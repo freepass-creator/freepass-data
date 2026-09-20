@@ -189,6 +189,16 @@ function canonicalTarget(
     };
   }
 
+  if (normalizedPath === 'policyCode') {
+    return {
+      entityType: 'offer',
+      entityId: entities.offer.id,
+      revision: entities.offer.revision,
+      fieldPath: 'policyId',
+      value: entities.offer.policyId ?? null
+    };
+  }
+
   if (normalizedPath === 'providerCompanyCode') {
     return {
       entityType: 'offer',
@@ -296,6 +306,7 @@ function requiredNormalizedPaths(candidate: CatalogCandidate) {
   if (candidate.seats !== undefined) required.push('seats');
   if (candidate.carNumber) required.push('carNumber');
   if (candidate.mileageKm !== undefined) required.push('mileageKm');
+  if (candidate.policyCode) required.push('policyCode');
 
   for (const term of candidate.priceTerms) {
     const prefix = `priceTerms.${term.termKey}`;
@@ -622,6 +633,7 @@ export async function canonicalizeCatalogCandidate(
       productId: product.id,
       supplierId: input.decision.supplierId,
       status: 'ACTIVE',
+      ...(candidate.policyCode ? { policyId: candidate.policyCode } : {}),
       priceTerms: structuredClone(candidate.priceTerms)
     };
 
