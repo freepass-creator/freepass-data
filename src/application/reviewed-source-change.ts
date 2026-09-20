@@ -1090,7 +1090,7 @@ export async function applyReviewedSourceChange(
     }
 
     if (assetChanged && nextAsset && state.asset) {
-      await tx.putVehicleAsset(nextAsset);
+      await tx.updateVehicleAsset(nextAsset);
       await tx.appendRevision({
         revisionRecordId: 'rev_' + digest([
           input.commandId,
