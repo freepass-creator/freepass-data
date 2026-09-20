@@ -57,6 +57,13 @@ export type SourceHead = {
   coverage: SourceCoverage;
 };
 
+export function isNewerSourceObservation(candidateObservedAt: string, currentObservedAt: string): boolean {
+  const candidate = Date.parse(candidateObservedAt);
+  const current = Date.parse(currentObservedAt);
+  if (!Number.isFinite(candidate) || !Number.isFinite(current)) return false;
+  return candidate > current;
+}
+
 export function canAssertSourceAbsence(run: SourceRun): boolean {
   return run.status === 'COMPLETED'
     && run.coverage.mode === 'FULL'
