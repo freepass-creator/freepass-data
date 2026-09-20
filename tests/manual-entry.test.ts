@@ -100,7 +100,7 @@ describe('manual catalog entry', () => {
     expect(second).toEqual(first);
     const lineage = (await store.listLineageByStage('RAW_TO_NORMALIZED'))
       .filter((item) => item.normalized?.candidateId === first.candidateId);
-    expect(lineage).toHaveLength(12);
+    expect(lineage).toHaveLength(16);
   });
 
   it('rejects idempotency key reuse with different manual input', async () => {
