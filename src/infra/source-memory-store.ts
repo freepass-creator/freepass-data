@@ -49,6 +49,7 @@ export class MemorySourceStore implements SourceStore {
       checkpoint: input.checkpoint,
       rawCount: input.rawCount,
       candidateCount: input.candidateCount,
+      lineageCount: input.lineageCount,
       warningCount: input.warningCount
     });
   }
