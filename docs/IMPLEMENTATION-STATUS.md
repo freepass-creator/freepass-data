@@ -45,6 +45,25 @@ Implemented:
 - Firebase Control Plane contract for consumer reads/writes and future Console mutation paths
 - tests for catalog mutation, authority enforcement, idempotency payload conflict, stale revision, projection semantics, ingestion, legacy normalization and shadow behavior
 
+## Admin consumer contract — 2026-09-21
+
+Implemented in this branch:
+- `contracts/admin-catalog-view-v1.schema.json`
+- `buildAdminCatalogProjection()`
+- generic ProjectionStore support for multiple consumer releases
+- Catalog Outbox rebuild of `admin-catalog` and `erp-public`
+- `GET /v1/views/admin-catalog/products`
+- production bearer-token fail-closed gate
+- `policyParity=COMPLETE|INCOMPLETE` evidence
+- typed Policy fact projection
+- product `policyCode` -> Canonical Offer `policyId` lineage
+
+Current cutover state:
+- projection/API: CODED
+- legacy Policy source -> Canonical Policy facts: INCOMPLETE
+- Admin operational read cutover: BLOCKED
+- shadow comparison: allowed with explicit incomplete-policy shadow mode
+
 ## Current gap
 
 The implementation has moved beyond the old Next list. The highest-value missing Catalog V1 platform contracts are now:
@@ -73,6 +92,7 @@ Routes:
 ```
 GET  /health
 GET  /v1/views/erp-public/products
+GET  /v1/views/admin-catalog/products
 POST /v1/commands/offers/:offerId/price
 ```
 
