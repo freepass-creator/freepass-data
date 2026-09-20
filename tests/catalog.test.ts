@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
-import { RevisionConflictError, buildErpPublicProjection, processOneOutboxEvent, updateOfferPrice } from '../src/application/catalog.js';
+import { IdempotencyConflictError, RevisionConflictError, buildErpPublicProjection, processOneOutboxEvent, updateOfferPrice } from '../src/application/catalog.js';
 
 describe('Catalog V1 vertical slice', () => {
   it('is idempotent and rejects stale revisions', async () => {
@@ -16,6 +16,23 @@ describe('Catalog V1 vertical slice', () => {
     expect(store.audits).toHaveLength(1); expect(store.outbox.size).toBe(1);
     await expect(updateOfferPrice(store,{...command,commandId:'cmd_2',idempotencyKey:'idem_price_0002',expectedRevision:1}))
       .rejects.toBeInstanceOf(RevisionConflictError);
+  });
+
+  it('rejects idempotency key reuse with a different payload', async () => {
+    const store=new MemoryDataStore(); await seedDemoCatalog(store);
+    const command={
+      commandId:'cmd_idem_1',idempotencyKey:'idem_payload_0001',offerId:'offer_gv70_demo',expectedRevision:1,termKey:'36@20000',
+      monthlyRent:{amount:710000,currency:'KRW' as const},reason:'테스트 가격 변경',actor:{id:'user:test',kind:'USER' as const}
+    };
+    await updateOfferPrice(store,command,'2026-09-20T10:00:00.000Z');
+    await expect(updateOfferPrice(store,{
+      ...command,
+      commandId:'cmd_idem_2',
+      monthlyRent:{amount:720000,currency:'KRW' as const}
+    },'2026-09-20T10:00:01.000Z')).rejects.toBeInstanceOf(IdempotencyConflictError);
+    expect((await store.getOffer(command.offerId))?.revision).toBe(2);
+    expect(store.audits).toHaveLength(1);
+    expect(store.outbox.size).toBe(1);
   });
 
   it('preserves commercial/offer/term boundaries in projection', async () => {
