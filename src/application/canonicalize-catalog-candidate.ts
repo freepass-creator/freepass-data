@@ -88,15 +88,19 @@ function assertModelCompatible(model: VehicleModel, candidate: CatalogCandidate)
       `Resolved VehicleModel ${model.id} does not match candidate maker/model`
     );
   }
-  if (candidate.subModel && model.subModel && model.subModel !== candidate.subModel) {
-    throw new CanonicalizationConflictError(
-      `Resolved VehicleModel ${model.id} subModel conflicts with candidate subModel`
-    );
-  }
-  if (candidate.trimName && model.trim && model.trim !== candidate.trimName) {
-    throw new CanonicalizationConflictError(
-      `Resolved VehicleModel ${model.id} trim conflicts with candidate trimName`
-    );
+  const knownPairs: Array<[string, unknown, unknown]> = [
+    ['subModel', candidate.subModel, model.subModel],
+    ['trimName', candidate.trimName, model.trim],
+    ['fuelType', candidate.fuelType, model.fuel],
+    ['driveType', candidate.driveType, model.drive],
+    ['seats', candidate.seats, model.seats]
+  ];
+  for (const [field, candidateValue, canonicalValue] of knownPairs) {
+    if (candidateValue !== undefined && candidateValue !== canonicalValue) {
+      throw new CanonicalizationConflictError(
+        `Resolved VehicleModel ${model.id} does not preserve candidate ${field}`
+      );
+    }
   }
 }
 
@@ -173,15 +177,6 @@ function canonicalTarget(
         value: entities.asset.odometerKm ?? null
       };
     }
-    if (normalizedPath === 'vehicleStatusRaw') {
-      return {
-        entityType: 'vehicle_asset',
-        entityId: entities.asset.id,
-        revision: entities.asset.revision,
-        fieldPath: 'status',
-        value: entities.asset.status
-      };
-    }
   }
 
   if (normalizedPath === 'commercialType') {
@@ -229,6 +224,68 @@ function canonicalTarget(
   }
 
   return null;
+}
+
+function assertPriceTermInvariants(candidate: CatalogCandidate) {
+  const seen = new Set<string>();
+  for (const term of candidate.priceTerms) {
+    if (seen.has(term.termKey)) {
+      throw new CanonicalizationRejectedError(`Duplicate PriceTerm key: ${term.termKey}`);
+    }
+    seen.add(term.termKey);
+
+    if (!Number.isInteger(term.termMonths) || term.termMonths < 1) {
+      throw new CanonicalizationRejectedError(
+        `Invalid termMonths for ${term.termKey}`
+      );
+    }
+    if (
+      term.monthlyRent.currency !== 'KRW' ||
+      !Number.isInteger(term.monthlyRent.amount) ||
+      term.monthlyRent.amount < 0
+    ) {
+      throw new CanonicalizationRejectedError(
+        `Invalid monthlyRent for ${term.termKey}`
+      );
+    }
+    if (
+      term.mileageLimitKmPerYear !== undefined &&
+      term.mileageLimitKmPerYear !== null &&
+      (!Number.isInteger(term.mileageLimitKmPerYear) || term.mileageLimitKmPerYear < 0)
+    ) {
+      throw new CanonicalizationRejectedError(
+        `Invalid mileage limit for ${term.termKey}`
+      );
+    }
+
+    const depositAmount = term.deposit?.amount;
+    if (term.depositState === 'KNOWN') {
+      if (
+        !term.deposit ||
+        term.deposit.currency !== 'KRW' ||
+        !Number.isInteger(depositAmount) ||
+        depositAmount! <= 0
+      ) {
+        throw new CanonicalizationRejectedError(
+          `KNOWN deposit must contain a positive KRW amount for ${term.termKey}`
+        );
+      }
+    } else if (term.depositState === 'ZERO') {
+      if (
+        !term.deposit ||
+        term.deposit.currency !== 'KRW' ||
+        depositAmount !== 0
+      ) {
+        throw new CanonicalizationRejectedError(
+          `ZERO deposit must contain KRW 0 for ${term.termKey}`
+        );
+      }
+    } else if (term.deposit !== undefined && term.deposit !== null) {
+      throw new CanonicalizationRejectedError(
+        `${term.depositState} deposit must not contain an amount for ${term.termKey}`
+      );
+    }
+  }
 }
 
 function requiredNormalizedPaths(candidate: CatalogCandidate) {
@@ -406,6 +463,7 @@ export async function canonicalizeCatalogCandidate(
         'Canonicalization requires maker, model, commercialType and at least one PriceTerm'
       );
     }
+    assertPriceTermInvariants(candidate);
     if (!sameIssues(candidate.issues, input.decision.approvedIssues)) {
       throw new CanonicalizationRejectedError(
         'Candidate warnings/issues must be explicitly and exactly approved'
@@ -516,7 +574,11 @@ export async function canonicalizeCatalogCandidate(
         }
         if (
           existingAsset.vehicleModelId !== model.id ||
-          (existingAsset.plateNumber && existingAsset.plateNumber !== candidate.carNumber)
+          existingAsset.plateNumber !== candidate.carNumber ||
+          (
+            candidate.mileageKm !== undefined &&
+            existingAsset.odometerKm !== candidate.mileageKm
+          )
         ) {
           throw new CanonicalizationConflictError(
             `Resolved VehicleAsset ${existingAsset.id} conflicts with candidate identity`
