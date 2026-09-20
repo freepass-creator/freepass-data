@@ -2,12 +2,14 @@ import { applicationDefault, getApp, getApps, initializeApp } from 'firebase-adm
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import type { NormalizedCandidateRecord, RawRecord, SourceDefinition, SourceRun } from '../domain/source.js';
 import type { SourceStore } from '../ports/source-store.js';
+import type { FieldLineageRecord } from '../domain/lineage.js';
 
 const C = {
   sources: 'sources',
   runs: 'source_runs',
   raw: 'raw_records',
-  candidates: 'normalized_candidates'
+  candidates: 'normalized_candidates',
+  lineage: 'field_lineage'
 } as const;
 
 export class FirestoreSourceStore implements SourceStore {
@@ -29,6 +31,9 @@ export class FirestoreSourceStore implements SourceStore {
   async appendCandidate(record: NormalizedCandidateRecord) {
     await this.db.collection(C.candidates).doc(record.candidateId.replaceAll('/', '__')).create(record);
   }
+  async appendLineage(record: FieldLineageRecord) {
+    await this.db.collection(C.lineage).doc(record.lineageRecordId).create(record);
+  }
   async completeRun(input: Parameters<SourceStore['completeRun']>[0]) {
     await this.db.collection(C.runs).doc(input.runId).update({
       status: 'COMPLETED',
@@ -37,6 +42,7 @@ export class FirestoreSourceStore implements SourceStore {
       checkpoint: input.checkpoint,
       rawCount: input.rawCount,
       candidateCount: input.candidateCount,
+      lineageCount: input.lineageCount,
       warningCount: input.warningCount
     });
   }
@@ -56,6 +62,10 @@ export class FirestoreSourceStore implements SourceStore {
   async listCandidates(runId: string) {
     const snap = await this.db.collection(C.candidates).where('runId', '==', runId).get();
     return snap.docs.map((x) => x.data() as NormalizedCandidateRecord);
+  }
+  async listLineage(runId: string) {
+    const snap = await this.db.collection(C.lineage).where('runId', '==', runId).get();
+    return snap.docs.map((x) => x.data() as FieldLineageRecord);
   }
 }
 

@@ -34,13 +34,14 @@ Implemented:
 - Firestore rules/index baseline
 - fail-closed projection behavior for incomplete deposit terms
 - Catalog Field Authority Registry with command/writer enforcement and authority evidence
+- append-only field-lineage contract and legacy RAW → normalized lineage persistence
 - tests for catalog mutation, authority enforcement, idempotency payload conflict, stale revision, projection semantics, ingestion, legacy normalization and shadow behavior
 
 ## Current gap
 
 The implementation has moved beyond the old Next list. The highest-value missing Catalog V1 platform contracts are now:
 
-1. **Field-level lineage / provenance**
+1. **Complete field lineage: normalized → canonical → projection**
 2. **Acceptance-test expansion for failure, duplicate, cutover and last-known-good cases**
 3. **Server/service authentication + IAM enforcement**
 4. **ERP.com shadow/read pilot**

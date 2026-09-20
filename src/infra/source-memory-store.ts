@@ -5,6 +5,7 @@ import type {
   SourceRun
 } from '../domain/source.js';
 import type { SourceStore } from '../ports/source-store.js';
+import type { FieldLineageRecord } from '../domain/lineage.js';
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -13,6 +14,7 @@ export class MemorySourceStore implements SourceStore {
   private runs = new Map<string, SourceRun>();
   private raw = new Map<string, RawRecord>();
   private candidates = new Map<string, NormalizedCandidateRecord>();
+  private lineage = new Map<string, FieldLineageRecord>();
 
   async upsertSource(source: SourceDefinition) { this.sources.set(source.sourceId, copy(source)); }
   async getSource(sourceId: string) { return copy(this.sources.get(sourceId) ?? null); }
@@ -32,6 +34,11 @@ export class MemorySourceStore implements SourceStore {
     this.candidates.set(record.candidateId, copy(record));
   }
 
+  async appendLineage(record: FieldLineageRecord) {
+    if (this.lineage.has(record.lineageRecordId)) throw new Error(`Lineage record is immutable: ${record.lineageRecordId}`);
+    this.lineage.set(record.lineageRecordId, copy(record));
+  }
+
   async completeRun(input: Parameters<SourceStore['completeRun']>[0]) {
     const run = this.runs.get(input.runId);
     if (!run) throw new Error(`Source run not found: ${input.runId}`);
@@ -42,6 +49,7 @@ export class MemorySourceStore implements SourceStore {
       checkpoint: input.checkpoint,
       rawCount: input.rawCount,
       candidateCount: input.candidateCount,
+      lineageCount: input.lineageCount,
       warningCount: input.warningCount
     });
   }
@@ -58,5 +66,8 @@ export class MemorySourceStore implements SourceStore {
   }
   async listCandidates(runId: string) {
     return copy([...this.candidates.values()].filter((x) => x.runId === runId));
+  }
+  async listLineage(runId: string) {
+    return copy([...this.lineage.values()].filter((x) => x.runId === runId));
   }
 }

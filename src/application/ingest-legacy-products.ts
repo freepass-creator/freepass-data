@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { LegacyProductSnapshot } from '../adapters/legacy-freepasserp3.js';
 import { normalizeLegacyProduct } from '../adapters/legacy-normalizer.js';
+import { buildLegacyCandidateLineage } from '../adapters/legacy-lineage.js';
 import type { SourceDefinition } from '../domain/source.js';
 import type { SourceStore } from '../ports/source-store.js';
 
@@ -33,11 +34,13 @@ export async function ingestLegacyProductSnapshot(
     startedAt: now,
     rawCount: 0,
     candidateCount: 0,
+    lineageCount: 0,
     warningCount: 0
   });
 
   let rawCount = 0;
   let candidateCount = 0;
+  let lineageCount = 0;
   let warningCount = 0;
 
   try {
@@ -62,8 +65,9 @@ export async function ingestLegacyProductSnapshot(
       );
       if (status !== 'VALID') warningCount += 1;
 
+      const candidateId = `${runId}:${raw.sourceRecordId}`;
       await sourceStore.appendCandidate({
-        candidateId: `${runId}:${raw.sourceRecordId}`,
+        candidateId,
         runId,
         sourceId: raw.sourceId,
         sourceRecordId: raw.sourceRecordId,
@@ -71,6 +75,10 @@ export async function ingestLegacyProductSnapshot(
         status,
         candidate
       });
+      for (const lineage of buildLegacyCandidateLineage(raw, candidate, runId, candidateId)) {
+        await sourceStore.appendLineage(lineage);
+        lineageCount += 1;
+      }
       candidateCount += 1;
     }
 
@@ -81,6 +89,7 @@ export async function ingestLegacyProductSnapshot(
       checkpoint: snapshot.checkpoint,
       rawCount,
       candidateCount,
+      lineageCount,
       warningCount
     });
     return await sourceStore.getRun(runId);

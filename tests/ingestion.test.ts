@@ -32,10 +32,24 @@ describe('legacy catalog ingestion', () => {
     expect(run?.status).toBe('COMPLETED');
     expect(run?.rawCount).toBe(1);
     expect(run?.candidateCount).toBe(1);
+    expect(run?.lineageCount).toBeGreaterThan(0);
 
     const candidates = await store.listCandidates(run!.runId);
     expect(candidates[0]?.candidate.commercialType).toBe('PICKUP_SUBSCRIPTION');
     expect(candidates[0]?.candidate.priceTerms[0]?.depositState).toBe('UNKNOWN');
     expect(candidates[0]?.candidate.priceTerms[0]?.termKey).toBe('source:24_3만');
+
+    const lineage = await store.listLineage(run!.runId);
+    expect(lineage.some((item) =>
+      item.source.fieldPath === 'product_type' &&
+      item.normalized?.fieldPath === 'commercialType' &&
+      item.normalized.value === 'PICKUP_SUBSCRIPTION'
+    )).toBe(true);
+    expect(lineage.some((item) =>
+      item.source.fieldPath === 'price.24_3만.rent' &&
+      item.normalized?.fieldPath === 'priceTerms.source:24_3만.monthlyRent.amount' &&
+      item.normalized.value === 750000
+    )).toBe(true);
+    expect(lineage.every((item) => item.stage === 'RAW_TO_NORMALIZED')).toBe(true);
   });
 });

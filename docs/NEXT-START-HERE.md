@@ -68,9 +68,9 @@ Minimum dimensions:
 
 Do not reduce this to a single `SOURCE_WINS`-style enum.
 
-### P1 — Field-level lineage ← NEXT
+### P1 — Field-level lineage ◐ IN PROGRESS
 
-Connect normalized source evidence to canonical fields and projection output.
+RAW → normalized field lineage is implemented. Next: connect normalized evidence to canonical entity revisions, then canonical fields to projection releases.
 
 Minimum evidence:
 
