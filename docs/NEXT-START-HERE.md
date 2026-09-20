@@ -68,9 +68,11 @@ Minimum dimensions:
 
 Do not reduce this to a single `SOURCE_WINS`-style enum.
 
-### P1 — Field-level lineage ◐ IN PROGRESS
+### P1 — Field-level lineage ✅
 
-RAW → normalized → canonical lineage, source-run safety, reviewed canonicalization, queryable Canonical Revision History, and controlled Manual Catalog Source/Command are implemented. Next: add Canonical → Projection lineage/release manifest evidence, then the explicit reviewed source-change update path.
+Catalog V1 now has RAW → normalized → canonical → projection lineage, exact Release manifests, source-run safety, reviewed canonicalization, queryable Canonical Revision History, and controlled Manual Catalog Source/Command.
+
+Next implementation focus: explicit reviewed source-change update for an existing canonical binding.
 
 Minimum evidence:
 
@@ -90,13 +92,15 @@ Promote the architecture-v2 review test matrix into executable tests, starting w
 - [x] idempotency key reused with a different payload must conflict — implemented in PR #3
 - [ ] stale revision must fail without losing the operator input
 - [x] incomplete deposit/price pair must not be published
-- [ ] partial projection build must not replace last-known-good ACTIVE release
+- [x] partial projection/evidence build must not replace last-known-good ACTIVE release
 - [x] current reviewed candidate canonicalization must pin accepted source head
 - [x] changed source fingerprint must require explicit re-review
 - [x] missing critical lineage must block Canonical promotion
 - [x] canonical create/change must append a queryable revision snapshot
 - [x] direct manual entry must create immutable source evidence before Canonical commit
 - [x] manual entry idempotency replay must not duplicate source evidence
+- [x] ACTIVE Release must carry exact Canonical input revisions and digests
+- [x] projection fields must resolve to source lineage or Canonical Revision History
 - [x] source collection failure/incomplete coverage must not be interpreted as mass deletion
 - [x] late older source run must not replace the accepted current head
 - [ ] duplicate / out-of-order event behavior

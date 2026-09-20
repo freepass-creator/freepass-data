@@ -16,12 +16,16 @@ import type {
   SourceHead,
   SourceRun
 } from '../domain/source.js';
-import type { FieldLineageRecord, LineageStage } from '../domain/lineage.js';
+import type { FieldLineageRecord, SourceLineageStage } from '../domain/lineage.js';
 import type {
   CatalogEntityType,
   EntityRevisionRecord
 } from '../domain/history.js';
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
+import type {
+  ProjectionFieldLineageRecord,
+  ProjectionReleaseManifest
+} from '../domain/projection-evidence.js';
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -45,6 +49,8 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   readonly audits: AuditEvent[] = [];
   readonly outbox = new Map<string, OutboxEvent>();
   private releases = new Map<string, ProjectionRelease<ErpPublicProduct>>();
+  private manifests = new Map<string, ProjectionReleaseManifest>();
+  private projectionLineage = new Map<string, ProjectionFieldLineageRecord>();
   private active = new Map<string, string>();
 
   async seed(input: {
@@ -232,7 +238,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async getManualCatalogEntryReceipt(idempotencyKey: string) {
     return copy(this.manualCatalogEntryReceipts.get(idempotencyKey) ?? null);
   }
-  async listLineageByStage(stage: LineageStage) {
+  async listLineageByStage(stage: SourceLineageStage) {
     return copy([...this.lineage.values()].filter((item) => item.stage === stage));
   }
   async listEntityHistory(entityType: CatalogEntityType, entityId: string) {
@@ -240,6 +246,16 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       [...this.revisionHistory.values()]
         .filter((item) => item.entityType === entityType && item.entityId === entityId)
         .sort((a, b) => a.revision - b.revision)
+    );
+  }
+  async listRevisionHistory() {
+    return copy(
+      [...this.revisionHistory.values()]
+        .sort((a, b) =>
+          a.entityType.localeCompare(b.entityType) ||
+          a.entityId.localeCompare(b.entityId) ||
+          a.revision - b.revision
+        )
     );
   }
   async listVehicleModels() { return copy([...this.models.values()]); }
@@ -251,9 +267,42 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async stage(release: ProjectionRelease<ErpPublicProduct>) {
     this.releases.set(release.releaseId, copy(release));
   }
+  async stageEvidence(input: {
+    manifest: ProjectionReleaseManifest;
+    lineage: ProjectionFieldLineageRecord[];
+  }) {
+    const release = this.releases.get(input.manifest.releaseId);
+    if (!release || release.status !== 'BUILDING') {
+      throw new Error('Projection evidence requires a BUILDING release');
+    }
+    if (this.manifests.has(input.manifest.releaseId)) {
+      throw new Error('Projection release manifest already exists');
+    }
+    for (const item of input.lineage) {
+      if (this.projectionLineage.has(item.lineageRecordId)) {
+        throw new Error(`Projection lineage already exists: ${item.lineageRecordId}`);
+      }
+    }
+    for (const item of input.lineage) {
+      this.projectionLineage.set(item.lineageRecordId, copy(item));
+    }
+    this.manifests.set(input.manifest.releaseId, copy(input.manifest));
+    release.status = 'VALIDATING';
+  }
   async markReady(releaseId: string) {
     const release = this.releases.get(releaseId);
     if (!release) throw new Error('Release not found');
+    if (release.status !== 'VALIDATING') {
+      throw new Error('Only VALIDATING release can become READY');
+    }
+    const manifest = this.manifests.get(releaseId);
+    if (!manifest) throw new Error('Release manifest not found');
+    const evidenceCount = [...this.projectionLineage.values()]
+      .filter((item) => item.releaseId === releaseId)
+      .length;
+    if (evidenceCount !== manifest.fieldEvidenceCount) {
+      throw new Error('Projection field evidence count mismatch');
+    }
     release.status = 'READY';
   }
   async activate(releaseId: string) {
@@ -269,6 +318,15 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async getActive(projectionId: string) {
     const id = this.active.get(projectionId);
     return id ? copy(this.releases.get(id) ?? null) : null;
+  }
+  async getManifest(releaseId: string) {
+    return copy(this.manifests.get(releaseId) ?? null);
+  }
+  async listProjectionLineage(releaseId: string) {
+    return copy(
+      [...this.projectionLineage.values()]
+        .filter((item) => item.releaseId === releaseId)
+    );
   }
 
   async claimNext(input: { workerId: string; now: string; leaseUntil: string }) {

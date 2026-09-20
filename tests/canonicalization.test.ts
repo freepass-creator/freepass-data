@@ -225,6 +225,25 @@ describe('safe catalog canonicalization', () => {
     expect(active?.data[0]?.vehicle.subModel).toBe('2세대');
     expect(active?.data[0]?.offers[0]?.offerId).toBe(receipt.offerId);
     expect(active?.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(750000);
+
+    const manifest=await store.getManifest(active!.releaseId);
+    expect(manifest?.canonicalInputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        entityType:'offer',
+        entityId:receipt.offerId,
+        revision:1
+      })
+    ]));
+    const priceEvidence=(await store.listProjectionLineage(active!.releaseId))
+      .find((item) =>
+        item.canonical.entityType==='offer' &&
+        item.canonical.entityId===receipt.offerId &&
+        item.canonical.fieldPath==='priceTerms.source:36_2만.monthlyRent.amount'
+      );
+    expect(priceEvidence?.evidenceOrigin).toBe('SOURCE_LINEAGE');
+    expect(priceEvidence?.parentLineageRecordId).toBeTruthy();
+    expect(priceEvidence?.revisionRecordId).toBeTruthy();
+    expect(priceEvidence?.projection.value).toBe(750000);
   });
 
   it('does not duplicate canonical entities when the same source fingerprint is reviewed again', async () => {

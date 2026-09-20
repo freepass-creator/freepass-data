@@ -1,7 +1,12 @@
-export type LineageStage =
+export type SourceLineageStage =
   | 'RAW_TO_NORMALIZED'
-  | 'NORMALIZED_TO_CANONICAL'
-  | 'CANONICAL_TO_PROJECTION';
+  | 'NORMALIZED_TO_CANONICAL';
+
+export type ProjectionLineageStage = 'CANONICAL_TO_PROJECTION';
+
+export type LineageStage =
+  | SourceLineageStage
+  | ProjectionLineageStage;
 
 export type LineageValueRef = {
   fieldPath: string;
@@ -11,7 +16,7 @@ export type LineageValueRef = {
 export type FieldLineageRecord = {
   lineageRecordId: string;
   lineageId: string;
-  stage: LineageStage;
+  stage: SourceLineageStage;
   parentLineageRecordId?: string | null;
 
   runId: string;

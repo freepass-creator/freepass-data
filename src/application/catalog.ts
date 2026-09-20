@@ -1,7 +1,23 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { ActorRef, ErpPublicProduct, Money, Offer, ProjectionRelease } from '../domain/catalog.js';
+import type {
+  ActorRef,
+  ErpPublicProduct,
+  Money,
+  Offer,
+  Product,
+  ProjectionRelease,
+  VehicleAsset,
+  VehicleModel
+} from '../domain/catalog.js';
 import { assertFieldAuthority } from '../domain/authority.js';
 import type { CatalogStore, OutboxStore, ProjectionStore } from '../ports/catalog-store.js';
+import type { CatalogEntityType, EntityRevisionRecord } from '../domain/history.js';
+import type { FieldLineageRecord } from '../domain/lineage.js';
+import type {
+  ProjectionCanonicalInput,
+  ProjectionFieldLineageRecord,
+  ProjectionReleaseManifest
+} from '../domain/projection-evidence.js';
 
 export type UpdateOfferPriceInput = {
   commandId: string; idempotencyKey: string; offerId: string; expectedRevision: number;
@@ -139,30 +155,202 @@ function activeOffer(offer: Offer, now: string) {
 }
 
 function publicPriceTerms(offer: Offer) {
-  return offer.priceTerms.filter((term) =>
-    term.depositState === 'KNOWN' ||
-    term.depositState === 'ZERO' ||
-    term.depositState === 'NOT_APPLICABLE'
-  );
+  return offer.priceTerms
+    .filter((term) =>
+      term.depositState === 'KNOWN' ||
+      term.depositState === 'ZERO' ||
+      term.depositState === 'NOT_APPLICABLE'
+    )
+    .sort((a, b) =>
+      a.termMonths - b.termMonths ||
+      (a.mileageLimitKmPerYear ?? -1) - (b.mileageLimitKmPerYear ?? -1) ||
+      a.termKey.localeCompare(b.termKey)
+    );
+}
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, child]) => [key, stableValue(child)])
+    );
+  }
+  return value;
+}
+
+function stableDigest(value: unknown) {
+  return createHash('sha256')
+    .update(JSON.stringify(stableValue(value)))
+    .digest('hex');
+}
+
+function canonicalInputKey(entityType: CatalogEntityType, entityId: string, revision: number) {
+  return `${entityType}|${entityId}|${revision}`;
+}
+
+function fieldEvidenceKey(
+  entityType: CatalogEntityType,
+  entityId: string,
+  revision: number,
+  fieldPath: string
+) {
+  return `${canonicalInputKey(entityType, entityId, revision)}|${fieldPath}`;
+}
+
+function sameEvidenceValue(a: unknown, b: unknown) {
+  return JSON.stringify(stableValue(a)) === JSON.stringify(stableValue(b));
+}
+
+function buildProjectionEvidenceContext(input: {
+  releaseId: string;
+  sourceLineage: FieldLineageRecord[];
+  revisionHistory: EntityRevisionRecord[];
+}) {
+  const lineageByField = new Map<string, FieldLineageRecord[]>();
+  for (const item of input.sourceLineage) {
+    const canonical = item.canonical;
+    if (!canonical || item.stage !== 'NORMALIZED_TO_CANONICAL') continue;
+    const key = fieldEvidenceKey(
+      canonical.entityType as CatalogEntityType,
+      canonical.entityId,
+      canonical.revision,
+      canonical.fieldPath
+    );
+    const list = lineageByField.get(key) ?? [];
+    list.push(item);
+    lineageByField.set(key, list);
+  }
+
+  const revisionByEntity = new Map<string, EntityRevisionRecord>();
+  for (const record of input.revisionHistory) {
+    revisionByEntity.set(
+      canonicalInputKey(record.entityType, record.entityId, record.revision),
+      record
+    );
+  }
+
+  const canonicalInputs = new Map<string, ProjectionCanonicalInput>();
+  const evidence: ProjectionFieldLineageRecord[] = [];
+
+  const requireRevision = (
+    entityType: CatalogEntityType,
+    entity: VehicleModel | VehicleAsset | Product | Offer
+  ) => {
+    const key = canonicalInputKey(entityType, entity.id, entity.revision);
+    const record = revisionByEntity.get(key);
+    if (!record) {
+      throw new Error(
+        `Projection release cannot use ${entityType} ${entity.id} r${entity.revision} without a revision snapshot`
+      );
+    }
+    if (!sameEvidenceValue(record.snapshot, entity)) {
+      throw new Error(
+        `Projection release detected snapshot drift for ${entityType} ${entity.id} r${entity.revision}`
+      );
+    }
+    canonicalInputs.set(key, {
+      entityType,
+      entityId: entity.id,
+      revision: entity.revision,
+      validationStatus: entity.validationStatus
+    });
+    return record;
+  };
+
+  const addField = (inputField: {
+    entityType: CatalogEntityType;
+    entityId: string;
+    revision: number;
+    fieldPath: string;
+    canonicalValue: unknown;
+    projectionFieldPath: string;
+    projectionValue: unknown;
+  }) => {
+    const key = fieldEvidenceKey(
+      inputField.entityType,
+      inputField.entityId,
+      inputField.revision,
+      inputField.fieldPath
+    );
+    const parent = (lineageByField.get(key) ?? []).find((item) =>
+      sameEvidenceValue(item.canonical?.value, inputField.canonicalValue)
+    );
+    const revisionRecord = revisionByEntity.get(
+      canonicalInputKey(
+        inputField.entityType,
+        inputField.entityId,
+        inputField.revision
+      )
+    );
+    if (!parent && !revisionRecord) {
+      throw new Error(
+        `Projection field has no Canonical evidence: ${key}`
+      );
+    }
+
+    const lineageRecordId = 'plin_' + stableDigest([
+      input.releaseId,
+      key,
+      inputField.projectionFieldPath
+    ]).slice(0, 40);
+
+    evidence.push({
+      lineageRecordId,
+      stage: 'CANONICAL_TO_PROJECTION',
+      projectionId: 'erp-public',
+      releaseId: input.releaseId,
+      canonical: {
+        entityType: inputField.entityType,
+        entityId: inputField.entityId,
+        revision: inputField.revision,
+        fieldPath: inputField.fieldPath,
+        value: structuredClone(inputField.canonicalValue)
+      },
+      projection: {
+        fieldPath: inputField.projectionFieldPath,
+        value: structuredClone(inputField.projectionValue)
+      },
+      evidenceOrigin: parent ? 'SOURCE_LINEAGE' : 'REVISION_HISTORY',
+      ...(parent ? { parentLineageRecordId: parent.lineageRecordId } : {}),
+      ...(revisionRecord ? { revisionRecordId: revisionRecord.revisionRecordId } : {})
+    });
+  };
+
+  return { canonicalInputs, evidence, requireRevision, addField };
 }
 
 export async function buildErpPublicProjection(
   catalog: CatalogStore, projections: ProjectionStore, now = new Date().toISOString()
 ): Promise<ProjectionRelease<ErpPublicProduct>> {
-  const [models, assets, products, offers] = await Promise.all([
-    catalog.listVehicleModels(), catalog.listVehicleAssets(), catalog.listProducts(), catalog.listOffers()
+  const releaseId = `rel_${randomUUID()}`;
+  const [models, assets, products, offers, sourceLineage, revisionHistory] = await Promise.all([
+    catalog.listVehicleModels(),
+    catalog.listVehicleAssets(),
+    catalog.listProducts(),
+    catalog.listOffers(),
+    catalog.listLineageByStage('NORMALIZED_TO_CANONICAL'),
+    catalog.listRevisionHistory()
   ]);
+
   const modelById = new Map(models.map((x) => [x.id, x]));
   const assetById = new Map(assets.map((x) => [x.id, x]));
   const offersByProduct = new Map<string, Offer[]>();
-  for (const offer of offers.filter((x) => activeOffer(x, now))) {
+  for (const offer of offers.filter((x) => activeOffer(x, now)).sort((a, b) => a.id.localeCompare(b.id))) {
     const list = offersByProduct.get(offer.productId) ?? [];
     list.push(offer);
     offersByProduct.set(offer.productId, list);
   }
 
+  const evidenceContext = buildProjectionEvidenceContext({
+    releaseId,
+    sourceLineage,
+    revisionHistory
+  });
+
   const data: ErpPublicProduct[] = [];
-  for (const product of products) {
+  for (const product of [...products].sort((a, b) => a.id.localeCompare(b.id))) {
     if (product.status !== 'ACTIVE' || product.validationStatus === 'INVALID') continue;
     const model = modelById.get(product.vehicleModelId);
     if (!model || model.validationStatus === 'INVALID') continue;
@@ -174,6 +362,169 @@ export async function buildErpPublicProjection(
       .map((offer) => ({ offer, terms: publicPriceTerms(offer) }))
       .filter(({ terms }) => terms.length > 0);
     if (!productOffers.length) continue;
+
+    evidenceContext.requireRevision('product', product);
+    evidenceContext.requireRevision('vehicle_model', model);
+    if (asset) evidenceContext.requireRevision('vehicle_asset', asset);
+    for (const { offer } of productOffers) evidenceContext.requireRevision('offer', offer);
+
+    const productPath = `products.${product.id}`;
+    evidenceContext.addField({
+      entityType: 'product',
+      entityId: product.id,
+      revision: product.revision,
+      fieldPath: 'id',
+      canonicalValue: product.id,
+      projectionFieldPath: `${productPath}.productId`,
+      projectionValue: product.id
+    });
+    evidenceContext.addField({
+      entityType: 'product',
+      entityId: product.id,
+      revision: product.revision,
+      fieldPath: 'revision',
+      canonicalValue: product.revision,
+      projectionFieldPath: `${productPath}.productRevision`,
+      projectionValue: product.revision
+    });
+    evidenceContext.addField({
+      entityType: 'product',
+      entityId: product.id,
+      revision: product.revision,
+      fieldPath: 'vehicleModelId',
+      canonicalValue: product.vehicleModelId,
+      projectionFieldPath: `${productPath}.vehicleModelId`,
+      projectionValue: model.id
+    });
+    if (product.vehicleAssetId) {
+      evidenceContext.addField({
+        entityType: 'product',
+        entityId: product.id,
+        revision: product.revision,
+        fieldPath: 'vehicleAssetId',
+        canonicalValue: product.vehicleAssetId,
+        projectionFieldPath: `${productPath}.vehicleAssetId`,
+        projectionValue: product.vehicleAssetId
+      });
+    }
+    evidenceContext.addField({
+      entityType: 'product',
+      entityId: product.id,
+      revision: product.revision,
+      fieldPath: 'displayName',
+      canonicalValue: product.displayName,
+      projectionFieldPath: `${productPath}.displayName`,
+      projectionValue: product.displayName
+    });
+    evidenceContext.addField({
+      entityType: 'product',
+      entityId: product.id,
+      revision: product.revision,
+      fieldPath: 'commercialType',
+      canonicalValue: product.commercialType,
+      projectionFieldPath: `${productPath}.commercialType`,
+      projectionValue: product.commercialType
+    });
+
+    const vehiclePath = `${productPath}.vehicle`;
+    const modelFields: Array<[string, unknown, string]> = [
+      ['maker', model.maker, 'maker'],
+      ['model', model.model, 'model']
+    ];
+    if (model.generation !== undefined) modelFields.push(['generation', model.generation, 'generation']);
+    if (model.subModel !== undefined) modelFields.push(['subModel', model.subModel, 'subModel']);
+    if (model.trim !== undefined) modelFields.push(['trim', model.trim, 'trim']);
+    if (model.fuel !== undefined) modelFields.push(['fuel', model.fuel, 'fuel']);
+    if (model.drive !== undefined) modelFields.push(['drive', model.drive, 'drive']);
+    if (model.seats !== undefined) modelFields.push(['seats', model.seats, 'seats']);
+    for (const [fieldPath, value, projected] of modelFields) {
+      evidenceContext.addField({
+        entityType: 'vehicle_model',
+        entityId: model.id,
+        revision: model.revision,
+        fieldPath,
+        canonicalValue: value,
+        projectionFieldPath: `${vehiclePath}.${projected}`,
+        projectionValue: value
+      });
+    }
+
+    if (asset) {
+      const assetFields: Array<[string, unknown, string]> = [
+        ['status', asset.status, 'assetStatus']
+      ];
+      if (asset.plateNumber !== undefined) assetFields.push(['plateNumber', asset.plateNumber, 'plateNumber']);
+      if (asset.odometerKm !== undefined) assetFields.push(['odometerKm', asset.odometerKm, 'odometerKm']);
+      for (const [fieldPath, value, projected] of assetFields) {
+        evidenceContext.addField({
+          entityType: 'vehicle_asset',
+          entityId: asset.id,
+          revision: asset.revision,
+          fieldPath,
+          canonicalValue: value,
+          projectionFieldPath: `${vehiclePath}.${projected}`,
+          projectionValue: value
+        });
+      }
+    }
+
+    for (const { offer, terms } of productOffers) {
+      const offerPath = `${productPath}.offers.${offer.id}`;
+      const offerFields: Array<[string, unknown, string]> = [
+        ['id', offer.id, 'offerId'],
+        ['supplierId', offer.supplierId, 'supplierId'],
+        ['revision', offer.revision, 'offerRevision']
+      ];
+      if (offer.policyId !== undefined) offerFields.push(['policyId', offer.policyId, 'policyId']);
+      for (const [fieldPath, value, projected] of offerFields) {
+        evidenceContext.addField({
+          entityType: 'offer',
+          entityId: offer.id,
+          revision: offer.revision,
+          fieldPath,
+          canonicalValue: value,
+          projectionFieldPath: `${offerPath}.${projected}`,
+          projectionValue: value
+        });
+      }
+
+      for (const term of terms) {
+        const canonicalPrefix = `priceTerms.${term.termKey}`;
+        const projectionPrefix = `${offerPath}.priceTerms.${term.termKey}`;
+        const termFields: Array<[string, unknown, string, unknown]> = [
+          [`${canonicalPrefix}.termKey`, term.termKey, `${projectionPrefix}.termKey`, term.termKey],
+          [`${canonicalPrefix}.termMonths`, term.termMonths, `${projectionPrefix}.termMonths`, term.termMonths],
+          [`${canonicalPrefix}.monthlyRent.amount`, term.monthlyRent.amount, `${projectionPrefix}.monthlyRent.amount`, term.monthlyRent.amount],
+          [`${canonicalPrefix}.monthlyRent.currency`, term.monthlyRent.currency, `${projectionPrefix}.monthlyRent.currency`, term.monthlyRent.currency],
+          [`${canonicalPrefix}.depositState`, term.depositState, `${projectionPrefix}.depositState`, term.depositState]
+        ];
+        if (term.deposit) {
+          termFields.push(
+            [`${canonicalPrefix}.deposit.amount`, term.deposit.amount, `${projectionPrefix}.deposit.amount`, term.deposit.amount],
+            [`${canonicalPrefix}.deposit.currency`, term.deposit.currency, `${projectionPrefix}.deposit.currency`, term.deposit.currency]
+          );
+        }
+        if (term.mileageLimitKmPerYear !== undefined && term.mileageLimitKmPerYear !== null) {
+          termFields.push([
+            `${canonicalPrefix}.mileageLimitKmPerYear`,
+            term.mileageLimitKmPerYear,
+            `${projectionPrefix}.mileageLimitKmPerYear`,
+            term.mileageLimitKmPerYear
+          ]);
+        }
+        for (const [canonicalFieldPath, canonicalValue, projectionFieldPath, projectionValue] of termFields) {
+          evidenceContext.addField({
+            entityType: 'offer',
+            entityId: offer.id,
+            revision: offer.revision,
+            fieldPath: canonicalFieldPath,
+            canonicalValue,
+            projectionFieldPath,
+            projectionValue
+          });
+        }
+      }
+    }
 
     data.push({
       productId: product.id,
@@ -206,12 +557,47 @@ export async function buildErpPublicProjection(
     });
   }
 
-  const canonicalRevision = Math.max(0, ...models.map(x=>x.revision), ...assets.map(x=>x.revision), ...products.map(x=>x.revision), ...offers.map(x=>x.revision));
-  const release: ProjectionRelease<ErpPublicProduct> = {
-    releaseId: `rel_${randomUUID()}`, projectionId: 'erp-public', schemaVersion: '1.0.0',
-    canonicalRevision, status: 'BUILDING', generatedAt: now, data
+  const canonicalInputs = [...evidenceContext.canonicalInputs.values()]
+    .sort((a, b) =>
+      a.entityType.localeCompare(b.entityType) ||
+      a.entityId.localeCompare(b.entityId) ||
+      a.revision - b.revision
+    );
+  const inputDigest = stableDigest(canonicalInputs);
+  const dataDigest = stableDigest(data);
+  const canonicalRevision = Math.max(0, ...canonicalInputs.map((x) => x.revision));
+  const manifestId = `manifest_${releaseId}`;
+  const manifest: ProjectionReleaseManifest = {
+    manifestId,
+    releaseId,
+    projectionId: 'erp-public',
+    schemaVersion: '1.0.0',
+    generatedAt: now,
+    canonicalInputs,
+    productCount: data.length,
+    offerCount: data.reduce((sum, product) => sum + product.offers.length, 0),
+    fieldEvidenceCount: evidenceContext.evidence.length,
+    inputDigest,
+    dataDigest
   };
+  const release: ProjectionRelease<ErpPublicProduct> = {
+    releaseId,
+    projectionId: 'erp-public',
+    schemaVersion: '1.0.0',
+    canonicalRevision,
+    manifestId,
+    inputDigest,
+    dataDigest,
+    status: 'BUILDING',
+    generatedAt: now,
+    data
+  };
+
   await projections.stage(release);
+  await projections.stageEvidence({
+    manifest,
+    lineage: evidenceContext.evidence
+  });
   await projections.markReady(release.releaseId);
   await projections.activate(release.releaseId);
   const active = await projections.getActive('erp-public');

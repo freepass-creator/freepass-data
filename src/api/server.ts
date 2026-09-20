@@ -35,7 +35,10 @@ app.get('/v1/views/erp-public/products', async (_request, reply) => {
     meta: {
       schemaVersion: release.schemaVersion,
       releaseId: release.releaseId,
+      manifestId: release.manifestId,
       revision: release.canonicalRevision,
+      inputDigest: release.inputDigest,
+      dataDigest: release.dataDigest,
       generatedAt: release.generatedAt,
       activatedAt: release.activatedAt ?? null
     }

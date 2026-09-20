@@ -170,14 +170,15 @@ Implemented:
 - append-only Audit
 - command receipts
 - RAW -> Normalized -> Canonical lineage baseline
-- durable Outbox and Projection Release
+- durable Outbox and evidence-gated Projection Release
+- exact Release Manifest with Canonical input revisions and input/data digests
+- field-level Canonical → Projection provenance
 - queryable append-only Canonical Revision History
 
 Next:
 
-1. Manual catalog source/command
+1. reviewed source-change update for existing Canonical bindings
 2. more field-specific edit commands driven by Authority Registry
-3. Canonical -> Projection lineage and Release manifest
-4. authenticated service/user identity and IAM
-5. Control Plane API/Console surfaces
-6. consumer SDK/contracts and gradual removal of direct Firebase access
+3. authenticated service/user identity and IAM
+4. Control Plane API/Console surfaces
+5. consumer SDK/contracts and gradual removal of direct Firebase access

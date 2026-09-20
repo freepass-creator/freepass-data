@@ -75,6 +75,7 @@ export type ErpPublicProduct = {
 };
 export type ProjectionRelease<T> = {
   releaseId: string; projectionId: string; schemaVersion: string; canonicalRevision: number;
+  manifestId: string; inputDigest: string; dataDigest: string;
   status: 'BUILDING' | 'VALIDATING' | 'READY' | 'ACTIVE' | 'FAILED';
   generatedAt: string; activatedAt?: string | null; data: T[];
 };
