@@ -46,8 +46,15 @@ export class MemorySourceStore implements SourceStore {
     const run = this.runs.get(input.runId);
     if (!run) throw new Error(`Source run not found: ${input.runId}`);
 
-    const eligible = input.coverage.completeness === 'COMPLETE';
     const currentHead = this.heads.get(run.sourceId);
+    if (run.status === 'COMPLETED') {
+      return {
+        acceptedAsHead: run.headStatus === 'CURRENT',
+        headRunId: currentHead?.runId ?? null
+      };
+    }
+
+    const eligible = input.coverage.completeness === 'COMPLETE';
     const newerThanHead = !currentHead || isNewerSourceObservation(input.observedAt, currentHead.observedAt);
     const acceptedAsHead = eligible && newerThanHead;
 
