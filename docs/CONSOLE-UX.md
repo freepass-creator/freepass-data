@@ -145,6 +145,13 @@ consumer
 - duration
 - evidence
 
+Release node detail:
+- exact Canonical input entity/revision set
+- manifest
+- input digest / data digest
+- field evidence count
+- field별 SOURCE_LINEAGE / REVISION_HISTORY 근거
+
 ## 7. 연결
 
 Consumer table:
@@ -155,6 +162,8 @@ Consumer table:
 - health
 - canonical revision
 - consumed revision
+- active release ID / manifest ID
+- input digest / data digest
 - lag
 - last acknowledged
 
