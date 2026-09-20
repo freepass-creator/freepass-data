@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import Ajv from 'ajv';
+import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import updateOfferPriceSchema from '../../contracts/update-offer-price.schema.json' with { type: 'json' };
 import { createRuntimeStores } from '../bootstrap.js';
@@ -12,7 +12,7 @@ import {
 } from '../application/catalog.js';
 
 const app = Fastify({ logger: true });
-const ajv = new Ajv({ allErrors: true, strict: false });
+const ajv = new Ajv2020({ allErrors: true, strict: false });
 addFormats(ajv);
 const validateUpdateOfferPrice = ajv.compile(updateOfferPriceSchema);
 const stores = await createRuntimeStores();
