@@ -32,6 +32,7 @@ describe('legacy catalog ingestion', () => {
     expect(run?.status).toBe('COMPLETED');
     expect(run?.rawCount).toBe(1);
     expect(run?.candidateCount).toBe(1);
+    expect(run?.lineageCount).toBeGreaterThan(0);
 
     const candidates = await store.listCandidates(run!.runId);
     expect(candidates[0]?.candidate.commercialType).toBe('PICKUP_SUBSCRIPTION');
