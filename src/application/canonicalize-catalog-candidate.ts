@@ -335,6 +335,14 @@ export async function canonicalizeCatalogCandidate(
     }
 
     const candidate = candidateRecord.candidate;
+    if (
+      candidate.sourceRecordId !== candidateRecord.sourceRecordId ||
+      candidate.sourceFingerprint !== candidateRecord.sourceFingerprint
+    ) {
+      throw new CanonicalizationRejectedError(
+        'Candidate envelope and normalized payload source identity do not match'
+      );
+    }
     if (!candidate.maker || !candidate.model || !candidate.commercialType || !candidate.priceTerms.length) {
       throw new CanonicalizationRejectedError(
         'Canonicalization requires maker, model, commercialType and at least one PriceTerm'
