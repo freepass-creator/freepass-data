@@ -1141,12 +1141,8 @@ export async function applyReviewedSourceChange(
           sourceFingerprint: state.candidateRecord.sourceFingerprint,
           sourceRunId: state.run.runId,
           sourceObservedAt: state.head.observedAt,
-          ...(state.head.checkpoint.sourceRevision
-            ? { sourceCheckpointRevision: state.head.checkpoint.sourceRevision }
-            : {}),
-          ...(state.head.checkpoint.checksum
-            ? { sourceCheckpointChecksum: state.head.checkpoint.checksum }
-            : {}),
+          sourceCheckpointRevision: state.head.checkpoint.sourceRevision ?? null,
+          sourceCheckpointChecksum: state.head.checkpoint.checksum ?? null,
           revision: state.binding.revision + 1,
           updatedAt: now,
           updatedBy: input.actor
