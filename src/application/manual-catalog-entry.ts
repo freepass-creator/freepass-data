@@ -425,7 +425,7 @@ export async function createManualCatalogEntry(
     sourceRecordId,
     sourceFingerprint: fingerprint,
     observedAt: now,
-    payload: structuredClone(input.entry) as unknown as Record<string, unknown>
+    payload: JSON.parse(JSON.stringify(input.entry)) as Record<string, unknown>
   };
   const candidateRecord: NormalizedCandidateRecord = {
     candidateId,
