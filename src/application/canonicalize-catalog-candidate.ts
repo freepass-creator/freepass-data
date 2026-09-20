@@ -235,6 +235,66 @@ function canonicalTarget(
   return null;
 }
 
+function requiredNormalizedPaths(candidate: {
+  maker: string;
+  model: string;
+  subModel?: string;
+  trimName?: string;
+  fuelType?: string;
+  driveType?: string;
+  seats?: number;
+  carNumber?: string;
+  mileageKm?: number;
+  commercialType: string;
+  priceTerms: Array<{
+    termKey: string;
+    termMonths: number;
+    monthlyRent: { amount: number };
+    deposit?: { amount: number } | null;
+    depositState: string;
+    mileageLimitKmPerYear?: number | null;
+  }>;
+}) {
+  const required = ['maker', 'model', 'commercialType'];
+  if (candidate.subModel) required.push('subModel');
+  if (candidate.trimName) required.push('trimName');
+  if (candidate.fuelType) required.push('fuelType');
+  if (candidate.driveType) required.push('driveType');
+  if (candidate.seats !== undefined) required.push('seats');
+  if (candidate.carNumber) required.push('carNumber');
+  if (candidate.mileageKm !== undefined) required.push('mileageKm');
+
+  for (const term of candidate.priceTerms) {
+    const prefix = `priceTerms.${term.termKey}`;
+    required.push(`${prefix}.monthlyRent.amount`);
+    required.push(`${prefix}.depositState`);
+    required.push(`${prefix}.termMonths`);
+    if (term.deposit) required.push(`${prefix}.deposit.amount`);
+    if (term.mileageLimitKmPerYear !== undefined && term.mileageLimitKmPerYear !== null) {
+      required.push(`${prefix}.mileageLimitKmPerYear`);
+    }
+  }
+  return required;
+}
+
+function assertCriticalLineage(
+  candidate: Parameters<typeof requiredNormalizedPaths>[0],
+  parents: FieldLineageRecord[]
+) {
+  const observed = new Set(
+    parents
+      .filter((item) => item.stage === 'RAW_TO_NORMALIZED')
+      .map((item) => item.normalized?.fieldPath)
+      .filter((value): value is string => Boolean(value))
+  );
+  const missing = requiredNormalizedPaths(candidate).filter((path) => !observed.has(path));
+  if (missing.length) {
+    throw new CanonicalizationRejectedError(
+      `Missing normalized lineage for canonical fields: ${missing.join(', ')}`
+    );
+  }
+}
+
 function buildCanonicalLineage(
   parents: FieldLineageRecord[],
   entities: {
@@ -480,6 +540,7 @@ export async function canonicalizeCatalogCandidate(
       tx.getOffer(offerId),
       tx.listLineageForCandidate(candidateRecord.candidateId)
     ]);
+    assertCriticalLineage(candidate, parentLineage);
     if (productCollision || offerCollision) {
       throw new CanonicalizationConflictError(
         'Deterministic Product/Offer identity already exists without a source binding'
