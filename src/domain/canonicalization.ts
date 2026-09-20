@@ -20,6 +20,7 @@ export type CanonicalSourceBinding = {
   sourceObservedAt: string;
   sourceCheckpointRevision?: string | null;
   sourceCheckpointChecksum?: string | null;
+  sourceSupplierCode?: string | null;
 
   vehicleModelId: string;
   vehicleAssetId?: string | null;
