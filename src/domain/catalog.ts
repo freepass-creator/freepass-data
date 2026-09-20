@@ -2,15 +2,9 @@ export type ValidationStatus = 'VALID' | 'WARNING' | 'INVALID';
 export type ActorRef = { id: string; kind: 'USER' | 'SERVICE'; organizationId?: string | null };
 export type Money = { amount: number; currency: 'KRW' };
 export type EntityMeta = {
-  schemaVersion: string;
-  revision: number;
-  validationStatus: ValidationStatus;
-  createdAt: string;
-  updatedAt: string;
-  createdBy: ActorRef;
-  updatedBy: ActorRef;
-  lineageId: string;
-  sourceRevision?: string;
+  schemaVersion: string; revision: number; validationStatus: ValidationStatus;
+  createdAt: string; updatedAt: string; createdBy: ActorRef; updatedBy: ActorRef;
+  lineageId: string; sourceRevision?: string;
 };
 export type VehicleModel = EntityMeta & {
   id: string; maker: string; model: string; displayName: string;
@@ -24,14 +18,16 @@ export type VehicleAsset = EntityMeta & {
   id: string; vehicleModelId: string; status: VehicleAssetStatus;
   plateNumber?: string | null; vin?: string | null; odometerKm?: number | null;
 };
+export type CommercialType =
+  | 'NEW_RENT' | 'USED_RENT' | 'NEW_SUBSCRIPTION' | 'USED_SUBSCRIPTION' | 'PICKUP_SUBSCRIPTION';
 export type Product = EntityMeta & {
   id: string; vehicleModelId: string; vehicleAssetId?: string | null;
-  productType: 'NEW' | 'USED'; status: 'ACTIVE' | 'HOLD' | 'SOLD' | 'ARCHIVED';
+  commercialType: CommercialType; status: 'ACTIVE' | 'HOLD' | 'SOLD' | 'ARCHIVED';
   displayName: string;
 };
 export type DepositState = 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
 export type PriceTerm = {
-  termMonths: number; monthlyRent: Money; deposit?: Money | null;
+  termKey: string; termMonths: number; monthlyRent: Money; deposit?: Money | null;
   depositState: DepositState; mileageLimitKmPerYear?: number | null;
 };
 export type Offer = EntityMeta & {
@@ -46,9 +42,8 @@ export type Policy = EntityMeta & {
   facts: Record<string, unknown>;
 };
 export type AuditEvent = {
-  eventId: string; commandId: string; actor: ActorRef;
-  entityType: string; entityId: string; action: string;
-  before: unknown; after: unknown; reason: string;
+  eventId: string; commandId: string; actor: ActorRef; entityType: string; entityId: string;
+  action: string; before: unknown; after: unknown; reason: string;
   revisionBefore: number; revisionAfter: number; occurredAt: string;
 };
 export type OutboxStatus = 'PENDING' | 'PROCESSING' | 'DONE' | 'DEAD_LETTER';
@@ -65,12 +60,11 @@ export type CommandReceipt = {
 };
 export type ErpPublicProduct = {
   productId: string; productRevision: number; vehicleModelId: string;
-  vehicleAssetId?: string | null; displayName: string; productType: Product['productType'];
+  vehicleAssetId?: string | null; displayName: string; commercialType: CommercialType;
   vehicle: {
     maker: string; model: string; generation?: string | null; trim?: string | null;
     fuel?: string | null; drive?: string | null; seats?: number | null;
-    assetStatus?: VehicleAssetStatus | null; plateNumber?: string | null;
-    odometerKm?: number | null;
+    assetStatus?: VehicleAssetStatus | null; plateNumber?: string | null; odometerKm?: number | null;
   };
   offers: Array<{
     offerId: string; supplierId: string; offerRevision: number;
@@ -78,8 +72,7 @@ export type ErpPublicProduct = {
   }>;
 };
 export type ProjectionRelease<T> = {
-  releaseId: string; projectionId: string; schemaVersion: string;
-  canonicalRevision: number;
+  releaseId: string; projectionId: string; schemaVersion: string; canonicalRevision: number;
   status: 'BUILDING' | 'VALIDATING' | 'READY' | 'ACTIVE' | 'FAILED';
   generatedAt: string; activatedAt?: string | null; data: T[];
 };
