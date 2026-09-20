@@ -13,6 +13,8 @@ import type {
 } from '../domain/canonicalization.js';
 import type {
   NormalizedCandidateRecord,
+  RawRecord,
+  SourceDefinition,
   SourceHead,
   SourceRun
 } from '../domain/source.js';
@@ -21,6 +23,7 @@ import type {
   CatalogEntityType,
   EntityRevisionRecord
 } from '../domain/history.js';
+import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
 
 const C = {
   vehicleModels: 'catalog_vehicle_models',
@@ -30,8 +33,11 @@ const C = {
   policies: 'catalog_policies',
   receipts: 'command_receipts',
   canonicalizationReceipts: 'canonicalization_receipts',
+  manualCatalogEntryReceipts: 'manual_catalog_entry_receipts',
+  sources: 'sources',
   sourceRuns: 'source_runs',
   sourceHeads: 'source_heads',
+  raw: 'raw_records',
   candidates: 'normalized_candidates',
   lineage: 'field_lineage',
   sourceBindings: 'canonical_source_bindings',
@@ -69,16 +75,51 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         getOffer: async (id) => data<Offer>(await native.get(this.db.collection(C.offers).doc(id))),
         putOffer: async (offer) => { native.set(this.db.collection(C.offers).doc(offer.id), offer); },
 
+        getSourceDefinition: async (sourceId) =>
+          data<SourceDefinition>(
+            await native.get(this.db.collection(C.sources).doc(sourceId.replaceAll('/', '__')))
+          ),
+        putSourceDefinition: async (source) => {
+          native.create(
+            this.db.collection(C.sources).doc(source.sourceId.replaceAll('/', '__')),
+            source
+          );
+        },
         getSourceRun: async (runId) =>
           data<SourceRun>(await native.get(this.db.collection(C.sourceRuns).doc(runId))),
+        putSourceRun: async (run) => {
+          native.create(this.db.collection(C.sourceRuns).doc(run.runId), run);
+        },
         getSourceHead: async (sourceId) =>
           data<SourceHead>(
             await native.get(this.db.collection(C.sourceHeads).doc(sourceId.replaceAll('/', '__')))
           ),
+        putSourceHead: async (head) => {
+          native.create(
+            this.db.collection(C.sourceHeads).doc(head.sourceId.replaceAll('/', '__')),
+            head
+          );
+        },
+        getRawRecord: async (rawRecordId) =>
+          data<RawRecord>(
+            await native.get(this.db.collection(C.raw).doc(rawRecordId.replaceAll('/', '__')))
+          ),
+        putRawRecord: async (record) => {
+          native.create(
+            this.db.collection(C.raw).doc(record.rawRecordId.replaceAll('/', '__')),
+            record
+          );
+        },
         getCandidate: async (candidateId) =>
           data<NormalizedCandidateRecord>(
             await native.get(this.db.collection(C.candidates).doc(candidateId.replaceAll('/', '__')))
           ),
+        putCandidate: async (record) => {
+          native.create(
+            this.db.collection(C.candidates).doc(record.candidateId.replaceAll('/', '__')),
+            record
+          );
+        },
         listLineageForCandidate: async (candidateId) => {
           const snap = await native.get(
             this.db.collection(C.lineage).where('normalized.candidateId', '==', candidateId)
@@ -111,6 +152,20 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         putCommandReceipt: async (receipt) => {
           native.create(this.db.collection(C.receipts).doc(receipt.idempotencyKey), receipt);
         },
+        getManualCatalogEntryReceipt: async (key) =>
+          data<ManualCatalogEntryReceipt>(
+            await native.get(
+              this.db.collection(C.manualCatalogEntryReceipts).doc(encodeURIComponent(key))
+            )
+          ),
+        putManualCatalogEntryReceipt: async (receipt) => {
+          native.create(
+            this.db.collection(C.manualCatalogEntryReceipts).doc(
+              encodeURIComponent(receipt.idempotencyKey)
+            ),
+            receipt
+          );
+        },
         appendAudit: async (event: AuditEvent) => {
           native.create(this.db.collection(C.audits).doc(event.eventId), event);
         },
@@ -135,6 +190,29 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     return data<Product>(await this.db.collection(C.products).doc(id).get());
   }
   async getOffer(id: string) { return data<Offer>(await this.db.collection(C.offers).doc(id).get()); }
+  async getSourceDefinition(sourceId: string) {
+    return data<SourceDefinition>(
+      await this.db.collection(C.sources).doc(sourceId.replaceAll('/', '__')).get()
+    );
+  }
+  async getSourceRun(runId: string) {
+    return data<SourceRun>(await this.db.collection(C.sourceRuns).doc(runId).get());
+  }
+  async getSourceHead(sourceId: string) {
+    return data<SourceHead>(
+      await this.db.collection(C.sourceHeads).doc(sourceId.replaceAll('/', '__')).get()
+    );
+  }
+  async getRawRecord(rawRecordId: string) {
+    return data<RawRecord>(
+      await this.db.collection(C.raw).doc(rawRecordId.replaceAll('/', '__')).get()
+    );
+  }
+  async getCandidate(candidateId: string) {
+    return data<NormalizedCandidateRecord>(
+      await this.db.collection(C.candidates).doc(candidateId.replaceAll('/', '__')).get()
+    );
+  }
   async getSourceBinding(bindingId: string) {
     return data<CanonicalSourceBinding>(
       await this.db.collection(C.sourceBindings).doc(bindingId).get()
@@ -143,6 +221,13 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async getCanonicalizationReceipt(idempotencyKey: string) {
     return data<CanonicalizationReceipt>(
       await this.db.collection(C.canonicalizationReceipts).doc(idempotencyKey).get()
+    );
+  }
+  async getManualCatalogEntryReceipt(idempotencyKey: string) {
+    return data<ManualCatalogEntryReceipt>(
+      await this.db.collection(C.manualCatalogEntryReceipts)
+        .doc(encodeURIComponent(idempotencyKey))
+        .get()
     );
   }
   async listLineageByStage(stage: LineageStage) {

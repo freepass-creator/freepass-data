@@ -8,6 +8,8 @@ import type {
 } from '../domain/canonicalization.js';
 import type {
   NormalizedCandidateRecord,
+  RawRecord,
+  SourceDefinition,
   SourceHead,
   SourceRun
 } from '../domain/source.js';
@@ -16,6 +18,7 @@ import type {
   CatalogEntityType,
   EntityRevisionRecord
 } from '../domain/history.js';
+import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
 
 export interface CatalogTransaction {
   getVehicleModel(id: string): Promise<VehicleModel | null>;
@@ -27,9 +30,16 @@ export interface CatalogTransaction {
   getOffer(id: string): Promise<Offer | null>;
   putOffer(offer: Offer): Promise<void>;
 
+  getSourceDefinition(sourceId: string): Promise<SourceDefinition | null>;
+  putSourceDefinition(source: SourceDefinition): Promise<void>;
   getSourceRun(runId: string): Promise<SourceRun | null>;
+  putSourceRun(run: SourceRun): Promise<void>;
   getSourceHead(sourceId: string): Promise<SourceHead | null>;
+  putSourceHead(head: SourceHead): Promise<void>;
+  getRawRecord(rawRecordId: string): Promise<RawRecord | null>;
+  putRawRecord(record: RawRecord): Promise<void>;
   getCandidate(candidateId: string): Promise<NormalizedCandidateRecord | null>;
+  putCandidate(record: NormalizedCandidateRecord): Promise<void>;
   listLineageForCandidate(candidateId: string): Promise<FieldLineageRecord[]>;
   appendLineage(record: FieldLineageRecord): Promise<void>;
 
@@ -39,6 +49,8 @@ export interface CatalogTransaction {
   putCanonicalizationReceipt(receipt: CanonicalizationReceipt): Promise<void>;
   getCommandReceipt(idempotencyKey: string): Promise<CommandReceipt | null>;
   putCommandReceipt(receipt: CommandReceipt): Promise<void>;
+  getManualCatalogEntryReceipt(idempotencyKey: string): Promise<ManualCatalogEntryReceipt | null>;
+  putManualCatalogEntryReceipt(receipt: ManualCatalogEntryReceipt): Promise<void>;
   appendAudit(event: AuditEvent): Promise<void>;
   appendRevision(record: EntityRevisionRecord): Promise<void>;
   appendOutbox(event: OutboxEvent): Promise<void>;
@@ -49,8 +61,14 @@ export interface CatalogStore {
   getVehicleAsset(id: string): Promise<VehicleAsset | null>;
   getProduct(id: string): Promise<Product | null>;
   getOffer(id: string): Promise<Offer | null>;
+  getSourceDefinition(sourceId: string): Promise<SourceDefinition | null>;
+  getSourceRun(runId: string): Promise<SourceRun | null>;
+  getSourceHead(sourceId: string): Promise<SourceHead | null>;
+  getRawRecord(rawRecordId: string): Promise<RawRecord | null>;
+  getCandidate(candidateId: string): Promise<NormalizedCandidateRecord | null>;
   getSourceBinding(bindingId: string): Promise<CanonicalSourceBinding | null>;
   getCanonicalizationReceipt(idempotencyKey: string): Promise<CanonicalizationReceipt | null>;
+  getManualCatalogEntryReceipt(idempotencyKey: string): Promise<ManualCatalogEntryReceipt | null>;
   listLineageByStage(stage: LineageStage): Promise<FieldLineageRecord[]>;
   listEntityHistory(
     entityType: CatalogEntityType,
@@ -69,6 +87,9 @@ export interface CatalogStore {
     sourceBindings?: CanonicalSourceBinding[];
     canonicalizationReceipts?: CanonicalizationReceipt[];
     revisionHistory?: EntityRevisionRecord[];
+    sourceDefinitions?: SourceDefinition[];
+    rawRecords?: RawRecord[];
+    manualCatalogEntryReceipts?: ManualCatalogEntryReceipt[];
   }): Promise<void>;
 }
 export interface ProjectionStore {

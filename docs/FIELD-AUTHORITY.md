@@ -45,3 +45,16 @@ The later security/IAM work must derive the actor/service identity from authenti
 This separation is intentional:
 
 `Authentication/IAM → verified ActorRef → Field Authority → Domain Validation → Transaction`
+
+
+## Command-level writer gate
+
+`CREATE_MANUAL_CATALOG_ENTRY` also has a semantic writer gate.
+
+Allowed writers:
+
+- USER at the semantic layer
+- SERVICE `service:freepass-data`
+- SERVICE `service:freepass-admin`
+
+This still does not replace authentication/IAM. The runtime must later derive ActorRef from authenticated credentials rather than trusting a request body.

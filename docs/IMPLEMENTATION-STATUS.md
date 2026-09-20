@@ -43,15 +43,16 @@ Implemented:
 - VehicleModel generation/subModel semantic separation
 - append-only queryable Canonical Revision History for create/change commands
 - Firebase Control Plane contract for consumer reads/writes and future Console mutation paths
+- controlled Manual Catalog Source/Command with immutable RAW, candidate, lineage and receipt
+- direct-input vertical slice through reviewed Canonicalization and ACTIVE ERP Public Release
 - tests for catalog mutation, authority enforcement, idempotency payload conflict, stale revision, projection semantics, ingestion, legacy normalization and shadow behavior
 
 ## Current gap
 
 The implementation has moved beyond the old Next list. The highest-value missing Catalog V1 platform contracts are now:
 
-1. **Manual Catalog Source/Command for direct controlled additions**
-2. **Complete field lineage: Canonical → Projection + Release evidence**
-3. **Reviewed source-change update path for an existing canonical binding**
+1. **Complete field lineage: Canonical → Projection + Release evidence**
+2. **Reviewed source-change update path for an existing canonical binding**
 3. **Acceptance-test expansion for failure, duplicate, cutover and last-known-good cases**
 4. **Server/service authentication + IAM enforcement**
 5. **ERP.com shadow/read pilot**

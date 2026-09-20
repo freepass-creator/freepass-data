@@ -1,7 +1,8 @@
 import type { ActorRef } from './catalog.js';
 
 export type CatalogCommandType =
-  | 'UPDATE_OFFER_PRICE';
+  | 'UPDATE_OFFER_PRICE'
+  | 'CREATE_MANUAL_CATALOG_ENTRY';
 
 export type AuthorityConflictPolicy =
   | 'EXPECTED_REVISION'
@@ -64,6 +65,24 @@ export class AuthorityDeniedError extends Error {
   }
 }
 
+export type CatalogCommandWriterRule = {
+  command: CatalogCommandType;
+  allowedWriters: readonly AllowedWriter[];
+};
+
+export const CATALOG_COMMAND_WRITERS: readonly CatalogCommandWriterRule[] = [
+  {
+    command: 'CREATE_MANUAL_CATALOG_ENTRY',
+    allowedWriters: [
+      { kind: 'USER' },
+      {
+        kind: 'SERVICE',
+        ids: ['service:freepass-data', 'service:freepass-admin']
+      }
+    ]
+  }
+] as const;
+
 export const CATALOG_FIELD_AUTHORITY: readonly FieldAuthorityRule[] = [
   {
     ruleId: 'catalog.offer.price-term.monthly-rent.v1',
@@ -94,12 +113,30 @@ function fieldMatches(rulePath: string, fieldPath: string) {
   return rule.every((part, index) => part === '*' || part === actual[index]);
 }
 
-function writerMatches(rule: FieldAuthorityRule, actor: ActorRef) {
-  return rule.allowedWriters.some((writer) => {
+function allowedWriterMatches(allowedWriters: readonly AllowedWriter[], actor: ActorRef) {
+  return allowedWriters.some((writer) => {
     if (writer.kind !== actor.kind) return false;
     if (writer.kind === 'USER') return true;
     return writer.ids.includes(actor.id);
   });
+}
+
+function writerMatches(rule: FieldAuthorityRule, actor: ActorRef) {
+  return allowedWriterMatches(rule.allowedWriters, actor);
+}
+
+export function assertCommandWriter(command: CatalogCommandType, actor: ActorRef) {
+  const rule = CATALOG_COMMAND_WRITERS.find((item) => item.command === command);
+  if (!rule || !allowedWriterMatches(rule.allowedWriters, actor)) {
+    throw new AuthorityDeniedError(
+      'catalog',
+      '*',
+      command,
+      actor.id,
+      rule ? 'actor is not an allowed command writer' : 'no command writer rule exists'
+    );
+  }
+  return rule;
 }
 
 export function resolveFieldAuthority(

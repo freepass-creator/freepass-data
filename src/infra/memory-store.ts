@@ -11,6 +11,8 @@ import type {
 } from '../domain/canonicalization.js';
 import type {
   NormalizedCandidateRecord,
+  RawRecord,
+  SourceDefinition,
   SourceHead,
   SourceRun
 } from '../domain/source.js';
@@ -19,6 +21,7 @@ import type {
   CatalogEntityType,
   EntityRevisionRecord
 } from '../domain/history.js';
+import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -30,8 +33,11 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   private policies = new Map<string, Policy>();
   private receipts = new Map<string, CommandReceipt>();
   private canonicalizationReceipts = new Map<string, CanonicalizationReceipt>();
+  private manualCatalogEntryReceipts = new Map<string, ManualCatalogEntryReceipt>();
+  private sourceDefinitions = new Map<string, SourceDefinition>();
   private sourceRuns = new Map<string, SourceRun>();
   private sourceHeads = new Map<string, SourceHead>();
+  private rawRecords = new Map<string, RawRecord>();
   private candidates = new Map<string, NormalizedCandidateRecord>();
   private lineage = new Map<string, FieldLineageRecord>();
   private sourceBindings = new Map<string, CanonicalSourceBinding>();
@@ -49,19 +55,27 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     sourceBindings?: CanonicalSourceBinding[];
     canonicalizationReceipts?: CanonicalizationReceipt[];
     revisionHistory?: EntityRevisionRecord[];
+    sourceDefinitions?: SourceDefinition[];
+    rawRecords?: RawRecord[];
+    manualCatalogEntryReceipts?: ManualCatalogEntryReceipt[];
   }) {
     for (const x of input.vehicleModels ?? []) this.models.set(x.id, copy(x));
     for (const x of input.vehicleAssets ?? []) this.assets.set(x.id, copy(x));
     for (const x of input.products ?? []) this.products.set(x.id, copy(x));
     for (const x of input.offers ?? []) this.offers.set(x.id, copy(x));
     for (const x of input.policies ?? []) this.policies.set(x.id, copy(x));
+    for (const x of input.sourceDefinitions ?? []) this.sourceDefinitions.set(x.sourceId, copy(x));
     for (const x of input.sourceRuns ?? []) this.sourceRuns.set(x.runId, copy(x));
     for (const x of input.sourceHeads ?? []) this.sourceHeads.set(x.sourceId, copy(x));
+    for (const x of input.rawRecords ?? []) this.rawRecords.set(x.rawRecordId, copy(x));
     for (const x of input.candidates ?? []) this.candidates.set(x.candidateId, copy(x));
     for (const x of input.lineage ?? []) this.lineage.set(x.lineageRecordId, copy(x));
     for (const x of input.sourceBindings ?? []) this.sourceBindings.set(x.bindingId, copy(x));
     for (const x of input.canonicalizationReceipts ?? []) {
       this.canonicalizationReceipts.set(x.idempotencyKey, copy(x));
+    }
+    for (const x of input.manualCatalogEntryReceipts ?? []) {
+      this.manualCatalogEntryReceipts.set(x.idempotencyKey, copy(x));
     }
     for (const x of input.revisionHistory ?? []) {
       this.revisionHistory.set(x.revisionRecordId, copy(x));
@@ -76,6 +90,12 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       offers: copy([...this.offers.entries()]),
       receipts: copy([...this.receipts.entries()]),
       canonicalizationReceipts: copy([...this.canonicalizationReceipts.entries()]),
+      manualCatalogEntryReceipts: copy([...this.manualCatalogEntryReceipts.entries()]),
+      sourceDefinitions: copy([...this.sourceDefinitions.entries()]),
+      sourceRuns: copy([...this.sourceRuns.entries()]),
+      sourceHeads: copy([...this.sourceHeads.entries()]),
+      rawRecords: copy([...this.rawRecords.entries()]),
+      candidates: copy([...this.candidates.entries()]),
       lineage: copy([...this.lineage.entries()]),
       sourceBindings: copy([...this.sourceBindings.entries()]),
       revisionHistory: copy([...this.revisionHistory.entries()]),
@@ -92,9 +112,39 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       getOffer: async (id) => copy(this.offers.get(id) ?? null),
       putOffer: async (offer) => { this.offers.set(offer.id, copy(offer)); },
 
+      getSourceDefinition: async (sourceId) => copy(this.sourceDefinitions.get(sourceId) ?? null),
+      putSourceDefinition: async (source) => {
+        if (this.sourceDefinitions.has(source.sourceId)) {
+          throw new Error(`Source definition already exists: ${source.sourceId}`);
+        }
+        this.sourceDefinitions.set(source.sourceId, copy(source));
+      },
       getSourceRun: async (runId) => copy(this.sourceRuns.get(runId) ?? null),
+      putSourceRun: async (run) => {
+        if (this.sourceRuns.has(run.runId)) throw new Error(`Source run already exists: ${run.runId}`);
+        this.sourceRuns.set(run.runId, copy(run));
+      },
       getSourceHead: async (sourceId) => copy(this.sourceHeads.get(sourceId) ?? null),
+      putSourceHead: async (head) => {
+        if (this.sourceHeads.has(head.sourceId)) {
+          throw new Error(`Source head already exists: ${head.sourceId}`);
+        }
+        this.sourceHeads.set(head.sourceId, copy(head));
+      },
+      getRawRecord: async (rawRecordId) => copy(this.rawRecords.get(rawRecordId) ?? null),
+      putRawRecord: async (record) => {
+        if (this.rawRecords.has(record.rawRecordId)) {
+          throw new Error(`Raw record already exists: ${record.rawRecordId}`);
+        }
+        this.rawRecords.set(record.rawRecordId, copy(record));
+      },
       getCandidate: async (candidateId) => copy(this.candidates.get(candidateId) ?? null),
+      putCandidate: async (record) => {
+        if (this.candidates.has(record.candidateId)) {
+          throw new Error(`Candidate already exists: ${record.candidateId}`);
+        }
+        this.candidates.set(record.candidateId, copy(record));
+      },
       listLineageForCandidate: async (candidateId) => copy(
         [...this.lineage.values()].filter((item) => item.normalized?.candidateId === candidateId)
       ),
@@ -123,6 +173,14 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
 
       getCommandReceipt: async (key) => copy(this.receipts.get(key) ?? null),
       putCommandReceipt: async (receipt) => { this.receipts.set(receipt.idempotencyKey, copy(receipt)); },
+      getManualCatalogEntryReceipt: async (key) =>
+        copy(this.manualCatalogEntryReceipts.get(key) ?? null),
+      putManualCatalogEntryReceipt: async (receipt) => {
+        if (this.manualCatalogEntryReceipts.has(receipt.idempotencyKey)) {
+          throw new Error(`Manual catalog entry receipt already exists: ${receipt.idempotencyKey}`);
+        }
+        this.manualCatalogEntryReceipts.set(receipt.idempotencyKey, copy(receipt));
+      },
       appendAudit: async (event) => { this.audits.push(copy(event)); },
       appendRevision: async (record) => {
         if (this.revisionHistory.has(record.revisionRecordId)) {
@@ -140,6 +198,12 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       this.offers = new Map(snapshot.offers);
       this.receipts = new Map(snapshot.receipts);
       this.canonicalizationReceipts = new Map(snapshot.canonicalizationReceipts);
+      this.manualCatalogEntryReceipts = new Map(snapshot.manualCatalogEntryReceipts);
+      this.sourceDefinitions = new Map(snapshot.sourceDefinitions);
+      this.sourceRuns = new Map(snapshot.sourceRuns);
+      this.sourceHeads = new Map(snapshot.sourceHeads);
+      this.rawRecords = new Map(snapshot.rawRecords);
+      this.candidates = new Map(snapshot.candidates);
       this.lineage = new Map(snapshot.lineage);
       this.sourceBindings = new Map(snapshot.sourceBindings);
       this.revisionHistory = new Map(snapshot.revisionHistory);
@@ -154,11 +218,19 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async getVehicleAsset(id: string) { return copy(this.assets.get(id) ?? null); }
   async getProduct(id: string) { return copy(this.products.get(id) ?? null); }
   async getOffer(id: string) { return copy(this.offers.get(id) ?? null); }
+  async getSourceDefinition(sourceId: string) { return copy(this.sourceDefinitions.get(sourceId) ?? null); }
+  async getSourceRun(runId: string) { return copy(this.sourceRuns.get(runId) ?? null); }
+  async getSourceHead(sourceId: string) { return copy(this.sourceHeads.get(sourceId) ?? null); }
+  async getRawRecord(rawRecordId: string) { return copy(this.rawRecords.get(rawRecordId) ?? null); }
+  async getCandidate(candidateId: string) { return copy(this.candidates.get(candidateId) ?? null); }
   async getSourceBinding(bindingId: string) {
     return copy(this.sourceBindings.get(bindingId) ?? null);
   }
   async getCanonicalizationReceipt(idempotencyKey: string) {
     return copy(this.canonicalizationReceipts.get(idempotencyKey) ?? null);
+  }
+  async getManualCatalogEntryReceipt(idempotencyKey: string) {
+    return copy(this.manualCatalogEntryReceipts.get(idempotencyKey) ?? null);
   }
   async listLineageByStage(stage: LineageStage) {
     return copy([...this.lineage.values()].filter((item) => item.stage === stage));

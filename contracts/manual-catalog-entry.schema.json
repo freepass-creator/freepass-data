@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/manual-catalog-entry.schema.json",
+  "title": "CreateManualCatalogEntryCommand",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["commandId", "idempotencyKey", "entry", "actor", "reason"],
+  "properties": {
+    "commandId": {"type": "string", "minLength": 1},
+    "idempotencyKey": {"type": "string", "minLength": 8},
+    "reason": {"type": "string", "minLength": 2},
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["USER", "SERVICE"]},
+        "organizationId": {"type": ["string", "null"]}
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maker", "model", "commercialType", "supplierId", "priceTerms"],
+      "properties": {
+        "carNumber": {"type": ["string", "null"]},
+        "maker": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "subModel": {"type": ["string", "null"]},
+        "trimName": {"type": ["string", "null"]},
+        "commercialType": {
+          "enum": ["NEW_RENT", "USED_RENT", "NEW_SUBSCRIPTION", "USED_SUBSCRIPTION", "PICKUP_SUBSCRIPTION"]
+        },
+        "supplierId": {"type": "string", "minLength": 1},
+        "fuelType": {"type": ["string", "null"]},
+        "mileageKm": {"type": ["integer", "null"], "minimum": 0},
+        "driveType": {"type": ["string", "null"]},
+        "seats": {"type": ["integer", "null"], "minimum": 1},
+        "priceTerms": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["termMonths", "monthlyRent", "depositState"],
+            "properties": {
+              "termMonths": {"type": "integer", "minimum": 1, "maximum": 120},
+              "monthlyRent": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["amount", "currency"],
+                "properties": {
+                  "amount": {"type": "integer", "minimum": 0},
+                  "currency": {"const": "KRW"}
+                }
+              },
+              "depositState": {"enum": ["KNOWN", "ZERO", "UNKNOWN", "NOT_APPLICABLE"]},
+              "deposit": {
+                "anyOf": [
+                  {"type": "null"},
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["amount", "currency"],
+                    "properties": {
+                      "amount": {"type": "integer", "minimum": 0},
+                      "currency": {"const": "KRW"}
+                    }
+                  }
+                ]
+              },
+              "mileageLimitKmPerYear": {"type": ["integer", "null"], "minimum": 0}
+            }
+          }
+        }
+      }
+    }
+  }
+}
