@@ -2,7 +2,8 @@ import type { ActorRef } from './catalog.js';
 
 export type CatalogCommandType =
   | 'UPDATE_OFFER_PRICE'
-  | 'CREATE_MANUAL_CATALOG_ENTRY';
+  | 'CREATE_MANUAL_CATALOG_ENTRY'
+  | 'APPLY_REVIEWED_SOURCE_CHANGE';
 
 export type AuthorityConflictPolicy =
   | 'EXPECTED_REVISION'
@@ -80,6 +81,16 @@ export const CATALOG_COMMAND_WRITERS: readonly CatalogCommandWriterRule[] = [
         ids: ['service:freepass-data', 'service:freepass-admin']
       }
     ]
+  },
+  {
+    command: 'APPLY_REVIEWED_SOURCE_CHANGE',
+    allowedWriters: [
+      { kind: 'USER' },
+      {
+        kind: 'SERVICE',
+        ids: ['service:freepass-data', 'service:freepass-admin']
+      }
+    ]
   }
 ] as const;
 
@@ -90,7 +101,7 @@ export const CATALOG_FIELD_AUTHORITY: readonly FieldAuthorityRule[] = [
     aggregate: 'offer',
     fieldPath: 'priceTerms.*.monthlyRent',
     semanticOwner: 'catalog-pricing',
-    allowedCommands: ['UPDATE_OFFER_PRICE'],
+    allowedCommands: ['UPDATE_OFFER_PRICE', 'APPLY_REVIEWED_SOURCE_CHANGE'],
     allowedWriters: [
       { kind: 'USER' },
       {
@@ -99,6 +110,74 @@ export const CATALOG_FIELD_AUTHORITY: readonly FieldAuthorityRule[] = [
       }
     ],
     approval: 'NONE',
+    conflict: 'EXPECTED_REVISION',
+    override: 'DISALLOWED',
+    effectiveTime: 'IMMEDIATE',
+    sourceRefresh: 'PRESERVE_CANONICAL_AND_REVIEW'
+  },
+  {
+    ruleId: 'catalog.offer.price-term.deposit-state.v1',
+    domain: 'catalog',
+    aggregate: 'offer',
+    fieldPath: 'priceTerms.*.depositState',
+    semanticOwner: 'catalog-pricing',
+    allowedCommands: ['APPLY_REVIEWED_SOURCE_CHANGE'],
+    allowedWriters: [
+      { kind: 'USER' },
+      { kind: 'SERVICE', ids: ['service:freepass-data', 'service:freepass-admin'] }
+    ],
+    approval: 'REQUIRED',
+    conflict: 'EXPECTED_REVISION',
+    override: 'DISALLOWED',
+    effectiveTime: 'IMMEDIATE',
+    sourceRefresh: 'PRESERVE_CANONICAL_AND_REVIEW'
+  },
+  {
+    ruleId: 'catalog.offer.price-term.deposit.v1',
+    domain: 'catalog',
+    aggregate: 'offer',
+    fieldPath: 'priceTerms.*.deposit',
+    semanticOwner: 'catalog-pricing',
+    allowedCommands: ['APPLY_REVIEWED_SOURCE_CHANGE'],
+    allowedWriters: [
+      { kind: 'USER' },
+      { kind: 'SERVICE', ids: ['service:freepass-data', 'service:freepass-admin'] }
+    ],
+    approval: 'REQUIRED',
+    conflict: 'EXPECTED_REVISION',
+    override: 'DISALLOWED',
+    effectiveTime: 'IMMEDIATE',
+    sourceRefresh: 'PRESERVE_CANONICAL_AND_REVIEW'
+  },
+  {
+    ruleId: 'catalog.offer.price-term-mileage-limit.v1',
+    domain: 'catalog',
+    aggregate: 'offer',
+    fieldPath: 'priceTerms.*.mileageLimitKmPerYear',
+    semanticOwner: 'catalog-pricing',
+    allowedCommands: ['APPLY_REVIEWED_SOURCE_CHANGE'],
+    allowedWriters: [
+      { kind: 'USER' },
+      { kind: 'SERVICE', ids: ['service:freepass-data', 'service:freepass-admin'] }
+    ],
+    approval: 'REQUIRED',
+    conflict: 'EXPECTED_REVISION',
+    override: 'DISALLOWED',
+    effectiveTime: 'IMMEDIATE',
+    sourceRefresh: 'PRESERVE_CANONICAL_AND_REVIEW'
+  },
+  {
+    ruleId: 'catalog.vehicle-asset.odometer.v1',
+    domain: 'catalog',
+    aggregate: 'vehicle_asset',
+    fieldPath: 'odometerKm',
+    semanticOwner: 'catalog-vehicle',
+    allowedCommands: ['APPLY_REVIEWED_SOURCE_CHANGE'],
+    allowedWriters: [
+      { kind: 'USER' },
+      { kind: 'SERVICE', ids: ['service:freepass-data', 'service:freepass-admin'] }
+    ],
+    approval: 'REQUIRED',
     conflict: 'EXPECTED_REVISION',
     override: 'DISALLOWED',
     effectiveTime: 'IMMEDIATE',
