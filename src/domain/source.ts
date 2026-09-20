@@ -7,6 +7,17 @@ export type SourceCheckpoint = {
   observedAt: string;
 };
 
+export type SourceCoverageMode = 'FULL' | 'DELTA' | 'PARTIAL' | 'UNKNOWN';
+export type SourceCompleteness = 'COMPLETE' | 'INCOMPLETE' | 'UNKNOWN';
+export type SourceRunHeadStatus = 'PENDING' | 'CURRENT' | 'STALE' | 'INELIGIBLE';
+
+export type SourceCoverage = {
+  mode: SourceCoverageMode;
+  completeness: SourceCompleteness;
+  scope?: string | null;
+  note?: string | null;
+};
+
 export type SourceKind = 'FIRESTORE' | 'GOOGLE_SHEET' | 'API' | 'FILE' | 'MANUAL';
 export type SourceHealth = 'UNKNOWN' | 'HEALTHY' | 'DEGRADED' | 'ERROR';
 
@@ -28,12 +39,30 @@ export type SourceRun = {
   completedAt?: string | null;
   observedAt?: string | null;
   checkpoint?: SourceCheckpoint | null;
+  coverage: SourceCoverage;
+  headStatus: SourceRunHeadStatus;
   rawCount: number;
   candidateCount: number;
   lineageCount?: number;
   warningCount: number;
   error?: string | null;
 };
+
+export type SourceHead = {
+  sourceId: string;
+  runId: string;
+  observedAt: string;
+  acceptedAt: string;
+  checkpoint: SourceCheckpoint;
+  coverage: SourceCoverage;
+};
+
+export function canAssertSourceAbsence(run: SourceRun): boolean {
+  return run.status === 'COMPLETED'
+    && run.coverage.mode === 'FULL'
+    && run.coverage.completeness === 'COMPLETE'
+    && run.headStatus === 'CURRENT';
+}
 
 export type RawRecord = {
   rawRecordId: string;
