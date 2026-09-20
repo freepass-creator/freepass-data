@@ -20,7 +20,10 @@
         "schemaVersion",
         "releaseId",
         "revision",
-        "generatedAt"
+        "generatedAt",
+        "policyParity",
+        "missingPolicyOfferIds",
+        "invalidPolicyFactRefs"
       ],
       "properties": {
         "schemaVersion": {
@@ -49,6 +52,24 @@
               "format": "date-time"
             }
           ]
+        },
+        "policyParity": {
+          "enum": [
+            "COMPLETE",
+            "INCOMPLETE"
+          ]
+        },
+        "missingPolicyOfferIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "invalidPolicyFactRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -428,6 +449,12 @@
             "null"
           ],
           "minimum": 0
+        },
+        "subModel": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
