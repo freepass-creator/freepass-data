@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { IdempotencyConflictError, RevisionConflictError, buildErpPublicProjection, processOneOutboxEvent, updateOfferPrice } from '../src/application/catalog.js';
+import { AuthorityDeniedError, resolveFieldAuthority } from '../src/domain/authority.js';
 
 describe('Catalog V1 vertical slice', () => {
   it('is idempotent and rejects stale revisions', async () => {
@@ -33,6 +34,34 @@ describe('Catalog V1 vertical slice', () => {
     expect((await store.getOffer(command.offerId))?.revision).toBe(2);
     expect(store.audits).toHaveLength(1);
     expect(store.outbox.size).toBe(1);
+  });
+
+  it('resolves the monthly-rent field authority rule', () => {
+    const rule=resolveFieldAuthority('offer','priceTerms.36@20000.monthlyRent');
+    expect(rule?.ruleId).toBe('catalog.offer.price-term.monthly-rent.v1');
+    expect(rule?.conflict).toBe('EXPECTED_REVISION');
+    expect(rule?.sourceRefresh).toBe('PRESERVE_CANONICAL_AND_REVIEW');
+  });
+
+  it('rejects an unregistered service writer before mutation', async () => {
+    const store=new MemoryDataStore(); await seedDemoCatalog(store);
+    await expect(updateOfferPrice(store,{
+      commandId:'cmd_authority_1',idempotencyKey:'idem_authority_0001',offerId:'offer_gv70_demo',expectedRevision:1,termKey:'36@20000',
+      monthlyRent:{amount:720000,currency:'KRW'},reason:'authority test',actor:{id:'service:unknown',kind:'SERVICE'}
+    },'2026-09-20T10:00:00.000Z')).rejects.toBeInstanceOf(AuthorityDeniedError);
+    expect((await store.getOffer('offer_gv70_demo'))?.revision).toBe(1);
+    expect(store.audits).toHaveLength(0);
+    expect(store.outbox.size).toBe(0);
+  });
+
+  it('allows the registered FreePass Data service writer', async () => {
+    const store=new MemoryDataStore(); await seedDemoCatalog(store);
+    const receipt=await updateOfferPrice(store,{
+      commandId:'cmd_authority_2',idempotencyKey:'idem_authority_0002',offerId:'offer_gv70_demo',expectedRevision:1,termKey:'36@20000',
+      monthlyRent:{amount:725000,currency:'KRW'},reason:'authority test',actor:{id:'service:freepass-data',kind:'SERVICE'}
+    },'2026-09-20T10:00:00.000Z');
+    expect(receipt.status).toBe('CANONICAL_COMMITTED');
+    expect((await store.getOffer('offer_gv70_demo'))?.revision).toBe(2);
   });
 
   it('preserves commercial/offer/term boundaries in projection', async () => {
