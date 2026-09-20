@@ -5,6 +5,9 @@ import {
   SourceChangedReviewRequiredError,
   canonicalizeCatalogCandidate
 } from '../src/application/canonicalize-catalog-candidate.js';
+import type {
+  CanonicalizeCatalogCandidateInput
+} from '../src/application/canonicalize-catalog-candidate.js';
 import { processOneOutboxEvent } from '../src/application/catalog.js';
 import type { FieldLineageRecord } from '../src/domain/lineage.js';
 import type {
@@ -149,7 +152,11 @@ function evidence(input: {
   return { run, head, candidate, lineage };
 }
 
-function command(candidateId: string, headRunId: string, idempotencyKey: string) {
+function command(
+  candidateId: string,
+  headRunId: string,
+  idempotencyKey: string
+): CanonicalizeCatalogCandidateInput {
   return {
     commandId: `cmd-${idempotencyKey}`,
     idempotencyKey,
@@ -178,7 +185,12 @@ describe('safe catalog canonicalization', () => {
       fingerprint: 'fp-current',
       observedAt: '2026-09-21T00:00:00Z'
     });
-    await store.seed!(fixture);
+    await store.seed!({
+      sourceRuns: [fixture.run],
+      sourceHeads: [fixture.head],
+      candidates: [fixture.candidate],
+      lineage: fixture.lineage
+    });
 
     const receipt = await canonicalizeCatalogCandidate(
       store,
@@ -231,7 +243,12 @@ describe('safe catalog canonicalization', () => {
       fingerprint: 'fp-current',
       observedAt: '2026-09-21T00:00:00Z'
     });
-    await store.seed!(fixture);
+    await store.seed!({
+      sourceRuns: [fixture.run],
+      sourceHeads: [fixture.head],
+      candidates: [fixture.candidate],
+      lineage: fixture.lineage
+    });
 
     const first = await canonicalizeCatalogCandidate(
       store,
@@ -293,7 +310,12 @@ describe('safe catalog canonicalization', () => {
       fingerprint: 'fp-original',
       observedAt: '2026-09-21T00:00:00Z'
     });
-    await store.seed!(original);
+    await store.seed!({
+      sourceRuns: [original.run],
+      sourceHeads: [original.head],
+      candidates: [original.candidate],
+      lineage: original.lineage
+    });
 
     await canonicalizeCatalogCandidate(
       store,
@@ -336,7 +358,12 @@ describe('safe catalog canonicalization', () => {
       observedAt: '2026-09-21T00:00:00Z',
       issues: ['UNKNOWN_PRODUCT_NOTE:manual-check']
     });
-    await store.seed!(fixture);
+    await store.seed!({
+      sourceRuns: [fixture.run],
+      sourceHeads: [fixture.head],
+      candidates: [fixture.candidate],
+      lineage: fixture.lineage
+    });
 
     await expect(canonicalizeCatalogCandidate(
       store,
