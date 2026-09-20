@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ActorRef, ErpPublicProduct, Money, Offer, ProjectionRelease } from '../domain/catalog.js';
+import { assertFieldAuthority } from '../domain/authority.js';
 import type { CatalogStore, OutboxStore, ProjectionStore } from '../ports/catalog-store.js';
 
 export type UpdateOfferPriceInput = {
@@ -52,6 +53,12 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
     throw new InvalidCommandError('monthlyRent must be a non-negative integer KRW amount');
   }
   if (!input.reason.trim()) throw new InvalidCommandError('reason is required');
+  const authority = assertFieldAuthority({
+    aggregate: 'offer',
+    fieldPath: `priceTerms.${input.termKey}.monthlyRent`,
+    command: 'UPDATE_OFFER_PRICE',
+    actor: input.actor
+  });
   const requestDigest = updateOfferPriceDigest(input);
 
   return store.transact(async (tx) => {
@@ -73,13 +80,15 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
     const receipt = {
       idempotencyKey: input.idempotencyKey, commandId: input.commandId,
       status: 'CANONICAL_COMMITTED' as const, entityType: 'offer', entityId: current.id,
-      revision: next.revision, committedAt: now, requestDigest
+      revision: next.revision, committedAt: now, requestDigest,
+      authorityRuleId: authority.ruleId
     };
     await tx.putOffer(next);
     await tx.appendAudit({
       eventId: randomUUID(), commandId: input.commandId, actor: input.actor,
       entityType: 'offer', entityId: current.id, action: 'OFFER_PRICE_UPDATED',
       before: current, after: next, reason: input.reason,
+      authorityRuleId: authority.ruleId,
       revisionBefore: current.revision, revisionAfter: next.revision, occurredAt: now
     });
     await tx.appendOutbox({

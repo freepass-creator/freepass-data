@@ -50,9 +50,9 @@ The current baseline includes:
 
 ## 4. Highest-value next work
 
-### P0 — Field Authority Registry
+### P0 — Field Authority Registry ✅
 
-Define the Catalog V1 field-authority contract before adding more business write commands.
+Implemented baseline: `src/domain/authority.ts`, command enforcement, authority evidence in receipt/audit, and regression tests.
 
 Minimum dimensions:
 
@@ -68,7 +68,7 @@ Minimum dimensions:
 
 Do not reduce this to a single `SOURCE_WINS`-style enum.
 
-### P1 — Field-level lineage
+### P1 — Field-level lineage ← NEXT
 
 Connect normalized source evidence to canonical fields and projection output.
 

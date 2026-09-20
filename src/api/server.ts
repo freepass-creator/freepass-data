@@ -3,6 +3,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import updateOfferPriceSchema from '../../contracts/update-offer-price.schema.json' with { type: 'json' };
 import { createRuntimeStores } from '../bootstrap.js';
+import { AuthorityDeniedError } from '../domain/authority.js';
 import {
   EntityNotFoundError,
   IdempotencyConflictError,
@@ -64,6 +65,15 @@ app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {
     }
     if (error instanceof IdempotencyConflictError) {
       return reply.code(409).send({ code: error.code, idempotencyKey: error.idempotencyKey });
+    }
+    if (error instanceof AuthorityDeniedError) {
+      return reply.code(403).send({
+        code: error.code,
+        aggregate: error.aggregate,
+        fieldPath: error.fieldPath,
+        command: error.command,
+        reason: error.reason
+      });
     }
     if (error instanceof EntityNotFoundError) {
       return reply.code(404).send({ code: error.code, message: error.message });
