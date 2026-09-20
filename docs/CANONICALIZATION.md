@@ -67,7 +67,7 @@ Same source record + changed fingerprint:
 - does not overwrite Canonical automatically
 - returns `SOURCE_CHANGED_REVIEW_REQUIRED`
 
-A later explicit re-canonicalization/update command will own reviewed source changes.
+The explicit reviewed update path is implemented in [REVIEWED-SOURCE-CHANGE.md](./REVIEWED-SOURCE-CHANGE.md).
 
 ## 5. Lineage gate
 
@@ -109,7 +109,7 @@ The Outbox worker then rebuilds and activates a new validated ERP Public project
 
 ## 7. Deliberately not implemented in this packet
 
-- automatic update of an existing binding after source fingerprint change
+- automatic unreviewed update after source fingerprint change
 - automatic VehicleModel merge
 - automatic VehicleAsset merge
 - Policy mapping from an external policy code
