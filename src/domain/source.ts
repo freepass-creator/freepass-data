@@ -24,6 +24,7 @@ export type SourceRun = {
   checkpoint?: SourceCheckpoint | null;
   rawCount: number;
   candidateCount: number;
+  lineageCount?: number;
   warningCount: number;
   error?: string | null;
 };
