@@ -28,6 +28,7 @@ console.log(JSON.stringify({
   sourceId: run?.sourceId ?? null,
   rawCount: run?.rawCount ?? null,
   candidateCount: run?.candidateCount ?? null,
+  lineageCount: run?.lineageCount ?? null,
   warningCount: run?.warningCount ?? null,
   targetProjectId,
   legacyProjectId
