@@ -428,4 +428,63 @@ describe('safe catalog canonicalization', () => {
     expect(receipt.status).toBe('CANONICAL_COMMITTED');
     expect((await store.getProduct(receipt.productId))?.validationStatus).toBe('WARNING');
   });
+
+  it('preserves legacy policy_code as Offer.policyId with lineage evidence', async () => {
+    const store = new MemoryDataStore();
+    const fixture = evidence({
+      runId: 'run-policy-binding',
+      candidateId: 'candidate-policy-binding',
+      fingerprint: 'fp-policy-binding',
+      observedAt: '2026-09-21T00:00:00Z'
+    });
+    fixture.candidate.candidate.policyCode = 'policy-basic-21';
+    fixture.lineage.push({
+      lineageRecordId: 'rawlin-policy-binding',
+      lineageId: 'lineage-policy-binding',
+      stage: 'RAW_TO_NORMALIZED',
+      runId: fixture.run.runId,
+      sourceId: SOURCE_ID,
+      sourceRecordId: fixture.candidate.sourceRecordId,
+      sourceFingerprint: fixture.candidate.sourceFingerprint,
+      observedAt: fixture.run.observedAt!,
+      source: { fieldPath: 'policy_code', value: 'policy-basic-21' },
+      normalized: {
+        candidateId: fixture.candidate.candidateId,
+        fieldPath: 'policyCode',
+        value: 'policy-basic-21'
+      },
+      transformId: 'legacy-freepasserp3-product-normalizer',
+      transformVersion: '1.0.0'
+    });
+    fixture.run.lineageCount = fixture.lineage.length;
+
+    await store.seed!({
+      sourceRuns: [fixture.run],
+      sourceHeads: [fixture.head],
+      candidates: [fixture.candidate],
+      lineage: fixture.lineage
+    });
+
+    const receipt = await canonicalizeCatalogCandidate(
+      store,
+      command(
+        fixture.candidate.candidateId,
+        fixture.run.runId,
+        'idem-canonical-policy-binding'
+      ),
+      '2026-09-21T00:01:00Z'
+    );
+
+    const offer = await store.getOffer(receipt.offerId);
+    expect(offer?.policyId).toBe('policy-basic-21');
+
+    const canonicalLineage = await store.listLineageByStage('NORMALIZED_TO_CANONICAL');
+    expect(canonicalLineage.some((item) =>
+      item.normalized?.fieldPath === 'policyCode'
+      && item.canonical?.entityType === 'offer'
+      && item.canonical?.fieldPath === 'policyId'
+      && item.canonical?.value === 'policy-basic-21'
+    )).toBe(true);
+  });
+
 });
