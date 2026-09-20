@@ -119,7 +119,14 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       getVehicleModel: async (id) => copy(this.models.get(id) ?? null),
       putVehicleModel: async (model) => { this.models.set(model.id, copy(model)); },
       getVehicleAsset: async (id) => copy(this.assets.get(id) ?? null),
-      putVehicleAsset: async (asset) => { this.assets.set(asset.id, copy(asset)); },
+      putVehicleAsset: async (asset) => {
+        if (this.assets.has(asset.id)) throw new Error(`VehicleAsset already exists: ${asset.id}`);
+        this.assets.set(asset.id, copy(asset));
+      },
+      updateVehicleAsset: async (asset) => {
+        if (!this.assets.has(asset.id)) throw new Error(`VehicleAsset not found: ${asset.id}`);
+        this.assets.set(asset.id, copy(asset));
+      },
       getProduct: async (id) => copy(this.products.get(id) ?? null),
       putProduct: async (product) => { this.products.set(product.id, copy(product)); },
       getOffer: async (id) => copy(this.offers.get(id) ?? null),
