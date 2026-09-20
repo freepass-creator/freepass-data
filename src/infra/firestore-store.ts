@@ -1,7 +1,7 @@
 import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type {
-  AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
+  AuditEvent, CommandReceipt, Offer, OutboxEvent, Policy,
   Product, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
@@ -152,7 +152,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async listOffers() { return this.all<Offer>(C.offers); }
   async listPolicies() { return this.all<Policy>(C.policies); }
 
-  async stage(release: ProjectionRelease<ErpPublicProduct>) {
+  async stage<T>(release: ProjectionRelease<T>) {
     await this.db.collection(C.releases).doc(release.releaseId).set(release);
   }
   async markReady(releaseId: string) {
@@ -174,10 +174,10 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       tx.set(activeRef, { releaseId, projectionId });
     });
   }
-  async getActive(projectionId: string) {
+  async getActive<T>(projectionId: string): Promise<ProjectionRelease<T> | null> {
     const active = await this.db.collection(C.activeReleases).doc(projectionId).get();
     if (!active.exists) return null;
-    return data<ProjectionRelease<ErpPublicProduct>>(
+    return data<ProjectionRelease<T>>(
       await this.db.collection(C.releases).doc(active.get('releaseId') as string).get()
     );
   }
