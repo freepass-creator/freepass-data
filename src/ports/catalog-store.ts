@@ -19,6 +19,10 @@ import type {
   EntityRevisionRecord
 } from '../domain/history.js';
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
+import type {
+  ProjectionFieldLineageRecord,
+  ProjectionReleaseManifest
+} from '../domain/projection-evidence.js';
 
 export interface CatalogTransaction {
   getVehicleModel(id: string): Promise<VehicleModel | null>;
@@ -74,6 +78,7 @@ export interface CatalogStore {
     entityType: CatalogEntityType,
     entityId: string
   ): Promise<EntityRevisionRecord[]>;
+  listRevisionHistory(): Promise<EntityRevisionRecord[]>;
   listVehicleModels(): Promise<VehicleModel[]>;
   listVehicleAssets(): Promise<VehicleAsset[]>;
   listProducts(): Promise<Product[]>;
@@ -94,9 +99,15 @@ export interface CatalogStore {
 }
 export interface ProjectionStore {
   stage(release: ProjectionRelease<ErpPublicProduct>): Promise<void>;
+  stageEvidence(input: {
+    manifest: ProjectionReleaseManifest;
+    lineage: ProjectionFieldLineageRecord[];
+  }): Promise<void>;
   markReady(releaseId: string): Promise<void>;
   activate(releaseId: string): Promise<void>;
   getActive(projectionId: string): Promise<ProjectionRelease<ErpPublicProduct> | null>;
+  getManifest(releaseId: string): Promise<ProjectionReleaseManifest | null>;
+  listProjectionLineage(releaseId: string): Promise<ProjectionFieldLineageRecord[]>;
 }
 export interface OutboxStore {
   claimNext(input: { workerId: string; now: string; leaseUntil: string }): Promise<OutboxEvent | null>;
