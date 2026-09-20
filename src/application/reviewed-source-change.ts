@@ -478,16 +478,25 @@ function buildChanges(state: LoadedState) {
   }
 
   if (candidate.providerCompanyCode) {
-    const previousSourceSupplierCode =
-      state.binding.sourceSupplierCode ?? offer.supplierId;
-    blocked(
-      'offer',
-      offer.id,
-      'sourceSupplierCode',
-      previousSourceSupplierCode,
-      candidate.providerCompanyCode,
-      'SOURCE_SUPPLIER_MAPPING_CHANGE_REQUIRES_SEPARATE_COMMAND'
-    );
+    if (state.binding.sourceSupplierCode === undefined) {
+      blocked(
+        'offer',
+        offer.id,
+        'sourceSupplierCode',
+        null,
+        candidate.providerCompanyCode,
+        'SOURCE_SUPPLIER_MAPPING_EVIDENCE_MISSING'
+      );
+    } else {
+      blocked(
+        'offer',
+        offer.id,
+        'sourceSupplierCode',
+        state.binding.sourceSupplierCode,
+        candidate.providerCompanyCode,
+        'SOURCE_SUPPLIER_MAPPING_CHANGE_REQUIRES_SEPARATE_COMMAND'
+      );
+    }
   }
 
   if (candidate.carNumber) {
