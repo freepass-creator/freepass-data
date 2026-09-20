@@ -17,6 +17,7 @@ describe('Catalog V1 vertical slice', () => {
     await expect(updateOfferPrice(store,{...command,commandId:'cmd_2',idempotencyKey:'idem_price_0002',expectedRevision:1}))
       .rejects.toBeInstanceOf(RevisionConflictError);
   });
+
   it('preserves commercial/offer/term boundaries in projection', async () => {
     const store=new MemoryDataStore(); await seedDemoCatalog(store);
     const release=await buildErpPublicProjection(store,store,'2026-09-20T10:00:00.000Z');
@@ -24,6 +25,25 @@ describe('Catalog V1 vertical slice', () => {
     expect(release.data[0]?.offers[0]?.priceTerms[0]?.termKey).toBe('36@20000');
     expect(release.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(690000);
   });
+
+  it('excludes UNKNOWN deposit terms from ERP public projection', async () => {
+    const store=new MemoryDataStore(); await seedDemoCatalog(store);
+    const offer = await store.getOffer('offer_gv70_demo');
+    await store.seed!({
+      offers: [{
+        ...offer!,
+        priceTerms: offer!.priceTerms.map((term) => ({
+          ...term,
+          deposit: null,
+          depositState: 'UNKNOWN' as const
+        }))
+      }]
+    });
+
+    const release=await buildErpPublicProjection(store,store,'2026-09-20T10:00:00.000Z');
+    expect(release.data).toHaveLength(0);
+  });
+
   it('outbox publishes repriced release', async () => {
     const store=new MemoryDataStore(); await seedDemoCatalog(store);
     await buildErpPublicProjection(store,store,'2026-09-20T09:00:00.000Z');
