@@ -104,7 +104,7 @@ describe('legacy catalog ingestion', () => {
       records: []
     }, '2026-09-20T10:11:00Z');
 
-    expect(invalid?.headStatus).toBe('STALE');
+    expect(invalid?.headStatus).toBe('INELIGIBLE');
     expect(await store.getSourceHead('freepasserp3/firestore/products')).toBeNull();
   });
 
