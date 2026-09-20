@@ -55,3 +55,15 @@ export type ProjectionEvidenceBundle = {
   manifest: ProjectionReleaseManifest;
   lineage: ProjectionFieldLineageRecord[];
 };
+
+
+export type ProjectionDeliveryReceipt = {
+  eventId: string;
+  eventType: string;
+  projectionId: string;
+  releaseId: string;
+  inputDigest: string;
+  dataDigest: string;
+  targetRevision: number;
+  processedAt: string;
+};
