@@ -30,6 +30,7 @@ export interface CatalogTransaction {
   putVehicleModel(model: VehicleModel): Promise<void>;
   getVehicleAsset(id: string): Promise<VehicleAsset | null>;
   putVehicleAsset(asset: VehicleAsset): Promise<void>;
+  updateVehicleAsset(asset: VehicleAsset): Promise<void>;
   getProduct(id: string): Promise<Product | null>;
   putProduct(product: Product): Promise<void>;
   getOffer(id: string): Promise<Offer | null>;
