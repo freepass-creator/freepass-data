@@ -25,6 +25,15 @@ export async function ingestLegacyProductSnapshot(
   snapshot: LegacyProductSnapshot,
   now = new Date().toISOString()
 ) {
+  if (snapshot.checkpoint.sourceId !== LEGACY_PRODUCT_SOURCE.sourceId) {
+    throw new Error(
+      `Source checkpoint mismatch: expected ${LEGACY_PRODUCT_SOURCE.sourceId}, got ${snapshot.checkpoint.sourceId}`
+    );
+  }
+  if (snapshot.records.some((record) => record.sourceId !== snapshot.checkpoint.sourceId)) {
+    throw new Error('Source record mismatch: snapshot contains a record from a different source');
+  }
+
   const runId = `run_${randomUUID()}`;
   await sourceStore.upsertSource(LEGACY_PRODUCT_SOURCE);
   await sourceStore.beginRun({
