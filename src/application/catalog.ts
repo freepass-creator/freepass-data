@@ -22,6 +22,18 @@ export class IdempotencyConflictError extends Error {
   }
 }
 
+function revisionRecordId(
+  commandId: string,
+  entityType: string,
+  entityId: string,
+  revision: number
+) {
+  return 'rev_' + createHash('sha256')
+    .update([commandId, entityType, entityId, String(revision)].join('|'))
+    .digest('hex')
+    .slice(0, 32);
+}
+
 function updateOfferPriceDigest(input: UpdateOfferPriceInput) {
   return createHash('sha256').update(JSON.stringify({
     commandType: 'UPDATE_OFFER_PRICE',
@@ -84,6 +96,24 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
       authorityRuleId: authority.ruleId
     };
     await tx.putOffer(next);
+    await tx.appendRevision({
+      revisionRecordId: revisionRecordId(
+        input.commandId,
+        'offer',
+        current.id,
+        next.revision
+      ),
+      entityType: 'offer',
+      entityId: current.id,
+      revision: next.revision,
+      previousRevision: current.revision,
+      snapshot: next,
+      actor: input.actor,
+      reason: input.reason,
+      origin: 'MANUAL_COMMAND',
+      commandId: input.commandId,
+      occurredAt: now
+    });
     await tx.appendAudit({
       eventId: randomUUID(), commandId: input.commandId, actor: input.actor,
       entityType: 'offer', entityId: current.id, action: 'OFFER_PRICE_UPDATED',
