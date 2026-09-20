@@ -18,7 +18,7 @@ import type {
   SourceHead,
   SourceRun
 } from '../domain/source.js';
-import type { FieldLineageRecord, LineageStage } from '../domain/lineage.js';
+import type { FieldLineageRecord, SourceLineageStage } from '../domain/lineage.js';
 import type {
   CatalogEntityType,
   EntityRevisionRecord
@@ -236,7 +236,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         .get()
     );
   }
-  async listLineageByStage(stage: LineageStage) {
+  async listLineageByStage(stage: SourceLineageStage) {
     const snap = await this.db.collection(C.lineage).where('stage', '==', stage).get();
     return snap.docs.map((doc) => doc.data() as FieldLineageRecord);
   }
