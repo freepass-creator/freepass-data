@@ -23,6 +23,7 @@ import type {
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
+import type { ReviewedSourceChangeReceipt } from '../domain/source-change.js';
 
 export interface CatalogTransaction {
   getVehicleModel(id: string): Promise<VehicleModel | null>;
@@ -49,12 +50,15 @@ export interface CatalogTransaction {
 
   getSourceBinding(bindingId: string): Promise<CanonicalSourceBinding | null>;
   putSourceBinding(binding: CanonicalSourceBinding): Promise<void>;
+  updateSourceBinding(binding: CanonicalSourceBinding): Promise<void>;
   getCanonicalizationReceipt(idempotencyKey: string): Promise<CanonicalizationReceipt | null>;
   putCanonicalizationReceipt(receipt: CanonicalizationReceipt): Promise<void>;
   getCommandReceipt(idempotencyKey: string): Promise<CommandReceipt | null>;
   putCommandReceipt(receipt: CommandReceipt): Promise<void>;
   getManualCatalogEntryReceipt(idempotencyKey: string): Promise<ManualCatalogEntryReceipt | null>;
   putManualCatalogEntryReceipt(receipt: ManualCatalogEntryReceipt): Promise<void>;
+  getReviewedSourceChangeReceipt(idempotencyKey: string): Promise<ReviewedSourceChangeReceipt | null>;
+  putReviewedSourceChangeReceipt(receipt: ReviewedSourceChangeReceipt): Promise<void>;
   appendAudit(event: AuditEvent): Promise<void>;
   appendRevision(record: EntityRevisionRecord): Promise<void>;
   appendOutbox(event: OutboxEvent): Promise<void>;
@@ -73,6 +77,7 @@ export interface CatalogStore {
   getSourceBinding(bindingId: string): Promise<CanonicalSourceBinding | null>;
   getCanonicalizationReceipt(idempotencyKey: string): Promise<CanonicalizationReceipt | null>;
   getManualCatalogEntryReceipt(idempotencyKey: string): Promise<ManualCatalogEntryReceipt | null>;
+  getReviewedSourceChangeReceipt(idempotencyKey: string): Promise<ReviewedSourceChangeReceipt | null>;
   listLineageByStage(stage: SourceLineageStage): Promise<FieldLineageRecord[]>;
   listEntityHistory(
     entityType: CatalogEntityType,
@@ -95,6 +100,7 @@ export interface CatalogStore {
     sourceDefinitions?: SourceDefinition[];
     rawRecords?: RawRecord[];
     manualCatalogEntryReceipts?: ManualCatalogEntryReceipt[];
+    reviewedSourceChangeReceipts?: ReviewedSourceChangeReceipt[];
   }): Promise<void>;
 }
 export interface ProjectionStore {
