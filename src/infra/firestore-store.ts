@@ -26,6 +26,7 @@ import type {
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
 import type { ReviewedSourceChangeReceipt } from '../domain/source-change.js';
 import type {
+  ProjectionDeliveryReceipt,
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
@@ -53,6 +54,7 @@ const C = {
   releases: 'projection_releases',
   releaseManifests: 'projection_release_manifests',
   projectionLineage: 'projection_field_lineage',
+  projectionDeliveryReceipts: 'projection_delivery_receipts',
   activeReleases: 'projection_active'
 } as const;
 
@@ -389,6 +391,18 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       .where('releaseId', '==', releaseId)
       .get();
     return snap.docs.map((doc) => doc.data() as ProjectionFieldLineageRecord);
+  }
+  async getDeliveryReceipt(eventId: string) {
+    return data<ProjectionDeliveryReceipt>(
+      await this.db.collection(C.projectionDeliveryReceipts)
+        .doc(encodeURIComponent(eventId))
+        .get()
+    );
+  }
+  async putDeliveryReceipt(receipt: ProjectionDeliveryReceipt) {
+    await this.db.collection(C.projectionDeliveryReceipts)
+      .doc(encodeURIComponent(receipt.eventId))
+      .create(receipt);
   }
 
   async claimNext(input: { workerId: string; now: string; leaseUntil: string }) {
