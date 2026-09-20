@@ -24,6 +24,7 @@ import type {
   EntityRevisionRecord
 } from '../domain/history.js';
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
+import type { ReviewedSourceChangeReceipt } from '../domain/source-change.js';
 import type {
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
@@ -38,6 +39,7 @@ const C = {
   receipts: 'command_receipts',
   canonicalizationReceipts: 'canonicalization_receipts',
   manualCatalogEntryReceipts: 'manual_catalog_entry_receipts',
+  reviewedSourceChangeReceipts: 'reviewed_source_change_receipts',
   sources: 'sources',
   sourceRuns: 'source_runs',
   sourceHeads: 'source_heads',
@@ -143,6 +145,9 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         putSourceBinding: async (binding) => {
           native.create(this.db.collection(C.sourceBindings).doc(binding.bindingId), binding);
         },
+        updateSourceBinding: async (binding) => {
+          native.set(this.db.collection(C.sourceBindings).doc(binding.bindingId), binding);
+        },
         getCanonicalizationReceipt: async (key) =>
           data<CanonicalizationReceipt>(
             await native.get(this.db.collection(C.canonicalizationReceipts).doc(key))
@@ -167,6 +172,21 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         putManualCatalogEntryReceipt: async (receipt) => {
           native.create(
             this.db.collection(C.manualCatalogEntryReceipts).doc(
+              encodeURIComponent(receipt.idempotencyKey)
+            ),
+            receipt
+          );
+        },
+        getReviewedSourceChangeReceipt: async (key) =>
+          data<ReviewedSourceChangeReceipt>(
+            await native.get(
+              this.db.collection(C.reviewedSourceChangeReceipts)
+                .doc(encodeURIComponent(key))
+            )
+          ),
+        putReviewedSourceChangeReceipt: async (receipt) => {
+          native.create(
+            this.db.collection(C.reviewedSourceChangeReceipts).doc(
               encodeURIComponent(receipt.idempotencyKey)
             ),
             receipt
@@ -232,6 +252,13 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async getManualCatalogEntryReceipt(idempotencyKey: string) {
     return data<ManualCatalogEntryReceipt>(
       await this.db.collection(C.manualCatalogEntryReceipts)
+        .doc(encodeURIComponent(idempotencyKey))
+        .get()
+    );
+  }
+  async getReviewedSourceChangeReceipt(idempotencyKey: string) {
+    return data<ReviewedSourceChangeReceipt>(
+      await this.db.collection(C.reviewedSourceChangeReceipts)
         .doc(encodeURIComponent(idempotencyKey))
         .get()
     );
