@@ -168,7 +168,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async listOffers() { return this.all<Offer>(C.offers); }
   async listPolicies() { return this.all<Policy>(C.policies); }
 
-  async stage(release: ProjectionRelease<ErpPublicProduct>) {
+  async stage<T>(release: ProjectionRelease<T>) {
     await this.db.collection(C.releases).doc(release.releaseId).set(release);
   }
   async markReady(releaseId: string) {
@@ -190,10 +190,10 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       tx.set(activeRef, { releaseId, projectionId });
     });
   }
-  async getActive(projectionId: string) {
+  async getActive<T = ErpPublicProduct>(projectionId: string): Promise<ProjectionRelease<T> | null> {
     const active = await this.db.collection(C.activeReleases).doc(projectionId).get();
     if (!active.exists) return null;
-    return data<ProjectionRelease<ErpPublicProduct>>(
+    return data<ProjectionRelease<T>>(
       await this.db.collection(C.releases).doc(active.get('releaseId') as string).get()
     );
   }
