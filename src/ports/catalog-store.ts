@@ -13,7 +13,7 @@ import type {
   SourceHead,
   SourceRun
 } from '../domain/source.js';
-import type { FieldLineageRecord, LineageStage } from '../domain/lineage.js';
+import type { FieldLineageRecord, SourceLineageStage } from '../domain/lineage.js';
 import type {
   CatalogEntityType,
   EntityRevisionRecord
@@ -73,7 +73,7 @@ export interface CatalogStore {
   getSourceBinding(bindingId: string): Promise<CanonicalSourceBinding | null>;
   getCanonicalizationReceipt(idempotencyKey: string): Promise<CanonicalizationReceipt | null>;
   getManualCatalogEntryReceipt(idempotencyKey: string): Promise<ManualCatalogEntryReceipt | null>;
-  listLineageByStage(stage: LineageStage): Promise<FieldLineageRecord[]>;
+  listLineageByStage(stage: SourceLineageStage): Promise<FieldLineageRecord[]>;
   listEntityHistory(
     entityType: CatalogEntityType,
     entityId: string
