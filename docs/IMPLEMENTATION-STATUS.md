@@ -33,7 +33,7 @@ Implemented:
 - shadow migration/comparison contract
 - Firestore rules/index baseline
 - fail-closed projection behavior for incomplete deposit terms
-- tests for catalog mutation, stale revision, projection semantics, ingestion, legacy normalization and shadow behavior
+- tests for catalog mutation, idempotency payload conflict, stale revision, projection semantics, ingestion, legacy normalization and shadow behavior
 
 ## Current gap
 
