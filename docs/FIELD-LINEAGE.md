@@ -1,8 +1,8 @@
 # Catalog V1 Field Lineage
 
-Status: **BASELINE IMPLEMENTED — RAW → NORMALIZED**
+Status: **IMPLEMENTED — RAW → NORMALIZED → CANONICAL → PROJECTION**
 
-FreePass Data records field-level provenance as an append-only chain.
+FreePass Data records field-level provenance as an append-only evidence chain.
 
 ## Stages
 
@@ -10,11 +10,13 @@ FreePass Data records field-level provenance as an append-only chain.
 2. `NORMALIZED_TO_CANONICAL`
 3. `CANONICAL_TO_PROJECTION`
 
-Each stage is a new immutable record. Later stages reference earlier evidence instead of mutating history.
+Each stage is immutable. Later evidence references the prior source-lineage record when that exact Canonical revision/value still comes from source data.
 
-## Implemented now
+When a Canonical value was changed by a reviewed command, Projection evidence points to the immutable Canonical Revision Snapshot instead of falsely attributing the new value to old RAW data.
 
-Legacy `freepasserp3/firestore/products` ingestion records:
+## RAW → normalized
+
+Source ingestion records:
 
 - source ID
 - source record ID
@@ -24,7 +26,6 @@ Legacy `freepasserp3/firestore/products` ingestion records:
 - normalized candidate ID
 - normalized field path/value
 - transform ID/version
-- deterministic lineage ID
 
 Examples:
 
@@ -32,12 +33,48 @@ Examples:
 - `price.24_3만.rent → priceTerms.source:24_3만.monthlyRent.amount`
 - `price.24_3만.deposit → ...depositState`
 
-Blank/unknown deposit remains observable as source evidence and is not rewritten as zero.
+Blank/unknown deposit remains source evidence and is never rewritten as zero.
 
-## Next lineage packet
+## Normalized → Canonical
 
-The next implementation should emit `NORMALIZED_TO_CANONICAL` records when a reviewed candidate becomes a canonical VehicleModel/Product/Offer/PriceTerm, then `CANONICAL_TO_PROJECTION` when an ACTIVE projection release is built.
+Reviewed Canonicalization records:
 
-This makes the final path inspectable:
+- parent RAW_TO_NORMALIZED lineage record
+- Canonical entity type / ID
+- exact Canonical revision
+- Canonical field path/value
+- canonicalizer transform/version
 
-`RAW → candidate → canonical revision → projection release`
+Critical Canonical fields cannot be promoted without normalized lineage evidence.
+
+## Canonical → Projection
+
+Every field emitted by ERP Public has Projection evidence containing:
+
+- projection ID
+- release ID
+- Canonical entity type / ID / revision
+- Canonical field path/value
+- stable Projection field path/value
+- evidence origin
+
+Evidence origin:
+
+- `SOURCE_LINEAGE` — exact matching Canonical lineage exists
+- `REVISION_HISTORY` — current Canonical revision came from a reviewed mutation or otherwise resolves through its immutable Revision Snapshot
+
+## Release evidence
+
+Every ACTIVE Release has an exact manifest containing:
+
+- exact Canonical input revisions
+- product/offer counts
+- field evidence count
+- input digest
+- data digest
+
+The complete inspectable chain is now:
+
+`RAW → Candidate → Canonical revision → Projection field → Release → Consumer`
+
+See also [PROJECTION-RELEASE-EVIDENCE.md](./PROJECTION-RELEASE-EVIDENCE.md).
