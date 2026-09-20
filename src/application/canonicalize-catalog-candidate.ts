@@ -639,6 +639,9 @@ export async function canonicalizeCatalogCandidate(
       ...(head.checkpoint.checksum
         ? { sourceCheckpointChecksum: head.checkpoint.checksum }
         : {}),
+      ...(candidate.providerCompanyCode
+        ? { sourceSupplierCode: candidate.providerCompanyCode }
+        : {}),
       vehicleModelId: model.id,
       ...(asset ? { vehicleAssetId: asset.id } : {}),
       productId: product.id,
