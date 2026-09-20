@@ -400,19 +400,24 @@ function buildChanges(state: LoadedState) {
     if (sameValue(before, after)) return;
     const aggregate = entityType === 'offer' ? 'offer' : 'vehicle_asset';
     const rule = resolveFieldAuthority(aggregate, authorityFieldPath);
+    const refreshAllowed = Boolean(rule) && rule!.sourceRefresh !== 'SOURCE_REFRESH_BLOCKED';
     const id = changeId({ entityType, entityId, fieldPath, before, after });
     diffs.push({
       changeId: id,
-      classification: rule ? 'REVIEWABLE' : 'BLOCKED',
+      classification: refreshAllowed ? 'REVIEWABLE' : 'BLOCKED',
       entityType,
       entityId,
       fieldPath,
       before: structuredClone(before),
       after: structuredClone(after),
-      reasonCode: rule ? reasonCode : 'NO_FIELD_AUTHORITY_RULE',
+      reasonCode: refreshAllowed
+        ? reasonCode
+        : rule
+          ? 'SOURCE_REFRESH_BLOCKED'
+          : 'NO_FIELD_AUTHORITY_RULE',
       authorityRuleId: rule?.ruleId ?? null
     });
-    if (rule) {
+    if (refreshAllowed) {
       operations.set(id, {
         ...operation,
         changeId: id,
@@ -1000,12 +1005,17 @@ export async function applyReviewedSourceChange(
 
     for (const operation of selectedOperations) {
       const aggregate = operation.kind === 'ASSET_ODOMETER' ? 'vehicle_asset' : 'offer';
-      assertFieldAuthority({
+      const authority = assertFieldAuthority({
         aggregate,
         fieldPath: operation.authorityFieldPath,
         command: 'APPLY_REVIEWED_SOURCE_CHANGE',
         actor: input.actor
       });
+      if (authority.sourceRefresh === 'SOURCE_REFRESH_BLOCKED') {
+        throw new ReviewedSourceChangeBlockedError([
+          review.diffs.find((item) => item.changeId === operation.changeId)!
+        ]);
+      }
     }
 
     const revisionValue = sourceRevision(state.head);
