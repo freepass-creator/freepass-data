@@ -2,7 +2,9 @@ import type {
   NormalizedCandidateRecord,
   RawRecord,
   SourceCheckpoint,
+  SourceCoverage,
   SourceDefinition,
+  SourceHead,
   SourceRun
 } from '../domain/source.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
@@ -20,14 +22,16 @@ export interface SourceStore {
     completedAt: string;
     observedAt: string;
     checkpoint: SourceCheckpoint;
+    coverage: SourceCoverage;
     rawCount: number;
     candidateCount: number;
     lineageCount: number;
     warningCount: number;
-  }): Promise<void>;
+  }): Promise<{ acceptedAsHead: boolean; headRunId: string | null }>;
   failRun(input: { runId: string; completedAt: string; error: string }): Promise<void>;
 
   getRun(runId: string): Promise<SourceRun | null>;
+  getSourceHead(sourceId: string): Promise<SourceHead | null>;
   listRaw(runId: string): Promise<RawRecord[]>;
   listCandidates(runId: string): Promise<NormalizedCandidateRecord[]>;
   listLineage(runId: string): Promise<FieldLineageRecord[]>;

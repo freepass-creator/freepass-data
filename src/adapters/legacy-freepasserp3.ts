@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { applicationDefault, getApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import type { SourceCheckpoint } from '../domain/source.js';
+import type { SourceCheckpoint, SourceCoverage } from '../domain/source.js';
 
 export type LegacyProductRaw = {
   sourceId: 'freepasserp3/firestore/products';
@@ -13,6 +13,7 @@ export type LegacyProductRaw = {
 
 export type LegacyProductSnapshot = {
   checkpoint: SourceCheckpoint;
+  coverage: SourceCoverage;
   records: LegacyProductRaw[];
 };
 
@@ -69,6 +70,11 @@ export async function readLegacyProductSnapshot(
       sourceId: 'freepasserp3/firestore/products',
       checksum,
       observedAt
+    },
+    coverage: {
+      mode: 'FULL',
+      completeness: 'COMPLETE',
+      scope: 'firestore:products'
     },
     records
   };
