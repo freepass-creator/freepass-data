@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { ActorRef, ErpPublicProduct, Money, Offer, ProjectionRelease } from '../domain/catalog.js';
 import type { CatalogStore, OutboxStore, ProjectionStore } from '../ports/catalog-store.js';
 
@@ -14,6 +14,24 @@ export class RevisionConflictError extends Error {
 }
 export class EntityNotFoundError extends Error { readonly code = 'ENTITY_NOT_FOUND'; }
 export class InvalidCommandError extends Error { readonly code = 'INVALID_COMMAND'; }
+export class IdempotencyConflictError extends Error {
+  readonly code = 'IDEMPOTENCY_CONFLICT';
+  constructor(readonly idempotencyKey: string) {
+    super(`Idempotency key ${idempotencyKey} was already used with a different request payload`);
+  }
+}
+
+function updateOfferPriceDigest(input: UpdateOfferPriceInput) {
+  return createHash('sha256').update(JSON.stringify({
+    commandType: 'UPDATE_OFFER_PRICE',
+    offerId: input.offerId,
+    expectedRevision: input.expectedRevision,
+    termKey: input.termKey,
+    monthlyRent: input.monthlyRent,
+    reason: input.reason,
+    actor: input.actor
+  })).digest('hex');
+}
 
 function replacePriceTerm(offer: Offer, termKey: string, monthlyRent: Money): Offer {
   if (!offer.priceTerms.some((term) => term.termKey === termKey)) {
@@ -27,10 +45,16 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
     throw new InvalidCommandError('monthlyRent must be a non-negative integer KRW amount');
   }
   if (!input.reason.trim()) throw new InvalidCommandError('reason is required');
+  const requestDigest = updateOfferPriceDigest(input);
 
   return store.transact(async (tx) => {
     const existingReceipt = await tx.getCommandReceipt(input.idempotencyKey);
-    if (existingReceipt) return existingReceipt;
+    if (existingReceipt) {
+      if (!existingReceipt.requestDigest || existingReceipt.requestDigest !== requestDigest) {
+        throw new IdempotencyConflictError(input.idempotencyKey);
+      }
+      return existingReceipt;
+    }
     const current = await tx.getOffer(input.offerId);
     if (!current) throw new EntityNotFoundError(`Offer not found: ${input.offerId}`);
     if (current.revision !== input.expectedRevision) throw new RevisionConflictError(input.expectedRevision, current.revision);
@@ -42,7 +66,7 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
     const receipt = {
       idempotencyKey: input.idempotencyKey, commandId: input.commandId,
       status: 'CANONICAL_COMMITTED' as const, entityType: 'offer', entityId: current.id,
-      revision: next.revision, committedAt: now
+      revision: next.revision, committedAt: now, requestDigest
     };
     await tx.putOffer(next);
     await tx.appendAudit({
