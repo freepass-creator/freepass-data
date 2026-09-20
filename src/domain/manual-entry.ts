@@ -14,7 +14,6 @@ export type ManualPriceTermInput = {
 };
 
 export type ManualCatalogEntry = {
-  referenceCode?: string | null;
   carNumber?: string | null;
   maker: string;
   model: string;
@@ -22,12 +21,10 @@ export type ManualCatalogEntry = {
   trimName?: string | null;
   commercialType: CommercialType;
   supplierId: string;
-  year?: string | null;
   fuelType?: string | null;
   mileageKm?: number | null;
   driveType?: string | null;
   seats?: number | null;
-  origin?: string | null;
   priceTerms: ManualPriceTermInput[];
 };
 
