@@ -111,6 +111,38 @@ describe('Catalog V1 vertical slice', () => {
     expect(release.data).toHaveLength(0);
   });
 
+  it('keeps the last-known-good ACTIVE release when evidence staging fails', async () => {
+    const store=new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const baseline=await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-20T09:00:00.000Z'
+    );
+
+    const failingProjection={
+      stage: store.stage.bind(store),
+      stageEvidence: async () => {
+        throw new Error('simulated evidence staging failure');
+      },
+      markReady: store.markReady.bind(store),
+      activate: store.activate.bind(store),
+      getActive: store.getActive.bind(store),
+      getManifest: store.getManifest.bind(store),
+      listProjectionLineage: store.listProjectionLineage.bind(store)
+    };
+
+    await expect(buildErpPublicProjection(
+      store,
+      failingProjection,
+      '2026-09-20T10:00:00.000Z'
+    )).rejects.toThrow('simulated evidence staging failure');
+
+    const active=await store.getActive('erp-public');
+    expect(active?.releaseId).toBe(baseline.releaseId);
+    expect(active?.status).toBe('ACTIVE');
+  });
+
   it('outbox publishes repriced release', async () => {
     const store=new MemoryDataStore(); await seedDemoCatalog(store);
     await buildErpPublicProjection(store,store,'2026-09-20T09:00:00.000Z');
