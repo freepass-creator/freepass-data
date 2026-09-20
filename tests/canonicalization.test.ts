@@ -361,6 +361,36 @@ describe('safe catalog canonicalization', () => {
     expect(store.outbox.size).toBe(0);
   });
 
+  it('rejects contradictory deposit state before Canonical commit', async () => {
+    const store = new MemoryDataStore();
+    const fixture = evidence({
+      runId: 'run-bad-deposit',
+      candidateId: 'candidate-bad-deposit',
+      fingerprint: 'fp-bad-deposit',
+      observedAt: '2026-09-21T00:00:00Z'
+    });
+    fixture.candidate.candidate.priceTerms[0]!.depositState = 'ZERO';
+    await store.seed!({
+      sourceRuns: [fixture.run],
+      sourceHeads: [fixture.head],
+      candidates: [fixture.candidate],
+      lineage: fixture.lineage
+    });
+
+    await expect(canonicalizeCatalogCandidate(
+      store,
+      command(
+        fixture.candidate.candidateId,
+        fixture.run.runId,
+        'idem-canonical-bad-deposit'
+      ),
+      '2026-09-21T00:01:00Z'
+    )).rejects.toThrow('ZERO deposit must contain KRW 0');
+
+    expect(await store.listProducts()).toHaveLength(0);
+    expect(store.outbox.size).toBe(0);
+  });
+
   it('requires exact approval of warning issues before canonicalization', async () => {
     const store = new MemoryDataStore();
     const fixture = evidence({
