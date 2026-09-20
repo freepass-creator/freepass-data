@@ -6,6 +6,7 @@ import type {
   VehicleAsset,
   VehicleModel
 } from '../domain/catalog.js';
+import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type {
   CanonicalSourceBinding,
   CanonicalizationDecision,
@@ -81,12 +82,7 @@ function sameIssues(actual: string[], approved?: string[]) {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-function assertModelCompatible(model: VehicleModel, candidate: {
-  maker: string;
-  model: string;
-  subModel?: string;
-  trimName?: string;
-}) {
+function assertModelCompatible(model: VehicleModel, candidate: CatalogCandidate) {
   if (model.maker !== candidate.maker || model.model !== candidate.model) {
     throw new CanonicalizationConflictError(
       `Resolved VehicleModel ${model.id} does not match candidate maker/model`
@@ -235,26 +231,7 @@ function canonicalTarget(
   return null;
 }
 
-function requiredNormalizedPaths(candidate: {
-  maker: string;
-  model: string;
-  subModel?: string;
-  trimName?: string;
-  fuelType?: string;
-  driveType?: string;
-  seats?: number;
-  carNumber?: string;
-  mileageKm?: number;
-  commercialType: string;
-  priceTerms: Array<{
-    termKey: string;
-    termMonths: number;
-    monthlyRent: { amount: number };
-    deposit?: { amount: number } | null;
-    depositState: string;
-    mileageLimitKmPerYear?: number | null;
-  }>;
-}) {
+function requiredNormalizedPaths(candidate: CatalogCandidate) {
   const required = ['maker', 'model', 'commercialType'];
   if (candidate.subModel) required.push('subModel');
   if (candidate.trimName) required.push('trimName');
@@ -278,7 +255,7 @@ function requiredNormalizedPaths(candidate: {
 }
 
 function assertCriticalLineage(
-  candidate: Parameters<typeof requiredNormalizedPaths>[0],
+  candidate: CatalogCandidate,
   parents: FieldLineageRecord[]
 ) {
   const observed = new Set(
