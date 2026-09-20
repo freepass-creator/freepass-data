@@ -39,3 +39,4 @@ FreePass Data는 또 하나의 화면 앱이 아닙니다.
 - [Architecture](docs/ARCHITECTURE.md)
 - [Migration Plan](docs/MIGRATION-PLAN.md)
 - [Console UX](docs/CONSOLE-UX.md)
+- [ERP.com · Google Sheets SSOT Operating Map](docs/ERP-COM-GOOGLE-SHEETS-SSOT.md)
