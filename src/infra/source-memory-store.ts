@@ -5,7 +5,7 @@ import type {
   SourceHead,
   SourceRun
 } from '../domain/source.js';
-import { isNewerSourceObservation } from '../domain/source.js';
+import { canAdvanceSourceHead } from '../domain/source.js';
 import type { SourceStore } from '../ports/source-store.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 
@@ -55,7 +55,7 @@ export class MemorySourceStore implements SourceStore {
     }
 
     const eligible = input.coverage.completeness === 'COMPLETE';
-    const newerThanHead = !currentHead || isNewerSourceObservation(input.observedAt, currentHead.observedAt);
+    const newerThanHead = canAdvanceSourceHead(input.observedAt, currentHead?.observedAt);
     const acceptedAsHead = eligible && newerThanHead;
 
     Object.assign(run, {
