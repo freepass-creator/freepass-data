@@ -95,10 +95,20 @@ test('Admin Catalog V1 accepts multi-supplier Offer terms and explicit deposit s
   assert.equal(validate(sample),true,JSON.stringify(validate.errors));
 });
 
-test('Admin Catalog V1 rejects KNOWN deposit without a money value at semantic validation layer',()=>{
-  // JSON Schema intentionally validates shape only; semantic release validation must
-  // additionally reject KNOWN without deposit. Keep this distinction explicit.
+test('Admin Catalog V1 rejects KNOWN deposit without a money value in schema',()=>{
   const copy=structuredClone(sample);
   delete copy.data[0].offers[1].priceTerms[0].deposit;
-  assert.equal(validate(copy),true,JSON.stringify(validate.errors));
+  assert.equal(validate(copy),false);
+});
+
+test('Admin Catalog V1 rejects a non-zero amount labeled ZERO',()=>{
+  const copy=structuredClone(sample);
+  copy.data[0].offers[0].priceTerms[0].deposit.amount=1000000;
+  assert.equal(validate(copy),false);
+});
+
+test('Admin Catalog V1 rejects an amount on UNKNOWN deposit state',()=>{
+  const copy=structuredClone(sample);
+  copy.data[0].offers[0].priceTerms[1].deposit={amount:0,currency:'KRW'};
+  assert.equal(validate(copy),false);
 });
