@@ -103,6 +103,24 @@ type SourceChangeOperation =
       authorityFieldPath: string;
     };
 
+type SourceChangeOperationDraft =
+  SourceChangeOperation extends infer T
+    ? T extends SourceChangeOperation
+      ? Omit<T, 'changeId' | 'authorityFieldPath'>
+      : never
+    : never;
+
+type OfferSourceChangeOperation = Exclude<
+  SourceChangeOperation,
+  { kind: 'ASSET_ODOMETER' }
+>;
+
+function isOfferOperation(
+  operation: SourceChangeOperation
+): operation is OfferSourceChangeOperation {
+  return operation.kind !== 'ASSET_ODOMETER';
+}
+
 type LoadedState = {
   binding: CanonicalSourceBinding;
   candidateRecord: NormalizedCandidateRecord;
@@ -377,7 +395,7 @@ function buildChanges(state: LoadedState) {
     after: unknown,
     reasonCode: string,
     authorityFieldPath: string,
-    operation: Omit<SourceChangeOperation, 'changeId' | 'authorityFieldPath'>
+    operation: SourceChangeOperationDraft
   ) => {
     if (sameValue(before, after)) return;
     const aggregate = entityType === 'offer' ? 'offer' : 'vehicle_asset';
@@ -726,13 +744,14 @@ function nextOfferFromOperations(
   operations: SourceChangeOperation[],
   now: string,
   input: ApplyReviewedSourceChangeInput,
+  validationStatus: 'VALID' | 'WARNING',
   sourceRevisionValue?: string
 ) {
-  if (!operations.some((item) => item.kind.startsWith('OFFER_'))) return offer;
+  if (!operations.some(isOfferOperation)) return offer;
 
   let terms = structuredClone(offer.priceTerms);
   for (const operation of operations) {
-    if (!operation.kind.startsWith('OFFER_')) continue;
+    if (!isOfferOperation(operation)) continue;
     terms = terms.map((term) => {
       if (term.termKey !== operation.termKey) return term;
       if (operation.kind === 'OFFER_MONTHLY_RENT') {
@@ -761,7 +780,7 @@ function nextOfferFromOperations(
     ...offer,
     priceTerms: terms,
     revision: offer.revision + 1,
-    validationStatus: 'VALID',
+    validationStatus,
     updatedAt: now,
     updatedBy: input.actor,
     ...(sourceRevisionValue ? { sourceRevision: sourceRevisionValue } : {})
@@ -773,6 +792,7 @@ function nextAssetFromOperations(
   operations: SourceChangeOperation[],
   now: string,
   input: ApplyReviewedSourceChangeInput,
+  validationStatus: 'VALID' | 'WARNING',
   sourceRevisionValue?: string
 ) {
   const odometer = operations.find(
@@ -788,7 +808,7 @@ function nextAssetFromOperations(
     ...asset,
     odometerKm: odometer.value,
     revision: asset.revision + 1,
-    validationStatus: 'VALID' as const,
+    validationStatus,
     updatedAt: now,
     updatedBy: input.actor,
     ...(sourceRevisionValue ? { sourceRevision: sourceRevisionValue } : {})
@@ -989,11 +1009,14 @@ export async function applyReviewedSourceChange(
     }
 
     const revisionValue = sourceRevision(state.head);
+    const validationStatus =
+      state.candidateRecord.status === 'WARNING' ? 'WARNING' as const : 'VALID' as const;
     const nextOffer = nextOfferFromOperations(
       state.offer,
       selectedOperations,
       now,
       input,
+      validationStatus,
       revisionValue
     );
     const nextAsset = nextAssetFromOperations(
@@ -1001,6 +1024,7 @@ export async function applyReviewedSourceChange(
       selectedOperations,
       now,
       input,
+      validationStatus,
       revisionValue
     );
 
