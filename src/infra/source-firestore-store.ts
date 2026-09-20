@@ -1,6 +1,7 @@
 import { applicationDefault, getApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import type { NormalizedCandidateRecord, RawRecord, SourceDefinition, SourceHead, SourceRun } from '../domain/source.js';
+import { isNewerSourceObservation } from '../domain/source.js';
 import type { SourceStore } from '../ports/source-store.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 
@@ -47,7 +48,7 @@ export class FirestoreSourceStore implements SourceStore {
       const currentHead = headSnap.exists ? headSnap.data() as SourceHead : null;
 
       const eligible = input.coverage.completeness === 'COMPLETE';
-      const newerThanHead = !currentHead || input.observedAt > currentHead.observedAt;
+      const newerThanHead = !currentHead || isNewerSourceObservation(input.observedAt, currentHead.observedAt);
       const acceptedAsHead = eligible && newerThanHead;
       const headStatus = acceptedAsHead ? 'CURRENT' : eligible ? 'STALE' : 'INELIGIBLE';
 
