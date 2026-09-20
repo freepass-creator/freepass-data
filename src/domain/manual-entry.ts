@@ -46,5 +46,7 @@ export type ManualCatalogEntryReceipt = {
   runId: string;
   candidateId: string;
   sourceFingerprint: string;
+  actor: ActorRef;
+  reason: string;
   acceptedAt: string;
 };
