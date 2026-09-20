@@ -328,6 +328,38 @@ describe('safe catalog canonicalization', () => {
     expect(store.outbox.size).toBe(1);
   });
 
+  it('rejects canonicalization when a critical field has no normalized lineage evidence', async () => {
+    const store = new MemoryDataStore();
+    const fixture = evidence({
+      runId: 'run-missing-lineage',
+      candidateId: 'candidate-missing-lineage',
+      fingerprint: 'fp-missing-lineage',
+      observedAt: '2026-09-21T00:00:00Z'
+    });
+    fixture.lineage = fixture.lineage.filter(
+      (item) => item.normalized?.fieldPath !== 'priceTerms.source:36_2만.depositState'
+    );
+    await store.seed!({
+      sourceRuns: [fixture.run],
+      sourceHeads: [fixture.head],
+      candidates: [fixture.candidate],
+      lineage: fixture.lineage
+    });
+
+    await expect(canonicalizeCatalogCandidate(
+      store,
+      command(
+        fixture.candidate.candidateId,
+        fixture.run.runId,
+        'idem-canonical-missing-lineage'
+      ),
+      '2026-09-21T00:01:00Z'
+    )).rejects.toThrow('Missing normalized lineage');
+
+    expect(await store.listProducts()).toHaveLength(0);
+    expect(store.outbox.size).toBe(0);
+  });
+
   it('requires exact approval of warning issues before canonicalization', async () => {
     const store = new MemoryDataStore();
     const fixture = evidence({
