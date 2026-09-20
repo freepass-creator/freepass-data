@@ -104,11 +104,30 @@ type SourceChangeOperation =
     };
 
 type SourceChangeOperationDraft =
-  SourceChangeOperation extends infer T
-    ? T extends SourceChangeOperation
-      ? Omit<T, 'changeId' | 'authorityFieldPath'>
-      : never
-    : never;
+  | {
+      kind: 'OFFER_MONTHLY_RENT';
+      termKey: string;
+      value: Money;
+    }
+  | {
+      kind: 'OFFER_DEPOSIT_STATE';
+      termKey: string;
+      value: PriceTerm['depositState'];
+    }
+  | {
+      kind: 'OFFER_DEPOSIT';
+      termKey: string;
+      value: Money | null;
+    }
+  | {
+      kind: 'OFFER_MILEAGE_LIMIT';
+      termKey: string;
+      value: number | null;
+    }
+  | {
+      kind: 'ASSET_ODOMETER';
+      value: number;
+    };
 
 type OfferSourceChangeOperation = Exclude<
   SourceChangeOperation,
