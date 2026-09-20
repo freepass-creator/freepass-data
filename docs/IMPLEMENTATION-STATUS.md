@@ -38,6 +38,9 @@ Implemented:
 - append-only field-lineage contract and legacy RAW → normalized lineage persistence
 - approved v2 repository boundaries + local architecture boundary check
 - source coverage/completeness contract, accepted source head and stale-run overwrite protection
+- reviewed Candidate → Canonical transaction with source binding, identity CREATE/LINK decisions and re-review-on-change
+- NORMALIZED_TO_CANONICAL field lineage and critical-lineage fail-closed gate
+- VehicleModel generation/subModel semantic separation
 - tests for catalog mutation, authority enforcement, idempotency payload conflict, stale revision, projection semantics, ingestion, legacy normalization and shadow behavior
 
 ## Admin consumer contract — 2026-09-21
@@ -58,8 +61,8 @@ The Admin contract intentionally differs from `erp-public`: it preserves Offer s
 
 The implementation has moved beyond the old Next list. The highest-value missing Catalog V1 platform contracts are now:
 
-1. **Safe canonicalization: reviewed candidate + accepted source checkpoint → canonical revision**
-2. **Complete field lineage: normalized → canonical → projection**
+1. **Complete field lineage: Canonical → Projection + Release evidence**
+2. **Reviewed source-change update path for an existing canonical binding**
 3. **Implement and validate the Admin Catalog ACTIVE Projection Release**
 4. **Acceptance-test expansion for failure, duplicate, cutover and last-known-good cases**
 5. **Server/service authentication + IAM enforcement**

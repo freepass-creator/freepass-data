@@ -8,7 +8,7 @@ export type EntityMeta = {
 };
 export type VehicleModel = EntityMeta & {
   id: string; maker: string; model: string; displayName: string;
-  generation?: string | null; trim?: string | null; fuel?: string | null;
+  generation?: string | null; subModel?: string | null; trim?: string | null; fuel?: string | null;
   drive?: string | null; seats?: number | null;
 };
 export type VehicleAssetStatus =
@@ -64,7 +64,7 @@ export type ErpPublicProduct = {
   productId: string; productRevision: number; vehicleModelId: string;
   vehicleAssetId?: string | null; displayName: string; commercialType: CommercialType;
   vehicle: {
-    maker: string; model: string; generation?: string | null; trim?: string | null;
+    maker: string; model: string; generation?: string | null; subModel?: string | null; trim?: string | null;
     fuel?: string | null; drive?: string | null; seats?: number | null;
     assetStatus?: VehicleAssetStatus | null; plateNumber?: string | null; odometerKm?: number | null;
   };

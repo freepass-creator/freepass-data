@@ -155,6 +155,7 @@ export async function buildErpPublicProjection(
       vehicle: {
         maker: model.maker, model: model.model,
         ...(model.generation !== undefined ? {generation: model.generation} : {}),
+        ...(model.subModel !== undefined ? {subModel: model.subModel} : {}),
         ...(model.trim !== undefined ? {trim: model.trim} : {}),
         ...(model.fuel !== undefined ? {fuel: model.fuel} : {}),
         ...(model.drive !== undefined ? {drive: model.drive} : {}),
