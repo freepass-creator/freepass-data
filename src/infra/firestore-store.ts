@@ -75,6 +75,9 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         putVehicleAsset: async (asset) => {
           native.create(this.db.collection(C.vehicleAssets).doc(asset.id), asset);
         },
+        updateVehicleAsset: async (asset) => {
+          native.set(this.db.collection(C.vehicleAssets).doc(asset.id), asset);
+        },
         getProduct: async (id) =>
           data<Product>(await native.get(this.db.collection(C.products).doc(id))),
         putProduct: async (product) => {
