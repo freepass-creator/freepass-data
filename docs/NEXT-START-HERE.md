@@ -87,13 +87,13 @@ Minimum evidence:
 
 Promote the architecture-v2 review test matrix into executable tests, starting with:
 
-- idempotency key reused with a different payload must conflict
-- stale revision must fail without losing the operator input
-- incomplete deposit/price pair must not be published
-- partial projection build must not replace last-known-good ACTIVE release
-- source collection failure must not be interpreted as mass deletion
-- duplicate / out-of-order event behavior
-- old writer blocked after ownership transfer (design + non-production enforcement test)
+- [x] idempotency key reused with a different payload must conflict — implemented in PR #3
+- [ ] stale revision must fail without losing the operator input
+- [x] incomplete deposit/price pair must not be published
+- [ ] partial projection build must not replace last-known-good ACTIVE release
+- [ ] source collection failure must not be interpreted as mass deletion
+- [ ] duplicate / out-of-order event behavior
+- [ ] old writer blocked after ownership transfer (design + non-production enforcement test)
 
 ### P3 — Security/IAM review
 
