@@ -57,6 +57,7 @@ export type OutboxEvent = {
 export type CommandReceipt = {
   idempotencyKey: string; commandId: string; status: 'CANONICAL_COMMITTED';
   entityType: string; entityId: string; revision: number; committedAt: string;
+  requestDigest?: string;
 };
 export type ErpPublicProduct = {
   productId: string; productRevision: number; vehicleModelId: string;
