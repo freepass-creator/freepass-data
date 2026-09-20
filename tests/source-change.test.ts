@@ -4,7 +4,8 @@ import {
   reviewSourceChange,
   ReviewedSourceChangeApprovalMismatchError,
   ReviewedSourceChangeBlockedError,
-  ReviewedSourceChangeConflictError
+  ReviewedSourceChangeConflictError,
+  ReviewedSourceChangeIdempotencyConflictError
 } from '../src/application/reviewed-source-change.js';
 import { canonicalizeCatalogCandidate } from '../src/application/canonicalize-catalog-candidate.js';
 import { processOneOutboxEvent, updateOfferPrice } from '../src/application/catalog.js';
@@ -368,6 +369,51 @@ describe('reviewed source change', () => {
       );
     expect(projectedPrice?.evidenceOrigin).toBe('SOURCE_LINEAGE');
     expect(projectedPrice?.parentLineageRecordId).toBeTruthy();
+  });
+
+  it('replays the same reviewed command and rejects idempotency-key payload reuse', async () => {
+    const store = new MemoryDataStore();
+    const { original, receipt: initial } = await initialCanonical(store);
+
+    const changed = evidence({
+      runId: 'run-idempotent',
+      candidateId: 'candidate-idempotent',
+      fingerprint: 'fp-idempotent',
+      observedAt: '2026-09-21T00:10:00Z',
+      rent: 790000
+    });
+    await installChangedHead(store, original, changed);
+
+    const review = await reviewSourceChange(
+      store,
+      initial.bindingId,
+      changed.candidate.candidateId
+    );
+    const command = applyCommand(review, 'idem-source-change-replay');
+
+    const first = await applyReviewedSourceChange(
+      store,
+      command,
+      '2026-09-21T00:11:00Z'
+    );
+    const replay = await applyReviewedSourceChange(
+      store,
+      command,
+      '2026-09-21T00:12:00Z'
+    );
+
+    expect(replay).toEqual(first);
+    expect((await store.getOffer(initial.offerId))?.revision).toBe(2);
+    expect((await store.getSourceBinding(initial.bindingId))?.revision).toBe(2);
+
+    await expect(applyReviewedSourceChange(
+      store,
+      {
+        ...command,
+        reason: 'different reviewed reason'
+      },
+      '2026-09-21T00:13:00Z'
+    )).rejects.toBeInstanceOf(ReviewedSourceChangeIdempotencyConflictError);
   });
 
   it('blocks supplier mapping or term-structure changes instead of partially applying them', async () => {
