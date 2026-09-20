@@ -22,6 +22,7 @@ import type {
   EntityRevisionRecord
 } from '../domain/history.js';
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
+import type { ReviewedSourceChangeReceipt } from '../domain/source-change.js';
 import type {
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
@@ -38,6 +39,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   private receipts = new Map<string, CommandReceipt>();
   private canonicalizationReceipts = new Map<string, CanonicalizationReceipt>();
   private manualCatalogEntryReceipts = new Map<string, ManualCatalogEntryReceipt>();
+  private reviewedSourceChangeReceipts = new Map<string, ReviewedSourceChangeReceipt>();
   private sourceDefinitions = new Map<string, SourceDefinition>();
   private sourceRuns = new Map<string, SourceRun>();
   private sourceHeads = new Map<string, SourceHead>();
@@ -64,6 +66,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     sourceDefinitions?: SourceDefinition[];
     rawRecords?: RawRecord[];
     manualCatalogEntryReceipts?: ManualCatalogEntryReceipt[];
+    reviewedSourceChangeReceipts?: ReviewedSourceChangeReceipt[];
   }) {
     for (const x of input.vehicleModels ?? []) this.models.set(x.id, copy(x));
     for (const x of input.vehicleAssets ?? []) this.assets.set(x.id, copy(x));
@@ -83,6 +86,9 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     for (const x of input.manualCatalogEntryReceipts ?? []) {
       this.manualCatalogEntryReceipts.set(x.idempotencyKey, copy(x));
     }
+    for (const x of input.reviewedSourceChangeReceipts ?? []) {
+      this.reviewedSourceChangeReceipts.set(x.idempotencyKey, copy(x));
+    }
     for (const x of input.revisionHistory ?? []) {
       this.revisionHistory.set(x.revisionRecordId, copy(x));
     }
@@ -97,6 +103,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       receipts: copy([...this.receipts.entries()]),
       canonicalizationReceipts: copy([...this.canonicalizationReceipts.entries()]),
       manualCatalogEntryReceipts: copy([...this.manualCatalogEntryReceipts.entries()]),
+      reviewedSourceChangeReceipts: copy([...this.reviewedSourceChangeReceipts.entries()]),
       sourceDefinitions: copy([...this.sourceDefinitions.entries()]),
       sourceRuns: copy([...this.sourceRuns.entries()]),
       sourceHeads: copy([...this.sourceHeads.entries()]),
@@ -112,7 +119,14 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       getVehicleModel: async (id) => copy(this.models.get(id) ?? null),
       putVehicleModel: async (model) => { this.models.set(model.id, copy(model)); },
       getVehicleAsset: async (id) => copy(this.assets.get(id) ?? null),
-      putVehicleAsset: async (asset) => { this.assets.set(asset.id, copy(asset)); },
+      putVehicleAsset: async (asset) => {
+        if (this.assets.has(asset.id)) throw new Error(`VehicleAsset already exists: ${asset.id}`);
+        this.assets.set(asset.id, copy(asset));
+      },
+      updateVehicleAsset: async (asset) => {
+        if (!this.assets.has(asset.id)) throw new Error(`VehicleAsset not found: ${asset.id}`);
+        this.assets.set(asset.id, copy(asset));
+      },
       getProduct: async (id) => copy(this.products.get(id) ?? null),
       putProduct: async (product) => { this.products.set(product.id, copy(product)); },
       getOffer: async (id) => copy(this.offers.get(id) ?? null),
@@ -168,6 +182,12 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
         }
         this.sourceBindings.set(binding.bindingId, copy(binding));
       },
+      updateSourceBinding: async (binding) => {
+        if (!this.sourceBindings.has(binding.bindingId)) {
+          throw new Error(`Source binding not found: ${binding.bindingId}`);
+        }
+        this.sourceBindings.set(binding.bindingId, copy(binding));
+      },
       getCanonicalizationReceipt: async (key) =>
         copy(this.canonicalizationReceipts.get(key) ?? null),
       putCanonicalizationReceipt: async (receipt) => {
@@ -187,6 +207,16 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
         }
         this.manualCatalogEntryReceipts.set(receipt.idempotencyKey, copy(receipt));
       },
+      getReviewedSourceChangeReceipt: async (key) =>
+        copy(this.reviewedSourceChangeReceipts.get(key) ?? null),
+      putReviewedSourceChangeReceipt: async (receipt) => {
+        if (this.reviewedSourceChangeReceipts.has(receipt.idempotencyKey)) {
+          throw new Error(
+            `Reviewed source-change receipt already exists: ${receipt.idempotencyKey}`
+          );
+        }
+        this.reviewedSourceChangeReceipts.set(receipt.idempotencyKey, copy(receipt));
+      },
       appendAudit: async (event) => { this.audits.push(copy(event)); },
       appendRevision: async (record) => {
         if (this.revisionHistory.has(record.revisionRecordId)) {
@@ -205,6 +235,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       this.receipts = new Map(snapshot.receipts);
       this.canonicalizationReceipts = new Map(snapshot.canonicalizationReceipts);
       this.manualCatalogEntryReceipts = new Map(snapshot.manualCatalogEntryReceipts);
+      this.reviewedSourceChangeReceipts = new Map(snapshot.reviewedSourceChangeReceipts);
       this.sourceDefinitions = new Map(snapshot.sourceDefinitions);
       this.sourceRuns = new Map(snapshot.sourceRuns);
       this.sourceHeads = new Map(snapshot.sourceHeads);
@@ -237,6 +268,9 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   }
   async getManualCatalogEntryReceipt(idempotencyKey: string) {
     return copy(this.manualCatalogEntryReceipts.get(idempotencyKey) ?? null);
+  }
+  async getReviewedSourceChangeReceipt(idempotencyKey: string) {
+    return copy(this.reviewedSourceChangeReceipts.get(idempotencyKey) ?? null);
   }
   async listLineageByStage(stage: SourceLineageStage) {
     return copy([...this.lineage.values()].filter((item) => item.stage === stage));

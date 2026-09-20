@@ -58,3 +58,20 @@ Allowed writers:
 - SERVICE `service:freepass-admin`
 
 This still does not replace authentication/IAM. The runtime must later derive ActorRef from authenticated credentials rather than trusting a request body.
+
+
+## Reviewed source refresh
+
+`APPLY_REVIEWED_SOURCE_CHANGE` is allowed only through explicit semantic writer rules.
+
+V1 source-refresh field rules:
+
+- `offer.priceTerms.*.monthlyRent`
+- `offer.priceTerms.*.depositState`
+- `offer.priceTerms.*.deposit`
+- `offer.priceTerms.*.mileageLimitKmPerYear`
+- `vehicle_asset.odometerKm`
+
+All use expected-revision conflict protection and `PRESERVE_CANONICAL_AND_REVIEW`.
+
+If a field has no authority rule, or its source-refresh policy is `SOURCE_REFRESH_BLOCKED`, the source diff is BLOCKED rather than silently applied.

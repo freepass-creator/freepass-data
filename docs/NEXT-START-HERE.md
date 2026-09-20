@@ -72,7 +72,9 @@ Do not reduce this to a single `SOURCE_WINS`-style enum.
 
 Catalog V1 now has RAW → normalized → canonical → projection lineage, exact Release manifests, source-run safety, reviewed canonicalization, queryable Canonical Revision History, and controlled Manual Catalog Source/Command.
 
-Next implementation focus: explicit reviewed source-change update for an existing canonical binding.
+Reviewed source-change update for existing canonical bindings is implemented.
+
+Next implementation focus: duplicate/out-of-order delivery behavior, ownership-transfer enforcement, then authenticated service/user identity.
 
 Minimum evidence:
 
@@ -95,6 +97,10 @@ Promote the architecture-v2 review test matrix into executable tests, starting w
 - [x] partial projection/evidence build must not replace last-known-good ACTIVE release
 - [x] current reviewed candidate canonicalization must pin accepted source head
 - [x] changed source fingerprint must require explicit re-review
+- [x] reviewed source refresh must apply only the exact current diff set
+- [x] structural/identity source changes must block partial refresh
+- [x] stale review must fail when any pinned Canonical revision changed
+- [x] source supplier code must be compared through binding mapping, not Canonical supplierId
 - [x] missing critical lineage must block Canonical promotion
 - [x] canonical create/change must append a queryable revision snapshot
 - [x] direct manual entry must create immutable source evidence before Canonical commit

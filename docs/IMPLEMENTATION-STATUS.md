@@ -48,18 +48,20 @@ Implemented:
 - exact Projection Release Manifest with Canonical input revisions and SHA-256 input/data digests
 - field-level Canonical → Projection evidence with SOURCE_LINEAGE vs REVISION_HISTORY provenance
 - BUILDING → VALIDATING → READY → ACTIVE evidence-gated Release promotion
+- reviewed source-fingerprint change diff/apply workflow with exact approval and all-entity revision pinning
+- source supplier-code mapping preserved separately from Canonical supplierId
+- SOURCE_REFRESH Revision/Audit/Lineage path for Offer pricing terms and VehicleAsset odometer
 - tests for catalog mutation, authority enforcement, idempotency payload conflict, stale revision, projection semantics, ingestion, legacy normalization and shadow behavior
 
 ## Current gap
 
 The implementation has moved beyond the old Next list. The highest-value missing Catalog V1 platform contracts are now:
 
-1. **Reviewed source-change update path for an existing canonical binding**
-2. **Acceptance-test expansion for duplicate, cutover and ownership-transfer cases**
-4. **Server/service authentication + IAM enforcement**
-5. **ERP.com shadow/read pilot**
-6. **Console Data Explorer / Entity Detail / Command Edit**
-7. **Backup/restore and operational recovery verification**
+1. **Acceptance-test expansion for duplicate, cutover and ownership-transfer cases**
+2. **Server/service authentication + IAM enforcement**
+3. **ERP.com shadow/read pilot**
+4. **Console Data Explorer / Entity Detail / Command Edit**
+5. **Backup/restore and operational recovery verification**
 
 ## Local execution
 

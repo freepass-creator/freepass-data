@@ -207,7 +207,25 @@ Rollback은 즉시 destructive revert 대신 rollback candidate 생성 후 적�
 - wider lineage graph
 - persistent filters
 
-## 10. 추가 / 수정 UX
+## 10. Source 변경 검수
+
+Source fingerprint 변경이 감지된 기존 binding은 Review Queue에 노출한다.
+
+검수 화면:
+- source before / after fingerprint
+- accepted source-head run
+- Canonical revision baseline
+- field diff
+- before / after
+- REVIEWABLE / BLOCKED
+- Authority rule
+- candidate issue
+- 영향 entity
+
+BLOCKED 변경이 하나라도 있으면 "반영" 버튼을 비활성화한다.
+REVIEWABLE 변경은 현재 diff 전체를 승인해야 binding을 새 source fingerprint로 전진시킨다.
+
+## 11. 추가 / 수정 UX
 
 직접 추가는 Firestore document editor를 노출하지 않는다.
 
@@ -218,7 +236,7 @@ Rollback은 즉시 destructive revert 대신 rollback candidate 생성 후 적�
 
 수정도 Field Authority에 등록된 필드와 Command만 편집 가능하게 한다.
 
-## 11. 접근성 / 상호작용
+## 12. 접근성 / 상호작용
 
 AI Core 기준:
 - WCAG 2.2 AA
