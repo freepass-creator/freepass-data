@@ -1,3 +1,4 @@
+import { buildAdminCatalogProjection } from './admin-catalog.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ActorRef, ErpPublicProduct, Money, Offer, ProjectionRelease } from '../domain/catalog.js';
 import { assertFieldAuthority } from '../domain/authority.js';
@@ -234,7 +235,10 @@ export async function processOneOutboxEvent(
   if (!event) return 'IDLE';
   const attempts = event.attempts + 1;
   try {
-    if (event.eventType.startsWith('catalog.')) await buildErpPublicProjection(catalog, projections, now.toISOString());
+    if (event.eventType.startsWith('catalog.')) {
+      await buildAdminCatalogProjection(catalog, projections, now.toISOString());
+      await buildErpPublicProjection(catalog, projections, now.toISOString());
+    }
     await outbox.markDone(event.eventId); return 'DONE';
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
