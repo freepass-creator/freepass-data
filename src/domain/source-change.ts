@@ -29,6 +29,10 @@ export type SourceChangeReview = {
   previousFingerprint: string;
   candidateFingerprint: string;
   sourceRunId: string;
+  vehicleModelRevision: number;
+  productRevision: number;
+  offerRevision: number;
+  vehicleAssetRevision?: number | null;
   candidateIssues: string[];
   diffs: SourceChangeDiff[];
   reviewableChangeIds: string[];
