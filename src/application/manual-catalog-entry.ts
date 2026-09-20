@@ -123,7 +123,11 @@ function assertMoney(input: ManualPriceTermInput, index: number) {
   }
 }
 
-function normalizeManualEntry(entry: ManualCatalogEntry, fingerprint: string): CatalogCandidate {
+function normalizeManualEntry(
+  entry: ManualCatalogEntry,
+  sourceRecordId: string,
+  fingerprint: string
+): CatalogCandidate {
   const maker = entry.maker.trim();
   const model = entry.model.trim();
   const supplierId = entry.supplierId.trim();
@@ -172,22 +176,27 @@ function normalizeManualEntry(entry: ManualCatalogEntry, fingerprint: string): C
     };
   });
 
-  const sourceRecordId = 'manual_' + token(fingerprint);
+  const carNumber = optionalText(entry.carNumber);
+  const subModel = optionalText(entry.subModel);
+  const trimName = optionalText(entry.trimName);
+  const fuelType = optionalText(entry.fuelType);
+  const driveType = optionalText(entry.driveType);
+
   return {
     sourceRecordId,
     sourceFingerprint: fingerprint,
-    carNumber: optionalText(entry.carNumber),
+    ...(carNumber ? { carNumber } : {}),
     maker,
     model,
-    subModel: optionalText(entry.subModel),
-    trimName: optionalText(entry.trimName),
+    ...(subModel ? { subModel } : {}),
+    ...(trimName ? { trimName } : {}),
     commercialType: entry.commercialType,
     providerCompanyCode: supplierId,
-    fuelType: optionalText(entry.fuelType),
+    ...(fuelType ? { fuelType } : {}),
     ...(entry.mileageKm !== undefined && entry.mileageKm !== null
       ? { mileageKm: entry.mileageKm }
       : {}),
-    driveType: optionalText(entry.driveType),
+    ...(driveType ? { driveType } : {}),
     ...(entry.seats !== undefined && entry.seats !== null
       ? { seats: entry.seats }
       : {}),
@@ -351,9 +360,9 @@ export async function createManualCatalogEntry(
 
   const digest = requestDigest(input);
   const fingerprint = hash(input.entry);
-  const candidate = normalizeManualEntry(input.entry, fingerprint);
   const identity = token(input.idempotencyKey);
-  const sourceRecordId = candidate.sourceRecordId;
+  const sourceRecordId = `manual_${identity}`;
+  const candidate = normalizeManualEntry(input.entry, sourceRecordId, fingerprint);
   const sourceId = `manual/catalog/${sourceRecordId}`;
   const runId = `run_manual_${identity}`;
   const candidateId = `cand_manual_${identity}`;
@@ -475,6 +484,8 @@ export async function createManualCatalogEntry(
       runId,
       candidateId,
       sourceFingerprint: fingerprint,
+      actor: structuredClone(input.actor),
+      reason: input.reason,
       acceptedAt: now
     };
     await tx.putManualCatalogEntryReceipt(receipt);
