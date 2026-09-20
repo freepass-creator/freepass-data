@@ -5,6 +5,7 @@ import updateOfferPriceSchema from '../../contracts/update-offer-price.schema.js
 import { createRuntimeStores } from '../bootstrap.js';
 import {
   EntityNotFoundError,
+  IdempotencyConflictError,
   InvalidCommandError,
   RevisionConflictError,
   buildErpPublicProjection,
@@ -60,6 +61,9 @@ app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {
         expectedRevision: error.expectedRevision,
         actualRevision: error.actualRevision
       });
+    }
+    if (error instanceof IdempotencyConflictError) {
+      return reply.code(409).send({ code: error.code, idempotencyKey: error.idempotencyKey });
     }
     if (error instanceof EntityNotFoundError) {
       return reply.code(404).send({ code: error.code, message: error.message });
