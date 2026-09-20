@@ -223,7 +223,88 @@
           ],
           "minimum": 0
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "depositState": {
+                "const": "KNOWN"
+              }
+            },
+            "required": [
+              "depositState"
+            ]
+          },
+          "then": {
+            "required": [
+              "deposit"
+            ],
+            "properties": {
+              "deposit": {
+                "$ref": "#/$defs/money"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "depositState": {
+                "const": "ZERO"
+              }
+            },
+            "required": [
+              "depositState"
+            ]
+          },
+          "then": {
+            "required": [
+              "deposit"
+            ],
+            "properties": {
+              "deposit": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "amount",
+                  "currency"
+                ],
+                "properties": {
+                  "amount": {
+                    "const": 0
+                  },
+                  "currency": {
+                    "const": "KRW"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "depositState": {
+                "enum": [
+                  "UNKNOWN",
+                  "NOT_APPLICABLE"
+                ]
+              }
+            },
+            "required": [
+              "depositState"
+            ]
+          },
+          "then": {
+            "properties": {
+              "deposit": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "offer": {
       "type": "object",
