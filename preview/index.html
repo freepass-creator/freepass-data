@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>FreePass Data Console Preview</title>
+<style>
+:root{
+  --bg:#f5f7fa;--card:#fff;--line:#e6e9ee;--text:#171a21;--muted:#6f7785;
+  --accent:#2358d5;--ok:#198754;--warn:#b76e00;--bad:#c33838;--soft:#eef3ff;
+  --shadow:0 8px 28px rgba(22,34,56,.08);--radius:18px;
+}
+*{box-sizing:border-box} body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",Arial,sans-serif;background:var(--bg);color:var(--text)}
+button{font:inherit}.app{min-height:100vh;display:grid;grid-template-columns:232px 1fr}
+.sidebar{background:#111827;color:#fff;padding:20px 14px;position:sticky;top:0;height:100vh}
+.brand{display:flex;gap:10px;align-items:center;padding:6px 10px 20px;font-weight:800}.logo{width:34px;height:34px;border-radius:10px;background:#fff;color:#111827;display:grid;place-items:center;font-size:13px}
+.demo{font-size:10px;font-weight:800;letter-spacing:.08em;background:#2d3b53;color:#cbd5e1;padding:4px 7px;border-radius:999px}
+.nav{display:grid;gap:5px}.nav button{border:0;background:transparent;color:#aab4c3;text-align:left;padding:11px 12px;border-radius:11px;cursor:pointer}.nav button.active,.nav button:hover{background:#202b3d;color:#fff}
+.main{min-width:0}.topbar{height:66px;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:5}
+.topbar h1{font-size:18px;margin:0}.topmeta{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12px}.dot{width:8px;height:8px;background:var(--ok);border-radius:50%}
+.content{padding:24px;max-width:1440px;margin:auto}.screen{display:none}.screen.active{display:block}
+.hero{display:flex;justify-content:space-between;gap:16px;align-items:end;margin-bottom:18px}.hero h2{margin:0 0 6px;font-size:26px}.hero p{margin:0;color:var(--muted);font-size:14px}.badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:6px 9px;background:#eef3ff;color:#244dba;font-size:11px;font-weight:700}
+.cards{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:12px}.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px}.metric .label{color:var(--muted);font-size:12px}.metric .value{font-size:24px;font-weight:800;margin:8px 0 3px}.metric .sub{font-size:11px;color:var(--muted)}
+.section{margin-top:16px}.section-title{display:flex;align-items:center;justify-content:space-between;margin:0 0 10px}.section-title h3{font-size:15px;margin:0}.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.pipeline{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;padding:18px}.stage{padding:12px;border:1px solid var(--line);border-radius:13px;background:#fbfcfe}.stage b{display:block;font-size:12px}.stage span{display:block;font-size:10px;color:var(--muted);margin-top:5px}.stage .count{font-size:18px;font-weight:800;color:var(--text);margin-top:9px}
+.table{width:100%;border-collapse:collapse}.table th,.table td{padding:12px 14px;border-bottom:1px solid var(--line);text-align:left;font-size:12px;vertical-align:middle}.table th{color:var(--muted);font-weight:700;background:#fbfcfe}.table tr:last-child td{border-bottom:0}
+.status{font-size:10px;font-weight:800;border-radius:999px;padding:5px 7px;display:inline-block}.ok{background:#e9f7ef;color:#147341}.warn{background:#fff4df;color:#925d00}.bad{background:#fdecec;color:#a02a2a}.info{background:#edf3ff;color:#2751b4}
+.split{display:grid;grid-template-columns:1.05fr .95fr;gap:14px}.detail{padding:18px}.detail h3{margin:0 0 4px}.kv{display:grid;grid-template-columns:150px 1fr;gap:10px 14px;font-size:12px;padding:12px 0;border-bottom:1px solid var(--line)}.kv:last-child{border-bottom:0}.kv .k{color:var(--muted)}
+.diff{padding:14px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:10px}.diff:last-child{border-bottom:0}.diff .path{font-size:12px;font-weight:800}.diff .change{font-size:12px;margin-top:7px}.diff .before{color:var(--muted);text-decoration:line-through}.arrow{color:#9aa3af;margin:0 7px}.diff .after{font-weight:700}.rule{font-size:10px;color:var(--muted);margin-top:6px}
+.manifest{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:16px}.manifest .item{border:1px solid var(--line);border-radius:12px;padding:12px}.manifest .item span{display:block;color:var(--muted);font-size:10px}.manifest .item b{display:block;margin-top:5px;font-size:12px;word-break:break-all}
+.timeline{padding:12px 18px}.event{display:grid;grid-template-columns:84px 1fr;gap:12px;padding:14px 0;border-bottom:1px solid var(--line)}.event:last-child{border-bottom:0}.event time{font-size:11px;color:var(--muted)}.event b{font-size:12px}.event p{font-size:11px;color:var(--muted);margin:5px 0 0}
+.mobile-nav{display:none}
+@media(max-width:980px){
+  .app{grid-template-columns:1fr}.sidebar{display:none}.topbar{padding:0 16px;height:60px}.content{padding:15px 14px 82px}.hero{align-items:start}.hero h2{font-size:22px}.cards{grid-template-columns:repeat(2,1fr)}.cards .card:last-child{grid-column:span 2}.pipeline{grid-template-columns:1fr}.split{grid-template-columns:1fr}.manifest{grid-template-columns:1fr}.table-wrap{overflow:auto}.table{min-width:720px}
+  .mobile-nav{position:fixed;left:10px;right:10px;bottom:10px;background:rgba(17,24,39,.96);padding:7px;border-radius:18px;display:grid;grid-template-columns:repeat(5,1fr);z-index:20;box-shadow:0 12px 35px rgba(0,0,0,.22)}
+  .mobile-nav button{border:0;background:transparent;color:#9aa5b5;padding:8px 3px;border-radius:10px;font-size:10px}.mobile-nav button.active{background:#27354b;color:#fff}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">FP</div><div>FreePass Data</div><span class="demo">DEMO</span></div>
+    <nav class="nav">
+      <button class="active" data-screen="home">홈</button>
+      <button data-screen="data">데이터</button>
+      <button data-screen="review">변경 검수</button>
+      <button data-screen="release">Release</button>
+      <button data-screen="history">변경 이력</button>
+    </nav>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <h1>FreePass Data Console</h1>
+      <div class="topmeta"><span class="dot"></span><span>Control Plane 정상</span><span class="demo">UI PREVIEW</span></div>
+    </header>
+    <div class="content">
+      <section id="home" class="screen active">
+        <div class="hero"><div><h2>데이터 관제센터</h2><p>어디서 왔고, 무엇이 정본이며, 어디에 배포됐는지 한눈에 확인합니다.</p></div><span class="badge">샘플 데이터 표시</span></div>
+        <div class="cards">
+          <div class="card metric"><div class="label">RAW 원본</div><div class="value">18,430</div><div class="sub">immutable evidence</div></div>
+          <div class="card metric"><div class="label">Candidate</div><div class="value">3,821</div><div class="sub">정규화 결과</div></div>
+          <div class="card metric"><div class="label">Canonical Product</div><div class="value">3,205</div><div class="sub">현재 정본</div></div>
+          <div class="card metric"><div class="label">검수 대기</div><div class="value">47</div><div class="sub">source change / warning</div></div>
+          <div class="card metric"><div class="label">ACTIVE Release</div><div class="value">4</div><div class="sub">Admin · Sales · ERP · Estimate</div></div>
+        </div>
+        <div class="section">
+          <div class="section-title"><h3>데이터 흐름</h3><span class="status ok">정상</span></div>
+          <div class="panel pipeline">
+            <div class="stage"><b>Sources</b><span>Firebase · Sheet · API · Manual</span><div class="count">12</div></div>
+            <div class="stage"><b>RAW</b><span>원문 보존</span><div class="count">18.4K</div></div>
+            <div class="stage"><b>Normalized</b><span>검증 후보</span><div class="count">3.8K</div></div>
+            <div class="stage"><b>Canonical</b><span>SSOT</span><div class="count">3.2K</div></div>
+            <div class="stage"><b>Projection</b><span>consumer shape</span><div class="count">4</div></div>
+            <div class="stage"><b>Release</b><span>evidence gated</span><div class="count">4</div></div>
+            <div class="stage"><b>Consumers</b><span>연결 상태</span><div class="count">4/4</div></div>
+          </div>
+        </div>
+        <div class="section split">
+          <div class="panel">
+            <div class="section-title" style="padding:16px 16px 0"><h3>최근 Source 상태</h3></div>
+            <div class="table-wrap"><table class="table"><thead><tr><th>Source</th><th>상태</th><th>마지막 관측</th></tr></thead><tbody>
+              <tr><td>freepasserp3 / products</td><td><span class="status ok">FULL · COMPLETE</span></td><td>07:31</td></tr>
+              <tr><td>손오공 Sheet</td><td><span class="status ok">CURRENT</span></td><td>07:28</td></tr>
+              <tr><td>AutoPlus API</td><td><span class="status warn">LAGGING</span></td><td>06:42</td></tr>
+            </tbody></table></div>
+          </div>
+          <div class="panel">
+            <div class="section-title" style="padding:16px 16px 0"><h3>최근 변경</h3></div>
+            <div class="timeline">
+              <div class="event"><time>07:32</time><div><b>Offer r12 → r13</b><p>월대여료 원천 변경 검수 완료 · Release 재생성</p></div></div>
+              <div class="event"><time>07:27</time><div><b>Source Head 교체</b><p>fp_9f... → fp_b2... · review queue 생성</p></div></div>
+              <div class="event"><time>07:20</time><div><b>Manual Catalog Entry</b><p>RAW / Candidate 보존 후 Canonical 검수 대기</p></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="data" class="screen">
+        <div class="hero"><div><h2>Data Explorer</h2><p>Canonical 정본과 출처·revision·소비처를 함께 봅니다.</p></div><span class="badge">Catalog V1</span></div>
+        <div class="split">
+          <div class="panel table-wrap">
+            <table class="table"><thead><tr><th>상태</th><th>상품</th><th>Revision</th><th>Source</th><th>검증</th></tr></thead><tbody>
+              <tr><td><span class="status ok">ACTIVE</span></td><td>제네시스 GV70 2.5T AWD</td><td>r13</td><td>freepasserp3</td><td>VALID</td></tr>
+              <tr><td><span class="status ok">ACTIVE</span></td><td>G80 2.5T</td><td>r8</td><td>Manual</td><td>VALID</td></tr>
+              <tr><td><span class="status warn">REVIEW</span></td><td>BMW 520i</td><td>r3</td><td>AutoPlus</td><td>WARNING</td></tr>
+            </tbody></table>
+          </div>
+          <div class="panel detail">
+            <h3>제네시스 GV70 2.5T AWD</h3>
+            <div class="badge" style="margin-top:6px">Product · prd_8b23...</div>
+            <div class="kv"><div class="k">Canonical revision</div><div>r13</div></div>
+            <div class="kv"><div class="k">VehicleModel</div><div>GV70 · 2세대 · 2.5T AWD</div></div>
+            <div class="kv"><div class="k">Offer</div><div>월 790,000원 · 보증금 3,000,000원</div></div>
+            <div class="kv"><div class="k">Source</div><div>freepasserp3 / legacy-product-001</div></div>
+            <div class="kv"><div class="k">Consumer</div><div>ERP Public · Sales · Admin</div></div>
+            <div class="kv"><div class="k">Lineage</div><div>RAW → Candidate → Canonical → Release</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="review" class="screen">
+        <div class="hero"><div><h2>변경 검수</h2><p>새 Source fingerprint와 현재 Canonical의 차이를 검수합니다.</p></div><span class="status warn">3건 대기</span></div>
+        <div class="split">
+          <div class="panel">
+            <div class="detail"><h3>GV70 · Source Change</h3><div class="kv"><div class="k">Source fingerprint</div><div>fp_21a... → fp_81c...</div></div><div class="kv"><div class="k">Pinned revision</div><div>Model r4 · Product r9 · Offer r12 · Asset r6</div></div></div>
+            <div class="diff"><div><div class="path">priceTerms.36.monthlyRent</div><div class="change"><span class="before">750,000</span><span class="arrow">→</span><span class="after">790,000</span></div><div class="rule">catalog-pricing · expectedRevision</div></div><span class="status info">REVIEWABLE</span></div>
+            <div class="diff"><div><div class="path">odometerKm</div><div class="change"><span class="before">12,000</span><span class="arrow">→</span><span class="after">18,000</span></div><div class="rule">catalog-vehicle · reviewed source refresh</div></div><span class="status info">REVIEWABLE</span></div>
+            <div class="diff"><div><div class="path">sourceSupplierCode</div><div class="change"><span class="before">SUP-LEGACY</span><span class="arrow">→</span><span class="after">SUP-NEW</span></div><div class="rule">별도 공급사 매핑 명령 필요</div></div><span class="status bad">BLOCKED</span></div>
+          </div>
+          <div class="panel detail">
+            <h3>검수 정책</h3>
+            <div class="kv"><div class="k">부분 승인</div><div>금지</div></div>
+            <div class="kv"><div class="k">BLOCKED 포함</div><div>반영 버튼 비활성</div></div>
+            <div class="kv"><div class="k">Stale revision</div><div>409 Conflict</div></div>
+            <div class="kv"><div class="k">반영 후</div><div>Revision · Audit · Lineage · Outbox</div></div>
+            <button disabled style="width:100%;margin-top:14px;padding:13px;border:0;border-radius:12px;background:#e6e9ee;color:#9198a4;font-weight:800">BLOCKED 변경 해결 필요</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="release" class="screen">
+        <div class="hero"><div><h2>Release & Consumers</h2><p>정확히 어떤 Canonical revision 묶음이 소비자에게 제공되는지 확인합니다.</p></div><span class="status ok">ACTIVE</span></div>
+        <div class="panel manifest">
+          <div class="item"><span>Release ID</span><b>rel_7fe2...c91</b></div>
+          <div class="item"><span>Manifest</span><b>manifest_rel_7fe2...c91</b></div>
+          <div class="item"><span>Input digest</span><b>8d3a1c...92bf</b></div>
+          <div class="item"><span>Data digest</span><b>2f781e...a011</b></div>
+          <div class="item"><span>Canonical inputs</span><b>VehicleModel r4 · Asset r6 · Product r9 · Offer r13</b></div>
+          <div class="item"><span>Field evidence</span><b>42 fields · SOURCE_LINEAGE / REVISION_HISTORY</b></div>
+        </div>
+        <div class="section panel table-wrap">
+          <table class="table"><thead><tr><th>Consumer</th><th>상태</th><th>Release</th><th>Lag</th><th>Last acknowledged</th></tr></thead><tbody>
+            <tr><td>ERP.com</td><td><span class="status ok">CONNECTED</span></td><td>rel_7fe2...</td><td>0</td><td>07:35</td></tr>
+            <tr><td>FreePass Admin</td><td><span class="status ok">CONNECTED</span></td><td>rel_7fe2...</td><td>0</td><td>07:35</td></tr>
+            <tr><td>FreePass Sales</td><td><span class="status ok">CONNECTED</span></td><td>rel_7fe2...</td><td>0</td><td>07:34</td></tr>
+            <tr><td>Estimate</td><td><span class="status warn">LAGGING</span></td><td>rel_6ac1...</td><td>1</td><td>07:29</td></tr>
+          </tbody></table>
+        </div>
+      </section>
+
+      <section id="history" class="screen">
+        <div class="hero"><div><h2>Revision & Audit</h2><p>상태 스냅샷과 변경 이유를 분리해 추적합니다.</p></div><span class="badge">append-only</span></div>
+        <div class="panel timeline">
+          <div class="event"><time>07:32</time><div><b>Offer r13 · SOURCE_REFRESH</b><p>750,000 → 790,000 · source fp_81c... · user:reviewer</p></div></div>
+          <div class="event"><time>07:31</time><div><b>Canonical Binding r7</b><p>새 Source Head 승인 · run_20260921_0731</p></div></div>
+          <div class="event"><time>06:58</time><div><b>Offer r12 · MANUAL_COMMAND</b><p>가격 직접 수정 · expectedRevision r11 → r12</p></div></div>
+          <div class="event"><time>06:40</time><div><b>Projection Delivery Receipt</b><p>중복 이벤트 재시도 · 기존 ACTIVE Release 재사용</p></div></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<nav class="mobile-nav">
+  <button class="active" data-screen="home">홈</button>
+  <button data-screen="data">데이터</button>
+  <button data-screen="review">검수</button>
+  <button data-screen="release">Release</button>
+  <button data-screen="history">이력</button>
+</nav>
+
+<script>
+const buttons=[...document.querySelectorAll('[data-screen]')];
+function openScreen(id){
+  document.querySelectorAll('.screen').forEach(x=>x.classList.toggle('active',x.id===id));
+  buttons.forEach(x=>x.classList.toggle('active',x.dataset.screen===id));
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+buttons.forEach(btn=>btn.addEventListener('click',()=>openScreen(btn.dataset.screen)));
+</script>
+</body>
+</html>
