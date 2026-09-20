@@ -4,6 +4,8 @@ import addFormats from 'ajv-formats';
 import updateOfferPriceSchema from '../../contracts/update-offer-price.schema.json' with { type: 'json' };
 import { createRuntimeStores } from '../bootstrap.js';
 import { AuthorityDeniedError } from '../domain/authority.js';
+import { buildAdminCatalogProjection } from '../application/admin-catalog.js';
+import type { AdminCatalogProduct, AdminCatalogProjectionMetadata } from '../domain/catalog.js';
 import {
   EntityNotFoundError,
   IdempotencyConflictError,
@@ -19,6 +21,7 @@ addFormats(ajv);
 const validateUpdateOfferPrice = ajv.compile(updateOfferPriceSchema);
 const stores = await createRuntimeStores();
 
+await buildAdminCatalogProjection(stores.catalog, stores.projections);
 await buildErpPublicProjection(stores.catalog, stores.projections);
 
 app.get('/health', async () => ({
@@ -26,6 +29,37 @@ app.get('/health', async () => ({
   status: 'ok',
   driver: process.env.FREEPASS_DATA_DRIVER ?? 'memory'
 }));
+
+app.get('/v1/views/admin-catalog/products', async (request, reply) => {
+  const required=String(process.env.FREEPASS_DATA_ADMIN_VIEW_TOKEN??'').trim();
+  if(process.env.NODE_ENV==='production'&&!required){
+    return reply.code(503).send({code:'ADMIN_VIEW_AUTH_NOT_BOUND'});
+  }
+  if(required){
+    const authorization=String(request.headers.authorization??'');
+    if(authorization!=='Bearer '+required){
+      return reply.code(401).send({code:'UNAUTHORIZED'});
+    }
+  }
+
+  const release=await stores.projections.getActive<AdminCatalogProduct>('admin-catalog');
+  if(!release)return reply.code(503).send({code:'NO_ACTIVE_ADMIN_CATALOG_RELEASE'});
+  const metadata=(release.metadata??{}) as Partial<AdminCatalogProjectionMetadata>;
+  return{
+    schema:'freepass-data.admin-catalog/v1',
+    data:release.data,
+    meta:{
+      schemaVersion:release.schemaVersion,
+      releaseId:release.releaseId,
+      revision:release.canonicalRevision,
+      generatedAt:release.generatedAt,
+      activatedAt:release.activatedAt??null,
+      policyParity:metadata.policyParity??'INCOMPLETE',
+      missingPolicyOfferIds:metadata.missingPolicyOfferIds??[],
+      invalidPolicyFactRefs:metadata.invalidPolicyFactRefs??[],
+    },
+  };
+});
 
 app.get('/v1/views/erp-public/products', async (_request, reply) => {
   const release = await stores.projections.getActive('erp-public');
