@@ -16,7 +16,7 @@ import type {
   SourceHead,
   SourceRun
 } from '../domain/source.js';
-import type { FieldLineageRecord, LineageStage } from '../domain/lineage.js';
+import type { FieldLineageRecord, SourceLineageStage } from '../domain/lineage.js';
 import type {
   CatalogEntityType,
   EntityRevisionRecord
@@ -238,7 +238,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async getManualCatalogEntryReceipt(idempotencyKey: string) {
     return copy(this.manualCatalogEntryReceipts.get(idempotencyKey) ?? null);
   }
-  async listLineageByStage(stage: LineageStage) {
+  async listLineageByStage(stage: SourceLineageStage) {
     return copy([...this.lineage.values()].filter((item) => item.stage === stage));
   }
   async listEntityHistory(entityType: CatalogEntityType, entityId: string) {
