@@ -46,7 +46,6 @@ export interface CatalogTransaction {
   getSourceBinding(bindingId: string): Promise<CanonicalSourceBinding | null>;
   putSourceBinding(binding: CanonicalSourceBinding): Promise<void>;
   getCanonicalizationReceipt(idempotencyKey: string): Promise<CanonicalizationReceipt | null>;
-  getManualCatalogEntryReceipt(idempotencyKey: string): Promise<ManualCatalogEntryReceipt | null>;
   putCanonicalizationReceipt(receipt: CanonicalizationReceipt): Promise<void>;
   getCommandReceipt(idempotencyKey: string): Promise<CommandReceipt | null>;
   putCommandReceipt(receipt: CommandReceipt): Promise<void>;
@@ -69,6 +68,7 @@ export interface CatalogStore {
   getCandidate(candidateId: string): Promise<NormalizedCandidateRecord | null>;
   getSourceBinding(bindingId: string): Promise<CanonicalSourceBinding | null>;
   getCanonicalizationReceipt(idempotencyKey: string): Promise<CanonicalizationReceipt | null>;
+  getManualCatalogEntryReceipt(idempotencyKey: string): Promise<ManualCatalogEntryReceipt | null>;
   listLineageByStage(stage: LineageStage): Promise<FieldLineageRecord[]>;
   listEntityHistory(
     entityType: CatalogEntityType,
