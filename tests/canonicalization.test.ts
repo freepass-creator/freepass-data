@@ -185,6 +185,18 @@ describe('safe catalog canonicalization', () => {
     expect(binding?.sourceRunId).toBe('run-current');
     expect(binding?.sourceFingerprint).toBe('fp-current');
 
+    const modelHistory=await store.listEntityHistory('vehicle_model','vm_reviewed_gv70_001');
+    const assetHistory=await store.listEntityHistory('vehicle_asset','va_reviewed_123ga4567');
+    const productHistory=await store.listEntityHistory('product',receipt.productId);
+    const offerHistory=await store.listEntityHistory('offer',receipt.offerId);
+    expect(modelHistory).toHaveLength(1);
+    expect(assetHistory).toHaveLength(1);
+    expect(productHistory).toHaveLength(1);
+    expect(offerHistory).toHaveLength(1);
+    expect(offerHistory[0]?.origin).toBe('CANONICALIZATION');
+    expect(offerHistory[0]?.sourceBindingId).toBe(receipt.bindingId);
+    expect(offerHistory[0]?.sourceRunId).toBe('run-current');
+
     const canonicalLineage = await store.listLineageByStage('NORMALIZED_TO_CANONICAL');
     expect(canonicalLineage.some((item) =>
       item.normalized?.fieldPath === 'commercialType' &&
@@ -246,6 +258,8 @@ describe('safe catalog canonicalization', () => {
     expect(second.bindingId).toBe(first.bindingId);
     expect(await store.listProducts()).toHaveLength(1);
     expect(await store.listOffers()).toHaveLength(1);
+    expect(await store.listEntityHistory('product',first.productId)).toHaveLength(1);
+    expect(await store.listEntityHistory('offer',first.offerId)).toHaveLength(1);
     expect(store.audits).toHaveLength(1);
     expect(store.outbox.size).toBe(1);
   });

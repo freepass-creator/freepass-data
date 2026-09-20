@@ -177,6 +177,10 @@ append-only audit surface.
 - receipt
 
 Compare revision 제공.
+
+Revision detail은 queryable Canonical Revision Snapshot을 기준으로 r1/r2/r3 상태를 재현한다.
+Audit은 왜/누가 바꿨는지, Revision Snapshot은 그 시점의 상태가 무엇이었는지를 담당한다.
+
 Rollback은 즉시 destructive revert 대신 rollback candidate 생성 후 적용한다.
 
 ## 9. 모바일
@@ -194,7 +198,18 @@ Rollback은 즉시 destructive revert 대신 rollback candidate 생성 후 적�
 - wider lineage graph
 - persistent filters
 
-## 10. 접근성 / 상호작용
+## 10. 추가 / 수정 UX
+
+직접 추가는 Firestore document editor를 노출하지 않는다.
+
+- "직접 추가"는 Manual Source/Command를 생성
+- 지원하는 도메인별 입력 Form 제공
+- 저장 전 validation + authority + 영향 범위 확인
+- 저장 후 canonical revision / audit / lineage / receipt 표시
+
+수정도 Field Authority에 등록된 필드와 Command만 편집 가능하게 한다.
+
+## 11. 접근성 / 상호작용
 
 AI Core 기준:
 - WCAG 2.2 AA

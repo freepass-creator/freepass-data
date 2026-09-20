@@ -656,12 +656,45 @@ export async function canonicalizeCatalogCandidate(
       offer
     });
 
-    if (modelResolution.action === 'CREATE') await tx.putVehicleModel(model);
+    const appendInitialRevision = async (
+      entityType: 'vehicle_model' | 'vehicle_asset' | 'product' | 'offer',
+      entityId: string,
+      snapshot: unknown
+    ) => {
+      await tx.appendRevision({
+        revisionRecordId: 'rev_' + stableHash([
+          input.commandId,
+          entityType,
+          entityId,
+          '1'
+        ]).slice(0, 32),
+        entityType,
+        entityId,
+        revision: 1,
+        previousRevision: null,
+        snapshot,
+        actor: input.actor,
+        reason: input.reason,
+        origin: 'CANONICALIZATION',
+        commandId: input.commandId,
+        occurredAt: now,
+        sourceBindingId: binding.bindingId,
+        sourceRunId: run.runId
+      });
+    };
+
+    if (modelResolution.action === 'CREATE') {
+      await tx.putVehicleModel(model);
+      await appendInitialRevision('vehicle_model', model.id, model);
+    }
     if (asset && input.decision.vehicleAsset?.action === 'CREATE') {
       await tx.putVehicleAsset(asset);
+      await appendInitialRevision('vehicle_asset', asset.id, asset);
     }
     await tx.putProduct(product);
+    await appendInitialRevision('product', product.id, product);
     await tx.putOffer(offer);
+    await appendInitialRevision('offer', offer.id, offer);
     await tx.putSourceBinding(binding);
     for (const lineage of canonicalLineage) await tx.appendLineage(lineage);
 

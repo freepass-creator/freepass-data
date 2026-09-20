@@ -12,6 +12,10 @@ import type {
   SourceRun
 } from '../domain/source.js';
 import type { FieldLineageRecord, LineageStage } from '../domain/lineage.js';
+import type {
+  CatalogEntityType,
+  EntityRevisionRecord
+} from '../domain/history.js';
 
 export interface CatalogTransaction {
   getVehicleModel(id: string): Promise<VehicleModel | null>;
@@ -36,6 +40,7 @@ export interface CatalogTransaction {
   getCommandReceipt(idempotencyKey: string): Promise<CommandReceipt | null>;
   putCommandReceipt(receipt: CommandReceipt): Promise<void>;
   appendAudit(event: AuditEvent): Promise<void>;
+  appendRevision(record: EntityRevisionRecord): Promise<void>;
   appendOutbox(event: OutboxEvent): Promise<void>;
 }
 export interface CatalogStore {
@@ -47,6 +52,10 @@ export interface CatalogStore {
   getSourceBinding(bindingId: string): Promise<CanonicalSourceBinding | null>;
   getCanonicalizationReceipt(idempotencyKey: string): Promise<CanonicalizationReceipt | null>;
   listLineageByStage(stage: LineageStage): Promise<FieldLineageRecord[]>;
+  listEntityHistory(
+    entityType: CatalogEntityType,
+    entityId: string
+  ): Promise<EntityRevisionRecord[]>;
   listVehicleModels(): Promise<VehicleModel[]>;
   listVehicleAssets(): Promise<VehicleAsset[]>;
   listProducts(): Promise<Product[]>;
@@ -59,6 +68,7 @@ export interface CatalogStore {
     candidates?: NormalizedCandidateRecord[]; lineage?: FieldLineageRecord[];
     sourceBindings?: CanonicalSourceBinding[];
     canonicalizationReceipts?: CanonicalizationReceipt[];
+    revisionHistory?: EntityRevisionRecord[];
   }): Promise<void>;
 }
 export interface ProjectionStore {

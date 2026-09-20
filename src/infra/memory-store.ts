@@ -15,6 +15,10 @@ import type {
   SourceRun
 } from '../domain/source.js';
 import type { FieldLineageRecord, LineageStage } from '../domain/lineage.js';
+import type {
+  CatalogEntityType,
+  EntityRevisionRecord
+} from '../domain/history.js';
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -31,6 +35,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   private candidates = new Map<string, NormalizedCandidateRecord>();
   private lineage = new Map<string, FieldLineageRecord>();
   private sourceBindings = new Map<string, CanonicalSourceBinding>();
+  private revisionHistory = new Map<string, EntityRevisionRecord>();
   readonly audits: AuditEvent[] = [];
   readonly outbox = new Map<string, OutboxEvent>();
   private releases = new Map<string, ProjectionRelease<ErpPublicProduct>>();
@@ -43,6 +48,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     candidates?: NormalizedCandidateRecord[]; lineage?: FieldLineageRecord[];
     sourceBindings?: CanonicalSourceBinding[];
     canonicalizationReceipts?: CanonicalizationReceipt[];
+    revisionHistory?: EntityRevisionRecord[];
   }) {
     for (const x of input.vehicleModels ?? []) this.models.set(x.id, copy(x));
     for (const x of input.vehicleAssets ?? []) this.assets.set(x.id, copy(x));
@@ -57,6 +63,9 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     for (const x of input.canonicalizationReceipts ?? []) {
       this.canonicalizationReceipts.set(x.idempotencyKey, copy(x));
     }
+    for (const x of input.revisionHistory ?? []) {
+      this.revisionHistory.set(x.revisionRecordId, copy(x));
+    }
   }
 
   async transact<T>(fn: (tx: CatalogTransaction) => Promise<T>): Promise<T> {
@@ -69,6 +78,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       canonicalizationReceipts: copy([...this.canonicalizationReceipts.entries()]),
       lineage: copy([...this.lineage.entries()]),
       sourceBindings: copy([...this.sourceBindings.entries()]),
+      revisionHistory: copy([...this.revisionHistory.entries()]),
       audits: copy(this.audits),
       outbox: copy([...this.outbox.entries()])
     };
@@ -114,6 +124,12 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       getCommandReceipt: async (key) => copy(this.receipts.get(key) ?? null),
       putCommandReceipt: async (receipt) => { this.receipts.set(receipt.idempotencyKey, copy(receipt)); },
       appendAudit: async (event) => { this.audits.push(copy(event)); },
+      appendRevision: async (record) => {
+        if (this.revisionHistory.has(record.revisionRecordId)) {
+          throw new Error(`Revision record already exists: ${record.revisionRecordId}`);
+        }
+        this.revisionHistory.set(record.revisionRecordId, copy(record));
+      },
       appendOutbox: async (event) => { this.outbox.set(event.eventId, copy(event)); }
     };
     try { return await fn(tx); }
@@ -126,6 +142,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       this.canonicalizationReceipts = new Map(snapshot.canonicalizationReceipts);
       this.lineage = new Map(snapshot.lineage);
       this.sourceBindings = new Map(snapshot.sourceBindings);
+      this.revisionHistory = new Map(snapshot.revisionHistory);
       this.audits.splice(0, this.audits.length, ...snapshot.audits);
       this.outbox.clear();
       for (const [key, value] of snapshot.outbox) this.outbox.set(key, value);
@@ -145,6 +162,13 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   }
   async listLineageByStage(stage: LineageStage) {
     return copy([...this.lineage.values()].filter((item) => item.stage === stage));
+  }
+  async listEntityHistory(entityType: CatalogEntityType, entityId: string) {
+    return copy(
+      [...this.revisionHistory.values()]
+        .filter((item) => item.entityType === entityType && item.entityId === entityId)
+        .sort((a, b) => a.revision - b.revision)
+    );
   }
   async listVehicleModels() { return copy([...this.models.values()]); }
   async listVehicleAssets() { return copy([...this.assets.values()]); }

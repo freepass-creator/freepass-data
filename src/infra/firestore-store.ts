@@ -17,6 +17,10 @@ import type {
   SourceRun
 } from '../domain/source.js';
 import type { FieldLineageRecord, LineageStage } from '../domain/lineage.js';
+import type {
+  CatalogEntityType,
+  EntityRevisionRecord
+} from '../domain/history.js';
 
 const C = {
   vehicleModels: 'catalog_vehicle_models',
@@ -31,6 +35,7 @@ const C = {
   candidates: 'normalized_candidates',
   lineage: 'field_lineage',
   sourceBindings: 'canonical_source_bindings',
+  revisions: 'catalog_entity_revisions',
   audits: 'audit_events',
   outbox: 'outbox_events',
   releases: 'projection_releases',
@@ -109,6 +114,9 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         appendAudit: async (event: AuditEvent) => {
           native.create(this.db.collection(C.audits).doc(event.eventId), event);
         },
+        appendRevision: async (record: EntityRevisionRecord) => {
+          native.create(this.db.collection(C.revisions).doc(record.revisionRecordId), record);
+        },
         appendOutbox: async (event: OutboxEvent) => {
           native.create(this.db.collection(C.outbox).doc(event.eventId), event);
         }
@@ -140,6 +148,14 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async listLineageByStage(stage: LineageStage) {
     const snap = await this.db.collection(C.lineage).where('stage', '==', stage).get();
     return snap.docs.map((doc) => doc.data() as FieldLineageRecord);
+  }
+  async listEntityHistory(entityType: CatalogEntityType, entityId: string) {
+    const snap = await this.db.collection(C.revisions)
+      .where('entityType', '==', entityType)
+      .where('entityId', '==', entityId)
+      .orderBy('revision', 'asc')
+      .get();
+    return snap.docs.map((doc) => doc.data() as EntityRevisionRecord);
   }
 
   private async all<T>(collection: string): Promise<T[]> {
