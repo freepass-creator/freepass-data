@@ -4,39 +4,77 @@
   "title": "FreePass Data Admin Catalog View V1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "data", "meta"],
+  "required": [
+    "schema",
+    "data",
+    "meta"
+  ],
   "properties": {
-    "schema": { "const": "freepass-data.admin-catalog/v1" },
+    "schema": {
+      "const": "freepass-data.admin-catalog/v1"
+    },
     "meta": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaVersion", "releaseId", "revision", "generatedAt"],
+      "required": [
+        "schemaVersion",
+        "releaseId",
+        "revision",
+        "generatedAt"
+      ],
       "properties": {
-        "schemaVersion": { "type": "string", "minLength": 1 },
-        "releaseId": { "type": "string", "minLength": 1 },
-        "revision": { "type": "integer", "minimum": 0 },
-        "generatedAt": { "type": "string", "format": "date-time" },
+        "schemaVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "releaseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
         "activatedAt": {
           "anyOf": [
-            { "type": "null" },
-            { "type": "string", "format": "date-time" }
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "format": "date-time"
+            }
           ]
         }
       }
     },
     "data": {
       "type": "array",
-      "items": { "$ref": "#/$defs/product" }
+      "items": {
+        "$ref": "#/$defs/product"
+      }
     }
   },
   "$defs": {
     "money": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["amount", "currency"],
+      "required": [
+        "amount",
+        "currency"
+      ],
       "properties": {
-        "amount": { "type": "integer", "minimum": 0 },
-        "currency": { "const": "KRW" }
+        "amount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "currency": {
+          "const": "KRW"
+        }
       }
     },
     "policyValue": {
@@ -44,43 +82,95 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["policyId", "type", "value"],
+          "required": [
+            "policyId",
+            "type",
+            "value"
+          ],
           "properties": {
-            "policyId": { "type": "string", "minLength": 1 },
-            "type": { "const": "BOOLEAN" },
-            "value": { "type": "boolean" }
+            "policyId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "const": "BOOLEAN"
+            },
+            "value": {
+              "type": "boolean"
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["policyId", "type", "value"],
+          "required": [
+            "policyId",
+            "type",
+            "value"
+          ],
           "properties": {
-            "policyId": { "type": "string", "minLength": 1 },
-            "type": { "enum": ["NUMBER", "MONEY", "PERCENTAGE"] },
-            "value": { "type": "number" }
+            "policyId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "enum": [
+                "NUMBER",
+                "MONEY",
+                "PERCENTAGE"
+              ]
+            },
+            "value": {
+              "type": "number"
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["policyId", "type", "value"],
+          "required": [
+            "policyId",
+            "type",
+            "value"
+          ],
           "properties": {
-            "policyId": { "type": "string", "minLength": 1 },
-            "type": { "enum": ["SINGLE_SELECT", "TEXT", "DATE"] },
-            "value": { "type": "string" }
+            "policyId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "enum": [
+                "SINGLE_SELECT",
+                "TEXT",
+                "DATE"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["policyId", "type", "value"],
+          "required": [
+            "policyId",
+            "type",
+            "value"
+          ],
           "properties": {
-            "policyId": { "type": "string", "minLength": 1 },
-            "type": { "const": "MULTI_SELECT" },
+            "policyId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "const": "MULTI_SELECT"
+            },
             "value": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             }
           }
         }
@@ -89,22 +179,48 @@
     "priceTerm": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["termKey", "termMonths", "monthlyRent", "depositState"],
+      "required": [
+        "termKey",
+        "termMonths",
+        "monthlyRent",
+        "depositState"
+      ],
       "properties": {
-        "termKey": { "type": "string", "minLength": 1 },
-        "termMonths": { "type": "integer", "minimum": 1, "maximum": 120 },
-        "monthlyRent": { "$ref": "#/$defs/money" },
+        "termKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "termMonths": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 120
+        },
+        "monthlyRent": {
+          "$ref": "#/$defs/money"
+        },
         "deposit": {
           "anyOf": [
-            { "type": "null" },
-            { "$ref": "#/$defs/money" }
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/money"
+            }
           ]
         },
         "depositState": {
-          "enum": ["KNOWN", "ZERO", "UNKNOWN", "NOT_APPLICABLE"]
+          "enum": [
+            "KNOWN",
+            "ZERO",
+            "UNKNOWN",
+            "NOT_APPLICABLE"
+          ]
         },
         "mileageLimitKmPerYear": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 0
         }
       }
@@ -120,46 +236,135 @@
         "priceTerms"
       ],
       "properties": {
-        "offerId": { "type": "string", "minLength": 1 },
-        "offerRevision": { "type": "integer", "minimum": 1 },
-        "supplierId": { "type": "string", "minLength": 1 },
-        "policyId": { "type": ["string", "null"] },
+        "offerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "offerRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "supplierId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "policyId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "policyValues": {
           "type": "array",
-          "items": { "$ref": "#/$defs/policyValue" }
+          "items": {
+            "$ref": "#/$defs/policyValue"
+          }
         },
         "priceTerms": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/priceTerm" }
+          "items": {
+            "$ref": "#/$defs/priceTerm"
+          }
         }
       }
     },
     "vehicleModel": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "maker", "model"],
+      "required": [
+        "id",
+        "maker",
+        "model"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "origin": { "type": ["string", "null"] },
-        "maker": { "type": "string", "minLength": 1 },
-        "model": { "type": "string", "minLength": 1 },
-        "generation": { "type": ["string", "null"] },
-        "trim": { "type": ["string", "null"] },
-        "fuel": { "type": ["string", "null"] },
-        "drive": { "type": ["string", "null"] },
-        "seats": { "type": ["integer", "null"], "minimum": 1 },
-        "modelYear": { "type": ["integer", "null"], "minimum": 1900 },
-        "displacementCc": { "type": ["integer", "null"], "minimum": 0 },
-        "batteryKwh": { "type": ["number", "null"], "minimum": 0 }
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "origin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maker": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trim": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fuel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "drive": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seats": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "modelYear": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1900
+        },
+        "displacementCc": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "batteryKwh": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
       }
     },
     "vehicleAsset": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": false,
-      "required": ["id", "status"],
+      "required": [
+        "id",
+        "status"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
         "status": {
           "enum": [
             "AVAILABLE",
@@ -172,10 +377,31 @@
             "RETIRED"
           ]
         },
-        "plateNumber": { "type": ["string", "null"] },
-        "vin": { "type": ["string", "null"] },
-        "odometerKm": { "type": ["integer", "null"], "minimum": 0 },
-        "firstRegistrationDate": { "type": ["string", "null"] }
+        "plateNumber": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "odometerKm": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "firstRegistrationDate": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "product": {
@@ -190,11 +416,25 @@
         "offers"
       ],
       "properties": {
-        "productId": { "type": "string", "minLength": 1 },
-        "productRevision": { "type": "integer", "minimum": 1 },
-        "sourceProductKey": { "type": "string" },
-        "updatedAt": { "type": "string", "format": "date-time" },
-        "displayName": { "type": "string", "minLength": 1 },
+        "productId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "productRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sourceProductKey": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
         "commercialType": {
           "enum": [
             "NEW_RENT",
@@ -204,12 +444,22 @@
             "PICKUP_SUBSCRIPTION"
           ]
         },
-        "vehicleModel": { "$ref": "#/$defs/vehicleModel" },
-        "vehicleAsset": { "$ref": "#/$defs/vehicleAsset" },
+        "vehicleModel": {
+          "$ref": "#/$defs/vehicleModel"
+        },
+        "vehicleAsset": {
+          "$ref": "#/$defs/vehicleAsset"
+        },
         "offers": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/offer" }
+          "items": {
+            "$ref": "#/$defs/offer"
+          }
+        },
+        "vehiclePrice": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     }
