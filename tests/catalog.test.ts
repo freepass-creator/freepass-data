@@ -15,8 +15,15 @@ describe('Catalog V1 vertical slice', () => {
     const replay=await updateOfferPrice(store,command,'2026-09-20T10:00:01.000Z');
     expect(replay).toEqual(first); expect((await store.getOffer(command.offerId))?.revision).toBe(2);
     expect(store.audits).toHaveLength(1); expect(store.outbox.size).toBe(1);
+    const history=await store.listEntityHistory('offer',command.offerId);
+    expect(history).toHaveLength(1);
+    expect(history[0]?.revision).toBe(2);
+    expect(history[0]?.previousRevision).toBe(1);
+    expect(history[0]?.origin).toBe('MANUAL_COMMAND');
+    expect((history[0]?.snapshot as any)?.priceTerms[0]?.monthlyRent.amount).toBe(710000);
     await expect(updateOfferPrice(store,{...command,commandId:'cmd_2',idempotencyKey:'idem_price_0002',expectedRevision:1}))
       .rejects.toBeInstanceOf(RevisionConflictError);
+    expect(await store.listEntityHistory('offer',command.offerId)).toHaveLength(1);
   });
 
   it('rejects idempotency key reuse with a different payload', async () => {
