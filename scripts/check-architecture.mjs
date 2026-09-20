@@ -38,16 +38,30 @@ function relativeTargetLayer(file, specifier) {
 }
 
 const violations = [];
-const importPattern = /(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?\s+from\s+)?['"]([^'"]+)['"]/g;
+
+function importSpecifiers(text) {
+  const out = [];
+  for (const statement of text.split(';')) {
+    const fromMatch = statement.match(
+      /\b(?:import|export)\s+(?:type\s+)?[\s\S]*?\bfrom\s+['"]([^'"]+)['"]/
+    );
+    if (fromMatch?.[1]) {
+      out.push(fromMatch[1]);
+      continue;
+    }
+
+    const sideEffectMatch = statement.match(/\bimport\s+['"]([^'"]+)['"]/);
+    if (sideEffectMatch?.[1]) out.push(sideEffectMatch[1]);
+  }
+  return out;
+}
 
 for (const file of walk(srcRoot)) {
   const layer = layerOf(file);
   const text = fs.readFileSync(file, 'utf8');
   const forbidden = forbiddenTargets[layer] ?? new Set();
 
-  for (const match of text.matchAll(importPattern)) {
-    const specifier = match[1];
-    if (!specifier) continue;
+  for (const specifier of importSpecifiers(text)) {
 
     if (firebaseForbiddenIn.has(layer) && specifier.startsWith('firebase-admin')) {
       violations.push({
