@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ActorRef, ErpPublicProduct, Money, Offer, ProjectionRelease } from '../domain/catalog.js';
+import { assertFieldAuthority } from '../domain/authority.js';
 import type { CatalogStore, OutboxStore, ProjectionStore } from '../ports/catalog-store.js';
 
 export type UpdateOfferPriceInput = {
@@ -52,6 +53,12 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
     throw new InvalidCommandError('monthlyRent must be a non-negative integer KRW amount');
   }
   if (!input.reason.trim()) throw new InvalidCommandError('reason is required');
+  assertFieldAuthority({
+    aggregate: 'offer',
+    fieldPath: `priceTerms.${input.termKey}.monthlyRent`,
+    command: 'UPDATE_OFFER_PRICE',
+    actor: input.actor
+  });
   const requestDigest = updateOfferPriceDigest(input);
 
   return store.transact(async (tx) => {
