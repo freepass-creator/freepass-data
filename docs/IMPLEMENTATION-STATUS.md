@@ -52,8 +52,12 @@ Added:
 Status:
 - contract: LOCKED
 - Admin adapter consumer boundary: prepared in freepass-admin
-- Data endpoint/release implementation: NOT ACTIVE
-- Admin read cutover: BLOCKED until policy parity + service auth + shadow parity evidence
+- Admin Catalog Projection builder: CODED
+- Admin Catalog ACTIVE release + API route: CODED
+- service bearer-token fail-closed gate: CODED
+- policyCode -> canonical Offer.policyId lineage: CODED
+- Policy source/canonical facts parity: INCOMPLETE
+- Admin read cutover: BLOCKED until policy parity + service auth runtime + shadow parity evidence
 
 The Admin contract intentionally differs from `erp-public`: it preserves Offer supplier identity, PriceTerm provenance, VIN/registration facts, optional vehicle-price pricing input facts and typed searchable policy values.
 
@@ -63,7 +67,7 @@ The implementation has moved beyond the old Next list. The highest-value missing
 
 1. **Complete field lineage: Canonical → Projection + Release evidence**
 2. **Reviewed source-change update path for an existing canonical binding**
-3. **Implement and validate the Admin Catalog ACTIVE Projection Release**
+3. **Complete legacy Policy source ingestion/canonical Policy parity for Admin Catalog**
 4. **Acceptance-test expansion for failure, duplicate, cutover and last-known-good cases**
 5. **Server/service authentication + IAM enforcement**
 6. **Admin catalog shadow/read pilot with policy parity**
@@ -86,6 +90,7 @@ Routes:
 ```
 GET  /health
 GET  /v1/views/erp-public/products
+GET  /v1/views/admin-catalog/products
 POST /v1/commands/offers/:offerId/price
 ```
 
