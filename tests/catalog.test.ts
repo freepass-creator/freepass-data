@@ -79,6 +79,18 @@ describe('Catalog V1 vertical slice', () => {
     expect(release.data[0]?.commercialType).toBe('USED_RENT');
     expect(release.data[0]?.offers[0]?.priceTerms[0]?.termKey).toBe('36@20000');
     expect(release.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(690000);
+    const manifest=await store.getManifest(release.releaseId);
+    expect(manifest?.releaseId).toBe(release.releaseId);
+    expect(manifest?.inputDigest).toBe(release.inputDigest);
+    expect(manifest?.dataDigest).toBe(release.dataDigest);
+    expect(manifest?.canonicalInputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({entityType:'vehicle_model',entityId:'vm_gv70_demo',revision:1}),
+      expect.objectContaining({entityType:'vehicle_asset',entityId:'va_gv70_demo',revision:1}),
+      expect.objectContaining({entityType:'product',entityId:'prod_gv70_demo',revision:1}),
+      expect.objectContaining({entityType:'offer',entityId:'offer_gv70_demo',revision:1})
+    ]));
+    expect((await store.listProjectionLineage(release.releaseId)).length)
+      .toBe(manifest?.fieldEvidenceCount);
   });
 
   it('excludes UNKNOWN deposit terms from ERP public projection', async () => {
@@ -107,6 +119,21 @@ describe('Catalog V1 vertical slice', () => {
       monthlyRent:{amount:730000,currency:'KRW'},reason:'outbox projection test',actor:{id:'user:test',kind:'USER'}
     },'2026-09-20T10:00:00.000Z');
     expect(await processOneOutboxEvent(store,store,store,{workerId:'worker:test'},new Date('2026-09-20T10:00:01.000Z'))).toBe('DONE');
-    expect((await store.getActive('erp-public'))?.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(730000);
+    const active=await store.getActive('erp-public');
+    expect(active?.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(730000);
+    const manifest=await store.getManifest(active!.releaseId);
+    expect(manifest?.canonicalInputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({entityType:'offer',entityId:'offer_gv70_demo',revision:2})
+    ]));
+    const priceEvidence=(await store.listProjectionLineage(active!.releaseId))
+      .find((item) =>
+        item.canonical.entityType==='offer' &&
+        item.canonical.entityId==='offer_gv70_demo' &&
+        item.canonical.revision===2 &&
+        item.canonical.fieldPath==='priceTerms.36@20000.monthlyRent.amount'
+      );
+    expect(priceEvidence?.evidenceOrigin).toBe('REVISION_HISTORY');
+    expect(priceEvidence?.revisionRecordId).toBeTruthy();
+    expect(priceEvidence?.projection.value).toBe(730000);
   });
 });
