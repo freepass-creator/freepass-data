@@ -69,13 +69,15 @@ Current cutover state:
 The implementation has moved beyond the old Next list. The highest-value missing Catalog V1 platform contracts are now:
 
 1. **Manual Catalog Source/Command for direct controlled additions**
-2. **Complete field lineage: Canonical → Projection + Release evidence**
-3. **Reviewed source-change update path for an existing canonical binding**
-3. **Acceptance-test expansion for failure, duplicate, cutover and last-known-good cases**
-4. **Server/service authentication + IAM enforcement**
-5. **ERP.com shadow/read pilot**
-6. **Console Data Explorer / Entity Detail / Command Edit**
-7. **Backup/restore and operational recovery verification**
+2. **Complete legacy Policy source ingestion/canonical Policy parity for Admin Catalog**
+3. **Complete field lineage: Canonical → Projection + Release evidence**
+4. **Reviewed source-change update path for an existing canonical binding**
+5. **Acceptance-test expansion for failure, duplicate, cutover and last-known-good cases**
+6. **Server/service authentication + IAM enforcement**
+7. **Admin catalog shadow/read pilot with full parity**
+8. **ERP.com shadow/read pilot**
+9. **Console Data Explorer / Entity Detail / Command Edit**
+10. **Backup/restore and operational recovery verification**
 
 ## Local execution
 
