@@ -74,7 +74,9 @@ Catalog V1 now has RAW → normalized → canonical → projection lineage, exac
 
 Reviewed source-change update for existing canonical bindings is implemented.
 
-Next implementation focus: duplicate/out-of-order delivery behavior, ownership-transfer enforcement, then authenticated service/user identity.
+Duplicate/out-of-order delivery behavior is implemented.
+
+Next implementation focus: writer ownership-transfer enforcement, then authenticated service/user identity.
 
 Minimum evidence:
 
@@ -109,7 +111,7 @@ Promote the architecture-v2 review test matrix into executable tests, starting w
 - [x] projection fields must resolve to source lineage or Canonical Revision History
 - [x] source collection failure/incomplete coverage must not be interpreted as mass deletion
 - [x] late older source run must not replace the accepted current head
-- [ ] duplicate / out-of-order event behavior
+- [x] duplicate / out-of-order event behavior
 - [ ] old writer blocked after ownership transfer (design + non-production enforcement test)
 
 ### P3 — Security/IAM review

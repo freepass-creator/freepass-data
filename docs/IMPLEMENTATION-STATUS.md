@@ -51,13 +51,16 @@ Implemented:
 - reviewed source-fingerprint change diff/apply workflow with exact approval and all-entity revision pinning
 - source supplier-code mapping preserved separately from Canonical supplierId
 - SOURCE_REFRESH Revision/Audit/Lineage path for Offer pricing terms and VehicleAsset odometer
+- idempotent projection delivery receipts keyed by outbox event
+- equivalent ACTIVE Release reuse by input/data digest
+- out-of-order catalog events converge on current Canonical state
 - tests for catalog mutation, authority enforcement, idempotency payload conflict, stale revision, projection semantics, ingestion, legacy normalization and shadow behavior
 
 ## Current gap
 
 The implementation has moved beyond the old Next list. The highest-value missing Catalog V1 platform contracts are now:
 
-1. **Acceptance-test expansion for duplicate, cutover and ownership-transfer cases**
+1. **Writer ownership-transfer enforcement**
 2. **Server/service authentication + IAM enforcement**
 3. **ERP.com shadow/read pilot**
 4. **Console Data Explorer / Entity Detail / Command Edit**

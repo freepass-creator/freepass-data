@@ -24,6 +24,7 @@ import type {
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
 import type { ReviewedSourceChangeReceipt } from '../domain/source-change.js';
 import type {
+  ProjectionDeliveryReceipt,
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
@@ -53,6 +54,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   private releases = new Map<string, ProjectionRelease<ErpPublicProduct>>();
   private manifests = new Map<string, ProjectionReleaseManifest>();
   private projectionLineage = new Map<string, ProjectionFieldLineageRecord>();
+  private deliveryReceipts = new Map<string, ProjectionDeliveryReceipt>();
   private active = new Map<string, string>();
 
   async seed(input: {
@@ -361,6 +363,15 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       [...this.projectionLineage.values()]
         .filter((item) => item.releaseId === releaseId)
     );
+  }
+  async getDeliveryReceipt(eventId: string) {
+    return copy(this.deliveryReceipts.get(eventId) ?? null);
+  }
+  async putDeliveryReceipt(receipt: ProjectionDeliveryReceipt) {
+    if (this.deliveryReceipts.has(receipt.eventId)) {
+      throw new Error(`Projection delivery receipt already exists: ${receipt.eventId}`);
+    }
+    this.deliveryReceipts.set(receipt.eventId, copy(receipt));
   }
 
   async claimNext(input: { workerId: string; now: string; leaseUntil: string }) {
