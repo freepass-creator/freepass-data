@@ -781,8 +781,9 @@ function nextOfferFromOperations(
     });
   }
 
+  const { sourceRevision: _previousSourceRevision, ...base } = offer;
   return {
-    ...offer,
+    ...base,
     priceTerms: terms,
     revision: offer.revision + 1,
     validationStatus,
@@ -809,8 +810,9 @@ function nextAssetFromOperations(
     throw new ReviewedSourceChangeRejectedError('VehicleAsset missing for odometer update');
   }
 
+  const { sourceRevision: _previousSourceRevision, ...base } = asset;
   return {
-    ...asset,
+    ...base,
     odometerKm: odometer.value,
     revision: asset.revision + 1,
     validationStatus,
