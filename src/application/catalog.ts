@@ -236,13 +236,18 @@ function buildProjectionEvidenceContext(input: {
 
   const requireRevision = (
     entityType: CatalogEntityType,
-    entity: { id: string; revision: number; validationStatus: Product['validationStatus'] }
+    entity: VehicleModel | VehicleAsset | Product | Offer
   ) => {
     const key = canonicalInputKey(entityType, entity.id, entity.revision);
     const record = revisionByEntity.get(key);
     if (!record) {
       throw new Error(
         `Projection release cannot use ${entityType} ${entity.id} r${entity.revision} without a revision snapshot`
+      );
+    }
+    if (!sameEvidenceValue(record.snapshot, entity)) {
+      throw new Error(
+        `Projection release detected snapshot drift for ${entityType} ${entity.id} r${entity.revision}`
       );
     }
     canonicalInputs.set(key, {
