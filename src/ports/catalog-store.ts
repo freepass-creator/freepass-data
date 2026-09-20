@@ -1,5 +1,5 @@
 import type {
-  AuditEvent, CommandReceipt, Offer, OutboxEvent, Policy,
+  AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
   Product, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
@@ -65,7 +65,7 @@ export interface ProjectionStore {
   stage<T>(release: ProjectionRelease<T>): Promise<void>;
   markReady(releaseId: string): Promise<void>;
   activate(releaseId: string): Promise<void>;
-  getActive<T>(projectionId: string): Promise<ProjectionRelease<T> | null>;
+  getActive<T = ErpPublicProduct>(projectionId: string): Promise<ProjectionRelease<T> | null>;
 }
 export interface OutboxStore {
   claimNext(input: { workerId: string; now: string; leaseUntil: string }): Promise<OutboxEvent | null>;
