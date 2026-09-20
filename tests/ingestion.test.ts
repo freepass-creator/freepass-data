@@ -1,0 +1,41 @@
+import { describe, expect, it } from 'vitest';
+import { ingestLegacyProductSnapshot } from '../src/application/ingest-legacy-products.js';
+import { MemorySourceStore } from '../src/infra/source-memory-store.js';
+
+describe('legacy catalog ingestion', () => {
+  it('persists immutable raw and normalized candidate without guessing blank deposit', async () => {
+    const store = new MemorySourceStore();
+    const run = await ingestLegacyProductSnapshot(store, {
+      checkpoint: {
+        sourceId: 'freepasserp3/firestore/products',
+        checksum: 'snapshot-1',
+        observedAt: '2026-09-20T10:00:00Z'
+      },
+      records: [{
+        sourceId: 'freepasserp3/firestore/products',
+        sourceRecordId: '123가4567',
+        observedAt: '2026-09-20T10:00:00Z',
+        fingerprint: 'row-1',
+        data: {
+          product_code: 'P1',
+          car_number: '123가4567',
+          maker: '제네시스',
+          model: 'GV70',
+          product_type: '픽업구독',
+          price: {
+            '24_3만': { rent: '750,000', deposit: '' }
+          }
+        }
+      }]
+    }, '2026-09-20T10:00:01Z');
+
+    expect(run?.status).toBe('COMPLETED');
+    expect(run?.rawCount).toBe(1);
+    expect(run?.candidateCount).toBe(1);
+
+    const candidates = await store.listCandidates(run!.runId);
+    expect(candidates[0]?.candidate.commercialType).toBe('PICKUP_SUBSCRIPTION');
+    expect(candidates[0]?.candidate.priceTerms[0]?.depositState).toBe('UNKNOWN');
+    expect(candidates[0]?.candidate.priceTerms[0]?.termKey).toBe('source:24_3만');
+  });
+});
