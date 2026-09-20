@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/shadow-v1.schema.json",
+  "title": "FreePass Change Mirror Shadow V1",
+  "$defs": {
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceId", "observedAt"],
+      "properties": {
+        "sourceId": {"type": "string"},
+        "sourceRevision": {"type": ["string", "null"]},
+        "checksum": {"type": ["string", "null"]},
+        "observedAt": {"type": "string", "format": "date-time"}
+      }
+    }
+  },
+  "type": "object",
+  "required": ["legacy", "freepass", "settledWindowMs"],
+  "properties": {
+    "legacy": {"$ref": "#/$defs/checkpoint"},
+    "freepass": {"$ref": "#/$defs/checkpoint"},
+    "settledWindowMs": {"type": "integer", "minimum": 0}
+  }
+}

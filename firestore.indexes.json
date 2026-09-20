@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "outbox_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "occurredAt", "order": "ASCENDING"}
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
