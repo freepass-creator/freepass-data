@@ -1,0 +1,15 @@
+{
+  "schema": "freepass-data-ai-core-lock/v1",
+  "repository": "freepass-creator/ai-core",
+  "revision": "f8833a0e1974e5267be4dd3bf8f74fc48c13568c",
+  "runtime_dependency": false,
+  "adoption": {
+    "ui_ux": "PINNED",
+    "core_contract": "PINNED",
+    "workflow": "PINNED"
+  },
+  "conformance": {
+    "mode": "LOCAL_AND_CI_WHEN_ENABLED",
+    "note": "Production runtime must not fetch AI Core HEAD."
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/update-offer-price.schema.json",
+  "title": "UpdateOfferPriceCommand",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["commandId", "idempotencyKey", "expectedRevision", "termMonths", "monthlyRent", "reason", "actor"],
+  "properties": {
+    "commandId": {"type": "string", "minLength": 1},
+    "idempotencyKey": {"type": "string", "minLength": 8},
+    "expectedRevision": {"type": "integer", "minimum": 1},
+    "termMonths": {"type": "integer", "minimum": 1, "maximum": 120},
+    "monthlyRent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": {"type": "integer", "minimum": 0},
+        "currency": {"const": "KRW"}
+      }
+    },
+    "reason": {"type": "string", "minLength": 2},
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["USER", "SERVICE"]},
+        "organizationId": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

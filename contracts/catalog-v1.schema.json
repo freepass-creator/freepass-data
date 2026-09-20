@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/catalog-v1.schema.json",
+  "title": "FreePass Catalog V1",
+  "$defs": {
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": {"type": "integer", "minimum": 0},
+        "currency": {"const": "KRW"}
+      }
+    },
+    "meta": {
+      "type": "object",
+      "required": ["schemaVersion", "revision", "validationStatus"],
+      "properties": {
+        "schemaVersion": {"type": "string"},
+        "revision": {"type": "integer", "minimum": 1},
+        "validationStatus": {"enum": ["VALID", "WARNING", "INVALID"]}
+      }
+    },
+    "priceTerm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["termMonths", "monthlyRent", "depositState"],
+      "properties": {
+        "termMonths": {"type": "integer", "minimum": 1, "maximum": 120},
+        "monthlyRent": {"$ref": "#/$defs/money"},
+        "deposit": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/money"}]},
+        "depositState": {"enum": ["KNOWN", "ZERO", "UNKNOWN", "NOT_APPLICABLE"]},
+        "mileageLimitKmPerYear": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "vehicleModel": {
+      "allOf": [
+        {"$ref": "#/$defs/meta"},
+        {
+          "type": "object",
+          "required": ["id", "maker", "model", "displayName"],
+          "properties": {
+            "id": {"type": "string"},
+            "maker": {"type": "string"},
+            "model": {"type": "string"},
+            "generation": {"type": ["string", "null"]},
+            "trim": {"type": ["string", "null"]},
+            "fuel": {"type": ["string", "null"]},
+            "drive": {"type": ["string", "null"]},
+            "seats": {"type": ["integer", "null"]},
+            "displayName": {"type": "string"}
+          }
+        }
+      ]
+    },
+    "vehicleAsset": {
+      "allOf": [
+        {"$ref": "#/$defs/meta"},
+        {
+          "type": "object",
+          "required": ["id", "vehicleModelId", "status"],
+          "properties": {
+            "id": {"type": "string"},
+            "vehicleModelId": {"type": "string"},
+            "plateNumber": {"type": ["string", "null"]},
+            "vin": {"type": ["string", "null"]},
+            "odometerKm": {"type": ["integer", "null"], "minimum": 0},
+            "status": {"enum": ["AVAILABLE", "RESERVED", "IN_USE", "RETURNED", "MAINTENANCE", "ACCIDENT", "SOLD", "RETIRED"]}
+          }
+        }
+      ]
+    },
+    "product": {
+      "allOf": [
+        {"$ref": "#/$defs/meta"},
+        {
+          "type": "object",
+          "required": ["id", "vehicleModelId", "productType", "status", "displayName"],
+          "properties": {
+            "id": {"type": "string"},
+            "vehicleModelId": {"type": "string"},
+            "vehicleAssetId": {"type": ["string", "null"]},
+            "productType": {"enum": ["NEW", "USED"]},
+            "status": {"enum": ["ACTIVE", "HOLD", "SOLD", "ARCHIVED"]},
+            "displayName": {"type": "string"}
+          }
+        }
+      ]
+    },
+    "offer": {
+      "allOf": [
+        {"$ref": "#/$defs/meta"},
+        {
+          "type": "object",
+          "required": ["id", "productId", "supplierId", "status", "priceTerms"],
+          "properties": {
+            "id": {"type": "string"},
+            "productId": {"type": "string"},
+            "supplierId": {"type": "string"},
+            "status": {"enum": ["ACTIVE", "SUSPENDED", "EXPIRED"]},
+            "validFrom": {"type": ["string", "null"]},
+            "validUntil": {"type": ["string", "null"]},
+            "policyId": {"type": ["string", "null"]},
+            "priceTerms": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/priceTerm"}}
+          }
+        }
+      ]
+    },
+    "policy": {
+      "allOf": [
+        {"$ref": "#/$defs/meta"},
+        {
+          "type": "object",
+          "required": ["id", "kind", "version", "effectiveFrom", "facts"],
+          "properties": {
+            "id": {"type": "string"},
+            "kind": {"enum": ["INSURANCE", "MILEAGE", "RETURN", "EARLY_TERMINATION", "OTHER"]},
+            "version": {"type": "string"},
+            "effectiveFrom": {"type": "string"},
+            "effectiveTo": {"type": ["string", "null"]},
+            "facts": {"type": "object"}
+          }
+        }
+      ]
+    }
+  }
+}
