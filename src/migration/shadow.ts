@@ -1,9 +1,4 @@
-export type SourceCheckpoint = {
-  sourceId: string;
-  sourceRevision?: string | null;
-  checksum?: string | null;
-  observedAt: string;
-};
+import type { SourceCheckpoint } from '../domain/source.js';
 
 export type ShadowRecord = {
   key: string;
