@@ -1,5 +1,5 @@
 import type {
-  AuditEvent, CommandReceipt, Offer, OutboxEvent, Policy,
+  AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
   Product, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
@@ -170,7 +170,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     release.activatedAt = new Date().toISOString();
     this.active.set(release.projectionId, releaseId);
   }
-  async getActive<T>(projectionId: string): Promise<ProjectionRelease<T> | null> {
+  async getActive<T = ErpPublicProduct>(projectionId: string): Promise<ProjectionRelease<T> | null> {
     const id = this.active.get(projectionId);
     return id ? copy(this.releases.get(id) ?? null) as ProjectionRelease<T> | null : null;
   }
