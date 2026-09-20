@@ -34,7 +34,7 @@ function record(input: {
   ]);
 
   return {
-    lineageRecordId: `lin_${lineageId}`,
+    lineageRecordId: `lin_${stableId([lineageId, input.runId])}`,
     lineageId,
     stage: 'RAW_TO_NORMALIZED',
     runId: input.runId,
