@@ -258,13 +258,12 @@ function assertPriceTermInvariants(candidate: CatalogCandidate) {
       );
     }
 
-    const depositAmount = term.deposit?.amount;
     if (term.depositState === 'KNOWN') {
       if (
         !term.deposit ||
         term.deposit.currency !== 'KRW' ||
-        !Number.isInteger(depositAmount) ||
-        depositAmount! <= 0
+        !Number.isInteger(term.deposit.amount) ||
+        term.deposit.amount <= 0
       ) {
         throw new CanonicalizationRejectedError(
           `KNOWN deposit must contain a positive KRW amount for ${term.termKey}`
@@ -274,7 +273,7 @@ function assertPriceTermInvariants(candidate: CatalogCandidate) {
       if (
         !term.deposit ||
         term.deposit.currency !== 'KRW' ||
-        depositAmount !== 0
+        term.deposit.amount !== 0
       ) {
         throw new CanonicalizationRejectedError(
           `ZERO deposit must contain KRW 0 for ${term.termKey}`
