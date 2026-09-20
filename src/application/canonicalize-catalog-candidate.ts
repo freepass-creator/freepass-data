@@ -88,9 +88,9 @@ function assertModelCompatible(model: VehicleModel, candidate: CatalogCandidate)
       `Resolved VehicleModel ${model.id} does not match candidate maker/model`
     );
   }
-  if (candidate.subModel && model.generation && model.generation !== candidate.subModel) {
+  if (candidate.subModel && model.subModel && model.subModel !== candidate.subModel) {
     throw new CanonicalizationConflictError(
-      `Resolved VehicleModel ${model.id} generation conflicts with candidate subModel`
+      `Resolved VehicleModel ${model.id} subModel conflicts with candidate subModel`
     );
   }
   if (candidate.trimName && model.trim && model.trim !== candidate.trimName) {
@@ -137,7 +137,7 @@ function canonicalTarget(
   const modelFields: Record<string, [string, unknown]> = {
     maker: ['maker', entities.model.maker],
     model: ['model', entities.model.model],
-    subModel: ['generation', entities.model.generation ?? null],
+    subModel: ['subModel', entities.model.subModel ?? null],
     trimName: ['trim', entities.model.trim ?? null],
     fuelType: ['fuel', entities.model.fuel ?? null],
     driveType: ['drive', entities.model.drive ?? null],
@@ -451,7 +451,7 @@ export async function canonicalizeCatalogCandidate(
       displayName: [candidate.maker, candidate.model, candidate.subModel, candidate.trimName]
         .filter(Boolean)
         .join(' '),
-      ...(candidate.subModel ? { generation: candidate.subModel } : {}),
+      ...(candidate.subModel ? { subModel: candidate.subModel } : {}),
       ...(candidate.trimName ? { trim: candidate.trimName } : {}),
       ...(candidate.fuelType ? { fuel: candidate.fuelType } : {}),
       ...(candidate.driveType ? { drive: candidate.driveType } : {}),
