@@ -54,17 +54,17 @@ function money(value: unknown): Money | null | undefined {
 
 function parsePriceKey(sourceKey: string) {
   const match = sourceKey.trim().match(/^(\d+)(?:_(\d+)만)?$/);
-  if (!match) return null;
+  if (!match?.[1]) return null;
   return {
     termMonths: Number(match[1]),
-    mileageLimitKmPerYear: match[2] ? Number(match[2]) * 10000 : undefined
+    ...(match[2] ? { mileageLimitKmPerYear: Number(match[2]) * 10000 } : {})
   };
 }
 
-function parseDeposit(raw: unknown): { deposit?: Money | null; depositState: DepositState } {
+function parseDeposit(raw: unknown): { deposit: Money | null; depositState: DepositState } {
   if (raw === '' || raw == null) return { deposit: null, depositState: 'UNKNOWN' };
   const parsed = money(raw);
-  if (parsed === null) return { deposit: null, depositState: 'UNKNOWN' };
+  if (!parsed) return { deposit: null, depositState: 'UNKNOWN' };
   if (parsed.amount === 0) return { deposit: parsed, depositState: 'ZERO' };
   return { deposit: parsed, depositState: 'KNOWN' };
 }
@@ -97,7 +97,7 @@ function parsePriceTerms(price: unknown, issues: string[]): PriceTerm[] {
       termMonths: key.termMonths,
       monthlyRent,
       ...deposit,
-      ...(key.mileageLimitKmPerYear !== undefined
+      ...('mileageLimitKmPerYear' in key
         ? { mileageLimitKmPerYear: key.mileageLimitKmPerYear }
         : {})
     });
@@ -119,25 +119,40 @@ export function normalizeLegacyProduct(raw: LegacyProductRaw): LegacyCatalogCand
   const model = text(d.model);
   if (!model) issues.push('MISSING_MODEL');
 
+  const productCode = text(d.product_code);
+  const carNumber = text(d.car_number);
+  const maker = text(d.maker);
+  const subModel = text(d.sub_model);
+  const trimName = text(d.trim_name);
+  const providerCompanyCode = text(d.provider_company_code);
+  const policyCode = text(d.policy_code);
+  const vehicleStatusRaw = text(d.vehicle_status);
+  const year = text(d.year);
+  const fuelType = text(d.fuel_type);
+  const mileageKm = int(d.mileage);
+  const driveType = text(d.drive_type);
+  const seats = int(d.seats);
+  const origin = text(d.origin);
+
   return {
     sourceRecordId: raw.sourceRecordId,
     sourceFingerprint: raw.fingerprint,
-    ...(text(d.product_code) ? { productCode: text(d.product_code)! } : {}),
-    ...(text(d.car_number) ? { carNumber: text(d.car_number)! } : {}),
-    ...(text(d.maker) ? { maker: text(d.maker)! } : {}),
+    ...(productCode ? { productCode } : {}),
+    ...(carNumber ? { carNumber } : {}),
+    ...(maker ? { maker } : {}),
     ...(model ? { model } : {}),
-    ...(text(d.sub_model) ? { subModel: text(d.sub_model)! } : {}),
-    ...(text(d.trim_name) ? { trimName: text(d.trim_name)! } : {}),
+    ...(subModel ? { subModel } : {}),
+    ...(trimName ? { trimName } : {}),
     ...(commercialType ? { commercialType } : {}),
-    ...(text(d.provider_company_code) ? { providerCompanyCode: text(d.provider_company_code)! } : {}),
-    ...(text(d.policy_code) ? { policyCode: text(d.policy_code)! } : {}),
-    ...(text(d.vehicle_status) ? { vehicleStatusRaw: text(d.vehicle_status)! } : {}),
-    ...(text(d.year) ? { year: text(d.year)! } : {}),
-    ...(text(d.fuel_type) ? { fuelType: text(d.fuel_type)! } : {}),
-    ...(int(d.mileage) !== undefined ? { mileageKm: int(d.mileage)! } : {}),
-    ...(text(d.drive_type) ? { driveType: text(d.drive_type)! } : {}),
-    ...(int(d.seats) !== undefined ? { seats: int(d.seats)! } : {}),
-    ...(text(d.origin) ? { origin: text(d.origin)! } : {}),
+    ...(providerCompanyCode ? { providerCompanyCode } : {}),
+    ...(policyCode ? { policyCode } : {}),
+    ...(vehicleStatusRaw ? { vehicleStatusRaw } : {}),
+    ...(year ? { year } : {}),
+    ...(fuelType ? { fuelType } : {}),
+    ...(mileageKm !== undefined ? { mileageKm } : {}),
+    ...(driveType ? { driveType } : {}),
+    ...(seats !== undefined ? { seats } : {}),
+    ...(origin ? { origin } : {}),
     priceTerms: parsePriceTerms(d.price, issues),
     issues
   };
