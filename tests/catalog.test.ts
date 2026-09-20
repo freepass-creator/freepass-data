@@ -61,6 +61,8 @@ describe('Catalog V1 vertical slice', () => {
       monthlyRent:{amount:725000,currency:'KRW'},reason:'authority test',actor:{id:'service:freepass-data',kind:'SERVICE'}
     },'2026-09-20T10:00:00.000Z');
     expect(receipt.status).toBe('CANONICAL_COMMITTED');
+    expect(receipt.authorityRuleId).toBe('catalog.offer.price-term.monthly-rent.v1');
+    expect(store.audits[0]?.authorityRuleId).toBe('catalog.offer.price-term.monthly-rent.v1');
     expect((await store.getOffer('offer_gv70_demo'))?.revision).toBe(2);
   });
 
