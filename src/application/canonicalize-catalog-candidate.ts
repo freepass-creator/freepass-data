@@ -295,6 +295,7 @@ function requiredNormalizedPaths(candidate: CatalogCandidate) {
   if (candidate.driveType) required.push('driveType');
   if (candidate.seats !== undefined) required.push('seats');
   if (candidate.carNumber) required.push('carNumber');
+  if (candidate.providerCompanyCode) required.push('providerCompanyCode');
   if (candidate.mileageKm !== undefined) required.push('mileageKm');
 
   for (const term of candidate.priceTerms) {
