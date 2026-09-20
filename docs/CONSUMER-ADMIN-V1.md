@@ -51,6 +51,19 @@ Admin additionally requires:
 - policy values as typed facts (`policyId`, `type`, `value`)
 - explicit deposit state; UNKNOWN must never become zero
 - release metadata for Snapshot provenance
+- optional vehicle price / pricing input facts required by settlement rules when canonicalized
+
+## Settlement input facts
+
+Admin owns settlement workflow/calculation behavior, but FreePass Data may provide versioned catalog facts used as calculation inputs.
+
+For example:
+- vehicle price for vehicle-price-based fee rules
+- commercial type
+- supplier-specific Offer/PriceTerm facts
+
+These are data facts, not the settlement calculation engine.
+Admin snapshots the facts at intake so later Data releases do not silently rewrite historical settlement inputs.
 
 ## Offer/PriceTerm rule
 
