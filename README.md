@@ -34,6 +34,8 @@ FreePass Data는 또 하나의 화면 앱이 아닙니다.
 - FreePass Data: 신규 central data platform.
 
 자세한 내용:
+- [Approved Architecture v2](docs/ARCHITECTURE-V2-APPROVED.md)
+- [Repository Structure](docs/REPO-STRUCTURE.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Migration Plan](docs/MIGRATION-PLAN.md)
 - [Console UX](docs/CONSOLE-UX.md)

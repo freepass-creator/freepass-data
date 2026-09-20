@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { LegacyProductRaw } from './legacy-freepasserp3.js';
-import type { LegacyCatalogCandidate } from './legacy-normalizer.js';
+import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 
 const TRANSFORM_ID = 'legacy-freepasserp3-product-normalizer';
@@ -58,13 +58,13 @@ function record(input: {
 
 export function buildLegacyCandidateLineage(
   raw: LegacyProductRaw,
-  candidate: LegacyCatalogCandidate,
+  candidate: CatalogCandidate,
   runId: string,
   candidateId: string
 ): FieldLineageRecord[] {
   const out: FieldLineageRecord[] = [];
 
-  const direct: Array<[string, keyof LegacyCatalogCandidate]> = [
+  const direct: Array<[string, keyof CatalogCandidate]> = [
     ['product_code', 'productCode'],
     ['car_number', 'carNumber'],
     ['maker', 'maker'],

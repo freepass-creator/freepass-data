@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { applicationDefault, getApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import type { SourceCheckpoint } from '../migration/shadow.js';
+import type { SourceCheckpoint } from '../domain/source.js';
 
 export type LegacyProductRaw = {
   sourceId: 'freepasserp3/firestore/products';

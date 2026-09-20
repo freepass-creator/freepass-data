@@ -2,6 +2,7 @@
 
 Status: **ACTIVE / EXECUTABLE BASELINE**  
 Approved scope: **CATALOG V1 ONLY**  
+Architecture baseline: [ARCHITECTURE-V2-APPROVED.md](./ARCHITECTURE-V2-APPROVED.md)  
 Recovery handoff: [NEXT-START-HERE.md](./NEXT-START-HERE.md)
 
 ## Confirmed on main
@@ -35,6 +36,7 @@ Implemented:
 - fail-closed projection behavior for incomplete deposit terms
 - Catalog Field Authority Registry with command/writer enforcement and authority evidence
 - append-only field-lineage contract and legacy RAW → normalized lineage persistence
+- approved v2 repository boundaries + local architecture boundary check
 - tests for catalog mutation, authority enforcement, idempotency payload conflict, stale revision, projection semantics, ingestion, legacy normalization and shadow behavior
 
 ## Current gap

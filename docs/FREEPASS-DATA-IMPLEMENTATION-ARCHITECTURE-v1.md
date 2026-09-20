@@ -1,9 +1,9 @@
 # FreePass Data — Implementation Architecture Proposal v1
 
-Status: PROPOSED / REVIEW REQUIRED  
+Status: **SUPERSEDED / DESIGN HISTORY ONLY**  
 Date: 2026-09-20  
 Repository: `freepass-creator/freepass-data`  
-Purpose: 구현 전에 구조를 잠그기 위한 기술 설계 정본 후보
+Purpose: 구현 전 기술 설계 이력. 현재 구현 정본은 `ARCHITECTURE-V2-APPROVED.md`.
 
 ---
 

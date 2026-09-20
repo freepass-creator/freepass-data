@@ -1,5 +1,11 @@
-import type { SourceCheckpoint } from '../migration/shadow.js';
-import type { LegacyCatalogCandidate } from '../adapters/legacy-normalizer.js';
+import type { CatalogCandidate } from './catalog-candidate.js';
+
+export type SourceCheckpoint = {
+  sourceId: string;
+  sourceRevision?: string | null;
+  checksum?: string | null;
+  observedAt: string;
+};
 
 export type SourceKind = 'FIRESTORE' | 'GOOGLE_SHEET' | 'API' | 'FILE' | 'MANUAL';
 export type SourceHealth = 'UNKNOWN' | 'HEALTHY' | 'DEGRADED' | 'ERROR';
@@ -46,5 +52,5 @@ export type NormalizedCandidateRecord = {
   sourceRecordId: string;
   sourceFingerprint: string;
   status: 'VALID' | 'WARNING' | 'REJECTED';
-  candidate: LegacyCatalogCandidate;
+  candidate: CatalogCandidate;
 };

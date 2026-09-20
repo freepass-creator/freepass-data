@@ -1,10 +1,10 @@
 import type {
   NormalizedCandidateRecord,
   RawRecord,
+  SourceCheckpoint,
   SourceDefinition,
   SourceRun
 } from '../domain/source.js';
-import type { SourceCheckpoint } from '../migration/shadow.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 
 export interface SourceStore {

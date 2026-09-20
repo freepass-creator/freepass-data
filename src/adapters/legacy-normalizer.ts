@@ -1,28 +1,10 @@
 import type { CommercialType, DepositState, Money, PriceTerm } from '../domain/catalog.js';
 import type { LegacyProductRaw } from './legacy-freepasserp3.js';
 
-export type LegacyCatalogCandidate = {
-  sourceRecordId: string;
-  sourceFingerprint: string;
-  productCode?: string;
-  carNumber?: string;
-  maker?: string;
-  model?: string;
-  subModel?: string;
-  trimName?: string;
-  commercialType?: CommercialType;
-  providerCompanyCode?: string;
-  policyCode?: string;
-  vehicleStatusRaw?: string;
-  year?: string;
-  fuelType?: string;
-  mileageKm?: number;
-  driveType?: string;
-  seats?: number;
-  origin?: string;
-  priceTerms: PriceTerm[];
-  issues: string[];
-};
+import type { CatalogCandidate } from '../domain/catalog-candidate.js';
+
+export type LegacyCatalogCandidate = CatalogCandidate;
+
 
 const COMMERCIAL_TYPE: Record<string, CommercialType> = {
   '신차렌트': 'NEW_RENT',
@@ -109,7 +91,7 @@ function parsePriceTerms(price: unknown, issues: string[]): PriceTerm[] {
   );
 }
 
-export function normalizeLegacyProduct(raw: LegacyProductRaw): LegacyCatalogCandidate {
+export function normalizeLegacyProduct(raw: LegacyProductRaw): CatalogCandidate {
   const d = raw.data;
   const issues: string[] = [];
   const productTypeRaw = text(d.product_type);
