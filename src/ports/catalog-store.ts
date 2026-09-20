@@ -72,10 +72,10 @@ export interface CatalogStore {
   }): Promise<void>;
 }
 export interface ProjectionStore {
-  stage(release: ProjectionRelease<ErpPublicProduct>): Promise<void>;
+  stage<T>(release: ProjectionRelease<T>): Promise<void>;
   markReady(releaseId: string): Promise<void>;
   activate(releaseId: string): Promise<void>;
-  getActive(projectionId: string): Promise<ProjectionRelease<ErpPublicProduct> | null>;
+  getActive<T = ErpPublicProduct>(projectionId: string): Promise<ProjectionRelease<T> | null>;
 }
 export interface OutboxStore {
   claimNext(input: { workerId: string; now: string; leaseUntil: string }): Promise<OutboxEvent | null>;
