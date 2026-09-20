@@ -47,6 +47,13 @@ export class FirestoreSourceStore implements SourceStore {
       const headSnap = await tx.get(headRef);
       const currentHead = headSnap.exists ? headSnap.data() as SourceHead : null;
 
+      if (run.status === 'COMPLETED') {
+        return {
+          acceptedAsHead: run.headStatus === 'CURRENT',
+          headRunId: currentHead?.runId ?? null
+        };
+      }
+
       const eligible = input.coverage.completeness === 'COMPLETE';
       const newerThanHead = !currentHead || isNewerSourceObservation(input.observedAt, currentHead.observedAt);
       const acceptedAsHead = eligible && newerThanHead;
