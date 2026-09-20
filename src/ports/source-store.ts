@@ -22,6 +22,7 @@ export interface SourceStore {
     checkpoint: SourceCheckpoint;
     rawCount: number;
     candidateCount: number;
+    lineageCount: number;
     warningCount: number;
   }): Promise<void>;
   failRun(input: { runId: string; completedAt: string; error: string }): Promise<void>;
