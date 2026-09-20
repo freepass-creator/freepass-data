@@ -48,7 +48,7 @@ function evidence(input: {
     headStatus: 'CURRENT',
     rawCount: 1,
     candidateCount: 1,
-    lineageCount: 3,
+    lineageCount: 12,
     warningCount: issues.length ? 1 : 0
   };
 
@@ -210,6 +210,7 @@ describe('safe catalog canonicalization', () => {
     const active = await store.getActive('erp-public');
     expect(active?.data).toHaveLength(1);
     expect(active?.data[0]?.productId).toBe(receipt.productId);
+    expect(active?.data[0]?.vehicle.subModel).toBe('2세대');
     expect(active?.data[0]?.offers[0]?.offerId).toBe(receipt.offerId);
     expect(active?.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(750000);
   });
