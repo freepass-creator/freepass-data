@@ -91,6 +91,39 @@ describe('legacy catalog ingestion', () => {
     expect(canAssertSourceAbsence(olderLate!)).toBe(false);
   });
 
+  it('rejects an invalid observation time from becoming the first accepted head', async () => {
+    const store = new MemorySourceStore();
+
+    const invalid = await ingestLegacyProductSnapshot(store, {
+      checkpoint: {
+        sourceId: 'freepasserp3/firestore/products',
+        checksum: 'invalid-time',
+        observedAt: 'not-a-time'
+      },
+      coverage: { mode: 'FULL', completeness: 'COMPLETE', scope: 'firestore:products' },
+      records: []
+    }, '2026-09-20T10:11:00Z');
+
+    expect(invalid?.headStatus).toBe('STALE');
+    expect(await store.getSourceHead('freepasserp3/firestore/products')).toBeNull();
+  });
+
+  it('rejects a snapshot whose checkpoint belongs to another source', async () => {
+    const store = new MemorySourceStore();
+
+    await expect(ingestLegacyProductSnapshot(store, {
+      checkpoint: {
+        sourceId: 'unexpected/source',
+        checksum: 'wrong-source',
+        observedAt: '2026-09-20T10:10:00Z'
+      },
+      coverage: { mode: 'FULL', completeness: 'COMPLETE' },
+      records: []
+    }, '2026-09-20T10:11:00Z')).rejects.toThrow('Source checkpoint mismatch');
+
+    expect(await store.getSourceHead('freepasserp3/firestore/products')).toBeNull();
+  });
+
   it('keeps incomplete collection reads as evidence but never treats absence as authoritative', async () => {
     const store = new MemorySourceStore();
 
