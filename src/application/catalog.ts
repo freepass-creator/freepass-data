@@ -27,9 +27,16 @@ function updateOfferPriceDigest(input: UpdateOfferPriceInput) {
     offerId: input.offerId,
     expectedRevision: input.expectedRevision,
     termKey: input.termKey,
-    monthlyRent: input.monthlyRent,
+    monthlyRent: {
+      amount: input.monthlyRent.amount,
+      currency: input.monthlyRent.currency
+    },
     reason: input.reason,
-    actor: input.actor
+    actor: {
+      id: input.actor.id,
+      kind: input.actor.kind,
+      organizationId: input.actor.organizationId ?? null
+    }
   })).digest('hex');
 }
 
