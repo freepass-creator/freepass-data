@@ -34,7 +34,7 @@
     "vehicleModel": {
       "allOf": [{"$ref": "#/$defs/meta"}, {"type": "object", "required": ["id", "maker", "model", "displayName"], "properties": {
         "id": {"type": "string"}, "maker": {"type": "string"}, "model": {"type": "string"},
-        "generation": {"type": ["string", "null"]}, "trim": {"type": ["string", "null"]},
+        "generation": {"type": ["string", "null"]}, "subModel": {"type": ["string", "null"]}, "trim": {"type": ["string", "null"]},
         "fuel": {"type": ["string", "null"]}, "drive": {"type": ["string", "null"]},
         "seats": {"type": ["integer", "null"]}, "displayName": {"type": "string"}
       }}]

@@ -70,7 +70,7 @@ Do not reduce this to a single `SOURCE_WINS`-style enum.
 
 ### P1 — Field-level lineage ◐ IN PROGRESS
 
-RAW → normalized field lineage is implemented. Source-run completeness/stale-run safety is also implemented. Next: canonicalize reviewed candidates while pinning the accepted source run/checkpoint, then connect canonical fields to projection releases.
+RAW → normalized field lineage, source-run completeness/stale-run safety, and the first reviewed Candidate → Canonical path are implemented. Next: add Canonical → Projection lineage/release manifest evidence, then implement the explicit reviewed update path for a changed source fingerprint.
 
 Minimum evidence:
 
@@ -91,6 +91,9 @@ Promote the architecture-v2 review test matrix into executable tests, starting w
 - [ ] stale revision must fail without losing the operator input
 - [x] incomplete deposit/price pair must not be published
 - [ ] partial projection build must not replace last-known-good ACTIVE release
+- [x] current reviewed candidate canonicalization must pin accepted source head
+- [x] changed source fingerprint must require explicit re-review
+- [x] missing critical lineage must block Canonical promotion
 - [x] source collection failure/incomplete coverage must not be interpreted as mass deletion
 - [x] late older source run must not replace the accepted current head
 - [ ] duplicate / out-of-order event behavior

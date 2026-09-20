@@ -7,6 +7,16 @@ import type {
 import type {
   CatalogStore, CatalogTransaction, OutboxStore, ProjectionStore
 } from '../ports/catalog-store.js';
+import type {
+  CanonicalSourceBinding,
+  CanonicalizationReceipt
+} from '../domain/canonicalization.js';
+import type {
+  NormalizedCandidateRecord,
+  SourceHead,
+  SourceRun
+} from '../domain/source.js';
+import type { FieldLineageRecord, LineageStage } from '../domain/lineage.js';
 
 const C = {
   vehicleModels: 'catalog_vehicle_models',
@@ -15,6 +25,12 @@ const C = {
   offers: 'catalog_offers',
   policies: 'catalog_policies',
   receipts: 'command_receipts',
+  canonicalizationReceipts: 'canonicalization_receipts',
+  sourceRuns: 'source_runs',
+  sourceHeads: 'source_heads',
+  candidates: 'normalized_candidates',
+  lineage: 'field_lineage',
+  sourceBindings: 'canonical_source_bindings',
   audits: 'audit_events',
   outbox: 'outbox_events',
   releases: 'projection_releases',
@@ -30,8 +46,61 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async transact<T>(fn: (tx: CatalogTransaction) => Promise<T>): Promise<T> {
     return this.db.runTransaction(async (native: Transaction) => {
       const tx: CatalogTransaction = {
+        getVehicleModel: async (id) =>
+          data<VehicleModel>(await native.get(this.db.collection(C.vehicleModels).doc(id))),
+        putVehicleModel: async (model) => {
+          native.create(this.db.collection(C.vehicleModels).doc(model.id), model);
+        },
+        getVehicleAsset: async (id) =>
+          data<VehicleAsset>(await native.get(this.db.collection(C.vehicleAssets).doc(id))),
+        putVehicleAsset: async (asset) => {
+          native.create(this.db.collection(C.vehicleAssets).doc(asset.id), asset);
+        },
+        getProduct: async (id) =>
+          data<Product>(await native.get(this.db.collection(C.products).doc(id))),
+        putProduct: async (product) => {
+          native.create(this.db.collection(C.products).doc(product.id), product);
+        },
         getOffer: async (id) => data<Offer>(await native.get(this.db.collection(C.offers).doc(id))),
         putOffer: async (offer) => { native.set(this.db.collection(C.offers).doc(offer.id), offer); },
+
+        getSourceRun: async (runId) =>
+          data<SourceRun>(await native.get(this.db.collection(C.sourceRuns).doc(runId))),
+        getSourceHead: async (sourceId) =>
+          data<SourceHead>(
+            await native.get(this.db.collection(C.sourceHeads).doc(sourceId.replaceAll('/', '__')))
+          ),
+        getCandidate: async (candidateId) =>
+          data<NormalizedCandidateRecord>(
+            await native.get(this.db.collection(C.candidates).doc(candidateId.replaceAll('/', '__')))
+          ),
+        listLineageForCandidate: async (candidateId) => {
+          const snap = await native.get(
+            this.db.collection(C.lineage).where('normalized.candidateId', '==', candidateId)
+          );
+          return snap.docs.map((doc) => doc.data() as FieldLineageRecord);
+        },
+        appendLineage: async (record) => {
+          native.create(this.db.collection(C.lineage).doc(record.lineageRecordId), record);
+        },
+
+        getSourceBinding: async (bindingId) =>
+          data<CanonicalSourceBinding>(
+            await native.get(this.db.collection(C.sourceBindings).doc(bindingId))
+          ),
+        putSourceBinding: async (binding) => {
+          native.create(this.db.collection(C.sourceBindings).doc(binding.bindingId), binding);
+        },
+        getCanonicalizationReceipt: async (key) =>
+          data<CanonicalizationReceipt>(
+            await native.get(this.db.collection(C.canonicalizationReceipts).doc(key))
+          ),
+        putCanonicalizationReceipt: async (receipt) => {
+          native.create(
+            this.db.collection(C.canonicalizationReceipts).doc(receipt.idempotencyKey),
+            receipt
+          );
+        },
         getCommandReceipt: async (key) =>
           data<CommandReceipt>(await native.get(this.db.collection(C.receipts).doc(key))),
         putCommandReceipt: async (receipt) => {
@@ -48,7 +117,30 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     });
   }
 
+  async getVehicleModel(id: string) {
+    return data<VehicleModel>(await this.db.collection(C.vehicleModels).doc(id).get());
+  }
+  async getVehicleAsset(id: string) {
+    return data<VehicleAsset>(await this.db.collection(C.vehicleAssets).doc(id).get());
+  }
+  async getProduct(id: string) {
+    return data<Product>(await this.db.collection(C.products).doc(id).get());
+  }
   async getOffer(id: string) { return data<Offer>(await this.db.collection(C.offers).doc(id).get()); }
+  async getSourceBinding(bindingId: string) {
+    return data<CanonicalSourceBinding>(
+      await this.db.collection(C.sourceBindings).doc(bindingId).get()
+    );
+  }
+  async getCanonicalizationReceipt(idempotencyKey: string) {
+    return data<CanonicalizationReceipt>(
+      await this.db.collection(C.canonicalizationReceipts).doc(idempotencyKey).get()
+    );
+  }
+  async listLineageByStage(stage: LineageStage) {
+    const snap = await this.db.collection(C.lineage).where('stage', '==', stage).get();
+    return snap.docs.map((doc) => doc.data() as FieldLineageRecord);
+  }
 
   private async all<T>(collection: string): Promise<T[]> {
     const snap = await this.db.collection(collection).get();
