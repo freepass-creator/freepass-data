@@ -359,7 +359,20 @@ export async function canonicalizeCatalogCandidate(
     if (!run || run.status !== 'COMPLETED') {
       throw new CanonicalizationRejectedError('Candidate source run is not completed');
     }
-    if (!head || head.runId !== candidateRecord.runId || run.headStatus !== 'CURRENT') {
+    if (
+      run.sourceId !== candidateRecord.sourceId ||
+      run.checkpoint?.sourceId !== candidateRecord.sourceId
+    ) {
+      throw new CanonicalizationRejectedError('Candidate source run identity is inconsistent');
+    }
+    if (
+      !head ||
+      head.sourceId !== candidateRecord.sourceId ||
+      head.checkpoint.sourceId !== candidateRecord.sourceId ||
+      head.coverage.completeness !== 'COMPLETE' ||
+      head.runId !== candidateRecord.runId ||
+      run.headStatus !== 'CURRENT'
+    ) {
       throw new CanonicalizationRejectedError('Candidate is not from the accepted current source head');
     }
     if (head.runId !== input.expectedHeadRunId) {
@@ -372,6 +385,14 @@ export async function canonicalizeCatalogCandidate(
     }
 
     const candidate = candidateRecord.candidate;
+    if (
+      (candidateRecord.status === 'VALID' && candidate.issues.length > 0) ||
+      (candidateRecord.status === 'WARNING' && candidate.issues.length === 0)
+    ) {
+      throw new CanonicalizationRejectedError(
+        'Candidate validation status and issue evidence are inconsistent'
+      );
+    }
     if (
       candidate.sourceRecordId !== candidateRecord.sourceRecordId ||
       candidate.sourceFingerprint !== candidateRecord.sourceFingerprint
