@@ -566,6 +566,15 @@ export async function buildErpPublicProjection(
   const inputDigest = stableDigest(canonicalInputs);
   const dataDigest = stableDigest(data);
   const canonicalRevision = Math.max(0, ...canonicalInputs.map((x) => x.revision));
+  const currentActive = await projections.getActive('erp-public');
+  if (
+    currentActive &&
+    currentActive.inputDigest === inputDigest &&
+    currentActive.dataDigest === dataDigest
+  ) {
+    return currentActive;
+  }
+
   const manifestId = `manifest_${releaseId}`;
   const manifest: ProjectionReleaseManifest = {
     manifestId,
@@ -620,7 +629,26 @@ export async function processOneOutboxEvent(
   if (!event) return 'IDLE';
   const attempts = event.attempts + 1;
   try {
-    if (event.eventType.startsWith('catalog.')) await buildErpPublicProjection(catalog, projections, now.toISOString());
+    if (event.eventType.startsWith('catalog.')) {
+      const existingDelivery = await projections.getDeliveryReceipt(event.eventId);
+      if (!existingDelivery) {
+        const release = await buildErpPublicProjection(
+          catalog,
+          projections,
+          now.toISOString()
+        );
+        await projections.putDeliveryReceipt({
+          eventId: event.eventId,
+          eventType: event.eventType,
+          projectionId: release.projectionId,
+          releaseId: release.releaseId,
+          inputDigest: release.inputDigest,
+          dataDigest: release.dataDigest,
+          targetRevision: event.targetRevision,
+          processedAt: now.toISOString()
+        });
+      }
+    }
     await outbox.markDone(event.eventId); return 'DONE';
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
