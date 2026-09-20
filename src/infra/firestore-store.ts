@@ -154,11 +154,15 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         },
         getManualCatalogEntryReceipt: async (key) =>
           data<ManualCatalogEntryReceipt>(
-            await native.get(this.db.collection(C.manualCatalogEntryReceipts).doc(key))
+            await native.get(
+              this.db.collection(C.manualCatalogEntryReceipts).doc(encodeURIComponent(key))
+            )
           ),
         putManualCatalogEntryReceipt: async (receipt) => {
           native.create(
-            this.db.collection(C.manualCatalogEntryReceipts).doc(receipt.idempotencyKey),
+            this.db.collection(C.manualCatalogEntryReceipts).doc(
+              encodeURIComponent(receipt.idempotencyKey)
+            ),
             receipt
           );
         },
@@ -221,7 +225,9 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   }
   async getManualCatalogEntryReceipt(idempotencyKey: string) {
     return data<ManualCatalogEntryReceipt>(
-      await this.db.collection(C.manualCatalogEntryReceipts).doc(idempotencyKey).get()
+      await this.db.collection(C.manualCatalogEntryReceipts)
+        .doc(encodeURIComponent(idempotencyKey))
+        .get()
     );
   }
   async listLineageByStage(stage: LineageStage) {
