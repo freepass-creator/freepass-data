@@ -92,62 +92,41 @@ function evidence(input: {
     }
   };
 
-  const lineage: FieldLineageRecord[] = [
-    {
-      lineageRecordId: `rawlin-maker-${input.runId}`,
-      lineageId: 'lineage-maker',
-      stage: 'RAW_TO_NORMALIZED',
-      runId: input.runId,
-      sourceId: SOURCE_ID,
-      sourceRecordId: candidate.sourceRecordId,
-      sourceFingerprint: input.fingerprint,
-      observedAt: input.observedAt,
-      source: { fieldPath: 'maker', value: '제네시스' },
-      normalized: {
-        candidateId: input.candidateId,
-        fieldPath: 'maker',
-        value: '제네시스'
-      },
-      transformId: 'legacy-freepasserp3-product-normalizer',
-      transformVersion: '1.0.0'
-    },
-    {
-      lineageRecordId: `rawlin-type-${input.runId}`,
-      lineageId: 'lineage-type',
-      stage: 'RAW_TO_NORMALIZED',
-      runId: input.runId,
-      sourceId: SOURCE_ID,
-      sourceRecordId: candidate.sourceRecordId,
-      sourceFingerprint: input.fingerprint,
-      observedAt: input.observedAt,
-      source: { fieldPath: 'product_type', value: '중고렌트' },
-      normalized: {
-        candidateId: input.candidateId,
-        fieldPath: 'commercialType',
-        value: 'USED_RENT'
-      },
-      transformId: 'legacy-freepasserp3-product-normalizer',
-      transformVersion: '1.0.0'
-    },
-    {
-      lineageRecordId: `rawlin-rent-${input.runId}`,
-      lineageId: 'lineage-rent',
-      stage: 'RAW_TO_NORMALIZED',
-      runId: input.runId,
-      sourceId: SOURCE_ID,
-      sourceRecordId: candidate.sourceRecordId,
-      sourceFingerprint: input.fingerprint,
-      observedAt: input.observedAt,
-      source: { fieldPath: 'price.36_2만.rent', value: rent },
-      normalized: {
-        candidateId: input.candidateId,
-        fieldPath: 'priceTerms.source:36_2만.monthlyRent.amount',
-        value: rent
-      },
-      transformId: 'legacy-freepasserp3-product-normalizer',
-      transformVersion: '1.0.0'
-    }
+  const lineageSpec: Array<[string, string, unknown, unknown]> = [
+    ['maker', 'maker', '제네시스', '제네시스'],
+    ['model', 'model', 'GV70', 'GV70'],
+    ['sub_model', 'subModel', '2세대', '2세대'],
+    ['trim_name', 'trimName', '2.5T AWD', '2.5T AWD'],
+    ['product_type', 'commercialType', '중고렌트', 'USED_RENT'],
+    ['car_number', 'carNumber', '123가4567', '123가4567'],
+    ['mileage', 'mileageKm', 12000, 12000],
+    ['price.36_2만.rent', 'priceTerms.source:36_2만.monthlyRent.amount', rent, rent],
+    ['price.36_2만.deposit', 'priceTerms.source:36_2만.depositState', 3000000, 'KNOWN'],
+    ['price.36_2만.deposit', 'priceTerms.source:36_2만.deposit.amount', 3000000, 3000000],
+    ['price.36_2만', 'priceTerms.source:36_2만.termMonths', 36, 36],
+    ['price.36_2만', 'priceTerms.source:36_2만.mileageLimitKmPerYear', 20000, 20000]
   ];
+
+  const lineage: FieldLineageRecord[] = lineageSpec.map(
+    ([sourceFieldPath, normalizedFieldPath, sourceValue, normalizedValue], index) => ({
+      lineageRecordId: `rawlin-${index}-${input.runId}`,
+      lineageId: `lineage-${index}`,
+      stage: 'RAW_TO_NORMALIZED',
+      runId: input.runId,
+      sourceId: SOURCE_ID,
+      sourceRecordId: candidate.sourceRecordId,
+      sourceFingerprint: input.fingerprint,
+      observedAt: input.observedAt,
+      source: { fieldPath: sourceFieldPath, value: sourceValue },
+      normalized: {
+        candidateId: input.candidateId,
+        fieldPath: normalizedFieldPath,
+        value: normalizedValue
+      },
+      transformId: 'legacy-freepasserp3-product-normalizer',
+      transformVersion: '1.0.0'
+    })
+  );
 
   return { run, head, candidate, lineage };
 }
