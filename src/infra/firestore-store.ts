@@ -24,6 +24,10 @@ import type {
   EntityRevisionRecord
 } from '../domain/history.js';
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
+import type {
+  ProjectionFieldLineageRecord,
+  ProjectionReleaseManifest
+} from '../domain/projection-evidence.js';
 
 const C = {
   vehicleModels: 'catalog_vehicle_models',
@@ -45,6 +49,8 @@ const C = {
   audits: 'audit_events',
   outbox: 'outbox_events',
   releases: 'projection_releases',
+  releaseManifests: 'projection_release_manifests',
+  projectionLineage: 'projection_field_lineage',
   activeReleases: 'projection_active'
 } as const;
 
@@ -242,6 +248,16 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       .get();
     return snap.docs.map((doc) => doc.data() as EntityRevisionRecord);
   }
+  async listRevisionHistory() {
+    const snap = await this.db.collection(C.revisions).get();
+    return snap.docs
+      .map((doc) => doc.data() as EntityRevisionRecord)
+      .sort((a, b) =>
+        a.entityType.localeCompare(b.entityType) ||
+        a.entityId.localeCompare(b.entityId) ||
+        a.revision - b.revision
+      );
+  }
 
   private async all<T>(collection: string): Promise<T[]> {
     const snap = await this.db.collection(collection).get();
@@ -254,10 +270,61 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async listPolicies() { return this.all<Policy>(C.policies); }
 
   async stage(release: ProjectionRelease<ErpPublicProduct>) {
-    await this.db.collection(C.releases).doc(release.releaseId).set(release);
+    await this.db.collection(C.releases).doc(release.releaseId).create(release);
+  }
+  async stageEvidence(input: {
+    manifest: ProjectionReleaseManifest;
+    lineage: ProjectionFieldLineageRecord[];
+  }) {
+    const releaseRef = this.db.collection(C.releases).doc(input.manifest.releaseId);
+    const releaseSnap = await releaseRef.get();
+    if (!releaseSnap.exists || releaseSnap.get('status') !== 'BUILDING') {
+      throw new Error('Projection evidence requires a BUILDING release');
+    }
+
+    const chunkSize = 400;
+    for (let offset = 0; offset < input.lineage.length; offset += chunkSize) {
+      const batch = this.db.batch();
+      for (const item of input.lineage.slice(offset, offset + chunkSize)) {
+        batch.set(
+          this.db.collection(C.projectionLineage).doc(item.lineageRecordId),
+          item
+        );
+      }
+      await batch.commit();
+    }
+
+    await this.db.runTransaction(async (tx) => {
+      const freshRelease = await tx.get(releaseRef);
+      if (!freshRelease.exists || freshRelease.get('status') !== 'BUILDING') {
+        throw new Error('Release changed while staging evidence');
+      }
+      tx.create(
+        this.db.collection(C.releaseManifests).doc(input.manifest.releaseId),
+        input.manifest
+      );
+      tx.update(releaseRef, { status: 'VALIDATING' });
+    });
   }
   async markReady(releaseId: string) {
-    await this.db.collection(C.releases).doc(releaseId).update({ status: 'READY' });
+    const releaseRef = this.db.collection(C.releases).doc(releaseId);
+    const [releaseSnap, manifestSnap, evidenceCountSnap] = await Promise.all([
+      releaseRef.get(),
+      this.db.collection(C.releaseManifests).doc(releaseId).get(),
+      this.db.collection(C.projectionLineage)
+        .where('releaseId', '==', releaseId)
+        .count()
+        .get()
+    ]);
+    if (!releaseSnap.exists || releaseSnap.get('status') !== 'VALIDATING') {
+      throw new Error('Only VALIDATING release can become READY');
+    }
+    if (!manifestSnap.exists) throw new Error('Release manifest not found');
+    const manifest = manifestSnap.data() as ProjectionReleaseManifest;
+    if (evidenceCountSnap.data().count !== manifest.fieldEvidenceCount) {
+      throw new Error('Projection field evidence count mismatch');
+    }
+    await releaseRef.update({ status: 'READY' });
   }
   async activate(releaseId: string) {
     await this.db.runTransaction(async (tx) => {
@@ -281,6 +348,17 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     return data<ProjectionRelease<ErpPublicProduct>>(
       await this.db.collection(C.releases).doc(active.get('releaseId') as string).get()
     );
+  }
+  async getManifest(releaseId: string) {
+    return data<ProjectionReleaseManifest>(
+      await this.db.collection(C.releaseManifests).doc(releaseId).get()
+    );
+  }
+  async listProjectionLineage(releaseId: string) {
+    const snap = await this.db.collection(C.projectionLineage)
+      .where('releaseId', '==', releaseId)
+      .get();
+    return snap.docs.map((doc) => doc.data() as ProjectionFieldLineageRecord);
   }
 
   async claimNext(input: { workerId: string; now: string; leaseUntil: string }) {
