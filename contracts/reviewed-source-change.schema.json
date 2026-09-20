@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/reviewed-source-change.schema.json",
+  "title": "ApplyReviewedSourceChangeCommand",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "commandId",
+    "idempotencyKey",
+    "bindingId",
+    "candidateId",
+    "expectedHeadRunId",
+    "expectedBindingRevision",
+    "expectedVehicleModelRevision",
+    "expectedProductRevision",
+    "expectedOfferRevision",
+    "approvedChangeIds",
+    "actor",
+    "reason"
+  ],
+  "properties": {
+    "commandId": {"type": "string", "minLength": 1},
+    "idempotencyKey": {"type": "string", "minLength": 8},
+    "bindingId": {"type": "string", "minLength": 1},
+    "candidateId": {"type": "string", "minLength": 1},
+    "expectedHeadRunId": {"type": "string", "minLength": 1},
+    "expectedBindingRevision": {"type": "integer", "minimum": 1},
+    "expectedVehicleModelRevision": {"type": "integer", "minimum": 1},
+    "expectedProductRevision": {"type": "integer", "minimum": 1},
+    "expectedOfferRevision": {"type": "integer", "minimum": 1},
+    "expectedVehicleAssetRevision": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "approvedChangeIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "approvedIssues": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["USER", "SERVICE"]},
+        "organizationId": {"type": ["string", "null"]}
+      }
+    },
+    "reason": {"type": "string", "minLength": 2}
+  }
+}
