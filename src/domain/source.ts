@@ -57,10 +57,13 @@ export type SourceHead = {
   coverage: SourceCoverage;
 };
 
-export function isNewerSourceObservation(candidateObservedAt: string, currentObservedAt: string): boolean {
+export function canAdvanceSourceHead(candidateObservedAt: string, currentObservedAt?: string | null): boolean {
   const candidate = Date.parse(candidateObservedAt);
+  if (!Number.isFinite(candidate)) return false;
+  if (!currentObservedAt) return true;
+
   const current = Date.parse(currentObservedAt);
-  if (!Number.isFinite(candidate) || !Number.isFinite(current)) return false;
+  if (!Number.isFinite(current)) return false;
   return candidate > current;
 }
 
