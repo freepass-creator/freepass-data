@@ -96,19 +96,54 @@ describe('Catalog V1 vertical slice', () => {
   it('excludes UNKNOWN deposit terms from ERP public projection', async () => {
     const store=new MemoryDataStore(); await seedDemoCatalog(store);
     const offer = await store.getOffer('offer_gv70_demo');
+    const updatedOffer={
+      ...offer!,
+      priceTerms: offer!.priceTerms.map((term) => ({
+        ...term,
+        deposit: null,
+        depositState: 'UNKNOWN' as const
+      }))
+    };
+    const [offerRevision]=await store.listEntityHistory('offer','offer_gv70_demo');
     await store.seed!({
-      offers: [{
-        ...offer!,
-        priceTerms: offer!.priceTerms.map((term) => ({
-          ...term,
-          deposit: null,
-          depositState: 'UNKNOWN' as const
-        }))
+      offers: [updatedOffer],
+      revisionHistory: [{
+        ...offerRevision!,
+        snapshot: updatedOffer
       }]
     });
 
     const release=await buildErpPublicProjection(store,store,'2026-09-20T10:00:00.000Z');
     expect(release.data).toHaveLength(0);
+  });
+
+  it('rejects a release when Canonical state drifted without a new revision snapshot', async () => {
+    const store=new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const baseline=await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-20T09:00:00.000Z'
+    );
+
+    const offer=await store.getOffer('offer_gv70_demo');
+    await store.seed!({
+      offers: [{
+        ...offer!,
+        priceTerms: offer!.priceTerms.map((term) => ({
+          ...term,
+          monthlyRent:{amount:999000,currency:'KRW' as const}
+        }))
+      }]
+    });
+
+    await expect(buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-20T10:00:00.000Z'
+    )).rejects.toThrow('snapshot drift');
+
+    expect((await store.getActive('erp-public'))?.releaseId).toBe(baseline.releaseId);
   });
 
   it('keeps the last-known-good ACTIVE release when evidence staging fails', async () => {
