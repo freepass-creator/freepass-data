@@ -1,3 +1,4 @@
+import { adminViewAuthDecision } from './admin-view-auth.js';
 import Fastify from 'fastify';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
@@ -31,16 +32,8 @@ app.get('/health', async () => ({
 }));
 
 app.get('/v1/views/admin-catalog/products', async (request, reply) => {
-  const required=String(process.env.FREEPASS_DATA_ADMIN_VIEW_TOKEN??'').trim();
-  if(process.env.NODE_ENV==='production'&&!required){
-    return reply.code(503).send({code:'ADMIN_VIEW_AUTH_NOT_BOUND'});
-  }
-  if(required){
-    const authorization=String(request.headers.authorization??'');
-    if(authorization!=='Bearer '+required){
-      return reply.code(401).send({code:'UNAUTHORIZED'});
-    }
-  }
+  const auth=adminViewAuthDecision(process.env,request.headers.authorization);
+  if(!auth.ok)return reply.code(auth.status).send({code:auth.code});
 
   const release=await stores.projections.getActive<AdminCatalogProduct>('admin-catalog');
   if(!release)return reply.code(503).send({code:'NO_ACTIVE_ADMIN_CATALOG_RELEASE'});
