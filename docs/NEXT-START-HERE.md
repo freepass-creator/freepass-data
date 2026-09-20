@@ -1,0 +1,121 @@
+# FreePass Data — NEXT START HERE
+
+Status: **ACTIVE / CATALOG V1 EXECUTABLE BASELINE**  
+Official project name: **프리패스 데이터 / FreePass Data**  
+Repository: `freepass-creator/freepass-data`  
+Verified main revision when this handoff was created: `6ee24326bd30b3420d04c4fe344ac9ad5dbfe769`  
+Date: 2026-09-20
+
+## 1. Do not restart or recreate the project
+
+This repository already exists and contains the Catalog V1 executable baseline.
+
+Do **not** create a replacement repository and do **not** redirect this work to `JPK ERP5/jpkerp5`.
+
+Legacy Firebase identifiers may still appear as source/target identifiers. They are identifiers, not the official project name.
+
+## 2. Locked boundaries
+
+- Approved implementation scope: **CATALOG V1 ONLY**
+- FreePass Data owns the server-side data-platform boundary, not Sales/Admin/Estimate business workflow meaning.
+- Consumer apps must not treat internal Firestore collection paths as their public contract.
+- Canonical writes fail closed when revision/authority/persistence validation cannot be performed.
+- RTDB: **no new usage**. Existing traces are migration debt only.
+- GitHub Actions / deployment automation: **do not add or enable without separate authorization**.
+- Production Firebase binding, IAM change, writer cutover, schedule activation, and real-data writes remain separately authorized operations.
+
+## 3. What is already on main
+
+The current baseline includes:
+
+- TypeScript / Node 22 modular monolith
+- Catalog JSON Schemas
+- VehicleModel / VehicleAsset / Product / Offer / PriceTerm / Policy domain
+- memory + Firestore repository adapters
+- revision conflict protection
+- idempotency receipt
+- append-only audit + transactional outbox
+- worker lease/retry/dead-letter behavior
+- ERP public projection + release activation
+- Fastify API baseline
+- legacy `freepasserp3` read-only adapter
+- conservative legacy normalizer
+- source run / RAW / normalized candidate persistence
+- guarded legacy product ingestion job
+- explicit target Firebase binding requirement
+- shadow migration/comparison contract
+- default-deny Firestore rules baseline + indexes
+- fail-closed public projection for incomplete deposit terms
+- tests covering catalog mutation, ingestion, normalizer and shadow behavior
+
+## 4. Highest-value next work
+
+### P0 — Field Authority Registry
+
+Define the Catalog V1 field-authority contract before adding more business write commands.
+
+Minimum dimensions:
+
+- domain / aggregate / field path
+- semantic owner
+- allowed command(s)
+- allowed writer/service identity class
+- approval requirement
+- conflict policy
+- override policy
+- effective-time policy
+- source refresh behavior
+
+Do not reduce this to a single `SOURCE_WINS`-style enum.
+
+### P1 — Field-level lineage
+
+Connect normalized source evidence to canonical fields and projection output.
+
+Minimum evidence:
+
+- source_id
+- source_record_id
+- source revision/digest
+- normalizer/mapper version
+- canonical entity + revision
+- field path
+- source value / normalized value / canonical value
+- override/correction reference when applicable
+
+### P2 — Acceptance tests
+
+Promote the architecture-v2 review test matrix into executable tests, starting with:
+
+- idempotency key reused with a different payload must conflict
+- stale revision must fail without losing the operator input
+- incomplete deposit/price pair must not be published
+- partial projection build must not replace last-known-good ACTIVE release
+- source collection failure must not be interpreted as mass deletion
+- duplicate / out-of-order event behavior
+- old writer blocked after ownership transfer (design + non-production enforcement test)
+
+### P3 — Security/IAM review
+
+Keep Firestore default deny. Define server/service authorization and consumer read boundary before any production cutover.
+
+### P4 — ERP.com pilot consumer
+
+Only after P0-P3 contracts are stable:
+
+`LEGACY → SHADOW → FREEPASS_DATA_READ`
+
+Do not perform writer cutover in the same step.
+
+## 5. Coordination rule
+
+Before each new change:
+
+1. read `docs/IMPLEMENTATION-STATUS.md`
+2. read this file
+3. verify current `main` revision
+4. check open PRs/branches for overlapping work
+5. make the smallest isolated change
+6. leave an updated next-start-here note when the work packet ends
+
+This file exists so another session can continue without re-discovering or re-creating the project.
