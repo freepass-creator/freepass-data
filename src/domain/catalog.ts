@@ -73,8 +73,62 @@ export type ErpPublicProduct = {
     policyId?: string | null; priceTerms: PriceTerm[];
   }>;
 };
+export type AdminPolicyValue =
+  | { policyId: string; type: 'BOOLEAN'; value: boolean }
+  | { policyId: string; type: 'NUMBER' | 'MONEY' | 'PERCENTAGE'; value: number }
+  | { policyId: string; type: 'SINGLE_SELECT' | 'TEXT' | 'DATE'; value: string }
+  | { policyId: string; type: 'MULTI_SELECT'; value: string[] };
+
+export type AdminCatalogProduct = {
+  productId: string;
+  productRevision: number;
+  sourceProductKey?: string;
+  updatedAt?: string;
+  displayName: string;
+  commercialType: CommercialType;
+  vehiclePrice?: number;
+  vehicleModel: {
+    id: string;
+    origin?: string | null;
+    maker: string;
+    model: string;
+    generation?: string | null;
+    subModel?: string | null;
+    trim?: string | null;
+    fuel?: string | null;
+    drive?: string | null;
+    seats?: number | null;
+    modelYear?: number | null;
+    displacementCc?: number | null;
+    batteryKwh?: number | null;
+  };
+  vehicleAsset?: {
+    id: string;
+    status: VehicleAssetStatus;
+    plateNumber?: string | null;
+    vin?: string | null;
+    odometerKm?: number | null;
+    firstRegistrationDate?: string | null;
+  } | null;
+  offers: Array<{
+    offerId: string;
+    offerRevision: number;
+    supplierId: string;
+    policyId?: string | null;
+    policyValues: AdminPolicyValue[];
+    priceTerms: PriceTerm[];
+  }>;
+};
+
+export type AdminCatalogProjectionMetadata = {
+  policyParity: 'COMPLETE' | 'INCOMPLETE';
+  missingPolicyOfferIds: string[];
+  invalidPolicyFactRefs: string[];
+};
+
 export type ProjectionRelease<T> = {
   releaseId: string; projectionId: string; schemaVersion: string; canonicalRevision: number;
   status: 'BUILDING' | 'VALIDATING' | 'READY' | 'ACTIVE' | 'FAILED';
   generatedAt: string; activatedAt?: string | null; data: T[];
+  metadata?: Record<string, unknown>;
 };
