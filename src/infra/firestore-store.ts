@@ -1,7 +1,7 @@
 import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type {
-  AuditEvent, CommandReceipt, Offer, OutboxEvent, Policy,
+  AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
   Product, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
@@ -174,7 +174,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       tx.set(activeRef, { releaseId, projectionId });
     });
   }
-  async getActive<T>(projectionId: string): Promise<ProjectionRelease<T> | null> {
+  async getActive<T = ErpPublicProduct>(projectionId: string): Promise<ProjectionRelease<T> | null> {
     const active = await this.db.collection(C.activeReleases).doc(projectionId).get();
     if (!active.exists) return null;
     return data<ProjectionRelease<T>>(
