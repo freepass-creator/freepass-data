@@ -478,9 +478,15 @@ function buildChanges(state: LoadedState) {
   }
 
   if (candidate.providerCompanyCode) {
+    const previousSourceSupplierCode =
+      state.binding.sourceSupplierCode ?? offer.supplierId;
     blocked(
-      'offer', offer.id, 'supplierId',
-      offer.supplierId, candidate.providerCompanyCode, 'SUPPLIER_CHANGE_REQUIRES_SEPARATE_COMMAND'
+      'offer',
+      offer.id,
+      'sourceSupplierCode',
+      previousSourceSupplierCode,
+      candidate.providerCompanyCode,
+      'SOURCE_SUPPLIER_MAPPING_CHANGE_REQUIRES_SEPARATE_COMMAND'
     );
   }
 
@@ -1145,6 +1151,10 @@ export async function applyReviewedSourceChange(
           sourceObservedAt: state.head.observedAt,
           sourceCheckpointRevision: state.head.checkpoint.sourceRevision ?? null,
           sourceCheckpointChecksum: state.head.checkpoint.checksum ?? null,
+          sourceSupplierCode:
+            state.candidateRecord.candidate.providerCompanyCode ??
+            state.binding.sourceSupplierCode ??
+            null,
           revision: state.binding.revision + 1,
           updatedAt: now,
           updatedBy: input.actor
