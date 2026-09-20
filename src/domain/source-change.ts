@@ -41,6 +41,8 @@ export type ApplyReviewedSourceChangeInput = {
   candidateId: string;
   expectedHeadRunId: string;
   expectedBindingRevision: number;
+  expectedVehicleModelRevision: number;
+  expectedProductRevision: number;
   expectedOfferRevision: number;
   expectedVehicleAssetRevision?: number | null;
   approvedChangeIds: string[];
