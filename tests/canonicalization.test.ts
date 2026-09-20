@@ -48,7 +48,7 @@ function evidence(input: {
     headStatus: 'CURRENT',
     rawCount: 1,
     candidateCount: 1,
-    lineageCount: 12,
+    lineageCount: 13,
     warningCount: issues.length ? 1 : 0
   };
 
@@ -98,6 +98,7 @@ function evidence(input: {
     ['sub_model', 'subModel', '2세대', '2세대'],
     ['trim_name', 'trimName', '2.5T AWD', '2.5T AWD'],
     ['product_type', 'commercialType', '중고렌트', 'USED_RENT'],
+    ['provider_company_code', 'providerCompanyCode', 'SUP-LEGACY', 'SUP-LEGACY'],
     ['car_number', 'carNumber', '123가4567', '123가4567'],
     ['mileage', 'mileageKm', 12000, 12000],
     ['price.36_2만.rent', 'priceTerms.source:36_2만.monthlyRent.amount', rent, rent],
