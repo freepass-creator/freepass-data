@@ -57,6 +57,10 @@ export type SourceHead = {
   coverage: SourceCoverage;
 };
 
+export function isValidSourceObservation(observedAt: string): boolean {
+  return Number.isFinite(Date.parse(observedAt));
+}
+
 export function canAdvanceSourceHead(candidateObservedAt: string, currentObservedAt?: string | null): boolean {
   const candidate = Date.parse(candidateObservedAt);
   if (!Number.isFinite(candidate)) return false;
