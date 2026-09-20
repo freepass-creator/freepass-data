@@ -39,16 +39,32 @@ Implemented:
 - approved v2 repository boundaries + local architecture boundary check
 - tests for catalog mutation, authority enforcement, idempotency payload conflict, stale revision, projection semantics, ingestion, legacy normalization and shadow behavior
 
+## Admin consumer contract — 2026-09-21
+
+Added:
+- `contracts/admin-catalog-view-v1.schema.json`
+- `docs/CONSUMER-ADMIN-V1.md`
+
+Status:
+- contract: LOCKED
+- Admin adapter consumer boundary: prepared in freepass-admin
+- Data endpoint/release implementation: NOT ACTIVE
+- Admin read cutover: BLOCKED until policy parity + service auth + shadow parity evidence
+
+The Admin contract intentionally differs from `erp-public`: it preserves Offer supplier identity, PriceTerm provenance, VIN/registration facts and typed searchable policy values.
+
 ## Current gap
 
 The implementation has moved beyond the old Next list. The highest-value missing Catalog V1 platform contracts are now:
 
 1. **Complete field lineage: normalized → canonical → projection**
-2. **Acceptance-test expansion for failure, duplicate, cutover and last-known-good cases**
-3. **Server/service authentication + IAM enforcement**
-4. **ERP.com shadow/read pilot**
-5. **Console Data Explorer / Entity Detail / Command Edit**
-6. **Backup/restore and operational recovery verification**
+2. **Implement and validate the Admin Catalog ACTIVE Projection Release**
+3. **Acceptance-test expansion for failure, duplicate, cutover and last-known-good cases**
+4. **Server/service authentication + IAM enforcement**
+5. **Admin catalog shadow/read pilot with policy parity**
+6. **ERP.com shadow/read pilot**
+7. **Console Data Explorer / Entity Detail / Command Edit**
+8. **Backup/restore and operational recovery verification**
 
 ## Local execution
 
