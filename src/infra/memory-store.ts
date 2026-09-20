@@ -1,5 +1,5 @@
 import type {
-  AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
+  AuditEvent, CommandReceipt, Offer, OutboxEvent, Policy,
   Product, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
@@ -33,7 +33,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   private sourceBindings = new Map<string, CanonicalSourceBinding>();
   readonly audits: AuditEvent[] = [];
   readonly outbox = new Map<string, OutboxEvent>();
-  private releases = new Map<string, ProjectionRelease<ErpPublicProduct>>();
+  private releases = new Map<string, ProjectionRelease<unknown>>();
   private active = new Map<string, string>();
 
   async seed(input: {
@@ -152,8 +152,8 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async listOffers() { return copy([...this.offers.values()]); }
   async listPolicies() { return copy([...this.policies.values()]); }
 
-  async stage(release: ProjectionRelease<ErpPublicProduct>) {
-    this.releases.set(release.releaseId, copy(release));
+  async stage<T>(release: ProjectionRelease<T>) {
+    this.releases.set(release.releaseId, copy(release) as ProjectionRelease<unknown>);
   }
   async markReady(releaseId: string) {
     const release = this.releases.get(releaseId);
@@ -170,9 +170,9 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     release.activatedAt = new Date().toISOString();
     this.active.set(release.projectionId, releaseId);
   }
-  async getActive(projectionId: string) {
+  async getActive<T>(projectionId: string): Promise<ProjectionRelease<T> | null> {
     const id = this.active.get(projectionId);
-    return id ? copy(this.releases.get(id) ?? null) : null;
+    return id ? copy(this.releases.get(id) ?? null) as ProjectionRelease<T> | null : null;
   }
 
   async claimNext(input: { workerId: string; now: string; leaseUntil: string }) {
