@@ -4,7 +4,7 @@ import type {
   SourceDefinition,
   SourceRun
 } from '../domain/source.js';
-import type { SourceCheckpoint } from '../migration/shadow.js';
+import type { SourceCheckpoint } from '../domain/source.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 
 export interface SourceStore {
