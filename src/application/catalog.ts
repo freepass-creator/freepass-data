@@ -68,6 +68,14 @@ function activeOffer(offer: Offer, now: string) {
   return true;
 }
 
+function publicPriceTerms(offer: Offer) {
+  return offer.priceTerms.filter((term) =>
+    term.depositState === 'KNOWN' ||
+    term.depositState === 'ZERO' ||
+    term.depositState === 'NOT_APPLICABLE'
+  );
+}
+
 export async function buildErpPublicProjection(
   catalog: CatalogStore, projections: ProjectionStore, now = new Date().toISOString()
 ): Promise<ProjectionRelease<ErpPublicProduct>> {
@@ -78,8 +86,11 @@ export async function buildErpPublicProjection(
   const assetById = new Map(assets.map((x) => [x.id, x]));
   const offersByProduct = new Map<string, Offer[]>();
   for (const offer of offers.filter((x) => activeOffer(x, now))) {
-    const list = offersByProduct.get(offer.productId) ?? []; list.push(offer); offersByProduct.set(offer.productId, list);
+    const list = offersByProduct.get(offer.productId) ?? [];
+    list.push(offer);
+    offersByProduct.set(offer.productId, list);
   }
+
   const data: ErpPublicProduct[] = [];
   for (const product of products) {
     if (product.status !== 'ACTIVE' || product.validationStatus === 'INVALID') continue;
@@ -88,12 +99,19 @@ export async function buildErpPublicProjection(
     const asset = product.vehicleAssetId ? assetById.get(product.vehicleAssetId) : undefined;
     if (product.vehicleAssetId && !asset) continue;
     if (asset && asset.status !== 'AVAILABLE') continue;
-    const productOffers = offersByProduct.get(product.id) ?? [];
+
+    const productOffers = (offersByProduct.get(product.id) ?? [])
+      .map((offer) => ({ offer, terms: publicPriceTerms(offer) }))
+      .filter(({ terms }) => terms.length > 0);
     if (!productOffers.length) continue;
+
     data.push({
-      productId: product.id, productRevision: product.revision, vehicleModelId: model.id,
+      productId: product.id,
+      productRevision: product.revision,
+      vehicleModelId: model.id,
       ...(product.vehicleAssetId ? {vehicleAssetId: product.vehicleAssetId} : {}),
-      displayName: product.displayName, commercialType: product.commercialType,
+      displayName: product.displayName,
+      commercialType: product.commercialType,
       vehicle: {
         maker: model.maker, model: model.model,
         ...(model.generation !== undefined ? {generation: model.generation} : {}),
@@ -107,18 +125,24 @@ export async function buildErpPublicProjection(
           ...(asset.odometerKm !== undefined ? {odometerKm: asset.odometerKm} : {})
         } : {})
       },
-      offers: productOffers.map((offer) => ({
-        offerId: offer.id, supplierId: offer.supplierId, offerRevision: offer.revision,
-        ...(offer.policyId !== undefined ? {policyId: offer.policyId} : {}), priceTerms: offer.priceTerms
+      offers: productOffers.map(({ offer, terms }) => ({
+        offerId: offer.id,
+        supplierId: offer.supplierId,
+        offerRevision: offer.revision,
+        ...(offer.policyId !== undefined ? {policyId: offer.policyId} : {}),
+        priceTerms: terms
       }))
     });
   }
+
   const canonicalRevision = Math.max(0, ...models.map(x=>x.revision), ...assets.map(x=>x.revision), ...products.map(x=>x.revision), ...offers.map(x=>x.revision));
   const release: ProjectionRelease<ErpPublicProduct> = {
     releaseId: `rel_${randomUUID()}`, projectionId: 'erp-public', schemaVersion: '1.0.0',
     canonicalRevision, status: 'BUILDING', generatedAt: now, data
   };
-  await projections.stage(release); await projections.markReady(release.releaseId); await projections.activate(release.releaseId);
+  await projections.stage(release);
+  await projections.markReady(release.releaseId);
+  await projections.activate(release.releaseId);
   const active = await projections.getActive('erp-public');
   if (!active) throw new Error('Projection activation failed');
   return active;
@@ -150,6 +174,7 @@ export async function processOneOutboxEvent(
       eventId:event.eventId,attempts,
       nextAttemptAt:new Date(now.getTime()+backoffMs(options.baseBackoffMs ?? 500,attempts)).toISOString(),
       error:message
-    }); return 'RETRY';
+    });
+    return 'RETRY';
   }
 }
