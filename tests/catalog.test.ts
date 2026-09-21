@@ -98,6 +98,77 @@ describe('Catalog V1 vertical slice', () => {
       .toBe(manifest?.fieldEvidenceDigest);
   });
 
+  it('does not reuse a tampered ACTIVE payload even when stored dataDigest is unchanged', async () => {
+    const store=new MemoryDataStore(); await seedDemoCatalog(store);
+    const first=await buildErpPublicProjection(store,store,'2026-09-20T09:00:00.000Z');
+
+    const tamperedActiveProjection={
+      stage: store.stage.bind(store),
+      stageEvidence: store.stageEvidence.bind(store),
+      markReady: store.markReady.bind(store),
+      activate: store.activate.bind(store),
+      getActive: async (projectionId:string) => {
+        const release=await store.getActive(projectionId);
+        if (!release || release.releaseId !== first.releaseId) return release;
+        const data=structuredClone(release.data);
+        data[0]={
+          ...data[0]!,
+          displayName:'TAMPERED'
+        };
+        return {...release,data};
+      },
+      getManifest: store.getManifest.bind(store),
+      listProjectionLineage: store.listProjectionLineage.bind(store),
+      getDeliveryReceipt: store.getDeliveryReceipt.bind(store),
+      putDeliveryReceipt: store.putDeliveryReceipt.bind(store)
+    };
+
+    const second=await buildErpPublicProjection(
+      store,
+      tamperedActiveProjection,
+      '2026-09-20T09:01:00.000Z'
+    );
+
+    expect(second.releaseId).not.toBe(first.releaseId);
+    expect(second.data[0]?.displayName).not.toBe('TAMPERED');
+    expect(second.data[0]?.displayName).toBe('제네시스 GV70');
+  });
+
+  it('does not reuse an ACTIVE release when manifest canonicalInputs are tampered', async () => {
+    const store=new MemoryDataStore(); await seedDemoCatalog(store);
+    const first=await buildErpPublicProjection(store,store,'2026-09-20T09:00:00.000Z');
+
+    const tamperedManifestProjection={
+      stage: store.stage.bind(store),
+      stageEvidence: store.stageEvidence.bind(store),
+      markReady: store.markReady.bind(store),
+      activate: store.activate.bind(store),
+      getActive: store.getActive.bind(store),
+      getManifest: async (releaseId:string) => {
+        const manifest=await store.getManifest(releaseId);
+        if (!manifest || releaseId !== first.releaseId) return manifest;
+        const canonicalInputs=structuredClone(manifest.canonicalInputs);
+        canonicalInputs[0]={
+          ...canonicalInputs[0]!,
+          revision:canonicalInputs[0]!.revision+100
+        };
+        return {...manifest,canonicalInputs};
+      },
+      listProjectionLineage: store.listProjectionLineage.bind(store),
+      getDeliveryReceipt: store.getDeliveryReceipt.bind(store),
+      putDeliveryReceipt: store.putDeliveryReceipt.bind(store)
+    };
+
+    const second=await buildErpPublicProjection(
+      store,
+      tamperedManifestProjection,
+      '2026-09-20T09:01:00.000Z'
+    );
+
+    expect(second.releaseId).not.toBe(first.releaseId);
+    expect((await store.getManifest(second.releaseId))?.inputDigest).toBe(second.inputDigest);
+  });
+
   it('does not reuse an ACTIVE release whose manifest lacks lineage digest', async () => {
     const store=new MemoryDataStore(); await seedDemoCatalog(store);
     const first=await buildErpPublicProjection(store,store,'2026-09-20T09:00:00.000Z');
