@@ -136,6 +136,14 @@ Do not perform writer cutover in the same step.
 
 ## 5. Coordination rule
 
+### Local working copy — 2026-09-21
+
+Local runtime fixes based on main `fea18ce15f523d41a9382e7ae79e702a58d3afae`
+are on `codex/local-runtime-baseline` in `C:\dev\freepass-data`.
+See [Local development](LOCAL-DEVELOPMENT.md) for Windows setup, validation,
+and the separate API/worker memory-store limitation. These local changes are
+not a production rollout. Open PR #12 covers Admin projection work separately.
+
 Before each new change:
 
 1. read `docs/IMPLEMENTATION-STATUS.md`
@@ -144,5 +152,9 @@ Before each new change:
 4. check open PRs/branches for overlapping work
 5. make the smallest isolated change
 6. leave an updated next-start-here note when the work packet ends
+
+### 운영 사고 메모
+
+- [2026-09-21 손오공 픽업구독 축소와 거짓 합격 방지](INCIDENT-2026-09-21-STALE-UPSTREAM-FALSE-PASS.md): 하류 `원자 → F01 → F86` 일치만으로 원천 정합성을 합격 처리하지 않는다. 현재 원천 관찰부터 차량번호·상태를 양방향 대조한다.
 
 This file exists so another session can continue without re-discovering or re-creating the project.

@@ -156,6 +156,18 @@ describe('Catalog V1 vertical slice', () => {
       '2026-09-20T09:00:00.000Z'
     );
 
+    // Change a canonical input so release reuse cannot bypass evidence staging.
+    await updateOfferPrice(store, {
+      commandId: 'cmd_evidence_failure',
+      idempotencyKey: 'idem_evidence_failure',
+      offerId: 'offer_gv70_demo',
+      expectedRevision: 1,
+      termKey: '36@20000',
+      monthlyRent: { amount: 710000, currency: 'KRW' },
+      reason: 'exercise evidence failure on a new release',
+      actor: { id: 'user:test', kind: 'USER' }
+    });
+
     const failingProjection={
       stage: store.stage.bind(store),
       stageEvidence: async () => {
@@ -165,7 +177,9 @@ describe('Catalog V1 vertical slice', () => {
       activate: store.activate.bind(store),
       getActive: store.getActive.bind(store),
       getManifest: store.getManifest.bind(store),
-      listProjectionLineage: store.listProjectionLineage.bind(store)
+      listProjectionLineage: store.listProjectionLineage.bind(store),
+      getDeliveryReceipt: store.getDeliveryReceipt.bind(store),
+      putDeliveryReceipt: store.putDeliveryReceipt.bind(store)
     };
 
     await expect(buildErpPublicProjection(

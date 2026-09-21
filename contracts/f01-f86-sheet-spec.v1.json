@@ -1,0 +1,83 @@
+{
+  "version": "1.0",
+  "effectiveDate": "2026-09-21",
+  "owner": "freepass-data",
+  "status": "SPEC_AND_LIVE_TAB_PRESENTATION_APPLIED_PUBLISHER_PENDING",
+  "timezone": "Asia/Seoul",
+  "workbooks": {
+    "F01": { "spreadsheetId": "1Y1Mx1EcEpAuNer0y50Dq4eK92CpVjThO_suZLmo2vVs", "primarySheetIds": [668539469, 1902102711, 978740603, 1902102713] },
+    "F86": { "spreadsheetId": "1hQtshpWKL4L0zSR3H3UQ36atICtHv9Ka7dQh7d7K5Vg", "primarySheetIds": [2024887857, 115390002, 1357913579, 891725079] }
+  },
+  "naming": {
+    "catalog": "MM.DD HH:mm 상품리스트 N대",
+    "other": "탭명 N대",
+    "separator": " ",
+    "count": "actual_unique_vehicle_rows",
+    "timestamp": "explicit_publication_run_timestamp_not_source_freshness",
+    "noMiddleDot": true
+  },
+  "primaryTabs": [
+    {
+      "key": "catalog",
+      "label": "상품리스트",
+      "color": "#4A86E8"
+    },
+    {
+      "key": "sonogong",
+      "label": "손오공상품",
+      "color": "#8E7CC3"
+    },
+    {
+      "key": "pickup",
+      "label": "픽업구독",
+      "color": "#45818E"
+    },
+    {
+      "key": "autoplus",
+      "label": "오플구독",
+      "color": "#6AA84F"
+    }
+  ],
+  "supplierTabs": {
+    "workbook": "F86",
+    "placement": "after_primary_tabs",
+    "color": "#7F8C8D",
+    "preserveExistingOrder": true
+  },
+  "retiredTab": "오공구독",
+  "sourceClassification": {
+    "sonogong": "RP012/SON_NO_KONG: 중고렌트 + 오공구독",
+    "pickup": "RP012/TCAR_EXTERNAL",
+    "autoplus": "RP023"
+  },
+  "appearance": {
+    "columnWidthsPx": { "차명(원문)": 260, "옵션(원문)": 360 },
+    "F01": "preserve_existing_standard_table",
+    "F86": "preserve_existing_retro_supplier_view",
+    "F86MinimumVisibleFeeMonths": 24,
+    "headerRowsFrozen": 1,
+    "filter": "entire_populated_rectangle",
+    "alignment": {
+      "names": "LEFT",
+      "money": "RIGHT",
+      "other": "preserve_existing_semantic_rules"
+    },
+    "money": "preserve_numeric_values_and_period_specific_deposit_pairs",
+    "missingValues": "preserve_unknown_do_not_invent_zero",
+    "semanticColors": "existing_status_product_type_color_SSOT_independent_of_tab_colors"
+  },
+  "safety": {
+    "stableSheetIds": true,
+    "hiddenAdminTabsExcluded": true,
+    "noSourceDataCorrectionByPresentation": true,
+    "noDoubleCountSupplierViews": true
+  },
+  "publisherAcceptance": [
+    "use_logical_tab_key_or_sheetId_not_title_startsWith",
+    "apply_same_name_order_color_rules_in_F01_F86",
+    "do_not_recreate_retired_ogong_tab",
+    "verify_vehicle_keys_counts_and_readback",
+    "back_up_before_consolidation",
+    "one_verified_snapshot_per_publication"
+  ]
+}
