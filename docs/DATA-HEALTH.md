@@ -263,6 +263,21 @@ The verifier covers:
 
 The shared layer is now protected by the architecture checker: `shared` cannot depend on ports/application/adapters/infra/api/jobs/migration and cannot import Firebase SDKs.
 
+## Projection lineage identity semantics
+
+Lineage content integrity is not only a digest check.
+
+The shared verifier also rejects evidence when:
+
+- a lineage record points to the wrong `releaseId`
+- a lineage record points to the wrong `projectionId`
+- a lineage record stage is not `CANONICAL_TO_PROJECTION`
+- duplicate `lineageRecordId` values exist
+
+These checks still fail even if an attacker or broken writer recomputes `fieldEvidenceDigest` after changing the invalid records.
+
+This prevents a semantically invalid evidence set from becoming trusted merely because its bytes are self-consistent.
+
 ## Firestore emulator validation hook
 
 `tests/firestore-projection-integrity.emulator.test.ts` is conditional on `FIRESTORE_EMULATOR_HOST`.
