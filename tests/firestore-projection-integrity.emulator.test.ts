@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { buildErpPublicProjection } from '../src/application/catalog.js';
@@ -9,24 +9,26 @@ import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { stableRecordSetDigest } from '../src/shared/stable-digest.js';
 
 const emulatorEnabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
-const app = emulatorEnabled
-  ? initializeApp(
-      { projectId: `freepass-data-test-${randomUUID()}` },
-      `freepass-data-emulator-${randomUUID()}`
-    )
-  : null;
 
-afterAll(async () => {
-  if (app) await deleteApp(app);
-});
+function createEmulatorFixture() {
+  const app = initializeApp(
+    { projectId: `freepass-data-test-${randomUUID()}` },
+    `freepass-data-emulator-${randomUUID()}`
+  );
+  const db = getFirestore(app);
+  return {
+    app,
+    db,
+    store: new FirestoreDataStore(db)
+  };
+}
 
 describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () => {
   it('promotes a multi-chunk evidence set and reads it atomically', async () => {
-    if (!app) throw new Error('emulator app missing');
-    const db = getFirestore(app);
-    const store = new FirestoreDataStore(db);
+    const { app, store } = createEmulatorFixture();
 
-    const memory = new MemoryDataStore();
+    try {
+      const memory = new MemoryDataStore();
     await seedDemoCatalog(memory);
     const active = await buildErpPublicProjection(
       memory,
@@ -69,16 +71,18 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
     const snapshot = await store.getActiveEvidenceSnapshot('erp-public');
     expect(snapshot.consistency).toBe('ATOMIC');
     expect(snapshot.release?.releaseId).toBe(releaseId);
-    expect(snapshot.manifest?.fieldEvidenceCount).toBe(801);
-    expect(snapshot.lineage).toHaveLength(801);
+      expect(snapshot.manifest?.fieldEvidenceCount).toBe(801);
+      expect(snapshot.lineage).toHaveLength(801);
+    } finally {
+      await deleteApp(app);
+    }
   });
 
   it('rejects ACTIVE transition when READY evidence is modified', async () => {
-    if (!app) throw new Error('emulator app missing');
-    const db = getFirestore(app);
-    const store = new FirestoreDataStore(db);
+    const { app, db, store } = createEmulatorFixture();
 
-    const memory = new MemoryDataStore();
+    try {
+      const memory = new MemoryDataStore();
     await seedDemoCatalog(memory);
     const active = await buildErpPublicProjection(
       memory,
@@ -126,6 +130,9 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
     await expect(store.activate(releaseId))
       .rejects.toThrow('EVIDENCE_DIGEST_MISMATCH');
 
-    expect(await store.getActive('erp-public')).toBeNull();
+      expect(await store.getActive('erp-public')).toBeNull();
+    } finally {
+      await deleteApp(app);
+    }
   });
 });
