@@ -40,19 +40,32 @@ export type CatalogDataHealthReadStore =
 export function dataHealthReader(db: Firestore): CatalogDataHealthReadStore {
   const projection = projectionReader(db);
 
-  const all = async <T>(collection: string): Promise<T[]> => {
+  const all = async <T>(
+    collection: string,
+    identityField: 'id' | 'revisionRecordId'
+  ): Promise<T[]> => {
     const snap = await db.collection(collection).get();
-    return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as T);
+    return snap.docs.map((doc) => {
+      const stored = doc.data();
+      const payloadIdentity = stored[identityField];
+      if (payloadIdentity !== undefined && payloadIdentity !== doc.id) {
+        throw new Error(`Firestore document identity mismatch in ${collection}`);
+      }
+      return { ...stored, [identityField]: doc.id } as T;
+    });
   };
 
   return {
-    listVehicleModels: () => all<VehicleModel>('catalog_vehicle_models'),
-    listVehicleAssets: () => all<VehicleAsset>('catalog_vehicle_assets'),
-    listProducts: () => all<Product>('catalog_products'),
-    listOffers: () => all<Offer>('catalog_offers'),
-    listPolicies: () => all<Policy>('catalog_policies'),
+    listVehicleModels: () => all<VehicleModel>('catalog_vehicle_models', 'id'),
+    listVehicleAssets: () => all<VehicleAsset>('catalog_vehicle_assets', 'id'),
+    listProducts: () => all<Product>('catalog_products', 'id'),
+    listOffers: () => all<Offer>('catalog_offers', 'id'),
+    listPolicies: () => all<Policy>('catalog_policies', 'id'),
     async listRevisionHistory() {
-      const records = await all<EntityRevisionRecord>('catalog_entity_revisions');
+      const records = await all<EntityRevisionRecord>(
+        'catalog_entity_revisions',
+        'revisionRecordId'
+      );
       return records.sort((a, b) =>
         a.entityType.localeCompare(b.entityType) ||
         a.entityId.localeCompare(b.entityId) ||

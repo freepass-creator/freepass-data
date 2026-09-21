@@ -248,6 +248,7 @@ export async function readCatalogDataHealth(
   projections: CatalogHealthProjectionStore,
   now = new Date().toISOString()
 ): Promise<CatalogHealthReport> {
+  const expectedProjectionId = 'erp-public' as const;
   const [
     models,
     assets,
@@ -263,7 +264,7 @@ export async function readCatalogDataHealth(
     catalog.listOffers(),
     catalog.listPolicies(),
     catalog.listRevisionHistory(),
-    readActiveProjectionEvidence(projections, 'erp-public')
+    readActiveProjectionEvidence(projections, expectedProjectionId)
   ]);
   const activeRelease = projectionEvidence.release;
 
@@ -508,6 +509,21 @@ export async function readCatalogDataHealth(
     const lineage = projectionEvidence.lineage;
     actualEvidenceCount = lineage.length;
 
+    if (
+      projectionEvidence.projectionId !== expectedProjectionId ||
+      activeRelease.projectionId !== expectedProjectionId ||
+      (manifest !== null && manifest.projectionId !== expectedProjectionId) ||
+      lineage.some((item) => item.projectionId !== expectedProjectionId)
+    ) {
+      issues.push({
+        code: 'ACTIVE_RELEASE_PROJECTION_ID_MISMATCH',
+        severity: 'ERROR',
+        entityType: 'projection',
+        entityId: activeRelease.releaseId,
+        message: `ACTIVE projection evidence does not belong to ${expectedProjectionId}.`
+      });
+    }
+
     if (!manifest) {
       issues.push({
         code: 'ACTIVE_RELEASE_MANIFEST_MISSING',
@@ -741,7 +757,7 @@ export async function readCatalogDataHealth(
     }
   }
 
-  const finalActiveRelease = await projections.getActive('erp-public');
+  const finalActiveRelease = await projections.getActive(expectedProjectionId);
   const startActiveReleaseId = activeRelease?.releaseId ?? null;
   const endActiveReleaseId = finalActiveRelease?.releaseId ?? null;
   const startActiveFingerprint = activeRelease
