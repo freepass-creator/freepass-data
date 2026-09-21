@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import Fastify from 'fastify';
 import { Ajv2020 } from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
+import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
 import catalogSchema from '../../contracts/catalog-v1.schema.json' with { type: 'json' };
 import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with { type: 'json' };
 import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
@@ -72,6 +72,11 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
 }
 
 const hash = (value: string) => createHash('sha256').update(value).digest();
+const addFormats = (
+  typeof addFormatsModule === 'function'
+    ? addFormatsModule
+    : (addFormatsModule as unknown as { default: FormatsPlugin }).default
+) as FormatsPlugin;
 export function createConsumerGateway(
   store: Pick<ProjectionStore, 'getActive' | 'getManifest'>,
   bindings: ConsumerBinding[],

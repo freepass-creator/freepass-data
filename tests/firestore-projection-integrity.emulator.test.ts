@@ -26,7 +26,7 @@ function createEmulatorFixture() {
 
 describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () => {
   it('promotes a multi-chunk evidence set and reads it atomically', async () => {
-    const { app, store } = createEmulatorFixture();
+    const { app, db, store } = createEmulatorFixture();
 
     try {
       const memory = new MemoryDataStore();
@@ -42,7 +42,7 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
       throw new Error('projection fixture missing');
     }
 
-    const releaseId = `rel_emulator_${randomUUID()}`;
+    const releaseId = `rel_${randomUUID()}`;
     const manifestId = `manifest_${releaseId}`;
     const lineage = Array.from({ length: 801 }, (_, index) => ({
       ...structuredClone(originalLineage[index % originalLineage.length]!),
@@ -106,7 +106,7 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
       throw new Error('projection fixture missing');
     }
 
-    const releaseId = `rel_emulator_tamper_${randomUUID()}`;
+    const releaseId = `rel_${randomUUID()}`;
     const manifestId = `manifest_${releaseId}`;
     const lineage = originalLineage.map((item, index) => ({
       ...structuredClone(item),
