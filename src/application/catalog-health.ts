@@ -1,5 +1,5 @@
 import type { CatalogStore, ProjectionStore } from '../ports/catalog-store.js';
-import { stableDigest } from './stable-digest.js';
+import { stableDigest, stableRecordSetDigest } from './stable-digest.js';
 
 export type CatalogHealthStatus = 'HEALTHY' | 'DEGRADED' | 'BLOCKED';
 export type CatalogHealthCheckStatus = 'PASS' | 'WARN' | 'FAIL';
@@ -30,7 +30,8 @@ export type CatalogHealthIssueCode =
   | 'ACTIVE_RELEASE_PRODUCT_COUNT_MISMATCH'
   | 'ACTIVE_RELEASE_OFFER_COUNT_MISMATCH'
   | 'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH'
-  | 'PROJECTION_LINEAGE_CONTENT_INTEGRITY_NOT_EVALUATED';
+  | 'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING'
+  | 'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH';
 
 export type CatalogHealthIssue = {
   code: CatalogHealthIssueCode;
@@ -93,7 +94,9 @@ export type CatalogHealthReport = {
         status: 'PASS' | 'FAIL' | 'NOT_APPLICABLE';
       };
       lineageContentIntegrity: {
-        status: 'NOT_EVALUATED' | 'NOT_APPLICABLE';
+        stored: string | null;
+        recomputed: string | null;
+        status: 'PASS' | 'FAIL' | 'NOT_EVALUATED' | 'NOT_APPLICABLE';
         reason: string;
       };
     };
@@ -105,6 +108,7 @@ export type CatalogHealthReport = {
       | 'ACTIVE_PROJECTION_METADATA'
       | 'ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST'
       | 'ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST'
+      | 'PROJECTION_LINEAGE_CONTENT_INTEGRITY'
     >;
     notEvaluated: Array<
       | 'PROJECTION_LINEAGE_CONTENT_INTEGRITY'
@@ -151,7 +155,8 @@ const projectionIssueCodes = new Set<CatalogHealthIssueCode>([
   'ACTIVE_RELEASE_PRODUCT_COUNT_MISMATCH',
   'ACTIVE_RELEASE_OFFER_COUNT_MISMATCH',
   'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH',
-  'PROJECTION_LINEAGE_CONTENT_INTEGRITY_NOT_EVALUATED'
+  'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING',
+  'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH'
 ]);
 
 function checkStatus(issues: CatalogHealthIssue[]): CatalogHealthCheckStatus {
@@ -295,10 +300,16 @@ export async function readCatalogDataHealth(
   let storedInputDigest: string | null = null;
   let recomputedInputDigest: string | null = null;
   let canonicalInputDigestStatus: 'PASS' | 'FAIL' | 'NOT_APPLICABLE' = 'NOT_APPLICABLE';
+  let storedLineageDigest: string | null = null;
+  let recomputedLineageDigest: string | null = null;
   let lineageContentIntegrity: {
-    status: 'NOT_EVALUATED' | 'NOT_APPLICABLE';
+    stored: string | null;
+    recomputed: string | null;
+    status: 'PASS' | 'FAIL' | 'NOT_EVALUATED' | 'NOT_APPLICABLE';
     reason: string;
   } = {
+    stored: null,
+    recomputed: null,
     status: 'NOT_APPLICABLE',
     reason: 'No ACTIVE release is available.'
   };
@@ -353,6 +364,8 @@ export async function readCatalogDataHealth(
         message: 'ACTIVE release has no Projection Release Manifest.'
       });
       lineageContentIntegrity = {
+        stored: null,
+        recomputed: null,
         status: 'NOT_EVALUATED',
         reason: 'Projection lineage content cannot be authenticated without a manifest.'
       };
@@ -438,22 +451,43 @@ export async function readCatalogDataHealth(
         });
       }
 
-      if (manifest.fieldEvidenceCount > 0) {
+      storedLineageDigest = manifest.fieldEvidenceDigest ?? null;
+      recomputedLineageDigest = stableRecordSetDigest(lineage);
+
+      if (!storedLineageDigest) {
         lineageContentIntegrity = {
+          stored: null,
+          recomputed: recomputedLineageDigest,
           status: 'NOT_EVALUATED',
-          reason: 'ProjectionReleaseManifest has no lineage-content digest; only evidence count can be verified.'
+          reason: 'ProjectionReleaseManifest has no fieldEvidenceDigest; legacy evidence content cannot be authenticated.'
         };
         issues.push({
-          code: 'PROJECTION_LINEAGE_CONTENT_INTEGRITY_NOT_EVALUATED',
+          code: 'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING',
           severity: 'WARNING',
+          entityType: 'projection',
+          entityId: activeRelease.releaseId,
+          message: lineageContentIntegrity.reason
+        });
+      } else if (storedLineageDigest !== recomputedLineageDigest) {
+        lineageContentIntegrity = {
+          stored: storedLineageDigest,
+          recomputed: recomputedLineageDigest,
+          status: 'FAIL',
+          reason: 'Projection lineage content does not match the manifest fieldEvidenceDigest.'
+        };
+        issues.push({
+          code: 'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH',
+          severity: 'ERROR',
           entityType: 'projection',
           entityId: activeRelease.releaseId,
           message: lineageContentIntegrity.reason
         });
       } else {
         lineageContentIntegrity = {
-          status: 'NOT_APPLICABLE',
-          reason: 'The manifest declares zero projection lineage records.'
+          stored: storedLineageDigest,
+          recomputed: recomputedLineageDigest,
+          status: 'PASS',
+          reason: 'Projection lineage content matches the manifest fieldEvidenceDigest.'
         };
       }
     }
@@ -528,10 +562,15 @@ export async function readCatalogDataHealth(
         'REFERENTIAL_INTEGRITY',
         'ACTIVE_PROJECTION_METADATA',
         'ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST',
-        'ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST'
+        'ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST',
+        ...(lineageContentIntegrity.status === 'PASS' || lineageContentIntegrity.status === 'FAIL'
+          ? ['PROJECTION_LINEAGE_CONTENT_INTEGRITY' as const]
+          : [])
       ],
       notEvaluated: [
-        'PROJECTION_LINEAGE_CONTENT_INTEGRITY',
+        ...(lineageContentIntegrity.status === 'NOT_EVALUATED'
+          ? ['PROJECTION_LINEAGE_CONTENT_INTEGRITY' as const]
+          : []),
         'CONSISTENT_SNAPSHOT',
         'SOURCE_FRESHNESS',
         'SOURCE_TO_CANONICAL_PARITY',
