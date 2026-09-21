@@ -34,6 +34,7 @@ import type {
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
+import { stableRecordSetDigest } from '../application/stable-digest.js';
 
 const C = {
   vehicleModels: 'catalog_vehicle_models',
@@ -356,6 +357,13 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       throw new Error('Projection evidence requires a BUILDING release');
     }
 
+    if (!input.manifest.fieldEvidenceDigest) {
+      throw new Error('Projection release manifest requires fieldEvidenceDigest');
+    }
+    if (input.manifest.fieldEvidenceDigest !== stableRecordSetDigest(input.lineage)) {
+      throw new Error('Projection field evidence digest mismatch');
+    }
+
     const chunkSize = 400;
     for (let offset = 0; offset < input.lineage.length; offset += chunkSize) {
       const batch = this.db.batch();
@@ -382,12 +390,11 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   }
   async markReady(releaseId: string) {
     const releaseRef = this.db.collection(C.releases).doc(releaseId);
-    const [releaseSnap, manifestSnap, evidenceCountSnap] = await Promise.all([
+    const [releaseSnap, manifestSnap, evidenceSnap] = await Promise.all([
       releaseRef.get(),
       this.db.collection(C.releaseManifests).doc(releaseId).get(),
       this.db.collection(C.projectionLineage)
         .where('releaseId', '==', releaseId)
-        .count()
         .get()
     ]);
     if (!releaseSnap.exists || releaseSnap.get('status') !== 'VALIDATING') {
@@ -395,8 +402,17 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     }
     if (!manifestSnap.exists) throw new Error('Release manifest not found');
     const manifest = manifestSnap.data() as ProjectionReleaseManifest;
-    if (evidenceCountSnap.data().count !== manifest.fieldEvidenceCount) {
+    const evidence = evidenceSnap.docs.map(
+      (doc) => doc.data() as ProjectionFieldLineageRecord
+    );
+    if (evidence.length !== manifest.fieldEvidenceCount) {
       throw new Error('Projection field evidence count mismatch');
+    }
+    if (!manifest.fieldEvidenceDigest) {
+      throw new Error('Projection release manifest requires fieldEvidenceDigest');
+    }
+    if (stableRecordSetDigest(evidence) !== manifest.fieldEvidenceDigest) {
+      throw new Error('Projection field evidence digest mismatch');
     }
     await releaseRef.update({ status: 'READY' });
   }
