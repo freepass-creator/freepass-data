@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { stableDigest, stableValue } from './stable-digest.js';
 import type {
   ActorRef,
   ErpPublicProduct,
@@ -180,24 +181,6 @@ function publicPriceTerms(offer: Offer) {
       (a.mileageLimitKmPerYear ?? -1) - (b.mileageLimitKmPerYear ?? -1) ||
       a.termKey.localeCompare(b.termKey)
     );
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, child]) => [key, stableValue(child)])
-    );
-  }
-  return value;
-}
-
-function stableDigest(value: unknown) {
-  return createHash('sha256')
-    .update(JSON.stringify(stableValue(value)))
-    .digest('hex');
 }
 
 function canonicalInputKey(entityType: CatalogEntityType, entityId: string, revision: number) {
