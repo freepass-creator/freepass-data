@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildErpPublicProjection } from '../src/application/catalog.js';
-import { readActiveProjectionEvidence, verifyProjectionReleaseIntegrity } from '../src/application/projection-integrity.js';
+import { readActiveProjectionEvidence } from '../src/application/projection-evidence-reader.js';
+import { verifyProjectionReleaseIntegrity } from '../src/shared/projection-integrity.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 
