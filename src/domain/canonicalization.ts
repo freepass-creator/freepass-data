@@ -1,4 +1,3 @@
-import type { ExecutionWriterRef } from './writer-ownership.js';
 import type { ActorRef, VehicleAssetStatus } from './catalog.js';
 
 export type IdentityResolution =
