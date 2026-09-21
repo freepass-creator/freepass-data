@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { analyzeErp5PolicyLinks } from '../src/adapters/erp5-policy-link-analysis.js';
 import { ERP5_DOCUMENTS, type Erp5SourceCapture } from '../src/adapters/erp5-source-capture.js';
 
@@ -8,9 +9,10 @@ const doc = (collection: 'products' | 'policy', id: string, fields: Record<strin
   updateTime: '2026-09-21T00:00:00Z', fields: Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, value(v as string | boolean)]))
 });
 function capture(products: RawDoc[], policies: RawDoc[]): Erp5SourceCapture {
-  return { version: 'erp5-source-capture/1', projectId: 'freepasserp5', databaseId: '(default)',
-    consistency: 'READ_ONLY_TRANSACTION', readTime: '2026-09-21T00:00:00Z', capturedAt: '2026-09-21T00:00:01Z',
-    collections: { products: { count: products.length, documents: products }, policy: { count: policies.length, documents: policies } }, digest: 'synthetic' };
+  const unsigned = { version: 'erp5-source-capture/1' as const, projectId: 'freepasserp5' as const, databaseId: '(default)' as const,
+    consistency: 'READ_ONLY_TRANSACTION' as const, readTime: '2026-09-21T00:00:00Z', capturedAt: '2026-09-21T00:00:01Z',
+    collections: { products: { count: products.length, documents: products }, policy: { count: policies.length, documents: policies } } };
+  return { ...unsigned, digest: createHash('sha256').update(JSON.stringify(unsigned)).digest('hex') };
 }
 type RawDoc = ReturnType<typeof doc>;
 
@@ -57,7 +59,13 @@ describe('ERP5 policy link evidence', () => {
   it('rejects a capture whose declared coverage differs from its documents', () => {
     const input = capture([], [doc('policy', 'RP004', { policy_code: 'RP004' })]);
     input.collections.policy.count = 2;
-    expect(() => analyzeErp5PolicyLinks(input)).toThrow('INVALID_CAPTURE_COVERAGE');
+    expect(() => analyzeErp5PolicyLinks(input)).toThrow('CAPTURE_DIGEST_MISMATCH');
+  });
+
+  it('rejects changed evidence before classifying policy links', () => {
+    const input = capture([doc('products', 'p1', { policy_code: 'RP004' })], [doc('policy', 'RP004', { policy_code: 'RP004' })]);
+    (input.collections.products.documents[0]!.fields as Record<string, unknown>).policy_code = { stringValue: 'CHANGED' };
+    expect(() => analyzeErp5PolicyLinks(input)).toThrow('CAPTURE_DIGEST_MISMATCH');
   });
 
   it('fails closed on malformed source types instead of aborting or linking them', () => {
