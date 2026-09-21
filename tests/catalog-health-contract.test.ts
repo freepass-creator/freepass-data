@@ -3,7 +3,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import healthSchema from '../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import { buildErpPublicProjection } from '../src/application/catalog.js';
-import { CATALOG_HEALTH_ISSUE_CODES, readCatalogDataHealth } from '../src/application/catalog-health.js';
+import { CATALOG_DATA_HEALTH_CONTRACT_VERSION, CATALOG_DATA_HEALTH_SCHEMA_VERSION, CATALOG_HEALTH_EVALUATED_DIMENSIONS, CATALOG_HEALTH_ISSUE_CODES, CATALOG_HEALTH_NOT_EVALUATED_DIMENSIONS, readCatalogDataHealth } from '../src/application/catalog-health.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 
@@ -57,6 +57,21 @@ describe('Catalog Data Health contract v1', () => {
     const runtimeIssueCodes = [...CATALOG_HEALTH_ISSUE_CODES].sort();
 
     expect(schemaIssueCodes).toEqual(runtimeIssueCodes);
+  });
+
+  it('keeps contract identity and coverage registries aligned with JSON Schema', () => {
+    expect(healthSchema.properties.contractVersion.const)
+      .toBe(CATALOG_DATA_HEALTH_CONTRACT_VERSION);
+    expect(healthSchema.properties.schemaVersion.const)
+      .toBe(CATALOG_DATA_HEALTH_SCHEMA_VERSION);
+
+    expect([
+      ...healthSchema.properties.coverage.properties.evaluated.items.enum
+    ].sort()).toEqual([...CATALOG_HEALTH_EVALUATED_DIMENSIONS].sort());
+
+    expect([
+      ...healthSchema.properties.coverage.properties.notEvaluated.items.enum
+    ].sort()).toEqual([...CATALOG_HEALTH_NOT_EVALUATED_DIMENSIONS].sort());
   });
 
   it('rejects undeclared top-level fields so API drift is explicit', async () => {
