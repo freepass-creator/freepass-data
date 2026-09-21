@@ -1,14 +1,29 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import Fastify from 'fastify';
 import { Ajv2020 } from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
 import catalogSchema from '../../contracts/catalog-v1.schema.json' with { type: 'json' };
 import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with { type: 'json' };
+import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import type { ProjectionStore } from '../ports/catalog-store.js';
+import { readCatalogDataHealth } from '../application/catalog-health.js';
 
-export type ConsumerBinding = { id: string; projectionId: 'erp-public'; token: string };
+export type ConsumerCapability = 'catalog' | 'catalog-health';
+export type ConsumerBinding = {
+  id: string;
+  projectionId: 'erp-public';
+  token: string;
+  capabilities?: ConsumerCapability[];
+};
+type RegisteredConsumerBinding = Omit<ConsumerBinding, 'capabilities'> & {
+  capabilities: ConsumerCapability[];
+};
+type CatalogDataHealthStore =
+  Parameters<typeof readCatalogDataHealth>[0] &
+  Parameters<typeof readCatalogDataHealth>[1];
 
 /** Server-owned registrations; a request can never select a collection or projection. */
-export function parseConsumerBindings(raw: string | undefined): ConsumerBinding[] {
+export function parseConsumerBindings(raw: string | undefined): RegisteredConsumerBinding[] {
   if (!raw) throw new Error('FREEPASS_DATA_CONSUMERS_JSON is required');
   const entries: unknown = JSON.parse(raw);
   if (!Array.isArray(entries) || !entries.length) throw new Error('Consumer registrations must be a non-empty array');
@@ -26,9 +41,32 @@ export function parseConsumerBindings(raw: string | undefined): ConsumerBinding[
       throw new Error('Each consumer needs a distinct service token of at least 32 characters');
     }
     if (ids.has(item.id) || tokens.has(item.token)) throw new Error('Duplicate consumer ID or shared service token');
+    const capabilities: ConsumerCapability[] = item.capabilities === undefined
+      ? ['catalog']
+      : (() => {
+          if (!Array.isArray(item.capabilities) || item.capabilities.length === 0) {
+            throw new Error('Consumer capabilities must be a non-empty array');
+          }
+          const allowed = new Set<ConsumerCapability>(['catalog', 'catalog-health']);
+          const values = item.capabilities.map((value) => {
+            if (typeof value !== 'string' || !allowed.has(value as ConsumerCapability)) {
+              throw new Error('Unsupported consumer capability');
+            }
+            return value as ConsumerCapability;
+          });
+          if (new Set(values).size !== values.length) {
+            throw new Error('Duplicate consumer capability');
+          }
+          return values;
+        })();
     ids.add(item.id);
     tokens.add(item.token);
-    return { id: item.id, projectionId: item.projectionId, token: item.token };
+    return {
+      id: item.id,
+      projectionId: item.projectionId,
+      token: item.token,
+      capabilities
+    };
   });
 }
 
@@ -45,13 +83,16 @@ const digest = (value: unknown) => hash(JSON.stringify(canonical(value))).toStri
 export function createConsumerGateway(
   store: Pick<ProjectionStore, 'getActive' | 'getManifest'>,
   bindings: ConsumerBinding[],
+  healthStore?: CatalogDataHealthStore,
 ) {
   // Validate again for callers constructing registrations without the environment parser.
   const registered = new Map(parseConsumerBindings(JSON.stringify(bindings)).map((item) => [item.id, item]));
   const app = Fastify({ logger: false });
   const ajv = new Ajv2020({ strict: false });
+  addFormats(ajv);
   ajv.addSchema(catalogSchema);
   const validateData = ajv.compile(erpViewSchema);
+  const validateHealth = ajv.compile(healthSchema);
   app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
   app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/catalog', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -60,6 +101,9 @@ export function createConsumerGateway(
     const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
     if (!binding || !matches) {
       return reply.code(401).send({ code: 'UNAUTHORIZED' });
+    }
+    if (!binding.capabilities.includes('catalog')) {
+      return reply.code(403).send({ code: 'FORBIDDEN' });
     }
     const release = await store.getActive(binding.projectionId);
     if (!release) return reply.code(503).send({ code: 'NO_ACTIVE_RELEASE' });
@@ -85,6 +129,39 @@ export function createConsumerGateway(
         revision: release.canonicalRevision, generatedAt: release.generatedAt, activatedAt: release.activatedAt,
       },
     };
+  });
+  app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/catalog-health', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const binding = registered.get(request.params.consumerId);
+    const supplied = request.headers.authorization ?? '';
+    const matches = timingSafeEqual(
+      hash(supplied),
+      hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
+    );
+    if (!binding || !matches) {
+      return reply.code(401).send({ code: 'UNAUTHORIZED' });
+    }
+    if (!binding.capabilities.includes('catalog-health')) {
+      return reply.code(403).send({ code: 'FORBIDDEN' });
+    }
+    if (!healthStore) {
+      return reply.code(503).send({ code: 'HEALTH_READER_UNAVAILABLE' });
+    }
+
+    try {
+      const report = await readCatalogDataHealth(
+        healthStore,
+        healthStore
+      );
+      if (!validateHealth(report)) {
+        return reply.code(503).send({ code: 'HEALTH_CONTRACT_INVALID' });
+      }
+      return reply
+        .code(report.status === 'BLOCKED' ? 503 : 200)
+        .send(report);
+    } catch {
+      return reply.code(503).send({ code: 'HEALTH_READ_FAILED' });
+    }
   });
   return app;
 }
