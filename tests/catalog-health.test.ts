@@ -5,7 +5,7 @@ import { seedDemoCatalog } from '../src/demo-seed.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 
 describe('Catalog Data Health v1', () => {
-  it('reports a valid release as DEGRADED while lineage content integrity is not yet provable', async () => {
+  it('reports a valid release as HEALTHY when all projection digests match', async () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
     const release = await buildErpPublicProjection(
@@ -20,7 +20,7 @@ describe('Catalog Data Health v1', () => {
       '2026-09-21T10:01:00.000Z'
     );
 
-    expect(report.status).toBe('DEGRADED');
+    expect(report.status).toBe('HEALTHY');
     expect(report.counts).toMatchObject({
       vehicleModels: 1,
       vehicleAssets: 1,
@@ -47,11 +47,12 @@ describe('Catalog Data Health v1', () => {
       productCount: 1,
       dataPayloadDigest: { status: 'PASS' },
       canonicalInputDigest: { status: 'PASS' },
-      lineageContentIntegrity: { status: 'NOT_EVALUATED' }
+      lineageContentIntegrity: { status: 'PASS' }
     });
     expect(report.checks.activeProjection.expectedEvidenceCount)
       .toBe(report.checks.activeProjection.actualEvidenceCount);
-    expect(report.coverage.notEvaluated).toContain('PROJECTION_LINEAGE_CONTENT_INTEGRITY');
+    expect(report.coverage.evaluated).toContain('PROJECTION_LINEAGE_CONTENT_INTEGRITY');
+    expect(report.coverage.notEvaluated).not.toContain('PROJECTION_LINEAGE_CONTENT_INTEGRITY');
     expect(report.coverage.notEvaluated).toContain('CONSISTENT_SNAPSHOT');
   });
 
@@ -219,7 +220,45 @@ describe('Catalog Data Health v1', () => {
     }));
   });
 
-  it('does not claim lineage content integrity when content changes but count stays equal', async () => {
+  it('keeps a legacy manifest without lineage digest as DEGRADED and NOT_EVALUATED', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-21T10:00:00.000Z'
+    );
+
+    const legacyProjection = {
+      getActive: store.getActive.bind(store),
+      getManifest: async (releaseId: string) => {
+        const manifest = await store.getManifest(releaseId);
+        if (!manifest) return null;
+        const { fieldEvidenceDigest: _legacyOmitted, ...legacyManifest } = manifest;
+        return legacyManifest;
+      },
+      listProjectionLineage: store.listProjectionLineage.bind(store)
+    };
+
+    const report = await readCatalogDataHealth(
+      store,
+      legacyProjection,
+      '2026-09-21T10:01:00.000Z'
+    );
+
+    expect(report.status).toBe('DEGRADED');
+    expect(report.checks.activeProjection.lineageContentIntegrity).toMatchObject({
+      status: 'NOT_EVALUATED',
+      stored: null
+    });
+    expect(report.coverage.notEvaluated).toContain('PROJECTION_LINEAGE_CONTENT_INTEGRITY');
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING',
+      severity: 'WARNING'
+    }));
+  });
+
+  it('blocks same-count lineage content tamper with the manifest digest', async () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
     await buildErpPublicProjection(
@@ -256,12 +295,12 @@ describe('Catalog Data Health v1', () => {
     expect(report.checks.activeProjection.expectedEvidenceCount)
       .toBe(report.checks.activeProjection.actualEvidenceCount);
     expect(report.checks.activeProjection.lineageContentIntegrity).toMatchObject({
-      status: 'NOT_EVALUATED'
+      status: 'FAIL'
     });
-    expect(report.status).toBe('DEGRADED');
+    expect(report.status).toBe('BLOCKED');
     expect(report.issues).toContainEqual(expect.objectContaining({
-      code: 'PROJECTION_LINEAGE_CONTENT_INTEGRITY_NOT_EVALUATED',
-      severity: 'WARNING'
+      code: 'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH',
+      severity: 'ERROR'
     }));
   });
 });
