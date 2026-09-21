@@ -230,7 +230,7 @@ describe('Catalog V1 vertical slice', () => {
       store,
       tamperingProjection,
       '2026-09-20T10:00:00.000Z'
-    )).rejects.toThrow('Projection field evidence digest mismatch');
+    )).rejects.toThrow('EVIDENCE_DIGEST_MISMATCH');
 
     expect(await store.getActive('erp-public')).toBeNull();
   });
@@ -268,7 +268,7 @@ describe('Catalog V1 vertical slice', () => {
       store,
       activationTamperProjection,
       '2026-09-20T10:00:00.000Z'
-    )).rejects.toThrow('Projection field evidence digest mismatch');
+    )).rejects.toThrow('EVIDENCE_DIGEST_MISMATCH');
 
     expect(await store.getActive('erp-public')).toBeNull();
   });
