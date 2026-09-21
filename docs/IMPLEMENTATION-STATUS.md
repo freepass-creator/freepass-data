@@ -71,8 +71,13 @@ The implementation has moved beyond the old Next list. The highest-value missing
 
 ## Local execution
 
+Windows setup and current local verification: [Local development](LOCAL-DEVELOPMENT.md).
+The local launcher forces memory mode and loopback binding. Dependency versions
+are pinned in `package-lock.json`. The memory-only Console serves at `/console`
+and provides a live Catalog read plus guarded Offer monthly-rent command flow.
+
 ```bash
-npm install
+npm ci
 npm run check
 npm run dev
 ```

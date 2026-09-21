@@ -496,7 +496,9 @@ export async function createFirestoreDataStore() {
   if (!getApps().length) {
     initializeApp({
       credential: applicationDefault(),
-      projectId: process.env.FIREBASE_PROJECT_ID
+      ...(process.env.FIREBASE_PROJECT_ID !== undefined
+        ? { projectId: process.env.FIREBASE_PROJECT_ID }
+        : {})
     });
   }
   return new FirestoreDataStore(getFirestore());

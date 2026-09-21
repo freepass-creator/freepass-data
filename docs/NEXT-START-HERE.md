@@ -136,6 +136,14 @@ Do not perform writer cutover in the same step.
 
 ## 5. Coordination rule
 
+### Local working copy — 2026-09-21
+
+Local runtime fixes based on main `fea18ce15f523d41a9382e7ae79e702a58d3afae`
+are on `codex/local-runtime-baseline` in `C:\dev\freepass-data`.
+See [Local development](LOCAL-DEVELOPMENT.md) for Windows setup, validation,
+and the separate API/worker memory-store limitation. These local changes are
+not a production rollout. Open PR #12 covers Admin projection work separately.
+
 Before each new change:
 
 1. read `docs/IMPLEMENTATION-STATUS.md`

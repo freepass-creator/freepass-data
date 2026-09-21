@@ -1,5 +1,7 @@
 import Fastify from 'fastify';
-import Ajv2020 from 'ajv/dist/2020.js';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import updateOfferPriceSchema from '../../contracts/update-offer-price.schema.json' with { type: 'json' };
 import { createRuntimeStores } from '../bootstrap.js';
@@ -11,21 +13,35 @@ import {
   InvalidCommandError,
   RevisionConflictError,
   buildErpPublicProjection,
+  processOneOutboxEvent,
   updateOfferPrice
 } from '../application/catalog.js';
 
 const app = Fastify({ logger: true });
 const ajv = new Ajv2020({ allErrors: true, strict: false });
-addFormats(ajv);
+addFormats.default(ajv);
 const validateUpdateOfferPrice = ajv.compile(updateOfferPriceSchema);
 const stores = await createRuntimeStores();
+const driver = process.env.FREEPASS_DATA_DRIVER ?? 'memory';
+const isLocalMemory = driver === 'memory';
 
 await buildErpPublicProjection(stores.catalog, stores.projections);
+
+app.get('/', async (_request, reply) => {
+  if (!isLocalMemory) return reply.code(404).send({ code: 'NOT_FOUND' });
+  return reply.redirect('/console');
+});
+
+app.get('/console', async (_request, reply) => {
+  if (!isLocalMemory) return reply.code(404).send({ code: 'NOT_FOUND' });
+  const html = await readFile(path.join(process.cwd(), 'preview', 'index.html'), 'utf8');
+  return reply.type('text/html; charset=utf-8').send(html);
+});
 
 app.get('/health', async () => ({
   service: 'freepass-data',
   status: 'ok',
-  driver: process.env.FREEPASS_DATA_DRIVER ?? 'memory'
+  driver
 }));
 
 app.get('/v1/views/erp-public/products', async (_request, reply) => {
@@ -62,6 +78,17 @@ app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {
         kind: 'SERVICE'
       }
     });
+    if (isLocalMemory) {
+      const delivery = await processOneOutboxEvent(
+        stores.catalog,
+        stores.outbox,
+        stores.projections,
+        { workerId: 'worker:local-console' }
+      );
+      if (delivery !== 'DONE') {
+        request.log.warn({ delivery }, 'Local projection refresh did not complete');
+      }
+    }
     return reply.send(receipt);
   } catch (error) {
     if (error instanceof RevisionConflictError) {
@@ -104,4 +131,4 @@ app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {
 });
 
 const port = Number(process.env.PORT ?? 8787);
-await app.listen({ port, host: '0.0.0.0' });
+await app.listen({ port, host: process.env.HOST ?? '0.0.0.0' });
