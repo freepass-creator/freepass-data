@@ -1,6 +1,7 @@
 # 2026-09-21 손오공 픽업구독 축소와 거짓 합격 방지
 
-Status: **OPEN INCIDENT / HOLD UNTIL SOURCE RECONCILIATION**  
+Status: **OPEN INCIDENT / HOLD UNTIL SOURCE RECONCILIATION**
+
 Scope: 손오공 API → Firestore 원자 → F01 판매시트 → F86 채널시트
 
 ## 사고 요약
