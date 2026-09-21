@@ -403,6 +403,19 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async activate(releaseId: string) {
     const release = this.releases.get(releaseId);
     if (!release || release.status !== 'READY') throw new Error('Only READY release can activate');
+    const manifest = this.manifests.get(releaseId);
+    if (!manifest) throw new Error('Release manifest not found');
+    const evidence = [...this.projectionLineage.values()]
+      .filter((item) => item.releaseId === releaseId);
+    if (evidence.length !== manifest.fieldEvidenceCount) {
+      throw new Error('Projection field evidence count mismatch');
+    }
+    if (!manifest.fieldEvidenceDigest) {
+      throw new Error('Projection release manifest requires fieldEvidenceDigest');
+    }
+    if (stableRecordSetDigest(evidence) !== manifest.fieldEvidenceDigest) {
+      throw new Error('Projection field evidence digest mismatch');
+    }
     const previousId = this.active.get(release.projectionId);
     const previous = previousId ? this.releases.get(previousId) : undefined;
     if (previous) previous.status = 'READY';
