@@ -153,4 +153,8 @@ Before each new change:
 5. make the smallest isolated change
 6. leave an updated next-start-here note when the work packet ends
 
+### 운영 사고 메모
+
+- [2026-09-21 손오공 픽업구독 축소와 거짓 합격 방지](INCIDENT-2026-09-21-STALE-UPSTREAM-FALSE-PASS.md): 하류 `원자 → F01 → F86` 일치만으로 원천 정합성을 합격 처리하지 않는다. 현재 원천 관찰부터 차량번호·상태를 양방향 대조한다.
+
 This file exists so another session can continue without re-discovering or re-creating the project.
