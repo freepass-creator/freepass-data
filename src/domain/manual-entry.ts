@@ -1,3 +1,4 @@
+import type { ExecutionWriterRef } from './writer-ownership.js';
 import type {
   ActorRef,
   CommercialType,
