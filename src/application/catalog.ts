@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { stableDigest, stableRecordSetDigest, stableValue } from './stable-digest.js';
+import { stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
 import type {
   ActorRef,
   ErpPublicProduct,
