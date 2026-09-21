@@ -1,6 +1,7 @@
 import type { CatalogStore, ProjectionEvidenceSnapshotStore, ProjectionStore } from '../ports/catalog-store.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import { readActiveProjectionEvidence, verifyProjectionReleaseIntegrity } from './projection-integrity.js';
+import { readActiveProjectionEvidence } from './projection-evidence-reader.js';
+import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 
 export type CatalogHealthStatus = 'HEALTHY' | 'DEGRADED' | 'BLOCKED';
 export type CatalogHealthCheckStatus = 'PASS' | 'WARN' | 'FAIL';
