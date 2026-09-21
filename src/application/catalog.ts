@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
-import { verifyProjectionReleaseIntegrity } from './projection-integrity.js';
+import { readActiveProjectionEvidence, verifyProjectionReleaseIntegrity } from './projection-integrity.js';
 import type {
   ActorRef,
   ErpPublicProduct,
@@ -564,24 +564,25 @@ export async function buildErpPublicProjection(
   const inputDigest = stableDigest(canonicalInputs);
   const dataDigest = stableDigest(data);
   const canonicalRevision = Math.max(0, ...canonicalInputs.map((x) => x.revision));
-  const currentActive = await projections.getActive('erp-public');
+  const currentEvidence = await readActiveProjectionEvidence(
+    projections,
+    'erp-public'
+  );
+  const currentActive = currentEvidence.release;
   if (
     currentActive &&
     currentActive.status === 'ACTIVE' &&
     currentActive.inputDigest === inputDigest &&
-    currentActive.dataDigest === dataDigest
+    currentActive.dataDigest === dataDigest &&
+    currentEvidence.manifest
   ) {
-    const currentManifest = await projections.getManifest(currentActive.releaseId);
-    if (currentManifest) {
-      const currentLineage = await projections.listProjectionLineage(currentActive.releaseId);
-      const integrity = verifyProjectionReleaseIntegrity(
-        currentActive,
-        currentManifest,
-        currentLineage
-      );
-      if (integrity.valid) {
-        return currentActive;
-      }
+    const integrity = verifyProjectionReleaseIntegrity(
+      currentActive,
+      currentEvidence.manifest,
+      currentEvidence.lineage
+    );
+    if (integrity.valid) {
+      return currentActive;
     }
   }
 
