@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { buildErp5CanonicalDryRun, captureErp5Source, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
+import { buildErp5CanonicalDryRun, captureErp5Source, compareErp5ProductCaptures, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
 const readTime = '2026-09-21T10:00:00.123456Z';
 function doc(collection = 'products', id = 'synthetic') {
   return {
@@ -77,6 +77,45 @@ describe('ERP5 same-transaction raw capture', () => {
     expect(first.reviewAxisCounts.IDENTITY).toBe(1);
     expect(Object.values(first.reviewComplexityCounts).reduce((sum, count) => sum + count, 0)).toBe(2);
     expect('raw' in first.records[0]!).toBe(false);
+  });
+
+  it('classifies full-capture additions, field changes, unchanged and missing records without deleting', async () => {
+    const changedBefore = doc('products', 'changed');
+    const changedAfter = structuredClone(changedBefore);
+    (changedAfter.fields as any).vehicle_status = { stringValue: '출고불가' };
+    (changedAfter.fields as any).status_kind = { stringValue: '불가' };
+    (changedAfter.fields as any).listable = { booleanValue: false };
+    const previous = await captureErp5Source(fake({ products: [doc('products', 'same'), changedBefore, doc('products', 'missing')] }).rpc);
+    const current = await captureErp5Source(fake({ products: [doc('products', 'same'), changedAfter, doc('products', 'added')] }).rpc);
+    const delta = compareErp5ProductCaptures(previous, current);
+
+    expect(delta.counts).toEqual({ ADDED: 1, CHANGED: 1, UNCHANGED: 1, MISSING_FROM_SOURCE: 1 });
+    expect(delta.inventoryTransitionCount).toBe(1);
+    expect(delta.status).toBe('HOLD');
+    expect(delta.canonicalWriteAuthorized).toBe(false);
+    expect(delta.destructiveActionAuthorized).toBe(false);
+    expect(delta.records.find((item) => item.sourceRecordId === 'changed')?.inventoryTransition).toEqual({
+      before: { vehicleStatus: '출고가능', listable: true },
+      after: { vehicleStatus: '출고불가', listable: false }
+    });
+    expect(delta.records.find((item) => item.sourceRecordId === 'missing')?.kind).toBe('MISSING_FROM_SOURCE');
+    expect(delta.records.every((item) => item.destructiveActionAuthorized === false)).toBe(true);
+  });
+
+  it('produces a deterministic no-change delta and rejects reversed capture order', async () => {
+    const previous = await captureErp5Source(fake().rpc);
+    const same = structuredClone(previous);
+    const first = compareErp5ProductCaptures(previous, same);
+    const second = compareErp5ProductCaptures(structuredClone(previous), structuredClone(same));
+    expect(first.digest).toBe(second.digest);
+    expect(first.status).toBe('NO_CHANGE');
+    expect(first.counts).toEqual({ ADDED: 0, CHANGED: 0, UNCHANGED: 1, MISSING_FROM_SOURCE: 0 });
+
+    const older = structuredClone(previous);
+    older.readTime = '2026-09-20T10:00:00Z';
+    const { digest: _digest, ...unsigned } = older;
+    older.digest = createHash('sha256').update(JSON.stringify(unsigned)).digest('hex');
+    expect(() => compareErp5ProductCaptures(previous, older)).toThrow('CAPTURE_ORDER_INVALID');
   });
 
   it('detects a truncated response instead of comparing its length to itself', async () => {

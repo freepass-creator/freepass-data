@@ -205,6 +205,68 @@ export function inspectErp5Capture(capture: Erp5SourceCapture) {
   };
 }
 
+export type Erp5CaptureChangeKind = 'ADDED' | 'CHANGED' | 'UNCHANGED' | 'MISSING_FROM_SOURCE';
+
+/** Compare two verified FULL collection captures. Missing records stay review-only and never imply deletion. */
+export function compareErp5ProductCaptures(previous: Erp5SourceCapture, current: Erp5SourceCapture) {
+  inspectErp5Capture(previous);
+  inspectErp5Capture(current);
+  if (Date.parse(current.readTime) < Date.parse(previous.readTime)) fail('CAPTURE_ORDER_INVALID');
+  const prefix = `${ERP5_DOCUMENTS}/products/`;
+  const index = (capture: Erp5SourceCapture) => new Map(capture.collections.products.documents.map((doc) => [
+    String(doc.name).slice(prefix.length), doc
+  ]));
+  const before = index(previous);
+  const after = index(current);
+  const ids = [...new Set([...before.keys(), ...after.keys()])].sort();
+  const readInventory = (doc: ObjectValue | undefined) => {
+    if (!doc || !object(doc.fields)) return { vehicleStatus: null, listable: null };
+    const decode = (key: string) => {
+      if (!Object.hasOwn(doc.fields!, key)) return null;
+      try { return decodeErp5Value((doc.fields as ObjectValue)[key]); } catch { return null; }
+    };
+    return { vehicleStatus: decode('vehicle_status'), listable: decode('listable') };
+  };
+  const records = ids.map((sourceRecordId) => {
+    const left = before.get(sourceRecordId);
+    const right = after.get(sourceRecordId);
+    const previousFingerprint = left ? hash(left.fields ?? {}) : null;
+    const currentFingerprint = right ? hash(right.fields ?? {}) : null;
+    const kind: Erp5CaptureChangeKind = !left ? 'ADDED' : !right ? 'MISSING_FROM_SOURCE'
+      : previousFingerprint === currentFingerprint ? 'UNCHANGED' : 'CHANGED';
+    const previousInventory = readInventory(left);
+    const currentInventory = readInventory(right);
+    const inventoryChanged = !!left && !!right
+      && JSON.stringify(previousInventory) !== JSON.stringify(currentInventory);
+    return {
+      sourceRecordId,
+      kind,
+      previousFingerprint,
+      currentFingerprint,
+      inventoryTransition: inventoryChanged ? { before: previousInventory, after: currentInventory } : null,
+      destructiveActionAuthorized: false as const
+    };
+  });
+  const counts = Object.fromEntries((['ADDED', 'CHANGED', 'UNCHANGED', 'MISSING_FROM_SOURCE'] as const)
+    .map((kind) => [kind, records.filter((record) => record.kind === kind).length])) as Record<Erp5CaptureChangeKind, number>;
+  const inventoryTransitionCount = records.filter((record) => record.inventoryTransition).length;
+  const unsigned = {
+    version: 'erp5-capture-delta/1' as const,
+    status: counts.MISSING_FROM_SOURCE || counts.CHANGED || counts.ADDED ? 'HOLD' as const : 'NO_CHANGE' as const,
+    canonicalWriteAuthorized: false as const,
+    destructiveActionAuthorized: false as const,
+    previous: { digest: previous.digest, readTime: previous.readTime, count: previous.collections.products.count },
+    current: { digest: current.digest, readTime: current.readTime, count: current.collections.products.count },
+    counts,
+    inventoryTransitionCount,
+    records
+  };
+  if (records.length !== new Set(ids).size || Object.values(counts).reduce((sum, count) => sum + count, 0) !== records.length) {
+    fail('DELTA_COVERAGE_MISMATCH');
+  }
+  return { ...unsigned, digest: hash(unsigned) };
+}
+
 export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
   const inspection = inspectErp5Capture(capture);
   const reviewAxes = [

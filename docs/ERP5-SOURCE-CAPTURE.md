@@ -110,6 +110,13 @@ readTime은 DB의 일관된 관측 시점이지 공급사 최신 수집 시각�
 `DEPOSIT`, `MILEAGE`, `POLICY`, `OTHER_DATA_QUALITY`)을 붙인다. 한 차량의 여러 문제를
 임의로 한 사유로 축소하지 않으며, stdout에는 축별 건수와 복잡도만 출력한다.
 
+같은 명령에 `--previous <previous capture.json>`을 붙이면 검증된 두 FULL 캡처의 products 전체를
+문서 ID와 원문 fields fingerprint로 비교한다. 결과는 `ADDED`, `CHANGED`, `UNCHANGED`,
+`MISSING_FROM_SOURCE`로 전수 분류하고 `vehicle_status`/`listable` 변화는 별도 inventory transition으로
+보존한다. `MISSING_FROM_SOURCE`는 삭제·판매·출고불가를 뜻하지 않으며 결과와 각 레코드 모두
+`destructiveActionAuthorized=false`다. 상세 ID와 전환 전후 값은 Git 밖의 별도 비공개 delta 파일에만
+저장하고 stdout에는 건수·digest·관측 시각만 출력한다. 이전 캡처보다 과거인 current 입력은 거부한다.
+
 최초 검토 축 감사에서 IDENTITY 24건은 모두 차량번호가 아니라 maker/model 공란이었다.
 22건은 maker와 model이 모두 공란이고 2건은 model만 공란이다. 같은 캡처의 productCode,
 carNumber에는 완전한 형제 레코드가 없었고 providerCompanyCode는 대부분 다건 공급사라
