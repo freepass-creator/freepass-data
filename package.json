@@ -7,6 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "serve:consumers": "tsx src/api/consumer-server.ts",
     "dev": "node --import tsx scripts/run-memory.mjs api",
     "worker:memory": "node --import tsx scripts/run-memory.mjs worker",
     "ingest:legacy-products": "tsx src/jobs/ingest-legacy-products.ts",

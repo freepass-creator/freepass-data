@@ -1,4 +1,4 @@
-import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
+import { getTargetFirebaseApp } from './firebase-target.js';
 import { getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type {
   AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
@@ -568,13 +568,5 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
 }
 
 export async function createFirestoreDataStore() {
-  if (!getApps().length) {
-    initializeApp({
-      credential: applicationDefault(),
-      ...(process.env.FIREBASE_PROJECT_ID !== undefined
-        ? { projectId: process.env.FIREBASE_PROJECT_ID }
-        : {})
-    });
-  }
-  return new FirestoreDataStore(getFirestore());
+  return new FirestoreDataStore(getFirestore(getTargetFirebaseApp()));
 }

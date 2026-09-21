@@ -5,6 +5,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { buildErpPublicProjection } from '../src/application/catalog.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { FirestoreDataStore } from '../src/infra/firestore-store.js';
+import { dataHealthReader } from '../src/infra/firestore-data-health-reader.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { stableRecordSetDigest } from '../src/shared/stable-digest.js';
 
@@ -25,7 +26,7 @@ function createEmulatorFixture() {
 
 describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () => {
   it('promotes a multi-chunk evidence set and reads it atomically', async () => {
-    const { app, store } = createEmulatorFixture();
+    const { app, db, store } = createEmulatorFixture();
 
     try {
       const memory = new MemoryDataStore();
@@ -41,7 +42,7 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
       throw new Error('projection fixture missing');
     }
 
-    const releaseId = `rel_emulator_${randomUUID()}`;
+    const releaseId = `rel_${randomUUID()}`;
     const manifestId = `manifest_${releaseId}`;
     const lineage = Array.from({ length: 801 }, (_, index) => ({
       ...structuredClone(originalLineage[index % originalLineage.length]!),
@@ -71,8 +72,18 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
     const snapshot = await store.getActiveEvidenceSnapshot('erp-public');
     expect(snapshot.consistency).toBe('ATOMIC');
     expect(snapshot.release?.releaseId).toBe(releaseId);
-      expect(snapshot.manifest?.fieldEvidenceCount).toBe(801);
-      expect(snapshot.lineage).toHaveLength(801);
+    expect(snapshot.manifest?.fieldEvidenceCount).toBe(801);
+    expect(snapshot.lineage).toHaveLength(801);
+
+    const readonly = dataHealthReader(db);
+    const readonlySnapshot = await readonly.getActiveEvidenceSnapshot('erp-public');
+    expect(readonlySnapshot.consistency).toBe('ATOMIC');
+    expect(readonlySnapshot.release?.releaseId).toBe(releaseId);
+    expect(readonlySnapshot.manifest?.fieldEvidenceCount).toBe(801);
+    expect(readonlySnapshot.lineage).toHaveLength(801);
+    expect('stage' in readonly).toBe(false);
+    expect('activate' in readonly).toBe(false);
+    expect('transact' in readonly).toBe(false);
     } finally {
       await deleteApp(app);
     }
@@ -95,7 +106,7 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
       throw new Error('projection fixture missing');
     }
 
-    const releaseId = `rel_emulator_tamper_${randomUUID()}`;
+    const releaseId = `rel_${randomUUID()}`;
     const manifestId = `manifest_${releaseId}`;
     const lineage = originalLineage.map((item, index) => ({
       ...structuredClone(item),
