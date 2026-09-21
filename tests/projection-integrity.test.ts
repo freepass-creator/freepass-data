@@ -219,6 +219,52 @@ describe('Projection release integrity verifier', () => {
     )).toThrow('RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH');
   });
 
+  it('rejects lineage with a wrong release identity even when its digest is recomputed', async () => {
+    const { release, manifest, lineage } = await fixture();
+    const changed = lineage.map((item) => ({
+      ...structuredClone(item),
+      releaseId: 'rel_wrong'
+    }));
+    const changedManifest = {
+      ...manifest,
+      fieldEvidenceDigest: stableRecordSetDigest(changed)
+    };
+
+    const result = verifyProjectionReleaseIntegrity(
+      release,
+      changedManifest,
+      changed
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.failures).toContain('EVIDENCE_RELEASE_ID_MISMATCH');
+    expect(result.failures).not.toContain('EVIDENCE_DIGEST_MISMATCH');
+  });
+
+  it('rejects duplicate lineage record IDs even when count and digest agree', async () => {
+    const { release, manifest, lineage } = await fixture();
+    if (lineage.length < 2) throw new Error('lineage fixture too small');
+
+    const changed = structuredClone(lineage);
+    changed[1] = {
+      ...changed[1]!,
+      lineageRecordId: changed[0]!.lineageRecordId
+    };
+    const changedManifest = {
+      ...manifest,
+      fieldEvidenceDigest: stableRecordSetDigest(changed)
+    };
+
+    const result = verifyProjectionReleaseIntegrity(
+      release,
+      changedManifest,
+      changed
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.failures).toContain('EVIDENCE_RECORD_ID_DUPLICATE');
+  });
+
   it('treats legacy manifests without lineage digest as incomplete evidence', async () => {
     const { release, manifest, lineage } = await fixture();
     const { fieldEvidenceDigest: _legacyOmitted, ...legacyManifest } = manifest;
