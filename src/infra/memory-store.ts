@@ -427,6 +427,29 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     const id = this.active.get(projectionId);
     return id ? copy(this.releases.get(id) ?? null) : null;
   }
+  async getActiveEvidenceSnapshot(projectionId: string) {
+    const releaseId = this.active.get(projectionId);
+    if (!releaseId) {
+      return {
+        projectionId,
+        release: null,
+        manifest: null,
+        lineage: [],
+        consistency: 'ATOMIC' as const
+      };
+    }
+    const release = this.releases.get(releaseId) ?? null;
+    const manifest = this.manifests.get(releaseId) ?? null;
+    const lineage = [...this.projectionLineage.values()]
+      .filter((item) => item.releaseId === releaseId);
+    return copy({
+      projectionId,
+      release,
+      manifest,
+      lineage,
+      consistency: 'ATOMIC' as const
+    });
+  }
   async getManifest(releaseId: string) {
     return copy(this.manifests.get(releaseId) ?? null);
   }
