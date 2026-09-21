@@ -149,7 +149,10 @@ export type ActiveProjectionEvidenceObservation = {
 };
 
 export async function readActiveProjectionEvidence(
-  projections: ProjectionStore & Partial<ProjectionEvidenceSnapshotStore>,
+  projections: Pick<
+    ProjectionStore,
+    'getActive' | 'getManifest' | 'listProjectionLineage'
+  > & Partial<ProjectionEvidenceSnapshotStore>,
   projectionId: string
 ): Promise<ActiveProjectionEvidenceObservation> {
   if (typeof projections.getActiveEvidenceSnapshot === 'function') {
