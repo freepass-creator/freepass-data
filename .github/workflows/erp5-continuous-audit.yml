@@ -1,0 +1,108 @@
+name: ERP5 continuous read-only audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */2 * * *'
+
+concurrency:
+  group: erp5-continuous-read-only-audit
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ERP5_PROJECT_ID: freepasserp5
+      EVIDENCE_BUCKET: ${{ vars.ERP5_EVIDENCE_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Fail closed until the read-only identity and private bucket are configured
+        shell: bash
+        run: |
+          test -n '${{ vars.ERP5_WIF_PROVIDER }}'
+          test -n '${{ vars.ERP5_READ_SERVICE_ACCOUNT }}'
+          test -n "$EVIDENCE_BUCKET"
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.ERP5_WIF_PROVIDER }}
+          service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 900s
+      - name: Capture the current FULL Firestore snapshot
+        id: capture
+        shell: bash
+        env:
+          FREEPASS_ERP5_READ_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set +e
+          npx tsx src/jobs/inspect-erp5-source.ts --live-read-only > capture-summary.json
+          code=$?
+          set -e
+          test "$code" -eq 2
+          capture_path=$(jq -r '.privateCapturePath' capture-summary.json)
+          test -f "$capture_path"
+          echo "path=$capture_path" >> "$GITHUB_OUTPUT"
+          echo "dir=$(dirname "$capture_path")" >> "$GITHUB_OUTPUT"
+      - name: Load the last accepted observation pointer
+        id: previous
+        shell: bash
+        run: |
+          previous_dir="$HOME/.codex/private/freepass-data-source-captures/previous"
+          mkdir -p "$previous_dir"
+          if gcloud storage cp "gs://$EVIDENCE_BUCKET/latest.json" "$previous_dir/latest.json" 2>/dev/null; then
+            uri=$(jq -r '.captureUri' "$previous_dir/latest.json")
+            test "$uri" != null
+            gcloud storage cp "$uri" "$previous_dir/capture.json"
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+            echo "path=$previous_dir/capture.json" >> "$GITHUB_OUTPUT"
+          else
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build immutable dry-run and delta evidence
+        shell: bash
+        run: |
+          set +e
+          if [ '${{ steps.previous.outputs.available }}' = true ]; then
+            npm run dry-run:erp5-canonical -- --capture '${{ steps.capture.outputs.path }}' --previous '${{ steps.previous.outputs.path }}' > dry-run-summary.json
+          else
+            npm run dry-run:erp5-canonical -- --capture '${{ steps.capture.outputs.path }}' > dry-run-summary.json
+          fi
+          code=$?
+          set -e
+          test "$code" -eq 2
+      - name: Persist immutable evidence and advance only the observation pointer
+        shell: bash
+        run: |
+          run_uri="gs://$EVIDENCE_BUCKET/runs/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          gcloud storage cp '${{ steps.capture.outputs.dir }}'/*.json "$run_uri/source/"
+          gcloud storage cp capture-summary.json dry-run-summary.json "$run_uri/"
+          capture_uri="$run_uri/source/capture.json"
+          jq -n \
+            --arg captureUri "$capture_uri" \
+            --arg sourceDigest "$(jq -r '.sourceDigest' capture-summary.json)" \
+            --arg readTime "$(jq -r '.readTime' capture-summary.json)" \
+            --arg runId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            '{version:"erp5-continuous-pointer/1",captureUri:$captureUri,sourceDigest:$sourceDigest,readTime:$readTime,runId:$runId}' \
+            > latest.json
+          gcloud storage cp latest.json "gs://$EVIDENCE_BUCKET/latest.json"
+      - name: Retain non-sensitive summaries for operator inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: erp5-audit-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            capture-summary.json
+            dry-run-summary.json
+          retention-days: 90
+          if-no-files-found: error
