@@ -42,7 +42,16 @@ A consumer does not infer business meaning by joining internal Firestore collect
 
 Shared-data writes use commands.
 
-`Authenticated identity -> Authority -> Expected Revision -> Validation -> Transaction -> Revision Snapshot -> Audit -> Outbox -> Receipt`
+`Authenticated identity -> Actor -> Execution Writer -> Writer Ownership -> Authority -> Expected Revision -> Validation -> Transaction -> Revision Snapshot -> Audit -> Outbox -> Receipt`
+
+`actor` and `writer` are different evidence:
+
+- actor = whose business intent caused the command
+- execution writer = which service actually performs the persistence mutation
+
+A human operator may act in FreePass Admin while `service:freepass-data` remains the exclusive Catalog execution writer.
+
+Writer ownership is revisioned. Before cutover the compatibility baseline is `SHARED_MIGRATION`; after the controlled transfer it becomes `EXCLUSIVE` and the previous writer is rejected before idempotency replay or mutation.
 
 No screen or connected application is considered successful merely because a Firestore document write returned successfully.
 
@@ -174,11 +183,15 @@ Implemented:
 - exact Release Manifest with Canonical input revisions and input/data digests
 - field-level Canonical → Projection provenance
 - queryable append-only Canonical Revision History
+- reviewed source-change update for existing Canonical bindings
+- Catalog writer ownership state and controlled SHARED_MIGRATION → EXCLUSIVE transfer
+- old-writer blocking across canonicalization/manual/source-refresh/price mutation paths
+- execution-writer evidence in receipts/audit
 
 Next:
 
-1. reviewed source-change update for existing Canonical bindings
-2. more field-specific edit commands driven by Authority Registry
-3. authenticated service/user identity and IAM
+1. authenticated service/user identity and IAM
+2. bind semantic execution writer to verified runtime identity
+3. ERP.com shadow/read pilot
 4. Control Plane API/Console surfaces
 5. consumer SDK/contracts and gradual removal of direct Firebase access
