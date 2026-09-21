@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import { assertDevelopmentApi } from './runtime-policy.js';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Ajv2020 } from 'ajv/dist/2020.js';
@@ -17,6 +18,7 @@ import {
   updateOfferPrice
 } from '../application/catalog.js';
 
+assertDevelopmentApi();
 const app = Fastify({ logger: true });
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 addFormats.default(ajv);
@@ -25,7 +27,8 @@ const stores = await createRuntimeStores();
 const driver = process.env.FREEPASS_DATA_DRIVER ?? 'memory';
 const isLocalMemory = driver === 'memory';
 
-await buildErpPublicProjection(stores.catalog, stores.projections);
+// Booting a reader must never publish an empty or unreviewed operational release.
+if (isLocalMemory) await buildErpPublicProjection(stores.catalog, stores.projections);
 
 app.get('/', async (_request, reply) => {
   if (!isLocalMemory) return reply.code(404).send({ code: 'NOT_FOUND' });
@@ -63,6 +66,9 @@ app.get('/v1/views/erp-public/products', async (_request, reply) => {
 });
 
 app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {
+  if (!isLocalMemory) {
+    return reply.code(503).send({ code: 'COMMAND_IDENTITY_NOT_CONFIGURED' });
+  }
   const params = request.params as { offerId: string };
   const body = request.body as Record<string, unknown>;
   if (!validateUpdateOfferPrice(body)) {
@@ -131,4 +137,4 @@ app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {
 });
 
 const port = Number(process.env.PORT ?? 8787);
-await app.listen({ port, host: process.env.HOST ?? '0.0.0.0' });
+await app.listen({ port, host: process.env.HOST ?? '127.0.0.1' });

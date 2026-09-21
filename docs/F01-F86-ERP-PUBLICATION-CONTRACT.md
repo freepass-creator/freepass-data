@@ -2,6 +2,8 @@
 
 사용자 2026-09-21 정정: 중앙 정본 한 곳을 Google Sheets 두 개, ERP.com과 그 외 화이트라벨들, Admin이 가져다 쓰는 구조다. 소비처를 고정된 세 곳으로 세거나 Admin·추가 화이트라벨을 제외하지 않는다.
 
+중앙 Firebase 프로젝트는 사용자 직접 지정한 `freepasserp5`다. 실제 저장소/읽기 서버의 연결 및 아직 전환하지 못한 항목은 [ERP5 소비처 런타임](ERP5-CONSUMER-RUNTIME.md)에 기록한다.
+
 ```text
 원천/API → FreePass Data 중앙 정본
                       ├─ Google Sheets F01 (표준 표시)
