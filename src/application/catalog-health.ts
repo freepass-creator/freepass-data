@@ -40,7 +40,10 @@ export const CATALOG_HEALTH_ISSUE_CODES = [
   'ACTIVE_RELEASE_CANONICAL_REVISION_MISMATCH',
   'ACTIVE_RELEASE_CANONICAL_INPUT_MISSING',
   'ACTIVE_RELEASE_CANONICAL_INPUT_STALE',
+  'ACTIVE_RELEASE_CANONICAL_INPUT_AHEAD',
   'ACTIVE_RELEASE_CANONICAL_INPUT_VALIDATION_MISMATCH',
+  'CANONICAL_REVISION_SNAPSHOT_MISSING',
+  'CANONICAL_REVISION_SNAPSHOT_DRIFT',
   'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION',
 ] as const;
 
@@ -89,6 +92,11 @@ export type CatalogHealthReport = {
       status: CatalogHealthCheckStatus;
       invalidEntityCount: number;
     };
+    canonicalRevisionIntegrity: {
+      status: CatalogHealthCheckStatus;
+      missingSnapshotCount: number;
+      driftCount: number;
+    };
     referentialIntegrity: {
       status: CatalogHealthCheckStatus;
       issueCount: number;
@@ -97,6 +105,7 @@ export type CatalogHealthReport = {
       status: CatalogHealthCheckStatus;
       missingCount: number;
       staleRevisionCount: number;
+      aheadRevisionCount: number;
       validationMismatchCount: number;
     };
     activeProjection: {
@@ -130,6 +139,7 @@ export type CatalogHealthReport = {
   coverage: {
     evaluated: Array<
       | 'CANONICAL_VALIDATION'
+      | 'CANONICAL_REVISION_INTEGRITY'
       | 'REFERENTIAL_INTEGRITY'
       | 'ACTIVE_PROJECTION_METADATA'
       | 'ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST'
@@ -155,6 +165,7 @@ type CatalogHealthCatalogStore = Pick<
   | 'listProducts'
   | 'listOffers'
   | 'listPolicies'
+  | 'listRevisionHistory'
 >;
 
 type CatalogHealthProjectionStore = Pick<
@@ -190,6 +201,7 @@ const projectionIssueCodes = new Set<CatalogHealthIssueCode>([
   'ACTIVE_RELEASE_CANONICAL_REVISION_MISMATCH',
   'ACTIVE_RELEASE_CANONICAL_INPUT_MISSING',
   'ACTIVE_RELEASE_CANONICAL_INPUT_STALE',
+  'ACTIVE_RELEASE_CANONICAL_INPUT_AHEAD',
   'ACTIVE_RELEASE_CANONICAL_INPUT_VALIDATION_MISMATCH',
   'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION'
 ]);
@@ -219,12 +231,21 @@ export async function readCatalogDataHealth(
   projections: CatalogHealthProjectionStore,
   now = new Date().toISOString()
 ): Promise<CatalogHealthReport> {
-  const [models, assets, products, offers, policies, projectionEvidence] = await Promise.all([
+  const [
+    models,
+    assets,
+    products,
+    offers,
+    policies,
+    revisionHistory,
+    projectionEvidence
+  ] = await Promise.all([
     catalog.listVehicleModels(),
     catalog.listVehicleAssets(),
     catalog.listProducts(),
     catalog.listOffers(),
     catalog.listPolicies(),
+    catalog.listRevisionHistory(),
     readActiveProjectionEvidence(projections, 'erp-public')
   ]);
   const activeRelease = projectionEvidence.release;
@@ -237,21 +258,79 @@ export async function readCatalogDataHealth(
   const currentCanonicalByKey = new Map<string, {
     revision: number;
     validationStatus: string;
+    value: unknown;
   }>();
   for (const item of models) {
-    currentCanonicalByKey.set(`vehicle_model|${item.id}`, item);
+    currentCanonicalByKey.set(`vehicle_model|${item.id}`, {
+      revision: item.revision,
+      validationStatus: item.validationStatus,
+      value: item
+    });
   }
   for (const item of assets) {
-    currentCanonicalByKey.set(`vehicle_asset|${item.id}`, item);
+    currentCanonicalByKey.set(`vehicle_asset|${item.id}`, {
+      revision: item.revision,
+      validationStatus: item.validationStatus,
+      value: item
+    });
   }
   for (const item of products) {
-    currentCanonicalByKey.set(`product|${item.id}`, item);
+    currentCanonicalByKey.set(`product|${item.id}`, {
+      revision: item.revision,
+      validationStatus: item.validationStatus,
+      value: item
+    });
   }
   for (const item of offers) {
-    currentCanonicalByKey.set(`offer|${item.id}`, item);
+    currentCanonicalByKey.set(`offer|${item.id}`, {
+      revision: item.revision,
+      validationStatus: item.validationStatus,
+      value: item
+    });
   }
   for (const item of policies) {
-    currentCanonicalByKey.set(`policy|${item.id}`, item);
+    currentCanonicalByKey.set(`policy|${item.id}`, {
+      revision: item.revision,
+      validationStatus: item.validationStatus,
+      value: item
+    });
+  }
+
+  const revisionByKey = new Map(
+    revisionHistory.map((record) => [
+      `${record.entityType}|${record.entityId}|${record.revision}`,
+      record
+    ])
+  );
+  let canonicalRevisionSnapshotMissingCount = 0;
+  let canonicalRevisionSnapshotDriftCount = 0;
+
+  for (const [key, current] of currentCanonicalByKey) {
+    const revisionKey = `${key}|${current.revision}`;
+    const revision = revisionByKey.get(revisionKey);
+    if (!revision) {
+      canonicalRevisionSnapshotMissingCount += 1;
+      const [entityType, entityId] = key.split('|');
+      issues.push({
+        code: 'CANONICAL_REVISION_SNAPSHOT_MISSING',
+        severity: 'ERROR',
+        entityType: (entityType ?? 'product') as CatalogHealthEntityType,
+        ...(entityId ? { entityId } : {}),
+        message: `Current Canonical ${key} r${current.revision} has no matching revision snapshot.`
+      });
+      continue;
+    }
+    if (stableDigest(revision.snapshot) !== stableDigest(current.value)) {
+      canonicalRevisionSnapshotDriftCount += 1;
+      const [entityType, entityId] = key.split('|');
+      issues.push({
+        code: 'CANONICAL_REVISION_SNAPSHOT_DRIFT',
+        severity: 'ERROR',
+        entityType: (entityType ?? 'product') as CatalogHealthEntityType,
+        ...(entityId ? { entityId } : {}),
+        message: `Current Canonical ${key} r${current.revision} differs from its immutable revision snapshot.`
+      });
+    }
   }
 
   const recordInvalid = (
@@ -357,6 +436,7 @@ export async function readCatalogDataHealth(
   let canonicalInputDigestStatus: 'PASS' | 'FAIL' | 'NOT_APPLICABLE' = 'NOT_APPLICABLE';
   let activeInputMissingCount = 0;
   let activeInputStaleRevisionCount = 0;
+  let activeInputAheadRevisionCount = 0;
   let activeInputValidationMismatchCount = 0;
     let storedLineageDigest: string | null = null;
   let recomputedLineageDigest: string | null = null;
@@ -443,14 +523,23 @@ export async function readCatalogDataHealth(
           });
           continue;
         }
-        if (current.revision !== input.revision) {
+        if (current.revision > input.revision) {
           activeInputStaleRevisionCount += 1;
           issues.push({
             code: 'ACTIVE_RELEASE_CANONICAL_INPUT_STALE',
             severity: 'WARNING',
             entityType: 'projection',
             entityId: activeRelease.releaseId,
-            message: `ACTIVE release input ${input.entityType} ${input.entityId} is r${input.revision}, current Canonical is r${current.revision}.`
+            message: `ACTIVE release input ${input.entityType} ${input.entityId} is r${input.revision}, current Canonical is newer at r${current.revision}.`
+          });
+        } else if (current.revision < input.revision) {
+          activeInputAheadRevisionCount += 1;
+          issues.push({
+            code: 'ACTIVE_RELEASE_CANONICAL_INPUT_AHEAD',
+            severity: 'ERROR',
+            entityType: 'projection',
+            entityId: activeRelease.releaseId,
+            message: `ACTIVE release input ${input.entityType} ${input.entityId} is r${input.revision}, ahead of current Canonical r${current.revision}.`
           });
         }
         if (current.validationStatus !== input.validationStatus) {
@@ -641,6 +730,10 @@ export async function readCatalogDataHealth(
   const invalidIssues = sortedIssues.filter(
     (issue) => issue.code === 'INVALID_CANONICAL_ENTITY'
   );
+  const canonicalRevisionIntegrityIssues = sortedIssues.filter((issue) =>
+    issue.code === 'CANONICAL_REVISION_SNAPSHOT_MISSING' ||
+    issue.code === 'CANONICAL_REVISION_SNAPSHOT_DRIFT'
+  );
   const referentialIssues = sortedIssues.filter((issue) =>
     referentialIssueCodes.has(issue.code)
   );
@@ -650,6 +743,7 @@ export async function readCatalogDataHealth(
   const activeInputParityIssues = sortedIssues.filter((issue) =>
     issue.code === 'ACTIVE_RELEASE_CANONICAL_INPUT_MISSING' ||
     issue.code === 'ACTIVE_RELEASE_CANONICAL_INPUT_STALE' ||
+    issue.code === 'ACTIVE_RELEASE_CANONICAL_INPUT_AHEAD' ||
     issue.code === 'ACTIVE_RELEASE_CANONICAL_INPUT_VALIDATION_MISMATCH'
   );
 
@@ -686,6 +780,11 @@ export async function readCatalogDataHealth(
         status: checkStatus(invalidIssues),
         invalidEntityCount: invalidIssues.length
       },
+      canonicalRevisionIntegrity: {
+        status: checkStatus(canonicalRevisionIntegrityIssues),
+        missingSnapshotCount: canonicalRevisionSnapshotMissingCount,
+        driftCount: canonicalRevisionSnapshotDriftCount
+      },
       referentialIntegrity: {
         status: checkStatus(referentialIssues),
         issueCount: referentialIssues.length
@@ -694,6 +793,7 @@ export async function readCatalogDataHealth(
         status: checkStatus(activeInputParityIssues),
         missingCount: activeInputMissingCount,
         staleRevisionCount: activeInputStaleRevisionCount,
+        aheadRevisionCount: activeInputAheadRevisionCount,
         validationMismatchCount: activeInputValidationMismatchCount
       },
       activeProjection: {
@@ -722,6 +822,7 @@ export async function readCatalogDataHealth(
     coverage: {
       evaluated: [
         'CANONICAL_VALIDATION',
+        'CANONICAL_REVISION_INTEGRITY',
         'REFERENTIAL_INTEGRITY',
         'ACTIVE_PROJECTION_METADATA',
         'ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST',
