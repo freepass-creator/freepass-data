@@ -36,11 +36,18 @@ describe('Catalog Data Health v1', () => {
       activeReleaseCanonicalRevision: 1,
       startActiveReleaseId: release.releaseId,
       endActiveReleaseId: release.releaseId,
-      activeReleaseStable: true
+      activeReleaseStable: true,
+      projectionEvidenceConsistency: 'ATOMIC'
     });
     expect(report.checks.referentialIntegrity).toEqual({
       status: 'PASS',
       issueCount: 0
+    });
+    expect(report.checks.activeInputParity).toEqual({
+      status: 'PASS',
+      missingCount: 0,
+      staleRevisionCount: 0,
+      validationMismatchCount: 0
     });
     expect(report.checks.activeProjection).toMatchObject({
       status: 'PASS',
@@ -107,12 +114,53 @@ describe('Catalog Data Health v1', () => {
     expect(report.observation).toMatchObject({
       startActiveReleaseId: first.releaseId,
       endActiveReleaseId: second.releaseId,
-      activeReleaseStable: false
+      activeReleaseStable: false,
+      projectionEvidenceConsistency: 'PARTIAL_MULTI_READ'
     });
     expect(report.issues).toContainEqual(expect.objectContaining({
       code: 'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION',
       severity: 'WARNING'
     }));
+  });
+
+  it('degrades when ACTIVE manifest inputs lag current Canonical revisions', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-21T09:00:00.000Z'
+    );
+
+    await updateOfferPrice(store, {
+      commandId: 'cmd_health_stale_r2',
+      idempotencyKey: 'idem_health_stale_r2',
+      offerId: 'offer_gv70_demo',
+      expectedRevision: 1,
+      termKey: '36@20000',
+      monthlyRent: { amount: 725000, currency: 'KRW' },
+      reason: 'leave ACTIVE projection one revision behind',
+      actor: { id: 'user:test', kind: 'USER' }
+    }, '2026-09-21T09:30:00.000Z');
+
+    const report = await readCatalogDataHealth(
+      store,
+      store,
+      '2026-09-21T10:01:00.000Z'
+    );
+
+    expect(report.status).toBe('DEGRADED');
+    expect(report.checks.activeInputParity).toEqual({
+      status: 'WARN',
+      missingCount: 0,
+      staleRevisionCount: 1,
+      validationMismatchCount: 0
+    });
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'ACTIVE_RELEASE_CANONICAL_INPUT_STALE',
+      severity: 'WARNING'
+    }));
+    expect(report.coverage.evaluated).toContain('ACTIVE_PROJECTION_INPUT_PARITY');
   });
 
   it('blocks health when Canonical references are broken', async () => {
