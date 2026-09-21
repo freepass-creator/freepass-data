@@ -5,7 +5,7 @@ import { seedDemoCatalog } from '../src/demo-seed.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 
 describe('Catalog Data Health v1', () => {
-  it('reports healthy for a valid Canonical catalog with an evidence-gated ACTIVE release', async () => {
+  it('reports a valid release as DEGRADED while lineage content integrity is not yet provable', async () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
     const release = await buildErpPublicProjection(
@@ -20,7 +20,7 @@ describe('Catalog Data Health v1', () => {
       '2026-09-21T10:01:00.000Z'
     );
 
-    expect(report.status).toBe('HEALTHY');
+    expect(report.status).toBe('DEGRADED');
     expect(report.counts).toMatchObject({
       vehicleModels: 1,
       vehicleAssets: 1,
@@ -29,21 +29,30 @@ describe('Catalog Data Health v1', () => {
       policies: 0,
       invalidCanonicalEntities: 0
     });
+    expect(report.observation).toMatchObject({
+      readAt: '2026-09-21T10:01:00.000Z',
+      consistency: 'PARTIAL_MULTI_READ',
+      partialObservation: true,
+      activeReleaseCanonicalRevision: 1
+    });
     expect(report.checks.referentialIntegrity).toEqual({
       status: 'PASS',
       issueCount: 0
     });
     expect(report.checks.activeProjection).toMatchObject({
-      status: 'PASS',
+      status: 'WARN',
       activeReleaseId: release.releaseId,
       releaseStatus: 'ACTIVE',
       manifestPresent: true,
-      productCount: 1
+      productCount: 1,
+      dataPayloadDigest: { status: 'PASS' },
+      canonicalInputDigest: { status: 'PASS' },
+      lineageContentIntegrity: { status: 'NOT_EVALUATED' }
     });
     expect(report.checks.activeProjection.expectedEvidenceCount)
       .toBe(report.checks.activeProjection.actualEvidenceCount);
-    expect(report.coverage.notEvaluated).toContain('SOURCE_FRESHNESS');
-    expect(report.issues).toEqual([]);
+    expect(report.coverage.notEvaluated).toContain('PROJECTION_LINEAGE_CONTENT_INTEGRITY');
+    expect(report.coverage.notEvaluated).toContain('CONSISTENT_SNAPSHOT');
   });
 
   it('blocks health when Canonical references are broken', async () => {
@@ -90,7 +99,9 @@ describe('Catalog Data Health v1', () => {
     expect(report.checks.activeProjection).toMatchObject({
       status: 'WARN',
       activeReleaseId: null,
-      manifestPresent: false
+      manifestPresent: false,
+      dataPayloadDigest: { status: 'NOT_APPLICABLE' },
+      canonicalInputDigest: { status: 'NOT_APPLICABLE' }
     });
     expect(report.issues).toContainEqual(expect.objectContaining({
       code: 'NO_ACTIVE_RELEASE',
@@ -129,6 +140,128 @@ describe('Catalog Data Health v1', () => {
     expect(report.issues).toContainEqual(expect.objectContaining({
       code: 'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH',
       severity: 'ERROR'
+    }));
+  });
+
+  it('blocks when release.data is tampered without updating the stored digest', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-21T10:00:00.000Z'
+    );
+
+    const tamperedProjection = {
+      getActive: async (projectionId: string) => {
+        const release = await store.getActive(projectionId);
+        if (!release) return null;
+        const data = structuredClone(release.data);
+        data[0] = {
+          ...data[0]!,
+          displayName: '변조된 상품명'
+        };
+        return { ...release, data };
+      },
+      getManifest: store.getManifest.bind(store),
+      listProjectionLineage: store.listProjectionLineage.bind(store)
+    };
+
+    const report = await readCatalogDataHealth(
+      store,
+      tamperedProjection,
+      '2026-09-21T10:01:00.000Z'
+    );
+
+    expect(report.status).toBe('BLOCKED');
+    expect(report.checks.activeProjection.dataPayloadDigest.status).toBe('FAIL');
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'ACTIVE_RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH',
+      severity: 'ERROR'
+    }));
+  });
+
+  it('blocks when manifest canonicalInputs are tampered without updating inputDigest', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-21T10:00:00.000Z'
+    );
+
+    const tamperedProjection = {
+      getActive: store.getActive.bind(store),
+      getManifest: async (releaseId: string) => {
+        const manifest = await store.getManifest(releaseId);
+        if (!manifest) return null;
+        const canonicalInputs = structuredClone(manifest.canonicalInputs);
+        canonicalInputs[0] = {
+          ...canonicalInputs[0]!,
+          revision: canonicalInputs[0]!.revision + 100
+        };
+        return { ...manifest, canonicalInputs };
+      },
+      listProjectionLineage: store.listProjectionLineage.bind(store)
+    };
+
+    const report = await readCatalogDataHealth(
+      store,
+      tamperedProjection,
+      '2026-09-21T10:01:00.000Z'
+    );
+
+    expect(report.status).toBe('BLOCKED');
+    expect(report.checks.activeProjection.canonicalInputDigest.status).toBe('FAIL');
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'ACTIVE_RELEASE_CANONICAL_INPUT_DIGEST_MISMATCH',
+      severity: 'ERROR'
+    }));
+  });
+
+  it('does not claim lineage content integrity when content changes but count stays equal', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-21T10:00:00.000Z'
+    );
+
+    const sameCountTamperedLineage = {
+      getActive: store.getActive.bind(store),
+      getManifest: store.getManifest.bind(store),
+      listProjectionLineage: async (releaseId: string) => {
+        const lineage = await store.listProjectionLineage(releaseId);
+        const copy = structuredClone(lineage);
+        if (copy[0]) {
+          copy[0] = {
+            ...copy[0],
+            projection: {
+              ...copy[0].projection,
+              value: 'tampered-with-same-count'
+            }
+          };
+        }
+        return copy;
+      }
+    };
+
+    const report = await readCatalogDataHealth(
+      store,
+      sameCountTamperedLineage,
+      '2026-09-21T10:01:00.000Z'
+    );
+
+    expect(report.checks.activeProjection.expectedEvidenceCount)
+      .toBe(report.checks.activeProjection.actualEvidenceCount);
+    expect(report.checks.activeProjection.lineageContentIntegrity).toMatchObject({
+      status: 'NOT_EVALUATED'
+    });
+    expect(report.status).toBe('DEGRADED');
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'PROJECTION_LINEAGE_CONTENT_INTEGRITY_NOT_EVALUATED',
+      severity: 'WARNING'
     }));
   });
 });
