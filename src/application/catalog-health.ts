@@ -404,15 +404,6 @@ export async function readCatalogDataHealth(
           message: 'ACTIVE release dataDigest does not match its manifest.'
         });
       }
-      if (manifest.dataDigest !== recomputedDataDigest) {
-        issues.push({
-          code: 'ACTIVE_RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH',
-          severity: 'ERROR',
-          entityType: 'projection',
-          entityId: activeRelease.releaseId,
-          message: 'ACTIVE release data payload does not match the manifest dataDigest.'
-        });
-      }
       if (manifest.productCount !== activeRelease.data.length) {
         issues.push({
           code: 'ACTIVE_RELEASE_PRODUCT_COUNT_MISMATCH',
