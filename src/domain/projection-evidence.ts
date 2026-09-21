@@ -22,6 +22,7 @@ export type ProjectionReleaseManifest = {
   productCount: number;
   offerCount: number;
   fieldEvidenceCount: number;
+  fieldEvidenceDigest?: string;
   inputDigest: string;
   dataDigest: string;
 };
