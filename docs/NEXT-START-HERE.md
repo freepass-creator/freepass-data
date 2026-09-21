@@ -3,7 +3,7 @@
 Status: **ACTIVE / CATALOG V1 EXECUTABLE BASELINE**  
 Official project name: **프리패스 데이터 / FreePass Data**  
 Repository: `freepass-creator/freepass-data`  
-Verified integration revision: `8d52775ad89844ea94f2d99529bb9c30bde6cd19`  
+Verified integration revision: `8d52775ad89844ea94f2d99529bb9c30bde6cd19`
 Date: 2026-09-21
 
 ## 0. Current live read evidence — 2026-09-21 22:44 KST
