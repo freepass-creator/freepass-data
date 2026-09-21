@@ -84,9 +84,21 @@ Cloud Run 조회는 `run.googleapis.com` 비활성으로 실패했다. API를 �
 공급사 원천과의 최신성/parity, 메타데이터 시각의 업무 의미, Policy 링크, Canonical write 및 소비처 전환은 미검증이다.
 요약 숫자는 원문 값이나 고객정보를 공개하지 않지만, 운영 연결 완료 증거로 사용하지 않는다.
 
+### Policy 연결 증거
+
+동일한 변경 불가 캡처를 대상으로 digest를 다시 확인한 뒤 정책 연결을 count-only로 분석했다.
+정책 문서 81건 중 비활성 26건, 사용할 수 없는 문서 0건, ID 충돌·중복 exact identifier 0건이었다.
+상품 참조는 전체 1,659건 중 정책 미설정 317건과 exact unique 연결 검토 후보 1,342건으로 완전 분류됐다.
+invalid·ambiguous·inactive exact·zero-padding/alias 후보·missing은 각각 0건이다.
+상품이 참조한 정책 문서는 30건이고 미참조 정책 문서는 51건이다.
+
+이 결과는 ID 수준의 정확한 일치 증거다. 1,342건의 정책 내용이 올바르거나 Canonical Policy로 승인됐다는 뜻은 아니다.
+정책 사실의 의미·유효기간·필드 authority를 검토하기 전까지 `status=HOLD`,
+`canonicalWriteAuthorized=false`, `cutoverAuthorized=false`를 유지한다.
+
 ## 전환에 남은 작업
 
-1. 완료한 read-only 전체 캡처를 기준으로 Firestore typed decode와 HOLD 사유를 분리하고, 엄격한 변환 → 검토 가능한 RAW/Candidate → 승인된 Canonical/Policy로 진행.
+1. 완료한 read-only 전체 캡처·typed decode·Policy ID 연결 증거를 기준으로 가격/보증금/주행거리와 정책 사실 의미를 대조해 검토 가능한 RAW/Candidate → 승인된 Canonical/Policy로 진행.
 2. PR12 Admin projection과 현재 manifest/lineage/READY 게이트 통합. 기존 PR12를 그대로 병합하면 이 계약과 호환되지 않는다.
 3. F01/F86 출력 필드를 보존하는 계약, 소비처 전체에 공통으로 추적할 source/release 버전 연결.
 4. 운영 API 호스팅/서비스 identity/IAM을 확정하고 실제 서버에서 읽기 검증.

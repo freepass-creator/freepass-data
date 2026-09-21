@@ -5,6 +5,7 @@
 `src/adapters/erp5-policy-link-analysis.ts` examines the already captured, read-only
 `freepasserp5/firestore/products` and `policy` documents. It reports aggregate evidence only.
 It does not return policy codes, document IDs, source values, canonical entities, or writes.
+It verifies the capture digest before classification, so changed evidence cannot silently produce a new link report.
 
 An exact match means only that a product `policy_code` occurs as one unique policy document ID,
 `_key`, or `policy_code`. It is `exactLinkedForReview`, not an approved canonical link.
