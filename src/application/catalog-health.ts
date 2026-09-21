@@ -62,6 +62,8 @@ export const CATALOG_HEALTH_ISSUE_CODES = [
   'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH',
   'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING',
   'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH',
+  'ACTIVE_RELEASE_LINEAGE_IDENTITY_MISMATCH',
+  'ACTIVE_RELEASE_LINEAGE_DUPLICATE_ID',
   'ACTIVE_RELEASE_RELEASE_ID_MISMATCH',
   'ACTIVE_RELEASE_PROJECTION_ID_MISMATCH',
   'ACTIVE_RELEASE_SCHEMA_VERSION_MISMATCH',
@@ -208,6 +210,8 @@ const projectionIssueCodes = new Set<CatalogHealthIssueCode>([
   'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH',
   'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING',
   'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH',
+  'ACTIVE_RELEASE_LINEAGE_IDENTITY_MISMATCH',
+  'ACTIVE_RELEASE_LINEAGE_DUPLICATE_ID',
   'ACTIVE_RELEASE_RELEASE_ID_MISMATCH',
   'ACTIVE_RELEASE_PROJECTION_ID_MISMATCH',
   'ACTIVE_RELEASE_SCHEMA_VERSION_MISMATCH',
@@ -704,6 +708,20 @@ export async function readCatalogDataHealth(
             addProjectionError(
               'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH',
               lineageContentIntegrity.reason
+            );
+            break;
+          case 'EVIDENCE_RELEASE_ID_MISMATCH':
+          case 'EVIDENCE_PROJECTION_ID_MISMATCH':
+          case 'EVIDENCE_STAGE_MISMATCH':
+            addProjectionError(
+              'ACTIVE_RELEASE_LINEAGE_IDENTITY_MISMATCH',
+              `Projection lineage identity check failed: ${failure}.`
+            );
+            break;
+          case 'EVIDENCE_RECORD_ID_DUPLICATE':
+            addProjectionError(
+              'ACTIVE_RELEASE_LINEAGE_DUPLICATE_ID',
+              'Projection lineage contains duplicate lineageRecordId values.'
             );
             break;
         }
