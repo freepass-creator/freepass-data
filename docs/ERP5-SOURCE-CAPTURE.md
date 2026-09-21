@@ -110,6 +110,13 @@ readTime은 DB의 일관된 관측 시점이지 공급사 최신 수집 시각�
 `DEPOSIT`, `MILEAGE`, `POLICY`, `OTHER_DATA_QUALITY`)을 붙인다. 한 차량의 여러 문제를
 임의로 한 사유로 축소하지 않으며, stdout에는 축별 건수와 복잡도만 출력한다.
 
+같은 비공개 산출물에는 products 원문을 중첩 map/array까지 재귀적으로 해부한 field profile을
+포함한다. 경로별 존재/누락 문서 수, 반복 출현 수, Firestore 자료형 분포, null/빈 문자열 수,
+값 fingerprint 기준 고유값 수, 문자열 최소/최대 길이를 기록하되 실제 scalar 값은 프로파일에
+복사하지 않는다. 현재 1,659건에서 508개 field path가 관측됐다. 이는 구조 파악 증거이며 필드의
+업무 의미나 쓰기 권한을 자동 확정하지 않는다. 의미·단위·authority·소비처 매핑은 경로별로 별도
+검토해 데이터 사전에 승격한다.
+
 같은 명령에 `--previous <previous capture.json>`을 붙이면 검증된 두 FULL 캡처의 products 전체를
 문서 ID와 원문 fields fingerprint로 비교한다. 결과는 `ADDED`, `CHANGED`, `UNCHANGED`,
 `MISSING_FROM_SOURCE`로 전수 분류하고 `vehicle_status`/`listable` 변화는 별도 inventory transition으로

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { buildErp5CanonicalDryRun, captureErp5Source, compareErp5ProductCaptures, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
+import { buildErp5CanonicalDryRun, captureErp5Source, compareErp5ProductCaptures, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, profileErp5CaptureFields, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
 const readTime = '2026-09-21T10:00:00.123456Z';
 function doc(collection = 'products', id = 'synthetic') {
   return {
@@ -77,6 +77,30 @@ describe('ERP5 same-transaction raw capture', () => {
     expect(first.reviewAxisCounts.IDENTITY).toBe(1);
     expect(Object.values(first.reviewComplexityCounts).reduce((sum, count) => sum + count, 0)).toBe(2);
     expect('raw' in first.records[0]!).toBe(false);
+    expect(first.fieldProfile.documentCount).toBe(2);
+    expect(first.fieldProfile.fields.find((field) => field.path === 'maker')).toMatchObject({
+      presentDocuments: 1, missingDocuments: 1, firestoreKinds: { stringValue: 1 }
+    });
+    expect(JSON.stringify(first.fieldProfile)).not.toContain('합성제조사');
+  });
+
+  it('profiles nested maps and repeated arrays without exposing scalar values', async () => {
+    const product = doc();
+    Object.assign(product.fields, {
+      empty: { stringValue: '' },
+      tags: { arrayValue: { values: [{ stringValue: 'private-a' }, { stringValue: 'private-b' }] } }
+    });
+    const capture = await captureErp5Source(fake({ products: [product] }).rpc);
+    const profile = profileErp5CaptureFields(capture, 'products');
+    expect(profile.fields.find((field) => field.path === 'price.24_3만.rent')).toMatchObject({
+      presentDocuments: 1, occurrences: 1, firestoreKinds: { integerValue: 1 }, distinctValueCount: 1
+    });
+    expect(profile.fields.find((field) => field.path === 'tags[]')).toMatchObject({
+      presentDocuments: 1, occurrences: 2, firestoreKinds: { stringValue: 2 }, distinctValueCount: 2
+    });
+    expect(profile.fields.find((field) => field.path === 'empty')?.emptyStringCount).toBe(1);
+    expect(JSON.stringify(profile)).not.toContain('private-a');
+    expect(JSON.stringify(profile)).not.toContain('750000');
   });
 
   it('classifies full-capture additions, field changes, unchanged and missing records without deleting', async () => {

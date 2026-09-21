@@ -51,6 +51,11 @@ if (![2, 4].includes(args.length) || args[0] !== '--capture' || (args.length ===
       issueCounts: dryRun.issueCounts,
       reviewAxisCounts: dryRun.reviewAxisCounts,
       reviewComplexityCounts: dryRun.reviewComplexityCounts,
+      fieldProfile: {
+        collection: dryRun.fieldProfile.collection,
+        documentCount: dryRun.fieldProfile.documentCount,
+        fieldPathCount: dryRun.fieldProfile.fieldPathCount
+      },
       delta: delta ? {
         status: delta.status,
         digest: delta.digest,

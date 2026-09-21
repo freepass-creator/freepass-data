@@ -267,6 +267,65 @@ export function compareErp5ProductCaptures(previous: Erp5SourceCapture, current:
   return { ...unsigned, digest: hash(unsigned) };
 }
 
+/** Private structural profile: paths and statistics only, never raw scalar values. */
+export function profileErp5CaptureFields(capture: Erp5SourceCapture, collection: Collection) {
+  inspectErp5Capture(capture);
+  type Mutable = {
+    documents: Set<string>; occurrences: number; kinds: Record<string, number>;
+    nullCount: number; emptyStringCount: number; distinct: Set<string>;
+    minStringLength: number | null; maxStringLength: number | null;
+  };
+  const stats = new Map<string, Mutable>();
+  const touch = (path: string, documentId: string, kind: string, scalar?: unknown) => {
+    const item = stats.get(path) ?? {
+      documents: new Set<string>(), occurrences: 0, kinds: {}, nullCount: 0, emptyStringCount: 0,
+      distinct: new Set<string>(), minStringLength: null, maxStringLength: null
+    };
+    item.documents.add(documentId);
+    item.occurrences++;
+    item.kinds[kind] = (item.kinds[kind] ?? 0) + 1;
+    if (scalar === null) item.nullCount++;
+    if (typeof scalar === 'string') {
+      if (scalar.length === 0) item.emptyStringCount++;
+      item.minStringLength = item.minStringLength === null ? scalar.length : Math.min(item.minStringLength, scalar.length);
+      item.maxStringLength = item.maxStringLength === null ? scalar.length : Math.max(item.maxStringLength, scalar.length);
+    }
+    if (scalar !== undefined) item.distinct.add(hash(scalar));
+    stats.set(path, item);
+  };
+  const walk = (path: string, value: unknown, documentId: string) => {
+    if (!object(value) || Object.keys(value).length !== 1) { touch(path, documentId, 'malformed'); return; }
+    const kind = Object.keys(value)[0]!;
+    let decoded: unknown;
+    try { decoded = decodeErp5Value(value); } catch { decoded = undefined; }
+    touch(path, documentId, kind, decoded !== undefined && !object(decoded) && !Array.isArray(decoded) ? decoded : undefined);
+    if (kind === 'mapValue' && object(value.mapValue) && object(value.mapValue.fields)) {
+      for (const [key, child] of Object.entries(value.mapValue.fields)) walk(`${path}.${key}`, child, documentId);
+    } else if (kind === 'arrayValue' && object(value.arrayValue) && Array.isArray(value.arrayValue.values)) {
+      for (const child of value.arrayValue.values) walk(`${path}[]`, child, documentId);
+    }
+  };
+  const documents = capture.collections[collection].documents;
+  for (const doc of documents) {
+    const documentId = String(doc.name).split('/').at(-1)!;
+    if (!object(doc.fields)) continue;
+    for (const [path, value] of Object.entries(doc.fields)) walk(path, value, documentId);
+  }
+  const fields = [...stats.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([path, item]) => ({
+    path,
+    presentDocuments: item.documents.size,
+    missingDocuments: documents.length - item.documents.size,
+    occurrences: item.occurrences,
+    firestoreKinds: Object.fromEntries(Object.entries(item.kinds).sort(([a], [b]) => a.localeCompare(b))),
+    nullCount: item.nullCount,
+    emptyStringCount: item.emptyStringCount,
+    distinctValueCount: item.distinct.size,
+    minStringLength: item.minStringLength,
+    maxStringLength: item.maxStringLength
+  }));
+  return { collection, documentCount: documents.length, fieldPathCount: fields.length, fields };
+}
+
 export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
   const inspection = inspectErp5Capture(capture);
   const reviewAxes = [
@@ -352,6 +411,7 @@ export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
     issueCounts,
     reviewAxisCounts,
     reviewComplexityCounts,
+    fieldProfile: profileErp5CaptureFields(capture, 'products'),
     records
   };
   if (unsigned.counts.candidates !== inspection.products) fail('DRY_RUN_COVERAGE_MISMATCH');
