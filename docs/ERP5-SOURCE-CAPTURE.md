@@ -110,6 +110,14 @@ readTime은 DB의 일관된 관측 시점이지 공급사 최신 수집 시각�
 `DEPOSIT`, `MILEAGE`, `POLICY`, `OTHER_DATA_QUALITY`)을 붙인다. 한 차량의 여러 문제를
 임의로 한 사유로 축소하지 않으며, stdout에는 축별 건수와 복잡도만 출력한다.
 
+최초 검토 축 감사에서 IDENTITY 24건은 모두 차량번호가 아니라 maker/model 공란이었다.
+22건은 maker와 model이 모두 공란이고 2건은 model만 공란이다. 같은 캡처의 productCode,
+carNumber에는 완전한 형제 레코드가 없었고 providerCompanyCode는 대부분 다건 공급사라
+차종을 결정할 근거가 아니다. 따라서 자동 복구하지 않고 `SOURCE_EVIDENCE_REQUIRED`로
+유지한다. 공급사 분포는 RP023 10, RP020 3, RP004/RP013/RP018/RP012 각 2,
+PT-0023/PT-0001/RP022 각 1이다. 다음 조회는 이 공급사별 원천에서 차량번호를 키로
+maker/model을 확인하는 읽기 전용 대조이며, ERP5의 빈 값을 추정으로 채우지 않는다.
+
 - `npm run check`: architecture/TypeScript build, Vitest 158건(캡처 신규 47건), Sheets 20건 통과.
 - 실패 반례: 잘린 쿼리, 다른 프로젝트/중첩 경로, 중복 문서, readTime 불일치, 정책 읽기 실패,
   저장 후 손상, count 재작성, 미지원/부정확 자료형, 원문 없는 차량번호, 중복 차량번호, write RPC 차단.
