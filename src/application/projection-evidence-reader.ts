@@ -1,5 +1,11 @@
 import type {
-  ActiveProjectionEvidenceSnapshot
+  ErpPublicProduct,
+  ProjectionRelease
+} from '../domain/catalog.js';
+import type {
+  ActiveProjectionEvidenceSnapshot,
+  ProjectionFieldLineageRecord,
+  ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
 import type {
   ProjectionEvidenceSnapshotStore,
