@@ -13,7 +13,7 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "check": "npm run check:arch && npm run check:sheets && npm run build && npm test",
-    "check:sheets": "node --test tests/sheet-presentation.node.mjs",
+    "check:sheets": "node --test tests/sheet-presentation.node.mjs tests/sheet-presentation-online.node.mjs",
     "sheets:plan": "node scripts/sheet-presentation.mjs",
     "check:arch": "node scripts/check-architecture.mjs"
   },

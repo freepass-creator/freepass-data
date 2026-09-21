@@ -57,3 +57,13 @@ npm run sheets:plan -- --input=tmp/f86-after.json --workbook=F86 --updated-at=20
 ## 운영 자동화 경계
 
 이 도구는 수동/AI 작업에 재사용할 계획·검증 도구다. 현재 외부 freepasserp4 Actions의 고정 엔진에는 연결되지 않았다. 따라서 예약 발행이 새 규격을 유지한다고 주장하면 안 된다. 연결 시 이 JSON과 실행기 버전을 고정해 발행 후 실행하고, 같은 회차의 새 readback으로 검증해야 한다. 별도 스케줄러나 이중 writer를 만들지 않는다.
+
+### 온라인 호출 계약
+
+`scripts/sheet-presentation-online.mjs`의 `runPresentation`은 같은 JSON과 planner를 직접 사용한다. `api(url, {method, body})`는 기존 발행기의 인증·재시도 정책을 재사용하며, 실패 응답은 반드시 throw하고 성공 응답의 parsed JSON만 반환한다. body는 문자열이 아닌 객체다.
+
+기본 `apply=false`는 읽기와 변경 요약만 수행한다. `apply=true`에는 기존 production write gate를 실행하는 `authorizeWrite`와 비공개 원본 백업을 실제 저장하는 `saveBackup` callback이 필요하다. 기존 `erp5-inventory-publish` 동시실행 잠금 안에서 호출한다. 이 모듈 자체가 분산 잠금을 제공하지 않는다.
+
+쓰기 직전 전체 관측값을 다시 읽어 바뀌면 HOLD한다. 적용 후 새 조회로 같은 timestamp의 요청 0개와 셀 값·수식 보존을 확인한다. Google Sheets API에는 이 모듈이 사용할 원자적 compare-and-swap이 없으므로 마지막 조회와 쓰기 사이의 외부 수동 편집까지 잠글 수는 없다. readback drift는 실패로 보고하며 자동 덮어쓰기/자동 rollback을 하지 않는다.
+
+백업은 원문을 포함하므로 비공개 저장소에만 보관한다. 반환 receipt에는 차량 원문을 넣지 않지만 workbook ID와 대수·서식 변경은 포함된다. 온라인 운영 완료는 실제 workflow 엔진 pin과 발행기 연결, 실행 및 readback 증거가 모두 있어야 한다.
