@@ -37,6 +37,39 @@ Firestore `(default)`, `asia-northeast3`를 실조회했다. RTDB는 사용하�
 F01/F86/Admin을 ERP public 계약에 억지로 연결하지 않는다. 원문 옵션·시트 게시 필드와 Admin 내부 정책 정보는 별도 계약이 필요하다.
 등록되지 않은 소비처는 응답을 받을 수 없다. 웹에 서비스를 공개하거나 운영 소비처를 전환한 상태가 아니다.
 
+## Catalog Data Health read endpoint
+
+The authenticated consumer gateway can expose Catalog Data Health through:
+
+`GET /v1/consumers/{consumerId}/catalog-health`
+
+This route is **not** granted by normal catalog registration.
+
+Consumer capabilities:
+
+- omitted `capabilities` → `["catalog"]`
+- `catalog` → ERP public catalog read
+- `catalog-health` → Catalog Data Health read
+- a health-only binding may have `["catalog-health"]` and receives no catalog payload access
+
+The same Bearer token authenticates the registered backend, but authorization is checked separately per capability.
+
+Security and response rules:
+
+- authentication occurs before any Health storage read
+- missing `catalog-health` capability → HTTP 403
+- missing health reader → HTTP 503
+- Health read failure → HTTP 503 without internal error detail
+- response is validated again against `catalog-data-health-v1.schema.json`
+- schema drift/invalid response → HTTP 503
+- `HEALTHY` / `DEGRADED` report → HTTP 200
+- `BLOCKED` report → HTTP 503 with the complete versioned Health report
+- `Cache-Control: no-store`
+
+The Health reader is a separate read-only Firestore adapter. It exposes only the Catalog/Projection reads required by Data Health and does not expose Catalog commands, release publication, or mutation methods.
+
+This endpoint does **not** authorize production cutover. It reports Catalog/Projection integrity only for implemented dimensions. Source freshness, source-to-Canonical parity, consumer migration state, and a whole-Catalog atomic snapshot remain separate scope.
+
 ## 반복 가능한 읽기 전용 점검
 
 서비스 인증 환경: `npm run check:central-firestore`.
