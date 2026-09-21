@@ -1,0 +1,454 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/catalog-data-health-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "schemaVersion",
+    "scope",
+    "generatedAt",
+    "status",
+    "observation",
+    "counts",
+    "checks",
+    "coverage",
+    "issues"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "catalog-data-health-v1"
+    },
+    "schemaVersion": {
+      "const": "1.0.0"
+    },
+    "scope": {
+      "const": "catalog-v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "enum": [
+        "HEALTHY",
+        "DEGRADED",
+        "BLOCKED"
+      ]
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "readAt",
+        "consistency",
+        "partialObservation",
+        "canonicalRevisionRange",
+        "activeReleaseCanonicalRevision",
+        "startActiveReleaseId",
+        "endActiveReleaseId",
+        "activeReleaseStable",
+        "note"
+      ],
+      "properties": {
+        "readAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "consistency": {
+          "const": "PARTIAL_MULTI_READ"
+        },
+        "partialObservation": {
+          "const": true
+        },
+        "canonicalRevisionRange": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "min",
+            "max"
+          ],
+          "properties": {
+            "min": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "max": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        },
+        "activeReleaseCanonicalRevision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "startActiveReleaseId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "endActiveReleaseId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "activeReleaseStable": {
+          "type": "boolean"
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "vehicleModels",
+        "vehicleAssets",
+        "products",
+        "offers",
+        "policies",
+        "invalidCanonicalEntities"
+      ],
+      "properties": {
+        "vehicleModels": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "vehicleAssets": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "products": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "offers": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "policies": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "invalidCanonicalEntities": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalValidation",
+        "referentialIntegrity",
+        "activeProjection"
+      ],
+      "properties": {
+        "canonicalValidation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "invalidEntityCount"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "PASS",
+                "WARN",
+                "FAIL"
+              ]
+            },
+            "invalidEntityCount": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "referentialIntegrity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "issueCount"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "PASS",
+                "WARN",
+                "FAIL"
+              ]
+            },
+            "issueCount": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "activeProjection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "projectionId",
+            "activeReleaseId",
+            "releaseStatus",
+            "manifestId",
+            "manifestPresent",
+            "productCount",
+            "expectedEvidenceCount",
+            "actualEvidenceCount",
+            "dataPayloadDigest",
+            "canonicalInputDigest",
+            "lineageContentIntegrity"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "PASS",
+                "WARN",
+                "FAIL"
+              ]
+            },
+            "projectionId": {
+              "const": "erp-public"
+            },
+            "activeReleaseId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "releaseStatus": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "manifestId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "manifestPresent": {
+              "type": "boolean"
+            },
+            "productCount": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "expectedEvidenceCount": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "actualEvidenceCount": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "dataPayloadDigest": {
+              "$ref": "#/$defs/contentDigestCheck"
+            },
+            "canonicalInputDigest": {
+              "$ref": "#/$defs/contentDigestCheck"
+            },
+            "lineageContentIntegrity": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "stored",
+                "recomputed",
+                "status",
+                "reason"
+              ],
+              "properties": {
+                "stored": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "recomputed": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "enum": [
+                    "PASS",
+                    "FAIL",
+                    "NOT_EVALUATED",
+                    "NOT_APPLICABLE"
+                  ]
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evaluated",
+        "notEvaluated"
+      ],
+      "properties": {
+        "evaluated": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "CANONICAL_VALIDATION",
+              "REFERENTIAL_INTEGRITY",
+              "ACTIVE_PROJECTION_METADATA",
+              "ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST",
+              "ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST",
+              "PROJECTION_LINEAGE_CONTENT_INTEGRITY"
+            ]
+          }
+        },
+        "notEvaluated": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "PROJECTION_LINEAGE_CONTENT_INTEGRITY",
+              "CONSISTENT_SNAPSHOT",
+              "SOURCE_FRESHNESS",
+              "SOURCE_TO_CANONICAL_PARITY",
+              "CONSUMER_MIGRATION_STATE"
+            ]
+          }
+        }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "severity",
+          "entityType",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "enum": [
+              "INVALID_CANONICAL_ENTITY",
+              "MISSING_ASSET_VEHICLE_MODEL",
+              "MISSING_PRODUCT_VEHICLE_MODEL",
+              "MISSING_PRODUCT_VEHICLE_ASSET",
+              "MISSING_OFFER_PRODUCT",
+              "MISSING_OFFER_POLICY",
+              "NO_ACTIVE_RELEASE",
+              "ACTIVE_RELEASE_STATUS_INVALID",
+              "ACTIVE_RELEASE_MANIFEST_MISSING",
+              "ACTIVE_RELEASE_MANIFEST_ID_MISMATCH",
+              "ACTIVE_RELEASE_INPUT_DIGEST_MISMATCH",
+              "ACTIVE_RELEASE_DATA_DIGEST_MISMATCH",
+              "ACTIVE_RELEASE_CANONICAL_INPUT_DIGEST_MISMATCH",
+              "ACTIVE_RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH",
+              "ACTIVE_RELEASE_PRODUCT_COUNT_MISMATCH",
+              "ACTIVE_RELEASE_OFFER_COUNT_MISMATCH",
+              "ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH",
+              "ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING",
+              "ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH",
+              "ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION"
+            ]
+          },
+          "severity": {
+            "enum": [
+              "WARNING",
+              "ERROR"
+            ]
+          },
+          "entityType": {
+            "enum": [
+              "vehicle_model",
+              "vehicle_asset",
+              "product",
+              "offer",
+              "policy",
+              "projection"
+            ]
+          },
+          "entityId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "contentDigestCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stored",
+        "recomputed",
+        "status"
+      ],
+      "properties": {
+        "stored": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recomputed": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "NOT_APPLICABLE"
+          ]
+        }
+      }
+    }
+  }
+}
