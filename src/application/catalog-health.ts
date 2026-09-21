@@ -1,6 +1,6 @@
-import type { CatalogStore, ProjectionStore } from '../ports/catalog-store.js';
+import type { CatalogStore, ProjectionEvidenceSnapshotStore, ProjectionStore } from '../ports/catalog-store.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import { verifyProjectionReleaseIntegrity } from './projection-integrity.js';
+import { readActiveProjectionEvidence, verifyProjectionReleaseIntegrity } from './projection-integrity.js';
 
 export type CatalogHealthStatus = 'HEALTHY' | 'DEGRADED' | 'BLOCKED';
 export type CatalogHealthCheckStatus = 'PASS' | 'WARN' | 'FAIL';
@@ -65,6 +65,7 @@ export type CatalogHealthReport = {
     startActiveReleaseId: string | null;
     endActiveReleaseId: string | null;
     activeReleaseStable: boolean;
+    projectionEvidenceConsistency: 'ATOMIC' | 'PARTIAL_MULTI_READ';
     note: string;
   };
   counts: {
@@ -144,7 +145,7 @@ type CatalogHealthCatalogStore = Pick<
 type CatalogHealthProjectionStore = Pick<
   ProjectionStore,
   'getActive' | 'getManifest' | 'listProjectionLineage'
->;
+> & Partial<ProjectionEvidenceSnapshotStore>;
 
 const referentialIssueCodes = new Set<CatalogHealthIssueCode>([
   'MISSING_ASSET_VEHICLE_MODEL',
@@ -200,14 +201,15 @@ export async function readCatalogDataHealth(
   projections: CatalogHealthProjectionStore,
   now = new Date().toISOString()
 ): Promise<CatalogHealthReport> {
-  const [models, assets, products, offers, policies, activeRelease] = await Promise.all([
+  const [models, assets, products, offers, policies, projectionEvidence] = await Promise.all([
     catalog.listVehicleModels(),
     catalog.listVehicleAssets(),
     catalog.listProducts(),
     catalog.listOffers(),
     catalog.listPolicies(),
-    projections.getActive('erp-public')
+    readActiveProjectionEvidence(projections, 'erp-public')
   ]);
+  const activeRelease = projectionEvidence.release;
 
   const issues: CatalogHealthIssue[] = [];
   const modelsById = new Map(models.map((model) => [model.id, model]));
@@ -365,10 +367,8 @@ export async function readCatalogDataHealth(
       });
     }
 
-    const [manifest, lineage] = await Promise.all([
-      projections.getManifest(activeRelease.releaseId),
-      projections.listProjectionLineage(activeRelease.releaseId)
-    ]);
+    const manifest = projectionEvidence.manifest;
+    const lineage = projectionEvidence.lineage;
     actualEvidenceCount = lineage.length;
 
     if (!manifest) {
@@ -585,6 +585,7 @@ export async function readCatalogDataHealth(
       startActiveReleaseId,
       endActiveReleaseId,
       activeReleaseStable,
+      projectionEvidenceConsistency: projectionEvidence.consistency,
       note: activeReleaseStable
         ? 'Catalog entities, ACTIVE release, manifest, and lineage are read through separate non-transactional calls; this report is not an atomic snapshot.'
         : 'ACTIVE release changed between the opening and closing fence reads; the observation is mixed and must not be treated as a stable snapshot.'
