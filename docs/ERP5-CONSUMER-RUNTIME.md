@@ -59,9 +59,34 @@ F01/F86/Admin을 ERP public 계약에 억지로 연결하지 않는다. 원문 �
 로컬 기본 ADC는 없으며 명시적 gcloud 읽기는 성공했다. gcloud 사용자 로그인을 운영 서비스 인증으로 설치하지 않았다.
 Cloud Run 조회는 `run.googleapis.com` 비활성으로 실패했다. API를 활성화하거나 서비스/IAM을 만들지 않았다.
 
+### ERP5 전체 원문 캡처 후속 관측
+
+별도 읽기 전용 수집 작업이 2026-09-21T09:06:44.344978Z의 동일 Firestore read-only transaction에서
+`products` 1,659건과 `policy` 81건을 전부 읽고 각각의 독립 COUNT와 일치시켰다.
+원문은 Git 밖의 로컬 private 증거 파일에만 저장했으며 이 문서나 PR에 포함하지 않았다.
+캡처 digest는 `ad67d6f5ef2914b90dc682704f1894105079ebbbbc0d8be44269cf69c68e735f`다.
+
+초기 엄격 매핑 요약은 `mappedForReview=0`, `mappingHold=766`, `decodeFailed=893`이었다.
+비민감 typed-key 집계를 별도로 실행한 결과 893건의 decode 실패는 모두 `timestampValue` 영향 문서였고
+해당 typed value는 총 1,030개였다. 필드별로는 `policy_reference_checked_at` 887개,
+`updated_at` 143개이며 같은 문서에 함께 있을 수 있다. reference/geoPoint/bytes typed value는 0개였다.
+
+원문 typed JSON과 digest는 바꾸지 않고 관측된 위 두 최상위 메타데이터 필드만 RFC3339로 검증해
+원문 문자열로 전달하도록 decoder 경계를 보완했다. 임의 업무필드나 중첩 timestamp에는 적용하지 않는다.
+같은 캡처 재검사 최종 결과는 `mappedForReview=0`, `mappingHold=1659`, `decodeFailed=0`이다.
+즉 1,659건 전부 의미 검사까지 도달했지만, 가격·보증금·주행거리·정책·손오공 분류 증거 부족으로
+모두 HOLD다. 이는 운영 상품 1,659건이 잘못됐다는 뜻이 아니다.
+정책 81건은 같은 시점 원문 캡처 범위이며 Policy 정본 변환·링크 검증 완료 건수가 아니다.
+전체 1,659건의 차량번호는 읽혔고 공백을 무시한 중복 요약은 0이지만,
+차량번호만으로 상품/계약 동일성을 보증하지 않는다.
+
+결과는 계속 `cutoverAuthorized=false`, `canonicalWriteAuthorized=false`다.
+공급사 원천과의 최신성/parity, 메타데이터 시각의 업무 의미, Policy 링크, Canonical write 및 소비처 전환은 미검증이다.
+요약 숫자는 원문 값이나 고객정보를 공개하지 않지만, 운영 연결 완료 증거로 사용하지 않는다.
+
 ## 전환에 남은 작업
 
-1. ERP5 원문 수집과 엄격한 변환 → 검토 가능한 RAW/Candidate → 승인된 Canonical/Policy.
+1. 완료한 read-only 전체 캡처를 기준으로 Firestore typed decode와 HOLD 사유를 분리하고, 엄격한 변환 → 검토 가능한 RAW/Candidate → 승인된 Canonical/Policy로 진행.
 2. PR12 Admin projection과 현재 manifest/lineage/READY 게이트 통합. 기존 PR12를 그대로 병합하면 이 계약과 호환되지 않는다.
 3. F01/F86 출력 필드를 보존하는 계약, 소비처 전체에 공통으로 추적할 source/release 버전 연결.
 4. 운영 API 호스팅/서비스 identity/IAM을 확정하고 실제 서버에서 읽기 검증.
