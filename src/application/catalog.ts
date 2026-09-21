@@ -562,7 +562,6 @@ export async function buildErpPublicProjection(
     );
   const inputDigest = stableDigest(canonicalInputs);
   const dataDigest = stableDigest(data);
-  const fieldEvidenceDigest = stableRecordSetDigest(evidenceContext.evidence);
   const canonicalRevision = Math.max(0, ...canonicalInputs.map((x) => x.revision));
   const currentActive = await projections.getActive('erp-public');
   if (
@@ -571,13 +570,18 @@ export async function buildErpPublicProjection(
     currentActive.dataDigest === dataDigest
   ) {
     const currentManifest = await projections.getManifest(currentActive.releaseId);
-    if (
-      currentManifest?.fieldEvidenceDigest === fieldEvidenceDigest
-    ) {
-      return currentActive;
+    if (currentManifest?.fieldEvidenceDigest) {
+      const currentLineage = await projections.listProjectionLineage(currentActive.releaseId);
+      if (
+        currentLineage.length === currentManifest.fieldEvidenceCount &&
+        stableRecordSetDigest(currentLineage) === currentManifest.fieldEvidenceDigest
+      ) {
+        return currentActive;
+      }
     }
   }
 
+  const fieldEvidenceDigest = stableRecordSetDigest(evidenceContext.evidence);
   const manifestId = `manifest_${releaseId}`;
   const manifest: ProjectionReleaseManifest = {
     manifestId,
