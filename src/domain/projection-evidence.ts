@@ -68,3 +68,11 @@ export type ProjectionDeliveryReceipt = {
   targetRevision: number;
   processedAt: string;
 };
+
+export type ActiveProjectionEvidenceSnapshot = {
+  projectionId: string;
+  release: ProjectionRelease<ErpPublicProduct> | null;
+  manifest: ProjectionReleaseManifest | null;
+  lineage: ProjectionFieldLineageRecord[];
+  consistency: 'ATOMIC';
+};
