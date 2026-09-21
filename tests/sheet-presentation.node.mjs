@@ -17,6 +17,24 @@ test('all primary tabs, Seoul timestamp and widths; no cell writes or deletions'
   assert.equal(result.requests.filter(r=>r.updateDimensionProperties?.properties.pixelSize===360).length,4);
   assert.ok(result.requests.every(r=>['updateSheetProperties','updateDimensionProperties','setBasicFilter'].includes(Object.keys(r)[0])));
 });
+test('fixed usability widths are reapplied on every matching sales tab',()=>{
+ const x=fixture();
+ for(const s of x.spreadsheet.sheets){
+  s.properties.gridProperties.columnCount=7;
+  s.data[0].rowData[0].values=['차량번호','차명(원문)','옵션(원문)','세부트림','반납형보증금','인수형보증금','24개월'].map(cell);
+  s.data[0].rowData[1].values=['TEST-'+s.properties.sheetId,'원문차명','원문옵션','긴 세부트림','긴 반납형 규칙','긴 인수형 규칙','100'].map(cell);
+  s.data[0].columnMetadata=Array.from({length:7},()=>({pixelSize:80}));
+ }
+ x.coverage.forEach(c=>c.endColumnIndex=7);
+ const result=planPresentation(x,opts);
+ assert.equal(result.requests.filter(r=>r.updateDimensionProperties?.properties.pixelSize===260).length,4);
+ assert.equal(result.requests.filter(r=>r.updateDimensionProperties?.properties.pixelSize===360).length,4);
+ assert.equal(result.requests.filter(r=>r.updateDimensionProperties?.properties.pixelSize===100).length,4);
+ const pickup=spec.workbooks.F86.primarySheetIds[2];
+ const pickup180=result.requests.filter(r=>r.updateDimensionProperties?.range.sheetId===pickup&&r.updateDimensionProperties?.properties.pixelSize===180);
+ assert.equal(pickup180.length,2);
+ assert.equal(result.requests.filter(r=>r.updateDimensionProperties?.properties.pixelSize===180).length,2);
+});
 test('wrong target and stale observations fail closed',()=>{
  const x=fixture();x.spreadsheet.spreadsheetId='wrong';assert.throws(()=>planPresentation(x,opts),/Wrong workbook/);
  assert.throws(()=>planPresentation(fixture(),{...opts,now:opts.now+300001}),/fresh/);
@@ -66,6 +84,13 @@ test('F01 preserves short-term visibility and uses its own stable IDs',()=>{
  x.spreadsheet.sheets.forEach((s,i)=>{s.properties.sheetId=spec.workbooks.F01.primarySheetIds[i];x.coverage[i].sheetId=s.properties.sheetId;});
  const r=planPresentation(x,{...opts,workbook:'F01'});
  assert.equal(r.counts.length,4);assert.equal(r.requests.filter(r=>r.updateDimensionProperties?.fields==='hiddenByUser').length,0);
+});
+test('F01 duplicate or stale extra visible catalog tab fails closed',()=>{
+ const x=fixture();x.spreadsheet.spreadsheetId=spec.workbooks.F01.spreadsheetId;
+ x.spreadsheet.sheets.forEach((s,i)=>{s.properties.sheetId=spec.workbooks.F01.primarySheetIds[i];x.coverage[i].sheetId=s.properties.sheetId;});
+ const duplicate=structuredClone(x.spreadsheet.sheets[0]);duplicate.properties={...duplicate.properties,sheetId:999,index:4,title:'상품리스트 09.21 18:13 · 385대'};
+ x.spreadsheet.sheets.push(duplicate);x.sheetInventory.push(duplicate.properties);x.coverage.push({sheetId:999,endRowIndex:10,endColumnIndex:4});
+ assert.throws(()=>planPresentation(x,{...opts,workbook:'F01'}),/Unexpected visible F01 tab/);
 });
 test('supplier views may repeat primary keys, preserve gaps and use common gray',()=>{
  const x=fixture(),s=structuredClone(x.spreadsheet.sheets[0]);

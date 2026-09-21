@@ -70,7 +70,9 @@ export function planPresentation(input, { workbook, updatedAt, now = Date.now() 
     if(fields.length) requests.push({updateSheetProperties:{properties,fields:fields.join(',')}});
     if ((grid.frozenRowCount ?? 0) !== 1) add(id,'frozenRowCount',grid.frozenRowCount,1,{updateSheetProperties:{properties:{sheetId:id,gridProperties:{frozenRowCount:1}},fields:'gridProperties.frozenRowCount'}});
     for(let ci=0;ci<headers.length;ci++) {
-      const header=headers[ci], width=spec.appearance.columnWidthsPx[header], meta=data.columnMetadata?.[ci];
+      const header=headers[ci];
+      const tabWidths=main ? spec.appearance.columnWidthsByTabPx?.[main.key] : undefined;
+      const width=tabWidths?.[header] ?? spec.appearance.columnWidthsPx[header], meta=data.columnMetadata?.[ci];
       if (!meta || !Number.isFinite(meta.pixelSize)) fail(`Column metadata unavailable: ${id}:${ci}`);
       const range={sheetId:id,dimension:'COLUMNS',startIndex:ci,endIndex:ci+1};
       if(width && meta.pixelSize !== width) add(id,`width:${header}`,meta.pixelSize,width,{updateDimensionProperties:{range,properties:{pixelSize:width},fields:'pixelSize'}});

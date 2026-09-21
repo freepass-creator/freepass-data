@@ -51,7 +51,10 @@
     "autoplus": "RP023"
   },
   "appearance": {
-    "columnWidthsPx": { "차명(원문)": 260, "옵션(원문)": 360 },
+    "columnWidthsPx": { "차명(원문)": 260, "옵션(원문)": 360, "세부트림": 100 },
+    "columnWidthsByTabPx": {
+      "pickup": { "반납형보증금": 180, "인수형보증금": 180 }
+    },
     "F01": "preserve_existing_standard_table",
     "F86": "preserve_existing_retro_supplier_view",
     "F86MinimumVisibleFeeMonths": 24,
