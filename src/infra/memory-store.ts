@@ -24,6 +24,10 @@ import type {
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
 import type { ReviewedSourceChangeReceipt } from '../domain/source-change.js';
 import type {
+  CatalogWriterOwnership,
+  WriterOwnershipTransferReceipt
+} from '../domain/writer-ownership.js';
+import type {
   ProjectionDeliveryReceipt,
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
@@ -41,6 +45,8 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   private canonicalizationReceipts = new Map<string, CanonicalizationReceipt>();
   private manualCatalogEntryReceipts = new Map<string, ManualCatalogEntryReceipt>();
   private reviewedSourceChangeReceipts = new Map<string, ReviewedSourceChangeReceipt>();
+  private catalogWriterOwnership: CatalogWriterOwnership | null = null;
+  private writerOwnershipTransferReceipts = new Map<string, WriterOwnershipTransferReceipt>();
   private sourceDefinitions = new Map<string, SourceDefinition>();
   private sourceRuns = new Map<string, SourceRun>();
   private sourceHeads = new Map<string, SourceHead>();
@@ -69,6 +75,8 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     rawRecords?: RawRecord[];
     manualCatalogEntryReceipts?: ManualCatalogEntryReceipt[];
     reviewedSourceChangeReceipts?: ReviewedSourceChangeReceipt[];
+    catalogWriterOwnership?: CatalogWriterOwnership | null;
+    writerOwnershipTransferReceipts?: WriterOwnershipTransferReceipt[];
   }) {
     for (const x of input.vehicleModels ?? []) this.models.set(x.id, copy(x));
     for (const x of input.vehicleAssets ?? []) this.assets.set(x.id, copy(x));
@@ -91,6 +99,12 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     for (const x of input.reviewedSourceChangeReceipts ?? []) {
       this.reviewedSourceChangeReceipts.set(x.idempotencyKey, copy(x));
     }
+    if (input.catalogWriterOwnership !== undefined) {
+      this.catalogWriterOwnership = copy(input.catalogWriterOwnership);
+    }
+    for (const x of input.writerOwnershipTransferReceipts ?? []) {
+      this.writerOwnershipTransferReceipts.set(x.idempotencyKey, copy(x));
+    }
     for (const x of input.revisionHistory ?? []) {
       this.revisionHistory.set(x.revisionRecordId, copy(x));
     }
@@ -106,6 +120,8 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       canonicalizationReceipts: copy([...this.canonicalizationReceipts.entries()]),
       manualCatalogEntryReceipts: copy([...this.manualCatalogEntryReceipts.entries()]),
       reviewedSourceChangeReceipts: copy([...this.reviewedSourceChangeReceipts.entries()]),
+      catalogWriterOwnership: copy(this.catalogWriterOwnership),
+      writerOwnershipTransferReceipts: copy([...this.writerOwnershipTransferReceipts.entries()]),
       sourceDefinitions: copy([...this.sourceDefinitions.entries()]),
       sourceRuns: copy([...this.sourceRuns.entries()]),
       sourceHeads: copy([...this.sourceHeads.entries()]),
@@ -219,6 +235,29 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
         }
         this.reviewedSourceChangeReceipts.set(receipt.idempotencyKey, copy(receipt));
       },
+      getCatalogWriterOwnership: async () => copy(this.catalogWriterOwnership),
+      putCatalogWriterOwnership: async (ownership) => {
+        if (this.catalogWriterOwnership) {
+          throw new Error('Catalog writer ownership already exists');
+        }
+        this.catalogWriterOwnership = copy(ownership);
+      },
+      updateCatalogWriterOwnership: async (ownership) => {
+        if (!this.catalogWriterOwnership) {
+          throw new Error('Catalog writer ownership not found');
+        }
+        this.catalogWriterOwnership = copy(ownership);
+      },
+      getWriterOwnershipTransferReceipt: async (key) =>
+        copy(this.writerOwnershipTransferReceipts.get(key) ?? null),
+      putWriterOwnershipTransferReceipt: async (receipt) => {
+        if (this.writerOwnershipTransferReceipts.has(receipt.idempotencyKey)) {
+          throw new Error(
+            `Writer ownership transfer receipt already exists: ${receipt.idempotencyKey}`
+          );
+        }
+        this.writerOwnershipTransferReceipts.set(receipt.idempotencyKey, copy(receipt));
+      },
       appendAudit: async (event) => { this.audits.push(copy(event)); },
       appendRevision: async (record) => {
         if (this.revisionHistory.has(record.revisionRecordId)) {
@@ -238,6 +277,8 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       this.canonicalizationReceipts = new Map(snapshot.canonicalizationReceipts);
       this.manualCatalogEntryReceipts = new Map(snapshot.manualCatalogEntryReceipts);
       this.reviewedSourceChangeReceipts = new Map(snapshot.reviewedSourceChangeReceipts);
+      this.catalogWriterOwnership = copy(snapshot.catalogWriterOwnership);
+      this.writerOwnershipTransferReceipts = new Map(snapshot.writerOwnershipTransferReceipts);
       this.sourceDefinitions = new Map(snapshot.sourceDefinitions);
       this.sourceRuns = new Map(snapshot.sourceRuns);
       this.sourceHeads = new Map(snapshot.sourceHeads);
@@ -273,6 +314,12 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   }
   async getReviewedSourceChangeReceipt(idempotencyKey: string) {
     return copy(this.reviewedSourceChangeReceipts.get(idempotencyKey) ?? null);
+  }
+  async getCatalogWriterOwnership() {
+    return copy(this.catalogWriterOwnership);
+  }
+  async getWriterOwnershipTransferReceipt(idempotencyKey: string) {
+    return copy(this.writerOwnershipTransferReceipts.get(idempotencyKey) ?? null);
   }
   async listLineageByStage(stage: SourceLineageStage) {
     return copy([...this.lineage.values()].filter((item) => item.stage === stage));
