@@ -14,6 +14,34 @@ export type CatalogHealthEntityType =
   | 'policy'
   | 'projection';
 
+export const CATALOG_DATA_HEALTH_CONTRACT_VERSION =
+  'catalog-data-health-v1' as const;
+export const CATALOG_DATA_HEALTH_SCHEMA_VERSION = '1.0.0' as const;
+
+export const CATALOG_HEALTH_EVALUATED_DIMENSIONS = [
+  'CANONICAL_VALIDATION',
+  'CANONICAL_REVISION_INTEGRITY',
+  'REFERENTIAL_INTEGRITY',
+  'ACTIVE_PROJECTION_METADATA',
+  'ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST',
+  'ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST',
+  'ACTIVE_PROJECTION_INPUT_PARITY',
+  'PROJECTION_LINEAGE_CONTENT_INTEGRITY'
+] as const;
+
+export const CATALOG_HEALTH_NOT_EVALUATED_DIMENSIONS = [
+  'PROJECTION_LINEAGE_CONTENT_INTEGRITY',
+  'CONSISTENT_SNAPSHOT',
+  'SOURCE_FRESHNESS',
+  'SOURCE_TO_CANONICAL_PARITY',
+  'CONSUMER_MIGRATION_STATE'
+] as const;
+
+export type CatalogHealthEvaluatedDimension =
+  typeof CATALOG_HEALTH_EVALUATED_DIMENSIONS[number];
+export type CatalogHealthNotEvaluatedDimension =
+  typeof CATALOG_HEALTH_NOT_EVALUATED_DIMENSIONS[number];
+
 export const CATALOG_HEALTH_ISSUE_CODES = [
   'INVALID_CANONICAL_ENTITY',
   'MISSING_ASSET_VEHICLE_MODEL',
@@ -59,8 +87,8 @@ export type CatalogHealthIssue = {
 };
 
 export type CatalogHealthReport = {
-  contractVersion: 'catalog-data-health-v1';
-  schemaVersion: '1.0.0';
+  contractVersion: typeof CATALOG_DATA_HEALTH_CONTRACT_VERSION;
+  schemaVersion: typeof CATALOG_DATA_HEALTH_SCHEMA_VERSION;
   scope: 'catalog-v1';
   generatedAt: string;
   status: CatalogHealthStatus;
@@ -137,23 +165,8 @@ export type CatalogHealthReport = {
     };
   };
   coverage: {
-    evaluated: Array<
-      | 'CANONICAL_VALIDATION'
-      | 'CANONICAL_REVISION_INTEGRITY'
-      | 'REFERENTIAL_INTEGRITY'
-      | 'ACTIVE_PROJECTION_METADATA'
-      | 'ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST'
-      | 'ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST'
-      | 'ACTIVE_PROJECTION_INPUT_PARITY'
-      | 'PROJECTION_LINEAGE_CONTENT_INTEGRITY'
-    >;
-    notEvaluated: Array<
-      | 'PROJECTION_LINEAGE_CONTENT_INTEGRITY'
-      | 'CONSISTENT_SNAPSHOT'
-      | 'SOURCE_FRESHNESS'
-      | 'SOURCE_TO_CANONICAL_PARITY'
-      | 'CONSUMER_MIGRATION_STATE'
-    >;
+    evaluated: CatalogHealthEvaluatedDimension[];
+    notEvaluated: CatalogHealthNotEvaluatedDimension[];
   };
   issues: CatalogHealthIssue[];
 };
@@ -748,8 +761,8 @@ export async function readCatalogDataHealth(
   );
 
   return {
-    contractVersion: 'catalog-data-health-v1',
-    schemaVersion: '1.0.0',
+    contractVersion: CATALOG_DATA_HEALTH_CONTRACT_VERSION,
+    schemaVersion: CATALOG_DATA_HEALTH_SCHEMA_VERSION,
     scope: 'catalog-v1',
     generatedAt: now,
     status: overallStatus(sortedIssues),
