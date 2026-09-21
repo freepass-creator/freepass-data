@@ -3,12 +3,40 @@
 Status: **ACTIVE / CATALOG V1 EXECUTABLE BASELINE**  
 Official project name: **프리패스 데이터 / FreePass Data**  
 Repository: `freepass-creator/freepass-data`  
-Verified main revision when this handoff was created: `6ee24326bd30b3420d04c4fe344ac9ad5dbfe769`  
-Date: 2026-09-20
+Verified integration revision: `8d52775ad89844ea94f2d99529bb9c30bde6cd19`  
+Date: 2026-09-21
+
+## 0. Current live read evidence — 2026-09-21 22:44 KST
+
+Read-only Firestore counts from the explicitly bound `freepasserp5` project:
+
+- legacy `products`: 1,659
+- legacy `policy`: 81
+- `catalog_products`: 0
+- `catalog_offers`: 0
+- `catalog_policies`: 0
+- `projection_active`: 0
+
+Current verdict: `HOLD_MISSING_CANONICAL_OR_RELEASE`. No Canonical write, release
+activation, deployment, IAM mutation, or consumer cutover was performed.
+
+The latest private source capture has digest
+`c28202a0f8f920e04b9e1940ab0d93d2d806f57d9f543e481506b62026f77c8b`
+at Firestore readTime `2026-09-21T13:44:58.865660Z`. It contains all 1,659
+products and 81 policy documents, with 0 decode failures and 0 normalized plate
+duplicates. All 1,659 products remain mapping HOLD because business semantics are
+not fully confirmed. Policy-link analysis found 1,342 exact review candidates and
+317 unset references; exact matching is evidence for review, not write approval.
+
+Next start here: define and review the authoritative mapping decisions for mileage,
+deposit, price keys, Sonogong classification and policy facts. Generate a dry-run
+Canonical candidate set with per-record HOLD reasons before proposing any Firestore write.
 
 ## 1. Do not restart or recreate the project
 
-This repository already exists and contains the Catalog V1 executable baseline.
+This repository already exists and contains the Catalog V1 executable baseline plus
+the authenticated read runtime, Data Health, ERP5 read-only capture/mapping analysis,
+deployment preparation, shadow comparison and fail-closed cutover gate.
 
 Do **not** create a replacement repository and do **not** redirect this work to `JPK ERP5/jpkerp5`.
 

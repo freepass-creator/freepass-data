@@ -65,6 +65,19 @@ Implemented:
 
 ## Current gap
 
+### Live state checked 2026-09-21
+
+The explicitly targeted `freepasserp5` Firestore currently has 1,659 legacy product
+documents and 81 legacy policy documents. The new `catalog_products`,
+`catalog_offers`, `catalog_policies` and `projection_active` collections are empty.
+Therefore the authenticated read runtime is implemented but has no publishable ACTIVE
+Catalog release. The current operational verdict is HOLD.
+
+Read-only source capture and policy-link analysis completed without writes. All 1,659
+products remain review HOLD; 1,342 policy references are exact link candidates and
+317 are unset. Canonical writes require explicit mapping decisions and a reviewed
+dry-run candidate set.
+
 The implementation has moved beyond the old Next list. The highest-value missing Catalog V1 platform contracts are now:
 
 1. **Server/service authentication + IAM enforcement**
