@@ -14,7 +14,7 @@ It is evidence-based. It does not return a vanity percentage and it does not cla
 Implementation:
 
 - `src/application/catalog-health.ts`
-- `src/application/stable-digest.ts`
+- `src/shared/stable-digest.ts`
 - `tests/catalog-health.test.ts`
 
 ## Reuse pre-review — COMPOSE_OR_EXTEND
