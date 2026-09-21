@@ -235,6 +235,44 @@ describe('Catalog V1 vertical slice', () => {
     expect(await store.getActive('erp-public')).toBeNull();
   });
 
+  it('rejects lineage tamper between READY and ACTIVE in the memory gate', async () => {
+    const store=new MemoryDataStore(); await seedDemoCatalog(store);
+    const activationTamperProjection={
+      stage: store.stage.bind(store),
+      stageEvidence: store.stageEvidence.bind(store),
+      markReady: store.markReady.bind(store),
+      activate: async (releaseId:string) => {
+        const projectionLineage=(store as any).projectionLineage as Map<string, any>;
+        const entry=[...projectionLineage.entries()]
+          .find(([,item])=>item.releaseId===releaseId);
+        if (entry) {
+          const [key,item]=entry;
+          projectionLineage.set(key,{
+            ...item,
+            projection:{
+              ...item.projection,
+              value:'tampered-after-ready'
+            }
+          });
+        }
+        return store.activate(releaseId);
+      },
+      getActive: store.getActive.bind(store),
+      getManifest: store.getManifest.bind(store),
+      listProjectionLineage: store.listProjectionLineage.bind(store),
+      getDeliveryReceipt: store.getDeliveryReceipt.bind(store),
+      putDeliveryReceipt: store.putDeliveryReceipt.bind(store)
+    };
+
+    await expect(buildErpPublicProjection(
+      store,
+      activationTamperProjection,
+      '2026-09-20T10:00:00.000Z'
+    )).rejects.toThrow('Projection field evidence digest mismatch');
+
+    expect(await store.getActive('erp-public')).toBeNull();
+  });
+
   it('excludes UNKNOWN deposit terms from ERP public projection', async () => {
     const store=new MemoryDataStore(); await seedDemoCatalog(store);
     const offer = await store.getOffer('offer_gv70_demo');
