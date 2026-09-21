@@ -31,7 +31,8 @@ export type CatalogHealthIssueCode =
   | 'ACTIVE_RELEASE_OFFER_COUNT_MISMATCH'
   | 'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH'
   | 'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING'
-  | 'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH';
+  | 'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH'
+  | 'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION';
 
 export type CatalogHealthIssue = {
   code: CatalogHealthIssueCode;
@@ -54,6 +55,9 @@ export type CatalogHealthReport = {
       max: number | null;
     };
     activeReleaseCanonicalRevision: number | null;
+    startActiveReleaseId: string | null;
+    endActiveReleaseId: string | null;
+    activeReleaseStable: boolean;
     note: string;
   };
   counts: {
@@ -156,7 +160,8 @@ const projectionIssueCodes = new Set<CatalogHealthIssueCode>([
   'ACTIVE_RELEASE_OFFER_COUNT_MISMATCH',
   'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH',
   'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING',
-  'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH'
+  'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH',
+  'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION'
 ]);
 
 function checkStatus(issues: CatalogHealthIssue[]): CatalogHealthCheckStatus {
@@ -493,6 +498,21 @@ export async function readCatalogDataHealth(
     }
   }
 
+  const finalActiveRelease = await projections.getActive('erp-public');
+  const startActiveReleaseId = activeRelease?.releaseId ?? null;
+  const endActiveReleaseId = finalActiveRelease?.releaseId ?? null;
+  const activeReleaseStable = startActiveReleaseId === endActiveReleaseId;
+
+  if (!activeReleaseStable) {
+    issues.push({
+      code: 'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION',
+      severity: 'WARNING',
+      entityType: 'projection',
+      entityId: endActiveReleaseId ?? startActiveReleaseId ?? undefined,
+      message: `ACTIVE release changed during health observation: ${startActiveReleaseId ?? 'none'} -> ${endActiveReleaseId ?? 'none'}.`
+    });
+  }
+
   const sortedIssues = sortIssues(issues);
   const invalidIssues = sortedIssues.filter(
     (issue) => issue.code === 'INVALID_CANONICAL_ENTITY'
@@ -514,7 +534,12 @@ export async function readCatalogDataHealth(
       partialObservation: true,
       canonicalRevisionRange,
       activeReleaseCanonicalRevision: activeRelease?.canonicalRevision ?? null,
-      note: 'Catalog entities, ACTIVE release, manifest, and lineage are read through separate non-transactional calls; this report is not an atomic snapshot.'
+      startActiveReleaseId,
+      endActiveReleaseId,
+      activeReleaseStable,
+      note: activeReleaseStable
+        ? 'Catalog entities, ACTIVE release, manifest, and lineage are read through separate non-transactional calls; this report is not an atomic snapshot.'
+        : 'ACTIVE release changed between the opening and closing fence reads; the observation is mixed and must not be treated as a stable snapshot.'
     },
     counts: {
       vehicleModels: models.length,
