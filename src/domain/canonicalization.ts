@@ -1,3 +1,4 @@
+import type { ExecutionWriterRef } from './writer-ownership.js';
 import type { ActorRef, VehicleAssetStatus } from './catalog.js';
 
 export type IdentityResolution =
@@ -47,4 +48,5 @@ export type CanonicalizationReceipt = {
   offerId: string;
   committedAt: string;
   requestDigest: string;
+  writerId?: string;
 };
