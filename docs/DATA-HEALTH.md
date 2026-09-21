@@ -176,9 +176,109 @@ If the ACTIVE release changes during the observation window, the report emits `A
 
 This does not create an atomic snapshot. `CONSISTENT_SNAPSHOT` remains not evaluated, but a detected release switch can no longer be hidden behind a clean report.
 
+## Projection evidence snapshot capability
+
+Projection evidence can now be read through an optional `ProjectionEvidenceSnapshotStore` capability.
+
+Memory and Firestore implement:
+
+- active pointer
+- ACTIVE release
+- Projection Release Manifest
+- projection lineage
+
+as one evidence snapshot.
+
+Firestore performs this read inside a transaction and reports:
+
+`projectionEvidenceConsistency = ATOMIC`
+
+Legacy/mocked readers that do not implement the capability continue through an explicit fallback:
+
+`projectionEvidenceConsistency = PARTIAL_MULTI_READ`
+
+This improves Projection evidence consistency without falsely claiming that the entire Catalog Health report is one atomic snapshot.
+
+## Current Canonical revision integrity
+
+Catalog Data Health now compares every current Canonical entity with Revision History for the **same entity ID and revision**.
+
+Checks cover:
+
+- VehicleModel
+- VehicleAsset
+- Product
+- Offer
+- Policy
+
+Results:
+
+- matching immutable revision snapshot → PASS
+- revision snapshot missing → WARNING / DEGRADED because integrity cannot be proven
+- same revision but current entity content differs from revision snapshot → ERROR / BLOCKED
+
+This closes the gap where a Canonical entity could be modified in-place without incrementing its revision and remain invisible until a projection rebuild.
+
+## ACTIVE input parity with current Canonical
+
+The ACTIVE manifest's exact `canonicalInputs` are compared with current Canonical state.
+
+The check deliberately covers only inputs the manifest claims to use; it does not infer that every current Canonical entity must be published.
+
+Results:
+
+- same revision and validation status → PASS
+- current Canonical revision newer than ACTIVE input → WARNING / DEGRADED
+- ACTIVE input revision ahead of current Canonical → ERROR / BLOCKED
+- ACTIVE input entity missing from current Canonical → ERROR / BLOCKED
+- validation status mismatch → WARNING / DEGRADED
+
+This is `ACTIVE_PROJECTION_INPUT_PARITY`, not Source → Canonical parity.
+
+## Single projection integrity verifier
+
+The pure verifier lives at:
+
+`src/shared/projection-integrity.ts`
+
+It is reused by:
+
+1. release reuse
+2. Catalog Data Health
+3. Memory staging / READY / ACTIVE gates
+4. Firestore staging / READY / ACTIVE gates
+5. dedicated integrity tests
+
+The verifier covers:
+
+- actual release payload digest
+- manifest data digest link
+- actual manifest canonical-input digest
+- release/manifest input digest link
+- manifest/release/projection/schema identity
+- product/offer counts
+- canonical revision
+- evidence count
+- lineage content digest
+
+The shared layer is now protected by the architecture checker: `shared` cannot depend on ports/application/adapters/infra/api/jobs/migration and cannot import Firebase SDKs.
+
+## Firestore emulator validation hook
+
+`tests/firestore-projection-integrity.emulator.test.ts` is conditional on `FIRESTORE_EMULATOR_HOST`.
+
+When an emulator is available it verifies:
+
+- >400 evidence rows, forcing multi-chunk evidence staging
+- READY and ACTIVE promotion
+- atomic active-evidence snapshot read
+- READY → ACTIVE lineage tamper rejection
+
+Without an emulator the test is skipped and must be reported as **NOT_RUN**, not PASS.
+
 ## Observation consistency
 
-Catalog Data Health v1 is **not an atomic snapshot**.
+Catalog Data Health v1 is **not a whole-Catalog atomic snapshot**. Projection evidence may be atomic while Canonical entity/revision reads remain separate.
 
 Catalog entities, ACTIVE release, manifest, and lineage are read through separate non-transactional calls. During concurrent updates, the report can combine values observed at different moments.
 
