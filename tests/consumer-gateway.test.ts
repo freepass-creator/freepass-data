@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createConsumerGateway, parseConsumerBindings } from '../src/api/consumer-gateway.js';
+import { createConsumerGateway, parseConsumerBindings, type ConsumerBinding } from '../src/api/consumer-gateway.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { buildErpPublicProjection } from '../src/application/catalog.js';
@@ -8,6 +8,11 @@ const token = 'test-service-token-0123456789abcdef';
 const binding = { id: 'erp-com', projectionId: 'erp-public' as const, token };
 const url = '/v1/consumers/erp-com/catalog';
 const headers = { authorization: `Bearer ${token}` };
+const healthUrl = '/v1/consumers/erp-com/catalog-health';
+const healthBinding: ConsumerBinding = {
+  ...binding,
+  capabilities: ['catalog', 'catalog-health']
+};
 
 describe('read-only consumer gateway', () => {
   it('does not read storage before authenticating the registered consumer', async () => {
@@ -62,13 +67,130 @@ describe('read-only consumer gateway', () => {
     expect((await app.inject({ url, headers })).statusCode).toBe(503);
     await app.close();
   });
+  it('authenticates before touching the Data Health reader', async () => {
+    let healthReads = 0;
+    const healthStore = {
+      listVehicleModels: async () => { healthReads++; return []; },
+      listVehicleAssets: async () => [],
+      listProducts: async () => [],
+      listOffers: async () => [],
+      listPolicies: async () => [],
+      listRevisionHistory: async () => [],
+      getActive: async () => null,
+      getManifest: async () => null,
+      listProjectionLineage: async () => []
+    } as any;
+
+    const app = createConsumerGateway(
+      { getActive: async () => null, getManifest: async () => null },
+      [healthBinding],
+      healthStore
+    );
+
+    for (const request of [
+      { url: healthUrl },
+      { url: healthUrl, headers: { authorization: 'Bearer wrong' } }
+    ]) {
+      expect((await app.inject(request)).statusCode).toBe(401);
+    }
+    expect(healthReads).toBe(0);
+    await app.close();
+  });
+
+  it('requires an explicit catalog-health capability', async () => {
+    const store = new MemoryDataStore();
+    const app = createConsumerGateway(store, [binding], store);
+
+    const result = await app.inject({ url: healthUrl, headers });
+    expect(result.statusCode).toBe(403);
+    expect(result.json()).toEqual({ code: 'FORBIDDEN' });
+
+    await app.close();
+  });
+
+  it('returns a schema-valid HEALTHY report to an explicitly authorized health reader', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await buildErpPublicProjection(store, store);
+
+    const app = createConsumerGateway(store, [healthBinding], store);
+    const result = await app.inject({ url: healthUrl, headers });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers['cache-control']).toBe('no-store');
+    expect(result.json()).toMatchObject({
+      contractVersion: 'catalog-data-health-v1',
+      schemaVersion: '1.0.0',
+      scope: 'catalog-v1',
+      status: 'HEALTHY'
+    });
+
+    await app.close();
+  });
+
+  it('returns HTTP 503 with the report body when Catalog Data Health is BLOCKED', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await buildErpPublicProjection(store, store);
+
+    const product = await store.getProduct('prod_gv70_demo');
+    await store.seed!({
+      products: [{
+        ...product!,
+        vehicleModelId: 'vm_missing'
+      }]
+    });
+
+    const app = createConsumerGateway(store, [healthBinding], store);
+    const result = await app.inject({ url: healthUrl, headers });
+
+    expect(result.statusCode).toBe(503);
+    expect(result.json()).toMatchObject({
+      contractVersion: 'catalog-data-health-v1',
+      status: 'BLOCKED'
+    });
+    expect(result.json().issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'MISSING_PRODUCT_VEHICLE_MODEL',
+        severity: 'ERROR'
+      })
+    ]));
+
+    await app.close();
+  });
+
+  it('allows a health-only registration without granting catalog data access', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await buildErpPublicProjection(store, store);
+
+    const healthOnly: ConsumerBinding = {
+      ...binding,
+      capabilities: ['catalog-health']
+    };
+    const app = createConsumerGateway(store, [healthOnly], store);
+
+    expect((await app.inject({ url, headers })).statusCode).toBe(403);
+    expect((await app.inject({ url: healthUrl, headers })).statusCode).toBe(200);
+
+    await app.close();
+  });
+
   it('does not silently reuse the ERP contract for Sheets or Admin, or share credentials', () => {
     for (const id of ['f01', 'f86', 'admin']) {
       expect(() => parseConsumerBindings(JSON.stringify([{ ...binding, id }]))).toThrow('not implemented');
     }
     expect(() => parseConsumerBindings(JSON.stringify([binding, { ...binding, id: 'whitelabel-test' }]))).toThrow('shared service token');
     expect(() => parseConsumerBindings(undefined)).toThrow('required');
-    for (const entries of [[], [{ ...binding, token: 'short' }], [{ ...binding, token: token + ' ' }], [{ ...binding, projectionId: 'admin-catalog' }]]) {
+    for (const entries of [
+      [],
+      [{ ...binding, token: 'short' }],
+      [{ ...binding, token: token + ' ' }],
+      [{ ...binding, projectionId: 'admin-catalog' }],
+      [{ ...binding, capabilities: [] }],
+      [{ ...binding, capabilities: ['unknown'] }],
+      [{ ...binding, capabilities: ['catalog', 'catalog'] }]
+    ]) {
       expect(() => parseConsumerBindings(JSON.stringify(entries))).toThrow();
     }
   });
