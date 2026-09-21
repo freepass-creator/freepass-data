@@ -94,6 +94,8 @@ describe('Catalog V1 vertical slice', () => {
     const lineage=await store.listProjectionLineage(release.releaseId);
     expect(lineage.length).toBe(manifest?.fieldEvidenceCount);
     expect(manifest?.fieldEvidenceDigest).toBe(stableRecordSetDigest(lineage));
+    expect(stableRecordSetDigest([...lineage].reverse()))
+      .toBe(manifest?.fieldEvidenceDigest);
   });
 
   it('does not reuse an ACTIVE release whose manifest lacks lineage digest', async () => {
