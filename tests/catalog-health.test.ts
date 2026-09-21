@@ -40,7 +40,7 @@ describe('Catalog Data Health v1', () => {
       issueCount: 0
     });
     expect(report.checks.activeProjection).toMatchObject({
-      status: 'WARN',
+      status: 'PASS',
       activeReleaseId: release.releaseId,
       releaseStatus: 'ACTIVE',
       manifestPresent: true,
