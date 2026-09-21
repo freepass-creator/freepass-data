@@ -3,6 +3,7 @@ import { buildErpPublicProjection, updateOfferPrice } from '../src/application/c
 import { readCatalogDataHealth } from '../src/application/catalog-health.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
+import { stableRecordSetDigest } from '../src/shared/stable-digest.js';
 
 describe('Catalog Data Health v1', () => {
   it('reports a valid release as HEALTHY when all projection digests match', async () => {
@@ -594,6 +595,54 @@ describe('Catalog Data Health v1', () => {
     expect(report.status).toBe('BLOCKED');
     expect(report.issues).toContainEqual(expect.objectContaining({
       code: 'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH',
+      severity: 'ERROR'
+    }));
+  });
+
+  it('blocks mutually consistent evidence for the wrong projection', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const active = await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-21T10:00:00.000Z'
+    );
+    const manifest = await store.getManifest(active.releaseId);
+    const lineage = await store.listProjectionLineage(active.releaseId);
+    if (!manifest) throw new Error('projection fixture missing');
+
+    const wrongLineage = lineage.map((item) => ({
+      ...item,
+      projectionId: 'wrong-projection'
+    }));
+    const wrongRelease = { ...active, projectionId: 'wrong-projection' };
+    const wrongManifest = {
+      ...manifest,
+      projectionId: 'wrong-projection',
+      fieldEvidenceDigest: stableRecordSetDigest(wrongLineage)
+    };
+    const wrongProjection = {
+      getActive: async () => wrongRelease,
+      getManifest: async () => wrongManifest,
+      listProjectionLineage: async () => wrongLineage,
+      getActiveEvidenceSnapshot: async () => ({
+        projectionId: 'erp-public',
+        release: wrongRelease,
+        manifest: wrongManifest,
+        lineage: wrongLineage,
+        consistency: 'ATOMIC' as const
+      })
+    };
+
+    const report = await readCatalogDataHealth(
+      store,
+      wrongProjection as any,
+      '2026-09-21T10:01:00.000Z'
+    );
+
+    expect(report.status).toBe('BLOCKED');
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'ACTIVE_RELEASE_PROJECTION_ID_MISMATCH',
       severity: 'ERROR'
     }));
   });

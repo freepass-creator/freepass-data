@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { buildErpPublicProjection } from '../src/application/catalog.js';
+import { readCatalogDataHealth } from '../src/application/catalog-health.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { FirestoreDataStore } from '../src/infra/firestore-store.js';
 import { dataHealthReader } from '../src/infra/firestore-data-health-reader.js';
@@ -142,6 +143,77 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
       .rejects.toThrow('EVIDENCE_DIGEST_MISMATCH');
 
       expect(await store.getActive('erp-public')).toBeNull();
+    } finally {
+      await deleteApp(app);
+    }
+  });
+
+  it('rejects a canonical payload identity that differs from its document path', async () => {
+    const { app, db } = createEmulatorFixture();
+
+    try {
+      await db.collection('catalog_products').doc('prod_path').set({
+        id: 'prod_payload'
+      });
+
+      const readonly = dataHealthReader(db);
+      await expect(readonly.listProducts())
+        .rejects.toThrow('Firestore document identity mismatch');
+    } finally {
+      await deleteApp(app);
+    }
+  });
+
+  it('blocks an erp-public pointer to mutually consistent evidence for another projection', async () => {
+    const { app, db } = createEmulatorFixture();
+
+    try {
+      const memory = new MemoryDataStore();
+      await seedDemoCatalog(memory);
+      const active = await buildErpPublicProjection(
+        memory,
+        memory,
+        '2026-09-21T10:00:00.000Z'
+      );
+      const manifest = await memory.getManifest(active.releaseId);
+      const lineage = await memory.listProjectionLineage(active.releaseId);
+      if (!manifest) throw new Error('projection fixture missing');
+
+      const wrongLineage = lineage.map((item) => ({
+        ...item,
+        projectionId: 'wrong-projection'
+      }));
+      await db.collection('projection_active').doc('erp-public').set({
+        releaseId: active.releaseId,
+        projectionId: 'erp-public'
+      });
+      await db.collection('projection_releases').doc(active.releaseId).set({
+        ...active,
+        projectionId: 'wrong-projection'
+      });
+      await db.collection('projection_release_manifests').doc(active.releaseId).set({
+        ...manifest,
+        projectionId: 'wrong-projection',
+        fieldEvidenceDigest: stableRecordSetDigest(wrongLineage)
+      });
+      for (const item of wrongLineage) {
+        await db.collection('projection_field_lineage')
+          .doc(item.lineageRecordId)
+          .set(item);
+      }
+
+      const readonly = dataHealthReader(db);
+      const report = await readCatalogDataHealth(
+        readonly,
+        readonly,
+        '2026-09-21T10:01:00.000Z'
+      );
+
+      expect(report.status).toBe('BLOCKED');
+      expect(report.issues).toContainEqual(expect.objectContaining({
+        code: 'ACTIVE_RELEASE_PROJECTION_ID_MISMATCH',
+        severity: 'ERROR'
+      }));
     } finally {
       await deleteApp(app);
     }
