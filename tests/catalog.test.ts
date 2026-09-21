@@ -3,6 +3,7 @@ import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { IdempotencyConflictError, RevisionConflictError, buildErpPublicProjection, processOneOutboxEvent, updateOfferPrice } from '../src/application/catalog.js';
 import { AuthorityDeniedError, resolveFieldAuthority } from '../src/domain/authority.js';
+import { stableRecordSetDigest } from '../src/application/stable-digest.js';
 
 describe('Catalog V1 vertical slice', () => {
   it('is idempotent and rejects stale revisions', async () => {
@@ -90,8 +91,75 @@ describe('Catalog V1 vertical slice', () => {
       expect.objectContaining({entityType:'product',entityId:'prod_gv70_demo',revision:1}),
       expect.objectContaining({entityType:'offer',entityId:'offer_gv70_demo',revision:1})
     ]));
-    expect((await store.listProjectionLineage(release.releaseId)).length)
-      .toBe(manifest?.fieldEvidenceCount);
+    const lineage=await store.listProjectionLineage(release.releaseId);
+    expect(lineage.length).toBe(manifest?.fieldEvidenceCount);
+    expect(manifest?.fieldEvidenceDigest).toBe(stableRecordSetDigest(lineage));
+  });
+
+  it('does not reuse an ACTIVE release whose manifest lacks lineage digest', async () => {
+    const store=new MemoryDataStore(); await seedDemoCatalog(store);
+    const first=await buildErpPublicProjection(store,store,'2026-09-20T09:00:00.000Z');
+
+    const legacyManifestProjection={
+      stage: store.stage.bind(store),
+      stageEvidence: store.stageEvidence.bind(store),
+      markReady: store.markReady.bind(store),
+      activate: store.activate.bind(store),
+      getActive: store.getActive.bind(store),
+      getManifest: async (releaseId:string) => {
+        const manifest=await store.getManifest(releaseId);
+        if (!manifest) return null;
+        const {fieldEvidenceDigest: _legacyOmitted, ...legacyManifest}=manifest;
+        return legacyManifest;
+      },
+      listProjectionLineage: store.listProjectionLineage.bind(store),
+      getDeliveryReceipt: store.getDeliveryReceipt.bind(store),
+      putDeliveryReceipt: store.putDeliveryReceipt.bind(store)
+    };
+
+    const second=await buildErpPublicProjection(
+      store,
+      legacyManifestProjection,
+      '2026-09-20T09:01:00.000Z'
+    );
+
+    expect(second.releaseId).not.toBe(first.releaseId);
+    expect((await store.getManifest(second.releaseId))?.fieldEvidenceDigest).toBeTruthy();
+  });
+
+  it('rejects same-count lineage tamper before READY promotion', async () => {
+    const store=new MemoryDataStore(); await seedDemoCatalog(store);
+    const tamperingProjection={
+      stage: store.stage.bind(store),
+      stageEvidence: async (input: Parameters<typeof store.stageEvidence>[0]) => {
+        const lineage=structuredClone(input.lineage);
+        if (lineage[0]) {
+          lineage[0]={
+            ...lineage[0],
+            projection:{
+              ...lineage[0].projection,
+              value:'tampered-before-ready'
+            }
+          };
+        }
+        return store.stageEvidence({manifest:input.manifest,lineage});
+      },
+      markReady: store.markReady.bind(store),
+      activate: store.activate.bind(store),
+      getActive: store.getActive.bind(store),
+      getManifest: store.getManifest.bind(store),
+      listProjectionLineage: store.listProjectionLineage.bind(store),
+      getDeliveryReceipt: store.getDeliveryReceipt.bind(store),
+      putDeliveryReceipt: store.putDeliveryReceipt.bind(store)
+    };
+
+    await expect(buildErpPublicProjection(
+      store,
+      tamperingProjection,
+      '2026-09-20T10:00:00.000Z'
+    )).rejects.toThrow('Projection field evidence digest mismatch');
+
+    expect(await store.getActive('erp-public')).toBeNull();
   });
 
   it('excludes UNKNOWN deposit terms from ERP public projection', async () => {
