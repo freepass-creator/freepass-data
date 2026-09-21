@@ -326,7 +326,7 @@ export async function readCatalogDataHealth(
       const [entityType, entityId] = key.split('|');
       issues.push({
         code: 'CANONICAL_REVISION_SNAPSHOT_MISSING',
-        severity: 'ERROR',
+        severity: 'WARNING',
         entityType: (entityType ?? 'product') as CatalogHealthEntityType,
         ...(entityId ? { entityId } : {}),
         message: `Current Canonical ${key} r${current.revision} has no matching revision snapshot.`
