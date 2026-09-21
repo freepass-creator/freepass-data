@@ -217,6 +217,50 @@ describe('Catalog Data Health v1', () => {
     expect(report.coverage.evaluated).toContain('ACTIVE_PROJECTION_INPUT_PARITY');
   });
 
+  it('degrades when current Canonical lacks revision-history evidence', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const model = await store.getVehicleModel('vm_gv70_demo');
+    if (!model) throw new Error('model fixture missing');
+
+    await store.seed!({
+      policies: [{
+        id: 'policy_without_history',
+        kind: 'OTHER',
+        version: '1',
+        effectiveFrom: '2026-09-01T00:00:00.000Z',
+        facts: {},
+        schemaVersion: model.schemaVersion,
+        revision: 1,
+        validationStatus: 'VALID',
+        createdAt: model.createdAt,
+        updatedAt: model.updatedAt,
+        createdBy: model.createdBy,
+        updatedBy: model.updatedBy,
+        lineageId: 'lin_policy_without_history'
+      }]
+    });
+
+    const report = await readCatalogDataHealth(
+      store,
+      store,
+      '2026-09-21T10:01:00.000Z'
+    );
+
+    expect(report.status).toBe('DEGRADED');
+    expect(report.checks.canonicalRevisionIntegrity).toEqual({
+      status: 'WARN',
+      missingSnapshotCount: 1,
+      driftCount: 0
+    });
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'CANONICAL_REVISION_SNAPSHOT_MISSING',
+      severity: 'WARNING',
+      entityType: 'policy',
+      entityId: 'policy_without_history'
+    }));
+  });
+
   it('blocks same-revision Canonical content drift from immutable revision history', async () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
