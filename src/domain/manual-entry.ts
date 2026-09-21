@@ -33,6 +33,7 @@ export type ManualCatalogEntryCommand = {
   idempotencyKey: string;
   entry: ManualCatalogEntry;
   actor: ActorRef;
+  writer?: ExecutionWriterRef;
   reason: string;
 };
 
@@ -49,4 +50,5 @@ export type ManualCatalogEntryReceipt = {
   actor: ActorRef;
   reason: string;
   acceptedAt: string;
+  writerId?: string;
 };
