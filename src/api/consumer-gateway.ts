@@ -7,6 +7,7 @@ import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with 
 import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import type { ProjectionStore } from '../ports/catalog-store.js';
 import { readCatalogDataHealth } from '../application/catalog-health.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 export type ConsumerCapability = 'catalog' | 'catalog-health';
 export type ConsumerBinding = {
@@ -71,15 +72,6 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
 }
 
 const hash = (value: string) => createHash('sha256').update(value).digest();
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value && typeof value === 'object') return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)])
-  );
-  return value;
-}
-const digest = (value: unknown) => hash(JSON.stringify(canonical(value))).toString('hex');
-
 export function createConsumerGateway(
   store: Pick<ProjectionStore, 'getActive' | 'getManifest'>,
   bindings: ConsumerBinding[],
@@ -116,7 +108,7 @@ export function createConsumerGateway(
       manifest.manifestId !== release.manifestId || manifest.schemaVersion !== release.schemaVersion ||
       manifest.productCount !== release.data.length || manifest.offerCount !== release.data.reduce((count, row) => count + row.offers.length, 0) ||
       manifest.inputDigest !== release.inputDigest || manifest.dataDigest !== release.dataDigest ||
-      digest(manifest.canonicalInputs) !== release.inputDigest || digest(release.data) !== release.dataDigest ||
+      stableDigest(manifest.canonicalInputs) !== release.inputDigest || stableDigest(release.data) !== release.dataDigest ||
       !release.activatedAt || !Number.isFinite(Date.parse(release.activatedAt))) {
       return reply.code(503).send({ code: 'RELEASE_EVIDENCE_MISMATCH' });
     }
