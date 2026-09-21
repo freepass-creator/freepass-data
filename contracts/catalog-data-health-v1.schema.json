@@ -48,6 +48,7 @@
         "startActiveReleaseId",
         "endActiveReleaseId",
         "activeReleaseStable",
+        "projectionEvidenceConsistency",
         "note"
       ],
       "properties": {
@@ -110,6 +111,12 @@
         "note": {
           "type": "string",
           "minLength": 1
+        },
+        "projectionEvidenceConsistency": {
+          "enum": [
+            "ATOMIC",
+            "PARTIAL_MULTI_READ"
+          ]
         }
       }
     },
@@ -157,6 +164,7 @@
       "required": [
         "canonicalValidation",
         "referentialIntegrity",
+        "activeInputParity",
         "activeProjection"
       ],
       "properties": {
@@ -315,6 +323,37 @@
               }
             }
           }
+        },
+        "activeInputParity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "missingCount",
+            "staleRevisionCount",
+            "validationMismatchCount"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "PASS",
+                "WARN",
+                "FAIL"
+              ]
+            },
+            "missingCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "staleRevisionCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "validationMismatchCount": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         }
       }
     },
@@ -336,6 +375,7 @@
               "ACTIVE_PROJECTION_METADATA",
               "ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST",
               "ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST",
+              "ACTIVE_PROJECTION_INPUT_PARITY",
               "PROJECTION_LINEAGE_CONTENT_INTEGRITY"
             ]
           }
@@ -392,7 +432,10 @@
               "ACTIVE_RELEASE_RELEASE_ID_MISMATCH",
               "ACTIVE_RELEASE_PROJECTION_ID_MISMATCH",
               "ACTIVE_RELEASE_SCHEMA_VERSION_MISMATCH",
-              "ACTIVE_RELEASE_CANONICAL_REVISION_MISMATCH"
+              "ACTIVE_RELEASE_CANONICAL_REVISION_MISMATCH",
+              "ACTIVE_RELEASE_CANONICAL_INPUT_MISSING",
+              "ACTIVE_RELEASE_CANONICAL_INPUT_STALE",
+              "ACTIVE_RELEASE_CANONICAL_INPUT_VALIDATION_MISMATCH"
             ]
           },
           "severity": {
