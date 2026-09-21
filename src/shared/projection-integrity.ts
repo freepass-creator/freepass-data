@@ -22,7 +22,11 @@ export type ProjectionIntegrityFailureCode =
   | 'CANONICAL_REVISION_MISMATCH'
   | 'EVIDENCE_COUNT_MISMATCH'
   | 'EVIDENCE_DIGEST_MISSING'
-  | 'EVIDENCE_DIGEST_MISMATCH';
+  | 'EVIDENCE_DIGEST_MISMATCH'
+  | 'EVIDENCE_RELEASE_ID_MISMATCH'
+  | 'EVIDENCE_PROJECTION_ID_MISMATCH'
+  | 'EVIDENCE_STAGE_MISMATCH'
+  | 'EVIDENCE_RECORD_ID_DUPLICATE';
 
 export type ProjectionIntegrityResult = {
   valid: boolean;
@@ -102,6 +106,18 @@ export function verifyProjectionReleaseIntegrity(
   }
   if (manifest.fieldEvidenceCount !== lineage.length) {
     failures.push('EVIDENCE_COUNT_MISMATCH');
+  }
+  if (lineage.some((item) => item.releaseId !== release.releaseId)) {
+    failures.push('EVIDENCE_RELEASE_ID_MISMATCH');
+  }
+  if (lineage.some((item) => item.projectionId !== release.projectionId)) {
+    failures.push('EVIDENCE_PROJECTION_ID_MISMATCH');
+  }
+  if (lineage.some((item) => item.stage !== 'CANONICAL_TO_PROJECTION')) {
+    failures.push('EVIDENCE_STAGE_MISMATCH');
+  }
+  if (new Set(lineage.map((item) => item.lineageRecordId)).size !== lineage.length) {
+    failures.push('EVIDENCE_RECORD_ID_DUPLICATE');
   }
   if (!manifest.fieldEvidenceDigest) {
     failures.push('EVIDENCE_DIGEST_MISSING');
