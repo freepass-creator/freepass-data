@@ -10,6 +10,11 @@ import type {
   VehicleModel
 } from '../domain/catalog.js';
 import { assertFieldAuthority } from '../domain/authority.js';
+import {
+  assertCatalogWriterOwnership,
+  resolveExecutionWriter,
+  type ExecutionWriterRef
+} from '../domain/writer-ownership.js';
 import type { CatalogStore, OutboxStore, ProjectionStore } from '../ports/catalog-store.js';
 import type { CatalogEntityType, EntityRevisionRecord } from '../domain/history.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
@@ -22,6 +27,7 @@ import type {
 export type UpdateOfferPriceInput = {
   commandId: string; idempotencyKey: string; offerId: string; expectedRevision: number;
   termKey: string; monthlyRent: Money; reason: string; actor: ActorRef;
+  writer?: ExecutionWriterRef;
 };
 export class RevisionConflictError extends Error {
   readonly code = 'REVISION_CONFLICT';
@@ -50,7 +56,7 @@ function revisionRecordId(
     .slice(0, 32);
 }
 
-function updateOfferPriceDigest(input: UpdateOfferPriceInput) {
+function updateOfferPriceDigest(input: UpdateOfferPriceInput, writerId: string) {
   return createHash('sha256').update(JSON.stringify({
     commandType: 'UPDATE_OFFER_PRICE',
     offerId: input.offerId,
@@ -65,7 +71,8 @@ function updateOfferPriceDigest(input: UpdateOfferPriceInput) {
       id: input.actor.id,
       kind: input.actor.kind,
       organizationId: input.actor.organizationId ?? null
-    }
+    },
+    writerId
   })).digest('hex');
 }
 
@@ -87,9 +94,14 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
     command: 'UPDATE_OFFER_PRICE',
     actor: input.actor
   });
-  const requestDigest = updateOfferPriceDigest(input);
+  const writer = resolveExecutionWriter(input.actor, input.writer);
+  const requestDigest = updateOfferPriceDigest(input, writer.id);
 
   return store.transact(async (tx) => {
+    assertCatalogWriterOwnership(
+      await tx.getCatalogWriterOwnership(),
+      writer
+    );
     const existingReceipt = await tx.getCommandReceipt(input.idempotencyKey);
     if (existingReceipt) {
       if (!existingReceipt.requestDigest || existingReceipt.requestDigest !== requestDigest) {
@@ -109,6 +121,7 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
       idempotencyKey: input.idempotencyKey, commandId: input.commandId,
       status: 'CANONICAL_COMMITTED' as const, entityType: 'offer', entityId: current.id,
       revision: next.revision, committedAt: now, requestDigest,
+      writerId: writer.id,
       authorityRuleId: authority.ruleId
     };
     await tx.putOffer(next);
@@ -134,6 +147,7 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
       eventId: randomUUID(), commandId: input.commandId, actor: input.actor,
       entityType: 'offer', entityId: current.id, action: 'OFFER_PRICE_UPDATED',
       before: current, after: next, reason: input.reason,
+      writerId: writer.id,
       authorityRuleId: authority.ruleId,
       revisionBefore: current.revision, revisionAfter: next.revision, occurredAt: now
     });
