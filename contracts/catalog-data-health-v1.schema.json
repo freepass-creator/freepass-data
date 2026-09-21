@@ -163,6 +163,7 @@
       "additionalProperties": false,
       "required": [
         "canonicalValidation",
+        "canonicalRevisionIntegrity",
         "referentialIntegrity",
         "activeInputParity",
         "activeProjection"
@@ -331,6 +332,7 @@
             "status",
             "missingCount",
             "staleRevisionCount",
+            "aheadRevisionCount",
             "validationMismatchCount"
           ],
           "properties": {
@@ -352,6 +354,36 @@
             "validationMismatchCount": {
               "type": "integer",
               "minimum": 0
+            },
+            "aheadRevisionCount": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "canonicalRevisionIntegrity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "missingSnapshotCount",
+            "driftCount"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "PASS",
+                "WARN",
+                "FAIL"
+              ]
+            },
+            "missingSnapshotCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "driftCount": {
+              "type": "integer",
+              "minimum": 0
             }
           }
         }
@@ -371,6 +403,7 @@
           "items": {
             "enum": [
               "CANONICAL_VALIDATION",
+              "CANONICAL_REVISION_INTEGRITY",
               "REFERENTIAL_INTEGRITY",
               "ACTIVE_PROJECTION_METADATA",
               "ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST",
@@ -435,7 +468,10 @@
               "ACTIVE_RELEASE_CANONICAL_REVISION_MISMATCH",
               "ACTIVE_RELEASE_CANONICAL_INPUT_MISSING",
               "ACTIVE_RELEASE_CANONICAL_INPUT_STALE",
-              "ACTIVE_RELEASE_CANONICAL_INPUT_VALIDATION_MISMATCH"
+              "ACTIVE_RELEASE_CANONICAL_INPUT_VALIDATION_MISMATCH",
+              "ACTIVE_RELEASE_CANONICAL_INPUT_AHEAD",
+              "CANONICAL_REVISION_SNAPSHOT_MISSING",
+              "CANONICAL_REVISION_SNAPSHOT_DRIFT"
             ]
           },
           "severity": {
