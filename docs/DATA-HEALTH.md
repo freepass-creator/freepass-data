@@ -77,20 +77,33 @@ If `release.data` or `manifest.canonicalInputs` is changed while the stored dige
 
 ## Projection lineage content integrity
 
-Current `ProjectionReleaseManifest` stores `fieldEvidenceCount`, but it does **not** store a digest over projection-lineage contents.
+New Projection Release Manifests carry `fieldEvidenceDigest`, a deterministic SHA-256 digest over the complete projection-lineage record set sorted by `lineageRecordId`.
 
-Therefore v1 can prove the count but cannot authenticate the content.
+The same shared stable-digest implementation is used by:
 
-When evidence rows exist:
+- release construction
+- Memory/Firestore evidence staging
+- Memory/Firestore READY promotion
+- Catalog Data Health verification
+
+This closes the previous gap where equal row counts could hide modified evidence content.
+
+For new manifests:
+
+- matching count + matching `fieldEvidenceDigest` → `PASS`
+- same count but changed lineage content → `BLOCKED`
+- mismatched count → `BLOCKED`
+
+For legacy manifests that predate `fieldEvidenceDigest`:
 
 - `lineageContentIntegrity.status = NOT_EVALUATED`
-- `PROJECTION_LINEAGE_CONTENT_INTEGRITY` stays in `coverage.notEvaluated`
-- the projection check is `WARN`
-- overall result cannot become `HEALTHY`; it remains at least `DEGRADED`
+- `ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING` warning
+- overall result is at least `DEGRADED`
+- an existing ACTIVE release without the digest is not reused by a new projection build
 
-A regression test explicitly changes lineage content while preserving the same row count and verifies that the system does not claim content integrity.
+The field remains optional in the TypeScript manifest contract only for read compatibility with already-persisted legacy manifests. New evidence staging requires the digest.
 
-Do not upgrade this to PASS until the evidence contract includes a deterministic lineage-content digest or equivalent authenticated proof.
+Release promotion also re-reads persisted evidence and recomputes the digest before READY, so the check is not limited to post-activation health reporting.
 
 ## Observation consistency
 
@@ -116,11 +129,10 @@ Do not interpret a clean check result as proof that every value came from one tr
 - `DEGRADED` — warning or explicit critical non-evaluation exists, but no implemented invariant is broken
 - `BLOCKED` — at least one implemented invariant fails
 
-With the current lineage contract, a non-empty ACTIVE release is expected to be at least `DEGRADED`, not `HEALTHY`.
+With a new manifest containing valid data, canonical-input, and lineage-content digests, a normal release can be `HEALTHY`. Legacy manifests without lineage digest remain `DEGRADED`.
 
 ## Explicitly not evaluated yet
 
-- `PROJECTION_LINEAGE_CONTENT_INTEGRITY`
 - `CONSISTENT_SNAPSHOT`
 - `SOURCE_FRESHNESS`
 - `SOURCE_TO_CANONICAL_PARITY`
@@ -138,14 +150,17 @@ Tests include:
 4. **release.data content tamper with unchanged digest**
 5. **manifest canonicalInputs tamper with unchanged digest**
 6. **same-count lineage content tamper**
+7. **legacy manifest without lineage digest**
+8. **same-count lineage tamper rejected before READY promotion**
+9. **ACTIVE release without lineage digest is not reused**
 
 ## Next safe extension
 
-1. Add lineage-content digest/equivalent evidence to the release contract.
-2. Add an atomic/snapshot read boundary or revision-token strategy for health observation.
-3. Add a versioned Source Registry read contract.
-4. Add source-head listing and freshness thresholds.
-5. Add Consumer Registry health after migration-state contracts are fixed.
-6. Expose the read model through an authenticated/read-only API only after the contract is stable.
+1. Re-run the full integrated test suite on the updated branch.
+2. Connect the proven Data Health read model to the existing authenticated/read-only consumer API boundary.
+3. Keep the API response read-only and versioned; do not expose raw Firestore topology.
+4. Preserve `PARTIAL_MULTI_READ` until an atomic snapshot/revision-token strategy exists.
+5. Add Source Registry/freshness only as a later isolated unit.
+6. Add Consumer Registry health only after migration-state contracts are fixed.
 
 No production writer cutover, Firebase IAM change, or consumer cutover is authorized by this health read model.
