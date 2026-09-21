@@ -204,3 +204,68 @@ export function inspectErp5Capture(capture: Erp5SourceCapture) {
     remaining: ['UPSTREAM_FRESHNESS_AND_PARITY_UNVERIFIED', 'POLICY_LINKS_UNREVIEWED', 'NO_CANONICAL_WRITE_OR_CONSUMER_CUTOVER']
   };
 }
+
+export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
+  const inspection = inspectErp5Capture(capture);
+  const records = capture.collections.products.documents.map((doc) => {
+    const documentId = String(doc.name).split('/').at(-1);
+    if (!documentId) fail('INVALID_CAPTURE_DOCUMENT');
+    try {
+      const mapped = mapErp5Product({
+        projectId: capture.projectId,
+        collection: 'products',
+        documentId,
+        sourceRevision: `capture:${capture.digest}`,
+        observedAt: new Date(capture.readTime).toISOString(),
+        data: decodeFields(doc.fields ?? {}, true)
+      });
+      return {
+        sourceRecordId: documentId,
+        sourceFingerprint: mapped.candidate.sourceFingerprint,
+        status: mapped.status,
+        canonicalWriteAuthorized: false as const,
+        holdReasons: [...mapped.candidate.issues].sort(),
+        candidate: mapped.candidate,
+        inventory: mapped.inventory,
+        fieldSources: mapped.fieldSources
+      };
+    } catch (error) {
+      const code = error instanceof Error && /^[A-Z0-9_:.-]+$/.test(error.message)
+        ? error.message
+        : 'DECODE_OR_ENVELOPE_HOLD';
+      return {
+        sourceRecordId: documentId,
+        sourceFingerprint: null,
+        status: 'HOLD' as const,
+        canonicalWriteAuthorized: false as const,
+        holdReasons: [code],
+        candidate: null,
+        inventory: null,
+        fieldSources: {}
+      };
+    }
+  }).sort((a, b) => a.sourceRecordId.localeCompare(b.sourceRecordId));
+  const issueCounts: Record<string, number> = {};
+  for (const record of records) for (const reason of record.holdReasons) {
+    issueCounts[reason] = (issueCounts[reason] ?? 0) + 1;
+  }
+  const unsigned = {
+    version: 'erp5-canonical-dry-run/1' as const,
+    status: 'HOLD' as const,
+    canonicalWriteAuthorized: false as const,
+    cutoverAuthorized: false as const,
+    sourceDigest: capture.digest,
+    sourceReadTime: capture.readTime,
+    mapperVersion: ERP5_PRODUCT_MAPPER_VERSION,
+    counts: {
+      sourceProducts: capture.collections.products.count,
+      candidates: records.length,
+      mappedForReview: records.filter((record) => record.status === 'MAPPED_FOR_REVIEW').length,
+      hold: records.filter((record) => record.status === 'HOLD').length
+    },
+    issueCounts,
+    records
+  };
+  if (unsigned.counts.candidates !== inspection.products) fail('DRY_RUN_COVERAGE_MISMATCH');
+  return { ...unsigned, digest: hash(unsigned) };
+}

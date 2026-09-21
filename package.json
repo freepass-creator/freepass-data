@@ -12,6 +12,7 @@
     "test:shadow": "node --test tests/catalog-shadow.node.mjs tests/catalog-shadow-stability.node.mjs tests/shadow-cli.node.mjs",
     "check:read-runtime": "node scripts/check-read-runtime.mjs",
     "check:central-firestore": "tsx src/jobs/check-central-firestore.ts",
+    "dry-run:erp5-canonical": "tsx src/jobs/build-erp5-canonical-dry-run.ts",
     "serve:consumers": "tsx src/api/consumer-server.ts",
     "dev": "node --import tsx scripts/run-memory.mjs api",
     "worker:memory": "node --import tsx scripts/run-memory.mjs worker",

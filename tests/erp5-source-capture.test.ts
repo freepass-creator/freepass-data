@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { captureErp5Source, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
+import { buildErp5CanonicalDryRun, captureErp5Source, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
 const readTime = '2026-09-21T10:00:00.123456Z';
 function doc(collection = 'products', id = 'synthetic') {
   return {
@@ -52,6 +52,28 @@ describe('ERP5 same-transaction raw capture', () => {
     expect(report.canonicalWriteAuthorized).toBe(false);
     expect(JSON.stringify(report)).not.toContain('12가3456');
     expect(JSON.stringify(report)).not.toContain('합성모델');
+  });
+
+  it('builds a complete deterministic private dry run without authorizing writes', async () => {
+    const held = doc('products', 'held');
+    delete (held.fields as Record<string, unknown>).maker;
+    const capture = await captureErp5Source(fake({ products: [doc(), held] }).rpc);
+    const first = buildErp5CanonicalDryRun(capture);
+    const second = buildErp5CanonicalDryRun(structuredClone(capture));
+
+    expect(first.digest).toBe(second.digest);
+    expect(first.status).toBe('HOLD');
+    expect(first.canonicalWriteAuthorized).toBe(false);
+    expect(first.cutoverAuthorized).toBe(false);
+    expect(first.counts).toEqual({
+      sourceProducts: 2,
+      candidates: 2,
+      mappedForReview: 1,
+      hold: 1
+    });
+    expect(first.records.map((record) => record.sourceRecordId)).toEqual(['held', 'synthetic']);
+    expect(first.records[0]!.holdReasons).toContain('MISSING_REQUIRED:maker');
+    expect('raw' in first.records[0]!).toBe(false);
   });
 
   it('detects a truncated response instead of comparing its length to itself', async () => {

@@ -95,6 +95,18 @@ readTime은 DB의 일관된 관측 시점이지 공급사 최신 수집 시각�
 
 ## 검증·검토와 남은 작업
 
+### Canonical DRY RUN 후보 묶음
+
+기존 캡처와 `erp5-product-mapping/1`을 재사용하는
+`npm run dry-run:erp5-canonical -- --capture <private capture.json>` 명령을 추가했다.
+신규 job이 필요한 이유는 기존 매퍼가 단건 순수 변환만 제공하고 전체 캡처의 건수 고정,
+건별 HOLD 사유, 결과 digest, 비공개 파일 readback을 하나의 실행 증거로 만들지 않았기 때문이다
+(`CREATE_NEW_JUSTIFIED`: private orchestration only; mapping logic is reused).
+
+최신 캡처의 DRY RUN 결과는 source 1,659건과 candidate 1,659건이 일치하고,
+`mappedForReview=0`, `hold=1659`, `canonicalWriteAuthorized=false`다. 결과 원문은
+캡처와 같은 Git 외부 비공개 실행 디렉터리에 새 파일로 저장하며 기존 파일을 덮어쓰지 않는다.
+
 - `npm run check`: architecture/TypeScript build, Vitest 158건(캡처 신규 47건), Sheets 20건 통과.
 - 실패 반례: 잘린 쿼리, 다른 프로젝트/중첩 경로, 중복 문서, readTime 불일치, 정책 읽기 실패,
   저장 후 손상, count 재작성, 미지원/부정확 자료형, 원문 없는 차량번호, 중복 차량번호, write RPC 차단.
