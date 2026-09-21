@@ -1,4 +1,5 @@
 import type { CatalogStore, ProjectionStore } from '../ports/catalog-store.js';
+import { stableDigest } from './stable-digest.js';
 
 export type CatalogHealthStatus = 'HEALTHY' | 'DEGRADED' | 'BLOCKED';
 export type CatalogHealthCheckStatus = 'PASS' | 'WARN' | 'FAIL';
@@ -24,9 +25,12 @@ export type CatalogHealthIssueCode =
   | 'ACTIVE_RELEASE_MANIFEST_ID_MISMATCH'
   | 'ACTIVE_RELEASE_INPUT_DIGEST_MISMATCH'
   | 'ACTIVE_RELEASE_DATA_DIGEST_MISMATCH'
+  | 'ACTIVE_RELEASE_CANONICAL_INPUT_DIGEST_MISMATCH'
+  | 'ACTIVE_RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH'
   | 'ACTIVE_RELEASE_PRODUCT_COUNT_MISMATCH'
   | 'ACTIVE_RELEASE_OFFER_COUNT_MISMATCH'
-  | 'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH';
+  | 'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH'
+  | 'PROJECTION_LINEAGE_CONTENT_INTEGRITY_NOT_EVALUATED';
 
 export type CatalogHealthIssue = {
   code: CatalogHealthIssueCode;
@@ -40,6 +44,17 @@ export type CatalogHealthReport = {
   scope: 'catalog-v1';
   generatedAt: string;
   status: CatalogHealthStatus;
+  observation: {
+    readAt: string;
+    consistency: 'PARTIAL_MULTI_READ';
+    partialObservation: true;
+    canonicalRevisionRange: {
+      min: number | null;
+      max: number | null;
+    };
+    activeReleaseCanonicalRevision: number | null;
+    note: string;
+  };
   counts: {
     vehicleModels: number;
     vehicleAssets: number;
@@ -67,16 +82,34 @@ export type CatalogHealthReport = {
       productCount: number | null;
       expectedEvidenceCount: number | null;
       actualEvidenceCount: number | null;
+      dataPayloadDigest: {
+        stored: string | null;
+        recomputed: string | null;
+        status: 'PASS' | 'FAIL' | 'NOT_APPLICABLE';
+      };
+      canonicalInputDigest: {
+        stored: string | null;
+        recomputed: string | null;
+        status: 'PASS' | 'FAIL' | 'NOT_APPLICABLE';
+      };
+      lineageContentIntegrity: {
+        status: 'NOT_EVALUATED' | 'NOT_APPLICABLE';
+        reason: string;
+      };
     };
   };
   coverage: {
     evaluated: Array<
-      'CANONICAL_VALIDATION'
+      | 'CANONICAL_VALIDATION'
       | 'REFERENTIAL_INTEGRITY'
-      | 'ACTIVE_PROJECTION_EVIDENCE'
+      | 'ACTIVE_PROJECTION_METADATA'
+      | 'ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST'
+      | 'ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST'
     >;
     notEvaluated: Array<
-      'SOURCE_FRESHNESS'
+      | 'PROJECTION_LINEAGE_CONTENT_INTEGRITY'
+      | 'CONSISTENT_SNAPSHOT'
+      | 'SOURCE_FRESHNESS'
       | 'SOURCE_TO_CANONICAL_PARITY'
       | 'CONSUMER_MIGRATION_STATE'
     >;
@@ -113,9 +146,12 @@ const projectionIssueCodes = new Set<CatalogHealthIssueCode>([
   'ACTIVE_RELEASE_MANIFEST_ID_MISMATCH',
   'ACTIVE_RELEASE_INPUT_DIGEST_MISMATCH',
   'ACTIVE_RELEASE_DATA_DIGEST_MISMATCH',
+  'ACTIVE_RELEASE_CANONICAL_INPUT_DIGEST_MISMATCH',
+  'ACTIVE_RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH',
   'ACTIVE_RELEASE_PRODUCT_COUNT_MISMATCH',
   'ACTIVE_RELEASE_OFFER_COUNT_MISMATCH',
-  'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH'
+  'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH',
+  'PROJECTION_LINEAGE_CONTENT_INTEGRITY_NOT_EVALUATED'
 ]);
 
 function checkStatus(issues: CatalogHealthIssue[]): CatalogHealthCheckStatus {
@@ -236,11 +272,36 @@ export async function readCatalogDataHealth(
     if (policy.validationStatus === 'INVALID') recordInvalid('policy', policy.id);
   }
 
+  const canonicalRevisions = [
+    ...models.map((item) => item.revision),
+    ...assets.map((item) => item.revision),
+    ...products.map((item) => item.revision),
+    ...offers.map((item) => item.revision),
+    ...policies.map((item) => item.revision)
+  ];
+  const canonicalRevisionRange = {
+    min: canonicalRevisions.length ? Math.min(...canonicalRevisions) : null,
+    max: canonicalRevisions.length ? Math.max(...canonicalRevisions) : null
+  };
+
   let manifestId: string | null = null;
   let manifestPresent = false;
   let productCount: number | null = null;
   let expectedEvidenceCount: number | null = null;
   let actualEvidenceCount: number | null = null;
+  let storedDataDigest: string | null = null;
+  let recomputedDataDigest: string | null = null;
+  let dataPayloadDigestStatus: 'PASS' | 'FAIL' | 'NOT_APPLICABLE' = 'NOT_APPLICABLE';
+  let storedInputDigest: string | null = null;
+  let recomputedInputDigest: string | null = null;
+  let canonicalInputDigestStatus: 'PASS' | 'FAIL' | 'NOT_APPLICABLE' = 'NOT_APPLICABLE';
+  let lineageContentIntegrity: {
+    status: 'NOT_EVALUATED' | 'NOT_APPLICABLE';
+    reason: string;
+  } = {
+    status: 'NOT_APPLICABLE',
+    reason: 'No ACTIVE release is available.'
+  };
 
   if (!activeRelease) {
     issues.push({
@@ -252,6 +313,20 @@ export async function readCatalogDataHealth(
   } else {
     manifestId = activeRelease.manifestId;
     productCount = activeRelease.data.length;
+    storedDataDigest = activeRelease.dataDigest;
+    recomputedDataDigest = stableDigest(activeRelease.data);
+    dataPayloadDigestStatus =
+      storedDataDigest === recomputedDataDigest ? 'PASS' : 'FAIL';
+
+    if (dataPayloadDigestStatus === 'FAIL') {
+      issues.push({
+        code: 'ACTIVE_RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH',
+        severity: 'ERROR',
+        entityType: 'projection',
+        entityId: activeRelease.releaseId,
+        message: 'ACTIVE release data payload does not match its stored dataDigest.'
+      });
+    }
 
     if (activeRelease.status !== 'ACTIVE') {
       issues.push({
@@ -277,9 +352,30 @@ export async function readCatalogDataHealth(
         entityId: activeRelease.releaseId,
         message: 'ACTIVE release has no Projection Release Manifest.'
       });
+      lineageContentIntegrity = {
+        status: 'NOT_EVALUATED',
+        reason: 'Projection lineage content cannot be authenticated without a manifest.'
+      };
     } else {
       manifestPresent = true;
       expectedEvidenceCount = manifest.fieldEvidenceCount;
+      storedInputDigest = manifest.inputDigest;
+      recomputedInputDigest = stableDigest(manifest.canonicalInputs);
+      canonicalInputDigestStatus =
+        storedInputDigest === recomputedInputDigest &&
+        activeRelease.inputDigest === recomputedInputDigest
+          ? 'PASS'
+          : 'FAIL';
+
+      if (canonicalInputDigestStatus === 'FAIL') {
+        issues.push({
+          code: 'ACTIVE_RELEASE_CANONICAL_INPUT_DIGEST_MISMATCH',
+          severity: 'ERROR',
+          entityType: 'projection',
+          entityId: activeRelease.releaseId,
+          message: 'Manifest canonicalInputs do not match the stored inputDigest.'
+        });
+      }
 
       if (manifest.manifestId !== activeRelease.manifestId) {
         issues.push({
@@ -306,6 +402,15 @@ export async function readCatalogDataHealth(
           entityType: 'projection',
           entityId: activeRelease.releaseId,
           message: 'ACTIVE release dataDigest does not match its manifest.'
+        });
+      }
+      if (manifest.dataDigest !== recomputedDataDigest) {
+        issues.push({
+          code: 'ACTIVE_RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH',
+          severity: 'ERROR',
+          entityType: 'projection',
+          entityId: activeRelease.releaseId,
+          message: 'ACTIVE release data payload does not match the manifest dataDigest.'
         });
       }
       if (manifest.productCount !== activeRelease.data.length) {
@@ -341,6 +446,25 @@ export async function readCatalogDataHealth(
           message: `Manifest fieldEvidenceCount ${manifest.fieldEvidenceCount} does not match stored lineage count ${lineage.length}.`
         });
       }
+
+      if (manifest.fieldEvidenceCount > 0) {
+        lineageContentIntegrity = {
+          status: 'NOT_EVALUATED',
+          reason: 'ProjectionReleaseManifest has no lineage-content digest; only evidence count can be verified.'
+        };
+        issues.push({
+          code: 'PROJECTION_LINEAGE_CONTENT_INTEGRITY_NOT_EVALUATED',
+          severity: 'WARNING',
+          entityType: 'projection',
+          entityId: activeRelease.releaseId,
+          message: lineageContentIntegrity.reason
+        });
+      } else {
+        lineageContentIntegrity = {
+          status: 'NOT_APPLICABLE',
+          reason: 'The manifest declares zero projection lineage records.'
+        };
+      }
     }
   }
 
@@ -359,6 +483,14 @@ export async function readCatalogDataHealth(
     scope: 'catalog-v1',
     generatedAt: now,
     status: overallStatus(sortedIssues),
+    observation: {
+      readAt: now,
+      consistency: 'PARTIAL_MULTI_READ',
+      partialObservation: true,
+      canonicalRevisionRange,
+      activeReleaseCanonicalRevision: activeRelease?.canonicalRevision ?? null,
+      note: 'Catalog entities, ACTIVE release, manifest, and lineage are read through separate non-transactional calls; this report is not an atomic snapshot.'
+    },
     counts: {
       vehicleModels: models.length,
       vehicleAssets: assets.length,
@@ -385,16 +517,31 @@ export async function readCatalogDataHealth(
         manifestPresent,
         productCount,
         expectedEvidenceCount,
-        actualEvidenceCount
+        actualEvidenceCount,
+        dataPayloadDigest: {
+          stored: storedDataDigest,
+          recomputed: recomputedDataDigest,
+          status: dataPayloadDigestStatus
+        },
+        canonicalInputDigest: {
+          stored: storedInputDigest,
+          recomputed: recomputedInputDigest,
+          status: canonicalInputDigestStatus
+        },
+        lineageContentIntegrity
       }
     },
     coverage: {
       evaluated: [
         'CANONICAL_VALIDATION',
         'REFERENTIAL_INTEGRITY',
-        'ACTIVE_PROJECTION_EVIDENCE'
+        'ACTIVE_PROJECTION_METADATA',
+        'ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST',
+        'ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST'
       ],
       notEvaluated: [
+        'PROJECTION_LINEAGE_CONTENT_INTEGRITY',
+        'CONSISTENT_SNAPSHOT',
         'SOURCE_FRESHNESS',
         'SOURCE_TO_CANONICAL_PARITY',
         'CONSUMER_MIGRATION_STATE'
