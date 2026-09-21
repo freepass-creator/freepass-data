@@ -114,3 +114,42 @@ test('missing required environment fails before network access', async () => {
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /READ_RUNTIME_URL is required/);
 });
+
+test('smoke checker rejects unknown status and missing ACTIVE release', async () => {
+  const invalidStatusServer = await startJsonServerForSmoke({
+    ...baseHealth,
+    status: 'UNKNOWN'
+  });
+  const missingReleaseServer = await startJsonServerForSmoke({
+    ...baseHealth,
+    checks: { activeProjection: { activeReleaseId: null } }
+  });
+  try {
+    for (const url of [invalidStatusServer.url, missingReleaseServer.url]) {
+      const result = await run({
+        READ_RUNTIME_URL: url,
+        READ_RUNTIME_CONSUMER_ID: 'erp-com',
+        READ_RUNTIME_TOKEN: 'secret'
+      });
+      assert.notEqual(result.code, 0);
+    }
+  } finally {
+    await Promise.all([invalidStatusServer.close(), missingReleaseServer.close()]);
+  }
+});
+
+async function startJsonServerForSmoke(payload) {
+  const server = createServer((_request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify(payload));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('server address missing');
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve())
+    )
+  };
+}

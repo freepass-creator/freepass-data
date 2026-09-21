@@ -21,8 +21,13 @@ const headers = {
 async function request(path) {
   const response = await fetch(`${baseUrl}${path}`, {
     headers,
-    redirect: 'error'
+    redirect: 'error',
+    signal: AbortSignal.timeout(15_000)
   });
+  const type = response.headers.get('content-type') ?? '';
+  if (!type.includes('application/json')) {
+    throw new Error(`Non-JSON response from ${path}: HTTP ${response.status}`);
+  }
   const text = await response.text();
   let body;
   try {
@@ -48,6 +53,24 @@ if (
 }
 
 const healthStatus = health.body.status;
+if (!['HEALTHY', 'DEGRADED', 'BLOCKED'].includes(healthStatus)) {
+  throw new Error(`Invalid Health status: ${String(healthStatus)}`);
+}
+if (!Number.isFinite(Date.parse(health.body.generatedAt))) {
+  throw new Error('Health generatedAt is missing or invalid');
+}
+if (!Array.isArray(health.body.issues)) {
+  throw new Error('Health issues must be an array');
+}
+const activeReleaseId = health.body.checks?.activeProjection?.activeReleaseId;
+if (typeof activeReleaseId !== 'string' || !activeReleaseId) {
+  throw new Error('Health has no ACTIVE release identity');
+}
+const projectionEvidenceConsistency =
+  health.body.observation?.projectionEvidenceConsistency;
+if (!['ATOMIC', 'PARTIAL_MULTI_READ'].includes(projectionEvidenceConsistency)) {
+  throw new Error('Health projection evidence consistency is missing or invalid');
+}
 const expectedHttp =
   healthStatus === 'BLOCKED' ? 503 : 200;
 
@@ -67,10 +90,8 @@ const summary = {
   issueCount: Array.isArray(health.body.issues)
     ? health.body.issues.length
     : null,
-  activeReleaseId:
-    health.body.checks?.activeProjection?.activeReleaseId ?? null,
-  projectionEvidenceConsistency:
-    health.body.observation?.projectionEvidenceConsistency ?? null
+  activeReleaseId,
+  projectionEvidenceConsistency
 };
 
 if (checkCatalog) {
@@ -81,6 +102,15 @@ if (checkCatalog) {
     throw new Error(
       `Catalog read failed: HTTP ${catalog.response.status}`
     );
+  }
+  if (
+    !catalog.body ||
+    !Array.isArray(catalog.body.data) ||
+    typeof catalog.body.meta?.releaseId !== 'string' ||
+    !catalog.body.meta.releaseId ||
+    catalog.body.meta.releaseId !== activeReleaseId
+  ) {
+    throw new Error('Catalog response metadata is incomplete or does not match Health');
   }
   summary.catalog = {
     releaseId: catalog.body?.meta?.releaseId ?? null,

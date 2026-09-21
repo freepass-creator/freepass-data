@@ -47,6 +47,34 @@ const allowedShadow = new Set([
 if (!allowedShadow.has(shadow?.verdict)) {
   throw new Error('Invalid shadow verdict');
 }
+if (
+  typeof shadow.contentMatches !== 'boolean' ||
+  typeof shadow.orderMatches !== 'boolean'
+) {
+  throw new Error('Shadow evidence parity flags are missing');
+}
+const verdictConsistent =
+  (shadow.verdict === 'PASS' && shadow.contentMatches && shadow.orderMatches) ||
+  (shadow.verdict === 'PASS_CONTENT_ORDER_DIFF_ALLOWED' && shadow.contentMatches && !shadow.orderMatches) ||
+  (shadow.verdict === 'FAIL_CONTENT' && !shadow.contentMatches) ||
+  (shadow.verdict === 'FAIL_ORDER' && shadow.contentMatches && !shadow.orderMatches);
+if (!verdictConsistent) {
+  throw new Error('Shadow verdict contradicts parity flags');
+}
+if (!Number.isFinite(Date.parse(health.generatedAt))) {
+  throw new Error('Health evidence generatedAt is missing or invalid');
+}
+if (!Number.isFinite(Date.parse(shadow.comparedAt))) {
+  throw new Error('Shadow evidence comparedAt is missing or invalid');
+}
+if (!Array.isArray(health.issues)) {
+  throw new Error('Health evidence issues must be an array');
+}
+if (!['ATOMIC', 'PARTIAL_MULTI_READ'].includes(
+  health?.observation?.projectionEvidenceConsistency
+)) {
+  throw new Error('Health projection evidence consistency is missing or invalid');
+}
 
 const reasons = [];
 

@@ -198,3 +198,35 @@ test('cutover readiness fails closed on invalid evidence contracts', async () =>
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('cutover readiness rejects a PASS verdict that contradicts parity evidence', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'freepass-cutover-contradiction-'));
+  try {
+    const healthPath = path.join(dir, 'health.json');
+    const shadowPath = path.join(dir, 'shadow.json');
+    await writeFile(healthPath, JSON.stringify({
+      contractVersion: 'catalog-data-health-v1',
+      schemaVersion: '1.0.0',
+      generatedAt: '2026-09-21T12:00:00.000Z',
+      status: 'HEALTHY',
+      observation: { projectionEvidenceConsistency: 'ATOMIC' },
+      checks: { activeProjection: { activeReleaseId: 'rel_test' } },
+      issues: []
+    }));
+    await writeFile(shadowPath, JSON.stringify({
+      verdict: 'PASS',
+      contentMatches: false,
+      orderMatches: true,
+      comparedAt: '2026-09-21T12:01:00.000Z'
+    }));
+
+    const result = await run('scripts/assess-cutover-readiness.mjs', {
+      CUTOVER_HEALTH_JSON: healthPath,
+      CUTOVER_SHADOW_JSON: shadowPath
+    });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /contradicts parity flags/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
