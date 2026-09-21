@@ -44,7 +44,7 @@ export type Policy = EntityMeta & {
 export type AuditEvent = {
   eventId: string; commandId: string; actor: ActorRef; entityType: string; entityId: string;
   action: string; before: unknown; after: unknown; reason: string;
-  authorityRuleId?: string;
+  writerId?: string; authorityRuleId?: string;
   revisionBefore: number; revisionAfter: number; occurredAt: string;
 };
 export type OutboxStatus = 'PENDING' | 'PROCESSING' | 'DONE' | 'DEAD_LETTER';
@@ -58,7 +58,7 @@ export type OutboxEvent = {
 export type CommandReceipt = {
   idempotencyKey: string; commandId: string; status: 'CANONICAL_COMMITTED';
   entityType: string; entityId: string; revision: number; committedAt: string;
-  requestDigest?: string; authorityRuleId?: string;
+  requestDigest?: string; writerId?: string; authorityRuleId?: string;
 };
 export type ErpPublicProduct = {
   productId: string; productRevision: number; vehicleModelId: string;

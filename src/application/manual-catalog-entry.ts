@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
 import { assertCommandWriter } from '../domain/authority.js';
+import {
+  assertCatalogWriterOwnership,
+  resolveExecutionWriter
+} from '../domain/writer-ownership.js';
 import type { PriceTerm } from '../domain/catalog.js';
 import type {
   ManualCatalogEntry,
@@ -50,7 +54,7 @@ function token(...parts: string[]) {
   return hash(parts).slice(0, 24);
 }
 
-function requestDigest(input: ManualCatalogEntryCommand) {
+function requestDigest(input: ManualCatalogEntryCommand, writerId: string) {
   return hash({
     commandType: 'CREATE_MANUAL_CATALOG_ENTRY',
     entry: input.entry,
@@ -59,6 +63,7 @@ function requestDigest(input: ManualCatalogEntryCommand) {
       kind: input.actor.kind,
       organizationId: input.actor.organizationId ?? null
     },
+    writerId,
     reason: input.reason
   });
 }
@@ -358,7 +363,8 @@ export async function createManualCatalogEntry(
     throw new InvalidManualCatalogEntryError('observed time is invalid');
   }
 
-  const digest = requestDigest(input);
+  const writer = resolveExecutionWriter(input.actor, input.writer);
+  const digest = requestDigest(input, writer.id);
   const fingerprint = hash(input.entry);
   const identity = token(input.idempotencyKey);
   const sourceRecordId = `manual_${identity}`;
@@ -438,6 +444,10 @@ export async function createManualCatalogEntry(
   };
 
   return store.transact(async (tx) => {
+    assertCatalogWriterOwnership(
+      await tx.getCatalogWriterOwnership(),
+      writer
+    );
     const existingReceipt = await tx.getManualCatalogEntryReceipt(input.idempotencyKey);
     if (existingReceipt) {
       if (existingReceipt.requestDigest !== digest) {
@@ -484,6 +494,7 @@ export async function createManualCatalogEntry(
       runId,
       candidateId,
       sourceFingerprint: fingerprint,
+      writerId: writer.id,
       actor: structuredClone(input.actor),
       reason: input.reason,
       acceptedAt: now

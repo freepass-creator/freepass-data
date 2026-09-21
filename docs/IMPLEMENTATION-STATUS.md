@@ -54,17 +54,20 @@ Implemented:
 - idempotent projection delivery receipts keyed by outbox event
 - equivalent ACTIVE Release reuse by input/data digest
 - out-of-order catalog events converge on current Canonical state
+- Catalog writer ownership state with SHARED_MIGRATION → EXCLUSIVE transfer
+- actor vs execution-writer separation for Catalog mutations
+- old-writer fail-closed enforcement across canonicalization/manual/source-refresh/price writes
+- writer ownership transfer revision/audit/idempotency evidence
 - tests for catalog mutation, authority enforcement, idempotency payload conflict, stale revision, projection semantics, ingestion, legacy normalization and shadow behavior
 
 ## Current gap
 
 The implementation has moved beyond the old Next list. The highest-value missing Catalog V1 platform contracts are now:
 
-1. **Writer ownership-transfer enforcement**
-2. **Server/service authentication + IAM enforcement**
-3. **ERP.com shadow/read pilot**
-4. **Console Data Explorer / Entity Detail / Command Edit**
-5. **Backup/restore and operational recovery verification**
+1. **Server/service authentication + IAM enforcement**
+2. **ERP.com shadow/read pilot**
+3. **Console Data Explorer / Entity Detail / Command Edit**
+4. **Backup/restore and operational recovery verification**
 
 ## Local execution
 

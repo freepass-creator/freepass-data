@@ -76,7 +76,9 @@ Reviewed source-change update for existing canonical bindings is implemented.
 
 Duplicate/out-of-order delivery behavior is implemented.
 
-Next implementation focus: writer ownership-transfer enforcement, then authenticated service/user identity.
+Writer ownership-transfer enforcement is implemented as a non-production semantic boundary.
+
+Next implementation focus: authenticated service/user identity and IAM enforcement, then the ERP.com shadow/read pilot.
 
 Minimum evidence:
 
@@ -112,11 +114,17 @@ Promote the architecture-v2 review test matrix into executable tests, starting w
 - [x] source collection failure/incomplete coverage must not be interpreted as mass deletion
 - [x] late older source run must not replace the accepted current head
 - [x] duplicate / out-of-order event behavior
-- [ ] old writer blocked after ownership transfer (design + non-production enforcement test)
+- [x] old writer blocked after ownership transfer (design + non-production enforcement test)
 
 ### P3 — Security/IAM review
 
-Keep Firestore default deny. Define server/service authorization and consumer read boundary before any production cutover.
+Writer ownership transfer semantics are implemented, but runtime writer identity is not yet cryptographically authenticated.
+
+Next:
+- authenticate service/user identity
+- bind execution writer to verified runtime identity rather than request metadata
+- keep Firestore default deny
+- define consumer read boundary before any production cutover
 
 ### P4 — ERP.com pilot consumer
 

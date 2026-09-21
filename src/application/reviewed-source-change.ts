@@ -4,6 +4,10 @@ import {
   assertFieldAuthority,
   resolveFieldAuthority
 } from '../domain/authority.js';
+import {
+  assertCatalogWriterOwnership,
+  resolveExecutionWriter
+} from '../domain/writer-ownership.js';
 import type {
   Money,
   Offer,
@@ -714,7 +718,7 @@ export async function reviewSourceChange(
   return toReview(state, diffs);
 }
 
-function requestDigest(input: ApplyReviewedSourceChangeInput) {
+function requestDigest(input: ApplyReviewedSourceChangeInput, writerId: string) {
   return digest({
     commandType: 'APPLY_REVIEWED_SOURCE_CHANGE',
     bindingId: input.bindingId,
@@ -728,6 +732,7 @@ function requestDigest(input: ApplyReviewedSourceChangeInput) {
     approvedChangeIds: [...input.approvedChangeIds].sort(),
     approvedIssues: [...(input.approvedIssues ?? [])].sort(),
     actor: input.actor,
+    writerId,
     reason: input.reason
   });
 }
@@ -990,9 +995,14 @@ export async function applyReviewedSourceChange(
     throw new ReviewedSourceChangeRejectedError('reason is required');
   }
 
-  const requestHash = requestDigest(input);
+  const writer = resolveExecutionWriter(input.actor, input.writer);
+  const requestHash = requestDigest(input, writer.id);
 
   return store.transact(async (tx: CatalogTransaction) => {
+    assertCatalogWriterOwnership(
+      await tx.getCatalogWriterOwnership(),
+      writer
+    );
     const existing = await tx.getReviewedSourceChangeReceipt(input.idempotencyKey);
     if (existing) {
       if (existing.requestDigest !== requestHash) {
@@ -1119,6 +1129,7 @@ export async function applyReviewedSourceChange(
         before: state.offer,
         after: nextOffer,
         reason: input.reason,
+        writerId: writer.id,
         revisionBefore: state.offer.revision,
         revisionAfter: nextOffer.revision,
         occurredAt: now
@@ -1157,6 +1168,7 @@ export async function applyReviewedSourceChange(
         before: state.asset,
         after: nextAsset,
         reason: input.reason,
+        writerId: writer.id,
         revisionBefore: state.asset.revision,
         revisionAfter: nextAsset.revision,
         occurredAt: now
@@ -1201,6 +1213,7 @@ export async function applyReviewedSourceChange(
         before: state.binding,
         after: nextBinding,
         reason: input.reason,
+        writerId: writer.id,
         revisionBefore: state.binding.revision,
         revisionAfter: nextBinding.revision,
         occurredAt: now
@@ -1233,6 +1246,7 @@ export async function applyReviewedSourceChange(
       bindingRevision: nextBinding.revision,
       sourceRunId: state.run.runId,
       sourceFingerprint: state.candidateRecord.sourceFingerprint,
+      writerId: writer.id,
       appliedChangeIds: [...review.reviewableChangeIds],
       offerId: nextOffer.id,
       offerRevision: nextOffer.revision,

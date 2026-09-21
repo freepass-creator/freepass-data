@@ -1,3 +1,4 @@
+import type { ExecutionWriterRef } from './writer-ownership.js';
 import type { ActorRef } from './catalog.js';
 
 export type SourceChangeClassification = 'REVIEWABLE' | 'BLOCKED';
@@ -53,6 +54,7 @@ export type ApplyReviewedSourceChangeInput = {
   approvedChangeIds: string[];
   approvedIssues?: string[];
   actor: ActorRef;
+  writer?: ExecutionWriterRef;
   reason: string;
 };
 
@@ -71,4 +73,5 @@ export type ReviewedSourceChangeReceipt = {
   vehicleAssetId?: string | null;
   vehicleAssetRevision?: number | null;
   committedAt: string;
+  writerId?: string;
 };

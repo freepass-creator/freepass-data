@@ -26,6 +26,10 @@ import type {
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
 import type { ReviewedSourceChangeReceipt } from '../domain/source-change.js';
 import type {
+  CatalogWriterOwnership,
+  WriterOwnershipTransferReceipt
+} from '../domain/writer-ownership.js';
+import type {
   ProjectionDeliveryReceipt,
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
@@ -41,6 +45,8 @@ const C = {
   canonicalizationReceipts: 'canonicalization_receipts',
   manualCatalogEntryReceipts: 'manual_catalog_entry_receipts',
   reviewedSourceChangeReceipts: 'reviewed_source_change_receipts',
+  writerOwnership: 'writer_ownership',
+  writerOwnershipTransferReceipts: 'writer_ownership_transfer_receipts',
   sources: 'sources',
   sourceRuns: 'source_runs',
   sourceHeads: 'source_heads',
@@ -197,6 +203,30 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
             receipt
           );
         },
+        getCatalogWriterOwnership: async () =>
+          data<CatalogWriterOwnership>(
+            await native.get(this.db.collection(C.writerOwnership).doc('catalog'))
+          ),
+        putCatalogWriterOwnership: async (ownership) => {
+          native.create(this.db.collection(C.writerOwnership).doc('catalog'), ownership);
+        },
+        updateCatalogWriterOwnership: async (ownership) => {
+          native.update(this.db.collection(C.writerOwnership).doc('catalog'), ownership);
+        },
+        getWriterOwnershipTransferReceipt: async (key) =>
+          data<WriterOwnershipTransferReceipt>(
+            await native.get(
+              this.db.collection(C.writerOwnershipTransferReceipts)
+                .doc(encodeURIComponent(key))
+            )
+          ),
+        putWriterOwnershipTransferReceipt: async (receipt) => {
+          native.create(
+            this.db.collection(C.writerOwnershipTransferReceipts)
+              .doc(encodeURIComponent(receipt.idempotencyKey)),
+            receipt
+          );
+        },
         appendAudit: async (event: AuditEvent) => {
           native.create(this.db.collection(C.audits).doc(event.eventId), event);
         },
@@ -264,6 +294,18 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async getReviewedSourceChangeReceipt(idempotencyKey: string) {
     return data<ReviewedSourceChangeReceipt>(
       await this.db.collection(C.reviewedSourceChangeReceipts)
+        .doc(encodeURIComponent(idempotencyKey))
+        .get()
+    );
+  }
+  async getCatalogWriterOwnership() {
+    return data<CatalogWriterOwnership>(
+      await this.db.collection(C.writerOwnership).doc('catalog').get()
+    );
+  }
+  async getWriterOwnershipTransferReceipt(idempotencyKey: string) {
+    return data<WriterOwnershipTransferReceipt>(
+      await this.db.collection(C.writerOwnershipTransferReceipts)
         .doc(encodeURIComponent(idempotencyKey))
         .get()
     );

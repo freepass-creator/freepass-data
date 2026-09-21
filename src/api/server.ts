@@ -4,6 +4,7 @@ import addFormats from 'ajv-formats';
 import updateOfferPriceSchema from '../../contracts/update-offer-price.schema.json' with { type: 'json' };
 import { createRuntimeStores } from '../bootstrap.js';
 import { AuthorityDeniedError } from '../domain/authority.js';
+import { WriterOwnershipDeniedError } from '../domain/writer-ownership.js';
 import {
   EntityNotFoundError,
   IdempotencyConflictError,
@@ -55,7 +56,11 @@ app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {
   try {
     const receipt = await updateOfferPrice(stores.catalog, {
       ...(body as any),
-      offerId: params.offerId
+      offerId: params.offerId,
+      writer: {
+        id: 'service:freepass-data',
+        kind: 'SERVICE'
+      }
     });
     return reply.send(receipt);
   } catch (error) {
@@ -75,6 +80,16 @@ app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {
         aggregate: error.aggregate,
         fieldPath: error.fieldPath,
         command: error.command,
+        reason: error.reason
+      });
+    }
+    if (error instanceof WriterOwnershipDeniedError) {
+      return reply.code(403).send({
+        code: error.code,
+        writerId: error.writerId,
+        ownershipRevision: error.ownershipRevision,
+        primaryWriterId: error.primaryWriterId,
+        mode: error.mode,
         reason: error.reason
       });
     }

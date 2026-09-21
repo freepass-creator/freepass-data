@@ -47,4 +47,5 @@ export type CanonicalizationReceipt = {
   offerId: string;
   committedAt: string;
   requestDigest: string;
+  writerId?: string;
 };

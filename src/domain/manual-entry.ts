@@ -1,3 +1,4 @@
+import type { ExecutionWriterRef } from './writer-ownership.js';
 import type {
   ActorRef,
   CommercialType,
@@ -33,6 +34,7 @@ export type ManualCatalogEntryCommand = {
   idempotencyKey: string;
   entry: ManualCatalogEntry;
   actor: ActorRef;
+  writer?: ExecutionWriterRef;
   reason: string;
 };
 
@@ -49,4 +51,5 @@ export type ManualCatalogEntryReceipt = {
   actor: ActorRef;
   reason: string;
   acceptedAt: string;
+  writerId?: string;
 };
