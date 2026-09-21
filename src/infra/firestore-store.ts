@@ -34,7 +34,7 @@ import type {
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
-import { stableRecordSetDigest } from '../shared/stable-digest.js';
+import { assertProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 
 const C = {
   vehicleModels: 'catalog_vehicle_models',
@@ -357,12 +357,11 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       throw new Error('Projection evidence requires a BUILDING release');
     }
 
-    if (!input.manifest.fieldEvidenceDigest) {
-      throw new Error('Projection release manifest requires fieldEvidenceDigest');
-    }
-    if (input.manifest.fieldEvidenceDigest !== stableRecordSetDigest(input.lineage)) {
-      throw new Error('Projection field evidence digest mismatch');
-    }
+    assertProjectionReleaseIntegrity(
+      releaseSnap.data() as ProjectionRelease<ErpPublicProduct>,
+      input.manifest,
+      input.lineage
+    );
 
     const chunkSize = 400;
     for (let offset = 0; offset < input.lineage.length; offset += chunkSize) {
@@ -409,15 +408,11 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         (doc) => doc.data() as ProjectionFieldLineageRecord
       );
 
-      if (evidence.length !== manifest.fieldEvidenceCount) {
-        throw new Error('Projection field evidence count mismatch');
-      }
-      if (!manifest.fieldEvidenceDigest) {
-        throw new Error('Projection release manifest requires fieldEvidenceDigest');
-      }
-      if (stableRecordSetDigest(evidence) !== manifest.fieldEvidenceDigest) {
-        throw new Error('Projection field evidence digest mismatch');
-      }
+      assertProjectionReleaseIntegrity(
+        releaseSnap.data() as ProjectionRelease<ErpPublicProduct>,
+        manifest,
+        evidence
+      );
 
       tx.update(releaseRef, { status: 'READY' });
     });
@@ -442,15 +437,11 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       const evidence = evidenceSnap.docs.map(
         (doc) => doc.data() as ProjectionFieldLineageRecord
       );
-      if (evidence.length !== manifest.fieldEvidenceCount) {
-        throw new Error('Projection field evidence count mismatch');
-      }
-      if (!manifest.fieldEvidenceDigest) {
-        throw new Error('Projection release manifest requires fieldEvidenceDigest');
-      }
-      if (stableRecordSetDigest(evidence) !== manifest.fieldEvidenceDigest) {
-        throw new Error('Projection field evidence digest mismatch');
-      }
+      assertProjectionReleaseIntegrity(
+        snap.data() as ProjectionRelease<ErpPublicProduct>,
+        manifest,
+        evidence
+      );
 
       const projectionId = snap.get('projectionId') as string;
       const activeRef = this.db.collection(C.activeReleases).doc(projectionId);
