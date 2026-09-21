@@ -726,7 +726,28 @@ export async function readCatalogDataHealth(
   const finalActiveRelease = await projections.getActive('erp-public');
   const startActiveReleaseId = activeRelease?.releaseId ?? null;
   const endActiveReleaseId = finalActiveRelease?.releaseId ?? null;
-  const activeReleaseStable = startActiveReleaseId === endActiveReleaseId;
+  const startActiveFingerprint = activeRelease
+    ? stableDigest({
+        releaseId: activeRelease.releaseId,
+        status: activeRelease.status,
+        manifestId: activeRelease.manifestId,
+        inputDigest: activeRelease.inputDigest,
+        dataDigest: activeRelease.dataDigest,
+        data: activeRelease.data
+      })
+    : null;
+  const endActiveFingerprint = finalActiveRelease
+    ? stableDigest({
+        releaseId: finalActiveRelease.releaseId,
+        status: finalActiveRelease.status,
+        manifestId: finalActiveRelease.manifestId,
+        inputDigest: finalActiveRelease.inputDigest,
+        dataDigest: finalActiveRelease.dataDigest,
+        data: finalActiveRelease.data
+      })
+    : null;
+  const activeReleaseStable =
+    startActiveFingerprint === endActiveFingerprint;
 
   if (!activeReleaseStable) {
     const changedReleaseId = endActiveReleaseId ?? startActiveReleaseId;
@@ -735,7 +756,7 @@ export async function readCatalogDataHealth(
       severity: 'WARNING',
       entityType: 'projection',
       ...(changedReleaseId ? { entityId: changedReleaseId } : {}),
-      message: `ACTIVE release changed during health observation: ${startActiveReleaseId ?? 'none'} -> ${endActiveReleaseId ?? 'none'}.`
+      message: `ACTIVE release identity or payload changed during health observation: ${startActiveReleaseId ?? 'none'} -> ${endActiveReleaseId ?? 'none'}.`
     });
   }
 
