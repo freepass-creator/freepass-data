@@ -564,17 +564,26 @@ export async function buildErpPublicProjection(
   const dataDigest = stableDigest(data);
   const canonicalRevision = Math.max(0, ...canonicalInputs.map((x) => x.revision));
   const currentActive = await projections.getActive('erp-public');
-  if (
-    currentActive &&
-    currentActive.inputDigest === inputDigest &&
-    currentActive.dataDigest === dataDigest
-  ) {
+  if (currentActive && currentActive.status === 'ACTIVE') {
+    const currentPayloadDigest = stableDigest(currentActive.data);
     const currentManifest = await projections.getManifest(currentActive.releaseId);
+
     if (currentManifest?.fieldEvidenceDigest) {
+      const currentCanonicalInputDigest = stableDigest(currentManifest.canonicalInputs);
       const currentLineage = await projections.listProjectionLineage(currentActive.releaseId);
+      const currentLineageDigest = stableRecordSetDigest(currentLineage);
+
       if (
+        currentPayloadDigest === currentActive.dataDigest &&
+        currentActive.dataDigest === currentManifest.dataDigest &&
+        currentActive.dataDigest === dataDigest &&
+        currentCanonicalInputDigest === currentManifest.inputDigest &&
+        currentManifest.inputDigest === currentActive.inputDigest &&
+        currentActive.inputDigest === inputDigest &&
+        currentManifest.manifestId === currentActive.manifestId &&
+        currentManifest.releaseId === currentActive.releaseId &&
         currentLineage.length === currentManifest.fieldEvidenceCount &&
-        stableRecordSetDigest(currentLineage) === currentManifest.fieldEvidenceDigest
+        currentLineageDigest === currentManifest.fieldEvidenceDigest
       ) {
         return currentActive;
       }
