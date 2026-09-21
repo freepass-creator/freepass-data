@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
+import { verifyProjectionReleaseIntegrity } from './projection-integrity.js';
 import type {
   ActorRef,
   ErpPublicProduct,
@@ -564,41 +565,21 @@ export async function buildErpPublicProjection(
   const dataDigest = stableDigest(data);
   const canonicalRevision = Math.max(0, ...canonicalInputs.map((x) => x.revision));
   const currentActive = await projections.getActive('erp-public');
-  if (currentActive && currentActive.status === 'ACTIVE') {
-    const currentPayloadDigest = stableDigest(currentActive.data);
+  if (
+    currentActive &&
+    currentActive.status === 'ACTIVE' &&
+    currentActive.inputDigest === inputDigest &&
+    currentActive.dataDigest === dataDigest
+  ) {
     const currentManifest = await projections.getManifest(currentActive.releaseId);
-
-    if (currentManifest?.fieldEvidenceDigest) {
-      const currentCanonicalInputDigest = stableDigest(currentManifest.canonicalInputs);
+    if (currentManifest) {
       const currentLineage = await projections.listProjectionLineage(currentActive.releaseId);
-      const currentLineageDigest = stableRecordSetDigest(currentLineage);
-
-      const currentOfferCount = currentActive.data.reduce(
-        (sum, product) => sum + product.offers.length,
-        0
+      const integrity = verifyProjectionReleaseIntegrity(
+        currentActive,
+        currentManifest,
+        currentLineage
       );
-      const currentCanonicalRevision = Math.max(
-        0,
-        ...currentManifest.canonicalInputs.map((item) => item.revision)
-      );
-
-      if (
-        currentPayloadDigest === currentActive.dataDigest &&
-        currentActive.dataDigest === currentManifest.dataDigest &&
-        currentActive.dataDigest === dataDigest &&
-        currentCanonicalInputDigest === currentManifest.inputDigest &&
-        currentManifest.inputDigest === currentActive.inputDigest &&
-        currentActive.inputDigest === inputDigest &&
-        currentManifest.manifestId === currentActive.manifestId &&
-        currentManifest.releaseId === currentActive.releaseId &&
-        currentManifest.projectionId === currentActive.projectionId &&
-        currentManifest.schemaVersion === currentActive.schemaVersion &&
-        currentManifest.productCount === currentActive.data.length &&
-        currentManifest.offerCount === currentOfferCount &&
-        currentActive.canonicalRevision === currentCanonicalRevision &&
-        currentLineage.length === currentManifest.fieldEvidenceCount &&
-        currentLineageDigest === currentManifest.fieldEvidenceDigest
-      ) {
+      if (integrity.valid) {
         return currentActive;
       }
     }
