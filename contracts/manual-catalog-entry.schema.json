@@ -30,7 +30,7 @@
         "subModel": {"type": ["string", "null"]},
         "trimName": {"type": ["string", "null"]},
         "commercialType": {
-          "enum": ["NEW_RENT", "USED_RENT", "NEW_SUBSCRIPTION", "USED_SUBSCRIPTION", "PICKUP_SUBSCRIPTION"]
+          "enum": ["NEW_RENT", "USED_RENT", "NEW_SUBSCRIPTION", "USED_SUBSCRIPTION", "OGONG_SUBSCRIPTION", "PICKUP_SUBSCRIPTION"]
         },
         "supplierId": {"type": "string", "minLength": 1},
         "fuelType": {"type": ["string", "null"]},

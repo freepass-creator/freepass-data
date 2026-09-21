@@ -88,7 +88,9 @@ export interface CatalogStore {
   getSourceRun(runId: string): Promise<SourceRun | null>;
   getSourceHead(sourceId: string): Promise<SourceHead | null>;
   getRawRecord(rawRecordId: string): Promise<RawRecord | null>;
+  listRawRecordsByRun(runId: string): Promise<RawRecord[]>;
   getCandidate(candidateId: string): Promise<NormalizedCandidateRecord | null>;
+  listCandidatesByRun(runId: string): Promise<NormalizedCandidateRecord[]>;
   getSourceBinding(bindingId: string): Promise<CanonicalSourceBinding | null>;
   getCanonicalizationReceipt(idempotencyKey: string): Promise<CanonicalizationReceipt | null>;
   getManualCatalogEntryReceipt(idempotencyKey: string): Promise<ManualCatalogEntryReceipt | null>;

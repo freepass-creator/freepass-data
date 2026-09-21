@@ -45,11 +45,14 @@ Implemented:
 - Firebase Control Plane contract for consumer reads/writes and future Console mutation paths
 - controlled Manual Catalog Source/Command with immutable RAW, candidate, lineage and receipt
 - direct-input vertical slice through reviewed Canonicalization and ACTIVE ERP Public Release
+- local product evidence trace from Source/RAW/Candidate through Canonical/Projection/Release
+- live Console record-list flow view: imported object → normalized object → outgoing object, with explicit local-only consumer boundary
 - exact Projection Release Manifest with Canonical input revisions and SHA-256 input/data digests
 - field-level Canonical → Projection evidence with SOURCE_LINEAGE vs REVISION_HISTORY provenance
 - BUILDING → VALIDATING → READY → ACTIVE evidence-gated Release promotion
 - reviewed source-fingerprint change diff/apply workflow with exact approval and all-entity revision pinning
 - source supplier-code mapping preserved separately from Canonical supplierId
+- consumer output ownership contract for F86: retro supplier view, long-term-only fees, and independent Sonogong supplier/product axes
 - SOURCE_REFRESH Revision/Audit/Lineage path for Offer pricing terms and VehicleAsset odometer
 - idempotent projection delivery receipts keyed by outbox event
 - equivalent ACTIVE Release reuse by input/data digest
@@ -68,6 +71,7 @@ The implementation has moved beyond the old Next list. The highest-value missing
 2. **ERP.com shadow/read pilot**
 3. **Console Data Explorer / Entity Detail / Command Edit**
 4. **Backup/restore and operational recovery verification**
+5. **Replace the separately pinned F01/F86 publisher rules with approved FreePass Data releases and consumer receipts**
 
 ## Local execution
 
@@ -89,6 +93,7 @@ Routes:
 ```
 GET  /health
 GET  /v1/views/erp-public/products
+GET  /v1/console/products/:productId/trace  # memory-only RAW-to-consumer evidence
 POST /v1/commands/offers/:offerId/price
 ```
 

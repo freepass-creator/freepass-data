@@ -16,6 +16,8 @@ import {
   processOneOutboxEvent,
   updateOfferPrice
 } from '../application/catalog.js';
+import { buildCatalogProductTrace } from '../application/catalog-trace.js';
+import { isLocalConsoleDriver } from './console-access.js';
 
 const app = Fastify({ logger: true });
 const ajv = new Ajv2020({ allErrors: true, strict: false });
@@ -23,7 +25,7 @@ addFormats.default(ajv);
 const validateUpdateOfferPrice = ajv.compile(updateOfferPriceSchema);
 const stores = await createRuntimeStores();
 const driver = process.env.FREEPASS_DATA_DRIVER ?? 'memory';
-const isLocalMemory = driver === 'memory';
+const isLocalMemory = isLocalConsoleDriver(driver);
 
 await buildErpPublicProjection(stores.catalog, stores.projections);
 
@@ -60,6 +62,18 @@ app.get('/v1/views/erp-public/products', async (_request, reply) => {
       activatedAt: release.activatedAt ?? null
     }
   };
+});
+
+app.get('/v1/console/products/:productId/trace', async (request, reply) => {
+  if (!isLocalMemory) return reply.code(404).send({ code: 'NOT_FOUND' });
+  const params = request.params as { productId: string };
+  const trace = await buildCatalogProductTrace(
+    stores.catalog,
+    stores.projections,
+    params.productId
+  );
+  if (!trace) return reply.code(404).send({ code: 'PRODUCT_NOT_FOUND' });
+  return trace;
 });
 
 app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {

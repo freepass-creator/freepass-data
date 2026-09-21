@@ -124,6 +124,15 @@ tr:last-child td{border-bottom:0}
 .manifest-item span{display:block;font-size:10px;color:var(--muted)}.manifest-item b{display:block;margin-top:6px;font-size:12px;word-break:break-all}
 .timeline{padding:0 16px}.event{display:grid;grid-template-columns:80px 1fr;gap:14px;padding:14px 0;border-bottom:1px solid var(--line)}
 .event:last-child{border-bottom:0}.event time{font-size:10px;color:var(--muted)}.event b{font-size:12px}.event p{margin:5px 0 0;font-size:11px;color:var(--muted)}
+.trace-evidence{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px;color:var(--muted);overflow-wrap:anywhere}
+.record-flow-list{display:grid;gap:12px}
+.record-flow-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.record-flow-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 16px;border-bottom:1px solid var(--line)}
+.record-flow-head b{font-size:13px}.record-flow-head span{font-size:10px;color:var(--muted)}
+.record-flow-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+.record-stage{min-width:0;padding:14px 16px;border-right:1px solid var(--line)}
+.record-stage:last-child{border-right:0}.record-stage h3{font-size:12px;margin:0}.record-stage p{min-height:30px;margin:6px 0 10px;color:var(--muted);font-size:10px;line-height:1.5}
+.record-stage pre{margin:0;padding:12px;border-radius:8px;background:#F7F9FC;color:var(--text);font-size:10px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:440px;overflow:auto}
 .review-queue{display:grid;gap:8px}
 .review-row{
   width:100%;min-height:64px;border:1px solid var(--line);border-radius:10px;
@@ -247,6 +256,14 @@ body[data-active-screen="review-detail"] main{padding-bottom:96px}
   main{padding:20px 16px}
   .grid2{grid-template-columns:1fr}
 }
+@media(max-width:1100px){
+  .record-flow-grid{grid-template-columns:1fr}
+  .record-stage{border-right:0;border-bottom:1px solid var(--line)}
+  .record-stage:last-child{border-bottom:0}
+  .value-step{border-right:0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:92px minmax(0,1fr);column-gap:12px}
+  .value-step:last-child{border-bottom:0}
+  .value-step .step-value{margin-top:0}.value-step .step-path,.value-step .step-note{grid-column:2}
+}
 </style>
 </head>
 <body>
@@ -266,7 +283,7 @@ body[data-active-screen="review-detail"] main{padding-bottom:96px}
 <nav class="tabs">
   <button class="active" data-screen="home">현황</button>
   <button data-screen="data">데이터</button>
-  <button data-screen="sources">원천</button>
+  <button data-screen="sources">흐름 추적</button>
   <button data-screen="review">변경 검수</button>
   <button data-screen="release">배포</button>
   <button data-screen="history">이력</button>
@@ -274,43 +291,35 @@ body[data-active-screen="review-detail"] main{padding-bottom:96px}
 
 <main>
 <section id="home" class="screen active">
-  <div class="head"><div><h1>데이터 현황</h1><p>현재 로컬 배포본과 앞으로 연결할 운영 지표를 구분해 표시합니다.</p></div><div class="mini-note">숫자 표시는 실데이터 · — 표시는 API 준비 중</div></div>
+  <div class="head"><div><h1>데이터 현황</h1><p>현재 로컬 배포본과 앞으로 연결할 운영 지표를 구분해 표시합니다.</p></div><div class="mini-note">숫자는 현재 로컬 실행 증거 · — 표시는 API 준비 중</div></div>
   <div class="summary">
-    <div class="stat"><div class="label">원본 데이터</div><div class="value">—</div><div class="unit">API 준비 중</div></div>
-    <div class="stat"><div class="label">정규화 후보</div><div class="value">—</div><div class="unit">API 준비 중</div></div>
+    <div class="stat"><div class="label">원본 데이터</div><div class="value" id="homeRawCount">—</div><div class="unit">로컬 보존 증거</div></div>
+    <div class="stat"><div class="label">정규화 후보</div><div class="value" id="homeCandidateCount">—</div><div class="unit">로컬 후보 증거</div></div>
     <div class="stat"><div class="label">활성 상품</div><div class="value" id="homeProductCount">—</div><div class="unit">개</div></div>
     <div class="stat"><div class="label">활성 오퍼</div><div class="value" id="homeOfferCount">—</div><div class="unit">개</div></div>
     <div class="stat"><div class="label">검수 대기</div><div class="value">—</div><div class="unit">API 준비 중</div></div>
     <div class="stat"><div class="label">사용 중 배포본</div><div class="value" id="homeReleaseCount">—</div><div class="unit">개</div></div>
   </div>
   <div class="section">
-    <div class="section-head"><h2>데이터 흐름</h2><span class="status-line ok"><i></i>정상</span></div>
+    <div class="section-head"><h2>데이터 흐름</h2><span class="status-line warn" id="flowStatus"><i></i>확인 중</span></div>
     <div class="box flow">
-      <div class="flow-item"><div><b>원천</b><span>연결 API 준비 중</span></div><strong>—</strong></div>
-      <div class="flow-item"><div><b>원본</b><span>수집 당시 값 보존</span></div><strong>—</strong></div>
-      <div class="flow-item"><div><b>정규화</b><span>형식 통일 · 검증 후보</span></div><strong>—</strong></div>
+      <div class="flow-item"><div><b>원천</b><span>실제 Source 정의</span></div><strong id="flowSourceCount">—</strong></div>
+      <div class="flow-item"><div><b>원본</b><span>수집 당시 값 보존</span></div><strong id="flowRawCount">—</strong></div>
+      <div class="flow-item"><div><b>정규화</b><span>형식 통일 · 검증 후보</span></div><strong id="flowCandidateCount">—</strong></div>
       <div class="flow-item"><div><b>정본</b><span>활성 상품 기준</span></div><strong id="flowCanonicalCount">—</strong></div>
-      <div class="flow-item"><div><b>제공 형태</b><span>ERP Public Projection</span></div><strong>1</strong></div>
+      <div class="flow-item"><div><b>제공 형태</b><span>필드 증거가 있는 Projection</span></div><strong id="flowProjectionCount">—</strong></div>
       <div class="flow-item"><div><b>배포본</b><span>현재 활성 배포본</span></div><strong id="flowReleaseCount">—</strong></div>
-      <div class="flow-item"><div><b>사용처</b><span>연결 상태 API 준비 중</span></div><strong>—</strong></div>
+      <div class="flow-item"><div><b>사용처</b><span>운영 소비처 연결 수</span></div><strong id="flowConsumerCount">—</strong></div>
     </div>
   </div>
   <div class="section grid2">
     <div>
-      <div class="section-head"><h2>원천 상태</h2><span class="sub">설계 예시 · API 미연결</span></div>
-      <div class="box table-wrap"><table><thead><tr><th>원천</th><th>상태</th><th class="num">마지막 관측</th></tr></thead><tbody>
-        <tr><td class="row-title" data-label="원천">기존 상품 파이어베이스</td><td data-label="상태"><span class="tag ok">전체 · 완료</span></td><td class="num" data-label="마지막 관측">07:31</td></tr>
-        <tr><td class="row-title" data-label="원천">손오공 시트</td><td data-label="상태"><span class="tag ok">최신</span></td><td class="num" data-label="마지막 관측">07:28</td></tr>
-        <tr><td class="row-title" data-label="원천">오토플러스 연동</td><td data-label="상태"><span class="tag warn">지연</span></td><td class="num" data-label="마지막 관측">06:42</td></tr>
-      </tbody></table></div>
+      <div class="section-head"><h2>현재 원천</h2><span class="sub">선택 상품의 실제 증거</span></div>
+      <div class="box detail" id="homeSourceSummary"><div class="empty-state">원천을 불러오는 중입니다.</div></div>
     </div>
     <div>
-      <div class="section-head"><h2>최근 처리</h2><span class="sub">설계 예시 · API 미연결</span></div>
-      <div class="box timeline">
-        <div class="event"><time>07:32</time><div><b>오퍼 r12 → r13</b><p>월 대여료 변경 검수 완료 · 새 배포본 생성</p></div></div>
-        <div class="event"><time>07:27</time><div><b>원천 기준점 변경</b><p>새 원천 버전 감지 · 검수 대기 등록</p></div></div>
-        <div class="event"><time>07:20</time><div><b>직접 상품 추가</b><p>원본과 정규화 후보를 보존하고 검수 대기</p></div></div>
-      </div>
+      <div class="section-head"><h2>현재 제공 범위</h2><span class="sub">실제 연결과 미연결 구분</span></div>
+      <div class="box detail" id="homeDeliverySummary"><div class="empty-state">배포 상태를 불러오는 중입니다.</div></div>
     </div>
   </div>
 </section>
@@ -329,13 +338,9 @@ body[data-active-screen="review-detail"] main{padding-bottom:96px}
 </section>
 
 <section id="sources" class="screen">
-  <div class="head"><div><h1>원천</h1><p>어디서 어떤 데이터를 가져오는지와 마지막 정상 수집 상태를 봅니다.</p></div><span class="mini-note">설계 예시 · API 미연결</span></div>
-  <div class="box table-wrap"><table><thead><tr><th>원천</th><th>종류</th><th>수집 범위</th><th>완전성</th><th class="num">원본 건수</th><th class="num">마지막 성공</th></tr></thead><tbody>
-    <tr><td class="row-title" data-label="원천">기존 상품 파이어베이스</td><td data-label="종류">파이어스토어</td><td data-label="수집 범위">전체</td><td data-label="완전성"><span class="tag ok">완료</span></td><td class="num" data-label="원본 건수">3,201</td><td class="num" data-label="마지막 성공">07:31</td></tr>
-    <tr><td class="row-title" data-label="원천">손오공 가격표</td><td data-label="종류">구글 시트</td><td data-label="수집 범위">전체</td><td data-label="완전성"><span class="tag ok">완료</span></td><td class="num" data-label="원본 건수">812</td><td class="num" data-label="마지막 성공">07:28</td></tr>
-    <tr><td class="row-title" data-label="원천">오토플러스 재고</td><td data-label="종류">외부 연동</td><td data-label="수집 범위">일부</td><td data-label="완전성"><span class="tag warn">확인 필요</span></td><td class="num" data-label="원본 건수">426</td><td class="num" data-label="마지막 성공">06:42</td></tr>
-    <tr><td class="row-title" data-label="원천">직접 입력</td><td data-label="종류">수동 원천</td><td data-label="수집 범위">단건</td><td data-label="완전성"><span class="tag ok">완료</span></td><td class="num" data-label="원본 건수">17</td><td class="num" data-label="마지막 성공">07:20</td></tr>
-  </tbody></table></div>
+  <div class="head"><div><h1>데이터 흐름</h1><p>데이터 한 건이 들어온 모습, 정제된 모습, 실제 나가는 모습을 한 카드에서 그대로 봅니다.</p></div><span class="runtime-note" id="traceMeta">흐름 불러오는 중</span></div>
+  <div class="section-head"><h2>전체 목록</h2><span class="sub" id="recordFlowMeta">가져온 것 → 정제한 것 → 나가는 것</span></div>
+  <div class="record-flow-list" id="recordFlowRows"><div class="box empty-state">데이터 흐름을 불러오는 중입니다.</div></div>
 </section>
 
 <section id="review" class="screen">
@@ -377,20 +382,17 @@ body[data-active-screen="review-detail"] main{padding-bottom:96px}
   </div>
 </section>
 <section id="release" class="screen">
-  <div class="head"><div><h1>배포</h1><p>어떤 정본 수정본 묶음이 각 프리패스 화면에 제공되는지 확인합니다.</p></div><span class="mini-note">설계 예시 · API 미연결</span></div>
+  <div class="head"><div><h1>배포</h1><p>어떤 정본 수정본 묶음이 어디까지 실제로 제공되는지 확인합니다.</p></div><span class="runtime-note" id="releaseRuntimeMeta">실제 배포 증거 불러오는 중</span></div>
   <div class="box manifest">
-    <div class="manifest-item"><span>배포 ID</span><b>rel_7fe2...c91</b></div>
-    <div class="manifest-item"><span>증거 묶음</span><b>manifest_rel_7fe2...c91</b></div>
-    <div class="manifest-item"><span>입력 지문</span><b>8d3a1c...92bf</b></div>
-    <div class="manifest-item"><span>출력 지문</span><b>2f781e...a011</b></div>
-    <div class="manifest-item"><span>정본 입력</span><b>모델 r4 · 실차 r6 · 상품 r9 · 오퍼 r13</b></div>
-    <div class="manifest-item"><span>필드 출처 증거</span><b>42개</b></div>
+    <div class="manifest-item"><span>배포 ID</span><b id="releaseIdValue">—</b></div>
+    <div class="manifest-item"><span>증거 묶음</span><b id="manifestIdValue">—</b></div>
+    <div class="manifest-item"><span>입력 지문</span><b id="inputDigestValue">—</b></div>
+    <div class="manifest-item"><span>출력 지문</span><b id="dataDigestValue">—</b></div>
+    <div class="manifest-item"><span>정본 입력</span><b id="canonicalInputsValue">—</b></div>
+    <div class="manifest-item"><span>필드 출처 증거</span><b id="evidenceCountValue">—</b></div>
   </div>
-  <div class="section box table-wrap"><table><thead><tr><th>사용처</th><th>상태</th><th>배포본</th><th class="num">차이</th><th class="num">마지막 확인</th></tr></thead><tbody>
-    <tr><td class="row-title" data-label="사용처">프리패스 ERP</td><td data-label="상태"><span class="tag ok">연결</span></td><td data-label="배포본">rel_7fe2...</td><td class="num" data-label="차이">0</td><td class="num" data-label="마지막 확인">07:35</td></tr>
-    <tr><td class="row-title" data-label="사용처">프리패스 어드민</td><td data-label="상태"><span class="tag ok">연결</span></td><td data-label="배포본">rel_7fe2...</td><td class="num" data-label="차이">0</td><td class="num" data-label="마지막 확인">07:35</td></tr>
-    <tr><td class="row-title" data-label="사용처">프리패스 세일즈</td><td data-label="상태"><span class="tag ok">연결</span></td><td data-label="배포본">rel_7fe2...</td><td class="num" data-label="차이">0</td><td class="num" data-label="마지막 확인">07:34</td></tr>
-    <tr><td class="row-title" data-label="사용처">견적기</td><td data-label="상태"><span class="tag warn">1개 뒤처짐</span></td><td data-label="배포본">rel_6ac1...</td><td class="num" data-label="차이">1</td><td class="num" data-label="마지막 확인">07:29</td></tr>
+  <div class="section box table-wrap"><table><thead><tr><th>사용처</th><th>상태</th><th>배포본</th><th>근거</th></tr></thead><tbody id="releaseConsumerRows">
+    <tr><td colspan="4"><div class="empty-state">실제 사용처 상태를 불러오는 중입니다.</div></td></tr>
   </tbody></table></div>
 </section>
 
@@ -423,8 +425,8 @@ body[data-active-screen="review-detail"] main{padding-bottom:96px}
   <button data-screen="data" aria-label="데이터">
     <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="7.5" ry="3"/><path d="M4.5 5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V5"/><path d="M4.5 11v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/></svg><span>데이터</span>
   </button>
-  <button data-screen="sources" aria-label="원천">
-    <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="7" cy="7" r="1"/><circle cx="10" cy="12" r="1"/><circle cx="14" cy="17" r="1"/></svg><span>원천</span>
+  <button data-screen="sources" aria-label="흐름 추적">
+    <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="7" cy="7" r="1"/><circle cx="10" cy="12" r="1"/><circle cx="14" cy="17" r="1"/></svg><span>흐름</span>
   </button>
   <button data-screen="review" aria-label="검수">
     <svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="m8 12 2.2 2.2L16 8.5"/></svg><span>검수</span>
@@ -462,7 +464,7 @@ document.getElementById('resolveBlockedButton')?.addEventListener('click',()=>{
 });
 document.getElementById('viewSourceButton')?.addEventListener('click',()=>show('sources'));
 
-const catalogState={products:[],release:null,selectedProductId:null,notice:null};
+const catalogState={products:[],release:null,trace:null,selectedProductId:null,notice:null};
 const won=new Intl.NumberFormat('ko-KR',{style:'currency',currency:'KRW',maximumFractionDigits:0});
 function el(tag,className,text){
   const node=document.createElement(tag);
@@ -477,6 +479,83 @@ function addKv(parent,label,value){
 }
 function currentProduct(){
   return catalogState.products.find(item=>item.productId===catalogState.selectedProductId)??null;
+}
+function addRecordStage(parent,title,note,value){
+  const stage=el('section','record-stage');
+  stage.append(el('h3','',title),el('p','',note),el('pre','',JSON.stringify(value??{},null,2)));
+  parent.append(stage);
+}
+function renderRecordFlows(trace){
+  const list=document.getElementById('recordFlowRows');list.replaceChildren();
+  const rawRows=trace?.rows?.filter(item=>item.stage==='RAW')??[];
+  const normalizedRows=trace?.rows?.filter(item=>item.stage==='NORMALIZED')??[];
+  const source=trace?.rows?.find(item=>item.stage==='SOURCE');
+  const consumer=trace?.rows?.find(item=>item.stage==='CONSUMER');
+  const output=currentProduct();
+  document.getElementById('recordFlowMeta').textContent=`${rawRows.length}건 · 가져온 것 → 정제한 것 → 나가는 것`;
+  if(!rawRows.length){list.append(el('div','box empty-state','연결된 원문 데이터가 없습니다.'));return;}
+  rawRows.forEach((raw,index)=>{
+    const normalized=normalizedRows.find(item=>item.details?.sourceRecordId===raw.title)??normalizedRows[index]??null;
+    const card=el('article','record-flow-card');
+    const head=el('div','record-flow-head');head.append(el('b','',raw.title),el('span','',source?.title??'원천 확인 필요'));
+    const grid=el('div','record-flow-grid');
+    addRecordStage(grid,'1. 가져온 것',raw.evidence,raw.details);
+    addRecordStage(grid,'2. 정제한 것',normalized?.summary??'정제 결과 없음',normalized?.details??null);
+    addRecordStage(grid,'3. 나가는 것',consumer?.evidence??'출력 위치 없음',output);
+    card.append(head,grid);list.append(card);
+  });
+}
+function renderTrace(){
+  const trace=catalogState.trace;
+  if(!trace?.rows?.length){
+    renderRecordFlows(trace);return;
+  }
+  renderRecordFlows(trace);
+  const source=trace.rows.find(item=>item.stage==='SOURCE');
+  const raw=trace.rows.find(item=>item.stage==='RAW');
+  const release=trace.rows.find(item=>item.stage==='RELEASE');
+  const consumer=trace.rows.find(item=>item.stage==='CONSUMER');
+  const sourceSummary=document.getElementById('homeSourceSummary');sourceSummary.replaceChildren();
+  sourceSummary.append(el('h3','',source?.title??'원천 없음'),el('div','id',source?.evidence??'SOURCE_HOLD'));
+  addKv(sourceSummary,'수집 상태',source?.summary??'확인 필요');addKv(sourceSummary,'RAW 원문',raw?.summary??'원문 없음');
+  const deliverySummary=document.getElementById('homeDeliverySummary');deliverySummary.replaceChildren();
+  deliverySummary.append(el('h3','',release?.title??'활성 배포본 없음'),el('div','id',release?.evidence??'RELEASE_HOLD'));
+  addKv(deliverySummary,'로컬 제공',consumer?.evidence??'미연결');addKv(deliverySummary,'운영 소비처','0개 · ERP/Admin/Sales/Estimate 미연결');
+  const manifest=release?.details;
+  document.getElementById('releaseRuntimeMeta').textContent=release?.summary??'배포 증거 없음';
+  document.getElementById('releaseIdValue').textContent=manifest?.releaseId??'—';
+  document.getElementById('manifestIdValue').textContent=manifest?.manifestId??'—';
+  document.getElementById('inputDigestValue').textContent=manifest?.inputDigest??'—';
+  document.getElementById('dataDigestValue').textContent=manifest?.dataDigest??'—';
+  document.getElementById('canonicalInputsValue').textContent=manifest?.canonicalInputs?.map(item=>`${item.entityType} ${item.entityId} r${item.revision}`).join(' · ')??'—';
+  document.getElementById('evidenceCountValue').textContent=manifest?`${manifest.fieldEvidenceCount}개`:'—';
+  const consumers=document.getElementById('releaseConsumerRows');consumers.replaceChildren();
+  const addConsumer=(name,status,statusClass,releaseId,evidence)=>{
+    const row=el('tr');const nameCell=el('td','row-title',name);nameCell.dataset.label='사용처';const statusCell=el('td');statusCell.dataset.label='상태';statusCell.append(el('span',statusClass,status));const releaseCell=el('td','',releaseId);releaseCell.dataset.label='배포본';const evidenceCell=el('td','trace-evidence',evidence);evidenceCell.dataset.label='근거';row.append(nameCell,statusCell,releaseCell,evidenceCell);consumers.append(row);
+  };
+  addConsumer('로컬 ERP Public API','제공 중','tag ok',manifest?.releaseId??'—',consumer?.evidence??'—');
+  addConsumer('운영 ERP · Admin · Sales · Estimate','미연결','tag warn','—','consumer receipt 없음');
+}
+async function loadTrace(productId){
+  const traceMeta=document.getElementById('traceMeta');
+  if(!productId)return;
+  try{
+    const response=await fetch(`/v1/console/products/${encodeURIComponent(productId)}/trace`,{cache:'no-store'});
+    const payload=await response.json();if(!response.ok)throw new Error(payload.code??`HTTP ${response.status}`);
+    catalogState.trace=payload;renderTrace();
+    document.getElementById('homeRawCount').textContent=String(payload.counts.rawRecords);
+    document.getElementById('homeCandidateCount').textContent=String(payload.counts.candidates);
+    document.getElementById('flowSourceCount').textContent=String(payload.counts.sources);
+    document.getElementById('flowRawCount').textContent=String(payload.counts.rawRecords);
+    document.getElementById('flowCandidateCount').textContent=String(payload.counts.candidates);
+    document.getElementById('flowProjectionCount').textContent=String(payload.counts.projectionFields);
+    document.getElementById('flowConsumerCount').textContent=String(payload.counts.connectedConsumers);
+    const hasHold=payload.rows.some(item=>item.status==='HOLD');
+    const flowStatus=document.getElementById('flowStatus');flowStatus.className=`status-line ${hasHold?'warn':'ok'}`;flowStatus.lastChild.textContent=hasHold?'HOLD 있음':'로컬 흐름 정상';
+    traceMeta.textContent=`${productId} · 원문 ${payload.counts.rawRecords}건 · 로컬 출력 중`;
+  }catch(error){
+    catalogState.trace=null;renderTrace();traceMeta.textContent=error instanceof Error?error.message:String(error);
+  }
 }
 function renderCatalogRows(){
   const body=document.getElementById('catalogRows');
@@ -496,7 +575,7 @@ function renderCatalogRows(){
     const productRevision=el('td','num',`r${product.productRevision}`);productRevision.dataset.label='상품 수정본';
     const offerRevision=el('td','num',offer?`r${offer.offerRevision}`:'—');offerRevision.dataset.label='오퍼 수정본';
     row.append(status,name,productRevision,offerRevision);
-    const select=()=>{catalogState.selectedProductId=product.productId;catalogState.notice=null;renderCatalogRows();renderCatalogDetail();};
+    const select=()=>{catalogState.selectedProductId=product.productId;catalogState.notice=null;renderCatalogRows();renderCatalogDetail();void loadTrace(product.productId);};
     row.addEventListener('click',select);
     row.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();select();}});
     body.append(row);
@@ -579,7 +658,7 @@ async function loadCatalog(preferredProductId){
     const health=await healthResponse.json();
     if(!healthResponse.ok||health.driver!=='memory')throw new Error('로컬 메모리 환경이 아닙니다.');
     document.getElementById('healthText').textContent='로컬 API 정상';
-    runtimeLabel.textContent='로컬 메모리 · 실제 연결';
+    runtimeLabel.textContent='로컬 메모리 · 데모 연결';
     const response=await fetch('/v1/views/erp-public/products',{cache:'no-store'});
     const payload=await response.json();
     if(!response.ok)throw new Error(payload.code??`HTTP ${response.status}`);
@@ -594,7 +673,7 @@ async function loadCatalog(preferredProductId){
     catalogState.selectedProductId=catalogState.products.some(item=>item.productId===preferredProductId)
       ?preferredProductId:(catalogState.selectedProductId??catalogState.products[0]?.productId??null);
     releaseMeta.textContent=`활성 배포본 ${payload.meta.releaseId} · 정본 r${payload.meta.revision}`;
-    renderCatalogRows();renderCatalogDetail();
+    renderCatalogRows();renderCatalogDetail();await loadTrace(catalogState.selectedProductId);
   }catch(error){
     document.getElementById('healthText').textContent='데이터 제어 확인 필요';
     document.getElementById('healthDot').style.background='var(--bad)';

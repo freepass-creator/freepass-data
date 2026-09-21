@@ -302,7 +302,13 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async getSourceRun(runId: string) { return copy(this.sourceRuns.get(runId) ?? null); }
   async getSourceHead(sourceId: string) { return copy(this.sourceHeads.get(sourceId) ?? null); }
   async getRawRecord(rawRecordId: string) { return copy(this.rawRecords.get(rawRecordId) ?? null); }
+  async listRawRecordsByRun(runId: string) {
+    return copy([...this.rawRecords.values()].filter((item) => item.runId === runId));
+  }
   async getCandidate(candidateId: string) { return copy(this.candidates.get(candidateId) ?? null); }
+  async listCandidatesByRun(runId: string) {
+    return copy([...this.candidates.values()].filter((item) => item.runId === runId));
+  }
   async getSourceBinding(bindingId: string) {
     return copy(this.sourceBindings.get(bindingId) ?? null);
   }

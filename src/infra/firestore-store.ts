@@ -269,10 +269,18 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       await this.db.collection(C.raw).doc(rawRecordId.replaceAll('/', '__')).get()
     );
   }
+  async listRawRecordsByRun(runId: string) {
+    const snap = await this.db.collection(C.raw).where('runId', '==', runId).get();
+    return snap.docs.map((item) => item.data() as RawRecord);
+  }
   async getCandidate(candidateId: string) {
     return data<NormalizedCandidateRecord>(
       await this.db.collection(C.candidates).doc(candidateId.replaceAll('/', '__')).get()
     );
+  }
+  async listCandidatesByRun(runId: string) {
+    const snap = await this.db.collection(C.candidates).where('runId', '==', runId).get();
+    return snap.docs.map((item) => item.data() as NormalizedCandidateRecord);
   }
   async getSourceBinding(bindingId: string) {
     return data<CanonicalSourceBinding>(

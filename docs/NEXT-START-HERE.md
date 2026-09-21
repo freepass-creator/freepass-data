@@ -50,6 +50,13 @@ The current baseline includes:
 
 ## 4. Highest-value next work
 
+### Consumer read preparation — 2026-09-21
+
+See [Consumer read pilot](CONSUMER-READ-PILOT.md) for the observed ERP/F01/F86
+read paths, remaining live-evidence gates, and `npm run pilot:check` offline
+three-way comparison. This is local preparation only; no production cutover.
+Preserve existing dirty Console/output-contract changes and the separate Admin PR #12.
+
 ### P0 — Field Authority Registry ✅
 
 Implemented baseline: `src/domain/authority.ts`, command enforcement, authority evidence in receipt/audit, and regression tests.

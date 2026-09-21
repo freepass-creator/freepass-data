@@ -19,7 +19,8 @@ export type VehicleAsset = EntityMeta & {
   plateNumber?: string | null; vin?: string | null; odometerKm?: number | null;
 };
 export type CommercialType =
-  | 'NEW_RENT' | 'USED_RENT' | 'NEW_SUBSCRIPTION' | 'USED_SUBSCRIPTION' | 'PICKUP_SUBSCRIPTION';
+  | 'NEW_RENT' | 'USED_RENT' | 'NEW_SUBSCRIPTION' | 'USED_SUBSCRIPTION'
+  | 'OGONG_SUBSCRIPTION' | 'PICKUP_SUBSCRIPTION';
 export type Product = EntityMeta & {
   id: string; vehicleModelId: string; vehicleAssetId?: string | null;
   commercialType: CommercialType; status: 'ACTIVE' | 'HOLD' | 'SOLD' | 'ARCHIVED';
