@@ -2,11 +2,15 @@
 
 사용자 2026-09-21 정정: 중앙 정본 한 곳을 Google Sheets 두 개, ERP.com과 그 외 화이트라벨들, Admin이 가져다 쓰는 구조다. 소비처를 고정된 세 곳으로 세거나 Admin·추가 화이트라벨을 제외하지 않는다.
 
+중앙 Firebase 프로젝트는 사용자 직접 지정한 `freepasserp5`다. 실제 저장소/읽기 서버의 연결 및 아직 전환하지 못한 항목은 [ERP5 소비처 런타임](ERP5-CONSUMER-RUNTIME.md)에 기록한다.
+
+상품 이후의 접수·계약·수수료 정산 관계와 소비처 노출 범위는 [업무 데이터 연결 지도](BUSINESS-DATA-CONNECTION-MAP.md)를 따른다. Admin 업무 규칙을 Data에 복제하거나 정산 정보를 판매 시트에 자동 추가하지 않는다.
 ```text
 원천/API → FreePass Data 중앙 정본
                       ├─ Google Sheets F01 (표준 표시)
                       ├─ Google Sheets F86 (레트로 표시)
-                      ├─ ERP.com + 각 화이트라벨 (웹 표시)
+                      ├─ ERP.com 공개 화면 + 각 화이트라벨 (웹 표시)
+                      ├─ ERP.com 내부 운영 (별도 인증·업무 권한)
                       └─ Admin (운영 업무 화면)
 ```
 
