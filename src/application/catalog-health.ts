@@ -1,5 +1,6 @@
 import type { CatalogStore, ProjectionStore } from '../ports/catalog-store.js';
-import { stableDigest, stableRecordSetDigest } from '../shared/stable-digest.js';
+import { stableDigest } from '../shared/stable-digest.js';
+import { verifyProjectionReleaseIntegrity } from './projection-integrity.js';
 
 export type CatalogHealthStatus = 'HEALTHY' | 'DEGRADED' | 'BLOCKED';
 export type CatalogHealthCheckStatus = 'PASS' | 'WARN' | 'FAIL';
@@ -32,6 +33,10 @@ export type CatalogHealthIssueCode =
   | 'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH'
   | 'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING'
   | 'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH'
+  | 'ACTIVE_RELEASE_RELEASE_ID_MISMATCH'
+  | 'ACTIVE_RELEASE_PROJECTION_ID_MISMATCH'
+  | 'ACTIVE_RELEASE_SCHEMA_VERSION_MISMATCH'
+  | 'ACTIVE_RELEASE_CANONICAL_REVISION_MISMATCH'
   | 'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION';
 
 export type CatalogHealthIssue = {
@@ -163,6 +168,10 @@ const projectionIssueCodes = new Set<CatalogHealthIssueCode>([
   'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH',
   'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING',
   'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH',
+  'ACTIVE_RELEASE_RELEASE_ID_MISMATCH',
+  'ACTIVE_RELEASE_PROJECTION_ID_MISMATCH',
+  'ACTIVE_RELEASE_SCHEMA_VERSION_MISMATCH',
+  'ACTIVE_RELEASE_CANONICAL_REVISION_MISMATCH',
   'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION'
 ]);
 
@@ -378,118 +387,152 @@ export async function readCatalogDataHealth(
       };
     } else {
       manifestPresent = true;
-      expectedEvidenceCount = manifest.fieldEvidenceCount;
-      storedInputDigest = manifest.inputDigest;
-      recomputedInputDigest = stableDigest(manifest.canonicalInputs);
-      canonicalInputDigestStatus =
-        storedInputDigest === recomputedInputDigest &&
-        activeRelease.inputDigest === recomputedInputDigest
-          ? 'PASS'
-          : 'FAIL';
-
-      if (canonicalInputDigestStatus === 'FAIL') {
-        issues.push({
-          code: 'ACTIVE_RELEASE_CANONICAL_INPUT_DIGEST_MISMATCH',
-          severity: 'ERROR',
-          entityType: 'projection',
-          entityId: activeRelease.releaseId,
-          message: 'Manifest canonicalInputs do not match the stored inputDigest.'
-        });
-      }
-
-      if (manifest.manifestId !== activeRelease.manifestId) {
-        issues.push({
-          code: 'ACTIVE_RELEASE_MANIFEST_ID_MISMATCH',
-          severity: 'ERROR',
-          entityType: 'projection',
-          entityId: activeRelease.releaseId,
-          message: `Release manifest ID ${activeRelease.manifestId} does not match stored manifest ${manifest.manifestId}.`
-        });
-      }
-      if (manifest.inputDigest !== activeRelease.inputDigest) {
-        issues.push({
-          code: 'ACTIVE_RELEASE_INPUT_DIGEST_MISMATCH',
-          severity: 'ERROR',
-          entityType: 'projection',
-          entityId: activeRelease.releaseId,
-          message: 'ACTIVE release inputDigest does not match its manifest.'
-        });
-      }
-      if (manifest.dataDigest !== activeRelease.dataDigest) {
-        issues.push({
-          code: 'ACTIVE_RELEASE_DATA_DIGEST_MISMATCH',
-          severity: 'ERROR',
-          entityType: 'projection',
-          entityId: activeRelease.releaseId,
-          message: 'ACTIVE release dataDigest does not match its manifest.'
-        });
-      }
-      if (manifest.productCount !== activeRelease.data.length) {
-        issues.push({
-          code: 'ACTIVE_RELEASE_PRODUCT_COUNT_MISMATCH',
-          severity: 'ERROR',
-          entityType: 'projection',
-          entityId: activeRelease.releaseId,
-          message: `Manifest productCount ${manifest.productCount} does not match release data count ${activeRelease.data.length}.`
-        });
-      }
-
-      const releaseOfferCount = activeRelease.data.reduce(
-        (sum, product) => sum + product.offers.length,
-        0
+      const integrity = verifyProjectionReleaseIntegrity(
+        activeRelease,
+        manifest,
+        lineage
       );
-      if (manifest.offerCount !== releaseOfferCount) {
-        issues.push({
-          code: 'ACTIVE_RELEASE_OFFER_COUNT_MISMATCH',
-          severity: 'ERROR',
-          entityType: 'projection',
-          entityId: activeRelease.releaseId,
-          message: `Manifest offerCount ${manifest.offerCount} does not match release offer count ${releaseOfferCount}.`
-        });
+
+      expectedEvidenceCount = manifest.fieldEvidenceCount;
+      actualEvidenceCount = integrity.counts.evidence;
+      storedDataDigest = integrity.dataDigest.stored;
+      recomputedDataDigest = integrity.dataDigest.recomputed;
+      dataPayloadDigestStatus = integrity.failures.includes(
+        'RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH'
+      ) ? 'FAIL' : 'PASS';
+      storedInputDigest = integrity.canonicalInputDigest.manifest;
+      recomputedInputDigest = integrity.canonicalInputDigest.recomputed;
+      canonicalInputDigestStatus = (
+        integrity.failures.includes('MANIFEST_CANONICAL_INPUT_DIGEST_MISMATCH') ||
+        integrity.failures.includes('RELEASE_INPUT_DIGEST_MISMATCH')
+      ) ? 'FAIL' : 'PASS';
+      storedLineageDigest = integrity.lineageDigest.stored;
+      recomputedLineageDigest = integrity.lineageDigest.recomputed;
+
+      const addProjectionError = (
+        code: CatalogHealthIssueCode,
+        message: string
+      ) => issues.push({
+        code,
+        severity: 'ERROR',
+        entityType: 'projection',
+        entityId: activeRelease.releaseId,
+        message
+      });
+
+      for (const failure of integrity.failures) {
+        switch (failure) {
+          case 'RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH':
+            if (!issues.some((issue) =>
+              issue.code === 'ACTIVE_RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH' &&
+              issue.entityId === activeRelease.releaseId
+            )) {
+              addProjectionError(
+                'ACTIVE_RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH',
+                'ACTIVE release data payload does not match its stored dataDigest.'
+              );
+            }
+            break;
+          case 'MANIFEST_DATA_DIGEST_MISMATCH':
+            addProjectionError(
+              'ACTIVE_RELEASE_DATA_DIGEST_MISMATCH',
+              'ACTIVE release dataDigest does not match its manifest.'
+            );
+            break;
+          case 'MANIFEST_CANONICAL_INPUT_DIGEST_MISMATCH':
+            addProjectionError(
+              'ACTIVE_RELEASE_CANONICAL_INPUT_DIGEST_MISMATCH',
+              'Manifest canonicalInputs do not match the stored inputDigest.'
+            );
+            break;
+          case 'RELEASE_INPUT_DIGEST_MISMATCH':
+            addProjectionError(
+              'ACTIVE_RELEASE_INPUT_DIGEST_MISMATCH',
+              'ACTIVE release inputDigest does not match its manifest.'
+            );
+            break;
+          case 'MANIFEST_ID_MISMATCH':
+            addProjectionError(
+              'ACTIVE_RELEASE_MANIFEST_ID_MISMATCH',
+              `Release manifest ID ${activeRelease.manifestId} does not match stored manifest ${manifest.manifestId}.`
+            );
+            break;
+          case 'RELEASE_ID_MISMATCH':
+            addProjectionError(
+              'ACTIVE_RELEASE_RELEASE_ID_MISMATCH',
+              `Manifest releaseId ${manifest.releaseId} does not match ACTIVE release ${activeRelease.releaseId}.`
+            );
+            break;
+          case 'PROJECTION_ID_MISMATCH':
+            addProjectionError(
+              'ACTIVE_RELEASE_PROJECTION_ID_MISMATCH',
+              `Manifest projectionId ${manifest.projectionId} does not match release projectionId ${activeRelease.projectionId}.`
+            );
+            break;
+          case 'SCHEMA_VERSION_MISMATCH':
+            addProjectionError(
+              'ACTIVE_RELEASE_SCHEMA_VERSION_MISMATCH',
+              `Manifest schemaVersion ${manifest.schemaVersion} does not match release schemaVersion ${activeRelease.schemaVersion}.`
+            );
+            break;
+          case 'PRODUCT_COUNT_MISMATCH':
+            addProjectionError(
+              'ACTIVE_RELEASE_PRODUCT_COUNT_MISMATCH',
+              `Manifest productCount ${manifest.productCount} does not match release data count ${integrity.counts.products}.`
+            );
+            break;
+          case 'OFFER_COUNT_MISMATCH':
+            addProjectionError(
+              'ACTIVE_RELEASE_OFFER_COUNT_MISMATCH',
+              `Manifest offerCount ${manifest.offerCount} does not match release offer count ${integrity.counts.offers}.`
+            );
+            break;
+          case 'CANONICAL_REVISION_MISMATCH':
+            addProjectionError(
+              'ACTIVE_RELEASE_CANONICAL_REVISION_MISMATCH',
+              `ACTIVE canonicalRevision ${activeRelease.canonicalRevision} does not match manifest canonical revision ${integrity.canonicalRevision}.`
+            );
+            break;
+          case 'EVIDENCE_COUNT_MISMATCH':
+            addProjectionError(
+              'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH',
+              `Manifest fieldEvidenceCount ${manifest.fieldEvidenceCount} does not match stored lineage count ${integrity.counts.evidence}.`
+            );
+            break;
+          case 'EVIDENCE_DIGEST_MISSING':
+            lineageContentIntegrity = {
+              stored: null,
+              recomputed: recomputedLineageDigest,
+              status: 'NOT_EVALUATED',
+              reason: 'ProjectionReleaseManifest has no fieldEvidenceDigest; legacy evidence content cannot be authenticated.'
+            };
+            issues.push({
+              code: 'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING',
+              severity: 'WARNING',
+              entityType: 'projection',
+              entityId: activeRelease.releaseId,
+              message: lineageContentIntegrity.reason
+            });
+            break;
+          case 'EVIDENCE_DIGEST_MISMATCH':
+            lineageContentIntegrity = {
+              stored: storedLineageDigest,
+              recomputed: recomputedLineageDigest,
+              status: 'FAIL',
+              reason: 'Projection lineage content does not match the manifest fieldEvidenceDigest.'
+            };
+            addProjectionError(
+              'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH',
+              lineageContentIntegrity.reason
+            );
+            break;
+        }
       }
 
-      if (manifest.fieldEvidenceCount !== lineage.length) {
-        issues.push({
-          code: 'ACTIVE_RELEASE_EVIDENCE_COUNT_MISMATCH',
-          severity: 'ERROR',
-          entityType: 'projection',
-          entityId: activeRelease.releaseId,
-          message: `Manifest fieldEvidenceCount ${manifest.fieldEvidenceCount} does not match stored lineage count ${lineage.length}.`
-        });
-      }
-
-      storedLineageDigest = manifest.fieldEvidenceDigest ?? null;
-      recomputedLineageDigest = stableRecordSetDigest(lineage);
-
-      if (!storedLineageDigest) {
-        lineageContentIntegrity = {
-          stored: null,
-          recomputed: recomputedLineageDigest,
-          status: 'NOT_EVALUATED',
-          reason: 'ProjectionReleaseManifest has no fieldEvidenceDigest; legacy evidence content cannot be authenticated.'
-        };
-        issues.push({
-          code: 'ACTIVE_RELEASE_LINEAGE_DIGEST_MISSING',
-          severity: 'WARNING',
-          entityType: 'projection',
-          entityId: activeRelease.releaseId,
-          message: lineageContentIntegrity.reason
-        });
-      } else if (storedLineageDigest !== recomputedLineageDigest) {
-        lineageContentIntegrity = {
-          stored: storedLineageDigest,
-          recomputed: recomputedLineageDigest,
-          status: 'FAIL',
-          reason: 'Projection lineage content does not match the manifest fieldEvidenceDigest.'
-        };
-        issues.push({
-          code: 'ACTIVE_RELEASE_LINEAGE_CONTENT_DIGEST_MISMATCH',
-          severity: 'ERROR',
-          entityType: 'projection',
-          entityId: activeRelease.releaseId,
-          message: lineageContentIntegrity.reason
-        });
-      } else {
+      if (
+        !integrity.failures.includes('EVIDENCE_DIGEST_MISSING') &&
+        !integrity.failures.includes('EVIDENCE_DIGEST_MISMATCH')
+      ) {
         lineageContentIntegrity = {
           stored: storedLineageDigest,
           recomputed: recomputedLineageDigest,
