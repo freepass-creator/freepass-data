@@ -37,6 +37,9 @@ export type CatalogHealthIssueCode =
   | 'ACTIVE_RELEASE_PROJECTION_ID_MISMATCH'
   | 'ACTIVE_RELEASE_SCHEMA_VERSION_MISMATCH'
   | 'ACTIVE_RELEASE_CANONICAL_REVISION_MISMATCH'
+  | 'ACTIVE_RELEASE_CANONICAL_INPUT_MISSING'
+  | 'ACTIVE_RELEASE_CANONICAL_INPUT_STALE'
+  | 'ACTIVE_RELEASE_CANONICAL_INPUT_VALIDATION_MISMATCH'
   | 'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION';
 
 export type CatalogHealthIssue = {
@@ -85,6 +88,12 @@ export type CatalogHealthReport = {
       status: CatalogHealthCheckStatus;
       issueCount: number;
     };
+    activeInputParity: {
+      status: CatalogHealthCheckStatus;
+      missingCount: number;
+      staleRevisionCount: number;
+      validationMismatchCount: number;
+    };
     activeProjection: {
       status: CatalogHealthCheckStatus;
       projectionId: 'erp-public';
@@ -120,6 +129,7 @@ export type CatalogHealthReport = {
       | 'ACTIVE_PROJECTION_METADATA'
       | 'ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST'
       | 'ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST'
+      | 'ACTIVE_PROJECTION_INPUT_PARITY'
       | 'PROJECTION_LINEAGE_CONTENT_INTEGRITY'
     >;
     notEvaluated: Array<
@@ -173,6 +183,9 @@ const projectionIssueCodes = new Set<CatalogHealthIssueCode>([
   'ACTIVE_RELEASE_PROJECTION_ID_MISMATCH',
   'ACTIVE_RELEASE_SCHEMA_VERSION_MISMATCH',
   'ACTIVE_RELEASE_CANONICAL_REVISION_MISMATCH',
+  'ACTIVE_RELEASE_CANONICAL_INPUT_MISSING',
+  'ACTIVE_RELEASE_CANONICAL_INPUT_STALE',
+  'ACTIVE_RELEASE_CANONICAL_INPUT_VALIDATION_MISMATCH',
   'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION'
 ]);
 
@@ -216,6 +229,25 @@ export async function readCatalogDataHealth(
   const assetsById = new Map(assets.map((asset) => [asset.id, asset]));
   const productsById = new Map(products.map((product) => [product.id, product]));
   const policiesById = new Map(policies.map((policy) => [policy.id, policy]));
+  const currentCanonicalByKey = new Map<string, {
+    revision: number;
+    validationStatus: string;
+  }>();
+  for (const item of models) {
+    currentCanonicalByKey.set(`vehicle_model|${item.id}`, item);
+  }
+  for (const item of assets) {
+    currentCanonicalByKey.set(`vehicle_asset|${item.id}`, item);
+  }
+  for (const item of products) {
+    currentCanonicalByKey.set(`product|${item.id}`, item);
+  }
+  for (const item of offers) {
+    currentCanonicalByKey.set(`offer|${item.id}`, item);
+  }
+  for (const item of policies) {
+    currentCanonicalByKey.set(`policy|${item.id}`, item);
+  }
 
   const recordInvalid = (
     entityType: Exclude<CatalogHealthEntityType, 'projection'>,
@@ -318,7 +350,10 @@ export async function readCatalogDataHealth(
   let storedInputDigest: string | null = null;
   let recomputedInputDigest: string | null = null;
   let canonicalInputDigestStatus: 'PASS' | 'FAIL' | 'NOT_APPLICABLE' = 'NOT_APPLICABLE';
-  let storedLineageDigest: string | null = null;
+  let activeInputMissingCount = 0;
+  let activeInputStaleRevisionCount = 0;
+  let activeInputValidationMismatchCount = 0;
+    let storedLineageDigest: string | null = null;
   let recomputedLineageDigest: string | null = null;
   let lineageContentIntegrity: {
     stored: string | null;
@@ -387,6 +422,44 @@ export async function readCatalogDataHealth(
       };
     } else {
       manifestPresent = true;
+
+      for (const input of manifest.canonicalInputs) {
+        const current = currentCanonicalByKey.get(
+          `${input.entityType}|${input.entityId}`
+        );
+        if (!current) {
+          activeInputMissingCount += 1;
+          issues.push({
+            code: 'ACTIVE_RELEASE_CANONICAL_INPUT_MISSING',
+            severity: 'ERROR',
+            entityType: 'projection',
+            entityId: activeRelease.releaseId,
+            message: `ACTIVE release input ${input.entityType} ${input.entityId} is missing from current Canonical state.`
+          });
+          continue;
+        }
+        if (current.revision !== input.revision) {
+          activeInputStaleRevisionCount += 1;
+          issues.push({
+            code: 'ACTIVE_RELEASE_CANONICAL_INPUT_STALE',
+            severity: 'WARNING',
+            entityType: 'projection',
+            entityId: activeRelease.releaseId,
+            message: `ACTIVE release input ${input.entityType} ${input.entityId} is r${input.revision}, current Canonical is r${current.revision}.`
+          });
+        }
+        if (current.validationStatus !== input.validationStatus) {
+          activeInputValidationMismatchCount += 1;
+          issues.push({
+            code: 'ACTIVE_RELEASE_CANONICAL_INPUT_VALIDATION_MISMATCH',
+            severity: 'WARNING',
+            entityType: 'projection',
+            entityId: activeRelease.releaseId,
+            message: `ACTIVE release input ${input.entityType} ${input.entityId} validationStatus ${input.validationStatus} differs from current Canonical ${current.validationStatus}.`
+          });
+        }
+      }
+
       const integrity = verifyProjectionReleaseIntegrity(
         activeRelease,
         manifest,
@@ -569,6 +642,11 @@ export async function readCatalogDataHealth(
   const projectionIssues = sortedIssues.filter((issue) =>
     projectionIssueCodes.has(issue.code)
   );
+  const activeInputParityIssues = sortedIssues.filter((issue) =>
+    issue.code === 'ACTIVE_RELEASE_CANONICAL_INPUT_MISSING' ||
+    issue.code === 'ACTIVE_RELEASE_CANONICAL_INPUT_STALE' ||
+    issue.code === 'ACTIVE_RELEASE_CANONICAL_INPUT_VALIDATION_MISMATCH'
+  );
 
   return {
     contractVersion: 'catalog-data-health-v1',
@@ -607,6 +685,12 @@ export async function readCatalogDataHealth(
         status: checkStatus(referentialIssues),
         issueCount: referentialIssues.length
       },
+      activeInputParity: {
+        status: checkStatus(activeInputParityIssues),
+        missingCount: activeInputMissingCount,
+        staleRevisionCount: activeInputStaleRevisionCount,
+        validationMismatchCount: activeInputValidationMismatchCount
+      },
       activeProjection: {
         status: checkStatus(projectionIssues),
         projectionId: 'erp-public',
@@ -637,6 +721,7 @@ export async function readCatalogDataHealth(
         'ACTIVE_PROJECTION_METADATA',
         'ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST',
         'ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST',
+        'ACTIVE_PROJECTION_INPUT_PARITY',
         ...(lineageContentIntegrity.status === 'PASS' || lineageContentIntegrity.status === 'FAIL'
           ? ['PROJECTION_LINEAGE_CONTENT_INTEGRITY' as const]
           : [])
