@@ -17,3 +17,11 @@ export function stableDigest(value: unknown) {
     .update(JSON.stringify(stableValue(value)))
     .digest('hex');
 }
+
+export function stableRecordSetDigest<T extends { lineageRecordId: string }>(
+  values: readonly T[]
+) {
+  return stableDigest(
+    [...values].sort((a, b) => a.lineageRecordId.localeCompare(b.lineageRecordId))
+  );
+}
