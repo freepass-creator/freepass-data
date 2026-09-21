@@ -425,12 +425,38 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async activate(releaseId: string) {
     await this.db.runTransaction(async (tx) => {
       const ref = this.db.collection(C.releases).doc(releaseId);
+      const manifestRef = this.db.collection(C.releaseManifests).doc(releaseId);
+      const evidenceQuery = this.db.collection(C.projectionLineage)
+        .where('releaseId', '==', releaseId);
+
       const snap = await tx.get(ref);
-      if (!snap.exists || snap.get('status') !== 'READY') throw new Error('Only READY release can activate');
+      const manifestSnap = await tx.get(manifestRef);
+      const evidenceSnap = await tx.get(evidenceQuery);
+
+      if (!snap.exists || snap.get('status') !== 'READY') {
+        throw new Error('Only READY release can activate');
+      }
+      if (!manifestSnap.exists) throw new Error('Release manifest not found');
+
+      const manifest = manifestSnap.data() as ProjectionReleaseManifest;
+      const evidence = evidenceSnap.docs.map(
+        (doc) => doc.data() as ProjectionFieldLineageRecord
+      );
+      if (evidence.length !== manifest.fieldEvidenceCount) {
+        throw new Error('Projection field evidence count mismatch');
+      }
+      if (!manifest.fieldEvidenceDigest) {
+        throw new Error('Projection release manifest requires fieldEvidenceDigest');
+      }
+      if (stableRecordSetDigest(evidence) !== manifest.fieldEvidenceDigest) {
+        throw new Error('Projection field evidence digest mismatch');
+      }
+
       const projectionId = snap.get('projectionId') as string;
       const activeRef = this.db.collection(C.activeReleases).doc(projectionId);
       const activeSnap = await tx.get(activeRef);
       const previousId = activeSnap.exists ? activeSnap.get('releaseId') as string : null;
+
       if (previousId && previousId !== releaseId) {
         tx.update(this.db.collection(C.releases).doc(previousId), { status: 'READY' });
       }
