@@ -22,6 +22,7 @@ export type ProjectionReleaseManifest = {
   productCount: number;
   offerCount: number;
   fieldEvidenceCount: number;
+  fieldEvidenceDigest?: string;
   inputDigest: string;
   dataDigest: string;
 };
@@ -66,4 +67,12 @@ export type ProjectionDeliveryReceipt = {
   dataDigest: string;
   targetRevision: number;
   processedAt: string;
+};
+
+export type ActiveProjectionEvidenceSnapshot = {
+  projectionId: string;
+  release: ProjectionRelease<ErpPublicProduct> | null;
+  manifest: ProjectionReleaseManifest | null;
+  lineage: ProjectionFieldLineageRecord[];
+  consistency: 'ATOMIC';
 };

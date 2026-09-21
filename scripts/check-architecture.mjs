@@ -10,10 +10,11 @@ const forbiddenTargets = {
   application: new Set(['infra', 'api', 'jobs']),
   adapters: new Set(['application', 'infra', 'api', 'jobs']),
   infra: new Set(['application', 'adapters', 'api', 'jobs', 'migration']),
-  migration: new Set(['ports', 'application', 'adapters', 'infra', 'api', 'jobs'])
+  migration: new Set(['ports', 'application', 'adapters', 'infra', 'api', 'jobs']),
+  shared: new Set(['ports', 'application', 'adapters', 'infra', 'api', 'jobs', 'migration'])
 };
 
-const firebaseForbiddenIn = new Set(['domain', 'ports', 'application']);
+const firebaseForbiddenIn = new Set(['domain', 'ports', 'application', 'shared']);
 
 function walk(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
