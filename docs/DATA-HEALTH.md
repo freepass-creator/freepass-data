@@ -105,6 +105,40 @@ The field remains optional in the TypeScript manifest contract only for read com
 
 Release promotion also re-reads persisted evidence and recomputes the digest before READY, so the check is not limited to post-activation health reporting.
 
+## ACTIVE release reuse safety
+
+Release reuse is an optimization, not an authority shortcut.
+
+Before returning an existing ACTIVE release, the builder now re-verifies the **actual stored contents**:
+
+- `stableDigest(currentActive.data) === currentActive.dataDigest`
+- `stableDigest(currentManifest.canonicalInputs) === currentManifest.inputDigest`
+- release ↔ manifest input/data digest agreement
+- manifest/release IDs, projection/schema metadata, product/offer counts
+- ACTIVE canonicalRevision ↔ manifest canonical inputs
+- lineage count
+- lineage content digest
+
+If the stored ACTIVE payload or manifest canonicalInputs were modified while their digest strings were left unchanged, the release is **not reused**. The builder proceeds through a new release path instead.
+
+Regression tests cover both payload tamper and canonical-input tamper on the ACTIVE reuse path.
+
+## READY / ACTIVE promotion consistency
+
+The evidence digest is enforced both when staging and when promoting a release.
+
+Memory adapter:
+- revalidates lineage before READY
+- revalidates lineage again before ACTIVE
+
+Firestore adapter:
+- READY transition reads release + manifest + lineage query and writes READY inside one Firestore transaction
+- ACTIVE transition again reads release + manifest + lineage query and switches the active pointer inside one Firestore transaction
+
+This removes the previous read-then-separate-update TOCTOU window from the normal adapter path. Firestore server transactions provide serializable isolation; concurrent changes to data read by the transaction cause contention/retry rather than silently committing against the older read.
+
+This does not authorize arbitrary external writers to projection evidence. Writer/IAM boundaries remain separate controls.
+
 ## Observation consistency
 
 Catalog Data Health v1 is **not an atomic snapshot**.
@@ -153,6 +187,9 @@ Tests include:
 7. **legacy manifest without lineage digest**
 8. **same-count lineage tamper rejected before READY promotion**
 9. **ACTIVE release without lineage digest is not reused**
+10. **tampered ACTIVE payload with unchanged dataDigest is not reused**
+11. **tampered ACTIVE manifest canonicalInputs with unchanged inputDigest is not reused**
+12. **lineage tamper between READY and ACTIVE is rejected**
 
 ## Next safe extension
 
