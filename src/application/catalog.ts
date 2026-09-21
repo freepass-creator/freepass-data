@@ -573,6 +573,15 @@ export async function buildErpPublicProjection(
       const currentLineage = await projections.listProjectionLineage(currentActive.releaseId);
       const currentLineageDigest = stableRecordSetDigest(currentLineage);
 
+      const currentOfferCount = currentActive.data.reduce(
+        (sum, product) => sum + product.offers.length,
+        0
+      );
+      const currentCanonicalRevision = Math.max(
+        0,
+        ...currentManifest.canonicalInputs.map((item) => item.revision)
+      );
+
       if (
         currentPayloadDigest === currentActive.dataDigest &&
         currentActive.dataDigest === currentManifest.dataDigest &&
@@ -582,6 +591,11 @@ export async function buildErpPublicProjection(
         currentActive.inputDigest === inputDigest &&
         currentManifest.manifestId === currentActive.manifestId &&
         currentManifest.releaseId === currentActive.releaseId &&
+        currentManifest.projectionId === currentActive.projectionId &&
+        currentManifest.schemaVersion === currentActive.schemaVersion &&
+        currentManifest.productCount === currentActive.data.length &&
+        currentManifest.offerCount === currentOfferCount &&
+        currentActive.canonicalRevision === currentCanonicalRevision &&
         currentLineage.length === currentManifest.fieldEvidenceCount &&
         currentLineageDigest === currentManifest.fieldEvidenceDigest
       ) {
