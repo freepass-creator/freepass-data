@@ -34,7 +34,7 @@ import type {
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
-import { stableRecordSetDigest } from '../application/stable-digest.js';
+import { stableRecordSetDigest } from '../shared/stable-digest.js';
 
 const C = {
   vehicleModels: 'catalog_vehicle_models',
