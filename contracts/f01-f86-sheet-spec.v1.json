@@ -13,7 +13,7 @@
     "other": "탭명 N대",
     "separator": " ",
     "count": "actual_unique_vehicle_rows",
-    "timestamp": "completed_sheet_update_time_not_source_freshness",
+    "timestamp": "explicit_publication_run_timestamp_not_source_freshness",
     "noMiddleDot": true
   },
   "primaryTabs": [
