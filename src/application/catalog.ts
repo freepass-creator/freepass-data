@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
-import { readActiveProjectionEvidence, verifyProjectionReleaseIntegrity } from './projection-integrity.js';
+import { readActiveProjectionEvidence } from './projection-evidence-reader.js';
+import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 import type {
   ActorRef,
   ErpPublicProduct,
