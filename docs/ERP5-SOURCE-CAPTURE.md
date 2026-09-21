@@ -97,7 +97,7 @@ readTime은 DB의 일관된 관측 시점이지 공급사 최신 수집 시각�
 
 ### Canonical DRY RUN 후보 묶음
 
-기존 캡처와 `erp5-product-mapping/1`을 재사용하는
+기존 캡처와 `erp5-product-mapping/2`를 재사용하는
 `npm run dry-run:erp5-canonical -- --capture <private capture.json>` 명령을 추가했다.
 신규 job이 필요한 이유는 기존 매퍼가 단건 순수 변환만 제공하고 전체 캡처의 건수 고정,
 건별 HOLD 사유, 결과 digest, 비공개 파일 readback을 하나의 실행 증거로 만들지 않았기 때문이다
@@ -118,7 +118,17 @@ carNumber에는 완전한 형제 레코드가 없었고 providerCompanyCode는 �
 PT-0023/PT-0001/RP022 각 1이다. 다음 조회는 이 공급사별 원천에서 차량번호를 키로
 maker/model을 확인하는 읽기 전용 대조이며, ERP5의 빈 값을 추정으로 채우지 않는다.
 
-- `npm run check`: architecture/TypeScript build, Vitest 158건(캡처 신규 47건), Sheets 20건 통과.
+CLASSIFICATION 903건을 원문 필드 존재 여부로 다시 감사했다. `source_bucket`은 RP012 문제
+736건뿐 아니라 캡처 1,659건 전체에서 누락되어 있었다. 따라서 공급사 코드나 현재 상품명만으로
+`SON_NO_KONG`/`TCAR_EXTERNAL`을 역추정하지 않고 736건을
+`SONOGONG_CLASSIFICATION_EVIDENCE_MISSING`으로 유지한다. 미인식 상품종류 167건 중 155건은
+RP023의 명시적 `오플구독`, 11건은 필드 누락, 1건은 빈 문자열이었다. 매퍼 v2는 155건을
+`OPLUS_SUBSCRIPTION` 후보로 보존하되 현재 Canonical 계약에 없는 값이므로
+`CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED` HOLD로 분류한다. RP023 이외 공급사의 같은 표기는
+추가로 `SUBSCRIPTION_SUPPLIER_REVIEW_REQUIRED`다. 나머지 12건은 계속 원천 증거가 필요하다.
+
+- `npm run check`: architecture/TypeScript build, Vitest 290건, emulator-only 4건 skip,
+  read-runtime smoke 5건, shadow 10건, Sheets 20건 통과.
 - 실패 반례: 잘린 쿼리, 다른 프로젝트/중첩 경로, 중복 문서, readTime 불일치, 정책 읽기 실패,
   저장 후 손상, count 재작성, 미지원/부정확 자료형, 원문 없는 차량번호, 중복 차량번호, write RPC 차단.
 - 실제 capture 후 저장 파일을 다시 읽어 요약 v2/v3를 생성했다. 원문 파일과 이전 요약은 덮어쓰지 않았다.

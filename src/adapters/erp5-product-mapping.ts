@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { CommercialType } from '../domain/catalog.js';
 
-export const ERP5_PRODUCT_MAPPER_VERSION = 'erp5-product-mapping/1';
+export const ERP5_PRODUCT_MAPPER_VERSION = 'erp5-product-mapping/2';
 export const ERP5_PRODUCT_SOURCE = 'freepasserp5/firestore/products';
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type ObjectValue = { [key: string]: Json };
@@ -10,7 +10,7 @@ export type Erp5ProductInput = {
   projectId: 'freepasserp5'; collection: 'products'; documentId: string;
   sourceRevision: string; observedAt: string; data: ObjectValue;
 };
-type MappedCommercialType = CommercialType | 'OGONG_SUBSCRIPTION';
+type MappedCommercialType = CommercialType | 'OPLUS_SUBSCRIPTION';
 export type Erp5ProductMapping = {
   status: 'MAPPED_FOR_REVIEW' | 'HOLD';
   canonicalWriteAuthorized: false;
@@ -47,7 +47,7 @@ function integer(x: unknown): number | undefined {
 const types: Record<string, MappedCommercialType> = {
   '신차렌트': 'NEW_RENT', '중고렌트': 'USED_RENT', '재렌트': 'USED_RENT',
   '신차구독': 'NEW_SUBSCRIPTION', '중고구독': 'USED_SUBSCRIPTION', '재구독': 'USED_SUBSCRIPTION',
-  '오공구독': 'OGONG_SUBSCRIPTION', '픽업구독': 'PICKUP_SUBSCRIPTION'
+  '오공구독': 'OGONG_SUBSCRIPTION', '픽업구독': 'PICKUP_SUBSCRIPTION', '오플구독': 'OPLUS_SUBSCRIPTION'
 };
 const inventoryKinds: Record<string, string> = {
   '즉시출고': '가용', '출고가능': '가용', '출고협의': '협의',
@@ -109,10 +109,13 @@ export function mapErp5Product(input: unknown): Erp5ProductMapping {
   const commercialType = text(d.product_type) && Object.hasOwn(types, d.product_type) ? types[d.product_type] : undefined;
   if (commercialType) { candidate.commercialType = commercialType; fieldSources.commercialType = ['/data/product_type']; }
   else issue('UNKNOWN_PRODUCT_TYPE');
-  if (commercialType === 'OGONG_SUBSCRIPTION') issue('CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED');
+  if (['OGONG_SUBSCRIPTION', 'OPLUS_SUBSCRIPTION'].includes(commercialType ?? '')) {
+    issue('CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED');
+  }
   if (['OGONG_SUBSCRIPTION', 'PICKUP_SUBSCRIPTION'].includes(commercialType ?? '') && supplier !== 'RP012') {
     issue('SUBSCRIPTION_SUPPLIER_REVIEW_REQUIRED');
   }
+  if (commercialType === 'OPLUS_SUBSCRIPTION' && supplier !== 'RP023') issue('SUBSCRIPTION_SUPPLIER_REVIEW_REQUIRED');
   // Independent bucket evidence confirms RP012 type; never recategorize to repair conflicts.
   if (d.provider_company_code === 'RP012') {
     const plate = candidate.carNumber ?? '';

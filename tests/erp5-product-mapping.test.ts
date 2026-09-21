@@ -134,6 +134,25 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.candidate.issues).toContain('SONOGONG_CLASSIFICATION_CONFLICT');
   });
 
+  it('recognizes explicit RP023 Oplus evidence but holds the missing canonical contract extension', () => {
+    const input = fixture();
+    Object.assign(input.data, { provider_company_code: 'RP023', product_type: '오플구독' });
+    const result = mapErp5Product(input);
+    expect(result.status).toBe('HOLD');
+    expect(result.candidate.commercialType).toBe('OPLUS_SUBSCRIPTION');
+    expect(result.candidate.issues).toContain('CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED');
+    expect(result.candidate.issues).not.toContain('UNKNOWN_PRODUCT_TYPE');
+    expect(result.candidate.issues).not.toContain('SUBSCRIPTION_SUPPLIER_REVIEW_REQUIRED');
+  });
+
+  it('does not accept an Oplus label from a supplier other than RP023', () => {
+    const input = fixture();
+    input.data.product_type = '오플구독';
+    const result = mapErp5Product(input);
+    expect(result.candidate.commercialType).toBe('OPLUS_SUBSCRIPTION');
+    expect(result.candidate.issues).toContain('SUBSCRIPTION_SUPPLIER_REVIEW_REQUIRED');
+  });
+
   it.each(['SONOGONG', 'sonogong', 'rp012'])('does not let alias %s bypass RP012 evidence checks', supplier => {
     const input = fixture();
     input.data.provider_company_code = supplier;

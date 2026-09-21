@@ -96,8 +96,9 @@ Firestore Timestamp/GeoPoint/DocumentReference 등 SDK 객체를 `JSON.stringify
 2. 입력 전체 문서 수·중복 문서/차량 키·동일 snapshot/policy/partner 연결은 수집/배치 단계에서 검증한다.
 3. 최신 공급사 원천과 ERP5 원자가 일치하는지 별도 비교한다. 원자 매핑 성공은 원천 최신화가 아니다.
 4. 현재 Catalog PriceTerm으로 표현 못 하는 정책/보증금 규칙/가격변형은 별도 계약 확장과 검토가 필요하다.
-   OGONG_SUBSCRIPTION은 아직 이 base의 Catalog CommercialType에 없으므로 이 준비 타입에서만
-   보존한다. 공용 domain/schema 변경은 기존 소유 작업에서 통합하고, 캐스팅으로 우회하지 않는다.
+   OGONG_SUBSCRIPTION은 base domain에는 있으나 ERP public 계약에 없고, OPLUS_SUBSCRIPTION은
+   base domain과 public 계약 모두에 없다. 두 값은 계약 전체가 합의될 때까지 HOLD하며 캐스팅으로
+   소비처 검증을 우회하지 않는다.
 5. Canonical 입력은 기존 검토/권한/lineage/expectedRevision 경로로만 반영한다.
    이 결과를 곧바로 ERP·화이트라벨·F01·F86·Admin에 발행하지 않는다.
 
@@ -106,8 +107,8 @@ Firestore Timestamp/GeoPoint/DocumentReference 등 SDK 객체를 `JSON.stringify
 
 ## 검증 기록
 
-- 최종 `npm run check`: architecture/TypeScript build 통과, Vitest 111건(새 매핑 63건 포함),
-  Sheets Node 테스트 20건 통과. 독립 worktree의 이 세 파일만 변경했다.
+- 최종 `npm run check`: architecture/TypeScript build 통과, Vitest 290건(매핑 65건 포함),
+  emulator-only 4건 skip, read-runtime smoke 5건, shadow 10건, Sheets Node 20건 통과.
 - Cursor 읽기 전용 코드 검토에서 보증금 0과 수수료 메모의 의미 누락, 오공구독의
   Catalog 계약 누락, 삭제표식 대소문자 우회를 지적했다. HOLD/UNKNOWN 처리와 회귀시험에 반영했다.
 - Codex와 Cursor는 원문 보존·엄격 숫자 파싱·복잡한 요금 의미의 HOLD·쓰기 승인 금지에 동의했다.
