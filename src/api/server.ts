@@ -55,7 +55,11 @@ app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {
   try {
     const receipt = await updateOfferPrice(stores.catalog, {
       ...(body as any),
-      offerId: params.offerId
+      offerId: params.offerId,
+      writer: {
+        id: 'service:freepass-data',
+        kind: 'SERVICE'
+      }
     });
     return reply.send(receipt);
   } catch (error) {
