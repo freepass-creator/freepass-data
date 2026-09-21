@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildErpPublicProjection } from '../src/application/catalog.js';
+import { buildErpPublicProjection, updateOfferPrice } from '../src/application/catalog.js';
 import { readCatalogDataHealth } from '../src/application/catalog-health.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
@@ -33,7 +33,10 @@ describe('Catalog Data Health v1', () => {
       readAt: '2026-09-21T10:01:00.000Z',
       consistency: 'PARTIAL_MULTI_READ',
       partialObservation: true,
-      activeReleaseCanonicalRevision: 1
+      activeReleaseCanonicalRevision: 1,
+      startActiveReleaseId: release.releaseId,
+      endActiveReleaseId: release.releaseId,
+      activeReleaseStable: true
     });
     expect(report.checks.referentialIntegrity).toEqual({
       status: 'PASS',
@@ -54,6 +57,62 @@ describe('Catalog Data Health v1', () => {
     expect(report.coverage.evaluated).toContain('PROJECTION_LINEAGE_CONTENT_INTEGRITY');
     expect(report.coverage.notEvaluated).not.toContain('PROJECTION_LINEAGE_CONTENT_INTEGRITY');
     expect(report.coverage.notEvaluated).toContain('CONSISTENT_SNAPSHOT');
+  });
+
+  it('degrades when ACTIVE release changes during the health observation window', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const first = await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-21T09:00:00.000Z'
+    );
+
+    await updateOfferPrice(store, {
+      commandId: 'cmd_health_fence_r2',
+      idempotencyKey: 'idem_health_fence_r2',
+      offerId: 'offer_gv70_demo',
+      expectedRevision: 1,
+      termKey: '36@20000',
+      monthlyRent: { amount: 720000, currency: 'KRW' },
+      reason: 'health observation fence test',
+      actor: { id: 'user:test', kind: 'USER' }
+    }, '2026-09-21T09:30:00.000Z');
+
+    const second = await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-21T09:31:00.000Z'
+    );
+
+    let activeReadCount = 0;
+    const changingProjection = {
+      getActive: async (_projectionId: string) => {
+        activeReadCount += 1;
+        return activeReadCount === 1
+          ? { ...first, status: 'ACTIVE' as const }
+          : second;
+      },
+      getManifest: store.getManifest.bind(store),
+      listProjectionLineage: store.listProjectionLineage.bind(store)
+    };
+
+    const report = await readCatalogDataHealth(
+      store,
+      changingProjection,
+      '2026-09-21T10:01:00.000Z'
+    );
+
+    expect(report.status).toBe('DEGRADED');
+    expect(report.observation).toMatchObject({
+      startActiveReleaseId: first.releaseId,
+      endActiveReleaseId: second.releaseId,
+      activeReleaseStable: false
+    });
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION',
+      severity: 'WARNING'
+    }));
   });
 
   it('blocks health when Canonical references are broken', async () => {
