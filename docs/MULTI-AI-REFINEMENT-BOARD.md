@@ -2,7 +2,7 @@
 
 상태: **ACTIVE / 의견 수집용 / 운영 승인 아님**  
 대상 저장소: `freepass-creator/freepass-data`  
-현재 작업 기준: `codex/local-runtime-baseline`  
+현재 작업 기준: `codex/local-runtime-baseline` / `a1fc717`  
 운영 데이터 대상: Firebase project `freepasserp5` / Firestore  
 현재 승인 구현 범위: **Catalog V1 — 상품·차량·가격·정책**
 
@@ -13,7 +13,7 @@
 
 ## 1. 이 문서의 목적
 
-이 문서는 Codex, Claude Code, Cursor Agent, Gemini CLI 및 사용자 채팅에서
+이 문서는 Codex, Claude Code 및 사용자 GPT 채팅에서
 FreePass Data의 설계와 구현을 독립적으로 검토하고 고도화하기 위한 공동 검토판이다.
 
 AI 의견의 개수나 합의는 정확성 증거가 아니다. 최종 판단 순서는 다음과 같다.
@@ -76,7 +76,7 @@ FreePass Data Canonical product/offer/policy 및 ACTIVE projection은 0건이었
 
 ### 진행 중 작업과 충돌 주의
 
-- 로컬 작업 트리에는 Console, trace, F86 출력 계약, `OGONG_SUBSCRIPTION`, read-pilot 변경이 남아 있다.
+- `a1fc717`에 Console, trace, 소비처 전환 계약, data-domain catalog와 read-pilot 기준선을 커밋했다.
 - PR #23: `freepasserp5` 명시적 binding과 인증된 read-only consumer runtime. 운영 미배포.
 - PR #12: Admin Catalog Projection. 현재 통합 충돌과 policy parity HOLD가 있다.
 - 기존 변경을 reset, stash, overwrite 또는 무단 병합하지 않는다.
@@ -132,6 +132,75 @@ FreePass Data Canonical product/offer/policy 및 ACTIVE projection은 0건이었
 
 ## 6. 역할별 추가 요청
 
+### 사용자 GPT 채팅 — 작은 고도화와 사용성 개선
+
+GPT 채팅은 저장소를 직접 실행하거나 운영 상태를 확인했다고 가정하지 않는다. 대신 사용자가
+겪은 불편을 작은 요구사항으로 정리하고, 현재 계약을 깨지 않는 수정안·문안·화면 흐름·테스트
+반례를 만드는 데 우선 사용한다. GPT의 강점은 짧은 반복으로 이름, 설명, 빈 상태, 오류 문구,
+검색·필터, 작은 API 응답과 문서 구조를 다듬는 것이다.
+
+GPT가 잘 고도화하려면 매 요청에 최소한 다음 입력을 함께 준다.
+
+1. 기준 commit과 관련 파일 1~5개
+2. 사용자가 실제로 겪은 전후 상황 또는 화면
+3. 바꾸려는 한 가지 결과와 건드리면 안 되는 계약
+4. 현재 테스트와 실패 로그 또는 `UNKNOWN`
+5. 제안만 필요한지, Codex가 적용할 patch 후보까지 필요한지
+
+GPT는 큰 재설계보다 아래 크기의 변경을 우선 제안한다.
+
+- 기존 함수·컴포넌트·문서를 확장하는 한 단위
+- 사용자가 바로 체감하는 검색, 필터, 정렬, 설명, 오류 상태 개선
+- 기존 구현을 그대로 복제하지 않는 반례 테스트
+- HOLD·출처·revision·consumer 상태를 더 분명하게 보여주는 개선
+- Codex가 한 번의 diff와 한 묶음의 검사로 검증할 수 있는 변경
+
+GPT가 하지 말아야 할 일은 다음과 같다.
+
+- 실제 저장소·Firestore·Google Sheet·배포 상태를 보지 않고 완료라고 선언하기
+- 새 데이터베이스, registry, service, 상태값을 기존 자산 검색 없이 추가하기
+- 누락값을 임의 추정하거나 HOLD를 정상값으로 바꾸기
+- RTDB fallback, 운영 쓰기, IAM 변경, 소비처 전환을 승인된 것으로 가정하기
+- 한 요청에서 UI, 스키마, 수집기, 운영 전환을 모두 다시 설계하기
+
+GPT 결과는 아래 형태면 Codex가 가장 빠르게 적용·검증할 수 있다.
+
+```text
+1. 관찰한 문제
+2. 사용자에게 보일 개선 결과
+3. 재사용할 기존 파일·함수
+4. 제안 변경(파일별)
+5. 깨질 수 있는 계약과 반례
+6. 필요한 테스트
+7. 확인하지 못한 것
+8. Codex용 next_start_here
+```
+
+#### 사용자 GPT 채팅용 고도화 프롬프트
+
+```text
+첨부한 MULTI-AI-REFINEMENT-BOARD.md와 지정한 파일만 기준으로 FreePass Data를
+한 단계 고도화해 주세요. 이번 요청은 작은 개선 단위 하나로 제한합니다.
+
+먼저 현재 구현에서 재사용할 파일·함수·계약을 찾고, 새 구조는 꼭 필요한 경우에만
+제안하세요. RAW, ID, revision, lineage, HOLD, Firestore-only 원칙을 보존하고
+RTDB fallback은 제안하지 마세요. 확인하지 못한 운영 상태는 UNKNOWN으로 적으세요.
+
+답변은 다음 순서로 작성하세요.
+1. 현재 문제와 사용자 영향
+2. 가장 작은 권장 변경
+3. 재사용할 기존 자산
+4. 파일별 변경안 또는 patch 후보
+5. 반례와 회귀 위험
+6. 테스트와 실제 readback 방법
+7. 남은 UNKNOWN
+8. Codex가 바로 시작할 next_start_here
+
+화면이나 문구 개선이라면 정상, 빈 상태, 로딩, 권한 없음, 실패 상태를 함께 검토하세요.
+데이터 변경이라면 원본 수, 불변 ID, revision, 누락·중복, consumer 영향을 분리하세요.
+코드나 문서를 만들었다고 운영 완료라고 쓰지 마세요.
+```
+
 ### Codex — 실행 통제와 최종 통합
 
 - 현재 branch, commit, dirty worktree, 열린 PR의 겹침을 먼저 확인한다.
@@ -146,14 +215,14 @@ FreePass Data Canonical product/offer/policy 및 ACTIVE projection은 0건이었
 - HOLD가 자동 정규화나 낙관적 표현으로 사라지는 지점을 찾는다.
 - 기본은 읽기 전용이며 원문·비밀정보를 프롬프트에 포함하지 않는다.
 
-### Cursor Agent — 코드·회귀·통합 위험
+### Cursor Agent — 사용자가 직접 지정한 경우의 코드·회귀 검토
 
 - 변경 파일과 인접 코드에서 타입, 인증, 상태, 트랜잭션, 예외 처리를 검토한다.
 - PR #23, PR #12와 로컬 dirty 변경의 충돌 지점을 확인한다.
 - 테스트가 구현을 그대로 복제하거나 중요한 반례를 놓치는지 확인한다.
 - 기본은 읽기 전용이며 파일을 수정하지 않는다.
 
-### Gemini CLI — 긴 문맥·Google Workspace 대조
+### Gemini CLI — 사용자가 직접 지정한 경우의 Google Workspace 대조
 
 - F01/F86 및 Google-native 자료가 필요할 때 파일 ID, 탭, 범위, 수정 시각을 고정한다.
 - 표의 누락, 중복, 합계, 기간별 금액·보증금, 탭 분류를 대조한다.
@@ -244,7 +313,6 @@ AI 검토만 완료되고 위 증거가 없으면 상태는 `REVIEWED`, `READY_F
 
 | 검토 ID | 검토자 | 주제 | 판정 | 상태 |
 |---|---|---|---|---|
-| REVIEW-PENDING-CODE | Cursor Agent | PR·로컬 변경 통합 위험 | 대기 | 읽기 전용 검토 필요 |
 | REVIEW-PENDING-DESIGN | Claude Code | 책임 경계·상태 전이·반례 | 대기 | 읽기 전용 검토 필요 |
-| REVIEW-PENDING-DATA | Gemini CLI | F01/F86·장문 데이터 계약 대조 | 대기 | 접근 가능 여부부터 확인 |
+| REVIEW-GPT-GUIDE | 사용자 GPT 채팅 | 작은 고도화·사용성 개선 | READY | 공통 프롬프트와 반환 형식 준비 |
 | REVIEW-CODEX-BASELINE | Codex | 저장소·인수인계·현재 검사 | HOLD | 로컬 검사는 통과했으나 운영 Canonical/Release 0건 |
