@@ -3,6 +3,7 @@ import type { ActorRef } from './catalog.js';
 export type CatalogCommandType =
   | 'UPDATE_OFFER_PRICE'
   | 'CREATE_MANUAL_CATALOG_ENTRY'
+  | 'CANONICALIZE_CATALOG_CANDIDATE'
   | 'APPLY_REVIEWED_SOURCE_CHANGE';
 
 export type AuthorityConflictPolicy =
@@ -74,6 +75,16 @@ export type CatalogCommandWriterRule = {
 export const CATALOG_COMMAND_WRITERS: readonly CatalogCommandWriterRule[] = [
   {
     command: 'CREATE_MANUAL_CATALOG_ENTRY',
+    allowedWriters: [
+      { kind: 'USER' },
+      {
+        kind: 'SERVICE',
+        ids: ['service:freepass-data', 'service:freepass-admin']
+      }
+    ]
+  },
+  {
+    command: 'CANONICALIZE_CATALOG_CANDIDATE',
     allowedWriters: [
       { kind: 'USER' },
       {
