@@ -3,6 +3,16 @@
 이 workflow는 `freepasserp5` Firestore의 `products`와 `policy`를 2시간마다 FULL 캡처하고,
 직전 성공 캡처와 비교해 신규·변경·동일·미관측 및 재고 상태 전환을 기록한다.
 
+이 workflow는 운영 writer가 아니다. 실제 원천 최신화와 Firestore/F01/F86 쓰기의 단일 책임자는
+`freepass-creator/freepasserp4`의 `.github/workflows/erp5-ssot-refresh.yml`이다. 해당 writer는
+24개 공급사 원천 재수집 → ERP5 Atom 갱신 → 정책 참조 정합화 → 고정 snapshot → F01/F86 발행·감사를
+한 concurrency 경계에서 수행한다. FreePass Data가 같은 컬렉션을 별도로 갱신해 이중 writer가 되지 않는다.
+
+2026-09-21 19:00 KST 커밋 `100e5a1d`에서 자동 trigger가 의도적으로 제거됐고 마지막 full-green
+운영 증거는 run `35580953322`였다. ChatGPT Audit 100은 data plane full-green과 함께 native schedule/
+recovery timeliness HOLD, Source Contract의 stale `audit95-recorder` main-writer 충돌을 기록했다.
+복구안은 ERP4 Draft PR #463이며, 병합·실행·readback 전에는 상시 최신화가 복구됐다고 표현하지 않는다.
+
 ## 영속성
 
 - 원문, DRY RUN, delta는 비공개 GCS 버킷의 실행 ID별 immutable prefix에 저장한다.
