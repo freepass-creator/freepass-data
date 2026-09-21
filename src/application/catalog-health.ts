@@ -43,6 +43,8 @@ export type CatalogHealthIssue = {
 };
 
 export type CatalogHealthReport = {
+  contractVersion: 'catalog-data-health-v1';
+  schemaVersion: '1.0.0';
   scope: 'catalog-v1';
   generatedAt: string;
   status: CatalogHealthStatus;
@@ -525,6 +527,8 @@ export async function readCatalogDataHealth(
   );
 
   return {
+    contractVersion: 'catalog-data-health-v1',
+    schemaVersion: '1.0.0',
     scope: 'catalog-v1',
     generatedAt: now,
     status: overallStatus(sortedIssues),
