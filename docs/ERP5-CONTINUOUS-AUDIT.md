@@ -3,6 +3,11 @@
 이 workflow는 `freepasserp5` Firestore의 `products`와 `policy`를 2시간마다 FULL 캡처하고,
 직전 성공 캡처와 비교해 신규·변경·동일·미관측 및 재고 상태 전환을 기록한다.
 
+각 성공 관측은 `source-inventory.json` 원천 신분증을 만든다. 여기에는 프로젝트/DB/컬렉션,
+동일 transaction readTime과 digest, 컬렉션별 전체 문서 수, 상품 필드 경로 수, 매핑 분류 수,
+직전 관측 대비 추가·변경·동일·미관측 수와 재고 상태 전환 수가 들어간다. 원문 값과 문서 ID는
+요약에 넣지 않는다. Actions 실행 요약에서도 같은 count card를 즉시 확인할 수 있다.
+
 이 workflow는 운영 writer가 아니다. 실제 원천 최신화와 Firestore/F01/F86 쓰기의 단일 책임자는
 `freepass-creator/freepasserp4`의 `.github/workflows/erp5-ssot-refresh.yml`이다. 해당 writer는
 24개 공급사 원천 재수집 → ERP5 Atom 갱신 → 정책 참조 정합화 → 고정 snapshot → F01/F86 발행·감사를
@@ -18,6 +23,7 @@ recovery timeliness HOLD, Source Contract의 stale `audit95-recorder` main-write
 - 원문, DRY RUN, delta는 비공개 GCS 버킷의 실행 ID별 immutable prefix에 저장한다.
 - `latest.json`은 다음 비교 대상을 가리키는 포인터일 뿐 원문을 덮어쓰지 않는다.
 - GitHub Artifact에는 원문 없이 요약만 90일 보존한다.
+- `source-inventory.json`은 원천별 개수와 구조·변화 인지를 위한 비민감 요약이다.
 - workflow와 검사 규칙은 Git에 남는다.
 
 ## 권한 경계
@@ -39,6 +45,10 @@ Canonical write, 시트 갱신, 소비처 전환, RTDB 접근은 workflow에 없
 
 캡처와 저장, readback이 모두 성공한 실행만 다음 `latest.json`이 된다. 변화가 있으면 결과는 HOLD이며
 자동 삭제·출고불가 처리·Canonical 반영을 하지 않는다. 실패한 실행은 직전 성공 포인터를 유지한다.
+
+운영자가 외워야 할 것은 특정 숫자를 영구 고정한 값이 아니라, 마지막 성공 실행의 `readTime + digest +
+collection count + field-path count + delta` 묶음이다. 개수가 같아도 필드나 값이 달라질 수 있으므로
+count-only PASS를 금지한다. `MISSING_FROM_SOURCE`는 삭제 허가가 아니며 원천 상태 확인 전 HOLD다.
 
 CREATE_NEW_JUSTIFIED: 저장소에 schedule 또는 상시 실행 workflow가 없었다. 기존 캡처·DRY RUN·delta
 구현은 그대로 재사용하고, 이 파일은 인증·주기·영속 저장을 연결하는 운영 orchestration만 담당한다.

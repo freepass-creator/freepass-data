@@ -82,12 +82,69 @@ jobs:
           code=$?
           set -e
           test "$code" -eq 2
+      - name: Build the source identity and count card
+        shell: bash
+        run: |
+          jq -n \
+            --slurpfile capture capture-summary.json \
+            --slurpfile dryRun dry-run-summary.json \
+            --arg runId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            '{
+              version: "erp5-source-inventory/1",
+              source: {
+                projectId: "freepasserp5",
+                databaseId: "(default)",
+                collections: {
+                  products: $capture[0].products,
+                  policy: $capture[0].policies
+                },
+                readTime: $capture[0].readTime,
+                digest: $capture[0].sourceDigest,
+                coverage: "FULL_SAME_READ_ONLY_TRANSACTION"
+              },
+              recognition: {
+                productFieldPathCount: $dryRun[0].fieldProfile.fieldPathCount,
+                mappedForReview: $dryRun[0].counts.mappedForReview,
+                mappingHold: $dryRun[0].counts.hold,
+                inventoryTransitionCount: ($dryRun[0].delta.inventoryTransitionCount // null)
+              },
+              change: ($dryRun[0].delta // {status:"FIRST_OBSERVATION"}),
+              authority: {
+                canonicalWriteAuthorized: false,
+                destructiveActionAuthorized: false
+              },
+              runId: $runId
+            }' > source-inventory.json
+          jq -e '
+            .source.collections.products >= 0 and
+            .source.collections.policy >= 0 and
+            .recognition.productFieldPathCount >= 0 and
+            .authority.canonicalWriteAuthorized == false and
+            .authority.destructiveActionAuthorized == false
+          ' source-inventory.json >/dev/null
+          {
+            echo '## ERP5 source identity and count card'
+            echo
+            echo '| Evidence | Value |'
+            echo '| --- | ---: |'
+            echo "| products | $(jq -r '.source.collections.products' source-inventory.json) |"
+            echo "| policy | $(jq -r '.source.collections.policy' source-inventory.json) |"
+            echo "| product field paths | $(jq -r '.recognition.productFieldPathCount' source-inventory.json) |"
+            echo "| added | $(jq -r '.change.counts.ADDED // "first observation"' source-inventory.json) |"
+            echo "| changed | $(jq -r '.change.counts.CHANGED // "first observation"' source-inventory.json) |"
+            echo "| missing from source | $(jq -r '.change.counts.MISSING_FROM_SOURCE // "first observation"' source-inventory.json) |"
+            echo "| inventory transitions | $(jq -r '.recognition.inventoryTransitionCount // "first observation"' source-inventory.json) |"
+            echo
+            echo "Read time: $(jq -r '.source.readTime' source-inventory.json)"
+            echo
+            echo "Source digest: $(jq -r '.source.digest' source-inventory.json)"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Persist immutable evidence and advance only the observation pointer
         shell: bash
         run: |
           run_uri="gs://$EVIDENCE_BUCKET/runs/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           gcloud storage cp '${{ steps.capture.outputs.dir }}'/*.json "$run_uri/source/"
-          gcloud storage cp capture-summary.json dry-run-summary.json "$run_uri/"
+          gcloud storage cp capture-summary.json dry-run-summary.json source-inventory.json "$run_uri/"
           capture_uri="$run_uri/source/capture.json"
           jq -n \
             --arg captureUri "$capture_uri" \
@@ -104,5 +161,6 @@ jobs:
           path: |
             capture-summary.json
             dry-run-summary.json
+            source-inventory.json
           retention-days: 90
           if-no-files-found: error

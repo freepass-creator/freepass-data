@@ -3,10 +3,48 @@
 Status: **ACTIVE / CATALOG V1 EXECUTABLE BASELINE**  
 Official project name: **프리패스 데이터 / FreePass Data**  
 Repository: `freepass-creator/freepass-data`  
-Verified integration revision: `8d52775ad89844ea94f2d99529bb9c30bde6cd19`
-Date: 2026-09-21
+Verified baseline before this handoff update: `adbbfca7c0ddc4e6c7c1906765d9b5aacccd3f4c`
+Branch: `codex/local-runtime-baseline`
+Date: 2026-09-22
 
-## 0. Current live read evidence — 2026-09-21 22:44 KST
+## 0. Start here now — source control tower
+
+FreePass Data must know each registered source by identity, ownership, collection, complete record count,
+field structure, last successful observation, immutable digest and change from the prior observation. A request
+to “bring FreePass data” must resolve to this inventory and its private raw evidence without rediscovery.
+
+The current monitored source is `freepasserp5` Firestore `(default)`:
+
+| Source | Role | Last verified full count | Structure evidence | Authority |
+| --- | --- | ---: | --- | --- |
+| `products` | ERP5 product/inventory Atom | 1,659 | 508 recursively observed field paths | read-only monitoring; Canonical write HOLD |
+| `policy` | ERP5 policy source | 81 | full raw capture retained privately; semantic approval incomplete | read-only monitoring; Canonical write HOLD |
+| `catalog_products` | FreePass Data Canonical target | 0 | no active Canonical population | write/cutover HOLD |
+| `catalog_offers` | FreePass Data Canonical target | 0 | no active Canonical population | write/cutover HOLD |
+| `catalog_policies` | FreePass Data Canonical target | 0 | no active Canonical population | write/cutover HOLD |
+| `projection_active` | active consumer release pointer | 0 | no active release | consumer cutover HOLD |
+
+The 1,659/81/508 values are the last verified observation, not eternal constants. Every successful observation
+must carry `readTime + sourceDigest + collection counts + field-path count + delta`. Count equality alone does
+not prove equality. Added, changed, missing-from-source and inventory-state transitions are retained as HOLD
+evidence; none independently authorizes deletion, delisting or Canonical mutation.
+
+The read-only monitor is `.github/workflows/erp5-continuous-audit.yml`. It reuses the FULL same-transaction
+capture, field profiler and prior-capture delta to emit `source-inventory.json` plus private immutable evidence.
+It is prepared in Git but repository variables/IAM and a successful scheduled run are not yet verified.
+
+The only existing production refresh writer is `freepass-creator/freepasserp4`'s
+`.github/workflows/erp5-ssot-refresh.yml`: 24 supplier sources → ERP5 Atom/policy reconciliation → fixed snapshot
+→ F01/F86 publication and audit under one concurrency boundary. Automatic triggers were paused by ERP4 commit
+`100e5a1d`. Restart preparation is Draft PR #463 at commit `1584121e`; checks are green, but it is unmerged and
+has no post-restart production readback. Do not create a second writer in this repository.
+
+Immediate next step: review and merge/activate the single writer only through its operational approval boundary,
+then bind the first successful run ID to a fresh FULL FreePass Data observation. Verify supplier-source coverage,
+ERP5 counts/digest/delta, policy reconciliation, projection state and F01/F86 readback from that same run before
+calling continuous freshness restored. After that, continue field-semantic decisions for the 1,659 product records.
+
+## 1. Last verified live read evidence — 2026-09-21 22:44 KST
 
 Read-only Firestore counts from the explicitly bound `freepasserp5` project:
 
@@ -32,7 +70,7 @@ Next start here: define and review the authoritative mapping decisions for milea
 deposit, price keys, Sonogong classification and policy facts. Generate a dry-run
 Canonical candidate set with per-record HOLD reasons before proposing any Firestore write.
 
-## 1. Do not restart or recreate the project
+## 2. Do not restart or recreate the project
 
 This repository already exists and contains the Catalog V1 executable baseline plus
 the authenticated read runtime, Data Health, ERP5 read-only capture/mapping analysis,
@@ -42,7 +80,7 @@ Do **not** create a replacement repository and do **not** redirect this work to 
 
 Legacy Firebase identifiers may still appear as source/target identifiers. They are identifiers, not the official project name.
 
-## 2. Locked boundaries
+## 3. Locked boundaries
 
 - Approved implementation scope: **CATALOG V1 ONLY**
 - FreePass Data owns the server-side data-platform boundary, not Sales/Admin/Estimate business workflow meaning.
@@ -52,9 +90,9 @@ Legacy Firebase identifiers may still appear as source/target identifiers. They 
 - GitHub Actions / deployment automation: **do not add or enable without separate authorization**.
 - Production Firebase binding, IAM change, writer cutover, schedule activation, and real-data writes remain separately authorized operations.
 
-## 3. What is already on main
+## 4. What is already implemented on this branch
 
-The current baseline includes:
+The branch baseline includes:
 
 - TypeScript / Node 22 modular monolith
 - Catalog JSON Schemas
@@ -76,7 +114,7 @@ The current baseline includes:
 - fail-closed public projection for incomplete deposit terms
 - tests covering catalog mutation, ingestion, normalizer and shadow behavior
 
-## 4. Highest-value next work
+## 5. Highest-value next work
 
 ### Consumer read preparation — 2026-09-21
 
@@ -169,15 +207,15 @@ Only after P0-P3 contracts are stable:
 
 Do not perform writer cutover in the same step.
 
-## 5. Coordination rule
+## 6. Coordination rule
 
 ### Local working copy — 2026-09-21
 
-Local runtime fixes based on main `fea18ce15f523d41a9382e7ae79e702a58d3afae`
-are on `codex/local-runtime-baseline` in `C:\dev\freepass-data`.
+The integrated work is on `codex/local-runtime-baseline` in `C:\dev\freepass-data`. Resolve and record the
+current HEAD at the start of every continuation; the baseline above is provenance, not a floating latest pointer.
 See [Local development](LOCAL-DEVELOPMENT.md) for Windows setup, validation,
-and the separate API/worker memory-store limitation. These local changes are
-not a production rollout. Open PR #12 covers Admin projection work separately.
+and the separate API/worker memory-store limitation. These branch changes are not a production rollout.
+Before relying on any numbered PR mentioned in older sections, re-read its current state and head revision.
 
 Before each new change:
 
