@@ -211,7 +211,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
           native.create(this.db.collection(C.writerOwnership).doc('catalog'), ownership);
         },
         updateCatalogWriterOwnership: async (ownership) => {
-          native.set(this.db.collection(C.writerOwnership).doc('catalog'), ownership);
+          native.update(this.db.collection(C.writerOwnership).doc('catalog'), ownership);
         },
         getWriterOwnershipTransferReceipt: async (key) =>
           data<WriterOwnershipTransferReceipt>(
