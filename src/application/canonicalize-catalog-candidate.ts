@@ -15,6 +15,12 @@ import type {
 } from '../domain/canonicalization.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import type { CatalogStore } from '../ports/catalog-store.js';
+import { assertCommandWriter } from '../domain/authority.js';
+import {
+  assertCatalogWriterOwnership,
+  resolveExecutionWriter,
+  type ExecutionWriterRef
+} from '../domain/writer-ownership.js';
 
 export type CanonicalizeCatalogCandidateInput = {
   commandId: string;
@@ -23,6 +29,7 @@ export type CanonicalizeCatalogCandidateInput = {
   expectedHeadRunId: string;
   decision: CanonicalizationDecision;
   actor: ActorRef;
+  writer?: ExecutionWriterRef;
   reason: string;
 };
 
@@ -61,7 +68,7 @@ function opaqueId(prefix: string, ...parts: string[]) {
   return `${prefix}_${stableHash(parts).slice(0, 24)}`;
 }
 
-function requestDigest(input: CanonicalizeCatalogCandidateInput) {
+function requestDigest(input: CanonicalizeCatalogCandidateInput, writerId: string) {
   return stableHash({
     commandType: 'CANONICALIZE_CATALOG_CANDIDATE',
     candidateId: input.candidateId,
@@ -72,6 +79,7 @@ function requestDigest(input: CanonicalizeCatalogCandidateInput) {
       kind: input.actor.kind,
       organizationId: input.actor.organizationId ?? null
     },
+    writerId,
     reason: input.reason
   });
 }
@@ -384,6 +392,7 @@ export async function canonicalizeCatalogCandidate(
   input: CanonicalizeCatalogCandidateInput,
   now = new Date().toISOString()
 ): Promise<CanonicalizationReceipt> {
+  assertCommandWriter('CANONICALIZE_CATALOG_CANDIDATE', input.actor);
   if (!input.reason.trim()) throw new CanonicalizationRejectedError('reason is required');
   if (!input.decision.supplierId.trim()) {
     throw new CanonicalizationRejectedError('reviewed supplierId is required');
@@ -391,9 +400,14 @@ export async function canonicalizeCatalogCandidate(
   assertIdentityId(input.decision.vehicleModel, 'vm');
   if (input.decision.vehicleAsset) assertIdentityId(input.decision.vehicleAsset, 'va');
 
-  const digest = requestDigest(input);
+  const writer = resolveExecutionWriter(input.actor, input.writer);
+  const digest = requestDigest(input, writer.id);
 
   return store.transact(async (tx) => {
+    assertCatalogWriterOwnership(
+      await tx.getCatalogWriterOwnership(),
+      writer
+    );
     const existingReceipt = await tx.getCanonicalizationReceipt(input.idempotencyKey);
     if (existingReceipt) {
       if (existingReceipt.requestDigest !== digest) {
@@ -494,7 +508,8 @@ export async function canonicalizeCatalogCandidate(
         productId: existingBinding.productId,
         offerId: existingBinding.offerId,
         committedAt: now,
-        requestDigest: digest
+        requestDigest: digest,
+        writerId: writer.id
       };
       await tx.putCanonicalizationReceipt(receipt);
       return receipt;
@@ -712,6 +727,7 @@ export async function canonicalizeCatalogCandidate(
       before: null,
       after: binding,
       reason: input.reason,
+      writerId: writer.id,
       revisionBefore: 0,
       revisionAfter: 1,
       occurredAt: now
@@ -743,7 +759,8 @@ export async function canonicalizeCatalogCandidate(
       productId: product.id,
       offerId: offer.id,
       committedAt: now,
-      requestDigest: digest
+      requestDigest: digest,
+      writerId: writer.id
     };
     await tx.putCanonicalizationReceipt(receipt);
     return receipt;
