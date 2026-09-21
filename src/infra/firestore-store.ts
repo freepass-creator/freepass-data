@@ -471,6 +471,42 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       await this.db.collection(C.releases).doc(active.get('releaseId') as string).get()
     );
   }
+  async getActiveEvidenceSnapshot(projectionId: string) {
+    const activeRef = this.db.collection(C.activeReleases).doc(projectionId);
+
+    return this.db.runTransaction(async (tx) => {
+      const activeSnap = await tx.get(activeRef);
+      if (!activeSnap.exists) {
+        return {
+          projectionId,
+          release: null,
+          manifest: null,
+          lineage: [],
+          consistency: 'ATOMIC' as const
+        };
+      }
+
+      const releaseId = activeSnap.get('releaseId') as string;
+      const releaseRef = this.db.collection(C.releases).doc(releaseId);
+      const manifestRef = this.db.collection(C.releaseManifests).doc(releaseId);
+      const evidenceQuery = this.db.collection(C.projectionLineage)
+        .where('releaseId', '==', releaseId);
+
+      const releaseSnap = await tx.get(releaseRef);
+      const manifestSnap = await tx.get(manifestRef);
+      const evidenceSnap = await tx.get(evidenceQuery);
+
+      return {
+        projectionId,
+        release: data<ProjectionRelease<ErpPublicProduct>>(releaseSnap),
+        manifest: data<ProjectionReleaseManifest>(manifestSnap),
+        lineage: evidenceSnap.docs.map(
+          (doc) => doc.data() as ProjectionFieldLineageRecord
+        ),
+        consistency: 'ATOMIC' as const
+      };
+    });
+  }
   async getManifest(releaseId: string) {
     return data<ProjectionReleaseManifest>(
       await this.db.collection(C.releaseManifests).doc(releaseId).get()
