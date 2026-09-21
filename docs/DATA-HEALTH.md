@@ -139,6 +139,43 @@ This removes the previous read-then-separate-update TOCTOU window from the norma
 
 This does not authorize arbitrary external writers to projection evidence. Writer/IAM boundaries remain separate controls.
 
+## Versioned read contract
+
+Catalog Data Health now has an explicit response contract:
+
+- `contractVersion = catalog-data-health-v1`
+- `schemaVersion = 1.0.0`
+- `contracts/catalog-data-health-v1.schema.json`
+
+The JSON Schema uses `additionalProperties: false` at contract boundaries so accidental API drift is rejected rather than silently accepted.
+
+Contract tests validate generated reports and reject changed contract identity or undeclared top-level fields.
+
+## Shared projection integrity verifier
+
+`src/application/projection-integrity.ts` is the single pure verifier used by both:
+
+- ACTIVE release reuse
+- Catalog Data Health
+
+It verifies the actual release payload, manifest canonical inputs, release/manifest identity and metadata, product/offer counts, canonical revision, evidence count, and lineage content digest.
+
+This prevents the previous failure mode where Health and release reuse implemented similar integrity checks independently and one path lagged behind the other.
+
+## ACTIVE observation fence
+
+Catalog Data Health re-reads the ACTIVE release at the end of the observation.
+
+The report includes:
+
+- `startActiveReleaseId`
+- `endActiveReleaseId`
+- `activeReleaseStable`
+
+If the ACTIVE release changes during the observation window, the report emits `ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION` and is at least `DEGRADED`.
+
+This does not create an atomic snapshot. `CONSISTENT_SNAPSHOT` remains not evaluated, but a detected release switch can no longer be hidden behind a clean report.
+
 ## Observation consistency
 
 Catalog Data Health v1 is **not an atomic snapshot**.
