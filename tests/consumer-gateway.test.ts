@@ -108,6 +108,33 @@ describe('read-only consumer gateway', () => {
     await app.close();
   });
 
+  it('returns DEGRADED as HTTP 200 because the diagnostic read itself succeeded', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+
+    const app = createConsumerGateway(store, [healthBinding], store);
+    const result = await app.inject({ url: healthUrl, headers });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.json()).toMatchObject({
+      contractVersion: 'catalog-data-health-v1',
+      status: 'DEGRADED'
+    });
+
+    await app.close();
+  });
+
+  it('returns 503 when a health-capable registration has no Health reader', async () => {
+    const store = new MemoryDataStore();
+    const app = createConsumerGateway(store, [healthBinding]);
+
+    const result = await app.inject({ url: healthUrl, headers });
+    expect(result.statusCode).toBe(503);
+    expect(result.json()).toEqual({ code: 'HEALTH_READER_UNAVAILABLE' });
+
+    await app.close();
+  });
+
   it('returns a schema-valid HEALTHY report to an explicitly authorized health reader', async () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
