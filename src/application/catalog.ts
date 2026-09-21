@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
+import { readActiveProjectionEvidence } from './projection-evidence-reader.js';
+import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 import type {
   ActorRef,
   ErpPublicProduct,
@@ -180,24 +183,6 @@ function publicPriceTerms(offer: Offer) {
       (a.mileageLimitKmPerYear ?? -1) - (b.mileageLimitKmPerYear ?? -1) ||
       a.termKey.localeCompare(b.termKey)
     );
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, child]) => [key, stableValue(child)])
-    );
-  }
-  return value;
-}
-
-function stableDigest(value: unknown) {
-  return createHash('sha256')
-    .update(JSON.stringify(stableValue(value)))
-    .digest('hex');
 }
 
 function canonicalInputKey(entityType: CatalogEntityType, entityId: string, revision: number) {
@@ -580,15 +565,29 @@ export async function buildErpPublicProjection(
   const inputDigest = stableDigest(canonicalInputs);
   const dataDigest = stableDigest(data);
   const canonicalRevision = Math.max(0, ...canonicalInputs.map((x) => x.revision));
-  const currentActive = await projections.getActive('erp-public');
+  const currentEvidence = await readActiveProjectionEvidence(
+    projections,
+    'erp-public'
+  );
+  const currentActive = currentEvidence.release;
   if (
     currentActive &&
+    currentActive.status === 'ACTIVE' &&
     currentActive.inputDigest === inputDigest &&
-    currentActive.dataDigest === dataDigest
+    currentActive.dataDigest === dataDigest &&
+    currentEvidence.manifest
   ) {
-    return currentActive;
+    const integrity = verifyProjectionReleaseIntegrity(
+      currentActive,
+      currentEvidence.manifest,
+      currentEvidence.lineage
+    );
+    if (integrity.valid) {
+      return currentActive;
+    }
   }
 
+  const fieldEvidenceDigest = stableRecordSetDigest(evidenceContext.evidence);
   const manifestId = `manifest_${releaseId}`;
   const manifest: ProjectionReleaseManifest = {
     manifestId,
@@ -600,6 +599,7 @@ export async function buildErpPublicProjection(
     productCount: data.length,
     offerCount: data.reduce((sum, product) => sum + product.offers.length, 0),
     fieldEvidenceCount: evidenceContext.evidence.length,
+    fieldEvidenceDigest,
     inputDigest,
     dataDigest
   };

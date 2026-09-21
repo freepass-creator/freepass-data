@@ -32,6 +32,7 @@ import type {
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
+import { assertProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -367,6 +368,11 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     if (this.manifests.has(input.manifest.releaseId)) {
       throw new Error('Projection release manifest already exists');
     }
+    assertProjectionReleaseIntegrity(
+      release,
+      input.manifest,
+      input.lineage
+    );
     for (const item of input.lineage) {
       if (this.projectionLineage.has(item.lineageRecordId)) {
         throw new Error(`Projection lineage already exists: ${item.lineageRecordId}`);
@@ -386,17 +392,19 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     }
     const manifest = this.manifests.get(releaseId);
     if (!manifest) throw new Error('Release manifest not found');
-    const evidenceCount = [...this.projectionLineage.values()]
-      .filter((item) => item.releaseId === releaseId)
-      .length;
-    if (evidenceCount !== manifest.fieldEvidenceCount) {
-      throw new Error('Projection field evidence count mismatch');
-    }
+    const evidence = [...this.projectionLineage.values()]
+      .filter((item) => item.releaseId === releaseId);
+    assertProjectionReleaseIntegrity(release, manifest, evidence);
     release.status = 'READY';
   }
   async activate(releaseId: string) {
     const release = this.releases.get(releaseId);
     if (!release || release.status !== 'READY') throw new Error('Only READY release can activate');
+    const manifest = this.manifests.get(releaseId);
+    if (!manifest) throw new Error('Release manifest not found');
+    const evidence = [...this.projectionLineage.values()]
+      .filter((item) => item.releaseId === releaseId);
+    assertProjectionReleaseIntegrity(release, manifest, evidence);
     const previousId = this.active.get(release.projectionId);
     const previous = previousId ? this.releases.get(previousId) : undefined;
     if (previous) previous.status = 'READY';
@@ -407,6 +415,29 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async getActive(projectionId: string) {
     const id = this.active.get(projectionId);
     return id ? copy(this.releases.get(id) ?? null) : null;
+  }
+  async getActiveEvidenceSnapshot(projectionId: string) {
+    const releaseId = this.active.get(projectionId);
+    if (!releaseId) {
+      return {
+        projectionId,
+        release: null,
+        manifest: null,
+        lineage: [],
+        consistency: 'ATOMIC' as const
+      };
+    }
+    const release = this.releases.get(releaseId) ?? null;
+    const manifest = this.manifests.get(releaseId) ?? null;
+    const lineage = [...this.projectionLineage.values()]
+      .filter((item) => item.releaseId === releaseId);
+    return copy({
+      projectionId,
+      release,
+      manifest,
+      lineage,
+      consistency: 'ATOMIC' as const
+    });
   }
   async getManifest(releaseId: string) {
     return copy(this.manifests.get(releaseId) ?? null);

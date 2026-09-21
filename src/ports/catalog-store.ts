@@ -20,6 +20,7 @@ import type {
 } from '../domain/history.js';
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
 import type {
+  ActiveProjectionEvidenceSnapshot,
   ProjectionDeliveryReceipt,
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
@@ -140,6 +141,12 @@ export interface ProjectionStore {
   getDeliveryReceipt(eventId: string): Promise<ProjectionDeliveryReceipt | null>;
   putDeliveryReceipt(receipt: ProjectionDeliveryReceipt): Promise<void>;
 }
+export interface ProjectionEvidenceSnapshotStore {
+  getActiveEvidenceSnapshot(
+    projectionId: string
+  ): Promise<ActiveProjectionEvidenceSnapshot>;
+}
+
 export interface OutboxStore {
   claimNext(input: { workerId: string; now: string; leaseUntil: string }): Promise<OutboxEvent | null>;
   markDone(eventId: string): Promise<void>;

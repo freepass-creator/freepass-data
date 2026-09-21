@@ -1,4 +1,4 @@
-import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
+import { getTargetFirebaseApp } from './firebase-target.js';
 import { getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type {
   AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
@@ -34,6 +34,7 @@ import type {
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
+import { assertProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 
 const C = {
   vehicleModels: 'catalog_vehicle_models',
@@ -364,6 +365,12 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       throw new Error('Projection evidence requires a BUILDING release');
     }
 
+    assertProjectionReleaseIntegrity(
+      releaseSnap.data() as ProjectionRelease<ErpPublicProduct>,
+      input.manifest,
+      input.lineage
+    );
+
     const chunkSize = 400;
     for (let offset = 0; offset < input.lineage.length; offset += chunkSize) {
       const batch = this.db.batch();
@@ -390,33 +397,65 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   }
   async markReady(releaseId: string) {
     const releaseRef = this.db.collection(C.releases).doc(releaseId);
-    const [releaseSnap, manifestSnap, evidenceCountSnap] = await Promise.all([
-      releaseRef.get(),
-      this.db.collection(C.releaseManifests).doc(releaseId).get(),
-      this.db.collection(C.projectionLineage)
-        .where('releaseId', '==', releaseId)
-        .count()
-        .get()
-    ]);
-    if (!releaseSnap.exists || releaseSnap.get('status') !== 'VALIDATING') {
-      throw new Error('Only VALIDATING release can become READY');
-    }
-    if (!manifestSnap.exists) throw new Error('Release manifest not found');
-    const manifest = manifestSnap.data() as ProjectionReleaseManifest;
-    if (evidenceCountSnap.data().count !== manifest.fieldEvidenceCount) {
-      throw new Error('Projection field evidence count mismatch');
-    }
-    await releaseRef.update({ status: 'READY' });
+    const manifestRef = this.db.collection(C.releaseManifests).doc(releaseId);
+    const evidenceQuery = this.db.collection(C.projectionLineage)
+      .where('releaseId', '==', releaseId);
+
+    await this.db.runTransaction(async (tx) => {
+      const releaseSnap = await tx.get(releaseRef);
+      const manifestSnap = await tx.get(manifestRef);
+      const evidenceSnap = await tx.get(evidenceQuery);
+
+      if (!releaseSnap.exists || releaseSnap.get('status') !== 'VALIDATING') {
+        throw new Error('Only VALIDATING release can become READY');
+      }
+      if (!manifestSnap.exists) throw new Error('Release manifest not found');
+
+      const manifest = manifestSnap.data() as ProjectionReleaseManifest;
+      const evidence = evidenceSnap.docs.map(
+        (doc) => doc.data() as ProjectionFieldLineageRecord
+      );
+
+      assertProjectionReleaseIntegrity(
+        releaseSnap.data() as ProjectionRelease<ErpPublicProduct>,
+        manifest,
+        evidence
+      );
+
+      tx.update(releaseRef, { status: 'READY' });
+    });
   }
   async activate(releaseId: string) {
     await this.db.runTransaction(async (tx) => {
       const ref = this.db.collection(C.releases).doc(releaseId);
+      const manifestRef = this.db.collection(C.releaseManifests).doc(releaseId);
+      const evidenceQuery = this.db.collection(C.projectionLineage)
+        .where('releaseId', '==', releaseId);
+
       const snap = await tx.get(ref);
-      if (!snap.exists || snap.get('status') !== 'READY') throw new Error('Only READY release can activate');
+      const manifestSnap = await tx.get(manifestRef);
+      const evidenceSnap = await tx.get(evidenceQuery);
+
+      if (!snap.exists || snap.get('status') !== 'READY') {
+        throw new Error('Only READY release can activate');
+      }
+      if (!manifestSnap.exists) throw new Error('Release manifest not found');
+
+      const manifest = manifestSnap.data() as ProjectionReleaseManifest;
+      const evidence = evidenceSnap.docs.map(
+        (doc) => doc.data() as ProjectionFieldLineageRecord
+      );
+      assertProjectionReleaseIntegrity(
+        snap.data() as ProjectionRelease<ErpPublicProduct>,
+        manifest,
+        evidence
+      );
+
       const projectionId = snap.get('projectionId') as string;
       const activeRef = this.db.collection(C.activeReleases).doc(projectionId);
       const activeSnap = await tx.get(activeRef);
       const previousId = activeSnap.exists ? activeSnap.get('releaseId') as string : null;
+
       if (previousId && previousId !== releaseId) {
         tx.update(this.db.collection(C.releases).doc(previousId), { status: 'READY' });
       }
@@ -430,6 +469,42 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     return data<ProjectionRelease<ErpPublicProduct>>(
       await this.db.collection(C.releases).doc(active.get('releaseId') as string).get()
     );
+  }
+  async getActiveEvidenceSnapshot(projectionId: string) {
+    const activeRef = this.db.collection(C.activeReleases).doc(projectionId);
+
+    return this.db.runTransaction(async (tx) => {
+      const activeSnap = await tx.get(activeRef);
+      if (!activeSnap.exists) {
+        return {
+          projectionId,
+          release: null,
+          manifest: null,
+          lineage: [],
+          consistency: 'ATOMIC' as const
+        };
+      }
+
+      const releaseId = activeSnap.get('releaseId') as string;
+      const releaseRef = this.db.collection(C.releases).doc(releaseId);
+      const manifestRef = this.db.collection(C.releaseManifests).doc(releaseId);
+      const evidenceQuery = this.db.collection(C.projectionLineage)
+        .where('releaseId', '==', releaseId);
+
+      const releaseSnap = await tx.get(releaseRef);
+      const manifestSnap = await tx.get(manifestRef);
+      const evidenceSnap = await tx.get(evidenceQuery);
+
+      return {
+        projectionId,
+        release: data<ProjectionRelease<ErpPublicProduct>>(releaseSnap),
+        manifest: data<ProjectionReleaseManifest>(manifestSnap),
+        lineage: evidenceSnap.docs.map(
+          (doc) => doc.data() as ProjectionFieldLineageRecord
+        ),
+        consistency: 'ATOMIC' as const
+      };
+    });
   }
   async getManifest(releaseId: string) {
     return data<ProjectionReleaseManifest>(
@@ -501,13 +576,5 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
 }
 
 export async function createFirestoreDataStore() {
-  if (!getApps().length) {
-    initializeApp({
-      credential: applicationDefault(),
-      ...(process.env.FIREBASE_PROJECT_ID !== undefined
-        ? { projectId: process.env.FIREBASE_PROJECT_ID }
-        : {})
-    });
-  }
-  return new FirestoreDataStore(getFirestore());
+  return new FirestoreDataStore(getFirestore(getTargetFirebaseApp()));
 }

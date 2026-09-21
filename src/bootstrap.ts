@@ -11,6 +11,10 @@ export type RuntimeStores = {
 export async function createRuntimeStores(): Promise<RuntimeStores> {
   const driver = process.env.FREEPASS_DATA_DRIVER ?? 'memory';
 
+  if (process.env.NODE_ENV === 'production' && driver !== 'firestore') {
+    throw new Error('Production FreePass Data requires the firestore driver; demo data is prohibited');
+  }
+
   if (driver === 'memory') {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
