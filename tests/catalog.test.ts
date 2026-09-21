@@ -3,7 +3,7 @@ import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { IdempotencyConflictError, RevisionConflictError, buildErpPublicProjection, processOneOutboxEvent, updateOfferPrice } from '../src/application/catalog.js';
 import { AuthorityDeniedError, resolveFieldAuthority } from '../src/domain/authority.js';
-import { stableRecordSetDigest } from '../src/application/stable-digest.js';
+import { stableRecordSetDigest } from '../src/shared/stable-digest.js';
 
 describe('Catalog V1 vertical slice', () => {
   it('is idempotent and rejects stale revisions', async () => {
