@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { stableDigest, stableValue } from './stable-digest.js';
+import { stableDigest, stableRecordSetDigest, stableValue } from './stable-digest.js';
 import type {
   ActorRef,
   ErpPublicProduct,
@@ -562,6 +562,7 @@ export async function buildErpPublicProjection(
     );
   const inputDigest = stableDigest(canonicalInputs);
   const dataDigest = stableDigest(data);
+  const fieldEvidenceDigest = stableRecordSetDigest(evidenceContext.evidence);
   const canonicalRevision = Math.max(0, ...canonicalInputs.map((x) => x.revision));
   const currentActive = await projections.getActive('erp-public');
   if (
@@ -569,7 +570,12 @@ export async function buildErpPublicProjection(
     currentActive.inputDigest === inputDigest &&
     currentActive.dataDigest === dataDigest
   ) {
-    return currentActive;
+    const currentManifest = await projections.getManifest(currentActive.releaseId);
+    if (
+      currentManifest?.fieldEvidenceDigest === fieldEvidenceDigest
+    ) {
+      return currentActive;
+    }
   }
 
   const manifestId = `manifest_${releaseId}`;
@@ -583,6 +589,7 @@ export async function buildErpPublicProjection(
     productCount: data.length,
     offerCount: data.reduce((sum, product) => sum + product.offers.length, 0),
     fieldEvidenceCount: evidenceContext.evidence.length,
+    fieldEvidenceDigest,
     inputDigest,
     dataDigest
   };
