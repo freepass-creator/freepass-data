@@ -32,7 +32,7 @@ import type {
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
-import { stableRecordSetDigest } from '../shared/stable-digest.js';
+import { assertProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -362,12 +362,11 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     if (this.manifests.has(input.manifest.releaseId)) {
       throw new Error('Projection release manifest already exists');
     }
-    if (!input.manifest.fieldEvidenceDigest) {
-      throw new Error('Projection release manifest requires fieldEvidenceDigest');
-    }
-    if (input.manifest.fieldEvidenceDigest !== stableRecordSetDigest(input.lineage)) {
-      throw new Error('Projection field evidence digest mismatch');
-    }
+    assertProjectionReleaseIntegrity(
+      release,
+      input.manifest,
+      input.lineage
+    );
     for (const item of input.lineage) {
       if (this.projectionLineage.has(item.lineageRecordId)) {
         throw new Error(`Projection lineage already exists: ${item.lineageRecordId}`);
@@ -389,15 +388,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     if (!manifest) throw new Error('Release manifest not found');
     const evidence = [...this.projectionLineage.values()]
       .filter((item) => item.releaseId === releaseId);
-    if (evidence.length !== manifest.fieldEvidenceCount) {
-      throw new Error('Projection field evidence count mismatch');
-    }
-    if (!manifest.fieldEvidenceDigest) {
-      throw new Error('Projection release manifest requires fieldEvidenceDigest');
-    }
-    if (stableRecordSetDigest(evidence) !== manifest.fieldEvidenceDigest) {
-      throw new Error('Projection field evidence digest mismatch');
-    }
+    assertProjectionReleaseIntegrity(release, manifest, evidence);
     release.status = 'READY';
   }
   async activate(releaseId: string) {
@@ -407,15 +398,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     if (!manifest) throw new Error('Release manifest not found');
     const evidence = [...this.projectionLineage.values()]
       .filter((item) => item.releaseId === releaseId);
-    if (evidence.length !== manifest.fieldEvidenceCount) {
-      throw new Error('Projection field evidence count mismatch');
-    }
-    if (!manifest.fieldEvidenceDigest) {
-      throw new Error('Projection release manifest requires fieldEvidenceDigest');
-    }
-    if (stableRecordSetDigest(evidence) !== manifest.fieldEvidenceDigest) {
-      throw new Error('Projection field evidence digest mismatch');
-    }
+    assertProjectionReleaseIntegrity(release, manifest, evidence);
     const previousId = this.active.get(release.projectionId);
     const previous = previousId ? this.releases.get(previousId) : undefined;
     if (previous) previous.status = 'READY';
