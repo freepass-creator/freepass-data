@@ -129,6 +129,53 @@ describe('Catalog Data Health v1', () => {
     }));
   });
 
+  it('degrades when the same ACTIVE release payload mutates during observation', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const release = await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-21T09:00:00.000Z'
+    );
+
+    let activeReadCount = 0;
+    const changingProjection = {
+      getActive: async (_projectionId: string) => {
+        activeReadCount += 1;
+        if (activeReadCount === 1) return release;
+        const data = structuredClone(release.data);
+        data[0] = {
+          ...data[0]!,
+          displayName: 'TAMPERED_DURING_OBSERVATION'
+        };
+        return {
+          ...release,
+          data
+        };
+      },
+      getManifest: store.getManifest.bind(store),
+      listProjectionLineage: store.listProjectionLineage.bind(store)
+    };
+
+    const report = await readCatalogDataHealth(
+      store,
+      changingProjection,
+      '2026-09-21T10:01:00.000Z'
+    );
+
+    expect(report.status).toBe('DEGRADED');
+    expect(report.observation).toMatchObject({
+      startActiveReleaseId: release.releaseId,
+      endActiveReleaseId: release.releaseId,
+      activeReleaseStable: false,
+      projectionEvidenceConsistency: 'PARTIAL_MULTI_READ'
+    });
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION',
+      severity: 'WARNING'
+    }));
+  });
+
   it('degrades when ACTIVE manifest inputs lag current Canonical revisions', async () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
