@@ -295,7 +295,7 @@ Without an emulator the test is skipped and must be reported as **NOT_RUN**, not
 
 Catalog Data Health v1 is **not a whole-Catalog atomic snapshot**. Projection evidence may be atomic while Canonical entity/revision reads remain separate.
 
-Catalog entities, ACTIVE release, manifest, and lineage are read through separate non-transactional calls. During concurrent updates, the report can combine values observed at different moments.
+Canonical entities and Revision History are still read separately from the Projection evidence snapshot. Memory/Firestore Projection evidence can be read atomically, while legacy readers explicitly fall back to partial multi-read. During concurrent updates, the report can therefore still combine Canonical state from one moment with Projection evidence from another.
 
 The response therefore includes:
 
@@ -345,10 +345,10 @@ Tests include:
 
 ## Next safe extension
 
-1. Re-run the full integrated test suite on the updated branch.
-2. Connect the proven Data Health read model to the existing authenticated/read-only consumer API boundary.
-3. Keep the API response read-only and versioned; do not expose raw Firestore topology.
-4. Preserve `PARTIAL_MULTI_READ` until an atomic snapshot/revision-token strategy exists.
+1. Run full integrated validation on the stacked consumer-runtime + Data-Health branch.
+2. After PR #23 and PR #25 land, rebase the API integration into a small standalone follow-up.
+3. Shadow-test the authenticated `catalog-health` route with a read-only service identity before any consumer cutover.
+4. Preserve whole-report `PARTIAL_MULTI_READ` semantics until Canonical + Projection can share a snapshot/revision-token boundary.
 5. Add Source Registry/freshness only as a later isolated unit.
 6. Add Consumer Registry health only after migration-state contracts are fixed.
 
