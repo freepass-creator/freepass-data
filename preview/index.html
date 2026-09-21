@@ -114,6 +114,42 @@ tr:last-child td{border-bottom:0}
 .manifest-item span{display:block;font-size:10px;color:var(--muted)}.manifest-item b{display:block;margin-top:6px;font-size:12px;word-break:break-all}
 .timeline{padding:0 16px}.event{display:grid;grid-template-columns:80px 1fr;gap:14px;padding:14px 0;border-bottom:1px solid var(--line)}
 .event:last-child{border-bottom:0}.event time{font-size:10px;color:var(--muted)}.event b{font-size:12px}.event p{margin:5px 0 0;font-size:11px;color:var(--muted)}
+.local-actionbar{
+  display:none;
+  position:sticky;
+  inset-block-end:0;
+  z-index:25;
+  max-inline-size:1200px;
+  margin:16px auto 0;
+  padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));
+  border-top:1px solid var(--line);
+  background:rgba(255,255,255,.97);
+  backdrop-filter:blur(10px)
+}
+.local-actionbar .secondary-action,
+.local-actionbar .primary-action{
+  min-height:48px;
+  border-radius:8px;
+  font-weight:700;
+  font-size:13px
+}
+.local-actionbar .secondary-action{
+  border:1px solid var(--line-strong);
+  background:#fff;
+  color:var(--brand)
+}
+.local-actionbar .primary-action{
+  border:1px solid var(--brand);
+  background:var(--brand);
+  color:#fff
+}
+.local-actionbar .primary-action:disabled{
+  border-color:var(--line);
+  background:#EFF1F4;
+  color:#9AA2AD
+}
+body[data-active-screen="review"] .local-actionbar{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,7fr);gap:8px}
+body[data-active-screen="review"] main{padding-bottom:96px}
 .mobile-nav{display:none}
 @media(max-width:640px){
   .top{min-height:58px;height:auto;padding:10px 12px;gap:10px}
@@ -160,7 +196,16 @@ tr:last-child td{border-bottom:0}
   .table-wrap td .tag{justify-self:start}
   .timeline{padding:0 12px}
   .event{grid-template-columns:64px minmax(0,1fr);gap:10px}
+  .local-actionbar{
+    position:fixed;
+    left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px));
+    max-inline-size:none;margin:0;padding:6px;
+    border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 8px 24px rgba(27,42,74,.12)
+  }
+  body[data-active-screen="review"] main{padding-bottom:calc(88px + env(safe-area-inset-bottom,0px))}
   .mobile-nav{display:grid;position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px));grid-template-columns:repeat(5,minmax(0,1fr));background:#fff;border:1px solid var(--line);border-radius:14px;padding:4px;z-index:30;box-shadow:0 8px 24px rgba(27,42,74,.12)}
+  body[data-active-screen="review"] .mobile-nav{display:none}
   .mobile-nav button{min-height:64px;border:0;background:transparent;color:var(--muted);border-radius:9px;font-size:10px;font-weight:650}
   .mobile-nav button.active{background:#EEF2F7;color:var(--brand)}
 }
@@ -281,7 +326,7 @@ tr:last-child td{border-bottom:0}
       <div class="kv"><div class="k">반영 불가 항목</div><div>1건이라도 있으면 저장 차단</div></div>
       <div class="kv"><div class="k">수정본 변경 감지</div><div>충돌 처리 후 다시 검수</div></div>
       <div class="kv"><div class="k">반영 결과</div><div>수정본 · 감사기록 · 출처이력 · 배포대기</div></div>
-      <div class="actions"><button class="action secondary">원천 보기</button><button class="action" disabled>반영 불가 항목 해결 필요</button></div>
+      <div class="rule" style="margin-top:14px">하단 고정 액션바에서 원천 확인 및 반영을 진행합니다.</div>
     </div>
   </div>
 </section>
@@ -316,6 +361,11 @@ tr:last-child td{border-bottom:0}
 </main>
 </div>
 
+<div class="local-actionbar" id="localActionbar" aria-label="검수 작업">
+  <button class="secondary-action">원천 보기</button>
+  <button class="primary-action" disabled>반영 불가 항목 해결 필요</button>
+</div>
+
 <nav class="mobile-nav">
   <button class="active" data-screen="home">현황</button>
   <button data-screen="data">데이터</button>
@@ -327,10 +377,12 @@ tr:last-child td{border-bottom:0}
 <script>
 const nav=[...document.querySelectorAll('[data-screen]')];
 function show(id){
+  document.body.dataset.activeScreen=id;
   document.querySelectorAll('.screen').forEach(el=>el.classList.toggle('active',el.id===id));
   nav.forEach(btn=>btn.classList.toggle('active',btn.dataset.screen===id));
   window.scrollTo({top:0,behavior:'smooth'});
 }
+document.body.dataset.activeScreen='home';
 nav.forEach(btn=>btn.addEventListener('click',()=>show(btn.dataset.screen)));
 </script>
 </body>
