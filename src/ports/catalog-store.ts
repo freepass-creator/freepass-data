@@ -25,6 +25,10 @@ import type {
   ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
 import type { ReviewedSourceChangeReceipt } from '../domain/source-change.js';
+import type {
+  CatalogWriterOwnership,
+  WriterOwnershipTransferReceipt
+} from '../domain/writer-ownership.js';
 
 export interface CatalogTransaction {
   getVehicleModel(id: string): Promise<VehicleModel | null>;
@@ -61,6 +65,15 @@ export interface CatalogTransaction {
   putManualCatalogEntryReceipt(receipt: ManualCatalogEntryReceipt): Promise<void>;
   getReviewedSourceChangeReceipt(idempotencyKey: string): Promise<ReviewedSourceChangeReceipt | null>;
   putReviewedSourceChangeReceipt(receipt: ReviewedSourceChangeReceipt): Promise<void>;
+  getCatalogWriterOwnership(): Promise<CatalogWriterOwnership | null>;
+  putCatalogWriterOwnership(ownership: CatalogWriterOwnership): Promise<void>;
+  updateCatalogWriterOwnership(ownership: CatalogWriterOwnership): Promise<void>;
+  getWriterOwnershipTransferReceipt(
+    idempotencyKey: string
+  ): Promise<WriterOwnershipTransferReceipt | null>;
+  putWriterOwnershipTransferReceipt(
+    receipt: WriterOwnershipTransferReceipt
+  ): Promise<void>;
   appendAudit(event: AuditEvent): Promise<void>;
   appendRevision(record: EntityRevisionRecord): Promise<void>;
   appendOutbox(event: OutboxEvent): Promise<void>;
@@ -80,6 +93,10 @@ export interface CatalogStore {
   getCanonicalizationReceipt(idempotencyKey: string): Promise<CanonicalizationReceipt | null>;
   getManualCatalogEntryReceipt(idempotencyKey: string): Promise<ManualCatalogEntryReceipt | null>;
   getReviewedSourceChangeReceipt(idempotencyKey: string): Promise<ReviewedSourceChangeReceipt | null>;
+  getCatalogWriterOwnership(): Promise<CatalogWriterOwnership | null>;
+  getWriterOwnershipTransferReceipt(
+    idempotencyKey: string
+  ): Promise<WriterOwnershipTransferReceipt | null>;
   listLineageByStage(stage: SourceLineageStage): Promise<FieldLineageRecord[]>;
   listEntityHistory(
     entityType: CatalogEntityType,
@@ -103,6 +120,8 @@ export interface CatalogStore {
     rawRecords?: RawRecord[];
     manualCatalogEntryReceipts?: ManualCatalogEntryReceipt[];
     reviewedSourceChangeReceipts?: ReviewedSourceChangeReceipt[];
+    catalogWriterOwnership?: CatalogWriterOwnership | null;
+    writerOwnershipTransferReceipts?: WriterOwnershipTransferReceipt[];
   }): Promise<void>;
 }
 export interface ProjectionStore {
