@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildErpPublicProjection } from '../src/application/catalog.js';
 import { readActiveProjectionEvidence } from '../src/application/projection-evidence-reader.js';
-import { verifyProjectionReleaseIntegrity } from '../src/shared/projection-integrity.js';
+import { assertProjectionReleaseIntegrity, verifyProjectionReleaseIntegrity } from '../src/shared/projection-integrity.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 
@@ -138,6 +138,85 @@ describe('Projection release integrity verifier', () => {
     expect(result.valid).toBe(false);
     expect(result.counts.evidence).toBe(manifest.fieldEvidenceCount);
     expect(result.failures).toContain('EVIDENCE_DIGEST_MISMATCH');
+  });
+
+  it('detects release-manifest identity count and revision mismatches', async () => {
+    const { release, manifest, lineage } = await fixture();
+
+    expect(verifyProjectionReleaseIntegrity(
+      release,
+      { ...manifest, dataDigest: '0'.repeat(64) },
+      lineage
+    ).failures).toContain('MANIFEST_DATA_DIGEST_MISMATCH');
+
+    expect(verifyProjectionReleaseIntegrity(
+      { ...release, inputDigest: '0'.repeat(64) },
+      manifest,
+      lineage
+    ).failures).toContain('RELEASE_INPUT_DIGEST_MISMATCH');
+
+    expect(verifyProjectionReleaseIntegrity(
+      { ...release, manifestId: 'manifest_tampered' },
+      manifest,
+      lineage
+    ).failures).toContain('MANIFEST_ID_MISMATCH');
+
+    expect(verifyProjectionReleaseIntegrity(
+      release,
+      { ...manifest, releaseId: 'rel_other' },
+      lineage
+    ).failures).toContain('RELEASE_ID_MISMATCH');
+
+    expect(verifyProjectionReleaseIntegrity(
+      release,
+      { ...manifest, projectionId: 'other-projection' },
+      lineage
+    ).failures).toContain('PROJECTION_ID_MISMATCH');
+
+    expect(verifyProjectionReleaseIntegrity(
+      release,
+      { ...manifest, schemaVersion: '9.9.9' },
+      lineage
+    ).failures).toContain('SCHEMA_VERSION_MISMATCH');
+
+    expect(verifyProjectionReleaseIntegrity(
+      release,
+      { ...manifest, productCount: manifest.productCount + 1 },
+      lineage
+    ).failures).toContain('PRODUCT_COUNT_MISMATCH');
+
+    expect(verifyProjectionReleaseIntegrity(
+      release,
+      { ...manifest, offerCount: manifest.offerCount + 1 },
+      lineage
+    ).failures).toContain('OFFER_COUNT_MISMATCH');
+
+    expect(verifyProjectionReleaseIntegrity(
+      { ...release, canonicalRevision: release.canonicalRevision + 1 },
+      manifest,
+      lineage
+    ).failures).toContain('CANONICAL_REVISION_MISMATCH');
+
+    expect(verifyProjectionReleaseIntegrity(
+      release,
+      manifest,
+      lineage.slice(1)
+    ).failures).toContain('EVIDENCE_COUNT_MISMATCH');
+  });
+
+  it('assertion helper fails closed with machine-readable integrity failure names', async () => {
+    const { release, manifest, lineage } = await fixture();
+    const data = structuredClone(release.data);
+    data[0] = {
+      ...data[0]!,
+      displayName: 'TAMPERED'
+    };
+
+    expect(() => assertProjectionReleaseIntegrity(
+      { ...release, data },
+      manifest,
+      lineage
+    )).toThrow('RELEASE_DATA_PAYLOAD_DIGEST_MISMATCH');
   });
 
   it('treats legacy manifests without lineage digest as incomplete evidence', async () => {
