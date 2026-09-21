@@ -134,7 +134,144 @@ Only after P0-P3 contracts are stable:
 
 Do not perform writer cutover in the same step.
 
-## 5. Coordination rule
+## 5. 2026-09-22 AI Core audit — Codex/Work immediate packet
+
+This section is the current cross-project handoff from the AI Core/Data Hub audit.
+
+Audit subject revision observed: `fea18ce15f523d41a9382e7ae79e702a58d3afae`.
+
+### P0-A — Production runtime must fail closed
+
+Current code defaults `FREEPASS_DATA_DRIVER` to `memory` and seeds demo catalog data. This is acceptable for local/test, but production must never silently boot with memory/demo data.
+
+Required:
+- introduce an explicit runtime environment/mode;
+- production must require an explicit persistent driver;
+- production must refuse memory/demo seeding;
+- split liveness from readiness;
+- readiness must verify target data binding, required ownership/security state and a readable last-known-good ACTIVE release;
+- do not report production-ready merely because the HTTP process is alive.
+
+Primary files:
+- `src/bootstrap.ts`
+- `src/api/server.ts`
+- `.env.example`
+
+### P0-B — Separate the serving plane from projection building
+
+Current API startup calls `buildErpPublicProjection(...)`. This couples the read-serving process to a fresh projection build.
+
+Target:
+`Canonical -> Builder/Worker -> validated Release -> ACTIVE pointer -> Read API -> Consumer`
+
+Required:
+- remove mandatory projection rebuild from API startup;
+- API read path must serve the last-known-good ACTIVE release;
+- builder/worker owns projection/release creation;
+- a failed new build must not make an already valid ACTIVE release unavailable;
+- add regression coverage proving read availability survives a failed new projection build.
+
+Primary files:
+- `src/api/server.ts`
+- `src/application/catalog.ts`
+- `src/worker.ts`
+
+### P0-C — Harden Catalog writer ownership
+
+Writer ownership transfer is implemented, but absent stored ownership currently resolves to the implicit `SHARED_MIGRATION` compatibility state.
+
+Required:
+- keep implicit shared migration only for explicitly declared non-production migration mode;
+- after production cutover, missing/corrupt ownership state must block Canonical writes;
+- runtime writer identity must eventually come from verified auth/IAM, not request semantics;
+- ownership recovery/restore behavior must be testable.
+
+Primary files:
+- `src/domain/writer-ownership.ts`
+- `src/application/writer-ownership.ts`
+- Firestore ownership persistence/tests.
+
+### P0-D — Enforce exact Firebase target binding
+
+`FIREBASE_PROJECT_ID` has no default, which is directionally correct, but the runtime must positively verify the expected target before production activation.
+
+Required:
+- require explicit target project ID in persistent mode;
+- fail readiness on missing/unknown target;
+- bind service identity/environment/project evidence into readiness;
+- no production writer activation from a loosely inherited Application Default Credential context.
+
+### P0-E — Fix F01/F03 authority drift before consumer cutover
+
+Live sheet observation on 2026-09-22:
+
+F01:
+- title: `[F01 사용중] 프리패스 상품리스트`
+- visible current tabs included `상품리스트 09.21 18:13 · 385대`, `손오공상품 · 58대`, `픽업구독 · 221대`, `오플구독 · 54대`.
+- hidden `이 시트는` content still describes the old flow where the sales sheet/product master effectively feed ERP as operational truth.
+
+F03:
+- title: `[F03 사용중] 차종마스터 신규`
+- `SSOT 운영기준` correctly says FreePass Data VehicleModel/VehicleAsset is Canonical SSOT and F03 is reviewed source/reference only.
+
+This is an authority-description conflict.
+
+Required:
+- F01 must be classified as projection/operational view, not Canonical authority;
+- F03 remains reviewed source/reference;
+- update the generator/source that writes F01's `이 시트는` text rather than hand-editing the generated tab;
+- do not let sheet display labels become machine identity.
+
+Cross-repo source:
+- `freepass-creator/freepasserp4/lib/domain/sheet-identity.ts`
+- `freepass-creator/freepasserp4/scripts/publish-sheet-identity-tab.mts`
+
+### P0-F — Fix machine key vs display-label coupling
+
+Current `freepasserp4/lib/domain/sales-published-tabs.ts` expects prefixes:
+- 상품리스트
+- 손오공구독
+- 픽업구독
+- 오플구독
+
+Live F01 currently exposes `손오공상품 · 58대`.
+
+Because the selector uses prefix matching, code paths using that contract can omit the live Sonogong tab.
+
+Required:
+- define a stable machine key (for example `subscription_sonogong`) independent from the visible tab title;
+- keep human labels free to change without changing identity;
+- add compatibility mapping for current/legacy labels;
+- add tests with the live current labels before changing production sheet generation;
+- do not rename live tabs as the first fix unless parity impact is measured.
+
+### P1 — Refresh AI Core / DevCenter observation evidence
+
+DevCenter Data Hub evidence currently pins an older FreePass Data revision (`bd75b604...`). The audited FreePass Data head is five commits ahead and includes reviewed source changes, projection delivery idempotency and writer ownership hardening.
+
+Required after P0 code changes:
+- regenerate/re-evaluate Data Hub revision-bound receipt on the exact new head;
+- refresh consumer/recovery evidence without hiding remaining IAM/backup HOLDs;
+- register/update the FreePass Data Project Capsule so AI Core can resolve repository, SSOT, commands, deployment boundaries and blockers without rediscovery.
+
+### Required execution discipline
+
+- Do not perform production Firebase writer cutover, live sheet mutation, IAM change, deploy automation activation or RTDB reintroduction as part of this packet.
+- Work in the owning repository for each concern. Do not copy project SSOT into AI Core.
+- Make the smallest isolated changes and preserve exact revision evidence.
+- Run repository checks/tests after each isolated change.
+- Leave exact commit/test/result/remaining-HOLD evidence in this handoff and GitHub issue #24.
+
+### Suggested implementation order
+
+1. P0-A runtime fail-closed.
+2. P0-B serving/build separation.
+3. P0-C/P0-D ownership + binding hardening.
+4. Cross-repo F01 authority/identity correction with tests.
+5. Exact-head Data Hub receipt refresh.
+6. Only after those pass: ERP.com shadow-read parity pilot.
+
+## 6. Coordination rule
 
 Before each new change:
 
