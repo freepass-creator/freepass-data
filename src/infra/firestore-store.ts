@@ -390,31 +390,37 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   }
   async markReady(releaseId: string) {
     const releaseRef = this.db.collection(C.releases).doc(releaseId);
-    const [releaseSnap, manifestSnap, evidenceSnap] = await Promise.all([
-      releaseRef.get(),
-      this.db.collection(C.releaseManifests).doc(releaseId).get(),
-      this.db.collection(C.projectionLineage)
-        .where('releaseId', '==', releaseId)
-        .get()
-    ]);
-    if (!releaseSnap.exists || releaseSnap.get('status') !== 'VALIDATING') {
-      throw new Error('Only VALIDATING release can become READY');
-    }
-    if (!manifestSnap.exists) throw new Error('Release manifest not found');
-    const manifest = manifestSnap.data() as ProjectionReleaseManifest;
-    const evidence = evidenceSnap.docs.map(
-      (doc) => doc.data() as ProjectionFieldLineageRecord
-    );
-    if (evidence.length !== manifest.fieldEvidenceCount) {
-      throw new Error('Projection field evidence count mismatch');
-    }
-    if (!manifest.fieldEvidenceDigest) {
-      throw new Error('Projection release manifest requires fieldEvidenceDigest');
-    }
-    if (stableRecordSetDigest(evidence) !== manifest.fieldEvidenceDigest) {
-      throw new Error('Projection field evidence digest mismatch');
-    }
-    await releaseRef.update({ status: 'READY' });
+    const manifestRef = this.db.collection(C.releaseManifests).doc(releaseId);
+    const evidenceQuery = this.db.collection(C.projectionLineage)
+      .where('releaseId', '==', releaseId);
+
+    await this.db.runTransaction(async (tx) => {
+      const releaseSnap = await tx.get(releaseRef);
+      const manifestSnap = await tx.get(manifestRef);
+      const evidenceSnap = await tx.get(evidenceQuery);
+
+      if (!releaseSnap.exists || releaseSnap.get('status') !== 'VALIDATING') {
+        throw new Error('Only VALIDATING release can become READY');
+      }
+      if (!manifestSnap.exists) throw new Error('Release manifest not found');
+
+      const manifest = manifestSnap.data() as ProjectionReleaseManifest;
+      const evidence = evidenceSnap.docs.map(
+        (doc) => doc.data() as ProjectionFieldLineageRecord
+      );
+
+      if (evidence.length !== manifest.fieldEvidenceCount) {
+        throw new Error('Projection field evidence count mismatch');
+      }
+      if (!manifest.fieldEvidenceDigest) {
+        throw new Error('Projection release manifest requires fieldEvidenceDigest');
+      }
+      if (stableRecordSetDigest(evidence) !== manifest.fieldEvidenceDigest) {
+        throw new Error('Projection field evidence digest mismatch');
+      }
+
+      tx.update(releaseRef, { status: 'READY' });
+    });
   }
   async activate(releaseId: string) {
     await this.db.runTransaction(async (tx) => {
