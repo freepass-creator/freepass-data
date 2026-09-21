@@ -118,3 +118,32 @@ Rollback action:
 3. Preserve the failing Health/shadow summaries.
 4. Diagnose source, Canonical, release, IAM or transport separately.
 5. Re-enter shadow validation before attempting another cutover.
+
+
+## Deterministic cutover decision
+
+After saving the versioned Health report and shadow summary as local evidence files:
+
+```bash
+CUTOVER_HEALTH_JSON="./health.json" \
+CUTOVER_SHADOW_JSON="./shadow.json" \
+npm run check:cutover-readiness
+```
+
+Default decision rules:
+
+- Health BLOCKED → HOLD
+- Health DEGRADED → HOLD unless `CUTOVER_ALLOW_DEGRADED=1`
+- shadow content mismatch → HOLD
+- shadow order mismatch → HOLD
+- no ACTIVE release → HOLD
+- otherwise → GO
+
+If order differences are explicitly accepted:
+
+```bash
+CUTOVER_ALLOW_ORDER_DIFF=1 npm run check:cutover-readiness
+```
+
+The readiness tool reads only the Health/shadow summaries, not raw product payloads.
+A `GO` result means the **technical shadow gate** passed; it does not itself authorize production traffic switching.
