@@ -549,11 +549,12 @@ export async function readCatalogDataHealth(
   const activeReleaseStable = startActiveReleaseId === endActiveReleaseId;
 
   if (!activeReleaseStable) {
+    const changedReleaseId = endActiveReleaseId ?? startActiveReleaseId;
     issues.push({
       code: 'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION',
       severity: 'WARNING',
       entityType: 'projection',
-      entityId: endActiveReleaseId ?? startActiveReleaseId ?? undefined,
+      ...(changedReleaseId ? { entityId: changedReleaseId } : {}),
       message: `ACTIVE release changed during health observation: ${startActiveReleaseId ?? 'none'} -> ${endActiveReleaseId ?? 'none'}.`
     });
   }
