@@ -207,6 +207,18 @@ export function inspectErp5Capture(capture: Erp5SourceCapture) {
 
 export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
   const inspection = inspectErp5Capture(capture);
+  const reviewAxes = [
+    ['IDENTITY', /^(MISSING_REQUIRED|INVALID_PLATE|DOCUMENT_ID_CONFLICT|SUPPLIER_ALIAS)/],
+    ['CLASSIFICATION', /^(UNKNOWN_PRODUCT_TYPE|SONOGONG_|SUBSCRIPTION_|CATALOG_COMMERCIAL)/],
+    ['PRICE_STRUCTURE', /^(MISSING_PRICE|NO_MAPPED_PRICE|UNSUPPORTED_PRICE|INVALID_RENT|INVALID_PRICE|UNMAPPED_PRICE|PRIVATE_PRICE|UNSUPPORTED_CURRENCY)/],
+    ['DEPOSIT', /^(UNKNOWN_DEPOSIT|PRICING_SEMANTICS)/],
+    ['MILEAGE', /^(UNKNOWN_MILEAGE|INVALID_INTEGER:mileage)/],
+    ['POLICY', /^(POLICY_LINK|INVALID_TEXT:policy_code)/],
+    ['OTHER_DATA_QUALITY', /^(INVALID_TEXT|INVALID_INTEGER|UNKNOWN_LISTABLE|UNREVIEWED_VEHICLE_STATUS|INVENTORY_|DELETION_)/]
+  ] as const;
+  const classify = (reasons: readonly string[]) => reviewAxes
+    .filter(([, pattern]) => reasons.some((reason) => pattern.test(reason)))
+    .map(([axis]) => axis);
   const records = capture.collections.products.documents.map((doc) => {
     const documentId = String(doc.name).split('/').at(-1);
     if (!documentId) fail('INVALID_CAPTURE_DOCUMENT');
@@ -219,12 +231,14 @@ export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
         observedAt: new Date(capture.readTime).toISOString(),
         data: decodeFields(doc.fields ?? {}, true)
       });
+      const holdReasons = [...mapped.candidate.issues].sort();
       return {
         sourceRecordId: documentId,
         sourceFingerprint: mapped.candidate.sourceFingerprint,
         status: mapped.status,
         canonicalWriteAuthorized: false as const,
-        holdReasons: [...mapped.candidate.issues].sort(),
+        holdReasons,
+        reviewAxes: classify(holdReasons),
         candidate: mapped.candidate,
         inventory: mapped.inventory,
         fieldSources: mapped.fieldSources
@@ -239,6 +253,7 @@ export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
         status: 'HOLD' as const,
         canonicalWriteAuthorized: false as const,
         holdReasons: [code],
+        reviewAxes: ['OTHER_DATA_QUALITY'] as const,
         candidate: null,
         inventory: null,
         fieldSources: {}
@@ -248,6 +263,15 @@ export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
   const issueCounts: Record<string, number> = {};
   for (const record of records) for (const reason of record.holdReasons) {
     issueCounts[reason] = (issueCounts[reason] ?? 0) + 1;
+  }
+  const reviewAxisCounts = Object.fromEntries(reviewAxes.map(([axis]) => [
+    axis,
+    records.filter((record) => record.reviewAxes.includes(axis as never)).length
+  ]));
+  const reviewComplexityCounts: Record<string, number> = {};
+  for (const record of records) {
+    const key = String(record.reviewAxes.length);
+    reviewComplexityCounts[key] = (reviewComplexityCounts[key] ?? 0) + 1;
   }
   const unsigned = {
     version: 'erp5-canonical-dry-run/1' as const,
@@ -264,6 +288,8 @@ export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
       hold: records.filter((record) => record.status === 'HOLD').length
     },
     issueCounts,
+    reviewAxisCounts,
+    reviewComplexityCounts,
     records
   };
   if (unsigned.counts.candidates !== inspection.products) fail('DRY_RUN_COVERAGE_MISMATCH');

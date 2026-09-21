@@ -38,6 +38,8 @@ if (args.length !== 2 || args[0] !== '--capture') {
       digest: dryRun.digest,
       counts: dryRun.counts,
       issueCounts: dryRun.issueCounts,
+      reviewAxisCounts: dryRun.reviewAxisCounts,
+      reviewComplexityCounts: dryRun.reviewComplexityCounts,
       privateOutputPath: outputPath
     }, null, 2));
     process.exitCode = 2;

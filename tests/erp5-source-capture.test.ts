@@ -73,6 +73,9 @@ describe('ERP5 same-transaction raw capture', () => {
     });
     expect(first.records.map((record) => record.sourceRecordId)).toEqual(['held', 'synthetic']);
     expect(first.records[0]!.holdReasons).toContain('MISSING_REQUIRED:maker');
+    expect(first.records[0]!.reviewAxes).toContain('IDENTITY');
+    expect(first.reviewAxisCounts.IDENTITY).toBe(1);
+    expect(Object.values(first.reviewComplexityCounts).reduce((sum, count) => sum + count, 0)).toBe(2);
     expect('raw' in first.records[0]!).toBe(false);
   });
 

@@ -106,6 +106,9 @@ readTime은 DB의 일관된 관측 시점이지 공급사 최신 수집 시각�
 최신 캡처의 DRY RUN 결과는 source 1,659건과 candidate 1,659건이 일치하고,
 `mappedForReview=0`, `hold=1659`, `canonicalWriteAuthorized=false`다. 결과 원문은
 캡처와 같은 Git 외부 비공개 실행 디렉터리에 새 파일로 저장하며 기존 파일을 덮어쓰지 않는다.
+각 후보에는 중복 가능한 검토 축(`IDENTITY`, `CLASSIFICATION`, `PRICE_STRUCTURE`,
+`DEPOSIT`, `MILEAGE`, `POLICY`, `OTHER_DATA_QUALITY`)을 붙인다. 한 차량의 여러 문제를
+임의로 한 사유로 축소하지 않으며, stdout에는 축별 건수와 복잡도만 출력한다.
 
 - `npm run check`: architecture/TypeScript build, Vitest 158건(캡처 신규 47건), Sheets 20건 통과.
 - 실패 반례: 잘린 쿼리, 다른 프로젝트/중첩 경로, 중복 문서, readTime 불일치, 정책 읽기 실패,
