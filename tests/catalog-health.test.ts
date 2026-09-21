@@ -39,6 +39,11 @@ describe('Catalog Data Health v1', () => {
       activeReleaseStable: true,
       projectionEvidenceConsistency: 'ATOMIC'
     });
+    expect(report.checks.canonicalRevisionIntegrity).toEqual({
+      status: 'PASS',
+      missingSnapshotCount: 0,
+      driftCount: 0
+    });
     expect(report.checks.referentialIntegrity).toEqual({
       status: 'PASS',
       issueCount: 0
@@ -47,6 +52,7 @@ describe('Catalog Data Health v1', () => {
       status: 'PASS',
       missingCount: 0,
       staleRevisionCount: 0,
+      aheadRevisionCount: 0,
       validationMismatchCount: 0
     });
     expect(report.checks.activeProjection).toMatchObject({
@@ -154,6 +160,7 @@ describe('Catalog Data Health v1', () => {
       status: 'WARN',
       missingCount: 0,
       staleRevisionCount: 1,
+      aheadRevisionCount: 0,
       validationMismatchCount: 0
     });
     expect(report.issues).toContainEqual(expect.objectContaining({
@@ -161,6 +168,95 @@ describe('Catalog Data Health v1', () => {
       severity: 'WARNING'
     }));
     expect(report.coverage.evaluated).toContain('ACTIVE_PROJECTION_INPUT_PARITY');
+  });
+
+  it('blocks same-revision Canonical content drift from immutable revision history', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-21T09:00:00.000Z'
+    );
+
+    const offer = await store.getOffer('offer_gv70_demo');
+    await store.seed!({
+      offers: [{
+        ...offer!,
+        priceTerms: offer!.priceTerms.map((term) => ({
+          ...term,
+          monthlyRent: { amount: 999000, currency: 'KRW' as const }
+        }))
+      }]
+    });
+
+    const report = await readCatalogDataHealth(
+      store,
+      store,
+      '2026-09-21T10:01:00.000Z'
+    );
+
+    expect(report.status).toBe('BLOCKED');
+    expect(report.checks.canonicalRevisionIntegrity).toEqual({
+      status: 'FAIL',
+      missingSnapshotCount: 0,
+      driftCount: 1
+    });
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'CANONICAL_REVISION_SNAPSHOT_DRIFT',
+      severity: 'ERROR',
+      entityType: 'offer',
+      entityId: 'offer_gv70_demo'
+    }));
+  });
+
+  it('blocks when ACTIVE manifest input revision is ahead of current Canonical state', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+
+    await updateOfferPrice(store, {
+      commandId: 'cmd_health_ahead_r2',
+      idempotencyKey: 'idem_health_ahead_r2',
+      offerId: 'offer_gv70_demo',
+      expectedRevision: 1,
+      termKey: '36@20000',
+      monthlyRent: { amount: 735000, currency: 'KRW' },
+      reason: 'build r2 before restoring current state to r1',
+      actor: { id: 'user:test', kind: 'USER' }
+    }, '2026-09-21T09:20:00.000Z');
+
+    await buildErpPublicProjection(
+      store,
+      store,
+      '2026-09-21T09:21:00.000Z'
+    );
+
+    const history = await store.listEntityHistory('offer', 'offer_gv70_demo');
+    const revisionOne = history.find((item) => item.revision === 1);
+    if (!revisionOne) throw new Error('revision one fixture missing');
+
+    await store.seed!({
+      offers: [structuredClone(revisionOne.snapshot) as any]
+    });
+
+    const report = await readCatalogDataHealth(
+      store,
+      store,
+      '2026-09-21T10:01:00.000Z'
+    );
+
+    expect(report.status).toBe('BLOCKED');
+    expect(report.checks.activeInputParity).toEqual({
+      status: 'FAIL',
+      missingCount: 0,
+      staleRevisionCount: 0,
+      aheadRevisionCount: 1,
+      validationMismatchCount: 0
+    });
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'ACTIVE_RELEASE_CANONICAL_INPUT_AHEAD',
+      severity: 'ERROR'
+    }));
   });
 
   it('blocks health when Canonical references are broken', async () => {
