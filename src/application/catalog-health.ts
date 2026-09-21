@@ -1,5 +1,5 @@
 import type { CatalogStore, ProjectionStore } from '../ports/catalog-store.js';
-import { stableDigest, stableRecordSetDigest } from './stable-digest.js';
+import { stableDigest, stableRecordSetDigest } from '../shared/stable-digest.js';
 
 export type CatalogHealthStatus = 'HEALTHY' | 'DEGRADED' | 'BLOCKED';
 export type CatalogHealthCheckStatus = 'PASS' | 'WARN' | 'FAIL';
