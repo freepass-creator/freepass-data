@@ -3,7 +3,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import healthSchema from '../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import { buildErpPublicProjection } from '../src/application/catalog.js';
-import { readCatalogDataHealth } from '../src/application/catalog-health.js';
+import { CATALOG_HEALTH_ISSUE_CODES, readCatalogDataHealth } from '../src/application/catalog-health.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 
@@ -48,6 +48,15 @@ describe('Catalog Data Health contract v1', () => {
     };
 
     expect(validateHealth(invalid)).toBe(false);
+  });
+
+  it('keeps JSON Schema issue codes exactly aligned with the TypeScript registry', () => {
+    const schemaIssueCodes = [
+      ...healthSchema.properties.issues.items.properties.code.enum
+    ].sort();
+    const runtimeIssueCodes = [...CATALOG_HEALTH_ISSUE_CODES].sort();
+
+    expect(schemaIssueCodes).toEqual(runtimeIssueCodes);
   });
 
   it('rejects undeclared top-level fields so API drift is explicit', async () => {
