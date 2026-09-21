@@ -7,6 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "check:read-runtime": "node scripts/check-read-runtime.mjs",
     "serve:consumers": "tsx src/api/consumer-server.ts",
     "dev": "node --import tsx scripts/run-memory.mjs api",
     "worker:memory": "node --import tsx scripts/run-memory.mjs worker",
