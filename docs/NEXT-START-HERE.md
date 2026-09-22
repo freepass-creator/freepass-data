@@ -372,9 +372,28 @@ Required after P0 code changes:
 5. Exact-head Data Hub receipt refresh.
 6. Only after those pass: ERP.com shadow-read parity pilot.
 
-## 6. Coordination rule
+## 6. 2026-09-22 Iancar two-source evidence packet
 
-## 6. Coordination rule
+- 목적: 이안카 ERP와 고정 Google Sheet 두 탭의 독립 관측을 한 비휘발 evidence bundle로 보존하고,
+  사용자 확정 우선순위에 따라 상태를 fail-closed로 판정한다.
+- 대상 revision: `main` `0740a396a474df92b3446d180513249413f6f2d0`.
+- 변경:
+  - `6e927f4`: ERP 우선, Sheet-only `출고협의/HOLD`, 양쪽 미관측 이력 보존, 삭제 금지 판정 계약.
+  - `3c5c6db`: ERP 원문·차량·요율과 Sheet `이안카`/`이안카 재렌트` 원문을 묶는 로컬 비휘발 캡처.
+  - `368d493`: 양쪽 coverage/freshness 중 하나라도 불충분하면 명시 상태까지 `HOLD`하는 반례 수정.
+  - `45b620d`: 비원자 수집 표시, 파서·파생 digest, plain-object 검증, 고정 private 경로 저장/readback 시험.
+- 검증: `npm run check` PASS — architecture PASS, Sheets 23, read-runtime smoke 5, shadow 10,
+  Vitest 317 PASS / Firestore emulator 4 conditional skip. Iancar 집중시험 23 PASS.
+- 독립 검토: Claude가 stale Sheet에서 ERP AVAILABLE이 나는 반례와 persistence 미검증을 찾았고 모두
+  코드·회귀시험에 반영했다. digest는 정확한 캡처 표현용이며 cross-run semantic hash가 아님을 문서화했다.
+- 남음/HOLD:
+  - 이안카 ERP 자격증명과 실제 transport가 아직 연결되지 않아 live capture는 미실행이다.
+  - freshness 판정, Canonical write, publication, 소비처 cutover는 승인되지 않았다.
+  - 로컬 캡처는 평문 준비 경계다. 운영 보관은 암호화·ACL·retention이 있는 append-only RAW가 필요하다.
+- next_start_here: 실제 transport를 read-only로 연결하고 양쪽 원천을 같은 회차에 캡처한 뒤,
+  revision/observedAt/coverage/freshness를 새 조회로 검증한다. 검증 전에는 mapping/cutover를 계속 HOLD한다.
+
+## 7. Coordination rule
 
 ### Local working copy — 2026-09-21
 
