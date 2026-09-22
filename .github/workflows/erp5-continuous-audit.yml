@@ -134,6 +134,18 @@ jobs:
             .version == "erp5-canonical-dry-run/1" and
             .status == "HOLD" and
             .canonicalWriteAuthorized == false and
+            .publicationGate.version == "erp5-publication-gate/1" and
+            .publicationGate.decision == "HOLD" and
+            .publicationGate.sourceCoverage.mode == "FULL" and
+            .publicationGate.sourceCoverage.completeness == "COMPLETE" and
+            .publicationGate.sourceCoverage.observedProducts == .counts.sourceProducts and
+            .publicationGate.sourceCoverage.candidateProducts == .counts.candidates and
+            .publicationGate.reviewCoverage.mappedForReview == .counts.mappedForReview and
+            .publicationGate.reviewCoverage.mappingHold == .counts.hold and
+            .publicationGate.reviewCoverage.approvedCanonicalProducts == 0 and
+            .publicationGate.activeReleaseAuthorized == false and
+            (.publicationGate.reasons | index("REVIEW_APPROVALS_NOT_INCLUDED") != null) and
+            (.publicationGate.reasons | index("CANONICAL_RELEASE_NOT_BUILT") != null) and
             (.sourceDigest | type == "string" and length == 64) and
             (.counts.sourceProducts | type == "number" and . >= 0) and
             (.counts.candidates == .counts.sourceProducts) and
@@ -177,7 +189,10 @@ jobs:
               change: ($dryRun[0].delta // {status:"FIRST_OBSERVATION"}),
               authority: {
                 canonicalWriteAuthorized: false,
-                destructiveActionAuthorized: false
+                destructiveActionAuthorized: false,
+                activeReleaseAuthorized: $dryRun[0].publicationGate.activeReleaseAuthorized,
+                publicationDecision: $dryRun[0].publicationGate.decision,
+                publicationHoldReasons: $dryRun[0].publicationGate.reasons
               },
               runId: $runId
             }' > source-inventory.json
@@ -186,7 +201,10 @@ jobs:
             .source.collections.policy >= 0 and
             .recognition.productFieldPathCount >= 0 and
             .authority.canonicalWriteAuthorized == false and
-            .authority.destructiveActionAuthorized == false
+            .authority.destructiveActionAuthorized == false and
+            .authority.activeReleaseAuthorized == false and
+            .authority.publicationDecision == "HOLD" and
+            (.authority.publicationHoldReasons | length > 0)
           ' source-inventory.json >/dev/null
           {
             echo '## ERP5 source identity and count card'
@@ -200,10 +218,14 @@ jobs:
             echo "| changed | $(jq -r '.change.counts.CHANGED // "first observation"' source-inventory.json) |"
             echo "| missing from source | $(jq -r '.change.counts.MISSING_FROM_SOURCE // "first observation"' source-inventory.json) |"
             echo "| inventory transitions | $(jq -r '.recognition.inventoryTransitionCount // "first observation"' source-inventory.json) |"
+            echo "| publication decision | $(jq -r '.authority.publicationDecision' source-inventory.json) |"
+            echo "| ACTIVE release authorized | $(jq -r '.authority.activeReleaseAuthorized' source-inventory.json) |"
             echo
             echo "Read time: $(jq -r '.source.readTime' source-inventory.json)"
             echo
             echo "Source digest: $(jq -r '.source.digest' source-inventory.json)"
+            echo
+            echo "Publication HOLD reasons: $(jq -r '.authority.publicationHoldReasons | join(", ")' source-inventory.json)"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Persist immutable evidence and read it back
         shell: bash

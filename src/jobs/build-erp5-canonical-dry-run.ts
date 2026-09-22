@@ -48,6 +48,7 @@ if (![2, 4].includes(args.length) || args[0] !== '--capture' || (args.length ===
       sourceDigest: dryRun.sourceDigest,
       digest: dryRun.digest,
       counts: dryRun.counts,
+      publicationGate: dryRun.publicationGate,
       issueCounts: dryRun.issueCounts,
       reviewAxisCounts: dryRun.reviewAxisCounts,
       reviewComplexityCounts: dryRun.reviewComplexityCounts,

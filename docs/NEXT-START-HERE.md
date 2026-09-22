@@ -7,6 +7,19 @@ Verified baseline before this handoff update: `adbbfca7c0ddc4e6c7c1906765d9b5aac
 Branch: `codex/local-runtime-baseline`
 Date: 2026-09-22
 
+## 2026-09-22 publication-readiness gate
+
+상시 ERP5 감사에 기계 판독 가능한 공개 판정 게이트를 추가했다. `FULL / COMPLETE`는 원천 관측 범위이며
+Canonical 쓰기나 ACTIVE release 허가가 아니다. source digest
+`553cc4042e1292ed31645b83d106dfbacd6f0a9d36c3552d84b97959beb0992c`를 재검증한 결과 원천 1,659건과
+candidate 1,659건이 일치했고, 1,659건 모두 HOLD, 검토 완료 0건, ACTIVE 허가 `false`다. 현재 사유는
+`MAPPING_HOLD_PRESENT`, `NO_CANDIDATES_READY_FOR_REVIEW`, `REVIEW_APPROVALS_NOT_INCLUDED`,
+`CANONICAL_RELEASE_NOT_BUILT`다.
+
+다음 시작점은 검토 증거로 mapper/policy HOLD를 줄인 뒤 별도의 reviewed Canonical import/release 명령을
+만드는 것이다. 일부만 전체 카탈로그로 공개하지 않는다. Kakao는 전용 토큰으로 비어 있지 않은 검토된
+ACTIVE release를 운영 PC에서 읽기 전까지 OBSERVE/HOLD다.
+
 ## 2026-09-22 continuous-audit durability checkpoint
 
 - `main@d63d051`에서 권한을 실행 증거 계정과 `latest.json` 전용 계정으로 분리했다.
