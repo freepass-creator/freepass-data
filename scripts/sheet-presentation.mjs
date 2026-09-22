@@ -80,7 +80,9 @@ export function planPresentation(input, { workbook, updatedAt, now = Date.now() 
       const isRent=!!months;
       const isDeposit=/보증/.test(header) && !/카드|결제|여부|가능|보험/.test(header);
       if(workbook==='F86' && (isRent || isDeposit)) {
-        const hiddenByUser=!(isRent && Number(months[1])>=spec.appearance.F86MinimumVisibleFeeMonths);
+        const termMonths=months ? Number(months[1]) : undefined;
+        const isShortDeposit=isDeposit && (/단기/.test(header) || (termMonths !== undefined && termMonths <= 12));
+        const hiddenByUser=isRent ? termMonths < spec.appearance.F86MinimumVisibleFeeMonths : isShortDeposit;
         if(!!meta.hiddenByUser!==hiddenByUser) add(id,`hidden:${header}`,!!meta.hiddenByUser,hiddenByUser,{updateDimensionProperties:{range,properties:{hiddenByUser},fields:'hiddenByUser'}});
       }
     }
