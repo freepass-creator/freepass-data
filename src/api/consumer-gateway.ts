@@ -121,6 +121,7 @@ export function createConsumerGateway(
       data: release.data,
       meta: {
         consumerId: binding.id, projectionId: release.projectionId,
+        authority: 'CANONICAL_ACTIVE' as const,
         schemaVersion: release.schemaVersion, releaseId: release.releaseId,
         manifestId: release.manifestId, inputDigest: release.inputDigest, dataDigest: release.dataDigest,
         revision: release.canonicalRevision, generatedAt: release.generatedAt, activatedAt: release.activatedAt,
