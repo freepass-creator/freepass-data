@@ -394,6 +394,15 @@ export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
     const key = String(record.reviewAxes.length);
     reviewComplexityCounts[key] = (reviewComplexityCounts[key] ?? 0) + 1;
   }
+  const mappedForReview = records.filter((record) => record.status === 'MAPPED_FOR_REVIEW').length;
+  const mappingHold = records.filter((record) => record.status === 'HOLD').length;
+  const publicationGateReasons = [
+    ...(records.length === 0 ? ['SOURCE_CATALOG_EMPTY'] : []),
+    ...(mappingHold > 0 ? ['MAPPING_HOLD_PRESENT'] : []),
+    ...(mappedForReview === 0 ? ['NO_CANDIDATES_READY_FOR_REVIEW'] : []),
+    'REVIEW_APPROVALS_NOT_INCLUDED',
+    'CANONICAL_RELEASE_NOT_BUILT'
+  ];
   const unsigned = {
     version: 'erp5-canonical-dry-run/1' as const,
     status: 'HOLD' as const,
@@ -405,8 +414,25 @@ export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
     counts: {
       sourceProducts: capture.collections.products.count,
       candidates: records.length,
-      mappedForReview: records.filter((record) => record.status === 'MAPPED_FOR_REVIEW').length,
-      hold: records.filter((record) => record.status === 'HOLD').length
+      mappedForReview,
+      hold: mappingHold
+    },
+    publicationGate: {
+      version: 'erp5-publication-gate/1' as const,
+      decision: 'HOLD' as const,
+      sourceCoverage: {
+        mode: 'FULL' as const,
+        completeness: 'COMPLETE' as const,
+        observedProducts: capture.collections.products.count,
+        candidateProducts: records.length
+      },
+      reviewCoverage: {
+        mappedForReview,
+        mappingHold,
+        approvedCanonicalProducts: 0
+      },
+      activeReleaseAuthorized: false as const,
+      reasons: publicationGateReasons
     },
     issueCounts,
     reviewAxisCounts,

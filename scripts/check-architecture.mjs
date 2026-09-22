@@ -94,4 +94,26 @@ if (violations.length) {
   process.exit(1);
 }
 
+const auditWorkflow = fs.readFileSync(
+  path.join(repoRoot, '.github', 'workflows', 'erp5-continuous-audit.yml'),
+  'utf8'
+);
+const captureStart = auditWorkflow.indexOf('- name: Capture the current FULL Firestore snapshot');
+const captureEnd = auditWorkflow.indexOf('- name: Load the last accepted observation pointer');
+const dryRunStart = auditWorkflow.indexOf('- name: Build immutable dry-run and delta evidence');
+const dryRunEnd = auditWorkflow.indexOf('- name: Build the source identity and count card');
+const captureStep = auditWorkflow.slice(captureStart, captureEnd);
+const dryRunStep = auditWorkflow.slice(dryRunStart, dryRunEnd);
+if (
+  captureStart < 0 || captureEnd <= captureStart || dryRunStart < 0 || dryRunEnd <= dryRunStart ||
+  !captureStep.includes("' capture-summary.json >/dev/null") ||
+  captureStep.includes('.publicationGate.') ||
+  !dryRunStep.includes("' dry-run-summary.json >/dev/null") ||
+  !dryRunStep.includes('.publicationGate.activeReleaseAuthorized == false') ||
+  !dryRunStep.includes('.publicationGate.sourceCoverage.mode == "FULL"')
+) {
+  console.error('Continuous-audit evidence predicates are attached to the wrong output contract');
+  process.exit(1);
+}
+
 console.log('Architecture boundaries OK');

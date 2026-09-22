@@ -73,3 +73,13 @@ count-only PASS를 금지한다. `MISSING_FROM_SOURCE`는 삭제 허가가 아�
 
 CREATE_NEW_JUSTIFIED: 저장소에 schedule 또는 상시 실행 workflow가 없었다. 기존 캡처·DRY RUN·delta
 구현은 그대로 재사용하고, 이 파일은 인증·주기·영속 저장을 연결하는 운영 orchestration만 담당한다.
+
+## 공개 판정 게이트
+
+각 감사의 DRY RUN은 `publicationGate`를 만들고 그 판정을 `source-inventory.json`에도 복사한다.
+`FULL / COMPLETE`는 Firestore 원천을 전부 읽었다는 뜻이며 공개 허가가 아니다. 매핑 HOLD가 하나라도
+남아 있거나, 검토 승인 증거가 없거나, 검토된 Canonical release를 만들지 않았으면 판정은 `HOLD`이고
+`activeReleaseAuthorized=false`다. workflow 자체에는 release 생성·활성화 기능이 없다.
+
+따라서 검토가 쉬운 일부 레코드만 골라 전체 ERP 카탈로그처럼 공개할 수 없다. 운영 판정에는 원천 수,
+candidate 수, 검토 대기/HOLD 수와 기계 판정 사유를 항상 함께 사용한다.

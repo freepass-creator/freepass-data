@@ -169,6 +169,35 @@ describe('ERP5 same-transaction raw capture', () => {
     const capture = await captureErp5Source(fake({ products: [] }).rpc);
     expect(inspectErp5Capture(capture).products).toBe(0);
     expect(inspectErp5Capture(capture).status).toBe('HOLD');
+    const dryRun = buildErp5CanonicalDryRun(capture);
+    expect(dryRun.publicationGate).toMatchObject({
+      decision: 'HOLD',
+      activeReleaseAuthorized: false,
+      sourceCoverage: { mode: 'FULL', completeness: 'COMPLETE', observedProducts: 0, candidateProducts: 0 },
+      reviewCoverage: { mappedForReview: 0, mappingHold: 0, approvedCanonicalProducts: 0 }
+    });
+    expect(dryRun.publicationGate.reasons).toEqual(expect.arrayContaining([
+      'SOURCE_CATALOG_EMPTY',
+      'NO_CANDIDATES_READY_FOR_REVIEW',
+      'REVIEW_APPROVALS_NOT_INCLUDED',
+      'CANONICAL_RELEASE_NOT_BUILT'
+    ]));
+  });
+  it('keeps a fully mapped review candidate on publication HOLD until approval and release evidence exist', async () => {
+    const capture = await captureErp5Source(fake().rpc);
+    const dryRun = buildErp5CanonicalDryRun(capture);
+    expect(dryRun.counts).toEqual({ sourceProducts: 1, candidates: 1, mappedForReview: 1, hold: 0 });
+    expect(dryRun.publicationGate).toMatchObject({
+      decision: 'HOLD',
+      activeReleaseAuthorized: false,
+      reviewCoverage: { mappedForReview: 1, mappingHold: 0, approvedCanonicalProducts: 0 }
+    });
+    expect(dryRun.publicationGate.reasons).not.toContain('MAPPING_HOLD_PRESENT');
+    expect(dryRun.publicationGate.reasons).not.toContain('NO_CANDIDATES_READY_FOR_REVIEW');
+    expect(dryRun.publicationGate.reasons).toEqual(expect.arrayContaining([
+      'REVIEW_APPROVALS_NOT_INCLUDED',
+      'CANONICAL_RELEASE_NOT_BUILT'
+    ]));
   });
   it('detects file corruption before mapping', async () => {
     const capture = await captureErp5Source(fake().rpc);
