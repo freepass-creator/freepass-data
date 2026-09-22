@@ -31,7 +31,7 @@ jobs:
           version: '579.0.0'
       - name: Verify the pinned Google Cloud CLI
         shell: bash
-        run: test "$(gcloud version --format='value(Google Cloud SDK)')" = '579.0.0'
+        run: gcloud version --format=json | jq -e '.["Google Cloud SDK"] == "579.0.0"' >/dev/null
       - run: npm ci
       - name: Fail closed until the read-only identity and private bucket are configured
         shell: bash
