@@ -209,6 +209,7 @@ describe('read-only consumer gateway', () => {
     }
     expect(() => parseConsumerBindings(JSON.stringify([binding, { ...binding, id: 'whitelabel-test' }]))).toThrow('shared service token');
     expect(() => parseConsumerBindings(undefined)).toThrow('required');
+    expect(parseConsumerBindings(JSON.stringify([{ ...binding, id: 'kakao-ops' }]))[0]?.id).toBe('kakao-ops');
     for (const entries of [
       [],
       [{ ...binding, token: 'short' }],

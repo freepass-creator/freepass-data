@@ -161,6 +161,30 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
     ]
   },
   {
+    consumerId: 'kakao-ops-catalog',
+    project: 'Kakao Ops',
+    repository: 'freepass-creator/kakao-ops',
+    domains: ['catalog'],
+    stage: 'OBSERVE',
+    activeReadOwner: 'freepasserp5/products-policy',
+    targetReadOwner: 'freepass-data',
+    switchKey: 'FREEPASS_DATA_KAKAO_OPS_READ_MODE',
+    evidence: {
+      contractReady: true,
+      authenticationVerified: false,
+      legacyReadVerified: true,
+      freepassReadVerified: false,
+      parityVerified: false,
+      fallbackVerified: false,
+      productionReadbackVerified: false
+    },
+    holdReasons: [
+      'dedicated kakao-ops token is not provisioned',
+      'non-empty ACTIVE erp-public release is not verified',
+      'Kakao operator PC readback is not verified'
+    ]
+  },
+  {
     consumerId: 'google-sheets-f01',
     project: 'Google Sheets F01',
     repository: 'freepass-creator/freepasserp4',

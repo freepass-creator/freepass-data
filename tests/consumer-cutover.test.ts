@@ -39,6 +39,7 @@ describe('consumer cutover registry', () => {
       'freepass-admin-catalog',
       'freepass-sales-catalog',
       'freepass-estimate-catalog',
+      'kakao-ops-catalog',
       'google-sheets-f01',
       'google-sheets-f86'
     ]);
