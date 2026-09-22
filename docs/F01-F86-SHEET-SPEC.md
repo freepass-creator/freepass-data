@@ -48,4 +48,6 @@
 
 2026-09-22 현재 이 규격은 운영 Actions의 고정 엔진 `46484b8cccfd3a1b55cf49aad4f6e67ebe983807`과 main workflow에 연결돼 있다. 회차 ID를 비운 `apply=true / ALL` 재적용 run `35681159372`에서 최신 유효 READY snapshot을 자동 선택했고, F01 386·손오공상품 57·픽업구독 216·오플구독 55대, F86 714대, 원자↔F01↔F86 칸 대조와 사진 링크 감사까지 PASS했다. 숨긴 과거 F01 탭은 보존하되 발행·대수·감사에서 제외한다.
 
-규격·발행기·감사기·운영 pin·수동 재적용 경로는 main에 영속 반영됐다. GitHub workflow는 `17 * * * *`로 active 상태지만 이 cron 전환 뒤 native `schedule` 회차가 실제 생성·성공한 증거는 아직 없다. 첫 자동 회차가 관측되기 전까지 예약 전달만 `HOLD_SCHEDULE_DELIVERY`로 둔다. 수동 재적용 PASS를 자동 예약 전달 PASS로 확대하지 않는다.
+규격·발행기·감사기·운영 pin·수동 재적용 경로는 main에 영속 반영됐다. GitHub workflow는 `17 * * * *`로 active이고, 매시 42분의 read-only watchdog은 최근 90분 안에 `schedule`·`repository_dispatch`·heartbeat `push`·`workflow_run` 성공/진행 회차가 없을 때만 같은 canonical writer를 다시 호출한다. watchdog은 Firestore나 시트에 직접 쓰지 않는다.
+
+2026-09-22 강제 복구 검증에서 watchdog run `35687124823`이 canonical `repository_dispatch` run `35687135474`를 생성했다. 이 회차는 새 원천 수집→freepasserp5 원자 갱신→스냅샷→F01/F86 발행→감사까지 PASS했다. 스냅샷은 현재 재고 714대였고 F01/F86 누락·잔존·값 차이 0, F86 65,124칸 어긋남 0이었다. 복구 실행 경로는 실증됐지만 cron 전환 뒤 native `schedule` 이벤트 자체의 실제 생성·성공 증거는 아직 없다. 첫 native 자동 회차가 관측되기 전까지 그 전달 증거만 `HOLD_NATIVE_SCHEDULE_OBSERVATION`으로 둔다. 수동 강제 복구 PASS를 native 예약 전달 PASS로 확대하지 않는다.
