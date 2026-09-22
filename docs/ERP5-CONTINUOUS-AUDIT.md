@@ -24,6 +24,8 @@ GCS 실행 경로, `latest.json` readback까지 통과했다. 후속 run `356895
 - 원문, DRY RUN, delta는 비공개 GCS 버킷의 실행 ID별 immutable prefix에 저장한다.
 - `latest.json`은 다음 비교 대상을 가리키는 포인터일 뿐 원문을 덮어쓰지 않는다.
 - `latest.json` 조회에서 HTTP 404만 첫 관측으로 인정한다. 인증·네트워크·서버 오류는 실패로 닫고 기존 포인터를 전진시키지 않는다.
+- 실행 원문 계정은 객체 생성·조회만 하고 삭제하지 못한다. 실행별 고유 경로와 각 객체의 `ifGenerationMatch=0`을 함께 적용해 같은 이름의 새 generation 생성도 실패로 닫는다. 별도 포인터 계정만 `latest.json` 하나를 바꿀 수 있다.
+- 실행별 원문과 요약을 GCS에서 다시 내려받아 byte-for-byte 일치한 뒤, 직전 generation 조건으로 `latest.json`을 원자적으로 전진시키고 다시 읽는다.
 - GitHub Artifact에는 원문 없이 요약만 90일 보존한다.
 - `source-inventory.json`은 원천별 개수와 구조·변화 인지를 위한 비민감 요약이다.
 - workflow와 검사 규칙은 Git에 남는다.
@@ -38,12 +40,21 @@ Canonical write, 시트 갱신, 소비처 전환, RTDB 접근은 workflow에 없
 
 - `ERP5_WIF_PROVIDER`
 - `ERP5_READ_SERVICE_ACCOUNT`
+- `ERP5_POINTER_SERVICE_ACCOUNT`
 - `ERP5_EVIDENCE_BUCKET`
 
 셋 중 하나라도 없으면 네트워크 읽기 전에 실패한다. 현재 WIF provider는
 `freepass-creator/freepass-data`의 `main`과 이 workflow 경로로 제한돼 있고, 서비스계정은
-`roles/datastore.viewer`와 지정 버킷의 `roles/storage.objectUser`만 사용한다. 버킷은 uniform access,
-public access prevention, object versioning을 사용한다. workflow는 default branch에서 active다.
+`roles/datastore.viewer`와 지정 버킷의 객체 생성·조회만 사용한다. 별도 포인터 서비스계정은 IAM 조건으로
+`latest.json` 하나에만 objectUser가 적용된다. 버킷은 uniform access, public access prevention,
+object versioning을 사용한다. workflow는 default branch에서 active다.
+
+Google Cloud CLI는 workflow에서 `579.0.0`으로 고정한다. 여러 파일을 한 명령으로 올리지 않고 객체마다
+`ifGenerationMatch=0`을 실행해, 이미 사용한 run ID/attempt 경로에서는 한 객체라도 충돌하면 실패한다.
+
+CREATE_NEW_JUSTIFIED: 기존 감사 서비스계정 하나로는 실행별 원문의 append-only 권한과 `latest.json`
+교체 권한을 동시에 최소화할 수 없다. 기존 workflow와 WIF provider는 재사용하고 포인터 객체 하나에만
+조건부 권한을 갖는 별도 서비스계정을 둔다.
 
 ## 운영 판정
 
