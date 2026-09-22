@@ -31,18 +31,22 @@ evidence; none independently authorizes deletion, delisting or Canonical mutatio
 
 The read-only monitor is `.github/workflows/erp5-continuous-audit.yml`. It reuses the FULL same-transaction
 capture, field profiler and prior-capture delta to emit `source-inventory.json` plus private immutable evidence.
-It is prepared in Git but repository variables/IAM and a successful scheduled run are not yet verified.
+It is active on `main` with repository-scoped GitHub OIDC, the read-only service account
+`github-data-auditor@freepasserp5.iam.gserviceaccount.com`, and the private versioned evidence bucket
+`freepasserp5-data-audit-evidence`. First successful run `35689380147` wrote and read back `latest.json`.
+Follow-up run `35689500302` loaded that pointer and proved the recurring delta path: 1,659 unchanged,
+added/changed/missing/inventory transitions all 0. Both observations covered 1,659 products, 81 policies and
+508 product field paths in one read-only transaction. Canonical and destructive writes remain unauthorized.
 
-The only existing production refresh writer is `freepass-creator/freepasserp4`'s
+The only production refresh writer is `freepass-creator/freepasserp4`'s
 `.github/workflows/erp5-ssot-refresh.yml`: 24 supplier sources → ERP5 Atom/policy reconciliation → fixed snapshot
-→ F01/F86 publication and audit under one concurrency boundary. Automatic triggers were paused by ERP4 commit
-`100e5a1d`. Restart preparation is Draft PR #463 at commit `1584121e`; checks are green, but it is unmerged and
-has no post-restart production readback. Do not create a second writer in this repository.
+→ F01/F86 publication and audit under one concurrency boundary. Its watchdog recovery run `35687135474`
+completed source collection, freepasserp5 update, F01/F86 publication and cell-level audit on 2026-09-22.
+FreePass Data continuous audit remains read-only and must not become a second writer.
 
-Immediate next step: review and merge/activate the single writer only through its operational approval boundary,
-then bind the first successful run ID to a fresh FULL FreePass Data observation. Verify supplier-source coverage,
-ERP5 counts/digest/delta, policy reconciliation, projection state and F01/F86 readback from that same run before
-calling continuous freshness restored. After that, continue field-semantic decisions for the 1,659 product records.
+Immediate next step: observe the first native `schedule` event for both the ERP4 writer and this read-only monitor;
+manual/workflow recovery success is not native schedule-delivery proof. Continue field-semantic decisions for the
+1,659 product records while retaining each FULL observation and delta in the private evidence bucket.
 
 ## 1. Last verified live read evidence — 2026-09-21 22:44 KST
 

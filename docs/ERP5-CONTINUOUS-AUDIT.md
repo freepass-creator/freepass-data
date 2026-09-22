@@ -13,10 +13,11 @@
 24개 공급사 원천 재수집 → ERP5 Atom 갱신 → 정책 참조 정합화 → 고정 snapshot → F01/F86 발행·감사를
 한 concurrency 경계에서 수행한다. FreePass Data가 같은 컬렉션을 별도로 갱신해 이중 writer가 되지 않는다.
 
-2026-09-21 19:00 KST 커밋 `100e5a1d`에서 자동 trigger가 의도적으로 제거됐고 마지막 full-green
-운영 증거는 run `35580953322`였다. ChatGPT Audit 100은 data plane full-green과 함께 native schedule/
-recovery timeliness HOLD, Source Contract의 stale `audit95-recorder` main-writer 충돌을 기록했다.
-복구안은 ERP4 Draft PR #463이며, 병합·실행·readback 전에는 상시 최신화가 복구됐다고 표현하지 않는다.
+2026-09-22 FreePass Data PR #36에서 이 read-only workflow를 default branch에 등록했고, PR #37에서
+summary stdout을 JSON-only로 고쳤다. 첫 성공 run `35689380147`은 FULL same-transaction 캡처와 private
+GCS 실행 경로, `latest.json` readback까지 통과했다. 후속 run `35689500302`는 직전 포인터를 읽고
+1,659개 전부 UNCHANGED, 추가·변경·미관측·재고전환 0인 delta를 보존한 뒤 포인터를 새 세대로 전진했다.
+두 번의 수동 성공은 native `schedule` 전달 성공의 증거로 확대하지 않는다.
 
 ## 영속성
 
@@ -39,8 +40,10 @@ Canonical write, 시트 갱신, 소비처 전환, RTDB 접근은 workflow에 없
 - `ERP5_READ_SERVICE_ACCOUNT`
 - `ERP5_EVIDENCE_BUCKET`
 
-셋 중 하나라도 없으면 네트워크 읽기 전에 실패한다. workflow schedule은 default branch에 병합된
-뒤에만 정기 실행된다. 현재 변수와 IAM이 없으므로 코드가 존재하는 것만으로 상시 가동을 주장하지 않는다.
+셋 중 하나라도 없으면 네트워크 읽기 전에 실패한다. 현재 WIF provider는
+`freepass-creator/freepass-data`의 `main`과 이 workflow 경로로 제한돼 있고, 서비스계정은
+`roles/datastore.viewer`와 지정 버킷의 `roles/storage.objectUser`만 사용한다. 버킷은 uniform access,
+public access prevention, object versioning을 사용한다. workflow는 default branch에서 active다.
 
 ## 운영 판정
 
