@@ -5,7 +5,7 @@
   "status": "SPEC_AND_LIVE_TAB_PRESENTATION_APPLIED_PUBLISHER_PENDING",
   "timezone": "Asia/Seoul",
   "workbooks": {
-    "F01": { "spreadsheetId": "1Y1Mx1EcEpAuNer0y50Dq4eK92CpVjThO_suZLmo2vVs", "primarySheetIds": [668539469, 1902102711, 978740603, 1902102713] },
+    "F01": { "spreadsheetId": "1Y1Mx1EcEpAuNer0y50Dq4eK92CpVjThO_suZLmo2vVs", "primarySheetIds": [668539469, 1902102711, 978740603, 1902102713], "retiredSheetIds": [1902102714] },
     "F86": { "spreadsheetId": "1hQtshpWKL4L0zSR3H3UQ36atICtHv9Ka7dQh7d7K5Vg", "primarySheetIds": [2029374993, 115390002, 1357913579, 891725079] }
   },
   "naming": {

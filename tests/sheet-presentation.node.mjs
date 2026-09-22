@@ -87,6 +87,13 @@ test('F01 preserves short-term visibility and uses its own stable IDs',()=>{
  const r=planPresentation(x,{...opts,workbook:'F01'});
  assert.equal(r.counts.length,4);assert.equal(r.requests.filter(r=>r.updateDimensionProperties?.fields==='hiddenByUser').length,0);
 });
+test('F01 ignores the explicitly retired hidden legacy catalog tab',()=>{
+ const x=fixture();x.spreadsheet.spreadsheetId=spec.workbooks.F01.spreadsheetId;
+ x.spreadsheet.sheets.forEach((s,i)=>{s.properties.sheetId=spec.workbooks.F01.primarySheetIds[i];x.coverage[i].sheetId=s.properties.sheetId;});
+ const retired=structuredClone(x.spreadsheet.sheets[0]);retired.properties={...retired.properties,sheetId:spec.workbooks.F01.retiredSheetIds[0],index:9,title:'상품리스트 09.21 18:13 · 385대',hidden:true};
+ x.spreadsheet.sheets.push(retired);x.sheetInventory.push(retired.properties);x.coverage.push({sheetId:retired.properties.sheetId,endRowIndex:10,endColumnIndex:7});
+ assert.equal(planPresentation(x,{...opts,workbook:'F01'}).counts.length,4);
+});
 test('F01 duplicate or stale extra visible catalog tab fails closed',()=>{
  const x=fixture();x.spreadsheet.spreadsheetId=spec.workbooks.F01.spreadsheetId;
  x.spreadsheet.sheets.forEach((s,i)=>{s.properties.sheetId=spec.workbooks.F01.primarySheetIds[i];x.coverage[i].sheetId=s.properties.sheetId;});
