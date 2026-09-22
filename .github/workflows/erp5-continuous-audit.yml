@@ -26,12 +26,19 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: '579.0.0'
+      - name: Verify the pinned Google Cloud CLI
+        shell: bash
+        run: test "$(gcloud version --format='value(Google Cloud SDK)')" = '579.0.0'
       - run: npm ci
       - name: Fail closed until the read-only identity and private bucket are configured
         shell: bash
         run: |
           test -n '${{ vars.ERP5_WIF_PROVIDER }}'
           test -n '${{ vars.ERP5_READ_SERVICE_ACCOUNT }}'
+          test -n '${{ vars.ERP5_POINTER_SERVICE_ACCOUNT }}'
           test -n "$EVIDENCE_BUCKET"
       - id: auth
         uses: google-github-actions/auth@v2
@@ -75,11 +82,18 @@ jobs:
           previous_dir="$HOME/.codex/private/freepass-data-source-captures/previous"
           mkdir -p "$previous_dir"
           http_code="$(curl --silent --show-error \
-            --output "$previous_dir/latest.json" \
+            --output "$previous_dir/latest-metadata.json" \
             --write-out '%{http_code}' \
             --header "Authorization: Bearer $GCS_ACCESS_TOKEN" \
-            "https://storage.googleapis.com/storage/v1/b/$EVIDENCE_BUCKET/o/latest.json?alt=media")"
+            "https://storage.googleapis.com/storage/v1/b/$EVIDENCE_BUCKET/o/latest.json")"
           if [ "$http_code" = 200 ]; then
+            generation=$(jq -er '.generation | select(type == "string" and test("^[1-9][0-9]*$"))' "$previous_dir/latest-metadata.json")
+            media_code="$(curl --silent --show-error \
+              --output "$previous_dir/latest.json" \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GCS_ACCESS_TOKEN" \
+              "https://storage.googleapis.com/storage/v1/b/$EVIDENCE_BUCKET/o/latest.json?alt=media&ifGenerationMatch=$generation")"
+            test "$media_code" = 200
             jq -e '
               .version == "erp5-continuous-pointer/1" and
               (.captureUri | type == "string" and length > 0) and
@@ -95,9 +109,11 @@ jobs:
             gcloud storage cp "$uri" "$previous_dir/capture.json"
             echo 'available=true' >> "$GITHUB_OUTPUT"
             echo "path=$previous_dir/capture.json" >> "$GITHUB_OUTPUT"
+            echo "generation=$generation" >> "$GITHUB_OUTPUT"
           elif [ "$http_code" = 404 ]; then
-            rm -f "$previous_dir/latest.json"
+            rm -f "$previous_dir/latest-metadata.json"
             echo 'available=false' >> "$GITHUB_OUTPUT"
+            echo 'generation=0' >> "$GITHUB_OUTPUT"
           else
             echo "::error::HOLD: latest.json read failed with HTTP $http_code; preserving the last-known-good pointer"
             exit 1
@@ -189,13 +205,28 @@ jobs:
             echo
             echo "Source digest: $(jq -r '.source.digest' source-inventory.json)"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Persist immutable evidence and advance only the observation pointer
+      - name: Persist immutable evidence and read it back
         shell: bash
         run: |
+          set -euo pipefail
           run_uri="gs://$EVIDENCE_BUCKET/runs/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          gcloud storage cp '${{ steps.capture.outputs.dir }}'/*.json "$run_uri/source/"
-          gcloud storage cp capture-summary.json dry-run-summary.json source-inventory.json "$run_uri/"
+          while IFS= read -r -d '' evidence; do
+            gcloud storage cp "$evidence" "$run_uri/source/$(basename "$evidence")" --if-generation-match=0
+          done < <(find '${{ steps.capture.outputs.dir }}' -maxdepth 1 -type f -name '*.json' -print0)
+          for evidence in capture-summary.json dry-run-summary.json source-inventory.json; do
+            gcloud storage cp "$evidence" "$run_uri/$evidence" --if-generation-match=0
+          done
           capture_uri="$run_uri/source/capture.json"
+          mkdir -p evidence-readback/source
+          gcloud storage cp "$capture_uri" evidence-readback/source/capture.json
+          gcloud storage cp "$run_uri/capture-summary.json" evidence-readback/capture-summary.json
+          gcloud storage cp "$run_uri/dry-run-summary.json" evidence-readback/dry-run-summary.json
+          gcloud storage cp "$run_uri/source-inventory.json" evidence-readback/source-inventory.json
+          cmp -s '${{ steps.capture.outputs.path }}' evidence-readback/source/capture.json
+          cmp -s capture-summary.json evidence-readback/capture-summary.json
+          cmp -s dry-run-summary.json evidence-readback/dry-run-summary.json
+          cmp -s source-inventory.json evidence-readback/source-inventory.json
+          gcloud storage objects describe "$capture_uri" --format='value(generation)' | grep -Eq '^[1-9][0-9]*$'
           jq -n \
             --arg captureUri "$capture_uri" \
             --arg sourceDigest "$(jq -r '.sourceDigest' capture-summary.json)" \
@@ -203,7 +234,24 @@ jobs:
             --arg runId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             '{version:"erp5-continuous-pointer/1",captureUri:$captureUri,sourceDigest:$sourceDigest,readTime:$readTime,runId:$runId}' \
             > latest.json
-          gcloud storage cp latest.json "gs://$EVIDENCE_BUCKET/latest.json"
+      - name: Authenticate the pointer-only identity
+        id: pointer-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.ERP5_WIF_PROVIDER }}
+          service_account: ${{ vars.ERP5_POINTER_SERVICE_ACCOUNT }}
+      - name: Advance latest.json atomically and read it back
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud storage cp latest.json "gs://$EVIDENCE_BUCKET/latest.json" \
+            --if-generation-match='${{ steps.previous.outputs.generation }}'
+          gcloud storage cp "gs://$EVIDENCE_BUCKET/latest.json" latest-readback.json
+          cmp -s latest.json latest-readback.json
+          generation="$(gcloud storage objects describe "gs://$EVIDENCE_BUCKET/latest.json" --format='value(generation)')"
+          test "$generation" -gt '${{ steps.previous.outputs.generation }}'
+          jq -e --arg runId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            '.version == "erp5-continuous-pointer/1" and .runId == $runId' latest-readback.json >/dev/null
       - name: Retain non-sensitive summaries for operator inspection
         uses: actions/upload-artifact@v4
         with:
