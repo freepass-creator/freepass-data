@@ -1,0 +1,546 @@
+{
+  "schema_version": "1.0",
+  "observed_at": "2026-09-19T03:45:00Z",
+  "work_types": [
+    {
+      "work_type_id": "ai-core-integration",
+      "name": "AI Core 전체 통합",
+      "domain": "development",
+      "aliases": [
+        "ai 코어 통합",
+        "ai core 통합",
+        "본사 통합",
+        "전체 통합"
+      ],
+      "target_project_id": "ai-core",
+      "approval_boundary": "MERGE_APPROVAL",
+      "completion_condition": "대상 registry/정본/작업원장 연결과 검증 결과가 revision-bound evidence로 남는다.",
+      "source_pointers": [
+        "docs/AI_CORE_INTEGRATION_EXECUTION_DIRECTIVE.md",
+        "docs/GROUP_OPERATING_MODEL.md"
+      ],
+      "capability_id": "core.group-integration"
+    },
+    {
+      "work_type_id": "project-registry",
+      "name": "프로젝트 Registry 편입",
+      "domain": "development",
+      "aliases": [
+        "프로젝트 등록",
+        "registry 편입",
+        "레지스트리 편입",
+        "프로젝트 편입"
+      ],
+      "target_project_id": "ai-core",
+      "approval_boundary": "READ_ONLY",
+      "completion_condition": "대상 repository가 검증 가능한 project_id와 상태로 registry에 등록되고 validator가 통과한다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "contracts/project-registry.schema.json"
+      ],
+      "capability_id": "core.project-registry"
+    },
+    {
+      "work_type_id": "project-source-review",
+      "name": "프로젝트 Source Review",
+      "domain": "development",
+      "aliases": [
+        "프로젝트 검토",
+        "저장소 검토",
+        "source review",
+        "프로젝트 캡슐"
+      ],
+      "target_project_id": "ai-core",
+      "approval_boundary": "READ_ONLY",
+      "completion_condition": "대상 repository의 현재 revision에서 명령·배포·운영지침·데이터 경계 증거가 capsule로 정리되고 blocker가 명시된다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "contracts/project-capsule.schema.json"
+      ],
+      "capability_id": "core.project-inspect"
+    },
+    {
+      "work_type_id": "business-planning",
+      "name": "사업/상품 기획",
+      "domain": "business",
+      "aliases": [
+        "사업 기획",
+        "사업기획안",
+        "신규 사업",
+        "상품 기획"
+      ],
+      "target_project_id": "ai-core",
+      "approval_boundary": "NONE",
+      "completion_condition": "목적·범위·결정사항·미확인·다음 행동이 정본 포인터와 함께 정리된다.",
+      "source_pointers": [
+        "docs/AI_CORE_OPERATING_PLAYBOOK.md",
+        "docs/GROUP_OPERATING_MODEL.md"
+      ],
+      "capability_id": "core.business-planning"
+    },
+    {
+      "work_type_id": "shared-design-system",
+      "name": "공통 디자인 시스템",
+      "domain": "design",
+      "aliases": [
+        "공통 디자인",
+        "디자인 시스템",
+        "ui 규격",
+        "디자인 규격"
+      ],
+      "target_project_id": "devcenter",
+      "approval_boundary": "MERGE_APPROVAL",
+      "completion_condition": "공통 규격이 DevCenter 정본에 반영되고 제품별 적용 범위와 검증 결과가 남는다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/devcenter"
+      ],
+      "capability_id": "dev.shared-design"
+    },
+    {
+      "work_type_id": "development-standard",
+      "name": "개발센터 표준/검증",
+      "domain": "development",
+      "aliases": [
+        "개발센터",
+        "devcenter",
+        "개발 규격",
+        "공통 컴포넌트"
+      ],
+      "target_project_id": "devcenter",
+      "approval_boundary": "READ_ONLY",
+      "completion_condition": "재사용 자산/규격/검증 결과가 DevCenter source revision에 결속된다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/devcenter"
+      ],
+      "capability_id": "dev.standard"
+    },
+    {
+      "work_type_id": "document-production",
+      "name": "문서/보고서/제안서 제작",
+      "domain": "document",
+      "aliases": [
+        "문서 만들어",
+        "보고서 만들어",
+        "제안서 만들어",
+        "계약서 만들어"
+      ],
+      "target_project_id": "docshub",
+      "approval_boundary": "USER_APPROVAL_FOR_EXTERNAL_WRITE",
+      "completion_condition": "원천과 템플릿을 사용한 수정 가능한 산출물이 만들어지고 외부 발송은 별도 승인된다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/docshub"
+      ],
+      "capability_id": "docs.production"
+    },
+    {
+      "work_type_id": "sales-calls",
+      "name": "영업 통화 흐름",
+      "domain": "sales",
+      "aliases": [
+        "영업 통화",
+        "고객 콜",
+        "통화 앱",
+        "오늘 통화"
+      ],
+      "target_project_id": "freepass-sales",
+      "approval_boundary": "PROJECT_RULES",
+      "completion_condition": "고객/통화 상태가 기존 Sales 규칙을 유지하며 검증된다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/freepass-sales"
+      ],
+      "capability_id": "sales.calls"
+    },
+    {
+      "work_type_id": "sales-customer-search",
+      "name": "영업 고객 조회",
+      "domain": "sales",
+      "aliases": [
+        "고객 조회",
+        "고객 검색",
+        "손님 조회",
+        "연락처 조회"
+      ],
+      "target_project_id": "freepass-sales",
+      "approval_boundary": "READ_ONLY",
+      "completion_condition": "이름/전화번호/필터 조회가 기존 고객 정본을 변경하지 않고 작동한다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/freepass-sales"
+      ],
+      "capability_id": "sales.customer-search"
+    },
+    {
+      "work_type_id": "sales-promotion",
+      "name": "영업 프로모션 메시지",
+      "domain": "sales",
+      "aliases": [
+        "프로모션 문자",
+        "문자 템플릿",
+        "웰컴 문자",
+        "홍보 문자"
+      ],
+      "target_project_id": "freepass-sales",
+      "approval_boundary": "USER_APPROVAL_FOR_EXTERNAL_WRITE",
+      "completion_condition": "승인된 문구가 준비되고 실제 외부 발송 여부가 별도 상태로 기록된다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/freepass-sales"
+      ],
+      "capability_id": "sales.message"
+    },
+    {
+      "work_type_id": "estimator",
+      "name": "차량 견적기",
+      "domain": "sales",
+      "aliases": [
+        "견적기",
+        "견적 계산",
+        "차량 견적",
+        "렌트 견적",
+        "셀프견적",
+        "셀프 견적",
+        "프리패스 견적",
+        "신차 견적",
+        "중고 견적"
+      ],
+      "target_project_id": "freepass-estimate",
+      "approval_boundary": "PROJECT_RULES",
+      "completion_condition": "계산 로직과 UI 변경이 기존 산식 회귀검사를 통과한다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/freepass-estimate",
+        "docs/coordination/FREEPASS_SELF_QUOTE_ENGINE_ADAPTER_LEARNING.md"
+      ],
+      "capability_id": "sales.vehicle-estimator"
+    },
+    {
+      "work_type_id": "erp-product",
+      "name": "ERP 상품/차량 상품",
+      "domain": "development",
+      "aliases": [
+        "erp 상품",
+        "상품 상세",
+        "상품 목록",
+        "차량 상품"
+      ],
+      "target_project_id": "freepasserp4",
+      "approval_boundary": "MERGE_APPROVAL",
+      "completion_condition": "상품 목록/상세가 현재 ERP SSOT와 UI 계약을 만족하며 build/check가 통과한다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/freepasserp4"
+      ],
+      "capability_id": "erp.product"
+    },
+    {
+      "work_type_id": "erp-contract",
+      "name": "ERP 계약/접수",
+      "domain": "development",
+      "aliases": [
+        "erp 계약",
+        "계약 접수",
+        "계약 상세",
+        "접수 목록"
+      ],
+      "target_project_id": "freepasserp4",
+      "approval_boundary": "MERGE_APPROVAL",
+      "completion_condition": "접수→계약 상태 흐름과 필수필드가 기존 업무 규칙을 유지한다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/freepasserp4"
+      ],
+      "capability_id": "erp.contract"
+    },
+    {
+      "work_type_id": "erp-settlement",
+      "name": "ERP 정산 화면",
+      "domain": "settlement",
+      "aliases": [
+        "erp 정산",
+        "청구 지급",
+        "세금계산서 화면",
+        "erp 청구"
+      ],
+      "target_project_id": "freepasserp4",
+      "approval_boundary": "MERGE_APPROVAL",
+      "completion_condition": "ERP 청구/지급/계산서 화면이 현재 정산 데이터 의미와 일치한다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/freepasserp4"
+      ],
+      "capability_id": "erp.settlement"
+    },
+    {
+      "work_type_id": "settlement-system",
+      "name": "정산 전용 시스템",
+      "domain": "settlement",
+      "aliases": [
+        "정산 시스템",
+        "정산 프로젝트",
+        "fp settlement",
+        "정산"
+      ],
+      "target_project_id": "fp-settlement",
+      "approval_boundary": "PROJECT_RULES",
+      "completion_condition": "정산 프로젝트의 SSOT·실행 명령·배포 경계가 검증된 뒤 작업 결과가 남는다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/fp-settlement"
+      ],
+      "capability_id": "settlement.system"
+    },
+    {
+      "work_type_id": "penalty-processing",
+      "name": "과태료 처리",
+      "domain": "operations",
+      "aliases": [
+        "과태료",
+        "고지서 처리",
+        "과태료 처리",
+        "변경부과"
+      ],
+      "target_project_id": "aiops",
+      "approval_boundary": "PROJECT_RULES",
+      "completion_condition": "현재 SOP에 따라 대상/관청/차량/계약을 대조하고 실제 쓰기 전 승인 경계를 지킨다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/aiops"
+      ],
+      "capability_id": "operations.penalty.prepare"
+    },
+    {
+      "work_type_id": "cash-status",
+      "name": "자금 현황/자금일보",
+      "domain": "finance",
+      "aliases": [
+        "자금 현황",
+        "자금일보",
+        "돈 관련",
+        "현금 현황"
+      ],
+      "target_project_id": "aiops",
+      "approval_boundary": "READ_ONLY",
+      "completion_condition": "실제 자금 정본을 읽어 기준시점·불일치·미확인을 구분해 반환한다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/aiops"
+      ],
+      "capability_id": "finance.cash-status"
+    },
+    {
+      "work_type_id": "receivables",
+      "name": "미수/수납 대조",
+      "domain": "finance",
+      "aliases": [
+        "미수",
+        "수납",
+        "입금 불일치",
+        "미수금"
+      ],
+      "target_project_id": "aiops",
+      "approval_boundary": "PROJECT_RULES",
+      "completion_condition": "수납/입금/미수 정본을 대조하고 변경이 필요한 경우 승인 전에서 멈춘다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/aiops"
+      ],
+      "capability_id": "finance.receivables"
+    },
+    {
+      "work_type_id": "insurance-operations",
+      "name": "보험 운영",
+      "domain": "operations",
+      "aliases": [
+        "보험 처리",
+        "보험 업무",
+        "차량 보험",
+        "보험"
+      ],
+      "target_project_id": "aiops",
+      "approval_boundary": "PROJECT_RULES",
+      "completion_condition": "현재 보험 SOP와 대상 계약/차량 정본을 기준으로 결과와 예외를 반환한다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/aiops"
+      ],
+      "capability_id": "operations.insurance"
+    },
+    {
+      "work_type_id": "operations-watch",
+      "name": "반복 운영/스케줄 점검",
+      "domain": "operations",
+      "aliases": [
+        "운영 자동화",
+        "스케줄 작업",
+        "배치 확인",
+        "운영 상태"
+      ],
+      "target_project_id": "ai-core",
+      "approval_boundary": "READ_ONLY",
+      "completion_condition": "스케줄/발행/실패 상태를 읽기 전용으로 관측하고 이상을 근거와 함께 반환한다.",
+      "source_pointers": [
+        "registry/operations.json",
+        "scripts/ops-watch.mjs"
+      ],
+      "capability_id": "operations.watch"
+    },
+    {
+      "work_type_id": "homepage",
+      "name": "프리패스 홈페이지",
+      "domain": "website",
+      "aliases": [
+        "프리패스 홈페이지",
+        "회사소개 사이트",
+        "홈페이지",
+        "freepass homepage"
+      ],
+      "target_project_id": "freepass-homepage",
+      "approval_boundary": "MERGE_APPROVAL",
+      "completion_condition": "현재 홈페이지 source/CI/배포 경계를 확인한 revision에서 변경과 검증이 완료된다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/freepasshomepage"
+      ],
+      "capability_id": "web.homepage"
+    },
+    {
+      "work_type_id": "freepass-admin",
+      "name": "FreePass Admin",
+      "domain": "development",
+      "aliases": [
+        "프리패스 어드민",
+        "freepass admin",
+        "관리자 화면",
+        "어드민"
+      ],
+      "target_project_id": "freepass-admin",
+      "approval_boundary": "MERGE_APPROVAL",
+      "completion_condition": "Admin UI-SPEC과 실제 코드가 일치하고 desktop/mobile 검증이 남는다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/freepass-admin"
+      ],
+      "capability_id": "admin.ui"
+    },
+    {
+      "work_type_id": "legal-casemap",
+      "name": "법무 사건지도/CaseMap",
+      "domain": "legal",
+      "aliases": [
+        "사건지도",
+        "casemap",
+        "법무 사건",
+        "소송 기록"
+      ],
+      "target_project_id": "casemap-private",
+      "approval_boundary": "PROJECT_RULES",
+      "completion_condition": "사건 사실/증거/절차 기록이 기존 CaseMap 정본에 연결되고 추정과 사실이 구분된다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/casemap-private"
+      ],
+      "capability_id": "legal.casemap"
+    },
+    {
+      "work_type_id": "workcontrol",
+      "name": "WorkControl 업무관리",
+      "domain": "operations",
+      "aliases": [
+        "workcontrol",
+        "워크컨트롤",
+        "업무 관리",
+        "작업 관리"
+      ],
+      "target_project_id": "workcontrol",
+      "approval_boundary": "PROJECT_RULES",
+      "completion_condition": "현재 업무 상태/담당/후속 규칙을 source revision에 맞춰 처리한다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/workcontrol"
+      ],
+      "capability_id": "operations.workcontrol"
+    },
+    {
+      "work_type_id": "teamjpkwork",
+      "name": "TeamJPK Work",
+      "domain": "business",
+      "aliases": [
+        "teamjpkwork",
+        "팀 jpk 업무",
+        "팀제이피케이 업무",
+        "team jpk work"
+      ],
+      "target_project_id": "teamjpkwork",
+      "approval_boundary": "PROJECT_RULES",
+      "completion_condition": "프로젝트 정본/현재 업무를 확인한 뒤 결과와 다음 행동이 기록된다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/teamjpkwork"
+      ],
+      "capability_id": "business.teamjpkwork"
+    },
+    {
+      "work_type_id": "mewcar-subscription",
+      "name": "뮤카 자동차 구독사업",
+      "domain": "business",
+      "aliases": [
+        "뮤카 구독",
+        "뮤카 자동차 구독",
+        "뮤카 구독사업",
+        "자동차 구독사업",
+        "뮤카 사업기획"
+      ],
+      "target_project_id": "mewcar",
+      "approval_boundary": "PROJECT_RULES",
+      "completion_condition": "Mewcar 정본의 결정·준비상태·미확정·다음 행동이 revision-bound source pointer와 함께 정리된다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/mewcar",
+        "freepass-creator/mewcar/PROJECT_READ_FIRST.md"
+      ],
+      "capability_id": "business.mewcar-subscription"
+    },
+    {
+      "work_type_id": "insurance-status-read",
+      "name": "보험 상태 조회",
+      "domain": "operations",
+      "aliases": [
+        "보험 상태 조회",
+        "보험 정합성 확인",
+        "보험 상태 확인",
+        "보험 이상 확인"
+      ],
+      "target_project_id": "aiops",
+      "approval_boundary": "READ_ONLY",
+      "completion_condition": "오늘 기준 AIOps 보험 evidence의 freshness, 연령 정합성, 고위험 불일치를 읽기 전용으로 반환한다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/aiops/lib/ai-core-insurance-adapter.mjs"
+      ],
+      "capability_id": "operations.insurance-status"
+    },
+    {
+      "work_type_id": "sales-mydata-intake",
+      "name": "마이데이터 수집",
+      "domain": "sales",
+      "aliases": [
+        "마이데이터 수집",
+        "메일 DB 수집",
+        "고객 DB 메일 수집",
+        "연락처 동기화"
+      ],
+      "target_project_id": "freepass-sales",
+      "approval_boundary": "PROJECT_RULES",
+      "completion_condition": "서버 수집 작업의 source 보존, lead merge, 연락처 동기화 결과와 중복/복구 evidence를 반환한다.",
+      "source_pointers": [
+        "registry/projects.json",
+        "freepass-creator/freepass-sales/server/"
+      ],
+      "capability_id": "sales.mydata-intake"
+    }
+  ]
+}
