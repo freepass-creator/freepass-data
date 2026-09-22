@@ -129,6 +129,7 @@ PR23의 ERP public schema는 서비스 간 읽기 계약이지 모든 필드의 
 | Admin main | `02deb4df0fcb123a478519e3cbb408cd5e2ad7c6` | 문서·Application snapshot 확인. main과 미병합 PR 구현을 구분 |
 | Admin 확장 구현 | 열려 있는 PR45 `fe11698c6b791b9bd80b9151841bb8a8cdf85e2d` | settlement domain/ERP5 repository/수수료 타입/접수 snapshot 코드 존재. 재구현 대신 이 경계에 통합; 배포·운영 증거 미검증 |
 | ERP 기존 정산 | ERP 엔진 작업트리 `6d9375a0d7fcf8e00d41712a3a154c6b1163f032`의 settlement-ledger | legacy 접수월/청구월·정산 구분 참고. 과거 주석의 수치·식별자·세금 산식을 현재 운영값으로 채택하지 않음 |
+| 정산원장 → ERP5 차량 상태 운영 연결 | `freepasserp4` native schedule run `35705106480` (`41cc517`, 2026-09-22 17:29 KST) | 기존 단일 production writer가 정산원장 `접수`를 ERP5 `계약중` lock으로, `취소`를 unlock 후보로 대조한 뒤 같은 회차의 원천 수집·F01/F86 발행을 실행. 접수 80대, 취소 31대(재접수 제외 해제 후보 30대), 신규 lock 0, unlock 0, 원자 부재 40대를 관측하고 성공. 이는 차량 판매상태 연결 증거이며 Admin 정산 금액·청구·지급 도메인의 FreePass Data 이관 완료를 뜻하지 않음 |
 | ERP5 원문 수집 | 별도 `erp5-product-mapping-20260921` 작업의 09:06:44Z 동일 transaction 캡처 | products 1659/policy 81 전체 COUNT 일치. 원문 불변 상태에서 관측된 metadata timestamp decode 후 전수 의미 검사: ready 0, 의미 HOLD 1659, decode HOLD 0; 정산 원문 수집과 write 이관은 범위 밖 |
 | ERP5 Policy 연결 | 동일 capture digest의 count-only 분석 | 상품 1659 = 미설정 317 + exact unique 검토 후보 1342. 모호/누락/별칭 후보 0; 정책 사실 의미와 Canonical 승인·소비처 전환은 HOLD |
 
