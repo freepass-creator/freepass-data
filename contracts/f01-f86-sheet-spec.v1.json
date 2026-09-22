@@ -2,11 +2,11 @@
   "version": "1.0",
   "effectiveDate": "2026-09-21",
   "owner": "freepass-data",
-  "status": "SPEC_AND_LIVE_TAB_PRESENTATION_APPLIED_PUBLISHER_PENDING",
+  "status": "SPEC_PUBLISHER_PINNED_LIVE_REAPPLY_AND_WATCHDOG_RECOVERY_VERIFIED_NATIVE_SCHEDULE_OBSERVATION_HOLD",
   "timezone": "Asia/Seoul",
   "workbooks": {
-    "F01": { "spreadsheetId": "1Y1Mx1EcEpAuNer0y50Dq4eK92CpVjThO_suZLmo2vVs", "primarySheetIds": [668539469, 1902102711, 978740603, 1902102713] },
-    "F86": { "spreadsheetId": "1hQtshpWKL4L0zSR3H3UQ36atICtHv9Ka7dQh7d7K5Vg", "primarySheetIds": [2024887857, 115390002, 1357913579, 891725079] }
+    "F01": { "spreadsheetId": "1Y1Mx1EcEpAuNer0y50Dq4eK92CpVjThO_suZLmo2vVs", "primarySheetIds": [668539469, 1902102711, 978740603, 1902102713], "retiredSheetIds": [1902102714] },
+    "F86": { "spreadsheetId": "1hQtshpWKL4L0zSR3H3UQ36atICtHv9Ka7dQh7d7K5Vg", "primarySheetIds": [2029374993, 115390002, 1357913579, 891725079] }
   },
   "naming": {
     "catalog": "MM.DD HH:mm 상품리스트 N대",
@@ -58,6 +58,7 @@
     "F01": "preserve_existing_standard_table",
     "F86": "preserve_existing_retro_supplier_view",
     "F86MinimumVisibleFeeMonths": 24,
+    "F86FeeVisibility": "long_term_rent_and_deposit_hide_short_term_through_12_months",
     "headerRowsFrozen": 1,
     "filter": "entire_populated_rectangle",
     "alignment": {

@@ -77,7 +77,14 @@ export function planPresentation(input, { workbook, updatedAt, now = Date.now() 
       const range={sheetId:id,dimension:'COLUMNS',startIndex:ci,endIndex:ci+1};
       if(width && meta.pixelSize !== width) add(id,`width:${header}`,meta.pixelSize,width,{updateDimensionProperties:{range,properties:{pixelSize:width},fields:'pixelSize'}});
       const months=String(header).match(/^(\d+)\s*개월/);
-      if(workbook==='F86' && (header==='단기보증' || (months && Number(months[1])<spec.appearance.F86MinimumVisibleFeeMonths)) && !meta.hiddenByUser) add(id,`hidden:${header}`,false,true,{updateDimensionProperties:{range,properties:{hiddenByUser:true},fields:'hiddenByUser'}});
+      const isRent=!!months;
+      const isDeposit=/보증/.test(header) && !/카드|결제|여부|가능|보험/.test(header);
+      if(workbook==='F86' && (isRent || isDeposit)) {
+        const termMonths=months ? Number(months[1]) : undefined;
+        const isShortDeposit=isDeposit && (/단기/.test(header) || (termMonths !== undefined && termMonths <= 12));
+        const hiddenByUser=isRent ? termMonths < spec.appearance.F86MinimumVisibleFeeMonths : isShortDeposit;
+        if(!!meta.hiddenByUser!==hiddenByUser) add(id,`hidden:${header}`,!!meta.hiddenByUser,hiddenByUser,{updateDimensionProperties:{range,properties:{hiddenByUser},fields:'hiddenByUser'}});
+      }
     }
     const width=headers.reduce((end,h,i)=>h ? i+1 : end,0);
     const wanted={sheetId:id,startRowIndex:0,endRowIndex:lastRow,startColumnIndex:0,endColumnIndex:width};
