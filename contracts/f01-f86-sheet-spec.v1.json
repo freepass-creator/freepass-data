@@ -58,7 +58,7 @@
     "F01": "preserve_existing_standard_table",
     "F86": "preserve_existing_retro_supplier_view",
     "F86MinimumVisibleFeeMonths": 24,
-    "F86FeeVisibility": "long_term_rent_only_hide_all_deposits",
+    "F86FeeVisibility": "long_term_rent_and_deposit_hide_short_term_through_12_months",
     "headerRowsFrozen": 1,
     "filter": "entire_populated_rectangle",
     "alignment": {
