@@ -118,3 +118,25 @@ Firestore Timestamp/GeoPoint/DocumentReference 등 SDK 객체를 `JSON.stringify
   등록 사실을 변환하는 것과 판매/공개 승인은 별개이며 원문 상태를 보존하는 회귀시험으로 확인했다.
 - Claude: 주간 사용 한도로 UNAVAILABLE. Gemini: 인증 단계 서비스 비활성화 403으로 UNAVAILABLE.
   두 검토를 PASS로 계산하지 않는다. 운영 변경 승인 또는 필수 운영 검증을 대체하지 않는다.
+
+## 이안카 ERP·Google Sheet 상태 통합 계약
+
+2026-09-22 사용자 결정으로 이안카(`RP031`)의 ERP 관측과 Google Sheet 관측을 같은 의미로
+합치지 않는다. 실행 계약은 `src/domain/iancar-availability-resolution.ts`다.
+
+| 관측 | 결과 |
+| --- | --- |
+| ERP에 존재, 별도 명시 상태 없음 | `출고가능` / `AVAILABLE` |
+| ERP와 Sheet 양쪽에 존재 | ERP 우선 `출고가능` |
+| Sheet에만 존재 | `출고협의` / `HOLD`, ERP 확인 필요 |
+| 기존 등록이지만 양쪽 모두 미관측 | `미관측` / `HOLD`, 이력 보존 |
+| ERP가 예약·계약중·판매·출고불가를 명시 | ERP 명시 상태 보존 |
+| ERP의 알 수 없는 명시 상태 | 추정하지 않고 `HOLD` |
+
+모든 판정에는 양쪽 source revision과 observation time, 전체 수집 완료와 freshness 검증이 필요하다.
+부분 수집이나 오래된 관측은 출고가능 또는 원천 부재 증거가 될 수 없다. 수집 성공 시각만으로 최신성을
+가정하지 않는다. 미관측이나 충돌을 삭제 신호로 사용하지 않으며, 이 계약은 운영 Firestore 쓰기,
+Canonical 승인 또는 소비처 전환 권한을 만들지 않는다.
+
+재사용 판정은 `CREATE_NEW_JUSTIFIED`다. 기존 ERP5 상품 매퍼는 게시된 단일 문서만 해석하므로
+독립된 ERP와 Sheet 관측의 부재·우선순위를 손실 없이 판정할 수 없다.
