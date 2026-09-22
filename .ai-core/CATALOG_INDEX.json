@@ -1,0 +1,24 @@
+{
+  "schema": "ai-core-starter-catalog/v1",
+  "generated_at": "2026-09-22T02:24:07.280Z",
+  "items": [
+    {
+      "path": "catalog/projects.json",
+      "sha256": "361fc385402d7dea2fdad9c81001054db3e8361c3d24c773e06ec60002051a70",
+      "source": "registry/projects.json",
+      "core_revision": "87b0f4f6c75dbb313ec4684081b83b1ef0c53da2"
+    },
+    {
+      "path": "catalog/capabilities.json",
+      "sha256": "2cde6604a0dc0f438e8d0d0f179a3d8220f9a32504e5565058be8bff38628d36",
+      "source": "registry/capabilities.json",
+      "core_revision": "87b0f4f6c75dbb313ec4684081b83b1ef0c53da2"
+    },
+    {
+      "path": "catalog/work-map.json",
+      "sha256": "1bf109b79d1d3d1cb3be45e41a0bd0b0b318ecaba674441464a872aa6462b07b",
+      "source": "registry/work-map.json",
+      "core_revision": "87b0f4f6c75dbb313ec4684081b83b1ef0c53da2"
+    }
+  ]
+}

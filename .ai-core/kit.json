@@ -1,0 +1,49 @@
+{
+  "schema": "ai-core-starter-kit/v1",
+  "core_revision": "87b0f4f6c75dbb313ec4684081b83b1ef0c53da2",
+  "generated_at": "2026-09-22T02:24:07.280Z",
+  "task": "최신 AI Core 규격과 GitHub 동기화 부트스트랩 적용",
+  "track": "development",
+  "target": {
+    "project_id": "freepass-data",
+    "repository": "freepass-creator/freepass-data",
+    "branch": "codex/refresh-ai-core-kit-v2-20260922",
+    "revision": "b79d64593770dfece6f85864c71c4d0a72a0c96f",
+    "registry_revision": "677622c47377c9c0e22a98a8db031041becb8887",
+    "root": "C:\\dev\\ai-core-kit-rollout-20260922-v2\\freepass-data",
+    "display_name": "freepass-data"
+  },
+  "files": [
+    {
+      "path": "standards/AI_WORKING_STANDARD.md",
+      "sha256": "1b45074f5ffaaf76f61bed90af525ab19290720c1400af5d0506ace9e102b3a8",
+      "source": "docs/AI_WORKING_STANDARD.md"
+    },
+    {
+      "path": "standards/AI_ACADEMY_CURRICULUM.md",
+      "sha256": "9781eed9023ec5beeb691eb5694dd6bd35f30a33cb7aa7fa02d982562af8947a",
+      "source": "docs/AI_ACADEMY_CURRICULUM.md"
+    },
+    {
+      "path": "standards/DEVELOPMENT_RUNTIME.md",
+      "sha256": "8030f571e45b4be8fcb725cca5cda93bcdeefda30b1f9987a5648f7665630f68",
+      "source": "docs/DEVELOPMENT_RUNTIME.md"
+    },
+    {
+      "path": "standards/shared-services/SHARED_RELEASE_GATE.md",
+      "sha256": "098ba568b40d6fcd7c5830e7a024048a52ad156ed7a6f0374af2a9ac545eb03b",
+      "source": "docs/shared-services/SHARED_RELEASE_GATE.md"
+    },
+    {
+      "path": "session-bootstrap.mjs",
+      "sha256": "60b0ccc3a8217aa2b7415f3830fec94fd894fab294155e294d7ede71edd8c900",
+      "source": "generated:session-bootstrap/v2"
+    }
+  ],
+  "verification": {
+    "install": "npm ci",
+    "test": "npm test",
+    "build": "npm run build"
+  },
+  "reuse_policy": "New assets require a recorded reuse decision before creation."
+}
