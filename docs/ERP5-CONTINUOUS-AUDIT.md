@@ -83,3 +83,8 @@ CREATE_NEW_JUSTIFIED: 저장소에 schedule 또는 상시 실행 workflow가 없
 
 따라서 검토가 쉬운 일부 레코드만 골라 전체 ERP 카탈로그처럼 공개할 수 없다. 운영 판정에는 원천 수,
 candidate 수, 검토 대기/HOLD 수와 기계 판정 사유를 항상 함께 사용한다.
+
+`main@015810c`의 첫 운영 검증 run `35696297683`은 이 게이트를 포함해 성공했다. products 1,659건,
+policy 81건, mapped-for-review 0건, mapping HOLD 1,659건, `NO_CHANGE`였고 공개 판정은 `HOLD`,
+ACTIVE release 허가는 `false`였다. 실행별 불변 업로드, byte readback, 포인터 CAS와 최종 readback도
+통과했다. 이 수동 실행은 native `schedule` 전달 증거가 아니며 schedule 실행은 아직 별도 HOLD다.
