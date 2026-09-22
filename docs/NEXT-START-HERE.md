@@ -11,7 +11,7 @@ Date: 2026-09-22
 
 상시 ERP5 감사에 기계 판독 가능한 공개 판정 게이트를 추가했다. `FULL / COMPLETE`는 원천 관측 범위이며
 Canonical 쓰기나 ACTIVE release 허가가 아니다. source digest
-`553cc4042e1292ed31645b83d106dfbacd6f0a9d36c3552d84b97959beb0992c`를 재검증한 결과 원천 1,659건과
+`b0930c6999a092c28263db7a3c8a8390ef9aa9d661c8a290e085f2cb3881cd6d`를 run `35696297683`에서 재검증한 결과 원천 1,659건과
 candidate 1,659건이 일치했고, 1,659건 모두 HOLD, 검토 완료 0건, ACTIVE 허가 `false`다. 현재 사유는
 `MAPPING_HOLD_PRESENT`, `NO_CANDIDATES_READY_FOR_REVIEW`, `REVIEW_APPROVALS_NOT_INCLUDED`,
 `CANONICAL_RELEASE_NOT_BUILT`다.
@@ -19,6 +19,7 @@ candidate 1,659건이 일치했고, 1,659건 모두 HOLD, 검토 완료 0건, AC
 다음 시작점은 검토 증거로 mapper/policy HOLD를 줄인 뒤 별도의 reviewed Canonical import/release 명령을
 만드는 것이다. 일부만 전체 카탈로그로 공개하지 않는다. Kakao는 전용 토큰으로 비어 있지 않은 검토된
 ACTIVE release를 운영 PC에서 읽기 전까지 OBSERVE/HOLD다.
+수동 workflow 전체는 GCS 저장·readback까지 성공했지만 native `schedule` 이벤트는 아직 0건이다.
 
 ## 2026-09-22 continuous-audit durability checkpoint
 
