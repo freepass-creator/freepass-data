@@ -7,6 +7,16 @@ Verified baseline before this handoff update: `adbbfca7c0ddc4e6c7c1906765d9b5aac
 Branch: `codex/local-runtime-baseline`
 Date: 2026-09-22
 
+## 2026-09-22 continuous-audit durability checkpoint
+
+- `main@d63d051`에서 권한을 실행 증거 계정과 `latest.json` 전용 계정으로 분리했다.
+- run `35693167169`, `35693329115`가 연속 성공했고 각 실행별 GCS 객체의 create-only 업로드와
+  byte-for-byte readback, 포인터 generation 조건 갱신을 통과했다.
+- 최신 관측은 products 1,659건, policy 81건이며 의미 매핑 1,659건은 계속 HOLD다.
+- 실제 `schedule` 이벤트 성공과 비어 있지 않은 ACTIVE `erp-public` release는 별도 미완료 게이트다.
+- Kakao Ops는 `kakao-ops` 전용 소비자 계약을 사용하도록 양쪽 저장소에 병합됐지만, 전용 토큰과
+  운영 API 왕복은 ACTIVE release 이후 검증한다. ERP.com의 `erp-com` 토큰을 재사용하지 않는다.
+
 ## 0. Start here now — source control tower
 
 FreePass Data must know each registered source by identity, ownership, collection, complete record count,

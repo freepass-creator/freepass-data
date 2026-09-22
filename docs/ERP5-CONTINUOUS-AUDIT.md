@@ -19,6 +19,12 @@ GCS 실행 경로, `latest.json` readback까지 통과했다. 후속 run `356895
 1,659개 전부 UNCHANGED, 추가·변경·미관측·재고전환 0인 delta를 보존한 뒤 포인터를 새 세대로 전진했다.
 두 번의 수동 성공은 native `schedule` 전달 성공의 증거로 확대하지 않는다.
 
+권한 분리 이후 `main@d63d051`에서 수동 run `35693167169`, `35693329115`가 연속 성공했다.
+두 실행 모두 객체별 create-only 업로드, GCS byte readback, 포인터 전용 신원 재인증,
+직전 generation 조건 갱신과 최종 readback을 통과했다. 두 번째 실행은 products 1,659건,
+policy 81건, field path 508개, `NO_CHANGE`, unchanged 1,659건을 기록했고 `latest.json`은
+`35693329115-1`을 가리킨다.
+
 ## 영속성
 
 - 원문, DRY RUN, delta는 비공개 GCS 버킷의 실행 ID별 immutable prefix에 저장한다.
