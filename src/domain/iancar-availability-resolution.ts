@@ -48,11 +48,11 @@ export function resolveIancarAvailability(input: IancarAvailabilityInput): Ianca
   if (!input.erp.observed && raw) throw new Error('ERP_STATE_WITHOUT_OBSERVATION');
   const erpTrusted = input.erp.coverageComplete && input.erp.freshnessVerified;
   const sheetTrusted = input.sheet.coverageComplete && input.sheet.freshnessVerified;
-  if (input.erp.observed && !erpTrusted) return { ...base, sourceDecision: 'IANCAR_ERP', state: '미관측',
-    canonicalStatus: 'HOLD', reviewRequired: true, reasons: ['ERP_OBSERVATION_NOT_CURRENT_AND_COMPLETE'] };
-  if (!input.erp.observed && (!erpTrusted || !sheetTrusted)) return {
-    ...base, sourceDecision: input.sheet.observed ? 'IANCAR_SHEET' : 'NONE', state: '미관측',
-    canonicalStatus: 'HOLD', reviewRequired: true, reasons: ['SOURCE_ABSENCE_NOT_PROVEN_CURRENT_AND_COMPLETE']
+  if (!erpTrusted || !sheetTrusted) return {
+    ...base,
+    sourceDecision: input.erp.observed ? 'IANCAR_ERP' : input.sheet.observed ? 'IANCAR_SHEET' : 'NONE',
+    state: '미관측', canonicalStatus: 'HOLD', reviewRequired: true,
+    reasons: ['SOURCE_EVIDENCE_NOT_CURRENT_AND_COMPLETE']
   };
   if (input.erp.observed) {
     if (raw) {

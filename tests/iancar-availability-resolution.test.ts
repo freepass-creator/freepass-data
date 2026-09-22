@@ -36,7 +36,15 @@ describe('Iancar availability resolution', () => {
   });
   it('holds stale or partial ERP evidence instead of claiming availability', () => {
     const input = seen(true, true); input.erp.freshnessVerified = false;
-    expect(resolveIancarAvailability(input)).toMatchObject({ canonicalStatus: 'HOLD', reasons: ['ERP_OBSERVATION_NOT_CURRENT_AND_COMPLETE'] });
+    expect(resolveIancarAvailability(input)).toMatchObject({ canonicalStatus: 'HOLD', reasons: ['SOURCE_EVIDENCE_NOT_CURRENT_AND_COMPLETE'] });
+  });
+  it('holds trusted ERP presence when the Sheet evidence is stale or partial', () => {
+    const stale = seen(true, true); stale.sheet.freshnessVerified = false;
+    expect(resolveIancarAvailability(stale)).toMatchObject({ state: '미관측', canonicalStatus: 'HOLD',
+      reasons: ['SOURCE_EVIDENCE_NOT_CURRENT_AND_COMPLETE'] });
+    const partial = seen(true, false, '출고불가'); partial.sheet.coverageComplete = false;
+    expect(resolveIancarAvailability(partial)).toMatchObject({ state: '미관측', canonicalStatus: 'HOLD',
+      reasons: ['SOURCE_EVIDENCE_NOT_CURRENT_AND_COMPLETE'] });
   });
   it('does not infer ERP absence from an incomplete collection', () => {
     const input = seen(false, true); input.erp.coverageComplete = false;
