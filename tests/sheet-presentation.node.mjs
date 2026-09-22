@@ -5,9 +5,9 @@ const at='2026-09-21T07:28:00Z';
 const opts={workbook:'F86',updatedAt:at,now:Date.parse(at)};
 const cell=s=>({userEnteredValue:{stringValue:s}});
 function fixture(){
-  const sheets=spec.workbooks.F86.primarySheetIds.map((id,i)=>({properties:{sheetId:id,title:`legacy-${i}`,index:i,gridProperties:{rowCount:10,columnCount:4,frozenRowCount:1}},data:[{rowData:[{values:['차량번호','차명(원문)','옵션(원문)','12개월'].map(cell)},{values:[`TEST-${i}`,'raw-name','raw-options','100'].map(cell)}],columnMetadata:Array.from({length:4},()=>({pixelSize:80}))}]}));
+  const sheets=spec.workbooks.F86.primarySheetIds.map((id,i)=>({properties:{sheetId:id,title:`legacy-${i}`,index:i,gridProperties:{rowCount:10,columnCount:6,frozenRowCount:1}},data:[{rowData:[{values:['차량번호','차명(원문)','옵션(원문)','장기보증','12개월','24개월'].map(cell)},{values:[`TEST-${i}`,'raw-name','raw-options','100','100','100'].map(cell)}],columnMetadata:[{pixelSize:80},{pixelSize:80},{pixelSize:80},{pixelSize:80},{pixelSize:80},{pixelSize:80,hiddenByUser:true}]}]}));
   for(const s of sheets)while(s.data[0].rowData.length<10)s.data[0].rowData.push({values:[]});
-  return {capturedAt:at,sheetInventory:sheets.map(s=>s.properties),coverage:sheets.map(s=>({sheetId:s.properties.sheetId,endRowIndex:10,endColumnIndex:4})),spreadsheet:{spreadsheetId:spec.workbooks.F86.spreadsheetId,sheets}};
+  return {capturedAt:at,sheetInventory:sheets.map(s=>s.properties),coverage:sheets.map(s=>({sheetId:s.properties.sheetId,endRowIndex:10,endColumnIndex:6})),spreadsheet:{spreadsheetId:spec.workbooks.F86.spreadsheetId,sheets}};
 }
 test('all primary tabs, Seoul timestamp and widths; no cell writes or deletions',()=>{
   const result=planPresentation(fixture(),opts);
@@ -15,6 +15,8 @@ test('all primary tabs, Seoul timestamp and widths; no cell writes or deletions'
   assert.equal(result.requests.find(r=>r.updateSheetProperties)?.updateSheetProperties.properties.title,'09.21 16:28 상품리스트 1대');
   assert.equal(result.requests.filter(r=>r.updateDimensionProperties?.properties.pixelSize===260).length,4);
   assert.equal(result.requests.filter(r=>r.updateDimensionProperties?.properties.pixelSize===360).length,4);
+  assert.equal(result.requests.filter(r=>r.updateDimensionProperties?.properties.hiddenByUser===true).length,8);
+  assert.equal(result.requests.filter(r=>r.updateDimensionProperties?.properties.hiddenByUser===false).length,4);
   assert.ok(result.requests.every(r=>['updateSheetProperties','updateDimensionProperties','setBasicFilter'].includes(Object.keys(r)[0])));
 });
 test('fixed usability widths are reapplied on every matching sales tab',()=>{
@@ -67,8 +69,8 @@ test('already-compliant native metadata verifies with no writes',()=>{
   const p=spec.primaryTabs[i],h=p.color;
   s.properties.title=i===0?'09.21 16:28 상품리스트 1대':`${p.label} 1대`;
   s.properties.tabColorStyle={rgbColor:{red:parseInt(h.slice(1,3),16)/255,green:parseInt(h.slice(3,5),16)/255,blue:parseInt(h.slice(5,7),16)/255}};
-  s.data[0].columnMetadata=[{pixelSize:80},{pixelSize:260},{pixelSize:360},{pixelSize:80,hiddenByUser:true}];
-  s.basicFilter={range:{sheetId:s.properties.sheetId,startRowIndex:0,endRowIndex:2,startColumnIndex:0,endColumnIndex:4}};
+  s.data[0].columnMetadata=[{pixelSize:80},{pixelSize:260},{pixelSize:360},{pixelSize:80,hiddenByUser:true},{pixelSize:80,hiddenByUser:true},{pixelSize:80,hiddenByUser:false}];
+  s.basicFilter={range:{sheetId:s.properties.sheetId,startRowIndex:0,endRowIndex:2,startColumnIndex:0,endColumnIndex:6}};
  }
  assert.equal(planPresentation(x,opts).status,'PASS');assert.deepEqual(planPresentation(x,opts).requests,[]);
 });
@@ -95,7 +97,7 @@ test('F01 duplicate or stale extra visible catalog tab fails closed',()=>{
 test('supplier views may repeat primary keys, preserve gaps and use common gray',()=>{
  const x=fixture(),s=structuredClone(x.spreadsheet.sheets[0]);
  s.properties={...s.properties,sheetId:999,index:7,title:'공급사 · 1대'};
- x.spreadsheet.sheets.push(s);x.sheetInventory.push(s.properties);x.coverage.push({sheetId:999,endRowIndex:10,endColumnIndex:4});
+ x.spreadsheet.sheets.push(s);x.sheetInventory.push(s.properties);x.coverage.push({sheetId:999,endRowIndex:10,endColumnIndex:6});
  const r=planPresentation(x,opts);const p=r.requests.find(r=>r.updateSheetProperties?.properties.sheetId===999).updateSheetProperties;
  assert.equal(p.properties.title,'공급사 1대');assert.equal(p.properties.index,undefined);
  assert.ok(p.properties.tabColorStyle);assert.equal(r.counts[4].count,1);
