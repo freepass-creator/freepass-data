@@ -23,6 +23,8 @@ Firestore `(default)`, `asia-northeast3`를 실조회했다. RTDB는 사용하�
 토큰은 Secret Manager 등 서버의 비밀 저장소에서 공급하고 브라우저/Sheets 셀/로그에 넣지 않는다.
 다른 소비처의 토큰을 재사용하거나 요청자가 projection을 선택할 수 없다.
 허용된 public schema, ACTIVE 상태, manifest 및 input/data digest를 확인하고 실제 사용한 release ID를 응답한다.
+정상 응답에는 `authority=CANONICAL_ACTIVE`를 포함한다. 소비자는 이 값이 없는 응답이나
+`REFERENCE_ONLY` 보조 자료를 공식 ACTIVE release로 취급하지 않는다.
 현재 빈 release도 거부한다. 정상적인 전체 품절에 따른 빈 게시 허용은 별도 증거 계약이 필요하다.
 이는 데이터 무결성 검사이며 최신성·가격 의미·소비처 parity 검증을 대체하지 않는다.
 

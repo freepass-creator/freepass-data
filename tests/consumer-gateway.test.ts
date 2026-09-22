@@ -41,6 +41,7 @@ describe('read-only consumer gateway', () => {
     expect(result.statusCode).toBe(200);
     expect(result.headers['cache-control']).toBe('no-store');
     expect(result.json().meta.releaseId).toBe(release.releaseId);
+    expect(result.json().meta.authority).toBe('CANONICAL_ACTIVE');
     expect(result.json().meta.dataDigest).toBe(release.dataDigest);
     expect((await app.inject({ url: '/v1/consumers/whitelabel-test/catalog', headers })).statusCode).toBe(401);
     const other = await app.inject({ url: '/v1/consumers/whitelabel-test/catalog', headers: { authorization: `Bearer ${token}2` } });
