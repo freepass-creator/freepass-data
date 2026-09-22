@@ -23,6 +23,16 @@ ACTIVE release를 운영 PC에서 읽기 전까지 OBSERVE/HOLD다.
 
 ## 2026-09-22 continuous-audit durability checkpoint
 
+- `freepasserp4` production writer native schedule run `35705106480` succeeded on
+  2026-09-22 17:29 KST. It collected current sources, reconciled the settlement-ledger
+  intake/cancel vehicle locks, rebuilt ERP5, published one fixed snapshot to F01/F86,
+  and completed cell-level audit. Published inventory was 707 vehicles; F01/F86 missing,
+  residual and differing-cell counts were all zero.
+- The same run read 1,659 ERP5 product atoms and the existing settlement ledger state
+  (`접수` 80 plates, `취소` 31 plates; 30 cancellation candidates after excluding
+  re-intake). It found zero new locks and zero unlocks because ledger and atoms already
+  matched. Forty ledger plates were absent from the current atom; they were reported as
+  evidence and were not invented or force-added to inventory.
 - `main@d63d051`에서 권한을 실행 증거 계정과 `latest.json` 전용 계정으로 분리했다.
 - run `35693167169`, `35693329115`가 연속 성공했고 각 실행별 GCS 객체의 create-only 업로드와
   byte-for-byte readback, 포인터 generation 조건 갱신을 통과했다.
@@ -68,8 +78,9 @@ The only production refresh writer is `freepass-creator/freepasserp4`'s
 completed source collection, freepasserp5 update, F01/F86 publication and cell-level audit on 2026-09-22.
 FreePass Data continuous audit remains read-only and must not become a second writer.
 
-Immediate next step: observe the first native `schedule` event for both the ERP4 writer and this read-only monitor;
-manual/workflow recovery success is not native schedule-delivery proof. Continue field-semantic decisions for the
+Immediate next step: the ERP4 writer native `schedule` path is now observed. Observe the first native `schedule`
+event for the FreePass Data read-only monitor; manual/workflow recovery success is not native schedule-delivery
+proof for that separate workflow. Continue field-semantic decisions for the
 1,659 product records while retaining each FULL observation and delta in the private evidence bucket.
 
 ## 1. Last verified live read evidence — 2026-09-21 22:44 KST
