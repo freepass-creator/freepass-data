@@ -22,6 +22,7 @@ recovery timeliness HOLD, Source Contract의 stale `audit95-recorder` main-write
 
 - 원문, DRY RUN, delta는 비공개 GCS 버킷의 실행 ID별 immutable prefix에 저장한다.
 - `latest.json`은 다음 비교 대상을 가리키는 포인터일 뿐 원문을 덮어쓰지 않는다.
+- `latest.json` 조회에서 HTTP 404만 첫 관측으로 인정한다. 인증·네트워크·서버 오류는 실패로 닫고 기존 포인터를 전진시키지 않는다.
 - GitHub Artifact에는 원문 없이 요약만 90일 보존한다.
 - `source-inventory.json`은 원천별 개수와 구조·변화 인지를 위한 비민감 요약이다.
 - workflow와 검사 규칙은 Git에 남는다.

@@ -51,24 +51,56 @@ jobs:
           code=$?
           set -e
           test "$code" -eq 2
-          capture_path=$(jq -r '.privateCapturePath' capture-summary.json)
+          jq -e '
+            .status == "HOLD" and
+            .cutoverAuthorized == false and
+            .canonicalWriteAuthorized == false and
+            (.sourceDigest | type == "string" and length == 64) and
+            (.readTime | type == "string" and length > 0) and
+            (.products | type == "number" and . >= 0) and
+            (.policies | type == "number" and . >= 0) and
+            (.privateCapturePath | type == "string" and length > 0)
+          ' capture-summary.json >/dev/null
+          capture_path=$(jq -er '.privateCapturePath' capture-summary.json)
           test -f "$capture_path"
           echo "path=$capture_path" >> "$GITHUB_OUTPUT"
           echo "dir=$(dirname "$capture_path")" >> "$GITHUB_OUTPUT"
       - name: Load the last accepted observation pointer
         id: previous
+        env:
+          GCS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
         shell: bash
         run: |
+          set -euo pipefail
           previous_dir="$HOME/.codex/private/freepass-data-source-captures/previous"
           mkdir -p "$previous_dir"
-          if gcloud storage cp "gs://$EVIDENCE_BUCKET/latest.json" "$previous_dir/latest.json" 2>/dev/null; then
-            uri=$(jq -r '.captureUri' "$previous_dir/latest.json")
-            test "$uri" != null
+          http_code="$(curl --silent --show-error \
+            --output "$previous_dir/latest.json" \
+            --write-out '%{http_code}' \
+            --header "Authorization: Bearer $GCS_ACCESS_TOKEN" \
+            "https://storage.googleapis.com/storage/v1/b/$EVIDENCE_BUCKET/o/latest.json?alt=media")"
+          if [ "$http_code" = 200 ]; then
+            jq -e '
+              .version == "erp5-continuous-pointer/1" and
+              (.captureUri | type == "string" and length > 0) and
+              (.sourceDigest | type == "string" and length == 64) and
+              (.readTime | type == "string" and length > 0) and
+              (.runId | type == "string" and length > 0)
+            ' "$previous_dir/latest.json" >/dev/null
+            uri=$(jq -er '.captureUri' "$previous_dir/latest.json")
+            case "$uri" in
+              "gs://$EVIDENCE_BUCKET/runs/"*/source/capture.json) ;;
+              *) echo '::error::HOLD: latest.json captureUri is outside the evidence bucket run prefix'; exit 1 ;;
+            esac
             gcloud storage cp "$uri" "$previous_dir/capture.json"
             echo 'available=true' >> "$GITHUB_OUTPUT"
             echo "path=$previous_dir/capture.json" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$http_code" = 404 ]; then
+            rm -f "$previous_dir/latest.json"
             echo 'available=false' >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::HOLD: latest.json read failed with HTTP $http_code; preserving the last-known-good pointer"
+            exit 1
           fi
       - name: Build immutable dry-run and delta evidence
         shell: bash
@@ -82,6 +114,24 @@ jobs:
           code=$?
           set -e
           test "$code" -eq 2
+          jq -e '
+            .version == "erp5-canonical-dry-run/1" and
+            .status == "HOLD" and
+            .canonicalWriteAuthorized == false and
+            (.sourceDigest | type == "string" and length == 64) and
+            (.counts.sourceProducts | type == "number" and . >= 0) and
+            (.counts.candidates == .counts.sourceProducts) and
+            (.privateOutputPath | type == "string" and length > 0)
+          ' dry-run-summary.json >/dev/null
+          if [ '${{ steps.previous.outputs.available }}' = true ]; then
+            jq -e '
+              .delta != null and
+              .delta.destructiveActionAuthorized == false and
+              (.delta.digest | type == "string" and length == 64)
+            ' dry-run-summary.json >/dev/null
+          else
+            jq -e '.delta == null' dry-run-summary.json >/dev/null
+          fi
       - name: Build the source identity and count card
         shell: bash
         run: |
