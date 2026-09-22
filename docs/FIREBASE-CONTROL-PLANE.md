@@ -6,6 +6,16 @@ FreePass Data is the technical owner and control plane for shared FreePass Fireb
 
 The goal is not to expose Firestore more conveniently. The goal is to make Firestore replaceable and governable behind stable FreePass Data contracts.
 
+The user-facing mandate is: when an authorized user or service asks to get FreePass
+data, this control plane must be the single discoverable entry point for all managed
+`freepasserp5` data. A domain that has not yet been connected must appear as an
+explicit `HOLD`/unavailable capability instead of silently forcing the caller to know
+and read a Firestore collection path.
+
+This mandate does not create one unrestricted endpoint that dumps every document.
+Discovery is central; delivery remains separated by domain, purpose, organization,
+identity, field permission, contract version and sensitivity.
+
 ## 1. Ownership
 
 Long-term consumer applications do not own shared Firestore collection paths.
@@ -37,6 +47,31 @@ Consumers receive:
 - freshness/health metadata when applicable
 
 A consumer does not infer business meaning by joining internal Firestore collections itself.
+
+### 2.1 Unified discovery contract
+
+The control plane must eventually expose a versioned catalog of managed data domains.
+For each domain it reports at least:
+
+- stable domain and contract identifier
+- semantic owner and source system
+- read capability and current migration state
+- permitted consumer/purpose classes
+- schema/contract version
+- freshness and last verified evidence
+- supported filters, pagination and export limits
+- sensitivity classification
+- `AVAILABLE`, `PARTIAL`, `HOLD` or `UNAVAILABLE` status with reason
+
+A request such as “get FreePass Data” is resolved through this catalog and routed to
+the relevant domain read contract. Callers must not need Firestore collection names.
+Cross-domain results retain each record's stable ID, source, revision and observation
+time. They are not flattened in a way that destroys provenance or access boundaries.
+
+Catalog V1 is the first implemented domain. Customer, sales activity, application,
+contract, settlement, payment and document evidence are later domain connections;
+their discovery target is fixed here, but their writers and business rules remain
+with their approved owning systems until separately migrated and verified.
 
 ## 3. Write path
 

@@ -51,7 +51,7 @@
       "allOf": [{"$ref": "#/$defs/meta"}, {"type": "object", "required": ["id", "vehicleModelId", "commercialType", "status", "displayName"], "properties": {
         "id": {"type": "string"}, "vehicleModelId": {"type": "string"},
         "vehicleAssetId": {"type": ["string", "null"]},
-        "commercialType": {"enum": ["NEW_RENT", "USED_RENT", "NEW_SUBSCRIPTION", "USED_SUBSCRIPTION", "PICKUP_SUBSCRIPTION"]},
+        "commercialType": {"enum": ["NEW_RENT", "USED_RENT", "NEW_SUBSCRIPTION", "USED_SUBSCRIPTION", "OGONG_SUBSCRIPTION", "PICKUP_SUBSCRIPTION"]},
         "status": {"enum": ["ACTIVE", "HOLD", "SOLD", "ARCHIVED"]},
         "displayName": {"type": "string"}
       }}]

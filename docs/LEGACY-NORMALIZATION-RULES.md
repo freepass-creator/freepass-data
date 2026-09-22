@@ -10,6 +10,7 @@ Exact mapping:
 - 중고렌트 / 재렌트 -> USED_RENT
 - 신차구독 -> NEW_SUBSCRIPTION
 - 중고구독 / 재구독 -> USED_SUBSCRIPTION
+- 오공구독 -> OGONG_SUBSCRIPTION
 - 픽업구독 -> PICKUP_SUBSCRIPTION
 
 Unknown values produce an issue and are not guessed.

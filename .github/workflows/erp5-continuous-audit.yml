@@ -1,0 +1,216 @@
+name: ERP5 continuous read-only audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */2 * * *'
+
+concurrency:
+  group: erp5-continuous-read-only-audit
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ERP5_PROJECT_ID: freepasserp5
+      EVIDENCE_BUCKET: ${{ vars.ERP5_EVIDENCE_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Fail closed until the read-only identity and private bucket are configured
+        shell: bash
+        run: |
+          test -n '${{ vars.ERP5_WIF_PROVIDER }}'
+          test -n '${{ vars.ERP5_READ_SERVICE_ACCOUNT }}'
+          test -n "$EVIDENCE_BUCKET"
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.ERP5_WIF_PROVIDER }}
+          service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 900s
+      - name: Capture the current FULL Firestore snapshot
+        id: capture
+        shell: bash
+        env:
+          FREEPASS_ERP5_READ_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set +e
+          npx tsx src/jobs/inspect-erp5-source.ts --live-read-only > capture-summary.json
+          code=$?
+          set -e
+          test "$code" -eq 2
+          jq -e '
+            .status == "HOLD" and
+            .cutoverAuthorized == false and
+            .canonicalWriteAuthorized == false and
+            (.sourceDigest | type == "string" and length == 64) and
+            (.readTime | type == "string" and length > 0) and
+            (.products | type == "number" and . >= 0) and
+            (.policies | type == "number" and . >= 0) and
+            (.privateCapturePath | type == "string" and length > 0)
+          ' capture-summary.json >/dev/null
+          capture_path=$(jq -er '.privateCapturePath' capture-summary.json)
+          test -f "$capture_path"
+          echo "path=$capture_path" >> "$GITHUB_OUTPUT"
+          echo "dir=$(dirname "$capture_path")" >> "$GITHUB_OUTPUT"
+      - name: Load the last accepted observation pointer
+        id: previous
+        env:
+          GCS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous_dir="$HOME/.codex/private/freepass-data-source-captures/previous"
+          mkdir -p "$previous_dir"
+          http_code="$(curl --silent --show-error \
+            --output "$previous_dir/latest.json" \
+            --write-out '%{http_code}' \
+            --header "Authorization: Bearer $GCS_ACCESS_TOKEN" \
+            "https://storage.googleapis.com/storage/v1/b/$EVIDENCE_BUCKET/o/latest.json?alt=media")"
+          if [ "$http_code" = 200 ]; then
+            jq -e '
+              .version == "erp5-continuous-pointer/1" and
+              (.captureUri | type == "string" and length > 0) and
+              (.sourceDigest | type == "string" and length == 64) and
+              (.readTime | type == "string" and length > 0) and
+              (.runId | type == "string" and length > 0)
+            ' "$previous_dir/latest.json" >/dev/null
+            uri=$(jq -er '.captureUri' "$previous_dir/latest.json")
+            case "$uri" in
+              "gs://$EVIDENCE_BUCKET/runs/"*/source/capture.json) ;;
+              *) echo '::error::HOLD: latest.json captureUri is outside the evidence bucket run prefix'; exit 1 ;;
+            esac
+            gcloud storage cp "$uri" "$previous_dir/capture.json"
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+            echo "path=$previous_dir/capture.json" >> "$GITHUB_OUTPUT"
+          elif [ "$http_code" = 404 ]; then
+            rm -f "$previous_dir/latest.json"
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::HOLD: latest.json read failed with HTTP $http_code; preserving the last-known-good pointer"
+            exit 1
+          fi
+      - name: Build immutable dry-run and delta evidence
+        shell: bash
+        run: |
+          set +e
+          if [ '${{ steps.previous.outputs.available }}' = true ]; then
+            npm run dry-run:erp5-canonical -- --capture '${{ steps.capture.outputs.path }}' --previous '${{ steps.previous.outputs.path }}' > dry-run-summary.json
+          else
+            npm run dry-run:erp5-canonical -- --capture '${{ steps.capture.outputs.path }}' > dry-run-summary.json
+          fi
+          code=$?
+          set -e
+          test "$code" -eq 2
+          jq -e '
+            .version == "erp5-canonical-dry-run/1" and
+            .status == "HOLD" and
+            .canonicalWriteAuthorized == false and
+            (.sourceDigest | type == "string" and length == 64) and
+            (.counts.sourceProducts | type == "number" and . >= 0) and
+            (.counts.candidates == .counts.sourceProducts) and
+            (.privateOutputPath | type == "string" and length > 0)
+          ' dry-run-summary.json >/dev/null
+          if [ '${{ steps.previous.outputs.available }}' = true ]; then
+            jq -e '
+              .delta != null and
+              .delta.destructiveActionAuthorized == false and
+              (.delta.digest | type == "string" and length == 64)
+            ' dry-run-summary.json >/dev/null
+          else
+            jq -e '.delta == null' dry-run-summary.json >/dev/null
+          fi
+      - name: Build the source identity and count card
+        shell: bash
+        run: |
+          jq -n \
+            --slurpfile capture capture-summary.json \
+            --slurpfile dryRun dry-run-summary.json \
+            --arg runId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            '{
+              version: "erp5-source-inventory/1",
+              source: {
+                projectId: "freepasserp5",
+                databaseId: "(default)",
+                collections: {
+                  products: $capture[0].products,
+                  policy: $capture[0].policies
+                },
+                readTime: $capture[0].readTime,
+                digest: $capture[0].sourceDigest,
+                coverage: "FULL_SAME_READ_ONLY_TRANSACTION"
+              },
+              recognition: {
+                productFieldPathCount: $dryRun[0].fieldProfile.fieldPathCount,
+                mappedForReview: $dryRun[0].counts.mappedForReview,
+                mappingHold: $dryRun[0].counts.hold,
+                inventoryTransitionCount: ($dryRun[0].delta.inventoryTransitionCount // null)
+              },
+              change: ($dryRun[0].delta // {status:"FIRST_OBSERVATION"}),
+              authority: {
+                canonicalWriteAuthorized: false,
+                destructiveActionAuthorized: false
+              },
+              runId: $runId
+            }' > source-inventory.json
+          jq -e '
+            .source.collections.products >= 0 and
+            .source.collections.policy >= 0 and
+            .recognition.productFieldPathCount >= 0 and
+            .authority.canonicalWriteAuthorized == false and
+            .authority.destructiveActionAuthorized == false
+          ' source-inventory.json >/dev/null
+          {
+            echo '## ERP5 source identity and count card'
+            echo
+            echo '| Evidence | Value |'
+            echo '| --- | ---: |'
+            echo "| products | $(jq -r '.source.collections.products' source-inventory.json) |"
+            echo "| policy | $(jq -r '.source.collections.policy' source-inventory.json) |"
+            echo "| product field paths | $(jq -r '.recognition.productFieldPathCount' source-inventory.json) |"
+            echo "| added | $(jq -r '.change.counts.ADDED // "first observation"' source-inventory.json) |"
+            echo "| changed | $(jq -r '.change.counts.CHANGED // "first observation"' source-inventory.json) |"
+            echo "| missing from source | $(jq -r '.change.counts.MISSING_FROM_SOURCE // "first observation"' source-inventory.json) |"
+            echo "| inventory transitions | $(jq -r '.recognition.inventoryTransitionCount // "first observation"' source-inventory.json) |"
+            echo
+            echo "Read time: $(jq -r '.source.readTime' source-inventory.json)"
+            echo
+            echo "Source digest: $(jq -r '.source.digest' source-inventory.json)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Persist immutable evidence and advance only the observation pointer
+        shell: bash
+        run: |
+          run_uri="gs://$EVIDENCE_BUCKET/runs/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          gcloud storage cp '${{ steps.capture.outputs.dir }}'/*.json "$run_uri/source/"
+          gcloud storage cp capture-summary.json dry-run-summary.json source-inventory.json "$run_uri/"
+          capture_uri="$run_uri/source/capture.json"
+          jq -n \
+            --arg captureUri "$capture_uri" \
+            --arg sourceDigest "$(jq -r '.sourceDigest' capture-summary.json)" \
+            --arg readTime "$(jq -r '.readTime' capture-summary.json)" \
+            --arg runId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            '{version:"erp5-continuous-pointer/1",captureUri:$captureUri,sourceDigest:$sourceDigest,readTime:$readTime,runId:$runId}' \
+            > latest.json
+          gcloud storage cp latest.json "gs://$EVIDENCE_BUCKET/latest.json"
+      - name: Retain non-sensitive summaries for operator inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: erp5-audit-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            capture-summary.json
+            dry-run-summary.json
+            source-inventory.json
+          retention-days: 90
+          if-no-files-found: error

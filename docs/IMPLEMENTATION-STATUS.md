@@ -45,11 +45,14 @@ Implemented:
 - Firebase Control Plane contract for consumer reads/writes and future Console mutation paths
 - controlled Manual Catalog Source/Command with immutable RAW, candidate, lineage and receipt
 - direct-input vertical slice through reviewed Canonicalization and ACTIVE ERP Public Release
+- local product evidence trace from Source/RAW/Candidate through Canonical/Projection/Release
+- live Console record-list flow view: imported object → normalized object → outgoing object, with explicit local-only consumer boundary
 - exact Projection Release Manifest with Canonical input revisions and SHA-256 input/data digests
 - field-level Canonical → Projection evidence with SOURCE_LINEAGE vs REVISION_HISTORY provenance
 - BUILDING → VALIDATING → READY → ACTIVE evidence-gated Release promotion
 - reviewed source-fingerprint change diff/apply workflow with exact approval and all-entity revision pinning
 - source supplier-code mapping preserved separately from Canonical supplierId
+- consumer output ownership contract for F86: retro supplier view, long-term-only fees, and independent Sonogong supplier/product axes
 - SOURCE_REFRESH Revision/Audit/Lineage path for Offer pricing terms and VehicleAsset odometer
 - idempotent projection delivery receipts keyed by outbox event
 - equivalent ACTIVE Release reuse by input/data digest
@@ -62,17 +65,36 @@ Implemented:
 
 ## Current gap
 
+### Live state checked 2026-09-21
+
+The explicitly targeted `freepasserp5` Firestore currently has 1,659 legacy product
+documents and 81 legacy policy documents. The new `catalog_products`,
+`catalog_offers`, `catalog_policies` and `projection_active` collections are empty.
+Therefore the authenticated read runtime is implemented but has no publishable ACTIVE
+Catalog release. The current operational verdict is HOLD.
+
+Read-only source capture and policy-link analysis completed without writes. All 1,659
+products remain review HOLD; 1,342 policy references are exact link candidates and
+317 are unset. Canonical writes require explicit mapping decisions and a reviewed
+dry-run candidate set.
+
 The implementation has moved beyond the old Next list. The highest-value missing Catalog V1 platform contracts are now:
 
 1. **Server/service authentication + IAM enforcement**
 2. **ERP.com shadow/read pilot**
 3. **Console Data Explorer / Entity Detail / Command Edit**
 4. **Backup/restore and operational recovery verification**
+5. **Replace the separately pinned F01/F86 publisher rules with approved FreePass Data releases and consumer receipts**
 
 ## Local execution
 
+Windows setup and current local verification: [Local development](LOCAL-DEVELOPMENT.md).
+The local launcher forces memory mode and loopback binding. Dependency versions
+are pinned in `package-lock.json`. The memory-only Console serves at `/console`
+and provides a live Catalog read plus guarded Offer monthly-rent command flow.
+
 ```bash
-npm install
+npm ci
 npm run check
 npm run dev
 ```
@@ -84,6 +106,7 @@ Routes:
 ```
 GET  /health
 GET  /v1/views/erp-public/products
+GET  /v1/console/products/:productId/trace  # memory-only RAW-to-consumer evidence
 POST /v1/commands/offers/:offerId/price
 ```
 

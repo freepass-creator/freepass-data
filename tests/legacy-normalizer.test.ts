@@ -43,4 +43,23 @@ describe('legacy product normalizer', () => {
     expect(candidate.priceTerms[0]?.depositState).toBe('UNKNOWN');
     expect(candidate.priceTerms[0]?.deposit).toBeNull();
   });
+
+  it('preserves Ogong subscription as its own commercial type', () => {
+    const candidate = normalizeLegacyProduct({
+      sourceId: 'freepasserp3/firestore/products',
+      sourceRecordId: '68로3197',
+      observedAt: '2026-09-21T03:00:00Z',
+      fingerprint: 'ogong-1',
+      data: {
+        car_number: '68로3197',
+        model: '아이오닉5',
+        product_type: '오공구독',
+        provider_company_code: 'RP012',
+        price: { '36': { rent: 790000, deposit: '' } }
+      }
+    });
+
+    expect(candidate.commercialType).toBe('OGONG_SUBSCRIPTION');
+    expect(candidate.commercialType).not.toBe('USED_SUBSCRIPTION');
+  });
 });

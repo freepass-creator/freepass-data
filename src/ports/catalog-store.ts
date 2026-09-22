@@ -20,6 +20,7 @@ import type {
 } from '../domain/history.js';
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
 import type {
+  ActiveProjectionEvidenceSnapshot,
   ProjectionDeliveryReceipt,
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
@@ -88,7 +89,9 @@ export interface CatalogStore {
   getSourceRun(runId: string): Promise<SourceRun | null>;
   getSourceHead(sourceId: string): Promise<SourceHead | null>;
   getRawRecord(rawRecordId: string): Promise<RawRecord | null>;
+  listRawRecordsByRun(runId: string): Promise<RawRecord[]>;
   getCandidate(candidateId: string): Promise<NormalizedCandidateRecord | null>;
+  listCandidatesByRun(runId: string): Promise<NormalizedCandidateRecord[]>;
   getSourceBinding(bindingId: string): Promise<CanonicalSourceBinding | null>;
   getCanonicalizationReceipt(idempotencyKey: string): Promise<CanonicalizationReceipt | null>;
   getManualCatalogEntryReceipt(idempotencyKey: string): Promise<ManualCatalogEntryReceipt | null>;
@@ -138,6 +141,12 @@ export interface ProjectionStore {
   getDeliveryReceipt(eventId: string): Promise<ProjectionDeliveryReceipt | null>;
   putDeliveryReceipt(receipt: ProjectionDeliveryReceipt): Promise<void>;
 }
+export interface ProjectionEvidenceSnapshotStore {
+  getActiveEvidenceSnapshot(
+    projectionId: string
+  ): Promise<ActiveProjectionEvidenceSnapshot>;
+}
+
 export interface OutboxStore {
   claimNext(input: { workerId: string; now: string; leaseUntil: string }): Promise<OutboxEvent | null>;
   markDone(eventId: string): Promise<void>;
