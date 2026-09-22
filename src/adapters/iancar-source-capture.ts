@@ -15,19 +15,24 @@ const instant = (x: unknown): x is string => typeof x === 'string' && /^\d{4}-\d
   && Number.isFinite(Date.parse(x));
 const json = (x: unknown): x is Json => x === null || typeof x === 'string' || typeof x === 'boolean'
   || (typeof x === 'number' && Number.isFinite(x)) || (Array.isArray(x) && x.every(json))
-  || (!!x && typeof x === 'object' && !Array.isArray(x) && Object.values(x).every(json));
+  || (!!x && typeof x === 'object' && !Array.isArray(x)
+    && (Object.getPrototypeOf(x) === Object.prototype || Object.getPrototypeOf(x) === null)
+    && Object.values(x).every(json));
 const digest = (x: unknown) => createHash('sha256').update(JSON.stringify(x)).digest('hex');
 
 export type IancarCaptureTransport = {
   readErp(): Promise<{ sourceRevision: string; observedAt: string; collectionComplete: boolean;
-    vehicles: Json[]; rateQuotes: Json[]; rateCoverageComplete: boolean; raw: Json }>;
+    parserVersion: string; vehicles: Json[]; rateQuotes: Json[]; rateCoverageComplete: boolean; raw: Json }>;
   readSheetTab(tab: typeof IANCAR_SHEET_TABS[number]): Promise<{ sourceRevision: string; observedAt: string;
     collectionComplete: boolean; rowCount: number; rawCsv: string }>;
 };
 
 export type IancarSourceCapture = {
   version: typeof IANCAR_SOURCE_CAPTURE_VERSION; capturedAt: string;
-  erp: Awaited<ReturnType<IancarCaptureTransport['readErp']>>;
+  crossSourceConsistency: 'NON_ATOMIC';
+  erp: Awaited<ReturnType<IancarCaptureTransport['readErp']>> & {
+    rawDigest: string; vehicleDigest: string; rateQuoteDigest: string;
+  };
   sheet: { spreadsheetId: typeof IANCAR_SHEET_ID; tabs: Array<typeof IANCAR_SHEET_TABS[number]
     & Awaited<ReturnType<IancarCaptureTransport['readSheetTab']>>>; };
   digest: string;
@@ -38,7 +43,7 @@ export async function captureIancarSource(transport: IancarCaptureTransport): Pr
   const [erp, ...tabs] = await Promise.all([
     transport.readErp(), ...IANCAR_SHEET_TABS.map(tab => transport.readSheetTab(tab))
   ]);
-  if (!text(erp.sourceRevision) || !instant(erp.observedAt) || typeof erp.collectionComplete !== 'boolean'
+  if (!text(erp.sourceRevision) || !instant(erp.observedAt) || !text(erp.parserVersion) || typeof erp.collectionComplete !== 'boolean'
     || typeof erp.rateCoverageComplete !== 'boolean' || !Array.isArray(erp.vehicles) || !erp.vehicles.every(json)
     || !Array.isArray(erp.rateQuotes) || !erp.rateQuotes.every(json) || !json(erp.raw)) throw new Error('INVALID_IANCAR_ERP_CAPTURE');
   const sheetTabs = tabs.map((value, index) => {
@@ -48,8 +53,11 @@ export async function captureIancarSource(transport: IancarCaptureTransport): Pr
     }
     return { ...IANCAR_SHEET_TABS[index]!, ...structuredClone(value) };
   });
-  const unsigned = { version: IANCAR_SOURCE_CAPTURE_VERSION as typeof IANCAR_SOURCE_CAPTURE_VERSION, capturedAt: new Date().toISOString(),
-    erp: structuredClone(erp), sheet: { spreadsheetId: IANCAR_SHEET_ID as typeof IANCAR_SHEET_ID, tabs: sheetTabs } };
+  const unsigned = { version: IANCAR_SOURCE_CAPTURE_VERSION as typeof IANCAR_SOURCE_CAPTURE_VERSION,
+    capturedAt: new Date().toISOString(), crossSourceConsistency: 'NON_ATOMIC' as const,
+    erp: { ...structuredClone(erp), rawDigest: digest(erp.raw), vehicleDigest: digest(erp.vehicles),
+      rateQuoteDigest: digest(erp.rateQuotes) },
+    sheet: { spreadsheetId: IANCAR_SHEET_ID as typeof IANCAR_SHEET_ID, tabs: sheetTabs } };
   return { ...unsigned, digest: digest(unsigned) };
 }
 
@@ -57,6 +65,9 @@ export async function captureIancarSource(transport: IancarCaptureTransport): Pr
 export function inspectIancarCapture(capture: IancarSourceCapture) {
   const { digest: claimed, ...unsigned } = capture;
   if (claimed !== digest(unsigned)) throw new Error('IANCAR_CAPTURE_DIGEST_MISMATCH');
+  if (capture.crossSourceConsistency !== 'NON_ATOMIC' || capture.erp.rawDigest !== digest(capture.erp.raw)
+    || capture.erp.vehicleDigest !== digest(capture.erp.vehicles)
+    || capture.erp.rateQuoteDigest !== digest(capture.erp.rateQuotes)) throw new Error('IANCAR_DERIVATION_DIGEST_MISMATCH');
   const coverageComplete = capture.erp.collectionComplete && capture.sheet.tabs.every(tab => tab.collectionComplete);
   const pricingComplete = capture.erp.rateCoverageComplete;
   return {
@@ -64,7 +75,7 @@ export function inspectIancarCapture(capture: IancarSourceCapture) {
     canonicalWriteAuthorized: false as const, cutoverAuthorized: false as const, sourceDigest: capture.digest,
     erpVehicles: capture.erp.vehicles.length, erpRateQuotes: capture.erp.rateQuotes.length,
     sheetRows: Object.fromEntries(capture.sheet.tabs.map(tab => [tab.title, tab.rowCount])),
-    coverageComplete, pricingComplete,
+    coverageComplete, pricingComplete, crossSourceConsistency: capture.crossSourceConsistency,
     remaining: [...(!coverageComplete ? ['SOURCE_COLLECTION_INCOMPLETE'] : []),
       ...(!pricingComplete ? ['ERP_RATE_COVERAGE_INCOMPLETE'] : []), 'NO_CANONICAL_WRITE_OR_CONSUMER_CUTOVER']
   };
