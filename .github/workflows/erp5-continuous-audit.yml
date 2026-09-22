@@ -107,9 +107,9 @@ jobs:
         run: |
           set +e
           if [ '${{ steps.previous.outputs.available }}' = true ]; then
-            npm run dry-run:erp5-canonical -- --capture '${{ steps.capture.outputs.path }}' --previous '${{ steps.previous.outputs.path }}' > dry-run-summary.json
+            npx tsx src/jobs/build-erp5-canonical-dry-run.ts --capture '${{ steps.capture.outputs.path }}' --previous '${{ steps.previous.outputs.path }}' > dry-run-summary.json
           else
-            npm run dry-run:erp5-canonical -- --capture '${{ steps.capture.outputs.path }}' > dry-run-summary.json
+            npx tsx src/jobs/build-erp5-canonical-dry-run.ts --capture '${{ steps.capture.outputs.path }}' > dry-run-summary.json
           fi
           code=$?
           set -e
