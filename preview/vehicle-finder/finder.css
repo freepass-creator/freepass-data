@@ -297,6 +297,7 @@
   }
   .vf .vf-back{display:block}
   .vf .vf-actionbar button{min-height:48px}
+  .vf.vf-inspecting .vf-selection:not(.vf-selection-success){margin-bottom:calc(76px + env(safe-area-inset-bottom))}
 }
 
 @media(max-width:640px){
