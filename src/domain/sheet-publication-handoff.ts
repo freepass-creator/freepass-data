@@ -181,6 +181,13 @@ export function validateSheetPublicationHandoff(
     violations.push('MANIFEST_EVIDENCE_MISMATCH');
   }
 
+  if (
+    manifest.sourceReadTime !== handoff.approvedRelease.observedAt ||
+    handoff.snapshot.snapshotId !== handoff.approvedRelease.releaseId
+  ) {
+    violations.push('RELEASE_LINEAGE_MISMATCH');
+  }
+
   const snapshotDataDigest = hashSheetPublicationData(handoff.snapshot);
   if (snapshotDataDigest !== handoff.approvedRelease.dataDigest) {
     violations.push('SNAPSHOT_DATA_DIGEST_MISMATCH');
