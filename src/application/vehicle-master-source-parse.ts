@@ -40,6 +40,7 @@ function persistedTrim(record: VehicleMasterParsedTrim) {
     currency: record.currency,
     effectiveFrom: record.effectiveFrom ?? null,
     baseItems: record.baseItems,
+    baseItemDetails: record.baseItemDetails ?? [],
     options: record.options,
     sourceTextHash: stableDigest(sourceText),
     sourceTextExcerpt: sourceText.slice(0, 16_000),
