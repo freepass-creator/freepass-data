@@ -1,4 +1,5 @@
 import { getTargetFirebaseApp } from './firebase-target.js';
+import { SOURCE_FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './source-firestore-layout.js';
 import { getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type {
   AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
@@ -48,12 +49,12 @@ const C = {
   reviewedSourceChangeReceipts: 'reviewed_source_change_receipts',
   writerOwnership: 'writer_ownership',
   writerOwnershipTransferReceipts: 'writer_ownership_transfer_receipts',
-  sources: 'sources',
-  sourceRuns: 'source_runs',
-  sourceHeads: 'source_heads',
-  raw: 'raw_records',
-  candidates: 'normalized_candidates',
-  lineage: 'field_lineage',
+  sources: SOURCE_FIRESTORE_COLLECTIONS.sources,
+  sourceRuns: SOURCE_FIRESTORE_COLLECTIONS.runs,
+  sourceHeads: SOURCE_FIRESTORE_COLLECTIONS.heads,
+  raw: SOURCE_FIRESTORE_COLLECTIONS.raw,
+  candidates: SOURCE_FIRESTORE_COLLECTIONS.candidates,
+  lineage: SOURCE_FIRESTORE_COLLECTIONS.lineage,
   sourceBindings: 'canonical_source_bindings',
   revisions: 'catalog_entity_revisions',
   audits: 'audit_events',
@@ -97,11 +98,11 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
 
         getSourceDefinition: async (sourceId) =>
           data<SourceDefinition>(
-            await native.get(this.db.collection(C.sources).doc(sourceId.replaceAll('/', '__')))
+            await native.get(this.db.collection(C.sources).doc(sourceFirestoreDocumentId(sourceId)))
           ),
         putSourceDefinition: async (source) => {
           native.create(
-            this.db.collection(C.sources).doc(source.sourceId.replaceAll('/', '__')),
+            this.db.collection(C.sources).doc(source.sourceFirestoreDocumentId(sourceId)),
             source
           );
         },
@@ -112,31 +113,31 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         },
         getSourceHead: async (sourceId) =>
           data<SourceHead>(
-            await native.get(this.db.collection(C.sourceHeads).doc(sourceId.replaceAll('/', '__')))
+            await native.get(this.db.collection(C.sourceHeads).doc(sourceFirestoreDocumentId(sourceId)))
           ),
         putSourceHead: async (head) => {
           native.create(
-            this.db.collection(C.sourceHeads).doc(head.sourceId.replaceAll('/', '__')),
+            this.db.collection(C.sourceHeads).doc(head.sourceFirestoreDocumentId(sourceId)),
             head
           );
         },
         getRawRecord: async (rawRecordId) =>
           data<RawRecord>(
-            await native.get(this.db.collection(C.raw).doc(rawRecordId.replaceAll('/', '__')))
+            await native.get(this.db.collection(C.raw).doc(sourceFirestoreDocumentId(rawRecordId)))
           ),
         putRawRecord: async (record) => {
           native.create(
-            this.db.collection(C.raw).doc(record.rawRecordId.replaceAll('/', '__')),
+            this.db.collection(C.raw).doc(record.sourceFirestoreDocumentId(rawRecordId)),
             record
           );
         },
         getCandidate: async (candidateId) =>
           data<NormalizedCandidateRecord>(
-            await native.get(this.db.collection(C.candidates).doc(candidateId.replaceAll('/', '__')))
+            await native.get(this.db.collection(C.candidates).doc(sourceFirestoreDocumentId(candidateId)))
           ),
         putCandidate: async (record) => {
           native.create(
-            this.db.collection(C.candidates).doc(record.candidateId.replaceAll('/', '__')),
+            this.db.collection(C.candidates).doc(record.sourceFirestoreDocumentId(candidateId)),
             record
           );
         },
@@ -254,7 +255,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async getOffer(id: string) { return data<Offer>(await this.db.collection(C.offers).doc(id).get()); }
   async getSourceDefinition(sourceId: string) {
     return data<SourceDefinition>(
-      await this.db.collection(C.sources).doc(sourceId.replaceAll('/', '__')).get()
+      await this.db.collection(C.sources).doc(sourceFirestoreDocumentId(sourceId)).get()
     );
   }
   async getSourceRun(runId: string) {
@@ -262,12 +263,12 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   }
   async getSourceHead(sourceId: string) {
     return data<SourceHead>(
-      await this.db.collection(C.sourceHeads).doc(sourceId.replaceAll('/', '__')).get()
+      await this.db.collection(C.sourceHeads).doc(sourceFirestoreDocumentId(sourceId)).get()
     );
   }
   async getRawRecord(rawRecordId: string) {
     return data<RawRecord>(
-      await this.db.collection(C.raw).doc(rawRecordId.replaceAll('/', '__')).get()
+      await this.db.collection(C.raw).doc(sourceFirestoreDocumentId(rawRecordId)).get()
     );
   }
   async listRawRecordsByRun(runId: string) {
@@ -276,7 +277,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   }
   async getCandidate(candidateId: string) {
     return data<NormalizedCandidateRecord>(
-      await this.db.collection(C.candidates).doc(candidateId.replaceAll('/', '__')).get()
+      await this.db.collection(C.candidates).doc(sourceFirestoreDocumentId(candidateId)).get()
     );
   }
   async listCandidatesByRun(runId: string) {
