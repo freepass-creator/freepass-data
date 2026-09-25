@@ -10,6 +10,7 @@
     "workbook",
     "spreadsheetId",
     "approvedRelease",
+    "renderedOutput",
     "publicationStartedAt",
     "publicationCompletedAt",
     "readback"
@@ -37,6 +38,16 @@
         "inputDigest": { "type": "string", "minLength": 1 },
         "dataDigest": { "type": "string", "minLength": 1 },
         "observedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "renderedOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transformContractId", "vehicleKeyCount", "dataDigest"],
+      "properties": {
+        "transformContractId": { "type": "string", "minLength": 1 },
+        "vehicleKeyCount": { "type": "integer", "minimum": 0 },
+        "dataDigest": { "type": "string", "minLength": 1 }
       }
     },
     "publicationStartedAt": { "type": "string", "format": "date-time" },

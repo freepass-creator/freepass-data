@@ -32,10 +32,19 @@ F01/F86 are downstream transports, not SSOT owners.
 
 A sheet writer may publish only from an approved FreePass Data release. Completion
 requires a `freepass-sheet-delivery-v1` receipt that binds the target workbook
-to the exact `projectionId/releaseId/manifestId/inputDigest/dataDigest` and records
-a successful readback. The executable validator is
+to the exact `projectionId/releaseId/manifestId/inputDigest/dataDigest`, records the
+render transform contract and its expected output digest/count, and then requires
+a successful readback of that rendered output. The executable validator is
 `src/domain/consumer-delivery.ts`; the JSON contract is
 `contracts/sheet-delivery-receipt.v1.schema.json`.
 
 Until that receipt exists and validates, F01/F86 remain HOLD even if a legacy
 publisher produced matching rows from another snapshot.
+
+
+The projection `dataDigest` and the rendered sheet `dataDigest` are deliberately
+different digest domains. A sheet renderer changes shape, grouping, columns, and
+presentation, so comparing the native sheet readback digest directly with the
+projection digest is invalid. The receipt proves release identity through
+`approvedRelease`, then proves transport integrity by comparing
+`renderedOutput.dataDigest/vehicleKeyCount` with the readback values.

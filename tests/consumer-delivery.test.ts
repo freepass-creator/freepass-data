@@ -21,19 +21,24 @@ function receipt(overrides: Partial<SheetDeliveryReceipt> = {}): SheetDeliveryRe
     workbook: 'F01',
     spreadsheetId: 'sheet-f01',
     approvedRelease: { ...release },
+    renderedOutput: {
+      transformContractId: 'f01-standard-v1',
+      vehicleKeyCount: 692,
+      dataDigest: 'sheet_output_digest'
+    },
     publicationStartedAt: '2026-09-25T07:01:00.000Z',
     publicationCompletedAt: '2026-09-25T07:02:00.000Z',
     readback: {
       verified: true,
       vehicleKeyCount: 692,
-      dataDigest: release.dataDigest
+      dataDigest: 'sheet_output_digest'
     },
     ...overrides
   };
 }
 
 describe('sheet delivery receipt', () => {
-  it('accepts a readback-verified receipt bound to the exact approved release', () => {
+  it('accepts a readback-verified receipt even when projection and rendered digests differ by domain', () => {
     expect(validateSheetDeliveryReceipt(receipt(), release)).toEqual({
       status: 'PASS',
       violations: []
@@ -65,8 +70,21 @@ describe('sheet delivery receipt', () => {
     expect(result.status).toBe('HOLD');
     expect(result.violations).toEqual(expect.arrayContaining([
       'RELEASE_ID_MISMATCH',
-      'READBACK_DATA_DIGEST_MISMATCH'
+      'READBACK_OUTPUT_DIGEST_MISMATCH'
     ]));
+  });
+
+  it('blocks a rendered/readback vehicle-key count mismatch', () => {
+    const result = validateSheetDeliveryReceipt(receipt({
+      readback: {
+        verified: true,
+        vehicleKeyCount: 691,
+        dataDigest: 'sheet_output_digest'
+      }
+    }), release);
+
+    expect(result).toMatchObject({ status: 'HOLD' });
+    expect(result.violations).toContain('READBACK_VEHICLE_KEY_COUNT_MISMATCH');
   });
 
   it('requires actual readback and a valid publication window', () => {
@@ -76,7 +94,7 @@ describe('sheet delivery receipt', () => {
       readback: {
         verified: false,
         vehicleKeyCount: 692,
-        dataDigest: release.dataDigest
+        dataDigest: 'sheet_output_digest'
       }
     }), release);
 
