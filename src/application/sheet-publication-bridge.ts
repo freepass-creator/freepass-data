@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ERP5_DOCUMENTS, type Erp5ReadRpc } from '../adapters/erp5-source-capture.js';
+import { hasSonokongDepositRuleViolation } from '../domain/consumer-output-contract.js';
 import {
   hashSheetPublicationHandoff,
   hashSheetPublicationData,
