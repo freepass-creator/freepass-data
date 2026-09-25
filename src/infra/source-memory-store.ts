@@ -6,12 +6,12 @@ import type {
   SourceRun
 } from '../domain/source.js';
 import { canAdvanceSourceHead, isValidSourceObservation } from '../domain/source.js';
-import type { SourceStore } from '../ports/source-store.js';
+import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 
 const copy = <T>(value: T): T => structuredClone(value);
 
-export class MemorySourceStore implements SourceStore {
+export class MemorySourceStore implements SourceIngestionStore {
   private sources = new Map<string, SourceDefinition>();
   private runs = new Map<string, SourceRun>();
   private raw = new Map<string, RawRecord>();
@@ -42,7 +42,7 @@ export class MemorySourceStore implements SourceStore {
     this.lineage.set(record.lineageRecordId, copy(record));
   }
 
-  async completeRun(input: Parameters<SourceStore['completeRun']>[0]) {
+  async completeRun(input: Parameters<SourceIngestionStore['completeRun']>[0]) {
     const run = this.runs.get(input.runId);
     if (!run) throw new Error(`Source run not found: ${input.runId}`);
 
@@ -93,7 +93,7 @@ export class MemorySourceStore implements SourceStore {
     };
   }
 
-  async failRun(input: Parameters<SourceStore['failRun']>[0]) {
+  async failRun(input: Parameters<SourceIngestionStore['failRun']>[0]) {
     const run = this.runs.get(input.runId);
     if (!run) throw new Error(`Source run not found: ${input.runId}`);
     Object.assign(run, { status: 'FAILED', completedAt: input.completedAt, error: input.error });
