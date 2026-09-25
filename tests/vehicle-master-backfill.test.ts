@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildRecentFirstBackfillQueue,
+  discoverAdditionalVehicleMasterInventoryPages,
   discoverVehicleMasterPages,
 } from '../src/application/vehicle-master-backfill.js';
 
@@ -47,6 +48,44 @@ describe('vehicle master recent-first backfill', () => {
     expect(pages).toHaveLength(1);
     expect(pages[0]?.sourceUrl).toContain('Work=estimate');
     expect(pages[0]?.latestModelYearHint).toBe(2027);
+  });
+
+  it('discovers source-specific detail URLs even when they are not anchor hrefs', () => {
+    const html = Buffer.from(`
+      <script>
+        const carnoon = "/newcar/vehicle/11572";
+      </script>
+    `, 'utf8');
+
+    const pages = discoverVehicleMasterPages({
+      sourceKey: 'CARNOON',
+      inventoryUrl: 'https://www.carnoon.co.kr/newcar/search',
+      bytes: html,
+    });
+
+    expect(pages.map((x) => x.sourceUrl)).toEqual([
+      'https://www.carnoon.co.kr/newcar/vehicle/11572',
+    ]);
+  });
+
+  it('discovers CarIsYou brand inventory shards from filter inputs', () => {
+    const html = Buffer.from(`
+      <form>
+        <input type="checkbox" name="srhBrandArry" value="43">
+        <input type="checkbox" name="srhBrandArry[]" value="787">
+        <a href="/car/?srhBrandArry=2246">토요타</a>
+      </form>
+    `, 'utf8');
+
+    expect(discoverAdditionalVehicleMasterInventoryPages({
+      sourceKey: 'CARISYOU',
+      inventoryUrl: 'https://www.carisyou.com/car/',
+      bytes: html,
+    })).toEqual([
+      'https://www.carisyou.com/car/?srhBrandArry=43',
+      'https://www.carisyou.com/car/?srhBrandArry=787',
+      'https://www.carisyou.com/car/?srhBrandArry=2246',
+    ]);
   });
 
   it('discovers CarIsYou historical/current detail pages and can skip completed URLs', () => {
