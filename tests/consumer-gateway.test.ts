@@ -161,13 +161,20 @@ describe('read-only consumer gateway', () => {
     await app.close();
   });
 
-  it('returns 503 when a health-capable registration has no Health reader', async () => {
+  it('returns 503 and audits denial when a health-capable registration has no Health reader', async () => {
     const store = new MemoryDataStore();
-    const { app } = withAccess(store, [healthBinding]);
+    const { app, logs } = withAccess(store, [healthBinding]);
 
     const result = await app.inject({ url: healthUrl, headers });
     expect(result.statusCode).toBe(503);
     expect(result.json()).toEqual({ code: 'HEALTH_READER_UNAVAILABLE' });
+    expect(logs.events).toHaveLength(1);
+    expect(logs.events[0]).toMatchObject({
+      mode: 'READ',
+      phase: 'DENIED',
+      operation: 'READ_CATALOG_HEALTH',
+      reasonCode: 'HEALTH_READER_UNAVAILABLE'
+    });
 
     await app.close();
   });
