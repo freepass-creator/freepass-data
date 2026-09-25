@@ -21,6 +21,7 @@ export type VehicleMasterReconciledOption = {
   kind: VehicleMasterParsedOptionKind;
   price: number | null;
   note: string | null;
+  packageItems: string[];
   conditions: VehicleMasterParsedCondition[];
   sourceDocumentIds: string[];
 };
@@ -36,6 +37,7 @@ export type VehicleMasterReconciledTrim = {
   currency: 'KRW';
   effectiveFrom: string | null;
   baseItems: string[];
+  baseItemDetails?: Array<{ category: string | null; name: string; sourceDocumentIds: string[] }>;
   options: VehicleMasterReconciledOption[];
   sourceDocumentIds: string[];
   fieldEvidence: Record<string, string[]>;
@@ -116,6 +118,7 @@ function mergeOptions(rows: VehicleMasterParsedSourceRecord[]): VehicleMasterRec
     kind: VehicleMasterParsedOptionKind;
     price: number | null;
     notes: string[];
+    packageItems: string[];
     conditions: VehicleMasterParsedCondition[];
     sourceDocumentIds: string[];
   }>();
@@ -129,10 +132,12 @@ function mergeOptions(rows: VehicleMasterParsedSourceRecord[]): VehicleMasterRec
         kind,
         price: option.price,
         notes: [],
+        packageItems: [],
         conditions: [],
         sourceDocumentIds: [],
       };
       if (option.note) current.notes.push(option.note);
+      current.packageItems.push(...(option.packageItems ?? []));
       current.conditions.push(...(option.conditions ?? []));
       current.sourceDocumentIds.push(row.sourceDocumentId);
       byIdentity.set(key, current);
@@ -145,6 +150,7 @@ function mergeOptions(rows: VehicleMasterParsedSourceRecord[]): VehicleMasterRec
       kind: option.kind,
       price: option.price,
       note: uniqueSorted(option.notes).join(' / ') || null,
+      packageItems: uniqueSorted(option.packageItems),
       conditions: option.conditions.filter(
         (condition, index, values) =>
           values.findIndex(
@@ -157,6 +163,38 @@ function mergeOptions(rows: VehicleMasterParsedSourceRecord[]): VehicleMasterRec
       sourceDocumentIds: uniqueSorted(option.sourceDocumentIds),
     }))
     .sort((a, b) => a.name.localeCompare(b.name) || (a.price ?? -1) - (b.price ?? -1));
+}
+
+
+function mergeBaseItemDetails(rows: VehicleMasterParsedSourceRecord[]) {
+  const byIdentity = new Map<string, {
+    category: string | null;
+    name: string;
+    sourceDocumentIds: string[];
+  }>();
+
+  for (const row of rows) {
+    for (const item of row.record.baseItemDetails ?? []) {
+      const key = JSON.stringify([item.category ?? null, normalized(item.name)]);
+      const current = byIdentity.get(key) ?? {
+        category: item.category ?? null,
+        name: item.name,
+        sourceDocumentIds: [],
+      };
+      current.sourceDocumentIds.push(row.sourceDocumentId);
+      byIdentity.set(key, current);
+    }
+  }
+
+  return [...byIdentity.values()]
+    .map((item) => ({
+      ...item,
+      sourceDocumentIds: uniqueSorted(item.sourceDocumentIds),
+    }))
+    .sort((a, b) =>
+      String(a.category ?? '').localeCompare(String(b.category ?? '')) ||
+      a.name.localeCompare(b.name)
+    );
 }
 
 export function reconcileVehicleMasterTrimFacts(
@@ -195,6 +233,7 @@ export function reconcileVehicleMasterTrimFacts(
       currency: (currency.value ?? 'KRW') as 'KRW',
       effectiveFrom: effectiveDates[0] ?? null,
       baseItems: uniqueSorted(group.flatMap((row) => row.record.baseItems)),
+      baseItemDetails: mergeBaseItemDetails(group),
       options: mergeOptions(group),
       sourceDocumentIds,
       fieldEvidence: {
