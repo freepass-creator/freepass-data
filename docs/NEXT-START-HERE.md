@@ -9,7 +9,7 @@ Date: 2026-09-22
 
 ## 2026-09-26 development-lineage consolidation
 
-Repository development authority is now explicitly locked in [DEVELOPMENT-LINEAGE.md](DEVELOPMENT-LINEAGE.md).
+Repository development authority is now machine-locked in `contracts/development-responsibility-registry.v1.json` and explained in [DEVELOPMENT-LINEAGE.md](DEVELOPMENT-LINEAGE.md). Every canonical PR must declare `Responsibility-ID` + `Lineage-Mode`; `npm run check:lineage` validates repository-local ownership and `npm run audit:open-pr-lineage` validates live GitHub open-PR uniqueness when network access is available.
 
 - Vehicle Master / new+used ingestion / Estimate master-data projection: canonical WIP is PR #58 only.
 - Consumer release / Sheet handoff / audited Data Access: canonical WIP is PR #54 only.
