@@ -210,11 +210,21 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     title.id = `${prefix}-title`;
     title.tabIndex = -1;
     detail.setAttribute('aria-labelledby', title.id);
-    detail.append(
+
+    const detailHead = element('div', 'vf-detail-head');
+    const detailTitle = element('div', 'vf-detail-title');
+    detailTitle.append(
       title,
       element('p', 'vf-path', pathText(entry)),
       element('p', 'vf-note', `${LEVELS[entry.nodeType]} 수준 · 차량 구성 미확정`),
     );
+    const close = element('button', 'vf-detail-close', '×');
+    close.type = 'button';
+    close.setAttribute('aria-label', '상세 닫기');
+    close.title = '상세 닫기';
+    listen(close, 'click', () => closeDetail());
+    detailHead.append(detailTitle, close);
+    detail.append(detailHead);
 
     const matchedConfigurations = match.matchedConfigurationIds
       .map(configurationId => entry.configurations.find(item => item.id === configurationId))
@@ -262,7 +272,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     detail.append(evidence);
 
     const actions = element('div', 'vf-actionbar');
-    const back = element('button', 'vf-secondary', '목록으로');
+    const back = element('button', 'vf-secondary vf-back', '목록으로');
     back.type = 'button';
     listen(back, 'click', () => closeDetail());
 
