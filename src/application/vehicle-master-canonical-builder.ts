@@ -210,7 +210,7 @@ export function buildVehicleMasterTrimProposalSet(input: {
     revision,
     sourceEvidenceIds,
     sourceDocumentIds: sourceEvidenceIds,
-    effectiveFrom: null,
+    effectiveFrom: priceEffectiveFrom,
     effectiveTo: null,
     createdAt: input.observedAt,
     updatedAt: input.observedAt,
