@@ -117,6 +117,50 @@ describe('common vehicle selector', () => {
     ]);
   });
 
+  it('guides new-car UI to the first ambiguous axis without making it mandatory', () => {
+    const rows = [
+      record('hybrid'),
+      record('gasoline', {
+        powertrain: { id: 'pt_gasoline', label: '2.5 가솔린 터보' },
+        fuelType: { id: null, label: 'GASOLINE' },
+        trim: { id: 'trim_prestige', label: '프레스티지' },
+      }),
+    ];
+
+    const initial = selectVehicles(rows, { mode: 'NEW_CAR' });
+    expect(initial.guidance.singletonAxes).toEqual(
+      expect.arrayContaining(['maker', 'model'])
+    );
+    expect(initial.guidance.ambiguousAxes).toEqual(
+      expect.arrayContaining(['powertrain', 'trim'])
+    );
+    expect(initial.guidance.suggestedNextAxis).toBe('powertrain');
+
+    const narrowed = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      selection: { powertrain: '하이브리드' },
+    });
+    expect(narrowed.guidance.resolvedRecordId).toBe('hybrid');
+  });
+
+  it('surfaces historical ambiguity to used-car UI instead of forcing a path', () => {
+    const rows = [
+      record('year-2027'),
+      record('year-2021', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      selection: { model: '쏘렌토' },
+    });
+
+    expect(result.guidance.ambiguousAxes).toContain('modelYear');
+    expect(result.guidance.suggestedNextAxis).toBe('modelYear');
+  });
+
   it('keeps UX presets separate from selector semantics', () => {
     expect(VEHICLE_SELECTOR_UX_PRESETS.NEW_CAR.presentation).toBe('GUIDED');
     expect(VEHICLE_SELECTOR_UX_PRESETS.USED_CAR.presentation).toBe('SEARCH_FILTER');
