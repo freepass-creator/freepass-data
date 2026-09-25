@@ -30,19 +30,31 @@
         "minLength": 1
       },
       "vehicleModelId": {
-        "type": "string",
+        "type": [
+          "string",
+          "null"
+        ],
         "minLength": 1
       },
       "modelYearId": {
-        "type": "string",
+        "type": [
+          "string",
+          "null"
+        ],
         "minLength": 1
       },
       "trimId": {
-        "type": "string",
+        "type": [
+          "string",
+          "null"
+        ],
         "minLength": 1
       },
       "powertrainId": {
-        "type": "string",
+        "type": [
+          "string",
+          "null"
+        ],
         "minLength": 1
       },
       "maker": {
@@ -54,7 +66,10 @@
         "minLength": 1
       },
       "modelYear": {
-        "type": "integer",
+        "type": [
+          "integer",
+          "null"
+        ],
         "minimum": 1900,
         "maximum": 2200
       },
@@ -83,7 +98,10 @@
           ],
           "properties": {
             "optionId": {
-              "type": "string",
+              "type": [
+                "string",
+                "null"
+              ],
               "minLength": 1
             },
             "name": {
@@ -187,7 +205,10 @@
       ],
       "properties": {
         "colorId": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1
         },
         "name": {
