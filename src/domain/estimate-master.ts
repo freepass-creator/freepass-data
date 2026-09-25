@@ -145,7 +145,7 @@ export function validateEstimateMasterSemantics(
       ] as const) {
         if (!value) issues.push({ code: 'ACTIVE_STABLE_ID_REQUIRED', productId: record.productId, field });
       }
-      if (!Number.isInteger(record.modelYear)) {
+      if (typeof record.modelYear !== 'number' || !Number.isInteger(record.modelYear)) {
         issues.push({ code: 'ACTIVE_MODEL_YEAR_REQUIRED', productId: record.productId, field: 'modelYear' });
       }
       if (record.exteriorColors.some((color) => !color.colorId)) {
