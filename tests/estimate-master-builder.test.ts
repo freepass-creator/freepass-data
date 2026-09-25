@@ -111,6 +111,20 @@ describe('Estimate new-car master builder', () => {
     expect(record.holdReasons).toContain('OPTION_REQUIRES_UNKNOWN');
   });
 
+  it('keeps acknowledged semantic defects as HOLD records in the release set', () => {
+    const records = buildEstimateNewcarMaster([candidate({
+      options: [{
+        optionId: 'opt_1',
+        name: '드라이브 와이즈',
+        price: { amount: 700000, currency: 'KRW' },
+        requires: ['opt_missing'],
+        excludes: []
+      }]
+    })]);
+    expect(records[0]?.status).toBe('HOLD');
+    expect(records[0]?.holdReasons).toContain('OPTION_REQUIRES_UNKNOWN');
+  });
+
   it('rejects duplicate product IDs across the release set', () => {
     expect(() => buildEstimateNewcarMaster([candidate(), candidate({ trimId: 'trim_2' })]))
       .toThrow('DUPLICATE_PRODUCT_ID');
