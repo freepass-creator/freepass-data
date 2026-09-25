@@ -124,7 +124,10 @@ try:
         expect(page.locator('.vf-config-missing')).to_contain_text('세부 구성 미확인')
         expect(page.get_by_text('검색·조회 근거', exact=True)).to_be_visible()
         assert not page.locator('.vf-evidence').evaluate('(node) => node.open')
-        page.get_by_role('button', name='이 수준으로 선택').click()
+        confirm = page.get_by_role('button', name='이 수준으로 선택')
+        confirm.click()
+        expect(page.get_by_role('button', name='선택됨', exact=True)).to_be_disabled()
+        expect(page.locator('.vf-selection-success')).to_have_text('시험차 B 선택됨')
         selected = page.evaluate('window.selected')
         assert selected['nodeType'] == 'MODEL' and selected['configurationConfirmed'] is False
         assert selected['path'][-1]['label'] == '시험차 B'
@@ -198,6 +201,12 @@ try:
             page.set_viewport_size({'width': width, 'height': 900})
             page.get_by_label('차량 검색', exact=True).fill('시험차 A')
             assert not page.evaluate('document.documentElement.scrollWidth > window.innerWidth'), f'list overflow at {width}'
+            if width <= 900:
+                search_box = page.get_by_label('차량 검색', exact=True).bounding_box()
+                filter_box = page.get_by_role('button', name='필터', exact=True).bounding_box()
+                refresh_box = page.get_by_role('button', name='다시 조회', exact=True).bounding_box()
+                assert abs(search_box['y'] - filter_box['y']) <= 2, f'mobile filter wraps below search at {width}'
+                assert abs(search_box['y'] - refresh_box['y']) <= 2, f'mobile refresh wraps below search at {width}'
             if width == 1920:
                 assert page.locator('.vf').bounding_box()['width'] > 1800, 'desktop data workspace is still artificially capped'
             row = page.get_by_role('button', name='시험제조사 › 시험차 A', exact=True)
@@ -208,6 +217,7 @@ try:
             confirm = page.get_by_role('button', name='이 수준으로 선택')
             assert confirm.bounding_box()['height'] >= (48 if width <= 900 else 44)
             if width <= 900:
+                expect(page.locator('.vf-head')).to_be_hidden()
                 actionbar = page.locator('.vf-actionbar').bounding_box()
                 assert actionbar['y'] + actionbar['height'] >= 890
                 expect(page.get_by_role('button', name='목록으로')).to_be_visible()
