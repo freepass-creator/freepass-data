@@ -53,7 +53,16 @@ const row = (id, amount = 1000) => ({
 
 test('shadow CLI passes matching catalogs and fails content mismatch', async () => {
   const oldServer = await startJsonServer({ data: [row('a'), row('b')] });
-  const sameServer = await startJsonServer({ data: [row('a'), row('b')] });
+  const sameServer = await startJsonServer({
+    data: [row('a'), row('b')],
+    meta: {
+      projectionId: 'erp-public',
+      releaseId: 'rel_shadow',
+      manifestId: 'manifest_shadow',
+      inputDigest: 'input_shadow',
+      dataDigest: 'data_shadow'
+    }
+  });
   const changedServer = await startJsonServer({ data: [row('a', 2000), row('c')] });
 
   try {
@@ -68,6 +77,8 @@ test('shadow CLI passes matching catalogs and fails content mismatch', async () 
     });
     assert.equal(pass.code, 0, pass.stderr);
     assert.match(pass.stdout, /"verdict": "PASS"/);
+    assert.match(pass.stdout, /"releaseId": "rel_shadow"/);
+    assert.match(pass.stdout, /"manifestId": "manifest_shadow"/);
 
     const fail = await run('scripts/check-catalog-shadow.mjs', {
       ...common,
