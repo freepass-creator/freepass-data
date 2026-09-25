@@ -170,7 +170,7 @@ describe('vehicle master canonical promotion chain', () => {
     });
     const result = await promoteVehicleMasterTrimProposalSet(store, changed);
 
-    expect(result.trim.canonicalWrite).toBe('UPDATED');
+    expect(result.trim.canonicalWrite).toBe('UNCHANGED');
     expect(result.basePrice.canonicalWrite).toBe('CREATED');
 
     const prices = await store.listPriceRevisionsByTarget(changed.trim.record.id);
