@@ -101,6 +101,11 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
     return copy(this.sourceDocuments.get(id) ?? null);
   }
 
+  async listSourceDocuments() {
+    return copy([...this.sourceDocuments.values()]
+      .sort((a, b) => a.sourceDocumentId.localeCompare(b.sourceDocumentId)));
+  }
+
   async putSourceDocument(record: VehicleMasterSourceDocument) {
     return this.putImmutable(
       this.sourceDocuments,
@@ -133,6 +138,14 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
         item.kind === kind &&
         item.sourceDocumentId === sourceDocumentId
       )
+      .sort((a, b) => a.recordId.localeCompare(b.recordId)));
+  }
+
+  async listPipelineRecordsByKind(
+    kind: VehicleMasterPipelineRecord['kind']
+  ) {
+    return copy([...this.pipeline.values()]
+      .filter((item) => item.kind === kind)
       .sort((a, b) => a.recordId.localeCompare(b.recordId)));
   }
 
