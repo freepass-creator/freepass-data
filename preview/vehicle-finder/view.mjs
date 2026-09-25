@@ -508,23 +508,59 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       renderResults();
     }
   });
-  const isMobileFilter = () => window.matchMedia('(max-width: 900px)').matches;
+  const mobileFilterMedia = window.matchMedia('(max-width: 900px)');
+  const isMobileFilter = () => mobileFilterMedia.matches;
+  let filterLock = null;
 
-  function setFilterPanel(open) {
+  function lockFilterContext() {
+    if (filterLock) return;
+    const background = [...root.children]
+      .filter(node => node !== filterPanel)
+      .map(node => [node, Boolean(node.inert)]);
+    for (const [node] of background) node.inert = true;
+
+    filterLock = {
+      background,
+      htmlOverflow: document.documentElement.style.overflow,
+      bodyOverflow: document.body?.style.overflow ?? '',
+    };
+    document.documentElement.style.overflow = 'hidden';
+    if (document.body) document.body.style.overflow = 'hidden';
+  }
+
+  function unlockFilterContext() {
+    if (!filterLock) return;
+    for (const [node, wasInert] of filterLock.background) node.inert = wasInert;
+    document.documentElement.style.overflow = filterLock.htmlOverflow;
+    if (document.body) document.body.style.overflow = filterLock.bodyOverflow;
+    filterLock = null;
+  }
+
+  function syncFilterMode() {
+    const open = !filterPanel.hidden;
     const mobile = isMobileFilter();
-    filterPanel.hidden = !open;
-    filterToggle.setAttribute('aria-expanded', String(open));
+
     root.classList.toggle('vf-filter-open', open && mobile);
+    if (mobile) filterToggle.setAttribute('aria-haspopup', 'dialog');
+    else filterToggle.removeAttribute('aria-haspopup');
 
     if (open && mobile) {
       filterPanel.setAttribute('role', 'dialog');
       filterPanel.setAttribute('aria-modal', 'true');
       filterPanel.setAttribute('aria-labelledby', filterSheetTitle.id);
+      lockFilterContext();
     } else {
       filterPanel.removeAttribute('role');
       filterPanel.removeAttribute('aria-modal');
       filterPanel.removeAttribute('aria-labelledby');
+      unlockFilterContext();
     }
+  }
+
+  function setFilterPanel(open) {
+    filterPanel.hidden = !open;
+    filterToggle.setAttribute('aria-expanded', String(open));
+    syncFilterMode();
 
     if (open) {
       const firstSelect = filterPanel.querySelector('select');
@@ -549,6 +585,9 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     syncFilterUi();
     renderResults();
   });
+  listen(mobileFilterMedia, 'change', syncFilterMode);
+  syncFilterMode();
+
   listen(root, 'keydown', event => {
     if (!filterPanel.hidden && isMobileFilter() && event.key === 'Tab') {
       const focusable = [...filterPanel.querySelectorAll(
@@ -586,6 +625,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     refresh: () => controller.refresh(),
     destroy() {
       disposed = true;
+      unlockFilterContext();
       controller.dispose();
       events.abort();
       root.replaceChildren();
