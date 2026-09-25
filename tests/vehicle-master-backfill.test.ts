@@ -81,6 +81,58 @@ describe('vehicle master recent-first backfill', () => {
     expect(queue.every((x) => x.latestModelYearHint === 2010)).toBe(true);
   });
 
+  it('prioritizes weaker coverage within the same recent model year', () => {
+    const pages = [
+      {
+        sourceKey: 'CARNOON' as const,
+        sourceType: 'CARNOON' as const,
+        sourceName: 'Carnoon',
+        sourceUrl: 'https://www.carnoon.co.kr/newcar/vehicle/sorento',
+        discoveredFromUrl: 'https://www.carnoon.co.kr/newcar/search',
+        modelHint: '쏘렌토 2027년형',
+        latestModelYearHint: 2027,
+        currentHint: true,
+      },
+      {
+        sourceKey: 'DANAWA' as const,
+        sourceType: 'DANAWA' as const,
+        sourceName: 'Danawa Auto',
+        sourceUrl: 'https://auto.danawa.com/newcar/?Work=estimate&Code=kona',
+        discoveredFromUrl: 'https://auto.danawa.com/newcar/',
+        modelHint: '코나 2027년형',
+        latestModelYearHint: 2027,
+        currentHint: true,
+      },
+    ];
+    const coverage = [
+      {
+        coverageId: 'cov_sorento',
+        maker: '기아',
+        model: '쏘렌토',
+        modelYear: 2027,
+        sourceDocumentIds: ['official'],
+        sourceOrigins: ['MANUFACTURER_OFFICIAL'],
+        sourceTypes: ['MANUFACTURER_OFFICIAL' as const],
+        normalizedRecordCount: 10,
+        powertrainKeys: ['hybrid'],
+        trimKeys: ['noblesse'],
+        latestObservedAt: '2026-09-26T00:00:00.000Z',
+        status: 'OFFICIAL' as const,
+      },
+    ];
+
+    const queue = buildRecentFirstBackfillQueue(pages, { coverage });
+
+    expect(queue.map((x) => x.sourceUrl)).toEqual([
+      'https://auto.danawa.com/newcar/?Work=estimate&Code=kona',
+      'https://www.carnoon.co.kr/newcar/vehicle/sorento',
+    ]);
+    expect(queue.map((x) => x.coverageStatus)).toEqual([
+      'MISSING',
+      'OFFICIAL',
+    ]);
+  });
+
   it('orders the combined provider queue by recent year before provider priority', () => {
     const pages = [
       {
