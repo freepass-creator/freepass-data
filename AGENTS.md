@@ -5,12 +5,10 @@
 Every Codex/Work/development AI working in this repository must start in this order:
 
 1. `AGENTS.md`
-2. `contracts/development-responsibility-registry.v1.json`
-3. `docs/DEVELOPMENT-LINEAGE.md`
-4. `docs/NEXT-START-HERE.md`
-5. `docs/IMPLEMENTATION-STATUS.md`
-6. `docs/ARCHITECTURE-V2-APPROVED.md`
-7. GitHub Issue #24 and the active PR/branch for the work
+2. `docs/NEXT-START-HERE.md`
+3. `docs/IMPLEMENTATION-STATUS.md`
+4. `docs/ARCHITECTURE-V2-APPROVED.md`
+5. GitHub Issue #24 and the active PR/branch for the work
 
 `docs/NEXT-START-HERE.md` is the current Chat → Work handoff board. Do not assume chat context is available locally.
 
@@ -44,6 +42,17 @@ Latest handoff commit when this file was created:
 - Production Firebase binding, IAM mutation, writer cutover, deployment, schedules and live sheet writes remain separately authorized operations.
 - Do not create a replacement repository or redirect this project to jpkerp5.
 
+## 2.1 FreePass Data implementation invariants
+
+These are project-specific data-platform boundaries, not company-wide development-governance rules.
+
+- All central FreePass Data Firebase/Firestore access must resolve the target through `src/infra/firebase-target.ts`; do not initialize a second target app path.
+- Source evidence physical collection names and source document-ID encoding come only from `src/infra/source-firestore-layout.ts`.
+- Source-run head promotion semantics come from the Domain source policy (`decideSourceHead`); adapters must not reimplement CURRENT/STALE/INELIGIBLE decisions.
+- `SourceIngestionStore` owns source-run ingestion lifecycle. `CatalogStore` owns Canonical transactional mutation. Do not collapse them into competing repositories or add a third source persistence path.
+- FreePass Data may publish Estimate master-data facts/projections, but pricing/calculation/issued-quote engine contracts remain in the Estimate product boundary.
+- Preview UI is reference material; FreePass Data is a data platform, not a second product UI implementation.
+
 ## 3. Evidence discipline
 
 Keep these states separate:
@@ -61,9 +70,6 @@ Do not call a consumer cutover complete from code/test parity alone.
 
 - fetch/verify current main revision
 - inspect overlapping branches/PRs
-- resolve the exact `Responsibility-ID` in `contracts/development-responsibility-registry.v1.json`
-- obey `docs/DEVELOPMENT-LINEAGE.md`; do not create a second implementation line for an owned responsibility
-- before opening or continuing a PR, run `npm run check:lineage`; when GitHub network access is available also run `npm run audit:open-pr-lineage`
 - use the smallest isolated change
 - preserve last-known-good ACTIVE release behavior
 - prefer fail-closed over silent fallback
