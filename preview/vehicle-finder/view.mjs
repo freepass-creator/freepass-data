@@ -286,6 +286,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
           inspectedId === id;
 
         selectedNotice.hidden = false;
+        selectedNotice.classList.remove('vf-selection-error');
         selectedNotice.textContent = isCurrent
           ? `${entry.label} · ${LEVELS[entry.nodeType]} 선택됨 · 차량 구성 미확정`
           : `${entry.label} · 이전 조회(${value.observationId}) 기준 선택이 전달됨 · 차량 구성 미확정`;
@@ -297,6 +298,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       } catch {
         if (!disposed) {
           selectedNotice.hidden = false;
+          selectedNotice.classList.add('vf-selection-error');
           selectedNotice.textContent = '선택을 전달하지 못했습니다. 다시 선택할 수 있습니다.';
         }
       } finally {
