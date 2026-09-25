@@ -1,7 +1,14 @@
+export type VehicleMasterParsedCondition = {
+  relation: 'REQUIRES' | 'EXCLUDES';
+  targetLabel: string;
+  raw: string;
+};
+
 export type VehicleMasterParsedOption = {
   name: string;
   price: number | null;
   note?: string | null;
+  conditions?: VehicleMasterParsedCondition[];
   sourceText: string;
 };
 
