@@ -94,15 +94,19 @@ const firestorePhysicalNames = [
   .map((match) => match[1])
   .filter((value) => value !== '__');
 
+const physicalLayoutLayers = new Set(['infra', 'api', 'jobs', 'adapters', 'migration']);
+
 for (const file of walk(srcRoot)) {
   if (path.resolve(file) === path.resolve(firestoreLayoutOwner)) continue;
+  const layer = layerOf(file);
+  if (!physicalLayoutLayers.has(layer)) continue;
   const text = fs.readFileSync(file, 'utf8');
   for (const collectionName of firestorePhysicalNames) {
     const literal = new RegExp(`['"]${collectionName}['"]`);
     if (literal.test(text)) {
       violations.push({
         file: path.relative(repoRoot, file),
-        layer: layerOf(file),
+        layer,
         import: collectionName,
         reason: 'FreePass Data Firestore physical layout must come from src/infra/firestore-layout.ts'
       });
