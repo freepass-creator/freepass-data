@@ -1,0 +1,122 @@
+{
+  "schemaVersion": "development-responsibility-registry/v1",
+  "repository": "freepass-creator/freepass-data",
+  "updatedAt": "2026-09-26",
+  "rules": {
+    "canonicalBaseBranch": "main",
+    "maxCanonicalWipPerResponsibility": 1,
+    "prototypeAuthority": "REFERENCE_ONLY"
+  },
+  "responsibilities": [
+    {
+      "id": "governance.development-lineage",
+      "name": "Development lineage, duplicate-implementation prevention, shared source persistence boundary",
+      "authority": {
+        "state": "ACTIVE_WIP",
+        "pr": 59,
+        "branch": "chore/lock-development-lineage-20260926",
+        "base": "main"
+      }
+    },
+    {
+      "id": "data.vehicle-master",
+      "name": "Vehicle Master new/used ingestion, persistence, selector and Estimate master-data projection",
+      "authority": {
+        "state": "ACTIVE_WIP",
+        "pr": 58,
+        "branch": "work/gpt/vehicle-master-unified-20260926",
+        "base": "main"
+      }
+    },
+    {
+      "id": "data.consumer-access",
+      "name": "Consumer release, Sheet handoff and audited Data Access gateway",
+      "authority": {
+        "state": "ACTIVE_WIP",
+        "pr": 54,
+        "branch": "auto/data-access-gateway-20260925",
+        "base": "main"
+      }
+    },
+    {
+      "id": "data.admin-catalog",
+      "name": "FreePass Admin Catalog projection and consumer contract",
+      "authority": {
+        "state": "ACTIVE_WIP",
+        "pr": 53,
+        "branch": "work/admin-catalog-projection-v2-current-20260925",
+        "base": "main"
+      }
+    },
+    {
+      "id": "data.iancar-evidence",
+      "name": "Iancar source evidence only",
+      "authority": {
+        "state": "ACTIVE_WIP",
+        "pr": 45,
+        "branch": "codex/iancar-availability-20260922",
+        "base": "main"
+      }
+    },
+    {
+      "id": "ui.preview",
+      "name": "FreePass Data preview/reference surfaces",
+      "authority": {
+        "state": "REFERENCE_ONLY"
+      },
+      "paths": [
+        "preview/**"
+      ]
+    },
+    {
+      "id": "estimate.pricing-engine",
+      "name": "Estimate pricing/calculation and issued-quote contracts",
+      "authority": {
+        "state": "EXTERNAL_AUTHORITY",
+        "repository": "freepass-creator/freepass-estimate"
+      },
+      "forbiddenHere": [
+        "contracts/freepass-quote-v2.schema.json",
+        "contracts/put-issued-quote-command-v1.schema.json"
+      ]
+    }
+  ],
+  "retiredLines": [
+    {
+      "pr": 1,
+      "reason": "historical architecture review"
+    },
+    {
+      "pr": 12,
+      "reason": "superseded by PR #53"
+    },
+    {
+      "pr": 48,
+      "reason": "superseded by PR #54"
+    },
+    {
+      "pr": 49,
+      "reason": "superseded by PR #58"
+    },
+    {
+      "pr": 50,
+      "reason": "superseded by PR #58"
+    },
+    {
+      "pr": 51,
+      "reason": "superseded by PR #58"
+    },
+    {
+      "pr": 52,
+      "reason": "prototype/reference only"
+    },
+    {
+      "pr": 56,
+      "reason": "temporary consolidation PR superseded by PR #58"
+    },
+    {
+      "pr": 57,
+      "reason": "temporary consolidation PR superseded by PR #54"
+    }
+  ]
+}
