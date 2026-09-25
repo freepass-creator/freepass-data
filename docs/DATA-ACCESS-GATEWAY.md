@@ -32,9 +32,18 @@ Browser/mobile direct Firestore read/write remains denied by `firestore.rules`.
 
 ## Evidence layers
 
-### 1. data_access_events
+### 1. DataAccessEvent — logical access-event contract
 
 Immutable operation-level access evidence.
+
+Physical sink depends on privilege boundary:
+
+- service/API and privileged writer runtimes: Firestore `data_access_events`
+- read-only audit/bridge jobs: private evidence GCS `access-events/YYYY/MM/DD/*.json`
+  with `ifGenerationMatch=0`
+
+Both sinks persist the same `DataAccessEvent` contract. Read-only service accounts do **not**
+receive Firestore write permission merely to log a read.
 
 Records:
 
@@ -54,6 +63,10 @@ Raw payloads, authorization tokens, customer data, and backend error text are no
 
 A STARTED event must persist before the underlying Firebase access begins.
 If audit persistence is unavailable, the access fails closed.
+
+This deliberately separates data privilege from audit privilege. The continuous ERP5 reader keeps
+its Firestore viewer role; it uses its existing append-only private evidence-bucket permission to
+write access evidence before reading Firestore.
 
 ### 2. mutation evidence
 
@@ -110,6 +123,10 @@ Raw Firestore stores/readers may be assembled only in explicit composition roots
 - `src/bootstrap.ts`
 - `src/api/data-access-runtime.ts`
 - `src/jobs/data-access-runtime.ts`
+
+The jobs composition root has two modes:
+- privileged writer jobs may use the Firestore access-event sink
+- read-only jobs must use the append-only GCS access-event sink
 
 Low-level infra/adapters may contain SDK/transport code, but API/job/application orchestration must not bypass the gateway.
 
