@@ -107,6 +107,8 @@ try:
         expect(trim_row.locator('.vf-row-path')).to_have_text('쏘렌토 › 2027')
         selected_trim = page.get_by_role('button', name='기아 › 쏘렌토 › 2027 › 프레스티지', exact=True)
         selected_trim.click()
+        expect(page.get_by_role('button', name='상세 닫기', exact=True)).to_be_visible()
+        expect(page.get_by_role('button', name='목록으로', exact=True)).to_be_hidden()
         expect(page.locator('.vf-configurations summary')).to_have_text('검색 조건과 일치한 구성 1개')
         assert not page.locator('.vf-configurations').evaluate('(node) => node.open')
         expect(selected_trim).to_have_attribute('aria-expanded', 'true')
@@ -214,13 +216,25 @@ try:
             page.keyboard.press('Enter')
             expect(page.locator('.vf-detail h2')).to_be_focused()
             assert not page.evaluate('document.documentElement.scrollWidth > window.innerWidth'), f'detail overflow at {width}'
+            if width > 900:
+                expect(page.get_by_role('button', name='상세 닫기', exact=True)).to_be_visible()
+                expect(page.get_by_role('button', name='목록으로', exact=True)).to_be_hidden()
             confirm = page.get_by_role('button', name='이 수준으로 선택')
             assert confirm.bounding_box()['height'] >= (48 if width <= 900 else 44)
             if width <= 900:
                 expect(page.locator('.vf-head')).to_be_hidden()
+                expect(page.get_by_role('button', name='상세 닫기', exact=True)).to_be_hidden()
                 actionbar = page.locator('.vf-actionbar').bounding_box()
                 assert actionbar['y'] + actionbar['height'] >= 890
                 expect(page.get_by_role('button', name='목록으로')).to_be_visible()
+                page.keyboard.press('Escape')
+                expect(row).to_be_focused()
+                expect(page.get_by_label('차량 검색', exact=True)).to_have_value('시험차 A')
+                list_row = page.locator('tr').filter(has=row)
+                assert list_row.evaluate("(node) => getComputedStyle(node).borderRadius") == '0px'
+                assert list_row.evaluate("(node) => getComputedStyle(node).backgroundColor") in ('rgba(0, 0, 0, 0)', 'transparent')
+                passed(f'{width}px list/detail: no overflow, focus return, mobile bottom action boundary')
+                continue
             page.keyboard.press('Escape')
             expect(row).to_be_focused()
             expect(page.get_by_label('차량 검색', exact=True)).to_have_value('시험차 A')
