@@ -71,8 +71,10 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   filterToggle.type = 'button';
   filterToggle.setAttribute('aria-expanded', 'false');
   filterToggle.setAttribute('aria-controls', `${prefix}-filters`);
-  const refresh = element('button', '', '다시 조회');
+  const refresh = element('button', 'vf-refresh', '↻');
   refresh.type = 'button';
+  refresh.setAttribute('aria-label', '다시 조회');
+  refresh.title = '다시 조회';
   utilityActions.append(filterToggle, refresh);
   toolbar.append(searchLabel, utilityActions);
 
@@ -210,15 +212,17 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       .map(configurationId => entry.configurations.find(item => item.id === configurationId))
       .filter(Boolean);
 
-    const vehicleFacts = element('section', 'vf-configurations');
-    vehicleFacts.append(element('h3', '', '검색 조건과 함께 확인된 구성'));
     if (!matchedConfigurations.length) {
-      vehicleFacts.append(element(
+      detail.append(element(
         'p',
-        'vf-note',
-        '이 수준에서는 세부 구성 근거가 아직 연결되지 않았습니다. 확인되지 않은 사양은 채우지 않습니다.',
+        'vf-note vf-config-missing',
+        '세부 구성 미확인 · 확인되지 않은 사양은 채우지 않습니다.',
       ));
     } else {
+      const vehicleFacts = element('details', 'vf-configurations');
+      vehicleFacts.append(
+        element('summary', '', `검색 조건과 일치한 구성 ${matchedConfigurations.length}개`),
+      );
       const listNode = element('ul', 'vf-config-list');
       for (const configuration of matchedConfigurations) {
         const item = element('li', 'vf-config-card');
@@ -230,25 +234,17 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
         listNode.append(item);
       }
       vehicleFacts.append(listNode);
+      detail.append(vehicleFacts);
     }
-    detail.append(vehicleFacts);
-
-    const facts = element('dl');
-    const fact = (name, value) =>
-      facts.append(element('dt', '', name), element('dd', '', value));
-    fact(
-      '선택 범위',
-      `${LEVELS[entry.nodeType]} 기준 · 세부 차량 구성은 확정하지 않음`,
-    );
-    fact(
-      '자료 범위',
-      snapshot.coverage === 'PARTIAL' ? '제공된 일부 자료' : '이 조회 범위 전체',
-    );
-    detail.append(facts);
 
     const evidence = element('details', 'vf-evidence');
     evidence.append(element('summary', '', '검색·조회 근거'));
     evidence.append(
+      element(
+        'p',
+        '',
+        `자료 범위 ${snapshot.coverage === 'PARTIAL' ? '제공된 일부 자료' : '이 조회 범위 전체'}`,
+      ),
       element('p', '', `검색어 ${input.value || '미지정'}`),
       element('p', '', `필터 ${Object.values(filters).join(' · ') || '미지정'}`),
       element('p', '', `관측 ${snapshot.observedAt}`),
