@@ -81,7 +81,7 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     tokens.add(item.token);
     return {
       id: item.id,
-      projectionId: item.projectionId,
+      projectionId: expectedProjection,
       token: item.token,
       capabilities
     };
