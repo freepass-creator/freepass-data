@@ -1,7 +1,4 @@
-import { readLegacyProductSnapshot } from '../adapters/legacy-freepasserp3.js';
-import { ingestLegacyProductSnapshot } from '../application/ingest-legacy-products.js';
 import { createSourceIngestDataAccessRuntime } from './data-access-runtime.js';
-import { stableDigest } from '../shared/stable-digest.js';
 
 const targetProjectId = process.env.FIREBASE_PROJECT_ID?.trim();
 const legacyProjectId = process.env.LEGACY_FREEPASSERP3_PROJECT_ID?.trim();
@@ -20,57 +17,8 @@ if (targetProjectId === legacyProjectId) {
 }
 
 const runtime = await createSourceIngestDataAccessRuntime();
-const snapshot = await runtime.access.read({
-  context: {
-    actor: { id: 'service:freepass-data-ingest', kind: 'SERVICE' },
-    clientId: 'job:ingest-legacy-products',
-    purpose: 'read legacy source snapshot through FreePass Data'
-  },
-  operation: 'READ_LEGACY_SOURCE_SNAPSHOT',
-  resource: {
-    kind: 'SOURCE',
-    name: 'freepasserp3/firestore/products'
-  },
-  summarize: (value) => ({
-    count: value.records.length,
-    digest: stableDigest({
-      checkpoint: value.checkpoint,
-      coverage: value.coverage,
-      recordFingerprints: value.records.map((record) => [record.sourceRecordId, record.fingerprint])
-    })
-  })
-}, () => readLegacyProductSnapshot());
-
-const run = await runtime.access.write({
-  context: {
-    actor: { id: 'service:freepass-data-ingest', kind: 'SERVICE' },
-    clientId: 'job:ingest-legacy-products',
-    purpose: 'ingest reviewed legacy source snapshot through FreePass Data',
-    correlationId: snapshot.checkpoint.sourceId
-  },
-  operation: 'WRITE_LEGACY_SOURCE_INGEST',
-  resource: {
-    kind: 'SOURCE',
-    name: snapshot.checkpoint.sourceId
-  },
-  requestDigest: stableDigest({
-    sourceId: snapshot.checkpoint.sourceId,
-    checkpoint: snapshot.checkpoint,
-    coverage: snapshot.coverage,
-    recordCount: snapshot.records.length
-  }),
-  summarize: (value) => value ? {
-    count: value.rawCount,
-    digest: stableDigest({
-      runId: value.runId,
-      sourceId: value.sourceId,
-      rawCount: value.rawCount,
-      candidateCount: value.candidateCount,
-      lineageCount: value.lineageCount,
-      warningCount: value.warningCount
-    })
-  } : { count: 0 }
-}, () => ingestLegacyProductSnapshot(runtime.sourceStore, snapshot));
+const snapshot = await runtime.readLegacySnapshot();
+const run = await runtime.ingestLegacySnapshot(snapshot);
 
 console.log(JSON.stringify({
   status: run?.status ?? 'UNKNOWN',
