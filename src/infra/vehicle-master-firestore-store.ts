@@ -184,6 +184,18 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
     );
   }
 
+  async listPipelineRecords(
+    kind: VehicleMasterPipelineRecord['kind'],
+    sourceDocumentId: string
+  ) {
+    const snap = await this.db.collection(pipelineCollection(kind))
+      .where('sourceDocumentId', '==', sourceDocumentId)
+      .get();
+    return snap.docs
+      .map((doc) => doc.data() as VehicleMasterPipelineRecord)
+      .sort((a, b) => a.recordId.localeCompare(b.recordId));
+  }
+
   async putPipelineRecord(record: VehicleMasterPipelineRecord) {
     return this.putImmutable(
       this.db.collection(pipelineCollection(record.kind)).doc(safeId(record.recordId)),
