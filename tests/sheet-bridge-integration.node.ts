@@ -25,7 +25,7 @@ import { ERP5_DOCUMENTS, type Erp5ReadRpc } from '../src/adapters/erp5-source-ca
 const peerRoot = process.env.FREEPASS_ERP4_ROOT;
 if (!peerRoot) throw new Error('FREEPASS_ERP4_ROOT is required; missing peer is not a PASS');
 const pinnedPeer = {
-  'lib/server/freepass-data-sheet-handoff.ts': 'a7dfa50a04e6eb2fa1f8b61e99491b488b67b7dd',
+  'lib/server/freepass-data-sheet-handoff.ts': '509bfc35f29b2731aef382b4566baa349102bdc5',
   'lib/server/sales-publish-snapshot.ts': '69db3e8c048ae45c8ef6b6fbe85e9ed13128d2fa',
   'lib/domain/inventory-contract.ts': '2b29adb650b5b08cebc44549a8e0539601ecb52f',
   'lib/domain/plate-registry.ts': '3245e40507f87e3e62583948e3e9170118ca0b38'
