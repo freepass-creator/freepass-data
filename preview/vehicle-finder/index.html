@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>차량 찾기 · 프리패스 데이터</title><link rel="stylesheet" href="./finder.css"></head>
+<body style="margin:0;background:#fff"><main id="vehicle-finder"></main>
+<script type="module">
+import { mountVehicleFinder } from './view.mjs';
+// Intentionally disconnected. The Console host must inject its authorized read adapter.
+mountVehicleFinder(document.getElementById('vehicle-finder'));
+</script></body></html>
