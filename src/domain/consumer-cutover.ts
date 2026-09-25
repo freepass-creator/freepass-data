@@ -97,7 +97,7 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
     repository: 'freepass-creator/freepass-admin',
     domains: ['catalog'],
     stage: 'OBSERVE',
-    activeReadOwner: 'freepass-admin-development-store',
+    activeReadOwner: 'freepass-admin/legacy-erp5-bridge',
     targetReadOwner: 'freepass-data',
     switchKey: 'FREEPASS_DATA_ADMIN_CATALOG_READ_MODE',
     evidence: {
@@ -110,8 +110,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       productionReadbackVerified: false
     },
     holdReasons: [
-      'Admin projection PR is not integrated',
-      'Policy parity and production persistence are not verified'
+      'Admin-specific projection is not deployed with a non-empty ACTIVE release',
+      'Policy parity, authentication, fallback and production readback are not verified'
     ]
   },
   {

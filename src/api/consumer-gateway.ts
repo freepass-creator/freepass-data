@@ -4,15 +4,18 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
 import catalogSchema from '../../contracts/catalog-v1.schema.json' with { type: 'json' };
 import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with { type: 'json' };
+import adminCatalogSchema from '../../contracts/admin-catalog-view-v1.schema.json' with { type: 'json' };
 import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import type { ProjectionStore } from '../ports/catalog-store.js';
+import type { AdminCatalogProduct, ProjectionProduct } from '../domain/catalog.js';
 import { readCatalogDataHealth } from '../application/catalog-health.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 export type ConsumerCapability = 'catalog' | 'catalog-health';
+export type ConsumerProjectionId = 'erp-public' | 'admin-catalog';
 export type ConsumerBinding = {
   id: string;
-  projectionId: 'erp-public';
+  projectionId: ConsumerProjectionId;
   token: string;
   capabilities?: ConsumerCapability[];
 };
@@ -33,11 +36,19 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
   return entries.map((entry: unknown) => {
     if (!entry || typeof entry !== 'object') throw new Error('Invalid consumer registration');
     const item = entry as Record<string, unknown>;
-    // F01/F86/Admin need their own complete contracts; never silently map them to ERP.
-    if (typeof item.id !== 'string' || !/^(erp-com|kakao-ops|whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
+    // Consumer identity determines projection; callers cannot select another product contract.
+    const expectedProjection: ConsumerProjectionId | null =
+      item.id === 'freepass-admin-catalog'
+        ? 'admin-catalog'
+        : typeof item.id === 'string' && /^(erp-com|kakao-ops|whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)
+          ? 'erp-public'
+          : null;
+    if (!expectedProjection) {
       throw new Error('Consumer contract is not implemented for this registration');
     }
-    if (item.projectionId !== 'erp-public') throw new Error('Unsupported consumer projection');
+    if (item.projectionId !== expectedProjection) {
+      throw new Error('Consumer projection does not match the registered contract');
+    }
     if (typeof item.token !== 'string' || item.token.trim() !== item.token || item.token.length < 32) {
       throw new Error('Each consumer needs a distinct service token of at least 32 characters');
     }
@@ -88,7 +99,8 @@ export function createConsumerGateway(
   const ajv = new Ajv2020({ strict: false });
   addFormats(ajv);
   ajv.addSchema(catalogSchema);
-  const validateData = ajv.compile(erpViewSchema);
+  const validateErpData = ajv.compile(erpViewSchema);
+  const validateAdminResponse = ajv.compile(adminCatalogSchema);
   const validateHealth = ajv.compile(healthSchema);
   app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
   app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/catalog', async (request, reply) => {
@@ -102,13 +114,11 @@ export function createConsumerGateway(
     if (!binding.capabilities.includes('catalog')) {
       return reply.code(403).send({ code: 'FORBIDDEN' });
     }
-    const release = await store.getActive(binding.projectionId);
+    const release = await store.getActive<ProjectionProduct>(binding.projectionId);
     if (!release) return reply.code(503).send({ code: 'NO_ACTIVE_RELEASE' });
-    if (release.schemaVersion !== '1.0.0' || !validateData(release.data)) {
-      return reply.code(503).send({ code: 'UNSUPPORTED_OR_INCOMPLETE_RELEASE' });
-    }
     const manifest = await store.getManifest(release.releaseId);
     if (release.status !== 'ACTIVE' || release.projectionId !== binding.projectionId ||
+      release.schemaVersion !== '1.0.0' ||
       !manifest || manifest.releaseId !== release.releaseId || manifest.projectionId !== release.projectionId ||
       manifest.manifestId !== release.manifestId || manifest.schemaVersion !== release.schemaVersion ||
       manifest.productCount !== release.data.length || manifest.offerCount !== release.data.reduce((count, row) => count + row.offers.length, 0) ||
@@ -117,16 +127,55 @@ export function createConsumerGateway(
       !release.activatedAt || !Number.isFinite(Date.parse(release.activatedAt))) {
       return reply.code(503).send({ code: 'RELEASE_EVIDENCE_MISMATCH' });
     }
-    return {
-      data: release.data,
-      meta: {
-        consumerId: binding.id, projectionId: release.projectionId,
-        authority: 'CANONICAL_ACTIVE' as const,
-        schemaVersion: release.schemaVersion, releaseId: release.releaseId,
-        manifestId: release.manifestId, inputDigest: release.inputDigest, dataDigest: release.dataDigest,
-        revision: release.canonicalRevision, generatedAt: release.generatedAt, activatedAt: release.activatedAt,
-      },
+
+    const commonMeta = {
+      consumerId: binding.id,
+      projectionId: release.projectionId,
+      authority: 'CANONICAL_ACTIVE' as const,
+      schemaVersion: release.schemaVersion,
+      releaseId: release.releaseId,
+      manifestId: release.manifestId,
+      inputDigest: release.inputDigest,
+      dataDigest: release.dataDigest,
+      revision: release.canonicalRevision,
+      generatedAt: release.generatedAt,
+      activatedAt: release.activatedAt,
     };
+
+    if (binding.projectionId === 'admin-catalog') {
+      const data = release.data as AdminCatalogProduct[];
+      const missingPolicyOfferIds = [...new Set(
+        data.flatMap((product) => product.offers)
+          .filter((offer) => offer.policyState === 'MISSING')
+          .map((offer) => offer.offerId)
+      )].sort();
+      const invalidPolicyFactRefs = [...new Set(
+        data.flatMap((product) => product.offers)
+          .flatMap((offer) => offer.invalidPolicyFactRefs)
+      )].sort();
+      const response = {
+        schema: 'freepass-data.admin-catalog/v1',
+        data,
+        meta: {
+          ...commonMeta,
+          projectionId: 'admin-catalog' as const,
+          policyParity: missingPolicyOfferIds.length || invalidPolicyFactRefs.length
+            ? 'INCOMPLETE' as const
+            : 'COMPLETE' as const,
+          missingPolicyOfferIds,
+          invalidPolicyFactRefs,
+        },
+      };
+      if (!validateAdminResponse(response)) {
+        return reply.code(503).send({ code: 'UNSUPPORTED_OR_INCOMPLETE_RELEASE' });
+      }
+      return response;
+    }
+
+    if (!validateErpData(release.data)) {
+      return reply.code(503).send({ code: 'UNSUPPORTED_OR_INCOMPLETE_RELEASE' });
+    }
+    return { data: release.data, meta: commonMeta };
   });
   app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/catalog-health', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');

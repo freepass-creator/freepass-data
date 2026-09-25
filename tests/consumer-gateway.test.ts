@@ -3,6 +3,7 @@ import { createConsumerGateway, parseConsumerBindings, type ConsumerBinding } fr
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { buildErpPublicProjection } from '../src/application/catalog.js';
+import { buildAdminCatalogProjection } from '../src/application/admin-catalog.js';
 
 const token = 'test-service-token-0123456789abcdef';
 const binding = { id: 'erp-com', projectionId: 'erp-public' as const, token };
@@ -204,6 +205,90 @@ describe('read-only consumer gateway', () => {
     await app.close();
   });
 
+  it('serves the Admin-specific catalog contract only to the Admin consumer identity', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+
+    // Demo seed has no Policy, so add a policy and bind it to the Offer with revision evidence.
+    const offer = await store.getOffer('offer_gv70_demo');
+    expect(offer).not.toBeNull();
+    const now = '2026-09-20T00:00:00.000Z';
+    const actor = { id: 'service:test', kind: 'SERVICE' as const };
+    const policy = {
+      schemaVersion: '1.0.0', revision: 1, validationStatus: 'VALID' as const,
+      createdAt: now, updatedAt: now, createdBy: actor, updatedBy: actor, lineageId: 'lin-policy',
+      id: 'policy-admin-test', kind: 'OTHER' as const, version: '1', effectiveFrom: now,
+      facts: { basic_driver_age: 21 },
+    };
+    const nextOffer = { ...offer!, policyId: policy.id };
+    await store.seed!({
+      offers: [nextOffer],
+      policies: [policy],
+      revisionHistory: [
+        {
+          revisionRecordId: 'rev_policy_admin_test', entityType: 'policy', entityId: policy.id,
+          revision: 1, previousRevision: null, snapshot: policy, actor,
+          reason: 'test', origin: 'MIGRATION', commandId: 'cmd-admin-test', occurredAt: now,
+        },
+        {
+          revisionRecordId: 'rev_offer_admin_test', entityType: 'offer', entityId: nextOffer.id,
+          revision: nextOffer.revision, previousRevision: null, snapshot: nextOffer, actor,
+          reason: 'test', origin: 'MIGRATION', commandId: 'cmd-admin-test', occurredAt: now,
+        },
+      ],
+    });
+    const release = await buildAdminCatalogProjection(store, store, now);
+    const adminToken = 'admin-service-token-0123456789abcdef';
+    const adminBinding = { id: 'freepass-admin-catalog', projectionId: 'admin-catalog' as const, token: adminToken };
+    const app = createConsumerGateway(store, [binding, adminBinding]);
+
+    const admin = await app.inject({
+      url: '/v1/consumers/freepass-admin-catalog/catalog',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(admin.statusCode).toBe(200);
+    expect(admin.json()).toMatchObject({
+      schema: 'freepass-data.admin-catalog/v1',
+      meta: {
+        consumerId: 'freepass-admin-catalog',
+        projectionId: 'admin-catalog',
+        authority: 'CANONICAL_ACTIVE',
+        releaseId: release.releaseId,
+        policyParity: 'COMPLETE',
+      },
+    });
+    expect(admin.json().data[0].offers[0].policyValues)
+      .toContainEqual({ policyId: 'basic_driver_age', type: 'NUMBER', value: 21 });
+
+    expect((await app.inject({
+      url: '/v1/consumers/freepass-admin-catalog/catalog',
+      headers,
+    })).statusCode).toBe(401);
+    expect((await app.inject({
+      url,
+      headers: { authorization: `Bearer ${adminToken}` },
+    })).statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('reports Admin policy parity incomplete instead of hiding missing policy facts', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await buildAdminCatalogProjection(store, store);
+    const adminToken = 'admin-service-token-0123456789abcdef';
+    const app = createConsumerGateway(store, [{
+      id: 'freepass-admin-catalog', projectionId: 'admin-catalog', token: adminToken,
+    }]);
+    const result = await app.inject({
+      url: '/v1/consumers/freepass-admin-catalog/catalog',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().meta.policyParity).toBe('INCOMPLETE');
+    expect(result.json().meta.missingPolicyOfferIds).toEqual(['offer_gv70_demo']);
+    await app.close();
+  });
+
   it('does not silently reuse the ERP contract for Sheets or Admin, or share credentials', () => {
     for (const id of ['f01', 'f86', 'admin']) {
       expect(() => parseConsumerBindings(JSON.stringify([{ ...binding, id }]))).toThrow('not implemented');
@@ -216,6 +301,8 @@ describe('read-only consumer gateway', () => {
       [{ ...binding, token: 'short' }],
       [{ ...binding, token: token + ' ' }],
       [{ ...binding, projectionId: 'admin-catalog' }],
+      [{ ...binding, id: 'freepass-admin-catalog' }],
+      [{ ...binding, id: 'freepass-admin-catalog', projectionId: 'erp-public' }],
       [{ ...binding, capabilities: [] }],
       [{ ...binding, capabilities: ['unknown'] }],
       [{ ...binding, capabilities: ['catalog', 'catalog'] }]
