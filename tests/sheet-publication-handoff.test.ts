@@ -8,7 +8,7 @@ import {
 
 const snapshot = {
   version: 1 as const,
-  snapshotId: 'snapshot_test',
+  snapshotId: 'rel_test',
   capturedAt: '2026-09-25T07:01:00.000Z',
   products: [{ _key: 'TEST-1', car_number: '12가3456' }],
   policies: [],
@@ -96,6 +96,30 @@ describe('sheet publication handoff', () => {
       status: 'HOLD',
       violations: ['CONSUMER_WORKBOOK_MISMATCH']
     });
+  });
+
+  it('fails closed on re-signed source lineage drift', () => {
+    const value = valid();
+    value.manifest.sourceReadTime = '2026-09-25T07:00:01.000Z';
+    value.handoffHash = hashSheetPublicationHandoff(
+      (({ handoffHash: _hash, ...rest }) => rest)(value)
+    );
+    const result = validateSheetPublicationHandoff(value);
+    expect(result.status).toBe('HOLD');
+    expect(result.violations).toContain('RELEASE_LINEAGE_MISMATCH');
+    expect(result.violations).not.toContain('HANDOFF_HASH_MISMATCH');
+  });
+
+  it('fails closed on re-signed snapshot identity drift', () => {
+    const value = valid();
+    value.snapshot.snapshotId = 'rel_other';
+    value.handoffHash = hashSheetPublicationHandoff(
+      (({ handoffHash: _hash, ...rest }) => rest)(value)
+    );
+    const result = validateSheetPublicationHandoff(value);
+    expect(result.status).toBe('HOLD');
+    expect(result.violations).toContain('RELEASE_LINEAGE_MISMATCH');
+    expect(result.violations).not.toContain('HANDOFF_HASH_MISMATCH');
   });
 
   it('fails closed on inventory and handoff tamper', () => {
