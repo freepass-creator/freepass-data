@@ -308,3 +308,39 @@ export function mapLegacyNewcarFeedToEstimateMaster(
 
   return buildEstimateNewcarMasterRecord(candidate);
 }
+
+
+export function mapLegacyNewcarSnapshotToEstimateMaster(
+  feedArtifact: { rows?: LegacyNewcarFeedRow[] },
+  masterArtifact: { records?: LegacyTrimMasterRecord[] },
+) {
+  const feedRows = Array.isArray(feedArtifact?.rows) ? feedArtifact.rows : [];
+  const masterRecords = Array.isArray(masterArtifact?.records) ? masterArtifact.records : [];
+  if (!feedRows.length) throw new Error('ESTIMATE_MASTER_SOURCE_EMPTY:feed');
+  if (!masterRecords.length) throw new Error('ESTIMATE_MASTER_SOURCE_EMPTY:master');
+
+  const records = feedRows.map((row) => mapLegacyNewcarFeedToEstimateMaster(row, masterRecords));
+  const active = records.filter((record) => record.status === 'ACTIVE');
+  const hold = records.filter((record) => record.status === 'HOLD');
+  const reasonCounts = new Map<string, number>();
+  for (const record of hold) {
+    for (const reason of record.holdReasons || []) {
+      reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
+    }
+  }
+
+  return Object.freeze({
+    records: Object.freeze(records),
+    summary: Object.freeze({
+      total: records.length,
+      active: active.length,
+      hold: hold.length,
+      activeRate: records.length ? active.length / records.length : 0,
+      holdReasons: Object.freeze(
+        [...reasonCounts.entries()]
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .map(([reason, count]) => Object.freeze({ reason, count }))
+      ),
+    }),
+  });
+}
