@@ -540,8 +540,8 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   listen(filterMore, 'click', () => {
     const expanded = filterMore.getAttribute('aria-expanded') !== 'true';
     filterMore.setAttribute('aria-expanded', String(expanded));
-    filterMore.textContent = expanded ? '추가 조건 접기' : '추가 조건';
     filterPanel.classList.toggle('vf-filter-advanced-open', expanded);
+    syncFilterUi();
   });
   listen(reset, 'click', () => {
     filters = {};
