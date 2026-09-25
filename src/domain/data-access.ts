@@ -28,6 +28,7 @@ export type DataAccessResultEvidence = {
 };
 
 export type DataAccessEvent = {
+  contractVersion: 'data-access-event-v1';
   eventId: string;
   operationId: string;
   mode: DataAccessMode;
