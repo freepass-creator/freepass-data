@@ -14,6 +14,7 @@ export type SheetDeliveryReceipt = {
   consumerId: SheetConsumerId;
   workbook: SheetWorkbook;
   spreadsheetId: string;
+  releaseAuthority: 'LEGACY_VERIFIED_BRIDGE' | 'CANONICAL_ACTIVE';
   approvedRelease: ApprovedReleaseEvidence;
   renderedOutput: SheetRenderedOutputEvidence;
   publicationStartedAt: string;
