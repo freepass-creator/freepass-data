@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/sheet-delivery-receipt.v1.schema.json",
+  "title": "FreePass Data sheet delivery receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "consumerId",
+    "workbook",
+    "spreadsheetId",
+    "approvedRelease",
+    "publicationStartedAt",
+    "publicationCompletedAt",
+    "readback"
+  ],
+  "properties": {
+    "contractVersion": { "const": "freepass-sheet-delivery-v1" },
+    "consumerId": { "enum": ["google-sheets-f01", "google-sheets-f86"] },
+    "workbook": { "enum": ["F01", "F86"] },
+    "spreadsheetId": { "type": "string", "minLength": 1 },
+    "approvedRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectionId",
+        "releaseId",
+        "manifestId",
+        "inputDigest",
+        "dataDigest",
+        "observedAt"
+      ],
+      "properties": {
+        "projectionId": { "type": "string", "minLength": 1 },
+        "releaseId": { "type": "string", "minLength": 1 },
+        "manifestId": { "type": "string", "minLength": 1 },
+        "inputDigest": { "type": "string", "minLength": 1 },
+        "dataDigest": { "type": "string", "minLength": 1 },
+        "observedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "publicationStartedAt": { "type": "string", "format": "date-time" },
+    "publicationCompletedAt": { "type": "string", "format": "date-time" },
+    "readback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verified", "vehicleKeyCount", "dataDigest"],
+      "properties": {
+        "verified": { "const": true },
+        "vehicleKeyCount": { "type": "integer", "minimum": 0 },
+        "dataDigest": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "workbook": { "const": "F01" } },
+        "required": ["workbook"]
+      },
+      "then": {
+        "properties": { "consumerId": { "const": "google-sheets-f01" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "workbook": { "const": "F86" } },
+        "required": ["workbook"]
+      },
+      "then": {
+        "properties": { "consumerId": { "const": "google-sheets-f86" } }
+      }
+    }
+  ]
+}
