@@ -42,7 +42,7 @@ function kiaModelName(text: string, url: string | null) {
 function modelYear(text: string) {
   const english = text.match(/\bThe\s+(20\d{2})\b/i);
   if (english?.[1]) return Number(english[1]);
-  const korean = text.match(/\b(20\d{2})년형\b/);
+  const korean = text.match(/(?<!\d)(20\d{2})년형/);
   return korean?.[1] ? Number(korean[1]) : null;
 }
 
