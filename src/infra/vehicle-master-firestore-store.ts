@@ -172,6 +172,13 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
     );
   }
 
+  async listSourceDocuments() {
+    const snap = await this.db.collection(C.sourceDocuments).get();
+    return snap.docs
+      .map((doc) => doc.data() as VehicleMasterSourceDocument)
+      .sort((a, b) => a.sourceDocumentId.localeCompare(b.sourceDocumentId));
+  }
+
   async putSourceDocument(record: VehicleMasterSourceDocument) {
     return this.putImmutable(
       this.db.collection(C.sourceDocuments).doc(safeId(record.sourceDocumentId)),
@@ -208,6 +215,15 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
     const snap = await this.db.collection(pipelineCollection(kind))
       .where('sourceDocumentId', '==', sourceDocumentId)
       .get();
+    return snap.docs
+      .map((doc) => doc.data() as VehicleMasterPipelineRecord)
+      .sort((a, b) => a.recordId.localeCompare(b.recordId));
+  }
+
+  async listPipelineRecordsByKind(
+    kind: VehicleMasterPipelineRecord['kind']
+  ) {
+    const snap = await this.db.collection(pipelineCollection(kind)).get();
     return snap.docs
       .map((doc) => doc.data() as VehicleMasterPipelineRecord)
       .sort((a, b) => a.recordId.localeCompare(b.recordId));
