@@ -107,6 +107,27 @@ export type VehicleMasterSourceDocument = VehicleMasterTemporal & {
   contentHash: string;
 };
 
+export type VehicleMasterHashScope =
+  | 'SOURCE_BYTES'
+  | 'SOURCE_DOCUMENT'
+  | 'PIPELINE_RECORD'
+  | 'CANONICAL_RECORD';
+
+export type VehicleMasterHashRecord = {
+  hashId: string;
+  scope: VehicleMasterHashScope;
+  algorithm: 'SHA-256';
+  digest: string;
+  sourceDocumentId: string | null;
+  targetId: string | null;
+  storagePath: string | null;
+  byteLength: number | null;
+  mimeType: string | null;
+  observedAt: string;
+  metadata: Record<string, unknown>;
+  contentHash: string;
+};
+
 export type VehicleMasterPipelineKind =
   | 'RAW_RECORD'
   | 'NORMALIZED_RECORD'
@@ -300,6 +321,50 @@ export function sealVehicleMasterSourceDocument(
     sourceName: cleanText(input.sourceName, 'sourceName'),
     storagePath: cleanText(input.storagePath, 'storagePath'),
     sha256: input.sha256.toLowerCase(),
+  };
+
+  return { ...record, contentHash: stableDigest(record) };
+}
+
+export function sealVehicleMasterHashRecord(
+  input: Omit<VehicleMasterHashRecord, 'contentHash'>
+): VehicleMasterHashRecord {
+  assertTime(input.observedAt, 'observedAt');
+  assertSha256(input.digest, 'digest');
+  if (input.algorithm !== 'SHA-256') {
+    throw new Error('VEHICLE_MASTER_INVALID:hashAlgorithm');
+  }
+  if (
+    input.byteLength != null &&
+    (!Number.isSafeInteger(input.byteLength) || input.byteLength < 0)
+  ) {
+    throw new Error('VEHICLE_MASTER_INVALID:byteLength');
+  }
+
+  const sourceDocumentId =
+    input.sourceDocumentId == null
+      ? null
+      : cleanText(input.sourceDocumentId, 'sourceDocumentId');
+  const targetId =
+    input.targetId == null
+      ? null
+      : cleanText(input.targetId, 'targetId');
+  const storagePath =
+    input.storagePath == null
+      ? null
+      : cleanText(input.storagePath, 'storagePath');
+
+  if (input.scope === 'SOURCE_BYTES' && (!sourceDocumentId || !storagePath)) {
+    throw new Error('VEHICLE_MASTER_INVALID:sourceBytesHashRefs');
+  }
+
+  const record = {
+    ...input,
+    hashId: cleanText(input.hashId, 'hashId'),
+    digest: input.digest.toLowerCase(),
+    sourceDocumentId,
+    targetId,
+    storagePath,
   };
 
   return { ...record, contentHash: stableDigest(record) };
