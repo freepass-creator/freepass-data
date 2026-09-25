@@ -13,44 +13,12 @@ export function assertFirestoreReleaseId(value: unknown): asserts value is strin
   }
 }
 
-function assertReleaseIdentity(
+function assertReleaseDocumentIdentity(
   release: ProjectionRelease<ErpPublicProduct>,
-  releaseId: string,
-  projectionId?: string
+  releaseId: string
 ) {
-  if (
-    release.releaseId !== releaseId ||
-    (projectionId !== undefined && release.projectionId !== projectionId)
-  ) {
+  if (release.releaseId !== releaseId) {
     throw new Error('Release pointer identity mismatch');
-  }
-}
-
-function assertManifestIdentity(
-  manifest: ProjectionReleaseManifest,
-  releaseId: string,
-  projectionId?: string
-) {
-  if (
-    manifest.releaseId !== releaseId ||
-    (projectionId !== undefined && manifest.projectionId !== projectionId)
-  ) {
-    throw new Error('Projection manifest identity mismatch');
-  }
-}
-
-function assertLineageIdentity(
-  lineage: readonly ProjectionFieldLineageRecord[],
-  releaseId: string,
-  projectionId?: string
-) {
-  if (lineage.some(
-    (record) =>
-      record.releaseId !== releaseId ||
-      (projectionId !== undefined && record.projectionId !== projectionId) ||
-      record.stage !== 'CANONICAL_TO_PROJECTION'
-  )) {
-    throw new Error('Projection lineage identity mismatch');
   }
 }
 
@@ -72,7 +40,7 @@ export async function readFirestoreActiveProjection(
   if (!releaseSnap.exists) return null;
 
   const release = releaseSnap.data() as ProjectionRelease<ErpPublicProduct>;
-  assertReleaseIdentity(release, releaseId, projectionId);
+  assertReleaseDocumentIdentity(release, releaseId);
   return release;
 }
 
@@ -84,27 +52,22 @@ export async function readFirestoreProjectionManifest(
   const manifestSnap = await db.collection(FIRESTORE_COLLECTIONS.projection.manifests)
     .doc(releaseId)
     .get();
-  if (!manifestSnap.exists) return null;
-
-  const manifest = manifestSnap.data() as ProjectionReleaseManifest;
-  assertManifestIdentity(manifest, releaseId);
-  return manifest;
+  return manifestSnap.exists
+    ? manifestSnap.data() as ProjectionReleaseManifest
+    : null;
 }
 
 export async function readFirestoreProjectionLineage(
   db: Firestore,
-  releaseId: string,
-  projectionId?: string
+  releaseId: string
 ): Promise<ProjectionFieldLineageRecord[]> {
   assertFirestoreReleaseId(releaseId);
   const snap = await db.collection(FIRESTORE_COLLECTIONS.projection.lineage)
     .where('releaseId', '==', releaseId)
     .get();
-  const lineage = snap.docs.map(
+  return snap.docs.map(
     (doc) => doc.data() as ProjectionFieldLineageRecord
   );
-  assertLineageIdentity(lineage, releaseId, projectionId);
-  return lineage;
 }
 
 export async function readFirestoreActiveProjectionEvidence(
@@ -140,23 +103,17 @@ export async function readFirestoreActiveProjectionEvidence(
     const release = releaseSnap.exists
       ? releaseSnap.data() as ProjectionRelease<ErpPublicProduct>
       : null;
-    if (release) assertReleaseIdentity(release, releaseId, projectionId);
-
-    const manifest = manifestSnap.exists
-      ? manifestSnap.data() as ProjectionReleaseManifest
-      : null;
-    if (manifest) assertManifestIdentity(manifest, releaseId, projectionId);
-
-    const lineage = evidenceSnap.docs.map(
-      (doc) => doc.data() as ProjectionFieldLineageRecord
-    );
-    assertLineageIdentity(lineage, releaseId, projectionId);
+    if (release) assertReleaseDocumentIdentity(release, releaseId);
 
     return {
       projectionId,
       release,
-      manifest,
-      lineage,
+      manifest: manifestSnap.exists
+        ? manifestSnap.data() as ProjectionReleaseManifest
+        : null,
+      lineage: evidenceSnap.docs.map(
+        (doc) => doc.data() as ProjectionFieldLineageRecord
+      ),
       consistency: 'ATOMIC' as const
     };
   });
