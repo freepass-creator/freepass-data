@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
 import { assertCommandWriter } from '../domain/authority.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import {
   assertCatalogWriterOwnership,
   resolveExecutionWriter
@@ -34,28 +34,12 @@ export class ManualCatalogEntryCollisionError extends Error {
   readonly code = 'MANUAL_CATALOG_ENTRY_COLLISION';
 }
 
-function stable(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stable);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, child]) => [key, stable(child)])
-    );
-  }
-  return value;
-}
-
-function hash(value: unknown) {
-  return createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
-}
-
 function token(...parts: string[]) {
-  return hash(parts).slice(0, 24);
+  return stableDigest(parts).slice(0, 24);
 }
 
 function requestDigest(input: ManualCatalogEntryCommand, writerId: string) {
-  return hash({
+  return stableDigest({
     commandType: 'CREATE_MANUAL_CATALOG_ENTRY',
     entry: input.entry,
     actor: {
@@ -222,7 +206,7 @@ function lineageRecord(input: {
   normalizedFieldPath: string;
   normalizedValue: unknown;
 }): FieldLineageRecord {
-  const lineageId = hash([
+  const lineageId = stableDigest([
     input.sourceId,
     input.sourceRecordId,
     input.fingerprint,
@@ -230,7 +214,7 @@ function lineageRecord(input: {
     input.normalizedFieldPath
   ]);
   return {
-    lineageRecordId: 'lin_' + hash([lineageId, input.runId]).slice(0, 40),
+    lineageRecordId: 'lin_' + stableDigest([lineageId, input.runId]).slice(0, 40),
     lineageId,
     stage: 'RAW_TO_NORMALIZED',
     runId: input.runId,
@@ -365,7 +349,7 @@ export async function createManualCatalogEntry(
 
   const writer = resolveExecutionWriter(input.actor, input.writer);
   const digest = requestDigest(input, writer.id);
-  const fingerprint = hash(input.entry);
+  const fingerprint = stableDigest(input.entry);
   const identity = token(input.idempotencyKey);
   const sourceRecordId = `manual_${identity}`;
   const candidate = normalizeManualEntry(input.entry, sourceRecordId, fingerprint);
