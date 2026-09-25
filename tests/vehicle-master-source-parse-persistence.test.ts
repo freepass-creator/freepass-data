@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { KiaOfficialPriceParser } from '../src/adapters/kia-official-price-parser.js';
 import { parseFetchedVehicleMasterSource } from '../src/application/vehicle-master-source-parse.js';
 import {
+  deterministicVehicleMasterRecordId,
+  sealVehicleMasterHashRecord,
   sealVehicleMasterSourceDocument,
+  type VehicleMasterSourceDocument,
 } from '../src/domain/vehicle-master.js';
 import { MemoryVehicleMasterStore } from '../src/infra/vehicle-master-memory-store.js';
 import { sha256Bytes } from '../src/shared/binary-digest.js';
@@ -26,6 +29,28 @@ const html = Buffer.from(`
   </html>
 `, 'utf8');
 
+
+function sourceByteHash(sourceDocument: VehicleMasterSourceDocument, byteLength = html.byteLength) {
+  return sealVehicleMasterHashRecord({
+    hashId: deterministicVehicleMasterRecordId('hash', {
+      scope: 'SOURCE_BYTES',
+      sourceDocumentId: sourceDocument.sourceDocumentId,
+      algorithm: 'SHA-256',
+      digest: sourceDocument.sha256,
+    }),
+    scope: 'SOURCE_BYTES',
+    algorithm: 'SHA-256',
+    digest: sourceDocument.sha256,
+    sourceDocumentId: sourceDocument.sourceDocumentId,
+    targetId: null,
+    storagePath: sourceDocument.storagePath,
+    byteLength,
+    mimeType: sourceDocument.mimeType,
+    observedAt: sourceDocument.observedAt,
+    metadata: { fixture: true },
+  });
+}
+
 describe('vehicle master parse persistence', () => {
   it('persists raw pointer, normalized rows and parser summary idempotently', async () => {
     const store = new MemoryVehicleMasterStore();
@@ -44,6 +69,8 @@ describe('vehicle master parse persistence', () => {
       metadata: {},
     });
     await store.putSourceDocument(sourceDocument);
+    const persistedHash = sourceByteHash(sourceDocument);
+    await store.putHash(persistedHash);
 
     const fetched = {
       requestedUrl: sourceDocument.sourceUrl!,
@@ -59,6 +86,7 @@ describe('vehicle master parse persistence', () => {
     );
 
     expect(first.parseResult.records).toHaveLength(1);
+    expect(first.sourceHashId).toBe(persistedHash.hashId);
     expect(first.normalizedRecordIds).toHaveLength(1);
     expect(first.writes).toEqual(['CREATED', 'CREATED', 'CREATED']);
 
@@ -86,6 +114,86 @@ describe('vehicle master parse persistence', () => {
     expect(second.normalizedRecordIds).toEqual(first.normalizedRecordIds);
     expect(second.summaryRecordId).toBe(first.summaryRecordId);
     expect(second.writes).toEqual(['UNCHANGED', 'UNCHANGED', 'UNCHANGED']);
+  });
+
+  it('fails closed when persisted source-byte hash evidence is missing', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const sourceDocument = sealVehicleMasterSourceDocument({
+      sourceDocumentId: 'srcdoc_kia_parse_missing_hash',
+      sourceType: 'MANUFACTURER_OFFICIAL',
+      sourceName: 'Kia Sorento fixture',
+      sourceUrl: 'https://www.kia.com/kr/vehicles/sorento/price',
+      publishedAt: null,
+      observedAt: '2026-09-25T08:30:00.000Z',
+      effectiveFrom: null,
+      effectiveTo: null,
+      storagePath: 'vehicle-master/source-documents/manufacturer_official/missing-hash.html',
+      sha256: sha256Bytes(html),
+      mimeType: 'text/html; charset=utf-8',
+      metadata: {},
+    });
+    await store.putSourceDocument(sourceDocument);
+
+    await expect(parseFetchedVehicleMasterSource(
+      { store, parsers: [new KiaOfficialPriceParser()] },
+      {
+        sourceDocument,
+        fetched: {
+          requestedUrl: sourceDocument.sourceUrl!,
+          finalUrl: sourceDocument.sourceUrl!,
+          status: 200,
+          contentType: sourceDocument.mimeType,
+          bytes: html,
+        },
+      }
+    )).rejects.toThrow('SOURCE_HASH_RECORD_MISSING');
+  });
+
+  it('fails closed when persisted source-byte hash provenance disagrees with the source document', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const sourceDocument = sealVehicleMasterSourceDocument({
+      sourceDocumentId: 'srcdoc_kia_parse_hash_mismatch',
+      sourceType: 'MANUFACTURER_OFFICIAL',
+      sourceName: 'Kia Sorento fixture',
+      sourceUrl: 'https://www.kia.com/kr/vehicles/sorento/price',
+      publishedAt: null,
+      observedAt: '2026-09-25T08:30:00.000Z',
+      effectiveFrom: null,
+      effectiveTo: null,
+      storagePath: 'vehicle-master/source-documents/manufacturer_official/hash-mismatch.html',
+      sha256: sha256Bytes(html),
+      mimeType: 'text/html; charset=utf-8',
+      metadata: {},
+    });
+    await store.putSourceDocument(sourceDocument);
+    const validHash = sourceByteHash(sourceDocument);
+    await store.putHash(sealVehicleMasterHashRecord({
+      hashId: validHash.hashId,
+      scope: validHash.scope,
+      algorithm: validHash.algorithm,
+      digest: validHash.digest,
+      sourceDocumentId: validHash.sourceDocumentId,
+      targetId: validHash.targetId,
+      storagePath: 'vehicle-master/source-documents/manufacturer_official/wrong-path.html',
+      byteLength: validHash.byteLength,
+      mimeType: validHash.mimeType,
+      observedAt: validHash.observedAt,
+      metadata: validHash.metadata,
+    }));
+
+    await expect(parseFetchedVehicleMasterSource(
+      { store, parsers: [new KiaOfficialPriceParser()] },
+      {
+        sourceDocument,
+        fetched: {
+          requestedUrl: sourceDocument.sourceUrl!,
+          finalUrl: sourceDocument.sourceUrl!,
+          status: 200,
+          contentType: sourceDocument.mimeType,
+          bytes: html,
+        },
+      }
+    )).rejects.toThrow('SOURCE_HASH_RECORD_MISMATCH');
   });
 
   it('fails closed when the bytes no longer match the archived SourceDocument hash', async () => {
