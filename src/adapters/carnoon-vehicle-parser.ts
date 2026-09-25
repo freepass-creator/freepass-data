@@ -74,7 +74,7 @@ function normalizeFuel(label: string, powertrainName: string) {
 
 export class CarnoonVehicleParser implements VehicleMasterSourceParser {
   readonly parserId = 'CARNOON_VEHICLE';
-  readonly parserVersion = '1.0.0';
+  readonly parserVersion = '1.1.0';
 
   canParse(input: VehicleMasterParseInput) {
     if (!input.sourceUrl) return false;
