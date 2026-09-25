@@ -4,8 +4,7 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createSheetBridgeDataAccessRuntime } from './data-access-runtime.js';
 import {
-  buildSheetBridgeRelease,
-  prepareSheetBridgeHandoffs
+  buildSheetBridgeRelease
 } from '../application/sheet-publication-bridge.js';
 import {
   validateSheetPublicationHandoff,
