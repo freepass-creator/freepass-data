@@ -63,6 +63,20 @@ export const hashSheetPublicationHandoff = (
   value: Omit<SheetPublicationHandoff, 'handoffHash'>
 ) => stableDigest(value);
 
+/** One digest domain shared by the producer, validator and fixtures.
+ * Snapshot identity/timestamps are covered by handoffHash, not the data digest.
+ */
+export function hashSheetPublicationData(
+  snapshot: Pick<SheetPublicationHandoff['snapshot'], 'products' | 'policies' | 'partners' | 'inventory'>
+) {
+  return stableDigest({
+    products: snapshot.products,
+    policies: snapshot.policies,
+    partners: snapshot.partners,
+    inventory: snapshot.inventory
+  });
+}
+
 export function validateSheetPublicationHandoff(
   handoff: SheetPublicationHandoff
 ): { status: 'PASS' | 'HOLD'; violations: string[] } {
@@ -138,6 +152,9 @@ export function validateSheetPublicationHandoff(
   }
 
   const manifest = handoff.manifest;
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    return { status: 'HOLD', violations: [...violations, 'MANIFEST_EVIDENCE_MISMATCH'] };
+  }
   if (
     manifest.contractVersion !== 'freepass-sheet-manifest-v1' ||
     manifest.manifestId !== handoff.approvedRelease.manifestId ||
@@ -155,12 +172,7 @@ export function validateSheetPublicationHandoff(
     violations.push('MANIFEST_EVIDENCE_MISMATCH');
   }
 
-  const snapshotDataDigest = stableDigest({
-    products: handoff.snapshot.products,
-    policies: handoff.snapshot.policies,
-    partners: handoff.snapshot.partners,
-    inventory: handoff.snapshot.inventory
-  });
+  const snapshotDataDigest = hashSheetPublicationData(handoff.snapshot);
   if (snapshotDataDigest !== handoff.approvedRelease.dataDigest) {
     violations.push('SNAPSHOT_DATA_DIGEST_MISMATCH');
   }
