@@ -41,6 +41,18 @@ function anchors(html: string) {
   return rows;
 }
 
+export function discoverVehicleMasterInventoryExpectedCount(input: {
+  sourceKey: VehicleMasterBackfillSourceKey;
+  bytes: Buffer;
+}) {
+  if (input.sourceKey !== 'CARISYOU') return null;
+  const text = decodeHtml(input.bytes.toString('utf8'));
+  const match = text.match(/자동차\s*([\d,]+)\s*(?:개|대|건)/);
+  if (!match?.[1]) return null;
+  const count = Number(match[1].replaceAll(',', ''));
+  return Number.isSafeInteger(count) && count >= 0 ? count : null;
+}
+
 function sourceSpecificUrlCandidates(
   html: string,
   sourceKey: VehicleMasterBackfillSourceKey
@@ -121,7 +133,12 @@ export function discoverAdditionalVehicleMasterInventoryPages(input: {
       return url.toString();
     });
 
-  for (const url of brandPages) additional.add(url);
+  for (const url of brandPages) {
+    additional.add(url);
+    const mobile = new URL(url);
+    mobile.hostname = 'm.carisyou.com';
+    additional.add(mobile.toString());
+  }
   additional.delete(input.inventoryUrl);
 
   return [...additional].sort((a, b) => {
