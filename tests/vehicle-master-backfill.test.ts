@@ -61,12 +61,21 @@ describe('vehicle master recent-first backfill', () => {
       bytes: html,
     });
 
+    expect(pages.map((x) => x.sourceUrl)).toEqual([
+      'https://www.carisyou.com/car/9001/Price',
+      'https://www.carisyou.com/car/9001/Spec',
+      'https://www.carisyou.com/car/3956/Price',
+      'https://www.carisyou.com/car/3956/Spec',
+    ]);
+
     const queue = buildRecentFirstBackfillQueue(pages, {
-      completedUrls: ['https://www.carisyou.com/car/9001'],
+      completedUrls: [
+        'https://www.carisyou.com/car/9001/Price',
+        'https://www.carisyou.com/car/9001/Spec',
+      ],
     });
-    expect(queue).toHaveLength(1);
-    expect(queue[0]?.sourceUrl).toBe('https://www.carisyou.com/car/3956');
-    expect(queue[0]?.latestModelYearHint).toBe(2010);
+    expect(queue).toHaveLength(2);
+    expect(queue.every((x) => x.latestModelYearHint === 2010)).toBe(true);
   });
 
   it('orders the combined provider queue by recent year before provider priority', () => {
