@@ -18,6 +18,9 @@ function candidate(overrides: Partial<EstimateMasterCandidate> = {}): EstimateMa
     trimName: '시그니처',
     powertrainName: '1.6 하이브리드',
     basePrice: { amount: 35020000, currency: 'KRW' },
+    priceBefore: { amount: 35020000, currency: 'KRW' },
+    priceAfter: { amount: 34520000, currency: 'KRW' },
+    priceBasis: '세제혜택 후',
     options: [{
       optionId: 'opt_1',
       name: '드라이브 와이즈',
