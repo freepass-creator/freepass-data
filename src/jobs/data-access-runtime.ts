@@ -3,9 +3,11 @@ import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-acces
 import { createFirestoreSourceStore } from '../infra/source-firestore-store.js';
 
 /** Composition root for background jobs that write source evidence. */
-export function createSourceIngestDataAccessRuntime() {
+export function createJobDataAccessRuntime() {
   return {
     access: new DataAccessGateway(createFirestoreDataAccessLogStore()),
     sourceStore: createFirestoreSourceStore()
   };
 }
+
+export const createSourceIngestDataAccessRuntime = createJobDataAccessRuntime;
