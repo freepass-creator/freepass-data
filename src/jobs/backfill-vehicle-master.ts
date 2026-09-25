@@ -343,6 +343,9 @@ const coverageCounts = (rows: typeof coverageAfter) =>
 const auditPayload = {
   observedAt,
   selectedSources,
+  currentRecaptureTtlHours,
+  manualCompletedUrlCount: manualCompletedUrls.length,
+  autoCompletedUrlCount: autoCompletedUrls.length,
   queued: queue.length,
   parsed: results.filter((row) => row.status === 'PARSED').length,
   capturedHold: results.filter((row) => row.status === 'CAPTURED_HOLD').length,
