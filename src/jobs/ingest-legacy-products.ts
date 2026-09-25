@@ -1,6 +1,6 @@
 import { readLegacyProductSnapshot } from '../adapters/legacy-freepasserp3.js';
 import { ingestLegacyProductSnapshot } from '../application/ingest-legacy-products.js';
-import { createSourceIngestDataAccessRuntime } from './data-access-runtime.js';
+import { createJobDataAccessRuntime } from './data-access-runtime.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 const targetProjectId = process.env.FIREBASE_PROJECT_ID?.trim();
@@ -19,8 +19,28 @@ if (targetProjectId === legacyProjectId) {
   );
 }
 
-const runtime = createSourceIngestDataAccessRuntime();
-const snapshot = await readLegacyProductSnapshot();
+const runtime = createJobDataAccessRuntime();
+const snapshot = await runtime.access.read({
+  context: {
+    actor: { id: 'service:freepass-data-ingest', kind: 'SERVICE' },
+    clientId: 'job:ingest-legacy-products',
+    purpose: 'read legacy source snapshot through FreePass Data'
+  },
+  operation: 'READ_LEGACY_SOURCE_SNAPSHOT',
+  resource: {
+    kind: 'SOURCE',
+    name: 'freepasserp3/firestore/products'
+  },
+  summarize: (value) => ({
+    count: value.records.length,
+    digest: stableDigest({
+      checkpoint: value.checkpoint,
+      coverage: value.coverage,
+      recordFingerprints: value.records.map((record) => [record.sourceRecordId, record.fingerprint])
+    })
+  })
+}, () => readLegacyProductSnapshot());
+
 const run = await runtime.access.write({
   context: {
     actor: { id: 'service:freepass-data-ingest', kind: 'SERVICE' },
