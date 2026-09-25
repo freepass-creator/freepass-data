@@ -97,11 +97,12 @@ export class DataAccessGateway {
 
     try {
       const result = await run();
+      const summary = spec.summarize?.(result);
       await this.append({
         eventId: this.id(),
         ...base,
         phase: 'SUCCEEDED',
-        ...(spec.summarize ? { result: spec.summarize(result) } : {}),
+        ...(summary ? { result: summary } : {}),
         occurredAt: this.now()
       });
       return result;
