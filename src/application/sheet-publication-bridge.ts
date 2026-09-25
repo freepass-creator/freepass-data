@@ -4,6 +4,7 @@ import {
   hashSheetPublicationHandoff,
   type SheetInventorySummary,
   type SheetPublicationHandoff,
+  type SheetPublicationManifest,
   type SheetHandoffWorkbook
 } from '../domain/sheet-publication-handoff.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -301,6 +302,7 @@ export type SheetBridgeRelease = {
     dataDigest: string;
     observedAt: string;
   };
+  manifest: SheetPublicationManifest;
   products: Record<string, unknown>[];
   policies: Record<string, unknown>[];
   partners: Record<string, unknown>[];
@@ -348,16 +350,33 @@ export function buildSheetBridgeRelease(
   const dataDigest = stableDigest({ products, policies, partners, inventory });
   const suffix = storedDigest.slice(0, 32);
 
+  const release = {
+    projectionId: 'sheet-publication-bridge' as const,
+    releaseId: `sheetbridge_${suffix}`,
+    manifestId: `sheetmanifest_${suffix}`,
+    inputDigest: storedDigest,
+    dataDigest,
+    observedAt: capture.readTime
+  };
+  const manifest: SheetPublicationManifest = {
+    contractVersion: 'freepass-sheet-manifest-v1',
+    manifestId: release.manifestId,
+    releaseId: release.releaseId,
+    projectionId: release.projectionId,
+    releaseAuthority: 'LEGACY_VERIFIED_BRIDGE',
+    sourceCaptureDigest: storedDigest,
+    sourceReadTime: capture.readTime,
+    productCount: products.length,
+    policyCount: policies.length,
+    partnerCount: partners.length,
+    dataDigest,
+    generatedAt: capture.capturedAt
+  };
+
   return {
     releaseAuthority: 'LEGACY_VERIFIED_BRIDGE',
-    release: {
-      projectionId: 'sheet-publication-bridge',
-      releaseId: `sheetbridge_${suffix}`,
-      manifestId: `sheetmanifest_${suffix}`,
-      inputDigest: storedDigest,
-      dataDigest,
-      observedAt: capture.readTime
-    },
+    release,
+    manifest,
     products,
     policies,
     partners,
@@ -382,6 +401,7 @@ export function buildSheetBridgeHandoff(
     generatedAt,
     releaseAuthority: bridge.releaseAuthority,
     approvedRelease: { ...bridge.release },
+    manifest: structuredClone(bridge.manifest),
     snapshot: {
       version: 1,
       snapshotId: bridge.release.releaseId,
