@@ -84,6 +84,8 @@ process.stdout.write(JSON.stringify({
   sourceUrl: result.sourceDocument.sourceUrl,
   storagePath: result.sourceDocument.storagePath,
   sha256: result.sourceDocument.sha256,
+  hashId: result.hashRecord.hashId,
   archiveWrite: result.archiveWrite,
   documentWrite: result.documentWrite,
+  hashWrite: result.hashWrite,
 }, null, 2) + '\n');
