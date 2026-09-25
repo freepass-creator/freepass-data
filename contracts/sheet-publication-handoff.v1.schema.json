@@ -135,6 +135,7 @@
             "blankPlateViolations",
             "invalidPlateViolations",
             "duplicatePlateViolations",
+            "depositRuleViolations",
             "byStatus"
           ],
           "properties": {
@@ -184,6 +185,10 @@
                 "type": "integer",
                 "minimum": 0
               }
+            },
+            "depositRuleViolations": {
+              "type": "integer",
+              "minimum": 0
             }
           }
         }
