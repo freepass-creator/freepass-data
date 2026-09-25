@@ -115,6 +115,9 @@ test('one capture produces both consumers and round-trips through the actual ERP
   assert.deepEqual(f01!.approvedRelease, f86!.approvedRelease);
   assert.equal(f01!.manifest.sourceReadTime, input.readTime);
   assert.equal(f01!.generatedAt, f86!.generatedAt);
+  assert.equal(f01!.snapshot.capturedAt, f01!.generatedAt);
+  assert.equal(f86!.snapshot.capturedAt, f86!.generatedAt);
+  assert.notEqual(f01!.snapshot.capturedAt, f01!.manifest.sourceReadTime);
   assert.notEqual(f01!.handoffHash, f86!.handoffHash, 'Target identity belongs to the envelope hash');
   const directory = mkdtempSync(path.join(tmpdir(), 'freepass-peer-test-'));
   try {
