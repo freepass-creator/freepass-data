@@ -24,6 +24,7 @@ const snapshot = {
     blankPlateViolations: 0,
     invalidPlateViolations: 0,
     duplicatePlateViolations: 0,
+    depositRuleViolations: 0,
     byStatus: { 즉시출고: 1 }
   }
 };
