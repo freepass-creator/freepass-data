@@ -89,7 +89,8 @@
 .vf .vf-filters label{flex:1;min-width:140px}
 .vf .vf-filter-sheet-head,
 .vf .vf-filter-more,
-.vf .vf-filter-close{display:none}
+.vf .vf-filter-close,
+.vf .vf-filter-done{display:none}
 .vf .vf-filters button[hidden]{display:none!important}
 .vf .vf-status{min-height:24px;font-size:var(--vf-support);margin-bottom:12px}
 .vf .vf-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:24px}
@@ -239,6 +240,7 @@
   .vf .vf-filters.vf-filter-advanced-open .vf-filter-advanced{display:grid}
   .vf .vf-filter-more{display:block;justify-self:start}
   .vf .vf-filter-reset{justify-self:start}
+  .vf .vf-filter-done{display:block;width:100%}
   .vf.vf-filter-open::before{
     content:'';
     position:fixed;
