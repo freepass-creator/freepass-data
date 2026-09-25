@@ -149,3 +149,35 @@ export function withParsedOptionKind(
 ): VehicleMasterParsedOption {
   return { ...option, kind };
 }
+
+
+export function splitTopLevelComma(value: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]!;
+    if (char === '(' || char === '[' || char === '{') depth += 1;
+    if (char === ')' || char === ']' || char === '}') depth = Math.max(0, depth - 1);
+    if (char === ',' && depth === 0) {
+      const item = value.slice(start, index).trim();
+      if (item) out.push(item);
+      start = index + 1;
+    }
+  }
+  const tail = value.slice(start).trim();
+  if (tail) out.push(tail);
+  return out;
+}
+
+export const VEHICLE_BASE_ITEM_CATEGORIES = new Set([
+  '파워트레인',
+  '첨단 운전자 보조(ADAS)',
+  '첨단 운전자 보조',
+  '안전',
+  '외장',
+  '내장',
+  '시트',
+  '편의',
+  '인포테인먼트',
+]);
