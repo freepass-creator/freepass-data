@@ -33,6 +33,48 @@ describe('vehicle master recent-first backfill', () => {
     expect(queue[0]?.sourceUrl).toContain('11572');
   });
 
+  it('uses public sitemap shards for Carnoon and Danawa discovery', () => {
+    expect(discoverAdditionalVehicleMasterInventoryPages({
+      sourceKey: 'CARNOON',
+      inventoryUrl: 'https://www.carnoon.co.kr/newcar/search',
+      bytes: Buffer.from('<html/>'),
+    })).toEqual(['https://www.carnoon.co.kr/sitemap.xml']);
+
+    expect(discoverAdditionalVehicleMasterInventoryPages({
+      sourceKey: 'DANAWA',
+      inventoryUrl: 'https://auto.danawa.com/newcar/',
+      bytes: Buffer.from('<html/>'),
+    })).toEqual(['https://auto.danawa.com/sitemap.xml']);
+
+    expect(discoverAdditionalVehicleMasterInventoryPages({
+      sourceKey: 'CARNOON',
+      inventoryUrl: 'https://www.carnoon.co.kr/sitemap.xml',
+      bytes: Buffer.from('<xml/>'),
+    })).toEqual([]);
+  });
+
+  it('discovers provider detail URLs embedded in sitemap XML', () => {
+    const carnoon = discoverVehicleMasterPages({
+      sourceKey: 'CARNOON',
+      inventoryUrl: 'https://www.carnoon.co.kr/sitemap.xml',
+      bytes: Buffer.from(
+        '<urlset><url><loc>https://www.carnoon.co.kr/newcar/vehicle/11572</loc></url></urlset>'
+      ),
+    });
+    expect(carnoon[0]?.sourceUrl).toBe(
+      'https://www.carnoon.co.kr/newcar/vehicle/11572'
+    );
+
+    const danawa = discoverVehicleMasterPages({
+      sourceKey: 'DANAWA',
+      inventoryUrl: 'https://auto.danawa.com/sitemap.xml',
+      bytes: Buffer.from(
+        '<urlset><url><loc>https://auto.danawa.com/newcar/?Brand=303&amp;Model=4088&amp;Work=estimate</loc></url></urlset>'
+      ),
+    });
+    expect(danawa[0]?.sourceUrl).toContain('Work=estimate');
+  });
+
   it('discovers Danawa estimate URLs without depending on one model ID scheme', () => {
     const html = Buffer.from(`
       <div>현대 코나 2027년형
