@@ -1,10 +1,10 @@
-import { applicationDefault, getApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import type { NormalizedCandidateRecord, RawRecord, SourceDefinition, SourceHead, SourceRun } from '../domain/source.js';
 import { decideSourceHead } from '../domain/source.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import { SOURCE_FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './source-firestore-layout.js';
+import { getTargetFirebaseApp } from './firebase-target.js';
 
 const C = SOURCE_FIRESTORE_COLLECTIONS;
 
@@ -117,13 +117,5 @@ export class FirestoreSourceStore implements SourceIngestionStore {
 }
 
 export function createFirestoreSourceStore() {
-  const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
-  if (!projectId) throw new Error('FIREBASE_PROJECT_ID is required for target FreePass Data writes');
-
-  const appName = 'freepass-data-target';
-  const app = getApps().some((item) => item.name === appName)
-    ? getApp(appName)
-    : initializeApp({ credential: applicationDefault(), projectId }, appName);
-
-  return new FirestoreSourceStore(getFirestore(app));
+  return new FirestoreSourceStore(getFirestore(getTargetFirebaseApp()));
 }
