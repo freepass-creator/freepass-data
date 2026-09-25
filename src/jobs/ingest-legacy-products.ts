@@ -1,8 +1,6 @@
 import { readLegacyProductSnapshot } from '../adapters/legacy-freepasserp3.js';
 import { ingestLegacyProductSnapshot } from '../application/ingest-legacy-products.js';
-import { createFirestoreSourceStore } from '../infra/source-firestore-store.js';
-import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
-import { DataAccessGateway } from '../application/data-access-gateway.js';
+import { createSourceIngestDataAccessRuntime } from './data-access-runtime.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 const targetProjectId = process.env.FIREBASE_PROJECT_ID?.trim();
@@ -21,10 +19,9 @@ if (targetProjectId === legacyProjectId) {
   );
 }
 
-const target = createFirestoreSourceStore();
+const runtime = createSourceIngestDataAccessRuntime();
 const snapshot = await readLegacyProductSnapshot();
-const access = new DataAccessGateway(createFirestoreDataAccessLogStore());
-const run = await access.write({
+const run = await runtime.access.write({
   context: {
     actor: { id: 'service:freepass-data-ingest', kind: 'SERVICE' },
     clientId: 'job:ingest-legacy-products',
@@ -53,7 +50,7 @@ const run = await access.write({
       warningCount: value.warningCount
     })
   } : { count: 0 }
-}, () => ingestLegacyProductSnapshot(target, snapshot));
+}, () => ingestLegacyProductSnapshot(runtime.sourceStore, snapshot));
 
 console.log(JSON.stringify({
   status: run?.status ?? 'UNKNOWN',
