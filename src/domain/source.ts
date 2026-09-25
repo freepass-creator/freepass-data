@@ -78,6 +78,30 @@ export function canAssertSourceAbsence(run: SourceRun): boolean {
     && run.headStatus === 'CURRENT';
 }
 
+export type SourceHeadDecision = {
+  eligible: boolean;
+  acceptedAsHead: boolean;
+  headStatus: Exclude<SourceRunHeadStatus, 'PENDING'>;
+};
+
+export function decideSourceHead(
+  coverage: SourceCoverage,
+  observedAt: string,
+  currentObservedAt?: string | null
+): SourceHeadDecision {
+  const eligible = coverage.completeness === 'COMPLETE'
+    && isValidSourceObservation(observedAt);
+  const acceptedAsHead = eligible
+    && canAdvanceSourceHead(observedAt, currentObservedAt);
+
+  return {
+    eligible,
+    acceptedAsHead,
+    headStatus: acceptedAsHead ? 'CURRENT' : eligible ? 'STALE' : 'INELIGIBLE'
+  };
+}
+
+
 export type RawRecord = {
   rawRecordId: string;
   runId: string;
