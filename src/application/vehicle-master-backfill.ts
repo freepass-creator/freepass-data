@@ -93,7 +93,22 @@ export function discoverAdditionalVehicleMasterInventoryPages(input: {
     if (match[1]) ids.add(match[1]);
   }
 
-  return [...ids]
+  const additional = new Set<string>();
+  const inventoryUrlPattern =
+    /(?:https?:\/\/[^"'<>\s]+)?\/car\/\?[^"'<>\s]*(?:page|pageNo|start|offset|srhBrandArry)=[^"'<>\s]*/gi;
+  for (const match of html.matchAll(inventoryUrlPattern)) {
+    if (!match[0]) continue;
+    try {
+      const url = new URL(match[0].replaceAll('&amp;', '&'), input.inventoryUrl);
+      if (url.hostname.endsWith('carisyou.com')) {
+        additional.add(url.toString());
+      }
+    } catch {
+      // ignore malformed discovery hints
+    }
+  }
+
+  const brandPages = [...ids]
     .sort((a, b) => Number(a) - Number(b))
     .map((id) => {
       const url = new URL(input.inventoryUrl);
