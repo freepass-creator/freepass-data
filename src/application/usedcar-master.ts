@@ -14,7 +14,7 @@ function attrText(node: VehicleMasterNode | null, key: string) {
 
 function attrInteger(node: VehicleMasterNode | null, key: string) {
   const value = node?.attributes?.[key];
-  return Number.isInteger(value) ? Number(value) : null;
+  return typeof value === 'number' && Number.isInteger(value) ? value : null;
 }
 
 function lifecycle(status: VehicleMasterNode['status']): UsedcarMasterLifecycleStatus {
