@@ -1,6 +1,6 @@
 import type { Erp5SourceCapture } from './erp5-source-capture.js';
 import { decodeErp5Value, ERP5_DOCUMENTS } from './erp5-source-capture.js';
-import { createHash } from 'node:crypto';
+import { orderedJsonDigest } from '../shared/stable-digest.js';
 
 export const ERP5_POLICY_LINK_ANALYZER_VERSION = 'erp5-policy-link-analysis/1';
 type Raw = Record<string, unknown>;
@@ -29,7 +29,7 @@ function relaxed(value: string): string {
  */
 export function analyzeErp5PolicyLinks(capture: Erp5SourceCapture) {
   const { digest, ...unsigned } = capture;
-  const expectedDigest = createHash('sha256').update(JSON.stringify(unsigned)).digest('hex');
+  const expectedDigest = orderedJsonDigest(unsigned);
   if (capture.version !== 'erp5-source-capture/1' || digest !== expectedDigest) throw new Error('CAPTURE_DIGEST_MISMATCH');
   if (capture.projectId !== 'freepasserp5' || capture.databaseId !== '(default)'
     || capture.consistency !== 'READ_ONLY_TRANSACTION') throw new Error('INVALID_CAPTURE');
