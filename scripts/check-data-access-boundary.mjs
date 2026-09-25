@@ -9,12 +9,8 @@ const allowedRawInfraConsumers = new Set([
   'src/jobs/data-access-runtime.ts'
 ]);
 
-const rawFirestoreModules = [
-  'firestore-store',
-  'firestore-projection-reader',
-  'firestore-data-health-reader',
-  'source-firestore-store'
-];
+const isRawFirestoreModule = (specifier) =>
+  /(?:^|\/)infra\/(?:firestore-|source-firestore-)/.test(specifier);
 
 function walk(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -46,7 +42,7 @@ for (const file of walk(src)) {
       });
     }
 
-    const raw = rawFirestoreModules.find((name) => specifier.includes(name));
+    const raw = isRawFirestoreModule(specifier);
     if (
       raw &&
       layer !== 'infra' &&
