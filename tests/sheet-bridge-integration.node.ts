@@ -111,6 +111,7 @@ test('one capture produces both consumers and round-trips through the actual ERP
     'runAggregationQuery', 'runQuery', 'rollback'
   ]);
   assert.equal(prepared.handoffs.length, 2);
+  assert.equal(prepared.bridge.inventory.depositRuleViolations, 0);
   const [f01, f86] = prepared.handoffs;
   assert.deepEqual(f01!.approvedRelease, f86!.approvedRelease);
   assert.equal(f01!.manifest.sourceReadTime, input.readTime);
