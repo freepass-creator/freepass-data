@@ -251,7 +251,7 @@ function selectionForAxis(
 function axisSelected(selection: VehicleSelectorSelection, axis: VehicleSelectorAxis) {
   const selected = selectionForAxis(selection, axis);
   return (
-    hasText(selected.id) ||
+    ('id' in selected && hasText(selected.id)) ||
     ('label' in selected && hasText(selected.label)) ||
     ('value' in selected && selected.value != null)
   );
