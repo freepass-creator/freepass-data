@@ -1,5 +1,10 @@
 import { stableDigest } from '../shared/stable-digest.js';
 import {
+  coverageStrength,
+  findCoverageForHint,
+  type VehicleMasterCoverageRow,
+} from './vehicle-master-coverage.js';
+import {
   vehicleMasterBackfillPolicy,
   type VehicleMasterBackfillSourceKey,
   type VehicleMasterBackfillTask,
@@ -157,6 +162,7 @@ export function buildRecentFirstBackfillQueue(
   options: {
     completedUrls?: readonly string[];
     sourceKeys?: readonly VehicleMasterBackfillSourceKey[];
+    coverage?: readonly VehicleMasterCoverageRow[];
   } = {}
 ): VehicleMasterBackfillTask[] {
   const completed = new Set(options.completedUrls ?? []);
@@ -170,24 +176,41 @@ export function buildRecentFirstBackfillQueue(
     if (!unique.has(key)) unique.set(key, page);
   }
 
-  const sorted = [...unique.values()].sort((a, b) => {
-    const yearA = a.latestModelYearHint ?? -1;
-    const yearB = b.latestModelYearHint ?? -1;
-    if (yearA !== yearB) return yearB - yearA;
-    if (a.currentHint !== b.currentHint) {
-      return a.currentHint === true ? -1 : b.currentHint === true ? 1 : 0;
-    }
-    const priorityA = vehicleMasterBackfillPolicy(a.sourceKey).priority;
-    const priorityB = vehicleMasterBackfillPolicy(b.sourceKey).priority;
-    return priorityB - priorityA || a.sourceUrl.localeCompare(b.sourceUrl);
+  const withCoverage = [...unique.values()].map((page) => {
+    const coverage = findCoverageForHint(
+      options.coverage ?? [],
+      page.modelHint,
+      page.latestModelYearHint
+    );
+    return {
+      page,
+      coverageStatus: coverage?.status ?? 'MISSING' as const,
+      coverageStrength: coverage ? coverageStrength(coverage.status) : 0,
+    };
   });
 
-  return sorted.map((page, index) => ({
+  const sorted = withCoverage.sort((a, b) => {
+    const yearA = a.page.latestModelYearHint ?? -1;
+    const yearB = b.page.latestModelYearHint ?? -1;
+    if (yearA !== yearB) return yearB - yearA;
+    if (a.coverageStrength !== b.coverageStrength) {
+      return a.coverageStrength - b.coverageStrength;
+    }
+    if (a.page.currentHint !== b.page.currentHint) {
+      return a.page.currentHint === true ? -1 : b.page.currentHint === true ? 1 : 0;
+    }
+    const priorityA = vehicleMasterBackfillPolicy(a.page.sourceKey).priority;
+    const priorityB = vehicleMasterBackfillPolicy(b.page.sourceKey).priority;
+    return priorityB - priorityA || a.page.sourceUrl.localeCompare(b.page.sourceUrl);
+  });
+
+  return sorted.map(({ page, coverageStatus }, index) => ({
     ...page,
     taskId: `vmbf_${stableDigest({
       sourceKey: page.sourceKey,
       sourceUrl: page.sourceUrl,
     }).slice(0, 24)}`,
     rank: index + 1,
+    coverageStatus,
   }));
 }
