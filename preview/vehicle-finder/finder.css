@@ -83,7 +83,8 @@
   vertical-align:middle;
 }
 .vf th{font-size:var(--vf-support);font-weight:600}
-.vf th:first-child{width:60%}
+.vf th:first-child{width:82%}
+.vf th:last-child{width:18%}
 .vf .vf-row-button{
   display:grid;
   gap:2px;
@@ -183,8 +184,12 @@
   .vf tr[data-selected='true']{background:var(--vf-selected)}
   .vf td{display:block;padding:2px 0;border:0}
   .vf td:first-child{grid-column:1/-1}
-  .vf .vf-row-level,.vf .vf-row-evidence{font-size:var(--vf-support);color:var(--text,#5F6974)}
-  .vf .vf-row-evidence{text-align:right}
+  .vf .vf-row-check{
+    font-size:var(--vf-support);
+    color:var(--text,#5F6974);
+    text-align:right;
+    white-space:nowrap;
+  }
 
   /* Detail actions stay at the local bottom action boundary. */
   .vf .vf-actionbar{
@@ -204,7 +209,6 @@
 }
 
 @media(max-width:640px){
-  .vf .vf-row-evidence{display:none}
   .vf tr{grid-template-columns:minmax(0,1fr) auto}
 }
 
