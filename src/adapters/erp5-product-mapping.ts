@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { CommercialType } from '../domain/catalog.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 export const ERP5_PRODUCT_MAPPER_VERSION = 'erp5-product-mapping/2';
 export const ERP5_PRODUCT_SOURCE = 'freepasserp5/firestore/products';
@@ -30,11 +30,6 @@ function jsonValue(x: unknown): x is Json {
   if (typeof x === 'number') return Number.isFinite(x);
   if (Array.isArray(x)) return x.every(jsonValue);
   return object(x) && Object.values(x).every(jsonValue);
-}
-function stable(x: Json): Json {
-  if (Array.isArray(x)) return x.map(stable);
-  if (object(x)) return Object.fromEntries(Object.keys(x).sort().map(k => [k, stable(x[k]!)]));
-  return x;
 }
 const pointer = (parts: string[]) => '/' + parts.map(p => p.replaceAll('~', '~0').replaceAll('/', '~1')).join('/');
 /** Only explicit integer KRW/count values. No unit stripping, rounding, or unknown-to-zero. */
@@ -73,7 +68,7 @@ export function mapErp5Product(input: unknown): Erp5ProductMapping {
   const issue = (code: string) => { if (!issues.includes(code)) issues.push(code); };
   const candidate: Erp5ProductMapping['candidate'] = {
     sourceRecordId: raw.documentId,
-    sourceFingerprint: createHash('sha256').update(JSON.stringify(stable(d))).digest('hex'),
+    sourceFingerprint: stableDigest(d),
     priceTerms: [], issues
   };
   fieldSources.sourceRecordId = ['/documentId'];
