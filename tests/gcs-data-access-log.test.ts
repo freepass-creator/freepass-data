@@ -3,6 +3,7 @@ import { gcsDataAccessLogStore } from '../src/infra/gcs-data-access-log.js';
 import type { DataAccessEvent } from '../src/domain/data-access.js';
 
 const event: DataAccessEvent = {
+  contractVersion: 'data-access-event-v1',
   eventId: 'evt_test',
   operationId: 'op_test',
   mode: 'READ',
