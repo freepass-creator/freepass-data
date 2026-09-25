@@ -2,6 +2,57 @@ import { describe, expect, it } from 'vitest';
 import { CarisyouHistoricalParser } from '../src/adapters/carisyou-historical-parser.js';
 
 describe('Carisyou historical parser', () => {
+  it('does not assign used-market price after a grade row as original MSRP', () => {
+    const parser = new CarisyouHistoricalParser();
+    const html = `
+      <html><body>
+        <h4>브랜드</h4><div>현대</div>
+        <h4>대표차종</h4><div>팰리세이드</div>
+        <h4>연형+차종</h4><div>2020 팰리세이드</div>
+        <div>3.8 가솔린 익스클루시브 2WD A/T</div>
+        <div>중고시세 : 589만원 ~ 984만원</div>
+      </body></html>
+    `;
+
+    const result = parser.parse({
+      sourceDocumentId: 'src_carisyou_used_price_guard',
+      sourceUrl: 'https://www.carisyou.com/car/6313/Price',
+      contentType: 'text/html; charset=utf-8',
+      bytes: Buffer.from(html, 'utf8'),
+    });
+
+    expect(result.records).toHaveLength(0);
+  });
+
+  it('does not borrow the next grade price when the current grade price is missing', () => {
+    const parser = new CarisyouHistoricalParser();
+    const html = `
+      <html><body>
+        <h4>브랜드</h4><div>현대</div>
+        <h4>대표차종</h4><div>팰리세이드</div>
+        <h4>연형+차종</h4><div>2020 팰리세이드</div>
+        <div>3.8 가솔린 익스클루시브 2WD A/T</div>
+        <div>-</div>
+        <div>2.2 디젤 프레스티지 4WD A/T 4,498만원</div>
+      </body></html>
+    `;
+
+    const result = parser.parse({
+      sourceDocumentId: 'src_carisyou_next_grade_guard',
+      sourceUrl: 'https://www.carisyou.com/car/6313/Spec',
+      contentType: 'text/html; charset=utf-8',
+      bytes: Buffer.from(html, 'utf8'),
+    });
+
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]).toEqual(expect.objectContaining({
+      powertrainName: '2.2 디젤',
+      trimName: '프레스티지',
+      drivetrain: '4WD',
+      basePrice: 44_980_000,
+    }));
+  });
+
   it('parses discontinued historical grades without importing used-market price', () => {
     const parser = new CarisyouHistoricalParser();
     const html = `
