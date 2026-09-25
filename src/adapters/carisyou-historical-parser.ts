@@ -44,22 +44,21 @@ function parseManwon(value: string) {
 }
 
 function parseGrade(line: string) {
-  const firstDrive = line.match(
-    /^(?:단종\s+)?(.+?)\s+(2WD|4WD|AWD|FWD|RWD)(?:\s|$)/
+  const normalized = line.replace(/^단종\s+/, '').trim();
+  const match = normalized.match(
+    /^([0-9.]+)\s+(가솔린|디젤|LPG|하이브리드|전기)(?:\s+(터보))?\s+(.+?)(?:\s+(2WD|4WD|AWD|FWD|RWD))?\s+(?:A\/T|M\/T|CVT|DCT)(?:\s+([\d,]+)\s*만원)?$/
   );
-  if (!firstDrive?.[1] || !firstDrive[2]) return null;
+  if (!match?.[1] || !match[2] || !match[4]) return null;
 
-  const korean = firstDrive[1].trim();
-  const detail = korean.match(
-    /^([0-9.]+)\s*(가솔린|디젤|LPG|하이브리드|전기)\s+(.+)$/
-  );
-  if (!detail?.[1] || !detail[2] || !detail[3]) return null;
-
+  const inlinePrice = match[6]
+    ? Number(match[6].replaceAll(',', '')) * 10_000
+    : null;
   return {
-    powertrainName: `${detail[1]} ${detail[2]}`,
-    fuelLabel: detail[2],
-    trimName: detail[3].trim(),
-    drivetrain: firstDrive[2],
+    powertrainName: [match[1], match[2], match[3]].filter(Boolean).join(' '),
+    fuelLabel: match[2],
+    trimName: match[4].trim(),
+    drivetrain: match[5] ?? null,
+    inlinePrice: Number.isSafeInteger(inlinePrice) ? inlinePrice : null,
   };
 }
 
@@ -81,7 +80,7 @@ export class CarisyouHistoricalParser implements VehicleMasterSourceParser {
       const url = new URL(input.sourceUrl);
       return (
         (url.hostname === 'carisyou.com' || url.hostname.endsWith('.carisyou.com')) &&
-        /^\/car\/\d+\/?$/.test(url.pathname)
+        /^\/car\/\d+(?:\/(?:Price|Spec))?\/?$/i.test(url.pathname)
       );
     } catch {
       return false;
@@ -108,7 +107,9 @@ export class CarisyouHistoricalParser implements VehicleMasterSourceParser {
         const grade = parseGrade(line);
         if (!grade) continue;
 
-        const priced = nextPrice(lines, index);
+        const priced = grade.inlinePrice !== null
+          ? { amount: grade.inlinePrice, index }
+          : nextPrice(lines, index);
         if (!priced) continue;
 
         records.push({
