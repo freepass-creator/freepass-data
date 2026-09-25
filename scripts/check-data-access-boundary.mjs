@@ -4,7 +4,9 @@ import path from 'node:path';
 const root = process.cwd();
 const src = path.join(root, 'src');
 const allowedRawInfraConsumers = new Set([
-  'src/api/data-access-runtime.ts'
+  'src/bootstrap.ts',
+  'src/api/data-access-runtime.ts',
+  'src/jobs/data-access-runtime.ts'
 ]);
 
 const rawFirestoreModules = [
