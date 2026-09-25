@@ -1,6 +1,8 @@
 import {
   deterministicVehicleMasterRecordId,
+  sealVehicleMasterHashRecord,
   sealVehicleMasterSourceDocument,
+  type VehicleMasterHashRecord,
   type VehicleMasterSourceDocument,
   type VehicleMasterWriteResult,
 } from '../domain/vehicle-master.js';
@@ -28,8 +30,10 @@ export type CaptureVehicleMasterSourceInput = {
 
 export type CaptureVehicleMasterSourceResult = {
   sourceDocument: VehicleMasterSourceDocument;
+  hashRecord: VehicleMasterHashRecord;
   archiveWrite: 'CREATED' | 'UNCHANGED';
   documentWrite: VehicleMasterWriteResult;
+  hashWrite: VehicleMasterWriteResult;
 };
 
 function extension(contentType: string | null, url: string) {
@@ -115,7 +119,30 @@ export async function persistFetchedVehicleMasterSource(
   });
   const documentWrite = await dependencies.store.putSourceDocument(sourceDocument);
 
-  return { sourceDocument, archiveWrite, documentWrite };
+  const hashRecord = sealVehicleMasterHashRecord({
+    hashId: deterministicVehicleMasterRecordId('hash', {
+      scope: 'SOURCE_BYTES',
+      sourceDocumentId,
+      algorithm: 'SHA-256',
+      digest: sha256,
+    }),
+    scope: 'SOURCE_BYTES',
+    algorithm: 'SHA-256',
+    digest: sha256,
+    sourceDocumentId,
+    targetId: null,
+    storagePath,
+    byteLength: fetched.bytes.byteLength,
+    mimeType: fetched.contentType,
+    observedAt: input.observedAt,
+    metadata: {
+      sourceType: input.sourceType,
+      sourceUrl: fetched.finalUrl,
+    },
+  });
+  const hashWrite = await dependencies.store.putHash(hashRecord);
+
+  return { sourceDocument, hashRecord, archiveWrite, documentWrite, hashWrite };
 }
 
 export async function captureVehicleMasterSource(
