@@ -134,9 +134,23 @@ const maxDiscoveryPages = discoveryPageLimit(
 
 const store = createFirestoreVehicleMasterStore();
 const existingSources = await store.listSourceDocuments();
+const existingNormalized = await store.listPipelineRecordsByKind('NORMALIZED_RECORD');
+const normalizedSourceIds = new Set(
+  existingNormalized
+    .map((record) => record.sourceDocumentId)
+    .filter((value): value is string => Boolean(value))
+);
 const persistedCompletedUrls = existingSources
-  .filter((source) => typeof source.metadata?.backfillTaskId === 'string')
-  .map((source) => source.sourceUrl)
+  .filter((source) =>
+    typeof source.metadata?.backfillTaskId === 'string' &&
+    normalizedSourceIds.has(source.sourceDocumentId)
+  )
+  .flatMap((source) => [
+    source.sourceUrl,
+    typeof source.metadata?.requestedUrl === 'string'
+      ? source.metadata.requestedUrl
+      : null,
+  ])
   .filter((value): value is string => Boolean(value));
 const skipUrls = [
   ...new Set([
@@ -335,8 +349,7 @@ const auditPayload = {
 const auditRecord = sealVehicleMasterPipelineRecord({
   recordId: deterministicVehicleMasterRecordId('backfill-audit', {
     observedAt,
-    coverageAfterDigest: auditPayload.coverageAfter.digest,
-    selectedSources,
+    auditDigest: stableDigest(auditPayload),
   }),
   kind: 'AUDIT_REPORT',
   sourceDocumentId: null,
