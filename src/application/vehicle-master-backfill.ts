@@ -94,8 +94,13 @@ export function discoverVehicleMasterPages(input: {
     }
     if (!acceptedDetailUrl(input.sourceKey, url)) continue;
 
-    const sourceUrl = url.toString();
-    if (discovered.has(sourceUrl)) continue;
+    const detailUrls =
+      input.sourceKey === 'CARISYOU' && /^\/car\/\d+\/?$/.test(url.pathname)
+        ? [
+            new URL(`${url.pathname.replace(/\/$/, '')}/Price`, url.origin).toString(),
+            new URL(`${url.pathname.replace(/\/$/, '')}/Spec`, url.origin).toString(),
+          ]
+        : [url.toString()];
     const hint = yearHint(html, anchor.index);
     const nearby = decodeHtml(html.slice(Math.max(0, anchor.index - 700), anchor.index + 100));
     const currentHint =
@@ -105,16 +110,19 @@ export function discoverVehicleMasterPages(input: {
           ? false
           : null;
 
-    discovered.set(sourceUrl, {
-      sourceKey: input.sourceKey,
-      sourceType: policy.sourceType,
-      sourceName: policy.sourceName,
-      sourceUrl,
-      discoveredFromUrl: input.inventoryUrl,
-      modelHint: modelHint(anchor.label, html, anchor.index),
-      latestModelYearHint: hint,
-      currentHint,
-    });
+    for (const sourceUrl of detailUrls) {
+      if (discovered.has(sourceUrl)) continue;
+      discovered.set(sourceUrl, {
+        sourceKey: input.sourceKey,
+        sourceType: policy.sourceType,
+        sourceName: policy.sourceName,
+        sourceUrl,
+        discoveredFromUrl: input.inventoryUrl,
+        modelHint: modelHint(anchor.label, html, anchor.index),
+        latestModelYearHint: hint,
+        currentHint,
+      });
+    }
   }
 
   return [...discovered.values()];
