@@ -92,12 +92,13 @@ try:
         assert page.get_by_role('button', name='다시 조회', exact=True).inner_text() == '↻'
         expect(page.locator('tbody .vf-row-button')).to_have_count(5)
         assert page.locator('.vf-selection').is_hidden()
-        expect(page.locator('thead th')).to_have_count(2)
-        expect(page.locator('thead')).not_to_contain_text('선택 수준')
-        expect(page.locator('thead')).not_to_contain_text('자료')
+        expect(page.locator('thead th')).to_have_count(1)
+        expect(page.locator('thead')).to_have_text('차량')
         model_b_row = page.locator('tr', has=page.get_by_role('button', name='시험제조사 › 시험차 B', exact=True))
         expect(model_b_row.locator('.vf-row-check')).to_have_text('구성 미확인')
         assert '구성 자료' not in page.locator('tbody').inner_text()
+        expect(page.locator('.vf-head')).to_have_text('차량 찾기')
+        expect(page.locator('.vf-head')).not_to_contain_text('아는 정보만으로')
         passed('initial browse stays minimal and only exceptional configuration state is visible')
 
         page.get_by_label('차량 검색', exact=True).fill('쏘렌토 프레스티지')
