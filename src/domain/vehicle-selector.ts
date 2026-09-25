@@ -91,10 +91,20 @@ export type VehicleSelectorFacetOption = {
   count: number;
 };
 
+export type VehicleSelectorGuidance = {
+  candidateCount: number;
+  selectableCount: number;
+  resolvedRecordId: string | null;
+  singletonAxes: VehicleSelectorAxis[];
+  ambiguousAxes: VehicleSelectorAxis[];
+  suggestedNextAxis: VehicleSelectorAxis | null;
+};
+
 export type VehicleSelectorResult = {
   mode: VehicleSelectorMode;
   candidates: VehicleSelectorCandidate[];
   facets: Record<VehicleSelectorAxis, VehicleSelectorFacetOption[]>;
+  guidance: VehicleSelectorGuidance;
 };
 
 export type VehicleSelectorUxPreset = {
@@ -104,6 +114,8 @@ export type VehicleSelectorUxPreset = {
   preferredAxisOrder: VehicleSelectorAxis[];
   hiddenByDefault: VehicleSelectorAxis[];
   allowArbitraryAxisEntry: true;
+  collapseSingletonAxes: true;
+  revealHiddenWhenAmbiguous: true;
 };
 
 export const VEHICLE_SELECTOR_UX_PRESETS: Record<
@@ -124,6 +136,8 @@ export const VEHICLE_SELECTOR_UX_PRESETS: Record<
     ],
     hiddenByDefault: ['generation', 'phase', 'modelYear', 'fuelType'],
     allowArbitraryAxisEntry: true,
+    collapseSingletonAxes: true,
+    revealHiddenWhenAmbiguous: true,
   },
   USED_CAR: {
     mode: 'USED_CAR',
@@ -143,6 +157,8 @@ export const VEHICLE_SELECTOR_UX_PRESETS: Record<
     ],
     hiddenByDefault: [],
     allowArbitraryAxisEntry: true,
+    collapseSingletonAxes: true,
+    revealHiddenWhenAmbiguous: true,
   },
 };
 
@@ -368,6 +384,52 @@ function buildFacets(
   })) as Record<VehicleSelectorAxis, VehicleSelectorFacetOption[]>;
 }
 
+function axisOptionCount(
+  candidates: readonly VehicleSelectorCandidate[],
+  axis: VehicleSelectorAxis
+) {
+  const values = new Set<string>();
+  for (const candidate of candidates) {
+    const option = facetOption(candidate.record, axis);
+    if (!option) continue;
+    values.add(JSON.stringify([option.id, option.label, option.value]));
+  }
+  return values.size;
+}
+
+function buildGuidance(
+  candidates: readonly VehicleSelectorCandidate[],
+  request: VehicleSelectorRequest
+): VehicleSelectorGuidance {
+  const selection = request.selection ?? {};
+  const singletonAxes: VehicleSelectorAxis[] = [];
+  const ambiguousAxes: VehicleSelectorAxis[] = [];
+
+  for (const axis of AXES) {
+    if (axisSelected(selection, axis)) continue;
+    const count = axisOptionCount(candidates, axis);
+    if (count === 1) singletonAxes.push(axis);
+    if (count > 1) ambiguousAxes.push(axis);
+  }
+
+  const selectable = candidates.filter((candidate) => candidate.selectable);
+  const preset = VEHICLE_SELECTOR_UX_PRESETS[request.mode];
+  const suggestedNextAxis =
+    preset.preferredAxisOrder.find((axis) => ambiguousAxes.includes(axis)) ?? null;
+
+  return {
+    candidateCount: candidates.length,
+    selectableCount: selectable.length,
+    resolvedRecordId:
+      candidates.length === 1 && candidates[0]?.selectable
+        ? candidates[0].record.recordId
+        : null,
+    singletonAxes,
+    ambiguousAxes,
+    suggestedNextAxis,
+  };
+}
+
 export function selectVehicles(
   records: readonly VehicleSelectorRecord[],
   request: VehicleSelectorRequest
@@ -432,5 +494,6 @@ export function selectVehicles(
     mode: request.mode,
     candidates,
     facets: buildFacets(records, request),
+    guidance: buildGuidance(candidates, request),
   };
 }
