@@ -120,7 +120,7 @@ export function createConsumerGateway(
     const supplied = request.headers.authorization ?? '';
     const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
     const context = consumerContext(
-      binding?.id ?? request.params.consumerId,
+      binding?.id ?? 'unregistered-consumer',
       'read approved catalog projection through FreePass Data',
       request.id
     );
@@ -209,7 +209,7 @@ export function createConsumerGateway(
       hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
     );
     const context = consumerContext(
-      binding?.id ?? request.params.consumerId,
+      binding?.id ?? 'unregistered-consumer',
       'read catalog health through FreePass Data',
       request.id
     );
