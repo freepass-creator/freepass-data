@@ -36,6 +36,61 @@ function anchors(html: string) {
   return rows;
 }
 
+function sourceSpecificUrlCandidates(
+  html: string,
+  sourceKey: VehicleMasterBackfillSourceKey
+) {
+  const rows: Array<{ href: string; label: string; index: number; end: number }> = [];
+  const patterns: RegExp[] = sourceKey === 'CARNOON'
+    ? [/\/newcar\/vehicle\/\d+\/?/g]
+    : sourceKey === 'CARISYOU'
+      ? [/\/car\/\d+(?:\/(?:Price|Spec))?\/?/gi]
+      : sourceKey === 'DANAWA'
+        ? [/\/newcar\/\?[^"'<>\s]*?(?:Work=estimate|Code=|Model=)[^"'<>\s]*/gi]
+        : [];
+
+  for (const pattern of patterns) {
+    for (const match of html.matchAll(pattern)) {
+      if (!match[0]) continue;
+      rows.push({
+        href: match[0].replaceAll('&amp;', '&'),
+        label: '',
+        index: match.index ?? 0,
+        end: (match.index ?? 0) + match[0].length,
+      });
+    }
+  }
+  return rows;
+}
+
+export function discoverAdditionalVehicleMasterInventoryPages(input: {
+  sourceKey: VehicleMasterBackfillSourceKey;
+  inventoryUrl: string;
+  bytes: Buffer;
+}): string[] {
+  if (input.sourceKey !== 'CARISYOU') return [];
+  const html = input.bytes.toString('utf8');
+  const ids = new Set<string>();
+
+  const inputPattern = /<input\b[^>]*\bname=["']srhBrandArry(?:\[\])?["'][^>]*\bvalue=["'](\d+)["'][^>]*>/gi;
+  for (const match of html.matchAll(inputPattern)) {
+    if (match[1]) ids.add(match[1]);
+  }
+
+  const queryPattern = /[?&]srhBrandArry=(\d+)/g;
+  for (const match of html.matchAll(queryPattern)) {
+    if (match[1]) ids.add(match[1]);
+  }
+
+  return [...ids]
+    .sort((a, b) => Number(a) - Number(b))
+    .map((id) => {
+      const url = new URL(input.inventoryUrl);
+      url.searchParams.set('srhBrandArry', id);
+      return url.toString();
+    });
+}
+
 function yearHint(
   html: string,
   index: number,
@@ -107,7 +162,12 @@ export function discoverVehicleMasterPages(input: {
     anchor: ReturnType<typeof anchors>[number];
     url: URL;
   }> = [];
-  for (const anchor of anchors(html)) {
+  const candidates = [
+    ...anchors(html),
+    ...sourceSpecificUrlCandidates(html, input.sourceKey),
+  ].sort((a, b) => a.index - b.index || a.href.localeCompare(b.href));
+
+  for (const anchor of candidates) {
     let url: URL;
     try {
       url = new URL(anchor.href.replaceAll('&amp;', '&'), input.inventoryUrl);
