@@ -1,5 +1,5 @@
 import type {
-  ErpPublicProduct,
+  ProjectionProduct,
   ProjectionRelease
 } from '../domain/catalog.js';
 import type {
@@ -53,8 +53,8 @@ export type ProjectionIntegrityResult = {
   canonicalRevision: number;
 };
 
-export function verifyProjectionReleaseIntegrity(
-  release: ProjectionRelease<ErpPublicProduct>,
+export function verifyProjectionReleaseIntegrity<T extends ProjectionProduct>(
+  release: ProjectionRelease<T>,
   manifest: ProjectionReleaseManifest,
   lineage: readonly ProjectionFieldLineageRecord[]
 ): ProjectionIntegrityResult {
@@ -158,8 +158,8 @@ export class ProjectionIntegrityError extends Error {
   }
 }
 
-export function assertProjectionReleaseIntegrity(
-  release: ProjectionRelease<ErpPublicProduct>,
+export function assertProjectionReleaseIntegrity<T extends ProjectionProduct>(
+  release: ProjectionRelease<T>,
   manifest: ProjectionReleaseManifest,
   lineage: readonly ProjectionFieldLineageRecord[]
 ): ProjectionIntegrityResult {

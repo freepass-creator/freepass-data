@@ -1,5 +1,6 @@
 import type {
   ErpPublicProduct,
+  ProjectionProduct,
   ProjectionRelease
 } from '../domain/catalog.js';
 import type {
@@ -12,28 +13,28 @@ import type {
   ProjectionStore
 } from '../ports/catalog-store.js';
 
-export type ActiveProjectionEvidenceObservation = {
+export type ActiveProjectionEvidenceObservation<T extends ProjectionProduct = ErpPublicProduct> = {
   projectionId: string;
-  release: ProjectionRelease<ErpPublicProduct> | null;
+  release: ProjectionRelease<T> | null;
   manifest: ProjectionReleaseManifest | null;
   lineage: ProjectionFieldLineageRecord[];
   consistency: 'ATOMIC' | 'PARTIAL_MULTI_READ';
 };
 
-export async function readActiveProjectionEvidence(
+export async function readActiveProjectionEvidence<T extends ProjectionProduct = ErpPublicProduct>(
   projections: Pick<
     ProjectionStore,
     'getActive' | 'getManifest' | 'listProjectionLineage'
   > & Partial<ProjectionEvidenceSnapshotStore>,
   projectionId: string
-): Promise<ActiveProjectionEvidenceObservation> {
+): Promise<ActiveProjectionEvidenceObservation<T>> {
   if (typeof projections.getActiveEvidenceSnapshot === 'function') {
-    const snapshot: ActiveProjectionEvidenceSnapshot =
-      await projections.getActiveEvidenceSnapshot(projectionId);
+    const snapshot: ActiveProjectionEvidenceSnapshot<T> =
+      await projections.getActiveEvidenceSnapshot<T>(projectionId);
     return snapshot;
   }
 
-  const release = await projections.getActive(projectionId);
+  const release = await projections.getActive<T>(projectionId);
   if (!release) {
     return {
       projectionId,

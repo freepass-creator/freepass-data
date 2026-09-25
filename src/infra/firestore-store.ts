@@ -2,7 +2,7 @@ import { getTargetFirebaseApp } from './firebase-target.js';
 import { getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type {
   AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
-  Product, ProjectionRelease, VehicleAsset, VehicleModel
+  Product, ProjectionProduct, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
   CatalogStore, CatalogTransaction, OutboxStore, ProjectionStore
@@ -30,6 +30,7 @@ import type {
   WriterOwnershipTransferReceipt
 } from '../domain/writer-ownership.js';
 import type {
+  ActiveProjectionEvidenceSnapshot,
   ProjectionDeliveryReceipt,
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
@@ -352,7 +353,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async listOffers() { return this.all<Offer>(C.offers); }
   async listPolicies() { return this.all<Policy>(C.policies); }
 
-  async stage(release: ProjectionRelease<ErpPublicProduct>) {
+  async stage<T extends ProjectionProduct>(release: ProjectionRelease<T>) {
     await this.db.collection(C.releases).doc(release.releaseId).create(release);
   }
   async stageEvidence(input: {
@@ -366,7 +367,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     }
 
     assertProjectionReleaseIntegrity(
-      releaseSnap.data() as ProjectionRelease<ErpPublicProduct>,
+      releaseSnap.data() as ProjectionRelease<ProjectionProduct>,
       input.manifest,
       input.lineage
     );
@@ -417,7 +418,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       );
 
       assertProjectionReleaseIntegrity(
-        releaseSnap.data() as ProjectionRelease<ErpPublicProduct>,
+        releaseSnap.data() as ProjectionRelease<ProjectionProduct>,
         manifest,
         evidence
       );
@@ -446,7 +447,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         (doc) => doc.data() as ProjectionFieldLineageRecord
       );
       assertProjectionReleaseIntegrity(
-        snap.data() as ProjectionRelease<ErpPublicProduct>,
+        snap.data() as ProjectionRelease<ProjectionProduct>,
         manifest,
         evidence
       );
@@ -463,14 +464,18 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       tx.set(activeRef, { releaseId, projectionId });
     });
   }
-  async getActive(projectionId: string) {
+  async getActive<T extends ProjectionProduct = ErpPublicProduct>(
+    projectionId: string
+  ): Promise<ProjectionRelease<T> | null> {
     const active = await this.db.collection(C.activeReleases).doc(projectionId).get();
     if (!active.exists) return null;
-    return data<ProjectionRelease<ErpPublicProduct>>(
+    return data<ProjectionRelease<T>>(
       await this.db.collection(C.releases).doc(active.get('releaseId') as string).get()
     );
   }
-  async getActiveEvidenceSnapshot(projectionId: string) {
+  async getActiveEvidenceSnapshot<T extends ProjectionProduct = ErpPublicProduct>(
+    projectionId: string
+  ): Promise<ActiveProjectionEvidenceSnapshot<T>> {
     const activeRef = this.db.collection(C.activeReleases).doc(projectionId);
 
     return this.db.runTransaction(async (tx) => {
@@ -497,7 +502,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
 
       return {
         projectionId,
-        release: data<ProjectionRelease<ErpPublicProduct>>(releaseSnap),
+        release: data<ProjectionRelease<T>>(releaseSnap),
         manifest: data<ProjectionReleaseManifest>(manifestSnap),
         lineage: evidenceSnap.docs.map(
           (doc) => doc.data() as ProjectionFieldLineageRecord

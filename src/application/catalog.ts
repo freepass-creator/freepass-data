@@ -7,6 +7,7 @@ import type {
   ErpPublicProduct,
   Money,
   Offer,
+  Policy,
   Product,
   ProjectionRelease,
   VehicleAsset,
@@ -202,8 +203,9 @@ function sameEvidenceValue(a: unknown, b: unknown) {
   return JSON.stringify(stableValue(a)) === JSON.stringify(stableValue(b));
 }
 
-function buildProjectionEvidenceContext(input: {
+export function buildProjectionEvidenceContext(input: {
   releaseId: string;
+  projectionId: string;
   sourceLineage: FieldLineageRecord[];
   revisionHistory: EntityRevisionRecord[];
 }) {
@@ -235,7 +237,7 @@ function buildProjectionEvidenceContext(input: {
 
   const requireRevision = (
     entityType: CatalogEntityType,
-    entity: VehicleModel | VehicleAsset | Product | Offer
+    entity: VehicleModel | VehicleAsset | Product | Offer | Policy
   ) => {
     const key = canonicalInputKey(entityType, entity.id, entity.revision);
     const record = revisionByEntity.get(key);
@@ -298,7 +300,7 @@ function buildProjectionEvidenceContext(input: {
     evidence.push({
       lineageRecordId,
       stage: 'CANONICAL_TO_PROJECTION',
-      projectionId: 'erp-public',
+      projectionId: input.projectionId,
       releaseId: input.releaseId,
       canonical: {
         entityType: inputField.entityType,
@@ -344,6 +346,7 @@ export async function buildErpPublicProjection(
 
   const evidenceContext = buildProjectionEvidenceContext({
     releaseId,
+    projectionId: 'erp-public',
     sourceLineage,
     revisionHistory
   });
