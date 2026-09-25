@@ -118,6 +118,24 @@ describe('DataAccessGateway', () => {
     expect(store.events[1]!.result?.revision).toBe(2);
   });
 
+  it('rejects malformed audit metadata before touching the data source', async () => {
+    const { access, store } = gateway();
+    let touched = false;
+    await expect(access.read({
+      context: {
+        ...context,
+        actor: { id: 'service:test', kind: 'INVALID' as any }
+      },
+      operation: 'READ_CATALOG',
+      resource
+    }, async () => {
+      touched = true;
+      return {};
+    })).rejects.toThrow('INVALID_DATA_ACCESS_SPEC');
+    expect(touched).toBe(false);
+    expect(store.events).toHaveLength(0);
+  });
+
   it('records denied attempts without running a data operation', async () => {
     const { store, access } = gateway();
     await access.deny('READ', {
