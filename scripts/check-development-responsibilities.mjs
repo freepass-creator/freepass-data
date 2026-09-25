@@ -23,6 +23,7 @@ const ids = new Set();
 const activeById = new Map();
 const activePrs = new Map();
 const activeBranches = new Map();
+const aliasOwners = new Map();
 
 for (const row of rows) {
   if (!row || typeof row !== 'object') {
@@ -35,6 +36,21 @@ for (const row of rows) {
   }
   if (ids.has(row.id)) fail(`duplicate responsibility id: ${row.id}`);
   ids.add(row.id);
+
+  const terms = [row.id, ...(Array.isArray(row.aliases) ? row.aliases : [])];
+  for (const raw of terms) {
+    if (typeof raw !== 'string' || !raw.trim()) {
+      fail(`responsibility aliases must be non-empty strings: ${row.id}`);
+      continue;
+    }
+    const normalized = raw.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\\s+/g, ' ');
+    const prior = aliasOwners.get(normalized);
+    if (prior && prior !== row.id) {
+      fail(`responsibility alias collision "${raw}": ${prior} vs ${row.id}`);
+    } else {
+      aliasOwners.set(normalized, row.id);
+    }
+  }
 
   const authority = row.authority ?? {};
   const state = authority.state;
@@ -109,5 +125,5 @@ if (!fs.existsSync(templatePath)) {
 }
 
 if (!process.exitCode) {
-  console.log(`Development responsibility registry OK: ${rows.length} responsibilities, ${activeById.size} canonical WIP lines`);
+  console.log(`Development responsibility registry OK: ${rows.length} responsibilities, ${activeById.size} canonical WIP lines, ${aliasOwners.size} unique responsibility terms`);
 }
