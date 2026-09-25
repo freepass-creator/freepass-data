@@ -87,6 +87,12 @@ export function buildVehicleMasterTrimProposalSet(input: {
   const sourceEvidenceIds = reconciled.sourceDocumentIds;
   const priceEffectiveFrom = reconciled.effectiveFrom;
   const status = statusFor(reconciled);
+  const priceObservations: VehicleMasterFieldObservation[] = (reconciled.basePriceObservations ?? []).map((item) => ({
+    fieldPath: 'amount', value: item.amount, sourceDocumentId: item.sourceDocumentId,
+  }));
+  const priceCurrencyObservations: VehicleMasterFieldObservation[] = (reconciled.basePriceObservations ?? []).map((item) => ({
+    fieldPath: 'currency', value: item.currency, sourceDocumentId: item.sourceDocumentId,
+  }));
 
   const modelYearId = deterministicVehicleMasterId('MODEL_YEAR', {
     phaseId: anchor.phaseId,
@@ -274,18 +280,12 @@ export function buildVehicleMasterTrimProposalSet(input: {
     },
     basePrice: {
       record: basePrice,
-      observations: [
-        ...observations(
-          'amount',
-          reconciled.basePrice,
-          reconciled.fieldEvidence.basePrice ?? []
-        ),
-        ...observations(
-          'currency',
-          reconciled.currency,
-          reconciled.fieldEvidence.currency ?? []
-        ),
-      ],
+      observations: priceObservations.length
+        ? [...priceObservations, ...priceCurrencyObservations]
+        : [
+            ...observations('amount', reconciled.basePrice, reconciled.fieldEvidence.basePrice ?? []),
+            ...observations('currency', reconciled.currency, reconciled.fieldEvidence.currency ?? []),
+          ],
       policy: {
         requiredFieldPaths: ['amount', 'currency'],
         minCorroboratingSourcesWithoutOfficial: 2,

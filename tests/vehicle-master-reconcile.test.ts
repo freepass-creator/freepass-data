@@ -127,4 +127,63 @@ describe('vehicle master cross-source reconciliation', () => {
       }),
     ]);
   });
+  it('treats base price as evidence, not trim identity', () => {
+    const base = {
+      maker: '기아',
+      model: '쏘렌토',
+      modelYear: 2027,
+      powertrainName: '2.5 가솔린 터보',
+      seats: 5,
+      drivetrain: '2WD',
+      trimName: '프레스티지',
+      fuelType: 'GASOLINE',
+      currency: 'KRW' as const,
+      baseItems: [],
+      options: [],
+      sourceText: 'fixture',
+    };
+
+    const rows = reconcileVehicleMasterTrimFacts([
+      {
+        sourceDocumentId: 'official_old',
+        record: {
+          ...base,
+          basePrice: 35410000,
+          effectiveFrom: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      {
+        sourceDocumentId: 'official_current',
+        record: {
+          ...base,
+          basePrice: 36410000,
+          effectiveFrom: '2026-09-01T00:00:00.000Z',
+        },
+      },
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.conflicts).toEqual([
+      expect.objectContaining({
+        field: 'basePrice',
+        values: [35410000, 36410000],
+        sourceDocumentIds: ['official_current', 'official_old'],
+      }),
+    ]);
+    expect(rows[0]?.basePriceObservations).toEqual([
+      {
+        sourceDocumentId: 'official_current',
+        amount: 36410000,
+        currency: 'KRW',
+        effectiveFrom: '2026-09-01T00:00:00.000Z',
+      },
+      {
+        sourceDocumentId: 'official_old',
+        amount: 35410000,
+        currency: 'KRW',
+        effectiveFrom: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+  });
+
 });

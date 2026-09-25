@@ -11,7 +11,7 @@ export type VehicleMasterParsedSourceRecord = {
 };
 
 export type VehicleMasterReconciliationConflict = {
-  field: 'seats' | 'drivetrain' | 'fuelType' | 'currency';
+  field: 'seats' | 'drivetrain' | 'fuelType' | 'basePrice' | 'currency';
   values: unknown[];
   sourceDocumentIds: string[];
 };
@@ -34,6 +34,7 @@ export type VehicleMasterReconciledTrim = {
   trimName: string;
   fuelType: string | null;
   basePrice: number;
+  basePriceObservations?: Array<{ sourceDocumentId: string; amount: number; currency: 'KRW'; effectiveFrom: string | null }>;
   currency: 'KRW';
   effectiveFrom: string | null;
   baseItems: string[];
@@ -71,8 +72,6 @@ function compatibleGroupKey(record: VehicleMasterParsedTrim) {
     record.modelYear,
     powertrainKey(record.powertrainName),
     trimKey(record.trimName),
-    record.basePrice,
-    record.currency,
   ]);
 }
 
@@ -212,8 +211,9 @@ export function reconcileVehicleMasterTrimFacts(
     const seats = mergeScalar('seats', group, (record) => record.seats);
     const drivetrain = mergeScalar('drivetrain', group, (record) => record.drivetrain);
     const fuelType = mergeScalar('fuelType', group, (record) => record.fuelType);
+    const basePrice = mergeScalar('basePrice', group, (record) => record.basePrice);
     const currency = mergeScalar('currency', group, (record) => record.currency);
-    const conflicts = [seats.conflict, drivetrain.conflict, fuelType.conflict, currency.conflict]
+    const conflicts = [seats.conflict, drivetrain.conflict, fuelType.conflict, basePrice.conflict, currency.conflict]
       .filter((value): value is VehicleMasterReconciliationConflict => Boolean(value));
 
     const sourceDocumentIds = uniqueSorted(group.map((row) => row.sourceDocumentId));
@@ -221,6 +221,18 @@ export function reconcileVehicleMasterTrimFacts(
       .map((row) => row.record.effectiveFrom ?? null)
       .filter((value): value is string => Boolean(value))
       .sort();
+    const basePriceObservations = group
+      .map((row) => ({
+        sourceDocumentId: row.sourceDocumentId,
+        amount: row.record.basePrice,
+        currency: row.record.currency,
+        effectiveFrom: row.record.effectiveFrom ?? null,
+      }))
+      .sort((a, b) =>
+        a.sourceDocumentId.localeCompare(b.sourceDocumentId) ||
+        a.amount - b.amount ||
+        String(a.effectiveFrom ?? '').localeCompare(String(b.effectiveFrom ?? ''))
+      );
 
     reconciled.push({
       modelYear: first.record.modelYear,
@@ -229,7 +241,8 @@ export function reconcileVehicleMasterTrimFacts(
       drivetrain: drivetrain.value,
       trimName: first.record.trimName,
       fuelType: fuelType.value,
-      basePrice: first.record.basePrice,
+      basePrice: basePrice.value ?? first.record.basePrice,
+      basePriceObservations,
       currency: (currency.value ?? 'KRW') as 'KRW',
       effectiveFrom: effectiveDates[0] ?? null,
       baseItems: uniqueSorted(group.flatMap((row) => row.record.baseItems)),
@@ -240,7 +253,7 @@ export function reconcileVehicleMasterTrimFacts(
         modelYear: sourceDocumentIds,
         powertrainName: sourceDocumentIds,
         trimName: sourceDocumentIds,
-        basePrice: sourceDocumentIds,
+        basePrice: basePrice.evidence,
         seats: seats.evidence,
         drivetrain: drivetrain.evidence,
         fuelType: fuelType.evidence,
