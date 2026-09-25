@@ -422,8 +422,11 @@ export function buildRecentFirstBackfillQueue(
   });
 
   const sorted = withCoverage.sort((a, b) => {
-    const yearA = a.page.latestModelYearHint ?? -1;
-    const yearB = b.page.latestModelYearHint ?? -1;
+    // A currently sold vehicle with no trustworthy model-year hint is still
+    // more urgent than known historical pages. The detail parser remains the
+    // authority for its actual model year.
+    const yearA = a.page.latestModelYearHint ?? (a.page.currentHint === true ? 9999 : -1);
+    const yearB = b.page.latestModelYearHint ?? (b.page.currentHint === true ? 9999 : -1);
     if (yearA !== yearB) return yearB - yearA;
     if (a.coverageStrength !== b.coverageStrength) {
       return a.coverageStrength - b.coverageStrength;
