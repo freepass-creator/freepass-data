@@ -103,6 +103,13 @@ Source observation time and publication time are distinct facts. Firestore
 the writer-facing snapshot `capturedAt` is the handoff generation/publication
 time used by the existing sheet presentation logic.
 
+
+The live command requires `FREEPASS_ERP5_READ_ACCESS_TOKEN`. The existing continuous
+read-only audit already obtains that token through the configured WIF read service account,
+but it does **not** currently invoke `prepare:sheet-bridge`. Running the bridge command
+outside an authenticated context must fail closed with `MISSING_READ_ACCESS_TOKEN` before
+any network request. Do not add a Sheet writer credential to this job.
+
 A successful preparation reports `READY_FOR_SHADOW`, never production cutover.
 Required next evidence is ERP4 shadow consumption, rendered-output parity, and a
 valid `freepass-sheet-delivery-v1` readback receipt.
