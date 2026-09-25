@@ -5,7 +5,7 @@ import type {
   SourceHead,
   SourceRun
 } from '../domain/source.js';
-import { canAdvanceSourceHead, isValidSourceObservation } from '../domain/source.js';
+import { decideSourceHead } from '../domain/source.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 
@@ -54,10 +54,12 @@ export class MemorySourceStore implements SourceIngestionStore {
       };
     }
 
-    const eligible = input.coverage.completeness === 'COMPLETE'
-      && isValidSourceObservation(input.observedAt);
-    const newerThanHead = canAdvanceSourceHead(input.observedAt, currentHead?.observedAt);
-    const acceptedAsHead = eligible && newerThanHead;
+    const decision = decideSourceHead(
+      input.coverage,
+      input.observedAt,
+      currentHead?.observedAt
+    );
+    const { acceptedAsHead, headStatus } = decision;
 
     Object.assign(run, {
       status: 'COMPLETED',
@@ -65,7 +67,7 @@ export class MemorySourceStore implements SourceIngestionStore {
       observedAt: input.observedAt,
       checkpoint: input.checkpoint,
       coverage: input.coverage,
-      headStatus: acceptedAsHead ? 'CURRENT' : eligible ? 'STALE' : 'INELIGIBLE',
+      headStatus,
       rawCount: input.rawCount,
       candidateCount: input.candidateCount,
       lineageCount: input.lineageCount,
