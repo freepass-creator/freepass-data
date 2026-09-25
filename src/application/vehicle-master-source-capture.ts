@@ -10,7 +10,10 @@ import type {
   VehicleMasterArchiveInput,
   VehicleMasterSourceArchive,
 } from '../ports/vehicle-master-source-archive.js';
-import type { VehicleMasterSourceFetcher } from '../ports/vehicle-master-source-fetcher.js';
+import type {
+  VehicleMasterFetchedSource,
+  VehicleMasterSourceFetcher,
+} from '../ports/vehicle-master-source-fetcher.js';
 
 export type CaptureVehicleMasterSourceInput = {
   sourceType: VehicleMasterSourceDocument['sourceType'];
@@ -55,15 +58,14 @@ function stringMetadata(value: Record<string, unknown>): Record<string, string> 
   );
 }
 
-export async function captureVehicleMasterSource(
+export async function persistFetchedVehicleMasterSource(
   dependencies: {
-    fetcher: VehicleMasterSourceFetcher;
     archive: VehicleMasterSourceArchive;
     store: VehicleMasterStore;
   },
-  input: CaptureVehicleMasterSourceInput
+  input: CaptureVehicleMasterSourceInput,
+  fetched: VehicleMasterFetchedSource
 ): Promise<CaptureVehicleMasterSourceResult> {
-  const fetched = await dependencies.fetcher.fetch(input.sourceUrl);
   const sha256 = sha256Bytes(fetched.bytes);
   const sourceDocumentId = deterministicVehicleMasterRecordId('srcdoc', {
     sourceType: input.sourceType,
@@ -114,4 +116,20 @@ export async function captureVehicleMasterSource(
   const documentWrite = await dependencies.store.putSourceDocument(sourceDocument);
 
   return { sourceDocument, archiveWrite, documentWrite };
+}
+
+export async function captureVehicleMasterSource(
+  dependencies: {
+    fetcher: VehicleMasterSourceFetcher;
+    archive: VehicleMasterSourceArchive;
+    store: VehicleMasterStore;
+  },
+  input: CaptureVehicleMasterSourceInput
+): Promise<CaptureVehicleMasterSourceResult> {
+  const fetched = await dependencies.fetcher.fetch(input.sourceUrl);
+  return persistFetchedVehicleMasterSource(
+    { archive: dependencies.archive, store: dependencies.store },
+    input,
+    fetched
+  );
 }
