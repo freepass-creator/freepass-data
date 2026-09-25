@@ -25,6 +25,7 @@ function doc(collection: 'products' | 'policy' | 'partner', id: string) {
         status_kind: { stringValue: '가용' },
         provider_company_code: { stringValue: 'RP999' },
         source: { stringValue: 'synthetic-source' },
+        policy_reference_checked_at: { timestampValue: '2026-09-25T08:00:00.123456789Z' },
         price: {
           mapValue: {
             fields: {
@@ -104,7 +105,8 @@ describe('Data-owned sheet publication bridge', () => {
       listableDrift: 0,
       statusKindDrift: 0,
       sourceIdentityViolations: 0,
-      duplicatePlateViolations: 0
+      duplicatePlateViolations: 0,
+      depositRuleViolations: 0
     });
 
     const f01 = buildSheetBridgeHandoff(
@@ -128,6 +130,37 @@ describe('Data-owned sheet publication bridge', () => {
     });
     expect(f01.approvedRelease).toEqual(f86.approvedRelease);
     expect(f01.snapshot.products).toEqual(f86.snapshot.products);
+  });
+
+  it('preserves Firestore Timestamp in the same JSON shape as the production SDK snapshot', async () => {
+    const bridge = buildSheetBridgeRelease(
+      await captureErp5SheetSource(fake().rpc, '2026-09-25T08:01:00.000Z')
+    );
+    expect(bridge.products[0]?.policy_reference_checked_at).toEqual({
+      _seconds: Date.parse('2026-09-25T08:00:00Z') / 1000,
+      _nanoseconds: 123456789
+    });
+  });
+
+  it('applies the current production deposit-rule publication gate in the legacy bridge', async () => {
+    const capture = await captureErp5SheetSource(
+      fake().rpc,
+      '2026-09-25T08:01:00.000Z'
+    );
+    const product = capture.collections.products.documents[0]!;
+    Object.assign(product.fields as Record<string, unknown>, {
+      deposit_note: { stringValue: '월 대여료 × 약정연수 (최대 3개월)' },
+      product_type: { stringValue: '픽업구독' }
+    });
+
+    const { createHash } = await import('node:crypto');
+    const { digest: _old, ...unsigned } = capture;
+    capture.digest = createHash('sha256')
+      .update(JSON.stringify(unsigned))
+      .digest('hex');
+
+    expect(() => buildSheetBridgeRelease(capture))
+      .toThrow('SHEET_BRIDGE_INVENTORY_VIOLATION');
   });
 
   it('detects handoff payload tampering independently of the handoff hash', async () => {
