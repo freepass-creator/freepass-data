@@ -3,7 +3,7 @@ import type { LegacyProductSnapshot } from '../adapters/legacy-freepasserp3.js';
 import { normalizeLegacyProduct } from '../adapters/legacy-normalizer.js';
 import { buildLegacyCandidateLineage } from '../adapters/legacy-lineage.js';
 import type { SourceDefinition } from '../domain/source.js';
-import type { SourceStore } from '../ports/source-store.js';
+import type { SourceIngestionStore } from '../ports/source-store.js';
 
 export const LEGACY_PRODUCT_SOURCE: SourceDefinition = {
   sourceId: 'freepasserp3/firestore/products',
@@ -21,7 +21,7 @@ function candidateStatus(issues: string[], hasModel: boolean, hasTerms: boolean)
 }
 
 export async function ingestLegacyProductSnapshot(
-  sourceStore: SourceStore,
+  sourceStore: SourceIngestionStore,
   snapshot: LegacyProductSnapshot,
   now = new Date().toISOString()
 ) {
