@@ -92,12 +92,26 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     listen(select, 'change', () => {
       if (select.value) filters[key] = select.value;
       else delete filters[key];
+      syncFilterUi();
       renderResults();
     });
   }
   const reset = element('button', '', '필터 초기화');
   reset.type = 'button';
+  reset.hidden = true;
   filterPanel.append(reset);
+
+  function syncFilterUi() {
+    const count = Object.keys(filters).length;
+    filterToggle.textContent = count ? `필터 · ${count}` : '필터';
+    reset.hidden = count === 0;
+  }
+
+  function currentReadPrefix() {
+    if (lastReadStatus === 'refreshing') return '직전 결과 표시 · 새 자료 조회 중';
+    if (lastReadStatus === 'error' && snapshot) return '직전 관측 유지 · 새 조회 실패';
+    return '';
+  }
 
   const status = element('div', 'vf-status');
   status.setAttribute('role', 'status');
@@ -298,7 +312,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     title.focus({ preventScroll: false });
   }
 
-  function renderResults(prefixMessage = '') {
+  function renderResults(prefixMessage = currentReadPrefix()) {
     if (!snapshot) return;
     const result = currentResult();
     tbody.replaceChildren();
@@ -378,6 +392,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       }
       select.value = filters[key] ?? '';
     }
+    syncFilterUi();
   }
 
   const controller = createReadController(read, state => {
@@ -435,11 +450,11 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   listen(input, 'compositionstart', () => { composing = true; });
   listen(input, 'compositionend', () => {
     composing = false;
-    renderResults(lastReadStatus === 'refreshing' ? '직전 결과 표시 · 새 자료 조회 중' : '');
+    renderResults();
   });
   listen(input, 'input', event => {
     if (!composing && !event.isComposing) {
-      renderResults(lastReadStatus === 'refreshing' ? '직전 결과 표시 · 새 자료 조회 중' : '');
+      renderResults();
     }
   });
   listen(filterToggle, 'click', () => {
@@ -449,6 +464,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   listen(reset, 'click', () => {
     filters = {};
     for (const select of filterInputs.values()) select.value = '';
+    syncFilterUi();
     renderResults();
   });
   listen(root, 'keydown', event => {
