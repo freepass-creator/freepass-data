@@ -115,6 +115,15 @@ describe('ERP4 reviewed master -> Estimate master migration adapter', () => {
     expect(record.holdReasons).toContain('COLOR_CODE_UNVERIFIED');
   });
 
+  it('holds missing color price instead of treating unknown as free', () => {
+    const record = mapLegacyNewcarFeedToEstimateMaster({
+      ...feed,
+      extColors: [{ name: '스노우 화이트 펄', code: 'SWP' }],
+    }, [master]);
+    expect(record.status).toBe('HOLD');
+    expect(record.holdReasons).toContain('COLOR_PRICE_UNVERIFIED');
+  });
+
   it('holds missing availableOptions rather than exposing the whole option master', () => {
     const { availableOptions, ...withoutAvailable } = feed;
     const record = mapLegacyNewcarFeedToEstimateMaster(withoutAvailable, [master]);
