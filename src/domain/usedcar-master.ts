@@ -1,4 +1,9 @@
 import { stableDigest } from '../shared/stable-digest.js';
+import {
+  selectVehicles,
+  type VehicleSelectorRecord,
+  type VehicleSelectorSelection,
+} from './vehicle-selector.js';
 
 export const USEDCAR_MASTER_CONTRACT = 'usedcar-master/v1';
 export const USEDCAR_MASTER_PROJECTION_ID = 'usedcar-master';
@@ -187,59 +192,38 @@ export function validateUsedcarMasterSemantics(
 }
 
 function nonEmptyQuery(query: UsedcarMasterQuery) {
-  return (
-    Boolean(text(query.searchText)) ||
-    Boolean(text(query.maker)) ||
-    Boolean(text(query.model)) ||
-    Boolean(text(query.generation)) ||
-    Boolean(text(query.phase)) ||
-    query.modelYear != null ||
-    Boolean(text(query.powertrain)) ||
-    Boolean(text(query.trim)) ||
-    Boolean(text(query.fuelType)) ||
-    Boolean(text(query.drivetrain)) ||
-    query.seats != null
+  return Object.values(query).some((value) =>
+    typeof value === 'string' ? Boolean(value.trim()) : value != null
   );
 }
 
-function matchTextField(
-  queryValue: string | null | undefined,
-  recordValue: string | null,
-  field: string,
-  matched: string[],
-  unresolved: string[]
-): { rejected: boolean; score: number } {
-  const q = compact(queryValue);
-  if (!q) return { rejected: false, score: 0 };
-  const r = compact(recordValue);
-  if (!r) {
-    unresolved.push(field);
-    return { rejected: false, score: 0 };
-  }
-  if (r.includes(q) || q.includes(r)) {
-    matched.push(field);
-    return { rejected: false, score: 20 };
-  }
-  return { rejected: true, score: 0 };
-}
-
-function matchNumberField(
-  queryValue: number | null | undefined,
-  recordValue: number | null,
-  field: string,
-  matched: string[],
-  unresolved: string[]
-): { rejected: boolean; score: number } {
-  if (queryValue == null) return { rejected: false, score: 0 };
-  if (recordValue == null) {
-    unresolved.push(field);
-    return { rejected: false, score: 0 };
-  }
-  if (recordValue === queryValue) {
-    matched.push(field);
-    return { rejected: false, score: 20 };
-  }
-  return { rejected: true, score: 0 };
+function toSelectorRecord(record: UsedcarMasterRecord): VehicleSelectorRecord {
+  return {
+    recordId: record.recordId,
+    lifecycle: record.lifecycleStatus,
+    identityStatus: record.identityStatus,
+    maker: { id: null, label: record.maker },
+    model: { id: record.vehicleModelId, label: record.model },
+    generation: { id: record.generationId, label: record.generationName },
+    phase: { id: record.phaseId, label: record.phaseName },
+    modelYear: {
+      id: record.modelYearId,
+      label: record.modelYear == null ? null : `${record.modelYear}년형`,
+      value: record.modelYear,
+    },
+    powertrain: { id: record.powertrainId, label: record.powertrainName },
+    fuelType: { id: null, label: record.configuration.fuelType },
+    drivetrain: { id: null, label: record.configuration.drivetrain },
+    seats: {
+      id: null,
+      label: record.configuration.seats == null
+        ? null
+        : `${record.configuration.seats}인승`,
+      value: record.configuration.seats,
+    },
+    trim: { id: record.trimId, label: record.trimName },
+    aliases: [...record.aliases],
+  };
 }
 
 export function searchUsedcarMaster(
@@ -250,85 +234,34 @@ export function searchUsedcarMaster(
     throw new Error('USEDCAR_MASTER_QUERY_REQUIRED');
   }
 
-  const candidates: UsedcarMasterCandidate[] = [];
+  const selection: VehicleSelectorSelection = {
+    maker: query.maker,
+    model: query.model,
+    generation: query.generation,
+    phase: query.phase,
+    modelYear: query.modelYear,
+    powertrain: query.powertrain,
+    fuelType: query.fuelType,
+    drivetrain: query.drivetrain,
+    seats: query.seats,
+    trim: query.trim,
+  };
 
-  for (const record of records) {
-    const matchedFields: string[] = [];
-    const unresolvedFields: string[] = [];
-    let score = 0;
-    let rejected = false;
-
-    const checks = [
-      matchTextField(query.maker, record.maker, 'maker', matchedFields, unresolvedFields),
-      matchTextField(query.model, record.model, 'model', matchedFields, unresolvedFields),
-      matchTextField(query.generation, record.generationName, 'generation', matchedFields, unresolvedFields),
-      matchTextField(query.phase, record.phaseName, 'phase', matchedFields, unresolvedFields),
-      matchNumberField(query.modelYear, record.modelYear, 'modelYear', matchedFields, unresolvedFields),
-      matchTextField(query.powertrain, record.powertrainName, 'powertrain', matchedFields, unresolvedFields),
-      matchTextField(query.trim, record.trimName, 'trim', matchedFields, unresolvedFields),
-      matchTextField(query.fuelType, record.configuration.fuelType, 'fuelType', matchedFields, unresolvedFields),
-      matchTextField(query.drivetrain, record.configuration.drivetrain, 'drivetrain', matchedFields, unresolvedFields),
-      matchNumberField(query.seats, record.configuration.seats, 'seats', matchedFields, unresolvedFields),
-    ];
-
-    for (const check of checks) {
-      if (check.rejected) {
-        rejected = true;
-        break;
-      }
-      score += check.score;
+  const byId = new Map(records.map((record) => [record.recordId, record]));
+  const result = selectVehicles(
+    records.map(toSelectorRecord),
+    {
+      mode: 'USED_CAR',
+      searchText: query.searchText,
+      selection,
+      includeHold: true,
     }
-    if (rejected) continue;
-
-    const tokens = text(query.searchText).split(' ').filter(Boolean);
-    if (tokens.length) {
-      const haystack = text([
-        record.maker,
-        record.model,
-        record.generationName ?? '',
-        record.phaseName ?? '',
-        record.modelYear == null ? '' : String(record.modelYear),
-        record.powertrainName ?? '',
-        record.trimName ?? '',
-        record.configuration.fuelType ?? '',
-        record.configuration.drivetrain ?? '',
-        record.configuration.seats == null ? '' : String(record.configuration.seats),
-        ...record.aliases,
-      ].join(' '));
-
-      let textMatched = 0;
-      for (const token of tokens) {
-        if (haystack.includes(token)) textMatched += 1;
-      }
-      if (textMatched === 0) continue;
-      score += textMatched * 5;
-      matchedFields.push('searchText');
-      if (textMatched < tokens.length) unresolvedFields.push('searchText');
-    }
-
-    const completeness = [
-      record.vehicleModelId,
-      record.generationId,
-      record.phaseId,
-      record.modelYearId,
-      record.powertrainId,
-      record.variantId,
-      record.trimId,
-    ].filter(Boolean).length;
-    score += completeness;
-
-    candidates.push({
-      record,
-      score,
-      matchedFields: uniqueSorted(matchedFields),
-      unresolvedFields: uniqueSorted(unresolvedFields),
-    });
-  }
-
-  return candidates.sort((a, b) =>
-    b.score - a.score ||
-    b.matchedFields.length - a.matchedFields.length ||
-    a.unresolvedFields.length - b.unresolvedFields.length ||
-    a.record.recordId.localeCompare(b.record.recordId)
   );
+
+  return result.candidates.map((candidate) => ({
+    record: byId.get(candidate.record.recordId)!,
+    score: candidate.score,
+    matchedFields: [...candidate.matchedAxes],
+    unresolvedFields: [...candidate.unresolvedAxes],
+  }));
 }
