@@ -112,6 +112,26 @@ for (const file of walk(srcRoot)) {
   }
 }
 
+for (const file of walk(srcRoot)) {
+  const text = fs.readFileSync(file, 'utf8');
+  if (/\bSourceStore\b/.test(text)) {
+    violations.push({
+      file: path.relative(repoRoot, file),
+      layer: layerOf(file),
+      import: 'SourceStore',
+      reason: 'Use the responsibility-specific SourceIngestionStore; do not recreate the ambiguous source repository port'
+    });
+  }
+  if (/\.sourceFirestoreDocumentId\s*\(/.test(text)) {
+    violations.push({
+      file: path.relative(repoRoot, file),
+      layer: layerOf(file),
+      import: '.sourceFirestoreDocumentId(',
+      reason: 'sourceFirestoreDocumentId is a shared function, not an object method'
+    });
+  }
+}
+
 for (const forbiddenDataContract of [
   'contracts/freepass-quote-v2.schema.json',
   'contracts/put-issued-quote-command-v1.schema.json'
