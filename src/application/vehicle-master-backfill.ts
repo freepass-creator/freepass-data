@@ -68,6 +68,15 @@ export function discoverAdditionalVehicleMasterInventoryPages(input: {
   inventoryUrl: string;
   bytes: Buffer;
 }): string[] {
+  const inventory = new URL(input.inventoryUrl);
+
+  if (
+    (input.sourceKey === 'CARNOON' || input.sourceKey === 'DANAWA') &&
+    !inventory.pathname.endsWith('/sitemap.xml')
+  ) {
+    return [new URL('/sitemap.xml', inventory.origin).toString()];
+  }
+
   if (input.sourceKey !== 'CARISYOU') return [];
   const html = input.bytes.toString('utf8');
   const ids = new Set<string>();
