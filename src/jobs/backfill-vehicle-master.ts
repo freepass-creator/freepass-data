@@ -7,7 +7,10 @@ import {
   discoverVehicleMasterPages,
   shouldSkipVehicleMasterBackfillPage,
 } from '../application/vehicle-master-backfill.js';
-import { buildVehicleMasterCoverage } from '../application/vehicle-master-coverage.js';
+import {
+  buildVehicleMasterCoverage,
+  buildVehicleMasterCoverageFromEvidence,
+} from '../application/vehicle-master-coverage.js';
 import { persistFetchedVehicleMasterSource } from '../application/vehicle-master-source-capture.js';
 import { parseFetchedVehicleMasterSource } from '../application/vehicle-master-source-parse.js';
 import {
@@ -258,7 +261,10 @@ for (const sourceKey of selectedSources) {
   });
 }
 
-const coverageBefore = await buildVehicleMasterCoverage(store);
+const coverageBefore = buildVehicleMasterCoverageFromEvidence({
+  sources: existingSources,
+  normalized: existingNormalized,
+});
 const autoCompletedUrls = discovered
   .filter((page) => shouldSkipVehicleMasterBackfillPage({
     page,
