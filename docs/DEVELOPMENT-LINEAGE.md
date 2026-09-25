@@ -3,7 +3,9 @@
 Status: ACTIVE  
 Date: 2026-09-26
 
-This file exists to prevent parallel AI sessions from creating competing implementations of the same responsibility.
+This file explains the development-lineage policy. The machine-readable authority is `contracts/development-responsibility-registry.v1.json`. If this document and the registry disagree, the registry must be corrected first and this document updated in the same change.
+
+This policy exists to prevent parallel AI sessions from creating competing implementations of the same responsibility.
 
 ## 1. Authority rule
 
@@ -11,7 +13,7 @@ This file exists to prevent parallel AI sessions from creating competing impleme
 2. An unmerged responsibility may have **one canonical WIP PR**.
 3. Older stacked/superseded PRs are historical evidence only, even if their branches still exist.
 4. Branch names such as `gpt/`, `claude/`, `codex/`, `auto/`, `feat/`, or `work/` do not imply authority.
-5. Before coding, compare the target responsibility against this file and current open PRs.
+5. Before coding, resolve the exact `Responsibility-ID` from `contracts/development-responsibility-registry.v1.json`, then compare current open PRs.
 6. Do not create a second adapter, engine, repository, projection, or UI implementation for an already-listed responsibility. Extend or rebase the canonical WIP line instead.
 7. Prototype/preview code is never production authority unless this file explicitly promotes it.
 
@@ -70,3 +72,5 @@ When a responsibility already has a canonical WIP line:
 5. update this file if authority changes.
 
 Do not keep two open PRs that both claim the same responsibility.
+
+Run `npm run check:lineage` for the repository-local guard. When GitHub access is available, run `npm run audit:open-pr-lineage`; it fails if an open PR is missing lineage metadata, claims an unknown responsibility, targets a non-main base as canonical WIP, or duplicates another canonical claim.
