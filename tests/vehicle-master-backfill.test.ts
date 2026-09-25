@@ -93,6 +93,25 @@ describe('vehicle master recent-first backfill', () => {
     expect(pages[0]?.latestModelYearHint).toBe(2027);
   });
 
+  it('prefers contextual anchor metadata when the same URL also appears in script', () => {
+    const html = Buffer.from(`
+      <script>const target = "/newcar/vehicle/11572";</script>
+      <div>더 뉴 쏘렌토 <span>27년형 8월 27일 출시</span>
+        <a href="/newcar/vehicle/11572">상세 보기</a>
+      </div>
+    `, 'utf8');
+
+    const pages = discoverVehicleMasterPages({
+      sourceKey: 'CARNOON',
+      inventoryUrl: 'https://www.carnoon.co.kr/newcar/search',
+      bytes: html,
+    });
+
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.latestModelYearHint).toBe(2027);
+    expect(pages[0]?.modelHint).toContain('쏘렌토');
+  });
+
   it('discovers source-specific detail URLs even when they are not anchor hrefs', () => {
     const html = Buffer.from(`
       <script>
