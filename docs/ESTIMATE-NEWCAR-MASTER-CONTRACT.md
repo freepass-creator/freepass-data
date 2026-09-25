@@ -39,13 +39,16 @@ The service token is unique to Estimate and must not be shared with ERP/white-la
 
 ## Required stable identity
 
-Every record carries:
+Every record carries a `productId`.
 
-- productId
+For `ACTIVE` records, the following stable identities are mandatory:
+
 - vehicleModelId
 - modelYearId
 - trimId
 - powertrainId
+
+For `HOLD` records, unresolved stable identities and model year are represented as `null` with explicit `holdReasons`. They are never replaced with guessed IDs or the current calendar year.
 - maker/model/modelYear
 - trim/powertrain labels
 - base price
@@ -108,8 +111,12 @@ An Estimate Master record may be ACTIVE only when the model year and `modelYearI
 
 ## Current blocker: publication
 
-This change defines the read contract and fail-closed consumer boundary. It does not fabricate an ACTIVE release.
+This change defines the read contract, semantic validator, fail-closed consumer boundary, and a pure source/canonical candidate builder.
 
-The next implementation unit is a reviewed builder/ingestion path that supplies this projection from FreePass Data-owned source evidence with stable IDs and a complete release manifest.
+The builder can already produce:
+- `ACTIVE` only when reviewed stable IDs, model year, option/color IDs and prices are complete.
+- `HOLD` when evidence is incomplete, preserving explicit reasons such as `MODEL_YEAR_UNVERIFIED`.
+
+It does not fabricate an ACTIVE Firestore release. The remaining implementation unit is the reviewed source ingestion + projection publication path that stages/activates `estimate-newcar-master` with a complete release manifest.
 
 RTDB is not a fallback.
