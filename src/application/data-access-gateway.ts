@@ -21,6 +21,11 @@ const bounded = (value: string, max: number) =>
   value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
 const digest = (value: string | undefined) =>
   value === undefined || /^[a-f0-9]{64}$/.test(value);
+const timestamp = (value: string) =>
+  Number.isFinite(Date.parse(value)) && /(?:Z|[+-]\d{2}:\d{2})$/.test(value);
+const resourceKinds = new Set([
+  'CATALOG', 'PROJECTION', 'HEALTH', 'COMMAND', 'SOURCE', 'SYSTEM'
+]);
 
 function assertSpec<T>(spec: AccessSpec<T>) {
   if (
@@ -33,6 +38,7 @@ function assertSpec<T>(spec: AccessSpec<T>) {
       !bounded(spec.context.actor.organizationId, 256)) ||
     !bounded(spec.context.clientId, 128) ||
     !bounded(spec.context.purpose, 256) ||
+    !resourceKinds.has(spec.resource.kind) ||
     !bounded(spec.resource.name, 256) ||
     !digest(spec.requestDigest)
   ) {
@@ -123,13 +129,23 @@ export class DataAccessGateway {
       throw new Error('INVALID_DATA_ACCESS_REASON');
     }
     const operationId = this.id();
+    const eventId = this.id();
     const startedAt = this.now();
+    const occurredAt = this.now();
+    if (
+      !bounded(operationId, 256) ||
+      !bounded(eventId, 256) ||
+      !timestamp(startedAt) ||
+      !timestamp(occurredAt)
+    ) {
+      throw new Error('INVALID_DATA_ACCESS_EVENT_METADATA');
+    }
     await this.append({
-      eventId: this.id(),
+      eventId,
       ...this.base(mode, spec, operationId, startedAt),
       phase: 'DENIED',
       reasonCode,
-      occurredAt: this.now()
+      occurredAt
     });
   }
 
@@ -141,11 +157,18 @@ export class DataAccessGateway {
     assertSpec(spec);
     const operationId = this.id();
     const startedAt = this.now();
+    if (!bounded(operationId, 256) || !timestamp(startedAt)) {
+      throw new Error('INVALID_DATA_ACCESS_EVENT_METADATA');
+    }
     const base = this.base(mode, spec, operationId, startedAt);
 
     // Fail closed before touching the underlying data source.
+    const startedEventId = this.id();
+    if (!bounded(startedEventId, 256)) {
+      throw new Error('INVALID_DATA_ACCESS_EVENT_METADATA');
+    }
     await this.append({
-      eventId: this.id(),
+      eventId: startedEventId,
       ...base,
       phase: 'STARTED',
       occurredAt: startedAt
@@ -155,21 +178,31 @@ export class DataAccessGateway {
       const result = await run();
       const summary = spec.summarize?.(result);
       assertResultEvidence(summary);
+      const eventId = this.id();
+      const occurredAt = this.now();
+      if (!bounded(eventId, 256) || !timestamp(occurredAt)) {
+        throw new Error('INVALID_DATA_ACCESS_EVENT_METADATA');
+      }
       await this.append({
-        eventId: this.id(),
+        eventId,
         ...base,
         phase: 'SUCCEEDED',
         ...(summary ? { result: summary } : {}),
-        occurredAt: this.now()
+        occurredAt
       });
       return result;
     } catch (error) {
+      const eventId = this.id();
+      const occurredAt = this.now();
+      if (!bounded(eventId, 256) || !timestamp(occurredAt)) {
+        throw new Error('INVALID_DATA_ACCESS_EVENT_METADATA');
+      }
       await this.append({
-        eventId: this.id(),
+        eventId,
         ...base,
         phase: 'FAILED',
         reasonCode: codeOf(error),
-        occurredAt: this.now()
+        occurredAt
       });
       throw error;
     }
