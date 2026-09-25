@@ -237,7 +237,12 @@ export function createConsumerGateway(
         return reply.code(403).send({ code: 'FORBIDDEN' });
       }
       if (!healthStore) {
-        throw new ConsumerReadError('HEALTH_READER_UNAVAILABLE', 503);
+        await access.deny('READ', {
+          context,
+          operation: 'READ_CATALOG_HEALTH',
+          resource
+        }, 'HEALTH_READER_UNAVAILABLE');
+        return reply.code(503).send({ code: 'HEALTH_READER_UNAVAILABLE' });
       }
 
       const report = await access.read({
