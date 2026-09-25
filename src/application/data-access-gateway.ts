@@ -27,6 +27,10 @@ function assertSpec<T>(spec: AccessSpec<T>) {
     !bounded(spec.operation, 100) ||
     !/^[A-Z][A-Z0-9_]{2,99}$/.test(spec.operation) ||
     !bounded(spec.context.actor.id, 256) ||
+    !['USER', 'SERVICE'].includes(spec.context.actor.kind) ||
+    (spec.context.actor.organizationId !== undefined &&
+      spec.context.actor.organizationId !== null &&
+      !bounded(spec.context.actor.organizationId, 256)) ||
     !bounded(spec.context.clientId, 128) ||
     !bounded(spec.context.purpose, 256) ||
     !bounded(spec.resource.name, 256) ||
@@ -114,7 +118,7 @@ export class DataAccessGateway {
 
   async deny<T>(mode: DataAccessMode, spec: AccessSpec<T>, reasonCode: string) {
     assertSpec(spec);
-    if (!/^[A-Z][A-Z0-9_]{2,100}$/.test(reasonCode)) {
+    if (!bounded(reasonCode, 100) || !/^[A-Z][A-Z0-9_]{2,99}$/.test(reasonCode)) {
       throw new Error('INVALID_DATA_ACCESS_REASON');
     }
     const operationId = this.id();
