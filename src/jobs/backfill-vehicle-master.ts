@@ -3,6 +3,7 @@ import {
   buildRecentFirstBackfillQueue,
   discoverVehicleMasterPages,
 } from '../application/vehicle-master-backfill.js';
+import { buildVehicleMasterCoverage } from '../application/vehicle-master-coverage.js';
 import { persistFetchedVehicleMasterSource } from '../application/vehicle-master-source-capture.js';
 import { parseFetchedVehicleMasterSource } from '../application/vehicle-master-source-parse.js';
 import {
@@ -11,6 +12,11 @@ import {
   type VehicleMasterBackfillSourceKey,
   type VehicleMasterDiscoveredPage,
 } from '../domain/vehicle-master-backfill.js';
+import {
+  sealVehicleMasterPipelineRecord,
+  deterministicVehicleMasterRecordId,
+} from '../domain/vehicle-master.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
 import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
 import { createHttpVehicleMasterSourceFetcher } from '../infra/vehicle-master-source-fetcher.js';
@@ -113,9 +119,19 @@ const selectedSources = [
   ]),
 ];
 const limit = batchSize(process.env.VEHICLE_MASTER_BACKFILL_BATCH_SIZE);
-const skipUrls = completedUrls(process.env.VEHICLE_MASTER_BACKFILL_COMPLETED_URLS_JSON);
 
 const store = createFirestoreVehicleMasterStore();
+const existingSources = await store.listSourceDocuments();
+const persistedCompletedUrls = existingSources
+  .filter((source) => typeof source.metadata?.backfillTaskId === 'string')
+  .map((source) => source.sourceUrl)
+  .filter((value): value is string => Boolean(value));
+const skipUrls = [
+  ...new Set([
+    ...completedUrls(process.env.VEHICLE_MASTER_BACKFILL_COMPLETED_URLS_JSON),
+    ...persistedCompletedUrls,
+  ]),
+];
 const archive = createFirebaseVehicleMasterSourceArchive();
 const fetcher = createHttpVehicleMasterSourceFetcher();
 const parsers = createVehicleMasterSourceParsers();
@@ -160,9 +176,11 @@ for (const sourceKey of selectedSources) {
   }
 }
 
+const coverageBefore = await buildVehicleMasterCoverage(store);
 const queue = buildRecentFirstBackfillQueue(discovered, {
   completedUrls: skipUrls,
   sourceKeys: selectedSources,
+  coverage: coverageBefore,
 }).slice(0, limit);
 
 const results: Array<Record<string, unknown>> = [];
@@ -201,6 +219,7 @@ for (const task of queue) {
         sourceKey: task.sourceKey,
         sourceUrl: task.sourceUrl,
         latestModelYearHint: task.latestModelYearHint,
+        coverageStatusBefore: task.coverageStatus,
         status: 'PARSED',
         sourceDocumentId: captured.sourceDocument.sourceDocumentId,
         hashId: captured.hashRecord.hashId,
@@ -219,6 +238,7 @@ for (const task of queue) {
         sourceKey: task.sourceKey,
         sourceUrl: task.sourceUrl,
         latestModelYearHint: task.latestModelYearHint,
+        coverageStatusBefore: task.coverageStatus,
         status: 'CAPTURED_HOLD',
         sourceDocumentId: captured.sourceDocument.sourceDocumentId,
         hashId: captured.hashRecord.hashId,
@@ -235,11 +255,53 @@ for (const task of queue) {
       sourceKey: task.sourceKey,
       sourceUrl: task.sourceUrl,
       latestModelYearHint: task.latestModelYearHint,
+      coverageStatusBefore: task.coverageStatus,
       status: 'FETCH_HOLD',
       errorCode: errorCode(error),
     });
   }
 }
+
+const coverageAfter = await buildVehicleMasterCoverage(store);
+const coverageCounts = (rows: typeof coverageAfter) =>
+  Object.fromEntries(
+    ['OFFICIAL', 'CORROBORATED', 'SINGLE_SOURCE', 'DISCOVERY_ONLY']
+      .map((status) => [
+        status,
+        rows.filter((row) => row.status === status).length,
+      ])
+  );
+
+const auditPayload = {
+  observedAt,
+  selectedSources,
+  queued: queue.length,
+  parsed: results.filter((row) => row.status === 'PARSED').length,
+  capturedHold: results.filter((row) => row.status === 'CAPTURED_HOLD').length,
+  fetchHold: results.filter((row) => row.status === 'FETCH_HOLD').length,
+  coverageBefore: {
+    rowCount: coverageBefore.length,
+    statusCounts: coverageCounts(coverageBefore),
+    digest: stableDigest(coverageBefore),
+  },
+  coverageAfter: {
+    rowCount: coverageAfter.length,
+    statusCounts: coverageCounts(coverageAfter),
+    digest: stableDigest(coverageAfter),
+  },
+};
+const auditRecord = sealVehicleMasterPipelineRecord({
+  recordId: deterministicVehicleMasterRecordId('backfill-audit', {
+    observedAt,
+    coverageAfterDigest: auditPayload.coverageAfter.digest,
+    selectedSources,
+  }),
+  kind: 'AUDIT_REPORT',
+  sourceDocumentId: null,
+  observedAt,
+  payload: auditPayload,
+});
+const auditWrite = await store.putPipelineRecord(auditRecord);
 
 const summary = {
   observedAt,
@@ -247,10 +309,15 @@ const summary = {
   batchSize: limit,
   discovery,
   totalDiscovered: discovered.length,
+  skippedFromFirestore: persistedCompletedUrls.length,
   queued: queue.length,
   parsed: results.filter((row) => row.status === 'PARSED').length,
   capturedHold: results.filter((row) => row.status === 'CAPTURED_HOLD').length,
   fetchHold: results.filter((row) => row.status === 'FETCH_HOLD').length,
+  coverageBefore: auditPayload.coverageBefore,
+  coverageAfter: auditPayload.coverageAfter,
+  auditReportId: auditRecord.recordId,
+  auditWrite,
   results,
   nextCompletedUrls: [
     ...new Set([
