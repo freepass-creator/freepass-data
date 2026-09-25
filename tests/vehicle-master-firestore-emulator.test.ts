@@ -7,6 +7,7 @@ import {
   type VehicleMasterFieldObservation,
 } from '../src/application/vehicle-master-ingestion.js';
 import {
+  sealVehicleMasterHashRecord,
   sealVehicleMasterNode,
   sealVehicleMasterSourceDocument,
 } from '../src/domain/vehicle-master.js';
@@ -72,6 +73,28 @@ emulatorTest('Firestore keeps slash IDs distinct from literal double-underscore 
     assert.equal(await store.putSourceDocument(underscore), 'CREATED');
     assert.deepEqual(await store.getSourceDocument('source/a'), slash);
     assert.deepEqual(await store.getSourceDocument('source__a'), underscore);
+  });
+});
+
+emulatorTest('Firestore persists immutable source-byte hash records idempotently', async () => {
+  await withStore(async (store) => {
+    const hash = sealVehicleMasterHashRecord({
+      hashId: 'hash/source-bytes',
+      scope: 'SOURCE_BYTES',
+      algorithm: 'SHA-256',
+      digest: 'd'.repeat(64),
+      sourceDocumentId: 'source/hash',
+      targetId: null,
+      storagePath: 'vehicle-master/source-documents/test/hash.bin',
+      byteLength: 123,
+      mimeType: 'application/octet-stream',
+      observedAt,
+      metadata: { synthetic: true },
+    });
+
+    assert.equal(await store.putHash(hash), 'CREATED');
+    assert.equal(await store.putHash(hash), 'UNCHANGED');
+    assert.deepEqual(await store.getHash(hash.hashId), hash);
   });
 });
 
