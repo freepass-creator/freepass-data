@@ -157,6 +157,18 @@
   border-radius:var(--vf-panel-radius);
   overflow-wrap:anywhere;
 }
+.vf .vf-selection-success{
+  position:absolute;
+  width:1px;
+  height:1px;
+  padding:0;
+  margin:-1px;
+  overflow:hidden;
+  clip:rect(0 0 0 0);
+  white-space:nowrap;
+  border:0;
+}
+.vf .vf-selection-error{color:var(--danger,#B42318)}
 .vf .vf-evidence{font-size:var(--vf-support)}
 .vf .vf-configurations summary,.vf .vf-evidence summary{
   color:var(--vf-ink);
@@ -168,12 +180,13 @@
 @media(max-width:900px){
   .vf{padding:20px 16px}
   .vf .vf-head{align-items:start}
-  .vf .vf-toolbar{flex-wrap:wrap}
-  .vf .vf-search{flex-basis:100%}
-  .vf .vf-utility-actions{width:100%;justify-content:flex-end}
+  .vf .vf-toolbar{flex-wrap:nowrap;align-items:center;gap:8px}
+  .vf .vf-search{flex:1 1 auto;min-width:0}
+  .vf .vf-utility-actions{flex:0 0 auto;width:auto;justify-content:flex-end}
   .vf .vf-filters label{flex-basis:100%}
   .vf input,.vf select{font-size:16px}
   .vf.vf-inspecting .vf-layout{grid-template-columns:minmax(0,1fr)}
+  .vf.vf-inspecting .vf-head,
   .vf.vf-inspecting .vf-list,
   .vf.vf-inspecting .vf-toolbar,
   .vf.vf-inspecting .vf-filters,
