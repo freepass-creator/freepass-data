@@ -10,8 +10,10 @@ import {
   htmlToVehicleText,
   parseKrw,
   splitOptionPrice,
+  splitTopLevelComma,
   uniqueParsedTrims,
   vehicleTextLines,
+  VEHICLE_BASE_ITEM_CATEGORIES,
 } from './vehicle-master-parser-utils.js';
 
 function modelName(text: string) {
@@ -96,6 +98,8 @@ export class CarnoonVehicleParser implements VehicleMasterSourceParser {
     const records: VehicleMasterParsedTrim[] = [];
     let context: ReturnType<typeof parseContext> = null;
     let current: VehicleMasterParsedTrim | null = null;
+    let currentCategory: string | null = null;
+    let lastOptionIndex: number | null = null;
 
     if (maker === 'UNKNOWN') warnings.push('MAKER_NOT_FOUND');
     if (model === 'UNKNOWN') warnings.push('MODEL_NOT_FOUND');
@@ -105,12 +109,16 @@ export class CarnoonVehicleParser implements VehicleMasterSourceParser {
       if (nextContext) {
         context = nextContext;
         current = null;
+        currentCategory = null;
+        lastOptionIndex = null;
         continue;
       }
       if (!context) continue;
 
       const trim = parseTrimLine(line);
       if (trim) {
+        currentCategory = null;
+        lastOptionIndex = null;
         current = {
           maker,
           model,
@@ -124,6 +132,7 @@ export class CarnoonVehicleParser implements VehicleMasterSourceParser {
           currency: 'KRW',
           effectiveFrom: null,
           baseItems: [],
+          baseItemDetails: [],
           options: [],
           sourceText: line,
         };
@@ -133,38 +142,68 @@ export class CarnoonVehicleParser implements VehicleMasterSourceParser {
 
       if (!current) continue;
 
+      if (VEHICLE_BASE_ITEM_CATEGORIES.has(line)) {
+        currentCategory = line;
+        lastOptionIndex = null;
+        continue;
+      }
+
       const option = splitOptionPrice(line);
       if (
         option &&
         !/^[\d.]+\s*㎞\/ℓ/.test(option.name) &&
         !option.name.includes('판매 가격')
       ) {
-        current.options.push(
-          option.kind === 'ACCESSORY'
-            ? { ...option, name: option.name.replace(/^\[(?:악세사리|액세서리)\]\s*/, '') }
-            : option
-        );
+        const normalizedOption = option.kind === 'ACCESSORY'
+          ? { ...option, name: option.name.replace(/^\[(?:악세사리|액세서리)\]\s*/, '') }
+          : option;
+        current.options.push(normalizedOption);
+        lastOptionIndex = current.options.length - 1;
+        currentCategory = null;
         continue;
       }
 
       if (line.startsWith('■ ')) {
-        const last = current.options[current.options.length - 1];
+        const description = line.slice(2).trim();
+        const last = lastOptionIndex === null ? null : current.options[lastOptionIndex];
         if (last && !last.note) {
-          last.note = line.slice(2).trim();
+          last.note = description;
+          const packageText = description.split('※')[0]?.trim() ?? '';
+          const packageItems = splitTopLevelComma(packageText);
+          if (packageItems.length > 1 || /패키지/.test(last.name)) {
+            last.packageItems = packageItems;
+          }
+          lastOptionIndex = null;
         } else {
-          current.baseItems.push(line.slice(2).trim());
+          const items = splitTopLevelComma(description);
+          current.baseItems.push(...items);
+          current.baseItemDetails?.push(
+            ...items.map((name) => ({
+              category: currentCategory,
+              name,
+              sourceText: line,
+            }))
+          );
         }
         continue;
       }
 
       if (
+        currentCategory &&
         line.length >= 2 &&
-        line.length <= 500 &&
-        !line.includes('가격표 보기') &&
-        !line.startsWith('2027년형') &&
-        !line.startsWith('2026년형')
+        line.length <= 1000 &&
+        !line.includes('가격표 보기')
       ) {
-        current.baseItems.push(line);
+        const items = splitTopLevelComma(line);
+        current.baseItems.push(...items);
+        current.baseItemDetails?.push(
+          ...items.map((name) => ({
+            category: currentCategory,
+            name,
+            sourceText: line,
+          }))
+        );
+        lastOptionIndex = null;
       }
     }
 
