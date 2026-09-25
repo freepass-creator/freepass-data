@@ -120,7 +120,15 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
 
   function syncFilterUi() {
     const count = Object.keys(filters).length;
+    const advancedCount = ['seatCount', 'drivetrain']
+      .filter(key => filters[key] != null && filters[key] !== '')
+      .length;
+    const advancedExpanded = filterMore.getAttribute('aria-expanded') === 'true';
+
     filterToggle.textContent = count ? `필터 · ${count}` : '필터';
+    filterMore.textContent = advancedCount
+      ? `${advancedExpanded ? '추가 조건 접기' : '추가 조건'} · ${advancedCount}`
+      : (advancedExpanded ? '추가 조건 접기' : '추가 조건');
     reset.hidden = count === 0;
   }
 
