@@ -86,6 +86,23 @@ for (const file of walk(srcRoot)) {
   }
 }
 
+const firebaseTargetOwner = path.join(srcRoot, 'infra', 'firebase-target.ts');
+
+for (const file of walk(srcRoot)) {
+  const layer = layerOf(file);
+  if (!new Set(['infra', 'api', 'jobs']).has(layer)) continue;
+  if (path.resolve(file) === path.resolve(firebaseTargetOwner)) continue;
+  const text = fs.readFileSync(file, 'utf8');
+  if (text.includes('firebase-admin/app')) {
+    violations.push({
+      file: path.relative(repoRoot, file),
+      layer,
+      import: 'firebase-admin/app',
+      reason: 'Central FreePass Data Firebase app initialization belongs only in src/infra/firebase-target.ts'
+    });
+  }
+}
+
 const firestoreLayoutOwner = path.join(srcRoot, 'infra', 'firestore-layout.ts');
 const firestoreLayoutText = fs.readFileSync(firestoreLayoutOwner, 'utf8');
 const firestorePhysicalNames = [
