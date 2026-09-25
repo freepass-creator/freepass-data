@@ -1,8 +1,10 @@
 import { createVehicleMasterSourceParsers } from '../adapters/vehicle-master-parser-registry.js';
 import {
   buildRecentFirstBackfillQueue,
+  buildVehicleMasterBackfillCompletionIndex,
   discoverAdditionalVehicleMasterInventoryPages,
   discoverVehicleMasterPages,
+  shouldSkipVehicleMasterBackfillPage,
 } from '../application/vehicle-master-backfill.js';
 import { buildVehicleMasterCoverage } from '../application/vehicle-master-coverage.js';
 import { persistFetchedVehicleMasterSource } from '../application/vehicle-master-source-capture.js';
@@ -40,6 +42,14 @@ function discoveryPageLimit(raw: string | undefined) {
   const value = raw ? Number(raw) : 100;
   if (!Number.isSafeInteger(value) || value < 1 || value > 500) {
     throw new Error('VEHICLE_MASTER_BACKFILL_DISCOVERY_PAGE_LIMIT must be 1..500');
+  }
+  return value;
+}
+
+function currentTtlHours(raw: string | undefined) {
+  const value = raw ? Number(raw) : 24;
+  if (!Number.isSafeInteger(value) || value < 1 || value > 720) {
+    throw new Error('VEHICLE_MASTER_BACKFILL_CURRENT_TTL_HOURS must be 1..720');
   }
   return value;
 }
@@ -131,33 +141,20 @@ const limit = batchSize(process.env.VEHICLE_MASTER_BACKFILL_BATCH_SIZE);
 const maxDiscoveryPages = discoveryPageLimit(
   process.env.VEHICLE_MASTER_BACKFILL_DISCOVERY_PAGE_LIMIT
 );
+const currentRecaptureTtlHours = currentTtlHours(
+  process.env.VEHICLE_MASTER_BACKFILL_CURRENT_TTL_HOURS
+);
 
 const store = createFirestoreVehicleMasterStore();
 const existingSources = await store.listSourceDocuments();
 const existingNormalized = await store.listPipelineRecordsByKind('NORMALIZED_RECORD');
-const normalizedSourceIds = new Set(
-  existingNormalized
-    .map((record) => record.sourceDocumentId)
-    .filter((value): value is string => Boolean(value))
+const completionIndex = buildVehicleMasterBackfillCompletionIndex({
+  sources: existingSources,
+  normalized: existingNormalized,
+});
+const manualCompletedUrls = completedUrls(
+  process.env.VEHICLE_MASTER_BACKFILL_COMPLETED_URLS_JSON
 );
-const persistedCompletedUrls = existingSources
-  .filter((source) =>
-    typeof source.metadata?.backfillTaskId === 'string' &&
-    normalizedSourceIds.has(source.sourceDocumentId)
-  )
-  .flatMap((source) => [
-    source.sourceUrl,
-    typeof source.metadata?.requestedUrl === 'string'
-      ? source.metadata.requestedUrl
-      : null,
-  ])
-  .filter((value): value is string => Boolean(value));
-const skipUrls = [
-  ...new Set([
-    ...completedUrls(process.env.VEHICLE_MASTER_BACKFILL_COMPLETED_URLS_JSON),
-    ...persistedCompletedUrls,
-  ]),
-];
 const archive = createFirebaseVehicleMasterSourceArchive();
 const fetcher = createHttpVehicleMasterSourceFetcher();
 const parsers = createVehicleMasterSourceParsers();
@@ -233,6 +230,21 @@ for (const sourceKey of selectedSources) {
 }
 
 const coverageBefore = await buildVehicleMasterCoverage(store);
+const autoCompletedUrls = discovered
+  .filter((page) => shouldSkipVehicleMasterBackfillPage({
+    page,
+    completions: completionIndex,
+    parsers,
+    now: observedAt,
+    currentTtlHours: currentRecaptureTtlHours,
+  }))
+  .map((page) => page.sourceUrl);
+const skipUrls = [
+  ...new Set([
+    ...manualCompletedUrls,
+    ...autoCompletedUrls,
+  ]),
+];
 const queue = buildRecentFirstBackfillQueue(discovered, {
   completedUrls: skipUrls,
   sourceKeys: selectedSources,
@@ -363,9 +375,10 @@ const summary = {
   selectedSources,
   batchSize: limit,
   discoveryPageLimit: maxDiscoveryPages,
+  currentRecaptureTtlHours,
   discovery,
   totalDiscovered: discovered.length,
-  skippedFromFirestore: persistedCompletedUrls.length,
+  skippedByParserVersionAndTtl: autoCompletedUrls.length,
   queued: queue.length,
   parsed: results.filter((row) => row.status === 'PARSED').length,
   capturedHold: results.filter((row) => row.status === 'CAPTURED_HOLD').length,
@@ -375,15 +388,11 @@ const summary = {
   auditReportId: auditRecord.recordId,
   auditWrite,
   results,
-  nextCompletedUrls: [
-    ...new Set([
-      ...skipUrls,
-      ...results
-        .filter((row) => row.status === 'PARSED' || row.status === 'CAPTURED_HOLD')
-        .map((row) => row.sourceUrl)
-        .filter((value): value is string => typeof value === 'string'),
-    ]),
-  ].sort(),
+  parsedUrlsThisRun: results
+    .filter((row) => row.status === 'PARSED')
+    .map((row) => row.sourceUrl)
+    .filter((value): value is string => typeof value === 'string')
+    .sort(),
 };
 
 process.stdout.write(JSON.stringify(summary, null, 2) + '\n');
