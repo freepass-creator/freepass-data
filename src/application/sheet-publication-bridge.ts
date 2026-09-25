@@ -257,20 +257,6 @@ const deletedMarker = (product: Record<string, unknown>) =>
   Boolean(String(product.deletedAt ?? '').trim()) ||
   String(product.status ?? '').trim().toLowerCase() === 'deleted';
 
-const LEGACY_SONOKONG_DEPOSIT_RULE = '월 대여료 × 약정연수 (최대 3개월)';
-const legacyDepositRuleViolation = (product: Record<string, unknown>) => {
-  if (String(product.deposit_note ?? '').trim() !== LEGACY_SONOKONG_DEPOSIT_RULE) return false;
-  const classification = object(product.sonokong_classification)
-    ? product.sonokong_classification
-    : null;
-  if (String(classification?.product_type ?? product.product_type ?? '').trim() === '중고렌트') {
-    return false;
-  }
-  if (!object(product.price)) return false;
-  return Object.values(product.price).some((term) =>
-    object(term) && Number(term.deposit) > 0
-  );
-};
 
 export function buildSheetInventorySummary(
   products: readonly Record<string, unknown>[]
@@ -302,7 +288,15 @@ export function buildSheetInventorySummary(
       String(product.source_schema ?? '').trim();
     if (!provider || !source) sourceIdentityViolations++;
     if (deletedMarker(product)) deletedMarkerViolations++;
-    if (legacyDepositRuleViolation(product)) depositRuleViolations++;
+    const classification = object(product.sonokong_classification)
+      ? product.sonokong_classification
+      : null;
+    if (hasSonokongDepositRuleViolation({
+      depositNote: product.deposit_note,
+      productType: product.product_type,
+      classificationProductType: classification?.product_type,
+      price: product.price
+    })) depositRuleViolations++;
 
     const rawPlate = String(product.car_number ?? '').trim();
     const plate = plateKey(rawPlate);
