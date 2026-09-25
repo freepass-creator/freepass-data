@@ -32,7 +32,8 @@ export type VehicleMasterEvidenceIssue = {
     | 'PARENT_NODE_MISSING'
     | 'REFERENCE_NODE_MISSING'
     | 'REFERENCE_NODE_SELF'
-    | 'PRICE_TARGET_MISSING';
+    | 'PRICE_TARGET_MISSING'
+    | 'PRICE_TARGET_HOLD';
   fieldPath?: string;
   sourceDocumentId?: string;
   detail?: string;
@@ -483,20 +484,26 @@ export async function promoteVehicleMasterPriceRevision(
 ): Promise<PromoteVehicleMasterPriceResult> {
   const sourceDecision = await evaluateVehicleMasterPriceEvidence(store, input);
   const priceTarget = await store.getNode(input.proposal.targetId);
-  const decision: VehicleMasterEvidenceDecision = priceTarget
-    ? sourceDecision
-    : {
+  const targetIssue: VehicleMasterEvidenceIssue | null = !priceTarget
+    ? {
+        code: 'PRICE_TARGET_MISSING',
+        fieldPath: 'targetId',
+        detail: input.proposal.targetId,
+      }
+    : priceTarget.status === 'HOLD'
+      ? {
+          code: 'PRICE_TARGET_HOLD',
+          fieldPath: 'targetId',
+          detail: input.proposal.targetId,
+        }
+      : null;
+  const decision: VehicleMasterEvidenceDecision = targetIssue
+    ? {
         ...sourceDecision,
         status: 'HOLD',
-        issues: [
-          ...sourceDecision.issues,
-          {
-            code: 'PRICE_TARGET_MISSING',
-            fieldPath: 'targetId',
-            detail: input.proposal.targetId,
-          },
-        ],
-      };
+        issues: [...sourceDecision.issues, targetIssue],
+      }
+    : sourceDecision;
   const evidence = await persistPromotionEvidence(store, {
     entityKind: 'PRICE',
     entityId: input.proposal.id,
