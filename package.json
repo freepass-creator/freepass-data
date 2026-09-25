@@ -27,7 +27,8 @@
     "check:arch": "node scripts/check-architecture.mjs",
     "test:read-runtime-smoke": "node --test tests/read-runtime-smoke.node.mjs",
     "capture:vehicle-master-source": "tsx src/jobs/capture-vehicle-master-source.ts",
-    "ingest:vehicle-master-source": "tsx src/jobs/ingest-vehicle-master-source.ts"
+    "ingest:vehicle-master-source": "tsx src/jobs/ingest-vehicle-master-source.ts",
+    "promote:vehicle-master-canonical": "tsx src/jobs/promote-vehicle-master-canonical.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",
