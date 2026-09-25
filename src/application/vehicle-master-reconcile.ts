@@ -1,6 +1,7 @@
 import type {
   VehicleMasterParsedCondition,
   VehicleMasterParsedOption,
+  VehicleMasterParsedOptionKind,
   VehicleMasterParsedTrim,
 } from '../domain/vehicle-master-source.js';
 
@@ -17,6 +18,7 @@ export type VehicleMasterReconciliationConflict = {
 
 export type VehicleMasterReconciledOption = {
   name: string;
+  kind: VehicleMasterParsedOptionKind;
   price: number | null;
   note: string | null;
   conditions: VehicleMasterParsedCondition[];
@@ -111,6 +113,7 @@ function mergeScalar<T>(
 function mergeOptions(rows: VehicleMasterParsedSourceRecord[]): VehicleMasterReconciledOption[] {
   const byIdentity = new Map<string, {
     name: string;
+    kind: VehicleMasterParsedOptionKind;
     price: number | null;
     notes: string[];
     conditions: VehicleMasterParsedCondition[];
@@ -119,9 +122,11 @@ function mergeOptions(rows: VehicleMasterParsedSourceRecord[]): VehicleMasterRec
 
   for (const row of rows) {
     for (const option of row.record.options) {
-      const key = JSON.stringify([normalized(option.name), option.price]);
+      const kind = option.kind ?? 'OPTION';
+      const key = JSON.stringify([normalized(option.name), kind, option.price]);
       const current = byIdentity.get(key) ?? {
         name: option.name,
+        kind,
         price: option.price,
         notes: [],
         conditions: [],
@@ -137,6 +142,7 @@ function mergeOptions(rows: VehicleMasterParsedSourceRecord[]): VehicleMasterRec
   return [...byIdentity.values()]
     .map((option) => ({
       name: option.name,
+      kind: option.kind,
       price: option.price,
       note: uniqueSorted(option.notes).join(' / ') || null,
       conditions: option.conditions.filter(
