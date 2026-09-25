@@ -38,7 +38,7 @@ describe('DataAccessGateway', () => {
       summarize: (value: { rows: unknown[]; releaseId: string }) => ({
         count: value.rows.length,
         releaseId: value.releaseId,
-        digest: 'safe-result-digest'
+        digest: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
       })
     }, async () => ({
       rows: [{ privateValue: 'must-not-be-logged' }],
@@ -51,7 +51,7 @@ describe('DataAccessGateway', () => {
     expect(store.events[1]!.result).toEqual({
       count: 1,
       releaseId: 'rel_test',
-      digest: 'safe-result-digest'
+      digest: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     });
     expect(JSON.stringify(store.events)).not.toContain('must-not-be-logged');
   });
@@ -106,7 +106,7 @@ describe('DataAccessGateway', () => {
         entityType: 'offer',
         entityId: 'offer_1'
       },
-      requestDigest: 'request-digest',
+      requestDigest: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       summarize: (value: { revision: number }) => ({ revision: value.revision })
     }, async () => ({ revision: 2 }));
 
