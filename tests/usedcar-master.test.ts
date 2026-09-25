@@ -70,11 +70,12 @@ describe('usedcar master', () => {
       aliases: ['MQ4', '쏘렌토 가솔린'],
     });
 
-    expect(searchUsedcarMaster([hybrid, gasoline], {
+    const freeText = searchUsedcarMaster([hybrid, gasoline], {
       searchText: '쏘렌토 하이브리드',
-    }).map((x) => x.record.recordId)).toEqual([
-      'used_trim_sorento_2021_noblesse',
-    ]);
+    });
+    expect(freeText[0]?.record.recordId).toBe('used_trim_sorento_2021_noblesse');
+    expect(freeText[0]?.unresolvedFields).not.toContain('searchText');
+    expect(freeText[1]?.unresolvedFields).toContain('searchText');
 
     expect(searchUsedcarMaster([hybrid, gasoline], {
       model: '쏘렌토',
