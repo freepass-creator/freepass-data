@@ -1,7 +1,7 @@
 import { applicationDefault, getApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import type { NormalizedCandidateRecord, RawRecord, SourceDefinition, SourceHead, SourceRun } from '../domain/source.js';
-import { canAdvanceSourceHead, isValidSourceObservation } from '../domain/source.js';
+import { decideSourceHead } from '../domain/source.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import { SOURCE_FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './source-firestore-layout.js';
@@ -37,7 +37,7 @@ export class FirestoreSourceStore implements SourceIngestionStore {
       if (!runSnap.exists) throw new Error(`Source run not found: ${input.runId}`);
       const run = runSnap.data() as SourceRun;
 
-      const headRef = this.db.collection(C.heads).doc(run.sourceFirestoreDocumentId(sourceId));
+      const headRef = this.db.collection(C.heads).doc(sourceFirestoreDocumentId(run.sourceId));
       const headSnap = await tx.get(headRef);
       const currentHead = headSnap.exists ? headSnap.data() as SourceHead : null;
 
@@ -48,11 +48,12 @@ export class FirestoreSourceStore implements SourceIngestionStore {
         };
       }
 
-      const eligible = input.coverage.completeness === 'COMPLETE'
-      && isValidSourceObservation(input.observedAt);
-      const newerThanHead = canAdvanceSourceHead(input.observedAt, currentHead?.observedAt);
-      const acceptedAsHead = eligible && newerThanHead;
-      const headStatus = acceptedAsHead ? 'CURRENT' : eligible ? 'STALE' : 'INELIGIBLE';
+      const decision = decideSourceHead(
+        input.coverage,
+        input.observedAt,
+        currentHead?.observedAt
+      );
+      const { acceptedAsHead, headStatus } = decision;
 
       tx.update(runRef, {
         status: 'COMPLETED',
