@@ -93,7 +93,7 @@
 .vf.vf-inspecting .vf-layout{grid-template-columns:minmax(0,1fr) minmax(320px,400px)}
 .vf table{width:100%;border-collapse:collapse;table-layout:fixed}
 .vf th,.vf td{
-  padding:10px 12px;
+  padding:6px 12px;
   border-bottom:1px solid var(--vf-line);
   text-align:left;
   overflow-wrap:anywhere;
@@ -105,7 +105,7 @@
   display:grid;
   gap:2px;
   background:transparent;
-  padding:6px 0;
+  padding:2px 0;
   text-align:left;
   color:var(--vf-ink);
   font-weight:650;
