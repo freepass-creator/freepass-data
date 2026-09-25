@@ -27,6 +27,10 @@ export interface VehicleMasterStore {
     kind: VehicleMasterPipelineRecord['kind'],
     recordId: string
   ): Promise<VehicleMasterPipelineRecord | null>;
+  listPipelineRecords(
+    kind: VehicleMasterPipelineRecord['kind'],
+    sourceDocumentId: string
+  ): Promise<VehicleMasterPipelineRecord[]>;
   putPipelineRecord(record: VehicleMasterPipelineRecord): Promise<VehicleMasterWriteResult>;
 
   getResolverFeedback(feedbackId: string): Promise<VehicleMasterResolverFeedback | null>;
