@@ -17,7 +17,7 @@ function decodeHtml(value: string) {
 }
 
 function anchors(html: string) {
-  const rows: Array<{ href: string; label: string; index: number }> = [];
+  const rows: Array<{ href: string; label: string; index: number; end: number }> = [];
   const pattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
   for (const match of html.matchAll(pattern)) {
     if (!match[1]) continue;
@@ -25,17 +25,25 @@ function anchors(html: string) {
       href: match[1],
       label: decodeHtml(match[2] ?? ''),
       index: match.index ?? 0,
+      end: (match.index ?? 0) + match[0].length,
     });
   }
   return rows;
 }
 
-function yearHint(html: string, index: number) {
-  const context = decodeHtml(html.slice(Math.max(0, index - 1200), index + 300));
+function yearHint(
+  html: string,
+  index: number,
+  floor = 0,
+  ceiling = html.length
+) {
+  const context = decodeHtml(
+    html.slice(Math.max(floor, index - 1200), Math.min(ceiling, index + 300))
+  );
   const years = [
-    ...[...context.matchAll(/\b(20\d{2})\s*년형\b/g)]
+    ...[...context.matchAll(/(?<!\d)(20\d{2})\s*년형/g)]
       .map((match) => Number(match[1])),
-    ...[...context.matchAll(/\b(\d{2})\s*년형\b/g)]
+    ...[...context.matchAll(/(?<!\d)(\d{2})\s*년형/g)]
       .map((match) => 2000 + Number(match[1])),
   ].filter((value) => Number.isInteger(value) && value >= 1990 && value <= 2200);
   if (years.length) return Math.max(...years);
@@ -46,11 +54,16 @@ function yearHint(html: string, index: number) {
   return loose.length ? Math.max(...loose) : null;
 }
 
-function modelHint(label: string, html: string, index: number) {
+function modelHint(
+  label: string,
+  html: string,
+  index: number,
+  floor = 0
+) {
   const generic = /^(상세\s*보기|견적\s*내기|신차\s*견적내기|Image)$/i;
   if (label && !generic.test(label)) return label;
 
-  const context = decodeHtml(html.slice(Math.max(0, index - 500), index));
+  const context = decodeHtml(html.slice(Math.max(floor, index - 500), index));
   const chunks = context.split(/\s{2,}|\n/).map((value) => value.trim()).filter(Boolean);
   return chunks.at(-1)?.slice(-100) ?? null;
 }
@@ -85,6 +98,10 @@ export function discoverVehicleMasterPages(input: {
   const html = input.bytes.toString('utf8');
   const discovered = new Map<string, VehicleMasterDiscoveredPage>();
 
+  const accepted: Array<{
+    anchor: ReturnType<typeof anchors>[number];
+    url: URL;
+  }> = [];
   for (const anchor of anchors(html)) {
     let url: URL;
     try {
@@ -93,7 +110,12 @@ export function discoverVehicleMasterPages(input: {
       continue;
     }
     if (!acceptedDetailUrl(input.sourceKey, url)) continue;
+    accepted.push({ anchor, url });
+  }
 
+  for (const [position, { anchor, url }] of accepted.entries()) {
+    const floor = accepted[position - 1]?.anchor.end ?? 0;
+    const ceiling = anchor.end;
     const detailUrls =
       input.sourceKey === 'CARISYOU' && /^\/car\/\d+\/?$/.test(url.pathname)
         ? [
@@ -101,8 +123,10 @@ export function discoverVehicleMasterPages(input: {
             new URL(`${url.pathname.replace(/\/$/, '')}/Spec`, url.origin).toString(),
           ]
         : [url.toString()];
-    const hint = yearHint(html, anchor.index);
-    const nearby = decodeHtml(html.slice(Math.max(0, anchor.index - 700), anchor.index + 100));
+    const hint = yearHint(html, anchor.index, floor, ceiling);
+    const nearby = decodeHtml(
+      html.slice(Math.max(floor, anchor.index - 700), Math.min(ceiling, anchor.index + 100))
+    );
     const currentHint =
       /판매중|시판|신차|출시|사전계약/.test(nearby)
         ? true
@@ -118,7 +142,7 @@ export function discoverVehicleMasterPages(input: {
         sourceName: policy.sourceName,
         sourceUrl,
         discoveredFromUrl: input.inventoryUrl,
-        modelHint: modelHint(anchor.label, html, anchor.index),
+        modelHint: modelHint(anchor.label, html, anchor.index, floor),
         latestModelYearHint: hint,
         currentHint,
       });
