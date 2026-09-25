@@ -121,6 +121,16 @@ export function validateSheetPublicationHandoff(
     }
   }
 
+  const snapshotDataDigest = stableDigest({
+    products: handoff.snapshot.products,
+    policies: handoff.snapshot.policies,
+    partners: handoff.snapshot.partners,
+    inventory: handoff.snapshot.inventory
+  });
+  if (snapshotDataDigest !== handoff.approvedRelease.dataDigest) {
+    violations.push('SNAPSHOT_DATA_DIGEST_MISMATCH');
+  }
+
   const { handoffHash, ...unsigned } = handoff;
   if (!/^[a-f0-9]{64}$/.test(handoffHash) ||
       hashSheetPublicationHandoff(unsigned) !== handoffHash) {
