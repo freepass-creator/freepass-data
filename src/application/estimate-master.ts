@@ -91,9 +91,9 @@ export function buildEstimateNewcarMasterRecord(
   if (!modelYearId) reasons.push('MODEL_YEAR_ID_UNVERIFIED');
   if (!trimId) reasons.push('TRIM_ID_UNVERIFIED');
   if (!powertrainId) reasons.push('POWERTRAIN_ID_UNVERIFIED');
-  if (!Number.isInteger(modelYear) || modelYear! < 1900 || modelYear! > 2200) {
-    reasons.push('MODEL_YEAR_UNVERIFIED');
-  }
+  const validModelYear = typeof modelYear === 'number' &&
+    Number.isInteger(modelYear) && modelYear >= 1900 && modelYear <= 2200;
+  if (!validModelYear) reasons.push('MODEL_YEAR_UNVERIFIED');
 
   const options = (candidate.options || []).map(normalizeOption);
   const exteriorColors = (candidate.exteriorColors || []).map(normalizeColor);
@@ -105,6 +105,11 @@ export function buildEstimateNewcarMasterRecord(
   if (!exteriorColors.length) reasons.push('EXTERIOR_COLOR_UNAVAILABLE');
   if (!interiorColors.length) reasons.push('INTERIOR_COLOR_UNAVAILABLE');
 
+  const seats = candidate.configuration?.seats == null ? null : Number(candidate.configuration.seats);
+  if (seats !== null && (!Number.isSafeInteger(seats) || seats < 1)) {
+    throw new Error('ESTIMATE_MASTER_CANDIDATE_INVALID:configuration.seats');
+  }
+
   let record: EstimateNewcarMasterRecord = {
     productId: text(candidate.productId, 'productId'),
     vehicleModelId,
@@ -113,7 +118,7 @@ export function buildEstimateNewcarMasterRecord(
     powertrainId,
     maker: text(candidate.maker, 'maker'),
     model: text(candidate.model, 'model'),
-    modelYear: Number.isInteger(modelYear) && modelYear! >= 1900 && modelYear! <= 2200 ? modelYear : null,
+    modelYear: validModelYear ? modelYear : null,
     trimName: text(candidate.trimName, 'trimName'),
     powertrainName: text(candidate.powertrainName, 'powertrainName'),
     basePrice: money(candidate.basePrice, 'basePrice'),
@@ -122,7 +127,7 @@ export function buildEstimateNewcarMasterRecord(
     interiorColors,
     configuration: {
       drivetrain: nullableId(candidate.configuration?.drivetrain),
-      seats: candidate.configuration?.seats == null ? null : Number(candidate.configuration.seats),
+      seats,
       bodyConfiguration: nullableId(candidate.configuration?.bodyConfiguration),
     },
     status: reasons.length ? 'HOLD' : 'ACTIVE',
