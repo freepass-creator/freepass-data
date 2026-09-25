@@ -1,5 +1,6 @@
 import type {
   VehicleMasterCompatibilityRule,
+  VehicleMasterHashRecord,
   VehicleMasterNode,
   VehicleMasterPipelineRecord,
   VehicleMasterPriceRevision,
@@ -22,6 +23,9 @@ export interface VehicleMasterStore {
 
   getSourceDocument(id: string): Promise<VehicleMasterSourceDocument | null>;
   putSourceDocument(record: VehicleMasterSourceDocument): Promise<VehicleMasterWriteResult>;
+
+  getHash(hashId: string): Promise<VehicleMasterHashRecord | null>;
+  putHash(record: VehicleMasterHashRecord): Promise<VehicleMasterWriteResult>;
 
   getPipelineRecord(
     kind: VehicleMasterPipelineRecord['kind'],
