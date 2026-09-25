@@ -1,6 +1,7 @@
 import { createVehicleMasterSourceParsers } from '../adapters/vehicle-master-parser-registry.js';
 import {
   buildRecentFirstBackfillQueue,
+  discoverAdditionalVehicleMasterInventoryPages,
   discoverVehicleMasterPages,
 } from '../application/vehicle-master-backfill.js';
 import { buildVehicleMasterCoverage } from '../application/vehicle-master-coverage.js';
@@ -31,6 +32,14 @@ function batchSize(raw: string | undefined) {
   const value = raw ? Number(raw) : 20;
   if (!Number.isSafeInteger(value) || value < 1 || value > 200) {
     throw new Error('VEHICLE_MASTER_BACKFILL_BATCH_SIZE must be 1..200');
+  }
+  return value;
+}
+
+function discoveryPageLimit(raw: string | undefined) {
+  const value = raw ? Number(raw) : 100;
+  if (!Number.isSafeInteger(value) || value < 1 || value > 500) {
+    throw new Error('VEHICLE_MASTER_BACKFILL_DISCOVERY_PAGE_LIMIT must be 1..500');
   }
   return value;
 }
@@ -119,6 +128,9 @@ const selectedSources = [
   ]),
 ];
 const limit = batchSize(process.env.VEHICLE_MASTER_BACKFILL_BATCH_SIZE);
+const maxDiscoveryPages = discoveryPageLimit(
+  process.env.VEHICLE_MASTER_BACKFILL_DISCOVERY_PAGE_LIMIT
+);
 
 const store = createFirestoreVehicleMasterStore();
 const existingSources = await store.listSourceDocuments();
@@ -151,29 +163,59 @@ for (const sourceKey of selectedSources) {
     continue;
   }
 
-  try {
-    const fetched = await fetcher.fetch(policy.discoveryUrl);
-    const pages = discoverVehicleMasterPages({
-      sourceKey,
-      inventoryUrl: fetched.finalUrl,
-      bytes: fetched.bytes,
-    });
-    discovered.push(...pages);
-    discovery.push({
-      sourceKey,
-      discoveryUrl: fetched.finalUrl,
-      status: 'DISCOVERED',
-      discoveredCount: pages.length,
-    });
-  } catch (error) {
-    discovery.push({
-      sourceKey,
-      discoveryUrl: policy.discoveryUrl,
-      status: 'DISCOVERY_HOLD',
-      discoveredCount: 0,
-      errorCode: errorCode(error),
-    });
+  const frontier = [policy.discoveryUrl];
+  const seenInventory = new Set<string>();
+  let providerDiscovered = 0;
+
+  while (frontier.length && seenInventory.size < maxDiscoveryPages) {
+    const inventoryUrl = frontier.shift()!;
+    if (seenInventory.has(inventoryUrl)) continue;
+    seenInventory.add(inventoryUrl);
+
+    try {
+      const fetched = await fetcher.fetch(inventoryUrl);
+      const pages = discoverVehicleMasterPages({
+        sourceKey,
+        inventoryUrl: fetched.finalUrl,
+        bytes: fetched.bytes,
+      });
+      discovered.push(...pages);
+      providerDiscovered += pages.length;
+
+      for (const nextUrl of discoverAdditionalVehicleMasterInventoryPages({
+        sourceKey,
+        inventoryUrl: fetched.finalUrl,
+        bytes: fetched.bytes,
+      })) {
+        if (!seenInventory.has(nextUrl) && !frontier.includes(nextUrl)) {
+          frontier.push(nextUrl);
+        }
+      }
+
+      discovery.push({
+        sourceKey,
+        discoveryUrl: fetched.finalUrl,
+        status: 'DISCOVERED',
+        discoveredCount: pages.length,
+      });
+    } catch (error) {
+      discovery.push({
+        sourceKey,
+        discoveryUrl: inventoryUrl,
+        status: 'DISCOVERY_HOLD',
+        discoveredCount: 0,
+        errorCode: errorCode(error),
+      });
+    }
   }
+
+  discovery.push({
+    sourceKey,
+    discoveryUrl: policy.discoveryUrl,
+    status: frontier.length ? 'DISCOVERY_PAGE_LIMIT' : 'DISCOVERY_COMPLETE',
+    inventoryPageCount: seenInventory.size,
+    discoveredCount: providerDiscovered,
+  });
 }
 
 const coverageBefore = await buildVehicleMasterCoverage(store);
@@ -307,6 +349,7 @@ const summary = {
   observedAt,
   selectedSources,
   batchSize: limit,
+  discoveryPageLimit: maxDiscoveryPages,
   discovery,
   totalDiscovered: discovered.length,
   skippedFromFirestore: persistedCompletedUrls.length,
