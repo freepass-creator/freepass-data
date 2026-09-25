@@ -109,19 +109,14 @@ function coverageStatus(sources: VehicleMasterSourceDocument[]) {
   return 'DISCOVERY_ONLY' as const;
 }
 
-export async function buildVehicleMasterCoverage(
-  store: Pick<
-    VehicleMasterStore,
-    'listSourceDocuments' | 'listPipelineRecordsByKind'
-  >
-): Promise<VehicleMasterCoverageRow[]> {
-  const [sources, normalized] = await Promise.all([
-    store.listSourceDocuments(),
-    store.listPipelineRecordsByKind('NORMALIZED_RECORD'),
-  ]);
+export function buildVehicleMasterCoverageFromEvidence(input: {
+  sources: readonly VehicleMasterSourceDocument[];
+  normalized: readonly VehicleMasterPipelineRecord[];
+}): VehicleMasterCoverageRow[] {
   const sourceById = new Map(
-    sources.map((source) => [source.sourceDocumentId, source])
+    input.sources.map((source) => [source.sourceDocumentId, source])
   );
+  const normalized = input.normalized;
 
   type Acc = {
     maker: string;
@@ -208,6 +203,19 @@ export async function buildVehicleMasterCoverage(
       a.maker.localeCompare(b.maker) ||
       a.model.localeCompare(b.model)
     );
+}
+
+export async function buildVehicleMasterCoverage(
+  store: Pick<
+    VehicleMasterStore,
+    'listSourceDocuments' | 'listPipelineRecordsByKind'
+  >
+): Promise<VehicleMasterCoverageRow[]> {
+  const [sources, normalized] = await Promise.all([
+    store.listSourceDocuments(),
+    store.listPipelineRecordsByKind('NORMALIZED_RECORD'),
+  ]);
+  return buildVehicleMasterCoverageFromEvidence({ sources, normalized });
 }
 
 export function coverageStrength(status: VehicleMasterCoverageStatus) {
