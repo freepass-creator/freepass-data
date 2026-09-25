@@ -102,6 +102,7 @@ export class DataAccessGateway {
     startedAt: string
   ) {
     return {
+      contractVersion: 'data-access-event-v1' as const,
       operationId,
       mode,
       operation: spec.operation,
