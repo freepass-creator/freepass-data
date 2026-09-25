@@ -1,5 +1,6 @@
 import type {
   VehicleMasterCompatibilityRule,
+  VehicleMasterHashRecord,
   VehicleMasterNode,
   VehicleMasterPipelineRecord,
   VehicleMasterPriceRevision,
@@ -22,6 +23,7 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
   private readonly rules = new Map<string, VehicleMasterCompatibilityRule>();
   private readonly prices = new Map<string, VehicleMasterPriceRevision>();
   private readonly sourceDocuments = new Map<string, VehicleMasterSourceDocument>();
+  private readonly hashes = new Map<string, VehicleMasterHashRecord>();
   private readonly pipeline = new Map<string, VehicleMasterPipelineRecord>();
   private readonly resolverFeedback = new Map<string, VehicleMasterResolverFeedback>();
 
@@ -105,6 +107,14 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
       record.sourceDocumentId,
       record
     );
+  }
+
+  async getHash(hashId: string) {
+    return copy(this.hashes.get(hashId) ?? null);
+  }
+
+  async putHash(record: VehicleMasterHashRecord) {
+    return this.putImmutable(this.hashes, record.hashId, record);
   }
 
   async getPipelineRecord(
