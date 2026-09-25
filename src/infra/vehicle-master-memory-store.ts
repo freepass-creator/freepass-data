@@ -85,6 +85,12 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
     return copy(this.prices.get(id) ?? null);
   }
 
+  async listPriceRevisionsByTarget(targetId: string) {
+    return copy([...this.prices.values()]
+      .filter((item) => item.targetId === targetId)
+      .sort((a, b) => a.revision - b.revision || a.id.localeCompare(b.id)));
+  }
+
   async putPriceRevision(record: VehicleMasterPriceRevision) {
     return this.putImmutable(this.prices, record.id, record);
   }
