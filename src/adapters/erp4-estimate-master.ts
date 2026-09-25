@@ -215,7 +215,7 @@ function colorRecords(
     if (!name) continue;
     const rawCode = S(color?.code);
     if (!rawCode) holdReasons.push('COLOR_CODE_UNVERIFIED');
-    const price = safeMoney(color?.price ?? 0);
+    const price = safeMoney(color?.price);
     if (!price) holdReasons.push('COLOR_PRICE_UNVERIFIED');
     out.push({
       colorId: rawCode ? stableChildId(trimId, kind, rawCode) : null,
