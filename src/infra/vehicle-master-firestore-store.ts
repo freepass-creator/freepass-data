@@ -146,6 +146,13 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
     );
   }
 
+  async listPriceRevisionsByTarget(targetId: string) {
+    const snap = await this.db.collection(C.prices).where('targetId', '==', targetId).get();
+    return snap.docs
+      .map((doc) => doc.data() as VehicleMasterPriceRevision)
+      .sort((a, b) => a.revision - b.revision || a.id.localeCompare(b.id));
+  }
+
   async putPriceRevision(record: VehicleMasterPriceRevision) {
     return this.putImmutable(
       this.db.collection(C.prices).doc(safeId(record.id)),
