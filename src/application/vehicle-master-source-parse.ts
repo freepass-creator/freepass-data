@@ -19,6 +19,7 @@ export type ParseFetchedVehicleMasterSourceResult = {
   parserId: string;
   parserVersion: string;
   parseResult: VehicleMasterParseResult;
+  sourceHashId: string;
   rawRecordId: string;
   normalizedRecordIds: string[];
   summaryRecordId: string;
@@ -63,6 +64,34 @@ function pipelineRecord(
   });
 }
 
+async function assertPersistedSourceByteHash(
+  store: VehicleMasterStore,
+  sourceDocument: VehicleMasterSourceDocument,
+  fetched: VehicleMasterFetchedSource
+): Promise<string> {
+  const sourceHashId = deterministicVehicleMasterRecordId('hash', {
+    scope: 'SOURCE_BYTES',
+    sourceDocumentId: sourceDocument.sourceDocumentId,
+    algorithm: 'SHA-256',
+    digest: sourceDocument.sha256,
+  });
+  const hashRecord = await store.getHash(sourceHashId);
+  if (!hashRecord) {
+    throw new Error('VEHICLE_MASTER_PARSE_SOURCE_HASH_RECORD_MISSING');
+  }
+  if (
+    hashRecord.scope !== 'SOURCE_BYTES' ||
+    hashRecord.algorithm !== 'SHA-256' ||
+    hashRecord.digest !== sourceDocument.sha256 ||
+    hashRecord.sourceDocumentId !== sourceDocument.sourceDocumentId ||
+    hashRecord.storagePath !== sourceDocument.storagePath ||
+    hashRecord.byteLength !== fetched.bytes.byteLength
+  ) {
+    throw new Error('VEHICLE_MASTER_PARSE_SOURCE_HASH_RECORD_MISMATCH');
+  }
+  return sourceHashId;
+}
+
 export async function parseFetchedVehicleMasterSource(
   dependencies: {
     store: VehicleMasterStore;
@@ -77,6 +106,11 @@ export async function parseFetchedVehicleMasterSource(
   if (actualSha !== input.sourceDocument.sha256) {
     throw new Error('VEHICLE_MASTER_PARSE_SOURCE_SHA_MISMATCH');
   }
+  const sourceHashId = await assertPersistedSourceByteHash(
+    dependencies.store,
+    input.sourceDocument,
+    input.fetched
+  );
 
   const parseInput = {
     sourceDocumentId: input.sourceDocument.sourceDocumentId,
@@ -176,6 +210,7 @@ export async function parseFetchedVehicleMasterSource(
     parserId: parser.parserId,
     parserVersion: parser.parserVersion,
     parseResult,
+    sourceHashId,
     rawRecordId,
     normalizedRecordIds,
     summaryRecordId,
