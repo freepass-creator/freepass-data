@@ -143,8 +143,9 @@ export function buildEstimateNewcarMasterRecord(
   }
 
   // Remaining issues here indicate a programmer/schema error rather than a business HOLD.
+  const recordedHoldReasons = new Set(record.holdReasons || []);
   const nonHoldRepresentationIssues = semanticIssues.filter(
-    (issue) => issue.code !== 'HOLD_REASON_REQUIRED'
+    (issue) => issue.code !== 'HOLD_REASON_REQUIRED' && !recordedHoldReasons.has(issue.code)
   );
   if (nonHoldRepresentationIssues.length) {
     throw new Error(
