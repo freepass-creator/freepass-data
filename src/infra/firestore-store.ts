@@ -36,7 +36,12 @@ import type {
   ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
 import { assertProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
-import { readFirestoreActiveProjectionEvidence } from './firestore-projection-evidence.js';
+import {
+  readFirestoreActiveProjection,
+  readFirestoreActiveProjectionEvidence,
+  readFirestoreProjectionLineage,
+  readFirestoreProjectionManifest
+} from './firestore-projection-evidence.js';
 
 const C = {
   vehicleModels: FIRESTORE_COLLECTIONS.catalog.vehicleModels,
@@ -466,25 +471,16 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     });
   }
   async getActive(projectionId: string) {
-    const active = await this.db.collection(C.activeReleases).doc(projectionId).get();
-    if (!active.exists) return null;
-    return data<ProjectionRelease<ErpPublicProduct>>(
-      await this.db.collection(C.releases).doc(active.get('releaseId') as string).get()
-    );
+    return readFirestoreActiveProjection(this.db, projectionId);
   }
   async getActiveEvidenceSnapshot(projectionId: string) {
     return readFirestoreActiveProjectionEvidence(this.db, projectionId);
   }
   async getManifest(releaseId: string) {
-    return data<ProjectionReleaseManifest>(
-      await this.db.collection(C.releaseManifests).doc(releaseId).get()
-    );
+    return readFirestoreProjectionManifest(this.db, releaseId);
   }
   async listProjectionLineage(releaseId: string) {
-    const snap = await this.db.collection(C.projectionLineage)
-      .where('releaseId', '==', releaseId)
-      .get();
-    return snap.docs.map((doc) => doc.data() as ProjectionFieldLineageRecord);
+    return readFirestoreProjectionLineage(this.db, releaseId);
   }
   async getDeliveryReceipt(eventId: string) {
     return data<ProjectionDeliveryReceipt>(
