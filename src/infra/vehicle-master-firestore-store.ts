@@ -29,7 +29,9 @@ const C = {
   auditReports: 'vehicle_master_audit_reports',
 } as const;
 
-const safeId = (value: string) => value.replaceAll('/', '__');
+export const vehicleMasterFirestoreDocumentId = (value: string) => encodeURIComponent(value);
+
+const safeId = vehicleMasterFirestoreDocumentId;
 
 const data = <T>(snapshot: FirebaseFirestore.DocumentSnapshot) =>
   snapshot.exists ? ({ ...snapshot.data() } as T) : null;
