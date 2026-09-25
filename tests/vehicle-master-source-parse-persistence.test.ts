@@ -75,7 +75,7 @@ describe('vehicle master parse persistence', () => {
     expect(normalized?.payload).toEqual(expect.objectContaining({
       recordKind: 'TRIM',
       parserId: 'KIA_OFFICIAL_PRICE',
-      parserVersion: '1.0.0',
+      parserVersion: '1.1.0',
     }));
 
     const second = await parseFetchedVehicleMasterSource(

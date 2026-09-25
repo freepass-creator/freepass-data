@@ -354,6 +354,16 @@ function pipelineRecord(
   });
 }
 
+async function putOutcomeRecordOnce(
+  store: VehicleMasterStore,
+  record: VehicleMasterPipelineRecord
+): Promise<VehicleMasterPipelineRecord> {
+  const existing = await store.getPipelineRecord(record.kind, record.recordId);
+  if (existing) return existing;
+  await store.putPipelineRecord(record);
+  return record;
+}
+
 async function persistPromotionEvidence(
   store: VehicleMasterStore,
   input: {
@@ -449,7 +459,7 @@ export async function promoteVehicleMasterNode(
     promotionStatus = 'PROMOTED';
   }
 
-  const promotionResult = pipelineRecord(
+  const promotionResult = await putOutcomeRecordOnce(store, pipelineRecord(
     'PROMOTION_RESULT',
     evidence.identity,
     input.observedAt,
@@ -460,12 +470,11 @@ export async function promoteVehicleMasterNode(
       canonicalWrite,
       issues: decision.issues,
     }
-  );
-  await store.putPipelineRecord(promotionResult);
+  ));
 
   let changeEventId: string | null = null;
   if (promotionStatus === 'PROMOTED') {
-    const changeEvent = pipelineRecord(
+    const changeEvent = await putOutcomeRecordOnce(store, pipelineRecord(
       'CHANGE_EVENT',
       { ...evidence.identity, promotionResultId: promotionResult.recordId },
       input.observedAt,
@@ -481,8 +490,7 @@ export async function promoteVehicleMasterNode(
         canonicalWrite,
         evidenceSetId: evidence.evidenceSet.recordId,
       }
-    );
-    await store.putPipelineRecord(changeEvent);
+    ));
     changeEventId = changeEvent.recordId;
   }
 
@@ -546,7 +554,7 @@ export async function promoteVehicleMasterPriceRevision(
     promotionStatus = 'PROMOTED';
   }
 
-  const promotionResult = pipelineRecord(
+  const promotionResult = await putOutcomeRecordOnce(store, pipelineRecord(
     'PROMOTION_RESULT',
     evidence.identity,
     input.observedAt,
@@ -557,12 +565,11 @@ export async function promoteVehicleMasterPriceRevision(
       canonicalWrite,
       issues: decision.issues,
     }
-  );
-  await store.putPipelineRecord(promotionResult);
+  ));
 
   let changeEventId: string | null = null;
   if (promotionStatus === 'PROMOTED') {
-    const changeEvent = pipelineRecord(
+    const changeEvent = await putOutcomeRecordOnce(store, pipelineRecord(
       'CHANGE_EVENT',
       { ...evidence.identity, promotionResultId: promotionResult.recordId },
       input.observedAt,
@@ -575,8 +582,7 @@ export async function promoteVehicleMasterPriceRevision(
         amount: input.proposal.amount,
         evidenceSetId: evidence.evidenceSet.recordId,
       }
-    );
-    await store.putPipelineRecord(changeEvent);
+    ));
     changeEventId = changeEvent.recordId;
   }
 
@@ -656,7 +662,7 @@ export async function promoteVehicleMasterCompatibilityRule(
     promotionStatus = 'PROMOTED';
   }
 
-  const promotionResult = pipelineRecord(
+  const promotionResult = await putOutcomeRecordOnce(store, pipelineRecord(
     'PROMOTION_RESULT',
     evidence.identity,
     input.observedAt,
@@ -667,12 +673,11 @@ export async function promoteVehicleMasterCompatibilityRule(
       canonicalWrite,
       issues: decision.issues,
     }
-  );
-  await store.putPipelineRecord(promotionResult);
+  ));
 
   let changeEventId: string | null = null;
   if (promotionStatus === 'PROMOTED') {
-    const changeEvent = pipelineRecord(
+    const changeEvent = await putOutcomeRecordOnce(store, pipelineRecord(
       'CHANGE_EVENT',
       { ...evidence.identity, promotionResultId: promotionResult.recordId },
       input.observedAt,
@@ -688,8 +693,7 @@ export async function promoteVehicleMasterCompatibilityRule(
         canonicalWrite,
         evidenceSetId: evidence.evidenceSet.recordId,
       }
-    );
-    await store.putPipelineRecord(changeEvent);
+    ));
     changeEventId = changeEvent.recordId;
   }
 
