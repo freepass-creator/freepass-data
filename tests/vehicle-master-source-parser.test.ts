@@ -52,6 +52,14 @@ describe('vehicle master source parsers', () => {
       currency: 'KRW',
       effectiveFrom: '2026-09-01T00:00:00.000Z',
     }));
+    expect(result.records[0]?.baseItemDetails).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: '파워트레인',
+          name: '스마트스트림 G2.5 터보 엔진',
+        }),
+      ])
+    );
     expect(result.records[0]?.options).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: '스타일', price: 1240000 }),
@@ -82,10 +90,12 @@ describe('vehicle master source parsers', () => {
           <ul>
             <li>프레스티지 2WD 휘발유 10.8㎞/ℓ 36,410,000 원</li>
             <li>스타일 1,240,000</li>
-            <li>■ 255/45 R20 컨티넨탈 타이어&amp;전면가공 휠</li>
+            <li>■ 255/45 R20 컨티넨탈 타이어&amp;전면가공 휠, 프로젝션 LED 헤드램프, LED 리어 콤비네이션램프</li>
             <li>12.3인치 클러스터 590,000</li>
             <li>HUD + 빌트인 캠 2 1,190,000</li>
             <li>노블레스 2WD 휘발유 10.8㎞/ℓ 39,660,000 원</li>
+            <li>외장</li>
+            <li>루프랙, 터치타입 아웃사이드 도어핸들</li>
           </ul>
         </body>
       </html>
@@ -118,7 +128,12 @@ describe('vehicle master source parsers', () => {
         expect.objectContaining({
           name: '스타일',
           price: 1240000,
-          note: '255/45 R20 컨티넨탈 타이어&전면가공 휠',
+          note: '255/45 R20 컨티넨탈 타이어&전면가공 휠, 프로젝션 LED 헤드램프, LED 리어 콤비네이션램프',
+          packageItems: [
+            '255/45 R20 컨티넨탈 타이어&전면가공 휠',
+            '프로젝션 LED 헤드램프',
+            'LED 리어 콤비네이션램프',
+          ],
         }),
         expect.objectContaining({ name: '12.3인치 클러스터', price: 590000 }),
       ])
@@ -127,6 +142,12 @@ describe('vehicle master source parsers', () => {
       trimName: '노블레스',
       basePrice: 39660000,
     }));
+    expect(result.records[1]?.baseItemDetails).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ category: '외장', name: '루프랙' }),
+        expect.objectContaining({ category: '외장', name: '터치타입 아웃사이드 도어핸들' }),
+      ])
+    );
   });
 
   it('rejects unrelated hosts through parser capability matching', () => {
