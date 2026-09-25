@@ -43,7 +43,7 @@ for (const row of rows) {
       fail(`responsibility aliases must be non-empty strings: ${row.id}`);
       continue;
     }
-    const normalized = raw.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\\s+/g, ' ');
+    const normalized = raw.trim().toLowerCase().replaceAll('_', ' ').replaceAll('-', ' ').split(' ').filter(Boolean).join(' ');
     const prior = aliasOwners.get(normalized);
     if (prior && prior !== row.id) {
       fail(`responsibility alias collision "${raw}": ${prior} vs ${row.id}`);
