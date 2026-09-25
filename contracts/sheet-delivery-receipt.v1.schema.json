@@ -46,7 +46,7 @@
       "additionalProperties": false,
       "required": ["verified", "vehicleKeyCount", "dataDigest"],
       "properties": {
-        "verified": { "const": true },
+        "verified": { "type": "boolean" },
         "vehicleKeyCount": { "type": "integer", "minimum": 0 },
         "dataDigest": { "type": "string", "minLength": 1 }
       }
