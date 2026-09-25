@@ -28,12 +28,7 @@ const snapshot = {
   }
 };
 
-const snapshotDataDigest = stableDigest({
-  products: snapshot.products,
-  policies: snapshot.policies,
-  partners: snapshot.partners,
-  inventory: snapshot.inventory
-});
+const snapshotDataDigest = hashSheetPublicationData(snapshot);
 
 const unsigned: Omit<SheetPublicationHandoff, 'handoffHash'> = {
   contractVersion: 'freepass-sheet-handoff-v1',
