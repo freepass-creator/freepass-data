@@ -125,7 +125,7 @@ async function captureCollection(
 
 export async function captureErp5SheetSource(
   rpc: Erp5ReadRpc,
-  capturedAt = new Date().toISOString()
+  capturedAt?: string
 ): Promise<Erp5SheetSourceCapture> {
   const started = await rpc('beginTransaction', { options: { readOnly: {} } });
   if (!object(started) || typeof started.transaction !== 'string' || !started.transaction) {
@@ -141,7 +141,8 @@ export async function captureErp5SheetSource(
       readTime ??= captured.readTime;
       result[collection] = captured.group;
     }
-    if (!time(capturedAt)) fail('INVALID_SHEET_SOURCE_CAPTURED_AT');
+    const completedAt = capturedAt ?? new Date().toISOString();
+    if (!time(completedAt)) fail('INVALID_SHEET_SOURCE_CAPTURED_AT');
 
     const unsigned = {
       version: 'erp5-sheet-source-capture/1' as const,
@@ -149,7 +150,7 @@ export async function captureErp5SheetSource(
       databaseId: '(default)' as const,
       consistency: 'READ_ONLY_TRANSACTION' as const,
       readTime: readTime!,
-      capturedAt,
+      capturedAt: completedAt,
       collections: result
     };
     return { ...unsigned, digest: digest(unsigned) };
