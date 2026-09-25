@@ -12,9 +12,11 @@ import {
   normalizeParsedOptionCondition,
   parseKrw,
   splitOptionPrice,
+  splitTopLevelComma,
   uniqueParsedTrims,
   vehicleTextLines,
   withParsedOptionKind,
+  VEHICLE_BASE_ITEM_CATEGORIES,
 } from './vehicle-master-parser-utils.js';
 
 const TRIM_NAMES = new Set([
@@ -113,7 +115,9 @@ export class KiaOfficialPriceParser implements VehicleMasterSourceParser {
         if (!priced) continue;
 
         const baseItems: string[] = [];
+        const baseItemDetails: Array<{ category: string | null; name: string; sourceText: string }> = [];
         const options = [];
+        let currentCategory: string | null = null;
         let inOptions = false;
         let inAccessory = false;
 
@@ -122,6 +126,7 @@ export class KiaOfficialPriceParser implements VehicleMasterSourceParser {
           if (j > priced.index + 1 && TRIM_NAMES.has(line)) break;
           if (/^트림\/가격/.test(line) || /^판매가격/.test(line)) break;
           if (line === '선택품목' || line.includes('선택품목 ')) {
+            currentCategory = null;
             inOptions = true;
             inAccessory = false;
             continue;
@@ -141,13 +146,27 @@ export class KiaOfficialPriceParser implements VehicleMasterSourceParser {
             continue;
           }
 
+          if (VEHICLE_BASE_ITEM_CATEGORIES.has(line)) {
+            currentCategory = line;
+            continue;
+          }
+
           if (
+            currentCategory &&
             line.length >= 2 &&
-            line.length <= 500 &&
+            line.length <= 1000 &&
             !/^\d{1,3}(?:,\d{3})+$/.test(line) &&
             !line.startsWith('[Button')
           ) {
-            baseItems.push(line);
+            const items = splitTopLevelComma(line);
+            baseItems.push(...items);
+            baseItemDetails.push(
+              ...items.map((name) => ({
+                category: currentCategory,
+                name,
+                sourceText: line,
+              }))
+            );
           }
         }
 
@@ -169,6 +188,7 @@ export class KiaOfficialPriceParser implements VehicleMasterSourceParser {
           currency: 'KRW',
           effectiveFrom: effective,
           baseItems: [...new Set(baseItems)],
+          baseItemDetails,
           options,
           sourceText: lines.slice(i, Math.min(lines.length, priced.index + 40)).join('\n'),
         });
