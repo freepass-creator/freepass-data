@@ -110,6 +110,22 @@ for (const item of retired) {
   if (activePrs.has(item.pr)) fail(`PR #${item.pr} cannot be active and retired`);
 }
 
+const retiredBranches = Array.isArray(registry.retiredBranches) ? registry.retiredBranches : [];
+const retiredBranchNames = new Set();
+for (const item of retiredBranches) {
+  if (typeof item?.branch !== 'string' || !item.branch.trim()) {
+    fail('retired branch requires a non-empty branch name');
+    continue;
+  }
+  if (retiredBranchNames.has(item.branch)) {
+    fail(`duplicate retired branch: ${item.branch}`);
+  }
+  retiredBranchNames.add(item.branch);
+  if (activeBranches.has(item.branch)) {
+    fail(`branch ${item.branch} cannot be active and retired`);
+  }
+}
+
 const agents = fs.readFileSync(agentsPath, 'utf8');
 if (!agents.includes('contracts/development-responsibility-registry.v1.json')) {
   fail('AGENTS.md must point to the machine-readable responsibility registry');
@@ -125,5 +141,5 @@ if (!fs.existsSync(templatePath)) {
 }
 
 if (!process.exitCode) {
-  console.log(`Development responsibility registry OK: ${rows.length} responsibilities, ${activeById.size} canonical WIP lines, ${aliasOwners.size} unique responsibility terms`);
+  console.log(`Development responsibility registry OK: ${rows.length} responsibilities, ${activeById.size} canonical WIP lines, ${aliasOwners.size} unique responsibility terms, ${retiredBranchNames.size} retired branches`);
 }
