@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type {
   ActorRef,
   Offer,
@@ -16,6 +16,7 @@ import type {
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import type { CatalogStore } from '../ports/catalog-store.js';
 import { assertCommandWriter } from '../domain/authority.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import {
   assertCatalogWriterOwnership,
   resolveExecutionWriter,
@@ -49,27 +50,12 @@ export class SourceChangedReviewRequiredError extends Error {
   readonly code = 'SOURCE_CHANGED_REVIEW_REQUIRED';
 }
 
-function stableHash(value: unknown) {
-  const stable = (input: unknown): unknown => {
-    if (Array.isArray(input)) return input.map(stable);
-    if (input && typeof input === 'object') {
-      return Object.fromEntries(
-        Object.entries(input as Record<string, unknown>)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([key, child]) => [key, stable(child)])
-      );
-    }
-    return input;
-  };
-  return createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
-}
-
 function opaqueId(prefix: string, ...parts: string[]) {
-  return `${prefix}_${stableHash(parts).slice(0, 24)}`;
+  return `${prefix}_${stableDigest(parts).slice(0, 24)}`;
 }
 
 function requestDigest(input: CanonicalizeCatalogCandidateInput, writerId: string) {
-  return stableHash({
+  return stableDigest({
     commandType: 'CANONICALIZE_CATALOG_CANDIDATE',
     candidateId: input.candidateId,
     expectedHeadRunId: input.expectedHeadRunId,
@@ -354,7 +340,7 @@ function buildCanonicalLineage(
     if (!canonical) continue;
 
     out.push({
-      lineageRecordId: `lin_${stableHash([
+      lineageRecordId: `lin_${stableDigest([
         parent.lineageRecordId,
         canonical.entityType,
         canonical.entityId,
@@ -681,7 +667,7 @@ export async function canonicalizeCatalogCandidate(
       snapshot: unknown
     ) => {
       await tx.appendRevision({
-        revisionRecordId: 'rev_' + stableHash([
+        revisionRecordId: 'rev_' + stableDigest([
           input.commandId,
           entityType,
           entityId,
