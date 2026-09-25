@@ -67,12 +67,17 @@ describe('vehicle master source capture', () => {
 
     expect(result.archiveWrite).toBe('CREATED');
     expect(result.documentWrite).toBe('CREATED');
+    expect(result.hashWrite).toBe('CREATED');
     expect(result.sourceDocument.sha256).toBe(sha256Bytes(bytes));
+    expect(result.hashRecord.digest).toBe(result.sourceDocument.sha256);
+    expect(result.hashRecord.storagePath).toBe(result.sourceDocument.storagePath);
     expect(result.sourceDocument.storagePath).toContain(result.sourceDocument.sha256);
     expect(result.sourceDocument.sourceUrl).toBe(fetched.finalUrl);
 
     const persisted = await store.getSourceDocument(result.sourceDocument.sourceDocumentId);
     expect(persisted?.contentHash).toBe(result.sourceDocument.contentHash);
+    const persistedHash = await store.getHash(result.hashRecord.hashId);
+    expect(persistedHash?.contentHash).toBe(result.hashRecord.contentHash);
   });
 
   it('is idempotent for the same observation and reuses content-addressed bytes', async () => {
@@ -96,6 +101,8 @@ describe('vehicle master source capture', () => {
     expect(first.sourceDocument.sourceDocumentId).toBe(second.sourceDocument.sourceDocumentId);
     expect(second.archiveWrite).toBe('UNCHANGED');
     expect(second.documentWrite).toBe('UNCHANGED');
+    expect(second.hashWrite).toBe('UNCHANGED');
+    expect(second.hashRecord.hashId).toBe(first.hashRecord.hashId);
   });
 
   it('creates a new observation record while reusing identical archived bytes', async () => {
@@ -125,6 +132,9 @@ describe('vehicle master source capture', () => {
     expect(first.sourceDocument.sourceDocumentId).not.toBe(second.sourceDocument.sourceDocumentId);
     expect(second.archiveWrite).toBe('UNCHANGED');
     expect(second.documentWrite).toBe('CREATED');
+    expect(second.hashWrite).toBe('CREATED');
+    expect(first.hashRecord.hashId).not.toBe(second.hashRecord.hashId);
+    expect(first.hashRecord.digest).toBe(second.hashRecord.digest);
     expect(first.sourceDocument.storagePath).toBe(second.sourceDocument.storagePath);
   });
 });
