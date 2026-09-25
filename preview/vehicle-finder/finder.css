@@ -215,6 +215,7 @@
     gap:12px;
     max-height:min(78vh,640px);
     overflow:auto;
+    overscroll-behavior:contain;
     padding:12px 16px calc(16px + env(safe-area-inset-bottom));
     background:var(--vf-bg);
     border-top:1px solid var(--vf-line);
