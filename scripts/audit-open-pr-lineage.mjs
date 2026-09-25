@@ -31,6 +31,7 @@ const responsibilities = new Map(
 );
 const claims = new Map();
 const failures = [];
+const retiredBranches = new Set((registry.retiredBranches || []).map((item) => item.branch));
 
 function metadata(body = '') {
   const read = (key) => {
@@ -45,6 +46,10 @@ function metadata(body = '') {
 }
 
 for (const pr of prs) {
+  if (retiredBranches.has(pr.head?.ref)) {
+    failures.push('PR #' + pr.number + ' uses retired branch ' + pr.head?.ref);
+  }
+
   const meta = metadata(pr.body || '');
   if (!meta.responsibilityId || !meta.lineageMode) {
     failures.push('PR #' + pr.number + ' is missing Responsibility-ID or Lineage-Mode');
