@@ -164,12 +164,16 @@ try:
 
         page.set_viewport_size({'width': 390, 'height': 844})
         filter_button = page.get_by_role('button', name='필터', exact=True)
+        expect(filter_button).to_have_attribute('aria-haspopup', 'dialog')
         filter_button.click()
         expect(page.get_by_role('button', name='필터 닫기', exact=True)).to_be_visible()
         filter_sheet = page.locator('.vf-filters')
         expect(filter_sheet).to_have_attribute('role', 'dialog')
         expect(filter_sheet).to_have_attribute('aria-modal', 'true')
         expect(filter_sheet).to_have_attribute('aria-labelledby')
+        assert page.locator('.vf-head').evaluate('(node) => node.inert') is True
+        assert page.evaluate("document.documentElement.style.overflow") == 'hidden'
+        assert page.evaluate("document.body.style.overflow") == 'hidden'
         result_action = page.locator('.vf-filter-done')
         expect(result_action).to_be_visible()
         assert result_action.inner_text().endswith('개 결과 보기')
@@ -183,6 +187,26 @@ try:
         page.get_by_role('button', name='추가 조건', exact=True).click()
         expect(page.get_by_role('combobox', name='인승', exact=True)).to_be_visible()
         expect(page.get_by_role('combobox', name='구동', exact=True)).to_be_visible()
+        page.get_by_role('combobox', name='인승', exact=True).select_option('7')
+        page.get_by_role('button', name='추가 조건 접기 · 1', exact=True).click()
+        expect(page.get_by_role('button', name='추가 조건 · 1', exact=True)).to_be_visible()
+        passed('collapsed advanced filters retain their active-count signal')
+
+        page.set_viewport_size({'width': 901, 'height': 844})
+        expect(filter_sheet).not_to_have_attribute('role', 'dialog')
+        expect(filter_sheet).not_to_have_attribute('aria-modal', 'true')
+        expect(filter_button).not_to_have_attribute('aria-haspopup', 'dialog')
+        assert page.locator('.vf-head').evaluate('(node) => node.inert') is False
+        assert page.evaluate("document.documentElement.style.overflow") != 'hidden'
+        assert page.evaluate("document.body.style.overflow") != 'hidden'
+        page.set_viewport_size({'width': 390, 'height': 844})
+        expect(filter_sheet).to_have_attribute('role', 'dialog')
+        expect(filter_button).to_have_attribute('aria-haspopup', 'dialog')
+        assert page.locator('.vf-head').evaluate('(node) => node.inert') is True
+        assert page.evaluate("document.documentElement.style.overflow") == 'hidden'
+        passed('open filter resyncs modal semantics and scroll isolation across the 900px breakpoint')
+
+        page.get_by_role('button', name='추가 조건 · 1', exact=True).click()
         first_filter = page.get_by_role('combobox', name='연식', exact=True)
         first_filter.focus()
         page.keyboard.press('Shift+Tab')
@@ -192,7 +216,10 @@ try:
         result_action.click()
         expect(filter_sheet).to_be_hidden()
         expect(filter_button).to_be_focused()
-        passed('mobile filter sheet exposes result count, traps focus, and returns focus on close')
+        assert page.locator('.vf-head').evaluate('(node) => node.inert') is False
+        assert page.evaluate("document.documentElement.style.overflow") != 'hidden'
+        assert page.evaluate("document.body.style.overflow") != 'hidden'
+        passed('mobile filter sheet exposes result count, traps focus, isolates background, and restores context')
         page.set_viewport_size({'width': 1440, 'height': 1000})
 
         page.get_by_label('차량 검색', exact=True).fill('')
