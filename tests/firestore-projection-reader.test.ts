@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Firestore } from 'firebase-admin/firestore';
 import { projectionReader } from '../src/infra/firestore-projection-reader.js';
+import type { AdminCatalogProduct } from '../src/domain/catalog.js';
 
 function fakeDb(documents: Record<string, Record<string, unknown>>) {
   const reads: string[] = [];
@@ -26,6 +27,38 @@ describe('Firestore projection read boundary', () => {
     expect((await reader.getManifest('rel_test'))?.releaseId).toBe('rel_test');
     expect(fixture.reads).toEqual(['projection_active/erp-public', 'projection_releases/rel_test', 'projection_release_manifests/rel_test']);
   });
+  it('preserves the Admin projection type through the read-only boundary', async () => {
+    const fixture = fakeDb({
+      'projection_active/admin-catalog': { releaseId: 'rel_admin_test' },
+      'projection_releases/rel_admin_test': {
+        releaseId: 'rel_admin_test',
+        projectionId: 'admin-catalog',
+        schemaVersion: '1.0.0',
+        canonicalRevision: 1,
+        manifestId: 'manifest_rel_admin_test',
+        inputDigest: 'input',
+        dataDigest: 'data',
+        status: 'ACTIVE',
+        generatedAt: '2026-09-25T00:00:00.000Z',
+        activatedAt: '2026-09-25T00:01:00.000Z',
+        data: [{
+          productId: 'p1', productRevision: 1, updatedAt: '2026-09-25T00:00:00.000Z',
+          displayName: '관리자 상품', commercialType: 'USED_RENT',
+          vehicleModel: { id: 'vm1', maker: '현대', model: '그랜저' },
+          offers: [],
+        }],
+      },
+    });
+    const reader = projectionReader(fixture.db);
+    const release = await reader.getActive<AdminCatalogProduct>('admin-catalog');
+    expect(release?.projectionId).toBe('admin-catalog');
+    expect(release?.data[0]?.vehicleModel.model).toBe('그랜저');
+    expect(fixture.reads).toEqual([
+      'projection_active/admin-catalog',
+      'projection_releases/rel_admin_test',
+    ]);
+  });
+
   it('does not create a release when no pointer exists', async () => {
     const fixture = fakeDb({});
     expect(await projectionReader(fixture.db).getActive('erp-public')).toBeNull();
