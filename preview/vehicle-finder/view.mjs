@@ -537,7 +537,10 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   }
 
   function firstVisibleFilterControl() {
-    return [...filterPanel.querySelectorAll('select:not([disabled]), button:not([disabled]):not([hidden])')]
+    const select = [...filterPanel.querySelectorAll('select:not([disabled])')]
+      .find(node => node.offsetParent !== null);
+    if (select) return select;
+    return [...filterPanel.querySelectorAll('button:not([disabled]):not([hidden])')]
       .find(node => node.offsetParent !== null) ?? null;
   }
 
