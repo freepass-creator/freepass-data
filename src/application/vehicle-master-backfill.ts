@@ -32,9 +32,12 @@ function anchors(html: string) {
 
 function yearHint(html: string, index: number) {
   const context = decodeHtml(html.slice(Math.max(0, index - 1200), index + 300));
-  const years = [...context.matchAll(/\b(20\d{2})\s*년형\b/g)]
-    .map((match) => Number(match[1]))
-    .filter(Number.isInteger);
+  const years = [
+    ...[...context.matchAll(/\b(20\d{2})\s*년형\b/g)]
+      .map((match) => Number(match[1])),
+    ...[...context.matchAll(/\b(\d{2})\s*년형\b/g)]
+      .map((match) => 2000 + Number(match[1])),
+  ].filter((value) => Number.isInteger(value) && value >= 1990 && value <= 2200);
   if (years.length) return Math.max(...years);
 
   const loose = [...context.matchAll(/\b(20\d{2})\b/g)]
