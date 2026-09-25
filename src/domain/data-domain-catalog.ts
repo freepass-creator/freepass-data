@@ -97,14 +97,21 @@ export const DATA_DOMAINS: readonly DataDomainDefinition[] = [
 export const DATA_ASSETS: readonly DataAssetDefinition[] = [
   {
     assetId: 'data-access-events', domainId: 'evidence-audit', displayName: 'FreePass Data 접근 감사 로그',
-    aliases: ['data_access_events', '접근로그', 'read log', 'write log', 'access audit'], kind: 'FIRESTORE_COLLECTION',
-    system: 'firebase:freepasserp5', locator: 'data_access_events', ownership: 'FREEPASS_DATA', authority: 'AUDIT',
+    aliases: ['data_access_events', 'access-events', '접근로그', 'read log', 'write log', 'access audit'], kind: 'DOCUMENT_STORE',
+    system: 'freepass-data:control-plane',
+    locator: 'logical:data-access-events (Firestore data_access_events + private GCS access-events/*)',
+    ownership: 'FREEPASS_DATA', authority: 'AUDIT',
     keyDescription: 'immutable eventId + operationId + actor/client + READ/WRITE phase',
     sensitivity: 'RESTRICTED', availability: 'AVAILABLE',
     freshnessPolicy: '각 Data Access operation의 STARTED 이전/완료 직후 append-only 기록',
     contractRef: 'docs/DATA-ACCESS-GATEWAY.md',
     consumers: ['freepass-data-control-plane', 'security-audit', 'operations'],
-    notes: ['raw payload/token/backend error text 저장 금지', 'canonical mutation detail은 audit_events/receipt/revision이 별도 정본']
+    notes: [
+      '동일 DataAccessEvent 계약을 privilege에 따라 Firestore 또는 불변 GCS sink에 저장',
+      'read-only identity에 Firestore write 권한을 추가하지 않음',
+      'raw payload/token/backend error text 저장 금지',
+      'canonical mutation detail은 audit_events/receipt/revision이 별도 정본'
+    ]
   },
   {
     assetId: 'erp5-products-source', domainId: 'catalog', displayName: 'ERP5 기존 상품 원천',
