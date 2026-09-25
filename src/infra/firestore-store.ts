@@ -102,7 +102,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
           ),
         putSourceDefinition: async (source) => {
           native.create(
-            this.db.collection(C.sources).doc(source.sourceFirestoreDocumentId(sourceId)),
+            this.db.collection(C.sources).doc(sourceFirestoreDocumentId(source.sourceId)),
             source
           );
         },
@@ -117,7 +117,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
           ),
         putSourceHead: async (head) => {
           native.create(
-            this.db.collection(C.sourceHeads).doc(head.sourceFirestoreDocumentId(sourceId)),
+            this.db.collection(C.sourceHeads).doc(sourceFirestoreDocumentId(head.sourceId)),
             head
           );
         },
@@ -127,7 +127,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
           ),
         putRawRecord: async (record) => {
           native.create(
-            this.db.collection(C.raw).doc(record.sourceFirestoreDocumentId(rawRecordId)),
+            this.db.collection(C.raw).doc(sourceFirestoreDocumentId(record.rawRecordId)),
             record
           );
         },
@@ -137,7 +137,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
           ),
         putCandidate: async (record) => {
           native.create(
-            this.db.collection(C.candidates).doc(record.sourceFirestoreDocumentId(candidateId)),
+            this.db.collection(C.candidates).doc(sourceFirestoreDocumentId(record.candidateId)),
             record
           );
         },
