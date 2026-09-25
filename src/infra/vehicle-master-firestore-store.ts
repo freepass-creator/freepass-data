@@ -2,6 +2,7 @@ import { getFirestore, type DocumentReference, type Firestore } from 'firebase-a
 import { getTargetFirebaseApp } from './firebase-target.js';
 import type {
   VehicleMasterCompatibilityRule,
+  VehicleMasterHashRecord,
   VehicleMasterNode,
   VehicleMasterPipelineRecord,
   VehicleMasterPriceRevision,
@@ -18,6 +19,7 @@ const C = {
   ruleRevisions: 'vehicle_master_rule_revisions',
   prices: 'vehicle_master_price_revisions',
   sourceDocuments: 'vehicle_master_source_documents',
+  hashes: 'vehicle_master_hashes',
   rawRecords: 'vehicle_master_raw_records',
   normalizedRecords: 'vehicle_master_normalized_records',
   candidateFacts: 'vehicle_master_candidate_facts',
@@ -173,6 +175,19 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
   async putSourceDocument(record: VehicleMasterSourceDocument) {
     return this.putImmutable(
       this.db.collection(C.sourceDocuments).doc(safeId(record.sourceDocumentId)),
+      record
+    );
+  }
+
+  async getHash(hashId: string) {
+    return data<VehicleMasterHashRecord>(
+      await this.db.collection(C.hashes).doc(safeId(hashId)).get()
+    );
+  }
+
+  async putHash(record: VehicleMasterHashRecord) {
+    return this.putImmutable(
+      this.db.collection(C.hashes).doc(safeId(record.hashId)),
       record
     );
   }
