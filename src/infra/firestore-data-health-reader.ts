@@ -1,6 +1,7 @@
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
+import { readFirestoreActiveProjectionEvidence } from './firestore-projection-evidence.js';
 import { projectionReader } from './firestore-projection-reader.js';
 import type {
   Offer,
@@ -87,17 +88,9 @@ export function dataHealthReader(db: Firestore): CatalogDataHealthReadStore {
       );
     },
     async getActiveEvidenceSnapshot(projectionId) {
-      const activeRef = db.collection(FIRESTORE_COLLECTIONS.projection.active).doc(projectionId);
-      return db.runTransaction(async (tx) => {
-        const activeSnap = await tx.get(activeRef);
-        if (!activeSnap.exists) {
-          return {
-            projectionId,
-            release: null,
-            manifest: null,
-            lineage: [],
-            consistency: 'ATOMIC' as const
-          };
+      return readFirestoreActiveProjectionEvidence(db, projectionId);
+    }
+  };
         }
 
         const releaseId: unknown = activeSnap.get('releaseId');
