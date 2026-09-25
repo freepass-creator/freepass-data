@@ -162,6 +162,7 @@ export function discoverVehicleMasterPages(input: {
     anchor: ReturnType<typeof anchors>[number];
     url: URL;
   }> = [];
+  const acceptedUrls = new Set<string>();
   const candidates = [
     ...anchors(html),
     ...sourceSpecificUrlCandidates(html, input.sourceKey),
@@ -175,6 +176,9 @@ export function discoverVehicleMasterPages(input: {
       continue;
     }
     if (!acceptedDetailUrl(input.sourceKey, url)) continue;
+    const key = url.toString();
+    if (acceptedUrls.has(key)) continue;
+    acceptedUrls.add(key);
     accepted.push({ anchor, url });
   }
 
