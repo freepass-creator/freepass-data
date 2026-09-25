@@ -76,9 +76,18 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   const filterPanel = element('div', 'vf-filters');
   filterPanel.id = `${prefix}-filters`;
   filterPanel.hidden = true;
+
+  const filterSheetHead = element('div', 'vf-filter-sheet-head');
+  filterSheetHead.append(element('strong', '', '필터'));
+  const filterClose = element('button', 'vf-filter-close', '×');
+  filterClose.type = 'button';
+  filterClose.setAttribute('aria-label', '필터 닫기');
+  filterSheetHead.append(filterClose);
+  filterPanel.append(filterSheetHead);
+
   const filterInputs = new Map();
   for (const [key, label] of Object.entries(facetLabels)) {
-    const wrapper = element('label');
+    const wrapper = element('label', ['seatCount', 'drivetrain'].includes(key) ? 'vf-filter-advanced' : '');
     wrapper.htmlFor = `${prefix}-${key}`;
     const select = element('select');
     select.id = wrapper.htmlFor;
@@ -93,7 +102,12 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       renderResults();
     });
   }
-  const reset = element('button', '', '필터 초기화');
+  const filterMore = element('button', 'vf-filter-more', '추가 조건');
+  filterMore.type = 'button';
+  filterMore.setAttribute('aria-expanded', 'false');
+  filterPanel.append(filterMore);
+
+  const reset = element('button', 'vf-filter-reset', '필터 초기화');
   reset.type = 'button';
   reset.hidden = true;
   filterPanel.append(reset);
@@ -479,9 +493,25 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       renderResults();
     }
   });
-  listen(filterToggle, 'click', () => {
-    filterPanel.hidden = !filterPanel.hidden;
-    filterToggle.setAttribute('aria-expanded', String(!filterPanel.hidden));
+  function setFilterPanel(open) {
+    filterPanel.hidden = !open;
+    filterToggle.setAttribute('aria-expanded', String(open));
+    root.classList.toggle('vf-filter-open', open);
+    if (open) {
+      const firstSelect = filterPanel.querySelector('select');
+      firstSelect?.focus({ preventScroll: true });
+    } else {
+      filterToggle.focus({ preventScroll: true });
+    }
+  }
+
+  listen(filterToggle, 'click', () => setFilterPanel(filterPanel.hidden));
+  listen(filterClose, 'click', () => setFilterPanel(false));
+  listen(filterMore, 'click', () => {
+    const expanded = filterMore.getAttribute('aria-expanded') !== 'true';
+    filterMore.setAttribute('aria-expanded', String(expanded));
+    filterMore.textContent = expanded ? '추가 조건 접기' : '추가 조건';
+    filterPanel.classList.toggle('vf-filter-advanced-open', expanded);
   });
   listen(reset, 'click', () => {
     filters = {};
@@ -490,7 +520,13 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     renderResults();
   });
   listen(root, 'keydown', event => {
-    if (event.key === 'Escape' && inspectedId) {
+    if (event.key !== 'Escape') return;
+    if (!filterPanel.hidden) {
+      event.preventDefault();
+      setFilterPanel(false);
+      return;
+    }
+    if (inspectedId) {
       event.preventDefault();
       closeDetail();
     }
@@ -505,7 +541,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       controller.dispose();
       events.abort();
       root.replaceChildren();
-      root.classList.remove('vf', 'vf-inspecting');
+      root.classList.remove('vf', 'vf-inspecting', 'vf-filter-open');
     },
   };
 }
