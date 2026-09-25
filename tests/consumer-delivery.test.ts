@@ -6,7 +6,7 @@ import {
 import type { ApprovedReleaseEvidence } from '../src/domain/consumer-cutover.js';
 
 const release: ApprovedReleaseEvidence = {
-  projectionId: 'erp-public',
+  projectionId: 'sheet-publication-bridge',
   releaseId: 'rel_20260925',
   manifestId: 'manifest_20260925',
   inputDigest: 'input_digest',
