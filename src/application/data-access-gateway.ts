@@ -76,9 +76,9 @@ function assertResultEvidence(result: DataAccessResultEvidence | undefined) {
 const codeOf = (error: unknown) => {
   if (error && typeof error === 'object' && 'code' in error) {
     const code = (error as { code?: unknown }).code;
-    if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{2,100}$/.test(code)) return code;
+    if (typeof code === 'string' && bounded(code, 100) && /^[A-Z][A-Z0-9_]{2,99}$/.test(code)) return code;
   }
-  if (error instanceof Error && /^[A-Z][A-Z0-9_]{2,100}$/.test(error.message)) {
+  if (error instanceof Error && bounded(error.message, 100) && /^[A-Z][A-Z0-9_]{2,99}$/.test(error.message)) {
     return error.message;
   }
   return 'UNCLASSIFIED_ACCESS_FAILURE';
