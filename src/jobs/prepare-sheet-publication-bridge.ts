@@ -4,19 +4,18 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { erp5ReadTransport } from '../adapters/erp5-source-capture.js';
 import {
-  buildSheetBridgeHandoff,
   buildSheetBridgeRelease,
-  captureErp5SheetSource
+  prepareSheetBridgeHandoffs
 } from '../application/sheet-publication-bridge.js';
 import {
   validateSheetPublicationHandoff,
   type SheetHandoffWorkbook
 } from '../domain/sheet-publication-handoff.js';
 
-function parseWorkbook(): SheetHandoffWorkbook | null {
+function parseWorkbook(): SheetHandoffWorkbook | 'ALL' | null {
   const arg = process.argv.slice(2).find((value) => value.startsWith('--workbook='));
   const value = arg?.slice('--workbook='.length);
-  return value === 'F01' || value === 'F86' ? value : null;
+  return value === 'F01' || value === 'F86' || value === 'ALL' ? value : null;
 }
 
 async function assertPrivateRoot(root: string) {
@@ -40,7 +39,7 @@ if (
   !args.includes('--live-read-only')
 ) {
   console.error(
-    'Usage: npm run prepare:sheet-bridge -- --live-read-only --workbook=F01|F86'
+    'Usage: npm run prepare:sheet-bridge -- --live-read-only --workbook=ALL|F01|F86'
   );
   process.exitCode = 2;
 } else {
@@ -54,59 +53,68 @@ if (
     await assertPrivateRoot(privateRoot);
 
     const token = process.env.FREEPASS_ERP5_READ_ACCESS_TOKEN ?? '';
-    const capture = await captureErp5SheetSource(erp5ReadTransport(token));
-    const bridge = buildSheetBridgeRelease(capture);
-    const handoff = buildSheetBridgeHandoff(bridge, workbook);
-
-    const validation = validateSheetPublicationHandoff(handoff);
-    if (validation.status !== 'PASS') {
-      throw new Error('SHEET_HANDOFF_SELF_VALIDATION_FAILED');
-    }
+    const targets: SheetHandoffWorkbook[] = workbook === 'ALL' ? ['F01', 'F86'] : [workbook];
+    const { capture, bridge, handoffs } = await prepareSheetBridgeHandoffs(
+      erp5ReadTransport(token), targets
+    );
 
     const runDir = join(privateRoot, randomUUID());
     await mkdir(runDir);
 
     const capturePath = join(runDir, 'source-capture.json');
-    const handoffPath = join(runDir, `${workbook.toLowerCase()}-handoff.json`);
     await writeFile(capturePath, JSON.stringify(capture), {
       flag: 'wx',
       mode: 0o600
     });
-    await writeFile(handoffPath, JSON.stringify(handoff), {
-      flag: 'wx',
-      mode: 0o600
-    });
+    const storedCapture = JSON.parse(await readFile(capturePath, 'utf8'));
+    const storedBridge = buildSheetBridgeRelease(storedCapture);
+    if (JSON.stringify(storedBridge.release) !== JSON.stringify(bridge.release)) {
+      throw new Error('SHEET_CAPTURE_PRIVATE_READBACK_FAILED');
+    }
 
-    const stored = JSON.parse(await readFile(handoffPath, 'utf8'));
-    const readback = validateSheetPublicationHandoff(stored);
-    if (readback.status !== 'PASS') {
-      throw new Error('SHEET_HANDOFF_PRIVATE_READBACK_FAILED');
+    const outputs = [];
+    for (const handoff of handoffs) {
+      const handoffPath = join(runDir, `${handoff.workbook.toLowerCase()}-handoff.json`);
+      await writeFile(handoffPath, JSON.stringify(handoff), { flag: 'wx', mode: 0o600 });
+      const stored = JSON.parse(await readFile(handoffPath, 'utf8'));
+      if (validateSheetPublicationHandoff(stored).status !== 'PASS' ||
+          stored.handoffHash !== handoff.handoffHash) {
+        throw new Error('SHEET_HANDOFF_PRIVATE_READBACK_FAILED');
+      }
+      outputs.push({
+        workbook: handoff.workbook,
+        handoffHash: handoff.handoffHash,
+        privateHandoffPath: handoffPath
+      });
     }
 
     console.log(JSON.stringify({
       status: 'READY_FOR_SHADOW',
       productionWriteAuthorized: false,
       cutoverAuthorized: false,
-      releaseAuthority: handoff.releaseAuthority,
+      releaseAuthority: bridge.releaseAuthority,
       workbook,
-      releaseId: handoff.approvedRelease.releaseId,
-      manifestId: handoff.approvedRelease.manifestId,
-      sourceReadTime: handoff.manifest.sourceReadTime,
+      releaseId: bridge.release.releaseId,
+      manifestId: bridge.release.manifestId,
+      sourceReadTime: bridge.manifest.sourceReadTime,
       sourceCounts: {
         products: capture.collections.products.count,
         policies: capture.collections.policy.count,
         partners: capture.collections.partner.count
       },
       inventory: {
-        registered: handoff.snapshot.inventory.registered,
-        unavailable: handoff.snapshot.inventory.unavailable,
-        open: handoff.snapshot.inventory.open
+        registered: bridge.inventory.registered,
+        unavailable: bridge.inventory.unavailable,
+        open: bridge.inventory.open
       },
-      inputDigest: handoff.approvedRelease.inputDigest,
-      dataDigest: handoff.approvedRelease.dataDigest,
-      handoffHash: handoff.handoffHash,
+      inputDigest: bridge.release.inputDigest,
+      dataDigest: bridge.release.dataDigest,
       privateCapturePath: capturePath,
-      privateHandoffPath: handoffPath,
+      outputs,
+      ...(outputs.length === 1 ? {
+        handoffHash: outputs[0]!.handoffHash,
+        privateHandoffPath: outputs[0]!.privateHandoffPath
+      } : {}),
       remaining: [
         'NO_SHEET_WRITE_PERFORMED',
         'ERP4_SHADOW_ADOPTION_REQUIRED',
