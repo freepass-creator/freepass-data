@@ -142,6 +142,23 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   const currentResult = () =>
     snapshot ? searchEntries(snapshot, input.value, filters) : null;
 
+  function rowContext(entry) {
+    if (!snapshot) return '';
+    const ancestors = entry.path.slice(0, -1);
+    if (!ancestors.length || entry.nodeType === 'MAKE') return '';
+
+    if (entry.nodeType === 'MODEL') {
+      const duplicated = snapshot.entries.some(item =>
+        item.id !== entry.id &&
+        item.nodeType === 'MODEL' &&
+        item.label === entry.label
+      );
+      return duplicated ? ancestors.at(-1)?.label ?? '' : '';
+    }
+
+    return ancestors.slice(-2).map(node => node.label).join(' › ');
+  }
+
   function closeDetail(restoreFocus = true) {
     const formerId = inspectedId;
     inspectedId = null;
@@ -337,10 +354,9 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       button.setAttribute('aria-expanded', String(entry.id === inspectedId));
       button.setAttribute('aria-controls', detail.id);
       button.setAttribute('aria-label', entryPath);
-      button.append(
-        element('span', 'vf-row-title', entry.label),
-        element('span', 'vf-row-path', entryPath),
-      );
+      button.append(element('span', 'vf-row-title', entry.label));
+      const context = rowContext(entry);
+      if (context) button.append(element('span', 'vf-row-path', context));
       listen(button, 'click', () => inspect(entry.id));
 
       const marker = element('span', 'vf-row-state', '보는 중');
