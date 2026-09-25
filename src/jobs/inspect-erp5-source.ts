@@ -3,6 +3,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { captureErp5Source, erp5ReadTransport, inspectErp5Capture } from '../adapters/erp5-source-capture.js';
+import { createJobDataAccessRuntime } from './data-access-runtime.js';
 
 // Fixed private destination, outside the repository. No arbitrary --out or database writes.
 if (process.argv.slice(2).join(' ') !== '--live-read-only') {
@@ -18,7 +19,25 @@ if (process.argv.slice(2).join(' ') !== '--live-read-only') {
       if (await stat(join(folder, '.git')).then(() => true, () => false)) throw new Error('PRIVATE_PATH_IN_GIT');
       if (dirname(folder) === folder) break;
     }
-    const capture = await captureErp5Source(erp5ReadTransport(process.env.FREEPASS_ERP5_READ_ACCESS_TOKEN ?? ''));
+    const runtime = createJobDataAccessRuntime();
+    const capture = await runtime.access.read({
+      context: {
+        actor: { id: 'service:freepass-data-audit', kind: 'SERVICE' },
+        clientId: 'job:inspect-erp5-source',
+        purpose: 'capture ERP5 source through FreePass Data'
+      },
+      operation: 'READ_ERP5_SOURCE_CAPTURE',
+      resource: {
+        kind: 'SOURCE',
+        name: 'freepasserp5/(default):products+policy'
+      },
+      summarize: (value) => ({
+        count: value.collections.products.count,
+        digest: value.digest
+      })
+    }, () => captureErp5Source(
+      erp5ReadTransport(process.env.FREEPASS_ERP5_READ_ACCESS_TOKEN ?? '')
+    ));
     const runDir = join(privateRoot, randomUUID());
     await mkdir(runDir);
     const capturePath = join(runDir, 'capture.json');
