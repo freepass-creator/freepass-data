@@ -64,7 +64,7 @@ describe('sheet delivery receipt', () => {
 
     expect(result.status).toBe('HOLD');
     expect(result.violations).toEqual(expect.arrayContaining([
-      'RELEASE_RELEASEID_MISMATCH',
+      'RELEASE_ID_MISMATCH',
       'READBACK_DATA_DIGEST_MISMATCH'
     ]));
   });
