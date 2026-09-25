@@ -94,11 +94,56 @@ if (
   reasons.push('SHADOW_ORDER_MISMATCH');
 }
 
-const activeReleaseId =
-  health?.checks?.activeProjection?.activeReleaseId ?? null;
+const activeProjection = health?.checks?.activeProjection ?? {};
+const activeReleaseId = activeProjection.activeReleaseId ?? null;
 if (!activeReleaseId) {
   reasons.push('NO_ACTIVE_RELEASE');
 }
+
+const healthRelease = {
+  projectionId: activeProjection.projectionId ?? null,
+  releaseId: activeReleaseId,
+  manifestId: activeProjection.manifestId ?? null,
+  inputDigest: activeProjection.canonicalInputDigest?.stored ?? null,
+  dataDigest: activeProjection.dataPayloadDigest?.stored ?? null
+};
+const healthReleaseComplete = Object.values(healthRelease).every(
+  (value) => typeof value === 'string' && value.length > 0
+);
+if (
+  activeProjection.status !== 'PASS' ||
+  activeProjection.releaseStatus !== 'ACTIVE' ||
+  activeProjection.manifestPresent !== true ||
+  activeProjection.canonicalInputDigest?.status !== 'PASS' ||
+  activeProjection.dataPayloadDigest?.status !== 'PASS' ||
+  !healthReleaseComplete
+) {
+  reasons.push('ACTIVE_RELEASE_EVIDENCE_INCOMPLETE');
+}
+
+const shadowRelease = shadow?.freepassRelease ?? null;
+const shadowReleaseComplete =
+  shadowRelease &&
+  ['projectionId', 'releaseId', 'manifestId', 'inputDigest', 'dataDigest']
+    .every((key) => typeof shadowRelease[key] === 'string' && shadowRelease[key].length > 0);
+if (!shadowReleaseComplete) {
+  reasons.push('SHADOW_RELEASE_EVIDENCE_MISSING');
+} else if (
+  healthReleaseComplete &&
+  Object.entries(healthRelease).some(([key, value]) => shadowRelease[key] !== value)
+) {
+  reasons.push('SHADOW_RELEASE_MISMATCH');
+}
+
+const approvedRelease =
+  healthReleaseComplete &&
+  shadowReleaseComplete &&
+  Object.entries(healthRelease).every(([key, value]) => shadowRelease[key] === value)
+    ? {
+        ...healthRelease,
+        observedAt: shadow.comparedAt
+      }
+    : null;
 
 const result = {
   assessedAt: new Date().toISOString(),
@@ -108,6 +153,7 @@ const result = {
     status: health.status,
     generatedAt: health.generatedAt ?? null,
     activeReleaseId,
+    approvedRelease,
     projectionEvidenceConsistency:
       health?.observation?.projectionEvidenceConsistency ?? null,
     issueCount: Array.isArray(health.issues)
