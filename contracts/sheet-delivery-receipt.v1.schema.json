@@ -9,6 +9,7 @@
     "consumerId",
     "workbook",
     "spreadsheetId",
+    "releaseAuthority",
     "approvedRelease",
     "renderedOutput",
     "publicationStartedAt",
@@ -20,6 +21,7 @@
     "consumerId": { "enum": ["google-sheets-f01", "google-sheets-f86"] },
     "workbook": { "enum": ["F01", "F86"] },
     "spreadsheetId": { "type": "string", "minLength": 1 },
+    "releaseAuthority": { "enum": ["LEGACY_VERIFIED_BRIDGE", "CANONICAL_ACTIVE"] },
     "approvedRelease": {
       "type": "object",
       "additionalProperties": false,
