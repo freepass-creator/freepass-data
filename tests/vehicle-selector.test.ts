@@ -161,6 +161,59 @@ describe('common vehicle selector', () => {
     expect(result.guidance.suggestedNextAxis).toBe('modelYear');
   });
 
+  it('does not let a shorter record label satisfy a more specific selected label', () => {
+    const rows = [
+      record('gt', {
+        trim: { id: 'trim_gt', label: 'GT' },
+      }),
+      record('gt-line', {
+        trim: { id: 'trim_gt_line', label: 'GT-Line' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      selection: { trim: 'GT-Line' },
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual(['gt-line']);
+  });
+
+  it('keeps unknown requested axes as candidates but never marks them resolved', () => {
+    const rows = [
+      record('known-five-seat'),
+      record('unknown-seats', {
+        seats: { id: null, label: null, value: null },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      selection: { seats: 7 },
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual(['unknown-seats']);
+    expect(result.candidates[0]?.selectable).toBe(false);
+    expect(result.guidance.resolvedRecordId).toBeNull();
+  });
+
+  it('never resolves a record when free-text only partially matches the request', () => {
+    const result = selectVehicles([
+      record('gasoline-five-seat', {
+        powertrain: { id: 'pt_gasoline', label: '2.5 가솔린 터보' },
+        fuelType: { id: null, label: 'GASOLINE' },
+        seats: { id: null, label: '5인승', value: 5 },
+      }),
+    ], {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토 7인승 디젤',
+    });
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.selectable).toBe(false);
+    expect(result.guidance.resolvedRecordId).toBeNull();
+  });
+
   it('keeps UX presets separate from selector semantics', () => {
     expect(VEHICLE_SELECTOR_UX_PRESETS.NEW_CAR.presentation).toBe('GUIDED');
     expect(VEHICLE_SELECTOR_UX_PRESETS.USED_CAR.presentation).toBe('SEARCH_FILTER');
