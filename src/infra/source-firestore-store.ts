@@ -3,10 +3,17 @@ import type { NormalizedCandidateRecord, RawRecord, SourceDefinition, SourceHead
 import { decideSourceHead } from '../domain/source.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
-import { SOURCE_FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './source-firestore-layout.js';
+import { FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './firestore-layout.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 
-const C = SOURCE_FIRESTORE_COLLECTIONS;
+const C = {
+  sources: FIRESTORE_COLLECTIONS.source.definitions,
+  runs: FIRESTORE_COLLECTIONS.source.runs,
+  heads: FIRESTORE_COLLECTIONS.source.heads,
+  raw: FIRESTORE_COLLECTIONS.source.raw,
+  candidates: FIRESTORE_COLLECTIONS.source.candidates,
+  lineage: FIRESTORE_COLLECTIONS.source.lineage
+} as const;
 
 export class FirestoreSourceStore implements SourceIngestionStore {
   constructor(private readonly db: Firestore) {}
