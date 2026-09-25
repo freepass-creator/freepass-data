@@ -79,12 +79,21 @@ function policy(requiredFieldPaths: string[]): VehicleMasterEvidencePolicy {
   };
 }
 
-function nodeTypeFor(option: VehicleMasterReconciledOption): 'OPTION' | 'COLOR' {
-  return option.kind === 'COLOR' ? 'COLOR' : 'OPTION';
+function isPackage(option: VehicleMasterReconciledOption) {
+  return option.kind === 'OPTION' && (
+    option.packageItems.length > 0 ||
+    /패키지/.test(option.name)
+  );
 }
 
-function priceTypeFor(option: VehicleMasterReconciledOption): 'OPTION' | 'COLOR' {
-  return option.kind === 'COLOR' ? 'COLOR' : 'OPTION';
+function nodeTypeFor(option: VehicleMasterReconciledOption): 'OPTION' | 'COLOR' | 'PACKAGE' {
+  if (option.kind === 'COLOR') return 'COLOR';
+  return isPackage(option) ? 'PACKAGE' : 'OPTION';
+}
+
+function priceTypeFor(option: VehicleMasterReconciledOption): 'OPTION' | 'COLOR' | 'PACKAGE' {
+  if (option.kind === 'COLOR') return 'COLOR';
+  return isPackage(option) ? 'PACKAGE' : 'OPTION';
 }
 
 export function buildVehicleMasterOptionProposalSet(input: {
@@ -145,6 +154,7 @@ export function buildVehicleMasterOptionProposalSet(input: {
       attributes: {
         selectionKind: option.kind,
         note: option.note,
+        packageItems: option.packageItems,
       },
       sourceEvidenceIds: option.sourceDocumentIds,
       effectiveFrom: null,
