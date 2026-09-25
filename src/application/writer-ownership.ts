@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { CatalogStore } from '../ports/catalog-store.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import {
   assertWriterOwnershipTransferActor,
   effectiveCatalogWriterOwnership,
@@ -10,24 +11,6 @@ import {
   type TransferCatalogWriterOwnershipInput,
   type WriterOwnershipTransferReceipt
 } from '../domain/writer-ownership.js';
-
-function stable(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stable);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, child]) => [key, stable(child)])
-    );
-  }
-  return value;
-}
-
-function digest(value: unknown) {
-  return createHash('sha256')
-    .update(JSON.stringify(stable(value)))
-    .digest('hex');
-}
 
 export async function transferCatalogWriterOwnership(
   store: CatalogStore,
@@ -49,7 +32,7 @@ export async function transferCatalogWriterOwnership(
   const writer = resolveExecutionWriter(input.actor, input.writer);
   assertWriterOwnershipTransferActor(input.actor, writer);
 
-  const requestDigest = digest({
+  const requestDigest = stableDigest({
     commandType: 'TRANSFER_CATALOG_WRITER_OWNERSHIP',
     expectedRevision: input.expectedRevision,
     toWriterId: input.toWriterId,
