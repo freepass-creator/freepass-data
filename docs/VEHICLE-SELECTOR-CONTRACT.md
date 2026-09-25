@@ -119,3 +119,22 @@ Therefore:
 - desktop used-car can expose simultaneous filters,
 
 without changing canonical IDs or selection semantics.
+
+
+## UX guidance from the engine
+
+The selector returns guidance in addition to candidates and facets:
+
+- `singletonAxes`: only one remaining value; UI may collapse or auto-resolve it.
+- `ambiguousAxes`: more than one value remains.
+- `suggestedNextAxis`: the first useful ambiguous axis under that mode's UX preset.
+- `resolvedRecordId`: exactly one final-selectable candidate remains.
+
+This does not create a mandatory order.
+
+For example, a new-car screen may hide generation/year when each has only one
+possible value and ask for powertrain next. If model year becomes ambiguous,
+the same engine exposes that ambiguity and the UI can reveal the year step.
+
+A used-car screen normally keeps the filters visible instead of turning
+`suggestedNextAxis` into a wizard step.
