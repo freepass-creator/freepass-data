@@ -19,7 +19,8 @@ const event: DataAccessEvent = {
 
 describe('GCS Data access log store', () => {
   it('creates one immutable object without exposing the access token', async () => {
-    const fetcher = vi.fn(async () => new Response('{}', { status: 200 }));
+    const fetcher = vi.fn(async (..._args: Parameters<typeof fetch>) =>
+      new Response('{}', { status: 200 }));
     const store = gcsDataAccessLogStore({
       bucket: 'freepass-private-evidence',
       accessToken: 'synthetic-token',
