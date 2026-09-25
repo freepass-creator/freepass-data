@@ -1,4 +1,5 @@
 import type {
+  VehicleMasterParsedCondition,
   VehicleMasterParsedOption,
   VehicleMasterParsedTrim,
 } from '../domain/vehicle-master-source.js';
@@ -85,4 +86,43 @@ export function isoDateFromKorean(
   if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return null;
   const iso = `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}T00:00:00.000Z`;
   return Number.isFinite(Date.parse(iso)) ? iso : null;
+}
+
+
+export function normalizeParsedOptionCondition(
+  option: VehicleMasterParsedOption
+): VehicleMasterParsedOption {
+  const match = option.name.match(/^(.*?)\((.+?)\)$/);
+  if (!match?.[1] || !match[2]) return option;
+
+  const baseName = match[1].trim();
+  const raw = match[2].trim();
+  const conditions: VehicleMasterParsedCondition[] = [];
+
+  const requires = raw.match(/^(.+?)\s*(?:적용|선택)\s*시$/);
+  if (requires?.[1]) {
+    conditions.push({
+      relation: 'REQUIRES',
+      targetLabel: requires[1].trim(),
+      raw,
+    });
+  }
+
+  const excludes = raw.match(/^(.+?)\s*미적용\s*시$/);
+  if (excludes?.[1]) {
+    conditions.push({
+      relation: 'EXCLUDES',
+      targetLabel: excludes[1].trim(),
+      raw,
+    });
+  }
+
+  if (!conditions.length) return option;
+
+  return {
+    ...option,
+    name: baseName,
+    note: raw,
+    conditions,
+  };
 }
