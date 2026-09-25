@@ -241,7 +241,15 @@
   .vf .vf-filters.vf-filter-advanced-open .vf-filter-advanced{display:grid}
   .vf .vf-filter-more{display:block;justify-self:start}
   .vf .vf-filter-reset{justify-self:start}
-  .vf .vf-filter-done{display:block;width:100%}
+  .vf .vf-filter-done{
+    position:sticky;
+    z-index:1;
+    bottom:0;
+    display:block;
+    width:100%;
+    margin-top:4px;
+    box-shadow:0 -8px 16px var(--vf-bg);
+  }
   .vf.vf-filter-open::before{
     content:'';
     position:fixed;
