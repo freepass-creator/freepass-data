@@ -1,5 +1,5 @@
 import { getTargetFirebaseApp } from './firebase-target.js';
-import { SOURCE_FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './source-firestore-layout.js';
+import { FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './firestore-layout.js';
 import { getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type {
   AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
@@ -38,32 +38,32 @@ import type {
 import { assertProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 
 const C = {
-  vehicleModels: 'catalog_vehicle_models',
-  vehicleAssets: 'catalog_vehicle_assets',
-  products: 'catalog_products',
-  offers: 'catalog_offers',
-  policies: 'catalog_policies',
-  receipts: 'command_receipts',
-  canonicalizationReceipts: 'canonicalization_receipts',
-  manualCatalogEntryReceipts: 'manual_catalog_entry_receipts',
-  reviewedSourceChangeReceipts: 'reviewed_source_change_receipts',
-  writerOwnership: 'writer_ownership',
-  writerOwnershipTransferReceipts: 'writer_ownership_transfer_receipts',
-  sources: SOURCE_FIRESTORE_COLLECTIONS.sources,
-  sourceRuns: SOURCE_FIRESTORE_COLLECTIONS.runs,
-  sourceHeads: SOURCE_FIRESTORE_COLLECTIONS.heads,
-  raw: SOURCE_FIRESTORE_COLLECTIONS.raw,
-  candidates: SOURCE_FIRESTORE_COLLECTIONS.candidates,
-  lineage: SOURCE_FIRESTORE_COLLECTIONS.lineage,
-  sourceBindings: 'canonical_source_bindings',
-  revisions: 'catalog_entity_revisions',
-  audits: 'audit_events',
-  outbox: 'outbox_events',
-  releases: 'projection_releases',
-  releaseManifests: 'projection_release_manifests',
-  projectionLineage: 'projection_field_lineage',
-  projectionDeliveryReceipts: 'projection_delivery_receipts',
-  activeReleases: 'projection_active'
+  vehicleModels: FIRESTORE_COLLECTIONS.catalog.vehicleModels,
+  vehicleAssets: FIRESTORE_COLLECTIONS.catalog.vehicleAssets,
+  products: FIRESTORE_COLLECTIONS.catalog.products,
+  offers: FIRESTORE_COLLECTIONS.catalog.offers,
+  policies: FIRESTORE_COLLECTIONS.catalog.policies,
+  receipts: FIRESTORE_COLLECTIONS.commands.receipts,
+  canonicalizationReceipts: FIRESTORE_COLLECTIONS.commands.canonicalizationReceipts,
+  manualCatalogEntryReceipts: FIRESTORE_COLLECTIONS.commands.manualCatalogEntryReceipts,
+  reviewedSourceChangeReceipts: FIRESTORE_COLLECTIONS.commands.reviewedSourceChangeReceipts,
+  writerOwnership: FIRESTORE_COLLECTIONS.ownership.writer,
+  writerOwnershipTransferReceipts: FIRESTORE_COLLECTIONS.ownership.transferReceipts,
+  sources: FIRESTORE_COLLECTIONS.source.definitions,
+  sourceRuns: FIRESTORE_COLLECTIONS.source.runs,
+  sourceHeads: FIRESTORE_COLLECTIONS.source.heads,
+  raw: FIRESTORE_COLLECTIONS.source.raw,
+  candidates: FIRESTORE_COLLECTIONS.source.candidates,
+  lineage: FIRESTORE_COLLECTIONS.source.lineage,
+  sourceBindings: FIRESTORE_COLLECTIONS.catalog.sourceBindings,
+  revisions: FIRESTORE_COLLECTIONS.catalog.revisions,
+  audits: FIRESTORE_COLLECTIONS.evidence.audits,
+  outbox: FIRESTORE_COLLECTIONS.evidence.outbox,
+  releases: FIRESTORE_COLLECTIONS.projection.releases,
+  releaseManifests: FIRESTORE_COLLECTIONS.projection.manifests,
+  projectionLineage: FIRESTORE_COLLECTIONS.projection.lineage,
+  projectionDeliveryReceipts: FIRESTORE_COLLECTIONS.projection.deliveryReceipts,
+  activeReleases: FIRESTORE_COLLECTIONS.projection.active
 } as const;
 
 const data = <T>(snap: FirebaseFirestore.DocumentSnapshot) =>
