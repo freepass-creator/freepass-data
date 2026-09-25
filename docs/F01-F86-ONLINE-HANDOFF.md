@@ -21,6 +21,11 @@ Current architecture direction supersedes the old ownership assumption above:
 - FreePassERP.com, F01 and F86 are consumers/transports.
 - The production writer is **not switched yet**. Existing production remains the last-known-good path until shadow/readback evidence is complete.
 
+The scheduled production workflow currently checks out the pinned publication engine
+`3c98e1b616392ee6d47e07c7d08dbb30320f67ff`, not ERP4 main. That pin is the
+runtime compatibility target for F01/F86 shadow validation; PR #495 main-branch CI
+is necessary adapter evidence but is not, by itself, production-pin proof.
+
 Implementation under review:
 
 - FreePass Data PR #48: release binding, Data-owned sheet bridge, manifest/handoff and delivery receipt contracts.
@@ -35,11 +40,11 @@ Read-only evidence from successful production publication run `36096321596` / sn
 - listable/status-kind/source identity/delete/blank plate/invalid plate/duplicate plate drift: **0**
 - Data bridge inventory calculation matches all common production inventory counters.
 - products carrying the Sonokong deposit-rule text: **726**
-- recomputed `depositRuleViolations`: **0**, matching the production artifact.
+- recomputed `depositRuleViolations`: **0**, matching the production artifact; the bridge contract now carries this counter and fails closed when it is non-zero.
 - the captured JSON shape showed no DocumentReference/GeoPoint/bytes-like objects. The only special SDK object shape observed was Firestore Timestamp serialization on product metadata:
   - `policy_reference_checked_at`: 887
   - `updated_at`: 143
-- the pinned F01/F86 writer source does not reference either timestamp metadata field, so the Data REST bridge's ISO-string representation is treated as a metadata representation difference, not a rendered-output semantic difference.
+- the bridge now preserves Firestore Timestamp values in the same JSON shape used by the current Admin SDK snapshot (`{_seconds,_nanoseconds}`) instead of converting them to ISO strings. This removes an avoidable transport-shape difference before shadow parity.
 
 Current HOLD:
 
