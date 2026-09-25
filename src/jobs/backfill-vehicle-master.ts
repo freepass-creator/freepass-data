@@ -105,7 +105,13 @@ if (!Number.isFinite(Date.parse(observedAt))) {
   throw new Error('Invalid VEHICLE_MASTER_BACKFILL_OBSERVED_AT');
 }
 
-const selectedSources = sourceKeys(process.env.VEHICLE_MASTER_BACKFILL_SOURCES);
+const extras = extraPages(process.env.VEHICLE_MASTER_BACKFILL_EXTRA_URLS_JSON);
+const selectedSources = [
+  ...new Set([
+    ...sourceKeys(process.env.VEHICLE_MASTER_BACKFILL_SOURCES),
+    ...extras.map((page) => page.sourceKey),
+  ]),
+];
 const limit = batchSize(process.env.VEHICLE_MASTER_BACKFILL_BATCH_SIZE);
 const skipUrls = completedUrls(process.env.VEHICLE_MASTER_BACKFILL_COMPLETED_URLS_JSON);
 
@@ -114,10 +120,8 @@ const archive = createFirebaseVehicleMasterSourceArchive();
 const fetcher = createHttpVehicleMasterSourceFetcher();
 const parsers = createVehicleMasterSourceParsers();
 
-const discovered: VehicleMasterDiscoveredPage[] = [
-  ...extraPages(process.env.VEHICLE_MASTER_BACKFILL_EXTRA_URLS_JSON),
-];
-const discovery = [];
+const discovered: VehicleMasterDiscoveredPage[] = [...extras];
+const discovery: Array<Record<string, unknown>> = [];
 
 for (const sourceKey of selectedSources) {
   const policy = vehicleMasterBackfillPolicy(sourceKey);
@@ -161,7 +165,7 @@ const queue = buildRecentFirstBackfillQueue(discovered, {
   sourceKeys: selectedSources,
 }).slice(0, limit);
 
-const results = [];
+const results: Array<Record<string, unknown>> = [];
 for (const task of queue) {
   const policy = vehicleMasterBackfillPolicy(task.sourceKey);
   try {
@@ -253,7 +257,8 @@ const summary = {
       ...skipUrls,
       ...results
         .filter((row) => row.status === 'PARSED' || row.status === 'CAPTURED_HOLD')
-        .map((row) => row.sourceUrl),
+        .map((row) => row.sourceUrl)
+        .filter((value): value is string => typeof value === 'string'),
     ]),
   ].sort(),
 };
