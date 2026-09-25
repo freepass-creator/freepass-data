@@ -34,11 +34,14 @@ for (const file of walk(src)) {
   const text = fs.readFileSync(file, 'utf8');
 
   for (const specifier of imports(text)) {
-    if (specifier === 'firebase-admin/firestore' && layer !== 'infra') {
+    if (
+      specifier === 'firebase-admin/firestore' &&
+      !['infra', 'adapters'].includes(layer)
+    ) {
       violations.push({
         file: rel,
         import: specifier,
-        reason: 'Firestore SDK is restricted to FreePass Data infra'
+        reason: 'Firestore SDK is restricted to FreePass Data infra/adapters; execution must be gateway-wrapped'
       });
     }
 
