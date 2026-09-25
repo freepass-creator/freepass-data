@@ -5,7 +5,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "contractVersion", "consumerId", "workbook", "generatedAt",
+    "contractVersion", "consumerId", "workbook", "generatedAt", "releaseAuthority",
     "approvedRelease", "snapshot", "handoffHash"
   ],
   "properties": {
@@ -13,6 +13,7 @@
     "consumerId": { "enum": ["google-sheets-f01", "google-sheets-f86"] },
     "workbook": { "enum": ["F01", "F86"] },
     "generatedAt": { "type": "string", "format": "date-time" },
+    "releaseAuthority": { "enum": ["LEGACY_VERIFIED_BRIDGE", "CANONICAL_ACTIVE"] },
     "approvedRelease": {
       "type": "object",
       "additionalProperties": false,
