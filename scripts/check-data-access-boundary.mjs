@@ -9,6 +9,11 @@ const allowedRawInfraConsumers = new Set([
   'src/jobs/data-access-runtime.ts'
 ]);
 
+const liveFirestoreAdapters = new Set([
+  '../adapters/legacy-freepasserp3.js',
+  '../adapters/erp5-source-capture.js'
+]);
+
 const isRawFirestoreModule = (specifier) =>
   /(?:^|\/)infra\/[^/]*firestore[^/]*\.js$/.test(specifier);
 
@@ -56,6 +61,18 @@ for (const file of walk(src)) {
       });
     }
 
+    if (
+      ['api', 'jobs'].includes(layer) &&
+      liveFirestoreAdapters.has(specifier) &&
+      rel !== 'src/jobs/data-access-runtime.ts'
+    ) {
+      violations.push({
+        file: rel,
+        import: specifier,
+        reason: 'live Firebase adapter must be hidden behind an audited composition runtime'
+      });
+    }
+
     const raw = isRawFirestoreModule(specifier);
     if (
       raw &&
@@ -88,9 +105,9 @@ if (
 const requiredGatewayUsage = new Map([
   ['src/api/consumer-gateway.ts', ['access.read(', 'access.deny(']],
   ['src/api/server.ts', ['stores.access.read(', 'stores.access.write(', 'stores.access.deny(']],
-  ['src/jobs/ingest-legacy-products.ts', ['runtime.access.read(', 'runtime.access.write(']],
-  ['src/jobs/inspect-erp5-source.ts', ['runtime.access.read(']],
-  ['src/jobs/prepare-sheet-publication-bridge.ts', ['runtime.access.read(']],
+  ['src/jobs/ingest-legacy-products.ts', ['runtime.readLegacySnapshot(', 'runtime.ingestLegacySnapshot(']],
+  ['src/jobs/inspect-erp5-source.ts', ['runtime.capture(']],
+  ['src/jobs/prepare-sheet-publication-bridge.ts', ['runtime.prepare(']],
   ['src/jobs/check-central-firestore.ts', ['runtime.access.read(']]
 ]);
 for (const [relativeFile, required] of requiredGatewayUsage) {
