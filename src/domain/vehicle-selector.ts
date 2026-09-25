@@ -270,7 +270,7 @@ function matchesAxis(
   const textValue = textAxis(record, axis);
   const numberValue = numberAxis(record, axis);
 
-  if (hasText(selected.id)) {
+  if ('id' in selected && hasText(selected.id)) {
     const actualId = textValue?.id ?? numberValue?.id ?? null;
     if (!actualId) return { matched: false, unresolved: true, rejected: false };
     if (actualId !== selected.id) return { matched: false, unresolved: false, rejected: true };
