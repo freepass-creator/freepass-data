@@ -129,6 +129,9 @@ describe('Data-owned sheet publication bridge', () => {
       violations: []
     });
     expect(f01.approvedRelease).toEqual(f86.approvedRelease);
+    expect(f01.manifest.sourceReadTime).toBe(readTime);
+    expect(f01.snapshot.capturedAt).toBe('2026-09-25T08:02:00.000Z');
+    expect(f86.snapshot.capturedAt).toBe('2026-09-25T08:02:00.000Z');
     expect(f01.snapshot.products).toEqual(f86.snapshot.products);
   });
 
