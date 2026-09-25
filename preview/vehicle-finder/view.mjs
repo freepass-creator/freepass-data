@@ -169,7 +169,6 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       button.setAttribute('aria-expanded', 'false');
     }
     for (const row of tbody.children) row.dataset.selected = 'false';
-    for (const marker of tbody.querySelectorAll('.vf-row-state')) marker.hidden = true;
 
     if (restoreFocus) {
       const button = [...tbody.querySelectorAll('button')]
@@ -204,9 +203,6 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       button.setAttribute('aria-expanded', String(button.dataset.entryId === id));
     }
     for (const row of tbody.children) row.dataset.selected = String(row.dataset.entryId === id);
-    for (const marker of tbody.querySelectorAll('.vf-row-state')) {
-      marker.hidden = marker.dataset.entryId !== id;
-    }
 
     const title = element('h2', '', entry.label);
     title.id = `${prefix}-title`;
@@ -359,10 +355,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       if (context) button.append(element('span', 'vf-row-path', context));
       listen(button, 'click', () => inspect(entry.id));
 
-      const marker = element('span', 'vf-row-state', '보는 중');
-      marker.dataset.entryId = entry.id;
-      marker.hidden = entry.id !== inspectedId;
-      name.append(button, marker);
+      name.append(button);
       if (!entry.configurations.length) {
         name.append(element('span', 'vf-row-check', '구성 미확인'));
       }
