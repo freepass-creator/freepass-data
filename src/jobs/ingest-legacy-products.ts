@@ -1,6 +1,6 @@
 import { readLegacyProductSnapshot } from '../adapters/legacy-freepasserp3.js';
 import { ingestLegacyProductSnapshot } from '../application/ingest-legacy-products.js';
-import { createJobDataAccessRuntime } from './data-access-runtime.js';
+import { createSourceIngestDataAccessRuntime } from './data-access-runtime.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 const targetProjectId = process.env.FIREBASE_PROJECT_ID?.trim();
@@ -19,7 +19,7 @@ if (targetProjectId === legacyProjectId) {
   );
 }
 
-const runtime = createJobDataAccessRuntime();
+const runtime = await createSourceIngestDataAccessRuntime();
 const snapshot = await runtime.access.read({
   context: {
     actor: { id: 'service:freepass-data-ingest', kind: 'SERVICE' },
