@@ -7,6 +7,19 @@ Verified baseline before this handoff update: `adbbfca7c0ddc4e6c7c1906765d9b5aac
 Branch: `codex/local-runtime-baseline`
 Date: 2026-09-22
 
+## 2026-09-26 development-lineage consolidation
+
+Repository development authority is now explicitly locked in [DEVELOPMENT-LINEAGE.md](DEVELOPMENT-LINEAGE.md).
+
+- Vehicle Master / new+used ingestion / Estimate master-data projection: canonical WIP is PR #58 only.
+- Consumer release / Sheet handoff / audited Data Access: canonical WIP is PR #54 only.
+- Admin Catalog current line: PR #53 supersedes old #12.
+- Vehicle Finder PR #52 is reference/prototype only, not production UI authority.
+- Source ingestion and Catalog canonical transactions share one Firestore physical layout module; the ingestion port is explicitly named `SourceIngestionStore`.
+- Quote issuance/calculation contracts remain outside FreePass Data and must not be reintroduced here.
+
+Do not start new work from superseded feature branches merely because they remain in GitHub history.
+
 ## 2026-09-22 publication-readiness gate
 
 상시 ERP5 감사에 기계 판독 가능한 공개 판정 게이트를 추가했다. `FULL / COMPLETE`는 원천 관측 범위이며
