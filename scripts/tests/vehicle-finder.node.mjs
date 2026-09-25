@@ -24,8 +24,11 @@ test('empty search browses supported master destinations without requiring year 
   assert.equal(result.matches.some(item => item.entry.nodeType === 'OPTION'), false);
 });
 
-test('MAKE is a supported Vehicle Master node and is browseable', () => {
-  assert.deepEqual(ids(searchEntries(read(), '시험제조사')), ['fixture:make:a']);
+test('MAKE is supported and manufacturer-only search can reach its descendants', () => {
+  const result = ids(searchEntries(read(), '시험제조사'));
+  assert.equal(result.includes('fixture:make:a'), true);
+  assert.equal(result.includes('fixture:model:a'), true);
+  assert.equal(result.includes('fixture:model:b'), true);
 });
 
 test('known but non-Finder master types are explicitly excluded instead of crashing the read', () => {
