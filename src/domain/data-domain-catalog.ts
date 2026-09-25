@@ -128,6 +128,18 @@ export const DATA_ASSETS: readonly DataAssetDefinition[] = [
     consumers: ['ERP.com', 'ERP white-labels'], notes: ['empty release is rejected']
   },
   {
+    assetId: 'estimate-newcar-master-release', domainId: 'catalog', displayName: 'Estimate 신차 Master ACTIVE Release',
+    aliases: ['estimate-newcar-master', '견적기 차종마스터', '신차 견적 마스터'], kind: 'PROJECTION',
+    system: 'firebase:freepasserp5', locator: 'projection_active/estimate-newcar-master',
+    ownership: 'FREEPASS_DATA', authority: 'PROJECTION',
+    keyDescription: 'productId + stable VehicleModel/ModelYear/Trim/Powertrain/Option/Color IDs + release evidence',
+    sensitivity: 'INTERNAL', availability: 'HOLD',
+    freshnessPolicy: 'CANONICAL_ACTIVE release + manifest/input/data digest 검증',
+    contractRef: 'contracts/estimate-newcar-master-v1.schema.json',
+    consumers: ['FreePass Estimate'],
+    notes: ['read contract implemented 2026-09-25', 'ACTIVE release builder/source evidence is not yet implemented', 'legacy year:2026 display default is not model-year authority']
+  },
+  {
     assetId: 'sheet-f01', domainId: 'publication', displayName: 'Google Sheets F01',
     aliases: ['F01', '표준시트', '판매시트'], kind: 'GOOGLE_SHEET', system: 'google-workspace:pyh@teamjpk.com',
     locator: 'contract:f01-f86-sheet-spec.v1.json#workbooks/F01', ownership: 'CONSUMER_OUTPUT', authority: 'OUTPUT',
