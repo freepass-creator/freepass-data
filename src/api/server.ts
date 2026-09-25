@@ -19,6 +19,7 @@ import {
 } from '../application/catalog.js';
 import { buildCatalogProductTrace } from '../application/catalog-trace.js';
 import { isLocalConsoleDriver } from './console-access.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 assertDevelopmentApi();
 const app = Fastify({ logger: true });
@@ -192,7 +193,13 @@ app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {
         entityType: 'offer',
         entityId: params.offerId
       },
-      requestDigest: command.idempotencyKey,
+      requestDigest: stableDigest({
+        commandId: command.commandId,
+        idempotencyKey: command.idempotencyKey,
+        offerId: params.offerId,
+        expectedRevision: command.expectedRevision,
+        termKey: command.termKey
+      }),
       summarize: (value: { revision: number }) => ({ revision: value.revision })
     }, async () => {
       const committed = await updateOfferPrice(stores.catalog, command);
