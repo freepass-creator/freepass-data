@@ -6,6 +6,7 @@ import {
   readFirestoreProjectionLineage
 } from './firestore-projection-evidence.js';
 import { projectionReader } from './firestore-projection-reader.js';
+import { decodeFirestoreIdentityDocument } from './firestore-document.js';
 import type {
   Offer,
   Policy,
@@ -44,14 +45,9 @@ export function dataHealthReader(db: Firestore): CatalogDataHealthReadStore {
     identityField: 'id' | 'revisionRecordId'
   ): Promise<T[]> => {
     const snap = await db.collection(collection).get();
-    return snap.docs.map((doc) => {
-      const stored = doc.data();
-      const payloadIdentity = stored[identityField];
-      if (payloadIdentity !== undefined && payloadIdentity !== doc.id) {
-        throw new Error(`Firestore document identity mismatch in ${collection}`);
-      }
-      return { ...stored, [identityField]: doc.id } as T;
-    });
+    return snap.docs.map((doc) =>
+      decodeFirestoreIdentityDocument<T>(doc, identityField)!
+    );
   };
 
   return {
