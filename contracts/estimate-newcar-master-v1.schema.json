@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/estimate-newcar-master-v1.schema.json",
+  "title": "FreePass Estimate New-car Master V1",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "productId",
+      "vehicleModelId",
+      "modelYearId",
+      "trimId",
+      "powertrainId",
+      "maker",
+      "model",
+      "modelYear",
+      "trimName",
+      "powertrainName",
+      "basePrice",
+      "options",
+      "exteriorColors",
+      "interiorColors",
+      "configuration",
+      "status"
+    ],
+    "properties": {
+      "productId": { "type": "string", "minLength": 1 },
+      "vehicleModelId": { "type": "string", "minLength": 1 },
+      "modelYearId": { "type": "string", "minLength": 1 },
+      "trimId": { "type": "string", "minLength": 1 },
+      "powertrainId": { "type": "string", "minLength": 1 },
+      "maker": { "type": "string", "minLength": 1 },
+      "model": { "type": "string", "minLength": 1 },
+      "modelYear": { "type": "integer", "minimum": 1900, "maximum": 2200 },
+      "trimName": { "type": "string", "minLength": 1 },
+      "powertrainName": { "type": "string", "minLength": 1 },
+      "basePrice": { "$ref": "https://freepass.teamjpk.com/contracts/catalog-v1.schema.json#/$defs/money" },
+      "options": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["optionId", "name", "price", "requires", "excludes"],
+          "properties": {
+            "optionId": { "type": "string", "minLength": 1 },
+            "name": { "type": "string", "minLength": 1 },
+            "price": { "$ref": "https://freepass.teamjpk.com/contracts/catalog-v1.schema.json#/$defs/money" },
+            "requires": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+            "excludes": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+            "exclusiveGroupId": { "type": ["string", "null"] }
+          }
+        }
+      },
+      "exteriorColors": {
+        "type": "array",
+        "items": { "$ref": "#/$defs/color" }
+      },
+      "interiorColors": {
+        "type": "array",
+        "items": { "$ref": "#/$defs/color" }
+      },
+      "configuration": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["drivetrain", "seats", "bodyConfiguration"],
+        "properties": {
+          "drivetrain": { "type": ["string", "null"] },
+          "seats": { "type": ["integer", "null"], "minimum": 1 },
+          "bodyConfiguration": { "type": ["string", "null"] }
+        }
+      },
+      "status": { "enum": ["ACTIVE", "HOLD"] },
+      "holdReasons": {
+        "type": "array",
+        "uniqueItems": true,
+        "items": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "color": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["colorId", "name", "price"],
+      "properties": {
+        "colorId": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "code": { "type": ["string", "null"] },
+        "price": { "$ref": "https://freepass.teamjpk.com/contracts/catalog-v1.schema.json#/$defs/money" }
+      }
+    }
+  }
+}
