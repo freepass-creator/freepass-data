@@ -136,6 +136,7 @@ export const VEHICLE_SELECTOR_UX_PRESETS: Record<
       'generation',
       'phase',
       'powertrain',
+      'fuelType',
       'drivetrain',
       'seats',
       'trim',
