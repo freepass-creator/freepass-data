@@ -1,5 +1,9 @@
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './firestore-layout.js';
+import {
+  decodeFirestoreDocument,
+  decodeFirestoreIdentityDocument
+} from './firestore-document.js';
 import { getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type {
   AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
@@ -73,7 +77,10 @@ const C = {
 } as const;
 
 const data = <T>(snap: FirebaseFirestore.DocumentSnapshot) =>
-  snap.exists ? ({ id: snap.id, ...snap.data() } as T) : null;
+  decodeFirestoreDocument<T>(snap);
+
+const catalogEntity = <T>(snap: FirebaseFirestore.DocumentSnapshot) =>
+  decodeFirestoreIdentityDocument<T>(snap, 'id');
 
 export class FirestoreDataStore implements CatalogStore, ProjectionStore, OutboxStore {
   constructor(private readonly db: Firestore) {}
@@ -82,12 +89,12 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     return this.db.runTransaction(async (native: Transaction) => {
       const tx: CatalogTransaction = {
         getVehicleModel: async (id) =>
-          data<VehicleModel>(await native.get(this.db.collection(C.vehicleModels).doc(id))),
+          catalogEntity<VehicleModel>(await native.get(this.db.collection(C.vehicleModels).doc(id))),
         putVehicleModel: async (model) => {
           native.create(this.db.collection(C.vehicleModels).doc(model.id), model);
         },
         getVehicleAsset: async (id) =>
-          data<VehicleAsset>(await native.get(this.db.collection(C.vehicleAssets).doc(id))),
+          catalogEntity<VehicleAsset>(await native.get(this.db.collection(C.vehicleAssets).doc(id))),
         putVehicleAsset: async (asset) => {
           native.create(this.db.collection(C.vehicleAssets).doc(asset.id), asset);
         },
@@ -95,11 +102,11 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
           native.set(this.db.collection(C.vehicleAssets).doc(asset.id), asset);
         },
         getProduct: async (id) =>
-          data<Product>(await native.get(this.db.collection(C.products).doc(id))),
+          catalogEntity<Product>(await native.get(this.db.collection(C.products).doc(id))),
         putProduct: async (product) => {
           native.create(this.db.collection(C.products).doc(product.id), product);
         },
-        getOffer: async (id) => data<Offer>(await native.get(this.db.collection(C.offers).doc(id))),
+        getOffer: async (id) => catalogEntity<Offer>(await native.get(this.db.collection(C.offers).doc(id))),
         putOffer: async (offer) => { native.set(this.db.collection(C.offers).doc(offer.id), offer); },
 
         getSourceDefinition: async (sourceId) =>
@@ -250,15 +257,15 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   }
 
   async getVehicleModel(id: string) {
-    return data<VehicleModel>(await this.db.collection(C.vehicleModels).doc(id).get());
+    return catalogEntity<VehicleModel>(await this.db.collection(C.vehicleModels).doc(id).get());
   }
   async getVehicleAsset(id: string) {
-    return data<VehicleAsset>(await this.db.collection(C.vehicleAssets).doc(id).get());
+    return catalogEntity<VehicleAsset>(await this.db.collection(C.vehicleAssets).doc(id).get());
   }
   async getProduct(id: string) {
-    return data<Product>(await this.db.collection(C.products).doc(id).get());
+    return catalogEntity<Product>(await this.db.collection(C.products).doc(id).get());
   }
-  async getOffer(id: string) { return data<Offer>(await this.db.collection(C.offers).doc(id).get()); }
+  async getOffer(id: string) { return catalogEntity<Offer>(await this.db.collection(C.offers).doc(id).get()); }
   async getSourceDefinition(sourceId: string) {
     return data<SourceDefinition>(
       await this.db.collection(C.sources).doc(sourceFirestoreDocumentId(sourceId)).get()
@@ -341,7 +348,12 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async listRevisionHistory() {
     const snap = await this.db.collection(C.revisions).get();
     return snap.docs
-      .map((doc) => doc.data() as EntityRevisionRecord)
+      .map((doc) =>
+        decodeFirestoreIdentityDocument<EntityRevisionRecord>(
+          doc,
+          'revisionRecordId'
+        )!
+      )
       .sort((a, b) =>
         a.entityType.localeCompare(b.entityType) ||
         a.entityId.localeCompare(b.entityId) ||
@@ -351,7 +363,9 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
 
   private async all<T>(collection: string): Promise<T[]> {
     const snap = await this.db.collection(collection).get();
-    return snap.docs.map((x) => ({ id: x.id, ...x.data() }) as T);
+    return snap.docs.map((doc) =>
+      decodeFirestoreIdentityDocument<T>(doc, 'id')!
+    );
   }
   async listVehicleModels() { return this.all<VehicleModel>(C.vehicleModels); }
   async listVehicleAssets() { return this.all<VehicleAsset>(C.vehicleAssets); }
