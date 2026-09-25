@@ -86,13 +86,22 @@ contract passes end-to-end.
 The migration bridge can be prepared without any Sheet or Firestore write:
 
 ```bash
+npm run prepare:sheet-bridge -- --live-read-only --workbook=ALL
+# 단일 소비처만 점검할 때만 F01 또는 F86 사용
 npm run prepare:sheet-bridge -- --live-read-only --workbook=F01
 npm run prepare:sheet-bridge -- --live-read-only --workbook=F86
 ```
 
 The job reads `products`, `policy`, and `partner` in one Firestore read-only
 transaction, builds the bridge release/manifest, self-validates the handoff, and
-writes only private local evidence under the user home directory.
+writes only private local evidence under the user home directory. `ALL` is the
+normal joint-publication preparation path: F01 and F86 share one source capture,
+release, manifest and generated-at time.
+
+Source observation time and publication time are distinct facts. Firestore
+`readTime` remains in the manifest/approved release as source evidence, while
+the writer-facing snapshot `capturedAt` is the handoff generation/publication
+time used by the existing sheet presentation logic.
 
 A successful preparation reports `READY_FOR_SHADOW`, never production cutover.
 Required next evidence is ERP4 shadow consumption, rendered-output parity, and a
