@@ -2,12 +2,13 @@ import { createHash } from 'node:crypto';
 import { ERP5_DOCUMENTS, type Erp5ReadRpc } from '../adapters/erp5-source-capture.js';
 import {
   hashSheetPublicationHandoff,
+  hashSheetPublicationData,
+  validateSheetPublicationHandoff,
   type SheetInventorySummary,
   type SheetPublicationHandoff,
   type SheetPublicationManifest,
   type SheetHandoffWorkbook
 } from '../domain/sheet-publication-handoff.js';
-import { stableDigest } from '../shared/stable-digest.js';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): value is ObjectValue =>
@@ -16,7 +17,7 @@ const time = (value: unknown): value is string =>
   typeof value === 'string' &&
   /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
   Number.isFinite(Date.parse(value));
-const fail = (code: string): never => { throw new Error(code); };
+function fail(code: string): never { throw new Error(code); }
 
 const collections = ['products', 'policy', 'partner'] as const;
 type SheetSourceCollection = typeof collections[number];
@@ -201,10 +202,14 @@ function decodedRecords(
   capture: Erp5SheetSourceCapture,
   collection: SheetSourceCollection
 ) {
-  return capture.collections[collection].documents.map((doc) => ({
-    ...decodeSheetFields(doc.fields ?? {}),
-    _key: documentId(doc, collection)
-  }));
+  return capture.collections[collection].documents.map((doc) => {
+    const id = documentId(doc, collection);
+    const data = decodeSheetFields(doc.fields ?? {});
+    if (Object.hasOwn(data, '_key') && data._key !== id) {
+      fail('SHEET_SOURCE_DOCUMENT_ID_MISMATCH');
+    }
+    return { ...data, _key: id };
+  });
 }
 
 const normalizeStatus = (value: unknown) =>
@@ -347,7 +352,7 @@ export function buildSheetBridgeRelease(
   ) {
     fail('SHEET_BRIDGE_INVENTORY_VIOLATION');
   }
-  const dataDigest = stableDigest({ products, policies, partners, inventory });
+  const dataDigest = hashSheetPublicationData({ products, policies, partners, inventory });
   const suffix = storedDigest.slice(0, 32);
 
   const release = {
@@ -417,4 +422,29 @@ export function buildSheetBridgeHandoff(
     ...unsigned,
     handoffHash: hashSheetPublicationHandoff(unsigned)
   };
+}
+
+
+/** Prepare requested outputs from exactly one read-only capture and one release.
+ * This is shadow preparation only: no publication or canonical approval is issued.
+ */
+export async function prepareSheetBridgeHandoffs(
+  rpc: Erp5ReadRpc,
+  workbooks: readonly SheetHandoffWorkbook[] = ['F01', 'F86']
+) {
+  if (workbooks.length === 0 || new Set(workbooks).size !== workbooks.length ||
+      workbooks.some((workbook) => workbook !== 'F01' && workbook !== 'F86')) {
+    fail('INVALID_SHEET_HANDOFF_TARGETS');
+  }
+  const capture = await captureErp5SheetSource(rpc);
+  const bridge = buildSheetBridgeRelease(capture);
+  const generatedAt = new Date().toISOString();
+  const handoffs = workbooks.map((workbook) => {
+    const handoff = buildSheetBridgeHandoff(bridge, workbook, generatedAt);
+    if (validateSheetPublicationHandoff(handoff).status !== 'PASS') {
+      fail('SHEET_HANDOFF_SELF_VALIDATION_FAILED');
+    }
+    return handoff;
+  });
+  return { capture, bridge, handoffs };
 }
