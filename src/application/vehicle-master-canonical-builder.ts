@@ -85,7 +85,7 @@ export function buildVehicleMasterTrimProposalSet(input: {
   const revision = input.revision ?? 1;
   const { anchor, reconciled } = input;
   const sourceEvidenceIds = reconciled.sourceDocumentIds;
-  const effectiveFrom = reconciled.effectiveFrom;
+  const priceEffectiveFrom = reconciled.effectiveFrom;
   const status = statusFor(reconciled);
 
   const modelYearId = deterministicVehicleMasterId('MODEL_YEAR', {
@@ -126,7 +126,7 @@ export function buildVehicleMasterTrimProposalSet(input: {
     aliases: [String(reconciled.modelYear), `${reconciled.modelYear}MY`],
     attributes: { modelYear: reconciled.modelYear },
     sourceEvidenceIds,
-    effectiveFrom,
+    effectiveFrom: null,
     effectiveTo: null,
     createdAt: input.observedAt,
     updatedAt: input.observedAt,
@@ -146,7 +146,7 @@ export function buildVehicleMasterTrimProposalSet(input: {
       fuelType: reconciled.fuelType,
     },
     sourceEvidenceIds,
-    effectiveFrom,
+    effectiveFrom: null,
     effectiveTo: null,
     createdAt: input.observedAt,
     updatedAt: input.observedAt,
@@ -169,7 +169,7 @@ export function buildVehicleMasterTrimProposalSet(input: {
       drivetrain: reconciled.drivetrain,
     },
     sourceEvidenceIds,
-    effectiveFrom,
+    effectiveFrom: null,
     effectiveTo: null,
     createdAt: input.observedAt,
     updatedAt: input.observedAt,
@@ -189,7 +189,7 @@ export function buildVehicleMasterTrimProposalSet(input: {
       reconciliationConflicts: reconciled.conflicts,
     },
     sourceEvidenceIds,
-    effectiveFrom,
+    effectiveFrom: null,
     effectiveTo: null,
     createdAt: input.observedAt,
     updatedAt: input.observedAt,
@@ -198,7 +198,7 @@ export function buildVehicleMasterTrimProposalSet(input: {
   const priceId = deterministicVehicleMasterRecordId('price', {
     targetId: trimId,
     priceType: 'BASE',
-    effectiveFrom,
+    effectiveFrom: priceEffectiveFrom,
     revision,
   });
   const basePrice = sealVehicleMasterPriceRevision({
@@ -210,7 +210,7 @@ export function buildVehicleMasterTrimProposalSet(input: {
     revision,
     sourceEvidenceIds,
     sourceDocumentIds: sourceEvidenceIds,
-    effectiveFrom,
+    effectiveFrom: null,
     effectiveTo: null,
     createdAt: input.observedAt,
     updatedAt: input.observedAt,
