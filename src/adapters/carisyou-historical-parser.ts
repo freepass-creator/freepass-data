@@ -45,20 +45,40 @@ function parseManwon(value: string) {
 
 function parseGrade(line: string) {
   const normalized = line.replace(/^단종\s+/, '').trim();
-  const match = normalized.match(
-    /^([0-9.]+)\s+(가솔린|디젤|LPG|하이브리드|전기)(?:\s+(터보))?\s+(.+?)(?:\s+(2WD|4WD|AWD|FWD|RWD))?\s+(?:A\/T|M\/T|CVT|DCT)(?:\s+([\d,]+)\s*만원)?$/
-  );
-  if (!match?.[1] || !match[2] || !match[4]) return null;
+  const inlinePrice = parseManwon(normalized);
+  const withoutPrice = normalized
+    .replace(/\s+[\d,]+\s*만원.*$/, '')
+    .trim();
 
-  const inlinePrice = match[6]
-    ? Number(match[6].replaceAll(',', '')) * 10_000
-    : null;
+  const withDrive = withoutPrice.match(
+    /^(.+?)\s+(2WD|4WD|AWD|FWD|RWD)(?:\s|$)/
+  );
+  if (withDrive?.[1] && withDrive[2]) {
+    const detail = withDrive[1].trim().match(
+      /^([0-9.]+)\s+(가솔린|디젤|LPG|하이브리드|전기)(?:\s+(터보))?\s+(.+)$/
+    );
+    if (detail?.[1] && detail[2] && detail[4]) {
+      return {
+        powertrainName: [detail[1], detail[2], detail[3]].filter(Boolean).join(' '),
+        fuelLabel: detail[2],
+        trimName: detail[4].trim(),
+        drivetrain: withDrive[2],
+        inlinePrice,
+      };
+    }
+  }
+
+  const generic = withoutPrice.match(
+    /^([0-9.]+)\s+(가솔린|디젤|LPG|하이브리드|전기)(?:\s+(터보))?\s+(.+?)\s+(?:A\/T|M\/T|CVT|DCT)$/
+  );
+  if (!generic?.[1] || !generic[2] || !generic[4]) return null;
+
   return {
-    powertrainName: [match[1], match[2], match[3]].filter(Boolean).join(' '),
-    fuelLabel: match[2],
-    trimName: match[4].trim(),
-    drivetrain: match[5] ?? null,
-    inlinePrice: Number.isSafeInteger(inlinePrice) ? inlinePrice : null,
+    powertrainName: [generic[1], generic[2], generic[3]].filter(Boolean).join(' '),
+    fuelLabel: generic[2],
+    trimName: generic[4].trim(),
+    drivetrain: null,
+    inlinePrice,
   };
 }
 
