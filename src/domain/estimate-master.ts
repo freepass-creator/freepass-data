@@ -3,7 +3,7 @@ export const ESTIMATE_NEWCAR_MASTER_PROJECTION_ID = 'estimate-newcar-master';
 
 export type EstimateMasterMoney = { amount: number; currency: 'KRW' };
 export type EstimateMasterOption = {
-  optionId: string;
+  optionId: string | null;
   name: string;
   price: EstimateMasterMoney;
   requires: string[];
@@ -11,20 +11,20 @@ export type EstimateMasterOption = {
   exclusiveGroupId?: string | null;
 };
 export type EstimateMasterColor = {
-  colorId: string;
+  colorId: string | null;
   name: string;
   code?: string | null;
   price: EstimateMasterMoney;
 };
 export type EstimateNewcarMasterRecord = {
   productId: string;
-  vehicleModelId: string;
-  modelYearId: string;
-  trimId: string;
-  powertrainId: string;
+  vehicleModelId: string | null;
+  modelYearId: string | null;
+  trimId: string | null;
+  powertrainId: string | null;
   maker: string;
   model: string;
-  modelYear: number;
+  modelYear: number | null;
   trimName: string;
   powertrainName: string;
   basePrice: EstimateMasterMoney;
@@ -65,18 +65,24 @@ export function validateEstimateMasterSemantics(
   for (const id of duplicateValues(records.map((record) => record.productId))) {
     issues.push({ code: 'DUPLICATE_PRODUCT_ID', detail: id });
   }
-  for (const id of duplicateValues(records.map((record) => record.trimId))) {
+  for (const id of duplicateValues(records.map((record) => record.trimId).filter((id): id is string => Boolean(id)))) {
     issues.push({ code: 'DUPLICATE_TRIM_ID', detail: id });
   }
 
   for (const record of records) {
-    const optionIds = record.options.map((option) => option.optionId);
+    const optionIds = record.options.map((option) => option.optionId).filter((id): id is string => Boolean(id));
     const optionSet = new Set(optionIds);
     for (const id of duplicateValues(optionIds)) {
       issues.push({ code: 'DUPLICATE_OPTION_ID', productId: record.productId, field: 'options', detail: id });
     }
 
     for (const option of record.options) {
+      if (!option.optionId) {
+        if (record.status === 'ACTIVE') {
+          issues.push({ code: 'ACTIVE_OPTION_ID_REQUIRED', productId: record.productId, field: 'options' });
+        }
+        continue;
+      }
       for (const requiredId of option.requires) {
         if (!optionSet.has(requiredId)) {
           issues.push({
@@ -125,12 +131,29 @@ export function validateEstimateMasterSemantics(
       ['exteriorColors', record.exteriorColors],
       ['interiorColors', record.interiorColors]
     ] as const) {
-      for (const id of duplicateValues(colors.map((color) => color.colorId))) {
+      for (const id of duplicateValues(colors.map((color) => color.colorId).filter((id): id is string => Boolean(id)))) {
         issues.push({ code: 'DUPLICATE_COLOR_ID', productId: record.productId, field, detail: id });
       }
     }
 
     if (record.status === 'ACTIVE') {
+      for (const [field, value] of [
+        ['vehicleModelId', record.vehicleModelId],
+        ['modelYearId', record.modelYearId],
+        ['trimId', record.trimId],
+        ['powertrainId', record.powertrainId],
+      ] as const) {
+        if (!value) issues.push({ code: 'ACTIVE_STABLE_ID_REQUIRED', productId: record.productId, field });
+      }
+      if (!Number.isInteger(record.modelYear)) {
+        issues.push({ code: 'ACTIVE_MODEL_YEAR_REQUIRED', productId: record.productId, field: 'modelYear' });
+      }
+      if (record.exteriorColors.some((color) => !color.colorId)) {
+        issues.push({ code: 'ACTIVE_COLOR_ID_REQUIRED', productId: record.productId, field: 'exteriorColors' });
+      }
+      if (record.interiorColors.some((color) => !color.colorId)) {
+        issues.push({ code: 'ACTIVE_COLOR_ID_REQUIRED', productId: record.productId, field: 'interiorColors' });
+      }
       if (!record.exteriorColors.length) {
         issues.push({ code: 'ACTIVE_EXTERIOR_COLOR_REQUIRED', productId: record.productId, field: 'exteriorColors' });
       }
