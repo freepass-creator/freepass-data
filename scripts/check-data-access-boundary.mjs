@@ -10,7 +10,7 @@ const allowedRawInfraConsumers = new Set([
 ]);
 
 const isRawFirestoreModule = (specifier) =>
-  /(?:^|\/)infra\/(?:firestore-|source-firestore-)/.test(specifier);
+  /(?:^|\/)infra\/[^/]*firestore[^/]*\.js$/.test(specifier);
 
 function walk(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -32,6 +32,17 @@ for (const file of walk(src)) {
   const rel = path.relative(root, file).replaceAll('\\', '/');
   const layer = rel.split('/')[1] ?? '';
   const text = fs.readFileSync(file, 'utf8');
+
+  if (
+    text.includes('https://firestore.googleapis.com/') &&
+    !['infra', 'adapters'].includes(layer)
+  ) {
+    violations.push({
+      file: rel,
+      import: 'firestore.googleapis.com',
+      reason: 'direct Firestore REST access is restricted to FreePass Data infra/adapters'
+    });
+  }
 
   for (const specifier of imports(text)) {
     if (
@@ -72,6 +83,27 @@ if (
     import: 'composition',
     reason: 'consumer server must receive raw Firebase resources only through data-access-runtime'
   });
+}
+
+const requiredGatewayUsage = new Map([
+  ['src/api/consumer-gateway.ts', ['access.read(', 'access.deny(']],
+  ['src/api/server.ts', ['stores.access.read(', 'stores.access.write(', 'stores.access.deny(']],
+  ['src/jobs/ingest-legacy-products.ts', ['runtime.access.read(', 'runtime.access.write(']],
+  ['src/jobs/inspect-erp5-source.ts', ['runtime.access.read(']],
+  ['src/jobs/prepare-sheet-publication-bridge.ts', ['runtime.access.read(']],
+  ['src/jobs/check-central-firestore.ts', ['runtime.access.read(']]
+]);
+for (const [relativeFile, required] of requiredGatewayUsage) {
+  const content = fs.readFileSync(path.join(root, relativeFile), 'utf8');
+  for (const marker of required) {
+    if (!content.includes(marker)) {
+      violations.push({
+        file: relativeFile,
+        import: marker,
+        reason: 'known live Firebase path no longer passes through Data Access Gateway'
+      });
+    }
+  }
 }
 
 const rules = fs.readFileSync(path.join(root, 'firestore.rules'), 'utf8');
