@@ -1,7 +1,7 @@
 import type { DataAccessEvent } from '../domain/data-access.js';
 import type { DataAccessLogStore } from '../ports/data-access.js';
 
-const bucketPattern = /^[a-z0-9][a-z0-9._-]{1,221}[a-z0-9]$/;
+const bucketPattern = /^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/;
 
 export function gcsDataAccessLogStore(input: {
   bucket: string;
