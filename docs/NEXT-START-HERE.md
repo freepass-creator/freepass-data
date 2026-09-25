@@ -1,5 +1,51 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-09-25 F01/F86 SSOT bridge stabilization checkpoint
+
+Current direction is unchanged: **FreePass Data owns shared data facts and release evidence; FreePassERP.com/F01/F86 are consumers/transports.** Do not add new consumer-side pricing/deposit/status interpretation.
+
+### Verified in this work packet
+
+- FreePass Data PR #48 now has a Data-owned read-only bridge for `products + policy + partner` from one Firestore transaction.
+- Normal joint preparation is `--workbook=ALL`: one capture/release/manifest produces both F01 and F86 handoffs.
+- Firestore document-path ID vs payload `_key` mismatch fails closed.
+- Firestore Timestamp values are preserved in the same JSON object shape as the current Admin SDK publication snapshot (`{_seconds,_nanoseconds}`).
+- source observation time and publication time are separate:
+  - manifest/approvedRelease `sourceReadTime/observedAt` = Firestore observation
+  - handoff snapshot `capturedAt` = handoff/publication preparation time
+- the bridge carries the production `depositRuleViolations` counter and blocks publication when it is non-zero.
+- ERP4 PR #495 exact adapter head `57aa32ace5548f6e54b9e4458cb24469c04363e6` passed CI run **#2124** including the FreePass Data handoff simulation and production build.
+- successful production publication run `36096321596` artifact was inspected:
+  - products 1,659 / policy 81 / partner 64
+  - registered 1,659 / unavailable 967 / open 692
+  - common inventory drifts 0
+  - `depositRuleViolations=0`
+  - product metadata Timestamp objects: 1,030 total (policy_reference_checked_at 887, updated_at 143).
+
+### Runtime compatibility warning
+
+The scheduled production workflow currently checks out publication engine
+`3c98e1b616392ee6d47e07c7d08dbb30320f67ff`, **not ERP4 main**.
+That production pin contains the deposit-rule inventory gate. Main and the pin have
+diverged substantially, so main-branch PR CI is necessary adapter evidence but is
+not sufficient proof of production-pin shadow parity.
+
+### Current HOLD / next single execution target
+
+Do **not** add another builder/contract before this path is exercised.
+
+1. prepare one live **read-only** Data bridge with `--workbook=ALL`;
+2. retain its exact source readTime/release/manifest/digests;
+3. consume that exact handoff through a shadow copy of the pinned F01/F86 publication engine;
+4. compare rendered F01/F86 vehicle keys and business cells against the legacy output from the same source state;
+5. only after rendered parity + delivery/readback receipts are valid may the legacy ERP4 snapshot source be considered for cutover.
+
+Still HOLD:
+- no production Sheet writer switch;
+- no live Sheet write from FreePass Data;
+- no Canonical ACTIVE Catalog cutover;
+- Data PR #48 full repository suite has not been run by PR CI.
+
 Status: **ACTIVE / CATALOG V1 EXECUTABLE BASELINE**  
 Official project name: **프리패스 데이터 / FreePass Data**  
 Repository: `freepass-creator/freepass-data`  
