@@ -3,6 +3,7 @@ import {
   type EstimateMasterMoney,
   type EstimateMasterOption,
   type EstimateNewcarMasterRecord,
+  uncoveredEstimateMasterIssues,
   validateEstimateMasterSemantics,
 } from '../domain/estimate-master.js';
 
@@ -171,7 +172,7 @@ export function buildEstimateNewcarMaster(
   candidates: readonly EstimateMasterCandidate[]
 ): EstimateNewcarMasterRecord[] {
   const records = candidates.map(buildEstimateNewcarMasterRecord);
-  const issues = validateEstimateMasterSemantics(records);
+  const issues = uncoveredEstimateMasterIssues(records);
   if (issues.length) {
     throw new Error(`ESTIMATE_MASTER_SET_INVALID:${issues.map((issue) => issue.code).join(',')}`);
   }
