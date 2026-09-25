@@ -26,7 +26,8 @@
     "sheets:plan": "node scripts/sheet-presentation.mjs",
     "check:arch": "node scripts/check-architecture.mjs",
     "test:read-runtime-smoke": "node --test tests/read-runtime-smoke.node.mjs",
-    "capture:vehicle-master-source": "tsx src/jobs/capture-vehicle-master-source.ts"
+    "capture:vehicle-master-source": "tsx src/jobs/capture-vehicle-master-source.ts",
+    "ingest:vehicle-master-source": "tsx src/jobs/ingest-vehicle-master-source.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",
