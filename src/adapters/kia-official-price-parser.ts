@@ -14,6 +14,7 @@ import {
   splitOptionPrice,
   uniqueParsedTrims,
   vehicleTextLines,
+  withParsedOptionKind,
 } from './vehicle-master-parser-utils.js';
 
 const TRIM_NAMES = new Set([
@@ -114,6 +115,7 @@ export class KiaOfficialPriceParser implements VehicleMasterSourceParser {
         const baseItems: string[] = [];
         const options = [];
         let inOptions = false;
+        let inAccessory = false;
 
         for (let j = priced.index + 1; j < lines.length; j += 1) {
           const line = lines[j] ?? '';
@@ -121,16 +123,21 @@ export class KiaOfficialPriceParser implements VehicleMasterSourceParser {
           if (/^트림\/가격/.test(line) || /^판매가격/.test(line)) break;
           if (line === '선택품목' || line.includes('선택품목 ')) {
             inOptions = true;
+            inAccessory = false;
             continue;
           }
           if (line === '기아 순정 액세서리' || line.includes('기아 순정 액세서리')) {
             inOptions = true;
+            inAccessory = true;
             continue;
           }
 
           if (inOptions) {
             const option = splitOptionPrice(line);
-            if (option) options.push(normalizeParsedOptionCondition(option));
+            if (option) {
+              const typed = inAccessory ? withParsedOptionKind(option, 'ACCESSORY') : option;
+              options.push(normalizeParsedOptionCondition(typed));
+            }
             continue;
           }
 
