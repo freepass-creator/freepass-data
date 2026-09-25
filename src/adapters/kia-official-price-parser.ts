@@ -76,7 +76,7 @@ function nextPrice(lines: string[], start: number) {
 
 export class KiaOfficialPriceParser implements VehicleMasterSourceParser {
   readonly parserId = 'KIA_OFFICIAL_PRICE';
-  readonly parserVersion = '1.1.0';
+  readonly parserVersion = '1.2.0';
 
   canParse(input: VehicleMasterParseInput) {
     if (!input.sourceUrl) return false;
