@@ -1,4 +1,9 @@
 import { stableDigest } from '../shared/stable-digest.js';
+import type {
+  VehicleMasterPipelineRecord,
+  VehicleMasterSourceDocument,
+} from '../domain/vehicle-master.js';
+import type { VehicleMasterSourceParser } from '../ports/vehicle-master-source-parser.js';
 import {
   coverageStrength,
   findCoverageForHint,
@@ -245,6 +250,112 @@ export function discoverVehicleMasterPages(input: {
   }
 
   return [...discovered.values()];
+}
+
+export type VehicleMasterBackfillCompletion = {
+  sourceUrl: string;
+  parserId: string;
+  parserVersion: string;
+  observedAt: string;
+};
+
+export function buildVehicleMasterBackfillCompletionIndex(input: {
+  sources: readonly VehicleMasterSourceDocument[];
+  normalized: readonly VehicleMasterPipelineRecord[];
+}) {
+  const sourceById = new Map(
+    input.sources.map((source) => [source.sourceDocumentId, source])
+  );
+  const byUrl = new Map<string, VehicleMasterBackfillCompletion[]>();
+
+  for (const record of input.normalized) {
+    if (
+      record.kind !== 'NORMALIZED_RECORD' ||
+      !record.sourceDocumentId ||
+      typeof record.payload.parserId !== 'string' ||
+      typeof record.payload.parserVersion !== 'string'
+    ) {
+      continue;
+    }
+    const source = sourceById.get(record.sourceDocumentId);
+    if (!source) continue;
+
+    const urls = [
+      source.sourceUrl,
+      typeof source.metadata?.requestedUrl === 'string'
+        ? source.metadata.requestedUrl
+        : null,
+    ].filter((value): value is string => Boolean(value));
+
+    for (const sourceUrl of urls) {
+      const list = byUrl.get(sourceUrl) ?? [];
+      const key = `${record.payload.parserId}@${record.payload.parserVersion}@${source.observedAt}`;
+      if (!list.some((item) =>
+        `${item.parserId}@${item.parserVersion}@${item.observedAt}` === key
+      )) {
+        list.push({
+          sourceUrl,
+          parserId: record.payload.parserId,
+          parserVersion: record.payload.parserVersion,
+          observedAt: source.observedAt,
+        });
+      }
+      byUrl.set(sourceUrl, list);
+    }
+  }
+
+  for (const list of byUrl.values()) {
+    list.sort((a, b) => b.observedAt.localeCompare(a.observedAt));
+  }
+  return byUrl;
+}
+
+export function currentVehicleMasterParserIdentity(
+  parsers: readonly VehicleMasterSourceParser[],
+  sourceUrl: string
+) {
+  const parseInput = {
+    sourceDocumentId: 'backfill-planner',
+    sourceUrl,
+    contentType: null,
+    bytes: Buffer.alloc(0),
+  };
+  const matching = parsers.filter((parser) => parser.canParse(parseInput));
+  if (matching.length !== 1) return null;
+  return {
+    parserId: matching[0]!.parserId,
+    parserVersion: matching[0]!.parserVersion,
+  };
+}
+
+export function shouldSkipVehicleMasterBackfillPage(input: {
+  page: VehicleMasterDiscoveredPage;
+  completions: Map<string, VehicleMasterBackfillCompletion[]>;
+  parsers: readonly VehicleMasterSourceParser[];
+  now: string;
+  currentTtlHours: number;
+}) {
+  const parser = currentVehicleMasterParserIdentity(
+    input.parsers,
+    input.page.sourceUrl
+  );
+  if (!parser) return false;
+
+  const completion = (input.completions.get(input.page.sourceUrl) ?? [])
+    .find((item) =>
+      item.parserId === parser.parserId &&
+      item.parserVersion === parser.parserVersion
+    );
+  if (!completion) return false;
+
+  if (input.page.currentHint === false) return true;
+
+  const nowMs = Date.parse(input.now);
+  const observedMs = Date.parse(completion.observedAt);
+  if (!Number.isFinite(nowMs) || !Number.isFinite(observedMs)) return false;
+
+  const ageMs = Math.max(0, nowMs - observedMs);
+  return ageMs <= input.currentTtlHours * 60 * 60 * 1000;
 }
 
 export function buildRecentFirstBackfillQueue(
