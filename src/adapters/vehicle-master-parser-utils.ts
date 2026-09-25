@@ -1,6 +1,7 @@
 import type {
   VehicleMasterParsedCondition,
   VehicleMasterParsedOption,
+  VehicleMasterParsedOptionKind,
   VehicleMasterParsedTrim,
 } from '../domain/vehicle-master-source.js';
 
@@ -54,7 +55,7 @@ export function splitOptionPrice(line: string): VehicleMasterParsedOption | null
   const name = match[1].trim();
   const price = parseKrw(match[2]);
   if (!name || price === null) return null;
-  return { name, price, sourceText: line };
+  return { name, kind: classifyParsedOptionKind(name), price, sourceText: line };
 }
 
 export function uniqueParsedTrims(records: VehicleMasterParsedTrim[]) {
@@ -125,4 +126,26 @@ export function normalizeParsedOptionCondition(
     note: raw,
     conditions,
   };
+}
+
+
+export function classifyParsedOptionKind(name: string): VehicleMasterParsedOptionKind {
+  const normalized = name.trim();
+  if (/^\d+인승$/.test(normalized)) return 'SEATS';
+  if (/^(?:전자식\s*)?(?:4WD|AWD)$/i.test(normalized)) return 'DRIVETRAIN';
+  if (/^\[악세사리\]/.test(normalized) || /^\[액세서리\]/.test(normalized)) return 'ACCESSORY';
+  if (
+    /(?:펄|메탈릭|매트|화이트|블랙|그레이|실버|레드|블루|그린|브라운|베이지)$/.test(normalized) &&
+    normalized.length <= 40
+  ) {
+    return 'COLOR';
+  }
+  return 'OPTION';
+}
+
+export function withParsedOptionKind(
+  option: VehicleMasterParsedOption,
+  kind: VehicleMasterParsedOptionKind
+): VehicleMasterParsedOption {
+  return { ...option, kind };
 }
