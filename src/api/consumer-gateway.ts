@@ -11,6 +11,7 @@ import {
   ESTIMATE_NEWCAR_MASTER_CONTRACT,
   ESTIMATE_NEWCAR_MASTER_PROJECTION_ID,
   type EstimateNewcarMasterRecord,
+  uncoveredEstimateMasterIssues,
   validateEstimateMasterSemantics
 } from '../domain/estimate-master.js';
 import { readCatalogDataHealth } from '../application/catalog-health.js';
@@ -171,11 +172,12 @@ export function createConsumerGateway(
       return reply.code(503).send({ code: 'UNSUPPORTED_OR_INCOMPLETE_RELEASE' });
     }
     const semanticIssues = validateEstimateMasterSemantics(records);
-    if (semanticIssues.length) {
+    const uncoveredIssues = uncoveredEstimateMasterIssues(records, semanticIssues);
+    if (uncoveredIssues.length) {
       return reply.code(503).send({
         code: 'ESTIMATE_MASTER_SEMANTIC_INVALID',
-        issueCount: semanticIssues.length,
-        issues: semanticIssues.slice(0, 20)
+        issueCount: uncoveredIssues.length,
+        issues: uncoveredIssues.slice(0, 20)
       });
     }
 
