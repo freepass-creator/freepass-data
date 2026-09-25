@@ -103,6 +103,8 @@ try:
 
         page.get_by_label('차량 검색', exact=True).fill('쏘렌토 프레스티지')
         expect(page.locator('tbody .vf-row-button')).to_have_count(1)
+        trim_row = page.locator('tr').filter(has=page.get_by_role('button', name='기아 › 쏘렌토 › 2027 › 프레스티지', exact=True))
+        expect(trim_row.locator('.vf-row-path')).to_have_text('쏘렌토 › 2027')
         page.get_by_role('button', name='기아 › 쏘렌토 › 2027 › 프레스티지', exact=True).click()
         expect(page.locator('.vf-configurations summary')).to_have_text('검색 조건과 일치한 구성 1개')
         assert not page.locator('.vf-configurations').evaluate('(node) => node.open')
@@ -112,6 +114,8 @@ try:
 
         page.get_by_label('차량 검색', exact=True).fill('시험차 B')
         model_b = page.get_by_role('button', name='시험제조사 › 시험차 B', exact=True)
+        expect(model_b.locator('.vf-row-path')).to_have_count(0)
+        assert model_b.bounding_box()['height'] >= 44
         model_b.click()
         expect(page.locator('.vf-detail')).to_contain_text('MODEL 수준 · 차량 구성 미확정')
         expect(page.locator('.vf-config-missing')).to_contain_text('세부 구성 미확인')
