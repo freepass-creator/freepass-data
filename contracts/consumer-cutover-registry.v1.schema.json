@@ -25,7 +25,7 @@
         "required": [
           "contractReady", "authenticationVerified", "legacyReadVerified",
           "freepassReadVerified", "parityVerified", "fallbackVerified",
-          "productionReadbackVerified", "approvedRelease"
+          "productionReadbackVerified"
         ],
         "properties": {
           "contractReady": { "type": "boolean" },
@@ -59,6 +59,26 @@
         }
       },
       "holdReasons": { "type": "array", "items": { "type": "string", "minLength": 1 } }
-    }
+    },
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "stage": { "enum": ["PARITY_VERIFIED", "FREEPASS_DATA_READ"] }
+          },
+          "required": ["stage"]
+        },
+        "then": {
+          "properties": {
+            "evidence": {
+              "required": ["approvedRelease"],
+              "properties": {
+                "approvedRelease": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    ]
   }
 }
