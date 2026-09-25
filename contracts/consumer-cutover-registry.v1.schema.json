@@ -7,148 +7,58 @@
     "type": "object",
     "additionalProperties": false,
     "required": [
-      "consumerId",
-      "project",
-      "repository",
-      "domains",
-      "stage",
-      "activeReadOwner",
-      "targetReadOwner",
-      "switchKey",
-      "evidence",
-      "holdReasons"
+      "consumerId", "project", "repository", "domains", "stage",
+      "activeReadOwner", "targetReadOwner", "switchKey", "evidence", "holdReasons"
     ],
     "properties": {
-      "consumerId": {
-        "type": "string",
-        "minLength": 1
-      },
-      "project": {
-        "type": "string",
-        "minLength": 1
-      },
-      "repository": {
-        "type": "string",
-        "minLength": 1
-      },
-      "domains": {
-        "type": "array",
-        "minItems": 1,
-        "uniqueItems": true,
-        "items": {
-          "type": "string",
-          "minLength": 1
-        }
-      },
-      "stage": {
-        "enum": [
-          "LEGACY_DIRECT",
-          "OBSERVE",
-          "SHADOW_READ",
-          "PARITY_VERIFIED",
-          "FREEPASS_DATA_READ"
-        ]
-      },
-      "activeReadOwner": {
-        "type": "string",
-        "minLength": 1
-      },
-      "targetReadOwner": {
-        "const": "freepass-data"
-      },
-      "switchKey": {
-        "type": "string",
-        "pattern": "^FREEPASS_DATA_[A-Z0-9_]+_READ_MODE$"
-      },
+      "consumerId": { "type": "string", "minLength": 1 },
+      "project": { "type": "string", "minLength": 1 },
+      "repository": { "type": "string", "minLength": 1 },
+      "domains": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+      "stage": { "enum": ["LEGACY_DIRECT", "OBSERVE", "SHADOW_READ", "PARITY_VERIFIED", "FREEPASS_DATA_READ"] },
+      "activeReadOwner": { "type": "string", "minLength": 1 },
+      "targetReadOwner": { "const": "freepass-data" },
+      "switchKey": { "type": "string", "pattern": "^FREEPASS_DATA_[A-Z0-9_]+_READ_MODE$" },
       "evidence": {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "contractReady",
-          "authenticationVerified",
-          "legacyReadVerified",
-          "freepassReadVerified",
-          "parityVerified",
-          "fallbackVerified",
-          "productionReadbackVerified",
-          "approvedRelease"
+          "contractReady", "authenticationVerified", "legacyReadVerified",
+          "freepassReadVerified", "parityVerified", "fallbackVerified",
+          "productionReadbackVerified", "approvedRelease"
         ],
         "properties": {
-          "contractReady": {
-            "type": "boolean"
-          },
-          "authenticationVerified": {
-            "type": "boolean"
-          },
-          "legacyReadVerified": {
-            "type": "boolean"
-          },
-          "freepassReadVerified": {
-            "type": "boolean"
-          },
-          "parityVerified": {
-            "type": "boolean"
-          },
-          "fallbackVerified": {
-            "type": "boolean"
-          },
-          "productionReadbackVerified": {
-            "type": "boolean"
-          },
+          "contractReady": { "type": "boolean" },
+          "authenticationVerified": { "type": "boolean" },
+          "legacyReadVerified": { "type": "boolean" },
+          "freepassReadVerified": { "type": "boolean" },
+          "parityVerified": { "type": "boolean" },
+          "fallbackVerified": { "type": "boolean" },
+          "productionReadbackVerified": { "type": "boolean" },
           "approvedRelease": {
             "anyOf": [
-              {
-                "type": "null"
-              },
+              { "type": "null" },
               {
                 "type": "object",
                 "additionalProperties": false,
                 "required": [
-                  "projectionId",
-                  "releaseId",
-                  "manifestId",
-                  "inputDigest",
-                  "dataDigest",
-                  "observedAt"
+                  "projectionId", "releaseId", "manifestId",
+                  "inputDigest", "dataDigest", "observedAt"
                 ],
                 "properties": {
-                  "projectionId": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "releaseId": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "manifestId": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "inputDigest": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "dataDigest": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "observedAt": {
-                    "type": "string",
-                    "format": "date-time"
-                  }
+                  "projectionId": { "type": "string", "minLength": 1 },
+                  "releaseId": { "type": "string", "minLength": 1 },
+                  "manifestId": { "type": "string", "minLength": 1 },
+                  "inputDigest": { "type": "string", "minLength": 1 },
+                  "dataDigest": { "type": "string", "minLength": 1 },
+                  "observedAt": { "type": "string", "format": "date-time" }
                 }
               }
             ]
           }
         }
       },
-      "holdReasons": {
-        "type": "array",
-        "items": {
-          "type": "string",
-          "minLength": 1
-        }
-      }
+      "holdReasons": { "type": "array", "items": { "type": "string", "minLength": 1 } }
     }
   }
 }
