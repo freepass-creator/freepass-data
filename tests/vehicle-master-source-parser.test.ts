@@ -57,8 +57,16 @@ describe('vehicle master source parsers', () => {
         expect.objectContaining({ name: '스타일', price: 1240000 }),
         expect.objectContaining({ name: '전자식 4WD', price: 2320000 }),
         expect.objectContaining({
-          name: '드라이브 와이즈(12.3인치 클러스터 적용 시)',
+          name: '드라이브 와이즈',
           price: 1290000,
+          note: '12.3인치 클러스터 적용 시',
+          conditions: [
+            {
+              relation: 'REQUIRES',
+              targetLabel: '12.3인치 클러스터',
+              raw: '12.3인치 클러스터 적용 시',
+            },
+          ],
         }),
       ])
     );
