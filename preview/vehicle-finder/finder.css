@@ -9,7 +9,7 @@
   --vf-hover:var(--surface-hover,var(--박스손,#EAEEF2));
   --vf-selected:var(--selected,var(--고름,#E6ECF5));
   --vf-panel-radius:var(--ui-panel-radius,var(--r,4px));
-  --vf-control-radius:var(--ui-radius,6px);
+  --vf-control-radius:var(--ui-control-radius,var(--ui-radius,6px));
   --vf-card-radius:var(--ui-card-radius,8px);
   --vf-title:var(--ui-text-title,var(--글제목,18px));
   --vf-main:var(--ui-text-main,var(--글메인,14px));
