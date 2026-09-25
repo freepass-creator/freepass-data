@@ -2,8 +2,7 @@ import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { createReadOnlyJobDataAccessRuntime } from './data-access-runtime.js';
-import { erp5ReadTransport } from '../adapters/erp5-source-capture.js';
+import { createSheetBridgeDataAccessRuntime } from './data-access-runtime.js';
 import {
   buildSheetBridgeRelease,
   prepareSheetBridgeHandoffs
@@ -55,33 +54,14 @@ if (
 
     const token = process.env.FREEPASS_ERP5_READ_ACCESS_TOKEN ?? '';
     const targets: SheetHandoffWorkbook[] = workbook === 'ALL' ? ['F01', 'F86'] : [workbook];
-    const runtime = createReadOnlyJobDataAccessRuntime({
+    const runtime = createSheetBridgeDataAccessRuntime({
       accessToken: token,
       evidenceBucket:
         process.env.FREEPASS_DATA_EVIDENCE_BUCKET ??
         process.env.EVIDENCE_BUCKET ??
         ''
     });
-    const { capture, bridge, handoffs } = await runtime.access.read({
-      context: {
-        actor: { id: 'service:freepass-data-sheet-bridge', kind: 'SERVICE' },
-        clientId: 'job:prepare-sheet-bridge',
-        purpose: 'prepare F01/F86 source handoff through FreePass Data'
-      },
-      operation: 'READ_SHEET_BRIDGE_SOURCE',
-      resource: {
-        kind: 'SOURCE',
-        name: 'freepasserp5/(default):products+policy+partner'
-      },
-      summarize: (value) => ({
-        count: value.capture.collections.products.count,
-        digest: value.bridge.release.dataDigest,
-        releaseId: value.bridge.release.releaseId,
-        manifestId: value.bridge.release.manifestId
-      })
-    }, () => prepareSheetBridgeHandoffs(
-      erp5ReadTransport(token), targets
-    ));
+    const { capture, bridge, handoffs } = await runtime.prepare(targets);
 
     const runDir = join(privateRoot, randomUUID());
     await mkdir(runDir);
