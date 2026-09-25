@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/usedcar-master-v1.schema.json",
+  "title": "FreePass Used-car Master V1",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "recordId",
+      "vehicleModelId",
+      "generationId",
+      "phaseId",
+      "modelYearId",
+      "powertrainId",
+      "variantId",
+      "trimId",
+      "maker",
+      "model",
+      "generationName",
+      "phaseName",
+      "modelYear",
+      "powertrainName",
+      "trimName",
+      "configuration",
+      "aliases",
+      "originalBasePriceHistory",
+      "lifecycleStatus",
+      "identityStatus",
+      "holdReasons",
+      "sourceEvidenceIds"
+    ],
+    "properties": {
+      "recordId": { "type": "string", "minLength": 1 },
+      "vehicleModelId": { "type": ["string", "null"] },
+      "generationId": { "type": ["string", "null"] },
+      "phaseId": { "type": ["string", "null"] },
+      "modelYearId": { "type": ["string", "null"] },
+      "powertrainId": { "type": ["string", "null"] },
+      "variantId": { "type": ["string", "null"] },
+      "trimId": { "type": ["string", "null"] },
+      "maker": { "type": "string", "minLength": 1 },
+      "model": { "type": "string", "minLength": 1 },
+      "generationName": { "type": ["string", "null"] },
+      "phaseName": { "type": ["string", "null"] },
+      "modelYear": { "type": ["integer", "null"], "minimum": 1900, "maximum": 2200 },
+      "powertrainName": { "type": ["string", "null"] },
+      "trimName": { "type": ["string", "null"] },
+      "configuration": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fuelType", "drivetrain", "seats"],
+        "properties": {
+          "fuelType": { "type": ["string", "null"] },
+          "drivetrain": { "type": ["string", "null"] },
+          "seats": { "type": ["integer", "null"], "minimum": 1 }
+        }
+      },
+      "aliases": {
+        "type": "array",
+        "uniqueItems": true,
+        "items": { "type": "string", "minLength": 1 }
+      },
+      "originalBasePriceHistory": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "priceRevisionId",
+            "amount",
+            "currency",
+            "effectiveFrom",
+            "effectiveTo",
+            "sourceDocumentIds"
+          ],
+          "properties": {
+            "priceRevisionId": { "type": "string", "minLength": 1 },
+            "amount": { "type": "integer", "minimum": 0 },
+            "currency": { "const": "KRW" },
+            "effectiveFrom": { "type": ["string", "null"], "format": "date-time" },
+            "effectiveTo": { "type": ["string", "null"], "format": "date-time" },
+            "sourceDocumentIds": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      },
+      "lifecycleStatus": {
+        "enum": ["CURRENT", "HISTORICAL", "DISCONTINUED", "HOLD"]
+      },
+      "identityStatus": {
+        "enum": ["RESOLVED", "PARTIAL", "HOLD"]
+      },
+      "holdReasons": {
+        "type": "array",
+        "uniqueItems": true,
+        "items": { "type": "string", "minLength": 1 }
+      },
+      "sourceEvidenceIds": {
+        "type": "array",
+        "uniqueItems": true,
+        "items": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
