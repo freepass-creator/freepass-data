@@ -114,17 +114,6 @@
 .vf .vf-row-title{font:inherit}
 .vf .vf-row-path{font-weight:450}
 .vf tr[data-selected='true']{background:var(--vf-selected)}
-.vf tr[data-selected='true'] .vf-row-button{font-weight:760}
-.vf .vf-row-state{
-  display:inline-flex;
-  align-items:center;
-  min-height:22px;
-  margin-top:2px;
-  font-size:var(--vf-support);
-  font-weight:700;
-  color:var(--vf-brand);
-}
-.vf .vf-row-state::before{content:'✓';margin-right:4px}
 .vf .vf-detail{padding-left:24px;border-left:1px solid var(--vf-line);min-width:0}
 .vf .vf-detail h2{margin:0 0 4px;overflow-wrap:anywhere}
 .vf .vf-path{margin-bottom:4px}
