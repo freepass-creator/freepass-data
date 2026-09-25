@@ -5,83 +5,302 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "contractVersion", "consumerId", "workbook", "generatedAt", "releaseAuthority",
-    "approvedRelease", "snapshot", "handoffHash"
+    "contractVersion",
+    "consumerId",
+    "workbook",
+    "generatedAt",
+    "releaseAuthority",
+    "approvedRelease",
+    "manifest",
+    "snapshot",
+    "handoffHash"
   ],
   "properties": {
-    "contractVersion": { "const": "freepass-sheet-handoff-v1" },
-    "consumerId": { "enum": ["google-sheets-f01", "google-sheets-f86"] },
-    "workbook": { "enum": ["F01", "F86"] },
-    "generatedAt": { "type": "string", "format": "date-time" },
-    "releaseAuthority": { "enum": ["LEGACY_VERIFIED_BRIDGE", "CANONICAL_ACTIVE"] },
+    "contractVersion": {
+      "const": "freepass-sheet-handoff-v1"
+    },
+    "consumerId": {
+      "enum": [
+        "google-sheets-f01",
+        "google-sheets-f86"
+      ]
+    },
+    "workbook": {
+      "enum": [
+        "F01",
+        "F86"
+      ]
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "releaseAuthority": {
+      "enum": [
+        "LEGACY_VERIFIED_BRIDGE",
+        "CANONICAL_ACTIVE"
+      ]
+    },
     "approvedRelease": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "projectionId", "releaseId", "manifestId",
-        "inputDigest", "dataDigest", "observedAt"
+        "projectionId",
+        "releaseId",
+        "manifestId",
+        "inputDigest",
+        "dataDigest",
+        "observedAt"
       ],
       "properties": {
-        "projectionId": { "type": "string", "minLength": 1 },
-        "releaseId": { "type": "string", "minLength": 1 },
-        "manifestId": { "type": "string", "minLength": 1 },
-        "inputDigest": { "type": "string", "minLength": 1 },
-        "dataDigest": { "type": "string", "minLength": 1 },
-        "observedAt": { "type": "string", "format": "date-time" }
+        "projectionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "releaseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputDigest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataDigest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
       }
     },
     "snapshot": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "version", "snapshotId", "capturedAt",
-        "products", "policies", "partners", "inventory"
+        "version",
+        "snapshotId",
+        "capturedAt",
+        "products",
+        "policies",
+        "partners",
+        "inventory"
       ],
       "properties": {
-        "version": { "const": 1 },
-        "snapshotId": { "type": "string", "minLength": 1 },
-        "capturedAt": { "type": "string", "format": "date-time" },
-        "products": { "type": "array", "items": { "type": "object" } },
-        "policies": { "type": "array", "items": { "type": "object" } },
-        "partners": { "type": "array", "items": { "type": "object" } },
+        "version": {
+          "const": 1
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capturedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "products": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "policies": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "partners": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
         "inventory": {
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "registered", "unavailable", "open",
-            "listableDrift", "statusKindDrift", "sourceIdentityViolations",
-            "deletedMarkerViolations", "blankPlateViolations",
-            "invalidPlateViolations", "duplicatePlateViolations", "byStatus"
+            "registered",
+            "unavailable",
+            "open",
+            "listableDrift",
+            "statusKindDrift",
+            "sourceIdentityViolations",
+            "deletedMarkerViolations",
+            "blankPlateViolations",
+            "invalidPlateViolations",
+            "duplicatePlateViolations",
+            "byStatus"
           ],
           "properties": {
-            "registered": { "type": "integer", "minimum": 0 },
-            "unavailable": { "type": "integer", "minimum": 0 },
-            "open": { "type": "integer", "minimum": 0 },
-            "listableDrift": { "type": "integer", "minimum": 0 },
-            "statusKindDrift": { "type": "integer", "minimum": 0 },
-            "sourceIdentityViolations": { "type": "integer", "minimum": 0 },
-            "deletedMarkerViolations": { "type": "integer", "minimum": 0 },
-            "blankPlateViolations": { "type": "integer", "minimum": 0 },
-            "invalidPlateViolations": { "type": "integer", "minimum": 0 },
-            "duplicatePlateViolations": { "type": "integer", "minimum": 0 },
+            "registered": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unavailable": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "open": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "listableDrift": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "statusKindDrift": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sourceIdentityViolations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deletedMarkerViolations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "blankPlateViolations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "invalidPlateViolations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "duplicatePlateViolations": {
+              "type": "integer",
+              "minimum": 0
+            },
             "byStatus": {
               "type": "object",
-              "additionalProperties": { "type": "integer", "minimum": 0 }
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0
+              }
             }
           }
         }
       }
     },
-    "handoffHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    "handoffHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "manifestId",
+        "releaseId",
+        "projectionId",
+        "releaseAuthority",
+        "sourceCaptureDigest",
+        "sourceReadTime",
+        "productCount",
+        "policyCount",
+        "partnerCount",
+        "dataDigest",
+        "generatedAt"
+      ],
+      "properties": {
+        "contractVersion": {
+          "const": "freepass-sheet-manifest-v1"
+        },
+        "manifestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "releaseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "projectionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "releaseAuthority": {
+          "enum": [
+            "LEGACY_VERIFIED_BRIDGE",
+            "CANONICAL_ACTIVE"
+          ]
+        },
+        "sourceCaptureDigest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceReadTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "productCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "policyCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "partnerCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dataDigest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
   },
   "allOf": [
     {
-      "if": { "properties": { "workbook": { "const": "F01" } }, "required": ["workbook"] },
-      "then": { "properties": { "consumerId": { "const": "google-sheets-f01" } } }
+      "if": {
+        "properties": {
+          "workbook": {
+            "const": "F01"
+          }
+        },
+        "required": [
+          "workbook"
+        ]
+      },
+      "then": {
+        "properties": {
+          "consumerId": {
+            "const": "google-sheets-f01"
+          }
+        }
+      }
     },
     {
-      "if": { "properties": { "workbook": { "const": "F86" } }, "required": ["workbook"] },
-      "then": { "properties": { "consumerId": { "const": "google-sheets-f86" } } }
+      "if": {
+        "properties": {
+          "workbook": {
+            "const": "F86"
+          }
+        },
+        "required": [
+          "workbook"
+        ]
+      },
+      "then": {
+        "properties": {
+          "consumerId": {
+            "const": "google-sheets-f86"
+          }
+        }
+      }
     }
   ]
 }
