@@ -5,7 +5,7 @@ export const ERP5_DOCUMENTS = 'projects/freepasserp5/databases/(default)/documen
 const collections = ['products', 'policy'] as const;
 type Collection = typeof collections[number];
 type ObjectValue = Record<string, unknown>;
-type Rpc = (method: 'beginTransaction' | 'runQuery' | 'runAggregationQuery' | 'rollback', body: ObjectValue) => Promise<unknown>;
+export type Erp5ReadRpc = (method: 'beginTransaction' | 'runQuery' | 'runAggregationQuery' | 'rollback', body: ObjectValue) => Promise<unknown>;
 const object = (x: unknown): x is ObjectValue => !!x && typeof x === 'object' && !Array.isArray(x);
 function fail(code: string): never { throw new Error(code); }
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -19,7 +19,7 @@ export type Erp5SourceCapture = {
 };
 
 /** Only the four allowlisted RPCs exist. No fallback, custom host, document writes or runtime bootstrap. */
-export function erp5ReadTransport(accessToken: string, fetcher: typeof fetch = fetch): Rpc {
+export function erp5ReadTransport(accessToken: string, fetcher: typeof fetch = fetch): Erp5ReadRpc {
   if (!accessToken.trim()) fail('MISSING_READ_ACCESS_TOKEN');
   return async (method, body) => {
     if (!['beginTransaction', 'runQuery', 'runAggregationQuery', 'rollback'].includes(method)) fail('FORBIDDEN_RPC');
@@ -33,7 +33,7 @@ export function erp5ReadTransport(accessToken: string, fetcher: typeof fetch = f
 }
 
 /** Complete collections and independent COUNT(*) in the same read-only transaction. */
-export async function captureErp5Source(rpc: Rpc): Promise<Erp5SourceCapture> {
+export async function captureErp5Source(rpc: Erp5ReadRpc): Promise<Erp5SourceCapture> {
   const started = await rpc('beginTransaction', { options: { readOnly: {} } });
   if (!object(started) || typeof started.transaction !== 'string' || !started.transaction) fail('MISSING_READ_TRANSACTION');
   const transaction = started.transaction;
