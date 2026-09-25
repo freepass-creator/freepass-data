@@ -118,7 +118,6 @@ export const VEHICLE_SELECTOR_UX_PRESETS: Record<
       'maker',
       'model',
       'powertrain',
-      'fuelType',
       'drivetrain',
       'seats',
       'trim',
