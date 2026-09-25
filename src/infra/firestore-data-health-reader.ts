@@ -7,16 +7,11 @@ import type {
   Offer,
   Policy,
   Product,
-  ProjectionRelease,
-  ErpPublicProduct,
   VehicleAsset,
   VehicleModel
 } from '../domain/catalog.js';
 import type { EntityRevisionRecord } from '../domain/history.js';
-import type {
-  ProjectionFieldLineageRecord,
-  ProjectionReleaseManifest
-} from '../domain/projection-evidence.js';
+import type { ProjectionFieldLineageRecord } from '../domain/projection-evidence.js';
 import type {
   CatalogStore,
   ProjectionEvidenceSnapshotStore,
@@ -58,11 +53,16 @@ export function dataHealthReader(db: Firestore): CatalogDataHealthReadStore {
   };
 
   return {
-    listVehicleModels: () => all<VehicleModel>(FIRESTORE_COLLECTIONS.catalog.vehicleModels, 'id'),
-    listVehicleAssets: () => all<VehicleAsset>(FIRESTORE_COLLECTIONS.catalog.vehicleAssets, 'id'),
-    listProducts: () => all<Product>(FIRESTORE_COLLECTIONS.catalog.products, 'id'),
-    listOffers: () => all<Offer>(FIRESTORE_COLLECTIONS.catalog.offers, 'id'),
-    listPolicies: () => all<Policy>(FIRESTORE_COLLECTIONS.catalog.policies, 'id'),
+    listVehicleModels: () =>
+      all<VehicleModel>(FIRESTORE_COLLECTIONS.catalog.vehicleModels, 'id'),
+    listVehicleAssets: () =>
+      all<VehicleAsset>(FIRESTORE_COLLECTIONS.catalog.vehicleAssets, 'id'),
+    listProducts: () =>
+      all<Product>(FIRESTORE_COLLECTIONS.catalog.products, 'id'),
+    listOffers: () =>
+      all<Offer>(FIRESTORE_COLLECTIONS.catalog.offers, 'id'),
+    listPolicies: () =>
+      all<Policy>(FIRESTORE_COLLECTIONS.catalog.policies, 'id'),
     async listRevisionHistory() {
       const records = await all<EntityRevisionRecord>(
         FIRESTORE_COLLECTIONS.catalog.revisions,
@@ -87,51 +87,8 @@ export function dataHealthReader(db: Firestore): CatalogDataHealthReadStore {
         (doc) => doc.data() as ProjectionFieldLineageRecord
       );
     },
-    async getActiveEvidenceSnapshot(projectionId) {
-      return readFirestoreActiveProjectionEvidence(db, projectionId);
-    }
-  };
-        }
-
-        const releaseId: unknown = activeSnap.get('releaseId');
-        if (
-          typeof releaseId !== 'string' ||
-          !/^rel_[a-zA-Z0-9-]+$/.test(releaseId)
-        ) {
-          throw new Error('Invalid release pointer');
-        }
-
-        const releaseRef = db.collection(FIRESTORE_COLLECTIONS.projection.releases).doc(releaseId);
-        const manifestRef = db.collection(FIRESTORE_COLLECTIONS.projection.manifests).doc(releaseId);
-        const evidenceQuery = db.collection(FIRESTORE_COLLECTIONS.projection.lineage)
-          .where('releaseId', '==', releaseId);
-
-        const releaseSnap = await tx.get(releaseRef);
-        const manifestSnap = await tx.get(manifestRef);
-        const evidenceSnap = await tx.get(evidenceQuery);
-
-        const release = releaseSnap.exists
-          ? releaseSnap.data() as ProjectionRelease<ErpPublicProduct>
-          : null;
-        if (release && release.releaseId !== releaseId) {
-          throw new Error('Release pointer identity mismatch');
-        }
-
-        const manifest = manifestSnap.exists
-          ? manifestSnap.data() as ProjectionReleaseManifest
-          : null;
-
-        return {
-          projectionId,
-          release,
-          manifest,
-          lineage: evidenceSnap.docs.map(
-            (doc) => doc.data() as ProjectionFieldLineageRecord
-          ),
-          consistency: 'ATOMIC' as const
-        };
-      });
-    }
+    getActiveEvidenceSnapshot: (projectionId) =>
+      readFirestoreActiveProjectionEvidence(db, projectionId)
   };
 }
 
