@@ -67,6 +67,7 @@ describe('usedcar master', () => {
       },
       trimId: 'trim_signature',
       trimName: '시그니처',
+      aliases: ['MQ4', '쏘렌토 가솔린'],
     });
 
     expect(searchUsedcarMaster([hybrid, gasoline], {
