@@ -80,6 +80,29 @@ describe('vehicle master source parsers', () => {
     );
   });
 
+  it('parses Kia model year when only Korean 년형 text is present', () => {
+    const parser = new KiaOfficialPriceParser();
+    const html = `
+      <html><body>
+        <div>기아 쏘렌토 가격 - 시대의 Mainstream</div>
+        <div>2027년형</div>
+        <div>2026년 9월 1일 기준 (단위 : 원)</div>
+        <button>2.5 가솔린 터보</button>
+        <h3>프레스티지</h3>
+        <div>36,410,000</div>
+      </body></html>
+    `;
+
+    const result = parser.parse({
+      sourceDocumentId: 'srcdoc_kia_korean_model_year',
+      sourceUrl: 'https://www.kia.com/kr/vehicles/sorento/price',
+      contentType: 'text/html; charset=utf-8',
+      bytes: Buffer.from(html, 'utf8'),
+    });
+
+    expect(result.records[0]?.modelYear).toBe(2027);
+  });
+
   it('parses Carnoon model-year, seat, drive, trim and options', () => {
     const parser = new CarnoonVehicleParser();
     const html = `
