@@ -5,10 +5,11 @@
 Every Codex/Work/development AI working in this repository must start in this order:
 
 1. `AGENTS.md`
-2. `docs/NEXT-START-HERE.md`
-3. `docs/IMPLEMENTATION-STATUS.md`
-4. `docs/ARCHITECTURE-V2-APPROVED.md`
-5. GitHub Issue #24 and the active PR/branch for the work
+2. `docs/DEVELOPMENT-LINEAGE.md`
+3. `docs/NEXT-START-HERE.md`
+4. `docs/IMPLEMENTATION-STATUS.md`
+5. `docs/ARCHITECTURE-V2-APPROVED.md`
+6. GitHub Issue #24 and the active PR/branch for the work
 
 `docs/NEXT-START-HERE.md` is the current Chat → Work handoff board. Do not assume chat context is available locally.
 
@@ -59,6 +60,7 @@ Do not call a consumer cutover complete from code/test parity alone.
 
 - fetch/verify current main revision
 - inspect overlapping branches/PRs
+- obey `docs/DEVELOPMENT-LINEAGE.md`; do not create a second implementation line for an owned responsibility
 - use the smallest isolated change
 - preserve last-known-good ACTIVE release behavior
 - prefer fail-closed over silent fallback
