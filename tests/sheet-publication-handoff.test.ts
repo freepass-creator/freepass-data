@@ -75,6 +75,17 @@ describe('sheet publication handoff', () => {
     });
   });
 
+  it('does not let the migration bridge claim CANONICAL_ACTIVE authority', () => {
+    const value = valid();
+    value.releaseAuthority = 'CANONICAL_ACTIVE';
+    value.manifest.releaseAuthority = 'CANONICAL_ACTIVE';
+    value.handoffHash = hashSheetPublicationHandoff(
+      (({ handoffHash: _hash, ...rest }) => rest)(value)
+    );
+    expect(validateSheetPublicationHandoff(value).violations)
+      .toContain('RELEASE_AUTHORITY_PROJECTION_MISMATCH');
+  });
+
   it('fails closed on crossed F01/F86 identity', () => {
     const value = valid();
     value.consumerId = 'google-sheets-f86';
