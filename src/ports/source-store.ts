@@ -9,7 +9,14 @@ import type {
 } from '../domain/source.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 
-export interface SourceStore {
+/**
+ * Source-run ingestion lifecycle only.
+ *
+ * This is not a second Canonical repository. Canonical mutations remain behind
+ * CatalogStore/CatalogTransaction; both paths share the same physical source
+ * evidence layout in infra.
+ */
+export interface SourceIngestionStore {
   upsertSource(source: SourceDefinition): Promise<void>;
   getSource(sourceId: string): Promise<SourceDefinition | null>;
 
