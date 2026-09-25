@@ -160,6 +160,28 @@ try:
         page.get_by_role('button', name='필터 초기화').click()
         expect(page.get_by_role('button', name='필터', exact=True)).to_be_visible()
         expect(page.get_by_role('button', name='필터 초기화', exact=True)).to_be_hidden()
+
+        page.set_viewport_size({'width': 390, 'height': 844})
+        filter_button = page.get_by_role('button', name='필터', exact=True)
+        filter_button.click()
+        expect(page.get_by_role('button', name='필터 닫기', exact=True)).to_be_visible()
+        filter_sheet = page.locator('.vf-filters')
+        sheet_box = filter_sheet.bounding_box()
+        assert sheet_box['y'] + sheet_box['height'] >= 840
+        expect(page.get_by_role('combobox', name='연식', exact=True)).to_be_visible()
+        expect(page.get_by_role('combobox', name='연료', exact=True)).to_be_visible()
+        expect(page.get_by_role('combobox', name='트림', exact=True)).to_be_visible()
+        expect(page.get_by_role('combobox', name='인승', exact=True)).to_be_hidden()
+        expect(page.get_by_role('combobox', name='구동', exact=True)).to_be_hidden()
+        page.get_by_role('button', name='추가 조건', exact=True).click()
+        expect(page.get_by_role('combobox', name='인승', exact=True)).to_be_visible()
+        expect(page.get_by_role('combobox', name='구동', exact=True)).to_be_visible()
+        page.get_by_role('button', name='필터 닫기', exact=True).click()
+        expect(filter_sheet).to_be_hidden()
+        expect(filter_button).to_be_focused()
+        passed('mobile filter sheet keeps three primary filters and progressively reveals advanced conditions')
+        page.set_viewport_size({'width': 1440, 'height': 1000})
+
         page.get_by_label('차량 검색', exact=True).fill('')
         page.evaluate('''() => {
           const input = document.querySelector('input[type=search]');
