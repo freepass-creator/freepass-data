@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/put-issued-quote-command-v1.schema.json",
+  "title": "Put Issued Quote Command v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "command",
+    "contract",
+    "idempotencyKey",
+    "quote"
+  ],
+  "properties": {
+    "command": {
+      "const": "PUT_ISSUED_QUOTE"
+    },
+    "contract": {
+      "const": "freepass-quote-repository/v1"
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "quote": {
+      "$ref": "https://freepass.teamjpk.com/contracts/freepass-quote-v2.schema.json"
+    }
+  }
+}
