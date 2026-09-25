@@ -5,6 +5,15 @@ export type ConsumerCutoverStage =
   | 'PARITY_VERIFIED'
   | 'FREEPASS_DATA_READ';
 
+export type ApprovedReleaseEvidence = {
+  projectionId: string;
+  releaseId: string;
+  manifestId: string;
+  inputDigest: string;
+  dataDigest: string;
+  observedAt: string;
+};
+
 export type ConsumerCutoverEvidence = {
   contractReady: boolean;
   authenticationVerified: boolean;
@@ -13,6 +22,7 @@ export type ConsumerCutoverEvidence = {
   parityVerified: boolean;
   fallbackVerified: boolean;
   productionReadbackVerified: boolean;
+  approvedRelease: ApprovedReleaseEvidence | null;
 };
 
 export type ConsumerSwitchRegistration = {
@@ -60,7 +70,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       freepassReadVerified: false,
       parityVerified: false,
       fallbackVerified: false,
-      productionReadbackVerified: false
+      productionReadbackVerified: false,
+      approvedRelease: null
     },
     holdReasons: [
       'FreePass Data consumer runtime is not deployed',
@@ -84,7 +95,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       freepassReadVerified: false,
       parityVerified: false,
       fallbackVerified: false,
-      productionReadbackVerified: false
+      productionReadbackVerified: false,
+      approvedRelease: null
     },
     holdReasons: [
       'each registered white-label needs an individual identity and read receipt',
@@ -107,7 +119,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       freepassReadVerified: false,
       parityVerified: false,
       fallbackVerified: false,
-      productionReadbackVerified: false
+      productionReadbackVerified: false,
+      approvedRelease: null
     },
     holdReasons: [
       'Admin projection PR is not integrated',
@@ -130,7 +143,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       freepassReadVerified: false,
       parityVerified: false,
       fallbackVerified: false,
-      productionReadbackVerified: false
+      productionReadbackVerified: false,
+      approvedRelease: null
     },
     holdReasons: [
       'catalog consumer adapter is not implemented',
@@ -153,7 +167,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       freepassReadVerified: false,
       parityVerified: false,
       fallbackVerified: false,
-      productionReadbackVerified: false
+      productionReadbackVerified: false,
+      approvedRelease: null
     },
     holdReasons: [
       'catalog input contract is not implemented',
@@ -176,7 +191,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       freepassReadVerified: false,
       parityVerified: false,
       fallbackVerified: false,
-      productionReadbackVerified: false
+      productionReadbackVerified: false,
+      approvedRelease: null
     },
     holdReasons: [
       'dedicated kakao-ops token is not provisioned',
@@ -200,7 +216,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       freepassReadVerified: false,
       parityVerified: false,
       fallbackVerified: true,
-      productionReadbackVerified: false
+      productionReadbackVerified: false,
+      approvedRelease: null
     },
     holdReasons: ['publisher does not consume an approved FreePass Data release']
   },
@@ -220,7 +237,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       freepassReadVerified: false,
       parityVerified: false,
       fallbackVerified: true,
-      productionReadbackVerified: false
+      productionReadbackVerified: false,
+      approvedRelease: null
     },
     holdReasons: ['publisher does not consume an approved FreePass Data release']
   }
@@ -269,6 +287,28 @@ export function evaluateConsumerCutover(
 
   for (const key of requiredEvidence(target)) {
     if (!registration.evidence[key]) blockers.push(`missing evidence: ${key}`);
+  }
+
+  if (targetIndex >= ORDER.indexOf('PARITY_VERIFIED')) {
+    const release = registration.evidence.approvedRelease;
+    if (!release) {
+      blockers.push('missing evidence: approvedRelease');
+    } else {
+      const requiredReleaseFields: (keyof ApprovedReleaseEvidence)[] = [
+        'projectionId',
+        'releaseId',
+        'manifestId',
+        'inputDigest',
+        'dataDigest',
+        'observedAt'
+      ];
+      for (const key of requiredReleaseFields) {
+        if (!release[key]?.trim()) blockers.push(`invalid approvedRelease: ${key}`);
+      }
+      if (release.observedAt && Number.isNaN(Date.parse(release.observedAt))) {
+        blockers.push('invalid approvedRelease: observedAt');
+      }
+    }
   }
 
   if (targetIndex >= ORDER.indexOf('PARITY_VERIFIED') && registration.holdReasons.length > 0) {
