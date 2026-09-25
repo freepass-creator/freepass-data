@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { ERP5_DOCUMENTS, type Erp5ReadRpc } from './erp5-source-capture.js';
+import { ERP5_DOCUMENTS, type Erp5ReadRpc } from '../adapters/erp5-source-capture.js';
 import {
   hashSheetPublicationHandoff,
   type SheetInventorySummary,
