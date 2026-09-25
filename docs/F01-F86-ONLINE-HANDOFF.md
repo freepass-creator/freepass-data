@@ -11,3 +11,42 @@ ERP 엔진 구현: `freepass-creator/freepasserp4` PR #461, `6d9375a0d7fcf8e00d4
 검증: data 검사20+기존58, ERP typecheck/check:sync/source registry, publisher-to-planner parity, pin의 source contract/schedules PASS. Cursor 검토에서 F01 필터의 명시적 끝행과 정규화 키 중복 사전 차단을 보완했다. Claude weekly limit/Gemini 계정403은 UNAVAILABLE이다. 사용자 지정 고위험 보조AI2개 조건에 대한 이번 실행 예외 허용을 질문했으며, 응답 전 운영 전환은 하지 않는다.
 
 PR454는 이전 축약 이름/180·320px 규격이므로 최신 정본과 충돌한다. 병합하지 않는다. 검증 전용 `codex/f01-f86-online-readonly-20260921`의 workflow 파일은 단발 GET용으로 운영 main에 병합하지 않는다.
+
+
+## 2026-09-25 FreePass Data bridge evidence
+
+Current architecture direction supersedes the old ownership assumption above:
+
+- FreePass Data is the SSOT/data-authority owner.
+- FreePassERP.com, F01 and F86 are consumers/transports.
+- The production writer is **not switched yet**. Existing production remains the last-known-good path until shadow/readback evidence is complete.
+
+Implementation under review:
+
+- FreePass Data PR #48: release binding, Data-owned sheet bridge, manifest/handoff and delivery receipt contracts.
+- FreePassERP.com PR #495: consumer adapter that verifies a Data handoff and reuses the existing writer input shape without owning pricing/deposit meaning.
+
+Read-only evidence from successful production publication run `36096321596` / snapshot artifact:
+
+- products: **1,659**
+- policy: **81**
+- partner: **64**
+- inventory: registered **1,659**, unavailable **967**, open **692**
+- listable/status-kind/source identity/delete/blank plate/invalid plate/duplicate plate drift: **0**
+- Data bridge inventory calculation matches all common production inventory counters.
+- products carrying the Sonokong deposit-rule text: **726**
+- recomputed `depositRuleViolations`: **0**, matching the production artifact.
+- the captured JSON shape showed no DocumentReference/GeoPoint/bytes-like objects. The only special SDK object shape observed was Firestore Timestamp serialization on product metadata:
+  - `policy_reference_checked_at`: 887
+  - `updated_at`: 143
+- the pinned F01/F86 writer source does not reference either timestamp metadata field, so the Data REST bridge's ISO-string representation is treated as a metadata representation difference, not a rendered-output semantic difference.
+
+Current HOLD:
+
+1. run the Data read-only bridge preparation against live Firestore and retain the private evidence,
+2. consume that exact handoff through ERP4 shadow mode,
+3. prove F01/F86 rendered-output parity,
+4. produce valid release-bound delivery/readback receipts,
+5. only then consider switching the production writer input source.
+
+Do not interpret `LEGACY_VERIFIED_BRIDGE` as `CANONICAL_ACTIVE`.
