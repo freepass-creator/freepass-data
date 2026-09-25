@@ -141,12 +141,25 @@ Coverage status:
 Recent model year remains the primary sort key. Within the same year, weaker
 coverage runs first.
 
-Already captured backfill URLs are derived from Firestore SourceDocument metadata,
-so a resumed campaign does not depend on the operator carrying a local completed
-URL list.
+Resume is evidence-aware rather than permanently URL-based.
 
-Each run writes an immutable AUDIT_REPORT with before/after coverage digests and
-coverage-status counts.
+A page is considered complete only when the persisted normalized evidence was
+produced by the **current parser ID + parser version**.
+
+- Parser version changed -> eligible for reprocessing.
+- Current or unknown-status page -> eligible for re-capture after
+  `VEHICLE_MASTER_BACKFILL_CURRENT_TTL_HOURS` (default 24h), so a new model year
+  added to the same URL can be discovered.
+- Historical/discontinued page -> same parser version may remain complete without TTL.
+- Source-only `CAPTURED_HOLD` -> remains retryable.
+- `VEHICLE_MASTER_BACKFILL_COMPLETED_URLS_JSON` is an explicit operator override
+  and should not be used for normal resume.
+
+Therefore a resumed campaign does not depend on the operator carrying a local
+completed-URL ledger.
+
+Each run writes an immutable AUDIT_REPORT with before/after coverage digests,
+coverage-status counts, recapture TTL, and automatic/manual skip counts.
 
 ## Inventory shards
 
