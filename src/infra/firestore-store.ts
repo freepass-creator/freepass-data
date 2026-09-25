@@ -1,7 +1,7 @@
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type {
-  AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
+  AuditEvent, CommandReceipt, Offer, OutboxEvent, Policy,
   Product, ProjectionProduct, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
@@ -353,7 +353,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async listOffers() { return this.all<Offer>(C.offers); }
   async listPolicies() { return this.all<Policy>(C.policies); }
 
-  async stage<T extends ProjectionProduct>(release: ProjectionRelease<T>) {
+  async stage(release: ProjectionRelease<ProjectionProduct>) {
     await this.db.collection(C.releases).doc(release.releaseId).create(release);
   }
   async stageEvidence(input: {
@@ -464,18 +464,16 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       tx.set(activeRef, { releaseId, projectionId });
     });
   }
-  async getActive<T extends ProjectionProduct = ErpPublicProduct>(
-    projectionId: string
-  ): Promise<ProjectionRelease<T> | null> {
+  async getActive(projectionId: string): Promise<ProjectionRelease<ProjectionProduct> | null> {
     const active = await this.db.collection(C.activeReleases).doc(projectionId).get();
     if (!active.exists) return null;
-    return data<ProjectionRelease<T>>(
+    return data<ProjectionRelease<ProjectionProduct>>(
       await this.db.collection(C.releases).doc(active.get('releaseId') as string).get()
     );
   }
-  async getActiveEvidenceSnapshot<T extends ProjectionProduct = ErpPublicProduct>(
+  async getActiveEvidenceSnapshot(
     projectionId: string
-  ): Promise<ActiveProjectionEvidenceSnapshot<T>> {
+  ): Promise<ActiveProjectionEvidenceSnapshot<ProjectionProduct>> {
     const activeRef = this.db.collection(C.activeReleases).doc(projectionId);
 
     return this.db.runTransaction(async (tx) => {
@@ -502,7 +500,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
 
       return {
         projectionId,
-        release: data<ProjectionRelease<T>>(releaseSnap),
+        release: data<ProjectionRelease<ProjectionProduct>>(releaseSnap),
         manifest: data<ProjectionReleaseManifest>(manifestSnap),
         lineage: evidenceSnap.docs.map(
           (doc) => doc.data() as ProjectionFieldLineageRecord

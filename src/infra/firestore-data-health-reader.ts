@@ -5,7 +5,6 @@ import type {
   Offer,
   Policy,
   Product,
-  ErpPublicProduct,
   ProjectionProduct,
   ProjectionRelease,
   VehicleAsset,
@@ -86,9 +85,7 @@ export function dataHealthReader(db: Firestore): CatalogDataHealthReadStore {
         (doc) => doc.data() as ProjectionFieldLineageRecord
       );
     },
-    async getActiveEvidenceSnapshot<T extends ProjectionProduct = ErpPublicProduct>(
-      projectionId: string
-    ) {
+    async getActiveEvidenceSnapshot(projectionId: string) {
       const activeRef = db.collection('projection_active').doc(projectionId);
       return db.runTransaction(async (tx) => {
         const activeSnap = await tx.get(activeRef);
@@ -120,7 +117,7 @@ export function dataHealthReader(db: Firestore): CatalogDataHealthReadStore {
         const evidenceSnap = await tx.get(evidenceQuery);
 
         const release = releaseSnap.exists
-          ? releaseSnap.data() as ProjectionRelease<T>
+          ? releaseSnap.data() as ProjectionRelease<ProjectionProduct>
           : null;
         if (release && release.releaseId !== releaseId) {
           throw new Error('Release pointer identity mismatch');

@@ -114,7 +114,7 @@ export function createConsumerGateway(
     if (!binding.capabilities.includes('catalog')) {
       return reply.code(403).send({ code: 'FORBIDDEN' });
     }
-    const release = await store.getActive<ProjectionProduct>(binding.projectionId);
+    const release = await store.getActive(binding.projectionId);
     if (!release) return reply.code(503).send({ code: 'NO_ACTIVE_RELEASE' });
     const manifest = await store.getManifest(release.releaseId);
     if (release.status !== 'ACTIVE' || release.projectionId !== binding.projectionId ||

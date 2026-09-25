@@ -50,9 +50,10 @@ describe('Firestore projection read boundary', () => {
       },
     });
     const reader = projectionReader(fixture.db);
-    const release = await reader.getActive<AdminCatalogProduct>('admin-catalog');
+    const release = await reader.getActive('admin-catalog');
+    const admin = release?.data[0] as AdminCatalogProduct | undefined;
     expect(release?.projectionId).toBe('admin-catalog');
-    expect(release?.data[0]?.vehicleModel.model).toBe('그랜저');
+    expect(admin?.vehicleModel.model).toBe('그랜저');
     expect(fixture.reads).toEqual([
       'projection_active/admin-catalog',
       'projection_releases/rel_admin_test',

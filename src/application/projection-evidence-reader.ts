@@ -29,12 +29,11 @@ export async function readActiveProjectionEvidence<T extends ProjectionProduct =
   projectionId: string
 ): Promise<ActiveProjectionEvidenceObservation<T>> {
   if (typeof projections.getActiveEvidenceSnapshot === 'function') {
-    const snapshot: ActiveProjectionEvidenceSnapshot<T> =
-      await projections.getActiveEvidenceSnapshot<T>(projectionId);
-    return snapshot;
+    const snapshot = await projections.getActiveEvidenceSnapshot(projectionId);
+    return snapshot as ActiveProjectionEvidenceSnapshot<T>;
   }
 
-  const release = await projections.getActive<T>(projectionId);
+  const release = await projections.getActive(projectionId) as ProjectionRelease<T> | null;
   if (!release) {
     return {
       projectionId,
