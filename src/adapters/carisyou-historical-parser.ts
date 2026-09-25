@@ -84,7 +84,10 @@ function parseGrade(line: string) {
 
 function nextPrice(lines: string[], start: number) {
   for (let index = start + 1; index < Math.min(lines.length, start + 9); index += 1) {
-    const amount = parseManwon(lines[index] ?? '');
+    const line = lines[index] ?? '';
+    if (parseGrade(line)) return null;
+    if (/중고|시세/.test(line)) continue;
+    const amount = parseManwon(line);
     if (amount !== null) return { amount, index };
   }
   return null;
