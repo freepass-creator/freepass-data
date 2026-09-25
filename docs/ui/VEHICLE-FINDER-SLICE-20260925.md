@@ -1,104 +1,175 @@
-# Vehicle Finder — first isolated UI slice
+# Vehicle Finder — hierarchy-aware read/inspect slice
 
-Date: 2026-09-25
-State: CODED / FOCUSED TESTED. Not API-connected, deployed, persistence-verified, or cutover-verified.
-Base: `main@09bc905a619b2d39faa649446c51a79c974b05c9`.
-Owner scope: FreePass Data UI/UX; shared canonical data remains behind authorized read contracts.
+Date: 2026-09-25  
+State: CODED / REVIEW-REVISED. Not API-connected, deployed, persistence-verified, or cutover-verified.  
+Base: `main@09bc905a619b2d39faa649446c51a79c974b05c9`.  
+Vehicle Master alignment source: PR #50 `src/domain/vehicle-master.ts`.  
+Adversarial review source: Claude branch `3321e06`, `docs/reviews/ADVERSARIAL-REVIEW-VEHICLE-FINDER-20260925.md`.
 
 ## Decision carried forward
 
 Find freely; preserve uncertainty; modify only with evidence; claim completion only where observed.
-This slice implements search -> inspect -> explicit partial reference selection. It does NOT complete
-the full search -> edit -> server validation -> persistence/history vertical slice.
 
-## Implemented
+This slice is still read-only:
+`search -> inspect evidence-backed facts -> explicitly select a partial master reference`.
 
-- One search input; manufacturer/year/trim are never prerequisites.
-- Entry label/approved aliases and evidence-backed configuration terms support free token order.
-- Optional year/fuel/seats filters; unknown facts are not filled from the clock or UI defaults.
-- All query tokens AND facet conditions must hold in a single configuration. Sibling facts cannot
-  fabricate, for example, a hybrid seven-seat match when only hybrid-five/diesel-seven are supplied.
-- Model references with no configuration evidence remain browseable and partially selectable.
-- `PARTIAL_REFERENCE` carries the actual node ID/type and observation ID. Search context remains
-  separate. It is never a completed vehicle configuration or a quote-ready Trim selection.
-- Lookup disconnected / loading / failed / successful empty / partial coverage remain distinct.
-- Out-of-order/aborted reads cannot replace a newer observation. No fixture fallback.
-- Native table and buttons, visible focus, explicit selection, IME-aware input, Escape/back return.
-- Responsive list + optional detail; mobile detail replaces the list without losing query/filter state.
-- CSS inherits host brand tokens. Fallbacks reuse the existing preview's values; no new logo or
-  assertion that these values have been independently approved by the CI center.
+It does **not** turn search text into confirmed vehicle specifications and it does not implement
+edit/save/persistence.
 
-## Files and local use
+## What changed after adversarial review
 
-- `preview/vehicle-finder/core.mjs`: pure search/selection and read lifecycle.
-- `preview/vehicle-finder/view.mjs`: `mountVehicleFinder(root, {read, onSelect})`.
-- `preview/vehicle-finder/finder.css`: scoped, dependency-free presentation.
-- `preview/vehicle-finder/index.html`: disconnected integration entrypoint, NOT a production route.
-- `scripts/tests/vehicle-finder.fixture.mjs`: clearly synthetic data, outside the preview directory.
-- `scripts/tests/vehicle-finder.test.mjs`: Node built-in tests; no package or workflow changes.
-- `scripts/tests/vehicle-finder.browser.py`: optional local HTTP and offline Chromium DOM tests.
+### Vehicle Master hierarchy
 
-The existing `/console` and `preview/index.html` are intentionally untouched. The new entrypoint is
-not automatically served by the existing application. An HTTP static server can serve this directory
-locally; until an authorized reader is injected, it correctly shows `조회 연결 대기`.
+The read projection is now `freepass.vehicle-finder.read/v2`.
 
-## Read-model boundary (not a new Canonical schema or public API)
+It aligns its node vocabulary with PR #50:
 
-`freepass.vehicle-finder.read/v1` is a component-level presentation shape:
+- MAKE
+- MODEL
+- GENERATION
+- PHASE
+- MODEL_YEAR
+- POWERTRAIN
+- VARIANT
+- TRIM
+- BASE_ITEM
+- OPTION
+- PACKAGE
+- OPTION_GROUP
+- COLOR
 
-- `observationId`, `observedAt`, `coverage: COMPLETE | PARTIAL`, `entries[]`.
-- entry: `id`, `level`, `label`, `aliases[]`, `configurations[]`.
-- configuration: `id`, `evidenceId`, `terms[]`, `facets`.
-- allowed facets: `modelYear`, `fuel`, `seatCount`, `drivetrain`, `trim`.
-- null/missing facets mean unknown, never a fabricated default.
+Finder destinations are MAKE through TRIM. BASE_ITEM / OPTION / PACKAGE / OPTION_GROUP / COLOR
+are known Vehicle Master node types but explicitly excluded from Finder results. A truly unknown
+node type still fails closed.
 
-The host adapter must authenticate/authorize, verify release/evidence, use actual canonical IDs,
-provide an explicit observed scope, and materialize ONLY simultaneously valid configurations.
-COMPLETE means complete within that authorized read scope, not all cars in the world.
-A populated evidence ID is a reference, NOT client-side proof of canonical promotion.
-No source collection is read directly and no REST path or Firebase collection is guessed.
-The reader receives an AbortSignal; bounded scopes/pagination and the integration boundary remain
-work for the host adapter. This first component does not promise full-catalog search performance.
+Every Finder entry carries a canonical ancestor path:
 
-`onSelect` is a local reference handoff, NOT an authorized persistence command. Downstream actions
-must revalidate observation/revision, authority, and required configuration specificity. Partial
-references must not be accepted as complete quote/contract inputs. Browser storage is not an SSOT.
+`[{ id, nodeType, label }, ...leaf]`
 
-## Tests observed in this execution
+The leaf must exactly match the entry id/type/label. The path is both displayed and searchable.
+Therefore two trims both named “프레스티지” are distinguishable by paths such as:
 
-Commands:
+- `기아 › 쏘렌토 › 2027 › 프레스티지`
+- `기아 › 스포티지 › 2027 › 프레스티지`
 
-```sh
-node --check preview/vehicle-finder/core.mjs
-node --check preview/vehicle-finder/view.mjs
-node --test scripts/tests/vehicle-finder.test.mjs
-python scripts/tests/vehicle-finder.browser.py --offline --output /tmp/finder-evidence
-```
+No parent label is fabricated by the UI.
 
-- Node syntax: PASS; focused unit tests: **27 PASS**.
-- Offline Chromium DOM checks: **16 PASS** using synthetic fixtures only.
-- Viewport checks: 360 / 390 / 412 / 1280 / 1440 / 1920 CSS px; list/detail overflow,
-  native-button keyboard entry, focus return, and action height checked.
-- Actual defects found and fixed: one-letter Latin tokens matching unrelated fuel substrings;
-  focus loss after disabling the selection button; narrow header/action wrapping in visual review.
-- HTTP navigation attempt was blocked by this execution environment (`ERR_BLOCKED_BY_ADMINISTRATOR`).
-  No policy was disabled and no blocked URL was retried via an alternate route. Offline tests use
-  source files rendered in memory; they are NOT HTTP/module-loader or production E2E evidence.
-- Not run: repository-wide `npm run check` / full suite, real mobile IME/hardware,
-  screen-reader combinations, production API/Firebase persistence, deployment/cutover.
+### Inspect before selection
 
-Screenshots in the execution artifacts carry a visible synthetic-test / Firebase-disconnected label.
-They are browser-rendered component evidence, not images of a production deployment.
+Search returns the configuration IDs that actually satisfied the current query/filter intersection.
+The detail panel displays those matching configurations and their evidence IDs plus known facets
+(year/fuel/seats/drivetrain/trim). Missing facts stay missing.
 
-## Next handoff / HOLD
+Selection remains:
 
-1. Reconcile the latest vehicle-master PR #49/#50/#51 read boundaries. Do not modify their
-   Canonical schemas or promote a HOLD source simply to make UI results appear.
-2. Implement an authorized, bounded read adapter over the approved master serving contract.
-3. Wire the component into the existing Console; preserve current runtime and last-known-good reads.
-4. Verify real API failure/scope/auth, observation revisions and partial selection handoff.
-5. Only then add permitted editing through existing command/revision/receipt/history contracts.
+- `kind=PARTIAL_REFERENCE`
+- actual node id/type/path
+- observation ID
+- `configurationConfirmed=false`
+- candidate configuration IDs only as evidence context
 
-No production Firebase writes, IAM changes, deployment, writer cutover, GitHub Actions additions,
-manual workflow dispatches, main merge, or changes to Admin/Sales/Estimate were performed.
-Shared handoff files are not overwritten in this isolated slice; the PR and Issue #24 carry its entrypoint.
+Candidate configuration IDs are not promoted to a chosen/confirmed configuration.
+
+### Read state continuity
+
+Refresh no longer destroys the last-known-good snapshot.
+
+- first read: `loading`
+- refresh with previous valid data: `refreshing` + previous snapshot remains visible
+- failed refresh: `error` + previous snapshot remains visible and is labeled as the previous observation
+- only a newer validated read replaces the snapshot
+
+A completed `onSelect` handoff is always surfaced. If the UI moved to a newer observation while
+the host was processing selection, the notice says that the selection was delivered using the
+previous observation ID instead of silently hiding the success.
+
+### Search behavior
+
+- query + filters still must agree in one configuration; sibling facts are never unioned
+- canonical ancestor labels participate in search
+- Korean whitespace-insensitive comparison is supported (for example `더뉴쏘렌토` can match
+  `더 뉴 쏘렌토`)
+- no fuzzy typo correction was added; unreviewed spelling guesses would create hidden semantics
+- only approved aliases supplied by the read adapter are searched
+- filtered candidates excluded because the requested facet is unknown are counted and disclosed
+- rendered results are capped at 100 while reporting total match count
+- normalized search terms are cached per accepted snapshot to avoid renormalizing the entire read on every key event
+
+This is a UI guard, not a full-catalog search-engine SLO. Real master-size performance remains unverified.
+
+### FreePass UI profile alignment
+
+The component now follows the AI Core FreePass profile more directly.
+
+Mobile:
+- top = title/context only
+- search/filter/refresh = utility area, not workflow completion actions
+- list = spaced card layout rather than a shrunken desktop table
+- detail local actions = fixed bottom action boundary
+- two actions use 3:7 proportions: `목록으로 : 이 수준으로 선택`
+- primary height = 48px
+- safe-area padding is included
+
+Selection is no longer color-only:
+- selected surface tint
+- stronger text weight
+- `✓ 보는 중` marker
+
+The primary foreground uses a host `--on-brand` token with a white fallback rather than assuming
+white is always correct for every host brand.
+
+## Read projection boundary
+
+`freepass.vehicle-finder.read/v2` is a presentation projection, not a new Canonical Vehicle Master.
+
+Required top-level fields:
+
+- `observationId`
+- `observedAt`
+- `coverage: COMPLETE | PARTIAL`
+- `entries[]`
+
+Entry:
+
+- `id`
+- `nodeType` — exact PR #50 node vocabulary
+- `label`
+- `aliases[]`
+- `path[]` — exact ancestor identity/labels ending at the entry
+- `configurations[]`
+
+Configuration:
+
+- `id`
+- `evidenceId`
+- `terms[]`
+- `facets`: modelYear / fuel / seatCount / drivetrain / trim
+
+The future authorized adapter must derive this projection from the approved Vehicle Master serving
+boundary. The component must not query Firestore collections directly.
+
+## Explicit non-goals / HOLD
+
+Still not proved:
+
+- #49/#50/#51 serving endpoint/auth integration
+- Firebase-backed Vehicle Master data
+- actual master-size performance and DOM cost
+- screen-reader combinations and physical mobile devices
+- Console integration
+- persistence/edit commands
+- full repository `npm run check`
+- production deployment/cutover
+
+The Finder must not be called production-ready from synthetic fixture tests.
+
+## Next implementation order
+
+1. define/confirm the authorized Vehicle Master Finder serving projection from the #50/#51 hierarchy
+2. connect PR #52 to that bounded reader without exposing internal Firestore topology
+3. run real read integration and validate MAKE/path/configuration evidence
+4. verify real browser/mobile/screen-reader behavior
+5. only then add permitted edit commands through revision/authority/receipt/history contracts
+
+No production Firebase writes, IAM changes, deployment, writer cutover, workflow additions,
+manual workflow dispatches, main merge, or changes to Admin/Sales/Estimate are authorized by this slice.
