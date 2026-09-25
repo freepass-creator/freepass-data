@@ -86,6 +86,46 @@ for (const file of walk(srcRoot)) {
   }
 }
 
+const sourceLayoutOwner = path.join(srcRoot, 'infra', 'source-firestore-layout.ts');
+const sourcePhysicalNames = [
+  'sources',
+  'source_runs',
+  'source_heads',
+  'raw_records',
+  'normalized_candidates',
+  'field_lineage'
+];
+
+for (const file of walk(srcRoot)) {
+  if (path.resolve(file) === path.resolve(sourceLayoutOwner)) continue;
+  const text = fs.readFileSync(file, 'utf8');
+  for (const collectionName of sourcePhysicalNames) {
+    const literal = new RegExp(`['"]${collectionName}['"]`);
+    if (literal.test(text)) {
+      violations.push({
+        file: path.relative(repoRoot, file),
+        layer: layerOf(file),
+        import: collectionName,
+        reason: 'Source Firestore physical layout must come from src/infra/source-firestore-layout.ts'
+      });
+    }
+  }
+}
+
+for (const forbiddenDataContract of [
+  'contracts/freepass-quote-v2.schema.json',
+  'contracts/put-issued-quote-command-v1.schema.json'
+]) {
+  if (fs.existsSync(path.join(repoRoot, forbiddenDataContract))) {
+    violations.push({
+      file: forbiddenDataContract,
+      layer: 'contract',
+      import: forbiddenDataContract,
+      reason: 'Quote issuance/calculation contracts belong to the FreePass Estimate product boundary, not FreePass Data'
+    });
+  }
+}
+
 if (violations.length) {
   console.error('Architecture boundary violations detected:');
   for (const item of violations) {
