@@ -25,6 +25,9 @@ describe('vehicle master recent-first backfill', () => {
       'https://www.carnoon.co.kr/newcar/vehicle/11572',
       'https://www.carnoon.co.kr/newcar/vehicle/9000',
     ]);
+    expect(pages[0]?.latestModelYearHint).toBe(2027);
+    expect(pages[1]?.latestModelYearHint).toBe(2024);
+    expect(pages[1]?.modelHint).not.toContain('쏘렌토');
     const queue = buildRecentFirstBackfillQueue(pages);
     expect(queue[0]?.sourceUrl).toContain('11572');
   });
