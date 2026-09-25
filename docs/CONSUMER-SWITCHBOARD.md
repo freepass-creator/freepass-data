@@ -23,7 +23,7 @@ IAM, 배포, 실제 데이터 수정 또는 스케줄 변경 권한을 부여하
 |---|---|---|---|---|
 | ERP.com 공개 Catalog | `freepasserp4` | SHADOW_READ | `FREEPASS_DATA_ERP_COM_READ_MODE` | Data runtime 미배포, ACTIVE Release 없음, 실 parity 미확인 |
 | ERP 화이트라벨 | `freepasserp4` | OBSERVE | `FREEPASS_DATA_WHITELABEL_READ_MODE` | tenant별 identity/노출/read receipt 미확인 |
-| FreePass Admin Catalog | `freepass-admin` | OBSERVE | `FREEPASS_DATA_ADMIN_CATALOG_READ_MODE` | Projection PR 미통합, policy parity/운영 persistence 미확인 |
+| FreePass Admin Catalog | `freepass-admin` | OBSERVE | `FREEPASS_DATA_ADMIN_CATALOG_READ_MODE` | PR #53에서 최신 release-evidence 구조로 Admin 전용 contract/projection 준비 중. 배포·ACTIVE release·policy parity·인증·실 parity 미확인 |
 | FreePass Sales Catalog | `freepass-sales` | LEGACY_DIRECT | `FREEPASS_DATA_SALES_CATALOG_READ_MODE` | adapter 없음, Sales 고객·통화 도메인과 분리 필요 |
 | FreePass Estimate Catalog 입력 | `freepass-estimate` | LEGACY_DIRECT | `FREEPASS_DATA_ESTIMATE_CATALOG_READ_MODE` | input adapter 없음, 계산·provider 소유권 분리 필요 |
 | Google Sheets F01 | ERP publisher | OBSERVE | `FREEPASS_DATA_F01_READ_MODE` | 승인 Release 소비와 receipt 없음 |
@@ -58,10 +58,11 @@ fallback하지 않는다.
 
 ### FreePass Admin
 
-- PR #12 Admin projection을 현재 main과 충돌 없이 다시 통합한다.
-- Product 검색·상세는 `AdminCatalogReader` port만 의존한다.
+- 과거 PR #12는 현재 main보다 크게 뒤처져 그대로 병합하지 않는다. PR #53이 현재 release manifest/digest/lineage 구조 위로 계약을 역수입한다.
+- Product 검색·상세는 Admin 저장소의 `AdminCatalogReader` port만 의존한다.
+- Admin consumer identity는 `freepass-admin-catalog`, projection은 `admin-catalog`로 고정하며 ERP public contract를 재사용하지 않는다.
 - application/contract/settlement workflow writer를 Catalog reader 전환과 섞지 않는다.
-- `policyParity=COMPLETE`와 인증·운영 persistence 증거 전에는 Data read를 활성화하지 않는다.
+- `policyParity=COMPLETE`와 인증·shadow parity·fallback·운영 readback 증거 전에는 `FREEPASS_DATA_READ`를 활성화하지 않는다.
 
 ### FreePass Sales
 
