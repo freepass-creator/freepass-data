@@ -1,9 +1,22 @@
 import { DataAccessGateway } from '../application/data-access-gateway.js';
 import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
+import { gcsDataAccessLogStore } from '../infra/gcs-data-access-log.js';
 
 export function createJobDataAccessRuntime() {
   return {
     access: new DataAccessGateway(createFirestoreDataAccessLogStore())
+  };
+}
+
+export function createReadOnlyJobDataAccessRuntime(input: {
+  accessToken: string;
+  evidenceBucket: string;
+}) {
+  return {
+    access: new DataAccessGateway(gcsDataAccessLogStore({
+      accessToken: input.accessToken,
+      bucket: input.evidenceBucket
+    }))
   };
 }
 
