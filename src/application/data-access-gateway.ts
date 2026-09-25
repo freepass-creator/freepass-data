@@ -17,6 +17,52 @@ type AccessSpec<T> = {
   summarize?: (result: T) => DataAccessResultEvidence | undefined;
 };
 
+const bounded = (value: string, max: number) =>
+  value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
+const digest = (value: string | undefined) =>
+  value === undefined || /^[a-f0-9]{64}$/.test(value);
+
+function assertSpec<T>(spec: AccessSpec<T>) {
+  if (
+    !bounded(spec.operation, 100) ||
+    !/^[A-Z][A-Z0-9_]{2,99}$/.test(spec.operation) ||
+    !bounded(spec.context.actor.id, 256) ||
+    !bounded(spec.context.clientId, 128) ||
+    !bounded(spec.context.purpose, 256) ||
+    !bounded(spec.resource.name, 256) ||
+    !digest(spec.requestDigest)
+  ) {
+    throw new Error('INVALID_DATA_ACCESS_SPEC');
+  }
+  for (const value of [
+    spec.context.requestId,
+    spec.context.correlationId,
+    spec.resource.entityType,
+    spec.resource.entityId,
+    spec.resource.projectionId
+  ]) {
+    if (value !== undefined && !bounded(value, 256)) {
+      throw new Error('INVALID_DATA_ACCESS_SPEC');
+    }
+  }
+}
+
+function assertResultEvidence(result: DataAccessResultEvidence | undefined) {
+  if (!result) return;
+  if (
+    (result.count !== undefined && (!Number.isSafeInteger(result.count) || result.count < 0)) ||
+    (result.revision !== undefined && (!Number.isSafeInteger(result.revision) || result.revision < 0)) ||
+    !digest(result.digest)
+  ) {
+    throw new Error('INVALID_DATA_ACCESS_RESULT_EVIDENCE');
+  }
+  for (const value of [result.releaseId, result.manifestId]) {
+    if (value !== undefined && !bounded(value, 256)) {
+      throw new Error('INVALID_DATA_ACCESS_RESULT_EVIDENCE');
+    }
+  }
+}
+
 const codeOf = (error: unknown) => {
   if (error && typeof error === 'object' && 'code' in error) {
     const code = (error as { code?: unknown }).code;
@@ -67,6 +113,10 @@ export class DataAccessGateway {
   }
 
   async deny<T>(mode: DataAccessMode, spec: AccessSpec<T>, reasonCode: string) {
+    assertSpec(spec);
+    if (!/^[A-Z][A-Z0-9_]{2,100}$/.test(reasonCode)) {
+      throw new Error('INVALID_DATA_ACCESS_REASON');
+    }
     const operationId = this.id();
     const startedAt = this.now();
     await this.append({
@@ -83,6 +133,7 @@ export class DataAccessGateway {
     spec: AccessSpec<T>,
     run: () => Promise<T>
   ): Promise<T> {
+    assertSpec(spec);
     const operationId = this.id();
     const startedAt = this.now();
     const base = this.base(mode, spec, operationId, startedAt);
@@ -98,6 +149,7 @@ export class DataAccessGateway {
     try {
       const result = await run();
       const summary = spec.summarize?.(result);
+      assertResultEvidence(summary);
       await this.append({
         eventId: this.id(),
         ...base,
