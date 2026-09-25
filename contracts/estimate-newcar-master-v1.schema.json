@@ -18,6 +18,9 @@
       "trimName",
       "powertrainName",
       "basePrice",
+      "priceBefore",
+      "priceAfter",
+      "priceBasis",
       "options",
       "exteriorColors",
       "interiorColors",
@@ -191,6 +194,32 @@
           "type": "string",
           "minLength": 1
         }
+      },
+      "priceBefore": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "$ref": "https://freepass.teamjpk.com/contracts/catalog-v1.schema.json#/$defs/money"
+          }
+        ]
+      },
+      "priceAfter": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "$ref": "https://freepass.teamjpk.com/contracts/catalog-v1.schema.json#/$defs/money"
+          }
+        ]
+      },
+      "priceBasis": {
+        "type": [
+          "string",
+          "null"
+        ]
       }
     }
   },
