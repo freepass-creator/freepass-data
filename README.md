@@ -44,6 +44,7 @@ FreePass Data는 또 하나의 화면 앱이 아닙니다.
 
 자세한 내용:
 - [Approved Architecture v2](docs/ARCHITECTURE-V2-APPROVED.md)
+- [Development Lineage Authority](docs/DEVELOPMENT-LINEAGE.md)
 - [Repository Structure](docs/REPO-STRUCTURE.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Migration Plan](docs/MIGRATION-PLAN.md)
