@@ -123,7 +123,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   table.setAttribute('aria-label', '차량 검색 결과');
   const thead = element('thead');
   const headerRow = element('tr');
-  for (const label of ['차량', '선택 수준', '자료']) {
+  for (const label of ['차량', '확인']) {
     const th = element('th', '', label);
     th.scope = 'col';
     headerRow.append(th);
@@ -236,12 +236,9 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     const facts = element('dl');
     const fact = (name, value) =>
       facts.append(element('dt', '', name), element('dd', '', value));
-    fact('계층 경로', pathText(entry));
-    fact('현재 검색어', input.value || '미지정');
-    fact('추가 필터', Object.values(filters).join(' · ') || '미지정');
     fact(
-      '선택의 의미',
-      '이 대상을 탐색 기준으로 선택합니다. 검색어와 필터는 확정 차량 사양으로 저장되지 않습니다.',
+      '선택 범위',
+      `${LEVELS[entry.nodeType]} 기준 · 세부 차량 구성은 확정하지 않음`,
     );
     fact(
       '자료 범위',
@@ -250,8 +247,10 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     detail.append(facts);
 
     const evidence = element('details', 'vf-evidence');
-    evidence.append(element('summary', '', '조회 근거'));
+    evidence.append(element('summary', '', '검색·조회 근거'));
     evidence.append(
+      element('p', '', `검색어 ${input.value || '미지정'}`),
+      element('p', '', `필터 ${Object.values(filters).join(' · ') || '미지정'}`),
       element('p', '', `관측 ${snapshot.observedAt}`),
       element('p', '', `조회 식별자 ${snapshot.observationId}`),
       element('p', '', `대상 ID ${entry.id}`),
@@ -364,8 +363,11 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
 
       row.append(
         name,
-        element('td', 'vf-row-level', LEVELS[entry.nodeType]),
-        element('td', 'vf-row-evidence', entry.configurations.length ? '구성 자료' : '구성 미확인'),
+        element(
+          'td',
+          'vf-row-check',
+          entry.configurations.length ? '' : '구성 미확인',
+        ),
       );
       tbody.append(row);
     }
