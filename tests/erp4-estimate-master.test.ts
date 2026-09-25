@@ -63,7 +63,7 @@ describe('ERP4 reviewed master -> Estimate master migration adapter', () => {
     expect(record.modelYearId).toBe(`${master.master_id}::my2026`);
     expect(record.powertrainId).toBe(`${master.master_id}::v02`);
     expect(record.trimId).toBe(master.trim_row_key);
-    expect(record.basePrice.amount).toBe(51500000);
+    expect(record.basePrice.amount).toBe(52000000);
     expect(record.priceBefore?.amount).toBe(52000000);
     expect(record.priceAfter?.amount).toBe(51500000);
     expect(record.options.map((option) => option.optionId)).toEqual([
