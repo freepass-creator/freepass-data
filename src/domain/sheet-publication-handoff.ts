@@ -15,6 +15,7 @@ export type SheetInventorySummary = {
   blankPlateViolations: number;
   invalidPlateViolations: number;
   duplicatePlateViolations: number;
+  depositRuleViolations: number;
   byStatus: Record<string, number>;
 };
 
@@ -129,7 +130,8 @@ export function validateSheetPublicationHandoff(
     inventory.deletedMarkerViolations,
     inventory.blankPlateViolations,
     inventory.invalidPlateViolations,
-    inventory.duplicatePlateViolations
+    inventory.duplicatePlateViolations,
+    inventory.depositRuleViolations
   ];
   if (counters.some((value) => !Number.isInteger(value) || value < 0)) {
     violations.push('INVALID_INVENTORY_COUNTER');
