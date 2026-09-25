@@ -2,6 +2,7 @@ import { stableDigest } from '../shared/stable-digest.js';
 import {
   deterministicVehicleMasterRecordId,
   sealVehicleMasterPipelineRecord,
+  type VehicleMasterCompatibilityRule,
   type VehicleMasterNode,
   type VehicleMasterPipelineRecord,
   type VehicleMasterPriceRevision,
@@ -33,7 +34,10 @@ export type VehicleMasterEvidenceIssue = {
     | 'REFERENCE_NODE_MISSING'
     | 'REFERENCE_NODE_SELF'
     | 'PRICE_TARGET_MISSING'
-    | 'PRICE_TARGET_HOLD';
+    | 'PRICE_TARGET_HOLD'
+    | 'RULE_SUBJECT_MISSING'
+    | 'RULE_TARGET_MISSING'
+    | 'RULE_SCOPE_REFERENCE_MISSING';
   fieldPath?: string;
   sourceDocumentId?: string;
   detail?: string;
@@ -48,6 +52,13 @@ export type VehicleMasterEvidenceDecision = {
 
 export type PromoteVehicleMasterNodeInput = {
   proposal: VehicleMasterNode;
+  observations: VehicleMasterFieldObservation[];
+  policy: VehicleMasterEvidencePolicy;
+  observedAt: string;
+};
+
+export type PromoteVehicleMasterRuleInput = {
+  proposal: VehicleMasterCompatibilityRule;
   observations: VehicleMasterFieldObservation[];
   policy: VehicleMasterEvidencePolicy;
   observedAt: string;
@@ -70,6 +81,7 @@ export type PromoteVehicleMasterNodeResult = {
   changeEventId: string | null;
 };
 
+export type PromoteVehicleMasterRuleResult = PromoteVehicleMasterNodeResult;
 export type PromoteVehicleMasterPriceResult = PromoteVehicleMasterNodeResult;
 
 const SOURCE_AUTHORITY: Record<VehicleMasterSourceDocument['sourceType'], number> = {
@@ -255,6 +267,13 @@ async function evaluateEvidence(
 export async function evaluateVehicleMasterEvidence(
   store: VehicleMasterStore,
   input: PromoteVehicleMasterNodeInput
+): Promise<VehicleMasterEvidenceDecision> {
+  return evaluateEvidence(store, input.proposal, input.proposal, input.observations, input.policy);
+}
+
+export async function evaluateVehicleMasterRuleEvidence(
+  store: VehicleMasterStore,
+  input: PromoteVehicleMasterRuleInput
 ): Promise<VehicleMasterEvidenceDecision> {
   return evaluateEvidence(store, input.proposal, input.proposal, input.observations, input.policy);
 }
@@ -554,6 +573,119 @@ export async function promoteVehicleMasterPriceRevision(
         canonicalWrite,
         targetId: input.proposal.targetId,
         amount: input.proposal.amount,
+        evidenceSetId: evidence.evidenceSet.recordId,
+      }
+    );
+    await store.putPipelineRecord(changeEvent);
+    changeEventId = changeEvent.recordId;
+  }
+
+  return {
+    decision,
+    canonicalWrite,
+    candidateFactId: evidence.candidateFact.recordId,
+    evidenceSetId: evidence.evidenceSet.recordId,
+    revisionCandidateId: evidence.revisionCandidate.recordId,
+    promotionResultId: promotionResult.recordId,
+    changeEventId,
+  };
+}
+
+
+export async function promoteVehicleMasterCompatibilityRule(
+  store: VehicleMasterStore,
+  input: PromoteVehicleMasterRuleInput
+): Promise<PromoteVehicleMasterRuleResult> {
+  const sourceDecision = await evaluateVehicleMasterRuleEvidence(store, input);
+  const issues = [...sourceDecision.issues];
+
+  if (!(await store.getNode(input.proposal.subjectId))) {
+    issues.push({
+      code: 'RULE_SUBJECT_MISSING',
+      fieldPath: 'subjectId',
+      detail: input.proposal.subjectId,
+    });
+  }
+  for (const targetId of input.proposal.targetIds) {
+    if (!(await store.getNode(targetId))) {
+      issues.push({
+        code: 'RULE_TARGET_MISSING',
+        fieldPath: 'targetIds',
+        detail: targetId,
+      });
+    }
+  }
+  for (const [field, refId] of Object.entries(input.proposal.scope)) {
+    if (refId && !(await store.getNode(refId))) {
+      issues.push({
+        code: 'RULE_SCOPE_REFERENCE_MISSING',
+        fieldPath: `scope.${field}`,
+        detail: refId,
+      });
+    }
+  }
+
+  const decision: VehicleMasterEvidenceDecision = {
+    ...sourceDecision,
+    status: issues.length ? 'HOLD' : 'APPROVED',
+    issues,
+  };
+  const evidence = await persistPromotionEvidence(store, {
+    entityKind: 'NODE',
+    entityId: input.proposal.id,
+    revision: input.proposal.revision,
+    proposalHash: input.proposal.contentHash,
+    observations: input.observations,
+    observedAt: input.observedAt,
+    decision,
+    candidatePayload: {
+      proposalHash: input.proposal.contentHash,
+      entityType: 'COMPATIBILITY_RULE',
+      subjectId: input.proposal.subjectId,
+      ruleType: input.proposal.ruleType,
+      targetIds: input.proposal.targetIds,
+      scope: input.proposal.scope,
+      observations: input.observations,
+    },
+  });
+
+  let canonicalWrite: VehicleMasterWriteResult | null = null;
+  let promotionStatus: 'PROMOTED' | 'HOLD' = 'HOLD';
+  if (decision.status === 'APPROVED') {
+    canonicalWrite = await store.putCompatibilityRule(input.proposal);
+    promotionStatus = 'PROMOTED';
+  }
+
+  const promotionResult = pipelineRecord(
+    'PROMOTION_RESULT',
+    evidence.identity,
+    input.observedAt,
+    input.proposal.id,
+    {
+      revisionCandidateId: evidence.revisionCandidate.recordId,
+      status: promotionStatus,
+      canonicalWrite,
+      issues: decision.issues,
+    }
+  );
+  await store.putPipelineRecord(promotionResult);
+
+  let changeEventId: string | null = null;
+  if (promotionStatus === 'PROMOTED') {
+    const changeEvent = pipelineRecord(
+      'CHANGE_EVENT',
+      { ...evidence.identity, promotionResultId: promotionResult.recordId },
+      input.observedAt,
+      input.proposal.id,
+      {
+        eventType:
+          canonicalWrite === 'CREATED'
+            ? 'VEHICLE_MASTER_RULE_CREATED'
+            : canonicalWrite === 'UPDATED'
+              ? 'VEHICLE_MASTER_RULE_REVISED'
+              : 'VEHICLE_MASTER_RULE_CONFIRMED',
+        revision: input.proposal.revision,
+        canonicalWrite,
         evidenceSetId: evidence.evidenceSet.recordId,
       }
     );
