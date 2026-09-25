@@ -20,6 +20,7 @@ function receipt(overrides: Partial<SheetDeliveryReceipt> = {}): SheetDeliveryRe
     consumerId: 'google-sheets-f01',
     workbook: 'F01',
     spreadsheetId: 'sheet-f01',
+    releaseAuthority: 'LEGACY_VERIFIED_BRIDGE',
     approvedRelease: { ...release },
     renderedOutput: {
       transformContractId: 'f01-standard-v1',
