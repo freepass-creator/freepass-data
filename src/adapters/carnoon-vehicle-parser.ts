@@ -139,7 +139,11 @@ export class CarnoonVehicleParser implements VehicleMasterSourceParser {
         !/^[\d.]+\s*㎞\/ℓ/.test(option.name) &&
         !option.name.includes('판매 가격')
       ) {
-        current.options.push(option);
+        current.options.push(
+          option.kind === 'ACCESSORY'
+            ? { ...option, name: option.name.replace(/^\[(?:악세사리|액세서리)\]\s*/, '') }
+            : option
+        );
         continue;
       }
 
