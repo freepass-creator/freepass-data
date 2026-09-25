@@ -64,7 +64,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   input.type = 'search';
   input.autocomplete = 'off';
   input.placeholder = '제조사, 차량명, 세대, 연식, 트림 등';
-  searchLabel.append(element('span', '', '차량 검색'), input);
+  searchLabel.append(element('span', 'vf-field-label', '차량 검색'), input);
 
   const utilityActions = element('div', 'vf-utility-actions');
   const filterToggle = element('button', '', '필터');
