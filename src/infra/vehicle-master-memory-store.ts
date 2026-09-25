@@ -114,6 +114,18 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
     return copy(this.pipeline.get(`${kind}:${recordId}`) ?? null);
   }
 
+  async listPipelineRecords(
+    kind: VehicleMasterPipelineRecord['kind'],
+    sourceDocumentId: string
+  ) {
+    return copy([...this.pipeline.values()]
+      .filter((item) =>
+        item.kind === kind &&
+        item.sourceDocumentId === sourceDocumentId
+      )
+      .sort((a, b) => a.recordId.localeCompare(b.recordId)));
+  }
+
   async putPipelineRecord(record: VehicleMasterPipelineRecord) {
     return this.putImmutable(
       this.pipeline,
