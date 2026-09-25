@@ -95,7 +95,7 @@ function nextPrice(lines: string[], start: number) {
 
 export class CarisyouHistoricalParser implements VehicleMasterSourceParser {
   readonly parserId = 'CARISYOU_HISTORICAL';
-  readonly parserVersion = '1.0.0';
+  readonly parserVersion = '1.1.0';
 
   canParse(input: VehicleMasterParseInput) {
     if (!input.sourceUrl) return false;
