@@ -92,6 +92,13 @@ export function validateSheetPublicationHandoff(
   if (!Number.isFinite(Date.parse(handoff.generatedAt))) {
     violations.push('INVALID_GENERATED_AT');
   }
+  const isBridgeProjection = handoff.approvedRelease?.projectionId === 'sheet-publication-bridge';
+  if (
+    (handoff.releaseAuthority === 'LEGACY_VERIFIED_BRIDGE' && !isBridgeProjection) ||
+    (handoff.releaseAuthority === 'CANONICAL_ACTIVE' && isBridgeProjection)
+  ) {
+    violations.push('RELEASE_AUTHORITY_PROJECTION_MISMATCH');
+  }
 
   const releaseFields = [
     'projectionId',
