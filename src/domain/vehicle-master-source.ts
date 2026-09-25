@@ -17,6 +17,13 @@ export type VehicleMasterParsedOption = {
   price: number | null;
   note?: string | null;
   conditions?: VehicleMasterParsedCondition[];
+  packageItems?: string[];
+  sourceText: string;
+};
+
+export type VehicleMasterParsedBaseItem = {
+  category: string | null;
+  name: string;
   sourceText: string;
 };
 
@@ -33,6 +40,7 @@ export type VehicleMasterParsedTrim = {
   currency: 'KRW';
   effectiveFrom?: string | null;
   baseItems: string[];
+  baseItemDetails?: VehicleMasterParsedBaseItem[];
   options: VehicleMasterParsedOption[];
   sourceText: string;
 };
