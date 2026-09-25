@@ -26,6 +26,7 @@ const C = {
   promotionResults: 'vehicle_master_promotion_results',
   changeEvents: 'vehicle_master_change_events',
   resolverFeedback: 'vehicle_master_resolver_feedback',
+  auditReports: 'vehicle_master_audit_reports',
 } as const;
 
 const safeId = (value: string) => value.replaceAll('/', '__');
@@ -42,6 +43,7 @@ const pipelineCollection = (kind: VehicleMasterPipelineRecord['kind']) => {
     case 'REVISION_CANDIDATE': return C.revisionCandidates;
     case 'PROMOTION_RESULT': return C.promotionResults;
     case 'CHANGE_EVENT': return C.changeEvents;
+    case 'AUDIT_REPORT': return C.auditReports;
   }
 };
 
