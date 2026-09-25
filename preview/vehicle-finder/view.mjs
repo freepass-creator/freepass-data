@@ -78,7 +78,9 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   filterPanel.hidden = true;
 
   const filterSheetHead = element('div', 'vf-filter-sheet-head');
-  filterSheetHead.append(element('strong', '', '필터'));
+  const filterSheetTitle = element('strong', '', '필터');
+  filterSheetTitle.id = `${prefix}-filter-title`;
+  filterSheetHead.append(filterSheetTitle);
   const filterClose = element('button', 'vf-filter-close', '×');
   filterClose.type = 'button';
   filterClose.setAttribute('aria-label', '필터 닫기');
@@ -111,6 +113,10 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   reset.type = 'button';
   reset.hidden = true;
   filterPanel.append(reset);
+
+  const filterDone = element('button', 'vf-filter-done vf-primary', '결과 보기');
+  filterDone.type = 'button';
+  filterPanel.append(filterDone);
 
   function syncFilterUi() {
     const count = Object.keys(filters).length;
@@ -374,6 +380,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       parts.push('일부 자료');
     }
     status.textContent = parts.join(' · ');
+    filterDone.textContent = `${result.totalMatches}개 결과 보기`;
 
     table.hidden = !result.matches.length;
     empty.hidden = Boolean(result.matches.length);
@@ -493,10 +500,24 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       renderResults();
     }
   });
+  const isMobileFilter = () => window.matchMedia('(max-width: 900px)').matches;
+
   function setFilterPanel(open) {
+    const mobile = isMobileFilter();
     filterPanel.hidden = !open;
     filterToggle.setAttribute('aria-expanded', String(open));
-    root.classList.toggle('vf-filter-open', open);
+    root.classList.toggle('vf-filter-open', open && mobile);
+
+    if (open && mobile) {
+      filterPanel.setAttribute('role', 'dialog');
+      filterPanel.setAttribute('aria-modal', 'true');
+      filterPanel.setAttribute('aria-labelledby', filterSheetTitle.id);
+    } else {
+      filterPanel.removeAttribute('role');
+      filterPanel.removeAttribute('aria-modal');
+      filterPanel.removeAttribute('aria-labelledby');
+    }
+
     if (open) {
       const firstSelect = filterPanel.querySelector('select');
       firstSelect?.focus({ preventScroll: true });
@@ -507,6 +528,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
 
   listen(filterToggle, 'click', () => setFilterPanel(filterPanel.hidden));
   listen(filterClose, 'click', () => setFilterPanel(false));
+  listen(filterDone, 'click', () => setFilterPanel(false));
   listen(filterMore, 'click', () => {
     const expanded = filterMore.getAttribute('aria-expanded') !== 'true';
     filterMore.setAttribute('aria-expanded', String(expanded));
@@ -520,6 +542,24 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     renderResults();
   });
   listen(root, 'keydown', event => {
+    if (!filterPanel.hidden && isMobileFilter() && event.key === 'Tab') {
+      const focusable = [...filterPanel.querySelectorAll(
+        'button:not([disabled]):not([hidden]), select:not([disabled]):not([hidden])'
+      )].filter(node => node.offsetParent !== null);
+      if (focusable.length) {
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+      return;
+    }
+
     if (event.key !== 'Escape') return;
     if (!filterPanel.hidden) {
       event.preventDefault();
