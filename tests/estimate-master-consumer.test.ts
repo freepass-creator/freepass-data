@@ -177,6 +177,38 @@ describe('Estimate new-car master consumer contract', () => {
     await app.close();
   });
 
+  it('serves explicit HOLD gaps without inventing missing stable identity', async () => {
+    const hold = record({
+      vehicleModelId: null,
+      modelYearId: null,
+      trimId: null,
+      powertrainId: null,
+      modelYear: null,
+      status: 'HOLD',
+      holdReasons: [
+        'VEHICLE_MODEL_ID_UNVERIFIED',
+        'MODEL_YEAR_ID_UNVERIFIED',
+        'MODEL_YEAR_UNVERIFIED',
+        'TRIM_ID_UNVERIFIED',
+        'POWERTRAIN_ID_UNVERIFIED'
+      ]
+    });
+    const r = release([hold]);
+    const app = createConsumerGateway({
+      getActive: async () => r,
+      getManifest: async () => manifest(r)
+    }, [binding]);
+
+    const response = await app.inject({ url, headers });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data[0]).toMatchObject({
+      productId: hold.productId,
+      status: 'HOLD',
+      modelYearId: null
+    });
+    await app.close();
+  });
+
   it('rejects mutated payloads even when release IDs still look valid', async () => {
     const records = [record()];
     const r = release(records);
