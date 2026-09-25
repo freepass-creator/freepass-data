@@ -9,6 +9,7 @@ import {
 import {
   sealVehicleMasterHashRecord,
   sealVehicleMasterNode,
+  sealVehicleMasterPipelineRecord,
   sealVehicleMasterSourceDocument,
 } from '../src/domain/vehicle-master.js';
 import { FirestoreVehicleMasterStore } from '../src/infra/vehicle-master-firestore-store.js';
@@ -73,6 +74,47 @@ emulatorTest('Firestore keeps slash IDs distinct from literal double-underscore 
     assert.equal(await store.putSourceDocument(underscore), 'CREATED');
     assert.deepEqual(await store.getSourceDocument('source/a'), slash);
     assert.deepEqual(await store.getSourceDocument('source__a'), underscore);
+  });
+});
+
+emulatorTest('Firestore exposes source and normalized evidence inventory for coverage planning', async () => {
+  await withStore(async (store) => {
+    const source = sealVehicleMasterSourceDocument({
+      sourceDocumentId: 'source/coverage',
+      sourceType: 'CARNOON',
+      sourceName: 'coverage source',
+      sourceUrl: 'https://www.carnoon.co.kr/newcar/vehicle/1',
+      publishedAt: null,
+      observedAt,
+      storagePath: 'synthetic/coverage',
+      sha256: '9'.repeat(64),
+      mimeType: 'text/html',
+      metadata: { backfillTaskId: 'task-1' },
+    });
+    await store.putSourceDocument(source);
+    const normalized = sealVehicleMasterPipelineRecord({
+      recordId: 'normalized/coverage',
+      kind: 'NORMALIZED_RECORD',
+      sourceDocumentId: source.sourceDocumentId,
+      observedAt,
+      payload: {
+        recordKind: 'TRIM',
+        record: {
+          maker: '기아',
+          model: '쏘렌토',
+          modelYear: 2027,
+          powertrainName: '2.5 가솔린 터보',
+          trimName: '프레스티지',
+        },
+      },
+    });
+    await store.putPipelineRecord(normalized);
+
+    assert.deepEqual(await store.listSourceDocuments(), [source]);
+    assert.deepEqual(
+      await store.listPipelineRecordsByKind('NORMALIZED_RECORD'),
+      [normalized]
+    );
   });
 });
 
