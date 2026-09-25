@@ -3,6 +3,7 @@ import {
   buildRecentFirstBackfillQueue,
   buildVehicleMasterBackfillCompletionIndex,
   discoverAdditionalVehicleMasterInventoryPages,
+  discoverVehicleMasterInventoryExpectedCount,
   discoverVehicleMasterPages,
   shouldSkipVehicleMasterBackfillPage,
 } from '../application/vehicle-master-backfill.js';
@@ -193,6 +194,21 @@ for (const sourceKey of selectedSources) {
       discovered.push(...pages);
       providerDiscovered += pages.length;
 
+      const expectedItemCount = discoverVehicleMasterInventoryExpectedCount({
+        sourceKey,
+        bytes: fetched.bytes,
+      });
+      const discoveredVehicleCount = sourceKey === 'CARISYOU'
+        ? new Set(
+            pages
+              .map((page) => page.sourceUrl.match(/\/car\/(\d+)/)?.[1] ?? null)
+              .filter((value): value is string => Boolean(value))
+          ).size
+        : pages.length;
+      const partialDiscovery =
+        expectedItemCount !== null &&
+        discoveredVehicleCount < expectedItemCount;
+
       for (const nextUrl of discoverAdditionalVehicleMasterInventoryPages({
         sourceKey,
         inventoryUrl: fetched.finalUrl,
@@ -203,11 +219,24 @@ for (const sourceKey of selectedSources) {
         }
       }
 
+      if (partialDiscovery && sourceKey === 'CARISYOU') {
+        const mobile = new URL(fetched.finalUrl);
+        if (mobile.hostname !== 'm.carisyou.com') {
+          mobile.hostname = 'm.carisyou.com';
+          const mobileUrl = mobile.toString();
+          if (!seenInventory.has(mobileUrl) && !frontier.includes(mobileUrl)) {
+            frontier.push(mobileUrl);
+          }
+        }
+      }
+
       discovery.push({
         sourceKey,
         discoveryUrl: fetched.finalUrl,
-        status: 'DISCOVERED',
+        status: partialDiscovery ? 'DISCOVERY_PARTIAL' : 'DISCOVERED',
         discoveredCount: pages.length,
+        discoveredVehicleCount,
+        expectedItemCount,
       });
     } catch (error) {
       discovery.push({
