@@ -12,7 +12,7 @@ Date: 2026-09-22
 Project-local data-layer cleanup only:
 
 - central target Firebase binding must flow through `src/infra/firebase-target.ts`;
-- source evidence collection names and source document-ID encoding are shared through `src/infra/source-firestore-layout.ts`;
+- source evidence collection names and source document-ID encoding are shared through `src/infra/firestore-layout.ts`;
 - source-run CURRENT / STALE / INELIGIBLE promotion policy is centralized in Domain `decideSourceHead`;
 - ingestion uses the responsibility-specific `SourceIngestionStore`; Canonical mutations remain behind `CatalogStore`;
 - FreePass Data owns Estimate master-data facts/projection only, not the Estimate pricing/issued-quote engine;
