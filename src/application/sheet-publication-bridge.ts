@@ -334,6 +334,17 @@ export function buildSheetBridgeRelease(
   const policies = decodedRecords(capture, 'policy');
   const partners = decodedRecords(capture, 'partner');
   const inventory = buildSheetInventorySummary(products);
+  if (
+    inventory.listableDrift ||
+    inventory.statusKindDrift ||
+    inventory.sourceIdentityViolations ||
+    inventory.deletedMarkerViolations ||
+    inventory.blankPlateViolations ||
+    inventory.invalidPlateViolations ||
+    inventory.duplicatePlateViolations
+  ) {
+    fail('SHEET_BRIDGE_INVENTORY_VIOLATION');
+  }
   const dataDigest = stableDigest({ products, policies, partners, inventory });
   const suffix = storedDigest.slice(0, 32);
 
