@@ -71,9 +71,15 @@ try:
                 data.entries[0].label = '<img src=x onerror=alert(1)>';
                 data.entries[0].path[data.entries[0].path.length - 1].label = data.entries[0].label;
               }
+              let calls = 0;
               const read = mode === 'error'
                 ? async () => { throw new Error('simulated failure'); }
-                : async () => data;
+                : mode === 'stale-error'
+                  ? async () => {
+                      if (calls++ === 0) return data;
+                      throw new Error('simulated refresh failure');
+                    }
+                  : async () => data;
               window.finder = mountVehicleFinder(document.getElementById('vehicle-finder'), {
                 read,
                 onSelect: value => { window.selected = value; }
@@ -122,9 +128,13 @@ try:
         expect(page.locator('tbody .vf-row-button')).to_have_count(0)
         expect(page.get_by_role('combobox', name='연료', exact=True)).to_have_value('HEV')
         expect(page.get_by_role('combobox', name='인승', exact=True)).to_have_value('7')
-        passed('explicit facet intersection is atomic and impossible filters remain visible')
+        expect(page.get_by_role('button', name='필터 · 2', exact=True)).to_be_visible()
+        expect(page.get_by_role('button', name='필터 초기화', exact=True)).to_be_visible()
+        passed('explicit facet intersection is atomic and active filter count stays visible')
 
         page.get_by_role('button', name='필터 초기화').click()
+        expect(page.get_by_role('button', name='필터', exact=True)).to_be_visible()
+        expect(page.get_by_role('button', name='필터 초기화', exact=True)).to_be_hidden()
         page.get_by_label('차량 검색', exact=True).fill('')
         page.evaluate('''() => {
           const input = document.querySelector('input[type=search]');
@@ -141,6 +151,18 @@ try:
         expect(page.locator('tbody .vf-row-button')).to_have_count(2)
         passed('synthetic IME composition does not filter midway; completed input does')
 
+        mount('stale-error')
+        expect(page.locator('tbody .vf-row-button')).to_have_count(5)
+        page.evaluate('window.finder.refresh()')
+        expect(page.locator('.vf-status')).to_contain_text('직전 관측 유지 · 새 조회 실패')
+        page.get_by_label('차량 검색', exact=True).fill('시험차 A')
+        expect(page.locator('.vf-status')).to_contain_text('직전 관측 유지 · 새 조회 실패')
+        page.get_by_role('button', name='필터', exact=True).click()
+        page.get_by_role('combobox', name='연료', exact=True).select_option('HEV')
+        expect(page.locator('.vf-status')).to_contain_text('직전 관측 유지 · 새 조회 실패')
+        expect(page.get_by_role('button', name='필터 · 1', exact=True)).to_be_visible()
+        passed('stale last-known-good warning survives query and filter rerenders')
+
         mount('error')
         expect(page.locator('.vf-status')).to_have_text('조회 실패')
         expect(page.locator('.vf-empty')).to_contain_text('차량이 없다는 뜻은 아닙니다')
@@ -152,10 +174,12 @@ try:
         passed('read model labels are inserted as text, not HTML')
 
         mount()
-        for width in [360, 390, 412, 1280, 1440, 1920]:
+        for width in [360, 390, 412, 768, 899, 900, 901, 1024, 1280, 1440, 1920]:
             page.set_viewport_size({'width': width, 'height': 900})
             page.get_by_label('차량 검색', exact=True).fill('시험차 A')
             assert not page.evaluate('document.documentElement.scrollWidth > window.innerWidth'), f'list overflow at {width}'
+            if width == 1920:
+                assert page.locator('.vf').bounding_box()['width'] > 1800, 'desktop data workspace is still artificially capped'
             row = page.get_by_role('button', name='시험제조사 › 시험차 A', exact=True)
             row.focus()
             page.keyboard.press('Enter')
