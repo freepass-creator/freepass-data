@@ -24,3 +24,18 @@ enforced downstream connection and must not be reported as migrated.
 
 The executable contract is `src/domain/consumer-output-contract.ts` and its
 regression coverage is `tests/consumer-output-contract.test.ts`.
+
+
+## F01/F86 delivery boundary
+
+F01/F86 are downstream transports, not SSOT owners.
+
+A sheet writer may publish only from an approved FreePass Data release. Completion
+requires a `freepass-sheet-delivery-v1` receipt that binds the target workbook
+to the exact `projectionId/releaseId/manifestId/inputDigest/dataDigest` and records
+a successful readback. The executable validator is
+`src/domain/consumer-delivery.ts`; the JSON contract is
+`contracts/sheet-delivery-receipt.v1.schema.json`.
+
+Until that receipt exists and validates, F01/F86 remain HOLD even if a legacy
+publisher produced matching rows from another snapshot.
