@@ -25,7 +25,15 @@ function readyRegistration(
       freepassReadVerified: true,
       parityVerified: true,
       fallbackVerified: true,
-      productionReadbackVerified: true
+      productionReadbackVerified: true,
+      approvedRelease: {
+        projectionId: 'erp-public',
+        releaseId: 'rel_test',
+        manifestId: 'manifest_test',
+        inputDigest: 'input_digest_test',
+        dataDigest: 'data_digest_test',
+        observedAt: '2026-09-25T00:00:00.000Z'
+      }
     },
     holdReasons: []
   };
@@ -68,6 +76,28 @@ describe('consumer cutover registry', () => {
     expect(decision.blockers).toEqual([
       'missing evidence: authenticationVerified',
       'missing evidence: freepassReadVerified'
+    ]);
+  });
+
+  it('requires an exact approved FreePass Data release before parity can be accepted', () => {
+    const registration = readyRegistration('SHADOW_READ');
+    registration.evidence.approvedRelease = null;
+
+    const decision = evaluateConsumerCutover(registration, 'PARITY_VERIFIED');
+    expect(decision.allowed).toBe(false);
+    expect(decision.blockers).toEqual([
+      'missing evidence: approvedRelease'
+    ]);
+  });
+
+  it('rejects malformed approved release evidence fail-closed', () => {
+    const registration = readyRegistration('SHADOW_READ');
+    registration.evidence.approvedRelease!.observedAt = 'not-a-date';
+
+    const decision = evaluateConsumerCutover(registration, 'PARITY_VERIFIED');
+    expect(decision.allowed).toBe(false);
+    expect(decision.blockers).toEqual([
+      'invalid approvedRelease: observedAt'
     ]);
   });
 
