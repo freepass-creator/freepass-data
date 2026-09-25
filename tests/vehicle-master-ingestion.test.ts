@@ -209,6 +209,37 @@ describe('vehicle master evidence-gated ingestion', () => {
     expect(result.canonicalWrite).toBe('CREATED');
   });
 
+  it('does not let a dealer/archive source independently complete historical corroboration', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const carisyou = source('carisyou-historical', 'CARISYOU', '7');
+    const wikicar = source('wikicar-discovery', 'WIKICAR', '8');
+    await store.putSourceDocument(carisyou);
+    await store.putSourceDocument(wikicar);
+
+    const proposal = trimProposal([carisyou.sourceDocumentId, wikicar.sourceDocumentId], 'HISTORICAL');
+    await seedAncestors(store, proposal);
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: observations(proposal, [
+        carisyou.sourceDocumentId,
+        wikicar.sourceDocumentId,
+      ]),
+      policy: identityPolicy,
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'SOURCE_AUTHORITY_INSUFFICIENT',
+          detail: 'corroborating=1',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
   it('keeps a single non-official source on HOLD', async () => {
     const store = new MemoryVehicleMasterStore();
     const carnoon = source('carnoon-only', 'CARNOON', 'e');
