@@ -4,8 +4,16 @@ export type VehicleMasterParsedCondition = {
   raw: string;
 };
 
+export type VehicleMasterParsedOptionKind =
+  | 'OPTION'
+  | 'COLOR'
+  | 'SEATS'
+  | 'DRIVETRAIN'
+  | 'ACCESSORY';
+
 export type VehicleMasterParsedOption = {
   name: string;
+  kind?: VehicleMasterParsedOptionKind;
   price: number | null;
   note?: string | null;
   conditions?: VehicleMasterParsedCondition[];
