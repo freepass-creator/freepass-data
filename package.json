@@ -28,6 +28,7 @@
     "test:read-runtime-smoke": "node --test tests/read-runtime-smoke.node.mjs",
     "capture:vehicle-master-source": "tsx src/jobs/capture-vehicle-master-source.ts",
     "ingest:vehicle-master-source": "tsx src/jobs/ingest-vehicle-master-source.ts",
+    "backfill:vehicle-master": "tsx src/jobs/backfill-vehicle-master.ts",
     "promote:vehicle-master-canonical": "tsx src/jobs/promote-vehicle-master-canonical.ts",
     "test:vehicle-master-firestore": "node -e \"if (!process.env.FIRESTORE_EMULATOR_HOST) { console.error('FIRESTORE_EMULATOR_HOST required'); process.exit(2) }\" && vitest run tests/vehicle-master-firestore-emulator.test.ts"
   },
