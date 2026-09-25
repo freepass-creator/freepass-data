@@ -124,3 +124,38 @@ This backfill collects vehicle identity/history facts.
 
 It does not turn used listings, mileage, accident history, seller price or transaction
 price into Vehicle Master. Those remain Asset/Listing/Market facts.
+
+
+## Coverage-led continuation
+
+Before each batch the runner builds a model-year coverage ledger from persisted
+SourceDocuments and NORMALIZED_RECORD evidence.
+
+Coverage status:
+- OFFICIAL
+- CORROBORATED
+- SINGLE_SOURCE
+- DISCOVERY_ONLY
+- MISSING (for a newly discovered page with no matching coverage row)
+
+Recent model year remains the primary sort key. Within the same year, weaker
+coverage runs first.
+
+Already captured backfill URLs are derived from Firestore SourceDocument metadata,
+so a resumed campaign does not depend on the operator carrying a local completed
+URL list.
+
+Each run writes an immutable AUDIT_REPORT with before/after coverage digests and
+coverage-status counts.
+
+## Inventory shards
+
+Some providers expose only a partial initial list.
+
+CarIsYou currently uses a “more” style list for a catalog larger than the visible
+first page. The runner therefore detects brand filter IDs from the inventory HTML
+and follows brand-specific inventory URLs, bounded by
+`VEHICLE_MASTER_BACKFILL_DISCOVERY_PAGE_LIMIT`.
+
+The discovery layer also scans provider-specific detail URL patterns outside
+ordinary anchor hrefs so JavaScript-embedded detail URLs can still be queued.
