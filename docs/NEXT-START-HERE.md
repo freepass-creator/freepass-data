@@ -7,18 +7,18 @@ Verified baseline before this handoff update: `adbbfca7c0ddc4e6c7c1906765d9b5aac
 Branch: `codex/local-runtime-baseline`
 Date: 2026-09-22
 
-## 2026-09-26 development-lineage consolidation
+## 2026-09-26 FreePass Data internal consolidation
 
-Repository development authority is now machine-locked in `contracts/development-responsibility-registry.v1.json` and explained in [DEVELOPMENT-LINEAGE.md](DEVELOPMENT-LINEAGE.md). Every canonical PR must declare `Responsibility-ID` + `Lineage-Mode`; `npm run check:lineage` validates repository-local ownership and `npm run audit:open-pr-lineage` validates live GitHub open-PR uniqueness when network access is available.
+Project-local data-layer cleanup only:
 
-- Vehicle Master / new+used ingestion / Estimate master-data projection: canonical WIP is PR #58 only.
-- Consumer release / Sheet handoff / audited Data Access: canonical WIP is PR #54 only.
-- Admin Catalog current line: PR #53 supersedes old #12.
-- Vehicle Finder PR #52 is reference/prototype only, not production UI authority.
-- Source ingestion and Catalog canonical transactions share one Firestore physical layout module; the ingestion port is explicitly named `SourceIngestionStore`.
-- Quote issuance/calculation contracts remain outside FreePass Data and must not be reintroduced here.
+- central target Firebase binding must flow through `src/infra/firebase-target.ts`;
+- source evidence collection names and source document-ID encoding are shared through `src/infra/source-firestore-layout.ts`;
+- source-run CURRENT / STALE / INELIGIBLE promotion policy is centralized in Domain `decideSourceHead`;
+- ingestion uses the responsibility-specific `SourceIngestionStore`; Canonical mutations remain behind `CatalogStore`;
+- FreePass Data owns Estimate master-data facts/projection only, not the Estimate pricing/issued-quote engine;
+- preview UI remains reference-only and is not a product UI authority.
 
-Do not start new work from superseded feature branches merely because they remain in GitHub history.
+Company-wide branch/PR lineage governance belongs in AI Core and is intentionally not duplicated here.
 
 ## 2026-09-22 publication-readiness gate
 
