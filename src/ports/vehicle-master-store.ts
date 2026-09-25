@@ -22,6 +22,7 @@ export interface VehicleMasterStore {
   putPriceRevision(record: VehicleMasterPriceRevision): Promise<VehicleMasterWriteResult>;
 
   getSourceDocument(id: string): Promise<VehicleMasterSourceDocument | null>;
+  listSourceDocuments(): Promise<VehicleMasterSourceDocument[]>;
   putSourceDocument(record: VehicleMasterSourceDocument): Promise<VehicleMasterWriteResult>;
 
   getHash(hashId: string): Promise<VehicleMasterHashRecord | null>;
@@ -34,6 +35,9 @@ export interface VehicleMasterStore {
   listPipelineRecords(
     kind: VehicleMasterPipelineRecord['kind'],
     sourceDocumentId: string
+  ): Promise<VehicleMasterPipelineRecord[]>;
+  listPipelineRecordsByKind(
+    kind: VehicleMasterPipelineRecord['kind']
   ): Promise<VehicleMasterPipelineRecord[]>;
   putPipelineRecord(record: VehicleMasterPipelineRecord): Promise<VehicleMasterWriteResult>;
 
