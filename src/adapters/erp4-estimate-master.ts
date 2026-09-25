@@ -267,8 +267,11 @@ export function mapLegacyNewcarFeedToEstimateMaster(
 
   const priceBefore = safeMoney(feed.priceBefore);
   const priceAfter = safeMoney(feed.priceAfter);
-  const basePrice = (priceAfter && priceAfter.amount > 0 ? priceAfter : null)
-    || (priceBefore && priceBefore.amount > 0 ? priceBefore : null);
+  // Standard engine starts from the pre-tax-benefit vehicle price and applies
+  // the verified before-after tax credit separately. Using priceAfter here
+  // would subtract the benefit twice.
+  const basePrice = (priceBefore && priceBefore.amount > 0 ? priceBefore : null)
+    || (priceAfter && priceAfter.amount > 0 ? priceAfter : null);
   if (!basePrice) holdReasons.push('BASE_PRICE_UNVERIFIED');
 
   const optionMapped = optionRecords(feed, identity.trimId);
