@@ -377,12 +377,14 @@ async function persistPromotionEvidence(
     candidatePayload: Record<string, unknown>;
   }
 ) {
-  const observationDigest = stableDigest(
-    [...input.observations].sort((a, b) =>
-      a.fieldPath.localeCompare(b.fieldPath) ||
-      a.sourceDocumentId.localeCompare(b.sourceDocumentId)
-    )
+  // The immutable candidate payload and its identity must use the same order.
+  // Value digest breaks ties without discarding contradictory observations.
+  const canonicalObservations = [...input.observations].sort((a, b) =>
+    a.fieldPath.localeCompare(b.fieldPath) ||
+    a.sourceDocumentId.localeCompare(b.sourceDocumentId) ||
+    stableDigest(a.value).localeCompare(stableDigest(b.value))
   );
+  const observationDigest = stableDigest(canonicalObservations);
   const identity = {
     entityKind: input.entityKind,
     entityId: input.entityId,
@@ -396,7 +398,7 @@ async function persistPromotionEvidence(
     identity,
     input.observedAt,
     input.entityId,
-    input.candidatePayload
+    { ...input.candidatePayload, observations: canonicalObservations }
   );
   await store.putPipelineRecord(candidateFact);
 
