@@ -79,3 +79,21 @@ Canonical ACTIVE Catalog release.
 The bridge can be retired only after a `CANONICAL_ACTIVE` sheet projection
 contains all fields needed by the sheet writers and the same delivery receipt
 contract passes end-to-end.
+
+
+### Read-only bridge preparation
+
+The migration bridge can be prepared without any Sheet or Firestore write:
+
+```bash
+npm run prepare:sheet-bridge -- --live-read-only --workbook=F01
+npm run prepare:sheet-bridge -- --live-read-only --workbook=F86
+```
+
+The job reads `products`, `policy`, and `partner` in one Firestore read-only
+transaction, builds the bridge release/manifest, self-validates the handoff, and
+writes only private local evidence under the user home directory.
+
+A successful preparation reports `READY_FOR_SHADOW`, never production cutover.
+Required next evidence is ERP4 shadow consumption, rendered-output parity, and a
+valid `freepass-sheet-delivery-v1` readback receipt.
