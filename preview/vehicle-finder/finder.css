@@ -31,7 +31,13 @@
 .vf .vf-note,.vf .vf-path,.vf .vf-row-path,.vf .vf-config-evidence{color:var(--text,#5F6974);font-size:var(--vf-support)}
 .vf .vf-head{display:flex;gap:12px;align-items:center;justify-content:space-between}
 .vf .vf-toolbar{display:flex;gap:12px;align-items:end;margin:24px 0 12px}
-.vf .vf-utility-actions{display:flex;gap:8px;align-items:center}
+.vf .vf-utility-actions{display:flex;gap:4px;align-items:center}
+.vf .vf-refresh{
+  width:44px;
+  padding:8px;
+  font-size:20px;
+  line-height:1;
+}
 .vf label{display:grid;gap:6px;min-width:0}
 .vf .vf-field-label{
   position:absolute;
@@ -126,8 +132,9 @@
 .vf dl{margin:20px 0}
 .vf dt{font-size:var(--vf-support);color:var(--text,#5F6974)}
 .vf dd{margin:0 0 16px;overflow-wrap:anywhere}
-.vf .vf-configurations{margin:20px 0}
-.vf .vf-config-list{display:grid;gap:8px;list-style:none;padding:0;margin:0}
+.vf .vf-configurations{margin:12px 0}
+.vf .vf-config-missing{margin:12px 0}
+.vf .vf-config-list{display:grid;gap:8px;list-style:none;padding:0 0 4px;margin:0}
 .vf .vf-config-card{
   display:grid;
   gap:3px;
@@ -163,6 +170,11 @@
   overflow-wrap:anywhere;
 }
 .vf .vf-evidence{font-size:var(--vf-support)}
+.vf .vf-configurations summary,.vf .vf-evidence summary{
+  color:var(--vf-ink);
+  font-size:var(--vf-support);
+  font-weight:600;
+}
 .vf summary{cursor:pointer;min-height:44px;padding:10px 0}
 
 @media(max-width:900px){
