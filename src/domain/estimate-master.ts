@@ -28,6 +28,9 @@ export type EstimateNewcarMasterRecord = {
   trimName: string;
   powertrainName: string;
   basePrice: EstimateMasterMoney;
+  priceBefore: EstimateMasterMoney | null;
+  priceAfter: EstimateMasterMoney | null;
+  priceBasis: string | null;
   options: EstimateMasterOption[];
   exteriorColors: EstimateMasterColor[];
   interiorColors: EstimateMasterColor[];
