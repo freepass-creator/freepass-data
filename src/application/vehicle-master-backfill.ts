@@ -72,9 +72,11 @@ export function discoverAdditionalVehicleMasterInventoryPages(input: {
   const html = input.bytes.toString('utf8');
   const ids = new Set<string>();
 
-  const inputPattern = /<input\b[^>]*\bname=["']srhBrandArry(?:\[\])?["'][^>]*\bvalue=["'](\d+)["'][^>]*>/gi;
-  for (const match of html.matchAll(inputPattern)) {
-    if (match[1]) ids.add(match[1]);
+  for (const match of html.matchAll(/<input\b[^>]*>/gi)) {
+    const tag = match[0];
+    const name = tag.match(/\bname=["']srhBrandArry(?:\[\])?["']/i);
+    const value = tag.match(/\bvalue=["'](\d+)["']/i);
+    if (name && value?.[1]) ids.add(value[1]);
   }
 
   const queryPattern = /[?&]srhBrandArry=(\d+)/g;
