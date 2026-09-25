@@ -48,3 +48,34 @@ presentation, so comparing the native sheet readback digest directly with the
 projection digest is invalid. The receipt proves release identity through
 `approvedRelease`, then proves transport integrity by comparing
 `renderedOutput.dataDigest/vehicleKeyCount` with the readback values.
+
+
+## Migration bridge ownership
+
+The target end state is still `CANONICAL_ACTIVE`, but F01/F86 migration must not
+wait for the entire Catalog canonicalization program to finish before authority
+moves out of ERP4.
+
+FreePass Data therefore owns a temporary, explicit migration authority:
+
+`LEGACY_VERIFIED_BRIDGE`
+
+This bridge is not Canonical Catalog authority. It is a Data-owned transport
+release built from one read-only Firestore transaction over the operational
+`products`, `policy`, and `partner` collections.
+
+Executable path:
+
+- `src/application/sheet-publication-bridge.ts`
+- `captureErp5SheetSource()` — captures all three collections at one Firestore read time
+- `buildSheetBridgeRelease()` — decodes without inventing missing values, verifies inventory invariants, and creates one bridge release + manifest
+- `buildSheetBridgeHandoff()` — emits F01/F86-specific `freepass-sheet-handoff-v1` payloads
+- `validateSheetPublicationHandoff()` — rechecks manifest identity, counts, release digest, snapshot digest and handoff hash
+
+The bridge release is identified by `releaseAuthority=LEGACY_VERIFIED_BRIDGE`
+and `projectionId=sheet-publication-bridge`. It must never be reported as a
+Canonical ACTIVE Catalog release.
+
+The bridge can be retired only after a `CANONICAL_ACTIVE` sheet projection
+contains all fields needed by the sheet writers and the same delivery receipt
+contract passes end-to-end.
