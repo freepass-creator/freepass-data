@@ -208,5 +208,39 @@
       "pr": 57,
       "reason": "temporary consolidation PR superseded by PR #54"
     }
+  ],
+  "retiredBranches": [
+    {
+      "branch": "design/architecture-v2-review-20260920",
+      "reason": "historical architecture review; approved authority is on main"
+    },
+    {
+      "branch": "work/admin-catalog-projection-v1-current-20260921",
+      "reason": "superseded by PR #53"
+    },
+    {
+      "branch": "auto/consumer-release-binding-20260925",
+      "reason": "superseded by PR #54"
+    },
+    {
+      "branch": "work/gpt/estimate-master-contract-20260925",
+      "reason": "superseded by PR #58 for Data-owned master facts"
+    },
+    {
+      "branch": "work/gpt/vehicle-master-persistence-20260925",
+      "reason": "superseded by PR #58"
+    },
+    {
+      "branch": "work/gpt/vehicle-master-ingestion-20260925",
+      "reason": "superseded by PR #58"
+    },
+    {
+      "branch": "work/gpt/data-ui-vehicle-finder-slice-20260925",
+      "reason": "prototype/reference only; not production UI authority"
+    },
+    {
+      "branch": "codex/erp5-consumer-runtime-20260921",
+      "reason": "historical runtime line; do not use as a new base"
+    }
   ]
 }
