@@ -133,12 +133,7 @@ export function discoverAdditionalVehicleMasterInventoryPages(input: {
       return url.toString();
     });
 
-  for (const url of brandPages) {
-    additional.add(url);
-    const mobile = new URL(url);
-    mobile.hostname = 'm.carisyou.com';
-    additional.add(mobile.toString());
-  }
+  for (const url of brandPages) additional.add(url);
   additional.delete(input.inventoryUrl);
 
   return [...additional].sort((a, b) => {
