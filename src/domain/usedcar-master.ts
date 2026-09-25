@@ -90,21 +90,6 @@ export type UsedcarMasterSemanticIssue = {
   detail?: string;
 };
 
-const text = (value: string | null | undefined) =>
-  (value ?? '')
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/[()[\]{}]/g, ' ')
-    .replace(/[^0-9a-z가-힣.+-]+/g, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
-
-const compact = (value: string | null | undefined) =>
-  text(value).replace(/\s+/g, '');
-
-const uniqueSorted = (values: readonly string[]) =>
-  [...new Set(values.filter(Boolean))].sort();
-
 export function usedcarMasterRecordId(trimId: string | null, fallbackIdentity: unknown) {
   return trimId
     ? `used_${trimId}`
@@ -257,27 +242,26 @@ export function searchUsedcarMaster(
     throw new Error('USEDCAR_MASTER_QUERY_REQUIRED');
   }
 
-  const selection: VehicleSelectorSelection = {
-    maker: query.maker,
-    model: query.model,
-    generation: query.generation,
-    phase: query.phase,
-    modelYear: query.modelYear,
-    powertrain: query.powertrain,
-    fuelType: query.fuelType,
-    drivetrain: query.drivetrain,
-    seats: query.seats,
-    trim: query.trim,
-  };
+  const selection: VehicleSelectorSelection = {};
+  if (query.maker !== undefined) selection.maker = query.maker;
+  if (query.model !== undefined) selection.model = query.model;
+  if (query.generation !== undefined) selection.generation = query.generation;
+  if (query.phase !== undefined) selection.phase = query.phase;
+  if (query.modelYear !== undefined) selection.modelYear = query.modelYear;
+  if (query.powertrain !== undefined) selection.powertrain = query.powertrain;
+  if (query.fuelType !== undefined) selection.fuelType = query.fuelType;
+  if (query.drivetrain !== undefined) selection.drivetrain = query.drivetrain;
+  if (query.seats !== undefined) selection.seats = query.seats;
+  if (query.trim !== undefined) selection.trim = query.trim;
 
   const byId = new Map(records.map((record) => [record.recordId, record]));
   const result = selectVehicles(
     records.map(toSelectorRecord),
     {
       mode: 'USED_CAR',
-      searchText: query.searchText,
       selection,
       includeHold: true,
+      ...(query.searchText !== undefined ? { searchText: query.searchText } : {}),
     }
   );
 
