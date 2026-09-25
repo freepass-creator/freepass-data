@@ -47,7 +47,7 @@ Latest handoff commit when this file was created:
 These are project-specific data-platform boundaries, not company-wide development-governance rules.
 
 - All central FreePass Data Firebase/Firestore access must resolve the target through `src/infra/firebase-target.ts`; do not initialize a second target app path.
-- Source evidence physical collection names and source document-ID encoding come only from `src/infra/source-firestore-layout.ts`.
+- Source evidence physical collection names and source document-ID encoding come only from `src/infra/firestore-layout.ts`.
 - Source-run head promotion semantics come from the Domain source policy (`decideSourceHead`); adapters must not reimplement CURRENT/STALE/INELIGIBLE decisions.
 - `SourceIngestionStore` owns source-run ingestion lifecycle. `CatalogStore` owns Canonical transactional mutation. Do not collapse them into competing repositories or add a third source persistence path.
 - FreePass Data may publish Estimate master-data facts/projections, but pricing/calculation/issued-quote engine contracts remain in the Estimate product boundary.
