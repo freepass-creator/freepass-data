@@ -219,24 +219,30 @@ export function discoverVehicleMasterPages(input: {
     url: URL;
   }> = [];
   const acceptedUrls = new Set<string>();
-  const candidates = [
-    ...anchors(html),
-    ...sourceSpecificUrlCandidates(html, input.sourceKey),
-  ].sort((a, b) => a.index - b.index || a.href.localeCompare(b.href));
 
-  for (const anchor of candidates) {
+  const acceptCandidate = (anchor: ReturnType<typeof anchors>[number]) => {
     let url: URL;
     try {
       url = new URL(anchor.href.replaceAll('&amp;', '&'), input.inventoryUrl);
     } catch {
-      continue;
+      return;
     }
-    if (!acceptedDetailUrl(input.sourceKey, url)) continue;
+    if (!acceptedDetailUrl(input.sourceKey, url)) return;
     const key = url.toString();
-    if (acceptedUrls.has(key)) continue;
+    if (acceptedUrls.has(key)) return;
     acceptedUrls.add(key);
     accepted.push({ anchor, url });
+  };
+
+  // Prefer real anchor cards because their surrounding text carries model/year/status.
+  // Provider-specific URL scans are fallback only for JavaScript/XML pages with no link.
+  for (const anchor of anchors(html)) acceptCandidate(anchor);
+  for (const fallback of sourceSpecificUrlCandidates(html, input.sourceKey)) {
+    acceptCandidate(fallback);
   }
+  accepted.sort((a, b) =>
+    a.anchor.index - b.anchor.index || a.url.toString().localeCompare(b.url.toString())
+  );
 
   for (const [position, { anchor, url }] of accepted.entries()) {
     const floor = accepted[position - 1]?.anchor.end ?? 0;
