@@ -219,7 +219,10 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       productionReadbackVerified: false,
       approvedRelease: null
     },
-    holdReasons: ['publisher does not consume an approved FreePass Data release']
+    holdReasons: [
+      'publisher does not consume an approved FreePass Data release',
+      'release-bound F01 delivery receipt is not verified'
+    ]
   },
   {
     consumerId: 'google-sheets-f86',
@@ -240,7 +243,10 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       productionReadbackVerified: false,
       approvedRelease: null
     },
-    holdReasons: ['publisher does not consume an approved FreePass Data release']
+    holdReasons: [
+      'publisher does not consume an approved FreePass Data release',
+      'release-bound F86 delivery receipt is not verified'
+    ]
   }
 ];
 
