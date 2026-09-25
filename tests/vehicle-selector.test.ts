@@ -19,6 +19,7 @@ function record(
     phase: { id: 'phase_mq4_fl', label: '페이스리프트' },
     modelYear: { id: 'my_2027', label: '2027년형', value: 2027 },
     powertrain: { id: 'pt_hybrid', label: '1.6 터보 하이브리드' },
+    fuelType: { id: null, label: 'HYBRID' },
     drivetrain: { id: null, label: '2WD' },
     seats: { id: null, label: '5인승', value: 5 },
     trim: { id: 'trim_noblesse', label: '노블레스' },
@@ -33,6 +34,7 @@ describe('common vehicle selector', () => {
       record('hybrid'),
       record('gasoline', {
         powertrain: { id: 'pt_gasoline', label: '2.5 가솔린 터보' },
+        fuelType: { id: null, label: 'GASOLINE' },
         trim: { id: 'trim_prestige', label: '프레스티지' },
         aliases: ['MQ4', '쏘렌토 가솔린'],
       }),
