@@ -9,6 +9,7 @@ import type {
 import {
   htmlToVehicleText,
   isoDateFromKorean,
+  normalizeParsedOptionCondition,
   parseKrw,
   splitOptionPrice,
   uniqueParsedTrims,
@@ -129,7 +130,7 @@ export class KiaOfficialPriceParser implements VehicleMasterSourceParser {
 
           if (inOptions) {
             const option = splitOptionPrice(line);
-            if (option) options.push(option);
+            if (option) options.push(normalizeParsedOptionCondition(option));
             continue;
           }
 
