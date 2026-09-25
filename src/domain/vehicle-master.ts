@@ -114,7 +114,8 @@ export type VehicleMasterPipelineKind =
   | 'EVIDENCE_SET'
   | 'REVISION_CANDIDATE'
   | 'PROMOTION_RESULT'
-  | 'CHANGE_EVENT';
+  | 'CHANGE_EVENT'
+  | 'AUDIT_REPORT';
 
 export type VehicleMasterPipelineRecord = {
   recordId: string;
