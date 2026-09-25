@@ -10,6 +10,7 @@ const unsigned: Omit<SheetPublicationHandoff, 'handoffHash'> = {
   consumerId: 'google-sheets-f01',
   workbook: 'F01',
   generatedAt: '2026-09-25T07:02:00.000Z',
+  releaseAuthority: 'LEGACY_VERIFIED_BRIDGE',
   approvedRelease: {
     projectionId: 'erp-public',
     releaseId: 'rel_test',
