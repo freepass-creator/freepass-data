@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   hashSheetPublicationHandoff,
+  hashSheetPublicationData,
   validateSheetPublicationHandoff,
   type SheetPublicationHandoff
 } from '../src/domain/sheet-publication-handoff.js';
-import { stableDigest } from '../src/shared/stable-digest.js';
 
 const snapshot = {
   version: 1 as const,
