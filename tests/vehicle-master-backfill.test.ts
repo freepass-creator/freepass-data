@@ -130,6 +130,24 @@ describe('vehicle master recent-first backfill', () => {
     ]);
   });
 
+  it('follows CarIsYou pagination-style inventory hints when exposed in page markup', () => {
+    const html = Buffer.from(`
+      <script>
+        const next = "/car/?srhBrandArry=43&pageNo=2";
+        const more = "/car/?srhBrandArry=43&offset=20";
+      </script>
+    `, 'utf8');
+
+    expect(discoverAdditionalVehicleMasterInventoryPages({
+      sourceKey: 'CARISYOU',
+      inventoryUrl: 'https://www.carisyou.com/car/?srhBrandArry=43',
+      bytes: html,
+    })).toEqual([
+      'https://www.carisyou.com/car/?srhBrandArry=43&offset=20',
+      'https://www.carisyou.com/car/?srhBrandArry=43&pageNo=2',
+    ]);
+  });
+
   it('discovers CarIsYou historical/current detail pages and can skip completed URLs', () => {
     const html = Buffer.from(`
       <div>시판 2027 BMW 5시리즈(8세대)
