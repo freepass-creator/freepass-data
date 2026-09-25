@@ -28,6 +28,13 @@ const snapshot = {
   }
 };
 
+const snapshotDataDigest = stableDigest({
+  products: snapshot.products,
+  policies: snapshot.policies,
+  partners: snapshot.partners,
+  inventory: snapshot.inventory
+});
+
 const unsigned: Omit<SheetPublicationHandoff, 'handoffHash'> = {
   contractVersion: 'freepass-sheet-handoff-v1',
   consumerId: 'google-sheets-f01',
@@ -35,25 +42,25 @@ const unsigned: Omit<SheetPublicationHandoff, 'handoffHash'> = {
   generatedAt: '2026-09-25T07:02:00.000Z',
   releaseAuthority: 'LEGACY_VERIFIED_BRIDGE',
   approvedRelease: {
-    projectionId: 'erp-public',
+    projectionId: 'sheet-publication-bridge',
     releaseId: 'rel_test',
     manifestId: 'manifest_test',
     inputDigest: 'input_test',
-    dataDigest: stableDigest(snapshot),
+    dataDigest: snapshotDataDigest,
     observedAt: '2026-09-25T07:00:00.000Z'
   },
   manifest: {
     contractVersion: 'freepass-sheet-manifest-v1',
     manifestId: 'manifest_test',
     releaseId: 'rel_test',
-    projectionId: 'erp-public',
+    projectionId: 'sheet-publication-bridge',
     releaseAuthority: 'LEGACY_VERIFIED_BRIDGE',
     sourceCaptureDigest: 'input_test',
     sourceReadTime: '2026-09-25T07:00:00.000Z',
     productCount: snapshot.products.length,
     policyCount: snapshot.policies.length,
     partnerCount: snapshot.partners.length,
-    dataDigest: stableDigest(snapshot),
+    dataDigest: snapshotDataDigest,
     generatedAt: '2026-09-25T07:01:00.000Z'
   },
   snapshot
