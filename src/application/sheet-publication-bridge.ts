@@ -158,6 +158,19 @@ export async function captureErp5SheetSource(
   }
 }
 
+function legacyTimestampValue(value: string) {
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) fail('INVALID_SHEET_FIRESTORE_TIMESTAMP');
+  const millis = Date.parse(`${match[1]}${match[3]}`);
+  if (!Number.isFinite(millis) || millis % 1000 !== 0) {
+    fail('INVALID_SHEET_FIRESTORE_TIMESTAMP');
+  }
+  return {
+    _seconds: millis / 1000,
+    _nanoseconds: Number((match[2] ?? '').padEnd(9, '0'))
+  };
+}
+
 function decodeSheetValue(value: unknown): unknown {
   if (!object(value) || Object.keys(value).length !== 1) {
     fail('INVALID_SHEET_FIRESTORE_VALUE');
@@ -173,7 +186,9 @@ function decodeSheetValue(value: unknown): unknown {
   }
   if ('doubleValue' in value && typeof value.doubleValue === 'number' &&
       Number.isFinite(value.doubleValue)) return value.doubleValue;
-  if ('timestampValue' in value && time(value.timestampValue)) return value.timestampValue;
+  if ('timestampValue' in value && typeof value.timestampValue === 'string' && time(value.timestampValue)) {
+    return legacyTimestampValue(value.timestampValue);
+  }
   if ('arrayValue' in value && object(value.arrayValue)) {
     if (Object.keys(value.arrayValue).some((key) => key !== 'values')) {
       fail('INVALID_SHEET_FIRESTORE_ARRAY');
@@ -242,6 +257,21 @@ const deletedMarker = (product: Record<string, unknown>) =>
   Boolean(String(product.deletedAt ?? '').trim()) ||
   String(product.status ?? '').trim().toLowerCase() === 'deleted';
 
+const LEGACY_SONOKONG_DEPOSIT_RULE = '월 대여료 × 약정연수 (최대 3개월)';
+const legacyDepositRuleViolation = (product: Record<string, unknown>) => {
+  if (String(product.deposit_note ?? '').trim() !== LEGACY_SONOKONG_DEPOSIT_RULE) return false;
+  const classification = object(product.sonokong_classification)
+    ? product.sonokong_classification
+    : null;
+  if (String(classification?.product_type ?? product.product_type ?? '').trim() === '중고렌트') {
+    return false;
+  }
+  if (!object(product.price)) return false;
+  return Object.values(product.price).some((term) =>
+    object(term) && Number(term.deposit) > 0
+  );
+};
+
 export function buildSheetInventorySummary(
   products: readonly Record<string, unknown>[]
 ): SheetInventorySummary {
@@ -254,6 +284,7 @@ export function buildSheetInventorySummary(
   let blankPlateViolations = 0;
   let invalidPlateViolations = 0;
   let duplicatePlateViolations = 0;
+  let depositRuleViolations = 0;
   const plates = new Set<string>();
 
   for (const product of products) {
@@ -271,6 +302,7 @@ export function buildSheetInventorySummary(
       String(product.source_schema ?? '').trim();
     if (!provider || !source) sourceIdentityViolations++;
     if (deletedMarker(product)) deletedMarkerViolations++;
+    if (legacyDepositRuleViolation(product)) depositRuleViolations++;
 
     const rawPlate = String(product.car_number ?? '').trim();
     const plate = plateKey(rawPlate);
@@ -293,6 +325,7 @@ export function buildSheetInventorySummary(
     blankPlateViolations,
     invalidPlateViolations,
     duplicatePlateViolations,
+    depositRuleViolations,
     byStatus
   };
 }
@@ -348,7 +381,8 @@ export function buildSheetBridgeRelease(
     inventory.deletedMarkerViolations ||
     inventory.blankPlateViolations ||
     inventory.invalidPlateViolations ||
-    inventory.duplicatePlateViolations
+    inventory.duplicatePlateViolations ||
+    inventory.depositRuleViolations
   ) {
     fail('SHEET_BRIDGE_INVENTORY_VIOLATION');
   }
