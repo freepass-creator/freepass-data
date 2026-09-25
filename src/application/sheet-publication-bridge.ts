@@ -438,7 +438,7 @@ export function buildSheetBridgeHandoff(
     snapshot: {
       version: 1,
       snapshotId: bridge.release.releaseId,
-      capturedAt: bridge.release.observedAt,
+      capturedAt: generatedAt,
       products: structuredClone(bridge.products),
       policies: structuredClone(bridge.policies),
       partners: structuredClone(bridge.partners),
