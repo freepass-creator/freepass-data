@@ -4,6 +4,29 @@ import {
   validateSheetPublicationHandoff,
   type SheetPublicationHandoff
 } from '../src/domain/sheet-publication-handoff.js';
+import { stableDigest } from '../src/shared/stable-digest.js';
+
+const snapshot = {
+  version: 1 as const,
+  snapshotId: 'snapshot_test',
+  capturedAt: '2026-09-25T07:01:00.000Z',
+  products: [{ _key: 'TEST-1', car_number: '12가3456' }],
+  policies: [],
+  partners: [],
+  inventory: {
+    registered: 1,
+    unavailable: 0,
+    open: 1,
+    listableDrift: 0,
+    statusKindDrift: 0,
+    sourceIdentityViolations: 0,
+    deletedMarkerViolations: 0,
+    blankPlateViolations: 0,
+    invalidPlateViolations: 0,
+    duplicatePlateViolations: 0,
+    byStatus: { 즉시출고: 1 }
+  }
+};
 
 const unsigned: Omit<SheetPublicationHandoff, 'handoffHash'> = {
   contractVersion: 'freepass-sheet-handoff-v1',
@@ -16,30 +39,10 @@ const unsigned: Omit<SheetPublicationHandoff, 'handoffHash'> = {
     releaseId: 'rel_test',
     manifestId: 'manifest_test',
     inputDigest: 'input_test',
-    dataDigest: 'data_test',
+    dataDigest: stableDigest(snapshot),
     observedAt: '2026-09-25T07:00:00.000Z'
   },
-  snapshot: {
-    version: 1,
-    snapshotId: 'snapshot_test',
-    capturedAt: '2026-09-25T07:01:00.000Z',
-    products: [{ _key: 'TEST-1', car_number: '12가3456' }],
-    policies: [],
-    partners: [],
-    inventory: {
-      registered: 1,
-      unavailable: 0,
-      open: 1,
-      listableDrift: 0,
-      statusKindDrift: 0,
-      sourceIdentityViolations: 0,
-      deletedMarkerViolations: 0,
-      blankPlateViolations: 0,
-      invalidPlateViolations: 0,
-      duplicatePlateViolations: 0,
-      byStatus: { 즉시출고: 1 }
-    }
-  }
+  snapshot
 };
 
 const valid = (): SheetPublicationHandoff => ({
