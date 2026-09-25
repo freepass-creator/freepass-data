@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/freepass-quote-v2.schema.json",
+  "title": "FreePass Issued Quote v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "quoteId",
+    "quoteVersion",
+    "createdAt",
+    "vehicleModelId",
+    "modelYearId",
+    "trimId",
+    "powertrainId",
+    "selectedOptionIds",
+    "exteriorColorId",
+    "interiorColorId",
+    "contractTerm",
+    "mileageCondition",
+    "deposit",
+    "prepayment",
+    "depositRatePct",
+    "prepaymentRatePct",
+    "vehiclePriceSnapshot",
+    "optionPriceSnapshot",
+    "totalVehiclePrice",
+    "monthlyRental",
+    "pricingEngineVersion",
+    "sourceRevision",
+    "snapshotHash"
+  ],
+  "properties": {
+    "contract": {
+      "const": "freepass-quote/v2"
+    },
+    "quoteId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "quoteVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "vehicleModelId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "modelYearId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trimId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "powertrainId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selectedOptionIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "exteriorColorId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "interiorColorId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contractTerm": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 120
+    },
+    "mileageCondition": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deposit": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "prepayment": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "depositRatePct": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "prepaymentRatePct": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "vehiclePriceSnapshot": {
+      "type": "object"
+    },
+    "optionPriceSnapshot": {
+      "type": "array"
+    },
+    "totalVehiclePrice": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "monthlyRental": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "pricingEngineVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceRevision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "snapshotHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}
