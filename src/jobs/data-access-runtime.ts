@@ -1,13 +1,24 @@
 import { DataAccessGateway } from '../application/data-access-gateway.js';
 import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
-import { createFirestoreSourceStore } from '../infra/source-firestore-store.js';
 
-/** Composition root for background jobs that write source evidence. */
 export function createJobDataAccessRuntime() {
   return {
-    access: new DataAccessGateway(createFirestoreDataAccessLogStore()),
+    access: new DataAccessGateway(createFirestoreDataAccessLogStore())
+  };
+}
+
+export async function createSourceIngestDataAccessRuntime() {
+  const { createFirestoreSourceStore } = await import('../infra/source-firestore-store.js');
+  return {
+    ...createJobDataAccessRuntime(),
     sourceStore: createFirestoreSourceStore()
   };
 }
 
-export const createSourceIngestDataAccessRuntime = createJobDataAccessRuntime;
+export async function createCentralDiagnosticDataAccessRuntime() {
+  const { readCentralFirestoreCounts } = await import('../infra/central-firestore-diagnostic.js');
+  return {
+    ...createJobDataAccessRuntime(),
+    readCounts: readCentralFirestoreCounts
+  };
+}
