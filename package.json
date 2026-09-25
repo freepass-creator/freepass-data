@@ -25,7 +25,8 @@
     "check:sheets": "node --test tests/sheet-presentation.node.mjs tests/sheet-presentation-online.node.mjs",
     "sheets:plan": "node scripts/sheet-presentation.mjs",
     "check:arch": "node scripts/check-architecture.mjs",
-    "test:read-runtime-smoke": "node --test tests/read-runtime-smoke.node.mjs"
+    "test:read-runtime-smoke": "node --test tests/read-runtime-smoke.node.mjs",
+    "prepare:sheet-bridge": "tsx src/jobs/prepare-sheet-publication-bridge.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",
