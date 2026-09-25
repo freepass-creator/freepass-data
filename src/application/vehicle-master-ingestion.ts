@@ -91,7 +91,7 @@ const SOURCE_AUTHORITY: Record<VehicleMasterSourceDocument['sourceType'], number
   DANAWA: 70,
   CARNOON: 70,
   CARISYOU: 70,
-  WIKICAR: 60,
+  WIKICAR: 40,
   MARKET_LISTING: 30,
   MANUAL: 20,
   OTHER: 10,
@@ -104,7 +104,6 @@ const CORROBORATING_SOURCE_TYPES = new Set<VehicleMasterSourceDocument['sourceTy
   'DANAWA',
   'CARNOON',
   'CARISYOU',
-  'WIKICAR',
 ]);
 
 
