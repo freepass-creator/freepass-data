@@ -45,15 +45,19 @@ export function validateSheetDeliveryReceipt(
     violations.push('MISSING_SPREADSHEET_ID');
   }
 
-  for (const key of [
-    'projectionId',
-    'releaseId',
-    'manifestId',
-    'inputDigest',
-    'dataDigest'
-  ] as const) {
+  const releaseFields = {
+    projectionId: 'PROJECTION_ID_MISMATCH',
+    releaseId: 'RELEASE_ID_MISMATCH',
+    manifestId: 'MANIFEST_ID_MISMATCH',
+    inputDigest: 'INPUT_DIGEST_MISMATCH',
+    dataDigest: 'DATA_DIGEST_MISMATCH'
+  } as const;
+
+  for (const [key, code] of Object.entries(releaseFields) as Array<
+    [keyof typeof releaseFields, (typeof releaseFields)[keyof typeof releaseFields]]
+  >) {
     if (receipt.approvedRelease[key] !== expectedRelease[key]) {
-      violations.push(`RELEASE_${key.toUpperCase()}_MISMATCH`);
+      violations.push(code);
     }
   }
 
