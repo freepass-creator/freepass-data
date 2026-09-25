@@ -86,27 +86,25 @@ for (const file of walk(srcRoot)) {
   }
 }
 
-const sourceLayoutOwner = path.join(srcRoot, 'infra', 'source-firestore-layout.ts');
-const sourcePhysicalNames = [
-  'sources',
-  'source_runs',
-  'source_heads',
-  'raw_records',
-  'normalized_candidates',
-  'field_lineage'
-];
+const firestoreLayoutOwner = path.join(srcRoot, 'infra', 'firestore-layout.ts');
+const firestoreLayoutText = fs.readFileSync(firestoreLayoutOwner, 'utf8');
+const firestorePhysicalNames = [
+  ...firestoreLayoutText.matchAll(/:\\s*'([^']+)'/g)
+]
+  .map((match) => match[1])
+  .filter((value) => value !== '__');
 
 for (const file of walk(srcRoot)) {
-  if (path.resolve(file) === path.resolve(sourceLayoutOwner)) continue;
+  if (path.resolve(file) === path.resolve(firestoreLayoutOwner)) continue;
   const text = fs.readFileSync(file, 'utf8');
-  for (const collectionName of sourcePhysicalNames) {
+  for (const collectionName of firestorePhysicalNames) {
     const literal = new RegExp(`['"]${collectionName}['"]`);
     if (literal.test(text)) {
       violations.push({
         file: path.relative(repoRoot, file),
         layer: layerOf(file),
         import: collectionName,
-        reason: 'Source Firestore physical layout must come from src/infra/source-firestore-layout.ts'
+        reason: 'FreePass Data Firestore physical layout must come from src/infra/firestore-layout.ts'
       });
     }
   }
