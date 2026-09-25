@@ -1,7 +1,9 @@
 import {
   deterministicVehicleMasterRecordId,
+  sealVehicleMasterCompatibilityRule,
   sealVehicleMasterNode,
   sealVehicleMasterPriceRevision,
+  type VehicleMasterCompatibilityRule,
   type VehicleMasterNode,
   type VehicleMasterPriceRevision,
 } from '../domain/vehicle-master.js';
@@ -35,7 +37,7 @@ function substantiveNode(record: VehicleMasterNode) {
   return substantive;
 }
 
-async function prepareNode(
+export async function prepareVehicleMasterNode(
   store: VehicleMasterStore,
   candidate: VehicleMasterNode
 ): Promise<VehicleMasterNode> {
@@ -68,6 +70,46 @@ async function prepareNode(
   });
 }
 
+
+function substantiveRule(record: VehicleMasterCompatibilityRule) {
+  const {
+    schemaVersion: _schemaVersion,
+    revision: _revision,
+    createdAt: _createdAt,
+    updatedAt: _updatedAt,
+    contentHash: _contentHash,
+    ...substantive
+  } = record;
+  return substantive;
+}
+
+export async function prepareVehicleMasterCompatibilityRule(
+  store: VehicleMasterStore,
+  candidate: VehicleMasterCompatibilityRule
+): Promise<VehicleMasterCompatibilityRule> {
+  const existing = await store.getCompatibilityRule(candidate.id);
+  if (!existing) return candidate;
+  if (existing.contentHash === candidate.contentHash) return existing;
+  if (stableDigest(substantiveRule(existing)) === stableDigest(substantiveRule(candidate))) {
+    return existing;
+  }
+
+  const {
+    schemaVersion: _schemaVersion,
+    contentHash: _contentHash,
+    revision: _revision,
+    createdAt: _createdAt,
+    updatedAt: _updatedAt,
+    ...base
+  } = candidate;
+  return sealVehicleMasterCompatibilityRule({
+    ...base,
+    revision: existing.revision + 1,
+    createdAt: existing.createdAt,
+    updatedAt: candidate.updatedAt,
+  });
+}
+
 function samePriceFacts(a: VehicleMasterPriceRevision, b: VehicleMasterPriceRevision) {
   return (
     a.targetId === b.targetId &&
@@ -79,7 +121,7 @@ function samePriceFacts(a: VehicleMasterPriceRevision, b: VehicleMasterPriceRevi
   );
 }
 
-async function preparePrice(
+export async function prepareVehicleMasterPrice(
   store: VehicleMasterStore,
   candidate: VehicleMasterPriceRevision
 ): Promise<VehicleMasterPriceRevision> {
@@ -118,7 +160,7 @@ export async function promoteVehicleMasterTrimProposalSet(
   store: VehicleMasterStore,
   proposalSet: VehicleMasterTrimProposalSet
 ): Promise<VehicleMasterTrimPromotionResult> {
-  const modelYearRecord = await prepareNode(store, proposalSet.modelYear.record);
+  const modelYearRecord = await prepareVehicleMasterNode(store, proposalSet.modelYear.record);
   const modelYear = await promoteVehicleMasterNode(store, {
     proposal: modelYearRecord,
     observations: proposalSet.modelYear.observations,
@@ -126,7 +168,7 @@ export async function promoteVehicleMasterTrimProposalSet(
     observedAt: modelYearRecord.updatedAt,
   });
 
-  const powertrainRecord = await prepareNode(store, proposalSet.powertrain.record);
+  const powertrainRecord = await prepareVehicleMasterNode(store, proposalSet.powertrain.record);
   const powertrain = await promoteVehicleMasterNode(store, {
     proposal: powertrainRecord,
     observations: proposalSet.powertrain.observations,
@@ -134,7 +176,7 @@ export async function promoteVehicleMasterTrimProposalSet(
     observedAt: powertrainRecord.updatedAt,
   });
 
-  const variantRecord = await prepareNode(store, proposalSet.variant.record);
+  const variantRecord = await prepareVehicleMasterNode(store, proposalSet.variant.record);
   const variant = await promoteVehicleMasterNode(store, {
     proposal: variantRecord,
     observations: proposalSet.variant.observations,
@@ -142,7 +184,7 @@ export async function promoteVehicleMasterTrimProposalSet(
     observedAt: variantRecord.updatedAt,
   });
 
-  const trimRecord = await prepareNode(store, proposalSet.trim.record);
+  const trimRecord = await prepareVehicleMasterNode(store, proposalSet.trim.record);
   const trim = await promoteVehicleMasterNode(store, {
     proposal: trimRecord,
     observations: proposalSet.trim.observations,
@@ -150,7 +192,7 @@ export async function promoteVehicleMasterTrimProposalSet(
     observedAt: trimRecord.updatedAt,
   });
 
-  const priceRecord = await preparePrice(store, proposalSet.basePrice.record);
+  const priceRecord = await prepareVehicleMasterPrice(store, proposalSet.basePrice.record);
   const basePrice = await promoteVehicleMasterPriceRevision(store, {
     proposal: priceRecord,
     observations: proposalSet.basePrice.observations,
