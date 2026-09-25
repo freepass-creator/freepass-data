@@ -23,6 +23,7 @@ export type SheetPublicationHandoff = {
   consumerId: SheetHandoffConsumerId;
   workbook: SheetHandoffWorkbook;
   generatedAt: string;
+  releaseAuthority: 'LEGACY_VERIFIED_BRIDGE' | 'CANONICAL_ACTIVE';
   approvedRelease: ApprovedReleaseEvidence;
   snapshot: {
     version: 1;
