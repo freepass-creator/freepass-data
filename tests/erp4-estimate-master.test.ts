@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   mapLegacyNewcarFeedToEstimateMaster,
+  mapLegacyNewcarSnapshotToEstimateMaster,
   permanentIdentityOf,
 } from '../src/adapters/erp4-estimate-master.js';
 
@@ -119,6 +120,24 @@ describe('ERP4 reviewed master -> Estimate master migration adapter', () => {
     const record = mapLegacyNewcarFeedToEstimateMaster(withoutAvailable, [master]);
     expect(record.status).toBe('HOLD');
     expect(record.holdReasons).toContain('AVAILABLE_OPTIONS_UNVERIFIED');
+  });
+
+  it('summarizes ACTIVE/HOLD coverage without dropping blocked source rows', () => {
+    const batch = mapLegacyNewcarSnapshotToEstimateMaster({
+      rows: [
+        feed,
+        { ...feed, id: 'prod_hold', trimKey: '', extColors: [] },
+      ]
+    }, { records: [master] });
+
+    expect(batch.summary.total).toBe(2);
+    expect(batch.summary.active).toBe(1);
+    expect(batch.summary.hold).toBe(1);
+    expect(batch.records).toHaveLength(2);
+    expect(batch.summary.holdReasons).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'TRIM_KEY_UNVERIFIED', count: 1 }),
+      expect.objectContaining({ reason: 'EXTERIOR_COLOR_UNAVAILABLE', count: 1 }),
+    ]));
   });
 
   it('rejects a trim key whose embedded structural sequence disagrees with the row', () => {
