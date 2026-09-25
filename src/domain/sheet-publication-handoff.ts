@@ -18,6 +18,21 @@ export type SheetInventorySummary = {
   byStatus: Record<string, number>;
 };
 
+export type SheetPublicationManifest = {
+  contractVersion: 'freepass-sheet-manifest-v1';
+  manifestId: string;
+  releaseId: string;
+  projectionId: string;
+  releaseAuthority: 'LEGACY_VERIFIED_BRIDGE' | 'CANONICAL_ACTIVE';
+  sourceCaptureDigest: string;
+  sourceReadTime: string;
+  productCount: number;
+  policyCount: number;
+  partnerCount: number;
+  dataDigest: string;
+  generatedAt: string;
+};
+
 export type SheetPublicationHandoff = {
   contractVersion: 'freepass-sheet-handoff-v1';
   consumerId: SheetHandoffConsumerId;
@@ -25,6 +40,7 @@ export type SheetPublicationHandoff = {
   generatedAt: string;
   releaseAuthority: 'LEGACY_VERIFIED_BRIDGE' | 'CANONICAL_ACTIVE';
   approvedRelease: ApprovedReleaseEvidence;
+  manifest: SheetPublicationManifest;
   snapshot: {
     version: 1;
     snapshotId: string;
@@ -119,6 +135,24 @@ export function validateSheetPublicationHandoff(
     ) {
       violations.push('INVENTORY_STATUS_TOTAL_MISMATCH');
     }
+  }
+
+  const manifest = handoff.manifest;
+  if (
+    manifest.contractVersion !== 'freepass-sheet-manifest-v1' ||
+    manifest.manifestId !== handoff.approvedRelease.manifestId ||
+    manifest.releaseId !== handoff.approvedRelease.releaseId ||
+    manifest.projectionId !== handoff.approvedRelease.projectionId ||
+    manifest.releaseAuthority !== handoff.releaseAuthority ||
+    manifest.sourceCaptureDigest !== handoff.approvedRelease.inputDigest ||
+    manifest.dataDigest !== handoff.approvedRelease.dataDigest ||
+    manifest.productCount !== handoff.snapshot.products.length ||
+    manifest.policyCount !== handoff.snapshot.policies.length ||
+    manifest.partnerCount !== handoff.snapshot.partners.length ||
+    !Number.isFinite(Date.parse(manifest.sourceReadTime)) ||
+    !Number.isFinite(Date.parse(manifest.generatedAt))
+  ) {
+    violations.push('MANIFEST_EVIDENCE_MISMATCH');
   }
 
   const snapshotDataDigest = stableDigest({
