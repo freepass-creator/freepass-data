@@ -536,6 +536,11 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     filterLock = null;
   }
 
+  function firstVisibleFilterControl() {
+    return [...filterPanel.querySelectorAll('select:not([disabled]), button:not([disabled]):not([hidden])')]
+      .find(node => node.offsetParent !== null) ?? null;
+  }
+
   function syncFilterMode() {
     const open = !filterPanel.hidden;
     const mobile = isMobileFilter();
@@ -549,11 +554,27 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       filterPanel.setAttribute('aria-modal', 'true');
       filterPanel.setAttribute('aria-labelledby', filterSheetTitle.id);
       lockFilterContext();
+
+      const active = document.activeElement;
+      const activeVisible =
+        active instanceof HTMLElement &&
+        filterPanel.contains(active) &&
+        active.offsetParent !== null;
+      if (!activeVisible) firstVisibleFilterControl()?.focus({ preventScroll: true });
     } else {
       filterPanel.removeAttribute('role');
       filterPanel.removeAttribute('aria-modal');
       filterPanel.removeAttribute('aria-labelledby');
       unlockFilterContext();
+
+      if (open) {
+        const active = document.activeElement;
+        const activeHidden =
+          active instanceof HTMLElement &&
+          filterPanel.contains(active) &&
+          active.offsetParent === null;
+        if (activeHidden) firstVisibleFilterControl()?.focus({ preventScroll: true });
+      }
     }
   }
 
