@@ -1,7 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { resolveTargetProject } from '../infra/firebase-target.js';
-import { readCentralFirestoreCounts } from '../infra/central-firestore-diagnostic.js';
-import { createJobDataAccessRuntime } from './data-access-runtime.js';
+import { createCentralDiagnosticDataAccessRuntime } from './data-access-runtime.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 const projectId = resolveTargetProject();
@@ -30,7 +29,7 @@ function localAccessToken(): string {
 }
 
 const token = useGcloud ? localAccessToken() : null;
-const runtime = createJobDataAccessRuntime();
+const runtime = await createCentralDiagnosticDataAccessRuntime();
 
 const counts = await runtime.access.read({
   context: {
@@ -47,7 +46,7 @@ const counts = await runtime.access.read({
     count: value.reduce((sum, item) => sum + item.count, 0),
     digest: stableDigest(value)
   })
-}, () => readCentralFirestoreCounts({
+}, () => runtime.readCounts({
   projectId,
   accessToken: token
 }));
