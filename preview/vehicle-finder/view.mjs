@@ -195,6 +195,8 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
 
     if (!inspectedId) listScroll = window.scrollY;
     inspectedId = id;
+    selectedNotice.hidden = true;
+    selectedNotice.classList.remove('vf-selection-success', 'vf-selection-error', 'vf-selection-warning');
     detail.replaceChildren();
     detail.hidden = false;
     root.classList.add('vf-inspecting');
@@ -267,7 +269,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     const confirm = element('button', 'vf-primary', '이 수준으로 선택');
     confirm.type = 'button';
     listen(confirm, 'click', async () => {
-      if (selectionPending || !snapshot) return;
+      if (selectionPending || !snapshot || confirm.dataset.selected === 'true') return;
       const selectedSnapshot = snapshot;
       const value = partialSelection(selectedSnapshot, id, {
         query: input.value,
@@ -277,6 +279,8 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
 
       selectionPending = true;
       confirm.disabled = true;
+      confirm.textContent = '선택 중…';
+      let keepDisabled = false;
       try {
         if (onSelect) await onSelect(value);
         if (disposed) return;
@@ -286,10 +290,20 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
           inspectedId === id;
 
         selectedNotice.hidden = false;
-        selectedNotice.classList.remove('vf-selection-error');
-        selectedNotice.textContent = isCurrent
-          ? `${entry.label} · ${LEVELS[entry.nodeType]} 선택됨 · 차량 구성 미확정`
-          : `${entry.label} · 이전 조회(${value.observationId}) 기준 선택이 전달됨 · 차량 구성 미확정`;
+        selectedNotice.classList.remove('vf-selection-error', 'vf-selection-warning', 'vf-selection-success');
+
+        if (isCurrent) {
+          keepDisabled = true;
+          confirm.dataset.selected = 'true';
+          confirm.textContent = '선택됨';
+          selectedNotice.classList.add('vf-selection-success');
+          selectedNotice.textContent = `${entry.label} 선택됨`;
+        } else {
+          confirm.textContent = '이 수준으로 선택';
+          selectedNotice.classList.add('vf-selection-warning');
+          selectedNotice.textContent =
+            `${entry.label} · 이전 조회(${value.observationId}) 기준 선택이 전달됨 · 현재 화면은 변경됨`;
+        }
 
         root.dispatchEvent(new CustomEvent('vehicle-reference-selected', {
           detail: value,
@@ -298,12 +312,14 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       } catch {
         if (!disposed) {
           selectedNotice.hidden = false;
+          selectedNotice.classList.remove('vf-selection-success', 'vf-selection-warning');
           selectedNotice.classList.add('vf-selection-error');
           selectedNotice.textContent = '선택을 전달하지 못했습니다. 다시 선택할 수 있습니다.';
+          confirm.textContent = '이 수준으로 선택';
         }
       } finally {
         selectionPending = false;
-        confirm.disabled = false;
+        confirm.disabled = keepDisabled;
         if (!disposed && confirm.isConnected && document.activeElement === document.body) {
           confirm.focus({ preventScroll: true });
         }
