@@ -19,6 +19,9 @@ export type EstimateMasterCandidate = {
   trimName: string;
   powertrainName: string;
   basePrice: EstimateMasterMoney;
+  priceBefore?: EstimateMasterMoney | null;
+  priceAfter?: EstimateMasterMoney | null;
+  priceBasis?: string | null;
   options?: EstimateMasterOption[];
   exteriorColors?: EstimateMasterColor[];
   interiorColors?: EstimateMasterColor[];
@@ -123,6 +126,9 @@ export function buildEstimateNewcarMasterRecord(
     trimName: text(candidate.trimName, 'trimName'),
     powertrainName: text(candidate.powertrainName, 'powertrainName'),
     basePrice: money(candidate.basePrice, 'basePrice'),
+    priceBefore: candidate.priceBefore ? money(candidate.priceBefore, 'priceBefore') : null,
+    priceAfter: candidate.priceAfter ? money(candidate.priceAfter, 'priceAfter') : null,
+    priceBasis: nullableId(candidate.priceBasis),
     options,
     exteriorColors,
     interiorColors,
