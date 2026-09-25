@@ -306,6 +306,76 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "releaseAuthority": {
+            "const": "LEGACY_VERIFIED_BRIDGE"
+          }
+        },
+        "required": [
+          "releaseAuthority"
+        ]
+      },
+      "then": {
+        "properties": {
+          "approvedRelease": {
+            "properties": {
+              "projectionId": {
+                "const": "sheet-publication-bridge"
+              }
+            }
+          },
+          "manifest": {
+            "properties": {
+              "projectionId": {
+                "const": "sheet-publication-bridge"
+              },
+              "releaseAuthority": {
+                "const": "LEGACY_VERIFIED_BRIDGE"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "releaseAuthority": {
+            "const": "CANONICAL_ACTIVE"
+          }
+        },
+        "required": [
+          "releaseAuthority"
+        ]
+      },
+      "then": {
+        "properties": {
+          "approvedRelease": {
+            "properties": {
+              "projectionId": {
+                "not": {
+                  "const": "sheet-publication-bridge"
+                }
+              }
+            }
+          },
+          "manifest": {
+            "properties": {
+              "projectionId": {
+                "not": {
+                  "const": "sheet-publication-bridge"
+                }
+              },
+              "releaseAuthority": {
+                "const": "CANONICAL_ACTIVE"
+              }
+            }
+          }
+        }
+      }
     }
   ]
 }
