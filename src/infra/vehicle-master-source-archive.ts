@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { sha256Bytes } from '../shared/binary-digest.js';
 import { getStorage } from 'firebase-admin/storage';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import type {
@@ -6,9 +6,7 @@ import type {
   VehicleMasterSourceArchive,
 } from '../ports/vehicle-master-source-archive.js';
 
-export function sha256Bytes(bytes: Buffer): string {
-  return createHash('sha256').update(bytes).digest('hex');
-}
+export { sha256Bytes };
 
 function resolveStorageBucket(env: NodeJS.ProcessEnv = process.env): string {
   const bucket = env.FIREBASE_STORAGE_BUCKET?.trim();
