@@ -120,6 +120,19 @@ export function discoverAdditionalVehicleMasterInventoryPages(input: {
       url.searchParams.set('srhBrandArry', id);
       return url.toString();
     });
+
+  for (const url of brandPages) additional.add(url);
+  additional.delete(input.inventoryUrl);
+
+  return [...additional].sort((a, b) => {
+    const brandA = Number(
+      new URL(a).searchParams.get('srhBrandArry') ?? Number.MAX_SAFE_INTEGER
+    );
+    const brandB = Number(
+      new URL(b).searchParams.get('srhBrandArry') ?? Number.MAX_SAFE_INTEGER
+    );
+    return brandA - brandB || a.localeCompare(b);
+  });
 }
 
 function yearHint(
