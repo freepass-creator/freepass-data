@@ -88,9 +88,17 @@ export type VehicleMasterDiscoveredPage = {
   currentHint: boolean | null;
 };
 
+export type VehicleMasterBackfillCoverageStatus =
+  | 'MISSING'
+  | 'DISCOVERY_ONLY'
+  | 'SINGLE_SOURCE'
+  | 'CORROBORATED'
+  | 'OFFICIAL';
+
 export type VehicleMasterBackfillTask = VehicleMasterDiscoveredPage & {
   taskId: string;
   rank: number;
+  coverageStatus: VehicleMasterBackfillCoverageStatus;
 };
 
 export function vehicleMasterBackfillPolicy(
