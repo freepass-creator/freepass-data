@@ -21,12 +21,13 @@
     "data:catalog": "tsx src/jobs/query-data-catalog.ts",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "check": "npm run check:arch && npm run check:sheets && npm run build && npm run test:read-runtime-smoke && npm run test:shadow && npm test",
+    "check": "npm run check:arch && npm run check:data-access-boundary && npm run check:sheets && npm run build && npm run test:read-runtime-smoke && npm run test:shadow && npm test",
     "check:sheets": "node --test tests/sheet-presentation.node.mjs tests/sheet-presentation-online.node.mjs",
     "sheets:plan": "node scripts/sheet-presentation.mjs",
     "check:arch": "node scripts/check-architecture.mjs",
     "test:read-runtime-smoke": "node --test tests/read-runtime-smoke.node.mjs",
-    "prepare:sheet-bridge": "tsx src/jobs/prepare-sheet-publication-bridge.ts"
+    "prepare:sheet-bridge": "tsx src/jobs/prepare-sheet-publication-bridge.ts",
+    "check:data-access-boundary": "node scripts/check-data-access-boundary.mjs"
   },
   "dependencies": {
     "ajv": "^8.0.0",
