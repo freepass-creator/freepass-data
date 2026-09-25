@@ -4,7 +4,7 @@ export type DataAccessMode = 'READ' | 'WRITE';
 export type DataAccessPhase = 'STARTED' | 'SUCCEEDED' | 'DENIED' | 'FAILED';
 
 export type DataAccessResource = {
-  kind: 'CATALOG' | 'PROJECTION' | 'HEALTH' | 'COMMAND' | 'SOURCE' | 'SYSTEM';
+  kind: 'CATALOG' | 'PROJECTION' | 'HEALTH' | 'COMMAND' | 'SOURCE' | 'STORAGE' | 'SYSTEM';
   name: string;
   entityType?: string;
   entityId?: string;
