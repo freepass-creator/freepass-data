@@ -111,12 +111,14 @@ CARNOON,DANAWA,CARISYOU
 
 The queue is sorted by:
 1. latest model-year hint descending
-2. current/sale hint
-3. provider priority
-4. stable URL
+2. weaker evidence coverage first within the same year
+3. current/sale hint
+4. provider priority
+5. stable URL
 
-The batch size is bounded. The command returns `nextCompletedUrls`; a runner can
-feed that list into the next execution so each batch moves progressively backward.
+The batch size is bounded. Normal continuation is derived from Firestore evidence,
+the current parser version and current-page TTL; the operator does not have to
+carry a completed-URL file between runs.
 
 ## Important separation
 
