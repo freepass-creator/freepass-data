@@ -96,6 +96,7 @@ function reconciled(): VehicleMasterReconciledTrim {
         kind: 'SEATS',
         price: 840000,
         note: null,
+        packageItems: [],
         conditions: [],
         sourceDocumentIds: sourceIds,
       },
@@ -104,6 +105,7 @@ function reconciled(): VehicleMasterReconciledTrim {
         kind: 'DRIVETRAIN',
         price: 2320000,
         note: null,
+        packageItems: [],
         conditions: [],
         sourceDocumentIds: sourceIds,
       },
@@ -112,6 +114,7 @@ function reconciled(): VehicleMasterReconciledTrim {
         kind: 'COLOR',
         price: 80000,
         note: null,
+        packageItems: [],
         conditions: [],
         sourceDocumentIds: sourceIds,
       },
@@ -120,6 +123,7 @@ function reconciled(): VehicleMasterReconciledTrim {
         kind: 'OPTION',
         price: 590000,
         note: null,
+        packageItems: [],
         conditions: [],
         sourceDocumentIds: sourceIds,
       },
@@ -128,6 +132,7 @@ function reconciled(): VehicleMasterReconciledTrim {
         kind: 'OPTION',
         price: 1290000,
         note: '12.3인치 클러스터 적용 시',
+        packageItems: ['전방 충돌방지 보조', '후측방 충돌방지 보조'],
         conditions: [{
           relation: 'REQUIRES',
           targetLabel: '12.3인치 클러스터',
@@ -140,6 +145,7 @@ function reconciled(): VehicleMasterReconciledTrim {
         kind: 'ACCESSORY',
         price: 390000,
         note: null,
+        packageItems: [],
         conditions: [],
         sourceDocumentIds: sourceIds,
       },
@@ -195,6 +201,8 @@ describe('vehicle master option graph', () => {
     const driveWise = optionSet.options.find(
       (item) => item.source.name === '드라이브 와이즈'
     );
+    expect(driveWise?.node.record.nodeType).toBe('PACKAGE');
+    expect(driveWise?.price?.record.priceType).toBe('PACKAGE');
     expect(driveWise?.dependencies).toHaveLength(1);
     expect(driveWise?.dependencies[0]?.record.ruleType).toBe('REQUIRES');
 
