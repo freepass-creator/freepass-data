@@ -172,3 +172,17 @@ export function validateEstimateMasterSemantics(
 
   return issues;
 }
+
+
+export function uncoveredEstimateMasterIssues(
+  records: readonly EstimateNewcarMasterRecord[],
+  issues: readonly EstimateMasterSemanticIssue[] = validateEstimateMasterSemantics(records)
+): EstimateMasterSemanticIssue[] {
+  const byProductId = new Map(records.map((record) => [record.productId, record]));
+  return issues.filter((issue) => {
+    if (!issue.productId) return true;
+    const record = byProductId.get(issue.productId);
+    if (!record || record.status !== 'HOLD') return true;
+    return !(record.holdReasons || []).includes(issue.code);
+  });
+}
