@@ -1,5 +1,6 @@
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import { getTargetFirebaseApp } from './firebase-target.js';
+import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { projectionReader } from './firestore-projection-reader.js';
 import type {
   Offer,
@@ -56,14 +57,14 @@ export function dataHealthReader(db: Firestore): CatalogDataHealthReadStore {
   };
 
   return {
-    listVehicleModels: () => all<VehicleModel>('catalog_vehicle_models', 'id'),
-    listVehicleAssets: () => all<VehicleAsset>('catalog_vehicle_assets', 'id'),
-    listProducts: () => all<Product>('catalog_products', 'id'),
-    listOffers: () => all<Offer>('catalog_offers', 'id'),
-    listPolicies: () => all<Policy>('catalog_policies', 'id'),
+    listVehicleModels: () => all<VehicleModel>(FIRESTORE_COLLECTIONS.catalog.vehicleModels, 'id'),
+    listVehicleAssets: () => all<VehicleAsset>(FIRESTORE_COLLECTIONS.catalog.vehicleAssets, 'id'),
+    listProducts: () => all<Product>(FIRESTORE_COLLECTIONS.catalog.products, 'id'),
+    listOffers: () => all<Offer>(FIRESTORE_COLLECTIONS.catalog.offers, 'id'),
+    listPolicies: () => all<Policy>(FIRESTORE_COLLECTIONS.catalog.policies, 'id'),
     async listRevisionHistory() {
       const records = await all<EntityRevisionRecord>(
-        'catalog_entity_revisions',
+        FIRESTORE_COLLECTIONS.catalog.revisions,
         'revisionRecordId'
       );
       return records.sort((a, b) =>
@@ -78,7 +79,7 @@ export function dataHealthReader(db: Firestore): CatalogDataHealthReadStore {
       if (!/^rel_[a-zA-Z0-9-]+$/.test(releaseId)) {
         throw new Error('Invalid release identity');
       }
-      const snap = await db.collection('projection_field_lineage')
+      const snap = await db.collection(FIRESTORE_COLLECTIONS.projection.lineage)
         .where('releaseId', '==', releaseId)
         .get();
       return snap.docs.map(
@@ -86,7 +87,7 @@ export function dataHealthReader(db: Firestore): CatalogDataHealthReadStore {
       );
     },
     async getActiveEvidenceSnapshot(projectionId) {
-      const activeRef = db.collection('projection_active').doc(projectionId);
+      const activeRef = db.collection(FIRESTORE_COLLECTIONS.projection.active).doc(projectionId);
       return db.runTransaction(async (tx) => {
         const activeSnap = await tx.get(activeRef);
         if (!activeSnap.exists) {
@@ -107,9 +108,9 @@ export function dataHealthReader(db: Firestore): CatalogDataHealthReadStore {
           throw new Error('Invalid release pointer');
         }
 
-        const releaseRef = db.collection('projection_releases').doc(releaseId);
-        const manifestRef = db.collection('projection_release_manifests').doc(releaseId);
-        const evidenceQuery = db.collection('projection_field_lineage')
+        const releaseRef = db.collection(FIRESTORE_COLLECTIONS.projection.releases).doc(releaseId);
+        const manifestRef = db.collection(FIRESTORE_COLLECTIONS.projection.manifests).doc(releaseId);
+        const evidenceQuery = db.collection(FIRESTORE_COLLECTIONS.projection.lineage)
           .where('releaseId', '==', releaseId);
 
         const releaseSnap = await tx.get(releaseRef);
