@@ -209,10 +209,10 @@
   .vf .vf-detail{padding:0 0 calc(76px + env(safe-area-inset-bottom));border:0}
   .vf .vf-detail-close{display:none}
 
-  /* Mobile list = spaced cards, not a shrunken desktop table. */
+  /* Mobile list = flat scan rows, not a shrunken desktop table. */
   .vf table,.vf tbody{display:block;width:100%}
   .vf thead{display:none}
-  .vf tbody{display:grid;gap:8px}
+  .vf tbody{display:grid;gap:0}
   .vf tr{
     display:grid;
     grid-template-columns:minmax(0,1fr) auto;
