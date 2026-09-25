@@ -55,6 +55,20 @@ export function validateSheetDeliveryReceipt(
   if (!nonEmpty(receipt.spreadsheetId)) {
     violations.push('MISSING_SPREADSHEET_ID');
   }
+  const authorityValid =
+    receipt.releaseAuthority === 'LEGACY_VERIFIED_BRIDGE' ||
+    receipt.releaseAuthority === 'CANONICAL_ACTIVE';
+  if (!authorityValid) {
+    violations.push('INVALID_RELEASE_AUTHORITY');
+  } else {
+    const isBridgeProjection = receipt.approvedRelease?.projectionId === 'sheet-publication-bridge';
+    if (
+      (receipt.releaseAuthority === 'LEGACY_VERIFIED_BRIDGE' && !isBridgeProjection) ||
+      (receipt.releaseAuthority === 'CANONICAL_ACTIVE' && isBridgeProjection)
+    ) {
+      violations.push('RELEASE_AUTHORITY_PROJECTION_MISMATCH');
+    }
+  }
 
   const releaseFields = {
     projectionId: 'PROJECTION_ID_MISMATCH',
