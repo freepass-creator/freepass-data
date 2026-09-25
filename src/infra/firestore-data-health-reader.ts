@@ -1,7 +1,10 @@
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
-import { readFirestoreActiveProjectionEvidence } from './firestore-projection-evidence.js';
+import {
+  readFirestoreActiveProjectionEvidence,
+  readFirestoreProjectionLineage
+} from './firestore-projection-evidence.js';
 import { projectionReader } from './firestore-projection-reader.js';
 import type {
   Offer,
@@ -11,7 +14,6 @@ import type {
   VehicleModel
 } from '../domain/catalog.js';
 import type { EntityRevisionRecord } from '../domain/history.js';
-import type { ProjectionFieldLineageRecord } from '../domain/projection-evidence.js';
 import type {
   CatalogStore,
   ProjectionEvidenceSnapshotStore,
@@ -76,17 +78,8 @@ export function dataHealthReader(db: Firestore): CatalogDataHealthReadStore {
     },
     getActive: projection.getActive,
     getManifest: projection.getManifest,
-    async listProjectionLineage(releaseId) {
-      if (!/^rel_[a-zA-Z0-9-]+$/.test(releaseId)) {
-        throw new Error('Invalid release identity');
-      }
-      const snap = await db.collection(FIRESTORE_COLLECTIONS.projection.lineage)
-        .where('releaseId', '==', releaseId)
-        .get();
-      return snap.docs.map(
-        (doc) => doc.data() as ProjectionFieldLineageRecord
-      );
-    },
+    listProjectionLineage: (releaseId) =>
+      readFirestoreProjectionLineage(db, releaseId),
     getActiveEvidenceSnapshot: (projectionId) =>
       readFirestoreActiveProjectionEvidence(db, projectionId)
   };
