@@ -88,6 +88,8 @@ try:
             }''', mode)
 
         mount()
+        expect(page.get_by_role('button', name='다시 조회', exact=True)).to_be_visible()
+        assert page.get_by_role('button', name='다시 조회', exact=True).inner_text() == '↻'
         expect(page.locator('tbody .vf-row-button')).to_have_count(5)
         assert page.locator('.vf-selection').is_hidden()
         expect(page.locator('thead th')).to_have_count(2)
@@ -101,18 +103,19 @@ try:
         page.get_by_label('차량 검색', exact=True).fill('쏘렌토 프레스티지')
         expect(page.locator('tbody .vf-row-button')).to_have_count(1)
         page.get_by_role('button', name='기아 › 쏘렌토 › 2027 › 프레스티지', exact=True).click()
-        expect(page.locator('.vf-detail')).to_contain_text('연식 2027')
-        expect(page.locator('.vf-detail')).to_contain_text('연료 GASOLINE')
+        expect(page.locator('.vf-configurations summary')).to_have_text('검색 조건과 일치한 구성 1개')
+        assert not page.locator('.vf-configurations').evaluate('(node) => node.open')
         expect(page.locator('.vf-row-state:not([hidden])')).to_have_text('보는 중')
-        passed('ancestor path disambiguates duplicate trims and inspect shows matched configuration facts')
+        passed('ancestor path disambiguates duplicate trims while configuration facts stay progressively disclosed')
         page.keyboard.press('Escape')
 
         page.get_by_label('차량 검색', exact=True).fill('시험차 B')
         model_b = page.get_by_role('button', name='시험제조사 › 시험차 B', exact=True)
         model_b.click()
-        expect(page.locator('.vf-detail dl')).to_contain_text('선택 범위')
-        expect(page.locator('.vf-detail dl')).not_to_contain_text('현재 검색어')
+        expect(page.locator('.vf-detail')).to_contain_text('MODEL 수준 · 차량 구성 미확정')
+        expect(page.locator('.vf-config-missing')).to_contain_text('세부 구성 미확인')
         expect(page.get_by_text('검색·조회 근거', exact=True)).to_be_visible()
+        assert not page.locator('.vf-evidence').evaluate('(node) => node.open')
         page.get_by_role('button', name='이 수준으로 선택').click()
         selected = page.evaluate('window.selected')
         assert selected['nodeType'] == 'MODEL' and selected['configurationConfirmed'] is False
