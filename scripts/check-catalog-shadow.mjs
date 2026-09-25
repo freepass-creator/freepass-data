@@ -47,6 +47,22 @@ const [oldPayload, newPayload] = await Promise.all([
 const result = compareCatalogs(oldPayload, newPayload);
 const trim = (values) => values.slice(0, maxIds);
 
+function releaseEvidence(payload) {
+  const meta = payload?.meta;
+  if (!meta || typeof meta !== 'object') return null;
+  const keys = ['projectionId', 'releaseId', 'manifestId', 'inputDigest', 'dataDigest'];
+  for (const key of keys) {
+    if (typeof meta[key] !== 'string' || !meta[key]) return null;
+  }
+  return {
+    projectionId: meta.projectionId,
+    releaseId: meta.releaseId,
+    manifestId: meta.manifestId,
+    inputDigest: meta.inputDigest,
+    dataDigest: meta.dataDigest
+  };
+}
+
 const summary = {
   comparedAt: new Date().toISOString(),
   verdict: !result.contentMatches
@@ -59,6 +75,7 @@ const summary = {
   contentMatches: result.contentMatches,
   orderMatches: result.orderMatches,
   requireOrder,
+  freepassRelease: releaseEvidence(newPayload),
   counts: result.counts,
   sampleIds: {
     missingOnRight: trim(result.ids.missingOnRight),
