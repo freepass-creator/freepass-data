@@ -42,6 +42,20 @@ const unsigned: Omit<SheetPublicationHandoff, 'handoffHash'> = {
     dataDigest: stableDigest(snapshot),
     observedAt: '2026-09-25T07:00:00.000Z'
   },
+  manifest: {
+    contractVersion: 'freepass-sheet-manifest-v1',
+    manifestId: 'manifest_test',
+    releaseId: 'rel_test',
+    projectionId: 'erp-public',
+    releaseAuthority: 'LEGACY_VERIFIED_BRIDGE',
+    sourceCaptureDigest: 'input_test',
+    sourceReadTime: '2026-09-25T07:00:00.000Z',
+    productCount: snapshot.products.length,
+    policyCount: snapshot.policies.length,
+    partnerCount: snapshot.partners.length,
+    dataDigest: stableDigest(snapshot),
+    generatedAt: '2026-09-25T07:01:00.000Z'
+  },
   snapshot
 };
 
