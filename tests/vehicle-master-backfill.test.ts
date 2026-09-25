@@ -269,6 +269,34 @@ describe('vehicle master recent-first backfill', () => {
     ]);
   });
 
+  it('prioritizes current vehicles with unknown year ahead of known historical pages', () => {
+    const pages = [
+      {
+        sourceKey: 'DANAWA' as const,
+        sourceType: 'DANAWA' as const,
+        sourceName: 'Danawa Auto',
+        sourceUrl: 'https://auto.danawa.com/newcar/?Work=estimate&Code=current',
+        discoveredFromUrl: 'https://auto.danawa.com/newcar/',
+        modelHint: '현재 판매 모델',
+        latestModelYearHint: null,
+        currentHint: true,
+      },
+      {
+        sourceKey: 'CARISYOU' as const,
+        sourceType: 'CARISYOU' as const,
+        sourceName: 'CarIsYou',
+        sourceUrl: 'https://www.carisyou.com/car/3956/Price',
+        discoveredFromUrl: 'https://www.carisyou.com/car/',
+        modelHint: '2010 K5',
+        latestModelYearHint: 2010,
+        currentHint: false,
+      },
+    ];
+
+    const queue = buildRecentFirstBackfillQueue(pages);
+    expect(queue.map((x) => x.sourceKey)).toEqual(['DANAWA', 'CARISYOU']);
+  });
+
   it('orders the combined provider queue by recent year before provider priority', () => {
     const pages = [
       {
