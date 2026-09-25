@@ -280,7 +280,7 @@ function matchesAxis(
     const actual = compact(textValue?.label);
     const expected = compact(selected.label);
     if (!actual) return { matched: false, unresolved: true, rejected: false };
-    if (!(actual.includes(expected) || expected.includes(actual))) {
+    if (!actual.includes(expected)) {
       return { matched: false, unresolved: false, rejected: true };
     }
   }
@@ -479,7 +479,9 @@ export function selectVehicles(
       unresolvedAxes,
       selectable:
         record.identityStatus === 'RESOLVED' &&
-        record.lifecycle !== 'HOLD',
+        record.lifecycle !== 'HOLD' &&
+        unresolvedAxes.length === 0 &&
+        !search.partial,
     });
   }
 
