@@ -2,7 +2,7 @@ import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { createJobDataAccessRuntime } from './data-access-runtime.js';
+import { createReadOnlyJobDataAccessRuntime } from './data-access-runtime.js';
 import { erp5ReadTransport } from '../adapters/erp5-source-capture.js';
 import {
   buildSheetBridgeRelease,
@@ -55,7 +55,13 @@ if (
 
     const token = process.env.FREEPASS_ERP5_READ_ACCESS_TOKEN ?? '';
     const targets: SheetHandoffWorkbook[] = workbook === 'ALL' ? ['F01', 'F86'] : [workbook];
-    const runtime = createJobDataAccessRuntime();
+    const runtime = createReadOnlyJobDataAccessRuntime({
+      accessToken: token,
+      evidenceBucket:
+        process.env.FREEPASS_DATA_EVIDENCE_BUCKET ??
+        process.env.EVIDENCE_BUCKET ??
+        ''
+    });
     const { capture, bridge, handoffs } = await runtime.access.read({
       context: {
         actor: { id: 'service:freepass-data-sheet-bridge', kind: 'SERVICE' },
