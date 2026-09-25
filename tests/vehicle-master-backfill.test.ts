@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildRecentFirstBackfillQueue,
   discoverAdditionalVehicleMasterInventoryPages,
+  discoverVehicleMasterInventoryExpectedCount,
   discoverVehicleMasterPages,
 } from '../src/application/vehicle-master-backfill.js';
 
@@ -108,6 +109,23 @@ describe('vehicle master recent-first backfill', () => {
     expect(pages.map((x) => x.sourceUrl)).toEqual([
       'https://www.carnoon.co.kr/newcar/vehicle/11572',
     ]);
+  });
+
+  it('reads CarIsYou declared inventory count for partial-discovery detection', () => {
+    expect(discoverVehicleMasterInventoryExpectedCount({
+      sourceKey: 'CARISYOU',
+      bytes: Buffer.from('<div>자동차 1,222 개</div>'),
+    })).toBe(1222);
+
+    expect(discoverVehicleMasterInventoryExpectedCount({
+      sourceKey: 'CARISYOU',
+      bytes: Buffer.from('<div>자동차 81대</div>'),
+    })).toBe(81);
+
+    expect(discoverVehicleMasterInventoryExpectedCount({
+      sourceKey: 'CARNOON',
+      bytes: Buffer.from('<div>자동차 81대</div>'),
+    })).toBeNull();
   });
 
   it('discovers CarIsYou brand inventory shards from filter inputs', () => {
