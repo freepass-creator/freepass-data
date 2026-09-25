@@ -25,8 +25,8 @@ import { ERP5_DOCUMENTS, type Erp5ReadRpc } from '../src/adapters/erp5-source-ca
 const peerRoot = process.env.FREEPASS_ERP4_ROOT;
 if (!peerRoot) throw new Error('FREEPASS_ERP4_ROOT is required; missing peer is not a PASS');
 const pinnedPeer = {
-  'lib/server/freepass-data-sheet-handoff.ts': '16b4cb75d66119416e42096ec86a9027e0a636aa',
-  'lib/server/sales-publish-snapshot.ts': 'ffbf4a86410dfc2f975d41d364d12bfc3f506535',
+  'lib/server/freepass-data-sheet-handoff.ts': 'a7dfa50a04e6eb2fa1f8b61e99491b488b67b7dd',
+  'lib/server/sales-publish-snapshot.ts': '69db3e8c048ae45c8ef6b6fbe85e9ed13128d2fa',
   'lib/domain/inventory-contract.ts': '2b29adb650b5b08cebc44549a8e0539601ecb52f',
   'lib/domain/plate-registry.ts': '3245e40507f87e3e62583948e3e9170118ca0b38'
 };
@@ -53,6 +53,7 @@ function source(options: { idMismatch?: boolean; failPartner?: boolean; drift?: 
     vehicle_status: { stringValue: '즉시출고' }, listable: { booleanValue: true },
     status_kind: { stringValue: '가용' }, provider_company_code: { stringValue: 'RP999' },
     source: { stringValue: 'synthetic-only' },
+    policy_reference_checked_at: { timestampValue: '2026-09-25T08:00:00.123456789Z' },
     deposit_note: { stringValue: '월 대여료 × 약정연수 (최대 3개월)' },
     price: { mapValue: { fields: {
       '24': { mapValue: { fields: { rent: { integerValue: '700000' }, deposit: { integerValue: '0' } } } }
@@ -143,6 +144,10 @@ test('unknown and zero values remain distinct; a deposit rule is not rewritten a
   assert.equal((row.price as any)['24'].deposit, 0);
   assert.equal((row.price as any)['24'].rent, 700000);
   assert.equal(row.deposit_note, '월 대여료 × 약정연수 (최대 3개월)');
+  assert.deepEqual(row.policy_reference_checked_at, {
+    _seconds: Date.parse('2026-09-25T08:00:00Z') / 1000,
+    _nanoseconds: 123456789
+  });
 });
 
 test('same capture, target and generation time give deterministic bytes', async () => {
