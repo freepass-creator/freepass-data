@@ -136,6 +136,21 @@ describe('DataAccessGateway', () => {
     expect(store.events).toHaveLength(0);
   });
 
+  it('rejects malformed generated event metadata before persistence', async () => {
+    const store = new MemoryDataAccessLogStore();
+    const access = new DataAccessGateway(
+      store,
+      () => 'not-a-time',
+      () => 'id_test'
+    );
+    await expect(access.read({
+      context,
+      operation: 'READ_CATALOG',
+      resource
+    }, async () => ({}))).rejects.toThrow('INVALID_DATA_ACCESS_EVENT_METADATA');
+    expect(store.events).toHaveLength(0);
+  });
+
   it('records denied attempts without running a data operation', async () => {
     const { store, access } = gateway();
     await access.deny('READ', {
