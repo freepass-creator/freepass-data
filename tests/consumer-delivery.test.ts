@@ -46,6 +46,20 @@ describe('sheet delivery receipt', () => {
     });
   });
 
+  it('blocks a bridge receipt that claims canonical authority', () => {
+    const result = validateSheetDeliveryReceipt(receipt({
+      releaseAuthority: 'CANONICAL_ACTIVE',
+      approvedRelease: {
+        ...release,
+        projectionId: 'sheet-publication-bridge'
+      }
+    }), {
+      ...release,
+      projectionId: 'sheet-publication-bridge'
+    });
+    expect(result.violations).toContain('RELEASE_AUTHORITY_PROJECTION_MISMATCH');
+  });
+
   it('fails closed when F01/F86 identity is crossed', () => {
     expect(validateSheetDeliveryReceipt(receipt({
       consumerId: 'google-sheets-f86'
