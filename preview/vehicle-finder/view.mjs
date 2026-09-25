@@ -49,12 +49,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   root.classList.add('vf');
 
   const head = element('header', 'vf-head');
-  const titles = element('div');
-  titles.append(
-    element('h1', '', '차량 찾기'),
-    element('p', 'vf-note', '아는 정보만으로 찾고, 확인한 수준에서 선택합니다.'),
-  );
-  head.append(titles);
+  head.append(element('h1', '', '차량 찾기'));
 
   const toolbar = element('div', 'vf-toolbar');
   const searchLabel = element('label', 'vf-search');
@@ -63,7 +58,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   input.id = searchLabel.htmlFor;
   input.type = 'search';
   input.autocomplete = 'off';
-  input.placeholder = '제조사, 차량명, 세대, 연식, 트림 등';
+  input.placeholder = '차량명, 세대, 연식, 트림 등';
   searchLabel.append(element('span', 'vf-field-label', '차량 검색'), input);
 
   const utilityActions = element('div', 'vf-utility-actions');
@@ -125,11 +120,9 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   table.setAttribute('aria-label', '차량 검색 결과');
   const thead = element('thead');
   const headerRow = element('tr');
-  for (const label of ['차량', '확인']) {
-    const th = element('th', '', label);
-    th.scope = 'col';
-    headerRow.append(th);
-  }
+  const vehicleHeader = element('th', '', '차량');
+  vehicleHeader.scope = 'col';
+  headerRow.append(vehicleHeader);
   thead.append(headerRow);
   const tbody = element('tbody');
   table.append(thead, tbody);
@@ -322,11 +315,9 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     if (result.excludedUnknownFacetCount) {
       parts.push(`필터 값 미확인 ${result.excludedUnknownFacetCount}개 제외됨`);
     }
-    parts.push(
-      snapshot.coverage === 'PARTIAL'
-        ? '제공된 일부 자료에서 검색'
-        : '이 조회 범위에서 검색',
-    );
+    if (snapshot.coverage === 'PARTIAL') {
+      parts.push('일부 자료');
+    }
     status.textContent = parts.join(' · ');
 
     table.hidden = !result.matches.length;
@@ -356,15 +347,11 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       marker.dataset.entryId = entry.id;
       marker.hidden = entry.id !== inspectedId;
       name.append(button, marker);
+      if (!entry.configurations.length) {
+        name.append(element('span', 'vf-row-check', '구성 미확인'));
+      }
 
-      row.append(
-        name,
-        element(
-          'td',
-          'vf-row-check',
-          entry.configurations.length ? '' : '구성 미확인',
-        ),
-      );
+      row.append(name);
       tbody.append(row);
     }
 
