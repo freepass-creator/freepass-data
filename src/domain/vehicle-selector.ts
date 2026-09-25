@@ -9,6 +9,7 @@ export type VehicleSelectorAxis =
   | 'phase'
   | 'modelYear'
   | 'powertrain'
+  | 'fuelType'
   | 'drivetrain'
   | 'seats'
   | 'trim';
@@ -41,6 +42,7 @@ export type VehicleSelectorRecord = {
   phase: VehicleSelectorTextValue;
   modelYear: VehicleSelectorNumberValue;
   powertrain: VehicleSelectorTextValue;
+  fuelType: VehicleSelectorTextValue;
   drivetrain: VehicleSelectorTextValue;
   seats: VehicleSelectorNumberValue;
   trim: VehicleSelectorTextValue;
@@ -60,6 +62,7 @@ export type VehicleSelectorSelection = {
   modelYear?: number | null;
   powertrainId?: string | null;
   powertrain?: string | null;
+  fuelType?: string | null;
   drivetrain?: string | null;
   seats?: number | null;
   trimId?: string | null;
@@ -115,11 +118,12 @@ export const VEHICLE_SELECTOR_UX_PRESETS: Record<
       'maker',
       'model',
       'powertrain',
+      'fuelType',
       'drivetrain',
       'seats',
       'trim',
     ],
-    hiddenByDefault: ['generation', 'phase', 'modelYear'],
+    hiddenByDefault: ['generation', 'phase', 'modelYear', 'fuelType'],
     allowArbitraryAxisEntry: true,
   },
   USED_CAR: {
@@ -149,6 +153,7 @@ const AXES: VehicleSelectorAxis[] = [
   'phase',
   'modelYear',
   'powertrain',
+  'fuelType',
   'drivetrain',
   'seats',
   'trim',
@@ -216,6 +221,8 @@ function selectionForAxis(
       return { id: selection.modelYearId, value: selection.modelYear };
     case 'powertrain':
       return { id: selection.powertrainId, label: selection.powertrain };
+    case 'fuelType':
+      return { label: selection.fuelType };
     case 'drivetrain':
       return { label: selection.drivetrain };
     case 'seats':
@@ -280,6 +287,7 @@ function searchableText(record: VehicleSelectorRecord) {
     record.modelYear.label,
     record.modelYear.value == null ? null : String(record.modelYear.value),
     record.powertrain.label,
+    record.fuelType.label,
     record.drivetrain.label,
     record.seats.label,
     record.seats.value == null ? null : String(record.seats.value),
