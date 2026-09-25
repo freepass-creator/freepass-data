@@ -38,7 +38,7 @@ function makerName(text: string) {
 
 function parseContext(line: string) {
   const match = line.match(
-    /^(20\d{2})년형\s+(.+?)\s+(\d+)인승(?:\s*\([^)]*\))?$/
+    /^(20\d{2})년형\s+(.+?)\s+(\d+)인승(?:\s*\([^)]*\))?(?:\s+가격표 보기)?$/
   );
   if (!match?.[1] || !match[2] || !match[3]) return null;
   return {
