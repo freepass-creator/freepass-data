@@ -7,6 +7,8 @@ const root = process.cwd();
 const viewPath = path.join(root, 'preview/vehicle-finder/view.mjs');
 const cssPath = path.join(root, 'preview/vehicle-finder/finder.css');
 const htmlPath = path.join(root, 'preview/vehicle-finder/index.html');
+const consolePath = path.join(root, 'preview/index.html');
+const serverPath = path.join(root, 'src/api/server.ts');
 
 describe('U-01 vehicle finder presentation boundary', () => {
   it('stays presentation-only and has valid module syntax', async () => {
@@ -97,6 +99,19 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).toMatch(/직전 관측 결과를 계속 표시합니다/);
     expect(source).toMatch(/이 오류를 후보 0건으로 해석하지 않습니다/);
     expect(source).toMatch(/\{ retry: true \}/);
+  });
+
+  it('is reachable from the local Console actual route without adding a data API', async () => {
+    const html = await readFile(htmlPath, 'utf8');
+    const consoleHtml = await readFile(consolePath, 'utf8');
+    const server = await readFile(serverPath, 'utf8');
+    expect(html).toMatch(/\/console\/vehicle-finder\/finder\.css/);
+    expect(html).toMatch(/\/console\/vehicle-finder\/view\.mjs/);
+    expect(consoleHtml).toMatch(/href="\/console\/vehicle-finder"/);
+    expect(server).toMatch(/app\.get\('\/console\/vehicle-finder'/);
+    expect(server).toMatch(/app\.get\('\/console\/vehicle-finder\/finder\.css'/);
+    expect(server).toMatch(/app\.get\('\/console\/vehicle-finder\/view\.mjs'/);
+    expect(server).not.toMatch(/\/v1\/.*vehicle-finder/);
   });
 
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
