@@ -11,7 +11,7 @@ const doc = (collection: 'products' | 'policy', id: string, fields: Record<strin
 function capture(products: RawDoc[], policies: RawDoc[]): Erp5SourceCapture {
   const unsigned = { version: 'erp5-source-capture/1' as const, projectId: 'freepasserp5' as const, databaseId: '(default)' as const,
     consistency: 'READ_ONLY_TRANSACTION' as const, readTime: '2026-09-21T00:00:00Z', capturedAt: '2026-09-21T00:00:01Z',
-    collections: { products: { count: products.length, documents: products }, policy: { count: policies.length, documents: policies } } };
+    collections: { products: { count: products.length, documents: products }, policy: { count: policies.length, documents: policies }, partner: { count: 0, documents: [] as RawDoc[] } } };
   return { ...unsigned, digest: createHash('sha256').update(JSON.stringify(unsigned)).digest('hex') };
 }
 type RawDoc = ReturnType<typeof doc>;

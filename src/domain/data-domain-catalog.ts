@@ -130,6 +130,15 @@ export const DATA_ASSETS: readonly DataAssetDefinition[] = [
     notes: ['2026-09-21 count-only 81; Policy Canonical parity is not verified']
   },
   {
+    assetId: 'erp5-partner-source', domainId: 'catalog', displayName: 'ERP5 공급사 원천',
+    aliases: ['partner', 'partners', '공급사', '제휴사', '렌터카사'], kind: 'FIRESTORE_COLLECTION',
+    system: 'firebase:freepasserp5', locator: 'partner',
+    ownership: 'SOURCE_OWNED', authority: 'SOURCE', keyDescription: '원천 partner document ID와 공급사 식별 증거',
+    sensitivity: 'INTERNAL', availability: 'PARTIAL', freshnessPolicy: '상품·정책과 같은 read boundary에서 전체 관측',
+    contractRef: 'docs/BUSINESS-DATA-CONNECTION-MAP.md', consumers: ['freepass-data-ingestion', 'projection-builders'],
+    notes: ['공급사 원천은 상품과 분리해 보존하며 소비처 표시명과 Canonical 공급사 ID를 혼동하지 않음']
+  },
+  {
     assetId: 'catalog-canonical', domainId: 'catalog', displayName: 'FreePass Data Canonical Catalog',
     aliases: ['canonical catalog', 'canonical product', 'canonical offer', 'canonical policy', '정본상품'], kind: 'FIRESTORE_COLLECTION',
     system: 'firebase:freepasserp5', locator: 'logical:catalog-canonical', ownership: 'FREEPASS_DATA', authority: 'CANONICAL',
