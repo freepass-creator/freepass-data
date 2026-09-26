@@ -6,6 +6,8 @@ import {
   type EstimateNewcarMasterRecord
 } from '../src/domain/estimate-master.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
+import { DataAccessGateway } from '../src/application/data-access-gateway.js';
+import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
 
 const token = 'estimate-service-token-0123456789abcdef';
 const binding: ConsumerBinding = {
@@ -16,6 +18,15 @@ const binding: ConsumerBinding = {
 };
 const url = '/v1/consumers/freepass-estimate/estimate-newcar-master';
 const headers = { authorization: `Bearer ${token}` };
+
+const createEstimateGateway = (
+  store: Parameters<typeof createConsumerGateway>[0],
+  bindings: ConsumerBinding[]
+) => createConsumerGateway(
+  store,
+  bindings,
+  new DataAccessGateway(new MemoryDataAccessLogStore())
+);
 
 function record(overrides: Partial<EstimateNewcarMasterRecord> = {}): EstimateNewcarMasterRecord {
   return {
@@ -107,7 +118,7 @@ describe('Estimate new-car master consumer contract', () => {
 
   it('authenticates before reading the projection store', async () => {
     let reads = 0;
-    const app = createConsumerGateway({
+    const app = createEstimateGateway({
       getActive: async () => { reads += 1; return null; },
       getManifest: async () => null
     }, [binding]);
@@ -119,7 +130,7 @@ describe('Estimate new-car master consumer contract', () => {
   });
 
   it('fails closed when no ACTIVE master release exists', async () => {
-    const app = createConsumerGateway({
+    const app = createEstimateGateway({
       getActive: async () => null,
       getManifest: async () => null
     }, [binding]);
@@ -131,7 +142,7 @@ describe('Estimate new-car master consumer contract', () => {
     const records = [record()];
     const r = release(records);
     const m = manifest(r);
-    const app = createConsumerGateway({
+    const app = createEstimateGateway({
       getActive: async () => r,
       getManifest: async () => m
     }, [binding]);
@@ -170,7 +181,7 @@ describe('Estimate new-car master consumer contract', () => {
     ]));
 
     const r = release(badRecords);
-    const app = createConsumerGateway({
+    const app = createEstimateGateway({
       getActive: async () => r,
       getManifest: async () => manifest(r)
     }, [binding]);
@@ -197,7 +208,7 @@ describe('Estimate new-car master consumer contract', () => {
       ]
     });
     const r = release([hold]);
-    const app = createConsumerGateway({
+    const app = createEstimateGateway({
       getActive: async () => r,
       getManifest: async () => manifest(r)
     }, [binding]);
@@ -220,7 +231,7 @@ describe('Estimate new-car master consumer contract', () => {
       ...r,
       data: [record({ basePrice: { amount: 1, currency: 'KRW' } })]
     };
-    const app = createConsumerGateway({
+    const app = createEstimateGateway({
       getActive: async () => mutated,
       getManifest: async () => m
     }, [binding]);
