@@ -610,7 +610,13 @@ function matchesAxis(
     const actual = compact(textValue?.label);
     const expected = compact(selected.label);
     if (!actual) return { matched: false, unresolved: true, rejected: false };
-    if (!actual.includes(expected)) {
+
+    const labelMatches =
+      axis === 'trim'
+        ? actual === expected
+        : actual.includes(expected);
+
+    if (!labelMatches) {
       return { matched: false, unresolved: false, rejected: true };
     }
   }
