@@ -146,6 +146,21 @@ function formatObservedAt(value) {
   }).format(date);
 }
 
+function groupTransitionRejectedMessage(reason) {
+  switch (reason) {
+    case 'GROUP_NOT_FOUND':
+      return '그룹 상태가 바뀌었습니다. 최신 결과를 다시 확인해 주세요.';
+    case 'UNRESOLVED_GROUP_IDENTITY':
+      return '이 그룹은 모델·세대 정체성이 확정되지 않아 조건으로 좁힐 수 없습니다.';
+    case 'DRILLDOWN_AXIS_NOT_AVAILABLE':
+      return '이 조건은 현재 그룹에서 더 이상 사용할 수 없습니다.';
+    case 'DRILLDOWN_OPTION_NOT_AVAILABLE':
+      return '선택한 값은 현재 그룹에서 더 이상 사용할 수 없습니다.';
+    default:
+      return '현재 상태에서는 이 조건을 적용할 수 없습니다.';
+  }
+}
+
 function stateBadge(item) {
   const badge = element('span', 'vf-state-badge', item.state.label);
   badge.dataset.tone = item.state.tone ?? 'neutral';
@@ -715,7 +730,7 @@ export function mountVehicleFinder(
           'drilldown-rejected',
           '이 조건으로는 후보를 좁힐 수 없습니다',
           response.message ??
-            ('전이 거절 · ' + (response.transition.reason ?? '사유 미확인')),
+            groupTransitionRejectedMessage(response.transition.reason),
         );
         return;
       }
@@ -819,7 +834,7 @@ export function mountVehicleFinder(
           element(
             'strong',
             'vf-group-drilldown-title',
-            (drilldown.label ?? drilldown.axis) + '으로 좁히기',
+            (drilldown.label ?? drilldown.axis) + ' 조건으로 좁히기',
           ),
         );
         const choices = element('div', 'vf-group-drilldown-options');
