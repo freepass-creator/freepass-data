@@ -3,7 +3,9 @@ import type {
   VehicleMasterCompatibilityRule,
   VehicleMasterNode,
   VehicleMasterNodeType,
+  VehicleMasterPipelineRecord,
   VehicleMasterPriceRevision,
+  VehicleMasterSourceDocument,
 } from '../domain/vehicle-master.js';
 import {
   canonicalDrivetrain,
@@ -20,7 +22,7 @@ import type { VehicleMasterStore } from '../ports/vehicle-master-store.js';
 export type VehicleMasterGraphAuditIssue = {
   code: string;
   severity: 'ERROR' | 'WARN';
-  entityKind: 'NODE' | 'RULE' | 'PRICE';
+  entityKind: 'NODE' | 'RULE' | 'PRICE' | 'SOURCE' | 'REVISION' | 'PIPELINE';
   entityId: string;
   fieldPath?: string;
   relatedId?: string;
@@ -44,6 +46,10 @@ export type VehicleMasterGraphSnapshot = {
   nodes: readonly VehicleMasterNode[];
   rules: readonly VehicleMasterCompatibilityRule[];
   prices: readonly VehicleMasterPriceRevision[];
+  sources?: readonly VehicleMasterSourceDocument[];
+  nodeRevisions?: readonly VehicleMasterNode[];
+  ruleRevisions?: readonly VehicleMasterCompatibilityRule[];
+  pipelineRecords?: readonly VehicleMasterPipelineRecord[];
 };
 
 const NODE_TYPES: readonly VehicleMasterNodeType[] = [
@@ -355,6 +361,34 @@ const findRequiresPath = (
 
   return visit(start, new Set([start]), []);
 };
+
+const expectedContentHash = <T extends { contentHash: string }>(record: T) => {
+  const { contentHash: _contentHash, ...payload } = record;
+  return stableDigest(payload);
+};
+
+const auditContentHash = (
+  record: { contentHash: string },
+  entityKind: VehicleMasterGraphAuditIssue['entityKind'],
+  entityId: string,
+  issues: VehicleMasterGraphAuditIssue[]
+) => {
+  const expected = expectedContentHash(record);
+  if (record.contentHash !== expected) {
+    add(issues, {
+      code: 'CONTENT_HASH_MISMATCH',
+      severity: 'ERROR',
+      entityKind,
+      entityId,
+      fieldPath: 'contentHash',
+      detail: `${record.contentHash}!=${expected}`,
+    });
+  }
+};
+
+const sourceEvidenceIds = (
+  record: VehicleMasterNode | VehicleMasterCompatibilityRule | VehicleMasterPriceRevision
+) => record.sourceEvidenceIds;
 
 const expectedPriceTargetType = (
   type: VehicleMasterPriceRevision['priceType']
