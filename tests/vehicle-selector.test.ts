@@ -2101,7 +2101,7 @@ describe('common vehicle selector', () => {
     });
   });
 
-  it('requires reselection when selection-relevant master facts change', () => {
+  it('ignores label-only changes when the stable selected identity is unchanged', () => {
     const original = record('approved');
     const issued = issueVehicleSelectionReceipt(
       [original],
@@ -2115,6 +2115,35 @@ describe('common vehicle selector', () => {
     const changed = {
       ...original,
       trim: { id: 'trim_noblesse', label: '노블레스 스페셜' },
+    };
+
+    const checked = revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      [changed],
+      { assessedAt: '2026-09-26T18:10:00+09:00' }
+    );
+
+    expect(checked).toMatchObject({
+      status: 'CURRENT',
+      reasons: [],
+      currentRecordChanged: false,
+    });
+  });
+
+  it('requires reselection when a stable selected identity changes even if its label stays the same', () => {
+    const original = record('approved');
+    const issued = issueVehicleSelectionReceipt(
+      [original],
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:00:00+09:00'
+    );
+
+    const changed = {
+      ...original,
+      trim: { id: 'trim_noblesse_v2', label: '노블레스' },
     };
 
     const checked = revalidateVehicleSelectionReceipt(
