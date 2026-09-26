@@ -1221,7 +1221,7 @@ function auditDependencyGraphSemantics(
         entityKind: 'RULE',
         entityId: excluded.rule.id,
         fieldPath: `targetIds.${excluded.to}`,
-        relatedId: forwardPath[0]?.rule.id,
+        relatedId: forwardPath[0]!.rule.id,
         detail:
           `${forwardPath.map((edge) => edge.rule.id).join('>')}|` +
           returnPath.map((edge) => edge.rule.id).join('>'),
