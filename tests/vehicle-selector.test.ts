@@ -1474,14 +1474,20 @@ describe('common vehicle selector', () => {
     expect(transition.result.groups[0]?.suggestedDrilldownAxis).toBe('powertrain');
   });
 
-  it('clears only stale prior choices when changing into another group', () => {
+  it('preserves compatible prior choices while entering a visible group', () => {
     const rows = [
       record('sorento-noblesse', {
+        drivetrain: { id: null, label: '2WD' },
         trim: { id: 'trim_noblesse', label: '노블레스' },
+      }),
+      record('sorento-signature', {
+        drivetrain: { id: null, label: '2WD' },
+        trim: { id: 'trim_signature', label: '시그니처' },
       }),
       record('carnival-prestige', {
         model: { id: 'model_carnival', label: '카니발' },
         generation: { id: 'gen_ka4', label: '4세대 KA4' },
+        drivetrain: { id: null, label: '4WD' },
         trim: { id: 'trim_prestige', label: '프레스티지' },
         aliases: ['KA4'],
       }),
@@ -1490,31 +1496,24 @@ describe('common vehicle selector', () => {
     const before = selectVehicles(rows, {
       mode: 'NEW_CAR',
       searchText: '기아',
-      selection: { trim: '노블레스' },
+      selection: { drivetrain: '2WD' },
     });
-    const broad = selectVehicles(rows, {
-      mode: 'NEW_CAR',
-      searchText: '기아',
-    });
-    const carnival = broad.groups.find((group) => group.model.id === 'model_carnival')!;
-
-    expect(before.candidates.map((item) => item.record.recordId)).toEqual([
-      'sorento-noblesse',
-    ]);
+    const sorento = before.groups.find((group) => group.model.id === 'model_sorento')!;
 
     const transition = applyVehicleGroupSelection(
       rows,
       { mode: 'NEW_CAR', searchText: '기아' },
-      { trim: '노블레스' },
-      carnival.groupId
+      { drivetrain: '2WD' },
+      sorento.groupId
     );
 
     expect(transition.status).toBe('APPLIED');
-    expect(transition.clearedAxes).toEqual(['trim']);
-    expect(transition.selection.trim).toBeUndefined();
-    expect(transition.selection.modelId).toBe('model_carnival');
+    expect(transition.clearedAxes).toEqual([]);
+    expect(transition.selection.drivetrain).toBe('2WD');
+    expect(transition.selection.modelId).toBe('model_sorento');
     expect(transition.result.candidates.map((item) => item.record.recordId)).toEqual([
-      'carnival-prestige',
+      'sorento-noblesse',
+      'sorento-signature',
     ]);
   });
 
