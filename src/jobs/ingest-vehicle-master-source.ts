@@ -1,11 +1,9 @@
 import { persistFetchedVehicleMasterSource } from '../application/vehicle-master-source-capture.js';
 import { parseFetchedVehicleMasterSource } from '../application/vehicle-master-source-parse.js';
 import { createVehicleMasterSourceParsers } from '../adapters/vehicle-master-parser-registry.js';
-import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
-import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
-import { createHttpVehicleMasterSourceFetcher } from '../infra/vehicle-master-source-fetcher.js';
 import type { CaptureVehicleMasterSourceInput } from '../application/vehicle-master-source-capture.js';
 import type { VehicleMasterSourceDocument } from '../domain/vehicle-master.js';
+import { createVehicleMasterJobRuntime } from './data-access-runtime.js';
 
 const SOURCE_TYPES = new Set<VehicleMasterSourceDocument['sourceType']>([
   'MANUFACTURER_OFFICIAL',
@@ -64,9 +62,7 @@ function parseInput(raw: string | undefined): CaptureVehicleMasterSourceInput {
 }
 
 const input = parseInput(process.env.VEHICLE_MASTER_CAPTURE_JSON);
-const store = createFirestoreVehicleMasterStore();
-const archive = createFirebaseVehicleMasterSourceArchive();
-const fetcher = createHttpVehicleMasterSourceFetcher();
+const { store, archive, fetcher } = createVehicleMasterJobRuntime();
 
 const fetched = await fetcher.fetch(input.sourceUrl);
 const captured = await persistFetchedVehicleMasterSource(
