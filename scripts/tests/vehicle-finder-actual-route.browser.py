@@ -323,6 +323,43 @@ try:
             };
           };
 
+          window.__qaRevalidateCount = 0;
+          window.__qaRevalidate = async payload => {
+            window.__qaLastRevalidate = payload;
+            window.__qaRevalidateCount += 1;
+            if (window.__qaRevalidateCount === 1) {
+              return {
+                review: {
+                  status: 'CURRENT',
+                  receiptId: payload.receipt.receiptId,
+                  recordId: payload.id,
+                  ageMs: 1800000,
+                  currentRecordChanged: false,
+                  snapshotRecordDigest: 'snapshot-record-digest-browser-qa',
+                  currentRecordDigest: 'snapshot-record-digest-browser-qa',
+                  reasons: [],
+                },
+              };
+            }
+            return {
+              review: {
+                status: 'RESELECT_REQUIRED',
+                receiptId: payload.receipt.receiptId,
+                recordId: payload.id,
+                ageMs: 3600000,
+                currentRecordChanged: true,
+                snapshotRecordDigest: 'snapshot-record-digest-browser-qa',
+                currentRecordDigest: 'current-record-digest-browser-qa',
+                reasons: [{
+                  code: 'CURRENT_RECORD_CHANGED',
+                  title: '확정 당시와 현재 차량 정보가 달라졌습니다',
+                  message: 'F가 선택 관련 차량 정보의 digest 변경을 확인했습니다.',
+                  nextStep: '변경된 차량 정보를 검토하고 다시 선택해 주세요.',
+                }],
+              },
+            };
+          };
+
           window.__qaSnapshot = makeSnapshot; 
           window.__qaReadLegacy = window.__qaRead;
 
@@ -333,6 +370,7 @@ try:
               onGroupDrilldown: window.__qaGroupDrilldown,
               onFinalize: window.__qaFinalize,
               onSelect: window.__qaSelect,
+              onRevalidate: window.__qaRevalidate,
               initialMode: 'NEW_CAR',
             },
           );
@@ -383,7 +421,21 @@ try:
         expect(desktop.get_by_text("선택 확정 완료")).to_be_visible()
         expect(desktop.get_by_text("vehicle_selection_browser_qa")).to_be_visible()
         assert desktop.evaluate("window.__qaLastSelect.finalizationContext.review") == "approved"
-        desktop.get_by_role("button", name="상세 닫기").click()
+
+        desktop.get_by_role("button", name="유효성 다시 확인").click()
+        expect(desktop.get_by_text("현재도 유효한 선택입니다")).to_be_visible()
+        expect(desktop.get_by_text("receipt 발급 후 30분")).to_be_visible()
+        assert desktop.evaluate("window.__qaLastRevalidate.receipt.receiptId") == "vehicle_selection_browser_qa"
+
+        desktop.get_by_role("button", name="유효성 다시 확인").click()
+        expect(desktop.get_by_text("다시 선택이 필요합니다")).to_be_visible()
+        expect(desktop.get_by_text("CURRENT_RECORD_CHANGED")).to_be_visible()
+        expect(desktop.get_by_role("button", name="목록에서 다시 선택")).to_be_visible()
+        desktop.get_by_text("변경 digest 확인").click()
+        expect(desktop.get_by_text("확정 당시 snapshot-record-digest-browser-qa")).to_be_visible()
+        expect(desktop.get_by_text("현재 current-record-digest-browser-qa")).to_be_visible()
+        desktop.get_by_role("button", name="목록에서 다시 선택").click()
+        expect(desktop.locator(".vf-detail")).to_be_hidden()
 
         desktop.locator(".vf-group-member").nth(1).get_by_role("button").click()
         expect(desktop.get_by_role("button", name="최종 선택 검토")).to_be_visible()
