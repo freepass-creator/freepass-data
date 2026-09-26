@@ -1999,21 +1999,37 @@ export function assertVehicleSelectionReceipt(
   return true;
 }
 
+function stableTextSelectionSnapshot(
+  value: VehicleSelectorTextValue
+) {
+  return value.id
+    ? { id: value.id }
+    : { id: null, label: value.label };
+}
+
+function stableNumberSelectionSnapshot(
+  value: VehicleSelectorNumberValue
+) {
+  return value.id
+    ? { id: value.id, value: value.value }
+    : { id: null, value: value.value };
+}
+
 function selectionRelevantRecordSnapshot(record: VehicleSelectorRecord) {
   return {
     recordId: record.recordId,
     lifecycle: record.lifecycle,
     identityStatus: record.identityStatus,
-    maker: record.maker,
-    model: record.model,
-    generation: record.generation,
-    phase: record.phase,
-    modelYear: record.modelYear,
-    powertrain: record.powertrain,
-    fuelType: record.fuelType,
-    drivetrain: record.drivetrain,
-    seats: record.seats,
-    trim: record.trim,
+    maker: stableTextSelectionSnapshot(record.maker),
+    model: stableTextSelectionSnapshot(record.model),
+    generation: stableTextSelectionSnapshot(record.generation),
+    phase: stableTextSelectionSnapshot(record.phase),
+    modelYear: stableNumberSelectionSnapshot(record.modelYear),
+    powertrain: stableTextSelectionSnapshot(record.powertrain),
+    fuelType: stableTextSelectionSnapshot(record.fuelType),
+    drivetrain: stableTextSelectionSnapshot(record.drivetrain),
+    seats: stableNumberSelectionSnapshot(record.seats),
+    trim: stableTextSelectionSnapshot(record.trim),
   };
 }
 
