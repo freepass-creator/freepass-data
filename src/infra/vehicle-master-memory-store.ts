@@ -79,6 +79,11 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
     return copy(this.rules.get(id) ?? null);
   }
 
+  async listCompatibilityRules() {
+    return copy([...this.rules.values()]
+      .sort((a, b) => a.id.localeCompare(b.id)));
+  }
+
   async putCompatibilityRule(record: VehicleMasterCompatibilityRule) {
     return this.putVersioned(this.rules, record);
   }

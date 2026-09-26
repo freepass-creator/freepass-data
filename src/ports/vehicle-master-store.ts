@@ -15,6 +15,7 @@ export interface VehicleMasterStore {
   putNode(record: VehicleMasterNode): Promise<VehicleMasterWriteResult>;
 
   getCompatibilityRule(id: string): Promise<VehicleMasterCompatibilityRule | null>;
+  listCompatibilityRules(): Promise<VehicleMasterCompatibilityRule[]>;
   putCompatibilityRule(record: VehicleMasterCompatibilityRule): Promise<VehicleMasterWriteResult>;
 
   getPriceRevision(id: string): Promise<VehicleMasterPriceRevision | null>;
