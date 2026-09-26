@@ -177,6 +177,25 @@ const auditWorkflow = fs.readFileSync(
   path.join(repoRoot, '.github', 'workflows', 'erp5-continuous-audit.yml'),
   'utf8'
 );
+const watchdogWorkflow = fs.readFileSync(
+  path.join(repoRoot, '.github', 'workflows', 'erp5-audit-watchdog.yml'),
+  'utf8'
+);
+if (
+  !watchdogWorkflow.includes("cron: '7 * * * *'") ||
+  !watchdogWorkflow.includes('ERP5_AUDIT_MAX_GAP_MINUTES') ||
+  !watchdogWorkflow.includes('ERP5_READ_SERVICE_ACCOUNT') ||
+  !watchdogWorkflow.includes('latest.json') ||
+  !watchdogWorkflow.includes('erp5-audit-watchdog/1') ||
+  !watchdogWorkflow.includes('exit 2') ||
+  watchdogWorkflow.includes('ERP5_POINTER_SERVICE_ACCOUNT') ||
+  watchdogWorkflow.includes('gcloud storage cp') ||
+  watchdogWorkflow.includes('--apply')
+) {
+  console.error('ERP5 audit watchdog must remain independent, hourly and read-only');
+  process.exit(1);
+}
+
 
 if (!auditWorkflow.includes("cron: '37 * * * *'")) {
   console.error('Continuous audit must remain on the hourly minute-37 schedule');
