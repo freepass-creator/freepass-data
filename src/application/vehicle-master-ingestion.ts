@@ -103,7 +103,11 @@ export type VehicleMasterEvidenceIssue = {
     | 'RULE_DEPENDENCY_DUPLICATE'
     | 'RULE_DEPENDENCY_CONFLICT'
     | 'RULE_DEPENDENCY_TRANSITIVE_CONFLICT'
-    | 'RULE_DEPENDENCY_CYCLE_CONFLICT';
+    | 'RULE_DEPENDENCY_CYCLE_CONFLICT'
+    | 'RULE_AVAILABILITY_CONDITION_REQUIRED'
+    | 'RULE_AVAILABILITY_EFFECT_MISMATCH'
+    | 'RULE_AVAILABILITY_DUPLICATE'
+    | 'RULE_AVAILABILITY_CONFLICT';
   fieldPath?: string;
   sourceDocumentId?: string;
   detail?: string;
@@ -439,6 +443,40 @@ function sameRuleScope(
   b: VehicleMasterCompatibilityRule
 ) {
   return stableDigest(a.scope) === stableDigest(b.scope);
+}
+
+const AVAILABILITY_RULE_TYPES = new Set<VehicleMasterCompatibilityRule['ruleType']>([
+  'AVAILABLE_IF',
+  'UNAVAILABLE_IF',
+]);
+
+function hasRuleCondition(rule: VehicleMasterCompatibilityRule) {
+  return Boolean(rule.condition && Object.keys(rule.condition).length);
+}
+
+function sameRuleCondition(
+  a: VehicleMasterCompatibilityRule,
+  b: VehicleMasterCompatibilityRule
+) {
+  return stableDigest(a.condition) === stableDigest(b.condition);
+}
+
+function expectedAvailabilityEffect(
+  ruleType: VehicleMasterCompatibilityRule['ruleType']
+): VehicleMasterCompatibilityRule['effect'] | null {
+  if (ruleType === 'AVAILABLE_IF') return 'VALID';
+  if (ruleType === 'UNAVAILABLE_IF') return 'INVALID';
+  return null;
+}
+
+function oppositeAvailabilityRuleType(
+  a: VehicleMasterCompatibilityRule['ruleType'],
+  b: VehicleMasterCompatibilityRule['ruleType']
+) {
+  return (
+    (a === 'AVAILABLE_IF' && b === 'UNAVAILABLE_IF') ||
+    (a === 'UNAVAILABLE_IF' && b === 'AVAILABLE_IF')
+  );
 }
 
 function rulePeriodsOverlap(
@@ -1635,6 +1673,53 @@ export async function promoteVehicleMasterCompatibilityRule(
       fieldPath: 'scope.trimId',
       detail: `${input.proposal.scope.trimId}!=${subject.id}`,
     });
+  }
+
+  if (AVAILABILITY_RULE_TYPES.has(input.proposal.ruleType)) {
+    if (!hasRuleCondition(input.proposal)) {
+      issues.push({
+        code: 'RULE_AVAILABILITY_CONDITION_REQUIRED',
+        fieldPath: 'condition',
+      });
+    }
+
+    const expectedEffect = expectedAvailabilityEffect(input.proposal.ruleType);
+    if (expectedEffect && input.proposal.effect !== expectedEffect) {
+      issues.push({
+        code: 'RULE_AVAILABILITY_EFFECT_MISMATCH',
+        fieldPath: 'effect',
+        detail: `${input.proposal.effect}!=${expectedEffect}`,
+      });
+    }
+
+    const existingAvailabilityRules = (await store.listCompatibilityRules())
+      .filter((rule) =>
+        rule.id !== input.proposal.id &&
+        AVAILABILITY_RULE_TYPES.has(rule.ruleType) &&
+        rule.subjectId === input.proposal.subjectId &&
+        sameTargetSet(rule, input.proposal) &&
+        sameRuleScope(rule, input.proposal) &&
+        sameRuleCondition(rule, input.proposal) &&
+        rulePeriodsOverlap(rule, input.proposal)
+      );
+
+    for (const existing of existingAvailabilityRules) {
+      if (existing.ruleType === input.proposal.ruleType) {
+        issues.push({
+          code: 'RULE_AVAILABILITY_DUPLICATE',
+          fieldPath: 'ruleType',
+          detail: existing.id,
+        });
+      } else if (
+        oppositeAvailabilityRuleType(existing.ruleType, input.proposal.ruleType)
+      ) {
+        issues.push({
+          code: 'RULE_AVAILABILITY_CONFLICT',
+          fieldPath: 'ruleType',
+          detail: existing.id,
+        });
+      }
+    }
   }
 
   if (DIRECT_DEPENDENCY_RULE_TYPES.has(input.proposal.ruleType)) {
