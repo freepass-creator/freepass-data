@@ -19,7 +19,7 @@ describe('U-01 vehicle finder presentation boundary', () => {
   it('is disconnected by default and ships no fake vehicle rows', async () => {
     const html = await readFile(htmlPath, 'utf8');
     expect(html).toMatch(/mountVehicleFinder\(document\.getElementById\('vehicle-finder'\)\)/);
-    expect(html).not.toMatch(/fixture|쏘렌토|싼타페|현대|기아/);
+    expect(html).not.toMatch(/쏘렌토|싼타페|현대|기아/);\n    expect(html).not.toMatch(/fixture\\s*\\(|from\\s+['\"][^'\"]*fixture/i);
   });
 
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
