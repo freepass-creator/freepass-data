@@ -141,6 +141,23 @@ A used-car screen normally keeps the filters visible instead of turning
 `suggestedNextAxis` into a wizard step.
 
 
+## Structured selection matching
+
+Free-text search remains intentionally broad, but a structured trim selection is
+an explicit identity choice.
+
+Therefore:
+
+- `selection.trim` label matching is normalized exact matching.
+- selecting `GT` must not also select `GT-Line`.
+- selecting `GT-Line` must not select `GT`.
+- stable `trimId` remains the preferred exact identity when available.
+- other descriptive structured axes keep their existing compatible partial-label
+  behavior unless a stable ID/value is supplied.
+
+This separation prevents search convenience from weakening an explicit trim
+choice.
+
 ## Candidate action semantics
 
 Selector candidates carry explicit functional action semantics:

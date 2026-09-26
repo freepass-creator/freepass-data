@@ -168,6 +168,24 @@ describe('common vehicle selector', () => {
     expect(result.guidance.suggestedNextAxis).toBe('modelYear');
   });
 
+  it('does not let a more specific trim satisfy a shorter structured trim selection', () => {
+    const rows = [
+      record('gt', {
+        trim: { id: 'trim_gt', label: 'GT' },
+      }),
+      record('gt-line', {
+        trim: { id: 'trim_gt_line', label: 'GT-Line' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      selection: { trim: 'GT' },
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual(['gt']);
+  });
+
   it('does not let a shorter record label satisfy a more specific selected label', () => {
     const rows = [
       record('gt', {
