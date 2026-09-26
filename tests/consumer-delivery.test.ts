@@ -89,6 +89,18 @@ describe('sheet delivery receipt', () => {
     ]));
   });
 
+  it('fails closed when a receipt reuses release identity with a different observation time', () => {
+    const result = validateSheetDeliveryReceipt(receipt({
+      approvedRelease: {
+        ...release,
+        observedAt: '2026-09-25T07:00:01.000Z'
+      }
+    }), release);
+
+    expect(result.status).toBe('HOLD');
+    expect(result.violations).toContain('OBSERVED_AT_MISMATCH');
+  });
+
   it('blocks a rendered/readback vehicle-key count mismatch', () => {
     const result = validateSheetDeliveryReceipt(receipt({
       readback: {

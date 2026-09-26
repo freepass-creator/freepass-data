@@ -75,7 +75,8 @@ export function validateSheetDeliveryReceipt(
     releaseId: 'RELEASE_ID_MISMATCH',
     manifestId: 'MANIFEST_ID_MISMATCH',
     inputDigest: 'INPUT_DIGEST_MISMATCH',
-    dataDigest: 'DATA_DIGEST_MISMATCH'
+    dataDigest: 'DATA_DIGEST_MISMATCH',
+    observedAt: 'OBSERVED_AT_MISMATCH'
   } as const;
 
   for (const [key, code] of Object.entries(releaseFields) as Array<
