@@ -237,6 +237,14 @@ if (
   process.exit(1);
 }
 
+if (
+  packageJson.scripts?.['build:data-control-tower'] !==
+  'tsx src/jobs/build-data-control-tower.ts'
+) {
+  console.error('FreePass Data control tower builder must remain registered');
+  process.exit(1);
+}
+
 const readinessStart = auditWorkflow.indexOf('- name: Check consumer readiness');
 const readinessEnd = auditWorkflow.indexOf('- name: Check F01/F86 consumer health');
 const readinessStep = auditWorkflow.slice(readinessStart, readinessEnd);
@@ -283,6 +291,23 @@ if (
   auditFreshnessStep.includes('canonicalWriteAuthorized: true')
 ) {
   console.error('Scheduled audit freshness evidence must remain explicit-policy and read-only');
+  process.exit(1);
+}
+
+const controlTowerStart = auditWorkflow.indexOf('- name: Build FreePass Data control tower');
+const controlTowerEnd = auditWorkflow.indexOf('- name: Persist immutable evidence and read it back');
+const controlTowerStep = auditWorkflow.slice(controlTowerStart, controlTowerEnd);
+if (
+  controlTowerStart < 0 ||
+  controlTowerEnd <= controlTowerStart ||
+  !controlTowerStep.includes('build:data-control-tower') ||
+  !controlTowerStep.includes('data-control-tower.json') ||
+  !auditWorkflow.includes('gcloud storage cp "$run_uri/data-control-tower.json"') ||
+  !auditWorkflow.includes('cmp -s data-control-tower.json evidence-readback/data-control-tower.json') ||
+  !auditWorkflow.includes('data-control-tower.json') ||
+  controlTowerStep.includes('--apply')
+) {
+  console.error('FreePass Data control tower must remain read-only and evidence-backed');
   process.exit(1);
 }
 
