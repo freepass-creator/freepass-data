@@ -185,7 +185,7 @@ try:
           window.__qaReadContexts = [];
           window.__qaRead = async ({ mode, readContext }) => {
             window.__qaReadContexts.push(readContext ?? null);
-            return makeSnapshot(mode);
+            return readContext ? makeSnapshot(mode, 4) : makeSnapshot(mode);
           };
           window.__qaGroupDrilldown = async payload => {
             window.__qaLastDrilldown = payload;
@@ -268,8 +268,13 @@ try:
 
         mobile.get_by_role("button", name="목록으로").click()
         expect(mobile.get_by_text("방금 본 후보")).to_be_visible()
-        expect(mobile.locator(".vf-group-member")).to_have_count(9)
+        expect(mobile.locator(".vf-group-member")).to_have_count(4)
         expect(mobile.get_by_role("button", name="필터")).to_be_visible()
+        mobile.get_by_role("button", name="다시 조회").click()
+        expect(mobile.locator(".vf-group-member")).to_have_count(4)
+        assert mobile.evaluate(
+            "window.__qaReadContexts[window.__qaReadContexts.length - 1].transition"
+        ) == "browser-qa"
 
         mobile.get_by_role("button", name="필터").click()
         expect(mobile.get_by_role("dialog", name="필터")).to_be_visible()
