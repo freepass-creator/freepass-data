@@ -35,6 +35,7 @@ export const FIRESTORE_COLLECTIONS = Object.freeze({
     manifests: 'projection_release_manifests',
     lineage: 'projection_field_lineage',
     deliveryReceipts: 'projection_delivery_receipts',
+    sheetDeliveryEvidence: 'sheet_delivery_evidence',
     active: 'projection_active'
   })
 } as const);
