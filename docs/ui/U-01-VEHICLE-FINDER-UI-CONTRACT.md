@@ -45,3 +45,35 @@ It never converts unknown to zero, the current year or a guessed label.
 
 The standalone preview is deliberately disconnected by default.
 Synthetic fixtures belong only in tests.
+
+
+## Operational state presentation
+
+U-01 may render display metadata supplied by the read adapter, but does not calculate governance meaning.
+
+Per result item the adapter may additionally provide:
+
+- `freshness: { code, label }`
+- `confidenceLabel`
+- `sources: [{ id, label? }]`
+
+These fields are optional presentation inputs. U-01 does not derive them from timestamps,
+evidence counts or source names.
+
+Rules:
+
+- state label and exact state code are both visible
+- `observedAt` is shown as an absolute observation timestamp
+- freshness is shown only when supplied; otherwise `판정 없음`
+- confidence is shown only when supplied; otherwise `평가 없음`
+- missing source labels do not hide evidence IDs
+- UNKNOWN facts remain `미확인`
+- U-01 never converts age into FRESH/STALE or evidence count into a confidence score
+
+## Web / mobile composition
+
+Desktop keeps search + filters + results + selected detail visible together.
+The detail panel is sticky within the viewport so evidence can be inspected without losing result context.
+
+Mobile keeps search/results primary, opens filters as a bottom sheet and uses the fixed
+3:7 bottom action boundary only while inspecting a result.
