@@ -393,12 +393,16 @@ if (
   controlTowerEnd <= controlTowerStart ||
   !controlTowerStep.includes('build:data-control-tower') ||
   !controlTowerStep.includes('data-control-tower.json') ||
+  !controlTowerStep.includes('estimateMasterReadiness') ||
+  !auditWorkflow.includes('partner: $capture[0].partners') ||
+  !auditWorkflow.includes('gcloud storage cp "$run_uri/estimate-master-readiness.json"') ||
+  !auditWorkflow.includes('cmp -s estimate-master-readiness.json evidence-readback/estimate-master-readiness.json') ||
   !auditWorkflow.includes('gcloud storage cp "$run_uri/data-control-tower.json"') ||
   !auditWorkflow.includes('cmp -s data-control-tower.json evidence-readback/data-control-tower.json') ||
   !auditWorkflow.includes('data-control-tower.json') ||
   controlTowerStep.includes('--apply')
 ) {
-  console.error('FreePass Data control tower must remain read-only and evidence-backed');
+  console.error('FreePass Data control tower must remain complete, read-only and evidence-backed');
   process.exit(1);
 }
 
