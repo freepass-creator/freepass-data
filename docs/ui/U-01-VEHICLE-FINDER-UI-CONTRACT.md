@@ -332,3 +332,38 @@ message plus the raw code.
 
 Group transition REJECTED messages likewise retain the raw F reason code after the
 human-readable message.
+
+
+## Final selection review
+
+Final selection is a separate U interaction state from candidate inspection.
+
+The Finder accepts an optional injected `onFinalize` callback. When present, an ACTIVE
+SELECT candidate does not call `onSelect` immediately.
+
+Flow:
+
+1. user selects `최종 선택 검토`
+2. U calls `onFinalize({ id, observationId, mode, query, filters, readContext })`
+3. callback returns a U-presented F decision:
+   - `APPROVED` → show final review and enable `이 차량으로 확정`
+   - `HOLD` → show raw F finalization reason codes and keep confirmation disabled
+4. only after APPROVED does U call the existing `onSelect`
+5. `onSelect` may return receipt metadata for display
+
+U never imports or invokes `finalizeVehicleSelection()` or
+`issueVehicleSelectionReceipt()` from browser UI code.
+
+The typed presenter `presentVehicleFinalizationDecision()` converts the F decision to
+human-readable review copy while preserving every raw reason code.
+
+Current F finalization reasons are all represented, including ambiguous/stale candidates,
+non-active/unresolved requests, required identity fields, used-car generation/phase, and
+mode-scope mismatch.
+
+`finalizationContext` returned by the callback is opaque. U only passes it to the final
+`onSelect` action.
+
+Receipt metadata (`receiptId`, `issuedAt`, snapshot/receipt digests) is display-only in
+U. Receipt issuance, integrity verification, persistence and revalidation remain F/I
+responsibilities.
