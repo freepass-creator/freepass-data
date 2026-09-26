@@ -11,8 +11,18 @@ import {
 import { readLegacyProductSnapshot } from '../adapters/legacy-freepasserp3.js';
 import { ingestLegacyProductSnapshot } from '../application/ingest-legacy-products.js';
 import { prepareSheetBridgeHandoffs } from '../application/sheet-publication-bridge.js';
+import {
+  assessLatestSheetConsumerCutover,
+  recordSheetDeliveryEvidence
+} from '../application/sheet-delivery-evidence.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import type { SheetHandoffWorkbook } from '../domain/sheet-publication-handoff.js';
+import type { SheetHandoffWorkbook, SheetPublicationHandoff } from '../domain/sheet-publication-handoff.js';
+import type { SheetDeliveryReceipt } from '../domain/consumer-delivery.js';
+import type {
+  ConsumerCutoverStage,
+  ConsumerSwitchRegistration
+} from '../domain/consumer-cutover.js';
+import { createFirestoreDataStore } from '../infra/firestore-store.js';
 import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
 import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
 import { createHttpVehicleMasterSourceFetcher } from '../infra/vehicle-master-source-fetcher.js';
@@ -89,6 +99,66 @@ export function createSheetBridgeDataAccessRuntime(input: {
         manifestId: value.bridge.release.manifestId
       })
     }, () => prepareSheetBridgeHandoffs(rpc, targets))
+  };
+}
+
+export async function createSheetDeliveryEvidenceDataAccessRuntime() {
+  const access = new DataAccessGateway(createFirestoreDataAccessLogStore());
+  const store = await createFirestoreDataStore();
+
+  return {
+    record: (input: {
+      handoff: SheetPublicationHandoff;
+      receipt: SheetDeliveryReceipt;
+      recordedAt?: string;
+    }) => access.write({
+      context: {
+        actor: { id: 'service:freepass-data-sheet-delivery', kind: 'SERVICE' },
+        clientId: 'job:record-sheet-delivery-evidence',
+        purpose: 'persist validated F01/F86 delivery evidence'
+      },
+      operation: 'WRITE_SHEET_DELIVERY_EVIDENCE',
+      resource: {
+        kind: 'PROJECTION',
+        name: 'sheet-delivery-evidence',
+        projectionId: input.receipt.approvedRelease.projectionId
+      },
+      requestDigest: stableDigest({
+        handoffHash: input.handoff.handoffHash,
+        receipt: input.receipt
+      }),
+      summarize: (value) => ({
+        count: 1,
+        digest: stableDigest(value),
+        releaseId: value.receipt.approvedRelease.releaseId
+      })
+    }, () => recordSheetDeliveryEvidence(store, input)),
+
+    assess: (
+      registration: ConsumerSwitchRegistration,
+      target: ConsumerCutoverStage
+    ) => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-sheet-cutover', kind: 'SERVICE' },
+        clientId: 'job:assess-sheet-consumer-cutover',
+        purpose: 'assess Sheet consumer cutover from durable FreePass Data evidence'
+      },
+      operation: 'READ_SHEET_CUTOVER_EVIDENCE',
+      resource: {
+        kind: 'PROJECTION',
+        name: 'sheet-delivery-evidence'
+      },
+      summarize: (value) => ({
+        count: value.record ? 1 : 0,
+        digest: stableDigest({
+          receiptId: value.record?.receiptId ?? null,
+          decision: value.decision
+        }),
+        ...(value.registration.evidence.approvedRelease
+          ? { releaseId: value.registration.evidence.approvedRelease.releaseId }
+          : {})
+      })
+    }, () => assessLatestSheetConsumerCutover(store, registration, target))
   };
 }
 
