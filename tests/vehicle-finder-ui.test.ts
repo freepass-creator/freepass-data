@@ -114,6 +114,17 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(server).not.toMatch(/\/v1\/.*vehicle-finder/);
   });
 
+  it('preserves actual selector action and NO_RESULT presentation', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    expect(source).toMatch(/item\.action\.code/);
+    expect(source).toMatch(/item\.action\.label/);
+    expect(source).toMatch(/item\.action\.reasons/);
+    expect(source).toMatch(/INSPECT_ONLY/);
+    expect(source).toMatch(/BLOCKED/);
+    expect(source).toMatch(/snapshot\.guidance\.noResultTitle/);
+    expect(source).toMatch(/snapshot\.guidance\.noResultMessage/);
+  });
+
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
     const css = await readFile(cssPath, 'utf8');
     expect(css).toMatch(/grid-template-columns:3fr 7fr/);

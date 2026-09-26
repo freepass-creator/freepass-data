@@ -17,7 +17,10 @@ function validateSnapshot(input) {
   if (!['NEW_CAR', 'USED_CAR'].includes(input.mode)) invalid('mode');
   if (!['GUIDED', 'SEARCH_FILTER'].includes(input.presentation)) invalid('presentation');
   if (!input.guidance || !text(input.guidance.resolutionStatus) ||
-      (input.guidance.suggestedNextAxis != null && !text(input.guidance.suggestedNextAxis))) {
+      (input.guidance.suggestedNextAxis != null && !text(input.guidance.suggestedNextAxis)) ||
+      (input.guidance.noResultReason != null && !text(input.guidance.noResultReason)) ||
+      (input.guidance.noResultTitle != null && !text(input.guidance.noResultTitle)) ||
+      (input.guidance.noResultMessage != null && !text(input.guidance.noResultMessage))) {
     invalid('guidance');
   }
   if (!text(input.observationId) || !text(input.observedAt) || !Number.isFinite(Date.parse(input.observedAt))) {
@@ -60,6 +63,12 @@ function validateSnapshot(input) {
         item.sources.some(source => !source || !text(source.id) ||
           (source.label != null && !text(source.label))))) {
       invalid('itemSources');
+    }
+    if (item.action != null &&
+        (!item.action || !text(item.action.code) || !text(item.action.label) ||
+          !Array.isArray(item.action.reasons) ||
+          item.action.reasons.some(reason => !text(reason)))) {
+      invalid('itemAction');
     }
     if (item.listLines != null &&
         (!Array.isArray(item.listLines) || item.listLines.length > 2 ||
@@ -469,6 +478,11 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
       element('span', 'vf-state-code', item.state.code),
       element('span', 'vf-note', item.nodeTypeLabel),
     );
+    if (item.action) {
+      const actionBadge = element('span', 'vf-action-state', item.action.label);
+      actionBadge.dataset.action = item.action.code;
+      resultMeta.append(actionBadge);
+    }
 
     const trust = element('dl', 'vf-trust-grid');
     const trustItems = [
@@ -481,6 +495,17 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
       const cell = element('div', 'vf-trust-item');
       cell.append(element('dt', '', label), element('dd', '', value));
       trust.append(cell);
+    }
+
+    if (item.action?.reasons.length) {
+      const reasons = element('div', 'vf-action-reasons');
+      reasons.append(element('strong', '', '선택 상태 근거'));
+      const reasonList = element('ul');
+      for (const reason of item.action.reasons) {
+        reasonList.append(element('li', '', reason));
+      }
+      reasons.append(reasonList);
+      detail._actionReasons = reasons;
     }
 
     const facts = element('dl', 'vf-detail-facts');
@@ -520,7 +545,13 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     const back = element('button', 'vf-back vf-secondary', '목록으로');
     back.type = 'button';
     listen(back, 'click', () => closeDetail());
-    const confirm = element('button', 'vf-primary', '이 차량 선택');
+    const confirmLabel =
+      item.action?.code === 'INSPECT_ONLY'
+        ? '확인만 가능'
+        : item.action?.code === 'BLOCKED'
+          ? '선택할 수 없음'
+          : '이 차량 선택';
+    const confirm = element('button', 'vf-primary', confirmLabel);
     confirm.type = 'button';
     confirm.disabled = item.selectable === false;
     listen(confirm, 'click', async () => {
@@ -541,7 +572,12 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     });
     actions.append(back, confirm);
 
-    detail.append(detailHead, resultMeta, trust, facts, evidence, actions);
+    detail.append(detailHead, resultMeta);
+    if (detail._actionReasons) {
+      detail.append(detail._actionReasons);
+      delete detail._actionReasons;
+    }
+    detail.append(trust, facts, evidence, actions);
     detail.hidden = false;
     root.classList.add('vf-inspecting');
   }
@@ -569,14 +605,16 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     } else if (snapshot.coverage === 'PARTIAL') {
       setEmptyState(
         'partial-zero',
-        '일부 자료에서 후보를 찾지 못했습니다',
-        '현재 관측 범위 안에서만 0건입니다. 전체 차량에 후보가 없다는 뜻은 아닙니다. 검색어와 필터는 유지됩니다.',
+        snapshot.guidance.noResultTitle ?? '일부 자료에서 후보를 찾지 못했습니다',
+        snapshot.guidance.noResultMessage ??
+          '현재 관측 범위 안에서만 0건입니다. 전체 차량에 후보가 없다는 뜻은 아닙니다. 검색어와 필터는 유지됩니다.',
       );
     } else {
       setEmptyState(
         'zero',
-        '일치하는 후보가 없습니다',
-        '현재 완료된 관측 범위에서 조건과 일치하는 후보가 없습니다. 검색어와 필터는 유지됩니다.',
+        snapshot.guidance.noResultTitle ?? '일치하는 후보가 없습니다',
+        snapshot.guidance.noResultMessage ??
+          '현재 완료된 관측 범위에서 조건과 일치하는 후보가 없습니다. 검색어와 필터는 유지됩니다.',
       );
     }
 

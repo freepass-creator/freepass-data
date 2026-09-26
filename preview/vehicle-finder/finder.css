@@ -683,3 +683,30 @@
 @media(prefers-reduced-motion:reduce){
   .vf .vf-empty-state[data-kind='loading'] .vf-empty-mark{animation:none}
 }
+
+
+/* U-01 actual selector action presentation */
+.vf .vf-action-state{
+  display:inline-flex;
+  align-items:center;
+  min-height:22px;
+  padding:2px 8px;
+  border-radius:999px;
+  background:var(--vf-soft);
+  color:var(--text,#5F6974);
+  font-size:var(--vf-support);
+  font-weight:700
+}
+.vf .vf-action-state[data-action='SELECT']{background:#EDF8F1;color:var(--ok,#176A42)}
+.vf .vf-action-state[data-action='INSPECT_ONLY']{background:#FFF6E4;color:var(--warn,#8B5A00)}
+.vf .vf-action-state[data-action='BLOCKED']{background:#FFF0F0;color:var(--danger,#A52F2F)}
+.vf .vf-action-reasons{
+  margin:14px 0;
+  padding:10px 12px;
+  border-radius:var(--vf-card-radius);
+  background:var(--vf-soft);
+  font-size:var(--vf-support)
+}
+.vf .vf-action-reasons strong{font-size:var(--vf-support)}
+.vf .vf-action-reasons ul{margin:6px 0 0;padding-left:18px}
+.vf .vf-action-reasons li{margin:3px 0;color:var(--text,#5F6974)}

@@ -186,3 +186,35 @@ Only an explicit mode change intentionally clears the mode-specific UI state.
 
 U-01 does not translate transport errors into data facts and does not promote PARTIAL
 coverage to COMPLETE.
+
+
+## Actual Vehicle Selector result boundary
+
+U-01 now has a typed presenter from the real F-owned `VehicleSelectorResult` to
+`freepass.vehicle-finder.ui/v1`.
+
+The presenter preserves, rather than recalculates:
+
+- `resolutionStatus`
+- `suggestedNextAxis`
+- `noResultReason`
+- candidate `actionState`
+- candidate `action: SELECT | INSPECT_ONLY | BLOCKED`
+- candidate `actionReasons[]`
+- candidate `selectable`
+
+U-01 owns only the human-readable presentation of those F-owned codes.
+
+Candidate display evidence remains explicit input to the presenter. If a selector
+candidate has no supplied display/evidence record, presentation fails closed with
+`MISSING_VEHICLE_FINDER_DISPLAY` instead of composing or guessing vehicle facts.
+
+The I-01 handoff is therefore narrow:
+
+1. obtain authoritative new/used master records
+2. run the existing F-owned selector/adapters
+3. provide ordered UI facets and evidence-backed display metadata
+4. call the U presenter
+5. deliver the resulting UI snapshot to the Finder read boundary
+
+U-01 does not create that transport endpoint.
