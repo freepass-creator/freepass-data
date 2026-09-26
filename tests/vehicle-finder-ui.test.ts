@@ -167,6 +167,8 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).toMatch(/이 차량으로 확정/);
     expect(source).toMatch(/finalizationContext/);
     expect(source).toMatch(/response\?\.receipt/);
+    expect(source).toMatch(/finalizationReview = null/);
+    expect(source).toMatch(/finalizationContext = null/);
     expect(source).not.toMatch(/finalizeVehicleSelection|issueVehicleSelectionReceipt/);
   });
 
