@@ -22,6 +22,12 @@ const invalid = field => { throw new Error('INVALID_VEHICLE_FINDER_UI:' + field)
 
 function validateSnapshot(input) {
   if (!input || input.schemaVersion !== UI_SCHEMA) invalid('schemaVersion');
+  if (!['NEW_CAR', 'USED_CAR'].includes(input.mode)) invalid('mode');
+  if (!['GUIDED', 'SEARCH_FILTER'].includes(input.presentation)) invalid('presentation');
+  if (!input.guidance || !text(input.guidance.resolutionStatus) ||
+      (input.guidance.suggestedNextAxis != null && !text(input.guidance.suggestedNextAxis))) {
+    invalid('guidance');
+  }
   if (!text(input.observationId) || !text(input.observedAt) || !Number.isFinite(Date.parse(input.observedAt))) {
     invalid('observation');
   }
@@ -83,7 +89,7 @@ function stateBadge(item) {
   return badge;
 }
 
-export function mountVehicleFinder(root, { read, onSelect } = {}) {
+export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CAR' } = {}) {
   if (!(root instanceof HTMLElement)) throw new TypeError('Finder root must be an HTMLElement');
 
   const prefix = 'vf-u01-' + (++instanceCount);
@@ -92,6 +98,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     node.addEventListener(type, callback, { signal: events.signal });
 
   let snapshot = null;
+  let mode = ['NEW_CAR', 'USED_CAR'].includes(initialMode) ? initialMode : 'NEW_CAR';
   let query = '';
   let filters = {};
   let inspectedId = null;
@@ -103,8 +110,24 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   root.classList.add('vf');
 
   const head = element('header', 'vf-head');
+  const headTitle = element('div', 'vf-head-title');
+  headTitle.append(element('h1', '', '차량 찾기'));
   const observation = element('div', 'vf-observation', '관측 정보 대기');
-  head.append(element('h1', '', '차량 찾기'), observation);
+  head.append(headTitle, observation);
+
+  const modeSwitch = element('div', 'vf-mode-switch');
+  modeSwitch.setAttribute('role', 'group');
+  modeSwitch.setAttribute('aria-label', '차량 구분');
+  const newCarButton = element('button', 'vf-mode-button', '신차');
+  const usedCarButton = element('button', 'vf-mode-button', '중고차');
+  newCarButton.type = 'button';
+  usedCarButton.type = 'button';
+  newCarButton.dataset.mode = 'NEW_CAR';
+  usedCarButton.dataset.mode = 'USED_CAR';
+  modeSwitch.append(newCarButton, usedCarButton);
+
+  const guidance = element('section', 'vf-guidance');
+  guidance.setAttribute('aria-live', 'polite');
 
   const toolbar = element('div', 'vf-toolbar');
   const searchLabel = element('label', 'vf-search');
@@ -186,7 +209,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   detail.hidden = true;
   layout.append(list, detail);
 
-  root.append(head, toolbar, filterPanel, status, layout);
+  root.append(head, modeSwitch, guidance, toolbar, filterPanel, status, layout);
 
   const mobileMedia = window.matchMedia('(max-width: 900px)');
 
@@ -228,6 +251,70 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       filterPanel.removeAttribute('aria-modal');
       filterPanel.removeAttribute('aria-labelledby');
       unlockFilterContext();
+    }
+  }
+
+  function syncModeUi() {
+    for (const button of [newCarButton, usedCarButton]) {
+      const active = button.dataset.mode === mode;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
+    root.dataset.mode = mode;
+    if (mode === 'NEW_CAR') {
+      input.placeholder = '제조사, 모델, 파워트레인, 트림 등';
+    } else {
+      input.placeholder = '모델, 연식, 세대, 변경형, 파워트레인, 트림 등';
+    }
+  }
+
+  function renderGuidance() {
+    guidance.replaceChildren();
+    if (!snapshot) return;
+
+    const title = element(
+      'strong',
+      '',
+      snapshot.mode === 'NEW_CAR' ? '신차 찾기' : '중고차 찾기',
+    );
+    const presentation = element(
+      'span',
+      'vf-guidance-presentation',
+      snapshot.presentation === 'GUIDED' ? '가이드형' : '검색·필터형',
+    );
+    const statusText = element(
+      'span',
+      'vf-guidance-status',
+      '상태 ' + snapshot.guidance.resolutionStatus,
+    );
+    guidance.append(title, presentation, statusText);
+
+    if (snapshot.guidance.suggestedNextAxis) {
+      guidance.append(
+        element(
+          'span',
+          'vf-guidance-next',
+          '다음으로 좁힐 수 있는 조건 · ' + snapshot.guidance.suggestedNextAxis,
+        ),
+      );
+    }
+
+    if (snapshot.mode === 'NEW_CAR') {
+      guidance.append(
+        element(
+          'p',
+          'vf-guidance-copy',
+          '아는 정보부터 선택하세요. 모든 단계를 순서대로 입력할 필요는 없습니다.',
+        ),
+      );
+    } else {
+      guidance.append(
+        element(
+          'p',
+          'vf-guidance-copy',
+          '연식·세대·변경형을 몰라도 검색할 수 있습니다. 조건을 알수록 후보가 좁아집니다.',
+        ),
+      );
     }
   }
 
@@ -398,6 +485,8 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
 
   function renderSnapshot(prefix = '') {
     if (!snapshot) return;
+    syncModeUi();
+    renderGuidance();
     populateFilters();
     renderRows();
 
@@ -437,7 +526,8 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     else status.textContent = '자료 조회 중';
 
     try {
-      const next = validateSnapshot(await read({ query, filters: { ...filters } }));
+      const next = validateSnapshot(await read({ mode, query, filters: { ...filters } }));
+      if (next.mode !== mode) invalid('modeEcho');
       if (disposed || seq !== requestSeq) return;
       snapshot = next;
       renderSnapshot();
@@ -461,6 +551,24 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   }
 
   let inputTimer = null;
+  const changeMode = nextMode => {
+    if (nextMode === mode) return;
+    mode = nextMode;
+    query = '';
+    filters = {};
+    inspectedId = null;
+    snapshot = null;
+    input.value = '';
+    detail.hidden = true;
+    root.classList.remove('vf-inspecting');
+    syncModeUi();
+    guidance.replaceChildren();
+    populateFilters();
+    void refreshResults({ preserve: false });
+  };
+  listen(newCarButton, 'click', () => changeMode('NEW_CAR'));
+  listen(usedCarButton, 'click', () => changeMode('USED_CAR'));
+
   listen(input, 'input', () => {
     query = input.value;
     clearTimeout(inputTimer);
@@ -497,6 +605,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     }
   });
 
+  syncModeUi();
   setFilterPanel(!mobileMedia.matches);
   const ready = refreshResults({ preserve: false });
 
