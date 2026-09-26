@@ -48,11 +48,13 @@ try:
         if trace["fieldFlows"]:
             page.locator(".ed-flow").first.click()
             expect(page.locator(".ed-detail h2")).to_be_visible()
-            expect(page.get_by_text("RAW",exact=True)).to_be_visible()
-            expect(page.get_by_text("NORMALIZED",exact=True)).to_be_visible()
-            expect(page.get_by_text("CANONICAL",exact=True).last).to_be_visible()
-            expect(page.get_by_text("PROJECTION",exact=True)).to_be_visible()
-            expect(page.get_by_text("CONSUMER",exact=True).last).to_be_visible()
+            chain = page.locator(".ed-detail .ed-chain-card")
+            expect(chain).to_have_count(5)
+            expect(chain.nth(0).get_by_text("RAW",exact=True)).to_be_visible()
+            expect(chain.nth(1).get_by_text("NORMALIZED",exact=True)).to_be_visible()
+            expect(chain.nth(2).get_by_text("CANONICAL",exact=True)).to_be_visible()
+            expect(chain.nth(3).get_by_text("PROJECTION",exact=True)).to_be_visible()
+            expect(chain.nth(4).get_by_text("CONSUMER",exact=True)).to_be_visible()
         page.screenshot(path=args.output/"entity-detail-desktop.png",full_page=True)
 
         mobile=browser.new_page(viewport={"width":390,"height":844});mobile.goto(route,wait_until="networkidle")
