@@ -1,7 +1,7 @@
 # Vehicle Master: New-car / Used-car Boundary
 
-Status: **ARCHITECTURE LOCKED / IMPLEMENTATION IN PROGRESS**  
-Date: 2026-09-25
+Status: **ARCHITECTURE LOCKED / SELECTOR FUNCTION IMPLEMENTED**  
+Date: 2026-09-26
 
 ## Decision
 
@@ -160,3 +160,37 @@ Product / Listing / Offer
 ```
 
 This preserves one vehicle taxonomy while allowing new-car and used-car workflows to evolve independently.
+
+
+## Shared selector projection boundary
+
+New-car and used-car masters share one selector semantics, but their grouping
+identity differs because the projections expose different stable identity depth.
+
+### New-car selector grouping
+
+`estimate-newcar-master` exposes stable `vehicleModelId`,
+`modelYearId`, `powertrainId` and `trimId`, but does not currently expose
+generation/phase IDs.
+
+Therefore NEW_CAR grouping is by stable `vehicleModelId` only.
+
+It is invalid to invent a generation ID merely to satisfy a grouping UI.
+
+### Used-car selector grouping
+
+`usedcar-master` exposes the historical identity chain including
+`generationId` and `phaseId`.
+
+Therefore USED_CAR grouping is by:
+
+`vehicleModelId + generationId`
+
+A missing generation remains unresolved and must not be merged into a synthetic
+model-generation group.
+
+### Consumer rule
+
+Both projections must enter the same selector engine through the approved master
+adapters/entrypoints. A consumer must not create a second search hierarchy or
+reinterpret missing IDs locally.
