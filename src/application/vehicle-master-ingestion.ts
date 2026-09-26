@@ -31,7 +31,9 @@ export type VehicleMasterEvidenceIssue = {
     | 'SOURCE_EFFECTIVE_PERIOD_MISMATCH'
     | 'SOURCE_AUTHORITY_INSUFFICIENT'
     | 'PARENT_NODE_MISSING'
+    | 'PARENT_NODE_HOLD'
     | 'REFERENCE_NODE_MISSING'
+    | 'REFERENCE_NODE_HOLD'
     | 'REFERENCE_NODE_SELF'
     | 'PRICE_TARGET_MISSING'
     | 'PRICE_TARGET_HOLD'
@@ -299,12 +301,21 @@ async function applyNodeReferenceGate(
         fieldPath: 'parentId',
         detail: proposal.parentId,
       });
-    } else if (!(await store.getNode(proposal.parentId))) {
-      issues.push({
-        code: 'PARENT_NODE_MISSING',
-        fieldPath: 'parentId',
-        detail: proposal.parentId,
-      });
+    } else {
+      const parent = await store.getNode(proposal.parentId);
+      if (!parent) {
+        issues.push({
+          code: 'PARENT_NODE_MISSING',
+          fieldPath: 'parentId',
+          detail: proposal.parentId,
+        });
+      } else if (proposal.status !== 'HOLD' && parent.status === 'HOLD') {
+        issues.push({
+          code: 'PARENT_NODE_HOLD',
+          fieldPath: 'parentId',
+          detail: proposal.parentId,
+        });
+      }
     }
   }
 
@@ -321,9 +332,16 @@ async function applyNodeReferenceGate(
       });
       continue;
     }
-    if (!(await store.getNode(refId))) {
+    const referenced = await store.getNode(refId);
+    if (!referenced) {
       issues.push({
         code: 'REFERENCE_NODE_MISSING',
+        fieldPath: `refs.${field}`,
+        detail: refId,
+      });
+    } else if (proposal.status !== 'HOLD' && referenced.status === 'HOLD') {
+      issues.push({
+        code: 'REFERENCE_NODE_HOLD',
         fieldPath: `refs.${field}`,
         detail: refId,
       });
