@@ -8,7 +8,7 @@ import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with 
 import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import estimateMasterSchema from '../../contracts/estimate-newcar-master-v1.schema.json' with { type: 'json' };
 import type { ProjectionEvidenceSnapshotStore, ProjectionStore } from '../ports/catalog-store.js';
-import type { AdminCatalogProduct, ErpPublicProduct } from '../domain/catalog.js';
+import type { AdminCatalogProduct, ErpPublicProduct, ProjectionRelease } from '../domain/catalog.js';
 import {
   ESTIMATE_NEWCAR_MASTER_CONTRACT,
   ESTIMATE_NEWCAR_MASTER_PROJECTION_ID,
@@ -326,11 +326,11 @@ export function createConsumerGateway(
           revision: value.meta.revision
         })
       }, async () => {
-        const evidence = await readActiveProjectionEvidence<EstimateNewcarMasterRecord>(
+        const evidence = await readActiveProjectionEvidence(
           store,
           binding.projectionId
         );
-        const release = evidence.release;
+        const release = evidence.release as unknown as ProjectionRelease<EstimateNewcarMasterRecord> | null;
         if (!release) throw new ConsumerReadError('NO_ACTIVE_RELEASE', 503);
         const records = release.data;
         if (release.schemaVersion !== '1.0.0' || !validateEstimateMaster(records)) {
