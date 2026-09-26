@@ -1188,6 +1188,184 @@ describe('common vehicle selector', () => {
     ]);
   });
 
+  it('suggests the structural group axis with the strongest narrowing power', () => {
+    const rows = [
+      record('2021-hybrid-noblesse', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        powertrain: { id: 'pt_hybrid', label: '하이브리드' },
+        trim: { id: 'trim_noblesse', label: '노블레스' },
+      }),
+      record('2021-gasoline-signature', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        powertrain: { id: 'pt_gasoline', label: '가솔린' },
+        trim: { id: 'trim_signature', label: '시그니처' },
+      }),
+      record('2024-diesel-prestige', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        powertrain: { id: 'pt_diesel', label: '디젤' },
+        trim: { id: 'trim_prestige', label: '프레스티지' },
+      }),
+      record('2021-hybrid-graphite', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        powertrain: { id: 'pt_hybrid', label: '하이브리드' },
+        trim: { id: 'trim_graphite', label: '그래비티' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+    });
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.suggestedDrilldownAxis).toBe('powertrain');
+    expect(result.groups[0]?.drilldownAxes.map((item) => item.axis)).toEqual([
+      'powertrain',
+      'modelYear',
+      'trim',
+    ]);
+    expect(
+      result.groups[0]?.drilldownAxes.find((item) => item.axis === 'powertrain')
+    ).toMatchObject({
+      selectableCandidateCount: 4,
+      largestBucketCount: 2,
+      discriminationScore: 2,
+    });
+  });
+
+  it('uses mode preference only as a tie-breaker for equally discriminating structural axes', () => {
+    const usedRows = [
+      record('2021-hybrid', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        powertrain: { id: 'pt_hybrid', label: '하이브리드' },
+      }),
+      record('2021-gas', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        powertrain: { id: 'pt_gas', label: '가솔린' },
+      }),
+      record('2024-hybrid', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        powertrain: { id: 'pt_hybrid', label: '하이브리드' },
+      }),
+      record('2024-gas', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        powertrain: { id: 'pt_gas', label: '가솔린' },
+      }),
+    ];
+
+    const used = selectVehicles(usedRows, {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+    });
+    expect(used.groups[0]?.suggestedDrilldownAxis).toBe('modelYear');
+
+    const newRows = usedRows.map((item) => ({
+      ...item,
+      lifecycle: 'CURRENT' as const,
+    }));
+    const current = selectVehicles(newRows, {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토',
+    });
+    expect(current.groups[0]?.suggestedDrilldownAxis).toBe('powertrain');
+  });
+
+  it('keeps trim as a fallback when no structural axis can narrow the group', () => {
+    const rows = [
+      record('noblesse', {
+        trim: { id: 'trim_noblesse', label: '노블레스' },
+      }),
+      record('signature', {
+        trim: { id: 'trim_signature', label: '시그니처' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토',
+    });
+
+    expect(result.groups[0]?.suggestedDrilldownAxis).toBe('trim');
+    expect(result.groups[0]?.drilldownAxes.map((item) => item.axis)).toEqual([
+      'trim',
+    ]);
+  });
+
+  it('does not let UNKNOWN or HOLD members manufacture group drilldown options', () => {
+    const rows = [
+      record('active-2021', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+      }),
+      record('active-2024', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+      }),
+      record('unknown-2099', {
+        lifecycle: 'HISTORICAL',
+        identityStatus: 'PARTIAL',
+        modelYear: { id: 'my_2099', label: '2099년형', value: 2099 },
+      }),
+      record('hold-2100', {
+        lifecycle: 'HOLD',
+        identityStatus: 'HOLD',
+        modelYear: { id: 'my_2100', label: '2100년형', value: 2100 },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+      includeHold: true,
+    });
+
+    const year = result.groups[0]?.drilldownAxes.find(
+      (item) => item.axis === 'modelYear'
+    );
+    expect(year?.options.map((option) => option.value)).toEqual([2021, 2024]);
+    expect(year?.selectableCandidateCount).toBe(2);
+  });
+
+  it('accounts for missing selectable values when measuring drilldown power', () => {
+    const rows = [
+      record('known-2021', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+      }),
+      record('known-2024', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+      }),
+      record('unknown-year', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: null, label: null, value: null },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+    });
+
+    const year = result.groups[0]?.drilldownAxes.find(
+      (item) => item.axis === 'modelYear'
+    );
+    expect(year).toMatchObject({
+      selectableCandidateCount: 3,
+      unknownValueCount: 1,
+      largestBucketCount: 1,
+      discriminationScore: 1,
+    });
+  });
+
   it('reports OPEN before the user supplies any search criteria', () => {
     const result = selectVehicles([
       record('one'),
