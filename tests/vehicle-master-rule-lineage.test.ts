@@ -349,29 +349,25 @@ describe('vehicle master compatibility-rule lineage', () => {
     await seedSource(store);
     const a = await seedLineage(store, 'a');
     const otherTrim = sealVehicleMasterNode({
-      ...a.trim,
       id: 'trim_a_other',
+      nodeType: 'TRIM',
+      status: 'ACTIVE',
+      revision: 1,
       canonicalName: '다른 트림',
+      parentId: a.variant.id,
+      refs: {
+        ...a.variant.refs,
+        variantId: a.variant.id,
+      },
+      aliases: [],
       attributes: { identityKey: canonicalTrimIdentity('다른 트림') },
-      contentHash: undefined as never,
+      sourceEvidenceIds: [sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
     });
-    const sealedOtherTrim = sealVehicleMasterNode({
-      id: otherTrim.id,
-      nodeType: otherTrim.nodeType,
-      status: otherTrim.status,
-      revision: otherTrim.revision,
-      canonicalName: otherTrim.canonicalName,
-      parentId: otherTrim.parentId ?? null,
-      refs: otherTrim.refs,
-      aliases: otherTrim.aliases,
-      attributes: otherTrim.attributes,
-      sourceEvidenceIds: otherTrim.sourceEvidenceIds,
-      effectiveFrom: otherTrim.effectiveFrom ?? null,
-      effectiveTo: otherTrim.effectiveTo ?? null,
-      createdAt: otherTrim.createdAt,
-      updatedAt: otherTrim.updatedAt,
-    });
-    await store.putNode(sealedOtherTrim);
+    await store.putNode(otherTrim);
 
     const target = sealVehicleMasterNode({
       id: 'base_a_target',
@@ -401,7 +397,7 @@ describe('vehicle master compatibility-rule lineage', () => {
       id: 'rule_wrong_trim_scope',
       subjectId: a.trim.id,
       targetIds: [target.id],
-      scopeTrimId: sealedOtherTrim.id,
+      scopeTrimId: otherTrim.id,
       ruleType: 'INCLUDES',
     }));
 
