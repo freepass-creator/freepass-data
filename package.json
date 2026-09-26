@@ -38,7 +38,8 @@
     "check:consumer-health": "tsx src/jobs/check-consumer-health.ts",
     "check:consumer-readiness": "tsx src/jobs/check-consumer-readiness.ts",
     "build:data-control-tower": "tsx src/jobs/build-data-control-tower.ts",
-    "dry-run:estimate-master-canonical": "tsx src/jobs/build-estimate-newcar-master-canonical-dry-run.ts"
+    "dry-run:estimate-master-canonical": "tsx src/jobs/build-estimate-newcar-master-canonical-dry-run.ts",
+    "check:estimate-master-readiness": "tsx src/jobs/check-estimate-master-readiness.ts --scheduled-read-only"
   },
   "dependencies": {
     "ajv": "^8.0.0",
