@@ -1,7 +1,11 @@
 # FreePass Data Console UX
 
-Status: DESIGN BASELINE
+Status: DOMAIN UX REFERENCE — NOT IMPLEMENTATION AUTHORITY
 AI Core consumer: YES
+
+> 이 문서는 FreePass Data가 소유하는 데이터 의미·상태·증거 표현 규칙을 정의한다.
+> 실제 page shell, route, component, design token의 구현 정본은 해당 제품 UI 저장소가 소유한다.
+> FreePass Admin의 CI/BI와 공통 디자인 언어는 참고하지만, Data Console은 데이터 관제·검증 업무에 맞는 정보 밀도와 composition을 우선한다.
 
 ## 1. 정보 구조
 
@@ -23,11 +27,17 @@ AI Core consumer: YES
 표시:
 - canonical entity count
 - validation warning/error
-- source freshness
+- source freshness — source runtime evidence가 있을 때만 값 표시, 없으면 `NOT_EVALUATED`
 - active ingestion
-- consumer lag
+- consumer lag — delivery/ack evidence가 있을 때만 값 표시, 없으면 `NOT_EVALUATED`
 - failed deliveries
 - recent changes
+- health coverage — evaluated / not evaluated 차원을 함께 표시
+
+원칙:
+- overall health가 `HEALTHY`여도 평가하지 않은 차원이 있으면 이를 숨기지 않는다.
+- `SOURCE_FRESHNESS`, `SOURCE_TO_CANONICAL_PARITY`, `CONSUMER_MIGRATION_STATE`처럼 현재 health contract가 평가하지 않는 항목을 정상/초록 상태로 추정 표시하지 않는다.
+- 숫자를 만들 수 없는 상태는 0으로 보정하지 말고 `미평가`, `증거 없음`, `관측 필요`처럼 근거 부족 상태를 명시한다.
 
 중앙 pipeline:
 
@@ -54,14 +64,18 @@ AI Core:
 - navigation.restore
 
 목록 기본 필드:
-- status
 - canonical name
 - entity id
-- source
+- availability / business gate
 - validation
+- source head / freshness evidence
 - revision
 - updated
-- consumer coverage
+- publication / consumer evidence
+
+금지:
+- 여러 의미를 한 개의 generic `status` 컬럼이나 한 개의 색으로 합치지 않는다.
+- Product `HOLD`, Source `STALE`, Health `BLOCKED`, Validation `INVALID`를 같은 "문제 상태"로 평탄화하지 않는다.
 
 ## 4. Entity Detail
 
@@ -236,7 +250,42 @@ REVIEWABLE 변경은 현재 diff 전체를 승인해야 binding을 새 source fi
 
 수정도 Field Authority에 등록된 필드와 Command만 편집 가능하게 한다.
 
-## 12. 접근성 / 상호작용
+
+## 12. 상태 / 오류 표현 규격
+
+FreePass Data는 상태 축이 많으므로 **상태의 의미를 먼저 분리**한다.
+
+### 상태 축
+
+- Domain / Asset availability: `AVAILABLE / PARTIAL / HOLD / UNAVAILABLE`
+- Canonical validation: `VALID / WARNING / INVALID`
+- Source health: `HEALTHY / DEGRADED / ERROR / UNKNOWN`
+- Source run: `RUNNING / COMPLETED / FAILED`
+- Source head: `PENDING / CURRENT / STALE / INELIGIBLE`
+- Catalog health: `HEALTHY / DEGRADED / BLOCKED`
+- Health check: `PASS / WARN / FAIL`
+- Projection release: `BUILDING / VALIDATING / READY / ACTIVE / FAILED`
+- Coverage / evidence: `ATOMIC / PARTIAL_MULTI_READ / NOT_EVALUATED / NOT_APPLICABLE`
+
+### 의미 규칙
+
+- `HOLD`: 권한·검수·가용성 gate. 시스템 오류와 동일시하지 않는다.
+- `BLOCKED`: 현재 health scope에서 integrity error가 있어 진행 불가.
+- `STALE`: 시간/순서상 최신 head가 아님. 실패와 동일하지 않다.
+- `UNKNOWN`, `NOT_EVALUATED`: 근거 부족. 성공처럼 초록색으로 보이지 않는다.
+- `NOT_APPLICABLE`: 해당 조건 자체가 적용되지 않음. 미평가와 구분한다.
+- `ERROR`, `FAILED`, `FAIL`: 실제 실행/검증 실패.
+
+### 화면 규칙
+
+- 한 행에는 필요한 상태 축만 1~3개 노출하고, 나머지는 Inspector에서 상세 제공한다.
+- 상태는 색 + 텍스트로 표현하며 색만으로 의미를 전달하지 않는다.
+- health summary 옆에는 항상 coverage를 확인할 수 있어야 한다.
+- 오류는 `code + 사람이 읽는 message + entity/context + evidence` 순으로 제공한다.
+- 복구 가능한 일시 오류는 retry affordance를 제공하되, authority/integrity gate는 원인을 해결하기 전까지 retry 버튼으로 우회하지 않는다.
+- critical error는 toast만으로 끝내지 않고 해당 row/panel/Inspector에 지속 표시한다.
+
+## 13. 접근성 / 상호작용
 
 AI Core 기준:
 - WCAG 2.2 AA
