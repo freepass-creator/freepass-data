@@ -1,6 +1,8 @@
 import { stableDigest } from '../shared/stable-digest.js';
 import {
   selectVehicles,
+  type VehicleSelectorAction,
+  type VehicleSelectorActionState,
   type VehicleSelectorRecord,
   type VehicleSelectorSelection,
 } from './vehicle-selector.js';
@@ -81,6 +83,10 @@ export type UsedcarMasterCandidate = {
   score: number;
   matchedFields: string[];
   unresolvedFields: string[];
+  actionState: VehicleSelectorActionState;
+  action: VehicleSelectorAction;
+  actionReasons: string[];
+  selectable: boolean;
 };
 
 export type UsedcarMasterSemanticIssue = {
@@ -182,7 +188,9 @@ function nonEmptyQuery(query: UsedcarMasterQuery) {
   );
 }
 
-function toSelectorRecord(record: UsedcarMasterRecord): VehicleSelectorRecord {
+export function usedcarMasterToSelectorRecord(
+  record: UsedcarMasterRecord
+): VehicleSelectorRecord {
   return {
     recordId: record.recordId,
     lifecycle: record.lifecycleStatus,
@@ -235,7 +243,7 @@ export function searchUsedcarMaster(
   const hasSearchText =
     typeof query.searchText === 'string' && Boolean(query.searchText.trim());
   const result = selectVehicles(
-    records.map(toSelectorRecord),
+    records.map(usedcarMasterToSelectorRecord),
     {
       mode: 'USED_CAR',
       selection,
@@ -259,6 +267,10 @@ export function searchUsedcarMaster(
         ...candidate.unresolvedAxes,
         ...(candidate.search.unresolvedTokens > 0 ? ['searchText'] : []),
       ],
+      actionState: candidate.actionState,
+      action: candidate.action,
+      actionReasons: [...candidate.actionReasons],
+      selectable: candidate.selectable,
     };
   });
 }
