@@ -1,0 +1,160 @@
+name: ERP5 audit watchdog
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '7 * * * *'
+
+concurrency:
+  group: erp5-audit-watchdog
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EVIDENCE_BUCKET: ${{ vars.ERP5_EVIDENCE_BUCKET }}
+      ERP5_AUDIT_MAX_GAP_MINUTES: ${{ vars.ERP5_AUDIT_MAX_GAP_MINUTES }}
+    steps:
+      - name: Fail closed until watchdog inputs are configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n '${{ vars.ERP5_WIF_PROVIDER }}'
+          test -n '${{ vars.ERP5_READ_SERVICE_ACCOUNT }}'
+          test -n "$EVIDENCE_BUCKET"
+          test -n "$ERP5_AUDIT_MAX_GAP_MINUTES"
+          case "$ERP5_AUDIT_MAX_GAP_MINUTES" in
+            *[!0-9]*|'') echo '::error::ERP5_AUDIT_MAX_GAP_MINUTES must be a positive integer'; exit 1 ;;
+          esac
+          test "$ERP5_AUDIT_MAX_GAP_MINUTES" -gt 0
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.ERP5_WIF_PROVIDER }}
+          service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 900s
+
+      - name: Verify latest accepted audit pointer freshness
+        id: freshness
+        shell: bash
+        env:
+          GCS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          metadata="$(mktemp)"
+          pointer="$(mktemp)"
+          http_code="$(curl --silent --show-error \
+            --output "$metadata" \
+            --write-out '%{http_code}' \
+            --header "Authorization: Bearer $GCS_ACCESS_TOKEN" \
+            "https://storage.googleapis.com/storage/v1/b/$EVIDENCE_BUCKET/o/latest.json")"
+          if [ "$http_code" != 200 ]; then
+            echo "::error::ERP5 audit watchdog could not read latest.json metadata (HTTP $http_code)"
+            exit 1
+          fi
+
+          generation="$(jq -er '.generation | select(type == "string" and test("^[1-9][0-9]*$"))' "$metadata")"
+          media_code="$(curl --silent --show-error \
+            --output "$pointer" \
+            --write-out '%{http_code}' \
+            --header "Authorization: Bearer $GCS_ACCESS_TOKEN" \
+            "https://storage.googleapis.com/storage/v1/b/$EVIDENCE_BUCKET/o/latest.json?alt=media&ifGenerationMatch=$generation")"
+          if [ "$media_code" != 200 ]; then
+            echo "::error::ERP5 audit watchdog could not read latest.json payload (HTTP $media_code)"
+            exit 1
+          fi
+
+          jq -e '
+            .version == "erp5-continuous-pointer/1" and
+            (.captureUri | type == "string" and length > 0) and
+            (.sourceDigest | type == "string" and length == 64) and
+            (.readTime | type == "string" and length > 0) and
+            (.runId | type == "string" and length > 0)
+          ' "$pointer" >/dev/null
+
+          read_time="$(jq -er '.readTime' "$pointer")"
+          pointer_run_id="$(jq -er '.runId' "$pointer")"
+          now_epoch="$(date -u +%s)"
+          read_epoch="$(date -u -d "$read_time" +%s)"
+          if [ "$read_epoch" -gt "$now_epoch" ]; then
+            echo '::error::ERP5 latest pointer readTime is in the future'
+            exit 1
+          fi
+
+          age_seconds="$((now_epoch - read_epoch))"
+          age_minutes="$(( (age_seconds + 59) / 60 ))"
+          checked_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+          if [ "$age_minutes" -le "$ERP5_AUDIT_MAX_GAP_MINUTES" ]; then
+            status='HEALTHY'
+            reason='LATEST_POINTER_FRESH'
+          else
+            status='BLOCKED'
+            reason='LATEST_POINTER_STALE'
+          fi
+
+          jq -n \
+            --arg status "$status" \
+            --arg reason "$reason" \
+            --arg checkedAt "$checked_at" \
+            --arg pointerReadTime "$read_time" \
+            --arg pointerRunId "$pointer_run_id" \
+            --argjson pointerGeneration "$generation" \
+            --argjson ageMinutes "$age_minutes" \
+            --argjson maxGapMinutes "$ERP5_AUDIT_MAX_GAP_MINUTES" \
+            '{
+              version: "erp5-audit-watchdog/1",
+              status: $status,
+              reason: $reason,
+              checkedAt: $checkedAt,
+              pointerReadTime: $pointerReadTime,
+              pointerRunId: $pointerRunId,
+              pointerGeneration: $pointerGeneration,
+              ageMinutes: $ageMinutes,
+              maxGapMinutes: $maxGapMinutes
+            }' > audit-watchdog-summary.json
+
+          jq -e '
+            .version == "erp5-audit-watchdog/1" and
+            (.status == "HEALTHY" or .status == "BLOCKED") and
+            (.ageMinutes | type == "number" and . >= 0) and
+            (.maxGapMinutes | type == "number" and . > 0)
+          ' audit-watchdog-summary.json >/dev/null
+
+          {
+            echo '## ERP5 audit watchdog'
+            echo
+            echo "Status: $(jq -r '.status' audit-watchdog-summary.json)"
+            echo
+            echo "Reason: $(jq -r '.reason' audit-watchdog-summary.json)"
+            echo
+            echo "Latest pointer read: $(jq -r '.pointerReadTime' audit-watchdog-summary.json)"
+            echo
+            echo "Pointer run: $(jq -r '.pointerRunId' audit-watchdog-summary.json)"
+            echo
+            echo "Age minutes: $(jq -r '.ageMinutes' audit-watchdog-summary.json)"
+            echo
+            echo "Max gap minutes: $(jq -r '.maxGapMinutes' audit-watchdog-summary.json)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$status" = BLOCKED ]; then
+            echo "::error::ERP5 audit latest.json is stale: ${age_minutes}m > ${ERP5_AUDIT_MAX_GAP_MINUTES}m"
+            exit 2
+          fi
+
+      - name: Retain watchdog summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: erp5-audit-watchdog-${{ github.run_id }}-${{ github.run_attempt }}
+          path: audit-watchdog-summary.json
+          retention-days: 90
+          if-no-files-found: warn

@@ -17,3 +17,8 @@ export function buildEstimateNewcarMaster(
   }
   return records;
 }
+
+
+export {
+  selectVehiclesFromNewcarMaster as selectEstimateNewcarMaster,
+} from './vehicle-selector-adapters.js';

@@ -385,3 +385,25 @@ A DEGRADED schedule-health result is retained as operational evidence and does n
 authorize or perform any Canonical write. The heartbeat is also included in the
 90-day non-sensitive audit artifact.
 
+## Independent Audit Watchdog
+
+The main ERP5 audit can detect a missed interval only after it eventually runs.
+A separate lightweight watchdog therefore checks the accepted `latest.json`
+pointer every hour at minute 07, independently of the full audit scheduled for
+minute 37.
+
+The watchdog uses only the read-only WIF service account and the private evidence
+bucket. It never advances `latest.json`, writes Canonical data, or invokes any
+consumer/canonical writer.
+
+It validates the pointer contract and compares the pointer `readTime` with the
+current UTC time using the same explicit `ERP5_AUDIT_MAX_GAP_MINUTES` policy.
+
+- Fresh pointer: workflow succeeds and emits `HEALTHY / LATEST_POINTER_FRESH`.
+- Stale pointer: workflow emits `BLOCKED / LATEST_POINTER_STALE` and fails so the
+  missing audit becomes visible as a GitHub Actions failure.
+- Missing/malformed pointer, invalid time, or missing configuration also fail
+  closed.
+
+The non-sensitive `audit-watchdog-summary.json` artifact is retained for 90 days.
+
