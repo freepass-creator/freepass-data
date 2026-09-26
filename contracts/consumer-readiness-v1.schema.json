@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/consumer-readiness-v1.schema.json",
+  "title": "FreePass Data Consumer Readiness v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "schemaVersion",
+    "generatedAt",
+    "counts",
+    "readyTransitions",
+    "consumers"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "consumer-readiness-v1"
+    },
+    "schemaVersion": {
+      "const": "1.0.0"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "readyForNextStage",
+        "hold",
+        "final"
+      ],
+      "properties": {
+        "readyForNextStage": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hold": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "final": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "readyTransitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "consumerId",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "consumerId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "from": {
+            "$ref": "#/$defs/stage"
+          },
+          "to": {
+            "$ref": "#/$defs/stage"
+          }
+        }
+      }
+    },
+    "consumers": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "$ref": "#/$defs/consumer"
+      }
+    }
+  },
+  "$defs": {
+    "stage": {
+      "enum": [
+        "LEGACY_DIRECT",
+        "OBSERVE",
+        "SHADOW_READ",
+        "PARITY_VERIFIED",
+        "FREEPASS_DATA_READ"
+      ]
+    },
+    "readiness": {
+      "enum": [
+        "READY_FOR_NEXT_STAGE",
+        "HOLD",
+        "FINAL"
+      ]
+    },
+    "health": {
+      "enum": [
+        "HEALTHY",
+        "DEGRADED",
+        "BLOCKED"
+      ]
+    },
+    "source": {
+      "enum": [
+        "GATEWAY_RUNTIME",
+        "SHEET_DELIVERY",
+        "WHITELABEL_AGGREGATE",
+        "NOT_IMPLEMENTED"
+      ]
+    },
+    "action": {
+      "enum": [
+        "IMPLEMENT_CONSUMER_CONTRACT",
+        "PROVISION_CONSUMER_AUTH",
+        "VERIFY_LEGACY_READ",
+        "VERIFY_FREEPASS_READ",
+        "VERIFY_PARITY",
+        "VERIFY_FALLBACK",
+        "VERIFY_PRODUCTION_READBACK",
+        "VERIFY_APPROVED_RELEASE",
+        "GENERATE_RUNTIME_READ_EVIDENCE",
+        "FIX_RUNTIME_AUTHENTICATION",
+        "FIX_RUNTIME_READ",
+        "REFRESH_RUNTIME_EVIDENCE",
+        "FIX_EVIDENCE_CLOCK",
+        "COMPLETE_RUNTIME_OPERATION",
+        "VERIFY_WHITELABEL_IDENTITIES",
+        "RECORD_SHEET_DELIVERY_EVIDENCE",
+        "REVIEW_STATIC_HOLD"
+      ]
+    },
+    "consumer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consumerId",
+        "project",
+        "currentStage",
+        "nextStage",
+        "readiness",
+        "transitionAllowed",
+        "healthStatus",
+        "evidenceSource",
+        "evidenceState",
+        "evidenceAgeMs",
+        "releaseId",
+        "missingEvidence",
+        "blockers",
+        "staticHoldReasons",
+        "requiredActions"
+      ],
+      "properties": {
+        "consumerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "currentStage": {
+          "$ref": "#/$defs/stage"
+        },
+        "nextStage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/stage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "readiness": {
+          "$ref": "#/$defs/readiness"
+        },
+        "transitionAllowed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "healthStatus": {
+          "$ref": "#/$defs/health"
+        },
+        "evidenceSource": {
+          "$ref": "#/$defs/source"
+        },
+        "evidenceState": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidenceAgeMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "releaseId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "missingEvidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "staticHoldReasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requiredActions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        }
+      }
+    }
+  }
+}
