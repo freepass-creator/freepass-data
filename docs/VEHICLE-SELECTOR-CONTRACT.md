@@ -308,7 +308,12 @@ current master and returns:
 
 Material selected-configuration changes, record disappearance, non-finalizable
 current state, request mismatch, future-dated evidence, or an explicitly supplied
-age policy can require reselection. Alias-only changes do not.
+age policy can require reselection.
+
+A label-only rename does not require reselection when that axis still has the same
+stable ID. The sealed receipt keeps the historical label, while currentness follows
+the stable identity. Label-backed axes without a stable ID remain label-sensitive.
+Alias-only changes also do not require reselection.
 
 There is no hidden default max-age threshold.
 
