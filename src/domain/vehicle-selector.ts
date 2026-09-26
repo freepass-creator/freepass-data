@@ -148,6 +148,15 @@ export type VehicleSelectorCandidateGroupScope =
   | 'MODEL_GENERATION'
   | 'UNRESOLVED_IDENTITY';
 
+export type VehicleSelectorGroupDrilldownAxis = {
+  axis: VehicleSelectorAxis;
+  options: VehicleSelectorFacetOption[];
+  selectableCandidateCount: number;
+  unknownValueCount: number;
+  largestBucketCount: number;
+  discriminationScore: number;
+};
+
 export type VehicleSelectorCandidateGroup = {
   groupId: string;
   scope: VehicleSelectorCandidateGroupScope;
@@ -161,6 +170,8 @@ export type VehicleSelectorCandidateGroup = {
   inspectOnlyCount: number;
   blockedCount: number;
   expandable: boolean;
+  drilldownAxes: VehicleSelectorGroupDrilldownAxis[];
+  suggestedDrilldownAxis: VehicleSelectorAxis | null;
 };
 
 export type VehicleSelectorResult = {
@@ -914,6 +925,91 @@ function diagnoseNoResult(
   return { reason: 'IMPOSSIBLE_COMBINATION', evidence };
 }
 
+const GROUP_DRILLDOWN_ORDER: Record<
+  VehicleSelectorMode,
+  VehicleSelectorAxis[]
+> = {
+  NEW_CAR: [
+    'powertrain',
+    'drivetrain',
+    'seats',
+    'modelYear',
+    'phase',
+    'fuelType',
+    'trim',
+  ],
+  USED_CAR: [
+    'modelYear',
+    'phase',
+    'powertrain',
+    'fuelType',
+    'drivetrain',
+    'seats',
+    'trim',
+  ],
+};
+
+function groupDrilldownAxes(
+  members: readonly VehicleSelectorCandidate[],
+  mode: VehicleSelectorMode
+): VehicleSelectorGroupDrilldownAxis[] {
+  const selectable = members.filter((candidate) => candidate.action === 'SELECT');
+  const preferred = GROUP_DRILLDOWN_ORDER[mode];
+
+  const axes = preferred.flatMap((axis) => {
+    const counts = new Map<string, VehicleSelectorFacetOption>();
+    let unknownValueCount = 0;
+
+    for (const candidate of selectable) {
+      const option = facetOption(candidate.record, axis);
+      if (!option) {
+        unknownValueCount += 1;
+        continue;
+      }
+      const key = JSON.stringify([option.id, option.label, option.value]);
+      const current = counts.get(key);
+      counts.set(key, {
+        ...option,
+        count: (current?.count ?? 0) + 1,
+      });
+    }
+
+    const options = [...counts.values()].sort((a, b) =>
+      (a.value ?? Number.MAX_SAFE_INTEGER) - (b.value ?? Number.MAX_SAFE_INTEGER) ||
+      a.label.localeCompare(b.label)
+    );
+
+    if (options.length < 2) return [];
+
+    const largestBucketCount = Math.max(...options.map((option) => option.count));
+    const discriminationScore = Math.max(
+      0,
+      selectable.length - (largestBucketCount + unknownValueCount)
+    );
+
+    return [{
+      axis,
+      options,
+      selectableCandidateCount: selectable.length,
+      unknownValueCount,
+      largestBucketCount,
+      discriminationScore,
+    }];
+  });
+
+  const orderIndex = new Map(preferred.map((axis, index) => [axis, index]));
+  return axes.sort((a, b) => {
+    const aTrim = a.axis === 'trim' ? 1 : 0;
+    const bTrim = b.axis === 'trim' ? 1 : 0;
+    return (
+      aTrim - bTrim ||
+      b.discriminationScore - a.discriminationScore ||
+      (orderIndex.get(a.axis) ?? Number.MAX_SAFE_INTEGER) -
+        (orderIndex.get(b.axis) ?? Number.MAX_SAFE_INTEGER)
+    );
+  });
+}
+
 function groupIdentityKey(record: VehicleSelectorRecord) {
   const makerId = record.maker.id;
   const modelId = record.model.id;
@@ -933,7 +1029,8 @@ function groupIdentityKey(record: VehicleSelectorRecord) {
 }
 
 function buildCandidateGroups(
-  candidates: readonly VehicleSelectorCandidate[]
+  candidates: readonly VehicleSelectorCandidate[],
+  mode: VehicleSelectorMode
 ): VehicleSelectorCandidateGroup[] {
   const groups = new Map<
     string,
@@ -958,6 +1055,7 @@ function buildCandidateGroups(
 
   return [...groups.entries()].map(([groupId, group]) => {
     const representative = group.members[0]!;
+    const drilldownAxes = groupDrilldownAxes(group.members, mode);
     return {
       groupId,
       scope: group.scope,
@@ -977,6 +1075,8 @@ function buildCandidateGroups(
         (candidate) => candidate.action === 'BLOCKED'
       ).length,
       expandable: group.members.length > 1,
+      drilldownAxes,
+      suggestedDrilldownAxis: drilldownAxes[0]?.axis ?? null,
     };
   });
 }
@@ -1139,7 +1239,7 @@ export function selectVehicles(
   );
 
   const facets = buildFacets(records, request, searchContext);
-  const groups = buildCandidateGroups(candidates);
+  const groups = buildCandidateGroups(candidates, request.mode);
 
   return {
     mode: request.mode,
