@@ -1,5 +1,7 @@
 # FreePass Data — Implementation Architecture Proposal v1
 
+> **NOT_CANONICAL** — 이미 SUPERSEDED 로 적혀 있다. 기계 검사(canon-guard)가 읽는 표시를 덧붙인다.
+
 Status: **SUPERSEDED / DESIGN HISTORY ONLY**  
 Date: 2026-09-20  
 Repository: `freepass-creator/freepass-data`  

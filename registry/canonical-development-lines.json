@@ -1,0 +1,121 @@
+{
+  "schema": "ai-core-canonical-development-lines/v1",
+  "updated_at": "2026-09-26",
+  "policy": {
+    "one_canonical_line_per_concern": true,
+    "historical_assets_must_not_claim_authority": true,
+    "superseded_branches_are_not_runtime_authority": true
+  },
+  "lines": [
+    {
+      "id": "architecture",
+      "canonical_entrypoint": "docs/ARCHITECTURE-V2-APPROVED.md",
+      "canonical_roots": [
+        "docs/ARCHITECTURE-V2-APPROVED.md"
+      ],
+      "historical_or_noncanonical": [
+        "docs/ARCHITECTURE.md",
+        "docs/FREEPASS-DATA-IMPLEMENTATION-ARCHITECTURE-v1.md"
+      ]
+    },
+    {
+      "id": "data-contracts",
+      "canonical_entrypoint": "contracts/catalog-v1.schema.json",
+      "canonical_roots": [
+        "contracts/"
+      ],
+      "notes": [
+        "계약(schema)은 contracts/ 한 곳. 다른 저장소가 같은 계약을 따로 적지 않는다 — 이 파일을 버전으로 받아 쓴다."
+      ]
+    },
+    {
+      "id": "source-of-record",
+      "canonical_entrypoint": "docs/ERP5-SOURCE-CAPTURE.md",
+      "canonical_roots": [
+        "docs/ERP5-SOURCE-CAPTURE.md",
+        "docs/ERP5-PRODUCT-MAPPING.md",
+        "src/adapters/erp5-"
+      ],
+      "historical_or_noncanonical": [
+        "docs/LEGACY-SOURCE-MAP.md"
+      ],
+      "notes": [
+        "현재 원천은 freepasserp5 Firestore products 다. freepasserp3 은 옛 freepasserp4 의 바인딩으로, 이력이다."
+      ]
+    },
+    {
+      "id": "sheet-spec",
+      "canonical_entrypoint": "docs/F01-F86-SHEET-SPEC.md",
+      "canonical_roots": [
+        "docs/F01-F86-SHEET-SPEC.md",
+        "contracts/f01-f86-sheet-spec.v1.json"
+      ]
+    }
+  ],
+  "repository_guards": {
+    "entry_files": {
+      "canonical": "AGENTS.md",
+      "mirrors": [
+        "CLAUDE.md",
+        "GEMINI.md"
+      ],
+      "why": "AI 가 처음 읽는 지시문은 한 벌이다."
+    },
+    "workflow_refs": {
+      "allow": [
+        "main"
+      ],
+      "why": "예약·운영 작업은 main 에서만 돈다."
+    },
+    "pull_request": {
+      "max_behind_main": 30,
+      "single_open_pr_per_canonical_path": true,
+      "why": "묵은 가지·같은 정본을 동시에 고치는 PR 이 갈림의 원인이다(2026-09-25 점검: #54·#53·#58·견적계약 가지가 consumer-gateway.ts 를 넷이 고침).",
+      "allowed_head_patterns": [
+        "^work/[a-z0-9._-]+/[a-z0-9._-]+$",
+        "^dependabot/",
+        "^renovate/"
+      ],
+      "forbidden_actor_prefixes": [
+        "gpt/",
+        "claude/",
+        "codex/",
+        "cursor/",
+        "gemini/",
+        "work/gpt/",
+        "work/claude/",
+        "work/codex/",
+        "work/cursor/",
+        "work/gemini/"
+      ],
+      "legacy_head_exceptions": [
+        {
+          "branch": "refactor/freepass-data-internal-unification-20260926",
+          "expires": "2026-10-07"
+        },
+        {
+          "branch": "work/gpt/vehicle-master-unified-20260926",
+          "expires": "2026-10-07"
+        },
+        {
+          "branch": "auto/data-access-gateway-20260925",
+          "expires": "2026-10-07"
+        },
+        {
+          "branch": "work/admin-catalog-projection-v2-current-20260925",
+          "expires": "2026-10-07"
+        },
+        {
+          "branch": "codex/iancar-availability-20260922",
+          "expires": "2026-10-07"
+        },
+        {
+          "branch": "claude/ai-core-integration-standardization-ntmoli",
+          "expires": "2026-10-07",
+          "reason": "이 Claude 세션에 배정된 가지 이름이라 세션이 바꿀 수 없다."
+        }
+      ]
+    }
+  },
+  "baseline": []
+}

@@ -45,7 +45,7 @@ FreePass Data는 또 하나의 화면 앱이 아닙니다.
 자세한 내용:
 - [Approved Architecture v2](docs/ARCHITECTURE-V2-APPROVED.md)
 - [Repository Structure](docs/REPO-STRUCTURE.md)
-- [Architecture](docs/ARCHITECTURE.md)
+- [Architecture v1 — 이력(NOT_CANONICAL, 정본은 v2)](docs/ARCHITECTURE.md)
 - [Migration Plan](docs/MIGRATION-PLAN.md)
 - [Console UX](docs/CONSOLE-UX.md)
 - [ERP.com · Google Sheets SSOT Operating Map](docs/ERP-COM-GOOGLE-SHEETS-SSOT.md)

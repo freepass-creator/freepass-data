@@ -1,5 +1,7 @@
 # Legacy Catalog Source Map — confirmed 2026-09-20
 
+> **Status: NOT_CANONICAL / LEGACY SOURCE (2026-09-26)** — 옛 freepasserp4 의 Firebase 바인딩(`freepasserp3`) 기록이다. **현재 원천은 `freepasserp5` Firestore `products`** 이고 정본은 [`ERP5-SOURCE-CAPTURE.md`](ERP5-SOURCE-CAPTURE.md)·[`ERP5-PRODUCT-MAPPING.md`](ERP5-PRODUCT-MAPPING.md)다. 이 문서를 근거로 freepasserp3 에서 새로 수집하지 않는다.
+
 Source repository: freepass-creator/freepasserp4  
 Firebase binding: freepasserp3
 

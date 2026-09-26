@@ -1,0 +1,16 @@
+name: Canon Guard
+
+# 정본 지킴이 — AI Core 규격(registry/canonical-development-lines.json)을 PR 마다 잰다.
+# 판정은 AI Core 한 곳(freepass-creator/ai-core scripts/canon-guard.mjs)이고, 여기서는 버전을 고정해 부른다.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  canon:
+    uses: freepass-creator/ai-core/.github/workflows/canon-guard.yml@ab8413b52b67877b17d9c607c3b4e844ab038395
+    with:
+      ai_core_ref: ab8413b52b67877b17d9c607c3b4e844ab038395
