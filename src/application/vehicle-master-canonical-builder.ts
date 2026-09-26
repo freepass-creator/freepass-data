@@ -46,10 +46,21 @@ function normalized(value: string) {
     .replace(/\s+/g, ' ');
 }
 
+const POWERTRAIN_TOKEN_ALIASES: Record<string, string> = {
+  hev: '하이브리드',
+  hybrid: '하이브리드',
+  ev: '전기',
+  electric: '전기',
+  gasoline: '가솔린',
+  petrol: '가솔린',
+  diesel: '디젤',
+};
+
 export function canonicalPowertrainIdentity(value: string) {
   return normalized(value)
     .split(' ')
     .filter(Boolean)
+    .map((token) => POWERTRAIN_TOKEN_ALIASES[token] ?? token)
     .sort()
     .join('|');
 }
