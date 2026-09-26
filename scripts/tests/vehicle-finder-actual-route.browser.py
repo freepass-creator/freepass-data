@@ -163,11 +163,16 @@ try:
         mobile.get_by_role("button", name="중고차").click()
         expect(mobile.get_by_text("중고차 찾기")).to_be_visible()
         expect(mobile.get_by_text("검색·필터형")).to_be_visible()
-        expect(mobile.get_by_text("연식", exact=True)).to_be_visible()
-        expect(mobile.get_by_text("세대", exact=True)).to_be_visible()
-        expect(mobile.get_by_text("변경형", exact=True)).to_be_visible()
         expect(mobile.get_by_text("방금 본 후보")).to_have_count(0)
+
+        mobile.get_by_role("button", name="필터").click()
+        filter_dialog = mobile.get_by_role("dialog", name="필터")
+        expect(filter_dialog).to_be_visible()
+        expect(filter_dialog.get_by_text("연식", exact=True)).to_be_visible()
+        expect(filter_dialog.get_by_text("세대", exact=True)).to_be_visible()
+        expect(filter_dialog.get_by_text("변경형", exact=True)).to_be_visible()
         mobile.screenshot(path=args.output / "mobile-used-finder.png", full_page=True)
+        mobile.get_by_role("button", name="필터 닫기").click()
 
         browser.close()
 finally:
