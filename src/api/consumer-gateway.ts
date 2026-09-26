@@ -7,8 +7,8 @@ import adminCatalogSchema from '../../contracts/admin-catalog-view-v1.schema.jso
 import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with { type: 'json' };
 import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import estimateMasterSchema from '../../contracts/estimate-newcar-master-v1.schema.json' with { type: 'json' };
-import type { ProjectionStore } from '../ports/catalog-store.js';
-import type { AdminCatalogProduct } from '../domain/catalog.js';
+import type { ProjectionEvidenceSnapshotStore, ProjectionStore } from '../ports/catalog-store.js';
+import type { AdminCatalogProduct, ErpPublicProduct } from '../domain/catalog.js';
 import {
   ESTIMATE_NEWCAR_MASTER_CONTRACT,
   ESTIMATE_NEWCAR_MASTER_PROJECTION_ID,
@@ -20,6 +20,8 @@ import { readCatalogDataHealth } from '../application/catalog-health.js';
 import { DataAccessGateway } from '../application/data-access-gateway.js';
 import { DataAccessAuditUnavailableError } from '../domain/data-access.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { readActiveProjectionEvidence } from '../application/projection-evidence-reader.js';
+import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 
 export type ConsumerCapability = 'catalog' | 'catalog-health' | 'estimate-newcar-master';
 export type ConsumerBinding = {
@@ -123,7 +125,8 @@ const consumerContext = (
 });
 
 export function createConsumerGateway(
-  store: Pick<ProjectionStore, 'getActive' | 'getManifest'>,
+  store: Pick<ProjectionStore, 'getActive' | 'getManifest' | 'listProjectionLineage'> &
+    Partial<ProjectionEvidenceSnapshotStore>,
   bindings: ConsumerBinding[],
   access: DataAccessGateway,
   healthStore?: CatalogDataHealthStore,
@@ -188,20 +191,35 @@ export function createConsumerGateway(
           revision: value.meta.revision
         })
       }, async () => {
-        const release = await store.getActive(binding.projectionId);
+        const evidence = await readActiveProjectionEvidence<ErpPublicProduct | AdminCatalogProduct>(
+          store,
+          binding.projectionId
+        );
+        const release = evidence.release;
         if (!release) throw new ConsumerReadError('NO_ACTIVE_RELEASE', 503);
         if (release.schemaVersion !== '1.0.0') {
           throw new ConsumerReadError('UNSUPPORTED_OR_INCOMPLETE_RELEASE', 503);
         }
-        const manifest = await store.getManifest(release.releaseId);
-        if (release.status !== 'ACTIVE' || release.projectionId !== binding.projectionId ||
-          !manifest || manifest.releaseId !== release.releaseId || manifest.projectionId !== release.projectionId ||
-          manifest.manifestId !== release.manifestId || manifest.schemaVersion !== release.schemaVersion ||
-          manifest.productCount !== release.data.length || manifest.offerCount !== release.data.reduce((count, row) => count + row.offers.length, 0) ||
-          manifest.inputDigest !== release.inputDigest || manifest.dataDigest !== release.dataDigest ||
-          stableDigest(manifest.canonicalInputs) !== release.inputDigest || stableDigest(release.data) !== release.dataDigest ||
-          !release.activatedAt || !Number.isFinite(Date.parse(release.activatedAt))) {
+        if (
+          evidence.consistency !== 'ATOMIC' ||
+          evidence.projectionId !== binding.projectionId ||
+          release.status !== 'ACTIVE' ||
+          release.projectionId !== binding.projectionId ||
+          !evidence.manifest ||
+          !release.activatedAt ||
+          !Number.isFinite(Date.parse(release.activatedAt))
+        ) {
           throw new ConsumerReadError('RELEASE_EVIDENCE_MISMATCH', 503);
+        }
+        const integrity = verifyProjectionReleaseIntegrity(
+          release,
+          evidence.manifest,
+          evidence.lineage
+        );
+        if (!integrity.valid) {
+          throw new ConsumerReadError('RELEASE_EVIDENCE_MISMATCH', 503, {
+            failures: integrity.failures
+          });
         }
         const commonMeta = {
           consumerId: binding.id,
@@ -308,9 +326,13 @@ export function createConsumerGateway(
           revision: value.meta.revision
         })
       }, async () => {
-        const release = await store.getActive(binding.projectionId);
+        const evidence = await readActiveProjectionEvidence<EstimateNewcarMasterRecord>(
+          store,
+          binding.projectionId
+        );
+        const release = evidence.release;
         if (!release) throw new ConsumerReadError('NO_ACTIVE_RELEASE', 503);
-        const records = release.data as unknown as EstimateNewcarMasterRecord[];
+        const records = release.data;
         if (release.schemaVersion !== '1.0.0' || !validateEstimateMaster(records)) {
           throw new ConsumerReadError('UNSUPPORTED_OR_INCOMPLETE_RELEASE', 503);
         }
@@ -322,15 +344,26 @@ export function createConsumerGateway(
             issues: uncoveredIssues.slice(0, 20)
           });
         }
-        const manifest = await store.getManifest(release.releaseId);
-        if (release.status !== 'ACTIVE' || release.projectionId !== binding.projectionId ||
-            !manifest || manifest.releaseId !== release.releaseId || manifest.projectionId !== release.projectionId ||
-            manifest.manifestId !== release.manifestId || manifest.schemaVersion !== release.schemaVersion ||
-            manifest.productCount !== records.length || manifest.offerCount !== 0 ||
-            manifest.inputDigest !== release.inputDigest || manifest.dataDigest !== release.dataDigest ||
-            stableDigest(manifest.canonicalInputs) !== release.inputDigest || stableDigest(records) !== release.dataDigest ||
-            !release.activatedAt || !Number.isFinite(Date.parse(release.activatedAt))) {
+        if (
+          evidence.consistency !== 'ATOMIC' ||
+          evidence.projectionId !== binding.projectionId ||
+          release.status !== 'ACTIVE' ||
+          release.projectionId !== binding.projectionId ||
+          !evidence.manifest ||
+          !release.activatedAt ||
+          !Number.isFinite(Date.parse(release.activatedAt))
+        ) {
           throw new ConsumerReadError('RELEASE_EVIDENCE_MISMATCH', 503);
+        }
+        const integrity = verifyProjectionReleaseIntegrity(
+          release,
+          evidence.manifest,
+          evidence.lineage
+        );
+        if (!integrity.valid) {
+          throw new ConsumerReadError('RELEASE_EVIDENCE_MISMATCH', 503, {
+            failures: integrity.failures
+          });
         }
         return {
           data: records,
