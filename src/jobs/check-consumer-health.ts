@@ -1,4 +1,7 @@
-import { createConsumerHealthDataAccessRuntime } from './data-access-runtime.js';
+import {
+  createConsumerHealthDataAccessRuntime,
+  createConsumerHealthReadOnlyDataAccessRuntime
+} from './data-access-runtime.js';
 
 function requiredArg(name: string) {
   const prefix = `--${name}=`;
@@ -36,7 +39,13 @@ if (!Number.isFinite(Date.parse(assessedAt))) {
   throw new Error('--assessed-at must be a valid timestamp');
 }
 
-const runtime = await createConsumerHealthDataAccessRuntime();
+const scheduledReadOnly = process.argv.includes('--scheduled-read-only');
+const runtime = scheduledReadOnly
+  ? await createConsumerHealthReadOnlyDataAccessRuntime({
+      accessToken: process.env.FREEPASS_ERP5_READ_ACCESS_TOKEN ?? '',
+      evidenceBucket: process.env.EVIDENCE_BUCKET ?? ''
+    })
+  : await createConsumerHealthDataAccessRuntime();
 const report = await runtime.health({
   assessedAt,
   maxAgeMs: Math.round(maxAgeMinutes * 60_000),
