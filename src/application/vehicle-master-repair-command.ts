@@ -1,10 +1,18 @@
+import type { ActorRef } from '../domain/catalog.js';
 import {
+  VEHICLE_MASTER_REPAIR_WRITER_POLICY,
   deterministicVehicleMasterRecordId,
   sealVehicleMasterRepairReceipt,
+  verifyVehicleMasterRepairApproval,
+  verifyVehicleMasterRepairReceipt,
   type VehicleMasterCompatibilityRule,
   type VehicleMasterNode,
   type VehicleMasterRepairReceipt,
 } from '../domain/vehicle-master.js';
+import {
+  resolveExecutionWriter,
+  type ExecutionWriterRef,
+} from '../domain/writer-ownership.js';
 import type { VehicleMasterStore } from '../ports/vehicle-master-store.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import {
@@ -34,6 +42,10 @@ export type ApplyVehicleMasterRepairCommandInput = {
   expectedBeforeContentHash: string;
   expectedAfterContentHash: string;
   committedAt: string;
+  actor: ActorRef;
+  writer?: ExecutionWriterRef;
+  reason: string;
+  approvalId: string;
 };
 
 export type ApplyVehicleMasterRepairCommandResult = {
@@ -79,7 +91,35 @@ const commandRequest = (input: ApplyVehicleMasterRepairCommandInput) => ({
     'expectedAfterContentHash'
   ),
   committedAt: clean(input.committedAt, 'committedAt'),
+  actor: structuredClone(input.actor),
+  writer: input.writer ? structuredClone(input.writer) : undefined,
+  reason: clean(input.reason, 'reason'),
+  approvalId: clean(input.approvalId, 'approvalId'),
 });
+
+function resolveAuthorizedWriter(
+  actor: ActorRef,
+  writer?: ExecutionWriterRef
+) {
+  const resolved = resolveExecutionWriter(actor, writer);
+  if (
+    resolved.id !== VEHICLE_MASTER_REPAIR_WRITER_POLICY.primaryWriterId ||
+    resolved.kind !== 'SERVICE'
+  ) {
+    throw new VehicleMasterRepairCommandRejectedError(
+      'REPAIR_WRITER_NOT_OWNER'
+    );
+  }
+  if (
+    actor.kind === 'SERVICE' &&
+    actor.id !== VEHICLE_MASTER_REPAIR_WRITER_POLICY.primaryWriterId
+  ) {
+    throw new VehicleMasterRepairCommandRejectedError(
+      'REPAIR_ACTOR_NOT_AUTHORIZED'
+    );
+  }
+  return resolved;
+}
 
 function validateInput(input: ReturnType<typeof commandRequest>) {
   if (
@@ -131,8 +171,12 @@ export async function applyVehicleMasterRepairCommand(
 ): Promise<ApplyVehicleMasterRepairCommandResult> {
   const input = commandRequest(rawInput);
   validateInput(input);
+  const writer = resolveAuthorizedWriter(input.actor, input.writer);
 
-  const requestDigest = stableDigest(input);
+  const requestDigest = stableDigest({
+    ...input,
+    writer,
+  });
   const receiptId = deterministicVehicleMasterRecordId(
     'vehicle_master_repair_receipt',
     { idempotencyKey: input.idempotencyKey }
@@ -140,6 +184,11 @@ export async function applyVehicleMasterRepairCommand(
 
   const existingReceipt = await store.getRepairReceipt(receiptId);
   if (existingReceipt) {
+    if (!verifyVehicleMasterRepairReceipt(existingReceipt)) {
+      throw new VehicleMasterRepairCommandRejectedError(
+        'EXISTING_REPAIR_RECEIPT_INVALID'
+      );
+    }
     if (existingReceipt.requestDigest !== requestDigest) {
       throw new VehicleMasterRepairCommandRejectedError(
         'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST'
@@ -150,6 +199,34 @@ export async function applyVehicleMasterRepairCommand(
       receipt: existingReceipt,
       postAudit: null,
     };
+  }
+
+  const approval = await store.getRepairApproval(input.approvalId);
+  if (!approval) {
+    throw new VehicleMasterRepairCommandRejectedError(
+      'REPAIR_APPROVAL_MISSING'
+    );
+  }
+  if (!verifyVehicleMasterRepairApproval(approval)) {
+    throw new VehicleMasterRepairCommandRejectedError(
+      'REPAIR_APPROVAL_INVALID'
+    );
+  }
+  if (
+    approval.writerId !== writer.id ||
+    approval.reason !== input.reason ||
+    approval.entityKind !== input.entityKind ||
+    approval.entityId !== input.entityId ||
+    approval.sourceAuditDigest !== input.sourceAuditDigest ||
+    approval.repairPlanDigest !== input.repairPlanDigest ||
+    approval.dryRunDigest !== input.dryRunDigest ||
+    approval.expectedCurrentRevision !== input.expectedCurrentRevision ||
+    approval.expectedBeforeContentHash !== input.expectedBeforeContentHash ||
+    approval.expectedAfterContentHash !== input.expectedAfterContentHash
+  ) {
+    throw new VehicleMasterRepairCommandRejectedError(
+      'REPAIR_APPROVAL_MISMATCH'
+    );
   }
 
   const snapshot = await readVehicleMasterGraphSnapshot(store);
@@ -229,6 +306,13 @@ export async function applyVehicleMasterRepairCommand(
     sourceAuditDigest: input.sourceAuditDigest,
     repairPlanDigest: input.repairPlanDigest,
     dryRunDigest: input.dryRunDigest,
+    actor: structuredClone(input.actor),
+    writerId: writer.id,
+    reason: input.reason,
+    approvalId: approval.approvalId,
+    approvalDigest: approval.contentHash,
+    approvedBy: structuredClone(approval.approvedBy),
+    authorityRuleId: approval.authorityRuleId,
     entityKind: input.entityKind,
     entityId: input.entityId,
     beforeRevision: input.expectedCurrentRevision,
@@ -245,6 +329,7 @@ export async function applyVehicleMasterRepairCommand(
           expectedRevision: input.expectedCurrentRevision,
           expectedContentHash: input.expectedBeforeContentHash,
           record: materialized.record as VehicleMasterNode,
+          approval,
           receipt,
         })
       : await store.commitRepair({
@@ -252,6 +337,7 @@ export async function applyVehicleMasterRepairCommand(
           expectedRevision: input.expectedCurrentRevision,
           expectedContentHash: input.expectedBeforeContentHash,
           record: materialized.record as VehicleMasterCompatibilityRule,
+          approval,
           receipt,
         });
 

@@ -3,6 +3,7 @@ import {
   deterministicVehicleMasterRecordId,
   sealVehicleMasterCompatibilityRule,
   sealVehicleMasterNode,
+  sealVehicleMasterRepairApproval,
   sealVehicleMasterRepairReceipt,
   sealVehicleMasterSourceDocument,
   type VehicleMasterNode,
@@ -23,6 +24,9 @@ import {
   materializeVehicleMasterRepairCandidate,
 } from '../src/application/vehicle-master-repair-dry-run.js';
 import {
+  approveVehicleMasterRepair,
+} from '../src/application/vehicle-master-repair-approval.js';
+import {
   applyVehicleMasterRepairCommand,
   VehicleMasterRepairCommandRejectedError,
   type ApplyVehicleMasterRepairCommandInput,
@@ -37,7 +41,12 @@ import { stableDigest } from '../src/shared/stable-digest.js';
 const at = '2026-09-27T04:40:00.000Z';
 const dryRunAt = '2026-09-27T04:45:00.000Z';
 const committedAt = '2026-09-27T04:50:00.000Z';
+const approvedAt = '2026-09-27T04:47:00.000Z';
 const sourceId = 'official_repair_command';
+const approvalReason = 'approve deterministic AUTO_SAFE repair';
+const approvedBy = { id: 'user:repair-approver', kind: 'USER' as const };
+const dataWriter = { id: 'service:freepass-data', kind: 'SERVICE' as const };
+const dataActor = { id: 'service:freepass-data', kind: 'SERVICE' as const };
 
 type Seed = {
   make: VehicleMasterNode;
@@ -311,6 +320,27 @@ async function buildCommand(
   );
   if (!item) throw new Error('TEST_DRY_RUN_ITEM_MISSING');
 
+  const approvalId = `approval_${entityKind.toLowerCase()}_${entityId}`;
+  const approval =
+    item.status === 'READY'
+      ? (await approveVehicleMasterRepair(store, {
+          approvalId,
+          entityKind,
+          entityId,
+          sourceAuditDigest: audit.digest,
+          repairPlanDigest: plan.digest,
+          dryRunDigest: dryRun.digest,
+          dryRunObservedAt: dryRunAt,
+          expectedCurrentRevision: item.currentRevision!,
+          expectedBeforeContentHash: item.beforeContentHash!,
+          expectedAfterContentHash: item.afterContentHash!,
+          approvedBy,
+          writer: dataWriter,
+          reason: approvalReason,
+          approvedAt,
+        })).approval
+      : null;
+
   return {
     input: {
       commandId: 'cmd_repair_1',
@@ -325,6 +355,10 @@ async function buildCommand(
       expectedBeforeContentHash: item.beforeContentHash!,
       expectedAfterContentHash: item.afterContentHash ?? 'blocked',
       committedAt,
+      actor: dataActor,
+      writer: dataWriter,
+      reason: approvalReason,
+      approvalId,
       ...overrides,
     } satisfies ApplyVehicleMasterRepairCommandInput,
     snapshot,
@@ -332,6 +366,7 @@ async function buildCommand(
     plan,
     dryRun,
     item,
+    approval,
   };
 }
 
@@ -388,6 +423,12 @@ describe('vehicle master repair command', () => {
       sourceAuditDigest: prepared.audit.digest,
       repairPlanDigest: prepared.plan.digest,
       dryRunDigest: prepared.dryRun.digest,
+      actor: dataActor,
+      writerId: dataWriter.id,
+      reason: approvalReason,
+      approvalId: prepared.approval?.approvalId,
+      approvalDigest: prepared.approval?.contentHash,
+      approvedBy,
     }));
     const updated = await store.getNode(seeded.powertrain.id);
     expect(updated?.revision).toBe(2);
@@ -471,19 +512,46 @@ describe('vehicle master repair command', () => {
     expect((await store.getNode(seeded.powertrain.id))?.revision).toBe(2);
   });
 
-  it('rejects a target that Dry-Run blocks because source evidence is still required', async () => {
+  it('refuses human approval when Dry-Run blocks the target', async () => {
     const store = new MemoryVehicleMasterStore();
     const seeded = await seedStore(store, { badFuel: true });
-    const prepared = await buildCommand(store, 'NODE', seeded.powertrain.id);
-
-    expect(prepared.item.status).toBe('BLOCKED');
+    const snapshot = await readVehicleMasterGraphSnapshot(store);
+    const audit = auditVehicleMasterGraph(snapshot);
+    const plan = buildVehicleMasterRepairPlan(audit);
+    const dryRun = buildVehicleMasterRepairDryRun({
+      snapshot,
+      auditReport: audit,
+      repairPlan: plan,
+      observedAt: dryRunAt,
+    });
+    const item = dryRun.items.find((candidate) =>
+      candidate.entityKind === 'NODE' &&
+      candidate.entityId === seeded.powertrain.id
+    );
+    expect(item?.status).toBe('BLOCKED');
 
     await expect(
-      applyVehicleMasterRepairCommand(store, prepared.input)
+      approveVehicleMasterRepair(store, {
+        approvalId: 'approval_blocked',
+        entityKind: 'NODE',
+        entityId: seeded.powertrain.id,
+        sourceAuditDigest: audit.digest,
+        repairPlanDigest: plan.digest,
+        dryRunDigest: dryRun.digest,
+        dryRunObservedAt: dryRunAt,
+        expectedCurrentRevision: item!.currentRevision!,
+        expectedBeforeContentHash: item!.beforeContentHash!,
+        expectedAfterContentHash: 'f'.repeat(64),
+        approvedBy,
+        writer: dataWriter,
+        reason: approvalReason,
+        approvedAt,
+      })
     ).rejects.toMatchObject({
-      code: 'VEHICLE_MASTER_REPAIR_COMMAND_REJECTED',
+      code: 'VEHICLE_MASTER_REPAIR_APPROVAL_REJECTED',
       reason: 'TARGET_NOT_READY_IN_DRY_RUN',
     });
+    expect(await store.getRepairApproval('approval_blocked')).toBeNull();
     expect((await store.getNode(seeded.powertrain.id))?.revision).toBe(1);
   });
 
@@ -499,7 +567,7 @@ describe('vehicle master repair command', () => {
       })
     ).rejects.toMatchObject({
       code: 'VEHICLE_MASTER_REPAIR_COMMAND_REJECTED',
-      reason: 'DRY_RUN_DIGEST_STALE',
+      reason: 'REPAIR_APPROVAL_MISMATCH',
     });
   });
 
@@ -548,10 +616,231 @@ describe('vehicle master repair command', () => {
       applyVehicleMasterRepairCommand(ruleStore, prepared.input)
     ).rejects.toMatchObject({
       code: 'VEHICLE_MASTER_REPAIR_COMMAND_REJECTED',
-      reason: 'TARGET_NOT_READY_IN_DRY_RUN',
+      reason: 'REPAIR_APPROVAL_MISSING',
     });
     expect((await ruleStore.getCompatibilityRule(tampered.id))?.revision).toBe(1);
     expect(seeded.trim.id).toBe('trim_repair_command');
+  });
+
+  it('requires a USER approver and the FreePass Data writer', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const seeded = await seedStore(store);
+    const snapshot = await readVehicleMasterGraphSnapshot(store);
+    const audit = auditVehicleMasterGraph(snapshot);
+    const plan = buildVehicleMasterRepairPlan(audit);
+    const dryRun = buildVehicleMasterRepairDryRun({
+      snapshot,
+      auditReport: audit,
+      repairPlan: plan,
+      observedAt: dryRunAt,
+    });
+    const item = dryRun.items.find((candidate) =>
+      candidate.entityKind === 'NODE' &&
+      candidate.entityId === seeded.powertrain.id
+    );
+    expect(item?.status).toBe('READY');
+
+    await expect(
+      approveVehicleMasterRepair(store, {
+        approvalId: 'approval_service_actor',
+        entityKind: 'NODE',
+        entityId: seeded.powertrain.id,
+        sourceAuditDigest: audit.digest,
+        repairPlanDigest: plan.digest,
+        dryRunDigest: dryRun.digest,
+        dryRunObservedAt: dryRunAt,
+        expectedCurrentRevision: item!.currentRevision!,
+        expectedBeforeContentHash: item!.beforeContentHash!,
+        expectedAfterContentHash: item!.afterContentHash!,
+        approvedBy: dataActor,
+        writer: dataWriter,
+        reason: approvalReason,
+        approvedAt,
+      })
+    ).rejects.toMatchObject({
+      code: 'VEHICLE_MASTER_REPAIR_APPROVAL_REJECTED',
+      reason: 'APPROVAL_REQUIRES_USER_ACTOR',
+    });
+
+    await expect(
+      approveVehicleMasterRepair(store, {
+        approvalId: 'approval_old_writer',
+        entityKind: 'NODE',
+        entityId: seeded.powertrain.id,
+        sourceAuditDigest: audit.digest,
+        repairPlanDigest: plan.digest,
+        dryRunDigest: dryRun.digest,
+        dryRunObservedAt: dryRunAt,
+        expectedCurrentRevision: item!.currentRevision!,
+        expectedBeforeContentHash: item!.beforeContentHash!,
+        expectedAfterContentHash: item!.afterContentHash!,
+        approvedBy,
+        writer: { id: 'service:freepass-admin', kind: 'SERVICE' },
+        reason: approvalReason,
+        approvedAt,
+      })
+    ).rejects.toMatchObject({
+      code: 'VEHICLE_MASTER_REPAIR_APPROVAL_REJECTED',
+      reason: 'REPAIR_WRITER_NOT_OWNER',
+    });
+  });
+
+  it('allows a human actor to execute through the FreePass Data writer', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const seeded = await seedStore(store);
+    const prepared = await buildCommand(store, 'NODE', seeded.powertrain.id, {
+      actor: { id: 'user:repair-operator', kind: 'USER' },
+    });
+
+    const result = await applyVehicleMasterRepairCommand(store, prepared.input);
+
+    expect(result.status).toBe('COMMITTED');
+    expect(result.receipt.actor).toEqual({
+      id: 'user:repair-operator',
+      kind: 'USER',
+    });
+    expect(result.receipt.writerId).toBe(dataWriter.id);
+    expect(result.receipt.approvedBy).toEqual(approvedBy);
+  });
+
+  it('rejects a legacy service actor even when it names the correct execution writer', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const seeded = await seedStore(store);
+    const prepared = await buildCommand(store, 'NODE', seeded.powertrain.id, {
+      actor: { id: 'service:freepass-admin', kind: 'SERVICE' },
+      writer: dataWriter,
+    });
+
+    await expect(
+      applyVehicleMasterRepairCommand(store, prepared.input)
+    ).rejects.toMatchObject({
+      code: 'VEHICLE_MASTER_REPAIR_COMMAND_REJECTED',
+      reason: 'REPAIR_ACTOR_NOT_AUTHORIZED',
+    });
+    expect((await store.getNode(seeded.powertrain.id))?.revision).toBe(1);
+  });
+
+  it('rejects execution when the command reason differs from the persisted approval', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const seeded = await seedStore(store);
+    const prepared = await buildCommand(store, 'NODE', seeded.powertrain.id, {
+      reason: 'different execution reason',
+    });
+
+    await expect(
+      applyVehicleMasterRepairCommand(store, prepared.input)
+    ).rejects.toMatchObject({
+      code: 'VEHICLE_MASTER_REPAIR_COMMAND_REJECTED',
+      reason: 'REPAIR_APPROVAL_MISMATCH',
+    });
+    expect((await store.getNode(seeded.powertrain.id))?.revision).toBe(1);
+  });
+
+  it('replays an identical approval immutably', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const seeded = await seedStore(store);
+    const prepared = await buildCommand(store, 'NODE', seeded.powertrain.id);
+    expect(prepared.approval).toBeTruthy();
+
+    const replay = await approveVehicleMasterRepair(store, {
+      approvalId: prepared.approval!.approvalId,
+      entityKind: 'NODE',
+      entityId: seeded.powertrain.id,
+      sourceAuditDigest: prepared.audit.digest,
+      repairPlanDigest: prepared.plan.digest,
+      dryRunDigest: prepared.dryRun.digest,
+      dryRunObservedAt: dryRunAt,
+      expectedCurrentRevision: prepared.item.currentRevision!,
+      expectedBeforeContentHash: prepared.item.beforeContentHash!,
+      expectedAfterContentHash: prepared.item.afterContentHash!,
+      approvedBy,
+      writer: dataWriter,
+      reason: approvalReason,
+      approvedAt,
+    });
+
+    expect(replay.status).toBe('UNCHANGED');
+    expect(replay.approval).toEqual(prepared.approval);
+  });
+
+  it('Store refuses direct repair commit when the approval was never persisted', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const seeded = await seedStore(store);
+    const snapshot = await readVehicleMasterGraphSnapshot(store);
+    const audit = auditVehicleMasterGraph(snapshot);
+    const plan = buildVehicleMasterRepairPlan(audit);
+    const dryRun = buildVehicleMasterRepairDryRun({
+      snapshot,
+      auditReport: audit,
+      repairPlan: plan,
+      observedAt: dryRunAt,
+    });
+    const item = dryRun.items.find((candidate) =>
+      candidate.entityKind === 'NODE' &&
+      candidate.entityId === seeded.powertrain.id
+    );
+    if (!item || item.status !== 'READY') {
+      throw new Error('TEST_READY_ITEM_MISSING');
+    }
+    const candidate = materializeVehicleMasterRepairCandidate({
+      snapshot,
+      repairPlan: plan,
+      dryRunItem: item,
+      observedAt: dryRunAt,
+    });
+    if (!candidate.record) throw new Error('TEST_CANDIDATE_MISSING');
+
+    const approval = sealVehicleMasterRepairApproval({
+      approvalId: 'approval_not_persisted',
+      entityKind: 'NODE',
+      entityId: seeded.powertrain.id,
+      sourceAuditDigest: audit.digest,
+      repairPlanDigest: plan.digest,
+      dryRunDigest: dryRun.digest,
+      expectedCurrentRevision: item.currentRevision!,
+      expectedBeforeContentHash: item.beforeContentHash!,
+      expectedAfterContentHash: item.afterContentHash!,
+      approvedBy,
+      writerId: dataWriter.id,
+      reason: approvalReason,
+      approvedAt,
+      authorityRuleId: 'vehicle-master-auto-safe-repair-v1',
+    });
+    const receipt = sealVehicleMasterRepairReceipt({
+      receiptId: 'receipt_without_persisted_approval',
+      idempotencyKey: 'idem_without_persisted_approval',
+      commandId: 'cmd_without_persisted_approval',
+      requestDigest: stableDigest({ direct: true }),
+      sourceAuditDigest: audit.digest,
+      repairPlanDigest: plan.digest,
+      dryRunDigest: dryRun.digest,
+      actor: dataActor,
+      writerId: dataWriter.id,
+      reason: approvalReason,
+      approvalId: approval.approvalId,
+      approvalDigest: approval.contentHash,
+      approvedBy,
+      authorityRuleId: approval.authorityRuleId,
+      entityKind: 'NODE',
+      entityId: seeded.powertrain.id,
+      beforeRevision: item.currentRevision!,
+      afterRevision: candidate.record.revision,
+      beforeContentHash: item.beforeContentHash!,
+      afterContentHash: candidate.record.contentHash,
+      committedAt,
+    });
+
+    await expect(
+      store.commitRepair({
+        entityKind: 'NODE',
+        expectedRevision: item.currentRevision!,
+        expectedContentHash: item.beforeContentHash!,
+        record: candidate.record as VehicleMasterNode,
+        approval,
+        receipt,
+      })
+    ).rejects.toThrow(/VEHICLE_MASTER_REPAIR_APPROVAL_MISSING/);
+    expect((await store.getNode(seeded.powertrain.id))?.revision).toBe(1);
   });
 
   it('Store rejects a forged receipt/candidate pair before any mutation', async () => {
@@ -574,6 +863,13 @@ describe('vehicle master repair command', () => {
       sourceAuditDigest: prepared.audit.digest,
       repairPlanDigest: prepared.plan.digest,
       dryRunDigest: prepared.dryRun.digest,
+      actor: dataActor,
+      writerId: dataWriter.id,
+      reason: approvalReason,
+      approvalId: prepared.approval!.approvalId,
+      approvalDigest: prepared.approval!.contentHash,
+      approvedBy,
+      authorityRuleId: prepared.approval!.authorityRuleId,
       entityKind: 'NODE',
       entityId: seeded.powertrain.id,
       beforeRevision: prepared.item.currentRevision!,
@@ -589,6 +885,7 @@ describe('vehicle master repair command', () => {
         expectedRevision: prepared.item.currentRevision!,
         expectedContentHash: prepared.item.beforeContentHash!,
         record: candidate.record as VehicleMasterNode,
+        approval: prepared.approval!,
         receipt,
       })
     ).rejects.toThrow(/VEHICLE_MASTER_REPAIR_RECEIPT_MISMATCH/);

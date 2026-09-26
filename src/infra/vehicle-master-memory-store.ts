@@ -1,9 +1,16 @@
+import {
+  VEHICLE_MASTER_REPAIR_AUTHORITY_RULE_ID,
+  VEHICLE_MASTER_REPAIR_WRITER_POLICY,
+  verifyVehicleMasterRepairApproval,
+  verifyVehicleMasterRepairReceipt,
+} from '../domain/vehicle-master.js';
 import type {
   VehicleMasterCompatibilityRule,
   VehicleMasterHashRecord,
   VehicleMasterNode,
   VehicleMasterPipelineRecord,
   VehicleMasterPriceRevision,
+  VehicleMasterRepairApproval,
   VehicleMasterRepairReceipt,
   VehicleMasterResolverFeedback,
   VehicleMasterSourceDocument,
@@ -33,6 +40,7 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
   private readonly hashes = new Map<string, VehicleMasterHashRecord>();
   private readonly pipeline = new Map<string, VehicleMasterPipelineRecord>();
   private readonly resolverFeedback = new Map<string, VehicleMasterResolverFeedback>();
+  private readonly repairApprovals = new Map<string, VehicleMasterRepairApproval>();
   private readonly repairReceipts = new Map<string, VehicleMasterRepairReceipt>();
 
   private putVersioned<T extends VersionedRecord>(
@@ -196,6 +204,23 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
     return this.putImmutable(this.resolverFeedback, record.feedbackId, record);
   }
 
+  async getRepairApproval(approvalId: string) {
+    return copy(this.repairApprovals.get(approvalId) ?? null);
+  }
+
+  async putRepairApproval(record: VehicleMasterRepairApproval) {
+    if (!verifyVehicleMasterRepairApproval(record)) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_APPROVAL_HASH_INVALID:${record.approvalId}`
+      );
+    }
+    return this.putImmutable(
+      this.repairApprovals,
+      record.approvalId,
+      record
+    );
+  }
+
   async getRepairReceipt(receiptId: string) {
     return copy(this.repairReceipts.get(receiptId) ?? null);
   }
@@ -203,6 +228,64 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
   async commitRepair(
     input: VehicleMasterRepairCommitInput
   ): Promise<VehicleMasterRepairCommitResult> {
+    const storedApproval = this.repairApprovals.get(input.approval.approvalId);
+    if (!storedApproval) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_APPROVAL_MISSING:${input.approval.approvalId}`
+      );
+    }
+    if (storedApproval.contentHash !== input.approval.contentHash) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_APPROVAL_MISMATCH:${input.approval.approvalId}`
+      );
+    }
+    if (!verifyVehicleMasterRepairApproval(storedApproval)) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_APPROVAL_HASH_INVALID:${storedApproval.approvalId}`
+      );
+    }
+    if (!verifyVehicleMasterRepairReceipt(input.receipt)) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_RECEIPT_HASH_INVALID:${input.receipt.receiptId}`
+      );
+    }
+    if (
+      storedApproval.approvedBy.kind !== 'USER' ||
+      storedApproval.writerId !==
+        VEHICLE_MASTER_REPAIR_WRITER_POLICY.primaryWriterId ||
+      storedApproval.authorityRuleId !==
+        VEHICLE_MASTER_REPAIR_AUTHORITY_RULE_ID
+    ) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_APPROVAL_AUTHORITY_INVALID:${storedApproval.approvalId}`
+      );
+    }
+    if (
+      input.receipt.approvalId !== storedApproval.approvalId ||
+      input.receipt.approvalDigest !== storedApproval.contentHash ||
+      input.receipt.approvedBy.id !== storedApproval.approvedBy.id ||
+      input.receipt.approvedBy.kind !== storedApproval.approvedBy.kind ||
+      (input.receipt.approvedBy.organizationId ?? null) !==
+        (storedApproval.approvedBy.organizationId ?? null) ||
+      input.receipt.writerId !== storedApproval.writerId ||
+      input.receipt.authorityRuleId !== storedApproval.authorityRuleId ||
+      input.receipt.reason !== storedApproval.reason ||
+      input.receipt.sourceAuditDigest !== storedApproval.sourceAuditDigest ||
+      input.receipt.repairPlanDigest !== storedApproval.repairPlanDigest ||
+      input.receipt.dryRunDigest !== storedApproval.dryRunDigest ||
+      input.receipt.entityKind !== storedApproval.entityKind ||
+      input.receipt.entityId !== storedApproval.entityId ||
+      (
+        input.receipt.actor.kind === 'SERVICE' &&
+        input.receipt.actor.id !==
+          VEHICLE_MASTER_REPAIR_WRITER_POLICY.primaryWriterId
+      )
+    ) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_APPROVAL_RECEIPT_MISMATCH:${storedApproval.approvalId}`
+      );
+    }
+
     const existingReceipt = this.repairReceipts.get(input.receipt.receiptId);
     if (existingReceipt) {
       if (existingReceipt.requestDigest !== input.receipt.requestDigest) {
@@ -233,6 +316,15 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
       throw new Error(
         `VEHICLE_MASTER_REPAIR_CAS_MISMATCH:${input.record.id}:` +
         `${current.revision}:${current.contentHash}`
+      );
+    }
+    if (
+      storedApproval.expectedCurrentRevision !== current.revision ||
+      storedApproval.expectedBeforeContentHash !== current.contentHash ||
+      storedApproval.expectedAfterContentHash !== input.record.contentHash
+    ) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_APPROVAL_TARGET_MISMATCH:${storedApproval.approvalId}`
       );
     }
     if (input.record.revision !== current.revision + 1) {

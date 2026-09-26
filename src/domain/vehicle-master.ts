@@ -1,4 +1,6 @@
 import { stableDigest } from '../shared/stable-digest.js';
+import type { ActorRef } from './catalog.js';
+import type { ExecutionWriterRef } from './writer-ownership.js';
 
 export const VEHICLE_MASTER_SCHEMA_VERSION = '1.0.0';
 
@@ -161,6 +163,34 @@ export type VehicleMasterResolverFeedback = {
   contentHash: string;
 };
 
+export const VEHICLE_MASTER_REPAIR_AUTHORITY_RULE_ID =
+  'vehicle-master-auto-safe-repair-v1';
+
+export const VEHICLE_MASTER_REPAIR_WRITER_POLICY = {
+  scope: 'vehicle-master-repair' as const,
+  mode: 'EXCLUSIVE' as const,
+  primaryWriterId: 'service:freepass-data',
+  authorityRuleId: VEHICLE_MASTER_REPAIR_AUTHORITY_RULE_ID,
+};
+
+export type VehicleMasterRepairApproval = {
+  approvalId: string;
+  entityKind: 'NODE' | 'RULE';
+  entityId: string;
+  sourceAuditDigest: string;
+  repairPlanDigest: string;
+  dryRunDigest: string;
+  expectedCurrentRevision: number;
+  expectedBeforeContentHash: string;
+  expectedAfterContentHash: string;
+  approvedBy: ActorRef;
+  writerId: string;
+  reason: string;
+  approvedAt: string;
+  authorityRuleId: string;
+  contentHash: string;
+};
+
 export type VehicleMasterRepairReceipt = {
   receiptId: string;
   idempotencyKey: string;
@@ -169,6 +199,13 @@ export type VehicleMasterRepairReceipt = {
   sourceAuditDigest: string;
   repairPlanDigest: string;
   dryRunDigest: string;
+  actor: ActorRef;
+  writerId: string;
+  reason: string;
+  approvalId: string;
+  approvalDigest: string;
+  approvedBy: ActorRef;
+  authorityRuleId: string;
   entityKind: 'NODE' | 'RULE';
   entityId: string;
   beforeRevision: number;
@@ -399,6 +436,48 @@ export function sealVehicleMasterPipelineRecord(
   return { ...record, contentHash: stableDigest(record) };
 }
 
+export function sealVehicleMasterRepairApproval(
+  input: Omit<VehicleMasterRepairApproval, 'contentHash'>
+): VehicleMasterRepairApproval {
+  assertTime(input.approvedAt, 'approvedAt');
+  assertRevision(input.expectedCurrentRevision);
+  assertSha256(input.sourceAuditDigest, 'sourceAuditDigest');
+  assertSha256(input.repairPlanDigest, 'repairPlanDigest');
+  assertSha256(input.dryRunDigest, 'dryRunDigest');
+  assertSha256(input.expectedBeforeContentHash, 'expectedBeforeContentHash');
+  assertSha256(input.expectedAfterContentHash, 'expectedAfterContentHash');
+  if (input.approvedBy.kind !== 'USER') {
+    throw new Error('VEHICLE_MASTER_REPAIR_APPROVAL_REQUIRES_USER');
+  }
+  if (
+    input.writerId !==
+    VEHICLE_MASTER_REPAIR_WRITER_POLICY.primaryWriterId
+  ) {
+    throw new Error('VEHICLE_MASTER_REPAIR_WRITER_NOT_OWNER');
+  }
+  if (input.authorityRuleId !== VEHICLE_MASTER_REPAIR_AUTHORITY_RULE_ID) {
+    throw new Error('VEHICLE_MASTER_REPAIR_AUTHORITY_RULE_MISMATCH');
+  }
+
+  const record = {
+    ...input,
+    approvalId: cleanText(input.approvalId, 'approvalId'),
+    entityId: cleanText(input.entityId, 'entityId'),
+    writerId: cleanText(input.writerId, 'writerId'),
+    reason: cleanText(input.reason, 'reason'),
+    authorityRuleId: cleanText(input.authorityRuleId, 'authorityRuleId'),
+    approvedBy: structuredClone(input.approvedBy),
+  };
+  return { ...record, contentHash: stableDigest(record) };
+}
+
+export function verifyVehicleMasterRepairApproval(
+  record: VehicleMasterRepairApproval
+) {
+  const { contentHash, ...input } = record;
+  return sealVehicleMasterRepairApproval(input).contentHash === contentHash;
+}
+
 export function sealVehicleMasterRepairReceipt(
   input: Omit<VehicleMasterRepairReceipt, 'contentHash'>
 ): VehicleMasterRepairReceipt {
@@ -412,8 +491,28 @@ export function sealVehicleMasterRepairReceipt(
   assertSha256(input.sourceAuditDigest, 'sourceAuditDigest');
   assertSha256(input.repairPlanDigest, 'repairPlanDigest');
   assertSha256(input.dryRunDigest, 'dryRunDigest');
+  assertSha256(input.approvalDigest, 'approvalDigest');
   assertSha256(input.beforeContentHash, 'beforeContentHash');
   assertSha256(input.afterContentHash, 'afterContentHash');
+  if (
+    input.writerId !==
+    VEHICLE_MASTER_REPAIR_WRITER_POLICY.primaryWriterId
+  ) {
+    throw new Error('VEHICLE_MASTER_REPAIR_WRITER_NOT_OWNER');
+  }
+  if (input.authorityRuleId !== VEHICLE_MASTER_REPAIR_AUTHORITY_RULE_ID) {
+    throw new Error('VEHICLE_MASTER_REPAIR_AUTHORITY_RULE_MISMATCH');
+  }
+  if (
+    input.actor.kind === 'SERVICE' &&
+    input.actor.id !== VEHICLE_MASTER_REPAIR_WRITER_POLICY.primaryWriterId
+  ) {
+    throw new Error('VEHICLE_MASTER_REPAIR_ACTOR_NOT_AUTHORIZED');
+  }
+  if (input.approvedBy.kind !== 'USER') {
+    throw new Error('VEHICLE_MASTER_REPAIR_APPROVAL_REQUIRES_USER');
+  }
+
   const record = {
     ...input,
     receiptId: cleanText(input.receiptId, 'receiptId'),
@@ -423,11 +522,25 @@ export function sealVehicleMasterRepairReceipt(
     sourceAuditDigest: cleanText(input.sourceAuditDigest, 'sourceAuditDigest'),
     repairPlanDigest: cleanText(input.repairPlanDigest, 'repairPlanDigest'),
     dryRunDigest: cleanText(input.dryRunDigest, 'dryRunDigest'),
+    writerId: cleanText(input.writerId, 'writerId'),
+    reason: cleanText(input.reason, 'reason'),
+    approvalId: cleanText(input.approvalId, 'approvalId'),
+    approvalDigest: cleanText(input.approvalDigest, 'approvalDigest'),
+    authorityRuleId: cleanText(input.authorityRuleId, 'authorityRuleId'),
+    actor: structuredClone(input.actor),
+    approvedBy: structuredClone(input.approvedBy),
     entityId: cleanText(input.entityId, 'entityId'),
     beforeContentHash: cleanText(input.beforeContentHash, 'beforeContentHash'),
     afterContentHash: cleanText(input.afterContentHash, 'afterContentHash'),
   };
   return { ...record, contentHash: stableDigest(record) };
+}
+
+export function verifyVehicleMasterRepairReceipt(
+  record: VehicleMasterRepairReceipt
+) {
+  const { contentHash, ...input } = record;
+  return sealVehicleMasterRepairReceipt(input).contentHash === contentHash;
 }
 
 export function sealVehicleMasterResolverFeedback(
