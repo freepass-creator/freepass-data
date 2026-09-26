@@ -512,7 +512,8 @@ function selectionSubset(
     }
   };
 
-  for (const axis of axes) {
+  for (const axis of AXES) {
+    if (!axes.has(axis) || !axisSelected(selection, axis)) continue;
     switch (axis) {
       case 'maker':
         copy('makerId');
@@ -2095,6 +2096,7 @@ export function revalidateVehicleSelectionReceipt(
   const stillMatches = result.candidates.some(
     (candidate) => candidate.record.recordId === recordId
   );
+
   if (!stillMatches) {
     reasons.push('CURRENT_REQUEST_NO_LONGER_MATCHES');
   }
@@ -2111,4 +2113,5 @@ export function revalidateVehicleSelectionReceipt(
     result,
   };
 }
+
 
