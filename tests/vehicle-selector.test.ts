@@ -647,7 +647,8 @@ describe('common vehicle selector', () => {
       powertrain: '하이브리드',
       trim: '노블레스',
     });
-    expect(reconciled.result.guidance.resolutionStatus).toBe('IMPOSSIBLE');
+    expect(reconciled.result.guidance.resolutionStatus).toBe('NO_RESULT');
+    expect(reconciled.result.guidance.noResultReason).toBe('INSUFFICIENT_DATA');
   });
 
   it('supports arbitrary-axis changes by protecting the axis the user explicitly changed', () => {
@@ -798,6 +799,129 @@ describe('common vehicle selector', () => {
       'hold-prestige',
     ]);
     expect(result.facets.trim.map((x) => x.label)).toEqual(['노블레스']);
+  });
+
+  it('distinguishes an unrecognized search term from a proven impossible combination', () => {
+    const result = selectVehicles([
+      record('known'),
+    ], {
+      mode: 'NEW_CAR',
+      searchText: '쏘랜토',
+    });
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.guidance.resolutionStatus).toBe('NO_RESULT');
+    expect(result.guidance.noResultReason).toBe('UNRECOGNIZED_SEARCH');
+    expect(result.guidance.noResultEvidence?.unrecognizedSearchTokens).toEqual([
+      '쏘랜토',
+    ]);
+  });
+
+  it('treats a selected value with no evidence as insufficient data, not impossibility', () => {
+    const result = selectVehicles([
+      record('known-2027'),
+    ], {
+      mode: 'NEW_CAR',
+      selection: {
+        model: '쏘렌토',
+        modelYear: 2099,
+      },
+    });
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.guidance.resolutionStatus).toBe('NO_RESULT');
+    expect(result.guidance.noResultReason).toBe('INSUFFICIENT_DATA');
+    expect(result.guidance.noResultEvidence?.unrecognizedAxes).toContain('modelYear');
+  });
+
+  it('reports HOLD_ONLY when matching evidence exists only behind HOLD exclusion', () => {
+    const hold = record('hold-only', {
+      lifecycle: 'HOLD',
+      identityStatus: 'HOLD',
+    });
+
+    const result = selectVehicles([hold], {
+      mode: 'USED_CAR',
+      selection: { model: '쏘렌토' },
+      includeHold: false,
+    });
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.guidance.resolutionStatus).toBe('NO_RESULT');
+    expect(result.guidance.noResultReason).toBe('HOLD_ONLY');
+    expect(result.guidance.noResultEvidence?.holdCompatibleCount).toBe(1);
+  });
+
+  it('reports OUT_OF_SCOPE when the combination exists only outside the requested mode', () => {
+    const historical = record('historical-only', {
+      lifecycle: 'HISTORICAL',
+    });
+
+    const result = selectVehicles([historical], {
+      mode: 'NEW_CAR',
+      selection: { model: '쏘렌토' },
+    });
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.guidance.resolutionStatus).toBe('NO_RESULT');
+    expect(result.guidance.noResultReason).toBe('OUT_OF_SCOPE');
+    expect(result.guidance.noResultEvidence?.outOfScopeCompatibleCount).toBe(1);
+  });
+
+  it('reports INSUFFICIENT_DATA when only UNKNOWN evidence could satisfy the request', () => {
+    const partial = record('partial-only', {
+      lifecycle: 'CURRENT',
+      identityStatus: 'PARTIAL',
+      modelYear: { id: null, label: null, value: null },
+    });
+
+    const result = selectVehicles([partial], {
+      mode: 'NEW_CAR',
+      selection: {
+        model: '쏘렌토',
+        modelYear: 2027,
+      },
+    });
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.guidance.resolutionStatus).toBe('NO_RESULT');
+    expect(result.guidance.noResultReason).toBe('INSUFFICIENT_DATA');
+    expect(result.guidance.noResultEvidence?.unknownCompatibleCount).toBe(1);
+  });
+
+  it('uses IMPOSSIBLE only when every fact is known but no single record proves the combination', () => {
+    const rows = [
+      record('2021-hybrid', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        powertrain: { id: 'pt_hybrid_2021', label: '1.6 터보 하이브리드' },
+      }),
+      record('2024-gasoline', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        powertrain: { id: 'pt_gasoline_2024', label: '2.5 가솔린 터보' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      selection: {
+        model: '쏘렌토',
+        modelYear: 2021,
+        powertrain: '가솔린',
+      },
+    });
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.guidance.resolutionStatus).toBe('IMPOSSIBLE');
+    expect(result.guidance.noResultReason).toBe('IMPOSSIBLE_COMBINATION');
+    expect(result.guidance.noResultEvidence).toMatchObject({
+      unrecognizedSearchTokens: [],
+      unrecognizedAxes: [],
+      unknownCompatibleCount: 0,
+      holdCompatibleCount: 0,
+      outOfScopeCompatibleCount: 0,
+    });
   });
 
   it('reports OPEN before the user supplies any search criteria', () => {
