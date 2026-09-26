@@ -442,3 +442,15 @@ npm run build:data-control-tower > data-control-tower.json
 Control Tower generation fails closed if configured consumer totals do not cover
 all eight registered consumers or if source/audit evidence is malformed.
 
+### Push-triggered operational revalidation
+
+The hourly schedule remains the periodic monitor, but changes to the live evidence
+path also trigger the audit immediately after they reach `main`. This includes
+ERP5 source capture/mapping, consumer cutover evidence, Sheet evidence, Estimate
+readiness, Control Tower assembly and the central Firestore evidence boundary.
+
+This prevents a source-capture or evidence-contract fix from waiting for the next
+scheduled run before it is exercised against the live read-only environment.
+Architecture Guard pins the critical path list so later workflow edits cannot
+silently remove production revalidation.
+
