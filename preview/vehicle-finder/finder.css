@@ -985,3 +985,46 @@
 .vf .vf-revalidation-next{font-weight:650!important;color:var(--vf-ink)!important}
 .vf .vf-revalidation-digest{font-size:var(--vf-support);color:var(--text,#5F6974)}
 .vf .vf-revalidation-digest code{display:block;overflow-wrap:anywhere;margin-top:4px}
+
+
+/* U-01 final accessibility/density polish */
+.vf button,
+.vf input,
+.vf select{
+  touch-action:manipulation;
+}
+.vf .vf-filter-toggle,
+.vf .vf-refresh,
+.vf .vf-filter-close,
+.vf .vf-detail-close{
+  min-width:44px;
+  min-height:44px;
+}
+.vf .vf-detail[role='region']{
+  scroll-margin-top:16px;
+}
+.vf .vf-group-button,
+.vf .vf-row-button,
+.vf .vf-action-reason-card,
+.vf .vf-finalization-reason,
+.vf .vf-revalidation-reason{
+  min-width:0;
+}
+.vf .vf-action-reason-title strong,
+.vf .vf-finalization-reason-title strong,
+.vf .vf-revalidation-reason-title strong{
+  min-width:0;
+  overflow-wrap:anywhere;
+}
+.vf code{
+  overflow-wrap:anywhere;
+  word-break:break-word;
+}
+@media(max-width:900px){
+  .vf .vf-filter-close,
+  .vf .vf-filter-done,
+  .vf .vf-filter-reset{
+    min-height:48px;
+  }
+  .vf .vf-filter-close{min-width:48px}
+}
