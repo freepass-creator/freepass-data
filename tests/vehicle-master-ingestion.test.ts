@@ -43,8 +43,10 @@ function source(
 }
 
 function trimProposal(sourceEvidenceIds: string[], status: 'ACTIVE' | 'HISTORICAL' = 'ACTIVE') {
+  const generationId = 'gen_mq4';
+  const phaseId = 'phase_mq4_fl';
   const modelYearId = deterministicVehicleMasterId('MODEL_YEAR', {
-    modelId: 'model_sorento',
+    phaseId,
     modelYear: 2027,
   });
   const powertrainId = deterministicVehicleMasterId('POWERTRAIN', {
@@ -71,6 +73,8 @@ function trimProposal(sourceEvidenceIds: string[], status: 'ACTIVE' | 'HISTORICA
     refs: {
       makeId: 'make_kia',
       modelId: 'model_sorento',
+      generationId,
+      phaseId,
       modelYearId,
       powertrainId,
       variantId,
@@ -91,6 +95,8 @@ function observations(
 ): VehicleMasterFieldObservation[] {
   const fields = [
     ['canonicalName', proposal.canonicalName],
+    ['refs.generationId', proposal.refs.generationId],
+    ['refs.phaseId', proposal.refs.phaseId],
     ['refs.modelYearId', proposal.refs.modelYearId],
     ['refs.powertrainId', proposal.refs.powertrainId],
     ['refs.variantId', proposal.refs.variantId],
@@ -113,10 +119,22 @@ async function seedAncestors(
     { id: 'make_kia', type: 'MAKE' as const, name: '기아', parentId: null },
     { id: 'model_sorento', type: 'MODEL' as const, name: '쏘렌토', parentId: 'make_kia' },
     {
+      id: proposal.refs.generationId!,
+      type: 'GENERATION' as const,
+      name: 'MQ4',
+      parentId: 'model_sorento',
+    },
+    {
+      id: proposal.refs.phaseId!,
+      type: 'PHASE' as const,
+      name: '더 뉴 쏘렌토',
+      parentId: proposal.refs.generationId!,
+    },
+    {
       id: proposal.refs.modelYearId!,
       type: 'MODEL_YEAR' as const,
       name: '2027년형',
-      parentId: 'model_sorento',
+      parentId: proposal.refs.phaseId!,
     },
     {
       id: proposal.refs.powertrainId!,
@@ -323,6 +341,267 @@ describe('vehicle master evidence-gated ingestion', () => {
         expect.objectContaining({
           code: 'SOURCE_AUTHORITY_INSUFFICIENT',
           detail: 'corroborating=1',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps TRIM on HOLD when required ancestor lineage refs are missing', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-missing-required-lineage', 'MANUFACTURER_OFFICIAL', '1');
+    await store.putSourceDocument(official);
+
+    const base = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, base);
+
+    const proposal = sealVehicleMasterNode({
+      id: 'trim_missing_phase_ref',
+      nodeType: 'TRIM',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: base.canonicalName,
+      parentId: base.parentId ?? null,
+      refs: { ...base.refs, phaseId: null },
+      aliases: base.aliases,
+      attributes: base.attributes,
+      sourceEvidenceIds: base.sourceEvidenceIds,
+      effectiveFrom: base.effectiveFrom ?? null,
+      effectiveTo: base.effectiveTo ?? null,
+      createdAt: base.createdAt,
+      updatedAt: base.updatedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: observations(proposal as ReturnType<typeof trimProposal>, [
+        official.sourceDocumentId,
+      ]),
+      policy: identityPolicy,
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'REQUIRED_REFERENCE_MISSING',
+          fieldPath: 'refs.phaseId',
+          detail: 'TRIM',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps non-root canonical nodes on HOLD when parentId is missing', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-parent-required', 'MANUFACTURER_OFFICIAL', '2');
+    await store.putSourceDocument(official);
+
+    await store.putNode(sealVehicleMasterNode({
+      id: 'make_parent_required',
+      nodeType: 'MAKE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '기아',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterNode({
+      id: 'model_parent_missing',
+      nodeType: 'MODEL',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '쏘렌토',
+      parentId: null,
+      refs: { makeId: 'make_parent_required' },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'canonicalName',
+        value: proposal.canonicalName,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['canonicalName'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'PARENT_ID_REQUIRED',
+          fieldPath: 'parentId',
+          detail: 'MAKE',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps MODEL_YEAR supplemental nodes on HOLD when ancestor refs are incomplete', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-option-lineage', 'MANUFACTURER_OFFICIAL', '3');
+    await store.putSourceDocument(official);
+
+    const make = sealVehicleMasterNode({
+      id: 'make_option_lineage',
+      nodeType: 'MAKE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '기아',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    const model = sealVehicleMasterNode({
+      id: 'model_option_lineage',
+      nodeType: 'MODEL',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '쏘렌토',
+      parentId: make.id,
+      refs: { makeId: make.id },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    const generation = sealVehicleMasterNode({
+      id: 'gen_option_lineage',
+      nodeType: 'GENERATION',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: 'MQ4',
+      parentId: model.id,
+      refs: { makeId: make.id, modelId: model.id },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    const phase = sealVehicleMasterNode({
+      id: 'phase_option_lineage',
+      nodeType: 'PHASE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '초기형',
+      parentId: generation.id,
+      refs: {
+        makeId: make.id,
+        modelId: model.id,
+        generationId: generation.id,
+      },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    const modelYear = sealVehicleMasterNode({
+      id: 'my_option_lineage',
+      nodeType: 'MODEL_YEAR',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '2027년형',
+      parentId: phase.id,
+      refs: {
+        makeId: make.id,
+        modelId: model.id,
+        generationId: generation.id,
+        phaseId: phase.id,
+      },
+      aliases: ['2027MY'],
+      attributes: { modelYear: 2027 },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    for (const node of [make, model, generation, phase, modelYear]) {
+      await store.putNode(node);
+    }
+
+    const proposal = sealVehicleMasterNode({
+      id: 'option_incomplete_lineage',
+      nodeType: 'OPTION',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '드라이브 와이즈',
+      parentId: modelYear.id,
+      refs: {
+        makeId: make.id,
+        modelId: model.id,
+        generationId: null,
+        phaseId: phase.id,
+        modelYearId: modelYear.id,
+      },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'canonicalName',
+        value: proposal.canonicalName,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['canonicalName'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'REQUIRED_REFERENCE_MISSING',
+          fieldPath: 'refs.generationId',
+          detail: 'OPTION',
         }),
       ])
     );
@@ -1676,14 +1955,30 @@ describe('vehicle master evidence-gated ingestion', () => {
     const official = source('official-generation-parent-scope', 'MANUFACTURER_OFFICIAL', 'd');
     await store.putSourceDocument(official);
 
+    const make = sealVehicleMasterNode({
+      id: 'make_parent_scope',
+      nodeType: 'MAKE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '테스트 제조사',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
     const modelA = sealVehicleMasterNode({
       id: 'model_parent_a',
       nodeType: 'MODEL',
       status: 'ACTIVE',
       revision: 1,
       canonicalName: '모델 A',
-      parentId: null,
-      refs: {},
+      parentId: make.id,
+      refs: { makeId: make.id },
       aliases: [],
       attributes: {},
       sourceEvidenceIds: [official.sourceDocumentId],
@@ -1698,8 +1993,8 @@ describe('vehicle master evidence-gated ingestion', () => {
       status: 'ACTIVE',
       revision: 1,
       canonicalName: '모델 B',
-      parentId: null,
-      refs: {},
+      parentId: make.id,
+      refs: { makeId: make.id },
       aliases: [],
       attributes: {},
       sourceEvidenceIds: [official.sourceDocumentId],
@@ -1708,6 +2003,7 @@ describe('vehicle master evidence-gated ingestion', () => {
       createdAt: observedAt,
       updatedAt: observedAt,
     });
+    await store.putNode(make);
     await store.putNode(modelA);
     await store.putNode(modelB);
 
@@ -1718,7 +2014,7 @@ describe('vehicle master evidence-gated ingestion', () => {
       revision: 1,
       canonicalName: '1세대',
       parentId: modelA.id,
-      refs: { modelId: modelA.id },
+      refs: { makeId: make.id, modelId: modelA.id },
       aliases: [],
       attributes: {},
       sourceEvidenceIds: [official.sourceDocumentId],
@@ -1735,7 +2031,7 @@ describe('vehicle master evidence-gated ingestion', () => {
       revision: 1,
       canonicalName: '1세대',
       parentId: modelB.id,
-      refs: { modelId: modelB.id },
+      refs: { makeId: make.id, modelId: modelB.id },
       aliases: [],
       attributes: {},
       sourceEvidenceIds: [official.sourceDocumentId],
