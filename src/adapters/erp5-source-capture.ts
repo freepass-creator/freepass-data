@@ -2,7 +2,7 @@ import { mapErp5Product, ERP5_PRODUCT_MAPPER_VERSION } from './erp5-product-mapp
 import { orderedJsonDigest } from '../shared/stable-digest.js';
 
 export const ERP5_DOCUMENTS = 'projects/freepasserp5/databases/(default)/documents';
-const collections = ['products', 'policy'] as const;
+const collections = ['products', 'policy', 'partner'] as const;
 type Collection = typeof collections[number];
 type ObjectValue = Record<string, unknown>;
 export type Erp5ReadRpc = (method: 'beginTransaction' | 'runQuery' | 'runAggregationQuery' | 'rollback', body: ObjectValue) => Promise<unknown>;
@@ -198,7 +198,7 @@ export function inspectErp5Capture(capture: Erp5SourceCapture) {
     status: 'HOLD' as const, cutoverAuthorized: false as const, canonicalWriteAuthorized: false as const,
     scope: 'ERP5_CAPTURE_AND_LOCAL_MAPPING_ONLY', mapperVersion: ERP5_PRODUCT_MAPPER_VERSION,
     sourceDigest: capture.digest, readTime: capture.readTime,
-    products: capture.collections.products.count, policies: capture.collections.policy.count,
+    products: capture.collections.products.count, policies: capture.collections.policy.count, partners: capture.collections.partner.count,
     mappedForReview: mapped, mappingHold: held, decodeFailed, decodeFailureCounts,
     duplicatePlateCount, plateChecked, plateUnchecked, metadataTimestampFields, issueCounts,
     remaining: ['UPSTREAM_FRESHNESS_AND_PARITY_UNVERIFIED', 'POLICY_LINKS_UNREVIEWED', 'NO_CANONICAL_WRITE_OR_CONSUMER_CUTOVER']
