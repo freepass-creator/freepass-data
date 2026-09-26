@@ -1,0 +1,73 @@
+name: one-time-retired-branch-prune
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/one-time-retired-branch-prune.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Delete explicitly retired branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          branches=(
+            "chore/lock-approved-architecture-20260920"
+            "chore/recovery-handoff-20260920"
+            "claude/ai-core-integration-standardization-ntmoli"
+            "codex/local-runtime-baseline"
+            "codex/refresh-ai-core-kit-v2-20260922"
+            "codex/settlement-sync-evidence-20260922"
+            "feat/catalog-data-health-v1-20260921"
+            "feat/catalog-field-authority-v1-20260920"
+            "feat/catalog-lineage-baseline-20260920"
+            "feat/catalog-revision-history-20260921"
+            "feat/manual-catalog-entry-20260921"
+            "feat/projection-delivery-idempotency-20260921"
+            "feat/projection-release-evidence-20260921"
+            "feat/reviewed-source-change-20260921"
+            "feat/safe-canonicalization-v1-20260921"
+            "feat/source-run-safety-20260921"
+            "feat/writer-ownership-transfer-20260921"
+            "fix/idempotency-payload-conflict-20260920"
+            "fix/local-bottom-actionbar-20260921"
+            "fix/mobile-bottom-nav-depth-model-20260921"
+            "fix/mobile-responsive-conformance-20260921"
+            "fix/preview-freepass-design-system-20260921"
+            "refactor/freepass-data-internal-unification-20260926"
+            "work/data/access-gateway"
+            "work/erpcom-sheets-ssot-20260921"
+            "work/data/console-ux-20260926"
+            "auto/projection-evidence-document-identity-20260926"
+            "chore/lock-development-lineage-20260926"
+            "auto/ssot-consumer-release-binding-20260925"
+            "feat/freepass-data-read-runtime-clean-20260921"
+            "feat/freepass-data-read-runtime-ops-20260921"
+            "work/gpt/vehicle-master-unified-20260926"
+            "work/admin-catalog-projection-v2-current-20260925"
+            "codex/iancar-availability-20260922"
+            "auto/fix-sheet-source-lineage-20260925"
+            "auto/consumer-release-binding-20260925"
+            "auto/ssot-handoff-lineage-20260925"
+            "auto/data-access-gateway-20260925"
+            "work/gpt/vehicle-master-ingestion-20260925"
+            "work/gpt/vehicle-master-persistence-20260925"
+          )
+          for b in "${branches[@]}"; do
+            if git ls-remote --exit-code --heads origin "refs/heads/${b}" >/dev/null 2>&1; then
+              echo "Deleting retired branch: ${b}"
+              git push origin --delete "${b}"
+            else
+              echo "Already absent: ${b}"
+            fi
+          done
