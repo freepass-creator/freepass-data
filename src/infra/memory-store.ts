@@ -3,7 +3,8 @@ import type {
   Product, ProjectionProduct, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
-  CatalogStore, CatalogTransaction, OutboxStore, ProjectionStore
+  CatalogStore, CatalogTransaction, OutboxStore, ProjectionStore,
+  SheetDeliveryEvidenceStore
 } from '../ports/catalog-store.js';
 import type {
   CanonicalSourceBinding,
@@ -24,6 +25,10 @@ import type {
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
 import type { ReviewedSourceChangeReceipt } from '../domain/source-change.js';
 import type {
+  SheetConsumerId,
+  StoredSheetDeliveryEvidence
+} from '../domain/consumer-delivery.js';
+import type {
   CatalogWriterOwnership,
   WriterOwnershipTransferReceipt
 } from '../domain/writer-ownership.js';
@@ -37,7 +42,7 @@ import { assertProjectionReleaseIntegrity } from '../shared/projection-integrity
 
 const copy = <T>(value: T): T => structuredClone(value);
 
-export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxStore {
+export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxStore, SheetDeliveryEvidenceStore {
   private models = new Map<string, VehicleModel>();
   private assets = new Map<string, VehicleAsset>();
   private products = new Map<string, Product>();
@@ -63,6 +68,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   private manifests = new Map<string, ProjectionReleaseManifest>();
   private projectionLineage = new Map<string, ProjectionFieldLineageRecord>();
   private deliveryReceipts = new Map<string, ProjectionDeliveryReceipt>();
+  private sheetDeliveryEvidence = new Map<string, StoredSheetDeliveryEvidence>();
   private active = new Map<string, string>();
 
   async seed(input: {
@@ -463,6 +469,21 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       throw new Error(`Projection delivery receipt already exists: ${receipt.eventId}`);
     }
     this.deliveryReceipts.set(receipt.eventId, copy(receipt));
+  }
+  async getSheetDeliveryEvidence(receiptId: string) {
+    return copy(this.sheetDeliveryEvidence.get(receiptId) ?? null);
+  }
+  async putSheetDeliveryEvidence(evidence: StoredSheetDeliveryEvidence) {
+    if (this.sheetDeliveryEvidence.has(evidence.receiptId)) {
+      throw new Error(`Sheet delivery evidence already exists: ${evidence.receiptId}`);
+    }
+    this.sheetDeliveryEvidence.set(evidence.receiptId, copy(evidence));
+  }
+  async listSheetDeliveryEvidence(consumerId: SheetConsumerId) {
+    return copy(
+      [...this.sheetDeliveryEvidence.values()]
+        .filter((item) => item.consumerId === consumerId)
+    );
   }
 
   async claimNext(input: { workerId: string; now: string; leaseUntil: string }) {
