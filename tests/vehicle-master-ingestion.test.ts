@@ -1181,6 +1181,247 @@ describe('vehicle master evidence-gated ingestion', () => {
     expect(result.canonicalWrite).toBeNull();
   });
 
+  it('keeps duplicate MAKE aliases on HOLD globally', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-make-alias-duplicate', 'MANUFACTURER_OFFICIAL', 'e');
+    await store.putSourceDocument(official);
+
+    await store.putNode(sealVehicleMasterNode({
+      id: 'make_kia_existing',
+      nodeType: 'MAKE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '기아',
+      parentId: null,
+      refs: {},
+      aliases: ['Kia'],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterNode({
+      id: 'make_kia_duplicate',
+      nodeType: 'MAKE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: 'Kia',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'canonicalName',
+        value: proposal.canonicalName,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['canonicalName'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'MAKE_DUPLICATE',
+          detail: 'make_kia_existing',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps a node on HOLD when parentId points to the wrong canonical node type', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-parent-type-mismatch', 'MANUFACTURER_OFFICIAL', 'f');
+    await store.putSourceDocument(official);
+
+    const make = sealVehicleMasterNode({
+      id: 'make_wrong_generation_parent',
+      nodeType: 'MAKE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '기아',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(make);
+
+    const proposal = sealVehicleMasterNode({
+      id: 'gen_wrong_parent_type',
+      nodeType: 'GENERATION',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: 'MQ4',
+      parentId: make.id,
+      refs: { modelId: make.id },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'canonicalName',
+        value: proposal.canonicalName,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['canonicalName'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'PARENT_NODE_TYPE_MISMATCH',
+          detail: 'MAKE!=MODEL',
+        }),
+        expect.objectContaining({
+          code: 'REFERENCE_NODE_TYPE_MISMATCH',
+          fieldPath: 'refs.modelId',
+          detail: 'MAKE!=MODEL',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps a node on HOLD when a reference field points to the wrong node type', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-ref-type-mismatch', 'MANUFACTURER_OFFICIAL', '0');
+    await store.putSourceDocument(official);
+
+    const make = sealVehicleMasterNode({
+      id: 'make_ref_type',
+      nodeType: 'MAKE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '기아',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    const model = sealVehicleMasterNode({
+      id: 'model_ref_type',
+      nodeType: 'MODEL',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '쏘렌토',
+      parentId: make.id,
+      refs: { makeId: make.id },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    const generation = sealVehicleMasterNode({
+      id: 'gen_ref_type',
+      nodeType: 'GENERATION',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: 'MQ4',
+      parentId: model.id,
+      refs: { makeId: make.id, modelId: model.id },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(make);
+    await store.putNode(model);
+    await store.putNode(generation);
+
+    const proposal = sealVehicleMasterNode({
+      id: 'phase_ref_type_mismatch',
+      nodeType: 'PHASE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '초기형',
+      parentId: generation.id,
+      refs: {
+        makeId: make.id,
+        modelId: generation.id,
+        generationId: generation.id,
+      },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'canonicalName',
+        value: proposal.canonicalName,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['canonicalName'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'REFERENCE_NODE_TYPE_MISMATCH',
+          fieldPath: 'refs.modelId',
+          detail: 'GENERATION!=MODEL',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
   it('keeps duplicate MODEL aliases on HOLD within the same MAKE', async () => {
     const store = new MemoryVehicleMasterStore();
     const official = source('official-model-alias-duplicate', 'MANUFACTURER_OFFICIAL', 'a');
