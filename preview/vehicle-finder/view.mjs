@@ -1,0 +1,449 @@
+const UI_SCHEMA = 'freepass.vehicle-finder.ui/v1';
+
+let instanceCount = 0;
+
+const facetLabels = Object.freeze({
+  modelYear: '연식',
+  fuel: '연료',
+  seatCount: '인승',
+  drivetrain: '구동',
+  trim: '트림',
+});
+
+const element = (tag, className, text) => {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = String(text);
+  return node;
+};
+
+const text = value => typeof value === 'string' && value.trim().length > 0;
+const invalid = field => { throw new Error('INVALID_VEHICLE_FINDER_UI:' + field); };
+
+function validateSnapshot(input) {
+  if (!input || input.schemaVersion !== UI_SCHEMA) invalid('schemaVersion');
+  if (!text(input.observationId) || !text(input.observedAt) || !Number.isFinite(Date.parse(input.observedAt))) {
+    invalid('observation');
+  }
+  if (!['COMPLETE', 'PARTIAL'].includes(input.coverage)) invalid('coverage');
+  if (!Number.isSafeInteger(input.total) || input.total < 0 || typeof input.hasMore !== 'boolean') invalid('resultMeta');
+  if (!Array.isArray(input.items)) invalid('items');
+  if (!input.filterOptions || typeof input.filterOptions !== 'object') invalid('filterOptions');
+
+  const ids = new Set();
+  for (const item of input.items) {
+    if (!item || !text(item.id) || ids.has(item.id) || !text(item.label)) invalid('item');
+    ids.add(item.id);
+    if (!text(item.pathText) || !text(item.nodeTypeLabel)) invalid('itemContext');
+    if (!item.state || !text(item.state.code) || !text(item.state.label)) invalid('itemState');
+    if (!Array.isArray(item.facts) || !Array.isArray(item.evidenceIds)) invalid('itemDetail');
+    for (const fact of item.facts) {
+      if (!fact || !text(fact.label) || typeof fact.unknown !== 'boolean') invalid('fact');
+      if (!fact.unknown && !text(String(fact.value ?? ''))) invalid('factValue');
+    }
+  }
+  return structuredClone(input);
+}
+
+function normalizeFilterOptions(snapshot, key) {
+  const raw = snapshot?.filterOptions?.[key];
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(value => text(String(value))).map(String);
+}
+
+function visibleFactValue(fact) {
+  return fact.unknown ? '미확인' : String(fact.value);
+}
+
+export function mountVehicleFinder(root, { read, onSelect } = {}) {
+  if (!(root instanceof HTMLElement)) throw new TypeError('Finder root must be an HTMLElement');
+
+  const prefix = 'vf-u01-' + (++instanceCount);
+  const events = new AbortController();
+  const listen = (node, type, callback) =>
+    node.addEventListener(type, callback, { signal: events.signal });
+
+  let snapshot = null;
+  let query = '';
+  let filters = {};
+  let inspectedId = null;
+  let requestSeq = 0;
+  let disposed = false;
+  let filterLock = null;
+
+  root.replaceChildren();
+  root.classList.add('vf');
+
+  const head = element('header', 'vf-head');
+  head.append(element('h1', '', '차량 찾기'));
+
+  const toolbar = element('div', 'vf-toolbar');
+  const searchLabel = element('label', 'vf-search');
+  searchLabel.htmlFor = prefix + '-search';
+  const input = element('input');
+  input.id = searchLabel.htmlFor;
+  input.type = 'search';
+  input.autocomplete = 'off';
+  input.placeholder = '차량명, 세대, 연식, 파워트레인, 트림 등';
+  searchLabel.append(element('span', 'vf-field-label', '차량 검색'), input);
+
+  const utilityActions = element('div', 'vf-utility-actions');
+  const filterToggle = element('button', '', '필터');
+  filterToggle.type = 'button';
+  filterToggle.setAttribute('aria-expanded', 'false');
+  filterToggle.setAttribute('aria-controls', prefix + '-filters');
+  const refresh = element('button', 'vf-refresh', '↻');
+  refresh.type = 'button';
+  refresh.setAttribute('aria-label', '다시 조회');
+  utilityActions.append(filterToggle, refresh);
+  toolbar.append(searchLabel, utilityActions);
+
+  const filterPanel = element('div', 'vf-filters');
+  filterPanel.id = prefix + '-filters';
+  filterPanel.hidden = true;
+
+  const filterSheetHead = element('div', 'vf-filter-sheet-head');
+  const filterSheetTitle = element('strong', '', '필터');
+  filterSheetTitle.id = prefix + '-filter-title';
+  const filterClose = element('button', 'vf-filter-close', '×');
+  filterClose.type = 'button';
+  filterClose.setAttribute('aria-label', '필터 닫기');
+  filterSheetHead.append(filterSheetTitle, filterClose);
+  filterPanel.append(filterSheetHead);
+
+  const filterInputs = new Map();
+  for (const [key, label] of Object.entries(facetLabels)) {
+    const wrapper = element('label', ['seatCount', 'drivetrain'].includes(key) ? 'vf-filter-advanced' : '');
+    wrapper.htmlFor = prefix + '-' + key;
+    const select = element('select');
+    select.id = wrapper.htmlFor;
+    wrapper.append(element('span', '', label), select);
+    filterPanel.append(wrapper);
+    filterInputs.set(key, select);
+    listen(select, 'change', () => {
+      if (select.value) filters[key] = select.value;
+      else delete filters[key];
+      void refreshResults({ preserve: true });
+    });
+  }
+
+  const filterMore = element('button', 'vf-filter-more', '추가 조건');
+  filterMore.type = 'button';
+  filterMore.setAttribute('aria-expanded', 'false');
+  const reset = element('button', 'vf-filter-reset', '필터 초기화');
+  reset.type = 'button';
+  const filterDone = element('button', 'vf-filter-done vf-primary', '결과 보기');
+  filterDone.type = 'button';
+  filterPanel.append(filterMore, reset, filterDone);
+
+  const status = element('div', 'vf-status');
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+
+  const layout = element('div', 'vf-layout');
+  const list = element('section', 'vf-list');
+  const table = element('table');
+  const thead = element('thead');
+  const headerRow = element('tr');
+  headerRow.append(element('th', '', '차량'), element('th', '', '상태'));
+  thead.append(headerRow);
+  const tbody = element('tbody');
+  table.append(thead, tbody);
+  const empty = element('div', 'vf-empty');
+  list.append(table, empty);
+
+  const detail = element('aside', 'vf-detail');
+  detail.id = prefix + '-detail';
+  detail.hidden = true;
+  layout.append(list, detail);
+
+  root.append(head, toolbar, filterPanel, status, layout);
+
+  const mobileMedia = window.matchMedia('(max-width: 900px)');
+
+  function lockFilterContext() {
+    if (filterLock || !mobileMedia.matches) return;
+    const background = [...root.children]
+      .filter(node => node !== filterPanel)
+      .map(node => [node, Boolean(node.inert)]);
+    for (const [node] of background) node.inert = true;
+    filterLock = {
+      background,
+      htmlOverflow: document.documentElement.style.overflow,
+      bodyOverflow: document.body?.style.overflow ?? '',
+    };
+    document.documentElement.style.overflow = 'hidden';
+    if (document.body) document.body.style.overflow = 'hidden';
+  }
+
+  function unlockFilterContext() {
+    if (!filterLock) return;
+    for (const [node, wasInert] of filterLock.background) node.inert = wasInert;
+    document.documentElement.style.overflow = filterLock.htmlOverflow;
+    if (document.body) document.body.style.overflow = filterLock.bodyOverflow;
+    filterLock = null;
+  }
+
+  function setFilterPanel(open) {
+    filterPanel.hidden = !open;
+    filterToggle.setAttribute('aria-expanded', String(open));
+    root.classList.toggle('vf-filter-open', open && mobileMedia.matches);
+
+    if (open && mobileMedia.matches) {
+      filterPanel.setAttribute('role', 'dialog');
+      filterPanel.setAttribute('aria-modal', 'true');
+      filterPanel.setAttribute('aria-labelledby', filterSheetTitle.id);
+      lockFilterContext();
+    } else {
+      filterPanel.removeAttribute('role');
+      filterPanel.removeAttribute('aria-modal');
+      filterPanel.removeAttribute('aria-labelledby');
+      unlockFilterContext();
+    }
+  }
+
+  function populateFilters() {
+    for (const [key, select] of filterInputs) {
+      const current = filters[key] ?? '';
+      select.replaceChildren(new Option('전체 · 미확인 포함', ''));
+      for (const value of normalizeFilterOptions(snapshot, key)) {
+        select.append(new Option(value, value));
+      }
+      if (current && ![...select.options].some(option => option.value === current)) {
+        select.append(new Option(current, current));
+      }
+      select.value = current;
+    }
+    reset.hidden = Object.keys(filters).length === 0;
+  }
+
+  function closeDetail(restoreFocus = true) {
+    const priorId = inspectedId;
+    inspectedId = null;
+    detail.hidden = true;
+    root.classList.remove('vf-inspecting');
+    renderRows();
+    if (restoreFocus && priorId) {
+      root.querySelector('[data-entry-id="' + CSS.escape(priorId) + '"]')?.focus({ preventScroll: true });
+    }
+  }
+
+  function renderDetail(item) {
+    detail.replaceChildren();
+    const detailHead = element('div', 'vf-detail-head');
+    const detailTitle = element('div', 'vf-detail-title');
+    detailTitle.append(element('h2', '', item.label), element('div', 'vf-path', item.pathText));
+    const close = element('button', 'vf-detail-close', '×');
+    close.type = 'button';
+    close.setAttribute('aria-label', '상세 닫기');
+    listen(close, 'click', () => closeDetail());
+    detailHead.append(detailTitle, close);
+
+    const resultMeta = element('div', 'vf-result-meta');
+    const badge = element('span', 'vf-state-badge', item.state.label);
+    badge.dataset.tone = item.state.tone ?? 'neutral';
+    resultMeta.append(badge, element('span', 'vf-note', item.nodeTypeLabel));
+
+    const facts = element('dl', 'vf-detail-facts');
+    for (const fact of item.facts) {
+      const row = element('div', 'vf-detail-fact');
+      row.dataset.unknown = String(fact.unknown);
+      row.append(element('dt', '', fact.label), element('dd', '', visibleFactValue(fact)));
+      facts.append(row);
+    }
+
+    const evidence = element('details', 'vf-evidence');
+    const summary = element('summary', '', '출처 근거 ' + item.evidenceIds.length + '개');
+    evidence.append(summary);
+    if (item.evidenceIds.length) {
+      const evidenceList = element('div', 'vf-config-evidence', item.evidenceIds.join(' · '));
+      evidence.append(evidenceList);
+    } else {
+      evidence.append(element('div', 'vf-note', '표시 가능한 출처 근거가 없습니다.'));
+    }
+
+    const actions = element('div', 'vf-actionbar');
+    const back = element('button', 'vf-back vf-secondary', '목록으로');
+    back.type = 'button';
+    listen(back, 'click', () => closeDetail());
+    const confirm = element('button', 'vf-primary', '이 차량 선택');
+    confirm.type = 'button';
+    confirm.disabled = item.selectable === false;
+    listen(confirm, 'click', async () => {
+      if (confirm.disabled || typeof onSelect !== 'function') return;
+      confirm.disabled = true;
+      try {
+        await onSelect({
+          id: item.id,
+          observationId: snapshot.observationId,
+          stateCode: item.state.code,
+        });
+        status.textContent = item.label + ' 선택 완료';
+      } catch {
+        status.textContent = '선택을 완료하지 못했습니다. 입력과 조회 결과는 유지됩니다.';
+      } finally {
+        confirm.disabled = item.selectable === false;
+      }
+    });
+    actions.append(back, confirm);
+
+    detail.append(detailHead, resultMeta, facts, evidence, actions);
+    detail.hidden = false;
+    root.classList.add('vf-inspecting');
+  }
+
+  function inspect(id) {
+    const item = snapshot?.items.find(candidate => candidate.id === id);
+    if (!item) return;
+    inspectedId = id;
+    renderRows();
+    renderDetail(item);
+    detail.querySelector('h2')?.focus?.({ preventScroll: false });
+  }
+
+  function renderRows() {
+    tbody.replaceChildren();
+    if (!snapshot) return;
+
+    table.hidden = snapshot.items.length === 0;
+    empty.hidden = snapshot.items.length > 0;
+    empty.textContent = '현재 조건과 일치하는 후보가 없습니다. 입력한 검색어와 필터는 유지됩니다.';
+
+    for (const item of snapshot.items) {
+      const row = element('tr');
+      row.dataset.selected = String(item.id === inspectedId);
+
+      const nameCell = element('td');
+      const button = element('button', 'vf-row-button');
+      button.type = 'button';
+      button.dataset.entryId = item.id;
+      button.setAttribute('aria-expanded', String(item.id === inspectedId));
+      button.setAttribute('aria-controls', detail.id);
+      button.setAttribute('aria-label', item.pathText);
+      button.append(element('span', 'vf-row-title', item.label));
+      const context = item.pathText === item.label ? '' : item.pathText;
+      if (context) button.append(element('span', 'vf-row-path', context));
+      listen(button, 'click', () => inspect(item.id));
+      nameCell.append(button);
+
+      const stateCell = element('td');
+      const badge = element('span', 'vf-state-badge', item.state.label);
+      badge.dataset.tone = item.state.tone ?? 'neutral';
+      stateCell.append(badge);
+      row.append(nameCell, stateCell);
+      tbody.append(row);
+    }
+  }
+
+  function renderSnapshot(prefix = '') {
+    if (!snapshot) return;
+    populateFilters();
+    renderRows();
+
+    const parts = [];
+    if (prefix) parts.push(prefix);
+    parts.push(snapshot.hasMore
+      ? snapshot.total + '개 후보 중 ' + snapshot.items.length + '개 표시'
+      : snapshot.total + '개 후보');
+    if (Number.isSafeInteger(snapshot.excludedUnknownFacetCount) && snapshot.excludedUnknownFacetCount > 0) {
+      parts.push('필터 값 미확인 ' + snapshot.excludedUnknownFacetCount + '개 제외');
+    }
+    if (snapshot.coverage === 'PARTIAL') parts.push('일부 자료');
+    status.textContent = parts.join(' · ');
+    filterDone.textContent = snapshot.total + '개 결과 보기';
+
+    if (inspectedId && !snapshot.items.some(item => item.id === inspectedId)) closeDetail(false);
+  }
+
+  async function refreshResults({ preserve = true } = {}) {
+    if (disposed) return;
+    if (typeof read !== 'function') {
+      snapshot = null;
+      table.hidden = true;
+      empty.hidden = false;
+      empty.textContent = '차량 마스터 조회 연결을 기다리고 있습니다. 예시 차량을 실제 자료처럼 표시하지 않습니다.';
+      status.textContent = '조회 연결 대기';
+      return;
+    }
+
+    const seq = ++requestSeq;
+    refresh.disabled = true;
+    root.setAttribute('aria-busy', 'true');
+    if (snapshot && preserve) renderSnapshot('직전 결과 표시 · 새 자료 조회 중');
+    else status.textContent = '자료 조회 중';
+
+    try {
+      const next = validateSnapshot(await read({ query, filters: { ...filters } }));
+      if (disposed || seq !== requestSeq) return;
+      snapshot = next;
+      renderSnapshot();
+    } catch {
+      if (disposed || seq !== requestSeq) return;
+      if (snapshot && preserve) renderSnapshot('직전 관측 유지 · 새 조회 실패');
+      else {
+        snapshot = null;
+        table.hidden = true;
+        empty.hidden = false;
+        empty.textContent = '자료를 불러오지 못했습니다. 차량이 없다는 뜻은 아닙니다.';
+        status.textContent = '조회 실패';
+      }
+    } finally {
+      if (!disposed && seq === requestSeq) {
+        refresh.disabled = false;
+        root.setAttribute('aria-busy', 'false');
+      }
+    }
+  }
+
+  let inputTimer = null;
+  listen(input, 'input', () => {
+    query = input.value;
+    clearTimeout(inputTimer);
+    inputTimer = setTimeout(() => { void refreshResults({ preserve: true }); }, 120);
+  });
+  listen(refresh, 'click', () => { void refreshResults({ preserve: true }); });
+  listen(filterToggle, 'click', () => setFilterPanel(filterPanel.hidden));
+  listen(filterClose, 'click', () => setFilterPanel(false));
+  listen(filterDone, 'click', () => setFilterPanel(false));
+  listen(filterMore, 'click', () => {
+    const expanded = filterMore.getAttribute('aria-expanded') !== 'true';
+    filterMore.setAttribute('aria-expanded', String(expanded));
+    filterPanel.classList.toggle('vf-filter-advanced-open', expanded);
+  });
+  listen(reset, 'click', () => {
+    filters = {};
+    populateFilters();
+    void refreshResults({ preserve: true });
+  });
+  listen(mobileMedia, 'change', () => {
+    if (!filterPanel.hidden) setFilterPanel(true);
+  });
+  listen(root, 'keydown', event => {
+    if (event.key !== 'Escape') return;
+    if (!filterPanel.hidden) {
+      event.preventDefault();
+      setFilterPanel(false);
+      filterToggle.focus({ preventScroll: true });
+      return;
+    }
+    if (inspectedId) {
+      event.preventDefault();
+      closeDetail();
+    }
+  });
+
+  const ready = refreshResults({ preserve: false });
+
+  return {
+    ready,
+    refresh: () => refreshResults({ preserve: true }),
+    destroy() {
+      disposed = true;
+      clearTimeout(inputTimer);
+      unlockFilterContext();
+      events.abort();
+      root.replaceChildren();
+      root.classList.remove('vf', 'vf-inspecting', 'vf-filter-open');
+    },
+  };
+}
