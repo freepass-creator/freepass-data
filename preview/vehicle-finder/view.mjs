@@ -860,10 +860,10 @@ export function mountVehicleFinder(
       container.append(review);
     };
 
-    const showReceipt = (receipt) => {
+    const showReceipt = (receipt, { preserveRevalidation = false } = {}) => {
       if (!receipt) return;
       confirmedReceipt = structuredClone(receipt);
-      receiptRevalidationReview = null;
+      if (!preserveRevalidation) receiptRevalidationReview = null;
 
       const receiptBox = element('section', 'vf-receipt');
       receiptBox.append(
@@ -902,7 +902,7 @@ export function mountVehicleFinder(
               response.review.status === 'CURRENT'
                 ? item.label + ' 선택 유효'
                 : item.label + ' 다시 선택 필요';
-            showReceipt(confirmedReceipt);
+            showReceipt(confirmedReceipt, { preserveRevalidation: true });
           } catch {
             status.textContent =
               'receipt 재검증을 완료하지 못했습니다. 기존 확정 정보는 유지됩니다.';
