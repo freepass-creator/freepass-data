@@ -250,5 +250,8 @@ npm run check:consumer-runtime-evidence -- \
 ```
 
 This report is read-only. It shows static evidence, observed runtime evidence,
-effective evidence and the resulting next-stage decision side by side.
+effective evidence and the resulting next-stage decision side by side. The
+event-limit bounds the audit scan; if a consumer's proof falls outside that
+window it remains unobserved/fail-closed rather than being guessed from older
+registry text.
 
