@@ -4,17 +4,56 @@ import { projectionReader } from '../src/infra/firestore-projection-reader.js';
 
 function fakeDb(documents: Record<string, Record<string, unknown>>) {
   const reads: string[] = [];
-  // Deliberately has no write/transaction API. Accidental mutation fails the test.
-  const db = { collection: (collection: string) => ({ doc: (id: string) => ({ get: async () => {
-    const key = collection + '/' + id;
-    reads.push(key);
-    return { exists: Object.hasOwn(documents, key), data: () => documents[key], get: (field: string) => documents[key]?.[field] };
-  } }) }) };
+  const snapshot = (key: string) => ({
+    exists: Object.hasOwn(documents, key),
+    data: () => documents[key],
+    get: (field: string) => documents[key]?.[field]
+  });
+  const querySnapshot = (collection: string, field: string, value: unknown) => ({
+    docs: Object.entries(documents)
+      .filter(([key, data]) => key.startsWith(collection + '/') && data[field] === value)
+      .map(([key]) => ({ data: () => documents[key] }))
+  });
+  const collection = (name: string) => ({
+    doc: (id: string) => ({
+      kind: 'doc' as const,
+      key: name + '/' + id,
+      get: async () => {
+        const key = name + '/' + id;
+        reads.push(key);
+        return snapshot(key);
+      }
+    }),
+    where: (field: string, _op: string, value: unknown) => ({
+      kind: 'query' as const,
+      name,
+      field,
+      value,
+      get: async () => {
+        reads.push(name + '?' + field + '==' + String(value));
+        return querySnapshot(name, field, value);
+      }
+    })
+  });
+  const db = {
+    collection,
+    runTransaction: async (fn: (tx: { get(ref: any): Promise<any> }) => Promise<any>) =>
+      fn({
+        get: async (ref) => {
+          if (ref.kind === 'doc') {
+            reads.push(ref.key);
+            return snapshot(ref.key);
+          }
+          reads.push(ref.name + '?' + ref.field + '==' + String(ref.value));
+          return querySnapshot(ref.name, ref.field, ref.value);
+        }
+      })
+  };
   return { db: db as unknown as Firestore, reads };
 }
 
 describe('Firestore projection read boundary', () => {
-  it('reads only the requested active release and its manifest', async () => {
+  it('reads only the requested active release and its evidence', async () => {
     const fixture = fakeDb({
       'projection_active/erp-public': { releaseId: 'rel_test' },
       'projection_releases/rel_test': { releaseId: 'rel_test', projectionId: 'erp-public' },
@@ -37,7 +76,16 @@ describe('Firestore projection read boundary', () => {
       lineage: [],
       consistency: 'ATOMIC'
     });
-    expect(fixture.reads).toEqual(['projection_active/erp-public', 'projection_releases/rel_test', 'projection_release_manifests/rel_test']);
+    expect(fixture.reads).toEqual([
+      'projection_active/erp-public',
+      'projection_releases/rel_test',
+      'projection_release_manifests/rel_test',
+      'projection_field_lineage?releaseId==rel_test',
+      'projection_active/erp-public',
+      'projection_releases/rel_test',
+      'projection_release_manifests/rel_test',
+      'projection_field_lineage?releaseId==rel_test'
+    ]);
   });
   it('does not create a release when no pointer exists', async () => {
     const fixture = fakeDb({});
