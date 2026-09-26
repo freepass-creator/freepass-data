@@ -151,6 +151,38 @@ for (const file of walk(srcRoot)) {
   }
 }
 
+const selectorRuntimeOwners = new Set([
+  'src/domain/usedcar-master.ts',
+  'src/application/vehicle-selector-adapters.ts'
+]);
+
+for (const file of walk(srcRoot)) {
+  const relative = path.relative(repoRoot, file).replaceAll('\\', '/');
+  const text = fs.readFileSync(file, 'utf8');
+
+  for (const match of text.matchAll(
+    /import\s*{([\s\S]*?)}\s*from\s*['"]([^'"]*vehicle-selector\.js)['"]/g
+  )) {
+    const bindings = (match[1] ?? '')
+      .split(',')
+      .map((item) => item.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0])
+      .filter(Boolean);
+
+    if (
+      bindings.includes('selectVehicles') &&
+      !selectorRuntimeOwners.has(relative)
+    ) {
+      violations.push({
+        file: relative,
+        layer: layerOf(file),
+        import: 'selectVehicles',
+        reason:
+          'Vehicle selection runtime must enter through the approved master selector boundary; do not create a second consumer search path'
+      });
+    }
+  }
+}
+
 for (const forbiddenDataContract of [
   'contracts/freepass-quote-v2.schema.json',
   'contracts/put-issued-quote-command-v1.schema.json'
