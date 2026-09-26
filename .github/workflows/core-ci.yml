@@ -23,6 +23,8 @@ jobs:
         run: npm run check:arch
       - name: Data access boundary
         run: npm run check:data-access-boundary
+      - name: Sheet contract tests
+        run: npm run check:sheets
       - name: TypeScript build
         run: npm run build
       - name: Unit tests
