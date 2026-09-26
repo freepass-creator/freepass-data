@@ -7,6 +7,10 @@ import {
   type VehicleMasterPriceRevision,
   type VehicleMasterStatus,
 } from '../domain/vehicle-master.js';
+import {
+  canonicalPowertrainIdentity,
+  canonicalTrimIdentity,
+} from '../domain/vehicle-master-normalization.js';
 import type {
   VehicleMasterReconciledTrim,
 } from './vehicle-master-reconcile.js';
@@ -36,38 +40,10 @@ export type VehicleMasterTrimProposalSet = {
   basePrice: VehicleMasterCanonicalProposalUnit<VehicleMasterPriceRevision>;
 };
 
-function normalized(value: string) {
-  return value
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/[()[\]{}]/g, ' ')
-    .replace(/[^0-9a-z가-힣.]+/g, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
-}
-
-const POWERTRAIN_TOKEN_ALIASES: Record<string, string> = {
-  hev: '하이브리드',
-  hybrid: '하이브리드',
-  ev: '전기',
-  electric: '전기',
-  gasoline: '가솔린',
-  petrol: '가솔린',
-  diesel: '디젤',
-};
-
-export function canonicalPowertrainIdentity(value: string) {
-  return normalized(value)
-    .split(' ')
-    .filter(Boolean)
-    .map((token) => POWERTRAIN_TOKEN_ALIASES[token] ?? token)
-    .sort()
-    .join('|');
-}
-
-export function canonicalTrimIdentity(value: string) {
-  return normalized(value).replace(/\s+/g, '');
-}
+export {
+  canonicalPowertrainIdentity,
+  canonicalTrimIdentity,
+} from '../domain/vehicle-master-normalization.js';
 
 function observations(
   fieldPath: string,
