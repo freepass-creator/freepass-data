@@ -1,7 +1,7 @@
 # FreePass Estimate New-car Master Contract v1
 
 Status: **CONTRACT IMPLEMENTED / ACTIVE RELEASE NOT YET AVAILABLE**  
-Date: 2026-09-25
+Date: 2026-09-26
 
 ## Purpose
 
@@ -120,3 +120,40 @@ The builder can already produce:
 It does not fabricate an ACTIVE Firestore release. The remaining implementation unit is the reviewed source ingestion + projection publication path that stages/activates `estimate-newcar-master` with a complete release manifest.
 
 RTDB is not a fallback.
+
+
+## Selector consumption rule
+
+Receiving `estimate-newcar-master` does not authorize FreePass Estimate to
+implement a second vehicle-search engine.
+
+The approved functional path after reading the projection is:
+
+`EstimateNewcarMasterRecord[] -> selectEstimateNewcarMaster() -> VehicleSelectorResult`
+
+`selectEstimateNewcarMaster()` is the Estimate application alias for the common
+master selector entrypoint. It uses the same selector semantics as used-car
+selection.
+
+The result includes the shared:
+
+- candidates
+- deterministic ranking
+- MODEL grouping
+- evidence-backed facets
+- adaptive drill-down guidance
+- ACTIVE / UNKNOWN / HOLD action semantics
+- NO_RESULT diagnosis
+- finalization semantics
+
+For new-car grouping, `vehicleModelId` is authoritative. The current Estimate
+Master contract does not carry generation/phase IDs, so the selector must not
+invent them.
+
+A UI or Estimate workflow may choose a different presentation, but must not
+replace these search/selection semantics with local filtering.
+
+Final vehicle selection may be sealed using the shared
+`vehicle-selection-receipt/v1` contract before downstream quote provenance is
+recorded. Persistence/transport of that receipt belongs to the integration
+boundary, not this selector contract.
