@@ -47,6 +47,78 @@ jobs:
           service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
           token_format: access_token
           access_token_lifetime: 900s
+      - name: Check F01/F86 consumer health
+        shell: bash
+        env:
+          FIREBASE_PROJECT_ID: freepasserp5
+          NODE_ENV: production
+          FREEPASS_ERP5_READ_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          SHEET_EVIDENCE_MAX_AGE_MINUTES: ${{ vars.SHEET_EVIDENCE_MAX_AGE_MINUTES }}
+          SHEET_EVIDENCE_MAX_FUTURE_SKEW_SECONDS: ${{ vars.SHEET_EVIDENCE_MAX_FUTURE_SKEW_SECONDS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SHEET_EVIDENCE_MAX_AGE_MINUTES:-}" ]; then
+            jq -n '{
+              version: "sheet-consumer-health-schedule/1",
+              configured: false,
+              status: "BLOCKED",
+              reason: "SHEET_EVIDENCE_MAX_AGE_MINUTES_NOT_CONFIGURED"
+            }' > sheet-consumer-health-summary.json
+          else
+            skew="${SHEET_EVIDENCE_MAX_FUTURE_SKEW_SECONDS:-0}"
+            set +e
+            npx tsx src/jobs/check-sheet-consumer-health.ts \
+              --scheduled-read-only \
+              --max-age-minutes="$SHEET_EVIDENCE_MAX_AGE_MINUTES" \
+              --max-future-skew-seconds="$skew" \
+              > sheet-consumer-health.json
+            code=$?
+            set -e
+            test "$code" -eq 0 -o "$code" -eq 2
+            jq -e '
+              .contractVersion == "sheet-consumer-health-v1" and
+              .schemaVersion == "1.0.0" and
+              (.status == "HEALTHY" or .status == "DEGRADED" or .status == "BLOCKED") and
+              (.consumers | length == 2) and
+              ([.consumers[].consumerId] | sort == ["google-sheets-f01","google-sheets-f86"])
+            ' sheet-consumer-health.json >/dev/null
+            jq -n \
+              --slurpfile health sheet-consumer-health.json \
+              '{
+                version: "sheet-consumer-health-schedule/1",
+                configured: true,
+                status: $health[0].status,
+                generatedAt: $health[0].generatedAt,
+                consumerStatuses: ($health[0].consumers | map({
+                  consumerId,
+                  status,
+                  currentStage,
+                  nextStage,
+                  releaseAuthority: .evidence.releaseAuthority,
+                  receiptId: .evidence.receiptId,
+                  blockers
+                }))
+              }' > sheet-consumer-health-summary.json
+          fi
+          jq -e '
+            .version == "sheet-consumer-health-schedule/1" and
+            (.configured | type == "boolean") and
+            (.status == "HEALTHY" or .status == "DEGRADED" or .status == "BLOCKED")
+          ' sheet-consumer-health-summary.json >/dev/null
+          {
+            echo '## F01/F86 consumer health'
+            echo
+            echo "Configured: $(jq -r '.configured' sheet-consumer-health-summary.json)"
+            echo
+            echo "Status: $(jq -r '.status' sheet-consumer-health-summary.json)"
+            if [ "$(jq -r '.configured' sheet-consumer-health-summary.json)" = true ]; then
+              echo
+              jq -r '.consumerStatuses[] | "- \(.consumerId): \(.status) / stage=\(.currentStage) / authority=\(.releaseAuthority // "none") / blockers=\(.blockers | join(", "))"' sheet-consumer-health-summary.json
+            else
+              echo
+              echo "Reason: $(jq -r '.reason' sheet-consumer-health-summary.json)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Capture the current FULL Firestore snapshot
         id: capture
         shell: bash
@@ -282,5 +354,7 @@ jobs:
             capture-summary.json
             dry-run-summary.json
             source-inventory.json
+            sheet-consumer-health-summary.json
+            sheet-consumer-health.json
           retention-days: 90
           if-no-files-found: error
