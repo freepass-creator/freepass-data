@@ -188,6 +188,27 @@ export type VehicleSelectorSelectionReconciliation = {
   result: VehicleSelectorResult;
 };
 
+export type VehicleSelectorGroupTransitionReason =
+  | 'GROUP_NOT_FOUND'
+  | 'UNRESOLVED_GROUP_IDENTITY'
+  | 'DRILLDOWN_AXIS_NOT_AVAILABLE'
+  | 'DRILLDOWN_OPTION_NOT_AVAILABLE';
+
+export type VehicleSelectorGroupTransition = {
+  status: 'APPLIED' | 'REJECTED';
+  reason: VehicleSelectorGroupTransitionReason | null;
+  sourceGroupId: string;
+  sourceCandidateCount: number | null;
+  selection: VehicleSelectorSelection;
+  clearedAxes: VehicleSelectorAxis[];
+  activeGroupId: string | null;
+  beforeCandidateCount: number;
+  afterCandidateCount: number;
+  beforeGroupCount: number;
+  afterGroupCount: number;
+  result: VehicleSelectorResult;
+};
+
 export type VehicleSelectorUxPreset = {
   mode: VehicleSelectorMode;
   presentation: 'GUIDED' | 'SEARCH_FILTER';
@@ -1305,3 +1326,254 @@ export function reconcileVehicleSelection(
     }
   }
 }
+
+function assignGroupIdentity(
+  selection: VehicleSelectorSelection,
+  group: VehicleSelectorCandidateGroup
+) {
+  if (
+    group.scope !== 'MODEL_GENERATION' ||
+    !group.maker.id ||
+    !group.model.id ||
+    !group.generation.id
+  ) {
+    return false;
+  }
+
+  selection.makerId = group.maker.id;
+  selection.maker = group.maker.label;
+  selection.modelId = group.model.id;
+  selection.model = group.model.label;
+  selection.generationId = group.generation.id;
+  selection.generation = group.generation.label;
+  return true;
+}
+
+function assignDrilldownOption(
+  selection: VehicleSelectorSelection,
+  axis: VehicleSelectorAxis,
+  option: VehicleSelectorFacetOption
+) {
+  clearSelectionAxis(selection, axis);
+
+  switch (axis) {
+    case 'maker':
+      selection.makerId = option.id;
+      selection.maker = option.label;
+      break;
+    case 'model':
+      selection.modelId = option.id;
+      selection.model = option.label;
+      break;
+    case 'generation':
+      selection.generationId = option.id;
+      selection.generation = option.label;
+      break;
+    case 'phase':
+      selection.phaseId = option.id;
+      selection.phase = option.label;
+      break;
+    case 'modelYear':
+      selection.modelYearId = option.id;
+      selection.modelYear = option.value;
+      break;
+    case 'powertrain':
+      selection.powertrainId = option.id;
+      selection.powertrain = option.label;
+      break;
+    case 'fuelType':
+      selection.fuelType = option.label;
+      break;
+    case 'drivetrain':
+      selection.drivetrain = option.label;
+      break;
+    case 'seats':
+      selection.seats = option.value;
+      break;
+    case 'trim':
+      selection.trimId = option.id;
+      selection.trim = option.label;
+      break;
+  }
+}
+
+function sameFacetOption(
+  left: VehicleSelectorFacetOption,
+  right: VehicleSelectorFacetOption
+) {
+  return (
+    left.id === right.id &&
+    left.label === right.label &&
+    left.value === right.value
+  );
+}
+
+function rejectedGroupTransition(
+  before: VehicleSelectorResult,
+  selection: VehicleSelectorSelection,
+  groupId: string,
+  reason: VehicleSelectorGroupTransitionReason
+): VehicleSelectorGroupTransition {
+  const group = before.groups.find((item) => item.groupId === groupId) ?? null;
+  return {
+    status: 'REJECTED',
+    reason,
+    sourceGroupId: groupId,
+    sourceCandidateCount: group?.candidateCount ?? null,
+    selection: structuredClone(selection),
+    clearedAxes: [],
+    activeGroupId: null,
+    beforeCandidateCount: before.candidates.length,
+    afterCandidateCount: before.candidates.length,
+    beforeGroupCount: before.groups.length,
+    afterGroupCount: before.groups.length,
+    result: before,
+  };
+}
+
+export function applyVehicleGroupSelection(
+  records: readonly VehicleSelectorRecord[],
+  request: Omit<VehicleSelectorRequest, 'selection'>,
+  currentSelection: VehicleSelectorSelection,
+  groupId: string
+): VehicleSelectorGroupTransition {
+  const before = selectVehicles(records, {
+    ...request,
+    selection: currentSelection,
+  });
+  const group = before.groups.find((item) => item.groupId === groupId);
+
+  if (!group) {
+    return rejectedGroupTransition(
+      before,
+      currentSelection,
+      groupId,
+      'GROUP_NOT_FOUND'
+    );
+  }
+
+  const nextSelection: VehicleSelectorSelection = { ...currentSelection };
+  if (!assignGroupIdentity(nextSelection, group)) {
+    return rejectedGroupTransition(
+      before,
+      currentSelection,
+      groupId,
+      'UNRESOLVED_GROUP_IDENTITY'
+    );
+  }
+
+  const reconciled = reconcileVehicleSelection(
+    records,
+    request,
+    nextSelection,
+    ['maker', 'model', 'generation']
+  );
+  const activeGroup = reconciled.result.groups.find(
+    (item) => item.groupId === groupId
+  ) ?? null;
+
+  return {
+    status: 'APPLIED',
+    reason: null,
+    sourceGroupId: groupId,
+    sourceCandidateCount: group.candidateCount,
+    selection: reconciled.selection,
+    clearedAxes: reconciled.clearedAxes,
+    activeGroupId: activeGroup?.groupId ?? null,
+    beforeCandidateCount: before.candidates.length,
+    afterCandidateCount: reconciled.result.candidates.length,
+    beforeGroupCount: before.groups.length,
+    afterGroupCount: reconciled.result.groups.length,
+    result: reconciled.result,
+  };
+}
+
+export function applyVehicleGroupDrilldown(
+  records: readonly VehicleSelectorRecord[],
+  request: Omit<VehicleSelectorRequest, 'selection'>,
+  currentSelection: VehicleSelectorSelection,
+  groupId: string,
+  axis: VehicleSelectorAxis,
+  option: VehicleSelectorFacetOption
+): VehicleSelectorGroupTransition {
+  const before = selectVehicles(records, {
+    ...request,
+    selection: currentSelection,
+  });
+  const group = before.groups.find((item) => item.groupId === groupId);
+
+  if (!group) {
+    return rejectedGroupTransition(
+      before,
+      currentSelection,
+      groupId,
+      'GROUP_NOT_FOUND'
+    );
+  }
+
+  if (group.scope !== 'MODEL_GENERATION') {
+    return rejectedGroupTransition(
+      before,
+      currentSelection,
+      groupId,
+      'UNRESOLVED_GROUP_IDENTITY'
+    );
+  }
+
+  const drilldown = group.drilldownAxes.find((item) => item.axis === axis);
+  if (!drilldown) {
+    return rejectedGroupTransition(
+      before,
+      currentSelection,
+      groupId,
+      'DRILLDOWN_AXIS_NOT_AVAILABLE'
+    );
+  }
+
+  const offered = drilldown.options.find((item) => sameFacetOption(item, option));
+  if (!offered) {
+    return rejectedGroupTransition(
+      before,
+      currentSelection,
+      groupId,
+      'DRILLDOWN_OPTION_NOT_AVAILABLE'
+    );
+  }
+
+  const nextSelection: VehicleSelectorSelection = { ...currentSelection };
+  if (!assignGroupIdentity(nextSelection, group)) {
+    return rejectedGroupTransition(
+      before,
+      currentSelection,
+      groupId,
+      'UNRESOLVED_GROUP_IDENTITY'
+    );
+  }
+  assignDrilldownOption(nextSelection, axis, offered);
+
+  const reconciled = reconcileVehicleSelection(
+    records,
+    request,
+    nextSelection,
+    ['maker', 'model', 'generation', axis]
+  );
+  const activeGroup = reconciled.result.groups.find(
+    (item) => item.groupId === groupId
+  ) ?? null;
+
+  return {
+    status: 'APPLIED',
+    reason: null,
+    sourceGroupId: groupId,
+    sourceCandidateCount: group.candidateCount,
+    selection: reconciled.selection,
+    clearedAxes: reconciled.clearedAxes,
+    activeGroupId: activeGroup?.groupId ?? null,
+    beforeCandidateCount: before.candidates.length,
+    afterCandidateCount: reconciled.result.candidates.length,
+    beforeGroupCount: before.groups.length,
+    afterGroupCount: reconciled.result.groups.length,
+    result: reconciled.result,
+  };
+}
+

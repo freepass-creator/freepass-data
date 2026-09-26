@@ -146,15 +146,51 @@ describe('consumer cutover registry', () => {
     });
   });
 
+  it('keeps ERP.com at OBSERVE while the downstream main serves ERP5 and FreePass Data stays shadow-only', () => {
+    const erp = findConsumerSwitch('erp-com-public-catalog');
+    expect(erp).not.toBeNull();
+    expect(erp?.stage).toBe('OBSERVE');
+    expect(erp?.evidence.contractReady).toBe(true);
+    expect(erp?.evidence.authenticationVerified).toBe(false);
+    expect(erp?.evidence.freepassReadVerified).toBe(false);
+    expect(erp?.activeReadOwner).toBe('freepasserp5/products-policy');
+    expect(erp?.holdReasons).toEqual([
+      'ERP.com public catalog still serves the ERP5 active reader; FreePass Data is shadow-only',
+      'authenticated FreePass Data consumer identity and production readback are not verified',
+      'non-empty ACTIVE erp-public release parity and shadow latency require production evidence'
+    ]);
+  });
+
+  it('keeps Estimate contractReady false until its canonical integration line is merged to product main', () => {
+    const estimate = findConsumerSwitch('freepass-estimate-catalog');
+    expect(estimate).not.toBeNull();
+    expect(estimate?.stage).toBe('LEGACY_DIRECT');
+    expect(estimate?.evidence.contractReady).toBe(false);
+    expect(estimate?.holdReasons).toEqual([
+      'Estimate FreePass Data integration is implemented on the canonical integration line but not merged to Estimate product main',
+      'real ACTIVE estimate-newcar-master readback and cutover proof are not production-verified',
+      'quote calculation and provider ownership must remain in Estimate'
+    ]);
+  });
+
   it('records Admin as integrated while keeping runtime cutover evidence on HOLD', () => {
     const admin = findConsumerSwitch('freepass-admin-catalog');
     expect(admin).not.toBeNull();
     expect(admin?.evidence.contractReady).toBe(true);
+    expect(admin?.evidence.legacyReadVerified).toBe(true);
     expect(admin?.stage).toBe('OBSERVE');
     expect(admin?.holdReasons).toEqual([
       'Admin consumer authentication and production FreePass Data readback are not verified',
-      'Policy parity and production persistence are not verified'
+      'Admin intake-critical shadow parity remains incomplete; latest I-01 hardening PR is not merged to Admin main'
     ]);
+  });
+
+  it('never registers a current stage that its own minimum evidence cannot support', () => {
+    for (const registration of CONSUMER_SWITCH_REGISTRY) {
+      const current = evaluateConsumerCutover(registration, registration.stage);
+      expect(current.allowed, registration.consumerId).toBe(true);
+      expect(current.blockers, registration.consumerId).toEqual([]);
+    }
   });
 
   it('keeps the current real consumers blocked from final cutover', () => {

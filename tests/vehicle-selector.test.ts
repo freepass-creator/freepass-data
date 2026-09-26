@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   VEHICLE_SELECTOR_UX_PRESETS,
+  applyVehicleGroupDrilldown,
+  applyVehicleGroupSelection,
   reconcileVehicleSelection,
   selectVehicles,
   type VehicleSelectorRecord,
@@ -1364,6 +1366,246 @@ describe('common vehicle selector', () => {
       largestBucketCount: 1,
       discriminationScore: 1,
     });
+  });
+
+  it('narrows a broad result to one stable model-generation group without losing concrete candidates', () => {
+    const rows = [
+      record('sorento-noblesse'),
+      record('sorento-signature', {
+        trim: { id: 'trim_signature', label: '시그니처' },
+      }),
+      record('carnival-prestige', {
+        model: { id: 'model_carnival', label: '카니발' },
+        generation: { id: 'gen_ka4', label: '4세대 KA4' },
+        trim: { id: 'trim_prestige', label: '프레스티지' },
+        aliases: ['KA4'],
+      }),
+    ];
+
+    const before = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '기아',
+    });
+    const sorento = before.groups.find((group) => group.model.id === 'model_sorento')!;
+
+    const transition = applyVehicleGroupSelection(
+      rows,
+      { mode: 'NEW_CAR', searchText: '기아' },
+      {},
+      sorento.groupId
+    );
+
+    expect(transition).toMatchObject({
+      status: 'APPLIED',
+      reason: null,
+      sourceCandidateCount: 2,
+      beforeCandidateCount: 3,
+      afterCandidateCount: 2,
+      beforeGroupCount: 2,
+      afterGroupCount: 1,
+      activeGroupId: sorento.groupId,
+    });
+    expect(transition.selection).toMatchObject({
+      makerId: 'make_kia',
+      modelId: 'model_sorento',
+      generationId: 'gen_mq4',
+    });
+    expect(transition.result.candidates.map((item) => item.record.recordId)).toEqual([
+      'sorento-noblesse',
+      'sorento-signature',
+    ]);
+  });
+
+  it('applies an offered drilldown and continuously recalculates group counts and next guidance', () => {
+    const rows = [
+      record('2021-hybrid-noblesse', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        powertrain: { id: 'pt_hybrid', label: '하이브리드' },
+        trim: { id: 'trim_noblesse', label: '노블레스' },
+      }),
+      record('2021-gas-signature', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        powertrain: { id: 'pt_gas', label: '가솔린' },
+        trim: { id: 'trim_signature', label: '시그니처' },
+      }),
+      record('2024-hybrid-signature', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        powertrain: { id: 'pt_hybrid', label: '하이브리드' },
+        trim: { id: 'trim_signature_2024', label: '시그니처' },
+      }),
+    ];
+
+    const before = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+    });
+    const group = before.groups[0]!;
+    const yearAxis = group.drilldownAxes.find((item) => item.axis === 'modelYear')!;
+    const year2021 = yearAxis.options.find((item) => item.value === 2021)!;
+
+    const transition = applyVehicleGroupDrilldown(
+      rows,
+      { mode: 'USED_CAR', searchText: '쏘렌토' },
+      {},
+      group.groupId,
+      'modelYear',
+      year2021
+    );
+
+    expect(transition).toMatchObject({
+      status: 'APPLIED',
+      sourceCandidateCount: 3,
+      beforeCandidateCount: 3,
+      afterCandidateCount: 2,
+      beforeGroupCount: 1,
+      afterGroupCount: 1,
+      activeGroupId: group.groupId,
+    });
+    expect(transition.selection).toMatchObject({
+      modelYear: 2021,
+      makerId: 'make_kia',
+      modelId: 'model_sorento',
+      generationId: 'gen_mq4',
+    });
+    expect(transition.result.groups[0]?.candidateCount).toBe(2);
+    expect(transition.result.groups[0]?.suggestedDrilldownAxis).toBe('powertrain');
+  });
+
+  it('preserves compatible prior choices while entering a visible group', () => {
+    const rows = [
+      record('sorento-noblesse', {
+        drivetrain: { id: null, label: '2WD' },
+        trim: { id: 'trim_noblesse', label: '노블레스' },
+      }),
+      record('sorento-signature', {
+        drivetrain: { id: null, label: '2WD' },
+        trim: { id: 'trim_signature', label: '시그니처' },
+      }),
+      record('carnival-prestige', {
+        model: { id: 'model_carnival', label: '카니발' },
+        generation: { id: 'gen_ka4', label: '4세대 KA4' },
+        drivetrain: { id: null, label: '4WD' },
+        trim: { id: 'trim_prestige', label: '프레스티지' },
+        aliases: ['KA4'],
+      }),
+    ];
+
+    const before = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '기아',
+      selection: { drivetrain: '2WD' },
+    });
+    const sorento = before.groups.find((group) => group.model.id === 'model_sorento')!;
+
+    const transition = applyVehicleGroupSelection(
+      rows,
+      { mode: 'NEW_CAR', searchText: '기아' },
+      { drivetrain: '2WD' },
+      sorento.groupId
+    );
+
+    expect(transition.status).toBe('APPLIED');
+    expect(transition.clearedAxes).toEqual([]);
+    expect(transition.selection.drivetrain).toBe('2WD');
+    expect(transition.selection.modelId).toBe('model_sorento');
+    expect(transition.result.candidates.map((item) => item.record.recordId)).toEqual([
+      'sorento-noblesse',
+      'sorento-signature',
+    ]);
+  });
+
+  it('rejects a stale or unknown group id without mutating the current selection', () => {
+    const rows = [record('one')];
+    const selection = { model: '쏘렌토' };
+
+    const transition = applyVehicleGroupSelection(
+      rows,
+      { mode: 'NEW_CAR', searchText: '쏘렌토' },
+      selection,
+      'model-generation:stale'
+    );
+
+    expect(transition).toMatchObject({
+      status: 'REJECTED',
+      reason: 'GROUP_NOT_FOUND',
+      selection,
+      activeGroupId: null,
+    });
+    expect(transition.beforeCandidateCount).toBe(transition.afterCandidateCount);
+  });
+
+  it('rejects group selection when identity is unresolved instead of inventing a generation', () => {
+    const rows = [
+      record('partial', {
+        lifecycle: 'HISTORICAL',
+        identityStatus: 'PARTIAL',
+        generation: { id: null, label: null },
+      }),
+    ];
+    const before = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+    });
+    const group = before.groups[0]!;
+
+    const transition = applyVehicleGroupSelection(
+      rows,
+      { mode: 'USED_CAR', searchText: '쏘렌토' },
+      {},
+      group.groupId
+    );
+
+    expect(transition).toMatchObject({
+      status: 'REJECTED',
+      reason: 'UNRESOLVED_GROUP_IDENTITY',
+    });
+    expect(transition.selection).toEqual({});
+  });
+
+  it('rejects drilldown axes and options that the current group did not offer', () => {
+    const rows = [
+      record('noblesse', {
+        trim: { id: 'trim_noblesse', label: '노블레스' },
+      }),
+      record('signature', {
+        trim: { id: 'trim_signature', label: '시그니처' },
+      }),
+    ];
+    const before = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토',
+    });
+    const group = before.groups[0]!;
+
+    const badAxis = applyVehicleGroupDrilldown(
+      rows,
+      { mode: 'NEW_CAR', searchText: '쏘렌토' },
+      {},
+      group.groupId,
+      'modelYear',
+      { id: 'my_2099', label: '2099년형', value: 2099, count: 1 }
+    );
+    expect(badAxis.reason).toBe('DRILLDOWN_AXIS_NOT_AVAILABLE');
+
+    const trimAxis = group.drilldownAxes.find((item) => item.axis === 'trim')!;
+    const fakeTrim = {
+      ...trimAxis.options[0]!,
+      id: 'trim_fake',
+      label: '가짜트림',
+    };
+    const badOption = applyVehicleGroupDrilldown(
+      rows,
+      { mode: 'NEW_CAR', searchText: '쏘렌토' },
+      {},
+      group.groupId,
+      'trim',
+      fakeTrim
+    );
+    expect(badOption.reason).toBe('DRILLDOWN_OPTION_NOT_AVAILABLE');
+    expect(badOption.selection).toEqual({});
   });
 
   it('reports OPEN before the user supplies any search criteria', () => {
