@@ -141,6 +141,23 @@ The health command is read-only and passes through the Data Access Gateway audit
 boundary. Overall `BLOCKED` exits non-zero. Missing evidence is shown explicitly
 with null receipt/release fields rather than being inferred as healthy.
 
+The scheduled ERP5 read-only audit also evaluates this health projection. Scheduled
+health uses the existing read-only WIF service account for Firestore reads and the
+private evidence bucket for Data Access audit events; it does not use the
+Firestore audit-write runtime.
+
+Repository Variables:
+
+- `SHEET_EVIDENCE_MAX_AGE_MINUTES` — required before scheduled health can be evaluated.
+- `SHEET_EVIDENCE_MAX_FUTURE_SKEW_SECONDS` — optional; defaults to zero when absent.
+
+If the maximum-age variable is not configured, the source audit continues but the
+Sheet health summary is explicitly recorded as `BLOCKED` with
+`SHEET_EVIDENCE_MAX_AGE_MINUTES_NOT_CONFIGURED`. A normal consumer `BLOCKED`
+health result is retained as operating evidence rather than causing the source
+audit itself to fail. Authentication/runtime failures still fail the workflow.
+
+
 Each durable record also carries an `evidenceDigest` that seals `recordedAt`,
 the validated expectation and the receipt itself. After a write, the recorder
 immediately re-reads the Firestore document and verifies the digest before
