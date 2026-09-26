@@ -101,7 +101,8 @@ export type VehicleMasterEvidenceIssue = {
     | 'RULE_GROUP_DUPLICATE'
     | 'RULE_GROUP_CONSTRAINT_CONFLICT'
     | 'RULE_DEPENDENCY_DUPLICATE'
-    | 'RULE_DEPENDENCY_CONFLICT';
+    | 'RULE_DEPENDENCY_CONFLICT'
+    | 'RULE_DEPENDENCY_TRANSITIVE_CONFLICT';
   fieldPath?: string;
   sourceDocumentId?: string;
   detail?: string;
@@ -461,6 +462,39 @@ function oppositeDependencyRuleType(
     (a === 'REQUIRES' && b === 'EXCLUDES') ||
     (a === 'EXCLUDES' && b === 'REQUIRES')
   );
+}
+
+type DependencyEdge = {
+  from: string;
+  to: string;
+  rule: VehicleMasterCompatibilityRule;
+};
+
+function dependencyEdges(
+  rules: readonly VehicleMasterCompatibilityRule[],
+  ruleType: 'REQUIRES' | 'EXCLUDES'
+): DependencyEdge[] {
+  return rules
+    .filter((rule) => rule.ruleType === ruleType)
+    .flatMap((rule) =>
+      rule.targetIds.map((to) => ({
+        from: rule.subjectId,
+        to,
+        rule,
+      }))
+    );
+}
+
+function rulesShareEffectiveWindow(
+  rules: readonly VehicleMasterCompatibilityRule[]
+) {
+  const start = Math.max(
+    ...rules.map((rule) => time(rule.effectiveFrom) ?? Number.NEGATIVE_INFINITY)
+  );
+  const end = Math.min(
+    ...rules.map((rule) => time(rule.effectiveTo) ?? Number.POSITIVE_INFINITY)
+  );
+  return start < end;
 }
 
 function modelYearValue(proposal: VehicleMasterNode): number | null {
@@ -1600,6 +1634,42 @@ export async function promoteVehicleMasterCompatibilityRule(
             code: 'RULE_DEPENDENCY_CONFLICT',
             fieldPath: `targetIds.${proposalTargetId}`,
             detail: existing.id,
+          });
+        }
+      }
+    }
+
+    const dependencyContext = [...existingDependencyRules, input.proposal];
+    const requiresEdges = dependencyEdges(dependencyContext, 'REQUIRES');
+    const excludesEdges = dependencyEdges(dependencyContext, 'EXCLUDES');
+    const transitiveConflictKeys = new Set<string>();
+
+    for (const first of requiresEdges) {
+      for (const second of requiresEdges) {
+        if (first.to !== second.from || first.from === second.to) continue;
+
+        for (const excluded of excludesEdges) {
+          const closesForward =
+            excluded.from === first.from &&
+            excluded.to === second.to;
+          const closesReverse =
+            excluded.from === second.to &&
+            excluded.to === first.from;
+          if (!closesForward && !closesReverse) continue;
+
+          const rules = [first.rule, second.rule, excluded.rule];
+          if (!rules.some((rule) => rule.id === input.proposal.id)) continue;
+          if (!rulesShareEffectiveWindow(rules)) continue;
+
+          const ids = rules.map((rule) => rule.id).sort();
+          const key = `${first.from}>${first.to}>${second.to}|${ids.join('|')}`;
+          if (transitiveConflictKeys.has(key)) continue;
+          transitiveConflictKeys.add(key);
+
+          issues.push({
+            code: 'RULE_DEPENDENCY_TRANSITIVE_CONFLICT',
+            fieldPath: `targetIds.${second.to}`,
+            detail: `${first.rule.id}>${second.rule.id}|${excluded.rule.id}`,
           });
         }
       }
