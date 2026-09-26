@@ -512,8 +512,7 @@ function selectionSubset(
     }
   };
 
-  for (const axis of AXES) {
-    if (!axes.has(axis) || !axisSelected(selection, axis)) continue;
+  for (const axis of axes) {
     switch (axis) {
       case 'maker':
         copy('makerId');
@@ -569,7 +568,7 @@ function facetMatchesSelection(
   if (
     'label' in selected &&
     hasText(selected.label) &&
-    !compact(option.label).includes(compact(selected.label))
+    !structuredLabelMatches(axis, compact(option.label), compact(selected.label))
   ) {
     return false;
   }
@@ -611,9 +610,7 @@ function matchesAxis(
     const expected = compact(selected.label);
     if (!actual) return { matched: false, unresolved: true, rejected: false };
 
-    const labelMatches = EXACT_STRUCTURED_LABEL_AXES.has(axis)
-      ? actual === expected
-      : actual.includes(expected);
+    const labelMatches = structuredLabelMatches(axis, actual, expected);
 
     if (!labelMatches) {
       return { matched: false, unresolved: false, rejected: true };
@@ -634,6 +631,17 @@ const EXACT_STRUCTURED_LABEL_AXES = new Set<VehicleSelectorAxis>([
   'fuelType',
   'drivetrain',
 ]);
+
+// Both callers pass compact labels; discovery and reconciliation share one policy.
+function structuredLabelMatches(
+  axis: VehicleSelectorAxis,
+  actual: string,
+  expected: string
+) {
+  return EXACT_STRUCTURED_LABEL_AXES.has(axis)
+    ? actual === expected
+    : actual.includes(expected);
+}
 
 type SearchTokenIntent = {
   token: string;
@@ -2087,7 +2095,6 @@ export function revalidateVehicleSelectionReceipt(
   const stillMatches = result.candidates.some(
     (candidate) => candidate.record.recordId === recordId
   );
-
   if (!stillMatches) {
     reasons.push('CURRENT_REQUEST_NO_LONGER_MATCHES');
   }
@@ -2104,5 +2111,4 @@ export function revalidateVehicleSelectionReceipt(
     result,
   };
 }
-
 
