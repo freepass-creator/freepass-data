@@ -347,3 +347,73 @@ describe('Vehicle Finder presented drilldown compatibility with F transition', (
     expect(transition.afterCandidateCount).toBeLessThan(2);
   });
 });
+
+
+describe('Vehicle Finder UNKNOWN / HOLD reason presentation', () => {
+  it('translates only F-owned candidate reason codes and preserves unresolved evidence', () => {
+    const partial = selectorRecordsFromUsedcarMaster([usedcar])[0]!;
+    const rows = [{
+      ...partial,
+      identityStatus: 'PARTIAL' as const,
+      seats: { id: null, label: null, value: null },
+    }];
+    const result = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      selection: { model: '쏘렌토', seats: 7 },
+    });
+    const candidate = result.candidates[0]!;
+    expect(candidate.action).toBe('INSPECT_ONLY');
+    expect(candidate.actionReasons).toEqual(
+      expect.arrayContaining(['IDENTITY_PARTIAL', 'UNRESOLVED_SELECTION']),
+    );
+
+    const view = presentVehicleSelectorResult({
+      result,
+      presentation: 'SEARCH_FILTER',
+      observation: {
+        id: 'obs-reason-unknown',
+        observedAt: '2026-09-26T10:00:00.000Z',
+        coverage: 'COMPLETE',
+      },
+      facets: [{ axis: 'seats', label: '인승', options: [] }],
+      displayByRecordId: display(partial.recordId, '기아 쏘렌토'),
+    });
+
+    expect(view.items[0]?.action.reasonDetails.map((item) => item.code))
+      .toEqual(candidate.actionReasons);
+    expect(view.items[0]?.unresolved.axes).toEqual([
+      { code: 'seats', label: '인승' },
+    ]);
+  });
+
+  it('keeps HOLD lifecycle/identity reasons visible as separate codes', () => {
+    const base = selectorRecordsFromUsedcarMaster([usedcar])[0]!;
+    const hold = {
+      ...base,
+      lifecycle: 'HOLD' as const,
+      identityStatus: 'HOLD' as const,
+    };
+    const result = selectVehicles([hold], {
+      mode: 'USED_CAR',
+      selection: { model: '쏘렌토' },
+      includeHold: true,
+    });
+    const view = presentVehicleSelectorResult({
+      result,
+      presentation: 'SEARCH_FILTER',
+      observation: {
+        id: 'obs-reason-hold',
+        observedAt: '2026-09-26T10:01:00.000Z',
+        coverage: 'COMPLETE',
+      },
+      facets: [],
+      displayByRecordId: display(hold.recordId, '기아 쏘렌토 HOLD'),
+    });
+
+    expect(view.items[0]?.action.code).toBe('BLOCKED');
+    expect(view.items[0]?.action.reasonDetails.map((item) => item.code))
+      .toEqual(expect.arrayContaining(['LIFECYCLE_HOLD', 'IDENTITY_HOLD']));
+    expect(view.items[0]?.action.reasonDetails.every((item) => item.nextStep.length > 0))
+      .toBe(true);
+  });
+});

@@ -115,6 +115,19 @@ export type VehicleFinderUiSnapshot = {
       code: VehicleSelectorAction;
       label: string;
       reasons: string[];
+      reasonDetails: Array<{
+        code: string;
+        title: string;
+        message: string;
+        nextStep: string;
+      }>;
+    };
+    unresolved: {
+      axes: Array<{
+        code: VehicleSelectorAxis;
+        label: string | null;
+      }>;
+      searchTokenCount: number;
     };
     listLines?: string[];
     facts: VehicleFinderUiFact[];
@@ -140,6 +153,47 @@ const ACTION_PRESENTATION: Record<VehicleSelectorAction, string> = {
   INSPECT_ONLY: '확인만 가능',
   BLOCKED: '선택 차단',
 };
+
+const ACTION_REASON_PRESENTATION: Record<
+  string,
+  { title: string; message: string; nextStep: string }
+> = {
+  IDENTITY_PARTIAL: {
+    title: '차량 식별 정보가 일부 미확정입니다',
+    message: 'F가 이 후보의 식별 상태를 PARTIAL로 판정했습니다.',
+    nextStep: '차종·세대·연식·트림 등 식별 근거를 추가로 확인해 주세요.',
+  },
+  UNRESOLVED_SELECTION: {
+    title: '선택 조건과 비교할 값이 일부 미확인입니다',
+    message: 'F가 입력 조건 중 하나 이상을 이 후보의 현재 자료로 확정하지 못했습니다.',
+    nextStep: '미확인 조건의 근거를 확인하거나 해당 조건을 비워 다시 비교해 주세요.',
+  },
+  UNRESOLVED_SEARCH: {
+    title: '검색어 일부가 이 후보 자료에서 확인되지 않습니다',
+    message: 'F가 검색어 일부를 직접 확인할 수 없는 상태로 판정했습니다.',
+    nextStep: '검색어를 줄이거나 후보의 상세 근거를 확인해 주세요.',
+  },
+  LIFECYCLE_HOLD: {
+    title: '차량 상태가 HOLD입니다',
+    message: 'F가 이 후보의 lifecycle을 HOLD로 판정했습니다.',
+    nextStep: '활성화 근거가 확인되기 전에는 선택하지 마세요.',
+  },
+  IDENTITY_HOLD: {
+    title: '차량 식별 상태가 HOLD입니다',
+    message: 'F가 이 후보의 identity 상태를 HOLD로 판정했습니다.',
+    nextStep: '식별 정보 정합성이 해소되기 전에는 선택하지 마세요.',
+  },
+};
+
+function presentActionReason(code: string) {
+  const known = ACTION_REASON_PRESENTATION[code];
+  return {
+    code,
+    title: known?.title ?? '추가 확인이 필요한 상태입니다',
+    message: known?.message ?? 'F가 이 후보에 추가 확인 사유를 반환했습니다.',
+    nextStep: known?.nextStep ?? '상세 근거와 원본 상태를 확인해 주세요.',
+  };
+}
 
 const NO_RESULT_PRESENTATION: Record<
   VehicleSelectorNoResultReason,
@@ -203,6 +257,8 @@ export function presentVehicleSelectorResult(
     ? NO_RESULT_PRESENTATION[input.result.guidance.noResultReason]
     : null;
 
+  const facetLabels = new Map(input.facets.map((facet) => [facet.axis, facet.label]));
+
   const items = input.result.candidates.map((candidate) => {
     const display = input.displayByRecordId[candidate.record.recordId];
     assertDisplay(display, candidate.record.recordId);
@@ -222,6 +278,14 @@ export function presentVehicleSelectorResult(
         code: candidate.action,
         label: ACTION_PRESENTATION[candidate.action],
         reasons: [...candidate.actionReasons],
+        reasonDetails: candidate.actionReasons.map(presentActionReason),
+      },
+      unresolved: {
+        axes: candidate.unresolvedAxes.map((axis) => ({
+          code: axis,
+          label: facetLabels.get(axis) ?? null,
+        })),
+        searchTokenCount: candidate.search.unresolvedTokens,
       },
       ...(display.listLines ? { listLines: [...display.listLines] } : {}),
       facts: structuredClone(display.facts),
@@ -235,7 +299,6 @@ export function presentVehicleSelectorResult(
     };
   });
 
-  const facetLabels = new Map(input.facets.map((facet) => [facet.axis, facet.label]));
   const groups = input.result.groups.map((group) => {
     const representative = input.displayByRecordId[group.representativeRecordId];
     assertDisplay(representative, group.representativeRecordId);

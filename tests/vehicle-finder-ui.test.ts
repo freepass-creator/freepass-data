@@ -149,6 +149,17 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).not.toMatch(/applyVehicleGroupDrilldown|applyVehicleGroupSelection/);
   });
 
+  it('explains UNKNOWN and HOLD using F-owned reason codes and unresolved axes', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    const css = await readFile(cssPath, 'utf8');
+    expect(source).toMatch(/item\.action\.reasonDetails/);
+    expect(source).toMatch(/item\.unresolved/);
+    expect(source).toMatch(/다음 확인/);
+    expect(source).toMatch(/vf-action-reason-code/);
+    expect(css).toMatch(/vf-unresolved-chip/);
+    expect(css).toMatch(/data-action='BLOCKED'/);
+  });
+
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
     const css = await readFile(cssPath, 'utf8');
     expect(css).toMatch(/grid-template-columns:3fr 7fr/);
