@@ -293,6 +293,123 @@ describe('common vehicle selector', () => {
     }).candidates).toHaveLength(0);
   });
 
+  it('rejects impossible cross-axis combinations from sibling records', () => {
+    const rows = [
+      record('pre-hybrid', {
+        phase: { id: 'phase_pre', label: '초기형' },
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        powertrain: { id: 'pt_hybrid_2021', label: '1.6 터보 하이브리드' },
+        trim: { id: 'trim_noblesse_2021', label: '노블레스' },
+      }),
+      record('fl-gasoline', {
+        phase: { id: 'phase_fl', label: '페이스리프트' },
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        powertrain: { id: 'pt_gasoline_2024', label: '2.5 가솔린 터보' },
+        trim: { id: 'trim_signature_2024', label: '시그니처' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      selection: {
+        phase: '페이스리프트',
+        modelYear: 2021,
+        powertrain: '하이브리드',
+      },
+    });
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.guidance.resolutionStatus).toBe('IMPOSSIBLE');
+    expect(result.guidance.resolvedRecordId).toBeNull();
+  });
+
+  it('resolves the same valid combination regardless of selection order', () => {
+    const rows = [
+      record('target'),
+      record('other', {
+        phase: { id: 'phase_pre', label: '초기형' },
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        powertrain: { id: 'pt_gasoline', label: '2.5 가솔린 터보' },
+        trim: { id: 'trim_signature', label: '시그니처' },
+      }),
+    ];
+
+    const a = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      selection: {
+        trim: '노블레스',
+        modelYear: 2027,
+        phase: '페이스리프트',
+        powertrain: '하이브리드',
+      },
+    });
+    const b = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      selection: {
+        powertrain: '하이브리드',
+        phase: '페이스리프트',
+        modelYear: 2027,
+        trim: '노블레스',
+      },
+    });
+
+    expect(a.candidates.map((x) => x.record.recordId)).toEqual(['target']);
+    expect(b.candidates.map((x) => x.record.recordId)).toEqual(['target']);
+    expect(a.guidance.resolutionStatus).toBe('RESOLVED');
+    expect(b.guidance.resolutionStatus).toBe('RESOLVED');
+  });
+
+  it('distinguishes ambiguity from unknown evidence without inventing facts', () => {
+    const ambiguous = selectVehicles([
+      record('noblesse'),
+      record('signature', {
+        trim: { id: 'trim_signature', label: '시그니처' },
+      }),
+    ], {
+      mode: 'NEW_CAR',
+      selection: { model: '쏘렌토' },
+    });
+
+    expect(ambiguous.guidance.resolutionStatus).toBe('AMBIGUOUS');
+
+    const partial = selectVehicles([
+      record('unknown-year', {
+        lifecycle: 'HISTORICAL',
+        identityStatus: 'PARTIAL',
+        modelYear: { id: null, label: null, value: null },
+      }),
+      record('known-wrong-year', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2020', label: '2020년형', value: 2020 },
+      }),
+    ], {
+      mode: 'USED_CAR',
+      selection: {
+        model: '쏘렌토',
+        modelYear: 2021,
+        powertrain: '하이브리드',
+      },
+    });
+
+    expect(partial.candidates.map((x) => x.record.recordId)).toEqual([
+      'unknown-year',
+    ]);
+    expect(partial.candidates[0]?.unresolvedAxes).toContain('modelYear');
+    expect(partial.guidance.resolutionStatus).toBe('PARTIAL_UNKNOWN');
+    expect(partial.guidance.resolvedRecordId).toBeNull();
+  });
+
+  it('reports OPEN before the user supplies any search criteria', () => {
+    const result = selectVehicles([
+      record('one'),
+      record('two', {
+        trim: { id: 'trim_signature', label: '시그니처' },
+      }),
+    ], { mode: 'NEW_CAR' });
+
+    expect(result.guidance.resolutionStatus).toBe('OPEN');
+  });
+
   it('keeps UX presets separate from selector semantics', () => {
     expect(VEHICLE_SELECTOR_UX_PRESETS.NEW_CAR.presentation).toBe('GUIDED');
     expect(VEHICLE_SELECTOR_UX_PRESETS.USED_CAR.presentation).toBe('SEARCH_FILTER');
