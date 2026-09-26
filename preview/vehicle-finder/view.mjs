@@ -29,6 +29,7 @@ function validateSnapshot(input) {
   if (!['COMPLETE', 'PARTIAL'].includes(input.coverage)) invalid('coverage');
   if (!Number.isSafeInteger(input.total) || input.total < 0 || typeof input.hasMore !== 'boolean') invalid('resultMeta');
   if (!Array.isArray(input.items)) invalid('items');
+  if (input.groups != null && !Array.isArray(input.groups)) invalid('groups');
   if (!Array.isArray(input.facets)) invalid('facets');
   const facetAxes = new Set();
   for (const facet of input.facets) {
@@ -81,6 +82,29 @@ function validateSnapshot(input) {
       if (!fact.unknown && !text(String(fact.value ?? ''))) invalid('factValue');
     }
   }
+
+  if (input.groups != null) {
+    const groupIds = new Set();
+    const groupedMembers = new Set();
+    for (const group of input.groups) {
+      if (!group || !text(group.id) || groupIds.has(group.id) ||
+          !text(group.label) || !text(group.representativeId) ||
+          !Array.isArray(group.memberIds) ||
+          !Number.isSafeInteger(group.candidateCount) || group.candidateCount < 1 ||
+          group.memberIds.length !== group.candidateCount ||
+          typeof group.expandable !== 'boolean') {
+        invalid('group');
+      }
+      groupIds.add(group.id);
+      if (!group.memberIds.includes(group.representativeId)) invalid('groupRepresentative');
+      for (const memberId of group.memberIds) {
+        if (!ids.has(memberId) || groupedMembers.has(memberId)) invalid('groupMember');
+        groupedMembers.add(memberId);
+      }
+    }
+    if (groupedMembers.size !== input.items.length) invalid('groupCoverage');
+  }
+
   return structuredClone(input);
 }
 
@@ -125,6 +149,7 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
   let inspectedId = null;
   let lastInspectedId = null;
   let listScrollY = 0;
+  const expandedGroupIds = new Set();
   let requestSeq = 0;
   let disposed = false;
   let filterLock = null;
@@ -593,6 +618,101 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     detail.querySelector('h2')?.focus?.({ preventScroll: false });
   }
 
+  function candidateRow(item) {
+    const row = element('tr');
+    row.classList.add('vf-candidate-row');
+    row.dataset.selected = String(item.id === inspectedId);
+    row.dataset.recent = String(item.id === lastInspectedId && item.id !== inspectedId);
+
+    const nameCell = element('td');
+    const button = element('button', 'vf-row-button');
+    button.type = 'button';
+    button.dataset.entryId = item.id;
+    button.setAttribute('aria-expanded', String(item.id === inspectedId));
+    button.setAttribute('aria-controls', detail.id);
+    button.setAttribute('aria-label', item.pathText);
+    button.append(element('span', 'vf-row-title', item.label));
+    const listLines = item.listLines ?? [];
+    if (listLines.length) {
+      const summary = element('span', 'vf-row-summary');
+      for (const line of listLines) {
+        summary.append(element('span', 'vf-row-summary-line', line));
+      }
+      button.append(summary);
+    } else {
+      const context = item.pathText === item.label ? '' : item.pathText;
+      if (context) button.append(element('span', 'vf-row-path', context));
+    }
+    if (item.id === lastInspectedId && item.id !== inspectedId) {
+      button.append(element('span', 'vf-row-recent', '방금 본 후보'));
+    }
+    listen(button, 'click', () => inspect(item.id));
+    nameCell.append(button);
+
+    const stateCell = element('td');
+    const stateMeta = element('div', 'vf-row-state');
+    stateMeta.append(stateBadge(item), element('span', 'vf-state-code', item.state.code));
+    stateCell.append(stateMeta);
+    row.append(nameCell, stateCell);
+    return row;
+  }
+
+  function groupRow(group) {
+    const row = element('tr', 'vf-group-row');
+    const cell = element('td');
+    cell.colSpan = 2;
+
+    const button = element('button', 'vf-group-button');
+    button.type = 'button';
+    button.dataset.groupId = group.id;
+    const expanded = expandedGroupIds.has(group.id);
+    button.setAttribute('aria-expanded', String(expanded));
+
+    const main = element('span', 'vf-group-main');
+    main.append(
+      element('strong', 'vf-group-title', group.label),
+      element('span', 'vf-group-count', group.candidateCount + '개 후보'),
+    );
+    if (group.context) {
+      main.append(element('span', 'vf-group-context', group.context));
+    }
+
+    const meta = element('span', 'vf-group-meta');
+    if (group.selectableCount) {
+      meta.append(element('span', 'vf-group-stat', '선택 ' + group.selectableCount));
+    }
+    if (group.inspectOnlyCount) {
+      meta.append(element('span', 'vf-group-stat', '확인 ' + group.inspectOnlyCount));
+    }
+    if (group.blockedCount) {
+      meta.append(element('span', 'vf-group-stat', '보류 ' + group.blockedCount));
+    }
+    if (group.suggestedDrilldownLabel) {
+      meta.append(
+        element('span', 'vf-group-next', '먼저 보기 · ' + group.suggestedDrilldownLabel),
+      );
+    }
+
+    const disclosure = element(
+      'span',
+      'vf-group-disclosure',
+      expanded ? '접기' : '후보 보기',
+    );
+    button.append(main, meta, disclosure);
+    listen(button, 'click', () => {
+      if (expandedGroupIds.has(group.id)) expandedGroupIds.delete(group.id);
+      else expandedGroupIds.add(group.id);
+      renderRows();
+      root.querySelector(
+        '[data-group-id="' + CSS.escape(group.id) + '"]',
+      )?.focus({ preventScroll: true });
+    });
+
+    cell.append(button);
+    row.append(cell);
+    return row;
+  }
+
   function renderRows() {
     tbody.replaceChildren();
     if (!snapshot) return;
@@ -618,42 +738,33 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
       );
     }
 
-    for (const item of snapshot.items) {
-      const row = element('tr');
-      row.dataset.selected = String(item.id === inspectedId);
-      row.dataset.recent = String(item.id === lastInspectedId && item.id !== inspectedId);
+    const itemsById = new Map(snapshot.items.map((item) => [item.id, item]));
+    const groups = snapshot.groups ?? [];
 
-      const nameCell = element('td');
-      const button = element('button', 'vf-row-button');
-      button.type = 'button';
-      button.dataset.entryId = item.id;
-      button.setAttribute('aria-expanded', String(item.id === inspectedId));
-      button.setAttribute('aria-controls', detail.id);
-      button.setAttribute('aria-label', item.pathText);
-      button.append(element('span', 'vf-row-title', item.label));
-      const listLines = item.listLines ?? [];
-      if (listLines.length) {
-        const summary = element('span', 'vf-row-summary');
-        for (const line of listLines) {
-          summary.append(element('span', 'vf-row-summary-line', line));
-        }
-        button.append(summary);
-      } else {
-        const context = item.pathText === item.label ? '' : item.pathText;
-        if (context) button.append(element('span', 'vf-row-path', context));
-      }
-      if (item.id === lastInspectedId && item.id !== inspectedId) {
-        button.append(element('span', 'vf-row-recent', '방금 본 후보'));
-      }
-      listen(button, 'click', () => inspect(item.id));
-      nameCell.append(button);
+    if (!groups.length) {
+      for (const item of snapshot.items) tbody.append(candidateRow(item));
+      return;
+    }
 
-      const stateCell = element('td');
-      const stateMeta = element('div', 'vf-row-state');
-      stateMeta.append(stateBadge(item), element('span', 'vf-state-code', item.state.code));
-      stateCell.append(stateMeta);
-      row.append(nameCell, stateCell);
-      tbody.append(row);
+    for (const group of groups) {
+      const members = group.memberIds
+        .map((id) => itemsById.get(id))
+        .filter(Boolean);
+
+      if (!group.expandable || group.candidateCount === 1) {
+        if (members[0]) tbody.append(candidateRow(members[0]));
+        continue;
+      }
+
+      tbody.append(groupRow(group));
+      if (!expandedGroupIds.has(group.id)) continue;
+
+      for (const member of members) {
+        const row = candidateRow(member);
+        row.classList.add('vf-group-member');
+        row.dataset.groupId = group.id;
+        tbody.append(row);
+      }
     }
   }
 
@@ -682,6 +793,12 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     if (inspectedId && !snapshot.items.some(item => item.id === inspectedId)) closeDetail(false);
     if (lastInspectedId && !snapshot.items.some(item => item.id === lastInspectedId)) {
       lastInspectedId = null;
+    }
+    if (snapshot.groups) {
+      const validGroupIds = new Set(snapshot.groups.map((group) => group.id));
+      for (const groupId of expandedGroupIds) {
+        if (!validGroupIds.has(groupId)) expandedGroupIds.delete(groupId);
+      }
     }
   }
 
@@ -768,6 +885,7 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     inspectedId = null;
     lastInspectedId = null;
     listScrollY = 0;
+    expandedGroupIds.clear();
     snapshot = null;
     input.value = '';
     detail.hidden = true;

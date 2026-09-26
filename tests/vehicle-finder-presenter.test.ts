@@ -181,3 +181,68 @@ describe('Vehicle Finder presenter over actual selector result', () => {
     ).toThrow('MISSING_VEHICLE_FINDER_DISPLAY');
   });
 });
+
+
+describe('Vehicle Finder presenter candidate groups', () => {
+  it('preserves F-owned group membership, counts and suggested drilldown', () => {
+    const adapted = selectorRecordsFromUsedcarMaster([usedcar])[0]!;
+    const base = {
+      ...adapted,
+      maker: { id: 'maker_kia', label: '기아' },
+    };
+    const second = {
+      ...base,
+      recordId: 'used_sorento_signature_2024',
+      modelYear: { id: 'my_2024', label: '2024', value: 2024 },
+      trim: { id: 'trim_signature_2024', label: '시그니처' },
+    };
+    const result = selectVehicles([base, second], {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+    });
+    const group = result.groups[0]!;
+    expect(group.candidateCount).toBe(2);
+    expect(group.expandable).toBe(true);
+
+    const view = presentVehicleSelectorResult({
+      result,
+      presentation: 'SEARCH_FILTER',
+      observation: {
+        id: 'obs-group-1',
+        observedAt: '2026-09-26T08:04:00.000Z',
+        coverage: 'COMPLETE',
+      },
+      facets: [
+        {
+          axis: 'modelYear',
+          label: '연식',
+          options: [
+            { key: 'my_2021', label: '2021', count: 1 },
+            { key: 'my_2024', label: '2024', count: 1 },
+          ],
+        },
+        {
+          axis: 'trim',
+          label: '트림',
+          options: [
+            { key: 'trim_noblesse_2021', label: '노블레스', count: 1 },
+            { key: 'trim_signature_2024', label: '시그니처', count: 1 },
+          ],
+        },
+      ],
+      displayByRecordId: {
+        ...display(base.recordId, '쏘렌토 · 노블레스'),
+        ...display(second.recordId, '쏘렌토 · 시그니처'),
+      },
+    });
+
+    expect(view.groups).toHaveLength(1);
+    expect(view.groups[0]?.memberIds).toEqual(group.memberRecordIds);
+    expect(view.groups[0]?.candidateCount).toBe(group.candidateCount);
+    expect(view.groups[0]?.representativeId).toBe(group.representativeRecordId);
+    expect(view.groups[0]?.suggestedDrilldownAxis).toBe(group.suggestedDrilldownAxis);
+    if (group.suggestedDrilldownAxis === 'modelYear') {
+      expect(view.groups[0]?.suggestedDrilldownLabel).toBe('연식');
+    }
+  });
+});

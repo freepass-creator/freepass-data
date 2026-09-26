@@ -125,6 +125,19 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).toMatch(/snapshot\.guidance\.noResultMessage/);
   });
 
+  it('renders F-owned candidate groups without recomputing membership', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    const css = await readFile(cssPath, 'utf8');
+    expect(source).toMatch(/snapshot\.groups \?\? \[\]/);
+    expect(source).toMatch(/group\.memberIds/);
+    expect(source).toMatch(/group\.candidateCount/);
+    expect(source).toMatch(/group\.suggestedDrilldownLabel/);
+    expect(source).toMatch(/expandedGroupIds/);
+    expect(source).not.toMatch(/model-generation:|UNRESOLVED_IDENTITY.*groupId/);
+    expect(css).toMatch(/vf-group-button/);
+    expect(css).toMatch(/vf-group-member/);
+  });
+
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
     const css = await readFile(cssPath, 'utf8');
     expect(css).toMatch(/grid-template-columns:3fr 7fr/);

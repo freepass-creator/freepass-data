@@ -710,3 +710,85 @@
 .vf .vf-action-reasons strong{font-size:var(--vf-support)}
 .vf .vf-action-reasons ul{margin:6px 0 0;padding-left:18px}
 .vf .vf-action-reasons li{margin:3px 0;color:var(--text,#5F6974)}
+
+
+/* U-01 F-owned candidate group presentation */
+.vf .vf-group-row td{padding:8px 0;border-bottom:0}
+.vf .vf-group-button{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto auto;
+  gap:10px 14px;
+  width:100%;
+  min-height:64px;
+  padding:11px 12px;
+  background:var(--vf-soft);
+  color:var(--vf-ink);
+  text-align:left;
+  border-radius:var(--vf-card-radius)
+}
+.vf .vf-group-main{display:grid;gap:2px;min-width:0}
+.vf .vf-group-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vf .vf-group-count,.vf .vf-group-context{
+  color:var(--text,#5F6974);
+  font-size:var(--vf-support)
+}
+.vf .vf-group-meta{
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  align-items:center;
+  gap:5px
+}
+.vf .vf-group-stat,.vf .vf-group-next{
+  display:inline-flex;
+  min-height:22px;
+  align-items:center;
+  padding:2px 7px;
+  border-radius:999px;
+  background:var(--vf-bg);
+  color:var(--text,#5F6974);
+  font-size:10px;
+  font-weight:700
+}
+.vf .vf-group-next{color:var(--vf-brand)}
+.vf .vf-group-disclosure{
+  align-self:center;
+  color:var(--vf-brand);
+  font-size:var(--vf-support);
+  font-weight:750;
+  white-space:nowrap
+}
+.vf .vf-group-member td:first-child{padding-left:24px}
+.vf .vf-group-member .vf-row-button{position:relative}
+.vf .vf-group-member .vf-row-button::before{
+  content:'';
+  position:absolute;
+  left:-13px;
+  top:12px;
+  bottom:12px;
+  width:2px;
+  border-radius:2px;
+  background:var(--vf-line-strong,var(--vf-line))
+}
+
+@media(max-width:900px){
+  .vf .vf-group-row{
+    display:block;
+    min-height:0;
+    padding:0;
+    border:0;
+    background:transparent
+  }
+  .vf .vf-group-row td{padding:0;border:0}
+  .vf .vf-group-button{
+    grid-template-columns:minmax(0,1fr) auto;
+    gap:7px 10px;
+    min-height:72px;
+    padding:11px 12px
+  }
+  .vf .vf-group-meta{grid-column:1/-1;justify-content:flex-start}
+  .vf .vf-group-disclosure{grid-column:2;grid-row:1}
+  .vf .vf-group-member{margin-left:12px;width:calc(100% - 12px)}
+  .vf .vf-group-member td:first-child{padding-left:10px}
+  .vf .vf-group-member .vf-row-button::before{left:-8px}
+}

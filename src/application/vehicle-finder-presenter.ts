@@ -74,6 +74,21 @@ export type VehicleFinderUiSnapshot = {
   hasMore: boolean;
   excludedUnknownFacetCount?: number;
   facets: VehicleFinderUiFacet[];
+  groups: Array<{
+    id: string;
+    scope: VehicleSelectorResult['groups'][number]['scope'];
+    label: string;
+    context: string | null;
+    representativeId: string;
+    memberIds: string[];
+    candidateCount: number;
+    selectableCount: number;
+    inspectOnlyCount: number;
+    blockedCount: number;
+    expandable: boolean;
+    suggestedDrilldownAxis: VehicleSelectorAxis | null;
+    suggestedDrilldownLabel: string | null;
+  }>;
   items: Array<{
     id: string;
     label: string;
@@ -208,6 +223,38 @@ export function presentVehicleSelectorResult(
     };
   });
 
+  const facetLabels = new Map(input.facets.map((facet) => [facet.axis, facet.label]));
+  const groups = input.result.groups.map((group) => {
+    const representative = input.displayByRecordId[group.representativeRecordId];
+    assertDisplay(representative, group.representativeRecordId);
+
+    const label =
+      group.model.label?.trim() ||
+      representative.label;
+    const contextParts = [
+      group.maker.label?.trim() || null,
+      group.generation.label?.trim() || null,
+    ].filter((value): value is string => Boolean(value));
+
+    return {
+      id: group.groupId,
+      scope: group.scope,
+      label,
+      context: contextParts.length ? contextParts.join(' · ') : null,
+      representativeId: group.representativeRecordId,
+      memberIds: [...group.memberRecordIds],
+      candidateCount: group.candidateCount,
+      selectableCount: group.selectableCount,
+      inspectOnlyCount: group.inspectOnlyCount,
+      blockedCount: group.blockedCount,
+      expandable: group.expandable,
+      suggestedDrilldownAxis: group.suggestedDrilldownAxis,
+      suggestedDrilldownLabel: group.suggestedDrilldownAxis
+        ? facetLabels.get(group.suggestedDrilldownAxis) ?? null
+        : null,
+    };
+  });
+
   return {
     schemaVersion: VEHICLE_FINDER_UI_SCHEMA,
     mode: input.result.mode,
@@ -231,6 +278,7 @@ export function presentVehicleSelectorResult(
       ? {}
       : { excludedUnknownFacetCount: input.excludedUnknownFacetCount }),
     facets: structuredClone(input.facets),
+    groups,
     items,
   };
 }
