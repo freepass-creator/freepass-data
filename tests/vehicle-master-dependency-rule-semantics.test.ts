@@ -31,6 +31,7 @@ type Seeded = {
   optionA: VehicleMasterNode;
   optionB: VehicleMasterNode;
   optionC: VehicleMasterNode;
+  optionD: VehicleMasterNode;
 };
 
 async function seedSource(store: MemoryVehicleMasterStore) {
@@ -263,6 +264,22 @@ async function seed(store: MemoryVehicleMasterStore): Promise<Seeded> {
     createdAt: observedAt,
     updatedAt: observedAt,
   });
+  const optionD = sealVehicleMasterNode({
+    id: 'opt_dependency_d',
+    nodeType: 'OPTION',
+    status: 'ACTIVE',
+    revision: 1,
+    canonicalName: '옵션 D',
+    parentId: modelYear.id,
+    refs: optionRefs,
+    aliases: [],
+    attributes: {},
+    sourceEvidenceIds: [sourceDocumentId],
+    effectiveFrom: null,
+    effectiveTo: null,
+    createdAt: observedAt,
+    updatedAt: observedAt,
+  });
 
   for (const node of [
     make,
@@ -277,6 +294,7 @@ async function seed(store: MemoryVehicleMasterStore): Promise<Seeded> {
     optionA,
     optionB,
     optionC,
+    optionD,
   ]) {
     await store.putNode(node);
   }
@@ -294,6 +312,7 @@ async function seed(store: MemoryVehicleMasterStore): Promise<Seeded> {
     optionA,
     optionB,
     optionC,
+    optionD,
   };
 }
 
@@ -579,6 +598,194 @@ describe('vehicle master direct dependency-rule semantics', () => {
       targetId: s.optionC.id,
       trimId: s.trimA.id,
       ruleType: 'EXCLUDES',
+    }));
+
+    expect(result.decision.status).toBe('APPROVED');
+    expect(result.canonicalWrite).toBe('CREATED');
+  });
+
+  it('allows a pure REQUIRES cycle without exclusions', async () => {
+    const store = new MemoryVehicleMasterStore();
+    await seedSource(store);
+    const s = await seed(store);
+
+    await store.putCompatibilityRule(rule({
+      id: 'rule_cycle_a_b',
+      subjectId: s.optionA.id,
+      targetId: s.optionB.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+    }));
+    await store.putCompatibilityRule(rule({
+      id: 'rule_cycle_b_c',
+      subjectId: s.optionB.id,
+      targetId: s.optionC.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+    }));
+
+    const result = await promote(store, rule({
+      id: 'rule_cycle_c_a',
+      subjectId: s.optionC.id,
+      targetId: s.optionA.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+    }));
+
+    expect(result.decision.status).toBe('APPROVED');
+    expect(result.canonicalWrite).toBe('CREATED');
+  });
+
+  it('keeps a REQUIRES cycle on HOLD when the cycle contains an EXCLUDES relation', async () => {
+    const store = new MemoryVehicleMasterStore();
+    await seedSource(store);
+    const s = await seed(store);
+
+    await store.putCompatibilityRule(rule({
+      id: 'rule_cycle_a_b_existing',
+      subjectId: s.optionA.id,
+      targetId: s.optionB.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+    }));
+    await store.putCompatibilityRule(rule({
+      id: 'rule_cycle_b_c_existing',
+      subjectId: s.optionB.id,
+      targetId: s.optionC.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+    }));
+    await store.putCompatibilityRule(rule({
+      id: 'rule_cycle_c_d_existing',
+      subjectId: s.optionC.id,
+      targetId: s.optionD.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+    }));
+    await store.putCompatibilityRule(rule({
+      id: 'rule_cycle_a_excludes_c_existing',
+      subjectId: s.optionA.id,
+      targetId: s.optionC.id,
+      trimId: s.trimA.id,
+      ruleType: 'EXCLUDES',
+    }));
+
+    const result = await promote(store, rule({
+      id: 'rule_cycle_d_a_new',
+      subjectId: s.optionD.id,
+      targetId: s.optionA.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+    }));
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'RULE_DEPENDENCY_CYCLE_CONFLICT',
+        fieldPath: `targetIds.${s.optionA.id}`,
+        detail: expect.stringContaining('rule_cycle_a_excludes_c_existing'),
+      }),
+    ]));
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps a new EXCLUDES rule on HOLD when both endpoints are inside one REQUIRES cycle', async () => {
+    const store = new MemoryVehicleMasterStore();
+    await seedSource(store);
+    const s = await seed(store);
+
+    for (const proposal of [
+      rule({
+        id: 'rule_cycle2_a_b',
+        subjectId: s.optionA.id,
+        targetId: s.optionB.id,
+        trimId: s.trimA.id,
+        ruleType: 'REQUIRES',
+      }),
+      rule({
+        id: 'rule_cycle2_b_c',
+        subjectId: s.optionB.id,
+        targetId: s.optionC.id,
+        trimId: s.trimA.id,
+        ruleType: 'REQUIRES',
+      }),
+      rule({
+        id: 'rule_cycle2_c_d',
+        subjectId: s.optionC.id,
+        targetId: s.optionD.id,
+        trimId: s.trimA.id,
+        ruleType: 'REQUIRES',
+      }),
+      rule({
+        id: 'rule_cycle2_d_a',
+        subjectId: s.optionD.id,
+        targetId: s.optionA.id,
+        trimId: s.trimA.id,
+        ruleType: 'REQUIRES',
+      }),
+    ]) {
+      await store.putCompatibilityRule(proposal);
+    }
+
+    const result = await promote(store, rule({
+      id: 'rule_cycle2_a_excludes_d',
+      subjectId: s.optionA.id,
+      targetId: s.optionD.id,
+      trimId: s.trimA.id,
+      ruleType: 'EXCLUDES',
+    }));
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'RULE_DEPENDENCY_CYCLE_CONFLICT',
+        fieldPath: `targetIds.${s.optionD.id}`,
+      }),
+    ]));
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('allows a cycle-shaped history when the cycle and exclusion never share one time window', async () => {
+    const store = new MemoryVehicleMasterStore();
+    await seedSource(store);
+    const s = await seed(store);
+
+    await store.putCompatibilityRule(rule({
+      id: 'rule_cycle_time_a_b',
+      subjectId: s.optionA.id,
+      targetId: s.optionB.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+      effectiveFrom: '2025-01-01T00:00:00.000Z',
+      effectiveTo: '2026-01-01T00:00:00.000Z',
+    }));
+    await store.putCompatibilityRule(rule({
+      id: 'rule_cycle_time_b_c',
+      subjectId: s.optionB.id,
+      targetId: s.optionC.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+      effectiveFrom: '2025-01-01T00:00:00.000Z',
+      effectiveTo: '2026-01-01T00:00:00.000Z',
+    }));
+    await store.putCompatibilityRule(rule({
+      id: 'rule_cycle_time_a_excludes_c',
+      subjectId: s.optionA.id,
+      targetId: s.optionC.id,
+      trimId: s.trimA.id,
+      ruleType: 'EXCLUDES',
+      effectiveFrom: '2026-01-01T00:00:00.000Z',
+      effectiveTo: null,
+    }));
+
+    const result = await promote(store, rule({
+      id: 'rule_cycle_time_c_a',
+      subjectId: s.optionC.id,
+      targetId: s.optionA.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+      effectiveFrom: '2025-01-01T00:00:00.000Z',
+      effectiveTo: '2026-01-01T00:00:00.000Z',
     }));
 
     expect(result.decision.status).toBe('APPROVED');
