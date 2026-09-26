@@ -216,6 +216,35 @@ describe('vehicle master supplemental identity', () => {
     expect(result.canonicalWrite).toBeNull();
   });
 
+  it('keeps duplicate BASE_ITEM identity on HOLD within one MODEL_YEAR', async () => {
+    const store = new MemoryVehicleMasterStore();
+    await seedSource(store);
+    const lineage = await seedLineage(store, 'base', 2027);
+
+    await store.putNode(supplemental(
+      'base_led_existing',
+      'BASE_ITEM',
+      'LED 헤드램프',
+      lineage
+    ));
+
+    const result = await promote(store, supplemental(
+      'base_led_duplicate',
+      'BASE_ITEM',
+      'LED-헤드램프',
+      lineage
+    ));
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'SUPPLEMENTAL_DUPLICATE_IN_MODEL_YEAR',
+        detail: 'base_led_existing',
+      }),
+    ]));
+    expect(result.canonicalWrite).toBeNull();
+  });
+
   it('uses explicit aliases when detecting supplemental duplicates', async () => {
     const store = new MemoryVehicleMasterStore();
     await seedSource(store);
@@ -298,11 +327,33 @@ describe('vehicle master supplemental identity', () => {
     expect(result.canonicalWrite).toBe('CREATED');
   });
 
-  it('allows the same supplemental identity in a different MODEL_YEAR', async () => {
+  it('allows the same supplemental identity in a different MODEL_YEAR of one PHASE', async () => {
     const store = new MemoryVehicleMasterStore();
     await seedSource(store);
-    const lineage2026 = await seedLineage(store, 'year26', 2026);
-    const lineage2027 = await seedLineage(store, 'year27', 2027);
+    const lineage2026 = await seedLineage(store, 'samephase', 2026);
+    const modelYear2027 = sealVehicleMasterNode({
+      id: 'my_samephase_2027',
+      nodeType: 'MODEL_YEAR',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '2027년형',
+      parentId: lineage2026.phase.id,
+      refs: {
+        makeId: lineage2026.make.id,
+        modelId: lineage2026.model.id,
+        generationId: lineage2026.generation.id,
+        phaseId: lineage2026.phase.id,
+      },
+      aliases: ['2027MY'],
+      attributes: { modelYear: 2027 },
+      sourceEvidenceIds: [sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(modelYear2027);
+    const lineage2027 = { ...lineage2026, modelYear: modelYear2027 };
 
     await store.putNode(supplemental(
       'opt_year26',
