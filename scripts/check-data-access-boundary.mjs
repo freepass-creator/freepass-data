@@ -106,6 +106,8 @@ const requiredGatewayUsage = new Map([
   ['src/api/consumer-gateway.ts', ['access.read(', 'access.deny(']],
   ['src/api/server.ts', ['stores.access.read(', 'stores.access.write(', 'stores.access.deny(']],
   ['src/jobs/ingest-legacy-products.ts', ['runtime.readLegacySnapshot(', 'runtime.ingestLegacySnapshot(']],
+  ['src/jobs/ingest-erp5-source.ts', ['readRuntime.capture(', 'writeRuntime.ingestRawBatch(']],
+  ['src/jobs/ingest-settlement-source.ts', ['runtime.ingestRawBatch(']],
   ['src/jobs/inspect-erp5-source.ts', ['runtime.capture(']],
   ['src/jobs/prepare-sheet-publication-bridge.ts', ['runtime.prepare(']],
   ['src/jobs/record-sheet-delivery-evidence.ts', ['runtime.record(']],
