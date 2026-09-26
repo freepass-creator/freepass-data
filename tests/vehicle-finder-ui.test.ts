@@ -14,7 +14,7 @@ describe('U-01 vehicle finder presentation boundary', () => {
   it('stays presentation-only and has valid module syntax', async () => {
     const source = await readFile(viewPath, 'utf8');
     expect(source).not.toMatch(/core\.mjs|searchEntries|partialSelection|NODE_TYPES|Canonical/);
-    expect(source).toMatch(/await read\(\{ mode, query, filters:/);
+    expect(source).toMatch(/await read\(\{[\s\S]*?mode,[\s\S]*?query,[\s\S]*?filters:/);
     expect(() => execFileSync(process.execPath, ['--check', viewPath])).not.toThrow();
   });
 
@@ -41,7 +41,7 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).toMatch(/input\.presentation/);
     expect(source).toMatch(/snapshot\.guidance\.resolutionStatus/);
     expect(source).toMatch(/snapshot\.guidance\.suggestedNextAxis/);
-    expect(source).toMatch(/read\(\{ mode, query, filters:/);
+    expect(source).toMatch(/read\(\{[\s\S]*?mode,[\s\S]*?query,[\s\S]*?filters:/);
     expect(source).not.toMatch(/VEHICLE_SELECTOR_UX_PRESETS|preferredAxisOrder|hiddenByDefault|facetLabels/);
   });
 
