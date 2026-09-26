@@ -499,6 +499,14 @@ try:
         expect(mobile.get_by_role("button", name="확인만 가능")).to_be_disabled()
         expect(mobile.get_by_text("최종 확정 전 검토")).to_have_count(0)
         expect(mobile.locator(".vf-detail h2")).to_be_focused()
+
+        inspected_button = mobile.locator(".vf-group-member").nth(3).get_by_role("button")
+        mobile.keyboard.press("Escape")
+        expect(mobile.locator(".vf-detail")).to_be_hidden()
+        expect(inspected_button).to_be_focused()
+        mobile.keyboard.press("Enter")
+        expect(mobile.locator(".vf-detail h2")).to_be_focused()
+
         back_box = mobile.get_by_role("button", name="목록으로").bounding_box()
         primary_box = mobile.get_by_role("button", name="확인만 가능").bounding_box()
         assert back_box and primary_box
