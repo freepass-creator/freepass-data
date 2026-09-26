@@ -52,6 +52,17 @@ export type VehicleMasterGraphSnapshot = {
   pipelineRecords?: readonly VehicleMasterPipelineRecord[];
 };
 
+const PIPELINE_KINDS: readonly VehicleMasterPipelineRecord['kind'][] = [
+  'RAW_RECORD',
+  'NORMALIZED_RECORD',
+  'CANDIDATE_FACT',
+  'EVIDENCE_SET',
+  'REVISION_CANDIDATE',
+  'PROMOTION_RESULT',
+  'CHANGE_EVENT',
+  'AUDIT_REPORT',
+];
+
 const NODE_TYPES: readonly VehicleMasterNodeType[] = [
   'MAKE',
   'MODEL',
@@ -1884,19 +1895,17 @@ function auditPipelineIntegrity(
     revisionByEvidenceSet.set(evidenceSetId, list);
   }
 
-  if (sourceById) {
-    for (const evidence of evidenceSets) {
-      const ids = pipelinePayloadStringArray(evidence, 'evidenceDocumentIds');
-      if (!ids) {
-        add(issues, {
-          code: 'PIPELINE_EVIDENCE_DOCUMENT_IDS_INVALID',
-          severity: 'ERROR',
-          entityKind: 'PIPELINE',
-          entityId: `${evidence.kind}:${evidence.recordId}`,
-          fieldPath: 'payload.evidenceDocumentIds',
-        });
-        continue;
-      }
+  for (const evidence of evidenceSets) {
+    const ids = pipelinePayloadStringArray(evidence, 'evidenceDocumentIds');
+    if (!ids) {
+      add(issues, {
+        code: 'PIPELINE_EVIDENCE_DOCUMENT_IDS_INVALID',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${evidence.kind}:${evidence.recordId}`,
+        fieldPath: 'payload.evidenceDocumentIds',
+      });
+    } else if (sourceById) {
       for (const sourceId of [...new Set(ids)].sort()) {
         if (sourceById.has(sourceId)) continue;
         add(issues, {
@@ -1908,14 +1917,15 @@ function auditPipelineIntegrity(
           relatedId: sourceId,
         });
       }
-      if (!(revisionByEvidenceSet.get(evidence.recordId)?.length)) {
-        add(issues, {
-          code: 'PIPELINE_EVIDENCE_SET_ORPHAN',
-          severity: 'ERROR',
-          entityKind: 'PIPELINE',
-          entityId: `${evidence.kind}:${evidence.recordId}`,
-        });
-      }
+    }
+
+    if (!(revisionByEvidenceSet.get(evidence.recordId)?.length)) {
+      add(issues, {
+        code: 'PIPELINE_EVIDENCE_SET_ORPHAN',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${evidence.kind}:${evidence.recordId}`,
+      });
     }
   }
 
@@ -2015,6 +2025,22 @@ export function auditVehicleMasterGraph(
   auditNodeSemantics(nodes, issues);
   auditRules(rules, nodes, issues);
   auditPrices(prices, nodes, issues);
+  auditCanonicalEvidenceAndDigests(input, issues);
+  auditRevisionHistory(
+    nodes,
+    input.nodeRevisions,
+    'NODE',
+    input.sources,
+    issues
+  );
+  auditRevisionHistory(
+    rules,
+    input.ruleRevisions,
+    'RULE',
+    input.sources,
+    issues
+  );
+  auditPipelineIntegrity(input.pipelineRecords, input.sources, issues);
 
   const sortedIssues = issues.sort(issueSort);
   const errors = sortedIssues.filter((issue) => issue.severity === 'ERROR').length;
@@ -2041,14 +2067,31 @@ export async function auditVehicleMasterStore(
   const nodeGroups = await Promise.all(
     NODE_TYPES.map((nodeType) => store.listNodesByType(nodeType))
   );
-  const [rules, prices] = await Promise.all([
+  const [
+    rules,
+    prices,
+    sources,
+    nodeRevisions,
+    ruleRevisions,
+    pipelineGroups,
+  ] = await Promise.all([
     store.listCompatibilityRules(),
     store.listPriceRevisions(),
+    store.listSourceDocuments(),
+    store.listNodeRevisions(),
+    store.listCompatibilityRuleRevisions(),
+    Promise.all(
+      PIPELINE_KINDS.map((kind) => store.listPipelineRecordsByKind(kind))
+    ),
   ]);
 
   return auditVehicleMasterGraph({
     nodes: nodeGroups.flat(),
     rules,
     prices,
+    sources,
+    nodeRevisions,
+    ruleRevisions,
+    pipelineRecords: pipelineGroups.flat(),
   });
 }
