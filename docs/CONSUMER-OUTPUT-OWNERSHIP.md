@@ -290,7 +290,7 @@ npm run check:consumer-health -- \
 The check is read-only with respect to Canonical/consumer data and is itself
 audited through the Data Access Gateway.
 
-The 2-hour ERP5 continuous audit now runs this unified report before the dedicated
+The hourly ERP5 continuous audit now runs this unified report before the dedicated
 F01/F86 health detail. Scheduled mode uses the existing read-only WIF identity for
 Firestore reads and the private GCS evidence bucket for the health check's own
 Data Access audit event, so it does not require Firestore audit-write permission.
@@ -342,7 +342,7 @@ npm run check:consumer-readiness -- \
 
 The command is read-only and audited through the Data Access Gateway.
 
-The 2-hour ERP5 continuous audit also runs Consumer Readiness immediately after
+The hourly ERP5 continuous audit also runs Consumer Readiness immediately after
 the unified Consumer Health check. Scheduled readiness uses the same explicit
 freshness window and read-only WIF identity, while its own Data Access audit event
 is written to the private GCS evidence bucket.
@@ -406,4 +406,39 @@ current UTC time using the same explicit `ERP5_AUDIT_MAX_GAP_MINUTES` policy.
   closed.
 
 The non-sensitive `audit-watchdog-summary.json` artifact is retained for 90 days.
+
+## FreePass Data Control Tower
+
+`freepass-data-control-tower-v1` is the top-level operational snapshot. It does
+not collapse migration state into one synthetic PASS/FAIL score. Instead it keeps
+the major evidence axes separate:
+
+- Source Observation — project/database identity, read time, digest, coverage,
+  product count and policy count.
+- Audit Freshness — configured schedule policy, observed gap and heartbeat state.
+- Publication Gate — HOLD/GO decision, ACTIVE release authorization and hold
+  reasons.
+- Consumer Health — HEALTHY/DEGRADED/BLOCKED state for the eight registered
+  consumers.
+- Consumer Readiness — READY/HOLD/FINAL counts and ready transitions.
+- Sheet Health — dedicated F01/F86 delivery/readback state.
+
+`operatorSummary` exposes only concrete counts such as ready transitions,
+blocked consumers, readiness holds, audit gap and publication hold reasons.
+`attention` contains machine-readable attention codes; it is not a substitute
+for the underlying evidence.
+
+The hourly audit builds `data-control-tower.json` after all component summaries
+and the source inventory are available. The file is uploaded to the immutable GCS
+run prefix, read back byte-for-byte, included in the 90-day GitHub artifact, and
+summarized in the GitHub Step Summary.
+
+Manual reconstruction from an audit working directory:
+
+```bash
+npm run build:data-control-tower > data-control-tower.json
+```
+
+Control Tower generation fails closed if configured consumer totals do not cover
+all eight registered consumers or if source/audit evidence is malformed.
 
