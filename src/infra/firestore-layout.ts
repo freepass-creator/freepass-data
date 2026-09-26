@@ -28,7 +28,8 @@ export const FIRESTORE_COLLECTIONS = Object.freeze({
   }),
   evidence: Object.freeze({
     audits: 'audit_events',
-    outbox: 'outbox_events'
+    outbox: 'outbox_events',
+    dataAccessEvents: 'data_access_events'
   }),
   projection: Object.freeze({
     releases: 'projection_releases',
