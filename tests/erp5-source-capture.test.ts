@@ -127,6 +127,75 @@ describe('ERP5 same-transaction raw capture', () => {
     expect(delta.records.every((item) => item.destructiveActionAuthorized === false)).toBe(true);
   });
 
+  it('accepts a digest-valid pre-partner capture only as the previous product-delta baseline', async () => {
+    const previous = await captureErp5Source(fake({
+      products: [doc('products', 'same'), doc('products', 'legacy-only')]
+    }).rpc);
+    const legacy = structuredClone(previous) as any;
+    delete legacy.collections.partner;
+    const { digest: _legacyDigest, ...legacyUnsigned } = legacy;
+    legacy.digest = createHash('sha256')
+      .update(JSON.stringify(legacyUnsigned))
+      .digest('hex');
+
+    const current = await captureErp5Source(fake({
+      products: [doc('products', 'same'), doc('products', 'new-only')]
+    }).rpc);
+
+    const delta = compareErp5ProductCaptures(legacy, current);
+    expect(delta.counts).toEqual({
+      ADDED: 1,
+      CHANGED: 0,
+      UNCHANGED: 1,
+      MISSING_FROM_SOURCE: 1
+    });
+    expect(delta.destructiveActionAuthorized).toBe(false);
+  });
+
+  it('still rejects a current capture that omits partner even when its digest is recomputed', async () => {
+    const previous = await captureErp5Source(fake().rpc);
+    const current = structuredClone(previous) as any;
+    delete current.collections.partner;
+    const { digest: _digest, ...unsigned } = current;
+    current.digest = createHash('sha256')
+      .update(JSON.stringify(unsigned))
+      .digest('hex');
+
+    expect(() => compareErp5ProductCaptures(previous, current))
+      .toThrow('INVALID_CAPTURE_COVERAGE');
+  });
+
+  it('rejects damaged or expanded legacy delta baselines instead of weakening coverage checks', async () => {
+    const current = await captureErp5Source(fake().rpc);
+
+    const badCount = structuredClone(current) as any;
+    delete badCount.collections.partner;
+    badCount.collections.products.count += 1;
+    {
+      const { digest: _digest, ...unsigned } = badCount;
+      badCount.digest = createHash('sha256')
+        .update(JSON.stringify(unsigned))
+        .digest('hex');
+    }
+    expect(() => compareErp5ProductCaptures(badCount, current))
+      .toThrow('INVALID_CAPTURE_COVERAGE');
+
+    const unknownCollection = structuredClone(current) as any;
+    delete unknownCollection.collections.partner;
+    unknownCollection.collections.unknown = {
+      count: 0,
+      documents: []
+    };
+    {
+      const { digest: _digest, ...unsigned } = unknownCollection;
+      unknownCollection.digest = createHash('sha256')
+        .update(JSON.stringify(unsigned))
+        .digest('hex');
+    }
+    expect(() => compareErp5ProductCaptures(unknownCollection, current))
+      .toThrow('INVALID_CAPTURE_COVERAGE');
+  });
+
   it('produces a deterministic no-change delta and rejects reversed capture order', async () => {
     const previous = await captureErp5Source(fake().rpc);
     const same = structuredClone(previous);
