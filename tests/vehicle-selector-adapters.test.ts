@@ -8,7 +8,10 @@ import {
   selectVehicles,
 } from '../src/domain/vehicle-selector.js';
 import type { EstimateNewcarMasterRecord } from '../src/domain/estimate-master.js';
-import type { UsedcarMasterRecord } from '../src/domain/usedcar-master.js';
+import {
+  usedcarMasterToSelectorRecord,
+  type UsedcarMasterRecord,
+} from '../src/domain/usedcar-master.js';
 
 const newcar: EstimateNewcarMasterRecord = {
   productId: 'new_sorento_hybrid_noblesse',
@@ -67,6 +70,20 @@ const usedcar: UsedcarMasterRecord = {
 };
 
 describe('vehicle selector adapters', () => {
+  it('uses one canonical used-car to selector mapping path', () => {
+    const direct = usedcarMasterToSelectorRecord(usedcar);
+    const adapted = selectorRecordsFromUsedcarMaster([usedcar]);
+
+    expect(adapted).toEqual([direct]);
+    expect(adapted[0]).toMatchObject({
+      recordId: usedcar.recordId,
+      maker: { id: null, label: '기아' },
+      model: { id: 'model_sorento', label: '쏘렌토' },
+      generation: { id: 'gen_mq4', label: '4세대 MQ4' },
+      trim: { id: 'trim_noblesse_2021', label: '노블레스' },
+    });
+  });
+
   it('runs new-car and used-car through the same selector semantics', () => {
     const newResult = selectVehicles(
       selectorRecordsFromNewcarMaster([newcar]),
