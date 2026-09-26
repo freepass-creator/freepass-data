@@ -2,6 +2,7 @@ import type {
   ErpPublicProduct,
   ProjectionRelease
 } from '../domain/catalog.js';
+import type { EstimateNewcarMasterRecord } from '../domain/estimate-master.js';
 import type {
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
@@ -26,7 +27,8 @@ export type ProjectionIntegrityFailureCode =
   | 'EVIDENCE_RELEASE_ID_MISMATCH'
   | 'EVIDENCE_PROJECTION_ID_MISMATCH'
   | 'EVIDENCE_STAGE_MISMATCH'
-  | 'EVIDENCE_RECORD_ID_DUPLICATE';
+  | 'EVIDENCE_RECORD_ID_DUPLICATE'
+  | 'PROJECTION_PAYLOAD_SHAPE_UNSUPPORTED';
 
 export type ProjectionIntegrityResult = {
   valid: boolean;
@@ -53,8 +55,34 @@ export type ProjectionIntegrityResult = {
   canonicalRevision: number;
 };
 
+type SupportedProjectionRecord = ErpPublicProduct | EstimateNewcarMasterRecord;
+
+function projectionCounts(
+  release: ProjectionRelease<SupportedProjectionRecord>
+): { products: number; offers: number; supported: boolean } {
+  if (release.projectionId === 'erp-public') {
+    const rows = release.data as ErpPublicProduct[];
+    if (rows.some((row) => !Array.isArray(row?.offers))) {
+      return { products: rows.length, offers: 0, supported: false };
+    }
+    return {
+      products: rows.length,
+      offers: rows.reduce((sum, product) => sum + product.offers.length, 0),
+      supported: true
+    };
+  }
+  if (release.projectionId === 'estimate-newcar-master') {
+    const rows = release.data as EstimateNewcarMasterRecord[];
+    if (rows.some((row) => !row || typeof row.productId !== 'string' || !['ACTIVE', 'HOLD'].includes(row.status))) {
+      return { products: rows.length, offers: 0, supported: false };
+    }
+    return { products: rows.length, offers: 0, supported: true };
+  }
+  return { products: release.data.length, offers: 0, supported: false };
+}
+
 export function verifyProjectionReleaseIntegrity(
-  release: ProjectionRelease<ErpPublicProduct>,
+  release: ProjectionRelease<SupportedProjectionRecord>,
   manifest: ProjectionReleaseManifest,
   lineage: readonly ProjectionFieldLineageRecord[]
 ): ProjectionIntegrityResult {
@@ -62,10 +90,9 @@ export function verifyProjectionReleaseIntegrity(
   const recomputedDataDigest = stableDigest(release.data);
   const recomputedCanonicalInputDigest = stableDigest(manifest.canonicalInputs);
   const recomputedLineageDigest = stableRecordSetDigest(lineage);
-  const offerCount = release.data.reduce(
-    (sum, product) => sum + product.offers.length,
-    0
-  );
+  const payloadCounts = projectionCounts(release);
+  const offerCount = payloadCounts.offers;
+  if (!payloadCounts.supported) failures.push('PROJECTION_PAYLOAD_SHAPE_UNSUPPORTED');
   const canonicalRevision = Math.max(
     0,
     ...manifest.canonicalInputs.map((item) => item.revision)
@@ -95,7 +122,7 @@ export function verifyProjectionReleaseIntegrity(
   if (manifest.schemaVersion !== release.schemaVersion) {
     failures.push('SCHEMA_VERSION_MISMATCH');
   }
-  if (manifest.productCount !== release.data.length) {
+  if (manifest.productCount !== payloadCounts.products) {
     failures.push('PRODUCT_COUNT_MISMATCH');
   }
   if (manifest.offerCount !== offerCount) {
@@ -143,7 +170,7 @@ export function verifyProjectionReleaseIntegrity(
       recomputed: recomputedLineageDigest
     },
     counts: {
-      products: release.data.length,
+      products: payloadCounts.products,
       offers: offerCount,
       evidence: lineage.length
     },
@@ -159,7 +186,7 @@ export class ProjectionIntegrityError extends Error {
 }
 
 export function assertProjectionReleaseIntegrity(
-  release: ProjectionRelease<ErpPublicProduct>,
+  release: ProjectionRelease<SupportedProjectionRecord>,
   manifest: ProjectionReleaseManifest,
   lineage: readonly ProjectionFieldLineageRecord[]
 ): ProjectionIntegrityResult {

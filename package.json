@@ -27,7 +27,8 @@
     "check:arch": "node scripts/check-architecture.mjs",
     "test:read-runtime-smoke": "node --test tests/read-runtime-smoke.node.mjs",
     "prepare:sheet-bridge": "tsx src/jobs/prepare-sheet-publication-bridge.ts",
-    "check:data-access-boundary": "node scripts/check-data-access-boundary.mjs"
+    "check:data-access-boundary": "node scripts/check-data-access-boundary.mjs",
+    "dry-run:estimate-master": "tsx src/jobs/build-estimate-newcar-master-dry-run.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",

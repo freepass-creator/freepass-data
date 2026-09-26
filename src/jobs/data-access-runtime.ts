@@ -13,6 +13,9 @@ import { ingestLegacyProductSnapshot } from '../application/ingest-legacy-produc
 import { prepareSheetBridgeHandoffs } from '../application/sheet-publication-bridge.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { SheetHandoffWorkbook } from '../domain/sheet-publication-handoff.js';
+import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
+import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
+import { createHttpVehicleMasterSourceFetcher } from '../infra/vehicle-master-source-fetcher.js';
 
 function readOnlyAccess(input: { accessToken: string; evidenceBucket: string }) {
   return new DataAccessGateway(gcsDataAccessLogStore({
@@ -163,5 +166,15 @@ export async function createCentralDiagnosticDataAccessRuntime() {
     canonicalCollections: CENTRAL_CANONICAL_COLLECTIONS,
     activeProjectionCollection: CENTRAL_ACTIVE_PROJECTION_COLLECTION,
     readCounts: readCentralFirestoreCounts
+  };
+}
+
+
+export function createVehicleMasterJobRuntime() {
+  return {
+    access: new DataAccessGateway(createFirestoreDataAccessLogStore()),
+    store: createFirestoreVehicleMasterStore(),
+    archive: createFirebaseVehicleMasterSourceArchive(),
+    fetcher: createHttpVehicleMasterSourceFetcher(),
   };
 }
