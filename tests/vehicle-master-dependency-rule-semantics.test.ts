@@ -30,6 +30,7 @@ type Seeded = {
   trimB: VehicleMasterNode;
   optionA: VehicleMasterNode;
   optionB: VehicleMasterNode;
+  optionC: VehicleMasterNode;
 };
 
 async function seedSource(store: MemoryVehicleMasterStore) {
@@ -246,6 +247,22 @@ async function seed(store: MemoryVehicleMasterStore): Promise<Seeded> {
     createdAt: observedAt,
     updatedAt: observedAt,
   });
+  const optionC = sealVehicleMasterNode({
+    id: 'opt_dependency_c',
+    nodeType: 'OPTION',
+    status: 'ACTIVE',
+    revision: 1,
+    canonicalName: '옵션 C',
+    parentId: modelYear.id,
+    refs: optionRefs,
+    aliases: [],
+    attributes: {},
+    sourceEvidenceIds: [sourceDocumentId],
+    effectiveFrom: null,
+    effectiveTo: null,
+    createdAt: observedAt,
+    updatedAt: observedAt,
+  });
 
   for (const node of [
     make,
@@ -259,6 +276,7 @@ async function seed(store: MemoryVehicleMasterStore): Promise<Seeded> {
     trimB,
     optionA,
     optionB,
+    optionC,
   ]) {
     await store.putNode(node);
   }
@@ -275,6 +293,7 @@ async function seed(store: MemoryVehicleMasterStore): Promise<Seeded> {
     trimB,
     optionA,
     optionB,
+    optionC,
   };
 }
 
@@ -451,6 +470,119 @@ describe('vehicle master direct dependency-rule semantics', () => {
       }),
     ]));
     expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps A EXCLUDES C on HOLD when A REQUIRES B and B REQUIRES C', async () => {
+    const store = new MemoryVehicleMasterStore();
+    await seedSource(store);
+    const s = await seed(store);
+
+    await store.putCompatibilityRule(rule({
+      id: 'rule_a_requires_b',
+      subjectId: s.optionA.id,
+      targetId: s.optionB.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+    }));
+    await store.putCompatibilityRule(rule({
+      id: 'rule_b_requires_c',
+      subjectId: s.optionB.id,
+      targetId: s.optionC.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+    }));
+
+    const result = await promote(store, rule({
+      id: 'rule_a_excludes_c',
+      subjectId: s.optionA.id,
+      targetId: s.optionC.id,
+      trimId: s.trimA.id,
+      ruleType: 'EXCLUDES',
+    }));
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'RULE_DEPENDENCY_TRANSITIVE_CONFLICT',
+        fieldPath: `targetIds.${s.optionC.id}`,
+        detail: 'rule_a_requires_b>rule_b_requires_c|rule_a_excludes_c',
+      }),
+    ]));
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps a new second-hop REQUIRES on HOLD when the implied target is excluded', async () => {
+    const store = new MemoryVehicleMasterStore();
+    await seedSource(store);
+    const s = await seed(store);
+
+    await store.putCompatibilityRule(rule({
+      id: 'rule_a_requires_b_existing',
+      subjectId: s.optionA.id,
+      targetId: s.optionB.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+    }));
+    await store.putCompatibilityRule(rule({
+      id: 'rule_a_excludes_c_existing',
+      subjectId: s.optionA.id,
+      targetId: s.optionC.id,
+      trimId: s.trimA.id,
+      ruleType: 'EXCLUDES',
+    }));
+
+    const result = await promote(store, rule({
+      id: 'rule_b_requires_c_new',
+      subjectId: s.optionB.id,
+      targetId: s.optionC.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+    }));
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'RULE_DEPENDENCY_TRANSITIVE_CONFLICT',
+        fieldPath: `targetIds.${s.optionC.id}`,
+      }),
+    ]));
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('allows a two-hop chain when the three rules have no common effective window', async () => {
+    const store = new MemoryVehicleMasterStore();
+    await seedSource(store);
+    const s = await seed(store);
+
+    await store.putCompatibilityRule(rule({
+      id: 'rule_a_requires_b_old',
+      subjectId: s.optionA.id,
+      targetId: s.optionB.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+      effectiveFrom: '2025-01-01T00:00:00.000Z',
+      effectiveTo: '2026-01-01T00:00:00.000Z',
+    }));
+    await store.putCompatibilityRule(rule({
+      id: 'rule_b_requires_c_new',
+      subjectId: s.optionB.id,
+      targetId: s.optionC.id,
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+      effectiveFrom: '2026-01-01T00:00:00.000Z',
+      effectiveTo: null,
+    }));
+
+    const result = await promote(store, rule({
+      id: 'rule_a_excludes_c_all_time',
+      subjectId: s.optionA.id,
+      targetId: s.optionC.id,
+      trimId: s.trimA.id,
+      ruleType: 'EXCLUDES',
+    }));
+
+    expect(result.decision.status).toBe('APPROVED');
+    expect(result.canonicalWrite).toBe('CREATED');
   });
 
   it('allows opposite dependency types in a different TRIM scope', async () => {
