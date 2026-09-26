@@ -107,7 +107,13 @@ export type VehicleMasterEvidenceIssue = {
     | 'RULE_AVAILABILITY_CONDITION_REQUIRED'
     | 'RULE_AVAILABILITY_EFFECT_MISMATCH'
     | 'RULE_AVAILABILITY_DUPLICATE'
-    | 'RULE_AVAILABILITY_CONFLICT';
+    | 'RULE_AVAILABILITY_CONFLICT'
+    | 'RULE_INCLUDES_SUBJECT_TYPE_MISMATCH'
+    | 'RULE_INCLUDES_TARGET_TYPE_MISMATCH'
+    | 'RULE_INCLUDES_EFFECT_MISMATCH'
+    | 'RULE_INCLUDES_DUPLICATE'
+    | 'RULE_INCLUDES_CONFLICT'
+    | 'RULE_PRICE_OVERRIDE_UNDEFINED';
   fieldPath?: string;
   sourceDocumentId?: string;
   detail?: string;
@@ -476,6 +482,18 @@ function oppositeAvailabilityRuleType(
   return (
     (a === 'AVAILABLE_IF' && b === 'UNAVAILABLE_IF') ||
     (a === 'UNAVAILABLE_IF' && b === 'AVAILABLE_IF')
+  );
+}
+
+function includesSemanticMatch(
+  a: VehicleMasterCompatibilityRule,
+  b: VehicleMasterCompatibilityRule
+) {
+  return (
+    a.subjectId === b.subjectId &&
+    sameTargetSet(a, b) &&
+    sameRuleScope(a, b) &&
+    rulePeriodsOverlap(a, b)
   );
 }
 
@@ -1672,6 +1690,69 @@ export async function promoteVehicleMasterCompatibilityRule(
       code: 'RULE_SCOPE_SUBJECT_MISMATCH',
       fieldPath: 'scope.trimId',
       detail: `${input.proposal.scope.trimId}!=${subject.id}`,
+    });
+  }
+
+  if (input.proposal.ruleType === 'INCLUDES') {
+    if (subject && subject.nodeType !== 'TRIM') {
+      issues.push({
+        code: 'RULE_INCLUDES_SUBJECT_TYPE_MISMATCH',
+        fieldPath: 'subjectId',
+        detail: `${subject.nodeType}!=TRIM`,
+      });
+    }
+
+    for (const target of targets) {
+      if (target.nodeType !== 'BASE_ITEM') {
+        issues.push({
+          code: 'RULE_INCLUDES_TARGET_TYPE_MISMATCH',
+          fieldPath: `targetIds.${target.id}`,
+          detail: `${target.nodeType}!=BASE_ITEM`,
+        });
+      }
+    }
+
+    if (input.proposal.effect !== 'VALID') {
+      issues.push({
+        code: 'RULE_INCLUDES_EFFECT_MISMATCH',
+        fieldPath: 'effect',
+        detail: `${input.proposal.effect}!=VALID`,
+      });
+    }
+
+    const existingRules = await store.listCompatibilityRules();
+    for (const existing of existingRules) {
+      if (existing.id === input.proposal.id) continue;
+
+      if (
+        existing.ruleType === 'INCLUDES' &&
+        includesSemanticMatch(existing, input.proposal)
+      ) {
+        issues.push({
+          code: 'RULE_INCLUDES_DUPLICATE',
+          fieldPath: 'ruleType',
+          detail: existing.id,
+        });
+      }
+
+      if (
+        existing.ruleType === 'EXCLUDES' &&
+        includesSemanticMatch(existing, input.proposal)
+      ) {
+        issues.push({
+          code: 'RULE_INCLUDES_CONFLICT',
+          fieldPath: 'ruleType',
+          detail: existing.id,
+        });
+      }
+    }
+  }
+
+  if (input.proposal.ruleType === 'PRICE_OVERRIDE') {
+    issues.push({
+      code: 'RULE_PRICE_OVERRIDE_UNDEFINED',
+      fieldPath: 'ruleType',
+      detail: 'PRICE_OVERRIDE contract not defined',
     });
   }
 
