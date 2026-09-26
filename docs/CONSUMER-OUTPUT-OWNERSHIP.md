@@ -414,7 +414,7 @@ not collapse migration state into one synthetic PASS/FAIL score. Instead it keep
 the major evidence axes separate:
 
 - Source Observation — project/database identity, read time, digest, coverage,
-  product count and policy count.
+  product, policy and partner counts.
 - Audit Freshness — configured schedule policy, observed gap and heartbeat state.
 - Publication Gate — HOLD/GO decision, ACTIVE release authorization and hold
   reasons.
@@ -422,15 +422,21 @@ the major evidence axes separate:
   consumers.
 - Consumer Readiness — READY/HOLD/FINAL counts and ready transitions.
 - Sheet Health — dedicated F01/F86 delivery/readback state.
+- Estimate Master Readiness — canonical trim availability, ACTIVE-ready/HOLD
+  counts, publication implementation state and blockers for
+  `estimate-newcar-master`.
 
 `operatorSummary` exposes only concrete counts such as ready transitions,
-blocked consumers, readiness holds, audit gap and publication hold reasons.
+blocked consumers, readiness holds, audit gap, publication hold reasons and
+Estimate canonical/ACTIVE/HOLD trim counts.
 `attention` contains machine-readable attention codes; it is not a substitute
 for the underlying evidence.
 
-The hourly audit builds `data-control-tower.json` after all component summaries
-and the source inventory are available. The file is uploaded to the immutable GCS
-run prefix, read back byte-for-byte, included in the 90-day GitHub artifact, and
+The hourly audit builds `data-control-tower.json` after all component summaries,
+Estimate readiness and the source inventory are available. Both
+`estimate-master-readiness.json` and the Control Tower are uploaded to the
+immutable GCS run prefix and read back byte-for-byte. The Control Tower is also
+included in the 90-day GitHub artifact, and
 summarized in the GitHub Step Summary.
 
 Manual reconstruction from an audit working directory:
