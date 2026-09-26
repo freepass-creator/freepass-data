@@ -454,6 +454,221 @@ describe('vehicle master evidence-gated ingestion', () => {
     expect(result.canonicalWrite).toBeNull();
   });
 
+  it('keeps MODEL_YEAR on HOLD when canonicalName disagrees with attributes.modelYear', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-model-year-name-mismatch', 'MANUFACTURER_OFFICIAL', '1');
+    await store.putSourceDocument(official);
+
+    const phase = sealVehicleMasterNode({
+      id: 'phase_model_year_semantics',
+      nodeType: 'PHASE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '초기형',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(phase);
+
+    const proposal = sealVehicleMasterNode({
+      id: 'my_name_mismatch',
+      nodeType: 'MODEL_YEAR',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '2024년형',
+      parentId: phase.id,
+      refs: { phaseId: phase.id },
+      aliases: ['2025MY'],
+      attributes: { modelYear: 2025 },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'attributes.modelYear',
+        value: 2025,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['attributes.modelYear'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'MODEL_YEAR_NAME_MISMATCH',
+          detail: '2024!=2025',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps MODEL_YEAR on HOLD when an explicit year alias disagrees with the fact value', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-model-year-alias-mismatch', 'MANUFACTURER_OFFICIAL', '2');
+    await store.putSourceDocument(official);
+
+    const phase = sealVehicleMasterNode({
+      id: 'phase_model_year_alias',
+      nodeType: 'PHASE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '초기형',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(phase);
+
+    const proposal = sealVehicleMasterNode({
+      id: 'my_alias_mismatch',
+      nodeType: 'MODEL_YEAR',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '2025년형',
+      parentId: phase.id,
+      refs: { phaseId: phase.id },
+      aliases: ['2024MY', '2025'],
+      attributes: { modelYear: 2025 },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'attributes.modelYear',
+        value: 2025,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['attributes.modelYear'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'MODEL_YEAR_ALIAS_MISMATCH',
+          detail: '2024MY!=2025',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps duplicate MODEL_YEAR facts on HOLD within the same PHASE', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-model-year-duplicate', 'MANUFACTURER_OFFICIAL', '3');
+    await store.putSourceDocument(official);
+
+    const phase = sealVehicleMasterNode({
+      id: 'phase_model_year_duplicate',
+      nodeType: 'PHASE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '초기형',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(phase);
+
+    await store.putNode(sealVehicleMasterNode({
+      id: 'my_2025_existing',
+      nodeType: 'MODEL_YEAR',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '2025년형',
+      parentId: phase.id,
+      refs: { phaseId: phase.id },
+      aliases: ['2025MY'],
+      attributes: { modelYear: 2025 },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterNode({
+      id: 'my_2025_duplicate',
+      nodeType: 'MODEL_YEAR',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '2025년형',
+      parentId: phase.id,
+      refs: { phaseId: phase.id },
+      aliases: ['2025'],
+      attributes: { modelYear: 2025 },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'attributes.modelYear',
+        value: 2025,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['attributes.modelYear'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'MODEL_YEAR_DUPLICATE_IN_PHASE',
+          detail: 'my_2025_existing',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
   it('keeps an overlapping sibling PHASE on HOLD within the same generation', async () => {
     const store = new MemoryVehicleMasterStore();
     const official = source('official-phase-overlap', 'MANUFACTURER_OFFICIAL', 'f');
