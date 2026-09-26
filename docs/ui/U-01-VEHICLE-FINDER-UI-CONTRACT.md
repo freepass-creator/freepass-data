@@ -111,3 +111,33 @@ than blocking search.
 
 Changing mode clears the previous query/filter/detail UI state so a selection from one
 consumption mode is never visually carried into the other.
+
+
+## Adapter-ordered facets
+
+U-01 no longer owns a fixed list such as year/fuel/seats/drivetrain/trim.
+
+The read adapter supplies ordered facet sections:
+
+```js
+facets: [
+  {
+    axis: 'modelYear',
+    label: '연식',
+    options: [{ key: 'opaque-key', label: '2024', count: 12 }]
+  }
+]
+```
+
+Rules:
+
+- facet order is rendered exactly as supplied
+- `axis` and option `key` are opaque UI tokens; U-01 does not reinterpret them
+- option counts are display-only
+- `guidance.suggestedNextAxis` points to one of the supplied facet axes when guidance is available
+- in `GUIDED` presentation, the suggested facet may be rendered as horizontal quick choices
+- in `SEARCH_FILTER` presentation, all supplied facets remain available as ordinary filters
+- U-01 does not own manufacturer/model/year/generation/phase priority or hidden-axis policy
+
+This allows F-01 to expose generation/phase/model-year for historical used-car search
+without adding those rules to U-01, while new-car guidance can remain concise.

@@ -2,14 +2,6 @@ const UI_SCHEMA = 'freepass.vehicle-finder.ui/v1';
 
 let instanceCount = 0;
 
-const facetLabels = Object.freeze({
-  modelYear: '연식',
-  fuel: '연료',
-  seatCount: '인승',
-  drivetrain: '구동',
-  trim: '트림',
-});
-
 const element = (tag, className, text) => {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -34,7 +26,24 @@ function validateSnapshot(input) {
   if (!['COMPLETE', 'PARTIAL'].includes(input.coverage)) invalid('coverage');
   if (!Number.isSafeInteger(input.total) || input.total < 0 || typeof input.hasMore !== 'boolean') invalid('resultMeta');
   if (!Array.isArray(input.items)) invalid('items');
-  if (!input.filterOptions || typeof input.filterOptions !== 'object') invalid('filterOptions');
+  if (!Array.isArray(input.facets)) invalid('facets');
+  const facetAxes = new Set();
+  for (const facet of input.facets) {
+    if (!facet || !text(facet.axis) || facetAxes.has(facet.axis) ||
+        !text(facet.label) || !Array.isArray(facet.options)) {
+      invalid('facet');
+    }
+    facetAxes.add(facet.axis);
+    const optionKeys = new Set();
+    for (const option of facet.options) {
+      if (!option || !text(option.key) || optionKeys.has(option.key) ||
+          !text(option.label) ||
+          (option.count != null && (!Number.isSafeInteger(option.count) || option.count < 0))) {
+        invalid('facetOption');
+      }
+      optionKeys.add(option.key);
+    }
+  }
 
   const ids = new Set();
   for (const item of input.items) {
@@ -61,10 +70,8 @@ function validateSnapshot(input) {
   return structuredClone(input);
 }
 
-function normalizeFilterOptions(snapshot, key) {
-  const raw = snapshot?.filterOptions?.[key];
-  if (!Array.isArray(raw)) return [];
-  return raw.filter(value => text(String(value))).map(String);
+function facetByAxis(snapshot, axis) {
+  return snapshot?.facets?.find(facet => facet.axis === axis) ?? null;
 }
 
 function visibleFactValue(fact) {
@@ -163,30 +170,16 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
   filterSheetHead.append(filterSheetTitle, filterClose);
   filterPanel.append(filterSheetHead);
 
-  const filterInputs = new Map();
-  for (const [key, label] of Object.entries(facetLabels)) {
-    const wrapper = element('label', ['seatCount', 'drivetrain'].includes(key) ? 'vf-filter-advanced' : '');
-    wrapper.htmlFor = prefix + '-' + key;
-    const select = element('select');
-    select.id = wrapper.htmlFor;
-    wrapper.append(element('span', '', label), select);
-    filterPanel.append(wrapper);
-    filterInputs.set(key, select);
-    listen(select, 'change', () => {
-      if (select.value) filters[key] = select.value;
-      else delete filters[key];
-      void refreshResults({ preserve: true });
-    });
-  }
+  const filterFields = element('div', 'vf-filter-fields');
+  filterPanel.append(filterFields);
 
-  const filterMore = element('button', 'vf-filter-more', '추가 조건');
-  filterMore.type = 'button';
-  filterMore.setAttribute('aria-expanded', 'false');
+  const filterActions = element('div', 'vf-filter-actions');
   const reset = element('button', 'vf-filter-reset', '필터 초기화');
   reset.type = 'button';
   const filterDone = element('button', 'vf-filter-done vf-primary', '결과 보기');
   filterDone.type = 'button';
-  filterPanel.append(filterMore, reset, filterDone);
+  filterActions.append(reset, filterDone);
+  filterPanel.append(filterActions);
 
   const status = element('div', 'vf-status');
   status.setAttribute('role', 'status');
@@ -290,13 +283,35 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     guidance.append(title, presentation, statusText);
 
     if (snapshot.guidance.suggestedNextAxis) {
+      const suggestedFacet = facetByAxis(snapshot, snapshot.guidance.suggestedNextAxis);
       guidance.append(
         element(
           'span',
           'vf-guidance-next',
-          '다음으로 좁힐 수 있는 조건 · ' + snapshot.guidance.suggestedNextAxis,
+          '다음으로 좁힐 수 있는 조건 · ' +
+            (suggestedFacet?.label ?? snapshot.guidance.suggestedNextAxis),
         ),
       );
+
+      if (snapshot.presentation === 'GUIDED' && suggestedFacet?.options.length) {
+        const choices = element('div', 'vf-guided-options');
+        choices.setAttribute('aria-label', suggestedFacet.label + ' 선택');
+        for (const option of suggestedFacet.options) {
+          const choice = element(
+            'button',
+            'vf-guided-option',
+            option.label + (option.count == null ? '' : ' · ' + option.count),
+          );
+          choice.type = 'button';
+          choice.dataset.selected = String(filters[suggestedFacet.axis] === option.key);
+          listen(choice, 'click', () => {
+            filters[suggestedFacet.axis] = option.key;
+            void refreshResults({ preserve: true });
+          });
+          choices.append(choice);
+        }
+        guidance.append(choices);
+      }
     }
 
     if (snapshot.mode === 'NEW_CAR') {
@@ -319,17 +334,44 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
   }
 
   function populateFilters() {
-    for (const [key, select] of filterInputs) {
-      const current = filters[key] ?? '';
-      select.replaceChildren(new Option('전체 · 미확인 포함', ''));
-      for (const value of normalizeFilterOptions(snapshot, key)) {
-        select.append(new Option(value, value));
+    filterFields.replaceChildren();
+    if (!snapshot) {
+      reset.hidden = Object.keys(filters).length === 0;
+      return;
+    }
+
+    for (const facet of snapshot.facets) {
+      const wrapper = element('label', 'vf-filter-field');
+      const selectId = prefix + '-facet-' + facet.axis;
+      wrapper.htmlFor = selectId;
+      const select = element('select');
+      select.id = selectId;
+      select.dataset.axis = facet.axis;
+      select.append(new Option('전체 · 미확인 포함', ''));
+
+      for (const option of facet.options) {
+        const label = option.count == null
+          ? option.label
+          : option.label + ' (' + option.count + ')';
+        select.append(new Option(label, option.key));
       }
+
+      const current = filters[facet.axis] ?? '';
       if (current && ![...select.options].some(option => option.value === current)) {
-        select.append(new Option(current, current));
+        select.append(new Option('선택값 유지', current));
       }
       select.value = current;
+
+      listen(select, 'change', () => {
+        if (select.value) filters[facet.axis] = select.value;
+        else delete filters[facet.axis];
+        void refreshResults({ preserve: true });
+      });
+
+      wrapper.append(element('span', '', facet.label), select);
+      filterFields.append(wrapper);
     }
+
     reset.hidden = Object.keys(filters).length === 0;
   }
 
@@ -578,11 +620,6 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
   listen(filterToggle, 'click', () => setFilterPanel(filterPanel.hidden));
   listen(filterClose, 'click', () => setFilterPanel(false));
   listen(filterDone, 'click', () => setFilterPanel(false));
-  listen(filterMore, 'click', () => {
-    const expanded = filterMore.getAttribute('aria-expanded') !== 'true';
-    filterMore.setAttribute('aria-expanded', String(expanded));
-    filterPanel.classList.toggle('vf-filter-advanced-open', expanded);
-  });
   listen(reset, 'click', () => {
     filters = {};
     populateFilters();
