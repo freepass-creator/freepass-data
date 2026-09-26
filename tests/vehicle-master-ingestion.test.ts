@@ -13,7 +13,10 @@ import {
   type VehicleMasterFieldObservation,
 } from '../src/application/vehicle-master-ingestion.js';
 import { MemoryVehicleMasterStore } from '../src/infra/vehicle-master-memory-store.js';
-import { canonicalPowertrainIdentity } from '../src/domain/vehicle-master-normalization.js';
+import {
+  canonicalPowertrainIdentity,
+  canonicalTrimIdentity,
+} from '../src/domain/vehicle-master-normalization.js';
 
 const observedAt = '2026-09-25T08:30:00.000Z';
 const effectiveFrom = '2026-09-01T00:00:00.000Z';
@@ -883,6 +886,124 @@ describe('vehicle master evidence-gated ingestion', () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: 'POWERTRAIN_IDENTITY_MISMATCH',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps a semantic duplicate TRIM on HOLD within the same VARIANT', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-trim-duplicate', 'MANUFACTURER_OFFICIAL', '7');
+    await store.putSourceDocument(official);
+
+    const base = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, base);
+
+    await store.putNode(sealVehicleMasterNode({
+      id: 'trim_noblesse_existing',
+      nodeType: 'TRIM',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '노블레스',
+      parentId: base.refs.variantId!,
+      refs: base.refs,
+      aliases: ['Noblesse'],
+      attributes: { identityKey: canonicalTrimIdentity('노블레스') },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterNode({
+      id: 'trim_noblesse_duplicate',
+      nodeType: 'TRIM',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: 'Noblesse',
+      parentId: base.refs.variantId!,
+      refs: base.refs,
+      aliases: [],
+      attributes: { identityKey: canonicalTrimIdentity('Noblesse') },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'canonicalName',
+        value: proposal.canonicalName,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['canonicalName'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'TRIM_DUPLICATE_IN_VARIANT',
+          detail: 'trim_noblesse_existing',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps TRIM on HOLD when identityKey does not match the canonical label', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-trim-key-mismatch', 'MANUFACTURER_OFFICIAL', '8');
+    await store.putSourceDocument(official);
+
+    const base = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, base);
+
+    const proposal = sealVehicleMasterNode({
+      id: 'trim_identity_mismatch',
+      nodeType: 'TRIM',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '시그니처',
+      parentId: base.refs.variantId!,
+      refs: base.refs,
+      aliases: [],
+      attributes: { identityKey: canonicalTrimIdentity('노블레스') },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'canonicalName',
+        value: proposal.canonicalName,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['canonicalName'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'TRIM_IDENTITY_MISMATCH',
         }),
       ])
     );
