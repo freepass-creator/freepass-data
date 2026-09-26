@@ -92,6 +92,11 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
     return copy(this.prices.get(id) ?? null);
   }
 
+  async listPriceRevisions() {
+    return copy([...this.prices.values()]
+      .sort((a, b) => a.targetId.localeCompare(b.targetId) || a.id.localeCompare(b.id)));
+  }
+
   async listPriceRevisionsByTarget(targetId: string) {
     return copy([...this.prices.values()]
       .filter((item) => item.targetId === targetId)
