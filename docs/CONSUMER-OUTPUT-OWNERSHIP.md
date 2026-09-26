@@ -117,6 +117,30 @@ npm run assess:sheet-cutover -- --consumer=google-sheets-f01 --target=SHADOW_REA
 ```
 
 The recorder is fail-closed: an invalid handoff or receipt is never persisted.
+
+### F01/F86 operational health projection
+
+The read-only operational status contract is
+`contracts/sheet-consumer-health-v1.schema.json`.
+`readSheetConsumerHealth()` summarizes both registered Sheet consumers from the
+same durable delivery evidence and cutover registry used by the enforcement path.
+
+Each consumer entry reports the current stage, next stage, latest receipt identity,
+evidence digest, release authority, approved release identity, freshness result,
+readback flags, next-transition decision and blockers.
+
+Operational check:
+
+```bash
+npm run check:sheet-consumer-health -- \
+  --max-age-minutes=30 \
+  --max-future-skew-seconds=30
+```
+
+The health command is read-only and passes through the Data Access Gateway audit
+boundary. Overall `BLOCKED` exits non-zero. Missing evidence is shown explicitly
+with null receipt/release fields rather than being inferred as healthy.
+
 Each durable record also carries an `evidenceDigest` that seals `recordedAt`,
 the validated expectation and the receipt itself. After a write, the recorder
 immediately re-reads the Firestore document and verifies the digest before

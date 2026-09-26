@@ -13,6 +13,7 @@ import {
   type VehicleMasterFieldObservation,
 } from '../src/application/vehicle-master-ingestion.js';
 import { MemoryVehicleMasterStore } from '../src/infra/vehicle-master-memory-store.js';
+import { canonicalPowertrainIdentity } from '../src/domain/vehicle-master-normalization.js';
 
 const observedAt = '2026-09-25T08:30:00.000Z';
 const effectiveFrom = '2026-09-01T00:00:00.000Z';
@@ -663,6 +664,225 @@ describe('vehicle master evidence-gated ingestion', () => {
         expect.objectContaining({
           code: 'MODEL_YEAR_DUPLICATE_IN_PHASE',
           detail: 'my_2025_existing',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps a semantic duplicate POWERTRAIN on HOLD within the same MODEL_YEAR', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-powertrain-duplicate', 'MANUFACTURER_OFFICIAL', '4');
+    await store.putSourceDocument(official);
+
+    const modelYear = sealVehicleMasterNode({
+      id: 'my_powertrain_duplicate',
+      nodeType: 'MODEL_YEAR',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '2026년형',
+      parentId: null,
+      refs: {},
+      aliases: ['2026MY'],
+      attributes: { modelYear: 2026 },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(modelYear);
+
+    await store.putNode(sealVehicleMasterNode({
+      id: 'pt_hybrid_existing',
+      nodeType: 'POWERTRAIN',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '1.6 하이브리드',
+      parentId: modelYear.id,
+      refs: { modelYearId: modelYear.id },
+      aliases: [],
+      attributes: {
+        identityKey: canonicalPowertrainIdentity('1.6 하이브리드'),
+        fuelType: 'HYBRID',
+      },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const identityKey = canonicalPowertrainIdentity('1.6 HEV');
+    const proposal = sealVehicleMasterNode({
+      id: 'pt_hev_duplicate',
+      nodeType: 'POWERTRAIN',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '1.6 HEV',
+      parentId: modelYear.id,
+      refs: { modelYearId: modelYear.id },
+      aliases: [],
+      attributes: { identityKey, fuelType: 'HYBRID' },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'attributes.identityKey',
+        value: identityKey,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['attributes.identityKey'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'POWERTRAIN_DUPLICATE_IN_MODEL_YEAR',
+          detail: 'pt_hybrid_existing',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps POWERTRAIN on HOLD when explicit fuel semantics contradict fuelType', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-powertrain-fuel-mismatch', 'MANUFACTURER_OFFICIAL', '5');
+    await store.putSourceDocument(official);
+
+    const modelYear = sealVehicleMasterNode({
+      id: 'my_powertrain_fuel',
+      nodeType: 'MODEL_YEAR',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '2026년형',
+      parentId: null,
+      refs: {},
+      aliases: ['2026MY'],
+      attributes: { modelYear: 2026 },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(modelYear);
+
+    const identityKey = canonicalPowertrainIdentity('1.6 터보 하이브리드');
+    const proposal = sealVehicleMasterNode({
+      id: 'pt_fuel_mismatch',
+      nodeType: 'POWERTRAIN',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '1.6 터보 하이브리드',
+      parentId: modelYear.id,
+      refs: { modelYearId: modelYear.id },
+      aliases: [],
+      attributes: { identityKey, fuelType: 'GASOLINE' },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'attributes.identityKey',
+        value: identityKey,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['attributes.identityKey'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'POWERTRAIN_FUEL_TYPE_MISMATCH',
+          detail: 'GASOLINE!=HYBRID',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps POWERTRAIN on HOLD when identityKey does not match its canonical label', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-powertrain-key-mismatch', 'MANUFACTURER_OFFICIAL', '6');
+    await store.putSourceDocument(official);
+
+    const modelYear = sealVehicleMasterNode({
+      id: 'my_powertrain_key',
+      nodeType: 'MODEL_YEAR',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '2026년형',
+      parentId: null,
+      refs: {},
+      aliases: ['2026MY'],
+      attributes: { modelYear: 2026 },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(modelYear);
+
+    const proposal = sealVehicleMasterNode({
+      id: 'pt_identity_mismatch',
+      nodeType: 'POWERTRAIN',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '2.2 디젤',
+      parentId: modelYear.id,
+      refs: { modelYearId: modelYear.id },
+      aliases: [],
+      attributes: { identityKey: '2.2|가솔린', fuelType: 'DIESEL' },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'attributes.identityKey',
+        value: '2.2|가솔린',
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['attributes.identityKey'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'POWERTRAIN_IDENTITY_MISMATCH',
         }),
       ])
     );

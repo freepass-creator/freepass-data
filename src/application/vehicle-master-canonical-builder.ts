@@ -7,6 +7,10 @@ import {
   type VehicleMasterPriceRevision,
   type VehicleMasterStatus,
 } from '../domain/vehicle-master.js';
+import {
+  canonicalPowertrainIdentity,
+  canonicalTrimIdentity,
+} from '../domain/vehicle-master-normalization.js';
 import type {
   VehicleMasterReconciledTrim,
 } from './vehicle-master-reconcile.js';
@@ -36,27 +40,10 @@ export type VehicleMasterTrimProposalSet = {
   basePrice: VehicleMasterCanonicalProposalUnit<VehicleMasterPriceRevision>;
 };
 
-function normalized(value: string) {
-  return value
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/[()[\]{}]/g, ' ')
-    .replace(/[^0-9a-z가-힣.]+/g, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
-}
-
-export function canonicalPowertrainIdentity(value: string) {
-  return normalized(value)
-    .split(' ')
-    .filter(Boolean)
-    .sort()
-    .join('|');
-}
-
-export function canonicalTrimIdentity(value: string) {
-  return normalized(value).replace(/\s+/g, '');
-}
+export {
+  canonicalPowertrainIdentity,
+  canonicalTrimIdentity,
+} from '../domain/vehicle-master-normalization.js';
 
 function observations(
   fieldPath: string,

@@ -110,6 +110,7 @@ const requiredGatewayUsage = new Map([
   ['src/jobs/prepare-sheet-publication-bridge.ts', ['runtime.prepare(']],
   ['src/jobs/record-sheet-delivery-evidence.ts', ['runtime.record(']],
   ['src/jobs/assess-sheet-consumer-cutover.ts', ['runtime.assess(']],
+  ['src/jobs/check-sheet-consumer-health.ts', ['runtime.health(']],
   ['src/jobs/check-central-firestore.ts', ['runtime.access.read(']]
 ]);
 for (const [relativeFile, required] of requiredGatewayUsage) {
