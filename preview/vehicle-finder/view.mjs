@@ -955,6 +955,8 @@ export function mountVehicleFinder(
       if (next.mode !== mode) invalid('modeEcho');
       snapshot = next;
       readContext = response.readContext ?? null;
+      finalizationReview = null;
+      finalizationContext = null;
       inspectedId = null;
       detail.hidden = true;
       root.classList.remove('vf-inspecting');
@@ -1221,6 +1223,8 @@ export function mountVehicleFinder(
       if (next.mode !== mode) invalid('modeEcho');
       if (disposed || seq !== requestSeq) return;
       snapshot = next;
+      finalizationReview = null;
+      finalizationContext = null;
       renderSnapshot();
     } catch {
       if (disposed || seq !== requestSeq) return;
