@@ -117,6 +117,26 @@ npm run assess:sheet-cutover -- --consumer=google-sheets-f01 --target=SHADOW_REA
 ```
 
 The recorder is fail-closed: an invalid handoff or receipt is never persisted.
+Each durable record also carries an `evidenceDigest` that seals `recordedAt`,
+the validated expectation and the receipt itself. After a write, the recorder
+immediately re-reads the Firestore document and verifies the digest before
+reporting success.
+
+Cutover assessment also requires an explicit freshness window. There is no hidden
+hard-coded business age. The operator must supply `--max-age-minutes`; optional
+`--max-future-skew-seconds` allows an explicitly approved clock-skew tolerance.
+Both the delivery readback time and approved release observation time must fit the
+window, and future-dated evidence fails closed.
+
+Example:
+
+```bash
+npm run assess:sheet-cutover -- \
+  --consumer=google-sheets-f01 \
+  --target=SHADOW_READ \
+  --max-age-minutes=30 \
+  --max-future-skew-seconds=30
+```
 
 
 
