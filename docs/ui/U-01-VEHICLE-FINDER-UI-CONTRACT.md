@@ -77,3 +77,37 @@ The detail panel is sticky within the viewport so evidence can be inspected with
 
 Mobile keeps search/results primary, opens filters as a bottom sheet and uses the fixed
 3:7 bottom action boundary only while inspecting a result.
+
+
+## New-car / used-car presentation
+
+U-01 exposes a simple user mode choice:
+
+- `NEW_CAR` → 신차
+- `USED_CAR` → 중고차
+
+U-01 sends the selected mode to the injected read adapter:
+
+```js
+read({ mode, query, filters })
+```
+
+The returned view state must echo the same `mode` and also provide:
+
+- `presentation: GUIDED | SEARCH_FILTER`
+- `guidance.resolutionStatus`
+- optional `guidance.suggestedNextAxis`
+
+The presentation meaning belongs to F-01. U-01 does not infer that NEW_CAR must be
+GUIDED or USED_CAR must be SEARCH_FILTER; it renders the value returned by the adapter.
+
+The visual intent is:
+
+- new-car: current-sale exploration, concise guidance, common axes visible
+- used-car: historical exploration, search-first context, year/generation/phase can remain visible
+
+Both modes retain the same principle: missing knowledge widens the candidate set rather
+than blocking search.
+
+Changing mode clears the previous query/filter/detail UI state so a selection from one
+consumption mode is never visually carried into the other.
