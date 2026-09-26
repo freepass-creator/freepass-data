@@ -88,6 +88,37 @@ not set canonical production readback evidence. The executable conversion is
 delivery may set it to true. The cutover evaluator independently rejects
 `sheet-publication-bridge` as authority for the final `FREEPASS_DATA_READ` stage.
 
+### Durable delivery evidence
+
+Validated F01/F86 receipts are persisted separately from generic projection/outbox
+delivery receipts. The central Firestore layout owns
+`projection.sheetDeliveryEvidence = sheet_delivery_evidence`.
+
+The durable flow is:
+
+`validated handoff + delivery receipt -> recordSheetDeliveryEvidence() -> Firestore -> assessLatestSheetConsumerCutover() -> evaluateConsumerCutover()`
+
+The latest durable receipt for a Sheet consumer is authoritative for its current
+Sheet readback evidence. If a newer bridge receipt follows an older canonical
+receipt, final cutover becomes HOLD again rather than continuing to trust the stale
+canonical receipt.
+
+Operational commands:
+
+```bash
+# validation only; no Firestore write
+npm run record:sheet-delivery-evidence -- --handoff=/path/handoff.json --receipt=/path/receipt.json
+
+# durable write; both switches are required
+FREEPASS_SHEET_EVIDENCE_WRITE_AUTHORIZED=1 npm run record:sheet-delivery-evidence -- --handoff=/path/handoff.json --receipt=/path/receipt.json --apply
+
+# read durable evidence and assess a registered Sheet consumer
+npm run assess:sheet-cutover -- --consumer=google-sheets-f01 --target=SHADOW_READ
+```
+
+The recorder is fail-closed: an invalid handoff or receipt is never persisted.
+
+
 
 ### Read-only bridge preparation
 
