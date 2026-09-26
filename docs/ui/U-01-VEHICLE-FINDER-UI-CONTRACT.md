@@ -165,3 +165,24 @@ detail inspection and return.
 
 Mode changes are different: they intentionally clear query/filter/detail/recent-item
 context so NEW_CAR state cannot leak into USED_CAR and vice versa.
+
+
+## Read-state semantics
+
+U-01 must keep absence of data separate from absence of candidates.
+
+Visible states:
+
+- `DISCONNECTED`: no authorized read adapter is connected; never show fixture/demo vehicles as real
+- `LOADING`: first read is in progress; do not show a 0-result message
+- `ZERO`: a COMPLETE observation returned zero candidates for the current criteria
+- `PARTIAL_ZERO`: a PARTIAL observation returned zero candidates; explicitly state this is not proof that no candidate exists globally
+- `ERROR`: no usable snapshot exists and the read failed; explicitly state that this does not mean there are no vehicles
+- `REFRESHING_WITH_LKG`: keep the previous observation visible while a newer read runs
+- `REFRESH_ERROR_WITH_LKG`: keep the previous observation visible, show a retry action, and never replace it with an empty result
+
+Search text and filter selections remain intact across loading and read failures.
+Only an explicit mode change intentionally clears the mode-specific UI state.
+
+U-01 does not translate transport errors into data facts and does not promote PARTIAL
+coverage to COMPLETE.
