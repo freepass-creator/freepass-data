@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import Ajv2020 from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
 import schema from '../contracts/admin-catalog-view-v1.schema.json' with { type: 'json' };
+
+const addFormats = (
+  typeof addFormatsModule === 'function'
+    ? addFormatsModule
+    : (addFormatsModule as unknown as { default: FormatsPlugin }).default
+) as FormatsPlugin;
 
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 addFormats(ajv);
@@ -91,19 +97,19 @@ test('Admin Catalog V1 rejects empty release data', () => {
 
 test('Admin Catalog V1 rejects KNOWN deposit without money', () => {
   const copy = structuredClone(sample);
-  copy.data[0].offers[0].priceTerms[0].depositState = 'KNOWN';
-  delete copy.data[0].offers[0].priceTerms[0].deposit;
+  copy.data[0]!.offers[0]!.priceTerms[0]!.depositState = 'KNOWN';
+  delete copy.data[0]!.offers[0]!.priceTerms[0]!.deposit;
   assert.equal(validate(copy), false);
 });
 
 test('Admin Catalog V1 rejects amount on UNKNOWN deposit', () => {
   const copy = structuredClone(sample);
-  copy.data[0].offers[0].priceTerms[1].deposit = { amount: 0, currency: 'KRW' };
+  copy.data[0]!.offers[0]!.priceTerms[1]!.deposit = { amount: 0, currency: 'KRW' };
   assert.equal(validate(copy), false);
 });
 
 test('Admin Catalog V1 includes current OGONG subscription commercial type', () => {
   const copy = structuredClone(sample);
-  copy.data[0].commercialType = 'OGONG_SUBSCRIPTION';
+  copy.data[0]!.commercialType = 'OGONG_SUBSCRIPTION';
   assert.equal(validate(copy), true, JSON.stringify(validate.errors));
 });
