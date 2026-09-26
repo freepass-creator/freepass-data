@@ -182,10 +182,11 @@ export function createConsumerGateway(
         resource,
         summarize: (value: {
           data: unknown[];
-          meta: { dataDigest: string; releaseId: string; manifestId: string; revision: number };
+          meta: { inputDigest: string; dataDigest: string; releaseId: string; manifestId: string; revision: number };
         }) => ({
           count: value.data.length,
           digest: value.meta.dataDigest,
+          inputDigest: value.meta.inputDigest,
           releaseId: value.meta.releaseId,
           manifestId: value.meta.manifestId,
           revision: value.meta.revision
@@ -317,10 +318,11 @@ export function createConsumerGateway(
         resource,
         summarize: (value: {
           data: EstimateNewcarMasterRecord[];
-          meta: { dataDigest: string; releaseId: string; manifestId: string; revision: number };
+          meta: { inputDigest: string; dataDigest: string; releaseId: string; manifestId: string; revision: number };
         }) => ({
           count: value.data.length,
           digest: value.meta.dataDigest,
+          inputDigest: value.meta.inputDigest,
           releaseId: value.meta.releaseId,
           manifestId: value.meta.manifestId,
           revision: value.meta.revision
