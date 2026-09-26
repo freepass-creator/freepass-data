@@ -1,5 +1,9 @@
 import { getFirestore, type DocumentReference, type Firestore } from 'firebase-admin/firestore';
 import { getTargetFirebaseApp } from './firebase-target.js';
+import {
+  VEHICLE_MASTER_REPAIR_AUTHORITY_RULE_ID,
+  VEHICLE_MASTER_REPAIR_WRITER_POLICY,
+} from '../domain/vehicle-master.js';
 import type {
   VehicleMasterCompatibilityRule,
   VehicleMasterHashRecord,
@@ -339,6 +343,17 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
         );
       }
       if (
+        storedApproval.approvedBy.kind !== 'USER' ||
+        storedApproval.writerId !==
+          VEHICLE_MASTER_REPAIR_WRITER_POLICY.primaryWriterId ||
+        storedApproval.authorityRuleId !==
+          VEHICLE_MASTER_REPAIR_AUTHORITY_RULE_ID
+      ) {
+        throw new Error(
+          `VEHICLE_MASTER_REPAIR_APPROVAL_AUTHORITY_INVALID:${storedApproval.approvalId}`
+        );
+      }
+      if (
         input.receipt.approvalId !== storedApproval.approvalId ||
         input.receipt.approvalDigest !== storedApproval.contentHash ||
         input.receipt.approvedBy.id !== storedApproval.approvedBy.id ||
@@ -386,6 +401,15 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
         throw new Error(
           `VEHICLE_MASTER_REPAIR_CAS_MISMATCH:${input.record.id}:` +
           `${current.revision}:${current.contentHash}`
+        );
+      }
+      if (
+        storedApproval.expectedCurrentRevision !== current.revision ||
+        storedApproval.expectedBeforeContentHash !== current.contentHash ||
+        storedApproval.expectedAfterContentHash !== input.record.contentHash
+      ) {
+        throw new Error(
+          `VEHICLE_MASTER_REPAIR_APPROVAL_TARGET_MISMATCH:${storedApproval.approvalId}`
         );
       }
       if (input.record.revision !== current.revision + 1) {
