@@ -447,6 +447,25 @@ function matchesSelection(
   return !matchesSearchText(record, searchContext).rejected;
 }
 
+function provesFacetContext(
+  record: VehicleSelectorRecord,
+  request: VehicleSelectorRequest,
+  searchContext: SearchContext,
+  ignoreAxis: VehicleSelectorAxis
+) {
+  if (!allowedByMode(record, request)) return false;
+  const selection = request.selection ?? {};
+
+  for (const axis of AXES) {
+    if (axis === ignoreAxis) continue;
+    const result = matchesAxis(record, selection, axis);
+    if (result.rejected || result.unresolved) return false;
+  }
+
+  const search = matchesSearchText(record, searchContext);
+  return !search.rejected && search.unresolved === 0;
+}
+
 function facetOption(record: VehicleSelectorRecord, axis: VehicleSelectorAxis) {
   const textValue = textAxis(record, axis);
   if (textValue) {
@@ -474,7 +493,7 @@ function buildFacets(
   return Object.fromEntries(AXES.map((axis) => {
     const counts = new Map<string, VehicleSelectorFacetOption>();
     for (const record of records) {
-      if (!matchesSelection(record, request, searchContext, axis)) continue;
+      if (!provesFacetContext(record, request, searchContext, axis)) continue;
       const option = facetOption(record, axis);
       if (!option) continue;
       const key = JSON.stringify([option.id, option.label, option.value]);
@@ -494,19 +513,6 @@ function buildFacets(
   })) as Record<VehicleSelectorAxis, VehicleSelectorFacetOption[]>;
 }
 
-function axisOptionCount(
-  candidates: readonly VehicleSelectorCandidate[],
-  axis: VehicleSelectorAxis
-) {
-  const values = new Set<string>();
-  for (const candidate of candidates) {
-    const option = facetOption(candidate.record, axis);
-    if (!option) continue;
-    values.add(JSON.stringify([option.id, option.label, option.value]));
-  }
-  return values.size;
-}
-
 function requestHasCriteria(request: VehicleSelectorRequest) {
   const selection = request.selection ?? {};
   return (
@@ -517,6 +523,7 @@ function requestHasCriteria(request: VehicleSelectorRequest) {
 
 function buildGuidance(
   candidates: readonly VehicleSelectorCandidate[],
+  facets: Record<VehicleSelectorAxis, VehicleSelectorFacetOption[]>,
   request: VehicleSelectorRequest
 ): VehicleSelectorGuidance {
   const selection = request.selection ?? {};
@@ -525,7 +532,7 @@ function buildGuidance(
 
   for (const axis of AXES) {
     if (axisSelected(selection, axis)) continue;
-    const count = axisOptionCount(candidates, axis);
+    const count = facets[axis].length;
     if (count === 1) singletonAxes.push(axis);
     if (count > 1) ambiguousAxes.push(axis);
   }
@@ -629,10 +636,12 @@ export function selectVehicles(
     a.record.recordId.localeCompare(b.record.recordId)
   );
 
+  const facets = buildFacets(records, request, searchContext);
+
   return {
     mode: request.mode,
     candidates,
-    facets: buildFacets(records, request, searchContext),
-    guidance: buildGuidance(candidates, request),
+    facets,
+    guidance: buildGuidance(candidates, facets, request),
   };
 }

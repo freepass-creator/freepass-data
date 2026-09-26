@@ -172,7 +172,8 @@ export async function buildUsedcarMasterRecords(
       identityStatus: identity,
       holdReasons: [...new Set(holdReasons)].sort(),
       sourceEvidenceIds: [...new Set([
-        ...trim.sourceEvidenceIds,
+        ...[make, model, generation, phase, modelYear, powertrain, variant, trim]
+          .flatMap((item) => item?.sourceEvidenceIds ?? []),
         ...prices.flatMap((price) => price.sourceEvidenceIds),
       ])].sort(),
     });
