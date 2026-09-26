@@ -2,6 +2,15 @@ name: ERP5 continuous read-only audit
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/erp5-continuous-audit.yml'
+      - 'src/application/estimate-master-canonical.ts'
+      - 'src/application/estimate-master-readiness.ts'
+      - 'src/jobs/check-estimate-master-readiness.ts'
+      - 'src/jobs/data-access-runtime.ts'
   schedule:
     - cron: '37 * * * *'
 
