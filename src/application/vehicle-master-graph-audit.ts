@@ -644,6 +644,33 @@ function auditNodeSemantics(
         entityId: node.id,
         fieldPath: 'attributes.modelYear',
       });
+      continue;
+    }
+
+    const nameYear = explicitModelYearLabel(node.canonicalName);
+    if (nameYear !== null && nameYear !== value) {
+      add(issues, {
+        code: 'MODEL_YEAR_NAME_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'canonicalName',
+        detail: `${nameYear}!=${value}`,
+      });
+    }
+
+    for (const alias of node.aliases) {
+      const aliasYear = explicitModelYearLabel(alias);
+      if (aliasYear !== null && aliasYear !== value) {
+        add(issues, {
+          code: 'MODEL_YEAR_ALIAS_MISMATCH',
+          severity: 'ERROR',
+          entityKind: 'NODE',
+          entityId: node.id,
+          fieldPath: 'aliases',
+          detail: `${alias}!=${value}`,
+        });
+      }
     }
   }
   for (let i = 0; i < modelYears.length; i += 1) {
@@ -665,6 +692,40 @@ function auditNodeSemantics(
   }
 
   const powertrains = active.filter((node) => node.nodeType === 'POWERTRAIN');
+  for (const node of powertrains) {
+    const expectedIdentity = canonicalPowertrainIdentity(node.canonicalName);
+    const storedIdentity =
+      typeof node.attributes.identityKey === 'string'
+        ? node.attributes.identityKey.trim()
+        : '';
+    if (!storedIdentity || storedIdentity !== expectedIdentity) {
+      add(issues, {
+        code: 'POWERTRAIN_IDENTITY_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'attributes.identityKey',
+        detail: `${storedIdentity || 'MISSING'}!=${expectedIdentity}`,
+      });
+    }
+
+    const inferredFuel = inferPowertrainFuelType(node.canonicalName);
+    const storedFuel =
+      typeof node.attributes.fuelType === 'string'
+        ? node.attributes.fuelType.trim().toUpperCase()
+        : null;
+    if (inferredFuel && storedFuel !== inferredFuel) {
+      add(issues, {
+        code: 'POWERTRAIN_FUEL_TYPE_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'attributes.fuelType',
+        detail: `${storedFuel ?? 'MISSING'}!=${inferredFuel}`,
+      });
+    }
+  }
+
   for (let i = 0; i < powertrains.length; i += 1) {
     for (let j = i + 1; j < powertrains.length; j += 1) {
       const a = powertrains[i]!;
@@ -687,6 +748,69 @@ function auditNodeSemantics(
   }
 
   const variants = active.filter((node) => node.nodeType === 'VARIANT');
+  for (const node of variants) {
+    const seats = canonicalSeatCount(node.attributes.seats);
+    const storedDrivetrain =
+      typeof node.attributes.drivetrain === 'string'
+        ? node.attributes.drivetrain.trim()
+        : null;
+    const drivetrain = canonicalDrivetrain(storedDrivetrain);
+
+    if (seats === null) {
+      add(issues, {
+        code: 'VARIANT_SEATS_INVALID',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'attributes.seats',
+      });
+    }
+    if (drivetrain === null) {
+      add(issues, {
+        code: 'VARIANT_DRIVETRAIN_INVALID',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'attributes.drivetrain',
+      });
+    } else if (storedDrivetrain !== drivetrain) {
+      add(issues, {
+        code: 'VARIANT_DRIVETRAIN_NOT_CANONICAL',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'attributes.drivetrain',
+        detail: `${storedDrivetrain}!=${drivetrain}`,
+      });
+    }
+
+    const labelFacts = inferVariantFacts(node.canonicalName);
+    if (labelFacts.seats !== null && seats !== null && labelFacts.seats !== seats) {
+      add(issues, {
+        code: 'VARIANT_NAME_SEATS_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'canonicalName',
+        detail: `${labelFacts.seats}!=${seats}`,
+      });
+    }
+    if (
+      labelFacts.drivetrain !== null &&
+      drivetrain !== null &&
+      labelFacts.drivetrain !== drivetrain
+    ) {
+      add(issues, {
+        code: 'VARIANT_NAME_DRIVETRAIN_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'canonicalName',
+        detail: `${labelFacts.drivetrain}!=${drivetrain}`,
+      });
+    }
+  }
+
   for (let i = 0; i < variants.length; i += 1) {
     for (let j = i + 1; j < variants.length; j += 1) {
       const a = variants[i]!;
@@ -719,6 +843,24 @@ function auditNodeSemantics(
   }
 
   const trims = active.filter((node) => node.nodeType === 'TRIM');
+  for (const node of trims) {
+    const expectedIdentity = canonicalTrimIdentity(node.canonicalName);
+    const storedIdentity =
+      typeof node.attributes.identityKey === 'string'
+        ? node.attributes.identityKey.trim()
+        : '';
+    if (!storedIdentity || storedIdentity !== expectedIdentity) {
+      add(issues, {
+        code: 'TRIM_IDENTITY_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'attributes.identityKey',
+        detail: `${storedIdentity || 'MISSING'}!=${expectedIdentity}`,
+      });
+    }
+  }
+
   for (let i = 0; i < trims.length; i += 1) {
     for (let j = i + 1; j < trims.length; j += 1) {
       const a = trims[i]!;
@@ -736,6 +878,24 @@ function auditNodeSemantics(
           relatedId: a.id,
         });
       }
+    }
+  }
+
+  const phases = active.filter((node) => node.nodeType === 'PHASE');
+  for (let i = 0; i < phases.length; i += 1) {
+    for (let j = i + 1; j < phases.length; j += 1) {
+      const a = phases[i]!;
+      const b = phases[j]!;
+      if (!a.parentId || a.parentId !== b.parentId) continue;
+      if (!explicitPhaseOverlap(a, b)) continue;
+      add(issues, {
+        code: 'PHASE_EFFECTIVE_RANGE_OVERLAP',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: b.id,
+        fieldPath: 'effectiveFrom',
+        relatedId: a.id,
+      });
     }
   }
 
