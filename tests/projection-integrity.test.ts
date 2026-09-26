@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildErpPublicProjection } from '../src/application/catalog.js';
 import { readActiveProjectionEvidence } from '../src/application/projection-evidence-reader.js';
 import { assertProjectionReleaseIntegrity, verifyProjectionReleaseIntegrity } from '../src/shared/projection-integrity.js';
-import { stableRecordSetDigest } from '../src/shared/stable-digest.js';
+import { stableDigest, stableRecordSetDigest } from '../src/shared/stable-digest.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 
@@ -264,6 +264,107 @@ describe('Projection release integrity verifier', () => {
 
     expect(result.valid).toBe(false);
     expect(result.failures).toContain('EVIDENCE_RECORD_ID_DUPLICATE');
+  });
+
+
+  it('validates the Estimate master projection without assuming ERP offers[]', () => {
+    const data = [{
+      productId: 'prod_1',
+      vehicleModelId: 'mf-002.md-036',
+      modelYearId: 'mf-002.md-036.sm-ka4::my2026',
+      trimId: 'mf-002.md-036.sm-ka4::v01::t01',
+      powertrainId: 'mf-002.md-036.sm-ka4::v01',
+      maker: '기아',
+      model: '카니발',
+      modelYear: 2026,
+      trimName: '노블레스',
+      powertrainName: '하이브리드 1.6T',
+      basePrice: { amount: 50000000, currency: 'KRW' as const },
+      priceBefore: { amount: 50000000, currency: 'KRW' as const },
+      priceAfter: { amount: 49500000, currency: 'KRW' as const },
+      priceBasis: '세제혜택 후',
+      options: [],
+      exteriorColors: [{ colorId: 'ext_1', name: '화이트', code: 'SWP', price: { amount: 80000, currency: 'KRW' as const } }],
+      interiorColors: [{ colorId: 'int_1', name: '블랙', code: 'BLK', price: { amount: 0, currency: 'KRW' as const } }],
+      configuration: { drivetrain: '2WD', seats: 7, bodyConfiguration: '승용' },
+      status: 'ACTIVE' as const,
+      holdReasons: []
+    }];
+    const canonicalInputs = [{
+      entityType: 'vehicle_model' as const,
+      entityId: 'mf-002.md-036',
+      revision: 1,
+      validationStatus: 'VALID' as const
+    }];
+    const release = {
+      releaseId: 'rel_estimate-master-test',
+      projectionId: 'estimate-newcar-master',
+      schemaVersion: '1.0.0',
+      canonicalRevision: 1,
+      manifestId: 'manifest_estimate-master-test',
+      inputDigest: stableDigest(canonicalInputs),
+      dataDigest: stableDigest(data),
+      status: 'ACTIVE' as const,
+      generatedAt: '2026-09-25T08:00:00.000Z',
+      activatedAt: '2026-09-25T08:01:00.000Z',
+      data
+    };
+    const manifest = {
+      manifestId: release.manifestId,
+      releaseId: release.releaseId,
+      projectionId: release.projectionId,
+      schemaVersion: release.schemaVersion,
+      generatedAt: release.generatedAt,
+      canonicalInputs,
+      productCount: 1,
+      offerCount: 0,
+      fieldEvidenceCount: 0,
+      fieldEvidenceDigest: stableRecordSetDigest([]),
+      inputDigest: release.inputDigest,
+      dataDigest: release.dataDigest
+    };
+    const result = verifyProjectionReleaseIntegrity(release, manifest, []);
+    expect(result.valid).toBe(true);
+    expect(result.counts).toMatchObject({ products: 1, offers: 0, evidence: 0 });
+  });
+
+  it('fails closed for an unknown projection payload shape', () => {
+    const canonicalInputs = [{
+      entityType: 'vehicle_model' as const,
+      entityId: 'vm_1',
+      revision: 1,
+      validationStatus: 'VALID' as const
+    }];
+    const data = [{ anything: true }];
+    const release = {
+      releaseId: 'rel_unknown-test',
+      projectionId: 'unknown-projection',
+      schemaVersion: '1.0.0',
+      canonicalRevision: 1,
+      manifestId: 'manifest_unknown-test',
+      inputDigest: stableDigest(canonicalInputs),
+      dataDigest: stableDigest(data),
+      status: 'ACTIVE' as const,
+      generatedAt: '2026-09-25T08:00:00.000Z',
+      activatedAt: '2026-09-25T08:01:00.000Z',
+      data
+    } as any;
+    const manifest = {
+      manifestId: release.manifestId,
+      releaseId: release.releaseId,
+      projectionId: release.projectionId,
+      schemaVersion: release.schemaVersion,
+      generatedAt: release.generatedAt,
+      canonicalInputs,
+      productCount: 1,
+      offerCount: 0,
+      fieldEvidenceCount: 0,
+      fieldEvidenceDigest: stableRecordSetDigest([]),
+      inputDigest: release.inputDigest,
+      dataDigest: release.dataDigest
+    };
+    expect(verifyProjectionReleaseIntegrity(release, manifest, []).failures)
+      .toContain('PROJECTION_PAYLOAD_SHAPE_UNSUPPORTED');
   });
 
   it('treats legacy manifests without lineage digest as incomplete evidence', async () => {
