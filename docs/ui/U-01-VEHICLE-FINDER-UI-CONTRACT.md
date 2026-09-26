@@ -399,3 +399,28 @@ not presented as currently valid.
 
 Receipt validation policy (assessedAt, max age, future skew), current-record lookup,
 digest comparison, finalizability and request matching remain F/I responsibilities.
+
+
+## Final accessibility and interaction QA
+
+U-01 final QA includes actual keyboard and focus behavior, not only CSS/DOM inspection.
+
+Mobile filter bottom sheet:
+
+- moves focus into the modal when opened
+- traps Tab / Shift+Tab inside the visible dialog controls
+- Escape closes the dialog
+- close / done / Escape restore focus to the filter trigger
+- background content remains inert while the dialog is open
+
+Candidate/detail flow:
+
+- group disclosure is a real button with `aria-expanded` and a count-aware accessible label
+- Enter/Space use native button behavior
+- opening candidate detail moves focus to the detail heading
+- detail is a labeled region linked to its heading
+- Escape closes detail and returns focus to the candidate row
+- mobile fixed bottom actions retain 3:7 layout and >=48px targets
+
+All ordinary controls retain >=44px targets and visible `:focus-visible` treatment.
+Long IDs/reason strings/digests must wrap without horizontal viewport overflow.
