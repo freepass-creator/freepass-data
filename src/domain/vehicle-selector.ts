@@ -1,4 +1,7 @@
+import { stableDigest } from '../shared/stable-digest.js';
+
 export const VEHICLE_SELECTOR_CONTRACT = 'vehicle-selector/v1';
+export const VEHICLE_SELECTION_RECEIPT_CONTRACT = 'vehicle-selection-receipt/v1';
 
 export type VehicleSelectorMode = 'NEW_CAR' | 'USED_CAR';
 
@@ -234,6 +237,31 @@ export type VehicleSelectorFinalizationDecision = {
   status: 'APPROVED' | 'HOLD';
   recordId: string | null;
   reasons: VehicleSelectorFinalizationReason[];
+  result: VehicleSelectorResult;
+};
+
+export type VehicleSelectionSnapshot = {
+  mode: VehicleSelectorMode;
+  searchText: string | null;
+  selection: VehicleSelectorSelection;
+  includeHold: boolean | null;
+  record: VehicleSelectorRecord;
+};
+
+export type VehicleSelectionReceipt = {
+  contractVersion: typeof VEHICLE_SELECTION_RECEIPT_CONTRACT;
+  selectorContract: typeof VEHICLE_SELECTOR_CONTRACT;
+  receiptId: string;
+  issuedAt: string;
+  snapshotDigest: string;
+  receiptDigest: string;
+  snapshot: VehicleSelectionSnapshot;
+};
+
+export type VehicleSelectionReceiptIssue = {
+  status: 'ISSUED' | 'HOLD';
+  reasons: VehicleSelectorFinalizationReason[];
+  receipt: VehicleSelectionReceipt | null;
   result: VehicleSelectorResult;
 };
 
@@ -1697,5 +1725,178 @@ export function finalizeVehicleSelection(
     reasons,
     result,
   };
+}
+
+function normalizedSelectionSnapshot(
+  selection: VehicleSelectorSelection | undefined
+) {
+  const snapshot: VehicleSelectorSelection = {};
+  for (const axis of AXES) {
+    if (!selection || !axisSelected(selection, axis)) continue;
+    const selected = selectionForAxis(selection, axis);
+    switch (axis) {
+      case 'maker':
+        if ('id' in selected && selected.id !== undefined) snapshot.makerId = selected.id;
+        if ('label' in selected && selected.label !== undefined) snapshot.maker = selected.label;
+        break;
+      case 'model':
+        if ('id' in selected && selected.id !== undefined) snapshot.modelId = selected.id;
+        if ('label' in selected && selected.label !== undefined) snapshot.model = selected.label;
+        break;
+      case 'generation':
+        if ('id' in selected && selected.id !== undefined) snapshot.generationId = selected.id;
+        if ('label' in selected && selected.label !== undefined) snapshot.generation = selected.label;
+        break;
+      case 'phase':
+        if ('id' in selected && selected.id !== undefined) snapshot.phaseId = selected.id;
+        if ('label' in selected && selected.label !== undefined) snapshot.phase = selected.label;
+        break;
+      case 'modelYear':
+        if ('id' in selected && selected.id !== undefined) snapshot.modelYearId = selected.id;
+        if ('value' in selected && selected.value !== undefined) snapshot.modelYear = selected.value;
+        break;
+      case 'powertrain':
+        if ('id' in selected && selected.id !== undefined) snapshot.powertrainId = selected.id;
+        if ('label' in selected && selected.label !== undefined) snapshot.powertrain = selected.label;
+        break;
+      case 'fuelType':
+        if ('label' in selected && selected.label !== undefined) snapshot.fuelType = selected.label;
+        break;
+      case 'drivetrain':
+        if ('label' in selected && selected.label !== undefined) snapshot.drivetrain = selected.label;
+        break;
+      case 'seats':
+        if ('value' in selected && selected.value !== undefined) snapshot.seats = selected.value;
+        break;
+      case 'trim':
+        if ('id' in selected && selected.id !== undefined) snapshot.trimId = selected.id;
+        if ('label' in selected && selected.label !== undefined) snapshot.trim = selected.label;
+        break;
+    }
+  }
+  return snapshot;
+}
+
+function receiptUnsigned(
+  receipt: Omit<VehicleSelectionReceipt, 'receiptDigest'>
+) {
+  return {
+    contractVersion: receipt.contractVersion,
+    selectorContract: receipt.selectorContract,
+    receiptId: receipt.receiptId,
+    issuedAt: receipt.issuedAt,
+    snapshotDigest: receipt.snapshotDigest,
+    snapshot: receipt.snapshot,
+  };
+}
+
+export function issueVehicleSelectionReceipt(
+  records: readonly VehicleSelectorRecord[],
+  request: VehicleSelectorRequest,
+  issuedAt: string,
+  recordId?: string | null
+): VehicleSelectionReceiptIssue {
+  if (!Number.isFinite(Date.parse(issuedAt))) {
+    throw new Error('INVALID_VEHICLE_SELECTION_RECEIPT_ISSUED_AT');
+  }
+
+  const decision = finalizeVehicleSelection(records, request, recordId);
+  if (decision.status !== 'APPROVED' || !decision.recordId) {
+    return {
+      status: 'HOLD',
+      reasons: [...decision.reasons],
+      receipt: null,
+      result: decision.result,
+    };
+  }
+
+  const candidate = decision.result.candidates.find(
+    (item) => item.record.recordId === decision.recordId
+  );
+  if (!candidate) {
+    throw new Error('APPROVED_VEHICLE_SELECTION_CANDIDATE_MISSING');
+  }
+
+  const snapshot: VehicleSelectionSnapshot = {
+    mode: request.mode,
+    searchText: hasText(request.searchText) ? normalize(request.searchText) : null,
+    selection: normalizedSelectionSnapshot(request.selection),
+    includeHold: request.includeHold ?? null,
+    record: structuredClone(candidate.record),
+  };
+  const snapshotDigest = stableDigest(snapshot);
+  const receiptId = `vehicle_selection_${stableDigest({
+    contractVersion: VEHICLE_SELECTION_RECEIPT_CONTRACT,
+    selectorContract: VEHICLE_SELECTOR_CONTRACT,
+    issuedAt,
+    snapshotDigest,
+  })}`;
+
+  const unsigned: Omit<VehicleSelectionReceipt, 'receiptDigest'> = {
+    contractVersion: VEHICLE_SELECTION_RECEIPT_CONTRACT,
+    selectorContract: VEHICLE_SELECTOR_CONTRACT,
+    receiptId,
+    issuedAt,
+    snapshotDigest,
+    snapshot,
+  };
+  const receipt: VehicleSelectionReceipt = {
+    ...unsigned,
+    receiptDigest: stableDigest(unsigned),
+  };
+
+  return {
+    status: 'ISSUED',
+    reasons: [],
+    receipt,
+    result: decision.result,
+  };
+}
+
+export function assertVehicleSelectionReceipt(
+  receipt: VehicleSelectionReceipt
+) {
+  if (receipt.contractVersion !== VEHICLE_SELECTION_RECEIPT_CONTRACT) {
+    throw new Error('UNSUPPORTED_VEHICLE_SELECTION_RECEIPT_CONTRACT');
+  }
+  if (receipt.selectorContract !== VEHICLE_SELECTOR_CONTRACT) {
+    throw new Error('VEHICLE_SELECTION_SELECTOR_CONTRACT_MISMATCH');
+  }
+  if (!Number.isFinite(Date.parse(receipt.issuedAt))) {
+    throw new Error('INVALID_VEHICLE_SELECTION_RECEIPT_ISSUED_AT');
+  }
+
+  const snapshotDigest = stableDigest(receipt.snapshot);
+  if (
+    !/^[a-f0-9]{64}$/.test(receipt.snapshotDigest) ||
+    snapshotDigest !== receipt.snapshotDigest
+  ) {
+    throw new Error('VEHICLE_SELECTION_SNAPSHOT_DIGEST_MISMATCH');
+  }
+
+  const expectedReceiptId = `vehicle_selection_${stableDigest({
+    contractVersion: receipt.contractVersion,
+    selectorContract: receipt.selectorContract,
+    issuedAt: receipt.issuedAt,
+    snapshotDigest: receipt.snapshotDigest,
+  })}`;
+  if (receipt.receiptId !== expectedReceiptId) {
+    throw new Error('VEHICLE_SELECTION_RECEIPT_ID_MISMATCH');
+  }
+
+  const expectedReceiptDigest = stableDigest(receiptUnsigned(receipt));
+  if (
+    !/^[a-f0-9]{64}$/.test(receipt.receiptDigest) ||
+    expectedReceiptDigest !== receipt.receiptDigest
+  ) {
+    throw new Error('VEHICLE_SELECTION_RECEIPT_DIGEST_MISMATCH');
+  }
+
+  if (receipt.snapshot.record.recordId === '' ||
+      receipt.snapshot.record.recordId == null) {
+    throw new Error('VEHICLE_SELECTION_RECEIPT_RECORD_ID_MISSING');
+  }
+
+  return true;
 }
 
