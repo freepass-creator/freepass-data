@@ -1111,6 +1111,125 @@ function auditRuleReference(
   }
 }
 
+function auditDependencyGraphSemantics(
+  rules: readonly VehicleMasterCompatibilityRule[],
+  issues: VehicleMasterGraphAuditIssue[]
+) {
+  const groups = new Map<string, VehicleMasterCompatibilityRule[]>();
+  for (const rule of rules) {
+    if (!DEPENDENCY_RULE_TYPES.has(rule.ruleType)) continue;
+    const key = stableDigest(rule.scope);
+    const list = groups.get(key) ?? [];
+    list.push(rule);
+    groups.set(key, list);
+  }
+
+  for (const scopeKey of [...groups.keys()].sort()) {
+    const scoped = [...(groups.get(scopeKey) ?? [])]
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const requiresEdges = dependencyEdges(scoped, 'REQUIRES');
+    const excludesEdges = dependencyEdges(scoped, 'EXCLUDES');
+
+    const reverseKeys = new Set<string>();
+    for (const required of requiresEdges) {
+      for (const excluded of excludesEdges) {
+        if (
+          required.from !== excluded.to ||
+          required.to !== excluded.from ||
+          !rulesShareEffectiveWindow([required.rule, excluded.rule])
+        ) {
+          continue;
+        }
+        const ids = [required.rule.id, excluded.rule.id].sort();
+        const key = ids.join('|');
+        if (reverseKeys.has(key)) continue;
+        reverseKeys.add(key);
+        add(issues, {
+          code: 'RULE_DEPENDENCY_CONFLICT',
+          severity: 'ERROR',
+          entityKind: 'RULE',
+          entityId: excluded.rule.id,
+          fieldPath: `targetIds.${excluded.to}`,
+          relatedId: required.rule.id,
+          detail: 'REVERSE_DIRECTION',
+        });
+      }
+    }
+
+    const transitiveKeys = new Set<string>();
+    for (const first of requiresEdges) {
+      for (const second of requiresEdges) {
+        if (first.to !== second.from || first.from === second.to) continue;
+
+        for (const excluded of excludesEdges) {
+          const closesForward =
+            excluded.from === first.from &&
+            excluded.to === second.to;
+          const closesReverse =
+            excluded.from === second.to &&
+            excluded.to === first.from;
+          if (!closesForward && !closesReverse) continue;
+
+          const triple = [first.rule, second.rule, excluded.rule];
+          if (!rulesShareEffectiveWindow(triple)) continue;
+
+          const ids = triple.map((rule) => rule.id).sort();
+          const key = `${first.from}>${first.to}>${second.to}|${ids.join('|')}`;
+          if (transitiveKeys.has(key)) continue;
+          transitiveKeys.add(key);
+
+          add(issues, {
+            code: 'RULE_DEPENDENCY_TRANSITIVE_CONFLICT',
+            severity: 'ERROR',
+            entityKind: 'RULE',
+            entityId: excluded.rule.id,
+            fieldPath: `targetIds.${second.to}`,
+            relatedId: first.rule.id,
+            detail: `${first.rule.id}>${second.rule.id}|${excluded.rule.id}`,
+          });
+        }
+      }
+    }
+
+    for (const excluded of excludesEdges) {
+      const forwardPath = findRequiresPath(
+        requiresEdges,
+        excluded.from,
+        excluded.to,
+        [excluded.rule]
+      );
+      if (!forwardPath?.length) continue;
+
+      const returnPath = findRequiresPath(
+        requiresEdges,
+        excluded.to,
+        excluded.from,
+        [excluded.rule, ...forwardPath.map((edge) => edge.rule)]
+      );
+      if (!returnPath?.length) continue;
+
+      const allRules = [
+        excluded.rule,
+        ...forwardPath.map((edge) => edge.rule),
+        ...returnPath.map((edge) => edge.rule),
+      ];
+      if (!rulesShareEffectiveWindow(allRules)) continue;
+
+      add(issues, {
+        code: 'RULE_DEPENDENCY_CYCLE_CONFLICT',
+        severity: 'ERROR',
+        entityKind: 'RULE',
+        entityId: excluded.rule.id,
+        fieldPath: `targetIds.${excluded.to}`,
+        relatedId: forwardPath[0]?.rule.id,
+        detail:
+          `${forwardPath.map((edge) => edge.rule.id).join('>')}|` +
+          returnPath.map((edge) => edge.rule.id).join('>'),
+      });
+    }
+  }
+}
+
 function auditRules(
   rules: readonly VehicleMasterCompatibilityRule[],
   nodes: readonly VehicleMasterNode[],
@@ -1450,6 +1569,8 @@ function auditRules(
       }
     }
   }
+
+  auditDependencyGraphSemantics(rules, issues);
 }
 
 export function auditVehicleMasterGraph(
