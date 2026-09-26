@@ -792,3 +792,45 @@
   .vf .vf-group-member td:first-child{padding-left:10px}
   .vf .vf-group-member .vf-row-button::before{left:-8px}
 }
+
+
+/* U-01 injected F group drilldown transition */
+.vf .vf-group-drilldown{
+  display:grid;
+  gap:7px;
+  margin:0 12px 10px;
+  padding:10px 0 0;
+  border-top:1px solid var(--vf-line)
+}
+.vf .vf-group-drilldown-title{
+  color:var(--text,#5F6974);
+  font-size:var(--vf-support)
+}
+.vf .vf-group-drilldown-options{
+  display:flex;
+  gap:7px;
+  overflow-x:auto;
+  overscroll-behavior-inline:contain;
+  padding-bottom:2px
+}
+.vf .vf-group-drilldown-option{
+  flex:0 0 auto;
+  min-height:38px;
+  padding:6px 11px;
+  border:1px solid var(--vf-line);
+  background:var(--vf-bg);
+  color:var(--vf-ink)
+}
+.vf .vf-group-drilldown-option:disabled{opacity:.55;cursor:progress}
+.vf .vf-group-drilldown-unknown{
+  color:var(--text,#5F6974);
+  font-size:10px
+}
+.vf .vf-read-notice[data-kind='drilldown-applied']{background:#EDF8F1}
+.vf .vf-read-notice[data-kind='drilldown-rejected'],
+.vf .vf-read-notice[data-kind='drilldown-error']{background:#FFF6E4}
+
+@media(max-width:900px){
+  .vf .vf-group-drilldown{margin-inline:10px}
+  .vf .vf-group-drilldown-option{min-height:44px}
+}

@@ -90,10 +90,28 @@ function validateSnapshot(input) {
       if (!group || !text(group.id) || groupIds.has(group.id) ||
           !text(group.label) || !text(group.representativeId) ||
           !Array.isArray(group.memberIds) ||
+          !Array.isArray(group.drilldowns) ||
           !Number.isSafeInteger(group.candidateCount) || group.candidateCount < 1 ||
           group.memberIds.length !== group.candidateCount ||
           typeof group.expandable !== 'boolean') {
         invalid('group');
+      }
+      for (const drilldown of group.drilldowns) {
+        if (!drilldown || !text(drilldown.axis) ||
+            (drilldown.label != null && !text(drilldown.label)) ||
+            !Array.isArray(drilldown.options) ||
+            !Number.isSafeInteger(drilldown.selectableCandidateCount) ||
+            !Number.isSafeInteger(drilldown.unknownValueCount)) {
+          invalid('groupDrilldown');
+        }
+        for (const option of drilldown.options) {
+          if (!option || !text(option.label) ||
+              (option.id != null && !text(option.id)) ||
+              (option.value != null && !Number.isFinite(option.value)) ||
+              !Number.isSafeInteger(option.count) || option.count < 0) {
+            invalid('groupDrilldownOption');
+          }
+        }
       }
       groupIds.add(group.id);
       if (!group.memberIds.includes(group.representativeId)) invalid('groupRepresentative');
@@ -128,13 +146,31 @@ function formatObservedAt(value) {
   }).format(date);
 }
 
+function groupTransitionRejectedMessage(reason) {
+  switch (reason) {
+    case 'GROUP_NOT_FOUND':
+      return '그룹 상태가 바뀌었습니다. 최신 결과를 다시 확인해 주세요.';
+    case 'UNRESOLVED_GROUP_IDENTITY':
+      return '이 그룹은 모델·세대 정체성이 확정되지 않아 조건으로 좁힐 수 없습니다.';
+    case 'DRILLDOWN_AXIS_NOT_AVAILABLE':
+      return '이 조건은 현재 그룹에서 더 이상 사용할 수 없습니다.';
+    case 'DRILLDOWN_OPTION_NOT_AVAILABLE':
+      return '선택한 값은 현재 그룹에서 더 이상 사용할 수 없습니다.';
+    default:
+      return '현재 상태에서는 이 조건을 적용할 수 없습니다.';
+  }
+}
+
 function stateBadge(item) {
   const badge = element('span', 'vf-state-badge', item.state.label);
   badge.dataset.tone = item.state.tone ?? 'neutral';
   return badge;
 }
 
-export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CAR' } = {}) {
+export function mountVehicleFinder(
+  root,
+  { read, onSelect, onGroupDrilldown, initialMode = 'NEW_CAR' } = {},
+) {
   if (!(root instanceof HTMLElement)) throw new TypeError('Finder root must be an HTMLElement');
 
   const prefix = 'vf-u01-' + (++instanceCount);
@@ -149,6 +185,8 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
   let inspectedId = null;
   let lastInspectedId = null;
   let listScrollY = 0;
+  let readContext = null;
+  let activeDrilldownKey = null;
   const expandedGroupIds = new Set();
   let requestSeq = 0;
   let disposed = false;
@@ -657,6 +695,81 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     return row;
   }
 
+  async function applyGroupDrilldown(group, drilldown, option, button) {
+    if (typeof onGroupDrilldown !== 'function' || activeDrilldownKey) return;
+
+    const key = group.id + ':' + drilldown.axis + ':' + option.label;
+    activeDrilldownKey = key;
+    button.disabled = true;
+    root.setAttribute('aria-busy', 'true');
+    setReadNotice(
+      'drilldown',
+      (drilldown.label ?? drilldown.axis) + ' 조건을 적용하고 있습니다',
+      '현재 후보를 유지한 채 F 전이 결과를 확인합니다.',
+    );
+
+    try {
+      const response = await onGroupDrilldown({
+        mode,
+        groupId: group.id,
+        axis: drilldown.axis,
+        option: structuredClone(option),
+        observationId: snapshot.observationId,
+        query,
+        filters: { ...filters },
+        readContext,
+      });
+
+      if (!response || !response.transition ||
+          !['APPLIED', 'REJECTED'].includes(response.transition.status)) {
+        invalid('groupDrilldownResponse');
+      }
+
+      if (response.transition.status === 'REJECTED') {
+        setReadNotice(
+          'drilldown-rejected',
+          '이 조건으로는 후보를 좁힐 수 없습니다',
+          response.message ??
+            groupTransitionRejectedMessage(response.transition.reason),
+        );
+        return;
+      }
+
+      const next = validateSnapshot(response.snapshot);
+      if (next.mode !== mode) invalid('modeEcho');
+      snapshot = next;
+      readContext = response.readContext ?? null;
+      inspectedId = null;
+      detail.hidden = true;
+      root.classList.remove('vf-inspecting');
+      expandedGroupIds.clear();
+      if (response.transition.activeGroupId) {
+        expandedGroupIds.add(response.transition.activeGroupId);
+      }
+      renderSnapshot(
+        '후보 ' + response.transition.beforeCandidateCount +
+          '개 → ' + response.transition.afterCandidateCount + '개',
+      );
+      setReadNotice(
+        'drilldown-applied',
+        '그룹 조건을 적용했습니다',
+        response.transition.clearedAxes?.length
+          ? '충돌하는 기존 조건 ' + response.transition.clearedAxes.length + '개가 정리되었습니다.'
+          : '선택한 조건으로 후보 범위를 좁혔습니다.',
+      );
+    } catch {
+      setReadNotice(
+        'drilldown-error',
+        '그룹 조건을 적용하지 못했습니다',
+        '기존 후보는 그대로 유지됩니다. 다시 시도해 주세요.',
+      );
+    } finally {
+      activeDrilldownKey = null;
+      button.disabled = false;
+      root.setAttribute('aria-busy', 'false');
+    }
+  }
+
   function groupRow(group) {
     const row = element('tr', 'vf-group-row');
     const cell = element('td');
@@ -709,6 +822,49 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     });
 
     cell.append(button);
+
+    if (expanded && typeof onGroupDrilldown === 'function' &&
+        group.suggestedDrilldownAxis) {
+      const drilldown = group.drilldowns.find(
+        (item) => item.axis === group.suggestedDrilldownAxis,
+      );
+      if (drilldown?.options.length) {
+        const panel = element('div', 'vf-group-drilldown');
+        panel.append(
+          element(
+            'strong',
+            'vf-group-drilldown-title',
+            (drilldown.label ?? drilldown.axis) + ' 조건으로 좁히기',
+          ),
+        );
+        const choices = element('div', 'vf-group-drilldown-options');
+        for (const option of drilldown.options) {
+          const choice = element(
+            'button',
+            'vf-group-drilldown-option',
+            option.label + (option.count ? ' · ' + option.count : ''),
+          );
+          choice.type = 'button';
+          choice.dataset.axis = drilldown.axis;
+          listen(choice, 'click', () => {
+            void applyGroupDrilldown(group, drilldown, option, choice);
+          });
+          choices.append(choice);
+        }
+        panel.append(choices);
+        if (drilldown.unknownValueCount > 0) {
+          panel.append(
+            element(
+              'span',
+              'vf-group-drilldown-unknown',
+              '값 미확인 ' + drilldown.unknownValueCount + '개',
+            ),
+          );
+        }
+        cell.append(panel);
+      }
+    }
+
     row.append(cell);
     return row;
   }
@@ -840,7 +996,12 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     }
 
     try {
-      const next = validateSnapshot(await read({ mode, query, filters: { ...filters } }));
+      const next = validateSnapshot(await read({
+        mode,
+        query,
+        filters: { ...filters },
+        readContext,
+      }));
       if (next.mode !== mode) invalid('modeEcho');
       if (disposed || seq !== requestSeq) return;
       snapshot = next;
@@ -886,6 +1047,7 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     lastInspectedId = null;
     listScrollY = 0;
     expandedGroupIds.clear();
+    readContext = null;
     snapshot = null;
     input.value = '';
     detail.hidden = true;
@@ -911,6 +1073,7 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
   listen(filterDone, 'click', () => setFilterPanel(false));
   listen(reset, 'click', () => {
     filters = {};
+    readContext = null;
     populateFilters();
     void refreshResults({ preserve: true });
   });
