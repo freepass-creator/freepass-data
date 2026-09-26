@@ -645,7 +645,7 @@ jobs:
             echo
             echo "Source digest: $(jq -r '.source.digest' source-inventory.json)"
             echo
-            echo "Publication HOLD reasons: $(jq -r '.authority.publicationHoldReasons | join(", "))' source-inventory.json)"
+            echo "Publication HOLD reasons: $(jq -r '.authority.publicationHoldReasons | join(", ")' source-inventory.json)"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Build FreePass Data control tower
         shell: bash
