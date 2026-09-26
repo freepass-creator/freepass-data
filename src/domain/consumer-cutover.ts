@@ -314,6 +314,12 @@ export function evaluateConsumerCutover(
       if (release.observedAt && Number.isNaN(Date.parse(release.observedAt))) {
         blockers.push('invalid approvedRelease: observedAt');
       }
+      if (
+        target === 'FREEPASS_DATA_READ' &&
+        release.projectionId === 'sheet-publication-bridge'
+      ) {
+        blockers.push('migration bridge release cannot authorize final cutover');
+      }
     }
   }
 
