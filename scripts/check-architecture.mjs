@@ -177,6 +177,22 @@ const auditWorkflow = fs.readFileSync(
   path.join(repoRoot, '.github', 'workflows', 'erp5-continuous-audit.yml'),
   'utf8'
 );
+const sheetHealthStart = auditWorkflow.indexOf('- name: Check F01/F86 consumer health');
+const sheetHealthEnd = auditWorkflow.indexOf('- name: Capture the current FULL Firestore snapshot');
+const sheetHealthStep = auditWorkflow.slice(sheetHealthStart, sheetHealthEnd);
+if (
+  sheetHealthStart < 0 ||
+  sheetHealthEnd <= sheetHealthStart ||
+  !sheetHealthStep.includes('--scheduled-read-only') ||
+  !sheetHealthStep.includes('SHEET_EVIDENCE_MAX_AGE_MINUTES') ||
+  !sheetHealthStep.includes('sheet-consumer-health-summary.json') ||
+  sheetHealthStep.includes('--apply') ||
+  sheetHealthStep.includes('FREEPASS_SHEET_EVIDENCE_WRITE_AUTHORIZED')
+) {
+  console.error('Scheduled Sheet consumer health must remain explicit-policy and read-only');
+  process.exit(1);
+}
+
 const captureStart = auditWorkflow.indexOf('- name: Capture the current FULL Firestore snapshot');
 const captureEnd = auditWorkflow.indexOf('- name: Load the last accepted observation pointer');
 const dryRunStart = auditWorkflow.indexOf('- name: Build immutable dry-run and delta evidence');
