@@ -21,9 +21,22 @@ describe('Firestore projection read boundary', () => {
       'projection_release_manifests/rel_test': { releaseId: 'rel_test' },
     });
     const reader = projectionReader(fixture.db);
-    expect(Object.keys(reader).sort()).toEqual(['getActive', 'getManifest']);
+    expect(Object.keys(reader).sort()).toEqual([
+      'getActive',
+      'getActiveEvidenceSnapshot',
+      'getManifest',
+      'listProjectionLineage'
+    ]);
     expect((await reader.getActive('erp-public'))?.releaseId).toBe('rel_test');
     expect((await reader.getManifest('rel_test'))?.releaseId).toBe('rel_test');
+    expect(await reader.listProjectionLineage('rel_test')).toEqual([]);
+    expect(await reader.getActiveEvidenceSnapshot('erp-public')).toMatchObject({
+      projectionId: 'erp-public',
+      release: { releaseId: 'rel_test' },
+      manifest: { releaseId: 'rel_test' },
+      lineage: [],
+      consistency: 'ATOMIC'
+    });
     expect(fixture.reads).toEqual(['projection_active/erp-public', 'projection_releases/rel_test', 'projection_release_manifests/rel_test']);
   });
   it('does not create a release when no pointer exists', async () => {
