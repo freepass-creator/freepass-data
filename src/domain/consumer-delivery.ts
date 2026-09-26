@@ -58,6 +58,7 @@ export type SheetCutoverEvidenceDecision = {
 export type StoredSheetDeliveryEvidence = {
   contractVersion: 'freepass-sheet-delivery-evidence-v1';
   receiptId: string;
+  evidenceDigest: string;
   consumerId: SheetConsumerId;
   workbook: SheetWorkbook;
   recordedAt: string;
