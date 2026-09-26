@@ -10,9 +10,12 @@ import {
   type VehicleMasterWriteResult,
 } from '../domain/vehicle-master.js';
 import {
+  canonicalDrivetrain,
   canonicalPowertrainIdentity,
+  canonicalSeatCount,
   canonicalTrimIdentity,
   inferPowertrainFuelType,
+  inferVariantFacts,
 } from '../domain/vehicle-master-normalization.js';
 import type { VehicleMasterStore } from '../ports/vehicle-master-store.js';
 
@@ -49,6 +52,12 @@ export type VehicleMasterEvidenceIssue = {
     | 'POWERTRAIN_DUPLICATE_IN_MODEL_YEAR'
     | 'TRIM_IDENTITY_MISMATCH'
     | 'TRIM_DUPLICATE_IN_VARIANT'
+    | 'VARIANT_SEATS_INVALID'
+    | 'VARIANT_DRIVETRAIN_INVALID'
+    | 'VARIANT_DRIVETRAIN_NOT_CANONICAL'
+    | 'VARIANT_NAME_SEATS_MISMATCH'
+    | 'VARIANT_NAME_DRIVETRAIN_MISMATCH'
+    | 'VARIANT_DUPLICATE_IN_POWERTRAIN'
     | 'REFERENCE_NODE_MISSING'
     | 'REFERENCE_NODE_HOLD'
     | 'REFERENCE_EFFECTIVE_RANGE_MISMATCH'
@@ -587,6 +596,78 @@ async function applyNodeReferenceGate(
           issues.push({
             code: 'TRIM_DUPLICATE_IN_VARIANT',
             fieldPath: 'canonicalName',
+            detail: sibling.id,
+          });
+        }
+      }
+    }
+  }
+
+  if (proposal.nodeType === 'VARIANT') {
+    const seats = canonicalSeatCount(proposal.attributes.seats);
+    const storedDrivetrain =
+      typeof proposal.attributes.drivetrain === 'string'
+        ? proposal.attributes.drivetrain.trim()
+        : null;
+    const drivetrain = canonicalDrivetrain(storedDrivetrain);
+
+    if (seats === null) {
+      issues.push({
+        code: 'VARIANT_SEATS_INVALID',
+        fieldPath: 'attributes.seats',
+      });
+    }
+    if (drivetrain === null) {
+      issues.push({
+        code: 'VARIANT_DRIVETRAIN_INVALID',
+        fieldPath: 'attributes.drivetrain',
+      });
+    } else if (storedDrivetrain !== drivetrain) {
+      issues.push({
+        code: 'VARIANT_DRIVETRAIN_NOT_CANONICAL',
+        fieldPath: 'attributes.drivetrain',
+        detail: `${storedDrivetrain}!=${drivetrain}`,
+      });
+    }
+
+    const labelFacts = inferVariantFacts(proposal.canonicalName);
+    if (labelFacts.seats !== null && seats !== null && labelFacts.seats !== seats) {
+      issues.push({
+        code: 'VARIANT_NAME_SEATS_MISMATCH',
+        fieldPath: 'canonicalName',
+        detail: `${labelFacts.seats}!=${seats}`,
+      });
+    }
+    if (
+      labelFacts.drivetrain !== null &&
+      drivetrain !== null &&
+      labelFacts.drivetrain !== drivetrain
+    ) {
+      issues.push({
+        code: 'VARIANT_NAME_DRIVETRAIN_MISMATCH',
+        fieldPath: 'canonicalName',
+        detail: `${labelFacts.drivetrain}!=${drivetrain}`,
+      });
+    }
+
+    if (proposal.parentId && seats !== null && drivetrain !== null) {
+      const siblings = (await store.listNodesByType('VARIANT'))
+        .filter((node) =>
+          node.id !== proposal.id &&
+          node.parentId === proposal.parentId &&
+          node.status !== 'HOLD'
+        );
+
+      for (const sibling of siblings) {
+        const siblingSeats = canonicalSeatCount(sibling.attributes.seats);
+        const siblingDrivetrain =
+          typeof sibling.attributes.drivetrain === 'string'
+            ? canonicalDrivetrain(sibling.attributes.drivetrain)
+            : null;
+        if (siblingSeats === seats && siblingDrivetrain === drivetrain) {
+          issues.push({
+            code: 'VARIANT_DUPLICATE_IN_POWERTRAIN',
+            fieldPath: 'attributes',
             detail: sibling.id,
           });
         }

@@ -90,6 +90,43 @@ describe('vehicle master cross-source reconciliation', () => {
     ]);
   });
 
+  it('normalizes safe drivetrain aliases before cross-source conflict detection', () => {
+    const base = {
+      maker: '기아',
+      model: '쏘렌토',
+      modelYear: 2027,
+      powertrainName: '2.5 가솔린 터보',
+      seats: 5,
+      trimName: '프레스티지',
+      fuelType: 'GASOLINE',
+      basePrice: 36410000,
+      currency: 'KRW' as const,
+      effectiveFrom: null,
+      baseItems: [],
+      options: [],
+      sourceText: 'fixture',
+    };
+
+    const rows = reconcileVehicleMasterTrimFacts([
+      {
+        sourceDocumentId: 'source_fwd',
+        record: { ...base, drivetrain: 'FWD' },
+      },
+      {
+        sourceDocumentId: 'source_front_korean',
+        record: { ...base, drivetrain: '전륜' },
+      },
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.drivetrain).toBe('FWD');
+    expect(rows[0]?.conflicts).toEqual([]);
+    expect(rows[0]?.fieldEvidence.drivetrain).toEqual([
+      'source_front_korean',
+      'source_fwd',
+    ]);
+  });
+
   it('keeps conflicting non-null structural facts unresolved', () => {
     const base = {
       maker: '기아',
