@@ -97,7 +97,7 @@ describe('read-only consumer gateway', () => {
       { ...release, data: release.data.map((row) => ({ ...row, privateCustomer: 'must-not-be-returned' })) },
     ]) {
       const { app } = withAccess(
-        { getActive: async () => altered, getManifest: (id) => store.getManifest(id) } as unknown as Parameters<typeof createConsumerGateway>[0],
+        { getActive: async () => altered, getManifest: (id: string) => store.getManifest(id) } as unknown as Parameters<typeof createConsumerGateway>[0],
         [binding]
       );
       expect((await app.inject({ url, headers })).statusCode).toBe(503);
