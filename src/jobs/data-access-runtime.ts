@@ -2,7 +2,9 @@ import { DataAccessGateway } from '../application/data-access-gateway.js';
 import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
 import { gcsDataAccessLogStore } from '../infra/gcs-data-access-log.js';
 import {
+  buildErp5CanonicalDryRun,
   captureErp5Source,
+  compareErp5ProductCaptures,
   erp5ReadTransport,
   inspectErp5Capture
 } from '../adapters/erp5-source-capture.js';
@@ -22,6 +24,13 @@ function readOnlyAccess(input: { accessToken: string; evidenceBucket: string }) 
 export function createJobDataAccessRuntime() {
   return {
     access: new DataAccessGateway(createFirestoreDataAccessLogStore())
+  };
+}
+
+export function createErp5CaptureAnalysisRuntime() {
+  return {
+    buildCanonicalDryRun: buildErp5CanonicalDryRun,
+    compareProductCaptures: compareErp5ProductCaptures
   };
 }
 
@@ -144,9 +153,15 @@ export async function createSourceIngestDataAccessRuntime() {
 }
 
 export async function createCentralDiagnosticDataAccessRuntime() {
-  const { readCentralFirestoreCounts } = await import('../infra/central-firestore-diagnostic.js');
+  const {
+    CENTRAL_ACTIVE_PROJECTION_COLLECTION,
+    CENTRAL_CANONICAL_COLLECTIONS,
+    readCentralFirestoreCounts
+  } = await import('../infra/central-firestore-diagnostic.js');
   return {
     ...createJobDataAccessRuntime(),
+    canonicalCollections: CENTRAL_CANONICAL_COLLECTIONS,
+    activeProjectionCollection: CENTRAL_ACTIVE_PROJECTION_COLLECTION,
     readCounts: readCentralFirestoreCounts
   };
 }
