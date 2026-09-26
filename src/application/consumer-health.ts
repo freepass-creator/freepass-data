@@ -212,7 +212,7 @@ export async function readConsumerHealth(
   ]);
 
   const registrations = registrationMap();
-  const sheetById = new Map(
+  const sheetById = new Map<string, SheetConsumerHealthEntry>(
     sheets.consumers.map((entry) => [entry.consumerId, entry])
   );
 
