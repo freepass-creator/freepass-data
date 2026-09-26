@@ -178,12 +178,12 @@ function readinessOf(
   contractReady: boolean
 ): ConsumerReadinessState {
   if (entry.currentStage === 'FREEPASS_DATA_READ') {
-    return entry.healthStatus === 'HEALTHY' ? 'FINAL' : 'HOLD';
+    return entry.status === 'HEALTHY' ? 'FINAL' : 'HOLD';
   }
   if (!contractReady) return 'HOLD';
   if (entry.evidence.source === 'NOT_IMPLEMENTED') return 'HOLD';
   return entry.nextTransition?.allowed === true &&
-    entry.healthStatus !== 'BLOCKED'
+    entry.status !== 'BLOCKED'
     ? 'READY_FOR_NEXT_STAGE'
     : 'HOLD';
 }
