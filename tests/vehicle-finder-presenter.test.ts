@@ -185,7 +185,11 @@ describe('Vehicle Finder presenter over actual selector result', () => {
 
 describe('Vehicle Finder presenter candidate groups', () => {
   it('preserves F-owned group membership, counts and suggested drilldown', () => {
-    const base = selectorRecordsFromUsedcarMaster([usedcar])[0]!;
+    const adapted = selectorRecordsFromUsedcarMaster([usedcar])[0]!;
+    const base = {
+      ...adapted,
+      maker: { id: 'maker_kia', label: '기아' },
+    };
     const second = {
       ...base,
       recordId: 'used_sorento_signature_2024',
