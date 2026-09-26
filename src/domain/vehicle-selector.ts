@@ -106,7 +106,23 @@ export type VehicleSelectorResolutionStatus =
   | 'AMBIGUOUS'
   | 'PARTIAL_UNKNOWN'
   | 'RESOLVED'
+  | 'NO_RESULT'
   | 'IMPOSSIBLE';
+
+export type VehicleSelectorNoResultReason =
+  | 'UNRECOGNIZED_SEARCH'
+  | 'INSUFFICIENT_DATA'
+  | 'HOLD_ONLY'
+  | 'OUT_OF_SCOPE'
+  | 'IMPOSSIBLE_COMBINATION';
+
+export type VehicleSelectorNoResultEvidence = {
+  unrecognizedSearchTokens: string[];
+  unrecognizedAxes: VehicleSelectorAxis[];
+  unknownCompatibleCount: number;
+  holdCompatibleCount: number;
+  outOfScopeCompatibleCount: number;
+};
 
 export type VehicleSelectorGuidance = {
   candidateCount: number;
@@ -115,6 +131,8 @@ export type VehicleSelectorGuidance = {
   blockedCount: number;
   resolvedRecordId: string | null;
   resolutionStatus: VehicleSelectorResolutionStatus;
+  noResultReason: VehicleSelectorNoResultReason | null;
+  noResultEvidence: VehicleSelectorNoResultEvidence | null;
   singletonAxes: VehicleSelectorAxis[];
   ambiguousAxes: VehicleSelectorAxis[];
   suggestedNextAxis: VehicleSelectorAxis | null;
@@ -517,10 +535,13 @@ function tokenMatchesAlias(record: VehicleSelectorRecord, token: string) {
 
 function buildSearchContext(
   records: readonly VehicleSelectorRecord[],
-  request: VehicleSelectorRequest
+  request: VehicleSelectorRequest,
+  respectMode = true
 ): SearchContext {
   const tokens = normalize(request.searchText).split(' ').filter(Boolean);
-  const allowed = records.filter((record) => allowedByMode(record, request));
+  const allowed = respectMode
+    ? records.filter((record) => allowedByMode(record, request))
+    : [...records];
 
   return {
     tokens: tokens.map((token) => ({
@@ -715,6 +736,105 @@ function buildFacets(
   })) as Record<VehicleSelectorAxis, VehicleSelectorFacetOption[]>;
 }
 
+function rawRequestCompatibility(
+  record: VehicleSelectorRecord,
+  request: VehicleSelectorRequest,
+  searchContext: SearchContext
+) {
+  const selection = request.selection ?? {};
+  let unresolved = false;
+
+  for (const axis of AXES) {
+    const result = matchesAxis(record, selection, axis);
+    if (result.rejected) {
+      return { compatible: false, unresolved: false };
+    }
+    if (result.unresolved) unresolved = true;
+  }
+
+  const search = matchesSearchText(record, searchContext);
+  if (search.rejected) {
+    return { compatible: false, unresolved: false };
+  }
+
+  return {
+    compatible: true,
+    unresolved: unresolved || search.unresolved > 0,
+  };
+}
+
+function diagnoseNoResult(
+  records: readonly VehicleSelectorRecord[],
+  request: VehicleSelectorRequest
+): {
+  reason: VehicleSelectorNoResultReason;
+  evidence: VehicleSelectorNoResultEvidence;
+} {
+  const selection = request.selection ?? {};
+  const globalSearchContext = buildSearchContext(records, request, false);
+  const unrecognizedSearchTokens = globalSearchContext.tokens
+    .filter((token) => !token.axes.length && !token.aliasKnown)
+    .map((token) => token.token);
+
+  const unrecognizedAxes = AXES.filter(
+    (axis) =>
+      axisSelected(selection, axis) &&
+      !records.some((record) => matchesAxis(record, selection, axis).matched)
+  );
+
+  const compatible = records
+    .map((record) => ({
+      record,
+      ...rawRequestCompatibility(record, request, globalSearchContext),
+    }))
+    .filter((entry) => entry.compatible);
+
+  const holdCompatibleCount = compatible.filter(
+    ({ record }) => baseActionState(record) === 'HOLD'
+  ).length;
+
+  const unknownCompatibleCount = compatible.filter(
+    ({ record, unresolved }) =>
+      baseActionState(record) === 'UNKNOWN' || unresolved
+  ).length;
+
+  const outOfScopeCompatibleCount = compatible.filter(
+    ({ record }) =>
+      baseActionState(record) === 'ACTIVE' &&
+      !allowedByMode(record, { ...request, includeHold: true })
+  ).length;
+
+  const evidence: VehicleSelectorNoResultEvidence = {
+    unrecognizedSearchTokens,
+    unrecognizedAxes,
+    unknownCompatibleCount,
+    holdCompatibleCount,
+    outOfScopeCompatibleCount,
+  };
+
+  if (unrecognizedSearchTokens.length) {
+    return { reason: 'UNRECOGNIZED_SEARCH', evidence };
+  }
+
+  if (unrecognizedAxes.length) {
+    return { reason: 'INSUFFICIENT_DATA', evidence };
+  }
+
+  if (outOfScopeCompatibleCount > 0) {
+    return { reason: 'OUT_OF_SCOPE', evidence };
+  }
+
+  if (unknownCompatibleCount > 0) {
+    return { reason: 'INSUFFICIENT_DATA', evidence };
+  }
+
+  if (holdCompatibleCount > 0) {
+    return { reason: 'HOLD_ONLY', evidence };
+  }
+
+  return { reason: 'IMPOSSIBLE_COMBINATION', evidence };
+}
+
 function requestHasCriteria(request: VehicleSelectorRequest) {
   const selection = request.selection ?? {};
   return (
@@ -724,6 +844,7 @@ function requestHasCriteria(request: VehicleSelectorRequest) {
 }
 
 function buildGuidance(
+  records: readonly VehicleSelectorRecord[],
   candidates: readonly VehicleSelectorCandidate[],
   facets: Record<VehicleSelectorAxis, VehicleSelectorFacetOption[]>,
   request: VehicleSelectorRequest
@@ -753,11 +874,18 @@ function buildGuidance(
       ? candidates[0].record.recordId
       : null;
 
+  const noResult =
+    requestHasCriteria(request) && candidates.length === 0
+      ? diagnoseNoResult(records, request)
+      : null;
+
   const resolutionStatus: VehicleSelectorResolutionStatus =
     !requestHasCriteria(request)
       ? 'OPEN'
       : candidates.length === 0
-        ? 'IMPOSSIBLE'
+        ? noResult?.reason === 'IMPOSSIBLE_COMBINATION'
+          ? 'IMPOSSIBLE'
+          : 'NO_RESULT'
         : resolvedRecordId
           ? 'RESOLVED'
           : candidates.some((candidate) => !candidate.selectable)
@@ -771,6 +899,8 @@ function buildGuidance(
     blockedCount: blocked.length,
     resolvedRecordId,
     resolutionStatus,
+    noResultReason: noResult?.reason ?? null,
+    noResultEvidence: noResult?.evidence ?? null,
     singletonAxes,
     ambiguousAxes,
     suggestedNextAxis,
@@ -862,7 +992,7 @@ export function selectVehicles(
     mode: request.mode,
     candidates,
     facets,
-    guidance: buildGuidance(candidates, facets, request),
+    guidance: buildGuidance(records, candidates, facets, request),
   };
 }
 
@@ -884,7 +1014,7 @@ export function reconcileVehicleSelection(
 
   if (
     protectedAxes.size > 0 &&
-    protectedResult.guidance.resolutionStatus === 'IMPOSSIBLE'
+    protectedResult.candidates.length === 0
   ) {
     return {
       selection,
