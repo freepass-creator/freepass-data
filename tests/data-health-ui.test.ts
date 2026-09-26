@@ -27,6 +27,7 @@ describe('U-01 Data Health presentation boundary',()=>{
     expect(html).toMatch(/mountDataHealth\(document\.getElementById\('data-health'\)\)/);
     expect(source).toMatch(/Consumer Health 연결 대기/);
     expect(source).toMatch(/상태를 추정하지 않습니다/);
+    expect(source).toMatch(/Data Health 다시 조회/);
   });
 
   it('renders evidence and blockers without recomputing health',async()=>{
@@ -56,5 +57,6 @@ describe('U-01 Data Health presentation boundary',()=>{
     expect(css).toMatch(/@media\(max-width:900px\)/);
     expect(css).toMatch(/min-height:48px/);
     expect(css).toMatch(/overflow-wrap:anywhere/);
+    expect(css).toMatch(/dh-refresh/);
   });
 });
