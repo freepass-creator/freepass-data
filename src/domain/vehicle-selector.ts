@@ -1686,7 +1686,7 @@ export function applyVehicleGroupDrilldown(
     );
   }
 
-  if (group.scope !== 'MODEL_GENERATION') {
+  if (group.scope === 'UNRESOLVED_IDENTITY') {
     return rejectedGroupTransition(
       before,
       currentSelection,
