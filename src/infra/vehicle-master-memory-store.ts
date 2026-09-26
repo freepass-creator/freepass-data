@@ -1,6 +1,8 @@
 import {
   VEHICLE_MASTER_REPAIR_AUTHORITY_RULE_ID,
   VEHICLE_MASTER_REPAIR_WRITER_POLICY,
+  verifyVehicleMasterRepairApproval,
+  verifyVehicleMasterRepairReceipt,
 } from '../domain/vehicle-master.js';
 import type {
   VehicleMasterCompatibilityRule,
@@ -232,6 +234,16 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
         `VEHICLE_MASTER_REPAIR_APPROVAL_MISMATCH:${input.approval.approvalId}`
       );
     }
+    if (!verifyVehicleMasterRepairApproval(storedApproval)) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_APPROVAL_HASH_INVALID:${storedApproval.approvalId}`
+      );
+    }
+    if (!verifyVehicleMasterRepairReceipt(input.receipt)) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_RECEIPT_HASH_INVALID:${input.receipt.receiptId}`
+      );
+    }
     if (
       storedApproval.approvedBy.kind !== 'USER' ||
       storedApproval.writerId !==
@@ -248,6 +260,8 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
       input.receipt.approvalDigest !== storedApproval.contentHash ||
       input.receipt.approvedBy.id !== storedApproval.approvedBy.id ||
       input.receipt.approvedBy.kind !== storedApproval.approvedBy.kind ||
+      (input.receipt.approvedBy.organizationId ?? null) !==
+        (storedApproval.approvedBy.organizationId ?? null) ||
       input.receipt.writerId !== storedApproval.writerId ||
       input.receipt.authorityRuleId !== storedApproval.authorityRuleId ||
       input.receipt.reason !== storedApproval.reason ||
@@ -255,7 +269,12 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
       input.receipt.repairPlanDigest !== storedApproval.repairPlanDigest ||
       input.receipt.dryRunDigest !== storedApproval.dryRunDigest ||
       input.receipt.entityKind !== storedApproval.entityKind ||
-      input.receipt.entityId !== storedApproval.entityId
+      input.receipt.entityId !== storedApproval.entityId ||
+      (
+        input.receipt.actor.kind === 'SERVICE' &&
+        input.receipt.actor.id !==
+          VEHICLE_MASTER_REPAIR_WRITER_POLICY.primaryWriterId
+      )
     ) {
       throw new Error(
         `VEHICLE_MASTER_REPAIR_APPROVAL_RECEIPT_MISMATCH:${storedApproval.approvalId}`
