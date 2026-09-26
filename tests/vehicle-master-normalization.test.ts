@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canonicalDrivetrain,
+  canonicalHierarchyLabelIdentity,
   canonicalPowertrainIdentity,
   canonicalSeatCount,
   canonicalTrimIdentity,
@@ -26,6 +27,17 @@ describe('vehicle master powertrain normalization', () => {
       .toBe(canonicalTrimIdentity('노-블레스'));
     expect(canonicalTrimIdentity('Noblesse'))
       .not.toBe(canonicalTrimIdentity('노블레스'));
+  });
+
+  it('normalizes hierarchy labels without translating or inferring generation meaning', () => {
+    expect(canonicalHierarchyLabelIdentity('Sorento'))
+      .toBe(canonicalHierarchyLabelIdentity('SORENTO'));
+    expect(canonicalHierarchyLabelIdentity('더 뉴 쏘렌토'))
+      .toBe(canonicalHierarchyLabelIdentity('더뉴-쏘렌토'));
+    expect(canonicalHierarchyLabelIdentity('쏘렌토'))
+      .not.toBe(canonicalHierarchyLabelIdentity('Sorento'));
+    expect(canonicalHierarchyLabelIdentity('MQ4'))
+      .not.toBe(canonicalHierarchyLabelIdentity('4세대 MQ4'));
   });
 
   it('normalizes only explicit drivetrain aliases and preserves 2WD ambiguity', () => {
