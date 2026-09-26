@@ -168,6 +168,42 @@ describe('common vehicle selector', () => {
     expect(result.guidance.suggestedNextAxis).toBe('modelYear');
   });
 
+  it('keeps a candidate when the stable trim id matches but its stored label is stale', () => {
+    const rows = [
+      record('renamed-trim', {
+        trim: { id: 'trim_gt', label: 'GT 기본형' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      selection: {
+        trimId: 'trim_gt',
+        trim: 'GT',
+      },
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual(['renamed-trim']);
+  });
+
+  it('still rejects a conflicting stable trim id even when the label matches', () => {
+    const rows = [
+      record('other-id', {
+        trim: { id: 'trim_gt_line', label: 'GT' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      selection: {
+        trimId: 'trim_gt',
+        trim: 'GT',
+      },
+    });
+
+    expect(result.candidates).toHaveLength(0);
+  });
+
   it('does not let a decorated drivetrain label satisfy structured AWD selection', () => {
     const rows = [
       record('awd', {
