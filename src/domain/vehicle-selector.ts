@@ -144,9 +144,29 @@ export type VehicleSelectorGuidance = {
   suggestedNextAxis: VehicleSelectorAxis | null;
 };
 
+export type VehicleSelectorCandidateGroupScope =
+  | 'MODEL_GENERATION'
+  | 'UNRESOLVED_IDENTITY';
+
+export type VehicleSelectorCandidateGroup = {
+  groupId: string;
+  scope: VehicleSelectorCandidateGroupScope;
+  maker: VehicleSelectorTextValue;
+  model: VehicleSelectorTextValue;
+  generation: VehicleSelectorTextValue;
+  representativeRecordId: string;
+  memberRecordIds: string[];
+  candidateCount: number;
+  selectableCount: number;
+  inspectOnlyCount: number;
+  blockedCount: number;
+  expandable: boolean;
+};
+
 export type VehicleSelectorResult = {
   mode: VehicleSelectorMode;
   candidates: VehicleSelectorCandidate[];
+  groups: VehicleSelectorCandidateGroup[];
   facets: Record<VehicleSelectorAxis, VehicleSelectorFacetOption[]>;
   guidance: VehicleSelectorGuidance;
 };
@@ -894,6 +914,73 @@ function diagnoseNoResult(
   return { reason: 'IMPOSSIBLE_COMBINATION', evidence };
 }
 
+function groupIdentityKey(record: VehicleSelectorRecord) {
+  const makerId = record.maker.id;
+  const modelId = record.model.id;
+  const generationId = record.generation.id;
+
+  if (!makerId || !modelId || !generationId) {
+    return {
+      key: `unresolved:${record.recordId}`,
+      scope: 'UNRESOLVED_IDENTITY' as const,
+    };
+  }
+
+  return {
+    key: `model-generation:${encodeURIComponent(makerId)}:${encodeURIComponent(modelId)}:${encodeURIComponent(generationId)}`,
+    scope: 'MODEL_GENERATION' as const,
+  };
+}
+
+function buildCandidateGroups(
+  candidates: readonly VehicleSelectorCandidate[]
+): VehicleSelectorCandidateGroup[] {
+  const groups = new Map<
+    string,
+    {
+      scope: VehicleSelectorCandidateGroupScope;
+      members: VehicleSelectorCandidate[];
+    }
+  >();
+
+  for (const candidate of candidates) {
+    const identity = groupIdentityKey(candidate.record);
+    const current = groups.get(identity.key);
+    if (current) {
+      current.members.push(candidate);
+    } else {
+      groups.set(identity.key, {
+        scope: identity.scope,
+        members: [candidate],
+      });
+    }
+  }
+
+  return [...groups.entries()].map(([groupId, group]) => {
+    const representative = group.members[0]!;
+    return {
+      groupId,
+      scope: group.scope,
+      maker: structuredClone(representative.record.maker),
+      model: structuredClone(representative.record.model),
+      generation: structuredClone(representative.record.generation),
+      representativeRecordId: representative.record.recordId,
+      memberRecordIds: group.members.map((candidate) => candidate.record.recordId),
+      candidateCount: group.members.length,
+      selectableCount: group.members.filter(
+        (candidate) => candidate.action === 'SELECT'
+      ).length,
+      inspectOnlyCount: group.members.filter(
+        (candidate) => candidate.action === 'INSPECT_ONLY'
+      ).length,
+      blockedCount: group.members.filter(
+        (candidate) => candidate.action === 'BLOCKED'
+      ).length,
+      expandable: group.members.length > 1,
+    };
+  });
+}
+
 function requestHasCriteria(request: VehicleSelectorRequest) {
   const selection = request.selection ?? {};
   return (
@@ -1052,10 +1139,12 @@ export function selectVehicles(
   );
 
   const facets = buildFacets(records, request, searchContext);
+  const groups = buildCandidateGroups(candidates);
 
   return {
     mode: request.mode,
     candidates,
+    groups,
     facets,
     guidance: buildGuidance(records, candidates, facets, request),
   };
