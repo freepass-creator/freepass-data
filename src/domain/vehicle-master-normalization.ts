@@ -10,7 +10,6 @@ const normalize = (value: string) =>
 const POWERTRAIN_TOKEN_ALIASES: Record<string, string> = {
   hev: '하이브리드',
   hybrid: '하이브리드',
-  phev: '하이브리드',
   ev: '전기',
   electric: '전기',
   gasoline: '가솔린',
