@@ -33,7 +33,7 @@ describe('read-only consumer gateway', () => {
   it('does not read storage before authenticating the registered consumer', async () => {
     let reads = 0;
     const { app, logs } = withAccess(
-      { getActive: async () => { reads++; return null; }, getManifest: async () => null },
+      { getActive: async () => { reads++; return null; }, getManifest: async () => null, listProjectionLineage: async () => [] },
       [binding]
     );
     for (const request of [{ url }, { url, headers: { authorization: 'Bearer wrong' } }, { url: '/v1/consumers/admin/catalog', headers }]) {
@@ -97,19 +97,63 @@ describe('read-only consumer gateway', () => {
       { ...release, data: release.data.map((row) => ({ ...row, privateCustomer: 'must-not-be-returned' })) },
     ]) {
       const { app } = withAccess(
-        { getActive: async () => altered, getManifest: (id: string) => store.getManifest(id) } as unknown as Parameters<typeof createConsumerGateway>[0],
+        { getActive: async () => altered, getManifest: (id: string) => store.getManifest(id), listProjectionLineage: (id: string) => store.listProjectionLineage(id) } as unknown as Parameters<typeof createConsumerGateway>[0],
         [binding]
       );
       expect((await app.inject({ url, headers })).statusCode).toBe(503);
       await app.close();
     }
     const { app } = withAccess(
-      { getActive: async () => release, getManifest: async () => null } as unknown as Parameters<typeof createConsumerGateway>[0],
+      { getActive: async () => release, getManifest: async () => null, listProjectionLineage: (id: string) => store.listProjectionLineage(id) } as unknown as Parameters<typeof createConsumerGateway>[0],
       [binding]
     );
     expect((await app.inject({ url, headers })).statusCode).toBe(503);
     await app.close();
   });
+
+  it('fails closed when release lineage is missing or evidence cannot be read atomically', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const release = await buildErpPublicProjection(store, store);
+
+    const missingLineage = {
+      getActive: (projectionId: string) => store.getActive(projectionId),
+      getManifest: (releaseId: string) => store.getManifest(releaseId),
+      listProjectionLineage: async () => []
+    };
+    const { app } = withAccess(
+      missingLineage as unknown as Parameters<typeof createConsumerGateway>[0],
+      [binding]
+    );
+    const result = await app.inject({ url, headers });
+
+    expect(result.statusCode).toBe(503);
+    expect(result.json()).toEqual({ code: 'RELEASE_EVIDENCE_MISMATCH' });
+    await app.close();
+
+    const atomicSnapshot = await store.getActiveEvidenceSnapshot('erp-public');
+    const tamperedEvidence = {
+      ...atomicSnapshot,
+      lineage: []
+    };
+    const { app: atomicApp } = withAccess({
+      getActive: (projectionId: string) => store.getActive(projectionId),
+      getManifest: (releaseId: string) => store.getManifest(releaseId),
+      listProjectionLineage: (releaseId: string) => store.listProjectionLineage(releaseId),
+      getActiveEvidenceSnapshot: async () => tamperedEvidence
+    } as unknown as Parameters<typeof createConsumerGateway>[0], [binding]);
+    const atomicResult = await atomicApp.inject({ url, headers });
+
+    expect(atomicResult.statusCode).toBe(503);
+    expect(atomicResult.json().code).toBe('RELEASE_EVIDENCE_MISMATCH');
+    expect(atomicResult.json().failures).toEqual(expect.arrayContaining([
+      'EVIDENCE_COUNT_MISMATCH',
+      'EVIDENCE_DIGEST_MISMATCH'
+    ]));
+    expect(release.releaseId).toBe(atomicSnapshot.release?.releaseId);
+    await atomicApp.close();
+  });
+
   it('authenticates before touching the Data Health reader', async () => {
     let healthReads = 0;
     const healthStore = {
@@ -125,7 +169,7 @@ describe('read-only consumer gateway', () => {
     } as any;
 
     const { app } = withAccess(
-      { getActive: async () => null, getManifest: async () => null },
+      { getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] },
       [healthBinding],
       healthStore
     );
