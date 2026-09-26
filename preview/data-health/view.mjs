@@ -125,14 +125,17 @@ export function mountDataHealth(root,{read}={}){
     });
     filterButtons.push(button);filters.append(button);
   }
-  toolbar.append(search,filters);
+  const refreshButton=el('button','dh-refresh','↻');
+  refreshButton.type='button';
+  refreshButton.setAttribute('aria-label','Data Health 다시 조회');
+  toolbar.append(search,filters,refreshButton);
 
   const status=el('div','dh-status');
   status.setAttribute('role','status');status.setAttribute('aria-live','polite');
 
   const layout=el('div','dh-layout');
   const list=el('section','dh-list');
-  const detail=el('aside','dh-detail');detail.hidden=true;detail.setAttribute('role','region');
+  const detail=el('aside','dh-detail');detail.id='dh-detail';detail.hidden=true;detail.setAttribute('role','region');
   layout.append(list,detail);
   root.append(head,summary,toolbar,status,layout);
 
@@ -236,6 +239,11 @@ export function mountDataHealth(root,{read}={}){
     list.replaceChildren();
     if(!report)return;
     const rows=matching();
+    if(selectedId&&!rows.some(item=>item.consumerId===selectedId)){
+      selectedId=null;
+      detail.hidden=true;
+      layout.dataset.inspecting='false';
+    }
     status.textContent=rows.length+'개 소비처 표시 · 전체 상태 '+report.status;
     if(!rows.length){
       list.append(el('div','dh-empty','현재 검색/필터 조건과 일치하는 소비처가 없습니다.'));
@@ -311,6 +319,7 @@ export function mountDataHealth(root,{read}={}){
   }
 
   input.addEventListener('input',()=>{query=input.value;renderList();});
+  refreshButton.addEventListener('click',()=>{void refresh({preserve:true});});
   root.addEventListener('keydown',event=>{
     if(event.key==='Escape'&&selectedId){event.preventDefault();closeDetail();}
   });
