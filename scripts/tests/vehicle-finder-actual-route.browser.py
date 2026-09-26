@@ -457,7 +457,33 @@ try:
         expect(mobile.locator(".vf-group-row")).to_have_count(2)
         expect(mobile.locator(".vf-group-member")).to_have_count(0)
 
-        mobile.locator(".vf-group-button").first.click()
+        filter_button = mobile.get_by_role("button", name="필터")
+        filter_button.focus()
+        mobile.keyboard.press("Enter")
+        filter_dialog = mobile.get_by_role("dialog", name="필터")
+        expect(filter_dialog).to_be_visible()
+        expect(mobile.get_by_role("button", name="필터 닫기")).to_be_focused()
+
+        mobile.keyboard.press("Shift+Tab")
+        expect(mobile.get_by_role("button", name="결과 보기")).to_be_focused()
+        mobile.keyboard.press("Tab")
+        expect(mobile.get_by_role("button", name="필터 닫기")).to_be_focused()
+
+        mobile.keyboard.press("Escape")
+        expect(filter_dialog).to_be_hidden()
+        expect(filter_button).to_be_focused()
+
+        first_group = mobile.locator(".vf-group-button").first
+        first_group.focus()
+        mobile.keyboard.press("Enter")
+        expect(first_group).to_have_attribute("aria-expanded", "true")
+        expect(mobile.locator(".vf-group-member")).to_have_count(9)
+        mobile.keyboard.press("Enter")
+        expect(first_group).to_have_attribute("aria-expanded", "false")
+        expect(mobile.locator(".vf-group-member")).to_have_count(0)
+
+        first_group.focus()
+        mobile.keyboard.press("Enter")
         expect(mobile.locator(".vf-group-member")).to_have_count(9)
         expect(mobile.get_by_text("모델 조건으로 좁히기")).to_be_visible()
         mobile.locator(".vf-group-drilldown-option").first.click()
@@ -472,6 +498,7 @@ try:
         expect(mobile.get_by_role("button", name="목록으로")).to_be_visible()
         expect(mobile.get_by_role("button", name="확인만 가능")).to_be_disabled()
         expect(mobile.get_by_text("최종 확정 전 검토")).to_have_count(0)
+        expect(mobile.locator(".vf-detail h2")).to_be_focused()
         back_box = mobile.get_by_role("button", name="목록으로").bounding_box()
         primary_box = mobile.get_by_role("button", name="확인만 가능").bounding_box()
         assert back_box and primary_box
