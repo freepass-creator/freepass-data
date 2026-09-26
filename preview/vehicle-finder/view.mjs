@@ -68,8 +68,21 @@ function validateSnapshot(input) {
     if (item.action != null &&
         (!item.action || !text(item.action.code) || !text(item.action.label) ||
           !Array.isArray(item.action.reasons) ||
-          item.action.reasons.some(reason => !text(reason)))) {
+          item.action.reasons.some(reason => !text(reason)) ||
+          !Array.isArray(item.action.reasonDetails) ||
+          item.action.reasonDetails.some(detail =>
+            !detail || !text(detail.code) || !text(detail.title) ||
+            !text(detail.message) || !text(detail.nextStep)))) {
       invalid('itemAction');
+    }
+    if (item.unresolved != null &&
+        (!item.unresolved || !Array.isArray(item.unresolved.axes) ||
+          !Number.isSafeInteger(item.unresolved.searchTokenCount) ||
+          item.unresolved.searchTokenCount < 0 ||
+          item.unresolved.axes.some(axis =>
+            !axis || !text(axis.code) ||
+            (axis.label != null && !text(axis.label))))) {
+      invalid('itemUnresolved');
     }
     if (item.listLines != null &&
         (!Array.isArray(item.listLines) || item.listLines.length > 2 ||
@@ -560,14 +573,63 @@ export function mountVehicleFinder(
       trust.append(cell);
     }
 
-    if (item.action?.reasons.length) {
-      const reasons = element('div', 'vf-action-reasons');
-      reasons.append(element('strong', '', '선택 상태 근거'));
-      const reasonList = element('ul');
-      for (const reason of item.action.reasons) {
-        reasonList.append(element('li', '', reason));
+    if (item.action && item.action.code !== 'SELECT') {
+      const reasons = element('section', 'vf-action-reasons');
+      reasons.dataset.action = item.action.code;
+      const heading = element(
+        'strong',
+        'vf-action-reasons-heading',
+        item.action.code === 'BLOCKED'
+          ? '현재 선택할 수 없는 이유'
+          : '선택 전 확인할 내용',
+      );
+      reasons.append(heading);
+
+      if (item.action.reasonDetails.length) {
+        const reasonList = element('div', 'vf-action-reason-list');
+        for (const reason of item.action.reasonDetails) {
+          const card = element('article', 'vf-action-reason-card');
+          const title = element('div', 'vf-action-reason-title');
+          title.append(
+            element('strong', '', reason.title),
+            element('code', 'vf-action-reason-code', reason.code),
+          );
+          card.append(
+            title,
+            element('p', 'vf-action-reason-message', reason.message),
+            element('p', 'vf-action-reason-next', '다음 확인 · ' + reason.nextStep),
+          );
+          reasonList.append(card);
+        }
+        reasons.append(reasonList);
       }
-      reasons.append(reasonList);
+
+      const unresolved = item.unresolved ?? { axes: [], searchTokenCount: 0 };
+      if (unresolved.axes.length || unresolved.searchTokenCount > 0) {
+        const unresolvedBox = element('div', 'vf-unresolved');
+        unresolvedBox.append(element('strong', '', '미확인 항목'));
+        const chips = element('div', 'vf-unresolved-chips');
+        for (const axis of unresolved.axes) {
+          const chip = element(
+            'span',
+            'vf-unresolved-chip',
+            axis.label ?? axis.code,
+          );
+          chip.title = axis.code;
+          chips.append(chip);
+        }
+        if (unresolved.searchTokenCount > 0) {
+          chips.append(
+            element(
+              'span',
+              'vf-unresolved-chip',
+              '검색어 ' + unresolved.searchTokenCount + '개',
+            ),
+          );
+        }
+        unresolvedBox.append(chips);
+        reasons.append(unresolvedBox);
+      }
       detail._actionReasons = reasons;
     }
 
@@ -730,7 +792,8 @@ export function mountVehicleFinder(
           'drilldown-rejected',
           '이 조건으로는 후보를 좁힐 수 없습니다',
           response.message ??
-            groupTransitionRejectedMessage(response.transition.reason),
+            groupTransitionRejectedMessage(response.transition.reason) +
+              ' [' + (response.transition.reason ?? 'UNKNOWN') + ']',
         );
         return;
       }
