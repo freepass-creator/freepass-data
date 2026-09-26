@@ -1,5 +1,5 @@
 import type { Firestore } from 'firebase-admin/firestore';
-import type { ProjectionProduct, ProjectionRelease } from '../domain/catalog.js';
+import type { ErpPublicProduct, ProjectionProduct, ProjectionRelease } from '../domain/catalog.js';
 import type {
   ActiveProjectionEvidenceSnapshot,
   ProjectionFieldLineageRecord,
@@ -13,8 +13,8 @@ export function assertFirestoreReleaseId(value: unknown): asserts value is strin
   }
 }
 
-function assertReleaseDocumentIdentity(
-  release: ProjectionRelease<ProjectionProduct>,
+function assertReleaseDocumentIdentity<T extends ProjectionProduct>(
+  release: ProjectionRelease<T>,
   releaseId: string
 ) {
   if (release.releaseId !== releaseId) {
@@ -22,10 +22,12 @@ function assertReleaseDocumentIdentity(
   }
 }
 
-export async function readFirestoreActiveProjection(
+export async function readFirestoreActiveProjection<
+  T extends ProjectionProduct = ErpPublicProduct
+>(
   db: Firestore,
   projectionId: string
-): Promise<ProjectionRelease<ProjectionProduct> | null> {
+): Promise<ProjectionRelease<T> | null> {
   const pointer = await db.collection(FIRESTORE_COLLECTIONS.projection.active)
     .doc(projectionId)
     .get();
@@ -39,7 +41,7 @@ export async function readFirestoreActiveProjection(
     .get();
   if (!releaseSnap.exists) return null;
 
-  const release = releaseSnap.data() as ProjectionRelease<ProjectionProduct>;
+  const release = releaseSnap.data() as ProjectionRelease<T>;
   assertReleaseDocumentIdentity(release, releaseId);
   return release;
 }
@@ -70,10 +72,12 @@ export async function readFirestoreProjectionLineage(
   );
 }
 
-export async function readFirestoreActiveProjectionEvidence(
+export async function readFirestoreActiveProjectionEvidence<
+  T extends ProjectionProduct = ErpPublicProduct
+>(
   db: Firestore,
   projectionId: string
-): Promise<ActiveProjectionEvidenceSnapshot> {
+): Promise<ActiveProjectionEvidenceSnapshot<T>> {
   const activeRef = db.collection(FIRESTORE_COLLECTIONS.projection.active).doc(projectionId);
 
   return db.runTransaction(async (tx) => {
@@ -101,7 +105,7 @@ export async function readFirestoreActiveProjectionEvidence(
     const evidenceSnap = await tx.get(evidenceQuery);
 
     const release = releaseSnap.exists
-      ? releaseSnap.data() as ProjectionRelease<ProjectionProduct>
+      ? releaseSnap.data() as ProjectionRelease<T>
       : null;
     if (release) assertReleaseDocumentIdentity(release, releaseId);
 
