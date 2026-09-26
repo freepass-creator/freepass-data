@@ -35,7 +35,8 @@
     "check:consumer-runtime-evidence": "tsx src/jobs/check-consumer-runtime-evidence.ts",
     "ingest:vehicle-master-source": "tsx src/jobs/ingest-vehicle-master-source.ts",
     "backfill:vehicle-master": "tsx src/jobs/backfill-vehicle-master.ts",
-    "check:consumer-health": "tsx src/jobs/check-consumer-health.ts"
+    "check:consumer-health": "tsx src/jobs/check-consumer-health.ts",
+    "check:consumer-readiness": "tsx src/jobs/check-consumer-readiness.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",
