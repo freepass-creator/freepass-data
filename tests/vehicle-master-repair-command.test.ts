@@ -523,7 +523,7 @@ describe('vehicle master repair command', () => {
     )).toBeNull();
   });
 
-  it('commits a READY RULE hash reseal through the same command boundary', async () => {
+  it('blocks RULE hash reseal when the immutable rule revision is also corrupted', async () => {
     const store = new MemoryVehicleMasterStore();
     const seeded = await seedStore(store, { withRule: true });
     const rule = await store.getCompatibilityRule('rule_repair_command');
@@ -533,23 +533,24 @@ describe('vehicle master repair command', () => {
       ...rule,
       contentHash: '0'.repeat(64),
     };
-    // Replace the current record by recreating a dedicated store so the tampered
-    // payload is revision 1, rather than bypassing the versioned writer.
     const ruleStore = new MemoryVehicleMasterStore();
     await seedStore(ruleStore);
     await ruleStore.putCompatibilityRule(tampered);
 
     const prepared = await buildCommand(ruleStore, 'RULE', tampered.id);
-    expect(prepared.item.status).toBe('READY');
 
-    const result = await applyVehicleMasterRepairCommand(
-      ruleStore,
-      prepared.input
-    );
+    expect(prepared.item.status).toBe('BLOCKED');
+    expect(prepared.item.blockers).toEqual(expect.arrayContaining([
+      expect.stringContaining('NON_AUTO_SAFE_ISSUE:CONTENT_HASH_MISMATCH:REVISION'),
+    ]));
 
-    expect(result.status).toBe('COMMITTED');
-    expect((await ruleStore.getCompatibilityRule(tampered.id))?.revision).toBe(2);
-    expect(result.postAudit?.status).toBe('PASS');
+    await expect(
+      applyVehicleMasterRepairCommand(ruleStore, prepared.input)
+    ).rejects.toMatchObject({
+      code: 'VEHICLE_MASTER_REPAIR_COMMAND_REJECTED',
+      reason: 'TARGET_NOT_READY_IN_DRY_RUN',
+    });
+    expect((await ruleStore.getCompatibilityRule(tampered.id))?.revision).toBe(1);
     expect(seeded.trim.id).toBe('trim_repair_command');
   });
 
@@ -575,9 +576,9 @@ describe('vehicle master repair command', () => {
       dryRunDigest: prepared.dryRun.digest,
       entityKind: 'NODE',
       entityId: seeded.powertrain.id,
-      beforeRevision: 999,
+      beforeRevision: prepared.item.currentRevision!,
       afterRevision: candidate.record.revision,
-      beforeContentHash: prepared.item.beforeContentHash!,
+      beforeContentHash: 'f'.repeat(64),
       afterContentHash: candidate.record.contentHash,
       committedAt,
     });
