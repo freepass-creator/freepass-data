@@ -141,3 +141,27 @@ Rules:
 
 This allows F-01 to expose generation/phase/model-year for historical used-car search
 without adding those rules to U-01, while new-car guidance can remain concise.
+
+
+## Candidate list scan contract
+
+The result list is intentionally limited to a compact scan surface.
+
+Each result always has:
+
+1. primary title: `item.label`
+2. optional adapter-prepared `item.listLines[]` with at most two lines
+3. state label/code in the state column
+
+`listLines` are display strings prepared by the F/I read adapter. U-01 does not
+construct them from vehicle fields or decide that year/generation/powertrain must
+always be shown. If `listLines` are absent, the existing `pathText` is used as
+a conservative fallback context.
+
+On mobile, the list returns to the prior scroll position after closing detail.
+The previously inspected candidate is marked as `방금 본 후보` so the user can
+resume scanning without losing place. Query and filters remain unchanged during
+detail inspection and return.
+
+Mode changes are different: they intentionally clear query/filter/detail/recent-item
+context so NEW_CAR state cannot leak into USED_CAR and vice versa.
