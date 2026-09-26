@@ -168,6 +168,24 @@ describe('common vehicle selector', () => {
     expect(result.guidance.suggestedNextAxis).toBe('modelYear');
   });
 
+  it('does not let a decorated drivetrain label satisfy structured AWD selection', () => {
+    const rows = [
+      record('awd', {
+        drivetrain: { id: null, label: 'AWD' },
+      }),
+      record('e-awd', {
+        drivetrain: { id: null, label: 'E-AWD' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      selection: { drivetrain: 'AWD' },
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual(['awd']);
+  });
+
   it('does not let plug-in hybrid satisfy structured HYBRID fuel selection', () => {
     const rows = [
       record('hev', {
