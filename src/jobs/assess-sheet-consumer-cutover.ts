@@ -1,11 +1,8 @@
 import {
-  assessLatestSheetConsumerCutover
-} from '../application/sheet-delivery-evidence.js';
-import {
   findConsumerSwitch,
   type ConsumerCutoverStage
 } from '../domain/consumer-cutover.js';
-import { createFirestoreDataStore } from '../infra/firestore-store.js';
+import { createSheetDeliveryEvidenceDataAccessRuntime } from './data-access-runtime.js';
 
 function requiredArg(name: string) {
   const prefix = `--${name}=`;
@@ -31,12 +28,8 @@ if (!allowedTargets.has(target)) {
 const registration = findConsumerSwitch(consumerId);
 if (!registration) throw new Error('Unknown consumer cutover registration');
 
-const store = await createFirestoreDataStore();
-const result = await assessLatestSheetConsumerCutover(
-  store,
-  registration,
-  target
-);
+const runtime = await createSheetDeliveryEvidenceDataAccessRuntime();
+const result = await runtime.assess(registration, target);
 
 console.log(JSON.stringify({
   consumerId,
