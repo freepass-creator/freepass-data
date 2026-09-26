@@ -1,16 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { resolveTargetProject } from '../infra/firebase-target.js';
-import { FIRESTORE_COLLECTIONS } from '../infra/firestore-layout.js';
 import { createCentralDiagnosticDataAccessRuntime } from './data-access-runtime.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 const projectId = resolveTargetProject();
-const canonicalCollectionSet = new Set<string>([
-  FIRESTORE_COLLECTIONS.catalog.products,
-  FIRESTORE_COLLECTIONS.catalog.offers,
-  FIRESTORE_COLLECTIONS.catalog.policies
-]);
-const activeProjectionCollection = FIRESTORE_COLLECTIONS.projection.active;
 const useGcloud = process.argv.includes('--gcloud');
 
 function localAccessToken(): string {
@@ -37,6 +30,7 @@ function localAccessToken(): string {
 
 const token = useGcloud ? localAccessToken() : null;
 const runtime = await createCentralDiagnosticDataAccessRuntime();
+const canonicalCollectionSet = new Set<string>(runtime.canonicalCollections);
 
 const counts = await runtime.access.read({
   context: {
@@ -67,7 +61,7 @@ console.log(JSON.stringify({
   status: counts.some(
     (item) => canonicalCollectionSet.has(item.collection) && item.count === 0
   ) || counts.some(
-    (item) => item.collection === activeProjectionCollection && item.count === 0
+    (item) => item.collection === runtime.activeProjectionCollection && item.count === 0
   )
     ? 'HOLD_MISSING_CANONICAL_OR_RELEASE'
     : 'REQUIRES_CONSUMER_PARITY_VERIFICATION',
