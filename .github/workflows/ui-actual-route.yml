@@ -10,9 +10,11 @@ on:
       - 'tests/vehicle-finder-*.test.ts'
       - 'tests/data-health-ui.test.ts'
       - 'tests/review-queue-ui.test.ts'
+      - 'tests/entity-detail-ui.test.ts'
       - 'scripts/tests/vehicle-finder-actual-route.browser.py'
       - 'scripts/tests/data-health-actual-route.browser.py'
       - 'scripts/tests/review-queue-actual-route.browser.py'
+      - 'scripts/tests/entity-detail-actual-route.browser.py'
       - '.github/workflows/ui-actual-route.yml'
 
 permissions:
@@ -40,6 +42,8 @@ jobs:
         run: python scripts/tests/data-health-actual-route.browser.py --output ui-evidence/data-health
       - name: Browser QA Review Queue actual route
         run: python scripts/tests/review-queue-actual-route.browser.py --output ui-evidence/review-queue
+      - name: Browser QA Entity Detail actual route
+        run: python scripts/tests/entity-detail-actual-route.browser.py --output ui-evidence/entity-detail
       - uses: actions/upload-artifact@v4
         if: always()
         with:

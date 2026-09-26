@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>프리패스 데이터 · Entity Detail</title>
+<link rel="stylesheet" href="/console/entity-detail/entity.css">
+</head>
+<body>
+<main id="entity-detail"></main>
+<script type="module">
+  import { mountEntityDetail } from '/console/entity-detail/view.mjs';
+
+  const read = async (productId) => {
+    const response = await fetch(
+      '/v1/console/products/' + encodeURIComponent(productId) + '/trace',
+      { cache: 'no-store' },
+    );
+    const payload = await response.json();
+    if (!response.ok) {
+      const error = new Error(payload.code ?? ('HTTP ' + response.status));
+      error.code = payload.code ?? null;
+      error.status = response.status;
+      throw error;
+    }
+    return payload;
+  };
+
+  const initialProductId =
+    new URLSearchParams(window.location.search).get('productId') ?? '';
+
+  mountEntityDetail(document.getElementById('entity-detail'), {
+    read,
+    initialProductId,
+  });
+</script>
+</body>
+</html>

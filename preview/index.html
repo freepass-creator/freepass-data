@@ -299,6 +299,7 @@ body[data-active-screen="review-detail"] main{padding-bottom:96px}
   <button data-screen="history">이력</button>
   <a class="tab-link" href="/console/data-health">Data Health</a>
   <a class="tab-link" href="/console/review-queue">Review Queue</a>
+  <a class="tab-link" href="/console/entity-detail">Entity Detail</a>
   <a class="tab-link" href="/console/vehicle-finder">차량 찾기</a>
 </nav>
 
@@ -431,6 +432,7 @@ body[data-active-screen="review-detail"] main{padding-bottom:96px}
   <button data-screen="history">이력</button>
   <a href="/console/data-health">Data Health</a>
   <a href="/console/review-queue">Review Queue</a>
+  <a href="/console/entity-detail">Entity Detail</a>
   <a href="/console/vehicle-finder">차량 찾기</a>
 </div>
 
@@ -614,6 +616,17 @@ function renderCatalogDetail(){
   addKv(detail,'공급사',offer?.supplierId??'오퍼 없음');
   addKv(detail,'월 대여료',term?won.format(term.monthlyRent.amount):'가격 없음');
   addKv(detail,'보증금',term?.deposit?won.format(term.deposit.amount):term?.depositState??'정보 없음');
+  const lineageActions=el('div','actions');
+  const lineageLink=document.createElement('a');
+  lineageLink.className='action secondary';
+  lineageLink.href='/console/entity-detail?productId='+encodeURIComponent(product.productId);
+  lineageLink.textContent='전체 lineage 보기';
+  lineageLink.style.display='inline-flex';
+  lineageLink.style.alignItems='center';
+  lineageLink.style.justifyContent='center';
+  lineageLink.style.textDecoration='none';
+  lineageActions.append(lineageLink);
+  detail.append(lineageActions);
   if(!offer||!term)return;
 
   const form=el('form','form-grid');
