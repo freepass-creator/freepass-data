@@ -93,7 +93,7 @@ try:
         expect(page.get_by_text("확인",exact=True).first).to_be_visible()
         page.screenshot(path=args.output/"data-health-desktop.png",full_page=True)
 
-        page.get_by_role("button",name="차단").click()
+        page.get_by_role("button",name="차단",exact=True).click()
         expect(page.locator(".dh-row")).to_have_count(5)
         page.locator("input[type=search]").fill("sheet")
         expect(page.locator(".dh-row")).to_have_count(2)
