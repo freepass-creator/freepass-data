@@ -6,6 +6,8 @@ import type {
   VehicleSelectorFinalizationReason,
   VehicleSelectorNoResultReason,
   VehicleSelectorResult,
+  VehicleSelectionReceiptRevalidationDecision,
+  VehicleSelectionReceiptRevalidationReason,
 } from '../domain/vehicle-selector.js';
 
 export const VEHICLE_FINDER_UI_SCHEMA = 'freepass.vehicle-finder.ui/v1' as const;
@@ -498,6 +500,79 @@ export function presentVehicleFinalizationDecision(
     reasons: decision.reasons.map((code) => ({
       code,
       ...FINALIZATION_REASON_PRESENTATION[code],
+    })),
+  };
+}
+
+
+export type VehicleFinderReceiptRevalidationReason = {
+  code: VehicleSelectionReceiptRevalidationReason;
+  title: string;
+  message: string;
+  nextStep: string;
+};
+
+export type VehicleFinderReceiptRevalidationReview = {
+  status: VehicleSelectionReceiptRevalidationDecision['status'];
+  receiptId: string;
+  recordId: string;
+  ageMs: number;
+  currentRecordChanged: boolean;
+  snapshotRecordDigest: string;
+  currentRecordDigest: string | null;
+  reasons: VehicleFinderReceiptRevalidationReason[];
+};
+
+const RECEIPT_REVALIDATION_REASON_PRESENTATION: Record<
+  VehicleSelectionReceiptRevalidationReason,
+  Omit<VehicleFinderReceiptRevalidationReason, 'code'>
+> = {
+  RECEIPT_FROM_FUTURE: {
+    title: '영수증 발급시각이 현재 검증시각보다 미래입니다',
+    message: 'F가 허용된 미래 시각 오차를 벗어난 receipt로 판정했습니다.',
+    nextStep: '시각 기준과 receipt 발급 경로를 확인한 뒤 다시 검증해 주세요.',
+  },
+  RECEIPT_STALE: {
+    title: '재검증 허용 기간을 지난 receipt입니다',
+    message: 'F가 설정된 최대 유효 기간을 초과했다고 판정했습니다.',
+    nextStep: '현재 차량 자료로 다시 선택하고 새 receipt를 발급해 주세요.',
+  },
+  CURRENT_RECORD_NOT_FOUND: {
+    title: '현재 정본에서 차량을 찾을 수 없습니다',
+    message: 'receipt의 recordId가 현재 차량 자료에 존재하지 않습니다.',
+    nextStep: '현재 차량 마스터에서 후보를 다시 선택해 주세요.',
+  },
+  CURRENT_RECORD_CHANGED: {
+    title: '확정 당시와 현재 차량 정보가 달라졌습니다',
+    message: 'F가 선택 관련 차량 정보의 digest 변경을 확인했습니다.',
+    nextStep: '변경된 차량 정보를 검토하고 다시 선택해 주세요.',
+  },
+  CURRENT_RECORD_NOT_FINALIZABLE: {
+    title: '현재 차량 상태로는 다시 확정할 수 없습니다',
+    message: 'F가 현재 record를 최종 선택 조건에 맞지 않는 상태로 판정했습니다.',
+    nextStep: '현재 HOLD/identity/필수 식별 정보 상태를 확인해 주세요.',
+  },
+  CURRENT_REQUEST_NO_LONGER_MATCHES: {
+    title: '현재 차량이 기존 선택 조건과 더 이상 일치하지 않습니다',
+    message: 'F가 receipt에 저장된 요청으로 현재 record를 다시 찾지 못했습니다.',
+    nextStep: '현재 조건과 후보를 다시 확인해 새 선택을 진행해 주세요.',
+  },
+};
+
+export function presentVehicleReceiptRevalidationDecision(
+  decision: VehicleSelectionReceiptRevalidationDecision
+): VehicleFinderReceiptRevalidationReview {
+  return {
+    status: decision.status,
+    receiptId: decision.receiptId,
+    recordId: decision.recordId,
+    ageMs: decision.ageMs,
+    currentRecordChanged: decision.currentRecordChanged,
+    snapshotRecordDigest: decision.snapshotRecordDigest,
+    currentRecordDigest: decision.currentRecordDigest,
+    reasons: decision.reasons.map((code) => ({
+      code,
+      ...RECEIPT_REVALIDATION_REASON_PRESENTATION[code],
     })),
   };
 }

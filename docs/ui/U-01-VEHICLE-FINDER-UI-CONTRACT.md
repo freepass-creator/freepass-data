@@ -367,3 +367,35 @@ mode-scope mismatch.
 Receipt metadata (`receiptId`, `issuedAt`, snapshot/receipt digests) is display-only in
 U. Receipt issuance, integrity verification, persistence and revalidation remain F/I
 responsibilities.
+
+
+## Selection receipt revalidation
+
+After confirmation, U may display receipt validity by calling an optional injected
+`onRevalidate` callback with the receipt object returned by `onSelect`.
+
+U never imports or runs `revalidateVehicleSelectionReceipt()`.
+
+The callback returns a U-presented F review:
+
+- `CURRENT`: receipt remains valid against the current vehicle record/request
+- `RESELECT_REQUIRED`: the prior selection must not be treated as current
+
+U preserves every F revalidation reason code:
+
+- `RECEIPT_FROM_FUTURE`
+- `RECEIPT_STALE`
+- `CURRENT_RECORD_NOT_FOUND`
+- `CURRENT_RECORD_CHANGED`
+- `CURRENT_RECORD_NOT_FINALIZABLE`
+- `CURRENT_REQUEST_NO_LONGER_MATCHES`
+
+When F reports `currentRecordChanged`, U may show the F-provided snapshot/current
+record digests as evidence. U does not calculate those digests.
+
+On `RESELECT_REQUIRED`, the receipt surface changes from confirmed/green to warning/red
+and offers `목록에서 다시 선택`. The old receipt is still displayed as evidence, but is
+not presented as currently valid.
+
+Receipt validation policy (assessedAt, max age, future skew), current-record lookup,
+digest comparison, finalizability and request matching remain F/I responsibilities.

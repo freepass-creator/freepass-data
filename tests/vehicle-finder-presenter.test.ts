@@ -5,11 +5,14 @@ import {
 } from '../src/application/vehicle-selector-adapters.js';
 import {
   presentVehicleFinalizationDecision,
+  presentVehicleReceiptRevalidationDecision,
   presentVehicleSelectorResult,
 } from '../src/application/vehicle-finder-presenter.js';
 import {
   applyVehicleGroupDrilldown,
   finalizeVehicleSelection,
+  issueVehicleSelectionReceipt,
+  revalidateVehicleSelectionReceipt,
   selectVehicles,
 } from '../src/domain/vehicle-selector.js';
 import type { EstimateNewcarMasterRecord } from '../src/domain/estimate-master.js';
@@ -463,5 +466,82 @@ describe('Vehicle Finder final selection review presenter', () => {
     expect(review.reasons.map((item) => item.code))
       .toEqual(decision.reasons);
     expect(review.reasons.every((item) => item.nextStep.length > 0)).toBe(true);
+  });
+});
+
+
+describe('Vehicle Finder receipt revalidation presenter', () => {
+  it('presents CURRENT from the real F receipt revalidation decision', () => {
+    const records = selectorRecordsFromNewcarMaster([newcar]);
+    const issued = issueVehicleSelectionReceipt(
+      records,
+      {
+        mode: 'NEW_CAR',
+        selection: {
+          model: '쏘렌토',
+          modelYear: 2027,
+          powertrain: '1.6 터보 하이브리드',
+          trim: '노블레스',
+        },
+      },
+      '2026-09-26T18:00:00+09:00',
+      newcar.productId,
+    );
+    expect(issued.status).toBe('ISSUED');
+
+    const decision = revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      records,
+      { assessedAt: '2026-09-26T18:30:00+09:00', maxAgeMs: 3_600_000 },
+    );
+    const review = presentVehicleReceiptRevalidationDecision(decision);
+
+    expect(decision.status).toBe('CURRENT');
+    expect(review.status).toBe('CURRENT');
+    expect(review.reasons).toEqual([]);
+    expect(review.currentRecordChanged).toBe(false);
+    expect(review.ageMs).toBe(1_800_000);
+  });
+
+  it('preserves RESELECT_REQUIRED F reasons and digest change evidence', () => {
+    const records = selectorRecordsFromNewcarMaster([newcar]);
+    const issued = issueVehicleSelectionReceipt(
+      records,
+      {
+        mode: 'NEW_CAR',
+        selection: {
+          model: '쏘렌토',
+          modelYear: 2027,
+          powertrain: '1.6 터보 하이브리드',
+          trim: '노블레스',
+        },
+      },
+      '2026-09-26T18:00:00+09:00',
+      newcar.productId,
+    );
+    expect(issued.status).toBe('ISSUED');
+
+    const changed = [{
+      ...records[0]!,
+      trim: { ...records[0]!.trim, label: '시그니처' },
+    }];
+    const decision = revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      changed,
+      { assessedAt: '2026-09-26T18:30:00+09:00', maxAgeMs: 3_600_000 },
+    );
+    const review = presentVehicleReceiptRevalidationDecision(decision);
+
+    expect(decision.status).toBe('RESELECT_REQUIRED');
+    expect(review.status).toBe('RESELECT_REQUIRED');
+    expect(review.currentRecordChanged).toBe(true);
+    expect(review.reasons.map((item) => item.code))
+      .toEqual(decision.reasons);
+    expect(review.reasons).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'CURRENT_RECORD_CHANGED' }),
+      ]),
+    );
+    expect(review.currentRecordDigest).not.toBe(review.snapshotRecordDigest);
   });
 });
