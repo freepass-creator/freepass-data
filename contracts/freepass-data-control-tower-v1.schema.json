@@ -1,0 +1,338 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/freepass-data-control-tower-v1.schema.json",
+  "title": "FreePass Data Control Tower v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "schemaVersion",
+    "generatedAt",
+    "runId",
+    "axes",
+    "operatorSummary",
+    "attention"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "freepass-data-control-tower-v1"
+    },
+    "schemaVersion": {
+      "const": "1.0.0"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "axes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceObservation",
+        "auditFreshness",
+        "publication",
+        "consumerHealth",
+        "consumerReadiness",
+        "sheetHealth"
+      ],
+      "properties": {
+        "sourceObservation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "projectId",
+            "databaseId",
+            "readTime",
+            "digest",
+            "coverage",
+            "products",
+            "policies"
+          ],
+          "properties": {
+            "status": {
+              "const": "OBSERVED"
+            },
+            "projectId": {
+              "const": "freepasserp5"
+            },
+            "databaseId": {
+              "const": "(default)"
+            },
+            "readTime": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "coverage": {
+              "type": "string",
+              "minLength": 1
+            },
+            "products": {
+              "type": "number",
+              "minimum": 0
+            },
+            "policies": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "auditFreshness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "configured",
+            "status",
+            "reason",
+            "currentReadTime",
+            "previousReadTime",
+            "gapMinutes",
+            "maxGapMinutes"
+          ],
+          "properties": {
+            "version": {
+              "const": "erp5-audit-schedule-health/1"
+            },
+            "configured": {
+              "type": "boolean"
+            },
+            "status": {
+              "enum": [
+                "HEALTHY",
+                "DEGRADED",
+                "BLOCKED"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "currentReadTime": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "previousReadTime": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gapMinutes": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "maxGapMinutes": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        },
+        "publication": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "decision",
+            "activeReleaseAuthorized",
+            "canonicalWriteAuthorized",
+            "destructiveActionAuthorized",
+            "holdReasons"
+          ],
+          "properties": {
+            "decision": {
+              "type": "string",
+              "minLength": 1
+            },
+            "activeReleaseAuthorized": {
+              "type": "boolean"
+            },
+            "canonicalWriteAuthorized": {
+              "type": "boolean"
+            },
+            "destructiveActionAuthorized": {
+              "type": "boolean"
+            },
+            "holdReasons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "consumerHealth": {
+          "$ref": "#/$defs/scheduledHealth"
+        },
+        "consumerReadiness": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/scheduledHealth"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "counts": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "readyForNextStage",
+                    "hold",
+                    "final"
+                  ],
+                  "properties": {
+                    "readyForNextStage": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "hold": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "final": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "readyTransitions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "consumerId",
+                      "from",
+                      "to"
+                    ],
+                    "properties": {
+                      "consumerId": {
+                        "type": "string"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "to": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "sheetHealth": {
+          "$ref": "#/$defs/scheduledHealth"
+        }
+      }
+    },
+    "operatorSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "readyTransitionCount",
+        "consumerBlockedCount",
+        "readinessHoldCount",
+        "auditGapMinutes",
+        "publicationHoldReasonCount"
+      ],
+      "properties": {
+        "readyTransitionCount": {
+          "type": "number",
+          "minimum": 0
+        },
+        "consumerBlockedCount": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "readinessHoldCount": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "auditGapMinutes": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "publicationHoldReasonCount": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "attention": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "AUDIT_SCHEDULE_BLOCKED",
+          "AUDIT_SCHEDULE_DEGRADED",
+          "PUBLICATION_HOLD",
+          "CONSUMER_HEALTH_BLOCKED",
+          "CONSUMER_HEALTH_DEGRADED",
+          "CONSUMER_READINESS_HOLD",
+          "CONSUMER_READINESS_DEGRADED",
+          "SHEET_HEALTH_BLOCKED",
+          "SHEET_HEALTH_DEGRADED",
+          "HEALTH_POLICY_NOT_CONFIGURED",
+          "READINESS_POLICY_NOT_CONFIGURED",
+          "SHEET_POLICY_NOT_CONFIGURED"
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "scheduledHealth": {
+      "type": "object",
+      "required": [
+        "configured",
+        "status"
+      ],
+      "properties": {
+        "configured": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "HEALTHY",
+            "DEGRADED",
+            "BLOCKED"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
