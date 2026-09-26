@@ -32,7 +32,8 @@ function input(): DataControlTowerInput {
         databaseId: '(default)',
         collections: {
           products: 321,
-          policy: 17
+          policy: 17,
+          partner: 9
         },
         readTime: '2026-09-26T10:00:00.000Z',
         digest: 'a'.repeat(64),
@@ -81,6 +82,26 @@ function input(): DataControlTowerInput {
       configured: true,
       status: 'BLOCKED',
       generatedAt: '2026-09-26T10:00:03.000Z'
+    },
+    estimateMasterReadiness: {
+      contractVersion: 'estimate-master-readiness-v1',
+      schemaVersion: '1.0.0',
+      status: 'DEGRADED',
+      generatedAt: '2026-09-26T10:00:04.000Z',
+      projectionId: 'estimate-newcar-master',
+      activeReleaseAuthorized: false,
+      publicationImplemented: false,
+      counts: {
+        total: 120,
+        active: 100,
+        hold: 20
+      },
+      activeRate: 100 / 120,
+      inputDigest: 'b'.repeat(64),
+      blockers: ['PARTIAL_ESTIMATE_MASTER_HOLD'],
+      holdReasons: [{ reason: 'MISSING_PRICE', count: 20 }],
+      bridgeConfigured: false,
+      bridgePath: null
     }
   };
 }
@@ -97,7 +118,8 @@ describe('FreePass Data control tower', () => {
     expect(report.axes.sourceObservation).toMatchObject({
       status: 'OBSERVED',
       products: 321,
-      policies: 17
+      policies: 17,
+      partners: 9
     });
     expect(report.axes.auditFreshness).toMatchObject({
       status: 'DEGRADED',
@@ -114,7 +136,15 @@ describe('FreePass Data control tower', () => {
       consumerBlockedCount: 7,
       readinessHoldCount: 7,
       auditGapMinutes: 180,
-      publicationHoldReasonCount: 2
+      publicationHoldReasonCount: 2,
+      estimateCanonicalTrimCount: 120,
+      estimateActiveTrimCount: 100,
+      estimateHoldTrimCount: 20
+    });
+    expect(report.axes.estimateMasterReadiness).toMatchObject({
+      status: 'DEGRADED',
+      projectionId: 'estimate-newcar-master',
+      counts: { total: 120, active: 100, hold: 20 }
     });
     expect(report.attention).toEqual(expect.arrayContaining([
       'AUDIT_SCHEDULE_DEGRADED',
@@ -158,7 +188,10 @@ describe('FreePass Data control tower', () => {
       readyTransitionCount: 0,
       consumerBlockedCount: null,
       readinessHoldCount: null,
-      auditGapMinutes: null
+      auditGapMinutes: null,
+      estimateCanonicalTrimCount: 120,
+      estimateActiveTrimCount: 100,
+      estimateHoldTrimCount: 20
     });
     expect(report.attention).toEqual(expect.arrayContaining([
       'AUDIT_SCHEDULE_BLOCKED',
@@ -167,6 +200,23 @@ describe('FreePass Data control tower', () => {
       'SHEET_POLICY_NOT_CONFIGURED',
       'PUBLICATION_HOLD'
     ]));
+    expect(validate(report), JSON.stringify(validate.errors)).toBe(true);
+  });
+
+  it('remains backward-compatible with older v1 source inventory and no Estimate readiness file', () => {
+    const value = input();
+    delete value.sourceInventory.source.collections.partner;
+    delete value.estimateMasterReadiness;
+
+    const report = buildDataControlTower(value);
+
+    expect(report.axes.sourceObservation.partners).toBeNull();
+    expect(report.axes.estimateMasterReadiness).toBeNull();
+    expect(report.operatorSummary).toMatchObject({
+      estimateCanonicalTrimCount: null,
+      estimateActiveTrimCount: null,
+      estimateHoldTrimCount: null
+    });
     expect(validate(report), JSON.stringify(validate.errors)).toBe(true);
   });
 

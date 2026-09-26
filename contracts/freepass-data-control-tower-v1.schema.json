@@ -82,6 +82,13 @@
             "policies": {
               "type": "number",
               "minimum": 0
+            },
+            "partners": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
             }
           }
         },
@@ -241,6 +248,128 @@
         },
         "sheetHealth": {
           "$ref": "#/$defs/scheduledHealth"
+        },
+        "estimateMasterReadiness": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "contractVersion",
+                "schemaVersion",
+                "status",
+                "generatedAt",
+                "projectionId",
+                "activeReleaseAuthorized",
+                "publicationImplemented",
+                "counts",
+                "activeRate",
+                "inputDigest",
+                "blockers",
+                "holdReasons",
+                "bridgeConfigured",
+                "bridgePath"
+              ],
+              "properties": {
+                "contractVersion": {
+                  "const": "estimate-master-readiness-v1"
+                },
+                "schemaVersion": {
+                  "const": "1.0.0"
+                },
+                "status": {
+                  "enum": [
+                    "READY",
+                    "DEGRADED",
+                    "BLOCKED"
+                  ]
+                },
+                "generatedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "projectionId": {
+                  "const": "estimate-newcar-master"
+                },
+                "activeReleaseAuthorized": {
+                  "type": "boolean"
+                },
+                "publicationImplemented": {
+                  "type": "boolean"
+                },
+                "counts": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "total",
+                    "active",
+                    "hold"
+                  ],
+                  "properties": {
+                    "total": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "active": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "hold": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "activeRate": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "inputDigest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "blockers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "holdReasons": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "reason",
+                      "count"
+                    ],
+                    "properties": {
+                      "reason": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                },
+                "bridgeConfigured": {
+                  "type": "boolean"
+                },
+                "bridgePath": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          ]
         }
       }
     },
@@ -282,6 +411,27 @@
         },
         "publicationHoldReasonCount": {
           "type": "number",
+          "minimum": 0
+        },
+        "estimateCanonicalTrimCount": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "estimateActiveTrimCount": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "estimateHoldTrimCount": {
+          "type": [
+            "number",
+            "null"
+          ],
           "minimum": 0
         }
       }
