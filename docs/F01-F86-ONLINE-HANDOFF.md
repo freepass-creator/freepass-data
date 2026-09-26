@@ -51,7 +51,14 @@ Current HOLD:
 1. run the Data read-only bridge preparation against live Firestore and retain the private evidence,
 2. consume that exact handoff through ERP4 shadow mode,
 3. prove F01/F86 rendered-output parity,
-4. produce valid release-bound delivery/readback receipts,
+4. produce valid release-bound delivery/readback receipts that also bind to the exact F01/F86 publication handoff hash,
 5. only then consider switching the production writer input source.
 
 Do not interpret `LEGACY_VERIFIED_BRIDGE` as `CANONICAL_ACTIVE`.
+
+A delivery receipt is not sufficient merely because its approved release ID/digests match.
+It must also carry the exact `publicationHandoffHash` from the validated F01/F86 handoff
+that was rendered. This prevents two workbook envelopes sharing one approved release from
+being treated as interchangeable evidence. Publication timestamps must also show that the
+write started after that bound handoff existed.
+
