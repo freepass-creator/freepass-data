@@ -35,6 +35,10 @@ export type VehicleMasterEvidenceIssue = {
     | 'PARENT_EFFECTIVE_RANGE_MISMATCH'
     | 'PARENT_REFERENCE_MISMATCH'
     | 'PHASE_EFFECTIVE_RANGE_OVERLAP'
+    | 'MODEL_YEAR_VALUE_INVALID'
+    | 'MODEL_YEAR_NAME_MISMATCH'
+    | 'MODEL_YEAR_ALIAS_MISMATCH'
+    | 'MODEL_YEAR_DUPLICATE_IN_PHASE'
     | 'REFERENCE_NODE_MISSING'
     | 'REFERENCE_NODE_HOLD'
     | 'REFERENCE_EFFECTIVE_RANGE_MISMATCH'
@@ -189,6 +193,22 @@ function expectedParentRef(proposal: VehicleMasterNode): string | null {
     case 'TRIM': return proposal.refs.variantId ?? null;
     default: return null;
   }
+}
+
+function modelYearValue(proposal: VehicleMasterNode): number | null {
+  const value = proposal.attributes.modelYear;
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 1900 &&
+    value <= 2200
+    ? value
+    : null;
+}
+
+function explicitModelYearLabel(value: string): number | null {
+  const normalized = value.normalize('NFKC').trim();
+  const match = normalized.match(/^(19|20|21|22)\d{2}(?:년형|MY)?$/i);
+  return match ? Number(normalized.slice(0, 4)) : null;
 }
 
 function valueAtPath(value: unknown, path: string): unknown {
@@ -417,6 +437,55 @@ async function applyNodeReferenceGate(
           fieldPath: `refs.${field}`,
           detail: refId,
         });
+      }
+    }
+  }
+
+  if (proposal.nodeType === 'MODEL_YEAR') {
+    const year = modelYearValue(proposal);
+    if (year === null) {
+      issues.push({
+        code: 'MODEL_YEAR_VALUE_INVALID',
+        fieldPath: 'attributes.modelYear',
+      });
+    } else {
+      const nameYear = explicitModelYearLabel(proposal.canonicalName);
+      if (nameYear !== null && nameYear !== year) {
+        issues.push({
+          code: 'MODEL_YEAR_NAME_MISMATCH',
+          fieldPath: 'canonicalName',
+          detail: `${nameYear}!=${year}`,
+        });
+      }
+
+      for (const alias of proposal.aliases) {
+        const aliasYear = explicitModelYearLabel(alias);
+        if (aliasYear !== null && aliasYear !== year) {
+          issues.push({
+            code: 'MODEL_YEAR_ALIAS_MISMATCH',
+            fieldPath: 'aliases',
+            detail: `${alias}!=${year}`,
+          });
+        }
+      }
+
+      if (proposal.parentId) {
+        const siblings = (await store.listNodesByType('MODEL_YEAR'))
+          .filter((node) =>
+            node.id !== proposal.id &&
+            node.parentId === proposal.parentId &&
+            node.status !== 'HOLD'
+          );
+
+        for (const sibling of siblings) {
+          if (modelYearValue(sibling) === year) {
+            issues.push({
+              code: 'MODEL_YEAR_DUPLICATE_IN_PHASE',
+              fieldPath: 'attributes.modelYear',
+              detail: sibling.id,
+            });
+          }
+        }
       }
     }
   }
