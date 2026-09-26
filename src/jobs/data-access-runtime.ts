@@ -21,6 +21,10 @@ import {
   readConsumerRuntimeEvidence,
   type ConsumerRuntimeEvidencePolicy
 } from '../application/consumer-runtime-evidence.js';
+import {
+  readConsumerHealth,
+  type ConsumerHealthPolicy
+} from '../application/consumer-health.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { SheetHandoffWorkbook, SheetPublicationHandoff } from '../domain/sheet-publication-handoff.js';
 import type { SheetDeliveryReceipt } from '../domain/consumer-delivery.js';
@@ -43,6 +47,31 @@ function readOnlyAccess(input: { accessToken: string; evidenceBucket: string }) 
 export function createJobDataAccessRuntime() {
   return {
     access: new DataAccessGateway(createFirestoreDataAccessLogStore())
+  };
+}
+
+export async function createConsumerHealthDataAccessRuntime() {
+  const logs = createFirestoreDataAccessLogStore();
+  const access = new DataAccessGateway(logs);
+  const store = await createFirestoreDataStore();
+
+  return {
+    health: (policy: ConsumerHealthPolicy) => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-consumer-health', kind: 'SERVICE' },
+        clientId: 'job:check-consumer-health',
+        purpose: 'read unified consumer runtime and Sheet delivery health'
+      },
+      operation: 'READ_CONSUMER_HEALTH',
+      resource: {
+        kind: 'HEALTH',
+        name: 'consumer-health'
+      },
+      summarize: (value) => ({
+        count: value.consumers.length,
+        digest: stableDigest(value)
+      })
+    }, () => readConsumerHealth(logs, store, policy))
   };
 }
 
