@@ -645,7 +645,7 @@ jobs:
             echo
             echo "Source digest: $(jq -r '.source.digest' source-inventory.json)"
             echo
-            echo "Publication HOLD reasons: $(jq -r '.authority.publicationHoldReasons | join(", ")' source-inventory.json)"
+            echo "Publication HOLD reasons: $(jq -r '.authority.publicationHoldReasons | join(", "))' source-inventory.json)"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Build FreePass Data control tower
         shell: bash
@@ -665,32 +665,34 @@ jobs:
             (.attention | type == "array") and
             (.operatorSummary.readyTransitionCount | type == "number")
           ' data-control-tower.json >/dev/null
-          {
-            echo '## FreePass Data Control Tower'
-            echo
-            echo "Source read: $(jq -r '.axes.sourceObservation.readTime' data-control-tower.json)"
-            echo
-            echo "Audit freshness: $(jq -r '.axes.auditFreshness.status + \" / \" + .axes.auditFreshness.reason' data-control-tower.json)"
-            echo
-            echo "Publication: $(jq -r '.axes.publication.decision' data-control-tower.json)"
-            echo
-            echo "Consumer health: $(jq -r '.axes.consumerHealth.status' data-control-tower.json)"
-            echo
-            echo "Consumer readiness: $(jq -r '.axes.consumerReadiness.status' data-control-tower.json)"
-            echo
-            echo "Sheet health: $(jq -r '.axes.sheetHealth.status' data-control-tower.json)"
-            echo
-            echo "Estimate master: $(jq -r '.axes.estimateMasterReadiness.status' data-control-tower.json)"
-            echo "Estimate canonical trims: $(jq -r '.operatorSummary.estimateCanonicalTrimCount // "unknown"' data-control-tower.json)"
-            echo "Estimate ACTIVE trims: $(jq -r '.operatorSummary.estimateActiveTrimCount // "unknown"' data-control-tower.json)"
-            echo "Estimate HOLD trims: $(jq -r '.operatorSummary.estimateHoldTrimCount // "unknown"' data-control-tower.json)"
-            echo
-            echo "Ready transitions: $(jq -r '.operatorSummary.readyTransitionCount' data-control-tower.json)"
-            echo
-            echo "Blocked consumers: $(jq -r '.operatorSummary.consumerBlockedCount // \"unknown\"' data-control-tower.json)"
-            echo
-            echo "Attention: $(jq -r 'if (.attention | length) == 0 then \"none\" else (.attention | join(\", \")) end' data-control-tower.json)"
-          } >> "$GITHUB_STEP_SUMMARY"
+          # Render before appending: jq errors must fail the step, not be masked by echo.
+          jq -r '
+            "## FreePass Data Control Tower",
+            "",
+            ("Source read: " + (.axes.sourceObservation.readTime | tostring)),
+            "",
+            ("Audit freshness: " + .axes.auditFreshness.status + " / " + .axes.auditFreshness.reason),
+            "",
+            ("Publication: " + (.axes.publication.decision | tostring)),
+            "",
+            ("Consumer health: " + (.axes.consumerHealth.status | tostring)),
+            "",
+            ("Consumer readiness: " + (.axes.consumerReadiness.status | tostring)),
+            "",
+            ("Sheet health: " + (.axes.sheetHealth.status | tostring)),
+            "",
+            ("Estimate master: " + (.axes.estimateMasterReadiness.status | tostring)),
+            ("Estimate canonical trims: " + (.operatorSummary.estimateCanonicalTrimCount // "unknown" | tostring)),
+            ("Estimate ACTIVE trims: " + (.operatorSummary.estimateActiveTrimCount // "unknown" | tostring)),
+            ("Estimate HOLD trims: " + (.operatorSummary.estimateHoldTrimCount // "unknown" | tostring)),
+            "",
+            ("Ready transitions: " + (.operatorSummary.readyTransitionCount | tostring)),
+            "",
+            ("Blocked consumers: " + (.operatorSummary.consumerBlockedCount // "unknown" | tostring)),
+            "",
+            ("Attention: " + (if (.attention | length) == 0 then "none" else (.attention | join(", ")) end))
+          ' data-control-tower.json > data-control-tower-summary.md
+          cat data-control-tower-summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Persist immutable evidence and read it back
         shell: bash
         run: |
