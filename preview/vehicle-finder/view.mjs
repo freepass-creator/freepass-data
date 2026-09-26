@@ -159,6 +159,17 @@ function formatObservedAt(value) {
   }).format(date);
 }
 
+function formatAgeMs(ageMs) {
+  if (!Number.isFinite(ageMs) || ageMs < 0) return '경과시간 미확인';
+  const minutes = Math.floor(ageMs / 60000);
+  if (minutes < 1) return '1분 미만';
+  if (minutes < 60) return minutes + '분';
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours + '시간 ' + (minutes % 60) + '분';
+  const days = Math.floor(hours / 24);
+  return days + '일 ' + (hours % 24) + '시간';
+}
+
 function groupTransitionRejectedMessage(reason) {
   switch (reason) {
     case 'GROUP_NOT_FOUND':
@@ -182,7 +193,14 @@ function stateBadge(item) {
 
 export function mountVehicleFinder(
   root,
-  { read, onSelect, onFinalize, onGroupDrilldown, initialMode = 'NEW_CAR' } = {},
+  {
+    read,
+    onSelect,
+    onFinalize,
+    onRevalidate,
+    onGroupDrilldown,
+    initialMode = 'NEW_CAR',
+  } = {},
 ) {
   if (!(root instanceof HTMLElement)) throw new TypeError('Finder root must be an HTMLElement');
 
@@ -201,6 +219,8 @@ export function mountVehicleFinder(
   let readContext = null;
   let finalizationReview = null;
   let finalizationContext = null;
+  let confirmedReceipt = null;
+  let receiptRevalidationReview = null;
   let activeDrilldownKey = null;
   const expandedGroupIds = new Set();
   let requestSeq = 0;
@@ -522,6 +542,8 @@ export function mountVehicleFinder(
     inspectedId = null;
     finalizationReview = null;
     finalizationContext = null;
+    confirmedReceipt = null;
+    receiptRevalidationReview = null;
     detail.hidden = true;
     root.classList.remove('vf-inspecting');
     renderRows();
@@ -544,6 +566,8 @@ export function mountVehicleFinder(
     if (finalizationReview && finalizationReview.itemId !== item.id) {
       finalizationReview = null;
       finalizationContext = null;
+      confirmedReceipt = null;
+      receiptRevalidationReview = null;
     }
     const detailHead = element('div', 'vf-detail-head');
     const detailTitle = element('div', 'vf-detail-title');
@@ -765,8 +789,82 @@ export function mountVehicleFinder(
       primary.disabled = item.selectable === false;
     };
 
+    const renderReceiptRevalidation = (container) => {
+      if (!receiptRevalidationReview) return;
+
+      const review = element('section', 'vf-revalidation');
+      review.dataset.status = receiptRevalidationReview.status;
+      review.append(
+        element(
+          'strong',
+          'vf-revalidation-heading',
+          receiptRevalidationReview.status === 'CURRENT'
+            ? '현재도 유효한 선택입니다'
+            : '다시 선택이 필요합니다',
+        ),
+        element(
+          'span',
+          'vf-revalidation-age',
+          'receipt 발급 후 ' + formatAgeMs(receiptRevalidationReview.ageMs),
+        ),
+      );
+
+      if (receiptRevalidationReview.status === 'CURRENT') {
+        review.append(
+          element(
+            'p',
+            'vf-revalidation-copy',
+            'F 재검증에서 현재 차량과 기존 선택 조건이 계속 유효한 것으로 확인되었습니다.',
+          ),
+        );
+      } else {
+        const reasons = element('div', 'vf-revalidation-reasons');
+        for (const reason of receiptRevalidationReview.reasons) {
+          const card = element('article', 'vf-revalidation-reason');
+          const title = element('div', 'vf-revalidation-reason-title');
+          title.append(
+            element('strong', '', reason.title),
+            element('code', '', reason.code),
+          );
+          card.append(
+            title,
+            element('p', '', reason.message),
+            element('p', 'vf-revalidation-next', '다음 확인 · ' + reason.nextStep),
+          );
+          reasons.append(card);
+        }
+        review.append(reasons);
+
+        const reselect = element('button', 'vf-reselect vf-secondary', '목록에서 다시 선택');
+        reselect.type = 'button';
+        listen(reselect, 'click', () => {
+          confirmedReceipt = null;
+          receiptRevalidationReview = null;
+          finalizationReview = null;
+          finalizationContext = null;
+          closeDetail();
+        });
+        review.append(reselect);
+      }
+
+      if (receiptRevalidationReview.currentRecordChanged) {
+        const digest = element('details', 'vf-revalidation-digest');
+        digest.append(element('summary', '', '변경 digest 확인'));
+        digest.append(
+          element('code', '', '확정 당시 ' + receiptRevalidationReview.snapshotRecordDigest),
+          element('code', '', '현재 ' + (receiptRevalidationReview.currentRecordDigest ?? '없음')),
+        );
+        review.append(digest);
+      }
+
+      container.append(review);
+    };
+
     const showReceipt = (receipt) => {
       if (!receipt) return;
+      confirmedReceipt = structuredClone(receipt);
+      receiptRevalidationReview = null;
+
       const receiptBox = element('section', 'vf-receipt');
       receiptBox.append(
         element('strong', '', '선택 확정 완료'),
@@ -779,9 +877,49 @@ export function mountVehicleFinder(
       if (receipt.receiptDigest) {
         receiptBox.append(element('code', '', 'receipt ' + receipt.receiptDigest));
       }
+
+      if (typeof onRevalidate === 'function') {
+        const revalidate = element('button', 'vf-revalidate vf-secondary', '유효성 다시 확인');
+        revalidate.type = 'button';
+        listen(revalidate, 'click', async () => {
+          revalidate.disabled = true;
+          revalidate.textContent = '재검증 중';
+          try {
+            const response = await onRevalidate({
+              receipt: structuredClone(confirmedReceipt),
+              id: item.id,
+              observationId: snapshot.observationId,
+              mode,
+              readContext,
+            });
+            if (!response?.review ||
+                !['CURRENT', 'RESELECT_REQUIRED'].includes(response.review.status) ||
+                !Array.isArray(response.review.reasons)) {
+              invalid('revalidationResponse');
+            }
+            receiptRevalidationReview = structuredClone(response.review);
+            status.textContent =
+              response.review.status === 'CURRENT'
+                ? item.label + ' 선택 유효'
+                : item.label + ' 다시 선택 필요';
+            showReceipt(confirmedReceipt);
+          } catch {
+            status.textContent =
+              'receipt 재검증을 완료하지 못했습니다. 기존 확정 정보는 유지됩니다.';
+            revalidate.disabled = false;
+            revalidate.textContent = '유효성 다시 확인';
+          }
+        });
+        receiptBox.append(revalidate);
+      }
+
+      renderReceiptRevalidation(receiptBox);
       finalization.replaceChildren(receiptBox);
       finalization.hidden = false;
-      finalization.dataset.status = 'CONFIRMED';
+      finalization.dataset.status =
+        receiptRevalidationReview?.status === 'RESELECT_REQUIRED'
+          ? 'RESELECT_REQUIRED'
+          : 'CONFIRMED';
     };
 
     listen(primary, 'click', async () => {
@@ -957,6 +1095,8 @@ export function mountVehicleFinder(
       readContext = response.readContext ?? null;
       finalizationReview = null;
       finalizationContext = null;
+      confirmedReceipt = null;
+      receiptRevalidationReview = null;
       inspectedId = null;
       detail.hidden = true;
       root.classList.remove('vf-inspecting');
@@ -1225,6 +1365,8 @@ export function mountVehicleFinder(
       snapshot = next;
       finalizationReview = null;
       finalizationContext = null;
+      confirmedReceipt = null;
+      receiptRevalidationReview = null;
       renderSnapshot();
       if (inspectedId) {
         const refreshedItem = snapshot.items.find((item) => item.id === inspectedId);
@@ -1274,6 +1416,8 @@ export function mountVehicleFinder(
     readContext = null;
     finalizationReview = null;
     finalizationContext = null;
+    confirmedReceipt = null;
+    receiptRevalidationReview = null;
     snapshot = null;
     input.value = '';
     detail.hidden = true;
