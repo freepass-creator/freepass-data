@@ -37,6 +37,10 @@ export function canonicalTrimIdentity(value: string) {
   return normalize(value).replace(/\s+/g, '');
 }
 
+export function canonicalHierarchyLabelIdentity(value: string) {
+  return normalize(value).replace(/\s+/g, '');
+}
+
 export function inferPowertrainFuelType(value: string): CanonicalFuelType | null {
   const tokens = normalize(value).split(' ').filter(Boolean);
   const tokenSet = new Set(tokens);

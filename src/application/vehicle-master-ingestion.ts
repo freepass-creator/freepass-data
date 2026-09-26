@@ -11,6 +11,7 @@ import {
 } from '../domain/vehicle-master.js';
 import {
   canonicalDrivetrain,
+  canonicalHierarchyLabelIdentity,
   canonicalPowertrainIdentity,
   canonicalSeatCount,
   canonicalTrimIdentity,
@@ -42,6 +43,9 @@ export type VehicleMasterEvidenceIssue = {
     | 'PARENT_NODE_HOLD'
     | 'PARENT_EFFECTIVE_RANGE_MISMATCH'
     | 'PARENT_REFERENCE_MISMATCH'
+    | 'MODEL_DUPLICATE_IN_MAKE'
+    | 'GENERATION_DUPLICATE_IN_MODEL'
+    | 'PHASE_DUPLICATE_IN_GENERATION'
     | 'PHASE_EFFECTIVE_RANGE_OVERLAP'
     | 'MODEL_YEAR_VALUE_INVALID'
     | 'MODEL_YEAR_NAME_MISMATCH'
@@ -228,6 +232,23 @@ function explicitModelYearLabel(value: string): number | null {
   const normalized = value.normalize('NFKC').trim();
   const match = normalized.match(/^(19|20|21|22)\d{2}(?:년형|MY)?$/i);
   return match ? Number(normalized.slice(0, 4)) : null;
+}
+
+function hierarchyNames(node: VehicleMasterNode) {
+  return new Set(
+    [node.canonicalName, ...node.aliases]
+      .map(canonicalHierarchyLabelIdentity)
+      .filter(Boolean)
+  );
+}
+
+function hierarchyDuplicateCode(
+  nodeType: VehicleMasterNode['nodeType']
+): VehicleMasterEvidenceIssue['code'] | null {
+  if (nodeType === 'MODEL') return 'MODEL_DUPLICATE_IN_MAKE';
+  if (nodeType === 'GENERATION') return 'GENERATION_DUPLICATE_IN_MODEL';
+  if (nodeType === 'PHASE') return 'PHASE_DUPLICATE_IN_GENERATION';
+  return null;
 }
 
 function valueAtPath(value: unknown, path: string): unknown {
@@ -455,6 +476,28 @@ async function applyNodeReferenceGate(
           code: 'REFERENCE_EFFECTIVE_RANGE_MISMATCH',
           fieldPath: `refs.${field}`,
           detail: refId,
+        });
+      }
+    }
+  }
+
+  const hierarchyDuplicate = hierarchyDuplicateCode(proposal.nodeType);
+  if (hierarchyDuplicate && proposal.parentId) {
+    const proposalNames = hierarchyNames(proposal);
+    const siblings = (await store.listNodesByType(proposal.nodeType))
+      .filter((node) =>
+        node.id !== proposal.id &&
+        node.parentId === proposal.parentId &&
+        node.status !== 'HOLD'
+      );
+
+    for (const sibling of siblings) {
+      const siblingNames = hierarchyNames(sibling);
+      if ([...proposalNames].some((name) => siblingNames.has(name))) {
+        issues.push({
+          code: hierarchyDuplicate,
+          fieldPath: 'canonicalName',
+          detail: sibling.id,
         });
       }
     }

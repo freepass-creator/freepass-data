@@ -1181,6 +1181,347 @@ describe('vehicle master evidence-gated ingestion', () => {
     expect(result.canonicalWrite).toBeNull();
   });
 
+  it('keeps duplicate MODEL aliases on HOLD within the same MAKE', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-model-alias-duplicate', 'MANUFACTURER_OFFICIAL', 'a');
+    await store.putSourceDocument(official);
+
+    const make = sealVehicleMasterNode({
+      id: 'make_kia_alias_test',
+      nodeType: 'MAKE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '기아',
+      parentId: null,
+      refs: {},
+      aliases: ['Kia'],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(make);
+
+    await store.putNode(sealVehicleMasterNode({
+      id: 'model_sorento_existing',
+      nodeType: 'MODEL',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '쏘렌토',
+      parentId: make.id,
+      refs: { makeId: make.id },
+      aliases: ['Sorento'],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterNode({
+      id: 'model_sorento_english_duplicate',
+      nodeType: 'MODEL',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: 'Sorento',
+      parentId: make.id,
+      refs: { makeId: make.id },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'canonicalName',
+        value: proposal.canonicalName,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['canonicalName'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'MODEL_DUPLICATE_IN_MAKE',
+          detail: 'model_sorento_existing',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps duplicate GENERATION aliases on HOLD within the same MODEL', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-generation-alias-duplicate', 'MANUFACTURER_OFFICIAL', 'b');
+    await store.putSourceDocument(official);
+
+    const model = sealVehicleMasterNode({
+      id: 'model_generation_alias_test',
+      nodeType: 'MODEL',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '쏘렌토',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(model);
+
+    await store.putNode(sealVehicleMasterNode({
+      id: 'gen_mq4_existing',
+      nodeType: 'GENERATION',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '4세대 MQ4',
+      parentId: model.id,
+      refs: { modelId: model.id },
+      aliases: ['MQ4'],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterNode({
+      id: 'gen_mq4_duplicate',
+      nodeType: 'GENERATION',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: 'MQ4',
+      parentId: model.id,
+      refs: { modelId: model.id },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'canonicalName',
+        value: proposal.canonicalName,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['canonicalName'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'GENERATION_DUPLICATE_IN_MODEL',
+          detail: 'gen_mq4_existing',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps duplicate PHASE aliases on HOLD within the same GENERATION', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-phase-alias-duplicate', 'MANUFACTURER_OFFICIAL', 'c');
+    await store.putSourceDocument(official);
+
+    const generation = sealVehicleMasterNode({
+      id: 'gen_phase_alias_test',
+      nodeType: 'GENERATION',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: 'MQ4',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(generation);
+
+    await store.putNode(sealVehicleMasterNode({
+      id: 'phase_facelift_existing',
+      nodeType: 'PHASE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '더 뉴 쏘렌토',
+      parentId: generation.id,
+      refs: { generationId: generation.id },
+      aliases: ['페이스리프트'],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterNode({
+      id: 'phase_facelift_duplicate',
+      nodeType: 'PHASE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '페이스리프트',
+      parentId: generation.id,
+      refs: { generationId: generation.id },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'canonicalName',
+        value: proposal.canonicalName,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['canonicalName'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'PHASE_DUPLICATE_IN_GENERATION',
+          detail: 'phase_facelift_existing',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('allows the same hierarchy label under a different canonical parent', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-generation-parent-scope', 'MANUFACTURER_OFFICIAL', 'd');
+    await store.putSourceDocument(official);
+
+    const modelA = sealVehicleMasterNode({
+      id: 'model_parent_a',
+      nodeType: 'MODEL',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '모델 A',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    const modelB = sealVehicleMasterNode({
+      id: 'model_parent_b',
+      nodeType: 'MODEL',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '모델 B',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(modelA);
+    await store.putNode(modelB);
+
+    await store.putNode(sealVehicleMasterNode({
+      id: 'gen_first_under_a',
+      nodeType: 'GENERATION',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '1세대',
+      parentId: modelA.id,
+      refs: { modelId: modelA.id },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterNode({
+      id: 'gen_first_under_b',
+      nodeType: 'GENERATION',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '1세대',
+      parentId: modelB.id,
+      refs: { modelId: modelB.id },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'canonicalName',
+        value: proposal.canonicalName,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['canonicalName'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('APPROVED');
+    expect(result.canonicalWrite).toBe('CREATED');
+  });
+
   it('keeps an overlapping sibling PHASE on HOLD within the same generation', async () => {
     const store = new MemoryVehicleMasterStore();
     const official = source('official-phase-overlap', 'MANUFACTURER_OFFICIAL', 'f');
