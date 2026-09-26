@@ -372,6 +372,13 @@ try:
         expect(desktop.get_by_text("최종 확정 전 검토")).to_be_visible()
         expect(desktop.get_by_role("button", name="이 차량으로 확정")).to_be_visible()
         assert desktop.evaluate("window.__qaLastFinalize.id") == "NEW_CAR-0"
+
+        desktop.get_by_role("button", name="다시 조회").click()
+        expect(desktop.get_by_text("최종 확정 전 검토")).to_have_count(0)
+        expect(desktop.get_by_role("button", name="최종 선택 검토")).to_be_visible()
+
+        desktop.get_by_role("button", name="최종 선택 검토").click()
+        expect(desktop.get_by_text("최종 확정 전 검토")).to_be_visible()
         desktop.get_by_role("button", name="이 차량으로 확정").click()
         expect(desktop.get_by_text("선택 확정 완료")).to_be_visible()
         expect(desktop.get_by_text("vehicle_selection_browser_qa")).to_be_visible()
