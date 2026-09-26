@@ -181,6 +181,7 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).toMatch(/CURRENT/);
     expect(source).toMatch(/RESELECT_REQUIRED/);
     expect(source).toMatch(/목록에서 다시 선택/);
+    expect(source).toMatch(/다시 선택 필요/);
     expect(source).not.toMatch(/revalidateVehicleSelectionReceipt|assertVehicleSelectionReceipt/);
   });
 
