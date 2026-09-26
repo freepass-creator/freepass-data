@@ -37,6 +37,27 @@ export type SheetHealthScheduleSummary = ScheduledStatusSummary & {
   generatedAt?: string;
 };
 
+export type EstimateMasterReadinessSummary = {
+  contractVersion: 'estimate-master-readiness-v1';
+  schemaVersion: '1.0.0';
+  status: 'READY' | 'DEGRADED' | 'BLOCKED';
+  generatedAt: string;
+  projectionId: 'estimate-newcar-master';
+  activeReleaseAuthorized: boolean;
+  publicationImplemented: boolean;
+  counts: {
+    total: number;
+    active: number;
+    hold: number;
+  };
+  activeRate: number;
+  inputDigest: string;
+  blockers: string[];
+  holdReasons: Array<{ reason: string; count: number }>;
+  bridgeConfigured: boolean;
+  bridgePath: string | null;
+};
+
 export type AuditScheduleHealthSummary = {
   version: 'erp5-audit-schedule-health/1';
   configured: boolean;
@@ -56,6 +77,7 @@ export type SourceInventorySummary = {
     collections: {
       products: number;
       policy: number;
+      partner?: number;
     };
     readTime: string;
     digest: string;
@@ -77,6 +99,7 @@ export type DataControlTowerInput = {
   consumerHealth: ConsumerHealthScheduleSummary;
   consumerReadiness: ConsumerReadinessScheduleSummary;
   sheetHealth: SheetHealthScheduleSummary;
+  estimateMasterReadiness?: EstimateMasterReadinessSummary | null;
 };
 
 export type DataControlTowerAttentionCode =
@@ -108,6 +131,7 @@ export type DataControlTowerReport = {
       coverage: string;
       products: number;
       policies: number;
+      partners: number | null;
     };
     auditFreshness: AuditScheduleHealthSummary;
     publication: {
@@ -120,6 +144,7 @@ export type DataControlTowerReport = {
     consumerHealth: ConsumerHealthScheduleSummary;
     consumerReadiness: ConsumerReadinessScheduleSummary;
     sheetHealth: SheetHealthScheduleSummary;
+    estimateMasterReadiness: EstimateMasterReadinessSummary | null;
   };
   operatorSummary: {
     readyTransitionCount: number;
@@ -127,6 +152,9 @@ export type DataControlTowerReport = {
     readinessHoldCount: number | null;
     auditGapMinutes: number | null;
     publicationHoldReasonCount: number;
+    estimateCanonicalTrimCount: number | null;
+    estimateActiveTrimCount: number | null;
+    estimateHoldTrimCount: number | null;
   };
   attention: DataControlTowerAttentionCode[];
 };
@@ -178,6 +206,8 @@ export function validateDataControlTowerInput(
     !/^[a-f0-9]{64}$/.test(source.source.digest) ||
     !finiteNonNegative(source.source.collections.products) ||
     !finiteNonNegative(source.source.collections.policy) ||
+    (source.source.collections.partner !== undefined &&
+      !finiteNonNegative(source.source.collections.partner)) ||
     typeof source.runId !== 'string' ||
     source.runId.length === 0 ||
     typeof source.authority.canonicalWriteAuthorized !== 'boolean' ||
@@ -233,6 +263,39 @@ export function validateDataControlTowerInput(
     !Array.isArray(input.consumerReadiness.readyTransitions)
   ) {
     throw new Error('INVALID_CONTROL_TOWER_READY_TRANSITIONS');
+  }
+
+  const estimate = input.estimateMasterReadiness;
+  if (estimate !== undefined && estimate !== null) {
+    if (
+      estimate.contractVersion !== 'estimate-master-readiness-v1' ||
+      estimate.schemaVersion !== '1.0.0' ||
+      !['READY', 'DEGRADED', 'BLOCKED'].includes(estimate.status) ||
+      !Number.isFinite(Date.parse(estimate.generatedAt)) ||
+      estimate.projectionId !== 'estimate-newcar-master' ||
+      typeof estimate.activeReleaseAuthorized !== 'boolean' ||
+      typeof estimate.publicationImplemented !== 'boolean' ||
+      !finiteNonNegative(estimate.counts.total) ||
+      !finiteNonNegative(estimate.counts.active) ||
+      !finiteNonNegative(estimate.counts.hold) ||
+      estimate.counts.active + estimate.counts.hold !== estimate.counts.total ||
+      typeof estimate.activeRate !== 'number' ||
+      !Number.isFinite(estimate.activeRate) ||
+      estimate.activeRate < 0 ||
+      estimate.activeRate > 1 ||
+      !/^[a-f0-9]{64}$/i.test(estimate.inputDigest) ||
+      !Array.isArray(estimate.blockers) ||
+      !Array.isArray(estimate.holdReasons) ||
+      estimate.holdReasons.some((item) =>
+        !item ||
+        typeof item.reason !== 'string' ||
+        !finiteNonNegative(item.count)
+      ) ||
+      typeof estimate.bridgeConfigured !== 'boolean' ||
+      (estimate.bridgePath !== null && typeof estimate.bridgePath !== 'string')
+    ) {
+      throw new Error('INVALID_CONTROL_TOWER_ESTIMATE_MASTER_READINESS');
+    }
   }
 }
 
@@ -300,7 +363,8 @@ export function buildDataControlTower(
         digest: input.sourceInventory.source.digest,
         coverage: input.sourceInventory.source.coverage,
         products: input.sourceInventory.source.collections.products,
-        policies: input.sourceInventory.source.collections.policy
+        policies: input.sourceInventory.source.collections.policy,
+        partners: input.sourceInventory.source.collections.partner ?? null
       },
       auditFreshness: structuredClone(input.auditSchedule),
       publication: {
@@ -317,7 +381,11 @@ export function buildDataControlTower(
       },
       consumerHealth: structuredClone(input.consumerHealth),
       consumerReadiness: structuredClone(input.consumerReadiness),
-      sheetHealth: structuredClone(input.sheetHealth)
+      sheetHealth: structuredClone(input.sheetHealth),
+      estimateMasterReadiness:
+        input.estimateMasterReadiness == null
+          ? null
+          : structuredClone(input.estimateMasterReadiness)
     },
     operatorSummary: {
       readyTransitionCount:
@@ -328,7 +396,13 @@ export function buildDataControlTower(
         input.consumerReadiness.counts?.hold ?? null,
       auditGapMinutes: input.auditSchedule.gapMinutes,
       publicationHoldReasonCount:
-        input.sourceInventory.authority.publicationHoldReasons.length
+        input.sourceInventory.authority.publicationHoldReasons.length,
+      estimateCanonicalTrimCount:
+        input.estimateMasterReadiness?.counts.total ?? null,
+      estimateActiveTrimCount:
+        input.estimateMasterReadiness?.counts.active ?? null,
+      estimateHoldTrimCount:
+        input.estimateMasterReadiness?.counts.hold ?? null
     },
     attention: attentionCodes(input)
   };
