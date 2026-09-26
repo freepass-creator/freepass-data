@@ -60,6 +60,12 @@ button{cursor:pointer}
   border-bottom:2px solid transparent
 }
 .tabs button.active{color:var(--brand);border-bottom-color:var(--brand)}
+.tabs .tab-link{
+  display:inline-flex;align-items:center;height:48px;padding:0 1px;
+  color:var(--muted);font-size:13px;font-weight:600;text-decoration:none;
+  border-bottom:2px solid transparent
+}
+.tabs .tab-link:hover,.tabs .tab-link:focus-visible{color:var(--brand);border-bottom-color:var(--brand)}
 main{max-width:1200px;min-inline-size:0;margin:0 auto;padding:24px 16px}
 .screen{display:none;min-inline-size:0;max-inline-size:100%}.screen.active{display:block}
 .head{display:flex;align-items:end;justify-content:space-between;gap:20px;margin-bottom:18px}
@@ -249,8 +255,12 @@ body[data-active-screen="review-detail"] main{padding-bottom:96px}
     z-index:29;background:#fff;border-top:1px solid var(--line);padding:8px 12px 12px
   }
   body[data-more-open="true"] .more-sheet{display:grid;gap:4px}
-  .more-sheet button{min-height:48px;border:0;background:#fff;text-align:left;padding:0 12px;border-radius:8px;font-weight:650;color:var(--ink)}
-  .more-sheet button:active{background:var(--soft)}
+  .more-sheet button,.more-sheet a{
+    min-height:48px;border:0;background:#fff;text-align:left;padding:0 12px;
+    border-radius:8px;font-weight:650;color:var(--ink);text-decoration:none;
+    display:flex;align-items:center
+  }
+  .more-sheet button:active,.more-sheet a:active{background:var(--soft)}
 }
 @media(min-width:641px) and (max-width:900px){
   main{padding:20px 16px}
@@ -287,6 +297,7 @@ body[data-active-screen="review-detail"] main{padding-bottom:96px}
   <button data-screen="review">변경 검수</button>
   <button data-screen="release">배포</button>
   <button data-screen="history">이력</button>
+  <a class="tab-link" href="/console/vehicle-finder">차량 찾기</a>
 </nav>
 
 <main>
@@ -416,6 +427,7 @@ body[data-active-screen="review-detail"] main{padding-bottom:96px}
 <div class="more-sheet" id="moreSheet" aria-label="더보기">
   <button data-screen="release">배포</button>
   <button data-screen="history">이력</button>
+  <a href="/console/vehicle-finder">차량 찾기</a>
 </div>
 
 <nav class="mobile-nav" aria-label="주요 메뉴">
