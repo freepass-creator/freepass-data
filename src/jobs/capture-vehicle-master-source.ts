@@ -1,8 +1,6 @@
 import { captureVehicleMasterSource } from '../application/vehicle-master-source-capture.js';
-import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
-import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
-import { createHttpVehicleMasterSourceFetcher } from '../infra/vehicle-master-source-fetcher.js';
 import type { VehicleMasterSourceDocument } from '../domain/vehicle-master.js';
+import { createVehicleMasterJobRuntime } from './data-access-runtime.js';
 
 const SOURCE_TYPES = new Set<VehicleMasterSourceDocument['sourceType']>([
   'MANUFACTURER_OFFICIAL',
@@ -72,9 +70,7 @@ function parseRequest(raw: string | undefined): CaptureRequest {
 }
 
 const input = parseRequest(process.env.VEHICLE_MASTER_CAPTURE_JSON);
-const store = createFirestoreVehicleMasterStore();
-const archive = createFirebaseVehicleMasterSourceArchive();
-const fetcher = createHttpVehicleMasterSourceFetcher();
+const { store, archive, fetcher } = createVehicleMasterJobRuntime();
 
 const result = await captureVehicleMasterSource({ fetcher, archive, store }, input);
 
