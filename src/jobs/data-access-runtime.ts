@@ -17,6 +17,10 @@ import {
   type SheetEvidenceFreshnessPolicy
 } from '../application/sheet-delivery-evidence.js';
 import { readSheetConsumerHealth } from '../application/sheet-consumer-health.js';
+import {
+  readConsumerRuntimeEvidence,
+  type ConsumerRuntimeEvidencePolicy
+} from '../application/consumer-runtime-evidence.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { SheetHandoffWorkbook, SheetPublicationHandoff } from '../domain/sheet-publication-handoff.js';
 import type { SheetDeliveryReceipt } from '../domain/consumer-delivery.js';
@@ -39,6 +43,29 @@ function readOnlyAccess(input: { accessToken: string; evidenceBucket: string }) 
 export function createJobDataAccessRuntime() {
   return {
     access: new DataAccessGateway(createFirestoreDataAccessLogStore())
+  };
+}
+
+export function createConsumerRuntimeEvidenceDataAccessRuntime() {
+  const logs = createFirestoreDataAccessLogStore();
+  const access = new DataAccessGateway(logs);
+  return {
+    report: (policy: ConsumerRuntimeEvidencePolicy) => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-consumer-evidence', kind: 'SERVICE' },
+        clientId: 'job:consumer-runtime-evidence',
+        purpose: 'derive consumer cutover evidence from audited runtime reads'
+      },
+      operation: 'READ_CONSUMER_RUNTIME_EVIDENCE',
+      resource: {
+        kind: 'HEALTH',
+        name: 'consumer-runtime-evidence'
+      },
+      summarize: (value) => ({
+        count: value.consumers.length,
+        digest: stableDigest(value)
+      })
+    }, () => readConsumerRuntimeEvidence(logs, policy))
   };
 }
 
