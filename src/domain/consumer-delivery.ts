@@ -1,4 +1,4 @@
-import type { ApprovedReleaseEvidence } from './consumer-cutover.js';
+import type { ApprovedReleaseEvidence, ConsumerCutoverEvidence } from './consumer-cutover.js';
 import {
   validateSheetPublicationHandoff,
   type SheetPublicationHandoff
@@ -43,6 +43,16 @@ export type SheetDeliveryExpectation = {
 export type SheetDeliveryDecision = {
   status: 'PASS' | 'HOLD';
   violations: string[];
+};
+
+export type SheetCutoverEvidenceDecision = {
+  status: 'PASS' | 'HOLD';
+  authority: SheetDeliveryReceipt['releaseAuthority'];
+  evidence: Pick<
+    ConsumerCutoverEvidence,
+    'freepassReadVerified' | 'productionReadbackVerified' | 'approvedRelease'
+  >;
+  blockers: string[];
 };
 
 const expectedConsumer = (workbook: SheetWorkbook): SheetConsumerId =>
@@ -173,5 +183,37 @@ export function validateSheetDeliveryReceipt(
   return {
     status: violations.length ? 'HOLD' : 'PASS',
     violations
+  };
+}
+
+export function deriveSheetCutoverEvidence(
+  receipt: SheetDeliveryReceipt,
+  expected: SheetDeliveryExpectation
+): SheetCutoverEvidenceDecision {
+  const delivery = validateSheetDeliveryReceipt(receipt, expected);
+  const blockers = [...delivery.violations];
+
+  if (
+    delivery.status === 'PASS' &&
+    receipt.releaseAuthority === 'LEGACY_VERIFIED_BRIDGE'
+  ) {
+    blockers.push('LEGACY_BRIDGE_NOT_CANONICAL_READBACK');
+  }
+
+  const canonicalReadback =
+    delivery.status === 'PASS' &&
+    receipt.releaseAuthority === 'CANONICAL_ACTIVE';
+
+  return {
+    status: blockers.length ? 'HOLD' : 'PASS',
+    authority: receipt.releaseAuthority,
+    evidence: {
+      freepassReadVerified: delivery.status === 'PASS',
+      productionReadbackVerified: canonicalReadback,
+      approvedRelease: delivery.status === 'PASS'
+        ? structuredClone(receipt.approvedRelease)
+        : null
+    },
+    blockers
   };
 }
