@@ -513,6 +513,136 @@ describe('vehicle master evidence-gated ingestion', () => {
     expect(result.canonicalWrite).toBeNull();
   });
 
+  it('keeps a conflicting price on HOLD when another price starts at the same time', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-price-same-start', 'MANUFACTURER_OFFICIAL', 'c');
+    await store.putSourceDocument(official);
+
+    const trim = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, trim);
+    await store.putNode(trim);
+
+    await store.putPriceRevision(sealVehicleMasterPriceRevision({
+      id: 'price_existing_same_start',
+      targetId: trim.id,
+      priceType: 'BASE',
+      amount: 36000000,
+      currency: 'KRW',
+      revision: 1,
+      sourceEvidenceIds: [official.sourceDocumentId],
+      sourceDocumentIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterPriceRevision({
+      id: 'price_conflicting_same_start',
+      targetId: trim.id,
+      priceType: 'BASE',
+      amount: 37000000,
+      currency: 'KRW',
+      revision: 1,
+      sourceEvidenceIds: [official.sourceDocumentId],
+      sourceDocumentIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterPriceRevision(store, {
+      proposal,
+      observations: [
+        { fieldPath: 'amount', value: 37000000, sourceDocumentId: official.sourceDocumentId },
+        { fieldPath: 'currency', value: 'KRW', sourceDocumentId: official.sourceDocumentId },
+        { fieldPath: 'targetId', value: trim.id, sourceDocumentId: official.sourceDocumentId },
+      ],
+      policy: {
+        requiredFieldPaths: ['amount', 'currency', 'targetId'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'PRICE_EFFECTIVE_START_CONFLICT',
+          detail: 'price_existing_same_start',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps an explicitly overlapping price range on HOLD', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-price-overlap', 'MANUFACTURER_OFFICIAL', 'd');
+    await store.putSourceDocument(official);
+
+    const trim = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, trim);
+    await store.putNode(trim);
+
+    await store.putPriceRevision(sealVehicleMasterPriceRevision({
+      id: 'price_existing_explicit_range',
+      targetId: trim.id,
+      priceType: 'BASE',
+      amount: 36000000,
+      currency: 'KRW',
+      revision: 1,
+      sourceEvidenceIds: [official.sourceDocumentId],
+      sourceDocumentIds: [official.sourceDocumentId],
+      effectiveFrom: '2026-09-01T00:00:00.000Z',
+      effectiveTo: '2026-10-01T00:00:00.000Z',
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterPriceRevision({
+      id: 'price_overlapping_explicit_range',
+      targetId: trim.id,
+      priceType: 'BASE',
+      amount: 37000000,
+      currency: 'KRW',
+      revision: 1,
+      sourceEvidenceIds: [official.sourceDocumentId],
+      sourceDocumentIds: [official.sourceDocumentId],
+      effectiveFrom: '2026-09-15T00:00:00.000Z',
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterPriceRevision(store, {
+      proposal,
+      observations: [
+        { fieldPath: 'amount', value: 37000000, sourceDocumentId: official.sourceDocumentId },
+        { fieldPath: 'currency', value: 'KRW', sourceDocumentId: official.sourceDocumentId },
+        { fieldPath: 'targetId', value: trim.id, sourceDocumentId: official.sourceDocumentId },
+      ],
+      policy: {
+        requiredFieldPaths: ['amount', 'currency', 'targetId'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'PRICE_EXPLICIT_RANGE_OVERLAP',
+          detail: 'price_existing_explicit_range',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
   it('promotes base price through the same evidence gate', async () => {
     const store = new MemoryVehicleMasterStore();
     const official = source('kia-price-2027-sorento', 'MANUFACTURER_OFFICIAL', '2');
