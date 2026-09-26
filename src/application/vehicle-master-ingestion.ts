@@ -14,6 +14,7 @@ import {
   canonicalHierarchyLabelIdentity,
   canonicalPowertrainIdentity,
   canonicalSeatCount,
+  canonicalSupplementalIdentity,
   canonicalTrimIdentity,
   inferPowertrainFuelType,
   inferVariantFacts,
@@ -65,6 +66,8 @@ export type VehicleMasterEvidenceIssue = {
     | 'VARIANT_NAME_SEATS_MISMATCH'
     | 'VARIANT_NAME_DRIVETRAIN_MISMATCH'
     | 'VARIANT_DUPLICATE_IN_POWERTRAIN'
+    | 'SUPPLEMENTAL_DUPLICATE_IN_MODEL_YEAR'
+    | 'SUPPLEMENTAL_TYPE_CONFLICT_IN_MODEL_YEAR'
     | 'REQUIRED_REFERENCE_MISSING'
     | 'REFERENCE_NODE_MISSING'
     | 'REFERENCE_NODE_TYPE_MISMATCH'
@@ -426,6 +429,28 @@ function hierarchyDuplicateCode(
   return null;
 }
 
+const SUPPLEMENTAL_NODE_TYPES = new Set<VehicleMasterNode['nodeType']>([
+  'BASE_ITEM',
+  'OPTION',
+  'PACKAGE',
+  'OPTION_GROUP',
+  'COLOR',
+]);
+
+const SELECTABLE_SUPPLEMENTAL_NODE_TYPES = new Set<VehicleMasterNode['nodeType']>([
+  'OPTION',
+  'PACKAGE',
+  'COLOR',
+]);
+
+function supplementalNames(node: VehicleMasterNode) {
+  return new Set(
+    [node.canonicalName, ...node.aliases]
+      .map(canonicalSupplementalIdentity)
+      .filter(Boolean)
+  );
+}
+
 function valueAtPath(value: unknown, path: string): unknown {
   let current = value;
   for (const part of path.split('.')) {
@@ -733,6 +758,50 @@ async function applyNodeReferenceGate(
           code: hierarchyDuplicate,
           fieldPath: 'canonicalName',
           detail: sibling.id,
+        });
+      }
+    }
+  }
+
+  if (
+    SUPPLEMENTAL_NODE_TYPES.has(proposal.nodeType) &&
+    proposal.refs.modelYearId
+  ) {
+    const proposalNames = supplementalNames(proposal);
+    const supplementalTypes = [...SUPPLEMENTAL_NODE_TYPES];
+    const siblingGroups = await Promise.all(
+      supplementalTypes.map((nodeType) => store.listNodesByType(nodeType))
+    );
+    const siblings = siblingGroups
+      .flat()
+      .filter((node) =>
+        node.id !== proposal.id &&
+        node.refs.modelYearId === proposal.refs.modelYearId &&
+        node.status !== 'HOLD'
+      );
+
+    for (const sibling of siblings) {
+      const siblingNames = supplementalNames(sibling);
+      const sameIdentity = [...proposalNames].some((name) => siblingNames.has(name));
+      if (!sameIdentity) continue;
+
+      if (sibling.nodeType === proposal.nodeType) {
+        issues.push({
+          code: 'SUPPLEMENTAL_DUPLICATE_IN_MODEL_YEAR',
+          fieldPath: 'canonicalName',
+          detail: sibling.id,
+        });
+        continue;
+      }
+
+      if (
+        SELECTABLE_SUPPLEMENTAL_NODE_TYPES.has(proposal.nodeType) &&
+        SELECTABLE_SUPPLEMENTAL_NODE_TYPES.has(sibling.nodeType)
+      ) {
+        issues.push({
+          code: 'SUPPLEMENTAL_TYPE_CONFLICT_IN_MODEL_YEAR',
+          fieldPath: 'nodeType',
+          detail: `${sibling.nodeType}:${sibling.id}`,
         });
       }
     }
