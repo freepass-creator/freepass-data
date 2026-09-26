@@ -113,3 +113,38 @@ export function validateF86FeeColumns(feeColumns: readonly string[]) {
     }))
   };
 }
+
+
+/**
+ * RP012 구독/픽업 보증금은 금액을 원자에 계산해 고정하지 않고 규칙을 보존한다.
+ * 중고렌트는 실제 숫자 보증금이 정본이므로 이 규칙의 검사 대상이 아니다.
+ */
+export const SONOKONG_DEPOSIT_RULE_TEXT =
+  '월 대여료 × 약정연수 (최대 3개월)' as const;
+
+export function hasSonokongDepositRuleViolation(input: {
+  depositNote?: unknown;
+  productType?: unknown;
+  classificationProductType?: unknown;
+  price?: unknown;
+}) {
+  if (String(input.depositNote ?? '').trim() !== SONOKONG_DEPOSIT_RULE_TEXT) {
+    return false;
+  }
+  if (
+    String(
+      input.classificationProductType ??
+      input.productType ??
+      ''
+    ).trim() === '중고렌트'
+  ) {
+    return false;
+  }
+  if (!input.price || typeof input.price !== 'object' || Array.isArray(input.price)) {
+    return false;
+  }
+  return Object.values(input.price as Record<string, unknown>).some((term) => {
+    if (!term || typeof term !== 'object' || Array.isArray(term)) return false;
+    return Number((term as Record<string, unknown>).deposit) > 0;
+  });
+}

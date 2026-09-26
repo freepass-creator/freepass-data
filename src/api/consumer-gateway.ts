@@ -7,6 +7,8 @@ import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with 
 import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import type { ProjectionStore } from '../ports/catalog-store.js';
 import { readCatalogDataHealth } from '../application/catalog-health.js';
+import { DataAccessGateway } from '../application/data-access-gateway.js';
+import { DataAccessAuditUnavailableError } from '../domain/data-access.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 export type ConsumerCapability = 'catalog' | 'catalog-health';
@@ -77,9 +79,30 @@ const addFormats = (
     ? addFormatsModule
     : (addFormatsModule as unknown as { default: FormatsPlugin }).default
 ) as FormatsPlugin;
+class ConsumerReadError extends Error {
+  constructor(
+    readonly code: string,
+    readonly statusCode: number
+  ) {
+    super(code);
+  }
+}
+
+const consumerContext = (
+  consumerId: string,
+  purpose: string,
+  requestId: string
+) => ({
+  actor: { id: `consumer:${consumerId}`, kind: 'SERVICE' as const },
+  clientId: consumerId,
+  purpose,
+  requestId
+});
+
 export function createConsumerGateway(
   store: Pick<ProjectionStore, 'getActive' | 'getManifest'>,
   bindings: ConsumerBinding[],
+  access: DataAccessGateway,
   healthStore?: CatalogDataHealthStore,
 ) {
   // Validate again for callers constructing registrations without the environment parser.
@@ -96,37 +119,86 @@ export function createConsumerGateway(
     const binding = registered.get(request.params.consumerId);
     const supplied = request.headers.authorization ?? '';
     const matches = timingSafeEqual(hash(supplied), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
-    if (!binding || !matches) {
-      return reply.code(401).send({ code: 'UNAUTHORIZED' });
-    }
-    if (!binding.capabilities.includes('catalog')) {
-      return reply.code(403).send({ code: 'FORBIDDEN' });
-    }
-    const release = await store.getActive(binding.projectionId);
-    if (!release) return reply.code(503).send({ code: 'NO_ACTIVE_RELEASE' });
-    if (release.schemaVersion !== '1.0.0' || !validateData(release.data)) {
-      return reply.code(503).send({ code: 'UNSUPPORTED_OR_INCOMPLETE_RELEASE' });
-    }
-    const manifest = await store.getManifest(release.releaseId);
-    if (release.status !== 'ACTIVE' || release.projectionId !== binding.projectionId ||
-      !manifest || manifest.releaseId !== release.releaseId || manifest.projectionId !== release.projectionId ||
-      manifest.manifestId !== release.manifestId || manifest.schemaVersion !== release.schemaVersion ||
-      manifest.productCount !== release.data.length || manifest.offerCount !== release.data.reduce((count, row) => count + row.offers.length, 0) ||
-      manifest.inputDigest !== release.inputDigest || manifest.dataDigest !== release.dataDigest ||
-      stableDigest(manifest.canonicalInputs) !== release.inputDigest || stableDigest(release.data) !== release.dataDigest ||
-      !release.activatedAt || !Number.isFinite(Date.parse(release.activatedAt))) {
-      return reply.code(503).send({ code: 'RELEASE_EVIDENCE_MISMATCH' });
-    }
-    return {
-      data: release.data,
-      meta: {
-        consumerId: binding.id, projectionId: release.projectionId,
-        authority: 'CANONICAL_ACTIVE' as const,
-        schemaVersion: release.schemaVersion, releaseId: release.releaseId,
-        manifestId: release.manifestId, inputDigest: release.inputDigest, dataDigest: release.dataDigest,
-        revision: release.canonicalRevision, generatedAt: release.generatedAt, activatedAt: release.activatedAt,
-      },
+    const context = consumerContext(
+      binding?.id ?? 'unregistered-consumer',
+      'read approved catalog projection through FreePass Data',
+      request.id
+    );
+    const resource = {
+      kind: 'PROJECTION' as const,
+      name: binding?.projectionId ?? 'unregistered',
+      ...(binding ? { projectionId: binding.projectionId } : {})
     };
+
+    try {
+      if (!binding || !matches) {
+        await access.deny('READ', {
+          context,
+          operation: 'READ_CONSUMER_CATALOG',
+          resource
+        }, 'UNAUTHORIZED');
+        return reply.code(401).send({ code: 'UNAUTHORIZED' });
+      }
+      if (!binding.capabilities.includes('catalog')) {
+        await access.deny('READ', {
+          context,
+          operation: 'READ_CONSUMER_CATALOG',
+          resource
+        }, 'FORBIDDEN');
+        return reply.code(403).send({ code: 'FORBIDDEN' });
+      }
+
+      const result = await access.read({
+        context,
+        operation: 'READ_CONSUMER_CATALOG',
+        resource,
+        summarize: (value: {
+          data: unknown[];
+          meta: { dataDigest: string; releaseId: string; manifestId: string; revision: number };
+        }) => ({
+          count: value.data.length,
+          digest: value.meta.dataDigest,
+          releaseId: value.meta.releaseId,
+          manifestId: value.meta.manifestId,
+          revision: value.meta.revision
+        })
+      }, async () => {
+        const release = await store.getActive(binding.projectionId);
+        if (!release) throw new ConsumerReadError('NO_ACTIVE_RELEASE', 503);
+        if (release.schemaVersion !== '1.0.0' || !validateData(release.data)) {
+          throw new ConsumerReadError('UNSUPPORTED_OR_INCOMPLETE_RELEASE', 503);
+        }
+        const manifest = await store.getManifest(release.releaseId);
+        if (release.status !== 'ACTIVE' || release.projectionId !== binding.projectionId ||
+          !manifest || manifest.releaseId !== release.releaseId || manifest.projectionId !== release.projectionId ||
+          manifest.manifestId !== release.manifestId || manifest.schemaVersion !== release.schemaVersion ||
+          manifest.productCount !== release.data.length || manifest.offerCount !== release.data.reduce((count, row) => count + row.offers.length, 0) ||
+          manifest.inputDigest !== release.inputDigest || manifest.dataDigest !== release.dataDigest ||
+          stableDigest(manifest.canonicalInputs) !== release.inputDigest || stableDigest(release.data) !== release.dataDigest ||
+          !release.activatedAt || !Number.isFinite(Date.parse(release.activatedAt))) {
+          throw new ConsumerReadError('RELEASE_EVIDENCE_MISMATCH', 503);
+        }
+        return {
+          data: release.data,
+          meta: {
+            consumerId: binding.id, projectionId: release.projectionId,
+            authority: 'CANONICAL_ACTIVE' as const,
+            schemaVersion: release.schemaVersion, releaseId: release.releaseId,
+            manifestId: release.manifestId, inputDigest: release.inputDigest, dataDigest: release.dataDigest,
+            revision: release.canonicalRevision, generatedAt: release.generatedAt, activatedAt: release.activatedAt,
+          },
+        };
+      });
+      return result;
+    } catch (error) {
+      if (error instanceof ConsumerReadError) {
+        return reply.code(error.statusCode).send({ code: error.code });
+      }
+      if (error instanceof DataAccessAuditUnavailableError) {
+        return reply.code(503).send({ code: error.code });
+      }
+      return reply.code(503).send({ code: 'CATALOG_READ_FAILED' });
+    }
   });
   app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/catalog-health', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -136,28 +208,69 @@ export function createConsumerGateway(
       hash(supplied),
       hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
     );
-    if (!binding || !matches) {
-      return reply.code(401).send({ code: 'UNAUTHORIZED' });
-    }
-    if (!binding.capabilities.includes('catalog-health')) {
-      return reply.code(403).send({ code: 'FORBIDDEN' });
-    }
-    if (!healthStore) {
-      return reply.code(503).send({ code: 'HEALTH_READER_UNAVAILABLE' });
-    }
+    const context = consumerContext(
+      binding?.id ?? 'unregistered-consumer',
+      'read catalog health through FreePass Data',
+      request.id
+    );
+    const resource = {
+      kind: 'HEALTH' as const,
+      name: 'catalog-data-health',
+      ...(binding ? { projectionId: binding.projectionId } : {})
+    };
 
     try {
-      const report = await readCatalogDataHealth(
-        healthStore,
-        healthStore
-      );
-      if (!validateHealth(report)) {
-        return reply.code(503).send({ code: 'HEALTH_CONTRACT_INVALID' });
+      if (!binding || !matches) {
+        await access.deny('READ', {
+          context,
+          operation: 'READ_CATALOG_HEALTH',
+          resource
+        }, 'UNAUTHORIZED');
+        return reply.code(401).send({ code: 'UNAUTHORIZED' });
       }
+      if (!binding.capabilities.includes('catalog-health')) {
+        await access.deny('READ', {
+          context,
+          operation: 'READ_CATALOG_HEALTH',
+          resource
+        }, 'FORBIDDEN');
+        return reply.code(403).send({ code: 'FORBIDDEN' });
+      }
+      if (!healthStore) {
+        await access.deny('READ', {
+          context,
+          operation: 'READ_CATALOG_HEALTH',
+          resource
+        }, 'HEALTH_READER_UNAVAILABLE');
+        return reply.code(503).send({ code: 'HEALTH_READER_UNAVAILABLE' });
+      }
+
+      const report = await access.read({
+        context,
+        operation: 'READ_CATALOG_HEALTH',
+        resource,
+        summarize: (value: { issues: unknown[] }) => ({
+          count: value.issues.length,
+          digest: stableDigest(value)
+        })
+      }, async () => {
+        const value = await readCatalogDataHealth(healthStore, healthStore);
+        if (!validateHealth(value)) {
+          throw new ConsumerReadError('HEALTH_CONTRACT_INVALID', 503);
+        }
+        return value;
+      });
+
       return reply
         .code(report.status === 'BLOCKED' ? 503 : 200)
         .send(report);
-    } catch {
+    } catch (error) {
+      if (error instanceof ConsumerReadError) {
+        return reply.code(error.statusCode).send({ code: error.code });
+      }
+      if (error instanceof DataAccessAuditUnavailableError) {
+        return reply.code(503).send({ code: error.code });
+      }
       return reply.code(503).send({ code: 'HEALTH_READ_FAILED' });
     }
   });

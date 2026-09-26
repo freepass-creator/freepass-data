@@ -1,6 +1,4 @@
-import { readLegacyProductSnapshot } from '../adapters/legacy-freepasserp3.js';
-import { ingestLegacyProductSnapshot } from '../application/ingest-legacy-products.js';
-import { createFirestoreSourceStore } from '../infra/source-firestore-store.js';
+import { createSourceIngestDataAccessRuntime } from './data-access-runtime.js';
 
 const targetProjectId = process.env.FIREBASE_PROJECT_ID?.trim();
 const legacyProjectId = process.env.LEGACY_FREEPASSERP3_PROJECT_ID?.trim();
@@ -18,9 +16,9 @@ if (targetProjectId === legacyProjectId) {
   );
 }
 
-const target = createFirestoreSourceStore();
-const snapshot = await readLegacyProductSnapshot();
-const run = await ingestLegacyProductSnapshot(target, snapshot);
+const runtime = await createSourceIngestDataAccessRuntime();
+const snapshot = await runtime.readLegacySnapshot();
+const run = await runtime.ingestLegacySnapshot(snapshot);
 
 console.log(JSON.stringify({
   status: run?.status ?? 'UNKNOWN',
