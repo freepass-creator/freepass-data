@@ -79,7 +79,7 @@ try:
         }""")
         expect(mobile.locator(".ct-axis")).to_have_count(6)
         expect(mobile.get_by_text("HEALTH_POLICY_NOT_CONFIGURED")).to_be_visible()
-        expect(mobile.get_by_text("POLICY_NOT_CONFIGURED")).to_be_visible()
+        expect(mobile.get_by_text("POLICY_NOT_CONFIGURED",exact=True)).to_be_visible()
         assert mobile.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
         mobile.screenshot(path=args.output/"control-tower-mobile.png",full_page=True)
         browser.close()
