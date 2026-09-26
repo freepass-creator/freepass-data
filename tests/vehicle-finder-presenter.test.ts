@@ -1,0 +1,183 @@
+import { describe, expect, it } from 'vitest';
+import {
+  selectorRecordsFromNewcarMaster,
+  selectorRecordsFromUsedcarMaster,
+} from '../src/application/vehicle-selector-adapters.js';
+import { presentVehicleSelectorResult } from '../src/application/vehicle-finder-presenter.js';
+import { selectVehicles } from '../src/domain/vehicle-selector.js';
+import type { EstimateNewcarMasterRecord } from '../src/domain/estimate-master.js';
+import type { UsedcarMasterRecord } from '../src/domain/usedcar-master.js';
+
+const newcar: EstimateNewcarMasterRecord = {
+  productId: 'new_sorento_hybrid_noblesse',
+  vehicleModelId: 'model_sorento',
+  modelYearId: 'my_2027',
+  trimId: 'trim_noblesse_2027',
+  powertrainId: 'pt_hybrid_2027',
+  maker: '기아',
+  model: '쏘렌토',
+  modelYear: 2027,
+  trimName: '노블레스',
+  powertrainName: '1.6 터보 하이브리드',
+  basePrice: { amount: 42170000, currency: 'KRW' },
+  priceBefore: null,
+  priceAfter: null,
+  priceBasis: null,
+  options: [],
+  exteriorColors: [],
+  interiorColors: [],
+  configuration: { drivetrain: '2WD', seats: 5, bodyConfiguration: null },
+  status: 'ACTIVE',
+  holdReasons: [],
+};
+
+const usedcar: UsedcarMasterRecord = {
+  recordId: 'used_sorento_hybrid_noblesse_2021',
+  vehicleModelId: 'model_sorento',
+  generationId: 'gen_mq4',
+  phaseId: 'phase_mq4_pre',
+  modelYearId: 'my_2021',
+  powertrainId: 'pt_hybrid_2021',
+  variantId: 'variant_hybrid_2wd_5',
+  trimId: 'trim_noblesse_2021',
+  maker: '기아',
+  model: '쏘렌토',
+  generationName: '4세대 MQ4',
+  phaseName: '초기형',
+  modelYear: 2021,
+  powertrainName: '1.6 터보 하이브리드',
+  trimName: '노블레스',
+  configuration: { fuelType: 'HYBRID', drivetrain: '2WD', seats: 5 },
+  aliases: ['MQ4', '쏘렌토 하이브리드'],
+  originalBasePriceHistory: [],
+  lifecycleStatus: 'HISTORICAL',
+  identityStatus: 'RESOLVED',
+  holdReasons: [],
+  sourceEvidenceIds: ['src_2021'],
+};
+
+function display(recordId: string, label: string) {
+  return {
+    [recordId]: {
+      label,
+      pathText: '기아 › 쏘렌토 › 노블레스',
+      nodeTypeLabel: '트림',
+      listLines: ['하이브리드 · 2WD', '노블레스'],
+      facts: [
+        { label: '트림', value: '노블레스', unknown: false },
+      ],
+      evidenceIds: ['evidence-1'],
+      sources: [{ id: 'source-1', label: '실제 selector projection test' }],
+    },
+  };
+}
+
+describe('Vehicle Finder presenter over actual selector result', () => {
+  it('preserves F-owned NEW_CAR action and guidance semantics', () => {
+    const result = selectVehicles(selectorRecordsFromNewcarMaster([newcar]), {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토 하이브리드',
+    });
+
+    const view = presentVehicleSelectorResult({
+      result,
+      presentation: 'GUIDED',
+      observation: {
+        id: 'obs-new-1',
+        observedAt: '2026-09-26T08:00:00.000Z',
+        coverage: 'COMPLETE',
+      },
+      facets: [
+        {
+          axis: 'model',
+          label: '모델',
+          options: [{ key: 'model_sorento', label: '쏘렌토', count: 1 }],
+        },
+      ],
+      displayByRecordId: display(newcar.productId, '기아 쏘렌토'),
+    });
+
+    expect(view.mode).toBe('NEW_CAR');
+    expect(view.items).toHaveLength(1);
+    expect(view.items[0]?.action.code).toBe(result.candidates[0]?.action);
+    expect(view.items[0]?.state.code).toBe(result.candidates[0]?.actionState);
+    expect(view.items[0]?.selectable).toBe(result.candidates[0]?.selectable);
+    expect(view.guidance.resolutionStatus).toBe(result.guidance.resolutionStatus);
+    expect(view.items[0]?.listLines).toEqual(['하이브리드 · 2WD', '노블레스']);
+  });
+
+  it('preserves USED_CAR historical selection semantics without building a second master', () => {
+    const result = selectVehicles(selectorRecordsFromUsedcarMaster([usedcar]), {
+      mode: 'USED_CAR',
+      selection: { modelYear: 2021, model: '쏘렌토' },
+    });
+
+    const view = presentVehicleSelectorResult({
+      result,
+      presentation: 'SEARCH_FILTER',
+      observation: {
+        id: 'obs-used-1',
+        observedAt: '2026-09-26T08:01:00.000Z',
+        coverage: 'COMPLETE',
+      },
+      facets: [
+        {
+          axis: 'modelYear',
+          label: '연식',
+          options: [{ key: 'my_2021', label: '2021', count: 1 }],
+        },
+      ],
+      displayByRecordId: display(usedcar.recordId, '기아 쏘렌토 2021'),
+    });
+
+    expect(view.mode).toBe('USED_CAR');
+    expect(view.items[0]?.id).toBe(usedcar.recordId);
+    expect(view.items[0]?.selectable).toBe(true);
+    expect(view.facets[0]?.axis).toBe('modelYear');
+  });
+
+  it('surfaces F-owned NO_RESULT diagnosis without inventing a replacement reason', () => {
+    const result = selectVehicles(selectorRecordsFromUsedcarMaster([usedcar]), {
+      mode: 'USED_CAR',
+      searchText: '존재하지않는검색어',
+    });
+
+    const view = presentVehicleSelectorResult({
+      result,
+      presentation: 'SEARCH_FILTER',
+      observation: {
+        id: 'obs-zero-1',
+        observedAt: '2026-09-26T08:02:00.000Z',
+        coverage: 'COMPLETE',
+      },
+      facets: [],
+      displayByRecordId: {},
+    });
+
+    expect(result.guidance.resolutionStatus).toBe('NO_RESULT');
+    expect(result.guidance.noResultReason).toBe('UNRECOGNIZED_SEARCH');
+    expect(view.guidance.noResultReason).toBe(result.guidance.noResultReason);
+    expect(view.guidance.noResultTitle).toContain('검색어');
+    expect(view.items).toHaveLength(0);
+  });
+
+  it('fails closed when selector candidate display evidence is missing', () => {
+    const result = selectVehicles(selectorRecordsFromNewcarMaster([newcar]), {
+      mode: 'NEW_CAR',
+    });
+
+    expect(() =>
+      presentVehicleSelectorResult({
+        result,
+        presentation: 'GUIDED',
+        observation: {
+          id: 'obs-missing-display',
+          observedAt: '2026-09-26T08:03:00.000Z',
+          coverage: 'COMPLETE',
+        },
+        facets: [],
+        displayByRecordId: {},
+      })
+    ).toThrow('MISSING_VEHICLE_FINDER_DISPLAY');
+  });
+});
