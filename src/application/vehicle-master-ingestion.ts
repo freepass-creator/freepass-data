@@ -40,9 +40,11 @@ export type VehicleMasterEvidenceIssue = {
     | 'SOURCE_EFFECTIVE_PERIOD_MISMATCH'
     | 'SOURCE_AUTHORITY_INSUFFICIENT'
     | 'PARENT_NODE_MISSING'
+    | 'PARENT_NODE_TYPE_MISMATCH'
     | 'PARENT_NODE_HOLD'
     | 'PARENT_EFFECTIVE_RANGE_MISMATCH'
     | 'PARENT_REFERENCE_MISMATCH'
+    | 'MAKE_DUPLICATE'
     | 'MODEL_DUPLICATE_IN_MAKE'
     | 'GENERATION_DUPLICATE_IN_MODEL'
     | 'PHASE_DUPLICATE_IN_GENERATION'
@@ -63,6 +65,7 @@ export type VehicleMasterEvidenceIssue = {
     | 'VARIANT_NAME_DRIVETRAIN_MISMATCH'
     | 'VARIANT_DUPLICATE_IN_POWERTRAIN'
     | 'REFERENCE_NODE_MISSING'
+    | 'REFERENCE_NODE_TYPE_MISMATCH'
     | 'REFERENCE_NODE_HOLD'
     | 'REFERENCE_EFFECTIVE_RANGE_MISMATCH'
     | 'REFERENCE_NODE_SELF'
@@ -218,6 +221,42 @@ function expectedParentRef(proposal: VehicleMasterNode): string | null {
   }
 }
 
+function expectedParentNodeType(
+  nodeType: VehicleMasterNode['nodeType']
+): VehicleMasterNode['nodeType'] | null {
+  switch (nodeType) {
+    case 'MODEL': return 'MAKE';
+    case 'GENERATION': return 'MODEL';
+    case 'PHASE': return 'GENERATION';
+    case 'MODEL_YEAR': return 'PHASE';
+    case 'POWERTRAIN': return 'MODEL_YEAR';
+    case 'VARIANT': return 'POWERTRAIN';
+    case 'TRIM': return 'VARIANT';
+    case 'BASE_ITEM':
+    case 'OPTION':
+    case 'PACKAGE':
+    case 'OPTION_GROUP':
+    case 'COLOR':
+      return 'MODEL_YEAR';
+    default:
+      return null;
+  }
+}
+
+function expectedRefNodeType(field: string): VehicleMasterNode['nodeType'] | null {
+  switch (field) {
+    case 'makeId': return 'MAKE';
+    case 'modelId': return 'MODEL';
+    case 'generationId': return 'GENERATION';
+    case 'phaseId': return 'PHASE';
+    case 'modelYearId': return 'MODEL_YEAR';
+    case 'powertrainId': return 'POWERTRAIN';
+    case 'variantId': return 'VARIANT';
+    case 'trimId': return 'TRIM';
+    default: return null;
+  }
+}
+
 function modelYearValue(proposal: VehicleMasterNode): number | null {
   const value = proposal.attributes.modelYear;
   return typeof value === 'number' &&
@@ -245,6 +284,7 @@ function hierarchyNames(node: VehicleMasterNode) {
 function hierarchyDuplicateCode(
   nodeType: VehicleMasterNode['nodeType']
 ): VehicleMasterEvidenceIssue['code'] | null {
+  if (nodeType === 'MAKE') return 'MAKE_DUPLICATE';
   if (nodeType === 'MODEL') return 'MODEL_DUPLICATE_IN_MAKE';
   if (nodeType === 'GENERATION') return 'GENERATION_DUPLICATE_IN_MODEL';
   if (nodeType === 'PHASE') return 'PHASE_DUPLICATE_IN_GENERATION';
@@ -425,6 +465,14 @@ async function applyNodeReferenceGate(
           detail: proposal.parentId,
         });
       } else {
+        const expectedType = expectedParentNodeType(proposal.nodeType);
+        if (expectedType && parent.nodeType !== expectedType) {
+          issues.push({
+            code: 'PARENT_NODE_TYPE_MISMATCH',
+            fieldPath: 'parentId',
+            detail: `${parent.nodeType}!=${expectedType}`,
+          });
+        }
         if (proposal.status !== 'HOLD' && parent.status === 'HOLD') {
           issues.push({
             code: 'PARENT_NODE_HOLD',
@@ -464,6 +512,14 @@ async function applyNodeReferenceGate(
         detail: refId,
       });
     } else {
+      const expectedType = expectedRefNodeType(field);
+      if (expectedType && referenced.nodeType !== expectedType) {
+        issues.push({
+          code: 'REFERENCE_NODE_TYPE_MISMATCH',
+          fieldPath: `refs.${field}`,
+          detail: `${referenced.nodeType}!=${expectedType}`,
+        });
+      }
       if (proposal.status !== 'HOLD' && referenced.status === 'HOLD') {
         issues.push({
           code: 'REFERENCE_NODE_HOLD',
@@ -482,12 +538,12 @@ async function applyNodeReferenceGate(
   }
 
   const hierarchyDuplicate = hierarchyDuplicateCode(proposal.nodeType);
-  if (hierarchyDuplicate && proposal.parentId) {
+  if (hierarchyDuplicate && (proposal.nodeType === 'MAKE' || proposal.parentId)) {
     const proposalNames = hierarchyNames(proposal);
     const siblings = (await store.listNodesByType(proposal.nodeType))
       .filter((node) =>
         node.id !== proposal.id &&
-        node.parentId === proposal.parentId &&
+        (proposal.nodeType === 'MAKE' || node.parentId === proposal.parentId) &&
         node.status !== 'HOLD'
       );
 
