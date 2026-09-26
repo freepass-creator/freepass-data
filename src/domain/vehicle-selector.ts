@@ -842,7 +842,14 @@ export function selectVehicles(
     });
   }
 
+  const actionRank: Record<VehicleSelectorAction, number> = {
+    SELECT: 0,
+    INSPECT_ONLY: 1,
+    BLOCKED: 2,
+  };
+
   candidates.sort((a, b) =>
+    actionRank[a.action] - actionRank[b.action] ||
     b.score - a.score ||
     b.matchedAxes.length - a.matchedAxes.length ||
     a.unresolvedAxes.length - b.unresolvedAxes.length ||
