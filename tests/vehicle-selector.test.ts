@@ -924,6 +924,124 @@ describe('common vehicle selector', () => {
     });
   });
 
+  it('ranks direct model evidence above alias-only matches', () => {
+    const rows = [
+      record('alias-only', {
+        model: { id: 'model_carnival', label: '카니발' },
+        aliases: ['쏘렌토'],
+      }),
+      record('direct-model'),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토',
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual([
+      'direct-model',
+      'alias-only',
+    ]);
+    expect(result.candidates[0]?.ranking).toMatchObject({
+      directSearchMatches: 1,
+      aliasOnlySearchMatches: 0,
+    });
+    expect(result.candidates[1]?.ranking).toMatchObject({
+      directSearchMatches: 0,
+      aliasOnlySearchMatches: 1,
+    });
+  });
+
+  it('ranks exact axis matches above broader containing labels', () => {
+    const rows = [
+      record('broader-model', {
+        model: { id: 'model_the_new_sorento', label: '더 뉴 쏘렌토' },
+      }),
+      record('exact-model'),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토',
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual([
+      'exact-model',
+      'broader-model',
+    ]);
+    expect(result.candidates[0]?.ranking.exactSearchMatches).toBe(1);
+    expect(result.candidates[1]?.ranking.exactSearchMatches).toBe(0);
+  });
+
+  it('uses axis specificity after direct and exact match quality', () => {
+    const rows = [
+      record('model-hit', {
+        model: { id: 'model_noblesse', label: '노블레스' },
+        trim: { id: 'trim_other', label: '프레스티지' },
+      }),
+      record('trim-hit', {
+        model: { id: 'model_other', label: '기타모델' },
+        trim: { id: 'trim_noblesse', label: '노블레스' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '노블레스',
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual([
+      'trim-hit',
+      'model-hit',
+    ]);
+    expect(result.candidates[0]?.ranking.specificityScore).toBeGreaterThan(
+      result.candidates[1]?.ranking.specificityScore ?? 0
+    );
+  });
+
+  it('keeps explicit selection matches ahead of free-text-only ranking', () => {
+    const rows = [
+      record('selected-match', {
+        trim: { id: 'trim_signature', label: '시그니처' },
+        aliases: ['패밀리'],
+      }),
+      record('search-only', {
+        trim: { id: 'trim_noblesse', label: '노블레스' },
+        model: { id: 'model_family', label: '패밀리' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '패밀리',
+      selection: { trim: '시그니처' },
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual([
+      'selected-match',
+    ]);
+    expect(result.candidates[0]?.matchedAxes).toContain('trim');
+  });
+
+  it('keeps ranking deterministic regardless of input record order', () => {
+    const a = record('a');
+    const b = record('b', {
+      model: { id: 'model_the_new_sorento', label: '더 뉴 쏘렌토' },
+    });
+
+    const first = selectVehicles([b, a], {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토',
+    });
+    const second = selectVehicles([a, b], {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토',
+    });
+
+    expect(first.candidates.map((x) => x.record.recordId)).toEqual(['a', 'b']);
+    expect(second.candidates.map((x) => x.record.recordId)).toEqual(['a', 'b']);
+  });
+
   it('reports OPEN before the user supplies any search criteria', () => {
     const result = selectVehicles([
       record('one'),
