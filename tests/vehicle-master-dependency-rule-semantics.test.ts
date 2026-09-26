@@ -382,7 +382,7 @@ describe('vehicle master direct dependency-rule semantics', () => {
     expect(result.decision.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'RULE_DEPENDENCY_CONFLICT',
-        fieldPath: 'ruleType',
+        fieldPath: `targetIds.${s.optionB.id}`,
         detail: 'rule_requires_existing',
       }),
     ]));
