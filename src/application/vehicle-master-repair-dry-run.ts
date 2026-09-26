@@ -86,7 +86,7 @@ const diff = (
   before: unknown,
   after: unknown
 ): VehicleMasterRepairDryRunChange | null =>
-  stableDigest(before) === stableDigest(after)
+  stableDigest({ value: before }) === stableDigest({ value: after })
     ? null
     : { fieldPath, before, after };
 
