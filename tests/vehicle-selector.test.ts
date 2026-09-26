@@ -680,6 +680,126 @@ describe('common vehicle selector', () => {
     ]);
   });
 
+  it('maps ACTIVE candidates to SELECT', () => {
+    const result = selectVehicles([
+      record('active'),
+    ], {
+      mode: 'NEW_CAR',
+      selection: { model: '쏘렌토' },
+    });
+
+    expect(result.candidates[0]).toMatchObject({
+      actionState: 'ACTIVE',
+      action: 'SELECT',
+      actionReasons: [],
+      selectable: true,
+    });
+    expect(result.guidance.selectableCount).toBe(1);
+    expect(result.guidance.inspectOnlyCount).toBe(0);
+    expect(result.guidance.blockedCount).toBe(0);
+  });
+
+  it('maps UNKNOWN identity or unresolved facts to INSPECT_ONLY', () => {
+    const partialIdentity = record('partial-identity', {
+      lifecycle: 'HISTORICAL',
+      identityStatus: 'PARTIAL',
+      seats: { id: null, label: null, value: null },
+    });
+    const unresolvedFact = record('unknown-seats', {
+      lifecycle: 'HISTORICAL',
+      seats: { id: null, label: null, value: null },
+    });
+
+    const result = selectVehicles([
+      partialIdentity,
+      unresolvedFact,
+    ], {
+      mode: 'USED_CAR',
+      selection: {
+        model: '쏘렌토',
+        seats: 7,
+      },
+    });
+
+    expect(result.candidates).toHaveLength(2);
+    expect(result.candidates.every((x) => x.actionState === 'UNKNOWN')).toBe(true);
+    expect(result.candidates.every((x) => x.action === 'INSPECT_ONLY')).toBe(true);
+    expect(result.candidates.every((x) => x.selectable === false)).toBe(true);
+    expect(result.guidance.selectableCount).toBe(0);
+    expect(result.guidance.inspectOnlyCount).toBe(2);
+    expect(result.guidance.blockedCount).toBe(0);
+    expect(result.candidates.find((x) => x.record.recordId === 'partial-identity')?.actionReasons)
+      .toContain('IDENTITY_PARTIAL');
+    expect(result.candidates.find((x) => x.record.recordId === 'unknown-seats')?.actionReasons)
+      .toContain('UNRESOLVED_SELECTION');
+  });
+
+  it('maps HOLD records to BLOCKED while keeping them visible when requested', () => {
+    const hold = record('hold', {
+      lifecycle: 'HOLD',
+      identityStatus: 'HOLD',
+    });
+
+    const visible = selectVehicles([hold], {
+      mode: 'USED_CAR',
+      selection: { model: '쏘렌토' },
+      includeHold: true,
+    });
+
+    expect(visible.candidates).toHaveLength(1);
+    expect(visible.candidates[0]).toMatchObject({
+      actionState: 'HOLD',
+      action: 'BLOCKED',
+      selectable: false,
+    });
+    expect(visible.candidates[0]?.actionReasons).toEqual(
+      expect.arrayContaining(['LIFECYCLE_HOLD', 'IDENTITY_HOLD'])
+    );
+    expect(visible.guidance.blockedCount).toBe(1);
+
+    const hidden = selectVehicles([hold], {
+      mode: 'USED_CAR',
+      selection: { model: '쏘렌토' },
+      includeHold: false,
+    });
+    expect(hidden.candidates).toHaveLength(0);
+  });
+
+  it('does not let UNKNOWN or HOLD records create selectable facet options', () => {
+    const rows = [
+      record('active-noblesse', {
+        lifecycle: 'HISTORICAL',
+        trim: { id: 'trim_noblesse_active', label: '노블레스' },
+      }),
+      record('unknown-signature', {
+        lifecycle: 'HISTORICAL',
+        identityStatus: 'PARTIAL',
+        trim: { id: 'trim_signature_unknown', label: '시그니처' },
+      }),
+      record('hold-prestige', {
+        lifecycle: 'HOLD',
+        identityStatus: 'HOLD',
+        trim: { id: 'trim_prestige_hold', label: '프레스티지' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      selection: {
+        model: '쏘렌토',
+        powertrain: '하이브리드',
+      },
+      includeHold: true,
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual([
+      'active-noblesse',
+      'unknown-signature',
+      'hold-prestige',
+    ]);
+    expect(result.facets.trim.map((x) => x.label)).toEqual(['노블레스']);
+  });
+
   it('reports OPEN before the user supplies any search criteria', () => {
     const result = selectVehicles([
       record('one'),
