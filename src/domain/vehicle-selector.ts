@@ -88,6 +88,12 @@ export type VehicleSelectorCandidate = {
     matchedTokens: number;
     unresolvedTokens: number;
   };
+  ranking: {
+    directSearchMatches: number;
+    aliasOnlySearchMatches: number;
+    exactSearchMatches: number;
+    specificityScore: number;
+  };
   actionState: VehicleSelectorActionState;
   action: VehicleSelectorAction;
   actionReasons: string[];
@@ -218,6 +224,19 @@ const AXES: VehicleSelectorAxis[] = [
   'seats',
   'trim',
 ];
+
+const SEARCH_AXIS_SPECIFICITY: Record<VehicleSelectorAxis, number> = {
+  maker: 10,
+  model: 30,
+  generation: 40,
+  phase: 45,
+  modelYear: 50,
+  powertrain: 60,
+  fuelType: 55,
+  drivetrain: 50,
+  seats: 50,
+  trim: 70,
+};
 
 function normalize(value: string | null | undefined) {
   return (value ?? '')
@@ -521,6 +540,16 @@ function termMatchesToken(term: string, token: string) {
   );
 }
 
+function termExactlyMatchesToken(term: string, token: string) {
+  const normalized = normalize(term);
+  const normalizedToken = normalize(token);
+  if (!normalized || !normalizedToken) return false;
+  return (
+    normalized === normalizedToken ||
+    compact(normalized) === compact(normalizedToken)
+  );
+}
+
 function tokenMatchesAxis(
   record: VehicleSelectorRecord,
   axis: VehicleSelectorAxis,
@@ -558,24 +587,59 @@ function matchesSearchText(
   record: VehicleSelectorRecord,
   context: SearchContext
 ) {
-  if (!context.tokens.length) {
-    return { matched: 0, unresolved: 0, partial: false, rejected: false };
-  }
-
   let matched = 0;
   let unresolved = 0;
+  let directSearchMatches = 0;
+  let aliasOnlySearchMatches = 0;
+  let exactSearchMatches = 0;
+  let specificityScore = 0;
+
+  const result = (rejected: boolean) => ({
+    matched,
+    unresolved,
+    partial: unresolved > 0,
+    rejected,
+    ranking: {
+      directSearchMatches,
+      aliasOnlySearchMatches,
+      exactSearchMatches,
+      specificityScore,
+    },
+  });
+
+  if (!context.tokens.length) return result(false);
 
   for (const intent of context.tokens) {
-    if (
-      intent.axes.some((axis) => tokenMatchesAxis(record, axis, intent.token)) ||
-      tokenMatchesAlias(record, intent.token)
-    ) {
+    const directAxes = intent.axes.filter((axis) =>
+      tokenMatchesAxis(record, axis, intent.token)
+    );
+    const aliasMatched = tokenMatchesAlias(record, intent.token);
+
+    if (directAxes.length || aliasMatched) {
       matched += 1;
+
+      if (directAxes.length) {
+        directSearchMatches += 1;
+        specificityScore += Math.max(
+          ...directAxes.map((axis) => SEARCH_AXIS_SPECIFICITY[axis])
+        );
+        if (
+          directAxes.some((axis) =>
+            axisTerms(record, axis).some((term) =>
+              termExactlyMatchesToken(term, intent.token)
+            )
+          )
+        ) {
+          exactSearchMatches += 1;
+        }
+      } else {
+        aliasOnlySearchMatches += 1;
+      }
       continue;
     }
 
     if (!intent.axes.length && !intent.aliasKnown) {
-      return { matched, unresolved, partial: unresolved > 0, rejected: true };
+      return result(true);
     }
 
     if (intent.axes.length) {
@@ -586,15 +650,10 @@ function matchesSearchText(
       }
     }
 
-    return { matched, unresolved, partial: unresolved > 0, rejected: true };
+    return result(true);
   }
 
-  return {
-    matched,
-    unresolved,
-    partial: unresolved > 0,
-    rejected: false,
-  };
+  return result(false);
 }
 
 function matchesSelection(
@@ -965,6 +1024,7 @@ export function selectVehicles(
         matchedTokens: search.matched,
         unresolvedTokens: search.unresolved,
       },
+      ranking: search.ranking,
       actionState: interaction.actionState,
       action: interaction.action,
       actionReasons: interaction.reasons,
@@ -980,9 +1040,14 @@ export function selectVehicles(
 
   candidates.sort((a, b) =>
     actionRank[a.action] - actionRank[b.action] ||
-    b.score - a.score ||
     b.matchedAxes.length - a.matchedAxes.length ||
+    b.ranking.directSearchMatches - a.ranking.directSearchMatches ||
+    b.ranking.exactSearchMatches - a.ranking.exactSearchMatches ||
+    b.ranking.specificityScore - a.ranking.specificityScore ||
+    a.ranking.aliasOnlySearchMatches - b.ranking.aliasOnlySearchMatches ||
+    a.search.unresolvedTokens - b.search.unresolvedTokens ||
     a.unresolvedAxes.length - b.unresolvedAxes.length ||
+    b.score - a.score ||
     a.record.recordId.localeCompare(b.record.recordId)
   );
 
