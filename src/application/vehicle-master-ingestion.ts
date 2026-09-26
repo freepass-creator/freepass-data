@@ -93,7 +93,13 @@ export type VehicleMasterEvidenceIssue = {
     | 'RULE_SCOPE_REFERENCE_HOLD'
     | 'RULE_LINEAGE_INCOMPLETE'
     | 'RULE_LINEAGE_MISMATCH'
-    | 'RULE_SCOPE_SUBJECT_MISMATCH';
+    | 'RULE_SCOPE_SUBJECT_MISMATCH'
+    | 'RULE_GROUP_SUBJECT_TYPE_MISMATCH'
+    | 'RULE_GROUP_TARGET_TYPE_MISMATCH'
+    | 'RULE_GROUP_TARGET_COUNT_INVALID'
+    | 'RULE_GROUP_MAX_SELECTION_INVALID'
+    | 'RULE_GROUP_DUPLICATE'
+    | 'RULE_GROUP_CONSTRAINT_CONFLICT';
   fieldPath?: string;
   sourceDocumentId?: string;
   detail?: string;
@@ -393,6 +399,30 @@ function validateRuleLineagePair(
       });
     }
   }
+}
+
+const OPTION_GROUP_RULE_TYPES = new Set<VehicleMasterCompatibilityRule['ruleType']>([
+  'ONE_OF',
+  'AT_LEAST_ONE',
+  'MAX_SELECTION',
+]);
+
+const OPTION_GROUP_TARGET_TYPES = new Set<VehicleMasterNode['nodeType']>([
+  'OPTION',
+  'PACKAGE',
+  'COLOR',
+]);
+
+function maxSelectionValue(rule: VehicleMasterCompatibilityRule): number | null {
+  const value = rule.condition?.maxSelection;
+  return typeof value === 'number' && Number.isSafeInteger(value) ? value : null;
+}
+
+function sameTargetSet(
+  a: VehicleMasterCompatibilityRule,
+  b: VehicleMasterCompatibilityRule
+) {
+  return stableDigest([...a.targetIds].sort()) === stableDigest([...b.targetIds].sort());
 }
 
 function modelYearValue(proposal: VehicleMasterNode): number | null {
@@ -1481,6 +1511,101 @@ export async function promoteVehicleMasterCompatibilityRule(
       fieldPath: 'scope.trimId',
       detail: `${input.proposal.scope.trimId}!=${subject.id}`,
     });
+  }
+
+  if (OPTION_GROUP_RULE_TYPES.has(input.proposal.ruleType)) {
+    if (subject && subject.nodeType !== 'OPTION_GROUP') {
+      issues.push({
+        code: 'RULE_GROUP_SUBJECT_TYPE_MISMATCH',
+        fieldPath: 'subjectId',
+        detail: `${subject.nodeType}!=OPTION_GROUP`,
+      });
+    }
+
+    if (input.proposal.targetIds.length < 2) {
+      issues.push({
+        code: 'RULE_GROUP_TARGET_COUNT_INVALID',
+        fieldPath: 'targetIds',
+        detail: String(input.proposal.targetIds.length),
+      });
+    }
+
+    for (const target of targets) {
+      if (!OPTION_GROUP_TARGET_TYPES.has(target.nodeType)) {
+        issues.push({
+          code: 'RULE_GROUP_TARGET_TYPE_MISMATCH',
+          fieldPath: `targetIds.${target.id}`,
+          detail: target.nodeType,
+        });
+      }
+    }
+
+    const proposalMax = maxSelectionValue(input.proposal);
+    if (
+      input.proposal.ruleType === 'MAX_SELECTION' &&
+      (
+        proposalMax === null ||
+        proposalMax < 1 ||
+        proposalMax > input.proposal.targetIds.length
+      )
+    ) {
+      issues.push({
+        code: 'RULE_GROUP_MAX_SELECTION_INVALID',
+        fieldPath: 'condition.maxSelection',
+        detail: String(input.proposal.condition?.maxSelection ?? 'MISSING'),
+      });
+    }
+
+    const existingGroupRules = (await store.listCompatibilityRules())
+      .filter((rule) =>
+        rule.id !== input.proposal.id &&
+        rule.subjectId === input.proposal.subjectId &&
+        OPTION_GROUP_RULE_TYPES.has(rule.ruleType)
+      );
+
+    for (const existing of existingGroupRules) {
+      if (
+        existing.ruleType === input.proposal.ruleType &&
+        sameTargetSet(existing, input.proposal) &&
+        (
+          input.proposal.ruleType !== 'MAX_SELECTION' ||
+          maxSelectionValue(existing) === proposalMax
+        )
+      ) {
+        issues.push({
+          code: 'RULE_GROUP_DUPLICATE',
+          fieldPath: 'ruleType',
+          detail: existing.id,
+        });
+        continue;
+      }
+
+      const existingMax = maxSelectionValue(existing);
+      const oneOfVsMaxConflict =
+        input.proposal.ruleType === 'ONE_OF' &&
+        existing.ruleType === 'MAX_SELECTION' &&
+        existingMax !== null &&
+        existingMax !== 1;
+      const maxVsOneOfConflict =
+        input.proposal.ruleType === 'MAX_SELECTION' &&
+        proposalMax !== null &&
+        proposalMax !== 1 &&
+        existing.ruleType === 'ONE_OF';
+      const maxVsMaxConflict =
+        input.proposal.ruleType === 'MAX_SELECTION' &&
+        existing.ruleType === 'MAX_SELECTION' &&
+        proposalMax !== null &&
+        existingMax !== null &&
+        proposalMax !== existingMax;
+
+      if (oneOfVsMaxConflict || maxVsOneOfConflict || maxVsMaxConflict) {
+        issues.push({
+          code: 'RULE_GROUP_CONSTRAINT_CONFLICT',
+          fieldPath: 'ruleType',
+          detail: existing.id,
+        });
+      }
+    }
   }
 
   const decision: VehicleMasterEvidenceDecision = {
