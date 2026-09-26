@@ -98,9 +98,9 @@ describe('consumer runtime evidence overlay', () => {
       operationId: 'op_2',
       phase: 'DENIED',
       occurredAt: '2026-09-26T08:04:00.000Z',
-      result: undefined,
       reasonCode: 'UNAUTHORIZED'
     });
+    delete denied.result;
 
     const erp = consumer(
       buildConsumerRuntimeEvidenceReport([success, denied], policy),
@@ -221,9 +221,9 @@ describe('consumer runtime evidence overlay', () => {
       eventId: 'evt_3',
       operationId: 'op_3',
       phase: 'STARTED',
-      occurredAt: '2026-09-26T08:04:30.000Z',
-      result: undefined
+      occurredAt: '2026-09-26T08:04:30.000Z'
     });
+    delete started.result;
     const erp = consumer(
       buildConsumerRuntimeEvidenceReport([event(), started], policy),
       'erp-com-public-catalog'
