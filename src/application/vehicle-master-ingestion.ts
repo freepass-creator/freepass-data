@@ -32,11 +32,14 @@ export type VehicleMasterEvidenceIssue = {
     | 'SOURCE_AUTHORITY_INSUFFICIENT'
     | 'PARENT_NODE_MISSING'
     | 'PARENT_NODE_HOLD'
+    | 'PARENT_EFFECTIVE_RANGE_MISMATCH'
     | 'REFERENCE_NODE_MISSING'
     | 'REFERENCE_NODE_HOLD'
+    | 'REFERENCE_EFFECTIVE_RANGE_MISMATCH'
     | 'REFERENCE_NODE_SELF'
     | 'PRICE_TARGET_MISSING'
     | 'PRICE_TARGET_HOLD'
+    | 'PRICE_TARGET_EFFECTIVE_RANGE_MISMATCH'
     | 'RULE_SUBJECT_MISSING'
     | 'RULE_TARGET_MISSING'
     | 'RULE_SCOPE_REFERENCE_MISSING';
@@ -147,6 +150,15 @@ function temporalCompatible(source: VehicleMasterSourceDocument, target: Tempora
   if (sourceFrom !== null && targetTo !== null && sourceFrom >= targetTo) return false;
   if (targetFrom !== null && sourceTo !== null && targetFrom >= sourceTo) return false;
   return true;
+}
+
+function temporalContains(container: TemporalTarget, child: TemporalTarget) {
+  const containerFrom = time(container.effectiveFrom) ?? Number.NEGATIVE_INFINITY;
+  const containerTo = time(container.effectiveTo) ?? Number.POSITIVE_INFINITY;
+  const childFrom = time(child.effectiveFrom) ?? Number.NEGATIVE_INFINITY;
+  const childTo = time(child.effectiveTo) ?? Number.POSITIVE_INFINITY;
+
+  return childFrom >= containerFrom && childTo <= containerTo;
 }
 
 function valueAtPath(value: unknown, path: string): unknown {
@@ -309,12 +321,21 @@ async function applyNodeReferenceGate(
           fieldPath: 'parentId',
           detail: proposal.parentId,
         });
-      } else if (proposal.status !== 'HOLD' && parent.status === 'HOLD') {
-        issues.push({
-          code: 'PARENT_NODE_HOLD',
-          fieldPath: 'parentId',
-          detail: proposal.parentId,
-        });
+      } else {
+        if (proposal.status !== 'HOLD' && parent.status === 'HOLD') {
+          issues.push({
+            code: 'PARENT_NODE_HOLD',
+            fieldPath: 'parentId',
+            detail: proposal.parentId,
+          });
+        }
+        if (!temporalContains(parent, proposal)) {
+          issues.push({
+            code: 'PARENT_EFFECTIVE_RANGE_MISMATCH',
+            fieldPath: 'parentId',
+            detail: proposal.parentId,
+          });
+        }
       }
     }
   }
@@ -339,12 +360,21 @@ async function applyNodeReferenceGate(
         fieldPath: `refs.${field}`,
         detail: refId,
       });
-    } else if (proposal.status !== 'HOLD' && referenced.status === 'HOLD') {
-      issues.push({
-        code: 'REFERENCE_NODE_HOLD',
-        fieldPath: `refs.${field}`,
-        detail: refId,
-      });
+    } else {
+      if (proposal.status !== 'HOLD' && referenced.status === 'HOLD') {
+        issues.push({
+          code: 'REFERENCE_NODE_HOLD',
+          fieldPath: `refs.${field}`,
+          detail: refId,
+        });
+      }
+      if (!temporalContains(referenced, proposal)) {
+        issues.push({
+          code: 'REFERENCE_EFFECTIVE_RANGE_MISMATCH',
+          fieldPath: `refs.${field}`,
+          detail: refId,
+        });
+      }
     }
   }
 
@@ -530,24 +560,34 @@ export async function promoteVehicleMasterPriceRevision(
 ): Promise<PromoteVehicleMasterPriceResult> {
   const sourceDecision = await evaluateVehicleMasterPriceEvidence(store, input);
   const priceTarget = await store.getNode(input.proposal.targetId);
-  const targetIssue: VehicleMasterEvidenceIssue | null = !priceTarget
-    ? {
-        code: 'PRICE_TARGET_MISSING',
+  const targetIssues: VehicleMasterEvidenceIssue[] = [];
+  if (!priceTarget) {
+    targetIssues.push({
+      code: 'PRICE_TARGET_MISSING',
+      fieldPath: 'targetId',
+      detail: input.proposal.targetId,
+    });
+  } else {
+    if (priceTarget.status === 'HOLD') {
+      targetIssues.push({
+        code: 'PRICE_TARGET_HOLD',
         fieldPath: 'targetId',
         detail: input.proposal.targetId,
-      }
-    : priceTarget.status === 'HOLD'
-      ? {
-          code: 'PRICE_TARGET_HOLD',
-          fieldPath: 'targetId',
-          detail: input.proposal.targetId,
-        }
-      : null;
-  const decision: VehicleMasterEvidenceDecision = targetIssue
+      });
+    }
+    if (!temporalContains(priceTarget, input.proposal)) {
+      targetIssues.push({
+        code: 'PRICE_TARGET_EFFECTIVE_RANGE_MISMATCH',
+        fieldPath: 'targetId',
+        detail: input.proposal.targetId,
+      });
+    }
+  }
+  const decision: VehicleMasterEvidenceDecision = targetIssues.length
     ? {
         ...sourceDecision,
         status: 'HOLD',
-        issues: [...sourceDecision.issues, targetIssue],
+        issues: [...sourceDecision.issues, ...targetIssues],
       }
     : sourceDecision;
   const evidence = await persistPromotionEvidence(store, {
