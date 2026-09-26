@@ -1730,7 +1730,17 @@ function auditRevisionHistory(
     }
 
     if (sourceById) {
-      for (const sourceId of [...new Set(revision.sourceEvidenceIds)].sort()) {
+      const evidenceIds = [...new Set(revision.sourceEvidenceIds)].sort();
+      if (!evidenceIds.length) {
+        add(issues, {
+          code: 'SOURCE_EVIDENCE_REQUIRED',
+          severity: 'ERROR',
+          entityKind: 'REVISION',
+          entityId: revisionEntityId,
+          fieldPath: 'sourceEvidenceIds',
+        });
+      }
+      for (const sourceId of evidenceIds) {
         if (sourceById.has(sourceId)) continue;
         add(issues, {
           code: 'SOURCE_EVIDENCE_MISSING',
@@ -1832,10 +1842,11 @@ const pipelinePayloadStringArray = (
 };
 
 function auditPipelineIntegrity(
-  records: readonly VehicleMasterPipelineRecord[] | undefined,
-  sources: readonly VehicleMasterSourceDocument[] | undefined,
+  input: VehicleMasterGraphSnapshot,
   issues: VehicleMasterGraphAuditIssue[]
 ) {
+  const records = input.pipelineRecords;
+  const sources = input.sources;
   if (!records) return;
 
   const sorted = [...records].sort((a, b) =>
@@ -1848,10 +1859,24 @@ function auditPipelineIntegrity(
     ? new Map(sources.map((source) => [source.sourceDocumentId, source]))
     : null;
 
+  const candidateFacts = sorted.filter((record) => record.kind === 'CANDIDATE_FACT');
   const evidenceSets = sorted.filter((record) => record.kind === 'EVIDENCE_SET');
   const revisionCandidates = sorted.filter((record) => record.kind === 'REVISION_CANDIDATE');
   const promotionResults = sorted.filter((record) => record.kind === 'PROMOTION_RESULT');
   const changeEvents = sorted.filter((record) => record.kind === 'CHANGE_EVENT');
+
+  const canonicalRevisionKeys = new Set<string>();
+  for (const record of [
+    ...input.nodes,
+    ...input.rules,
+    ...input.prices,
+    ...(input.nodeRevisions ?? []),
+    ...(input.ruleRevisions ?? []),
+  ]) {
+    canonicalRevisionKeys.add(
+      `${record.id}|${record.revision}|${record.contentHash}`
+    );
+  }
 
   for (const record of sorted) {
     auditContentHash(record, 'PIPELINE', `${record.kind}:${record.recordId}`, issues);
@@ -1893,6 +1918,54 @@ function auditPipelineIntegrity(
     const list = revisionByEvidenceSet.get(evidenceSetId) ?? [];
     list.push(revision);
     revisionByEvidenceSet.set(evidenceSetId, list);
+  }
+
+  for (const revision of revisionCandidates) {
+    const revisionNumber = revision.payload.revision;
+    const proposalHash = pipelinePayloadString(revision, 'proposalHash');
+
+    if (
+      typeof revisionNumber !== 'number' ||
+      !Number.isSafeInteger(revisionNumber) ||
+      revisionNumber < 1
+    ) {
+      add(issues, {
+        code: 'PIPELINE_REVISION_NUMBER_INVALID',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${revision.kind}:${revision.recordId}`,
+        fieldPath: 'payload.revision',
+        detail: String(revisionNumber ?? 'MISSING'),
+      });
+    }
+
+    if (!proposalHash) {
+      add(issues, {
+        code: 'PIPELINE_PROPOSAL_HASH_MISSING',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${revision.kind}:${revision.recordId}`,
+        fieldPath: 'payload.proposalHash',
+      });
+    }
+
+    const matchingCandidate = proposalHash
+      ? candidateFacts.find((candidate) =>
+          candidate.entityId === revision.entityId &&
+          candidate.observedAt === revision.observedAt &&
+          candidate.payload.proposalHash === proposalHash
+        )
+      : null;
+    if (!matchingCandidate) {
+      add(issues, {
+        code: 'PIPELINE_CANDIDATE_FACT_MISSING',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${revision.kind}:${revision.recordId}`,
+        fieldPath: 'payload.proposalHash',
+        ...(proposalHash ? { relatedId: proposalHash } : {}),
+      });
+    }
   }
 
   for (const evidence of evidenceSets) {
@@ -1976,7 +2049,47 @@ function auditPipelineIntegrity(
     if (!revision) continue;
 
     const revisionNumber = revision.payload.revision;
+    const proposalHash = pipelinePayloadString(revision, 'proposalHash');
     const evidenceSetId = pipelinePayloadString(revision, 'evidenceSetId');
+    const revisionStatus = revision.payload.status;
+    const promotionStatus = promotion.payload.status;
+    const expectedPromotionStatus =
+      revisionStatus === 'APPROVED'
+        ? 'PROMOTED'
+        : revisionStatus === 'HOLD'
+          ? 'HOLD'
+          : null;
+
+    if (expectedPromotionStatus && promotionStatus !== expectedPromotionStatus) {
+      add(issues, {
+        code: 'PIPELINE_STATUS_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${promotion.kind}:${promotion.recordId}`,
+        fieldPath: 'payload.status',
+        detail: `${String(promotionStatus)}!=${expectedPromotionStatus}`,
+      });
+    }
+
+    if (
+      promotionStatus === 'PROMOTED' &&
+      typeof revisionNumber === 'number' &&
+      proposalHash &&
+      promotion.entityId &&
+      !canonicalRevisionKeys.has(
+        `${promotion.entityId}|${revisionNumber}|${proposalHash}`
+      )
+    ) {
+      add(issues, {
+        code: 'PIPELINE_PROPOSAL_HASH_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${promotion.kind}:${promotion.recordId}`,
+        fieldPath: 'payload.revisionCandidateId',
+        relatedId: revision.recordId,
+        detail: proposalHash,
+      });
+    }
     const matchingEvent = changeEvents.find((event) =>
       event.entityId === promotion.entityId &&
       event.observedAt === promotion.observedAt &&
@@ -2040,7 +2153,7 @@ export function auditVehicleMasterGraph(
     input.sources,
     issues
   );
-  auditPipelineIntegrity(input.pipelineRecords, input.sources, issues);
+  auditPipelineIntegrity(input, issues);
 
   const sortedIssues = issues.sort(issueSort);
   const errors = sortedIssues.filter((issue) => issue.severity === 'ERROR').length;
