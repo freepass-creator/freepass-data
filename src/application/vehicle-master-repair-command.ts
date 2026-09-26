@@ -238,13 +238,22 @@ export async function applyVehicleMasterRepairCommand(
     committedAt: input.committedAt,
   });
 
-  const commit = await store.commitRepair({
-    entityKind: input.entityKind,
-    expectedRevision: input.expectedCurrentRevision,
-    expectedContentHash: input.expectedBeforeContentHash,
-    record: materialized.record as never,
-    receipt,
-  } as never);
+  const commit =
+    input.entityKind === 'NODE'
+      ? await store.commitRepair({
+          entityKind: 'NODE',
+          expectedRevision: input.expectedCurrentRevision,
+          expectedContentHash: input.expectedBeforeContentHash,
+          record: materialized.record as VehicleMasterNode,
+          receipt,
+        })
+      : await store.commitRepair({
+          entityKind: 'RULE',
+          expectedRevision: input.expectedCurrentRevision,
+          expectedContentHash: input.expectedBeforeContentHash,
+          record: materialized.record as VehicleMasterCompatibilityRule,
+          receipt,
+        });
 
   const readback = await readCurrent(
     store,
