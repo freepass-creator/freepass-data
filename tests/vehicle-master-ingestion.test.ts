@@ -116,37 +116,89 @@ async function seedAncestors(
   proposal: ReturnType<typeof trimProposal>
 ) {
   const rows = [
-    { id: 'make_kia', type: 'MAKE' as const, name: '기아', parentId: null },
-    { id: 'model_sorento', type: 'MODEL' as const, name: '쏘렌토', parentId: 'make_kia' },
+    {
+      id: 'make_kia',
+      type: 'MAKE' as const,
+      name: '기아',
+      parentId: null,
+      refs: {},
+      attributes: {},
+    },
+    {
+      id: 'model_sorento',
+      type: 'MODEL' as const,
+      name: '쏘렌토',
+      parentId: 'make_kia',
+      refs: { makeId: 'make_kia' },
+      attributes: {},
+    },
     {
       id: proposal.refs.generationId!,
       type: 'GENERATION' as const,
       name: 'MQ4',
       parentId: 'model_sorento',
+      refs: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+      },
+      attributes: {},
     },
     {
       id: proposal.refs.phaseId!,
       type: 'PHASE' as const,
       name: '더 뉴 쏘렌토',
       parentId: proposal.refs.generationId!,
+      refs: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+        generationId: proposal.refs.generationId!,
+      },
+      attributes: {},
     },
     {
       id: proposal.refs.modelYearId!,
       type: 'MODEL_YEAR' as const,
       name: '2027년형',
       parentId: proposal.refs.phaseId!,
+      refs: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+        generationId: proposal.refs.generationId!,
+        phaseId: proposal.refs.phaseId!,
+      },
+      attributes: { modelYear: 2027 },
     },
     {
       id: proposal.refs.powertrainId!,
       type: 'POWERTRAIN' as const,
       name: '2.5 가솔린 터보',
       parentId: proposal.refs.modelYearId!,
+      refs: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+        generationId: proposal.refs.generationId!,
+        phaseId: proposal.refs.phaseId!,
+        modelYearId: proposal.refs.modelYearId!,
+      },
+      attributes: {
+        identityKey: canonicalPowertrainIdentity('2.5 가솔린 터보'),
+        fuelType: 'GASOLINE',
+      },
     },
     {
       id: proposal.refs.variantId!,
       type: 'VARIANT' as const,
       name: '5인승 2WD',
       parentId: proposal.refs.powertrainId!,
+      refs: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+        generationId: proposal.refs.generationId!,
+        phaseId: proposal.refs.phaseId!,
+        modelYearId: proposal.refs.modelYearId!,
+        powertrainId: proposal.refs.powertrainId!,
+      },
+      attributes: { seats: 5, drivetrain: '2WD' },
     },
   ];
 
@@ -158,9 +210,9 @@ async function seedAncestors(
       revision: 1,
       canonicalName: row.name,
       parentId: row.parentId,
-      refs: {},
+      refs: row.refs,
       aliases: [],
-      attributes: {},
+      attributes: row.attributes,
       sourceEvidenceIds: proposal.sourceEvidenceIds,
       effectiveFrom,
       effectiveTo: null,
