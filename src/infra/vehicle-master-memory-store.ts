@@ -209,6 +209,11 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
   }
 
   async putRepairApproval(record: VehicleMasterRepairApproval) {
+    if (!verifyVehicleMasterRepairApproval(record)) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_APPROVAL_HASH_INVALID:${record.approvalId}`
+      );
+    }
     return this.putImmutable(
       this.repairApprovals,
       record.approvalId,
