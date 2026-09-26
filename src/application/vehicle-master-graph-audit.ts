@@ -12,6 +12,8 @@ import {
   canonicalSeatCount,
   canonicalSupplementalIdentity,
   canonicalTrimIdentity,
+  inferPowertrainFuelType,
+  inferVariantFacts,
 } from '../domain/vehicle-master-normalization.js';
 import type { VehicleMasterStore } from '../ports/vehicle-master-store.js';
 
@@ -233,6 +235,27 @@ const modelYearValue = (node: VehicleMasterNode) => {
   return typeof value === 'number' && Number.isInteger(value) ? value : null;
 };
 
+const explicitModelYearLabel = (value: string): number | null => {
+  const normalized = value.normalize('NFKC').trim();
+  const match = normalized.match(/^(19|20|21|22)\d{2}(?:년형|MY)?$/i);
+  return match ? Number(normalized.slice(0, 4)) : null;
+};
+
+const explicitPhaseOverlap = (
+  a: { effectiveFrom?: string | null; effectiveTo?: string | null },
+  b: { effectiveFrom?: string | null; effectiveTo?: string | null }
+) => {
+  const aFrom = time(a.effectiveFrom);
+  const aTo = time(a.effectiveTo);
+  const bFrom = time(b.effectiveFrom);
+  const bTo = time(b.effectiveTo);
+
+  if (aFrom === null || bFrom === null) return false;
+  if (aTo !== null && bFrom < aTo && bFrom >= aFrom) return true;
+  if (bTo !== null && aFrom < bTo && aFrom >= bFrom) return true;
+  return false;
+};
+
 const normalizedNames = (
   node: VehicleMasterNode,
   normalize: (value: string) => string
@@ -261,6 +284,77 @@ const sharedTargets = (
   a: VehicleMasterCompatibilityRule,
   b: VehicleMasterCompatibilityRule
 ) => a.targetIds.filter((id) => b.targetIds.includes(id)).sort();
+
+type DependencyEdge = {
+  from: string;
+  to: string;
+  rule: VehicleMasterCompatibilityRule;
+};
+
+const dependencyEdges = (
+  rules: readonly VehicleMasterCompatibilityRule[],
+  ruleType: 'REQUIRES' | 'EXCLUDES'
+): DependencyEdge[] =>
+  rules
+    .filter((rule) => rule.ruleType === ruleType)
+    .flatMap((rule) =>
+      rule.targetIds.map((to) => ({
+        from: rule.subjectId,
+        to,
+        rule,
+      }))
+    );
+
+const rulesShareEffectiveWindow = (
+  rules: readonly VehicleMasterCompatibilityRule[]
+) => {
+  const start = Math.max(
+    ...rules.map((rule) => time(rule.effectiveFrom) ?? Number.NEGATIVE_INFINITY)
+  );
+  const end = Math.min(
+    ...rules.map((rule) => time(rule.effectiveTo) ?? Number.POSITIVE_INFINITY)
+  );
+  return start < end;
+};
+
+const findRequiresPath = (
+  edges: readonly DependencyEdge[],
+  start: string,
+  goal: string,
+  requiredRules: readonly VehicleMasterCompatibilityRule[] = []
+): DependencyEdge[] | null => {
+  const ordered = [...edges].sort((a, b) =>
+    a.from.localeCompare(b.from) ||
+    a.to.localeCompare(b.to) ||
+    a.rule.id.localeCompare(b.rule.id)
+  );
+
+  const visit = (
+    current: string,
+    visited: Set<string>,
+    path: DependencyEdge[]
+  ): DependencyEdge[] | null => {
+    if (current === goal) return path;
+
+    for (const edge of ordered) {
+      if (edge.from !== current || visited.has(edge.to)) continue;
+      const candidateRules = [
+        ...requiredRules,
+        ...path.map((item) => item.rule),
+        edge.rule,
+      ];
+      if (!rulesShareEffectiveWindow(candidateRules)) continue;
+
+      const nextVisited = new Set(visited);
+      nextVisited.add(edge.to);
+      const found = visit(edge.to, nextVisited, [...path, edge]);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  return visit(start, new Set([start]), []);
+};
 
 const expectedPriceTargetType = (
   type: VehicleMasterPriceRevision['priceType']
