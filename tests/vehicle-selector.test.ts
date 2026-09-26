@@ -1208,9 +1208,9 @@ describe('common vehicle selector', () => {
         powertrain: { id: 'pt_diesel', label: '디젤' },
         trim: { id: 'trim_prestige', label: '프레스티지' },
       }),
-      record('2024-hybrid-graphite', {
+      record('2021-hybrid-graphite', {
         lifecycle: 'HISTORICAL',
-        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
         powertrain: { id: 'pt_hybrid', label: '하이브리드' },
         trim: { id: 'trim_graphite', label: '그래비티' },
       }),
