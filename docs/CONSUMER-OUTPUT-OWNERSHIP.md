@@ -358,4 +358,30 @@ ERP5 source audit. Missing freshness configuration is recorded explicitly as
 `BLOCKED / NOT_CONFIGURED`; authentication, malformed-contract, or runtime
 failures still fail the workflow.
 
+## Scheduled Audit Heartbeat
+
+The ERP5 continuous read-only audit is scheduled hourly at minute 37. GitHub
+scheduled workflows can be delayed or skipped, so the workflow does not treat the
+cron declaration itself as proof that monitoring actually ran.
+
+Every successful audit compares the current capture `readTime` with the previous
+accepted `latest.json` pointer and emits `audit-schedule-health.json`.
+
+Repository Variable:
+
+- `ERP5_AUDIT_MAX_GAP_MINUTES` — explicit maximum accepted interval between
+  consecutive accepted source observations.
+
+Schedule-health states:
+
+- `HEALTHY / WITHIN_MAX_GAP` — observed gap is within the configured maximum.
+- `DEGRADED / AUDIT_GAP_EXCEEDED` — GitHub or the audit path missed the intended
+  monitoring interval.
+- `DEGRADED / FIRST_OBSERVATION` — no previous accepted pointer exists.
+- `BLOCKED / ERP5_AUDIT_MAX_GAP_MINUTES_NOT_CONFIGURED` — the threshold was not
+  explicitly configured.
+
+A DEGRADED schedule-health result is retained as operational evidence and does not
+authorize or perform any Canonical write. The heartbeat is also included in the
+90-day non-sensitive audit artifact.
 
