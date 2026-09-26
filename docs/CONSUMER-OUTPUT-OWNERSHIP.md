@@ -307,4 +307,38 @@ If the max-age variable is absent, the source audit continues but
 A normal consumer-health `BLOCKED` result is evidence, not a source-audit crash;
 authentication, malformed-contract, or runtime failures still fail the workflow.
 
+## Consumer Readiness
+
+`consumer-readiness-v1` answers one operational question: for each registered
+consumer, can it move from its current cutover stage to the next stage now?
+
+The projection is derived from `consumer-health-v1` plus the reviewed static
+registry. It never changes a stage. Every entry is classified as:
+
+- `READY_FOR_NEXT_STAGE` — the next transition is allowed and the consumer
+  contract is present on the product main.
+- `HOLD` — required evidence, implementation, freshness or runtime proof is
+  still missing.
+- `FINAL` — the consumer is already at `FREEPASS_DATA_READ` with healthy
+  production readback evidence.
+
+Readiness also returns coded `requiredActions` such as
+`PROVISION_CONSUMER_AUTH`, `GENERATE_RUNTIME_READ_EVIDENCE`,
+`VERIFY_WHITELABEL_IDENTITIES` and `RECORD_SHEET_DELIVERY_EVIDENCE`.
+
+A formal stage transition that would otherwise be allowed does not become
+operator-ready when the downstream product-main contract is still absent. This
+keeps Sales/Estimate from being reported as ready merely because the minimum
+LEGACY_DIRECT -> OBSERVE evaluator requirements are weak.
+
+Operational check:
+
+```bash
+npm run check:consumer-readiness -- \
+  --max-age-minutes=30 \
+  --max-future-skew-seconds=30 \
+  --event-limit=1000
+```
+
+The command is read-only and audited through the Data Access Gateway.
 
