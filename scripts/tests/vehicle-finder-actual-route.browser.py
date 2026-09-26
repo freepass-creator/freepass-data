@@ -156,7 +156,9 @@ try:
         expect(desktop.locator(".vf-group-member")).to_have_count(0)
         desktop.locator(".vf-group-button").first.click()
         expect(desktop.locator(".vf-group-member")).to_have_count(9)
-        expect(desktop.get_by_text("먼저 보기 · 모델")).to_be_visible()
+        expect(
+            desktop.locator(".vf-group-row").first.get_by_text("먼저 보기 · 모델")
+        ).to_be_visible()
         desktop.locator(".vf-group-member").first.get_by_role("button").click()
         expect(desktop.locator(".vf-detail")).to_be_visible()
         assert desktop.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
@@ -198,7 +200,9 @@ try:
         expect(mobile.get_by_text("검색·필터형")).to_be_visible()
         expect(mobile.get_by_text("방금 본 후보")).to_have_count(0)
         expect(mobile.locator(".vf-group-member")).to_have_count(0)
-        expect(mobile.get_by_text("먼저 보기 · 연식")).to_be_visible()
+        expect(
+            mobile.locator(".vf-group-row").first.get_by_text("먼저 보기 · 연식")
+        ).to_be_visible()
 
         mobile.get_by_role("button", name="필터").click()
         filter_dialog = mobile.get_by_role("dialog", name="필터")
