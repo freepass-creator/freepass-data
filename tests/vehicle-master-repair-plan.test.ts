@@ -103,6 +103,24 @@ describe('vehicle master repair plan', () => {
     }
   });
 
+  it('does not classify immutable PRICE revision hash corruption as AUTO_SAFE', () => {
+    const source = report([
+      issue('CONTENT_HASH_MISMATCH', 'PRICE', 'price_a'),
+    ]);
+
+    const plan = buildVehicleMasterRepairPlan(source);
+
+    expect(plan.counts.AUTO_SAFE).toBe(0);
+    expect(plan.counts.UNRECOVERABLE).toBe(1);
+    expect(plan.items[0]).toEqual(expect.objectContaining({
+      issueCode: 'CONTENT_HASH_MISMATCH',
+      entityKind: 'PRICE',
+      classification: 'UNRECOVERABLE',
+      owner: 'INCIDENT_RECOVERY',
+      action: 'REBUILD_FROM_TRUSTED_SNAPSHOT',
+    }));
+  });
+
   it('never treats immutable evidence hash corruption as AUTO_SAFE', () => {
     const source = report([
       issue('CONTENT_HASH_MISMATCH', 'SOURCE', 'source_a'),
