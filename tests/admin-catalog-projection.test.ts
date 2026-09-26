@@ -96,7 +96,7 @@ describe('Admin Catalog projection on current release evidence', () => {
   });
 
   it('marks missing policy explicitly without converting it to a complete policy', async () => {
-    const { store, f } = await seeded((x) => { x.offer.policyId = undefined; });
+    const { store, f } = await seeded((x) => { delete x.offer.policyId; });
     const release = await buildAdminCatalogProjection(store, store, now);
     const offer = release.data[0]?.offers[0];
     expect(offer?.policyState).toBe('MISSING');
