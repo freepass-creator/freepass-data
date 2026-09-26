@@ -1,5 +1,5 @@
 import type {
-  AuditEvent, CommandReceipt, Offer, OutboxEvent, Policy,
+  AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
   Product, ProjectionProduct, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
@@ -355,7 +355,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async listOffers() { return copy([...this.offers.values()]); }
   async listPolicies() { return copy([...this.policies.values()]); }
 
-  async stage(release: ProjectionRelease<ProjectionProduct>) {
+  async stage<T extends ProjectionProduct>(release: ProjectionRelease<T>) {
     this.releases.set(release.releaseId, copy(release));
   }
   async stageEvidence(input: {
@@ -413,13 +413,17 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     release.activatedAt = new Date().toISOString();
     this.active.set(release.projectionId, releaseId);
   }
-  async getActive(projectionId: string): Promise<ProjectionRelease<ProjectionProduct> | null> {
-    const id = this.active.get(projectionId);
-    return id ? copy(this.releases.get(id) ?? null) : null;
-  }
-  async getActiveEvidenceSnapshot(
+  async getActive<T extends ProjectionProduct = ErpPublicProduct>(
     projectionId: string
-  ): Promise<ActiveProjectionEvidenceSnapshot<ProjectionProduct>> {
+  ): Promise<ProjectionRelease<T> | null> {
+    const id = this.active.get(projectionId);
+    return id
+      ? copy(this.releases.get(id) ?? null) as ProjectionRelease<T> | null
+      : null;
+  }
+  async getActiveEvidenceSnapshot<T extends ProjectionProduct = ErpPublicProduct>(
+    projectionId: string
+  ): Promise<ActiveProjectionEvidenceSnapshot<T>> {
     const releaseId = this.active.get(projectionId);
     if (!releaseId) {
       return {
@@ -440,7 +444,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       manifest,
       lineage,
       consistency: 'ATOMIC' as const
-    });
+    }) as ActiveProjectionEvidenceSnapshot<T>;
   }
   async getManifest(releaseId: string) {
     return copy(this.manifests.get(releaseId) ?? null);
