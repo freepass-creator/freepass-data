@@ -125,7 +125,7 @@ describe('Catalog V1 vertical slice', () => {
 
     const second=await buildErpPublicProjection(
       store,
-      tamperedActiveProjection,
+      tamperedActiveProjection as unknown as Parameters<typeof buildErpPublicProjection>[1],
       '2026-09-20T09:01:00.000Z'
     );
 
