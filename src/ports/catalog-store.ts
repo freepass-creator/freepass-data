@@ -27,6 +27,10 @@ import type {
 } from '../domain/projection-evidence.js';
 import type { ReviewedSourceChangeReceipt } from '../domain/source-change.js';
 import type {
+  SheetConsumerId,
+  StoredSheetDeliveryEvidence
+} from '../domain/consumer-delivery.js';
+import type {
   CatalogWriterOwnership,
   WriterOwnershipTransferReceipt
 } from '../domain/writer-ownership.js';
@@ -147,6 +151,18 @@ export interface ProjectionEvidenceSnapshotStore {
   getActiveEvidenceSnapshot<T extends ProjectionProduct = ErpPublicProduct>(
     projectionId: string
   ): Promise<ActiveProjectionEvidenceSnapshot<T>>;
+}
+
+export interface SheetDeliveryEvidenceStore {
+  getSheetDeliveryEvidence(
+    receiptId: string
+  ): Promise<StoredSheetDeliveryEvidence | null>;
+  putSheetDeliveryEvidence(
+    evidence: StoredSheetDeliveryEvidence
+  ): Promise<void>;
+  listSheetDeliveryEvidence(
+    consumerId: SheetConsumerId
+  ): Promise<StoredSheetDeliveryEvidence[]>;
 }
 
 export interface OutboxStore {
