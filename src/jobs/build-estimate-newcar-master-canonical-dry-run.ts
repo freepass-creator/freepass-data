@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { buildEstimateMasterFromCanonicalVehicleMaster, type EstimateMasterCanonicalBridge } from '../application/estimate-master-canonical.js';
-import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
+import { createVehicleMasterJobRuntime } from './data-access-runtime.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 const S = (value: unknown) => String(value ?? '').trim();
 const arg = (name: string) => {
@@ -14,8 +15,26 @@ const bridge: EstimateMasterCanonicalBridge = bridgePath
   ? JSON.parse(readFileSync(bridgePath, 'utf8'))
   : {};
 
-const store = createFirestoreVehicleMasterStore();
-const result = await buildEstimateMasterFromCanonicalVehicleMaster(store, { bridge });
+const { access, store } = createVehicleMasterJobRuntime();
+const result = await access.read({
+  context: {
+    actor: { id: 'service:freepass-data-estimate-master-dry-run', kind: 'SERVICE' },
+    clientId: 'job:build-estimate-newcar-master-canonical-dry-run',
+    purpose: 'derive Estimate master readiness from canonical Vehicle Master'
+  },
+  operation: 'READ_ESTIMATE_MASTER_CANONICAL_DRY_RUN',
+  resource: {
+    kind: 'PROJECTION',
+    name: 'estimate-newcar-master-canonical-dry-run',
+    projectionId: 'estimate-newcar-master'
+  },
+  requestDigest: stableDigest({ bridge }),
+  summarize: (value) => ({
+    count: value.summary.total,
+    digest: stableDigest(value.records),
+    inputDigest: value.summary.inputDigest
+  })
+}, () => buildEstimateMasterFromCanonicalVehicleMaster(store, { bridge }));
 
 const artifact = {
   contract: 'estimate-newcar-master-canonical-dry-run/v1',
