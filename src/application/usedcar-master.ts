@@ -52,6 +52,27 @@ function aliases(nodes: Array<VehicleMasterNode | null>) {
   )].sort();
 }
 
+function projectedBasePriceHistory(
+  prices: Awaited<ReturnType<VehicleMasterStore['listPriceRevisionsByTarget']>>
+) {
+  return prices.map((price, index) => {
+    const next = prices[index + 1];
+    const impliedEffectiveTo =
+      price.effectiveFrom && next?.effectiveFrom
+        ? next.effectiveFrom
+        : null;
+
+    return {
+      priceRevisionId: price.id,
+      amount: price.amount,
+      currency: price.currency,
+      effectiveFrom: price.effectiveFrom ?? null,
+      effectiveTo: price.effectiveTo ?? impliedEffectiveTo,
+      sourceDocumentIds: [...price.sourceDocumentIds],
+    };
+  });
+}
+
 export async function buildUsedcarMasterRecords(
   store: VehicleMasterStore
 ): Promise<UsedcarMasterRecord[]> {
@@ -151,14 +172,7 @@ export async function buildUsedcarMasterRecords(
         seats: attrInteger(variant, 'seats'),
       },
       aliases: aliases([make, model, generation, phase, modelYear, powertrain, variant, trim]),
-      originalBasePriceHistory: prices.map((price) => ({
-        priceRevisionId: price.id,
-        amount: price.amount,
-        currency: price.currency,
-        effectiveFrom: price.effectiveFrom ?? null,
-        effectiveTo: price.effectiveTo ?? null,
-        sourceDocumentIds: [...price.sourceDocumentIds],
-      })),
+      originalBasePriceHistory: projectedBasePriceHistory(prices),
       lifecycleStatus: lifecycle([
         make,
         model,

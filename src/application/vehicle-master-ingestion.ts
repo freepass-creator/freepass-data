@@ -40,6 +40,9 @@ export type VehicleMasterEvidenceIssue = {
     | 'PRICE_TARGET_MISSING'
     | 'PRICE_TARGET_HOLD'
     | 'PRICE_TARGET_EFFECTIVE_RANGE_MISMATCH'
+    | 'PRICE_EFFECTIVE_FROM_REQUIRED_FOR_HISTORY'
+    | 'PRICE_EFFECTIVE_START_CONFLICT'
+    | 'PRICE_EXPLICIT_RANGE_OVERLAP'
     | 'RULE_SUBJECT_MISSING'
     | 'RULE_TARGET_MISSING'
     | 'RULE_SCOPE_REFERENCE_MISSING';
@@ -159,6 +162,18 @@ function temporalContains(container: TemporalTarget, child: TemporalTarget) {
   const childTo = time(child.effectiveTo) ?? Number.POSITIVE_INFINITY;
 
   return childFrom >= containerFrom && childTo <= containerTo;
+}
+
+function explicitTemporalOverlap(a: TemporalTarget, b: TemporalTarget) {
+  const aFrom = time(a.effectiveFrom);
+  const aTo = time(a.effectiveTo);
+  const bFrom = time(b.effectiveFrom);
+  const bTo = time(b.effectiveTo);
+
+  if (aFrom === null || bFrom === null) return false;
+  if (aTo !== null && bFrom < aTo && bFrom >= aFrom) return true;
+  if (bTo !== null && aFrom < bTo && aFrom >= bFrom) return true;
+  return false;
 }
 
 function valueAtPath(value: unknown, path: string): unknown {
@@ -583,6 +598,49 @@ export async function promoteVehicleMasterPriceRevision(
       });
     }
   }
+  const siblingPrices = (await store.listPriceRevisionsByTarget(input.proposal.targetId))
+    .filter((price) =>
+      price.priceType === input.proposal.priceType &&
+      price.id !== input.proposal.id
+    );
+
+  if (siblingPrices.length && !input.proposal.effectiveFrom) {
+    targetIssues.push({
+      code: 'PRICE_EFFECTIVE_FROM_REQUIRED_FOR_HISTORY',
+      fieldPath: 'effectiveFrom',
+      detail: input.proposal.targetId,
+    });
+  }
+
+  for (const existing of siblingPrices) {
+    if (!existing.effectiveFrom) {
+      targetIssues.push({
+        code: 'PRICE_EFFECTIVE_FROM_REQUIRED_FOR_HISTORY',
+        fieldPath: 'effectiveFrom',
+        detail: existing.id,
+      });
+      continue;
+    }
+    if (
+      input.proposal.effectiveFrom &&
+      existing.effectiveFrom === input.proposal.effectiveFrom
+    ) {
+      targetIssues.push({
+        code: 'PRICE_EFFECTIVE_START_CONFLICT',
+        fieldPath: 'effectiveFrom',
+        detail: existing.id,
+      });
+      continue;
+    }
+    if (explicitTemporalOverlap(existing, input.proposal)) {
+      targetIssues.push({
+        code: 'PRICE_EXPLICIT_RANGE_OVERLAP',
+        fieldPath: 'effectiveFrom',
+        detail: existing.id,
+      });
+    }
+  }
+
   const decision: VehicleMasterEvidenceDecision = targetIssues.length
     ? {
         ...sourceDecision,

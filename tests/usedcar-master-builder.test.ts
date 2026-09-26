@@ -174,6 +174,54 @@ describe('usedcar master canonical state projection', () => {
     ]);
   });
 
+  it('derives non-overlapping price history ranges from successive start dates', async () => {
+    const store = await seedChain();
+
+    await store.putPriceRevision(sealVehicleMasterPriceRevision({
+      id: 'price_trim_noblesse_base_2021_01',
+      targetId: 'trim_noblesse',
+      priceType: 'BASE',
+      amount: 35000000,
+      currency: 'KRW',
+      revision: 1,
+      sourceEvidenceIds: ['evidence_price_jan'],
+      sourceDocumentIds: ['document_price_jan'],
+      effectiveFrom: '2021-01-01T00:00:00.000Z',
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+    await store.putPriceRevision(sealVehicleMasterPriceRevision({
+      id: 'price_trim_noblesse_base_2021_07',
+      targetId: 'trim_noblesse',
+      priceType: 'BASE',
+      amount: 36000000,
+      currency: 'KRW',
+      revision: 2,
+      sourceEvidenceIds: ['evidence_price_jul'],
+      sourceDocumentIds: ['document_price_jul'],
+      effectiveFrom: '2021-07-01T00:00:00.000Z',
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const [record] = await buildUsedcarMasterRecords(store);
+
+    expect(record?.originalBasePriceHistory).toEqual([
+      expect.objectContaining({
+        priceRevisionId: 'price_trim_noblesse_base_2021_01',
+        effectiveFrom: '2021-01-01T00:00:00.000Z',
+        effectiveTo: '2021-07-01T00:00:00.000Z',
+      }),
+      expect.objectContaining({
+        priceRevisionId: 'price_trim_noblesse_base_2021_07',
+        effectiveFrom: '2021-07-01T00:00:00.000Z',
+        effectiveTo: null,
+      }),
+    ]);
+  });
+
   it('gives DISCONTINUED precedence over HISTORICAL in the canonical chain', async () => {
     const store = await seedChain({
       generationStatus: 'HISTORICAL',
