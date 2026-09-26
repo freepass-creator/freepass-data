@@ -2,8 +2,9 @@ import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { buildErp5CanonicalDryRun, compareErp5ProductCaptures } from '../adapters/erp5-source-capture.js';
+import { createErp5CaptureAnalysisRuntime } from './data-access-runtime.js';
 
+const analysis = createErp5CaptureAnalysisRuntime();
 const args = process.argv.slice(2);
 if (![2, 4].includes(args.length) || args[0] !== '--capture' || (args.length === 4 && args[2] !== '--previous')) {
   console.error('Usage: npx tsx src/jobs/build-erp5-canonical-dry-run.ts --capture <current capture.json> [--previous <previous capture.json>]');
@@ -25,9 +26,9 @@ if (![2, 4].includes(args.length) || args[0] !== '--capture' || (args.length ===
     };
     const capturePath = await checkedPath(args[1]!);
     const capture = JSON.parse(await readFile(capturePath, 'utf8'));
-    const dryRun = buildErp5CanonicalDryRun(capture);
+    const dryRun = analysis.buildCanonicalDryRun(capture);
     const delta = args.length === 4
-      ? compareErp5ProductCaptures(JSON.parse(await readFile(await checkedPath(args[3]!), 'utf8')), capture)
+      ? analysis.compareProductCaptures(JSON.parse(await readFile(await checkedPath(args[3]!), 'utf8')), capture)
       : null;
     const outputPath = join(dirname(capturePath), `canonical-dry-run-${randomUUID()}.json`);
     await writeFile(outputPath, JSON.stringify(dryRun, null, 2), { flag: 'wx', mode: 0o600 });
