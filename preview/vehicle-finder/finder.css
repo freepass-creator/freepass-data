@@ -891,3 +891,48 @@
   font-size:10px;
   font-weight:700
 }
+
+
+/* U-01 final selection review */
+.vf .vf-finalization{
+  display:grid;
+  gap:8px;
+  margin:16px 0;
+  padding:12px;
+  border-radius:var(--vf-card-radius);
+  background:var(--vf-soft)
+}
+.vf .vf-finalization[hidden]{display:none}
+.vf .vf-finalization[data-status='APPROVED']{
+  background:#EDF8F1;
+  border-left:3px solid var(--ok,#176A42)
+}
+.vf .vf-finalization[data-status='HOLD']{
+  background:#FFF6E4;
+  border-left:3px solid var(--warn,#8B5A00)
+}
+.vf .vf-finalization[data-status='CONFIRMED']{
+  background:#EDF8F1;
+  border-left:3px solid var(--ok,#176A42)
+}
+.vf .vf-finalization-heading{font-size:var(--vf-main)}
+.vf .vf-finalization-copy{margin:0!important;color:var(--text,#5F6974);font-size:var(--vf-support)}
+.vf .vf-finalization-record{overflow-wrap:anywhere;font-size:10px}
+.vf .vf-finalization-reasons{display:grid;gap:8px}
+.vf .vf-finalization-reason{
+  display:grid;
+  gap:4px;
+  padding:9px 10px;
+  border-radius:10px;
+  background:var(--vf-bg)
+}
+.vf .vf-finalization-reason-title{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  align-items:start
+}
+.vf .vf-finalization-reason p{margin:0!important;color:var(--text,#5F6974);font-size:var(--vf-support)}
+.vf .vf-finalization-next{font-weight:650!important;color:var(--vf-ink)!important}
+.vf .vf-receipt{display:grid;gap:4px;overflow-wrap:anywhere}
+.vf .vf-receipt code{font-size:10px;color:var(--text,#5F6974)}
