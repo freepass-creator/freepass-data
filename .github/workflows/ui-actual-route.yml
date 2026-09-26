@@ -11,10 +11,12 @@ on:
       - 'tests/data-health-ui.test.ts'
       - 'tests/review-queue-ui.test.ts'
       - 'tests/entity-detail-ui.test.ts'
+      - 'tests/control-tower-ui.test.ts'
       - 'scripts/tests/vehicle-finder-actual-route.browser.py'
       - 'scripts/tests/data-health-actual-route.browser.py'
       - 'scripts/tests/review-queue-actual-route.browser.py'
       - 'scripts/tests/entity-detail-actual-route.browser.py'
+      - 'scripts/tests/control-tower-actual-route.browser.py'
       - '.github/workflows/ui-actual-route.yml'
 
 permissions:
@@ -44,6 +46,8 @@ jobs:
         run: python scripts/tests/review-queue-actual-route.browser.py --output ui-evidence/review-queue
       - name: Browser QA Entity Detail actual route
         run: python scripts/tests/entity-detail-actual-route.browser.py --output ui-evidence/entity-detail
+      - name: Browser QA Control Tower actual route
+        run: python scripts/tests/control-tower-actual-route.browser.py --output ui-evidence/control-tower
       - uses: actions/upload-artifact@v4
         if: always()
         with:
