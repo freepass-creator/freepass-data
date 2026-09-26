@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canonicalDrivetrain,
   canonicalPowertrainIdentity,
+  canonicalSeatCount,
   canonicalTrimIdentity,
+  canonicalVariantIdentity,
   inferPowertrainFuelType,
+  inferVariantFacts,
 } from '../src/domain/vehicle-master-normalization.js';
 
 describe('vehicle master powertrain normalization', () => {
@@ -22,6 +26,25 @@ describe('vehicle master powertrain normalization', () => {
       .toBe(canonicalTrimIdentity('노-블레스'));
     expect(canonicalTrimIdentity('Noblesse'))
       .not.toBe(canonicalTrimIdentity('노블레스'));
+  });
+
+  it('normalizes only explicit drivetrain aliases and preserves 2WD ambiguity', () => {
+    expect(canonicalDrivetrain('awd')).toBe('AWD');
+    expect(canonicalDrivetrain('전륜')).toBe('FWD');
+    expect(canonicalDrivetrain('rear wheel drive')).toBe('RWD');
+    expect(canonicalDrivetrain('2WD')).toBe('2WD');
+    expect(canonicalDrivetrain('사륜')).toBeNull();
+  });
+
+  it('normalizes variant facts deterministically without guessing missing values', () => {
+    expect(canonicalSeatCount(5)).toBe(5);
+    expect(canonicalSeatCount(0)).toBeNull();
+    expect(canonicalSeatCount(5.5)).toBeNull();
+    expect(canonicalVariantIdentity({ seats: 5, drivetrain: 'awd' }))
+      .toEqual({ seats: 5, drivetrain: 'AWD' });
+    expect(inferVariantFacts('AWD 5seat')).toEqual({ seats: 5, drivetrain: 'AWD' });
+    expect(inferVariantFacts('5인승 전륜')).toEqual({ seats: 5, drivetrain: 'FWD' });
+    expect(inferVariantFacts('프리미엄')).toEqual({ seats: null, drivetrain: null });
   });
 
   it('keeps materially different powertrain descriptors distinct', () => {

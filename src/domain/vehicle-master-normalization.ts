@@ -62,3 +62,63 @@ export function inferPowertrainFuelType(value: string): CanonicalFuelType | null
 
   return null;
 }
+
+export type CanonicalDrivetrain = '2WD' | '4WD' | 'AWD' | 'FWD' | 'RWD';
+
+const DRIVETRAIN_ALIASES: Record<string, CanonicalDrivetrain> = {
+  '2wd': '2WD',
+  '4wd': '4WD',
+  'awd': 'AWD',
+  'fwd': 'FWD',
+  'rwd': 'RWD',
+  'front wheel drive': 'FWD',
+  'rear wheel drive': 'RWD',
+  'all wheel drive': 'AWD',
+  '전륜': 'FWD',
+  '후륜': 'RWD',
+};
+
+export function canonicalDrivetrain(
+  value: string | null | undefined
+): CanonicalDrivetrain | null {
+  if (!value) return null;
+  return DRIVETRAIN_ALIASES[normalize(value)] ?? null;
+}
+
+export function canonicalSeatCount(value: unknown): number | null {
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= 99
+    ? value
+    : null;
+}
+
+export function canonicalVariantIdentity(input: {
+  seats: unknown;
+  drivetrain: string | null | undefined;
+}) {
+  return {
+    seats: canonicalSeatCount(input.seats),
+    drivetrain: canonicalDrivetrain(input.drivetrain),
+  };
+}
+
+export function inferVariantFacts(value: string) {
+  const normalized = normalize(value);
+  const seatMatch = normalized.match(
+    /(?:^|\s)(\d{1,2})\s*(?:인승|seat|seats|seater)(?:\s|$)/i
+  );
+  const seats = seatMatch ? canonicalSeatCount(Number(seatMatch[1])) : null;
+
+  const drivetrain = Object.entries(DRIVETRAIN_ALIASES)
+    .sort(([a], [b]) => b.length - a.length)
+    .find(([alias]) =>
+      normalized === alias ||
+      normalized.startsWith(`${alias} `) ||
+      normalized.endsWith(` ${alias}`) ||
+      normalized.includes(` ${alias} `)
+    )?.[1] ?? null;
+
+  return { seats, drivetrain };
+}

@@ -72,12 +72,16 @@ async function seed(store: MemoryVehicleMasterStore) {
   }));
 }
 
-function reconciled(basePrice = 36410000, effectiveFrom = '2026-09-01T00:00:00.000Z'): VehicleMasterReconciledTrim {
+function reconciled(
+  basePrice = 36410000,
+  effectiveFrom = '2026-09-01T00:00:00.000Z',
+  drivetrain = '2WD'
+): VehicleMasterReconciledTrim {
   return {
     modelYear: 2027,
     powertrainName: '2.5 가솔린 터보',
     seats: 5,
-    drivetrain: '2WD',
+    drivetrain,
     trimName: '프레스티지',
     fuelType: 'GASOLINE',
     basePrice,
@@ -140,6 +144,33 @@ describe('vehicle master canonical promotion chain', () => {
     expect(second.variant.canonicalWrite).toBe('UNCHANGED');
     expect(second.trim.canonicalWrite).toBe('UNCHANGED');
     expect(second.basePrice.canonicalWrite).toBe('UNCHANGED');
+  });
+
+  it('builds one VARIANT identity from safe drivetrain aliases', () => {
+    const lower = buildVehicleMasterTrimProposalSet({
+      anchor: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+        generationId: 'gen_mq4',
+        phaseId: 'phase_mq4_fl',
+      },
+      reconciled: reconciled(36410000, '2026-09-01T00:00:00.000Z', 'awd'),
+      observedAt,
+    });
+    const canonical = buildVehicleMasterTrimProposalSet({
+      anchor: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+        generationId: 'gen_mq4',
+        phaseId: 'phase_mq4_fl',
+      },
+      reconciled: reconciled(36410000, '2026-09-01T00:00:00.000Z', 'AWD'),
+      observedAt,
+    });
+
+    expect(lower.variant.record.id).toBe(canonical.variant.record.id);
+    expect(lower.variant.record.attributes.drivetrain).toBe('AWD');
+    expect(lower.variant.record.canonicalName).toBe('5인승 AWD');
   });
 
   it('creates the next price revision when the effective price actually changes', async () => {

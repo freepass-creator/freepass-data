@@ -1,3 +1,4 @@
+import { canonicalDrivetrain } from '../domain/vehicle-master-normalization.js';
 import type {
   VehicleMasterParsedCondition,
   VehicleMasterParsedOption,
@@ -209,7 +210,11 @@ export function reconcileVehicleMasterTrimFacts(
   for (const group of groups.values()) {
     const first = group[0]!;
     const seats = mergeScalar('seats', group, (record) => record.seats);
-    const drivetrain = mergeScalar('drivetrain', group, (record) => record.drivetrain);
+    const drivetrain = mergeScalar(
+      'drivetrain',
+      group,
+      (record) => canonicalDrivetrain(record.drivetrain)
+    );
     const fuelType = mergeScalar('fuelType', group, (record) => record.fuelType);
     const basePrice = mergeScalar('basePrice', group, (record) => record.basePrice);
     const currency = mergeScalar('currency', group, (record) => record.currency);
