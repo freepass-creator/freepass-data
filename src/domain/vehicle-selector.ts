@@ -95,10 +95,18 @@ export type VehicleSelectorFacetOption = {
   count: number;
 };
 
+export type VehicleSelectorResolutionStatus =
+  | 'OPEN'
+  | 'AMBIGUOUS'
+  | 'PARTIAL_UNKNOWN'
+  | 'RESOLVED'
+  | 'IMPOSSIBLE';
+
 export type VehicleSelectorGuidance = {
   candidateCount: number;
   selectableCount: number;
   resolvedRecordId: string | null;
+  resolutionStatus: VehicleSelectorResolutionStatus;
   singletonAxes: VehicleSelectorAxis[];
   ambiguousAxes: VehicleSelectorAxis[];
   suggestedNextAxis: VehicleSelectorAxis | null;
@@ -499,6 +507,14 @@ function axisOptionCount(
   return values.size;
 }
 
+function requestHasCriteria(request: VehicleSelectorRequest) {
+  const selection = request.selection ?? {};
+  return (
+    AXES.some((axis) => axisSelected(selection, axis)) ||
+    hasText(request.searchText)
+  );
+}
+
 function buildGuidance(
   candidates: readonly VehicleSelectorCandidate[],
   request: VehicleSelectorRequest
@@ -519,13 +535,27 @@ function buildGuidance(
   const suggestedNextAxis =
     preset.preferredAxisOrder.find((axis) => ambiguousAxes.includes(axis)) ?? null;
 
+  const resolvedRecordId =
+    candidates.length === 1 && candidates[0]?.selectable
+      ? candidates[0].record.recordId
+      : null;
+
+  const resolutionStatus: VehicleSelectorResolutionStatus =
+    !requestHasCriteria(request)
+      ? 'OPEN'
+      : candidates.length === 0
+        ? 'IMPOSSIBLE'
+        : resolvedRecordId
+          ? 'RESOLVED'
+          : candidates.some((candidate) => !candidate.selectable)
+            ? 'PARTIAL_UNKNOWN'
+            : 'AMBIGUOUS';
+
   return {
     candidateCount: candidates.length,
     selectableCount: selectable.length,
-    resolvedRecordId:
-      candidates.length === 1 && candidates[0]?.selectable
-        ? candidates[0].record.recordId
-        : null,
+    resolvedRecordId,
+    resolutionStatus,
     singletonAxes,
     ambiguousAxes,
     suggestedNextAxis,
