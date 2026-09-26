@@ -3,7 +3,9 @@ import type {
   VehicleMasterCompatibilityRule,
   VehicleMasterNode,
   VehicleMasterNodeType,
+  VehicleMasterPipelineRecord,
   VehicleMasterPriceRevision,
+  VehicleMasterSourceDocument,
 } from '../domain/vehicle-master.js';
 import {
   canonicalDrivetrain,
@@ -20,7 +22,7 @@ import type { VehicleMasterStore } from '../ports/vehicle-master-store.js';
 export type VehicleMasterGraphAuditIssue = {
   code: string;
   severity: 'ERROR' | 'WARN';
-  entityKind: 'NODE' | 'RULE' | 'PRICE';
+  entityKind: 'NODE' | 'RULE' | 'PRICE' | 'SOURCE' | 'REVISION' | 'PIPELINE';
   entityId: string;
   fieldPath?: string;
   relatedId?: string;
@@ -44,7 +46,22 @@ export type VehicleMasterGraphSnapshot = {
   nodes: readonly VehicleMasterNode[];
   rules: readonly VehicleMasterCompatibilityRule[];
   prices: readonly VehicleMasterPriceRevision[];
+  sources?: readonly VehicleMasterSourceDocument[];
+  nodeRevisions?: readonly VehicleMasterNode[];
+  ruleRevisions?: readonly VehicleMasterCompatibilityRule[];
+  pipelineRecords?: readonly VehicleMasterPipelineRecord[];
 };
+
+const PIPELINE_KINDS: readonly VehicleMasterPipelineRecord['kind'][] = [
+  'RAW_RECORD',
+  'NORMALIZED_RECORD',
+  'CANDIDATE_FACT',
+  'EVIDENCE_SET',
+  'REVISION_CANDIDATE',
+  'PROMOTION_RESULT',
+  'CHANGE_EVENT',
+  'AUDIT_REPORT',
+];
 
 const NODE_TYPES: readonly VehicleMasterNodeType[] = [
   'MAKE',
@@ -355,6 +372,34 @@ const findRequiresPath = (
 
   return visit(start, new Set([start]), []);
 };
+
+const expectedContentHash = <T extends { contentHash: string }>(record: T) => {
+  const { contentHash: _contentHash, ...payload } = record;
+  return stableDigest(payload);
+};
+
+const auditContentHash = (
+  record: { contentHash: string },
+  entityKind: VehicleMasterGraphAuditIssue['entityKind'],
+  entityId: string,
+  issues: VehicleMasterGraphAuditIssue[]
+) => {
+  const expected = expectedContentHash(record);
+  if (record.contentHash !== expected) {
+    add(issues, {
+      code: 'CONTENT_HASH_MISMATCH',
+      severity: 'ERROR',
+      entityKind,
+      entityId,
+      fieldPath: 'contentHash',
+      detail: `${record.contentHash}!=${expected}`,
+    });
+  }
+};
+
+const sourceEvidenceIds = (
+  record: VehicleMasterNode | VehicleMasterCompatibilityRule | VehicleMasterPriceRevision
+) => record.sourceEvidenceIds;
 
 const expectedPriceTargetType = (
   type: VehicleMasterPriceRevision['priceType']
@@ -1573,6 +1618,514 @@ function auditRules(
   auditDependencyGraphSemantics(rules, issues);
 }
 
+function auditCanonicalEvidenceAndDigests(
+  input: VehicleMasterGraphSnapshot,
+  issues: VehicleMasterGraphAuditIssue[]
+) {
+  const currentRecords: Array<{
+    kind: 'NODE' | 'RULE' | 'PRICE';
+    id: string;
+    record: VehicleMasterNode | VehicleMasterCompatibilityRule | VehicleMasterPriceRevision;
+  }> = [
+    ...input.nodes.map((record) => ({ kind: 'NODE' as const, id: record.id, record })),
+    ...input.rules.map((record) => ({ kind: 'RULE' as const, id: record.id, record })),
+    ...input.prices.map((record) => ({ kind: 'PRICE' as const, id: record.id, record })),
+  ];
+
+  for (const item of currentRecords) {
+    auditContentHash(item.record, item.kind, item.id, issues);
+  }
+
+  if (!input.sources) return;
+
+  const sources = [...input.sources].sort((a, b) =>
+    a.sourceDocumentId.localeCompare(b.sourceDocumentId)
+  );
+  const sourceById = new Map(sources.map((source) => [source.sourceDocumentId, source]));
+
+  for (const source of sources) {
+    auditContentHash(source, 'SOURCE', source.sourceDocumentId, issues);
+  }
+
+  for (const item of currentRecords) {
+    const ids = [...new Set(sourceEvidenceIds(item.record))].sort();
+    if (!ids.length) {
+      add(issues, {
+        code: 'SOURCE_EVIDENCE_REQUIRED',
+        severity: 'ERROR',
+        entityKind: item.kind,
+        entityId: item.id,
+        fieldPath: 'sourceEvidenceIds',
+      });
+    }
+    for (const sourceId of ids) {
+      if (sourceById.has(sourceId)) continue;
+      add(issues, {
+        code: 'SOURCE_EVIDENCE_MISSING',
+        severity: 'ERROR',
+        entityKind: item.kind,
+        entityId: item.id,
+        fieldPath: 'sourceEvidenceIds',
+        relatedId: sourceId,
+      });
+    }
+
+    if (item.kind === 'PRICE') {
+      const price = item.record as VehicleMasterPriceRevision;
+      if (!price.sourceDocumentIds.length) {
+        add(issues, {
+          code: 'PRICE_SOURCE_DOCUMENT_REQUIRED',
+          severity: 'ERROR',
+          entityKind: 'PRICE',
+          entityId: price.id,
+          fieldPath: 'sourceDocumentIds',
+        });
+      }
+      for (const sourceId of [...new Set(price.sourceDocumentIds)].sort()) {
+        if (sourceById.has(sourceId)) continue;
+        add(issues, {
+          code: 'PRICE_SOURCE_DOCUMENT_MISSING',
+          severity: 'ERROR',
+          entityKind: 'PRICE',
+          entityId: price.id,
+          fieldPath: 'sourceDocumentIds',
+          relatedId: sourceId,
+        });
+      }
+    }
+  }
+}
+
+type VersionedCanonicalRecord = VehicleMasterNode | VehicleMasterCompatibilityRule;
+
+function auditRevisionHistory(
+  current: readonly VersionedCanonicalRecord[],
+  revisions: readonly VersionedCanonicalRecord[] | undefined,
+  recordKind: 'NODE' | 'RULE',
+  sources: readonly VehicleMasterSourceDocument[] | undefined,
+  issues: VehicleMasterGraphAuditIssue[]
+) {
+  if (!revisions) return;
+
+  const currentById = new Map(current.map((record) => [record.id, record]));
+  const sourceById = sources
+    ? new Map(sources.map((source) => [source.sourceDocumentId, source]))
+    : null;
+  const groups = new Map<string, VersionedCanonicalRecord[]>();
+
+  for (const revision of [...revisions].sort((a, b) =>
+    a.id.localeCompare(b.id) || a.revision - b.revision
+  )) {
+    const revisionEntityId = `${recordKind}:${revision.id}:r${revision.revision}`;
+    auditContentHash(revision, 'REVISION', revisionEntityId, issues);
+
+    if (!currentById.has(revision.id)) {
+      add(issues, {
+        code: 'REVISION_ORPHAN',
+        severity: 'ERROR',
+        entityKind: 'REVISION',
+        entityId: revisionEntityId,
+        relatedId: revision.id,
+      });
+    }
+
+    if (sourceById) {
+      const evidenceIds = [...new Set(revision.sourceEvidenceIds)].sort();
+      if (!evidenceIds.length) {
+        add(issues, {
+          code: 'SOURCE_EVIDENCE_REQUIRED',
+          severity: 'ERROR',
+          entityKind: 'REVISION',
+          entityId: revisionEntityId,
+          fieldPath: 'sourceEvidenceIds',
+        });
+      }
+      for (const sourceId of evidenceIds) {
+        if (sourceById.has(sourceId)) continue;
+        add(issues, {
+          code: 'SOURCE_EVIDENCE_MISSING',
+          severity: 'ERROR',
+          entityKind: 'REVISION',
+          entityId: revisionEntityId,
+          fieldPath: 'sourceEvidenceIds',
+          relatedId: sourceId,
+        });
+      }
+    }
+
+    const list = groups.get(revision.id) ?? [];
+    list.push(revision);
+    groups.set(revision.id, list);
+  }
+
+  for (const record of [...current].sort((a, b) => a.id.localeCompare(b.id))) {
+    const history = (groups.get(record.id) ?? [])
+      .sort((a, b) => a.revision - b.revision);
+
+    if (!history.length) {
+      add(issues, {
+        code: 'REVISION_HISTORY_MISSING',
+        severity: 'ERROR',
+        entityKind: recordKind,
+        entityId: record.id,
+        fieldPath: 'revision',
+        detail: String(record.revision),
+      });
+      continue;
+    }
+
+    const byNumber = new Map<number, VersionedCanonicalRecord[]>();
+    for (const revision of history) {
+      const sameNumber = byNumber.get(revision.revision) ?? [];
+      sameNumber.push(revision);
+      byNumber.set(revision.revision, sameNumber);
+    }
+
+    for (const [revision, rows] of [...byNumber.entries()].sort(([a], [b]) => a - b)) {
+      if (rows.length <= 1) continue;
+      add(issues, {
+        code: 'REVISION_DUPLICATE_NUMBER',
+        severity: 'ERROR',
+        entityKind: recordKind,
+        entityId: record.id,
+        fieldPath: 'revision',
+        detail: String(revision),
+      });
+    }
+
+    for (let revision = 1; revision <= record.revision; revision += 1) {
+      if (byNumber.has(revision)) continue;
+      add(issues, {
+        code: 'REVISION_SEQUENCE_GAP',
+        severity: 'ERROR',
+        entityKind: recordKind,
+        entityId: record.id,
+        fieldPath: 'revision',
+        detail: String(revision),
+      });
+    }
+
+    const latest = history.at(-1)!;
+    if (
+      latest.revision !== record.revision ||
+      stableDigest(latest) !== stableDigest(record)
+    ) {
+      add(issues, {
+        code: 'REVISION_LATEST_MISMATCH',
+        severity: 'ERROR',
+        entityKind: recordKind,
+        entityId: record.id,
+        fieldPath: 'revision',
+        relatedId: `r${latest.revision}`,
+        detail: `${latest.revision}!=${record.revision}`,
+      });
+    }
+  }
+}
+
+const pipelinePayloadString = (
+  record: VehicleMasterPipelineRecord,
+  field: string
+) => {
+  const value = record.payload[field];
+  return typeof value === 'string' && value ? value : null;
+};
+
+const pipelinePayloadStringArray = (
+  record: VehicleMasterPipelineRecord,
+  field: string
+) => {
+  const value = record.payload[field];
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+    ? value as string[]
+    : null;
+};
+
+function auditPipelineIntegrity(
+  input: VehicleMasterGraphSnapshot,
+  issues: VehicleMasterGraphAuditIssue[]
+) {
+  const records = input.pipelineRecords;
+  const sources = input.sources;
+  if (!records) return;
+
+  const sorted = [...records].sort((a, b) =>
+    a.kind.localeCompare(b.kind) || a.recordId.localeCompare(b.recordId)
+  );
+  const byKindAndId = new Map(
+    sorted.map((record) => [`${record.kind}:${record.recordId}`, record])
+  );
+  const sourceById = sources
+    ? new Map(sources.map((source) => [source.sourceDocumentId, source]))
+    : null;
+
+  const candidateFacts = sorted.filter((record) => record.kind === 'CANDIDATE_FACT');
+  const evidenceSets = sorted.filter((record) => record.kind === 'EVIDENCE_SET');
+  const revisionCandidates = sorted.filter((record) => record.kind === 'REVISION_CANDIDATE');
+  const promotionResults = sorted.filter((record) => record.kind === 'PROMOTION_RESULT');
+  const changeEvents = sorted.filter((record) => record.kind === 'CHANGE_EVENT');
+
+  const canonicalRevisionKeys = new Set<string>();
+  for (const record of [
+    ...input.nodes,
+    ...input.rules,
+    ...input.prices,
+    ...(input.nodeRevisions ?? []),
+    ...(input.ruleRevisions ?? []),
+  ]) {
+    canonicalRevisionKeys.add(
+      `${record.id}|${record.revision}|${record.contentHash}`
+    );
+  }
+
+  for (const record of sorted) {
+    auditContentHash(record, 'PIPELINE', `${record.kind}:${record.recordId}`, issues);
+    if (record.sourceDocumentId && sourceById && !sourceById.has(record.sourceDocumentId)) {
+      add(issues, {
+        code: 'PIPELINE_SOURCE_DOCUMENT_MISSING',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${record.kind}:${record.recordId}`,
+        fieldPath: 'sourceDocumentId',
+        relatedId: record.sourceDocumentId,
+      });
+    }
+  }
+
+  const revisionByEvidenceSet = new Map<string, VehicleMasterPipelineRecord[]>();
+  for (const revision of revisionCandidates) {
+    const evidenceSetId = pipelinePayloadString(revision, 'evidenceSetId');
+    if (!evidenceSetId) {
+      add(issues, {
+        code: 'PIPELINE_EVIDENCE_SET_ID_MISSING',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${revision.kind}:${revision.recordId}`,
+        fieldPath: 'payload.evidenceSetId',
+      });
+      continue;
+    }
+    if (!byKindAndId.has(`EVIDENCE_SET:${evidenceSetId}`)) {
+      add(issues, {
+        code: 'PIPELINE_EVIDENCE_SET_MISSING',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${revision.kind}:${revision.recordId}`,
+        fieldPath: 'payload.evidenceSetId',
+        relatedId: evidenceSetId,
+      });
+    }
+    const list = revisionByEvidenceSet.get(evidenceSetId) ?? [];
+    list.push(revision);
+    revisionByEvidenceSet.set(evidenceSetId, list);
+  }
+
+  for (const revision of revisionCandidates) {
+    const revisionNumber = revision.payload.revision;
+    const proposalHash = pipelinePayloadString(revision, 'proposalHash');
+
+    if (
+      typeof revisionNumber !== 'number' ||
+      !Number.isSafeInteger(revisionNumber) ||
+      revisionNumber < 1
+    ) {
+      add(issues, {
+        code: 'PIPELINE_REVISION_NUMBER_INVALID',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${revision.kind}:${revision.recordId}`,
+        fieldPath: 'payload.revision',
+        detail: String(revisionNumber ?? 'MISSING'),
+      });
+    }
+
+    if (!proposalHash) {
+      add(issues, {
+        code: 'PIPELINE_PROPOSAL_HASH_MISSING',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${revision.kind}:${revision.recordId}`,
+        fieldPath: 'payload.proposalHash',
+      });
+    }
+
+    const matchingCandidate = proposalHash
+      ? candidateFacts.find((candidate) =>
+          candidate.entityId === revision.entityId &&
+          candidate.observedAt === revision.observedAt &&
+          candidate.payload.proposalHash === proposalHash
+        )
+      : null;
+    if (!matchingCandidate) {
+      add(issues, {
+        code: 'PIPELINE_CANDIDATE_FACT_MISSING',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${revision.kind}:${revision.recordId}`,
+        fieldPath: 'payload.proposalHash',
+        ...(proposalHash ? { relatedId: proposalHash } : {}),
+      });
+    }
+  }
+
+  for (const evidence of evidenceSets) {
+    const ids = pipelinePayloadStringArray(evidence, 'evidenceDocumentIds');
+    if (!ids) {
+      add(issues, {
+        code: 'PIPELINE_EVIDENCE_DOCUMENT_IDS_INVALID',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${evidence.kind}:${evidence.recordId}`,
+        fieldPath: 'payload.evidenceDocumentIds',
+      });
+    } else if (sourceById) {
+      for (const sourceId of [...new Set(ids)].sort()) {
+        if (sourceById.has(sourceId)) continue;
+        add(issues, {
+          code: 'PIPELINE_EVIDENCE_SOURCE_MISSING',
+          severity: 'ERROR',
+          entityKind: 'PIPELINE',
+          entityId: `${evidence.kind}:${evidence.recordId}`,
+          fieldPath: 'payload.evidenceDocumentIds',
+          relatedId: sourceId,
+        });
+      }
+    }
+
+    if (!(revisionByEvidenceSet.get(evidence.recordId)?.length)) {
+      add(issues, {
+        code: 'PIPELINE_EVIDENCE_SET_ORPHAN',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${evidence.kind}:${evidence.recordId}`,
+      });
+    }
+  }
+
+  const promotionByRevision = new Map<string, VehicleMasterPipelineRecord[]>();
+  for (const promotion of promotionResults) {
+    const revisionCandidateId = pipelinePayloadString(promotion, 'revisionCandidateId');
+    if (!revisionCandidateId) {
+      add(issues, {
+        code: 'PIPELINE_REVISION_CANDIDATE_ID_MISSING',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${promotion.kind}:${promotion.recordId}`,
+        fieldPath: 'payload.revisionCandidateId',
+      });
+      continue;
+    }
+    if (!byKindAndId.has(`REVISION_CANDIDATE:${revisionCandidateId}`)) {
+      add(issues, {
+        code: 'PIPELINE_REVISION_CANDIDATE_MISSING',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${promotion.kind}:${promotion.recordId}`,
+        fieldPath: 'payload.revisionCandidateId',
+        relatedId: revisionCandidateId,
+      });
+    }
+    const list = promotionByRevision.get(revisionCandidateId) ?? [];
+    list.push(promotion);
+    promotionByRevision.set(revisionCandidateId, list);
+  }
+
+  for (const revision of revisionCandidates) {
+    if (promotionByRevision.get(revision.recordId)?.length) continue;
+    add(issues, {
+      code: 'PIPELINE_REVISION_CANDIDATE_ORPHAN',
+      severity: 'ERROR',
+      entityKind: 'PIPELINE',
+      entityId: `${revision.kind}:${revision.recordId}`,
+    });
+  }
+
+  for (const promotion of promotionResults) {
+    if (promotion.payload.status !== 'PROMOTED') continue;
+    const revisionCandidateId = pipelinePayloadString(promotion, 'revisionCandidateId');
+    const revision = revisionCandidateId
+      ? byKindAndId.get(`REVISION_CANDIDATE:${revisionCandidateId}`)
+      : null;
+    if (!revision) continue;
+
+    const revisionNumber = revision.payload.revision;
+    const proposalHash = pipelinePayloadString(revision, 'proposalHash');
+    const evidenceSetId = pipelinePayloadString(revision, 'evidenceSetId');
+    const revisionStatus = revision.payload.status;
+    const promotionStatus = promotion.payload.status;
+    const expectedPromotionStatus =
+      revisionStatus === 'APPROVED'
+        ? 'PROMOTED'
+        : revisionStatus === 'HOLD'
+          ? 'HOLD'
+          : null;
+
+    if (expectedPromotionStatus && promotionStatus !== expectedPromotionStatus) {
+      add(issues, {
+        code: 'PIPELINE_STATUS_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${promotion.kind}:${promotion.recordId}`,
+        fieldPath: 'payload.status',
+        detail: `${String(promotionStatus)}!=${expectedPromotionStatus}`,
+      });
+    }
+
+    if (
+      promotionStatus === 'PROMOTED' &&
+      typeof revisionNumber === 'number' &&
+      proposalHash &&
+      promotion.entityId &&
+      !canonicalRevisionKeys.has(
+        `${promotion.entityId}|${revisionNumber}|${proposalHash}`
+      )
+    ) {
+      add(issues, {
+        code: 'PIPELINE_PROPOSAL_HASH_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${promotion.kind}:${promotion.recordId}`,
+        fieldPath: 'payload.revisionCandidateId',
+        relatedId: revision.recordId,
+        detail: proposalHash,
+      });
+    }
+    const matchingEvent = changeEvents.find((event) =>
+      event.entityId === promotion.entityId &&
+      event.observedAt === promotion.observedAt &&
+      event.payload.revision === revisionNumber &&
+      event.payload.evidenceSetId === evidenceSetId
+    );
+    if (!matchingEvent) {
+      add(issues, {
+        code: 'PIPELINE_CHANGE_EVENT_MISSING',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${promotion.kind}:${promotion.recordId}`,
+        fieldPath: 'payload.status',
+        detail: 'PROMOTED',
+      });
+    }
+  }
+
+  for (const event of changeEvents) {
+    const evidenceSetId = pipelinePayloadString(event, 'evidenceSetId');
+    if (
+      evidenceSetId &&
+      !byKindAndId.has(`EVIDENCE_SET:${evidenceSetId}`)
+    ) {
+      add(issues, {
+        code: 'PIPELINE_EVIDENCE_SET_MISSING',
+        severity: 'ERROR',
+        entityKind: 'PIPELINE',
+        entityId: `${event.kind}:${event.recordId}`,
+        fieldPath: 'payload.evidenceSetId',
+        relatedId: evidenceSetId,
+      });
+    }
+  }
+}
+
 export function auditVehicleMasterGraph(
   input: VehicleMasterGraphSnapshot
 ): VehicleMasterGraphAuditReport {
@@ -1585,6 +2138,22 @@ export function auditVehicleMasterGraph(
   auditNodeSemantics(nodes, issues);
   auditRules(rules, nodes, issues);
   auditPrices(prices, nodes, issues);
+  auditCanonicalEvidenceAndDigests(input, issues);
+  auditRevisionHistory(
+    nodes,
+    input.nodeRevisions,
+    'NODE',
+    input.sources,
+    issues
+  );
+  auditRevisionHistory(
+    rules,
+    input.ruleRevisions,
+    'RULE',
+    input.sources,
+    issues
+  );
+  auditPipelineIntegrity(input, issues);
 
   const sortedIssues = issues.sort(issueSort);
   const errors = sortedIssues.filter((issue) => issue.severity === 'ERROR').length;
@@ -1611,14 +2180,31 @@ export async function auditVehicleMasterStore(
   const nodeGroups = await Promise.all(
     NODE_TYPES.map((nodeType) => store.listNodesByType(nodeType))
   );
-  const [rules, prices] = await Promise.all([
+  const [
+    rules,
+    prices,
+    sources,
+    nodeRevisions,
+    ruleRevisions,
+    pipelineGroups,
+  ] = await Promise.all([
     store.listCompatibilityRules(),
     store.listPriceRevisions(),
+    store.listSourceDocuments(),
+    store.listNodeRevisions(),
+    store.listCompatibilityRuleRevisions(),
+    Promise.all(
+      PIPELINE_KINDS.map((kind) => store.listPipelineRecordsByKind(kind))
+    ),
   ]);
 
   return auditVehicleMasterGraph({
     nodes: nodeGroups.flat(),
     rules,
     prices,
+    sources,
+    nodeRevisions,
+    ruleRevisions,
+    pipelineRecords: pipelineGroups.flat(),
   });
 }

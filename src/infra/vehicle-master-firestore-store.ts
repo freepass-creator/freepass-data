@@ -124,6 +124,13 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
     return snap.docs.map((doc) => doc.data() as VehicleMasterNode);
   }
 
+  async listNodeRevisions() {
+    const snap = await this.db.collection(C.nodeRevisions).get();
+    return snap.docs
+      .map((doc) => doc.data() as VehicleMasterNode)
+      .sort((a, b) => a.id.localeCompare(b.id) || a.revision - b.revision);
+  }
+
   async putNode(record: VehicleMasterNode) {
     return this.putVersioned(
       this.db.collection(C.nodes).doc(safeId(record.id)),
@@ -143,6 +150,13 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
     return snap.docs
       .map((doc) => doc.data() as VehicleMasterCompatibilityRule)
       .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  async listCompatibilityRuleRevisions() {
+    const snap = await this.db.collection(C.ruleRevisions).get();
+    return snap.docs
+      .map((doc) => doc.data() as VehicleMasterCompatibilityRule)
+      .sort((a, b) => a.id.localeCompare(b.id) || a.revision - b.revision);
   }
 
   async putCompatibilityRule(record: VehicleMasterCompatibilityRule) {

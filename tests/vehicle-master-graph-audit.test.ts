@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   sealVehicleMasterCompatibilityRule,
   sealVehicleMasterNode,
+  sealVehicleMasterPipelineRecord,
   sealVehicleMasterPriceRevision,
+  sealVehicleMasterSourceDocument,
   type VehicleMasterNode,
 } from '../src/domain/vehicle-master.js';
 import {
@@ -16,6 +18,23 @@ import {
 } from '../src/domain/vehicle-master-normalization.js';
 
 const at = '2026-09-26T12:30:00.000Z';
+
+function cleanSource() {
+  return sealVehicleMasterSourceDocument({
+    sourceDocumentId: 'official',
+    sourceType: 'MANUFACTURER_OFFICIAL',
+    sourceName: 'official audit source',
+    sourceUrl: 'https://example.test/audit-source',
+    publishedAt: at,
+    observedAt: at,
+    effectiveFrom: null,
+    effectiveTo: null,
+    storagePath: 'vehicle-master/source-documents/test/audit-source.html',
+    sha256: 'a'.repeat(64),
+    mimeType: 'text/html',
+    metadata: {},
+  });
+}
 
 function cleanNodes() {
   const make = sealVehicleMasterNode({
@@ -457,6 +476,7 @@ describe('vehicle master graph audit', () => {
   it('audits a store snapshot without mutating canonical records', async () => {
     const n = cleanNodes();
     const store = new MemoryVehicleMasterStore();
+    await store.putSourceDocument(cleanSource());
     for (const node of n.list) await store.putNode(node);
     await store.putCompatibilityRule(cleanRule(n.trim, n.base));
     await store.putPriceRevision(cleanPrice(n.trim));
@@ -817,5 +837,314 @@ describe('vehicle master graph audit', () => {
     ]));
   });
 
+
+
+  it('detects current/source digest tampering and dangling evidence', () => {
+    const n = cleanNodes();
+    const source = cleanSource();
+
+    const tamperedOption = {
+      ...n.option,
+      canonicalName: '변조된 옵션명',
+    };
+    const tamperedSource = {
+      ...source,
+      sourceName: '변조된 source',
+    };
+    const missingEvidenceBase = sealVehicleMasterNode({
+      id: 'base_audit_missing_evidence',
+      nodeType: 'BASE_ITEM',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '증거 누락 기본품목',
+      parentId: n.modelYear.id,
+      refs: {
+        makeId: n.make.id,
+        modelId: n.model.id,
+        generationId: n.generation.id,
+        phaseId: n.phase.id,
+        modelYearId: n.modelYear.id,
+      },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: ['missing-source'],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+
+    const report = auditVehicleMasterGraph({
+      nodes: [
+        ...n.list.filter((node) => node.id !== n.option.id),
+        tamperedOption,
+        missingEvidenceBase,
+      ],
+      rules: [cleanRule(n.trim, n.base)],
+      prices: [cleanPrice(n.trim)],
+      sources: [tamperedSource],
+    });
+
+    expect(report.status).toBe('FAIL');
+    expect(report.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'CONTENT_HASH_MISMATCH',
+        entityKind: 'NODE',
+        entityId: n.option.id,
+      }),
+      expect.objectContaining({
+        code: 'CONTENT_HASH_MISMATCH',
+        entityKind: 'SOURCE',
+        entityId: source.sourceDocumentId,
+      }),
+      expect.objectContaining({
+        code: 'SOURCE_EVIDENCE_MISSING',
+        entityKind: 'NODE',
+        entityId: missingEvidenceBase.id,
+        relatedId: 'missing-source',
+      }),
+    ]));
+  });
+
+  it('detects revision gaps, latest mismatch, orphan revisions, and revision hash tampering', () => {
+    const n = cleanNodes();
+    const currentOption = sealVehicleMasterNode({
+      id: n.option.id,
+      nodeType: n.option.nodeType,
+      status: n.option.status,
+      revision: 2,
+      canonicalName: '드라이브 와이즈 2',
+      parentId: n.option.parentId ?? null,
+      refs: n.option.refs,
+      aliases: n.option.aliases,
+      attributes: n.option.attributes,
+      sourceEvidenceIds: n.option.sourceEvidenceIds,
+      effectiveFrom: n.option.effectiveFrom ?? null,
+      effectiveTo: n.option.effectiveTo ?? null,
+      createdAt: n.option.createdAt,
+      updatedAt: '2026-09-26T13:00:00.000Z',
+    });
+    const currentNodes = n.list.map((node) =>
+      node.id === n.option.id ? currentOption : node
+    );
+
+    const orphanRevision = sealVehicleMasterNode({
+      id: 'opt_orphan_revision',
+      nodeType: 'OPTION',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: 'orphan',
+      parentId: n.modelYear.id,
+      refs: n.option.refs,
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: ['official'],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+    const tamperedRevision = {
+      ...n.base,
+      canonicalName: '변조 revision',
+    };
+
+    const report = auditVehicleMasterGraph({
+      nodes: currentNodes,
+      rules: [cleanRule(n.trim, n.base)],
+      prices: [cleanPrice(n.trim)],
+      sources: [cleanSource()],
+      nodeRevisions: [
+        ...n.list.filter((node) => node.id !== n.base.id),
+        tamperedRevision,
+        orphanRevision,
+      ],
+    });
+
+    expect(report.status).toBe('FAIL');
+    expect(report.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'REVISION_SEQUENCE_GAP',
+        entityKind: 'NODE',
+        entityId: currentOption.id,
+        detail: '2',
+      }),
+      expect.objectContaining({
+        code: 'REVISION_LATEST_MISMATCH',
+        entityKind: 'NODE',
+        entityId: currentOption.id,
+      }),
+      expect.objectContaining({
+        code: 'REVISION_ORPHAN',
+        entityKind: 'REVISION',
+        relatedId: orphanRevision.id,
+      }),
+      expect.objectContaining({
+        code: 'CONTENT_HASH_MISMATCH',
+        entityKind: 'REVISION',
+        entityId: `NODE:${n.base.id}:r1`,
+      }),
+    ]));
+  });
+
+  it('detects broken persisted promotion evidence chains', () => {
+    const n = cleanNodes();
+    const source = cleanSource();
+
+    const evidence = sealVehicleMasterPipelineRecord({
+      recordId: 'evidence_ok',
+      kind: 'EVIDENCE_SET',
+      entityId: n.option.id,
+      observedAt: at,
+      payload: {
+        evidenceDocumentIds: [source.sourceDocumentId],
+        authorityScore: 100,
+        decisionStatus: 'APPROVED',
+        issues: [],
+      },
+    });
+    const revision = sealVehicleMasterPipelineRecord({
+      recordId: 'revision_ok',
+      kind: 'REVISION_CANDIDATE',
+      entityId: n.option.id,
+      observedAt: at,
+      payload: {
+        revision: 1,
+        proposalHash: n.option.contentHash,
+        evidenceSetId: evidence.recordId,
+        status: 'APPROVED',
+      },
+    });
+    const promotion = sealVehicleMasterPipelineRecord({
+      recordId: 'promotion_missing_change',
+      kind: 'PROMOTION_RESULT',
+      entityId: n.option.id,
+      observedAt: at,
+      payload: {
+        revisionCandidateId: revision.recordId,
+        status: 'PROMOTED',
+        canonicalWrite: 'CREATED',
+        issues: [],
+      },
+    });
+    const brokenPromotion = sealVehicleMasterPipelineRecord({
+      recordId: 'promotion_missing_revision',
+      kind: 'PROMOTION_RESULT',
+      entityId: n.base.id,
+      observedAt: at,
+      payload: {
+        revisionCandidateId: 'revision_missing',
+        status: 'HOLD',
+        canonicalWrite: null,
+        issues: [],
+      },
+    });
+    const orphanEvidence = sealVehicleMasterPipelineRecord({
+      recordId: 'evidence_orphan',
+      kind: 'EVIDENCE_SET',
+      entityId: n.base.id,
+      observedAt: at,
+      payload: {
+        evidenceDocumentIds: ['missing-source'],
+        authorityScore: 0,
+        decisionStatus: 'HOLD',
+        issues: [],
+      },
+    });
+    const candidate = sealVehicleMasterPipelineRecord({
+      recordId: 'candidate_tampered',
+      kind: 'CANDIDATE_FACT',
+      entityId: n.option.id,
+      observedAt: at,
+      payload: {
+        proposalHash: n.option.contentHash,
+        observations: [],
+      },
+    });
+    const tamperedCandidate = {
+      ...candidate,
+      payload: {
+        ...candidate.payload,
+        proposalHash: 'tampered',
+      },
+    };
+
+    const report = auditVehicleMasterGraph({
+      nodes: n.list,
+      rules: [cleanRule(n.trim, n.base)],
+      prices: [cleanPrice(n.trim)],
+      sources: [source],
+      pipelineRecords: [
+        evidence,
+        revision,
+        promotion,
+        brokenPromotion,
+        orphanEvidence,
+        tamperedCandidate,
+      ],
+    });
+
+    expect(report.status).toBe('FAIL');
+    expect(report.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'PIPELINE_CHANGE_EVENT_MISSING',
+        entityId: `PROMOTION_RESULT:${promotion.recordId}`,
+      }),
+      expect.objectContaining({
+        code: 'PIPELINE_REVISION_CANDIDATE_MISSING',
+        entityId: `PROMOTION_RESULT:${brokenPromotion.recordId}`,
+        relatedId: 'revision_missing',
+      }),
+      expect.objectContaining({
+        code: 'PIPELINE_EVIDENCE_SOURCE_MISSING',
+        entityId: `EVIDENCE_SET:${orphanEvidence.recordId}`,
+        relatedId: 'missing-source',
+      }),
+      expect.objectContaining({
+        code: 'PIPELINE_EVIDENCE_SET_ORPHAN',
+        entityId: `EVIDENCE_SET:${orphanEvidence.recordId}`,
+      }),
+      expect.objectContaining({
+        code: 'CONTENT_HASH_MISMATCH',
+        entityKind: 'PIPELINE',
+        entityId: `CANDIDATE_FACT:${candidate.recordId}`,
+      }),
+    ]));
+  });
+
+  it('keeps a complete in-memory revision chain audit-clean', async () => {
+    const n = cleanNodes();
+    const store = new MemoryVehicleMasterStore();
+    await store.putSourceDocument(cleanSource());
+    for (const node of n.list) await store.putNode(node);
+    await store.putCompatibilityRule(cleanRule(n.trim, n.base));
+    await store.putPriceRevision(cleanPrice(n.trim));
+
+    const updatedOption = sealVehicleMasterNode({
+      id: n.option.id,
+      nodeType: n.option.nodeType,
+      status: n.option.status,
+      revision: 2,
+      canonicalName: '드라이브 와이즈 플러스',
+      parentId: n.option.parentId ?? null,
+      refs: n.option.refs,
+      aliases: n.option.aliases,
+      attributes: n.option.attributes,
+      sourceEvidenceIds: n.option.sourceEvidenceIds,
+      effectiveFrom: n.option.effectiveFrom ?? null,
+      effectiveTo: n.option.effectiveTo ?? null,
+      createdAt: n.option.createdAt,
+      updatedAt: '2026-09-26T13:10:00.000Z',
+    });
+    await store.putNode(updatedOption);
+
+    const report = await auditVehicleMasterStore(store);
+
+    expect(report.status).toBe('PASS');
+    expect(report.issues).toEqual([]);
+    expect((await store.listNodeRevisions())
+      .filter((node) => node.id === n.option.id)
+      .map((node) => node.revision)).toEqual([1, 2]);
+  });
 
 });
