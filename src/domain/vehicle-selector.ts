@@ -563,15 +563,25 @@ function facetMatchesSelection(
   axis: VehicleSelectorAxis
 ) {
   const selected = selectionForAxis(selection, axis);
-  if ('id' in selected && hasText(selected.id) && option.id !== selected.id) {
+  const selectedId =
+    'id' in selected && hasText(selected.id)
+      ? selected.id
+      : null;
+
+  if (selectedId && option.id !== selectedId) {
     return false;
   }
   if (
+    !selectedId &&
     'label' in selected &&
-    hasText(selected.label) &&
-    !structuredLabelMatches(axis, compact(option.label), compact(selected.label))
+    hasText(selected.label)
   ) {
-    return false;
+    const actual = compact(option.label);
+    const expected = compact(selected.label);
+    const labelMatches = EXACT_STRUCTURED_LABEL_AXES.has(axis)
+      ? actual === expected
+      : actual.includes(expected);
+    if (!labelMatches) return false;
   }
   if (
     'value' in selected &&
@@ -600,18 +610,29 @@ function matchesAxis(
   const textValue = textAxis(record, axis);
   const numberValue = numberAxis(record, axis);
 
-  if ('id' in selected && hasText(selected.id)) {
+  const selectedId =
+    'id' in selected && hasText(selected.id)
+      ? selected.id
+      : null;
+
+  if (selectedId) {
     const actualId = textValue?.id ?? numberValue?.id ?? null;
     if (!actualId) return { matched: false, unresolved: true, rejected: false };
-    if (actualId !== selected.id) return { matched: false, unresolved: false, rejected: true };
+    if (actualId !== selectedId) return { matched: false, unresolved: false, rejected: true };
   }
 
-  if ('label' in selected && hasText(selected.label)) {
+  if (
+    !selectedId &&
+    'label' in selected &&
+    hasText(selected.label)
+  ) {
     const actual = compact(textValue?.label);
     const expected = compact(selected.label);
     if (!actual) return { matched: false, unresolved: true, rejected: false };
 
-    const labelMatches = structuredLabelMatches(axis, actual, expected);
+    const labelMatches = EXACT_STRUCTURED_LABEL_AXES.has(axis)
+      ? actual === expected
+      : actual.includes(expected);
 
     if (!labelMatches) {
       return { matched: false, unresolved: false, rejected: true };
@@ -632,17 +653,6 @@ const EXACT_STRUCTURED_LABEL_AXES = new Set<VehicleSelectorAxis>([
   'fuelType',
   'drivetrain',
 ]);
-
-// Both callers pass compact labels; discovery and reconciliation share one policy.
-function structuredLabelMatches(
-  axis: VehicleSelectorAxis,
-  actual: string,
-  expected: string
-) {
-  return EXACT_STRUCTURED_LABEL_AXES.has(axis)
-    ? actual === expected
-    : actual.includes(expected);
-}
 
 type SearchTokenIntent = {
   token: string;
