@@ -79,6 +79,34 @@ export async function createConsumerHealthReadOnlyDataAccessRuntime(input: {
   };
 }
 
+export async function createConsumerReadinessReadOnlyDataAccessRuntime(input: {
+  accessToken: string;
+  evidenceBucket: string;
+}) {
+  const logs = createFirestoreDataAccessLogStore();
+  const access = readOnlyAccess(input);
+  const store = await createFirestoreDataStore();
+
+  return {
+    readiness: (policy: ConsumerHealthPolicy) => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-consumer-readiness-audit', kind: 'SERVICE' },
+        clientId: 'job:check-consumer-readiness',
+        purpose: 'derive consumer readiness without Firestore audit writes'
+      },
+      operation: 'READ_CONSUMER_READINESS',
+      resource: {
+        kind: 'HEALTH',
+        name: 'consumer-readiness'
+      },
+      summarize: (value) => ({
+        count: value.consumers.length,
+        digest: stableDigest(value)
+      })
+    }, () => readConsumerReadiness(logs, store, policy))
+  };
+}
+
 export async function createConsumerReadinessDataAccessRuntime() {
   const logs = createFirestoreDataAccessLogStore();
   const access = new DataAccessGateway(logs);

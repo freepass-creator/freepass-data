@@ -138,6 +138,88 @@ jobs:
               echo "Reason: $(jq -r '.reason' consumer-health-summary.json)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Check consumer readiness
+        shell: bash
+        env:
+          FIREBASE_PROJECT_ID: freepasserp5
+          NODE_ENV: production
+          FREEPASS_ERP5_READ_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          CONSUMER_READINESS_MAX_AGE_MINUTES: ${{ vars.SHEET_EVIDENCE_MAX_AGE_MINUTES }}
+          CONSUMER_READINESS_MAX_FUTURE_SKEW_SECONDS: ${{ vars.SHEET_EVIDENCE_MAX_FUTURE_SKEW_SECONDS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CONSUMER_READINESS_MAX_AGE_MINUTES:-}" ]; then
+            jq -n '{
+              version: "consumer-readiness-schedule/1",
+              configured: false,
+              status: "BLOCKED",
+              reason: "CONSUMER_READINESS_MAX_AGE_MINUTES_NOT_CONFIGURED"
+            }' > consumer-readiness-summary.json
+          else
+            skew="${CONSUMER_READINESS_MAX_FUTURE_SKEW_SECONDS:-0}"
+            set +e
+            npx tsx src/jobs/check-consumer-readiness.ts \
+              --scheduled-read-only \
+              --max-age-minutes="$CONSUMER_READINESS_MAX_AGE_MINUTES" \
+              --max-future-skew-seconds="$skew" \
+              --event-limit=1000 \
+              > consumer-readiness.json
+            code=$?
+            set -e
+            test "$code" -eq 0 -o "$code" -eq 2
+            jq -e '
+              .contractVersion == "consumer-readiness-v1" and
+              .schemaVersion == "1.0.0" and
+              (.consumers | length == 8) and
+              ((.counts.readyForNextStage + .counts.hold + .counts.final) == 8) and
+              (.readyTransitions | type == "array")
+            ' consumer-readiness.json >/dev/null
+            jq -n \
+              --slurpfile readiness consumer-readiness.json \
+              '{
+                version: "consumer-readiness-schedule/1",
+                configured: true,
+                status: (if $readiness[0].counts.hold > 0 then "BLOCKED"
+                         elif $readiness[0].counts.readyForNextStage > 0 then "DEGRADED"
+                         else "HEALTHY" end),
+                generatedAt: $readiness[0].generatedAt,
+                counts: $readiness[0].counts,
+                readyTransitions: $readiness[0].readyTransitions,
+                consumers: ($readiness[0].consumers | map({
+                  consumerId,
+                  readiness,
+                  currentStage,
+                  nextStage,
+                  healthStatus,
+                  evidenceSource,
+                  evidenceState,
+                  releaseId,
+                  requiredActions,
+                  blockers
+                }))
+              }' > consumer-readiness-summary.json
+          fi
+          jq -e '
+            .version == "consumer-readiness-schedule/1" and
+            (.configured | type == "boolean") and
+            (.status == "HEALTHY" or .status == "DEGRADED" or .status == "BLOCKED")
+          ' consumer-readiness-summary.json >/dev/null
+          {
+            echo '## Consumer readiness — next-stage actions'
+            echo
+            echo "Configured: $(jq -r '.configured' consumer-readiness-summary.json)"
+            echo
+            echo "Status: $(jq -r '.status' consumer-readiness-summary.json)"
+            if [ "$(jq -r '.configured' consumer-readiness-summary.json)" = true ]; then
+              echo
+              echo "READY: $(jq -r '.counts.readyForNextStage' consumer-readiness-summary.json) · HOLD: $(jq -r '.counts.hold' consumer-readiness-summary.json) · FINAL: $(jq -r '.counts.final' consumer-readiness-summary.json)"
+              echo
+              jq -r '.consumers[] | "- \(.consumerId): \(.readiness) / \(.currentStage)→\(.nextStage // "final") / actions=\(.requiredActions | join(", ")) / blockers=\(.blockers | join(", "))"' consumer-readiness-summary.json
+            else
+              echo
+              echo "Reason: $(jq -r '.reason' consumer-readiness-summary.json)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Check F01/F86 consumer health
         shell: bash
         env:
@@ -447,6 +529,8 @@ jobs:
             source-inventory.json
             consumer-health-summary.json
             consumer-health.json
+            consumer-readiness-summary.json
+            consumer-readiness.json
             sheet-consumer-health-summary.json
             sheet-consumer-health.json
           retention-days: 90

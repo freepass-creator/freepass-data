@@ -178,7 +178,7 @@ const auditWorkflow = fs.readFileSync(
   'utf8'
 );
 const consumerHealthStart = auditWorkflow.indexOf('- name: Check all consumer health');
-const consumerHealthEnd = auditWorkflow.indexOf('- name: Check F01/F86 consumer health');
+const consumerHealthEnd = auditWorkflow.indexOf('- name: Check consumer readiness');
 const consumerHealthStep = auditWorkflow.slice(consumerHealthStart, consumerHealthEnd);
 if (
   consumerHealthStart < 0 ||
@@ -202,6 +202,31 @@ if (
   'tsx src/jobs/check-consumer-health.ts'
 ) {
   console.error('Unified consumer health command must remain registered');
+  process.exit(1);
+}
+
+if (
+  packageJson.scripts?.['check:consumer-readiness'] !==
+  'tsx src/jobs/check-consumer-readiness.ts'
+) {
+  console.error('Consumer readiness command must remain registered');
+  process.exit(1);
+}
+
+const readinessStart = auditWorkflow.indexOf('- name: Check consumer readiness');
+const readinessEnd = auditWorkflow.indexOf('- name: Check F01/F86 consumer health');
+const readinessStep = auditWorkflow.slice(readinessStart, readinessEnd);
+if (
+  readinessStart < 0 ||
+  readinessEnd <= readinessStart ||
+  !readinessStep.includes('--scheduled-read-only') ||
+  !readinessStep.includes('CONSUMER_READINESS_MAX_AGE_MINUTES') ||
+  !readinessStep.includes('consumer-readiness-summary.json') ||
+  !readinessStep.includes('consumer-readiness.json') ||
+  readinessStep.includes('--apply') ||
+  readinessStep.includes('FREEPASS_SHEET_EVIDENCE_WRITE_AUTHORIZED')
+) {
+  console.error('Scheduled consumer readiness must remain explicit-policy and read-only');
   process.exit(1);
 }
 

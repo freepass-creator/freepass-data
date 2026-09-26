@@ -342,3 +342,20 @@ npm run check:consumer-readiness -- \
 
 The command is read-only and audited through the Data Access Gateway.
 
+The 2-hour ERP5 continuous audit also runs Consumer Readiness immediately after
+the unified Consumer Health check. Scheduled readiness uses the same explicit
+freshness window and read-only WIF identity, while its own Data Access audit event
+is written to the private GCS evidence bucket.
+
+The scheduled artifacts are:
+
+- `consumer-readiness.json` — full 8-consumer readiness contract.
+- `consumer-readiness-summary.json` — READY/HOLD/FINAL counts, ready
+  transitions, and coded required actions per consumer.
+
+A normal `HOLD` readiness result is operating evidence and does not fail the
+ERP5 source audit. Missing freshness configuration is recorded explicitly as
+`BLOCKED / NOT_CONFIGURED`; authentication, malformed-contract, or runtime
+failures still fail the workflow.
+
+
