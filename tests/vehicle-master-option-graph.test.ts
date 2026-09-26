@@ -24,12 +24,42 @@ const observedAt = '2026-09-25T10:00:00.000Z';
 const sourceIds = ['official', 'secondary'];
 
 async function seed(store: MemoryVehicleMasterStore) {
-  for (const [id, type, name, parentId] of [
-    ['make_kia', 'MAKE', '기아', null],
-    ['model_sorento', 'MODEL', '쏘렌토', 'make_kia'],
-    ['gen_mq4', 'GENERATION', 'MQ4', 'model_sorento'],
-    ['phase_mq4_fl', 'PHASE', '더 뉴 쏘렌토', 'gen_mq4'],
-  ] as const) {
+  const rows = [
+    {
+      id: 'make_kia',
+      type: 'MAKE' as const,
+      name: '기아',
+      parentId: null,
+      refs: {},
+    },
+    {
+      id: 'model_sorento',
+      type: 'MODEL' as const,
+      name: '쏘렌토',
+      parentId: 'make_kia',
+      refs: { makeId: 'make_kia' },
+    },
+    {
+      id: 'gen_mq4',
+      type: 'GENERATION' as const,
+      name: 'MQ4',
+      parentId: 'model_sorento',
+      refs: { makeId: 'make_kia', modelId: 'model_sorento' },
+    },
+    {
+      id: 'phase_mq4_fl',
+      type: 'PHASE' as const,
+      name: '더 뉴 쏘렌토',
+      parentId: 'gen_mq4',
+      refs: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+        generationId: 'gen_mq4',
+      },
+    },
+  ];
+
+  for (const { id, type, name, parentId, refs } of rows) {
     await store.putNode(sealVehicleMasterNode({
       id,
       nodeType: type,
@@ -37,7 +67,7 @@ async function seed(store: MemoryVehicleMasterStore) {
       revision: 1,
       canonicalName: name,
       parentId,
-      refs: {},
+      refs,
       aliases: [],
       attributes: {},
       sourceEvidenceIds: sourceIds,
