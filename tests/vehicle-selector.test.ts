@@ -168,6 +168,25 @@ describe('common vehicle selector', () => {
     expect(result.guidance.suggestedNextAxis).toBe('modelYear');
   });
 
+  it('does not let plug-in hybrid satisfy structured HYBRID fuel selection', () => {
+    const rows = [
+      record('hev', {
+        fuelType: { id: null, label: 'HYBRID' },
+      }),
+      record('phev', {
+        fuelType: { id: null, label: 'PLUG-IN HYBRID' },
+        powertrain: { id: 'pt_phev', label: '1.6 터보 플러그인 하이브리드' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      selection: { fuelType: 'HYBRID' },
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual(['hev']);
+  });
+
   it('does not let a more specific trim satisfy a shorter structured trim selection', () => {
     const rows = [
       record('gt', {
