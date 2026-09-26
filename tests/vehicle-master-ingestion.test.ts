@@ -348,6 +348,51 @@ describe('vehicle master evidence-gated ingestion', () => {
     expect(result.canonicalWrite).toBeNull();
   });
 
+  it('keeps a resolved child on HOLD when a canonical ancestor is HOLD', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-hold-parent', 'MANUFACTURER_OFFICIAL', '9');
+    await store.putSourceDocument(official);
+
+    const proposal = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, proposal);
+
+    const parent = await store.getNode(proposal.parentId!);
+    expect(parent).toBeTruthy();
+    await store.putNode(sealVehicleMasterNode({
+      id: parent!.id,
+      nodeType: parent!.nodeType,
+      status: 'HOLD',
+      revision: parent!.revision + 1,
+      canonicalName: parent!.canonicalName,
+      parentId: parent!.parentId,
+      refs: parent!.refs,
+      aliases: parent!.aliases,
+      attributes: parent!.attributes,
+      sourceEvidenceIds: parent!.sourceEvidenceIds,
+      effectiveFrom: parent!.effectiveFrom,
+      effectiveTo: parent!.effectiveTo,
+      createdAt: parent!.createdAt,
+      updatedAt: observedAt,
+    }));
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: observations(proposal, [official.sourceDocumentId]),
+      policy: identityPolicy,
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'PARENT_NODE_HOLD', detail: proposal.parentId }),
+        expect.objectContaining({ code: 'REFERENCE_NODE_HOLD', fieldPath: 'refs.variantId' }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+    expect(await store.getNode(proposal.id)).toBeNull();
+  });
+
   it('promotes base price through the same evidence gate', async () => {
     const store = new MemoryVehicleMasterStore();
     const official = source('kia-price-2027-sorento', 'MANUFACTURER_OFFICIAL', '2');
