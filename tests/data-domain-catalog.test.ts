@@ -23,6 +23,7 @@ describe('data domain catalog', () => {
     expect(products.assets.map((item) => item.assetId)).toContain('erp5-products-source');
     expect(products.domains.map((item) => item.domainId)).toContain('catalog');
     expect(searchDataCatalog('통화').assets.map((item) => item.assetId)).toContain('sales-leads');
+    expect(searchDataCatalog('공급사').assets.map((item) => item.assetId)).toContain('erp5-partner-source');
   });
 
   it('classifies an exact registered observation', () => {
