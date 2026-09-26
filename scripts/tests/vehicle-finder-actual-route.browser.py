@@ -279,6 +279,50 @@ try:
             };
           };
 
+          window.__qaFinalize = async payload => {
+            window.__qaLastFinalize = payload;
+            if (payload.id.endsWith('-1')) {
+              return {
+                review: {
+                  status: 'HOLD',
+                  recordId: null,
+                  canConfirm: false,
+                  reasons: [{
+                    code: 'AMBIGUOUS_CANDIDATES',
+                    title: '확정 가능한 후보가 여러 개 남아 있습니다',
+                    message: 'F가 단일 차량으로 확정할 수 없는 상태로 판정했습니다.',
+                    nextStep: '후보를 하나 직접 선택하거나 조건을 더 좁혀 주세요.',
+                  }],
+                },
+                finalizationContext: { review: 'hold' },
+              };
+            }
+            return {
+              review: {
+                status: 'APPROVED',
+                recordId: payload.id,
+                canConfirm: true,
+                reasons: [],
+              },
+              finalizationContext: {
+                review: 'approved',
+                recordId: payload.id,
+              },
+            };
+          };
+
+          window.__qaSelect = async payload => {
+            window.__qaLastSelect = payload;
+            return {
+              receipt: {
+                receiptId: 'vehicle_selection_browser_qa',
+                issuedAt: '2026-09-26T18:20:00+09:00',
+                snapshotDigest: 'snapshot-digest-browser-qa',
+                receiptDigest: 'receipt-digest-browser-qa',
+              },
+            };
+          };
+
           window.__qaSnapshot = makeSnapshot; 
           window.__qaReadLegacy = window.__qaRead;
 
@@ -287,6 +331,8 @@ try:
             {
               read: window.__qaRead,
               onGroupDrilldown: window.__qaGroupDrilldown,
+              onFinalize: window.__qaFinalize,
+              onSelect: window.__qaSelect,
               initialMode: 'NEW_CAR',
             },
           );
@@ -321,6 +367,26 @@ try:
 
         desktop.locator(".vf-group-member").first.get_by_role("button").click()
         expect(desktop.locator(".vf-detail")).to_be_visible()
+        expect(desktop.get_by_role("button", name="최종 선택 검토")).to_be_visible()
+        desktop.get_by_role("button", name="최종 선택 검토").click()
+        expect(desktop.get_by_text("최종 확정 전 검토")).to_be_visible()
+        expect(desktop.get_by_role("button", name="이 차량으로 확정")).to_be_visible()
+        assert desktop.evaluate("window.__qaLastFinalize.id") == "NEW_CAR-0"
+        desktop.get_by_role("button", name="이 차량으로 확정").click()
+        expect(desktop.get_by_text("선택 확정 완료")).to_be_visible()
+        expect(desktop.get_by_text("vehicle_selection_browser_qa")).to_be_visible()
+        assert desktop.evaluate("window.__qaLastSelect.finalizationContext.review") == "approved"
+        desktop.get_by_role("button", name="상세 닫기").click()
+
+        desktop.locator(".vf-group-member").nth(1).get_by_role("button").click()
+        expect(desktop.get_by_role("button", name="최종 선택 검토")).to_be_visible()
+        desktop.get_by_role("button", name="최종 선택 검토").click()
+        expect(desktop.get_by_text("현재는 최종 확정할 수 없습니다")).to_be_visible()
+        expect(desktop.get_by_text("AMBIGUOUS_CANDIDATES")).to_be_visible()
+        expect(desktop.get_by_role("button", name="확정 보류")).to_be_disabled()
+        desktop.get_by_role("button", name="상세 닫기").click()
+
+        desktop.locator(".vf-group-member").first.get_by_role("button").click()
         assert desktop.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
         desktop.screenshot(path=args.output / "desktop-finder.png", full_page=True)
 
@@ -346,6 +412,7 @@ try:
         expect(mobile.get_by_text("인승", exact=True)).to_be_visible()
         expect(mobile.get_by_role("button", name="목록으로")).to_be_visible()
         expect(mobile.get_by_role("button", name="확인만 가능")).to_be_disabled()
+        expect(mobile.get_by_text("최종 확정 전 검토")).to_have_count(0)
         back_box = mobile.get_by_role("button", name="목록으로").bounding_box()
         primary_box = mobile.get_by_role("button", name="확인만 가능").bounding_box()
         assert back_box and primary_box
