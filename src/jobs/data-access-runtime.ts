@@ -6,10 +6,13 @@ import {
   captureErp5Source,
   compareErp5ProductCaptures,
   erp5ReadTransport,
-  inspectErp5Capture
+  inspectErp5Capture,
+  buildErp5RawSourceIntakeBatches
 } from '../adapters/erp5-source-capture.js';
 import { readLegacyProductSnapshot } from '../adapters/legacy-freepasserp3.js';
 import { ingestLegacyProductSnapshot } from '../application/ingest-legacy-products.js';
+import { ingestRawSourceBatch } from '../application/ingest-raw-source.js';
+import type { SourceIntakeBatch } from '../domain/source-intake.js';
 import { prepareSheetBridgeHandoffs } from '../application/sheet-publication-bridge.js';
 import {
   assessLatestSheetConsumerCutover,
@@ -199,6 +202,7 @@ export function createErp5InspectionDataAccessRuntime(input: {
   const rpc = erp5ReadTransport(input.accessToken);
   return {
     inspectCapture: inspectErp5Capture,
+    buildRawIntakeBatches: buildErp5RawSourceIntakeBatches,
     capture: () => access.read({
       context: {
         actor: { id: 'service:freepass-data-audit', kind: 'SERVICE' },
@@ -208,7 +212,7 @@ export function createErp5InspectionDataAccessRuntime(input: {
       operation: 'READ_ERP5_SOURCE_CAPTURE',
       resource: {
         kind: 'SOURCE',
-        name: 'freepasserp5/(default):products+policy'
+        name: 'freepasserp5/(default):products+policy+partner'
       },
       summarize: (value) => ({
         count: value.collections.products.count,
@@ -416,6 +420,44 @@ export async function createSourceIngestDataAccessRuntime() {
           })
         } : { count: 0 }
       }, () => ingestLegacyProductSnapshot(sourceStore, snapshot))
+,
+
+    ingestRawBatch: (batch: SourceIntakeBatch) =>
+      access.write({
+        context: {
+          actor: { id: 'service:freepass-data-source-intake', kind: 'SERVICE' },
+          clientId: 'job:raw-source-intake',
+          purpose: 'persist raw-first source evidence through FreePass Data',
+          correlationId: batch.source.sourceId
+        },
+        operation: 'WRITE_RAW_SOURCE_INGEST',
+        resource: {
+          kind: 'SOURCE',
+          name: batch.source.sourceId
+        },
+        requestDigest: stableDigest({
+          laneId: batch.laneId,
+          sourceId: batch.source.sourceId,
+          observedAt: batch.observedAt,
+          sourceRevision: batch.sourceRevision ?? null,
+          checksum: batch.checksum ?? null,
+          coverage: batch.coverage,
+          records: batch.records.map((record) => [
+            record.sourceRecordId,
+            record.sourceFingerprint ?? stableDigest(record.payload)
+          ])
+        }),
+        summarize: (value) => ({
+          count: value.rawCount,
+          digest: stableDigest({
+            runId: value.runId,
+            sourceId: value.sourceId,
+            rawCount: value.rawCount,
+            headStatus: value.headStatus,
+            checkpoint: value.checkpoint
+          })
+        })
+      }, () => ingestRawSourceBatch(sourceStore, batch))
   };
 }
 

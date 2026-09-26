@@ -39,7 +39,9 @@
     "check:consumer-readiness": "tsx src/jobs/check-consumer-readiness.ts",
     "build:data-control-tower": "tsx src/jobs/build-data-control-tower.ts",
     "dry-run:estimate-master-canonical": "tsx src/jobs/build-estimate-newcar-master-canonical-dry-run.ts",
-    "check:estimate-master-readiness": "tsx src/jobs/check-estimate-master-readiness.ts --scheduled-read-only"
+    "check:estimate-master-readiness": "tsx src/jobs/check-estimate-master-readiness.ts --scheduled-read-only",
+    "ingest:erp5-source": "tsx src/jobs/ingest-erp5-source.ts",
+    "ingest:settlement-source": "tsx src/jobs/ingest-settlement-source.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",

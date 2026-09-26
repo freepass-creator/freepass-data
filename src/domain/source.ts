@@ -1,5 +1,11 @@
 import type { CatalogCandidate } from './catalog-candidate.js';
 
+export type FreePassSourceLaneId =
+  | 'SUPPLIER'
+  | 'PRODUCT_VEHICLE'
+  | 'VEHICLE_MASTER'
+  | 'SETTLEMENT';
+
 export type SourceCheckpoint = {
   sourceId: string;
   sourceRevision?: string | null;
@@ -101,7 +107,6 @@ export function decideSourceHead(
   };
 }
 
-
 export type RawRecord = {
   rawRecordId: string;
   runId: string;
@@ -109,6 +114,9 @@ export type RawRecord = {
   sourceRecordId: string;
   sourceFingerprint: string;
   observedAt: string;
+  intakeLaneId?: FreePassSourceLaneId;
+  sourceRevision?: string | null;
+  sourceChecksum?: string | null;
   payload: Record<string, unknown>;
 };
 

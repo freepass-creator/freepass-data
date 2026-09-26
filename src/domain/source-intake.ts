@@ -1,8 +1,10 @@
-export type FreePassSourceLaneId =
-  | 'SUPPLIER'
-  | 'PRODUCT_VEHICLE'
-  | 'VEHICLE_MASTER'
-  | 'SETTLEMENT';
+import type {
+  FreePassSourceLaneId,
+  SourceCoverage,
+  SourceKind,
+} from './source.js';
+
+export type { FreePassSourceLaneId } from './source.js';
 
 export type FreePassSourceLane = {
   laneId: FreePassSourceLaneId;
@@ -58,8 +60,37 @@ export type SourceIntakeEnvelope = {
   payload: Record<string, unknown>;
 };
 
+export type SourceIntakeBatch = {
+  laneId: FreePassSourceLaneId;
+  source: {
+    sourceId: string;
+    kind: SourceKind;
+    displayName: string;
+    authorityScope?: string[];
+    expectedFreshnessSeconds?: number | null;
+  };
+  observedAt: string;
+  sourceRevision?: string | null;
+  checksum?: string | null;
+  coverage: SourceCoverage;
+  records: Array<{
+    sourceRecordId: string;
+    sourceFingerprint?: string | null;
+    payload: Record<string, unknown>;
+  }>;
+};
+
 const nonBlank = (value: string) => Boolean(value.trim());
 const sha256 = (value: string) => /^[a-f0-9]{64}$/i.test(value);
+const sourceKinds = new Set<SourceKind>([
+  'FIRESTORE',
+  'GOOGLE_SHEET',
+  'API',
+  'FILE',
+  'MANUAL',
+]);
+const coverageModes = new Set(['FULL', 'DELTA', 'PARTIAL', 'UNKNOWN']);
+const completeness = new Set(['COMPLETE', 'INCOMPLETE', 'UNKNOWN']);
 
 export function sourceLane(laneId: FreePassSourceLaneId) {
   const lane = FREEPASS_SOURCE_LANES.find((item) => item.laneId === laneId);
@@ -86,6 +117,63 @@ export function validateSourceIntakeEnvelope(input: SourceIntakeEnvelope) {
   }
   if (input.checksum != null && !sha256(input.checksum)) {
     throw new Error('INVALID_SOURCE_INTAKE_CHECKSUM');
+  }
+
+  return true;
+}
+
+export function validateSourceIntakeBatch(input: SourceIntakeBatch) {
+  sourceLane(input.laneId);
+  if (
+    !nonBlank(input.source.sourceId) ||
+    !nonBlank(input.source.displayName) ||
+    !sourceKinds.has(input.source.kind) ||
+    !Number.isFinite(Date.parse(input.observedAt)) ||
+    !coverageModes.has(input.coverage.mode) ||
+    !completeness.has(input.coverage.completeness) ||
+    !Array.isArray(input.records)
+  ) {
+    throw new Error('INVALID_SOURCE_INTAKE_BATCH');
+  }
+  if (
+    input.source.expectedFreshnessSeconds != null &&
+    (!Number.isSafeInteger(input.source.expectedFreshnessSeconds) ||
+      input.source.expectedFreshnessSeconds < 0)
+  ) {
+    throw new Error('INVALID_SOURCE_INTAKE_FRESHNESS');
+  }
+  if (
+    input.source.authorityScope?.some(
+      (value) => typeof value !== 'string' || !nonBlank(value)
+    )
+  ) {
+    throw new Error('INVALID_SOURCE_INTAKE_AUTHORITY_SCOPE');
+  }
+  if (input.sourceRevision != null && !nonBlank(input.sourceRevision)) {
+    throw new Error('INVALID_SOURCE_INTAKE_REVISION');
+  }
+  if (input.checksum != null && !sha256(input.checksum)) {
+    throw new Error('INVALID_SOURCE_INTAKE_CHECKSUM');
+  }
+
+  const ids = new Set<string>();
+  for (const record of input.records) {
+    if (
+      !nonBlank(record.sourceRecordId) ||
+      ids.has(record.sourceRecordId) ||
+      !record.payload ||
+      typeof record.payload !== 'object' ||
+      Array.isArray(record.payload)
+    ) {
+      throw new Error('INVALID_SOURCE_INTAKE_RECORD');
+    }
+    if (
+      record.sourceFingerprint != null &&
+      !sha256(record.sourceFingerprint)
+    ) {
+      throw new Error('INVALID_SOURCE_INTAKE_FINGERPRINT');
+    }
+    ids.add(record.sourceRecordId);
   }
 
   return true;
