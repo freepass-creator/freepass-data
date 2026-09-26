@@ -1042,6 +1042,152 @@ describe('common vehicle selector', () => {
     expect(second.candidates.map((x) => x.record.recordId)).toEqual(['a', 'b']);
   });
 
+  it('groups broad manufacturer results by model and generation without dropping candidates', () => {
+    const rows = [
+      record('sorento-noblesse', {
+        trim: { id: 'trim_noblesse', label: '노블레스' },
+      }),
+      record('sorento-signature', {
+        trim: { id: 'trim_signature', label: '시그니처' },
+      }),
+      record('carnival-prestige', {
+        model: { id: 'model_carnival', label: '카니발' },
+        generation: { id: 'gen_ka4', label: '4세대 KA4' },
+        trim: { id: 'trim_prestige', label: '프레스티지' },
+        aliases: ['KA4'],
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '기아',
+    });
+
+    expect(result.candidates).toHaveLength(3);
+    expect(result.groups).toHaveLength(2);
+    expect(result.groups.map((group) => group.model.label)).toEqual([
+      '카니발',
+      '쏘렌토',
+    ]);
+
+    const sorento = result.groups.find((group) => group.model.label === '쏘렌토');
+    expect(sorento).toMatchObject({
+      scope: 'MODEL_GENERATION',
+      candidateCount: 2,
+      selectableCount: 2,
+      expandable: true,
+    });
+    expect(sorento?.memberRecordIds).toEqual([
+      'sorento-noblesse',
+      'sorento-signature',
+    ]);
+  });
+
+  it('keeps different generations of the same model in separate groups', () => {
+    const rows = [
+      record('mq4', {
+        generation: { id: 'gen_mq4', label: '4세대 MQ4' },
+      }),
+      record('um', {
+        generation: { id: 'gen_um', label: '3세대 UM' },
+        lifecycle: 'HISTORICAL',
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+    });
+
+    expect(result.groups).toHaveLength(2);
+    expect(result.groups.map((group) => group.generation.id)).toEqual([
+      'gen_mq4',
+      'gen_um',
+    ]);
+  });
+
+  it('never merges unresolved generation identity into a fabricated group', () => {
+    const rows = [
+      record('unknown-generation-a', {
+        lifecycle: 'HISTORICAL',
+        identityStatus: 'PARTIAL',
+        generation: { id: null, label: null },
+      }),
+      record('unknown-generation-b', {
+        lifecycle: 'HISTORICAL',
+        identityStatus: 'PARTIAL',
+        generation: { id: null, label: null },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+    });
+
+    expect(result.groups).toHaveLength(2);
+    expect(result.groups.every((group) => group.scope === 'UNRESOLVED_IDENTITY'))
+      .toBe(true);
+    expect(result.groups.every((group) => group.candidateCount === 1)).toBe(true);
+    expect(result.groups.map((group) => group.representativeRecordId)).toEqual([
+      'unknown-generation-a',
+      'unknown-generation-b',
+    ]);
+  });
+
+  it('uses the highest-ranked member as the group representative', () => {
+    const rows = [
+      record('hold-first-input', {
+        lifecycle: 'HOLD',
+        identityStatus: 'HOLD',
+      }),
+      record('active-second-input'),
+      record('partial-third-input', {
+        lifecycle: 'HISTORICAL',
+        identityStatus: 'PARTIAL',
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+      includeHold: true,
+    });
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]).toMatchObject({
+      representativeRecordId: 'active-second-input',
+      candidateCount: 3,
+      selectableCount: 1,
+      inspectOnlyCount: 1,
+      blockedCount: 1,
+      expandable: true,
+    });
+    expect(result.groups[0]?.memberRecordIds).toEqual([
+      'active-second-input',
+      'partial-third-input',
+      'hold-first-input',
+    ]);
+  });
+
+  it('returns a non-expandable group for a single concrete candidate', () => {
+    const result = selectVehicles([
+      record('only'),
+    ], {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토',
+    });
+
+    expect(result.groups).toEqual([
+      expect.objectContaining({
+        representativeRecordId: 'only',
+        memberRecordIds: ['only'],
+        candidateCount: 1,
+        expandable: false,
+      }),
+    ]);
+  });
+
   it('reports OPEN before the user supplies any search criteria', () => {
     const result = selectVehicles([
       record('one'),
