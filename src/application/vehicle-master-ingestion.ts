@@ -219,6 +219,12 @@ function expectedParentRef(proposal: VehicleMasterNode): string | null {
     case 'POWERTRAIN': return proposal.refs.modelYearId ?? null;
     case 'VARIANT': return proposal.refs.powertrainId ?? null;
     case 'TRIM': return proposal.refs.variantId ?? null;
+    case 'BASE_ITEM':
+    case 'OPTION':
+    case 'PACKAGE':
+    case 'OPTION_GROUP':
+    case 'COLOR':
+      return proposal.refs.modelYearId ?? null;
     default: return null;
   }
 }
