@@ -1561,24 +1561,30 @@ export async function promoteVehicleMasterCompatibilityRule(
       );
 
     for (const existing of existingDependencyRules) {
-      const sameDirection =
-        existing.subjectId === input.proposal.subjectId &&
-        sameTargetSet(existing, input.proposal);
+      const sameSubject = existing.subjectId === input.proposal.subjectId;
+      const sharedTargetIds = input.proposal.targetIds
+        .filter((targetId) => existing.targetIds.includes(targetId));
 
-      if (sameDirection) {
-        if (existing.ruleType === input.proposal.ruleType) {
-          issues.push({
-            code: 'RULE_DEPENDENCY_DUPLICATE',
-            fieldPath: 'ruleType',
-            detail: existing.id,
-          });
-        } else if (oppositeDependencyRuleType(existing.ruleType, input.proposal.ruleType)) {
-          issues.push({
-            code: 'RULE_DEPENDENCY_CONFLICT',
-            fieldPath: 'ruleType',
-            detail: existing.id,
-          });
-        }
+      if (
+        sameSubject &&
+        existing.ruleType === input.proposal.ruleType &&
+        sameTargetSet(existing, input.proposal)
+      ) {
+        issues.push({
+          code: 'RULE_DEPENDENCY_DUPLICATE',
+          fieldPath: 'ruleType',
+          detail: existing.id,
+        });
+      } else if (
+        sameSubject &&
+        sharedTargetIds.length &&
+        oppositeDependencyRuleType(existing.ruleType, input.proposal.ruleType)
+      ) {
+        issues.push({
+          code: 'RULE_DEPENDENCY_CONFLICT',
+          fieldPath: `targetIds.${sharedTargetIds.sort()[0]}`,
+          detail: existing.id,
+        });
       }
 
       for (const proposalTargetId of input.proposal.targetIds) {
