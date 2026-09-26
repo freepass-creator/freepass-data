@@ -28,7 +28,7 @@ function fake(options: { products?: Record<string, unknown>[]; drift?: boolean; 
     if (collection === 'policy' && options.failPolicy) throw new Error('synthetic failure');
     if (method === 'runAggregationQuery') return [{ readTime: options.drift && collection === 'policy' ? '2026-09-21T10:01:00Z' : readTime,
       result: { aggregateFields: { total: { integerValue: options.count ?? String(collection === 'products' ? products.length : 1) } } } }];
-    const rows: unknown[] = (collection === 'products' ? products : [doc('policy')]).map(document => ({ readTime, document }));
+    const rows: unknown[] = (collection === 'products' ? products : [doc(collection)]).map(document => ({ readTime, document }));
     if (!rows.length) rows.push({ readTime });
     if (options.extraRow) rows.push(options.extraRow);
     return rows;
@@ -41,12 +41,13 @@ describe('ERP5 same-transaction raw capture', () => {
     const { rpc, calls } = fake();
     const capture = await captureErp5Source(rpc);
     expect(calls[0]).toEqual({ method: 'beginTransaction', body: { options: { readOnly: {} } } });
-    expect(calls.map(c => c.method)).toEqual(['beginTransaction', 'runAggregationQuery', 'runQuery', 'runAggregationQuery', 'runQuery', 'rollback']);
+    expect(calls.map(c => c.method)).toEqual(['beginTransaction', 'runAggregationQuery', 'runQuery', 'runAggregationQuery', 'runQuery', 'runAggregationQuery', 'runQuery', 'rollback']);
     expect(capture.readTime).toBe(readTime);
     expect(capture.collections.products.documents[0]).toEqual(doc());
     expect(JSON.stringify(capture)).not.toContain('synthetic-private-transaction');
     const report = inspectErp5Capture(capture);
     expect(report.mappedForReview).toBe(1);
+    expect(report.partners).toBe(1);
     expect(report.status).toBe('HOLD');
     expect(report.cutoverAuthorized).toBe(false);
     expect(report.canonicalWriteAuthorized).toBe(false);
