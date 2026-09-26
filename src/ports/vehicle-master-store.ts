@@ -4,6 +4,7 @@ import type {
   VehicleMasterNode,
   VehicleMasterPipelineRecord,
   VehicleMasterPriceRevision,
+  VehicleMasterRepairApproval,
   VehicleMasterRepairReceipt,
   VehicleMasterResolverFeedback,
   VehicleMasterSourceDocument,
@@ -16,6 +17,7 @@ export type VehicleMasterRepairCommitInput =
       expectedRevision: number;
       expectedContentHash: string;
       record: VehicleMasterNode;
+      approval: VehicleMasterRepairApproval;
       receipt: VehicleMasterRepairReceipt;
     }
   | {
@@ -23,6 +25,7 @@ export type VehicleMasterRepairCommitInput =
       expectedRevision: number;
       expectedContentHash: string;
       record: VehicleMasterCompatibilityRule;
+      approval: VehicleMasterRepairApproval;
       receipt: VehicleMasterRepairReceipt;
     };
 
@@ -69,6 +72,8 @@ export interface VehicleMasterStore {
   getResolverFeedback(feedbackId: string): Promise<VehicleMasterResolverFeedback | null>;
   putResolverFeedback(record: VehicleMasterResolverFeedback): Promise<VehicleMasterWriteResult>;
 
+  getRepairApproval(approvalId: string): Promise<VehicleMasterRepairApproval | null>;
+  putRepairApproval(record: VehicleMasterRepairApproval): Promise<VehicleMasterWriteResult>;
   getRepairReceipt(receiptId: string): Promise<VehicleMasterRepairReceipt | null>;
   commitRepair(input: VehicleMasterRepairCommitInput): Promise<VehicleMasterRepairCommitResult>;
 }
