@@ -119,6 +119,12 @@ export type VehicleSelectorResult = {
   guidance: VehicleSelectorGuidance;
 };
 
+export type VehicleSelectorSelectionReconciliation = {
+  selection: VehicleSelectorSelection;
+  clearedAxes: VehicleSelectorAxis[];
+  result: VehicleSelectorResult;
+};
+
 export type VehicleSelectorUxPreset = {
   mode: VehicleSelectorMode;
   presentation: 'GUIDED' | 'SEARCH_FILTER';
@@ -267,6 +273,137 @@ function axisSelected(selection: VehicleSelectorSelection, axis: VehicleSelector
     ('label' in selected && hasText(selected.label)) ||
     ('value' in selected && selected.value != null)
   );
+}
+
+function clearSelectionAxis(
+  selection: VehicleSelectorSelection,
+  axis: VehicleSelectorAxis
+) {
+  switch (axis) {
+    case 'maker':
+      delete selection.makerId;
+      delete selection.maker;
+      break;
+    case 'model':
+      delete selection.modelId;
+      delete selection.model;
+      break;
+    case 'generation':
+      delete selection.generationId;
+      delete selection.generation;
+      break;
+    case 'phase':
+      delete selection.phaseId;
+      delete selection.phase;
+      break;
+    case 'modelYear':
+      delete selection.modelYearId;
+      delete selection.modelYear;
+      break;
+    case 'powertrain':
+      delete selection.powertrainId;
+      delete selection.powertrain;
+      break;
+    case 'fuelType':
+      delete selection.fuelType;
+      break;
+    case 'drivetrain':
+      delete selection.drivetrain;
+      break;
+    case 'seats':
+      delete selection.seats;
+      break;
+    case 'trim':
+      delete selection.trimId;
+      delete selection.trim;
+      break;
+  }
+}
+
+function selectionSubset(
+  selection: VehicleSelectorSelection,
+  axes: ReadonlySet<VehicleSelectorAxis>
+) {
+  const subset: VehicleSelectorSelection = {};
+  for (const axis of AXES) {
+    if (!axes.has(axis) || !axisSelected(selection, axis)) continue;
+    const selected = selectionForAxis(selection, axis);
+    switch (axis) {
+      case 'maker':
+        subset.makerId = 'id' in selected ? selected.id : undefined;
+        subset.maker = 'label' in selected ? selected.label : undefined;
+        break;
+      case 'model':
+        subset.modelId = 'id' in selected ? selected.id : undefined;
+        subset.model = 'label' in selected ? selected.label : undefined;
+        break;
+      case 'generation':
+        subset.generationId = 'id' in selected ? selected.id : undefined;
+        subset.generation = 'label' in selected ? selected.label : undefined;
+        break;
+      case 'phase':
+        subset.phaseId = 'id' in selected ? selected.id : undefined;
+        subset.phase = 'label' in selected ? selected.label : undefined;
+        break;
+      case 'modelYear':
+        subset.modelYearId = 'id' in selected ? selected.id : undefined;
+        subset.modelYear = 'value' in selected ? selected.value : undefined;
+        break;
+      case 'powertrain':
+        subset.powertrainId = 'id' in selected ? selected.id : undefined;
+        subset.powertrain = 'label' in selected ? selected.label : undefined;
+        break;
+      case 'fuelType':
+        subset.fuelType = 'label' in selected ? selected.label : undefined;
+        break;
+      case 'drivetrain':
+        subset.drivetrain = 'label' in selected ? selected.label : undefined;
+        break;
+      case 'seats':
+        subset.seats = 'value' in selected ? selected.value : undefined;
+        break;
+      case 'trim':
+        subset.trimId = 'id' in selected ? selected.id : undefined;
+        subset.trim = 'label' in selected ? selected.label : undefined;
+        break;
+    }
+  }
+  return subset;
+}
+
+function facetMatchesSelection(
+  option: VehicleSelectorFacetOption,
+  selection: VehicleSelectorSelection,
+  axis: VehicleSelectorAxis
+) {
+  const selected = selectionForAxis(selection, axis);
+  if ('id' in selected && hasText(selected.id) && option.id !== selected.id) {
+    return false;
+  }
+  if (
+    'label' in selected &&
+    hasText(selected.label) &&
+    !compact(option.label).includes(compact(selected.label))
+  ) {
+    return false;
+  }
+  if (
+    'value' in selected &&
+    selected.value != null &&
+    option.value !== selected.value
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function reconciliationOrder(mode: VehicleSelectorMode) {
+  const preferred = VEHICLE_SELECTOR_UX_PRESETS[mode].preferredAxisOrder;
+  const ordered = [
+    ...preferred,
+    ...AXES.filter((axis) => !preferred.includes(axis)),
+  ];
+  return [...ordered].reverse();
 }
 
 function matchesAxis(
@@ -644,4 +781,60 @@ export function selectVehicles(
     facets,
     guidance: buildGuidance(candidates, facets, request),
   };
+}
+
+
+export function reconcileVehicleSelection(
+  records: readonly VehicleSelectorRecord[],
+  request: Omit<VehicleSelectorRequest, 'selection'>,
+  nextSelection: VehicleSelectorSelection,
+  changedAxes: readonly VehicleSelectorAxis[]
+): VehicleSelectorSelectionReconciliation {
+  const selection: VehicleSelectorSelection = { ...nextSelection };
+  const protectedAxes = new Set(changedAxes);
+
+  const protectedSelection = selectionSubset(selection, protectedAxes);
+  const protectedResult = selectVehicles(records, {
+    ...request,
+    selection: protectedSelection,
+  });
+
+  if (
+    protectedAxes.size > 0 &&
+    protectedResult.guidance.resolutionStatus === 'IMPOSSIBLE'
+  ) {
+    return {
+      selection,
+      clearedAxes: [],
+      result: selectVehicles(records, { ...request, selection }),
+    };
+  }
+
+  const clearedAxes: VehicleSelectorAxis[] = [];
+
+  while (true) {
+    const current = selectVehicles(records, { ...request, selection });
+    let cleared = false;
+
+    for (const axis of reconciliationOrder(request.mode)) {
+      if (protectedAxes.has(axis) || !axisSelected(selection, axis)) continue;
+      const stillValid = current.facets[axis].some((option) =>
+        facetMatchesSelection(option, selection, axis)
+      );
+      if (stillValid) continue;
+
+      clearSelectionAxis(selection, axis);
+      clearedAxes.push(axis);
+      cleared = true;
+      break;
+    }
+
+    if (!cleared) {
+      return {
+        selection,
+        clearedAxes,
+        result: current,
+      };
+    }
+  }
 }
