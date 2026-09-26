@@ -397,13 +397,8 @@ function facetMatchesSelection(
   return true;
 }
 
-function reconciliationOrder(mode: VehicleSelectorMode) {
-  const preferred = VEHICLE_SELECTOR_UX_PRESETS[mode].preferredAxisOrder;
-  const ordered = [
-    ...preferred,
-    ...AXES.filter((axis) => !preferred.includes(axis)),
-  ];
-  return [...ordered].reverse();
+function reconciliationOrder() {
+  return [...AXES].reverse();
 }
 
 function matchesAxis(
@@ -816,7 +811,7 @@ export function reconcileVehicleSelection(
     const current = selectVehicles(records, { ...request, selection });
     let cleared = false;
 
-    for (const axis of reconciliationOrder(request.mode)) {
+    for (const axis of reconciliationOrder()) {
       if (protectedAxes.has(axis) || !axisSelected(selection, axis)) continue;
       const stillValid = current.facets[axis].some((option) =>
         facetMatchesSelection(option, selection, axis)
