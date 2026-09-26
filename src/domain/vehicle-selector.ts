@@ -148,6 +148,7 @@ export type VehicleSelectorGuidance = {
 };
 
 export type VehicleSelectorCandidateGroupScope =
+  | 'MODEL'
   | 'MODEL_GENERATION'
   | 'UNRESOLVED_IDENTITY';
 
@@ -1113,12 +1114,28 @@ function groupDrilldownAxes(
   });
 }
 
-function groupIdentityKey(record: VehicleSelectorRecord) {
-  const makerId = record.maker.id;
+function groupIdentityKey(
+  record: VehicleSelectorRecord,
+  mode: VehicleSelectorMode
+) {
   const modelId = record.model.id;
-  const generationId = record.generation.id;
 
-  if (!makerId || !modelId || !generationId) {
+  if (!modelId) {
+    return {
+      key: `unresolved:${record.recordId}`,
+      scope: 'UNRESOLVED_IDENTITY' as const,
+    };
+  }
+
+  if (mode === 'NEW_CAR') {
+    return {
+      key: `model:${encodeURIComponent(modelId)}`,
+      scope: 'MODEL' as const,
+    };
+  }
+
+  const generationId = record.generation.id;
+  if (!generationId) {
     return {
       key: `unresolved:${record.recordId}`,
       scope: 'UNRESOLVED_IDENTITY' as const,
@@ -1126,7 +1143,7 @@ function groupIdentityKey(record: VehicleSelectorRecord) {
   }
 
   return {
-    key: `model-generation:${encodeURIComponent(makerId)}:${encodeURIComponent(modelId)}:${encodeURIComponent(generationId)}`,
+    key: `model-generation:${encodeURIComponent(modelId)}:${encodeURIComponent(generationId)}`,
     scope: 'MODEL_GENERATION' as const,
   };
 }
@@ -1144,7 +1161,7 @@ function buildCandidateGroups(
   >();
 
   for (const candidate of candidates) {
-    const identity = groupIdentityKey(candidate.record);
+    const identity = groupIdentityKey(candidate.record, mode);
     const current = groups.get(identity.key);
     if (current) {
       current.members.push(candidate);
@@ -1482,20 +1499,28 @@ function assignGroupIdentity(
   group: VehicleSelectorCandidateGroup
 ) {
   if (
-    group.scope !== 'MODEL_GENERATION' ||
-    !group.maker.id ||
+    group.scope === 'UNRESOLVED_IDENTITY' ||
+    !hasText(group.maker.label) ||
     !group.model.id ||
-    !group.generation.id
+    !hasText(group.model.label)
   ) {
     return false;
   }
 
-  selection.makerId = group.maker.id;
+  clearSelectionAxis(selection, 'maker');
+  if (group.maker.id) selection.makerId = group.maker.id;
   selection.maker = group.maker.label;
   selection.modelId = group.model.id;
   selection.model = group.model.label;
-  selection.generationId = group.generation.id;
-  selection.generation = group.generation.label;
+
+  if (group.scope === 'MODEL_GENERATION') {
+    if (!group.generation.id || !hasText(group.generation.label)) {
+      return false;
+    }
+    selection.generationId = group.generation.id;
+    selection.generation = group.generation.label;
+  }
+
   return true;
 }
 
@@ -1661,7 +1686,7 @@ export function applyVehicleGroupDrilldown(
     );
   }
 
-  if (group.scope !== 'MODEL_GENERATION') {
+  if (group.scope === 'UNRESOLVED_IDENTITY') {
     return rejectedGroupTransition(
       before,
       currentSelection,

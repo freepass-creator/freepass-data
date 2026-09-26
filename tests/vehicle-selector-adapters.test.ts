@@ -3,7 +3,10 @@ import {
   selectorRecordsFromNewcarMaster,
   selectorRecordsFromUsedcarMaster,
 } from '../src/application/vehicle-selector-adapters.js';
-import { selectVehicles } from '../src/domain/vehicle-selector.js';
+import {
+  applyVehicleGroupSelection,
+  selectVehicles,
+} from '../src/domain/vehicle-selector.js';
 import type { EstimateNewcarMasterRecord } from '../src/domain/estimate-master.js';
 import type { UsedcarMasterRecord } from '../src/domain/usedcar-master.js';
 
@@ -109,6 +112,138 @@ describe('vehicle selector adapters', () => {
 
     expect(newResult.candidates).toHaveLength(1);
     expect(usedResult.candidates).toHaveLength(1);
+  });
+
+  it('groups real new-car adapter records by stable model ID without inventing generation', () => {
+    const signature: EstimateNewcarMasterRecord = {
+      ...newcar,
+      productId: 'new_sorento_hybrid_signature',
+      trimId: 'trim_signature_2027',
+      trimName: '시그니처',
+    };
+
+    const result = selectVehicles(
+      selectorRecordsFromNewcarMaster([newcar, signature]),
+      { mode: 'NEW_CAR', searchText: '쏘렌토' }
+    );
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]).toMatchObject({
+      scope: 'MODEL',
+      model: { id: 'model_sorento', label: '쏘렌토' },
+      candidateCount: 2,
+      expandable: true,
+    });
+    expect(result.groups[0]?.generation.id).toBeNull();
+
+    const transition = applyVehicleGroupSelection(
+      selectorRecordsFromNewcarMaster([newcar, signature]),
+      { mode: 'NEW_CAR', searchText: '쏘렌토' },
+      {},
+      result.groups[0]!.groupId
+    );
+    expect(transition.status).toBe('APPLIED');
+    expect(transition.selection).toMatchObject({
+      maker: '기아',
+      modelId: 'model_sorento',
+      model: '쏘렌토',
+    });
+    expect(transition.selection.makerId).toBeUndefined();
+    expect(transition.selection.generationId).toBeUndefined();
+    expect(transition.result.candidates).toHaveLength(2);
+  });
+
+  it('groups real used-car adapter records by model and generation without requiring maker ID', () => {
+    const signature: UsedcarMasterRecord = {
+      ...usedcar,
+      recordId: 'used_sorento_hybrid_signature_2021',
+      trimId: 'trim_signature_2021',
+      trimName: '시그니처',
+    };
+    const previousGeneration: UsedcarMasterRecord = {
+      ...usedcar,
+      recordId: 'used_sorento_um_2020',
+      generationId: 'gen_um',
+      generationName: '3세대 UM',
+      phaseId: 'phase_um_fl',
+      phaseName: '페이스리프트',
+      modelYearId: 'my_2020',
+      modelYear: 2020,
+      powertrainId: 'pt_diesel_2020',
+      powertrainName: '2.2 디젤',
+      trimId: 'trim_prestige_2020',
+      trimName: '프레스티지',
+    };
+
+    const records = selectorRecordsFromUsedcarMaster([
+      usedcar,
+      signature,
+      previousGeneration,
+    ]);
+    const result = selectVehicles(records, {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+    });
+
+    expect(result.groups).toHaveLength(2);
+    const mq4 = result.groups.find(
+      (group) => group.generation.id === 'gen_mq4'
+    );
+    expect(mq4).toMatchObject({
+      scope: 'MODEL_GENERATION',
+      model: { id: 'model_sorento', label: '쏘렌토' },
+      generation: { id: 'gen_mq4', label: '4세대 MQ4' },
+      candidateCount: 2,
+    });
+
+    const transition = applyVehicleGroupSelection(
+      records,
+      { mode: 'USED_CAR', searchText: '쏘렌토' },
+      {},
+      mq4!.groupId
+    );
+    expect(transition.status).toBe('APPLIED');
+    expect(transition.selection).toMatchObject({
+      maker: '기아',
+      modelId: 'model_sorento',
+      generationId: 'gen_mq4',
+    });
+    expect(transition.selection.makerId).toBeUndefined();
+    expect(transition.result.candidates).toHaveLength(2);
+  });
+
+  it('keeps used-car rows with missing generation isolated instead of merging them by model', () => {
+    const partialA: UsedcarMasterRecord = {
+      ...usedcar,
+      recordId: 'used_partial_a',
+      generationId: null,
+      generationName: null,
+      phaseId: null,
+      phaseName: null,
+      modelYearId: null,
+      modelYear: null,
+      powertrainId: null,
+      variantId: null,
+      trimId: null,
+      powertrainName: null,
+      trimName: null,
+      identityStatus: 'PARTIAL',
+    };
+    const partialB: UsedcarMasterRecord = {
+      ...partialA,
+      recordId: 'used_partial_b',
+    };
+
+    const result = selectVehicles(
+      selectorRecordsFromUsedcarMaster([partialA, partialB]),
+      { mode: 'USED_CAR', searchText: '쏘렌토' }
+    );
+
+    expect(result.groups).toHaveLength(2);
+    expect(result.groups.every(
+      (group) => group.scope === 'UNRESOLVED_IDENTITY'
+    )).toBe(true);
+    expect(result.groups.every((group) => group.candidateCount === 1)).toBe(true);
   });
 
   it('keeps historical year available only in used-car mode data', () => {

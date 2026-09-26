@@ -1078,7 +1078,7 @@ describe('common vehicle selector', () => {
 
     const sorento = result.groups.find((group) => group.model.label === '쏘렌토');
     expect(sorento).toMatchObject({
-      scope: 'MODEL_GENERATION',
+      scope: 'MODEL',
       candidateCount: 2,
       selectableCount: 2,
       expandable: true,
@@ -1412,8 +1412,8 @@ describe('common vehicle selector', () => {
     expect(transition.selection).toMatchObject({
       makerId: 'make_kia',
       modelId: 'model_sorento',
-      generationId: 'gen_mq4',
     });
+    expect(transition.selection.generationId).toBeUndefined();
     expect(transition.result.candidates.map((item) => item.record.recordId)).toEqual([
       'sorento-noblesse',
       'sorento-signature',
