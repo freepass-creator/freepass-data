@@ -13,7 +13,8 @@ import { ingestLegacyProductSnapshot } from '../application/ingest-legacy-produc
 import { prepareSheetBridgeHandoffs } from '../application/sheet-publication-bridge.js';
 import {
   assessLatestSheetConsumerCutover,
-  recordSheetDeliveryEvidence
+  recordSheetDeliveryEvidence,
+  type SheetEvidenceFreshnessPolicy
 } from '../application/sheet-delivery-evidence.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { SheetHandoffWorkbook, SheetPublicationHandoff } from '../domain/sheet-publication-handoff.js';
@@ -136,7 +137,8 @@ export async function createSheetDeliveryEvidenceDataAccessRuntime() {
 
     assess: (
       registration: ConsumerSwitchRegistration,
-      target: ConsumerCutoverStage
+      target: ConsumerCutoverStage,
+      freshnessPolicy: SheetEvidenceFreshnessPolicy
     ) => access.read({
       context: {
         actor: { id: 'service:freepass-data-sheet-cutover', kind: 'SERVICE' },
@@ -158,7 +160,12 @@ export async function createSheetDeliveryEvidenceDataAccessRuntime() {
           ? { releaseId: value.registration.evidence.approvedRelease.releaseId }
           : {})
       })
-    }, () => assessLatestSheetConsumerCutover(store, registration, target))
+    }, () => assessLatestSheetConsumerCutover(
+      store,
+      registration,
+      target,
+      freshnessPolicy
+    ))
   };
 }
 
