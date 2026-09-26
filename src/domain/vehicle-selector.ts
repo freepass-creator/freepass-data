@@ -265,6 +265,32 @@ export type VehicleSelectionReceiptIssue = {
   result: VehicleSelectorResult;
 };
 
+export type VehicleSelectionReceiptRevalidationReason =
+  | 'RECEIPT_FROM_FUTURE'
+  | 'RECEIPT_STALE'
+  | 'CURRENT_RECORD_NOT_FOUND'
+  | 'CURRENT_RECORD_CHANGED'
+  | 'CURRENT_RECORD_NOT_FINALIZABLE'
+  | 'CURRENT_REQUEST_NO_LONGER_MATCHES';
+
+export type VehicleSelectionReceiptRevalidationPolicy = {
+  assessedAt: string;
+  maxAgeMs?: number;
+  maxFutureSkewMs?: number;
+};
+
+export type VehicleSelectionReceiptRevalidationDecision = {
+  status: 'CURRENT' | 'RESELECT_REQUIRED';
+  reasons: VehicleSelectionReceiptRevalidationReason[];
+  receiptId: string;
+  recordId: string;
+  ageMs: number;
+  snapshotRecordDigest: string;
+  currentRecordDigest: string | null;
+  currentRecordChanged: boolean;
+  result: VehicleSelectorResult | null;
+};
+
 export type VehicleSelectorUxPreset = {
   mode: VehicleSelectorMode;
   presentation: 'GUIDED' | 'SEARCH_FILTER';
@@ -1158,22 +1184,11 @@ function buildCandidateGroups(
   });
 }
 
-function finalizationReasonsForCandidate(
-  candidate: VehicleSelectorCandidate,
+function finalizationReasonsForRecord(
+  record: VehicleSelectorRecord,
   mode: VehicleSelectorMode
 ): VehicleSelectorFinalizationReason[] {
   const reasons: VehicleSelectorFinalizationReason[] = [];
-  const record = candidate.record;
-
-  if (candidate.action !== 'SELECT' || candidate.actionState !== 'ACTIVE') {
-    reasons.push('NON_ACTIVE_CANDIDATE');
-  }
-  if (
-    candidate.unresolvedAxes.length > 0 ||
-    candidate.search.unresolvedTokens > 0
-  ) {
-    reasons.push('UNRESOLVED_REQUEST');
-  }
 
   if (!hasText(record.recordId)) reasons.push('MISSING_RECORD_ID');
   if (!hasText(record.maker.label)) reasons.push('MISSING_MAKER');
@@ -1187,13 +1202,42 @@ function finalizationReasonsForCandidate(
   if (!hasText(record.trim.label)) reasons.push('MISSING_TRIM');
 
   if (mode === 'NEW_CAR') {
-    if (record.lifecycle !== 'CURRENT') reasons.push('MODE_SCOPE_MISMATCH');
+    if (
+      record.lifecycle !== 'CURRENT' ||
+      record.identityStatus !== 'RESOLVED'
+    ) {
+      reasons.push('MODE_SCOPE_MISMATCH');
+    }
   } else {
     if (!hasText(record.generation.id)) reasons.push('MISSING_GENERATION_ID');
     if (!hasText(record.generation.label)) reasons.push('MISSING_GENERATION');
     if (!hasText(record.phase.id)) reasons.push('MISSING_PHASE_ID');
     if (!hasText(record.phase.label)) reasons.push('MISSING_PHASE');
-    if (record.lifecycle === 'HOLD') reasons.push('MODE_SCOPE_MISMATCH');
+    if (
+      record.lifecycle === 'HOLD' ||
+      record.identityStatus !== 'RESOLVED'
+    ) {
+      reasons.push('MODE_SCOPE_MISMATCH');
+    }
+  }
+
+  return [...new Set(reasons)];
+}
+
+function finalizationReasonsForCandidate(
+  candidate: VehicleSelectorCandidate,
+  mode: VehicleSelectorMode
+): VehicleSelectorFinalizationReason[] {
+  const reasons = finalizationReasonsForRecord(candidate.record, mode);
+
+  if (candidate.action !== 'SELECT' || candidate.actionState !== 'ACTIVE') {
+    reasons.unshift('NON_ACTIVE_CANDIDATE');
+  }
+  if (
+    candidate.unresolvedAxes.length > 0 ||
+    candidate.search.unresolvedTokens > 0
+  ) {
+    reasons.unshift('UNRESOLVED_REQUEST');
   }
 
   return [...new Set(reasons)];
@@ -1899,4 +1943,130 @@ export function assertVehicleSelectionReceipt(
 
   return true;
 }
+
+function selectionRelevantRecordSnapshot(record: VehicleSelectorRecord) {
+  return {
+    recordId: record.recordId,
+    lifecycle: record.lifecycle,
+    identityStatus: record.identityStatus,
+    maker: record.maker,
+    model: record.model,
+    generation: record.generation,
+    phase: record.phase,
+    modelYear: record.modelYear,
+    powertrain: record.powertrain,
+    fuelType: record.fuelType,
+    drivetrain: record.drivetrain,
+    seats: record.seats,
+    trim: record.trim,
+  };
+}
+
+function assertReceiptRevalidationPolicy(
+  policy: VehicleSelectionReceiptRevalidationPolicy
+) {
+  if (
+    !Number.isFinite(Date.parse(policy.assessedAt)) ||
+    (policy.maxAgeMs !== undefined &&
+      (!Number.isSafeInteger(policy.maxAgeMs) || policy.maxAgeMs <= 0)) ||
+    (policy.maxFutureSkewMs !== undefined &&
+      (!Number.isSafeInteger(policy.maxFutureSkewMs) ||
+        policy.maxFutureSkewMs < 0))
+  ) {
+    throw new Error('INVALID_VEHICLE_SELECTION_RECEIPT_REVALIDATION_POLICY');
+  }
+}
+
+export function revalidateVehicleSelectionReceipt(
+  receipt: VehicleSelectionReceipt,
+  currentRecords: readonly VehicleSelectorRecord[],
+  policy: VehicleSelectionReceiptRevalidationPolicy
+): VehicleSelectionReceiptRevalidationDecision {
+  assertVehicleSelectionReceipt(receipt);
+  assertReceiptRevalidationPolicy(policy);
+
+  const assessedAt = Date.parse(policy.assessedAt);
+  const issuedAt = Date.parse(receipt.issuedAt);
+  const skew = policy.maxFutureSkewMs ?? 0;
+  const ageMs = Math.max(0, assessedAt - issuedAt);
+  const reasons: VehicleSelectionReceiptRevalidationReason[] = [];
+
+  if (issuedAt > assessedAt + skew) {
+    reasons.push('RECEIPT_FROM_FUTURE');
+  }
+  if (policy.maxAgeMs !== undefined && ageMs > policy.maxAgeMs) {
+    reasons.push('RECEIPT_STALE');
+  }
+
+  const recordId = receipt.snapshot.record.recordId;
+  const currentRecord = currentRecords.find(
+    (record) => record.recordId === recordId
+  ) ?? null;
+
+  const snapshotRecordDigest = stableDigest(
+    selectionRelevantRecordSnapshot(receipt.snapshot.record)
+  );
+
+  if (!currentRecord) {
+    reasons.push('CURRENT_RECORD_NOT_FOUND');
+    return {
+      status: 'RESELECT_REQUIRED',
+      reasons,
+      receiptId: receipt.receiptId,
+      recordId,
+      ageMs,
+      snapshotRecordDigest,
+      currentRecordDigest: null,
+      currentRecordChanged: true,
+      result: null,
+    };
+  }
+
+  const currentRecordDigest = stableDigest(
+    selectionRelevantRecordSnapshot(currentRecord)
+  );
+  const currentRecordChanged = currentRecordDigest !== snapshotRecordDigest;
+  if (currentRecordChanged) {
+    reasons.push('CURRENT_RECORD_CHANGED');
+  }
+
+  if (
+    finalizationReasonsForRecord(
+      currentRecord,
+      receipt.snapshot.mode
+    ).length > 0
+  ) {
+    reasons.push('CURRENT_RECORD_NOT_FINALIZABLE');
+  }
+
+  const request: VehicleSelectorRequest = {
+    mode: receipt.snapshot.mode,
+    searchText: receipt.snapshot.searchText,
+    selection: structuredClone(receipt.snapshot.selection),
+    ...(receipt.snapshot.includeHold == null
+      ? {}
+      : { includeHold: receipt.snapshot.includeHold }),
+  };
+  const result = selectVehicles(currentRecords, request);
+  const stillMatches = result.candidates.some(
+    (candidate) => candidate.record.recordId === recordId
+  );
+
+  if (!stillMatches) {
+    reasons.push('CURRENT_REQUEST_NO_LONGER_MATCHES');
+  }
+
+  return {
+    status: reasons.length ? 'RESELECT_REQUIRED' : 'CURRENT',
+    reasons: [...new Set(reasons)],
+    receiptId: receipt.receiptId,
+    recordId,
+    ageMs,
+    snapshotRecordDigest,
+    currentRecordDigest,
+    currentRecordChanged,
+    result,
+  };
+}
+
 
