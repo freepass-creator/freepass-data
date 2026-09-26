@@ -7,6 +7,7 @@ import {
   finalizeVehicleSelection,
   issueVehicleSelectionReceipt,
   reconcileVehicleSelection,
+  revalidateVehicleSelectionReceipt,
   selectVehicles,
   type VehicleSelectorRecord,
 } from '../src/domain/vehicle-selector.js';
@@ -1949,6 +1950,223 @@ describe('common vehicle selector', () => {
       },
       'not-a-time'
     )).toThrow('INVALID_VEHICLE_SELECTION_RECEIPT_ISSUED_AT');
+  });
+
+  it('revalidates an unchanged receipt as CURRENT', () => {
+    const rows = [record('approved')];
+    const issued = issueVehicleSelectionReceipt(
+      rows,
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:00:00+09:00'
+    );
+
+    const checked = revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      rows,
+      { assessedAt: '2026-09-26T18:10:00+09:00' }
+    );
+
+    expect(checked).toMatchObject({
+      status: 'CURRENT',
+      reasons: [],
+      recordId: 'approved',
+      currentRecordChanged: false,
+      ageMs: 10 * 60_000,
+    });
+    expect(checked.currentRecordDigest).toBe(checked.snapshotRecordDigest);
+  });
+
+  it('ignores alias-only master changes because they do not change the selected configuration', () => {
+    const original = record('approved', {
+      aliases: ['MQ4'],
+    });
+    const issued = issueVehicleSelectionReceipt(
+      [original],
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:00:00+09:00'
+    );
+
+    const current = {
+      ...original,
+      aliases: ['MQ4', '쏘렌토 하이브리드'],
+    };
+
+    const checked = revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      [current],
+      { assessedAt: '2026-09-26T18:10:00+09:00' }
+    );
+
+    expect(checked).toMatchObject({
+      status: 'CURRENT',
+      reasons: [],
+      currentRecordChanged: false,
+    });
+  });
+
+  it('requires reselection when selection-relevant master facts change', () => {
+    const original = record('approved');
+    const issued = issueVehicleSelectionReceipt(
+      [original],
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:00:00+09:00'
+    );
+
+    const changed = {
+      ...original,
+      trim: { id: 'trim_noblesse', label: '노블레스 스페셜' },
+    };
+
+    const checked = revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      [changed],
+      { assessedAt: '2026-09-26T18:10:00+09:00' }
+    );
+
+    expect(checked.status).toBe('RESELECT_REQUIRED');
+    expect(checked.reasons).toContain('CURRENT_RECORD_CHANGED');
+    expect(checked.currentRecordChanged).toBe(true);
+  });
+
+  it('requires reselection when the selected record disappears from current master', () => {
+    const issued = issueVehicleSelectionReceipt(
+      [record('approved')],
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:00:00+09:00'
+    );
+
+    const checked = revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      [],
+      { assessedAt: '2026-09-26T18:10:00+09:00' }
+    );
+
+    expect(checked).toMatchObject({
+      status: 'RESELECT_REQUIRED',
+      reasons: ['CURRENT_RECORD_NOT_FOUND'],
+      currentRecordDigest: null,
+      currentRecordChanged: true,
+      result: null,
+    });
+  });
+
+  it('requires reselection when the current record is no longer finalizable', () => {
+    const original = record('approved');
+    const issued = issueVehicleSelectionReceipt(
+      [original],
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:00:00+09:00'
+    );
+
+    const hold = {
+      ...original,
+      lifecycle: 'HOLD' as const,
+      identityStatus: 'HOLD' as const,
+    };
+
+    const checked = revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      [hold],
+      { assessedAt: '2026-09-26T18:10:00+09:00' }
+    );
+
+    expect(checked.status).toBe('RESELECT_REQUIRED');
+    expect(checked.reasons).toEqual(
+      expect.arrayContaining([
+        'CURRENT_RECORD_CHANGED',
+        'CURRENT_RECORD_NOT_FINALIZABLE',
+        'CURRENT_REQUEST_NO_LONGER_MATCHES',
+      ])
+    );
+  });
+
+  it('applies age-based staleness only when an explicit maxAge policy is supplied', () => {
+    const rows = [record('approved')];
+    const issued = issueVehicleSelectionReceipt(
+      rows,
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:00:00+09:00'
+    );
+
+    const withoutAgePolicy = revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      rows,
+      { assessedAt: '2026-09-27T18:00:00+09:00' }
+    );
+    expect(withoutAgePolicy.status).toBe('CURRENT');
+
+    const withAgePolicy = revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      rows,
+      {
+        assessedAt: '2026-09-27T18:00:00+09:00',
+        maxAgeMs: 60 * 60_000,
+      }
+    );
+    expect(withAgePolicy.status).toBe('RESELECT_REQUIRED');
+    expect(withAgePolicy.reasons).toContain('RECEIPT_STALE');
+  });
+
+  it('fails closed on future-dated receipts outside explicit skew tolerance', () => {
+    const rows = [record('approved')];
+    const issued = issueVehicleSelectionReceipt(
+      rows,
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:10:00+09:00'
+    );
+
+    const checked = revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      rows,
+      {
+        assessedAt: '2026-09-26T18:00:00+09:00',
+        maxFutureSkewMs: 30_000,
+      }
+    );
+
+    expect(checked.status).toBe('RESELECT_REQUIRED');
+    expect(checked.reasons).toContain('RECEIPT_FROM_FUTURE');
+  });
+
+  it('rejects invalid revalidation policy instead of inventing a freshness threshold', () => {
+    const issued = issueVehicleSelectionReceipt(
+      [record('approved')],
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:00:00+09:00'
+    );
+
+    expect(() => revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      [record('approved')],
+      {
+        assessedAt: 'not-a-time',
+        maxAgeMs: 0,
+      }
+    )).toThrow('INVALID_VEHICLE_SELECTION_RECEIPT_REVALIDATION_POLICY');
   });
 
   it('reports OPEN before the user supplies any search criteria', () => {
