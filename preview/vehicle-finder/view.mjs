@@ -903,6 +903,11 @@ export function mountVehicleFinder(
                 ? item.label + ' 선택 유효'
                 : item.label + ' 다시 선택 필요';
             showReceipt(confirmedReceipt, { preserveRevalidation: true });
+            primary.textContent =
+              response.review.status === 'CURRENT'
+                ? '확정 완료'
+                : '다시 선택 필요';
+            primary.disabled = true;
           } catch {
             status.textContent =
               'receipt 재검증을 완료하지 못했습니다. 기존 확정 정보는 유지됩니다.';
