@@ -161,6 +161,24 @@ export type VehicleMasterResolverFeedback = {
   contentHash: string;
 };
 
+export type VehicleMasterRepairReceipt = {
+  receiptId: string;
+  idempotencyKey: string;
+  commandId: string;
+  requestDigest: string;
+  sourceAuditDigest: string;
+  repairPlanDigest: string;
+  dryRunDigest: string;
+  entityKind: 'NODE' | 'RULE';
+  entityId: string;
+  beforeRevision: number;
+  afterRevision: number;
+  beforeContentHash: string;
+  afterContentHash: string;
+  committedAt: string;
+  contentHash: string;
+};
+
 export type VehicleMasterWriteResult = 'CREATED' | 'UNCHANGED' | 'UPDATED';
 
 const PREFIX: Record<VehicleMasterNodeType, string> = {
@@ -377,6 +395,26 @@ export function sealVehicleMasterPipelineRecord(
   const record = {
     ...input,
     recordId: cleanText(input.recordId, 'recordId'),
+  };
+  return { ...record, contentHash: stableDigest(record) };
+}
+
+export function sealVehicleMasterRepairReceipt(
+  input: Omit<VehicleMasterRepairReceipt, 'contentHash'>
+): VehicleMasterRepairReceipt {
+  assertTime(input.committedAt, 'committedAt');
+  const record = {
+    ...input,
+    receiptId: cleanText(input.receiptId, 'receiptId'),
+    idempotencyKey: cleanText(input.idempotencyKey, 'idempotencyKey'),
+    commandId: cleanText(input.commandId, 'commandId'),
+    requestDigest: cleanText(input.requestDigest, 'requestDigest'),
+    sourceAuditDigest: cleanText(input.sourceAuditDigest, 'sourceAuditDigest'),
+    repairPlanDigest: cleanText(input.repairPlanDigest, 'repairPlanDigest'),
+    dryRunDigest: cleanText(input.dryRunDigest, 'dryRunDigest'),
+    entityId: cleanText(input.entityId, 'entityId'),
+    beforeContentHash: cleanText(input.beforeContentHash, 'beforeContentHash'),
+    afterContentHash: cleanText(input.afterContentHash, 'afterContentHash'),
   };
   return { ...record, contentHash: stableDigest(record) };
 }
