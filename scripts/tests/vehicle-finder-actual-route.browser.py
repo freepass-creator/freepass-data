@@ -231,7 +231,7 @@ try:
         expect(
             desktop.locator(".vf-group-row").first.get_by_text("먼저 보기 · 모델")
         ).to_be_visible()
-        expect(desktop.get_by_text("모델으로 좁히기")).to_be_visible()
+        expect(desktop.get_by_text("모델 조건으로 좁히기")).to_be_visible()
         desktop.locator(".vf-group-drilldown-option").first.click()
         expect(desktop.get_by_text("후보 18개 → 4개")).to_be_visible()
         expect(desktop.locator(".vf-group-member")).to_have_count(4)
@@ -251,7 +251,7 @@ try:
 
         mobile.locator(".vf-group-button").first.click()
         expect(mobile.locator(".vf-group-member")).to_have_count(9)
-        expect(mobile.get_by_text("모델으로 좁히기")).to_be_visible()
+        expect(mobile.get_by_text("모델 조건으로 좁히기")).to_be_visible()
         mobile.locator(".vf-group-drilldown-option").first.click()
         expect(mobile.locator(".vf-group-member")).to_have_count(4)
         expect(mobile.get_by_text("충돌하는 기존 조건 1개가 정리되었습니다.")).to_be_visible()
