@@ -169,6 +169,8 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).toMatch(/response\?\.receipt/);
     expect(source).toMatch(/finalizationReview = null/);
     expect(source).toMatch(/finalizationContext = null/);
+    expect(source).toMatch(/const refreshedItem = snapshot\.items\.find/);
+    expect(source).toMatch(/renderDetail\(refreshedItem\)/);
     expect(source).not.toMatch(/finalizeVehicleSelection|issueVehicleSelectionReceipt/);
   });
 
