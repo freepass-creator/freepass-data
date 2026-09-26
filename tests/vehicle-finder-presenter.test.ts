@@ -3,9 +3,13 @@ import {
   selectorRecordsFromNewcarMaster,
   selectorRecordsFromUsedcarMaster,
 } from '../src/application/vehicle-selector-adapters.js';
-import { presentVehicleSelectorResult } from '../src/application/vehicle-finder-presenter.js';
+import {
+  presentVehicleFinalizationDecision,
+  presentVehicleSelectorResult,
+} from '../src/application/vehicle-finder-presenter.js';
 import {
   applyVehicleGroupDrilldown,
+  finalizeVehicleSelection,
   selectVehicles,
 } from '../src/domain/vehicle-selector.js';
 import type { EstimateNewcarMasterRecord } from '../src/domain/estimate-master.js';
@@ -415,5 +419,49 @@ describe('Vehicle Finder UNKNOWN / HOLD reason presentation', () => {
       .toEqual(expect.arrayContaining(['LIFECYCLE_HOLD', 'IDENTITY_HOLD']));
     expect(view.items[0]?.action.reasonDetails.every((item) => item.nextStep.length > 0))
       .toBe(true);
+  });
+});
+
+
+describe('Vehicle Finder final selection review presenter', () => {
+  it('allows confirm only after a real F APPROVED decision', () => {
+    const records = selectorRecordsFromNewcarMaster([newcar]);
+    const decision = finalizeVehicleSelection(records, {
+      mode: 'NEW_CAR',
+      selection: {
+        model: '쏘렌토',
+        modelYear: 2027,
+        powertrain: '1.6 터보 하이브리드',
+        trim: '노블레스',
+      },
+    }, newcar.productId);
+    const review = presentVehicleFinalizationDecision(decision);
+
+    expect(decision.status).toBe('APPROVED');
+    expect(review).toEqual({
+      status: 'APPROVED',
+      recordId: newcar.productId,
+      canConfirm: true,
+      reasons: [],
+    });
+  });
+
+  it('keeps F HOLD reasons as raw codes with human review guidance', () => {
+    const partial = selectorRecordsFromUsedcarMaster([usedcar])[0]!;
+    const decision = finalizeVehicleSelection([{
+      ...partial,
+      identityStatus: 'PARTIAL',
+      phase: { id: null, label: null },
+    }], {
+      mode: 'USED_CAR',
+      selection: { model: '쏘렌토' },
+    }, partial.recordId);
+    const review = presentVehicleFinalizationDecision(decision);
+
+    expect(decision.status).toBe('HOLD');
+    expect(review.canConfirm).toBe(false);
+    expect(review.reasons.map((item) => item.code))
+      .toEqual(decision.reasons);
+    expect(review.reasons.every((item) => item.nextStep.length > 0)).toBe(true);
   });
 });

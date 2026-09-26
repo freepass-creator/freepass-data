@@ -182,7 +182,7 @@ function stateBadge(item) {
 
 export function mountVehicleFinder(
   root,
-  { read, onSelect, onGroupDrilldown, initialMode = 'NEW_CAR' } = {},
+  { read, onSelect, onFinalize, onGroupDrilldown, initialMode = 'NEW_CAR' } = {},
 ) {
   if (!(root instanceof HTMLElement)) throw new TypeError('Finder root must be an HTMLElement');
 
@@ -199,6 +199,8 @@ export function mountVehicleFinder(
   let lastInspectedId = null;
   let listScrollY = 0;
   let readContext = null;
+  let finalizationReview = null;
+  let finalizationContext = null;
   let activeDrilldownKey = null;
   const expandedGroupIds = new Set();
   let requestSeq = 0;
@@ -518,6 +520,8 @@ export function mountVehicleFinder(
     const priorId = inspectedId;
     if (priorId) lastInspectedId = priorId;
     inspectedId = null;
+    finalizationReview = null;
+    finalizationContext = null;
     detail.hidden = true;
     root.classList.remove('vf-inspecting');
     renderRows();
@@ -537,6 +541,10 @@ export function mountVehicleFinder(
 
   function renderDetail(item) {
     detail.replaceChildren();
+    if (finalizationReview && finalizationReview.itemId !== item.id) {
+      finalizationReview = null;
+      finalizationContext = null;
+    }
     const detailHead = element('div', 'vf-detail-head');
     const detailTitle = element('div', 'vf-detail-title');
     const detailHeading = element('h2', '', item.label);
@@ -666,43 +674,188 @@ export function mountVehicleFinder(
       evidence.append(element('div', 'vf-note', '표시 가능한 근거 ID가 없습니다.'));
     }
 
+    const finalization = element('section', 'vf-finalization');
+    finalization.hidden = true;
+
+    const renderFinalization = () => {
+      finalization.replaceChildren();
+      if (!finalizationReview) {
+        finalization.hidden = true;
+        return;
+      }
+
+      finalization.hidden = false;
+      finalization.dataset.status = finalizationReview.status;
+      const heading = element(
+        'strong',
+        'vf-finalization-heading',
+        finalizationReview.status === 'APPROVED'
+          ? '최종 확정 전 검토'
+          : '현재는 최종 확정할 수 없습니다',
+      );
+      finalization.append(heading);
+
+      if (finalizationReview.status === 'APPROVED') {
+        finalization.append(
+          element(
+            'p',
+            'vf-finalization-copy',
+            'F 최종화 검증을 통과했습니다. 차량 정보와 근거를 마지막으로 확인한 뒤 확정하세요.',
+          ),
+          element(
+            'code',
+            'vf-finalization-record',
+            finalizationReview.recordId ?? item.id,
+          ),
+        );
+      } else {
+        const list = element('div', 'vf-finalization-reasons');
+        for (const reason of finalizationReview.reasons ?? []) {
+          const card = element('article', 'vf-finalization-reason');
+          const title = element('div', 'vf-finalization-reason-title');
+          title.append(
+            element('strong', '', reason.title),
+            element('code', '', reason.code),
+          );
+          card.append(
+            title,
+            element('p', '', reason.message),
+            element('p', 'vf-finalization-next', '다음 확인 · ' + reason.nextStep),
+          );
+          list.append(card);
+        }
+        finalization.append(list);
+      }
+    };
+
     const actions = element('div', 'vf-actionbar');
     const back = element('button', 'vf-back vf-secondary', '목록으로');
     back.type = 'button';
     listen(back, 'click', () => closeDetail());
-    const confirmLabel =
-      item.action?.code === 'INSPECT_ONLY'
-        ? '확인만 가능'
-        : item.action?.code === 'BLOCKED'
-          ? '선택할 수 없음'
-          : '이 차량 선택';
-    const confirm = element('button', 'vf-primary', confirmLabel);
-    confirm.type = 'button';
-    confirm.disabled = item.selectable === false;
-    listen(confirm, 'click', async () => {
-      if (confirm.disabled || typeof onSelect !== 'function') return;
-      confirm.disabled = true;
+
+    const primary = element('button', 'vf-primary');
+    primary.type = 'button';
+    const syncPrimary = () => {
+      if (item.action?.code === 'INSPECT_ONLY') {
+        primary.textContent = '확인만 가능';
+        primary.disabled = true;
+        return;
+      }
+      if (item.action?.code === 'BLOCKED') {
+        primary.textContent = '선택할 수 없음';
+        primary.disabled = true;
+        return;
+      }
+      if (typeof onFinalize === 'function') {
+        if (!finalizationReview) {
+          primary.textContent = '최종 선택 검토';
+          primary.disabled = false;
+          return;
+        }
+        if (finalizationReview.status === 'HOLD' || !finalizationReview.canConfirm) {
+          primary.textContent = '확정 보류';
+          primary.disabled = true;
+          return;
+        }
+        primary.textContent = '이 차량으로 확정';
+        primary.disabled = false;
+        return;
+      }
+      primary.textContent = '이 차량 선택';
+      primary.disabled = item.selectable === false;
+    };
+
+    const showReceipt = (receipt) => {
+      if (!receipt) return;
+      const receiptBox = element('section', 'vf-receipt');
+      receiptBox.append(
+        element('strong', '', '선택 확정 완료'),
+        element('div', '', receipt.receiptId ?? 'receipt id 없음'),
+        element('div', '', receipt.issuedAt ?? '발급시각 없음'),
+      );
+      if (receipt.snapshotDigest) {
+        receiptBox.append(element('code', '', 'snapshot ' + receipt.snapshotDigest));
+      }
+      if (receipt.receiptDigest) {
+        receiptBox.append(element('code', '', 'receipt ' + receipt.receiptDigest));
+      }
+      finalization.replaceChildren(receiptBox);
+      finalization.hidden = false;
+      finalization.dataset.status = 'CONFIRMED';
+    };
+
+    listen(primary, 'click', async () => {
+      if (primary.disabled) return;
+
+      if (typeof onFinalize === 'function' && !finalizationReview) {
+        primary.disabled = true;
+        primary.textContent = '검토 중';
+        try {
+          const response = await onFinalize({
+            id: item.id,
+            observationId: snapshot.observationId,
+            mode,
+            query,
+            filters: { ...filters },
+            readContext,
+          });
+          if (!response?.review ||
+              !['APPROVED', 'HOLD'].includes(response.review.status) ||
+              !Array.isArray(response.review.reasons)) {
+            invalid('finalizationResponse');
+          }
+          finalizationReview = {
+            ...structuredClone(response.review),
+            itemId: item.id,
+          };
+          finalizationContext = response.finalizationContext ?? null;
+          renderFinalization();
+          syncPrimary();
+          status.textContent =
+            response.review.status === 'APPROVED'
+              ? item.label + ' 최종 검토 통과'
+              : item.label + ' 최종 확정 보류';
+        } catch {
+          status.textContent =
+            '최종 검토를 완료하지 못했습니다. 현재 후보와 입력은 유지됩니다.';
+          finalizationReview = null;
+          finalizationContext = null;
+          syncPrimary();
+        }
+        return;
+      }
+
+      if (typeof onSelect !== 'function') return;
+      primary.disabled = true;
+      primary.textContent = '확정 중';
       try {
-        await onSelect({
+        const response = await onSelect({
           id: item.id,
           observationId: snapshot.observationId,
           stateCode: item.state.code,
+          finalizationContext,
         });
         status.textContent = item.label + ' 선택 완료';
+        showReceipt(response?.receipt ?? null);
+        primary.textContent = '확정 완료';
+        primary.disabled = true;
       } catch {
-        status.textContent = '선택을 완료하지 못했습니다. 입력과 조회 결과는 유지됩니다.';
-      } finally {
-        confirm.disabled = item.selectable === false;
+        status.textContent =
+          '선택을 완료하지 못했습니다. 최종 검토 결과와 후보는 유지됩니다.';
+        syncPrimary();
       }
     });
-    actions.append(back, confirm);
+
+    syncPrimary();
+    actions.append(back, primary);
 
     detail.append(detailHead, resultMeta);
     if (detail._actionReasons) {
       detail.append(detail._actionReasons);
       delete detail._actionReasons;
     }
-    detail.append(trust, facts, evidence, actions);
+    detail.append(trust, facts, evidence, finalization, actions);
+    renderFinalization();
     detail.hidden = false;
     root.classList.add('vf-inspecting');
   }
@@ -802,6 +955,8 @@ export function mountVehicleFinder(
       if (next.mode !== mode) invalid('modeEcho');
       snapshot = next;
       readContext = response.readContext ?? null;
+      finalizationReview = null;
+      finalizationContext = null;
       inspectedId = null;
       detail.hidden = true;
       root.classList.remove('vf-inspecting');
@@ -1068,7 +1223,13 @@ export function mountVehicleFinder(
       if (next.mode !== mode) invalid('modeEcho');
       if (disposed || seq !== requestSeq) return;
       snapshot = next;
+      finalizationReview = null;
+      finalizationContext = null;
       renderSnapshot();
+      if (inspectedId) {
+        const refreshedItem = snapshot.items.find((item) => item.id === inspectedId);
+        if (refreshedItem) renderDetail(refreshedItem);
+      }
     } catch {
       if (disposed || seq !== requestSeq) return;
       if (snapshot && preserve) {
@@ -1111,6 +1272,8 @@ export function mountVehicleFinder(
     listScrollY = 0;
     expandedGroupIds.clear();
     readContext = null;
+    finalizationReview = null;
+    finalizationContext = null;
     snapshot = null;
     input.value = '';
     detail.hidden = true;

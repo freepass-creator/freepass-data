@@ -2,6 +2,8 @@ import type {
   VehicleSelectorAction,
   VehicleSelectorActionState,
   VehicleSelectorAxis,
+  VehicleSelectorFinalizationDecision,
+  VehicleSelectorFinalizationReason,
   VehicleSelectorNoResultReason,
   VehicleSelectorResult,
 } from '../domain/vehicle-selector.js';
@@ -367,5 +369,135 @@ export function presentVehicleSelectorResult(
     facets: structuredClone(input.facets),
     groups,
     items,
+  };
+}
+
+
+export type VehicleFinderFinalizationReason = {
+  code: VehicleSelectorFinalizationReason;
+  title: string;
+  message: string;
+  nextStep: string;
+};
+
+export type VehicleFinderFinalizationReview = {
+  status: VehicleSelectorFinalizationDecision['status'];
+  recordId: string | null;
+  canConfirm: boolean;
+  reasons: VehicleFinderFinalizationReason[];
+};
+
+const FINALIZATION_REASON_PRESENTATION: Record<
+  VehicleSelectorFinalizationReason,
+  Omit<VehicleFinderFinalizationReason, 'code'>
+> = {
+  CANDIDATE_NOT_FOUND: {
+    title: '선택한 후보를 현재 결과에서 찾지 못했습니다',
+    message: 'F 최종화 시점의 후보 집합에 해당 recordId가 없습니다.',
+    nextStep: '최신 후보를 다시 조회하고 차량을 다시 선택해 주세요.',
+  },
+  AMBIGUOUS_CANDIDATES: {
+    title: '확정 가능한 후보가 여러 개 남아 있습니다',
+    message: 'F가 단일 차량으로 확정할 수 없는 상태로 판정했습니다.',
+    nextStep: '후보를 하나 직접 선택하거나 조건을 더 좁혀 주세요.',
+  },
+  NON_ACTIVE_CANDIDATE: {
+    title: '현재 선택 가능한 ACTIVE 후보가 아닙니다',
+    message: 'F가 이 후보를 SELECT 가능한 ACTIVE 상태로 인정하지 않았습니다.',
+    nextStep: 'UNKNOWN/HOLD 사유와 근거를 먼저 해소해 주세요.',
+  },
+  UNRESOLVED_REQUEST: {
+    title: '요청에 아직 미확인 조건이 남아 있습니다',
+    message: 'F가 선택 조건 또는 검색어 일부를 확정하지 못했습니다.',
+    nextStep: '미확인 조건을 확인하거나 해당 조건을 비운 뒤 다시 검토해 주세요.',
+  },
+  MISSING_RECORD_ID: {
+    title: '차량 record ID가 없습니다',
+    message: '최종 확정에 필요한 recordId가 비어 있습니다.',
+    nextStep: '정본 차량 식별자를 확인해 주세요.',
+  },
+  MISSING_MAKER: {
+    title: '제조사 정보가 없습니다',
+    message: '최종 확정에 필요한 제조사명이 확인되지 않습니다.',
+    nextStep: '제조사 식별 근거를 확인해 주세요.',
+  },
+  MISSING_MODEL_ID: {
+    title: '모델 ID가 없습니다',
+    message: '최종 확정에 필요한 모델 식별자가 없습니다.',
+    nextStep: '정본 모델 ID를 확인해 주세요.',
+  },
+  MISSING_MODEL: {
+    title: '모델명이 없습니다',
+    message: '최종 확정에 필요한 모델명이 확인되지 않습니다.',
+    nextStep: '모델 식별 근거를 확인해 주세요.',
+  },
+  MISSING_MODEL_YEAR_ID: {
+    title: '연식 ID가 없습니다',
+    message: '최종 확정에 필요한 연식 식별자가 없습니다.',
+    nextStep: '정본 연식 ID를 확인해 주세요.',
+  },
+  MISSING_MODEL_YEAR: {
+    title: '연식 값이 없습니다',
+    message: '최종 확정에 필요한 연식 값이 확인되지 않습니다.',
+    nextStep: '연식 근거를 확인해 주세요.',
+  },
+  MISSING_POWERTRAIN_ID: {
+    title: '파워트레인 ID가 없습니다',
+    message: '최종 확정에 필요한 파워트레인 식별자가 없습니다.',
+    nextStep: '정본 파워트레인 ID를 확인해 주세요.',
+  },
+  MISSING_POWERTRAIN: {
+    title: '파워트레인 정보가 없습니다',
+    message: '최종 확정에 필요한 파워트레인명이 확인되지 않습니다.',
+    nextStep: '파워트레인 근거를 확인해 주세요.',
+  },
+  MISSING_TRIM_ID: {
+    title: '트림 ID가 없습니다',
+    message: '최종 확정에 필요한 트림 식별자가 없습니다.',
+    nextStep: '정본 트림 ID를 확인해 주세요.',
+  },
+  MISSING_TRIM: {
+    title: '트림 정보가 없습니다',
+    message: '최종 확정에 필요한 트림명이 확인되지 않습니다.',
+    nextStep: '트림 근거를 확인해 주세요.',
+  },
+  MISSING_GENERATION_ID: {
+    title: '세대 ID가 없습니다',
+    message: '중고차 최종 확정에 필요한 세대 식별자가 없습니다.',
+    nextStep: '정본 세대 ID를 확인해 주세요.',
+  },
+  MISSING_GENERATION: {
+    title: '세대 정보가 없습니다',
+    message: '중고차 최종 확정에 필요한 세대명이 확인되지 않습니다.',
+    nextStep: '세대 식별 근거를 확인해 주세요.',
+  },
+  MISSING_PHASE_ID: {
+    title: '변경형 ID가 없습니다',
+    message: '중고차 최종 확정에 필요한 변경형 식별자가 없습니다.',
+    nextStep: '정본 변경형 ID를 확인해 주세요.',
+  },
+  MISSING_PHASE: {
+    title: '변경형 정보가 없습니다',
+    message: '중고차 최종 확정에 필요한 변경형명이 확인되지 않습니다.',
+    nextStep: '변경형 식별 근거를 확인해 주세요.',
+  },
+  MODE_SCOPE_MISMATCH: {
+    title: '현재 신차/중고차 모드에서 확정할 수 없는 상태입니다',
+    message: 'F가 후보의 lifecycle 또는 identity 상태가 현재 모드 확정 조건과 맞지 않는다고 판정했습니다.',
+    nextStep: '차량 상태를 확인하거나 올바른 신차/중고차 모드에서 다시 선택해 주세요.',
+  },
+};
+
+export function presentVehicleFinalizationDecision(
+  decision: VehicleSelectorFinalizationDecision
+): VehicleFinderFinalizationReview {
+  return {
+    status: decision.status,
+    recordId: decision.recordId,
+    canConfirm: decision.status === 'APPROVED' && Boolean(decision.recordId),
+    reasons: decision.reasons.map((code) => ({
+      code,
+      ...FINALIZATION_REASON_PRESENTATION[code],
+    })),
   };
 }
