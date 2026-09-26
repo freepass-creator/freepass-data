@@ -81,6 +81,10 @@ export type VehicleSelectorCandidate = {
   score: number;
   matchedAxes: VehicleSelectorAxis[];
   unresolvedAxes: VehicleSelectorAxis[];
+  search: {
+    matchedTokens: number;
+    unresolvedTokens: number;
+  };
   selectable: boolean;
 };
 
@@ -380,7 +384,7 @@ function matchesSearchText(
   context: SearchContext
 ) {
   if (!context.tokens.length) {
-    return { matched: 0, partial: false, rejected: false };
+    return { matched: 0, unresolved: 0, partial: false, rejected: false };
   }
 
   let matched = 0;
@@ -396,7 +400,7 @@ function matchesSearchText(
     }
 
     if (!intent.axes.length && !intent.aliasKnown) {
-      return { matched, partial: unresolved > 0, rejected: true };
+      return { matched, unresolved, partial: unresolved > 0, rejected: true };
     }
 
     if (intent.axes.length) {
@@ -407,11 +411,12 @@ function matchesSearchText(
       }
     }
 
-    return { matched, partial: unresolved > 0, rejected: true };
+    return { matched, unresolved, partial: unresolved > 0, rejected: true };
   }
 
   return {
     matched,
+    unresolved,
     partial: unresolved > 0,
     rejected: false,
   };
@@ -575,6 +580,10 @@ export function selectVehicles(
       score,
       matchedAxes,
       unresolvedAxes,
+      search: {
+        matchedTokens: search.matched,
+        unresolvedTokens: search.unresolved,
+      },
       selectable:
         record.identityStatus === 'RESOLVED' &&
         record.lifecycle !== 'HOLD' &&
