@@ -32,7 +32,8 @@
     "record:sheet-delivery-evidence": "tsx src/jobs/record-sheet-delivery-evidence.ts",
     "assess:sheet-cutover": "tsx src/jobs/assess-sheet-consumer-cutover.ts",
     "check:sheet-consumer-health": "tsx src/jobs/check-sheet-consumer-health.ts",
-    "check:consumer-runtime-evidence": "tsx src/jobs/check-consumer-runtime-evidence.ts"
+    "check:consumer-runtime-evidence": "tsx src/jobs/check-consumer-runtime-evidence.ts",
+    "check:consumer-health": "tsx src/jobs/check-consumer-health.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",

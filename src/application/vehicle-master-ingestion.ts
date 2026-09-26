@@ -68,6 +68,8 @@ export type VehicleMasterEvidenceIssue = {
     | 'REQUIRED_REFERENCE_MISSING'
     | 'REFERENCE_NODE_MISSING'
     | 'REFERENCE_NODE_TYPE_MISMATCH'
+    | 'REFERENCE_LINEAGE_INCOMPLETE'
+    | 'REFERENCE_LINEAGE_MISMATCH'
     | 'REFERENCE_NODE_HOLD'
     | 'REFERENCE_EFFECTIVE_RANGE_MISMATCH'
     | 'REFERENCE_NODE_SELF'
@@ -302,6 +304,13 @@ function requiredRefFields(
     case 'COLOR':
       return VEHICLE_LINEAGE_REF_FIELDS.slice(0, 5);
   }
+}
+
+function lineageFieldsBefore(field: string): readonly string[] {
+  const index = VEHICLE_LINEAGE_REF_FIELDS.indexOf(
+    field as (typeof VEHICLE_LINEAGE_REF_FIELDS)[number]
+  );
+  return index < 0 ? [] : VEHICLE_LINEAGE_REF_FIELDS.slice(0, index);
 }
 
 function modelYearValue(proposal: VehicleMasterNode): number | null {
@@ -586,6 +595,31 @@ async function applyNodeReferenceGate(
           detail: `${referenced.nodeType}!=${expectedType}`,
         });
       }
+
+      if (expectedType && referenced.nodeType === expectedType) {
+        for (const ancestorField of lineageFieldsBefore(field)) {
+          const proposalAncestorId = proposal.refs[ancestorField];
+          const referencedAncestorId = referenced.refs[ancestorField];
+
+          if (!referencedAncestorId) {
+            issues.push({
+              code: 'REFERENCE_LINEAGE_INCOMPLETE',
+              fieldPath: `refs.${field}.${ancestorField}`,
+              detail: referenced.id,
+            });
+          } else if (
+            proposalAncestorId &&
+            referencedAncestorId !== proposalAncestorId
+          ) {
+            issues.push({
+              code: 'REFERENCE_LINEAGE_MISMATCH',
+              fieldPath: `refs.${field}.${ancestorField}`,
+              detail: `${referencedAncestorId}!=${proposalAncestorId}`,
+            });
+          }
+        }
+      }
+
       if (proposal.status !== 'HOLD' && referenced.status === 'HOLD') {
         issues.push({
           code: 'REFERENCE_NODE_HOLD',

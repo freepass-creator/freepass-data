@@ -116,37 +116,89 @@ async function seedAncestors(
   proposal: ReturnType<typeof trimProposal>
 ) {
   const rows = [
-    { id: 'make_kia', type: 'MAKE' as const, name: '기아', parentId: null },
-    { id: 'model_sorento', type: 'MODEL' as const, name: '쏘렌토', parentId: 'make_kia' },
+    {
+      id: 'make_kia',
+      type: 'MAKE' as const,
+      name: '기아',
+      parentId: null,
+      refs: {},
+      attributes: {},
+    },
+    {
+      id: 'model_sorento',
+      type: 'MODEL' as const,
+      name: '쏘렌토',
+      parentId: 'make_kia',
+      refs: { makeId: 'make_kia' },
+      attributes: {},
+    },
     {
       id: proposal.refs.generationId!,
       type: 'GENERATION' as const,
       name: 'MQ4',
       parentId: 'model_sorento',
+      refs: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+      },
+      attributes: {},
     },
     {
       id: proposal.refs.phaseId!,
       type: 'PHASE' as const,
       name: '더 뉴 쏘렌토',
       parentId: proposal.refs.generationId!,
+      refs: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+        generationId: proposal.refs.generationId!,
+      },
+      attributes: {},
     },
     {
       id: proposal.refs.modelYearId!,
       type: 'MODEL_YEAR' as const,
       name: '2027년형',
       parentId: proposal.refs.phaseId!,
+      refs: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+        generationId: proposal.refs.generationId!,
+        phaseId: proposal.refs.phaseId!,
+      },
+      attributes: { modelYear: 2027 },
     },
     {
       id: proposal.refs.powertrainId!,
       type: 'POWERTRAIN' as const,
       name: '2.5 가솔린 터보',
       parentId: proposal.refs.modelYearId!,
+      refs: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+        generationId: proposal.refs.generationId!,
+        phaseId: proposal.refs.phaseId!,
+        modelYearId: proposal.refs.modelYearId!,
+      },
+      attributes: {
+        identityKey: canonicalPowertrainIdentity('2.5 가솔린 터보'),
+        fuelType: 'GASOLINE',
+      },
     },
     {
       id: proposal.refs.variantId!,
       type: 'VARIANT' as const,
       name: '5인승 2WD',
       parentId: proposal.refs.powertrainId!,
+      refs: {
+        makeId: 'make_kia',
+        modelId: 'model_sorento',
+        generationId: proposal.refs.generationId!,
+        phaseId: proposal.refs.phaseId!,
+        modelYearId: proposal.refs.modelYearId!,
+        powertrainId: proposal.refs.powertrainId!,
+      },
+      attributes: { seats: 5, drivetrain: '2WD' },
     },
   ];
 
@@ -158,9 +210,9 @@ async function seedAncestors(
       revision: 1,
       canonicalName: row.name,
       parentId: row.parentId,
-      refs: {},
+      refs: row.refs,
       aliases: [],
-      attributes: {},
+      attributes: row.attributes,
       sourceEvidenceIds: proposal.sourceEvidenceIds,
       effectiveFrom,
       effectiveTo: null,
@@ -341,6 +393,108 @@ describe('vehicle master evidence-gated ingestion', () => {
         expect.objectContaining({
           code: 'SOURCE_AUTHORITY_INSUFFICIENT',
           detail: 'corroborating=1',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps TRIM on HOLD when a referenced ancestor belongs to another lineage', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-cross-lineage', 'MANUFACTURER_OFFICIAL', '4');
+    await store.putSourceDocument(official);
+
+    const base = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, base);
+
+    const variant = await store.getNode(base.refs.variantId!);
+    expect(variant).toBeTruthy();
+
+    await store.putNode(sealVehicleMasterNode({
+      id: variant!.id,
+      nodeType: variant!.nodeType,
+      status: variant!.status,
+      revision: variant!.revision + 1,
+      canonicalName: variant!.canonicalName,
+      parentId: variant!.parentId ?? null,
+      refs: {
+        ...variant!.refs,
+        modelId: 'model_other_lineage',
+      },
+      aliases: variant!.aliases,
+      attributes: variant!.attributes,
+      sourceEvidenceIds: variant!.sourceEvidenceIds,
+      effectiveFrom: variant!.effectiveFrom ?? null,
+      effectiveTo: variant!.effectiveTo ?? null,
+      createdAt: variant!.createdAt,
+      updatedAt: observedAt,
+    }));
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal: base,
+      observations: observations(base, [official.sourceDocumentId]),
+      policy: identityPolicy,
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'REFERENCE_LINEAGE_MISMATCH',
+          fieldPath: 'refs.variantId.modelId',
+          detail: 'model_other_lineage!=model_sorento',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps TRIM on HOLD when a referenced ancestor has incomplete lineage', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-incomplete-referenced-lineage', 'MANUFACTURER_OFFICIAL', '5');
+    await store.putSourceDocument(official);
+
+    const base = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, base);
+
+    const powertrain = await store.getNode(base.refs.powertrainId!);
+    expect(powertrain).toBeTruthy();
+
+    await store.putNode(sealVehicleMasterNode({
+      id: powertrain!.id,
+      nodeType: powertrain!.nodeType,
+      status: powertrain!.status,
+      revision: powertrain!.revision + 1,
+      canonicalName: powertrain!.canonicalName,
+      parentId: powertrain!.parentId ?? null,
+      refs: {
+        ...powertrain!.refs,
+        generationId: null,
+      },
+      aliases: powertrain!.aliases,
+      attributes: powertrain!.attributes,
+      sourceEvidenceIds: powertrain!.sourceEvidenceIds,
+      effectiveFrom: powertrain!.effectiveFrom ?? null,
+      effectiveTo: powertrain!.effectiveTo ?? null,
+      createdAt: powertrain!.createdAt,
+      updatedAt: observedAt,
+    }));
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal: base,
+      observations: observations(base, [official.sourceDocumentId]),
+      policy: identityPolicy,
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'REFERENCE_LINEAGE_INCOMPLETE',
+          fieldPath: 'refs.powertrainId.generationId',
+          detail: base.refs.powertrainId,
         }),
       ])
     );

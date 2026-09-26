@@ -255,3 +255,38 @@ event-limit bounds the audit scan; if a consumer's proof falls outside that
 window it remains unobserved/fail-closed rather than being guessed from older
 registry text.
 
+## Unified Consumer Health
+
+`consumer-health-v1` is the operator-facing rollup across every registered
+FreePass Data consumer. It combines the static cutover registry with the runtime
+Data Access evidence overlay and the dedicated F01/F86 durable Sheet delivery
+health path.
+
+The report covers ERP.com, the White Label aggregate, FreePass Admin, FreePass
+Sales, FreePass Estimate, Kakao Ops, F01 and F86 in one JSON contract.
+
+Status semantics:
+
+- `HEALTHY` — the consumer is already at `FREEPASS_DATA_READ` with production
+  readback evidence.
+- `DEGRADED` — fresh evidence exists and the next cutover stage is currently
+  allowed, but the consumer is not yet at final FreePass Data read ownership.
+- `BLOCKED` — evidence is missing/stale/denied/failed, an aggregate identity is
+  incomplete, the adapter is not implemented, or the next transition has blockers.
+
+Static HOLD reasons are reported separately from runtime blockers. They are never
+silently converted into runtime proof. F01/F86 continue to use their Sheet
+delivery evidence; the generic Data Access log is not substituted for it.
+
+Operational check:
+
+```bash
+npm run check:consumer-health -- \
+  --max-age-minutes=30 \
+  --max-future-skew-seconds=30 \
+  --event-limit=1000
+```
+
+The check is read-only with respect to Canonical/consumer data and is itself
+audited through the Data Access Gateway.
+
