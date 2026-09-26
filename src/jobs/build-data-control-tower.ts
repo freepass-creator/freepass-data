@@ -5,6 +5,7 @@ import {
   type AuditScheduleHealthSummary,
   type ConsumerHealthScheduleSummary,
   type ConsumerReadinessScheduleSummary,
+  type EstimateMasterReadinessSummary,
   type SheetHealthScheduleSummary,
   type SourceInventorySummary
 } from '../application/data-control-tower.js';
@@ -25,6 +26,25 @@ async function readJson<T>(baseDir: string, file: string): Promise<T> {
   }
 }
 
+async function readOptionalJson<T>(
+  baseDir: string,
+  file: string
+): Promise<T | null> {
+  try {
+    return await readJson<T>(baseDir, file);
+  } catch (error) {
+    if (
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      error.code === 'ENOENT'
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 const baseDir = optionalArg('dir') ?? process.cwd();
 
 const [
@@ -32,7 +52,8 @@ const [
   sourceInventory,
   consumerHealth,
   consumerReadiness,
-  sheetHealth
+  sheetHealth,
+  estimateMasterReadiness
 ] = await Promise.all([
   readJson<AuditScheduleHealthSummary>(
     baseDir,
@@ -53,6 +74,10 @@ const [
   readJson<SheetHealthScheduleSummary>(
     baseDir,
     'sheet-consumer-health-summary.json'
+  ),
+  readOptionalJson<EstimateMasterReadinessSummary>(
+    baseDir,
+    'estimate-master-readiness.json'
   )
 ]);
 
@@ -61,7 +86,8 @@ const report = buildDataControlTower({
   sourceInventory,
   consumerHealth,
   consumerReadiness,
-  sheetHealth
+  sheetHealth,
+  estimateMasterReadiness
 });
 
 console.log(JSON.stringify(report, null, 2));
