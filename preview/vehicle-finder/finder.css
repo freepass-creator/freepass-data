@@ -342,3 +342,71 @@
   .vf td:last-child{grid-column:2;grid-row:1;align-self:start;justify-self:end}
   .vf .vf-detail-fact{grid-template-columns:minmax(0,1fr) auto}
 }
+
+
+/* U-01 operational state / provenance presentation */
+.vf .vf-observation{
+  color:var(--text,#5F6974);
+  font-size:var(--vf-support);
+  font-variant-numeric:tabular-nums;
+  text-align:right;
+}
+.vf .vf-state-code{
+  color:var(--text,#5F6974);
+  font:600 10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;
+  letter-spacing:.02em
+}
+.vf .vf-row-state{display:grid;justify-items:end;gap:3px}
+.vf .vf-trust-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:1px;
+  margin:16px 0;
+  overflow:hidden;
+  border-radius:var(--vf-card-radius);
+  background:var(--vf-line)
+}
+.vf .vf-trust-item{min-width:0;padding:10px 12px;background:var(--vf-soft)}
+.vf .vf-trust-item dt{margin:0;color:var(--text,#5F6974);font-size:var(--vf-support)}
+.vf .vf-trust-item dd{
+  margin:4px 0 0;
+  font-weight:650;
+  overflow-wrap:anywhere;
+  font-variant-numeric:tabular-nums
+}
+.vf .vf-source-list{margin:0 0 8px;padding:0 0 0 18px}
+.vf .vf-source-list li{margin:4px 0;overflow-wrap:anywhere}
+
+@media(min-width:901px){
+  .vf .vf-filter-toggle{display:none}
+  .vf .vf-filters{
+    display:grid;
+    grid-template-columns:repeat(5,minmax(120px,1fr)) auto;
+    align-items:end;
+    gap:10px;
+    padding:12px 0 20px
+  }
+  .vf .vf-filter-sheet-head,
+  .vf .vf-filter-more,
+  .vf .vf-filter-close,
+  .vf .vf-filter-done{display:none!important}
+  .vf .vf-filter-reset{justify-self:end}
+  .vf.vf-inspecting .vf-layout{
+    grid-template-columns:minmax(0,1.35fr) minmax(360px,.65fr);
+    align-items:start
+  }
+  .vf .vf-detail{
+    position:sticky;
+    top:20px;
+    max-height:calc(100vh - 40px);
+    overflow:auto;
+    overscroll-behavior:contain
+  }
+}
+
+@media(max-width:900px){
+  .vf .vf-head{align-items:flex-start}
+  .vf .vf-observation{max-width:48%;text-align:right}
+  .vf .vf-trust-grid{grid-template-columns:minmax(0,1fr)}
+  .vf .vf-row-state{justify-items:end}
+}
