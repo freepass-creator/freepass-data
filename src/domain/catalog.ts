@@ -74,6 +74,52 @@ export type ErpPublicProduct = {
     policyId?: string | null; priceTerms: PriceTerm[];
   }>;
 };
+export type AdminPolicyValue =
+  | { policyId: string; type: 'BOOLEAN'; value: boolean }
+  | { policyId: string; type: 'NUMBER' | 'MONEY' | 'PERCENTAGE'; value: number }
+  | { policyId: string; type: 'SINGLE_SELECT' | 'TEXT' | 'DATE'; value: string }
+  | { policyId: string; type: 'MULTI_SELECT'; value: string[] };
+
+export type AdminPolicyState = 'COMPLETE' | 'MISSING' | 'INVALID';
+
+export type AdminCatalogProduct = {
+  productId: string;
+  productRevision: number;
+  updatedAt: string;
+  displayName: string;
+  commercialType: CommercialType;
+  vehicleModel: {
+    id: string;
+    maker: string;
+    model: string;
+    generation?: string | null;
+    subModel?: string | null;
+    trim?: string | null;
+    fuel?: string | null;
+    drive?: string | null;
+    seats?: number | null;
+  };
+  vehicleAsset?: {
+    id: string;
+    status: VehicleAssetStatus;
+    plateNumber?: string | null;
+    vin?: string | null;
+    odometerKm?: number | null;
+  } | null;
+  offers: Array<{
+    offerId: string;
+    offerRevision: number;
+    supplierId: string;
+    policyId?: string | null;
+    policyState: AdminPolicyState;
+    policyValues: AdminPolicyValue[];
+    invalidPolicyFactRefs: string[];
+    priceTerms: PriceTerm[];
+  }>;
+};
+
+export type ProjectionProduct = ErpPublicProduct | AdminCatalogProduct;
+
 export type ProjectionRelease<T> = {
   releaseId: string; projectionId: string; schemaVersion: string; canonicalRevision: number;
   manifestId: string; inputDigest: string; dataDigest: string;
