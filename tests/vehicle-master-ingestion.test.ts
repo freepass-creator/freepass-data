@@ -892,6 +892,177 @@ describe('vehicle master evidence-gated ingestion', () => {
     expect(result.canonicalWrite).toBeNull();
   });
 
+  it('keeps a semantic duplicate VARIANT on HOLD within the same POWERTRAIN', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-variant-duplicate', 'MANUFACTURER_OFFICIAL', 'a');
+    await store.putSourceDocument(official);
+
+    const base = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, base);
+
+    await store.putNode(sealVehicleMasterNode({
+      id: 'variant_fwd_existing',
+      nodeType: 'VARIANT',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '5인승 전륜',
+      parentId: base.refs.powertrainId!,
+      refs: { powertrainId: base.refs.powertrainId! },
+      aliases: [],
+      attributes: { seats: 5, drivetrain: 'FWD' },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterNode({
+      id: 'variant_fwd_duplicate',
+      nodeType: 'VARIANT',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: 'FWD 5seat',
+      parentId: base.refs.powertrainId!,
+      refs: { powertrainId: base.refs.powertrainId! },
+      aliases: [],
+      attributes: { seats: 5, drivetrain: 'FWD' },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [
+        { fieldPath: 'attributes.seats', value: 5, sourceDocumentId: official.sourceDocumentId },
+        { fieldPath: 'attributes.drivetrain', value: 'FWD', sourceDocumentId: official.sourceDocumentId },
+      ],
+      policy: {
+        requiredFieldPaths: ['attributes.seats', 'attributes.drivetrain'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'VARIANT_DUPLICATE_IN_POWERTRAIN',
+          detail: 'variant_fwd_existing',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps VARIANT on HOLD when drivetrain is semantically valid but not canonicalized', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-variant-noncanonical-drive', 'MANUFACTURER_OFFICIAL', 'b');
+    await store.putSourceDocument(official);
+
+    const base = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, base);
+
+    const proposal = sealVehicleMasterNode({
+      id: 'variant_noncanonical_drive',
+      nodeType: 'VARIANT',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '5인승 전륜',
+      parentId: base.refs.powertrainId!,
+      refs: { powertrainId: base.refs.powertrainId! },
+      aliases: [],
+      attributes: { seats: 5, drivetrain: '전륜' },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [
+        { fieldPath: 'attributes.seats', value: 5, sourceDocumentId: official.sourceDocumentId },
+        { fieldPath: 'attributes.drivetrain', value: '전륜', sourceDocumentId: official.sourceDocumentId },
+      ],
+      policy: {
+        requiredFieldPaths: ['attributes.seats', 'attributes.drivetrain'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'VARIANT_DRIVETRAIN_NOT_CANONICAL',
+          detail: '전륜!=FWD',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps VARIANT on HOLD when explicit label facts contradict seats and drivetrain', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-variant-label-mismatch', 'MANUFACTURER_OFFICIAL', 'c');
+    await store.putSourceDocument(official);
+
+    const base = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, base);
+
+    const proposal = sealVehicleMasterNode({
+      id: 'variant_label_mismatch',
+      nodeType: 'VARIANT',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '7인승 AWD',
+      parentId: base.refs.powertrainId!,
+      refs: { powertrainId: base.refs.powertrainId! },
+      aliases: [],
+      attributes: { seats: 5, drivetrain: 'FWD' },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [
+        { fieldPath: 'attributes.seats', value: 5, sourceDocumentId: official.sourceDocumentId },
+        { fieldPath: 'attributes.drivetrain', value: 'FWD', sourceDocumentId: official.sourceDocumentId },
+      ],
+      policy: {
+        requiredFieldPaths: ['attributes.seats', 'attributes.drivetrain'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'VARIANT_NAME_SEATS_MISMATCH',
+          detail: '7!=5',
+        }),
+        expect.objectContaining({
+          code: 'VARIANT_NAME_DRIVETRAIN_MISMATCH',
+          detail: 'AWD!=FWD',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
   it('keeps a semantic duplicate TRIM on HOLD within the same VARIANT', async () => {
     const store = new MemoryVehicleMasterStore();
     const official = source('official-trim-duplicate', 'MANUFACTURER_OFFICIAL', '7');
