@@ -68,6 +68,13 @@ jobs:
             "work/gpt/data-console-reference-ux-20260926"
             "work/gpt/data-ui-vehicle-finder-slice-20260925"
             "codex/erp5-consumer-runtime-20260921"
+            "claude/freepass-data-work-ts0y9t"
+            "feat/catalog-data-health-api-v1-20260921"
+            "work/admin-catalog-consumer-v1-20260921"
+            "work/admin-catalog-consumer-v1-rebased-20260921"
+            "work/admin-catalog-projection-v1-current-20260921"
+            "work/data/branch-cleanup"
+            "work/data/branch-cleanup-2"
           )
           for b in "${branches[@]}"; do
             if git ls-remote --exit-code --heads origin "refs/heads/${b}" >/dev/null 2>&1; then
