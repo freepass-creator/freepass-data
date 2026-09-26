@@ -1,4 +1,4 @@
-import type { ErpPublicProduct, ProjectionRelease, ValidationStatus } from './catalog.js';
+import type { ErpPublicProduct, ProjectionProduct, ProjectionRelease, ValidationStatus } from './catalog.js';
 import type { CatalogEntityType } from './history.js';
 
 export type ProjectionEvidenceOrigin =
@@ -51,8 +51,8 @@ export type ProjectionFieldLineageRecord = {
   revisionRecordId?: string | null;
 };
 
-export type ProjectionEvidenceBundle = {
-  release: ProjectionRelease<ErpPublicProduct>;
+export type ProjectionEvidenceBundle<T extends ProjectionProduct = ErpPublicProduct> = {
+  release: ProjectionRelease<T>;
   manifest: ProjectionReleaseManifest;
   lineage: ProjectionFieldLineageRecord[];
 };
@@ -69,9 +69,9 @@ export type ProjectionDeliveryReceipt = {
   processedAt: string;
 };
 
-export type ActiveProjectionEvidenceSnapshot = {
+export type ActiveProjectionEvidenceSnapshot<T extends ProjectionProduct = ErpPublicProduct> = {
   projectionId: string;
-  release: ProjectionRelease<ErpPublicProduct> | null;
+  release: ProjectionRelease<T> | null;
   manifest: ProjectionReleaseManifest | null;
   lineage: ProjectionFieldLineageRecord[];
   consistency: 'ATOMIC';

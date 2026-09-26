@@ -6,7 +6,7 @@ import {
 } from './firestore-document.js';
 import { getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type {
-  AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
+  AuditEvent, CommandReceipt, ErpPublicProduct, ProjectionProduct, Offer, OutboxEvent, Policy,
   Product, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
@@ -373,7 +373,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async listOffers() { return this.all<Offer>(C.offers); }
   async listPolicies() { return this.all<Policy>(C.policies); }
 
-  async stage(release: ProjectionRelease<ErpPublicProduct>) {
+  async stage(release: ProjectionRelease<ProjectionProduct>) {
     await this.db.collection(C.releases).doc(release.releaseId).create(release);
   }
   async stageEvidence(input: {
@@ -387,7 +387,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     }
 
     assertProjectionReleaseIntegrity(
-      releaseSnap.data() as ProjectionRelease<ErpPublicProduct>,
+      releaseSnap.data() as ProjectionRelease<ProjectionProduct>,
       input.manifest,
       input.lineage
     );
@@ -438,7 +438,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       );
 
       assertProjectionReleaseIntegrity(
-        releaseSnap.data() as ProjectionRelease<ErpPublicProduct>,
+        releaseSnap.data() as ProjectionRelease<ProjectionProduct>,
         manifest,
         evidence
       );
@@ -467,7 +467,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         (doc) => doc.data() as ProjectionFieldLineageRecord
       );
       assertProjectionReleaseIntegrity(
-        snap.data() as ProjectionRelease<ErpPublicProduct>,
+        snap.data() as ProjectionRelease<ProjectionProduct>,
         manifest,
         evidence
       );
@@ -484,11 +484,15 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       tx.set(activeRef, { releaseId, projectionId });
     });
   }
-  async getActive(projectionId: string) {
-    return readFirestoreActiveProjection(this.db, projectionId);
+  async getActive<T extends ProjectionProduct = ErpPublicProduct>(
+    projectionId: string
+  ): Promise<ProjectionRelease<T> | null> {
+    return readFirestoreActiveProjection<T>(this.db, projectionId);
   }
-  async getActiveEvidenceSnapshot(projectionId: string) {
-    return readFirestoreActiveProjectionEvidence(this.db, projectionId);
+  async getActiveEvidenceSnapshot<T extends ProjectionProduct = ErpPublicProduct>(
+    projectionId: string
+  ) {
+    return readFirestoreActiveProjectionEvidence<T>(this.db, projectionId);
   }
   async getManifest(releaseId: string) {
     return readFirestoreProjectionManifest(this.db, releaseId);

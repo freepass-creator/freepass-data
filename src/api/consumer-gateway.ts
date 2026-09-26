@@ -3,10 +3,12 @@ import Fastify from 'fastify';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
 import catalogSchema from '../../contracts/catalog-v1.schema.json' with { type: 'json' };
+import adminCatalogSchema from '../../contracts/admin-catalog-view-v1.schema.json' with { type: 'json' };
 import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with { type: 'json' };
 import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import estimateMasterSchema from '../../contracts/estimate-newcar-master-v1.schema.json' with { type: 'json' };
 import type { ProjectionStore } from '../ports/catalog-store.js';
+import type { AdminCatalogProduct } from '../domain/catalog.js';
 import {
   ESTIMATE_NEWCAR_MASTER_CONTRACT,
   ESTIMATE_NEWCAR_MASTER_PROJECTION_ID,
@@ -22,7 +24,7 @@ import { stableDigest } from '../shared/stable-digest.js';
 export type ConsumerCapability = 'catalog' | 'catalog-health' | 'estimate-newcar-master';
 export type ConsumerBinding = {
   id: string;
-  projectionId: 'erp-public' | 'estimate-newcar-master';
+  projectionId: 'erp-public' | 'admin-catalog' | 'estimate-newcar-master';
   token: string;
   capabilities?: ConsumerCapability[];
 };
@@ -44,12 +46,14 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     if (!entry || typeof entry !== 'object') throw new Error('Invalid consumer registration');
     const item = entry as Record<string, unknown>;
     // F01/F86/Admin need their own complete contracts; never silently map them to ERP.
-    if (typeof item.id !== 'string' || !/^(erp-com|kakao-ops|freepass-estimate|whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
+    if (typeof item.id !== 'string' || !/^(erp-com|kakao-ops|freepass-estimate|freepass-admin-catalog|whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
       throw new Error('Consumer contract is not implemented for this registration');
     }
     const expectedProjection = item.id === 'freepass-estimate'
       ? ESTIMATE_NEWCAR_MASTER_PROJECTION_ID
-      : 'erp-public';
+      : item.id === 'freepass-admin-catalog'
+        ? 'admin-catalog'
+        : 'erp-public';
     if (item.projectionId !== expectedProjection) throw new Error('Unsupported consumer projection');
     if (typeof item.token !== 'string' || item.token.trim() !== item.token || item.token.length < 32) {
       throw new Error('Each consumer needs a distinct service token of at least 32 characters');
@@ -130,7 +134,8 @@ export function createConsumerGateway(
   const ajv = new Ajv2020({ strict: false });
   addFormats(ajv);
   ajv.addSchema(catalogSchema);
-  const validateData = ajv.compile(erpViewSchema);
+  const validateErpData = ajv.compile(erpViewSchema);
+  const validateAdminResponse = ajv.compile(adminCatalogSchema);
   const validateHealth = ajv.compile(healthSchema);
   const validateEstimateMaster = ajv.compile(estimateMasterSchema);
   app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
@@ -185,7 +190,7 @@ export function createConsumerGateway(
       }, async () => {
         const release = await store.getActive(binding.projectionId);
         if (!release) throw new ConsumerReadError('NO_ACTIVE_RELEASE', 503);
-        if (release.schemaVersion !== '1.0.0' || !validateData(release.data)) {
+        if (release.schemaVersion !== '1.0.0') {
           throw new ConsumerReadError('UNSUPPORTED_OR_INCOMPLETE_RELEASE', 503);
         }
         const manifest = await store.getManifest(release.releaseId);
@@ -198,16 +203,54 @@ export function createConsumerGateway(
           !release.activatedAt || !Number.isFinite(Date.parse(release.activatedAt))) {
           throw new ConsumerReadError('RELEASE_EVIDENCE_MISMATCH', 503);
         }
-        return {
-          data: release.data,
-          meta: {
-            consumerId: binding.id, projectionId: release.projectionId,
-            authority: 'CANONICAL_ACTIVE' as const,
-            schemaVersion: release.schemaVersion, releaseId: release.releaseId,
-            manifestId: release.manifestId, inputDigest: release.inputDigest, dataDigest: release.dataDigest,
-            revision: release.canonicalRevision, generatedAt: release.generatedAt, activatedAt: release.activatedAt,
-          },
+        const commonMeta = {
+          consumerId: binding.id,
+          projectionId: release.projectionId,
+          authority: 'CANONICAL_ACTIVE' as const,
+          schemaVersion: release.schemaVersion,
+          releaseId: release.releaseId,
+          manifestId: release.manifestId,
+          inputDigest: release.inputDigest,
+          dataDigest: release.dataDigest,
+          revision: release.canonicalRevision,
+          generatedAt: release.generatedAt,
+          activatedAt: release.activatedAt,
         };
+
+        if (binding.projectionId === 'admin-catalog') {
+          const data = release.data as unknown as AdminCatalogProduct[];
+          const missingPolicyOfferIds = [...new Set(
+            data.flatMap((product) => product.offers)
+              .filter((offer) => offer.policyState === 'MISSING')
+              .map((offer) => offer.offerId)
+          )].sort();
+          const invalidPolicyFactRefs = [...new Set(
+            data.flatMap((product) => product.offers)
+              .flatMap((offer) => offer.invalidPolicyFactRefs)
+          )].sort();
+          const response = {
+            schema: 'freepass-data.admin-catalog/v1',
+            data,
+            meta: {
+              ...commonMeta,
+              projectionId: 'admin-catalog' as const,
+              policyParity: missingPolicyOfferIds.length || invalidPolicyFactRefs.length
+                ? 'INCOMPLETE' as const
+                : 'COMPLETE' as const,
+              missingPolicyOfferIds,
+              invalidPolicyFactRefs,
+            },
+          };
+          if (!validateAdminResponse(response)) {
+            throw new ConsumerReadError('UNSUPPORTED_OR_INCOMPLETE_RELEASE', 503);
+          }
+          return response;
+        }
+
+        if (!validateErpData(release.data)) {
+          throw new ConsumerReadError('UNSUPPORTED_OR_INCOMPLETE_RELEASE', 503);
+        }
+        return { data: release.data, meta: commonMeta };
       });
       return result;
     } catch (error) {

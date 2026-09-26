@@ -1,6 +1,6 @@
 import type {
   AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
-  Product, ProjectionRelease, VehicleAsset, VehicleModel
+  Product, ProjectionProduct, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
   CanonicalSourceBinding,
@@ -128,23 +128,25 @@ export interface CatalogStore {
   }): Promise<void>;
 }
 export interface ProjectionStore {
-  stage(release: ProjectionRelease<ErpPublicProduct>): Promise<void>;
+  stage<T extends ProjectionProduct>(release: ProjectionRelease<T>): Promise<void>;
   stageEvidence(input: {
     manifest: ProjectionReleaseManifest;
     lineage: ProjectionFieldLineageRecord[];
   }): Promise<void>;
   markReady(releaseId: string): Promise<void>;
   activate(releaseId: string): Promise<void>;
-  getActive(projectionId: string): Promise<ProjectionRelease<ErpPublicProduct> | null>;
+  getActive<T extends ProjectionProduct = ErpPublicProduct>(
+    projectionId: string
+  ): Promise<ProjectionRelease<T> | null>;
   getManifest(releaseId: string): Promise<ProjectionReleaseManifest | null>;
   listProjectionLineage(releaseId: string): Promise<ProjectionFieldLineageRecord[]>;
   getDeliveryReceipt(eventId: string): Promise<ProjectionDeliveryReceipt | null>;
   putDeliveryReceipt(receipt: ProjectionDeliveryReceipt): Promise<void>;
 }
 export interface ProjectionEvidenceSnapshotStore {
-  getActiveEvidenceSnapshot(
+  getActiveEvidenceSnapshot<T extends ProjectionProduct = ErpPublicProduct>(
     projectionId: string
-  ): Promise<ActiveProjectionEvidenceSnapshot>;
+  ): Promise<ActiveProjectionEvidenceSnapshot<T>>;
 }
 
 export interface OutboxStore {

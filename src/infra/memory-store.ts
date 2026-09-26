@@ -1,6 +1,6 @@
 import type {
   AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
-  Product, ProjectionRelease, VehicleAsset, VehicleModel
+  Product, ProjectionProduct, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
   CatalogStore, CatalogTransaction, OutboxStore, ProjectionStore
@@ -28,6 +28,7 @@ import type {
   WriterOwnershipTransferReceipt
 } from '../domain/writer-ownership.js';
 import type {
+  ActiveProjectionEvidenceSnapshot,
   ProjectionDeliveryReceipt,
   ProjectionFieldLineageRecord,
   ProjectionReleaseManifest
@@ -58,7 +59,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   private revisionHistory = new Map<string, EntityRevisionRecord>();
   readonly audits: AuditEvent[] = [];
   readonly outbox = new Map<string, OutboxEvent>();
-  private releases = new Map<string, ProjectionRelease<ErpPublicProduct>>();
+  private releases = new Map<string, ProjectionRelease<ProjectionProduct>>();
   private manifests = new Map<string, ProjectionReleaseManifest>();
   private projectionLineage = new Map<string, ProjectionFieldLineageRecord>();
   private deliveryReceipts = new Map<string, ProjectionDeliveryReceipt>();
@@ -354,7 +355,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async listOffers() { return copy([...this.offers.values()]); }
   async listPolicies() { return copy([...this.policies.values()]); }
 
-  async stage(release: ProjectionRelease<ErpPublicProduct>) {
+  async stage<T extends ProjectionProduct>(release: ProjectionRelease<T>) {
     this.releases.set(release.releaseId, copy(release));
   }
   async stageEvidence(input: {
@@ -412,11 +413,17 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     release.activatedAt = new Date().toISOString();
     this.active.set(release.projectionId, releaseId);
   }
-  async getActive(projectionId: string) {
+  async getActive<T extends ProjectionProduct = ErpPublicProduct>(
+    projectionId: string
+  ): Promise<ProjectionRelease<T> | null> {
     const id = this.active.get(projectionId);
-    return id ? copy(this.releases.get(id) ?? null) : null;
+    return id
+      ? copy(this.releases.get(id) ?? null) as ProjectionRelease<T> | null
+      : null;
   }
-  async getActiveEvidenceSnapshot(projectionId: string) {
+  async getActiveEvidenceSnapshot<T extends ProjectionProduct = ErpPublicProduct>(
+    projectionId: string
+  ): Promise<ActiveProjectionEvidenceSnapshot<T>> {
     const releaseId = this.active.get(projectionId);
     if (!releaseId) {
       return {
@@ -437,7 +444,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
       manifest,
       lineage,
       consistency: 'ATOMIC' as const
-    });
+    }) as ActiveProjectionEvidenceSnapshot<T>;
   }
   async getManifest(releaseId: string) {
     return copy(this.manifests.get(releaseId) ?? null);

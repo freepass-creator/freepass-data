@@ -113,7 +113,7 @@ describe('Catalog Data Health v1', () => {
 
     const report = await readCatalogDataHealth(
       store,
-      changingProjection,
+      changingProjection as unknown as Parameters<typeof readCatalogDataHealth>[1],
       '2026-09-21T10:01:00.000Z'
     );
 
@@ -160,7 +160,7 @@ describe('Catalog Data Health v1', () => {
 
     const report = await readCatalogDataHealth(
       store,
-      changingProjection,
+      changingProjection as unknown as Parameters<typeof readCatalogDataHealth>[1],
       '2026-09-21T10:01:00.000Z'
     );
 
@@ -465,7 +465,7 @@ describe('Catalog Data Health v1', () => {
 
     const report = await readCatalogDataHealth(
       store,
-      tamperedProjection,
+      tamperedProjection as unknown as Parameters<typeof readCatalogDataHealth>[1],
       '2026-09-21T10:01:00.000Z'
     );
 
@@ -503,7 +503,7 @@ describe('Catalog Data Health v1', () => {
 
     const report = await readCatalogDataHealth(
       store,
-      tamperedProjection,
+      tamperedProjection as unknown as Parameters<typeof readCatalogDataHealth>[1],
       '2026-09-21T10:01:00.000Z'
     );
 

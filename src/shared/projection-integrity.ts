@@ -1,4 +1,5 @@
 import type {
+  AdminCatalogProduct,
   ErpPublicProduct,
   ProjectionRelease
 } from '../domain/catalog.js';
@@ -55,13 +56,24 @@ export type ProjectionIntegrityResult = {
   canonicalRevision: number;
 };
 
-type SupportedProjectionRecord = ErpPublicProduct | EstimateNewcarMasterRecord;
+type SupportedProjectionRecord = ErpPublicProduct | AdminCatalogProduct | EstimateNewcarMasterRecord;
 
 function projectionCounts(
   release: ProjectionRelease<SupportedProjectionRecord>
 ): { products: number; offers: number; supported: boolean } {
   if (release.projectionId === 'erp-public') {
     const rows = release.data as ErpPublicProduct[];
+    if (rows.some((row) => !Array.isArray(row?.offers))) {
+      return { products: rows.length, offers: 0, supported: false };
+    }
+    return {
+      products: rows.length,
+      offers: rows.reduce((sum, product) => sum + product.offers.length, 0),
+      supported: true
+    };
+  }
+  if (release.projectionId === 'admin-catalog') {
+    const rows = release.data as AdminCatalogProduct[];
     if (rows.some((row) => !Array.isArray(row?.offers))) {
       return { products: rows.length, offers: 0, supported: false };
     }
