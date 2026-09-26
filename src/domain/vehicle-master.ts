@@ -471,6 +471,13 @@ export function sealVehicleMasterRepairApproval(
   return { ...record, contentHash: stableDigest(record) };
 }
 
+export function verifyVehicleMasterRepairApproval(
+  record: VehicleMasterRepairApproval
+) {
+  const { contentHash, ...input } = record;
+  return sealVehicleMasterRepairApproval(input).contentHash === contentHash;
+}
+
 export function sealVehicleMasterRepairReceipt(
   input: Omit<VehicleMasterRepairReceipt, 'contentHash'>
 ): VehicleMasterRepairReceipt {
@@ -527,6 +534,13 @@ export function sealVehicleMasterRepairReceipt(
     afterContentHash: cleanText(input.afterContentHash, 'afterContentHash'),
   };
   return { ...record, contentHash: stableDigest(record) };
+}
+
+export function verifyVehicleMasterRepairReceipt(
+  record: VehicleMasterRepairReceipt
+) {
+  const { contentHash, ...input } = record;
+  return sealVehicleMasterRepairReceipt(input).contentHash === contentHash;
 }
 
 export function sealVehicleMasterResolverFeedback(
