@@ -20,7 +20,9 @@ type VersionedRecord = {
 
 export class MemoryVehicleMasterStore implements VehicleMasterStore {
   private readonly nodes = new Map<string, VehicleMasterNode>();
+  private readonly nodeRevisions = new Map<string, VehicleMasterNode>();
   private readonly rules = new Map<string, VehicleMasterCompatibilityRule>();
+  private readonly ruleRevisions = new Map<string, VehicleMasterCompatibilityRule>();
   private readonly prices = new Map<string, VehicleMasterPriceRevision>();
   private readonly sourceDocuments = new Map<string, VehicleMasterSourceDocument>();
   private readonly hashes = new Map<string, VehicleMasterHashRecord>();
@@ -29,6 +31,7 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
 
   private putVersioned<T extends VersionedRecord>(
     map: Map<string, T>,
+    revisions: Map<string, T>,
     record: T
   ): VehicleMasterWriteResult {
     const current = map.get(record.id);
@@ -37,6 +40,7 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
         throw new Error('VEHICLE_MASTER_FIRST_REVISION_MUST_BE_ONE');
       }
       map.set(record.id, copy(record));
+      revisions.set(`${record.id}__r${record.revision}`, copy(record));
       return 'CREATED';
     }
     if (current.contentHash === record.contentHash) return 'UNCHANGED';
@@ -46,6 +50,7 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
       );
     }
     map.set(record.id, copy(record));
+    revisions.set(`${record.id}__r${record.revision}`, copy(record));
     return 'UPDATED';
   }
 
@@ -71,8 +76,13 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
     return copy([...this.nodes.values()].filter((item) => item.nodeType === nodeType));
   }
 
+  async listNodeRevisions() {
+    return copy([...this.nodeRevisions.values()]
+      .sort((a, b) => a.id.localeCompare(b.id) || a.revision - b.revision));
+  }
+
   async putNode(record: VehicleMasterNode) {
-    return this.putVersioned(this.nodes, record);
+    return this.putVersioned(this.nodes, this.nodeRevisions, record);
   }
 
   async getCompatibilityRule(id: string) {
@@ -84,8 +94,13 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
       .sort((a, b) => a.id.localeCompare(b.id)));
   }
 
+  async listCompatibilityRuleRevisions() {
+    return copy([...this.ruleRevisions.values()]
+      .sort((a, b) => a.id.localeCompare(b.id) || a.revision - b.revision));
+  }
+
   async putCompatibilityRule(record: VehicleMasterCompatibilityRule) {
-    return this.putVersioned(this.rules, record);
+    return this.putVersioned(this.rules, this.ruleRevisions, record);
   }
 
   async getPriceRevision(id: string) {

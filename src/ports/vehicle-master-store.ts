@@ -12,10 +12,12 @@ import type {
 export interface VehicleMasterStore {
   getNode(id: string): Promise<VehicleMasterNode | null>;
   listNodesByType(nodeType: VehicleMasterNode['nodeType']): Promise<VehicleMasterNode[]>;
+  listNodeRevisions(): Promise<VehicleMasterNode[]>;
   putNode(record: VehicleMasterNode): Promise<VehicleMasterWriteResult>;
 
   getCompatibilityRule(id: string): Promise<VehicleMasterCompatibilityRule | null>;
   listCompatibilityRules(): Promise<VehicleMasterCompatibilityRule[]>;
+  listCompatibilityRuleRevisions(): Promise<VehicleMasterCompatibilityRule[]>;
   putCompatibilityRule(record: VehicleMasterCompatibilityRule): Promise<VehicleMasterWriteResult>;
 
   getPriceRevision(id: string): Promise<VehicleMasterPriceRevision | null>;
