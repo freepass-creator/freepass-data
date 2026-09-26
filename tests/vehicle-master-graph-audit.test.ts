@@ -472,4 +472,350 @@ describe('vehicle master graph audit', () => {
     expect(await store.getCompatibilityRule('rule_audit_includes')).toEqual(beforeRule);
     expect(await store.getPriceRevision('price_audit_base')).toEqual(beforePrice);
   });
+
+  it('audits stored node semantics at promotion-gate parity', () => {
+    const n = cleanNodes();
+
+    const phaseA = sealVehicleMasterNode({
+      id: 'phase_audit_overlap_a',
+      nodeType: 'PHASE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '전기형',
+      parentId: n.generation.id,
+      refs: {
+        makeId: n.make.id,
+        modelId: n.model.id,
+        generationId: n.generation.id,
+      },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: ['legacy'],
+      effectiveFrom: '2025-01-01T00:00:00.000Z',
+      effectiveTo: '2026-06-01T00:00:00.000Z',
+      createdAt: at,
+      updatedAt: at,
+    });
+    const phaseB = sealVehicleMasterNode({
+      id: 'phase_audit_overlap_b',
+      nodeType: 'PHASE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '후기형',
+      parentId: n.generation.id,
+      refs: {
+        makeId: n.make.id,
+        modelId: n.model.id,
+        generationId: n.generation.id,
+      },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: ['legacy'],
+      effectiveFrom: '2026-01-01T00:00:00.000Z',
+      effectiveTo: '2027-01-01T00:00:00.000Z',
+      createdAt: at,
+      updatedAt: at,
+    });
+
+    const badModelYear = sealVehicleMasterNode({
+      id: 'my_audit_bad_semantics',
+      nodeType: 'MODEL_YEAR',
+      status: 'HOLD',
+      revision: 1,
+      canonicalName: '2026년형',
+      parentId: n.phase.id,
+      refs: {
+        makeId: n.make.id,
+        modelId: n.model.id,
+        generationId: n.generation.id,
+        phaseId: n.phase.id,
+      },
+      aliases: ['2025MY'],
+      attributes: { modelYear: 2028 },
+      sourceEvidenceIds: ['legacy'],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+
+    const badPowertrain = sealVehicleMasterNode({
+      id: 'pt_audit_bad_semantics',
+      nodeType: 'POWERTRAIN',
+      status: 'HOLD',
+      revision: 1,
+      canonicalName: '1.6 하이브리드',
+      parentId: n.modelYear.id,
+      refs: {
+        ...n.modelYear.refs,
+        modelYearId: n.modelYear.id,
+      },
+      aliases: [],
+      attributes: {
+        identityKey: 'wrong',
+        fuelType: 'GASOLINE',
+      },
+      sourceEvidenceIds: ['legacy'],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+
+    const badVariant = sealVehicleMasterNode({
+      id: 'variant_audit_bad_semantics',
+      nodeType: 'VARIANT',
+      status: 'HOLD',
+      revision: 1,
+      canonicalName: '5인승 RWD',
+      parentId: n.powertrain.id,
+      refs: {
+        ...n.powertrain.refs,
+        powertrainId: n.powertrain.id,
+      },
+      aliases: [],
+      attributes: {
+        seats: 7,
+        drivetrain: '전륜',
+      },
+      sourceEvidenceIds: ['legacy'],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+
+    const invalidVariant = sealVehicleMasterNode({
+      id: 'variant_audit_invalid',
+      nodeType: 'VARIANT',
+      status: 'HOLD',
+      revision: 1,
+      canonicalName: '미상 사양',
+      parentId: n.powertrain.id,
+      refs: {
+        ...n.powertrain.refs,
+        powertrainId: n.powertrain.id,
+      },
+      aliases: [],
+      attributes: {
+        seats: 0,
+        drivetrain: '사륜',
+      },
+      sourceEvidenceIds: ['legacy'],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+
+    const badTrim = sealVehicleMasterNode({
+      id: 'trim_audit_bad_semantics',
+      nodeType: 'TRIM',
+      status: 'HOLD',
+      revision: 1,
+      canonicalName: '노블레스',
+      parentId: n.variant.id,
+      refs: {
+        ...n.variant.refs,
+        variantId: n.variant.id,
+      },
+      aliases: [],
+      attributes: { identityKey: 'wrong' },
+      sourceEvidenceIds: ['legacy'],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+
+    const incompleteOption = sealVehicleMasterNode({
+      id: 'opt_audit_incomplete_price_target',
+      nodeType: 'OPTION',
+      status: 'HOLD',
+      revision: 1,
+      canonicalName: '불완전 옵션',
+      parentId: n.modelYear.id,
+      refs: {
+        makeId: n.make.id,
+        modelId: n.model.id,
+        generationId: null,
+        phaseId: n.phase.id,
+        modelYearId: n.modelYear.id,
+      },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: ['legacy'],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+    const incompletePrice = sealVehicleMasterPriceRevision({
+      id: 'price_audit_incomplete_target',
+      targetId: incompleteOption.id,
+      priceType: 'OPTION',
+      amount: 100000,
+      currency: 'KRW',
+      revision: 1,
+      sourceEvidenceIds: ['legacy'],
+      sourceDocumentIds: ['legacy'],
+      effectiveFrom: '2026-01-01T00:00:00.000Z',
+      effectiveTo: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+
+    const report = auditVehicleMasterGraph({
+      nodes: [
+        ...n.list,
+        phaseA,
+        phaseB,
+        badModelYear,
+        badPowertrain,
+        badVariant,
+        invalidVariant,
+        badTrim,
+        incompleteOption,
+      ],
+      rules: [cleanRule(n.trim, n.base)],
+      prices: [cleanPrice(n.trim), incompletePrice],
+    });
+
+    expect(report.status).toBe('FAIL');
+    expect(report.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'PHASE_EFFECTIVE_RANGE_OVERLAP' }),
+      expect.objectContaining({
+        code: 'MODEL_YEAR_NAME_MISMATCH',
+        entityId: badModelYear.id,
+      }),
+      expect.objectContaining({
+        code: 'MODEL_YEAR_ALIAS_MISMATCH',
+        entityId: badModelYear.id,
+      }),
+      expect.objectContaining({
+        code: 'POWERTRAIN_IDENTITY_MISMATCH',
+        entityId: badPowertrain.id,
+      }),
+      expect.objectContaining({
+        code: 'POWERTRAIN_FUEL_TYPE_MISMATCH',
+        entityId: badPowertrain.id,
+      }),
+      expect.objectContaining({
+        code: 'VARIANT_DRIVETRAIN_NOT_CANONICAL',
+        entityId: badVariant.id,
+      }),
+      expect.objectContaining({
+        code: 'VARIANT_NAME_SEATS_MISMATCH',
+        entityId: badVariant.id,
+      }),
+      expect.objectContaining({
+        code: 'VARIANT_NAME_DRIVETRAIN_MISMATCH',
+        entityId: badVariant.id,
+      }),
+      expect.objectContaining({
+        code: 'VARIANT_SEATS_INVALID',
+        entityId: invalidVariant.id,
+      }),
+      expect.objectContaining({
+        code: 'VARIANT_DRIVETRAIN_INVALID',
+        entityId: invalidVariant.id,
+      }),
+      expect.objectContaining({
+        code: 'TRIM_IDENTITY_MISMATCH',
+        entityId: badTrim.id,
+      }),
+      expect.objectContaining({
+        code: 'PRICE_TARGET_LINEAGE_INCOMPLETE',
+        entityId: incompletePrice.id,
+        fieldPath: 'targetId.generationId',
+      }),
+    ]));
+  });
+
+  it('audits reverse, two-hop, and cycle dependency conflicts in stored rules', () => {
+    const n = cleanNodes();
+    const refs = {
+      makeId: n.make.id,
+      modelId: n.model.id,
+      generationId: n.generation.id,
+      phaseId: n.phase.id,
+      modelYearId: n.modelYear.id,
+    };
+    const option = (id: string, name: string) => sealVehicleMasterNode({
+      id,
+      nodeType: 'OPTION',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: name,
+      parentId: n.modelYear.id,
+      refs,
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: ['official'],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+    const a = option('opt_audit_graph_a', '옵션 A');
+    const b = option('opt_audit_graph_b', '옵션 B');
+    const cNode = option('opt_audit_graph_c', '옵션 C');
+    const d = option('opt_audit_graph_d', '옵션 D');
+
+    const dependency = (
+      id: string,
+      subjectId: string,
+      targetId: string,
+      ruleType: 'REQUIRES' | 'EXCLUDES'
+    ) => sealVehicleMasterCompatibilityRule({
+      id,
+      revision: 1,
+      subjectId,
+      ruleType,
+      targetIds: [targetId],
+      scope: { trimId: n.trim.id },
+      condition: { evidence: id },
+      effect: ruleType === 'EXCLUDES' ? 'INVALID' : 'VALID',
+      priority: 200,
+      sourceEvidenceIds: ['official'],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+
+    const rules = [
+      dependency('rule_audit_a_requires_b', a.id, b.id, 'REQUIRES'),
+      dependency('rule_audit_b_excludes_a', b.id, a.id, 'EXCLUDES'),
+      dependency('rule_audit_b_requires_c', b.id, cNode.id, 'REQUIRES'),
+      dependency('rule_audit_a_excludes_c', a.id, cNode.id, 'EXCLUDES'),
+      dependency('rule_audit_c_requires_d', cNode.id, d.id, 'REQUIRES'),
+      dependency('rule_audit_d_requires_a', d.id, a.id, 'REQUIRES'),
+      dependency('rule_audit_b_excludes_d', b.id, d.id, 'EXCLUDES'),
+    ];
+
+    const report = auditVehicleMasterGraph({
+      nodes: [...n.list, a, b, cNode, d],
+      rules,
+      prices: [cleanPrice(n.trim)],
+    });
+
+    expect(report.status).toBe('FAIL');
+    expect(report.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'RULE_DEPENDENCY_CONFLICT',
+        entityId: 'rule_audit_b_excludes_a',
+        detail: 'REVERSE_DIRECTION',
+      }),
+      expect.objectContaining({
+        code: 'RULE_DEPENDENCY_TRANSITIVE_CONFLICT',
+        entityId: 'rule_audit_a_excludes_c',
+      }),
+      expect.objectContaining({
+        code: 'RULE_DEPENDENCY_CYCLE_CONFLICT',
+      }),
+    ]));
+  });
+
+
 });
