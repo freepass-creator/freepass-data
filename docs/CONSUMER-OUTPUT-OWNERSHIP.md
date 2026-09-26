@@ -80,6 +80,14 @@ The bridge can be retired only after a `CANONICAL_ACTIVE` sheet projection
 contains all fields needed by the sheet writers and the same delivery receipt
 contract passes end-to-end.
 
+A valid `LEGACY_VERIFIED_BRIDGE` delivery receipt may prove that the FreePass Data
+transport path and readback are working for shadow/migration purposes, but it must
+not set canonical production readback evidence. The executable conversion is
+`deriveSheetCutoverEvidence()`: bridge authority keeps
+`productionReadbackVerified=false`, while only a valid `CANONICAL_ACTIVE`
+delivery may set it to true. The cutover evaluator independently rejects
+`sheet-publication-bridge` as authority for the final `FREEPASS_DATA_READ` stage.
+
 
 ### Read-only bridge preparation
 

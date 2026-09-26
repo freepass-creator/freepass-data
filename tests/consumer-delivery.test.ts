@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSheetDeliveryExpectation,
+  deriveSheetCutoverEvidence,
   validateSheetDeliveryReceipt,
   type SheetDeliveryReceipt
 } from '../src/domain/consumer-delivery.js';
@@ -79,6 +80,33 @@ function expectation() {
   return buildSheetDeliveryExpectation(handoff());
 }
 
+function canonicalHandoff(): SheetPublicationHandoff {
+  const value = handoff();
+  value.releaseAuthority = 'CANONICAL_ACTIVE';
+  value.approvedRelease.projectionId = 'erp-public';
+  value.manifest.releaseAuthority = 'CANONICAL_ACTIVE';
+  value.manifest.projectionId = 'erp-public';
+  value.handoffHash = hashSheetPublicationHandoff(
+    (({ handoffHash: _hash, ...rest }) => rest)(value)
+  );
+  return value;
+}
+
+function canonicalReceipt(): {
+  receipt: SheetDeliveryReceipt;
+  expected: ReturnType<typeof buildSheetDeliveryExpectation>;
+} {
+  const expected = buildSheetDeliveryExpectation(canonicalHandoff());
+  return {
+    expected,
+    receipt: receipt({
+      releaseAuthority: 'CANONICAL_ACTIVE',
+      approvedRelease: structuredClone(expected.approvedRelease),
+      publicationHandoffHash: expected.publicationHandoffHash
+    })
+  };
+}
+
 function receipt(overrides: Partial<SheetDeliveryReceipt> = {}): SheetDeliveryReceipt {
   const expected = expectation();
   return {
@@ -126,6 +154,58 @@ describe('sheet delivery receipt', () => {
       status: 'PASS',
       violations: []
     });
+  });
+
+  it('allows bridge delivery for shadow evidence but never promotes it to canonical production readback', () => {
+    const result = deriveSheetCutoverEvidence(receipt(), expectation());
+
+    expect(result).toMatchObject({
+      status: 'HOLD',
+      authority: 'LEGACY_VERIFIED_BRIDGE',
+      evidence: {
+        freepassReadVerified: true,
+        productionReadbackVerified: false,
+        approvedRelease: release
+      },
+      blockers: ['LEGACY_BRIDGE_NOT_CANONICAL_READBACK']
+    });
+  });
+
+  it('promotes only a valid CANONICAL_ACTIVE delivery to production readback evidence', () => {
+    const canonical = canonicalReceipt();
+    const result = deriveSheetCutoverEvidence(
+      canonical.receipt,
+      canonical.expected
+    );
+
+    expect(result).toMatchObject({
+      status: 'PASS',
+      authority: 'CANONICAL_ACTIVE',
+      evidence: {
+        freepassReadVerified: true,
+        productionReadbackVerified: true,
+        approvedRelease: canonical.expected.approvedRelease
+      },
+      blockers: []
+    });
+  });
+
+  it('does not promote an invalid delivery receipt into any readback evidence', () => {
+    const result = deriveSheetCutoverEvidence(receipt({
+      readback: {
+        verified: false,
+        vehicleKeyCount: 692,
+        dataDigest: 'sheet_output_digest'
+      }
+    }), expectation());
+
+    expect(result.status).toBe('HOLD');
+    expect(result.evidence).toEqual({
+      freepassReadVerified: false,
+      productionReadbackVerified: false,
+      approvedRelease: null
+    });
+    expect(result.blockers).toContain('READBACK_NOT_VERIFIED');
   });
 
   it('blocks a receipt copied from another handoff even when the approved release is identical', () => {
