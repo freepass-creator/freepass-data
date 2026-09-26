@@ -359,8 +359,8 @@ function changeId(input: {
     input.entityType,
     input.entityId,
     input.fieldPath,
-    stable(input.before),
-    stable(input.after)
+    stableValue(input.before),
+    stableValue(input.after)
   ]).slice(0, 32);
 }
 
