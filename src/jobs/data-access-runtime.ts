@@ -37,6 +37,10 @@ import { createFirestoreDataStore } from '../infra/firestore-store.js';
 import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
 import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
 import { createHttpVehicleMasterSourceFetcher } from '../infra/vehicle-master-source-fetcher.js';
+import {
+  buildEstimateMasterFromCanonicalVehicleMaster,
+  type EstimateMasterCanonicalBridge,
+} from '../application/estimate-master-canonical.js';
 
 function readOnlyAccess(input: { accessToken: string; evidenceBucket: string }) {
   return new DataAccessGateway(gcsDataAccessLogStore({
@@ -436,5 +440,35 @@ export function createVehicleMasterJobRuntime() {
     store: createFirestoreVehicleMasterStore(),
     archive: createFirebaseVehicleMasterSourceArchive(),
     fetcher: createHttpVehicleMasterSourceFetcher(),
+  };
+}
+
+export function createVehicleMasterReadOnlyDataAccessRuntime(input: {
+  accessToken: string;
+  evidenceBucket: string;
+}) {
+  const access = readOnlyAccess(input);
+  const store = createFirestoreVehicleMasterStore();
+
+  return {
+    estimateMasterReadiness: (bridge: EstimateMasterCanonicalBridge = {}) => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-estimate-master-readiness', kind: 'SERVICE' },
+        clientId: 'job:check-estimate-master-readiness',
+        purpose: 'derive Estimate master readiness from canonical Vehicle Master without Firestore audit writes'
+      },
+      operation: 'READ_ESTIMATE_MASTER_READINESS',
+      resource: {
+        kind: 'PROJECTION',
+        name: 'estimate-newcar-master-readiness',
+        projectionId: 'estimate-newcar-master'
+      },
+      requestDigest: stableDigest({ bridge }),
+      summarize: (value) => ({
+        count: value.summary.total,
+        digest: stableDigest(value.records),
+        inputDigest: value.summary.inputDigest
+      })
+    }, () => buildEstimateMasterFromCanonicalVehicleMaster(store, { bridge }))
   };
 }
