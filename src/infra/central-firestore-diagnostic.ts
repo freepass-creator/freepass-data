@@ -2,13 +2,19 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 
+export const CENTRAL_CANONICAL_COLLECTIONS = [
+  FIRESTORE_COLLECTIONS.catalog.products,
+  FIRESTORE_COLLECTIONS.catalog.offers,
+  FIRESTORE_COLLECTIONS.catalog.policies
+] as const;
+
+export const CENTRAL_ACTIVE_PROJECTION_COLLECTION = FIRESTORE_COLLECTIONS.projection.active;
+
 export const CENTRAL_DIAGNOSTIC_COLLECTIONS = [
   'products',
   'policy',
-  FIRESTORE_COLLECTIONS.catalog.products,
-  FIRESTORE_COLLECTIONS.catalog.offers,
-  FIRESTORE_COLLECTIONS.catalog.policies,
-  FIRESTORE_COLLECTIONS.projection.active
+  ...CENTRAL_CANONICAL_COLLECTIONS,
+  CENTRAL_ACTIVE_PROJECTION_COLLECTION
 ] as const;
 
 export type CentralFirestoreCount = {
