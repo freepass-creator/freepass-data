@@ -54,6 +54,7 @@ export type VehicleMasterEvidenceIssue = {
     | 'TRIM_DUPLICATE_IN_VARIANT'
     | 'VARIANT_SEATS_INVALID'
     | 'VARIANT_DRIVETRAIN_INVALID'
+    | 'VARIANT_DRIVETRAIN_NOT_CANONICAL'
     | 'VARIANT_NAME_SEATS_MISMATCH'
     | 'VARIANT_NAME_DRIVETRAIN_MISMATCH'
     | 'VARIANT_DUPLICATE_IN_POWERTRAIN'
@@ -604,10 +605,11 @@ async function applyNodeReferenceGate(
 
   if (proposal.nodeType === 'VARIANT') {
     const seats = canonicalSeatCount(proposal.attributes.seats);
-    const drivetrain =
+    const storedDrivetrain =
       typeof proposal.attributes.drivetrain === 'string'
-        ? canonicalDrivetrain(proposal.attributes.drivetrain)
+        ? proposal.attributes.drivetrain.trim()
         : null;
+    const drivetrain = canonicalDrivetrain(storedDrivetrain);
 
     if (seats === null) {
       issues.push({
@@ -619,6 +621,12 @@ async function applyNodeReferenceGate(
       issues.push({
         code: 'VARIANT_DRIVETRAIN_INVALID',
         fieldPath: 'attributes.drivetrain',
+      });
+    } else if (storedDrivetrain !== drivetrain) {
+      issues.push({
+        code: 'VARIANT_DRIVETRAIN_NOT_CANONICAL',
+        fieldPath: 'attributes.drivetrain',
+        detail: `${storedDrivetrain}!=${drivetrain}`,
       });
     }
 
