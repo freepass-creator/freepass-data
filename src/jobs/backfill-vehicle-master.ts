@@ -147,7 +147,7 @@ const currentRecaptureTtlHours = currentTtlHours(
   process.env.VEHICLE_MASTER_BACKFILL_CURRENT_TTL_HOURS
 );
 
-const store = createFirestoreVehicleMasterStore();
+const { store, archive, fetcher } = createVehicleMasterJobRuntime();
 const existingSources = await store.listSourceDocuments();
 const existingNormalized = await store.listPipelineRecordsByKind('NORMALIZED_RECORD');
 const completionIndex = buildVehicleMasterBackfillCompletionIndex({
@@ -157,8 +157,6 @@ const completionIndex = buildVehicleMasterBackfillCompletionIndex({
 const manualCompletedUrls = completedUrls(
   process.env.VEHICLE_MASTER_BACKFILL_COMPLETED_URLS_JSON
 );
-const archive = createFirebaseVehicleMasterSourceArchive();
-const fetcher = createHttpVehicleMasterSourceFetcher();
 const parsers = createVehicleMasterSourceParsers();
 
 const discovered: VehicleMasterDiscoveredPage[] = [...extras];
