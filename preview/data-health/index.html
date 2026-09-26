@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>프리패스 데이터 · Data Health</title>
+<link rel="stylesheet" href="/console/data-health/health.css">
+</head>
+<body>
+<main id="data-health"></main>
+<script type="module">
+  import { mountDataHealth } from '/console/data-health/view.mjs';
+  mountDataHealth(document.getElementById('data-health'));
+</script>
+</body>
+</html>
