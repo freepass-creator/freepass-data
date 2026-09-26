@@ -290,3 +290,21 @@ npm run check:consumer-health -- \
 The check is read-only with respect to Canonical/consumer data and is itself
 audited through the Data Access Gateway.
 
+The 2-hour ERP5 continuous audit now runs this unified report before the dedicated
+F01/F86 health detail. Scheduled mode uses the existing read-only WIF identity for
+Firestore reads and the private GCS evidence bucket for the health check's own
+Data Access audit event, so it does not require Firestore audit-write permission.
+
+The scheduled top-level summary stores counts of `HEALTHY / DEGRADED / BLOCKED`
+and one line per registered consumer. It reuses the explicit Sheet evidence
+freshness Repository Variables as the common runtime/Sheet freshness window:
+
+- `SHEET_EVIDENCE_MAX_AGE_MINUTES`
+- `SHEET_EVIDENCE_MAX_FUTURE_SKEW_SECONDS`
+
+If the max-age variable is absent, the source audit continues but
+`consumer-health-summary.json` is recorded as `BLOCKED / NOT_CONFIGURED`.
+A normal consumer-health `BLOCKED` result is evidence, not a source-audit crash;
+authentication, malformed-contract, or runtime failures still fail the workflow.
+
+
