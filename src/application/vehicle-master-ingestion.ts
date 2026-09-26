@@ -85,6 +85,7 @@ export type VehicleMasterEvidenceIssue = {
     | 'RULE_TARGET_HOLD'
     | 'RULE_SCOPE_REFERENCE_MISSING'
     | 'RULE_SCOPE_REFERENCE_TYPE_MISMATCH'
+    | 'RULE_SCOPE_REFERENCE_HOLD'
     | 'RULE_LINEAGE_INCOMPLETE'
     | 'RULE_LINEAGE_MISMATCH'
     | 'RULE_SCOPE_SUBJECT_MISMATCH';
@@ -330,6 +331,22 @@ function ruleComparableLineageFields(a: VehicleMasterNode, b: VehicleMasterNode)
     nodeLineageValue(a, field) !== null &&
     nodeLineageValue(b, field) !== null
   );
+}
+
+function validateRuleNodeLineage(
+  issues: VehicleMasterEvidenceIssue[],
+  node: VehicleMasterNode,
+  fieldPath: string
+) {
+  for (const field of requiredRefFields(node.nodeType)) {
+    if (!node.refs[field]) {
+      issues.push({
+        code: 'RULE_LINEAGE_INCOMPLETE',
+        fieldPath: `${fieldPath}.${field}`,
+        detail: node.id,
+      });
+    }
+  }
 }
 
 function validateRuleLineagePair(
@@ -1277,12 +1294,15 @@ export async function promoteVehicleMasterCompatibilityRule(
       fieldPath: 'subjectId',
       detail: input.proposal.subjectId,
     });
-  } else if (subject.status === 'HOLD') {
-    issues.push({
-      code: 'RULE_SUBJECT_HOLD',
-      fieldPath: 'subjectId',
-      detail: subject.id,
-    });
+  } else {
+    validateRuleNodeLineage(issues, subject, 'subjectId');
+    if (subject.status === 'HOLD') {
+      issues.push({
+        code: 'RULE_SUBJECT_HOLD',
+        fieldPath: 'subjectId',
+        detail: subject.id,
+      });
+    }
   }
 
   const targets: VehicleMasterNode[] = [];
@@ -1297,6 +1317,7 @@ export async function promoteVehicleMasterCompatibilityRule(
       continue;
     }
     targets.push(target);
+    validateRuleNodeLineage(issues, target, `targetIds.${target.id}`);
     if (target.status === 'HOLD') {
       issues.push({
         code: 'RULE_TARGET_HOLD',
@@ -1331,6 +1352,14 @@ export async function promoteVehicleMasterCompatibilityRule(
       });
     }
     scopeNodes.push({ field, node: scopeNode });
+    validateRuleNodeLineage(issues, scopeNode, `scope.${field}`);
+    if (scopeNode.status === 'HOLD') {
+      issues.push({
+        code: 'RULE_SCOPE_REFERENCE_HOLD',
+        fieldPath: `scope.${field}`,
+        detail: scopeNode.id,
+      });
+    }
 
     if (subject) {
       validateRuleLineagePair(issues, subject, scopeNode, `scope.${field}`);
