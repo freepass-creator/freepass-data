@@ -548,3 +548,58 @@
   .vf .vf-filter-actions button{min-height:48px}
   .vf .vf-guided-options{margin-inline:-2px}
 }
+
+
+/* U-01 scan-friendly candidate rows */
+.vf .vf-row-button{min-width:0}
+.vf .vf-row-title{
+  display:block;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-weight:750
+}
+.vf .vf-row-summary{
+  display:grid;
+  gap:1px;
+  min-width:0;
+  margin-top:2px
+}
+.vf .vf-row-summary-line,
+.vf .vf-row-path{
+  display:block;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:var(--text,#5F6974);
+  font-size:var(--vf-support);
+  font-weight:450
+}
+.vf .vf-row-recent{
+  display:inline-flex;
+  width:max-content;
+  margin-top:3px;
+  color:var(--vf-brand);
+  font-size:10px;
+  font-weight:700
+}
+.vf tr[data-recent='true']:not([data-selected='true']){
+  background:color-mix(in srgb,var(--vf-selected) 45%,var(--vf-bg))
+}
+.vf .vf-row-state{min-width:84px}
+
+@media(max-width:900px){
+  .vf tr{
+    min-height:72px;
+    align-items:start
+  }
+  .vf .vf-row-button{padding:2px 0 3px}
+  .vf .vf-row-title{font-size:14px;line-height:1.4}
+  .vf .vf-row-summary-line,.vf .vf-row-path{font-size:12px;line-height:1.4}
+  .vf .vf-row-state{min-width:72px}
+}
+
+@media(min-width:901px){
+  .vf .vf-row-button{padding-block:7px}
+}
