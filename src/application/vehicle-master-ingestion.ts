@@ -107,7 +107,13 @@ export type VehicleMasterEvidenceIssue = {
     | 'RULE_AVAILABILITY_CONDITION_REQUIRED'
     | 'RULE_AVAILABILITY_EFFECT_MISMATCH'
     | 'RULE_AVAILABILITY_DUPLICATE'
-    | 'RULE_AVAILABILITY_CONFLICT';
+    | 'RULE_AVAILABILITY_CONFLICT'
+    | 'RULE_INCLUDES_SUBJECT_TYPE_MISMATCH'
+    | 'RULE_INCLUDES_TARGET_TYPE_MISMATCH'
+    | 'RULE_INCLUDES_EFFECT_MISMATCH'
+    | 'RULE_INCLUDES_DUPLICATE'
+    | 'RULE_INCLUDES_CONFLICT'
+    | 'RULE_PRICE_OVERRIDE_UNDEFINED';
   fieldPath?: string;
   sourceDocumentId?: string;
   detail?: string;
@@ -477,6 +483,25 @@ function oppositeAvailabilityRuleType(
     (a === 'AVAILABLE_IF' && b === 'UNAVAILABLE_IF') ||
     (a === 'UNAVAILABLE_IF' && b === 'AVAILABLE_IF')
   );
+}
+
+function includesSemanticMatch(
+  a: VehicleMasterCompatibilityRule,
+  b: VehicleMasterCompatibilityRule
+) {
+  return (
+    a.subjectId === b.subjectId &&
+    sameTargetSet(a, b) &&
+    sameRuleScope(a, b) &&
+    rulePeriodsOverlap(a, b)
+  );
+}
+
+function sharedRuleTargetIds(
+  a: VehicleMasterCompatibilityRule,
+  b: VehicleMasterCompatibilityRule
+) {
+  return a.targetIds.filter((targetId) => b.targetIds.includes(targetId)).sort();
 }
 
 function rulePeriodsOverlap(
@@ -1672,6 +1697,95 @@ export async function promoteVehicleMasterCompatibilityRule(
       code: 'RULE_SCOPE_SUBJECT_MISMATCH',
       fieldPath: 'scope.trimId',
       detail: `${input.proposal.scope.trimId}!=${subject.id}`,
+    });
+  }
+
+  if (input.proposal.ruleType === 'INCLUDES') {
+    if (subject && subject.nodeType !== 'TRIM') {
+      issues.push({
+        code: 'RULE_INCLUDES_SUBJECT_TYPE_MISMATCH',
+        fieldPath: 'subjectId',
+        detail: `${subject.nodeType}!=TRIM`,
+      });
+    }
+
+    for (const target of targets) {
+      if (target.nodeType !== 'BASE_ITEM') {
+        issues.push({
+          code: 'RULE_INCLUDES_TARGET_TYPE_MISMATCH',
+          fieldPath: `targetIds.${target.id}`,
+          detail: `${target.nodeType}!=BASE_ITEM`,
+        });
+      }
+    }
+
+    if (input.proposal.effect !== 'VALID') {
+      issues.push({
+        code: 'RULE_INCLUDES_EFFECT_MISMATCH',
+        fieldPath: 'effect',
+        detail: `${input.proposal.effect}!=VALID`,
+      });
+    }
+
+    const existingRules = await store.listCompatibilityRules();
+    for (const existing of existingRules) {
+      if (existing.id === input.proposal.id) continue;
+
+      if (
+        existing.ruleType === 'INCLUDES' &&
+        includesSemanticMatch(existing, input.proposal)
+      ) {
+        issues.push({
+          code: 'RULE_INCLUDES_DUPLICATE',
+          fieldPath: 'ruleType',
+          detail: existing.id,
+        });
+      }
+
+      if (
+        existing.ruleType === 'EXCLUDES' &&
+        existing.subjectId === input.proposal.subjectId &&
+        sameRuleScope(existing, input.proposal) &&
+        rulePeriodsOverlap(existing, input.proposal)
+      ) {
+        const sharedTargets = sharedRuleTargetIds(existing, input.proposal);
+        if (sharedTargets.length) {
+          issues.push({
+            code: 'RULE_INCLUDES_CONFLICT',
+            fieldPath: `targetIds.${sharedTargets[0]}`,
+            detail: existing.id,
+          });
+        }
+      }
+    }
+  }
+
+  if (input.proposal.ruleType === 'EXCLUDES') {
+    const existingIncludesRules = (await store.listCompatibilityRules())
+      .filter((rule) =>
+        rule.id !== input.proposal.id &&
+        rule.ruleType === 'INCLUDES' &&
+        rule.subjectId === input.proposal.subjectId &&
+        sameRuleScope(rule, input.proposal) &&
+        rulePeriodsOverlap(rule, input.proposal)
+      );
+
+    for (const existing of existingIncludesRules) {
+      const sharedTargets = sharedRuleTargetIds(existing, input.proposal);
+      if (!sharedTargets.length) continue;
+      issues.push({
+        code: 'RULE_INCLUDES_CONFLICT',
+        fieldPath: `targetIds.${sharedTargets[0]}`,
+        detail: existing.id,
+      });
+    }
+  }
+
+  if (input.proposal.ruleType === 'PRICE_OVERRIDE') {
+    issues.push({
+      code: 'RULE_PRICE_OVERRIDE_UNDEFINED',
+      fieldPath: 'ruleType',
+      detail: 'PRICE_OVERRIDE contract not defined',
     });
   }
 
