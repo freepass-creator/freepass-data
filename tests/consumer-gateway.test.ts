@@ -96,11 +96,17 @@ describe('read-only consumer gateway', () => {
       { ...release, schemaVersion: 'unreviewed-version' },
       { ...release, data: release.data.map((row) => ({ ...row, privateCustomer: 'must-not-be-returned' })) },
     ]) {
-      const { app } = withAccess({ getActive: async () => altered, getManifest: (id) => store.getManifest(id) }, [binding]);
+      const { app } = withAccess(
+        { getActive: async () => altered, getManifest: (id) => store.getManifest(id) } as unknown as Parameters<typeof createConsumerGateway>[0],
+        [binding]
+      );
       expect((await app.inject({ url, headers })).statusCode).toBe(503);
       await app.close();
     }
-    const { app } = withAccess({ getActive: async () => release, getManifest: async () => null }, [binding]);
+    const { app } = withAccess(
+      { getActive: async () => release, getManifest: async () => null } as unknown as Parameters<typeof createConsumerGateway>[0],
+      [binding]
+    );
     expect((await app.inject({ url, headers })).statusCode).toBe(503);
     await app.close();
   });
