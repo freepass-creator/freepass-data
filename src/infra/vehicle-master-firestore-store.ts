@@ -138,6 +138,13 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
     );
   }
 
+  async listCompatibilityRules() {
+    const snap = await this.db.collection(C.rules).get();
+    return snap.docs
+      .map((doc) => doc.data() as VehicleMasterCompatibilityRule)
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
   async putCompatibilityRule(record: VehicleMasterCompatibilityRule) {
     return this.putVersioned(
       this.db.collection(C.rules).doc(safeId(record.id)),
