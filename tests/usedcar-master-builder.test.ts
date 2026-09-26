@@ -13,7 +13,7 @@ function canonicalNode(input: {
   id: string;
   nodeType: VehicleMasterNode['nodeType'];
   name: string;
-  status?: VehicleMasterStatus;
+  status?: VehicleMasterStatus | undefined;
   attributes?: Record<string, unknown>;
 }) {
   return sealVehicleMasterNode({
