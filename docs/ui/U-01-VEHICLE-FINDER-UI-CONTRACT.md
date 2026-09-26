@@ -300,3 +300,35 @@ Rules:
 - if F returns `activeGroupId`, that group remains expanded after transition
 
 This preserves transition continuity without moving selection reconciliation into U.
+
+
+## UNKNOWN / HOLD explanation
+
+Candidate action reasons are F-owned codes. U-01 may translate only those returned codes
+into human-readable copy while preserving the raw code next to the explanation.
+
+Current F candidate reason codes presented by U:
+
+- `IDENTITY_PARTIAL`
+- `UNRESOLVED_SELECTION`
+- `UNRESOLVED_SEARCH`
+- `LIFECYCLE_HOLD`
+- `IDENTITY_HOLD`
+
+The presenter also preserves F `unresolvedAxes[]` and unresolved search token count.
+Axis labels are taken only from the supplied UI facets; U does not recreate a fixed axis
+label table.
+
+Detail presentation separates:
+
+1. current action/state
+2. why F marked the candidate inspect-only or blocked
+3. the raw reason code
+4. what evidence/condition should be checked next
+5. unresolved axes/search token count
+
+Unknown future F reason codes are not hidden; U displays a generic additional-check
+message plus the raw code.
+
+Group transition REJECTED messages likewise retain the raw F reason code after the
+human-readable message.
