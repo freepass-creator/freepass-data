@@ -1,4 +1,3 @@
-import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
 import { loadNormalizedVehicleMasterTrimRecords } from '../application/vehicle-master-normalized-loader.js';
 import { reconcileVehicleMasterTrimFacts } from '../application/vehicle-master-reconcile.js';
 import { buildVehicleMasterTrimProposalSet } from '../application/vehicle-master-canonical-builder.js';
@@ -18,6 +17,8 @@ import type {
   VehicleMasterNode,
   VehicleMasterPriceRevision,
 } from '../domain/vehicle-master.js';
+import type { VehicleMasterStore } from '../ports/vehicle-master-store.js';
+import { createVehicleMasterJobRuntime } from './data-access-runtime.js';
 
 type PromotionRequest = {
   approval: 'PROMOTE_CANONICAL';
@@ -111,7 +112,7 @@ function matchesSelector(
 }
 
 async function assertAnchor(
-  store: Awaited<ReturnType<typeof createFirestoreVehicleMasterStore>>,
+  store: VehicleMasterStore,
   request: PromotionRequest
 ) {
   const expected = [
@@ -130,7 +131,7 @@ async function assertAnchor(
 }
 
 async function preflightNode(
-  store: Awaited<ReturnType<typeof createFirestoreVehicleMasterStore>>,
+  store: VehicleMasterStore,
   unit: VehicleMasterCanonicalProposalUnit<VehicleMasterNode>
 ) {
   const decision = await evaluateVehicleMasterEvidence(store, {
@@ -145,7 +146,7 @@ async function preflightNode(
 }
 
 async function preflightPrice(
-  store: Awaited<ReturnType<typeof createFirestoreVehicleMasterStore>>,
+  store: VehicleMasterStore,
   unit: VehicleMasterCanonicalProposalUnit<VehicleMasterPriceRevision>
 ) {
   const decision = await evaluateVehicleMasterPriceEvidence(store, {
@@ -160,7 +161,7 @@ async function preflightPrice(
 }
 
 async function preflightRule(
-  store: Awaited<ReturnType<typeof createFirestoreVehicleMasterStore>>,
+  store: VehicleMasterStore,
   unit: VehicleMasterCanonicalProposalUnit<VehicleMasterCompatibilityRule>
 ) {
   const decision = await evaluateVehicleMasterRuleEvidence(store, {
@@ -179,7 +180,7 @@ if (process.env.VEHICLE_MASTER_PROMOTION_APPROVED !== 'true') {
   throw new Error('VEHICLE_MASTER_PROMOTION_APPROVED=true is required');
 }
 
-const store = createFirestoreVehicleMasterStore();
+const { store } = createVehicleMasterJobRuntime();
 await assertAnchor(store, request);
 
 const normalizedRows = await loadNormalizedVehicleMasterTrimRecords(
