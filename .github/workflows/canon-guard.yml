@@ -11,6 +11,6 @@ permissions:
 
 jobs:
   canon:
-    uses: freepass-creator/ai-core/.github/workflows/canon-guard.yml@ab8413b52b67877b17d9c607c3b4e844ab038395
+    uses: freepass-creator/ai-core/.github/workflows/canon-guard.yml@76f513ab0b61e30150887fc535a52f442e0eeb7b
     with:
-      ai_core_ref: ab8413b52b67877b17d9c607c3b4e844ab038395
+      ai_core_ref: 76f513ab0b61e30150887fc535a52f442e0eeb7b
