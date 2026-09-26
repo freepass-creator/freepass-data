@@ -81,6 +81,10 @@ export type VehicleSelectorCandidate = {
   score: number;
   matchedAxes: VehicleSelectorAxis[];
   unresolvedAxes: VehicleSelectorAxis[];
+  search: {
+    matchedTokens: number;
+    unresolvedTokens: number;
+  };
   selectable: boolean;
 };
 
@@ -294,37 +298,134 @@ function matchesAxis(
   return { matched: true, unresolved: false, rejected: false };
 }
 
-function searchableText(record: VehicleSelectorRecord) {
-  return normalize([
-    record.maker.label,
-    record.model.label,
-    record.generation.label,
-    record.phase.label,
-    record.modelYear.label,
-    record.modelYear.value == null ? null : String(record.modelYear.value),
-    record.powertrain.label,
-    record.fuelType.label,
-    record.drivetrain.label,
-    record.seats.label,
-    record.seats.value == null ? null : String(record.seats.value),
-    record.trim.label,
-    ...record.aliases,
-  ].filter(Boolean).join(' '));
+type SearchTokenIntent = {
+  token: string;
+  axes: VehicleSelectorAxis[];
+  aliasKnown: boolean;
+};
+
+type SearchContext = {
+  tokens: SearchTokenIntent[];
+};
+
+function axisTerms(record: VehicleSelectorRecord, axis: VehicleSelectorAxis) {
+  const textValue = textAxis(record, axis);
+  if (textValue) return [textValue.label].filter(hasText) as string[];
+
+  const numberValue = numberAxis(record, axis);
+  if (!numberValue) return [];
+  return [
+    numberValue.label,
+    numberValue.value == null ? null : String(numberValue.value),
+  ].filter(hasText) as string[];
 }
 
-function matchesSearchText(record: VehicleSelectorRecord, searchText: string | null | undefined) {
-  const tokens = normalize(searchText).split(' ').filter(Boolean);
-  if (!tokens.length) return { matched: 0, partial: false, rejected: false };
+function axisKnown(record: VehicleSelectorRecord, axis: VehicleSelectorAxis) {
+  return axisTerms(record, axis).length > 0;
+}
 
-  const haystack = searchableText(record);
-  const matched = tokens.filter((token) => haystack.includes(token)).length;
-  if (!matched) return { matched: 0, partial: false, rejected: true };
-  return { matched, partial: matched < tokens.length, rejected: false };
+function termMatchesToken(term: string, token: string) {
+  const normalized = normalize(term);
+  const normalizedToken = normalize(token);
+  if (!normalizedToken) return false;
+
+  if (/^\d+$/.test(normalizedToken)) {
+    return normalized.split(/\D+/).filter(Boolean).includes(normalizedToken);
+  }
+
+  if (/^[a-z0-9-]+$/.test(normalizedToken)) {
+    return normalized
+      .split(/[^a-z0-9-]+/)
+      .filter(Boolean)
+      .some((word) =>
+        word === normalizedToken ||
+        (normalizedToken.length > 1 && word.startsWith(normalizedToken))
+      );
+  }
+
+  return (
+    normalized.includes(normalizedToken) ||
+    compact(normalized).includes(compact(normalizedToken))
+  );
+}
+
+function tokenMatchesAxis(
+  record: VehicleSelectorRecord,
+  axis: VehicleSelectorAxis,
+  token: string
+) {
+  return axisTerms(record, axis).some((term) => termMatchesToken(term, token));
+}
+
+function tokenMatchesAlias(record: VehicleSelectorRecord, token: string) {
+  return record.aliases.some((alias) => termMatchesToken(alias, token));
+}
+
+function buildSearchContext(
+  records: readonly VehicleSelectorRecord[],
+  request: VehicleSelectorRequest
+): SearchContext {
+  const tokens = normalize(request.searchText).split(' ').filter(Boolean);
+  const allowed = records.filter((record) => allowedByMode(record, request));
+
+  return {
+    tokens: tokens.map((token) => ({
+      token,
+      axes: AXES.filter((axis) =>
+        allowed.some((record) => tokenMatchesAxis(record, axis, token))
+      ),
+      aliasKnown: allowed.some((record) => tokenMatchesAlias(record, token)),
+    })),
+  };
+}
+
+function matchesSearchText(
+  record: VehicleSelectorRecord,
+  context: SearchContext
+) {
+  if (!context.tokens.length) {
+    return { matched: 0, unresolved: 0, partial: false, rejected: false };
+  }
+
+  let matched = 0;
+  let unresolved = 0;
+
+  for (const intent of context.tokens) {
+    if (
+      intent.axes.some((axis) => tokenMatchesAxis(record, axis, intent.token)) ||
+      tokenMatchesAlias(record, intent.token)
+    ) {
+      matched += 1;
+      continue;
+    }
+
+    if (!intent.axes.length && !intent.aliasKnown) {
+      return { matched, unresolved, partial: unresolved > 0, rejected: true };
+    }
+
+    if (intent.axes.length) {
+      const knownRelevantAxes = intent.axes.filter((axis) => axisKnown(record, axis));
+      if (!knownRelevantAxes.length) {
+        unresolved += 1;
+        continue;
+      }
+    }
+
+    return { matched, unresolved, partial: unresolved > 0, rejected: true };
+  }
+
+  return {
+    matched,
+    unresolved,
+    partial: unresolved > 0,
+    rejected: false,
+  };
 }
 
 function matchesSelection(
   record: VehicleSelectorRecord,
   request: VehicleSelectorRequest,
+  searchContext: SearchContext,
   ignoreAxis?: VehicleSelectorAxis
 ) {
   if (!allowedByMode(record, request)) return false;
@@ -335,7 +436,7 @@ function matchesSelection(
     if (matchesAxis(record, selection, axis).rejected) return false;
   }
 
-  return !matchesSearchText(record, request.searchText).rejected;
+  return !matchesSearchText(record, searchContext).rejected;
 }
 
 function facetOption(record: VehicleSelectorRecord, axis: VehicleSelectorAxis) {
@@ -359,12 +460,13 @@ function facetOption(record: VehicleSelectorRecord, axis: VehicleSelectorAxis) {
 
 function buildFacets(
   records: readonly VehicleSelectorRecord[],
-  request: VehicleSelectorRequest
+  request: VehicleSelectorRequest,
+  searchContext: SearchContext
 ): Record<VehicleSelectorAxis, VehicleSelectorFacetOption[]> {
   return Object.fromEntries(AXES.map((axis) => {
     const counts = new Map<string, VehicleSelectorFacetOption>();
     for (const record of records) {
-      if (!matchesSelection(record, request, axis)) continue;
+      if (!matchesSelection(record, request, searchContext, axis)) continue;
       const option = facetOption(record, axis);
       if (!option) continue;
       const key = JSON.stringify([option.id, option.label, option.value]);
@@ -435,6 +537,7 @@ export function selectVehicles(
   request: VehicleSelectorRequest
 ): VehicleSelectorResult {
   const selection = request.selection ?? {};
+  const searchContext = buildSearchContext(records, request);
   const candidates: VehicleSelectorCandidate[] = [];
 
   for (const record of records) {
@@ -459,7 +562,7 @@ export function selectVehicles(
     }
     if (rejected) continue;
 
-    const search = matchesSearchText(record, request.searchText);
+    const search = matchesSearchText(record, searchContext);
     if (search.rejected) continue;
     score += search.matched * 5;
     if (search.partial) score -= 2;
@@ -477,6 +580,10 @@ export function selectVehicles(
       score,
       matchedAxes,
       unresolvedAxes,
+      search: {
+        matchedTokens: search.matched,
+        unresolvedTokens: search.unresolved,
+      },
       selectable:
         record.identityStatus === 'RESOLVED' &&
         record.lifecycle !== 'HOLD' &&
@@ -495,7 +602,7 @@ export function selectVehicles(
   return {
     mode: request.mode,
     candidates,
-    facets: buildFacets(records, request),
+    facets: buildFacets(records, request, searchContext),
     guidance: buildGuidance(candidates, request),
   };
 }
