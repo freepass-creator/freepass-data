@@ -15,6 +15,7 @@ const cases: Array<{ axis: ExactAxis; selected: string; actual: string }> = [
 ];
 const modes: VehicleSelectorMode[] = ['NEW_CAR', 'USED_CAR'];
 
+// Synthetic records exercise selector semantics, not production vehicle facts.
 function record(overrides: Partial<VehicleSelectorRecord> = {}): VehicleSelectorRecord {
   return {
     recordId: 'new-record',
@@ -35,11 +36,22 @@ function record(overrides: Partial<VehicleSelectorRecord> = {}): VehicleSelector
   };
 }
 
+function previousRecord(overrides: Partial<VehicleSelectorRecord> = {}): VehicleSelectorRecord {
+  return record({
+    recordId: 'old-record',
+    model: { id: 'old-model', label: '이전 차종' },
+    ...overrides,
+  });
+}
+
 for (const mode of modes) {
   describe(`${mode} exact-axis reconciliation`, () => {
     for (const { axis, selected, actual } of cases) {
       it(`clears stale ${axis} after a model change instead of keeping a zero-result trap`, () => {
-        const rows = [record({ [axis]: { id: null, label: actual } })];
+        const rows = [
+          previousRecord({ [axis]: { id: null, label: selected } }),
+          record({ [axis]: { id: null, label: actual } }),
+        ];
         const selection: VehicleSelectorSelection = { modelId: 'new-model', [axis]: selected };
         const before = structuredClone(selection);
         expect(selectVehicles(rows, { mode, selection }).candidates).toHaveLength(0);
@@ -61,21 +73,43 @@ for (const mode of modes) {
       });
 
       it(`retains a normalized exact ${axis} value`, () => {
-        const rows = [record({ [axis]: { id: null, label: selected.toLowerCase() } })];
+        const rows = [
+          previousRecord({ [axis]: { id: null, label: selected } }),
+          record({ [axis]: { id: null, label: selected.toLowerCase() } }),
+        ];
         const selection: VehicleSelectorSelection = { modelId: 'new-model', [axis]: `  ${selected}  ` };
         const reconciled = reconcileVehicleSelection(rows, { mode }, selection, ['model']);
         expect(reconciled.clearedAxes).toEqual([]);
         expect(reconciled.selection).toEqual(selection);
-        expect(reconciled.result.candidates).toHaveLength(1);
+        expect(reconciled.result.candidates.map((item) => item.record.recordId)).toEqual(['new-record']);
       });
     }
 
     it('keeps descriptive powertrain partial matching', () => {
+      const rows = [
+        previousRecord(),
+        record({ powertrain: { id: 'new-powertrain', label: '1.6 터보 플러그인 하이브리드' } }),
+      ];
       const selection = { modelId: 'new-model', powertrain: '하이브리드' };
-      const reconciled = reconcileVehicleSelection([record()], { mode }, selection, ['model']);
+      const reconciled = reconcileVehicleSelection(rows, { mode }, selection, ['model']);
       expect(reconciled.clearedAxes).toEqual([]);
       expect(reconciled.selection).toEqual(selection);
-      expect(reconciled.result.candidates).toHaveLength(1);
+      expect(reconciled.result.candidates.map((item) => item.record.recordId)).toEqual(['new-record']);
+    });
+
+    // Absorbed from PR #177: protected fuel is available elsewhere, so clear
+    // the incompatible old model rather than clearing the user's new choice.
+    it('protects a changed available fuel choice and clears the incompatible model', () => {
+      const rows = [
+        previousRecord({ fuelType: { id: null, label: 'HYBRID' } }),
+        record({ fuelType: { id: null, label: 'PLUG-IN HYBRID' } }),
+      ];
+      const selection = { modelId: 'new-model', fuelType: 'HYBRID' };
+      const reconciled = reconcileVehicleSelection(rows, { mode }, selection, ['fuelType']);
+      expect(reconciled.clearedAxes).toEqual(['model']);
+      expect(reconciled.selection).toEqual({ fuelType: 'HYBRID' });
+      expect(reconciled.result.candidates.map((item) => item.record.recordId)).toEqual(['old-record']);
+      expect(selection).toEqual({ modelId: 'new-model', fuelType: 'HYBRID' });
     });
 
     it('does not weaken stable trim identity checks', () => {
