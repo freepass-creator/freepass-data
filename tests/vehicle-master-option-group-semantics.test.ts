@@ -344,7 +344,7 @@ describe('vehicle master option-group rule semantics', () => {
       id: 'rule_group_bad_subject',
       subjectId: s.optionA.id,
       ruleType: 'ONE_OF',
-      targetIds: [s.optionA.id, s.optionB.id],
+      targetIds: [s.optionB.id, s.packageNode.id],
       trimId: s.trim.id,
     }));
 
