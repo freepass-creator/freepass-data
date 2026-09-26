@@ -11,6 +11,7 @@
     "spreadsheetId",
     "releaseAuthority",
     "approvedRelease",
+    "publicationHandoffHash",
     "renderedOutput",
     "publicationStartedAt",
     "publicationCompletedAt",
@@ -132,6 +133,10 @@
           "minLength": 1
         }
       }
+    },
+    "publicationHandoffHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
     }
   },
   "allOf": [
