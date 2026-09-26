@@ -47,6 +47,48 @@ jobs:
           service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
           token_format: access_token
           access_token_lifetime: 900s
+      - name: Check Estimate master readiness from canonical Vehicle Master
+        shell: bash
+        env:
+          FIREBASE_PROJECT_ID: freepasserp5
+          NODE_ENV: production
+          FREEPASS_ERP5_READ_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set +e
+          npx tsx src/jobs/check-estimate-master-readiness.ts --scheduled-read-only > estimate-master-readiness.json
+          code=$?
+          set -e
+          test "$code" -eq 0 -o "$code" -eq 2
+          jq -e '
+            .contractVersion == "estimate-master-readiness-v1" and
+            .schemaVersion == "1.0.0" and
+            .projectionId == "estimate-newcar-master" and
+            (.status == "READY" or .status == "DEGRADED" or .status == "BLOCKED") and
+            .activeReleaseAuthorized == false and
+            .publicationImplemented == false and
+            (.counts.total | type == "number" and . >= 0) and
+            (.counts.active | type == "number" and . >= 0) and
+            (.counts.hold | type == "number" and . >= 0) and
+            (.inputDigest | type == "string" and length == 64) and
+            (.blockers | type == "array") and
+            (.holdReasons | type == "array")
+          ' estimate-master-readiness.json >/dev/null
+          {
+            echo '## Estimate new-car master readiness'
+            echo
+            echo "Status: $(jq -r '.status' estimate-master-readiness.json)"
+            echo
+            echo "Canonical trims: $(jq -r '.counts.total' estimate-master-readiness.json)"
+            echo "ACTIVE-ready: $(jq -r '.counts.active' estimate-master-readiness.json)"
+            echo "HOLD: $(jq -r '.counts.hold' estimate-master-readiness.json)"
+            echo "Active rate: $(jq -r '.activeRate' estimate-master-readiness.json)"
+            echo "Bridge configured: $(jq -r '.bridgeConfigured' estimate-master-readiness.json)"
+            echo "Blockers: $(jq -r 'if (.blockers | length) == 0 then "none" else (.blockers | join(", ")) end' estimate-master-readiness.json)"
+            echo
+            echo 'Top HOLD reasons:'
+            jq -r '.holdReasons[:10][]? | "- \(.reason): \(.count)"' estimate-master-readiness.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Check all consumer health
         shell: bash
         env:
@@ -673,5 +715,6 @@ jobs:
             consumer-readiness.json
             sheet-consumer-health-summary.json
             sheet-consumer-health.json
+            estimate-master-readiness.json
           retention-days: 90
           if-no-files-found: error
