@@ -591,7 +591,8 @@ jobs:
                 databaseId: "(default)",
                 collections: {
                   products: $capture[0].products,
-                  policy: $capture[0].policies
+                  policy: $capture[0].policies,
+                  partner: $capture[0].partners
                 },
                 readTime: $capture[0].readTime,
                 digest: $capture[0].sourceDigest,
@@ -616,6 +617,7 @@ jobs:
           jq -e '
             .source.collections.products >= 0 and
             .source.collections.policy >= 0 and
+            .source.collections.partner >= 0 and
             .recognition.productFieldPathCount >= 0 and
             .authority.canonicalWriteAuthorized == false and
             .authority.destructiveActionAuthorized == false and
@@ -630,6 +632,7 @@ jobs:
             echo '| --- | ---: |'
             echo "| products | $(jq -r '.source.collections.products' source-inventory.json) |"
             echo "| policy | $(jq -r '.source.collections.policy' source-inventory.json) |"
+            echo "| partner | $(jq -r '.source.collections.partner' source-inventory.json) |"
             echo "| product field paths | $(jq -r '.recognition.productFieldPathCount' source-inventory.json) |"
             echo "| added | $(jq -r '.change.counts.ADDED // "first observation"' source-inventory.json) |"
             echo "| changed | $(jq -r '.change.counts.CHANGED // "first observation"' source-inventory.json) |"
@@ -653,6 +656,9 @@ jobs:
             .contractVersion == "freepass-data-control-tower-v1" and
             .schemaVersion == "1.0.0" and
             .axes.sourceObservation.status == "OBSERVED" and
+            (.axes.sourceObservation.partners | type == "number" and . >= 0) and
+            .axes.estimateMasterReadiness.contractVersion == "estimate-master-readiness-v1" and
+            .axes.estimateMasterReadiness.projectionId == "estimate-newcar-master" and
             (.axes.auditFreshness.status == "HEALTHY" or
              .axes.auditFreshness.status == "DEGRADED" or
              .axes.auditFreshness.status == "BLOCKED") and
@@ -674,6 +680,11 @@ jobs:
             echo
             echo "Sheet health: $(jq -r '.axes.sheetHealth.status' data-control-tower.json)"
             echo
+            echo "Estimate master: $(jq -r '.axes.estimateMasterReadiness.status' data-control-tower.json)"
+            echo "Estimate canonical trims: $(jq -r '.operatorSummary.estimateCanonicalTrimCount // "unknown"' data-control-tower.json)"
+            echo "Estimate ACTIVE trims: $(jq -r '.operatorSummary.estimateActiveTrimCount // "unknown"' data-control-tower.json)"
+            echo "Estimate HOLD trims: $(jq -r '.operatorSummary.estimateHoldTrimCount // "unknown"' data-control-tower.json)"
+            echo
             echo "Ready transitions: $(jq -r '.operatorSummary.readyTransitionCount' data-control-tower.json)"
             echo
             echo "Blocked consumers: $(jq -r '.operatorSummary.consumerBlockedCount // \"unknown\"' data-control-tower.json)"
@@ -688,7 +699,7 @@ jobs:
           while IFS= read -r -d '' evidence; do
             gcloud storage cp "$evidence" "$run_uri/source/$(basename "$evidence")" --if-generation-match=0
           done < <(find '${{ steps.capture.outputs.dir }}' -maxdepth 1 -type f -name '*.json' -print0)
-          for evidence in capture-summary.json dry-run-summary.json source-inventory.json data-control-tower.json; do
+          for evidence in capture-summary.json dry-run-summary.json source-inventory.json estimate-master-readiness.json data-control-tower.json; do
             gcloud storage cp "$evidence" "$run_uri/$evidence" --if-generation-match=0
           done
           capture_uri="$run_uri/source/capture.json"
@@ -697,11 +708,13 @@ jobs:
           gcloud storage cp "$run_uri/capture-summary.json" evidence-readback/capture-summary.json
           gcloud storage cp "$run_uri/dry-run-summary.json" evidence-readback/dry-run-summary.json
           gcloud storage cp "$run_uri/source-inventory.json" evidence-readback/source-inventory.json
+          gcloud storage cp "$run_uri/estimate-master-readiness.json" evidence-readback/estimate-master-readiness.json
           gcloud storage cp "$run_uri/data-control-tower.json" evidence-readback/data-control-tower.json
           cmp -s '${{ steps.capture.outputs.path }}' evidence-readback/source/capture.json
           cmp -s capture-summary.json evidence-readback/capture-summary.json
           cmp -s dry-run-summary.json evidence-readback/dry-run-summary.json
           cmp -s source-inventory.json evidence-readback/source-inventory.json
+          cmp -s estimate-master-readiness.json evidence-readback/estimate-master-readiness.json
           cmp -s data-control-tower.json evidence-readback/data-control-tower.json
           gcloud storage objects describe "$capture_uri" --format='value(generation)' | grep -Eq '^[1-9][0-9]*$'
           jq -n \
