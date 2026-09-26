@@ -603,3 +603,83 @@
 @media(min-width:901px){
   .vf .vf-row-button{padding-block:7px}
 }
+
+
+/* U-01 explicit read/empty state surfaces */
+.vf .vf-empty-state{
+  display:grid;
+  justify-items:center;
+  gap:7px;
+  min-height:160px;
+  padding:28px 18px;
+  text-align:center;
+  align-content:center
+}
+.vf .vf-empty-mark{
+  display:grid;
+  place-items:center;
+  min-width:36px;
+  min-height:36px;
+  border-radius:999px;
+  background:var(--vf-soft);
+  color:var(--text,#5F6974);
+  font-weight:800
+}
+.vf .vf-empty-title{font-size:var(--vf-main);color:var(--vf-ink)}
+.vf .vf-empty-copy{
+  max-width:560px;
+  margin:0!important;
+  color:var(--text,#5F6974);
+  font-size:var(--vf-support);
+  line-height:1.55
+}
+.vf .vf-empty-action,.vf .vf-read-notice-action{
+  min-height:40px;
+  padding:7px 12px;
+  background:var(--vf-bg);
+  border:1px solid var(--vf-line);
+  color:var(--vf-brand);
+  font-weight:700
+}
+.vf .vf-empty-state[data-kind='partial-zero'] .vf-empty-mark{
+  background:#FFF6E4;
+  color:var(--warn,#8B5A00)
+}
+.vf .vf-empty-state[data-kind='error'] .vf-empty-mark{
+  background:#FFF0F0;
+  color:var(--danger,#A52F2F)
+}
+.vf .vf-empty-state[data-kind='loading'] .vf-empty-mark{
+  animation:vf-loading-pulse 1.2s ease-in-out infinite
+}
+.vf .vf-read-notice{
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr) auto;
+  align-items:center;
+  gap:8px 12px;
+  margin:4px 0 12px;
+  padding:10px 12px;
+  border-radius:var(--vf-card-radius);
+  background:var(--vf-soft)
+}
+.vf .vf-read-notice-title{font-size:var(--vf-support)}
+.vf .vf-read-notice-copy{
+  color:var(--text,#5F6974);
+  font-size:var(--vf-support)
+}
+.vf .vf-read-notice[data-kind='refresh-error']{
+  background:#FFF6E4
+}
+@keyframes vf-loading-pulse{
+  0%,100%{opacity:.45}
+  50%{opacity:1}
+}
+@media(max-width:900px){
+  .vf .vf-read-notice{
+    grid-template-columns:minmax(0,1fr) auto
+  }
+  .vf .vf-read-notice-copy{grid-column:1/-1}
+}
+@media(prefers-reduced-motion:reduce){
+  .vf .vf-empty-state[data-kind='loading'] .vf-empty-mark{animation:none}
+}

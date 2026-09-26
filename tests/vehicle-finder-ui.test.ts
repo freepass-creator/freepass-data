@@ -79,6 +79,26 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).toMatch(/방금 본 후보/);
   });
 
+  it('distinguishes disconnected, loading, zero, partial-zero and error states', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    expect(source).toMatch(/'disconnected'/);
+    expect(source).toMatch(/'loading'/);
+    expect(source).toMatch(/'partial-zero'/);
+    expect(source).toMatch(/'zero'/);
+    expect(source).toMatch(/'error'/);
+    expect(source).toMatch(/전체 차량에 후보가 없다는 뜻은 아닙니다/);
+    expect(source).toMatch(/차량이 없다는 뜻이 아닙니다/);
+  });
+
+  it('keeps last-known-good results visible across refresh failure', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    expect(source).toMatch(/'refreshing'/);
+    expect(source).toMatch(/'refresh-error'/);
+    expect(source).toMatch(/직전 관측 결과를 계속 표시합니다/);
+    expect(source).toMatch(/이 오류를 후보 0건으로 해석하지 않습니다/);
+    expect(source).toMatch(/\{ retry: true \}/);
+  });
+
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
     const css = await readFile(cssPath, 'utf8');
     expect(css).toMatch(/grid-template-columns:3fr 7fr/);
