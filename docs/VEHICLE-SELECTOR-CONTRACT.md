@@ -154,6 +154,8 @@ Therefore:
 - selecting `GT-Line` must not select `GT`.
 - selecting `HYBRID` must not also select `PLUG-IN HYBRID`.
 - selecting `AWD` must not silently select a distinct `E-AWD` label.
+- when a stable axis ID is supplied and matches, a stale display label on that same axis does not invalidate the selection.
+- a conflicting stable ID always rejects the candidate even if the label text happens to match.
 - stable IDs remain the preferred exact identity when available.
 - descriptive axes such as powertrain keep their compatible partial-label
   behavior so `하이브리드` can match `1.6 터보 하이브리드`.
