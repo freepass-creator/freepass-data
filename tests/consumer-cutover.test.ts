@@ -128,6 +128,17 @@ describe('consumer cutover registry', () => {
     });
   });
 
+  it('records Admin as integrated while keeping runtime cutover evidence on HOLD', () => {
+    const admin = findConsumerSwitch('freepass-admin-catalog');
+    expect(admin).not.toBeNull();
+    expect(admin?.evidence.contractReady).toBe(true);
+    expect(admin?.stage).toBe('OBSERVE');
+    expect(admin?.holdReasons).toEqual([
+      'Admin consumer authentication and production FreePass Data readback are not verified',
+      'Policy parity and production persistence are not verified'
+    ]);
+  });
+
   it('keeps the current real consumers blocked from final cutover', () => {
     for (const registration of CONSUMER_SWITCH_REGISTRY) {
       const decision = evaluateConsumerCutover(registration, 'FREEPASS_DATA_READ');

@@ -123,7 +123,7 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       approvedRelease: null
     },
     holdReasons: [
-      'Admin projection PR is not integrated',
+      'Admin consumer authentication and production FreePass Data readback are not verified',
       'Policy parity and production persistence are not verified'
     ]
   },
