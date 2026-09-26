@@ -135,26 +135,64 @@ function decodeFields(fields: unknown, productMetadata = false): ObjectValue {
   ]));
 }
 
-/** No raw values or IDs in returned report. Even zero mapping holds cannot authorize cutover. */
-export function inspectErp5Capture(capture: Erp5SourceCapture) {
+type CaptureGroup = { count: number; documents: ObjectValue[] };
+type DeltaBaselineCapture = Omit<Erp5SourceCapture, 'collections'> & {
+  collections: {
+    products: CaptureGroup;
+    policy: CaptureGroup;
+    partner?: CaptureGroup;
+  };
+};
+
+function assertCaptureEnvelope(capture: unknown): asserts capture is DeltaBaselineCapture {
   if (!object(capture) || capture.version !== 'erp5-source-capture/1' || capture.projectId !== 'freepasserp5'
     || capture.databaseId !== '(default)' || capture.consistency !== 'READ_ONLY_TRANSACTION'
-    || !time(capture.readTime) || !time(capture.capturedAt) || !object(capture.collections)) fail('INVALID_CAPTURE');
+    || !time(capture.readTime) || !time(capture.capturedAt) || !object(capture.collections)
+    || typeof capture.digest !== 'string') fail('INVALID_CAPTURE');
   const { digest, ...unsigned } = capture;
   if (digest !== hash(unsigned)) fail('CAPTURE_DIGEST_MISMATCH');
-  for (const collection of collections) {
-    const group = capture.collections[collection];
-    if (!object(group) || !Number.isSafeInteger(group.count) || group.count < 0
-      || !Array.isArray(group.documents) || group.documents.length !== group.count) fail('INVALID_CAPTURE_COVERAGE');
-    const prefix = `${ERP5_DOCUMENTS}/${collection}/`;
-    const names = new Set<string>();
-    for (const doc of group.documents) {
-      if (!object(doc) || typeof doc.name !== 'string' || !doc.name.startsWith(prefix)
-        || !doc.name.slice(prefix.length) || doc.name.slice(prefix.length).includes('/') || names.has(doc.name)
-        || !time(doc.createTime) || !time(doc.updateTime) || (doc.fields !== undefined && !object(doc.fields))) fail('INVALID_CAPTURE_DOCUMENT');
-      names.add(doc.name);
-    }
+}
+
+function assertCaptureCollection(
+  capture: DeltaBaselineCapture,
+  collection: Collection
+) {
+  const group = capture.collections[collection];
+  if (!object(group) || !Number.isSafeInteger(group.count) || group.count < 0
+    || !Array.isArray(group.documents) || group.documents.length !== group.count) fail('INVALID_CAPTURE_COVERAGE');
+  const prefix = `${ERP5_DOCUMENTS}/${collection}/`;
+  const names = new Set<string>();
+  for (const doc of group.documents) {
+    if (!object(doc) || typeof doc.name !== 'string' || !doc.name.startsWith(prefix)
+      || !doc.name.slice(prefix.length) || doc.name.slice(prefix.length).includes('/') || names.has(doc.name)
+      || !time(doc.createTime) || !time(doc.updateTime) || (doc.fields !== undefined && !object(doc.fields))) fail('INVALID_CAPTURE_DOCUMENT');
+    names.add(doc.name);
   }
+}
+
+/**
+ * Delta comparison may read an immutable accepted capture created before partner
+ * joined source-capture/1. Only the previous baseline gets this compatibility
+ * path; current captures must still prove the full three-collection contract.
+ */
+function inspectErp5DeltaBaseline(capture: Erp5SourceCapture) {
+  assertCaptureEnvelope(capture);
+  const keys = Object.keys(capture.collections).sort();
+  const legacy = ['policy', 'products'];
+  const current = ['partner', 'policy', 'products'];
+  if (
+    JSON.stringify(keys) !== JSON.stringify(legacy) &&
+    JSON.stringify(keys) !== JSON.stringify(current)
+  ) fail('INVALID_CAPTURE_COVERAGE');
+  assertCaptureCollection(capture, 'products');
+  assertCaptureCollection(capture, 'policy');
+  if ('partner' in capture.collections) assertCaptureCollection(capture, 'partner');
+}
+
+/** No raw values or IDs in returned report. Even zero mapping holds cannot authorize cutover. */
+export function inspectErp5Capture(capture: Erp5SourceCapture) {
+  assertCaptureEnvelope(capture);
+  for (const collection of collections) assertCaptureCollection(capture, collection);
   const issueCounts: Record<string, number> = {};
   const decodeFailureCounts: Record<string, number> = {};
   let mapped = 0;
@@ -209,7 +247,7 @@ export type Erp5CaptureChangeKind = 'ADDED' | 'CHANGED' | 'UNCHANGED' | 'MISSING
 
 /** Compare two verified FULL collection captures. Missing records stay review-only and never imply deletion. */
 export function compareErp5ProductCaptures(previous: Erp5SourceCapture, current: Erp5SourceCapture) {
-  inspectErp5Capture(previous);
+  inspectErp5DeltaBaseline(previous);
   inspectErp5Capture(current);
   if (Date.parse(current.readTime) < Date.parse(previous.readTime)) fail('CAPTURE_ORDER_INVALID');
   const prefix = `${ERP5_DOCUMENTS}/products/`;
