@@ -39,6 +39,7 @@ export type VehicleMasterEvidenceIssue = {
     | 'SOURCE_DOCUMENT_MISSING'
     | 'SOURCE_EFFECTIVE_PERIOD_MISMATCH'
     | 'SOURCE_AUTHORITY_INSUFFICIENT'
+    | 'PARENT_ID_REQUIRED'
     | 'PARENT_NODE_MISSING'
     | 'PARENT_NODE_TYPE_MISMATCH'
     | 'PARENT_NODE_HOLD'
@@ -64,6 +65,7 @@ export type VehicleMasterEvidenceIssue = {
     | 'VARIANT_NAME_SEATS_MISMATCH'
     | 'VARIANT_NAME_DRIVETRAIN_MISMATCH'
     | 'VARIANT_DUPLICATE_IN_POWERTRAIN'
+    | 'REQUIRED_REFERENCE_MISSING'
     | 'REFERENCE_NODE_MISSING'
     | 'REFERENCE_NODE_TYPE_MISMATCH'
     | 'REFERENCE_NODE_HOLD'
@@ -217,6 +219,12 @@ function expectedParentRef(proposal: VehicleMasterNode): string | null {
     case 'POWERTRAIN': return proposal.refs.modelYearId ?? null;
     case 'VARIANT': return proposal.refs.powertrainId ?? null;
     case 'TRIM': return proposal.refs.variantId ?? null;
+    case 'BASE_ITEM':
+    case 'OPTION':
+    case 'PACKAGE':
+    case 'OPTION_GROUP':
+    case 'COLOR':
+      return proposal.refs.modelYearId ?? null;
     default: return null;
   }
 }
@@ -254,6 +262,45 @@ function expectedRefNodeType(field: string): VehicleMasterNode['nodeType'] | nul
     case 'variantId': return 'VARIANT';
     case 'trimId': return 'TRIM';
     default: return null;
+  }
+}
+
+const VEHICLE_LINEAGE_REF_FIELDS = [
+  'makeId',
+  'modelId',
+  'generationId',
+  'phaseId',
+  'modelYearId',
+  'powertrainId',
+  'variantId',
+] as const;
+
+function requiredRefFields(
+  nodeType: VehicleMasterNode['nodeType']
+): readonly string[] {
+  switch (nodeType) {
+    case 'MAKE':
+      return [];
+    case 'MODEL':
+      return VEHICLE_LINEAGE_REF_FIELDS.slice(0, 1);
+    case 'GENERATION':
+      return VEHICLE_LINEAGE_REF_FIELDS.slice(0, 2);
+    case 'PHASE':
+      return VEHICLE_LINEAGE_REF_FIELDS.slice(0, 3);
+    case 'MODEL_YEAR':
+      return VEHICLE_LINEAGE_REF_FIELDS.slice(0, 4);
+    case 'POWERTRAIN':
+      return VEHICLE_LINEAGE_REF_FIELDS.slice(0, 5);
+    case 'VARIANT':
+      return VEHICLE_LINEAGE_REF_FIELDS.slice(0, 6);
+    case 'TRIM':
+      return VEHICLE_LINEAGE_REF_FIELDS.slice(0, 7);
+    case 'BASE_ITEM':
+    case 'OPTION':
+    case 'PACKAGE':
+    case 'OPTION_GROUP':
+    case 'COLOR':
+      return VEHICLE_LINEAGE_REF_FIELDS.slice(0, 5);
   }
 }
 
@@ -436,6 +483,25 @@ async function applyNodeReferenceGate(
 ): Promise<VehicleMasterEvidenceDecision> {
   const issues = [...decision.issues];
   const expectedParent = expectedParentRef(proposal);
+  const expectedParentType = expectedParentNodeType(proposal.nodeType);
+
+  if (expectedParentType && !proposal.parentId) {
+    issues.push({
+      code: 'PARENT_ID_REQUIRED',
+      fieldPath: 'parentId',
+      detail: expectedParentType,
+    });
+  }
+
+  for (const field of requiredRefFields(proposal.nodeType)) {
+    if (!proposal.refs[field]) {
+      issues.push({
+        code: 'REQUIRED_REFERENCE_MISSING',
+        fieldPath: `refs.${field}`,
+        detail: proposal.nodeType,
+      });
+    }
+  }
 
   if (
     proposal.parentId &&
