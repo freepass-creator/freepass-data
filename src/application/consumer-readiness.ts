@@ -150,9 +150,11 @@ function runtimeActions(entry: ConsumerHealthEntry): ConsumerRequiredAction[] {
 
 function requiredActions(
   entry: ConsumerHealthEntry,
-  missing: readonly string[]
+  missing: readonly string[],
+  contractReady: boolean
 ): ConsumerRequiredAction[] {
   const actions: ConsumerRequiredAction[] = [];
+  if (!contractReady) actions.push('IMPLEMENT_CONSUMER_CONTRACT');
   for (const key of missing) {
     const action = actionForEvidence(key);
     if (action) actions.push(action);
@@ -171,11 +173,17 @@ function requiredActions(
   return [...new Set(actions)];
 }
 
-function readinessOf(entry: ConsumerHealthEntry): ConsumerReadinessState {
+function readinessOf(
+  entry: ConsumerHealthEntry,
+  contractReady: boolean
+): ConsumerReadinessState {
   if (entry.currentStage === 'FREEPASS_DATA_READ') {
     return entry.healthStatus === 'HEALTHY' ? 'FINAL' : 'HOLD';
   }
-  return entry.nextTransition?.allowed === true
+  if (!contractReady) return 'HOLD';
+  if (entry.evidence.source === 'NOT_IMPLEMENTED') return 'HOLD';
+  return entry.nextTransition?.allowed === true &&
+    entry.healthStatus !== 'BLOCKED'
     ? 'READY_FOR_NEXT_STAGE'
     : 'HOLD';
 }
@@ -189,8 +197,12 @@ export function buildConsumerReadiness(
     if (!registrations.has(entry.consumerId)) {
       throw new Error('CONSUMER_READINESS_REGISTRATION_MISSING');
     }
+    const registration = registrations.get(entry.consumerId)!;
     const missing = missingEvidence(entry.blockers);
-    const readiness = readinessOf(entry);
+    const readiness = readinessOf(
+      entry,
+      registration.evidence.contractReady
+    );
     return {
       consumerId: entry.consumerId,
       project: entry.project,
@@ -208,7 +220,11 @@ export function buildConsumerReadiness(
       staticHoldReasons: [...entry.staticHoldReasons],
       requiredActions: readiness === 'FINAL'
         ? []
-        : requiredActions(entry, missing)
+        : requiredActions(
+            entry,
+            missing,
+            registration.evidence.contractReady
+          )
     } satisfies ConsumerReadinessEntry;
   });
 
