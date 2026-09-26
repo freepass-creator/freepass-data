@@ -119,6 +119,12 @@ export type VehicleSelectorResult = {
   guidance: VehicleSelectorGuidance;
 };
 
+export type VehicleSelectorSelectionReconciliation = {
+  selection: VehicleSelectorSelection;
+  clearedAxes: VehicleSelectorAxis[];
+  result: VehicleSelectorResult;
+};
+
 export type VehicleSelectorUxPreset = {
   mode: VehicleSelectorMode;
   presentation: 'GUIDED' | 'SEARCH_FILTER';
@@ -267,6 +273,138 @@ function axisSelected(selection: VehicleSelectorSelection, axis: VehicleSelector
     ('label' in selected && hasText(selected.label)) ||
     ('value' in selected && selected.value != null)
   );
+}
+
+function clearSelectionAxis(
+  selection: VehicleSelectorSelection,
+  axis: VehicleSelectorAxis
+) {
+  switch (axis) {
+    case 'maker':
+      delete selection.makerId;
+      delete selection.maker;
+      break;
+    case 'model':
+      delete selection.modelId;
+      delete selection.model;
+      break;
+    case 'generation':
+      delete selection.generationId;
+      delete selection.generation;
+      break;
+    case 'phase':
+      delete selection.phaseId;
+      delete selection.phase;
+      break;
+    case 'modelYear':
+      delete selection.modelYearId;
+      delete selection.modelYear;
+      break;
+    case 'powertrain':
+      delete selection.powertrainId;
+      delete selection.powertrain;
+      break;
+    case 'fuelType':
+      delete selection.fuelType;
+      break;
+    case 'drivetrain':
+      delete selection.drivetrain;
+      break;
+    case 'seats':
+      delete selection.seats;
+      break;
+    case 'trim':
+      delete selection.trimId;
+      delete selection.trim;
+      break;
+  }
+}
+
+function selectionSubset(
+  selection: VehicleSelectorSelection,
+  axes: ReadonlySet<VehicleSelectorAxis>
+) {
+  const subset: VehicleSelectorSelection = {};
+  const copy = <K extends keyof VehicleSelectorSelection>(key: K) => {
+    const value = selection[key];
+    if (value !== undefined) {
+      subset[key] = value;
+    }
+  };
+
+  for (const axis of AXES) {
+    if (!axes.has(axis) || !axisSelected(selection, axis)) continue;
+    switch (axis) {
+      case 'maker':
+        copy('makerId');
+        copy('maker');
+        break;
+      case 'model':
+        copy('modelId');
+        copy('model');
+        break;
+      case 'generation':
+        copy('generationId');
+        copy('generation');
+        break;
+      case 'phase':
+        copy('phaseId');
+        copy('phase');
+        break;
+      case 'modelYear':
+        copy('modelYearId');
+        copy('modelYear');
+        break;
+      case 'powertrain':
+        copy('powertrainId');
+        copy('powertrain');
+        break;
+      case 'fuelType':
+        copy('fuelType');
+        break;
+      case 'drivetrain':
+        copy('drivetrain');
+        break;
+      case 'seats':
+        copy('seats');
+        break;
+      case 'trim':
+        copy('trimId');
+        copy('trim');
+        break;
+    }
+  }
+  return subset;
+}
+
+function facetMatchesSelection(
+  option: VehicleSelectorFacetOption,
+  selection: VehicleSelectorSelection,
+  axis: VehicleSelectorAxis
+) {
+  const selected = selectionForAxis(selection, axis);
+  if ('id' in selected && hasText(selected.id) && option.id !== selected.id) {
+    return false;
+  }
+  if (
+    'label' in selected &&
+    hasText(selected.label) &&
+    !compact(option.label).includes(compact(selected.label))
+  ) {
+    return false;
+  }
+  if (
+    'value' in selected &&
+    selected.value != null &&
+    option.value !== selected.value
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function reconciliationOrder() {
+  return [...AXES].reverse();
 }
 
 function matchesAxis(
@@ -644,4 +782,60 @@ export function selectVehicles(
     facets,
     guidance: buildGuidance(candidates, facets, request),
   };
+}
+
+
+export function reconcileVehicleSelection(
+  records: readonly VehicleSelectorRecord[],
+  request: Omit<VehicleSelectorRequest, 'selection'>,
+  nextSelection: VehicleSelectorSelection,
+  changedAxes: readonly VehicleSelectorAxis[]
+): VehicleSelectorSelectionReconciliation {
+  const selection: VehicleSelectorSelection = { ...nextSelection };
+  const protectedAxes = new Set(changedAxes);
+
+  const protectedSelection = selectionSubset(selection, protectedAxes);
+  const protectedResult = selectVehicles(records, {
+    ...request,
+    selection: protectedSelection,
+  });
+
+  if (
+    protectedAxes.size > 0 &&
+    protectedResult.guidance.resolutionStatus === 'IMPOSSIBLE'
+  ) {
+    return {
+      selection,
+      clearedAxes: [],
+      result: selectVehicles(records, { ...request, selection }),
+    };
+  }
+
+  const clearedAxes: VehicleSelectorAxis[] = [];
+
+  while (true) {
+    const current = selectVehicles(records, { ...request, selection });
+    let cleared = false;
+
+    for (const axis of reconciliationOrder()) {
+      if (protectedAxes.has(axis) || !axisSelected(selection, axis)) continue;
+      const stillValid = current.facets[axis].some((option) =>
+        facetMatchesSelection(option, selection, axis)
+      );
+      if (stillValid) continue;
+
+      clearSelectionAxis(selection, axis);
+      clearedAxes.push(axis);
+      cleared = true;
+      break;
+    }
+
+    if (!cleared) {
+      return {
+        selection,
+        clearedAxes,
+        result: current,
+      };
+    }
+  }
 }
