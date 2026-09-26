@@ -53,7 +53,16 @@ const row = (id, amount = 1000) => ({
 
 test('shadow CLI passes matching catalogs and fails content mismatch', async () => {
   const oldServer = await startJsonServer({ data: [row('a'), row('b')] });
-  const sameServer = await startJsonServer({ data: [row('a'), row('b')] });
+  const sameServer = await startJsonServer({
+    data: [row('a'), row('b')],
+    meta: {
+      projectionId: 'erp-public',
+      releaseId: 'rel_shadow',
+      manifestId: 'manifest_shadow',
+      inputDigest: 'input_shadow',
+      dataDigest: 'data_shadow'
+    }
+  });
   const changedServer = await startJsonServer({ data: [row('a', 2000), row('c')] });
 
   try {
@@ -68,6 +77,8 @@ test('shadow CLI passes matching catalogs and fails content mismatch', async () 
     });
     assert.equal(pass.code, 0, pass.stderr);
     assert.match(pass.stdout, /"verdict": "PASS"/);
+    assert.match(pass.stdout, /"releaseId": "rel_shadow"/);
+    assert.match(pass.stdout, /"manifestId": "manifest_shadow"/);
 
     const fail = await run('scripts/check-catalog-shadow.mjs', {
       ...common,
@@ -126,13 +137,31 @@ test('cutover readiness CLI returns GO/HOLD from evidence summaries', async () =
       generatedAt: '2026-09-21T12:00:00.000Z',
       status: 'HEALTHY',
       observation: { projectionEvidenceConsistency: 'ATOMIC' },
-      checks: { activeProjection: { activeReleaseId: 'rel_test' } },
+      checks: {
+        activeProjection: {
+          status: 'PASS',
+          projectionId: 'erp-public',
+          activeReleaseId: 'rel_test',
+          releaseStatus: 'ACTIVE',
+          manifestId: 'manifest_test',
+          manifestPresent: true,
+          canonicalInputDigest: { stored: 'input_test', recomputed: 'input_test', status: 'PASS' },
+          dataPayloadDigest: { stored: 'data_test', recomputed: 'data_test', status: 'PASS' }
+        }
+      },
       issues: []
     };
     const shadowPass = {
       verdict: 'PASS',
       contentMatches: true,
       orderMatches: true,
+      freepassRelease: {
+        projectionId: 'erp-public',
+        releaseId: 'rel_test',
+        manifestId: 'manifest_test',
+        inputDigest: 'input_test',
+        dataDigest: 'data_test'
+      },
       counts: { left: 2, right: 2 },
       comparedAt: '2026-09-21T12:01:00.000Z'
     };
@@ -148,6 +177,30 @@ test('cutover readiness CLI returns GO/HOLD from evidence summaries', async () =
     const go = await run('scripts/assess-cutover-readiness.mjs', common);
     assert.equal(go.code, 0, go.stderr);
     assert.match(go.stdout, /"decision": "GO"/);
+    assert.match(go.stdout, /"releaseId": "rel_test"/);
+    assert.match(go.stdout, /"manifestId": "manifest_test"/);
+
+    const mismatchedShadow = {
+      ...shadowPass,
+      freepassRelease: {
+        ...shadowPass.freepassRelease,
+        releaseId: 'rel_other'
+      }
+    };
+    await writeFile(shadowPath, JSON.stringify(mismatchedShadow));
+    const mismatched = await run('scripts/assess-cutover-readiness.mjs', common);
+    assert.equal(mismatched.code, 2);
+    assert.match(mismatched.stdout, /"SHADOW_RELEASE_MISMATCH"/);
+
+    await writeFile(shadowPath, JSON.stringify({
+      ...shadowPass,
+      freepassRelease: null
+    }));
+    const missingRelease = await run('scripts/assess-cutover-readiness.mjs', common);
+    assert.equal(missingRelease.code, 2);
+    assert.match(missingRelease.stdout, /"SHADOW_RELEASE_EVIDENCE_MISSING"/);
+
+    await writeFile(shadowPath, JSON.stringify(shadowPass));
 
     await writeFile(
       healthPath,

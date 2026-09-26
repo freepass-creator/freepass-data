@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   F86_OUTPUT_CONTRACT,
+  SONOKONG_DEPOSIT_RULE_TEXT,
   classifySonokongRecord,
+  hasSonokongDepositRuleViolation,
   validateF86FeeColumns
 } from '../src/domain/consumer-output-contract.js';
 
@@ -47,6 +49,30 @@ describe('consumer output contracts', () => {
     expect(validateF86FeeColumns(F86_OUTPUT_CONTRACT.supplierFeeColumns.RP023)).toEqual({
       status: 'PASS', violations: []
     });
+  });
+
+  it('owns the Sonokong deposit rule and blocks stale numeric deposits', () => {
+    expect(SONOKONG_DEPOSIT_RULE_TEXT).toBe('월 대여료 × 약정연수 (최대 3개월)');
+    expect(hasSonokongDepositRuleViolation({
+      depositNote: SONOKONG_DEPOSIT_RULE_TEXT,
+      productType: '오공구독',
+      price: { '24': { deposit: 1 } }
+    })).toBe(true);
+    expect(hasSonokongDepositRuleViolation({
+      depositNote: SONOKONG_DEPOSIT_RULE_TEXT,
+      productType: '오공구독',
+      price: { '24': { deposit: 0 } }
+    })).toBe(false);
+    expect(hasSonokongDepositRuleViolation({
+      depositNote: SONOKONG_DEPOSIT_RULE_TEXT,
+      productType: '중고렌트',
+      price: { '24': { deposit: 1000000 } }
+    })).toBe(false);
+    expect(hasSonokongDepositRuleViolation({
+      depositNote: '무보증',
+      productType: '오공구독',
+      price: { '24': { deposit: 1000000 } }
+    })).toBe(false);
   });
 
   it('blocks short-term exceptions from F86, including supplier-specific columns', () => {

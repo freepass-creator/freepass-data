@@ -3,6 +3,8 @@ import { createConsumerGateway, parseConsumerBindings, type ConsumerBinding } fr
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { buildErpPublicProjection } from '../src/application/catalog.js';
+import { DataAccessGateway } from '../src/application/data-access-gateway.js';
+import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
 
 const token = 'test-service-token-0123456789abcdef';
 const binding = { id: 'erp-com', projectionId: 'erp-public' as const, token };
@@ -14,18 +16,40 @@ const healthBinding: ConsumerBinding = {
   capabilities: ['catalog', 'catalog-health']
 };
 
+const withAccess = (
+  store: Parameters<typeof createConsumerGateway>[0],
+  bindings: ConsumerBinding[],
+  healthStore?: Parameters<typeof createConsumerGateway>[3]
+) => {
+  const logs = new MemoryDataAccessLogStore();
+  const access = new DataAccessGateway(logs);
+  return {
+    logs,
+    app: createConsumerGateway(store, bindings, access, healthStore)
+  };
+};
+
 describe('read-only consumer gateway', () => {
   it('does not read storage before authenticating the registered consumer', async () => {
     let reads = 0;
-    const app = createConsumerGateway({ getActive: async () => { reads++; return null; }, getManifest: async () => null }, [binding]);
+    const { app, logs } = withAccess(
+      { getActive: async () => { reads++; return null; }, getManifest: async () => null },
+      [binding]
+    );
     for (const request of [{ url }, { url, headers: { authorization: 'Bearer wrong' } }, { url: '/v1/consumers/admin/catalog', headers }]) {
       expect((await app.inject(request)).statusCode).toBe(401);
     }
     expect(reads).toBe(0);
+    expect(logs.events).toHaveLength(3);
+    expect(logs.events.every((event) =>
+      event.mode === 'READ' &&
+      event.phase === 'DENIED' &&
+      event.reasonCode === 'UNAUTHORIZED'
+    )).toBe(true);
     await app.close();
   });
   it('returns HOLD instead of demo data when the operational release is absent', async () => {
-    const app = createConsumerGateway(new MemoryDataStore(), [binding]);
+    const { app } = withAccess(new MemoryDataStore(), [binding]);
     const result = await app.inject({ url, headers });
     expect(result.statusCode).toBe(503);
     expect(result.json()).toEqual({ code: 'NO_ACTIVE_RELEASE' });
@@ -36,13 +60,25 @@ describe('read-only consumer gateway', () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
     const release = await buildErpPublicProjection(store, store);
-    const app = createConsumerGateway(store, [binding, { id: 'whitelabel-test', projectionId: 'erp-public', token: token + '2' }]);
+    const { app, logs } = withAccess(store, [binding, { id: 'whitelabel-test', projectionId: 'erp-public', token: token + '2' }]);
     const result = await app.inject({ url, headers });
     expect(result.statusCode).toBe(200);
     expect(result.headers['cache-control']).toBe('no-store');
     expect(result.json().meta.releaseId).toBe(release.releaseId);
     expect(result.json().meta.authority).toBe('CANONICAL_ACTIVE');
     expect(result.json().meta.dataDigest).toBe(release.dataDigest);
+    expect(logs.events.slice(0, 2).map((event) => event.phase)).toEqual(['STARTED', 'SUCCEEDED']);
+    expect(logs.events[1]).toMatchObject({
+      mode: 'READ',
+      operation: 'READ_CONSUMER_CATALOG',
+      result: {
+        count: release.data.length,
+        digest: release.dataDigest,
+        releaseId: release.releaseId,
+        manifestId: release.manifestId,
+        revision: release.canonicalRevision
+      }
+    });
     expect((await app.inject({ url: '/v1/consumers/whitelabel-test/catalog', headers })).statusCode).toBe(401);
     const other = await app.inject({ url: '/v1/consumers/whitelabel-test/catalog', headers: { authorization: `Bearer ${token}2` } });
     expect(other.json().meta.releaseId).toBe(release.releaseId);
@@ -60,11 +96,11 @@ describe('read-only consumer gateway', () => {
       { ...release, schemaVersion: 'unreviewed-version' },
       { ...release, data: release.data.map((row) => ({ ...row, privateCustomer: 'must-not-be-returned' })) },
     ]) {
-      const app = createConsumerGateway({ getActive: async () => altered, getManifest: (id) => store.getManifest(id) }, [binding]);
+      const { app } = withAccess({ getActive: async () => altered, getManifest: (id) => store.getManifest(id) }, [binding]);
       expect((await app.inject({ url, headers })).statusCode).toBe(503);
       await app.close();
     }
-    const app = createConsumerGateway({ getActive: async () => release, getManifest: async () => null }, [binding]);
+    const { app } = withAccess({ getActive: async () => release, getManifest: async () => null }, [binding]);
     expect((await app.inject({ url, headers })).statusCode).toBe(503);
     await app.close();
   });
@@ -82,7 +118,7 @@ describe('read-only consumer gateway', () => {
       listProjectionLineage: async () => []
     } as any;
 
-    const app = createConsumerGateway(
+    const { app } = withAccess(
       { getActive: async () => null, getManifest: async () => null },
       [healthBinding],
       healthStore
@@ -100,7 +136,7 @@ describe('read-only consumer gateway', () => {
 
   it('requires an explicit catalog-health capability', async () => {
     const store = new MemoryDataStore();
-    const app = createConsumerGateway(store, [binding], store);
+    const { app } = withAccess(store, [binding], store);
 
     const result = await app.inject({ url: healthUrl, headers });
     expect(result.statusCode).toBe(403);
@@ -113,7 +149,7 @@ describe('read-only consumer gateway', () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
 
-    const app = createConsumerGateway(store, [healthBinding], store);
+    const { app } = withAccess(store, [healthBinding], store);
     const result = await app.inject({ url: healthUrl, headers });
 
     expect(result.statusCode).toBe(200);
@@ -125,13 +161,20 @@ describe('read-only consumer gateway', () => {
     await app.close();
   });
 
-  it('returns 503 when a health-capable registration has no Health reader', async () => {
+  it('returns 503 and audits denial when a health-capable registration has no Health reader', async () => {
     const store = new MemoryDataStore();
-    const app = createConsumerGateway(store, [healthBinding]);
+    const { app, logs } = withAccess(store, [healthBinding]);
 
     const result = await app.inject({ url: healthUrl, headers });
     expect(result.statusCode).toBe(503);
     expect(result.json()).toEqual({ code: 'HEALTH_READER_UNAVAILABLE' });
+    expect(logs.events).toHaveLength(1);
+    expect(logs.events[0]).toMatchObject({
+      mode: 'READ',
+      phase: 'DENIED',
+      operation: 'READ_CATALOG_HEALTH',
+      reasonCode: 'HEALTH_READER_UNAVAILABLE'
+    });
 
     await app.close();
   });
@@ -141,7 +184,7 @@ describe('read-only consumer gateway', () => {
     await seedDemoCatalog(store);
     await buildErpPublicProjection(store, store);
 
-    const app = createConsumerGateway(store, [healthBinding], store);
+    const { app } = withAccess(store, [healthBinding], store);
     const result = await app.inject({ url: healthUrl, headers });
 
     expect(result.statusCode).toBe(200);
@@ -169,7 +212,7 @@ describe('read-only consumer gateway', () => {
       }]
     });
 
-    const app = createConsumerGateway(store, [healthBinding], store);
+    const { app } = withAccess(store, [healthBinding], store);
     const result = await app.inject({ url: healthUrl, headers });
 
     expect(result.statusCode).toBe(503);
@@ -196,7 +239,7 @@ describe('read-only consumer gateway', () => {
       ...binding,
       capabilities: ['catalog-health']
     };
-    const app = createConsumerGateway(store, [healthOnly], store);
+    const { app } = withAccess(store, [healthOnly], store);
 
     expect((await app.inject({ url, headers })).statusCode).toBe(403);
     expect((await app.inject({ url: healthUrl, headers })).statusCode).toBe(200);

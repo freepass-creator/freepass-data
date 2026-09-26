@@ -20,6 +20,35 @@ Project-local data-layer cleanup only:
 
 Company-wide branch/PR lineage governance belongs in AI Core and is intentionally not duplicated here.
 
+## 2026-09-25 F01/F86 SSOT bridge stabilization checkpoint
+
+**FreePass Data owns shared data facts and release evidence; FreePassERP.com/F01/F86 are consumers/transports.** Consumer-side pricing/deposit/status interpretation을 새로 만들지 않는다.
+
+### Verified in this work packet
+
+- Data-owned read-only bridge가 `products + policy + partner`를 한 Firestore transaction에서 읽는다.
+- 정상 공동 준비는 `--workbook=ALL`: 한 capture/release/manifest가 F01/F86 handoff를 함께 만든다.
+- Firestore document-path ID와 payload `_key` 불일치는 fail closed 한다.
+- source observation time과 publication time을 분리한다.
+- bridge는 `depositRuleViolations`를 전달하고 0이 아니면 publication을 막는다.
+- 운영 publication evidence에서 products 1,659 / policy 81 / partner 64, registered 1,659 / unavailable 967 / open 692, common drift 0, `depositRuleViolations=0`가 확인됐다.
+
+### Runtime compatibility / HOLD
+
+예약 production workflow는 ERP4 main 자체가 아니라 별도 pinned publication engine을 사용할 수 있으므로, main PR CI만으로 production-pin parity를 주장하지 않는다.
+
+다음 단일 실행 목표:
+1. live **read-only** Data bridge를 `--workbook=ALL`로 준비한다.
+2. exact source readTime/release/manifest/digests를 보존한다.
+3. 동일 handoff를 pinned F01/F86 publication engine shadow에 소비시킨다.
+4. 같은 source state의 legacy output과 rendered F01/F86 vehicle key/business cell을 비교한다.
+5. rendered parity + delivery/readback receipt가 유효해진 뒤에만 legacy snapshot source cutover를 검토한다.
+
+계속 HOLD:
+- production Sheet writer switch
+- live Sheet write from FreePass Data
+- Canonical ACTIVE Catalog cutover
+
 ## 2026-09-22 publication-readiness gate
 
 상시 ERP5 감사에 기계 판독 가능한 공개 판정 게이트를 추가했다. `FULL / COMPLETE`는 원천 관측 범위이며

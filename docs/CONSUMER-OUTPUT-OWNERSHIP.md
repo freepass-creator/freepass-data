@@ -24,3 +24,92 @@ enforced downstream connection and must not be reported as migrated.
 
 The executable contract is `src/domain/consumer-output-contract.ts` and its
 regression coverage is `tests/consumer-output-contract.test.ts`.
+
+
+## F01/F86 delivery boundary
+
+F01/F86 are downstream transports, not SSOT owners.
+
+A sheet writer may publish only from an approved FreePass Data release. Completion
+requires a `freepass-sheet-delivery-v1` receipt that binds the target workbook
+to the exact `projectionId/releaseId/manifestId/inputDigest/dataDigest`, records the
+render transform contract and its expected output digest/count, and then requires
+a successful readback of that rendered output. The executable validator is
+`src/domain/consumer-delivery.ts`; the JSON contract is
+`contracts/sheet-delivery-receipt.v1.schema.json`.
+
+Until that receipt exists and validates, F01/F86 remain HOLD even if a legacy
+publisher produced matching rows from another snapshot.
+
+
+The projection `dataDigest` and the rendered sheet `dataDigest` are deliberately
+different digest domains. A sheet renderer changes shape, grouping, columns, and
+presentation, so comparing the native sheet readback digest directly with the
+projection digest is invalid. The receipt proves release identity through
+`approvedRelease`, then proves transport integrity by comparing
+`renderedOutput.dataDigest/vehicleKeyCount` with the readback values.
+
+
+## Migration bridge ownership
+
+The target end state is still `CANONICAL_ACTIVE`, but F01/F86 migration must not
+wait for the entire Catalog canonicalization program to finish before authority
+moves out of ERP4.
+
+FreePass Data therefore owns a temporary, explicit migration authority:
+
+`LEGACY_VERIFIED_BRIDGE`
+
+This bridge is not Canonical Catalog authority. It is a Data-owned transport
+release built from one read-only Firestore transaction over the operational
+`products`, `policy`, and `partner` collections.
+
+Executable path:
+
+- `src/application/sheet-publication-bridge.ts`
+- `captureErp5SheetSource()` — captures all three collections at one Firestore read time
+- `buildSheetBridgeRelease()` — decodes without inventing missing values, verifies inventory invariants, and creates one bridge release + manifest
+- `buildSheetBridgeHandoff()` — emits F01/F86-specific `freepass-sheet-handoff-v1` payloads
+- `validateSheetPublicationHandoff()` — rechecks manifest identity, counts, release digest, snapshot digest and handoff hash
+
+The bridge release is identified by `releaseAuthority=LEGACY_VERIFIED_BRIDGE`
+and `projectionId=sheet-publication-bridge`. It must never be reported as a
+Canonical ACTIVE Catalog release.
+
+The bridge can be retired only after a `CANONICAL_ACTIVE` sheet projection
+contains all fields needed by the sheet writers and the same delivery receipt
+contract passes end-to-end.
+
+
+### Read-only bridge preparation
+
+The migration bridge can be prepared without any Sheet or Firestore write:
+
+```bash
+npm run prepare:sheet-bridge -- --live-read-only --workbook=ALL
+# 단일 소비처만 점검할 때만 F01 또는 F86 사용
+npm run prepare:sheet-bridge -- --live-read-only --workbook=F01
+npm run prepare:sheet-bridge -- --live-read-only --workbook=F86
+```
+
+The job reads `products`, `policy`, and `partner` in one Firestore read-only
+transaction, builds the bridge release/manifest, self-validates the handoff, and
+writes only private local evidence under the user home directory. `ALL` is the
+normal joint-publication preparation path: F01 and F86 share one source capture,
+release, manifest and generated-at time.
+
+Source observation time and publication time are distinct facts. Firestore
+`readTime` remains in the manifest/approved release as source evidence, while
+the writer-facing snapshot `capturedAt` is the handoff generation/publication
+time used by the existing sheet presentation logic.
+
+
+The live command requires `FREEPASS_ERP5_READ_ACCESS_TOKEN`. The existing continuous
+read-only audit already obtains that token through the configured WIF read service account,
+but it does **not** currently invoke `prepare:sheet-bridge`. Running the bridge command
+outside an authenticated context must fail closed with `MISSING_READ_ACCESS_TOKEN` before
+any network request. Do not add a Sheet writer credential to this job.
+
+A successful preparation reports `READY_FOR_SHADOW`, never production cutover.
+Required next evidence is ERP4 shadow consumption, rendered-output parity, and a
+valid `freepass-sheet-delivery-v1` readback receipt.

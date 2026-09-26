@@ -280,6 +280,12 @@ describe('lossless Firestore decode boundary', () => {
 });
 
 describe('network boundary', () => {
+  it('fails before any network call when the live read token is missing', async () => {
+    const fetcher = vi.fn();
+    expect(() => erp5ReadTransport('', fetcher as typeof fetch))
+      .toThrow('MISSING_READ_ACCESS_TOKEN');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it('uses the fixed Google endpoint and refuses redirects without logging error bodies', async () => {
     const fetcher = vi.fn(async (..._args: Parameters<typeof fetch>) => new Response('sensitive server error', { status: 403 }));
     const rpc = erp5ReadTransport('synthetic-token', fetcher as typeof fetch);

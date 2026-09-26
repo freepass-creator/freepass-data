@@ -33,7 +33,7 @@ describe('Firestore projection read boundary', () => {
   });
   it('rejects path injection and a pointer that misidentifies its release', async () => {
     const badPath = fakeDb({ 'projection_active/erp-public': { releaseId: '../private/path' } });
-    await expect(projectionReader(badPath.db).getActive('erp-public')).rejects.toThrow('Invalid release pointer');
+    await expect(projectionReader(badPath.db).getActive('erp-public')).rejects.toThrow('Invalid release identity');
     expect(badPath.reads).toHaveLength(1);
     const mismatch = fakeDb({
       'projection_active/erp-public': { releaseId: 'rel_expected' },

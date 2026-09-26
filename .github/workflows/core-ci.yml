@@ -1,0 +1,33 @@
+name: Core CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Architecture guard
+        run: npm run check:arch
+      - name: Data access boundary
+        run: npm run check:data-access-boundary
+      - name: TypeScript build
+        run: npm run build
+      - name: Unit tests
+        run: npm test
+      - name: Read runtime smoke
+        run: npm run test:read-runtime-smoke
+      - name: Shadow tests
+        run: npm run test:shadow

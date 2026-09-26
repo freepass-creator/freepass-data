@@ -34,10 +34,51 @@
           "freepassReadVerified": { "type": "boolean" },
           "parityVerified": { "type": "boolean" },
           "fallbackVerified": { "type": "boolean" },
-          "productionReadbackVerified": { "type": "boolean" }
+          "productionReadbackVerified": { "type": "boolean" },
+          "approvedRelease": {
+            "anyOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "projectionId", "releaseId", "manifestId",
+                  "inputDigest", "dataDigest", "observedAt"
+                ],
+                "properties": {
+                  "projectionId": { "type": "string", "minLength": 1 },
+                  "releaseId": { "type": "string", "minLength": 1 },
+                  "manifestId": { "type": "string", "minLength": 1 },
+                  "inputDigest": { "type": "string", "minLength": 1 },
+                  "dataDigest": { "type": "string", "minLength": 1 },
+                  "observedAt": { "type": "string", "format": "date-time" }
+                }
+              }
+            ]
+          }
         }
       },
       "holdReasons": { "type": "array", "items": { "type": "string", "minLength": 1 } }
-    }
+    },
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "stage": { "enum": ["PARITY_VERIFIED", "FREEPASS_DATA_READ"] }
+          },
+          "required": ["stage"]
+        },
+        "then": {
+          "properties": {
+            "evidence": {
+              "required": ["approvedRelease"],
+              "properties": {
+                "approvedRelease": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    ]
   }
 }

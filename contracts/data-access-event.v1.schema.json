@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/data-access-event.v1.schema.json",
+  "title": "FreePass Data Access Event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion", "eventId", "operationId", "mode", "phase",
+    "operation", "actor", "clientId", "purpose", "resource",
+    "startedAt", "occurredAt"
+  ],
+  "properties": {
+    "contractVersion": { "const": "data-access-event-v1" },
+    "eventId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "operationId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "mode": { "enum": ["READ", "WRITE"] },
+    "phase": { "enum": ["STARTED", "SUCCEEDED", "DENIED", "FAILED"] },
+    "operation": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{2,99}$"
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "kind": { "enum": ["USER", "SERVICE"] },
+        "organizationId": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "clientId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "purpose": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": {
+          "enum": ["CATALOG", "PROJECTION", "HEALTH", "COMMAND", "SOURCE", "SYSTEM"]
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "entityType": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "entityId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "projectionId": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "correlationId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "requestDigest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "releaseId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "manifestId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "reasonCode": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{2,99}$"
+    },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "occurredAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "phase": { "const": "SUCCEEDED" } } },
+      "then": { "not": { "required": ["reasonCode"] } }
+    },
+    {
+      "if": { "properties": { "phase": { "enum": ["DENIED", "FAILED"] } } },
+      "then": { "required": ["reasonCode"] }
+    }
+  ]
+}
