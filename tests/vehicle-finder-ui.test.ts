@@ -145,6 +145,7 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).toMatch(/response\.transition\.status/);
     expect(source).toMatch(/response\.readContext \?\? null/);
     expect(source).toMatch(/readContext,/);
+    expect(source).toMatch(/groupTransitionRejectedMessage/);
     expect(source).not.toMatch(/applyVehicleGroupDrilldown|applyVehicleGroupSelection/);
   });
 
