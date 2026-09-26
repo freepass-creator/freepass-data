@@ -104,6 +104,33 @@ export function createSheetBridgeDataAccessRuntime(input: {
   };
 }
 
+export async function createSheetConsumerHealthReadOnlyDataAccessRuntime(input: {
+  accessToken: string;
+  evidenceBucket: string;
+}) {
+  const access = readOnlyAccess(input);
+  const store = await createFirestoreDataStore();
+
+  return {
+    health: (freshnessPolicy: SheetEvidenceFreshnessPolicy) => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-sheet-health-audit', kind: 'SERVICE' },
+        clientId: 'job:check-sheet-consumer-health',
+        purpose: 'read F01/F86 delivery and cutover health without Firestore audit writes'
+      },
+      operation: 'READ_SHEET_CONSUMER_HEALTH',
+      resource: {
+        kind: 'PROJECTION',
+        name: 'sheet-consumer-health'
+      },
+      summarize: (value) => ({
+        count: value.consumers.length,
+        digest: stableDigest(value)
+      })
+    }, () => readSheetConsumerHealth(store, freshnessPolicy))
+  };
+}
+
 export async function createSheetDeliveryEvidenceDataAccessRuntime() {
   const access = new DataAccessGateway(createFirestoreDataAccessLogStore());
   const store = await createFirestoreDataStore();
