@@ -33,6 +33,8 @@ export type VehicleMasterEvidenceIssue = {
     | 'PARENT_NODE_MISSING'
     | 'PARENT_NODE_HOLD'
     | 'PARENT_EFFECTIVE_RANGE_MISMATCH'
+    | 'PARENT_REFERENCE_MISMATCH'
+    | 'PHASE_EFFECTIVE_RANGE_OVERLAP'
     | 'REFERENCE_NODE_MISSING'
     | 'REFERENCE_NODE_HOLD'
     | 'REFERENCE_EFFECTIVE_RANGE_MISMATCH'
@@ -174,6 +176,19 @@ function explicitTemporalOverlap(a: TemporalTarget, b: TemporalTarget) {
   if (aTo !== null && bFrom < aTo && bFrom >= aFrom) return true;
   if (bTo !== null && aFrom < bTo && aFrom >= bFrom) return true;
   return false;
+}
+
+function expectedParentRef(proposal: VehicleMasterNode): string | null {
+  switch (proposal.nodeType) {
+    case 'MODEL': return proposal.refs.makeId ?? null;
+    case 'GENERATION': return proposal.refs.modelId ?? null;
+    case 'PHASE': return proposal.refs.generationId ?? null;
+    case 'MODEL_YEAR': return proposal.refs.phaseId ?? null;
+    case 'POWERTRAIN': return proposal.refs.modelYearId ?? null;
+    case 'VARIANT': return proposal.refs.powertrainId ?? null;
+    case 'TRIM': return proposal.refs.variantId ?? null;
+    default: return null;
+  }
 }
 
 function valueAtPath(value: unknown, path: string): unknown {
@@ -320,6 +335,19 @@ async function applyNodeReferenceGate(
   decision: VehicleMasterEvidenceDecision
 ): Promise<VehicleMasterEvidenceDecision> {
   const issues = [...decision.issues];
+  const expectedParent = expectedParentRef(proposal);
+
+  if (
+    proposal.parentId &&
+    expectedParent &&
+    proposal.parentId !== expectedParent
+  ) {
+    issues.push({
+      code: 'PARENT_REFERENCE_MISMATCH',
+      fieldPath: 'parentId',
+      detail: `${proposal.parentId}!=${expectedParent}`,
+    });
+  }
 
   if (proposal.parentId) {
     if (proposal.parentId === proposal.id) {
@@ -388,6 +416,25 @@ async function applyNodeReferenceGate(
           code: 'REFERENCE_EFFECTIVE_RANGE_MISMATCH',
           fieldPath: `refs.${field}`,
           detail: refId,
+        });
+      }
+    }
+  }
+
+  if (proposal.nodeType === 'PHASE' && proposal.parentId) {
+    const siblings = (await store.listNodesByType('PHASE'))
+      .filter((node) =>
+        node.id !== proposal.id &&
+        node.parentId === proposal.parentId &&
+        node.status !== 'HOLD'
+      );
+
+    for (const sibling of siblings) {
+      if (explicitTemporalOverlap(sibling, proposal)) {
+        issues.push({
+          code: 'PHASE_EFFECTIVE_RANGE_OVERLAP',
+          fieldPath: 'effectiveFrom',
+          detail: sibling.id,
         });
       }
     }

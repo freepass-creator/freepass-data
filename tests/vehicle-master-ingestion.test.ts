@@ -393,6 +393,150 @@ describe('vehicle master evidence-gated ingestion', () => {
     expect(await store.getNode(proposal.id)).toBeNull();
   });
 
+  it('keeps a node on HOLD when parentId disagrees with its canonical parent ref', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-parent-ref-mismatch', 'MANUFACTURER_OFFICIAL', 'e');
+    await store.putSourceDocument(official);
+
+    const base = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, base);
+
+    await store.putNode(sealVehicleMasterNode({
+      id: 'variant_alternate_parent',
+      nodeType: 'VARIANT',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '5인승 AWD',
+      parentId: base.refs.powertrainId!,
+      refs: {},
+      aliases: [],
+      attributes: { seats: 5, drivetrain: 'AWD' },
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterNode({
+      id: base.id,
+      nodeType: base.nodeType,
+      status: base.status,
+      revision: base.revision,
+      canonicalName: base.canonicalName,
+      parentId: 'variant_alternate_parent',
+      refs: base.refs,
+      aliases: base.aliases,
+      attributes: base.attributes,
+      sourceEvidenceIds: base.sourceEvidenceIds,
+      effectiveFrom: base.effectiveFrom ?? null,
+      effectiveTo: base.effectiveTo ?? null,
+      createdAt: base.createdAt,
+      updatedAt: base.updatedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: observations(proposal, [official.sourceDocumentId]),
+      policy: identityPolicy,
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'PARENT_REFERENCE_MISMATCH',
+          fieldPath: 'parentId',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps an overlapping sibling PHASE on HOLD within the same generation', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-phase-overlap', 'MANUFACTURER_OFFICIAL', 'f');
+    await store.putSourceDocument(official);
+
+    const generation = sealVehicleMasterNode({
+      id: 'gen_overlap_test',
+      nodeType: 'GENERATION',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '테스트 세대',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: '2026-01-01T00:00:00.000Z',
+      effectiveTo: '2027-01-01T00:00:00.000Z',
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+    await store.putNode(generation);
+
+    await store.putNode(sealVehicleMasterNode({
+      id: 'phase_pre_overlap',
+      nodeType: 'PHASE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '초기형',
+      parentId: generation.id,
+      refs: { generationId: generation.id },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: '2026-01-01T00:00:00.000Z',
+      effectiveTo: '2026-10-01T00:00:00.000Z',
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const proposal = sealVehicleMasterNode({
+      id: 'phase_facelift_overlap',
+      nodeType: 'PHASE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '페이스리프트',
+      parentId: generation.id,
+      refs: { generationId: generation.id },
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: '2026-09-01T00:00:00.000Z',
+      effectiveTo: '2027-01-01T00:00:00.000Z',
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: [{
+        fieldPath: 'canonicalName',
+        value: proposal.canonicalName,
+        sourceDocumentId: official.sourceDocumentId,
+      }],
+      policy: {
+        requiredFieldPaths: ['canonicalName'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'PHASE_EFFECTIVE_RANGE_OVERLAP',
+          detail: 'phase_pre_overlap',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
   it('keeps a child on HOLD when its effective range escapes the canonical parent', async () => {
     const store = new MemoryVehicleMasterStore();
     const official = source('official-temporal-parent', 'MANUFACTURER_OFFICIAL', 'a');
