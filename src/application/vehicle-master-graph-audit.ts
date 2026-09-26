@@ -596,7 +596,7 @@ function auditNodeSemantics(
   nodes: readonly VehicleMasterNode[],
   issues: VehicleMasterGraphAuditIssue[]
 ) {
-  const active = nodes.filter((node) => node.status !== 'HOLD');
+  const dedupe = nodes.filter((node) => node.status !== 'HOLD');
 
   const hierarchyTypes: readonly VehicleMasterNodeType[] = [
     'MAKE',
@@ -605,7 +605,7 @@ function auditNodeSemantics(
     'PHASE',
   ];
   for (const type of hierarchyTypes) {
-    const rows = active.filter((node) => node.nodeType === type);
+    const rows = dedupe.filter((node) => node.nodeType === type);
     for (let i = 0; i < rows.length; i += 1) {
       for (let j = i + 1; j < rows.length; j += 1) {
         const a = rows[i]!;
@@ -633,7 +633,8 @@ function auditNodeSemantics(
     }
   }
 
-  const modelYears = active.filter((node) => node.nodeType === 'MODEL_YEAR');
+  const modelYears = nodes.filter((node) => node.nodeType === 'MODEL_YEAR');
+  const dedupeModelYears = dedupe.filter((node) => node.nodeType === 'MODEL_YEAR');
   for (const node of modelYears) {
     const value = modelYearValue(node);
     if (value === null || value < 1900 || value > 2200) {
@@ -673,10 +674,10 @@ function auditNodeSemantics(
       }
     }
   }
-  for (let i = 0; i < modelYears.length; i += 1) {
-    for (let j = i + 1; j < modelYears.length; j += 1) {
-      const a = modelYears[i]!;
-      const b = modelYears[j]!;
+  for (let i = 0; i < dedupeModelYears.length; i += 1) {
+    for (let j = i + 1; j < dedupeModelYears.length; j += 1) {
+      const a = dedupeModelYears[i]!;
+      const b = dedupeModelYears[j]!;
       if (a.parentId !== b.parentId) continue;
       if (modelYearValue(a) !== null && modelYearValue(a) === modelYearValue(b)) {
         add(issues, {
@@ -691,7 +692,8 @@ function auditNodeSemantics(
     }
   }
 
-  const powertrains = active.filter((node) => node.nodeType === 'POWERTRAIN');
+  const powertrains = nodes.filter((node) => node.nodeType === 'POWERTRAIN');
+  const dedupePowertrains = dedupe.filter((node) => node.nodeType === 'POWERTRAIN');
   for (const node of powertrains) {
     const expectedIdentity = canonicalPowertrainIdentity(node.canonicalName);
     const storedIdentity =
@@ -726,10 +728,10 @@ function auditNodeSemantics(
     }
   }
 
-  for (let i = 0; i < powertrains.length; i += 1) {
-    for (let j = i + 1; j < powertrains.length; j += 1) {
-      const a = powertrains[i]!;
-      const b = powertrains[j]!;
+  for (let i = 0; i < dedupePowertrains.length; i += 1) {
+    for (let j = i + 1; j < dedupePowertrains.length; j += 1) {
+      const a = dedupePowertrains[i]!;
+      const b = dedupePowertrains[j]!;
       if (a.parentId !== b.parentId) continue;
       if (
         canonicalPowertrainIdentity(a.canonicalName) ===
@@ -747,7 +749,8 @@ function auditNodeSemantics(
     }
   }
 
-  const variants = active.filter((node) => node.nodeType === 'VARIANT');
+  const variants = nodes.filter((node) => node.nodeType === 'VARIANT');
+  const dedupeVariants = dedupe.filter((node) => node.nodeType === 'VARIANT');
   for (const node of variants) {
     const seats = canonicalSeatCount(node.attributes.seats);
     const storedDrivetrain =
@@ -811,10 +814,10 @@ function auditNodeSemantics(
     }
   }
 
-  for (let i = 0; i < variants.length; i += 1) {
-    for (let j = i + 1; j < variants.length; j += 1) {
-      const a = variants[i]!;
-      const b = variants[j]!;
+  for (let i = 0; i < dedupeVariants.length; i += 1) {
+    for (let j = i + 1; j < dedupeVariants.length; j += 1) {
+      const a = dedupeVariants[i]!;
+      const b = dedupeVariants[j]!;
       if (a.parentId !== b.parentId) continue;
       const aSeats = canonicalSeatCount(a.attributes.seats);
       const bSeats = canonicalSeatCount(b.attributes.seats);
@@ -842,7 +845,8 @@ function auditNodeSemantics(
     }
   }
 
-  const trims = active.filter((node) => node.nodeType === 'TRIM');
+  const trims = nodes.filter((node) => node.nodeType === 'TRIM');
+  const dedupeTrims = dedupe.filter((node) => node.nodeType === 'TRIM');
   for (const node of trims) {
     const expectedIdentity = canonicalTrimIdentity(node.canonicalName);
     const storedIdentity =
@@ -861,10 +865,10 @@ function auditNodeSemantics(
     }
   }
 
-  for (let i = 0; i < trims.length; i += 1) {
-    for (let j = i + 1; j < trims.length; j += 1) {
-      const a = trims[i]!;
-      const b = trims[j]!;
+  for (let i = 0; i < dedupeTrims.length; i += 1) {
+    for (let j = i + 1; j < dedupeTrims.length; j += 1) {
+      const a = dedupeTrims[i]!;
+      const b = dedupeTrims[j]!;
       if (a.parentId !== b.parentId) continue;
       const aNames = normalizedNames(a, canonicalTrimIdentity);
       const bNames = normalizedNames(b, canonicalTrimIdentity);
@@ -881,7 +885,7 @@ function auditNodeSemantics(
     }
   }
 
-  const phases = active.filter((node) => node.nodeType === 'PHASE');
+  const phases = dedupe.filter((node) => node.nodeType === 'PHASE');
   for (let i = 0; i < phases.length; i += 1) {
     for (let j = i + 1; j < phases.length; j += 1) {
       const a = phases[i]!;
@@ -899,7 +903,7 @@ function auditNodeSemantics(
     }
   }
 
-  const supplemental = active.filter((node) => SUPPLEMENTAL_TYPES.has(node.nodeType));
+  const supplemental = dedupe.filter((node) => SUPPLEMENTAL_TYPES.has(node.nodeType));
   for (let i = 0; i < supplemental.length; i += 1) {
     for (let j = i + 1; j < supplemental.length; j += 1) {
       const a = supplemental[i]!;
@@ -955,6 +959,19 @@ function auditPrices(
         relatedId: price.targetId,
       });
       continue;
+    }
+
+    for (const field of requiredRefFields(target.nodeType)) {
+      if (!target.refs[field]) {
+        add(issues, {
+          code: 'PRICE_TARGET_LINEAGE_INCOMPLETE',
+          severity: 'ERROR',
+          entityKind: 'PRICE',
+          entityId: price.id,
+          fieldPath: `targetId.${field}`,
+          relatedId: target.id,
+        });
+      }
     }
 
     const expected = expectedPriceTargetType(price.priceType);
@@ -1051,7 +1068,8 @@ function auditRuleReference(
   node: VehicleMasterNode,
   fieldPath: string,
   anchor: VehicleMasterNode | null,
-  issues: VehicleMasterGraphAuditIssue[]
+  issues: VehicleMasterGraphAuditIssue[],
+  holdCode: 'RULE_SUBJECT_HOLD' | 'RULE_TARGET_HOLD' | null
 ) {
   for (const field of requiredRefFields(node.nodeType)) {
     if (!node.refs[field]) {
@@ -1065,9 +1083,9 @@ function auditRuleReference(
       });
     }
   }
-  if (node.status === 'HOLD') {
+  if (node.status === 'HOLD' && holdCode) {
     add(issues, {
-      code: fieldPath === 'subjectId' ? 'RULE_SUBJECT_HOLD' : 'RULE_TARGET_HOLD',
+      code: holdCode,
       severity: 'ERROR',
       entityKind: 'RULE',
       entityId: rule.id,
@@ -1112,7 +1130,7 @@ function auditRules(
         relatedId: rule.subjectId,
       });
     } else {
-      auditRuleReference(rule, subject, 'subjectId', null, issues);
+      auditRuleReference(rule, subject, 'subjectId', null, issues, 'RULE_SUBJECT_HOLD');
     }
 
     for (const targetId of rule.targetIds) {
@@ -1127,7 +1145,7 @@ function auditRules(
           relatedId: targetId,
         });
       } else {
-        auditRuleReference(rule, target, `targetIds.${target.id}`, subject, issues);
+        auditRuleReference(rule, target, `targetIds.${target.id}`, subject, issues, 'RULE_TARGET_HOLD');
       }
     }
 
@@ -1167,7 +1185,23 @@ function auditRules(
           relatedId: node.id,
         });
       }
-      auditRuleReference(rule, node, `scope.${field}`, subject, issues);
+      auditRuleReference(rule, node, `scope.${field}`, subject, issues, null);
+    }
+
+    if (
+      rule.scope.trimId &&
+      subject?.nodeType === 'TRIM' &&
+      rule.scope.trimId !== subject.id
+    ) {
+      add(issues, {
+        code: 'RULE_SCOPE_SUBJECT_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'RULE',
+        entityId: rule.id,
+        fieldPath: 'scope.trimId',
+        relatedId: rule.scope.trimId,
+        detail: `${rule.scope.trimId}!=${subject.id}`,
+      });
     }
 
     if (rule.ruleType === 'INCLUDES') {
