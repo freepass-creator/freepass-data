@@ -40,7 +40,7 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).toMatch(/snapshot\.guidance\.resolutionStatus/);
     expect(source).toMatch(/snapshot\.guidance\.suggestedNextAxis/);
     expect(source).toMatch(/read\(\{ mode, query, filters:/);
-    expect(source).not.toMatch(/VEHICLE_SELECTOR_UX_PRESETS|preferredAxisOrder|hiddenByDefault/);
+    expect(source).not.toMatch(/VEHICLE_SELECTOR_UX_PRESETS|preferredAxisOrder|hiddenByDefault|facetLabels/);
   });
 
   it('clears UI selection state when switching new and used modes', async () => {
@@ -49,6 +49,16 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).toMatch(/query = ''/);
     expect(source).toMatch(/filters = \{\}/);
     expect(source).toMatch(/inspectedId = null/);
+  });
+
+  it('renders adapter-ordered facets and guided options without owning axis priority', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    expect(source).toMatch(/input\.facets/);
+    expect(source).toMatch(/for \(const facet of snapshot\.facets\)/);
+    expect(source).toMatch(/facetByAxis\(snapshot, snapshot\.guidance\.suggestedNextAxis\)/);
+    expect(source).toMatch(/vf-guided-options/);
+    expect(source).toMatch(/filters\[suggestedFacet\.axis\] = option\.key/);
+    expect(source).not.toMatch(/modelYear: '연식'|phase:|generation:/);
   });
 
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
