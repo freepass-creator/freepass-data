@@ -1226,6 +1226,10 @@ export function mountVehicleFinder(
       finalizationReview = null;
       finalizationContext = null;
       renderSnapshot();
+      if (inspectedId) {
+        const refreshedItem = snapshot.items.find((item) => item.id === inspectedId);
+        if (refreshedItem) renderDetail(refreshedItem);
+      }
     } catch {
       if (disposed || seq !== requestSeq) return;
       if (snapshot && preserve) {
