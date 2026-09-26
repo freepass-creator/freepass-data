@@ -174,6 +174,16 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).not.toMatch(/finalizeVehicleSelection|issueVehicleSelectionReceipt/);
   });
 
+  it('renders receipt revalidation without computing receipt validity in U', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    expect(source).toMatch(/onRevalidate/);
+    expect(source).toMatch(/유효성 다시 확인/);
+    expect(source).toMatch(/CURRENT/);
+    expect(source).toMatch(/RESELECT_REQUIRED/);
+    expect(source).toMatch(/목록에서 다시 선택/);
+    expect(source).not.toMatch(/revalidateVehicleSelectionReceipt|assertVehicleSelectionReceipt/);
+  });
+
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
     const css = await readFile(cssPath, 'utf8');
     expect(css).toMatch(/grid-template-columns:3fr 7fr/);
