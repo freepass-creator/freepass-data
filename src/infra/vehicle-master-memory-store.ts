@@ -254,11 +254,19 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
       );
     }
 
-    map.set(input.record.id, copy(input.record) as never);
-    revisions.set(
-      `${input.record.id}__r${input.record.revision}`,
-      copy(input.record) as never
-    );
+    if (input.entityKind === 'NODE') {
+      this.nodes.set(input.record.id, copy(input.record));
+      this.nodeRevisions.set(
+        `${input.record.id}__r${input.record.revision}`,
+        copy(input.record)
+      );
+    } else {
+      this.rules.set(input.record.id, copy(input.record));
+      this.ruleRevisions.set(
+        `${input.record.id}__r${input.record.revision}`,
+        copy(input.record)
+      );
+    }
     this.repairReceipts.set(input.receipt.receiptId, copy(input.receipt));
 
     return {
