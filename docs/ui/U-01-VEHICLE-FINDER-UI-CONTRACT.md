@@ -248,3 +248,55 @@ U does not calculate discrimination scores, bucket power or group membership.
 
 `UNRESOLVED_IDENTITY` groups remain separate exactly as F returns them; U must not
 merge unresolved generations into a fabricated model/generation group.
+
+
+## Group drilldown transition UI
+
+Expandable groups may expose the F-provided drilldown axes and options carried by the
+U presenter. U does not score or rank those axes.
+
+The Finder accepts an optional injected callback:
+
+```js
+onGroupDrilldown({
+  mode,
+  groupId,
+  axis,
+  option,
+  observationId,
+  query,
+  filters,
+  readContext
+})
+```
+
+The callback owns the F/I transition execution and returns:
+
+```js
+{
+  transition: {
+    status: 'APPLIED' | 'REJECTED',
+    reason,
+    activeGroupId,
+    beforeCandidateCount,
+    afterCandidateCount,
+    clearedAxes
+  },
+  snapshot,
+  readContext,
+  message?
+}
+```
+
+Rules:
+
+- U sends the F-provided option payload back unchanged
+- U never imports or invokes `applyVehicleGroupDrilldown()`
+- APPLIED replaces the snapshot with the callback result
+- REJECTED keeps the current snapshot intact
+- callback/network failure keeps the current snapshot intact
+- returned `readContext` is opaque; U stores it and forwards it on later `read()` calls
+- mode change and explicit filter reset clear `readContext`
+- if F returns `activeGroupId`, that group remains expanded after transition
+
+This preserves transition continuity without moving selection reconciliation into U.
