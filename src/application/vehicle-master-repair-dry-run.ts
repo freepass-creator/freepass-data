@@ -282,6 +282,94 @@ function changesFor(
     .sort((a, b) => a.fieldPath.localeCompare(b.fieldPath));
 }
 
+export function materializeVehicleMasterRepairCandidate(input: {
+  snapshot: VehicleMasterGraphSnapshot;
+  repairPlan: VehicleMasterRepairPlan;
+  dryRunItem: VehicleMasterRepairDryRunItem;
+  observedAt: string;
+}): {
+  record: RepairableRecord | null;
+  blockers: string[];
+} {
+  if (input.dryRunItem.status !== 'READY') {
+    return { record: null, blockers: ['DRY_RUN_ITEM_NOT_READY'] };
+  }
+
+  const current = recordFor(
+    input.snapshot,
+    input.dryRunItem.entityKind,
+    input.dryRunItem.entityId
+  );
+  if (!current) {
+    return { record: null, blockers: ['CURRENT_CANONICAL_RECORD_MISSING'] };
+  }
+
+  const planItems = input.repairPlan.items
+    .filter((item) => item.classification === 'AUTO_SAFE')
+    .filter((item) =>
+      item.entityKind === input.dryRunItem.entityKind &&
+      item.entityId === input.dryRunItem.entityId
+    )
+    .sort((a, b) => a.repairId.localeCompare(b.repairId));
+
+  if (!planItems.length) {
+    return { record: null, blockers: ['AUTO_SAFE_PLAN_ITEMS_MISSING'] };
+  }
+
+  const repairIds = planItems.map((item) => item.repairId).sort();
+  if (
+    stableDigest(repairIds) !==
+    stableDigest([...input.dryRunItem.repairIds].sort())
+  ) {
+    return { record: null, blockers: ['DRY_RUN_REPAIR_SET_MISMATCH'] };
+  }
+
+  const entityBlockers = hasEntityBlocker(
+    input.snapshot,
+    input.repairPlan,
+    input.dryRunItem.entityKind,
+    input.dryRunItem.entityId
+  ).map((item) =>
+    `NON_AUTO_SAFE_ISSUE:${item.issueCode}:${item.entityKind}:${item.entityId}`
+  );
+  if (entityBlockers.length) {
+    return {
+      record: null,
+      blockers: [...new Set(entityBlockers)].sort(),
+    };
+  }
+
+  const repaired =
+    input.dryRunItem.entityKind === 'NODE'
+      ? repairNode(current as VehicleMasterNode, planItems, input.observedAt)
+      : repairRule(
+          current as VehicleMasterCompatibilityRule,
+          planItems,
+          input.observedAt
+        );
+
+  if (!repaired.record || repaired.blockers.length) {
+    return {
+      record: null,
+      blockers: [...new Set(repaired.blockers)].sort(),
+    };
+  }
+
+  if (
+    repaired.record.revision !== input.dryRunItem.expectedRevision ||
+    repaired.record.contentHash !== input.dryRunItem.afterContentHash ||
+    current.revision !== input.dryRunItem.currentRevision ||
+    current.contentHash !== input.dryRunItem.beforeContentHash
+  ) {
+    return {
+      record: null,
+      blockers: ['DRY_RUN_CANDIDATE_MISMATCH'],
+    };
+  }
+
+  return { record: repaired.record, blockers: [] };
+}
+
 function simulateEntity(
   snapshot: VehicleMasterGraphSnapshot,
   report: VehicleMasterGraphAuditReport,
