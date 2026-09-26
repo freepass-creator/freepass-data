@@ -109,6 +109,60 @@ describe('usedcar master', () => {
     expect(result[0]?.record.trimId).toBeNull();
   });
 
+  it('exposes selector action semantics instead of flattening UNKNOWN and HOLD candidates', () => {
+    const partial = row({
+      recordId: 'used_partial_sorento',
+      modelYearId: null,
+      powertrainId: null,
+      variantId: null,
+      trimId: null,
+      modelYear: null,
+      powertrainName: null,
+      trimName: null,
+      identityStatus: 'PARTIAL',
+    });
+    const hold = row({
+      recordId: 'used_hold_sorento',
+      lifecycleStatus: 'HOLD',
+      identityStatus: 'HOLD',
+      holdReasons: ['IDENTITY_HOLD'],
+    });
+
+    const result = searchUsedcarMaster([row(), partial, hold], {
+      model: '쏘렌토',
+    });
+
+    expect(result.map((candidate) => ({
+      id: candidate.record.recordId,
+      actionState: candidate.actionState,
+      action: candidate.action,
+      selectable: candidate.selectable,
+    }))).toEqual([
+      {
+        id: 'used_trim_sorento_2021_noblesse',
+        actionState: 'ACTIVE',
+        action: 'SELECT',
+        selectable: true,
+      },
+      {
+        id: 'used_partial_sorento',
+        actionState: 'UNKNOWN',
+        action: 'INSPECT_ONLY',
+        selectable: false,
+      },
+      {
+        id: 'used_hold_sorento',
+        actionState: 'HOLD',
+        action: 'BLOCKED',
+        selectable: false,
+      },
+    ]);
+    expect(result[1]?.actionReasons).toContain('IDENTITY_PARTIAL');
+    expect(result[2]?.actionReasons).toEqual(
+      expect.arrayContaining(['LIFECYCLE_HOLD', 'IDENTITY_HOLD'])
+    );
+  });
+
   it('fails semantic validation when a resolved record is missing stable identity', () => {
     const issues = validateUsedcarMasterSemantics([
       row({ trimId: null }),

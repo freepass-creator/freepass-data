@@ -1,5 +1,8 @@
 import type { EstimateNewcarMasterRecord } from '../domain/estimate-master.js';
-import type { UsedcarMasterRecord } from '../domain/usedcar-master.js';
+import {
+  usedcarMasterToSelectorRecord,
+  type UsedcarMasterRecord,
+} from '../domain/usedcar-master.js';
 import type { VehicleSelectorRecord } from '../domain/vehicle-selector.js';
 
 function textValue(id: string | null | undefined, label: string | null | undefined) {
@@ -21,22 +24,7 @@ function numberValue(
 export function selectorRecordsFromUsedcarMaster(
   records: readonly UsedcarMasterRecord[]
 ): VehicleSelectorRecord[] {
-  return records.map((record) => ({
-    recordId: record.recordId,
-    lifecycle: record.lifecycleStatus,
-    identityStatus: record.identityStatus,
-    maker: textValue(null, record.maker),
-    model: textValue(record.vehicleModelId, record.model),
-    generation: textValue(record.generationId, record.generationName),
-    phase: textValue(record.phaseId, record.phaseName),
-    modelYear: numberValue(record.modelYearId, record.modelYear),
-    powertrain: textValue(record.powertrainId, record.powertrainName),
-    fuelType: textValue(null, record.configuration.fuelType),
-    drivetrain: textValue(null, record.configuration.drivetrain),
-    seats: numberValue(null, record.configuration.seats),
-    trim: textValue(record.trimId, record.trimName),
-    aliases: [...record.aliases],
-  }));
+  return records.map(usedcarMasterToSelectorRecord);
 }
 
 export function selectorRecordsFromNewcarMaster(
