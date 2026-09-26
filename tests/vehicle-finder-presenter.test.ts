@@ -4,7 +4,10 @@ import {
   selectorRecordsFromUsedcarMaster,
 } from '../src/application/vehicle-selector-adapters.js';
 import { presentVehicleSelectorResult } from '../src/application/vehicle-finder-presenter.js';
-import { selectVehicles } from '../src/domain/vehicle-selector.js';
+import {
+  applyVehicleGroupDrilldown,
+  selectVehicles,
+} from '../src/domain/vehicle-selector.js';
 import type { EstimateNewcarMasterRecord } from '../src/domain/estimate-master.js';
 import type { UsedcarMasterRecord } from '../src/domain/usedcar-master.js';
 
@@ -304,5 +307,43 @@ describe('Vehicle Finder group drilldown presentation contract', () => {
     expect(presented.drilldowns[0]?.options)
       .toEqual(group.drilldownAxes[0]?.options);
     expect(presented.suggestedDrilldownAxis).toBe(group.suggestedDrilldownAxis);
+  });
+});
+
+
+describe('Vehicle Finder presented drilldown compatibility with F transition', () => {
+  it('round-trips a presented F option back through applyVehicleGroupDrilldown', () => {
+    const adapted = selectorRecordsFromUsedcarMaster([usedcar])[0]!;
+    const base = {
+      ...adapted,
+      maker: { id: 'maker_kia', label: '기아' },
+    };
+    const second = {
+      ...base,
+      recordId: 'used_sorento_signature_2024',
+      modelYear: { id: 'my_2024', label: '2024', value: 2024 },
+      trim: { id: 'trim_signature_2024', label: '시그니처' },
+    };
+    const records = [base, second];
+    const result = selectVehicles(records, {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+    });
+    const group = result.groups[0]!;
+    const drilldown = group.drilldownAxes[0]!;
+    const option = drilldown.options[0]!;
+
+    const transition = applyVehicleGroupDrilldown(
+      records,
+      { mode: 'USED_CAR', searchText: '쏘렌토' },
+      {},
+      group.groupId,
+      drilldown.axis,
+      option,
+    );
+
+    expect(transition.status).toBe('APPLIED');
+    expect(transition.beforeCandidateCount).toBe(2);
+    expect(transition.afterCandidateCount).toBeLessThan(2);
   });
 });
