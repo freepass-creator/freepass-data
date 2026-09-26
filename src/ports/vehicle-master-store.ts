@@ -4,10 +4,31 @@ import type {
   VehicleMasterNode,
   VehicleMasterPipelineRecord,
   VehicleMasterPriceRevision,
+  VehicleMasterRepairReceipt,
   VehicleMasterResolverFeedback,
   VehicleMasterSourceDocument,
   VehicleMasterWriteResult,
 } from '../domain/vehicle-master.js';
+
+export type VehicleMasterRepairCommitInput =
+  | {
+      entityKind: 'NODE';
+      expectedRevision: number;
+      expectedContentHash: string;
+      record: VehicleMasterNode;
+      receipt: VehicleMasterRepairReceipt;
+    }
+  | {
+      entityKind: 'RULE';
+      expectedRevision: number;
+      expectedContentHash: string;
+      record: VehicleMasterCompatibilityRule;
+      receipt: VehicleMasterRepairReceipt;
+    };
+
+export type VehicleMasterRepairCommitResult =
+  | { status: 'COMMITTED'; receipt: VehicleMasterRepairReceipt }
+  | { status: 'IDEMPOTENT_REPLAY'; receipt: VehicleMasterRepairReceipt };
 
 export interface VehicleMasterStore {
   getNode(id: string): Promise<VehicleMasterNode | null>;
@@ -47,4 +68,7 @@ export interface VehicleMasterStore {
 
   getResolverFeedback(feedbackId: string): Promise<VehicleMasterResolverFeedback | null>;
   putResolverFeedback(record: VehicleMasterResolverFeedback): Promise<VehicleMasterWriteResult>;
+
+  getRepairReceipt(receiptId: string): Promise<VehicleMasterRepairReceipt | null>;
+  commitRepair(input: VehicleMasterRepairCommitInput): Promise<VehicleMasterRepairCommitResult>;
 }

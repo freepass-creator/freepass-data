@@ -4,11 +4,16 @@ import type {
   VehicleMasterNode,
   VehicleMasterPipelineRecord,
   VehicleMasterPriceRevision,
+  VehicleMasterRepairReceipt,
   VehicleMasterResolverFeedback,
   VehicleMasterSourceDocument,
   VehicleMasterWriteResult,
 } from '../domain/vehicle-master.js';
-import type { VehicleMasterStore } from '../ports/vehicle-master-store.js';
+import type {
+  VehicleMasterRepairCommitInput,
+  VehicleMasterRepairCommitResult,
+  VehicleMasterStore,
+} from '../ports/vehicle-master-store.js';
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -28,6 +33,7 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
   private readonly hashes = new Map<string, VehicleMasterHashRecord>();
   private readonly pipeline = new Map<string, VehicleMasterPipelineRecord>();
   private readonly resolverFeedback = new Map<string, VehicleMasterResolverFeedback>();
+  private readonly repairReceipts = new Map<string, VehicleMasterRepairReceipt>();
 
   private putVersioned<T extends VersionedRecord>(
     map: Map<string, T>,
@@ -188,5 +194,84 @@ export class MemoryVehicleMasterStore implements VehicleMasterStore {
 
   async putResolverFeedback(record: VehicleMasterResolverFeedback) {
     return this.putImmutable(this.resolverFeedback, record.feedbackId, record);
+  }
+
+  async getRepairReceipt(receiptId: string) {
+    return copy(this.repairReceipts.get(receiptId) ?? null);
+  }
+
+  async commitRepair(
+    input: VehicleMasterRepairCommitInput
+  ): Promise<VehicleMasterRepairCommitResult> {
+    const existingReceipt = this.repairReceipts.get(input.receipt.receiptId);
+    if (existingReceipt) {
+      if (existingReceipt.requestDigest !== input.receipt.requestDigest) {
+        throw new Error(
+          `VEHICLE_MASTER_REPAIR_IDEMPOTENCY_CONFLICT:${input.receipt.receiptId}`
+        );
+      }
+      return {
+        status: 'IDEMPOTENT_REPLAY',
+        receipt: copy(existingReceipt),
+      };
+    }
+
+    const map = input.entityKind === 'NODE' ? this.nodes : this.rules;
+    const revisions =
+      input.entityKind === 'NODE' ? this.nodeRevisions : this.ruleRevisions;
+    const current = map.get(input.record.id);
+
+    if (!current) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_CURRENT_MISSING:${input.entityKind}:${input.record.id}`
+      );
+    }
+    if (
+      current.revision !== input.expectedRevision ||
+      current.contentHash !== input.expectedContentHash
+    ) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_CAS_MISMATCH:${input.record.id}:` +
+        `${current.revision}:${current.contentHash}`
+      );
+    }
+    if (input.record.revision !== current.revision + 1) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_REVISION_MISMATCH:${input.record.id}:` +
+        `${current.revision}->${input.record.revision}`
+      );
+    }
+    if (
+      input.receipt.entityKind !== input.entityKind ||
+      input.receipt.entityId !== input.record.id ||
+      input.receipt.beforeRevision !== current.revision ||
+      input.receipt.afterRevision !== input.record.revision ||
+      input.receipt.beforeContentHash !== current.contentHash ||
+      input.receipt.afterContentHash !== input.record.contentHash
+    ) {
+      throw new Error(
+        `VEHICLE_MASTER_REPAIR_RECEIPT_MISMATCH:${input.receipt.receiptId}`
+      );
+    }
+
+    if (input.entityKind === 'NODE') {
+      this.nodes.set(input.record.id, copy(input.record));
+      this.nodeRevisions.set(
+        `${input.record.id}__r${input.record.revision}`,
+        copy(input.record)
+      );
+    } else {
+      this.rules.set(input.record.id, copy(input.record));
+      this.ruleRevisions.set(
+        `${input.record.id}__r${input.record.revision}`,
+        copy(input.record)
+      );
+    }
+    this.repairReceipts.set(input.receipt.receiptId, copy(input.receipt));
+
+    return {
+      status: 'COMMITTED',
+      receipt: copy(input.receipt),
+    };
   }
 }

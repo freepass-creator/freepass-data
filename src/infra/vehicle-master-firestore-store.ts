@@ -6,11 +6,16 @@ import type {
   VehicleMasterNode,
   VehicleMasterPipelineRecord,
   VehicleMasterPriceRevision,
+  VehicleMasterRepairReceipt,
   VehicleMasterResolverFeedback,
   VehicleMasterSourceDocument,
   VehicleMasterWriteResult,
 } from '../domain/vehicle-master.js';
-import type { VehicleMasterStore } from '../ports/vehicle-master-store.js';
+import type {
+  VehicleMasterRepairCommitInput,
+  VehicleMasterRepairCommitResult,
+  VehicleMasterStore,
+} from '../ports/vehicle-master-store.js';
 
 const C = {
   nodes: 'vehicle_master_nodes',
@@ -29,6 +34,7 @@ const C = {
   changeEvents: 'vehicle_master_change_events',
   resolverFeedback: 'vehicle_master_resolver_feedback',
   auditReports: 'vehicle_master_audit_reports',
+  repairReceipts: 'vehicle_master_repair_receipts',
 } as const;
 
 export const vehicleMasterFirestoreDocumentId = (value: string) => encodeURIComponent(value);
@@ -275,6 +281,93 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
       this.db.collection(C.resolverFeedback).doc(safeId(record.feedbackId)),
       record
     );
+  }
+
+  async getRepairReceipt(receiptId: string) {
+    return data<VehicleMasterRepairReceipt>(
+      await this.db.collection(C.repairReceipts).doc(safeId(receiptId)).get()
+    );
+  }
+
+  async commitRepair(
+    input: VehicleMasterRepairCommitInput
+  ): Promise<VehicleMasterRepairCommitResult> {
+    const receiptRef = this.db.collection(C.repairReceipts)
+      .doc(safeId(input.receipt.receiptId));
+    const currentCollection =
+      input.entityKind === 'NODE' ? C.nodes : C.rules;
+    const revisionCollection =
+      input.entityKind === 'NODE' ? C.nodeRevisions : C.ruleRevisions;
+    const currentRef = this.db.collection(currentCollection)
+      .doc(safeId(input.record.id));
+    const revisionRef = this.db.collection(revisionCollection)
+      .doc(`${safeId(input.record.id)}__r${input.record.revision}`);
+
+    return this.db.runTransaction(async (tx) => {
+      const [receiptSnap, currentSnap] = await Promise.all([
+        tx.get(receiptRef),
+        tx.get(currentRef),
+      ]);
+
+      if (receiptSnap.exists) {
+        const existing = receiptSnap.data() as VehicleMasterRepairReceipt;
+        if (existing.requestDigest !== input.receipt.requestDigest) {
+          throw new Error(
+            `VEHICLE_MASTER_REPAIR_IDEMPOTENCY_CONFLICT:${input.receipt.receiptId}`
+          );
+        }
+        return {
+          status: 'IDEMPOTENT_REPLAY',
+          receipt: existing,
+        };
+      }
+
+      if (!currentSnap.exists) {
+        throw new Error(
+          `VEHICLE_MASTER_REPAIR_CURRENT_MISSING:${input.entityKind}:${input.record.id}`
+        );
+      }
+
+      const current = currentSnap.data() as
+        | VehicleMasterNode
+        | VehicleMasterCompatibilityRule;
+      if (
+        current.revision !== input.expectedRevision ||
+        current.contentHash !== input.expectedContentHash
+      ) {
+        throw new Error(
+          `VEHICLE_MASTER_REPAIR_CAS_MISMATCH:${input.record.id}:` +
+          `${current.revision}:${current.contentHash}`
+        );
+      }
+      if (input.record.revision !== current.revision + 1) {
+        throw new Error(
+          `VEHICLE_MASTER_REPAIR_REVISION_MISMATCH:${input.record.id}:` +
+          `${current.revision}->${input.record.revision}`
+        );
+      }
+      if (
+        input.receipt.entityKind !== input.entityKind ||
+        input.receipt.entityId !== input.record.id ||
+        input.receipt.beforeRevision !== current.revision ||
+        input.receipt.afterRevision !== input.record.revision ||
+        input.receipt.beforeContentHash !== current.contentHash ||
+        input.receipt.afterContentHash !== input.record.contentHash
+      ) {
+        throw new Error(
+          `VEHICLE_MASTER_REPAIR_RECEIPT_MISMATCH:${input.receipt.receiptId}`
+        );
+      }
+
+      tx.set(currentRef, input.record);
+      tx.create(revisionRef, input.record);
+      tx.create(receiptRef, input.receipt);
+
+      return {
+        status: 'COMMITTED',
+        receipt: input.receipt,
+      };
+    });
   }
 }
 
