@@ -2130,6 +2130,38 @@ describe('common vehicle selector', () => {
     });
   });
 
+  it('keeps a label-only request current when the sealed stable identity is unchanged', () => {
+    const original = record('approved');
+    const issued = issueVehicleSelectionReceipt(
+      [original],
+      {
+        mode: 'NEW_CAR',
+        selection: {
+          model: '쏘렌토',
+          trim: '노블레스',
+        },
+      },
+      '2026-09-26T18:00:00+09:00'
+    );
+
+    const renamed = {
+      ...original,
+      trim: { id: 'trim_noblesse', label: '노블레스 스페셜' },
+    };
+
+    const checked = revalidateVehicleSelectionReceipt(
+      issued.receipt!,
+      [renamed],
+      { assessedAt: '2026-09-26T18:10:00+09:00' }
+    );
+
+    expect(checked).toMatchObject({
+      status: 'CURRENT',
+      reasons: [],
+      currentRecordChanged: false,
+    });
+  });
+
   it('requires reselection when a stable selected identity changes even if its label stays the same', () => {
     const original = record('approved');
     const issued = issueVehicleSelectionReceipt(
