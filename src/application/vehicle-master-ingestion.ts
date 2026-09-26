@@ -80,8 +80,15 @@ export type VehicleMasterEvidenceIssue = {
     | 'PRICE_EFFECTIVE_START_CONFLICT'
     | 'PRICE_EXPLICIT_RANGE_OVERLAP'
     | 'RULE_SUBJECT_MISSING'
+    | 'RULE_SUBJECT_HOLD'
     | 'RULE_TARGET_MISSING'
-    | 'RULE_SCOPE_REFERENCE_MISSING';
+    | 'RULE_TARGET_HOLD'
+    | 'RULE_SCOPE_REFERENCE_MISSING'
+    | 'RULE_SCOPE_REFERENCE_TYPE_MISMATCH'
+    | 'RULE_SCOPE_REFERENCE_HOLD'
+    | 'RULE_LINEAGE_INCOMPLETE'
+    | 'RULE_LINEAGE_MISMATCH'
+    | 'RULE_SCOPE_SUBJECT_MISMATCH';
   fieldPath?: string;
   sourceDocumentId?: string;
   detail?: string;
@@ -311,6 +318,64 @@ function lineageFieldsBefore(field: string): readonly string[] {
     field as (typeof VEHICLE_LINEAGE_REF_FIELDS)[number]
   );
   return index < 0 ? [] : VEHICLE_LINEAGE_REF_FIELDS.slice(0, index);
+}
+
+function nodeLineageValue(node: VehicleMasterNode, field: string): string | null {
+  const expectedType = expectedRefNodeType(field);
+  if (expectedType && node.nodeType === expectedType) return node.id;
+  return node.refs[field] ?? null;
+}
+
+function ruleComparableLineageFields(a: VehicleMasterNode, b: VehicleMasterNode) {
+  return VEHICLE_LINEAGE_REF_FIELDS.filter((field) =>
+    nodeLineageValue(a, field) !== null &&
+    nodeLineageValue(b, field) !== null
+  );
+}
+
+function validateRuleNodeLineage(
+  issues: VehicleMasterEvidenceIssue[],
+  node: VehicleMasterNode,
+  fieldPath: string
+) {
+  for (const field of requiredRefFields(node.nodeType)) {
+    if (!node.refs[field]) {
+      issues.push({
+        code: 'RULE_LINEAGE_INCOMPLETE',
+        fieldPath: `${fieldPath}.${field}`,
+        detail: node.id,
+      });
+    }
+  }
+}
+
+function validateRuleLineagePair(
+  issues: VehicleMasterEvidenceIssue[],
+  left: VehicleMasterNode,
+  right: VehicleMasterNode,
+  fieldPath: string
+) {
+  const comparable = ruleComparableLineageFields(left, right);
+  if (!comparable.length) {
+    issues.push({
+      code: 'RULE_LINEAGE_INCOMPLETE',
+      fieldPath,
+      detail: `${left.id}<->${right.id}`,
+    });
+    return;
+  }
+
+  for (const field of comparable) {
+    const leftValue = nodeLineageValue(left, field);
+    const rightValue = nodeLineageValue(right, field);
+    if (leftValue !== rightValue) {
+      issues.push({
+        code: 'RULE_LINEAGE_MISMATCH',
+        fieldPath: `${fieldPath}.${field}`,
+        detail: `${leftValue}!=${rightValue}`,
+      });
+    }
+  }
 }
 
 function modelYearValue(proposal: VehicleMasterNode): number | null {
@@ -1222,30 +1287,98 @@ export async function promoteVehicleMasterCompatibilityRule(
   const sourceDecision = await evaluateVehicleMasterRuleEvidence(store, input);
   const issues = [...sourceDecision.issues];
 
-  if (!(await store.getNode(input.proposal.subjectId))) {
+  const subject = await store.getNode(input.proposal.subjectId);
+  if (!subject) {
     issues.push({
       code: 'RULE_SUBJECT_MISSING',
       fieldPath: 'subjectId',
       detail: input.proposal.subjectId,
     });
+  } else {
+    validateRuleNodeLineage(issues, subject, 'subjectId');
+    if (subject.status === 'HOLD') {
+      issues.push({
+        code: 'RULE_SUBJECT_HOLD',
+        fieldPath: 'subjectId',
+        detail: subject.id,
+      });
+    }
   }
+
+  const targets: VehicleMasterNode[] = [];
   for (const targetId of input.proposal.targetIds) {
-    if (!(await store.getNode(targetId))) {
+    const target = await store.getNode(targetId);
+    if (!target) {
       issues.push({
         code: 'RULE_TARGET_MISSING',
         fieldPath: 'targetIds',
         detail: targetId,
       });
+      continue;
+    }
+    targets.push(target);
+    validateRuleNodeLineage(issues, target, `targetIds.${target.id}`);
+    if (target.status === 'HOLD') {
+      issues.push({
+        code: 'RULE_TARGET_HOLD',
+        fieldPath: 'targetIds',
+        detail: target.id,
+      });
+    }
+    if (subject) {
+      validateRuleLineagePair(issues, subject, target, `targetIds.${target.id}`);
     }
   }
+
+  const scopeNodes: Array<{ field: string; node: VehicleMasterNode }> = [];
   for (const [field, refId] of Object.entries(input.proposal.scope)) {
-    if (refId && !(await store.getNode(refId))) {
+    if (!refId) continue;
+    const scopeNode = await store.getNode(refId);
+    if (!scopeNode) {
       issues.push({
         code: 'RULE_SCOPE_REFERENCE_MISSING',
         fieldPath: `scope.${field}`,
         detail: refId,
       });
+      continue;
     }
+
+    const expectedType = expectedRefNodeType(field);
+    if (expectedType && scopeNode.nodeType !== expectedType) {
+      issues.push({
+        code: 'RULE_SCOPE_REFERENCE_TYPE_MISMATCH',
+        fieldPath: `scope.${field}`,
+        detail: `${scopeNode.nodeType}!=${expectedType}`,
+      });
+    }
+    scopeNodes.push({ field, node: scopeNode });
+    validateRuleNodeLineage(issues, scopeNode, `scope.${field}`);
+    if (scopeNode.status === 'HOLD') {
+      issues.push({
+        code: 'RULE_SCOPE_REFERENCE_HOLD',
+        fieldPath: `scope.${field}`,
+        detail: scopeNode.id,
+      });
+    }
+
+    if (subject) {
+      validateRuleLineagePair(issues, subject, scopeNode, `scope.${field}`);
+    }
+    for (const target of targets) {
+      validateRuleLineagePair(issues, target, scopeNode, `scope.${field}`);
+    }
+  }
+
+  if (
+    input.proposal.scope.trimId &&
+    subject?.nodeType === 'TRIM' &&
+    input.proposal.scope.trimId !== subject.id
+  ) {
+    issues.push({
+      code: 'RULE_SCOPE_SUBJECT_MISMATCH',
+      fieldPath: 'scope.trimId',
+      detail: `${input.proposal.scope.trimId}!=${subject.id}`,
+    });
   }
 
   const decision: VehicleMasterEvidenceDecision = {

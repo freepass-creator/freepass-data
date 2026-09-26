@@ -78,11 +78,140 @@ async function fixture(kind: Kind) {
     };
   }
 
-  await store.putNode(makeNode('make_order_target'));
+  const make = await store.getNode('make_order_subject');
+  assert.ok(make);
+  const model = sealVehicleMasterNode({
+    ...meta,
+    id: 'model_order',
+    nodeType: 'MODEL',
+    status: 'ACTIVE',
+    canonicalName: 'model_order',
+    parentId: make.id,
+    refs: { makeId: make.id },
+    aliases: [],
+    attributes: { synthetic: true },
+  });
+  const generation = sealVehicleMasterNode({
+    ...meta,
+    id: 'gen_order',
+    nodeType: 'GENERATION',
+    status: 'ACTIVE',
+    canonicalName: 'gen_order',
+    parentId: model.id,
+    refs: { makeId: make.id, modelId: model.id },
+    aliases: [],
+    attributes: { synthetic: true },
+  });
+  const phase = sealVehicleMasterNode({
+    ...meta,
+    id: 'phase_order',
+    nodeType: 'PHASE',
+    status: 'ACTIVE',
+    canonicalName: 'phase_order',
+    parentId: generation.id,
+    refs: {
+      makeId: make.id,
+      modelId: model.id,
+      generationId: generation.id,
+    },
+    aliases: [],
+    attributes: { synthetic: true },
+  });
+  const modelYear = sealVehicleMasterNode({
+    ...meta,
+    id: 'my_order',
+    nodeType: 'MODEL_YEAR',
+    status: 'ACTIVE',
+    canonicalName: '2026년형',
+    parentId: phase.id,
+    refs: {
+      makeId: make.id,
+      modelId: model.id,
+      generationId: generation.id,
+      phaseId: phase.id,
+    },
+    aliases: ['2026MY'],
+    attributes: { modelYear: 2026 },
+  });
+  const powertrain = sealVehicleMasterNode({
+    ...meta,
+    id: 'pt_order',
+    nodeType: 'POWERTRAIN',
+    status: 'ACTIVE',
+    canonicalName: 'synthetic powertrain',
+    parentId: modelYear.id,
+    refs: {
+      ...modelYear.refs,
+      modelYearId: modelYear.id,
+    },
+    aliases: [],
+    attributes: { identityKey: 'synthetic|powertrain', fuelType: null },
+  });
+  const variant = sealVehicleMasterNode({
+    ...meta,
+    id: 'variant_order',
+    nodeType: 'VARIANT',
+    status: 'ACTIVE',
+    canonicalName: '5인승 2WD',
+    parentId: powertrain.id,
+    refs: {
+      ...powertrain.refs,
+      powertrainId: powertrain.id,
+    },
+    aliases: [],
+    attributes: { seats: 5, drivetrain: '2WD' },
+  });
+  const trim = sealVehicleMasterNode({
+    ...meta,
+    id: 'trim_order',
+    nodeType: 'TRIM',
+    status: 'ACTIVE',
+    canonicalName: 'trim_order',
+    parentId: variant.id,
+    refs: {
+      ...variant.refs,
+      variantId: variant.id,
+    },
+    aliases: [],
+    attributes: { identityKey: 'trim_order' },
+  });
+  const optionRefs = {
+    makeId: make.id,
+    modelId: model.id,
+    generationId: generation.id,
+    phaseId: phase.id,
+    modelYearId: modelYear.id,
+  };
+  const subject = sealVehicleMasterNode({
+    ...meta,
+    id: 'option_order_subject',
+    nodeType: 'OPTION',
+    status: 'ACTIVE',
+    canonicalName: 'option_order_subject',
+    parentId: modelYear.id,
+    refs: optionRefs,
+    aliases: [],
+    attributes: { synthetic: true },
+  });
+  const target = sealVehicleMasterNode({
+    ...meta,
+    id: 'option_order_target',
+    nodeType: 'OPTION',
+    status: 'ACTIVE',
+    canonicalName: 'option_order_target',
+    parentId: modelYear.id,
+    refs: optionRefs,
+    aliases: [],
+    attributes: { synthetic: true },
+  });
+  for (const node of [model, generation, phase, modelYear, powertrain, variant, trim, subject, target]) {
+    await store.putNode(node);
+  }
+
   const proposal = sealVehicleMasterCompatibilityRule({
-    ...meta, id: 'rule_order_regression', subjectId: 'make_order_subject',
-    ruleType: 'REQUIRES', targetIds: ['make_order_target'],
-    scope: {}, condition: null, effect: 'VALID', priority: 1,
+    ...meta, id: 'rule_order_regression', subjectId: subject.id,
+    ruleType: 'REQUIRES', targetIds: [target.id],
+    scope: { trimId: trim.id }, condition: null, effect: 'VALID', priority: 1,
   });
   return {
     store,
