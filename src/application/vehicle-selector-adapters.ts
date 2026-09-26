@@ -3,7 +3,12 @@ import {
   usedcarMasterToSelectorRecord,
   type UsedcarMasterRecord,
 } from '../domain/usedcar-master.js';
-import type { VehicleSelectorRecord } from '../domain/vehicle-selector.js';
+import {
+  selectVehicles,
+  type VehicleSelectorRecord,
+  type VehicleSelectorRequest,
+  type VehicleSelectorResult,
+} from '../domain/vehicle-selector.js';
 
 function textValue(id: string | null | undefined, label: string | null | undefined) {
   return { id: id ?? null, label: label ?? null };
@@ -46,4 +51,25 @@ export function selectorRecordsFromNewcarMaster(
     trim: textValue(record.trimId, record.trimName),
     aliases: [],
   }));
+}
+
+
+export function selectVehiclesFromNewcarMaster(
+  records: readonly EstimateNewcarMasterRecord[],
+  request: Omit<VehicleSelectorRequest, 'mode'>
+): VehicleSelectorResult {
+  return selectVehicles(selectorRecordsFromNewcarMaster(records), {
+    ...request,
+    mode: 'NEW_CAR',
+  });
+}
+
+export function selectVehiclesFromUsedcarMaster(
+  records: readonly UsedcarMasterRecord[],
+  request: Omit<VehicleSelectorRequest, 'mode'>
+): VehicleSelectorResult {
+  return selectVehicles(selectorRecordsFromUsedcarMaster(records), {
+    ...request,
+    mode: 'USED_CAR',
+  });
 }
