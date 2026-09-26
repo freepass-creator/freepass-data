@@ -74,6 +74,8 @@ export type VehicleMasterEvidenceIssue = {
     | 'REFERENCE_EFFECTIVE_RANGE_MISMATCH'
     | 'REFERENCE_NODE_SELF'
     | 'PRICE_TARGET_MISSING'
+    | 'PRICE_TARGET_TYPE_MISMATCH'
+    | 'PRICE_TARGET_LINEAGE_INCOMPLETE'
     | 'PRICE_TARGET_HOLD'
     | 'PRICE_TARGET_EFFECTIVE_RANGE_MISMATCH'
     | 'PRICE_EFFECTIVE_FROM_REQUIRED_FOR_HISTORY'
@@ -318,6 +320,18 @@ function lineageFieldsBefore(field: string): readonly string[] {
     field as (typeof VEHICLE_LINEAGE_REF_FIELDS)[number]
   );
   return index < 0 ? [] : VEHICLE_LINEAGE_REF_FIELDS.slice(0, index);
+}
+
+function expectedPriceTargetNodeType(
+  priceType: VehicleMasterPriceRevision['priceType']
+): VehicleMasterNode['nodeType'] | null {
+  switch (priceType) {
+    case 'BASE': return 'TRIM';
+    case 'OPTION': return 'OPTION';
+    case 'PACKAGE': return 'PACKAGE';
+    case 'COLOR': return 'COLOR';
+    case 'ADJUSTMENT': return null;
+  }
 }
 
 function nodeLineageValue(node: VehicleMasterNode, field: string): string | null {
@@ -1148,6 +1162,25 @@ export async function promoteVehicleMasterPriceRevision(
       detail: input.proposal.targetId,
     });
   } else {
+    const expectedTargetType = expectedPriceTargetNodeType(input.proposal.priceType);
+    if (expectedTargetType && priceTarget.nodeType !== expectedTargetType) {
+      targetIssues.push({
+        code: 'PRICE_TARGET_TYPE_MISMATCH',
+        fieldPath: 'targetId',
+        detail: `${priceTarget.nodeType}!=${expectedTargetType}`,
+      });
+    }
+
+    for (const field of requiredRefFields(priceTarget.nodeType)) {
+      if (!priceTarget.refs[field]) {
+        targetIssues.push({
+          code: 'PRICE_TARGET_LINEAGE_INCOMPLETE',
+          fieldPath: `targetId.${field}`,
+          detail: priceTarget.id,
+        });
+      }
+    }
+
     if (priceTarget.status === 'HOLD') {
       targetIssues.push({
         code: 'PRICE_TARGET_HOLD',

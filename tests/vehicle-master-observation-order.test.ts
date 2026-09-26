@@ -64,7 +64,9 @@ async function fixture(kind: Kind) {
   if (kind === 'price') {
     const proposal = sealVehicleMasterPriceRevision({
       ...meta, id: 'price_order_regression', targetId: 'make_order_subject',
-      priceType: 'BASE', amount: 100, currency: 'KRW',
+      // This fixture tests observation ordering only. BASE target semantics are
+      // covered separately by vehicle-master-price-semantics.test.ts.
+      priceType: 'ADJUSTMENT', amount: 100, currency: 'KRW',
       sourceDocumentIds: [sourceDocumentId],
     });
     return {
