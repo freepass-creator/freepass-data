@@ -1,5 +1,4 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
+import { expect, test } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
 import schema from '../contracts/admin-catalog-view-v1.schema.json' with { type: 'json' };
@@ -86,30 +85,30 @@ const sample = {
 };
 
 test('Admin Catalog V1 validates release evidence, policy state and explicit deposit semantics', () => {
-  assert.equal(validate(sample), true, JSON.stringify(validate.errors));
+  expect(validate(sample), JSON.stringify(validate.errors)).toBe(true);
 });
 
 test('Admin Catalog V1 rejects empty release data', () => {
   const copy = structuredClone(sample);
   copy.data = [];
-  assert.equal(validate(copy), false);
+  expect(validate(copy)).toBe(false);
 });
 
 test('Admin Catalog V1 rejects KNOWN deposit without money', () => {
   const copy = structuredClone(sample);
   copy.data[0]!.offers[0]!.priceTerms[0]!.depositState = 'KNOWN';
   delete copy.data[0]!.offers[0]!.priceTerms[0]!.deposit;
-  assert.equal(validate(copy), false);
+  expect(validate(copy)).toBe(false);
 });
 
 test('Admin Catalog V1 rejects amount on UNKNOWN deposit', () => {
   const copy = structuredClone(sample);
   copy.data[0]!.offers[0]!.priceTerms[1]!.deposit = { amount: 0, currency: 'KRW' };
-  assert.equal(validate(copy), false);
+  expect(validate(copy)).toBe(false);
 });
 
 test('Admin Catalog V1 includes current OGONG subscription commercial type', () => {
   const copy = structuredClone(sample);
   copy.data[0]!.commercialType = 'OGONG_SUBSCRIPTION';
-  assert.equal(validate(copy), true, JSON.stringify(validate.errors));
+  expect(validate(copy), JSON.stringify(validate.errors)).toBe(true);
 });
