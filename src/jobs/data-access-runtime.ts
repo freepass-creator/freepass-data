@@ -16,6 +16,7 @@ import {
   recordSheetDeliveryEvidence,
   type SheetEvidenceFreshnessPolicy
 } from '../application/sheet-delivery-evidence.js';
+import { readSheetConsumerHealth } from '../application/sheet-consumer-health.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { SheetHandoffWorkbook, SheetPublicationHandoff } from '../domain/sheet-publication-handoff.js';
 import type { SheetDeliveryReceipt } from '../domain/consumer-delivery.js';
@@ -134,6 +135,23 @@ export async function createSheetDeliveryEvidenceDataAccessRuntime() {
         releaseId: value.receipt.approvedRelease.releaseId
       })
     }, () => recordSheetDeliveryEvidence(store, input)),
+
+    health: (freshnessPolicy: SheetEvidenceFreshnessPolicy) => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-sheet-health', kind: 'SERVICE' },
+        clientId: 'job:check-sheet-consumer-health',
+        purpose: 'read F01/F86 delivery and cutover health'
+      },
+      operation: 'READ_SHEET_CONSUMER_HEALTH',
+      resource: {
+        kind: 'PROJECTION',
+        name: 'sheet-consumer-health'
+      },
+      summarize: (value) => ({
+        count: value.consumers.length,
+        digest: stableDigest(value)
+      })
+    }, () => readSheetConsumerHealth(store, freshnessPolicy)),
 
     assess: (
       registration: ConsumerSwitchRegistration,
