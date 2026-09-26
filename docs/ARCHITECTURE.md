@@ -1,5 +1,7 @@
 # FreePass Data Architecture v1
 
+> **Status: NOT_CANONICAL / DESIGN HISTORY (2026-09-26)** — v1 제안이다. 현재 구현 정본은 [`ARCHITECTURE-V2-APPROVED.md`](ARCHITECTURE-V2-APPROVED.md)(`registry/canonical-development-lines.json` `architecture`).
+
 Status: DESIGN BASELINE
 Date: 2026-09-20
 
