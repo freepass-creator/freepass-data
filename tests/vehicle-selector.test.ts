@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   VEHICLE_SELECTOR_UX_PRESETS,
+  reconcileVehicleSelection,
   selectVehicles,
   type VehicleSelectorRecord,
 } from '../src/domain/vehicle-selector.js';
@@ -501,6 +502,182 @@ describe('common vehicle selector', () => {
       'unknown-seats-signature',
     ]);
     expect(result.facets.trim.map((x) => x.label)).toEqual(['노블레스']);
+  });
+
+  it('preserves compatible selections and clears only stale downstream choices', () => {
+    const rows = [
+      record('2021-hybrid-noblesse', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        powertrain: { id: 'pt_hybrid_2021', label: '1.6 터보 하이브리드' },
+        trim: { id: 'trim_noblesse_2021', label: '노블레스' },
+      }),
+      record('2024-hybrid-signature', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        powertrain: { id: 'pt_hybrid_2024', label: '1.6 터보 하이브리드' },
+        trim: { id: 'trim_signature_2024', label: '시그니처' },
+      }),
+    ];
+
+    const reconciled = reconcileVehicleSelection(
+      rows,
+      { mode: 'USED_CAR' },
+      {
+        model: '쏘렌토',
+        modelYear: 2024,
+        powertrain: '하이브리드',
+        trim: '노블레스',
+      },
+      ['modelYear']
+    );
+
+    expect(reconciled.selection).toEqual({
+      model: '쏘렌토',
+      modelYear: 2024,
+      powertrain: '하이브리드',
+    });
+    expect(reconciled.clearedAxes).toEqual(['trim']);
+    expect(reconciled.result.candidates.map((x) => x.record.recordId)).toEqual([
+      '2024-hybrid-signature',
+    ]);
+  });
+
+  it('clears multiple incompatible retained choices while protecting the changed axis', () => {
+    const rows = [
+      record('2021-hybrid-noblesse', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        powertrain: { id: 'pt_hybrid_2021', label: '1.6 터보 하이브리드' },
+        trim: { id: 'trim_noblesse_2021', label: '노블레스' },
+      }),
+      record('2024-gasoline-signature', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        powertrain: { id: 'pt_gasoline_2024', label: '2.5 가솔린 터보' },
+        trim: { id: 'trim_signature_2024', label: '시그니처' },
+      }),
+    ];
+
+    const reconciled = reconcileVehicleSelection(
+      rows,
+      { mode: 'USED_CAR' },
+      {
+        model: '쏘렌토',
+        modelYear: 2024,
+        powertrain: '하이브리드',
+        trim: '노블레스',
+      },
+      ['modelYear']
+    );
+
+    expect(reconciled.selection).toEqual({
+      model: '쏘렌토',
+      modelYear: 2024,
+    });
+    expect(reconciled.clearedAxes).toEqual(['trim', 'powertrain']);
+    expect(reconciled.result.candidates.map((x) => x.record.recordId)).toEqual([
+      '2024-gasoline-signature',
+    ]);
+  });
+
+  it('treats removing a condition as back-navigation and preserves remaining valid choices', () => {
+    const rows = [
+      record('2021-hybrid-noblesse', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        trim: { id: 'trim_noblesse_2021', label: '노블레스' },
+      }),
+      record('2024-hybrid-noblesse', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        trim: { id: 'trim_noblesse_2024', label: '노블레스' },
+      }),
+    ];
+
+    const reconciled = reconcileVehicleSelection(
+      rows,
+      { mode: 'USED_CAR' },
+      {
+        model: '쏘렌토',
+        powertrain: '하이브리드',
+        trim: '노블레스',
+      },
+      ['modelYear']
+    );
+
+    expect(reconciled.clearedAxes).toEqual([]);
+    expect(reconciled.selection).toEqual({
+      model: '쏘렌토',
+      powertrain: '하이브리드',
+      trim: '노블레스',
+    });
+    expect(reconciled.result.candidates).toHaveLength(2);
+    expect(reconciled.result.facets.modelYear.map((x) => x.value)).toEqual([
+      2021,
+      2024,
+    ]);
+  });
+
+  it('does not erase prior choices when the newly changed condition is itself impossible', () => {
+    const rows = [
+      record('2021-hybrid-noblesse', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        trim: { id: 'trim_noblesse_2021', label: '노블레스' },
+      }),
+    ];
+
+    const reconciled = reconcileVehicleSelection(
+      rows,
+      { mode: 'USED_CAR' },
+      {
+        model: '쏘렌토',
+        modelYear: 2099,
+        powertrain: '하이브리드',
+        trim: '노블레스',
+      },
+      ['modelYear']
+    );
+
+    expect(reconciled.clearedAxes).toEqual([]);
+    expect(reconciled.selection).toEqual({
+      model: '쏘렌토',
+      modelYear: 2099,
+      powertrain: '하이브리드',
+      trim: '노블레스',
+    });
+    expect(reconciled.result.guidance.resolutionStatus).toBe('IMPOSSIBLE');
+  });
+
+  it('supports arbitrary-axis changes by protecting the axis the user explicitly changed', () => {
+    const rows = [
+      record('hybrid-noblesse'),
+      record('gasoline-signature', {
+        powertrain: { id: 'pt_gasoline', label: '2.5 가솔린 터보' },
+        trim: { id: 'trim_signature', label: '시그니처' },
+      }),
+    ];
+
+    const reconciled = reconcileVehicleSelection(
+      rows,
+      { mode: 'NEW_CAR' },
+      {
+        model: '쏘렌토',
+        powertrain: '하이브리드',
+        trim: '시그니처',
+      },
+      ['trim']
+    );
+
+    expect(reconciled.selection).toEqual({
+      model: '쏘렌토',
+      trim: '시그니처',
+    });
+    expect(reconciled.clearedAxes).toEqual(['powertrain']);
+    expect(reconciled.result.candidates.map((x) => x.record.recordId)).toEqual([
+      'gasoline-signature',
+    ]);
   });
 
   it('reports OPEN before the user supplies any search criteria', () => {
