@@ -1,5 +1,6 @@
 import { mapErp5Product, ERP5_PRODUCT_MAPPER_VERSION } from './erp5-product-mapping.js';
 import { orderedJsonDigest } from '../shared/stable-digest.js';
+import type { SourceIntakeBatch } from '../domain/source-intake.js';
 
 export const ERP5_DOCUMENTS = 'projects/freepasserp5/databases/(default)/documents';
 const collections = ['products', 'policy', 'partner'] as const;
@@ -480,4 +481,62 @@ export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
   };
   if (unsigned.counts.candidates !== inspection.products) fail('DRY_RUN_COVERAGE_MISMATCH');
   return { ...unsigned, digest: hash(unsigned) };
+}
+
+
+export function buildErp5RawSourceIntakeBatches(
+  capture: Erp5SourceCapture
+): SourceIntakeBatch[] {
+  inspectErp5Capture(capture);
+
+  const config = {
+    products: {
+      laneId: 'PRODUCT_VEHICLE' as const,
+      displayName: 'ERP5 products',
+      authorityScope: ['catalog:product-vehicle-source'],
+    },
+    policy: {
+      laneId: 'PRODUCT_VEHICLE' as const,
+      displayName: 'ERP5 policy',
+      authorityScope: ['catalog:policy-source'],
+    },
+    partner: {
+      laneId: 'SUPPLIER' as const,
+      displayName: 'ERP5 partner',
+      authorityScope: ['catalog:supplier-source'],
+    },
+  };
+
+  return collections.map((collection) => {
+    const group = capture.collections[collection];
+    const prefix = `${ERP5_DOCUMENTS}/${collection}/`;
+    return {
+      laneId: config[collection].laneId,
+      source: {
+        sourceId: `freepasserp5/firestore/${collection}`,
+        kind: 'FIRESTORE' as const,
+        displayName: config[collection].displayName,
+        authorityScope: config[collection].authorityScope,
+      },
+      observedAt: capture.readTime,
+      sourceRevision: `capture:${capture.digest}`,
+      checksum: capture.digest,
+      coverage: {
+        mode: 'FULL' as const,
+        completeness: 'COMPLETE' as const,
+        scope: `firestore:${collection}`,
+      },
+      records: group.documents.map((document) => {
+        const name = String(document.name);
+        if (!name.startsWith(prefix) || !name.slice(prefix.length)) {
+          fail('INVALID_CAPTURE_DOCUMENT');
+        }
+        return {
+          sourceRecordId: name.slice(prefix.length),
+          sourceFingerprint: hash(document),
+          payload: structuredClone(document),
+        };
+      }),
+    };
+  });
 }
