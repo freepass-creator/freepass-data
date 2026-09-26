@@ -3,6 +3,8 @@ import {
   VEHICLE_MASTER_REPAIR_WRITER_POLICY,
   deterministicVehicleMasterRecordId,
   sealVehicleMasterRepairReceipt,
+  verifyVehicleMasterRepairApproval,
+  verifyVehicleMasterRepairReceipt,
   type VehicleMasterCompatibilityRule,
   type VehicleMasterNode,
   type VehicleMasterRepairReceipt,
@@ -182,6 +184,11 @@ export async function applyVehicleMasterRepairCommand(
 
   const existingReceipt = await store.getRepairReceipt(receiptId);
   if (existingReceipt) {
+    if (!verifyVehicleMasterRepairReceipt(existingReceipt)) {
+      throw new VehicleMasterRepairCommandRejectedError(
+        'EXISTING_REPAIR_RECEIPT_INVALID'
+      );
+    }
     if (existingReceipt.requestDigest !== requestDigest) {
       throw new VehicleMasterRepairCommandRejectedError(
         'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST'
@@ -198,6 +205,11 @@ export async function applyVehicleMasterRepairCommand(
   if (!approval) {
     throw new VehicleMasterRepairCommandRejectedError(
       'REPAIR_APPROVAL_MISSING'
+    );
+  }
+  if (!verifyVehicleMasterRepairApproval(approval)) {
+    throw new VehicleMasterRepairCommandRejectedError(
+      'REPAIR_APPROVAL_INVALID'
     );
   }
   if (
