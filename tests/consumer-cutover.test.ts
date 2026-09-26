@@ -114,6 +114,24 @@ describe('consumer cutover registry', () => {
     ]);
   });
 
+  it('never allows a migration bridge release to authorize final cutover', () => {
+    const registration = readyRegistration('PARITY_VERIFIED');
+    registration.evidence.approvedRelease = {
+      ...registration.evidence.approvedRelease!,
+      projectionId: 'sheet-publication-bridge'
+    };
+
+    const decision = evaluateConsumerCutover(
+      registration,
+      'FREEPASS_DATA_READ'
+    );
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.blockers).toContain(
+      'migration bridge release cannot authorize final cutover'
+    );
+  });
+
   it('allows one verified stage transition', () => {
     expect(
       evaluateConsumerCutover(
