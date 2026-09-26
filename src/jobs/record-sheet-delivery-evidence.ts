@@ -6,8 +6,7 @@ import {
   type SheetDeliveryReceipt
 } from '../domain/consumer-delivery.js';
 import type { SheetPublicationHandoff } from '../domain/sheet-publication-handoff.js';
-import { recordSheetDeliveryEvidence } from '../application/sheet-delivery-evidence.js';
-import { createFirestoreDataStore } from '../infra/firestore-store.js';
+import { createSheetDeliveryEvidenceDataAccessRuntime } from './data-access-runtime.js';
 
 function arg(name: string) {
   const prefix = `--${name}=`;
@@ -61,9 +60,9 @@ if (delivery.status !== 'PASS') {
       'FREEPASS_SHEET_EVIDENCE_WRITE_AUTHORIZED=1 is required for --apply'
     );
   }
-  const store = await createFirestoreDataStore();
+  const runtime = await createSheetDeliveryEvidenceDataAccessRuntime();
   const recordedAt = arg('recorded-at');
-  const evidence = await recordSheetDeliveryEvidence(store, {
+  const evidence = await runtime.record({
     handoff,
     receipt,
     ...(recordedAt ? { recordedAt } : {})
