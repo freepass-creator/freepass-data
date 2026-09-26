@@ -246,3 +246,63 @@ describe('Vehicle Finder presenter candidate groups', () => {
     }
   });
 });
+
+
+describe('Vehicle Finder group drilldown presentation contract', () => {
+  it('preserves F drilldown options without recalculating discrimination', () => {
+    const adapted = selectorRecordsFromUsedcarMaster([usedcar])[0]!;
+    const base = {
+      ...adapted,
+      maker: { id: 'maker_kia', label: '기아' },
+    };
+    const second = {
+      ...base,
+      recordId: 'used_sorento_signature_2024',
+      modelYear: { id: 'my_2024', label: '2024', value: 2024 },
+      trim: { id: 'trim_signature_2024', label: '시그니처' },
+    };
+    const result = selectVehicles([base, second], {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토',
+    });
+    const group = result.groups[0]!;
+    const view = presentVehicleSelectorResult({
+      result,
+      presentation: 'SEARCH_FILTER',
+      observation: {
+        id: 'obs-drilldown-1',
+        observedAt: '2026-09-26T09:00:00.000Z',
+        coverage: 'COMPLETE',
+      },
+      facets: [
+        {
+          axis: 'modelYear',
+          label: '연식',
+          options: [
+            { key: 'opaque-2021', label: '2021', count: 1 },
+            { key: 'opaque-2024', label: '2024', count: 1 },
+          ],
+        },
+        {
+          axis: 'trim',
+          label: '트림',
+          options: [
+            { key: 'opaque-noblesse', label: '노블레스', count: 1 },
+            { key: 'opaque-signature', label: '시그니처', count: 1 },
+          ],
+        },
+      ],
+      displayByRecordId: {
+        ...display(base.recordId, '쏘렌토 · 노블레스'),
+        ...display(second.recordId, '쏘렌토 · 시그니처'),
+      },
+    });
+
+    const presented = view.groups[0]!;
+    expect(presented.drilldowns.map((item) => item.axis))
+      .toEqual(group.drilldownAxes.map((item) => item.axis));
+    expect(presented.drilldowns[0]?.options)
+      .toEqual(group.drilldownAxes[0]?.options);
+    expect(presented.suggestedDrilldownAxis).toBe(group.suggestedDrilldownAxis);
+  });
+});
