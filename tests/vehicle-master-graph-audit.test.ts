@@ -346,7 +346,7 @@ describe('vehicle master graph audit', () => {
       revision: 1,
       subjectId: n.option.id,
       ruleType: 'INCLUDES',
-      targetIds: [n.option.id === n.base.id ? n.base.id : n.option.id],
+      targetIds: [duplicateOption.id],
       scope: { trimId: n.trim.id },
       condition: { evidence: 'legacy' },
       effect: 'INVALID',
