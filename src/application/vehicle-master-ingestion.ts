@@ -497,6 +497,13 @@ function includesSemanticMatch(
   );
 }
 
+function sharedRuleTargetIds(
+  a: VehicleMasterCompatibilityRule,
+  b: VehicleMasterCompatibilityRule
+) {
+  return a.targetIds.filter((targetId) => b.targetIds.includes(targetId)).sort();
+}
+
 function rulePeriodsOverlap(
   a: VehicleMasterCompatibilityRule,
   b: VehicleMasterCompatibilityRule
@@ -1737,14 +1744,40 @@ export async function promoteVehicleMasterCompatibilityRule(
 
       if (
         existing.ruleType === 'EXCLUDES' &&
-        includesSemanticMatch(existing, input.proposal)
+        existing.subjectId === input.proposal.subjectId &&
+        sameRuleScope(existing, input.proposal) &&
+        rulePeriodsOverlap(existing, input.proposal)
       ) {
-        issues.push({
-          code: 'RULE_INCLUDES_CONFLICT',
-          fieldPath: 'ruleType',
-          detail: existing.id,
-        });
+        const sharedTargets = sharedRuleTargetIds(existing, input.proposal);
+        if (sharedTargets.length) {
+          issues.push({
+            code: 'RULE_INCLUDES_CONFLICT',
+            fieldPath: `targetIds.${sharedTargets[0]}`,
+            detail: existing.id,
+          });
+        }
       }
+    }
+  }
+
+  if (input.proposal.ruleType === 'EXCLUDES') {
+    const existingIncludesRules = (await store.listCompatibilityRules())
+      .filter((rule) =>
+        rule.id !== input.proposal.id &&
+        rule.ruleType === 'INCLUDES' &&
+        rule.subjectId === input.proposal.subjectId &&
+        sameRuleScope(rule, input.proposal) &&
+        rulePeriodsOverlap(rule, input.proposal)
+      );
+
+    for (const existing of existingIncludesRules) {
+      const sharedTargets = sharedRuleTargetIds(existing, input.proposal);
+      if (!sharedTargets.length) continue;
+      issues.push({
+        code: 'RULE_INCLUDES_CONFLICT',
+        fieldPath: `targetIds.${sharedTargets[0]}`,
+        detail: existing.id,
+      });
     }
   }
 
