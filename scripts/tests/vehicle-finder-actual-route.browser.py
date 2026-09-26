@@ -91,6 +91,29 @@ try:
             selectable: index !== 2,
           }));
 
+          const makeGroups = mode => [0, 1].map(groupIndex => {
+            const start = groupIndex * 9;
+            const memberIds = Array.from(
+              { length: 9 },
+              (_, offset) => mode + '-' + (start + offset),
+            );
+            return {
+              id: mode + '-group-' + groupIndex,
+              scope: 'MODEL_GENERATION',
+              label: (mode === 'NEW_CAR' ? '신차 모델 ' : '중고차 모델 ') + (groupIndex + 1),
+              context: '제조사 · ' + (groupIndex + 1) + '세대',
+              representativeId: memberIds[0],
+              memberIds,
+              candidateCount: 9,
+              selectableCount: groupIndex === 0 ? 8 : 9,
+              inspectOnlyCount: 0,
+              blockedCount: groupIndex === 0 ? 1 : 0,
+              expandable: true,
+              suggestedDrilldownAxis: mode === 'NEW_CAR' ? 'model' : 'modelYear',
+              suggestedDrilldownLabel: mode === 'NEW_CAR' ? '모델' : '연식',
+            };
+          });
+
           window.__qaRead = async ({ mode }) => ({
             schemaVersion: 'freepass.vehicle-finder.ui/v1',
             mode,
@@ -116,6 +139,7 @@ try:
                   { axis: 'generation', label: '세대', options: [{ key: 'g1', label: '1세대', count: 18 }] },
                   { axis: 'phase', label: '변경형', options: [{ key: 'p1', label: '페이스리프트', count: 18 }] },
                 ],
+            groups: makeGroups(mode),
             items: makeItems(mode),
           });
 
@@ -128,8 +152,12 @@ try:
         desktop.evaluate(mount_script)
         expect(desktop.get_by_text("신차 찾기")).to_be_visible()
         expect(desktop.locator(".vf-guided-options")).to_be_visible()
-        expect(desktop.locator("tbody tr")).to_have_count(18)
-        desktop.locator("tbody tr").nth(0).get_by_role("button").click()
+        expect(desktop.locator(".vf-group-row")).to_have_count(2)
+        expect(desktop.locator(".vf-group-member")).to_have_count(0)
+        desktop.locator(".vf-group-button").first.click()
+        expect(desktop.locator(".vf-group-member")).to_have_count(9)
+        expect(desktop.get_by_text("먼저 보기 · 모델")).to_be_visible()
+        desktop.locator(".vf-group-member").first.get_by_role("button").click()
         expect(desktop.locator(".vf-detail")).to_be_visible()
         assert desktop.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
         desktop.screenshot(path=args.output / "desktop-finder.png", full_page=True)
@@ -139,9 +167,13 @@ try:
         mobile.evaluate(mount_script)
         assert mobile.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
         expect(mobile.get_by_role("button", name="필터")).to_be_visible()
+        expect(mobile.locator(".vf-group-row")).to_have_count(2)
+        expect(mobile.locator(".vf-group-member")).to_have_count(0)
 
-        mobile.locator("tbody tr").nth(8).get_by_role("button").scroll_into_view_if_needed()
-        mobile.locator("tbody tr").nth(8).get_by_role("button").click()
+        mobile.locator(".vf-group-button").first.click()
+        expect(mobile.locator(".vf-group-member")).to_have_count(9)
+        mobile.locator(".vf-group-member").nth(8).get_by_role("button").scroll_into_view_if_needed()
+        mobile.locator(".vf-group-member").nth(8).get_by_role("button").click()
         expect(mobile.get_by_role("button", name="목록으로")).to_be_visible()
         expect(mobile.get_by_role("button", name="이 차량 선택")).to_be_visible()
         back_box = mobile.get_by_role("button", name="목록으로").bounding_box()
@@ -153,6 +185,7 @@ try:
 
         mobile.get_by_role("button", name="목록으로").click()
         expect(mobile.get_by_text("방금 본 후보")).to_be_visible()
+        expect(mobile.locator(".vf-group-member")).to_have_count(9)
         expect(mobile.get_by_role("button", name="필터")).to_be_visible()
 
         mobile.get_by_role("button", name="필터").click()
@@ -164,6 +197,8 @@ try:
         expect(mobile.get_by_text("중고차 찾기")).to_be_visible()
         expect(mobile.get_by_text("검색·필터형")).to_be_visible()
         expect(mobile.get_by_text("방금 본 후보")).to_have_count(0)
+        expect(mobile.locator(".vf-group-member")).to_have_count(0)
+        expect(mobile.get_by_text("먼저 보기 · 연식")).to_be_visible()
 
         mobile.get_by_role("button", name="필터").click()
         filter_dialog = mobile.get_by_role("dialog", name="필터")
