@@ -611,10 +611,9 @@ function matchesAxis(
     const expected = compact(selected.label);
     if (!actual) return { matched: false, unresolved: true, rejected: false };
 
-    const labelMatches =
-      axis === 'trim' || axis === 'fuelType'
-        ? actual === expected
-        : actual.includes(expected);
+    const labelMatches = EXACT_STRUCTURED_LABEL_AXES.has(axis)
+      ? actual === expected
+      : actual.includes(expected);
 
     if (!labelMatches) {
       return { matched: false, unresolved: false, rejected: true };
@@ -629,6 +628,12 @@ function matchesAxis(
 
   return { matched: true, unresolved: false, rejected: false };
 }
+
+const EXACT_STRUCTURED_LABEL_AXES = new Set<VehicleSelectorAxis>([
+  'trim',
+  'fuelType',
+  'drivetrain',
+]);
 
 type SearchTokenIntent = {
   token: string;

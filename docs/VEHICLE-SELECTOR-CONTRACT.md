@@ -149,10 +149,11 @@ an explicit identity choice.
 Therefore:
 
 - `selection.trim` label matching is normalized exact matching.
-- `selection.fuelType` is also exact because it is a categorical fact.
+- `selection.fuelType` and `selection.drivetrain` are also exact because they are categorical facts.
 - selecting `GT` must not also select `GT-Line`.
 - selecting `GT-Line` must not select `GT`.
 - selecting `HYBRID` must not also select `PLUG-IN HYBRID`.
+- selecting `AWD` must not silently select a distinct `E-AWD` label.
 - stable IDs remain the preferred exact identity when available.
 - descriptive axes such as powertrain keep their compatible partial-label
   behavior so `하이브리드` can match `1.6 터보 하이브리드`.
