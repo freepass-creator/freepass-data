@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>차량 찾기 · 프리패스 데이터</title>
-<link rel="stylesheet" href="./finder.css">
+<link rel="stylesheet" href="/console/vehicle-finder/finder.css">
 </head>
 <body style="margin:0;background:#fff">
 <main id="vehicle-finder"></main>
 <script type="module">
-import { mountVehicleFinder } from './view.mjs';
+import { mountVehicleFinder } from '/console/vehicle-finder/view.mjs';
 // U-01 is presentation-only. F/I must inject an authorized read adapter.
 // Disconnected-by-default prevents fixtures or guessed vehicle facts from appearing as real data.
 mountVehicleFinder(document.getElementById('vehicle-finder'));
