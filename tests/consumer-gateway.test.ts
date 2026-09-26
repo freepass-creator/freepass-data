@@ -121,7 +121,10 @@ describe('read-only consumer gateway', () => {
       getManifest: (releaseId: string) => store.getManifest(releaseId),
       listProjectionLineage: async () => []
     };
-    const { app } = withAccess(missingLineage, [binding]);
+    const { app } = withAccess(
+      missingLineage as unknown as Parameters<typeof createConsumerGateway>[0],
+      [binding]
+    );
     const result = await app.inject({ url, headers });
 
     expect(result.statusCode).toBe(503);
@@ -138,7 +141,7 @@ describe('read-only consumer gateway', () => {
       getManifest: (releaseId: string) => store.getManifest(releaseId),
       listProjectionLineage: (releaseId: string) => store.listProjectionLineage(releaseId),
       getActiveEvidenceSnapshot: async () => tamperedEvidence
-    }, [binding]);
+    } as unknown as Parameters<typeof createConsumerGateway>[0], [binding]);
     const atomicResult = await atomicApp.inject({ url, headers });
 
     expect(atomicResult.statusCode).toBe(503);
