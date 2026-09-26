@@ -218,3 +218,33 @@ The I-01 handoff is therefore narrow:
 5. deliver the resulting UI snapshot to the Finder read boundary
 
 U-01 does not create that transport endpoint.
+
+
+## Candidate group presentation
+
+When F returns multiple candidates for the same selector group, U-01 may collapse the
+rows into a group disclosure. U-01 never computes group membership.
+
+The presenter carries forward from F:
+
+- group id and scope
+- representative record id
+- ordered member record ids
+- candidate/selectable/inspect-only/blocked counts
+- expandable
+- suggested drilldown axis
+
+The UI rule is deliberately small:
+
+- one-member or non-expandable groups render as the candidate row directly
+- expandable groups render one group card
+- expanding renders members in F-supplied member order
+- group disclosure state is preserved while inspecting a candidate
+- mode changes clear disclosure state
+
+If the suggested drilldown axis is already present in the U-supplied facet presentation,
+the group card shows its human label, e.g. `먼저 보기 · 연식`.
+U does not calculate discrimination scores, bucket power or group membership.
+
+`UNRESOLVED_IDENTITY` groups remain separate exactly as F returns them; U must not
+merge unresolved generations into a fabricated model/generation group.
