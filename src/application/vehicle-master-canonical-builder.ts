@@ -8,7 +8,9 @@ import {
   type VehicleMasterStatus,
 } from '../domain/vehicle-master.js';
 import {
+  canonicalDrivetrain,
   canonicalPowertrainIdentity,
+  canonicalSeatCount,
   canonicalTrimIdentity,
 } from '../domain/vehicle-master-normalization.js';
 import type {
@@ -58,7 +60,9 @@ function observations(
 }
 
 function statusFor(record: VehicleMasterReconciledTrim): VehicleMasterStatus {
-  return record.conflicts.length || record.seats === null || record.drivetrain === null
+  return record.conflicts.length ||
+    canonicalSeatCount(record.seats) === null ||
+    canonicalDrivetrain(record.drivetrain) === null
     ? 'HOLD'
     : 'ACTIVE';
 }
@@ -90,10 +94,12 @@ export function buildVehicleMasterTrimProposalSet(input: {
     modelYearId,
     powertrainIdentity,
   });
+  const variantSeats = canonicalSeatCount(reconciled.seats);
+  const variantDrivetrain = canonicalDrivetrain(reconciled.drivetrain);
   const variantId = deterministicVehicleMasterId('VARIANT', {
     powertrainId,
-    seats: reconciled.seats,
-    drivetrain: reconciled.drivetrain,
+    seats: variantSeats,
+    drivetrain: variantDrivetrain,
   });
   const trimIdentity = canonicalTrimIdentity(reconciled.trimName);
   const trimId = deterministicVehicleMasterId('TRIM', {
@@ -151,15 +157,15 @@ export function buildVehicleMasterTrimProposalSet(input: {
     status,
     revision,
     canonicalName: [
-      reconciled.seats === null ? '인승미상' : `${reconciled.seats}인승`,
-      reconciled.drivetrain ?? '구동미상',
+      variantSeats === null ? '인승미상' : `${variantSeats}인승`,
+      variantDrivetrain ?? '구동미상',
     ].join(' '),
     parentId: powertrainId,
     refs: { ...commonRefs, modelYearId, powertrainId },
     aliases: [],
     attributes: {
-      seats: reconciled.seats,
-      drivetrain: reconciled.drivetrain,
+      seats: variantSeats,
+      drivetrain: variantDrivetrain,
     },
     sourceEvidenceIds,
     effectiveFrom: null,
@@ -239,12 +245,12 @@ export function buildVehicleMasterTrimProposalSet(input: {
       observations: [
         ...observations(
           'attributes.seats',
-          reconciled.seats,
+          variantSeats,
           reconciled.fieldEvidence.seats ?? []
         ),
         ...observations(
           'attributes.drivetrain',
-          reconciled.drivetrain,
+          variantDrivetrain,
           reconciled.fieldEvidence.drivetrain ?? []
         ),
       ],
