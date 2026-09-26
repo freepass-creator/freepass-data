@@ -76,6 +76,9 @@ export type VehicleSelectorRequest = {
   includeHold?: boolean;
 };
 
+export type VehicleSelectorActionState = 'ACTIVE' | 'UNKNOWN' | 'HOLD';
+export type VehicleSelectorAction = 'SELECT' | 'INSPECT_ONLY' | 'BLOCKED';
+
 export type VehicleSelectorCandidate = {
   record: VehicleSelectorRecord;
   score: number;
@@ -85,6 +88,9 @@ export type VehicleSelectorCandidate = {
     matchedTokens: number;
     unresolvedTokens: number;
   };
+  actionState: VehicleSelectorActionState;
+  action: VehicleSelectorAction;
+  actionReasons: string[];
   selectable: boolean;
 };
 
@@ -105,6 +111,8 @@ export type VehicleSelectorResolutionStatus =
 export type VehicleSelectorGuidance = {
   candidateCount: number;
   selectableCount: number;
+  inspectOnlyCount: number;
+  blockedCount: number;
   resolvedRecordId: string | null;
   resolutionStatus: VehicleSelectorResolutionStatus;
   singletonAxes: VehicleSelectorAxis[];
@@ -585,6 +593,61 @@ function matchesSelection(
   return !matchesSearchText(record, searchContext).rejected;
 }
 
+function baseActionState(record: VehicleSelectorRecord): VehicleSelectorActionState {
+  if (record.lifecycle === 'HOLD' || record.identityStatus === 'HOLD') {
+    return 'HOLD';
+  }
+  if (record.identityStatus === 'PARTIAL') {
+    return 'UNKNOWN';
+  }
+  return 'ACTIVE';
+}
+
+function candidateAction(
+  record: VehicleSelectorRecord,
+  unresolvedAxes: readonly VehicleSelectorAxis[],
+  searchUnresolvedTokens: number
+): {
+  actionState: VehicleSelectorActionState;
+  action: VehicleSelectorAction;
+  reasons: string[];
+} {
+  const base = baseActionState(record);
+
+  if (base === 'HOLD') {
+    return {
+      actionState: 'HOLD',
+      action: 'BLOCKED',
+      reasons: [
+        ...(record.lifecycle === 'HOLD' ? ['LIFECYCLE_HOLD'] : []),
+        ...(record.identityStatus === 'HOLD' ? ['IDENTITY_HOLD'] : []),
+      ],
+    };
+  }
+
+  if (
+    base === 'UNKNOWN' ||
+    unresolvedAxes.length > 0 ||
+    searchUnresolvedTokens > 0
+  ) {
+    return {
+      actionState: 'UNKNOWN',
+      action: 'INSPECT_ONLY',
+      reasons: [
+        ...(record.identityStatus === 'PARTIAL' ? ['IDENTITY_PARTIAL'] : []),
+        ...(unresolvedAxes.length > 0 ? ['UNRESOLVED_SELECTION'] : []),
+        ...(searchUnresolvedTokens > 0 ? ['UNRESOLVED_SEARCH'] : []),
+      ],
+    };
+  }
+
+  return {
+    actionState: 'ACTIVE',
+    action: 'SELECT',
+    reasons: [],
+  };
+}
+
 function provesFacetContext(
   record: VehicleSelectorRecord,
   request: VehicleSelectorRequest,
@@ -592,6 +655,7 @@ function provesFacetContext(
   ignoreAxis: VehicleSelectorAxis
 ) {
   if (!allowedByMode(record, request)) return false;
+  if (baseActionState(record) !== 'ACTIVE') return false;
   const selection = request.selection ?? {};
 
   for (const axis of AXES) {
@@ -675,7 +739,11 @@ function buildGuidance(
     if (count > 1) ambiguousAxes.push(axis);
   }
 
-  const selectable = candidates.filter((candidate) => candidate.selectable);
+  const selectable = candidates.filter((candidate) => candidate.action === 'SELECT');
+  const inspectOnly = candidates.filter(
+    (candidate) => candidate.action === 'INSPECT_ONLY'
+  );
+  const blocked = candidates.filter((candidate) => candidate.action === 'BLOCKED');
   const preset = VEHICLE_SELECTOR_UX_PRESETS[request.mode];
   const suggestedNextAxis =
     preset.preferredAxisOrder.find((axis) => ambiguousAxes.includes(axis)) ?? null;
@@ -699,6 +767,8 @@ function buildGuidance(
   return {
     candidateCount: candidates.length,
     selectableCount: selectable.length,
+    inspectOnlyCount: inspectOnly.length,
+    blockedCount: blocked.length,
     resolvedRecordId,
     resolutionStatus,
     singletonAxes,
@@ -750,6 +820,12 @@ export function selectVehicles(
     }).length;
     score += completeness;
 
+    const interaction = candidateAction(
+      record,
+      unresolvedAxes,
+      search.unresolved
+    );
+
     candidates.push({
       record,
       score,
@@ -759,11 +835,10 @@ export function selectVehicles(
         matchedTokens: search.matched,
         unresolvedTokens: search.unresolved,
       },
-      selectable:
-        record.identityStatus === 'RESOLVED' &&
-        record.lifecycle !== 'HOLD' &&
-        unresolvedAxes.length === 0 &&
-        !search.partial,
+      actionState: interaction.actionState,
+      action: interaction.action,
+      actionReasons: interaction.reasons,
+      selectable: interaction.action === 'SELECT',
     });
   }
 
