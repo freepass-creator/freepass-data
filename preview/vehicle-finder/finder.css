@@ -410,3 +410,80 @@
   .vf .vf-trust-grid{grid-template-columns:minmax(0,1fr)}
   .vf .vf-row-state{justify-items:end}
 }
+
+
+/* U-01 new/used vehicle consumption modes */
+.vf .vf-head-title{display:grid;gap:3px}
+.vf .vf-mode-switch{
+  display:inline-grid;
+  grid-template-columns:1fr 1fr;
+  gap:4px;
+  padding:4px;
+  margin-top:14px;
+  background:var(--vf-soft);
+  border-radius:var(--vf-control-radius);
+}
+.vf .vf-mode-button{
+  min-width:92px;
+  min-height:40px;
+  padding:7px 14px;
+  color:var(--text,#5F6974)
+}
+.vf .vf-mode-button.active{
+  background:var(--vf-bg);
+  color:var(--vf-brand);
+  font-weight:750;
+  box-shadow:0 1px 4px rgb(0 0 0 / 8%)
+}
+.vf .vf-guidance{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:8px 10px;
+  margin:12px 0 4px;
+  padding:12px 14px;
+  border-radius:var(--vf-card-radius);
+  background:var(--vf-soft)
+}
+.vf .vf-guidance strong{font-size:var(--vf-main)}
+.vf .vf-guidance-presentation,
+.vf .vf-guidance-status,
+.vf .vf-guidance-next{
+  font-size:var(--vf-support);
+  color:var(--text,#5F6974)
+}
+.vf .vf-guidance-presentation{
+  min-height:22px;
+  display:inline-flex;
+  align-items:center;
+  padding:2px 7px;
+  border-radius:999px;
+  background:var(--vf-bg);
+  color:var(--vf-brand);
+  font-weight:700
+}
+.vf .vf-guidance-copy{
+  flex-basis:100%;
+  margin:0!important;
+  color:var(--text,#5F6974);
+  font-size:var(--vf-support)
+}
+.vf[data-mode='NEW_CAR'] .vf-guidance{border-left:3px solid var(--vf-brand)}
+.vf[data-mode='USED_CAR'] .vf-guidance{border-left:3px solid var(--vf-accent,var(--accent,#5B9FD4))}
+
+@media(max-width:900px){
+  .vf .vf-mode-switch{display:grid;width:100%}
+  .vf .vf-mode-button{min-height:44px}
+  .vf .vf-guidance{display:grid;grid-template-columns:auto auto;align-items:center}
+  .vf .vf-guidance-copy,.vf .vf-guidance-next{grid-column:1/-1}
+}
+
+@media(min-width:901px){
+  .vf .vf-mode-switch{width:max-content}
+  .vf[data-mode='NEW_CAR'] .vf-filters{
+    grid-template-columns:repeat(5,minmax(120px,1fr)) auto
+  }
+  .vf[data-mode='USED_CAR'] .vf-filters{
+    grid-template-columns:repeat(5,minmax(120px,1fr)) auto
+  }
+}

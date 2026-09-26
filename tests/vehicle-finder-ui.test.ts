@@ -12,7 +12,7 @@ describe('U-01 vehicle finder presentation boundary', () => {
   it('stays presentation-only and has valid module syntax', async () => {
     const source = await readFile(viewPath, 'utf8');
     expect(source).not.toMatch(/core\.mjs|searchEntries|partialSelection|NODE_TYPES|Canonical/);
-    expect(source).toMatch(/await read\(\{ query, filters:/);
+    expect(source).toMatch(/await read\(\{ mode, query, filters:/);
     expect(() => execFileSync(process.execPath, ['--check', viewPath])).not.toThrow();
   });
 
@@ -31,6 +31,24 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).toMatch(/item\.confidenceLabel \?\? '평가 없음'/);
     expect(source).toMatch(/item\.sources \?\? \[\]/);
     expect(source).not.toMatch(/Date\.now\(\)|STALE_AFTER|confidenceScore/);
+  });
+
+  it('renders F-owned new/used presentation metadata without copying selector rules', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    expect(source).toMatch(/input\.mode/);
+    expect(source).toMatch(/input\.presentation/);
+    expect(source).toMatch(/snapshot\.guidance\.resolutionStatus/);
+    expect(source).toMatch(/snapshot\.guidance\.suggestedNextAxis/);
+    expect(source).toMatch(/read\(\{ mode, query, filters:/);
+    expect(source).not.toMatch(/VEHICLE_SELECTOR_UX_PRESETS|preferredAxisOrder|hiddenByDefault/);
+  });
+
+  it('clears UI selection state when switching new and used modes', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    expect(source).toMatch(/mode = nextMode/);
+    expect(source).toMatch(/query = ''/);
+    expect(source).toMatch(/filters = \{\}/);
+    expect(source).toMatch(/inspectedId = null/);
   });
 
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
