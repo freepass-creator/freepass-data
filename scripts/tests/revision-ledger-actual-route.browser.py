@@ -48,8 +48,9 @@ try:
         chain = page.locator(".rl-detail .rl-chain")
         expect(chain.get_by_text("r1",exact=True)).to_be_visible()
         expect(chain.get_by_text("r2",exact=True)).to_be_visible()
-        expect(page.get_by_text("cmd-price-2")).to_be_visible()
-        expect(page.get_by_text("user:operator")).to_be_visible()
+        detail = page.locator(".rl-detail")
+        expect(detail.get_by_text("cmd-price-2",exact=True)).to_be_visible()
+        expect(detail.get_by_text("USER · user:operator",exact=True)).to_be_visible()
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
         page.screenshot(path=args.output/"revision-ledger-desktop.png",full_page=True)
 
