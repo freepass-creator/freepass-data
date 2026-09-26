@@ -55,6 +55,16 @@ export type SheetCutoverEvidenceDecision = {
   blockers: string[];
 };
 
+export type StoredSheetDeliveryEvidence = {
+  contractVersion: 'freepass-sheet-delivery-evidence-v1';
+  receiptId: string;
+  consumerId: SheetConsumerId;
+  workbook: SheetWorkbook;
+  recordedAt: string;
+  expectation: SheetDeliveryExpectation;
+  receipt: SheetDeliveryReceipt;
+};
+
 const expectedConsumer = (workbook: SheetWorkbook): SheetConsumerId =>
   workbook === 'F01' ? 'google-sheets-f01' : 'google-sheets-f86';
 
