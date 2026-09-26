@@ -6,6 +6,7 @@ import {
 } from '../src/domain/vehicle-master.js';
 import { MemoryVehicleMasterStore } from '../src/infra/vehicle-master-memory-store.js';
 import { buildEstimateMasterFromCanonicalVehicleMaster } from '../src/application/estimate-master-canonical.js';
+import { selectEstimateNewcarMaster } from '../src/application/estimate-master.js';
 
 const now = '2026-09-26T10:00:00.000Z';
 const source = ['src_official'];
@@ -205,6 +206,72 @@ describe('canonical vehicle master -> Estimate master dry-run', () => {
     expect(built.records[0]?.exteriorColors[0]?.colorId).toBe(ext.id);
     expect(built.records[0]?.interiorColors[0]?.colorId).toBe(interior.id);
     expect(built.records[0]?.holdReasons).toEqual([]);
+  });
+
+  it('feeds canonical ACTIVE output into the common selector without a second search path', async () => {
+    const { store, trim, ext, interior } = await fixture();
+    const built = await buildEstimateMasterFromCanonicalVehicleMaster(store, {
+      asOf: now,
+      bridge: {
+        products: [{
+          trimId: trim.id,
+          productId: 'kia_niro_hev_signature',
+          priceBefore: 35020000,
+          priceAfter: 34520000,
+          priceBasis: '세제혜택 후',
+        }],
+        colorDomains: {
+          [ext.id]: 'EXTERIOR',
+          [interior.id]: 'INTERIOR',
+        },
+      },
+    });
+
+    const selected = selectEstimateNewcarMaster(built.records, {
+      searchText: '니로 하이브리드',
+      selection: {
+        model: '니로',
+        modelYear: 2026,
+        powertrain: '하이브리드',
+        trim: '시그니처',
+      },
+    });
+
+    expect(selected.mode).toBe('NEW_CAR');
+    expect(selected.candidates).toHaveLength(1);
+    expect(selected.candidates[0]).toMatchObject({
+      record: {
+        recordId: 'kia_niro_hev_signature',
+        model: { id: 'model_niro', label: '니로' },
+        modelYear: { id: 'my_niro_2026', value: 2026 },
+        powertrain: { id: 'pt_niro_hev', label: '1.6 하이브리드' },
+        trim: { id: trim.id, label: '시그니처' },
+      },
+      actionState: 'ACTIVE',
+      action: 'SELECT',
+      selectable: true,
+    });
+    expect(selected.guidance.resolvedRecordId).toBe('kia_niro_hev_signature');
+  });
+
+  it('keeps canonical HOLD output out of normal NEW_CAR selection', async () => {
+    const { store } = await fixture();
+    const built = await buildEstimateMasterFromCanonicalVehicleMaster(store, {
+      asOf: now,
+    });
+
+    expect(built.records[0]?.status).toBe('HOLD');
+
+    const selected = selectEstimateNewcarMaster(built.records, {
+      searchText: '니로',
+      selection: { model: '니로' },
+    });
+
+    expect(selected.candidates).toHaveLength(0);
+    expect(selected.guidance.selectableCount).toBe(0);
+    expect(selected.guidance.resolvedRecordId).toBeNull();
+    expect(selected.guidance.resolutionStatus).toBe('NO_RESULT');
+    expect(selected.guidance.noResultReason).toBe('HOLD_ONLY');
   });
 
   it('rejects duplicate product identities in the commercial bridge', async () => {
