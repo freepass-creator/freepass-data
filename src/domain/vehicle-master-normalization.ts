@@ -41,6 +41,10 @@ export function canonicalHierarchyLabelIdentity(value: string) {
   return normalize(value).replace(/\s+/g, '');
 }
 
+export function canonicalSupplementalIdentity(value: string) {
+  return normalize(value).replace(/\s+/g, '');
+}
+
 export function inferPowertrainFuelType(value: string): CanonicalFuelType | null {
   const tokens = normalize(value).split(' ').filter(Boolean);
   const tokenSet = new Set(tokens);
