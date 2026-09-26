@@ -49,6 +49,29 @@ fallback하지 않는다.
 
 ## 프로젝트별 준비 작업
 
+### ERP.com I-01 구현 상태 — 2026-09-27
+
+ERP 저장소 `freepass-creator/freepasserp4`의 고정 I-01 작업선
+`work/freepass/i-01-integration`이 이 문서의 consumer gateway 계약을 실제 client로 구현한다.
+
+- gateway: `GET /v1/consumers/{consumerId}/catalog`
+- ERP 기본 identity: `erp-com`
+- White Label identity: `whitelabel-<channel-key>`
+- FreePass consumer Bearer 인증
+- private Cloud Run의 `X-Serverless-Authorization` 지원
+- `CANONICAL_ACTIVE`, schema/release/manifest/digest 증거 검증
+- customer ACTIVE read는 아직 ERP5 유지
+- `FREEPASS_DATA_READ` 조기 전환은 ERP consumer에서 fail-closed
+
+ERP PR: `freepasserp4#502`.
+
+**남은 HOLD:** read runtime production 배포/caller IAM/token readback, non-empty ACTIVE release parity,
+tenant별 receipt, 그리고 현재 erp-public v1에 없는 White Label public display field
+(사진·옵션·연식·내외장색·상세 정책 표시 등)의 Canonical/Projection coverage.
+
+이 표시 필드는 ERP에서 보조 정본으로 다시 만들지 않는다. FreePass Data 쪽에서 source lineage를
+보존해 Canonical/Projection을 확장한 뒤 ERP consumer parity를 다시 검증한다.
+
 ### ERP.com과 화이트라벨
 
 - 현재 ERP5 reader를 `LegacyCatalogReader` port 뒤에 유지한다.
