@@ -5,7 +5,7 @@ import {
   validateEstimateMasterSemantics,
   type EstimateNewcarMasterRecord
 } from '../src/domain/estimate-master.js';
-import { stableDigest } from '../src/shared/stable-digest.js';
+import { stableDigest, stableRecordSetDigest } from '../src/shared/stable-digest.js';
 import { DataAccessGateway } from '../src/application/data-access-gateway.js';
 import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
 
@@ -97,9 +97,29 @@ function manifest(r: ReturnType<typeof release>) {
     productCount: r.data.length,
     offerCount: 0,
     fieldEvidenceCount: 0,
+    fieldEvidenceDigest: stableRecordSetDigest([]),
     inputDigest: stableDigest(canonicalInputs),
     dataDigest: stableDigest(r.data)
   } as any;
+}
+
+function estimateProjectionStore(
+  active: ReturnType<typeof release> | null,
+  evidenceManifest: ReturnType<typeof manifest> | null
+): Parameters<typeof createConsumerGateway>[0] {
+  const snapshot = {
+    projectionId: ESTIMATE_NEWCAR_MASTER_PROJECTION_ID,
+    release: active,
+    manifest: evidenceManifest,
+    lineage: [],
+    consistency: 'ATOMIC' as const
+  };
+  return {
+    getActive: async () => active,
+    getManifest: async () => evidenceManifest,
+    listProjectionLineage: async () => [],
+    getActiveEvidenceSnapshot: async () => snapshot
+  } as unknown as Parameters<typeof createConsumerGateway>[0];
 }
 
 describe('Estimate new-car master consumer contract', () => {
@@ -120,8 +140,19 @@ describe('Estimate new-car master consumer contract', () => {
     let reads = 0;
     const app = createEstimateGateway({
       getActive: async () => { reads += 1; return null; },
-      getManifest: async () => null
-    }, [binding]);
+      getManifest: async () => null,
+      listProjectionLineage: async () => [],
+      getActiveEvidenceSnapshot: async () => {
+        reads += 1;
+        return {
+          projectionId: ESTIMATE_NEWCAR_MASTER_PROJECTION_ID,
+          release: null,
+          manifest: null,
+          lineage: [],
+          consistency: 'ATOMIC' as const
+        };
+      }
+    } as unknown as Parameters<typeof createConsumerGateway>[0], [binding]);
 
     expect((await app.inject({ url })).statusCode).toBe(401);
     expect((await app.inject({ url, headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
@@ -130,10 +161,7 @@ describe('Estimate new-car master consumer contract', () => {
   });
 
   it('fails closed when no ACTIVE master release exists', async () => {
-    const app = createEstimateGateway({
-      getActive: async () => null,
-      getManifest: async () => null
-    }, [binding]);
+    const app = createEstimateGateway(estimateProjectionStore(null, null), [binding]);
     expect((await app.inject({ url, headers })).statusCode).toBe(503);
     await app.close();
   });
@@ -142,10 +170,7 @@ describe('Estimate new-car master consumer contract', () => {
     const records = [record()];
     const r = release(records);
     const m = manifest(r);
-    const app = createEstimateGateway({
-      getActive: async () => r,
-      getManifest: async () => m
-    }, [binding]);
+    const app = createEstimateGateway(estimateProjectionStore(r, m), [binding]);
 
     const response = await app.inject({ url, headers });
     expect(response.statusCode).toBe(200);
@@ -181,10 +206,7 @@ describe('Estimate new-car master consumer contract', () => {
     ]));
 
     const r = release(badRecords);
-    const app = createEstimateGateway({
-      getActive: async () => r,
-      getManifest: async () => manifest(r)
-    }, [binding]);
+    const app = createEstimateGateway(estimateProjectionStore(r, manifest(r)), [binding]);
     const response = await app.inject({ url, headers });
     expect(response.statusCode).toBe(503);
     expect(response.json().code).toBe('ESTIMATE_MASTER_SEMANTIC_INVALID');
@@ -208,10 +230,7 @@ describe('Estimate new-car master consumer contract', () => {
       ]
     });
     const r = release([hold]);
-    const app = createEstimateGateway({
-      getActive: async () => r,
-      getManifest: async () => manifest(r)
-    }, [binding]);
+    const app = createEstimateGateway(estimateProjectionStore(r, manifest(r)), [binding]);
 
     const response = await app.inject({ url, headers });
     expect(response.statusCode).toBe(200);
@@ -231,10 +250,7 @@ describe('Estimate new-car master consumer contract', () => {
       ...r,
       data: [record({ basePrice: { amount: 1, currency: 'KRW' } })]
     };
-    const app = createEstimateGateway({
-      getActive: async () => mutated,
-      getManifest: async () => m
-    }, [binding]);
+    const app = createEstimateGateway(estimateProjectionStore(mutated, m), [binding]);
 
     expect((await app.inject({ url, headers })).statusCode).toBe(503);
     await app.close();
