@@ -99,7 +99,9 @@ export type VehicleMasterEvidenceIssue = {
     | 'RULE_GROUP_TARGET_COUNT_INVALID'
     | 'RULE_GROUP_MAX_SELECTION_INVALID'
     | 'RULE_GROUP_DUPLICATE'
-    | 'RULE_GROUP_CONSTRAINT_CONFLICT';
+    | 'RULE_GROUP_CONSTRAINT_CONFLICT'
+    | 'RULE_DEPENDENCY_DUPLICATE'
+    | 'RULE_DEPENDENCY_CONFLICT';
   fieldPath?: string;
   sourceDocumentId?: string;
   detail?: string;
@@ -423,6 +425,42 @@ function sameTargetSet(
   b: VehicleMasterCompatibilityRule
 ) {
   return stableDigest([...a.targetIds].sort()) === stableDigest([...b.targetIds].sort());
+}
+
+const DIRECT_DEPENDENCY_RULE_TYPES = new Set<VehicleMasterCompatibilityRule['ruleType']>([
+  'REQUIRES',
+  'EXCLUDES',
+]);
+
+function sameRuleScope(
+  a: VehicleMasterCompatibilityRule,
+  b: VehicleMasterCompatibilityRule
+) {
+  return stableDigest(a.scope) === stableDigest(b.scope);
+}
+
+function rulePeriodsOverlap(
+  a: VehicleMasterCompatibilityRule,
+  b: VehicleMasterCompatibilityRule
+) {
+  const aFrom = time(a.effectiveFrom);
+  const aTo = time(a.effectiveTo);
+  const bFrom = time(b.effectiveFrom);
+  const bTo = time(b.effectiveTo);
+
+  if (aFrom !== null && bTo !== null && aFrom >= bTo) return false;
+  if (bFrom !== null && aTo !== null && bFrom >= aTo) return false;
+  return true;
+}
+
+function oppositeDependencyRuleType(
+  a: VehicleMasterCompatibilityRule['ruleType'],
+  b: VehicleMasterCompatibilityRule['ruleType']
+) {
+  return (
+    (a === 'REQUIRES' && b === 'EXCLUDES') ||
+    (a === 'EXCLUDES' && b === 'REQUIRES')
+  );
 }
 
 function modelYearValue(proposal: VehicleMasterNode): number | null {
@@ -1511,6 +1549,55 @@ export async function promoteVehicleMasterCompatibilityRule(
       fieldPath: 'scope.trimId',
       detail: `${input.proposal.scope.trimId}!=${subject.id}`,
     });
+  }
+
+  if (DIRECT_DEPENDENCY_RULE_TYPES.has(input.proposal.ruleType)) {
+    const existingDependencyRules = (await store.listCompatibilityRules())
+      .filter((rule) =>
+        rule.id !== input.proposal.id &&
+        DIRECT_DEPENDENCY_RULE_TYPES.has(rule.ruleType) &&
+        sameRuleScope(rule, input.proposal) &&
+        rulePeriodsOverlap(rule, input.proposal)
+      );
+
+    for (const existing of existingDependencyRules) {
+      const sameDirection =
+        existing.subjectId === input.proposal.subjectId &&
+        sameTargetSet(existing, input.proposal);
+
+      if (sameDirection) {
+        if (existing.ruleType === input.proposal.ruleType) {
+          issues.push({
+            code: 'RULE_DEPENDENCY_DUPLICATE',
+            fieldPath: 'ruleType',
+            detail: existing.id,
+          });
+        } else if (oppositeDependencyRuleType(existing.ruleType, input.proposal.ruleType)) {
+          issues.push({
+            code: 'RULE_DEPENDENCY_CONFLICT',
+            fieldPath: 'ruleType',
+            detail: existing.id,
+          });
+        }
+      }
+
+      for (const proposalTargetId of input.proposal.targetIds) {
+        const reverseRelation =
+          existing.subjectId === proposalTargetId &&
+          existing.targetIds.includes(input.proposal.subjectId);
+
+        if (
+          reverseRelation &&
+          oppositeDependencyRuleType(existing.ruleType, input.proposal.ruleType)
+        ) {
+          issues.push({
+            code: 'RULE_DEPENDENCY_CONFLICT',
+            fieldPath: `targetIds.${proposalTargetId}`,
+            detail: existing.id,
+          });
+        }
+      }
+    }
   }
 
   if (OPTION_GROUP_RULE_TYPES.has(input.proposal.ruleType)) {
