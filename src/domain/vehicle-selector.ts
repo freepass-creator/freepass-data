@@ -612,7 +612,7 @@ function matchesAxis(
     if (!actual) return { matched: false, unresolved: true, rejected: false };
 
     const labelMatches =
-      axis === 'trim'
+      axis === 'trim' || axis === 'fuelType'
         ? actual === expected
         : actual.includes(expected);
 
