@@ -24,9 +24,7 @@ import {
   deterministicVehicleMasterRecordId,
 } from '../domain/vehicle-master.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
-import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
-import { createHttpVehicleMasterSourceFetcher } from '../infra/vehicle-master-source-fetcher.js';
+import { createVehicleMasterJobRuntime } from './data-access-runtime.js';
 
 function approved() {
   if (process.env.VEHICLE_MASTER_BACKFILL_APPROVED !== 'true') {
