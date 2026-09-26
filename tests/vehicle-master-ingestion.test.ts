@@ -76,7 +76,7 @@ function trimProposal(sourceEvidenceIds: string[], status: 'ACTIVE' | 'HISTORICA
       variantId,
     },
     aliases: ['Prestige', '프레스티지'],
-    attributes: {},
+    attributes: { identityKey: canonicalTrimIdentity('프레스티지') },
     sourceEvidenceIds,
     effectiveFrom,
     effectiveTo: null,
