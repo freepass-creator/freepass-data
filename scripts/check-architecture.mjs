@@ -177,6 +177,34 @@ const auditWorkflow = fs.readFileSync(
   path.join(repoRoot, '.github', 'workflows', 'erp5-continuous-audit.yml'),
   'utf8'
 );
+const consumerHealthStart = auditWorkflow.indexOf('- name: Check all consumer health');
+const consumerHealthEnd = auditWorkflow.indexOf('- name: Check F01/F86 consumer health');
+const consumerHealthStep = auditWorkflow.slice(consumerHealthStart, consumerHealthEnd);
+if (
+  consumerHealthStart < 0 ||
+  consumerHealthEnd <= consumerHealthStart ||
+  !consumerHealthStep.includes('--scheduled-read-only') ||
+  !consumerHealthStep.includes('CONSUMER_HEALTH_MAX_AGE_MINUTES') ||
+  !consumerHealthStep.includes('consumer-health-summary.json') ||
+  !consumerHealthStep.includes('consumer-health.json') ||
+  consumerHealthStep.includes('--apply') ||
+  consumerHealthStep.includes('FREEPASS_SHEET_EVIDENCE_WRITE_AUTHORIZED')
+) {
+  console.error('Scheduled unified consumer health must remain explicit-policy and read-only');
+  process.exit(1);
+}
+
+const packageJson = JSON.parse(
+  fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')
+);
+if (
+  packageJson.scripts?.['check:consumer-health'] !==
+  'tsx src/jobs/check-consumer-health.ts'
+) {
+  console.error('Unified consumer health command must remain registered');
+  process.exit(1);
+}
+
 const sheetHealthStart = auditWorkflow.indexOf('- name: Check F01/F86 consumer health');
 const sheetHealthEnd = auditWorkflow.indexOf('- name: Capture the current FULL Firestore snapshot');
 const sheetHealthStep = auditWorkflow.slice(sheetHealthStart, sheetHealthEnd);
