@@ -281,7 +281,8 @@ async function seed(store: MemoryVehicleMasterStore): Promise<Seeded> {
 function rule(input: {
   id: string;
   subjectId: string;
-  targetId: string;
+  targetId?: string;
+  targetIds?: string[];
   trimId: string;
   ruleType: 'REQUIRES' | 'EXCLUDES';
   effectiveFrom?: string | null;
@@ -292,7 +293,7 @@ function rule(input: {
     revision: 1,
     subjectId: input.subjectId,
     ruleType: input.ruleType,
-    targetIds: [input.targetId],
+    targetIds: input.targetIds ?? [input.targetId!],
     scope: { trimId: input.trimId },
     condition: { evidence: 'ok' },
     effect: input.ruleType === 'EXCLUDES' ? 'INVALID' : 'VALID',
@@ -383,6 +384,38 @@ describe('vehicle master direct dependency-rule semantics', () => {
         code: 'RULE_DEPENDENCY_CONFLICT',
         fieldPath: 'ruleType',
         detail: 'rule_requires_existing',
+      }),
+    ]));
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('catches a contradiction on any shared target in a multi-target dependency', async () => {
+    const store = new MemoryVehicleMasterStore();
+    await seedSource(store);
+    const s = await seed(store);
+
+    await store.putCompatibilityRule(rule({
+      id: 'rule_multi_requires_existing',
+      subjectId: s.optionA.id,
+      targetIds: [s.optionB.id, s.trimA.id],
+      trimId: s.trimA.id,
+      ruleType: 'REQUIRES',
+    }));
+
+    const result = await promote(store, rule({
+      id: 'rule_partial_excludes_conflict',
+      subjectId: s.optionA.id,
+      targetId: s.optionB.id,
+      trimId: s.trimA.id,
+      ruleType: 'EXCLUDES',
+    }));
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'RULE_DEPENDENCY_CONFLICT',
+        fieldPath: `targetIds.${s.optionB.id}`,
+        detail: 'rule_multi_requires_existing',
       }),
     ]));
     expect(result.canonicalWrite).toBeNull();
