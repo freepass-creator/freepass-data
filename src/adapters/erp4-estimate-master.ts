@@ -1,12 +1,10 @@
 import {
   buildEstimateNewcarMasterRecord,
   type EstimateMasterCandidate,
-} from '../application/estimate-master.js';
-import type {
-  EstimateMasterColor,
-  EstimateMasterOption,
-  EstimateNewcarMasterRecord,
-  EstimateMasterMoney,
+  type EstimateMasterColor,
+  type EstimateMasterOption,
+  type EstimateNewcarMasterRecord,
+  type EstimateMasterMoney,
 } from '../domain/estimate-master.js';
 
 type LegacyTrimMasterRecord = {
