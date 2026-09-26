@@ -62,6 +62,12 @@ jobs:
             "auto/data-access-gateway-20260925"
             "work/gpt/vehicle-master-ingestion-20260925"
             "work/gpt/vehicle-master-persistence-20260925"
+            "design/architecture-v2-review-20260920"
+            "feat/freepass-data-shadow-verify-20260921"
+            "work/data/console-ux"
+            "work/gpt/data-console-reference-ux-20260926"
+            "work/gpt/data-ui-vehicle-finder-slice-20260925"
+            "codex/erp5-consumer-runtime-20260921"
           )
           for b in "${branches[@]}"; do
             if git ls-remote --exit-code --heads origin "refs/heads/${b}" >/dev/null 2>&1; then
