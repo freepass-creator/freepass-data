@@ -10,7 +10,6 @@ import {
 import type { SheetEvidenceFreshnessPolicy } from './sheet-delivery-evidence.js';
 import {
   CONSUMER_SWITCH_REGISTRY,
-  type ConsumerCutoverEvidence,
   type ConsumerCutoverStage,
   type ConsumerSwitchDecision,
   type ConsumerSwitchRegistration
