@@ -12,6 +12,8 @@ import {
   canonicalSeatCount,
   canonicalSupplementalIdentity,
   canonicalTrimIdentity,
+  inferPowertrainFuelType,
+  inferVariantFacts,
 } from '../domain/vehicle-master-normalization.js';
 import type { VehicleMasterStore } from '../ports/vehicle-master-store.js';
 
@@ -233,6 +235,27 @@ const modelYearValue = (node: VehicleMasterNode) => {
   return typeof value === 'number' && Number.isInteger(value) ? value : null;
 };
 
+const explicitModelYearLabel = (value: string): number | null => {
+  const normalized = value.normalize('NFKC').trim();
+  const match = normalized.match(/^(19|20|21|22)\d{2}(?:년형|MY)?$/i);
+  return match ? Number(normalized.slice(0, 4)) : null;
+};
+
+const explicitPhaseOverlap = (
+  a: { effectiveFrom?: string | null; effectiveTo?: string | null },
+  b: { effectiveFrom?: string | null; effectiveTo?: string | null }
+) => {
+  const aFrom = time(a.effectiveFrom);
+  const aTo = time(a.effectiveTo);
+  const bFrom = time(b.effectiveFrom);
+  const bTo = time(b.effectiveTo);
+
+  if (aFrom === null || bFrom === null) return false;
+  if (aTo !== null && bFrom < aTo && bFrom >= aFrom) return true;
+  if (bTo !== null && aFrom < bTo && aFrom >= bFrom) return true;
+  return false;
+};
+
 const normalizedNames = (
   node: VehicleMasterNode,
   normalize: (value: string) => string
@@ -261,6 +284,77 @@ const sharedTargets = (
   a: VehicleMasterCompatibilityRule,
   b: VehicleMasterCompatibilityRule
 ) => a.targetIds.filter((id) => b.targetIds.includes(id)).sort();
+
+type DependencyEdge = {
+  from: string;
+  to: string;
+  rule: VehicleMasterCompatibilityRule;
+};
+
+const dependencyEdges = (
+  rules: readonly VehicleMasterCompatibilityRule[],
+  ruleType: 'REQUIRES' | 'EXCLUDES'
+): DependencyEdge[] =>
+  rules
+    .filter((rule) => rule.ruleType === ruleType)
+    .flatMap((rule) =>
+      rule.targetIds.map((to) => ({
+        from: rule.subjectId,
+        to,
+        rule,
+      }))
+    );
+
+const rulesShareEffectiveWindow = (
+  rules: readonly VehicleMasterCompatibilityRule[]
+) => {
+  const start = Math.max(
+    ...rules.map((rule) => time(rule.effectiveFrom) ?? Number.NEGATIVE_INFINITY)
+  );
+  const end = Math.min(
+    ...rules.map((rule) => time(rule.effectiveTo) ?? Number.POSITIVE_INFINITY)
+  );
+  return start < end;
+};
+
+const findRequiresPath = (
+  edges: readonly DependencyEdge[],
+  start: string,
+  goal: string,
+  requiredRules: readonly VehicleMasterCompatibilityRule[] = []
+): DependencyEdge[] | null => {
+  const ordered = [...edges].sort((a, b) =>
+    a.from.localeCompare(b.from) ||
+    a.to.localeCompare(b.to) ||
+    a.rule.id.localeCompare(b.rule.id)
+  );
+
+  const visit = (
+    current: string,
+    visited: Set<string>,
+    path: DependencyEdge[]
+  ): DependencyEdge[] | null => {
+    if (current === goal) return path;
+
+    for (const edge of ordered) {
+      if (edge.from !== current || visited.has(edge.to)) continue;
+      const candidateRules = [
+        ...requiredRules,
+        ...path.map((item) => item.rule),
+        edge.rule,
+      ];
+      if (!rulesShareEffectiveWindow(candidateRules)) continue;
+
+      const nextVisited = new Set(visited);
+      nextVisited.add(edge.to);
+      const found = visit(edge.to, nextVisited, [...path, edge]);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  return visit(start, new Set([start]), []);
+};
 
 const expectedPriceTargetType = (
   type: VehicleMasterPriceRevision['priceType']
@@ -502,7 +596,7 @@ function auditNodeSemantics(
   nodes: readonly VehicleMasterNode[],
   issues: VehicleMasterGraphAuditIssue[]
 ) {
-  const active = nodes.filter((node) => node.status !== 'HOLD');
+  const dedupe = nodes.filter((node) => node.status !== 'HOLD');
 
   const hierarchyTypes: readonly VehicleMasterNodeType[] = [
     'MAKE',
@@ -511,7 +605,7 @@ function auditNodeSemantics(
     'PHASE',
   ];
   for (const type of hierarchyTypes) {
-    const rows = active.filter((node) => node.nodeType === type);
+    const rows = dedupe.filter((node) => node.nodeType === type);
     for (let i = 0; i < rows.length; i += 1) {
       for (let j = i + 1; j < rows.length; j += 1) {
         const a = rows[i]!;
@@ -539,7 +633,8 @@ function auditNodeSemantics(
     }
   }
 
-  const modelYears = active.filter((node) => node.nodeType === 'MODEL_YEAR');
+  const modelYears = nodes.filter((node) => node.nodeType === 'MODEL_YEAR');
+  const dedupeModelYears = dedupe.filter((node) => node.nodeType === 'MODEL_YEAR');
   for (const node of modelYears) {
     const value = modelYearValue(node);
     if (value === null || value < 1900 || value > 2200) {
@@ -550,12 +645,39 @@ function auditNodeSemantics(
         entityId: node.id,
         fieldPath: 'attributes.modelYear',
       });
+      continue;
+    }
+
+    const nameYear = explicitModelYearLabel(node.canonicalName);
+    if (nameYear !== null && nameYear !== value) {
+      add(issues, {
+        code: 'MODEL_YEAR_NAME_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'canonicalName',
+        detail: `${nameYear}!=${value}`,
+      });
+    }
+
+    for (const alias of node.aliases) {
+      const aliasYear = explicitModelYearLabel(alias);
+      if (aliasYear !== null && aliasYear !== value) {
+        add(issues, {
+          code: 'MODEL_YEAR_ALIAS_MISMATCH',
+          severity: 'ERROR',
+          entityKind: 'NODE',
+          entityId: node.id,
+          fieldPath: 'aliases',
+          detail: `${alias}!=${value}`,
+        });
+      }
     }
   }
-  for (let i = 0; i < modelYears.length; i += 1) {
-    for (let j = i + 1; j < modelYears.length; j += 1) {
-      const a = modelYears[i]!;
-      const b = modelYears[j]!;
+  for (let i = 0; i < dedupeModelYears.length; i += 1) {
+    for (let j = i + 1; j < dedupeModelYears.length; j += 1) {
+      const a = dedupeModelYears[i]!;
+      const b = dedupeModelYears[j]!;
       if (a.parentId !== b.parentId) continue;
       if (modelYearValue(a) !== null && modelYearValue(a) === modelYearValue(b)) {
         add(issues, {
@@ -570,11 +692,46 @@ function auditNodeSemantics(
     }
   }
 
-  const powertrains = active.filter((node) => node.nodeType === 'POWERTRAIN');
-  for (let i = 0; i < powertrains.length; i += 1) {
-    for (let j = i + 1; j < powertrains.length; j += 1) {
-      const a = powertrains[i]!;
-      const b = powertrains[j]!;
+  const powertrains = nodes.filter((node) => node.nodeType === 'POWERTRAIN');
+  const dedupePowertrains = dedupe.filter((node) => node.nodeType === 'POWERTRAIN');
+  for (const node of powertrains) {
+    const expectedIdentity = canonicalPowertrainIdentity(node.canonicalName);
+    const storedIdentity =
+      typeof node.attributes.identityKey === 'string'
+        ? node.attributes.identityKey.trim()
+        : '';
+    if (!storedIdentity || storedIdentity !== expectedIdentity) {
+      add(issues, {
+        code: 'POWERTRAIN_IDENTITY_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'attributes.identityKey',
+        detail: `${storedIdentity || 'MISSING'}!=${expectedIdentity}`,
+      });
+    }
+
+    const inferredFuel = inferPowertrainFuelType(node.canonicalName);
+    const storedFuel =
+      typeof node.attributes.fuelType === 'string'
+        ? node.attributes.fuelType.trim().toUpperCase()
+        : null;
+    if (inferredFuel && storedFuel !== inferredFuel) {
+      add(issues, {
+        code: 'POWERTRAIN_FUEL_TYPE_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'attributes.fuelType',
+        detail: `${storedFuel ?? 'MISSING'}!=${inferredFuel}`,
+      });
+    }
+  }
+
+  for (let i = 0; i < dedupePowertrains.length; i += 1) {
+    for (let j = i + 1; j < dedupePowertrains.length; j += 1) {
+      const a = dedupePowertrains[i]!;
+      const b = dedupePowertrains[j]!;
       if (a.parentId !== b.parentId) continue;
       if (
         canonicalPowertrainIdentity(a.canonicalName) ===
@@ -592,11 +749,75 @@ function auditNodeSemantics(
     }
   }
 
-  const variants = active.filter((node) => node.nodeType === 'VARIANT');
-  for (let i = 0; i < variants.length; i += 1) {
-    for (let j = i + 1; j < variants.length; j += 1) {
-      const a = variants[i]!;
-      const b = variants[j]!;
+  const variants = nodes.filter((node) => node.nodeType === 'VARIANT');
+  const dedupeVariants = dedupe.filter((node) => node.nodeType === 'VARIANT');
+  for (const node of variants) {
+    const seats = canonicalSeatCount(node.attributes.seats);
+    const storedDrivetrain =
+      typeof node.attributes.drivetrain === 'string'
+        ? node.attributes.drivetrain.trim()
+        : null;
+    const drivetrain = canonicalDrivetrain(storedDrivetrain);
+
+    if (seats === null) {
+      add(issues, {
+        code: 'VARIANT_SEATS_INVALID',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'attributes.seats',
+      });
+    }
+    if (drivetrain === null) {
+      add(issues, {
+        code: 'VARIANT_DRIVETRAIN_INVALID',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'attributes.drivetrain',
+      });
+    } else if (storedDrivetrain !== drivetrain) {
+      add(issues, {
+        code: 'VARIANT_DRIVETRAIN_NOT_CANONICAL',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'attributes.drivetrain',
+        detail: `${storedDrivetrain}!=${drivetrain}`,
+      });
+    }
+
+    const labelFacts = inferVariantFacts(node.canonicalName);
+    if (labelFacts.seats !== null && seats !== null && labelFacts.seats !== seats) {
+      add(issues, {
+        code: 'VARIANT_NAME_SEATS_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'canonicalName',
+        detail: `${labelFacts.seats}!=${seats}`,
+      });
+    }
+    if (
+      labelFacts.drivetrain !== null &&
+      drivetrain !== null &&
+      labelFacts.drivetrain !== drivetrain
+    ) {
+      add(issues, {
+        code: 'VARIANT_NAME_DRIVETRAIN_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'canonicalName',
+        detail: `${labelFacts.drivetrain}!=${drivetrain}`,
+      });
+    }
+  }
+
+  for (let i = 0; i < dedupeVariants.length; i += 1) {
+    for (let j = i + 1; j < dedupeVariants.length; j += 1) {
+      const a = dedupeVariants[i]!;
+      const b = dedupeVariants[j]!;
       if (a.parentId !== b.parentId) continue;
       const aSeats = canonicalSeatCount(a.attributes.seats);
       const bSeats = canonicalSeatCount(b.attributes.seats);
@@ -624,11 +845,30 @@ function auditNodeSemantics(
     }
   }
 
-  const trims = active.filter((node) => node.nodeType === 'TRIM');
-  for (let i = 0; i < trims.length; i += 1) {
-    for (let j = i + 1; j < trims.length; j += 1) {
-      const a = trims[i]!;
-      const b = trims[j]!;
+  const trims = nodes.filter((node) => node.nodeType === 'TRIM');
+  const dedupeTrims = dedupe.filter((node) => node.nodeType === 'TRIM');
+  for (const node of trims) {
+    const expectedIdentity = canonicalTrimIdentity(node.canonicalName);
+    const storedIdentity =
+      typeof node.attributes.identityKey === 'string'
+        ? node.attributes.identityKey.trim()
+        : '';
+    if (!storedIdentity || storedIdentity !== expectedIdentity) {
+      add(issues, {
+        code: 'TRIM_IDENTITY_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: node.id,
+        fieldPath: 'attributes.identityKey',
+        detail: `${storedIdentity || 'MISSING'}!=${expectedIdentity}`,
+      });
+    }
+  }
+
+  for (let i = 0; i < dedupeTrims.length; i += 1) {
+    for (let j = i + 1; j < dedupeTrims.length; j += 1) {
+      const a = dedupeTrims[i]!;
+      const b = dedupeTrims[j]!;
       if (a.parentId !== b.parentId) continue;
       const aNames = normalizedNames(a, canonicalTrimIdentity);
       const bNames = normalizedNames(b, canonicalTrimIdentity);
@@ -645,7 +885,25 @@ function auditNodeSemantics(
     }
   }
 
-  const supplemental = active.filter((node) => SUPPLEMENTAL_TYPES.has(node.nodeType));
+  const phases = dedupe.filter((node) => node.nodeType === 'PHASE');
+  for (let i = 0; i < phases.length; i += 1) {
+    for (let j = i + 1; j < phases.length; j += 1) {
+      const a = phases[i]!;
+      const b = phases[j]!;
+      if (!a.parentId || a.parentId !== b.parentId) continue;
+      if (!explicitPhaseOverlap(a, b)) continue;
+      add(issues, {
+        code: 'PHASE_EFFECTIVE_RANGE_OVERLAP',
+        severity: 'ERROR',
+        entityKind: 'NODE',
+        entityId: b.id,
+        fieldPath: 'effectiveFrom',
+        relatedId: a.id,
+      });
+    }
+  }
+
+  const supplemental = dedupe.filter((node) => SUPPLEMENTAL_TYPES.has(node.nodeType));
   for (let i = 0; i < supplemental.length; i += 1) {
     for (let j = i + 1; j < supplemental.length; j += 1) {
       const a = supplemental[i]!;
@@ -701,6 +959,19 @@ function auditPrices(
         relatedId: price.targetId,
       });
       continue;
+    }
+
+    for (const field of requiredRefFields(target.nodeType)) {
+      if (!target.refs[field]) {
+        add(issues, {
+          code: 'PRICE_TARGET_LINEAGE_INCOMPLETE',
+          severity: 'ERROR',
+          entityKind: 'PRICE',
+          entityId: price.id,
+          fieldPath: `targetId.${field}`,
+          relatedId: target.id,
+        });
+      }
     }
 
     const expected = expectedPriceTargetType(price.priceType);
@@ -797,7 +1068,8 @@ function auditRuleReference(
   node: VehicleMasterNode,
   fieldPath: string,
   anchor: VehicleMasterNode | null,
-  issues: VehicleMasterGraphAuditIssue[]
+  issues: VehicleMasterGraphAuditIssue[],
+  holdCode: 'RULE_SUBJECT_HOLD' | 'RULE_TARGET_HOLD' | null
 ) {
   for (const field of requiredRefFields(node.nodeType)) {
     if (!node.refs[field]) {
@@ -811,9 +1083,9 @@ function auditRuleReference(
       });
     }
   }
-  if (node.status === 'HOLD') {
+  if (node.status === 'HOLD' && holdCode) {
     add(issues, {
-      code: fieldPath === 'subjectId' ? 'RULE_SUBJECT_HOLD' : 'RULE_TARGET_HOLD',
+      code: holdCode,
       severity: 'ERROR',
       entityKind: 'RULE',
       entityId: rule.id,
@@ -839,6 +1111,125 @@ function auditRuleReference(
   }
 }
 
+function auditDependencyGraphSemantics(
+  rules: readonly VehicleMasterCompatibilityRule[],
+  issues: VehicleMasterGraphAuditIssue[]
+) {
+  const groups = new Map<string, VehicleMasterCompatibilityRule[]>();
+  for (const rule of rules) {
+    if (!DEPENDENCY_RULE_TYPES.has(rule.ruleType)) continue;
+    const key = stableDigest(rule.scope);
+    const list = groups.get(key) ?? [];
+    list.push(rule);
+    groups.set(key, list);
+  }
+
+  for (const scopeKey of [...groups.keys()].sort()) {
+    const scoped = [...(groups.get(scopeKey) ?? [])]
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const requiresEdges = dependencyEdges(scoped, 'REQUIRES');
+    const excludesEdges = dependencyEdges(scoped, 'EXCLUDES');
+
+    const reverseKeys = new Set<string>();
+    for (const required of requiresEdges) {
+      for (const excluded of excludesEdges) {
+        if (
+          required.from !== excluded.to ||
+          required.to !== excluded.from ||
+          !rulesShareEffectiveWindow([required.rule, excluded.rule])
+        ) {
+          continue;
+        }
+        const ids = [required.rule.id, excluded.rule.id].sort();
+        const key = ids.join('|');
+        if (reverseKeys.has(key)) continue;
+        reverseKeys.add(key);
+        add(issues, {
+          code: 'RULE_DEPENDENCY_CONFLICT',
+          severity: 'ERROR',
+          entityKind: 'RULE',
+          entityId: excluded.rule.id,
+          fieldPath: `targetIds.${excluded.to}`,
+          relatedId: required.rule.id,
+          detail: 'REVERSE_DIRECTION',
+        });
+      }
+    }
+
+    const transitiveKeys = new Set<string>();
+    for (const first of requiresEdges) {
+      for (const second of requiresEdges) {
+        if (first.to !== second.from || first.from === second.to) continue;
+
+        for (const excluded of excludesEdges) {
+          const closesForward =
+            excluded.from === first.from &&
+            excluded.to === second.to;
+          const closesReverse =
+            excluded.from === second.to &&
+            excluded.to === first.from;
+          if (!closesForward && !closesReverse) continue;
+
+          const triple = [first.rule, second.rule, excluded.rule];
+          if (!rulesShareEffectiveWindow(triple)) continue;
+
+          const ids = triple.map((rule) => rule.id).sort();
+          const key = `${first.from}>${first.to}>${second.to}|${ids.join('|')}`;
+          if (transitiveKeys.has(key)) continue;
+          transitiveKeys.add(key);
+
+          add(issues, {
+            code: 'RULE_DEPENDENCY_TRANSITIVE_CONFLICT',
+            severity: 'ERROR',
+            entityKind: 'RULE',
+            entityId: excluded.rule.id,
+            fieldPath: `targetIds.${second.to}`,
+            relatedId: first.rule.id,
+            detail: `${first.rule.id}>${second.rule.id}|${excluded.rule.id}`,
+          });
+        }
+      }
+    }
+
+    for (const excluded of excludesEdges) {
+      const forwardPath = findRequiresPath(
+        requiresEdges,
+        excluded.from,
+        excluded.to,
+        [excluded.rule]
+      );
+      if (!forwardPath?.length) continue;
+
+      const returnPath = findRequiresPath(
+        requiresEdges,
+        excluded.to,
+        excluded.from,
+        [excluded.rule, ...forwardPath.map((edge) => edge.rule)]
+      );
+      if (!returnPath?.length) continue;
+
+      const allRules = [
+        excluded.rule,
+        ...forwardPath.map((edge) => edge.rule),
+        ...returnPath.map((edge) => edge.rule),
+      ];
+      if (!rulesShareEffectiveWindow(allRules)) continue;
+
+      add(issues, {
+        code: 'RULE_DEPENDENCY_CYCLE_CONFLICT',
+        severity: 'ERROR',
+        entityKind: 'RULE',
+        entityId: excluded.rule.id,
+        fieldPath: `targetIds.${excluded.to}`,
+        relatedId: forwardPath[0]!.rule.id,
+        detail:
+          `${forwardPath.map((edge) => edge.rule.id).join('>')}|` +
+          returnPath.map((edge) => edge.rule.id).join('>'),
+      });
+    }
+  }
+}
+
 function auditRules(
   rules: readonly VehicleMasterCompatibilityRule[],
   nodes: readonly VehicleMasterNode[],
@@ -858,7 +1249,7 @@ function auditRules(
         relatedId: rule.subjectId,
       });
     } else {
-      auditRuleReference(rule, subject, 'subjectId', null, issues);
+      auditRuleReference(rule, subject, 'subjectId', null, issues, 'RULE_SUBJECT_HOLD');
     }
 
     for (const targetId of rule.targetIds) {
@@ -873,7 +1264,7 @@ function auditRules(
           relatedId: targetId,
         });
       } else {
-        auditRuleReference(rule, target, `targetIds.${target.id}`, subject, issues);
+        auditRuleReference(rule, target, `targetIds.${target.id}`, subject, issues, 'RULE_TARGET_HOLD');
       }
     }
 
@@ -913,7 +1304,23 @@ function auditRules(
           relatedId: node.id,
         });
       }
-      auditRuleReference(rule, node, `scope.${field}`, subject, issues);
+      auditRuleReference(rule, node, `scope.${field}`, subject, issues, null);
+    }
+
+    if (
+      rule.scope.trimId &&
+      subject?.nodeType === 'TRIM' &&
+      rule.scope.trimId !== subject.id
+    ) {
+      add(issues, {
+        code: 'RULE_SCOPE_SUBJECT_MISMATCH',
+        severity: 'ERROR',
+        entityKind: 'RULE',
+        entityId: rule.id,
+        fieldPath: 'scope.trimId',
+        relatedId: rule.scope.trimId,
+        detail: `${rule.scope.trimId}!=${subject.id}`,
+      });
     }
 
     if (rule.ruleType === 'INCLUDES') {
@@ -1162,6 +1569,8 @@ function auditRules(
       }
     }
   }
+
+  auditDependencyGraphSemantics(rules, issues);
 }
 
 export function auditVehicleMasterGraph(
