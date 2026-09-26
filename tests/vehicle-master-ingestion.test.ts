@@ -399,6 +399,108 @@ describe('vehicle master evidence-gated ingestion', () => {
     expect(result.canonicalWrite).toBeNull();
   });
 
+  it('keeps TRIM on HOLD when a referenced ancestor belongs to another lineage', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-cross-lineage', 'MANUFACTURER_OFFICIAL', '4');
+    await store.putSourceDocument(official);
+
+    const base = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, base);
+
+    const variant = await store.getNode(base.refs.variantId!);
+    expect(variant).toBeTruthy();
+
+    await store.putNode(sealVehicleMasterNode({
+      id: variant!.id,
+      nodeType: variant!.nodeType,
+      status: variant!.status,
+      revision: variant!.revision + 1,
+      canonicalName: variant!.canonicalName,
+      parentId: variant!.parentId ?? null,
+      refs: {
+        ...variant!.refs,
+        modelId: 'model_other_lineage',
+      },
+      aliases: variant!.aliases,
+      attributes: variant!.attributes,
+      sourceEvidenceIds: variant!.sourceEvidenceIds,
+      effectiveFrom: variant!.effectiveFrom ?? null,
+      effectiveTo: variant!.effectiveTo ?? null,
+      createdAt: variant!.createdAt,
+      updatedAt: observedAt,
+    }));
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal: base,
+      observations: observations(base, [official.sourceDocumentId]),
+      policy: identityPolicy,
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'REFERENCE_LINEAGE_MISMATCH',
+          fieldPath: 'refs.variantId.modelId',
+          detail: 'model_other_lineage!=model_sorento',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps TRIM on HOLD when a referenced ancestor has incomplete lineage', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-incomplete-referenced-lineage', 'MANUFACTURER_OFFICIAL', '5');
+    await store.putSourceDocument(official);
+
+    const base = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, base);
+
+    const powertrain = await store.getNode(base.refs.powertrainId!);
+    expect(powertrain).toBeTruthy();
+
+    await store.putNode(sealVehicleMasterNode({
+      id: powertrain!.id,
+      nodeType: powertrain!.nodeType,
+      status: powertrain!.status,
+      revision: powertrain!.revision + 1,
+      canonicalName: powertrain!.canonicalName,
+      parentId: powertrain!.parentId ?? null,
+      refs: {
+        ...powertrain!.refs,
+        generationId: null,
+      },
+      aliases: powertrain!.aliases,
+      attributes: powertrain!.attributes,
+      sourceEvidenceIds: powertrain!.sourceEvidenceIds,
+      effectiveFrom: powertrain!.effectiveFrom ?? null,
+      effectiveTo: powertrain!.effectiveTo ?? null,
+      createdAt: powertrain!.createdAt,
+      updatedAt: observedAt,
+    }));
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal: base,
+      observations: observations(base, [official.sourceDocumentId]),
+      policy: identityPolicy,
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'REFERENCE_LINEAGE_INCOMPLETE',
+          fieldPath: 'refs.powertrainId.generationId',
+          detail: base.refs.powertrainId,
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
   it('keeps TRIM on HOLD when required ancestor lineage refs are missing', async () => {
     const store = new MemoryVehicleMasterStore();
     const official = source('official-missing-required-lineage', 'MANUFACTURER_OFFICIAL', '1');
