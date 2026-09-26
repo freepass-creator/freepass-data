@@ -1,0 +1,40 @@
+name: UI Actual Route QA
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'preview/**'
+      - 'src/api/server.ts'
+      - 'tests/vehicle-finder-*.test.ts'
+      - 'scripts/tests/vehicle-finder-actual-route.browser.py'
+      - '.github/workflows/ui-actual-route.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: python -m pip install --disable-pip-version-check playwright==1.55.0
+      - run: python -m playwright install --with-deps chromium
+      - name: Browser QA actual Console route
+        run: python scripts/tests/vehicle-finder-actual-route.browser.py --output ui-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vehicle-finder-actual-route
+          path: ui-evidence
+          if-no-files-found: ignore
