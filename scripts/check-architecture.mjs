@@ -177,6 +177,11 @@ const auditWorkflow = fs.readFileSync(
   path.join(repoRoot, '.github', 'workflows', 'erp5-continuous-audit.yml'),
   'utf8'
 );
+
+if (!auditWorkflow.includes("cron: '37 * * * *'")) {
+  console.error('Continuous audit must remain on the hourly minute-37 schedule');
+  process.exit(1);
+}
 const consumerHealthStart = auditWorkflow.indexOf('- name: Check all consumer health');
 const consumerHealthEnd = auditWorkflow.indexOf('- name: Check consumer readiness');
 const consumerHealthStep = auditWorkflow.slice(consumerHealthStart, consumerHealthEnd);
@@ -243,6 +248,22 @@ if (
   sheetHealthStep.includes('FREEPASS_SHEET_EVIDENCE_WRITE_AUTHORIZED')
 ) {
   console.error('Scheduled Sheet consumer health must remain explicit-policy and read-only');
+  process.exit(1);
+}
+
+const auditFreshnessStart = auditWorkflow.indexOf('- name: Check scheduled audit freshness');
+const auditFreshnessEnd = auditWorkflow.indexOf('- name: Build immutable dry-run and delta evidence');
+const auditFreshnessStep = auditWorkflow.slice(auditFreshnessStart, auditFreshnessEnd);
+if (
+  auditFreshnessStart < 0 ||
+  auditFreshnessEnd <= auditFreshnessStart ||
+  !auditFreshnessStep.includes('ERP5_AUDIT_MAX_GAP_MINUTES') ||
+  !auditFreshnessStep.includes('audit-schedule-health.json') ||
+  !auditWorkflow.includes('audit-schedule-health.json') ||
+  auditFreshnessStep.includes('--apply') ||
+  auditFreshnessStep.includes('canonicalWriteAuthorized: true')
+) {
+  console.error('Scheduled audit freshness evidence must remain explicit-policy and read-only');
   process.exit(1);
 }
 
