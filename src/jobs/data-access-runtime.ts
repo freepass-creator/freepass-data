@@ -50,6 +50,34 @@ export function createJobDataAccessRuntime() {
   };
 }
 
+export async function createConsumerHealthReadOnlyDataAccessRuntime(input: {
+  accessToken: string;
+  evidenceBucket: string;
+}) {
+  const logs = createFirestoreDataAccessLogStore();
+  const access = readOnlyAccess(input);
+  const store = await createFirestoreDataStore();
+
+  return {
+    health: (policy: ConsumerHealthPolicy) => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-consumer-health-audit', kind: 'SERVICE' },
+        clientId: 'job:check-consumer-health',
+        purpose: 'read unified consumer health without Firestore audit writes'
+      },
+      operation: 'READ_CONSUMER_HEALTH',
+      resource: {
+        kind: 'HEALTH',
+        name: 'consumer-health'
+      },
+      summarize: (value) => ({
+        count: value.consumers.length,
+        digest: stableDigest(value)
+      })
+    }, () => readConsumerHealth(logs, store, policy))
+  };
+}
+
 export async function createConsumerHealthDataAccessRuntime() {
   const logs = createFirestoreDataAccessLogStore();
   const access = new DataAccessGateway(logs);
