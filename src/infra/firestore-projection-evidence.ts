@@ -1,5 +1,5 @@
 import type { Firestore } from 'firebase-admin/firestore';
-import type { ErpPublicProduct, ProjectionRelease } from '../domain/catalog.js';
+import type { ProjectionProduct, ProjectionRelease } from '../domain/catalog.js';
 import type {
   ActiveProjectionEvidenceSnapshot,
   ProjectionFieldLineageRecord,
@@ -14,7 +14,7 @@ export function assertFirestoreReleaseId(value: unknown): asserts value is strin
 }
 
 function assertReleaseDocumentIdentity(
-  release: ProjectionRelease<ErpPublicProduct>,
+  release: ProjectionRelease<ProjectionProduct>,
   releaseId: string
 ) {
   if (release.releaseId !== releaseId) {
@@ -25,7 +25,7 @@ function assertReleaseDocumentIdentity(
 export async function readFirestoreActiveProjection(
   db: Firestore,
   projectionId: string
-): Promise<ProjectionRelease<ErpPublicProduct> | null> {
+): Promise<ProjectionRelease<ProjectionProduct> | null> {
   const pointer = await db.collection(FIRESTORE_COLLECTIONS.projection.active)
     .doc(projectionId)
     .get();
@@ -39,7 +39,7 @@ export async function readFirestoreActiveProjection(
     .get();
   if (!releaseSnap.exists) return null;
 
-  const release = releaseSnap.data() as ProjectionRelease<ErpPublicProduct>;
+  const release = releaseSnap.data() as ProjectionRelease<ProjectionProduct>;
   assertReleaseDocumentIdentity(release, releaseId);
   return release;
 }
@@ -101,7 +101,7 @@ export async function readFirestoreActiveProjectionEvidence(
     const evidenceSnap = await tx.get(evidenceQuery);
 
     const release = releaseSnap.exists
-      ? releaseSnap.data() as ProjectionRelease<ErpPublicProduct>
+      ? releaseSnap.data() as ProjectionRelease<ProjectionProduct>
       : null;
     if (release) assertReleaseDocumentIdentity(release, releaseId);
 
