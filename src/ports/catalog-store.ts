@@ -1,6 +1,6 @@
 import type {
-  AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
-  Product, ProjectionRelease, VehicleAsset, VehicleModel
+  AuditEvent, CommandReceipt, Offer, OutboxEvent, Policy,
+  Product, ProjectionProduct, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
   CanonicalSourceBinding,
@@ -128,14 +128,14 @@ export interface CatalogStore {
   }): Promise<void>;
 }
 export interface ProjectionStore {
-  stage(release: ProjectionRelease<ErpPublicProduct>): Promise<void>;
+  stage(release: ProjectionRelease<ProjectionProduct>): Promise<void>;
   stageEvidence(input: {
     manifest: ProjectionReleaseManifest;
     lineage: ProjectionFieldLineageRecord[];
   }): Promise<void>;
   markReady(releaseId: string): Promise<void>;
   activate(releaseId: string): Promise<void>;
-  getActive(projectionId: string): Promise<ProjectionRelease<ErpPublicProduct> | null>;
+  getActive(projectionId: string): Promise<ProjectionRelease<ProjectionProduct> | null>;
   getManifest(releaseId: string): Promise<ProjectionReleaseManifest | null>;
   listProjectionLineage(releaseId: string): Promise<ProjectionFieldLineageRecord[]>;
   getDeliveryReceipt(eventId: string): Promise<ProjectionDeliveryReceipt | null>;
@@ -144,7 +144,7 @@ export interface ProjectionStore {
 export interface ProjectionEvidenceSnapshotStore {
   getActiveEvidenceSnapshot(
     projectionId: string
-  ): Promise<ActiveProjectionEvidenceSnapshot>;
+  ): Promise<ActiveProjectionEvidenceSnapshot<ProjectionProduct>>;
 }
 
 export interface OutboxStore {
