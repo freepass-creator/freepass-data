@@ -1876,6 +1876,57 @@ function normalizedSelectionSnapshot(
   return snapshot;
 }
 
+function revalidationSelectionFromReceipt(
+  receipt: VehicleSelectionReceipt
+): VehicleSelectorSelection {
+  const selection = structuredClone(receipt.snapshot.selection);
+  const record = receipt.snapshot.record;
+
+  const applyStableId = (
+    axis: VehicleSelectorAxis,
+    id: string | null | undefined
+  ) => {
+    if (!id || !axisSelected(selection, axis)) return;
+    switch (axis) {
+      case 'maker':
+        selection.makerId = id;
+        break;
+      case 'model':
+        selection.modelId = id;
+        break;
+      case 'generation':
+        selection.generationId = id;
+        break;
+      case 'phase':
+        selection.phaseId = id;
+        break;
+      case 'modelYear':
+        selection.modelYearId = id;
+        break;
+      case 'powertrain':
+        selection.powertrainId = id;
+        break;
+      case 'trim':
+        selection.trimId = id;
+        break;
+      case 'fuelType':
+      case 'drivetrain':
+      case 'seats':
+        break;
+    }
+  };
+
+  applyStableId('maker', record.maker.id);
+  applyStableId('model', record.model.id);
+  applyStableId('generation', record.generation.id);
+  applyStableId('phase', record.phase.id);
+  applyStableId('modelYear', record.modelYear.id);
+  applyStableId('powertrain', record.powertrain.id);
+  applyStableId('trim', record.trim.id);
+
+  return selection;
+}
+
 function receiptUnsigned(
   receipt: Omit<VehicleSelectionReceipt, 'receiptDigest'>
 ) {
@@ -1999,21 +2050,37 @@ export function assertVehicleSelectionReceipt(
   return true;
 }
 
+function stableTextSelectionSnapshot(
+  value: VehicleSelectorTextValue
+) {
+  return value.id
+    ? { id: value.id }
+    : { id: null, label: value.label };
+}
+
+function stableNumberSelectionSnapshot(
+  value: VehicleSelectorNumberValue
+) {
+  return value.id
+    ? { id: value.id, value: value.value }
+    : { id: null, value: value.value };
+}
+
 function selectionRelevantRecordSnapshot(record: VehicleSelectorRecord) {
   return {
     recordId: record.recordId,
     lifecycle: record.lifecycle,
     identityStatus: record.identityStatus,
-    maker: record.maker,
-    model: record.model,
-    generation: record.generation,
-    phase: record.phase,
-    modelYear: record.modelYear,
-    powertrain: record.powertrain,
-    fuelType: record.fuelType,
-    drivetrain: record.drivetrain,
-    seats: record.seats,
-    trim: record.trim,
+    maker: stableTextSelectionSnapshot(record.maker),
+    model: stableTextSelectionSnapshot(record.model),
+    generation: stableTextSelectionSnapshot(record.generation),
+    phase: stableTextSelectionSnapshot(record.phase),
+    modelYear: stableNumberSelectionSnapshot(record.modelYear),
+    powertrain: stableTextSelectionSnapshot(record.powertrain),
+    fuelType: stableTextSelectionSnapshot(record.fuelType),
+    drivetrain: stableTextSelectionSnapshot(record.drivetrain),
+    seats: stableNumberSelectionSnapshot(record.seats),
+    trim: stableTextSelectionSnapshot(record.trim),
   };
 }
 
@@ -2097,7 +2164,7 @@ export function revalidateVehicleSelectionReceipt(
   const request: VehicleSelectorRequest = {
     mode: receipt.snapshot.mode,
     searchText: receipt.snapshot.searchText,
-    selection: structuredClone(receipt.snapshot.selection),
+    selection: revalidationSelectionFromReceipt(receipt),
     ...(receipt.snapshot.includeHold == null
       ? {}
       : { includeHold: receipt.snapshot.includeHold }),

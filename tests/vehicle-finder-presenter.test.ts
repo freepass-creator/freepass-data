@@ -523,7 +523,7 @@ describe('Vehicle Finder receipt revalidation presenter', () => {
 
     const changed = [{
       ...records[0]!,
-      trim: { ...records[0]!.trim, label: '시그니처' },
+      trim: { id: 'trim_signature', label: '시그니처' },
     }];
     const decision = revalidateVehicleSelectionReceipt(
       issued.receipt!,
