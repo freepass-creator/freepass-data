@@ -3,7 +3,9 @@ import {
   VEHICLE_SELECTOR_UX_PRESETS,
   applyVehicleGroupDrilldown,
   applyVehicleGroupSelection,
+  assertVehicleSelectionReceipt,
   finalizeVehicleSelection,
+  issueVehicleSelectionReceipt,
   reconcileVehicleSelection,
   selectVehicles,
   type VehicleSelectorRecord,
@@ -1779,6 +1781,174 @@ describe('common vehicle selector', () => {
     expect(result.reasons).toEqual(
       expect.arrayContaining(['NON_ACTIVE_CANDIDATE', 'UNRESOLVED_REQUEST'])
     );
+  });
+
+  it('issues one sealed receipt only after final approval', () => {
+    const issued = issueVehicleSelectionReceipt(
+      [record('approved')],
+      {
+        mode: 'NEW_CAR',
+        searchText: ' 쏘렌토   하이브리드 ',
+        selection: {
+          model: '쏘렌토',
+          modelYear: 2027,
+          powertrain: '하이브리드',
+          trim: '노블레스',
+        },
+      },
+      '2026-09-26T18:00:00+09:00'
+    );
+
+    expect(issued.status).toBe('ISSUED');
+    expect(issued.reasons).toEqual([]);
+    expect(issued.receipt).toMatchObject({
+      contractVersion: 'vehicle-selection-receipt/v1',
+      selectorContract: 'vehicle-selector/v1',
+      issuedAt: '2026-09-26T18:00:00+09:00',
+      snapshot: {
+        mode: 'NEW_CAR',
+        searchText: '쏘렌토 하이브리드',
+        record: { recordId: 'approved' },
+      },
+    });
+    expect(issued.receipt?.receiptId).toMatch(
+      /^vehicle_selection_[a-f0-9]{64}$/
+    );
+    expect(issued.receipt?.snapshotDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(issued.receipt?.receiptDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(assertVehicleSelectionReceipt(issued.receipt!)).toBe(true);
+  });
+
+  it('keeps receipt generation deterministic for the same approved snapshot and issue time', () => {
+    const rows = [record('approved')];
+    const first = issueVehicleSelectionReceipt(
+      rows,
+      {
+        mode: 'NEW_CAR',
+        selection: {
+          trim: '노블레스',
+          powertrain: '하이브리드',
+          model: '쏘렌토',
+          modelYear: 2027,
+        },
+      },
+      '2026-09-26T18:01:00+09:00'
+    );
+    const second = issueVehicleSelectionReceipt(
+      rows,
+      {
+        mode: 'NEW_CAR',
+        selection: {
+          modelYear: 2027,
+          model: '쏘렌토',
+          powertrain: '하이브리드',
+          trim: '노블레스',
+        },
+      },
+      '2026-09-26T18:01:00+09:00'
+    );
+
+    expect(second.receipt).toEqual(first.receipt);
+  });
+
+  it('returns HOLD instead of a receipt when finalization is ambiguous or invalid', () => {
+    const ambiguous = issueVehicleSelectionReceipt(
+      [
+        record('noblesse'),
+        record('signature', {
+          trim: { id: 'trim_signature', label: '시그니처' },
+        }),
+      ],
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:02:00+09:00'
+    );
+
+    expect(ambiguous).toMatchObject({
+      status: 'HOLD',
+      reasons: ['AMBIGUOUS_CANDIDATES'],
+      receipt: null,
+    });
+
+    const missingId = issueVehicleSelectionReceipt(
+      [
+        record('missing-id', {
+          trim: { id: null, label: '노블레스' },
+        }),
+      ],
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:02:00+09:00'
+    );
+    expect(missingId.status).toBe('HOLD');
+    expect(missingId.reasons).toContain('MISSING_TRIM_ID');
+    expect(missingId.receipt).toBeNull();
+  });
+
+  it('issues a receipt for an explicitly selected finalizable record among multiple candidates', () => {
+    const issued = issueVehicleSelectionReceipt(
+      [
+        record('noblesse'),
+        record('signature', {
+          trim: { id: 'trim_signature', label: '시그니처' },
+        }),
+      ],
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:03:00+09:00',
+      'signature'
+    );
+
+    expect(issued).toMatchObject({
+      status: 'ISSUED',
+      reasons: [],
+      receipt: {
+        snapshot: {
+          record: {
+            recordId: 'signature',
+          },
+        },
+      },
+    });
+  });
+
+  it('detects receipt snapshot or metadata tampering', () => {
+    const issued = issueVehicleSelectionReceipt(
+      [record('approved')],
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      '2026-09-26T18:04:00+09:00'
+    );
+    const receipt = issued.receipt!;
+
+    const changedSnapshot = structuredClone(receipt);
+    changedSnapshot.snapshot.record.trim.label = '변조트림';
+    expect(() => assertVehicleSelectionReceipt(changedSnapshot))
+      .toThrow('VEHICLE_SELECTION_SNAPSHOT_DIGEST_MISMATCH');
+
+    const changedTime = structuredClone(receipt);
+    changedTime.issuedAt = '2026-09-26T18:05:00+09:00';
+    expect(() => assertVehicleSelectionReceipt(changedTime))
+      .toThrow('VEHICLE_SELECTION_RECEIPT_ID_MISMATCH');
+  });
+
+  it('requires an explicit valid issue timestamp and never invents current time', () => {
+    expect(() => issueVehicleSelectionReceipt(
+      [record('approved')],
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      'not-a-time'
+    )).toThrow('INVALID_VEHICLE_SELECTION_RECEIPT_ISSUED_AT');
   });
 
   it('reports OPEN before the user supplies any search criteria', () => {
