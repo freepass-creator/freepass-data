@@ -180,8 +180,7 @@ function autoSafeHash(issue: VehicleMasterGraphAuditIssue): RepairRule | null {
 
   if (
     issue.entityKind === 'NODE' ||
-    issue.entityKind === 'RULE' ||
-    issue.entityKind === 'PRICE'
+    issue.entityKind === 'RULE'
   ) {
     return {
       classification: 'AUTO_SAFE',
