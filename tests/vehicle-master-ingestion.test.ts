@@ -1955,14 +1955,30 @@ describe('vehicle master evidence-gated ingestion', () => {
     const official = source('official-generation-parent-scope', 'MANUFACTURER_OFFICIAL', 'd');
     await store.putSourceDocument(official);
 
+    const make = sealVehicleMasterNode({
+      id: 'make_parent_scope',
+      nodeType: 'MAKE',
+      status: 'ACTIVE',
+      revision: 1,
+      canonicalName: '테스트 제조사',
+      parentId: null,
+      refs: {},
+      aliases: [],
+      attributes: {},
+      sourceEvidenceIds: [official.sourceDocumentId],
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
     const modelA = sealVehicleMasterNode({
       id: 'model_parent_a',
       nodeType: 'MODEL',
       status: 'ACTIVE',
       revision: 1,
       canonicalName: '모델 A',
-      parentId: null,
-      refs: {},
+      parentId: make.id,
+      refs: { makeId: make.id },
       aliases: [],
       attributes: {},
       sourceEvidenceIds: [official.sourceDocumentId],
@@ -1977,8 +1993,8 @@ describe('vehicle master evidence-gated ingestion', () => {
       status: 'ACTIVE',
       revision: 1,
       canonicalName: '모델 B',
-      parentId: null,
-      refs: {},
+      parentId: make.id,
+      refs: { makeId: make.id },
       aliases: [],
       attributes: {},
       sourceEvidenceIds: [official.sourceDocumentId],
@@ -1987,6 +2003,7 @@ describe('vehicle master evidence-gated ingestion', () => {
       createdAt: observedAt,
       updatedAt: observedAt,
     });
+    await store.putNode(make);
     await store.putNode(modelA);
     await store.putNode(modelB);
 
@@ -1997,7 +2014,7 @@ describe('vehicle master evidence-gated ingestion', () => {
       revision: 1,
       canonicalName: '1세대',
       parentId: modelA.id,
-      refs: { modelId: modelA.id },
+      refs: { makeId: make.id, modelId: modelA.id },
       aliases: [],
       attributes: {},
       sourceEvidenceIds: [official.sourceDocumentId],
@@ -2014,7 +2031,7 @@ describe('vehicle master evidence-gated ingestion', () => {
       revision: 1,
       canonicalName: '1세대',
       parentId: modelB.id,
-      refs: { modelId: modelB.id },
+      refs: { makeId: make.id, modelId: modelB.id },
       aliases: [],
       attributes: {},
       sourceEvidenceIds: [official.sourceDocumentId],
