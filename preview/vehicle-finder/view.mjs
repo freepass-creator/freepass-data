@@ -36,6 +36,16 @@ function validateSnapshot(input) {
     ids.add(item.id);
     if (!text(item.pathText) || !text(item.nodeTypeLabel)) invalid('itemContext');
     if (!item.state || !text(item.state.code) || !text(item.state.label)) invalid('itemState');
+    if (item.freshness != null &&
+        (!item.freshness || !text(item.freshness.code) || !text(item.freshness.label))) {
+      invalid('itemFreshness');
+    }
+    if (item.confidenceLabel != null && !text(item.confidenceLabel)) invalid('itemConfidence');
+    if (item.sources != null && (!Array.isArray(item.sources) ||
+        item.sources.some(source => !source || !text(source.id) ||
+          (source.label != null && !text(source.label))))) {
+      invalid('itemSources');
+    }
     if (!Array.isArray(item.facts) || !Array.isArray(item.evidenceIds)) invalid('itemDetail');
     for (const fact of item.facts) {
       if (!fact || !text(fact.label) || typeof fact.unknown !== 'boolean') invalid('fact');
@@ -53,6 +63,24 @@ function normalizeFilterOptions(snapshot, key) {
 
 function visibleFactValue(fact) {
   return fact.unknown ? '미확인' : String(fact.value);
+}
+
+function formatObservedAt(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '관측시각 미확인';
+  return new Intl.DateTimeFormat('ko-KR', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function stateBadge(item) {
+  const badge = element('span', 'vf-state-badge', item.state.label);
+  badge.dataset.tone = item.state.tone ?? 'neutral';
+  return badge;
 }
 
 export function mountVehicleFinder(root, { read, onSelect } = {}) {
@@ -75,7 +103,8 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   root.classList.add('vf');
 
   const head = element('header', 'vf-head');
-  head.append(element('h1', '', '차량 찾기'));
+  const observation = element('div', 'vf-observation', '관측 정보 대기');
+  head.append(element('h1', '', '차량 찾기'), observation);
 
   const toolbar = element('div', 'vf-toolbar');
   const searchLabel = element('label', 'vf-search');
@@ -88,7 +117,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
   searchLabel.append(element('span', 'vf-field-label', '차량 검색'), input);
 
   const utilityActions = element('div', 'vf-utility-actions');
-  const filterToggle = element('button', '', '필터');
+  const filterToggle = element('button', 'vf-filter-toggle', '필터');
   filterToggle.type = 'button';
   filterToggle.setAttribute('aria-expanded', 'false');
   filterToggle.setAttribute('aria-controls', prefix + '-filters');
@@ -232,7 +261,9 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     detail.replaceChildren();
     const detailHead = element('div', 'vf-detail-head');
     const detailTitle = element('div', 'vf-detail-title');
-    detailTitle.append(element('h2', '', item.label), element('div', 'vf-path', item.pathText));
+    const detailHeading = element('h2', '', item.label);
+    detailHeading.tabIndex = -1;
+    detailTitle.append(detailHeading, element('div', 'vf-path', item.pathText));
     const close = element('button', 'vf-detail-close', '×');
     close.type = 'button';
     close.setAttribute('aria-label', '상세 닫기');
@@ -240,9 +271,24 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     detailHead.append(detailTitle, close);
 
     const resultMeta = element('div', 'vf-result-meta');
-    const badge = element('span', 'vf-state-badge', item.state.label);
-    badge.dataset.tone = item.state.tone ?? 'neutral';
-    resultMeta.append(badge, element('span', 'vf-note', item.nodeTypeLabel));
+    resultMeta.append(
+      stateBadge(item),
+      element('span', 'vf-state-code', item.state.code),
+      element('span', 'vf-note', item.nodeTypeLabel),
+    );
+
+    const trust = element('dl', 'vf-trust-grid');
+    const trustItems = [
+      ['관측', formatObservedAt(snapshot.observedAt)],
+      ['최신성', item.freshness?.label ?? '판정 없음'],
+      ['신뢰도', item.confidenceLabel ?? '평가 없음'],
+      ['근거', item.evidenceIds.length + '개'],
+    ];
+    for (const [label, value] of trustItems) {
+      const cell = element('div', 'vf-trust-item');
+      cell.append(element('dt', '', label), element('dd', '', value));
+      trust.append(cell);
+    }
 
     const facts = element('dl', 'vf-detail-facts');
     for (const fact of item.facts) {
@@ -253,13 +299,28 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     }
 
     const evidence = element('details', 'vf-evidence');
-    const summary = element('summary', '', '출처 근거 ' + item.evidenceIds.length + '개');
+    const sources = item.sources ?? [];
+    const summary = element(
+      'summary',
+      '',
+      '출처 ' + sources.length + '곳 · 근거 ' + item.evidenceIds.length + '개',
+    );
     evidence.append(summary);
-    if (item.evidenceIds.length) {
-      const evidenceList = element('div', 'vf-config-evidence', item.evidenceIds.join(' · '));
-      evidence.append(evidenceList);
+    if (sources.length) {
+      const sourceList = element('ul', 'vf-source-list');
+      for (const source of sources) {
+        sourceList.append(element('li', '', source.label ?? source.id));
+      }
+      evidence.append(sourceList);
     } else {
-      evidence.append(element('div', 'vf-note', '표시 가능한 출처 근거가 없습니다.'));
+      evidence.append(element('div', 'vf-note', '표시 가능한 출처 이름이 없습니다.'));
+    }
+    if (item.evidenceIds.length) {
+      evidence.append(
+        element('div', 'vf-config-evidence', '근거 ID · ' + item.evidenceIds.join(' · ')),
+      );
+    } else {
+      evidence.append(element('div', 'vf-note', '표시 가능한 근거 ID가 없습니다.'));
     }
 
     const actions = element('div', 'vf-actionbar');
@@ -287,7 +348,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     });
     actions.append(back, confirm);
 
-    detail.append(detailHead, resultMeta, facts, evidence, actions);
+    detail.append(detailHead, resultMeta, trust, facts, evidence, actions);
     detail.hidden = false;
     root.classList.add('vf-inspecting');
   }
@@ -327,9 +388,9 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       nameCell.append(button);
 
       const stateCell = element('td');
-      const badge = element('span', 'vf-state-badge', item.state.label);
-      badge.dataset.tone = item.state.tone ?? 'neutral';
-      stateCell.append(badge);
+      const stateMeta = element('div', 'vf-row-state');
+      stateMeta.append(stateBadge(item), element('span', 'vf-state-code', item.state.code));
+      stateCell.append(stateMeta);
       row.append(nameCell, stateCell);
       tbody.append(row);
     }
@@ -350,6 +411,8 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     }
     if (snapshot.coverage === 'PARTIAL') parts.push('일부 자료');
     status.textContent = parts.join(' · ');
+    observation.textContent =
+      '관측 ' + formatObservedAt(snapshot.observedAt) + ' · 범위 ' + snapshot.coverage;
     filterDone.textContent = snapshot.total + '개 결과 보기';
 
     if (inspectedId && !snapshot.items.some(item => item.id === inspectedId)) closeDetail(false);
@@ -363,6 +426,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       empty.hidden = false;
       empty.textContent = '차량 마스터 조회 연결을 기다리고 있습니다. 예시 차량을 실제 자료처럼 표시하지 않습니다.';
       status.textContent = '조회 연결 대기';
+      observation.textContent = '관측 정보 없음';
       return;
     }
 
@@ -382,6 +446,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
       if (snapshot && preserve) renderSnapshot('직전 관측 유지 · 새 조회 실패');
       else {
         snapshot = null;
+        observation.textContent = '관측 실패';
         table.hidden = true;
         empty.hidden = false;
         empty.textContent = '자료를 불러오지 못했습니다. 차량이 없다는 뜻은 아닙니다.';
@@ -416,7 +481,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     void refreshResults({ preserve: true });
   });
   listen(mobileMedia, 'change', () => {
-    if (!filterPanel.hidden) setFilterPanel(true);
+    setFilterPanel(!mobileMedia.matches);
   });
   listen(root, 'keydown', event => {
     if (event.key !== 'Escape') return;
@@ -432,6 +497,7 @@ export function mountVehicleFinder(root, { read, onSelect } = {}) {
     }
   });
 
+  setFilterPanel(!mobileMedia.matches);
   const ready = refreshResults({ preserve: false });
 
   return {
