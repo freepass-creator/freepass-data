@@ -280,7 +280,7 @@ export function mapLegacyNewcarFeedToEstimateMaster(
 
   const candidate: EstimateMasterCandidate = {
     productId,
-    vehicleModelId: identity.vehicleModelId,
+    vehicleModelId: identity.vehicleModelId ?? null,
     modelYearId,
     trimId: identity.trimId,
     powertrainId: identity.powertrainId,
