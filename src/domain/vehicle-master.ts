@@ -403,6 +403,17 @@ export function sealVehicleMasterRepairReceipt(
   input: Omit<VehicleMasterRepairReceipt, 'contentHash'>
 ): VehicleMasterRepairReceipt {
   assertTime(input.committedAt, 'committedAt');
+  assertRevision(input.beforeRevision);
+  assertRevision(input.afterRevision);
+  if (input.afterRevision !== input.beforeRevision + 1) {
+    throw new Error('VEHICLE_MASTER_INVALID:repairRevisionTransition');
+  }
+  assertSha256(input.requestDigest, 'requestDigest');
+  assertSha256(input.sourceAuditDigest, 'sourceAuditDigest');
+  assertSha256(input.repairPlanDigest, 'repairPlanDigest');
+  assertSha256(input.dryRunDigest, 'dryRunDigest');
+  assertSha256(input.beforeContentHash, 'beforeContentHash');
+  assertSha256(input.afterContentHash, 'afterContentHash');
   const record = {
     ...input,
     receiptId: cleanText(input.receiptId, 'receiptId'),
