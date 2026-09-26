@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildUsedcarMasterRecords } from '../src/application/usedcar-master.js';
 import {
   sealVehicleMasterNode,
+  sealVehicleMasterPriceRevision,
   type VehicleMasterNode,
   type VehicleMasterStatus,
 } from '../src/domain/vehicle-master.js';
@@ -15,6 +16,7 @@ function canonicalNode(input: {
   name: string;
   status?: VehicleMasterStatus | undefined;
   attributes?: Record<string, unknown>;
+  evidenceId?: string | undefined;
 }) {
   return sealVehicleMasterNode({
     id: input.id,
@@ -26,7 +28,7 @@ function canonicalNode(input: {
     refs: {},
     aliases: [],
     attributes: input.attributes ?? {},
-    sourceEvidenceIds: ['source_test'],
+    sourceEvidenceIds: [input.evidenceId ?? 'source_test'],
     effectiveFrom: null,
     effectiveTo: null,
     createdAt: observedAt,
@@ -47,16 +49,17 @@ async function seedChain(input: {
 } = {}) {
   const store = new MemoryVehicleMasterStore();
   const nodes = {
-    make: canonicalNode({ id: 'make_kia', nodeType: 'MAKE', name: '기아', status: input.makeStatus }),
-    model: canonicalNode({ id: 'model_sorento', nodeType: 'MODEL', name: '쏘렌토', status: input.modelStatus }),
-    generation: canonicalNode({ id: 'gen_mq4', nodeType: 'GENERATION', name: '4세대 MQ4', status: input.generationStatus }),
-    phase: canonicalNode({ id: 'phase_mq4_pre', nodeType: 'PHASE', name: '초기형', status: input.phaseStatus }),
+    make: canonicalNode({ id: 'make_kia', nodeType: 'MAKE', name: '기아', status: input.makeStatus, evidenceId: 'evidence_make' }),
+    model: canonicalNode({ id: 'model_sorento', nodeType: 'MODEL', name: '쏘렌토', status: input.modelStatus, evidenceId: 'evidence_model' }),
+    generation: canonicalNode({ id: 'gen_mq4', nodeType: 'GENERATION', name: '4세대 MQ4', status: input.generationStatus, evidenceId: 'evidence_generation' }),
+    phase: canonicalNode({ id: 'phase_mq4_pre', nodeType: 'PHASE', name: '초기형', status: input.phaseStatus, evidenceId: 'evidence_phase' }),
     modelYear: canonicalNode({
       id: 'my_2021',
       nodeType: 'MODEL_YEAR',
       name: '2021년형',
       status: input.modelYearStatus,
       attributes: { modelYear: 2021 },
+      evidenceId: 'evidence_model_year',
     }),
     powertrain: canonicalNode({
       id: 'pt_hybrid',
@@ -64,6 +67,7 @@ async function seedChain(input: {
       name: '1.6 터보 하이브리드',
       status: input.powertrainStatus,
       attributes: { fuelType: 'HYBRID' },
+      evidenceId: 'evidence_powertrain',
     }),
     variant: canonicalNode({
       id: 'variant_5seat_2wd',
@@ -71,6 +75,7 @@ async function seedChain(input: {
       name: '5인승 2WD',
       status: input.variantStatus,
       attributes: { seats: 5, drivetrain: '2WD' },
+      evidenceId: 'evidence_variant',
     }),
   };
 
@@ -96,7 +101,7 @@ async function seedChain(input: {
     },
     aliases: [],
     attributes: {},
-    sourceEvidenceIds: ['source_test'],
+    sourceEvidenceIds: ['evidence_trim'],
     effectiveFrom: null,
     effectiveTo: null,
     createdAt: observedAt,
@@ -135,6 +140,38 @@ describe('usedcar master canonical state projection', () => {
     expect(record?.identityStatus).toBe('RESOLVED');
     expect(record?.lifecycleStatus).toBe('HISTORICAL');
     expect(record?.holdReasons).toEqual([]);
+  });
+
+  it('preserves evidence lineage from the full canonical chain and price facts', async () => {
+    const store = await seedChain();
+    await store.putPriceRevision(sealVehicleMasterPriceRevision({
+      id: 'price_trim_noblesse_base_2021',
+      targetId: 'trim_noblesse',
+      priceType: 'BASE',
+      amount: 36000000,
+      currency: 'KRW',
+      revision: 1,
+      sourceEvidenceIds: ['evidence_price'],
+      sourceDocumentIds: ['document_price'],
+      effectiveFrom: '2021-01-01T00:00:00.000Z',
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    }));
+
+    const [record] = await buildUsedcarMasterRecords(store);
+
+    expect(record?.sourceEvidenceIds).toEqual([
+      'evidence_generation',
+      'evidence_make',
+      'evidence_model',
+      'evidence_model_year',
+      'evidence_phase',
+      'evidence_powertrain',
+      'evidence_price',
+      'evidence_trim',
+      'evidence_variant',
+    ]);
   });
 
   it('gives DISCONTINUED precedence over HISTORICAL in the canonical chain', async () => {
