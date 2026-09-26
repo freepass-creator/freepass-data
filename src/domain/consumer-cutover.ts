@@ -59,7 +59,7 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
     project: 'ERP.com',
     repository: 'freepass-creator/freepasserp4',
     domains: ['catalog'],
-    stage: 'SHADOW_READ',
+    stage: 'OBSERVE',
     activeReadOwner: 'freepasserp5/products-policy',
     targetReadOwner: 'freepass-data',
     switchKey: 'FREEPASS_DATA_ERP_COM_READ_MODE',
@@ -74,9 +74,9 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       approvedRelease: null
     },
     holdReasons: [
-      'FreePass Data consumer runtime is not deployed',
-      'ACTIVE Catalog release is empty',
-      'shadow latency and parity require production evidence'
+      'ERP.com public catalog still serves the ERP5 active reader; FreePass Data is shadow-only',
+      'authenticated FreePass Data consumer identity and production readback are not verified',
+      'non-empty ACTIVE erp-public release parity and shadow latency require production evidence'
     ]
   },
   {
@@ -115,7 +115,7 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
     evidence: {
       contractReady: true,
       authenticationVerified: false,
-      legacyReadVerified: false,
+      legacyReadVerified: true,
       freepassReadVerified: false,
       parityVerified: false,
       fallbackVerified: false,
@@ -124,7 +124,7 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
     },
     holdReasons: [
       'Admin consumer authentication and production FreePass Data readback are not verified',
-      'Policy parity and production persistence are not verified'
+      'Admin intake-critical shadow parity remains incomplete; latest I-01 hardening PR is not merged to Admin main'
     ]
   },
   {
@@ -171,7 +171,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       approvedRelease: null
     },
     holdReasons: [
-      'catalog input contract is not implemented',
+      'Estimate FreePass Data integration is implemented on the canonical integration line but not merged to Estimate product main',
+      'real ACTIVE estimate-newcar-master readback and cutover proof are not production-verified',
       'quote calculation and provider ownership must remain in Estimate'
     ]
   },
