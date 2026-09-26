@@ -74,6 +74,7 @@ describe('read-only consumer gateway', () => {
       result: {
         count: release.data.length,
         digest: release.dataDigest,
+        inputDigest: release.inputDigest,
         releaseId: release.releaseId,
         manifestId: release.manifestId,
         revision: release.canonicalRevision

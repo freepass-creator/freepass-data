@@ -213,3 +213,45 @@ any network request. Do not add a Sheet writer credential to this job.
 A successful preparation reports `READY_FOR_SHADOW`, never production cutover.
 Required next evidence is ERP4 shadow consumption, rendered-output parity, and a
 valid `freepass-sheet-delivery-v1` readback receipt.
+
+## Runtime-derived consumer evidence
+
+The static consumer switch registry records product/cutover intent and manually
+reviewed facts. It is not itself proof that a downstream consumer actually read
+FreePass Data.
+
+`consumer-runtime-evidence-v1` overlays the append-only Data Access audit stream
+without mutating the registry. A fresh successful authenticated Consumer Gateway
+read may automatically prove only:
+
+- `authenticationVerified`
+- `freepassReadVerified`
+- the exact approved release identity observed by that read
+
+The audit event must contain projection ID, release ID, manifest ID, input digest
+and data digest. Missing or malformed release evidence fails closed.
+
+The overlay never infers `parityVerified`, `fallbackVerified` or
+`productionReadbackVerified`. Those require their own reviewed evidence.
+
+A newer DENIED/FAILED/incomplete runtime operation, or evidence outside the
+explicit freshness window, blocks runtime promotion. White Label remains an
+aggregate registry entry: one `whitelabel-*` identity can never promote the
+whole White Label fleet. F01/F86 continue to use their dedicated durable Sheet
+delivery evidence path.
+
+Operational inspection:
+
+```bash
+npm run check:consumer-runtime-evidence -- \
+  --max-age-minutes=30 \
+  --max-future-skew-seconds=30 \
+  --event-limit=1000
+```
+
+This report is read-only. It shows static evidence, observed runtime evidence,
+effective evidence and the resulting next-stage decision side by side. The
+event-limit bounds the audit scan; if a consumer's proof falls outside that
+window it remains unobserved/fail-closed rather than being guessed from older
+registry text.
+

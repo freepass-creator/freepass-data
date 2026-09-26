@@ -38,7 +38,8 @@ describe('DataAccessGateway', () => {
       summarize: (value: { rows: unknown[]; releaseId: string }) => ({
         count: value.rows.length,
         releaseId: value.releaseId,
-        digest: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        digest: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        inputDigest: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
       })
     }, async () => ({
       rows: [{ privateValue: 'must-not-be-logged' }],
@@ -51,9 +52,31 @@ describe('DataAccessGateway', () => {
     expect(store.events[1]!.result).toEqual({
       count: 1,
       releaseId: 'rel_test',
-      digest: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+      digest: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      inputDigest: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
     });
     expect(JSON.stringify(store.events)).not.toContain('must-not-be-logged');
+  });
+
+  it('rejects malformed input digest evidence before recording success', async () => {
+    const { store, access } = gateway();
+    await expect(access.read({
+      context,
+      operation: 'READ_CATALOG',
+      resource,
+      summarize: () => ({
+        inputDigest: 'not-a-digest'
+      })
+    }, async () => ({ ok: true }))).rejects.toThrow(
+      'INVALID_DATA_ACCESS_RESULT_EVIDENCE'
+    );
+
+    expect(store.events.map((event) => event.phase)).toEqual([
+      'STARTED',
+      'FAILED'
+    ]);
+    expect(store.events[1]?.reasonCode)
+      .toBe('INVALID_DATA_ACCESS_RESULT_EVIDENCE');
   });
 
   it('records failure without copying the thrown message when no safe code exists', async () => {

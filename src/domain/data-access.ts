@@ -22,6 +22,7 @@ export type DataAccessContext = {
 export type DataAccessResultEvidence = {
   count?: number;
   digest?: string;
+  inputDigest?: string;
   releaseId?: string;
   manifestId?: string;
   revision?: number;

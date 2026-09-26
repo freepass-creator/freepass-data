@@ -62,7 +62,8 @@ function assertResultEvidence(result: DataAccessResultEvidence | undefined) {
   if (
     (result.count !== undefined && (!Number.isSafeInteger(result.count) || result.count < 0)) ||
     (result.revision !== undefined && (!Number.isSafeInteger(result.revision) || result.revision < 0)) ||
-    !digest(result.digest)
+    !digest(result.digest) ||
+    !digest(result.inputDigest)
   ) {
     throw new Error('INVALID_DATA_ACCESS_RESULT_EVIDENCE');
   }
