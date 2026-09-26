@@ -314,6 +314,7 @@ export function mountVehicleFinder(
 
   const detail = element('aside', 'vf-detail');
   detail.id = prefix + '-detail';
+  detail.setAttribute('role', 'region');
   detail.hidden = true;
   layout.append(list, detail);
 
@@ -390,7 +391,13 @@ export function mountVehicleFinder(
     filterLock = null;
   }
 
-  function setFilterPanel(open) {
+  function filterFocusableElements() {
+    return [...filterPanel.querySelectorAll(
+      'button:not([disabled]), select:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )].filter(node => !node.hidden && node.getClientRects().length > 0);
+  }
+
+  function setFilterPanel(open, { restoreFocus = false } = {}) {
     filterPanel.hidden = !open;
     filterToggle.setAttribute('aria-expanded', String(open));
     root.classList.toggle('vf-filter-open', open && mobileMedia.matches);
@@ -400,11 +407,19 @@ export function mountVehicleFinder(
       filterPanel.setAttribute('aria-modal', 'true');
       filterPanel.setAttribute('aria-labelledby', filterSheetTitle.id);
       lockFilterContext();
+      requestAnimationFrame(() => {
+        (filterFocusableElements()[0] ?? filterPanel).focus?.({ preventScroll: true });
+      });
     } else {
       filterPanel.removeAttribute('role');
       filterPanel.removeAttribute('aria-modal');
       filterPanel.removeAttribute('aria-labelledby');
       unlockFilterContext();
+      if (restoreFocus && mobileMedia.matches) {
+        requestAnimationFrame(() => {
+          filterToggle.focus({ preventScroll: true });
+        });
+      }
     }
   }
 
@@ -572,7 +587,9 @@ export function mountVehicleFinder(
     const detailHead = element('div', 'vf-detail-head');
     const detailTitle = element('div', 'vf-detail-title');
     const detailHeading = element('h2', '', item.label);
+    detailHeading.id = prefix + '-detail-heading';
     detailHeading.tabIndex = -1;
+    detail.setAttribute('aria-labelledby', detailHeading.id);
     detailTitle.append(detailHeading, element('div', 'vf-path', item.pathText));
     const close = element('button', 'vf-detail-close', '×');
     close.type = 'button';
@@ -1143,6 +1160,11 @@ export function mountVehicleFinder(
     button.dataset.groupId = group.id;
     const expanded = expandedGroupIds.has(group.id);
     button.setAttribute('aria-expanded', String(expanded));
+    button.setAttribute(
+      'aria-label',
+      group.label + ' · ' + group.candidateCount + '개 후보 · ' +
+        (expanded ? '접기' : '후보 펼치기'),
+    );
 
     const main = element('span', 'vf-group-main');
     main.append(
@@ -1443,9 +1465,12 @@ export function mountVehicleFinder(
     inputTimer = setTimeout(() => { void refreshResults({ preserve: true }); }, 120);
   });
   listen(refresh, 'click', () => { void refreshResults({ preserve: true }); });
-  listen(filterToggle, 'click', () => setFilterPanel(filterPanel.hidden));
-  listen(filterClose, 'click', () => setFilterPanel(false));
-  listen(filterDone, 'click', () => setFilterPanel(false));
+  listen(filterToggle, 'click', () => {
+    const opening = filterPanel.hidden;
+    setFilterPanel(opening, { restoreFocus: !opening });
+  });
+  listen(filterClose, 'click', () => setFilterPanel(false, { restoreFocus: true }));
+  listen(filterDone, 'click', () => setFilterPanel(false, { restoreFocus: true }));
   listen(reset, 'click', () => {
     filters = {};
     readContext = null;
@@ -1456,11 +1481,34 @@ export function mountVehicleFinder(
     setFilterPanel(!mobileMedia.matches);
   });
   listen(root, 'keydown', event => {
+    if (event.key === 'Tab' && !filterPanel.hidden && mobileMedia.matches) {
+      const focusable = filterFocusableElements();
+      if (!focusable.length) {
+        event.preventDefault();
+        return;
+      }
+      const activeIndex = focusable.indexOf(document.activeElement);
+      if (event.shiftKey && activeIndex <= 0) {
+        event.preventDefault();
+        focusable.at(-1)?.focus({ preventScroll: true });
+        return;
+      }
+      if (!event.shiftKey && activeIndex === focusable.length - 1) {
+        event.preventDefault();
+        focusable[0]?.focus({ preventScroll: true });
+        return;
+      }
+      if (activeIndex < 0) {
+        event.preventDefault();
+        focusable[0]?.focus({ preventScroll: true });
+        return;
+      }
+    }
+
     if (event.key !== 'Escape') return;
     if (!filterPanel.hidden) {
       event.preventDefault();
-      setFilterPanel(false);
-      filterToggle.focus({ preventScroll: true });
+      setFilterPanel(false, { restoreFocus: true });
       return;
     }
     if (inspectedId) {
