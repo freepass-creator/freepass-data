@@ -549,7 +549,7 @@ describe('vehicle master repair command', () => {
       })
     ).rejects.toMatchObject({
       code: 'VEHICLE_MASTER_REPAIR_APPROVAL_REJECTED',
-      reason: 'REPAIR_APPROVAL_MISSING',
+      reason: 'TARGET_NOT_READY_IN_DRY_RUN',
     });
     expect(await store.getRepairApproval('approval_blocked')).toBeNull();
     expect((await store.getNode(seeded.powertrain.id))?.revision).toBe(1);
@@ -616,7 +616,7 @@ describe('vehicle master repair command', () => {
       applyVehicleMasterRepairCommand(ruleStore, prepared.input)
     ).rejects.toMatchObject({
       code: 'VEHICLE_MASTER_REPAIR_COMMAND_REJECTED',
-      reason: 'TARGET_NOT_READY_IN_DRY_RUN',
+      reason: 'REPAIR_APPROVAL_MISSING',
     });
     expect((await ruleStore.getCompatibilityRule(tampered.id))?.revision).toBe(1);
     expect(seeded.trim.id).toBe('trim_repair_command');
