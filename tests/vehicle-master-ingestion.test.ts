@@ -393,6 +393,126 @@ describe('vehicle master evidence-gated ingestion', () => {
     expect(await store.getNode(proposal.id)).toBeNull();
   });
 
+  it('keeps a child on HOLD when its effective range escapes the canonical parent', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-temporal-parent', 'MANUFACTURER_OFFICIAL', 'a');
+    await store.putSourceDocument(official);
+
+    const proposal = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, proposal);
+
+    const parent = await store.getNode(proposal.parentId!);
+    expect(parent).toBeTruthy();
+    await store.putNode(sealVehicleMasterNode({
+      id: parent!.id,
+      nodeType: parent!.nodeType,
+      status: parent!.status,
+      revision: parent!.revision + 1,
+      canonicalName: parent!.canonicalName,
+      parentId: parent!.parentId ?? null,
+      refs: parent!.refs,
+      aliases: parent!.aliases,
+      attributes: parent!.attributes,
+      sourceEvidenceIds: parent!.sourceEvidenceIds,
+      effectiveFrom: '2026-10-01T00:00:00.000Z',
+      effectiveTo: null,
+      createdAt: parent!.createdAt,
+      updatedAt: observedAt,
+    }));
+
+    const result = await promoteVehicleMasterNode(store, {
+      proposal,
+      observations: observations(proposal, [official.sourceDocumentId]),
+      policy: identityPolicy,
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'PARENT_EFFECTIVE_RANGE_MISMATCH',
+          detail: proposal.parentId,
+        }),
+        expect.objectContaining({
+          code: 'REFERENCE_EFFECTIVE_RANGE_MISMATCH',
+          fieldPath: 'refs.variantId',
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
+  it('keeps a price on HOLD when its effective range escapes the target trim', async () => {
+    const store = new MemoryVehicleMasterStore();
+    const official = source('official-temporal-price', 'MANUFACTURER_OFFICIAL', 'b');
+    await store.putSourceDocument(official);
+
+    const trim = trimProposal([official.sourceDocumentId]);
+    await seedAncestors(store, trim);
+    await store.putNode(trim);
+    await store.putNode(sealVehicleMasterNode({
+      id: trim.id,
+      nodeType: trim.nodeType,
+      status: trim.status,
+      revision: 2,
+      canonicalName: trim.canonicalName,
+      parentId: trim.parentId ?? null,
+      refs: trim.refs,
+      aliases: trim.aliases,
+      attributes: trim.attributes,
+      sourceEvidenceIds: trim.sourceEvidenceIds,
+      effectiveFrom: '2026-10-01T00:00:00.000Z',
+      effectiveTo: null,
+      createdAt: trim.createdAt,
+      updatedAt: observedAt,
+    }));
+
+    const price = sealVehicleMasterPriceRevision({
+      id: deterministicVehicleMasterRecordId('price', {
+        targetId: trim.id,
+        priceType: 'BASE',
+        effectiveFrom,
+      }),
+      targetId: trim.id,
+      priceType: 'BASE',
+      amount: 36410000,
+      currency: 'KRW',
+      revision: 1,
+      sourceEvidenceIds: [official.sourceDocumentId],
+      sourceDocumentIds: [official.sourceDocumentId],
+      effectiveFrom,
+      effectiveTo: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    });
+
+    const result = await promoteVehicleMasterPriceRevision(store, {
+      proposal: price,
+      observations: [
+        { fieldPath: 'amount', value: 36410000, sourceDocumentId: official.sourceDocumentId },
+        { fieldPath: 'currency', value: 'KRW', sourceDocumentId: official.sourceDocumentId },
+        { fieldPath: 'targetId', value: trim.id, sourceDocumentId: official.sourceDocumentId },
+      ],
+      policy: {
+        requiredFieldPaths: ['amount', 'currency', 'targetId'],
+        minCorroboratingSourcesWithoutOfficial: 2,
+      },
+      observedAt,
+    });
+
+    expect(result.decision.status).toBe('HOLD');
+    expect(result.decision.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'PRICE_TARGET_EFFECTIVE_RANGE_MISMATCH',
+          detail: trim.id,
+        }),
+      ])
+    );
+    expect(result.canonicalWrite).toBeNull();
+  });
+
   it('promotes base price through the same evidence gate', async () => {
     const store = new MemoryVehicleMasterStore();
     const official = source('kia-price-2027-sorento', 'MANUFACTURER_OFFICIAL', '2');
