@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canonicalPowertrainIdentity,
+  canonicalTrimIdentity,
   inferPowertrainFuelType,
 } from '../src/domain/vehicle-master-normalization.js';
 
@@ -12,6 +13,15 @@ describe('vehicle master powertrain normalization', () => {
       .toBe(canonicalPowertrainIdentity('2.5 가솔린 turbo'));
     expect(canonicalPowertrainIdentity('EV'))
       .toBe(canonicalPowertrainIdentity('전기'));
+  });
+
+  it('normalizes trim spacing, punctuation and latin case without translating names', () => {
+    expect(canonicalTrimIdentity('Noblesse'))
+      .toBe(canonicalTrimIdentity('NOBLESSE'));
+    expect(canonicalTrimIdentity('노 블레스'))
+      .toBe(canonicalTrimIdentity('노-블레스'));
+    expect(canonicalTrimIdentity('Noblesse'))
+      .not.toBe(canonicalTrimIdentity('노블레스'));
   });
 
   it('keeps materially different powertrain descriptors distinct', () => {
