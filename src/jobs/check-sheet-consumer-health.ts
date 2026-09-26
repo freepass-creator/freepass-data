@@ -1,4 +1,7 @@
-import { createSheetDeliveryEvidenceDataAccessRuntime } from './data-access-runtime.js';
+import {
+  createSheetConsumerHealthReadOnlyDataAccessRuntime,
+  createSheetDeliveryEvidenceDataAccessRuntime
+} from './data-access-runtime.js';
 
 function requiredArg(name: string) {
   const prefix = `--${name}=`;
@@ -31,7 +34,14 @@ if (!Number.isFinite(Date.parse(assessedAt))) {
   throw new Error('--assessed-at must be a valid timestamp');
 }
 
-const runtime = await createSheetDeliveryEvidenceDataAccessRuntime();
+const scheduledReadOnly = process.argv.includes('--scheduled-read-only');
+const runtime = scheduledReadOnly
+  ? await createSheetConsumerHealthReadOnlyDataAccessRuntime({
+      accessToken: process.env.FREEPASS_ERP5_READ_ACCESS_TOKEN ?? '',
+      evidenceBucket: process.env.EVIDENCE_BUCKET ?? ''
+    })
+  : await createSheetDeliveryEvidenceDataAccessRuntime();
+
 const report = await runtime.health({
   assessedAt,
   maxAgeMs: Math.round(maxAgeMinutes * 60_000),
