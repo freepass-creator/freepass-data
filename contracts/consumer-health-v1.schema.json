@@ -1,0 +1,317 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/consumer-health-v1.schema.json",
+  "title": "FreePass Data Consumer Health v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "schemaVersion",
+    "generatedAt",
+    "status",
+    "policy",
+    "consumers"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "consumer-health-v1"
+    },
+    "schemaVersion": {
+      "const": "1.0.0"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "enum": [
+        "HEALTHY",
+        "DEGRADED",
+        "BLOCKED"
+      ]
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxAgeMs",
+        "maxFutureSkewMs",
+        "eventLimit"
+      ],
+      "properties": {
+        "maxAgeMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxFutureSkewMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "eventLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        }
+      }
+    },
+    "consumers": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "$ref": "#/$defs/consumer"
+      }
+    }
+  },
+  "$defs": {
+    "stage": {
+      "enum": [
+        "LEGACY_DIRECT",
+        "OBSERVE",
+        "SHADOW_READ",
+        "PARITY_VERIFIED",
+        "FREEPASS_DATA_READ"
+      ]
+    },
+    "decision": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "allowed",
+        "from",
+        "to",
+        "blockers"
+      ],
+      "properties": {
+        "allowed": {
+          "type": "boolean"
+        },
+        "from": {
+          "$ref": "#/$defs/stage"
+        },
+        "to": {
+          "$ref": "#/$defs/stage"
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "state",
+        "observedAt",
+        "ageMs",
+        "eventId",
+        "receiptId",
+        "releaseAuthority",
+        "projectionId",
+        "releaseId",
+        "manifestId",
+        "authenticated",
+        "freepassReadVerified",
+        "productionReadbackVerified",
+        "parityVerified",
+        "fallbackVerified"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "GATEWAY_RUNTIME",
+            "SHEET_DELIVERY",
+            "WHITELABEL_AGGREGATE",
+            "NOT_IMPLEMENTED"
+          ]
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ageMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "eventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "receiptId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "releaseAuthority": {
+          "anyOf": [
+            {
+              "enum": [
+                "CANONICAL_ACTIVE",
+                "LEGACY_VERIFIED_BRIDGE"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "projectionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "releaseId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manifestId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "authenticated": {
+          "type": "boolean"
+        },
+        "freepassReadVerified": {
+          "type": "boolean"
+        },
+        "productionReadbackVerified": {
+          "type": "boolean"
+        },
+        "parityVerified": {
+          "type": "boolean"
+        },
+        "fallbackVerified": {
+          "type": "boolean"
+        }
+      }
+    },
+    "consumer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consumerId",
+        "project",
+        "repository",
+        "domains",
+        "status",
+        "currentStage",
+        "nextStage",
+        "activeReadOwner",
+        "targetReadOwner",
+        "switchKey",
+        "evidence",
+        "nextTransition",
+        "blockers",
+        "staticHoldReasons"
+      ],
+      "properties": {
+        "consumerId": {
+          "enum": [
+            "erp-com-public-catalog",
+            "erp-whitelabel-catalogs",
+            "freepass-admin-catalog",
+            "freepass-sales-catalog",
+            "freepass-estimate-catalog",
+            "kakao-ops-catalog",
+            "google-sheets-f01",
+            "google-sheets-f86"
+          ]
+        },
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "domains": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "status": {
+          "enum": [
+            "HEALTHY",
+            "DEGRADED",
+            "BLOCKED"
+          ]
+        },
+        "currentStage": {
+          "$ref": "#/$defs/stage"
+        },
+        "nextStage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/stage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "activeReadOwner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetReadOwner": {
+          "const": "freepass-data"
+        },
+        "switchKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence"
+        },
+        "nextTransition": {
+          "$ref": "#/$defs/decision"
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "staticHoldReasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
