@@ -159,27 +159,56 @@ const selectorRuntimeOwners = new Set([
 for (const file of walk(srcRoot)) {
   const relative = path.relative(repoRoot, file).replaceAll('\\', '/');
   const text = fs.readFileSync(file, 'utf8');
+  if (selectorRuntimeOwners.has(relative)) continue;
+
+  const selectorSpecifier =
+    /['"][^'"]*vehicle-selector\.js['"]/;
 
   for (const match of text.matchAll(
-    /import\s*{([\s\S]*?)}\s*from\s*['"]([^'"]*vehicle-selector\.js)['"]/g
+    /(?:import|export)\s*{([\s\S]*?)}\s*from\s*['"]([^'"]*vehicle-selector\.js)['"]/g
   )) {
     const bindings = (match[1] ?? '')
       .split(',')
       .map((item) => item.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0])
       .filter(Boolean);
 
-    if (
-      bindings.includes('selectVehicles') &&
-      !selectorRuntimeOwners.has(relative)
-    ) {
+    if (bindings.includes('selectVehicles')) {
       violations.push({
         file: relative,
         layer: layerOf(file),
         import: 'selectVehicles',
         reason:
-          'Vehicle selection runtime must enter through the approved master selector boundary; do not create a second consumer search path'
+          'Vehicle selection runtime must enter through the approved master selector boundary; do not import or re-export the canonical runtime elsewhere'
       });
     }
+  }
+
+  if (
+    new RegExp(
+      String.raw`import\\s+(?:type\\s+)?\\*\\s+as\\s+[A-Za-z_$][\\w$]*\\s+from\\s+${selectorSpecifier.source}`
+    ).test(text)
+  ) {
+    violations.push({
+      file: relative,
+      layer: layerOf(file),
+      import: '* as vehicle-selector',
+      reason:
+        'Namespace access to the Vehicle Selector runtime is forbidden outside approved runtime owners'
+    });
+  }
+
+  if (
+    new RegExp(
+      String.raw`import\\s*\\(\\s*${selectorSpecifier.source}\\s*\\)`
+    ).test(text)
+  ) {
+    violations.push({
+      file: relative,
+      layer: layerOf(file),
+      import: 'dynamic vehicle-selector import',
+      reason:
+        'Dynamic access to the Vehicle Selector runtime is forbidden outside approved runtime owners'
+    });
   }
 }
 
