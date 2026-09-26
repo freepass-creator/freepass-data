@@ -703,6 +703,7 @@ describe('common vehicle selector', () => {
     const partialIdentity = record('partial-identity', {
       lifecycle: 'HISTORICAL',
       identityStatus: 'PARTIAL',
+      seats: { id: null, label: null, value: null },
     });
     const unresolvedFact = record('unknown-seats', {
       lifecycle: 'HISTORICAL',
