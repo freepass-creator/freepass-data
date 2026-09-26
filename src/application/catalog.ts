@@ -347,7 +347,7 @@ export async function buildErpPublicProjection(
   const evidenceContext = buildProjectionEvidenceContext({
     releaseId,
     projectionId: 'erp-public',
-    sourceLineage:
+    sourceLineage,
     revisionHistory
   });
 
