@@ -31,6 +31,7 @@ button{cursor:pointer}
 .dh-search span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .dh-search input{width:100%;border:1px solid var(--line-strong);border-radius:9px;padding:0 12px;background:var(--surface)}
 .dh-filters{display:flex;gap:6px;overflow-x:auto}
+.dh-refresh{flex:0 0 44px;width:44px;border:0;border-radius:9px;background:var(--surface);color:var(--brand);font-size:20px}
 .dh-filter{border:0;border-radius:999px;padding:0 12px;background:var(--surface);color:var(--muted);white-space:nowrap}
 .dh-filter[aria-pressed='true']{background:var(--brand);color:#fff;font-weight:700}
 .dh-status{min-height:22px;margin-bottom:10px;color:var(--muted);font-size:11px}
