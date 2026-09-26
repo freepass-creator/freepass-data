@@ -10,7 +10,8 @@ import type {
   Product, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
-  CatalogStore, CatalogTransaction, OutboxStore, ProjectionStore
+  CatalogStore, CatalogTransaction, OutboxStore, ProjectionStore,
+  SheetDeliveryEvidenceStore
 } from '../ports/catalog-store.js';
 import type {
   CanonicalSourceBinding,
@@ -30,6 +31,10 @@ import type {
 } from '../domain/history.js';
 import type { ManualCatalogEntryReceipt } from '../domain/manual-entry.js';
 import type { ReviewedSourceChangeReceipt } from '../domain/source-change.js';
+import type {
+  SheetConsumerId,
+  StoredSheetDeliveryEvidence
+} from '../domain/consumer-delivery.js';
 import type {
   CatalogWriterOwnership,
   WriterOwnershipTransferReceipt
@@ -73,6 +78,7 @@ const C = {
   releaseManifests: FIRESTORE_COLLECTIONS.projection.manifests,
   projectionLineage: FIRESTORE_COLLECTIONS.projection.lineage,
   projectionDeliveryReceipts: FIRESTORE_COLLECTIONS.projection.deliveryReceipts,
+  sheetDeliveryEvidence: FIRESTORE_COLLECTIONS.projection.sheetDeliveryEvidence,
   activeReleases: FIRESTORE_COLLECTIONS.projection.active
 } as const;
 
@@ -82,7 +88,7 @@ const data = <T>(snap: FirebaseFirestore.DocumentSnapshot) =>
 const catalogEntity = <T>(snap: FirebaseFirestore.DocumentSnapshot) =>
   decodeFirestoreIdentityDocument<T>(snap, 'id');
 
-export class FirestoreDataStore implements CatalogStore, ProjectionStore, OutboxStore {
+export class FirestoreDataStore implements CatalogStore, ProjectionStore, OutboxStore, SheetDeliveryEvidenceStore {
   constructor(private readonly db: Firestore) {}
 
   async transact<T>(fn: (tx: CatalogTransaction) => Promise<T>): Promise<T> {
@@ -511,6 +517,26 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     await this.db.collection(C.projectionDeliveryReceipts)
       .doc(encodeURIComponent(receipt.eventId))
       .create(receipt);
+  }
+  async getSheetDeliveryEvidence(receiptId: string) {
+    return data<StoredSheetDeliveryEvidence>(
+      await this.db.collection(C.sheetDeliveryEvidence)
+        .doc(encodeURIComponent(receiptId))
+        .get()
+    );
+  }
+  async putSheetDeliveryEvidence(evidence: StoredSheetDeliveryEvidence) {
+    await this.db.collection(C.sheetDeliveryEvidence)
+      .doc(encodeURIComponent(evidence.receiptId))
+      .create(evidence);
+  }
+  async listSheetDeliveryEvidence(consumerId: SheetConsumerId) {
+    const snap = await this.db.collection(C.sheetDeliveryEvidence)
+      .where('consumerId', '==', consumerId)
+      .get();
+    return snap.docs.map(
+      (doc) => doc.data() as StoredSheetDeliveryEvidence
+    );
   }
 
   async claimNext(input: { workerId: string; now: string; leaseUntil: string }) {
