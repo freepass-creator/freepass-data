@@ -690,7 +690,6 @@ describe('vehicle master repair command', () => {
     const seeded = await seedStore(store);
     const prepared = await buildCommand(store, 'NODE', seeded.powertrain.id, {
       actor: { id: 'user:repair-operator', kind: 'USER' },
-      writer: undefined,
     });
 
     const result = await applyVehicleMasterRepairCommand(store, prepared.input);
