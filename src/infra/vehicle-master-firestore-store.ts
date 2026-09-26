@@ -6,6 +6,7 @@ import type {
   VehicleMasterNode,
   VehicleMasterPipelineRecord,
   VehicleMasterPriceRevision,
+  VehicleMasterRepairApproval,
   VehicleMasterRepairReceipt,
   VehicleMasterResolverFeedback,
   VehicleMasterSourceDocument,
@@ -34,6 +35,7 @@ const C = {
   changeEvents: 'vehicle_master_change_events',
   resolverFeedback: 'vehicle_master_resolver_feedback',
   auditReports: 'vehicle_master_audit_reports',
+  repairApprovals: 'vehicle_master_repair_approvals',
   repairReceipts: 'vehicle_master_repair_receipts',
 } as const;
 
@@ -283,6 +285,19 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
     );
   }
 
+  async getRepairApproval(approvalId: string) {
+    return data<VehicleMasterRepairApproval>(
+      await this.db.collection(C.repairApprovals).doc(safeId(approvalId)).get()
+    );
+  }
+
+  async putRepairApproval(record: VehicleMasterRepairApproval) {
+    return this.putImmutable(
+      this.db.collection(C.repairApprovals).doc(safeId(record.approvalId)),
+      record
+    );
+  }
+
   async getRepairReceipt(receiptId: string) {
     return data<VehicleMasterRepairReceipt>(
       await this.db.collection(C.repairReceipts).doc(safeId(receiptId)).get()
@@ -292,6 +307,8 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
   async commitRepair(
     input: VehicleMasterRepairCommitInput
   ): Promise<VehicleMasterRepairCommitResult> {
+    const approvalRef = this.db.collection(C.repairApprovals)
+      .doc(safeId(input.approval.approvalId));
     const receiptRef = this.db.collection(C.repairReceipts)
       .doc(safeId(input.receipt.receiptId));
     const currentCollection =
@@ -304,10 +321,41 @@ export class FirestoreVehicleMasterStore implements VehicleMasterStore {
       .doc(`${safeId(input.record.id)}__r${input.record.revision}`);
 
     return this.db.runTransaction(async (tx) => {
-      const [receiptSnap, currentSnap] = await Promise.all([
+      const [approvalSnap, receiptSnap, currentSnap] = await Promise.all([
+        tx.get(approvalRef),
         tx.get(receiptRef),
         tx.get(currentRef),
       ]);
+
+      if (!approvalSnap.exists) {
+        throw new Error(
+          `VEHICLE_MASTER_REPAIR_APPROVAL_MISSING:${input.approval.approvalId}`
+        );
+      }
+      const storedApproval = approvalSnap.data() as VehicleMasterRepairApproval;
+      if (storedApproval.contentHash !== input.approval.contentHash) {
+        throw new Error(
+          `VEHICLE_MASTER_REPAIR_APPROVAL_MISMATCH:${input.approval.approvalId}`
+        );
+      }
+      if (
+        input.receipt.approvalId !== storedApproval.approvalId ||
+        input.receipt.approvalDigest !== storedApproval.contentHash ||
+        input.receipt.approvedBy.id !== storedApproval.approvedBy.id ||
+        input.receipt.approvedBy.kind !== storedApproval.approvedBy.kind ||
+        input.receipt.writerId !== storedApproval.writerId ||
+        input.receipt.authorityRuleId !== storedApproval.authorityRuleId ||
+        input.receipt.reason !== storedApproval.reason ||
+        input.receipt.sourceAuditDigest !== storedApproval.sourceAuditDigest ||
+        input.receipt.repairPlanDigest !== storedApproval.repairPlanDigest ||
+        input.receipt.dryRunDigest !== storedApproval.dryRunDigest ||
+        input.receipt.entityKind !== storedApproval.entityKind ||
+        input.receipt.entityId !== storedApproval.entityId
+      ) {
+        throw new Error(
+          `VEHICLE_MASTER_REPAIR_APPROVAL_RECEIPT_MISMATCH:${storedApproval.approvalId}`
+        );
+      }
 
       if (receiptSnap.exists) {
         const existing = receiptSnap.data() as VehicleMasterRepairReceipt;
