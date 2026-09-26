@@ -9,6 +9,10 @@ import {
   type VehicleMasterSourceDocument,
   type VehicleMasterWriteResult,
 } from '../domain/vehicle-master.js';
+import {
+  canonicalPowertrainIdentity,
+  inferPowertrainFuelType,
+} from '../domain/vehicle-master-normalization.js';
 import type { VehicleMasterStore } from '../ports/vehicle-master-store.js';
 
 export type VehicleMasterFieldObservation = {
@@ -39,6 +43,9 @@ export type VehicleMasterEvidenceIssue = {
     | 'MODEL_YEAR_NAME_MISMATCH'
     | 'MODEL_YEAR_ALIAS_MISMATCH'
     | 'MODEL_YEAR_DUPLICATE_IN_PHASE'
+    | 'POWERTRAIN_IDENTITY_MISMATCH'
+    | 'POWERTRAIN_FUEL_TYPE_MISMATCH'
+    | 'POWERTRAIN_DUPLICATE_IN_MODEL_YEAR'
     | 'REFERENCE_NODE_MISSING'
     | 'REFERENCE_NODE_HOLD'
     | 'REFERENCE_EFFECTIVE_RANGE_MISMATCH'
@@ -485,6 +492,55 @@ async function applyNodeReferenceGate(
               detail: sibling.id,
             });
           }
+        }
+      }
+    }
+  }
+
+  if (proposal.nodeType === 'POWERTRAIN') {
+    const expectedIdentity = canonicalPowertrainIdentity(proposal.canonicalName);
+    const storedIdentity =
+      typeof proposal.attributes.identityKey === 'string'
+        ? proposal.attributes.identityKey.trim()
+        : '';
+
+    if (!storedIdentity || storedIdentity !== expectedIdentity) {
+      issues.push({
+        code: 'POWERTRAIN_IDENTITY_MISMATCH',
+        fieldPath: 'attributes.identityKey',
+        detail: `${storedIdentity || 'MISSING'}!=${expectedIdentity}`,
+      });
+    }
+
+    const inferredFuelType = inferPowertrainFuelType(proposal.canonicalName);
+    const storedFuelType =
+      typeof proposal.attributes.fuelType === 'string'
+        ? proposal.attributes.fuelType.trim().toUpperCase()
+        : null;
+
+    if (inferredFuelType && storedFuelType !== inferredFuelType) {
+      issues.push({
+        code: 'POWERTRAIN_FUEL_TYPE_MISMATCH',
+        fieldPath: 'attributes.fuelType',
+        detail: `${storedFuelType ?? 'MISSING'}!=${inferredFuelType}`,
+      });
+    }
+
+    if (proposal.parentId) {
+      const siblings = (await store.listNodesByType('POWERTRAIN'))
+        .filter((node) =>
+          node.id !== proposal.id &&
+          node.parentId === proposal.parentId &&
+          node.status !== 'HOLD'
+        );
+
+      for (const sibling of siblings) {
+        if (canonicalPowertrainIdentity(sibling.canonicalName) === expectedIdentity) {
+          issues.push({
+            code: 'POWERTRAIN_DUPLICATE_IN_MODEL_YEAR',
+            fieldPath: 'canonicalName',
+            detail: sibling.id,
+          });
         }
       }
     }
