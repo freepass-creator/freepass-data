@@ -11,6 +11,7 @@ import {
 } from '../domain/vehicle-master.js';
 import {
   canonicalPowertrainIdentity,
+  canonicalTrimIdentity,
   inferPowertrainFuelType,
 } from '../domain/vehicle-master-normalization.js';
 import type { VehicleMasterStore } from '../ports/vehicle-master-store.js';
@@ -46,6 +47,8 @@ export type VehicleMasterEvidenceIssue = {
     | 'POWERTRAIN_IDENTITY_MISMATCH'
     | 'POWERTRAIN_FUEL_TYPE_MISMATCH'
     | 'POWERTRAIN_DUPLICATE_IN_MODEL_YEAR'
+    | 'TRIM_IDENTITY_MISMATCH'
+    | 'TRIM_DUPLICATE_IN_VARIANT'
     | 'REFERENCE_NODE_MISSING'
     | 'REFERENCE_NODE_HOLD'
     | 'REFERENCE_EFFECTIVE_RANGE_MISMATCH'
@@ -538,6 +541,51 @@ async function applyNodeReferenceGate(
         if (canonicalPowertrainIdentity(sibling.canonicalName) === expectedIdentity) {
           issues.push({
             code: 'POWERTRAIN_DUPLICATE_IN_MODEL_YEAR',
+            fieldPath: 'canonicalName',
+            detail: sibling.id,
+          });
+        }
+      }
+    }
+  }
+
+  if (proposal.nodeType === 'TRIM') {
+    const expectedIdentity = canonicalTrimIdentity(proposal.canonicalName);
+    const storedIdentity =
+      typeof proposal.attributes.identityKey === 'string'
+        ? proposal.attributes.identityKey.trim()
+        : '';
+
+    if (!storedIdentity || storedIdentity !== expectedIdentity) {
+      issues.push({
+        code: 'TRIM_IDENTITY_MISMATCH',
+        fieldPath: 'attributes.identityKey',
+        detail: `${storedIdentity || 'MISSING'}!=${expectedIdentity}`,
+      });
+    }
+
+    if (proposal.parentId) {
+      const proposalNames = new Set(
+        [proposal.canonicalName, ...proposal.aliases]
+          .map(canonicalTrimIdentity)
+          .filter(Boolean)
+      );
+      const siblings = (await store.listNodesByType('TRIM'))
+        .filter((node) =>
+          node.id !== proposal.id &&
+          node.parentId === proposal.parentId &&
+          node.status !== 'HOLD'
+        );
+
+      for (const sibling of siblings) {
+        const siblingNames = new Set(
+          [sibling.canonicalName, ...sibling.aliases]
+            .map(canonicalTrimIdentity)
+            .filter(Boolean)
+        );
+        if ([...proposalNames].some((name) => siblingNames.has(name))) {
+          issues.push({
+            code: 'TRIM_DUPLICATE_IN_VARIANT',
             fieldPath: 'canonicalName',
             detail: sibling.id,
           });
