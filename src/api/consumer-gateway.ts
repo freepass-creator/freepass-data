@@ -218,7 +218,7 @@ export function createConsumerGateway(
         };
 
         if (binding.projectionId === 'admin-catalog') {
-          const data = release.data as AdminCatalogProduct[];
+          const data = release.data as unknown as AdminCatalogProduct[];
           const missingPolicyOfferIds = [...new Set(
             data.flatMap((product) => product.offers)
               .filter((offer) => offer.policyState === 'MISSING')
