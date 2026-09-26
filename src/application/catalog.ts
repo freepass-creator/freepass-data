@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
+import { orderedJsonDigest, stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from './projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 import type {
@@ -60,7 +60,7 @@ function revisionRecordId(
 }
 
 function updateOfferPriceDigest(input: UpdateOfferPriceInput, writerId: string) {
-  return createHash('sha256').update(JSON.stringify({
+  return orderedJsonDigest({
     commandType: 'UPDATE_OFFER_PRICE',
     offerId: input.offerId,
     expectedRevision: input.expectedRevision,
@@ -76,7 +76,7 @@ function updateOfferPriceDigest(input: UpdateOfferPriceInput, writerId: string) 
       organizationId: input.actor.organizationId ?? null
     },
     writerId
-  })).digest('hex');
+  });
 }
 
 function replacePriceTerm(offer: Offer, termKey: string, monthlyRent: Money): Offer {

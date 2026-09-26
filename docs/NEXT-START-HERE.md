@@ -7,6 +7,19 @@ Verified baseline before this handoff update: `adbbfca7c0ddc4e6c7c1906765d9b5aac
 Branch: `codex/local-runtime-baseline`
 Date: 2026-09-22
 
+## 2026-09-26 FreePass Data internal consolidation
+
+Project-local data-layer cleanup only:
+
+- central target Firebase binding must flow through `src/infra/firebase-target.ts`;
+- source evidence collection names and source document-ID encoding are shared through `src/infra/firestore-layout.ts`;
+- source-run CURRENT / STALE / INELIGIBLE promotion policy is centralized in Domain `decideSourceHead`;
+- ingestion uses the responsibility-specific `SourceIngestionStore`; Canonical mutations remain behind `CatalogStore`;
+- FreePass Data owns Estimate master-data facts/projection only, not the Estimate pricing/issued-quote engine;
+- preview UI remains reference-only and is not a product UI authority.
+
+Company-wide branch/PR lineage governance belongs in AI Core and is intentionally not duplicated here.
+
 ## 2026-09-22 publication-readiness gate
 
 상시 ERP5 감사에 기계 판독 가능한 공개 판정 게이트를 추가했다. `FULL / COMPLETE`는 원천 관측 범위이며

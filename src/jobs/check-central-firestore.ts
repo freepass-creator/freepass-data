@@ -1,9 +1,22 @@
 import { getFirestore } from 'firebase-admin/firestore';
 import { execFileSync } from 'node:child_process';
 import { getTargetFirebaseApp, resolveTargetProject } from '../infra/firebase-target.js';
+import { FIRESTORE_COLLECTIONS } from '../infra/firestore-layout.js';
 
 const projectId = resolveTargetProject();
-const collections = ['products', 'policy', 'catalog_products', 'catalog_offers', 'catalog_policies', 'projection_active'] as const;
+const canonicalCollections = [
+  FIRESTORE_COLLECTIONS.catalog.products,
+  FIRESTORE_COLLECTIONS.catalog.offers,
+  FIRESTORE_COLLECTIONS.catalog.policies
+] as const;
+const activeProjectionCollection = FIRESTORE_COLLECTIONS.projection.active;
+const collections = [
+  'products',
+  'policy',
+  ...canonicalCollections,
+  activeProjectionCollection
+] as const;
+const canonicalCollectionSet = new Set<string>(canonicalCollections);
 const useGcloud = process.argv.includes('--gcloud');
 function localAccessToken(): string {
   try {
@@ -44,8 +57,8 @@ try {
   console.log(JSON.stringify({
     projectId, credentialMode: useGcloud ? 'EXPLICIT_LOCAL_GCLOUD' : 'APPLICATION_DEFAULT', operation: 'READ_ONLY_COUNTS', counts,
     cutoverAuthorized: false,
-    status: counts.some((item) => item.collection.startsWith('catalog_') && item.count === 0) ||
-      counts.some((item) => item.collection === 'projection_active' && item.count === 0)
+    status: counts.some((item) => canonicalCollectionSet.has(item.collection) && item.count === 0) ||
+      counts.some((item) => item.collection === activeProjectionCollection && item.count === 0)
       ? 'HOLD_MISSING_CANONICAL_OR_RELEASE' : 'REQUIRES_CONSUMER_PARITY_VERIFICATION',
   }, null, 2));
 } finally {

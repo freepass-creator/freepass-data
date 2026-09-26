@@ -1,49 +1,50 @@
-import { applicationDefault, getApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import type { NormalizedCandidateRecord, RawRecord, SourceDefinition, SourceHead, SourceRun } from '../domain/source.js';
-import { canAdvanceSourceHead, isValidSourceObservation } from '../domain/source.js';
-import type { SourceStore } from '../ports/source-store.js';
+import { decideSourceHead } from '../domain/source.js';
+import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
+import { FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './firestore-layout.js';
+import { getTargetFirebaseApp } from './firebase-target.js';
 
 const C = {
-  sources: 'sources',
-  runs: 'source_runs',
-  raw: 'raw_records',
-  candidates: 'normalized_candidates',
-  lineage: 'field_lineage',
-  heads: 'source_heads'
+  sources: FIRESTORE_COLLECTIONS.source.definitions,
+  runs: FIRESTORE_COLLECTIONS.source.runs,
+  heads: FIRESTORE_COLLECTIONS.source.heads,
+  raw: FIRESTORE_COLLECTIONS.source.raw,
+  candidates: FIRESTORE_COLLECTIONS.source.candidates,
+  lineage: FIRESTORE_COLLECTIONS.source.lineage
 } as const;
 
-export class FirestoreSourceStore implements SourceStore {
+export class FirestoreSourceStore implements SourceIngestionStore {
   constructor(private readonly db: Firestore) {}
 
   async upsertSource(source: SourceDefinition) {
-    await this.db.collection(C.sources).doc(source.sourceId.replaceAll('/', '__')).set(source, { merge: true });
+    await this.db.collection(C.sources).doc(sourceFirestoreDocumentId(source.sourceId)).set(source, { merge: true });
   }
   async getSource(sourceId: string) {
-    const snap = await this.db.collection(C.sources).doc(sourceId.replaceAll('/', '__')).get();
+    const snap = await this.db.collection(C.sources).doc(sourceFirestoreDocumentId(sourceId)).get();
     return snap.exists ? snap.data() as SourceDefinition : null;
   }
   async beginRun(run: SourceRun) {
     await this.db.collection(C.runs).doc(run.runId).create(run);
   }
   async appendRaw(record: RawRecord) {
-    await this.db.collection(C.raw).doc(record.rawRecordId.replaceAll('/', '__')).create(record);
+    await this.db.collection(C.raw).doc(sourceFirestoreDocumentId(record.rawRecordId)).create(record);
   }
   async appendCandidate(record: NormalizedCandidateRecord) {
-    await this.db.collection(C.candidates).doc(record.candidateId.replaceAll('/', '__')).create(record);
+    await this.db.collection(C.candidates).doc(sourceFirestoreDocumentId(record.candidateId)).create(record);
   }
   async appendLineage(record: FieldLineageRecord) {
     await this.db.collection(C.lineage).doc(record.lineageRecordId).create(record);
   }
-  async completeRun(input: Parameters<SourceStore['completeRun']>[0]) {
+  async completeRun(input: Parameters<SourceIngestionStore['completeRun']>[0]) {
     return this.db.runTransaction(async (tx) => {
       const runRef = this.db.collection(C.runs).doc(input.runId);
       const runSnap = await tx.get(runRef);
       if (!runSnap.exists) throw new Error(`Source run not found: ${input.runId}`);
       const run = runSnap.data() as SourceRun;
 
-      const headRef = this.db.collection(C.heads).doc(run.sourceId.replaceAll('/', '__'));
+      const headRef = this.db.collection(C.heads).doc(sourceFirestoreDocumentId(run.sourceId));
       const headSnap = await tx.get(headRef);
       const currentHead = headSnap.exists ? headSnap.data() as SourceHead : null;
 
@@ -54,11 +55,12 @@ export class FirestoreSourceStore implements SourceStore {
         };
       }
 
-      const eligible = input.coverage.completeness === 'COMPLETE'
-      && isValidSourceObservation(input.observedAt);
-      const newerThanHead = canAdvanceSourceHead(input.observedAt, currentHead?.observedAt);
-      const acceptedAsHead = eligible && newerThanHead;
-      const headStatus = acceptedAsHead ? 'CURRENT' : eligible ? 'STALE' : 'INELIGIBLE';
+      const decision = decideSourceHead(
+        input.coverage,
+        input.observedAt,
+        currentHead?.observedAt
+      );
+      const { acceptedAsHead, headStatus } = decision;
 
       tx.update(runRef, {
         status: 'COMPLETED',
@@ -94,7 +96,7 @@ export class FirestoreSourceStore implements SourceStore {
       };
     });
   }
-  async failRun(input: Parameters<SourceStore['failRun']>[0]) {
+  async failRun(input: Parameters<SourceIngestionStore['failRun']>[0]) {
     await this.db.collection(C.runs).doc(input.runId).update({
       status: 'FAILED', completedAt: input.completedAt, error: input.error
     });
@@ -104,7 +106,7 @@ export class FirestoreSourceStore implements SourceStore {
     return snap.exists ? snap.data() as SourceRun : null;
   }
   async getSourceHead(sourceId: string) {
-    const snap = await this.db.collection(C.heads).doc(sourceId.replaceAll('/', '__')).get();
+    const snap = await this.db.collection(C.heads).doc(sourceFirestoreDocumentId(sourceId)).get();
     return snap.exists ? snap.data() as SourceHead : null;
   }
   async listRaw(runId: string) {
@@ -122,13 +124,5 @@ export class FirestoreSourceStore implements SourceStore {
 }
 
 export function createFirestoreSourceStore() {
-  const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
-  if (!projectId) throw new Error('FIREBASE_PROJECT_ID is required for target FreePass Data writes');
-
-  const appName = 'freepass-data-target';
-  const app = getApps().some((item) => item.name === appName)
-    ? getApp(appName)
-    : initializeApp({ credential: applicationDefault(), projectId }, appName);
-
-  return new FirestoreSourceStore(getFirestore(app));
+  return new FirestoreSourceStore(getFirestore(getTargetFirebaseApp()));
 }

@@ -86,6 +86,85 @@ for (const file of walk(srcRoot)) {
   }
 }
 
+const firebaseTargetOwner = path.join(srcRoot, 'infra', 'firebase-target.ts');
+
+for (const file of walk(srcRoot)) {
+  const layer = layerOf(file);
+  if (!new Set(['infra', 'api', 'jobs']).has(layer)) continue;
+  if (path.resolve(file) === path.resolve(firebaseTargetOwner)) continue;
+  const text = fs.readFileSync(file, 'utf8');
+  if (text.includes('firebase-admin/app')) {
+    violations.push({
+      file: path.relative(repoRoot, file),
+      layer,
+      import: 'firebase-admin/app',
+      reason: 'Central FreePass Data Firebase app initialization belongs only in src/infra/firebase-target.ts'
+    });
+  }
+}
+
+const firestoreLayoutOwner = path.join(srcRoot, 'infra', 'firestore-layout.ts');
+const firestoreLayoutText = fs.readFileSync(firestoreLayoutOwner, 'utf8');
+const firestorePhysicalNames = [
+  ...firestoreLayoutText.matchAll(/:\\s*'([^']+)'/g)
+]
+  .map((match) => match[1])
+  .filter((value) => value !== '__');
+
+const physicalLayoutLayers = new Set(['infra', 'api', 'jobs', 'adapters', 'migration']);
+
+for (const file of walk(srcRoot)) {
+  if (path.resolve(file) === path.resolve(firestoreLayoutOwner)) continue;
+  const layer = layerOf(file);
+  if (!physicalLayoutLayers.has(layer)) continue;
+  const text = fs.readFileSync(file, 'utf8');
+  for (const collectionName of firestorePhysicalNames) {
+    const literal = new RegExp(`['"]${collectionName}['"]`);
+    if (literal.test(text)) {
+      violations.push({
+        file: path.relative(repoRoot, file),
+        layer,
+        import: collectionName,
+        reason: 'FreePass Data Firestore physical layout must come from src/infra/firestore-layout.ts'
+      });
+    }
+  }
+}
+
+for (const file of walk(srcRoot)) {
+  const text = fs.readFileSync(file, 'utf8');
+  if (/\bSourceStore\b/.test(text)) {
+    violations.push({
+      file: path.relative(repoRoot, file),
+      layer: layerOf(file),
+      import: 'SourceStore',
+      reason: 'Use the responsibility-specific SourceIngestionStore; do not recreate the ambiguous source repository port'
+    });
+  }
+  if (/\.sourceFirestoreDocumentId\s*\(/.test(text)) {
+    violations.push({
+      file: path.relative(repoRoot, file),
+      layer: layerOf(file),
+      import: '.sourceFirestoreDocumentId(',
+      reason: 'sourceFirestoreDocumentId is a shared function, not an object method'
+    });
+  }
+}
+
+for (const forbiddenDataContract of [
+  'contracts/freepass-quote-v2.schema.json',
+  'contracts/put-issued-quote-command-v1.schema.json'
+]) {
+  if (fs.existsSync(path.join(repoRoot, forbiddenDataContract))) {
+    violations.push({
+      file: forbiddenDataContract,
+      layer: 'contract',
+      import: forbiddenDataContract,
+      reason: 'Quote issuance/calculation contracts belong to the FreePass Estimate product boundary, not FreePass Data'
+    });
+  }
+}
+
 if (violations.length) {
   console.error('Architecture boundary violations detected:');
   for (const item of violations) {

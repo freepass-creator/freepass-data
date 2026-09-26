@@ -113,16 +113,16 @@ export const DATA_ASSETS: readonly DataAssetDefinition[] = [
   },
   {
     assetId: 'catalog-canonical', domainId: 'catalog', displayName: 'FreePass Data Canonical Catalog',
-    aliases: ['catalog_products', 'catalog_offers', 'catalog_policies', '정본상품'], kind: 'FIRESTORE_COLLECTION',
-    system: 'firebase:freepasserp5', locator: 'catalog_*', ownership: 'FREEPASS_DATA', authority: 'CANONICAL',
+    aliases: ['canonical catalog', 'canonical product', 'canonical offer', 'canonical policy', '정본상품'], kind: 'FIRESTORE_COLLECTION',
+    system: 'firebase:freepasserp5', locator: 'logical:catalog-canonical', ownership: 'FREEPASS_DATA', authority: 'CANONICAL',
     keyDescription: 'entity type + stable entity ID + revision', sensitivity: 'INTERNAL', availability: 'HOLD',
     freshnessPolicy: 'reviewed source head 또는 승인 command revision', contractRef: 'contracts/catalog-v1.schema.json',
     consumers: ['projection-builders', 'freepass-data-console'], notes: ['2026-09-21 observed empty; re-read before use']
   },
   {
     assetId: 'erp-public-release', domainId: 'publication', displayName: 'ERP 공개 Catalog ACTIVE Release',
-    aliases: ['projection_active', 'ERP release', '공개카탈로그'], kind: 'PROJECTION', system: 'firebase:freepasserp5',
-    locator: 'projection_active/erp-public', ownership: 'FREEPASS_DATA', authority: 'PROJECTION',
+    aliases: ['active catalog release', 'ERP release', '공개카탈로그'], kind: 'PROJECTION', system: 'firebase:freepasserp5',
+    locator: 'projection:erp-public/active', ownership: 'FREEPASS_DATA', authority: 'PROJECTION',
     keyDescription: 'projection + release ID + manifest/data digest', sensitivity: 'PUBLIC', availability: 'HOLD',
     freshnessPolicy: 'ACTIVE release metadata와 consumer receipt로 확인', contractRef: 'docs/PROJECTION-RELEASE-EVIDENCE.md',
     consumers: ['ERP.com', 'ERP white-labels'], notes: ['empty release is rejected']

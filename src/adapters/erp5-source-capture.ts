@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
 import { mapErp5Product, ERP5_PRODUCT_MAPPER_VERSION } from './erp5-product-mapping.js';
+import { orderedJsonDigest } from '../shared/stable-digest.js';
 
 export const ERP5_DOCUMENTS = 'projects/freepasserp5/databases/(default)/documents';
 const collections = ['products', 'policy'] as const;
@@ -8,7 +8,7 @@ type ObjectValue = Record<string, unknown>;
 type Rpc = (method: 'beginTransaction' | 'runQuery' | 'runAggregationQuery' | 'rollback', body: ObjectValue) => Promise<unknown>;
 const object = (x: unknown): x is ObjectValue => !!x && typeof x === 'object' && !Array.isArray(x);
 function fail(code: string): never { throw new Error(code); }
-const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const hash = orderedJsonDigest;
 const time = (x: unknown): x is string => typeof x === 'string' && /^\d{4}-\d{2}-\d{2}T.*Z$/.test(x) && Number.isFinite(Date.parse(x));
 
 export type Erp5SourceCapture = {

@@ -1,4 +1,9 @@
 import { getTargetFirebaseApp } from './firebase-target.js';
+import { FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './firestore-layout.js';
+import {
+  decodeFirestoreDocument,
+  decodeFirestoreIdentityDocument
+} from './firestore-document.js';
 import { getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type {
   AuditEvent, CommandReceipt, ErpPublicProduct, Offer, OutboxEvent, Policy,
@@ -35,38 +40,47 @@ import type {
   ProjectionReleaseManifest
 } from '../domain/projection-evidence.js';
 import { assertProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
+import {
+  readFirestoreActiveProjection,
+  readFirestoreActiveProjectionEvidence,
+  readFirestoreProjectionLineage,
+  readFirestoreProjectionManifest
+} from './firestore-projection-evidence.js';
 
 const C = {
-  vehicleModels: 'catalog_vehicle_models',
-  vehicleAssets: 'catalog_vehicle_assets',
-  products: 'catalog_products',
-  offers: 'catalog_offers',
-  policies: 'catalog_policies',
-  receipts: 'command_receipts',
-  canonicalizationReceipts: 'canonicalization_receipts',
-  manualCatalogEntryReceipts: 'manual_catalog_entry_receipts',
-  reviewedSourceChangeReceipts: 'reviewed_source_change_receipts',
-  writerOwnership: 'writer_ownership',
-  writerOwnershipTransferReceipts: 'writer_ownership_transfer_receipts',
-  sources: 'sources',
-  sourceRuns: 'source_runs',
-  sourceHeads: 'source_heads',
-  raw: 'raw_records',
-  candidates: 'normalized_candidates',
-  lineage: 'field_lineage',
-  sourceBindings: 'canonical_source_bindings',
-  revisions: 'catalog_entity_revisions',
-  audits: 'audit_events',
-  outbox: 'outbox_events',
-  releases: 'projection_releases',
-  releaseManifests: 'projection_release_manifests',
-  projectionLineage: 'projection_field_lineage',
-  projectionDeliveryReceipts: 'projection_delivery_receipts',
-  activeReleases: 'projection_active'
+  vehicleModels: FIRESTORE_COLLECTIONS.catalog.vehicleModels,
+  vehicleAssets: FIRESTORE_COLLECTIONS.catalog.vehicleAssets,
+  products: FIRESTORE_COLLECTIONS.catalog.products,
+  offers: FIRESTORE_COLLECTIONS.catalog.offers,
+  policies: FIRESTORE_COLLECTIONS.catalog.policies,
+  receipts: FIRESTORE_COLLECTIONS.commands.receipts,
+  canonicalizationReceipts: FIRESTORE_COLLECTIONS.commands.canonicalizationReceipts,
+  manualCatalogEntryReceipts: FIRESTORE_COLLECTIONS.commands.manualCatalogEntryReceipts,
+  reviewedSourceChangeReceipts: FIRESTORE_COLLECTIONS.commands.reviewedSourceChangeReceipts,
+  writerOwnership: FIRESTORE_COLLECTIONS.ownership.writer,
+  writerOwnershipTransferReceipts: FIRESTORE_COLLECTIONS.ownership.transferReceipts,
+  sources: FIRESTORE_COLLECTIONS.source.definitions,
+  sourceRuns: FIRESTORE_COLLECTIONS.source.runs,
+  sourceHeads: FIRESTORE_COLLECTIONS.source.heads,
+  raw: FIRESTORE_COLLECTIONS.source.raw,
+  candidates: FIRESTORE_COLLECTIONS.source.candidates,
+  lineage: FIRESTORE_COLLECTIONS.source.lineage,
+  sourceBindings: FIRESTORE_COLLECTIONS.catalog.sourceBindings,
+  revisions: FIRESTORE_COLLECTIONS.catalog.revisions,
+  audits: FIRESTORE_COLLECTIONS.evidence.audits,
+  outbox: FIRESTORE_COLLECTIONS.evidence.outbox,
+  releases: FIRESTORE_COLLECTIONS.projection.releases,
+  releaseManifests: FIRESTORE_COLLECTIONS.projection.manifests,
+  projectionLineage: FIRESTORE_COLLECTIONS.projection.lineage,
+  projectionDeliveryReceipts: FIRESTORE_COLLECTIONS.projection.deliveryReceipts,
+  activeReleases: FIRESTORE_COLLECTIONS.projection.active
 } as const;
 
 const data = <T>(snap: FirebaseFirestore.DocumentSnapshot) =>
-  snap.exists ? ({ id: snap.id, ...snap.data() } as T) : null;
+  decodeFirestoreDocument<T>(snap);
+
+const catalogEntity = <T>(snap: FirebaseFirestore.DocumentSnapshot) =>
+  decodeFirestoreIdentityDocument<T>(snap, 'id');
 
 export class FirestoreDataStore implements CatalogStore, ProjectionStore, OutboxStore {
   constructor(private readonly db: Firestore) {}
@@ -75,12 +89,12 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     return this.db.runTransaction(async (native: Transaction) => {
       const tx: CatalogTransaction = {
         getVehicleModel: async (id) =>
-          data<VehicleModel>(await native.get(this.db.collection(C.vehicleModels).doc(id))),
+          catalogEntity<VehicleModel>(await native.get(this.db.collection(C.vehicleModels).doc(id))),
         putVehicleModel: async (model) => {
           native.create(this.db.collection(C.vehicleModels).doc(model.id), model);
         },
         getVehicleAsset: async (id) =>
-          data<VehicleAsset>(await native.get(this.db.collection(C.vehicleAssets).doc(id))),
+          catalogEntity<VehicleAsset>(await native.get(this.db.collection(C.vehicleAssets).doc(id))),
         putVehicleAsset: async (asset) => {
           native.create(this.db.collection(C.vehicleAssets).doc(asset.id), asset);
         },
@@ -88,20 +102,20 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
           native.set(this.db.collection(C.vehicleAssets).doc(asset.id), asset);
         },
         getProduct: async (id) =>
-          data<Product>(await native.get(this.db.collection(C.products).doc(id))),
+          catalogEntity<Product>(await native.get(this.db.collection(C.products).doc(id))),
         putProduct: async (product) => {
           native.create(this.db.collection(C.products).doc(product.id), product);
         },
-        getOffer: async (id) => data<Offer>(await native.get(this.db.collection(C.offers).doc(id))),
+        getOffer: async (id) => catalogEntity<Offer>(await native.get(this.db.collection(C.offers).doc(id))),
         putOffer: async (offer) => { native.set(this.db.collection(C.offers).doc(offer.id), offer); },
 
         getSourceDefinition: async (sourceId) =>
           data<SourceDefinition>(
-            await native.get(this.db.collection(C.sources).doc(sourceId.replaceAll('/', '__')))
+            await native.get(this.db.collection(C.sources).doc(sourceFirestoreDocumentId(sourceId)))
           ),
         putSourceDefinition: async (source) => {
           native.create(
-            this.db.collection(C.sources).doc(source.sourceId.replaceAll('/', '__')),
+            this.db.collection(C.sources).doc(sourceFirestoreDocumentId(source.sourceId)),
             source
           );
         },
@@ -112,31 +126,31 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         },
         getSourceHead: async (sourceId) =>
           data<SourceHead>(
-            await native.get(this.db.collection(C.sourceHeads).doc(sourceId.replaceAll('/', '__')))
+            await native.get(this.db.collection(C.sourceHeads).doc(sourceFirestoreDocumentId(sourceId)))
           ),
         putSourceHead: async (head) => {
           native.create(
-            this.db.collection(C.sourceHeads).doc(head.sourceId.replaceAll('/', '__')),
+            this.db.collection(C.sourceHeads).doc(sourceFirestoreDocumentId(head.sourceId)),
             head
           );
         },
         getRawRecord: async (rawRecordId) =>
           data<RawRecord>(
-            await native.get(this.db.collection(C.raw).doc(rawRecordId.replaceAll('/', '__')))
+            await native.get(this.db.collection(C.raw).doc(sourceFirestoreDocumentId(rawRecordId)))
           ),
         putRawRecord: async (record) => {
           native.create(
-            this.db.collection(C.raw).doc(record.rawRecordId.replaceAll('/', '__')),
+            this.db.collection(C.raw).doc(sourceFirestoreDocumentId(record.rawRecordId)),
             record
           );
         },
         getCandidate: async (candidateId) =>
           data<NormalizedCandidateRecord>(
-            await native.get(this.db.collection(C.candidates).doc(candidateId.replaceAll('/', '__')))
+            await native.get(this.db.collection(C.candidates).doc(sourceFirestoreDocumentId(candidateId)))
           ),
         putCandidate: async (record) => {
           native.create(
-            this.db.collection(C.candidates).doc(record.candidateId.replaceAll('/', '__')),
+            this.db.collection(C.candidates).doc(sourceFirestoreDocumentId(record.candidateId)),
             record
           );
         },
@@ -243,18 +257,18 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   }
 
   async getVehicleModel(id: string) {
-    return data<VehicleModel>(await this.db.collection(C.vehicleModels).doc(id).get());
+    return catalogEntity<VehicleModel>(await this.db.collection(C.vehicleModels).doc(id).get());
   }
   async getVehicleAsset(id: string) {
-    return data<VehicleAsset>(await this.db.collection(C.vehicleAssets).doc(id).get());
+    return catalogEntity<VehicleAsset>(await this.db.collection(C.vehicleAssets).doc(id).get());
   }
   async getProduct(id: string) {
-    return data<Product>(await this.db.collection(C.products).doc(id).get());
+    return catalogEntity<Product>(await this.db.collection(C.products).doc(id).get());
   }
-  async getOffer(id: string) { return data<Offer>(await this.db.collection(C.offers).doc(id).get()); }
+  async getOffer(id: string) { return catalogEntity<Offer>(await this.db.collection(C.offers).doc(id).get()); }
   async getSourceDefinition(sourceId: string) {
     return data<SourceDefinition>(
-      await this.db.collection(C.sources).doc(sourceId.replaceAll('/', '__')).get()
+      await this.db.collection(C.sources).doc(sourceFirestoreDocumentId(sourceId)).get()
     );
   }
   async getSourceRun(runId: string) {
@@ -262,12 +276,12 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   }
   async getSourceHead(sourceId: string) {
     return data<SourceHead>(
-      await this.db.collection(C.sourceHeads).doc(sourceId.replaceAll('/', '__')).get()
+      await this.db.collection(C.sourceHeads).doc(sourceFirestoreDocumentId(sourceId)).get()
     );
   }
   async getRawRecord(rawRecordId: string) {
     return data<RawRecord>(
-      await this.db.collection(C.raw).doc(rawRecordId.replaceAll('/', '__')).get()
+      await this.db.collection(C.raw).doc(sourceFirestoreDocumentId(rawRecordId)).get()
     );
   }
   async listRawRecordsByRun(runId: string) {
@@ -276,7 +290,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   }
   async getCandidate(candidateId: string) {
     return data<NormalizedCandidateRecord>(
-      await this.db.collection(C.candidates).doc(candidateId.replaceAll('/', '__')).get()
+      await this.db.collection(C.candidates).doc(sourceFirestoreDocumentId(candidateId)).get()
     );
   }
   async listCandidatesByRun(runId: string) {
@@ -334,7 +348,12 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async listRevisionHistory() {
     const snap = await this.db.collection(C.revisions).get();
     return snap.docs
-      .map((doc) => doc.data() as EntityRevisionRecord)
+      .map((doc) =>
+        decodeFirestoreIdentityDocument<EntityRevisionRecord>(
+          doc,
+          'revisionRecordId'
+        )!
+      )
       .sort((a, b) =>
         a.entityType.localeCompare(b.entityType) ||
         a.entityId.localeCompare(b.entityId) ||
@@ -344,7 +363,9 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
 
   private async all<T>(collection: string): Promise<T[]> {
     const snap = await this.db.collection(collection).get();
-    return snap.docs.map((x) => ({ id: x.id, ...x.data() }) as T);
+    return snap.docs.map((doc) =>
+      decodeFirestoreIdentityDocument<T>(doc, 'id')!
+    );
   }
   async listVehicleModels() { return this.all<VehicleModel>(C.vehicleModels); }
   async listVehicleAssets() { return this.all<VehicleAsset>(C.vehicleAssets); }
@@ -464,58 +485,16 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     });
   }
   async getActive(projectionId: string) {
-    const active = await this.db.collection(C.activeReleases).doc(projectionId).get();
-    if (!active.exists) return null;
-    return data<ProjectionRelease<ErpPublicProduct>>(
-      await this.db.collection(C.releases).doc(active.get('releaseId') as string).get()
-    );
+    return readFirestoreActiveProjection(this.db, projectionId);
   }
   async getActiveEvidenceSnapshot(projectionId: string) {
-    const activeRef = this.db.collection(C.activeReleases).doc(projectionId);
-
-    return this.db.runTransaction(async (tx) => {
-      const activeSnap = await tx.get(activeRef);
-      if (!activeSnap.exists) {
-        return {
-          projectionId,
-          release: null,
-          manifest: null,
-          lineage: [],
-          consistency: 'ATOMIC' as const
-        };
-      }
-
-      const releaseId = activeSnap.get('releaseId') as string;
-      const releaseRef = this.db.collection(C.releases).doc(releaseId);
-      const manifestRef = this.db.collection(C.releaseManifests).doc(releaseId);
-      const evidenceQuery = this.db.collection(C.projectionLineage)
-        .where('releaseId', '==', releaseId);
-
-      const releaseSnap = await tx.get(releaseRef);
-      const manifestSnap = await tx.get(manifestRef);
-      const evidenceSnap = await tx.get(evidenceQuery);
-
-      return {
-        projectionId,
-        release: data<ProjectionRelease<ErpPublicProduct>>(releaseSnap),
-        manifest: data<ProjectionReleaseManifest>(manifestSnap),
-        lineage: evidenceSnap.docs.map(
-          (doc) => doc.data() as ProjectionFieldLineageRecord
-        ),
-        consistency: 'ATOMIC' as const
-      };
-    });
+    return readFirestoreActiveProjectionEvidence(this.db, projectionId);
   }
   async getManifest(releaseId: string) {
-    return data<ProjectionReleaseManifest>(
-      await this.db.collection(C.releaseManifests).doc(releaseId).get()
-    );
+    return readFirestoreProjectionManifest(this.db, releaseId);
   }
   async listProjectionLineage(releaseId: string) {
-    const snap = await this.db.collection(C.projectionLineage)
-      .where('releaseId', '==', releaseId)
-      .get();
-    return snap.docs.map((doc) => doc.data() as ProjectionFieldLineageRecord);
+    return readFirestoreProjectionLineage(this.db, releaseId);
   }
   async getDeliveryReceipt(eventId: string) {
     return data<ProjectionDeliveryReceipt>(

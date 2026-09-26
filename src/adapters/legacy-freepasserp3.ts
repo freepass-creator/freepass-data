@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
 import { applicationDefault, getApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import type { SourceCheckpoint, SourceCoverage } from '../domain/source.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 export type LegacyProductRaw = {
   sourceId: 'freepasserp3/firestore/products';
@@ -17,22 +17,9 @@ export type LegacyProductSnapshot = {
   records: LegacyProductRaw[];
 };
 
-function stable(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stable);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, child]) => [key, stable(child)])
-    );
-  }
-  return value;
-}
-
 function fingerprint(value: unknown) {
-  return createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
+  return stableDigest(value);
 }
-
 function legacyApp() {
   const name = 'freepass-data-legacy-freepasserp3';
   if (getApps().some((app) => app.name === name)) return getApp(name);

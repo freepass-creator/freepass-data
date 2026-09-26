@@ -42,6 +42,17 @@ Latest handoff commit when this file was created:
 - Production Firebase binding, IAM mutation, writer cutover, deployment, schedules and live sheet writes remain separately authorized operations.
 - Do not create a replacement repository or redirect this project to jpkerp5.
 
+## 2.1 FreePass Data implementation invariants
+
+These are project-specific data-platform boundaries, not company-wide development-governance rules.
+
+- All central FreePass Data Firebase/Firestore access must resolve the target through `src/infra/firebase-target.ts`; do not initialize a second target app path.
+- Source evidence physical collection names and source document-ID encoding come only from `src/infra/firestore-layout.ts`.
+- Source-run head promotion semantics come from the Domain source policy (`decideSourceHead`); adapters must not reimplement CURRENT/STALE/INELIGIBLE decisions.
+- `SourceIngestionStore` owns source-run ingestion lifecycle. `CatalogStore` owns Canonical transactional mutation. Do not collapse them into competing repositories or add a third source persistence path.
+- FreePass Data may publish Estimate master-data facts/projections, but pricing/calculation/issued-quote engine contracts remain in the Estimate product boundary.
+- Preview UI is reference material; FreePass Data is a data platform, not a second product UI implementation.
+
 ## 3. Evidence discipline
 
 Keep these states separate:
