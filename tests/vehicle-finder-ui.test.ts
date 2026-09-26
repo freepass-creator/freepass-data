@@ -185,6 +185,23 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).not.toMatch(/revalidateVehicleSelectionReceipt|assertVehicleSelectionReceipt/);
   });
 
+  it('traps mobile filter focus and restores focus to the invoking control', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    expect(source).toMatch(/function filterFocusableElements/);
+    expect(source).toMatch(/event\.key === 'Tab'/);
+    expect(source).toMatch(/event\.shiftKey/);
+    expect(source).toMatch(/restoreFocus: true/);
+    expect(source).toMatch(/filterToggle\.focus/);
+  });
+
+  it('labels detail and group disclosure semantics for assistive technology', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    expect(source).toMatch(/detail\.setAttribute\('role', 'region'\)/);
+    expect(source).toMatch(/detail\.setAttribute\('aria-labelledby'/);
+    expect(source).toMatch(/group\.candidateCount \+ '개 후보'/);
+    expect(source).toMatch(/후보 펼치기/);
+  });
+
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
     const css = await readFile(cssPath, 'utf8');
     expect(css).toMatch(/grid-template-columns:3fr 7fr/);
