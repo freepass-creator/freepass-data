@@ -399,6 +399,110 @@ describe('common vehicle selector', () => {
     expect(partial.guidance.resolvedRecordId).toBeNull();
   });
 
+  it('keeps UNKNOWN-compatible candidates without exposing unproven facet options', () => {
+    const rows = [
+      record('known-2021-noblesse', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        trim: { id: 'trim_noblesse_2021', label: '노블레스' },
+      }),
+      record('unknown-year-signature', {
+        lifecycle: 'HISTORICAL',
+        identityStatus: 'PARTIAL',
+        modelYear: { id: null, label: null, value: null },
+        trim: { id: 'trim_signature_unknown', label: '시그니처' },
+      }),
+      record('known-2024-signature', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        trim: { id: 'trim_signature_2024', label: '시그니처' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      selection: {
+        model: '쏘렌토',
+        modelYear: 2021,
+        powertrain: '하이브리드',
+      },
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual([
+      'known-2021-noblesse',
+      'unknown-year-signature',
+    ]);
+    expect(result.facets.trim.map((x) => x.label)).toEqual(['노블레스']);
+    expect(result.guidance.ambiguousAxes).not.toContain('trim');
+    expect(result.guidance.resolutionStatus).toBe('PARTIAL_UNKNOWN');
+  });
+
+  it('widens evidence-backed facet options when a prior condition is removed', () => {
+    const rows = [
+      record('year-2021-noblesse', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2021', label: '2021년형', value: 2021 },
+        trim: { id: 'trim_noblesse_2021', label: '노블레스' },
+      }),
+      record('year-2024-signature', {
+        lifecycle: 'HISTORICAL',
+        modelYear: { id: 'my_2024', label: '2024년형', value: 2024 },
+        trim: { id: 'trim_signature_2024', label: '시그니처' },
+      }),
+    ];
+
+    const narrowed = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      selection: {
+        model: '쏘렌토',
+        modelYear: 2021,
+        powertrain: '하이브리드',
+      },
+    });
+    expect(narrowed.facets.trim.map((x) => x.label)).toEqual(['노블레스']);
+
+    const widened = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      selection: {
+        model: '쏘렌토',
+        powertrain: '하이브리드',
+      },
+    });
+    expect(widened.facets.trim.map((x) => x.label)).toEqual([
+      '노블레스',
+      '시그니처',
+    ]);
+    expect(widened.guidance.ambiguousAxes).toContain('modelYear');
+    expect(widened.guidance.ambiguousAxes).toContain('trim');
+  });
+
+  it('does not use unresolved free-text evidence to manufacture filter choices', () => {
+    const rows = [
+      record('known-seven-noblesse', {
+        lifecycle: 'HISTORICAL',
+        seats: { id: null, label: '7인승', value: 7 },
+        trim: { id: 'trim_noblesse_7', label: '노블레스' },
+      }),
+      record('unknown-seats-signature', {
+        lifecycle: 'HISTORICAL',
+        identityStatus: 'PARTIAL',
+        seats: { id: null, label: null, value: null },
+        trim: { id: 'trim_signature_unknown', label: '시그니처' },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'USED_CAR',
+      searchText: '쏘렌토 7인승',
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual([
+      'known-seven-noblesse',
+      'unknown-seats-signature',
+    ]);
+    expect(result.facets.trim.map((x) => x.label)).toEqual(['노블레스']);
+  });
+
   it('reports OPEN before the user supplies any search criteria', () => {
     const result = selectVehicles([
       record('one'),
