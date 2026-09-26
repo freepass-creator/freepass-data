@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  selectVehiclesFromNewcarMaster,
+  selectVehiclesFromUsedcarMaster,
   selectorRecordsFromNewcarMaster,
   selectorRecordsFromUsedcarMaster,
 } from '../src/application/vehicle-selector-adapters.js';
@@ -261,6 +263,91 @@ describe('vehicle selector adapters', () => {
       (group) => group.scope === 'UNRESOLVED_IDENTITY'
     )).toBe(true);
     expect(result.groups.every((group) => group.candidateCount === 1)).toBe(true);
+  });
+
+  it('provides one official full-selector entrypoint for Estimate new-car master', () => {
+    const signature: EstimateNewcarMasterRecord = {
+      ...newcar,
+      productId: 'new_sorento_hybrid_signature',
+      trimId: 'trim_signature_2027',
+      trimName: '시그니처',
+    };
+
+    const result = selectVehiclesFromNewcarMaster(
+      [newcar, signature],
+      {
+        searchText: '쏘렌토',
+        selection: { powertrain: '하이브리드' },
+      }
+    );
+
+    expect(result.mode).toBe('NEW_CAR');
+    expect(result.candidates.map((item) => item.record.recordId)).toEqual([
+      'new_sorento_hybrid_noblesse',
+      'new_sorento_hybrid_signature',
+    ]);
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]).toMatchObject({
+      scope: 'MODEL',
+      candidateCount: 2,
+    });
+    expect(result.facets.trim.map((item) => item.label)).toEqual([
+      '노블레스',
+      '시그니처',
+    ]);
+  });
+
+  it('provides the same full-selector contract for used-car master consumption', () => {
+    const signature: UsedcarMasterRecord = {
+      ...usedcar,
+      recordId: 'used_sorento_hybrid_signature_2021',
+      trimId: 'trim_signature_2021',
+      trimName: '시그니처',
+    };
+
+    const result = selectVehiclesFromUsedcarMaster(
+      [usedcar, signature],
+      {
+        searchText: '쏘렌토',
+        selection: { modelYear: 2021 },
+      }
+    );
+
+    expect(result.mode).toBe('USED_CAR');
+    expect(result.candidates).toHaveLength(2);
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]).toMatchObject({
+      scope: 'MODEL_GENERATION',
+      candidateCount: 2,
+    });
+  });
+
+  it('keeps master wrappers semantically identical to direct selector execution', () => {
+    const newDirect = selectVehicles(
+      selectorRecordsFromNewcarMaster([newcar]),
+      {
+        mode: 'NEW_CAR',
+        selection: { trim: '노블레스' },
+      }
+    );
+    const newWrapped = selectVehiclesFromNewcarMaster(
+      [newcar],
+      { selection: { trim: '노블레스' } }
+    );
+    expect(newWrapped).toEqual(newDirect);
+
+    const usedDirect = selectVehicles(
+      selectorRecordsFromUsedcarMaster([usedcar]),
+      {
+        mode: 'USED_CAR',
+        selection: { trim: '노블레스' },
+      }
+    );
+    const usedWrapped = selectVehiclesFromUsedcarMaster(
+      [usedcar],
+      { selection: { trim: '노블레스' } }
+    );
+    expect(usedWrapped).toEqual(usedDirect);
   });
 
   it('keeps historical year available only in used-car mode data', () => {
