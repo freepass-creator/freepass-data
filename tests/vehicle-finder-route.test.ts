@@ -6,7 +6,7 @@ async function freePort() {
   const server = net.createServer();
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
+    server.listen(0, '127.0.0.1', () => resolve(undefined));
   });
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('NO_TEST_PORT');
@@ -15,7 +15,7 @@ async function freePort() {
   return port;
 }
 
-async function waitFor(url, timeoutMs = 10000) {
+async function waitFor(url: string, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
