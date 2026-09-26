@@ -197,21 +197,100 @@ describe('common vehicle selector', () => {
     expect(result.guidance.resolvedRecordId).toBeNull();
   });
 
-  it('never resolves a record when free-text only partially matches the request', () => {
-    const result = selectVehicles([
+  it('narrows free-text candidates as more known facts are supplied', () => {
+    const rows = [
+      record('hybrid'),
+      record('gasoline', {
+        powertrain: { id: 'pt_gasoline', label: '2.5 가솔린 터보' },
+        fuelType: { id: null, label: 'GASOLINE' },
+        aliases: ['MQ4', '쏘렌토 가솔린'],
+      }),
+    ];
+
+    expect(selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토',
+    }).candidates.map((x) => x.record.recordId)).toEqual([
+      'gasoline',
+      'hybrid',
+    ]);
+
+    expect(selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토 하이브리드',
+    }).candidates.map((x) => x.record.recordId)).toEqual(['hybrid']);
+  });
+
+  it('rejects candidates that contradict recognized free-text facts', () => {
+    const rows = [
       record('gasoline-five-seat', {
         powertrain: { id: 'pt_gasoline', label: '2.5 가솔린 터보' },
         fuelType: { id: null, label: 'GASOLINE' },
         seats: { id: null, label: '5인승', value: 5 },
+        aliases: ['쏘렌토 가솔린'],
       }),
-    ], {
+      record('diesel-seven-seat', {
+        powertrain: { id: 'pt_diesel', label: '2.2 디젤' },
+        fuelType: { id: null, label: 'DIESEL' },
+        seats: { id: null, label: '7인승', value: 7 },
+        aliases: ['쏘렌토 디젤'],
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
       mode: 'NEW_CAR',
       searchText: '쏘렌토 7인승 디젤',
     });
 
-    expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]?.selectable).toBe(false);
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual([
+      'diesel-seven-seat',
+    ]);
+    expect(result.guidance.resolvedRecordId).toBe('diesel-seven-seat');
+  });
+
+  it('keeps a candidate when a recognized free-text fact is unknown on that record', () => {
+    const rows = [
+      record('known-seven-seat', {
+        seats: { id: null, label: '7인승', value: 7 },
+      }),
+      record('unknown-seats', {
+        seats: { id: null, label: null, value: null },
+      }),
+      record('known-five-seat', {
+        seats: { id: null, label: '5인승', value: 5 },
+      }),
+    ];
+
+    const result = selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '쏘렌토 7인승',
+    });
+
+    expect(result.candidates.map((x) => x.record.recordId)).toEqual([
+      'known-seven-seat',
+      'unknown-seats',
+    ]);
+    expect(result.candidates.find((x) => x.record.recordId === 'unknown-seats')?.selectable)
+      .toBe(false);
     expect(result.guidance.resolvedRecordId).toBeNull();
+  });
+
+  it('supports whitespace-insensitive Korean free-text without fuzzy typo invention', () => {
+    const rows = [
+      record('the-new', {
+        model: { id: 'model_the_new_sorento', label: '더 뉴 쏘렌토' },
+      }),
+    ];
+
+    expect(selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '더뉴쏘렌토',
+    }).candidates.map((x) => x.record.recordId)).toEqual(['the-new']);
+
+    expect(selectVehicles(rows, {
+      mode: 'NEW_CAR',
+      searchText: '쏘랜토',
+    }).candidates).toHaveLength(0);
   });
 
   it('keeps UX presets separate from selector semantics', () => {

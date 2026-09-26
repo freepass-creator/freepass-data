@@ -211,29 +211,6 @@ function toSelectorRecord(record: UsedcarMasterRecord): VehicleSelectorRecord {
   };
 }
 
-function searchTextCoverage(record: UsedcarMasterRecord, searchText: string | null | undefined) {
-  const normalized = (value: string) =>
-    value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
-  const tokens = normalized(searchText ?? '').split(' ').filter(Boolean);
-  if (!tokens.length) return { matched: false, partial: false };
-
-  const haystack = normalized([
-    record.maker,
-    record.model,
-    record.generationName ?? '',
-    record.phaseName ?? '',
-    record.modelYear == null ? '' : String(record.modelYear),
-    record.powertrainName ?? '',
-    record.trimName ?? '',
-    record.configuration.fuelType ?? '',
-    record.configuration.drivetrain ?? '',
-    record.configuration.seats == null ? '' : String(record.configuration.seats),
-    ...record.aliases,
-  ].join(' '));
-  const count = tokens.filter((token) => haystack.includes(token)).length;
-  return { matched: count > 0, partial: count > 0 && count < tokens.length };
-}
-
 export function searchUsedcarMaster(
   records: readonly UsedcarMasterRecord[],
   query: UsedcarMasterQuery
@@ -255,6 +232,8 @@ export function searchUsedcarMaster(
   if (query.trim !== undefined) selection.trim = query.trim;
 
   const byId = new Map(records.map((record) => [record.recordId, record]));
+  const hasSearchText =
+    typeof query.searchText === 'string' && Boolean(query.searchText.trim());
   const result = selectVehicles(
     records.map(toSelectorRecord),
     {
@@ -267,17 +246,18 @@ export function searchUsedcarMaster(
 
   return result.candidates.map((candidate) => {
     const record = byId.get(candidate.record.recordId)!;
-    const search = searchTextCoverage(record, query.searchText);
     return {
       record,
       score: candidate.score,
       matchedFields: [
         ...candidate.matchedAxes,
-        ...(search.matched ? ['searchText'] : []),
+        ...(hasSearchText && candidate.search.matchedTokens > 0
+          ? ['searchText']
+          : []),
       ],
       unresolvedFields: [
         ...candidate.unresolvedAxes,
-        ...(search.partial ? ['searchText'] : []),
+        ...(candidate.search.unresolvedTokens > 0 ? ['searchText'] : []),
       ],
     };
   });
