@@ -17,19 +17,26 @@ function attrInteger(node: VehicleMasterNode | null, key: string) {
   return typeof value === 'number' && Number.isInteger(value) ? value : null;
 }
 
-function lifecycle(status: VehicleMasterNode['status']): UsedcarMasterLifecycleStatus {
-  if (status === 'ACTIVE') return 'CURRENT';
-  if (status === 'HISTORICAL') return 'HISTORICAL';
-  if (status === 'DISCONTINUED') return 'DISCONTINUED';
-  return 'HOLD';
+function lifecycle(nodes: Array<VehicleMasterNode | null>): UsedcarMasterLifecycleStatus {
+  if (nodes.some((node) => !node || node.status === 'HOLD')) return 'HOLD';
+
+  const statuses = nodes.map((node) => node!.status);
+  if (statuses.includes('DISCONTINUED')) return 'DISCONTINUED';
+  if (statuses.includes('HISTORICAL')) return 'HISTORICAL';
+  return 'CURRENT';
 }
 
 function identityStatus(
   ids: Array<string | null>,
+  requiredRefs: Array<{ refId: string | null; node: VehicleMasterNode | null }>,
   trimStatus: VehicleMasterNode['status'],
   modelYear: number | null
 ): UsedcarMasterIdentityStatus {
-  if (trimStatus === 'HOLD') return 'HOLD';
+  const brokenReference = requiredRefs.some(({ refId, node }) => Boolean(refId) && !node);
+  const canonicalHold = trimStatus === 'HOLD'
+    || requiredRefs.some(({ node }) => node?.status === 'HOLD');
+
+  if (brokenReference || canonicalHold) return 'HOLD';
   if (ids.every(Boolean) && modelYear != null) return 'RESOLVED';
   return 'PARTIAL';
 }
@@ -83,17 +90,23 @@ export async function buildUsedcarMasterRecords(
       trim.id,
     ];
     const holdReasons: string[] = [];
-    const requiredNodes: Array<[string, VehicleMasterNode | null]> = [
-      ['MAKE_NOT_FOUND', make],
-      ['MODEL_NOT_FOUND', model],
-      ['GENERATION_NOT_FOUND', generation],
-      ['PHASE_NOT_FOUND', phase],
-      ['MODEL_YEAR_NOT_FOUND', modelYear],
-      ['POWERTRAIN_NOT_FOUND', powertrain],
-      ['VARIANT_NOT_FOUND', variant],
+    const requiredNodes: Array<{
+      reason: string;
+      holdReason: string;
+      refId: string | null;
+      node: VehicleMasterNode | null;
+    }> = [
+      { reason: 'MAKE_NOT_FOUND', holdReason: 'CANONICAL_MAKE_HOLD', refId: refs.makeId ?? null, node: make },
+      { reason: 'MODEL_NOT_FOUND', holdReason: 'CANONICAL_MODEL_HOLD', refId: refs.modelId ?? null, node: model },
+      { reason: 'GENERATION_NOT_FOUND', holdReason: 'CANONICAL_GENERATION_HOLD', refId: refs.generationId ?? null, node: generation },
+      { reason: 'PHASE_NOT_FOUND', holdReason: 'CANONICAL_PHASE_HOLD', refId: refs.phaseId ?? null, node: phase },
+      { reason: 'MODEL_YEAR_NOT_FOUND', holdReason: 'CANONICAL_MODEL_YEAR_HOLD', refId: refs.modelYearId ?? null, node: modelYear },
+      { reason: 'POWERTRAIN_NOT_FOUND', holdReason: 'CANONICAL_POWERTRAIN_HOLD', refId: refs.powertrainId ?? null, node: powertrain },
+      { reason: 'VARIANT_NOT_FOUND', holdReason: 'CANONICAL_VARIANT_HOLD', refId: refs.variantId ?? null, node: variant },
     ];
-    for (const [reason, value] of requiredNodes) {
-      if (!value) holdReasons.push(reason);
+    for (const item of requiredNodes) {
+      if (!item.node) holdReasons.push(item.reason);
+      if (item.node?.status === 'HOLD') holdReasons.push(item.holdReason);
     }
     if (modelYearValue == null) holdReasons.push('MODEL_YEAR_VALUE_NOT_FOUND');
     if (trim.status === 'HOLD') holdReasons.push('CANONICAL_TRIM_HOLD');
@@ -106,7 +119,12 @@ export async function buildUsedcarMasterRecords(
         a.id.localeCompare(b.id)
       );
 
-    const identity = identityStatus(stableIds, trim.status, modelYearValue);
+    const identity = identityStatus(
+      stableIds,
+      requiredNodes.map(({ refId, node }) => ({ refId, node })),
+      trim.status,
+      modelYearValue
+    );
     if (identity === 'HOLD' && !holdReasons.length) {
       holdReasons.push('IDENTITY_HOLD');
     }
@@ -141,7 +159,16 @@ export async function buildUsedcarMasterRecords(
         effectiveTo: price.effectiveTo ?? null,
         sourceDocumentIds: [...price.sourceDocumentIds],
       })),
-      lifecycleStatus: lifecycle(trim.status),
+      lifecycleStatus: lifecycle([
+        make,
+        model,
+        generation,
+        phase,
+        modelYear,
+        powertrain,
+        variant,
+        trim,
+      ]),
       identityStatus: identity,
       holdReasons: [...new Set(holdReasons)].sort(),
       sourceEvidenceIds: [...new Set([
