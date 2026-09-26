@@ -43,8 +43,10 @@ function source(
 }
 
 function trimProposal(sourceEvidenceIds: string[], status: 'ACTIVE' | 'HISTORICAL' = 'ACTIVE') {
+  const generationId = 'gen_mq4';
+  const phaseId = 'phase_mq4_fl';
   const modelYearId = deterministicVehicleMasterId('MODEL_YEAR', {
-    modelId: 'model_sorento',
+    phaseId,
     modelYear: 2027,
   });
   const powertrainId = deterministicVehicleMasterId('POWERTRAIN', {
@@ -71,6 +73,8 @@ function trimProposal(sourceEvidenceIds: string[], status: 'ACTIVE' | 'HISTORICA
     refs: {
       makeId: 'make_kia',
       modelId: 'model_sorento',
+      generationId,
+      phaseId,
       modelYearId,
       powertrainId,
       variantId,
@@ -91,6 +95,8 @@ function observations(
 ): VehicleMasterFieldObservation[] {
   const fields = [
     ['canonicalName', proposal.canonicalName],
+    ['refs.generationId', proposal.refs.generationId],
+    ['refs.phaseId', proposal.refs.phaseId],
     ['refs.modelYearId', proposal.refs.modelYearId],
     ['refs.powertrainId', proposal.refs.powertrainId],
     ['refs.variantId', proposal.refs.variantId],
@@ -113,10 +119,22 @@ async function seedAncestors(
     { id: 'make_kia', type: 'MAKE' as const, name: '기아', parentId: null },
     { id: 'model_sorento', type: 'MODEL' as const, name: '쏘렌토', parentId: 'make_kia' },
     {
+      id: proposal.refs.generationId!,
+      type: 'GENERATION' as const,
+      name: 'MQ4',
+      parentId: 'model_sorento',
+    },
+    {
+      id: proposal.refs.phaseId!,
+      type: 'PHASE' as const,
+      name: '더 뉴 쏘렌토',
+      parentId: proposal.refs.generationId!,
+    },
+    {
       id: proposal.refs.modelYearId!,
       type: 'MODEL_YEAR' as const,
       name: '2027년형',
-      parentId: 'model_sorento',
+      parentId: proposal.refs.phaseId!,
     },
     {
       id: proposal.refs.powertrainId!,
