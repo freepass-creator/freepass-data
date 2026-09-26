@@ -201,7 +201,8 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
   thead.append(headerRow);
   const tbody = element('tbody');
   table.append(thead, tbody);
-  const empty = element('div', 'vf-empty');
+  const empty = element('div', 'vf-empty vf-empty-state');
+  empty.setAttribute('role', 'status');
   list.append(table, empty);
 
   const detail = element('aside', 'vf-detail');
@@ -209,9 +210,55 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
   detail.hidden = true;
   layout.append(list, detail);
 
-  root.append(head, modeSwitch, guidance, toolbar, filterPanel, status, layout);
+  const readNotice = element('section', 'vf-read-notice');
+  readNotice.hidden = true;
+  readNotice.setAttribute('role', 'status');
+  readNotice.setAttribute('aria-live', 'polite');
+
+  root.append(head, modeSwitch, guidance, toolbar, filterPanel, status, readNotice, layout);
 
   const mobileMedia = window.matchMedia('(max-width: 900px)');
+
+  function setReadNotice(kind, title, message, { retry = false } = {}) {
+    readNotice.replaceChildren();
+    readNotice.dataset.kind = kind;
+    readNotice.append(
+      element('strong', 'vf-read-notice-title', title),
+      element('span', 'vf-read-notice-copy', message),
+    );
+    if (retry) {
+      const retryButton = element('button', 'vf-read-notice-action', '다시 조회');
+      retryButton.type = 'button';
+      listen(retryButton, 'click', () => { void refreshResults({ preserve: true }); });
+      readNotice.append(retryButton);
+    }
+    readNotice.hidden = false;
+  }
+
+  function clearReadNotice() {
+    readNotice.hidden = true;
+    readNotice.replaceChildren();
+    delete readNotice.dataset.kind;
+  }
+
+  function setEmptyState(kind, title, message, { retry = false } = {}) {
+    empty.replaceChildren();
+    empty.dataset.kind = kind;
+    const mark = element('span', 'vf-empty-mark', kind === 'loading' ? '···' : '—');
+    mark.setAttribute('aria-hidden', 'true');
+    empty.append(
+      mark,
+      element('strong', 'vf-empty-title', title),
+      element('p', 'vf-empty-copy', message),
+    );
+    if (retry) {
+      const retryButton = element('button', 'vf-empty-action', '다시 조회');
+      retryButton.type = 'button';
+      listen(retryButton, 'click', () => { void refreshResults({ preserve: false }); });
+      empty.append(retryButton);
+    }
+    empty.hidden = false;
+  }
 
   function lockFilterContext() {
     if (filterLock || !mobileMedia.matches) return;
@@ -515,8 +562,23 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     if (!snapshot) return;
 
     table.hidden = snapshot.items.length === 0;
-    empty.hidden = snapshot.items.length > 0;
-    empty.textContent = '현재 조건과 일치하는 후보가 없습니다. 입력한 검색어와 필터는 유지됩니다.';
+    if (snapshot.items.length > 0) {
+      empty.hidden = true;
+      empty.replaceChildren();
+      delete empty.dataset.kind;
+    } else if (snapshot.coverage === 'PARTIAL') {
+      setEmptyState(
+        'partial-zero',
+        '일부 자료에서 후보를 찾지 못했습니다',
+        '현재 관측 범위 안에서만 0건입니다. 전체 차량에 후보가 없다는 뜻은 아닙니다. 검색어와 필터는 유지됩니다.',
+      );
+    } else {
+      setEmptyState(
+        'zero',
+        '일치하는 후보가 없습니다',
+        '현재 완료된 관측 범위에서 조건과 일치하는 후보가 없습니다. 검색어와 필터는 유지됩니다.',
+      );
+    }
 
     for (const item of snapshot.items) {
       const row = element('tr');
@@ -559,6 +621,7 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
 
   function renderSnapshot(prefix = '') {
     if (!snapshot) return;
+    if (!prefix) clearReadNotice();
     syncModeUi();
     renderGuidance();
     populateFilters();
@@ -589,8 +652,12 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     if (typeof read !== 'function') {
       snapshot = null;
       table.hidden = true;
-      empty.hidden = false;
-      empty.textContent = '차량 마스터 조회 연결을 기다리고 있습니다. 예시 차량을 실제 자료처럼 표시하지 않습니다.';
+      clearReadNotice();
+      setEmptyState(
+        'disconnected',
+        '차량 마스터 조회 연결을 기다리고 있습니다',
+        '아직 실제 조회 경로가 연결되지 않았습니다. 예시 차량을 실제 자료처럼 표시하지 않습니다.',
+      );
       status.textContent = '조회 연결 대기';
       observation.textContent = '관측 정보 없음';
       return;
@@ -599,8 +666,23 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     const seq = ++requestSeq;
     refresh.disabled = true;
     root.setAttribute('aria-busy', 'true');
-    if (snapshot && preserve) renderSnapshot('직전 결과 표시 · 새 자료 조회 중');
-    else status.textContent = '자료 조회 중';
+    if (snapshot && preserve) {
+      renderSnapshot('직전 결과 표시 · 새 자료 조회 중');
+      setReadNotice(
+        'refreshing',
+        '새 자료를 확인하고 있습니다',
+        '직전 관측 결과를 그대로 표시합니다. 새 조회가 끝나기 전까지 현재 목록을 유지합니다.',
+      );
+    } else {
+      table.hidden = true;
+      clearReadNotice();
+      setEmptyState(
+        'loading',
+        '차량 자료를 불러오는 중입니다',
+        '조회가 끝나면 현재 검색어와 조건에 맞는 후보를 표시합니다.',
+      );
+      status.textContent = '자료 조회 중';
+    }
 
     try {
       const next = validateSnapshot(await read({ mode, query, filters: { ...filters } }));
@@ -610,13 +692,25 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
       renderSnapshot();
     } catch {
       if (disposed || seq !== requestSeq) return;
-      if (snapshot && preserve) renderSnapshot('직전 관측 유지 · 새 조회 실패');
-      else {
+      if (snapshot && preserve) {
+        renderSnapshot('직전 관측 유지 · 새 조회 실패');
+        setReadNotice(
+          'refresh-error',
+          '새 조회를 완료하지 못했습니다',
+          '직전 관측 결과를 계속 표시합니다. 이 오류를 후보 0건으로 해석하지 않습니다.',
+          { retry: true },
+        );
+      } else {
         snapshot = null;
         observation.textContent = '관측 실패';
         table.hidden = true;
-        empty.hidden = false;
-        empty.textContent = '자료를 불러오지 못했습니다. 차량이 없다는 뜻은 아닙니다.';
+        clearReadNotice();
+        setEmptyState(
+          'error',
+          '자료를 불러오지 못했습니다',
+          '차량이 없다는 뜻이 아닙니다. 검색어와 필터는 유지되며 다시 조회할 수 있습니다.',
+          { retry: true },
+        );
         status.textContent = '조회 실패';
       }
     } finally {
@@ -642,6 +736,8 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     root.classList.remove('vf-inspecting');
     syncModeUi();
     guidance.replaceChildren();
+    clearReadNotice();
+    empty.replaceChildren();
     populateFilters();
     void refreshResults({ preserve: false });
   };
