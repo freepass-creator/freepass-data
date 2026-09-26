@@ -71,6 +71,33 @@ app.get('/console/vehicle-finder/view.mjs', async (_request, reply) => {
   return reply.type('text/javascript; charset=utf-8').send(moduleSource);
 });
 
+app.get('/console/data-health', async (_request, reply) => {
+  if (!isLocalMemory) return reply.code(404).send({ code: 'NOT_FOUND' });
+  const html = await readFile(
+    path.join(process.cwd(), 'preview', 'data-health', 'index.html'),
+    'utf8'
+  );
+  return reply.type('text/html; charset=utf-8').send(html);
+});
+
+app.get('/console/data-health/health.css', async (_request, reply) => {
+  if (!isLocalMemory) return reply.code(404).send({ code: 'NOT_FOUND' });
+  const css = await readFile(
+    path.join(process.cwd(), 'preview', 'data-health', 'health.css'),
+    'utf8'
+  );
+  return reply.type('text/css; charset=utf-8').send(css);
+});
+
+app.get('/console/data-health/view.mjs', async (_request, reply) => {
+  if (!isLocalMemory) return reply.code(404).send({ code: 'NOT_FOUND' });
+  const moduleSource = await readFile(
+    path.join(process.cwd(), 'preview', 'data-health', 'view.mjs'),
+    'utf8'
+  );
+  return reply.type('text/javascript; charset=utf-8').send(moduleSource);
+});
+
 app.get('/health', async () => ({
   service: 'freepass-data',
   status: 'ok',
