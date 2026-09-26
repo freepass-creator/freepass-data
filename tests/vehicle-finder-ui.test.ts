@@ -138,6 +138,16 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(css).toMatch(/vf-group-member/);
   });
 
+  it('uses an injected group transition callback and keeps readContext opaque', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    expect(source).toMatch(/onGroupDrilldown/);
+    expect(source).toMatch(/group\.drilldowns\.find/);
+    expect(source).toMatch(/response\.transition\.status/);
+    expect(source).toMatch(/response\.readContext \?\? null/);
+    expect(source).toMatch(/readContext,/);
+    expect(source).not.toMatch(/applyVehicleGroupDrilldown|applyVehicleGroupSelection/);
+  });
+
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
     const css = await readFile(cssPath, 'utf8');
     expect(css).toMatch(/grid-template-columns:3fr 7fr/);
