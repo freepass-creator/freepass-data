@@ -102,7 +102,8 @@ export type VehicleMasterEvidenceIssue = {
     | 'RULE_GROUP_CONSTRAINT_CONFLICT'
     | 'RULE_DEPENDENCY_DUPLICATE'
     | 'RULE_DEPENDENCY_CONFLICT'
-    | 'RULE_DEPENDENCY_TRANSITIVE_CONFLICT';
+    | 'RULE_DEPENDENCY_TRANSITIVE_CONFLICT'
+    | 'RULE_DEPENDENCY_CYCLE_CONFLICT';
   fieldPath?: string;
   sourceDocumentId?: string;
   detail?: string;
@@ -495,6 +496,57 @@ function rulesShareEffectiveWindow(
     ...rules.map((rule) => time(rule.effectiveTo) ?? Number.POSITIVE_INFINITY)
   );
   return start < end;
+}
+
+function findRequiresPath(
+  edges: readonly DependencyEdge[],
+  start: string,
+  goal: string,
+  requiredRules: readonly VehicleMasterCompatibilityRule[] = []
+): DependencyEdge[] | null {
+  const ordered = [...edges].sort((a, b) =>
+    a.from.localeCompare(b.from) ||
+    a.to.localeCompare(b.to) ||
+    a.rule.id.localeCompare(b.rule.id)
+  );
+
+  const visit = (
+    current: string,
+    visited: Set<string>,
+    path: DependencyEdge[]
+  ): DependencyEdge[] | null => {
+    if (current === goal) return path;
+
+    for (const edge of ordered) {
+      if (edge.from !== current || visited.has(edge.to)) continue;
+      const candidateRules = [
+        ...requiredRules,
+        ...path.map((item) => item.rule),
+        edge.rule,
+      ];
+      if (!rulesShareEffectiveWindow(candidateRules)) continue;
+
+      const nextVisited = new Set(visited);
+      nextVisited.add(edge.to);
+      const found = visit(edge.to, nextVisited, [...path, edge]);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  return visit(start, new Set([start]), []);
+}
+
+function cycleNodeIds(
+  start: string,
+  proposalTarget: string,
+  returnPath: readonly DependencyEdge[]
+) {
+  return new Set([
+    start,
+    proposalTarget,
+    ...returnPath.flatMap((edge) => [edge.from, edge.to]),
+  ]);
 }
 
 function modelYearValue(proposal: VehicleMasterNode): number | null {
@@ -1642,6 +1694,8 @@ export async function promoteVehicleMasterCompatibilityRule(
     const dependencyContext = [...existingDependencyRules, input.proposal];
     const requiresEdges = dependencyEdges(dependencyContext, 'REQUIRES');
     const excludesEdges = dependencyEdges(dependencyContext, 'EXCLUDES');
+    const existingRequiresEdges = dependencyEdges(existingDependencyRules, 'REQUIRES');
+    const existingExcludesEdges = dependencyEdges(existingDependencyRules, 'EXCLUDES');
     const transitiveConflictKeys = new Set<string>();
 
     for (const first of requiresEdges) {
@@ -1672,6 +1726,87 @@ export async function promoteVehicleMasterCompatibilityRule(
             detail: `${first.rule.id}>${second.rule.id}|${excluded.rule.id}`,
           });
         }
+      }
+    }
+
+    const cycleConflictKeys = new Set<string>();
+
+    if (input.proposal.ruleType === 'REQUIRES') {
+      for (const proposalTargetId of input.proposal.targetIds) {
+        const returnPath = findRequiresPath(
+          existingRequiresEdges,
+          proposalTargetId,
+          input.proposal.subjectId,
+          [input.proposal]
+        );
+        if (!returnPath?.length) continue;
+
+        const nodes = cycleNodeIds(
+          input.proposal.subjectId,
+          proposalTargetId,
+          returnPath
+        );
+        const cycleRules = [input.proposal, ...returnPath.map((edge) => edge.rule)];
+
+        for (const excluded of existingExcludesEdges) {
+          if (!nodes.has(excluded.from) || !nodes.has(excluded.to)) continue;
+          const rules = [...cycleRules, excluded.rule];
+          if (!rulesShareEffectiveWindow(rules)) continue;
+
+          const key = [
+            ...nodes,
+          ].sort().join('|') + `|${excluded.rule.id}`;
+          if (cycleConflictKeys.has(key)) continue;
+          cycleConflictKeys.add(key);
+
+          issues.push({
+            code: 'RULE_DEPENDENCY_CYCLE_CONFLICT',
+            fieldPath: `targetIds.${proposalTargetId}`,
+            detail: `${cycleRules.map((rule) => rule.id).join('>')}|${excluded.rule.id}`,
+          });
+        }
+      }
+    }
+
+    if (input.proposal.ruleType === 'EXCLUDES') {
+      for (const proposalTargetId of input.proposal.targetIds) {
+        const forwardPath = findRequiresPath(
+          existingRequiresEdges,
+          input.proposal.subjectId,
+          proposalTargetId,
+          [input.proposal]
+        );
+        if (!forwardPath?.length) continue;
+
+        const returnPath = findRequiresPath(
+          existingRequiresEdges,
+          proposalTargetId,
+          input.proposal.subjectId,
+          [input.proposal, ...forwardPath.map((edge) => edge.rule)]
+        );
+        if (!returnPath?.length) continue;
+
+        const rules = [
+          input.proposal,
+          ...forwardPath.map((edge) => edge.rule),
+          ...returnPath.map((edge) => edge.rule),
+        ];
+        if (!rulesShareEffectiveWindow(rules)) continue;
+
+        const key = [
+          input.proposal.subjectId,
+          proposalTargetId,
+          ...forwardPath.flatMap((edge) => [edge.from, edge.to]),
+          ...returnPath.flatMap((edge) => [edge.from, edge.to]),
+        ].sort().join('|');
+        if (cycleConflictKeys.has(key)) continue;
+        cycleConflictKeys.add(key);
+
+        issues.push({
+          code: 'RULE_DEPENDENCY_CYCLE_CONFLICT',
+          fieldPath: `targetIds.${proposalTargetId}`,
+          detail: `${forwardPath.map((edge) => edge.rule.id).join('>')}|${returnPath.map((edge) => edge.rule.id).join('>')}`,
+        });
       }
     }
   }
