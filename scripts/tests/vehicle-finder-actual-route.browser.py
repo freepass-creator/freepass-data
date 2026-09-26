@@ -91,12 +91,35 @@ try:
             selectable: index !== 2,
           }));
 
+          const makeDrilldown = mode => mode === 'NEW_CAR'
+            ? {
+                axis: 'model',
+                label: '모델',
+                selectableCandidateCount: 9,
+                unknownValueCount: 0,
+                options: [
+                  { id: 'model-a', label: '모델 A', value: null, count: 5 },
+                  { id: 'model-b', label: '모델 B', value: null, count: 4 },
+                ],
+              }
+            : {
+                axis: 'modelYear',
+                label: '연식',
+                selectableCandidateCount: 9,
+                unknownValueCount: 1,
+                options: [
+                  { id: 'my-2022', label: '2022', value: 2022, count: 5 },
+                  { id: 'my-2023', label: '2023', value: 2023, count: 3 },
+                ],
+              };
+
           const makeGroups = mode => [0, 1].map(groupIndex => {
             const start = groupIndex * 9;
             const memberIds = Array.from(
               { length: 9 },
               (_, offset) => mode + '-' + (start + offset),
             );
+            const drilldown = makeDrilldown(mode);
             return {
               id: mode + '-group-' + groupIndex,
               scope: 'MODEL_GENERATION',
@@ -109,43 +132,92 @@ try:
               inspectOnlyCount: 0,
               blockedCount: groupIndex === 0 ? 1 : 0,
               expandable: true,
-              suggestedDrilldownAxis: mode === 'NEW_CAR' ? 'model' : 'modelYear',
-              suggestedDrilldownLabel: mode === 'NEW_CAR' ? '모델' : '연식',
+              suggestedDrilldownAxis: drilldown.axis,
+              suggestedDrilldownLabel: drilldown.label,
+              drilldowns: [drilldown],
             };
           });
 
-          window.__qaRead = async ({ mode }) => ({
-            schemaVersion: 'freepass.vehicle-finder.ui/v1',
-            mode,
-            presentation: mode === 'NEW_CAR' ? 'GUIDED' : 'SEARCH_FILTER',
-            guidance: {
-              resolutionStatus: 'AMBIGUOUS',
-              suggestedNextAxis: mode === 'NEW_CAR' ? 'model' : 'modelYear',
-            },
-            observationId: 'browser-qa-' + mode,
-            observedAt: '2026-09-26T08:00:00.000Z',
-            coverage: 'COMPLETE',
-            total: 18,
-            hasMore: false,
-            excludedUnknownFacetCount: 0,
-            facets: mode === 'NEW_CAR'
-              ? [
-                  { axis: 'maker', label: '제조사', options: [{ key: 'maker-a', label: '제조사 A', count: 18 }] },
-                  { axis: 'model', label: '모델', options: [{ key: 'model-a', label: '모델 A', count: 9 }, { key: 'model-b', label: '모델 B', count: 9 }] },
-                ]
-              : [
-                  { axis: 'model', label: '모델', options: [{ key: 'used-a', label: '중고 모델 A', count: 18 }] },
-                  { axis: 'modelYear', label: '연식', options: [{ key: '2022', label: '2022', count: 10 }, { key: '2023', label: '2023', count: 8 }] },
-                  { axis: 'generation', label: '세대', options: [{ key: 'g1', label: '1세대', count: 18 }] },
-                  { axis: 'phase', label: '변경형', options: [{ key: 'p1', label: '페이스리프트', count: 18 }] },
-                ],
-            groups: makeGroups(mode),
-            items: makeItems(mode),
-          });
+          const makeFacets = mode => mode === 'NEW_CAR'
+            ? [
+                { axis: 'maker', label: '제조사', options: [{ key: 'maker-a', label: '제조사 A', count: 18 }] },
+                { axis: 'model', label: '모델', options: [{ key: 'model-a', label: '모델 A', count: 9 }, { key: 'model-b', label: '모델 B', count: 9 }] },
+              ]
+            : [
+                { axis: 'model', label: '모델', options: [{ key: 'used-a', label: '중고 모델 A', count: 18 }] },
+                { axis: 'modelYear', label: '연식', options: [{ key: '2022', label: '2022', count: 10 }, { key: '2023', label: '2023', count: 8 }] },
+                { axis: 'generation', label: '세대', options: [{ key: 'g1', label: '1세대', count: 18 }] },
+                { axis: 'phase', label: '변경형', options: [{ key: 'p1', label: '페이스리프트', count: 18 }] },
+              ];
+
+          const makeSnapshot = (mode, count = 18) => {
+            const items = makeItems(mode).slice(0, count);
+            const groups = count === 18
+              ? makeGroups(mode)
+              : [{
+                  ...makeGroups(mode)[0],
+                  memberIds: items.map(item => item.id),
+                  representativeId: items[0].id,
+                  candidateCount: items.length,
+                  selectableCount: items.filter(item => item.selectable).length,
+                  blockedCount: items.filter(item => !item.selectable).length,
+                }];
+            return {
+              schemaVersion: 'freepass.vehicle-finder.ui/v1',
+              mode,
+              presentation: mode === 'NEW_CAR' ? 'GUIDED' : 'SEARCH_FILTER',
+              guidance: {
+                resolutionStatus: 'AMBIGUOUS',
+                suggestedNextAxis: mode === 'NEW_CAR' ? 'model' : 'modelYear',
+              },
+              observationId: 'browser-qa-' + mode + '-' + count,
+              observedAt: '2026-09-26T08:00:00.000Z',
+              coverage: 'COMPLETE',
+              total: items.length,
+              hasMore: false,
+              excludedUnknownFacetCount: 0,
+              facets: makeFacets(mode),
+              groups,
+              items,
+            };
+          };
+
+          window.__qaReadContexts = [];
+          window.__qaRead = async ({ mode, readContext }) => {
+            window.__qaReadContexts.push(readContext ?? null);
+            return makeSnapshot(mode);
+          };
+          window.__qaGroupDrilldown = async payload => {
+            window.__qaLastDrilldown = payload;
+            return {
+              transition: {
+                status: 'APPLIED',
+                reason: null,
+                activeGroupId: payload.mode + '-group-0',
+                beforeCandidateCount: 18,
+                afterCandidateCount: 4,
+                clearedAxes: ['trim'],
+              },
+              snapshot: makeSnapshot(payload.mode, 4),
+              readContext: {
+                transition: 'browser-qa',
+                groupId: payload.groupId,
+                axis: payload.axis,
+                option: payload.option.label,
+              },
+            };
+          };
+
+          window.__qaSnapshot = makeSnapshot; 
+          window.__qaReadLegacy = window.__qaRead;
 
           window.__qaFinder = mountVehicleFinder(
             document.getElementById('vehicle-finder'),
-            { read: window.__qaRead, initialMode: 'NEW_CAR' },
+            {
+              read: window.__qaRead,
+              onGroupDrilldown: window.__qaGroupDrilldown,
+              initialMode: 'NEW_CAR',
+            },
           );
           await window.__qaFinder.ready;
         }"""
@@ -159,6 +231,11 @@ try:
         expect(
             desktop.locator(".vf-group-row").first.get_by_text("먼저 보기 · 모델")
         ).to_be_visible()
+        expect(desktop.get_by_text("모델으로 좁히기")).to_be_visible()
+        desktop.locator(".vf-group-drilldown-option").first.click()
+        expect(desktop.get_by_text("후보 18개 → 4개")).to_be_visible()
+        expect(desktop.locator(".vf-group-member")).to_have_count(4)
+        assert desktop.evaluate("window.__qaLastDrilldown.option.label") == "모델 A"
         desktop.locator(".vf-group-member").first.get_by_role("button").click()
         expect(desktop.locator(".vf-detail")).to_be_visible()
         assert desktop.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
@@ -174,8 +251,12 @@ try:
 
         mobile.locator(".vf-group-button").first.click()
         expect(mobile.locator(".vf-group-member")).to_have_count(9)
-        mobile.locator(".vf-group-member").nth(8).get_by_role("button").scroll_into_view_if_needed()
-        mobile.locator(".vf-group-member").nth(8).get_by_role("button").click()
+        expect(mobile.get_by_text("모델으로 좁히기")).to_be_visible()
+        mobile.locator(".vf-group-drilldown-option").first.click()
+        expect(mobile.locator(".vf-group-member")).to_have_count(4)
+        expect(mobile.get_by_text("충돌하는 기존 조건 1개가 정리되었습니다.")).to_be_visible()
+        mobile.locator(".vf-group-member").nth(3).get_by_role("button").scroll_into_view_if_needed()
+        mobile.locator(".vf-group-member").nth(3).get_by_role("button").click()
         expect(mobile.get_by_role("button", name="목록으로")).to_be_visible()
         expect(mobile.get_by_role("button", name="이 차량 선택")).to_be_visible()
         back_box = mobile.get_by_role("button", name="목록으로").bounding_box()
@@ -197,6 +278,7 @@ try:
 
         mobile.get_by_role("button", name="중고차").click()
         expect(mobile.get_by_text("중고차 찾기")).to_be_visible()
+        assert mobile.evaluate("window.__qaReadContexts[window.__qaReadContexts.length - 1]") is None
         expect(mobile.get_by_text("검색·필터형")).to_be_visible()
         expect(mobile.get_by_text("방금 본 후보")).to_have_count(0)
         expect(mobile.locator(".vf-group-member")).to_have_count(0)
