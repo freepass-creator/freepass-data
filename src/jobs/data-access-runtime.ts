@@ -25,6 +25,7 @@ import {
   readConsumerHealth,
   type ConsumerHealthPolicy
 } from '../application/consumer-health.js';
+import { readConsumerReadiness } from '../application/consumer-readiness.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { SheetHandoffWorkbook, SheetPublicationHandoff } from '../domain/sheet-publication-handoff.js';
 import type { SheetDeliveryReceipt } from '../domain/consumer-delivery.js';
@@ -75,6 +76,31 @@ export async function createConsumerHealthReadOnlyDataAccessRuntime(input: {
         digest: stableDigest(value)
       })
     }, () => readConsumerHealth(logs, store, policy))
+  };
+}
+
+export async function createConsumerReadinessDataAccessRuntime() {
+  const logs = createFirestoreDataAccessLogStore();
+  const access = new DataAccessGateway(logs);
+  const store = await createFirestoreDataStore();
+
+  return {
+    readiness: (policy: ConsumerHealthPolicy) => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-consumer-readiness', kind: 'SERVICE' },
+        clientId: 'job:check-consumer-readiness',
+        purpose: 'derive next-stage consumer readiness from reviewed and runtime evidence'
+      },
+      operation: 'READ_CONSUMER_READINESS',
+      resource: {
+        kind: 'HEALTH',
+        name: 'consumer-readiness'
+      },
+      summarize: (value) => ({
+        count: value.consumers.length,
+        digest: stableDigest(value)
+      })
+    }, () => readConsumerReadiness(logs, store, policy))
   };
 }
 
