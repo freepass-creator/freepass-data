@@ -1580,6 +1580,8 @@ export async function promoteVehicleMasterCompatibilityRule(
         continue;
       }
 
+      if (!sameTargetSet(existing, input.proposal)) continue;
+
       const existingMax = maxSelectionValue(existing);
       const oneOfVsMaxConflict =
         input.proposal.ruleType === 'ONE_OF' &&
