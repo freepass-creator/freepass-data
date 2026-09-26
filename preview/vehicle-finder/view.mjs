@@ -61,6 +61,11 @@ function validateSnapshot(input) {
           (source.label != null && !text(source.label))))) {
       invalid('itemSources');
     }
+    if (item.listLines != null &&
+        (!Array.isArray(item.listLines) || item.listLines.length > 2 ||
+          item.listLines.some(line => !text(line)))) {
+      invalid('itemListLines');
+    }
     if (!Array.isArray(item.facts) || !Array.isArray(item.evidenceIds)) invalid('itemDetail');
     for (const fact of item.facts) {
       if (!fact || !text(fact.label) || typeof fact.unknown !== 'boolean') invalid('fact');
@@ -109,6 +114,8 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
   let query = '';
   let filters = {};
   let inspectedId = null;
+  let lastInspectedId = null;
+  let listScrollY = 0;
   let requestSeq = 0;
   let disposed = false;
   let filterLock = null;
@@ -377,12 +384,22 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
 
   function closeDetail(restoreFocus = true) {
     const priorId = inspectedId;
+    if (priorId) lastInspectedId = priorId;
     inspectedId = null;
     detail.hidden = true;
     root.classList.remove('vf-inspecting');
     renderRows();
+
     if (restoreFocus && priorId) {
-      root.querySelector('[data-entry-id="' + CSS.escape(priorId) + '"]')?.focus({ preventScroll: true });
+      const priorButton = root.querySelector(
+        '[data-entry-id="' + CSS.escape(priorId) + '"]',
+      );
+      priorButton?.focus({ preventScroll: true });
+      if (mobileMedia.matches) {
+        requestAnimationFrame(() => {
+          window.scrollTo({ top: listScrollY, behavior: 'auto' });
+        });
+      }
     }
   }
 
@@ -485,7 +502,9 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
   function inspect(id) {
     const item = snapshot?.items.find(candidate => candidate.id === id);
     if (!item) return;
+    listScrollY = window.scrollY;
     inspectedId = id;
+    lastInspectedId = id;
     renderRows();
     renderDetail(item);
     detail.querySelector('h2')?.focus?.({ preventScroll: false });
@@ -502,6 +521,7 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     for (const item of snapshot.items) {
       const row = element('tr');
       row.dataset.selected = String(item.id === inspectedId);
+      row.dataset.recent = String(item.id === lastInspectedId && item.id !== inspectedId);
 
       const nameCell = element('td');
       const button = element('button', 'vf-row-button');
@@ -511,8 +531,20 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
       button.setAttribute('aria-controls', detail.id);
       button.setAttribute('aria-label', item.pathText);
       button.append(element('span', 'vf-row-title', item.label));
-      const context = item.pathText === item.label ? '' : item.pathText;
-      if (context) button.append(element('span', 'vf-row-path', context));
+      const listLines = item.listLines ?? [];
+      if (listLines.length) {
+        const summary = element('span', 'vf-row-summary');
+        for (const line of listLines) {
+          summary.append(element('span', 'vf-row-summary-line', line));
+        }
+        button.append(summary);
+      } else {
+        const context = item.pathText === item.label ? '' : item.pathText;
+        if (context) button.append(element('span', 'vf-row-path', context));
+      }
+      if (item.id === lastInspectedId && item.id !== inspectedId) {
+        button.append(element('span', 'vf-row-recent', '방금 본 후보'));
+      }
       listen(button, 'click', () => inspect(item.id));
       nameCell.append(button);
 
@@ -547,6 +579,9 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     filterDone.textContent = snapshot.total + '개 결과 보기';
 
     if (inspectedId && !snapshot.items.some(item => item.id === inspectedId)) closeDetail(false);
+    if (lastInspectedId && !snapshot.items.some(item => item.id === lastInspectedId)) {
+      lastInspectedId = null;
+    }
   }
 
   async function refreshResults({ preserve = true } = {}) {
@@ -599,6 +634,8 @@ export function mountVehicleFinder(root, { read, onSelect, initialMode = 'NEW_CA
     query = '';
     filters = {};
     inspectedId = null;
+    lastInspectedId = null;
+    listScrollY = 0;
     snapshot = null;
     input.value = '';
     detail.hidden = true;

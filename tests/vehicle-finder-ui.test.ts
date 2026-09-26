@@ -61,6 +61,24 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(source).not.toMatch(/modelYear: '연식'|phase:|generation:/);
   });
 
+  it('keeps candidate rows to title plus adapter-supplied scan lines', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    const css = await readFile(cssPath, 'utf8');
+    expect(source).toMatch(/item\.listLines \?\? \[\]/);
+    expect(source).toMatch(/listLines\.length/);
+    expect(source).toMatch(/vf-row-summary-line/);
+    expect(css).toMatch(/text-overflow:ellipsis/);
+    expect(css).toMatch(/white-space:nowrap/);
+  });
+
+  it('restores mobile list context after inspecting a candidate', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    expect(source).toMatch(/listScrollY = window\.scrollY/);
+    expect(source).toMatch(/lastInspectedId = id/);
+    expect(source).toMatch(/window\.scrollTo\(\{ top: listScrollY, behavior: 'auto' \}\)/);
+    expect(source).toMatch(/방금 본 후보/);
+  });
+
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
     const css = await readFile(cssPath, 'utf8');
     expect(css).toMatch(/grid-template-columns:3fr 7fr/);
