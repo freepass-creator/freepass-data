@@ -160,6 +160,16 @@ describe('U-01 vehicle finder presentation boundary', () => {
     expect(css).toMatch(/data-action='BLOCKED'/);
   });
 
+  it('requires injected finalization review before confirmation', async () => {
+    const source = await readFile(viewPath, 'utf8');
+    expect(source).toMatch(/onFinalize/);
+    expect(source).toMatch(/최종 선택 검토/);
+    expect(source).toMatch(/이 차량으로 확정/);
+    expect(source).toMatch(/finalizationContext/);
+    expect(source).toMatch(/response\?\.receipt/);
+    expect(source).not.toMatch(/finalizeVehicleSelection|issueVehicleSelectionReceipt/);
+  });
+
   it('keeps the FreePass mobile action and accessibility boundaries', async () => {
     const css = await readFile(cssPath, 'utf8');
     expect(css).toMatch(/grid-template-columns:3fr 7fr/);
