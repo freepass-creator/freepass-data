@@ -262,6 +262,36 @@ if (!auditWorkflow.includes("cron: '37 * * * *'")) {
   console.error('Continuous audit must remain on the hourly minute-37 schedule');
   process.exit(1);
 }
+
+for (const requiredAuditPath of [
+  'src/adapters/erp5-source-capture.ts',
+  'src/adapters/erp5-product-mapping.ts',
+  'src/domain/consumer-cutover.ts',
+  'src/application/consumer-runtime-evidence.ts',
+  'src/application/consumer-health.ts',
+  'src/application/consumer-readiness.ts',
+  'src/application/sheet-delivery-evidence.ts',
+  'src/application/sheet-consumer-health.ts',
+  'src/application/estimate-master-canonical.ts',
+  'src/application/estimate-master-readiness.ts',
+  'src/application/data-control-tower.ts',
+  'src/infra/firestore-store.ts',
+  'src/infra/firestore-data-access-log.ts',
+  'src/infra/firestore-layout.ts',
+  'src/jobs/inspect-erp5-source.ts',
+  'src/jobs/build-erp5-canonical-dry-run.ts',
+  'src/jobs/check-estimate-master-readiness.ts',
+  'src/jobs/check-consumer-health.ts',
+  'src/jobs/check-consumer-readiness.ts',
+  'src/jobs/check-sheet-consumer-health.ts',
+  'src/jobs/build-data-control-tower.ts',
+  'src/jobs/data-access-runtime.ts'
+]) {
+  if (!auditWorkflow.includes(`- '${requiredAuditPath}'`)) {
+    console.error(`Continuous audit push trigger is missing critical evidence path: ${requiredAuditPath}`);
+    process.exit(1);
+  }
+}
 const consumerHealthStart = auditWorkflow.indexOf('- name: Check all consumer health');
 const consumerHealthEnd = auditWorkflow.indexOf('- name: Check consumer readiness');
 const consumerHealthStep = auditWorkflow.slice(consumerHealthStart, consumerHealthEnd);
