@@ -2174,9 +2174,9 @@ export function auditVehicleMasterGraph(
   };
 }
 
-export async function auditVehicleMasterStore(
+export async function readVehicleMasterGraphSnapshot(
   store: VehicleMasterStore
-): Promise<VehicleMasterGraphAuditReport> {
+): Promise<VehicleMasterGraphSnapshot> {
   const nodeGroups = await Promise.all(
     NODE_TYPES.map((nodeType) => store.listNodesByType(nodeType))
   );
@@ -2198,7 +2198,7 @@ export async function auditVehicleMasterStore(
     ),
   ]);
 
-  return auditVehicleMasterGraph({
+  return {
     nodes: nodeGroups.flat(),
     rules,
     prices,
@@ -2206,5 +2206,13 @@ export async function auditVehicleMasterStore(
     nodeRevisions,
     ruleRevisions,
     pipelineRecords: pipelineGroups.flat(),
-  });
+  };
+}
+
+export async function auditVehicleMasterStore(
+  store: VehicleMasterStore
+): Promise<VehicleMasterGraphAuditReport> {
+  return auditVehicleMasterGraph(
+    await readVehicleMasterGraphSnapshot(store)
+  );
 }
