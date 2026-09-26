@@ -1,4 +1,8 @@
 import type { ApprovedReleaseEvidence } from './consumer-cutover.js';
+import {
+  validateSheetPublicationHandoff,
+  type SheetPublicationHandoff
+} from './sheet-publication-handoff.js';
 
 export type SheetConsumerId = 'google-sheets-f01' | 'google-sheets-f86';
 export type SheetWorkbook = 'F01' | 'F86';
@@ -16,6 +20,7 @@ export type SheetDeliveryReceipt = {
   spreadsheetId: string;
   releaseAuthority: 'LEGACY_VERIFIED_BRIDGE' | 'CANONICAL_ACTIVE';
   approvedRelease: ApprovedReleaseEvidence;
+  publicationHandoffHash: string;
   renderedOutput: SheetRenderedOutputEvidence;
   publicationStartedAt: string;
   publicationCompletedAt: string;
@@ -24,6 +29,15 @@ export type SheetDeliveryReceipt = {
     vehicleKeyCount: number;
     dataDigest: string;
   };
+};
+
+export type SheetDeliveryExpectation = {
+  consumerId: SheetConsumerId;
+  workbook: SheetWorkbook;
+  releaseAuthority: 'LEGACY_VERIFIED_BRIDGE' | 'CANONICAL_ACTIVE';
+  approvedRelease: ApprovedReleaseEvidence;
+  publicationHandoffHash: string;
+  handoffGeneratedAt: string;
 };
 
 export type SheetDeliveryDecision = {
@@ -40,9 +54,31 @@ const nonEmpty = (value: unknown) =>
 const validCount = (value: unknown) =>
   Number.isInteger(value) && Number(value) >= 0;
 
+const validDigest = (value: unknown) =>
+  typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+
+export function buildSheetDeliveryExpectation(
+  handoff: SheetPublicationHandoff
+): SheetDeliveryExpectation {
+  const decision = validateSheetPublicationHandoff(handoff);
+  if (decision.status !== 'PASS') {
+    throw new Error(
+      `INVALID_SHEET_PUBLICATION_HANDOFF:${decision.violations.join(',')}`
+    );
+  }
+  return {
+    consumerId: handoff.consumerId,
+    workbook: handoff.workbook,
+    releaseAuthority: handoff.releaseAuthority,
+    approvedRelease: structuredClone(handoff.approvedRelease),
+    publicationHandoffHash: handoff.handoffHash,
+    handoffGeneratedAt: handoff.generatedAt
+  };
+}
+
 export function validateSheetDeliveryReceipt(
   receipt: SheetDeliveryReceipt,
-  expectedRelease: ApprovedReleaseEvidence
+  expected: SheetDeliveryExpectation
 ): SheetDeliveryDecision {
   const violations: string[] = [];
 
@@ -51,6 +87,12 @@ export function validateSheetDeliveryReceipt(
   }
   if (receipt.consumerId !== expectedConsumer(receipt.workbook)) {
     violations.push('CONSUMER_WORKBOOK_MISMATCH');
+  }
+  if (
+    receipt.consumerId !== expected.consumerId ||
+    receipt.workbook !== expected.workbook
+  ) {
+    violations.push('PUBLICATION_TARGET_MISMATCH');
   }
   if (!nonEmpty(receipt.spreadsheetId)) {
     violations.push('MISSING_SPREADSHEET_ID');
@@ -68,6 +110,16 @@ export function validateSheetDeliveryReceipt(
     ) {
       violations.push('RELEASE_AUTHORITY_PROJECTION_MISMATCH');
     }
+    if (receipt.releaseAuthority !== expected.releaseAuthority) {
+      violations.push('RELEASE_AUTHORITY_MISMATCH');
+    }
+  }
+
+  if (
+    !validDigest(receipt.publicationHandoffHash) ||
+    receipt.publicationHandoffHash !== expected.publicationHandoffHash
+  ) {
+    violations.push('PUBLICATION_HANDOFF_HASH_MISMATCH');
   }
 
   const releaseFields = {
@@ -82,22 +134,31 @@ export function validateSheetDeliveryReceipt(
   for (const [key, code] of Object.entries(releaseFields) as Array<
     [keyof typeof releaseFields, (typeof releaseFields)[keyof typeof releaseFields]]
   >) {
-    if (receipt.approvedRelease[key] !== expectedRelease[key]) {
+    if (receipt.approvedRelease[key] !== expected.approvedRelease[key]) {
       violations.push(code);
     }
   }
 
   if (
     !Number.isFinite(Date.parse(receipt.approvedRelease.observedAt)) ||
+    !Number.isFinite(Date.parse(expected.handoffGeneratedAt)) ||
     !Number.isFinite(Date.parse(receipt.publicationStartedAt)) ||
     !Number.isFinite(Date.parse(receipt.publicationCompletedAt))
   ) {
     violations.push('INVALID_TIMESTAMP');
-  } else if (
-    Date.parse(receipt.publicationCompletedAt) <
-    Date.parse(receipt.publicationStartedAt)
-  ) {
-    violations.push('INVALID_PUBLICATION_WINDOW');
+  } else {
+    if (
+      Date.parse(receipt.publicationStartedAt) <
+      Date.parse(expected.handoffGeneratedAt)
+    ) {
+      violations.push('PUBLICATION_BEFORE_HANDOFF');
+    }
+    if (
+      Date.parse(receipt.publicationCompletedAt) <
+      Date.parse(receipt.publicationStartedAt)
+    ) {
+      violations.push('INVALID_PUBLICATION_WINDOW');
+    }
   }
 
   if (!nonEmpty(receipt.renderedOutput.transformContractId)) violations.push('MISSING_TRANSFORM_CONTRACT_ID');
