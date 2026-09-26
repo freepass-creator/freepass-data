@@ -88,6 +88,18 @@ export type VehicleFinderUiSnapshot = {
     expandable: boolean;
     suggestedDrilldownAxis: VehicleSelectorAxis | null;
     suggestedDrilldownLabel: string | null;
+    drilldowns: Array<{
+      axis: VehicleSelectorAxis;
+      label: string | null;
+      selectableCandidateCount: number;
+      unknownValueCount: number;
+      options: Array<{
+        id: string | null;
+        label: string;
+        value: number | null;
+        count: number;
+      }>;
+    }>;
   }>;
   items: Array<{
     id: string;
@@ -252,6 +264,18 @@ export function presentVehicleSelectorResult(
       suggestedDrilldownLabel: group.suggestedDrilldownAxis
         ? facetLabels.get(group.suggestedDrilldownAxis) ?? null
         : null,
+      drilldowns: group.drilldownAxes.map((drilldown) => ({
+        axis: drilldown.axis,
+        label: facetLabels.get(drilldown.axis) ?? null,
+        selectableCandidateCount: drilldown.selectableCandidateCount,
+        unknownValueCount: drilldown.unknownValueCount,
+        options: drilldown.options.map((option) => ({
+          id: option.id,
+          label: option.label,
+          value: option.value,
+          count: option.count,
+        })),
+      })),
     };
   });
 
