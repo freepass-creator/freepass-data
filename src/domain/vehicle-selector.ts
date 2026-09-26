@@ -325,46 +325,52 @@ function selectionSubset(
   axes: ReadonlySet<VehicleSelectorAxis>
 ) {
   const subset: VehicleSelectorSelection = {};
+  const copy = <K extends keyof VehicleSelectorSelection>(key: K) => {
+    const value = selection[key];
+    if (value !== undefined) {
+      subset[key] = value;
+    }
+  };
+
   for (const axis of AXES) {
     if (!axes.has(axis) || !axisSelected(selection, axis)) continue;
-    const selected = selectionForAxis(selection, axis);
     switch (axis) {
       case 'maker':
-        subset.makerId = 'id' in selected ? selected.id : undefined;
-        subset.maker = 'label' in selected ? selected.label : undefined;
+        copy('makerId');
+        copy('maker');
         break;
       case 'model':
-        subset.modelId = 'id' in selected ? selected.id : undefined;
-        subset.model = 'label' in selected ? selected.label : undefined;
+        copy('modelId');
+        copy('model');
         break;
       case 'generation':
-        subset.generationId = 'id' in selected ? selected.id : undefined;
-        subset.generation = 'label' in selected ? selected.label : undefined;
+        copy('generationId');
+        copy('generation');
         break;
       case 'phase':
-        subset.phaseId = 'id' in selected ? selected.id : undefined;
-        subset.phase = 'label' in selected ? selected.label : undefined;
+        copy('phaseId');
+        copy('phase');
         break;
       case 'modelYear':
-        subset.modelYearId = 'id' in selected ? selected.id : undefined;
-        subset.modelYear = 'value' in selected ? selected.value : undefined;
+        copy('modelYearId');
+        copy('modelYear');
         break;
       case 'powertrain':
-        subset.powertrainId = 'id' in selected ? selected.id : undefined;
-        subset.powertrain = 'label' in selected ? selected.label : undefined;
+        copy('powertrainId');
+        copy('powertrain');
         break;
       case 'fuelType':
-        subset.fuelType = 'label' in selected ? selected.label : undefined;
+        copy('fuelType');
         break;
       case 'drivetrain':
-        subset.drivetrain = 'label' in selected ? selected.label : undefined;
+        copy('drivetrain');
         break;
       case 'seats':
-        subset.seats = 'value' in selected ? selected.value : undefined;
+        copy('seats');
         break;
       case 'trim':
-        subset.trimId = 'id' in selected ? selected.id : undefined;
-        subset.trim = 'label' in selected ? selected.label : undefined;
+        copy('trimId');
+        copy('trim');
         break;
     }
   }
