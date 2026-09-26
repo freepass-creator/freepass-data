@@ -2,6 +2,15 @@ name: ERP5 continuous read-only audit
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/erp5-continuous-audit.yml'
+      - 'src/application/estimate-master-canonical.ts'
+      - 'src/application/estimate-master-readiness.ts'
+      - 'src/jobs/check-estimate-master-readiness.ts'
+      - 'src/jobs/data-access-runtime.ts'
   schedule:
     - cron: '37 * * * *'
 
@@ -73,6 +82,9 @@ jobs:
             (.blockers | type == "array") and
             (.holdReasons | type == "array")
           ' estimate-master-readiness.json >/dev/null
+          echo '--- estimate-master-readiness.json ---'
+          cat estimate-master-readiness.json
+          echo '--- end estimate-master-readiness.json ---'
           {
             echo '## Estimate new-car master readiness'
             echo
@@ -700,6 +712,7 @@ jobs:
           jq -e --arg runId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             '.version == "erp5-continuous-pointer/1" and .runId == $runId' latest-readback.json >/dev/null
       - name: Retain non-sensitive summaries for operator inspection
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: erp5-audit-summary-${{ github.run_id }}-${{ github.run_attempt }}
