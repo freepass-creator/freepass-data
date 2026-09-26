@@ -137,6 +137,17 @@ function registration(
   };
 }
 
+function freshness(
+  assessedAt = '2026-09-26T07:10:00.000Z',
+  maxAgeMs = 15 * 60_000
+) {
+  return {
+    assessedAt,
+    maxAgeMs,
+    maxFutureSkewMs: 0
+  };
+}
+
 describe('durable Sheet delivery evidence', () => {
   it('records, re-reads and idempotently reuses one validated receipt', async () => {
     const store = new MemoryDataStore();
@@ -156,10 +167,45 @@ describe('durable Sheet delivery evidence', () => {
     const reread = await readSheetDeliveryEvidence(store, first.receiptId);
 
     expect(first.receiptId).toMatch(/^sheet_receipt_[a-f0-9]{64}$/);
+    expect(first.evidenceDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(second).toEqual(first);
     expect(reread).toEqual(first);
     expect(await store.listSheetDeliveryEvidence('google-sheets-f01'))
       .toHaveLength(1);
+  });
+
+  it('rejects evidence recorded before the delivery readback completed', async () => {
+    const store = new MemoryDataStore();
+    const h = handoff('CANONICAL_ACTIVE');
+
+    await expect(recordSheetDeliveryEvidence(store, {
+      handoff: h,
+      receipt: receipt(h),
+      recordedAt: '2026-09-26T07:03:59.000Z'
+    })).rejects.toThrow('SHEET_DELIVERY_EVIDENCE_RECORDED_BEFORE_READBACK');
+
+    expect(await store.listSheetDeliveryEvidence('google-sheets-f01'))
+      .toEqual([]);
+  });
+
+  it('detects stored metadata tampering because recordedAt is sealed by evidenceDigest', async () => {
+    const source = new MemoryDataStore();
+    const h = handoff('CANONICAL_ACTIVE');
+    const stored = await recordSheetDeliveryEvidence(source, {
+      handoff: h,
+      receipt: receipt(h),
+      recordedAt: '2026-09-26T07:05:00.000Z'
+    });
+
+    const tamperedStore = new MemoryDataStore();
+    await tamperedStore.putSheetDeliveryEvidence({
+      ...structuredClone(stored),
+      recordedAt: '2026-09-26T07:06:00.000Z'
+    });
+
+    await expect(
+      readSheetDeliveryEvidence(tamperedStore, stored.receiptId)
+    ).rejects.toThrow('SHEET_DELIVERY_EVIDENCE_DIGEST_MISMATCH');
   });
 
   it('never persists an invalid receipt', async () => {
@@ -182,13 +228,15 @@ describe('durable Sheet delivery evidence', () => {
     const h = handoff('LEGACY_VERIFIED_BRIDGE');
     await recordSheetDeliveryEvidence(store, {
       handoff: h,
-      receipt: receipt(h)
+      receipt: receipt(h),
+      recordedAt: '2026-09-26T07:05:00.000Z'
     });
 
     const assessed = await assessLatestSheetConsumerCutover(
       store,
       registration('OBSERVE'),
-      'SHADOW_READ'
+      'SHADOW_READ',
+      freshness()
     );
 
     expect(assessed.delivery).toMatchObject({
@@ -206,13 +254,15 @@ describe('durable Sheet delivery evidence', () => {
     const h = handoff('CANONICAL_ACTIVE');
     await recordSheetDeliveryEvidence(store, {
       handoff: h,
-      receipt: receipt(h)
+      receipt: receipt(h),
+      recordedAt: '2026-09-26T07:05:00.000Z'
     });
 
     const assessed = await assessLatestSheetConsumerCutover(
       store,
       registration('PARITY_VERIFIED'),
-      'FREEPASS_DATA_READ'
+      'FREEPASS_DATA_READ',
+      freshness()
     );
 
     expect(assessed.delivery).toMatchObject({
@@ -229,6 +279,65 @@ describe('durable Sheet delivery evidence', () => {
       to: 'FREEPASS_DATA_READ',
       blockers: []
     });
+  });
+
+  it('fails closed when the latest canonical readback is stale', async () => {
+    const store = new MemoryDataStore();
+    const h = handoff('CANONICAL_ACTIVE');
+    await recordSheetDeliveryEvidence(store, {
+      handoff: h,
+      receipt: receipt(h),
+      recordedAt: '2026-09-26T07:05:00.000Z'
+    });
+
+    const assessed = await assessLatestSheetConsumerCutover(
+      store,
+      registration('PARITY_VERIFIED'),
+      'FREEPASS_DATA_READ',
+      freshness('2026-09-26T08:10:00.000Z')
+    );
+
+    expect(assessed.freshness).toMatchObject({
+      status: 'HOLD',
+      blockers: expect.arrayContaining([
+        'SHEET_READBACK_STALE',
+        'SHEET_APPROVED_RELEASE_STALE'
+      ])
+    });
+    expect(assessed.registration.evidence).toMatchObject({
+      freepassReadVerified: false,
+      productionReadbackVerified: false,
+      approvedRelease: null
+    });
+    expect(assessed.decision.allowed).toBe(false);
+  });
+
+  it('fails closed on future-dated stored evidence outside the allowed clock skew', async () => {
+    const store = new MemoryDataStore();
+    const h = handoff('CANONICAL_ACTIVE');
+    const futureReceipt = receipt(h, '2026-09-26T07:12:00.000Z');
+
+    await recordSheetDeliveryEvidence(store, {
+      handoff: h,
+      receipt: futureReceipt,
+      recordedAt: '2026-09-26T07:12:30.000Z'
+    });
+
+    const assessed = await assessLatestSheetConsumerCutover(
+      store,
+      registration('PARITY_VERIFIED'),
+      'FREEPASS_DATA_READ',
+      freshness('2026-09-26T07:10:00.000Z')
+    );
+
+    expect(assessed.freshness).toMatchObject({
+      status: 'HOLD',
+      blockers: expect.arrayContaining([
+        'SHEET_READBACK_FROM_FUTURE',
+        'SHEET_EVIDENCE_RECORD_FROM_FUTURE'
+      ])
+    });
+    expect(assessed.decision.allowed).toBe(false);
   });
 
   it('fails closed when the latest durable receipt falls back to bridge authority', async () => {
@@ -258,7 +367,8 @@ describe('durable Sheet delivery evidence', () => {
     const assessed = await assessLatestSheetConsumerCutover(
       store,
       registration('PARITY_VERIFIED'),
-      'FREEPASS_DATA_READ'
+      'FREEPASS_DATA_READ',
+      freshness()
     );
 
     expect(assessed.record?.receipt.releaseAuthority)
