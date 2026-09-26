@@ -3,6 +3,7 @@ import {
   VEHICLE_SELECTOR_UX_PRESETS,
   applyVehicleGroupDrilldown,
   applyVehicleGroupSelection,
+  finalizeVehicleSelection,
   reconcileVehicleSelection,
   selectVehicles,
   type VehicleSelectorRecord,
@@ -1606,6 +1607,178 @@ describe('common vehicle selector', () => {
     );
     expect(badOption.reason).toBe('DRILLDOWN_OPTION_NOT_AVAILABLE');
     expect(badOption.selection).toEqual({});
+  });
+
+  it('approves one fully identified active new-car configuration', () => {
+    const result = finalizeVehicleSelection([
+      record('approved-new'),
+    ], {
+      mode: 'NEW_CAR',
+      selection: {
+        model: '쏘렌토',
+        modelYear: 2027,
+        powertrain: '하이브리드',
+        trim: '노블레스',
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: 'APPROVED',
+      recordId: 'approved-new',
+      reasons: [],
+    });
+    expect(result.result.guidance.resolvedRecordId).toBe('approved-new');
+  });
+
+  it('holds a single candidate when required new-car stable identity is missing', () => {
+    const result = finalizeVehicleSelection([
+      record('missing-trim-id', {
+        trim: { id: null, label: '노블레스' },
+      }),
+    ], {
+      mode: 'NEW_CAR',
+      selection: { model: '쏘렌토' },
+    });
+
+    expect(result.status).toBe('HOLD');
+    expect(result.recordId).toBeNull();
+    expect(result.reasons).toContain('MISSING_TRIM_ID');
+    expect(result.result.candidates).toHaveLength(1);
+    expect(result.result.guidance.resolvedRecordId).toBeNull();
+  });
+
+  it('requires generation and phase stable identity before used-car approval', () => {
+    const missingPhase = finalizeVehicleSelection([
+      record('used-missing-phase', {
+        lifecycle: 'HISTORICAL',
+        phase: { id: null, label: null },
+      }),
+    ], {
+      mode: 'USED_CAR',
+      selection: { model: '쏘렌토' },
+    });
+
+    expect(missingPhase.status).toBe('HOLD');
+    expect(missingPhase.reasons).toEqual(
+      expect.arrayContaining(['MISSING_PHASE_ID', 'MISSING_PHASE'])
+    );
+
+    const complete = finalizeVehicleSelection([
+      record('used-complete', {
+        lifecycle: 'HISTORICAL',
+      }),
+    ], {
+      mode: 'USED_CAR',
+      selection: { model: '쏘렌토' },
+    });
+
+    expect(complete).toMatchObject({
+      status: 'APPROVED',
+      recordId: 'used-complete',
+      reasons: [],
+    });
+  });
+
+  it('never approves UNKNOWN or HOLD candidates even when only one remains', () => {
+    const unknown = finalizeVehicleSelection([
+      record('unknown', {
+        lifecycle: 'HISTORICAL',
+        identityStatus: 'PARTIAL',
+      }),
+    ], {
+      mode: 'USED_CAR',
+      selection: { model: '쏘렌토' },
+    });
+
+    expect(unknown.status).toBe('HOLD');
+    expect(unknown.reasons).toContain('NON_ACTIVE_CANDIDATE');
+
+    const hold = finalizeVehicleSelection([
+      record('hold', {
+        lifecycle: 'HOLD',
+        identityStatus: 'HOLD',
+      }),
+    ], {
+      mode: 'USED_CAR',
+      selection: { model: '쏘렌토' },
+      includeHold: true,
+    });
+
+    expect(hold.status).toBe('HOLD');
+    expect(hold.reasons).toContain('NON_ACTIVE_CANDIDATE');
+  });
+
+  it('requires explicit record choice while multiple finalizable candidates remain', () => {
+    const rows = [
+      record('noblesse'),
+      record('signature', {
+        trim: { id: 'trim_signature', label: '시그니처' },
+      }),
+    ];
+
+    const automatic = finalizeVehicleSelection(rows, {
+      mode: 'NEW_CAR',
+      selection: { model: '쏘렌토' },
+    });
+    expect(automatic).toMatchObject({
+      status: 'HOLD',
+      recordId: null,
+      reasons: ['AMBIGUOUS_CANDIDATES'],
+    });
+
+    const explicit = finalizeVehicleSelection(
+      rows,
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      'signature'
+    );
+    expect(explicit).toMatchObject({
+      status: 'APPROVED',
+      recordId: 'signature',
+      reasons: [],
+    });
+  });
+
+  it('rejects a stale explicit record id instead of falling back to the top-ranked candidate', () => {
+    const result = finalizeVehicleSelection(
+      [record('real')],
+      {
+        mode: 'NEW_CAR',
+        selection: { model: '쏘렌토' },
+      },
+      'stale-record'
+    );
+
+    expect(result).toMatchObject({
+      status: 'HOLD',
+      recordId: null,
+      reasons: ['CANDIDATE_NOT_FOUND'],
+    });
+    expect(result.result.candidates.map((item) => item.record.recordId)).toEqual([
+      'real',
+    ]);
+  });
+
+  it('holds finalization when the request still depends on unknown evidence', () => {
+    const result = finalizeVehicleSelection([
+      record('unknown-seats', {
+        lifecycle: 'HISTORICAL',
+        seats: { id: null, label: null, value: null },
+      }),
+    ], {
+      mode: 'USED_CAR',
+      selection: {
+        model: '쏘렌토',
+        seats: 7,
+      },
+    });
+
+    expect(result.status).toBe('HOLD');
+    expect(result.reasons).toEqual(
+      expect.arrayContaining(['NON_ACTIVE_CANDIDATE', 'UNRESOLVED_REQUEST'])
+    );
   });
 
   it('reports OPEN before the user supplies any search criteria', () => {

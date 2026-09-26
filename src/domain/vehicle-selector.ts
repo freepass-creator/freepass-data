@@ -209,6 +209,34 @@ export type VehicleSelectorGroupTransition = {
   result: VehicleSelectorResult;
 };
 
+export type VehicleSelectorFinalizationReason =
+  | 'CANDIDATE_NOT_FOUND'
+  | 'AMBIGUOUS_CANDIDATES'
+  | 'NON_ACTIVE_CANDIDATE'
+  | 'UNRESOLVED_REQUEST'
+  | 'MISSING_RECORD_ID'
+  | 'MISSING_MAKER'
+  | 'MISSING_MODEL_ID'
+  | 'MISSING_MODEL'
+  | 'MISSING_MODEL_YEAR_ID'
+  | 'MISSING_MODEL_YEAR'
+  | 'MISSING_POWERTRAIN_ID'
+  | 'MISSING_POWERTRAIN'
+  | 'MISSING_TRIM_ID'
+  | 'MISSING_TRIM'
+  | 'MISSING_GENERATION_ID'
+  | 'MISSING_GENERATION'
+  | 'MISSING_PHASE_ID'
+  | 'MISSING_PHASE'
+  | 'MODE_SCOPE_MISMATCH';
+
+export type VehicleSelectorFinalizationDecision = {
+  status: 'APPROVED' | 'HOLD';
+  recordId: string | null;
+  reasons: VehicleSelectorFinalizationReason[];
+  result: VehicleSelectorResult;
+};
+
 export type VehicleSelectorUxPreset = {
   mode: VehicleSelectorMode;
   presentation: 'GUIDED' | 'SEARCH_FILTER';
@@ -1102,6 +1130,54 @@ function buildCandidateGroups(
   });
 }
 
+function finalizationReasonsForCandidate(
+  candidate: VehicleSelectorCandidate,
+  mode: VehicleSelectorMode
+): VehicleSelectorFinalizationReason[] {
+  const reasons: VehicleSelectorFinalizationReason[] = [];
+  const record = candidate.record;
+
+  if (candidate.action !== 'SELECT' || candidate.actionState !== 'ACTIVE') {
+    reasons.push('NON_ACTIVE_CANDIDATE');
+  }
+  if (
+    candidate.unresolvedAxes.length > 0 ||
+    candidate.search.unresolvedTokens > 0
+  ) {
+    reasons.push('UNRESOLVED_REQUEST');
+  }
+
+  if (!hasText(record.recordId)) reasons.push('MISSING_RECORD_ID');
+  if (!hasText(record.maker.label)) reasons.push('MISSING_MAKER');
+  if (!hasText(record.model.id)) reasons.push('MISSING_MODEL_ID');
+  if (!hasText(record.model.label)) reasons.push('MISSING_MODEL');
+  if (!hasText(record.modelYear.id)) reasons.push('MISSING_MODEL_YEAR_ID');
+  if (!Number.isInteger(record.modelYear.value)) reasons.push('MISSING_MODEL_YEAR');
+  if (!hasText(record.powertrain.id)) reasons.push('MISSING_POWERTRAIN_ID');
+  if (!hasText(record.powertrain.label)) reasons.push('MISSING_POWERTRAIN');
+  if (!hasText(record.trim.id)) reasons.push('MISSING_TRIM_ID');
+  if (!hasText(record.trim.label)) reasons.push('MISSING_TRIM');
+
+  if (mode === 'NEW_CAR') {
+    if (record.lifecycle !== 'CURRENT') reasons.push('MODE_SCOPE_MISMATCH');
+  } else {
+    if (!hasText(record.generation.id)) reasons.push('MISSING_GENERATION_ID');
+    if (!hasText(record.generation.label)) reasons.push('MISSING_GENERATION');
+    if (!hasText(record.phase.id)) reasons.push('MISSING_PHASE_ID');
+    if (!hasText(record.phase.label)) reasons.push('MISSING_PHASE');
+    if (record.lifecycle === 'HOLD') reasons.push('MODE_SCOPE_MISMATCH');
+  }
+
+  return [...new Set(reasons)];
+}
+
+function candidateFinalizable(
+  candidate: VehicleSelectorCandidate,
+  mode: VehicleSelectorMode
+) {
+  return finalizationReasonsForCandidate(candidate, mode).length === 0;
+}
+
 function requestHasCriteria(request: VehicleSelectorRequest) {
   const selection = request.selection ?? {};
   return (
@@ -1137,7 +1213,9 @@ function buildGuidance(
     preset.preferredAxisOrder.find((axis) => ambiguousAxes.includes(axis)) ?? null;
 
   const resolvedRecordId =
-    candidates.length === 1 && candidates[0]?.selectable
+    candidates.length === 1 &&
+    candidates[0] &&
+    candidateFinalizable(candidates[0], request.mode)
       ? candidates[0].record.recordId
       : null;
 
@@ -1574,6 +1652,50 @@ export function applyVehicleGroupDrilldown(
     beforeGroupCount: before.groups.length,
     afterGroupCount: reconciled.result.groups.length,
     result: reconciled.result,
+  };
+}
+
+export function finalizeVehicleSelection(
+  records: readonly VehicleSelectorRecord[],
+  request: VehicleSelectorRequest,
+  recordId?: string | null
+): VehicleSelectorFinalizationDecision {
+  const result = selectVehicles(records, request);
+
+  let candidate: VehicleSelectorCandidate | undefined;
+
+  if (hasText(recordId)) {
+    candidate = result.candidates.find(
+      (item) => item.record.recordId === recordId
+    );
+    if (!candidate) {
+      return {
+        status: 'HOLD',
+        recordId: null,
+        reasons: ['CANDIDATE_NOT_FOUND'],
+        result,
+      };
+    }
+  } else {
+    if (result.candidates.length !== 1) {
+      return {
+        status: 'HOLD',
+        recordId: null,
+        reasons: result.candidates.length > 1
+          ? ['AMBIGUOUS_CANDIDATES']
+          : ['CANDIDATE_NOT_FOUND'],
+        result,
+      };
+    }
+    candidate = result.candidates[0];
+  }
+
+  const reasons = finalizationReasonsForCandidate(candidate!, request.mode);
+  return {
+    status: reasons.length ? 'HOLD' : 'APPROVED',
+    recordId: reasons.length ? null : candidate!.record.recordId,
+    reasons,
+    result,
   };
 }
 
