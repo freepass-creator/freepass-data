@@ -29,7 +29,9 @@
         "generatedAt",
         "policyParity",
         "missingPolicyOfferIds",
-        "invalidPolicyFactRefs"
+        "invalidPolicyFactRefs",
+        "commercialCoverage",
+        "commercialMissingOfferIds"
       ],
       "properties": {
         "schemaVersion": {
@@ -97,6 +99,18 @@
         "dataDigest": {
           "type": "string",
           "minLength": 1
+        },
+        "commercialCoverage": {
+          "enum": [
+            "COMPLETE",
+            "INCOMPLETE"
+          ]
+        },
+        "commercialMissingOfferIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -411,6 +425,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "commercial": {
+          "$ref": "https://freepass.teamjpk.com/contracts/commercial-offer-view-v1.schema.json"
         }
       }
     },

@@ -12,6 +12,7 @@ import type {
 } from '../domain/catalog.js';
 import type { CatalogStore, ProjectionStore } from '../ports/catalog-store.js';
 import type { ProjectionReleaseManifest } from '../domain/projection-evidence.js';
+import { buildCommercialOfferView } from './build-commercial-offer-view.js';
 
 const MONEY_KEYS = new Set([
   'mileage_upcharge_per_10000km',
@@ -294,6 +295,14 @@ export async function buildAdminCatalogProjection(
         }
       }
 
+      const commercial = buildCommercialOfferView({
+        product,
+        vehicleModel: model,
+        ...(asset ? { vehicleAsset: asset } : {}),
+        offer,
+        ...(policy.policy ? { policy: policy.policy } : {}),
+      });
+
       projectedOffers.push({
         offerId: offer.id,
         offerRevision: offer.revision,
@@ -303,6 +312,7 @@ export async function buildAdminCatalogProjection(
         policyValues: policy.values,
         invalidPolicyFactRefs: policy.invalid,
         priceTerms: terms,
+        commercial,
       });
     }
 

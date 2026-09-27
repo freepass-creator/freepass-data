@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/product-condition-pricing-v1.schema.json",
+  "title": "Product Condition Pricing V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dimensions", "adjustmentRules", "eligibilityRules"],
+  "properties": {
+    "dimensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "label", "group", "valueType", "role", "sourcePolicyKeys", "mayAffect"],
+        "properties": {
+          "key": {"type": "string", "minLength": 1},
+          "label": {"type": "string", "minLength": 1},
+          "group": {"enum": ["TERM","MILEAGE","DRIVER","INSURANCE","MAINTENANCE","PAYMENT","DELIVERY","SETTLEMENT","OTHER"]},
+          "valueType": {"enum": ["BOOLEAN","NUMBER","MONEY","ENUM","TEXT"]},
+          "role": {"enum": ["PRICE_INPUT","ELIGIBILITY","CONTRACT_ONLY"]},
+          "defaultValue": {},
+          "allowedValues": {"type": "array"},
+          "sourcePolicyKeys": {"type": "array", "items": {"type": "string"}},
+          "mayAffect": {"type": "array", "items": {"enum": ["MONTHLY_RENT","DEPOSIT","UPFRONT_FEE","ELIGIBILITY"]}}
+        }
+      }
+    },
+    "adjustmentRules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ruleId", "dimensionKey", "target", "when", "operation", "priority", "source"],
+        "properties": {
+          "ruleId": {"type": "string", "minLength": 1},
+          "dimensionKey": {"type": "string", "minLength": 1},
+          "target": {"enum": ["MONTHLY_RENT","DEPOSIT","UPFRONT_FEE"]},
+          "when": {"type": "array", "minItems": 1},
+          "operation": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": {"enum": ["ADD_FIXED","ADD_RATE","ADD_PER_UNIT","MULTIPLY","SET_FIXED","REQUIRE_EXPLICIT_VARIANT"]}
+            }
+          },
+          "priority": {"type": "integer"},
+          "source": {"type": "object"}
+        }
+      }
+    },
+    "eligibilityRules": {"type": "array"}
+  }
+}

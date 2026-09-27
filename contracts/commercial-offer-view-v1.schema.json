@@ -1,0 +1,752 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/commercial-offer-view-v1.schema.json",
+  "title": "FreePass Commercial Offer View V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "offerId",
+    "supplierId",
+    "basisRows",
+    "dataCatalog",
+    "listing",
+    "conditionSummary",
+    "preview",
+    "review"
+  ],
+  "properties": {
+    "offerId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "supplierId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "policyId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "basisRows": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/basisRow"
+      }
+    },
+    "conditionSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "known",
+        "unknown"
+      ],
+      "properties": {
+        "known": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/conditionEvidence"
+          }
+        },
+        "unknown": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "preview": {
+      "$ref": "#/$defs/preview"
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "decisions",
+        "invalidFacts"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "READY",
+            "NEEDS_DECISION",
+            "INVALID"
+          ]
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "invalidFacts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "listing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy",
+        "termKey",
+        "monthlyRent",
+        "deposit",
+        "attribution"
+      ],
+      "properties": {
+        "strategy": {
+          "const": "LOWEST_BASIS_MONTHLY_RENT"
+        },
+        "termKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "monthlyRent": {
+          "$ref": "#/$defs/money"
+        },
+        "deposit": {
+          "$ref": "#/$defs/deposit"
+        },
+        "attribution": {
+          "$ref": "#/$defs/attribution"
+        }
+      }
+    },
+    "dataCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dimensions",
+        "classification",
+        "pricingModifiers",
+        "policyFacts",
+        "contractFacts",
+        "derived",
+        "quality"
+      ],
+      "properties": {
+        "dimensions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dimension"
+          }
+        },
+        "classification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "priceInputKeys",
+            "eligibilityKeys",
+            "contractOnlyKeys",
+            "groups"
+          ],
+          "properties": {
+            "priceInputKeys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "eligibilityKeys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "contractOnlyKeys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "groups": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "TERM",
+                "MILEAGE",
+                "DRIVER",
+                "INSURANCE",
+                "MAINTENANCE",
+                "PAYMENT",
+                "DELIVERY",
+                "SETTLEMENT",
+                "OTHER"
+              ],
+              "properties": {
+                "TERM": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "MILEAGE": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "DRIVER": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "INSURANCE": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "MAINTENANCE": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "PAYMENT": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "DELIVERY": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "SETTLEMENT": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "OTHER": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "pricingModifiers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pricingModifier"
+          }
+        },
+        "policyFacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fact"
+          }
+        },
+        "contractFacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fact"
+          }
+        },
+        "derived": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lowestBasisPrice",
+            "defaultConditionResult"
+          ],
+          "properties": {
+            "lowestBasisPrice": {
+              "$ref": "#/$defs/derivedBasis"
+            },
+            "defaultConditionResult": {
+              "$ref": "#/$defs/preview"
+            }
+          }
+        },
+        "quality": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "unresolvedDimensionKeys",
+            "partialBasisTermKeys",
+            "ambiguousPolicyTermKeys",
+            "unclassifiedPolicyFactKeys"
+          ],
+          "properties": {
+            "unresolvedDimensionKeys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "partialBasisTermKeys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "ambiguousPolicyTermKeys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "unclassifiedPolicyFactKeys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "properties": {
+        "amount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "currency": {
+          "const": "KRW"
+        }
+      }
+    },
+    "conditionEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dimensionKey",
+        "status",
+        "origin"
+      ],
+      "properties": {
+        "dimensionKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "KNOWN",
+            "UNKNOWN"
+          ]
+        },
+        "value": {},
+        "origin": {
+          "enum": [
+            "SOURCE_PRICE_KEY",
+            "CANONICAL_PRICE_TERM",
+            "LINKED_POLICY_FACT",
+            "MATCHED_POLICY_FACT",
+            "UNRESOLVED"
+          ]
+        },
+        "sourceRef": {
+          "type": "string"
+        }
+      }
+    },
+    "policyMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "candidatePolicyIds",
+        "matchedDimensionKeys",
+        "sourceRefs"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "UNIQUE_MATCH",
+            "AMBIGUOUS",
+            "NO_MATCH",
+            "INSUFFICIENT_EVIDENCE"
+          ]
+        },
+        "matchedPolicyId": {
+          "type": "string"
+        },
+        "candidatePolicyIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "matchedDimensionKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "deposit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "KNOWN",
+            "ZERO",
+            "UNKNOWN",
+            "NOT_APPLICABLE"
+          ]
+        },
+        "amount": {
+          "$ref": "#/$defs/money"
+        }
+      }
+    },
+    "basisRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "termKey",
+        "monthlyRent",
+        "deposit",
+        "attribution"
+      ],
+      "properties": {
+        "termKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "monthlyRent": {
+          "$ref": "#/$defs/money"
+        },
+        "deposit": {
+          "$ref": "#/$defs/deposit"
+        },
+        "attribution": {
+          "$ref": "#/$defs/attribution"
+        }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "options"
+      ],
+      "properties": {
+        "termMonths": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "mileageKmPerYear": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "driverAge": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "additionalDriverCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "options": {
+          "type": "object"
+        }
+      }
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "selection",
+        "decisions",
+        "invalidFacts"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "READY",
+            "NEEDS_DECISION",
+            "INVALID"
+          ]
+        },
+        "selection": {
+          "$ref": "#/$defs/selection"
+        },
+        "basisTermKey": {
+          "type": "string"
+        },
+        "monthlyRent": {
+          "$ref": "#/$defs/money"
+        },
+        "deposit": {
+          "$ref": "#/$defs/deposit"
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "invalidFacts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "attribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "conditions",
+        "unknownConditionKeys",
+        "monthlyRentOrigin",
+        "depositOrigin"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "COMPLETE",
+            "PARTIAL"
+          ]
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/conditionEvidence"
+          }
+        },
+        "unknownConditionKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "policyMatch": {
+          "$ref": "#/$defs/policyMatch"
+        },
+        "monthlyRentOrigin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "origin",
+            "sourceRef"
+          ],
+          "properties": {
+            "origin": {
+              "const": "CANONICAL_PRICE_TERM"
+            },
+            "sourceRef": {
+              "type": "string"
+            }
+          }
+        },
+        "depositOrigin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "origin"
+          ],
+          "properties": {
+            "origin": {
+              "enum": [
+                "CANONICAL_PRICE_TERM",
+                "UNRESOLVED"
+              ]
+            },
+            "sourceRef": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "value"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {}
+      }
+    },
+    "dimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "label",
+        "group",
+        "valueType",
+        "role",
+        "sourcePolicyKeys",
+        "mayAffect"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "group": {
+          "enum": [
+            "TERM",
+            "MILEAGE",
+            "DRIVER",
+            "INSURANCE",
+            "MAINTENANCE",
+            "PAYMENT",
+            "DELIVERY",
+            "SETTLEMENT",
+            "OTHER"
+          ]
+        },
+        "valueType": {
+          "enum": [
+            "BOOLEAN",
+            "NUMBER",
+            "MONEY",
+            "ENUM",
+            "TEXT"
+          ]
+        },
+        "role": {
+          "enum": [
+            "PRICE_INPUT",
+            "ELIGIBILITY",
+            "CONTRACT_ONLY"
+          ]
+        },
+        "defaultValue": {},
+        "allowedValues": {
+          "type": "array"
+        },
+        "options": {
+          "type": "array"
+        },
+        "sourcePolicyKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mayAffect": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "MONTHLY_RENT",
+              "DEPOSIT",
+              "UPFRONT_FEE",
+              "ELIGIBILITY"
+            ]
+          }
+        }
+      }
+    },
+    "pricingModifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "dimension",
+        "target",
+        "cadence",
+        "unit",
+        "rawValue"
+      ],
+      "properties": {
+        "key": {
+          "enum": [
+            "mileage_upcharge_per_10000km",
+            "age_lowering_cost",
+            "additional_driver_cost"
+          ]
+        },
+        "dimension": {
+          "enum": [
+            "MILEAGE",
+            "DRIVER_AGE",
+            "ADDITIONAL_DRIVER"
+          ]
+        },
+        "target": {
+          "const": "MONTHLY_RENT"
+        },
+        "cadence": {
+          "const": "MONTHLY"
+        },
+        "unit": {
+          "enum": [
+            "PER_10000KM",
+            "ON_AGE_LOWERING",
+            "PER_ADDITIONAL_DRIVER"
+          ]
+        },
+        "rawValue": {}
+      }
+    },
+    "derivedBasis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "termKey",
+        "monthlyRent",
+        "deposit",
+        "attribution"
+      ],
+      "properties": {
+        "termKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "monthlyRent": {
+          "$ref": "#/$defs/money"
+        },
+        "deposit": {
+          "$ref": "#/$defs/deposit"
+        },
+        "attribution": {
+          "$ref": "#/$defs/attribution"
+        }
+      }
+    }
+  }
+}

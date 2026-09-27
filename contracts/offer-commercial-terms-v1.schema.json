@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/offer-commercial-terms-v1.schema.json",
+  "title": "Offer Commercial Terms V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["offerId", "productId", "supplierId", "defaultMileage", "terms", "status", "decisions", "invalidFacts"],
+  "properties": {
+    "offerId": { "type": "string", "minLength": 1 },
+    "productId": { "type": "string", "minLength": 1 },
+    "supplierId": { "type": "string", "minLength": 1 },
+    "policyId": { "type": "string", "minLength": 1 },
+    "defaultMileage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "kmPerYear", "source"],
+          "properties": {
+            "state": { "const": "KNOWN" },
+            "kmPerYear": { "type": "integer", "minimum": 1 },
+            "source": { "const": "POLICY" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "source"],
+          "properties": {
+            "state": { "const": "UNKNOWN" },
+            "source": { "const": "UNRESOLVED" }
+          }
+        }
+      ]
+    },
+    "terms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["termKey", "termMonths", "monthlyRent", "mileage", "deposit"],
+        "properties": {
+          "termKey": { "type": "string", "minLength": 1 },
+          "termMonths": { "type": "integer", "minimum": 1, "maximum": 120 },
+          "monthlyRent": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["amount", "currency"],
+            "properties": {
+              "amount": { "type": "integer", "minimum": 0 },
+              "currency": { "const": "KRW" }
+            }
+          },
+          "mileage": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "kmPerYear", "source", "isDefault"],
+                "properties": {
+                  "state": { "const": "KNOWN" },
+                  "kmPerYear": { "type": "integer", "minimum": 1 },
+                  "source": { "enum": ["TERM", "POLICY_DEFAULT"] },
+                  "isDefault": { "type": "boolean" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "source", "isDefault"],
+                "properties": {
+                  "state": { "const": "UNKNOWN" },
+                  "source": { "const": "UNRESOLVED" },
+                  "isDefault": { "const": false }
+                }
+              }
+            ]
+          },
+          "deposit": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "amount", "source"],
+                "properties": {
+                  "state": { "enum": ["KNOWN", "ZERO"] },
+                  "amount": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["amount", "currency"],
+                    "properties": {
+                      "amount": { "type": "integer", "minimum": 0 },
+                      "currency": { "const": "KRW" }
+                    }
+                  },
+                  "source": { "const": "TERM" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "source"],
+                "properties": {
+                  "state": { "const": "NOT_APPLICABLE" },
+                  "source": { "const": "TERM" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "source"],
+                "properties": {
+                  "state": { "const": "UNKNOWN" },
+                  "source": { "const": "UNRESOLVED" }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "status": { "enum": ["READY", "NEEDS_DECISION", "INVALID"] },
+    "decisions": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "invalidFacts": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+  }
+}

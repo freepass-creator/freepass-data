@@ -29,7 +29,7 @@ function fixtures() {
   const policy: Policy = {
     ...meta, id: 'policy-a', kind: 'OTHER', version: '2026-09',
     effectiveFrom: '2026-09-01T00:00:00.000Z',
-    facts: { basic_driver_age: 21, deposit_card_payment: true, pay_method: ['CARD','TRANSFER'] },
+    facts: { default_term_months: 36, annual_mileage: 20000, basic_driver_age: 21, insurance_included: true, property_compensation_limit: 100000000, deposit_card_payment: true, pay_method: ['CARD','TRANSFER'] },
   };
   const offer: Offer = {
     ...meta, id: 'offer-a', productId: product.id, supplierId: 'supplier-a',
@@ -89,6 +89,55 @@ describe('Admin Catalog projection on current release evidence', () => {
     expect(row.offers[0]?.policyValues).toContainEqual({
       policyId: 'basic_driver_age', type: 'NUMBER', value: 21,
     });
+    expect(row.offers[0]?.commercial?.dataCatalog.classification.priceInputKeys).toEqual(
+      expect.arrayContaining(['annual_mileage_km', 'driver_age', 'insurance_included', 'property_compensation_limit']),
+    );
+    expect(row.offers[0]?.commercial?.dataCatalog.classification.groups.INSURANCE).toEqual(
+      expect.arrayContaining(['insurance_included', 'property_compensation_limit']),
+    );
+    expect(row.offers[0]?.commercial?.dataCatalog.quality.unresolvedDimensionKeys).toContain('additional_driver_count');
+    expect(row.offers[0]?.commercial?.dataCatalog.derived.lowestBasisPrice).toMatchObject({
+      termKey: '48_2만',
+      monthlyRent: { amount: 850000, currency: 'KRW' },
+      deposit: { state: 'UNKNOWN' },
+    });
+    expect(row.offers[0]?.commercial?.listing).toMatchObject({
+      strategy: 'LOWEST_BASIS_MONTHLY_RENT',
+      termKey: '48_2만',
+      monthlyRent: { amount: 850000, currency: 'KRW' },
+      deposit: { state: 'UNKNOWN' },
+    });
+    expect(row.offers[0]?.commercial?.listing.attribution.unknownConditionKeys).toEqual(
+      expect.arrayContaining(['additional_driver_count']),
+    );
+    expect(row.offers[0]?.commercial?.preview).toMatchObject({
+      status: 'READY',
+      basisTermKey: '36_2만',
+      monthlyRent: { amount: 920000, currency: 'KRW' },
+      deposit: { state: 'ZERO', amount: { amount: 0, currency: 'KRW' } },
+    });
+    expect(row.offers[0]?.commercial?.basisRows[0]?.attribution.conditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          dimensionKey: 'annual_mileage_km',
+          status: 'KNOWN',
+          value: 20000,
+        }),
+        expect.objectContaining({
+          dimensionKey: 'driver_age',
+          status: 'KNOWN',
+          value: 21,
+          origin: 'LINKED_POLICY_FACT',
+        }),
+        expect.objectContaining({
+          dimensionKey: 'property_compensation_limit',
+          status: 'KNOWN',
+          value: 100000000,
+          origin: 'LINKED_POLICY_FACT',
+        }),
+      ]),
+    );
+    expect(row.offers[0]?.commercial?.conditionSummary.unknown).toContain('additional_driver_count');
     const manifest = await store.getManifest(release.releaseId);
     const lineage = await store.listProjectionLineage(release.releaseId);
     expect(manifest).not.toBeNull();

@@ -4,6 +4,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
 import catalogSchema from '../../contracts/catalog-v1.schema.json' with { type: 'json' };
 import adminCatalogSchema from '../../contracts/admin-catalog-view-v1.schema.json' with { type: 'json' };
+import commercialOfferSchema from '../../contracts/commercial-offer-view-v1.schema.json' with { type: 'json' };
 import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with { type: 'json' };
 import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import estimateMasterSchema from '../../contracts/estimate-newcar-master-v1.schema.json' with { type: 'json' };
@@ -150,6 +151,7 @@ export function createConsumerGateway(
   const ajv = new Ajv2020({ strict: false });
   addFormats(ajv);
   ajv.addSchema(catalogSchema);
+  ajv.addSchema(commercialOfferSchema);
   const validateErpData = ajv.compile(erpViewSchema);
   const validateAdminResponse = ajv.compile(adminCatalogSchema);
   const validateHealth = ajv.compile(healthSchema);
@@ -260,6 +262,11 @@ export function createConsumerGateway(
             data.flatMap((product) => product.offers)
               .flatMap((offer) => offer.invalidPolicyFactRefs)
           )].sort();
+          const commercialMissingOfferIds = [...new Set(
+            data.flatMap((product) => product.offers)
+              .filter((offer) => !offer.commercial)
+              .map((offer) => offer.offerId)
+          )].sort();
           const response = {
             schema: 'freepass-data.admin-catalog/v1',
             data,
@@ -271,6 +278,10 @@ export function createConsumerGateway(
                 : 'COMPLETE' as const,
               missingPolicyOfferIds,
               invalidPolicyFactRefs,
+              commercialCoverage: commercialMissingOfferIds.length
+                ? 'INCOMPLETE' as const
+                : 'COMPLETE' as const,
+              commercialMissingOfferIds,
             },
           };
           if (!validateAdminResponse(response)) {
