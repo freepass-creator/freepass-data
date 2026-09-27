@@ -5,7 +5,9 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const workflow = readFileSync(new URL('../.github/workflows/erp5-continuous-audit.yml', import.meta.url), 'utf8');
+// Checkouts with core.autocrlf on hand back CRLF, which every \n split below would miss.
+const workflow = readFileSync(new URL('../.github/workflows/erp5-continuous-audit.yml', import.meta.url), 'utf8')
+  .replace(/\r\n/g, '\n');
 const section = workflow.split('      - name: Build FreePass Data control tower\n')[1]?.split('\n      - name:')[0];
 assert.ok(section, 'Control Tower workflow step must exist');
 const runBlock = section.split('        run: |\n')[1];
