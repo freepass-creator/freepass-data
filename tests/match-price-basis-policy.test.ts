@@ -149,12 +149,14 @@ describe('reverse price-basis policy matching', () => {
   it('refuses reverse matching when there is no independent comparable evidence', () => {
     const noEvidence: PriceBasisAttribution = {
       ...structuredClone(attribution),
-      conditions: attribution.conditions.map((condition) => ({
-        ...condition,
-        status: 'UNKNOWN' as const,
-        origin: 'UNRESOLVED' as const,
-        value: undefined,
-      })),
+      conditions: attribution.conditions.map((condition) => {
+        const { value: _value, sourceRef: _sourceRef, ...rest } = condition;
+        return {
+          ...rest,
+          status: 'UNKNOWN' as const,
+          origin: 'UNRESOLVED' as const,
+        };
+      }),
       unknownConditionKeys: ['annual_mileage_km', 'driver_age', 'property_compensation_limit'],
     };
     const match = matchPriceBasisToPolicyCandidates({
