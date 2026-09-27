@@ -14,6 +14,18 @@ export type ConditionValueType =
   | 'ENUM'
   | 'TEXT';
 
+export type ConditionOption = {
+  value: CommercialFactValue;
+  label?: string;
+  availability: 'SELECTABLE' | 'NOT_ALLOWED' | 'CONSULT';
+  priceImpact:
+    | { status: 'NOT_PROVIDED' }
+    | { status: 'NO_CHANGE' }
+    | { status: 'RULED'; ruleIds: string[] }
+    | { status: 'EXPLICIT_VARIANT_REQUIRED' }
+    | { status: 'CONSULT' };
+};
+
 export type ConditionDimension = {
   key: string;
   label: string;
@@ -31,6 +43,7 @@ export type ConditionDimension = {
   role: 'PRICE_INPUT' | 'ELIGIBILITY' | 'CONTRACT_ONLY';
   defaultValue?: CommercialFactValue;
   allowedValues?: CommercialFactValue[];
+  options?: ConditionOption[];
   sourcePolicyKeys: string[];
   mayAffect: PricingTarget[];
 };
