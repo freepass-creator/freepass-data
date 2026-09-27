@@ -147,3 +147,29 @@ export type CommercialProductView = {
     unclassifiedPolicyFacts: string[];
   };
 };
+
+
+export type CommercialOfferView = {
+  offerId: string;
+  supplierId: string;
+  policyId?: string;
+  basisRows: Array<{
+    termKey: string;
+    monthlyRent: Money;
+    deposit: {
+      state: 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
+      amount?: Money;
+    };
+    attribution: PriceBasisAttribution;
+  }>;
+  conditionSummary: {
+    known: PriceConditionEvidence[];
+    unknown: string[];
+  };
+  preview: ProductPriceResult;
+  review: {
+    status: 'READY' | 'NEEDS_DECISION' | 'INVALID';
+    decisions: string[];
+    invalidFacts: string[];
+  };
+};
