@@ -1,4 +1,4 @@
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getFirestore } from 'firebase-admin/firestore';
 import { getDatabase } from 'firebase-admin/database';
 import {
   assertBusinessId,
@@ -143,8 +143,40 @@ export class FirebaseBusinessStore {
       throw new Error('BUSINESS_COMMAND_MIXED_BACKEND_FORBIDDEN');
     }
 
+    const buildReceipt = (): BusinessWriteReceipt => ({
+      contract: 'freepass-data.business-write-receipt/v1',
+      consumerId: input.consumerId,
+      commandId: input.commandId,
+      idempotencyKey: input.idempotencyKey,
+      status: 'COMMITTED',
+      operationCount: input.operations.length,
+      committedAt: new Date().toISOString(),
+    });
+
     if (resolved[0]!.resource.backend === 'RTDB') {
       const root = getDatabase(getBusinessFirebaseApp(resolved[0]!.resource.target)).ref();
+      const receiptRef = root.child('_freepass_data_command_receipts')
+        .child(encodeURIComponent(input.consumerId))
+        .child(encodeURIComponent(input.idempotencyKey));
+      const committed = await receiptRef.transaction((current) => {
+        if (current) return;
+        return {
+          state: 'CLAIMED',
+          commandId: input.commandId,
+          idempotencyKey: input.idempotencyKey,
+          claimedAt: new Date().toISOString(),
+        };
+      }, undefined, false);
+      if (!committed.committed) {
+        const current = committed.snapshot.val() as BusinessWriteReceipt | { receipt?: BusinessWriteReceipt } | null;
+        const existing = current && 'receipt' in current ? current.receipt : current;
+        if (existing && (existing as BusinessWriteReceipt).contract === 'freepass-data.business-write-receipt/v1') {
+          return existing as BusinessWriteReceipt;
+        }
+        throw new Error('BUSINESS_COMMAND_IN_PROGRESS');
+      }
+
+      const receipt = buildReceipt();
       const updates: Record<string, unknown> = {};
       for (const { operation, resource } of resolved) {
         const segments = [resource.collectionOrRoot];
@@ -161,29 +193,43 @@ export class FirebaseBusinessStore {
           updates[key] = operation.data ?? {};
         }
       }
+      updates[`_freepass_data_command_receipts/${encodeURIComponent(input.consumerId)}/${encodeURIComponent(input.idempotencyKey)}`] = {
+        state: 'COMMITTED',
+        receipt,
+      };
       await root.update(updates);
-    } else {
-      const db = getFirestore(getBusinessFirebaseApp(resolved[0]!.resource.target));
-      await db.runTransaction(async (tx) => {
-        for (const { operation, resource } of resolved) {
-          const ref = firestoreRef(resource, operation.id, operation.parentId);
-          if (operation.action === 'CREATE') tx.create(ref, operation.data ?? {});
-          else if (operation.action === 'SET') tx.set(ref, operation.data ?? {});
-          else if (operation.action === 'PATCH') tx.update(ref, operation.data ?? {});
-          else tx.delete(ref);
-        }
-      });
+      return receipt;
     }
 
-    return {
-      contract: 'freepass-data.business-write-receipt/v1',
-      consumerId: input.consumerId,
-      commandId: input.commandId,
-      idempotencyKey: input.idempotencyKey,
-      status: 'COMMITTED',
-      operationCount: input.operations.length,
-      committedAt: new Date().toISOString(),
-    };
+    const db = getFirestore(getBusinessFirebaseApp(resolved[0]!.resource.target));
+    const receiptRef = db.collection('_freepass_data_command_receipts')
+      .doc(encodeURIComponent(`${input.consumerId}:${input.idempotencyKey}`));
+    return db.runTransaction(async (tx) => {
+      const existing = await tx.get(receiptRef);
+      if (existing.exists) {
+        const stored = existing.data()?.receipt as BusinessWriteReceipt | undefined;
+        if (!stored || stored.commandId !== input.commandId) {
+          throw new Error('BUSINESS_IDEMPOTENCY_CONFLICT');
+        }
+        return stored;
+      }
+
+      for (const { operation, resource } of resolved) {
+        const ref = firestoreRef(resource, operation.id, operation.parentId);
+        if (operation.action === 'CREATE') tx.create(ref, operation.data ?? {});
+        else if (operation.action === 'SET') tx.set(ref, operation.data ?? {});
+        else if (operation.action === 'PATCH') tx.update(ref, operation.data ?? {});
+        else tx.delete(ref);
+      }
+      const receipt = buildReceipt();
+      tx.create(receiptRef, {
+        consumerId: input.consumerId,
+        commandId: input.commandId,
+        idempotencyKey: input.idempotencyKey,
+        receipt,
+      });
+      return receipt;
+    });
   }
 }
 
