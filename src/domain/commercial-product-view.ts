@@ -7,6 +7,26 @@ export type CommercialFact = {
   value: CommercialFactValue;
 };
 
+export type ProductConditionSelection = {
+  termMonths?: number;
+  mileageKmPerYear?: number;
+  driverAge?: number;
+  options: Record<string, CommercialFactValue>;
+};
+
+export type ProductPriceResult = {
+  status: 'READY' | 'NEEDS_DECISION' | 'INVALID';
+  selection: ProductConditionSelection;
+  basisTermKey?: string;
+  monthlyRent?: Money;
+  deposit?: {
+    state: 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
+    amount?: Money;
+  };
+  decisions: string[];
+  invalidFacts: string[];
+};
+
 export type CommercialProductView = {
   vehicle: {
     productId: string;
@@ -26,11 +46,17 @@ export type CommercialProductView = {
     plateNumber?: string | null;
     odometerKm?: number | null;
   };
-  rentalTerms: Array<{
+  conditionProfile: {
+    defaults: ProductConditionSelection;
+    available: {
+      termMonths: number[];
+      mileageKmPerYear: number[];
+    };
+  };
+  pricingBasis: Array<{
     termKey: string;
     termMonths: number;
     mileageKmPerYear?: number;
-    isDefaultMileage: boolean;
     monthlyRent: Money;
     deposit: {
       state: 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
@@ -39,12 +65,12 @@ export type CommercialProductView = {
   }>;
   policy: {
     policyId?: string;
-    defaultAnnualMileageKm?: number;
     facts: CommercialFact[];
   };
   contractConditions: {
     facts: CommercialFact[];
   };
+  preview: ProductPriceResult;
   review: {
     status: 'READY' | 'NEEDS_DECISION' | 'INVALID';
     decisions: string[];
