@@ -20,6 +20,12 @@ export function buildCommercialOfferView(input: {
     attribution: structuredClone(row.attribution),
   }));
 
+  const listing = [...basisRows].sort((a, b) =>
+    a.monthlyRent.amount - b.monthlyRent.amount ||
+    a.termKey.localeCompare(b.termKey)
+  )[0];
+  if (!listing) throw new Error('COMMERCIAL_LISTING_PRICE_MISSING');
+
   const previewBasis = productView.preview.basisTermKey
     ? basisRows.find((row) => row.termKey === productView.preview.basisTermKey)
     : undefined;
@@ -37,6 +43,13 @@ export function buildCommercialOfferView(input: {
     supplierId: input.offer.supplierId,
     ...(input.offer.policyId ? { policyId: input.offer.policyId } : {}),
     basisRows,
+    listing: {
+      strategy: 'LOWEST_BASIS_MONTHLY_RENT',
+      termKey: listing.termKey,
+      monthlyRent: structuredClone(listing.monthlyRent),
+      deposit: structuredClone(listing.deposit),
+      attribution: structuredClone(listing.attribution),
+    },
     conditionSummary: {
       known,
       unknown,
