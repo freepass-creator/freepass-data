@@ -13,7 +13,7 @@ import {
   type AdminWorkflowMutation,
   type AdminWorkflowReadResult,
   type AdminWorkflowReadSpec,
-} from '../api/admin-workflow-contract.js';
+} from '../domain/admin-workflow.js';
 
 const RECEIPTS = FIRESTORE_COLLECTIONS.legacyAdminWorkflow.receipts;
 
