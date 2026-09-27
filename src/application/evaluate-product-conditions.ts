@@ -4,6 +4,7 @@ import type {
   ProductPriceResult,
 } from '../domain/commercial-product-view.js';
 import { resolveOfferCommercialTerms } from './resolve-offer-commercial-terms.js';
+import { numberFromPolicy } from './product-pricing-policy.js';
 
 const positiveInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
@@ -24,25 +25,27 @@ export function buildDefaultProductConditionSelection(
   let termMonths: number | undefined;
   const rawDefaultTerm = policy?.facts.default_term_months;
   if (rawDefaultTerm !== undefined) {
-    if (!positiveInteger(rawDefaultTerm)) invalidFacts.push('INVALID_DEFAULT_TERM_MONTHS');
-    else if (!availableTerms.includes(rawDefaultTerm)) decisions.push('DEFAULT_TERM_PRICE_MISSING');
-    else termMonths = rawDefaultTerm;
+    const parsed = numberFromPolicy(rawDefaultTerm);
+    if (!parsed || !Number.isSafeInteger(parsed)) invalidFacts.push('INVALID_DEFAULT_TERM_MONTHS');
+    else if (!availableTerms.includes(parsed)) decisions.push('DEFAULT_TERM_PRICE_MISSING');
+    else termMonths = parsed;
   } else if (availableTerms.length === 1) {
     termMonths = availableTerms[0];
   } else {
     decisions.push('DEFAULT_TERM_REQUIRED');
   }
 
-  const selection: ProductConditionSelection = { options: {} };
+  const selection: ProductConditionSelection = { additionalDriverCount: 0, options: {} };
   if (termMonths !== undefined) selection.termMonths = termMonths;
   if (commercial.defaultMileage.state === 'KNOWN') {
     selection.mileageKmPerYear = commercial.defaultMileage.kmPerYear;
   }
 
-  const rawDriverAge = policy?.facts.basic_driver_age;
-  if (rawDriverAge !== undefined) {
-    if (!positiveInteger(rawDriverAge)) invalidFacts.push('INVALID_BASIC_DRIVER_AGE');
-    else selection.driverAge = rawDriverAge;
+  const basicDriverAge = numberFromPolicy(policy?.facts.basic_driver_age);
+  if (policy?.facts.basic_driver_age !== undefined && basicDriverAge === undefined) {
+    invalidFacts.push('INVALID_BASIC_DRIVER_AGE');
+  } else if (basicDriverAge !== undefined) {
+    selection.driverAge = basicDriverAge;
   }
 
   return {
@@ -73,12 +76,51 @@ export function evaluateProductConditions(
   );
 
   if (selection.termMonths && selection.mileageKmPerYear && !basis) {
-    decisions.push('PRICE_BASIS_NOT_FOUND');
+    const defaultMileage = commercial.defaultMileage.state === 'KNOWN'
+      ? commercial.defaultMileage.kmPerYear
+      : undefined;
+    const defaultBasis = commercial.terms.find((term) =>
+      term.termMonths === selection.termMonths &&
+      term.mileage.state === 'KNOWN' &&
+      term.mileage.kmPerYear === defaultMileage
+    );
+    if (defaultBasis && selection.mileageKmPerYear > (defaultMileage ?? 0)
+      && policy?.facts.mileage_upcharge_per_10000km !== undefined) {
+      decisions.push('MILEAGE_PRICE_ADJUSTMENT_REQUIRED');
+    } else {
+      decisions.push('PRICE_BASIS_NOT_FOUND');
+    }
   }
 
-  const basicDriverAge = policy?.facts.basic_driver_age;
-  if (selection.driverAge !== undefined && positiveInteger(basicDriverAge) && selection.driverAge !== basicDriverAge) {
-    decisions.push('DRIVER_AGE_PRICE_RULE_REQUIRED');
+  const basicDriverAge = numberFromPolicy(policy?.facts.basic_driver_age);
+  const lowerableToAge = numberFromPolicy(policy?.facts.driver_age_lowering);
+  const upperAge = numberFromPolicy(policy?.facts.driver_age_upper_limit);
+  if (selection.driverAge !== undefined) {
+    if (upperAge !== undefined && selection.driverAge > upperAge) {
+      invalidFacts.push('DRIVER_AGE_ABOVE_ALLOWED_RANGE');
+    } else if (basicDriverAge !== undefined && selection.driverAge < basicDriverAge) {
+      if (lowerableToAge === undefined || selection.driverAge < lowerableToAge) {
+        invalidFacts.push('DRIVER_AGE_BELOW_ALLOWED_RANGE');
+      } else if (policy?.facts.age_lowering_cost !== undefined) {
+        decisions.push('DRIVER_AGE_PRICE_ADJUSTMENT_REQUIRED');
+      } else {
+        decisions.push('DRIVER_AGE_PRICE_RULE_REQUIRED');
+      }
+    }
+  }
+
+  const additionalDriverCount = selection.additionalDriverCount ?? 0;
+  if (!Number.isSafeInteger(additionalDriverCount) || additionalDriverCount < 0) {
+    invalidFacts.push('INVALID_ADDITIONAL_DRIVER_COUNT');
+  } else if (additionalDriverCount > 0) {
+    const maxAdditional = numberFromPolicy(policy?.facts.additional_driver_allowance_count);
+    if (maxAdditional === undefined) decisions.push('ADDITIONAL_DRIVER_ALLOWANCE_REQUIRED');
+    else if (additionalDriverCount > maxAdditional) invalidFacts.push('ADDITIONAL_DRIVER_COUNT_EXCEEDS_POLICY');
+    else if (policy?.facts.additional_driver_cost !== undefined) {
+      decisions.push('ADDITIONAL_DRIVER_PRICE_ADJUSTMENT_REQUIRED');
+    } else {
+      decisions.push('ADDITIONAL_DRIVER_PRICE_RULE_REQUIRED');
+    }
   }
 
   for (const key of Object.keys(selection.options).sort()) {
