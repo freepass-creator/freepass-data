@@ -97,18 +97,16 @@ export function buildCommercialProductView(input: {
   const commercial = resolveOfferCommercialTerms(offer, policy);
   const classified = classifyPolicyFacts(policy);
 
-  const rentalRates = commercial.terms.map((term) => ({
+  const rentalTerms = commercial.terms.map((term) => ({
     termKey: term.termKey,
     termMonths: term.termMonths,
     ...(term.mileage.state === 'KNOWN' ? { mileageKmPerYear: term.mileage.kmPerYear } : {}),
     isDefaultMileage: term.mileage.state === 'KNOWN' ? term.mileage.isDefault : false,
     monthlyRent: structuredClone(term.monthlyRent),
-  }));
-
-  const depositByTerm = commercial.terms.map((term) => ({
-    termKey: term.termKey,
-    state: term.deposit.state,
-    ...('amount' in term.deposit ? { amount: structuredClone(term.deposit.amount) } : {}),
+    deposit: {
+      state: term.deposit.state,
+      ...('amount' in term.deposit ? { amount: structuredClone(term.deposit.amount) } : {}),
+    },
   }));
 
   const decisions = [...commercial.decisions];
@@ -135,7 +133,7 @@ export function buildCommercialProductView(input: {
         ...(vehicleAsset.odometerKm !== undefined ? { odometerKm: vehicleAsset.odometerKm } : {}),
       } : {}),
     },
-    rentalRates,
+    rentalTerms,
     policy: {
       ...(offer.policyId ? { policyId: offer.policyId } : {}),
       ...(commercial.defaultMileage.state === 'KNOWN'
@@ -144,7 +142,6 @@ export function buildCommercialProductView(input: {
       facts: classified.policyFacts,
     },
     contractConditions: {
-      depositByTerm,
       facts: classified.contractFacts,
     },
     review: {
