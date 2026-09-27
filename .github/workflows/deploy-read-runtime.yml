@@ -2,6 +2,10 @@ name: Deploy FreePass Data read runtime
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/read-runtime-deploy.trigger"
 
 concurrency:
   group: freepass-data-read-runtime-deploy
@@ -10,6 +14,7 @@ concurrency:
 permissions:
   contents: read
   id-token: write
+  issues: write
 
 jobs:
   deploy:
@@ -53,6 +58,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "READ_RUNTIME_APIS_READY=false" >> "$GITHUB_ENV"
           enabled="$(gcloud services list --enabled --project="$PROJECT_ID" --format='value(config.name)')"
           for api in run.googleapis.com artifactregistry.googleapis.com iamcredentials.googleapis.com sts.googleapis.com secretmanager.googleapis.com; do
             grep -qx "$api" <<<"$enabled" || {
@@ -60,6 +66,7 @@ jobs:
               exit 1
             }
           done
+          echo "READ_RUNTIME_APIS_READY=true" >> "$GITHUB_ENV"
 
       - name: Build immutable container
         shell: bash
@@ -86,6 +93,8 @@ jobs:
           ready="$(gcloud run services describe "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --format='value(status.conditions[0].status)')"
           test -n "$url"
           test "$ready" = "True"
+          echo "READ_RUNTIME_DEPLOYED_URL=$url" >> "$GITHUB_ENV"
+          echo "READ_RUNTIME_READY=$ready" >> "$GITHUB_ENV"
           {
             echo '## FreePass Data read runtime deployed'
             echo
@@ -96,3 +105,55 @@ jobs:
             echo
             echo 'Next: hand this URL to FreePassERP I-01, configure Vercel OIDC caller IAM, then switch ERP.com to OBSERVE.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record sanitized activation evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          HAS_DEPLOY_WIF_PROVIDER: ${{ vars.FREEPASS_DATA_DEPLOY_WIF_PROVIDER != '' }}
+          HAS_DEPLOY_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT != '' }}
+          HAS_READ_REGION: ${{ vars.FREEPASS_DATA_READ_REGION != '' }}
+          HAS_READ_SERVICE_NAME: ${{ vars.FREEPASS_DATA_READ_SERVICE_NAME != '' }}
+          HAS_ARTIFACT_REPOSITORY: ${{ vars.FREEPASS_DATA_ARTIFACT_REPOSITORY != '' }}
+          HAS_RUNTIME_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_RUNTIME_SERVICE_ACCOUNT != '' }}
+          HAS_CONSUMERS_SECRET_NAME: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_NAME != '' }}
+        shell: bash
+        run: |
+          set +e
+          missing_apis="unknown"
+          if command -v gcloud >/dev/null 2>&1 && gcloud auth list --filter=status:ACTIVE --format='value(account)' | grep -q .; then
+            enabled="$(gcloud services list --enabled --project="$PROJECT_ID" --format='value(config.name)' 2>/dev/null)"
+            missing=()
+            for api in run.googleapis.com artifactregistry.googleapis.com iamcredentials.googleapis.com sts.googleapis.com secretmanager.googleapis.com; do
+              grep -qx "$api" <<<"$enabled" || missing+=("$api")
+            done
+            if [ "${#missing[@]}" -eq 0 ]; then
+              missing_apis="none"
+            else
+              missing_apis="$(IFS=,; echo "${missing[*]}")"
+            fi
+          fi
+
+          {
+            echo '### ERP.com FreePass Data read runtime activation'
+            echo
+            echo "- commit: \`$GITHUB_SHA\`"
+            echo "- workflow status: **$JOB_STATUS**"
+            echo "- deploy WIF provider configured: **$HAS_DEPLOY_WIF_PROVIDER**"
+            echo "- deploy service account configured: **$HAS_DEPLOY_SERVICE_ACCOUNT**"
+            echo "- region configured: **$HAS_READ_REGION**"
+            echo "- service name configured: **$HAS_READ_SERVICE_NAME**"
+            echo "- artifact repository configured: **$HAS_ARTIFACT_REPOSITORY**"
+            echo "- runtime service account configured: **$HAS_RUNTIME_SERVICE_ACCOUNT**"
+            echo "- consumer secret name configured: **$HAS_CONSUMERS_SECRET_NAME**"
+            echo "- required APIs ready: **${READ_RUNTIME_APIS_READY:-false}**"
+            echo "- missing APIs: **$missing_apis**"
+            echo "- Cloud Run ready: **${READ_RUNTIME_READY:-false}**"
+            if [ -n "${READ_RUNTIME_DEPLOYED_URL:-}" ]; then
+              echo "- Cloud Run URL: \`${READ_RUNTIME_DEPLOYED_URL}\`"
+            fi
+            echo
+            echo 'No consumer token or credential value is recorded.'
+          } > /tmp/read-runtime-evidence.md
+          gh issue comment 209 --repo "$GITHUB_REPOSITORY" --body-file /tmp/read-runtime-evidence.md || true
