@@ -13,6 +13,10 @@ assert.ok(section, 'Control Tower workflow step must exist');
 const runBlock = section.split('        run: |\n')[1];
 assert.ok(runBlock, 'Control Tower must have a literal Bash run block');
 const command = runBlock.split('\n').map((line) => line.replace(/^ {10}/, '')).join('\n');
+// This suite executes the Ubuntu Actions Bash+jq block verbatim. Windows has
+// neither a native jq nor stable POSIX temp-directory semantics, so the Linux
+// PR job is the authoritative execution environment for these four checks.
+const workflowTest = process.platform === 'win32' ? test.skip : test;
 
 function fixture() {
   return {
@@ -66,7 +70,7 @@ function execute(report: unknown) {
   }
 }
 
-test('Control Tower renders actual HOLD reasons, freshness and numeric zeros without jq errors', () => {
+workflowTest('Control Tower renders actual HOLD reasons, freshness and numeric zeros without jq errors', () => {
   const result = execute(fixture());
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, '');
@@ -88,7 +92,7 @@ test('Control Tower renders actual HOLD reasons, freshness and numeric zeros wit
   ]) assert.ok(result.summary.split('\n').includes(line), `Missing exact summary line: ${line}`);
 });
 
-test('Control Tower renders empty attention and unknown historical counters without inventing zeros', () => {
+workflowTest('Control Tower renders empty attention and unknown historical counters without inventing zeros', () => {
   const report = fixture();
   const result = execute({ ...report, attention: [], operatorSummary: {
     ...report.operatorSummary,
@@ -105,14 +109,14 @@ test('Control Tower renders empty attention and unknown historical counters with
   }
 });
 
-test('Control Tower propagates jq rendering failure and does not append a partial success summary', () => {
+workflowTest('Control Tower propagates jq rendering failure and does not append a partial success summary', () => {
   const result = execute({ ...fixture(), attention: [{ invalid: 'not a string' }] });
   assert.notEqual(result.status, 0, 'A rendering error must not be hidden by echo');
   assert.match(result.stderr, /jq: error/);
   assert.equal(result.summary, 'previous summary\n');
 });
 
-test('Control Tower preserves the existing schema gate before publishing a summary', () => {
+workflowTest('Control Tower preserves the existing schema gate before publishing a summary', () => {
   const result = execute({ ...fixture(), contractVersion: 'invalid-contract' });
   assert.notEqual(result.status, 0);
   assert.equal(result.summary, 'previous summary\n');
