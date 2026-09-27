@@ -35,9 +35,32 @@ Firestore `(default)`, `asia-northeast3`를 실조회했다. RTDB는 사용하�
 | F01 | 전용 게시 계약 필요 | 기존 출력 경로 유지 |
 | F86 | 전용 게시 계약 필요 | 기존 출력 경로 유지 |
 | Admin | 기존 PR12와 새 Release 증거 게이트 통합 필요 | Policy parity 및 인증/IAM 검증 전 |
+| Kakao Ops | `kakao-ops` 전용 `catalog-reference` 계약 | 코드·정적검증 완료, 전용 token/배포/운영 PC readback 전 |
 
 F01/F86/Admin을 ERP public 계약에 억지로 연결하지 않는다. 원문 옵션·시트 게시 필드와 Admin 내부 정책 정보는 별도 계약이 필요하다.
 등록되지 않은 소비처는 응답을 받을 수 없다. 웹에 서비스를 공개하거나 운영 소비처를 전환한 상태가 아니다.
+
+### Kakao Ops 명시적 REFERENCE_ONLY 계약 (2026-09-28)
+
+Canonical ACTIVE release가 비어 있는 동안 Kakao가 운영 의미를 임의 계산하지 않도록
+`GET /v1/consumers/kakao-ops/catalog-reference`를 별도 계약으로 둔다. 기존 `/catalog`의 503을
+이 응답으로 조용히 대체하지 않는다.
+
+- 기간별 `depositAmount`, `depositState`, `depositRule`을 FreePass Data에서 결정한다.
+- `ZERO`는 원문 비고가 `무보증`일 때만 사용한다. 규칙이 있는데 원천 숫자가 0인 값은 규칙으로
+  계산하고, 비고가 없으면서 원천 숫자가 0인 값은 `UNKNOWN`이다.
+- ERP5 `products.ext_color`는 `vehicle.exteriorColor`로 전달한다.
+- F80-F85 정산시트 6개의 `수수료!A:E`가 동일한 것을 2026-09-28 읽기 전용으로 확인해
+  rule/version/source ID를 고정했다. `영업자 조율` 행은 금액을 만들지 않는다.
+- 원 단위 나눗셈 또는 VAT에서 소수점이 생기는데 반올림 규칙이 없으면 계산하지 않고
+  `ROUNDING_RULE_UNSPECIFIED`/`VAT_ROUNDING_RULE_UNSPECIFIED`로 HOLD한다.
+- 응답은 항상 `authority=REFERENCE_ONLY`, `publicationDecision=HOLD`다. 재고·가격·수수료 확정은
+  별도 공급사 확인 전 완료가 아니다.
+
+최근 private read-only 캡처(`readTime=2026-09-27T16:09:37.843976Z`, source digest
+`659c1a84d316965e62ace7669ad630261685d55f923d9938c8148edc9a697310`)로 로컬 전수 검증한 결과는
+원천 1,659건 중 listable projection 685건, 기간 4,223건, 외장색상 678건이다. 보증금 상태는
+KNOWN 4,037 / ZERO 36 / UNKNOWN 150이었다. 이는 로컬 계약 검증이며 배포·운영 readback이 아니다.
 
 ## 반복 가능한 읽기 전용 점검
 
