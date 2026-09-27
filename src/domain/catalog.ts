@@ -1,3 +1,4 @@
+import type { CommercialOfferView } from './commercial-product-view.js';
 export type ValidationStatus = 'VALID' | 'WARNING' | 'INVALID';
 export type ActorRef = { id: string; kind: 'USER' | 'SERVICE'; organizationId?: string | null };
 export type Money = { amount: number; currency: 'KRW' };
@@ -115,6 +116,7 @@ export type AdminCatalogProduct = {
     policyValues: AdminPolicyValue[];
     invalidPolicyFactRefs: string[];
     priceTerms: PriceTerm[];
+    commercial?: CommercialOfferView;
   }>;
 };
 
