@@ -1,9 +1,12 @@
 # FreePass Data Read Runtime — Deployment Readiness
 
-Status: **PREPARED / NOT DEPLOYED**
+Status: **PREPARED / NOT DEPLOYED — GCP ADMIN BOOTSTRAP REQUIRED**
 
 This runbook prepares the authenticated read runtime for a private Cloud Run deployment.
 It does not create IAM bindings, secrets, Cloud Run services, or consumer cutover by itself.
+
+Operational ownership and switch order: `docs/READ-RUNTIME-ACTIVATION.md`.
+After bootstrap, deploy with the manual GitHub Action `.github/workflows/deploy-read-runtime.yml`.
 
 ## 1. Security model
 
@@ -169,3 +172,16 @@ This deployment does not prove:
 - production writer cutover
 
 Those remain separate gates.
+
+
+## 10. Current infrastructure blocker — 2026-09-27
+
+Live diagnostic evidence from the authorized continuous audit identity confirmed:
+
+- `run.googleapis.com` is currently disabled on project `freepasserp5`.
+- `github-data-auditor@freepasserp5.iam.gserviceaccount.com` can authenticate and read Firestore evidence.
+- That audit identity does **not** have `serviceusage.services.enable`, so it cannot enable Cloud Run.
+- The audit workflow has been restored after the one-time probe; no diagnostic code remains in the canonical workflow.
+
+Therefore the next actor is a GCP project administrator, not the ERP application.
+The administrator performs the one-time bootstrap described in `docs/READ-RUNTIME-ACTIVATION.md`; after that, Data I-01 runs the manual deploy workflow.
