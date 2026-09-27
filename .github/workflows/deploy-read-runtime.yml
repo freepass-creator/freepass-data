@@ -158,8 +158,8 @@ jobs:
           trap 'rm -f "$response_file"' EXIT
           authenticated_status="$(curl --silent --show-error --output "$response_file" \
             --write-out '%{http_code}' \
-            --header="X-Serverless-Authorization: Bearer $cloud_run_token" \
-            --header="Authorization: Bearer $consumer_token" \
+            --header "X-Serverless-Authorization: Bearer $cloud_run_token" \
+            --header "Authorization: Bearer $consumer_token" \
             "$READ_RUNTIME_DEPLOYED_URL/v1/consumers/erp-com/catalog-compat")"
           test "$authenticated_status" = "200"
           jq -e '
