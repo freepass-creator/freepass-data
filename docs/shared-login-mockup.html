@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>공용 로그인 — 브랜드 교체 시안</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Exo+2:wght@300;600&display=swap');
+:root{
+  --bg-page:#EEF0F3; --bg-card:#FFFFFF;
+  --text-main:#171A21; --text-sub:#5B646F; --text-weak:#8A929C; --text-muted:#B4BAC2;
+  --line:#E2E5EA; --brand:#1B2A4A; --brand-h:#24365E; --shadow-md:0 2px 12px rgba(20,28,45,.10);
+  --red-text:#B53838; --green-text:#1D7A4A;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#F7F8FA;color:var(--text-main);
+  font-family:Pretendard,-apple-system,BlinkMacSystemFont,system-ui,'Segoe UI','Noto Sans KR',sans-serif}
+.toolbar{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--line);
+  padding:12px 20px;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.toolbar b{font-size:13px}
+.toolbar .note{font-size:11.5px;color:var(--text-weak)}
+.tabs{display:flex;gap:8px}
+.tabs button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:6px 12px;font:inherit;font-size:12px;cursor:pointer}
+.tabs button.on{border-color:var(--brand);color:var(--brand);font-weight:700}
+.stage{display:grid;grid-template-columns:repeat(3,1fr);gap:0}
+.pane{border-right:1px solid var(--line);min-height:calc(100vh - 54px);display:flex;flex-direction:column}
+.pane:last-child{border-right:0}
+.pane .cap{font-size:11px;color:var(--text-weak);padding:10px 14px;border-bottom:1px solid var(--line);background:#fff}
+.pane .cap b{color:var(--text-main);font-size:12px}
+
+/* ---- 아래부터가 공용 로그인 규격(.fp-login) ---- */
+.fp-login{flex:1;background:var(--bg-page);overflow:auto}
+.fp-login .login-page{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:24px;padding:40px 16px;font-size:13px;line-height:1.5}
+.fp-login .login-card{position:relative;width:100%;max-width:400px;background:var(--bg-card);border:none;
+  border-radius:2px;padding:36px 30px;box-shadow:var(--shadow-md);display:grid;gap:24px}
+.fp-login .login-head{display:grid;gap:8px}
+.fp-login .login-title{margin:0;font-size:20px;font-weight:600;color:var(--text-main);line-height:1.3;letter-spacing:-.02em}
+.fp-login .login-sub{margin:0;font-size:13px;color:var(--text-sub);line-height:1.5}
+.fp-login .login-form{display:grid;gap:16px}
+.fp-login .login-field{display:grid;gap:6px}
+.fp-login .login-field>span{font-size:12px;font-weight:500;color:var(--text-sub);line-height:1.4}
+.fp-login input,.fp-login select{height:44px;width:100%;border:1px solid var(--line);border-radius:6px;
+  padding:0 12px;font:inherit;font-size:13.5px;background:#fff;color:var(--text-main)}
+.fp-login input:focus,.fp-login select:focus{outline:2px solid var(--brand);outline-offset:1px;border-color:var(--brand)}
+.fp-login .btn{height:44px;width:100%;border:0;border-radius:6px;background:var(--brand);color:#fff;
+  font:inherit;font-size:14px;font-weight:600;cursor:pointer;margin-top:4px}
+.fp-login .btn:hover{background:var(--brand-h)}
+.fp-login .login-links{display:flex;align-items:center;justify-content:center;gap:8px;font-size:11px;color:var(--text-weak)}
+.fp-login .login-links a{color:var(--brand);font-weight:500;text-decoration:none;padding:8px 4px}
+.fp-login .login-links-sep{color:var(--text-muted)}
+.fp-login .consent{border:1px solid var(--line);border-radius:6px;padding:10px 12px;display:grid;gap:8px;text-align:left}
+.fp-login .consent label{display:flex;align-items:center;gap:10px;min-height:32px;font-size:12px;color:var(--text-main);cursor:pointer}
+.fp-login .consent .all{font-weight:700;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.fp-login .consent input{width:18px;height:18px;accent-color:var(--brand);flex:0 0 auto}
+.fp-login .consent a{color:var(--brand);text-decoration:underline;text-underline-offset:2px}
+.fp-login .consent p{margin:0;font-size:11px;color:var(--text-muted);line-height:1.5}
+.fp-login .hint{margin:2px 0 0;font-size:11px;color:var(--text-weak);line-height:1.4}
+.fp-login .hint.miss{color:var(--red-text)} .fp-login .hint.ok{color:var(--green-text)}
+.fp-login .policy{margin:0;font-size:11px;line-height:1.5;padding:9px 11px;border-radius:6px;
+  background:#F3F5F8;color:var(--text-sub);border:1px solid var(--line)}
+
+/* 간판 자리만 잡는다 — 서체·무게·자간은 각 브랜드의 CI가 정한다 */
+.brandslot{display:flex;align-items:baseline;justify-content:center}
+/* 우리 CI: Exo 2 두 무게 소문자 */
+.ci-ours{font-family:'Exo 2',sans-serif;font-size:25px;line-height:1;letter-spacing:-.02em;text-transform:lowercase}
+.ci-ours .a{font-weight:600;color:var(--brand)} .ci-ours .b{font-weight:300;color:#7F93B3}
+/* 채널 CI: 한 크기·한 굵기·고른 자간. 우리 서체 규칙을 씌우지 않는다 */
+.ci-channel{font-size:22px;font-weight:600;line-height:1;letter-spacing:.06em;color:var(--brand)}
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <b>공용 로그인 시안</b>
+  <span class="note">같은 규격 · 간판과 토큰만 교체</span>
+  <div class="tabs">
+    <button class="on" data-mode="login">로그인</button>
+    <button data-mode="signup">계정 만들기</button>
+    <button data-mode="reset">비밀번호 재설정</button>
+  </div>
+</div>
+
+<div class="stage" id="stage"></div>
+
+<script>
+const BRANDS = [
+  { key:'freepass', host:'freepasserp.com', policy:'AUTO',
+    ci:'<span class="ci-ours"><span class="a">freepass</span><span class="b">erp.com</span></span>',
+    vars:{ '--brand':'#1B2A4A', '--brand-h':'#24365E' },
+    caption:'우리 도메인 · 서비스 BI' },
+  { key:'uniauto', host:'uniautofreepass.com', policy:'AUTO',
+    ci:'<span class="ci-channel">UNI AUTOMOBILE</span>',
+    vars:{ '--brand':'#0F5C3F', '--brand-h':'#0B4A32' },
+    caption:'채널 도메인 · 그 회사 공식 CI' },
+  { key:'data-audit', host:'data.freepass 내부', policy:'APPROVAL',
+    ci:'<span class="ci-ours"><span class="a">freepass</span><span class="b">data</span></span>',
+    vars:{ '--brand':'#5B3FA8', '--brand-h':'#4A3289' },
+    caption:'내부 도구 · 승인 필요' }
+];
+
+const FIELD = (label, input) => `<label class="login-field"><span>${label}</span>${input}</label>`;
+const INPUT = (type, ph, extra='') => `<input type="${type}" placeholder="${ph}" ${extra}>`;
+
+function card(mode, brand) {
+  if (mode === 'login') return `
+    <form class="login-card" onsubmit="return false">
+      <header class="login-head"><h2 class="login-title">로그인</h2>
+        <p class="login-sub">이메일과 비밀번호를 입력해주세요.</p></header>
+      <div class="login-form">
+        ${FIELD('이메일', INPUT('email','name@company.com'))}
+        ${FIELD('비밀번호', INPUT('password','비밀번호 입력'))}
+        <button class="btn">로그인</button>
+      </div>
+      <div class="login-links"><a href="#">계정 만들기</a><span class="login-links-sep">·</span><a href="#">비밀번호 재설정</a></div>
+    </form>`;
+  if (mode === 'reset') return `
+    <form class="login-card" onsubmit="return false">
+      <header class="login-head"><h2 class="login-title">비밀번호 재설정</h2>
+        <p class="login-sub">가입한 이메일로 재설정 링크를 보내드립니다.</p></header>
+      <div class="login-form">
+        ${FIELD('이메일', INPUT('email','name@company.com'))}
+        <button class="btn">재설정 메일 전송</button>
+      </div>
+      <div class="login-links"><a href="#">로그인으로 돌아가기</a></div>
+    </form>`;
+  const policy = brand.policy === 'APPROVAL'
+    ? '<p class="policy"><b>승인 필요</b> — 가입 신청 후 마스터가 승인해야 이용할 수 있습니다.</p>'
+    : '<p class="policy">처음에는 개인 영업자로 시작합니다. 실제 회사·채널 소속은 관리자 확인 후 연결됩니다.</p>';
+  const bizFields = brand.policy === 'APPROVAL' ? '' : `
+        ${FIELD('연락처', INPUT('tel','010-0000-0000'))}
+        ${FIELD('소속 회사명 (선택)', INPUT('text','나중에 입력해도 됩니다'))}
+        ${FIELD('활동 유형 (선택)', '<select><option>나중에 지정</option><option>공급사</option><option>영업(소속)</option><option>개인영업</option></select>')}
+        ${FIELD('소속 사업자번호 (선택)', INPUT('text','나중에 입력해도 됩니다') + '<p class="hint ok">소속 후보: 유니오토모빌 · 영업 — 가입 후 관리자가 연결합니다</p>')}`;
+  return `
+    <form class="login-card" onsubmit="return false">
+      <header class="login-head"><h2 class="login-title">계정 만들기</h2>
+        <p class="login-sub">가입 후 이용할 수 있습니다.</p></header>
+      <div class="login-form">
+        ${FIELD('이메일 (필수)', INPUT('email','name@company.com'))}
+        ${FIELD('비밀번호', INPUT('password','6자 이상'))}
+        ${FIELD('비밀번호 확인', INPUT('password','비밀번호 재입력'))}
+        ${FIELD('이름', INPUT('text','홍길동'))}
+        ${bizFields}
+        ${policy}
+        <div class="consent">
+          <label class="all"><input type="checkbox"> 전체 동의</label>
+          <label><input type="checkbox"> <span>[필수] <a href="#">이용약관</a>에 동의합니다</span></label>
+          <label><input type="checkbox"> <span>[필수] <a href="#">개인정보 수집·이용</a>에 동의합니다</span></label>
+          <p>수집 항목: 이메일·이름(필수) · 목적: 회원 식별과 서비스 제공 · 보유: 이용계약 종료 시까지</p>
+        </div>
+        <button class="btn">계정 만들기</button>
+      </div>
+      <div class="login-links"><a href="#">로그인으로 돌아가기</a></div>
+    </form>`;
+}
+
+function render(mode) {
+  document.getElementById('stage').innerHTML = BRANDS.map((b) => {
+    const vars = Object.entries(b.vars).map(([k, v]) => `${k}:${v}`).join(';');
+    return `<section class="pane">
+      <div class="cap"><b>${b.host}</b> · ${b.caption} · 가입정책 <b>${b.policy}</b></div>
+      <div class="fp-login" style="${vars}">
+        <div class="login-page">
+          <div class="brandslot">${b.ci}</div>
+          ${card(mode, b)}
+        </div>
+      </div>
+    </section>`;
+  }).join('');
+}
+
+document.querySelector('.tabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-mode]');
+  if (!btn) return;
+  document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b === btn));
+  render(btn.dataset.mode);
+});
+
+render('login');
+</script>
+</body>
+</html>
