@@ -89,6 +89,15 @@ describe('Admin Catalog projection on current release evidence', () => {
     expect(row.offers[0]?.policyValues).toContainEqual({
       policyId: 'basic_driver_age', type: 'NUMBER', value: 21,
     });
+    expect(row.offers[0]?.commercial?.listing).toMatchObject({
+      strategy: 'LOWEST_BASIS_MONTHLY_RENT',
+      termKey: '48_2만',
+      monthlyRent: { amount: 850000, currency: 'KRW' },
+      deposit: { state: 'UNKNOWN' },
+    });
+    expect(row.offers[0]?.commercial?.listing.attribution.unknownConditionKeys).toEqual(
+      expect.arrayContaining(['additional_driver_count']),
+    );
     expect(row.offers[0]?.commercial?.preview).toMatchObject({
       status: 'READY',
       basisTermKey: '36_2만',
