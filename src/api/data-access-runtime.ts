@@ -1,6 +1,7 @@
 import { DataAccessGateway } from '../application/data-access-gateway.js';
 import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
 import { createFirestoreDataHealthReader } from '../infra/firestore-data-health-reader.js';
+import { createFirestoreCatalogCompatibilityReader } from '../infra/erp5-compat-catalog-reader.js';
 import { createFirestoreProjectionReader } from '../infra/firestore-projection-reader.js';
 
 /**
@@ -12,6 +13,7 @@ export function createConsumerDataAccessRuntime() {
   return {
     access,
     projection: createFirestoreProjectionReader(),
-    health: createFirestoreDataHealthReader()
+    health: createFirestoreDataHealthReader(),
+    compat: createFirestoreCatalogCompatibilityReader()
   };
 }
