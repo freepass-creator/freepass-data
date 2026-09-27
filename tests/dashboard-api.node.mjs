@@ -41,8 +41,10 @@ const { default: handler } = await import('../dashboard/api/[...path].mjs');
 
 function call(method, path, { token, body } = {}) {
   const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))];
+  // 운영과 같은 모양으로 부른다 — 라우팅은 req.url을 정본으로 읽고, query는 보조일 뿐이다.
   const req = {
     method,
+    url: `/api/${path}`,
     headers: token ? { authorization: `Bearer ${token}` } : {},
     query: { path: path.split('/') },
     async *[Symbol.asyncIterator]() { yield* chunks; }
