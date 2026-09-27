@@ -9,16 +9,27 @@ import {
   buildMonthlyRentModifiers,
   buildPricingConditionScope,
   MONTHLY_RENT_MODIFIER_KEYS,
-  PRICING_SCOPE_POLICY_KEYS,
 } from './product-pricing-policy.js';
+import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
 
 export const PRODUCT_POLICY_FACT_KEYS = [
   'default_term_months',
-  ...PRICING_SCOPE_POLICY_KEYS,
+  ...new Set(CONDITION_DIMENSION_SPECS.flatMap((item) => item.sourcePolicyKeys)),
   ...MONTHLY_RENT_MODIFIER_KEYS,
 ] as const;
 
 export const CONTRACT_CONDITION_FACT_KEYS = [
+  'annual_mileage',
+  'basic_driver_age',
+  'license_period',
+  'personal_driver_scope',
+  'business_driver_scope',
+  'insurance_included',
+  'injury_compensation_limit',
+  'property_compensation_limit',
+  'self_body_accident',
+  'uninsured_damage',
+  'own_damage_compensation',
   'succession_fee',
   'own_damage_min_deductible',
   'own_damage_max_deductible',
@@ -59,15 +70,16 @@ function classifyPolicyFacts(policy: Policy | undefined) {
       unclassifiedPolicyFacts.push(key);
       continue;
     }
+    let classified = false;
     if (policyKeys.has(key)) {
       policyFacts.push({ key, value });
-      continue;
+      classified = true;
     }
     if (contractKeys.has(key)) {
       contractFacts.push({ key, value });
-      continue;
+      classified = true;
     }
-    unclassifiedPolicyFacts.push(key);
+    if (!classified) unclassifiedPolicyFacts.push(key);
   }
 
   const byKey = (a: CommercialFact, b: CommercialFact) => a.key.localeCompare(b.key);
