@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getFirestore, type Firestore, type Query, type Transaction } from 'firebase-admin/firestore';
 import { getTargetFirebaseApp } from './firebase-target.js';
+import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import {
   ADMIN_WORKFLOW_RESOURCES,
@@ -14,7 +15,7 @@ import {
   type AdminWorkflowReadSpec,
 } from '../api/admin-workflow-contract.js';
 
-const RECEIPTS = 'data_admin_workflow_receipts';
+const RECEIPTS = FIRESTORE_COLLECTIONS.legacyAdminWorkflow.receipts;
 
 class AdminWorkflowConflictError extends Error {
   readonly code = 'ADMIN_WORKFLOW_CONFLICT';
@@ -27,7 +28,7 @@ class AdminWorkflowIdempotencyError extends Error {
 }
 
 const collectionName = (resource: keyof typeof ADMIN_WORKFLOW_RESOURCES) =>
-  ADMIN_WORKFLOW_RESOURCES[resource];
+  FIRESTORE_COLLECTIONS.legacyAdminWorkflow[resource];
 
 function queryFor(db: Firestore, spec: Extract<AdminWorkflowReadSpec, { kind: 'query' }>): Query {
   let query: Query = db.collection(collectionName(spec.resource));
