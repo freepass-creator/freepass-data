@@ -103,8 +103,10 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
       if (capabilities.some((value) => !['estimate-newcar-master', 'estimate-artifacts'].includes(value))) {
         throw new Error('FreePass Estimate registration may only use Estimate capabilities');
       }
-    } else if (capabilities.includes('estimate-newcar-master') || capabilities.includes('estimate-artifacts')) {
-      throw new Error('Estimate capabilities require freepass-estimate registration');
+    } else if (capabilities.includes('estimate-newcar-master')) {
+      throw new Error('Estimate master capability requires freepass-estimate registration');
+    } else if (capabilities.includes('estimate-artifacts')) {
+      throw new Error('Estimate artifact capability requires freepass-estimate registration');
     }
     if (capabilities.includes('admin-workflow') && item.id !== 'freepass-admin-catalog') {
       throw new Error('Admin workflow capability requires freepass-admin-catalog registration');
