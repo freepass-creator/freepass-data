@@ -162,6 +162,16 @@ export type CommercialOfferView = {
     };
     attribution: PriceBasisAttribution;
   }>;
+  listing: {
+    strategy: 'LOWEST_BASIS_MONTHLY_RENT';
+    termKey: string;
+    monthlyRent: Money;
+    deposit: {
+      state: 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
+      amount?: Money;
+    };
+    attribution: PriceBasisAttribution;
+  };
   conditionSummary: {
     known: PriceConditionEvidence[];
     unknown: string[];
