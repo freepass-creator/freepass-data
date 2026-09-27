@@ -29,7 +29,7 @@ import {
   assertAdminWorkflowReadSpec,
   type AdminWorkflowCommitRequest,
   type AdminWorkflowReadSpec,
-} from './admin-workflow-contract.js';
+} from '../domain/admin-workflow.js';
 
 export type ConsumerCapability = 'catalog' | 'catalog-health' | 'estimate-newcar-master' | 'admin-workflow';
 export type ConsumerBinding = {
