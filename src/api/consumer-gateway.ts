@@ -22,6 +22,7 @@ import { DataAccessAuditUnavailableError } from '../domain/data-access.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from '../application/projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
+import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
 
 export type ConsumerCapability = 'catalog' | 'catalog-health' | 'estimate-newcar-master';
 export type ConsumerBinding = {
@@ -130,6 +131,7 @@ export function createConsumerGateway(
   bindings: ConsumerBinding[],
   access: DataAccessGateway,
   healthStore?: CatalogDataHealthStore,
+  compatReader?: { read(consumerId: string): Promise<CatalogCompatibilitySnapshot> },
 ) {
   // Validate again for callers constructing registrations without the environment parser.
   const registered = new Map(parseConsumerBindings(JSON.stringify(bindings)).map((item) => [item.id, item]));
@@ -282,6 +284,84 @@ export function createConsumerGateway(
       return reply.code(503).send({ code: 'CATALOG_READ_FAILED' });
     }
   });
+  app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/catalog-compat', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const binding = registered.get(request.params.consumerId);
+    const supplied = request.headers.authorization ?? '';
+    const matches = timingSafeEqual(
+      hash(supplied),
+      hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
+    );
+    const context = consumerContext(
+      binding?.id ?? 'unregistered-consumer',
+      'read legacy-compatible catalog through FreePass Data',
+      request.id
+    );
+    const resource = {
+      kind: 'CATALOG' as const,
+      name: 'erp5-catalog-compat'
+    };
+
+    try {
+      if (!binding || !matches) {
+        await access.deny('READ', {
+          context,
+          operation: 'READ_CONSUMER_CATALOG_COMPAT',
+          resource
+        }, 'UNAUTHORIZED');
+        return reply.code(401).send({ code: 'UNAUTHORIZED' });
+      }
+      if (!binding.capabilities.includes('catalog')) {
+        await access.deny('READ', {
+          context,
+          operation: 'READ_CONSUMER_CATALOG_COMPAT',
+          resource
+        }, 'FORBIDDEN');
+        return reply.code(403).send({ code: 'FORBIDDEN' });
+      }
+      if (!compatReader) {
+        await access.deny('READ', {
+          context,
+          operation: 'READ_CONSUMER_CATALOG_COMPAT',
+          resource
+        }, 'COMPATIBILITY_READER_UNAVAILABLE');
+        return reply.code(503).send({ code: 'COMPATIBILITY_READER_UNAVAILABLE' });
+      }
+
+      const result = await access.read({
+        context,
+        operation: 'READ_CONSUMER_CATALOG_COMPAT',
+        resource,
+        summarize: (value: CatalogCompatibilitySnapshot) => ({
+          count: value.meta.collectionCounts.products ?? 0,
+          digest: stableDigest({
+            schema: value.schema,
+            consumerId: value.meta.consumerId,
+            observedAt: value.meta.observedAt,
+            collectionCounts: value.meta.collectionCounts
+          })
+        })
+      }, () => compatReader.read(binding.id));
+
+      if (
+        result.schema !== 'freepass-data.catalog-compat/v1' ||
+        result.meta.consumerId !== binding.id ||
+        result.meta.authority !== 'FREEPASS_DATA_COMPATIBILITY_BRIDGE' ||
+        result.meta.sourceProject !== 'freepasserp5' ||
+        !result.data.products ||
+        !result.data.policies
+      ) {
+        return reply.code(503).send({ code: 'CATALOG_COMPAT_RESPONSE_INVALID' });
+      }
+      return result;
+    } catch (error) {
+      if (error instanceof DataAccessAuditUnavailableError) {
+        return reply.code(503).send({ code: error.code });
+      }
+      return reply.code(503).send({ code: 'CATALOG_COMPAT_READ_FAILED' });
+    }
+  });
+
   app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/estimate-newcar-master', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const binding = registered.get(request.params.consumerId);
