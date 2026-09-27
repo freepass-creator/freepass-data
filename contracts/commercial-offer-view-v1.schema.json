@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/commercial-offer-view-v1.schema.json",
+  "title": "FreePass Commercial Offer View V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["offerId", "supplierId", "basisRows", "conditionSummary", "preview", "review"],
+  "properties": {
+    "offerId": {"type": "string", "minLength": 1},
+    "supplierId": {"type": "string", "minLength": 1},
+    "policyId": {"type": ["string", "null"]},
+    "basisRows": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/basisRow"}
+    },
+    "conditionSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["known", "unknown"],
+      "properties": {
+        "known": {"type": "array", "items": {"$ref": "#/$defs/conditionEvidence"}},
+        "unknown": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "preview": {"$ref": "#/$defs/preview"},
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "decisions", "invalidFacts"],
+      "properties": {
+        "status": {"enum": ["READY", "NEEDS_DECISION", "INVALID"]},
+        "decisions": {"type": "array", "items": {"type": "string"}},
+        "invalidFacts": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  },
+  "$defs": {
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": {"type": "integer", "minimum": 0},
+        "currency": {"const": "KRW"}
+      }
+    },
+    "conditionEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dimensionKey", "status", "origin"],
+      "properties": {
+        "dimensionKey": {"type": "string", "minLength": 1},
+        "status": {"enum": ["KNOWN", "UNKNOWN"]},
+        "value": {},
+        "origin": {
+          "enum": [
+            "SOURCE_PRICE_KEY",
+            "CANONICAL_PRICE_TERM",
+            "LINKED_POLICY_FACT",
+            "MATCHED_POLICY_FACT",
+            "UNRESOLVED"
+          ]
+        },
+        "sourceRef": {"type": "string"}
+      }
+    },
+    "policyMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "candidatePolicyIds", "matchedDimensionKeys", "sourceRefs"],
+      "properties": {
+        "status": {"enum": ["UNIQUE_MATCH", "AMBIGUOUS", "NO_MATCH", "INSUFFICIENT_EVIDENCE"]},
+        "matchedPolicyId": {"type": "string"},
+        "candidatePolicyIds": {"type": "array", "items": {"type": "string"}},
+        "matchedDimensionKeys": {"type": "array", "items": {"type": "string"}},
+        "sourceRefs": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "deposit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["KNOWN", "ZERO", "UNKNOWN", "NOT_APPLICABLE"]},
+        "amount": {"$ref": "#/$defs/money"}
+      }
+    },
+    "basisRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["termKey", "monthlyRent", "deposit", "attribution"],
+      "properties": {
+        "termKey": {"type": "string", "minLength": 1},
+        "monthlyRent": {"$ref": "#/$defs/money"},
+        "deposit": {"$ref": "#/$defs/deposit"},
+        "attribution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "conditions", "unknownConditionKeys", "monthlyRentOrigin", "depositOrigin"],
+          "properties": {
+            "status": {"enum": ["COMPLETE", "PARTIAL"]},
+            "conditions": {"type": "array", "items": {"$ref": "#/$defs/conditionEvidence"}},
+            "unknownConditionKeys": {"type": "array", "items": {"type": "string"}},
+            "policyMatch": {"$ref": "#/$defs/policyMatch"},
+            "monthlyRentOrigin": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["origin", "sourceRef"],
+              "properties": {
+                "origin": {"const": "CANONICAL_PRICE_TERM"},
+                "sourceRef": {"type": "string"}
+              }
+            },
+            "depositOrigin": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["origin"],
+              "properties": {
+                "origin": {"enum": ["CANONICAL_PRICE_TERM", "UNRESOLVED"]},
+                "sourceRef": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["options"],
+      "properties": {
+        "termMonths": {"type": "integer", "minimum": 1},
+        "mileageKmPerYear": {"type": "integer", "minimum": 1},
+        "driverAge": {"type": "integer", "minimum": 1},
+        "additionalDriverCount": {"type": "integer", "minimum": 0},
+        "options": {"type": "object"}
+      }
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "selection", "decisions", "invalidFacts"],
+      "properties": {
+        "status": {"enum": ["READY", "NEEDS_DECISION", "INVALID"]},
+        "selection": {"$ref": "#/$defs/selection"},
+        "basisTermKey": {"type": "string"},
+        "monthlyRent": {"$ref": "#/$defs/money"},
+        "deposit": {"$ref": "#/$defs/deposit"},
+        "decisions": {"type": "array", "items": {"type": "string"}},
+        "invalidFacts": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}
