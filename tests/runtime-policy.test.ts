@@ -41,6 +41,8 @@ describe('API runtime boundary', () => {
     expect(workflow).toContain('test "$unauthenticated_status" = "403"');
     expect(workflow).toContain("--write-out '%{http_code}'");
     expect(workflow).not.toContain("--write-out='%{http_code}'");
+    expect(workflow).toContain('token_format: id_token');
+    expect(workflow).toContain('id_token_audience: ${{ steps.readiness.outputs.url }}');
     expect(workflow).toContain('/v1/consumers/erp-com/catalog-compat');
     expect(workflow).toContain('.schema == "freepass-data.catalog-compat/v1"');
     expect(workflow).toContain('READ_RUNTIME_READBACK_OK=true');
