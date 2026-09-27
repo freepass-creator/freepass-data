@@ -11,7 +11,39 @@ export type ProductConditionSelection = {
   termMonths?: number;
   mileageKmPerYear?: number;
   driverAge?: number;
+  additionalDriverCount?: number;
   options: Record<string, CommercialFactValue>;
+};
+
+export type PricingConditionScope = {
+  termMonths: number;
+  mileage: {
+    pricedUpToKmPerYear?: number;
+    maxSelectableKmPerYear?: number;
+  };
+  driverAge: {
+    includedFromAge?: number;
+    lowerableToAge?: number;
+    allowedToAge?: number;
+  };
+  drivers: {
+    includedAdditionalDriverCount: 0;
+    maxAdditionalDriverCount?: number;
+    personalScope?: string;
+    businessScope?: string;
+  };
+  licensePeriod?: CommercialFactValue;
+  insuranceIncluded?: CommercialFactValue;
+  maintenanceService?: CommercialFactValue;
+};
+
+export type MonthlyRentModifier = {
+  key: 'mileage_upcharge_per_10000km' | 'age_lowering_cost' | 'additional_driver_cost';
+  dimension: 'MILEAGE' | 'DRIVER_AGE' | 'ADDITIONAL_DRIVER';
+  target: 'MONTHLY_RENT';
+  cadence: 'MONTHLY';
+  unit: 'PER_10000KM' | 'ON_AGE_LOWERING' | 'PER_ADDITIONAL_DRIVER';
+  rawValue: CommercialFactValue;
 };
 
 export type ProductPriceResult = {
@@ -52,11 +84,11 @@ export type CommercialProductView = {
       termMonths: number[];
       mileageKmPerYear: number[];
     };
+    monthlyRentModifiers: MonthlyRentModifier[];
   };
   pricingBasis: Array<{
     termKey: string;
-    termMonths: number;
-    mileageKmPerYear?: number;
+    conditionScope: PricingConditionScope;
     monthlyRent: Money;
     deposit: {
       state: 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
