@@ -243,7 +243,7 @@ describe('Estimate immutable artifact gateway', () => {
       projectionId: 'erp-public',
       token: token + 'x',
       capabilities: ['estimate-artifacts'],
-    }]))).toThrow('Estimate capabilities require freepass-estimate');
+    }]))).toThrow('Estimate artifact capability requires freepass-estimate');
   });
 
   it('authenticates before touching Estimate artifact storage', async () => {
