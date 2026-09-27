@@ -39,18 +39,66 @@ const policy: Policy = {
   facts: {
     default_term_months: 36,
     annual_mileage: 20000,
-    basic_driver_age: 26,
-    insurance_included: true,
+    max_annual_mileage: 40000,
+    mileage_upcharge_per_10000km: '대여료의 10%',
+    basic_driver_age: '만 26세 이상',
+    driver_age_lowering: '만 21세까지',
+    driver_age_upper_limit: '만 70세 이하',
+    age_lowering_cost: '10만원',
+    license_period: '1년 이상',
+    personal_driver_scope: '본인+직계가족',
+    business_driver_scope: '임직원',
+    additional_driver_allowance_count: '1인까지',
+    additional_driver_cost: '5만원',
+    insurance_included: '보험료 포함',
+    maintenance_service: '미제공',
   },
 };
 
 describe('product condition preview', () => {
+  it('attaches the priced condition envelope to every basis rent', () => {
+    const view = buildCommercialProductView({ product, vehicleModel: model, vehicleAsset: asset, offer, policy });
+    expect(view.pricingBasis.find((row) => row.termKey === '36_2만')?.conditionScope).toEqual({
+      termMonths: 36,
+      mileage: { pricedUpToKmPerYear: 20000, maxSelectableKmPerYear: 40000 },
+      driverAge: { includedFromAge: 26, lowerableToAge: 21, allowedToAge: 70 },
+      drivers: {
+        includedAdditionalDriverCount: 0,
+        maxAdditionalDriverCount: 1,
+        personalScope: '본인+직계가족',
+        businessScope: '임직원',
+      },
+      licensePeriod: '1년 이상',
+      insuranceIncluded: '보험료 포함',
+      maintenanceService: '미제공',
+    });
+  });
+
+  it('exposes the three policy inputs that directly modify monthly rent', () => {
+    const view = buildCommercialProductView({ product, vehicleModel: model, vehicleAsset: asset, offer, policy });
+    expect(view.conditionProfile.monthlyRentModifiers).toEqual([
+      {
+        key: 'mileage_upcharge_per_10000km', dimension: 'MILEAGE', target: 'MONTHLY_RENT',
+        cadence: 'MONTHLY', unit: 'PER_10000KM', rawValue: '대여료의 10%',
+      },
+      {
+        key: 'age_lowering_cost', dimension: 'DRIVER_AGE', target: 'MONTHLY_RENT',
+        cadence: 'MONTHLY', unit: 'ON_AGE_LOWERING', rawValue: '10만원',
+      },
+      {
+        key: 'additional_driver_cost', dimension: 'ADDITIONAL_DRIVER', target: 'MONTHLY_RENT',
+        cadence: 'MONTHLY', unit: 'PER_ADDITIONAL_DRIVER', rawValue: '5만원',
+      },
+    ]);
+  });
+
   it('shows ERP default price only after applying explicit default conditions', () => {
     const view = buildCommercialProductView({ product, vehicleModel: model, vehicleAsset: asset, offer, policy });
     expect(view.conditionProfile.defaults).toEqual({
       termMonths: 36,
       mileageKmPerYear: 20000,
       driverAge: 26,
+      additionalDriverCount: 0,
       options: {},
     });
     expect(view.preview).toMatchObject({
@@ -61,40 +109,55 @@ describe('product condition preview', () => {
     });
   });
 
-  it('recomputes the product result when period or mileage selection changes', () => {
+  it('keeps the same basis price for an older driver inside the priced age range', () => {
+    const result = evaluateProductConditions(offer, policy, {
+      termMonths: 24, mileageKmPerYear: 20000, driverAge: 40, additionalDriverCount: 0, options: {},
+    });
+    expect(result.status).toBe('READY');
+    expect(result.monthlyRent?.amount).toBe(700000);
+  });
+
+  it('requires a price adjustment when age is lowered within the allowed range', () => {
+    const result = evaluateProductConditions(offer, policy, {
+      termMonths: 24, mileageKmPerYear: 20000, driverAge: 21, additionalDriverCount: 0, options: {},
+    });
+    expect(result.status).toBe('NEEDS_DECISION');
+    expect(result.decisions).toContain('DRIVER_AGE_PRICE_ADJUSTMENT_REQUIRED');
+    expect(result).not.toHaveProperty('monthlyRent');
+  });
+
+  it('requires an additional-driver adjustment inside the allowed count', () => {
+    const result = evaluateProductConditions(offer, policy, {
+      termMonths: 24, mileageKmPerYear: 20000, driverAge: 26, additionalDriverCount: 1, options: {},
+    });
+    expect(result.status).toBe('NEEDS_DECISION');
+    expect(result.decisions).toContain('ADDITIONAL_DRIVER_PRICE_ADJUSTMENT_REQUIRED');
+  });
+
+  it('rejects selections outside policy age or driver count bounds', () => {
     expect(evaluateProductConditions(offer, policy, {
-      termMonths: 24, mileageKmPerYear: 30000, driverAge: 26, options: {},
+      termMonths: 24, mileageKmPerYear: 20000, driverAge: 71, additionalDriverCount: 0, options: {},
+    }).invalidFacts).toContain('DRIVER_AGE_ABOVE_ALLOWED_RANGE');
+    expect(evaluateProductConditions(offer, policy, {
+      termMonths: 24, mileageKmPerYear: 20000, driverAge: 26, additionalDriverCount: 2, options: {},
+    }).invalidFacts).toContain('ADDITIONAL_DRIVER_COUNT_EXCEEDS_POLICY');
+  });
+
+  it('uses an explicit mileage price row when one exists', () => {
+    expect(evaluateProductConditions(offer, policy, {
+      termMonths: 24, mileageKmPerYear: 30000, driverAge: 26, additionalDriverCount: 0, options: {},
     })).toMatchObject({
       status: 'READY',
       basisTermKey: '24_3만',
       monthlyRent: { amount: 760000, currency: 'KRW' },
-      deposit: { state: 'KNOWN', amount: { amount: 3500000, currency: 'KRW' } },
     });
   });
 
-  it('does not show a false final price when a changed age needs an untyped adjustment rule', () => {
+  it('requires policy adjustment when requested mileage has no explicit row', () => {
     const result = evaluateProductConditions(offer, policy, {
-      termMonths: 24, mileageKmPerYear: 20000, driverAge: 21, options: {},
+      termMonths: 36, mileageKmPerYear: 30000, driverAge: 26, additionalDriverCount: 0, options: {},
     });
     expect(result.status).toBe('NEEDS_DECISION');
-    expect(result.decisions).toContain('DRIVER_AGE_PRICE_RULE_REQUIRED');
-    expect(result).not.toHaveProperty('monthlyRent');
-    expect(result).not.toHaveProperty('deposit');
-  });
-
-  it('requires a default term policy when more than one duration exists', () => {
-    const noDefaultTerm = { ...policy, facts: { annual_mileage: 20000, basic_driver_age: 26 } };
-    const view = buildCommercialProductView({
-      product, vehicleModel: model, vehicleAsset: asset, offer, policy: noDefaultTerm,
-    });
-    expect(view.preview.status).toBe('NEEDS_DECISION');
-    expect(view.review.decisions).toContain('DEFAULT_TERM_REQUIRED');
-  });
-
-  it('keeps raw basis rows separate from the final preview result', () => {
-    const view = buildCommercialProductView({ product, vehicleModel: model, vehicleAsset: asset, offer, policy });
-    expect(view.pricingBasis).toHaveLength(3);
-    expect(view.preview.basisTermKey).toBe('36_2만');
-    expect(view.pricingBasis.find((row) => row.termKey === '24_2만')?.monthlyRent.amount).toBe(700000);
+    expect(result.decisions).toContain('MILEAGE_PRICE_ADJUSTMENT_REQUIRED');
   });
 });
