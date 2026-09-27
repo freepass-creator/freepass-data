@@ -22,7 +22,8 @@ Date: 2026-09-28
   base `main@4191977`에 이미 포함된 `src/jobs/apply-iancar-policy-sync.ts`의 Data Access boundary 위반으로 HOLD이며
   이 작업은 해당 별도 Iancar 파일을 수정하지 않았다. Claude 읽기 전용 검토는 두 번 모두 응답 없이 멈춰
   `UNAVAILABLE`이고 PASS로 계산하지 않는다.
-- 운영 HOLD: PR/merge, read runtime deployment, `kakao-ops` 전용 secret 등록, 운영 PC readback,
+- publication: commit `2407e01`, draft PR #222. `canon` CI PASS; `core` CI는 위 base Iancar boundary 위반으로 FAIL.
+- 운영 HOLD: PR merge, read runtime deployment, `kakao-ops` 전용 secret 등록, 운영 PC readback,
   Kakao 계산 제거는 아직 실행하지 않았다. 운영 배포와 consumer 변경은 별도 승인/후속 작업이다.
 
 next_start_here: base의 Iancar Data Access boundary blocker를 별도 개발선에서 해소한 뒤 전체 `npm run check`를 재실행하고,
