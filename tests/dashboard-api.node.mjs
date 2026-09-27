@@ -10,10 +10,14 @@ process.env.DASHBOARD_FIREBASE_PROJECT_ID = 'test-project';
 const accounts = new Map();
 /** Stands in for Firebase: "token" → the identity it verifies to, or null. */
 const tokens = new Map();
+/** 비어 있지 않으면 토큰 검증이 그 오류로 터진다 — 설정 실패를 흉내내는 스위치. */
+let 고장 = '';
 
 mock.module('../dashboard/api/_lib/identity.mjs', {
   namedExports: {
     verifyBearer: async (header) => {
+      // 서버가 자격증명 없이 떠 있는 상황을 흉내낸다.
+      if (고장) throw new Error(고장);
       const match = /^Bearer (.+)$/.exec(String(header ?? '').trim());
       return match ? (tokens.get(match[1]) ?? null) : null;
     }
@@ -213,4 +217,30 @@ test('unknown routes and oversized bodies fail closed', async () => {
   const master = await masterToken();
   assert.equal((await call('GET', 'nope', { token: master })).status, 404);
   assert.equal((await call('POST', 'accounts/decide', { token: master, body: { id: 'x'.repeat(9000) } })).status, 400);
+});
+
+
+test('자격증명 없이 뜬 서버는 그 사실을 말한다 — 로그인 문제로 떠넘기지 않는다', async () => {
+  고장 = 'MISSING_DASHBOARD_FIREBASE_SERVICE_ACCOUNT_JSON';
+  try {
+    for (const [method, path] of [['GET', 'me'], ['GET', 'audit'], ['POST', 'register']]) {
+      const res = await call(method, path, { token: 'whatever' });
+      assert.equal(res.status, 503, `${method} ${path}`);
+      assert.equal(res.body.error, 'SERVICE_NOT_CONFIGURED');
+      assert.match(res.body.detail, /SERVICE_ACCOUNT_JSON/, '고칠 사람이 무엇이 없는지 알 수 있어야 한다');
+    }
+  } finally {
+    고장 = '';
+  }
+});
+
+test('설정이 멀쩡할 때의 오류는 여전히 500으로 남는다 — 전부 503으로 뭉개지 않는다', async () => {
+  고장 = '알 수 없는 내부 오류';
+  try {
+    const res = await call('GET', 'me', { token: 'whatever' });
+    assert.equal(res.status, 500);
+    assert.equal(res.body.error, 'INTERNAL_ERROR');
+  } finally {
+    고장 = '';
+  }
 });
