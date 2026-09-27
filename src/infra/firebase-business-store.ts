@@ -1,5 +1,7 @@
 import { getFirestore } from 'firebase-admin/firestore';
 import { getDatabase } from 'firebase-admin/database';
+import { getStorage } from 'firebase-admin/storage';
+import { createHash } from 'node:crypto';
 import {
   assertBusinessId,
   resolveBusinessResource,
@@ -232,6 +234,76 @@ export class FirebaseBusinessStore {
     });
   }
 }
+
+
+  async readAsset(input: {
+    consumerId: string;
+    resource: string;
+    id: string;
+    parentId?: string;
+  }) {
+    const resource = resolveBusinessResource(input.consumerId, input.resource, 'READ');
+    if (!resource || resource.backend !== 'STORAGE') throw new Error('BUSINESS_ASSET_READ_FORBIDDEN');
+    const segments = [resource.collectionOrRoot];
+    if (input.parentId) segments.push(assertBusinessId(input.parentId, 'parent_id'));
+    segments.push(assertBusinessId(input.id));
+    const objectName = segments.join('/');
+    const file = getStorage(getBusinessFirebaseApp(resource.target)).bucket().file(objectName);
+    const [exists] = await file.exists();
+    if (!exists) throw new Error('BUSINESS_ASSET_NOT_FOUND');
+    const [[bytes], [metadata]] = await Promise.all([file.download(), file.getMetadata()]);
+    return {
+      bytes,
+      meta: {
+        contract: 'freepass-data.business-asset/v1' as const,
+        consumerId: input.consumerId,
+        resource: resource.name,
+        id: input.id,
+        size: bytes.length,
+        contentType: metadata.contentType || 'application/octet-stream',
+        digest: createHash('sha256').update(bytes).digest('hex'),
+      },
+    };
+  }
+
+  async writeAsset(input: {
+    consumerId: string;
+    resource: string;
+    id: string;
+    parentId?: string;
+    contentType: string;
+    bytes: Buffer;
+  }) {
+    const resource = resolveBusinessResource(input.consumerId, input.resource, 'WRITE');
+    if (!resource || resource.backend !== 'STORAGE') throw new Error('BUSINESS_ASSET_WRITE_FORBIDDEN');
+    if (!input.bytes.length || input.bytes.length > 32 * 1024 * 1024) throw new Error('BUSINESS_ASSET_SIZE_INVALID');
+    const segments = [resource.collectionOrRoot];
+    if (input.parentId) segments.push(assertBusinessId(input.parentId, 'parent_id'));
+    segments.push(assertBusinessId(input.id));
+    const objectName = segments.join('/');
+    const digest = createHash('sha256').update(input.bytes).digest('hex');
+    const file = getStorage(getBusinessFirebaseApp(resource.target)).bucket().file(objectName);
+    await file.save(input.bytes, {
+      resumable: false,
+      validation: 'crc32c',
+      metadata: {
+        contentType: input.contentType || 'application/octet-stream',
+        metadata: {
+          freepassDataDigest: digest,
+          freepassDataConsumer: input.consumerId,
+        },
+      },
+    });
+    return {
+      contract: 'freepass-data.business-asset-write-receipt/v1' as const,
+      consumerId: input.consumerId,
+      resource: resource.name,
+      id: input.id,
+      size: input.bytes.length,
+      digest,
+      committedAt: new Date().toISOString(),
+    };
+  }
 
 export function createFirebaseBusinessStore() {
   return new FirebaseBusinessStore();
