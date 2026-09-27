@@ -74,6 +74,18 @@ jobs:
           service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
           token_format: access_token
           access_token_lifetime: 900s
+      - name: One-time diagnostic — Cloud Run read runtime presence
+        shell: bash
+        run: |
+          set +e
+          gcloud run services list \
+            --project=freepasserp5 \
+            --region=asia-northeast3 \
+            --platform=managed \
+            --format='table(metadata.name,status.url,status.conditions[0].status,status.conditions[0].message)'
+          code=$?
+          set -e
+          echo "cloud_run_list_exit=$code"
       - name: Check Estimate master readiness from canonical Vehicle Master
         shell: bash
         env:
