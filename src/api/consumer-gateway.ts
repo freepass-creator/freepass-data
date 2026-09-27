@@ -23,7 +23,7 @@ import { stableDigest } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from '../application/projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
-import type { AdminWorkflowStore } from '../infra/admin-workflow-firestore.js';
+import type { AdminWorkflowStore } from '../ports/admin-workflow.js';
 import {
   assertAdminWorkflowCommitRequest,
   assertAdminWorkflowReadSpec,
