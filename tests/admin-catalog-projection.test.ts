@@ -89,6 +89,18 @@ describe('Admin Catalog projection on current release evidence', () => {
     expect(row.offers[0]?.policyValues).toContainEqual({
       policyId: 'basic_driver_age', type: 'NUMBER', value: 21,
     });
+    expect(row.offers[0]?.commercial?.dataCatalog.classification.priceInputKeys).toEqual(
+      expect.arrayContaining(['annual_mileage_km', 'driver_age', 'insurance_included', 'property_compensation_limit']),
+    );
+    expect(row.offers[0]?.commercial?.dataCatalog.classification.groups.INSURANCE).toEqual(
+      expect.arrayContaining(['insurance_included', 'property_compensation_limit']),
+    );
+    expect(row.offers[0]?.commercial?.dataCatalog.quality.unresolvedDimensionKeys).toContain('additional_driver_count');
+    expect(row.offers[0]?.commercial?.dataCatalog.derived.lowestBasisPrice).toMatchObject({
+      termKey: '48_2만',
+      monthlyRent: { amount: 850000, currency: 'KRW' },
+      deposit: { state: 'UNKNOWN' },
+    });
     expect(row.offers[0]?.commercial?.listing).toMatchObject({
       strategy: 'LOWEST_BASIS_MONTHLY_RENT',
       termKey: '48_2만',
