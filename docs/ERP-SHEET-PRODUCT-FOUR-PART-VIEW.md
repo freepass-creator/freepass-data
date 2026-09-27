@@ -99,3 +99,28 @@ ERP의 Result는 현재 선택조건 + 정책 조정 → 최종 월대여료 + �
 ## FreePass Estimate와 경계
 
 여기까지는 상품조건 산출이다. 고객 견적 저장/발송/Quote ID/견적서는 FreePass Estimate 영역이다.
+## 원천 가격행의 조건 귀속
+
+기간별 대여료와 보증금은 가져온 즉시 가격만 저장하지 않는다.
+각 가격행에 그 금액이 성립하는 조건과 근거를 함께 귀속한다.
+
+근거 상태:
+- SOURCE_PRICE_KEY: 가격 키 자체가 기간/주행거리/반납·인수 조건을 명시
+- CANONICAL_PRICE_TERM: 정규화된 PriceTerm에 값이 있으나 원천 키 직접 증거는 아님
+- LINKED_POLICY_FACT: 같은 상품에 연결된 정책 사실에서 조건을 확인
+- UNRESOLVED: 어떤 원천/정책에서도 해당 기준조건을 확인할 수 없음
+
+예:
+- source:24_2만 → 기간 24개월, 주행거리 20,000km는 SOURCE_PRICE_KEY
+- basic_driver_age=만 26세 이상 → LINKED_POLICY_FACT
+- property_compensation_limit=1억원 → LINKED_POLICY_FACT
+- 추가운전자 기본 포함 수가 원천/정책에 없음 → UNKNOWN
+
+가격행은 UNKNOWN 조건이 하나라도 있으면 PARTIAL로 표시한다.
+UNKNOWN을 프리패스 기본값으로 덮어 가격의 원천 조건처럼 보이게 하지 않는다.
+
+월대여료와 보증금도 각각 출처를 구분한다.
+보증금 숫자 또는 산정근거가 확인되지 않으면 월대여료가 확정되어 있어도 보증금은 별도 UNRESOLVED다.
+
+이 조건 귀속은 이후 가격 산출의 기준점이다.
+사용자가 조건을 바꾸면 어떤 기준조건에서 출발했는지 확인한 뒤 변경 규칙을 적용해야 한다.
