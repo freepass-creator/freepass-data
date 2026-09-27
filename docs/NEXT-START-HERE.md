@@ -7,6 +7,28 @@ Handoff base when closure work started: `28d46e1f8d14a3a08d86586dae535838e4d123c
 Branch: `main`
 Date: 2026-09-28
 
+## 2026-09-28 Kakao reference facts packet
+
+`work/freepass-data/kakao-facts-20260928`에서 Kakao 전용 typed `REFERENCE_ONLY` 계약을 구현했다.
+
+- 요청 원문: `kakao-ops@ee9dea7`의 `docs/handoffs/FREEPASS-DATA-요청-20260928-보증금-색상-수수료.md`
+- source base: `main@41919776437890413200902d13b112c017aaeb14`
+- route: `GET /v1/consumers/kakao-ops/catalog-reference`
+- 기간별 계산 보증금, 명시적 ZERO/UNKNOWN, ERP5 외장색상, F80-F85 기반 수수료 정책/계산 상태를 제공한다.
+- 기존 Canonical `/catalog`의 fallback이 아니며 응답은 `authority=REFERENCE_ONLY`, `publicationDecision=HOLD`다.
+- 로컬 private capture 전수검증: source 1,659 / projected 685 / terms 4,223 / exterior color 678;
+  deposit KNOWN 4,037 / ZERO 36 / UNKNOWN 150.
+- 검증: 최신 `main@cc4c8e6` 통합 후 이안카 일회성 정책 적용 경로를 기존 Data Access Gateway로 감싸고
+  `npm run check` 전체 PASS: architecture/data-access/build, node route/sheet/shadow/dashboard 60건,
+  Vitest 958 PASS / 12 SKIP. 운영 Firestore 쓰기는 실행하지 않았다. Claude 읽기 전용 검토는 다시 요청했으나
+  응답 없이 멈춰 `UNAVAILABLE`이고 PASS로 계산하지 않는다.
+- publication: PR #222에 통합 결과를 추가해 새 HEAD CI를 재검증한 뒤 `main` 병합한다.
+- 운영 HOLD: PR merge, read runtime deployment, `kakao-ops` 전용 secret 등록, 운영 PC readback,
+  Kakao 계산 제거는 아직 실행하지 않았다. 운영 배포와 consumer 변경은 별도 승인/후속 작업이다.
+
+next_start_here: PR #222 병합 후에도 read runtime 배포, `kakao-ops` 전용 secret 등록, 운영 PC readback과
+Kakao 계산 제거는 별도 승인/HOLD로 유지한다.
+
 ## 2026-09-28 READ-ONLY OPERATIONS v1.0
 
 G1 중앙 read runtime 운영 기반은 완료됐다.
