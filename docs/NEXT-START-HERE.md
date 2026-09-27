@@ -1,23 +1,47 @@
 # FreePass Data — NEXT START HERE
 
-Status: **ACTIVE / CLOSURE EXECUTION**
+Status: **READ-ONLY OPERATIONS v1.0 / CONSUMER HANDOFF**
 Official project name: **프리패스 데이터 / FreePass Data**
 Repository: `freepass-creator/freepass-data`
 Handoff base when closure work started: `28d46e1f8d14a3a08d86586dae535838e4d123cd`
 Branch: `main`
-Date: 2026-09-27
+Date: 2026-09-28
+
+## 2026-09-28 READ-ONLY OPERATIONS v1.0
+
+G1 중앙 read runtime 운영 기반은 완료됐다.
+
+- canonical main: `ff591ef835179439828f81aa5b4f605356964c84`
+- successful deployment: GitHub Actions run `36327937895`
+- Cloud Run: `freepass-data-read`, `asia-northeast3`
+- Ready revision: `freepass-data-read-00011-4sw`
+- immutable image digest: `sha256:90d2b9da9361da3facd774eadf19a412ad6cc712f36f7575a566e4d226dd013c`
+- unauthenticated `/health`: HTTP 403
+- WIF-authenticated `erp-com/catalog-compat`: HTTP 200 and contract readback PASS
+- runtime identity: `freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com`
+- business data는 `datastore.viewer`로만 읽지만 Data Access 감사 이벤트 append를 위해 custom
+  `datastore.entities.create` 권한이 있다. Firestore IAM은 collection 단위로 이를 제한하지 못하므로
+  감사 collection 경계는 application code로 강제한다. Canonical/source/projection mutation 권한은 없다.
+- deploy identity는 프로젝트 전체 `run.admin`이 아니라 이 Cloud Run service의 `run.admin` +
+  `run.invoker`만 가진다.
+- deploy WIF는 별도 pool이며 numeric owner `256007744`, repository, `main` branch와 정확한
+  `deploy-read-runtime.yml@refs/heads/main` 조건을 모두 고정한다.
+
+로컬 Codex와 Claude의 공통 GCP 실행 경로는 native gcloud configuration `freepass-data`다.
+계정은 `dudguq@gmail.com`, project는 `freepasserp5`다. 키 파일을 복제하거나 문서에 credential을
+남기지 않는다. 세션 확인은 `gcloud config configurations activate freepass-data` 후
+`gcloud config list`로 하며 재인증 실패는 우회하지 않고 HOLD한다.
+
+다음 시작점은 G2 소비 프로젝트의 Preview `OBSERVE` 연결이다. 이는 FreePass Data v1.0 기반
+완료와 분리된 소비자 작업이며, 사용자 GO 전 `FREEPASS_DATA_READ` cutover는 금지한다.
 
 ## 2026-09-27 closure entrypoint
 
 FreePass Data를 계속 확장하지 않고 운영 기반을 닫는 현재 계획과 무료 ChatGPT/Codex 작업 분담은
 [`PROJECT-CLOSURE-AND-FREE-CHAT-HANDOFF.md`](./PROJECT-CLOSURE-AND-FREE-CHAT-HANDOFF.md)를 따른다.
 
-현재 첫 운영 게이트는 IAM-protected Cloud Run read runtime의 GCP bootstrap과 실제 readback이다.
-서비스는 `--ingress=all`로 인터넷에서 도달 가능하지만 Cloud Run IAM으로 미인증 호출을 거부한다.
-최신 main에는
-배포 workflow가 있으나 GitHub deploy WIF/서비스 계정/region/service/Artifact Registry/runtime identity/
-consumer secret 설정이 없어 run `36317333170`이 fail-closed됐다. 운영 변경 전 GCP 현재 상태를 다시 읽고
-변경안·rollback을 제시한 뒤 사용자 직전 승인을 받는다.
+첫 운영 게이트였던 IAM-protected Cloud Run bootstrap과 실제 readback은 위 2026-09-28 증거로 닫혔다.
+과거 run `36317333170`의 fail-closed 기록은 bootstrap 전 상태이며 현재 상태로 사용하지 않는다.
 
 커밋 `28d46e1`의 `activate`는 배포 workflow 활성화를 뜻하며 Cloud Run 배포·consumer cutover 완료가 아니다.
 
