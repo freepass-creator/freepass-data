@@ -63,7 +63,6 @@ describe('product condition preview', () => {
       mileage: { pricedUpToKmPerYear: 20000, maxSelectableKmPerYear: 40000 },
       driverAge: { includedFromAge: 26, lowerableToAge: 21, allowedToAge: 70 },
       drivers: {
-        includedAdditionalDriverCount: 0,
         maxAdditionalDriverCount: 1,
         personalScope: '본인+직계가족',
         businessScope: '임직원',
