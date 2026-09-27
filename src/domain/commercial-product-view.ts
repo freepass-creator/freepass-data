@@ -37,6 +37,32 @@ export type PricingConditionScope = {
   maintenanceService?: CommercialFactValue;
 };
 
+export type PriceConditionEvidence = {
+  dimensionKey: string;
+  status: 'KNOWN' | 'UNKNOWN';
+  value?: CommercialFactValue;
+  origin:
+    | 'SOURCE_PRICE_KEY'
+    | 'CANONICAL_PRICE_TERM'
+    | 'LINKED_POLICY_FACT'
+    | 'UNRESOLVED';
+  sourceRef?: string;
+};
+
+export type PriceBasisAttribution = {
+  status: 'COMPLETE' | 'PARTIAL';
+  conditions: PriceConditionEvidence[];
+  unknownConditionKeys: string[];
+  monthlyRentOrigin: {
+    origin: 'CANONICAL_PRICE_TERM';
+    sourceRef: string;
+  };
+  depositOrigin: {
+    origin: 'CANONICAL_PRICE_TERM' | 'UNRESOLVED';
+    sourceRef?: string;
+  };
+};
+
 export type MonthlyRentModifier = {
   key: 'mileage_upcharge_per_10000km' | 'age_lowering_cost' | 'additional_driver_cost';
   dimension: 'MILEAGE' | 'DRIVER_AGE' | 'ADDITIONAL_DRIVER';
@@ -90,6 +116,7 @@ export type CommercialProductView = {
     termKey: string;
     conditionScope: PricingConditionScope;
     monthlyRent: Money;
+    attribution: PriceBasisAttribution;
     deposit: {
       state: 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
       amount?: Money;
