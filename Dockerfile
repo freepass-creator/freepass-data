@@ -29,4 +29,4 @@ COPY contracts ./contracts
 
 USER node
 
-CMD ["node", "dist/api/consumer-server.js"]
+CMD ["node", "dist/src/api/consumer-server.js"]
