@@ -131,7 +131,7 @@ jobs:
         run: |
           set -euo pipefail
           unauthenticated_status="$(curl --silent --show-error --output /dev/null \
-            --write-out='%{http_code}' \
+            --write-out '%{http_code}' \
             "$READ_RUNTIME_DEPLOYED_URL/health")"
           test "$unauthenticated_status" = "403"
 
@@ -145,7 +145,7 @@ jobs:
           response_file="$(mktemp)"
           trap 'rm -f "$response_file"' EXIT
           authenticated_status="$(curl --silent --show-error --output "$response_file" \
-            --write-out='%{http_code}' \
+            --write-out '%{http_code}' \
             --header="X-Serverless-Authorization: Bearer $cloud_run_token" \
             --header="Authorization: Bearer $consumer_token" \
             "$READ_RUNTIME_DEPLOYED_URL/v1/consumers/erp-com/catalog-compat")"
