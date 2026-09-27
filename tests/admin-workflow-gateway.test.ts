@@ -3,7 +3,7 @@ import { createConsumerGateway, parseConsumerBindings, type ConsumerBinding } fr
 import { DataAccessGateway } from '../src/application/data-access-gateway.js';
 import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
-import type { AdminWorkflowStore } from '../src/infra/admin-workflow-firestore.js';
+import type { AdminWorkflowStore } from '../src/ports/admin-workflow.js';
 
 const token = 'admin-workflow-token-0123456789abcdef';
 const binding: ConsumerBinding = {
