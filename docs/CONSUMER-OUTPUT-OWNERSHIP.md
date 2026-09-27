@@ -388,24 +388,32 @@ authorize or perform any Canonical write. The heartbeat is also included in the
 ## Independent Audit Watchdog
 
 The main ERP5 audit can detect a missed interval only after it eventually runs.
-A separate lightweight watchdog therefore checks the accepted `latest.json`
-pointer every hour at minute 07, independently of the full audit scheduled for
-minute 37.
+A separate lightweight watchdog therefore runs every hour at minute 07,
+independently of the full audit, and reports when no audit has succeeded recently.
 
-The watchdog uses only the read-only WIF service account and the private evidence
-bucket. It never advances `latest.json`, writes Canonical data, or invokes any
-consumer/canonical writer.
+The watchdog holds no Google Cloud identity and touches neither the evidence
+bucket nor Firestore. It reads this repository's own Actions run history with a
+read-scoped `GITHUB_TOKEN` (`actions: read`) and asks one question: when did
+`erp5-continuous-audit.yml` last succeed on `main`? A successful audit run is
+valid proof that `latest.json` advanced, because that workflow reports success
+only after its own byte readback and generation check pass.
 
-It validates the pointer contract and compares the pointer `readTime` with the
-current UTC time using the same explicit `ERP5_AUDIT_MAX_GAP_MINUTES` policy.
+The WIF attribute condition deliberately admits the audit workflow path alone.
+Keeping the watchdog outside Google Cloud preserves that boundary instead of
+widening token minting to a second workflow.
 
-- Fresh pointer: workflow succeeds and emits `HEALTHY / LATEST_POINTER_FRESH`.
-- Stale pointer: workflow emits `BLOCKED / LATEST_POINTER_STALE` and fails so the
+It compares the last successful run's completion time with the current UTC time
+using the same explicit `ERP5_AUDIT_MAX_GAP_MINUTES` policy.
+
+- Recent audit success: workflow succeeds and emits `HEALTHY / AUDIT_RUN_RECENT`.
+- Overdue audit: workflow emits `BLOCKED / AUDIT_RUN_STALE` and fails so the
   missing audit becomes visible as a GitHub Actions failure.
-- Missing/malformed pointer, invalid time, or missing configuration also fail
-  closed.
+- No successful run, an unreadable run list, a completion time in the future, or
+  missing configuration also fail closed.
 
-The non-sensitive `audit-watchdog-summary.json` artifact is retained for 90 days.
+The non-sensitive `audit-watchdog-summary.json` artifact (`erp5-audit-watchdog/2`)
+is retained for 90 days. It records the observed run id, event, head SHA and age,
+and never authorizes a Canonical or destructive action.
 
 ## FreePass Data Control Tower
 
