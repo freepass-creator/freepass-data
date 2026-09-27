@@ -1,4 +1,5 @@
 import type { CommercialType, Money, VehicleAssetStatus } from './catalog.js';
+import type { ConditionDimension } from './pricing-condition-model.js';
 
 export type CommercialFactValue = boolean | number | string | string[];
 
@@ -162,6 +163,40 @@ export type CommercialOfferView = {
     };
     attribution: PriceBasisAttribution;
   }>;
+  dataCatalog: {
+    dimensions: ConditionDimension[];
+    classification: {
+      priceInputKeys: string[];
+      eligibilityKeys: string[];
+      contractOnlyKeys: string[];
+      groups: Record<
+        'TERM' | 'MILEAGE' | 'DRIVER' | 'INSURANCE' | 'MAINTENANCE' | 'PAYMENT' | 'DELIVERY' | 'SETTLEMENT' | 'OTHER',
+        string[]
+      >;
+    };
+    pricingModifiers: MonthlyRentModifier[];
+    policyFacts: CommercialFact[];
+    contractFacts: CommercialFact[];
+    derived: {
+      lowestBasisPrice: {
+        termKey: string;
+        monthlyRent: Money;
+        deposit: {
+          state: 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
+          amount?: Money;
+        };
+        attribution: PriceBasisAttribution;
+      };
+      defaultConditionResult: ProductPriceResult;
+    };
+    quality: {
+      unresolvedDimensionKeys: string[];
+      partialBasisTermKeys: string[];
+      ambiguousPolicyTermKeys: string[];
+      unclassifiedPolicyFactKeys: string[];
+    };
+  };
+  /** Compatibility alias for current consumers. Consumers decide whether to use it. */
   listing: {
     strategy: 'LOWEST_BASIS_MONTHLY_RENT';
     termKey: string;
