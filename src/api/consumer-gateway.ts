@@ -25,6 +25,12 @@ import { readActiveProjectionEvidence } from '../application/projection-evidence
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
 import type { AdminWorkflowStore } from '../ports/admin-workflow.js';
+import type { EstimateArtifactStore } from '../ports/estimate-artifacts.js';
+import {
+  assertQuotePutCommand,
+  assertShareEnvelopePutCommand,
+  normalizedArtifactVersion,
+} from '../domain/estimate-artifacts.js';
 import {
   assertAdminWorkflowCommitRequest,
   assertAdminWorkflowReadSpec,
@@ -32,7 +38,12 @@ import {
   type AdminWorkflowReadSpec,
 } from '../domain/admin-workflow.js';
 
-export type ConsumerCapability = 'catalog' | 'catalog-health' | 'estimate-newcar-master' | 'admin-workflow';
+export type ConsumerCapability =
+  | 'catalog'
+  | 'catalog-health'
+  | 'estimate-newcar-master'
+  | 'estimate-artifacts'
+  | 'admin-workflow';
 export type ConsumerBinding = {
   id: string;
   projectionId: 'erp-public' | 'admin-catalog' | 'estimate-newcar-master';
@@ -71,12 +82,12 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     }
     if (ids.has(item.id) || tokens.has(item.token)) throw new Error('Duplicate consumer ID or shared service token');
     const capabilities: ConsumerCapability[] = item.capabilities === undefined
-      ? (item.id === 'freepass-estimate' ? ['estimate-newcar-master'] : ['catalog'])
+      ? (item.id === 'freepass-estimate' ? ['estimate-newcar-master', 'estimate-artifacts'] : ['catalog'])
       : (() => {
           if (!Array.isArray(item.capabilities) || item.capabilities.length === 0) {
             throw new Error('Consumer capabilities must be a non-empty array');
           }
-          const allowed = new Set<ConsumerCapability>(['catalog', 'catalog-health', 'estimate-newcar-master', 'admin-workflow']);
+          const allowed = new Set<ConsumerCapability>(['catalog', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'admin-workflow']);
           const values = item.capabilities.map((value) => {
             if (typeof value !== 'string' || !allowed.has(value as ConsumerCapability)) {
               throw new Error('Unsupported consumer capability');
@@ -89,11 +100,11 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
           return values;
         })();
     if (item.id === 'freepass-estimate') {
-      if (capabilities.some((value) => value !== 'estimate-newcar-master')) {
-        throw new Error('FreePass Estimate registration may only use estimate-newcar-master capability');
+      if (capabilities.some((value) => !['estimate-newcar-master', 'estimate-artifacts'].includes(value))) {
+        throw new Error('FreePass Estimate registration may only use Estimate capabilities');
       }
-    } else if (capabilities.includes('estimate-newcar-master')) {
-      throw new Error('Estimate master capability requires freepass-estimate registration');
+    } else if (capabilities.includes('estimate-newcar-master') || capabilities.includes('estimate-artifacts')) {
+      throw new Error('Estimate capabilities require freepass-estimate registration');
     }
     if (capabilities.includes('admin-workflow') && item.id !== 'freepass-admin-catalog') {
       throw new Error('Admin workflow capability requires freepass-admin-catalog registration');
@@ -144,6 +155,7 @@ export function createConsumerGateway(
   healthStore?: CatalogDataHealthStore,
   compatReader?: { read(consumerId: string): Promise<CatalogCompatibilitySnapshot> },
   workflowStore?: AdminWorkflowStore,
+  estimateArtifactStore?: EstimateArtifactStore,
 ) {
   // Validate again for callers constructing registrations without the environment parser.
   const registered = new Map(parseConsumerBindings(JSON.stringify(bindings)).map((item) => [item.id, item]));
