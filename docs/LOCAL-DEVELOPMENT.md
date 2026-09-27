@@ -4,7 +4,13 @@ Working directory: `C:\dev\freepass-data`
 
 Requires Node.js 22 or newer. Verified on Windows with Node.js 24.19.0 and npm 11.17.0.
 
+`npm run check` also needs **`jq`** on PATH: some tests extract the Bash blocks out of
+`.github/workflows/*.yml` and run them exactly as CI would, and those blocks call `jq`.
+Without it those tests fail locally while CI stays green, which reads as a broken branch
+when nothing is broken.
+
 ```powershell
+winget install jqlang.jq   # once, if `jq --version` fails
 cd C:\dev\freepass-data
 npm ci
 npm run check
