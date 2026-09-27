@@ -1,0 +1,161 @@
+/*
+ * 공용 로그인 규격 — 모든 프리패스 앱이 같은 파일을 쓴다.
+ * 짜임은 ERP4 로그인(v3 이래의 규격)을 그대로 따른다: 400px 카드, 라벨 위·칸 아래,
+ * 44/48 높이, 링크 한 줄, 모바일은 카드 껍데기를 걷고 흰 한 면.
+ *
+ * ★치수는 여기 한 곳에만 있다. 앱 쪽 CSS에 높이를 다시 적지 말 것.
+ * ★색은 토큰(--fpl-*)만 뒤집는다. 규칙에 브랜드색을 박아 넣지 말 것 —
+ *   그래야 브랜드 한 줄만 갈아 끼우면 버튼·링크·포커스링이 전부 따라온다.
+ */
+.fpl {
+  --fpl-brand: #1B2A4A;
+  --fpl-brand-hover: #24365E;
+  --fpl-bg-page: #EEF0F3;
+  --fpl-bg-card: #FFFFFF;
+  --fpl-text: #171A21;
+  --fpl-text-sub: #5B646F;
+  --fpl-text-weak: #8A929C;
+  --fpl-text-muted: #B4BAC2;
+  --fpl-line: #E2E5EA;
+  --fpl-ok: #1D7A4A;
+  --fpl-bad: #B53838;
+  --fpl-ctrl: 44px;
+  --fpl-shadow: 0 2px 12px rgba(20, 28, 45, .10);
+
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  overflow: auto;
+  background: var(--fpl-bg-page);
+  color: var(--fpl-text);
+  font-family: Pretendard, -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', 'Noto Sans KR', sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.fpl *, .fpl *::before, .fpl *::after { box-sizing: border-box; }
+
+.fpl-page {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 40px 16px;
+  padding-top: max(40px, env(safe-area-inset-top));
+  padding-bottom: max(32px, env(safe-area-inset-bottom));
+}
+
+/*
+ * 간판 «자리»만 잡는다. 서체·무게·자간·색은 브랜드가 들고 온다.
+ * ⚠ 여기에 text-transform 이나 서체를 적지 말 것 — 그러면 채널 이름이
+ *   우리 CI 규칙을 뒤집어쓴다. 남의 회사 이름은 그 회사 규격대로 선다.
+ */
+.fpl-brand { display: flex; align-items: baseline; justify-content: center; gap: 1px; line-height: 1; }
+
+.fpl-card {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  background: var(--fpl-bg-card);
+  border: none;
+  border-radius: 2px;
+  padding: 40px 32px;
+  box-shadow: var(--fpl-shadow);
+  display: grid;
+  gap: 24px;
+}
+.fpl-head { display: grid; gap: 8px; }
+.fpl-title { margin: 0; font-size: 20px; font-weight: 600; line-height: 1.3; letter-spacing: -.02em; }
+.fpl-sub { margin: 0; font-size: 13px; color: var(--fpl-text-sub); line-height: 1.5; }
+
+.fpl-form { display: grid; gap: 16px; }
+.fpl-field { display: grid; gap: 6px; }
+.fpl-field > span { font-size: 12px; font-weight: 500; color: var(--fpl-text-sub); line-height: 1.4; }
+.fpl input, .fpl select {
+  height: var(--fpl-ctrl);
+  width: 100%;
+  border: 1px solid var(--fpl-line);
+  border-radius: 6px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 13.5px;
+  background: #fff;
+  color: var(--fpl-text);
+}
+.fpl input:focus, .fpl select:focus {
+  outline: 2px solid var(--fpl-brand);
+  outline-offset: 1px;
+  border-color: var(--fpl-brand);
+}
+.fpl-submit {
+  height: var(--fpl-ctrl);
+  width: 100%;
+  margin-top: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--fpl-brand);
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fpl-submit:hover:not(:disabled) { background: var(--fpl-brand-hover); }
+.fpl-submit:disabled { opacity: .55; cursor: default; }
+
+.fpl-links { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 11px; color: var(--fpl-text-weak); }
+.fpl-links button {
+  border: 0; background: none; font: inherit; font-size: 11px; font-weight: 500;
+  color: var(--fpl-brand); text-decoration: none; padding: 8px 4px; cursor: pointer;
+}
+.fpl-links button:hover { color: var(--fpl-brand-hover); text-decoration: underline; }
+.fpl-links-sep { color: var(--fpl-text-muted); }
+
+.fpl-msg { margin: 0; font-size: 11.5px; line-height: 1.5; text-align: center; color: var(--fpl-text-weak); }
+.fpl-msg.is-ok { color: var(--fpl-ok); }
+.fpl-msg.is-err { color: var(--fpl-bad); }
+.fpl-hint { margin: 2px 0 0; font-size: 11px; line-height: 1.4; color: var(--fpl-text-weak); }
+.fpl-hint.is-miss { color: var(--fpl-bad); }
+
+.fpl-policy {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  padding: 9px 11px;
+  border-radius: 6px;
+  border: 1px solid var(--fpl-line);
+  background: #F3F5F8;
+  color: var(--fpl-text-sub);
+  text-align: left;
+}
+
+.fpl-consent { border: 1px solid var(--fpl-line); border-radius: 6px; padding: 10px 12px; display: grid; gap: 8px; text-align: left; }
+.fpl-consent label { display: flex; align-items: center; gap: 10px; min-height: 32px; font-size: 12px; line-height: 1.5; cursor: pointer; }
+.fpl-consent .fpl-all { font-weight: 700; padding-bottom: 8px; border-bottom: 1px solid var(--fpl-line); }
+.fpl-consent input { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--fpl-brand); }
+.fpl-consent a { color: var(--fpl-brand); text-decoration: underline; text-underline-offset: 2px; }
+.fpl-consent p { margin: 0; font-size: 11px; color: var(--fpl-text-muted); line-height: 1.5; }
+
+/* 처리 중 덮개 — 카드 위만 덮는다. 누르는 것을 막되 읽는 것은 막지 않는다. */
+.fpl-busy {
+  position: absolute; inset: 0; z-index: 10;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--fpl-bg-card) 82%, transparent);
+  font-size: 12px; color: var(--fpl-text-sub);
+}
+
+/*
+ * 모바일은 «한 면이 흰 바탕»이다. 카드 껍데기(테두리·그림자·모서리)를 걷고 전체폭으로 편 뒤
+ * 바탕까지 흰색으로 올린다 — 안 그러면 회색 위에 경계 없는 흰 띠가 떠 보인다.
+ */
+@media (max-width: 768px) {
+  .fpl { --fpl-ctrl: 48px; background: var(--fpl-bg-card); }
+  .fpl-page { align-items: stretch; justify-content: flex-start; gap: 20px; padding: max(28px, env(safe-area-inset-top)) 0 max(24px, env(safe-area-inset-bottom)); }
+  .fpl-brand { padding: 0 24px; }
+  .fpl-card { max-width: none; padding: 0 24px; gap: 20px; box-shadow: none; border: 0; border-radius: 0; background: transparent; }
+  .fpl-field > span { font-size: 13px; }
+  .fpl-links { font-size: 13px; gap: 12px; }
+  .fpl-links button { font-size: 13px; }
+}

@@ -1,0 +1,79 @@
+name: Publish audit dashboard snapshot
+
+on:
+  workflow_run:
+    workflows: ['ERP5 continuous read-only audit']
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: audit-dashboard-snapshot
+  cancel-in-progress: false
+
+# Carries no cloud identity. It republishes only the non-sensitive summary the audit
+# already emits, so the private evidence bucket stays reachable by the audit alone.
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  snapshot:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SNAPSHOT_PATH: dashboard/data/audit-latest.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Resolve the audit run to publish
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id='${{ github.event.workflow_run.id }}'
+          if [ -z "$run_id" ]; then
+            run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/erp5-continuous-audit.yml/runs?branch=main&status=success&per_page=1" \
+              --jq '.workflow_runs[0].id')"
+          fi
+          test -n "$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download the non-sensitive summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf artifact && mkdir artifact
+          gh run download '${{ steps.source.outputs.run_id }}' -D artifact
+          found="$(find artifact -name source-inventory.json | head -1)"
+          test -n "$found"
+          # Republishing anything but this contract could leak raw source values.
+          jq -e '
+            .version == "erp5-source-inventory/1" and
+            (.source.projectId | type == "string") and
+            (.source.digest | type == "string" and length == 64) and
+            (.source.collections | type == "object") and
+            (.runId | type == "string" and length > 0) and
+            .authority.canonicalWriteAuthorized == false and
+            .authority.destructiveActionAuthorized == false and
+            (has("records") | not)
+          ' "$found" >/dev/null
+          mkdir -p "$(dirname "$SNAPSHOT_PATH")"
+          jq -S . "$found" > "$SNAPSHOT_PATH"
+
+      - name: Commit only when the observation changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- "$SNAPSHOT_PATH"; then
+            echo "No change in the published observation; nothing to commit."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$SNAPSHOT_PATH"
+          git commit -m "chore(dashboard): publish audit observation ${{ steps.source.outputs.run_id }}"
+          git push origin HEAD:main
