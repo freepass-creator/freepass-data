@@ -53,11 +53,18 @@ export type ConditionPredicate =
   | { dimensionKey: string; op: 'IN'; values: CommercialFactValue[] }
   | { dimensionKey: string; op: 'GT' | 'GTE' | 'LT' | 'LTE'; value: number };
 
+export type PriceBaseRef =
+  | 'BASIS_MONTHLY_RENT'
+  | 'CURRENT_MONTHLY_RENT'
+  | 'BASIS_DEPOSIT'
+  | 'CURRENT_DEPOSIT'
+  | `CONTEXT:${string}`;
+
 export type PriceAdjustmentOperation =
   | { kind: 'ADD_FIXED'; amount: Money }
-  | { kind: 'ADD_RATE'; rate: number; base: 'BASIS_MONTHLY_RENT' | 'CURRENT_MONTHLY_RENT' }
+  | { kind: 'ADD_RATE'; rate: number; base: PriceBaseRef }
   | { kind: 'ADD_PER_UNIT'; unit: number; amount: Money; fromValue?: number }
-  | { kind: 'MULTIPLY'; multiplier: number; base: 'BASIS_MONTHLY_RENT' | 'CURRENT_MONTHLY_RENT' | 'CURRENT_DEPOSIT' }
+  | { kind: 'MULTIPLY'; multiplier: number; base: PriceBaseRef }
   | { kind: 'SET_FIXED'; amount: Money }
   | { kind: 'REQUIRE_EXPLICIT_VARIANT' };
 
