@@ -85,6 +85,8 @@ export class FirebaseBusinessStore {
     const resource = resolveBusinessResource(input.consumerId, input.resource, 'READ');
     if (!resource) throw new Error('BUSINESS_RESOURCE_READ_FORBIDDEN');
 
+    if (resource.backend === 'STORAGE') throw new Error('BUSINESS_ASSET_ENDPOINT_REQUIRED');
+
     if (resource.backend === 'RTDB') {
       const snap = await rtdbRef(resource, input.id, input.parentId).get();
       return {
@@ -139,6 +141,9 @@ export class FirebaseBusinessStore {
       if (!resource) throw new Error('BUSINESS_RESOURCE_WRITE_FORBIDDEN');
       return { operation, resource };
     });
+    if (resolved.some((item) => item.resource.backend === 'STORAGE')) {
+      throw new Error('BUSINESS_ASSET_ENDPOINT_REQUIRED');
+    }
     const backends = new Set(resolved.map((item) => item.resource.backend));
     const targets = new Set(resolved.map((item) => item.resource.target));
     if (backends.size !== 1 || targets.size !== 1) {
