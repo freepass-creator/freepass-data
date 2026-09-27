@@ -1,0 +1,42 @@
+name: Diagnose FreePass Data read runtime once
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/diag-read-runtime-once.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Authenticate with existing read identity
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.ERP5_WIF_PROVIDER }}
+          service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+      - name: Inspect Cloud Run read runtime metadata only
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "project=freepasserp5"
+          echo "region=asia-northeast3"
+          set +e
+          gcloud run services list             --project=freepasserp5             --region=asia-northeast3             --platform=managed             --format='table(metadata.name,status.url,status.conditions[0].status,status.conditions[0].message)'             > /tmp/services.txt 2> /tmp/services.err
+          code=$?
+          set -e
+          echo "list_exit=$code"
+          cat /tmp/services.txt
+          if [ "$code" -ne 0 ]; then
+            echo "Cloud Run listing unavailable to read identity:"
+            sed -E 's/(ya29\.[A-Za-z0-9._-]+)/[REDACTED]/g' /tmp/services.err
+          fi
