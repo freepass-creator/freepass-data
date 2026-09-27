@@ -2,7 +2,7 @@ import { createBusinessGateway, parseBusinessBindings } from './business-gateway
 import { DataAccessGateway } from '../application/data-access-gateway.js';
 import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
 import { createFirebaseBusinessStore } from '../infra/firebase-business-store.js';
-import { assertBusinessRuntimeCredentialPolicy } from '../infra/firebase-business-targets.js';
+import { assertBusinessRuntimeCredentialPolicy } from '../infra/firebase-target.js';
 import { assertConsumerRuntime } from './runtime-policy.js';
 
 /**
