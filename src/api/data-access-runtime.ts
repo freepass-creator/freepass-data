@@ -4,6 +4,7 @@ import { createFirestoreAdminWorkflowStore } from '../infra/admin-workflow-fires
 import { createFirestoreDataHealthReader } from '../infra/firestore-data-health-reader.js';
 import { createFirestoreCatalogCompatibilityReader } from '../infra/erp5-compat-catalog-reader.js';
 import { createFirestoreProjectionReader } from '../infra/firestore-projection-reader.js';
+import { createFirestoreEstimateArtifactStore } from '../infra/estimate-artifacts-firestore.js';
 
 /**
  * Composition root for consumer-facing reads.
@@ -16,6 +17,7 @@ export function createConsumerDataAccessRuntime() {
     projection: createFirestoreProjectionReader(),
     health: createFirestoreDataHealthReader(),
     compat: createFirestoreCatalogCompatibilityReader(),
-    workflow: createFirestoreAdminWorkflowStore()
+    workflow: createFirestoreAdminWorkflowStore(),
+    estimateArtifacts: createFirestoreEstimateArtifactStore()
   };
 }

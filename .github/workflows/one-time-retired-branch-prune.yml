@@ -98,6 +98,7 @@ jobs:
             "work/data/w-11-policy-value-shape"
             "work/gpt/estimate-master-contract-20260925"
             "work/data/branch-cleanup-20260927"
+            "work/data/estimate-artifacts-20260927"
           )
           for b in "${branches[@]}"; do
             if git ls-remote --exit-code --heads origin "refs/heads/${b}" >/dev/null 2>&1; then
