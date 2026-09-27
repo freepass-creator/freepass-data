@@ -58,6 +58,8 @@ if (![2, 4].includes(args.length) || args[0] !== '--capture' || (args.length ===
         documentCount: dryRun.fieldProfile.documentCount,
         fieldPathCount: dryRun.fieldProfile.fieldPathCount
       },
+      // Enumerable codes and counts only — this is what turns the holds into questions.
+      decisionInputs: dryRun.decisionInputs,
       delta: delta ? {
         status: delta.status,
         digest: delta.digest,
