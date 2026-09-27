@@ -31,6 +31,12 @@ export const FIRESTORE_COLLECTIONS = Object.freeze({
     outbox: 'outbox_events',
     dataAccessEvents: 'data_access_events'
   }),
+  estimateArtifacts: Object.freeze({
+    issuedQuotes: 'estimate_issued_quotes',
+    issuedQuoteHeads: 'estimate_issued_quote_heads',
+    shareEnvelopes: 'estimate_share_envelopes',
+    shareEnvelopeHeads: 'estimate_share_envelope_heads'
+  }),
   legacyAdminWorkflow: Object.freeze({
     products: 'products',
     policies: 'policy',
