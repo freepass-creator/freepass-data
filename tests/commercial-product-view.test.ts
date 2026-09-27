@@ -33,7 +33,7 @@ const offer: Offer = {
     { termKey: '24_2만', termMonths: 24, monthlyRent: { amount: 700000, currency: 'KRW' },
       deposit: { amount: 3000000, currency: 'KRW' }, depositState: 'KNOWN', mileageLimitKmPerYear: 20000 },
     { termKey: '24_3만', termMonths: 24, monthlyRent: { amount: 760000, currency: 'KRW' },
-      deposit: { amount: 3000000, currency: 'KRW' }, depositState: 'KNOWN', mileageLimitKmPerYear: 30000 },
+      deposit: { amount: 3500000, currency: 'KRW' }, depositState: 'KNOWN', mileageLimitKmPerYear: 30000 },
   ],
 };
 const policy: Policy = {
@@ -51,7 +51,7 @@ const policy: Policy = {
 };
 
 describe('commercial product four-part view', () => {
-  it('separates vehicle, rental rates, product policy and contract conditions', () => {
+  it('keeps term, mileage, rent and deposit as one commercial row', () => {
     const view = buildCommercialProductView({ product, vehicleModel: model, vehicleAsset: asset, offer, policy });
 
     expect(view.vehicle).toMatchObject({
@@ -59,14 +59,16 @@ describe('commercial product four-part view', () => {
       vehicleAssetId: 'va_1', plateNumber: '12하3456',
     });
 
-    expect(view.rentalRates).toEqual([
+    expect(view.rentalTerms).toEqual([
       {
         termKey: '24_2만', termMonths: 24, mileageKmPerYear: 20000, isDefaultMileage: true,
         monthlyRent: { amount: 700000, currency: 'KRW' },
+        deposit: { state: 'KNOWN', amount: { amount: 3000000, currency: 'KRW' } },
       },
       {
         termKey: '24_3만', termMonths: 24, mileageKmPerYear: 30000, isDefaultMileage: false,
         monthlyRent: { amount: 760000, currency: 'KRW' },
+        deposit: { state: 'KNOWN', amount: { amount: 3500000, currency: 'KRW' } },
       },
     ]);
 
@@ -75,13 +77,18 @@ describe('commercial product four-part view', () => {
       'annual_mileage', 'max_annual_mileage', 'over_mileage_rate_per_km',
     ]);
 
-    expect(view.contractConditions.depositByTerm[0]).toEqual({
-      termKey: '24_2만', state: 'KNOWN', amount: { amount: 3000000, currency: 'KRW' },
-    });
     expect(view.contractConditions.facts.map((fact) => fact.key)).toEqual([
       'basic_driver_age', 'early_termination_rate_under1y', 'insurance_included', 'succession_allowed',
     ]);
     expect(view.review.status).toBe('READY');
+  });
+
+  it('preserves a different deposit for each term/mileage price row', () => {
+    const view = buildCommercialProductView({ product, vehicleModel: model, vehicleAsset: asset, offer, policy });
+    expect(view.rentalTerms.map((term) => [term.termKey, term.monthlyRent.amount, term.deposit.amount?.amount])).toEqual([
+      ['24_2만', 700000, 3000000],
+      ['24_3만', 760000, 3500000],
+    ]);
   });
 
   it('never silently drops a new policy fact', () => {
@@ -92,12 +99,6 @@ describe('commercial product four-part view', () => {
     expect(view.review.status).toBe('NEEDS_DECISION');
     expect(view.review.decisions).toContain('POLICY_FACT_CLASSIFICATION_REQUIRED');
     expect(view.review.unclassifiedPolicyFacts).toEqual(['future_supplier_rule']);
-  });
-
-  it('keeps deposit out of rentalRates while preserving it under contract conditions', () => {
-    const view = buildCommercialProductView({ product, vehicleModel: model, vehicleAsset: asset, offer, policy });
-    expect(view.rentalRates[0]).not.toHaveProperty('deposit');
-    expect(view.contractConditions.depositByTerm).toHaveLength(2);
   });
 
   it('covers every currently known Admin policy key in one of the two semantic buckets', () => {
