@@ -1,4 +1,5 @@
 import { applicationDefault, getApps, initializeApp, type App } from 'firebase-admin/app';
+import type { BusinessTarget } from '../domain/business-resource-registry.js';
 
 // User-confirmed operational project, 2026-09-21. Never infer this from ADC.
 export const CENTRAL_FIREBASE_PROJECT_ID = 'freepasserp5';
@@ -31,4 +32,62 @@ export function getTargetFirebaseApp(): App {
     return existing;
   }
   return initializeApp({ credential: applicationDefault(), projectId }, CENTRAL_FIREBASE_APP_NAME);
+}
+
+
+type BusinessTargetConfig = {
+  projectId: string;
+  appName: string;
+  databaseURL?: string;
+  storageBucket?: string;
+};
+
+export const BUSINESS_FIREBASE_TARGETS: Record<BusinessTarget, BusinessTargetConfig> = {
+  CORE: {
+    projectId: 'freepasserp5',
+    appName: 'freepass-data-business-core',
+    storageBucket: 'freepasserp5.appspot.com',
+  },
+  SALES: {
+    projectId: 'welrixtable',
+    appName: 'freepass-data-business-sales',
+  },
+  LEGACY: {
+    projectId: 'freepasserp3',
+    appName: 'freepass-data-business-legacy',
+    databaseURL: 'https://freepasserp3-default-rtdb.asia-southeast1.firebasedatabase.app',
+    storageBucket: 'freepasserp3.firebasestorage.app',
+  },
+};
+
+export function getBusinessFirebaseApp(target: BusinessTarget): App {
+  const cfg = BUSINESS_FIREBASE_TARGETS[target];
+  if (!cfg) throw new Error('UNKNOWN_BUSINESS_FIREBASE_TARGET');
+  const existing = getApps().find((app) => app.name === cfg.appName);
+  if (existing) {
+    assertTargetApp(existing, cfg.projectId);
+    return existing;
+  }
+  return initializeApp({
+    credential: applicationDefault(),
+    projectId: cfg.projectId,
+    ...(cfg.databaseURL ? { databaseURL: cfg.databaseURL } : {}),
+    ...(cfg.storageBucket ? { storageBucket: cfg.storageBucket } : {}),
+  }, cfg.appName);
+}
+
+/**
+ * FreePass Data owns the Firebase workload identity. Consumer-owned service account
+ * JSON must never be smuggled into this runtime as a compatibility shortcut.
+ */
+export function assertBusinessRuntimeCredentialPolicy(env: NodeJS.ProcessEnv = process.env): void {
+  const forbidden = [
+    'ERP5_FIREBASE_SERVICE_ACCOUNT_JSON',
+    'AUTH_FIREBASE_SERVICE_ACCOUNT_JSON',
+    'SALES_FIREBASE_SERVICE_ACCOUNT_JSON',
+    'ESTIMATE_FIREBASE_SERVICE_ACCOUNT_JSON',
+  ].filter((key) => Boolean(env[key]?.trim()));
+  if (forbidden.length) {
+    throw new Error('CONSUMER_FIREBASE_SERVICE_ACCOUNT_FORBIDDEN_IN_DATA_RUNTIME');
+  }
 }
