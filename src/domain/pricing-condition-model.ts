@@ -43,7 +43,7 @@ export type PriceAdjustmentOperation =
   | { kind: 'ADD_FIXED'; amount: Money }
   | { kind: 'ADD_RATE'; rate: number; base: 'BASIS_MONTHLY_RENT' | 'CURRENT_MONTHLY_RENT' }
   | { kind: 'ADD_PER_UNIT'; unit: number; amount: Money; fromValue?: number }
-  | { kind: 'MULTIPLY'; multiplier: number }
+  | { kind: 'MULTIPLY'; multiplier: number; base: 'BASIS_MONTHLY_RENT' | 'CURRENT_MONTHLY_RENT' | 'CURRENT_DEPOSIT' }
   | { kind: 'SET_FIXED'; amount: Money }
   | { kind: 'REQUIRE_EXPLICIT_VARIANT' };
 
