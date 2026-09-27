@@ -6,7 +6,7 @@ import type {
 import type { CommercialFactValue } from '../domain/commercial-product-view.js';
 import { policyScalar } from './product-pricing-policy.js';
 
-type DimensionSpec = Omit<ConditionDimension, 'defaultValue' | 'allowedValues'> & {
+export type DimensionSpec = Omit<ConditionDimension, 'defaultValue' | 'allowedValues'> & {
   defaultPolicyKey?: string;
   allowedPolicyKeys?: string[];
 };
