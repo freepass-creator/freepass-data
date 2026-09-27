@@ -242,14 +242,19 @@ const watchdogWorkflow = fs.readFileSync(
   path.join(repoRoot, '.github', 'workflows', 'erp5-audit-watchdog.yml'),
   'utf8'
 );
+// The watchdog must stay outside Google Cloud: the WIF attribute condition admits
+// the audit workflow path alone, so any identity here would require widening it.
 if (
   !watchdogWorkflow.includes("cron: '7 * * * *'") ||
   !watchdogWorkflow.includes('ERP5_AUDIT_MAX_GAP_MINUTES') ||
-  !watchdogWorkflow.includes('ERP5_READ_SERVICE_ACCOUNT') ||
-  !watchdogWorkflow.includes('latest.json') ||
-  !watchdogWorkflow.includes('erp5-audit-watchdog/1') ||
+  !watchdogWorkflow.includes('actions: read') ||
+  !watchdogWorkflow.includes('erp5-continuous-audit.yml') ||
+  !watchdogWorkflow.includes('erp5-audit-watchdog/2') ||
   !watchdogWorkflow.includes('exit 2') ||
+  watchdogWorkflow.includes('ERP5_READ_SERVICE_ACCOUNT') ||
   watchdogWorkflow.includes('ERP5_POINTER_SERVICE_ACCOUNT') ||
+  watchdogWorkflow.includes('google-github-actions/auth') ||
+  watchdogWorkflow.includes('id-token') ||
   watchdogWorkflow.includes('gcloud storage cp') ||
   watchdogWorkflow.includes('--apply')
 ) {
