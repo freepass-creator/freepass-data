@@ -152,6 +152,7 @@ jobs:
             --write-out '%{http_code}' \
             "$READ_RUNTIME_DEPLOYED_URL/health")"
           test "$unauthenticated_status" = "403"
+          echo "READ_RUNTIME_UNAUTHENTICATED_STATUS=$unauthenticated_status" >> "$GITHUB_ENV"
 
           cloud_run_token="$CLOUD_RUN_ID_TOKEN"
           consumer_token="$(gcloud secrets versions access latest \
@@ -166,15 +167,18 @@ jobs:
             --header "X-Serverless-Authorization: Bearer $cloud_run_token" \
             --header "Authorization: Bearer $consumer_token" \
             "$READ_RUNTIME_DEPLOYED_URL/v1/consumers/erp-com/catalog-compat")"
-          test "$authenticated_status" = "200"
+          echo "READ_RUNTIME_AUTHENTICATED_STATUS=$authenticated_status" >> "$GITHUB_ENV"
+          if [ "$authenticated_status" != "200" ]; then
+            response_code="$(jq -r '.code // "NON_JSON_RESPONSE"' "$response_file" 2>/dev/null || echo NON_JSON_RESPONSE)"
+            echo "::error::Authenticated compatibility readback failed: HTTP $authenticated_status / $response_code"
+            exit 1
+          fi
           jq -e '
             .schema == "freepass-data.catalog-compat/v1" and
-            (.products | type == "array") and
-            (.policy | type == "array") and
-            (.partner | type == "array")
+            (.data.products | type == "object") and
+            (.data.policies | type == "object") and
+            (.data.partners | type == "object")
           ' "$response_file" >/dev/null
-          echo "READ_RUNTIME_UNAUTHENTICATED_STATUS=$unauthenticated_status" >> "$GITHUB_ENV"
-          echo "READ_RUNTIME_AUTHENTICATED_STATUS=$authenticated_status" >> "$GITHUB_ENV"
           echo "READ_RUNTIME_READBACK_OK=true" >> "$GITHUB_ENV"
 
       - name: Record sanitized activation evidence
