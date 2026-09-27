@@ -3,91 +3,64 @@
 Status: comparison branch proposal  
 Branch: `work/data/offer-commercial-policy-20260927`
 
-## Problem
+## Core commercial unit
 
-A product is not commercially usable from a monthly rent alone. Each active offer needs a coherent set of:
+The commercial row is:
 
-- default annual mileage
-- rental period
-- monthly rent for each period/mileage variant
-- deposit state and amount
-- a linked policy that explains the default and exceptions
+`term + mileage + monthly rent + deposit`
 
-The existing Catalog already preserves `PriceTerm` facts and a generic `Policy`, but it does not provide one deterministic answer to:
-"Which mileage is the default for this offer, which price row is the default row, and which facts still need a business decision?"
+Monthly rent and deposit are not independent consumer rows. They belong to the same term/mileage variant.
+A deposit policy may be shared across an offer, but its **resolved deposit amount** is attached to each commercial row.
 
-This layer answers that question without creating a second price source of truth.
+This preserves cases where one deposit rule produces different amounts as monthly rent, duration, mileage or another policy input changes.
 
 ## Authority boundary
 
-1. **Price amount authority stays in Offer.priceTerms.**
-2. **Default mileage authority comes only from the linked Policy.fact `annual_mileage`.**
-3. A term-level `mileageLimitKmPerYear` is an explicit variant/override. It is never overwritten.
-4. Deposit amount authority stays in the term. Policy prose or notes are not converted into money.
-5. Missing or ambiguous facts become decision items. They are never converted to zero or guessed defaults.
-6. This resolver is read/decision logic only. It does not write Canonical Catalog data.
+1. Price and resolved deposit facts stay in `Offer.priceTerms`.
+2. Default mileage authority comes from linked Policy fact `annual_mileage`.
+3. A term-level `mileageLimitKmPerYear` remains an explicit variant and is never overwritten.
+4. A future typed deposit calculation rule belongs to Policy; the resulting amount belongs to the matching PriceTerm.
+5. Deposit handling such as return timing, card payment or installment eligibility is a contract condition, not the deposit amount.
+6. Missing or ambiguous facts become decision items and are never guessed.
+7. This resolver does not create a second price table or a second vehicle master.
 
-## Resolution rules
+## Deposit semantics
 
-### Default mileage
+Current canonical values:
+- `KNOWN`: explicit positive KRW amount
+- `ZERO`: explicit zero
+- `NOT_APPLICABLE`: no deposit applies
+- `UNKNOWN`: business/policy decision still required
 
-- linked policy + positive integer `annual_mileage` -> KNOWN default mileage
-- missing policy link -> `DEFAULT_MILEAGE_POLICY_REQUIRED`
-- linked policy missing `annual_mileage` -> `DEFAULT_MILEAGE_REQUIRED`
-- zero, negative, decimal, string, or other invalid value -> `INVALID_POLICY_ANNUAL_MILEAGE`
+The branch intentionally does not invent a formula such as "monthly rent × N" or "vehicle price × percentage" until the ERP5 policy source exposes a typed, reviewed authority for that rule.
 
-A value of `0` is **not** interpreted as unlimited mileage.
+Once such a policy is approved:
+1. policy rule is stored as Policy
+2. rule is evaluated against the matching term inputs
+3. resulting deposit is materialized/validated against that term
+4. ERP and Sheets receive term + rent + deposit together
 
-### Mileage variants
+## Mileage variants
 
 For each term:
-
 - explicit term mileage -> preserve it
-- no term mileage + known policy default -> inherit policy default
-- neither -> `MILEAGE_REQUIRED:<termKey>`
+- no term mileage + known policy default -> inherit default
+- neither -> decision required
 
-For every offered duration, a known default mileage must have a matching price row.
-If not, emit `DEFAULT_MILEAGE_PRICE_MISSING:<months>`.
-
-This means, for example, 24-month / 20,000 km and 24-month / 30,000 km remain two rows.
-If policy says 20,000 km is the default, the 20,000 km row is marked `isDefault=true`.
-
-### Deposit
-
-- `KNOWN` requires a positive KRW amount
-- `ZERO` requires an explicit KRW zero amount
-- `NOT_APPLICABLE` requires no amount
-- `UNKNOWN` becomes `DEPOSIT_REQUIRED:<termKey>`
-
-Contradictions are INVALID rather than silently repaired.
-
-This branch intentionally does **not** implement "monthly rent x N", percentage-of-vehicle-price, or prose-derived deposit formulas until a separate typed canonical rule is approved.
+For every offered duration, a known default mileage should have a matching price row.
 
 ## Status
 
-Each resolved offer is one of:
-
-- `READY`: default mileage, default price coverage, mileage, rent and deposit facts are coherent
-- `NEEDS_DECISION`: facts are missing but not contradictory
+- `READY`: term/mileage/rent/deposit and required policy facts are coherent
+- `NEEDS_DECISION`: required facts are missing
 - `INVALID`: canonical facts contradict each other
 
-The summary function counts unresolved items by decision code so Control Tower/Admin can surface a finite policy work queue.
+## Recommended consumer shape
 
-## Recommended business workflow
+ERP/Sheet projection:
+- vehicle
+- rentalTerms (term + mileage + monthlyRent + deposit)
+- policy
+- contractConditions
 
-1. ingest raw supplier/product/policy evidence
-2. canonicalize Offer + Policy with lineage
-3. run commercial terms resolver
-4. show `NEEDS_DECISION` rows in Admin/Control Tower
-5. a human or approved policy command resolves the missing canonical fact
-6. rebuild projection
-7. expose only `READY` offers to downstream consumer products that require complete commercial terms
-
-## Deliberate non-goals
-
-- no second vehicle master
-- no second price table
-- no direct Firebase access
-- no source-note parsing into money
-- no automatic canonical writes
-- no assumption that every supplier uses the same deposit formula
+This is a projection over Canonical facts, not a new source of truth.
