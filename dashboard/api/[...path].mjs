@@ -75,8 +75,11 @@ export default async function handler(req, res) {
     if (route === 'accounts/decide' && req.method === 'POST') return await decide(req, res);
     return json(res, 404, { error: 'NOT_FOUND' });
   } catch (error) {
-    const bad = error?.message === 'BODY_TOO_LARGE' || error?.message === 'INVALID_JSON';
-    return json(res, bad ? 400 : 500, { error: bad ? error.message : 'INTERNAL_ERROR' });
+    const message = String(error?.message ?? '');
+    if (message === 'BODY_TOO_LARGE' || message === 'INVALID_JSON') return json(res, 400, { error: message });
+    // 서버가 자격증명 없이 떠 있는 것은 사용자의 잘못이 아니다. 그대로 말해야 고칠 사람이 안다.
+    if (/SERVICE_ACCOUNT_JSON$/.test(message)) return json(res, 503, { error: 'SERVICE_NOT_CONFIGURED', detail: message });
+    return json(res, 500, { error: 'INTERNAL_ERROR' });
   }
 }
 
