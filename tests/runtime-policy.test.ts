@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { assertConsumerRuntime, assertDevelopmentApi } from '../src/api/runtime-policy.js';
 
 describe('API runtime boundary', () => {
@@ -30,5 +31,16 @@ describe('API runtime boundary', () => {
       expect(result.stderr).toContain(message);
       expect(result.stderr).not.toContain('Could not load the default credentials');
     }
+  });
+  it('deployment evidence binds Ready by type, immutable image identity, IAM denial and authenticated readback', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(workflow).toContain('select(.type == "Ready")');
+    expect(workflow).toContain('status.latestReadyRevisionName');
+    expect(workflow).toContain("--format='value(image_summary.digest)'");
+    expect(workflow).toContain('test "$unauthenticated_status" = "403"');
+    expect(workflow).toContain('/v1/consumers/erp-com/catalog-compat');
+    expect(workflow).toContain('.schema == "freepass-data.catalog-compat/v1"');
+    expect(workflow).toContain('READ_RUNTIME_READBACK_OK=true');
   });
 });

@@ -1,7 +1,7 @@
 # FreePass Data 종료 계획과 무료 채팅 인계
 
 상태: **CURRENT / COST-AWARE HANDOFF**
-기준 revision: `28d46e1f8d14a3a08d86586dae535838e4d123cd`
+작성 기준 revision: `96b834f02aeeda0768ec1de27311df96beddf968`
 기준일: 2026-09-27
 
 ## 목적
@@ -14,14 +14,17 @@ FreePass Data를 끝없이 확장하지 않는다. 아래 종료 게이트를 �
 
 - GitHub/code 정본: `freepass-creator/freepass-data`의 `main`
 - 운영 원천: `freepasserp5` Firestore
-- 현재 main: `28d46e1`
+- 실제 현재 main은 작업 시작 때 `git fetch` 후 다시 확인한다. 이 문서의 작성 기준 SHA를 현재값으로 추정하지 않는다.
 - 최신 ERP5 감사: products 1,659 / policy 81 / partner 64, `FULL_SAME_READ_ONLY_TRANSACTION`
 - 최신 공개 판정: `HOLD`
 - 금지: RTDB 복구, 빈 Canonical/Release를 성공으로 간주, 테스트 결과를 배포·전환으로 확대
 
 숫자와 상태는 시점값이다. 다음 작업자는 GitHub Actions와 실제 소비처를 다시 읽고 사용한다.
 
-## 프로젝트 종료 게이트
+## 프로젝트 종료 게이트와 실행 순서
+
+종료 순서는 `G3 + G4 병렬 -> G1 -> G2 -> G5`다. GCP 변경을 기다리는 동안 경계와 소비자
+인계를 먼저 닫되, 운영 배포·전환 증거를 추정하지 않는다.
 
 ### G1. 중앙 read runtime 운영 기반
 
@@ -37,9 +40,10 @@ FreePass Data를 끝없이 확장하지 않는다. 아래 종료 게이트를 �
 
 ### G3. Canonical publication 경계 확정
 
-- ERP5 FULL 캡처가 Canonical write 승인을 뜻하지 않음을 유지한다.
-- review evidence, non-empty validated Release, manifest/digest/readback이 모두 있어야 ACTIVE다.
-- 미확인 1건이라도 있으면 `HOLD`로 남긴다.
+- ERP5 FULL 캡처가 Canonical write 승인을 뜻하지 않음을 코드와 계약으로 강제한다.
+- 현재 판정이 `HOLD`면 정확한 사유를 기록하는 것으로 이 종료 게이트를 닫을 수 있다.
+- ACTIVE 승격은 review evidence, non-empty validated Release, manifest/digest/readback을 모두 요구하는
+  별도 승인 트랙이다. 1,659건 mapping HOLD 해소를 기반 구축 종료 조건으로 만들지 않는다.
 
 ### G4. 핵심 소비자 인계
 
@@ -51,12 +55,17 @@ FreePass Data를 끝없이 확장하지 않는다. 아래 종료 게이트를 �
 
 - `main`과 로컬 HEAD 동일
 - Core CI/Canon Guard PASS
-- read runtime deployment/readback evidence
+- read runtime service/revision/image digest, `Ready=True`, 미인증 403과 인증된 readback evidence
 - 최신 `docs/NEXT-START-HERE.md`와 `docs/IMPLEMENTATION-STATUS.md`
 - 열린 Issue를 `완료 / 소비 프로젝트 이관 / 명시적 HOLD`로 재분류
-- 알려진 치명·중대 오류 0, 필수 검증 실패 0
+- 정의된 종료 범위에서 발견된 치명·중대 오류와 필수 검증 실패 0
 
-G1~G5가 닫히면 FreePass Data 기반 구축을 **CLOSED / OPERATIONS MODE**로 바꾼다.
+G1~G5가 닫히면 FreePass Data 기반 구축을 **CLOSED / OPERATIONS MODE**로 바꾼다. 이는 ERP.com
+cutover 완료, ACTIVE Release 존재 또는 mapping HOLD 해소를 뜻하지 않는다.
+
+OPERATIONS MODE에서는 보안 패치, dependency/runtime 갱신, 인시던트 대응, 감사 관측, 승인된
+release 운영과 문서 갱신만 기본 허용한다. 신규 collection/contract/projection/consumer,
+Canonical write, ACTIVE 승격과 schema 변경은 새 사용자 승인 업무다.
 
 ## 무료 ChatGPT에서 먼저 할 일
 

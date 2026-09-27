@@ -3,7 +3,7 @@
 Status: **ACTIVE / CLOSURE EXECUTION**
 Official project name: **프리패스 데이터 / FreePass Data**
 Repository: `freepass-creator/freepass-data`
-Verified baseline before this handoff update: `28d46e1f8d14a3a08d86586dae535838e4d123cd`
+Handoff base when closure work started: `28d46e1f8d14a3a08d86586dae535838e4d123cd`
 Branch: `main`
 Date: 2026-09-27
 
@@ -12,10 +12,14 @@ Date: 2026-09-27
 FreePass Data를 계속 확장하지 않고 운영 기반을 닫는 현재 계획과 무료 ChatGPT/Codex 작업 분담은
 [`PROJECT-CLOSURE-AND-FREE-CHAT-HANDOFF.md`](./PROJECT-CLOSURE-AND-FREE-CHAT-HANDOFF.md)를 따른다.
 
-현재 첫 게이트는 private Cloud Run read runtime의 GCP bootstrap과 실제 readback이다. 최신 main에는
+현재 첫 운영 게이트는 IAM-protected Cloud Run read runtime의 GCP bootstrap과 실제 readback이다.
+서비스는 `--ingress=all`로 인터넷에서 도달 가능하지만 Cloud Run IAM으로 미인증 호출을 거부한다.
+최신 main에는
 배포 workflow가 있으나 GitHub deploy WIF/서비스 계정/region/service/Artifact Registry/runtime identity/
 consumer secret 설정이 없어 run `36317333170`이 fail-closed됐다. 운영 변경 전 GCP 현재 상태를 다시 읽고
 변경안·rollback을 제시한 뒤 사용자 직전 승인을 받는다.
+
+커밋 `28d46e1`의 `activate`는 배포 workflow 활성화를 뜻하며 Cloud Run 배포·consumer cutover 완료가 아니다.
 
 ## 2026-09-26 FreePass Data internal consolidation
 

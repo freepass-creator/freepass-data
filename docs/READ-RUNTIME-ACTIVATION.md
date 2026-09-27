@@ -1,6 +1,6 @@
 # FreePass Data Read Runtime — Activation Handoff
 
-상태: **DEPLOY WORKFLOW PREPARED / GCP ADMIN BOOTSTRAP REQUIRED**
+상태: **DEPLOY WORKFLOW PREPARED / LAST DEPLOY FAILED CLOSED / GCP ADMIN BOOTSTRAP REQUIRED**
 
 이 문서는 FreePassERP.com이 실제 FreePass Data read runtime을 사용하기 시작하는 시점과 담당을 고정한다.
 
@@ -33,6 +33,7 @@
    - runtime service account `actAs`
 4. GitHub Actions용 deploy WIF provider
    - 이 저장소의 `.github/workflows/deploy-read-runtime.yml`만 허용
+   - `main` ref만 허용
 5. Secret Manager의 `FREEPASS_DATA_CONSUMERS_JSON`
 6. Vercel 호출용 service account
    - Cloud Run service에 `roles/run.invoker`
@@ -65,9 +66,10 @@
 - 자동 실행하지 않는다.
 - API가 미리 켜져 있지 않으면 실패한다.
 - immutable SHA tag 이미지로 배포한다.
-- anonymous invocation을 허용하지 않는다.
+- `ingress=all`이지만 Cloud Run IAM으로 anonymous invocation을 허용하지 않는다.
 - runtime에는 Firestore read-only identity만 붙인다.
-- 배포 후 Cloud Run URL과 Ready 상태만 출력한다.
+- 배포 후 `type=Ready` 조건, revision, image digest, 미인증 403과 인증된
+  `erp-com/catalog-compat` readback을 검증한다.
 
 ## 4. 배포 후 인계
 

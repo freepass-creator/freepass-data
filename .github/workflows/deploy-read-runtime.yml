@@ -89,12 +89,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          url="$(gcloud run services describe "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --format='value(status.url)')"
-          ready="$(gcloud run services describe "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --format='value(status.conditions[0].status)')"
+          service_json="$(gcloud run services describe "$SERVICE_NAME" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --format=json)"
+          url="$(jq -r '.status.url // empty' <<<"$service_json")"
+          ready="$(jq -r '[.status.conditions[] | select(.type == "Ready")][0].status // empty' <<<"$service_json")"
+          revision="$(jq -r '.status.latestReadyRevisionName // empty' <<<"$service_json")"
+          image_digest="$(gcloud artifacts docker images describe "$IMAGE" \
+            --project="$PROJECT_ID" \
+            --format='value(image_summary.digest)')"
           test -n "$url"
           test "$ready" = "True"
+          test -n "$revision"
+          test -n "$image_digest"
           echo "READ_RUNTIME_DEPLOYED_URL=$url" >> "$GITHUB_ENV"
           echo "READ_RUNTIME_READY=$ready" >> "$GITHUB_ENV"
+          echo "READ_RUNTIME_REVISION=$revision" >> "$GITHUB_ENV"
+          echo "READ_RUNTIME_IMAGE_DIGEST=$image_digest" >> "$GITHUB_ENV"
           {
             echo '## FreePass Data read runtime deployed'
             echo
@@ -102,9 +114,44 @@ jobs:
             echo "Region: $REGION"
             echo "URL: $url"
             echo "Image: $IMAGE"
+            echo "Image digest: $image_digest"
+            echo "Revision: $revision"
             echo
             echo 'Next: hand this URL to FreePassERP I-01, configure Vercel OIDC caller IAM, then switch ERP.com to OBSERVE.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify IAM denial and authenticated compatibility readback
+        shell: bash
+        run: |
+          set -euo pipefail
+          unauthenticated_status="$(curl --silent --show-error --output /dev/null \
+            --write-out='%{http_code}' \
+            "$READ_RUNTIME_DEPLOYED_URL/health")"
+          test "$unauthenticated_status" = "403"
+
+          cloud_run_token="$(gcloud auth print-identity-token \
+            --audiences="$READ_RUNTIME_DEPLOYED_URL")"
+          consumer_token="$(gcloud secrets versions access latest \
+            --project="$PROJECT_ID" \
+            --secret="$CONSUMERS_SECRET_NAME" \
+            | jq -er '.[] | select(.id == "erp-com") | .token')"
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+          authenticated_status="$(curl --silent --show-error --output "$response_file" \
+            --write-out='%{http_code}' \
+            --header="X-Serverless-Authorization: Bearer $cloud_run_token" \
+            --header="Authorization: Bearer $consumer_token" \
+            "$READ_RUNTIME_DEPLOYED_URL/v1/consumers/erp-com/catalog-compat")"
+          test "$authenticated_status" = "200"
+          jq -e '
+            .schema == "freepass-data.catalog-compat/v1" and
+            (.products | type == "array") and
+            (.policy | type == "array") and
+            (.partner | type == "array")
+          ' "$response_file" >/dev/null
+          echo "READ_RUNTIME_UNAUTHENTICATED_STATUS=$unauthenticated_status" >> "$GITHUB_ENV"
+          echo "READ_RUNTIME_AUTHENTICATED_STATUS=$authenticated_status" >> "$GITHUB_ENV"
+          echo "READ_RUNTIME_READBACK_OK=true" >> "$GITHUB_ENV"
 
       - name: Record sanitized activation evidence
         if: always()
@@ -150,6 +197,15 @@ jobs:
             echo "- required APIs ready: **${READ_RUNTIME_APIS_READY:-false}**"
             echo "- missing APIs: **$missing_apis**"
             echo "- Cloud Run ready: **${READ_RUNTIME_READY:-false}**"
+            echo "- unauthenticated request status: **${READ_RUNTIME_UNAUTHENTICATED_STATUS:-unknown}**"
+            echo "- authenticated compatibility readback status: **${READ_RUNTIME_AUTHENTICATED_STATUS:-unknown}**"
+            echo "- authenticated compatibility readback passed: **${READ_RUNTIME_READBACK_OK:-false}**"
+            if [ -n "${READ_RUNTIME_REVISION:-}" ]; then
+              echo "- Cloud Run revision: \`${READ_RUNTIME_REVISION}\`"
+            fi
+            if [ -n "${READ_RUNTIME_IMAGE_DIGEST:-}" ]; then
+              echo "- image digest: \`${READ_RUNTIME_IMAGE_DIGEST}\`"
+            fi
             if [ -n "${READ_RUNTIME_DEPLOYED_URL:-}" ]; then
               echo "- Cloud Run URL: \`${READ_RUNTIME_DEPLOYED_URL}\`"
             fi
