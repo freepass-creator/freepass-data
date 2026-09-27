@@ -77,7 +77,8 @@ function applyMutation(
 ) {
   const ref = db.collection(collectionName(mutation.resource)).doc(mutation.id);
   if (mutation.op === 'set') {
-    tx.set(ref, mutation.data, mutation.merge ? { merge: true } : undefined);
+    if (mutation.merge) tx.set(ref, mutation.data, { merge: true });
+    else tx.set(ref, mutation.data);
   } else if (mutation.op === 'update') {
     tx.update(ref, mutation.data);
   } else {
