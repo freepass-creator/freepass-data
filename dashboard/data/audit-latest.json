@@ -1,0 +1,56 @@
+{
+  "version": "erp5-source-inventory/1",
+  "source": {
+    "projectId": "freepasserp5",
+    "databaseId": "(default)",
+    "collections": {
+      "products": 1659,
+      "policy": 81,
+      "partner": 64
+    },
+    "readTime": "2026-09-27T00:50:05.463362Z",
+    "digest": "f3eb75b4ede7a18047078060c798a2b89a6e62a3693bb31af8b1ee82d8f131e9",
+    "coverage": "FULL_SAME_READ_ONLY_TRANSACTION"
+  },
+  "recognition": {
+    "productFieldPathCount": 512,
+    "mappedForReview": 0,
+    "mappingHold": 1659,
+    "inventoryTransitionCount": 0
+  },
+  "change": {
+    "status": "NO_CHANGE",
+    "digest": "ebe0a68071f0e69c7ff6feba691f429a352acbea3812b19b7e9cf13a0cd7dac6",
+    "previous": {
+      "digest": "2296b75e7f5e274d0c733d821aad4a0b72eb0fa7cf70ba2c38d0a46645c2082a",
+      "readTime": "2026-09-27T00:35:31.843172Z",
+      "count": 1659
+    },
+    "current": {
+      "digest": "f3eb75b4ede7a18047078060c798a2b89a6e62a3693bb31af8b1ee82d8f131e9",
+      "readTime": "2026-09-27T00:50:05.463362Z",
+      "count": 1659
+    },
+    "counts": {
+      "ADDED": 0,
+      "CHANGED": 0,
+      "UNCHANGED": 1659,
+      "MISSING_FROM_SOURCE": 0
+    },
+    "inventoryTransitionCount": 0,
+    "destructiveActionAuthorized": false
+  },
+  "authority": {
+    "canonicalWriteAuthorized": false,
+    "destructiveActionAuthorized": false,
+    "activeReleaseAuthorized": false,
+    "publicationDecision": "HOLD",
+    "publicationHoldReasons": [
+      "MAPPING_HOLD_PRESENT",
+      "NO_CANDIDATES_READY_FOR_REVIEW",
+      "REVIEW_APPROVALS_NOT_INCLUDED",
+      "CANONICAL_RELEASE_NOT_BUILT"
+    ]
+  },
+  "runId": "36283663129-1"
+}
