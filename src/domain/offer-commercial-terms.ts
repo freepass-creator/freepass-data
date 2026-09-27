@@ -1,4 +1,4 @@
-import type { Money } from './catalog.js';
+import type { Money, OfferTermEconomics } from './catalog.js';
 
 export type CommercialTermsStatus = 'READY' | 'NEEDS_DECISION' | 'INVALID';
 
@@ -29,6 +29,13 @@ export type OfferCommercialTerms = {
     | { state: 'UNKNOWN'; source: 'UNRESOLVED' };
   terms: ResolvedCommercialTerm[];
   status: CommercialTermsStatus;
+  decisions: string[];
+  invalidFacts: string[];
+};
+
+export type OfferEconomicsAudit = {
+  status: CommercialTermsStatus;
+  terms: OfferTermEconomics[];
   decisions: string[];
   invalidFacts: string[];
 };
