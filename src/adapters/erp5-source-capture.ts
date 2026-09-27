@@ -458,11 +458,27 @@ export function summarizeErp5DecisionInputs(capture: Erp5SourceCapture) {
   // 필드 «이름»은 스키마다 — 값이 아니다. 값은 여기서도 나가지 않는다.
   const policyFieldPaths: Record<string, number> = {};
   const policyCompanyValues = new Map<string, Map<string, number>>();
+  const policyValueShapes = new Map<string, Map<string, number>>();
+  const policyShortValues = new Map<string, Map<string, number>>();
   for (const doc of capture.collections.policy.documents) {
     let data: ObjectValue;
     try { data = decodeFields(doc.fields ?? {}); } catch { continue; }
     for (const [key, value] of Object.entries(data)) {
       policyFieldPaths[key] = (policyFieldPaths[key] ?? 0) + 1;
+      // 숫자로 쓰는 줄 알았던 필드가 실제로 어떤 꼴인지 — 이걸 몰라서 정책 조회가 통째로 헛돌았다.
+      if (['annual_mileage', 'basic_driver_age', 'mileage_upcharge_per_10000km'].includes(key)) {
+        const shape = typeof value === 'number' ? 'number'
+          : typeof value === 'string' ? (/^\d+$/.test(value) ? 'string:digits' : 'string:other')
+          : value === null ? 'null' : typeof value;
+        const bucket = policyValueShapes.get(key) ?? new Map<string, number>();
+        bucket.set(shape, (bucket.get(shape) ?? 0) + 1);
+        policyValueShapes.set(key, bucket);
+        if (typeof value === 'string' && value.length <= 12) {
+          const seen = policyShortValues.get(key) ?? new Map<string, number>();
+          seen.set(value, (seen.get(value) ?? 0) + 1);
+          policyShortValues.set(key, seen);
+        }
+      }
       // 회사를 가리킬 법한 짧은 코드성 필드만 값을 센다(긴 문장은 세지 않는다).
       if (/company|provider|partner|supplier|회사|공급/i.test(key) && typeof value === 'string' && value.length <= 24) {
         const bucket = policyCompanyValues.get(key) ?? new Map<string, number>();
@@ -476,6 +492,8 @@ export function summarizeErp5DecisionInputs(capture: Erp5SourceCapture) {
     version: 'erp5-decision-inputs/2' as const,
     documentCount: capture.collections.products.count,
     policyFieldPaths,
+    policyValueShapes: Object.fromEntries([...policyValueShapes].map(([f, v]) => [f, Object.fromEntries([...v])])),
+    policyShortValues: Object.fromEntries([...policyShortValues].map(([f, v]) => [f, Object.fromEntries([...v].sort((a, b) => b[1] - a[1]).slice(0, 12))])),
     policyCompanyCodes: Object.fromEntries(
       [...policyCompanyValues].map(([field, values]) => [field, Object.fromEntries([...values].sort((a, b) => b[1] - a[1]))])
     ),
