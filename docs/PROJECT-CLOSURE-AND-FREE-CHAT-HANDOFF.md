@@ -21,6 +21,10 @@ FreePass Data를 끝없이 확장하지 않는다. 아래 종료 게이트를 �
 
 숫자와 상태는 시점값이다. 다음 작업자는 GitHub Actions와 실제 소비처를 다시 읽고 사용한다.
 
+`source.digest`는 `readTime`과 `capturedAt`을 포함한 capture 전체 digest라 관측마다 달라진다.
+`change.status=NO_CHANGE`는 두 FULL capture의 상품별 `fields` fingerprint를 비교한 결과다. 따라서
+capture digest가 달라도 ADDED/CHANGED/MISSING이 모두 0이면 모순이 아니다.
+
 ## 프로젝트 종료 게이트와 실행 순서
 
 종료 순서는 `G3 + G4 병렬 -> G1 -> G2 -> G5`다. GCP 변경을 기다리는 동안 경계와 소비자
@@ -50,6 +54,18 @@ FreePass Data를 끝없이 확장하지 않는다. 아래 종료 게이트를 �
 - ERP/화이트라벨, Admin, Sales, Estimate, F01/F86 각각에 contract, switch key, 현재 단계,
   남은 HOLD와 `next_start_here`를 남긴다.
 - FreePass Data가 각 제품의 UI·workflow·계산 엔진까지 소유하지 않는다.
+
+현재 인계 정본은 [`CONSUMER-SWITCHBOARD.md`](./CONSUMER-SWITCHBOARD.md)다. 각 행은 실행 전
+consumer 저장소의 실제 revision/runtime을 다시 읽으며, 표의 단계만으로 전환 완료를 주장하지 않는다.
+
+열린 Issue의 종료 분류:
+
+- `#209` ERP.com read runtime activation: **G1 HOLD**, bootstrap/deploy/readback 후 종료
+- `#137` Vehicle Finder provider/E2E: **consumer integration handoff**, Data 기반 종료와 분리
+- `#64` Estimate vehicle facts: **evidence-backed data extension HOLD**, 별도 승인 트랙
+- `#55` Estimate issued quote: main에 Quote v2/Share Envelope 구현이 있으나 emulator/concurrency 및
+  소비처 readback을 재검증하기 전에는 Issue 완료로 추정하지 않음
+- `#24` North Star: G1~G5 종료 증거를 모으는 상위 handoff
 
 ### G5. 종료 증거
 

@@ -31,6 +31,8 @@
    - Cloud Run deploy
    - Artifact Registry push
    - runtime service account `actAs`
+   - 배포된 service의 `roles/run.invoker`
+   - readback에 사용할 consumer secret 한 개에만 `roles/secretmanager.secretAccessor`
 4. GitHub Actions용 deploy WIF provider
    - 이 저장소의 `.github/workflows/deploy-read-runtime.yml`만 허용
    - `main` ref만 허용
