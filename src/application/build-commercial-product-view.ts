@@ -11,6 +11,7 @@ import {
   MONTHLY_RENT_MODIFIER_KEYS,
 } from './product-pricing-policy.js';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
+import { attributePriceBasisConditions } from './attribute-price-basis-conditions.js';
 
 export const PRODUCT_POLICY_FACT_KEYS = [
   'default_term_months',
@@ -111,19 +112,28 @@ export function buildCommercialProductView(input: {
   const defaults = buildDefaultProductConditionSelection(offer, policy);
   const preview = evaluateProductConditions(offer, policy, defaults.selection);
 
-  const pricingBasis = commercial.terms.map((term) => ({
-    termKey: term.termKey,
-    conditionScope: buildPricingConditionScope({
-      termMonths: term.termMonths,
-      ...(term.mileage.state === 'KNOWN' ? { mileageKmPerYear: term.mileage.kmPerYear } : {}),
-      ...(policy ? { policy } : {}),
-    }),
-    monthlyRent: structuredClone(term.monthlyRent),
-    deposit: {
-      state: term.deposit.state,
-      ...('amount' in term.deposit ? { amount: structuredClone(term.deposit.amount) } : {}),
-    },
-  }));
+  const pricingBasis = commercial.terms.map((term) => {
+    const sourceTerm = offer.priceTerms.find((candidate) => candidate.termKey === term.termKey);
+    if (!sourceTerm) throw new Error(`PRICE_TERM_SOURCE_MISSING:${term.termKey}`);
+    return {
+      termKey: term.termKey,
+      conditionScope: buildPricingConditionScope({
+        termMonths: term.termMonths,
+        ...(term.mileage.state === 'KNOWN' ? { mileageKmPerYear: term.mileage.kmPerYear } : {}),
+        ...(policy ? { policy } : {}),
+      }),
+      monthlyRent: structuredClone(term.monthlyRent),
+      attribution: attributePriceBasisConditions({
+        sourceTerm,
+        resolvedTerm: term,
+        ...(policy ? { policy } : {}),
+      }),
+      deposit: {
+        state: term.deposit.state,
+        ...('amount' in term.deposit ? { amount: structuredClone(term.deposit.amount) } : {}),
+      },
+    };
+  });
 
   const decisions = [
     ...commercial.decisions,
