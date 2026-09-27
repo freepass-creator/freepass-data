@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
 <title>ERP5 원천 감사 · 프리패스 데이터</title>
+<link rel="stylesheet" href="./login/login.css">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Exo+2:wght@300;600&display=swap');
 :root{
@@ -77,16 +78,6 @@ footer{max-width:1180px;margin:0 auto;padding:0 16px 40px;font-size:11.5px;color
 footer a{color:var(--accent)}
 .err{background:#FBEDED;border:1px solid #EFC9C9;color:#7A2A2A;padding:14px 16px;border-radius:var(--radius);font-size:13px}
 .notice{background:var(--soft);border:1px solid var(--line-strong);color:var(--text);padding:12px 15px;border-radius:var(--radius);font-size:12.5px;margin-bottom:14px}
-.authbox{max-width:390px;margin:6vh auto 0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:26px 24px}
-.authbox h1{font-size:20px;margin:0 0 6px}
-.gatelead{font-size:12.5px;color:var(--muted);margin:0 0 18px;line-height:1.6}
-.authbox label{display:block;font-size:11.5px;color:var(--muted);margin:12px 0 5px}
-.authbox input{width:100%;padding:10px 12px;border:1px solid var(--line-strong);border-radius:8px;font-size:13.5px;background:#fff;color:var(--ink)}
-.authbox input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
-button.primary{width:100%;margin-top:18px;padding:11px 14px;border:0;border-radius:8px;background:var(--brand);color:#fff;font-size:13.5px;font-weight:700}
-button.primary:disabled{background:var(--brand-sub);cursor:default}
-.switch{margin-top:14px;text-align:center;font-size:12px;color:var(--muted)}
-button.link{border:0;background:none;color:var(--accent);font-size:12px;font-weight:700;padding:2px 4px;text-decoration:underline}
 .arow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 15px;border-bottom:1px solid var(--line);font-size:12.5px;flex-wrap:wrap}
 .arow:last-child{border-bottom:0}
 .arow .who{font-weight:700;word-break:break-all}
@@ -130,36 +121,26 @@ button.link{border:0;background:none;color:var(--accent);font-size:12px;font-wei
   </div>
 </header>
 
-<main id="gate" style="display:none">
-  <div class="authbox">
-    <h1 id="gateTitle">로그인</h1>
-    <p class="gatelead" id="gateLead">프리패스 데이터 계정으로 들어갑니다.</p>
-    <div id="gateError" class="err" style="display:none"></div>
-    <div id="gateNotice" class="notice" style="display:none"></div>
-    <form id="authForm" autocomplete="on">
-      <label for="accountId">아이디</label>
-      <input id="accountId" name="username" type="text" inputmode="email" autocomplete="username" placeholder="이메일 또는 아이디" required>
-      <label for="accountPw">비밀번호</label>
-      <input id="accountPw" name="password" type="password" autocomplete="current-password" placeholder="10자 이상, 영문+숫자" required>
-      <button class="primary" id="authSubmit" type="submit">로그인</button>
-    </form>
-    <div class="switch">
-      <span id="switchText">계정이 없으신가요?</span>
-      <button type="button" class="link" id="switchBtn">가입 신청</button>
-    </div>
-    <div class="switch"><button type="button" class="link" id="resetBtn">비밀번호 재설정</button></div>
-  </div>
-</main>
-
+<main id="gate" style="display:none"></main>
+<!-- 로그인 다음 상태도 같은 규격으로 선다 — 두 화면이 연달아 나오는데 모양이 갈리면 안 된다. -->
 <main id="pending" style="display:none">
-  <div class="authbox">
-    <h1 id="pendingTitle">승인 대기 중</h1>
-    <p class="gatelead" id="pendingLead">가입 신청이 접수됐습니다. 마스터가 승인해야 데이터가 보입니다.</p>
-    <div class="notice" id="pendingWho"></div>
-    <button class="primary" id="pendingRefresh" type="button">다시 확인</button>
-    <div class="switch">
-      <button type="button" class="link" id="resend" style="display:none">인증 메일 다시 보내기</button>
-      <button type="button" class="link" id="pendingLogout">로그아웃</button>
+  <div class="fpl" style="position:static">
+    <div class="fpl-page">
+      <div class="fpl-brand"><span class="ci"><span class="main">freepass</span><span class="sub">data</span></span></div>
+      <div class="fpl-card">
+        <header class="fpl-head">
+          <h2 class="fpl-title" id="pendingTitle">승인 대기 중</h2>
+          <p class="fpl-sub" id="pendingLead">가입 신청이 접수됐습니다. 마스터가 승인해야 데이터가 보입니다.</p>
+        </header>
+        <div class="fpl-form">
+          <p class="fpl-policy" id="pendingWho"></p>
+          <button class="fpl-submit" id="pendingRefresh" type="button">다시 확인</button>
+        </div>
+        <div class="fpl-links">
+          <button type="button" id="resend" style="display:none">인증 메일 다시 보내기</button>
+          <button type="button" id="pendingLogout">로그아웃</button>
+        </div>
+      </div>
     </div>
   </div>
 </main>
@@ -336,14 +317,9 @@ function render(d) {
   ].join(' · ');
 }
 
+import { mount as mountLogin, FREEPASS_DATA_BRAND } from './login/login.js';
+
 const MESSAGES = {
-  'auth/invalid-credential': '아이디 또는 비밀번호가 맞지 않습니다.',
-  'auth/invalid-email': '이메일 형식이 올바르지 않습니다.',
-  'auth/missing-password': '비밀번호를 입력해주세요.',
-  'auth/weak-password': '비밀번호는 6자 이상이어야 합니다. 10자 이상을 권합니다.',
-  'auth/email-already-in-use': '이미 가입된 이메일입니다. 로그인하거나 비밀번호 재설정을 이용하세요.',
-  'auth/too-many-requests': '시도가 많아 잠시 차단됐습니다. 잠시 뒤 다시 시도하세요.',
-  'auth/network-request-failed': '네트워크 오류입니다. 연결을 확인해주세요.',
   EMAIL_NOT_VERIFIED: '메일 인증이 끝나지 않았습니다. 받은 편지함의 인증 링크를 눌러주세요.',
   SIGN_IN_REQUIRED: '로그인이 필요합니다.',
   INVALID_ACCOUNT_ID: '이 이메일 주소로는 계정을 만들 수 없습니다.',
@@ -382,33 +358,27 @@ const api = async (path, options = {}) => {
   return { ok: res.ok, status: res.status, data };
 };
 
-let mode = 'login';
 const show = (which) => {
   for (const id of ['gate', 'pending', 'app']) $(id).style.display = id === which ? 'block' : 'none';
   $('signout').style.display = which === 'app' ? 'inline-block' : 'none';
 };
-const gateError = (text) => {
-  $('gateError').style.display = text ? 'block' : 'none';
-  $('gateError').textContent = text ?? '';
-};
-const gateNotice = (text) => {
-  $('gateNotice').style.display = text ? 'block' : 'none';
-  $('gateNotice').textContent = text ?? '';
-};
 
-function setMode(next) {
-  mode = next;
-  const register = mode === 'register';
-  $('gateTitle').textContent = register ? '가입 신청' : '로그인';
-  $('gateLead').textContent = register
-    ? '가입하면 인증 메일이 갑니다. 메일 인증 뒤 마스터가 승인하면 데이터가 보입니다.'
-    : '프리패스 데이터 계정으로 들어갑니다.';
-  $('authSubmit').textContent = register ? '가입 신청' : '로그인';
-  $('accountPw').setAttribute('autocomplete', register ? 'new-password' : 'current-password');
-  $('switchText').textContent = register ? '이미 계정이 있으신가요?' : '계정이 없으신가요?';
-  $('switchBtn').textContent = register ? '로그인' : '가입 신청';
-  $('resetBtn').style.display = register ? 'none' : 'inline-block';
-  gateError(null);
+let loginScreen = null;
+/** 공용 로그인을 세운다. 이 앱이 정하는 것은 브랜드와 가입 정책뿐이다. */
+function showLogin(message, tone) {
+  if (!loginScreen) {
+    loginScreen = mountLogin($('gate'), {
+      brand: FREEPASS_DATA_BRAND,
+      policy: 'APPROVAL',
+      fields: 'basic',
+      consent: false,
+      auth,
+      firebase,
+      onSignedIn: route
+    });
+  }
+  show('gate');
+  if (message) loginScreen.showMessage(message, tone ?? 'err');
 }
 
 async function renderMaster() {
@@ -469,7 +439,7 @@ async function ensureFreshClaims(user) {
 
 async function route() {
   const user = auth?.currentUser;
-  if (!user) { setMode('login'); show('gate'); return; }
+  if (!user) { showLogin(); return; }
   await user.reload();
   await ensureFreshClaims(user);
   if (!user.emailVerified) {
@@ -484,7 +454,7 @@ async function route() {
   // Idempotent: creates the authority record on first sight, returns the existing one after.
   const { ok, data } = await api('register', { method: 'POST' });
   const view = ok ? data.account : null;
-  if (!view) { setMode('login'); show('gate'); gateError(say(data?.error)); return; }
+  if (!view) { showLogin(say(data?.error)); return; }
   if (view.status !== 'APPROVED') {
     $('pendingTitle').textContent = '승인 대기 중';
     $('pendingLead').textContent = '가입 신청이 접수됐습니다. 마스터가 승인해야 데이터가 보입니다.';
@@ -494,44 +464,6 @@ async function route() {
   }
   await loadAudit(view);
 }
-
-$('switchBtn').addEventListener('click', () => setMode(mode === 'login' ? 'register' : 'login'));
-
-$('resetBtn').addEventListener('click', async () => {
-  const email = $('accountId').value.trim();
-  if (!email) { gateError('먼저 이메일을 입력해주세요.'); return; }
-  try {
-    await firebase.sendPasswordResetEmail(auth, email);
-    gateError(null);
-    gateNotice('비밀번호 재설정 메일을 보냈습니다.');
-  } catch (error) { gateError(say(error.code)); }
-});
-
-$('authForm').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  gateError(null);
-  gateNotice(null);
-  const email = $('accountId').value.trim();
-  const password = $('accountPw').value;
-  $('authSubmit').disabled = true;
-  try {
-    if (mode === 'register') {
-      const created = await firebase.createUserWithEmailAndPassword(auth, email, password);
-      await firebase.sendEmailVerification(created.user);
-      $('accountPw').value = '';
-      setMode('login');
-      gateNotice('인증 메일을 보냈습니다. 링크를 누른 뒤 로그인하세요.');
-      return;
-    }
-    await firebase.signInWithEmailAndPassword(auth, email, password);
-    $('accountPw').value = '';
-    await route();
-  } catch (error) {
-    gateError(say(error.code, error.message));
-  } finally {
-    $('authSubmit').disabled = false;
-  }
-});
 
 for (const [id, handler] of [
   ['signout', async () => { await firebase.signOut(auth); location.reload(); }],
@@ -549,9 +481,7 @@ try {
   await startFirebase();
   await route();
 } catch (error) {
-  setMode('login');
-  show('gate');
-  gateError(say(error.message, '초기화에 실패했습니다.'));
+  showLogin(say(error.message, '초기화에 실패했습니다.'));
 }
 
 </script>
