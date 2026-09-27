@@ -45,6 +45,7 @@ describe('API runtime boundary', () => {
     expect(workflow).toContain('id_token_audience: ${{ steps.readiness.outputs.url }}');
     expect(workflow).toContain('--header "X-Serverless-Authorization: Bearer $cloud_run_token"');
     expect(workflow).not.toContain('--header="X-Serverless-Authorization: Bearer $cloud_run_token"');
+    expect(workflow).toContain('Reusing existing immutable image for $GITHUB_SHA');
     expect(workflow).toContain('/v1/consumers/erp-com/catalog-compat');
     expect(workflow).toContain('.schema == "freepass-data.catalog-compat/v1"');
     expect(workflow).toContain('READ_RUNTIME_READBACK_OK=true');

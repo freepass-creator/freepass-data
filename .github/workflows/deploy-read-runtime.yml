@@ -75,9 +75,14 @@ jobs:
           registry="$REGION-docker.pkg.dev"
           image="$registry/$PROJECT_ID/$ARTIFACT_REPOSITORY/freepass-data-read:$GITHUB_SHA"
           echo "IMAGE=$image" >> "$GITHUB_ENV"
-          gcloud auth configure-docker "$registry" --quiet
-          docker build --pull --tag "$image" .
-          docker push "$image"
+          if gcloud artifacts docker images describe "$image" \
+            --project="$PROJECT_ID" --format='value(image_summary.digest)' | grep -q '^sha256:'; then
+            echo "Reusing existing immutable image for $GITHUB_SHA"
+          else
+            gcloud auth configure-docker "$registry" --quiet
+            docker build --pull --tag "$image" .
+            docker push "$image"
+          fi
 
       - name: Deploy private read-only service
         shell: bash
