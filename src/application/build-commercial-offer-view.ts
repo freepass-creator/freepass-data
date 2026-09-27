@@ -20,7 +20,15 @@ export function buildCommercialOfferView(input: {
     attribution: structuredClone(row.attribution),
   }));
 
-  const listing = [...basisRows].sort((a, b) =>
+  const isBuyout = (row: (typeof basisRows)[number]) =>
+    row.attribution.conditions.some((condition) =>
+      condition.dimensionKey === 'settlement_type' &&
+      condition.status === 'KNOWN' &&
+      condition.value === 'BUYOUT'
+    );
+  const nonBuyoutRows = basisRows.filter((row) => !isBuyout(row));
+  const listingPool = nonBuyoutRows.length ? nonBuyoutRows : basisRows;
+  const listing = [...listingPool].sort((a, b) =>
     a.monthlyRent.amount - b.monthlyRent.amount ||
     a.termKey.localeCompare(b.termKey)
   )[0];
