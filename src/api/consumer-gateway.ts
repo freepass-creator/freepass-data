@@ -640,6 +640,10 @@ export function createConsumerGateway(
           await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, 'ADMIN_WORKFLOW_UNAVAILABLE');
           return reply.code(503).send({ code: 'ADMIN_WORKFLOW_UNAVAILABLE' });
         }
+        if (process.env.NODE_ENV === 'production' && process.env.FREEPASS_DATA_ADMIN_WORKFLOW_WRITE?.trim() !== 'on') {
+          await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, 'ADMIN_WORKFLOW_WRITE_DISABLED');
+          return reply.code(503).send({ code: 'ADMIN_WORKFLOW_WRITE_DISABLED' });
+        }
         assertAdminWorkflowCommitRequest(request.body);
         const result = await access.write({
           context,
