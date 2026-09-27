@@ -1,5 +1,5 @@
 export type BusinessTarget = 'CORE' | 'SALES' | 'LEGACY';
-export type BusinessBackend = 'FIRESTORE' | 'RTDB';
+export type BusinessBackend = 'FIRESTORE' | 'RTDB' | 'STORAGE';
 
 export type BusinessResource = {
   name: string;
@@ -40,6 +40,7 @@ const resources = [
   { name: 'sales.user', target: 'SALES', backend: 'FIRESTORE', collectionOrRoot: 'users', consumers: ['freepass-sales'], read: true, write: true },
   { name: 'sales.automation-mail-run', target: 'SALES', backend: 'FIRESTORE', collectionOrRoot: 'automation_mail_runs', consumers: ['freepass-sales-intake'], read: true, write: true },
   { name: 'sales.automation-contact-sync', target: 'SALES', backend: 'FIRESTORE', collectionOrRoot: 'automation_contact_sync', consumers: ['freepass-sales-intake'], read: true, write: true },
+  { name: 'sales.call-recording', target: 'SALES', backend: 'STORAGE', collectionOrRoot: 'call-recordings', consumers: ['freepass-sales'], read: true, write: true },
 
   // Estimate legacy RTDB domains. These exist only to remove client RTDB credentials during migration.
   { name: 'estimate.quote-legacy', target: 'LEGACY', backend: 'RTDB', collectionOrRoot: 'welrix_quotes', consumers: ['freepass-estimate'], read: true, write: true },
@@ -47,6 +48,7 @@ const resources = [
   { name: 'estimate.chat-legacy', target: 'LEGACY', backend: 'RTDB', collectionOrRoot: 'welrix_chats', consumers: ['freepass-estimate'], read: true, write: true },
   { name: 'estimate.lead-legacy', target: 'LEGACY', backend: 'RTDB', collectionOrRoot: 'leads', consumers: ['freepass-estimate'], read: true, write: true },
   { name: 'estimate.user-legacy', target: 'LEGACY', backend: 'RTDB', collectionOrRoot: 'users', consumers: ['freepass-estimate'], read: true, write: false },
+  { name: 'estimate.contract-file-legacy', target: 'LEGACY', backend: 'STORAGE', collectionOrRoot: 'contract-files', consumers: ['freepass-estimate'], read: true, write: true },
 ] as const satisfies readonly BusinessResource[];
 
 export const BUSINESS_RESOURCES = resources;
