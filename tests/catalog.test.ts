@@ -81,6 +81,15 @@ describe('Catalog V1 vertical slice', () => {
     expect(release.data[0]?.commercialType).toBe('USED_RENT');
     expect(release.data[0]?.offers[0]?.priceTerms[0]?.termKey).toBe('36@20000');
     expect(release.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(690000);
+    expect(release.data[0]?.offers[0]?.commercial?.basisRows[0]).toMatchObject({
+      termKey: '36@20000',
+      monthlyRent: { amount: 690000, currency: 'KRW' },
+      deposit: { state: 'KNOWN', amount: { amount: 3000000, currency: 'KRW' } },
+    });
+    expect(release.data[0]?.offers[0]?.commercial?.dataCatalog.classification.priceInputKeys)
+      .toEqual(expect.arrayContaining(['term_months', 'annual_mileage_km', 'driver_age', 'insurance_included']));
+    expect(release.data[0]?.offers[0]?.commercial?.dataCatalog.quality.unresolvedDimensionKeys)
+      .toEqual(expect.arrayContaining(['driver_age', 'insurance_included']));
     const manifest=await store.getManifest(release.releaseId);
     expect(manifest?.releaseId).toBe(release.releaseId);
     expect(manifest?.inputDigest).toBe(release.inputDigest);

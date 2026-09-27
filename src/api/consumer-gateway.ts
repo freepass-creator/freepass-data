@@ -293,7 +293,22 @@ export function createConsumerGateway(
         if (!validateErpData(release.data)) {
           throw new ConsumerReadError('UNSUPPORTED_OR_INCOMPLETE_RELEASE', 503);
         }
-        return { data: release.data, meta: commonMeta };
+        const data = release.data as ErpPublicProduct[];
+        const commercialMissingOfferIds = [...new Set(
+          data.flatMap((product) => product.offers)
+            .filter((offer) => !offer.commercial)
+            .map((offer) => offer.offerId)
+        )].sort();
+        return {
+          data,
+          meta: {
+            ...commonMeta,
+            commercialCoverage: commercialMissingOfferIds.length
+              ? 'INCOMPLETE' as const
+              : 'COMPLETE' as const,
+            commercialMissingOfferIds,
+          },
+        };
       });
       return result;
     } catch (error) {

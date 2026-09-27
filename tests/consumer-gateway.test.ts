@@ -123,6 +123,9 @@ describe('read-only consumer gateway', () => {
     expect(result.json().meta.releaseId).toBe(release.releaseId);
     expect(result.json().meta.authority).toBe('CANONICAL_ACTIVE');
     expect(result.json().meta.dataDigest).toBe(release.dataDigest);
+    expect(result.json().meta.commercialCoverage).toBe('COMPLETE');
+    expect(result.json().meta.commercialMissingOfferIds).toEqual([]);
+    expect(result.json().data[0]?.offers[0]?.commercial?.basisRows[0]?.termKey).toBe('36@20000');
     expect(logs.events.slice(0, 2).map((event) => event.phase)).toEqual(['STARTED', 'SUCCEEDED']);
     expect(logs.events[1]).toMatchObject({
       mode: 'READ',

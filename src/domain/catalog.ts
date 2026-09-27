@@ -73,6 +73,7 @@ export type ErpPublicProduct = {
   offers: Array<{
     offerId: string; supplierId: string; offerRevision: number;
     policyId?: string | null; priceTerms: PriceTerm[];
+    commercial?: CommercialOfferView;
   }>;
 };
 export type AdminPolicyValue =
