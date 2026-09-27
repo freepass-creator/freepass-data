@@ -5,7 +5,7 @@ import {
   resolveBusinessResource,
   type BusinessResource,
 } from '../domain/business-resource-registry.js';
-import { getBusinessFirebaseApp } from './firebase-business-targets.js';
+import { getBusinessFirebaseApp } from './firebase-target.js';
 
 export type BusinessReadRequest = {
   consumerId: string;
