@@ -81,7 +81,6 @@ export function buildPricingConditionScope(input: {
       ...(upperAge !== undefined ? { allowedToAge: upperAge } : {}),
     },
     drivers: {
-      includedAdditionalDriverCount: 0,
       ...(maxAdditionalDrivers !== undefined ? { maxAdditionalDriverCount: maxAdditionalDrivers } : {}),
       ...(personalScope ? { personalScope } : {}),
       ...(businessScope ? { businessScope } : {}),
