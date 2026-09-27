@@ -1,4 +1,7 @@
 export const ADMIN_WORKFLOW_RESOURCES = {
+  products: 'products',
+  policies: 'policy',
+  vehicleMaster: 'vehicle_master',
   settlementRows: 'settlement_rows',
   settlementEvents: 'settlement_events',
   settlementInvoices: 'settlement_invoices',
