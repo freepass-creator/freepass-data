@@ -104,7 +104,7 @@ export function buildCommercialProductView(input: {
     conditionScope: buildPricingConditionScope({
       termMonths: term.termMonths,
       ...(term.mileage.state === 'KNOWN' ? { mileageKmPerYear: term.mileage.kmPerYear } : {}),
-      policy,
+      ...(policy ? { policy } : {}),
     }),
     monthlyRent: structuredClone(term.monthlyRent),
     deposit: {
