@@ -57,9 +57,13 @@ export default async function handler(req, res) {
     return json(res, 503, { error: 'SERVICE_NOT_CONFIGURED' });
   }
 
-  const route = (Array.isArray(req.query?.path) ? req.query.path : String(req.query?.path ?? '').split('/'))
-    .filter(Boolean)
-    .join('/');
+  // URL이 정본이다. catch-all 파라미터 이름은 런타임이 정하는 것이라 거기에 기대면
+  // 호스트가 바뀌는 순간 모든 경로가 조용히 404가 된다(실제로 첫 배포에서 그랬다).
+  const fromUrl = String(req.url ?? '').split('?')[0].replace(/^\/+api\/?/, '');
+  const fromQuery = Array.isArray(req.query?.path)
+    ? req.query.path.join('/')
+    : String(req.query?.path ?? '');
+  const route = (fromUrl || fromQuery).split('/').filter(Boolean).join('/');
 
   try {
     // Public by design: the web config identifies the project, it does not grant access.
