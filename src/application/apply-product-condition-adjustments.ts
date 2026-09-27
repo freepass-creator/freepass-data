@@ -50,6 +50,7 @@ export function applyProductConditionAdjustmentRules(input: {
   basisUpfrontFee?: Money;
   conditions: ConditionValues;
   rules: ProductConditionAdjustmentRule[];
+  numericContext?: Record<string, number>;
 }): PricingRuleEvaluation {
   let monthlyRent = input.basisMonthlyRent.amount;
   let deposit = input.basisDeposit?.amount;
@@ -64,9 +65,18 @@ export function applyProductConditionAdjustmentRules(input: {
   const readTarget = (target: ProductConditionAdjustmentRule['target']) =>
     target === 'MONTHLY_RENT' ? monthlyRent : target === 'DEPOSIT' ? deposit : upfrontFee;
   const writeTarget = (target: ProductConditionAdjustmentRule['target'], amount: number) => {
-    if (target === 'MONTHLY_RENT') monthlyRent = amount;
-    else if (target === 'DEPOSIT') deposit = amount;
-    else upfrontFee = amount;
+    const rounded = Math.round(amount);
+    if (target === 'MONTHLY_RENT') monthlyRent = rounded;
+    else if (target === 'DEPOSIT') deposit = rounded;
+    else upfrontFee = rounded;
+  };
+  const resolveBase = (base: import('../domain/pricing-condition-model.js').PriceBaseRef): number | undefined => {
+    if (base === 'BASIS_MONTHLY_RENT') return input.basisMonthlyRent.amount;
+    if (base === 'CURRENT_MONTHLY_RENT') return monthlyRent;
+    if (base === 'BASIS_DEPOSIT') return input.basisDeposit?.amount;
+    if (base === 'CURRENT_DEPOSIT') return deposit;
+    if (base.startsWith('CONTEXT:')) return input.numericContext?.[base.slice('CONTEXT:'.length)];
+    return undefined;
   };
 
   for (const rule of sorted) {
@@ -86,9 +96,8 @@ export function applyProductConditionAdjustmentRules(input: {
       writeTarget(rule.target, before + op.amount.amount);
     } else if (op.kind === 'ADD_RATE') {
       if (before === undefined) { unresolvedRules.push(rule.ruleId); continue; }
-      const base = op.base === 'BASIS_MONTHLY_RENT'
-        ? input.basisMonthlyRent.amount
-        : monthlyRent;
+      const base = resolveBase(op.base);
+      if (base === undefined) { unresolvedRules.push(rule.ruleId); continue; }
       writeTarget(rule.target, before + base * op.rate);
     } else if (op.kind === 'ADD_PER_UNIT') {
       if (before === undefined) { unresolvedRules.push(rule.ruleId); continue; }
@@ -98,11 +107,7 @@ export function applyProductConditionAdjustmentRules(input: {
       const units = Math.max(0, Math.ceil((actual - from) / op.unit));
       writeTarget(rule.target, before + units * op.amount.amount);
     } else if (op.kind === 'MULTIPLY') {
-      const base = op.base === 'BASIS_MONTHLY_RENT'
-        ? input.basisMonthlyRent.amount
-        : op.base === 'CURRENT_MONTHLY_RENT'
-          ? monthlyRent
-          : deposit;
+      const base = resolveBase(op.base);
       if (base === undefined) { unresolvedRules.push(rule.ruleId); continue; }
       writeTarget(rule.target, base * op.multiplier);
     }
