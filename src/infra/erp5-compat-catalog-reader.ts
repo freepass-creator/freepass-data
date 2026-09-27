@@ -86,7 +86,7 @@ export class FirestoreCatalogCompatibilityReader {
     const resolved = await Promise.all(
       requests.map(async ([name, query]) => [name, await query] as const)
     );
-    const byName = new Map(resolved);
+    const byName = new Map<string, QuerySnapshot>(resolved.map(([name, snapshot]) => [name, snapshot]));
     const get = (name: string) => byName.get(name);
 
     const products = get('products');
