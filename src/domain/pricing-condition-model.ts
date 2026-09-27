@@ -1,4 +1,5 @@
-import type { CommercialFactValue, Money } from './commercial-product-view.js';
+import type { Money } from './catalog.js';
+import type { CommercialFactValue } from './commercial-product-view.js';
 
 export type PricingTarget =
   | 'MONTHLY_RENT'
