@@ -43,4 +43,10 @@ describe('API runtime boundary', () => {
     expect(workflow).toContain('.schema == "freepass-data.catalog-compat/v1"');
     expect(workflow).toContain('READ_RUNTIME_READBACK_OK=true');
   });
+  it('the production container starts the compiled consumer entrypoint', () => {
+    const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(dockerfile).toContain('CMD ["node", "dist/src/api/consumer-server.js"]');
+    expect(dockerfile).not.toContain('CMD ["node", "dist/api/consumer-server.js"]');
+  });
 });

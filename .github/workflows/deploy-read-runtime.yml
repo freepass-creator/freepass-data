@@ -83,7 +83,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gcloud run deploy "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --platform=managed             --image="$IMAGE"             --service-account="$RUNTIME_SERVICE_ACCOUNT"             --ingress=all             --no-allow-unauthenticated             --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5"             --set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:latest"             --quiet
+          gcloud run deploy "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --platform=managed             --image="$IMAGE"             --service-account="$RUNTIME_SERVICE_ACCOUNT"             --ingress=all             --max-instances=10             --no-allow-unauthenticated             --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5"             --set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:latest"             --quiet
 
       - name: Verify service readiness metadata
         shell: bash
@@ -96,13 +96,19 @@ jobs:
           url="$(jq -r '.status.url // empty' <<<"$service_json")"
           ready="$(jq -r '[.status.conditions[] | select(.type == "Ready")][0].status // empty' <<<"$service_json")"
           revision="$(jq -r '.status.latestReadyRevisionName // empty' <<<"$service_json")"
+          revision_service_account="$(jq -r '.spec.template.spec.serviceAccountName // empty' <<<"$service_json")"
           image_digest="$(gcloud artifacts docker images describe "$IMAGE" \
             --project="$PROJECT_ID" \
             --format='value(image_summary.digest)')"
           test -n "$url"
           test "$ready" = "True"
           test -n "$revision"
+          test "$revision_service_account" = "$RUNTIME_SERVICE_ACCOUNT"
           test -n "$image_digest"
+          policy="$(gcloud run services get-iam-policy "$SERVICE_NAME" \
+            --project="$PROJECT_ID" --region="$REGION" --format=json)"
+          ! jq -e '[.bindings[]?.members[]?] | any(. == "allUsers" or . == "allAuthenticatedUsers")' \
+            <<<"$policy" >/dev/null
           echo "READ_RUNTIME_DEPLOYED_URL=$url" >> "$GITHUB_ENV"
           echo "READ_RUNTIME_READY=$ready" >> "$GITHUB_ENV"
           echo "READ_RUNTIME_REVISION=$revision" >> "$GITHUB_ENV"
@@ -135,6 +141,7 @@ jobs:
             --project="$PROJECT_ID" \
             --secret="$CONSUMERS_SECRET_NAME" \
             | jq -er '.[] | select(.id == "erp-com") | .token')"
+          echo "::add-mask::$consumer_token"
           response_file="$(mktemp)"
           trap 'rm -f "$response_file"' EXIT
           authenticated_status="$(curl --silent --show-error --output "$response_file" \
