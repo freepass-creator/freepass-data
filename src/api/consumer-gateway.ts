@@ -23,8 +23,15 @@ import { stableDigest } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from '../application/projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
+import type { AdminWorkflowStore } from '../ports/admin-workflow.js';
+import {
+  assertAdminWorkflowCommitRequest,
+  assertAdminWorkflowReadSpec,
+  type AdminWorkflowCommitRequest,
+  type AdminWorkflowReadSpec,
+} from '../domain/admin-workflow.js';
 
-export type ConsumerCapability = 'catalog' | 'catalog-health' | 'estimate-newcar-master';
+export type ConsumerCapability = 'catalog' | 'catalog-health' | 'estimate-newcar-master' | 'admin-workflow';
 export type ConsumerBinding = {
   id: string;
   projectionId: 'erp-public' | 'admin-catalog' | 'estimate-newcar-master';
@@ -68,7 +75,7 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
           if (!Array.isArray(item.capabilities) || item.capabilities.length === 0) {
             throw new Error('Consumer capabilities must be a non-empty array');
           }
-          const allowed = new Set<ConsumerCapability>(['catalog', 'catalog-health', 'estimate-newcar-master']);
+          const allowed = new Set<ConsumerCapability>(['catalog', 'catalog-health', 'estimate-newcar-master', 'admin-workflow']);
           const values = item.capabilities.map((value) => {
             if (typeof value !== 'string' || !allowed.has(value as ConsumerCapability)) {
               throw new Error('Unsupported consumer capability');
@@ -86,6 +93,9 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
       }
     } else if (capabilities.includes('estimate-newcar-master')) {
       throw new Error('Estimate master capability requires freepass-estimate registration');
+    }
+    if (capabilities.includes('admin-workflow') && item.id !== 'freepass-admin-catalog') {
+      throw new Error('Admin workflow capability requires freepass-admin-catalog registration');
     }
     ids.add(item.id);
     tokens.add(item.token);
@@ -132,6 +142,7 @@ export function createConsumerGateway(
   access: DataAccessGateway,
   healthStore?: CatalogDataHealthStore,
   compatReader?: { read(consumerId: string): Promise<CatalogCompatibilitySnapshot> },
+  workflowStore?: AdminWorkflowStore,
 ) {
   // Validate again for callers constructing registrations without the environment parser.
   const registered = new Map(parseConsumerBindings(JSON.stringify(bindings)).map((item) => [item.id, item]));
@@ -550,5 +561,110 @@ export function createConsumerGateway(
       return reply.code(503).send({ code: 'HEALTH_READ_FAILED' });
     }
   });
+
+  app.post<{ Params: { consumerId: string }; Body: AdminWorkflowReadSpec }>(
+    '/v1/consumers/:consumerId/admin-workflow/read',
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const binding = registered.get(request.params.consumerId);
+      const supplied = request.headers.authorization ?? '';
+      const matches = timingSafeEqual(
+        hash(supplied),
+        hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
+      );
+      const context = consumerContext(
+        binding?.id ?? 'unregistered-consumer',
+        'read Admin workflow data through FreePass Data',
+        request.id
+      );
+      const resource = { kind: 'SYSTEM' as const, name: 'admin-workflow' };
+
+      try {
+        if (!binding || !matches) {
+          await access.deny('READ', { context, operation: 'READ_ADMIN_WORKFLOW', resource }, 'UNAUTHORIZED');
+          return reply.code(401).send({ code: 'UNAUTHORIZED' });
+        }
+        if (!binding.capabilities.includes('admin-workflow')) {
+          await access.deny('READ', { context, operation: 'READ_ADMIN_WORKFLOW', resource }, 'FORBIDDEN');
+          return reply.code(403).send({ code: 'FORBIDDEN' });
+        }
+        if (!workflowStore) {
+          await access.deny('READ', { context, operation: 'READ_ADMIN_WORKFLOW', resource }, 'ADMIN_WORKFLOW_UNAVAILABLE');
+          return reply.code(503).send({ code: 'ADMIN_WORKFLOW_UNAVAILABLE' });
+        }
+        assertAdminWorkflowReadSpec(request.body);
+        const result = await access.read({
+          context,
+          operation: 'READ_ADMIN_WORKFLOW',
+          resource,
+          requestDigest: stableDigest(request.body),
+          summarize: (value) => ({ count: value.docs.length, digest: value.digest })
+        }, () => workflowStore.read(request.body));
+        return result;
+      } catch (error) {
+        if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
+        const code = error instanceof Error ? error.message : 'ADMIN_WORKFLOW_READ_FAILED';
+        if (code.startsWith('INVALID_ADMIN_WORKFLOW_')) return reply.code(400).send({ code });
+        return reply.code(503).send({ code: 'ADMIN_WORKFLOW_READ_FAILED' });
+      }
+    }
+  );
+
+  app.post<{ Params: { consumerId: string }; Body: AdminWorkflowCommitRequest }>(
+    '/v1/consumers/:consumerId/admin-workflow/commit',
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const binding = registered.get(request.params.consumerId);
+      const supplied = request.headers.authorization ?? '';
+      const matches = timingSafeEqual(
+        hash(supplied),
+        hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
+      );
+      const context = consumerContext(
+        binding?.id ?? 'unregistered-consumer',
+        'commit Admin workflow data through FreePass Data',
+        request.id
+      );
+      const resource = { kind: 'COMMAND' as const, name: 'admin-workflow' };
+
+      try {
+        if (!binding || !matches) {
+          await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, 'UNAUTHORIZED');
+          return reply.code(401).send({ code: 'UNAUTHORIZED' });
+        }
+        if (!binding.capabilities.includes('admin-workflow')) {
+          await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, 'FORBIDDEN');
+          return reply.code(403).send({ code: 'FORBIDDEN' });
+        }
+        if (!workflowStore) {
+          await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, 'ADMIN_WORKFLOW_UNAVAILABLE');
+          return reply.code(503).send({ code: 'ADMIN_WORKFLOW_UNAVAILABLE' });
+        }
+        if (process.env.NODE_ENV === 'production' && process.env.FREEPASS_DATA_ADMIN_WORKFLOW_WRITE?.trim() !== 'on') {
+          await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, 'ADMIN_WORKFLOW_WRITE_DISABLED');
+          return reply.code(503).send({ code: 'ADMIN_WORKFLOW_WRITE_DISABLED' });
+        }
+        assertAdminWorkflowCommitRequest(request.body);
+        const result = await access.write({
+          context,
+          operation: 'WRITE_ADMIN_WORKFLOW',
+          resource,
+          requestDigest: stableDigest(request.body),
+          summarize: (value) => ({ count: value.mutationCount, digest: value.receiptDigest })
+        }, () => workflowStore.commit(binding.id, request.body));
+        return result;
+      } catch (error) {
+        if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
+        const code = error && typeof error === 'object' && 'code' in error
+          ? String((error as { code?: unknown }).code ?? '')
+          : error instanceof Error ? error.message : '';
+        if (code === 'ADMIN_WORKFLOW_CONFLICT' || code === 'ADMIN_WORKFLOW_IDEMPOTENCY_CONFLICT') {
+          return reply.code(409).send({ code });
+        }
+        if (code.startsWith('INVALID_ADMIN_WORKFLOW_')) return reply.code(400).send({ code });
+        return reply.code(503).send({ code: 'ADMIN_WORKFLOW_COMMIT_FAILED' });
+      }
+    }
+  );
   return app;
 }

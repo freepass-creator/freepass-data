@@ -31,6 +31,26 @@ export const FIRESTORE_COLLECTIONS = Object.freeze({
     outbox: 'outbox_events',
     dataAccessEvents: 'data_access_events'
   }),
+  legacyAdminWorkflow: Object.freeze({
+    products: 'products',
+    policies: 'policy',
+    vehicleMaster: 'vehicle_master',
+    settlementRows: 'settlement_rows',
+    settlementEvents: 'settlement_events',
+    settlementInvoices: 'settlement_invoices',
+    settlementCashEvents: 'settlement_cash_events',
+    settlementClawbacks: 'settlement_clawbacks',
+    settlementFeeRules: 'settlement_fee_rules',
+    settlementRules: 'settlement_rules',
+    partners: 'partner',
+    contracts: 'contract',
+    contractEvents: 'contract_event',
+    esignSessions: 'esign_session',
+    esignPrivate: 'esign_private',
+    esignEvents: 'esign_event',
+    esignIssueLocks: 'esign_issue_lock',
+    receipts: 'data_admin_workflow_receipts'
+  }),
   projection: Object.freeze({
     releases: 'projection_releases',
     manifests: 'projection_release_manifests',
