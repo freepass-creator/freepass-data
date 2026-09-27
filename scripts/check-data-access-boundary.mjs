@@ -6,6 +6,7 @@ const src = path.join(root, 'src');
 const allowedRawInfraConsumers = new Set([
   'src/bootstrap.ts',
   'src/api/data-access-runtime.ts',
+  'src/api/business-data-access-runtime.ts',
   'src/jobs/data-access-runtime.ts'
 ]);
 
