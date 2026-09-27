@@ -362,7 +362,7 @@ describe('read-only consumer gateway', () => {
     expect(result.headers['cache-control']).toBe('no-store');
     expect(result.json()).toMatchObject({
       contractVersion: 'catalog-data-health-v1',
-      schemaVersion: '1.0.0',
+      schemaVersion: '1.1.0',
       scope: 'catalog-v1',
       status: 'HEALTHY'
     });
