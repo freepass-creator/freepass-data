@@ -45,8 +45,17 @@ export type PriceConditionEvidence = {
     | 'SOURCE_PRICE_KEY'
     | 'CANONICAL_PRICE_TERM'
     | 'LINKED_POLICY_FACT'
+    | 'MATCHED_POLICY_FACT'
     | 'UNRESOLVED';
   sourceRef?: string;
+};
+
+export type PriceBasisPolicyMatch = {
+  status: 'UNIQUE_MATCH' | 'AMBIGUOUS' | 'NO_MATCH' | 'INSUFFICIENT_EVIDENCE';
+  matchedPolicyId?: string;
+  candidatePolicyIds: string[];
+  matchedDimensionKeys: string[];
+  sourceRefs: string[];
 };
 
 export type PriceBasisAttribution = {
@@ -57,6 +66,7 @@ export type PriceBasisAttribution = {
     origin: 'CANONICAL_PRICE_TERM';
     sourceRef: string;
   };
+  policyMatch?: PriceBasisPolicyMatch;
   depositOrigin: {
     origin: 'CANONICAL_PRICE_TERM' | 'UNRESOLVED';
     sourceRef?: string;
