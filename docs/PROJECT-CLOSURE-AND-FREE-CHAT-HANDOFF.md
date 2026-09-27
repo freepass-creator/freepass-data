@@ -1,8 +1,8 @@
 # FreePass Data 종료 계획과 무료 채팅 인계
 
-상태: **CURRENT / COST-AWARE HANDOFF**
-작성 기준 revision: `96b834f02aeeda0768ec1de27311df96beddf968`
-기준일: 2026-09-27
+상태: **READ-ONLY OPERATIONS v1.0 / COST-AWARE HANDOFF**
+작성 기준 revision: `ff591ef835179439828f81aa5b4f605356964c84`
+기준일: 2026-09-28
 
 ## 목적
 
@@ -32,6 +32,11 @@ capture digest가 달라도 ADDED/CHANGED/MISSING이 모두 0이면 모순이 �
 
 ### G1. 중앙 read runtime 운영 기반
 
+상태: **COMPLETE (2026-09-28)** — run `36327937895`, Ready revision
+`freepass-data-read-00011-4sw`, immutable digest
+`sha256:90d2b9da9361da3facd774eadf19a412ad6cc712f36f7575a566e4d226dd013c`,
+미인증 403, 인증된 compatibility readback 200.
+
 - 필요한 GCP API, Artifact Registry, deploy/runtime identity, Secret Manager와 GitHub WIF를 준비한다.
 - private Cloud Run read runtime을 immutable main SHA로 배포한다.
 - 서비스 Ready, 인증 거부, 정상 consumer readback을 모두 확인한다.
@@ -60,7 +65,7 @@ consumer 저장소의 실제 revision/runtime을 다시 읽으며, 표의 단계
 
 열린 Issue의 종료 분류:
 
-- `#209` ERP.com read runtime activation: **G1 HOLD**, bootstrap/deploy/readback 후 종료
+- `#209` ERP.com read runtime activation: **G1 COMPLETE**, 운영 증거 기록 후 종료 대상
 - `#137` Vehicle Finder provider/E2E: **consumer integration handoff**, Data 기반 종료와 분리
 - `#64` Estimate vehicle facts: **evidence-backed data extension HOLD**, 별도 승인 트랙
 - `#55` Estimate issued quote: main에 Quote v2/Share Envelope 구현이 있으나 emulator/concurrency 및
@@ -147,7 +152,8 @@ dirty worktree, 열린 PR/Issue/Actions를 실측해. 무료 채팅 초안은 �
 
 ## 현재 next_start_here
 
-1. 브라우저 OAuth로 `pyh@teamjpk.com`의 `gcloud` 재인증을 완료한다.
-2. `freepasserp5` API/IAM/Artifact Registry/Secret/WIF/Cloud Run 상태를 읽기 전용으로 재조회한다.
-3. G1 bootstrap 변경안과 rollback을 제시하고 사용자 직전 승인을 받는다.
-4. 승인 후 G1을 실행·readback하고 G2 Preview로 넘어간다.
+1. 로컬 작업은 `gcloud config configurations activate freepass-data`로 공통 설정을 선택한다.
+2. Issue #209의 최신 성공 evidence와 run `36327937895`를 기준으로 G1을 재검증한다.
+3. FreePassERP 소비 프로젝트에서 별도 작업으로 Preview `OBSERVE`를 연결한다.
+4. parity와 rollback을 확인한 뒤에만 사용자에게 G2 `SHADOW_READ` 진행 여부를 묻는다.
+5. Canonical write, ACTIVE release, Sheet writer, `FREEPASS_DATA_READ` cutover는 계속 HOLD다.
