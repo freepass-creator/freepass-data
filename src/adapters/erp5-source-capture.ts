@@ -427,9 +427,31 @@ export function summarizeErp5DecisionInputs(capture: Erp5SourceCapture) {
     }
   }
 
+  // 정책이 기본 주행거리를 들고 있고 회사와도 맞아야 하므로, 정책 쪽 뼈대도 같이 낸다.
+  // 필드 «이름»은 스키마다 — 값이 아니다. 값은 여기서도 나가지 않는다.
+  const policyFieldPaths: Record<string, number> = {};
+  const policyCompanyValues = new Map<string, Map<string, number>>();
+  for (const doc of capture.collections.policy.documents) {
+    let data: ObjectValue;
+    try { data = decodeFields(doc.fields ?? {}); } catch { continue; }
+    for (const [key, value] of Object.entries(data)) {
+      policyFieldPaths[key] = (policyFieldPaths[key] ?? 0) + 1;
+      // 회사를 가리킬 법한 짧은 코드성 필드만 값을 센다(긴 문장은 세지 않는다).
+      if (/company|provider|partner|supplier|회사|공급/i.test(key) && typeof value === 'string' && value.length <= 24) {
+        const bucket = policyCompanyValues.get(key) ?? new Map<string, number>();
+        bucket.set(value, (bucket.get(value) ?? 0) + 1);
+        policyCompanyValues.set(key, bucket);
+      }
+    }
+  }
+
   return {
-    version: 'erp5-decision-inputs/1' as const,
+    version: 'erp5-decision-inputs/2' as const,
     documentCount: capture.collections.products.count,
+    policyFieldPaths,
+    policyCompanyCodes: Object.fromEntries(
+      [...policyCompanyValues].map(([field, values]) => [field, Object.fromEntries([...values].sort((a, b) => b[1] - a[1]))])
+    ),
     productType: out('productType'),
     sourceBucket: out('sourceBucket'),
     providerCompanyCode: out('providerCompanyCode'),

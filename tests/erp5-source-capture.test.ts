@@ -436,6 +436,7 @@ describe('decision inputs', () => {
       product('c', { policy_code: s('P-없음') }),
       product('d', {})
     ], ['P-1', 'P-2']));
+    expect(result.version).toBe('erp5-decision-inputs/2');
     expect(result.policyLink).toEqual({ matched: 2, unmatched: 1, absent: 1, policyDocuments: 2 });
   });
 
@@ -448,5 +449,50 @@ describe('decision inputs', () => {
     expect(result.freeTextFieldPresence).toEqual({ deposit_note: 2, quotes: 1 });
     expect(JSON.stringify(result)).not.toContain('김철수');
     expect(JSON.stringify(result)).not.toContain('보증금 면제');
+  });
+});
+
+describe('policy skeleton', () => {
+  const policyDoc = (id: string, fields: Record<string, unknown>) => ({
+    name: `${ERP5_DOCUMENTS}/policy/${id}`,
+    createTime: '2026-09-01T00:00:00.000000Z',
+    updateTime: '2026-09-01T00:00:00.000000Z',
+    fields
+  });
+
+  function captureWithPolicies(policies: unknown[]) {
+    const unsigned = {
+      version: 'erp5-source-capture/1' as const,
+      projectId: 'freepasserp5' as const,
+      databaseId: '(default)' as const,
+      consistency: 'READ_ONLY_TRANSACTION' as const,
+      readTime: '2026-09-27T00:00:00.000000Z',
+      capturedAt: '2026-09-27T00:00:01.000Z',
+      collections: {
+        products: { count: 0, documents: [] },
+        policy: { count: policies.length, documents: policies },
+        partner: { count: 0, documents: [] }
+      }
+    };
+    return { ...unsigned, digest: createHash('sha256').update(JSON.stringify(unsigned)).digest('hex') } as never;
+  }
+
+  it('reports which fields a policy carries, so mileage can be found', () => {
+    const result = summarizeErp5DecisionInputs(captureWithPolicies([
+      policyDoc('P-1', { mileage_limit: { integerValue: '20000' }, provider_company_code: { stringValue: 'RP012' } }),
+      policyDoc('P-2', { mileage_limit: { integerValue: '30000' }, provider_company_code: { stringValue: 'RP023' } }),
+      policyDoc('P-3', { provider_company_code: { stringValue: 'RP012' } })
+    ]));
+    expect(result.policyFieldPaths).toEqual({ mileage_limit: 2, provider_company_code: 3 });
+    expect(result.policyCompanyCodes.provider_company_code).toEqual({ RP012: 2, RP023: 1 });
+  });
+
+  it('counts company codes but never long policy text', () => {
+    const sentence = '이 정책은 고객 김철수에게 적용되며 보증금을 면제한다';
+    const result = summarizeErp5DecisionInputs(captureWithPolicies([
+      policyDoc('P-1', { company_note: { stringValue: sentence }, provider_company_code: { stringValue: 'RP012' } })
+    ]));
+    expect(result.policyFieldPaths.company_note).toBe(1);
+    expect(JSON.stringify(result)).not.toContain('김철수');
   });
 });
