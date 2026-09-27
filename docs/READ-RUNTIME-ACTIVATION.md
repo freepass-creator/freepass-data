@@ -119,3 +119,33 @@ White Label OBSERVE
 ```
 
 문제가 생기면 I-01은 해당 mode를 `LEGACY_DIRECT`로 되돌리고 재배포한다.
+
+
+## 7. Live consumer rehearsal evidence — 2026-09-27
+
+A live pre-deploy rehearsal used the existing authenticated Google WIF identity and current main code.
+
+FreePass Data `erp-com/catalog-compat` against live `freepasserp5` returned:
+
+- HTTP 200
+- products 1,659
+- policy 81
+- partner 64
+- user 168
+- authority `FREEPASS_DATA_COMPATIBILITY_BRIDGE`
+
+The ERP application was then started with `FREEPASS_DATA_ERP_COM_READ_MODE=OBSERVE`
+and the local Data consumer endpoint as `FREEPASS_DATA_BASE_URL`.
+
+End-to-end result:
+
+- ERP catalog feed HTTP 200
+- public offerable feed count 686
+- ERP quote/detail HTTP 200
+- consumer `erp-com`
+
+This proves the application/data contract and real source path before persistent runtime deployment.
+
+The remaining blocker is infrastructure bootstrap only:
+`serviceusage.services.enable` is not granted to either existing GitHub Google service account,
+and the required Cloud Run-related APIs remain disabled.
