@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { orderedJsonDigest, stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from './projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
+import { buildCommercialOfferView } from './build-commercial-offer-view.js';
 import type {
   ActorRef,
   ErpPublicProduct,
@@ -172,6 +173,13 @@ function activeOffer(offer: Offer, now: string) {
   return true;
 }
 
+function activePolicy(policy: Policy, now: string) {
+  if (policy.validationStatus === 'INVALID') return false;
+  if (policy.effectiveFrom && policy.effectiveFrom > now) return false;
+  if (policy.effectiveTo && policy.effectiveTo <= now) return false;
+  return true;
+}
+
 function publicPriceTerms(offer: Offer) {
   return offer.priceTerms
     .filter((term) =>
@@ -326,17 +334,19 @@ export async function buildErpPublicProjection(
   catalog: CatalogStore, projections: ProjectionStore, now = new Date().toISOString()
 ): Promise<ProjectionRelease<ErpPublicProduct>> {
   const releaseId = `rel_${randomUUID()}`;
-  const [models, assets, products, offers, sourceLineage, revisionHistory] = await Promise.all([
+  const [models, assets, products, offers, policies, sourceLineage, revisionHistory] = await Promise.all([
     catalog.listVehicleModels(),
     catalog.listVehicleAssets(),
     catalog.listProducts(),
     catalog.listOffers(),
+    catalog.listPolicies(),
     catalog.listLineageByStage('NORMALIZED_TO_CANONICAL'),
     catalog.listRevisionHistory()
   ]);
 
   const modelById = new Map(models.map((x) => [x.id, x]));
   const assetById = new Map(assets.map((x) => [x.id, x]));
+  const policyById = new Map(policies.map((x) => [x.id, x]));
   const offersByProduct = new Map<string, Offer[]>();
   for (const offer of offers.filter((x) => activeOffer(x, now)).sort((a, b) => a.id.localeCompare(b.id))) {
     const list = offersByProduct.get(offer.productId) ?? [];
@@ -361,14 +371,22 @@ export async function buildErpPublicProjection(
     if (asset && asset.status !== 'AVAILABLE') continue;
 
     const productOffers = (offersByProduct.get(product.id) ?? [])
-      .map((offer) => ({ offer, terms: publicPriceTerms(offer) }))
+      .map((offer) => {
+        const terms = publicPriceTerms(offer);
+        const linked = offer.policyId ? policyById.get(offer.policyId) : undefined;
+        const policy = linked && activePolicy(linked, now) ? linked : undefined;
+        return { offer, terms, policy };
+      })
       .filter(({ terms }) => terms.length > 0);
     if (!productOffers.length) continue;
 
     evidenceContext.requireRevision('product', product);
     evidenceContext.requireRevision('vehicle_model', model);
     if (asset) evidenceContext.requireRevision('vehicle_asset', asset);
-    for (const { offer } of productOffers) evidenceContext.requireRevision('offer', offer);
+    for (const { offer, policy } of productOffers) {
+      evidenceContext.requireRevision('offer', offer);
+      if (policy) evidenceContext.requireRevision('policy', policy);
+    }
 
     const productPath = `products.${product.id}`;
     evidenceContext.addField({
@@ -470,7 +488,8 @@ export async function buildErpPublicProjection(
       }
     }
 
-    for (const { offer, terms } of productOffers) {
+    const projectedOffers: ErpPublicProduct['offers'] = [];
+    for (const { offer, terms, policy } of productOffers) {
       const offerPath = `${productPath}.offers.${offer.id}`;
       const offerFields: Array<[string, unknown, string]> = [
         ['id', offer.id, 'offerId'],
@@ -526,6 +545,45 @@ export async function buildErpPublicProjection(
           });
         }
       }
+
+      const publicOffer: Offer = { ...offer, priceTerms: structuredClone(terms) };
+      const commercial = buildCommercialOfferView({
+        product,
+        vehicleModel: model,
+        ...(asset ? { vehicleAsset: asset } : {}),
+        offer: publicOffer,
+        ...(policy ? { policy } : {}),
+      });
+
+      evidenceContext.addField({
+        entityType: 'offer',
+        entityId: offer.id,
+        revision: offer.revision,
+        fieldPath: 'priceTerms',
+        canonicalValue: offer.priceTerms,
+        projectionFieldPath: `${offerPath}.commercial.basisRows`,
+        projectionValue: commercial.basisRows,
+      });
+      if (policy) {
+        evidenceContext.addField({
+          entityType: 'policy',
+          entityId: policy.id,
+          revision: policy.revision,
+          fieldPath: 'facts',
+          canonicalValue: policy.facts,
+          projectionFieldPath: `${offerPath}.commercial.dataCatalog`,
+          projectionValue: commercial.dataCatalog,
+        });
+      }
+
+      projectedOffers.push({
+        offerId: offer.id,
+        supplierId: offer.supplierId,
+        offerRevision: offer.revision,
+        ...(offer.policyId !== undefined ? { policyId: offer.policyId } : {}),
+        priceTerms: terms,
+        commercial,
+      });
     }
 
     data.push({
@@ -549,13 +607,7 @@ export async function buildErpPublicProjection(
           ...(asset.odometerKm !== undefined ? {odometerKm: asset.odometerKm} : {})
         } : {})
       },
-      offers: productOffers.map(({ offer, terms }) => ({
-        offerId: offer.id,
-        supplierId: offer.supplierId,
-        offerRevision: offer.revision,
-        ...(offer.policyId !== undefined ? {policyId: offer.policyId} : {}),
-        priceTerms: terms
-      }))
+      offers: projectedOffers
     });
   }
 
