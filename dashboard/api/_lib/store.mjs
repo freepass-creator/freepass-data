@@ -1,38 +1,9 @@
-import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { adminApp } from './firebase.mjs';
 
-const COLLECTION = 'dashboard_accounts';
+const COLLECTION = 'identity_accounts';
 
-function serviceAccount() {
-  const raw = process.env.DASHBOARD_FIREBASE_SERVICE_ACCOUNT_JSON;
-  if (!raw) throw new Error('MISSING_DASHBOARD_FIREBASE_SERVICE_ACCOUNT_JSON');
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error('INVALID_SERVICE_ACCOUNT_JSON');
-  }
-  for (const key of ['project_id', 'client_email', 'private_key']) {
-    if (typeof parsed[key] !== 'string' || !parsed[key]) throw new Error('INCOMPLETE_SERVICE_ACCOUNT_JSON');
-  }
-  return parsed;
-}
-
-function db() {
-  if (!getApps().length) {
-    const account = serviceAccount();
-    initializeApp({
-      credential: cert({
-        projectId: account.project_id,
-        clientEmail: account.client_email,
-        // Vercel env values keep newlines escaped.
-        privateKey: account.private_key.replace(/\\n/g, '\n')
-      }),
-      projectId: account.project_id
-    });
-  }
-  return getFirestore();
-}
+const db = () => getFirestore(adminApp());
 
 export async function getAccount(id) {
   const snap = await db().collection(COLLECTION).doc(id).get();
@@ -44,7 +15,7 @@ export async function listAccounts(limit = 200) {
   return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 }
 
-/** Refuses to overwrite an existing account so registration cannot reset a password. */
+/** Refuses to overwrite, so a second registration cannot reset an existing authority. */
 export async function createAccount(id, fields) {
   await db().collection(COLLECTION).doc(id).create({ ...fields, id });
 }

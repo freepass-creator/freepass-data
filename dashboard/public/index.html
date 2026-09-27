@@ -147,16 +147,20 @@ button.link{border:0;background:none;color:var(--accent);font-size:12px;font-wei
       <span id="switchText">계정이 없으신가요?</span>
       <button type="button" class="link" id="switchBtn">가입 신청</button>
     </div>
+    <div class="switch"><button type="button" class="link" id="resetBtn">비밀번호 재설정</button></div>
   </div>
 </main>
 
 <main id="pending" style="display:none">
   <div class="authbox">
-    <h1>승인 대기 중</h1>
-    <p class="gatelead">가입 신청이 접수됐습니다. 마스터가 승인해야 데이터가 보입니다.</p>
+    <h1 id="pendingTitle">승인 대기 중</h1>
+    <p class="gatelead" id="pendingLead">가입 신청이 접수됐습니다. 마스터가 승인해야 데이터가 보입니다.</p>
     <div class="notice" id="pendingWho"></div>
-    <button class="primary" id="pendingRefresh" type="button">승인됐는지 다시 확인</button>
-    <div class="switch"><button type="button" class="link" id="pendingLogout">로그아웃</button></div>
+    <button class="primary" id="pendingRefresh" type="button">다시 확인</button>
+    <div class="switch">
+      <button type="button" class="link" id="resend" style="display:none">인증 메일 다시 보내기</button>
+      <button type="button" class="link" id="pendingLogout">로그아웃</button>
+    </div>
   </div>
 </main>
 
@@ -243,7 +247,7 @@ button.link{border:0;background:none;color:var(--accent);font-size:12px;font-wei
   <div>이 페이지는 비공개 GCS 증거를 직접 읽지 않습니다. 감사가 만든 비민감 요약(<span class="mono">source-inventory.json</span>)만 정적으로 배포됩니다.</div>
 </footer>
 
-<script>
+<script type="module">
 const $ = (id) => document.getElementById(id);
 const num = (v) => (typeof v === 'number' ? v.toLocaleString('ko-KR') : '—');
 const shortSha = (s) => (typeof s === 'string' && s.length > 16 ? s.slice(0, 12) + '…' + s.slice(-6) : (s ?? '—'));
@@ -333,25 +337,46 @@ function render(d) {
 }
 
 const MESSAGES = {
-  INVALID_CREDENTIALS: '아이디 또는 비밀번호가 맞지 않습니다.',
-  TEMPORARILY_LOCKED: '로그인 실패가 반복돼 잠시 잠겼습니다. 15분 뒤 다시 시도하세요.',
-  ACCOUNT_EXISTS: '이미 신청된 아이디입니다. 로그인하거나 마스터 승인을 기다리세요.',
-  INVALID_ACCOUNT_ID: '아이디 형식이 올바르지 않습니다.',
-  PASSWORD_TOO_SHORT: '비밀번호는 10자 이상이어야 합니다.',
-  PASSWORD_NEEDS_LETTER_AND_DIGIT: '비밀번호에 영문과 숫자를 모두 넣어주세요.',
-  PASSWORD_REQUIRED: '비밀번호를 입력해주세요.',
-  SERVICE_NOT_CONFIGURED: '서버 설정이 아직 끝나지 않았습니다(마스터 아이디·세션 비밀키).',
+  'auth/invalid-credential': '아이디 또는 비밀번호가 맞지 않습니다.',
+  'auth/invalid-email': '이메일 형식이 올바르지 않습니다.',
+  'auth/missing-password': '비밀번호를 입력해주세요.',
+  'auth/weak-password': '비밀번호는 6자 이상이어야 합니다. 10자 이상을 권합니다.',
+  'auth/email-already-in-use': '이미 가입된 이메일입니다. 로그인하거나 비밀번호 재설정을 이용하세요.',
+  'auth/too-many-requests': '시도가 많아 잠시 차단됐습니다. 잠시 뒤 다시 시도하세요.',
+  'auth/network-request-failed': '네트워크 오류입니다. 연결을 확인해주세요.',
+  EMAIL_NOT_VERIFIED: '메일 인증이 끝나지 않았습니다. 받은 편지함의 인증 링크를 눌러주세요.',
+  SIGN_IN_REQUIRED: '로그인이 필요합니다.',
+  INVALID_ACCOUNT_ID: '이 이메일 주소로는 계정을 만들 수 없습니다.',
   MASTER_ONLY: '마스터만 할 수 있습니다.',
-  MASTER_CANNOT_BE_CHANGED: '마스터 계정은 변경할 수 없습니다.'
+  MASTER_CANNOT_BE_CHANGED: '마스터 계정은 변경할 수 없습니다.',
+  SERVICE_NOT_CONFIGURED: '서버 설정이 아직 끝나지 않았습니다(마스터 아이디·Firebase 설정).'
 };
 const say = (code, fallback) => MESSAGES[code] ?? fallback ?? code ?? '알 수 없는 오류';
 
+let auth = null;
+let firebase = null;
+
+async function startFirebase() {
+  const res = await fetch('/api/config', { cache: 'no-store' });
+  if (!res.ok) throw new Error('SERVICE_NOT_CONFIGURED');
+  const { firebase: config } = await res.json();
+  const [{ initializeApp }, authModule] = await Promise.all([
+    import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),
+    import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js')
+  ]);
+  firebase = authModule;
+  const { authEmulatorHost, ...appConfig } = config;
+  auth = authModule.getAuth(initializeApp(appConfig));
+  if (authEmulatorHost) authModule.connectAuthEmulator(auth, `http://${authEmulatorHost}`, { disableWarnings: true });
+  await auth.authStateReady?.();
+}
+
+/** Every call carries a freshly minted ID token; the server verifies it, we never mint one. */
 const api = async (path, options = {}) => {
-  const res = await fetch(`/api/${path}`, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers ?? {}) },
-    cache: 'no-store'
-  });
+  const headers = { 'Content-Type': 'application/json', ...(options.headers ?? {}) };
+  const user = auth?.currentUser;
+  if (user) headers.Authorization = `Bearer ${await user.getIdToken()}`;
+  const res = await fetch(`/api/${path}`, { ...options, headers, cache: 'no-store' });
   let data = {};
   try { data = await res.json(); } catch { /* keep {} */ }
   return { ok: res.ok, status: res.status, data };
@@ -376,12 +401,13 @@ function setMode(next) {
   const register = mode === 'register';
   $('gateTitle').textContent = register ? '가입 신청' : '로그인';
   $('gateLead').textContent = register
-    ? '신청하면 마스터 승인 뒤에 데이터가 보입니다. 비밀번호는 10자 이상, 영문과 숫자를 포함해야 합니다.'
+    ? '가입하면 인증 메일이 갑니다. 메일 인증 뒤 마스터가 승인하면 데이터가 보입니다.'
     : '프리패스 데이터 계정으로 들어갑니다.';
   $('authSubmit').textContent = register ? '가입 신청' : '로그인';
   $('accountPw').setAttribute('autocomplete', register ? 'new-password' : 'current-password');
   $('switchText').textContent = register ? '이미 계정이 있으신가요?' : '계정이 없으신가요?';
   $('switchBtn').textContent = register ? '로그인' : '가입 신청';
+  $('resetBtn').style.display = register ? 'none' : 'inline-block';
   gateError(null);
 }
 
@@ -431,11 +457,37 @@ async function loadAudit(view) {
   render(data.snapshot);
 }
 
+/**
+ * Verifying the address updates the profile but not the token already in hand, so
+ * the server would keep reading email_verified:false until that token expired.
+ */
+async function ensureFreshClaims(user) {
+  if (!user.emailVerified) return;
+  const { claims } = await user.getIdTokenResult();
+  if (claims.email_verified !== true) await user.getIdToken(true);
+}
+
 async function route() {
-  const { ok, data } = await api('me');
+  const user = auth?.currentUser;
+  if (!user) { setMode('login'); show('gate'); return; }
+  await user.reload();
+  await ensureFreshClaims(user);
+  if (!user.emailVerified) {
+    $('pendingWho').textContent = `${user.email} · 메일 인증이 남았습니다`;
+    $('pendingTitle').textContent = '메일 인증 대기';
+    $('pendingLead').textContent = '받은 편지함의 인증 링크를 누른 뒤 아래 버튼으로 다시 확인하세요.';
+    $('resend').style.display = 'inline-block';
+    show('pending');
+    return;
+  }
+  $('resend').style.display = 'none';
+  // Idempotent: creates the authority record on first sight, returns the existing one after.
+  const { ok, data } = await api('register', { method: 'POST' });
   const view = ok ? data.account : null;
-  if (!view) { setMode('login'); show('gate'); return; }
+  if (!view) { setMode('login'); show('gate'); gateError(say(data?.error)); return; }
   if (view.status !== 'APPROVED') {
+    $('pendingTitle').textContent = '승인 대기 중';
+    $('pendingLead').textContent = '가입 신청이 접수됐습니다. 마스터가 승인해야 데이터가 보입니다.';
     $('pendingWho').textContent = `${view.id} · 현재 상태 ${view.status}`;
     show('pending');
     return;
@@ -445,39 +497,63 @@ async function route() {
 
 $('switchBtn').addEventListener('click', () => setMode(mode === 'login' ? 'register' : 'login'));
 
+$('resetBtn').addEventListener('click', async () => {
+  const email = $('accountId').value.trim();
+  if (!email) { gateError('먼저 이메일을 입력해주세요.'); return; }
+  try {
+    await firebase.sendPasswordResetEmail(auth, email);
+    gateError(null);
+    gateNotice('비밀번호 재설정 메일을 보냈습니다.');
+  } catch (error) { gateError(say(error.code)); }
+});
+
 $('authForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   gateError(null);
   gateNotice(null);
-  const id = $('accountId').value;
+  const email = $('accountId').value.trim();
   const password = $('accountPw').value;
   $('authSubmit').disabled = true;
   try {
-    const { ok, data } = await api(mode === 'register' ? 'register' : 'login', {
-      method: 'POST',
-      body: JSON.stringify({ id, password })
-    });
-    if (!ok) { gateError(say(data.error)); return; }
     if (mode === 'register') {
-      if (data.status === 'APPROVED') { setMode('login'); gateNotice('마스터 계정이 만들어졌습니다. 이제 로그인하세요.'); return; }
+      const created = await firebase.createUserWithEmailAndPassword(auth, email, password);
+      await firebase.sendEmailVerification(created.user);
+      $('accountPw').value = '';
       setMode('login');
-      gateNotice('가입 신청이 접수됐습니다. 마스터 승인 뒤 로그인하면 데이터가 보입니다.');
+      gateNotice('인증 메일을 보냈습니다. 링크를 누른 뒤 로그인하세요.');
       return;
     }
+    await firebase.signInWithEmailAndPassword(auth, email, password);
     $('accountPw').value = '';
     await route();
+  } catch (error) {
+    gateError(say(error.code, error.message));
   } finally {
     $('authSubmit').disabled = false;
   }
 });
 
 for (const [id, handler] of [
-  ['signout', async () => { await api('logout', { method: 'POST' }); location.reload(); }],
-  ['pendingLogout', async () => { await api('logout', { method: 'POST' }); location.reload(); }],
-  ['pendingRefresh', route]
+  ['signout', async () => { await firebase.signOut(auth); location.reload(); }],
+  ['pendingLogout', async () => { await firebase.signOut(auth); location.reload(); }],
+  ['pendingRefresh', route],
+  ['resend', async () => {
+    try {
+      await firebase.sendEmailVerification(auth.currentUser);
+      alert('인증 메일을 다시 보냈습니다.');
+    } catch (error) { alert(say(error.code)); }
+  }]
 ]) $(id).addEventListener('click', handler);
 
-route();
+try {
+  await startFirebase();
+  await route();
+} catch (error) {
+  setMode('login');
+  show('gate');
+  gateError(say(error.message, '초기화에 실패했습니다.'));
+}
+
 </script>
 </body>
 </html>

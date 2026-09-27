@@ -1,29 +1,24 @@
 import { createRequire } from 'node:module';
-import {
-  accountView,
-  canReadData,
-  clearedCookie,
-  hashPassword,
-  isLockedOut,
-  nextFailureState,
-  normalizeAccountId,
-  readCookie,
-  readSession,
-  sessionCookie,
-  signSession,
-  validatePassword,
-  verifyPassword
-} from './_lib/auth.mjs';
+import { accountView, APPLICATION, canEnter, decisionRecord, normalizeAccountId, pendingRecord } from './_lib/authority.mjs';
+import { verifyBearer } from './_lib/identity.mjs';
 import { createAccount, getAccount, isAlreadyExists, listAccounts, updateAccount } from './_lib/store.mjs';
 
 const require = createRequire(import.meta.url);
 const snapshot = require('../data/audit-latest.json');
 
 const MASTER_ID = normalizeAccountId(process.env.DASHBOARD_MASTER_ID ?? '');
-const SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET ?? '';
 
-const json = (res, status, body, cookie) => {
-  if (cookie) res.setHeader('Set-Cookie', cookie);
+const WEB_CONFIG = {
+  apiKey: process.env.DASHBOARD_FIREBASE_WEB_API_KEY ?? '',
+  authDomain: process.env.DASHBOARD_FIREBASE_AUTH_DOMAIN ?? '',
+  projectId: process.env.DASHBOARD_FIREBASE_PROJECT_ID ?? '',
+  // Set only for local development against an emulator (docs/IDENTITY-AND-ACCESS.md §2).
+  ...(process.env.DASHBOARD_FIREBASE_AUTH_EMULATOR_HOST
+    ? { authEmulatorHost: process.env.DASHBOARD_FIREBASE_AUTH_EMULATOR_HOST }
+    : {})
+};
+
+const json = (res, status, body) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
   res.status(status).end(JSON.stringify(body));
@@ -46,16 +41,19 @@ async function body(req) {
   }
 }
 
-async function currentView(req) {
-  const token = readCookie(req.headers.cookie);
-  const session = readSession(token, SESSION_SECRET);
-  if (!session) return null;
-  const account = await getAccount(session.sub);
-  return accountView(account, MASTER_ID);
+/** Resolves the caller to an authority record, or a reason it cannot be resolved. */
+async function caller(req) {
+  const identity = await verifyBearer(req.headers.authorization);
+  if (!identity) return { error: 'SIGN_IN_REQUIRED', status: 401 };
+  if (!identity.emailVerified) return { error: 'EMAIL_NOT_VERIFIED', status: 403, identity };
+  const id = normalizeAccountId(identity.email);
+  if (!id) return { error: 'INVALID_ACCOUNT_ID', status: 400, identity };
+  const account = await getAccount(id);
+  return { identity, id, view: accountView(account, MASTER_ID) };
 }
 
 export default async function handler(req, res) {
-  if (!MASTER_ID || SESSION_SECRET.length < 32) {
+  if (!MASTER_ID || !WEB_CONFIG.apiKey || !WEB_CONFIG.authDomain || !WEB_CONFIG.projectId) {
     return json(res, 503, { error: 'SERVICE_NOT_CONFIGURED' });
   }
 
@@ -64,88 +62,71 @@ export default async function handler(req, res) {
     .join('/');
 
   try {
+    // Public by design: the web config identifies the project, it does not grant access.
+    if (route === 'config' && req.method === 'GET') return json(res, 200, { firebase: WEB_CONFIG });
     if (route === 'register' && req.method === 'POST') return await register(req, res);
-    if (route === 'login' && req.method === 'POST') return await login(req, res);
-    if (route === 'logout' && req.method === 'POST') return json(res, 200, { ok: true }, clearedCookie());
-    if (route === 'me' && req.method === 'GET') return json(res, 200, { account: await currentView(req) });
+    if (route === 'me' && req.method === 'GET') return await me(req, res);
     if (route === 'audit' && req.method === 'GET') return await audit(req, res);
     if (route === 'accounts' && req.method === 'GET') return await accounts(req, res);
     if (route === 'accounts/decide' && req.method === 'POST') return await decide(req, res);
     return json(res, 404, { error: 'NOT_FOUND' });
   } catch (error) {
-    const code = error?.message === 'BODY_TOO_LARGE' || error?.message === 'INVALID_JSON' ? 400 : 500;
-    return json(res, code, { error: code === 400 ? error.message : 'INTERNAL_ERROR' });
+    const bad = error?.message === 'BODY_TOO_LARGE' || error?.message === 'INVALID_JSON';
+    return json(res, bad ? 400 : 500, { error: bad ? error.message : 'INTERNAL_ERROR' });
   }
 }
 
+/** Creates the authority record for an already-authenticated Firebase user. */
 async function register(req, res) {
-  const { id: rawId, password } = await body(req);
-  const id = normalizeAccountId(rawId);
-  if (!id) return json(res, 400, { error: 'INVALID_ACCOUNT_ID' });
-  const weak = validatePassword(password);
-  if (weak) return json(res, 400, { error: weak });
+  const resolved = await caller(req);
+  if (resolved.error) return json(res, resolved.status, { error: resolved.error });
+  if (resolved.view) return json(res, 200, { account: resolved.view });
 
-  const now = new Date().toISOString();
-  const isMaster = id === MASTER_ID;
+  const record = pendingRecord(resolved.id, MASTER_ID);
   try {
-    await createAccount(id, {
-      status: isMaster ? 'APPROVED' : 'PENDING',
-      passwordHash: await hashPassword(password),
-      createdAt: now,
-      approvedAt: isMaster ? now : null,
-      approvedBy: isMaster ? 'SELF_MASTER' : null,
-      failedAttempts: 0,
-      lockedUntil: 0
-    });
+    await createAccount(resolved.id, record);
   } catch (error) {
-    if (isAlreadyExists(error)) return json(res, 409, { error: 'ACCOUNT_EXISTS' });
+    if (isAlreadyExists(error)) return json(res, 200, { account: accountView(await getAccount(resolved.id), MASTER_ID) });
     throw error;
   }
-  return json(res, 201, { status: isMaster ? 'APPROVED' : 'PENDING' });
+  return json(res, 201, { account: accountView(record, MASTER_ID) });
 }
 
-async function login(req, res) {
-  const { id: rawId, password } = await body(req);
-  const id = normalizeAccountId(rawId);
-  // Same answer for an unknown id and a wrong password so accounts cannot be enumerated.
-  const reject = () => json(res, 401, { error: 'INVALID_CREDENTIALS' });
-  if (!id || typeof password !== 'string') return reject();
-
-  const account = await getAccount(id);
-  if (!account) {
-    await hashPassword(password); // keep the timing of a miss close to a hit
-    return reject();
-  }
-  if (isLockedOut(account)) return json(res, 423, { error: 'TEMPORARILY_LOCKED' });
-
-  if (!(await verifyPassword(password, account.passwordHash))) {
-    await updateAccount(id, nextFailureState(account));
-    return reject();
-  }
-  if (account.failedAttempts || account.lockedUntil) {
-    await updateAccount(id, { failedAttempts: 0, lockedUntil: 0 });
-  }
-
-  const view = accountView({ ...account, failedAttempts: 0, lockedUntil: 0 }, MASTER_ID);
-  return json(res, 200, { account: view }, sessionCookie(signSession({ sub: id }, SESSION_SECRET)));
+async function me(req, res) {
+  const resolved = await caller(req);
+  if (resolved.error) return json(res, resolved.status, { error: resolved.error });
+  return json(res, 200, { account: resolved.view, application: APPLICATION });
 }
 
 async function audit(req, res) {
-  const view = await currentView(req);
-  if (!view) return json(res, 401, { error: 'SIGN_IN_REQUIRED' });
-  if (!canReadData(view)) return json(res, 403, { error: 'APPROVAL_PENDING', status: view.status });
-  return json(res, 200, { account: view, snapshot });
+  const resolved = await caller(req);
+  if (resolved.error) return json(res, resolved.status, { error: resolved.error });
+  if (!canEnter(resolved.view)) {
+    return json(res, 403, { error: 'APPROVAL_PENDING', status: resolved.view?.status ?? 'UNREGISTERED' });
+  }
+  return json(res, 200, { account: resolved.view, snapshot });
+}
+
+async function requireMaster(req, res) {
+  const resolved = await caller(req);
+  if (resolved.error) {
+    json(res, resolved.status, { error: resolved.error });
+    return null;
+  }
+  if (resolved.view?.role !== 'MASTER') {
+    json(res, 403, { error: 'MASTER_ONLY' });
+    return null;
+  }
+  return resolved;
 }
 
 async function accounts(req, res) {
-  const view = await currentView(req);
-  if (view?.role !== 'MASTER') return json(res, 403, { error: 'MASTER_ONLY' });
+  if (!(await requireMaster(req, res))) return;
   return json(res, 200, { accounts: (await listAccounts()).map((item) => accountView(item, MASTER_ID)) });
 }
 
 async function decide(req, res) {
-  const view = await currentView(req);
-  if (view?.role !== 'MASTER') return json(res, 403, { error: 'MASTER_ONLY' });
+  if (!(await requireMaster(req, res))) return;
 
   const { id: rawId, decision } = await body(req);
   const id = normalizeAccountId(rawId);
@@ -153,12 +134,6 @@ async function decide(req, res) {
   if (id === MASTER_ID) return json(res, 400, { error: 'MASTER_CANNOT_BE_CHANGED' });
   if (!(await getAccount(id))) return json(res, 404, { error: 'ACCOUNT_NOT_FOUND' });
 
-  await updateAccount(id, {
-    status: decision,
-    approvedAt: decision === 'APPROVED' ? new Date().toISOString() : null,
-    approvedBy: decision === 'APPROVED' ? MASTER_ID : null,
-    failedAttempts: 0,
-    lockedUntil: 0
-  });
+  await updateAccount(id, decisionRecord(decision, MASTER_ID));
   return json(res, 200, { id, status: decision });
 }
