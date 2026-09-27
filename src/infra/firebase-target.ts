@@ -51,6 +51,7 @@ export const BUSINESS_FIREBASE_TARGETS: Record<BusinessTarget, BusinessTargetCon
   SALES: {
     projectId: 'welrixtable',
     appName: 'freepass-data-business-sales',
+    storageBucket: 'welrixtable.firebasestorage.app',
   },
   LEGACY: {
     projectId: 'freepasserp3',
