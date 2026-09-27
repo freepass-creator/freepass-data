@@ -27,7 +27,7 @@ export type PricingConditionScope = {
     allowedToAge?: number;
   };
   drivers: {
-    includedAdditionalDriverCount: 0;
+    includedAdditionalDriverCount?: number;
     maxAdditionalDriverCount?: number;
     personalScope?: string;
     businessScope?: string;
