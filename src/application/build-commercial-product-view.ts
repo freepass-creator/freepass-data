@@ -1,8 +1,13 @@
 import type { Offer, Policy, Product, VehicleAsset, VehicleModel } from '../domain/catalog.js';
 import type { CommercialFact, CommercialFactValue, CommercialProductView } from '../domain/commercial-product-view.js';
 import { resolveOfferCommercialTerms } from './resolve-offer-commercial-terms.js';
+import {
+  buildDefaultProductConditionSelection,
+  evaluateProductConditions,
+} from './evaluate-product-conditions.js';
 
 export const PRODUCT_POLICY_FACT_KEYS = [
+  'default_term_months',
   'annual_mileage',
   'max_annual_mileage',
   'mileage_upcharge_per_10000km',
@@ -96,12 +101,13 @@ export function buildCommercialProductView(input: {
 
   const commercial = resolveOfferCommercialTerms(offer, policy);
   const classified = classifyPolicyFacts(policy);
+  const defaults = buildDefaultProductConditionSelection(offer, policy);
+  const preview = evaluateProductConditions(offer, policy, defaults.selection);
 
-  const rentalTerms = commercial.terms.map((term) => ({
+  const pricingBasis = commercial.terms.map((term) => ({
     termKey: term.termKey,
     termMonths: term.termMonths,
     ...(term.mileage.state === 'KNOWN' ? { mileageKmPerYear: term.mileage.kmPerYear } : {}),
-    isDefaultMileage: term.mileage.state === 'KNOWN' ? term.mileage.isDefault : false,
     monthlyRent: structuredClone(term.monthlyRent),
     deposit: {
       state: term.deposit.state,
@@ -109,8 +115,17 @@ export function buildCommercialProductView(input: {
     },
   }));
 
-  const decisions = [...commercial.decisions];
+  const decisions = [
+    ...commercial.decisions,
+    ...defaults.decisions,
+    ...preview.decisions,
+  ];
   if (classified.unclassifiedPolicyFacts.length) decisions.push('POLICY_FACT_CLASSIFICATION_REQUIRED');
+  const invalidFacts = [
+    ...commercial.invalidFacts,
+    ...defaults.invalidFacts,
+    ...preview.invalidFacts,
+  ];
 
   return {
     vehicle: {
@@ -133,25 +148,32 @@ export function buildCommercialProductView(input: {
         ...(vehicleAsset.odometerKm !== undefined ? { odometerKm: vehicleAsset.odometerKm } : {}),
       } : {}),
     },
-    rentalTerms,
+    conditionProfile: {
+      defaults: defaults.selection,
+      available: {
+        termMonths: [...new Set(pricingBasis.map((term) => term.termMonths))].sort((a, b) => a - b),
+        mileageKmPerYear: [...new Set(pricingBasis.flatMap((term) =>
+          term.mileageKmPerYear === undefined ? [] : [term.mileageKmPerYear]
+        ))].sort((a, b) => a - b),
+      },
+    },
+    pricingBasis,
     policy: {
       ...(offer.policyId ? { policyId: offer.policyId } : {}),
-      ...(commercial.defaultMileage.state === 'KNOWN'
-        ? { defaultAnnualMileageKm: commercial.defaultMileage.kmPerYear }
-        : {}),
       facts: classified.policyFacts,
     },
     contractConditions: {
       facts: classified.contractFacts,
     },
+    preview,
     review: {
-      status: commercial.invalidFacts.length
+      status: invalidFacts.length
         ? 'INVALID'
         : decisions.length
           ? 'NEEDS_DECISION'
           : 'READY',
       decisions: [...new Set(decisions)].sort(),
-      invalidFacts: [...commercial.invalidFacts],
+      invalidFacts: [...new Set(invalidFacts)].sort(),
       unclassifiedPolicyFacts: classified.unclassifiedPolicyFacts,
     },
   };
