@@ -167,3 +167,35 @@ Quote ID, 고객별 선택, 견적 저장/발송은 Estimate 책임이다.
 소비처가 같은 원천을 각자 다시 해석하면 또 여러 벌의 정답이 생긴다.
 따라서 조건 귀속·역매칭·기본값·가격산출 의미는 FreePass Data 한 곳에서만 결정하고,
 다른 프로젝트는 그 결과를 읽고 표현한다.
+## Listing 가격과 Preview 가격 분리
+
+상품찾기에서 처음 보이는 가격과 기본 계약조건 가격은 같은 개념이 아니다.
+
+### listing
+- 목적: 상품찾기 목록의 `월 N원부터`
+- 정책: 일반 반납형 가격행이 있으면 인수형을 제외하고 그 안에서 가장 낮은 Basis 월대여료
+- 금액만 내리지 않고 해당 가격행의 attribution을 함께 내림
+- 기간/주행거리/연령/보험/대물/정비 등 확인된 조건을 함께 표시할 수 있어야 함
+- 조건이 모르면 UNKNOWN을 유지
+
+### preview
+- 목적: 상품 상세 진입 시 기본 선택조건
+- 공급사/상품 정책의 default term, default mileage, 기본 연령 등으로 산출
+- listing보다 비쌀 수 있음
+- listing을 덮어쓰지 않음
+
+예:
+- listing: 48개월 / 연 2만km / 월 65만원부터 / 보험조건 미확인
+- preview: 36개월 / 연 2만km / 만21세 / 월 70만원
+
+두 값이 다르면 Admin 상세에서 `최저가`와 `기본조건`을 별도 표시한다.
+ERP.com도 동일한 commercial contract를 소비해 같은 의미를 사용한다.
+
+## Admin → ERP.com 전개 원칙
+
+1. Admin에서 먼저 commercial 데이터의 의미와 누락을 검수한다.
+2. Data contract와 listing/preview 정책을 확정한다.
+3. ERP.com은 자체 UI/UX를 유지한다.
+4. ERP.com 내부에서 priceTerms/policy를 다시 계산하지 않는다.
+5. Admin과 ERP.com은 같은 listing termKey, 같은 condition evidence, 같은 UNKNOWN 판정을 사용한다.
+6. 화면 레이아웃만 서로 다를 수 있다.
