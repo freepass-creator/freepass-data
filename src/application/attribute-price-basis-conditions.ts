@@ -2,8 +2,8 @@ import type { Policy, PriceTerm } from '../domain/catalog.js';
 import type {
   PriceBasisAttribution,
   PriceConditionEvidence,
-  ResolvedCommercialTerm,
 } from '../domain/commercial-product-view.js';
+import type { ResolvedCommercialTerm } from '../domain/offer-commercial-terms.js';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
 import { policyScalar } from './product-pricing-policy.js';
 
