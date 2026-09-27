@@ -704,5 +704,264 @@ export function createConsumerGateway(
       }
     }
   );
+
+  const artifactErrorCode = (error: unknown, fallback: string) => {
+    if (error && typeof error === 'object' && 'code' in error) {
+      const value = String((error as { code?: unknown }).code ?? '');
+      if (value) return value;
+    }
+    return error instanceof Error && error.message ? error.message : fallback;
+  };
+  const validArtifactId = (value: string) => /^[A-Za-z0-9._:-]{1,200}$/.test(value);
+
+  app.post<{ Body: unknown }>(
+    '/v1/commands/freepass-estimate/issued-quotes',
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const binding = registered.get('freepass-estimate');
+      const supplied = request.headers.authorization ?? '';
+      const matches = timingSafeEqual(
+        hash(supplied),
+        hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
+      );
+      const context = consumerContext(
+        binding?.id ?? 'unregistered-consumer',
+        'persist immutable issued Quote v2 through FreePass Data',
+        request.id
+      );
+      const resource = { kind: 'COMMAND' as const, name: 'estimate-issued-quote' };
+
+      try {
+        if (!binding || !matches) {
+          await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_ISSUED_QUOTE', resource }, 'UNAUTHORIZED');
+          return reply.code(401).send({ code: 'UNAUTHORIZED' });
+        }
+        if (!binding.capabilities.includes('estimate-artifacts')) {
+          await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_ISSUED_QUOTE', resource }, 'FORBIDDEN');
+          return reply.code(403).send({ code: 'FORBIDDEN' });
+        }
+        if (!estimateArtifactStore) {
+          await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_ISSUED_QUOTE', resource }, 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE');
+          return reply.code(503).send({ code: 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE' });
+        }
+        if (process.env.NODE_ENV === 'production' && process.env.FREEPASS_DATA_ESTIMATE_ARTIFACT_WRITE?.trim() !== 'on') {
+          await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_ISSUED_QUOTE', resource }, 'ESTIMATE_ARTIFACT_WRITE_DISABLED');
+          return reply.code(503).send({ code: 'ESTIMATE_ARTIFACT_WRITE_DISABLED' });
+        }
+
+        assertQuotePutCommand(request.body, request.headers['idempotency-key']);
+        const command = request.body;
+        return await access.write({
+          context,
+          operation: 'WRITE_ESTIMATE_ISSUED_QUOTE',
+          resource: {
+            ...resource,
+            entityType: 'issued-quote',
+            entityId: command.quote.quoteId,
+          },
+          requestDigest: stableDigest(command),
+          summarize: (value) => ({
+            count: 1,
+            digest: value.snapshotHash,
+            revision: value.quoteVersion,
+          }),
+        }, () => estimateArtifactStore.putIssuedQuote(command.quote, command.idempotencyKey));
+      } catch (error) {
+        if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
+        const code = artifactErrorCode(error, 'QUOTE_REPOSITORY_WRITE_FAILED');
+        if (code.includes('CONFLICT') || code === 'QUOTE_REVISION_INVALID') return reply.code(409).send({ code });
+        if (
+          code === 'QUOTE_REPOSITORY_COMMAND_INVALID' ||
+          code === 'QUOTE_REPOSITORY_QUOTE_INVALID' ||
+          code === 'QUOTE_V2_INTEGRITY_MISMATCH' ||
+          code === 'QUOTE_PRICING_ENGINE_UNVERIFIED'
+        ) return reply.code(400).send({ code });
+        return reply.code(503).send({ code: 'QUOTE_REPOSITORY_WRITE_FAILED' });
+      }
+    }
+  );
+
+  app.get<{ Params: { consumerId: string; quoteId: string }; Querystring: { quoteVersion?: string } }>(
+    '/v1/consumers/:consumerId/issued-quotes/:quoteId',
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const binding = registered.get(request.params.consumerId);
+      const supplied = request.headers.authorization ?? '';
+      const matches = timingSafeEqual(
+        hash(supplied),
+        hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
+      );
+      const context = consumerContext(
+        binding?.id ?? 'unregistered-consumer',
+        'read immutable issued Quote v2 through FreePass Data',
+        request.id
+      );
+      const resource = {
+        kind: 'SYSTEM' as const,
+        name: 'estimate-issued-quote',
+        entityType: 'issued-quote',
+        entityId: request.params.quoteId,
+      };
+
+      try {
+        if (!binding || !matches) {
+          await access.deny('READ', { context, operation: 'READ_ESTIMATE_ISSUED_QUOTE', resource }, 'UNAUTHORIZED');
+          return reply.code(401).send({ code: 'UNAUTHORIZED' });
+        }
+        if (binding.id !== 'freepass-estimate' || !binding.capabilities.includes('estimate-artifacts')) {
+          await access.deny('READ', { context, operation: 'READ_ESTIMATE_ISSUED_QUOTE', resource }, 'FORBIDDEN');
+          return reply.code(403).send({ code: 'FORBIDDEN' });
+        }
+        if (!estimateArtifactStore) {
+          await access.deny('READ', { context, operation: 'READ_ESTIMATE_ISSUED_QUOTE', resource }, 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE');
+          return reply.code(503).send({ code: 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE' });
+        }
+        if (!validArtifactId(request.params.quoteId)) return reply.code(400).send({ code: 'QUOTE_REPOSITORY_QUERY_INVALID' });
+        const version = normalizedArtifactVersion(request.query.quoteVersion, 'QUOTE_REPOSITORY_QUERY_INVALID');
+        return await access.read({
+          context,
+          operation: 'READ_ESTIMATE_ISSUED_QUOTE',
+          resource,
+          requestDigest: stableDigest({ quoteId: request.params.quoteId, quoteVersion: version }),
+          summarize: (value) => ({
+            count: value.status === 'FOUND' ? 1 : 0,
+            ...(value.status === 'FOUND' ? { digest: value.snapshotHash, revision: value.quoteVersion } : {}),
+          }),
+        }, () => estimateArtifactStore.getIssuedQuote(request.params.quoteId, version));
+      } catch (error) {
+        if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
+        const code = artifactErrorCode(error, 'QUOTE_REPOSITORY_READ_FAILED');
+        if (code === 'QUOTE_REPOSITORY_QUERY_INVALID') return reply.code(400).send({ code });
+        if (code.includes('CONFLICT')) return reply.code(409).send({ code });
+        return reply.code(503).send({ code: 'QUOTE_REPOSITORY_READ_FAILED' });
+      }
+    }
+  );
+
+  app.post<{ Body: unknown }>(
+    '/v1/commands/freepass-estimate/share-envelopes',
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const binding = registered.get('freepass-estimate');
+      const supplied = request.headers.authorization ?? '';
+      const matches = timingSafeEqual(
+        hash(supplied),
+        hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
+      );
+      const context = consumerContext(
+        binding?.id ?? 'unregistered-consumer',
+        'persist immutable Share Envelope through FreePass Data',
+        request.id
+      );
+      const resource = { kind: 'COMMAND' as const, name: 'estimate-share-envelope' };
+
+      try {
+        if (!binding || !matches) {
+          await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_SHARE_ENVELOPE', resource }, 'UNAUTHORIZED');
+          return reply.code(401).send({ code: 'UNAUTHORIZED' });
+        }
+        if (!binding.capabilities.includes('estimate-artifacts')) {
+          await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_SHARE_ENVELOPE', resource }, 'FORBIDDEN');
+          return reply.code(403).send({ code: 'FORBIDDEN' });
+        }
+        if (!estimateArtifactStore) {
+          await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_SHARE_ENVELOPE', resource }, 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE');
+          return reply.code(503).send({ code: 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE' });
+        }
+        if (process.env.NODE_ENV === 'production' && process.env.FREEPASS_DATA_ESTIMATE_ARTIFACT_WRITE?.trim() !== 'on') {
+          await access.deny('WRITE', { context, operation: 'WRITE_ESTIMATE_SHARE_ENVELOPE', resource }, 'ESTIMATE_ARTIFACT_WRITE_DISABLED');
+          return reply.code(503).send({ code: 'ESTIMATE_ARTIFACT_WRITE_DISABLED' });
+        }
+
+        assertShareEnvelopePutCommand(request.body, request.headers['idempotency-key']);
+        const command = request.body;
+        return await access.write({
+          context,
+          operation: 'WRITE_ESTIMATE_SHARE_ENVELOPE',
+          resource: {
+            ...resource,
+            entityType: 'share-envelope',
+            entityId: command.envelope.envelopeId,
+          },
+          requestDigest: stableDigest(command),
+          summarize: (value) => ({
+            count: 1,
+            digest: value.snapshotHash,
+            revision: value.envelopeVersion,
+          }),
+        }, () => estimateArtifactStore.putShareEnvelope(command.envelope, command.idempotencyKey));
+      } catch (error) {
+        if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
+        const code = artifactErrorCode(error, 'SHARE_ENVELOPE_WRITE_FAILED');
+        if (code.includes('CONFLICT') || code.includes('QUOTE_NOT_PERSISTED') || code.includes('QUOTE_RECEIPT_MISMATCH')) {
+          return reply.code(409).send({ code });
+        }
+        if (
+          code === 'SHARE_ENVELOPE_COMMAND_INVALID' ||
+          code === 'SHARE_ENVELOPE_INVALID' ||
+          code === 'SHARE_ENVELOPE_INTEGRITY_MISMATCH'
+        ) return reply.code(400).send({ code });
+        return reply.code(503).send({ code: 'SHARE_ENVELOPE_WRITE_FAILED' });
+      }
+    }
+  );
+
+  app.get<{ Params: { consumerId: string; envelopeId: string }; Querystring: { envelopeVersion?: string } }>(
+    '/v1/consumers/:consumerId/share-envelopes/:envelopeId',
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const binding = registered.get(request.params.consumerId);
+      const supplied = request.headers.authorization ?? '';
+      const matches = timingSafeEqual(
+        hash(supplied),
+        hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
+      );
+      const context = consumerContext(
+        binding?.id ?? 'unregistered-consumer',
+        'read immutable Share Envelope through FreePass Data',
+        request.id
+      );
+      const resource = {
+        kind: 'SYSTEM' as const,
+        name: 'estimate-share-envelope',
+        entityType: 'share-envelope',
+        entityId: request.params.envelopeId,
+      };
+
+      try {
+        if (!binding || !matches) {
+          await access.deny('READ', { context, operation: 'READ_ESTIMATE_SHARE_ENVELOPE', resource }, 'UNAUTHORIZED');
+          return reply.code(401).send({ code: 'UNAUTHORIZED' });
+        }
+        if (binding.id !== 'freepass-estimate' || !binding.capabilities.includes('estimate-artifacts')) {
+          await access.deny('READ', { context, operation: 'READ_ESTIMATE_SHARE_ENVELOPE', resource }, 'FORBIDDEN');
+          return reply.code(403).send({ code: 'FORBIDDEN' });
+        }
+        if (!estimateArtifactStore) {
+          await access.deny('READ', { context, operation: 'READ_ESTIMATE_SHARE_ENVELOPE', resource }, 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE');
+          return reply.code(503).send({ code: 'ESTIMATE_ARTIFACT_STORE_UNAVAILABLE' });
+        }
+        if (!validArtifactId(request.params.envelopeId)) return reply.code(400).send({ code: 'SHARE_ENVELOPE_QUERY_INVALID' });
+        const version = normalizedArtifactVersion(request.query.envelopeVersion, 'SHARE_ENVELOPE_QUERY_INVALID');
+        return await access.read({
+          context,
+          operation: 'READ_ESTIMATE_SHARE_ENVELOPE',
+          resource,
+          requestDigest: stableDigest({ envelopeId: request.params.envelopeId, envelopeVersion: version }),
+          summarize: (value) => ({
+            count: value.status === 'FOUND' ? 1 : 0,
+            ...(value.status === 'FOUND' ? { digest: value.snapshotHash, revision: value.envelopeVersion } : {}),
+          }),
+        }, () => estimateArtifactStore.getShareEnvelope(request.params.envelopeId, version));
+      } catch (error) {
+        if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
+        const code = artifactErrorCode(error, 'SHARE_ENVELOPE_READ_FAILED');
+        if (code === 'SHARE_ENVELOPE_QUERY_INVALID') return reply.code(400).send({ code });
+        if (code.includes('CONFLICT')) return reply.code(409).send({ code });
+        return reply.code(503).send({ code: 'SHARE_ENVELOPE_READ_FAILED' });
+      }
+    }
+  );
+
   return app;
 }
