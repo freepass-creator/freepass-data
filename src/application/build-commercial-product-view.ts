@@ -5,20 +5,20 @@ import {
   buildDefaultProductConditionSelection,
   evaluateProductConditions,
 } from './evaluate-product-conditions.js';
+import {
+  buildMonthlyRentModifiers,
+  buildPricingConditionScope,
+  MONTHLY_RENT_MODIFIER_KEYS,
+  PRICING_SCOPE_POLICY_KEYS,
+} from './product-pricing-policy.js';
 
 export const PRODUCT_POLICY_FACT_KEYS = [
   'default_term_months',
-  'annual_mileage',
-  'max_annual_mileage',
-  'mileage_upcharge_per_10000km',
-  'over_mileage_rate_domestic',
-  'over_mileage_rate_imported',
-  'over_mileage_rate_per_km',
+  ...PRICING_SCOPE_POLICY_KEYS,
+  ...MONTHLY_RENT_MODIFIER_KEYS,
 ] as const;
 
 export const CONTRACT_CONDITION_FACT_KEYS = [
-  'additional_driver_cost',
-  'age_lowering_cost',
   'succession_fee',
   'own_damage_min_deductible',
   'own_damage_max_deductible',
@@ -32,14 +32,9 @@ export const CONTRACT_CONDITION_FACT_KEYS = [
   'accident_termination_count',
   'deposit_return_days',
   'auto_terminate_overdue_days',
-  'basic_driver_age',
-  'driver_age_lowering',
-  'driver_age_upper_limit',
   'deposit_card_payment',
   'deposit_installment',
   'succession_allowed',
-  'maintenance_service',
-  'insurance_included',
 ] as const;
 
 const policyKeys = new Set<string>(PRODUCT_POLICY_FACT_KEYS);
@@ -106,8 +101,11 @@ export function buildCommercialProductView(input: {
 
   const pricingBasis = commercial.terms.map((term) => ({
     termKey: term.termKey,
-    termMonths: term.termMonths,
-    ...(term.mileage.state === 'KNOWN' ? { mileageKmPerYear: term.mileage.kmPerYear } : {}),
+    conditionScope: buildPricingConditionScope({
+      termMonths: term.termMonths,
+      ...(term.mileage.state === 'KNOWN' ? { mileageKmPerYear: term.mileage.kmPerYear } : {}),
+      policy,
+    }),
     monthlyRent: structuredClone(term.monthlyRent),
     deposit: {
       state: term.deposit.state,
@@ -151,11 +149,14 @@ export function buildCommercialProductView(input: {
     conditionProfile: {
       defaults: defaults.selection,
       available: {
-        termMonths: [...new Set(pricingBasis.map((term) => term.termMonths))].sort((a, b) => a - b),
+        termMonths: [...new Set(pricingBasis.map((term) => term.conditionScope.termMonths))].sort((a, b) => a - b),
         mileageKmPerYear: [...new Set(pricingBasis.flatMap((term) =>
-          term.mileageKmPerYear === undefined ? [] : [term.mileageKmPerYear]
+          term.conditionScope.mileage.pricedUpToKmPerYear === undefined
+            ? []
+            : [term.conditionScope.mileage.pricedUpToKmPerYear]
         ))].sort((a, b) => a - b),
       },
+      monthlyRentModifiers: buildMonthlyRentModifiers(policy),
     },
     pricingBasis,
     policy: {
