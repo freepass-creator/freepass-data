@@ -29,14 +29,15 @@ function same(a: CommercialFactValue, b: CommercialFactValue) {
 function matches(predicate: ConditionPredicate, values: ConditionValues): boolean {
   const actual = values[predicate.dimensionKey];
   if (actual === undefined) return false;
-  if (predicate.op === 'EQ') return same(actual, predicate.value);
-  if (predicate.op === 'NE') return !same(actual, predicate.value);
-  if (predicate.op === 'IN') return predicate.values.some((value) => same(actual, value));
-  if (typeof actual !== 'number') return false;
-  if (predicate.op === 'GT') return actual > predicate.value;
-  if (predicate.op === 'GTE') return actual >= predicate.value;
-  if (predicate.op === 'LT') return actual < predicate.value;
-  return actual <= predicate.value;
+  switch (predicate.op) {
+    case 'EQ': return same(actual, predicate.value);
+    case 'NE': return !same(actual, predicate.value);
+    case 'IN': return predicate.values.some((value) => same(actual, value));
+    case 'GT': return typeof actual === 'number' && actual > predicate.value;
+    case 'GTE': return typeof actual === 'number' && actual >= predicate.value;
+    case 'LT': return typeof actual === 'number' && actual < predicate.value;
+    case 'LTE': return typeof actual === 'number' && actual <= predicate.value;
+  }
 }
 
 function money(amount: number): Money {
