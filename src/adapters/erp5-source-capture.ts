@@ -1,4 +1,4 @@
-import { mapErp5Product, ERP5_PRODUCT_MAPPER_VERSION } from './erp5-product-mapping.js';
+import { mapErp5Product, ERP5_PRODUCT_MAPPER_VERSION, type Erp5PolicyFacts } from './erp5-product-mapping.js';
 import { orderedJsonDigest } from '../shared/stable-digest.js';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
 
@@ -194,6 +194,7 @@ function inspectErp5DeltaBaseline(capture: Erp5SourceCapture) {
 export function inspectErp5Capture(capture: Erp5SourceCapture) {
   assertCaptureEnvelope(capture);
   for (const collection of collections) assertCaptureCollection(capture, collection);
+  const policies = readErp5PolicyFacts(capture);
   const issueCounts: Record<string, number> = {};
   const decodeFailureCounts: Record<string, number> = {};
   let mapped = 0;
@@ -223,7 +224,7 @@ export function inspectErp5Capture(capture: Erp5SourceCapture) {
       const result = mapErp5Product({
         projectId: capture.projectId, collection: 'products', documentId: String(doc.name).split('/').at(-1),
         sourceRevision: `capture:${capture.digest}`, observedAt: new Date(capture.readTime).toISOString(), data
-      });
+      }, { policies });
       if (result.status === 'MAPPED_FOR_REVIEW') mapped++; else held++;
       for (const issue of result.candidate.issues) issueCounts[issue] = (issueCounts[issue] ?? 0) + 1;
     } catch (error) {
@@ -242,6 +243,32 @@ export function inspectErp5Capture(capture: Erp5SourceCapture) {
     duplicatePlateCount, plateChecked, plateUnchecked, metadataTimestampFields, issueCounts,
     remaining: ['UPSTREAM_FRESHNESS_AND_PARITY_UNVERIFIED', 'POLICY_LINKS_UNREVIEWED', 'NO_CANONICAL_WRITE_OR_CONSUMER_CUTOVER']
   };
+}
+
+/** 캡처 안의 정책을 매퍼가 읽을 수 있는 사실로 바꾼다. 값은 정책 문서가 정본이다. */
+export function readErp5PolicyFacts(capture: Erp5SourceCapture): Erp5PolicyFacts[] {
+  const facts: Erp5PolicyFacts[] = [];
+  for (const doc of capture.collections.policy.documents) {
+    let data: ObjectValue;
+    try { data = decodeFields(doc.fields ?? {}); } catch { continue; }
+    const code = typeof data.policy_code === 'string' && data.policy_code.trim()
+      ? data.policy_code.trim()
+      : String(doc.name).slice(`${ERP5_DOCUMENTS}/policy/`.length);
+    const company = typeof data.companyId === 'string' && data.companyId.trim() ? data.companyId.trim()
+      : typeof data.provider_company_code === 'string' && data.provider_company_code.trim() ? data.provider_company_code.trim()
+      : undefined;
+    const mileage = typeof data.annual_mileage === 'number' && Number.isSafeInteger(data.annual_mileage)
+      ? data.annual_mileage : undefined;
+    const age = typeof data.basic_driver_age === 'number' && Number.isSafeInteger(data.basic_driver_age)
+      ? data.basic_driver_age : undefined;
+    facts.push({
+      policyCode: code,
+      ...(company !== undefined ? { companyId: company } : {}),
+      ...(mileage !== undefined ? { annualMileageKm: mileage } : {}),
+      ...(age !== undefined ? { basicDriverAge: age } : {})
+    });
+  }
+  return facts;
 }
 
 export type Erp5CaptureChangeKind = 'ADDED' | 'CHANGED' | 'UNCHANGED' | 'MISSING_FROM_SOURCE';
@@ -478,6 +505,7 @@ export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
   const classify = (reasons: readonly string[]) => reviewAxes
     .filter(([, pattern]) => reasons.some((reason) => pattern.test(reason)))
     .map(([axis]) => axis);
+  const policies = readErp5PolicyFacts(capture);
   const records = capture.collections.products.documents.map((doc) => {
     const documentId = String(doc.name).split('/').at(-1);
     if (!documentId) fail('INVALID_CAPTURE_DOCUMENT');
@@ -489,7 +517,7 @@ export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
         sourceRevision: `capture:${capture.digest}`,
         observedAt: new Date(capture.readTime).toISOString(),
         data: decodeFields(doc.fields ?? {}, true)
-      });
+      }, { policies });
       const holdReasons = [...mapped.candidate.issues].sort();
       return {
         sourceRecordId: documentId,

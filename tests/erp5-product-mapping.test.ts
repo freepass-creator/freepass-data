@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapErp5Product, type Erp5ProductInput } from '../src/adapters/erp5-product-mapping.js';
+import { mapErp5Product, parseErp5PriceKey, resolveErp5Mileage, ERP5_DEFAULT_BASIC_DRIVER_AGE, type Erp5ProductInput } from '../src/adapters/erp5-product-mapping.js';
 
 function fixture(): Erp5ProductInput {
   return {
@@ -76,7 +76,20 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.raw.data).toEqual(input.data);
   });
 
-  it.each(['deposit_note', 'offer_terms', 'adapter_pricing', 'rent_variants', 'rentVariants'])('does not flatten %s into a false zero deposit', field => {
+  it('keeps the deposit a deposit_note merely explains — the amount is already per term', () => {
+    const input = fixture();
+    input.data.price = { '24_3만': { rent: 750000, deposit: 3000000 } };
+    input.data.deposit_note = '연수 × 월대여료';
+    const result = mapErp5Product(input);
+    expect(result.candidate.priceTerms[0]!.depositState).toBe('KNOWN');
+    expect(result.candidate.priceTerms[0]!.deposit).toEqual({ amount: 3000000, currency: 'KRW' });
+    expect(result.candidate.issues).not.toContain('UNKNOWN_DEPOSIT');
+    expect(result.candidate.issues).not.toContain('PRICING_SEMANTICS_REVIEW_REQUIRED:deposit_note');
+    // 메모 자체는 원문에 그대로 남는다 — 쓰지 않는 것과 버리는 것은 다르다.
+    expect(result.raw.data.deposit_note).toBe('연수 × 월대여료');
+  });
+
+  it.each(['offer_terms', 'adapter_pricing', 'rent_variants', 'rentVariants'])('does not flatten %s into a false zero deposit', field => {
     const input = fixture();
     input.data.price = { '24_3만': { rent: 750000, deposit: 0 } };
     input.data[field] = { preserved_rule_or_variant: 'synthetic' };
@@ -124,10 +137,11 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.candidate.issues.filter(x => x.startsWith('SONOGONG'))).toEqual([]);
   });
 
-  it('does not invent a Sonogong bucket or silently repair a commercial type conflict', () => {
+  it('trusts product_type when no bucket exists, and still refuses to repair a conflict when one does', () => {
     const input = fixture();
     input.data.provider_company_code = 'RP012';
-    expect(mapErp5Product(input).candidate.issues).toContain('SONOGONG_CLASSIFICATION_EVIDENCE_MISSING');
+    // 원천에 source_bucket이 더는 없다. 없는 증거를 기다리면 RP012 전량이 멈춘다.
+    expect(mapErp5Product(input).candidate.issues).not.toContain('SONOGONG_CLASSIFICATION_EVIDENCE_MISSING');
     input.data.source_bucket = 'TCAR_EXTERNAL';
     const result = mapErp5Product(input);
     expect(result.candidate.commercialType).toBe('USED_RENT');
@@ -184,15 +198,53 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.raw.data.price).toEqual(input.data.price);
   });
 
-  it('does not guess missing annual mileage, policy links or supplier aliases', () => {
+  it('falls back to the company default mileage but never passes it off as source truth', () => {
     const input = fixture();
     input.data.price = { '24': { rent: 750000, deposit: 0 } };
-    input.data.policy_code = 'synthetic-policy';
     input.data.partner_code = 'different-supplier';
     const result = mapErp5Product(input);
-    expect(result.candidate.issues).toEqual(expect.arrayContaining([
-      'UNKNOWN_MILEAGE_LIMIT', 'POLICY_LINK_REVIEW_REQUIRED', 'SUPPLIER_ALIAS_REVIEW_REQUIRED'
-    ]));
+    expect(result.candidate.priceTerms[0]!.mileageLimitKmPerYear).toBe(30000);
+    // 기본값으로 떨어졌다는 사실 자체가 증거로 남아야 한다.
+    expect(result.candidate.issues).toContain('MILEAGE_FROM_COMPANY_DEFAULT');
+    expect(result.candidate.issues).toContain('SUPPLIER_ALIAS_REVIEW_REQUIRED');
+  });
+
+  it('reads mileage from the policy when the price key does not carry one', () => {
+    const input = fixture();
+    input.data.price = { '24': { rent: 750000, deposit: 0 } };
+    input.data.policy_code = 'P-1';
+    input.data.provider_company_code = 'RP012';
+    const result = mapErp5Product(input, {
+      policies: [{ policyCode: 'P-1', companyId: 'RP012', annualMileageKm: 20000 }]
+    });
+    expect(result.candidate.priceTerms[0]!.mileageLimitKmPerYear).toBe(20000);
+    expect(result.candidate.issues).not.toContain('MILEAGE_FROM_COMPANY_DEFAULT');
+  });
+
+  it('flags a policy code that resolves to another company rather than using it', () => {
+    const input = fixture();
+    input.data.policy_code = 'P-1';
+    input.data.provider_company_code = 'RP012';
+    const result = mapErp5Product(input, {
+      policies: [{ policyCode: 'P-1', companyId: 'RP023', annualMileageKm: 20000 }]
+    });
+    expect(result.candidate.issues).toContain('POLICY_LINK_COMPANY_MISMATCH');
+  });
+
+  it('flags a policy code that resolves to nothing at all', () => {
+    const input = fixture();
+    input.data.policy_code = 'P-없음';
+    const result = mapErp5Product(input, { policies: [{ policyCode: 'P-1', companyId: 'RP012' }] });
+    expect(result.candidate.issues).toContain('POLICY_LINK_NOT_FOUND');
+  });
+
+  it('accepts a buyout term but marks it as a separate product', () => {
+    const input = fixture();
+    input.data.price = { '36_인수형': { rent: 750000, deposit: 0 } };
+    const result = mapErp5Product(input);
+    expect(result.candidate.priceTerms[0]!.termMonths).toBe(36);
+    expect(result.candidate.issues).toContain('BUYOUT_PRODUCT_SEPARATION_REQUIRED');
+    expect(result.candidate.issues).not.toContain('UNSUPPORTED_PRICE_KEY');
   });
 
   it.each(['fee', 'commission', 'fee_memo'])('preserves %s privately and does not infer ZERO from a partial public price', field => {
@@ -250,5 +302,63 @@ describe('ERP5 product mapping preparation', () => {
   it('rejects SDK objects and undefined rather than silently dropping raw fields', () => {
     expect(() => mapErp5Product({ ...fixture(), data: { price: undefined } })).toThrow();
     expect(() => mapErp5Product({ ...fixture(), data: { when: new Date() } })).toThrow();
+  });
+});
+
+describe('주행거리 사슬', () => {
+  const 정책 = (policyCode: string, companyId: string, annualMileageKm?: number) =>
+    (annualMileageKm === undefined ? { policyCode, companyId } : { policyCode, companyId, annualMileageKm });
+
+  it('가격 키에 적혀 있으면 그것이 우선이다', () => {
+    const r = resolveErp5Mileage(20000, 'P-1', 'RP012', [정책('P-1', 'RP012', 30000)]);
+    expect(r).toEqual({ km: 20000, source: 'PRICE_KEY' });
+  });
+
+  it('키에 없으면 그 차의 정책을 읽는다', () => {
+    const r = resolveErp5Mileage(undefined, 'P-1', 'RP012', [정책('P-1', 'RP012', 20000)]);
+    expect(r).toEqual({ km: 20000, source: 'POLICY_CODE' });
+  });
+
+  it('코드가 맞아도 회사가 다르면 그 정책을 쓰지 않는다', () => {
+    const r = resolveErp5Mileage(undefined, 'P-1', 'RP012', [정책('P-1', 'RP023', 20000)]);
+    expect(r.source).toBe('DEFAULT');
+  });
+
+  it('정책 코드가 없고 회사 정책이 하나뿐이면 그것을 쓴다', () => {
+    const r = resolveErp5Mileage(undefined, undefined, 'RP032', [
+      정책('P-9', 'RP032', 25000), 정책('P-1', 'RP012', 20000)
+    ]);
+    expect(r).toEqual({ km: 25000, source: 'COMPANY_SOLE_POLICY' });
+  });
+
+  it('회사 정책이 둘 이상이면 고르지 않는다 — 추측하지 않는다', () => {
+    const r = resolveErp5Mileage(undefined, undefined, 'RP012', [
+      정책('P-1', 'RP012', 20000), 정책('P-2', 'RP012', 30000)
+    ]);
+    expect(r.source).toBe('DEFAULT');
+  });
+
+  it('아무것도 없으면 3만km가 기본이다', () => {
+    expect(resolveErp5Mileage(undefined, undefined, undefined, [])).toEqual({ km: 30000, source: 'DEFAULT' });
+    expect(ERP5_DEFAULT_BASIC_DRIVER_AGE).toBe(26);
+  });
+});
+
+describe('가격 키 읽기', () => {
+  it('기간만 있는 키', () => {
+    expect(parseErp5PriceKey('36')).toEqual({ months: 36, settlement: 'RETURN' });
+  });
+  it('주행거리가 붙은 키', () => {
+    expect(parseErp5PriceKey('24_2만')).toEqual({ months: 24, mileageKm: 20000, settlement: 'RETURN' });
+    expect(parseErp5PriceKey('12_3만')).toEqual({ months: 12, mileageKm: 30000, settlement: 'RETURN' });
+  });
+  it('인수형은 별도 상품이므로 정산 방식으로 갈라 둔다', () => {
+    expect(parseErp5PriceKey('36_인수형')).toEqual({ months: 36, settlement: 'BUYOUT' });
+    expect(parseErp5PriceKey('12_인수형')).toEqual({ months: 12, settlement: 'BUYOUT' });
+  });
+  it('모르는 꼴은 지어내지 않는다', () => {
+    for (const bad of ['', '0', '월정액', '36_', '_2만', '36_2', 'abc', '36_0만']) {
+      expect(parseErp5PriceKey(bad)).toBeUndefined();
+    }
   });
 });
