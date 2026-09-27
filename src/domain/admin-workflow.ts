@@ -105,7 +105,7 @@ const field = (value: unknown) =>
 export function assertAdminWorkflowReadSpec(value: unknown): asserts value is AdminWorkflowReadSpec {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_ADMIN_WORKFLOW_READ');
   const v = value as Record<string, unknown>;
-  if (!(v.resource && v.resource in ADMIN_WORKFLOW_RESOURCES)) throw new Error('INVALID_ADMIN_WORKFLOW_RESOURCE');
+  if (typeof v.resource !== 'string' || !(v.resource in ADMIN_WORKFLOW_RESOURCES)) throw new Error('INVALID_ADMIN_WORKFLOW_RESOURCE');
   if (v.kind === 'doc') {
     if (!id(v.id)) throw new Error('INVALID_ADMIN_WORKFLOW_DOCUMENT_ID');
     return;
@@ -146,7 +146,7 @@ export function assertAdminWorkflowCommitRequest(value: unknown): asserts value 
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('INVALID_ADMIN_WORKFLOW_MUTATION');
     const m = raw as Record<string, unknown>;
     if (!['set', 'update', 'create'].includes(String(m.op))) throw new Error('INVALID_ADMIN_WORKFLOW_MUTATION');
-    if (!(m.resource && m.resource in ADMIN_WORKFLOW_RESOURCES) || !id(m.id)) {
+    if (typeof m.resource !== 'string' || !(m.resource in ADMIN_WORKFLOW_RESOURCES) || !id(m.id)) {
       throw new Error('INVALID_ADMIN_WORKFLOW_MUTATION');
     }
     if (!m.data || typeof m.data !== 'object' || Array.isArray(m.data)) throw new Error('INVALID_ADMIN_WORKFLOW_MUTATION');
