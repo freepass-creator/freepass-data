@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { getFirestore, type Firestore, type Query, type Transaction } from 'firebase-admin/firestore';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
+import type { AdminWorkflowStore } from '../ports/admin-workflow.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import {
   ADMIN_WORKFLOW_RESOURCES,
@@ -90,11 +91,6 @@ function applyMutation(
 function receiptId(consumerId: string, operationId: string) {
   return 'awr_' + createHash('sha256').update(consumerId + '|' + operationId).digest('hex').slice(0, 40);
 }
-
-export type AdminWorkflowStore = {
-  read(spec: AdminWorkflowReadSpec): Promise<AdminWorkflowReadResult>;
-  commit(consumerId: string, request: AdminWorkflowCommitRequest): Promise<AdminWorkflowCommitReceipt>;
-};
 
 export function adminWorkflowStore(db: Firestore): AdminWorkflowStore {
   return {
