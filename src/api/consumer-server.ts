@@ -10,6 +10,7 @@ const app = createConsumerGateway(
   runtime.projection,
   bindings,
   runtime.access,
-  runtime.health
+  runtime.health,
+  runtime.compat
 );
 await app.listen({ port: Number(process.env.PORT ?? 8787), host: process.env.HOST ?? '127.0.0.1' });

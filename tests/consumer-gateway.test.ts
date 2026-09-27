@@ -11,6 +11,7 @@ const binding = { id: 'erp-com', projectionId: 'erp-public' as const, token };
 const url = '/v1/consumers/erp-com/catalog';
 const headers = { authorization: `Bearer ${token}` };
 const healthUrl = '/v1/consumers/erp-com/catalog-health';
+const compatUrl = '/v1/consumers/erp-com/catalog-compat';
 const healthBinding: ConsumerBinding = {
   ...binding,
   capabilities: ['catalog', 'catalog-health']
@@ -19,13 +20,14 @@ const healthBinding: ConsumerBinding = {
 const withAccess = (
   store: Parameters<typeof createConsumerGateway>[0],
   bindings: ConsumerBinding[],
-  healthStore?: Parameters<typeof createConsumerGateway>[3]
+  healthStore?: Parameters<typeof createConsumerGateway>[3],
+  compatReader?: Parameters<typeof createConsumerGateway>[4]
 ) => {
   const logs = new MemoryDataAccessLogStore();
   const access = new DataAccessGateway(logs);
   return {
     logs,
-    app: createConsumerGateway(store, bindings, access, healthStore)
+    app: createConsumerGateway(store, bindings, access, healthStore, compatReader)
   };
 };
 
@@ -48,6 +50,60 @@ describe('read-only consumer gateway', () => {
     )).toBe(true);
     await app.close();
   });
+  it('keeps the compatibility bridge behind consumer authentication and Data Access audit', async () => {
+    let reads = 0;
+    const compat = {
+      read: async (consumerId: string) => {
+        reads += 1;
+        return {
+          schema: 'freepass-data.catalog-compat/v1' as const,
+          data: {
+            products: { P1: { _key: 'P1', product_code: 'P1' } },
+            policies: { POL1: { _key: 'POL1', policy_code: 'POL1' } },
+            partners: {},
+            users: {},
+          },
+          meta: {
+            consumerId,
+            authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE' as const,
+            sourceProject: 'freepasserp5' as const,
+            observedAt: '2026-09-27T00:00:00.000Z',
+            collectionCounts: { products: 1, policy: 1, partner: 0, user: 0 },
+          },
+        };
+      },
+    };
+
+    const { app, logs } = withAccess(
+      { getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] },
+      [binding],
+      undefined,
+      compat,
+    );
+
+    expect((await app.inject({ url: compatUrl })).statusCode).toBe(401);
+    expect(reads).toBe(0);
+
+    const result = await app.inject({ url: compatUrl, headers });
+    expect(result.statusCode).toBe(200);
+    expect(result.json()).toMatchObject({
+      schema: 'freepass-data.catalog-compat/v1',
+      meta: {
+        consumerId: 'erp-com',
+        authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE',
+        sourceProject: 'freepasserp5',
+      },
+    });
+    expect(reads).toBe(1);
+    expect(logs.events.at(-1)).toMatchObject({
+      mode: 'READ',
+      phase: 'SUCCEEDED',
+      operation: 'READ_CONSUMER_CATALOG_COMPAT',
+      result: { count: 1 },
+    });
+    await app.close();
+  });
+
   it('returns HOLD instead of demo data when the operational release is absent', async () => {
     const { app } = withAccess(new MemoryDataStore(), [binding]);
     const result = await app.inject({ url, headers });
