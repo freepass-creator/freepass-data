@@ -33,13 +33,18 @@ export const CONDITION_DIMENSION_SPECS: DimensionSpec[] = [
     mayAffect: ['MONTHLY_RENT', 'ELIGIBILITY'],
   },
   {
-    key: 'driver_scope', label: '운전자 범위', group: 'DRIVER', valueType: 'ENUM', role: 'PRICE_INPUT',
-    sourcePolicyKeys: ['personal_driver_scope', 'business_driver_scope'],
+    key: 'personal_driver_scope', label: '개인 운전자 범위', group: 'DRIVER', valueType: 'ENUM', role: 'PRICE_INPUT',
+    sourcePolicyKeys: ['personal_driver_scope'], defaultPolicyKey: 'personal_driver_scope',
+    mayAffect: ['MONTHLY_RENT', 'ELIGIBILITY'],
+  },
+  {
+    key: 'business_driver_scope', label: '법인 운전자 범위', group: 'DRIVER', valueType: 'ENUM', role: 'PRICE_INPUT',
+    sourcePolicyKeys: ['business_driver_scope'], defaultPolicyKey: 'business_driver_scope',
     mayAffect: ['MONTHLY_RENT', 'ELIGIBILITY'],
   },
   {
     key: 'license_period', label: '면허 경력', group: 'DRIVER', valueType: 'ENUM', role: 'ELIGIBILITY',
-    sourcePolicyKeys: ['license_period'], mayAffect: ['ELIGIBILITY'],
+    sourcePolicyKeys: ['license_period'], defaultPolicyKey: 'license_period', mayAffect: ['ELIGIBILITY'],
   },
   {
     key: 'insurance_included', label: '보험 포함 여부', group: 'INSURANCE', valueType: 'ENUM', role: 'PRICE_INPUT',
