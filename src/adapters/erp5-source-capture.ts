@@ -365,6 +365,83 @@ export function profileErp5CaptureFields(capture: Erp5SourceCapture, collection:
   return { collection, documentCount: documents.length, fieldPathCount: fields.length, fields };
 }
 
+/**
+ * Turns the mapping holds into answerable questions.
+ *
+ * Every product is on hold, but not for 1,659 different reasons — a handful of
+ * undecided meanings are applied across the whole set. Deciding them needs to know
+ * what the source actually contains, and the non-sensitive summary does not carry it.
+ *
+ * Only enumerable codes and keys leave here: price-term keys, bucket and type codes,
+ * and counts. Free text (deposit notes, names, plates) is counted, never quoted —
+ * a note field can hold anything, including a customer's words.
+ */
+export function summarizeErp5DecisionInputs(capture: Erp5SourceCapture) {
+  inspectErp5Capture(capture);
+  const tally = new Map<string, Map<string, number>>();
+  const add = (group: string, key: string) => {
+    const bucket = tally.get(group) ?? new Map<string, number>();
+    bucket.set(key, (bucket.get(key) ?? 0) + 1);
+    tally.set(group, bucket);
+  };
+  const out = (group: string) => Object.fromEntries(
+    [...(tally.get(group) ?? new Map())].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  );
+
+  const policyIds = new Set(capture.collections.policy.documents.map(
+    (doc) => String(doc.name).slice(`${ERP5_DOCUMENTS}/policy/`.length)
+  ));
+  const freeTextFields = ['deposit_note', 'offer_terms', 'adapter_pricing', 'rent_variants',
+    'rentVariants', 'deposit', 'pricing_rules', 'quotes'];
+  const freeText: Record<string, number> = {};
+  let policyMatched = 0, policyUnmatched = 0, policyAbsent = 0;
+
+  for (const doc of capture.collections.products.documents) {
+    let data: ObjectValue;
+    try { data = decodeFields(doc.fields ?? {}, true); } catch { add('undecodable', 'DECODE_FAILED'); continue; }
+
+    add('productType', typeof data.product_type === 'string' ? data.product_type : '(없음)');
+    add('sourceBucket', typeof data.source_bucket === 'string' ? data.source_bucket : '(없음)');
+    add('providerCompanyCode', typeof data.provider_company_code === 'string' ? data.provider_company_code : '(없음)');
+
+    // A policy link is only a decision if the code actually resolves to a policy document.
+    const code = typeof data.policy_code === 'string' ? data.policy_code.trim() : '';
+    if (!code) policyAbsent++;
+    else if (policyIds.has(code)) policyMatched++;
+    else policyUnmatched++;
+
+    for (const field of freeTextFields) {
+      if (Object.hasOwn(data, field) && data[field] !== null && data[field] !== '') {
+        freeText[field] = (freeText[field] ?? 0) + 1;
+      }
+    }
+
+    const price = object(data.price) ? data.price : {};
+    if (!Object.keys(price).length) add('priceKeyShape', '(가격 없음)');
+    for (const key of Object.keys(price)) {
+      const parsed = /^([1-9]\d*)(?:_([1-9]\d*)만)?$/.exec(key);
+      add('priceKeyShape', !parsed ? '해석 불가' : parsed[2] ? '개월_주행거리' : '개월만');
+      add('priceKey', key);
+      const terms = object(price[key]) ? (price[key] as ObjectValue) : {};
+      for (const termField of Object.keys(terms)) add('priceTermField', termField);
+    }
+  }
+
+  return {
+    version: 'erp5-decision-inputs/1' as const,
+    documentCount: capture.collections.products.count,
+    productType: out('productType'),
+    sourceBucket: out('sourceBucket'),
+    providerCompanyCode: out('providerCompanyCode'),
+    priceKeyShape: out('priceKeyShape'),
+    priceKey: out('priceKey'),
+    priceTermField: out('priceTermField'),
+    freeTextFieldPresence: freeText,
+    policyLink: { matched: policyMatched, unmatched: policyUnmatched, absent: policyAbsent, policyDocuments: policyIds.size },
+    undecodable: out('undecodable')
+  };
+}
+
 export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
   const inspection = inspectErp5Capture(capture);
   const reviewAxes = [
@@ -477,6 +554,7 @@ export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
     reviewAxisCounts,
     reviewComplexityCounts,
     fieldProfile: profileErp5CaptureFields(capture, 'products'),
+    decisionInputs: summarizeErp5DecisionInputs(capture),
     records
   };
   if (unsigned.counts.candidates !== inspection.products) fail('DRY_RUN_COVERAGE_MISMATCH');

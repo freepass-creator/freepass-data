@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { buildErp5CanonicalDryRun, captureErp5Source, compareErp5ProductCaptures, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, profileErp5CaptureFields, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
+import { buildErp5CanonicalDryRun, captureErp5Source, compareErp5ProductCaptures, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, profileErp5CaptureFields, summarizeErp5DecisionInputs, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
 const readTime = '2026-09-21T10:00:00.123456Z';
 function doc(collection = 'products', id = 'synthetic') {
   return {
@@ -368,5 +368,85 @@ describe('network boundary', () => {
     const rpc = erp5ReadTransport('synthetic-token', fetcher as typeof fetch);
     await expect((rpc as any)('commit', { writes: [] })).rejects.toThrow('FORBIDDEN_RPC');
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('decision inputs', () => {
+  const product = (id: string, fields: Record<string, unknown>) => ({
+    name: `${ERP5_DOCUMENTS}/products/${id}`,
+    createTime: '2026-09-01T00:00:00.000000Z',
+    updateTime: '2026-09-01T00:00:00.000000Z',
+    fields
+  });
+  const s = (stringValue: string) => ({ stringValue });
+  const map = (fields: Record<string, unknown>) => ({ mapValue: { fields } });
+
+  function captureOf(products: unknown[], policyIds: string[] = []) {
+    const unsigned = {
+      version: 'erp5-source-capture/1' as const,
+      projectId: 'freepasserp5' as const,
+      databaseId: '(default)' as const,
+      consistency: 'READ_ONLY_TRANSACTION' as const,
+      readTime: '2026-09-27T00:00:00.000000Z',
+      capturedAt: '2026-09-27T00:00:01.000Z',
+      collections: {
+        products: { count: products.length, documents: products },
+        policy: {
+          count: policyIds.length,
+          documents: policyIds.map((id) => ({
+            name: `${ERP5_DOCUMENTS}/policy/${id}`,
+            createTime: '2026-09-01T00:00:00.000000Z',
+            updateTime: '2026-09-01T00:00:00.000000Z',
+            fields: {}
+          }))
+        },
+        partner: { count: 0, documents: [] }
+      }
+    };
+    return { ...unsigned, digest: createHash('sha256').update(JSON.stringify(unsigned)).digest('hex') } as never;
+  }
+
+  it('counts the codes that decisions depend on', () => {
+    const result = summarizeErp5DecisionInputs(captureOf([
+      product('a', { product_type: s('구독'), source_bucket: s('SON_NO_KONG'), provider_company_code: s('RP012') }),
+      product('b', { product_type: s('구독'), source_bucket: s('TCAR_EXTERNAL'), provider_company_code: s('RP012') }),
+      product('c', { product_type: s('렌트'), provider_company_code: s('RP023') })
+    ]));
+    expect(result.productType).toEqual({ 구독: 2, 렌트: 1 });
+    expect(result.sourceBucket).toEqual({ SON_NO_KONG: 1, TCAR_EXTERNAL: 1, '(없음)': 1 });
+    expect(result.providerCompanyCode).toEqual({ RP012: 2, RP023: 1 });
+  });
+
+  it('separates price keys that carry a mileage limit from those that do not', () => {
+    const result = summarizeErp5DecisionInputs(captureOf([
+      product('a', { price: map({ '36': map({ rent: { integerValue: '500000' } }) }) }),
+      product('b', { price: map({ '36_2만': map({ rent: { integerValue: '520000' } }) }) }),
+      product('c', { price: map({ '월정액': map({ rent: { integerValue: '400000' } }) }) }),
+      product('d', {})
+    ]));
+    expect(result.priceKeyShape).toEqual({ 개월만: 1, 개월_주행거리: 1, '해석 불가': 1, '(가격 없음)': 1 });
+    expect(result.priceKey['36_2만']).toBe(1);
+    expect(result.priceTermField).toEqual({ rent: 3 });
+  });
+
+  it('says whether a policy code actually resolves to a policy document', () => {
+    const result = summarizeErp5DecisionInputs(captureOf([
+      product('a', { policy_code: s('P-1') }),
+      product('b', { policy_code: s('P-1') }),
+      product('c', { policy_code: s('P-없음') }),
+      product('d', {})
+    ], ['P-1', 'P-2']));
+    expect(result.policyLink).toEqual({ matched: 2, unmatched: 1, absent: 1, policyDocuments: 2 });
+  });
+
+  it('counts free text without ever quoting it', () => {
+    const secret = '고객 김철수 요청: 보증금 면제';
+    const result = summarizeErp5DecisionInputs(captureOf([
+      product('a', { deposit_note: s(secret) }),
+      product('b', { deposit_note: s('다른 메모'), quotes: s('견적 메모') })
+    ]));
+    expect(result.freeTextFieldPresence).toEqual({ deposit_note: 2, quotes: 1 });
+    expect(JSON.stringify(result)).not.toContain('김철수');
+    expect(JSON.stringify(result)).not.toContain('보증금 면제');
   });
 });
