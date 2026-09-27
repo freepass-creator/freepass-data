@@ -26,12 +26,16 @@ export type CommercialProductView = {
     plateNumber?: string | null;
     odometerKm?: number | null;
   };
-  rentalRates: Array<{
+  rentalTerms: Array<{
     termKey: string;
     termMonths: number;
     mileageKmPerYear?: number;
     isDefaultMileage: boolean;
     monthlyRent: Money;
+    deposit: {
+      state: 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
+      amount?: Money;
+    };
   }>;
   policy: {
     policyId?: string;
@@ -39,11 +43,6 @@ export type CommercialProductView = {
     facts: CommercialFact[];
   };
   contractConditions: {
-    depositByTerm: Array<{
-      termKey: string;
-      state: 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
-      amount?: Money;
-    }>;
     facts: CommercialFact[];
   };
   review: {
