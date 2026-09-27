@@ -4,6 +4,19 @@ import { planPresentation, specification as spec } from '../scripts/sheet-presen
 const at='2026-09-21T07:28:00Z';
 const opts={workbook:'F86',updatedAt:at,now:Date.parse(at)};
 const cell=s=>({userEnteredValue:{stringValue:s}});
+test('FreePass Data owns one semantic color palette for every Google Sheets consumer',()=>{
+  const colors=spec.appearance.semanticColors;
+  assert.equal(colors.policy,'one_freepass_data_palette_for_all_google_sheets');
+  assert.equal(colors.consumerOverridesForbidden,true);
+  assert.deepEqual(colors.productTypeText,{
+    신차렌트:'#FF00FF',중고렌트:'#0D706B',중고구독:'#6B3DB3',신차구독:'#474D57',픽업구독:'#C2185B',오공구독:'#5B21B6',오플구독:'#A16207'
+  });
+  assert.deepEqual(colors.availabilityText,{
+    즉시출고:'#0000FF',출고가능:'#0000FF',상품화중:'#FF9900',출고협의:'#FF9900',계약중:'#999999',출고불가:'#999999'
+  });
+  assert.equal(colors.missingText,'#B7B7B7');
+  assert.equal(colors.linkText,'#1155CC');
+});
 function fixture(){
   const sheets=spec.workbooks.F86.primarySheetIds.map((id,i)=>({properties:{sheetId:id,title:`legacy-${i}`,index:i,gridProperties:{rowCount:10,columnCount:7,frozenRowCount:1}},data:[{rowData:[{values:['차량번호','차명(원문)','옵션(원문)','단기보증','장기보증','12개월','24개월'].map(cell)},{values:[`TEST-${i}`,'raw-name','raw-options','100','100','100','100'].map(cell)}],columnMetadata:[{pixelSize:80},{pixelSize:80},{pixelSize:80},{pixelSize:80},{pixelSize:80,hiddenByUser:true},{pixelSize:80},{pixelSize:80,hiddenByUser:true}]}]}));
   for(const s of sheets)while(s.data[0].rowData.length<10)s.data[0].rowData.push({values:[]});
