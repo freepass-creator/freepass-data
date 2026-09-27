@@ -18,8 +18,8 @@ export function buildDefaultProductConditionSelection(
   policy?: Policy,
 ): { selection: ProductConditionSelection; decisions: string[]; invalidFacts: string[] } {
   const commercial = resolveOfferCommercialTerms(offer, policy);
-  const decisions = [...commercial.decisions];
-  const invalidFacts = [...commercial.invalidFacts];
+  const decisions: string[] = [];
+  const invalidFacts: string[] = [];
   const availableTerms = uniqueSorted(commercial.terms.map((term) => term.termMonths));
 
   let termMonths: number | undefined;
@@ -61,30 +61,67 @@ export function evaluateProductConditions(
   selection: ProductConditionSelection,
 ): ProductPriceResult {
   const commercial = resolveOfferCommercialTerms(offer, policy);
-  const decisions = [...commercial.decisions];
-  const invalidFacts = [...commercial.invalidFacts];
 
-  if (!selection.termMonths) decisions.push('TERM_SELECTION_REQUIRED');
-  if (!selection.mileageKmPerYear) decisions.push('MILEAGE_SELECTION_REQUIRED');
+  if (!selection.termMonths) {
+    return {
+      status: 'NEEDS_DECISION',
+      selection: structuredClone(selection),
+      decisions: ['TERM_SELECTION_REQUIRED'],
+      invalidFacts: [],
+    };
+  }
+
+  const selectedMonths = selection.termMonths;
+
+  if (!selection.mileageKmPerYear) {
+    return {
+      status: 'NEEDS_DECISION',
+      selection: structuredClone(selection),
+      decisions: ['MILEAGE_SELECTION_REQUIRED'],
+      invalidFacts: [],
+    };
+  }
+
+  const selectedMileage = selection.mileageKmPerYear;
 
   const basis = commercial.terms.find((term) =>
-    selection.termMonths !== undefined &&
-    selection.mileageKmPerYear !== undefined &&
-    term.termMonths === selection.termMonths &&
+    term.termMonths === selectedMonths &&
     term.mileage.state === 'KNOWN' &&
-    term.mileage.kmPerYear === selection.mileageKmPerYear
+    term.mileage.kmPerYear === selectedMileage
   );
 
-  if (selection.termMonths && selection.mileageKmPerYear && !basis) {
+  const selectedTermKey = basis?.termKey;
+  const termDecisionCodes = new Set(['DEPOSIT_REQUIRED', 'MILEAGE_REQUIRED']);
+  const termInvalidCodes = new Set([
+    'DEPOSIT_NOT_APPLICABLE_WITH_AMOUNT',
+    'UNKNOWN_DEPOSIT_WITH_AMOUNT',
+    'INVALID_DEPOSIT_AMOUNT',
+    'ZERO_DEPOSIT_WITH_NONZERO_AMOUNT',
+    'KNOWN_DEPOSIT_WITH_ZERO_AMOUNT',
+    'INVALID_TERM_MILEAGE',
+  ]);
+  const decisions = commercial.decisions.filter((item) => {
+    const [code, suffix] = item.split(':', 2);
+    if (termDecisionCodes.has(code!)) return !!selectedTermKey && suffix === selectedTermKey;
+    if (code === 'DEFAULT_MILEAGE_PRICE_MISSING') return Number(suffix) === selectedMonths;
+    return true;
+  });
+  const invalidFacts = commercial.invalidFacts.filter((item) => {
+    const [code, suffix] = item.split(':', 2);
+    if (termInvalidCodes.has(code!)) return !!selectedTermKey && suffix === selectedTermKey;
+    return true;
+  });
+
+  if (!basis) {
     const defaultMileage = commercial.defaultMileage.state === 'KNOWN'
       ? commercial.defaultMileage.kmPerYear
       : undefined;
     const defaultBasis = commercial.terms.find((term) =>
-      term.termMonths === selection.termMonths &&
+      term.termMonths === selectedMonths &&
       term.mileage.state === 'KNOWN' &&
       term.mileage.kmPerYear === defaultMileage
     );
-    if (defaultBasis && selection.mileageKmPerYear > (defaultMileage ?? 0)
+    if (defaultBasis && selectedMileage > (defaultMileage ?? 0)
       && policy?.facts.mileage_upcharge_per_10000km !== undefined) {
       decisions.push('MILEAGE_PRICE_ADJUSTMENT_REQUIRED');
     } else {
