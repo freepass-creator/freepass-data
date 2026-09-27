@@ -1,0 +1,98 @@
+name: Deploy FreePass Data read runtime
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: freepass-data-read-runtime-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PROJECT_ID: freepasserp5
+      REGION: ${{ vars.FREEPASS_DATA_READ_REGION }}
+      SERVICE_NAME: ${{ vars.FREEPASS_DATA_READ_SERVICE_NAME }}
+      ARTIFACT_REPOSITORY: ${{ vars.FREEPASS_DATA_ARTIFACT_REPOSITORY }}
+      RUNTIME_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_RUNTIME_SERVICE_ACCOUNT }}
+      CONSUMERS_SECRET_NAME: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_NAME }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail closed until bootstrap is complete
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n '${{ vars.FREEPASS_DATA_DEPLOY_WIF_PROVIDER }}'
+          test -n '${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}'
+          test -n "$REGION"
+          test -n "$SERVICE_NAME"
+          test -n "$ARTIFACT_REPOSITORY"
+          test -n "$RUNTIME_SERVICE_ACCOUNT"
+          test -n "$CONSUMERS_SECRET_NAME"
+
+      - name: Authenticate deploy identity
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.FREEPASS_DATA_DEPLOY_WIF_PROVIDER }}
+          service_account: ${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: '579.0.0'
+
+      - name: Verify required APIs are already enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          enabled="$(gcloud services list --enabled --project="$PROJECT_ID" --format='value(config.name)')"
+          for api in run.googleapis.com artifactregistry.googleapis.com iamcredentials.googleapis.com sts.googleapis.com secretmanager.googleapis.com; do
+            grep -qx "$api" <<<"$enabled" || {
+              echo "::error::Required API is not enabled: $api"
+              exit 1
+            }
+          done
+
+      - name: Build immutable container
+        shell: bash
+        run: |
+          set -euo pipefail
+          registry="$REGION-docker.pkg.dev"
+          image="$registry/$PROJECT_ID/$ARTIFACT_REPOSITORY/freepass-data-read:$GITHUB_SHA"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build --pull --tag "$image" .
+          docker push "$image"
+
+      - name: Deploy private read-only service
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --platform=managed             --image="$IMAGE"             --service-account="$RUNTIME_SERVICE_ACCOUNT"             --ingress=all             --no-allow-unauthenticated             --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5"             --set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:latest"             --quiet
+
+      - name: Verify service readiness metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --format='value(status.url)')"
+          ready="$(gcloud run services describe "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --format='value(status.conditions[0].status)')"
+          test -n "$url"
+          test "$ready" = "True"
+          {
+            echo '## FreePass Data read runtime deployed'
+            echo
+            echo "Service: $SERVICE_NAME"
+            echo "Region: $REGION"
+            echo "URL: $url"
+            echo "Image: $IMAGE"
+            echo
+            echo 'Next: hand this URL to FreePassERP I-01, configure Vercel OIDC caller IAM, then switch ERP.com to OBSERVE.'
+          } >> "$GITHUB_STEP_SUMMARY"
