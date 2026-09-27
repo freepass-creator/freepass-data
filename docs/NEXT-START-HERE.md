@@ -1,11 +1,21 @@
 # FreePass Data — NEXT START HERE
 
-Status: **ACTIVE / CATALOG V1 EXECUTABLE BASELINE**  
-Official project name: **프리패스 데이터 / FreePass Data**  
-Repository: `freepass-creator/freepass-data`  
-Verified baseline before this handoff update: `adbbfca7c0ddc4e6c7c1906765d9b5aacccd3f4c`
-Branch: `codex/local-runtime-baseline`
-Date: 2026-09-22
+Status: **ACTIVE / CLOSURE EXECUTION**
+Official project name: **프리패스 데이터 / FreePass Data**
+Repository: `freepass-creator/freepass-data`
+Verified baseline before this handoff update: `28d46e1f8d14a3a08d86586dae535838e4d123cd`
+Branch: `main`
+Date: 2026-09-27
+
+## 2026-09-27 closure entrypoint
+
+FreePass Data를 계속 확장하지 않고 운영 기반을 닫는 현재 계획과 무료 ChatGPT/Codex 작업 분담은
+[`PROJECT-CLOSURE-AND-FREE-CHAT-HANDOFF.md`](./PROJECT-CLOSURE-AND-FREE-CHAT-HANDOFF.md)를 따른다.
+
+현재 첫 게이트는 private Cloud Run read runtime의 GCP bootstrap과 실제 readback이다. 최신 main에는
+배포 workflow가 있으나 GitHub deploy WIF/서비스 계정/region/service/Artifact Registry/runtime identity/
+consumer secret 설정이 없어 run `36317333170`이 fail-closed됐다. 운영 변경 전 GCP 현재 상태를 다시 읽고
+변경안·rollback을 제시한 뒤 사용자 직전 승인을 받는다.
 
 ## 2026-09-26 FreePass Data internal consolidation
 
