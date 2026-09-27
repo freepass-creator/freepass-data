@@ -2,6 +2,7 @@ import { expect, test } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
 import schema from '../contracts/admin-catalog-view-v1.schema.json' with { type: 'json' };
+import commercialSchema from '../contracts/commercial-offer-view-v1.schema.json' with { type: 'json' };
 
 const addFormats = (
   typeof addFormatsModule === 'function'
@@ -11,6 +12,7 @@ const addFormats = (
 
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 addFormats(ajv);
+ajv.addSchema(commercialSchema);
 const validate = ajv.compile(schema);
 
 const sample = {
@@ -30,6 +32,8 @@ const sample = {
     policyParity: 'COMPLETE',
     missingPolicyOfferIds: [],
     invalidPolicyFactRefs: [],
+    commercialCoverage: 'COMPLETE',
+    commercialMissingOfferIds: [],
   },
   data: [{
     productId: 'product-1',
