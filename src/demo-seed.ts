@@ -79,6 +79,27 @@ export async function seedDemoCatalog(store: CatalogStore) {
       depositState: 'KNOWN',
       mileageLimitKmPerYear: 20000
     }],
+    internalEconomicsTerms: [{
+      termKey: '36@20000',
+      depositCalculation: {
+        state: 'KNOWN',
+        amount: { amount: 3000000, currency: 'KRW' },
+        calculation: { kind: 'FIXED', amount: { amount: 3000000, currency: 'KRW' } },
+        sourceRefs: ['demo:priceTerms.36@20000.deposit']
+      },
+      supplierBillingFee: {
+        state: 'ZERO',
+        amount: { amount: 0, currency: 'KRW' },
+        calculation: { kind: 'FIXED', amount: { amount: 0, currency: 'KRW' } },
+        sourceRefs: ['demo:internalEconomicsTerms.36@20000.supplierBillingFee']
+      },
+      channelPayoutFee: {
+        state: 'ZERO',
+        amount: { amount: 0, currency: 'KRW' },
+        calculation: { kind: 'FIXED', amount: { amount: 0, currency: 'KRW' } },
+        sourceRefs: ['demo:internalEconomicsTerms.36@20000.channelPayoutFee']
+      }
+    }],
     ...meta('lin_offer_gv70')
   };
 
