@@ -1,11 +1,21 @@
 # FreePass Data — Catalog V1 Implementation Status
 
-Status: **ACTIVE / EXECUTABLE BASELINE**  
+Status: **READ-ONLY OPERATIONS v1.0 / EXECUTABLE BASELINE**
 Approved scope: **CATALOG V1 ONLY**  
 Architecture baseline: [ARCHITECTURE-V2-APPROVED.md](./ARCHITECTURE-V2-APPROVED.md)  
 Recovery handoff: [NEXT-START-HERE.md](./NEXT-START-HERE.md)
 
 ## Confirmed on main
+
+Operational baseline verified 2026-09-28:
+
+- private Cloud Run `freepass-data-read` is Ready in `asia-northeast3`;
+- immutable main image, WIF deploy, service-scoped deploy IAM and secret-backed consumer auth are active;
+- unauthenticated request returns 403;
+- authenticated `erp-com/catalog-compat` returns 200 with contract readback;
+- read-only means no business-data mutation; an explicit code-bounded Firestore create permission remains only
+  for immutable Data Access audit-event append, because Firestore IAM cannot scope entity create to one collection;
+- this does not create or approve a Canonical ACTIVE release and does not cut over any consumer.
 
 Implemented:
 

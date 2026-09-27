@@ -2,6 +2,10 @@ name: Deploy FreePass Data read runtime
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/read-runtime-deploy.trigger"
 
 concurrency:
   group: freepass-data-read-runtime-deploy
@@ -10,6 +14,7 @@ concurrency:
 permissions:
   contents: read
   id-token: write
+  issues: write
 
 jobs:
   deploy:
@@ -53,6 +58,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "READ_RUNTIME_APIS_READY=false" >> "$GITHUB_ENV"
           enabled="$(gcloud services list --enabled --project="$PROJECT_ID" --format='value(config.name)')"
           for api in run.googleapis.com artifactregistry.googleapis.com iamcredentials.googleapis.com sts.googleapis.com secretmanager.googleapis.com; do
             grep -qx "$api" <<<"$enabled" || {
@@ -60,6 +66,7 @@ jobs:
               exit 1
             }
           done
+          echo "READ_RUNTIME_APIS_READY=true" >> "$GITHUB_ENV"
 
       - name: Build immutable container
         shell: bash
@@ -68,24 +75,51 @@ jobs:
           registry="$REGION-docker.pkg.dev"
           image="$registry/$PROJECT_ID/$ARTIFACT_REPOSITORY/freepass-data-read:$GITHUB_SHA"
           echo "IMAGE=$image" >> "$GITHUB_ENV"
-          gcloud auth configure-docker "$registry" --quiet
-          docker build --pull --tag "$image" .
-          docker push "$image"
+          if gcloud artifacts docker images describe "$image" \
+            --project="$PROJECT_ID" --format='value(image_summary.digest)' | grep -q '^sha256:'; then
+            echo "Reusing existing immutable image for $GITHUB_SHA"
+          else
+            gcloud auth configure-docker "$registry" --quiet
+            docker build --pull --tag "$image" .
+            docker push "$image"
+          fi
 
       - name: Deploy private read-only service
         shell: bash
         run: |
           set -euo pipefail
-          gcloud run deploy "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --platform=managed             --image="$IMAGE"             --service-account="$RUNTIME_SERVICE_ACCOUNT"             --ingress=all             --no-allow-unauthenticated             --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5"             --set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:latest"             --quiet
+          gcloud run deploy "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --platform=managed             --image="$IMAGE"             --service-account="$RUNTIME_SERVICE_ACCOUNT"             --ingress=all             --max-instances=10             --no-allow-unauthenticated             --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5"             --set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:latest"             --quiet
 
       - name: Verify service readiness metadata
+        id: readiness
         shell: bash
         run: |
           set -euo pipefail
-          url="$(gcloud run services describe "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --format='value(status.url)')"
-          ready="$(gcloud run services describe "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --format='value(status.conditions[0].status)')"
+          service_json="$(gcloud run services describe "$SERVICE_NAME" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --format=json)"
+          url="$(jq -r '.status.url // empty' <<<"$service_json")"
+          ready="$(jq -r '[.status.conditions[] | select(.type == "Ready")][0].status // empty' <<<"$service_json")"
+          revision="$(jq -r '.status.latestReadyRevisionName // empty' <<<"$service_json")"
+          revision_service_account="$(jq -r '.spec.template.spec.serviceAccountName // empty' <<<"$service_json")"
+          image_digest="$(gcloud artifacts docker images describe "$IMAGE" \
+            --project="$PROJECT_ID" \
+            --format='value(image_summary.digest)')"
           test -n "$url"
           test "$ready" = "True"
+          test -n "$revision"
+          test "$revision_service_account" = "$RUNTIME_SERVICE_ACCOUNT"
+          test -n "$image_digest"
+          policy="$(gcloud run services get-iam-policy "$SERVICE_NAME" \
+            --project="$PROJECT_ID" --region="$REGION" --format=json)"
+          ! jq -e '[.bindings[]?.members[]?] | any(. == "allUsers" or . == "allAuthenticatedUsers")' \
+            <<<"$policy" >/dev/null
+          echo "READ_RUNTIME_DEPLOYED_URL=$url" >> "$GITHUB_ENV"
+          echo "READ_RUNTIME_READY=$ready" >> "$GITHUB_ENV"
+          echo "READ_RUNTIME_REVISION=$revision" >> "$GITHUB_ENV"
+          echo "READ_RUNTIME_IMAGE_DIGEST=$image_digest" >> "$GITHUB_ENV"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
           {
             echo '## FreePass Data read runtime deployed'
             echo
@@ -93,6 +127,117 @@ jobs:
             echo "Region: $REGION"
             echo "URL: $url"
             echo "Image: $IMAGE"
+            echo "Image digest: $image_digest"
+            echo "Revision: $revision"
             echo
             echo 'Next: hand this URL to FreePassERP I-01, configure Vercel OIDC caller IAM, then switch ERP.com to OBSERVE.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Authenticate readback identity
+        id: readback-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.FREEPASS_DATA_DEPLOY_WIF_PROVIDER }}
+          service_account: ${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.readiness.outputs.url }}
+
+      - name: Verify IAM denial and authenticated compatibility readback
+        env:
+          CLOUD_RUN_ID_TOKEN: ${{ steps.readback-auth.outputs.id_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unauthenticated_status="$(curl --silent --show-error --output /dev/null \
+            --write-out '%{http_code}' \
+            "$READ_RUNTIME_DEPLOYED_URL/health")"
+          test "$unauthenticated_status" = "403"
+          echo "READ_RUNTIME_UNAUTHENTICATED_STATUS=$unauthenticated_status" >> "$GITHUB_ENV"
+
+          cloud_run_token="$CLOUD_RUN_ID_TOKEN"
+          consumer_token="$(gcloud secrets versions access latest \
+            --project="$PROJECT_ID" \
+            --secret="$CONSUMERS_SECRET_NAME" \
+            | jq -er '.[] | select(.id == "erp-com") | .token')"
+          echo "::add-mask::$consumer_token"
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+          authenticated_status="$(curl --silent --show-error --output "$response_file" \
+            --write-out '%{http_code}' \
+            --header "X-Serverless-Authorization: Bearer $cloud_run_token" \
+            --header "Authorization: Bearer $consumer_token" \
+            "$READ_RUNTIME_DEPLOYED_URL/v1/consumers/erp-com/catalog-compat")"
+          echo "READ_RUNTIME_AUTHENTICATED_STATUS=$authenticated_status" >> "$GITHUB_ENV"
+          if [ "$authenticated_status" != "200" ]; then
+            response_code="$(jq -r '.code // "NON_JSON_RESPONSE"' "$response_file" 2>/dev/null || echo NON_JSON_RESPONSE)"
+            echo "::error::Authenticated compatibility readback failed: HTTP $authenticated_status / $response_code"
+            exit 1
+          fi
+          jq -e '
+            .schema == "freepass-data.catalog-compat/v1" and
+            (.data.products | type == "object") and
+            (.data.policies | type == "object") and
+            (.data.partners | type == "object")
+          ' "$response_file" >/dev/null
+          echo "READ_RUNTIME_READBACK_OK=true" >> "$GITHUB_ENV"
+
+      - name: Record sanitized activation evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          HAS_DEPLOY_WIF_PROVIDER: ${{ vars.FREEPASS_DATA_DEPLOY_WIF_PROVIDER != '' }}
+          HAS_DEPLOY_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT != '' }}
+          HAS_READ_REGION: ${{ vars.FREEPASS_DATA_READ_REGION != '' }}
+          HAS_READ_SERVICE_NAME: ${{ vars.FREEPASS_DATA_READ_SERVICE_NAME != '' }}
+          HAS_ARTIFACT_REPOSITORY: ${{ vars.FREEPASS_DATA_ARTIFACT_REPOSITORY != '' }}
+          HAS_RUNTIME_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_RUNTIME_SERVICE_ACCOUNT != '' }}
+          HAS_CONSUMERS_SECRET_NAME: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_NAME != '' }}
+        shell: bash
+        run: |
+          set +e
+          missing_apis="unknown"
+          if command -v gcloud >/dev/null 2>&1 && gcloud auth list --filter=status:ACTIVE --format='value(account)' | grep -q .; then
+            enabled="$(gcloud services list --enabled --project="$PROJECT_ID" --format='value(config.name)' 2>/dev/null)"
+            missing=()
+            for api in run.googleapis.com artifactregistry.googleapis.com iamcredentials.googleapis.com sts.googleapis.com secretmanager.googleapis.com; do
+              grep -qx "$api" <<<"$enabled" || missing+=("$api")
+            done
+            if [ "${#missing[@]}" -eq 0 ]; then
+              missing_apis="none"
+            else
+              missing_apis="$(IFS=,; echo "${missing[*]}")"
+            fi
+          fi
+
+          {
+            echo '### ERP.com FreePass Data read runtime activation'
+            echo
+            echo "- commit: \`$GITHUB_SHA\`"
+            echo "- workflow status: **$JOB_STATUS**"
+            echo "- deploy WIF provider configured: **$HAS_DEPLOY_WIF_PROVIDER**"
+            echo "- deploy service account configured: **$HAS_DEPLOY_SERVICE_ACCOUNT**"
+            echo "- region configured: **$HAS_READ_REGION**"
+            echo "- service name configured: **$HAS_READ_SERVICE_NAME**"
+            echo "- artifact repository configured: **$HAS_ARTIFACT_REPOSITORY**"
+            echo "- runtime service account configured: **$HAS_RUNTIME_SERVICE_ACCOUNT**"
+            echo "- consumer secret name configured: **$HAS_CONSUMERS_SECRET_NAME**"
+            echo "- required APIs ready: **${READ_RUNTIME_APIS_READY:-false}**"
+            echo "- missing APIs: **$missing_apis**"
+            echo "- Cloud Run ready: **${READ_RUNTIME_READY:-false}**"
+            echo "- unauthenticated request status: **${READ_RUNTIME_UNAUTHENTICATED_STATUS:-unknown}**"
+            echo "- authenticated compatibility readback status: **${READ_RUNTIME_AUTHENTICATED_STATUS:-unknown}**"
+            echo "- authenticated compatibility readback passed: **${READ_RUNTIME_READBACK_OK:-false}**"
+            if [ -n "${READ_RUNTIME_REVISION:-}" ]; then
+              echo "- Cloud Run revision: \`${READ_RUNTIME_REVISION}\`"
+            fi
+            if [ -n "${READ_RUNTIME_IMAGE_DIGEST:-}" ]; then
+              echo "- image digest: \`${READ_RUNTIME_IMAGE_DIGEST}\`"
+            fi
+            if [ -n "${READ_RUNTIME_DEPLOYED_URL:-}" ]; then
+              echo "- Cloud Run URL: \`${READ_RUNTIME_DEPLOYED_URL}\`"
+            fi
+            echo
+            echo 'No consumer token or credential value is recorded.'
+          } > /tmp/read-runtime-evidence.md
+          gh issue comment 209 --repo "$GITHUB_REPOSITORY" --body-file /tmp/read-runtime-evidence.md || true
