@@ -11,7 +11,13 @@ function sourcePriceKey(termKey: string): string | undefined {
   return termKey.startsWith('source:') ? termKey.slice('source:'.length) : undefined;
 }
 
-function parseSourceKey(termKey: string) {
+type ParsedSourceKey = {
+  months?: number;
+  mileageKmPerYear?: number;
+  settlementType?: 'RETURN' | 'BUYOUT';
+};
+
+function parseSourceKey(termKey: string): ParsedSourceKey {
   const key = sourcePriceKey(termKey);
   if (!key) return {};
   const buyout = /^([1-9]\d*)_인수형$/.exec(key);
