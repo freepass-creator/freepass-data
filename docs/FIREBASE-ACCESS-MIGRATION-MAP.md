@@ -5,6 +5,13 @@ Status: migration control document
 
 ## Principle
 
+**Firebase/Firestore/RTDB/Storage business-data access authority belongs exclusively to FreePass Data.**
+
+Consumer applications may keep Firebase Auth only for user identity. They must not hold a Firebase
+business-data credential, import a database/storage SDK for business data, or know collection/path names
+as a runtime contract. All reads and writes go through an authenticated FreePass Data contract and the
+Data Access Gateway.
+
 FreePass Data is the **data access/control plane**, not the semantic owner of every business domain.
 
 - Sales owns CRM/call workflow semantics.
@@ -36,8 +43,9 @@ domain command/read adapter
 Firebase / Firestore / Storage
 ```
 
-A migration is not complete while a consumer still carries a Firebase database credential or directly
-imports a Firebase database/storage SDK for business data.
+A migration is not complete while a consumer still carries a Firebase database/storage credential or directly
+imports a Firebase database/storage SDK for business data. This is now a hard architecture rule, not a
+long-term preference. The machine-readable authority contract is `contracts/firebase-access-authority.v1.json`.
 
 Firebase Auth used only to establish user identity is a separate concern; application data reads/writes
 after authentication must still use FreePass Data contracts.

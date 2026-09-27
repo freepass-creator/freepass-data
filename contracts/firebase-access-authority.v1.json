@@ -1,0 +1,48 @@
+{
+  "contractVersion": "firebase-access-authority-v1",
+  "schemaVersion": "1.0.0",
+  "authority": {
+    "owner": "freepass-data",
+    "rule": "ONLY_FREEPASS_DATA_MAY_ACCESS_FIREBASE_BUSINESS_DATA",
+    "firebaseAuthException": "CONSUMERS_MAY_USE_FIREBASE_AUTH_FOR_IDENTITY_ONLY"
+  },
+  "prohibitedOutsideFreePassData": [
+    "firebase-admin database/firestore/storage credentials",
+    "firebase/firestore business-data reads or writes",
+    "firebase/database RTDB business-data reads or writes",
+    "firebase/storage business-data uploads/downloads",
+    "service-account credentials granting Firebase business-data access",
+    "direct collection/path access as a runtime business contract"
+  ],
+  "requiredConsumerFlow": [
+    "consumer identity",
+    "FreePass Data contract",
+    "Data Access Gateway",
+    "domain read/command adapter",
+    "Firebase/Firestore/Storage"
+  ],
+  "completionCriteria": [
+    "no consumer runtime holds Firebase business-data credentials",
+    "no consumer runtime imports Firebase database/storage SDK for business data",
+    "every read/write has consumer identity capability and purpose",
+    "every write returns idempotency/revision/authority receipt",
+    "old direct data path is removed or denied by IAM/rules",
+    "Firebase Auth is not used as a database authorization bypass"
+  ],
+  "migrationDebt": {
+    "freepass-admin": [
+      "contract/settlement/esign ERP5 repositories still access Firestore directly"
+    ],
+    "freepass-sales": [
+      "browser app and analytics still access welrixtable Firestore/Storage directly",
+      "intake pipeline writes Firestore directly"
+    ],
+    "freepass-estimate": [
+      "legacy RTDB/Storage modules remain for leads/contracts/chat/legacy quote paths"
+    ],
+    "freepasserp4": [
+      "legacy operational readers/writers still own Firebase credentials outside migrated catalog boundary"
+    ],
+    "kakao-ops": []
+  }
+}

@@ -18,7 +18,7 @@ FreePass Data는 또 하나의 화면 앱이 아닙니다.
 - Canonical SSOT를 만든다.
 - Admin / Sales / ERP.com / Estimate 등 소비자별 projection을 제공한다.
 - 모든 수정은 revision, actor, reason, diff, receipt를 남긴다.
-- 각 소비 앱이 Firebase collection 구조를 직접 알지 않게 한다.
+- 각 소비 앱이 Firebase collection 구조·서비스계정·database/storage credential을 직접 알거나 보유하지 않게 한다.
 - 공통 데이터 조회의 단일 진입점을 제공하고, 도메인·조직·사용자 권한에 맞는 결과와 버전 증거를 반환한다.
 
 ## 핵심 원칙
@@ -27,7 +27,7 @@ FreePass Data는 또 하나의 화면 앱이 아닙니다.
 2. **RAW는 immutable** — 직접 수정하지 않는다.
 3. **Canonical은 설명 가능해야 한다** — 모든 필드는 source / transform / override provenance를 가진다.
 4. **직접 수정은 override** — 원문 덮어쓰기가 아니다.
-5. **소비 앱은 Data Contract를 사용** — 장기적으로 Firebase SDK 직접 접근을 제거한다.
+5. **Firebase 업무 데이터 접근권한은 FreePass Data만 가진다** — 소비 앱은 Data Contract만 사용한다. Firebase Auth는 사용자 신원 확인 용도로만 예외 허용하며, 인증 후 업무 데이터 read/write는 반드시 FreePass Data를 통과한다.
 6. **기능 정본과 데이터 정본을 분리** — Estimate는 계산 기능을, Sales는 영업 workflow를, Admin은 운영 workflow를 소유하되 공통 업무 사실은 FreePass Data가 제공한다.
 7. **쓰기 완료는 receipt 기반** — UI에서 저장 버튼을 눌렀다는 사실이 완료가 아니다.
 8. **RTDB 신규 사용 금지** — 기존 흔적은 migration debt로만 취급한다.

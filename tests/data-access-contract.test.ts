@@ -4,6 +4,7 @@ import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
 import schema from '../contracts/data-access-event.v1.schema.json' with { type: 'json' };
 import { DataAccessGateway } from '../src/application/data-access-gateway.js';
 import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
+import firebaseAuthority from '../contracts/firebase-access-authority.v1.json' with { type: 'json' };
 
 const addFormats = (
   typeof addFormatsModule === 'function'
@@ -67,5 +68,28 @@ describe('data-access-event-v1 contract', () => {
       startedAt: '2026-09-25T12:00:00.000Z',
       occurredAt: '2026-09-25T12:00:00.000Z'
     })).toBe(false);
+  });
+});
+
+
+describe('firebase access authority', () => {
+  it('makes FreePass Data the exclusive business-data Firebase authority', () => {
+    expect(firebaseAuthority.authority.owner).toBe('freepass-data');
+    expect(firebaseAuthority.authority.rule).toBe('ONLY_FREEPASS_DATA_MAY_ACCESS_FIREBASE_BUSINESS_DATA');
+    expect(firebaseAuthority.authority.firebaseAuthException).toBe('CONSUMERS_MAY_USE_FIREBASE_AUTH_FOR_IDENTITY_ONLY');
+    expect(firebaseAuthority.prohibitedOutsideFreePassData).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('firebase/firestore'),
+        expect.stringContaining('firebase/database'),
+        expect.stringContaining('firebase/storage'),
+        expect.stringContaining('service-account')
+      ])
+    );
+    expect(firebaseAuthority.completionCriteria).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('no consumer runtime holds Firebase business-data credentials'),
+        expect.stringContaining('every read/write has consumer identity capability and purpose')
+      ])
+    );
   });
 });
