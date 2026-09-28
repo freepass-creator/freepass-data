@@ -49,6 +49,12 @@ describe('Catalog Data Health v1', () => {
       status: 'PASS',
       issueCount: 0
     });
+    expect(report.checks.offerEconomics).toEqual({
+      status: 'PASS',
+      missingTermCount: 0,
+      unresolvedValueCount: 0,
+      invalidTermCount: 0
+    });
     expect(report.checks.activeInputParity).toEqual({
       status: 'PASS',
       missingCount: 0,
@@ -69,8 +75,29 @@ describe('Catalog Data Health v1', () => {
     expect(report.checks.activeProjection.expectedEvidenceCount)
       .toBe(report.checks.activeProjection.actualEvidenceCount);
     expect(report.coverage.evaluated).toContain('PROJECTION_LINEAGE_CONTENT_INTEGRITY');
+    expect(report.coverage.evaluated).toContain('OFFER_ECONOMICS_COMPLETENESS');
     expect(report.coverage.notEvaluated).not.toContain('PROJECTION_LINEAGE_CONTENT_INTEGRITY');
     expect(report.coverage.notEvaluated).toContain('CONSISTENT_SNAPSHOT');
+  });
+
+  it('blocks health when any offered period lacks billing, payout or deposit economics', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const offer = await store.getOffer('offer_gv70_demo');
+    const [revision] = await store.listEntityHistory('offer', 'offer_gv70_demo');
+    const { internalEconomicsTerms: _removed, ...withoutEconomics } = offer!;
+    await store.seed!({
+      offers: [withoutEconomics],
+      revisionHistory: [{ ...revision!, snapshot: withoutEconomics }]
+    });
+
+    const report = await readCatalogDataHealth(store, store, '2026-09-21T10:01:00.000Z');
+    expect(report.status).toBe('BLOCKED');
+    expect(report.checks.offerEconomics).toMatchObject({ status: 'FAIL', missingTermCount: 1 });
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      code: 'OFFER_ECONOMICS_TERM_MISSING',
+      entityId: 'offer_gv70_demo'
+    }));
   });
 
   it('degrades when ACTIVE release changes during the health observation window', async () => {

@@ -4,6 +4,10 @@ import { planPresentation, specification as spec } from '../scripts/sheet-presen
 const at='2026-09-21T07:28:00Z';
 const opts={workbook:'F86',updatedAt:at,now:Date.parse(at)};
 const cell=s=>({userEnteredValue:{stringValue:s}});
+const retroCell=s=>({
+  ...cell(s),
+  userEnteredFormat:{textFormat:{...spec.appearance.F86TextFormat}}
+});
 test('FreePass Data owns one semantic color palette for every Google Sheets consumer',()=>{
   const colors=spec.appearance.semanticColors;
   assert.equal(colors.policy,'one_freepass_data_palette_for_all_google_sheets');
@@ -22,7 +26,7 @@ function fixture(){
   for(const s of sheets)while(s.data[0].rowData.length<10)s.data[0].rowData.push({values:[]});
   return {capturedAt:at,sheetInventory:sheets.map(s=>s.properties),coverage:sheets.map(s=>({sheetId:s.properties.sheetId,endRowIndex:10,endColumnIndex:7})),spreadsheet:{spreadsheetId:spec.workbooks.F86.spreadsheetId,sheets}};
 }
-test('all primary tabs, Seoul timestamp and widths; no cell writes or deletions',()=>{
+test('all primary tabs, Seoul timestamp, widths and durable F86 font; no deletions',()=>{
   const result=planPresentation(fixture(),opts);
   assert.equal(result.counts.length,4);
   assert.equal(result.requests.find(r=>r.updateSheetProperties)?.updateSheetProperties.properties.title,'09.21 16:28 상품리스트 1대');
@@ -30,7 +34,13 @@ test('all primary tabs, Seoul timestamp and widths; no cell writes or deletions'
   assert.equal(result.requests.filter(r=>r.updateDimensionProperties?.properties.pixelSize===360).length,4);
   assert.equal(result.requests.filter(r=>r.updateDimensionProperties?.properties.hiddenByUser===true).length,8);
   assert.equal(result.requests.filter(r=>r.updateDimensionProperties?.properties.hiddenByUser===false).length,8);
-  assert.ok(result.requests.every(r=>['updateSheetProperties','updateDimensionProperties','setBasicFilter'].includes(Object.keys(r)[0])));
+  const fontRequests=result.requests.filter(r=>r.repeatCell);
+  assert.equal(fontRequests.length,4);
+  assert.deepEqual(fontRequests[0].repeatCell.cell.userEnteredFormat.textFormat,{
+    fontFamily:'Malgun Gothic',fontSize:9,italic:true
+  });
+  assert.equal(fontRequests[0].repeatCell.fields,'userEnteredFormat.textFormat.fontFamily,userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.italic');
+  assert.ok(result.requests.every(r=>['updateSheetProperties','updateDimensionProperties','setBasicFilter','repeatCell'].includes(Object.keys(r)[0])));
 });
 test('fixed usability widths are reapplied on every matching sales tab',()=>{
  const x=fixture();
@@ -83,6 +93,9 @@ test('already-compliant native metadata verifies with no writes',()=>{
   s.properties.title=i===0?'09.21 16:28 상품리스트 1대':`${p.label} 1대`;
   s.properties.tabColorStyle={rgbColor:{red:parseInt(h.slice(1,3),16)/255,green:parseInt(h.slice(3,5),16)/255,blue:parseInt(h.slice(5,7),16)/255}};
   s.data[0].columnMetadata=[{pixelSize:80},{pixelSize:260},{pixelSize:360},{pixelSize:80,hiddenByUser:true},{pixelSize:80,hiddenByUser:false},{pixelSize:80,hiddenByUser:true},{pixelSize:80,hiddenByUser:false}];
+  s.data[0].rowData.forEach(row=>{
+   row.values=Array.from({length:7},(_,ci)=>retroCell(row.values?.[ci]?.userEnteredValue?.stringValue??''));
+  });
   s.basicFilter={range:{sheetId:s.properties.sheetId,startRowIndex:0,endRowIndex:2,startColumnIndex:0,endColumnIndex:7}};
  }
  assert.equal(planPresentation(x,opts).status,'PASS');assert.deepEqual(planPresentation(x,opts).requests,[]);
@@ -99,6 +112,7 @@ test('F01 preserves short-term visibility and uses its own stable IDs',()=>{
  x.spreadsheet.sheets.forEach((s,i)=>{s.properties.sheetId=spec.workbooks.F01.primarySheetIds[i];x.coverage[i].sheetId=s.properties.sheetId;});
  const r=planPresentation(x,{...opts,workbook:'F01'});
  assert.equal(r.counts.length,4);assert.equal(r.requests.filter(r=>r.updateDimensionProperties?.fields==='hiddenByUser').length,0);
+ assert.equal(r.requests.filter(r=>r.repeatCell).length,0);
 });
 test('F01 ignores the explicitly retired hidden legacy catalog tab',()=>{
  const x=fixture();x.spreadsheet.spreadsheetId=spec.workbooks.F01.spreadsheetId;

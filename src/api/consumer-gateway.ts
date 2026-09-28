@@ -8,6 +8,8 @@ import commercialOfferSchema from '../../contracts/commercial-offer-view-v1.sche
 import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with { type: 'json' };
 import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import estimateMasterSchema from '../../contracts/estimate-newcar-master-v1.schema.json' with { type: 'json' };
+import settlementLedgerSchema from '../../contracts/settlement-ledger-view-v1.schema.json' with { type: 'json' };
+import kakaoCatalogReferenceSchema from '../../contracts/kakao-catalog-reference-v1.schema.json' with { type: 'json' };
 import type { ProjectionEvidenceSnapshotStore, ProjectionStore } from '../ports/catalog-store.js';
 import type { AdminCatalogProduct, ErpPublicProduct, ProjectionRelease } from '../domain/catalog.js';
 import {
@@ -24,6 +26,11 @@ import { stableDigest } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from '../application/projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
+import {
+  buildKakaoCatalogReference,
+  type KakaoCatalogReference,
+  type KakaoCatalogReferenceSource,
+} from '../application/kakao-catalog-reference.js';
 import type { AdminWorkflowStore } from '../ports/admin-workflow.js';
 import type { EstimateArtifactStore } from '../ports/estimate-artifacts.js';
 import {
@@ -37,12 +44,19 @@ import {
   type AdminWorkflowCommitRequest,
   type AdminWorkflowReadSpec,
 } from '../domain/admin-workflow.js';
+import { readSettlementLedgerView } from '../application/settlement-ledger-view.js';
+import {
+  assertSettlementLedgerReadRequest,
+  type SettlementLedgerReadRequest,
+} from '../domain/settlement-ledger-view.js';
 
 export type ConsumerCapability =
   | 'catalog'
+  | 'catalog-reference'
   | 'catalog-health'
   | 'estimate-newcar-master'
   | 'estimate-artifacts'
+  | 'settlement-ledger-read'
   | 'admin-workflow';
 export type ConsumerBinding = {
   id: string;
@@ -87,7 +101,7 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
           if (!Array.isArray(item.capabilities) || item.capabilities.length === 0) {
             throw new Error('Consumer capabilities must be a non-empty array');
           }
-          const allowed = new Set<ConsumerCapability>(['catalog', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'admin-workflow']);
+          const allowed = new Set<ConsumerCapability>(['catalog', 'catalog-reference', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'settlement-ledger-read', 'admin-workflow']);
           const values = item.capabilities.map((value) => {
             if (typeof value !== 'string' || !allowed.has(value as ConsumerCapability)) {
               throw new Error('Unsupported consumer capability');
@@ -110,6 +124,9 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     }
     if (capabilities.includes('admin-workflow') && item.id !== 'freepass-admin-catalog') {
       throw new Error('Admin workflow capability requires freepass-admin-catalog registration');
+    }
+    if (capabilities.includes('catalog-reference') && item.id !== 'kakao-ops') {
+      throw new Error('Catalog reference capability requires kakao-ops registration');
     }
     ids.add(item.id);
     tokens.add(item.token);
@@ -155,7 +172,10 @@ export function createConsumerGateway(
   bindings: ConsumerBinding[],
   access: DataAccessGateway,
   healthStore?: CatalogDataHealthStore,
-  compatReader?: { read(consumerId: string): Promise<CatalogCompatibilitySnapshot> },
+  compatReader?: {
+    read(consumerId: string): Promise<CatalogCompatibilitySnapshot>;
+    readKakaoReferenceSource?(consumerId: string): Promise<KakaoCatalogReferenceSource>;
+  },
   workflowStore?: AdminWorkflowStore,
   estimateArtifactStore?: EstimateArtifactStore,
 ) {
@@ -170,6 +190,8 @@ export function createConsumerGateway(
   const validateAdminResponse = ajv.compile(adminCatalogSchema);
   const validateHealth = ajv.compile(healthSchema);
   const validateEstimateMaster = ajv.compile(estimateMasterSchema);
+  const validateSettlementLedger = ajv.compile(settlementLedgerSchema);
+  const validateKakaoReference = ajv.compile(kakaoCatalogReferenceSchema);
   app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
   app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/catalog', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -412,6 +434,83 @@ export function createConsumerGateway(
       return reply.code(503).send({ code: 'CATALOG_COMPAT_READ_FAILED' });
     }
   });
+  app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/catalog-reference', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const binding = registered.get(request.params.consumerId);
+    const supplied = request.headers.authorization ?? '';
+    const matches = timingSafeEqual(
+      hash(supplied),
+      hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
+    );
+    const context = consumerContext(
+      binding?.id ?? 'unregistered-consumer',
+      'read Kakao REFERENCE_ONLY catalog facts through FreePass Data',
+      request.id
+    );
+    const resource = {
+      kind: 'PROJECTION' as const,
+      name: 'kakao-catalog-reference',
+      projectionId: 'kakao-catalog-reference'
+    };
+
+    try {
+      if (!binding || !matches) {
+        await access.deny('READ', {
+          context,
+          operation: 'READ_KAKAO_CATALOG_REFERENCE',
+          resource
+        }, 'UNAUTHORIZED');
+        return reply.code(401).send({ code: 'UNAUTHORIZED' });
+      }
+      if (binding.id !== 'kakao-ops' || !binding.capabilities.includes('catalog-reference')) {
+        await access.deny('READ', {
+          context,
+          operation: 'READ_KAKAO_CATALOG_REFERENCE',
+          resource
+        }, 'FORBIDDEN');
+        return reply.code(403).send({ code: 'FORBIDDEN' });
+      }
+      if (!compatReader?.readKakaoReferenceSource) {
+        await access.deny('READ', {
+          context,
+          operation: 'READ_KAKAO_CATALOG_REFERENCE',
+          resource
+        }, 'KAKAO_REFERENCE_READER_UNAVAILABLE');
+        return reply.code(503).send({ code: 'KAKAO_REFERENCE_READER_UNAVAILABLE' });
+      }
+
+      const result = await access.read({
+        context,
+        operation: 'READ_KAKAO_CATALOG_REFERENCE',
+        resource,
+        summarize: (value: KakaoCatalogReference) => ({
+          count: value.meta.projectedCount,
+          digest: value.meta.dataDigest,
+        })
+      }, async () => buildKakaoCatalogReference(
+        await compatReader.readKakaoReferenceSource!(binding.id)
+      ));
+
+      if (
+        !validateKakaoReference(result) ||
+        result.schema !== 'freepass-data.kakao-catalog-reference/v1' ||
+        result.meta.consumerId !== binding.id ||
+        result.meta.authority !== 'REFERENCE_ONLY' ||
+        result.meta.publicationDecision !== 'HOLD' ||
+        result.meta.sourceProject !== 'freepasserp5' ||
+        !result.data.length ||
+        !result.commissionPolicy.digest
+      ) {
+        return reply.code(503).send({ code: 'KAKAO_REFERENCE_RESPONSE_INVALID' });
+      }
+      return result;
+    } catch (error) {
+      if (error instanceof DataAccessAuditUnavailableError) {
+        return reply.code(503).send({ code: error.code });
+      }
+      return reply.code(503).send({ code: 'KAKAO_REFERENCE_READ_FAILED' });
+    }
+  });
 
   app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/estimate-newcar-master', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -601,6 +700,63 @@ export function createConsumerGateway(
       return reply.code(503).send({ code: 'HEALTH_READ_FAILED' });
     }
   });
+
+  app.post<{ Params: { consumerId: string }; Body: SettlementLedgerReadRequest }>(
+    '/v1/consumers/:consumerId/settlement-ledger/read',
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const binding = registered.get(request.params.consumerId);
+      const supplied = request.headers.authorization ?? '';
+      const matches = timingSafeEqual(
+        hash(supplied),
+        hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
+      );
+      const context = consumerContext(
+        binding?.id ?? 'unregistered-consumer',
+        'read FreePass Data settlement ledger facts',
+        request.id
+      );
+      const resource = { kind: 'PROJECTION' as const, name: 'settlement-ledger' };
+
+      try {
+        if (!binding || !matches) {
+          await access.deny('READ', { context, operation: 'READ_SETTLEMENT_LEDGER', resource }, 'UNAUTHORIZED');
+          return reply.code(401).send({ code: 'UNAUTHORIZED' });
+        }
+        if (!binding.capabilities.includes('settlement-ledger-read')) {
+          await access.deny('READ', { context, operation: 'READ_SETTLEMENT_LEDGER', resource }, 'FORBIDDEN');
+          return reply.code(403).send({ code: 'FORBIDDEN' });
+        }
+        if (!workflowStore) {
+          await access.deny('READ', { context, operation: 'READ_SETTLEMENT_LEDGER', resource }, 'SETTLEMENT_LEDGER_UNAVAILABLE');
+          return reply.code(503).send({ code: 'SETTLEMENT_LEDGER_UNAVAILABLE' });
+        }
+        assertSettlementLedgerReadRequest(request.body);
+        const result = await access.read({
+          context,
+          operation: 'READ_SETTLEMENT_LEDGER',
+          resource,
+          requestDigest: stableDigest(request.body),
+          summarize: (value) => ({ count: value.meta.count, digest: value.meta.dataDigest })
+        }, () => readSettlementLedgerView(workflowStore, binding.id, request.body));
+        if (!validateSettlementLedger(result)) {
+          return reply.code(503).send({ code: 'SETTLEMENT_LEDGER_RESPONSE_INVALID' });
+        }
+        return result;
+      } catch (error) {
+        if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
+        const code = error instanceof Error ? error.message : 'SETTLEMENT_LEDGER_READ_FAILED';
+        if (
+          code.startsWith('INVALID_SETTLEMENT_LEDGER_')
+          || code === 'SETTLEMENT_LEDGER_QUERY_REQUIRES_FILTER'
+          || code === 'SETTLEMENT_LEDGER_PERSON_LOOKUP_REQUIRES_AGENT_AND_CUSTOMER'
+        ) {
+          return reply.code(400).send({ code });
+        }
+        return reply.code(503).send({ code: 'SETTLEMENT_LEDGER_READ_FAILED' });
+      }
+    }
+  );
 
   app.post<{ Params: { consumerId: string }; Body: AdminWorkflowReadSpec }>(
     '/v1/consumers/:consumerId/admin-workflow/read',

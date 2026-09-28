@@ -32,11 +32,30 @@ export type PriceTerm = {
   termKey: string; termMonths: number; monthlyRent: Money; deposit?: Money | null;
   depositState: DepositState; mileageLimitKmPerYear?: number | null;
 };
+export type TermAmountState = 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
+export type TermAmountCalculation =
+  | { kind: 'FIXED'; amount: Money }
+  | { kind: 'MULTIPLY'; base: 'MONTHLY_RENT'; multiplier: number }
+  | { kind: 'RATE'; base: 'MONTHLY_RENT_X_TERM' | 'VEHICLE_PRICE'; rate: number };
+export type TermEconomicAmount = {
+  state: TermAmountState;
+  amount?: Money | null;
+  calculation?: TermAmountCalculation | null;
+  sourceRefs: string[];
+};
+export type OfferTermEconomics = {
+  termKey: string;
+  depositCalculation: TermEconomicAmount;
+  supplierBillingFee: TermEconomicAmount;
+  channelPayoutFee: TermEconomicAmount;
+};
 export type Offer = EntityMeta & {
   id: string; productId: string; supplierId: string;
   status: 'ACTIVE' | 'SUSPENDED' | 'EXPIRED';
   validFrom?: string | null; validUntil?: string | null; policyId?: string | null;
   priceTerms: PriceTerm[];
+  /** Internal product economics. Never include this field in public/white-label projections. */
+  internalEconomicsTerms?: OfferTermEconomics[];
 };
 export type Policy = EntityMeta & {
   id: string; kind: 'INSURANCE' | 'MILEAGE' | 'RETURN' | 'EARLY_TERMINATION' | 'OTHER';
