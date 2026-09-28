@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "effectiveDate": "2026-09-21",
   "owner": "freepass-data",
   "status": "SPEC_PUBLISHER_PINNED_LIVE_REAPPLY_AND_WATCHDOG_RECOVERY_VERIFIED_NATIVE_SCHEDULE_OBSERVATION_HOLD",
@@ -57,6 +57,11 @@
     },
     "F01": "preserve_existing_standard_table",
     "F86": "preserve_existing_retro_supplier_view",
+    "F86TextFormat": {
+      "fontFamily": "Malgun Gothic",
+      "fontSize": 9,
+      "italic": true
+    },
     "F86MinimumVisibleFeeMonths": 24,
     "F86FeeVisibility": "long_term_rent_and_deposit_hide_short_term_through_12_months",
     "headerRowsFrozen": 1,
@@ -68,7 +73,43 @@
     },
     "money": "preserve_numeric_values_and_period_specific_deposit_pairs",
     "missingValues": "preserve_unknown_do_not_invent_zero",
-    "semanticColors": "existing_status_product_type_color_SSOT_independent_of_tab_colors"
+    "semanticColors": {
+      "policy": "one_freepass_data_palette_for_all_google_sheets",
+      "consumerOverridesForbidden": true,
+      "productTypeText": {
+        "신차렌트": "#FF00FF",
+        "중고렌트": "#0D706B",
+        "중고구독": "#6B3DB3",
+        "신차구독": "#474D57",
+        "픽업구독": "#C2185B",
+        "오공구독": "#5B21B6",
+        "오플구독": "#A16207"
+      },
+      "availabilityText": {
+        "즉시출고": "#0000FF",
+        "출고가능": "#0000FF",
+        "상품화중": "#FF9900",
+        "출고협의": "#FF9900",
+        "계약중": "#999999",
+        "출고불가": "#999999"
+      },
+      "missingText": "#B7B7B7",
+      "linkText": "#1155CC",
+      "defaultText": "#000000",
+      "periodBackground": {
+        "단기보증": "#EAF7F8",
+        "1개월": "#DCF0F2",
+        "6개월": "#CDE9EC",
+        "12개월": "#BFE2E6",
+        "장기보증": "#EDF0FE",
+        "24개월": "#DFE5FD",
+        "36개월": "#D1DAFC",
+        "48개월": "#C3CFFB",
+        "60개월": "#B5C4FA",
+        "보증금 반납형": "#EDF0FE",
+        "보증금 인수형": "#F1EBFD"
+      }
+    }
   },
   "safety": {
     "stableSheetIds": true,
@@ -79,6 +120,7 @@
   "publisherAcceptance": [
     "use_logical_tab_key_or_sheetId_not_title_startsWith",
     "apply_same_name_order_color_rules_in_F01_F86",
+    "enforce_F86_Malgun_Gothic_9pt_italic_on_every_populated_cell",
     "do_not_recreate_retired_ogong_tab",
     "verify_vehicle_keys_counts_and_readback",
     "back_up_before_consolidation",

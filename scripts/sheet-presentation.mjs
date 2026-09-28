@@ -87,6 +87,42 @@ export function planPresentation(input, { workbook, updatedAt, now = Date.now() 
       }
     }
     const width=headers.reduce((end,h,i)=>h ? i+1 : end,0);
+    if (workbook === 'F86') {
+      const expected = spec.appearance.F86TextFormat;
+      if (!expected?.fontFamily || !Number.isFinite(expected.fontSize) || expected.italic !== true) {
+        fail('Invalid F86 text format specification');
+      }
+      let compliant = true;
+      for (let ri = 0; ri < lastRow && compliant; ri++) {
+        const cells = rows[ri]?.values ?? [];
+        for (let ci = 0; ci < width; ci++) {
+          const format = cells[ci]?.userEnteredFormat?.textFormat ?? {};
+          if (
+            format.fontFamily !== expected.fontFamily ||
+            format.fontSize !== expected.fontSize ||
+            format.italic !== expected.italic
+          ) {
+            compliant = false;
+            break;
+          }
+        }
+      }
+      if (!compliant) {
+        add(id, 'textFormat', null, expected, {
+          repeatCell: {
+            range: {
+              sheetId: id,
+              startRowIndex: 0,
+              endRowIndex: lastRow,
+              startColumnIndex: 0,
+              endColumnIndex: width,
+            },
+            cell: { userEnteredFormat: { textFormat: expected } },
+            fields: 'userEnteredFormat.textFormat.fontFamily,userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.italic',
+          },
+        });
+      }
+    }
     const wanted={sheetId:id,startRowIndex:0,endRowIndex:lastRow,startColumnIndex:0,endColumnIndex:width};
     const actual=s.basicFilter?.range;
     const covers = actual && actual.sheetId===id && (actual.startRowIndex??0)===0 && (actual.startColumnIndex??0)===0 && actual.endRowIndex>=lastRow && actual.endRowIndex<=grid.rowCount && actual.endColumnIndex>=width && actual.endColumnIndex<=grid.columnCount;

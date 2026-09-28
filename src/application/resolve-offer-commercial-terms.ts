@@ -1,8 +1,9 @@
-import type { Offer, Policy, PriceTerm } from '../domain/catalog.js';
+import type { Offer, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
 import type {
   DepositResolution,
   MileageResolution,
   OfferCommercialTerms,
+  OfferEconomicsAudit,
   ResolvedCommercialTerm,
 } from '../domain/offer-commercial-terms.js';
 
@@ -196,5 +197,116 @@ export function summarizeCommercialTerms(
     byStatus,
     decisionCounts: Object.fromEntries(Object.entries(decisionCounts).sort(([a], [b]) => a.localeCompare(b))),
     invalidCounts: Object.fromEntries(Object.entries(invalidCounts).sort(([a], [b]) => a.localeCompare(b))),
+  };
+}
+
+function auditEconomicAmount(
+  value: TermEconomicAmount,
+  label: string,
+  monthlyRent: number,
+  termMonths: number,
+  decisions: string[],
+  invalidFacts: string[],
+) {
+  const amount = value.amount?.amount;
+  const hasAmount = value.amount != null;
+  const hasCalculation = value.calculation != null;
+  const validRefs = Array.isArray(value.sourceRefs) && value.sourceRefs.length > 0 &&
+    value.sourceRefs.every((ref) => typeof ref === 'string' && ref.trim().length > 0);
+
+  if (!validRefs) invalidFacts.push(`ECONOMICS_SOURCE_REQUIRED:${label}`);
+  if (value.state === 'UNKNOWN' || value.state === 'NOT_APPLICABLE') {
+    if (hasAmount || hasCalculation) invalidFacts.push(`ECONOMICS_UNRESOLVED_WITH_VALUE:${label}`);
+    if (value.state === 'UNKNOWN') decisions.push(`ECONOMICS_VALUE_REQUIRED:${label}`);
+    return;
+  }
+  if (!hasAmount || value.amount?.currency !== 'KRW' || !Number.isSafeInteger(amount) || amount! < 0) {
+    invalidFacts.push(`INVALID_ECONOMICS_AMOUNT:${label}`);
+    return;
+  }
+  if (value.state === 'ZERO' && amount !== 0) invalidFacts.push(`ZERO_ECONOMICS_WITH_NONZERO_AMOUNT:${label}`);
+  if (value.state === 'KNOWN' && amount === 0) invalidFacts.push(`KNOWN_ECONOMICS_WITH_ZERO_AMOUNT:${label}`);
+  if (!hasCalculation) {
+    invalidFacts.push(`ECONOMICS_CALCULATION_REQUIRED:${label}`);
+    return;
+  }
+
+  const calculation = value.calculation!;
+  let expected: number | undefined;
+  if (calculation.kind === 'FIXED') {
+    if (calculation.amount.currency !== 'KRW' || !Number.isSafeInteger(calculation.amount.amount) || calculation.amount.amount < 0) {
+      invalidFacts.push(`INVALID_ECONOMICS_CALCULATION:${label}`);
+      return;
+    }
+    expected = calculation.amount.amount;
+  } else if (calculation.kind === 'MULTIPLY') {
+    if (!Number.isFinite(calculation.multiplier) || calculation.multiplier < 0) {
+      invalidFacts.push(`INVALID_ECONOMICS_CALCULATION:${label}`);
+      return;
+    }
+    expected = Math.round(monthlyRent * calculation.multiplier);
+  } else if (calculation.base === 'MONTHLY_RENT_X_TERM') {
+    if (!Number.isFinite(calculation.rate) || calculation.rate < 0) {
+      invalidFacts.push(`INVALID_ECONOMICS_CALCULATION:${label}`);
+      return;
+    }
+    expected = Math.round(monthlyRent * termMonths * calculation.rate);
+  } else if (!Number.isFinite(calculation.rate) || calculation.rate < 0) {
+    invalidFacts.push(`INVALID_ECONOMICS_CALCULATION:${label}`);
+    return;
+  }
+
+  if (calculation.kind === 'RATE' && calculation.base === 'VEHICLE_PRICE') {
+    decisions.push(`ECONOMICS_CALCULATION_INPUT_REQUIRED:${label}:VEHICLE_PRICE`);
+  }
+
+  // VEHICLE_PRICE needs the contract/quote snapshot input and is validated there.
+  if (expected !== undefined && expected !== amount) {
+    invalidFacts.push(`ECONOMICS_CALCULATION_MISMATCH:${label}`);
+  }
+}
+
+/**
+ * Audits pre-contract product economics without becoming a settlement calculator.
+ * Contract overrides, invoicing, collection and payout remain in the Admin settlement domain.
+ */
+export function auditOfferEconomicsTerms(offer: Offer): OfferEconomicsAudit {
+  const decisions: string[] = [];
+  const invalidFacts: string[] = [];
+  const economics = structuredClone(offer.internalEconomicsTerms ?? []);
+  const prices = new Map(offer.priceTerms.map((term) => [term.termKey, term]));
+  const seen = new Set<string>();
+
+  for (const term of economics) {
+    if (seen.has(term.termKey)) invalidFacts.push(`DUPLICATE_ECONOMICS_TERM:${term.termKey}`);
+    seen.add(term.termKey);
+    const price = prices.get(term.termKey);
+    if (!price) {
+      invalidFacts.push(`ORPHAN_ECONOMICS_TERM:${term.termKey}`);
+      continue;
+    }
+    auditEconomicAmount(term.depositCalculation, `${term.termKey}:DEPOSIT`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
+    auditEconomicAmount(term.supplierBillingFee, `${term.termKey}:SUPPLIER_BILLING_FEE`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
+    auditEconomicAmount(term.channelPayoutFee, `${term.termKey}:CHANNEL_PAYOUT_FEE`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
+
+    if (
+      (term.depositCalculation.state === 'KNOWN' || term.depositCalculation.state === 'ZERO') &&
+      (price.depositState === 'KNOWN' || price.depositState === 'ZERO') &&
+      term.depositCalculation.amount?.amount !== price.deposit?.amount
+    ) {
+      invalidFacts.push(`DEPOSIT_ECONOMICS_MISMATCH:${term.termKey}`);
+    }
+  }
+  for (const term of offer.priceTerms) {
+    if (!seen.has(term.termKey)) decisions.push(`ECONOMICS_TERM_REQUIRED:${term.termKey}`);
+  }
+
+  const uniqueDecisions = [...new Set(decisions)].sort();
+  const uniqueInvalidFacts = [...new Set(invalidFacts)].sort();
+  return {
+    status: uniqueInvalidFacts.length ? 'INVALID' : uniqueDecisions.length ? 'NEEDS_DECISION' : 'READY',
+    terms: economics.sort((a, b) => a.termKey.localeCompare(b.termKey)),
+    decisions: uniqueDecisions,
+    invalidFacts: uniqueInvalidFacts,
   };
 }

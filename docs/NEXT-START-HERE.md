@@ -1,11 +1,82 @@
 # FreePass Data — NEXT START HERE
 
-Status: **ACTIVE / CATALOG V1 EXECUTABLE BASELINE**  
-Official project name: **프리패스 데이터 / FreePass Data**  
-Repository: `freepass-creator/freepass-data`  
-Verified baseline before this handoff update: `adbbfca7c0ddc4e6c7c1906765d9b5aacccd3f4c`
-Branch: `codex/local-runtime-baseline`
-Date: 2026-09-22
+Status: **READ-ONLY OPERATIONS v1.0 / CONSUMER HANDOFF**
+Official project name: **프리패스 데이터 / FreePass Data**
+Repository: `freepass-creator/freepass-data`
+Handoff base when closure work started: `28d46e1f8d14a3a08d86586dae535838e4d123cd`
+Branch: `main`
+Date: 2026-09-28
+
+## 2026-09-28 F86 font durability lock
+
+- 기계 정본 `contracts/f01-f86-sheet-spec.v1.json` v1.1에 F86 글꼴을 `Malgun Gothic` 9pt 기울임으로 고정했다.
+- `scripts/sheet-presentation.mjs`는 F86의 모든 보이는 판매/공급사 탭에서 실제 사용 범위 전체를 검사하고,
+  불일치가 하나라도 있으면 해당 범위에 글꼴·크기·기울임만 다시 적용한다. 값·수식·색·굵기 등 다른 서식은 건드리지 않는다.
+- F01은 기존 글꼴을 보존하고 이 F86 전용 규칙을 적용하지 않는다.
+- 검증: sheet contract 24 PASS, TypeScript build PASS. 전체 `npm run check`와 GitHub CI 후 `main` 병합한다.
+
+next_start_here: 운영 발행기는 이 계약의 exact main revision을 사용해야 한다. 운영 시트 재적용은 별도 승인과
+백업/readback 절차를 거치며, 코드 병합만으로 live Sheet write 완료라고 표현하지 않는다.
+
+## 2026-09-28 Kakao reference facts packet
+
+`work/freepass-data/kakao-facts-20260928`에서 Kakao 전용 typed `REFERENCE_ONLY` 계약을 구현했다.
+
+- 요청 원문: `kakao-ops@ee9dea7`의 `docs/handoffs/FREEPASS-DATA-요청-20260928-보증금-색상-수수료.md`
+- source base: `main@41919776437890413200902d13b112c017aaeb14`
+- route: `GET /v1/consumers/kakao-ops/catalog-reference`
+- 기간별 계산 보증금, 명시적 ZERO/UNKNOWN, ERP5 외장색상, F80-F85 기반 수수료 정책/계산 상태를 제공한다.
+- 기존 Canonical `/catalog`의 fallback이 아니며 응답은 `authority=REFERENCE_ONLY`, `publicationDecision=HOLD`다.
+- 로컬 private capture 전수검증: source 1,659 / projected 685 / terms 4,223 / exterior color 678;
+  deposit KNOWN 4,037 / ZERO 36 / UNKNOWN 150.
+- 검증: 최신 `main@cc4c8e6` 통합 후 이안카 일회성 정책 적용 경로를 기존 Data Access Gateway로 감싸고
+  `npm run check` 전체 PASS: architecture/data-access/build, node route/sheet/shadow/dashboard 60건,
+  Vitest 958 PASS / 12 SKIP. 운영 Firestore 쓰기는 실행하지 않았다. Claude 읽기 전용 검토는 다시 요청했으나
+  응답 없이 멈춰 `UNAVAILABLE`이고 PASS로 계산하지 않는다.
+- publication: PR #222에 통합 결과를 추가해 새 HEAD CI를 재검증한 뒤 `main` 병합한다.
+- 운영 HOLD: PR merge, read runtime deployment, `kakao-ops` 전용 secret 등록, 운영 PC readback,
+  Kakao 계산 제거는 아직 실행하지 않았다. 운영 배포와 consumer 변경은 별도 승인/후속 작업이다.
+
+next_start_here: PR #222 병합 후에도 read runtime 배포, `kakao-ops` 전용 secret 등록, 운영 PC readback과
+Kakao 계산 제거는 별도 승인/HOLD로 유지한다.
+
+## 2026-09-28 READ-ONLY OPERATIONS v1.0
+
+G1 중앙 read runtime 운영 기반은 완료됐다.
+
+- canonical main: `ff591ef835179439828f81aa5b4f605356964c84`
+- successful deployment: GitHub Actions run `36327937895`
+- Cloud Run: `freepass-data-read`, `asia-northeast3`
+- Ready revision: `freepass-data-read-00011-4sw`
+- immutable image digest: `sha256:90d2b9da9361da3facd774eadf19a412ad6cc712f36f7575a566e4d226dd013c`
+- unauthenticated `/health`: HTTP 403
+- WIF-authenticated `erp-com/catalog-compat`: HTTP 200 and contract readback PASS
+- runtime identity: `freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com`
+- business data는 `datastore.viewer`로만 읽지만 Data Access 감사 이벤트 append를 위해 custom
+  `datastore.entities.create` 권한이 있다. Firestore IAM은 collection 단위로 이를 제한하지 못하므로
+  감사 collection 경계는 application code로 강제한다. Canonical/source/projection mutation 권한은 없다.
+- deploy identity는 프로젝트 전체 `run.admin`이 아니라 이 Cloud Run service의 `run.admin` +
+  `run.invoker`만 가진다.
+- deploy WIF는 별도 pool이며 numeric owner `256007744`, repository, `main` branch와 정확한
+  `deploy-read-runtime.yml@refs/heads/main` 조건을 모두 고정한다.
+
+로컬 Codex와 Claude의 공통 GCP 실행 경로는 native gcloud configuration `freepass-data`다.
+계정은 `dudguq@gmail.com`, project는 `freepasserp5`다. 키 파일을 복제하거나 문서에 credential을
+남기지 않는다. 세션 확인은 `gcloud config configurations activate freepass-data` 후
+`gcloud config list`로 하며 재인증 실패는 우회하지 않고 HOLD한다.
+
+다음 시작점은 G2 소비 프로젝트의 Preview `OBSERVE` 연결이다. 이는 FreePass Data v1.0 기반
+완료와 분리된 소비자 작업이며, 사용자 GO 전 `FREEPASS_DATA_READ` cutover는 금지한다.
+
+## 2026-09-27 closure entrypoint
+
+FreePass Data를 계속 확장하지 않고 운영 기반을 닫는 현재 계획과 무료 ChatGPT/Codex 작업 분담은
+[`PROJECT-CLOSURE-AND-FREE-CHAT-HANDOFF.md`](./PROJECT-CLOSURE-AND-FREE-CHAT-HANDOFF.md)를 따른다.
+
+첫 운영 게이트였던 IAM-protected Cloud Run bootstrap과 실제 readback은 위 2026-09-28 증거로 닫혔다.
+과거 run `36317333170`의 fail-closed 기록은 bootstrap 전 상태이며 현재 상태로 사용하지 않는다.
+
+커밋 `28d46e1`의 `activate`는 배포 workflow 활성화를 뜻하며 Cloud Run 배포·consumer cutover 완료가 아니다.
 
 ## 2026-09-26 FreePass Data internal consolidation
 
@@ -451,3 +522,32 @@ Before each new change:
 - [2026-09-21 손오공 픽업구독 축소와 거짓 합격 방지](INCIDENT-2026-09-21-STALE-UPSTREAM-FALSE-PASS.md): 하류 `원자 → F01 → F86` 일치만으로 원천 정합성을 합격 처리하지 않는다. 현재 원천 관찰부터 차량번호·상태를 양방향 대조한다.
 
 This file exists so another session can continue without re-discovering or re-creating the project.
+# 2026-09-28 Iancar policy/source recovery
+
+- Source SSOT: `이안카_프리패스` tabs `이안카`, `이안카 재렌트`; 119 unique plates.
+- F54 backup: Drive file `1LwgzNLWI9hENYeJ5q7TTQ5wkyyFDVpowUJO0fTFpiNk`.
+- F54 policy split: `RP031_S01..S04` = 5/10/15/25만원; matched inventory counts 62/35/18/4.
+- Firestore apply run: `2026-09-27T16-37-05-835Z-766258c0-376b-4225-9691-f87303bb953e`; local private rollback evidence retained.
+- Publication preparation/apply: GitHub Actions runs `36333911144` / `36333983363`.
+- Readback: F01 `09.28 01:38 상품리스트 441대`, F86 `이안카 223대`; exact 119 source plates checked, policy-field errors 0.
+- HOLD: six historical Iancar rows outside the 119-row current source remain source-absent and were not guessed or rewritten.
+- `next_start_here`: merge or supersede the scoped ERP4 publisher branches only after reviewing `e6727ff0` and the production pin strategy; do not restore the old policy-field omission.
+# 2026-09-28 기간별 상품 경제조건 — 청구·지급 수수료 / 보증금 산식
+
+- 목적: 상품 Offer의 각 `termKey`마다 기간별 보증금 산식, 공급사 청구 수수료, 영업채널 지급 수수료를 명확히 보존한다.
+- 대상: `work/freepass-data/period-economics-20260928`, latest `origin/main` 위로 rebase.
+- 경계: Data는 계약 전 상품 기준표와 근거를 소유한다. 계약별 예외·확정액·VAT·인센티브·환수·청구/수금/지급 사건은 기존 Admin/정산 원장이 계속 소유한다.
+- 변경: `Offer.internalEconomicsTerms`에 기간별 `depositCalculation`, `supplierBillingFee`, `channelPayoutFee`를 추가했다. Catalog Health의 `OFFER_ECONOMICS_COMPLETENESS`가 기간 누락·미확정·산식 불일치를 `BLOCKED`로 처리한다. 금액 상태, 계산식, 원천 참조를 분리하며 공개 ERP/화이트라벨 projection에는 노출하지 않는다.
+- 검증: `npm run build` PASS, `npm test` 944 PASS / 12 SKIP, Sheets 24 PASS, read-runtime 5 PASS, shadow 10 PASS, dashboard 21 PASS, 내부 수수료 공개 비노출 회귀검사 PASS.
+- 남음: 현재 기준 HEAD의 기존 `src/jobs/apply-iancar-policy-sync.ts` Firestore 직접 접근 때문에 `npm run check` 전체 묶음은 `check:data-access-boundary`에서 HOLD. 실제 상품 수수료 원천을 구조화하여 채우는 운영 write는 수행하지 않았다. Claude 독립 검토는 응답 없이 장시간 대기되어 UNAVAILABLE로 기록한다.
+- next_start_here: `src/domain/catalog.ts`의 `OfferTermEconomics` → `src/application/resolve-offer-commercial-terms.ts`의 `auditOfferEconomicsTerms()` → `tests/offer-commercial-terms.test.ts`.
+
+# 2026-09-28 정산원장 소비자 읽기 계약
+
+- 목적: FreePass Data 정산원장을 Admin, Kakao Ops와 명시적으로 등록된 소비자가 동일한 계약으로 안전하게 조회한다.
+- 대상: `work/freepass-data/settlement-ledger-sync`, base `cc4c8e6`.
+- 변경: `freepass-data.settlement-ledger/v1` 계약과 인증·감사된 `POST /v1/consumers/:consumerId/settlement-ledger/read`를 추가했다. `settlement-ledger-read` capability는 Admin workflow write 권한과 분리된다.
+- 검색: 차량번호/정산코드/접수일/청구월 등 exact filter, 또는 `영업자+고객명` 동시 filter. 무필터/사람 단독 검색/100건 초과는 fail-closed다.
+- 경계: 정산 사실의 기준은 `FREEPASS_DATA_SETTLEMENT`다. Admin은 승인된 업무 command를 수행하는 애플리케이션이며 별도 정본이 아니다. 소비 앱은 `settlement_rows`를 재계산하거나 두 번째 원장으로 복제하지 않는다. 미입력은 `null`이다.
+- 검증: 최신 `origin/main` 병합 후 `npm run check` 전체 PASS. Vitest 962 PASS / 12 SKIP, Sheets 24 PASS, read-runtime 5 PASS, shadow 10 PASS, dashboard 21 PASS. Claude 독립 검토는 두 차례 응답 없이 대기되어 UNAVAILABLE로 기록한다. 운영 토큰 등록·배포·Kakao Ops 실제 호출은 다음 검증 단계다.
+- next_start_here: `src/domain/settlement-ledger-view.ts` → `src/application/settlement-ledger-view.ts` → `src/api/consumer-gateway.ts` → `tests/settlement-ledger-view.test.ts`.

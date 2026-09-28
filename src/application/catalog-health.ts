@@ -2,6 +2,7 @@ import type { CatalogStore, ProjectionEvidenceSnapshotStore, ProjectionStore } f
 import { stableDigest } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from './projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
+import { auditOfferEconomicsTerms } from './resolve-offer-commercial-terms.js';
 
 export type CatalogHealthStatus = 'HEALTHY' | 'DEGRADED' | 'BLOCKED';
 export type CatalogHealthCheckStatus = 'PASS' | 'WARN' | 'FAIL';
@@ -16,12 +17,13 @@ export type CatalogHealthEntityType =
 
 export const CATALOG_DATA_HEALTH_CONTRACT_VERSION =
   'catalog-data-health-v1' as const;
-export const CATALOG_DATA_HEALTH_SCHEMA_VERSION = '1.0.0' as const;
+export const CATALOG_DATA_HEALTH_SCHEMA_VERSION = '1.1.0' as const;
 
 export const CATALOG_HEALTH_EVALUATED_DIMENSIONS = [
   'CANONICAL_VALIDATION',
   'CANONICAL_REVISION_INTEGRITY',
   'REFERENTIAL_INTEGRITY',
+  'OFFER_ECONOMICS_COMPLETENESS',
   'ACTIVE_PROJECTION_METADATA',
   'ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST',
   'ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST',
@@ -74,6 +76,9 @@ export const CATALOG_HEALTH_ISSUE_CODES = [
   'ACTIVE_RELEASE_CANONICAL_INPUT_VALIDATION_MISMATCH',
   'CANONICAL_REVISION_SNAPSHOT_MISSING',
   'CANONICAL_REVISION_SNAPSHOT_DRIFT',
+  'OFFER_ECONOMICS_TERM_MISSING',
+  'OFFER_ECONOMICS_VALUE_UNRESOLVED',
+  'OFFER_ECONOMICS_INVALID',
   'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION',
 ] as const;
 
@@ -130,6 +135,12 @@ export type CatalogHealthReport = {
     referentialIntegrity: {
       status: CatalogHealthCheckStatus;
       issueCount: number;
+    };
+    offerEconomics: {
+      status: CatalogHealthCheckStatus;
+      missingTermCount: number;
+      unresolvedValueCount: number;
+      invalidTermCount: number;
     };
     activeInputParity: {
       status: CatalogHealthCheckStatus;
@@ -221,6 +232,12 @@ const projectionIssueCodes = new Set<CatalogHealthIssueCode>([
   'ACTIVE_RELEASE_CANONICAL_INPUT_AHEAD',
   'ACTIVE_RELEASE_CANONICAL_INPUT_VALIDATION_MISMATCH',
   'ACTIVE_RELEASE_CHANGED_DURING_OBSERVATION'
+]);
+
+const economicsIssueCodes = new Set<CatalogHealthIssueCode>([
+  'OFFER_ECONOMICS_TERM_MISSING',
+  'OFFER_ECONOMICS_VALUE_UNRESOLVED',
+  'OFFER_ECONOMICS_INVALID'
 ]);
 
 function checkStatus(issues: CatalogHealthIssue[]): CatalogHealthCheckStatus {
@@ -421,6 +438,26 @@ export async function readCatalogDataHealth(
         entityType: 'offer',
         entityId: offer.id,
         message: `Offer ${offer.id} references missing Policy ${offer.policyId}.`
+      });
+    }
+    const economics = auditOfferEconomicsTerms(offer);
+    for (const decision of economics.decisions) {
+      const missing = decision.startsWith('ECONOMICS_TERM_REQUIRED:');
+      issues.push({
+        code: missing ? 'OFFER_ECONOMICS_TERM_MISSING' : 'OFFER_ECONOMICS_VALUE_UNRESOLVED',
+        severity: 'ERROR',
+        entityType: 'offer',
+        entityId: offer.id,
+        message: `Offer ${offer.id} period economics HOLD: ${decision}.`
+      });
+    }
+    for (const invalid of economics.invalidFacts) {
+      issues.push({
+        code: 'OFFER_ECONOMICS_INVALID',
+        severity: 'ERROR',
+        entityType: 'offer',
+        entityId: offer.id,
+        message: `Offer ${offer.id} period economics invalid: ${invalid}.`
       });
     }
   }
@@ -808,6 +845,7 @@ export async function readCatalogDataHealth(
   const projectionIssues = sortedIssues.filter((issue) =>
     projectionIssueCodes.has(issue.code)
   );
+  const economicsIssues = sortedIssues.filter((issue) => economicsIssueCodes.has(issue.code));
   const activeInputParityIssues = sortedIssues.filter((issue) =>
     issue.code === 'ACTIVE_RELEASE_CANONICAL_INPUT_MISSING' ||
     issue.code === 'ACTIVE_RELEASE_CANONICAL_INPUT_STALE' ||
@@ -857,6 +895,12 @@ export async function readCatalogDataHealth(
         status: checkStatus(referentialIssues),
         issueCount: referentialIssues.length
       },
+      offerEconomics: {
+        status: checkStatus(economicsIssues),
+        missingTermCount: economicsIssues.filter((issue) => issue.code === 'OFFER_ECONOMICS_TERM_MISSING').length,
+        unresolvedValueCount: economicsIssues.filter((issue) => issue.code === 'OFFER_ECONOMICS_VALUE_UNRESOLVED').length,
+        invalidTermCount: economicsIssues.filter((issue) => issue.code === 'OFFER_ECONOMICS_INVALID').length
+      },
       activeInputParity: {
         status: checkStatus(activeInputParityIssues),
         missingCount: activeInputMissingCount,
@@ -892,6 +936,7 @@ export async function readCatalogDataHealth(
         'CANONICAL_VALIDATION',
         'CANONICAL_REVISION_INTEGRITY',
         'REFERENTIAL_INTEGRITY',
+        'OFFER_ECONOMICS_COMPLETENESS',
         'ACTIVE_PROJECTION_METADATA',
         'ACTIVE_PROJECTION_DATA_PAYLOAD_DIGEST',
         'ACTIVE_PROJECTION_CANONICAL_INPUT_DIGEST',
