@@ -64,4 +64,21 @@ describe('vehicle master reference naming parity', () => {
     expect(report.status).toBe('PASS');
     expect(report.counts.outOfReferenceScopeMasters).toBe(1);
   });
+
+  it('holds a product that remains stale after its master name was repaired', () => {
+    const report = auditVehicleNameReferenceParity({
+      referenceRows,
+      masterRows: [
+        { id: 'g80-dh', maker: '제네시스', model: 'G80', subModel: 'G80', generationCode: 'DH', yearStart: '2016', yearEnd: '2020' },
+      ],
+      productRows: [
+        { id: 'p1', plateNumber: '24저4970', maker: '제네시스', model: 'G80', subModel: 'G80 DH' },
+      ],
+    });
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      entityId: '24저4970',
+      code: 'PRODUCT_REFERENCE_NAME_MISMATCH',
+      severity: 'HOLD',
+    }));
+  });
 });
