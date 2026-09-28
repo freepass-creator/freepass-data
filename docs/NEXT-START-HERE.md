@@ -7,6 +7,26 @@ Handoff base when closure work started: `28d46e1f8d14a3a08d86586dae535838e4d123c
 Branch: `main`
 Date: 2026-09-28
 
+## 2026-09-28 vehicle-name reference parity gate
+
+- 정본 비교 기준은 F03 `차종마스터`의 엔카 표시명이다. 세대코드를 일괄 삭제하지 않고 F03의 정확한
+  표시명(`K5 DL3` 등)은 그대로 보존한다.
+- 전체 입력 스냅샷(F03 1,668행 / Firestore `vehicle_master` 1,816건 / `products` 1,717건)을
+  읽기 전용으로 대조했다. 명백한 세대코드 접미사 drift는 master 41건·현재 product 93건이고,
+  기간 또는 명칭이 모호한 항목은 master 187건·product 105건으로 HOLD다.
+- `G80 DH -> G80`, `올 뉴 K3 BD -> 올 뉴 K3`는 명백한 drift에 포함되지만 이 두 사례만을 위한
+  예외 코드는 두지 않았다. 모든 제조사·모델에 동일한 reference parity 규칙을 적용한다.
+- 재현 명령: `npm run audit:vehicle-name-parity`. 입력은
+  `VEHICLE_NAME_REFERENCE_JSON`, `VEHICLE_NAME_MASTER_JSON`, 선택적
+  `VEHICLE_NAME_PRODUCT_JSON`으로 고정하며 불일치/HOLD가 있으면 exit 2로 닫힌다.
+- snapshot digest: `832c9db20f77f99ae4002e5a1eb35ab34866646e2512dae37319115272b62e68`.
+- 검증: `npm run check` PASS (Vitest 976 PASS / 12 SKIP 포함). 이 packet은 audit 계약이며
+  운영 Firestore 값을 자동 수정하지 않았다.
+
+next_start_here: 명백한 41개 master/93개 product 후보는 source evidence와 plate-level readback을
+붙인 별도 dry-run repair로 처리한다. HOLD 187개 master/105개 product는 이름을 추정하거나 세대코드를
+일괄 삭제하지 말고 F03 행·연식·원천 상품명을 추가 대조한다.
+
 ## 2026-09-28 F86 font durability lock
 
 - 기계 정본 `contracts/f01-f86-sheet-spec.v1.json` v1.1에 F86 글꼴을 `Malgun Gothic` 9pt 기울임으로 고정했다.
