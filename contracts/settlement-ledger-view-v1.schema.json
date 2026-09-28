@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/settlement-ledger-view-v1.schema.json",
+  "title": "FreePass Data Settlement Ledger View V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "data", "meta"],
+  "properties": {
+    "schema": { "const": "freepass-data.settlement-ledger/v1" },
+    "data": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/record" }
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["consumerId", "authority", "sourceProject", "sourceCollection", "observedAt", "count", "sourceDigest", "dataDigest"],
+      "properties": {
+        "consumerId": { "type": "string", "minLength": 1 },
+        "authority": { "const": "FREEPASS_ADMIN_SETTLEMENT" },
+        "sourceProject": { "const": "freepasserp5" },
+        "sourceCollection": { "const": "settlement_rows" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "count": { "type": "integer", "minimum": 0 },
+        "sourceDigest": { "$ref": "#/$defs/digest" },
+        "dataDigest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "nullableString": { "type": ["string", "null"] },
+    "nullableNumber": { "type": ["number", "null"] },
+    "nullableBoolean": { "type": ["boolean", "null"] },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ledgerId", "identity", "contract", "parties", "progress", "money", "source"],
+      "properties": {
+        "ledgerId": { "type": "string", "minLength": 1 },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["vehicleNumber", "receivedAt"],
+          "properties": {
+            "vehicleNumber": { "$ref": "#/$defs/nullableString" },
+            "receivedAt": { "$ref": "#/$defs/nullableString" }
+          }
+        },
+        "contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["customerName", "model", "productKind", "paymentKind", "paidRounds"],
+          "properties": {
+            "customerName": { "$ref": "#/$defs/nullableString" },
+            "model": { "$ref": "#/$defs/nullableString" },
+            "productKind": { "$ref": "#/$defs/nullableString" },
+            "paymentKind": { "$ref": "#/$defs/nullableString" },
+            "paidRounds": { "$ref": "#/$defs/nullableNumber" }
+          }
+        },
+        "parties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["supplierName", "supplierCode", "channelName", "channelCode", "agentName", "agentCode"],
+          "properties": {
+            "supplierName": { "$ref": "#/$defs/nullableString" },
+            "supplierCode": { "$ref": "#/$defs/nullableString" },
+            "channelName": { "$ref": "#/$defs/nullableString" },
+            "channelCode": { "$ref": "#/$defs/nullableString" },
+            "agentName": { "$ref": "#/$defs/nullableString" },
+            "agentCode": { "$ref": "#/$defs/nullableString" }
+          }
+        },
+        "progress": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["contractDocumentReceived", "delivered", "deliveredAt", "cancelled", "billed", "billingMonth", "billedAt", "invoiceIssued", "invoiceAt", "collected", "collectedAmount", "paid", "paidAmount", "billingHold", "settlementExcluded", "claimStage", "payStage"],
+          "properties": {
+            "contractDocumentReceived": { "$ref": "#/$defs/nullableBoolean" },
+            "delivered": { "$ref": "#/$defs/nullableBoolean" },
+            "deliveredAt": { "$ref": "#/$defs/nullableString" },
+            "cancelled": { "$ref": "#/$defs/nullableBoolean" },
+            "billed": { "$ref": "#/$defs/nullableBoolean" },
+            "billingMonth": { "$ref": "#/$defs/nullableString" },
+            "billedAt": { "$ref": "#/$defs/nullableString" },
+            "invoiceIssued": { "$ref": "#/$defs/nullableBoolean" },
+            "invoiceAt": { "$ref": "#/$defs/nullableString" },
+            "collected": { "$ref": "#/$defs/nullableBoolean" },
+            "collectedAmount": { "$ref": "#/$defs/nullableNumber" },
+            "paid": { "$ref": "#/$defs/nullableBoolean" },
+            "paidAmount": { "$ref": "#/$defs/nullableNumber" },
+            "billingHold": { "$ref": "#/$defs/nullableBoolean" },
+            "settlementExcluded": { "$ref": "#/$defs/nullableBoolean" },
+            "claimStage": { "$ref": "#/$defs/nullableString" },
+            "payStage": { "$ref": "#/$defs/nullableString" }
+          }
+        },
+        "money": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["claimAmount", "payAmount", "claimAdjustment", "payAdjustment", "adjustmentReason", "supplierFeeRaw", "channelFeeRaw"],
+          "properties": {
+            "claimAmount": { "$ref": "#/$defs/nullableNumber" },
+            "payAmount": { "$ref": "#/$defs/nullableNumber" },
+            "claimAdjustment": { "$ref": "#/$defs/nullableNumber" },
+            "payAdjustment": { "$ref": "#/$defs/nullableNumber" },
+            "adjustmentReason": { "$ref": "#/$defs/nullableString" },
+            "supplierFeeRaw": { "type": ["string", "number", "boolean", "null"] },
+            "channelFeeRaw": { "type": ["string", "number", "boolean", "null"] }
+          }
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["authority", "project", "collection", "documentId"],
+          "properties": {
+            "authority": { "const": "FREEPASS_ADMIN_SETTLEMENT" },
+            "project": { "const": "freepasserp5" },
+            "collection": { "const": "settlement_rows" },
+            "documentId": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

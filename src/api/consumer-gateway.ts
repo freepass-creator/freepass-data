@@ -8,6 +8,7 @@ import commercialOfferSchema from '../../contracts/commercial-offer-view-v1.sche
 import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with { type: 'json' };
 import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import estimateMasterSchema from '../../contracts/estimate-newcar-master-v1.schema.json' with { type: 'json' };
+import settlementLedgerSchema from '../../contracts/settlement-ledger-view-v1.schema.json' with { type: 'json' };
 import type { ProjectionEvidenceSnapshotStore, ProjectionStore } from '../ports/catalog-store.js';
 import type { AdminCatalogProduct, ErpPublicProduct, ProjectionRelease } from '../domain/catalog.js';
 import {
@@ -37,12 +38,18 @@ import {
   type AdminWorkflowCommitRequest,
   type AdminWorkflowReadSpec,
 } from '../domain/admin-workflow.js';
+import { readSettlementLedgerView } from '../application/settlement-ledger-view.js';
+import {
+  assertSettlementLedgerReadRequest,
+  type SettlementLedgerReadRequest,
+} from '../domain/settlement-ledger-view.js';
 
 export type ConsumerCapability =
   | 'catalog'
   | 'catalog-health'
   | 'estimate-newcar-master'
   | 'estimate-artifacts'
+  | 'settlement-ledger-read'
   | 'admin-workflow';
 export type ConsumerBinding = {
   id: string;
@@ -87,7 +94,7 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
           if (!Array.isArray(item.capabilities) || item.capabilities.length === 0) {
             throw new Error('Consumer capabilities must be a non-empty array');
           }
-          const allowed = new Set<ConsumerCapability>(['catalog', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'admin-workflow']);
+          const allowed = new Set<ConsumerCapability>(['catalog', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'settlement-ledger-read', 'admin-workflow']);
           const values = item.capabilities.map((value) => {
             if (typeof value !== 'string' || !allowed.has(value as ConsumerCapability)) {
               throw new Error('Unsupported consumer capability');
@@ -170,6 +177,7 @@ export function createConsumerGateway(
   const validateAdminResponse = ajv.compile(adminCatalogSchema);
   const validateHealth = ajv.compile(healthSchema);
   const validateEstimateMaster = ajv.compile(estimateMasterSchema);
+  const validateSettlementLedger = ajv.compile(settlementLedgerSchema);
   app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
   app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/catalog', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -601,6 +609,63 @@ export function createConsumerGateway(
       return reply.code(503).send({ code: 'HEALTH_READ_FAILED' });
     }
   });
+
+  app.post<{ Params: { consumerId: string }; Body: SettlementLedgerReadRequest }>(
+    '/v1/consumers/:consumerId/settlement-ledger/read',
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const binding = registered.get(request.params.consumerId);
+      const supplied = request.headers.authorization ?? '';
+      const matches = timingSafeEqual(
+        hash(supplied),
+        hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer')
+      );
+      const context = consumerContext(
+        binding?.id ?? 'unregistered-consumer',
+        'read Admin-owned settlement ledger facts through FreePass Data',
+        request.id
+      );
+      const resource = { kind: 'PROJECTION' as const, name: 'settlement-ledger' };
+
+      try {
+        if (!binding || !matches) {
+          await access.deny('READ', { context, operation: 'READ_SETTLEMENT_LEDGER', resource }, 'UNAUTHORIZED');
+          return reply.code(401).send({ code: 'UNAUTHORIZED' });
+        }
+        if (!binding.capabilities.includes('settlement-ledger-read')) {
+          await access.deny('READ', { context, operation: 'READ_SETTLEMENT_LEDGER', resource }, 'FORBIDDEN');
+          return reply.code(403).send({ code: 'FORBIDDEN' });
+        }
+        if (!workflowStore) {
+          await access.deny('READ', { context, operation: 'READ_SETTLEMENT_LEDGER', resource }, 'SETTLEMENT_LEDGER_UNAVAILABLE');
+          return reply.code(503).send({ code: 'SETTLEMENT_LEDGER_UNAVAILABLE' });
+        }
+        assertSettlementLedgerReadRequest(request.body);
+        const result = await access.read({
+          context,
+          operation: 'READ_SETTLEMENT_LEDGER',
+          resource,
+          requestDigest: stableDigest(request.body),
+          summarize: (value) => ({ count: value.meta.count, digest: value.meta.dataDigest })
+        }, () => readSettlementLedgerView(workflowStore, binding.id, request.body));
+        if (!validateSettlementLedger(result)) {
+          return reply.code(503).send({ code: 'SETTLEMENT_LEDGER_RESPONSE_INVALID' });
+        }
+        return result;
+      } catch (error) {
+        if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
+        const code = error instanceof Error ? error.message : 'SETTLEMENT_LEDGER_READ_FAILED';
+        if (
+          code.startsWith('INVALID_SETTLEMENT_LEDGER_')
+          || code === 'SETTLEMENT_LEDGER_QUERY_REQUIRES_FILTER'
+          || code === 'SETTLEMENT_LEDGER_PERSON_LOOKUP_REQUIRES_AGENT_AND_CUSTOMER'
+        ) {
+          return reply.code(400).send({ code });
+        }
+        return reply.code(503).send({ code: 'SETTLEMENT_LEDGER_READ_FAILED' });
+      }
+    }
+  );
 
   app.post<{ Params: { consumerId: string }; Body: AdminWorkflowReadSpec }>(
     '/v1/consumers/:consumerId/admin-workflow/read',

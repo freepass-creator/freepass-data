@@ -130,10 +130,24 @@ VAT 포함/별도/미확인이 섞인 금액을 합치거나 청구총액에서 
 | 각 화이트라벨 | 등록 조직의 공개 허용 상품과 브랜드 설정 | 타 조직 데이터 및 내부 정산; API 등록만으로 tenant별 노출 적합성을 증명하지 않음 |
 | ERP.com 내부 운영 화면 | 별도 관리자 인증과 업무 권한에 맞는 조회 | 공개 endpoint/캐시와 혼용 금지; 현재 동작은 경로별 검증 필요 |
 | Admin | 담당 업무/조직 권한의 상품·접수·계약·정산·증빙 | 다른 조직 또는 승인 권한 밖의 자료 |
+| Kakao Ops 등 등록 소비자 | `settlement-ledger-read`가 명시된 서비스만 차량번호·정산코드·접수일·청구월 또는 `영업자+고객명`으로 현재 원장 사실 조회 | 무조건 전체 조회, 고객명/영업자 단독 검색, Admin 상태 변경·청구·수금·지급 command |
 
 F01/F86 전체 셀에 금융 정보를 추가하는 작업은 이번 범위에 없다.
 PR23의 ERP public schema는 서비스 간 읽기 계약이지 모든 필드의 인터넷 공개 승인표가 아니다.
 원문·계좌정보·인증정보는 공개 schema에 섞지 않는다. 소비처 캐시도 조직·권한·버전 경계를 지킨다.
+
+### 정산원장 읽기 데이터 제품 v1
+
+- 계약: `contracts/settlement-ledger-view-v1.schema.json`
+- API: `POST /v1/consumers/:consumerId/settlement-ledger/read`
+- 권한: 등록 소비자의 `settlement-ledger-read` capability와 개별 서비스 토큰이 모두 필요하다.
+- 정본/쓰기 소유자: FreePass Admin의 `freepasserp5/settlement_rows`. Data는 읽기 형태만 제공하며 상태나 금액을 다시 계산하지 않는다.
+- 검색: 문서 ID 또는 allowlist 필드의 정확 일치. 무필터 조회는 거부하고 최대 100건으로 제한한다.
+- 사람 검색: `agent`와 `customer`를 반드시 함께 전달한다. 결과가 여러 건이면 차량번호와 접수일을 함께 제시하고 사용자가 대상을 확정하게 한다.
+- 미입력: boolean·금액이 원문에 없으면 `null`로 반환한다. `false`나 `0`으로 추정하지 않는다.
+- 개인정보: 전화번호·주소·계좌·메모·사업자번호는 v1 응답에 포함하지 않는다.
+
+재사용 판정은 기존 `AdminWorkflowStore`, 인증 consumer gateway, Data Access audit를 `COMPOSE_OR_EXTEND`로 확장했다. 별도 정산 repository/calculator는 만들지 않았다. 신규 JSON Schema는 Kakao Ops 등 비-Admin 소비자가 내부 Firestore 문서 구조에 결합하지 않게 하는 공개 계약이라 `CREATE_NEW_JUSTIFIED`다.
 
 ## 6. 현재 코드와 실제 연결 증거
 
