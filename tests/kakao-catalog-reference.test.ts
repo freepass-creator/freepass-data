@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  KAKAO_COMMISSION_POLICY,
   buildKakaoCatalogReference,
   buildKakaoCatalogReferenceProduct,
   resolveReferenceDeposit,
@@ -104,6 +105,30 @@ describe('Kakao sales commission facts', () => {
 });
 
 describe('Kakao billing, payout and margin facts', () => {
+  it('matches the F04 billing/payout ladder for every supplier code that uses the standard re-rent policy', () => {
+    const supplierIds = [
+      ...KAKAO_COMMISSION_POLICY.standardSupplierIds,
+      ...KAKAO_COMMISSION_POLICY.exceptionSupplierIds.sonokong,
+      ...KAKAO_COMMISSION_POLICY.exceptionSupplierIds.iancar,
+      ...KAKAO_COMMISSION_POLICY.exceptionSupplierIds.iron,
+      ...KAKAO_COMMISSION_POLICY.exceptionSupplierIds.pacific,
+    ];
+    const expected = new Map([
+      [12, [600000, 500000]],
+      [24, [912000, 768000]],
+      [36, [1080000, 864000]],
+      [48, [1248000, 960000]],
+      [60, [1080000, 840000]],
+    ]);
+    for (const supplierId of new Set(supplierIds)) {
+      for (const [termMonths, [billing, payout]] of expected) {
+        const input = { supplierId, productType: '중고렌트', termMonths, monthlyRent: 800000, fuel: '가솔린' };
+        expect(resolveSupplierBillingFee(input), `${supplierId}/${termMonths}/billing`).toMatchObject({ state: 'CALCULATED', amount: billing });
+        expect(resolveSalesCommission(input), `${supplierId}/${termMonths}/payout`).toMatchObject({ state: 'CALCULATED', amount: payout });
+      }
+    }
+  });
+
   it.each([
     [12, 600000, 500000, 100000],
     [24, 912000, 768000, 144000],

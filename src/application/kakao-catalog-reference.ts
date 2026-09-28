@@ -190,6 +190,7 @@ const unknownCommission = (reasonCode: string): CommissionResolution => ({
 const standardLadderSupplier = (supplierId: string) =>
   KAKAO_COMMISSION_POLICY.standardSupplierIds.includes(supplierId as never)
   || KAKAO_COMMISSION_POLICY.exceptionSupplierIds.sonokong.includes(supplierId as 'RP012')
+  || KAKAO_COMMISSION_POLICY.exceptionSupplierIds.star.includes(supplierId as 'RP018')
   || KAKAO_COMMISSION_POLICY.exceptionSupplierIds.iancar.includes(supplierId as 'RP004')
   || KAKAO_COMMISSION_POLICY.exceptionSupplierIds.pacific.includes(supplierId as 'RP022');
 
