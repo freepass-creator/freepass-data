@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  KAKAO_COMMISSION_POLICY,
   buildKakaoCatalogReference,
   buildKakaoCatalogReferenceProduct,
   resolveReferenceDeposit,
+  resolveExpectedGrossMargin,
   resolveSalesCommission,
+  resolveSupplierBillingFee,
 } from '../src/application/kakao-catalog-reference.js';
 
 describe('Kakao catalog reference deposit facts', () => {
@@ -101,6 +104,86 @@ describe('Kakao sales commission facts', () => {
   });
 });
 
+describe('Kakao billing, payout and margin facts', () => {
+  it('matches the F04 billing/payout ladder for every supplier code that uses the standard re-rent policy', () => {
+    const supplierIds = [
+      ...KAKAO_COMMISSION_POLICY.standardSupplierIds,
+      ...KAKAO_COMMISSION_POLICY.exceptionSupplierIds.sonokong,
+      ...KAKAO_COMMISSION_POLICY.exceptionSupplierIds.iancar,
+      ...KAKAO_COMMISSION_POLICY.exceptionSupplierIds.iron,
+      ...KAKAO_COMMISSION_POLICY.exceptionSupplierIds.pacific,
+    ];
+    const expected = new Map([
+      [12, [600000, 500000]],
+      [24, [912000, 768000]],
+      [36, [1080000, 864000]],
+      [48, [1248000, 960000]],
+      [60, [1080000, 840000]],
+    ]);
+    for (const supplierId of new Set(supplierIds)) {
+      for (const [termMonths, [billing, payout]] of expected) {
+        const input = { supplierId, productType: '중고렌트', termMonths, monthlyRent: 800000, fuel: '가솔린' };
+        expect(resolveSupplierBillingFee(input), `${supplierId}/${termMonths}/billing`).toMatchObject({ state: 'CALCULATED', amount: billing });
+        expect(resolveSalesCommission(input), `${supplierId}/${termMonths}/payout`).toMatchObject({ state: 'CALCULATED', amount: payout });
+      }
+    }
+  });
+
+  it.each([
+    [12, 600000, 500000, 100000],
+    [24, 912000, 768000, 144000],
+    [36, 1080000, 864000, 216000],
+    [48, 1248000, 960000, 288000],
+    [60, 1080000, 840000, 240000],
+  ])('calculates both sides and margin from the standard F04 ladder for %s months', (termMonths, billing, payout, margin) => {
+    const input = { supplierId: 'RP013', productType: '중고렌트', termMonths, monthlyRent: 800000 };
+    const supplierBillingFee = resolveSupplierBillingFee(input);
+    const channelPayoutFee = resolveSalesCommission({ ...input, fuel: '가솔린' });
+    expect(supplierBillingFee).toMatchObject({ state: 'CALCULATED', amount: billing });
+    expect(channelPayoutFee).toMatchObject({ state: 'CALCULATED', amount: payout });
+    expect(resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee)).toMatchObject({ state: 'CALCULATED', amount: margin });
+  });
+
+  it('calculates the confirmed Oplus fixed billing, payout and pre-VAT margin for every period', () => {
+    for (const termMonths of [12, 24, 36, 48, 60]) {
+      const input = { supplierId: 'RP023', productType: '오플구독', termMonths, monthlyRent: 700000 };
+      const supplierBillingFee = resolveSupplierBillingFee(input);
+      const channelPayoutFee = resolveSalesCommission({ ...input, fuel: '가솔린' });
+      expect(supplierBillingFee).toMatchObject({
+        state: 'CALCULATED', ruleId: 'AUTOPLUS_SUBSCRIPTION_BILLING_FIXED', amount: 1000000,
+        vatAmount: 100000, totalAmount: 1100000,
+      });
+      expect(channelPayoutFee).toMatchObject({ state: 'CALCULATED', amount: 800000 });
+      expect(resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee)).toEqual({
+        state: 'CALCULATED', amount: 200000, currency: 'KRW',
+        basis: 'SUPPLY_AMOUNT_EXCLUDING_VAT', reasonCode: null,
+      });
+    }
+  });
+
+  it('applies the switch subscription and Iancar fixed exceptions on both sides', () => {
+    const switchInput = { supplierId: 'RP014', productType: '중고구독', termMonths: 36, monthlyRent: 800000 };
+    expect(resolveSupplierBillingFee(switchInput)).toMatchObject({ state: 'CALCULATED', amount: 1080000 });
+    expect(resolveSalesCommission({ ...switchInput, fuel: '가솔린' })).toMatchObject({ state: 'CALCULATED', amount: 864000 });
+
+    const iancarInput = { supplierId: 'RP004', productType: '중고렌트', termMonths: 6, monthlyRent: 700000, fuel: '가솔린' };
+    expect(resolveSupplierBillingFee(iancarInput)).toMatchObject({ state: 'CALCULATED', amount: 400000 });
+    expect(resolveSalesCommission(iancarInput)).toMatchObject({ state: 'CALCULATED', amount: 300000 });
+  });
+
+  it('does not invent margin for human-decided or absent F04 rules', () => {
+    const supplierBillingFee = resolveSupplierBillingFee({ supplierId: 'RP012', productType: '오공구독', termMonths: 36, monthlyRent: 800000 });
+    const channelPayoutFee = resolveSalesCommission({ supplierId: 'RP012', productType: '오공구독', fuel: '가솔린', termMonths: 36, monthlyRent: 800000 });
+    expect(supplierBillingFee).toMatchObject({ state: 'COORDINATION_REQUIRED' });
+    expect(resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee)).toMatchObject({
+      state: 'UNKNOWN', amount: null, reasonCode: 'BILLING_OR_PAYOUT_UNRESOLVED',
+    });
+    expect(resolveSupplierBillingFee({ supplierId: 'RP034', productType: '중고렌트', termMonths: 36, monthlyRent: 800000 })).toMatchObject({
+      state: 'UNKNOWN', reasonCode: 'SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE',
+    });
+  });
+});
+
 describe('Kakao typed REFERENCE_ONLY projection', () => {
   const product = {
     listable: true,
@@ -127,6 +210,29 @@ describe('Kakao typed REFERENCE_ONLY projection', () => {
     });
   });
 
+  it('exposes Oplus billing, payout and expected gross margin without depending on the term', () => {
+    expect(buildKakaoCatalogReferenceProduct('oplus-1', {
+      ...product,
+      product_type: '오플구독', provider_company_code: 'RP023', provider_name: '오토플러스',
+      price: { '24_2만': { rent: 700000, deposit: 0 }, '36_2만': { rent: 650000, deposit: 0 } },
+    })).toMatchObject({
+      offers: [{ priceTerms: [
+        {
+          termMonths: 24,
+          supplierBillingFee: { amount: 1000000 },
+          channelPayoutFee: { amount: 800000 },
+          expectedGrossMargin: { state: 'CALCULATED', amount: 200000 },
+        },
+        {
+          termMonths: 36,
+          supplierBillingFee: { amount: 1000000 },
+          channelPayoutFee: { amount: 800000 },
+          expectedGrossMargin: { state: 'CALCULATED', amount: 200000 },
+        },
+      ] }],
+    });
+  });
+
   it('excludes non-listable source rows and marks the whole response REFERENCE_ONLY/HOLD', () => {
     const response = buildKakaoCatalogReference({
       consumerId: 'kakao-ops',
@@ -137,7 +243,7 @@ describe('Kakao typed REFERENCE_ONLY projection', () => {
     expect(response.meta).toMatchObject({
       authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD', sourceCount: 2, projectedCount: 1,
     });
-    expect(response.commissionPolicy.sourceFiles).toHaveLength(6);
+    expect(response.commissionPolicy.sourceFiles).toHaveLength(1);
     expect(response.commissionPolicy.digest).toMatch(/^[0-9a-f]{64}$/);
   });
 });
