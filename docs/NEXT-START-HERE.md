@@ -18,8 +18,15 @@ Date: 2026-09-28
 - 검증: 신규/관련 테스트 6 PASS, TypeScript build PASS, 전체 check 중 977 PASS / 12 SKIP 후
   기존 `runtime-policy` 5초 timeout 1건은 단독 재실행 5 PASS로 확인했다.
 
-next_start_here: 운영 apply 후 157개 문서 readback과 parity 재감사를 기록한다. HOLD 84건은 현재
-Google Sheets OAuth scope 복구 후 최신 F03 재조회, 공급사 원문 보강 전에는 추정 수정하지 않는다.
+next_start_here: HOLD 84건은 현재 Google Sheets OAuth scope 복구 후 최신 F03 재조회와 공급사 원문
+보강 전에는 추정 수정하지 않는다.
+
+- production apply 완료: run `2026-09-28T06-11-51-115Z-741269dd-94d8-440d-8e5f-6d246456b316`.
+  `vehicle_master` 41건 + `products` 116건을 수정 전 private backup 뒤 단일 transaction으로 적용했고
+  157건 readback이 모두 일치했다.
+- post-apply 전체 감사: errors 0, product HOLD 84, digest
+  `6f581fa84145590bd283968ab9297620455e20a0a5e70bef8029e11906f40cd4`.
+- `G80 DH`, `올 뉴 K3 BD` 잔존은 0건이다. HOLD는 자동 보정하지 않았다.
 
 Post-apply audit에서 master 이름이 먼저 정정된 뒤 stale product가 기존 master-issue 전파 검사에서
 빠지는 경우를 발견했다. product를 master 상태와 독립적으로 F03 reference에 직접 대조하도록 보강하며,
