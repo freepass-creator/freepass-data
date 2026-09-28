@@ -25,7 +25,8 @@ export type VehicleNameParityIssueCode =
   | 'REFERENCE_NAME_MISMATCH'
   | 'GENERATION_CODE_SUFFIX_DRIFT'
   | 'GENERATION_CODE_SUFFIX_TIME_MISMATCH'
-  | 'PRODUCT_USES_DRIFTED_MASTER_NAME';
+  | 'PRODUCT_USES_DRIFTED_MASTER_NAME'
+  | 'PRODUCT_REFERENCE_NAME_MISMATCH';
 
 export type VehicleNameParityIssue = {
   code: VehicleNameParityIssueCode;
@@ -110,6 +111,7 @@ export function auditVehicleNameReferenceParity(input: {
 
   const issues: VehicleNameParityIssue[] = [];
   const masterIssueByName = new Map<string, VehicleNameParityIssue>();
+  const masterIdByName = new Map<string, string>();
   let exactMasters = 0;
   let outOfReferenceScopeMasters = 0;
 
@@ -117,6 +119,7 @@ export function auditVehicleNameReferenceParity(input: {
     const maker = text(master.maker);
     const model = text(master.model);
     const actualSubModel = text(master.subModel);
+    masterIdByName.set(key(maker, model, actualSubModel), master.id);
     if (exactReference.has(key(maker, model, actualSubModel))) {
       exactMasters += 1;
       continue;
@@ -155,20 +158,24 @@ export function auditVehicleNameReferenceParity(input: {
 
   let affectedProducts = 0;
   for (const product of input.productRows ?? []) {
-    const masterIssue = masterIssueByName.get(key(product.maker, product.model, product.subModel));
-    if (!masterIssue) continue;
+    const productKey = key(product.maker, product.model, product.subModel);
+    if (exactReference.has(productKey)) continue;
+    const candidates = referenceByModel.get(key(product.maker, product.model));
+    if (!candidates?.length) continue;
+    const masterIssue = masterIssueByName.get(productKey);
     affectedProducts += 1;
+    const relatedMasterId = masterIssue?.entityId ?? masterIdByName.get(productKey);
     issues.push({
-      code: 'PRODUCT_USES_DRIFTED_MASTER_NAME',
-      severity: masterIssue.severity,
+      code: masterIssue ? 'PRODUCT_USES_DRIFTED_MASTER_NAME' : 'PRODUCT_REFERENCE_NAME_MISMATCH',
+      severity: masterIssue?.severity ?? 'HOLD',
       entityKind: 'PRODUCT',
       entityId: product.plateNumber || product.id,
       maker: text(product.maker),
       model: text(product.model),
       actualSubModel: text(product.subModel),
-      expectedSubModels: masterIssue.expectedSubModels,
-      suggestedSubModel: masterIssue.suggestedSubModel,
-      relatedMasterId: masterIssue.entityId,
+      expectedSubModels: masterIssue?.expectedSubModels ?? [...new Set(candidates.map((row) => row.subModel))].sort(),
+      suggestedSubModel: masterIssue?.suggestedSubModel ?? null,
+      ...(relatedMasterId ? { relatedMasterId } : {}),
     });
   }
 

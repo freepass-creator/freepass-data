@@ -11,15 +11,19 @@ Date: 2026-09-28
 
 - 기존 parity 결과를 현재 Firestore 원문 차명·연식·차량번호와 다시 결합했다. 마스터명 일괄 치환과
   상품별 판정을 분리하며, F03 후보명이 원문에 명시되고 유효기간이 겹치는 경우만 repair한다.
-- exact plan: master 41건 / product 116건. 나머지 product 82건은 원문에 세대가 없거나, 원문과
+- exact plan: master 41건 / product 116건. 적용 후 독립 product parity로 확인된 나머지 product 84건은 원문에 세대가 없거나, 원문과
   정제값·연식이 충돌하거나, 현재 F03 후보에 최신 세대가 없어 HOLD다.
 - apply는 exact source digest 승인, 수정 전 private backup, 한 Firestore transaction의 expected-value
   precondition, Data Access 감사, 수정 후 전체 readback을 모두 요구한다.
 - 검증: 신규/관련 테스트 6 PASS, TypeScript build PASS, 전체 check 중 977 PASS / 12 SKIP 후
   기존 `runtime-policy` 5초 timeout 1건은 단독 재실행 5 PASS로 확인했다.
 
-next_start_here: 운영 apply 후 157개 문서 readback과 parity 재감사를 기록한다. HOLD 82건은 현재
+next_start_here: 운영 apply 후 157개 문서 readback과 parity 재감사를 기록한다. HOLD 84건은 현재
 Google Sheets OAuth scope 복구 후 최신 F03 재조회, 공급사 원문 보강 전에는 추정 수정하지 않는다.
+
+Post-apply audit에서 master 이름이 먼저 정정된 뒤 stale product가 기존 master-issue 전파 검사에서
+빠지는 경우를 발견했다. product를 master 상태와 독립적으로 F03 reference에 직접 대조하도록 보강하며,
+정정되지 않은 product는 `PRODUCT_REFERENCE_NAME_MISMATCH` HOLD로 계속 노출한다.
 
 ## 2026-09-28 vehicle-name reference parity gate
 
