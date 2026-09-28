@@ -13,6 +13,11 @@ import { readLegacyProductSnapshot } from '../adapters/legacy-freepasserp3.js';
 import { ingestLegacyProductSnapshot } from '../application/ingest-legacy-products.js';
 import { ingestRawSourceBatch } from '../application/ingest-raw-source.js';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
+import { F04_SOURCE_ID } from '../adapters/f04-settlement-source.js';
+import {
+  readF04SettlementSource,
+  type F04SettlementSourceQuery,
+} from '../application/f04-settlement-source-query.js';
 import { prepareSheetBridgeHandoffs } from '../application/sheet-publication-bridge.js';
 import {
   assessLatestSheetConsumerCutover,
@@ -458,6 +463,25 @@ export async function createSourceIngestDataAccessRuntime() {
           })
         })
       }, () => ingestRawSourceBatch(sourceStore, batch))
+  };
+}
+
+export async function createF04SettlementQueryDataAccessRuntime() {
+  const { createFirestoreSourceStore } = await import('../infra/source-firestore-store.js');
+  const access = new DataAccessGateway(createFirestoreDataAccessLogStore());
+  const sourceStore = createFirestoreSourceStore();
+
+  return {
+    query: (input: F04SettlementSourceQuery) => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-f04-query', kind: 'SERVICE' },
+        clientId: 'job:query-f04-settlement-source',
+        purpose: 'query the current F04 settlement source snapshot',
+      },
+      operation: 'READ_F04_SETTLEMENT_SOURCE',
+      resource: { kind: 'SOURCE', name: F04_SOURCE_ID },
+      summarize: (value) => ({ count: value.matched, digest: value.digest }),
+    }, () => readF04SettlementSource(sourceStore, input)),
   };
 }
 

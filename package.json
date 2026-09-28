@@ -42,6 +42,8 @@
     "dry-run:estimate-master-canonical": "tsx src/jobs/build-estimate-newcar-master-canonical-dry-run.ts",
     "check:estimate-master-readiness": "tsx src/jobs/check-estimate-master-readiness.ts --scheduled-read-only",
     "ingest:erp5-source": "tsx src/jobs/ingest-erp5-source.ts",
+    "dry-run:f04-settlement-source": "tsx src/jobs/build-f04-settlement-source-batch.ts",
+    "query:f04-settlement-source": "tsx src/jobs/query-f04-settlement-source.ts",
     "ingest:settlement-source": "tsx src/jobs/ingest-settlement-source.ts",
     "promote:vehicle-master-canonical": "tsx src/jobs/promote-vehicle-master-canonical.ts"
   },
