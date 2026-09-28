@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "effectiveDate": "2026-09-21",
   "owner": "freepass-data",
   "status": "SPEC_PUBLISHER_PINNED_LIVE_REAPPLY_AND_WATCHDOG_RECOVERY_VERIFIED_NATIVE_SCHEDULE_OBSERVATION_HOLD",
@@ -57,6 +57,11 @@
     },
     "F01": "preserve_existing_standard_table",
     "F86": "preserve_existing_retro_supplier_view",
+    "F86TextFormat": {
+      "fontFamily": "Malgun Gothic",
+      "fontSize": 9,
+      "italic": true
+    },
     "F86MinimumVisibleFeeMonths": 24,
     "F86FeeVisibility": "long_term_rent_and_deposit_hide_short_term_through_12_months",
     "headerRowsFrozen": 1,
@@ -115,6 +120,7 @@
   "publisherAcceptance": [
     "use_logical_tab_key_or_sheetId_not_title_startsWith",
     "apply_same_name_order_color_rules_in_F01_F86",
+    "enforce_F86_Malgun_Gothic_9pt_italic_on_every_populated_cell",
     "do_not_recreate_retired_ogong_tab",
     "verify_vehicle_keys_counts_and_readback",
     "back_up_before_consolidation",
