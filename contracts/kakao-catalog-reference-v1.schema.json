@@ -165,15 +165,26 @@
     },
     "commissionPolicy": {
       "type": "object",
-      "required": ["policyId", "sourceRole", "sourceObservedAt", "sourceFiles", "standardSupplierIds", "exceptionSupplierIds", "rules", "digest"],
+      "required": ["policyId", "sourceRole", "sourceObservedAt", "canonicalSource", "sourceFiles", "standardSupplierIds", "exceptionSupplierIds", "rules", "timingRules", "digest"],
       "properties": {
         "policyId": { "const": "sales-commission-2026-09-28" },
-        "sourceRole": { "const": "GOOGLE_SHEETS_SSOT_SNAPSHOT" },
+        "sourceRole": { "const": "REPOSITORY_SSOT_WITH_GOOGLE_SHEET_COPY" },
         "sourceObservedAt": { "type": "string", "format": "date-time" },
-        "sourceFiles": { "type": "array", "minItems": 6, "maxItems": 6 },
+        "canonicalSource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "path", "revision"],
+          "properties": {
+            "repository": { "const": "freepass-creator/freepasserp4" },
+            "path": { "const": "lib/domain/settlement-fee-table.ts" },
+            "revision": { "type": "string", "minLength": 1 }
+          }
+        },
+        "sourceFiles": { "type": "array", "minItems": 1, "maxItems": 1 },
         "standardSupplierIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
         "exceptionSupplierIds": { "type": "object" },
         "rules": { "type": "array", "minItems": 1 },
+        "timingRules": { "type": "array", "minItems": 1 },
         "digest": { "$ref": "#/$defs/digest" }
       }
     }

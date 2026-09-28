@@ -104,6 +104,21 @@ describe('Kakao sales commission facts', () => {
 });
 
 describe('Kakao billing, payout and margin facts', () => {
+  it.each([
+    [12, 600000, 500000, 100000],
+    [24, 912000, 768000, 144000],
+    [36, 1080000, 864000, 216000],
+    [48, 1248000, 960000, 288000],
+    [60, 1080000, 840000, 240000],
+  ])('calculates both sides and margin from the standard F04 ladder for %s months', (termMonths, billing, payout, margin) => {
+    const input = { supplierId: 'RP013', productType: '중고렌트', termMonths, monthlyRent: 800000 };
+    const supplierBillingFee = resolveSupplierBillingFee(input);
+    const channelPayoutFee = resolveSalesCommission({ ...input, fuel: '가솔린' });
+    expect(supplierBillingFee).toMatchObject({ state: 'CALCULATED', amount: billing });
+    expect(channelPayoutFee).toMatchObject({ state: 'CALCULATED', amount: payout });
+    expect(resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee)).toMatchObject({ state: 'CALCULATED', amount: margin });
+  });
+
   it('calculates the confirmed Oplus fixed billing, payout and pre-VAT margin for every period', () => {
     for (const termMonths of [12, 24, 36, 48, 60]) {
       const input = { supplierId: 'RP023', productType: '오플구독', termMonths, monthlyRent: 700000 };
@@ -121,16 +136,25 @@ describe('Kakao billing, payout and margin facts', () => {
     }
   });
 
-  it('does not invent margin when the supplier billing rule is not verified', () => {
-    const supplierBillingFee = resolveSupplierBillingFee({
-      supplierId: 'RP013', productType: '중고렌트', termMonths: 36, monthlyRent: 800000,
-    });
-    const channelPayoutFee = resolveSalesCommission({
-      supplierId: 'RP013', productType: '중고렌트', fuel: '가솔린', termMonths: 36, monthlyRent: 800000,
-    });
-    expect(supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'SUPPLIER_BILLING_RULE_NOT_VERIFIED' });
+  it('applies the switch subscription and Iancar fixed exceptions on both sides', () => {
+    const switchInput = { supplierId: 'RP014', productType: '중고구독', termMonths: 36, monthlyRent: 800000 };
+    expect(resolveSupplierBillingFee(switchInput)).toMatchObject({ state: 'CALCULATED', amount: 1080000 });
+    expect(resolveSalesCommission({ ...switchInput, fuel: '가솔린' })).toMatchObject({ state: 'CALCULATED', amount: 864000 });
+
+    const iancarInput = { supplierId: 'RP004', productType: '중고렌트', termMonths: 6, monthlyRent: 700000, fuel: '가솔린' };
+    expect(resolveSupplierBillingFee(iancarInput)).toMatchObject({ state: 'CALCULATED', amount: 400000 });
+    expect(resolveSalesCommission(iancarInput)).toMatchObject({ state: 'CALCULATED', amount: 300000 });
+  });
+
+  it('does not invent margin for human-decided or absent F04 rules', () => {
+    const supplierBillingFee = resolveSupplierBillingFee({ supplierId: 'RP012', productType: '오공구독', termMonths: 36, monthlyRent: 800000 });
+    const channelPayoutFee = resolveSalesCommission({ supplierId: 'RP012', productType: '오공구독', fuel: '가솔린', termMonths: 36, monthlyRent: 800000 });
+    expect(supplierBillingFee).toMatchObject({ state: 'COORDINATION_REQUIRED' });
     expect(resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee)).toMatchObject({
       state: 'UNKNOWN', amount: null, reasonCode: 'BILLING_OR_PAYOUT_UNRESOLVED',
+    });
+    expect(resolveSupplierBillingFee({ supplierId: 'RP034', productType: '중고렌트', termMonths: 36, monthlyRent: 800000 })).toMatchObject({
+      state: 'UNKNOWN', reasonCode: 'SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE',
     });
   });
 });
@@ -194,7 +218,7 @@ describe('Kakao typed REFERENCE_ONLY projection', () => {
     expect(response.meta).toMatchObject({
       authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD', sourceCount: 2, projectedCount: 1,
     });
-    expect(response.commissionPolicy.sourceFiles).toHaveLength(6);
+    expect(response.commissionPolicy.sourceFiles).toHaveLength(1);
     expect(response.commissionPolicy.digest).toMatch(/^[0-9a-f]{64}$/);
   });
 });

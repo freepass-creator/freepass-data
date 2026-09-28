@@ -11,15 +11,15 @@ export const KAKAO_CATALOG_REFERENCE_SCHEMA = 'freepass-data.kakao-catalog-refer
 
 export const KAKAO_COMMISSION_POLICY = {
   policyId: 'sales-commission-2026-09-28',
-  sourceRole: 'GOOGLE_SHEETS_SSOT_SNAPSHOT',
-  sourceObservedAt: '2026-09-27T17:50:36.383Z',
+  sourceRole: 'REPOSITORY_SSOT_WITH_GOOGLE_SHEET_COPY',
+  sourceObservedAt: '2026-09-28T00:09:22.575Z',
+  canonicalSource: {
+    repository: 'freepass-creator/freepasserp4',
+    path: 'lib/domain/settlement-fee-table.ts',
+    revision: 'f862d0097f6e83d79d0b699bc369a83716b1d982',
+  },
   sourceFiles: [
-    { code: 'F80', id: '1xna0rU3yDhEh8Jd7yy_DBGquoWj1IV-D4oh2lXLGvwA', sheetId: 1805460665, range: '수수료!A1:E36', modifiedTime: '2026-09-08T09:35:52.626Z' },
-    { code: 'F81', id: '1qMakR9SrU6d1I-EkG5esuWCaOZftYNV_nHvKrrCNNa8', sheetId: 1484385044, range: '수수료!A1:E36', modifiedTime: '2026-09-08T09:35:54.034Z' },
-    { code: 'F82', id: '1bUGxMrRoCFEAU2WwNcJXEy9lK3BZpwWWt4T7AbTg3mA', sheetId: 408461961, range: '수수료!A1:E39', modifiedTime: '2026-09-08T09:35:54.695Z' },
-    { code: 'F83', id: '1VY0NcYLfTceGTaC4vAvpRgmdTO2aL8Wf6Dr-B8Pw_nQ', sheetId: 1158691959, range: '수수료!A1:E36', modifiedTime: '2026-09-08T09:35:53.325Z' },
-    { code: 'F84', id: '1CpEAVCljoK6Qd8Gpd5O0KfSPVNtu3RfmqCJbMkcsNRs', sheetId: 161761526, range: '수수료!A1:E36', modifiedTime: '2026-09-08T09:35:55.373Z' },
-    { code: 'F85', id: '1rxNvTf6r80aC9EdaTv1K6B04xGg0Z_8uBIMsG7RGKO8', sheetId: 1173104569, range: '수수료!A1:E36', modifiedTime: '2026-09-08T03:14:53.945Z' },
+    { code: 'F04', id: '1BjGBqAjRLEb9ZMKarpQsMF-q_UjdgmEqBAl1uVk8SR4', sheetId: 1982531660, range: '수수료표!A1:J180', modifiedTime: '2026-09-28T00:09:22.575Z' },
   ],
   standardSupplierIds: [
     'RP013', 'RP031', 'RP016', 'RP015', 'RP019', 'RP020', 'RP032', 'PT-0023',
@@ -30,10 +30,14 @@ export const KAKAO_COMMISSION_POLICY = {
     sonokong: ['RP012'],
     star: ['RP018'],
     autoplus: ['RP023'],
+    switchplan: ['RP014'],
     iancar: ['RP004'],
+    iron: ['RP006'],
     pacific: ['RP022'],
+    mindcarWithoutPublishedRule: ['RP034'],
   },
   rules: [
+    { id: 'STANDARD_NEW_PREDELIVERY_BILLING_3_5_PERCENT', supplierGroup: 'STANDARD', product: 'NEW_PREDELIVERY', basis: 'VEHICLE_VALUE', rateBasisPoints: 350, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'STANDARD_NEW_PREDELIVERY_3_PERCENT', supplierGroup: 'STANDARD', product: 'NEW_PREDELIVERY', basis: 'VEHICLE_VALUE', rateBasisPoints: 300, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'STANDARD_NEW_MATCHING_UP_TO_9_PERCENT', supplierGroup: 'STANDARD', product: 'NEW_MATCHING', basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'EXCLUDED', coordinationRequired: true },
     { id: 'STANDARD_RERENT_12_FIXED', supplierGroup: 'STANDARD', product: 'RERENT', termMonths: 12, basis: 'FIXED', fixedAmount: 500000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
@@ -41,15 +45,31 @@ export const KAKAO_COMMISSION_POLICY = {
     { id: 'STANDARD_RERENT_36_RENT_X_TERM_X_3_PERCENT', supplierGroup: 'STANDARD', product: 'RERENT', termMonths: 36, basis: 'MONTHLY_RENT_X_TERM', rateBasisPoints: 300, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'STANDARD_RERENT_48_RENT_X_TERM_X_2_5_PERCENT', supplierGroup: 'STANDARD', product: 'RERENT', termMonths: 48, basis: 'MONTHLY_RENT_X_TERM', rateBasisPoints: 250, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'STANDARD_RERENT_60_RENT_X_TERM_X_1_75_PERCENT', supplierGroup: 'STANDARD', product: 'RERENT', termMonths: 60, basis: 'MONTHLY_RENT_X_TERM', rateBasisPoints: 175, vatTreatment: 'EXCLUDED', coordinationRequired: false },
+    { id: 'STANDARD_RERENT_BILLING_LADDER', supplierGroup: 'STANDARD', product: 'RERENT', basis: 'TERM_LADDER', termRules: [
+      { termMonths: 12, basis: 'FIXED', fixedAmount: 600000 },
+      { termMonths: 24, basis: 'MONTHLY_RENT_X_TERM', rateBasisPoints: 475 },
+      { termMonths: 36, basis: 'MONTHLY_RENT_X_TERM', rateBasisPoints: 375 },
+      { termMonths: 48, basis: 'MONTHLY_RENT_X_TERM', rateBasisPoints: 325 },
+      { termMonths: 60, basis: 'MONTHLY_RENT_X_TERM', rateBasisPoints: 225 },
+    ], vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'SONOKONG_SUBSCRIPTION_12_MONTH_RENT_100_PERCENT', supplierGroup: 'SONOKONG', product: 'SUBSCRIPTION', basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'EXCLUDED', coordinationRequired: true },
     { id: 'STAR_RERENT_ONE_MONTH_RENT_X_80_PERCENT', supplierGroup: 'STAR', product: 'RERENT', basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'INCLUDED', coordinationRequired: true },
     { id: 'AUTOPLUS_SUBSCRIPTION_FIXED', supplierGroup: 'AUTOPLUS', product: 'SUBSCRIPTION', basis: 'FIXED', fixedAmount: 800000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'AUTOPLUS_SUBSCRIPTION_BILLING_FIXED', supplierGroup: 'AUTOPLUS', product: 'SUBSCRIPTION', basis: 'FIXED', fixedAmount: 1000000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
+    { id: 'SWITCH_SUBSCRIPTION_LADDER', supplierGroup: 'SWITCH', product: 'SUBSCRIPTION', basis: 'TERM_LADDER', vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'IANCAR_RERENT_1_MONTH', supplierGroup: 'IANCAR', product: 'RERENT', termMonths: 1, basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'EXCLUDED', coordinationRequired: true },
+    { id: 'IANCAR_RERENT_6_MONTH_BILLING_FIXED', supplierGroup: 'IANCAR', product: 'RERENT', termMonths: 6, basis: 'FIXED', fixedAmount: 400000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'IANCAR_RERENT_6_MONTH_FIXED', supplierGroup: 'IANCAR', product: 'RERENT', termMonths: 6, basis: 'FIXED', fixedAmount: 300000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
+    { id: 'IANCAR_EV_BILLING_FIXED', supplierGroup: 'IANCAR', product: 'EV', basis: 'FIXED', fixedAmount: 1000000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'IANCAR_EV_FIXED', supplierGroup: 'IANCAR', product: 'EV', basis: 'FIXED', fixedAmount: 800000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'PACIFIC_NEW_PREDELIVERY_DEPOSIT_TIER', supplierGroup: 'PACIFIC', product: 'NEW_PREDELIVERY', basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'INCLUDED', coordinationRequired: true },
     { id: 'PACIFIC_NEW_MATCHING_DEPOSIT_TIER', supplierGroup: 'PACIFIC', product: 'NEW_MATCHING', basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'INCLUDED', coordinationRequired: true },
+  ],
+  timingRules: [
+    { supplierGroup: 'STAR_IANCAR', case: 'INSTALLMENT', billingAndPayout: 'AFTER_ALL_INSTALLMENTS_RECEIVED', broken: 'NO_FEE' },
+    { supplierGroup: 'OTHERS', case: 'INSTALLMENT', billingAndPayout: 'FULL_ON_DELIVERY', broken: 'PRORATE_BY_RECEIVED_INSTALLMENTS' },
+    { supplierGroup: 'ALL', case: 'LUMP_SUM', billingAndPayout: 'FULL_ON_DELIVERY', broken: 'NOT_APPLICABLE' },
+    { supplierGroup: 'ALL', case: 'DEPOSIT_INSTALLMENT', billingAndPayout: 'INSTALLMENT_DUE_DATES_FROM_DELIVERY', broken: 'COMPLETE_AFTER_FINAL_DUE_DATE_PLUS_ONE_MONTH' },
   ],
 } as const;
 
@@ -167,6 +187,38 @@ const unknownCommission = (reasonCode: string): CommissionResolution => ({
   state: 'UNKNOWN', ruleId: null, amount: null, vatTreatment: 'UNKNOWN', vatAmount: null, totalAmount: null, reasonCode,
 });
 
+const standardLadderSupplier = (supplierId: string) =>
+  KAKAO_COMMISSION_POLICY.standardSupplierIds.includes(supplierId as never)
+  || KAKAO_COMMISSION_POLICY.exceptionSupplierIds.sonokong.includes(supplierId as 'RP012')
+  || KAKAO_COMMISSION_POLICY.exceptionSupplierIds.iancar.includes(supplierId as 'RP004')
+  || KAKAO_COMMISSION_POLICY.exceptionSupplierIds.pacific.includes(supplierId as 'RP022');
+
+const resolveTermLadder = (
+  termMonths: number,
+  monthlyRent: number,
+  side: 'BILLING' | 'PAYOUT',
+  prefix = 'STANDARD_RERENT',
+): CommissionResolution => {
+  const fixed = side === 'BILLING' ? 600000 : 500000;
+  const ruleId = (term: number, suffix: 'FIXED' | 'RENT_X_TERM') => {
+    if (prefix === 'STANDARD_RERENT' && side === 'PAYOUT') {
+      return term === 12 ? 'STANDARD_RERENT_12_FIXED' : `STANDARD_RERENT_${term}_RENT_X_TERM`;
+    }
+    return `${prefix}_${term}_${side}_${suffix}`;
+  };
+  if (termMonths === 12) return calculatedCommission(ruleId(12, 'FIXED'), fixed, 'EXCLUDED');
+  const rates = side === 'BILLING'
+    ? new Map([[24, 475], [36, 375], [48, 325], [60, 225]])
+    : new Map([[24, 400], [36, 300], [48, 250], [60, 175]]);
+  const basisPoints = rates.get(termMonths);
+  if (!basisPoints) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
+  return calculatedCommission(
+    ruleId(termMonths, 'RENT_X_TERM'),
+    monthlyRent * termMonths * basisPoints / 10000,
+    'EXCLUDED',
+  );
+};
+
 export function resolveSalesCommission(input: {
   supplierId: string;
   productType: string;
@@ -184,6 +236,9 @@ export function resolveSalesCommission(input: {
   if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.autoplus.includes(supplierId as 'RP023') && /구독/.test(productType)) {
     return calculatedCommission('AUTOPLUS_SUBSCRIPTION_FIXED', 800000, 'EXCLUDED');
   }
+  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.switchplan.includes(supplierId as 'RP014') && /구독/.test(productType)) {
+    return resolveTermLadder(termMonths, monthlyRent, 'PAYOUT', 'SWITCH_SUBSCRIPTION');
+  }
   if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.iancar.includes(supplierId as 'RP004')) {
     if (/전기/.test(fuel)) return calculatedCommission('IANCAR_EV_FIXED', 800000, 'EXCLUDED');
     if (/렌트/.test(productType) && termMonths === 6) return calculatedCommission('IANCAR_RERENT_6_MONTH_FIXED', 300000, 'EXCLUDED');
@@ -192,21 +247,11 @@ export function resolveSalesCommission(input: {
   if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.pacific.includes(supplierId as 'RP022') && /신차/.test(productType)) {
     return coordination('PACIFIC_NEW_PREDELIVERY_DEPOSIT_TIER', 'INCLUDED');
   }
-  if (!KAKAO_COMMISSION_POLICY.standardSupplierIds.includes(supplierId as never)) {
-    return unknownCommission('SUPPLIER_NOT_IN_VERIFIED_COMMISSION_POLICY');
+  if (!standardLadderSupplier(supplierId)) {
+    return unknownCommission('SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE');
   }
   if (/중고렌트|재렌트/.test(productType)) {
-    if (termMonths === 12) return calculatedCommission('STANDARD_RERENT_12_FIXED', 500000, 'EXCLUDED');
-    const rates = new Map([[24, 400], [36, 300], [48, 250], [60, 175]]);
-    const basisPoints = rates.get(termMonths);
-    if (basisPoints) {
-      return calculatedCommission(
-        `STANDARD_RERENT_${termMonths}_RENT_X_TERM`,
-        monthlyRent * termMonths * basisPoints / 10000,
-        'EXCLUDED',
-      );
-    }
-    return unknownCommission('TERM_NOT_IN_VERIFIED_COMMISSION_POLICY');
+    return resolveTermLadder(termMonths, monthlyRent, 'PAYOUT');
   }
   if (/신차/.test(productType)) return unknownCommission('NEW_PRODUCT_SUBTYPE_OR_VEHICLE_VALUE_NOT_RESOLVED');
   return { state: 'NOT_APPLICABLE', ruleId: null, amount: null, vatTreatment: 'UNKNOWN', vatAmount: null, totalAmount: null, reasonCode: 'NO_MATCHING_RULE' };
@@ -215,14 +260,35 @@ export function resolveSalesCommission(input: {
 export function resolveSupplierBillingFee(input: {
   supplierId: string;
   productType: string;
+  fuel?: string;
   termMonths: number;
   monthlyRent: number;
 }): CommissionResolution {
-  const { supplierId, productType } = input;
+  const { supplierId, productType, termMonths, monthlyRent } = input;
+  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.sonokong.includes(supplierId as 'RP012') && /구독/.test(productType)) {
+    return coordination('SONOKONG_SUBSCRIPTION_BILLING_12_MONTH_RENT_PLUS_FIXED', 'EXCLUDED');
+  }
+  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.star.includes(supplierId as 'RP018') && /렌트/.test(productType)) {
+    return coordination('STAR_RERENT_ONE_MONTH_RENT_BILLING', 'INCLUDED');
+  }
   if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.autoplus.includes(supplierId as 'RP023') && /구독/.test(productType)) {
     return calculatedCommission('AUTOPLUS_SUBSCRIPTION_BILLING_FIXED', 1000000, 'EXCLUDED');
   }
-  return unknownCommission('SUPPLIER_BILLING_RULE_NOT_VERIFIED');
+  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.switchplan.includes(supplierId as 'RP014') && /구독/.test(productType)) {
+    return resolveTermLadder(termMonths, monthlyRent, 'BILLING', 'SWITCH_SUBSCRIPTION');
+  }
+  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.iancar.includes(supplierId as 'RP004')) {
+    if (/전기/.test(input.fuel ?? '')) return calculatedCommission('IANCAR_EV_BILLING_FIXED', 1000000, 'EXCLUDED');
+    if (/렌트/.test(productType) && termMonths === 6) return calculatedCommission('IANCAR_RERENT_6_MONTH_BILLING_FIXED', 400000, 'EXCLUDED');
+    if (/렌트/.test(productType) && termMonths === 1) return coordination('IANCAR_RERENT_1_MONTH_BILLING', 'EXCLUDED');
+  }
+  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.pacific.includes(supplierId as 'RP022') && /신차/.test(productType)) {
+    return coordination('PACIFIC_NEW_PREDELIVERY_BILLING_DEPOSIT_TIER', 'INCLUDED');
+  }
+  if (!standardLadderSupplier(supplierId)) return unknownCommission('SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE');
+  if (/중고렌트|재렌트/.test(productType)) return resolveTermLadder(termMonths, monthlyRent, 'BILLING');
+  if (/신차/.test(productType)) return unknownCommission('NEW_PRODUCT_SUBTYPE_OR_VEHICLE_VALUE_NOT_RESOLVED');
+  return { state: 'NOT_APPLICABLE', ruleId: null, amount: null, vatTreatment: 'UNKNOWN', vatAmount: null, totalAmount: null, reasonCode: 'NO_MATCHING_RULE' };
 }
 
 export function resolveExpectedGrossMargin(
@@ -289,6 +355,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
     const supplierBillingFee = resolveSupplierBillingFee({
       supplierId,
       productType: text(source.product_type),
+      fuel: text(source.fuel_type),
       termMonths: parsed.months,
       monthlyRent,
     });
