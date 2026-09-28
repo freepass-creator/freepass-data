@@ -7,6 +7,20 @@ Handoff base when closure work started: `28d46e1f8d14a3a08d86586dae535838e4d123c
 Branch: `main`
 Date: 2026-09-28
 
+## 2026-09-28 vehicle-name evidence repair
+
+- 기존 parity 결과를 현재 Firestore 원문 차명·연식·차량번호와 다시 결합했다. 마스터명 일괄 치환과
+  상품별 판정을 분리하며, F03 후보명이 원문에 명시되고 유효기간이 겹치는 경우만 repair한다.
+- exact plan: master 41건 / product 116건. 나머지 product 82건은 원문에 세대가 없거나, 원문과
+  정제값·연식이 충돌하거나, 현재 F03 후보에 최신 세대가 없어 HOLD다.
+- apply는 exact source digest 승인, 수정 전 private backup, 한 Firestore transaction의 expected-value
+  precondition, Data Access 감사, 수정 후 전체 readback을 모두 요구한다.
+- 검증: 신규/관련 테스트 6 PASS, TypeScript build PASS, 전체 check 중 977 PASS / 12 SKIP 후
+  기존 `runtime-policy` 5초 timeout 1건은 단독 재실행 5 PASS로 확인했다.
+
+next_start_here: 운영 apply 후 157개 문서 readback과 parity 재감사를 기록한다. HOLD 82건은 현재
+Google Sheets OAuth scope 복구 후 최신 F03 재조회, 공급사 원문 보강 전에는 추정 수정하지 않는다.
+
 ## 2026-09-28 vehicle-name reference parity gate
 
 - 정본 비교 기준은 F03 `차종마스터`의 엔카 표시명이다. 세대코드를 일괄 삭제하지 않고 F03의 정확한
