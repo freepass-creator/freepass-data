@@ -28,7 +28,7 @@ describe('Catalog Data Health contract v1', () => {
     );
 
     expect(report.contractVersion).toBe('catalog-data-health-v1');
-    expect(report.schemaVersion).toBe('1.0.0');
+    expect(report.schemaVersion).toBe('1.1.0');
     expect(validateHealth(report), JSON.stringify(validateHealth.errors)).toBe(true);
   });
 

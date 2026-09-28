@@ -5,6 +5,7 @@ import { seedDemoCatalog } from '../src/demo-seed.js';
 import { buildErpPublicProjection } from '../src/application/catalog.js';
 import { DataAccessGateway } from '../src/application/data-access-gateway.js';
 import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
+import { buildKakaoCatalogReference } from '../src/application/kakao-catalog-reference.js';
 
 const token = 'test-service-token-0123456789abcdef';
 const binding = { id: 'erp-com', projectionId: 'erp-public' as const, token };
@@ -100,6 +101,66 @@ describe('read-only consumer gateway', () => {
       phase: 'SUCCEEDED',
       operation: 'READ_CONSUMER_CATALOG_COMPAT',
       result: { count: 1 },
+    });
+    await app.close();
+  });
+
+  it('serves Kakao typed reference facts only to its dedicated identity', async () => {
+    let reads = 0;
+    const reference = buildKakaoCatalogReference({
+      consumerId: 'kakao-ops',
+      observedAt: '2026-09-28T00:00:00.000Z',
+      products: {
+        P1: {
+          listable: true,
+          maker: '기아', model: '쏘렌토', trim_name: '시그니처', product_type: '중고렌트',
+          provider_company_code: 'RP013', ext_color: '화이트', deposit_note: '국산: 월 대여료×2',
+          price: { '36': { rent: 800000, deposit: 0 } },
+        },
+      },
+    });
+    const compat = {
+      read: async () => { throw new Error('not used'); },
+      readKakaoReferenceSource: async () => {
+        reads += 1;
+        return {
+          consumerId: 'kakao-ops',
+          observedAt: reference.meta.observedAt,
+          products: {
+            P1: {
+              listable: true,
+              maker: '기아', model: '쏘렌토', trim_name: '시그니처', product_type: '중고렌트',
+              provider_company_code: 'RP013', ext_color: '화이트', deposit_note: '국산: 월 대여료×2',
+              price: { '36': { rent: 800000, deposit: 0 } },
+            },
+          },
+        };
+      },
+    };
+    const kakaoBinding: ConsumerBinding = {
+      id: 'kakao-ops', projectionId: 'erp-public', token,
+      capabilities: ['catalog-reference'],
+    };
+    const { app, logs } = withAccess(
+      { getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] },
+      [kakaoBinding],
+      undefined,
+      compat,
+    );
+    const referenceUrl = '/v1/consumers/kakao-ops/catalog-reference';
+
+    expect((await app.inject({ url: referenceUrl })).statusCode).toBe(401);
+    expect(reads).toBe(0);
+    const result = await app.inject({ url: referenceUrl, headers });
+    expect(result.statusCode).toBe(200);
+    expect(result.json()).toMatchObject({
+      schema: 'freepass-data.kakao-catalog-reference/v1',
+      data: [{ vehicle: { exteriorColor: '화이트' }, offers: [{ priceTerms: [{ depositAmount: 1600000 }] }] }],
+      meta: { consumerId: 'kakao-ops', authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD' },
+    });
+    expect(reads).toBe(1);
+    expect(logs.events.at(-1)).toMatchObject({
+      mode: 'READ', phase: 'SUCCEEDED', operation: 'READ_KAKAO_CATALOG_REFERENCE', result: { count: 1 },
     });
     await app.close();
   });
@@ -301,7 +362,7 @@ describe('read-only consumer gateway', () => {
     expect(result.headers['cache-control']).toBe('no-store');
     expect(result.json()).toMatchObject({
       contractVersion: 'catalog-data-health-v1',
-      schemaVersion: '1.0.0',
+      schemaVersion: '1.1.0',
       scope: 'catalog-v1',
       status: 'HEALTHY'
     });
@@ -364,6 +425,10 @@ describe('read-only consumer gateway', () => {
     expect(() => parseConsumerBindings(JSON.stringify([binding, { ...binding, id: 'whitelabel-test' }]))).toThrow('shared service token');
     expect(() => parseConsumerBindings(undefined)).toThrow('required');
     expect(parseConsumerBindings(JSON.stringify([{ ...binding, id: 'kakao-ops' }]))[0]?.id).toBe('kakao-ops');
+    expect(parseConsumerBindings(JSON.stringify([{ ...binding, id: 'kakao-ops' }]))[0]?.capabilities)
+      .toEqual(['catalog']);
+    expect(() => parseConsumerBindings(JSON.stringify([{ ...binding, capabilities: ['catalog-reference'] }])))
+      .toThrow('requires kakao-ops');
     for (const entries of [
       [],
       [{ ...binding, token: 'short' }],

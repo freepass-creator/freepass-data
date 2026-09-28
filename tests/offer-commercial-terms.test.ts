@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Offer, Policy } from '../src/domain/catalog.js';
-import { resolveOfferCommercialTerms, summarizeCommercialTerms } from '../src/application/resolve-offer-commercial-terms.js';
+import { auditOfferEconomicsTerms, resolveOfferCommercialTerms, summarizeCommercialTerms } from '../src/application/resolve-offer-commercial-terms.js';
 
 const meta = {
   schemaVersion: '1', revision: 1, validationStatus: 'VALID' as const,
@@ -37,6 +37,72 @@ function offer(): Offer {
 }
 
 describe('offer commercial terms resolution', () => {
+  it('requires one internal economics row for every price term without guessing missing fees', () => {
+    const result = auditOfferEconomicsTerms(offer());
+    expect(result.status).toBe('NEEDS_DECISION');
+    expect(result.decisions).toEqual([
+      'ECONOMICS_TERM_REQUIRED:24@default',
+      'ECONOMICS_TERM_REQUIRED:36@default',
+    ]);
+  });
+
+  it('keeps period deposit, supplier billing fee and channel payout fee explicit and traceable', () => {
+    const input = offer();
+    input.internalEconomicsTerms = [{
+      termKey: '24@default',
+      depositCalculation: {
+        state: 'KNOWN', amount: { amount: 3000000, currency: 'KRW' },
+        calculation: { kind: 'MULTIPLY', base: 'MONTHLY_RENT', multiplier: 3000000 / 700000 },
+        sourceRefs: ['source:product.price.24@default.deposit'],
+      },
+      supplierBillingFee: {
+        state: 'KNOWN', amount: { amount: 504000, currency: 'KRW' },
+        calculation: { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.03 },
+        sourceRefs: ['source:fee-table:supplier:24'],
+      },
+      channelPayoutFee: {
+        state: 'KNOWN', amount: { amount: 336000, currency: 'KRW' },
+        calculation: { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.02 },
+        sourceRefs: ['source:fee-table:channel:24'],
+      },
+    }, {
+      termKey: '36@default',
+      depositCalculation: {
+        state: 'ZERO', amount: { amount: 0, currency: 'KRW' },
+        calculation: { kind: 'FIXED', amount: { amount: 0, currency: 'KRW' } },
+        sourceRefs: ['source:product.price.36@default.deposit'],
+      },
+      supplierBillingFee: { state: 'UNKNOWN', sourceRefs: ['source:fee-table:supplier:36'] },
+      channelPayoutFee: { state: 'NOT_APPLICABLE', sourceRefs: ['source:fee-table:channel:36'] },
+    }];
+    const result = auditOfferEconomicsTerms(input);
+    expect(result.status).toBe('NEEDS_DECISION');
+    expect(result.terms[0]?.supplierBillingFee.amount?.amount).toBe(504000);
+    expect(result.decisions).toContain('ECONOMICS_VALUE_REQUIRED:36@default:SUPPLIER_BILLING_FEE');
+  });
+
+  it('fails closed when a stored amount disagrees with its period formula', () => {
+    const input = offer();
+    input.internalEconomicsTerms = [{
+      termKey: '24@default',
+      depositCalculation: {
+        state: 'KNOWN', amount: { amount: 3000000, currency: 'KRW' },
+        calculation: { kind: 'MULTIPLY', base: 'MONTHLY_RENT', multiplier: 2 },
+        sourceRefs: ['source:deposit'],
+      },
+      supplierBillingFee: {
+        state: 'KNOWN', amount: { amount: 1, currency: 'KRW' },
+        calculation: { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.03 },
+        sourceRefs: ['source:billing'],
+      },
+      channelPayoutFee: { state: 'UNKNOWN', sourceRefs: ['source:payout'] },
+    }];
+    const result = auditOfferEconomicsTerms(input);
+    expect(result.status).toBe('INVALID');
+    expect(result.invalidFacts).toContain('ECONOMICS_CALCULATION_MISMATCH:24@default:DEPOSIT');
+    expect(result.invalidFacts).toContain('ECONOMICS_CALCULATION_MISMATCH:24@default:SUPPLIER_BILLING_FEE');
+  });
+
   it('uses policy annual_mileage as the default and fills terms that omit mileage', () => {
     const result = resolveOfferCommercialTerms(offer(), policy());
     expect(result.status).toBe('READY');

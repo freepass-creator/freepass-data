@@ -107,6 +107,23 @@ describe('Catalog V1 vertical slice', () => {
       .toBe(manifest?.fieldEvidenceDigest);
   });
 
+  it('never leaks internal period fee economics into the ERP public projection', async () => {
+    const store=new MemoryDataStore(); await seedDemoCatalog(store);
+    const offer=await store.getOffer('offer_gv70_demo');
+    const updatedOffer={...offer!,internalEconomicsTerms:[{
+      termKey:'36@20000',
+      depositCalculation:{state:'KNOWN' as const,amount:{amount:3000000,currency:'KRW' as const},calculation:{kind:'FIXED' as const,amount:{amount:3000000,currency:'KRW' as const}},sourceRefs:['source:deposit']},
+      supplierBillingFee:{state:'KNOWN' as const,amount:{amount:1000000,currency:'KRW' as const},calculation:{kind:'FIXED' as const,amount:{amount:1000000,currency:'KRW' as const}},sourceRefs:['source:billing']},
+      channelPayoutFee:{state:'KNOWN' as const,amount:{amount:700000,currency:'KRW' as const},calculation:{kind:'FIXED' as const,amount:{amount:700000,currency:'KRW' as const}},sourceRefs:['source:payout']},
+    }]};
+    const [offerRevision]=await store.listEntityHistory('offer','offer_gv70_demo');
+    await store.seed!({offers:[updatedOffer],revisionHistory:[{...offerRevision!,snapshot:updatedOffer}]});
+    const release=await buildErpPublicProjection(store,store,'2026-09-20T10:00:00.000Z');
+    expect(JSON.stringify(release.data)).not.toContain('internalEconomicsTerms');
+    expect(JSON.stringify(release.data)).not.toContain('supplierBillingFee');
+    expect(JSON.stringify(release.data)).not.toContain('channelPayoutFee');
+  });
+
   it('does not reuse a tampered ACTIVE payload even when stored dataDigest is unchanged', async () => {
     const store=new MemoryDataStore(); await seedDemoCatalog(store);
     const first=await buildErpPublicProjection(store,store,'2026-09-20T09:00:00.000Z');
