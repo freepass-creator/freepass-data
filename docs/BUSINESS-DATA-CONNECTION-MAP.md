@@ -7,8 +7,9 @@
 
 중앙 저장 대상은 사용자 지정 `freepasserp5` Firestore다.
 공통 사실·원문·버전·관계·변경 증거는 FreePass Data가 관리하는 방향으로 연결한다. 현재 구현 승인 기준인 Catalog V1과 후속 계약·정산 연결 단계를 구분한다.
-Admin은 접수/계약/실적/정산의 업무 규칙과 승인 흐름을, Sales는 영업 흐름을, Estimate는 견적 계산을 소유한다.
-정산 규칙을 Data에 복제하여 두 계산기가 생기게 하지 않는다.
+FreePass Data는 접수부터 지급·취소·환수까지 공유되는 정산 사실과 수수료 정책·계약을 소유한다.
+Admin은 그 정본에 승인된 command를 수행하는 업무 화면과 승인 흐름을, Sales는 영업 흐름을, Estimate는 견적 계산을 소유한다.
+소비 앱에 정산 규칙을 복제하여 두 계산기가 생기게 하지 않는다.
 
 이번 필수 소비처는 F01, F86, ERP.com, 실제 등록된 각 화이트라벨, Admin이다.
 Sales/Estimate는 견적·영업 연결의 관련 소유자이며 이번 상품 배포 대상에 자동 추가하지 않는다.
@@ -33,12 +34,12 @@ Admin이 확정한 업무 결과는 승인된 명령과 증거를 통해 공통 
 
 ### 단계별 저장·쓰기 소유권
 
-**이번 단계는 금융 데이터를 Data 소유 collection으로 복제하지 않는다.** 동일 Firebase 프로젝트를 쓴다는 것과 동일 writer/업무 책임을 가진다는 것은 다르다.
+**기존 `freepasserp5/settlement_rows`를 FreePass Data 정산 정본으로 사용하며 별도 복제 collection을 만들지 않는다.** 동일 Firebase 프로젝트를 쓴다는 것과 모든 소비 앱에 writer 권한을 주는 것은 다르다.
 
 | 영역 | 현재 유지할 기록 위치 / 코드 근거 | 이번 Data 역할 | writer 전환 조건 |
 | --- | --- | --- | --- |
 | 상품 Catalog V1 | Data의 `catalog_*`/projection 계약. 원천 products/policy와 별개 | 검증 후 central release 생성·소비 연결 | 상품 이전 및 소비처 대사 충족 전 기존 경로 유지 |
-| 기존 접수·수수료 원장 | Admin PR45 repository의 ERP5 `settlement_rows` | read-only 참조/crosswalk 설계만. 별도 Data 정산 원장 생성 금지 | 실제 활성 writer 식별 및 기존 도메인 command 위임 검증 전 전환 금지 |
+| 접수·수수료 정산원장 | FreePass Data의 ERP5 `settlement_rows` | 정산 사실의 정본 계약·조회·감사 제공. 별도 원장 생성 금지 | Admin 등 writer는 승인된 command와 원자적 receipt를 통해서만 변경 |
 | 기존 정산 이력·문서·환수 | 같은 repository의 `settlement_events`, `settlement_invoices`, `settlement_clawbacks` | 기존 ID와 원본 증거 유지. 복사본을 두 번째 수정 정본으로 사용 금지 | 소유 서비스·명령·트랜잭션·권한을 확인한 후 별도 이관 |
 | 계약 확정 기록 | 기존 계약 소유 시스템 유지. 실제 authoritative 경로는 아직 미확인 | 연결 후보와 검증 상태만 준비, 새 계약 collection/write 금지 | source/namespace/버전/운영 owner 식별 전 HOLD |
 | 은행 거래·수금/지급 배정 | 실제 거래 원천과 승인된 운영 원장 유지. 현재 확인한 코드의 수금/지급 입력은 은행 거래 자동 연결 증거가 아님 | payment/allocation 논리 요구사항만 정의, 데이터·잔액 생성 금지 | 원천 거래 ID·기록 위치·담당 writer·부분 배정 계약 검증 전 HOLD |
@@ -62,10 +63,10 @@ Data에서 정산 금액이나 배정 규칙을 재계산하는 별도 writer를
 | 고객·접수 | application ID, 고객 연결, supplier/channel/assignee, 선택 상품 스냅샷 | Admin 접수 흐름 / Sales 소유 영업 흐름 | 기존 최초 접수 필수값을 늘리거나 미확인 고객 ID를 가짜로 만들지 않음 |
 | 계약 | contract ID/revision, 계약 상대, 확정 조건, 기간, 증빙 | Admin 계약 흐름 | 접수/상품/차량 연결, 변경 전 계약 조건 보존 |
 | 인도·취소·반납 | event ID, 발생 시각, 대상 계약/차량, 증거 | Admin 운영 흐름 | 계약서·서류·잔금·인도를 하나의 완료값으로 합치지 않음 |
-| 실적·수수료 정산 | settlement/performance ID, 접수/계약 참조, 기준 조건, 공급/영업 상대, 확정 버전 | Admin 정산 도메인 | 같은 인도에서 중복 생성 방지; 직접접수/과거 원장 연결도 보존 |
+| 실적·수수료 정산 | settlement/performance ID, 접수/계약 참조, 기준 조건, 공급/영업 상대, 확정 버전 | FreePass Data 정산 정본 / Admin command·승인 화면 | 같은 인도에서 중복 생성 방지; 직접접수/과거 원장 연결도 보존 |
 | 청구·증빙 | claim/invoice ID와 revision, 청구 상대, 청구 명세, 발행/취소 증거 | Admin 청구 흐름 | 정산 확정, 청구서 생성, 발송, 계산서 처리 각각 구분 |
 | 실제 수금·지급 | payment event ID, 방향, 상대, 금액·통화·발생일·외부 거래 참조 | 승인된 금융 수집/확인 및 Admin 처리 | 예정 금액이나 체크박스를 실제 거래로 바꾸지 않음 |
-| 배정·분납·환수 | allocation/installment/adjustment ID, 원 거래·청구·정산 참조 | Admin 정산 흐름 | 다대다 배정, 부분 수금·지급, 취소·역분개, 미배정 잔액 보존 |
+| 배정·분납·환수 | allocation/installment/adjustment ID, 원 거래·청구·정산 참조 | FreePass Data 사실 계약 / Admin command·승인 흐름 | 다대다 배정, 부분 수금·지급, 취소·역분개, 미배정 잔액 보존 |
 | 문서·감사 | document/source ID, 해시·원본 위치, actor, 사유, revision, 명령 receipt | 자료 소유자 / Data 증거 보존 | 원문 권한을 유지하고 공개 출력과 분리 |
 
 원문 관측시각, 실제 업무 발생시각, 적용기간, 시스템 기록시각을 구분한다.
@@ -130,10 +131,26 @@ VAT 포함/별도/미확인이 섞인 금액을 합치거나 청구총액에서 
 | 각 화이트라벨 | 등록 조직의 공개 허용 상품과 브랜드 설정 | 타 조직 데이터 및 내부 정산; API 등록만으로 tenant별 노출 적합성을 증명하지 않음 |
 | ERP.com 내부 운영 화면 | 별도 관리자 인증과 업무 권한에 맞는 조회 | 공개 endpoint/캐시와 혼용 금지; 현재 동작은 경로별 검증 필요 |
 | Admin | 담당 업무/조직 권한의 상품·접수·계약·정산·증빙 | 다른 조직 또는 승인 권한 밖의 자료 |
+| Kakao Ops 등 등록 소비자 | `settlement-ledger-read`가 명시된 서비스만 차량번호·정산코드·접수일·청구월 또는 `영업자+고객명`으로 현재 원장 사실 조회 | 무조건 전체 조회, 고객명/영업자 단독 검색, Admin 상태 변경·청구·수금·지급 command |
 
 F01/F86 전체 셀에 금융 정보를 추가하는 작업은 이번 범위에 없다.
 PR23의 ERP public schema는 서비스 간 읽기 계약이지 모든 필드의 인터넷 공개 승인표가 아니다.
 원문·계좌정보·인증정보는 공개 schema에 섞지 않는다. 소비처 캐시도 조직·권한·버전 경계를 지킨다.
+
+### 정산원장 읽기 데이터 제품 v1
+
+- 계약: `contracts/settlement-ledger-view-v1.schema.json`
+- API: `POST /v1/consumers/:consumerId/settlement-ledger/read`
+- 권한: 등록 소비자의 `settlement-ledger-read` capability와 개별 서비스 토큰이 모두 필요하다.
+- 정본: FreePass Data의 `freepasserp5/settlement_rows`. 접수부터 취소·지급·환수까지의 공유 정산 사실은 `FREEPASS_DATA_SETTLEMENT` 권위로 제공한다.
+- 업무 역할: Admin은 FreePass Data 정산 사실을 조회하고 승인된 command로 상태 변경·청구·수금·지급을 수행하는 업무 애플리케이션이다. Kakao Ops와 다른 소비자는 같은 Data 계약을 읽으며, 각자 별도 원장을 만들지 않는다.
+- 계산 경계: 수수료 정책과 확정 스냅샷은 FreePass Data 계약으로 보존하되, 소비 앱이 금액이나 상태를 제각각 재계산하지 않는다.
+- 검색: 문서 ID 또는 allowlist 필드의 정확 일치. 무필터 조회는 거부하고 최대 100건으로 제한한다.
+- 사람 검색: `agent`와 `customer`를 반드시 함께 전달한다. 결과가 여러 건이면 차량번호와 접수일을 함께 제시하고 사용자가 대상을 확정하게 한다.
+- 미입력: boolean·금액이 원문에 없으면 `null`로 반환한다. `false`나 `0`으로 추정하지 않는다.
+- 개인정보: 전화번호·주소·계좌·메모·사업자번호는 v1 응답에 포함하지 않는다.
+
+재사용 판정은 기존 `AdminWorkflowStore`, 인증 consumer gateway, Data Access audit를 `COMPOSE_OR_EXTEND`로 확장했다. 별도 정산 repository/calculator는 만들지 않았다. 신규 JSON Schema는 Kakao Ops 등 비-Admin 소비자가 내부 Firestore 문서 구조에 결합하지 않게 하는 공개 계약이라 `CREATE_NEW_JUSTIFIED`다.
 
 ## 6. 현재 코드와 실제 연결 증거
 
