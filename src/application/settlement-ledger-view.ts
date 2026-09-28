@@ -74,7 +74,7 @@ export function projectSettlementLedgerRecord(
       channelFeeRaw: rawScalar(data.agentRate),
     },
     source: {
-      authority: 'FREEPASS_ADMIN_SETTLEMENT',
+      authority: 'FREEPASS_DATA_SETTLEMENT',
       project: 'freepasserp5',
       collection: 'settlement_rows',
       documentId,
@@ -103,7 +103,7 @@ export async function readSettlementLedgerView(
     data,
     meta: {
       consumerId,
-      authority: 'FREEPASS_ADMIN_SETTLEMENT',
+      authority: 'FREEPASS_DATA_SETTLEMENT',
       sourceProject: 'freepasserp5',
       sourceCollection: 'settlement_rows',
       observedAt,

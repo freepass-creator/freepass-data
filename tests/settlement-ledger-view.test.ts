@@ -62,7 +62,7 @@ function workflowStore(): AdminWorkflowStore {
 }
 
 describe('settlement ledger data product', () => {
-  it('projects Admin-owned facts without guessing missing booleans or money', async () => {
+  it('projects FreePass Data settlement facts without guessing missing booleans or money', async () => {
     const store = workflowStore();
     const result = await readSettlementLedgerView(
       store,
@@ -86,7 +86,7 @@ describe('settlement ledger data product', () => {
         supplierFeeRaw: 0.0325,
         channelFeeRaw: 500_000,
       },
-      source: { authority: 'FREEPASS_ADMIN_SETTLEMENT', documentId: '12가3456_2026-09-01' },
+      source: { authority: 'FREEPASS_DATA_SETTLEMENT', documentId: '12가3456_2026-09-01' },
     });
     const ajv = new Ajv2020({ strict: false });
     addFormats(ajv);
@@ -149,7 +149,7 @@ describe('settlement ledger data product', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       schema: 'freepass-data.settlement-ledger/v1',
-      meta: { consumerId: 'kakao-ops', authority: 'FREEPASS_ADMIN_SETTLEMENT', count: 1 },
+      meta: { consumerId: 'kakao-ops', authority: 'FREEPASS_DATA_SETTLEMENT', count: 1 },
     });
     expect(logs.events.map((event) => [event.mode, event.phase])).toEqual([
       ['READ', 'DENIED'],

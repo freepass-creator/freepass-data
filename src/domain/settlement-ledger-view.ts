@@ -75,7 +75,7 @@ export type SettlementLedgerRecord = {
     channelFeeRaw: SettlementLedgerValue;
   };
   source: {
-    authority: 'FREEPASS_ADMIN_SETTLEMENT';
+    authority: 'FREEPASS_DATA_SETTLEMENT';
     project: 'freepasserp5';
     collection: 'settlement_rows';
     documentId: string;
@@ -87,7 +87,7 @@ export type SettlementLedgerView = {
   data: SettlementLedgerRecord[];
   meta: {
     consumerId: string;
-    authority: 'FREEPASS_ADMIN_SETTLEMENT';
+    authority: 'FREEPASS_DATA_SETTLEMENT';
     sourceProject: 'freepasserp5';
     sourceCollection: 'settlement_rows';
     observedAt: string;

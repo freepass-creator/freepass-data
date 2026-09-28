@@ -713,7 +713,7 @@ export function createConsumerGateway(
       );
       const context = consumerContext(
         binding?.id ?? 'unregistered-consumer',
-        'read Admin-owned settlement ledger facts through FreePass Data',
+        'read FreePass Data settlement ledger facts',
         request.id
       );
       const resource = { kind: 'PROJECTION' as const, name: 'settlement-ledger' };

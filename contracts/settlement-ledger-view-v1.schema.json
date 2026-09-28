@@ -17,7 +17,7 @@
       "required": ["consumerId", "authority", "sourceProject", "sourceCollection", "observedAt", "count", "sourceDigest", "dataDigest"],
       "properties": {
         "consumerId": { "type": "string", "minLength": 1 },
-        "authority": { "const": "FREEPASS_ADMIN_SETTLEMENT" },
+        "authority": { "const": "FREEPASS_DATA_SETTLEMENT" },
         "sourceProject": { "const": "freepasserp5" },
         "sourceCollection": { "const": "settlement_rows" },
         "observedAt": { "type": "string", "format": "date-time" },
@@ -115,7 +115,7 @@
           "additionalProperties": false,
           "required": ["authority", "project", "collection", "documentId"],
           "properties": {
-            "authority": { "const": "FREEPASS_ADMIN_SETTLEMENT" },
+            "authority": { "const": "FREEPASS_DATA_SETTLEMENT" },
             "project": { "const": "freepasserp5" },
             "collection": { "const": "settlement_rows" },
             "documentId": { "type": "string", "minLength": 1 }
