@@ -5,6 +5,7 @@ type Rec = Record<string, unknown>;
 type DepositState = 'KNOWN' | 'ZERO' | 'UNKNOWN';
 type VatTreatment = 'EXCLUDED' | 'INCLUDED' | 'UNKNOWN';
 type CommissionState = 'CALCULATED' | 'COORDINATION_REQUIRED' | 'UNKNOWN' | 'NOT_APPLICABLE';
+type MarginState = 'CALCULATED' | 'UNKNOWN' | 'NOT_APPLICABLE';
 
 export const KAKAO_CATALOG_REFERENCE_SCHEMA = 'freepass-data.kakao-catalog-reference/v1' as const;
 
@@ -43,6 +44,7 @@ export const KAKAO_COMMISSION_POLICY = {
     { id: 'SONOKONG_SUBSCRIPTION_12_MONTH_RENT_100_PERCENT', supplierGroup: 'SONOKONG', product: 'SUBSCRIPTION', basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'EXCLUDED', coordinationRequired: true },
     { id: 'STAR_RERENT_ONE_MONTH_RENT_X_80_PERCENT', supplierGroup: 'STAR', product: 'RERENT', basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'INCLUDED', coordinationRequired: true },
     { id: 'AUTOPLUS_SUBSCRIPTION_FIXED', supplierGroup: 'AUTOPLUS', product: 'SUBSCRIPTION', basis: 'FIXED', fixedAmount: 800000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
+    { id: 'AUTOPLUS_SUBSCRIPTION_BILLING_FIXED', supplierGroup: 'AUTOPLUS', product: 'SUBSCRIPTION', basis: 'FIXED', fixedAmount: 1000000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'IANCAR_RERENT_1_MONTH', supplierGroup: 'IANCAR', product: 'RERENT', termMonths: 1, basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'EXCLUDED', coordinationRequired: true },
     { id: 'IANCAR_RERENT_6_MONTH_FIXED', supplierGroup: 'IANCAR', product: 'RERENT', termMonths: 6, basis: 'FIXED', fixedAmount: 300000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'IANCAR_EV_FIXED', supplierGroup: 'IANCAR', product: 'EV', basis: 'FIXED', fixedAmount: 800000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
@@ -58,6 +60,14 @@ type CommissionResolution = {
   vatTreatment: VatTreatment;
   vatAmount: number | null;
   totalAmount: number | null;
+  reasonCode: string | null;
+};
+
+type MarginResolution = {
+  state: MarginState;
+  amount: number | null;
+  currency: 'KRW';
+  basis: 'SUPPLY_AMOUNT_EXCLUDING_VAT';
   reasonCode: string | null;
 };
 
@@ -202,6 +212,51 @@ export function resolveSalesCommission(input: {
   return { state: 'NOT_APPLICABLE', ruleId: null, amount: null, vatTreatment: 'UNKNOWN', vatAmount: null, totalAmount: null, reasonCode: 'NO_MATCHING_RULE' };
 }
 
+export function resolveSupplierBillingFee(input: {
+  supplierId: string;
+  productType: string;
+  termMonths: number;
+  monthlyRent: number;
+}): CommissionResolution {
+  const { supplierId, productType } = input;
+  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.autoplus.includes(supplierId as 'RP023') && /구독/.test(productType)) {
+    return calculatedCommission('AUTOPLUS_SUBSCRIPTION_BILLING_FIXED', 1000000, 'EXCLUDED');
+  }
+  return unknownCommission('SUPPLIER_BILLING_RULE_NOT_VERIFIED');
+}
+
+export function resolveExpectedGrossMargin(
+  supplierBillingFee: CommissionResolution,
+  channelPayoutFee: CommissionResolution,
+): MarginResolution {
+  if (supplierBillingFee.state === 'NOT_APPLICABLE' && channelPayoutFee.state === 'NOT_APPLICABLE') {
+    return {
+      state: 'NOT_APPLICABLE', amount: null, currency: 'KRW',
+      basis: 'SUPPLY_AMOUNT_EXCLUDING_VAT', reasonCode: 'NO_COMMISSION_APPLICABLE',
+    };
+  }
+  if (
+    supplierBillingFee.state !== 'CALCULATED' || supplierBillingFee.amount === null ||
+    channelPayoutFee.state !== 'CALCULATED' || channelPayoutFee.amount === null
+  ) {
+    return {
+      state: 'UNKNOWN', amount: null, currency: 'KRW',
+      basis: 'SUPPLY_AMOUNT_EXCLUDING_VAT', reasonCode: 'BILLING_OR_PAYOUT_UNRESOLVED',
+    };
+  }
+  const amount = supplierBillingFee.amount - channelPayoutFee.amount;
+  if (!Number.isSafeInteger(amount)) {
+    return {
+      state: 'UNKNOWN', amount: null, currency: 'KRW',
+      basis: 'SUPPLY_AMOUNT_EXCLUDING_VAT', reasonCode: 'MARGIN_OUT_OF_RANGE',
+    };
+  }
+  return {
+    state: 'CALCULATED', amount, currency: 'KRW',
+    basis: 'SUPPLY_AMOUNT_EXCLUDING_VAT', reasonCode: null,
+  };
+}
+
 const assetStatus = (value: unknown) => ({
   '즉시출고': 'AVAILABLE', '출고가능': 'AVAILABLE', '가용': 'AVAILABLE',
   '계약중': 'RESERVED', '점검중': 'MAINTENANCE',
@@ -224,13 +279,20 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       monthlyRent,
       sourceAmount: (raw as Rec).deposit,
     });
-    const salesCommission = resolveSalesCommission({
+    const channelPayoutFee = resolveSalesCommission({
       supplierId,
       productType: text(source.product_type),
       fuel: text(source.fuel_type),
       termMonths: parsed.months,
       monthlyRent,
     });
+    const supplierBillingFee = resolveSupplierBillingFee({
+      supplierId,
+      productType: text(source.product_type),
+      termMonths: parsed.months,
+      monthlyRent,
+    });
+    const expectedGrossMargin = resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee);
     return [{
       termKey: `source:${sourceKey}`,
       termMonths: parsed.months,
@@ -239,7 +301,11 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       ...deposit,
       mileageLimitKmPerYear: parsed.mileageKm ?? null,
       settlement: parsed.settlement,
-      salesCommission,
+      // Backward-compatible alias for the existing Kakao consumer.
+      salesCommission: channelPayoutFee,
+      supplierBillingFee,
+      channelPayoutFee,
+      expectedGrossMargin,
     }];
   }).sort((a, b) => a.termMonths - b.termMonths || a.termKey.localeCompare(b.termKey));
   if (!priceTerms.length) return null;

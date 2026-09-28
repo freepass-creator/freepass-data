@@ -58,10 +58,22 @@
         "reasonCode": { "$ref": "#/$defs/nullableString" }
       }
     },
+    "marginResolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "amount", "currency", "basis", "reasonCode"],
+      "properties": {
+        "state": { "enum": ["CALCULATED", "UNKNOWN", "NOT_APPLICABLE"] },
+        "amount": { "type": ["integer", "null"] },
+        "currency": { "const": "KRW" },
+        "basis": { "const": "SUPPLY_AMOUNT_EXCLUDING_VAT" },
+        "reasonCode": { "$ref": "#/$defs/nullableString" }
+      }
+    },
     "priceTerm": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["termKey", "termMonths", "monthlyRent", "deposit", "depositAmount", "depositState", "depositRule", "mileageLimitKmPerYear", "settlement", "salesCommission"],
+      "required": ["termKey", "termMonths", "monthlyRent", "deposit", "depositAmount", "depositState", "depositRule", "mileageLimitKmPerYear", "settlement", "salesCommission", "supplierBillingFee", "channelPayoutFee", "expectedGrossMargin"],
       "properties": {
         "termKey": { "type": "string", "minLength": 1 },
         "termMonths": { "type": "integer", "minimum": 1 },
@@ -86,7 +98,10 @@
         },
         "mileageLimitKmPerYear": { "$ref": "#/$defs/nullableInteger" },
         "settlement": { "enum": ["RETURN", "BUYOUT"] },
-        "salesCommission": { "$ref": "#/$defs/commissionResolution" }
+        "salesCommission": { "$ref": "#/$defs/commissionResolution" },
+        "supplierBillingFee": { "$ref": "#/$defs/commissionResolution" },
+        "channelPayoutFee": { "$ref": "#/$defs/commissionResolution" },
+        "expectedGrossMargin": { "$ref": "#/$defs/marginResolution" }
       }
     },
     "product": {

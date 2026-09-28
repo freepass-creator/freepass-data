@@ -542,6 +542,16 @@ This file exists so another session can continue without re-discovering or re-cr
 - 남음: 현재 기준 HEAD의 기존 `src/jobs/apply-iancar-policy-sync.ts` Firestore 직접 접근 때문에 `npm run check` 전체 묶음은 `check:data-access-boundary`에서 HOLD. 실제 상품 수수료 원천을 구조화하여 채우는 운영 write는 수행하지 않았다. Claude 독립 검토는 응답 없이 장시간 대기되어 UNAVAILABLE로 기록한다.
 - next_start_here: `src/domain/catalog.ts`의 `OfferTermEconomics` → `src/application/resolve-offer-commercial-terms.ts`의 `auditOfferEconomicsTerms()` → `tests/offer-commercial-terms.test.ts`.
 
+## 2026-09-28 청구·지급·예상수익 직접 결정 반영
+
+- 목적: 공급사에서 받을 기준 수수료와 영업채널에 줄 기준 수수료를 같은 `termKey`에서 별도로 계산하고, 공급가액 기준 예상수익을 `청구 - 지급`으로 제시한다.
+- 대상: `work/freepass-data/commission-margin-20260928`, base `34129457349f073306e081a1e7acd98ef31782c3`.
+- 사용자 결정: 청구와 지급은 같은 상품·기간 기준을 사용하지만 서로 다른 금액/비율이다. 오플구독은 기간과 무관하게 공급사 청구 1,000,000원, 영업채널 지급 800,000원이다.
+- 변경: Kakao REFERENCE_ONLY 기간행에 `supplierBillingFee`, `channelPayoutFee`, `expectedGrossMargin`을 추가했다. 기존 `salesCommission`은 호환 alias로 유지한다. 예상수익은 VAT를 섞지 않은 공급가액 기준이며, 청구 또는 지급 한쪽이 미확정이면 금액을 만들지 않는다.
+- 검증: `npm run check` 전체 PASS — Vitest 965 PASS / 12 SKIP, Sheets 24 PASS, read-runtime 5 PASS, shadow 10 PASS, dashboard 21 PASS. 오플 12/24/36/48/60개월 모두 청구 1,000,000원, 지급 800,000원, 예상수익 200,000원으로 고정되는 회귀검사를 추가했다.
+- 남음: 다른 공급사의 지급 기준은 F80-F85 `수수료!A:E`로 확인했지만 청구 기준은 공급사별 근거를 더 고정해야 한다. 과거 청구서는 실제 사건 증거이지 미래 정책을 자동 확정하는 표가 아니므로, 검증되지 않은 청구액과 예상수익은 `UNKNOWN`이다. Claude 독립 검토는 호출했으나 응답이 없어 `UNAVAILABLE`이며 PASS로 세지 않았다. Canonical write·ACTIVE release·운영 배포는 수행하지 않았다.
+- next_start_here: `src/application/kakao-catalog-reference.ts`의 `resolveSupplierBillingFee()`와 `resolveExpectedGrossMargin()` → 공급사별 청구 근거 확정 → `Offer.internalEconomicsTerms` 적재 dry-run.
+
 # 2026-09-28 정산원장 소비자 읽기 계약
 
 - 목적: FreePass Data 정산원장을 Admin, Kakao Ops와 명시적으로 등록된 소비자가 동일한 계약으로 안전하게 조회한다.

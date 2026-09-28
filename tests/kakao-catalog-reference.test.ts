@@ -3,7 +3,9 @@ import {
   buildKakaoCatalogReference,
   buildKakaoCatalogReferenceProduct,
   resolveReferenceDeposit,
+  resolveExpectedGrossMargin,
   resolveSalesCommission,
+  resolveSupplierBillingFee,
 } from '../src/application/kakao-catalog-reference.js';
 
 describe('Kakao catalog reference deposit facts', () => {
@@ -101,6 +103,38 @@ describe('Kakao sales commission facts', () => {
   });
 });
 
+describe('Kakao billing, payout and margin facts', () => {
+  it('calculates the confirmed Oplus fixed billing, payout and pre-VAT margin for every period', () => {
+    for (const termMonths of [12, 24, 36, 48, 60]) {
+      const input = { supplierId: 'RP023', productType: '오플구독', termMonths, monthlyRent: 700000 };
+      const supplierBillingFee = resolveSupplierBillingFee(input);
+      const channelPayoutFee = resolveSalesCommission({ ...input, fuel: '가솔린' });
+      expect(supplierBillingFee).toMatchObject({
+        state: 'CALCULATED', ruleId: 'AUTOPLUS_SUBSCRIPTION_BILLING_FIXED', amount: 1000000,
+        vatAmount: 100000, totalAmount: 1100000,
+      });
+      expect(channelPayoutFee).toMatchObject({ state: 'CALCULATED', amount: 800000 });
+      expect(resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee)).toEqual({
+        state: 'CALCULATED', amount: 200000, currency: 'KRW',
+        basis: 'SUPPLY_AMOUNT_EXCLUDING_VAT', reasonCode: null,
+      });
+    }
+  });
+
+  it('does not invent margin when the supplier billing rule is not verified', () => {
+    const supplierBillingFee = resolveSupplierBillingFee({
+      supplierId: 'RP013', productType: '중고렌트', termMonths: 36, monthlyRent: 800000,
+    });
+    const channelPayoutFee = resolveSalesCommission({
+      supplierId: 'RP013', productType: '중고렌트', fuel: '가솔린', termMonths: 36, monthlyRent: 800000,
+    });
+    expect(supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'SUPPLIER_BILLING_RULE_NOT_VERIFIED' });
+    expect(resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee)).toMatchObject({
+      state: 'UNKNOWN', amount: null, reasonCode: 'BILLING_OR_PAYOUT_UNRESOLVED',
+    });
+  });
+});
+
 describe('Kakao typed REFERENCE_ONLY projection', () => {
   const product = {
     listable: true,
@@ -124,6 +158,29 @@ describe('Kakao typed REFERENCE_ONLY projection', () => {
           salesCommission: { state: 'CALCULATED', amount: 864000 },
         }],
       }],
+    });
+  });
+
+  it('exposes Oplus billing, payout and expected gross margin without depending on the term', () => {
+    expect(buildKakaoCatalogReferenceProduct('oplus-1', {
+      ...product,
+      product_type: '오플구독', provider_company_code: 'RP023', provider_name: '오토플러스',
+      price: { '24_2만': { rent: 700000, deposit: 0 }, '36_2만': { rent: 650000, deposit: 0 } },
+    })).toMatchObject({
+      offers: [{ priceTerms: [
+        {
+          termMonths: 24,
+          supplierBillingFee: { amount: 1000000 },
+          channelPayoutFee: { amount: 800000 },
+          expectedGrossMargin: { state: 'CALCULATED', amount: 200000 },
+        },
+        {
+          termMonths: 36,
+          supplierBillingFee: { amount: 1000000 },
+          channelPayoutFee: { amount: 800000 },
+          expectedGrossMargin: { state: 'CALCULATED', amount: 200000 },
+        },
+      ] }],
     });
   });
 
