@@ -31,15 +31,16 @@ It does not seed data, publish releases, run workers, or expose Catalog mutation
 
 Registration fields:
 
-- `id`: `erp-com` or `whitelabel-<slug>`
+- `id`: `erp-com`, `kakao-ops`, `freepass-estimate`, `freepass-admin-catalog`, or `whitelabel-<slug>`
 - `projectionId`: currently only `erp-public`
 - `token`: unique backend token, minimum 32 characters
 - `capabilities`: optional
 
 Capability rules:
 
-- omitted `capabilities` => `["catalog"]`
+- omitted `capabilities` => `["catalog"]`; `catalog-reference` must be granted explicitly to `kakao-ops`
 - `catalog` => ERP public projection read
+- `catalog-reference` => Kakao-only, typed `REFERENCE_ONLY` ERP5 facts; it never means Canonical ACTIVE
 - `catalog-health` => Catalog Data Health read
 - health-only registration is allowed and does not grant catalog payload access
 
@@ -66,6 +67,21 @@ Capability rules:
 - 503 BLOCKED with the versioned Health report body
 
 Both responses use `Cache-Control: no-store`.
+
+### Kakao catalog reference
+
+`GET /v1/consumers/kakao-ops/catalog-reference`
+
+- only the separately registered `kakao-ops` identity may use it;
+- projects current listable ERP5 products in memory without a Firestore write;
+- materializes each period's deposit amount/rule/state, including explicit `ZERO` vs `UNKNOWN`;
+- carries `vehicle.exteriorColor` from ERP5 `products.ext_color`;
+- returns the verified F80-F85 sales-commission policy snapshot and term-level calculated,
+  coordination-required, unknown, or not-applicable result;
+- always returns `authority=REFERENCE_ONLY` and `publicationDecision=HOLD`.
+
+This route is an explicit migration bridge, not a silent fallback for `/catalog`. Kakao must opt into
+the route and must not convert its response into a Canonical ACTIVE claim.
 
 ## Storage boundary
 

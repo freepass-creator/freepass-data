@@ -6,7 +6,8 @@ const src = path.join(root, 'src');
 const allowedRawInfraConsumers = new Set([
   'src/bootstrap.ts',
   'src/api/data-access-runtime.ts',
-  'src/jobs/data-access-runtime.ts'
+  'src/jobs/data-access-runtime.ts',
+  'src/jobs/apply-iancar-policy-sync.ts'
 ]);
 
 const liveFirestoreAdapters = new Set([
@@ -116,7 +117,8 @@ const requiredGatewayUsage = new Map([
   ['src/jobs/check-consumer-runtime-evidence.ts', ['runtime.report(']],
   ['src/jobs/check-consumer-health.ts', ['runtime.health(']],
   ['src/jobs/check-consumer-readiness.ts', ['runtime.readiness(']],
-  ['src/jobs/check-central-firestore.ts', ['runtime.access.read(']]
+  ['src/jobs/check-central-firestore.ts', ['runtime.access.read(']],
+  ['src/jobs/apply-iancar-policy-sync.ts', ['runtime.access.write(']]
 ]);
 for (const [relativeFile, required] of requiredGatewayUsage) {
   const content = fs.readFileSync(path.join(root, relativeFile), 'utf8');

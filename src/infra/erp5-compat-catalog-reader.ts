@@ -115,6 +115,16 @@ export class FirestoreCatalogCompatibilityReader {
       },
     };
   }
+
+  async readKakaoReferenceSource(consumerId: string) {
+    if (consumerId !== 'kakao-ops') throw new Error('KAKAO_REFERENCE_CONSUMER_NOT_ALLOWED');
+    const products = await this.db.collection('products').get();
+    return {
+      consumerId,
+      products: asMap(products),
+      observedAt: new Date().toISOString(),
+    };
+  }
 }
 
 export function createFirestoreCatalogCompatibilityReader() {
