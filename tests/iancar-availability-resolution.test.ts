@@ -13,8 +13,11 @@ describe('Iancar availability resolution', () => {
     expect(resolveIancarAvailability(seen(true, false))).toMatchObject({ state: '출고가능', canonicalStatus: 'AVAILABLE' });
     expect(resolveIancarAvailability(seen(true, true))).toMatchObject({ state: '출고가능', reasons: ['ERP_PRECEDENCE_OVER_SHEET'] });
   });
-  it('holds a Sheet-only vehicle as 출고협의', () => {
-    expect(resolveIancarAvailability(seen(false, true))).toMatchObject({ state: '출고협의', canonicalStatus: 'HOLD', reviewRequired: true });
+  it('marks a Sheet-only vehicle unavailable when it is absent from the complete Iancar ERP', () => {
+    expect(resolveIancarAvailability(seen(false, true))).toMatchObject({
+      state: '출고불가', canonicalStatus: 'UNAVAILABLE', reviewRequired: false,
+      reasons: ['ABSENT_FROM_CURRENT_COMPLETE_IANCAR_ERP']
+    });
   });
   it.each([['예약중', '예약중', 'RESERVED'], ['계약중', '예약중', 'RESERVED'], ['판매완료', '판매완료', 'SOLD'],
     ['출고불가', '출고불가', 'UNAVAILABLE']] as const)('preserves explicit ERP state %s', (raw, state, canonicalStatus) => {
@@ -23,8 +26,10 @@ describe('Iancar availability resolution', () => {
   it('holds an unknown explicit ERP state instead of guessing available', () => {
     expect(resolveIancarAvailability(seen(true, true, '검토중'))).toMatchObject({ state: '미관측', canonicalStatus: 'HOLD' });
   });
-  it('preserves registered history when both current sources do not observe it', () => {
-    expect(resolveIancarAvailability(seen(false, false))).toMatchObject({ state: '미관측', sourceDecision: 'HISTORY_ONLY', deleteAuthorized: false });
+  it('marks registered history unavailable when it is absent from the complete Iancar ERP', () => {
+    expect(resolveIancarAvailability(seen(false, false))).toMatchObject({
+      state: '출고불가', canonicalStatus: 'UNAVAILABLE', sourceDecision: 'IANCAR_ERP', deleteAuthorized: false
+    });
   });
   it('does not create a candidate with no observation or history', () => {
     const input = seen(false, false); input.previouslyRegistered = false;
@@ -36,23 +41,21 @@ describe('Iancar availability resolution', () => {
   });
   it('holds stale or partial ERP evidence instead of claiming availability', () => {
     const input = seen(true, true); input.erp.freshnessVerified = false;
-    expect(resolveIancarAvailability(input)).toMatchObject({ canonicalStatus: 'HOLD', reasons: ['SOURCE_EVIDENCE_NOT_CURRENT_AND_COMPLETE'] });
+    expect(resolveIancarAvailability(input)).toMatchObject({ canonicalStatus: 'HOLD', reasons: ['IANCAR_ERP_EVIDENCE_NOT_CURRENT_AND_COMPLETE'] });
   });
-  it('holds trusted ERP presence when the Sheet evidence is stale or partial', () => {
+  it('ignores Sheet freshness because Iancar ERP is the sole availability authority', () => {
     const stale = seen(true, true); stale.sheet.freshnessVerified = false;
-    expect(resolveIancarAvailability(stale)).toMatchObject({ state: '미관측', canonicalStatus: 'HOLD',
-      reasons: ['SOURCE_EVIDENCE_NOT_CURRENT_AND_COMPLETE'] });
+    expect(resolveIancarAvailability(stale)).toMatchObject({ state: '출고가능', canonicalStatus: 'AVAILABLE' });
     const partial = seen(true, false, '출고불가'); partial.sheet.coverageComplete = false;
-    expect(resolveIancarAvailability(partial)).toMatchObject({ state: '미관측', canonicalStatus: 'HOLD',
-      reasons: ['SOURCE_EVIDENCE_NOT_CURRENT_AND_COMPLETE'] });
+    expect(resolveIancarAvailability(partial)).toMatchObject({ state: '출고불가', canonicalStatus: 'UNAVAILABLE' });
   });
   it('does not infer ERP absence from an incomplete collection', () => {
     const input = seen(false, true); input.erp.coverageComplete = false;
     expect(resolveIancarAvailability(input)).toMatchObject({ state: '미관측', canonicalStatus: 'HOLD' });
   });
-  it('does not classify history-only when Sheet absence is stale', () => {
+  it('marks registered history unavailable even when the non-authoritative Sheet is stale', () => {
     const input = seen(false, false); input.sheet.freshnessVerified = false;
-    expect(resolveIancarAvailability(input)).toMatchObject({ canonicalStatus: 'HOLD', sourceDecision: 'NONE' });
+    expect(resolveIancarAvailability(input)).toMatchObject({ state: '출고불가', canonicalStatus: 'UNAVAILABLE', sourceDecision: 'IANCAR_ERP' });
   });
   it('rejects an ERP state without an ERP observation', () => {
     expect(() => resolveIancarAvailability(seen(false, true, '출고불가'))).toThrow('ERP_STATE_WITHOUT_OBSERVATION');
