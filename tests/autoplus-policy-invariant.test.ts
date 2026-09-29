@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { assertAutoplusPolicyInvariant } from '../src/domain/autoplus-policy-invariant.js';
+import {
+  assertAutoplusPolicyInvariant,
+  assertAutoplusProductSet,
+  AUTOPLUS_EXPECTED_ACTIVE_PRODUCT_COUNT,
+} from '../src/domain/autoplus-policy-invariant.js';
 
 const valid = {
   basic_driver_age: '만 26세 이상',
@@ -20,5 +24,24 @@ describe('RP023 policy invariant', () => {
     [{ ...valid, insurance_included: '별도' }, 'insurance_included'],
   ])('rejects a contradictory policy', (facts, message) => {
     expect(() => assertAutoplusPolicyInvariant(facts)).toThrow(message);
+  });
+});
+
+describe('RP023 product policy-link scope', () => {
+  const products = Array.from({ length: AUTOPLUS_EXPECTED_ACTIVE_PRODUCT_COUNT }, (_, index) => ({
+    id: `product-${index}`,
+    data: { provider_company_code: 'RP023', product_type: '오플구독' },
+  }));
+
+  it('accepts the exact active AutoPlus product set', () => {
+    expect(() => assertAutoplusProductSet(products)).not.toThrow();
+  });
+
+  it('fails closed when the count or product type drifts', () => {
+    expect(() => assertAutoplusProductSet(products.slice(1))).toThrow('Expected 155');
+    expect(() => assertAutoplusProductSet([
+      ...products.slice(0, -1),
+      { id: 'wrong-type', data: { provider_company_code: 'RP023', product_type: '렌트' } },
+    ])).toThrow('product_type');
   });
 });
