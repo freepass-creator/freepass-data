@@ -10,7 +10,8 @@ adding entity update permission to the read service would silently widen every r
 
 The writer service uses:
 
-- a dedicated runtime service account with only `datastore.entities.get`, `list`, `create`, and `update`;
+- a dedicated runtime service account with `datastore.databases.get` only for transaction begin/rollback,
+  plus `datastore.entities.get`, `list`, `create`, and `update`;
 - a dedicated Secret Manager secret containing only the `freepass-estimate` consumer binding;
 - an exact numeric secret version, never `latest`;
 - private Cloud Run IAM with one Estimate Vercel caller identity;
@@ -19,6 +20,10 @@ The writer service uses:
 Firestore IAM cannot scope these permissions to a collection. Application contracts therefore remain
 the final immutable-write guard. Never grant delete, `roles/datastore.user`, or the read-runtime identity
 to this service.
+
+The first ON canary proved that entity permissions alone are insufficient: Firestore rejected
+`beginTransaction`. Google Cloud's Firestore IAM contract assigns that operation specifically to
+`datastore.databases.get`; it does not grant database metadata read or entity deletion.
 
 The Cloud Run service IAM has exactly two invokers: the dedicated Estimate Vercel caller and the deploy
 service account used for authenticated deployment verification. The deploy identity is not an Estimate

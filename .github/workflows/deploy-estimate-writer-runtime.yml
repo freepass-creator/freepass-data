@@ -186,9 +186,11 @@ jobs:
 
           role_id="${WRITER_IAM_ROLE##*/}"
           role_permissions="$(gcloud iam roles describe "$role_id" --project="$PROJECT_ID" --format='value(includedPermissions)' | tr ';' '\n' | sort -u)"
-          expected_permissions=$'datastore.entities.create\ndatastore.entities.get\ndatastore.entities.list\ndatastore.entities.update'
+          expected_permissions=$'datastore.databases.get\ndatastore.entities.create\ndatastore.entities.get\ndatastore.entities.list\ndatastore.entities.update'
           test "$role_permissions" = "$expected_permissions"
           project_policy="$(gcloud projects get-iam-policy "$PROJECT_ID" --format=json)"
+          writer_role_members="$(jq -r --arg role "$WRITER_IAM_ROLE" '.bindings[] | select(.role == $role) | .members[]?' <<<"$project_policy" | sort -u)"
+          test "$writer_role_members" = "serviceAccount:$RUNTIME_SERVICE_ACCOUNT"
           runtime_roles="$(jq -r --arg member "serviceAccount:$RUNTIME_SERVICE_ACCOUNT" '.bindings[] | select(any(.members[]?; . == $member)) | .role' <<<"$project_policy" | sort -u)"
           test "$runtime_roles" = "$WRITER_IAM_ROLE"
           caller_roles="$(jq -r --arg member "serviceAccount:$ESTIMATE_CALLER_SERVICE_ACCOUNT" '.bindings[] | select(any(.members[]?; . == $member)) | .role' <<<"$project_policy" | sort -u)"

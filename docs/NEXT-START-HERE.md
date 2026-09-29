@@ -10,6 +10,13 @@
 - 남음: ACTIVE Estimate master release 부재와 실제 agent/admin Firebase 인증은 별도 HOLD이며, synthetic persistence PASS로 소비자 전체 cutover를 선언하지 않는다.
 - next_start_here: main exact revision의 ON workflow에서 영구 synthetic 증거를 생성하고 Quote/Envelope ID·hash·persistedAt을 재확인한다.
 
+### 2026-09-30 first ON run readback
+
+- 운영 run `36591019208`은 첫 Quote transaction에서 `503 QUOTE_REPOSITORY_WRITE_FAILED`로 실패했고 자동 OFF 복귀가 PASS했다. 현재 Ready revision은 `freepass-data-estimate-writer-00005-hfd`, write mode `off`, traffic 100%다.
+- 원인: custom role에 entity get/list/create/update만 있고 Firestore `beginTransaction` 필수 권한 `datastore.databases.get`이 없었다.
+- 보정: 삭제·metadata·범용 Datastore User 권한 없이 `datastore.databases.get` 한 개만 추가하고 exact permission 검사를 5개로 고정한다.
+- next_start_here: 보정 PR을 main에 병합하고 custom role readback이 정확히 5개인지 확인한 뒤 ON workflow를 재실행한다.
+
 ## 2026-09-29 Estimate dedicated writer runtime activation
 
 - 목적: read runtime 권한을 넓히지 않고 Estimate Quote/Share Envelope 불변 저장을 전용 private Cloud Run 경계로 운영한다.
