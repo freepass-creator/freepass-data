@@ -144,7 +144,7 @@ This does not authorize arbitrary external writers to projection evidence. Write
 Catalog Data Health now has an explicit response contract:
 
 - `contractVersion = catalog-data-health-v1`
-- `schemaVersion = 1.0.0`
+- `schemaVersion = 1.1.0`
 - `contracts/catalog-data-health-v1.schema.json`
 
 The JSON Schema uses `additionalProperties: false` at contract boundaries so accidental API drift is rejected rather than silently accepted.
