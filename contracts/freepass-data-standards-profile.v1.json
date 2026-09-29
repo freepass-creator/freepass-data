@@ -5,7 +5,7 @@
   "standards": [
     {"id":"JSON_SCHEMA_2020_12","reference":"https://json-schema.org/draft/2020-12/schema","level":"REQUIRED","scope":"Every *.schema.json contract","verification":"AUTOMATED","checker":"AJV_2020_COMPILE_ALL_SCHEMAS"},
     {"id":"RFC_3339_DATETIME","reference":"https://www.rfc-editor.org/rfc/rfc3339","level":"REQUIRED","scope":"Canonical temporal schema properties ending in At or Time; RFC3339 date-time or full-date is explicit","verification":"AUTOMATED","checker":"RFC3339_SCHEMA_TEMPORAL_FIELDS"},
-    {"id":"ISO_4217_CURRENCY","reference":"https://www.iso.org/iso-4217-currency-codes.html","level":"REQUIRED","scope":"Money currency codes; Catalog V1 currently supports KRW only","verification":"HOLD"},
+    {"id":"ISO_4217_CURRENCY","reference":"https://www.iso.org/iso-4217-currency-codes.html","level":"REQUIRED","scope":"Every currency schema property; Catalog V1 supports ISO 4217 KRW only","verification":"AUTOMATED","checker":"ISO4217_KRW_CURRENCY_FIELDS"},
     {"id":"SHA_256","reference":"https://csrc.nist.gov/pubs/fips/180-4/upd1/final","level":"REQUIRED","scope":"Content, source, input and release integrity digests","verification":"HOLD"},
     {"id":"RFC_9457_PROBLEM_DETAILS","reference":"https://www.rfc-editor.org/rfc/rfc9457","level":"TARGET","scope":"Consumer API error envelopes","verification":"HOLD"},
     {"id":"OPENAPI_3_1","reference":"https://spec.openapis.org/oas/v3.1.0","level":"TARGET","scope":"Published HTTP interface description and compatibility","verification":"HOLD"},
