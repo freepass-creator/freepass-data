@@ -17,6 +17,13 @@ FreePass Admin (Vercel)
 
 Admin business semantics remain in `freepass-admin`. FreePass Data owns the Firebase credential,
 physical collection layout, access audit, transaction execution and idempotency receipt.
+An Admin workflow receipt identifies FreePass Data as the **execution gateway**, not as the semantic
+owner of every resource in the transaction. Settlement resources use `FREEPASS_DATA_SETTLEMENT`;
+contract and e-sign workflow resources remain `FREEPASS_ADMIN_APPLICATION_CONTRACT`.
+
+Catalog source resources (`products`, `policies`, `vehicleMaster`, `partners`) are readable through
+this compatibility gateway but are not writable through it. Catalog mutation must use the governed
+Catalog command/authority path.
 
 ## Runtime separation
 

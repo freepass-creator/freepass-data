@@ -71,8 +71,8 @@ export const DATA_DOMAINS: readonly DataDomainDefinition[] = [
   {
     domainId: 'settlement-finance', displayName: '정산·청구·수금·지급',
     aliases: ['정산', '수수료', '청구', '수금', '지급', '입금', '환수', 'settlement', 'invoice', 'payment', 'commission'],
-    description: 'Admin 정산 규칙과 증거가 있는 금융 이벤트',
-    semanticOwner: 'freepass-admin/settlement', sensitivity: 'RESTRICTED', availability: 'HOLD', currentScope: 'FUTURE_CONNECTION'
+    description: 'FreePass Data 정산 정본과 Admin command·승인 흐름이 연결되는 금융 이벤트',
+    semanticOwner: 'freepass-data/settlement', sensitivity: 'RESTRICTED', availability: 'HOLD', currentScope: 'FUTURE_CONNECTION'
   },
   {
     domainId: 'quote-estimate', displayName: '견적·계산 입력과 결과',
@@ -202,10 +202,10 @@ export const DATA_ASSETS: readonly DataAssetDefinition[] = [
     assetId: 'admin-settlement', domainId: 'settlement-finance', displayName: 'Admin 정산·수수료 원장',
     aliases: ['settlement_rows', 'settlement_events', '정산원장', '수수료'], kind: 'FIRESTORE_COLLECTION',
     system: 'firebase:freepasserp5', locator: 'settlement_* (candidate paths; live authority unverified)',
-    ownership: 'DOMAIN_OWNED', authority: 'WORKFLOW', keyDescription: 'settlement ID + revision + source evidence',
+    ownership: 'FREEPASS_DATA', authority: 'WORKFLOW', keyDescription: 'settlement ID + revision + source evidence',
     sensitivity: 'RESTRICTED', availability: 'HOLD', freshnessPolicy: '운영 owner/writer/namespace를 먼저 실측',
     contractRef: 'docs/BUSINESS-DATA-CONNECTION-MAP.md', consumers: ['FreePass Admin'],
-    notes: ['새 Data 금융 원장을 만들지 않음', '실제 collection과 active writer는 미검증']
+    notes: ['기존 settlement_*를 정본으로 유지하고 두 번째 원장을 만들지 않음', 'Admin은 승인 command와 업무 화면을 소유', 'active writer 전환은 별도 검증']
   },
   {
     assetId: 'estimate-contracts', domainId: 'quote-estimate', displayName: '견적 입력·결과 계약',

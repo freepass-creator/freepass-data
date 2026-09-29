@@ -20,6 +20,37 @@ export const ADMIN_WORKFLOW_RESOURCES = {
 
 export type AdminWorkflowResource = keyof typeof ADMIN_WORKFLOW_RESOURCES;
 
+export type AdminWorkflowSemanticOwner =
+  | 'FREEPASS_DATA_CATALOG'
+  | 'FREEPASS_DATA_SETTLEMENT'
+  | 'FREEPASS_DATA_REFERENCE'
+  | 'FREEPASS_ADMIN_APPLICATION_CONTRACT';
+
+export type AdminWorkflowResourcePolicy = {
+  semanticOwner: AdminWorkflowSemanticOwner;
+  writeThroughGateway: boolean;
+};
+
+export const ADMIN_WORKFLOW_RESOURCE_POLICIES: Record<AdminWorkflowResource, AdminWorkflowResourcePolicy> = {
+  products: { semanticOwner: 'FREEPASS_DATA_CATALOG', writeThroughGateway: false },
+  policies: { semanticOwner: 'FREEPASS_DATA_CATALOG', writeThroughGateway: false },
+  vehicleMaster: { semanticOwner: 'FREEPASS_DATA_CATALOG', writeThroughGateway: false },
+  partners: { semanticOwner: 'FREEPASS_DATA_REFERENCE', writeThroughGateway: false },
+  settlementRows: { semanticOwner: 'FREEPASS_DATA_SETTLEMENT', writeThroughGateway: true },
+  settlementEvents: { semanticOwner: 'FREEPASS_DATA_SETTLEMENT', writeThroughGateway: true },
+  settlementInvoices: { semanticOwner: 'FREEPASS_DATA_SETTLEMENT', writeThroughGateway: true },
+  settlementCashEvents: { semanticOwner: 'FREEPASS_DATA_SETTLEMENT', writeThroughGateway: true },
+  settlementClawbacks: { semanticOwner: 'FREEPASS_DATA_SETTLEMENT', writeThroughGateway: true },
+  settlementFeeRules: { semanticOwner: 'FREEPASS_DATA_SETTLEMENT', writeThroughGateway: true },
+  settlementRules: { semanticOwner: 'FREEPASS_DATA_SETTLEMENT', writeThroughGateway: true },
+  contracts: { semanticOwner: 'FREEPASS_ADMIN_APPLICATION_CONTRACT', writeThroughGateway: true },
+  contractEvents: { semanticOwner: 'FREEPASS_ADMIN_APPLICATION_CONTRACT', writeThroughGateway: true },
+  esignSessions: { semanticOwner: 'FREEPASS_ADMIN_APPLICATION_CONTRACT', writeThroughGateway: true },
+  esignPrivate: { semanticOwner: 'FREEPASS_ADMIN_APPLICATION_CONTRACT', writeThroughGateway: true },
+  esignEvents: { semanticOwner: 'FREEPASS_ADMIN_APPLICATION_CONTRACT', writeThroughGateway: true },
+  esignIssueLocks: { semanticOwner: 'FREEPASS_ADMIN_APPLICATION_CONTRACT', writeThroughGateway: true },
+};
+
 export type AdminWorkflowFilter = {
   field: string;
   op: '==';
@@ -80,7 +111,7 @@ export type AdminWorkflowCommitRequest = {
   mutations: AdminWorkflowMutation[];
 };
 
-export type AdminWorkflowCommitReceipt = {
+export type AdminWorkflowCommitReceiptV1 = {
   schema: 'freepass-data.admin-workflow-receipt/v1';
   authority: 'FREEPASS_DATA';
   consumerId: string;
@@ -91,6 +122,21 @@ export type AdminWorkflowCommitReceipt = {
   receiptDigest: string;
   idempotent: boolean;
 };
+
+export type AdminWorkflowCommitReceiptV2 = Omit<AdminWorkflowCommitReceiptV1, 'schema' | 'authority'> & {
+  schema: 'freepass-data.admin-workflow-receipt/v2';
+  authority: 'FREEPASS_DATA_ACCESS_GATEWAY';
+  authorityRole: 'EXECUTION_GATEWAY';
+  semanticOwners: AdminWorkflowSemanticOwner[];
+};
+
+export type AdminWorkflowCommitReceipt = AdminWorkflowCommitReceiptV1 | AdminWorkflowCommitReceiptV2;
+
+export function adminWorkflowSemanticOwners(request: AdminWorkflowCommitRequest) {
+  return [...new Set(request.mutations.map((mutation) =>
+    ADMIN_WORKFLOW_RESOURCE_POLICIES[mutation.resource].semanticOwner
+  ))].sort() as AdminWorkflowSemanticOwner[];
+}
 
 const id = (value: unknown, max = 256) =>
   typeof value === 'string'
@@ -151,5 +197,7 @@ export function assertAdminWorkflowCommitRequest(value: unknown): asserts value 
     }
     if (!m.data || typeof m.data !== 'object' || Array.isArray(m.data)) throw new Error('INVALID_ADMIN_WORKFLOW_MUTATION');
     if (m.merge !== undefined && typeof m.merge !== 'boolean') throw new Error('INVALID_ADMIN_WORKFLOW_MUTATION');
+    const policy = ADMIN_WORKFLOW_RESOURCE_POLICIES[m.resource as AdminWorkflowResource];
+    if (!policy.writeThroughGateway) throw new Error('ADMIN_WORKFLOW_RESOURCE_READ_ONLY');
   }
 }
