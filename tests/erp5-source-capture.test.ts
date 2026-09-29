@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { buildErp5CanonicalDryRun, captureErp5Source, compareErp5ProductCaptures, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, profileErp5CaptureFields, summarizeErp5DecisionInputs, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
+import { buildErp5CanonicalDryRun, captureErp5Source, compareErp5ProductCaptures, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, readErp5PolicyFacts, profileErp5CaptureFields, summarizeErp5DecisionInputs, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
 const readTime = '2026-09-21T10:00:00.123456Z';
 function doc(collection = 'products', id = 'synthetic') {
   return {
@@ -14,7 +14,7 @@ function doc(collection = 'products', id = 'synthetic') {
     } : {}
   };
 }
-function fake(options: { products?: Record<string, unknown>[]; drift?: boolean; failPolicy?: boolean; count?: string; extraRow?: unknown } = {}) {
+function fake(options: { products?: Record<string, unknown>[]; policies?: Record<string, unknown>[]; drift?: boolean; failPolicy?: boolean; count?: string; extraRow?: unknown } = {}) {
   const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
   const products = options.products ?? [doc()];
   const rpc = async (method: string, body: Record<string, unknown>) => {
@@ -25,10 +25,11 @@ function fake(options: { products?: Record<string, unknown>[]; drift?: boolean; 
     const query = (body.structuredQuery ?? (body.structuredAggregationQuery as any)?.structuredQuery) as any;
     expect(Object.keys(query)).toEqual(['from']);
     const collection = query.from[0].collectionId;
+    const documents = collection === 'products' ? products : collection === 'policy' ? options.policies ?? [doc(collection)] : [doc(collection)];
     if (collection === 'policy' && options.failPolicy) throw new Error('synthetic failure');
     if (method === 'runAggregationQuery') return [{ readTime: options.drift && collection === 'policy' ? '2026-09-21T10:01:00Z' : readTime,
-      result: { aggregateFields: { total: { integerValue: options.count ?? String(collection === 'products' ? products.length : 1) } } } }];
-    const rows: unknown[] = (collection === 'products' ? products : [doc(collection)]).map(document => ({ readTime, document }));
+      result: { aggregateFields: { total: { integerValue: options.count ?? String(documents.length) } } } }];
+    const rows: unknown[] = documents.map(document => ({ readTime, document }));
     if (!rows.length) rows.push({ readTime });
     if (options.extraRow) rows.push(options.extraRow);
     return rows;
@@ -313,6 +314,100 @@ describe('ERP5 same-transaction raw capture', () => {
     Object.assign(product.fields, { nested: { mapValue: { fields: { updated_at: { timestampValue: readTime } } } } });
     const capture = await captureErp5Source(fake({ products: [product] }).rpc);
     expect(inspectErp5Capture(capture).decodeFailed).toBe(1);
+  });
+  it('reports skipped policies separately from missing mileage without promoting timestamp records', async () => {
+    const policy = doc('policy', 'synthetic-private-policy');
+    Object.assign(policy.fields, { updated_at: { timestampValue: readTime }, annual_mileage: { integerValue: '30000' } });
+    const capture = await captureErp5Source(fake({ policies: [policy] }).rpc);
+    const before = JSON.stringify(capture);
+    const report = inspectErp5Capture(capture);
+    expect(readErp5PolicyFacts(capture)).toEqual([]);
+    expect(report.policyFactCoverage).toMatchObject({
+      sourceDocuments: 1, factsProduced: 0, skippedDocuments: 1,
+      decodeFailureCounts: { UNSUPPORTED_FIRESTORE_VALUE: 1 },
+      skippedWithTopLevelTimestampFields: 1, factsMissingAnnualMileage: 0
+    });
+    expect(JSON.stringify(report)).not.toContain('synthetic-private-policy');
+    expect(JSON.stringify(capture)).toBe(before);
+    expect(report.cutoverAuthorized).toBe(false);
+  });
+  it('distinguishes explicit zero, uninterpreted units and missing policy mileage', async () => {
+    const policies = ['numeric', 'text', 'missing'].map(id => doc('policy', id));
+    Object.assign(policies[0]!.fields, { annual_mileage: { integerValue: '0' } });
+    Object.assign(policies[1]!.fields, { annual_mileage: { stringValue: '연 30,000km' } });
+    const capture = await captureErp5Source(fake({ policies }).rpc);
+    const facts = readErp5PolicyFacts(capture);
+    expect(facts.find(x => x.policyCode === 'numeric')?.annualMileageKm).toBe(0);
+    expect(facts.find(x => x.policyCode === 'text')).not.toHaveProperty('annualMileageKm');
+    expect(inspectErp5Capture(capture).policyFactCoverage).toMatchObject({
+      sourceDocuments: 3, factsProduced: 3, skippedDocuments: 0,
+      factsWithAnnualMileage: 1, factsWithUninterpretedAnnualMileage: 1, factsMissingAnnualMileage: 1
+    });
+  });
+  it('exposes inactive facts already emitted by the reader rather than silently changing eligibility', async () => {
+    const policy = doc('policy', 'inactive-synthetic');
+    Object.assign(policy.fields, { _deleted: { booleanValue: true }, annual_mileage: { integerValue: '20000' } });
+    const capture = await captureErp5Source(fake({ policies: [policy] }).rpc);
+    expect(readErp5PolicyFacts(capture)).toEqual([{ policyCode: 'inactive-synthetic', annualMileageKm: 20000 }]);
+    const report = inspectErp5Capture(capture);
+    expect(report.policyFactCoverage.explicitInactiveFactsProduced).toBe(1);
+    expect(report.status).toBe('HOLD');
+    expect(report.canonicalWriteAuthorized).toBe(false);
+  });
+  it('reports duplicate codes, fallback codes and explicit empty values without changing fact order', async () => {
+    const policies = ['first', 'second', 'fallback'].map(id => doc('policy', id));
+    Object.assign(policies[0]!.fields, { policy_code: { stringValue: 'same' }, annual_mileage: { nullValue: null } });
+    Object.assign(policies[1]!.fields, { policy_code: { stringValue: ' same ' }, annual_mileage: { stringValue: '' } });
+    const capture = await captureErp5Source(fake({ policies }).rpc);
+    // The immutable capture sorts documents by name before the reader sees them.
+    expect(readErp5PolicyFacts(capture).map(x => x.policyCode)).toEqual(['fallback', 'same', 'same']);
+    const coverage = inspectErp5Capture(capture).policyFactCoverage;
+    expect(coverage).toMatchObject({ factsUsingDocumentIdAsPolicyCode: 1, duplicatePolicyCodes: 1,
+      extraFactsWithDuplicatePolicyCode: 1, factsMissingAnnualMileage: 3,
+      annualMileageAbsent: 1, annualMileageNull: 1, annualMileageEmptyString: 1 });
+    expect(coverage.sourceDocuments).toBe(coverage.factsProduced + coverage.skippedDocuments);
+    expect(coverage.factsProduced).toBe(coverage.factsWithAnnualMileage + coverage.factsWithUninterpretedAnnualMileage + coverage.factsMissingAnnualMileage);
+  });
+  it('exposes explicit age strings without treating them as missing or approving a default age', async () => {
+    const policies = ['age-number', 'age-text', 'age-missing'].map(id => doc('policy', id));
+    Object.assign(policies[0]!.fields, { basic_driver_age: { integerValue: '26' } });
+    Object.assign(policies[1]!.fields, { basic_driver_age: { stringValue: '만 26세 이상' } });
+    const capture = await captureErp5Source(fake({ policies }).rpc);
+    const facts = readErp5PolicyFacts(capture);
+    expect(facts.find(x => x.policyCode === 'age-number')?.basicDriverAge).toBe(26);
+    expect(facts.find(x => x.policyCode === 'age-text')).not.toHaveProperty('basicDriverAge');
+    expect(facts.find(x => x.policyCode === 'age-missing')).not.toHaveProperty('basicDriverAge');
+    const report = inspectErp5Capture(capture);
+    expect(report.policyFactCoverage).toMatchObject({
+      factsWithBasicDriverAge: 1, factsWithUninterpretedBasicDriverAge: 1, factsMissingBasicDriverAge: 1
+    });
+    const c = report.policyFactCoverage;
+    expect(c.factsProduced).toBe(c.factsWithBasicDriverAge + c.factsWithUninterpretedBasicDriverAge + c.factsMissingBasicDriverAge);
+    expect(report.status).toBe('HOLD');
+    expect(report.canonicalWriteAuthorized).toBe(false);
+  });
+  it('limits timestamp diagnostics to top-level co-occurrence rather than a failure cause', async () => {
+    const nested = doc('policy', 'nested');
+    Object.assign(nested.fields, { metadata: { mapValue: { fields: { at: { timestampValue: readTime } } } } });
+    const otherCause = doc('policy', 'other');
+    Object.assign(otherCause.fields, { unsupported: { bytesValue: 'AA==' }, at: { timestampValue: readTime } });
+    const capture = await captureErp5Source(fake({ policies: [nested, otherCause] }).rpc);
+    expect(readErp5PolicyFacts(capture)).toEqual([]);
+    expect(inspectErp5Capture(capture).policyFactCoverage).toMatchObject({
+      skippedDocuments: 2, skippedWithTopLevelTimestampFields: 1,
+      decodeFailureCounts: { UNSUPPORTED_FIRESTORE_VALUE: 2 }
+    });
+  });
+  it.each([
+    { is_active: { booleanValue: false } },
+    { status: { stringValue: 'deleted' } },
+    { status: { stringValue: 'retired' } }
+  ])('counts only the explicit inactive markers it supports: %j', async fields => {
+    const policy = doc('policy', 'inactive');
+    Object.assign(policy.fields, fields);
+    const capture = await captureErp5Source(fake({ policies: [policy] }).rpc);
+    expect(inspectErp5Capture(capture).policyFactCoverage.explicitInactiveFactsProduced).toBe(1);
+    expect(readErp5PolicyFacts(capture)).toHaveLength(1);
   });
   it('counts duplicate plate evidence without discarding either document', async () => {
     const capture = await captureErp5Source(fake({ products: [doc(), doc('products', 'second')] }).rpc);

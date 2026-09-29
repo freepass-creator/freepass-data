@@ -1,5 +1,15 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-09-30 정책 의미 사전·읽기 진단 / main 통합
+
+- 목적: 상품·정책의 값/단위/기준액/주기/자격/예외를 이해하고, 읽기 실패와 의미 손실을 드러내며 사용자 지시에 따라 main에 합친다.
+- 대상 revision: 공개 main `7fdfc4e` 기반. 이전 로컬 감사 작업은 비공개 증거와 로컬 보존 ref에 유지한다. 공개 이력에는 원천 위치·공급사별 세부 조건·상품 식별자를 포함하지 않는다.
+- 변경: 기존 commercial 문서에 72개 항목 의미 사전과 전달/갱신 경계 기록. 기존 capture reader에는 count-only 정책 진단과 합성 회귀검사 추가. 반환 사실·decoder·운영값·writer·schedule은 변경하지 않는다.
+- 관측: 나이별 조건이 공개 API에서 빠지는 경우, 기본값 보충, 원천 문자열 연령의 numeric reader 미해석, 변동 수집의 신규차 제외, DB 내부 정책 참조 정리와 원천 본문 동기화의 차이를 확인했다. 자세한 증거는 제한된 로컬 감사 자료에서만 재조회한다.
+- 검증: 같은 ERP capture에 대해 진단 추가 외 기존 결과 동일. 기본 병렬 전체 검사에서 기존 runtime-policy 테스트가 5초 timeout 2회였고, 제한을 변경하지 않고 `npx vitest run --maxWorkers=2`로 전체 1,011 PASS/14 SKIP. 해당 runtime 검사도 약1.9초에 통과. architecture/standards/data-access/sheets/build/runtime-smoke/shadow/dashboard 단계 PASS. 표준 역량 PARTIAL 및 skip된 외부/emulator 검사는 계속 미완료다.
+- 남음: 원천 충돌과 정책 효력·단위 해석, 나이별 공개 계약, 신규 재고/정책 본문 갱신, 전 소비처·실제 계약 readback. main 병합은 운영 정책값 수정이나 배포 완료가 아니다.
+- next_start_here: 아래 문서의 추가 감사 경계에서 소비처 연령별 조건과 source freshness를 각각 좁혀 검증한다. 기존 dirty checkout을 보존하고 실제 운영 변경은 해당 승인·원천 증거 경계를 따른다.
+
 ## 2026-09-30 Estimate writer permanent synthetic canary
 
 - 목적: 전용 Estimate writer를 ON으로 전환할 때 Quote v2와 Share Envelope의 실제 저장·멱등 재시도·재조회를 한 배포 영수증에서 증명한다.

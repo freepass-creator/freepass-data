@@ -194,7 +194,8 @@ function inspectErp5DeltaBaseline(capture: Erp5SourceCapture) {
 export function inspectErp5Capture(capture: Erp5SourceCapture) {
   assertCaptureEnvelope(capture);
   for (const collection of collections) assertCaptureCollection(capture, collection);
-  const policies = readErp5PolicyFacts(capture);
+  const policyRead = collectErp5PolicyFacts(capture);
+  const policies = policyRead.facts;
   const issueCounts: Record<string, number> = {};
   const decodeFailureCounts: Record<string, number> = {};
   let mapped = 0;
@@ -241,19 +242,57 @@ export function inspectErp5Capture(capture: Erp5SourceCapture) {
     products: capture.collections.products.count, policies: capture.collections.policy.count, partners: capture.collections.partner.count,
     mappedForReview: mapped, mappingHold: held, decodeFailed, decodeFailureCounts,
     duplicatePlateCount, plateChecked, plateUnchecked, metadataTimestampFields, issueCounts,
+    policyFactCoverage: policyRead.coverage,
     remaining: ['UPSTREAM_FRESHNESS_AND_PARITY_UNVERIFIED', 'POLICY_LINKS_UNREVIEWED', 'NO_CANONICAL_WRITE_OR_CONSUMER_CUTOVER']
   };
 }
 
 /** 캡처 안의 정책을 매퍼가 읽을 수 있는 사실로 바꾼다. 값은 정책 문서가 정본이다. */
 export function readErp5PolicyFacts(capture: Erp5SourceCapture): Erp5PolicyFacts[] {
+  return collectErp5PolicyFacts(capture).facts;
+}
+
+/** Count-only diagnostics; collecting evidence does not broaden decoding or approve policy facts. */
+function collectErp5PolicyFacts(capture: Erp5SourceCapture) {
   const facts: Erp5PolicyFacts[] = [];
+  const coverage = {
+    sourceDocuments: capture.collections.policy.documents.length,
+    factsProduced: 0,
+    skippedDocuments: 0,
+    decodeFailureCounts: {} as Record<string, number>,
+    skippedWithTopLevelTimestampFields: 0,
+    factsUsingDocumentIdAsPolicyCode: 0,
+    duplicatePolicyCodes: 0,
+    extraFactsWithDuplicatePolicyCode: 0,
+    explicitInactiveFactsProduced: 0,
+    factsWithAnnualMileage: 0,
+    factsWithUninterpretedAnnualMileage: 0,
+    factsMissingAnnualMileage: 0,
+    factsWithBasicDriverAge: 0,
+    factsWithUninterpretedBasicDriverAge: 0,
+    factsMissingBasicDriverAge: 0,
+    annualMileageAbsent: 0,
+    annualMileageNull: 0,
+    annualMileageEmptyString: 0
+  };
+  const codeCounts = new Map<string, number>();
   for (const doc of capture.collections.policy.documents) {
     let data: ObjectValue;
-    try { data = decodeFields(doc.fields ?? {}); } catch { continue; }
+    try { data = decodeFields(doc.fields ?? {}); } catch (error) {
+      coverage.skippedDocuments++;
+      const code = error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : 'UNKNOWN_DECODE_ERROR';
+      coverage.decodeFailureCounts[code] = (coverage.decodeFailureCounts[code] ?? 0) + 1;
+      if (object(doc.fields) && Object.values(doc.fields).some(value => object(value) && 'timestampValue' in value)) {
+        // Co-occurrence only, not the decoder's failure cause; nested fields are outside this count.
+        coverage.skippedWithTopLevelTimestampFields++;
+      }
+      continue;
+    }
     const code = typeof data.policy_code === 'string' && data.policy_code.trim()
       ? data.policy_code.trim()
       : String(doc.name).slice(`${ERP5_DOCUMENTS}/policy/`.length);
+    if (!(typeof data.policy_code === 'string' && data.policy_code.trim())) coverage.factsUsingDocumentIdAsPolicyCode++;
+    codeCounts.set(code, (codeCounts.get(code) ?? 0) + 1);
     const company = typeof data.companyId === 'string' && data.companyId.trim() ? data.companyId.trim()
       : typeof data.provider_company_code === 'string' && data.provider_company_code.trim() ? data.provider_company_code.trim()
       : undefined;
@@ -261,6 +300,21 @@ export function readErp5PolicyFacts(capture: Erp5SourceCapture): Erp5PolicyFacts
       ? data.annual_mileage : undefined;
     const age = typeof data.basic_driver_age === 'number' && Number.isSafeInteger(data.basic_driver_age)
       ? data.basic_driver_age : undefined;
+    // Report existing behavior, including inactive facts, without changing the mapping result.
+    if (data._deleted === true || data.is_active === false || data.status === 'deleted' || data.status === 'retired') {
+      coverage.explicitInactiveFactsProduced++;
+    }
+    if (mileage !== undefined) coverage.factsWithAnnualMileage++;
+    else if (data.annual_mileage === undefined || data.annual_mileage === null || data.annual_mileage === '') {
+      coverage.factsMissingAnnualMileage++;
+      if (data.annual_mileage === undefined) coverage.annualMileageAbsent++;
+      else if (data.annual_mileage === null) coverage.annualMileageNull++;
+      else coverage.annualMileageEmptyString++;
+    } else coverage.factsWithUninterpretedAnnualMileage++;
+    if (age !== undefined) coverage.factsWithBasicDriverAge++;
+    else if (data.basic_driver_age === undefined || data.basic_driver_age === null || data.basic_driver_age === '') {
+      coverage.factsMissingBasicDriverAge++;
+    } else coverage.factsWithUninterpretedBasicDriverAge++;
     facts.push({
       policyCode: code,
       ...(company !== undefined ? { companyId: company } : {}),
@@ -268,7 +322,14 @@ export function readErp5PolicyFacts(capture: Erp5SourceCapture): Erp5PolicyFacts
       ...(age !== undefined ? { basicDriverAge: age } : {})
     });
   }
-  return facts;
+  coverage.factsProduced = facts.length;
+  for (const count of codeCounts.values()) {
+    if (count > 1) {
+      coverage.duplicatePolicyCodes++;
+      coverage.extraFactsWithDuplicatePolicyCode += count - 1;
+    }
+  }
+  return { facts, coverage };
 }
 
 export type Erp5CaptureChangeKind = 'ADDED' | 'CHANGED' | 'UNCHANGED' | 'MISSING_FROM_SOURCE';
