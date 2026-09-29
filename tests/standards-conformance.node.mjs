@@ -36,9 +36,9 @@ test('international references are explicit and uniquely identified', () => {
 
 test('AUTOMATED is reserved for a named implemented checker', () => {
   const automated = profile.standards.filter((standard) => standard.verification === 'AUTOMATED');
-  assert.deepEqual(automated.map((standard) => standard.id), ['JSON_SCHEMA_2020_12']);
-  assert.deepEqual(automated.map((standard) => standard.checker), ['AJV_2020_COMPILE_ALL_SCHEMAS']);
-  for (const id of ['RFC_3339_DATETIME', 'ISO_4217_CURRENCY', 'SHA_256']) {
+  assert.deepEqual(automated.map((standard) => standard.id), ['JSON_SCHEMA_2020_12', 'RFC_3339_DATETIME']);
+  assert.deepEqual(automated.map((standard) => standard.checker), ['AJV_2020_COMPILE_ALL_SCHEMAS', 'RFC3339_SCHEMA_TEMPORAL_FIELDS']);
+  for (const id of ['ISO_4217_CURRENCY', 'SHA_256']) {
     assert.equal(profile.standards.find((standard) => standard.id === id)?.verification, 'HOLD');
   }
 });
@@ -53,12 +53,23 @@ test('rejects an AUTOMATED claim that has no implemented checker', () => {
   const result = withContractFixture((contracts) => {
     const file = path.join(contracts, 'freepass-data-standards-profile.v1.json');
     const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const rfc3339 = value.standards.find((standard) => standard.id === 'RFC_3339_DATETIME');
-    rfc3339.verification = 'AUTOMATED';
+    const rfc9457 = value.standards.find((standard) => standard.id === 'RFC_9457_PROBLEM_DETAILS');
+    rfc9457.verification = 'AUTOMATED';
     fs.writeFileSync(file, JSON.stringify(value));
   });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /MISSING_AUTOMATED_CHECK:RFC_3339_DATETIME/);
+  assert.match(result.stderr, /MISSING_AUTOMATED_CHECK:RFC_9457_PROBLEM_DETAILS/);
+});
+
+test('rejects a timestamp property without an RFC3339 date-time schema', () => {
+  const result = withContractFixture((contracts) => {
+    const file = path.join(contracts, 'catalog-data-health-v1.schema.json');
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    value.properties.generatedAt = { type: 'string' };
+    fs.writeFileSync(file, JSON.stringify(value));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /RFC3339_TEMPORAL_SCHEMA_INVALID:catalog-data-health-v1\.schema\.json:#\/properties\/generatedAt/);
 });
 
 test('rejects COMPLETE while any standard remains HOLD', () => {
@@ -70,7 +81,7 @@ test('rejects COMPLETE while any standard remains HOLD', () => {
     fs.writeFileSync(file, JSON.stringify(value));
   });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /STANDARD_NOT_VERIFIED_FOR_COMPLETE:RFC_3339_DATETIME/);
+  assert.match(result.stderr, /STANDARD_NOT_VERIFIED_FOR_COMPLETE:ISO_4217_CURRENCY/);
 });
 
 test('rejects COMPLETE while any platform capability remains unresolved', () => {
