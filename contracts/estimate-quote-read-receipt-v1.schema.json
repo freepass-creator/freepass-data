@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/estimate-quote-read-receipt-v1.schema.json",
+  "title": "FreePass Estimate Quote read receipt v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "status", "quoteId", "quoteVersion"],
+      "properties": {
+        "contract": { "const": "freepass-quote-read-receipt/v1" },
+        "status": { "const": "NOT_FOUND" },
+        "quoteId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,200}$" },
+        "quoteVersion": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "status", "quoteId", "quoteVersion", "snapshotHash", "quote"],
+      "properties": {
+        "contract": { "const": "freepass-quote-read-receipt/v1" },
+        "status": { "const": "FOUND" },
+        "quoteId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,200}$" },
+        "quoteVersion": { "type": "integer", "minimum": 1 },
+        "snapshotHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "quote": {
+          "type": "object",
+          "required": ["contract", "quoteId", "quoteVersion", "snapshotHash", "createdAt"],
+          "properties": {
+            "contract": { "const": "freepass-quote/v2" },
+            "quoteId": { "type": "string" },
+            "quoteVersion": { "type": "integer", "minimum": 1 },
+            "snapshotHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "createdAt": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -71,6 +71,7 @@ Implemented:
 - actor vs execution-writer separation for Catalog mutations
 - old-writer fail-closed enforcement across canonicalization/manual/source-refresh/price writes
 - writer ownership transfer revision/audit/idempotency evidence
+- immutable Estimate Quote v2 / Share Envelope persistence with server-time receipts, code-point canonical digests, schema-validated read/write receipts, and Firestore concurrency proof
 - tests for catalog mutation, authority enforcement, idempotency payload conflict, stale revision, projection semantics, ingestion, legacy normalization and shadow behavior
 
 ## Current gap

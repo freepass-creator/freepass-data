@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/estimate-share-envelope-read-receipt-v1.schema.json",
+  "title": "FreePass Estimate Share Envelope read receipt v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "status", "envelopeId", "envelopeVersion"],
+      "properties": {
+        "contract": { "const": "freepass-share-envelope-read-receipt/v1" },
+        "status": { "const": "NOT_FOUND" },
+        "envelopeId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,200}$" },
+        "envelopeVersion": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "status", "envelopeId", "envelopeVersion", "snapshotHash", "envelope"],
+      "properties": {
+        "contract": { "const": "freepass-share-envelope-read-receipt/v1" },
+        "status": { "const": "FOUND" },
+        "envelopeId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,200}$" },
+        "envelopeVersion": { "const": 1 },
+        "snapshotHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "envelope": {
+          "type": "object",
+          "required": ["contract", "envelopeId", "envelopeVersion", "snapshotHash", "createdAt", "expiresAt", "quoteRefs"],
+          "properties": {
+            "contract": { "const": "freepass-share-envelope/v1" },
+            "envelopeId": { "type": "string" },
+            "envelopeVersion": { "const": 1 },
+            "snapshotHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "createdAt": { "type": "string", "format": "date-time" },
+            "expiresAt": { "type": "string", "format": "date-time" },
+            "quoteRefs": { "type": "array", "minItems": 1, "maxItems": 100 }
+          }
+        }
+      }
+    }
+  ]
+}

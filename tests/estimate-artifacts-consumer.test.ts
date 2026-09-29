@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { createConsumerGateway, parseConsumerBindings, type ConsumerBinding } from '../src/api/consumer-gateway.js';
 import { DataAccessGateway } from '../src/application/data-access-gateway.js';
 import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
-import { stableDigest } from '../src/shared/stable-digest.js';
 import {
   QUOTE_READ_RECEIPT_CONTRACT,
   QUOTE_SNAPSHOT_CONTRACT_V2,
@@ -10,6 +9,7 @@ import {
   SHARE_ENVELOPE_READ_RECEIPT_CONTRACT,
   SHARE_ENVELOPE_SNAPSHOT_CONTRACT,
   SHARE_ENVELOPE_WRITE_RECEIPT_CONTRACT,
+  estimateArtifactDigest,
   quoteIdempotencyKey,
   shareEnvelopeIdempotencyKey,
   type IssuedQuoteV2,
@@ -81,7 +81,7 @@ function issuedQuote(): IssuedQuoteV2 {
     },
     sourceRevision: 'vehicle-master:r7',
   };
-  const snapshotHash = stableDigest(snapshot);
+  const snapshotHash = estimateArtifactDigest(snapshot);
   const { contract: _snapshotContract, ...facts } = snapshot;
   return {
     contract: 'freepass-quote/v2',
@@ -102,7 +102,7 @@ function shareEnvelope(quote: IssuedQuoteV2): ShareEnvelopeV1 {
     snapshotHash: quote.snapshotHash,
   }];
   const expiresAt = '2026-10-27T10:00:00.000Z';
-  const snapshotHash = stableDigest({
+  const snapshotHash = estimateArtifactDigest({
     contract: SHARE_ENVELOPE_SNAPSHOT_CONTRACT,
     quoteRefs,
     expiresAt,
@@ -121,6 +121,7 @@ function shareEnvelope(quote: IssuedQuoteV2): ShareEnvelopeV1 {
 function memoryArtifacts(): EstimateArtifactStore & { quoteWrites: number; envelopeWrites: number } {
   const quotes = new Map<string, IssuedQuoteV2>();
   const envelopes = new Map<string, ShareEnvelopeV1>();
+  const persistedAt = '2026-09-27T10:02:00.000Z';
   return {
     quoteWrites: 0,
     envelopeWrites: 0,
@@ -137,6 +138,7 @@ function memoryArtifacts(): EstimateArtifactStore & { quoteWrites: number; envel
           quoteVersion: quote.quoteVersion,
           snapshotHash: quote.snapshotHash,
           idempotencyKey: key,
+          persistedAt,
         };
       }
       quotes.set(id, structuredClone(quote));
@@ -147,6 +149,7 @@ function memoryArtifacts(): EstimateArtifactStore & { quoteWrites: number; envel
         quoteVersion: quote.quoteVersion,
         snapshotHash: quote.snapshotHash,
         idempotencyKey: key,
+        persistedAt,
       };
     },
     async getIssuedQuote(quoteId, quoteVersion = null): Promise<QuoteReadReceipt> {
@@ -186,6 +189,7 @@ function memoryArtifacts(): EstimateArtifactStore & { quoteWrites: number; envel
           envelopeVersion: envelope.envelopeVersion,
           snapshotHash: envelope.snapshotHash,
           idempotencyKey: key,
+          persistedAt,
         };
       }
       envelopes.set(id, structuredClone(envelope));
@@ -196,6 +200,7 @@ function memoryArtifacts(): EstimateArtifactStore & { quoteWrites: number; envel
         envelopeVersion: envelope.envelopeVersion,
         snapshotHash: envelope.snapshotHash,
         idempotencyKey: key,
+        persistedAt,
       };
     },
     async getShareEnvelope(envelopeId, envelopeVersion = null): Promise<ShareEnvelopeReadReceipt> {
@@ -231,6 +236,11 @@ function gateway(store: EstimateArtifactStore) {
 }
 
 describe('Estimate immutable artifact gateway', () => {
+  it('uses locale-independent code-point ordering for Estimate artifact hashes', () => {
+    expect(estimateArtifactDigest({ 'ä': 1, z: 2, '가': 3, A: 4 }))
+      .toBe('5ca3e468965b1e51fd55f6e7000f06c5130829e15ead9ec629f7dd6958d3348c');
+  });
+
   it('registers Estimate master and artifact capabilities without exposing them to other consumers', () => {
     expect(parseConsumerBindings(JSON.stringify([{
       id: 'freepass-estimate',
@@ -286,7 +296,11 @@ describe('Estimate immutable artifact gateway', () => {
       payload,
     });
     expect(created.statusCode).toBe(200);
-    expect(created.json()).toMatchObject({ contract: QUOTE_WRITE_RECEIPT_CONTRACT, status: 'CREATED' });
+    expect(created.json()).toMatchObject({
+      contract: QUOTE_WRITE_RECEIPT_CONTRACT,
+      status: 'CREATED',
+      persistedAt: '2026-09-27T10:02:00.000Z',
+    });
 
     const existing = await app.inject({
       method: 'POST',
@@ -294,7 +308,10 @@ describe('Estimate immutable artifact gateway', () => {
       headers: { ...headers, 'idempotency-key': key },
       payload,
     });
-    expect(existing.json().status).toBe('EXISTING');
+    expect(existing.json()).toMatchObject({
+      status: 'EXISTING',
+      persistedAt: created.json().persistedAt,
+    });
 
     const read = await app.inject({
       url: `/v1/consumers/freepass-estimate/issued-quotes/${quote.quoteId}?quoteVersion=1`,
@@ -331,6 +348,83 @@ describe('Estimate immutable artifact gateway', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json().code).toBe('QUOTE_V2_INTEGRITY_MISMATCH');
     expect(store.quoteWrites).toBe(0);
+    await app.close();
+  });
+
+  it.each(['2026-09-29', '2026-02-30T00:00:00.000Z'])(
+    'rejects non-RFC3339 artifact timestamp %s before immutable storage',
+    async (createdAt) => {
+    const store = memoryArtifacts();
+    const app = gateway(store);
+    const original = issuedQuote();
+    const quote = { ...original, createdAt };
+    const key = quoteIdempotencyKey(original);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/commands/freepass-estimate/issued-quotes',
+      headers: { ...headers, 'idempotency-key': key },
+      payload: {
+        command: 'PUT_ISSUED_QUOTE',
+        contract: 'freepass-quote-repository/v1',
+        idempotencyKey: key,
+        quote,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe('QUOTE_REPOSITORY_QUOTE_INVALID');
+    expect(store.quoteWrites).toBe(0);
+    await app.close();
+    },
+  );
+
+  it('fails closed when storage returns a write receipt without server persistence time', async () => {
+    const store = memoryArtifacts();
+    store.putIssuedQuote = async (quote, key) => ({
+      contract: QUOTE_WRITE_RECEIPT_CONTRACT,
+      status: 'CREATED',
+      quoteId: quote.quoteId,
+      quoteVersion: quote.quoteVersion,
+      snapshotHash: quote.snapshotHash,
+      idempotencyKey: key,
+    } as ReturnType<EstimateArtifactStore['putIssuedQuote']> extends Promise<infer T> ? T : never);
+    const app = gateway(store);
+    const quote = issuedQuote();
+    const key = quoteIdempotencyKey(quote);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/commands/freepass-estimate/issued-quotes',
+      headers: { ...headers, 'idempotency-key': key },
+      payload: {
+        command: 'PUT_ISSUED_QUOTE',
+        contract: 'freepass-quote-repository/v1',
+        idempotencyKey: key,
+        quote,
+      },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().code).toBe('QUOTE_REPOSITORY_WRITE_FAILED');
+    await app.close();
+  });
+
+  it('rejects an unsupported mutable Share Envelope version', async () => {
+    const store = memoryArtifacts();
+    const app = gateway(store);
+    const quote = issuedQuote();
+    const envelope = { ...shareEnvelope(quote), envelopeVersion: 2 };
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/commands/freepass-estimate/share-envelopes',
+      headers: { ...headers, 'idempotency-key': shareEnvelopeIdempotencyKey(shareEnvelope(quote)) },
+      payload: {
+        command: 'PUT_SHARE_ENVELOPE',
+        contract: 'freepass-share-envelope-repository/v1',
+        idempotencyKey: shareEnvelopeIdempotencyKey(shareEnvelope(quote)),
+        envelope,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe('SHARE_ENVELOPE_VERSION_UNSUPPORTED');
+    expect(store.envelopeWrites).toBe(0);
     await app.close();
   });
 
@@ -380,6 +474,7 @@ describe('Estimate immutable artifact gateway', () => {
       contract: SHARE_ENVELOPE_WRITE_RECEIPT_CONTRACT,
       status: 'CREATED',
       envelopeId: envelope.envelopeId,
+      persistedAt: '2026-09-27T10:02:00.000Z',
     });
 
     const read = await app.inject({

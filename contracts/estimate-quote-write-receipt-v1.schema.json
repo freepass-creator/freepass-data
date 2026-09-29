@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/estimate-quote-write-receipt-v1.schema.json",
+  "title": "FreePass Estimate Quote write receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "status", "quoteId", "quoteVersion", "snapshotHash", "idempotencyKey", "persistedAt"],
+  "properties": {
+    "contract": { "const": "freepass-quote-write-receipt/v1" },
+    "status": { "enum": ["CREATED", "EXISTING"] },
+    "quoteId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,200}$" },
+    "quoteVersion": { "type": "integer", "minimum": 1 },
+    "snapshotHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "idempotencyKey": { "type": "string", "minLength": 1 },
+    "persistedAt": { "type": "string", "format": "date-time" }
+  }
+}
