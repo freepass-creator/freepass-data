@@ -26,6 +26,17 @@ describe('data domain catalog', () => {
     expect(searchDataCatalog('공급사').assets.map((item) => item.assetId)).toContain('erp5-partner-source');
   });
 
+  it('keeps settlement fact ownership separate from the Admin workflow owner', () => {
+    expect(DATA_DOMAINS.find((item) => item.domainId === 'settlement-finance')?.semanticOwner)
+      .toBe('freepass-data/settlement');
+    expect(DATA_ASSETS.find((item) => item.assetId === 'admin-settlement')).toMatchObject({
+      ownership: 'FREEPASS_DATA',
+      authority: 'WORKFLOW',
+    });
+    expect(DATA_DOMAINS.find((item) => item.domainId === 'application-contract')?.semanticOwner)
+      .toBe('freepass-admin');
+  });
+
   it('classifies an exact registered observation', () => {
     const result = classifyObservedDataAsset({
       kind: 'FIRESTORE_COLLECTION', system: 'firebase:freepasserp5', locator: 'products',

@@ -840,7 +840,16 @@ export function createConsumerGateway(
           await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, 'ADMIN_WORKFLOW_WRITE_DISABLED');
           return reply.code(503).send({ code: 'ADMIN_WORKFLOW_WRITE_DISABLED' });
         }
-        assertAdminWorkflowCommitRequest(request.body);
+        try {
+          assertAdminWorkflowCommitRequest(request.body);
+        } catch (error) {
+          const code = error instanceof Error ? error.message : '';
+          if (code === 'ADMIN_WORKFLOW_RESOURCE_READ_ONLY') {
+            await access.deny('WRITE', { context, operation: 'WRITE_ADMIN_WORKFLOW', resource }, code);
+            return reply.code(403).send({ code });
+          }
+          throw error;
+        }
         const result = await access.write({
           context,
           operation: 'WRITE_ADMIN_WORKFLOW',

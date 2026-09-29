@@ -6,6 +6,7 @@ import type { AdminWorkflowStore } from '../ports/admin-workflow.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import {
   ADMIN_WORKFLOW_RESOURCES,
+  adminWorkflowSemanticOwners,
   assertAdminWorkflowCommitRequest,
   assertAdminWorkflowReadSpec,
   type AdminWorkflowCommitReceipt,
@@ -127,8 +128,10 @@ export function adminWorkflowStore(db: Firestore): AdminWorkflowStore {
 
         const committedAt = new Date().toISOString();
         const base = {
-          schema: 'freepass-data.admin-workflow-receipt/v1' as const,
-          authority: 'FREEPASS_DATA' as const,
+          schema: 'freepass-data.admin-workflow-receipt/v2' as const,
+          authority: 'FREEPASS_DATA_ACCESS_GATEWAY' as const,
+          authorityRole: 'EXECUTION_GATEWAY' as const,
+          semanticOwners: adminWorkflowSemanticOwners(request),
           consumerId,
           operationId: request.operationId,
           requestDigest,
