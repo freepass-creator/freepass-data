@@ -20,16 +20,16 @@
     },
     "current": {
       "count": 1717,
-      "digest": "35f8c687246cfb6c20fafb6566bcc71c23a927ce2e748a46a57b0c82b8aa81e6",
-      "readTime": "2026-09-29T23:11:26.484733Z"
+      "digest": "dbbfd8f64b0bc72618f148d630147a26a3c9bf16162fb902129bd813f4424155",
+      "readTime": "2026-09-29T23:49:41.609430Z"
     },
     "destructiveActionAuthorized": false,
-    "digest": "317a51c9ba42a6338b2070223e1079bf82de3dc97de44ca48d718fc0f4d54fb5",
+    "digest": "ecbaf76e84e888d065f16a998912189e24934c8d048a6514a2927e6408f77f6b",
     "inventoryTransitionCount": 0,
     "previous": {
       "count": 1717,
-      "digest": "f885b197c8eb32b277d5d6e90c6045f4267d0cb677cb19a4500124b73d2499f1",
-      "readTime": "2026-09-29T19:36:54.357025Z"
+      "digest": "35f8c687246cfb6c20fafb6566bcc71c23a927ce2e748a46a57b0c82b8aa81e6",
+      "readTime": "2026-09-29T23:11:26.484733Z"
     },
     "status": "HOLD"
   },
@@ -39,7 +39,7 @@
     "mappingHold": 1717,
     "productFieldPathCount": 514
   },
-  "runId": "36643782901-1",
+  "runId": "36647174781-1",
   "source": {
     "collections": {
       "partner": 64,
@@ -48,9 +48,9 @@
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "35f8c687246cfb6c20fafb6566bcc71c23a927ce2e748a46a57b0c82b8aa81e6",
+    "digest": "dbbfd8f64b0bc72618f148d630147a26a3c9bf16162fb902129bd813f4424155",
     "projectId": "freepasserp5",
-    "readTime": "2026-09-29T23:11:26.484733Z"
+    "readTime": "2026-09-29T23:49:41.609430Z"
   },
   "version": "erp5-source-inventory/1"
 }
