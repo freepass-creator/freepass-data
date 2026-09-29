@@ -31,8 +31,18 @@ Date: 2026-09-28
 - 적용기는 정책 5건·상품 47건을 private backup하고 update-time 사전조건을 걸어,
   정본 정합·12대 연결·미사용 중복 퇴역을 한 transaction에서만 실행한다.
 - 로컬 검증: `npm run check` 990 PASS / 12 SKIP.
+- main: PR #238, merge `9c3848eb2f20783c3cbcb8eee68a0e631e1bcd9f`; Core CI와 Canon Guard PASS.
+- 운영 보정: exact main revision에서 run
+  `2026-09-29T09-12-45-763Z-39915592-4ee9-479f-9d1b-2536163acaea` 실행. private backup 후 12대를
+  `FP-RP021-RENT`에 연결했고, 활성 RP021 47/47 전체가 같은 정본 정책을 참조함을 새 조회로 확인했다.
+- readback: `FP-RP021-RENT`는 연 20,000km, 1만km당 10만원, 만 26세 이상,
+  만 21세까지 하향·하향료 10만원, 보험료 포함이다. S01/S02는 각각 15/20만원과 5/10만원을
+  그대로 보존했고, `POL-0040`만 `POL-0035`의 미사용 중복으로 퇴역했다.
+- ERP.com: 기존 미연결 `08주6722` (`/q/6e3ur7v9fg`)에서 요금 기준,
+  보험 보상한도·면책금, 이용조건이 모두 원본과 같게 노출되는 것을 확인했다.
+- Claude 읽기 전용 독립 검토는 status available 후 호출했으나 응답 본문 없이 멈춰 `UNAVAILABLE`이며 PASS로 세지 않았다.
 
-next_start_here: main CI·병합 후 exact main에서 실행하고, 47/47 readback과 기존 미연결 대표 차량 `08주6722`의 ERP.com 상세 화면를 확인한다.
+next_start_here: 빌린카 원본에서 새 상품이 입력될 때 `정책UID`를 잃지 않고 정본 코드로 변환하는지 계속 감사한다. S01/S02는 비용이 다른 별도 정책으로 유지한다.
 
 ## 2026-09-29 RP023 오토플러스 운전자 연령 정책 교정
 
