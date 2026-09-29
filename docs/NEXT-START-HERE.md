@@ -15,7 +15,15 @@ Date: 2026-09-28
 - 변경: RP023 정책 불변조건을 추가하고, 하향 가능 연령이 없는 정책의 `age_lowering_cost`를 소비자 월대여료 조정항목으로
   노출하지 않는다. 운영 보정은 두 정책만 대상으로 수정 전 private backup, update-time 사전조건, 한 transaction,
   필수 기본조건 readback을 요구한다.
-- 검증: `npm run check` 및 운영 보정 후 `309고5544` 포함 RP023 정책 참조·표시 readback을 남긴다.
+- main: PR #230, merge `eb55de9298f1fba77e3f70d695aaab19f8a4f3c2`; Core CI와 Canon Guard PASS.
+- 운영 보정: main exact revision에서 run
+  `2026-09-29T04-44-30-502Z-42019aec-9cd2-4fa9-85bf-76c6b1542a68` 실행. `POL-0047`과
+  `FP-RP023-RENT` 모두 기본연령 `만 26세 이상`, 연령하향 `불가`, 연 30,000km, 보험료 포함이며
+  `age_lowering_cost`가 없음을 새 조회로 확인했다.
+- 차량번호 readback: `309고5544`는 RP023 오플구독 → `POL-0047`이고 동일 조건 및 본문
+  `운전연령하향: 불가`를 확인했다. 운영 수정 전 private backup이 생성됐다.
+- 검증: 로컬 전체 984 PASS / 12 SKIP 뒤 기존 `runtime-policy` 5초 timeout 1건은 단독 5 PASS;
+  GitHub Core CI PASS. Claude 독립 검토는 응답 본문이 없어 UNAVAILABLE이며 PASS로 계산하지 않았다.
 
 next_start_here: RP023의 정책 미연결 상품은 별도 정책 연결 근거 없이 자동 연결하지 않는다. 연결 여부와 연령 정책 정확성은
 분리하며, 미연결 상품을 이번 보정에서 추정 수정하지 않는다.
