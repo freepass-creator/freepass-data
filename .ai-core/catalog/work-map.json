@@ -88,12 +88,14 @@
         "ui 규격",
         "디자인 규격"
       ],
-      "target_project_id": "devcenter",
+      "target_project_id": "ai-core",
       "approval_boundary": "MERGE_APPROVAL",
-      "completion_condition": "공통 규격이 DevCenter 정본에 반영되고 제품별 적용 범위와 검증 결과가 남는다.",
+      "completion_condition": "공통 규격이 AI Core 루트 정본과 내부 DevCenter 실행 모듈에 반영되고 제품별 적용 범위와 검증 결과가 남는다.",
       "source_pointers": [
         "registry/projects.json",
-        "freepass-creator/devcenter"
+        "devcenter/",
+        "registry/hubs.json",
+        "registry/design-hub-binding.json"
       ],
       "capability_id": "dev.shared-design"
     },
@@ -107,12 +109,14 @@
         "개발 규격",
         "공통 컴포넌트"
       ],
-      "target_project_id": "devcenter",
+      "target_project_id": "ai-core",
       "approval_boundary": "READ_ONLY",
-      "completion_condition": "재사용 자산/규격/검증 결과가 DevCenter source revision에 결속된다.",
+      "completion_condition": "재사용 자산·규격·검증 결과가 AI Core revision과 DevCenter module provenance에 결속된다.",
       "source_pointers": [
         "registry/projects.json",
-        "freepass-creator/devcenter"
+        "devcenter/",
+        "registry/hubs.json",
+        "registry/design-hub-binding.json"
       ],
       "capability_id": "dev.standard"
     },
@@ -542,5 +546,179 @@
       ],
       "capability_id": "sales.mydata-intake"
     }
-  ]
+  ],
+  "hub_routes": {
+    "version": 1,
+    "no_match": "HOLD",
+    "tie": "HOLD",
+    "rules": [
+      {
+        "id": "design-ui",
+        "priority": 100,
+        "primary": "design",
+        "secondary": [
+          "quality"
+        ],
+        "match_any": [
+          "디자인",
+          "ui",
+          "ux",
+          "버튼",
+          "헤더",
+          "상단바",
+          "컴포넌트",
+          "토큰",
+          "패턴",
+          "레이아웃",
+          "화면 통일",
+          "visual"
+        ]
+      },
+      {
+        "id": "data-ssot",
+        "priority": 100,
+        "primary": "data",
+        "secondary": [
+          "quality"
+        ],
+        "match_any": [
+          "데이터",
+          "ssot",
+          "schema",
+          "스키마",
+          "lineage",
+          "리니지",
+          "provenance",
+          "정본 데이터",
+          "projection",
+          "마이그레이션",
+          "migration"
+        ]
+      },
+      {
+        "id": "document-artifact",
+        "priority": 100,
+        "primary": "document",
+        "secondary": [
+          "design",
+          "quality"
+        ],
+        "match_any": [
+          "문서",
+          "계약서",
+          "약관",
+          "제안서",
+          "보고서",
+          "양식",
+          "pdf",
+          "ppt",
+          "pptx",
+          "document"
+        ]
+      },
+      {
+        "id": "engineering-common",
+        "priority": 90,
+        "primary": "engineering",
+        "secondary": [
+          "quality"
+        ],
+        "match_any": [
+          "공통 코드",
+          "sdk",
+          "repository",
+          "리포지토리 패턴",
+          "adapter",
+          "provider",
+          "라이브러리",
+          "library",
+          "백엔드 패턴",
+          "프론트엔드 패턴",
+          "starter"
+        ]
+      },
+      {
+        "id": "integration-connectors",
+        "priority": 110,
+        "primary": "integration",
+        "secondary": [
+          "engineering",
+          "quality"
+        ],
+        "match_any": [
+          "firebase",
+          "파이어베이스",
+          "google",
+          "구글",
+          "github",
+          "깃허브",
+          "api 연동",
+          "webhook",
+          "웹훅",
+          "connector",
+          "커넥터",
+          "외부 api",
+          "연동"
+        ]
+      },
+      {
+        "id": "quality-verification",
+        "priority": 120,
+        "primary": "quality",
+        "secondary": [],
+        "match_any": [
+          "테스트",
+          "검수",
+          "qa",
+          "회귀",
+          "regression",
+          "conformance",
+          "접근성",
+          "성능 검사",
+          "보안 검사",
+          "검증"
+        ]
+      },
+      {
+        "id": "delivery-release",
+        "priority": 120,
+        "primary": "delivery",
+        "secondary": [
+          "quality"
+        ],
+        "match_any": [
+          "배포",
+          "deploy",
+          "release",
+          "릴리스",
+          "build",
+          "빌드",
+          "rollback",
+          "롤백",
+          "recovery",
+          "복구",
+          "runtime evidence",
+          "런타임 증거"
+        ]
+      },
+      {
+        "id": "control-standards",
+        "priority": 130,
+        "primary": "control-plane",
+        "secondary": [],
+        "match_any": [
+          "규격 정본",
+          "정본 포인터",
+          "작업 배정",
+          "지도점검",
+          "시정명령",
+          "ssot 검증",
+          "registry",
+          "레지스트리",
+          "control plane",
+          "컨트롤 플레인"
+        ]
+      }
+    ]
+  }
 }

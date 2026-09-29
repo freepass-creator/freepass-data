@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "updated_at": "2026-09-22T10:10:00+09:00",
+  "updated_at": "2026-09-26T08:30:00+09:00",
   "rules": {
     "use_confirmed_decisions_without_reasking": true,
     "ask_only_when_required_value_is_missing_or_changed": true,
@@ -32,6 +32,11 @@
       "id": "firebase.rtdb",
       "value": "Permanently retired for Freepass and TeamJPK",
       "do_not_ask": "Do not suggest or restore RTDB fallback; Firestore gaps are HOLD."
+    },
+    {
+      "id": "development.continuity",
+      "value": "Resume the existing Work branch; Work owns the branch, not the AI",
+      "do_not_ask": "Do not create a Claude/Codex/GPT-specific branch when an existing Work/PR/branch can be resumed. Warn on development-line split before adding another implementation."
     }
   ],
   "user_work_style": {
@@ -42,7 +47,8 @@
     "preservation": "Preserve originals, raw evidence, immutable IDs, history, dirty worktrees, and project-specific identity.",
     "communication": "Lead with the result, use plain Korean, avoid unnecessary menus and repeated questions, and report change, verification, remaining uncertainty, and next_start_here.",
     "delivery": "A local file, passing test, merged PR, deployment, and real-world outcome are separate states and must be reported separately.",
-    "collaboration": "Codex executes and integrates; Claude provides read-only independent review for material risk when available. Other AIs are opt-in per task."
+    "collaboration": "Codex executes and integrates; Claude provides read-only independent review for material risk when available. Other AIs are opt-in per task.",
+    "development_continuity": "Treat '다음/이어서/고도화' as continuing the current canonical development line. New branches, engines, adapters or UI standards require evidence that no existing Work can be resumed."
   },
   "platforms": [
     {
@@ -72,7 +78,7 @@
       ],
       "procedure": [
         "Confirm repository, remote, branch, HEAD, dirty state, and relevant AGENTS.md before editing.",
-        "Use an isolated codex/ branch or worktree when needed; preserve unrelated dirty work.",
+        "Resolve an existing Work/PR/branch first. For new development, use work/<project-id>/<work-id>; AI identity is writer metadata, not branch identity.",
         "Run project checks, inspect the exact diff, commit selected files, push without force, open a PR, and attach it to the task.",
         "Merge only within existing authority, then verify the exact remote main commit and its CI run."
       ],
@@ -102,7 +108,8 @@
         "force-push without direct authority",
         "reset/stash/clean another worktree",
         "claim completion from local state",
-        "copy sensitive conversation text into GitHub"
+        "copy sensitive conversation text into GitHub",
+        "create an AI-specific parallel branch when an existing Work branch can be resumed"
       ]
     },
     {
@@ -299,6 +306,44 @@
       ],
       "walls": [
         "No send authorization is inferred from tool availability, a draft, a prior different bundle, or a successful connection check."
+      ]
+    },
+    {
+      "id": "business.freepass-mobility",
+      "triggers": [
+        "프리패스모빌리티",
+        "프리패스 회사",
+        "공급사 수익",
+        "영업자 수익",
+        "수수료 구조",
+        "프리패스 마진"
+      ],
+      "canonical_refs": [
+        "docs/business/FREEPASS_MOBILITY_BUSINESS_KNOWLEDGE.md",
+        "registry/projects.json"
+      ],
+      "procedure": [
+        "Explain FreePass Mobility as a mobility distribution and brokerage operator connecting suppliers, sales channels and customers across product guidance, intake, contract, delivery confirmation and settlement.",
+        "For product, price and policy use the current FreePass Data ACTIVE Release; for inventory, allocation and delivery exceptions obtain the latest supplier confirmation.",
+        "For a specific contract, commission, collection or payout use only the authorized Admin-owned settlement record and an exact case identifier.",
+        "Keep confirmed margin separate from actual collection and payout cash flow, and keep customer deposit, monthly rent and return settlement outside FreePass commission income unless the contract proves otherwise.",
+        "If the source, identity, authority or amount is missing or conflicting, answer only with the confirmed general structure and leave the specific item HOLD."
+      ],
+      "do_not_ask": [
+        "What FreePass Mobility generally does when the shared business knowledge already answers it.",
+        "Whether customer deposits or monthly rent should be treated as FreePass margin: they remain a separate financial flow without explicit contract evidence.",
+        "Whether an unknown commission rate or payout date may be estimated: it may not.",
+        "Whether a supplier private commission or another sales channel payout may be disclosed without role-specific authority: it may not."
+      ],
+      "ask_only_if_missing": [
+        "exact vehicle, application or contract identifier for a case-specific status",
+        "authorized settlement source and viewer role for a case-specific commission or payout",
+        "supplier confirmation when current inventory, allocation, delivery timing or an exception is not established by the current source"
+      ],
+      "walls": [
+        "Do not create a second settlement ledger or recalculate authoritative settlement outside the Admin domain.",
+        "Do not expose customer data, contract originals, accounts, supplier cost or private commission across roles.",
+        "Do not turn a historical case, KakaoTalk message or stale catalog snapshot into a general policy."
       ]
     }
   ]

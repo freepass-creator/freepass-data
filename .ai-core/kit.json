@@ -1,28 +1,34 @@
 {
   "schema": "ai-core-starter-kit/v1",
-  "core_revision": "87b0f4f6c75dbb313ec4684081b83b1ef0c53da2",
-  "generated_at": "2026-09-22T02:24:07.280Z",
-  "task": "최신 AI Core 규격과 GitHub 동기화 부트스트랩 적용",
+  "digest_rule": "sha256(utf8, CRLF→LF)",
+  "core_revision": "2ca825b4bdad366fad42afc9eacf5a36ac698381",
+  "generated_at": "2026-09-29T15:25:38.765Z",
+  "task": "AI Core 키트 재생성 — 줄끝 정규화·내용 기준 신선도",
   "track": "development",
   "target": {
     "project_id": "freepass-data",
     "repository": "freepass-creator/freepass-data",
-    "branch": "codex/refresh-ai-core-kit-v2-20260922",
-    "revision": "b79d64593770dfece6f85864c71c4d0a72a0c96f",
-    "registry_revision": "677622c47377c9c0e22a98a8db031041becb8887",
-    "root": "C:\\dev\\ai-core-kit-rollout-20260922-v2\\freepass-data",
+    "branch": "chore/ai-core-kit-refresh-20260930",
+    "revision": "5e1be5f3244be6472ce3693fef100c960c227be6",
+    "registry_revision": "5e1be5f3244be6472ce3693fef100c960c227be6",
+    "root": "C:\\dev\\.kit-roll\\freepass-data",
     "display_name": "freepass-data"
   },
   "files": [
     {
       "path": "standards/AI_WORKING_STANDARD.md",
-      "sha256": "1b45074f5ffaaf76f61bed90af525ab19290720c1400af5d0506ace9e102b3a8",
+      "sha256": "e59d851d63c3aea504360370f6a800a0427a6c78053f552e917cdc31d822a88d",
       "source": "docs/AI_WORKING_STANDARD.md"
     },
     {
       "path": "standards/AI_ACADEMY_CURRICULUM.md",
-      "sha256": "9781eed9023ec5beeb691eb5694dd6bd35f30a33cb7aa7fa02d982562af8947a",
+      "sha256": "fec2b99ec070799db3593b599078c26e36b290a3e9c53917783a14d4b78ebde5",
       "source": "docs/AI_ACADEMY_CURRICULUM.md"
+    },
+    {
+      "path": "standards/DEVELOPMENT_CONTINUITY_STANDARD.md",
+      "sha256": "e27a7c2e6a04e452aef777d8bd765b28bc1e36dba925f202aa93643ce2863aaf",
+      "source": "docs/DEVELOPMENT_CONTINUITY_STANDARD.md"
     },
     {
       "path": "standards/DEVELOPMENT_RUNTIME.md",
@@ -31,15 +37,32 @@
     },
     {
       "path": "standards/shared-services/SHARED_RELEASE_GATE.md",
-      "sha256": "098ba568b40d6fcd7c5830e7a024048a52ad156ed7a6f0374af2a9ac545eb03b",
+      "sha256": "783badc5170ccf5defefe4c02ed35641bf0139993780dbd9c28ed7f7b2f19ebb",
       "source": "docs/shared-services/SHARED_RELEASE_GATE.md"
     },
     {
       "path": "session-bootstrap.mjs",
-      "sha256": "60b0ccc3a8217aa2b7415f3830fec94fd894fab294155e294d7ede71edd8c900",
+      "sha256": "b2a467cfeeb32cd5342d5ce6a3da9bbe7eb986323eb960e615ff29b0357fa2b6",
       "source": "generated:session-bootstrap/v2"
     }
   ],
+  "freshness_inputs": [
+    "docs/AI_WORKING_STANDARD.md",
+    "docs/AI_ACADEMY_CURRICULUM.md",
+    "docs/DEVELOPMENT_CONTINUITY_STANDARD.md",
+    "docs/DEVELOPMENT_RUNTIME.md",
+    "docs/shared-services/SHARED_RELEASE_GATE.md",
+    "registry/operating-knowledge.json",
+    "src/academy/starter-kit.mjs",
+    "src/academy/start-gate.mjs",
+    "scripts/academy-start.mjs"
+  ],
+  "catalog_inputs": [
+    "registry/projects.json",
+    "registry/capabilities.json",
+    "registry/work-map.json"
+  ],
+  "verification_source": "registry/projects.json",
   "verification": {
     "install": "npm ci",
     "test": "npm test",

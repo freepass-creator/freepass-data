@@ -346,7 +346,7 @@
         "design"
       ],
       "projects": [
-        "devcenter"
+        "ai-core"
       ],
       "mode": "LOCAL_MUTATION",
       "priority": 75,
@@ -354,7 +354,7 @@
       "required_scopes": [],
       "walls": [],
       "result_contract": "ai-core-work-result/v1",
-      "hold_reason": "DevCenter가 HOLD이며 공통 디자인 적용 adapter가 아직 없다."
+      "hold_reason": "DevCenter는 AI Core 내부 모듈로 통합됐으며 실행 adapter와 portal 경로 독립화가 아직 완료되지 않았다."
     },
     {
       "id": "dev.standard",
@@ -364,7 +364,7 @@
         "development"
       ],
       "projects": [
-        "devcenter"
+        "ai-core"
       ],
       "mode": "READ_ONLY",
       "priority": 74,
@@ -372,7 +372,7 @@
       "required_scopes": [],
       "walls": [],
       "result_contract": "ai-core-work-result/v1",
-      "hold_reason": "DevCenter source-review와 통합 실행 진입점이 아직 확정되지 않았다."
+      "hold_reason": "DevCenter는 AI Core 내부 모듈로 통합됐으며 실행 adapter와 portal 경로 독립화가 아직 완료되지 않았다."
     },
     {
       "id": "docs.production",

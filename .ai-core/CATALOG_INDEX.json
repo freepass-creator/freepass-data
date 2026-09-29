@@ -1,24 +1,24 @@
 {
   "schema": "ai-core-starter-catalog/v1",
-  "generated_at": "2026-09-22T02:24:07.280Z",
+  "generated_at": "2026-09-29T15:25:38.765Z",
   "items": [
     {
       "path": "catalog/projects.json",
-      "sha256": "361fc385402d7dea2fdad9c81001054db3e8361c3d24c773e06ec60002051a70",
+      "sha256": "9156b44eea5682bc7ec5ee19670e3c5ffe6c4cffe431aa2510362e7ebfbaa0db",
       "source": "registry/projects.json",
-      "core_revision": "87b0f4f6c75dbb313ec4684081b83b1ef0c53da2"
+      "core_revision": "2ca825b4bdad366fad42afc9eacf5a36ac698381"
     },
     {
       "path": "catalog/capabilities.json",
-      "sha256": "2cde6604a0dc0f438e8d0d0f179a3d8220f9a32504e5565058be8bff38628d36",
+      "sha256": "12751a133ff77ff2b6c9eb765cb0e0a2967b3b780cb0a071cc18091a02f1462c",
       "source": "registry/capabilities.json",
-      "core_revision": "87b0f4f6c75dbb313ec4684081b83b1ef0c53da2"
+      "core_revision": "2ca825b4bdad366fad42afc9eacf5a36ac698381"
     },
     {
       "path": "catalog/work-map.json",
-      "sha256": "1bf109b79d1d3d1cb3be45e41a0bd0b0b318ecaba674441464a872aa6462b07b",
+      "sha256": "314258a53889fe94cba9fb3b0c7836602294cd49f07149ee5722a36c5b31fc2f",
       "source": "registry/work-map.json",
-      "core_revision": "87b0f4f6c75dbb313ec4684081b83b1ef0c53da2"
+      "core_revision": "2ca825b4bdad366fad42afc9eacf5a36ac698381"
     }
   ]
 }
