@@ -7,6 +7,19 @@ Handoff base when closure work started: `28d46e1f8d14a3a08d86586dae535838e4d123c
 Branch: `main`
 Date: 2026-09-28
 
+## 2026-09-29 RP023 오토플러스 운전자 연령 정책 교정
+
+- 사용자 결정: 오플구독 기본 대여료 조건은 `만 26세 이상`, 상품별 약정 주행거리, 보험료 포함이며 운전자 연령 하향은 불가다.
+- 운영 원인: `POL-0047`이 과거 공통정책 복제 과정에서 `만21세`와 `age_lowering_cost=10만원`을 함께 물려받았고,
+  `FP-RP023-RENT`에도 하향 가능 연령 없이 비용만 남아 있었다.
+- 변경: RP023 정책 불변조건을 추가하고, 하향 가능 연령이 없는 정책의 `age_lowering_cost`를 소비자 월대여료 조정항목으로
+  노출하지 않는다. 운영 보정은 두 정책만 대상으로 수정 전 private backup, update-time 사전조건, 한 transaction,
+  필수 기본조건 readback을 요구한다.
+- 검증: `npm run check` 및 운영 보정 후 `309고5544` 포함 RP023 정책 참조·표시 readback을 남긴다.
+
+next_start_here: RP023의 정책 미연결 상품은 별도 정책 연결 근거 없이 자동 연결하지 않는다. 연결 여부와 연령 정책 정확성은
+분리하며, 미연결 상품을 이번 보정에서 추정 수정하지 않는다.
+
 ## 2026-09-28 vehicle-name evidence repair
 
 - 기존 parity 결과를 현재 Firestore 원문 차명·연식·차량번호와 다시 결합했다. 마스터명 일괄 치환과
