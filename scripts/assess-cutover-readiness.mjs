@@ -10,6 +10,18 @@ const healthPath = required('CUTOVER_HEALTH_JSON');
 const shadowPath = required('CUTOVER_SHADOW_JSON');
 const allowDegraded = process.env.CUTOVER_ALLOW_DEGRADED === '1';
 const allowOrderDiff = process.env.CUTOVER_ALLOW_ORDER_DIFF === '1';
+const healthContract = JSON.parse(await readFile(
+  new URL('../contracts/catalog-data-health-v1.schema.json', import.meta.url),
+  'utf8'
+));
+const expectedHealthContractVersion = healthContract?.properties?.contractVersion?.const;
+const expectedHealthSchemaVersion = healthContract?.properties?.schemaVersion?.const;
+if (
+  typeof expectedHealthContractVersion !== 'string' || !expectedHealthContractVersion ||
+  typeof expectedHealthSchemaVersion !== 'string' || !expectedHealthSchemaVersion
+) {
+  throw new Error('Catalog Health schema has no fixed contract identity');
+}
 
 async function load(path, label) {
   const raw = await readFile(path, 'utf8');
@@ -28,8 +40,8 @@ const [health, shadow] = await Promise.all([
 ]);
 
 if (
-  health?.contractVersion !== 'catalog-data-health-v1' ||
-  health?.schemaVersion !== '1.0.0'
+  health?.contractVersion !== expectedHealthContractVersion ||
+  health?.schemaVersion !== expectedHealthSchemaVersion
 ) {
   throw new Error('Unsupported Health evidence contract');
 }
