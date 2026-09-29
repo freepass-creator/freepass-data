@@ -71,6 +71,7 @@
         "then": {
           "properties": {
             "evidence": {
+              "type": "object",
               "required": ["approvedRelease"],
               "properties": {
                 "approvedRelease": { "type": "object" }

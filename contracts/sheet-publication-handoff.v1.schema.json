@@ -321,6 +321,7 @@
       "then": {
         "properties": {
           "approvedRelease": {
+            "type": "object",
             "properties": {
               "projectionId": {
                 "const": "sheet-publication-bridge"
@@ -328,6 +329,7 @@
             }
           },
           "manifest": {
+            "type": "object",
             "properties": {
               "projectionId": {
                 "const": "sheet-publication-bridge"
@@ -354,6 +356,7 @@
       "then": {
         "properties": {
           "approvedRelease": {
+            "type": "object",
             "properties": {
               "projectionId": {
                 "not": {
@@ -363,6 +366,7 @@
             }
           },
           "manifest": {
+            "type": "object",
             "properties": {
               "projectionId": {
                 "not": {

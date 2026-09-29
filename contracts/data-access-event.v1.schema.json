@@ -76,7 +76,7 @@
   "allOf": [
     {
       "if": { "properties": { "phase": { "const": "SUCCEEDED" } } },
-      "then": { "not": { "required": ["reasonCode"] } }
+      "then": { "not": { "type": "object", "properties": { "reasonCode": {} }, "required": ["reasonCode"] } }
     },
     {
       "if": { "properties": { "phase": { "enum": ["DENIED", "FAILED"] } } },

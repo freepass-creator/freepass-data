@@ -3,16 +3,20 @@
   "status": "PARTIAL",
   "normativeContractRoot": "contracts",
   "standards": [
-    {"id":"JSON_SCHEMA_2020_12","reference":"https://json-schema.org/draft/2020-12/schema","level":"REQUIRED","scope":"Every *.schema.json contract","verification":"AUTOMATED"},
-    {"id":"RFC_3339_DATETIME","reference":"https://www.rfc-editor.org/rfc/rfc3339","level":"REQUIRED","scope":"Canonical instants and API timestamps","verification":"AUTOMATED"},
-    {"id":"ISO_4217_CURRENCY","reference":"https://www.iso.org/iso-4217-currency-codes.html","level":"REQUIRED","scope":"Money currency codes; Catalog V1 currently supports KRW only","verification":"AUTOMATED"},
-    {"id":"SHA_256","reference":"https://csrc.nist.gov/pubs/fips/180-4/upd1/final","level":"REQUIRED","scope":"Content, source, input and release integrity digests","verification":"AUTOMATED"},
+    {"id":"JSON_SCHEMA_2020_12","reference":"https://json-schema.org/draft/2020-12/schema","level":"REQUIRED","scope":"Every *.schema.json contract","verification":"AUTOMATED","checker":"AJV_2020_COMPILE_ALL_SCHEMAS"},
+    {"id":"RFC_3339_DATETIME","reference":"https://www.rfc-editor.org/rfc/rfc3339","level":"REQUIRED","scope":"Canonical instants and API timestamps","verification":"HOLD"},
+    {"id":"ISO_4217_CURRENCY","reference":"https://www.iso.org/iso-4217-currency-codes.html","level":"REQUIRED","scope":"Money currency codes; Catalog V1 currently supports KRW only","verification":"HOLD"},
+    {"id":"SHA_256","reference":"https://csrc.nist.gov/pubs/fips/180-4/upd1/final","level":"REQUIRED","scope":"Content, source, input and release integrity digests","verification":"HOLD"},
     {"id":"RFC_9457_PROBLEM_DETAILS","reference":"https://www.rfc-editor.org/rfc/rfc9457","level":"TARGET","scope":"Consumer API error envelopes","verification":"HOLD"},
     {"id":"OPENAPI_3_1","reference":"https://spec.openapis.org/oas/v3.1.0","level":"TARGET","scope":"Published HTTP interface description and compatibility","verification":"HOLD"},
     {"id":"ISO_3779_VIN","reference":"https://www.iso.org/standard/52200.html","level":"TARGET","scope":"Vehicle identification number syntax and validation","verification":"HOLD"},
     {"id":"CLOUD_EVENTS_1_0","reference":"https://spec.cloudevents.io/","level":"TARGET","scope":"Outbox and integration event interoperability","verification":"HOLD"},
     {"id":"ISO_27001_27701_CONTROLS","reference":"https://www.iso.org/standard/27001","level":"TARGET","scope":"Security and privacy management evidence; no certification claim","verification":"HOLD"}
   ],
+  "contractInventory": {
+    "schemaPattern": "*.schema.json",
+    "instanceContracts": ["f01-f86-sheet-spec.v1.json", "firebase-access-authority.v1.json", "freepass-data-standards-profile.v1.json"]
+  },
   "platformRequiredCapabilities": ["STABLE_OPAQUE_IDENTITY","EXPLICIT_NULL_UNKNOWN_ZERO","SCHEMA_AND_CONTRACT_VERSIONING","OPTIMISTIC_REVISION","IDEMPOTENCY_RECEIPT","IMMUTABLE_RAW_EVIDENCE","FIELD_LEVEL_PROVENANCE","CANONICAL_TO_PROJECTION_RELEASE","SOURCE_FRESHNESS","CONSUMER_COMPATIBILITY","ACCESS_AUDIT","FAIL_CLOSED_VALIDATION"],
   "unresolvedCapabilities": ["OPENAPI_PUBLICATION_AND_COMPATIBILITY","RFC_9457_ERROR_ENVELOPE","ISO_3779_VIN_VALIDATION","VEHICLE_MEDIA_ASSET_CONTRACT","RETENTION_ERASURE_PRIVACY_LIFECYCLE","CLOUD_EVENTS_INTEROPERABILITY","MULTI_CURRENCY_MINOR_UNIT_REGISTRY","SUPPLIER_FIELD_COVERAGE_MATRIX","ALL_CONSUMER_CUTOVER_READBACK"],
   "completionRule": "Status may become COMPLETE only when unresolvedCapabilities is empty and every required or target standard has automated evidence or an explicitly approved NOT_APPLICABLE decision."
