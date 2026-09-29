@@ -1,4 +1,4 @@
-import { stableDigest } from '../shared/stable-digest.js';
+import { createHash } from 'node:crypto';
 
 export const QUOTE_CONTRACT_V2 = 'freepass-quote/v2' as const;
 export const QUOTE_SNAPSHOT_CONTRACT_V2 = 'freepass-quote-snapshot/v2' as const;
@@ -30,6 +30,7 @@ export type QuoteWriteReceipt = {
   quoteVersion: number;
   snapshotHash: string;
   idempotencyKey: string;
+  persistedAt: string;
 };
 
 export type QuoteReadReceipt =
@@ -71,6 +72,7 @@ export type ShareEnvelopeWriteReceipt = {
   envelopeVersion: number;
   snapshotHash: string;
   idempotencyKey: string;
+  persistedAt: string;
 };
 
 export type ShareEnvelopeReadReceipt =
@@ -113,6 +115,26 @@ const SNAPSHOT_FIELDS = [
   'sourceRevision',
 ] as const;
 
+export const MAX_SHARE_ENVELOPE_QUOTE_REFS = 100;
+
+function artifactStableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(artifactStableValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, child]) => [key, artifactStableValue(child)]),
+    );
+  }
+  return value;
+}
+
+export function estimateArtifactDigest(value: unknown) {
+  return createHash('sha256')
+    .update(JSON.stringify(artifactStableValue(value)))
+    .digest('hex');
+}
+
 const record = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
@@ -142,7 +164,25 @@ function sha256(value: unknown, code: string) {
 
 function iso(value: unknown, code: string) {
   const text = String(value ?? '').trim();
-  if (!text || !Number.isFinite(Date.parse(text))) throw coded(code);
+  const match = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/,
+  );
+  if (!match) throw coded(code);
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, offsetHourText, offsetMinuteText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const validCalendarDay = month >= 1 && month <= 12 &&
+    day >= 1 && day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (
+    !validCalendarDay ||
+    Number(hourText) > 23 ||
+    Number(minuteText) > 59 ||
+    Number(secondText) > 59 ||
+    (offsetHourText !== undefined && Number(offsetHourText) > 23) ||
+    (offsetMinuteText !== undefined && Number(offsetMinuteText) > 59) ||
+    !Number.isFinite(Date.parse(text))
+  ) throw coded(code);
   return text;
 }
 
@@ -179,7 +219,7 @@ export function assertIssuedQuoteV2(value: unknown): asserts value is IssuedQuot
   iso(value.createdAt, 'QUOTE_REPOSITORY_QUOTE_INVALID');
   const snapshotHash = sha256(value.snapshotHash, 'QUOTE_REPOSITORY_QUOTE_INVALID');
   const snapshot = quoteSnapshotFromIssuedQuote(value as IssuedQuoteV2);
-  if (stableDigest(snapshot) !== snapshotHash) {
+  if (estimateArtifactDigest(snapshot) !== snapshotHash) {
     throw coded('QUOTE_V2_INTEGRITY_MISMATCH');
   }
 
@@ -201,7 +241,7 @@ export function assertIssuedQuoteV2(value: unknown): asserts value is IssuedQuot
     sha256(value.revision.previousRevisionHash, 'QUOTE_REVISION_INVALID');
   }
   const revisionHash = sha256(value.revisionHash, 'QUOTE_REVISION_INVALID');
-  if (revisionHash !== stableDigest({
+  if (revisionHash !== estimateArtifactDigest({
     contract: QUOTE_REVISION_CONTRACT_V1,
     quoteId,
     quoteVersion,
@@ -231,11 +271,17 @@ export function assertShareEnvelopeV1(value: unknown): asserts value is ShareEnv
     throw coded('SHARE_ENVELOPE_INVALID');
   }
   requiredId(value.envelopeId, 'SHARE_ENVELOPE_INVALID');
-  positiveInteger(value.envelopeVersion, 'SHARE_ENVELOPE_INVALID');
+  if (positiveInteger(value.envelopeVersion, 'SHARE_ENVELOPE_INVALID') !== 1) {
+    throw coded('SHARE_ENVELOPE_VERSION_UNSUPPORTED');
+  }
   const createdAt = iso(value.createdAt, 'SHARE_ENVELOPE_INVALID');
   const expiresAt = iso(value.expiresAt, 'SHARE_ENVELOPE_INVALID');
   if (Date.parse(expiresAt) <= Date.parse(createdAt)) throw coded('SHARE_ENVELOPE_INVALID');
-  if (!Array.isArray(value.quoteRefs) || value.quoteRefs.length < 1) throw coded('SHARE_ENVELOPE_INVALID');
+  if (
+    !Array.isArray(value.quoteRefs) ||
+    value.quoteRefs.length < 1 ||
+    value.quoteRefs.length > MAX_SHARE_ENVELOPE_QUOTE_REFS
+  ) throw coded('SHARE_ENVELOPE_INVALID');
 
   const refs = value.quoteRefs.map(quoteRef);
   if (new Set(refs.map((item) => item.quoteId)).size !== refs.length) {
@@ -248,7 +294,10 @@ export function assertShareEnvelopeV1(value: unknown): asserts value is ShareEnv
     quoteRefs: refs,
     expiresAt,
   };
-  if (stableDigest(snapshot) !== snapshotHash) {
+  if (estimateArtifactDigest(snapshot) !== snapshotHash) {
+    throw coded('SHARE_ENVELOPE_INTEGRITY_MISMATCH');
+  }
+  if (value.envelopeId !== `se_${snapshotHash.slice(0, 24)}`) {
     throw coded('SHARE_ENVELOPE_INTEGRITY_MISMATCH');
   }
 }

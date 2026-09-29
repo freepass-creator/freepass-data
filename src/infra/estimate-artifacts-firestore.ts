@@ -1,7 +1,6 @@
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
-import { stableDigest } from '../shared/stable-digest.js';
 import type { EstimateArtifactStore } from '../ports/estimate-artifacts.js';
 import {
   QUOTE_READ_RECEIPT_CONTRACT,
@@ -10,6 +9,7 @@ import {
   SHARE_ENVELOPE_WRITE_RECEIPT_CONTRACT,
   assertIssuedQuoteV2,
   assertShareEnvelopeV1,
+  estimateArtifactDigest,
   quoteIdempotencyKey,
   shareEnvelopeIdempotencyKey,
   type IssuedQuoteV2,
@@ -60,8 +60,16 @@ type EnvelopeHead = {
   updatedAt: string;
 };
 
-function samePayload(a: unknown, b: unknown) {
-  return stableDigest(a) === stableDigest(b);
+function sameQuoteIdentity(a: IssuedQuoteV2, b: IssuedQuoteV2) {
+  const { createdAt: _storedCreatedAt, ...storedIdentity } = a;
+  const { createdAt: _retryCreatedAt, ...retryIdentity } = b;
+  return estimateArtifactDigest(storedIdentity) === estimateArtifactDigest(retryIdentity);
+}
+
+function sameEnvelopeIdentity(a: ShareEnvelopeV1, b: ShareEnvelopeV1) {
+  const { createdAt: _storedCreatedAt, ...storedIdentity } = a;
+  const { createdAt: _retryCreatedAt, ...retryIdentity } = b;
+  return estimateArtifactDigest(storedIdentity) === estimateArtifactDigest(retryIdentity);
 }
 
 export function estimateArtifactStore(db: Firestore): EstimateArtifactStore {
@@ -80,12 +88,13 @@ export function estimateArtifactStore(db: Firestore): EstimateArtifactStore {
 
         if (existing.exists) {
           const stored = existing.data() as QuoteStored;
+          assertIssuedQuoteV2(stored.quote);
           if (
             stored.quoteId !== quote.quoteId ||
             stored.quoteVersion !== quote.quoteVersion ||
             stored.snapshotHash !== quote.snapshotHash ||
             stored.idempotencyKey !== expectedKey ||
-            !samePayload(stored.quote, quote)
+            !sameQuoteIdentity(stored.quote, quote)
           ) {
             throw coded('QUOTE_REPOSITORY_CONFLICT');
           }
@@ -96,6 +105,7 @@ export function estimateArtifactStore(db: Firestore): EstimateArtifactStore {
             quoteVersion: quote.quoteVersion,
             snapshotHash: quote.snapshotHash,
             idempotencyKey: expectedKey,
+            persistedAt: stored.createdAt,
           };
         }
 
@@ -147,6 +157,7 @@ export function estimateArtifactStore(db: Firestore): EstimateArtifactStore {
           quoteVersion: quote.quoteVersion,
           snapshotHash: quote.snapshotHash,
           idempotencyKey: expectedKey,
+          persistedAt,
         };
       });
     },
@@ -210,12 +221,13 @@ export function estimateArtifactStore(db: Firestore): EstimateArtifactStore {
 
         if (existing.exists) {
           const stored = existing.data() as EnvelopeStored;
+          assertShareEnvelopeV1(stored.envelope);
           if (
             stored.envelopeId !== envelope.envelopeId ||
             stored.envelopeVersion !== envelope.envelopeVersion ||
             stored.snapshotHash !== envelope.snapshotHash ||
             stored.idempotencyKey !== expectedKey ||
-            !samePayload(stored.envelope, envelope)
+            !sameEnvelopeIdentity(stored.envelope, envelope)
           ) {
             throw coded('SHARE_ENVELOPE_CONFLICT');
           }
@@ -226,6 +238,7 @@ export function estimateArtifactStore(db: Firestore): EstimateArtifactStore {
             envelopeVersion: envelope.envelopeVersion,
             snapshotHash: envelope.snapshotHash,
             idempotencyKey: expectedKey,
+            persistedAt: stored.createdAt,
           };
         }
 
@@ -272,6 +285,7 @@ export function estimateArtifactStore(db: Firestore): EstimateArtifactStore {
           envelopeVersion: envelope.envelopeVersion,
           snapshotHash: envelope.snapshotHash,
           idempotencyKey: expectedKey,
+          persistedAt,
         };
       });
     },

@@ -8,6 +8,10 @@ import commercialOfferSchema from '../../contracts/commercial-offer-view-v1.sche
 import erpViewSchema from '../../contracts/erp-public-view-v1.schema.json' with { type: 'json' };
 import healthSchema from '../../contracts/catalog-data-health-v1.schema.json' with { type: 'json' };
 import estimateMasterSchema from '../../contracts/estimate-newcar-master-v1.schema.json' with { type: 'json' };
+import estimateQuoteReadReceiptSchema from '../../contracts/estimate-quote-read-receipt-v1.schema.json' with { type: 'json' };
+import estimateQuoteWriteReceiptSchema from '../../contracts/estimate-quote-write-receipt-v1.schema.json' with { type: 'json' };
+import estimateShareEnvelopeReadReceiptSchema from '../../contracts/estimate-share-envelope-read-receipt-v1.schema.json' with { type: 'json' };
+import estimateShareEnvelopeWriteReceiptSchema from '../../contracts/estimate-share-envelope-write-receipt-v1.schema.json' with { type: 'json' };
 import settlementLedgerSchema from '../../contracts/settlement-ledger-view-v1.schema.json' with { type: 'json' };
 import kakaoCatalogReferenceSchema from '../../contracts/kakao-catalog-reference-v1.schema.json' with { type: 'json' };
 import type { ProjectionEvidenceSnapshotStore, ProjectionStore } from '../ports/catalog-store.js';
@@ -190,6 +194,10 @@ export function createConsumerGateway(
   const validateAdminResponse = ajv.compile(adminCatalogSchema);
   const validateHealth = ajv.compile(healthSchema);
   const validateEstimateMaster = ajv.compile(estimateMasterSchema);
+  const validateEstimateQuoteReadReceipt = ajv.compile(estimateQuoteReadReceiptSchema);
+  const validateEstimateQuoteWriteReceipt = ajv.compile(estimateQuoteWriteReceiptSchema);
+  const validateEstimateShareEnvelopeReadReceipt = ajv.compile(estimateShareEnvelopeReadReceiptSchema);
+  const validateEstimateShareEnvelopeWriteReceipt = ajv.compile(estimateShareEnvelopeWriteReceiptSchema);
   const validateSettlementLedger = ajv.compile(settlementLedgerSchema);
   const validateKakaoReference = ajv.compile(kakaoCatalogReferenceSchema);
   app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
@@ -879,6 +887,10 @@ export function createConsumerGateway(
     }
     return error instanceof Error && error.message ? error.message : fallback;
   };
+  const validatedArtifactReceipt = <T>(validate: (value: unknown) => boolean, value: T, code: string): T => {
+    if (!validate(value)) throw Object.assign(new Error(code), { code });
+    return value;
+  };
   const validArtifactId = (value: string) => /^[A-Za-z0-9._:-]{1,200}$/.test(value);
 
   app.post<{ Body: unknown }>(
@@ -932,16 +944,21 @@ export function createConsumerGateway(
             digest: value.snapshotHash,
             revision: value.quoteVersion,
           }),
-        }, () => estimateArtifactStore.putIssuedQuote(command.quote, command.idempotencyKey));
+        }, async () => validatedArtifactReceipt(
+          validateEstimateQuoteWriteReceipt,
+          await estimateArtifactStore.putIssuedQuote(command.quote, command.idempotencyKey),
+          'QUOTE_REPOSITORY_RECEIPT_INVALID',
+        ));
       } catch (error) {
         if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
         const code = artifactErrorCode(error, 'QUOTE_REPOSITORY_WRITE_FAILED');
-        if (code.includes('CONFLICT') || code === 'QUOTE_REVISION_INVALID') return reply.code(409).send({ code });
+        if (code.includes('CONFLICT')) return reply.code(409).send({ code });
         if (
           code === 'QUOTE_REPOSITORY_COMMAND_INVALID' ||
           code === 'QUOTE_REPOSITORY_QUOTE_INVALID' ||
           code === 'QUOTE_V2_INTEGRITY_MISMATCH' ||
-          code === 'QUOTE_PRICING_ENGINE_UNVERIFIED'
+          code === 'QUOTE_PRICING_ENGINE_UNVERIFIED' ||
+          code === 'QUOTE_REVISION_INVALID'
         ) return reply.code(400).send({ code });
         return reply.code(503).send({ code: 'QUOTE_REPOSITORY_WRITE_FAILED' });
       }
@@ -994,7 +1011,11 @@ export function createConsumerGateway(
             count: value.status === 'FOUND' ? 1 : 0,
             ...(value.status === 'FOUND' ? { digest: value.snapshotHash, revision: value.quoteVersion } : {}),
           }),
-        }, () => estimateArtifactStore.getIssuedQuote(request.params.quoteId, version));
+        }, async () => validatedArtifactReceipt(
+          validateEstimateQuoteReadReceipt,
+          await estimateArtifactStore.getIssuedQuote(request.params.quoteId, version),
+          'QUOTE_REPOSITORY_RECEIPT_INVALID',
+        ));
       } catch (error) {
         if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
         const code = artifactErrorCode(error, 'QUOTE_REPOSITORY_READ_FAILED');
@@ -1056,7 +1077,11 @@ export function createConsumerGateway(
             digest: value.snapshotHash,
             revision: value.envelopeVersion,
           }),
-        }, () => estimateArtifactStore.putShareEnvelope(command.envelope, command.idempotencyKey));
+        }, async () => validatedArtifactReceipt(
+          validateEstimateShareEnvelopeWriteReceipt,
+          await estimateArtifactStore.putShareEnvelope(command.envelope, command.idempotencyKey),
+          'SHARE_ENVELOPE_RECEIPT_INVALID',
+        ));
       } catch (error) {
         if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
         const code = artifactErrorCode(error, 'SHARE_ENVELOPE_WRITE_FAILED');
@@ -1066,7 +1091,8 @@ export function createConsumerGateway(
         if (
           code === 'SHARE_ENVELOPE_COMMAND_INVALID' ||
           code === 'SHARE_ENVELOPE_INVALID' ||
-          code === 'SHARE_ENVELOPE_INTEGRITY_MISMATCH'
+          code === 'SHARE_ENVELOPE_INTEGRITY_MISMATCH' ||
+          code === 'SHARE_ENVELOPE_VERSION_UNSUPPORTED'
         ) return reply.code(400).send({ code });
         return reply.code(503).send({ code: 'SHARE_ENVELOPE_WRITE_FAILED' });
       }
@@ -1119,7 +1145,11 @@ export function createConsumerGateway(
             count: value.status === 'FOUND' ? 1 : 0,
             ...(value.status === 'FOUND' ? { digest: value.snapshotHash, revision: value.envelopeVersion } : {}),
           }),
-        }, () => estimateArtifactStore.getShareEnvelope(request.params.envelopeId, version));
+        }, async () => validatedArtifactReceipt(
+          validateEstimateShareEnvelopeReadReceipt,
+          await estimateArtifactStore.getShareEnvelope(request.params.envelopeId, version),
+          'SHARE_ENVELOPE_RECEIPT_INVALID',
+        ));
       } catch (error) {
         if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
         const code = artifactErrorCode(error, 'SHARE_ENVELOPE_READ_FAILED');
