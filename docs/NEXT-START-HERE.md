@@ -17,6 +17,16 @@
 - 보정: 삭제·metadata·범용 Datastore User 권한 없이 `datastore.databases.get` 한 개만 추가하고 exact permission 검사를 5개로 고정한다.
 - next_start_here: 보정 PR을 main에 병합하고 custom role readback이 정확히 5개인지 확인한 뒤 ON workflow를 재실행한다.
 
+### 2026-09-30 ON activation complete
+
+- 목적: 전용 writer의 실제 transaction 저장·멱등 재시도·불변 readback을 main exact revision에서 증명한다.
+- 대상 revision: `main@fb75539356144dabe377d1170faedd22f8fd0346`, workflow run `36592266901`.
+- 변경: custom role은 `datastore.databases.get`과 entity create/get/list/update 정확히 5개이며 보유자는 전용 runtime SA 1개다. 삭제 권한은 없다.
+- 검증: run PASS. Quote `q_128d815c9c6657710776eaf7` / hash `128d815c9c6657710776eaf713b3665c50687fe841776beaa603158bd4f220f6` / persistedAt `2026-09-29T15:44:10.442Z`; Envelope `se_c0652432f3fc963ace9489d6` / hash `c0652432f3fc963ace9489d6710a2bdfbf70894646a9a8799254ad36b06043d2` / persistedAt `2026-09-29T15:44:11.644Z`. 두 자산 모두 CREATED→EXISTING 동일 persistedAt과 exact hash readback을 통과했다.
+- 운영 readback: `freepass-data-estimate-writer-00006-76q`, image digest `sha256:6986cbd096540fd24229397843cbb234288a16fa8ecd0a18e6c2b87cbfff1b50`, write mode `on`, traffic 100%, secret version 3.
+- 남음: ACTIVE Estimate master release 부재와 실제 agent/admin Firebase 인증은 계속 HOLD다. 이 writer persistence PASS를 전체 Estimate 소비자 cutover 완료로 확대하지 않는다.
+- next_start_here: Estimate 쪽 실제 인증 사용자가 생기면 role/UID allowlist를 보존한 채 사용자 흐름 write readback을 별도 수행한다. master는 ACTIVE projection을 만들기 전까지 503 HOLD를 유지한다.
+
 ## 2026-09-29 Estimate dedicated writer runtime activation
 
 - 목적: read runtime 권한을 넓히지 않고 Estimate Quote/Share Envelope 불변 저장을 전용 private Cloud Run 경계로 운영한다.
