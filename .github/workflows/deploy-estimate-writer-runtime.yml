@@ -243,3 +243,68 @@ jobs:
             "$ESTIMATE_WRITER_DEPLOYED_URL/v1/commands/freepass-estimate/issued-quotes")"
           test "$status" = "503"
           jq -e '.code == "ESTIMATE_ARTIFACT_WRITE_DISABLED"' "$response_file" >/dev/null
+
+      - name: Use Node.js 22 for the permanent synthetic canary
+        if: inputs.write_mode == 'on'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install pinned canary dependencies
+        if: inputs.write_mode == 'on'
+        run: npm ci --ignore-scripts
+
+      - name: Authenticate private writer canary
+        if: inputs.write_mode == 'on'
+        id: writer-canary-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.FREEPASS_DATA_DEPLOY_WIF_PROVIDER }}
+          service_account: ${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.readiness.outputs.url }}
+
+      - name: Persist and read back permanent synthetic evidence
+        if: inputs.write_mode == 'on'
+        env:
+          CLOUD_RUN_ID_TOKEN: ${{ steps.writer-canary-auth.outputs.id_token }}
+          ESTIMATE_WRITER_BASE_URL: ${{ steps.readiness.outputs.url }}
+          ESTIMATE_CANARY_RUN_ID: github-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer_token="$(gcloud secrets versions access "$CONSUMERS_SECRET_VERSION" \
+            --project="$PROJECT_ID" --secret="$CONSUMERS_SECRET_NAME" \
+            | jq -er '.[] | select(.id == "freepass-estimate") | .token')"
+          echo "::add-mask::$consumer_token"
+          ESTIMATE_CONSUMER_TOKEN="$consumer_token" npm run --silent probe:estimate-writer-canary \
+            | tee "$RUNNER_TEMP/estimate-writer-canary.json"
+          jq -e '.status == "PASS"' "$RUNNER_TEMP/estimate-writer-canary.json" >/dev/null
+          {
+            echo
+            echo '### Permanent synthetic persistence canary'
+            jq -r '"- run: \(.runId)\n- Quote: `\(.quote.quoteId)` / `\(.quote.snapshotHash)` / `\(.quote.persistedAt)`\n- Share Envelope: `\(.envelope.envelopeId)` / `\(.envelope.snapshotHash)` / `\(.envelope.persistedAt)`"' \
+              "$RUNNER_TEMP/estimate-writer-canary.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail closed to a new OFF revision when ON activation fails
+        if: ${{ inputs.write_mode == 'on' && (failure() || cancelled()) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services update "$SERVICE_NAME" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --platform=managed \
+            --update-env-vars="FREEPASS_DATA_ESTIMATE_ARTIFACT_WRITE=off" \
+            --quiet
+          service_json="$(gcloud run services describe "$SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format=json)"
+          ready="$(jq -r '[.status.conditions[] | select(.type == "Ready")][0].status // empty' <<<"$service_json")"
+          write_mode="$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "FREEPASS_DATA_ESTIMATE_ARTIFACT_WRITE") | .value' <<<"$service_json")"
+          revision="$(jq -r '.status.latestReadyRevisionName // empty' <<<"$service_json")"
+          latest_traffic="$(jq -r --arg revision "$revision" '[.status.traffic[] | select(.revisionName == $revision)] | (length == 1 and .[0].percent == 100)' <<<"$service_json")"
+          test "$ready" = "True"
+          test "$write_mode" = "off"
+          test "$latest_traffic" = "true"
+          echo 'ON activation failed; a new Ready revision was deployed with writes OFF.' >> "$GITHUB_STEP_SUMMARY"

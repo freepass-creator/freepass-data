@@ -45,10 +45,22 @@ HTTP 403 without Cloud Run identity, and an authenticated Estimate consumer read
 ## Activation and canary
 
 Before `write_mode=on`, FreePass Estimate production must have a non-empty role or UID write selector
-and its Vercel OIDC subject must be bound only to the dedicated caller service account. After activation,
-run `apps/new/scripts/probe-freepass-data-cutover.mjs` from the matching Estimate main revision.
+and its Vercel OIDC subject must be bound only to the dedicated caller service account. The ON deployment
+runs `src/jobs/probe-estimate-writer-canary.ts` inside the workflow. This writer-only probe does not depend
+on an ACTIVE Estimate master release. The broader Estimate cutover probe remains a separate gate and must
+not hide a missing master release.
 
-The synthetic Quote and Share Envelope are intentionally permanent immutable evidence. Their IDs and
-sealed payload must carry the canary purpose. A second identical command must return `EXISTING` with the
+The synthetic Quote and Share Envelope are intentionally permanent immutable evidence. Their IDs are
+contract-derived digests; the sealed payload carries the canary purpose through
+`pricingEngineVersion=synthetic-canary/v1`, `calculationProvenance.evidence`, and `sourceRevision`.
+The Share Envelope carries the purpose transitively through its sealed reference to that canary Quote.
+A second identical command must return `EXISTING` with the
 same `persistedAt`; readback must match both snapshot hashes. There is no delete rollback. Roll back by
 redeploying `write_mode=off` and reverting Estimate traffic, while preserving canary evidence.
+
+If any ON activation step fails after deployment, the workflow creates and verifies a new Ready revision
+with `FREEPASS_DATA_ESTIMATE_ARTIFACT_WRITE=off`. A failed job must never be treated as an active writer.
+
+`CREATE_NEW_JUSTIFIED`: the existing Estimate cutover probe requires an ACTIVE master projection and
+cannot isolate persistence readiness. This probe reuses the canonical artifact contracts and digest
+implementation while adding only the missing writer-runtime evidence boundary.

@@ -48,7 +48,8 @@
     "audit:vehicle-name-parity": "tsx src/jobs/audit-vehicle-name-reference-parity.ts",
     "repair:vehicle-name-parity": "tsx src/jobs/apply-vehicle-name-reference-repair.ts",
     "repair:autoplus-policy": "tsx src/jobs/apply-autoplus-policy-repair.ts",
-    "repair:billincar-policy": "tsx src/jobs/apply-billincar-policy-repair.ts"
+    "repair:billincar-policy": "tsx src/jobs/apply-billincar-policy-repair.ts",
+    "probe:estimate-writer-canary": "tsx src/jobs/probe-estimate-writer-canary.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",
