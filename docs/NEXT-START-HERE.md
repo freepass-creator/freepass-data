@@ -16,6 +16,24 @@ Handoff base when closure work started: `28d46e1f8d14a3a08d86586dae535838e4d123c
 Branch: `main`
 Date: 2026-09-28
 
+## 2026-09-29 RP021 빌린카 정책 원본 정합·연결 보정
+
+- 정본: `[F67 사용중] 빌린카 프리패스 재고` (`1036j-xoQtu-nzWOcfky8MmtSRrvPhRls16E7n49iFVA`),
+  `운영정책` sheetId `654905320`, `A1:BS5`.
+- 원본의 `pol_freepassstd` 1건과 `POL-0035`, `RP021_S01`, `RP021_S02`는 서로 다른 4개 정책이다.
+  S01과 S02는 추가주행료·연령하향료가 달라 합치지 않는다.
+- 활성 RP021 상품 47대의 원천 정책 UID는 모두 `pol_freepassstd`이다. 35대는 이미
+  `FP-RP021-RENT`에 연결됐고, 나머지 12대는 같은 UID를 보존하고도 `policy_code`가 비어 있다.
+- `FP-RP021-RENT`는 원본보다 주행거리·추가주행료·연령하향료·보상한도가 drift된 상태다.
+  원본 표준은 연 20,000km, 1만km당 10만원, 만 26세 이상, 만 21세까지 하향, 하향료 10만원,
+  보험료 포함이다.
+- Firestore `POL-0040`은 원본에 없고 연결 상품도 없는 `POL-0035` 중복 drift로 판정했다.
+- 적용기는 정책 5건·상품 47건을 private backup하고 update-time 사전조건을 걸어,
+  정본 정합·12대 연결·미사용 중복 퇴역을 한 transaction에서만 실행한다.
+- 로컬 검증: `npm run check` 990 PASS / 12 SKIP.
+
+next_start_here: main CI·병합 후 exact main에서 실행하고, 47/47 readback과 기존 미연결 대표 차량 `08주6722`의 ERP.com 상세 화면를 확인한다.
+
 ## 2026-09-29 RP023 오토플러스 운전자 연령 정책 교정
 
 ### RP023 전 상품 정책 연결 통일
