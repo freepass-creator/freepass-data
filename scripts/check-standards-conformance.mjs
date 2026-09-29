@@ -9,7 +9,7 @@ const profile = JSON.parse(fs.readFileSync(path.join(contractsDir, 'freepass-dat
 const failures = [];
 const contractJsonFiles = fs.readdirSync(contractsDir).filter((name) => name.endsWith('.json')).sort();
 const schemaFiles = contractJsonFiles.filter((name) => name.endsWith('.schema.json'));
-const knownAutomatedCheckers = new Set(['AJV_2020_COMPILE_ALL_SCHEMAS', 'RFC3339_SCHEMA_TEMPORAL_FIELDS']);
+const knownAutomatedCheckers = new Set(['AJV_2020_COMPILE_ALL_SCHEMAS', 'RFC3339_SCHEMA_TEMPORAL_FIELDS', 'ISO4217_KRW_CURRENCY_FIELDS']);
 const executedCheckers = new Set();
 
 if (profile.profile !== 'freepass-data-standards-profile/v1') failures.push('PROFILE_ID_INVALID');
@@ -67,6 +67,20 @@ function checkTimestampProperties(file, rootSchema) {
   };
   visit(rootSchema);
 }
+
+function checkCurrencyProperties(file, rootSchema) {
+  const visit = (node, pointer = '#') => {
+    if (!node || typeof node !== 'object') return;
+    for (const [name, propertySchema] of Object.entries(node.properties ?? {})) {
+      const propertyPointer = `${pointer}/properties/${name}`;
+      const resolved = resolveLocalRef(rootSchema, propertySchema);
+      if (name === 'currency' && resolved?.const !== 'KRW') failures.push(`ISO4217_KRW_SCHEMA_INVALID:${file}:${propertyPointer}`);
+      visit(propertySchema, propertyPointer);
+    }
+    for (const [key, value] of Object.entries(node)) if (key !== 'properties' && typeof value === 'object') visit(value, `${pointer}/${key}`);
+  };
+  visit(rootSchema);
+}
 for (const { file, schema } of schemas) {
   if (schema.$schema !== 'https://json-schema.org/draft/2020-12/schema') failures.push(`JSON_SCHEMA_DIALECT:${file}`);
   if (typeof schema.$id !== 'string' || !schema.$id.startsWith('https://freepass.teamjpk.com/contracts/')) failures.push(`SCHEMA_ID_INVALID:${file}`);
@@ -81,6 +95,8 @@ for (const { file, schema } of schemas) {
 executedCheckers.add('AJV_2020_COMPILE_ALL_SCHEMAS');
 for (const { file, schema } of schemas) checkTimestampProperties(file, schema);
 executedCheckers.add('RFC3339_SCHEMA_TEMPORAL_FIELDS');
+for (const { file, schema } of schemas) checkCurrencyProperties(file, schema);
+executedCheckers.add('ISO4217_KRW_CURRENCY_FIELDS');
 
 for (const standard of profile.standards ?? []) {
   if (standard.verification === 'AUTOMATED' && !executedCheckers.has(standard.checker)) failures.push(`AUTOMATED_CHECK_NOT_EXECUTED:${standard.id}`);

@@ -36,9 +36,9 @@ test('international references are explicit and uniquely identified', () => {
 
 test('AUTOMATED is reserved for a named implemented checker', () => {
   const automated = profile.standards.filter((standard) => standard.verification === 'AUTOMATED');
-  assert.deepEqual(automated.map((standard) => standard.id), ['JSON_SCHEMA_2020_12', 'RFC_3339_DATETIME']);
-  assert.deepEqual(automated.map((standard) => standard.checker), ['AJV_2020_COMPILE_ALL_SCHEMAS', 'RFC3339_SCHEMA_TEMPORAL_FIELDS']);
-  for (const id of ['ISO_4217_CURRENCY', 'SHA_256']) {
+  assert.deepEqual(automated.map((standard) => standard.id), ['JSON_SCHEMA_2020_12', 'RFC_3339_DATETIME', 'ISO_4217_CURRENCY']);
+  assert.deepEqual(automated.map((standard) => standard.checker), ['AJV_2020_COMPILE_ALL_SCHEMAS', 'RFC3339_SCHEMA_TEMPORAL_FIELDS', 'ISO4217_KRW_CURRENCY_FIELDS']);
+  for (const id of ['SHA_256']) {
     assert.equal(profile.standards.find((standard) => standard.id === id)?.verification, 'HOLD');
   }
 });
@@ -72,6 +72,17 @@ test('rejects a timestamp property without an RFC3339 date-time schema', () => {
   assert.match(result.stderr, /RFC3339_TEMPORAL_SCHEMA_INVALID:catalog-data-health-v1\.schema\.json:#\/properties\/generatedAt/);
 });
 
+test('rejects a currency property outside the Catalog V1 KRW-only contract', () => {
+  const result = withContractFixture((contracts) => {
+    const file = path.join(contracts, 'catalog-v1.schema.json');
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    value.$defs.money.properties.currency = { type: 'string' };
+    fs.writeFileSync(file, JSON.stringify(value));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ISO4217_KRW_SCHEMA_INVALID:catalog-v1\.schema\.json:#\/\$defs\/money\/properties\/currency/);
+});
+
 test('rejects COMPLETE while any standard remains HOLD', () => {
   const result = withContractFixture((contracts) => {
     const file = path.join(contracts, 'freepass-data-standards-profile.v1.json');
@@ -81,7 +92,7 @@ test('rejects COMPLETE while any standard remains HOLD', () => {
     fs.writeFileSync(file, JSON.stringify(value));
   });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /STANDARD_NOT_VERIFIED_FOR_COMPLETE:ISO_4217_CURRENCY/);
+  assert.match(result.stderr, /STANDARD_NOT_VERIFIED_FOR_COMPLETE:SHA_256/);
 });
 
 test('rejects COMPLETE while any platform capability remains unresolved', () => {
