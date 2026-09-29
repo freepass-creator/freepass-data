@@ -124,3 +124,13 @@ release proof에는 최소 다음을 남긴다.
 ## 한 문장
 
 > **배포 완료는 플랫폼의 성공 표시가 아니라, 실제 운영 주소가 기대 revision을 서빙한다는 관측으로 증명한다.**
+
+## 활성화 권한 — 관측 완료와 승인 분리
+
+`관측 완료`, `검토 승인`, `release build`, `활성화 권한`은 서로 다른 사실이다. 관측이 COMPLETE여도 review가 APPROVED가 아니거나 canonical release가 BUILT가 아니면 활성화 권한은 `HOLD`다.
+
+공통 기계 계약은 `governance.activation-decision.v1`이며 다음을 강제한다.
+
+- `AUTHORIZED` = observation COMPLETE + review APPROVED + release BUILT + release_id 존재
+- `HOLD` = 한 가지 이상의 이유를 반드시 기록
+- 프로젝트는 관측/evidence를 제공할 수 있지만 AI Core 공통 거버넌스의 활성화 권한을 자기 프로젝트 상태로 추정하지 않는다.

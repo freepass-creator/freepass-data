@@ -53,7 +53,11 @@ AI Core에는 헌법, 표준, 연구 후보, 프로젝트 학습, 과거 인계�
 
 ### 개발 시작
 
+- [Development Continuity Standard](DEVELOPMENT_CONTINUITY_STANDARD.md)를 먼저 적용한다.
 - 대상 repository, branch, commit, dirty/ahead/behind 상태를 확인한다.
+- 같은 목적의 기존 Work/PR/branch/handoff를 먼저 찾고, 있으면 **RESUME**한다. 기존 개발선이 없다는 근거가 있을 때만 CREATE한다.
+- branch는 AI가 아니라 Work가 소유한다. 기본 이름은 `work/<project-id>/<work-id>`다.
+- 저장소 branch budget과 branch lifetime을 확인하고 split 징후가 있으면 기능 개발보다 먼저 경고·정리한다.
 - 프로젝트 지침과 실제 실행 명령을 확인한다.
 - 요구를 `원하는 결과 / 완료 조건 / 제외 범위 / UI·데이터·상태 영향 / 필요한 검증`으로 정리한다.
 - 관련 코드, 기존 컴포넌트, 테스트, API, 데이터 흐름과 실제 소비자를 찾는다.
@@ -187,7 +191,7 @@ commit·변경 파일·실행한 명령·PASS/FAIL/SKIP·미리보기·배포 �
 | 업무 | 먼저 읽을 것 | 필요할 때만 |
 |---|---|---|
 | 모든 업무 | 헌법 → 이 교범 → 대상 프로젝트 지침 | Canonical Principles |
-| 코드 수정 | 위 공통 → 프로젝트 코드·테스트 | Development Runtime, Release Gate |
+| 코드 수정 | 위 공통 → Development Continuity Standard → 프로젝트 코드·테스트 | Development Runtime, Release Gate |
 | UI/UX | 위 공통 → UI/UX Constitution → 제품 프로필 | Responsive, Accessibility, Visual QA |
 | 데이터/API | 위 공통 → Core Contract Standard | research findings, migration guides |
 | 상태/워크플로 | 위 공통 → Workflow Constitution | State Machine Specification |
