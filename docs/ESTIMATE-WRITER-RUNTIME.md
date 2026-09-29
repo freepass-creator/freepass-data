@@ -1,6 +1,6 @@
 # FreePass Data Estimate Writer Runtime
 
-Status: deployment-ready; activation requires the authenticated canary gate below.
+Status: writer persistence ACTIVE and canary-verified; broader Estimate cutover remains HOLD.
 
 ## Boundary
 
@@ -69,3 +69,11 @@ with `FREEPASS_DATA_ESTIMATE_ARTIFACT_WRITE=off`. A failed job must never be tre
 `CREATE_NEW_JUSTIFIED`: the existing Estimate cutover probe requires an ACTIVE master projection and
 cannot isolate persistence readiness. This probe reuses the canonical artifact contracts and digest
 implementation while adding only the missing writer-runtime evidence boundary.
+
+## 2026-09-30 activation evidence
+
+Main `fb75539356144dabe377d1170faedd22f8fd0346`, workflow run `36592266901`, and Cloud Run
+revision `freepass-data-estimate-writer-00006-76q` passed the permanent Quote and Share Envelope
+canary. The live service is write `on` with 100% traffic on the exact immutable image digest recorded
+in `docs/NEXT-START-HERE.md`. This proves the artifact persistence boundary only; it does not clear
+the ACTIVE master or real agent/admin authentication HOLDs.
