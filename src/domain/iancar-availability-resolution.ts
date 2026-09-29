@@ -1,4 +1,4 @@
-export const IANCAR_AVAILABILITY_RULE_VERSION = 'iancar-availability-resolution/1';
+export const IANCAR_AVAILABILITY_RULE_VERSION = 'iancar-availability-resolution/2';
 
 export type IancarAvailabilityInput = {
   erp: { observed: boolean; explicitState?: string | null; sourceRevision: string; observedAt: string;
@@ -47,12 +47,11 @@ export function resolveIancarAvailability(input: IancarAvailabilityInput): Ianca
   const base = { ruleVersion: IANCAR_AVAILABILITY_RULE_VERSION, deleteAuthorized: false } as const;
   if (!input.erp.observed && raw) throw new Error('ERP_STATE_WITHOUT_OBSERVATION');
   const erpTrusted = input.erp.coverageComplete && input.erp.freshnessVerified;
-  const sheetTrusted = input.sheet.coverageComplete && input.sheet.freshnessVerified;
-  if (!erpTrusted || !sheetTrusted) return {
+  if (!erpTrusted) return {
     ...base,
     sourceDecision: input.erp.observed ? 'IANCAR_ERP' : input.sheet.observed ? 'IANCAR_SHEET' : 'NONE',
     state: '미관측', canonicalStatus: 'HOLD', reviewRequired: true,
-    reasons: ['SOURCE_EVIDENCE_NOT_CURRENT_AND_COMPLETE']
+    reasons: ['IANCAR_ERP_EVIDENCE_NOT_CURRENT_AND_COMPLETE']
   };
   if (input.erp.observed) {
     if (raw) {
@@ -65,10 +64,14 @@ export function resolveIancarAvailability(input: IancarAvailabilityInput): Ianca
     return { ...base, sourceDecision: 'IANCAR_ERP', state: '출고가능', canonicalStatus: 'AVAILABLE',
       reviewRequired: false, reasons: input.sheet.observed ? ['ERP_PRECEDENCE_OVER_SHEET'] : ['OBSERVED_IN_IANCAR_ERP'] };
   }
-  if (input.sheet.observed) return { ...base, sourceDecision: 'IANCAR_SHEET', state: '출고협의',
-    canonicalStatus: 'HOLD', reviewRequired: true, reasons: ['SHEET_ONLY_REQUIRES_ERP_CONFIRMATION'] };
-  if (input.previouslyRegistered) return { ...base, sourceDecision: 'HISTORY_ONLY', state: '미관측',
-    canonicalStatus: 'HOLD', reviewRequired: true, reasons: ['UNOBSERVED_IN_ERP_AND_SHEET', 'PRESERVE_REGISTERED_HISTORY'] };
+  if (input.sheet.observed || input.previouslyRegistered) return {
+    ...base,
+    sourceDecision: 'IANCAR_ERP',
+    state: '출고불가',
+    canonicalStatus: 'UNAVAILABLE',
+    reviewRequired: false,
+    reasons: ['ABSENT_FROM_CURRENT_COMPLETE_IANCAR_ERP']
+  };
   return { ...base, sourceDecision: 'NONE', state: '미관측', canonicalStatus: 'NO_CANDIDATE',
     reviewRequired: false, reasons: ['NOT_OBSERVED_OR_REGISTERED'] };
 }

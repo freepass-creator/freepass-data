@@ -192,6 +192,7 @@
       "then": {
         "properties": {
           "approvedRelease": {
+            "type": "object",
             "properties": {
               "projectionId": {
                 "const": "sheet-publication-bridge"
@@ -215,6 +216,7 @@
       "then": {
         "properties": {
           "approvedRelease": {
+            "type": "object",
             "properties": {
               "projectionId": {
                 "not": {

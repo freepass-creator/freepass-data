@@ -2,6 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+
+const healthContract = JSON.parse(await readFile(
+  new URL('../contracts/catalog-data-health-v1.schema.json', import.meta.url),
+  'utf8'
+));
+const healthContractVersion = healthContract.properties.contractVersion.const;
+const healthSchemaVersion = healthContract.properties.schemaVersion.const;
 
 function run(env) {
   return new Promise((resolve, reject) => {
@@ -38,8 +46,8 @@ async function withServer(handler, fn) {
 }
 
 const baseHealth = {
-  contractVersion: 'catalog-data-health-v1',
-  schemaVersion: '1.0.0',
+  contractVersion: healthContractVersion,
+  schemaVersion: healthSchemaVersion,
   scope: 'catalog-v1',
   generatedAt: '2026-09-21T12:00:00.000Z',
   status: 'HEALTHY',
@@ -47,6 +55,21 @@ const baseHealth = {
   checks: { activeProjection: { activeReleaseId: 'rel_test' } },
   issues: []
 };
+
+test('smoke checker rejects the retired catalog health schema version', async () => {
+  await withServer((_request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ ...baseHealth, schemaVersion: '1.0.0' }));
+  }, async (url) => {
+    const result = await run({
+      READ_RUNTIME_URL: url,
+      READ_RUNTIME_CONSUMER_ID: 'erp-com',
+      READ_RUNTIME_TOKEN: 'secret'
+    });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Unexpected Health response contract/);
+  });
+});
 
 test('smoke checker succeeds on HEALTHY and never prints tokens', async () => {
   await withServer((request, response) => {

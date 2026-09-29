@@ -7,6 +7,8 @@ const allowedRawInfraConsumers = new Set([
   'src/bootstrap.ts',
   'src/api/data-access-runtime.ts',
   'src/jobs/data-access-runtime.ts',
+  'src/jobs/apply-autoplus-policy-repair.ts',
+  'src/jobs/apply-billincar-policy-repair.ts',
   'src/jobs/apply-vehicle-name-reference-repair.ts'
 ]);
 
@@ -109,7 +111,6 @@ const requiredGatewayUsage = new Map([
   ['src/jobs/ingest-legacy-products.ts', ['runtime.readLegacySnapshot(', 'runtime.ingestLegacySnapshot(']],
   ['src/jobs/ingest-erp5-source.ts', ['readRuntime.capture(', 'writeRuntime.ingestRawBatch(']],
   ['src/jobs/ingest-settlement-source.ts', ['runtime.ingestRawBatch(']],
-  ['src/jobs/ingest-iancar-policy-source.ts', ['runtime.ingestRawBatch(']],
   ['src/jobs/inspect-erp5-source.ts', ['runtime.capture(']],
   ['src/jobs/prepare-sheet-publication-bridge.ts', ['runtime.prepare(']],
   ['src/jobs/record-sheet-delivery-evidence.ts', ['runtime.record(']],
@@ -119,6 +120,9 @@ const requiredGatewayUsage = new Map([
   ['src/jobs/check-consumer-health.ts', ['runtime.health(']],
   ['src/jobs/check-consumer-readiness.ts', ['runtime.readiness(']],
   ['src/jobs/check-central-firestore.ts', ['runtime.access.read(']],
+  ['src/jobs/ingest-iancar-policy-source.ts', ['runtime.ingestRawBatch(']],
+  ['src/jobs/apply-autoplus-policy-repair.ts', ['runtime.access.write(']],
+  ['src/jobs/apply-billincar-policy-repair.ts', ['runtime.access.write(']],
   ['src/jobs/apply-vehicle-name-reference-repair.ts', ['runtime.access.write(']]
 ]);
 for (const [relativeFile, required] of requiredGatewayUsage) {

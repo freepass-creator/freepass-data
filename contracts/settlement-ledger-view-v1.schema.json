@@ -30,6 +30,7 @@
   "$defs": {
     "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "nullableString": { "type": ["string", "null"] },
+    "nullableDate": { "anyOf": [{ "type": "string", "format": "date" }, { "type": "null" }] },
     "nullableNumber": { "type": ["number", "null"] },
     "nullableBoolean": { "type": ["boolean", "null"] },
     "record": {
@@ -44,7 +45,7 @@
           "required": ["vehicleNumber", "receivedAt"],
           "properties": {
             "vehicleNumber": { "$ref": "#/$defs/nullableString" },
-            "receivedAt": { "$ref": "#/$defs/nullableString" }
+            "receivedAt": { "$ref": "#/$defs/nullableDate" }
           }
         },
         "contract": {
@@ -79,13 +80,13 @@
           "properties": {
             "contractDocumentReceived": { "$ref": "#/$defs/nullableBoolean" },
             "delivered": { "$ref": "#/$defs/nullableBoolean" },
-            "deliveredAt": { "$ref": "#/$defs/nullableString" },
+            "deliveredAt": { "$ref": "#/$defs/nullableDate" },
             "cancelled": { "$ref": "#/$defs/nullableBoolean" },
             "billed": { "$ref": "#/$defs/nullableBoolean" },
             "billingMonth": { "$ref": "#/$defs/nullableString" },
-            "billedAt": { "$ref": "#/$defs/nullableString" },
+            "billedAt": { "$ref": "#/$defs/nullableDate" },
             "invoiceIssued": { "$ref": "#/$defs/nullableBoolean" },
-            "invoiceAt": { "$ref": "#/$defs/nullableString" },
+            "invoiceAt": { "$ref": "#/$defs/nullableDate" },
             "collected": { "$ref": "#/$defs/nullableBoolean" },
             "collectedAmount": { "$ref": "#/$defs/nullableNumber" },
             "paid": { "$ref": "#/$defs/nullableBoolean" },

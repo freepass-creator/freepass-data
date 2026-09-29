@@ -100,6 +100,9 @@ export function buildMonthlyRentModifiers(policy?: Policy): MonthlyRentModifier[
   ] as const;
   const out: MonthlyRentModifier[] = [];
   for (const [key, dimension, unit] of specs) {
+    if (key === 'age_lowering_cost' && numberFromPolicy(policy.facts.driver_age_lowering) === undefined) {
+      continue;
+    }
     const rawValue = policyScalar(policy.facts[key]);
     if (rawValue === undefined) continue;
     out.push({ key, dimension, target: 'MONTHLY_RENT', cadence: 'MONTHLY', unit, rawValue });

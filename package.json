@@ -21,11 +21,12 @@
     "data:catalog": "tsx src/jobs/query-data-catalog.ts",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "check": "npm run check:arch && npm run check:data-access-boundary && npm run check:sheets && npm run build && npm run test:read-runtime-smoke && npm run test:shadow && npm run test:dashboard && npm test",
+    "check": "npm run check:arch && npm run check:standards && npm run check:data-access-boundary && npm run check:sheets && npm run build && npm run test:read-runtime-smoke && npm run test:shadow && npm run test:dashboard && npm test",
     "test:dashboard": "node --test tests/dashboard-authority.node.mjs && node --test --experimental-test-module-mocks tests/dashboard-api.node.mjs",
     "check:sheets": "node --test tests/sheet-presentation.node.mjs tests/sheet-presentation-online.node.mjs",
     "sheets:plan": "node scripts/sheet-presentation.mjs",
     "check:arch": "node scripts/check-architecture.mjs",
+    "check:standards": "node scripts/check-standards-conformance.mjs && node --test tests/standards-conformance.node.mjs",
     "test:read-runtime-smoke": "node --test tests/read-runtime-smoke.node.mjs",
     "prepare:sheet-bridge": "tsx src/jobs/prepare-sheet-publication-bridge.ts",
     "check:data-access-boundary": "node scripts/check-data-access-boundary.mjs",
@@ -46,6 +47,8 @@
     "promote:vehicle-master-canonical": "tsx src/jobs/promote-vehicle-master-canonical.ts",
     "audit:vehicle-name-parity": "tsx src/jobs/audit-vehicle-name-reference-parity.ts",
     "repair:vehicle-name-parity": "tsx src/jobs/apply-vehicle-name-reference-repair.ts",
+    "repair:autoplus-policy": "tsx src/jobs/apply-autoplus-policy-repair.ts",
+    "repair:billincar-policy": "tsx src/jobs/apply-billincar-policy-repair.ts",
     "ingest:iancar-policy-source": "tsx src/jobs/ingest-iancar-policy-source.ts"
   },
   "dependencies": {

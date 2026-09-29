@@ -479,7 +479,8 @@
           "type": "string"
         },
         "generatedAt": {
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         }
       },
       "additionalProperties": true

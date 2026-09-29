@@ -21,6 +21,8 @@ jobs:
       - run: npm ci
       - name: Architecture guard
         run: npm run check:arch
+      - name: Standards conformance
+        run: npm run check:standards
       - name: Data access boundary
         run: npm run check:data-access-boundary
       - name: Sheet contract tests
