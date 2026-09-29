@@ -2,6 +2,13 @@ name: Deploy FreePass Data Admin runtime
 
 on:
   workflow_dispatch:
+    inputs:
+      write_mode:
+        description: Keep off for staging; use on only for the already-authorized Admin writer path
+        required: true
+        default: 'off'
+        type: choice
+        options: ['off', 'on']
 
 concurrency:
   group: freepass-data-admin-runtime-deploy
@@ -22,6 +29,8 @@ jobs:
       ARTIFACT_REPOSITORY: ${{ vars.FREEPASS_DATA_ARTIFACT_REPOSITORY }}
       RUNTIME_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_ADMIN_RUNTIME_SERVICE_ACCOUNT }}
       CONSUMERS_SECRET_NAME: ${{ vars.FREEPASS_DATA_ADMIN_CONSUMERS_SECRET_NAME }}
+      CONSUMERS_SECRET_VERSION: ${{ vars.FREEPASS_DATA_ADMIN_CONSUMERS_SECRET_VERSION }}
+      WRITE_MODE: ${{ inputs.write_mode }}
 
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +46,9 @@ jobs:
           test -n "$ARTIFACT_REPOSITORY"
           test -n "$RUNTIME_SERVICE_ACCOUNT"
           test -n "$CONSUMERS_SECRET_NAME"
+          [[ "$CONSUMERS_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
+          [[ "$WRITE_MODE" == "off" || "$WRITE_MODE" == "on" ]]
+          test "$GITHUB_REF" = 'refs/heads/main'
 
       - name: Authenticate deploy identity
         uses: google-github-actions/auth@v2
@@ -76,28 +88,49 @@ jobs:
             docker build --pull --tag "$image" .
             docker push "$image"
           fi
+          digest="$(gcloud artifacts docker images describe "$image" --project="$PROJECT_ID" --format='value(image_summary.digest)')"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+          echo "IMAGE_REF=$image@$digest" >> "$GITHUB_ENV"
 
-      - name: Deploy private Admin service with writes closed
+      - name: Deploy private Admin service
         shell: bash
         run: |
           set -euo pipefail
-          gcloud run deploy "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --platform=managed             --image="$IMAGE"             --service-account="$RUNTIME_SERVICE_ACCOUNT"             --ingress=all             --no-allow-unauthenticated             --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5,FREEPASS_DATA_ADMIN_WORKFLOW_WRITE=off"             --set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:latest"             --quiet
+          gcloud run deploy "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --platform=managed             --image="$IMAGE_REF"             --service-account="$RUNTIME_SERVICE_ACCOUNT"             --ingress=all             --no-allow-unauthenticated             --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5,FREEPASS_DATA_ADMIN_WORKFLOW_WRITE=$WRITE_MODE"             --set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:$CONSUMERS_SECRET_VERSION"             --quiet
 
       - name: Verify service readiness metadata
         shell: bash
         run: |
           set -euo pipefail
-          url="$(gcloud run services describe "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --format='value(status.url)')"
-          ready="$(gcloud run services describe "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --format='value(status.conditions[0].status)')"
+          service_json="$(gcloud run services describe "$SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format=json)"
+          url="$(jq -r '.status.url // empty' <<<"$service_json")"
+          ready="$(jq -r '[.status.conditions[] | select(.type == "Ready")][0].status // empty' <<<"$service_json")"
+          revision="$(jq -r '.status.latestReadyRevisionName // empty' <<<"$service_json")"
+          service_account="$(jq -r '.spec.template.spec.serviceAccountName // empty' <<<"$service_json")"
+          write_mode="$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "FREEPASS_DATA_ADMIN_WORKFLOW_WRITE") | .value' <<<"$service_json")"
+          secret_version="$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "FREEPASS_DATA_CONSUMERS_JSON") | .valueFrom.secretKeyRef.key' <<<"$service_json")"
+          deployed_image="$(jq -r '.spec.template.spec.containers[0].image // empty' <<<"$service_json")"
+          latest_traffic="$(jq -r --arg revision "$revision" '[.status.traffic[] | select(.revisionName == $revision)] | (length == 1 and .[0].percent == 100)' <<<"$service_json")"
+          policy="$(gcloud run services get-iam-policy "$SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format=json)"
           test -n "$url"
           test "$ready" = "True"
+          test "$service_account" = "$RUNTIME_SERVICE_ACCOUNT"
+          test "$write_mode" = "$WRITE_MODE"
+          test "$secret_version" = "$CONSUMERS_SECRET_VERSION"
+          test "$deployed_image" = "$IMAGE_REF"
+          test "$latest_traffic" = "true"
+          ! jq -e '[.bindings[]?.members[]?] | any(. == "allUsers" or . == "allAuthenticatedUsers")' <<<"$policy" >/dev/null
           {
             echo '## FreePass Data Admin runtime deployed'
             echo
             echo "Service: $SERVICE_NAME"
             echo "Region: $REGION"
             echo "URL: $url"
-            echo "Image: $IMAGE"
+            echo "Image: $IMAGE_REF"
+            echo "Revision: $revision"
+            echo "Write mode: $WRITE_MODE"
+            echo "Secret version: $CONSUMERS_SECRET_VERSION"
             echo
-            echo 'Writes remain OFF. Next: configure Admin caller OIDC + consumer token, verify readback, then explicitly approve write activation.'
+            echo 'The requested write mode was read back from the Ready revision. Consumer tokens are never recorded.'
           } >> "$GITHUB_STEP_SUMMARY"

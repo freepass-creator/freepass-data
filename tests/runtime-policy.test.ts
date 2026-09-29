@@ -51,6 +51,24 @@ describe('API runtime boundary', () => {
     expect(workflow).toContain('.data.products | type == "object"');
     expect(workflow).toContain('Authenticated compatibility readback failed: HTTP $authenticated_status / $response_code');
     expect(workflow).toContain('READ_RUNTIME_READBACK_OK=true');
+    expect(workflow).toContain("test \"$GITHUB_REF\" = 'refs/heads/main'");
+    expect(workflow).toContain('--image="$IMAGE_REF"');
+    expect(workflow).toContain('test "$deployed_image" = "$IMAGE_REF"');
+    expect(workflow).toContain('test "$secret_version" = "$CONSUMERS_SECRET_VERSION"');
+    expect(workflow).toContain('test "$latest_traffic" = "true"');
+    expect(workflow).not.toContain('$CONSUMERS_SECRET_NAME:latest');
+  });
+  it('Admin deployment makes write authority explicit and pins immutable runtime inputs', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-admin-runtime.yml', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(workflow).toContain("default: 'off'");
+    expect(workflow).toContain("test \"$GITHUB_REF\" = 'refs/heads/main'");
+    expect(workflow).toContain('--image="$IMAGE_REF"');
+    expect(workflow).toContain('FREEPASS_DATA_ADMIN_WORKFLOW_WRITE=$WRITE_MODE');
+    expect(workflow).toContain('test "$write_mode" = "$WRITE_MODE"');
+    expect(workflow).toContain('test "$secret_version" = "$CONSUMERS_SECRET_VERSION"');
+    expect(workflow).toContain('test "$latest_traffic" = "true"');
+    expect(workflow).not.toContain('$CONSUMERS_SECRET_NAME:latest');
   });
   it('Estimate writer deployment stays separate, immutable, private and write-disabled by default', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-estimate-writer-runtime.yml', import.meta.url), 'utf8')
