@@ -52,6 +52,24 @@ describe('API runtime boundary', () => {
     expect(workflow).toContain('Authenticated compatibility readback failed: HTTP $authenticated_status / $response_code');
     expect(workflow).toContain('READ_RUNTIME_READBACK_OK=true');
   });
+  it('Estimate writer deployment stays separate, immutable, private and write-disabled by default', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-estimate-writer-runtime.yml', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(workflow).toContain("default: 'off'");
+    expect(workflow).toContain("test \"$GITHUB_REF\" = 'refs/heads/main'");
+    expect(workflow).toContain('test "$SERVICE_NAME" != "$READ_SERVICE_NAME"');
+    expect(workflow).toContain('test "$RUNTIME_SERVICE_ACCOUNT" != "$READ_RUNTIME_SERVICE_ACCOUNT"');
+    expect(workflow).toContain('length == 1');
+    expect(workflow).toContain('.[0].id == "freepass-estimate"');
+    expect(workflow).toContain('test "$runtime_roles" = "$WRITER_IAM_ROLE"');
+    expect(workflow).toContain('test -z "$caller_roles"');
+    expect(workflow).toContain('--image="$IMAGE_REF"');
+    expect(workflow).toContain('test "$deployed_image" = "$IMAGE_REF"');
+    expect(workflow).toContain('test "$latest_traffic" = "true"');
+    expect(workflow).toContain('id_token_audience: ${{ steps.readiness.outputs.url }}');
+    expect(workflow).toContain('.code == "ESTIMATE_ARTIFACT_WRITE_DISABLED"');
+    expect(workflow).not.toContain('$CONSUMERS_SECRET_NAME:latest');
+  });
   it('the production container starts the compiled consumer entrypoint', () => {
     const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8')
       .replace(/\r\n/g, '\n');

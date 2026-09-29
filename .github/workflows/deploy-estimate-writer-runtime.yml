@@ -1,0 +1,245 @@
+name: Deploy FreePass Data Estimate writer runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      write_mode:
+        description: Keep off for staging; use on only after authenticated canary approval
+        required: true
+        default: 'off'
+        type: choice
+        options: ['off', 'on']
+
+concurrency:
+  group: freepass-data-estimate-writer-runtime-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PROJECT_ID: freepasserp5
+      REGION: ${{ vars.FREEPASS_DATA_ESTIMATE_WRITER_REGION }}
+      SERVICE_NAME: ${{ vars.FREEPASS_DATA_ESTIMATE_WRITER_SERVICE_NAME }}
+      ARTIFACT_REPOSITORY: ${{ vars.FREEPASS_DATA_ARTIFACT_REPOSITORY }}
+      RUNTIME_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_ESTIMATE_WRITER_RUNTIME_SERVICE_ACCOUNT }}
+      CONSUMERS_SECRET_NAME: ${{ vars.FREEPASS_DATA_ESTIMATE_WRITER_CONSUMERS_SECRET_NAME }}
+      CONSUMERS_SECRET_VERSION: ${{ vars.FREEPASS_DATA_ESTIMATE_WRITER_CONSUMERS_SECRET_VERSION }}
+      WRITE_MODE: ${{ inputs.write_mode }}
+      READ_SERVICE_NAME: ${{ vars.FREEPASS_DATA_READ_SERVICE_NAME }}
+      READ_RUNTIME_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_RUNTIME_SERVICE_ACCOUNT }}
+      READ_CONSUMERS_SECRET_NAME: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_NAME }}
+      ADMIN_SERVICE_NAME: ${{ vars.FREEPASS_DATA_ADMIN_SERVICE_NAME }}
+      ADMIN_RUNTIME_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_ADMIN_RUNTIME_SERVICE_ACCOUNT }}
+      ADMIN_CONSUMERS_SECRET_NAME: ${{ vars.FREEPASS_DATA_ADMIN_CONSUMERS_SECRET_NAME }}
+      WRITER_IAM_ROLE: ${{ vars.FREEPASS_DATA_ESTIMATE_WRITER_IAM_ROLE }}
+      ESTIMATE_CALLER_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_ESTIMATE_CALLER_SERVICE_ACCOUNT }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail closed until bootstrap is complete
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n '${{ vars.FREEPASS_DATA_DEPLOY_WIF_PROVIDER }}'
+          test -n '${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}'
+          test -n "$REGION"
+          test -n "$SERVICE_NAME"
+          test -n "$ARTIFACT_REPOSITORY"
+          test -n "$RUNTIME_SERVICE_ACCOUNT"
+          test -n "$CONSUMERS_SECRET_NAME"
+          test -n "$READ_SERVICE_NAME"
+          test -n "$READ_RUNTIME_SERVICE_ACCOUNT"
+          test -n "$READ_CONSUMERS_SECRET_NAME"
+          test -n "$ADMIN_SERVICE_NAME"
+          test -n "$ADMIN_RUNTIME_SERVICE_ACCOUNT"
+          test -n "$ADMIN_CONSUMERS_SECRET_NAME"
+          test -n "$WRITER_IAM_ROLE"
+          test -n "$ESTIMATE_CALLER_SERVICE_ACCOUNT"
+          [[ "$CONSUMERS_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
+          [[ "$WRITE_MODE" == "off" || "$WRITE_MODE" == "on" ]]
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$SERVICE_NAME" != "$READ_SERVICE_NAME"
+          test "$SERVICE_NAME" != "$ADMIN_SERVICE_NAME"
+          test "$RUNTIME_SERVICE_ACCOUNT" != "$READ_RUNTIME_SERVICE_ACCOUNT"
+          test "$RUNTIME_SERVICE_ACCOUNT" != "$ADMIN_RUNTIME_SERVICE_ACCOUNT"
+          test "$RUNTIME_SERVICE_ACCOUNT" != "$ESTIMATE_CALLER_SERVICE_ACCOUNT"
+          test "$RUNTIME_SERVICE_ACCOUNT" != '${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}'
+          test "$ESTIMATE_CALLER_SERVICE_ACCOUNT" != "$READ_RUNTIME_SERVICE_ACCOUNT"
+          test "$ESTIMATE_CALLER_SERVICE_ACCOUNT" != "$ADMIN_RUNTIME_SERVICE_ACCOUNT"
+          test "$CONSUMERS_SECRET_NAME" != "$READ_CONSUMERS_SECRET_NAME"
+          test "$CONSUMERS_SECRET_NAME" != "$ADMIN_CONSUMERS_SECRET_NAME"
+
+      - name: Authenticate deploy identity
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.FREEPASS_DATA_DEPLOY_WIF_PROVIDER }}
+          service_account: ${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: '579.0.0'
+
+      - name: Verify dedicated Estimate-only consumer secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          bindings="$(gcloud secrets versions access "$CONSUMERS_SECRET_VERSION" \
+            --project="$PROJECT_ID" --secret="$CONSUMERS_SECRET_NAME")"
+          jq -e '
+            length == 1 and
+            .[0].id == "freepass-estimate" and
+            .[0].projectionId == "estimate-newcar-master" and
+            (.[0].token | type == "string" and length >= 32) and
+            (.[0].capabilities | sort == ["estimate-artifacts", "estimate-newcar-master"])
+          ' <<<"$bindings" >/dev/null
+
+      - name: Verify required APIs are already enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          enabled="$(gcloud services list --enabled --project="$PROJECT_ID" --format='value(config.name)')"
+          for api in run.googleapis.com artifactregistry.googleapis.com iamcredentials.googleapis.com sts.googleapis.com secretmanager.googleapis.com; do
+            grep -qx "$api" <<<"$enabled" || {
+              echo "::error::Required API is not enabled: $api"
+              exit 1
+            }
+          done
+
+      - name: Build immutable container
+        shell: bash
+        run: |
+          set -euo pipefail
+          registry="$REGION-docker.pkg.dev"
+          image="$registry/$PROJECT_ID/$ARTIFACT_REPOSITORY/freepass-data-estimate-writer:$GITHUB_SHA"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+          if gcloud artifacts docker images describe "$image" \
+            --project="$PROJECT_ID" --format='value(image_summary.digest)' | grep -q '^sha256:'; then
+            echo "Reusing existing immutable image for $GITHUB_SHA"
+          else
+            gcloud auth configure-docker "$registry" --quiet
+            docker build --pull --tag "$image" .
+            docker push "$image"
+          fi
+          digest="$(gcloud artifacts docker images describe "$image" --project="$PROJECT_ID" --format='value(image_summary.digest)')"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+          echo "IMAGE_REF=$image@$digest" >> "$GITHUB_ENV"
+
+      - name: Deploy private Estimate writer service
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$SERVICE_NAME" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --platform=managed \
+            --image="$IMAGE_REF" \
+            --service-account="$RUNTIME_SERVICE_ACCOUNT" \
+            --ingress=all \
+            --max-instances=5 \
+            --no-allow-unauthenticated \
+            --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5,FREEPASS_DATA_ESTIMATE_ARTIFACT_WRITE=$WRITE_MODE" \
+            --set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:$CONSUMERS_SECRET_VERSION" \
+            --quiet
+
+      - name: Verify exact runtime boundary
+        id: readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          service_json="$(gcloud run services describe "$SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format=json)"
+          url="$(jq -r '.status.url // empty' <<<"$service_json")"
+          ready="$(jq -r '[.status.conditions[] | select(.type == "Ready")][0].status // empty' <<<"$service_json")"
+          revision="$(jq -r '.status.latestReadyRevisionName // empty' <<<"$service_json")"
+          service_account="$(jq -r '.spec.template.spec.serviceAccountName // empty' <<<"$service_json")"
+          write_mode="$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "FREEPASS_DATA_ESTIMATE_ARTIFACT_WRITE") | .value' <<<"$service_json")"
+          secret_version="$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "FREEPASS_DATA_CONSUMERS_JSON") | .valueFrom.secretKeyRef.key' <<<"$service_json")"
+          secret_name="$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "FREEPASS_DATA_CONSUMERS_JSON") | .valueFrom.secretKeyRef.name' <<<"$service_json")"
+          deployed_image="$(jq -r '.spec.template.spec.containers[0].image // empty' <<<"$service_json")"
+          latest_traffic="$(jq -r --arg revision "$revision" '[.status.traffic[] | select(.revisionName == $revision)] | (length == 1 and .[0].percent == 100)' <<<"$service_json")"
+          policy="$(gcloud run services get-iam-policy "$SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format=json)"
+          test -n "$url"
+          test "$ready" = "True"
+          test -n "$revision"
+          test "$service_account" = "$RUNTIME_SERVICE_ACCOUNT"
+          test "$write_mode" = "$WRITE_MODE"
+          test "$secret_version" = "$CONSUMERS_SECRET_VERSION"
+          test "$secret_name" = "$CONSUMERS_SECRET_NAME"
+          test "$deployed_image" = "$IMAGE_REF"
+          test "$latest_traffic" = "true"
+          ! jq -e '[.bindings[]?.members[]?] | any(. == "allUsers" or . == "allAuthenticatedUsers")' <<<"$policy" >/dev/null
+          invokers="$(jq -r '.bindings[] | select(.role == "roles/run.invoker") | .members[]?' <<<"$policy" | sort -u)"
+          grep -qx "serviceAccount:$ESTIMATE_CALLER_SERVICE_ACCOUNT" <<<"$invokers"
+          grep -qx "serviceAccount:${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}" <<<"$invokers"
+          while IFS= read -r member; do
+            test -z "$member" && continue
+            [[ "$member" == "serviceAccount:$ESTIMATE_CALLER_SERVICE_ACCOUNT" || "$member" == "serviceAccount:${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}" ]]
+          done <<<"$invokers"
+
+          role_id="${WRITER_IAM_ROLE##*/}"
+          role_permissions="$(gcloud iam roles describe "$role_id" --project="$PROJECT_ID" --format='value(includedPermissions)' | tr ';' '\n' | sort -u)"
+          expected_permissions=$'datastore.entities.create\ndatastore.entities.get\ndatastore.entities.list\ndatastore.entities.update'
+          test "$role_permissions" = "$expected_permissions"
+          project_policy="$(gcloud projects get-iam-policy "$PROJECT_ID" --format=json)"
+          runtime_roles="$(jq -r --arg member "serviceAccount:$RUNTIME_SERVICE_ACCOUNT" '.bindings[] | select(any(.members[]?; . == $member)) | .role' <<<"$project_policy" | sort -u)"
+          test "$runtime_roles" = "$WRITER_IAM_ROLE"
+          caller_roles="$(jq -r --arg member "serviceAccount:$ESTIMATE_CALLER_SERVICE_ACCOUNT" '.bindings[] | select(any(.members[]?; . == $member)) | .role' <<<"$project_policy" | sort -u)"
+          test -z "$caller_roles"
+          unauthenticated_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$url/health")"
+          test "$unauthenticated_status" = "403"
+          echo "ESTIMATE_WRITER_DEPLOYED_URL=$url" >> "$GITHUB_ENV"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          {
+            echo '## FreePass Data Estimate writer runtime'
+            echo
+            echo "- service: $SERVICE_NAME"
+            echo "- revision: $revision"
+            echo "- image: $IMAGE"
+            echo "- image digest: $IMAGE_DIGEST"
+            echo "- write mode: $WRITE_MODE"
+            echo "- secret version: $CONSUMERS_SECRET_VERSION"
+            echo "- unauthenticated health: $unauthenticated_status"
+            echo
+            echo 'Consumer tokens and credential values are never recorded.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Authenticate private writer verification
+        if: inputs.write_mode == 'off'
+        id: writer-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.FREEPASS_DATA_DEPLOY_WIF_PROVIDER }}
+          service_account: ${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.readiness.outputs.url }}
+
+      - name: Prove staged writer remains disabled
+        if: inputs.write_mode == 'off'
+        env:
+          CLOUD_RUN_ID_TOKEN: ${{ steps.writer-auth.outputs.id_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer_token="$(gcloud secrets versions access "$CONSUMERS_SECRET_VERSION" \
+            --project="$PROJECT_ID" --secret="$CONSUMERS_SECRET_NAME" \
+            | jq -er '.[] | select(.id == "freepass-estimate") | .token')"
+          echo "::add-mask::$consumer_token"
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+          status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' \
+            --request POST \
+            --header "X-Serverless-Authorization: Bearer $CLOUD_RUN_ID_TOKEN" \
+            --header "Authorization: Bearer $consumer_token" \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            "$ESTIMATE_WRITER_DEPLOYED_URL/v1/commands/freepass-estimate/issued-quotes")"
+          test "$status" = "503"
+          jq -e '.code == "ESTIMATE_ARTIFACT_WRITE_DISABLED"' "$response_file" >/dev/null
