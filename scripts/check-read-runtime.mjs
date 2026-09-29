@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 const required = (name) => {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
@@ -10,6 +12,18 @@ const consumerToken = required('READ_RUNTIME_TOKEN');
 const cloudRunIdToken = process.env.READ_RUNTIME_CLOUD_RUN_ID_TOKEN;
 const allowDegraded = process.env.READ_RUNTIME_ALLOW_DEGRADED === '1';
 const checkCatalog = process.env.READ_RUNTIME_CHECK_CATALOG === '1';
+const healthContract = JSON.parse(await readFile(
+  new URL('../contracts/catalog-data-health-v1.schema.json', import.meta.url),
+  'utf8'
+));
+const expectedHealthContractVersion = healthContract?.properties?.contractVersion?.const;
+const expectedHealthSchemaVersion = healthContract?.properties?.schemaVersion?.const;
+if (
+  typeof expectedHealthContractVersion !== 'string' || !expectedHealthContractVersion ||
+  typeof expectedHealthSchemaVersion !== 'string' || !expectedHealthSchemaVersion
+) {
+  throw new Error('Catalog Health schema has no fixed contract identity');
+}
 
 const headers = {
   Authorization: `Bearer ${consumerToken}`,
@@ -44,8 +58,8 @@ const health = await request(healthPath);
 
 if (
   !health.body ||
-  health.body.contractVersion !== 'catalog-data-health-v1' ||
-  health.body.schemaVersion !== '1.0.0'
+  health.body.contractVersion !== expectedHealthContractVersion ||
+  health.body.schemaVersion !== expectedHealthSchemaVersion
 ) {
   throw new Error(
     `Unexpected Health response contract: HTTP ${health.response.status}`

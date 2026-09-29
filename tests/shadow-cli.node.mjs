@@ -1,10 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+
+const healthContract = JSON.parse(await readFile(
+  new URL('../contracts/catalog-data-health-v1.schema.json', import.meta.url),
+  'utf8'
+));
+const healthContractVersion = healthContract.properties.contractVersion.const;
+const healthSchemaVersion = healthContract.properties.schemaVersion.const;
 
 function run(script, env) {
   return new Promise((resolve, reject) => {
@@ -132,8 +139,8 @@ test('cutover readiness CLI returns GO/HOLD from evidence summaries', async () =
     const shadowPath = path.join(dir, 'shadow.json');
 
     const healthy = {
-      contractVersion: 'catalog-data-health-v1',
-      schemaVersion: '1.0.0',
+      contractVersion: healthContractVersion,
+      schemaVersion: healthSchemaVersion,
       generatedAt: '2026-09-21T12:00:00.000Z',
       status: 'HEALTHY',
       observation: { projectionEvidenceConsistency: 'ATOMIC' },
@@ -236,7 +243,7 @@ test('cutover readiness fails closed on invalid evidence contracts', async () =>
     const shadowPath = path.join(dir, 'shadow.json');
     await writeFile(healthPath, JSON.stringify({
       contractVersion: 'wrong',
-      schemaVersion: '1.0.0',
+      schemaVersion: healthSchemaVersion,
       status: 'HEALTHY'
     }));
     await writeFile(shadowPath, JSON.stringify({ verdict: 'PASS' }));
@@ -247,6 +254,18 @@ test('cutover readiness fails closed on invalid evidence contracts', async () =>
     });
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /Unsupported Health evidence contract/);
+
+    await writeFile(healthPath, JSON.stringify({
+      contractVersion: healthContractVersion,
+      schemaVersion: '1.0.0',
+      status: 'HEALTHY'
+    }));
+    const retired = await run('scripts/assess-cutover-readiness.mjs', {
+      CUTOVER_HEALTH_JSON: healthPath,
+      CUTOVER_SHADOW_JSON: shadowPath
+    });
+    assert.notEqual(retired.code, 0);
+    assert.match(retired.stderr, /Unsupported Health evidence contract/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -258,8 +277,8 @@ test('cutover readiness rejects a PASS verdict that contradicts parity evidence'
     const healthPath = path.join(dir, 'health.json');
     const shadowPath = path.join(dir, 'shadow.json');
     await writeFile(healthPath, JSON.stringify({
-      contractVersion: 'catalog-data-health-v1',
-      schemaVersion: '1.0.0',
+      contractVersion: healthContractVersion,
+      schemaVersion: healthSchemaVersion,
       generatedAt: '2026-09-21T12:00:00.000Z',
       status: 'HEALTHY',
       observation: { projectionEvidenceConsistency: 'ATOMIC' },
