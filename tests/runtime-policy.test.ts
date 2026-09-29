@@ -62,6 +62,8 @@ describe('API runtime boundary', () => {
     expect(workflow).toContain('length == 1');
     expect(workflow).toContain('.[0].id == "freepass-estimate"');
     expect(workflow).toContain('test "$runtime_roles" = "$WRITER_IAM_ROLE"');
+    expect(workflow).toContain('test "$writer_role_members" = "serviceAccount:$RUNTIME_SERVICE_ACCOUNT"');
+    expect(workflow).toContain("expected_permissions=$'datastore.databases.get\\ndatastore.entities.create\\ndatastore.entities.get\\ndatastore.entities.list\\ndatastore.entities.update'");
     expect(workflow).toContain('test -z "$caller_roles"');
     expect(workflow).toContain('--image="$IMAGE_REF"');
     expect(workflow).toContain('test "$deployed_image" = "$IMAGE_REF"');
