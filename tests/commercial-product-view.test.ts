@@ -91,6 +91,16 @@ describe('product condition preview', () => {
     ]);
   });
 
+  it('does not expose an age-lowering charge when age lowering is unavailable', () => {
+    const unavailablePolicy: Policy = {
+      ...policy,
+      facts: { ...policy.facts, driver_age_lowering: '불가', age_lowering_cost: '10만원' },
+    };
+    const view = buildCommercialProductView({ product, vehicleModel: model, vehicleAsset: asset, offer, policy: unavailablePolicy });
+    expect(view.conditionProfile.monthlyRentModifiers.map((item) => item.key)).not.toContain('age_lowering_cost');
+    expect(view.pricingBasis[0]?.conditionScope.driverAge).not.toHaveProperty('lowerableToAge');
+  });
+
   it('shows ERP default price only after applying explicit default conditions', () => {
     const view = buildCommercialProductView({ product, vehicleModel: model, vehicleAsset: asset, offer, policy });
     expect(view.conditionProfile.defaults).toEqual({
