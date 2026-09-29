@@ -68,6 +68,15 @@ describe('API runtime boundary', () => {
     expect(workflow).toContain('test "$latest_traffic" = "true"');
     expect(workflow).toContain('id_token_audience: ${{ steps.readiness.outputs.url }}');
     expect(workflow).toContain('.code == "ESTIMATE_ARTIFACT_WRITE_DISABLED"');
+    expect(workflow).toContain("if: inputs.write_mode == 'on'");
+    expect(workflow).toContain('npm run --silent probe:estimate-writer-canary');
+    expect(workflow).not.toContain('npx tsx src/jobs/probe-estimate-writer-canary.ts');
+    expect(workflow).toContain('github-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}');
+    expect(workflow).toContain("jq -e '.status == \"PASS\"'");
+    expect(workflow).toContain("if: ${{ inputs.write_mode == 'on' && (failure() || cancelled()) }}");
+    expect(workflow).toContain('--update-env-vars="FREEPASS_DATA_ESTIMATE_ARTIFACT_WRITE=off"');
+    expect(workflow).toContain('test "$write_mode" = "off"');
+    expect(workflow).toContain('test "$latest_traffic" = "true"');
     expect(workflow).not.toContain('$CONSUMERS_SECRET_NAME:latest');
   });
   it('the production container starts the compiled consumer entrypoint', () => {
