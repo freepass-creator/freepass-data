@@ -900,3 +900,10 @@ This file exists so another session can continue without re-discovering or re-cr
 - 경계: 정산 사실의 기준은 `FREEPASS_DATA_SETTLEMENT`다. Admin은 승인된 업무 command를 수행하는 애플리케이션이며 별도 정본이 아니다. 소비 앱은 `settlement_rows`를 재계산하거나 두 번째 원장으로 복제하지 않는다. 미입력은 `null`이다.
 - 검증: 최신 `origin/main` 병합 후 `npm run check` 전체 PASS. Vitest 962 PASS / 12 SKIP, Sheets 24 PASS, read-runtime 5 PASS, shadow 10 PASS, dashboard 21 PASS. Claude 독립 검토는 두 차례 응답 없이 대기되어 UNAVAILABLE로 기록한다. 운영 토큰 등록·배포·Kakao Ops 실제 호출은 다음 검증 단계다.
 - next_start_here: `src/domain/settlement-ledger-view.ts` → `src/application/settlement-ledger-view.ts` → `src/api/consumer-gateway.ts` → `tests/settlement-ledger-view.test.ts`.
+# 2026-09-30 공급사 재고 관리 기준
+
+- 목적/변경: 사용자 지시로 직원의 공급사별 차량번호 기반 일일 관리 업무와 시스템 자동 대사·영구 등록대기 요구사항을 `docs/BUSINESS-DATA-CONNECTION-MAP.md`의 「공급사 차량 재고 정합성 관리」에 반영했다.
+- 대상: 현재 origin/main 기반의 문서 변경. 기존 작업 폴더의 미커밋 문서는 보존했다.
+- 검증: 관리 항목 6개, 0대/소규모 포함, 기본연령/하향 분리, 예외 담당자·기한, 원천 성공 시각과 수정 시각 분리, 승인 및 재조회 경계를 확인한다.
+- 남음: 자동 관리 기능 구현·운영 데이터 수정·배포는 이번 문서 저장에 포함되지 않는다.
+- next_start_here: 운영 pin `e6727ff04fcf98380701fa6360c36f313e0e321f`의 `scripts/ingest-supplier-to-firestore.mts` 임시 `tmp/등록대기.json` 경로와 `scripts/ingest-all-suppliers.mts`의 하위 로그 축약부터 검토하여 기존 SourceIngestionStore/원천 영수증 경계에 연결한다. 세 번째 저장 경로를 만들지 않는다.
