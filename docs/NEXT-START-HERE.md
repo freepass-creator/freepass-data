@@ -66,6 +66,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+## 2026-09-30 운영 시트 반영 승인 — ERP 로그인 접근 HOLD
+
+- 사용자 직접 승인: `운영시트도 바꿔 얼른`. 이안카 범위 반영 승인은 받았으며 같은 수정 승인을 다시 요청하지 않는다. Academy operations READY, 대상 `430b43c`.
+- 현재 원본 재조회: `이안카_프리패스`의 `이안카` 60행 / `이안카 재렌트` 59행, 두 탭 metadata/CellData 전체 기존 범위 확인. 수식/chip/dataValidation 0. 실제 status는 배차가능 118 / 상품화 진행중 1. F01 상품리스트 433, F86 이안카 223은 현재 출력이며 원천 정합성 PASS가 아님.
+- 실제 blocker: supplier `/api/inventory` HTTP 403. 기존 연결의 credential은 ERP bridge GitHub secret에만 있으며 이 PC의 process/user/machine env 및 연결 worktree의 정해진 계정 파일에서 찾지 못함. Chrome 신규 supplier 페이지는 로그인 세션 없음. 비밀번호 추출/공개 로그/공개 artifact 우회 금지.
+- 아직 수행하지 않음: 운영 Sheet/Firestore 쓰기, 원본 백업 생성, publisher 재발행. 원본 ERP를 못 읽은 상태에서 새 값이나 출고불가를 추정하지 않았다. 기존 collector의 partial-inventory absence→출고불가 및 clear/rewrite 경로를 그대로 실행하지 않는다.
+- next_start_here: 사용자에게 Chrome supplier 로그인 화면 인계. 로그인 후 인증된 현재 원본을 확보하고 필드·기간·약정거리·관측 범위를 고정 → source/Sheet/중앙 신규·변경 대사 → private backup → 해당 수정 범위만 patch → 중앙/시트/ERP 실제 readback. 쓰기 전에 각 대상 원본을 새로 읽는다. source hostname 이동은 관측 사실이며 credential을 새 host로 전송하기 전 actual endpoint/권한을 검증한다.
+
 ## 2026-09-30 이안카 공급사 ERP 직접 수집 — 운영 전환 미완료
 
 - 목적: 사용자의 ERP 원천 변경 지시를 실행 경로에 반영. Sheet를 재고 원천으로 읽거나 신규 차량을 기존 등록 목록으로 제외하지 않는다.
