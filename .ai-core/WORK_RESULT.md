@@ -1,7 +1,7 @@
 # AI Work Result
 
-- 목적: AI Core 키트 재생성 — 줄끝 정규화·내용 기준 신선도
-- 대상 revision: 5e1be5f3244be6472ce3693fef100c960c227be6
+- 목적: AI Core 키트 v2 — 차단/권고 분리·호환 버전·가지 흐름 경고
+- 대상 revision: 66f9f084f988037cdd0819fde9f7a403c97e8679
 - 변경:
 - 검증:
 - 남음:

@@ -1,6 +1,6 @@
 {
   "schema_version": "1.1",
-  "observed_at": "2026-09-29T15:15:54Z",
+  "observed_at": "2026-09-30T09:01:46Z",
   "projects": [
     {
       "project_id": "ai-core",
@@ -46,13 +46,13 @@
       "repository": "freepass-creator/aiops",
       "default_branch": "main",
       "local_path": "C:\\dev\\aiops",
-      "head_revision": "f54be4cdd46074b7d3ff67f58f960c88fab14be2",
+      "head_revision": "1172539a84c70a00d442ed719800e08b4a2025df",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/aiops",
-          "revision": "f54be4cdd46074b7d3ff67f58f960c88fab14be2",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "1172539a84c70a00d442ed719800e08b4a2025df",
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -84,13 +84,13 @@
       "repository": "freepass-creator/casemap-private",
       "default_branch": "main",
       "local_path": null,
-      "head_revision": "f7c9c212a1d281f410d82d1949db32cf30f5187a",
+      "head_revision": "b2c4d8882eaa403e907c689ff520b202e39a8f36",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/casemap-private",
-          "revision": "f7c9c212a1d281f410d82d1949db32cf30f5187a",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "b2c4d8882eaa403e907c689ff520b202e39a8f36",
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -120,7 +120,7 @@
           "kind": "GIT",
           "ref": "freepass-creator/docshub",
           "revision": "4059d82779b7e1796afa2bbdf644e1d3bbdba3e7",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -152,7 +152,7 @@
           "kind": "GIT",
           "ref": "freepass-creator/fp-settlement",
           "revision": "7b90d04a4461e605e2ac2987f1f9e371c476e176",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -176,13 +176,13 @@
       "repository": "freepass-creator/freepass-admin",
       "default_branch": "main",
       "local_path": null,
-      "head_revision": "932dd42f71d5a33b8794f9523cecff11702eefa1",
+      "head_revision": "711ce0d4805b88ef58c9b64a5ed4bd18744193ee",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/freepass-admin",
-          "revision": "932dd42f71d5a33b8794f9523cecff11702eefa1",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "711ce0d4805b88ef58c9b64a5ed4bd18744193ee",
+          "observed_at": "2026-09-30T09:01:46Z"
         },
         {
           "kind": "GIT",
@@ -219,13 +219,13 @@
       "repository": "freepass-creator/freepass-estimate",
       "default_branch": "main",
       "local_path": null,
-      "head_revision": "5fa8f7f44b9f18dae1261c8f3a49e449701eddbb",
+      "head_revision": "f05c4b997bc6268f5526db74bbc65d0ed7cf0f8e",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/freepass-estimate#main",
-          "revision": "5fa8f7f44b9f18dae1261c8f3a49e449701eddbb",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "f05c4b997bc6268f5526db74bbc65d0ed7cf0f8e",
+          "observed_at": "2026-09-30T09:01:46Z"
         },
         {
           "kind": "GIT",
@@ -260,13 +260,13 @@
       "repository": "freepass-creator/freepasshomepage",
       "default_branch": "main",
       "local_path": null,
-      "head_revision": "5afcdd03f2db7abdf8ee68fde77cdba541f21220",
+      "head_revision": "dbf35c85c48a39a7c6d9b75b1a1e8ad157178918",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/freepasshomepage",
-          "revision": "5afcdd03f2db7abdf8ee68fde77cdba541f21220",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "dbf35c85c48a39a7c6d9b75b1a1e8ad157178918",
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -290,13 +290,13 @@
       "repository": "freepass-creator/freepass-sales",
       "default_branch": "main",
       "local_path": "C:\\dev\\sales",
-      "head_revision": "76dd85abab0ea795a3f58ef48bc32b47beb9c5ad",
+      "head_revision": "5c7cc6a9b3016458705b16624f9024715f291fbe",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/freepass-sales",
-          "revision": "76dd85abab0ea795a3f58ef48bc32b47beb9c5ad",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "5c7cc6a9b3016458705b16624f9024715f291fbe",
+          "observed_at": "2026-09-30T09:01:46Z"
         },
         {
           "kind": "GIT",
@@ -330,13 +330,13 @@
       "repository": "freepass-creator/freepass-data",
       "default_branch": "main",
       "local_path": "C:\\dev\\freepass-data",
-      "head_revision": "5e1be5f3244be6472ce3693fef100c960c227be6",
+      "head_revision": "66f9f084f988037cdd0819fde9f7a403c97e8679",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/freepass-data",
-          "revision": "5e1be5f3244be6472ce3693fef100c960c227be6",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "66f9f084f988037cdd0819fde9f7a403c97e8679",
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -363,13 +363,13 @@
       "repository": "freepass-creator/freepasserp4",
       "default_branch": "main",
       "local_path": "C:\\dev\\freepasserp4",
-      "head_revision": "c860364e523f9265c2b80f44938b4c744c07e15d",
+      "head_revision": "8e5fdc2e2ad1ca2dc35ce09d36fc9a9173058456",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/freepasserp4",
-          "revision": "c860364e523f9265c2b80f44938b4c744c07e15d",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "8e5fdc2e2ad1ca2dc35ce09d36fc9a9173058456",
+          "observed_at": "2026-09-30T09:01:46Z"
         },
         {
           "kind": "GIT",
@@ -441,7 +441,7 @@
           "kind": "GIT",
           "ref": "freepass-creator/sonogong-estimator",
           "revision": "a3627f6e7b8d61f71a83cc7008997b2780522e6f",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -471,7 +471,7 @@
           "kind": "GIT",
           "ref": "freepass-creator/teamjpkwork",
           "revision": "867ebfdc73ea31106fea83c4320e6973e26f1027",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -501,7 +501,7 @@
           "kind": "GIT",
           "ref": "freepass-creator/workcontrol",
           "revision": "71920aa1a9b7f030b931ab4c009f250d66292002",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -526,13 +526,13 @@
       "repository": "freepass-creator/mewcar",
       "default_branch": "main",
       "local_path": "C:\\dev\\mewcar",
-      "head_revision": "c929437dd63ac58b4030a189661abe5ec5a4ff7b",
+      "head_revision": "b8d75b6fad4154c59a8f29aa5045d9fdab7cf782",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/mewcar",
-          "revision": "c929437dd63ac58b4030a189661abe5ec5a4ff7b",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "b8d75b6fad4154c59a8f29aa5045d9fdab7cf782",
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -567,13 +567,13 @@
       "repository": "freepass-creator/welrixtable",
       "default_branch": "main",
       "local_path": null,
-      "head_revision": "f86d2f14e98f386045677ab0a63b42f6f378c4db",
+      "head_revision": "e7010b445ceb52a6b22fd6e64c55b4dd665ab685",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/welrixtable",
-          "revision": "f86d2f14e98f386045677ab0a63b42f6f378c4db",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "e7010b445ceb52a6b22fd6e64c55b4dd665ab685",
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -608,7 +608,7 @@
           "kind": "GIT",
           "ref": "freepass-creator/mewcar-jbwoori-proposal",
           "revision": "3fc11053ed46bfd92165bffd26530006b2de2293",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -641,13 +641,13 @@
         "codex/freepass-data-consumer-20260922"
       ],
       "local_path": "C:\\dev\\kakao-remote",
-      "head_revision": "9495c9f5de7994b68ff8af30f2da36f3b697fe9d",
+      "head_revision": "ce79954be509ab5cfb603e84f83498db3b45f828",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/kakao-ops",
-          "revision": "9495c9f5de7994b68ff8af30f2da36f3b697fe9d",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "ce79954be509ab5cfb603e84f83498db3b45f828",
+          "observed_at": "2026-09-30T09:01:46Z"
         }
       ],
       "commands": {
@@ -674,6 +674,49 @@
         "test": "Deterministic consumer-adapter tests are the next integration change and are not merged yet.",
         "build": "PowerShell and Node.js runtime scripts execute from source without a build artifact."
       }
+    },
+    {
+      "project_id": "renman-data",
+      "name": "Renman Data",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Dedicated Renman data contracts and policy-governed read gateway over teamjpkwork Firestore; preserves source evidence and does not duplicate AI Ops business writers.",
+      "repository": "freepass-creator/renman-data",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\renman-data",
+      "head_revision": "294a36b04bb47db2ece61963024b9d16173fb804",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/renman-data",
+          "revision": "294a36b04bb47db2ece61963024b9d16173fb804",
+          "observed_at": "2026-09-30T09:01:46Z"
+        }
+      ],
+      "commands": {
+        "install": null,
+        "test": "node scripts/renman-source-audit.mjs --test-profile && node --test scripts/renman-read-api.test.mjs scripts/renman-cloud-hub.test.mjs",
+        "build": null
+      },
+      "commands_absent_reason": {
+        "install": "Native Node runtime modules use no third-party package install.",
+        "build": "Container packaging exists; a successful current-revision cloud build has not been verified."
+      },
+      "deploy_targets": [
+        "Cloud Run teamjpkwork/asia-northeast3/renman-data-read"
+      ],
+      "required_approvals": [
+        "production-data-write",
+        "production-deploy",
+        "consumer-permission-change"
+      ],
+      "known_blockers": [
+        "READ_ONLY_DEVELOPMENT_ALLOWED; execution readiness remains HOLD for business-confirmed source publication and production changes.",
+        "Immutable source retention, stable contract mapping, staff confirmation and per-consumer persistent audit remain unimplemented.",
+        "CI deployment was blocked by GitHub billing in the project history; current CI and deployed source revision need independent verification.",
+        "AI Ops owns existing business write paths; this registration does not authorize a second arrears writer or data migration."
+      ]
     }
   ]
 }
