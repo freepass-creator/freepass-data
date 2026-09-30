@@ -452,3 +452,45 @@ export function buildKakaoCatalogReference(input: {
 
 export type KakaoCatalogReference = ReturnType<typeof buildKakaoCatalogReference>;
 export type KakaoCatalogReferenceSource = Parameters<typeof buildKakaoCatalogReference>[0];
+
+/** Internal estimate facts, not an issued settlement or public selling price. */
+export function buildInternalPeriodFees(source: Rec) {
+  const supplierId = text(source.provider_company_code);
+  const price = source.price && typeof source.price === 'object' && !Array.isArray(source.price)
+    ? source.price as Rec : {};
+  const input = {
+    supplierId, productType: text(source.product_type), fuel: text(source.fuel_type),
+    deleted: source._deleted === true,
+    prices: Object.entries(price).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => ({
+      key, rent: value && typeof value === 'object' ? (value as Rec).rent ?? null : null,
+    })),
+  };
+  const priceTerms = input.deleted ? [] : input.prices.map(({ key, rent }) => {
+    const parsed = parseErp5PriceKey(key);
+    const monthlyRent = integer(rent);
+    const valid = Boolean(supplierId && parsed && monthlyRent !== null && monthlyRent > 0);
+    const args = { supplierId, productType: input.productType, fuel: input.fuel,
+      termMonths: parsed?.months ?? 0, monthlyRent: monthlyRent ?? 0 };
+    const resolvedBilling = valid ? resolveSupplierBillingFee(args) : unknownCommission('INVALID_PRICE_TERM_INPUT');
+    const resolvedPayout = valid ? resolveSalesCommission(args) : unknownCommission('INVALID_PRICE_TERM_INPUT');
+    const supplierBillingFee = resolvedBilling.reasonCode === 'NO_MATCHING_RULE' ? unknownCommission('NO_MATCHING_RULE') : resolvedBilling;
+    const channelPayoutFee = resolvedPayout.reasonCode === 'NO_MATCHING_RULE' ? unknownCommission('NO_MATCHING_RULE') : resolvedPayout;
+    return { termKey: `source:${key}`, sourcePriceKey: key, termMonths: parsed?.months ?? null,
+      monthlyRent: monthlyRent === null ? null : { amount: monthlyRent, currency: 'KRW' as const },
+      supplierBillingFee, channelPayoutFee,
+      expectedGrossMargin: resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee) };
+  });
+  return { schema: 'freepass-data.internal-period-fees/v1' as const, supplierId,
+    authority: 'INTERNAL_ESTIMATE_NOT_SETTLEMENT' as const,
+    completeness: !priceTerms.length || priceTerms.some((term) =>
+      ['UNKNOWN', 'COORDINATION_REQUIRED'].includes(term.supplierBillingFee.state) ||
+      ['UNKNOWN', 'COORDINATION_REQUIRED'].includes(term.channelPayoutFee.state)) ? 'HOLD' as const : 'CALCULATED' as const,
+    settlementConditions: supplierId === 'RP023' ? ['3개월 유지 조건 — 환수 있음', '보증금·대여료 회차 완납 후 청구'] : [],
+    inputDigest: hash(JSON.stringify(input)), policyDigest: hash(JSON.stringify(KAKAO_COMMISSION_POLICY)),
+    policy: KAKAO_COMMISSION_POLICY, priceTerms };
+}
+
+export function projectCompatibilityProductFees(source: Rec, internal: boolean): Rec {
+  const { internalPeriodFees: _stored, internalEconomicsTerms: _economics, ...publicSource } = source;
+  return internal ? { ...publicSource, internalPeriodFees: buildInternalPeriodFees(source) } : publicSource;
+}

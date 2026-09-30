@@ -864,3 +864,16 @@ This file exists so another session can continue without re-discovering or re-cr
 - 경계: 정산 사실의 기준은 `FREEPASS_DATA_SETTLEMENT`다. Admin은 승인된 업무 command를 수행하는 애플리케이션이며 별도 정본이 아니다. 소비 앱은 `settlement_rows`를 재계산하거나 두 번째 원장으로 복제하지 않는다. 미입력은 `null`이다.
 - 검증: 최신 `origin/main` 병합 후 `npm run check` 전체 PASS. Vitest 962 PASS / 12 SKIP, Sheets 24 PASS, read-runtime 5 PASS, shadow 10 PASS, dashboard 21 PASS. Claude 독립 검토는 두 차례 응답 없이 대기되어 UNAVAILABLE로 기록한다. 운영 토큰 등록·배포·Kakao Ops 실제 호출은 다음 검증 단계다.
 - next_start_here: `src/domain/settlement-ledger-view.ts` → `src/application/settlement-ledger-view.ts` → `src/api/consumer-gateway.ts` → `tests/settlement-ledger-view.test.ts`.
+# 2026-09-30 기간별 내부 수수료 — 진행 중
+
+- 목적: 공급사별 정본 규칙과 상품 기간별 대여료로 공급사 청구/영업채널 지급/예상 마진 계산. RP023은 기간 무관 1,000,000/800,000원이며 3개월 유지·환수 조건 유지.
+- 대상 revision: origin/main `a49dab2606f1273f5d8ad54c6c012fc8f9ca8549`, branch `work/freepass-data/period-fee-materialization`, isolated worktree `C:/dev/worktrees/freepass-data-period-fees-20260930`.
+- 재사용: COMPOSE_OR_EXTEND, 기존 Kakao 수수료 계산기/compat reader/data access gateway. Academy READY. 별도 계산 엔진/저장소 없음.
+- 변경: `buildInternalPeriodFees`, current-rent admin compatibility enrichment, public internal-field exclusion, dry-run-default `src/jobs/materialize-period-fees.ts`. 저장 대상은 operational products의 `internalPeriodFees` 파생 필드이며 Canonical ACTIVE cutover 또는 확정 정산이 아님.
+- 원본 확인: F04 `1BjGBqAjRLEb9ZMKarpQsMF-q_UjdgmEqBAl1uVk8SR4`, `수수료표` sheetId 1982531660, A1:J152 실조회. 시트 자체가 ERP4 `lib/domain/settlement-fee-table.ts`의 사본이라고 명시. 정액·율·협의 구분 유지.
+- 검증: build/architecture/data-access boundary 통과. 27개 calculator 테스트 통과. 전체 vitest 2 workers 재실행 106 files / 1015 tests PASS, emulator 14 skipped. 최초 full check runtime entrypoint timeout 1건은 단독 및 전체 재실행 PASS.
+- 실제 DRY RUN: 1717 products / 10557 terms. CALCULATED/CALCULATED 2512, COORDINATION_REQUIRED/COORDINATION_REQUIRED 7167, UNKNOWN/UNKNOWN 777, UNKNOWN/CALCULATED 3, NOT_APPLICABLE/NOT_APPLICABLE 98. 숫자 누락을 0으로 보정하지 않음.
+- 독립 검토: Claude 응답/exit0 확인. RP023 100/80와 표준율·정본 revision 일치. 중요한 이견은 운영 products 저장 vs Canonical Offer 저장이며 sourceFingerprint feedback이 실제 코드에 확인됨. public leak 지적은 신규 projector로 해결, price 하위 fee 쓰기는 하지 않음, RP023 환수조건도 내부 snapshot에 추가. supplier binding/EV predicate/digest 범위/정본 writer 경로는 미해결이므로 apply가 `HOLD_PERIOD_FEES_CANONICAL_STORAGE_REVIEW`로 실패하도록 잠금.
+- 남음: 운영 apply/readback 미실행; runtime 미배포; 지속적 source-refresh 적재 실행 연결 미완료. 기존 사용자 dirty tree 보존. 테스트를 저장/배포 완료로 표현하지 말 것.
+- live 확인: canonicalOfferCount=0. 현재 운영 products=1717과 Canonical Offer 사이의 적재/연결이 없는 상태이며, 임의의 두 번째 정본을 만들어 우회하지 않음. 위험한 products backfill 코드는 삭제했고 apply는 명시 HOLD. 최신 dry-run에서 NO_MATCHING_RULE 98개를 UNKNOWN으로 교정하여 UNKNOWN/UNKNOWN=875.
+- next_start_here: `FIREBASE_PROJECT_ID=freepasserp5 npx tsx src/jobs/materialize-period-fees.ts --dry-run`의 canonicalOfferCount와 정본 Offer/source binding 상태 확인. 원천 fingerprint를 변조해 통과시키지 말고 CatalogStore Offer.internalEconomicsTerms 경로 및 rent transaction 재계산으로 연결. supplier binding 증거와 규칙 engine digest 해결 후 재검토. 사용자 계산·저장 요청 있음. 공개 시트에 수수료·마진 노출 금지. 기존 정산/지급 기록은 수정하지 않음.

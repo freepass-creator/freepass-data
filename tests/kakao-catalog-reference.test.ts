@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   KAKAO_COMMISSION_POLICY,
+  buildInternalPeriodFees,
+  projectCompatibilityProductFees,
   buildKakaoCatalogReference,
   buildKakaoCatalogReferenceProduct,
   resolveReferenceDeposit,
@@ -8,6 +10,40 @@ import {
   resolveSalesCommission,
   resolveSupplierBillingFee,
 } from '../src/application/kakao-catalog-reference.js';
+
+describe('internal period fees', () => {
+  const product = { provider_company_code: 'RP023', product_type: '오플구독',
+    price: { '12': { rent: 700000 }, '24': { rent: 600000 } } };
+  it('stores 100/80 for each Autoplus term independently of rent', () => {
+    const result = buildInternalPeriodFees(product);
+    expect(result.priceTerms).toHaveLength(2);
+    for (const term of result.priceTerms) {
+      expect(term.supplierBillingFee.amount).toBe(1000000);
+      expect(term.channelPayoutFee.amount).toBe(800000);
+      expect(term.expectedGrossMargin.amount).toBe(200000);
+    }
+  });
+  it('recalculates percentage terms and changes input digest with rent', () => {
+    const input = { ...product, provider_company_code: 'RP031', product_type: '중고렌트', price: { '24': { rent: 1000000 } } };
+    const first = buildInternalPeriodFees(input);
+    const next = buildInternalPeriodFees({ ...input, price: { '24': { rent: 2000000 } } });
+    expect(first.priceTerms[0]?.supplierBillingFee.amount).toBe(1140000);
+    expect(next.priceTerms[0]?.supplierBillingFee.amount).toBe(2280000);
+    expect(next.inputDigest).not.toBe(first.inputDigest);
+  });
+  it('keeps invalid terms unknown and clears deleted or removed terms', () => {
+    const result = buildInternalPeriodFees({ ...product, price: { broken: { rent: -1 } } });
+    expect(result.priceTerms).toHaveLength(1);
+    expect(result.priceTerms[0]?.channelPayoutFee.state).toBe('UNKNOWN');
+    expect(buildInternalPeriodFees({ ...product, _deleted: true }).priceTerms).toEqual([]);
+    expect(buildInternalPeriodFees({ ...product, price: {} }).priceTerms).toEqual([]);
+  });
+  it('does not expose internal derived fields publicly; admin reads current rent rather than stale amounts', () => {
+    const source = { ...product, internalPeriodFees: { stale: true }, internalEconomicsTerms: [{ private: true }] };
+    expect(projectCompatibilityProductFees(source, false)).toEqual(product);
+    expect(projectCompatibilityProductFees(source, true).internalPeriodFees).toEqual(buildInternalPeriodFees(source));
+  });
+});
 
 describe('Kakao catalog reference deposit facts', () => {
   it.each([

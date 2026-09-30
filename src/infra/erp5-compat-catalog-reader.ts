@@ -1,5 +1,7 @@
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
+import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 type Rec = Record<string, unknown>;
 
@@ -62,6 +64,10 @@ const allowedConsumer = (consumerId: string) =>
  */
 export class FirestoreCatalogCompatibilityReader {
   private readonly db = getFirestore(getTargetFirebaseApp());
+  constructor(private readonly fees: {
+    build: (source: Rec) => Rec & { priceTerms: { supplierBillingFee: { state: string }; channelPayoutFee: { state: string } }[] };
+    project: (source: Rec, internal: boolean) => Rec;
+  }) {}
 
   async read(consumerId: string): Promise<CatalogCompatibilitySnapshot> {
     if (!allowedConsumer(consumerId)) throw new Error('CATALOG_COMPAT_CONSUMER_NOT_ALLOWED');
@@ -100,7 +106,8 @@ export class FirestoreCatalogCompatibilityReader {
     return {
       schema: 'freepass-data.catalog-compat/v1',
       data: {
-        products: asMap(products),
+        products: Object.fromEntries(Object.entries(asMap(products)).map(([id, data]) =>
+          [id, this.fees.project(data, wantsAdminMaster)])),
         policies: asMap(policies),
         ...(get('partner') ? { partners: asMap(get('partner')!) } : {}),
         ...(get('user') ? { users: asMap(get('user')!) } : {}),
@@ -125,8 +132,29 @@ export class FirestoreCatalogCompatibilityReader {
       observedAt: new Date().toISOString(),
     };
   }
+
+  async materializePeriodFees(apply: boolean) {
+    // Independent review found source fingerprint feedback. Do not backfill source
+    // documents until canonical Offer persistence/ownership is resolved.
+    if (apply) throw new Error('HOLD_PERIOD_FEES_CANONICAL_STORAGE_REVIEW');
+    if (process.env.FIREBASE_PROJECT_ID !== CENTRAL_FIREBASE_PROJECT_ID || process.env.FIRESTORE_EMULATOR_HOST) {
+      throw new Error('PERIOD_FEES_TARGET_MISMATCH');
+    }
+    const snapshot = await this.db.collection(FIRESTORE_COLLECTIONS.legacyAdminWorkflow.products).get();
+    const canonicalOfferCount = (await this.db.collection(FIRESTORE_COLLECTIONS.catalog.offers).count().get()).data().count;
+    if (snapshot.empty) throw new Error('PERIOD_FEES_SOURCE_EMPTY');
+    const rows = snapshot.docs.map((doc) => ({ doc, value: this.fees.build(doc.data()) }));
+    const changed = rows.filter(({ doc, value }) => stableDigest(doc.data().internalPeriodFees ?? null) !== stableDigest(value));
+    const states: Record<string, number> = {};
+    for (const row of rows) for (const term of row.value.priceTerms) {
+      const state = `${term.supplierBillingFee.state}/${term.channelPayoutFee.state}`;
+      states[state] = (states[state] ?? 0) + 1;
+    }
+    return { mode: 'DRY_RUN', canonicalOfferCount, productCount: rows.length, changedCount: changed.length,
+      written: 0, termCount: rows.reduce((sum, row) => sum + row.value.priceTerms.length, 0), states, backupPath: null };
+  }
 }
 
-export function createFirestoreCatalogCompatibilityReader() {
-  return new FirestoreCatalogCompatibilityReader();
+export function createFirestoreCatalogCompatibilityReader(fees: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0]) {
+  return new FirestoreCatalogCompatibilityReader(fees);
 }

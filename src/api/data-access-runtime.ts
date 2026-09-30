@@ -3,6 +3,7 @@ import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-acces
 import { createFirestoreAdminWorkflowStore } from '../infra/admin-workflow-firestore.js';
 import { createFirestoreDataHealthReader } from '../infra/firestore-data-health-reader.js';
 import { createFirestoreCatalogCompatibilityReader } from '../infra/erp5-compat-catalog-reader.js';
+import { buildInternalPeriodFees, projectCompatibilityProductFees } from '../application/kakao-catalog-reference.js';
 import { createFirestoreProjectionReader } from '../infra/firestore-projection-reader.js';
 import { createFirestoreEstimateArtifactStore } from '../infra/estimate-artifacts-firestore.js';
 
@@ -16,7 +17,7 @@ export function createConsumerDataAccessRuntime() {
     access,
     projection: createFirestoreProjectionReader(),
     health: createFirestoreDataHealthReader(),
-    compat: createFirestoreCatalogCompatibilityReader(),
+    compat: createFirestoreCatalogCompatibilityReader({ build: buildInternalPeriodFees, project: projectCompatibilityProductFees }),
     workflow: createFirestoreAdminWorkflowStore(),
     estimateArtifacts: createFirestoreEstimateArtifactStore()
   };

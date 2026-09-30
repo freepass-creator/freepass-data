@@ -1,4 +1,6 @@
 import { DataAccessGateway } from '../application/data-access-gateway.js';
+import { createFirestoreCatalogCompatibilityReader } from '../infra/erp5-compat-catalog-reader.js';
+import { buildInternalPeriodFees, projectCompatibilityProductFees } from '../application/kakao-catalog-reference.js';
 import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
 import { gcsDataAccessLogStore } from '../infra/gcs-data-access-log.js';
 import {
@@ -56,6 +58,19 @@ export function createJobDataAccessRuntime() {
   return {
     access: new DataAccessGateway(createFirestoreDataAccessLogStore())
   };
+}
+
+export async function materializeInternalPeriodFees(apply: boolean) {
+  const { access } = createJobDataAccessRuntime();
+  const spec = {
+    context: { actor: { id: 'service:period-fees', kind: 'SERVICE' as const },
+      clientId: 'job:materialize-period-fees', purpose: 'derive internal supplier billing and channel payout from current term rent' },
+    operation: apply ? 'WRITE_INTERNAL_PERIOD_FEES' : 'READ_INTERNAL_PERIOD_FEES_PLAN',
+    resource: { kind: 'SOURCE' as const, name: 'freepasserp5/products/internal-period-fees' },
+    summarize: (result: { productCount: number }) => ({ count: result.productCount, digest: stableDigest(result) }),
+  };
+  const run = () => createFirestoreCatalogCompatibilityReader({ build: buildInternalPeriodFees, project: projectCompatibilityProductFees }).materializePeriodFees(apply);
+  return apply ? access.write(spec, run) : access.read(spec, run);
 }
 
 export async function createConsumerHealthReadOnlyDataAccessRuntime(input: {
