@@ -1,8 +1,9 @@
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { assessDepositEvidence, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
 
-export const ERP5_PRODUCT_MAPPER_VERSION = 'erp5-product-mapping/3';
+export const ERP5_PRODUCT_MAPPER_VERSION = 'erp5-product-mapping/4';
 
 /**
  * 정책이 회사의 기본을 확정한다 — 상품에 안 적힌 값은 여기서 읽는다.
@@ -200,9 +201,8 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     issue('DELETION_MARKER_REVIEW_REQUIRED');
   }
 
-  // 기간·대여료 조합마다 보증금 값이 하나씩 붙어 있고, `deposit_note`는 그것을 엑셀로
-  // 표현하다 생긴 설명(예: 연수×월대여료)이지 금액을 뒤집는 규칙이 아니다(2026-09-27 확인).
-  // 그래서 메모가 있다고 해서 실제 숫자를 버리지 않는다. 나머지 축은 여전히 표현 불가다.
+  // Preserve positive per-term source amounts. Numeric zero is not waiver evidence:
+  // formula-backed placeholders and missing waiver evidence remain UNKNOWN (2026-09-30).
   const complex = ['offer_terms', 'adapter_pricing', 'rent_variants', 'rentVariants',
     'deposit', 'pricing_rules', 'quotes']
     .filter(k => has(d, k) && present(d[k]));
@@ -232,7 +232,12 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     }
     const privateTerms = ['fee', 'commission', 'fee_memo'].filter(k => has(terms, k) && present(terms[k]));
     if (privateTerms.length) issue('PRIVATE_PRICE_TERMS_REVIEW_REQUIRED');
-    const depositAmount = complex.length || privateTerms.length ? undefined : integer(terms.deposit);
+    const depositEvidence = assessDepositEvidence({ supplierId: d.provider_company_code, productType: d.product_type,
+      note: d.deposit_note, depositFree: d.deposit_free, sourceAmount: terms.deposit,
+      hasPositivePaidDeposit: hasConflictingPaidDeposit(d.price) });
+    const depositAmount = complex.length || privateTerms.length || depositEvidence.state === 'UNKNOWN'
+      ? undefined : depositEvidence.amount ?? undefined;
+    if (depositEvidence.state === 'UNKNOWN') issue(depositEvidence.reason);
     if (depositAmount === undefined) issue('UNKNOWN_DEPOSIT');
     // 기본값으로 떨어진 주행거리는 원천이 말한 값이 아니다. 지우지 말고 검토 표시를 남긴다.
     if (mileage.source === 'DEFAULT') issue('MILEAGE_FROM_COMPANY_DEFAULT');

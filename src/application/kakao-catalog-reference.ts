@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { parseErp5PriceKey } from '../adapters/erp5-product-mapping.js';
+import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
 
 type Rec = Record<string, unknown>;
 type DepositState = 'KNOWN' | 'ZERO' | 'UNKNOWN';
@@ -112,11 +113,26 @@ export function resolveReferenceDeposit(input: {
   termMonths: number;
   monthlyRent: number;
   sourceAmount: unknown;
+  supplierId?: unknown;
+  productType?: unknown;
+  depositFree?: unknown;
+  hasPositivePaidDeposit?: boolean;
 }) {
   const note = text(input.note);
+  const evidence = assessDepositEvidence(input);
+  if (['CONFLICTING_ZERO_DEPOSIT_EVIDENCE', 'INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE', 'POSITIVE_AMOUNT_WITH_RULE_REQUIRES_REVIEW', 'INVALID_DEPOSIT_AMOUNT'].includes(evidence.reason)) {
+    return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
+  }
+  if (evidence.state === 'KNOWN') {
+    return { depositAmount: evidence.amount, depositState: 'KNOWN' as DepositState,
+      depositRule: { code: 'SOURCE_AMOUNT', multiplier: null, label: '공급사 입력 금액' } };
+  }
+  if (input.supplierId === 'RP012' && ['중고렌트', '재렌트'].includes(String(input.productType))) {
+    return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
+  }
   const known = (code: string, multiplier: number, label: string) => {
     const depositAmount = input.monthlyRent * multiplier;
-    if (!Number.isSafeInteger(depositAmount)) {
+    if (!Number.isSafeInteger(depositAmount) || depositAmount <= 0) {
       return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
     }
     return {
@@ -125,7 +141,7 @@ export function resolveReferenceDeposit(input: {
       depositRule: { code, multiplier, label },
     };
   };
-  if (note === '무보증') {
+  if (evidence.state === 'ZERO') {
     return {
       depositAmount: 0,
       depositState: 'ZERO' as DepositState,
@@ -134,6 +150,9 @@ export function resolveReferenceDeposit(input: {
   }
   if (input.monthlyRent > 0) {
     if (/^월 대여료 × 약정연수 \(최대 3개월\)$/.test(note)) {
+      if (!Number.isSafeInteger(input.termMonths) || input.termMonths <= 0 || input.termMonths % 12 !== 0) {
+        return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
+      }
       const multiplier = Math.min(Math.ceil(input.termMonths / 12), 3);
       return known('RENT_X_CONTRACT_YEARS_MAX3', multiplier, `대여료×${multiplier}`);
     }
@@ -345,6 +364,10 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       termMonths: parsed.months,
       monthlyRent,
       sourceAmount: (raw as Rec).deposit,
+      supplierId,
+      productType: source.product_type,
+      depositFree: source.deposit_free,
+      hasPositivePaidDeposit: hasConflictingPaidDeposit(price),
     });
     const channelPayoutFee = resolveSalesCommission({
       supplierId,
@@ -367,6 +390,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       monthlyRent: { amount: monthlyRent, currency: 'KRW' as const },
       deposit: deposit.depositAmount === null ? null : { amount: deposit.depositAmount, currency: 'KRW' as const },
       ...deposit,
+      depositStatusLabel: depositStatusLabel(deposit.depositState, (raw as Rec).deposit, source.deposit_note),
       mileageLimitKmPerYear: parsed.mileageKm ?? null,
       settlement: parsed.settlement,
       // Backward-compatible alias for the existing Kakao consumer.
@@ -423,6 +447,17 @@ export function buildKakaoCatalogReference(input: {
   observedAt: string;
 }) {
   if (input.consumerId !== 'kakao-ops') throw new Error('KAKAO_REFERENCE_CONSUMER_NOT_ALLOWED');
+  return buildReferenceFacts(input);
+}
+
+export function buildInternalAiReference(input: KakaoCatalogReferenceSource) {
+  if (!/^internal-ai-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.consumerId)) throw new Error('INTERNAL_AI_CONSUMER_NOT_ALLOWED');
+  const result = buildReferenceFacts(input);
+  return { ...result, schema: 'freepass-data.internal-ai-reference/v1' as const,
+    meta: { ...result.meta, consumerId: input.consumerId, projectionId: 'internal-ai-reference' as const } };
+}
+
+function buildReferenceFacts(input: { consumerId: string; products: Record<string, Rec>; observedAt: string }) {
   const data = Object.entries(input.products)
     .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source))
     .filter((row): row is NonNullable<typeof row> => row !== null)

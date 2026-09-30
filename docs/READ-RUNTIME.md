@@ -46,7 +46,7 @@ It does not seed data, publish releases, run workers, or expose Catalog mutation
 
 Registration fields:
 
-- `id`: `erp-com`, `kakao-ops`, `freepass-estimate`, `freepass-admin-catalog`, or `whitelabel-<slug>`
+- `id`: `erp-com`, `kakao-ops`, `freepass-estimate`, `freepass-admin-catalog`, `whitelabel-<slug>`, or `internal-ai-<project-slug>`
 - `projectionId`: currently only `erp-public`
 - `token`: unique backend token, minimum 32 characters
 - `capabilities`: optional
@@ -56,6 +56,7 @@ Capability rules:
 - omitted `capabilities` => `["catalog"]`; `catalog-reference` must be granted explicitly to `kakao-ops`
 - `catalog` => ERP public projection read
 - `catalog-reference` => Kakao-only, typed `REFERENCE_ONLY` ERP5 facts; it never means Canonical ACTIVE
+- `internal-ai-reference` => internal-project-only typed reference facts. Explicit capability required; no other capability may be combined. This identity cannot read raw compatibility, public catalog, customer/admin workflows or settlement ledgers.
 - `catalog-health` => Catalog Data Health read
 - health-only registration is allowed and does not grant catalog payload access
 
@@ -97,6 +98,22 @@ Both responses use `Cache-Control: no-store`.
 
 This route is an explicit migration bridge, not a silent fallback for `/catalog`. Kakao must opt into
 the route and must not convert its response into a Canonical ACTIVE claim.
+
+## Internal AI reference API — CODED/TESTED, deployment and grants HOLD
+
+`GET /v1/consumers/internal-ai-<project-slug>/internal-ai-reference`
+
+Register each approved internal project separately with a unique backend service token (minimum 32 characters), `projectionId=erp-public` (registration compatibility only) and exactly `capabilities=["internal-ai-reference"]`. The response projection is `internal-ai-reference`, schema `freepass-data.internal-ai-reference/v1`. No token is minted or deployed by this code change. Do not share an internal token with an external supplier/channel or put it in browser code/chat/repository. Internal AI sees typed product facts, both fee axes and margin reference; this is NOT the external channel's default payout-only view.
+
+The endpoint reuses the existing product/commission projector with a distinct identity, schema, reader gate, read audit and `no-store`. It reads products only; arbitrary customer/contract/collection queries and writes are unsupported. It always returns `REFERENCE_ONLY`/`HOLD`: a source snapshot is not an approved ACTIVE release or permission to quote/send/write. A responding API is not proof of downstream deployment.
+
+## Deposit evidence and visible labels — 2026-09-30 user decision
+
+Numeric `0` without waiver evidence is never `ZERO`. RP012 and pickup products cannot be promoted to zero deposit. Explicit waiver with positive/invalid amounts, conflicting notes or missing supplier/product identity remains `UNKNOWN`. Positive ERP amounts for RP012 used rental are preserved; formula-backed subscription placeholders are not written over with invented values. Positive amounts carrying unresolved rule notes are held, not silently replaced by a formula.
+
+Both reference APIs emit `priceTerms[].depositStatusLabel`: no amount/note input => `미입력`; unresolved 0/formula/conflict => `확인중`; proven waiver => `무보증`; resolved positive amount => `보증금 있음` (display the accompanying amount/rule). `UNKNOWN` has null numeric amount, never 0. Labels are display metadata, not monetary strings to write into numeric source fields. Keep known rule wording; don't label unsupported/nonexistent term columns as missing input.
+
+The Canonical mapper preserves raw source evidence and emits UNKNOWN/HOLD for ambiguous deposit facts. Existing ERP/Sheet consumers must adopt the evidence/label contract, remove their own numeric-zero heuristic, and obtain authorized deployment/publication + live readback before ALL_CONSUMER completion.
 
 ## Storage boundary
 

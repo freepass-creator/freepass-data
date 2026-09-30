@@ -26,13 +26,27 @@ PR23의 Firebase binding/gateway/auth, 계약·정산 연결지도, 공용 root�
    사용한다. 나노초/시간대 표기는 보존하고 업무 필드에 그 의미를 옮기지 않는다. 기타 미지원 자료형은
    해당 상품을 decode HOLD로 세고 원문은 보존한다. stdout은 수치·사유 코드·증거 경로만 제공한다.
 
-현재 CLI는 다음 고정 호출만 지원한다.
+신규 캡처 CLI는 다음 고정 호출을 지원한다.
 
 ```powershell
 # 기존 로그인에서 확보한 토큰을 이 실행의 프로세스 환경에만 주입한다.
 # 토큰을 출력하거나 명령행 인수/파일/Git에 기록하지 않는다.
 node --import tsx src/jobs/inspect-erp5-source.ts --live-read-only
 ```
+
+## 보증금 전수감사와 미입력/확인중 — 2026-09-30
+
+같은 비공개 FULL 캡처에서 보증금 관련 필드만 선택 해석해, 무관한 메타데이터 decode 실패 때문에 상품이 감사에서 빠지지 않게 한다. 원문·금액·source digest는 보존한다.
+
+```powershell
+node --import tsx src/jobs/inspect-erp5-source.ts --deposit-audit "<사용자 홈의 .codex/private/freepass-data-source-captures/<run>/capture.json 절대경로>"
+```
+
+기존 검사 실행기를 확장했으며 새 원천 reader/writer는 없다. 캡처의 digest/고정 대상/transaction/독립 COUNT를 검증하고, 비공개 경로·Git 외부를 확인한 뒤 `deposit-audit-<uuid>.json`을 배타 생성·재읽기한다. 원문 식별자와 기간별 수정 후보는 비공개 보고서에만 두고 stdout/Git에는 수치·사유만 둔다. 정상 감사도 exit 2/HOLD이며 금액 변경·배포·전환 승인이 아니다. 동일 캡처 반복 감사는 새 파일을 만들고 기존 보고서를 덮지 않는다.
+
+전체 상품 수, 유료기간 수, KNOWN/ZERO/UNKNOWN, supplier별 UNKNOWN, 미입력/확인중 라벨, 원문 전기간 0인데 waiver 근거가 없는 상품 수를 별도로 센다. UNKNOWN에는 규칙을 계산해야 하는 상품도 포함되므로 전부 운영 오류로 단정하지 않는다. price 자체 누락·관련 필드 decode 실패는 별도 coverage HOLD다. 비활성 상품도 감사하지만 임의 재활성화/삭제하지 않는다.
+
+사용자 결정: 손오공상품/픽업구독은 무보증 없음. 정보가 없으면 `미입력`, 0/규칙/입력 충돌은 `확인중`. 금액 칸을 글자로 덮지 않고 표시 metadata로 제공하며, 명확한 규칙·비해당 기간은 보존한다. 운영 시트·ERP 반영은 별도 consumer/publisher 변경·직전 승인·readback이 필요하다.
 
 인증 변수는 `FREEPASS_ERP5_READ_ACCESS_TOKEN`이다. 종료 후 이전 환경을 복구한다.
 CLI는 캡처가 성공해도 운영 미준비를 나타내는 **exit 2/HOLD**를 반환한다.
