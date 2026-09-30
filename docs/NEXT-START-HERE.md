@@ -75,6 +75,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - Claude: 광역 호출 REVIEW_TIMEOUT 후 좁힌 설계 자문/준비 검토와 두 실제 파일 독립 검토 ANSWERED/exit 0. destructive retire·백업·credential drain·rollback 지적 반영. cross-repository Actions token을 별도 최소 권한 secret으로 분리하고 failureCode/exitCode와 durable pre-effect checkpoint/readback을 보강했다. pinned parity script의 shadow `--write-receipt`는 실제 Firestore write임을 확인해 제거했다. Main-only shadow와 ADC는 의도된 보안/실행 경계로 유지한다. 운영 검증 완료를 뜻하지 않는다.
 - 남음: 전용 WIF/SA/환경/시크릿, private bucket, token-mint 음성테스트, shadow·supplier field coverage, 전체 workbook backup, rollback drill, consumer별 실제 readback, 운영 recovery watchdog 이관. owner 변수는 미설정이며 기존 ERP4 writer는 그대로 유지했다.
 - next_start_here: [이관 실행 절차](DATA-DELIVERY-OWNER-ROLLOUT.md)의 admission/activation과 recovery 게이트. 코드 준비를 운영 최신화 이관 완료로 표현하지 않는다.
+- 2026-09-30 사용자 main 병합 지시 / 독립 GPT: exact `8f541064`의 runner·workflow·tests·rollout·governance diff와 회귀 11/11을 검토해 owner 미설정 PREPARED 병합을 막는 재현 가능한 치명 오류 없음으로 판단했다. SA 직접 IAM 조회는 project-level/custom token 권한·다른 credential의 완전 fence 증거가 아니므로 운영 전 음성테스트와 권한 전수 확인은 HOLD다. Shadow는 DB→projection 자기대사이며 공급사 전체/신규 재고/정책 본문/소비처 사용 증거로 확대하지 않는다. PR #261 CI exact-head 통과 후 main 병합하고, 운영 변수·IAM·ERP4 기존 실행은 변경하지 않는다. 사진 PR #260은 별도 필수 검토 HOLD를 유지한다.
 
 ## 2026-09-30 내부 AI API와 무보증 오인 전수감사
 
