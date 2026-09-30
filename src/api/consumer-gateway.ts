@@ -14,6 +14,7 @@ import estimateShareEnvelopeReadReceiptSchema from '../../contracts/estimate-sha
 import estimateShareEnvelopeWriteReceiptSchema from '../../contracts/estimate-share-envelope-write-receipt-v1.schema.json' with { type: 'json' };
 import settlementLedgerSchema from '../../contracts/settlement-ledger-view-v1.schema.json' with { type: 'json' };
 import kakaoCatalogReferenceSchema from '../../contracts/kakao-catalog-reference-v1.schema.json' with { type: 'json' };
+import internalAiReferenceSchema from '../../contracts/internal-ai-reference-v1.schema.json' with { type: 'json' };
 import type { ProjectionEvidenceSnapshotStore, ProjectionStore } from '../ports/catalog-store.js';
 import type { AdminCatalogProduct, ErpPublicProduct, ProjectionRelease } from '../domain/catalog.js';
 import {
@@ -32,6 +33,7 @@ import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity
 import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
 import {
   buildKakaoCatalogReference,
+  buildInternalAiReference,
   type KakaoCatalogReference,
   type KakaoCatalogReferenceSource,
 } from '../application/kakao-catalog-reference.js';
@@ -57,6 +59,7 @@ import {
 export type ConsumerCapability =
   | 'catalog'
   | 'catalog-reference'
+  | 'internal-ai-reference'
   | 'catalog-health'
   | 'estimate-newcar-master'
   | 'estimate-artifacts'
@@ -86,7 +89,7 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     if (!entry || typeof entry !== 'object') throw new Error('Invalid consumer registration');
     const item = entry as Record<string, unknown>;
     // F01/F86/Admin need their own complete contracts; never silently map them to ERP.
-    if (typeof item.id !== 'string' || !/^(erp-com|kakao-ops|freepass-estimate|freepass-admin-catalog|whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
+    if (typeof item.id !== 'string' || !/^(erp-com|kakao-ops|freepass-estimate|freepass-admin-catalog|(?:whitelabel|internal-ai)-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
       throw new Error('Consumer contract is not implemented for this registration');
     }
     const expectedProjection = item.id === 'freepass-estimate'
@@ -99,13 +102,15 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
       throw new Error('Each consumer needs a distinct service token of at least 32 characters');
     }
     if (ids.has(item.id) || tokens.has(item.token)) throw new Error('Duplicate consumer ID or shared service token');
+    const internalAi = item.id.startsWith('internal-ai-');
+    if (internalAi && item.capabilities === undefined) throw new Error('Internal AI capability must be explicit');
     const capabilities: ConsumerCapability[] = item.capabilities === undefined
       ? (item.id === 'freepass-estimate' ? ['estimate-newcar-master', 'estimate-artifacts'] : ['catalog'])
       : (() => {
           if (!Array.isArray(item.capabilities) || item.capabilities.length === 0) {
             throw new Error('Consumer capabilities must be a non-empty array');
           }
-          const allowed = new Set<ConsumerCapability>(['catalog', 'catalog-reference', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'settlement-ledger-read', 'admin-workflow']);
+          const allowed = new Set<ConsumerCapability>(['catalog', 'catalog-reference', 'internal-ai-reference', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'settlement-ledger-read', 'admin-workflow']);
           const values = item.capabilities.map((value) => {
             if (typeof value !== 'string' || !allowed.has(value as ConsumerCapability)) {
               throw new Error('Unsupported consumer capability');
@@ -131,6 +136,10 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     }
     if (capabilities.includes('catalog-reference') && item.id !== 'kakao-ops') {
       throw new Error('Catalog reference capability requires kakao-ops registration');
+    }
+    if ((internalAi && capabilities.some(value => value !== 'internal-ai-reference')) ||
+        (!internalAi && capabilities.includes('internal-ai-reference'))) {
+      throw new Error('Internal AI registration may only use its dedicated read capability');
     }
     ids.add(item.id);
     tokens.add(item.token);
@@ -179,6 +188,7 @@ export function createConsumerGateway(
   compatReader?: {
     read(consumerId: string): Promise<CatalogCompatibilitySnapshot>;
     readKakaoReferenceSource?(consumerId: string): Promise<KakaoCatalogReferenceSource>;
+    readInternalAiReferenceSource?(consumerId: string): Promise<KakaoCatalogReferenceSource>;
   },
   workflowStore?: AdminWorkflowStore,
   estimateArtifactStore?: EstimateArtifactStore,
@@ -200,6 +210,7 @@ export function createConsumerGateway(
   const validateEstimateShareEnvelopeWriteReceipt = ajv.compile(estimateShareEnvelopeWriteReceiptSchema);
   const validateSettlementLedger = ajv.compile(settlementLedgerSchema);
   const validateKakaoReference = ajv.compile(kakaoCatalogReferenceSchema);
+  const validateInternalAiReference = ajv.compile(internalAiReferenceSchema);
   app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
   app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/catalog', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -442,7 +453,13 @@ export function createConsumerGateway(
       return reply.code(503).send({ code: 'CATALOG_COMPAT_READ_FAILED' });
     }
   });
-  app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/catalog-reference', async (request, reply) => {
+  for (const internalAi of [false, true]) {
+  app.get<{ Params: { consumerId: string } }>(`/v1/consumers/:consumerId/${internalAi ? 'internal-ai-reference' : 'catalog-reference'}`, async (request, reply) => {
+    const operation = internalAi ? 'READ_INTERNAL_AI_REFERENCE' : 'READ_KAKAO_CATALOG_REFERENCE';
+    const projectionId = internalAi ? 'internal-ai-reference' : 'kakao-catalog-reference';
+    const errorPrefix = internalAi ? 'INTERNAL_AI_REFERENCE' : 'KAKAO_REFERENCE';
+    const readSource = internalAi ? compatReader?.readInternalAiReferenceSource?.bind(compatReader)
+      : compatReader?.readKakaoReferenceSource?.bind(compatReader);
     reply.header('Cache-Control', 'no-store');
     const binding = registered.get(request.params.consumerId);
     const supplied = request.headers.authorization ?? '';
@@ -452,56 +469,59 @@ export function createConsumerGateway(
     );
     const context = consumerContext(
       binding?.id ?? 'unregistered-consumer',
-      'read Kakao REFERENCE_ONLY catalog facts through FreePass Data',
+      `read ${projectionId} REFERENCE_ONLY facts through FreePass Data`,
       request.id
     );
     const resource = {
       kind: 'PROJECTION' as const,
-      name: 'kakao-catalog-reference',
-      projectionId: 'kakao-catalog-reference'
+      name: projectionId,
+      projectionId
     };
 
     try {
       if (!binding || !matches) {
         await access.deny('READ', {
           context,
-          operation: 'READ_KAKAO_CATALOG_REFERENCE',
+          operation,
           resource
         }, 'UNAUTHORIZED');
         return reply.code(401).send({ code: 'UNAUTHORIZED' });
       }
-      if (binding.id !== 'kakao-ops' || !binding.capabilities.includes('catalog-reference')) {
+      if (internalAi ? !binding.id.startsWith('internal-ai-') || !binding.capabilities.includes('internal-ai-reference')
+        : binding.id !== 'kakao-ops' || !binding.capabilities.includes('catalog-reference')) {
         await access.deny('READ', {
           context,
-          operation: 'READ_KAKAO_CATALOG_REFERENCE',
+          operation,
           resource
         }, 'FORBIDDEN');
         return reply.code(403).send({ code: 'FORBIDDEN' });
       }
-      if (!compatReader?.readKakaoReferenceSource) {
+      if (!readSource) {
         await access.deny('READ', {
           context,
-          operation: 'READ_KAKAO_CATALOG_REFERENCE',
+          operation,
           resource
-        }, 'KAKAO_REFERENCE_READER_UNAVAILABLE');
-        return reply.code(503).send({ code: 'KAKAO_REFERENCE_READER_UNAVAILABLE' });
+        }, `${errorPrefix}_READER_UNAVAILABLE`);
+        return reply.code(503).send({ code: `${errorPrefix}_READER_UNAVAILABLE` });
       }
 
       const result = await access.read({
         context,
-        operation: 'READ_KAKAO_CATALOG_REFERENCE',
+        operation,
         resource,
-        summarize: (value: KakaoCatalogReference) => ({
+        summarize: (value: KakaoCatalogReference | ReturnType<typeof buildInternalAiReference>) => ({
           count: value.meta.projectedCount,
           digest: value.meta.dataDigest,
         })
-      }, async () => buildKakaoCatalogReference(
-        await compatReader.readKakaoReferenceSource!(binding.id)
-      ));
+      }, async () => {
+        const source = await readSource(binding.id);
+        if (source.consumerId !== binding.id) throw new Error('REFERENCE_SOURCE_CONSUMER_MISMATCH');
+        return internalAi ? buildInternalAiReference(source) : buildKakaoCatalogReference(source);
+      });
 
       if (
-        !validateKakaoReference(result) ||
-        result.schema !== 'freepass-data.kakao-catalog-reference/v1' ||
+        !(internalAi ? validateInternalAiReference(result) : validateKakaoReference(result)) ||
+        result.schema !== (internalAi ? 'freepass-data.internal-ai-reference/v1' : 'freepass-data.kakao-catalog-reference/v1') ||
         result.meta.consumerId !== binding.id ||
         result.meta.authority !== 'REFERENCE_ONLY' ||
         result.meta.publicationDecision !== 'HOLD' ||
@@ -509,16 +529,17 @@ export function createConsumerGateway(
         !result.data.length ||
         !result.commissionPolicy.digest
       ) {
-        return reply.code(503).send({ code: 'KAKAO_REFERENCE_RESPONSE_INVALID' });
+        return reply.code(503).send({ code: `${errorPrefix}_RESPONSE_INVALID` });
       }
       return result;
     } catch (error) {
       if (error instanceof DataAccessAuditUnavailableError) {
         return reply.code(503).send({ code: error.code });
       }
-      return reply.code(503).send({ code: 'KAKAO_REFERENCE_READ_FAILED' });
+      return reply.code(503).send({ code: `${errorPrefix}_READ_FAILED` });
     }
   });
+  }
 
   app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/estimate-newcar-master', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');

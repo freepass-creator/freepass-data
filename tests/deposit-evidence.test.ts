@@ -1,0 +1,73 @@
+import { describe, expect, it } from 'vitest';
+import { assessDepositEvidence, auditDepositEvidence, depositStatusLabel } from '../src/domain/deposit-evidence.js';
+import { buildKakaoCatalogReferenceProduct, resolveReferenceDeposit } from '../src/application/kakao-catalog-reference.js';
+
+describe('deposit evidence never promotes a placeholder to waiver', () => {
+  it('labels truly missing input separately from unresolved zero/rules', () => {
+    expect(depositStatusLabel('UNKNOWN', null)).toBe('미입력');
+    expect(depositStatusLabel('UNKNOWN', '')).toBe('미입력');
+    expect(depositStatusLabel('UNKNOWN', 0)).toBe('확인중');
+    expect(depositStatusLabel('UNKNOWN', null, '대여료×2')).toBe('확인중');
+    expect(depositStatusLabel('ZERO', 0, '무보증')).toBe('무보증');
+  });
+  it.each(['1,500,000원', '150만', '1500000.5', -500000, true, {}, ' 0 '])('holds malformed nonempty amount %j even with an explicit waiver', sourceAmount => {
+    expect(assessDepositEvidence({ supplierId: 'RP004', productType: '중고렌트', note: '무보증', sourceAmount }).state).toBe('UNKNOWN');
+  });
+  it('requires source identity to allow an explicit waiver and normalizes only policy guard comparisons', () => {
+    expect(assessDepositEvidence({ note: '무보증', sourceAmount: 0 }).state).toBe('UNKNOWN');
+    expect(assessDepositEvidence({ supplierId: ' RP012 ', productType: '중고구독', note: '무보증', sourceAmount: 0 }).state).toBe('UNKNOWN');
+    expect(assessDepositEvidence({ supplierId: 'RP004', productType: '픽업 구독', note: '무보증', sourceAmount: 0 }).state).toBe('UNKNOWN');
+  });
+  it('does not silently override positive amounts with a formula; used rental preserves its ERP amount', () => {
+    const facts = { supplierId: 'RP023', productType: '오플구독', note: '국산: 월 대여료×2', sourceAmount: 3000000, monthlyRent: 500000, termMonths: 24 };
+    expect(resolveReferenceDeposit(facts).depositState).toBe('UNKNOWN');
+    expect(assessDepositEvidence(facts).state).toBe('UNKNOWN');
+    expect(resolveReferenceDeposit({ ...facts, supplierId: 'RP012', productType: '중고렌트' })).toMatchObject({ depositState: 'KNOWN', depositAmount: 3000000 });
+    expect(resolveReferenceDeposit({ ...facts, supplierId: 'RP012', productType: '중고렌트', note: '월 대여료 × 약정연수 (최대 3개월)', sourceAmount: 0 }).depositState).toBe('UNKNOWN');
+    expect(resolveReferenceDeposit({ ...facts, note: '국산: 월 대여료×2', sourceAmount: '150만' }).depositState).toBe('UNKNOWN');
+    expect(resolveReferenceDeposit({ ...facts, note: '월 대여료 × 약정연수 (최대 3개월)', sourceAmount: 0, termMonths: 6 }).depositState).toBe('UNKNOWN');
+  });
+  it('does not ignore malformed positive sibling evidence under a product waiver', () => {
+    const product = buildKakaoCatalogReferenceProduct('P2', { listable: true, provider_company_code: 'RP004', product_type: '중고렌트', deposit_note: '무보증',
+      price: { '12': { rent: 500000, deposit: 0 }, '24': { rent: 400000, deposit: '150만' } } });
+    expect(product!.offers[0]!.priceTerms.every(row => row.depositState === 'UNKNOWN' && row.depositStatusLabel === '확인중')).toBe(true);
+    const rentlessSibling = buildKakaoCatalogReferenceProduct('P3', { listable: true, provider_company_code: 'RP004', product_type: '중고렌트', deposit_note: '무보증',
+      price: { '12': { rent: 500000, deposit: 0 }, '24': { deposit: 1000000 } } });
+    expect(rentlessSibling!.offers[0]!.priceTerms[0]).toMatchObject({ depositState: 'UNKNOWN', depositStatusLabel: '확인중' });
+  });
+  it.each(['중고렌트', '재렌트', '오공구독', '픽업구독'])('prohibits zero for Sonogong %s, even with a contradictory explicit flag', productType => {
+    for (const note of ['', '무보증', '월 대여료 × 약정연수 (최대 3개월)']) {
+      expect(assessDepositEvidence({ supplierId: 'RP012', productType, note, depositFree: true, sourceAmount: 0 }).state).toBe('UNKNOWN');
+      expect(resolveReferenceDeposit({ supplierId: 'RP012', productType, note: '무보증', sourceAmount: 0, termMonths: 12, monthlyRent: 900000 }).depositState).toBe('UNKNOWN');
+    }
+  });
+  it.each([0, '0', null, undefined, '', true, -1, '미확인'])('does not infer ZERO from %j without an explicit waiver', sourceAmount => {
+    expect(assessDepositEvidence({ sourceAmount }).state).toBe('UNKNOWN');
+  });
+  it('preserves a legitimate explicit waiver but holds contradictory positive evidence', () => {
+    const identity = { supplierId: 'RP004', productType: '중고렌트' };
+    expect(assessDepositEvidence({ ...identity, note: '무보증', sourceAmount: 0 }).state).toBe('ZERO');
+    for (const patch of [{ note: '무보증', sourceAmount: 1000000 },
+      { note: '무보증', sourceAmount: 0, hasPositivePaidDeposit: true },
+      { note: '국산: 월 대여료×2', depositFree: true, sourceAmount: 0 },
+      { note: '무보증', depositFree: false, sourceAmount: 0 }]) {
+      expect(assessDepositEvidence({ ...identity, ...patch })).toMatchObject({ state: 'UNKNOWN', reason: 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' });
+    }
+  });
+  it('does not erase a known positive source amount for a nonzero product', () => {
+    expect(assessDepositEvidence({ supplierId: 'RP012', productType: '중고렌트', sourceAmount: '1,500,000' })).toMatchObject({ state: 'KNOWN', amount: 1500000 });
+  });
+  it('holds a whole-product waiver conflicting with any paid term', () => {
+    const result = buildKakaoCatalogReferenceProduct('P1', { listable: true, provider_company_code: 'RP004', product_type: '중고렌트',
+      deposit_note: '무보증', price: { '12': { rent: 800000, deposit: 0 }, '24': { rent: 700000, deposit: 1400000 } } });
+    expect(result!.offers[0]!.priceTerms.every(row => row.depositState === 'UNKNOWN')).toBe(true);
+  });
+  it('audits inactive records too, preserving originals and term identity', () => {
+    const products = { A: { listable: true, provider_company_code: 'RP012', product_type: '픽업구독', price: { '12': { rent: 900000, deposit: 0 } } },
+      B: { listable: false, provider_company_code: 'RP004', product_type: '중고렌트', deposit_note: '무보증', price: { '24': { rent: 500000, deposit: 0 } } },
+      C: { price: { '12': { rent: 600000, deposit: 1200000 }, '24': { rent: 0, deposit: 0 } } } };
+    const before = structuredClone(products);
+    expect(auditDepositEvidence(products)).toMatchObject({ productCount: 3, paidTermCount: 3, counts: { KNOWN: 1, ZERO: 1, UNKNOWN: 1 }, writeAuthorized: false });
+    expect(products).toEqual(before);
+  });
+});

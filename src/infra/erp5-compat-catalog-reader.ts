@@ -118,6 +118,15 @@ export class FirestoreCatalogCompatibilityReader {
 
   async readKakaoReferenceSource(consumerId: string) {
     if (consumerId !== 'kakao-ops') throw new Error('KAKAO_REFERENCE_CONSUMER_NOT_ALLOWED');
+    return this.readReferenceProducts(consumerId);
+  }
+
+  async readInternalAiReferenceSource(consumerId: string) {
+    if (!/^internal-ai-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId)) throw new Error('INTERNAL_AI_CONSUMER_NOT_ALLOWED');
+    return this.readReferenceProducts(consumerId);
+  }
+
+  private async readReferenceProducts(consumerId: string) {
     const products = await this.db.collection('products').get();
     return {
       consumerId,

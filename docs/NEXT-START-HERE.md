@@ -66,6 +66,20 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+## 2026-09-30 내부 AI API와 무보증 오인 전수감사
+
+- 목적: 내부 AI 전용 read API 분리, 손오공/픽업 무보증 금지, 애매한 보증금 `미입력`/`확인중` 표시. 데이터·권한 고위험: 운영 쓰기/배포 없이 read-only + 준비 변경.
+- 대상 revision: `origin/main@db788eb654c30f2f0970263f4904fa9a837dc504`, branch `work/freepass-data/internal-ai-deposit-audit-20260930`. 원래 checkout의 사용자 문서 변경은 보존했다.
+- 재사용: 기존 consumer gateway, Kakao typed projector/commission schema, 고정 Firebase reader, private capture/inspect job을 확장(COMPOSE_OR_EXTEND). 신규 evidence helper/analysis/schema는 기존 자산에 없던 waiver 판정·비공개 전수진단·별도 내부 identity 계약을 보완하며 원천 reader/writer나 두 번째 정본을 만들지 않는다. Academy READY 확인.
+- 원본: 2026-09-30T01:54:45.805120Z read-only transaction 캡처 products 1,717 / policy 82 / partner 64, independent COUNT FULL. digest `390b58b5a10de3a9ffb2d62d38d8b4b3abf2f0b82cf0fdb213066b1037fd6354`. F01/F86 현행 visible 탭 23개를 정확한 metadata/range로 읽음(운영 수정 없음).
+- 관측: Son 47/Pickup 162 현행 Sheet에는 `무보증` 문자열 없음. RP012 ogong 38 + pickup 162는 유료기간 원천 deposit=0 + 보증금 규칙. 별도로 오플 35도 규칙 + 0. 전 유료기간 raw=0인데 waiver evidence가 없는 후보 842(노출 239); 후보에는 금액 미해석/조건 미확정이 포함되므로 모두 확정 오류로 쓰지 않는다. RP012 usedrent 원문 양수는 보존.
+- 변경: 내부 `internal-ai-<project>` + 명시 capability `internal-ai-reference`만 허용. 토큰 공유/외부 권한/다른 capability는 거부. 별도 route/schema/reader와 감사. Canonical mapper v4는 숫자 0을 waiver 증거로 승격하지 않음. Reference API는 typed depositState + depositStatusLabel 제공. 기존 inspect job에 private deposit-audit/readback 추가.
+- 검증: 초기 Claude 광역 검토 REVIEW_TIMEOUT(PASS 아님); 좁힌 독립 검토 ANSWERED. gateway 권한 격리에 합의, 양수+규칙 덮어쓰기·잘못된 waiver 값·identity 누락·sibling 검증 불일치는 수정/회귀검사 반영. 표시 라벨과 supplier-wide ban은 검토 중 이미 반영된 최신 변경으로 재검증한다. 최종 테스트/검토 영수증은 이어지는 기록과 PR에서 확인.
+- 남음/HOLD: 신규 내부 키 발급·운영 grant/배포 없음. ERP `lib/domain/product.ts:noDeposit`의 all-zero heuristic 및 상세/기간 facet/공유/시트 publisher는 아직 이 계약으로 전환되지 않음. F01/F86 직접 쓰기·예약 pin 변경 없음. 원문 금액 누락/모순의 확정은 공급사 근거 필요. private audit의 price 누락/관련 decode failure는 별도 확인.
+- next_start_here: [READ-RUNTIME](READ-RUNTIME.md)의 내부 AI/보증금 절 → [캡처 실행](ERP5-SOURCE-CAPTURE.md)의 보증금 전수감사 → 같은 digest private audit. consumer별 단위·비해당 기간을 확인해 표시 adapter 연결 후 정확한 승인 범위로 배포/발행하고 각 consumer readback을 기록한다. Sheet 빈칸 전체 치환 금지(비해당 기간도 있음).
+- 최종 로컬 검증: architecture/standards/data-access/sheets/build/runtime-smoke/shadow/dashboard PASS; Vitest `--maxWorkers=2` 1,043 PASS / 14 SKIP(외부/emulator). 관련 검사 217 PASS. Claude ANSWERED 최종 좁은 검토에서 앞선 blocking 5건 해소 확인; 잔여 반례인 부정 waiver flag/대여료 없는 sibling/마스킹 assertion도 추가 가드·회귀검사로 보강. 운영 승인으로 확대하지 않음.
+- 같은 캡처 reference dry-run: 682개 상품 / 기간별 보증금 있음 3,792 · 무보증 27 · 미입력 58 · 확인중 53. 손오공/픽업 ZERO 0. 원문 유료기간 10,557의 감사는 KNOWN 2,264 / ZERO 174 / UNKNOWN 8,119; 선택된 reference는 확인된 계산식을 해석하므로 이 두 모수를 혼동하지 않음. 보증금 관련 필드 decode 실패 0 / price 자체 누락 57. 원문 감사 결과는 동일 run의 UUID별 `deposit-audit-*.json`에 배타 보존·재읽기됨.
+
 ## 2026-09-30 프리패스 수수료와 연동 상대별 선택 규칙
 
 - 목적: 사용자 직접 결정 `프리패스 수수료 = 지급수수료`를 실행 규칙과 계약에 고정한다.

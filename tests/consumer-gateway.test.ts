@@ -33,6 +33,35 @@ const withAccess = (
 };
 
 describe('read-only consumer gateway', () => {
+  it('isolates internal AI project credentials, capabilities and audited typed responses', async () => {
+    const ai: ConsumerBinding = { id: 'internal-ai-test-project', projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] };
+    for (const capabilities of [undefined, ['catalog'], ['internal-ai-reference', 'admin-workflow']]) {
+      expect(() => parseConsumerBindings(JSON.stringify([{ ...ai, capabilities }]))).toThrow();
+    }
+    expect(() => parseConsumerBindings(JSON.stringify([{ ...binding, capabilities: ['internal-ai-reference'] }]))).toThrow();
+    let reads = 0;
+    const compat = { read: async () => { throw new Error('raw bridge must not be used'); },
+      readInternalAiReferenceSource: async (consumerId: string) => { reads++; return { consumerId, observedAt: '2026-09-30T01:54:45.805Z',
+        products: { P1: { listable: true, provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '무보증',
+          bank_account: 'must-not-leak', price: { '12': { rent: 900000, deposit: 0 } } } } }; } };
+    const { app, logs } = withAccess({ getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] }, [ai], undefined, compat);
+    const aiUrl = `/v1/consumers/${ai.id}/internal-ai-reference`;
+    expect((await app.inject({ url: aiUrl })).statusCode).toBe(401);
+    expect((await app.inject({ url: aiUrl, headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+    expect(reads).toBe(0);
+    const result = await app.inject({ url: aiUrl, headers });
+    expect(result.statusCode).toBe(200);
+    expect(result.json()).toMatchObject({ schema: 'freepass-data.internal-ai-reference/v1', meta: { consumerId: ai.id, authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD' } });
+    expect(result.body).not.toContain('must-not-leak');
+    expect(result.json().data[0].offers[0].priceTerms[0].depositState).toBe('UNKNOWN');
+    expect(logs.events.at(-1)).toMatchObject({ operation: 'READ_INTERNAL_AI_REFERENCE', phase: 'SUCCEEDED' });
+    for (const endpoint of ['catalog', 'catalog-compat', 'catalog-reference', 'catalog-health']) {
+      expect((await app.inject({ url: `/v1/consumers/${ai.id}/${endpoint}`, headers })).statusCode).toBe(403);
+    }
+    expect(reads).toBe(1);
+    expect((await app.inject({ method: 'POST', url: aiUrl, headers })).statusCode).toBe(404);
+    await app.close();
+  });
   it('does not read storage before authenticating the registered consumer', async () => {
     let reads = 0;
     const { app, logs } = withAccess(

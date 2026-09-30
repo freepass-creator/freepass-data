@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
+import { analyzeErp5Deposits } from '../src/adapters/erp5-deposit-analysis.js';
 import { buildErp5CanonicalDryRun, captureErp5Source, compareErp5ProductCaptures, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, readErp5PolicyFacts, profileErp5CaptureFields, summarizeErp5DecisionInputs, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
 const readTime = '2026-09-21T10:00:00.123456Z';
 function doc(collection = 'products', id = 'synthetic') {
@@ -10,6 +11,7 @@ function doc(collection = 'products', id = 'synthetic') {
       car_number: { stringValue: '12가3456' }, maker: { stringValue: '합성제조사' }, model: { stringValue: '합성모델' },
       provider_company_code: { stringValue: 'SYNTHETIC' }, product_type: { stringValue: '중고렌트' },
       vehicle_status: { stringValue: '출고가능' }, status_kind: { stringValue: '가용' }, listable: { booleanValue: true },
+      deposit_note: { stringValue: '무보증' },
       price: { mapValue: { fields: { '24_3만': { mapValue: { fields: { rent: { integerValue: '750000' }, deposit: { integerValue: '0' } } } } } } }
     } : {}
   };
@@ -38,6 +40,17 @@ function fake(options: { products?: Record<string, unknown>[]; policies?: Record
 }
 
 describe('ERP5 same-transaction raw capture', () => {
+  it('audits deposit fields across full coverage despite unrelated unsupported metadata', async () => {
+    const row = doc();
+    (row.fields as Record<string, unknown>).unrelated = { timestampValue: '2026-09-21T09:00:00Z' };
+    const capture = await captureErp5Source(fake({ products: [row] }).rpc);
+    const before = JSON.stringify(capture);
+    const audit = analyzeErp5Deposits(capture);
+    expect(audit).toMatchObject({ productCount: 1, paidTermCount: 1, counts: { ZERO: 1, UNKNOWN: 0, KNOWN: 0 }, decodeFailures: [], writeAuthorized: false, decision: 'HOLD' });
+    expect(audit.findings[0]).toMatchObject({ productId: 'synthetic', termKey: '24_3만', depositStatusLabel: '무보증' });
+    expect(JSON.stringify(capture)).toBe(before);
+    expect(() => analyzeErp5Deposits({ ...capture, digest: '0'.repeat(64) })).toThrow('CAPTURE_DIGEST_MISMATCH');
+  });
   it('uses a read-only transaction and independent counts for full products and policy', async () => {
     const { rpc, calls } = fake();
     const capture = await captureErp5Source(rpc);

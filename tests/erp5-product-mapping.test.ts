@@ -58,12 +58,13 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.candidate.issues).toContain('INVALID_RENT');
   });
 
-  it.each([0, '0'])('preserves explicit numeric zero %j without guessing missing values', zero => {
+  it.each([0, '0'])('preserves raw zero %j but does not invent waiver evidence', zero => {
     const input = fixture();
     input.data.price = { '24_3만': { rent: zero, deposit: zero } };
     const result = mapErp5Product(input);
     expect(result.candidate.priceTerms[0]!.monthlyRent.amount).toBe(0);
-    expect(result.candidate.priceTerms[0]!.depositState).toBe('ZERO');
+    expect(result.candidate.priceTerms[0]!.depositState).toBe('UNKNOWN');
+    expect(result.raw.data.price).toEqual(input.data.price);
   });
 
   it.each(['', null, '무보증', '미확인', '월요금×3'])('preserves unresolved deposit %j as UNKNOWN and HOLD', deposit => {
@@ -78,6 +79,7 @@ describe('ERP5 product mapping preparation', () => {
 
   it('keeps the deposit a deposit_note merely explains — the amount is already per term', () => {
     const input = fixture();
+    input.data.provider_company_code = 'RP012';
     input.data.price = { '24_3만': { rent: 750000, deposit: 3000000 } };
     input.data.deposit_note = '연수 × 월대여료';
     const result = mapErp5Product(input);

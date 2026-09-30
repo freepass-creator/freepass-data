@@ -44,7 +44,7 @@ describe('Kakao catalog reference deposit facts', () => {
   });
 
   it('emits ZERO only for the explicit no-deposit rule', () => {
-    expect(resolveReferenceDeposit({ note: '무보증', termMonths: 60, monthlyRent: 800000, sourceAmount: 1000000 })).toEqual({
+    expect(resolveReferenceDeposit({ supplierId: 'RP004', productType: '중고렌트', note: '무보증', termMonths: 60, monthlyRent: 800000, sourceAmount: 0 })).toEqual({
       depositAmount: 0,
       depositState: 'ZERO',
       depositRule: { code: 'ZERO_DEPOSIT', multiplier: 0, label: '무보증' },

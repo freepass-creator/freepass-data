@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/internal-ai-reference-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "data", "commissionPolicy", "meta"],
+  "properties": {
+    "schema": { "const": "freepass-data.internal-ai-reference/v1" },
+    "data": { "$ref": "https://freepass.teamjpk.com/contracts/kakao-catalog-reference-v1.schema.json#/properties/data" },
+    "commissionPolicy": { "$ref": "https://freepass.teamjpk.com/contracts/kakao-catalog-reference-v1.schema.json#/properties/commissionPolicy" },
+    "meta": {
+      "type": "object", "additionalProperties": false,
+      "required": ["consumerId", "projectionId", "authority", "publicationDecision", "observedAt", "sourceProject", "sourceCollection", "sourceCount", "projectedCount", "dataDigest", "warning"],
+      "properties": {
+        "consumerId": { "type": "string", "pattern": "^internal-ai-[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "projectionId": { "const": "internal-ai-reference" },
+        "authority": { "const": "REFERENCE_ONLY" },
+        "publicationDecision": { "const": "HOLD" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "sourceProject": { "const": "freepasserp5" },
+        "sourceCollection": { "const": "products" },
+        "sourceCount": { "type": "integer", "minimum": 1 },
+        "projectedCount": { "type": "integer", "minimum": 1 },
+        "dataDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "warning": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
