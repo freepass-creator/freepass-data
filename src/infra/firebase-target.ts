@@ -1,6 +1,7 @@
 import { applicationDefault, getApps, initializeApp, type App } from 'firebase-admin/app';
 
-// User-confirmed operational project, 2026-09-21. Never infer this from ADC.
+// Display name: freepass-data (live verified 2026-09-30).
+// Historical connection ID remains freepasserp5; never rename it via string replacement or infer it from ADC.
 export const CENTRAL_FIREBASE_PROJECT_ID = 'freepasserp5';
 export const CENTRAL_FIREBASE_APP_NAME = 'freepass-data-target';
 

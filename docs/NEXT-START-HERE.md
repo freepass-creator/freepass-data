@@ -864,6 +864,13 @@ This file exists so another session can continue without re-discovering or re-cr
 - 경계: 정산 사실의 기준은 `FREEPASS_DATA_SETTLEMENT`다. Admin은 승인된 업무 command를 수행하는 애플리케이션이며 별도 정본이 아니다. 소비 앱은 `settlement_rows`를 재계산하거나 두 번째 원장으로 복제하지 않는다. 미입력은 `null`이다.
 - 검증: 최신 `origin/main` 병합 후 `npm run check` 전체 PASS. Vitest 962 PASS / 12 SKIP, Sheets 24 PASS, read-runtime 5 PASS, shadow 10 PASS, dashboard 21 PASS. Claude 독립 검토는 두 차례 응답 없이 대기되어 UNAVAILABLE로 기록한다. 운영 토큰 등록·배포·Kakao Ops 실제 호출은 다음 검증 단계다.
 - next_start_here: `src/domain/settlement-ledger-view.ts` → `src/application/settlement-ledger-view.ts` → `src/api/consumer-gateway.ts` → `tests/settlement-ledger-view.test.ts`.
+# 2026-09-30 보험 포함·프로젝트 표시명 — 사용자 확정
+
+- 사용자 확정: `손오공상품`·`픽업구독`은 보험 포함 상품이고 기간별 대여료에도 보험료가 이미 포함되어 있다. 별도 보험료를 가산하지 않는다. 보험 포함이 면책금 0원·무제한 보장·운전자 제한 없음이라는 뜻은 아니다.
+- 의미 사전의 보험료 항목에 반영. 공급사 보험 담보/면책금/자격 원문은 보존. 실제 정책 문서/시트/소비처 갱신은 아직 미실행이며 문서 반영을 운영 반영으로 표현하지 않는다.
+- 프로젝트명 실조회: `gcloud projects describe freepasserp5` → name=`freepass-data`, projectId=`freepasserp5`, projectNumber=`110304297079`. 표시 이름은 이미 요청과 일치하므로 외부 변경 불필요.
+- Data domain catalog의 사람용 상품/정책 표시명을 FreePass Data로 통일. 연결 ID·IAM·서비스계정·버킷·source locator·과거 감사 이력은 치환하지 않음. 저장소 경로 변경·프로젝트 재생성·DB 이전은 이번 이름 변경에 포함하지 않음.
+
 # 2026-09-30 기간별 내부 수수료 — 진행 중
 
 - 목적: 공급사별 정본 규칙과 상품 기간별 대여료로 공급사 청구/영업채널 지급/예상 마진 계산. RP023은 기간 무관 1,000,000/800,000원이며 3개월 유지·환수 조건 유지.

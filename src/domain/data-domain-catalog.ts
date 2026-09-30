@@ -114,7 +114,7 @@ export const DATA_ASSETS: readonly DataAssetDefinition[] = [
     ]
   },
   {
-    assetId: 'erp5-products-source', domainId: 'catalog', displayName: 'ERP5 기존 상품 원천',
+    assetId: 'erp5-products-source', domainId: 'catalog', displayName: 'FreePass Data 운영 상품 원천',
     aliases: ['products', 'ERP5 상품', '기존상품'], kind: 'FIRESTORE_COLLECTION', system: 'firebase:freepasserp5', locator: 'products',
     ownership: 'SOURCE_OWNED', authority: 'SOURCE', keyDescription: '원천 document ID와 차량/상품 식별 증거',
     sensitivity: 'INTERNAL', availability: 'PARTIAL', freshnessPolicy: '새 작업마다 전체 coverage와 readTime 재관측',
@@ -122,7 +122,7 @@ export const DATA_ASSETS: readonly DataAssetDefinition[] = [
     notes: ['2026-09-21 count-only 1659; snapshot value is not a permanent count', 'Canonical write remains HOLD']
   },
   {
-    assetId: 'erp5-policy-source', domainId: 'catalog', displayName: 'ERP5 기존 정책 원천',
+    assetId: 'erp5-policy-source', domainId: 'catalog', displayName: 'FreePass Data 운영 정책 원천',
     aliases: ['policy', '정책원천'], kind: 'FIRESTORE_COLLECTION', system: 'firebase:freepasserp5', locator: 'policy',
     ownership: 'SOURCE_OWNED', authority: 'SOURCE', keyDescription: '원천 policy document ID/code',
     sensitivity: 'INTERNAL', availability: 'PARTIAL', freshnessPolicy: '상품 캡처와 같은 read boundary에서 전체 관측',
