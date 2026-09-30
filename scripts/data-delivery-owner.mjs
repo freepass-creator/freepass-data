@@ -153,6 +153,7 @@ async function main() {
   if (process.argv.includes('--preflight')) { console.log(JSON.stringify({ status: 'READY', engineRevision: ENGINE_REVISION, writeExecuted: false })); return; }
   if (!process.argv.includes('--execute')) throw new Error('EXPLICIT_EXECUTE_REQUIRED');
   const { CONSUMER_SWITCH_REGISTRY } = await import('../src/domain/consumer-cutover.ts');
+  let checkpoint = 0;
   const receipt = await runDelivery({
     execution: { runId: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT, revision: process.env.GITHUB_SHA, lockfileDigest },
     consumers: CONSUMER_SWITCH_REGISTRY, assertOwnership,
@@ -176,7 +177,14 @@ async function main() {
       if (digest !== createHash('sha256').update(readFileSync(readback)).digest('hex')) throw new Error('BACKUP_READBACK_FAILED');
       return { uri, sha256: digest, verified: true };
     },
-    persistReceipt: async value => writeFileSync(output, `${JSON.stringify(value, null, 2)}\n`)
+    persistReceipt: async value => {
+      writeFileSync(output, `${JSON.stringify(value, null, 2)}\n`);
+      const uri = `gs://${PRIVATE_EVIDENCE_BUCKET}/delivery/${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}/checkpoints/${String(++checkpoint).padStart(3, '0')}.json`;
+      command('gcloud', ['storage', 'cp', output, uri, '--if-generation-match=0'], engineRoot);
+      const readback = `${output}.readback`;
+      command('gcloud', ['storage', 'cp', uri, readback], engineRoot);
+      if (!readFileSync(output).equals(readFileSync(readback))) throw new Error('ATTEMPT_CHECKPOINT_READBACK_FAILED');
+    }
   });
   console.log(JSON.stringify(receipt));
   if (receipt.status !== 'SUCCEEDED') process.exitCode = 2;

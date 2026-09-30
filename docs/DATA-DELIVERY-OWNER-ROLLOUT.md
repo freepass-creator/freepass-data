@@ -119,6 +119,10 @@ Shadow's verified pinned calls read only Firestore and require no Sheets credent
 The 60-minute job deadline remains a hard attempt ceiling, not 15 times 20 minutes
 of guaranteed availability. A timeout/runner loss can leave a RUNNING checkpoint;
 operators must reconcile it as ambiguous, never treat it as SUCCEEDED or blindly retry.
+Each pre-effect checkpoint is create-only in the private run/attempt prefix and
+byte-readback verified before the command. Runner loss therefore leaves durable
+RUNNING evidence instead of only an ephemeral local file. It still cannot prove
+whether a timed-out external write finished; reconciliation remains mandatory.
 
 next_start_here: provision and read back the narrowly scoped identities/environment,
 then run shadow and collect the missing field/source/consumer evidence before any

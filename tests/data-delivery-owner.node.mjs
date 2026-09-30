@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { ownershipDecision, privateBucketDecision, PRIVATE_EVIDENCE_BUCKET, runDelivery, STAGES, ENGINE_REVISION } from '../scripts/data-delivery-owner.mjs';
 
 const evidence = () => ({
@@ -101,4 +102,17 @@ test('backup failure blocks all atom mutations and retirement is never automatic
   assert.equal(receipt.stages.at(-1).id, 'before-backup');
   assert.equal(receipt.status, 'PARTIAL');
   assert.ok(!STAGES.some(([, , args]) => args.includes('--retire')));
+});
+test('shadow engine calls cannot write an ops receipt and legacy history uses a scoped credential', () => {
+  const source = readFileSync(new URL('../scripts/data-delivery-owner.mjs', import.meta.url), 'utf8');
+  const workflow = readFileSync(new URL('../.github/workflows/data-owned-refresh.yml', import.meta.url), 'utf8');
+  const call = source.split('\n').find(line => line.includes("command('npx'") && line.includes('verify-whitelabel-publication.mts') && line.includes('data-delivery-shadow'));
+  assert.ok(call); assert.ok(!call.includes('--write-receipt'));
+  assert.ok(workflow.includes('secrets.FREEPASS_DATA_LEGACY_ACTIONS_READ_TOKEN'));
+  assert.ok(!workflow.includes('GH_TOKEN: ${{ github.token }}'));
+});
+test('failed durable checkpoint prevents its engine effect', async () => {
+  const r = runner({ persistReceipt: async () => { throw new Error('evidence transport unavailable'); } });
+  await assert.rejects(runDelivery(r.options));
+  assert.equal(r.calls.length, 0);
 });
