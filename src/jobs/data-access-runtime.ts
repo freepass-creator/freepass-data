@@ -1,4 +1,5 @@
 import { DataAccessGateway } from '../application/data-access-gateway.js';
+import { iancarErpReadTransport, buildIancarErpRawIntakeBatch } from '../adapters/iancar-source-capture.js';
 import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
 import { gcsDataAccessLogStore } from '../infra/gcs-data-access-log.js';
 import {
@@ -50,6 +51,22 @@ function readOnlyAccess(input: { accessToken: string; evidenceBucket: string }) 
     accessToken: input.accessToken,
     bucket: input.evidenceBucket
   }));
+}
+
+export function createIancarErpInspectionDataAccessRuntime(input: {
+  accessToken: string; evidenceBucket: string; accountJson: string;
+}) {
+  const access = readOnlyAccess(input);
+  const readErp = iancarErpReadTransport(input);
+  return {
+    buildRawIntakeBatch: buildIancarErpRawIntakeBatch,
+    capture: () => access.read({
+      context: { actor: { id: 'service:freepass-data-iancar-source', kind: 'SERVICE' },
+        clientId: 'job:ingest-erp5-source', purpose: 'read supplier ERP inventory directly, not a Sheet mirror' },
+      operation: 'READ_IANCAR_ERP_INVENTORY', resource: { kind: 'SOURCE', name: 'supplier/RP031/erp-inventory' },
+      summarize: value => ({ count: value.vehicles.length, digest: value.sourceRevision })
+    }, readErp)
+  };
 }
 
 export function createJobDataAccessRuntime() {

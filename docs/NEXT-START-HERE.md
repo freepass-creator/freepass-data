@@ -66,6 +66,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+## 2026-09-30 이안카 공급사 ERP 직접 수집 — 운영 전환 미완료
+
+- 목적: 사용자의 ERP 원천 변경 지시를 실행 경로에 반영. Sheet를 재고 원천으로 읽거나 신규 차량을 기존 등록 목록으로 제외하지 않는다.
+- 대상 revision: `origin/main@f77e581b01c61544bb877fec21e4b0a2ae1607e5`; 기존 isolated worktree 재사용, Work `work/freepass-data/iancar-erp-source-20260930`. 기존 ERP authority Work/PR #233은 main 병합됨과 unique-ahead 0 확인; 현재 transport 목적의 open PR 없음. 원래 checkout의 사용자 변경 보존. Academy READY, COMPOSE_OR_EXTEND.
+- 변경: 기존 Iancar capture adapter에 인증 ERP transport/엄격 parser/RAW batch 추가. 기존 source job에 `--iancar-erp --dry-run`과 승인된 RAW intake 경로 연결. 기존 DataAccessGateway/SourceIngestionStore 유지. 모든 관측 차량과 원본 응답 보존, 기존 차량 필터 없음.
+- 안전 경계: inventory 응답은 available/reserved 부분집합이며 fleet 전체가 아님. PARTIAL coverage로 absence/retire 금지. 누락 요금 UNKNOWN/HOLD, Sheet fallback 없음. stale/미래/1시간 초과는 INCOMPLETE. credential/응답 body 노출 및 redirect 금지.
+- 검증: build/architecture/data-access-boundary/sheets/read-runtime-smoke/shadow/dashboard PASS. 최종 전체 Vitest 1,055 PASS/14 SKIP, Iancar 20 PASS(기존 store intake/replay, 실제 job gate, 지연 재생 포함). standards 실행은 PASS이나 역량 상태는 기존 PARTIAL. Claude 첫 검토 REVIEW_TIMEOUT(PASS 아님); 좁힌 검토 ANSWERED에서 credential 격리/부분 범위/요금 UNKNOWN에 동의, wall-clock completeness 재판정 반례 1건 발견. capturedAt 고정·판정 일치 검사·지연 재생 회귀검사로 수정하고 재검토 요청. 실제 ERP 인증·수집·운영 저장 검증으로 확대하지 않는다.
+- 남음/HOLD: 운영 bridge의 Sheet 원천/pin은 아직 변경되지 않음. supplier credential은 ERP bridge GitHub secret에만 확인됨; 로컬/중앙 Secret Manager에는 없음. LIVE_READ/PERSISTENCE/CANONICAL_MAPPING/DEPLOYMENT/CUTOVER 미검증. 코드 준비를 운영 변경 완료로 보고하지 않는다.
+- next_start_here: [Iancar capture의 Direct ERP intake](IANCAR-SOURCE-CAPTURE.md) → 안전한 credential binding 및 실제 ERP dry-run → 원문/현재 중앙 등록과 신규·변경 후보 대사 → exact reviewed writer/publication 범위 승인 → 소비처별 readback. ERP API만으로 기존 fleet 차를 출고불가/삭제하지 않는다.
+- Claude 최종 좁은 재검토: 본문·exit 0·ANSWERED, 기존 completeness blocker 해결 및 잔여 blocker 없음. capturedAt/판정을 함께 위조하는 악의적 caller까지 helper가 인증하지 않는다는 비차단 의견은 기록한다. helper를 공개 untrusted 입력 API로 사용하지 않으며 기존 인증 job/append-only RAW 경계를 유지한다. wall clock을 재도입하는 제안은 불변 재생을 깨므로 반영하지 않는다. 운영 승인·계정 인증·원천 최신성의 증거로 확대하지 않는다.
+
 ## 2026-09-30 내부 AI API와 무보증 오인 전수감사
 
 - 목적: 내부 AI 전용 read API 분리, 손오공/픽업 무보증 금지, 애매한 보증금 `미입력`/`확인중` 표시. 데이터·권한 고위험: 운영 쓰기/배포 없이 read-only + 준비 변경.
