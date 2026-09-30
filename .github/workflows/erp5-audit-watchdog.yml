@@ -2,8 +2,11 @@ name: ERP5 audit watchdog
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/erp5-audit-watchdog.yml"]
   schedule:
-    - cron: '7 * * * *'
+    - cron: "7 * * * *"
 
 concurrency:
   group: erp5-audit-watchdog
@@ -15,7 +18,7 @@ concurrency:
 # surface without making the staleness signal any stronger.
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 jobs:
   watchdog:
@@ -73,6 +76,7 @@ jobs:
 
           age_seconds="$((now_epoch - run_epoch))"
           age_minutes="$(( (age_seconds + 59) / 60 ))"
+          echo "age_minutes=$age_minutes" >> "$GITHUB_OUTPUT"
           checked_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
           if [ "$age_minutes" -le "$ERP5_AUDIT_MAX_GAP_MINUTES" ]; then
@@ -137,6 +141,33 @@ jobs:
             echo "::error::ERP5 audit has not succeeded recently: ${age_minutes}m > ${ERP5_AUDIT_MAX_GAP_MINUTES}m"
             exit 2
           fi
+
+      - name: Recover a missed audit without duplicating an active run
+        if: ${{ !cancelled() && steps.freshness.outputs.age_minutes != '' }}
+        shell: bash
+        env:
+          AUDIT_AGE_MINUTES: ${{ steps.freshness.outputs.age_minutes }}
+        run: |
+          set -euo pipefail
+          # Recovery is an attempted dispatch, never proof of restored freshness.
+          # The original stale verdict remains failed until a new audit succeeds.
+          if [ "$AUDIT_AGE_MINUTES" -le 90 ]; then
+            echo 'Audit is recent; no recovery needed.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$AUDIT_WORKFLOW/runs?branch=main&per_page=100")"
+          if jq -e 'any(.workflow_runs[]; .status != "completed")' <<<"$runs" >/dev/null; then
+            echo 'Recovery skipped: an audit is already queued or running.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          last_attempt="$(jq -er '.workflow_runs[0].created_at' <<<"$runs")"
+          attempt_age="$(( $(date -u +%s) - $(date -u -d "$last_attempt" +%s) ))"
+          if [ "$attempt_age" -lt 1800 ]; then
+            echo 'Recovery skipped: the latest attempt is within the 30-minute cooldown.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh workflow run "$AUDIT_WORKFLOW" --repo "$GITHUB_REPOSITORY" --ref main
+          echo 'Recovery dispatched on main; awaiting successful capture and pointer readback.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Retain watchdog summary
         if: always()
