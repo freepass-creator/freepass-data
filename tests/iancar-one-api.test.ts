@@ -33,11 +33,42 @@ const page = (input: {
   success: true,
   data: input.data,
   pagination: { page: input.page, page_size: 100, total: input.total },
-  synced_at: input.syncedAt ?? '2026-10-01T00:00:00.000Z',
+    synced_at: input.syncedAt ?? new Date().toISOString(),
   stale: input.stale ?? false
 });
 
 describe('EANCAR ONE official partner API', () => {
+  it('rejects credential transmission to any alternate origin', () => {
+    expect(() => createIancarOneApiClient({ ...config, baseUrl: 'https://other.example' }))
+      .toThrow('IANCAR_ONE_API_BASE_URL_NOT_ALLOWED');
+  });
+
+  it.each([
+    ['2026-09-30T23:00:00.000Z', 'IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED'],
+    ['2026-10-01T00:02:00.000Z', 'IANCAR_ONE_SOURCE_TIME_IN_FUTURE']
+  ])('HOLDs invalid source time %s even when provider stale=false', async (syncedAt, issue) => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(page({
+      page: 1, total: 1, data: [vehicle('v1')], syncedAt
+    })), { status: 200 }));
+    const capture = await collectIancarOneVehicleList(config, fetcher as typeof fetch,
+      '2026-10-01T00:01:00.000Z');
+    expect(capture.readyForRawIngest).toBe(false);
+    expect(capture.issues).toContain(issue);
+  });
+
+  it('HOLDs pagination total drift even when observed rows match the first page', async () => {
+    const firstData = Array.from({ length: 100 }, (_, index) => vehicle(`v${index}`));
+    const syncedAt = new Date().toISOString();
+    const fetcher = vi.fn(async (input: URL | RequestInfo) => {
+      const n = Number(new URL(String(input)).searchParams.get('page'));
+      return new Response(JSON.stringify(page({ page: n, total: n === 1 ? 101 : 102,
+        data: n === 1 ? firstData : [vehicle('last')], syncedAt })), { status: 200 });
+    });
+    const capture = await collectIancarOneVehicleList(config, fetcher as typeof fetch);
+    expect(capture.issues).toContain('IANCAR_ONE_PAGINATION_METADATA_DRIFT');
+    expect(capture.readyForRawIngest).toBe(false);
+  });
+
   it('uses the verified Bearer scheme and /v1/vehicles contract', async () => {
     const fetcher = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
       expect(String(input)).toBe('https://eancarone.com/v1/vehicles?page=1&page_size=100');
@@ -45,7 +76,7 @@ describe('EANCAR ONE official partner API', () => {
         .toBe('Bearer synthetic-key-never-real');
       expect(init?.method).toBe('GET');
       expect(init?.redirect).toBe('manual');
-      return new Response(JSON.stringify(page({ page: 1, total: 1, data: [vehicle('v1')] })), {
+      return new Response(JSON.stringify(page({ page: 1, total: 1, data: [vehicle('v1')], syncedAt: '2026-10-01T00:00:00.000Z' })), {
         status: 200,
         headers: { 'content-type': 'application/json' }
       });

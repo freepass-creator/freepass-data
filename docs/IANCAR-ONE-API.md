@@ -1,6 +1,16 @@
 # RP031 이안카 ONE API — FreePass Data 연동 계약
 
-Status (2026-10-01): **공식 공개 가이드/인증 방식 검증 완료 · Data 클라이언트 구현 중 · 운영 키 미주입 · Canonical/소비처 전환 전**
+Status (2026-10-01): **공식 API 인증 조회 검증 완료 · 서버 Secret 등록 · Canonical/소비처 전환 전**
+
+## 2026-10-01 실제 연결 확인
+
+- 사용자 최신 결정: 제공한 기존 키를 그대로 사용한다. 교체를 실행 조건으로 다시 요구하지 않는다.
+- 서버 자격증명 정본: `freepasserp5` Secret Manager의 `freepass-data-iancar-one-api`, version `1` (enabled). 별도 IAM grant/운영 scheduler 활성화는 하지 않았다. 값은 Git/명령행/파일/출력에 넣지 않고 비출력 stdin으로 등록하고 실행 프로세스 메모리에서만 사용했다.
+- 원천 관측 `2026-09-30T22:55:34.446Z` (2026-10-01 KST): 전체 목록 108대 / 2페이지, API `stale=false`. 상태 AVAILABLE 101 / UNAVAILABLE 4 / PREPARING 2 / RESERVED 1. source digest `8dc5c186a4ea7e682068ae7f064751a4ad1871661ae3f7fc71af3468f52d41ae`.
+- 실제 공식 목록/상세/availability/rates 조회 성공. 요금 샘플 24개, 목록 사진 참조 보유 52대. 사진 보유 차량 상세 샘플에 사진 47개; 인증 사진 샘플 HTTP 200, image/jpeg, 490351 bytes. 전 차량 사진/요금 수집 완료를 뜻하지 않는다.
+- 초기 목록 probe는 HTTP 200 뒤 Windows PTY 종료 오류로 process exit 1이었다. 이후 Secret readback 및 실제 클라이언트 목록/상세/요금/사진 재조회는 exit 0으로 별도 확인했다.
+- 안전 보강: 공식 origin 외 credential 전송 금지, capturedAt 기준 15분 초과/미래 timestamp 및 페이지 total/page_size drift는 HOLD. 전용 회귀 14 PASS, build PASS.
+- 남음: provider stable ID와 기존 차량/정책 연결의 검증된 mapping, 상세 요금/계약조건/사진의 전체 수집과 원천 범위 증거, reviewed Canonical 반영, 전용 writer/runtime secret binding, ERP/운영시트 실제 readback. 이번 연결 확인은 READ VERIFIED이며 RAW/CANONICAL/DEPLOYMENT/CUTOVER 완료가 아니다.
 
 ## 확정된 연동 경로
 
@@ -139,8 +149,8 @@ RAW 적재는 Canonical 발행이나 ERP.com 전환을 의미하지 않는다.
 
 ## 운영 개통 순서
 
-1. 채팅에 노출된 기존 키는 폐기하고 새 read-only partner key를 재발급한다.
-2. 새 키를 Git/명령행/브라우저가 아닌 FreePass Data runtime Secret에만 넣는다.
+1. 사용자 승인된 provider key를 사용한다. 2026-10-01 기존 키 사용 결정과 Secret version 1 등록을 확인했다.
+2. 키를 Git/명령행/브라우저가 아닌 FreePass Data runtime Secret에서 실행 프로세스로만 주입한다.
 3. 첫 live read에서 전체 목록의 `total/synced_at/stale` 및 schema shape를 확인한다.
 4. 차량 상세·요금·계약조건 schema를 값이 없는 shape 보고서로 확인한다.
 5. allowlist 기반 Canonical mapper를 확정한다.

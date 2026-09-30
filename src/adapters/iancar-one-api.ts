@@ -82,6 +82,8 @@ function normalizedConfig(config: IancarOneApiConfig) {
   const url = new URL(baseUrl);
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash)
     throw new IancarOneApiError('IANCAR_ONE_API_BASE_URL_NOT_ALLOWED');
+  if (url.origin !== IANCAR_ONE_API_ORIGIN || url.pathname !== '/')
+    throw new IancarOneApiError('IANCAR_ONE_API_BASE_URL_NOT_ALLOWED');
 
   const timeoutMs = config.timeoutMs ?? 20_000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000)
@@ -241,6 +243,13 @@ export async function collectIancarOneVehicleList(
 
   const issues: string[] = [];
   const syncedAt = first.synced_at;
+  const sourceAgeMs = Date.parse(now) - Date.parse(syncedAt);
+  if (sourceAgeMs < 0) issues.push('IANCAR_ONE_SOURCE_TIME_IN_FUTURE');
+  if (sourceAgeMs > IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS * 1000)
+    issues.push('IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED');
+  if (pages.some(page => page.pagination.total !== first.pagination.total
+    || page.pagination.page_size !== first.pagination.page_size))
+    issues.push('IANCAR_ONE_PAGINATION_METADATA_DRIFT');
   if (pages.some(page => page.synced_at !== syncedAt)) issues.push('IANCAR_ONE_SYNC_TIME_DRIFT');
   if (pages.some(page => page.stale)) issues.push('IANCAR_ONE_SOURCE_STALE');
 

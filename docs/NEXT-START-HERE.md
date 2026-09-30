@@ -69,6 +69,8 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 2026-10-01 이안카 온라인·로컬 구현 동기화
 
+- 최신 사용자 결정/연결: 제공한 기존 키 그대로 사용 승인. `freepasserp5/freepass-data-iancar-one-api` version 1 enabled 등록 및 공식 API 실제 클라이언트 조회 exit 0 확인. 전체 108 / AVAILABLE 101 / UNAVAILABLE 4 / PREPARING 2 / RESERVED 1, 상세/재고/요금/사진 샘플 성공. 상세 증거와 다음 미완료 경계는 [ONE API 실제 연결 확인](IANCAR-ONE-API.md)에서 확인한다. 아래 키 미주입·재발급 경계는 이 결정 이전 이력이며 현재 blocker는 Canonical mapping/writer/consumer 검증이다.
+
 - 목적: 온라인 main의 공식 ONE API 구현(PR #269)을 기존 로컬 Work에 통합한다. 다음 원천 수집 시작점은 `docs/IANCAR-ONE-API.md`와 `npm run source:iancar:one`이며 아래 로그인 transport 기록은 과거 준비 이력이다. `/api/inventory` 및 로그인 수집을 운영 fallback으로 활성화하지 않는다.
 - 키 위치 확인: 사용자가 온라인 채팅 `기타 접속 여부 확인`에 제공한 키를 확인했다. 키 값은 파일/Git/로그에 복제하지 않았다. 현재 Data GitHub secret, ERP bridge secret 이름, `freepasserp5` Secret Manager metadata, 로컬 process/user/machine 환경변수에는 공식 ONE 키 binding이 확인되지 않았다. 채팅 노출 키는 재발급 후 서버 비밀 저장소 주입이 필요하다.
 - 남음: 새 키의 안전한 runtime binding, 실제 목록/상세/재고/요금/사진 read-only 검증, reviewed Canonical mapping, ERP/운영시트 readback. 코드 동기화는 운영 전환이 아니다.
