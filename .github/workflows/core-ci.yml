@@ -35,3 +35,5 @@ jobs:
         run: npm run test:read-runtime-smoke
       - name: Shadow tests
         run: npm run test:shadow
+      - name: Delivery owner fail-closed regressions
+        run: npm run test:delivery-owner

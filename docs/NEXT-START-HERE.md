@@ -66,6 +66,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+## 2026-09-30 Data 수집·배달 실행 소유권 구현
+
+- 목적: 연결 지도의 실제 실행을 Data가 맡게 하는 검증 가능한 이관 경로. 운영/IAM/시트 고위험이며 이번 packet은 준비 코드다.
+- 대상: `work/freepass-data/delivery-owner-20260930`, base `f77e581`. 기존 checkout의 문서 두 건은 보존한 별도 worktree. Academy READY / COMPOSE_OR_EXTEND.
+- 변경: frozen engine adapter, 기본 shadow workflow, 매 단계 owner/old IAM/키/drain 확인, private before backup readback, 단일 snapshot SHA 고정, 실패 시 downstream 중단과 redacted attempt receipt. 신규차 import/자동 retire/CANONICAL ACTIVE는 범위 밖 HOLD.
+- 검증: 신규 Node 회귀검사와 전체 architecture/standards/data-access/sheets/build/runtime/shadow/dashboard 검사. 기본 전체 Vitest의 기존 runtime-policy 5초 timeout은 `--maxWorkers=2` 전체 재실행으로 1,043 PASS / 14 SKIP. 상세 CI/commit은 PR 참조.
+- Claude: 광역 호출 REVIEW_TIMEOUT 후 좁힌 설계 자문과 최종 준비 검토 ANSWERED/exit 0. destructive retire·백업·credential drain·rollback 지적 반영. ADC 전체 제거는 승인된 동일 ERP5 대상 이관을 깨므로 채택하지 않고 target/IAM 제한을 요구한다. 실제 구현 코드의 독립 전수 리뷰·운영 검증을 대체하지 않는다.
+- 남음: 전용 WIF/SA/환경/시크릿, private bucket, token-mint 음성테스트, shadow·supplier field coverage, 전체 workbook backup, rollback drill, consumer별 실제 readback, 운영 recovery watchdog 이관. owner 변수는 미설정이며 기존 ERP4 writer는 그대로 유지했다.
+- next_start_here: [이관 실행 절차](DATA-DELIVERY-OWNER-ROLLOUT.md)의 admission/activation과 recovery 게이트. 코드 준비를 운영 최신화 이관 완료로 표현하지 않는다.
+
 ## 2026-09-30 내부 AI API와 무보증 오인 전수감사
 
 - 목적: 내부 AI 전용 read API 분리, 손오공/픽업 무보증 금지, 애매한 보증금 `미입력`/`확인중` 표시. 데이터·권한 고위험: 운영 쓰기/배포 없이 read-only + 준비 변경.

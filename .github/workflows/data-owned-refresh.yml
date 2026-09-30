@@ -1,0 +1,123 @@
+name: FreePass Data source collection and delivery
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [shadow, execute]
+        default: shadow
+  schedule:
+    - cron: '17 * * * *'
+
+# Repository concurrency is NOT cross-repository locking. The adapter also
+# requires the old writer disabled, drained and fenced at its IAM identity.
+concurrency:
+  group: freepass-data-production-delivery
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+jobs:
+  refresh:
+    if: vars.FREEPASS_DATA_REFRESH_OWNER == 'freepass-data' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'shadow')
+    environment: data-production-delivery
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      FREEPASS_DATA_REFRESH_OWNER: ${{ vars.FREEPASS_DATA_REFRESH_OWNER }}
+      FREEPASS_DATA_LEGACY_FENCED_AT: ${{ vars.FREEPASS_DATA_LEGACY_FENCED_AT }}
+      FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET }}
+      GOOGLE_CLOUD_PROJECT: freepasserp5
+      FREEPASS_DATA_ENGINE_ROOT: ${{ github.workspace }}/engine
+      FREEPASS_DATA_RECEIPT_PATH: ${{ github.workspace }}/tmp/data-delivery-receipt.json
+      GOOGLE_SHEETS_APPLICATION_CREDENTIALS: ${{ github.workspace }}/engine/tmp/firebase-auth/sheets.json
+      GOOGLE_SHEETS_SUBJECT: pyh@teamjpk.com
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: freepass-creator/freepasserp4
+          ref: e6727ff04fcf98380701fa6360c36f313e0e321f
+          path: engine
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Require dedicated delivery identity and private evidence bucket
+        env:
+          PROVIDER: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
+          ACCOUNT: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
+          BUCKET: ${{ vars.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET }}
+        run: |
+          set -euo pipefail
+          test -n "$PROVIDER"
+          test "$ACCOUNT" = 'github-data-inventory-writer@freepasserp5.iam.gserviceaccount.com'
+          test -n "$BUCKET"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
+          service_account: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: npm ci --ignore-scripts
+      - name: Verify Data ownership before materializing supplier credentials
+        if: github.event_name != 'workflow_dispatch' || inputs.mode == 'execute'
+        run: node --import tsx scripts/data-delivery-owner.mjs --preflight
+      - name: Install frozen adapter
+        working-directory: engine
+        run: npm ci
+      - name: Prepare private supplier credentials
+        if: github.event_name != 'workflow_dispatch' || inputs.mode == 'execute'
+        env:
+          SHEETS_SA: ${{ secrets.GOOGLE_SA_JSON }}
+          SONOGONG: ${{ secrets.SONOGONG_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "$SHEETS_SA"
+          test -n "$SONOGONG"
+          umask 077
+          mkdir -p engine/tmp/firebase-auth engine/sonokong/lib/wonja
+          printf '%s' "$SHEETS_SA" > engine/tmp/firebase-auth/sheets.json
+          printf '%s' "$SONOGONG" > engine/sonokong/lib/wonja/.손오공계정.json
+      - name: Collect, refresh and deliver with per-stage owner checks
+        if: github.event_name != 'workflow_dispatch' || inputs.mode == 'execute'
+        run: node --import tsx scripts/data-delivery-owner.mjs --execute
+      - name: Read-only shadow parity (no supplier/Sheet mutation)
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'shadow'
+        run: node --import tsx scripts/data-delivery-owner.mjs --shadow
+      - name: Preserve immutable private snapshot and verify bytes
+        if: always()
+        env:
+          BUCKET: ${{ vars.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET }}
+        run: |
+          set -euo pipefail
+          test -f tmp/data-delivery-receipt.json || exit 0
+          uri="gs://$BUCKET/delivery/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          gcloud storage cp tmp/data-delivery-receipt.json "$uri/receipt.json" --if-generation-match=0
+          gcloud storage cp "$uri/receipt.json" tmp/receipt-readback.json
+          cmp tmp/data-delivery-receipt.json tmp/receipt-readback.json
+          for snapshot in data-delivery-snapshot data-delivery-shadow; do
+            if test -f "engine/tmp/$snapshot.json"; then
+              gcloud storage cp "engine/tmp/$snapshot.json" "$uri/$snapshot.json" --if-generation-match=0
+              gcloud storage cp "$uri/$snapshot.json" "tmp/$snapshot-readback.json"
+              cmp "engine/tmp/$snapshot.json" "tmp/$snapshot-readback.json"
+            fi
+          done
+      - name: Retain redacted attempt receipt only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-delivery-attempt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmp/data-delivery-receipt.json
+          if-no-files-found: ignore
+      - name: Remove temporary credentials
+        if: always()
+        run: |
+          rm -f engine/tmp/firebase-auth/sheets.json engine/sonokong/lib/wonja/.손오공계정.json engine/sonokong/lib/wonja/.손오공토큰.json
