@@ -7,6 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "test:delivery-owner": "node --test tests/data-delivery-owner.node.mjs",
     "check:catalog-shadow": "node scripts/check-catalog-shadow.mjs",
     "check:cutover-readiness": "node scripts/assess-cutover-readiness.mjs",
     "test:shadow": "node --test tests/catalog-shadow.node.mjs tests/catalog-shadow-stability.node.mjs tests/shadow-cli.node.mjs",
