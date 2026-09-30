@@ -21,6 +21,12 @@ Do not start a second writer while the legacy production refresh identity still 
 authority. IAM fencing, backups and rollback of the active writer must be verified at
 cutover, not inferred from a PR merge.
 
+## 2026-09-30 provider ONE API supersession
+
+The provider has now approved a FreePass read-only **ONE API** covering vehicle inventory/detail, term+mileage rent/deposit, contract/policy conditions and representative/detail photos. Customer PII, actual contract/customer documents, internal cost/commission/notes, GPS/control and mutation/reservation actions are excluded.
+
+See [IANCAR-ONE-API.md](IANCAR-ONE-API.md). After exact Base URL/auth/endpoint/schema are verified, ONE API supersedes the login-only RP031 pilot and becomes the field authority for facts it supplies. Do not copy the live key into Git, issues, CI logs or command lines; provision a rotated key through runtime secret storage. Until the endpoint contract is observed, mapping/canonical/publication stay HOLD.
+
 ## RP031 / 이안카 direct pilot
 
 `src/adapters/iancar-direct-source.ts` logs into the supplier's **original ERP** at the
