@@ -38,15 +38,34 @@ function sameOriginUrl(path) {
   if (url.origin !== ORIGIN) throw new Error('CROSS_ORIGIN_ASSET_REJECTED');
   return url;
 }
-const srcs = unique([...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(m => m[1]))
+const assetRefs = unique([
+  ...[...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(m => m[1]),
+  ...[...html.matchAll(/<link[^>]+href=["']([^"']+\.(?:js|mjs)(?:\?[^"']*)?)["']/gi)].map(m => m[1]),
+  ...[...html.matchAll(/["']([^"']+\.(?:js|mjs)(?:\?[^"']*)?)["']/gi)].map(m => m[1])
+]);
+const srcs = assetRefs
   .filter(src => {
-    try { return sameOriginUrl(src).pathname.match(/\.(?:js|mjs)(?:$|\?)/); } catch { return false; }
+    try { return sameOriginUrl(src).pathname.match(/\.(?:js|mjs)$/); } catch { return false; }
   })
-  .slice(0, 80);
+  .slice(0, 120);
 
 const publicEndpoints = new Set(html.match(endpointPattern) ?? []);
 const hints = new Set();
 let authHints = new Set();
+const htmlApiContexts = [];
+for (const match of html.matchAll(/\/api\/[A-Za-z0-9_?&=./:%{}$-]+/g)) {
+  const i = match.index ?? 0;
+  htmlApiContexts.push(html.slice(Math.max(0, i - 120), Math.min(html.length, i + 260))
+    .replace(/\s+/g, ' ').slice(0, 380));
+}
+const keywordContexts = [];
+for (const rx of [/one\s*api/ig, /api[-_]?key/ig, /openapi/ig, /swagger/ig, /x-api-key/ig, /authorization/ig]) {
+  for (const match of html.matchAll(rx)) {
+    const i = match.index ?? 0;
+    keywordContexts.push(html.slice(Math.max(0, i - 140), Math.min(html.length, i + 280))
+      .replace(/\s+/g, ' ').slice(0, 420));
+  }
+}
 const scanned = [];
 
 for (const src of srcs) {
@@ -76,5 +95,8 @@ console.log(JSON.stringify({
   oneSpecificHints: unique(oneSpecific).slice(0, 120),
   dataRouteHints: unique(likelyData).slice(0, 180),
   authLexemesPresent: unique([...authHints]),
+  htmlApiContexts: unique(htmlApiContexts).slice(0, 120),
+  keywordContexts: unique(keywordContexts).slice(0, 80),
+  discoveredAssetRefs: srcs,
   note: 'PUBLIC_ASSET_DISCOVERY_ONLY_NO_API_KEY_NO_AUTHENTICATED_ENDPOINT_CALLS'
 }, null, 2));
