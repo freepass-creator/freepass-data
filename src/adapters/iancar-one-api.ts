@@ -16,7 +16,9 @@ const isJson = (value: unknown): value is Json =>
 const digest = (value: unknown) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const instant = (value: unknown): value is string =>
-  typeof value === 'string' && Number.isFinite(Date.parse(value));
+  typeof value === 'string'
+  && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)
+  && Number.isFinite(Date.parse(value));
 const integer = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value);
 
@@ -235,6 +237,7 @@ export async function collectIancarOneVehicleList(
   const client = createIancarOneApiClient(config, fetcher);
   const first = parseListPage(await client.listVehicles(1, IANCAR_ONE_PAGE_SIZE), 1);
   const expectedPages = Math.max(1, Math.ceil(first.pagination.total / first.pagination.page_size));
+  if (expectedPages > 1000) throw new IancarOneApiError('IANCAR_ONE_PAGE_LIMIT_EXCEEDED');
   const pages = [first];
 
   for (let page = 2; page <= expectedPages; page++) {
@@ -244,11 +247,11 @@ export async function collectIancarOneVehicleList(
   const issues: string[] = [];
   const syncedAt = first.synced_at;
   const sourceAgeMs = Date.parse(now) - Date.parse(syncedAt);
-  if (sourceAgeMs < 0) issues.push('IANCAR_ONE_SOURCE_TIME_IN_FUTURE');
+  // Bounded clock skew permits a snapshot created while the request is in flight.
+  if (sourceAgeMs < -60_000) issues.push('IANCAR_ONE_SOURCE_TIME_IN_FUTURE');
   if (sourceAgeMs > IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS * 1000)
     issues.push('IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED');
-  if (pages.some(page => page.pagination.total !== first.pagination.total
-    || page.pagination.page_size !== first.pagination.page_size))
+  if (pages.some(page => page.pagination.total !== first.pagination.total))
     issues.push('IANCAR_ONE_PAGINATION_METADATA_DRIFT');
   if (pages.some(page => page.synced_at !== syncedAt)) issues.push('IANCAR_ONE_SYNC_TIME_DRIFT');
   if (pages.some(page => page.stale)) issues.push('IANCAR_ONE_SOURCE_STALE');

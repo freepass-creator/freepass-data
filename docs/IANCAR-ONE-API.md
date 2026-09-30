@@ -9,7 +9,8 @@ Status (2026-10-01): **공식 API 인증 조회 검증 완료 · 서버 Secret �
 - 원천 관측 `2026-09-30T22:55:34.446Z` (2026-10-01 KST): 전체 목록 108대 / 2페이지, API `stale=false`. 상태 AVAILABLE 101 / UNAVAILABLE 4 / PREPARING 2 / RESERVED 1. source digest `8dc5c186a4ea7e682068ae7f064751a4ad1871661ae3f7fc71af3468f52d41ae`.
 - 실제 공식 목록/상세/availability/rates 조회 성공. 요금 샘플 24개, 목록 사진 참조 보유 52대. 사진 보유 차량 상세 샘플에 사진 47개; 인증 사진 샘플 HTTP 200, image/jpeg, 490351 bytes. 전 차량 사진/요금 수집 완료를 뜻하지 않는다.
 - 초기 목록 probe는 HTTP 200 뒤 Windows PTY 종료 오류로 process exit 1이었다. 이후 Secret readback 및 실제 클라이언트 목록/상세/요금/사진 재조회는 exit 0으로 별도 확인했다.
-- 안전 보강: 공식 origin 외 credential 전송 금지, capturedAt 기준 15분 초과/미래 timestamp 및 페이지 total/page_size drift는 HOLD. 전용 회귀 14 PASS, build PASS.
+- 안전 보강: 공식 origin 외 credential 전송 금지, RFC3339 offset 필수, capturedAt 기준 15분 초과/60초 이상 미래 timestamp 및 페이지 total drift는 HOLD. 페이지 상한 1,000. 전용 회귀 16 PASS, build PASS.
+- Claude 독립 검토 ANSWERED/exit 0: 공식 origin 고정과 신선도 검사 방향에 동의했으나 fixture 벽시계 의존, 0초 skew, timezone 누락, pagination 상한 반례를 발견했다. Date-only 고정 테스트/60초 제한 skew/offset 필수/상한 및 회귀검사로 수정했다. 마지막 페이지 page_size가 반환 개수일 수 있다는 제안은 total drift만 검증하도록 반영했다. 실제 원천 대수의 독립 대사와 Canonical/운영 전환은 여전히 HOLD다.
 - 남음: provider stable ID와 기존 차량/정책 연결의 검증된 mapping, 상세 요금/계약조건/사진의 전체 수집과 원천 범위 증거, reviewed Canonical 반영, 전용 writer/runtime secret binding, ERP/운영시트 실제 readback. 이번 연결 확인은 READ VERIFIED이며 RAW/CANONICAL/DEPLOYMENT/CUTOVER 완료가 아니다.
 
 ## 확정된 연동 경로

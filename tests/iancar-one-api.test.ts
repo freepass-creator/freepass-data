@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildIancarOneSourceBatch,
   collectIancarOneVehicleList,
@@ -33,11 +33,16 @@ const page = (input: {
   success: true,
   data: input.data,
   pagination: { page: input.page, page_size: 100, total: input.total },
-    synced_at: input.syncedAt ?? new Date().toISOString(),
+  synced_at: input.syncedAt ?? '2026-10-01T00:00:00.000Z',
   stale: input.stale ?? false
 });
 
 describe('EANCAR ONE official partner API', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-01T00:01:00.000Z'));
+  });
+  afterEach(() => vi.useRealTimers());
   it('rejects credential transmission to any alternate origin', () => {
     expect(() => createIancarOneApiClient({ ...config, baseUrl: 'https://other.example' }))
       .toThrow('IANCAR_ONE_API_BASE_URL_NOT_ALLOWED');
@@ -45,7 +50,7 @@ describe('EANCAR ONE official partner API', () => {
 
   it.each([
     ['2026-09-30T23:00:00.000Z', 'IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED'],
-    ['2026-10-01T00:02:00.000Z', 'IANCAR_ONE_SOURCE_TIME_IN_FUTURE']
+    ['2026-10-01T00:03:00.000Z', 'IANCAR_ONE_SOURCE_TIME_IN_FUTURE']
   ])('HOLDs invalid source time %s even when provider stale=false', async (syncedAt, issue) => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify(page({
       page: 1, total: 1, data: [vehicle('v1')], syncedAt
@@ -67,6 +72,27 @@ describe('EANCAR ONE official partner API', () => {
     const capture = await collectIancarOneVehicleList(config, fetcher as typeof fetch);
     expect(capture.issues).toContain('IANCAR_ONE_PAGINATION_METADATA_DRIFT');
     expect(capture.readyForRawIngest).toBe(false);
+  });
+
+  it('permits bounded clock skew but rejects timestamps without an offset', async () => {
+    const fetcher = (syncedAt: string) => vi.fn(async () => new Response(JSON.stringify(page({
+      page: 1, total: 1, data: [vehicle('v1')], syncedAt
+    })), { status: 200 }));
+    const capture = await collectIancarOneVehicleList(config,
+      fetcher('2026-10-01T00:01:30Z') as typeof fetch);
+    expect(capture.readyForRawIngest).toBe(true);
+    await expect(collectIancarOneVehicleList(config,
+      fetcher('2026-10-01T00:00:00') as typeof fetch))
+      .rejects.toThrow('INVALID_IANCAR_ONE_LIST_RESPONSE');
+  });
+
+  it('bounds upstream page declarations before issuing additional requests', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(page({
+      page: 1, total: 100001, data: [vehicle('v1')]
+    })), { status: 200 }));
+    await expect(collectIancarOneVehicleList(config, fetcher as typeof fetch))
+      .rejects.toThrow('IANCAR_ONE_PAGE_LIMIT_EXCEEDED');
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it('uses the verified Bearer scheme and /v1/vehicles contract', async () => {
