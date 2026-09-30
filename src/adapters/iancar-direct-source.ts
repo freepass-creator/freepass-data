@@ -40,7 +40,9 @@ export async function readOriginalIancarInventory(
   if (!clean(account?.email) || !clean(account?.password)) throw new Error('IANCAR_CREDENTIALS_REQUIRED');
   const jar = new Map<string, string>();
   const merge = (res: Response) => {
-    for (const line of res.headers.getSetCookie?.() ?? []) {
+    const setCookies = res.headers.getSetCookie?.() ?? [];
+    const cookieLines = setCookies.length ? setCookies : res.headers.get('set-cookie') ? [res.headers.get('set-cookie')!] : [];
+    for (const line of cookieLines) {
       const pair = line.split(';', 1)[0]?.trim() ?? '';
       const key = pair.split('=', 1)[0]?.trim() ?? '';
       if (key && pair.includes('=')) jar.set(key, pair);
