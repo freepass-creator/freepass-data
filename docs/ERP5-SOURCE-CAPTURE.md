@@ -177,3 +177,16 @@ RP023의 명시적 `오플구독`, 11건은 필드 누락, 1건은 빈 문자열
 [beginTransaction](https://docs.cloud.google.com/firestore/docs/reference/rest/v1/projects.databases.documents/beginTransaction),
 [runQuery](https://docs.cloud.google.com/firestore/docs/reference/rest/v1/projects.databases.documents/runQuery),
 [runAggregationQuery](https://docs.cloud.google.com/firestore/docs/reference/rest/v1/projects.databases.documents/runAggregationQuery).
+
+## 2026-09-30 예약 감사 누락 복구
+
+기존 `erp5-audit-watchdog.yml`은 성공 감사가 90분 이상 오래되면 같은 main 감사 workflow를 dispatch한다.
+진행 중/대기 중 회차가 있으면 생략하고, 최근 시도 후 30분 동안 재요청하지 않는다.
+dispatch는 복구 요청이며 성공 증거가 아니다. 360분 초과의 기존 stale 실패는 유지하고,
+새 감사의 FULL capture·pointer readback 성공으로만 복구를 판정한다.
+GitHub 예약 자체가 두 workflow 모두를 누락하면 자동 복구도 실행되지 않으므로 지속적인 매시간 실행을 보증하지 않는다.
+외부 독립 scheduler 도입 여부는 실제 후속 회차 간격으로 판단한다.
+
+대상 baseline: `696f6e88d37d5bb3d2cf0ae13ca91c69f986cac1`.
+이 변경은 원천 조회 감사만 복구하며 공급사 재고 수집/Canonical write/판매시트 게시를 수행하지 않는다.
+next_start_here: watchdog dispatch 기록 → 새 audit 성공/캡처 시각 → 다음 예약 회차 간격을 대조한다.
