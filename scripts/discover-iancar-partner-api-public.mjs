@@ -9,6 +9,19 @@ async function get(path){
   return r.text();
 }
 const html=await get('/');
+const unauthProbe = await (async()=>{
+  const u=new URL('/v1/vehicles?page=1&page_size=1',ORIGIN);
+  const res=await fetch(u,{method:'GET',redirect:'manual',cache:'no-store',headers:H,signal:AbortSignal.timeout(20000)});
+  let body='';
+  try{body=(await res.text()).slice(0,500)}catch{}
+  return {
+    status:res.status,
+    wwwAuthenticate:res.headers.get('www-authenticate'),
+    requestId:res.headers.get('x-request-id'),
+    contentType:res.headers.get('content-type'),
+    body:body.replace(/eancar_live_[A-Za-z0-9_-]+/g,'[REDACTED_LIVE_KEY]')
+  };
+})();
 const guideHtml=await get('/partner-api-guide');
 const guideText=guideHtml
   .replace(/<script[\s\S]*?<\/script>/gi,' ')
@@ -63,6 +76,7 @@ console.log(JSON.stringify({
   candidateAssets:named,
   fetched,
   guideBytes: Buffer.byteLength(guideHtml),
+  unauthProbe,
   rawAuthEvidence,
   guideApiMatches,
   guideContexts:[...new Set(guideContexts)].slice(0,100),
