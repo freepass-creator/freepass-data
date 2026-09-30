@@ -67,6 +67,19 @@ for (const rx of [/one\s*api/ig, /api[-_]?key/ig, /openapi/ig, /swagger/ig, /x-a
   }
 }
 const scanned = [];
+const assetEvidenceContexts = [];
+const evidenceRegexes = [
+  /\/api\/one-network/ig,
+  /one\s*api/ig,
+  /api[-_ ]?key/ig,
+  /x-api-key/ig,
+  /authorization/ig,
+  /bearer/ig,
+  /partner[^"'\`]{0,40}api/ig,
+  /external[^"'\`]{0,40}api/ig,
+  /integration[^"'\`]{0,40}api/ig,
+  /api[^"'\`]{0,40}(?:token|secret)/ig
+];
 
 for (const src of srcs) {
   const url = sameOriginUrl(src);
@@ -82,6 +95,17 @@ for (const src of srcs) {
     if (value && value.length < 260) hints.add(value);
   }
   for (const m of body.matchAll(authPattern)) authHints.add(m[0].toLowerCase());
+  for (const rx of evidenceRegexes) {
+    for (const m of body.matchAll(rx)) {
+      const i = m.index ?? 0;
+      assetEvidenceContexts.push({
+        asset: url.pathname,
+        keyword: m[0],
+        context: body.slice(Math.max(0, i - 220), Math.min(body.length, i + 520))
+          .replace(/\s+/g, ' ').slice(0, 720)
+      });
+    }
+  }
 }
 
 const oneSpecific = [...hints].filter(x => /one|openapi|swagger|api[-_]?key/i.test(x));
@@ -98,5 +122,6 @@ console.log(JSON.stringify({
   htmlApiContexts: unique(htmlApiContexts).slice(0, 120),
   keywordContexts: unique(keywordContexts).slice(0, 80),
   discoveredAssetRefs: srcs,
+  assetEvidenceContexts: assetEvidenceContexts.slice(0, 180),
   note: 'PUBLIC_ASSET_DISCOVERY_ONLY_NO_API_KEY_NO_AUTHENTICATED_ENDPOINT_CALLS'
 }, null, 2));
