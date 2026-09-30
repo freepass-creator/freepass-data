@@ -99,9 +99,9 @@ describe('FreePass Data native Iancar source boundary', () => {
     const fetcher = vi.fn(async (url: string, options: RequestInit) => {
       called.push(`${options.method} ${url}`);
       expect(options.redirect).toBe('manual');
-      if (url.endsWith('/login')) return new Response('', { status: 200 });
       if (url.endsWith('/api/auth/login'))
         return new Response('{}', { status: 200, headers: { 'set-cookie': 'eancar_session=synthetic; Path=/; HttpOnly' } });
+      if (url.endsWith('/login')) return new Response('', { status: 200 });
       if (url.endsWith('/api/inventory')) {
         expect(String((options.headers as Record<string, string>).cookie)).toContain('eancar_session=');
         return new Response(JSON.stringify(full()), { status: 200 });
