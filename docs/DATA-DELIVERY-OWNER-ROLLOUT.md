@@ -60,6 +60,8 @@ Before activation the operator must confirm the exact account/project/workflow a
 - Register `FREEPASS_DATA_REFRESH_WIF_PROVIDER`,
   `FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT`, `FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET`,
   plus supplier secrets through secure transport. Never extract GitHub secrets to logs.
+  `FREEPASS_DATA_LEGACY_ACTIONS_READ_TOKEN` must be an App/fine-grained read-only
+  token scoped to legacy Actions history, not a broad personal or write token.
 - Grant the minimum read of the old writer SA IAM policy required by preflight.
 - Run shadow N times; compare exact snapshots/transform outputs and supplier coverage,
   not merely collection counts. Current shadow checks only engine-to-DB public
@@ -108,6 +110,15 @@ cross-repository races and recovery gaps. Retirement was removed, backup/readbac
 token-drain admission and explicit rollout/recovery gates added. The recommendation
 to clear all subprocess ADC was not adopted: it conflicts with the intended Data-owned
 write into the verified ERP5 target. Production gates above remain mandatory.
+Exact-file review also raised cross-repository token scope; the workflow now requires
+an explicit legacy Actions-read identity. Per-stage safe failure code/exit code is
+retained without copying sensitive stdout/stderr. The shadow engine call omits its
+Firestore `--write-receipt` flag. Main-only shadow is intentional (after disabled
+workflow merge and narrowly scoped provisioning), not a PR-branch IAM bypass.
+Shadow's verified pinned calls read only Firestore and require no Sheets credential.
+The 60-minute job deadline remains a hard attempt ceiling, not 15 times 20 minutes
+of guaranteed availability. A timeout/runner loss can leave a RUNNING checkpoint;
+operators must reconcile it as ambiguous, never treat it as SUCCEEDED or blindly retry.
 
 next_start_here: provision and read back the narrowly scoped identities/environment,
 then run shadow and collect the missing field/source/consumer evidence before any

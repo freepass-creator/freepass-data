@@ -84,6 +84,8 @@ export async function runDelivery({ execute, assertOwnership, readSnapshot, seal
         stage.status = 'SUCCEEDED';
       } catch (error) {
         stage.status = 'FAILED';
+        stage.failureCode = ['PROCESS_TIMEOUT', 'PROCESS_SPAWN_FAILED', 'ADAPTER_EXIT_NONZERO'].includes(error.code) ? error.code : 'STAGE_VERIFICATION_FAILED';
+        stage.exitCode = Number.isInteger(error.executionExitCode) ? error.executionExitCode : null;
         throw error;
       } finally { stage.completedAt = now(); }
     }
@@ -104,7 +106,12 @@ export async function runDelivery({ execute, assertOwnership, readSnapshot, seal
 
 function command(command, args, cwd, env = process.env) {
   const result = spawnSync(command, args, { cwd, env, encoding: 'utf8', shell: false, timeout: 20 * 60_000, maxBuffer: 64 * 1024 * 1024 });
-  if (result.error || result.status !== 0) throw new Error('ADAPTER_COMMAND_FAILED');
+  if (result.error || result.status !== 0) {
+    const error = new Error('ADAPTER_COMMAND_FAILED');
+    error.code = result.error?.code === 'ETIMEDOUT' ? 'PROCESS_TIMEOUT' : result.error ? 'PROCESS_SPAWN_FAILED' : 'ADAPTER_EXIT_NONZERO';
+    error.executionExitCode = result.status;
+    throw error;
+  }
   return result.stdout;
 }
 
@@ -132,7 +139,9 @@ async function main() {
   if (process.argv.includes('--shadow')) {
     if (process.env.GITHUB_REPOSITORY !== 'freepass-creator/freepass-data' || process.env.GITHUB_REF !== 'refs/heads/main' || process.env.GOOGLE_CLOUD_PROJECT !== 'freepasserp5') throw new Error('SHADOW_TARGET_MISMATCH');
     command('npx', ['tsx', 'scripts/capture-sales-publish-snapshot.mts', '--erp5', '--out=tmp/data-delivery-shadow.json'], engineRoot, { ...process.env, ERP5_FIREBASE_USE_ADC: 'true' });
-    command('npx', ['tsx', 'scripts/verify-whitelabel-publication.mts', '--snapshot=tmp/data-delivery-shadow.json', '--write-receipt'], engineRoot, { ...process.env, ERP5_FIREBASE_USE_ADC: 'true' });
+    // --write-receipt mutates ops/public_catalog_publication in the frozen engine.
+    // It is intentionally omitted on the genuinely read-only shadow path.
+    command('npx', ['tsx', 'scripts/verify-whitelabel-publication.mts', '--snapshot=tmp/data-delivery-shadow.json'], engineRoot, { ...process.env, ERP5_FIREBASE_USE_ADC: 'true' });
     const bytes = readFileSync(join(engineRoot, 'tmp/data-delivery-shadow.json'));
     const shadow = { version: 'freepass-data-refresh-attempt/1', status: 'SHADOW_ENGINE_PARITY_VERIFIED', engineRevision: ENGINE_REVISION, lockfileDigest, writeExecuted: false, canonicalCutoverVerified: false, allConsumerReadbackVerified: false, snapshotSha256: createHash('sha256').update(bytes).digest('hex') };
     writeFileSync(output, `${JSON.stringify(shadow, null, 2)}\n`);

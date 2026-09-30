@@ -36,7 +36,9 @@ jobs:
       FREEPASS_DATA_RECEIPT_PATH: ${{ github.workspace }}/tmp/data-delivery-receipt.json
       GOOGLE_SHEETS_APPLICATION_CREDENTIALS: ${{ github.workspace }}/engine/tmp/firebase-auth/sheets.json
       GOOGLE_SHEETS_SUBJECT: pyh@teamjpk.com
-      GH_TOKEN: ${{ github.token }}
+      # Fine-grained/App token: Actions read on the legacy repository only.
+      # The Data repository GITHUB_TOKEN is not cross-repository authorization.
+      GH_TOKEN: ${{ secrets.FREEPASS_DATA_LEGACY_ACTIONS_READ_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,7 +71,9 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Verify Data ownership before materializing supplier credentials
         if: github.event_name != 'workflow_dispatch' || inputs.mode == 'execute'
-        run: node --import tsx scripts/data-delivery-owner.mjs --preflight
+        run: |
+          test -n "$GH_TOKEN"
+          node --import tsx scripts/data-delivery-owner.mjs --preflight
       - name: Install frozen adapter
         working-directory: engine
         run: npm ci
