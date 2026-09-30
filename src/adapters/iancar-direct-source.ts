@@ -119,9 +119,9 @@ export function prepareIancarDirectInventory(
   if (original.stale !== false) issues.push('UPSTREAM_STALE_OR_UNVERIFIED');
   if (!Number.isFinite(upstreamMs) || upstreamMs > observedMs + 5 * 60_000
     || observedMs - upstreamMs > MAX_SOURCE_AGE_MS) issues.push('UPSTREAM_FRESHNESS_UNVERIFIED');
-  if (!Number.isSafeInteger(original.total) || original.total !== modelUnits) issues.push('INVENTORY_COUNT_MISMATCH');
+  if (typeof original.total !== 'number' || !Number.isSafeInteger(original.total) || original.total !== modelUnits) issues.push('INVENTORY_COUNT_MISMATCH');
   if (original.reservedTotal !== undefined &&
-    (!Number.isSafeInteger(original.reservedTotal) || original.reservedTotal !== reservations.size))
+    (typeof original.reservedTotal !== 'number' || !Number.isSafeInteger(original.reservedTotal) || original.reservedTotal !== reservations.size))
     issues.push('RESERVATION_COUNT_MISMATCH');
   if (modelUnits === 0) issues.push('EMPTY_INVENTORY_REQUIRES_REVIEW');
   if (unknownStatusCount) issues.push('UNKNOWN_SOURCE_STATUS');
@@ -153,7 +153,7 @@ export function prepareIancarDirectInventory(
   return {
     batch,
     evidence: {
-      sourceDigest, capturedAt, upstreamSyncedAt, declaredTotal: Number.isSafeInteger(original.total) ? original.total as number : null,
+      sourceDigest, capturedAt, upstreamSyncedAt, declaredTotal: typeof original.total === 'number' && Number.isSafeInteger(original.total) ? original.total : null,
       modelUnits, reservedUnits: reservations.size, unknownStatusCount, issues: [...new Set(issues)],
       readyForRawIngest, pricingVerified: false, canonicalWriteAuthorized: false, publicationAuthorized: false
     }
