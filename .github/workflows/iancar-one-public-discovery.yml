@@ -1,0 +1,24 @@
+name: Iancar ONE public discovery
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/discover-iancar-one-public.mjs'
+      - '.github/workflows/iancar-one-public-discovery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-discovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Discover same-origin public ONE/API route hints
+        run: node scripts/discover-iancar-one-public.mjs
