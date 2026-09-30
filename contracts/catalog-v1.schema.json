@@ -56,8 +56,8 @@
       "properties": {
         "termKey": {"type": "string", "minLength": 1},
         "depositCalculation": {"$ref": "#/$defs/termEconomicAmount"},
-        "supplierBillingFee": {"$ref": "#/$defs/termEconomicAmount"},
-        "channelPayoutFee": {"$ref": "#/$defs/termEconomicAmount"}
+        "supplierBillingFee": {"$ref": "#/$defs/termEconomicAmount", "description": "공급사 청구수수료: 공급사 → FreePass. 공급사 연동의 수수료이며 영업채널 지급수수료와 구분한다."},
+        "channelPayoutFee": {"$ref": "#/$defs/termEconomicAmount", "description": "프리패스 수수료 = 지급수수료: FreePass → 영업채널. 기본 연동 수수료. 수취수수료나 내부 마진을 뜻하지 않는다."}
       }
     },
     "vehicleModel": {

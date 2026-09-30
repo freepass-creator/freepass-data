@@ -4,6 +4,48 @@ import { seedDemoCatalog } from '../src/demo-seed.js';
 import { IdempotencyConflictError, RevisionConflictError, buildErpPublicProjection, processOneOutboxEvent, updateOfferPrice } from '../src/application/catalog.js';
 import { AuthorityDeniedError, resolveFieldAuthority } from '../src/domain/authority.js';
 import { stableRecordSetDigest } from '../src/shared/stable-digest.js';
+import { projectCounterpartyCommission, type OfferTermEconomics } from '../src/domain/catalog.js';
+
+describe('counterparty commission contract', () => {
+  const term: OfferTermEconomics = {
+    termKey: '36@20000',
+    depositCalculation: { state: 'UNKNOWN', sourceRefs: ['private-deposit'] },
+    supplierBillingFee: { state: 'KNOWN', amount: { amount: 1000000, currency: 'KRW' }, sourceRefs: ['private-billing'] },
+    channelPayoutFee: { state: 'KNOWN', amount: { amount: 800000, currency: 'KRW' }, sourceRefs: ['private-payout'] },
+  };
+  it('defaults to payout as 프리패스 수수료 and reveals neither billing nor margin', () => {
+    expect(projectCounterpartyCommission(term)).toEqual({
+      termKey: '36@20000', audience: 'SALES_CHANNEL', feeType: 'channelPayoutFee',
+      label: '프리패스 수수료', payer: 'FREEPASS', payee: 'SALES_CHANNEL',
+      state: 'KNOWN', amount: { amount: 800000, currency: 'KRW' },
+    });
+  });
+  it('selects billing only for the supplier audience', () => {
+    expect(projectCounterpartyCommission(term, 'SUPPLIER')).toEqual({
+      termKey: '36@20000', audience: 'SUPPLIER', feeType: 'supplierBillingFee',
+      label: '공급사 청구수수료', payer: 'SUPPLIER', payee: 'FREEPASS',
+      state: 'KNOWN', amount: { amount: 1000000, currency: 'KRW' },
+    });
+    expect(() => projectCounterpartyCommission(term, 'INTERNAL' as never)).toThrow();
+  });
+  it('preserves unknown and zero separately and rejects inconsistent amounts', () => {
+    for (const fee of [
+      { state: 'UNKNOWN' as const, amount: { amount: 123, currency: 'KRW' as const } },
+      { state: 'KNOWN' as const, amount: null },
+      { state: 'ZERO' as const, amount: { amount: 123, currency: 'KRW' as const } },
+      { state: 'KNOWN' as const, amount: { amount: -1, currency: 'KRW' as const } },
+    ]) {
+      expect(projectCounterpartyCommission({ ...term, channelPayoutFee: { ...fee, sourceRefs: ['private'] } }))
+        .toMatchObject({ state: 'UNKNOWN', amount: null });
+    }
+    expect(projectCounterpartyCommission({ ...term, channelPayoutFee: {
+      state: 'ZERO', amount: { amount: 0, currency: 'KRW' }, sourceRefs: ['private'],
+    } })).toMatchObject({ state: 'ZERO', amount: { amount: 0 } });
+    expect(projectCounterpartyCommission({ ...term, channelPayoutFee: {
+      state: 'NOT_APPLICABLE', sourceRefs: ['private'],
+    } })).toMatchObject({ state: 'NOT_APPLICABLE', amount: null });
+  });
+});
 
 describe('Catalog V1 vertical slice', () => {
   it('is idempotent and rejects stale revisions', async () => {
