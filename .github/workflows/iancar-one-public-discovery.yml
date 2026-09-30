@@ -22,3 +22,5 @@ jobs:
           node-version: 22
       - name: Discover same-origin public ONE/API route hints
         run: node scripts/discover-iancar-one-public.mjs
+      - name: Inspect public partner API guide and manager assets
+        run: node scripts/discover-iancar-partner-api-public.mjs
