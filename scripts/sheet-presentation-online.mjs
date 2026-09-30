@@ -33,7 +33,7 @@ export async function collectPresentation(api, workbook) {
     const { rowCount, columnCount } = prop.gridProperties ?? {};
     if (!Number.isSafeInteger(rowCount) || rowCount < 1 || !Number.isSafeInteger(columnCount) || columnCount < 1) hold('Invalid grid dimensions');
     const range = `'${prop.title.replace(/'/g, "''")}'!A1:${column(columnCount)}${rowCount}`;
-    const fields = 'spreadsheetId,sheets(properties(sheetId),data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue)),columnMetadata(pixelSize,hiddenByUser)))';
+    const fields = 'spreadsheetId,sheets(properties(sheetId),data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue,userEnteredFormat(textFormat(fontFamily,fontSize,italic)))),columnMetadata(pixelSize,hiddenByUser)))';
     const full = await api(`${url}?includeGridData=true&ranges=${encodeURIComponent(range)}&fields=${encodeURIComponent(fields)}`, { method: 'GET' });
     if (full.spreadsheetId !== spreadsheet.spreadsheetId || full.sheets?.length !== 1 || full.sheets[0].properties?.sheetId !== prop.sheetId) hold('Wrong grid response');
     const grids = full.sheets[0].data;
@@ -51,6 +51,7 @@ export async function collectPresentation(api, workbook) {
       row.values = row.values.map(cell => ({
         ...(cell.userEnteredValue && Object.keys(cell.userEnteredValue).length ? { userEnteredValue: cell.userEnteredValue } : {}),
         ...(cell.effectiveValue && Object.keys(cell.effectiveValue).length ? { effectiveValue: cell.effectiveValue } : {}),
+        ...(cell.userEnteredFormat?.textFormat ? { userEnteredFormat: { textFormat: cell.userEnteredFormat.textFormat } } : {}),
       }));
     }
     if (grid.columnMetadata?.length !== columnCount) hold('Missing column metadata');
