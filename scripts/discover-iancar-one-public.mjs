@@ -1,24 +1,42 @@
-const ORIGIN = 'https://xn--le5bt3bwxk.com';
+const ENTRY = 'https://xn--le5bt3bwxk.com';
 const timeout = (ms = 20000) => AbortSignal.timeout(ms);
 const headers = { 'user-agent': 'FreePassData/1 public-one-api-discovery', accept: 'text/html,application/javascript,*/*' };
 
-function sameOriginUrl(path) {
-  const url = new URL(path, ORIGIN);
-  if (url.origin !== ORIGIN) throw new Error('CROSS_ORIGIN_ASSET_REJECTED');
-  return url;
+const officialHost = new URL(ENTRY).hostname;
+function allowedHost(hostname) {
+  return hostname === officialHost || hostname === `www.${officialHost}`;
 }
-async function text(url) {
-  const res = await fetch(url, { method: 'GET', redirect: 'manual', cache: 'no-store', signal: timeout(), headers });
-  if (res.status >= 300 && res.status < 400) throw new Error(`REDIRECT_${res.status}_${new URL(url).pathname}`);
-  if (!res.ok) throw new Error(`HTTP_${res.status}_${new URL(url).pathname}`);
-  return res.text();
+async function request(url) {
+  let current = new URL(url);
+  for (let hop = 0; hop < 3; hop++) {
+    if (current.protocol !== 'https:' || !allowedHost(current.hostname)) throw new Error('CROSS_ORIGIN_REDIRECT_REJECTED');
+    const res = await fetch(current, { method: 'GET', redirect: 'manual', cache: 'no-store', signal: timeout(), headers });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      if (!location) throw new Error(`REDIRECT_WITHOUT_LOCATION_${res.status}`);
+      const next = new URL(location, current);
+      console.error(JSON.stringify({ redirect: res.status, from: current.pathname, toOrigin: next.origin, toPath: next.pathname }));
+      current = next;
+      continue;
+    }
+    if (!res.ok) throw new Error(`HTTP_${res.status}_${current.pathname}`);
+    return { url: current, body: await res.text() };
+  }
+  throw new Error('TOO_MANY_REDIRECTS');
 }
 const unique = xs => [...new Set(xs)].sort();
 const endpointPattern = /(?:https:\/\/[^"'\s)]+)?\/api\/[A-Za-z0-9_?&=./:%{}$-]+/g;
 const routePattern = /(?:^|["'`])((?:\/|https:\/\/)[^"'\s]{0,160}(?:one|openapi|swagger|rate|quote|inventory|vehicle|photo|policy|contract|term|mileage)[^"'\s]{0,160})/gi;
 const authPattern = /(?:x-api-key|api[-_]?key|authorization|bearer)/gi;
 
-const html = await text(ORIGIN + '/');
+const home = await request(ENTRY + '/');
+const ORIGIN = home.url.origin;
+const html = home.body;
+function sameOriginUrl(path) {
+  const url = new URL(path, ORIGIN);
+  if (url.origin !== ORIGIN) throw new Error('CROSS_ORIGIN_ASSET_REJECTED');
+  return url;
+}
 const srcs = unique([...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(m => m[1]))
   .filter(src => {
     try { return sameOriginUrl(src).pathname.match(/\.(?:js|mjs)(?:$|\?)/); } catch { return false; }
@@ -33,7 +51,7 @@ const scanned = [];
 for (const src of srcs) {
   const url = sameOriginUrl(src);
   let body;
-  try { body = await text(url); } catch (error) {
+  try { body = (await request(url)).body; } catch (error) {
     scanned.push({ asset: url.pathname, status: 'ERROR', reason: error instanceof Error ? error.message : 'FETCH_ERROR' });
     continue;
   }
