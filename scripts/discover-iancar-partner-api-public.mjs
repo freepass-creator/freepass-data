@@ -9,6 +9,24 @@ async function get(path){
   return r.text();
 }
 const html=await get('/');
+const guideHtml=await get('/partner-api-guide');
+const guideText=guideHtml
+  .replace(/<script[\s\S]*?<\/script>/gi,' ')
+  .replace(/<style[\s\S]*?<\/style>/gi,' ')
+  .replace(/<[^>]+>/g,' ')
+  .replace(/&quot;/g,'"').replace(/&amp;/g,'&').replace(/&#x27;|&#39;/g,"'")
+  .replace(/\s+/g,' ').trim();
+const guideApiMatches=[...new Set([
+  ...(guideHtml.match(/\/api\/[A-Za-z0-9_?&=./:%{}$-]+/g)??[]),
+  ...(guideText.match(/https:\/\/[^\s<>"']+/g)??[]).filter(x=>/api|eancarone/i.test(x))
+])];
+const guideContexts=[];
+for(const rx of [/x-api-key/ig,/api[-_ ]?key/ig,/authorization/ig,/bearer/ig,/curl/ig,/GET\s+\//ig,/scope/ig,/재고/ig,/요금/ig,/사진/ig,/계약조건/ig]){
+  for(const m of guideText.matchAll(rx)){
+    const i=m.index??0;
+    guideContexts.push(guideText.slice(Math.max(0,i-260),Math.min(guideText.length,i+900)).slice(0,1100));
+  }
+}
 const indexRef=[...html.matchAll(/["'](\/assets\/index-[^"']+\.js)["']/g)].map(m=>m[1])[0];
 if(!indexRef) throw new Error('INDEX_ASSET_NOT_FOUND');
 const index=await get(indexRef);
@@ -36,6 +54,9 @@ console.log(JSON.stringify({
   origin:ORIGIN,indexAsset:indexRef,
   candidateAssets:named,
   fetched,
+  guideBytes: Buffer.byteLength(guideHtml),
+  guideApiMatches,
+  guideContexts:[...new Set(guideContexts)].slice(0,100),
   contexts:contexts.filter(x=>/partner-api|api[-_ ]?key|x-api-key|authorization|bearer|\/api\//i.test(x.keyword)).slice(0,250),
   note:'PUBLIC_CODE_ONLY_NO_KEY_NO_AUTHENTICATED_CALL'
 },null,2));
