@@ -2,6 +2,17 @@
 
 FreePass 전체 제품군의 데이터 계약, 정본, lineage, distribution을 담당하는 중앙 데이터 플랫폼입니다.
 
+## 처음 오셨다면 여기부터
+
+**[데이터 업무 시작점 — 사람·AI 공통 안내](docs/NEXT-START-HERE.md#data-start)** 를 먼저 보세요.
+상품·정책의 숫자가 무엇을 뜻하는지, 접수·계약·정산은 어디서 찾는지, 갱신과 실제 전달을 무엇으로 확인하는지 한곳에서 안내합니다.
+
+- 값·단위·조건을 이해하려면 [72개 항목 업무 의미 사전](docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary).
+- 정본과 실행 증거를 찾으려면 [질문별 문서 안내](docs/NEXT-START-HERE.md#data-reading-map).
+- 이어서 작업할 사람·AI는 [미해결 항목과 인계 규칙](docs/NEXT-START-HERE.md#data-open-items).
+
+AI는 [AGENTS.md](AGENTS.md)의 진입 순서도 따릅니다. 안내 문서는 운영 데이터나 계약 승인 자체가 아니며, 최신 값은 권한 있는 원천과 실제 소비처에서 확인합니다.
+
 최종 목표는 **“FreePass Data에서 가져와”라는 요청 하나로 권한이 허용된
 `freepasserp5` 관리 데이터를 이곳의 안정된 계약을 통해 찾고 가져올 수 있게 하는 것**입니다.
 상품 Catalog V1부터 구현하되, 이후 고객·접수·계약·정산·증빙 등도 각 업무 소유권과
@@ -34,7 +45,9 @@ FreePass Data는 또 하나의 화면 앱이 아닙니다.
 9. **모든 관리 대상 데이터는 발견 가능해야 한다** — 데이터 도메인 목록과 제공 상태를 조회할 수 있고, 미연결 데이터는 누락시키지 않고 `HOLD`로 표시한다.
 10. **전체 조회와 전체 공개는 다르다** — 중앙에서 관리·검색할 수 있어도 소비자에게는 승인된 필드와 범위만 제공한다.
 
-## 현재 확인된 상태 — 2026-09-20
+## 과거 관측 — 2026-09-20, 현재 운영 판단에 사용하지 않음
+
+아래는 당시 기록입니다. 최신 작업 위치는 [데이터 업무 시작점](docs/NEXT-START-HERE.md#data-start), 구현·운영 증거는 [Implementation Status](docs/IMPLEMENTATION-STATUS.md)와 해당 handoff의 revision/readback을 확인하세요. RTDB는 영구 폐기되어 아래의 과거 참조가 사용·복원 허가를 뜻하지 않습니다.
 
 - FreePass Admin: Canonical Product Domain SSOT를 소비하도록 설계되어 있으나 production persistence/auth는 아직 NOT VERIFIED.
 - FreePass Sales: Firebase project `welrixtable` / Firestore를 현재 운영 정본으로 직접 사용.
