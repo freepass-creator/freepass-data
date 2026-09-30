@@ -52,7 +52,6 @@ export type OfferTermEconomics = {
 
 /** Commission names are from FreePass's perspective, never the caller's perspective. */
 export const COMMISSION_CONSUMER_POLICY = {
-  defaultAudience: 'SALES_CHANNEL',
   SALES_CHANNEL: {
     field: 'channelPayoutFee', label: '프리패스 수수료',
     payer: 'FREEPASS', payee: 'SALES_CHANNEL',
@@ -62,6 +61,7 @@ export const COMMISSION_CONSUMER_POLICY = {
     payer: 'SUPPLIER', payee: 'FREEPASS',
   },
 } as const;
+export const DEFAULT_COMMISSION_AUDIENCE = 'SALES_CHANNEL' as const;
 
 /**
  * Prepared counterparty projection, not an authorization gate or an API route.
@@ -70,7 +70,7 @@ export const COMMISSION_CONSUMER_POLICY = {
  */
 export function projectCounterpartyCommission(
   term: OfferTermEconomics,
-  audience: 'SALES_CHANNEL' | 'SUPPLIER' = 'SALES_CHANNEL',
+  audience: 'SALES_CHANNEL' | 'SUPPLIER' = DEFAULT_COMMISSION_AUDIENCE,
 ) {
   if (audience !== 'SALES_CHANNEL' && audience !== 'SUPPLIER') {
     throw new Error('Unsupported commission audience');

@@ -27,9 +27,7 @@ The runtime rejects:
 
 It does not seed data, publish releases, run workers, or expose Catalog mutation routes.
 
-## Consumer capabilities
-
-### 수수료 연동 기준 — 사용자 결정 2026-09-30
+## 수수료 연동 기준 — 사용자 결정 2026-09-30
 
 **프리패스 수수료는 지급수수료(`channelPayoutFee`)다.** FreePass가 영업채널에 지급하는 금액이며, 공급사로부터 받는 청구수수료나 내부 마진을 뜻하지 않는다.
 
@@ -43,6 +41,8 @@ It does not seed data, publish releases, run workers, or expose Catalog mutation
 이 helper는 **PREPARED** 상태다. 신규 공급사/영업채널 API와 운영 등록은 아직 연결되지 않았다. 운영 API에 연결할 때 audience와 공급사/영업채널 ID 범위는 서버가 등록된 전용키의 grant에서 결정해야 한다. 요청의 query/body로 audience를 바꾸거나 다른 공급사·채널을 조회할 수 있게 만들지 않는다. 상대별 계약조건이 다르면 해당 조건을 조회하고, 없으면 공통 기준을 확정 지급액으로 간주하지 않고 HOLD한다.
 
 기존 Kakao `catalog-reference`는 내부 업무용으로 양쪽 수수료와 예상 마진을 포함하는 별도 계약이다. 이 응답과 키를 외부 공급사/영업채널에 전달하지 않는다. 현재 public ERP/화이트라벨 projection에는 내부 수수료를 추가하지 않는다. 외부 연동 완료는 전용 계약·scope 차단 테스트·인증된 운영 readback 이후에만 선언한다.
+
+## Consumer capabilities
 
 Registration fields:
 

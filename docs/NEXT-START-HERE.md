@@ -72,6 +72,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 대상 revision: `origin/main@a49dab2606f1273f5d8ad54c6c012fc8f9ca8549`에서 이어받은 `work/freepass-data/commission-audience-20260930`.
 - 변경: 기존 `OfferTermEconomics`를 재사용(`COMPOSE_OR_EXTEND`)해 영업채널 기본 `channelPayoutFee`, 공급사용 `supplierBillingFee`를 선택하는 helper를 추가했다. 반환값에 상대편 수수료·마진·원천 참조가 없다. 기존 내부 Kakao API 계약은 유지한다.
 - 검증: architecture/standards/data-access/sheets/build/runtime-smoke/shadow/dashboard PASS. 기본 병렬 Vitest는 기존 runtime-policy 5초 timeout 1건; 제한 변경 없이 `npx vitest run --maxWorkers=2` 전체 1,014 PASS/14 SKIP(외부·emulator 검사). 수수료 회귀검사 3건 PASS. 최종 commit·CI·Claude 검토는 PR 영수증에서 확인한다.
+- Claude: 본문·exit 0·ANSWERED 확인, PREPARED 범위 병합 차단 없음. 기본 audience 중복정의와 문서 제목 계층 지적은 반영했다. 기존 field 이름은 이미 Canonical 계약이므로 유지하며, helper는 I/O 없는 도메인 선택 규칙으로 유지한다. 운영 API의 서버 grant·상대 ID scope 연결 전 외부 공개 금지에 합의했다.
 - 남음: helper는 PREPARED이며 운영 API/전용키 scope 연결은 미구현이다. 신규 공급사·채널 등록이나 배포를 수행하지 않는다.
 - next_start_here: `docs/READ-RUNTIME.md`의 수수료 연동 기준 → `src/domain/catalog.ts`의 `projectCounterpartyCommission`. 신규 외부 API는 서버 등록 audience와 상대 ID scope를 함께 강제한 뒤 연결한다.
 
