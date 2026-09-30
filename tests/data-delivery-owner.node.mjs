@@ -1,11 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ownershipDecision, runDelivery, STAGES, ENGINE_REVISION } from '../scripts/data-delivery-owner.mjs';
+import { ownershipDecision, privateBucketDecision, PRIVATE_EVIDENCE_BUCKET, runDelivery, STAGES, ENGINE_REVISION } from '../scripts/data-delivery-owner.mjs';
 
 const evidence = () => ({
   env: { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'freepass-creator/freepass-data', GITHUB_REF: 'refs/heads/main', GOOGLE_CLOUD_PROJECT: 'freepasserp5', FREEPASS_DATA_REFRESH_OWNER: 'freepass-data', FREEPASS_DATA_LEGACY_FENCED_AT: new Date(Date.now() - 66 * 60_000).toISOString() },
   workflow: { path: '.github/workflows/erp5-ssot-refresh.yml', state: 'disabled_manually' },
   runs: { workflow_runs: [{ status: 'completed' }] }, oldWriterPolicy: { etag: 'test-etag', bindings: [] }, oldWriterKeys: []
+});
+test('source backup cannot target a public or unrelated bucket', () => {
+  const metadata = { name: PRIVATE_EVIDENCE_BUCKET, public_access_prevention: 'enforced', uniform_bucket_level_access: true };
+  assert.equal(privateBucketDecision(metadata), true);
+  assert.equal(privateBucketDecision({ ...metadata, public_access_prevention: 'inherited' }), false);
+  assert.equal(privateBucketDecision({ ...metadata, name: 'another-tenant' }), false);
+  assert.equal(privateBucketDecision(null), false);
 });
 test('owner activation requires disabled, drained and identity-fenced old writer', () => {
   assert.equal(ownershipDecision(evidence()).status, 'READY');

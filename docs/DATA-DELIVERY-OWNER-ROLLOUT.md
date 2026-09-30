@@ -53,6 +53,10 @@ Before activation the operator must confirm the exact account/project/workflow a
   do not broaden the existing read-runtime or auditor identities.
 - Restrict the private evidence bucket (no allUsers/allAuthenticatedUsers, enforced
   public-access prevention), with create-only run objects and readback permission.
+  Reuse verified `freepasserp5-data-audit-evidence`, not a new bucket. Admission
+  reads its metadata and requires exact name, enforced public-access prevention and
+  uniform bucket access before any capture/backup. Observation on 2026-09-30 confirmed
+  these settings; permissions for the new delivery identity are still unconfigured.
 - Register `FREEPASS_DATA_REFRESH_WIF_PROVIDER`,
   `FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT`, `FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET`,
   plus supplier secrets through secure transport. Never extract GitHub secrets to logs.

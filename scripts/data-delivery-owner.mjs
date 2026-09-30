@@ -8,6 +8,10 @@ import { pathToFileURL } from 'node:url';
 export const ENGINE_REVISION = 'e6727ff04fcf98380701fa6360c36f313e0e321f';
 export const LEGACY_REPOSITORY = 'freepass-creator/freepasserp4';
 export const LEGACY_WORKFLOW = 'erp5-ssot-refresh.yml';
+export const PRIVATE_EVIDENCE_BUCKET = 'freepasserp5-data-audit-evidence';
+export function privateBucketDecision(metadata) {
+  return metadata?.name === PRIVATE_EVIDENCE_BUCKET && metadata.public_access_prevention === 'enforced' && metadata.uniform_bucket_level_access === true;
+}
 export const STAGES = [
   ['source-contract', 'npm', ['run', 'check:inventory-sources']],
   ['source-options', 'npm', ['run', 'check:sonokong-options']],
@@ -111,6 +115,12 @@ async function main() {
   const lockfileDigest = createHash('sha256').update(readFileSync(join(engineRoot, 'package-lock.json'))).digest('hex');
   const output = resolve(process.env.FREEPASS_DATA_RECEIPT_PATH || 'tmp/data-delivery-receipt.json');
   mkdirSync(resolve(output, '..'), { recursive: true });
+  const assertPrivateBucket = () => {
+    if (process.env.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET !== PRIVATE_EVIDENCE_BUCKET) throw new Error('PRIVATE_BUCKET_TARGET_MISMATCH');
+    const metadata = JSON.parse(command('gcloud', ['storage', 'buckets', 'describe', `gs://${PRIVATE_EVIDENCE_BUCKET}`, '--format=json'], engineRoot));
+    if (!privateBucketDecision(metadata)) throw new Error('PRIVATE_BUCKET_NOT_ENFORCED');
+  };
+  assertPrivateBucket();
   const assertOwnership = async () => {
     const workflow = JSON.parse(command('gh', ['api', `repos/${LEGACY_REPOSITORY}/actions/workflows/${LEGACY_WORKFLOW}`], engineRoot));
     const runs = JSON.parse(command('gh', ['api', '--paginate', '--slurp', `repos/${LEGACY_REPOSITORY}/actions/workflows/${LEGACY_WORKFLOW}/runs?per_page=100`], engineRoot));
@@ -145,6 +155,7 @@ async function main() {
     },
     readSnapshot: async () => readFileSync(join(engineRoot, 'tmp/data-delivery-snapshot.json')),
     sealBackup: async () => {
+      assertPrivateBucket();
       const bucket = process.env.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET;
       if (!bucket) throw new Error('PRIVATE_BACKUP_BUCKET_REQUIRED');
       const backup = join(engineRoot, 'tmp/data-delivery-before.json');
