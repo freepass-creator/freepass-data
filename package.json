@@ -50,7 +50,9 @@
     "repair:vehicle-name-parity": "tsx src/jobs/apply-vehicle-name-reference-repair.ts",
     "repair:autoplus-policy": "tsx src/jobs/apply-autoplus-policy-repair.ts",
     "repair:billincar-policy": "tsx src/jobs/apply-billincar-policy-repair.ts",
-    "probe:estimate-writer-canary": "tsx src/jobs/probe-estimate-writer-canary.ts"
+    "probe:estimate-writer-canary": "tsx src/jobs/probe-estimate-writer-canary.ts",
+    "source:iancar:direct": "tsx src/jobs/collect-iancar-direct.ts",
+    "test:source:iancar:direct": "vitest run tests/iancar-direct-source.test.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",

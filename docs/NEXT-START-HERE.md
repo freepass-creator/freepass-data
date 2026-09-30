@@ -26,6 +26,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 | 어떤 데이터가 있고 어떤 경로로 접근하는가? | [데이터 도메인 카탈로그](DATA-DOMAIN-CATALOG.md), [접근 Gateway](DATA-ACCESS-GATEWAY.md) | 제공 상태·권한·계약과 조회 영수증. 내부 collection 경로를 공개 계약으로 사용하지 않음 |
 | F01/F86·ERP·화이트라벨·Admin에 잘 전달되는가? | [소비처별 사용 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md), [소비처 런타임](ERP5-CONSUMER-RUNTIME.md) | 소비처별 release/snapshot·필드·실제 readback. 한 곳 성공을 전체 성공으로 확대하지 않음 |
 | 시트 모양·열·숨김 규칙은 무엇인가? | [시트 규격](F01-F86-SHEET-SPEC.md), [실행 runbook](F01-F86-SHEET-RUNBOOK.md) | 기계 정본 `contracts/f01-f86-sheet-spec.v1.json`. 표시 검사는 원천 최신화 검사가 아님 |
+| ERP4 수집기 없이 공급사 원본을 어떻게 직접 읽는가? | [FreePass Data 원본 직접 수집기](NATIVE-SOURCE-COLLECTOR.md) | 이안카 RP031 RAW-only 첫 단계. 모든 공급사/요금/운영 컷오버 완료 아님 |
 | 원본을 어떻게 읽고 오류·갱신을 확인하는가? | [ERP5 캡처](ERP5-SOURCE-CAPTURE.md), [Source run 안전 규칙](SOURCE-RUN-SAFETY.md) | readTime·digest·전체 범위·갱신 run·accepted head. schedule/종료 성공만으로 최신성 판정 금지 |
 | 어디까지 구현·운영되었고 무엇부터 이어가는가? | [Implementation Status](IMPLEMENTATION-STATUS.md), 이 문서의 업무별 날짜 기록 | CODED/TESTED/PERSISTENCE/DEPLOYMENT/CUTOVER를 구분. 현재 main·진행 PR과 대조 |
 | 프로젝트 책임과 설계 기준은 무엇인가? | [승인 Architecture v2](ARCHITECTURE-V2-APPROVED.md), [Issue #24](https://github.com/freepass-creator/freepass-data/issues/24) | 설계 기준과 최신 도메인 소유권 결정 구분. 과거 charter를 후속 승인보다 우선하지 않음 |
@@ -65,6 +66,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+## 2026-09-30 이안카 원본 ERP 직접 수집 우선 도입
+
+- 사용자 지시: ERP4 수집기를 FreePass Data의 장기 수집 정본으로 재사용하지 않는다. Data가 공급사 원본을 직접 읽는 단일 소유 구조로 바꾼다. 영업자 원천↔ERP5↔F01/F86↔화면 불일치를 정상 PASS로 보고하지 않는다.
+- 변경: 기존 Data SourceIntakeBatch/RAW/SourceHead만 재사용하는 이안카 원본 ERP 직접 API 수집 adapter, 신선도·범위·차번·예약 검사, ERP5와 차량번호 양방향/상태 대사 선택 명령 및 합성 회귀검사를 한 작업선에 추가. 요금 API 미확인으로 가격·Canonical·발행은 HOLD.
+- 상태: PREPARED 코드이며 실제 공급사 자격증명/운영 실행·배포·컷오버는 아직 검증되지 않았다. 기존 ERP4 고정 엔진은 여전히 과도기 의존성으로 남아 있어 운영 단일화 완료가 아니다. 신규 중복 운영 writer를 켜지 않는다.
+- next_start_here: [원본 직접 수집 및 영업자 정합 종료 기준](NATIVE-SOURCE-COLLECTOR.md) → 이안카 원천 실제 읽기/ERP5 비교 → 다른 활성 공급사 직접 adapter → 단일 실행기 전환·권한 분리·전 소비처 readback.
 
 ## 2026-09-30 Data 수집·배달 실행 소유권 구현
 
