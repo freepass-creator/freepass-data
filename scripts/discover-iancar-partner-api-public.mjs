@@ -16,6 +16,14 @@ const guideText=guideHtml
   .replace(/<[^>]+>/g,' ')
   .replace(/&quot;/g,'"').replace(/&amp;/g,'&').replace(/&#x27;|&#39;/g,"'")
   .replace(/\s+/g,' ').trim();
+const rawAuthEvidence = (() => {
+  const lower = guideHtml.toLowerCase();
+  const i = lower.indexOf('authorization');
+  if (i < 0) return { found:false, hasBearer:/bearer/i.test(guideHtml), snippet:null };
+  let snippet = guideHtml.slice(Math.max(0,i-280),Math.min(guideHtml.length,i+700));
+  snippet = snippet.replace(/eancar_live_[A-Za-z0-9_-]+/g,'[REDACTED_LIVE_KEY]');
+  return { found:true, hasBearer:/bearer/i.test(snippet), snippet };
+})();
 const guideApiMatches=[...new Set([
   ...(guideHtml.match(/\/api\/[A-Za-z0-9_?&=./:%{}$-]+/g)??[]),
   ...(guideText.match(/https:\/\/[^\s<>"']+/g)??[]).filter(x=>/api|eancarone/i.test(x))
@@ -55,6 +63,7 @@ console.log(JSON.stringify({
   candidateAssets:named,
   fetched,
   guideBytes: Buffer.byteLength(guideHtml),
+  rawAuthEvidence,
   guideApiMatches,
   guideContexts:[...new Set(guideContexts)].slice(0,100),
   contexts:contexts.filter(x=>/partner-api|api[-_ ]?key|x-api-key|authorization|bearer|\/api\//i.test(x.keyword)).slice(0,250),
