@@ -6,7 +6,7 @@ import { ownershipDecision, privateBucketDecision, PRIVATE_EVIDENCE_BUCKET, runD
 const evidence = () => ({
   env: { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'freepass-creator/freepass-data', GITHUB_REF: 'refs/heads/main', GOOGLE_CLOUD_PROJECT: 'freepasserp5', FREEPASS_DATA_REFRESH_OWNER: 'freepass-data', FREEPASS_DATA_LEGACY_FENCED_AT: new Date(Date.now() - 66 * 60_000).toISOString() },
   workflow: { path: '.github/workflows/erp5-ssot-refresh.yml', state: 'disabled_manually' },
-  runs: { workflow_runs: [{ status: 'completed' }] }, oldWriterPolicy: { etag: 'test-etag', bindings: [] }, oldWriterKeys: []
+  runs: { workflow_runs: [{ status: 'completed', updated_at: new Date(Date.now() - 66 * 60_000).toISOString() }] }, oldWriterPolicy: { etag: 'test-etag', bindings: [] }, oldWriterKeys: []
 });
 test('source backup cannot target a public or unrelated bucket', () => {
   const metadata = { name: PRIVATE_EVIDENCE_BUCKET, public_access_prevention: 'enforced', uniform_bucket_level_access: true };
@@ -26,6 +26,7 @@ test('owner activation requires disabled, drained and identity-fenced old writer
     e => { e.workflow.path = 'wrong.yml'; },
     e => { e.runs.workflow_runs.push({ status: 'queued' }); },
     e => { e.runs = {}; },
+    e => { e.runs.workflow_runs[0].updated_at = new Date().toISOString(); },
     e => { e.oldWriterPolicy = null; },
     e => { e.oldWriterKeys = [{ name: 'user-key' }]; },
     e => { e.oldWriterPolicy.bindings.push({ role: 'roles/iam.workloadIdentityUser', members: ['legacy'] }); }
@@ -110,6 +111,8 @@ test('shadow engine calls cannot write an ops receipt and legacy history uses a 
   assert.ok(call); assert.ok(!call.includes('--write-receipt'));
   assert.ok(workflow.includes('secrets.FREEPASS_DATA_LEGACY_ACTIONS_READ_TOKEN'));
   assert.ok(!workflow.includes('GH_TOKEN: ${{ github.token }}'));
+  assert.ok(workflow.includes('npm --prefix engine ci --ignore-scripts'));
+  assert.ok(workflow.indexOf('npm --prefix engine ci --ignore-scripts') < workflow.indexOf('google-github-actions/auth@'));
 });
 test('failed durable checkpoint prevents its engine effect', async () => {
   const r = runner({ persistReceipt: async () => { throw new Error('evidence transport unavailable'); } });

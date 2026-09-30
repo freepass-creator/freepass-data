@@ -123,6 +123,12 @@ Each pre-effect checkpoint is create-only in the private run/attempt prefix and
 byte-readback verified before the command. Runner loss therefore leaves durable
 RUNNING evidence instead of only an ephemeral local file. It still cannot prove
 whether a timed-out external write finished; reconciliation remains mandatory.
+Final review hardening: install both lockfiles with lifecycle scripts disabled
+before WIF authentication; also require GitHub-observed completion timestamps of
+all old runs to be at least 65 minutes old. The claimed IAM-removal timestamp still
+needs original audit evidence; run history is a cross-check, not proof of removal
+time. Existing joint `audit-sheet-vs-atom.mts` is the F01 **and** F86 field-readback
+stage; F86 has an additional dedicated freshness audit.
 
 next_start_here: provision and read back the narrowly scoped identities/environment,
 then run shadow and collect the missing field/source/consumer evidence before any

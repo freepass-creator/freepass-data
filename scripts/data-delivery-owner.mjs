@@ -39,6 +39,8 @@ export function ownershipDecision({ env, workflow, runs, oldWriterPolicy, oldWri
   if (env.GOOGLE_CLOUD_PROJECT !== 'freepasserp5') blockers.push('TARGET_MISMATCH');
   if (workflow?.path !== `.github/workflows/${LEGACY_WORKFLOW}` || !['disabled_manually', 'disabled_inactivity'].includes(workflow?.state)) blockers.push('LEGACY_WRITER_NOT_DISABLED');
   if (!Array.isArray(runs?.workflow_runs) || runs.workflow_runs.some(run => run.status !== 'completed')) blockers.push('LEGACY_WRITER_NOT_DRAINED');
+  const completedTimes = (runs?.workflow_runs ?? []).map(run => Date.parse(run.updated_at || ''));
+  if (!completedTimes.length || completedTimes.some(time => !Number.isFinite(time)) || Date.now() - Math.max(...completedTimes) < 65 * 60_000) blockers.push('LEGACY_RUN_DRAIN_WINDOW_NOT_ELAPSED');
   // Disabling cron alone is not a fence: another actor could re-enable it. Require
   // removal of the legacy writer's token-minting bindings before new writes.
   if (!oldWriterPolicy || typeof oldWriterPolicy.etag !== 'string' || (oldWriterPolicy.bindings !== undefined && !Array.isArray(oldWriterPolicy.bindings)) || (oldWriterPolicy.bindings ?? []).some(binding =>

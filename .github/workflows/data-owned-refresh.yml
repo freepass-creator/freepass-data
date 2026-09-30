@@ -53,6 +53,10 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - name: Install platform and frozen adapter without lifecycle hooks
+        run: |
+          npm ci --ignore-scripts
+          npm --prefix engine ci --ignore-scripts
       - name: Require dedicated delivery identity and private evidence bucket
         env:
           PROVIDER: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
@@ -68,15 +72,11 @@ jobs:
           workload_identity_provider: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
           service_account: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
-      - run: npm ci --ignore-scripts
       - name: Verify Data ownership before materializing supplier credentials
         if: github.event_name != 'workflow_dispatch' || inputs.mode == 'execute'
         run: |
           test -n "$GH_TOKEN"
           node --import tsx scripts/data-delivery-owner.mjs --preflight
-      - name: Install frozen adapter
-        working-directory: engine
-        run: npm ci
       - name: Prepare private supplier credentials
         if: github.event_name != 'workflow_dispatch' || inputs.mode == 'execute'
         env:
