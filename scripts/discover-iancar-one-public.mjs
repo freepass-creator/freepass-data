@@ -3,8 +3,9 @@ const timeout = (ms = 20000) => AbortSignal.timeout(ms);
 const headers = { 'user-agent': 'FreePassData/1 public-one-api-discovery', accept: 'text/html,application/javascript,*/*' };
 
 const officialHost = new URL(ENTRY).hostname;
+const OFFICIAL_HOSTS = new Set([officialHost, `www.${officialHost}`, 'eancarone.com', 'www.eancarone.com']);
 function allowedHost(hostname) {
-  return hostname === officialHost || hostname === `www.${officialHost}`;
+  return OFFICIAL_HOSTS.has(hostname);
 }
 async function request(url) {
   let current = new URL(url);
