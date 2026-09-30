@@ -12,13 +12,19 @@ Every Codex/Work/development AI working in this repository must start in this or
 
 `docs/NEXT-START-HERE.md` is the current Chat → Work handoff board. Do not assume chat context is available locally.
 
-## 1. Current 2026-09-22 P0 packet
+Start its stable [Data work entry guide](docs/NEXT-START-HERE.md#data-start) before the dated history. Use its question-to-document map to locate the existing authority; do not create another policy dictionary or treat a dated audit as current source truth. Product/policy meaning lives in [Commercial Data Catalog](docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary). Record unresolved semantics and missing private evidence as HOLD.
 
-The current highest-priority handoff is the section:
+Keep this stable guide above the dated log. Add new work records under `날짜별 작업 이력`; update the guide's routes and unresolved items when their evidence changes.
+
+## 1. Historical 2026-09-22 P0 packet
+
+The baseline handoff is the section:
 
 `2026-09-22 AI Core audit — Codex/Work immediate packet`
 
 in `docs/NEXT-START-HERE.md`.
+
+Retain it as history. Check the stable entry guide, latest scoped handoff and current main/PR evidence before assigning present priority. This reclassification does not declare its remaining items complete.
 
 It covers:
 - production runtime fail-closed; no silent memory/demo production boot
