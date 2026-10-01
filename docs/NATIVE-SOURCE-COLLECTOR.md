@@ -4,6 +4,18 @@ Status (2026-09-30): **CODED / UNVERIFIED AGAINST LIVE ORIGINAL; RAW-ONLY PILOT.
 Owner: FreePass Data. Existing `SourceIntakeBatch`, `ingestRawSourceBatch` and Firestore Source Store are reused.
 This does not add a second CatalogStore, publication writer or scheduler.
 
+## 2026-10-02 RP023 source authority and bounded bridge recovery
+
+- Latest direct user decision: AutoPlus inventory/prices/term mileage/photo links use the supplier's original Sheet as primary; supplier ERP/website are supplementary observations only. Sheet read failure is HOLD, never website fallback. This supersedes the 2026-09-08 website-primary rule.
+- Original: `1TJBG4PABgly7EtGG6Os5GcY9La7kDR_yex56KHhXe2U`, `판매차량리스트` gid `284963459` and EV promo gid `2018553731`. Connector metadata on 2026-10-02 confirmed both visible. Read them as one Grid snapshot, excluding supplier-hidden/filter-hidden rows and retaining vehicle-cell photo links. Main wins normal cross-tab overlap; within-tab duplicates are HOLD.
+- `1Tvd5IioF5y_yu3L1BQMRP4J1R8hcZHwkgl3vl-TsgY0/재고` is a derived reference, not the original. The operational run `36931100638` reference count 61 versus published 40 is **not** a primary-source count or proof of 21 missing vehicles.
+- The original main notice explicitly says imported vehicles' 12-month quote is annual 20,000km, despite the shared 30,000km column label. Term keys must preserve this exception; do not overwrite the global policy or infer a new rate.
+- Bounded recovery reuses the frozen legacy engine `ce811592daef6c0283c3637ec94f1b7cf09a3838` two-tab parser and visible-grid reader; this is repair of the temporary bridge, not approval to develop a second ERP-owned source authority. RP006/Iron and RP031/Iancar are excluded from this work.
+- Recovery guards: existing RP023 immutable IDs only; `_deleted` tombstones and contract locks preserved; no new identity or website-only automatic listing; price map replaced with source rent/deposit only; original photos preserved as links; missing/duplicate/invalid monetary facts HOLD. Apply needs the exact source digest, private source+document backup, transaction update-time checks, and full patched-field readback.
+- **NOT APPLIED / NOT PINNED / NOT CUT OVER**: local `gws` source read returned insufficient OAuth scopes. Connected metadata/header reads succeeded but do not prove complete visible-row capture or the legacy service identity's source permission. Do not claim inventory parity or activate the recovery pin before full source dry-run, independent review, approval and consumer readback. Existing ACTIVE/operational writers remain unchanged.
+
+next_start_here: the isolated legacy recovery checkout `C:/dev/worktrees/freepass-autoplus-recovery-20261002`, `scripts/ingest-reborncar-to-firestore.mts` (default Sheet dry-run; `--crawl-only` has no Firestore access; `--supplementary-only --apply` is rejected). Run original-sheet full capture with the approved runtime identity, reconcile stable RP023 IDs/term prices/photo links, then review the exact pin and authorized publication/rollback plan. Native Data ingestion/release promotion remains a separate HOLD.
+
 ## Non-negotiable topology
 
 ```text
