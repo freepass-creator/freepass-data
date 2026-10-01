@@ -4,6 +4,33 @@ import { readFileSync } from 'node:fs';
 import { assertConsumerRuntime, assertDevelopmentApi } from '../src/api/runtime-policy.js';
 
 describe('API runtime boundary', () => {
+  it('audit recovery dispatches only overdue runs outside the active-run and retry cooldown gates', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/erp5-audit-watchdog.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const section = workflow.split('      - name: Recover a missed audit')[1]?.split('      - name: Retain watchdog summary')[0];
+    const block = section?.split('        run: |\n')[1];
+    if (!block) throw new Error('Audit recovery script missing');
+    const script = block.split('\n').map(line => line.slice(10)).join('\n');
+    const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+    const mock = 'gh() { if [ "$1" = workflow ]; then echo DISPATCHED; else printf "%s" "$MOCK_RUNS"; fi; }\n';
+    const old = new Date(Date.now() - 3_600_000).toISOString();
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    for (const [age, gap, status, created, dispatched] of [
+      [30, 360, 'completed', old, false],
+      [100, 360, 'in_progress', old, false],
+      [100, 360, 'queued', old, false],
+      [100, 360, 'completed', recent, false],
+      [100, 360, 'completed', old, true],
+      [61, 60, 'completed', old, true],
+    ] as const) {
+      const result = spawnSync(bash, ['-s'], { input: mock + script, encoding: 'utf8', env: {
+        ...process.env, AUDIT_AGE_MINUTES: String(age), ERP5_AUDIT_MAX_GAP_MINUTES: String(gap),
+        AUDIT_WORKFLOW: 'erp5-continuous-audit.yml', GITHUB_REPOSITORY: 'test/repo', GITHUB_STEP_SUMMARY: '/dev/null',
+        MOCK_RUNS: JSON.stringify({ workflow_runs: [{ status, created_at: created }] }),
+      } });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.includes('DISPATCHED')).toBe(dispatched);
+    }
+  });
   it('refuses the unauthenticated development API for any Firestore target', () => {
     expect(() => assertDevelopmentApi({ FREEPASS_DATA_DRIVER: 'firestore', FIREBASE_PROJECT_ID: 'freepasserp5' })).toThrow('memory-only');
     expect(() => assertDevelopmentApi({ NODE_ENV: 'production' })).toThrow('memory-only');
