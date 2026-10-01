@@ -412,6 +412,56 @@ export function compareIancarOneInventoryParity(
     sourceInvalid: a.invalid, consumerInvalid: b.invalid };
 }
 
+/** Data-owned phase-one products for the existing compatibility publication plane.
+ * This is not authorization to activate Catalog V1 or attach supplier policy defaults.
+ * Bare period keys are explicitly documented aliases of the lowest observed mileage tier.
+ */
+export function buildIancarOnePublicationProducts(capture: IancarOneListCapture, now = new Date().toISOString()) {
+  const phase = projectIancarOnePhaseOne(capture, now);
+  return phase.vehicles.map((vehicle, index) => {
+    const raw = capture.records[index]!.payload;
+    const envelope = raw.rates as JsonObject;
+    const rates = envelope.data as JsonObject[];
+    const price: Record<string, { rent: number; deposit: number }> = {};
+    const priceAliases: Record<string, string> = {};
+    const terms = vehicle.terms.map((term, termIndex) => {
+      const deposit = rates[termIndex]!.deposit;
+      if (!integer(deposit) || deposit < 0) throw new IancarOneApiError('IANCAR_ONE_UNKNOWN_PUBLICATION_DEPOSIT');
+      const suffix = term.contractedMileage.period === 'month'
+        ? `월${term.contractedMileage.km}km` : `연${term.contractedMileage.km}km`;
+      const key = `${term.termMonths}_${suffix}`;
+      price[key] = { rent: term.monthlyRent.amount, deposit };
+      return { ...term, deposit: { amount: deposit, currency: 'KRW' as const },
+        depositState: deposit === 0 ? 'ZERO' as const : 'KNOWN' as const, compatibilityPriceKey: key };
+    });
+    for (const months of new Set(terms.map(term => term.termMonths))) {
+      const candidates = terms.filter(term => term.termMonths === months);
+      if (new Set(candidates.map(term => term.contractedMileage.period)).size !== 1)
+        throw new IancarOneApiError('IANCAR_ONE_AMBIGUOUS_BASE_MILEAGE');
+      const base = candidates.reduce((a, b) => a.contractedMileage.km < b.contractedMileage.km ? a : b);
+      price[String(months)] = { ...price[base.compatibilityPriceKey]! };
+      priceAliases[String(months)] = base.key;
+    }
+    return { sourceVehicleId: vehicle.sourceVehicleId, car_number: vehicle.plate,
+      price, terms, priceAliases, vehicle_status: vehicle.displayStatus,
+      status: vehicle.displayStatus, status_kind: vehicle.displayStatus === '출고가능' ? '가용'
+        : vehicle.displayStatus === '계약중' ? '선점' : '불가',
+      listable: vehicle.displayStatus !== '출고불가',
+      facts: { maker: typeof raw.manufacturer === 'string' ? raw.manufacturer : null,
+        model: typeof raw.model === 'string' ? raw.model : null,
+        year: integer(raw.year) ? String(raw.year) : null,
+        fuel_type: typeof raw.fuel === 'string' ? raw.fuel : null,
+        ext_color: typeof raw.color === 'string' ? raw.color : null,
+        mileage: integer(raw.mileage) && raw.mileage >= 0 ? raw.mileage : null,
+        rawName: typeof raw.name === 'string' ? raw.name : null },
+      evidence: { stage: 'PHASE_ONE', policyStage: 'DEFERRED', sourceVehicleId: vehicle.sourceVehicleId,
+        sourceInventoryStatus: vehicle.sourceInventoryStatus, sourceDigest: phase.sourceDigest,
+        sourceSyncedAt: phase.syncedAt, ratesUpdatedAt: vehicle.ratesUpdatedAt,
+        terms, priceAliases, ratesDigest: digest(envelope), publicationPlane: 'ERP5_COMPATIBILITY_BRIDGE' }
+    };
+  });
+}
+
 /** Full phase-one readback gate: snapshot, identity, display state and all observed rental tuples. */
 export function compareIancarOnePhaseOneParity(
   source: ReturnType<typeof projectIancarOnePhaseOne>,

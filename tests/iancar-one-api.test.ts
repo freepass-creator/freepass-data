@@ -4,6 +4,7 @@ import {
   collectIancarOneVehicleList,
   collectIancarOneFullFacts,
   collectIancarOnePhaseOneFacts,
+  buildIancarOnePublicationProducts,
   createIancarOneApiClient,
   IANCAR_ONE_API_ORIGIN,
   IancarOneApiError,
@@ -154,6 +155,38 @@ describe('EANCAR ONE official partner API', () => {
     expect(first.records[0]?.fingerprint).toBe(second.records[0]?.fingerprint);
     expect(first.sourceDigest).toBe(second.sourceDigest);
     expect(first.records[0]?.payload.rateRequestEvidence).not.toEqual(second.records[0]?.payload.rateRequestEvidence);
+  });
+
+  it('products preserve exact mileage/deposit tiers with explicit base aliases and deferred policy', async () => {
+    const capture = await collectIancarOnePhaseOneFacts(config, fullFetcher());
+    const [product] = buildIancarOnePublicationProducts(capture);
+    expect(product?.price).toEqual({ '24_연20000km': { rent: 500000, deposit: 700000 },
+      '24': { rent: 500000, deposit: 700000 } });
+    expect(product?.priceAliases).toEqual({ '24': '24:20000:year' });
+    expect(product?.terms[0]?.contractedMileage).toEqual({ km: 20000, period: 'year' });
+    expect(product?.evidence.policyStage).toBe('DEFERRED');
+    expect(product?.facts.maker).toBe('현대');
+    expect(product?.evidence).not.toHaveProperty('contract_conditions');
+  });
+
+  it('products never annualize monthly limits and never create an unobserved six-month rate', async () => {
+    const fetcher = (async (input: string | URL | Request) => {
+      const response = await fullFetcher()(input); const body = await response.json();
+      if (new URL(String(input)).pathname.endsWith('/rates')) body.data = [
+        { ...body.data[0], rental_period: 3, contracted_mileage: 2000, mileage_period: 'month' },
+        { ...body.data[0], rental_period: 3, contracted_mileage: 3000, mileage_period: 'month', monthly_rate: 600000 }
+      ];
+      else body.data[0].manufacturer = null;
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const capture = await collectIancarOnePhaseOneFacts(config, fetcher);
+    const [product] = buildIancarOnePublicationProducts(capture);
+    expect(product?.price['3_월2000km']?.rent).toBe(500000);
+    expect(product?.price['3_월3000km']?.rent).toBe(600000);
+    expect(product?.price['3']?.rent).toBe(500000);
+    expect(product?.price).not.toHaveProperty('6');
+    expect(product?.facts.maker).toBeNull();
+    expect(product?.terms[0]).not.toHaveProperty('mileageLimitKmPerYear');
   });
 
   it('accepts a fresh refresh-clock advance only when exact inventory facts remain unchanged', async () => {

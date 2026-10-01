@@ -1,6 +1,8 @@
 # RP031 이안카 ONE API — FreePass Data 연동 계약
 
-Status (2026-10-01): **공식 API 인증 조회 검증 완료 · 서버 Secret 등록 · Canonical/소비처 전환 전**
+Status (2026-10-01): **1차 Data 상품/ERP/F01/F86 실제 발행 및 readback 완료 · 정책/15분 자동 writer/Catalog cutover는 미완료**
+
+최신 적용 회차: source `2026-10-01T08:13:03.756Z`, 117대/2,808개 요금에서 공개109대(출고가능108·계약중1). Data apply `b6a8ac1e-a86a-49c8-a53a-9037a760303a`, 운영 시트 apply `36837674105` SUCCESS. F01/F86 새 원문 조회로109대 차량번호·상태·기준금액·24개 기간/월연거리/보증금·정책 확인중 표시 mismatch0. 별도 공급사 원천표 없이 Data 소유 RP031 compatibility bridge를 기존 소비처에 적용했다. Catalog V1 ACTIVE release/cutover나 현재 API 실시간 신선도를 주장하지 않는다. 아래 미실행/111대 문구는 이전 관측 이력이며 최신 적용 증거는 [handoff](NEXT-START-HERE.md)에 있다.
 
 최신 전량 관측(서울13:24 source): 111대 상세·availability·요금2,664개 및 종료 inventory 대사 성공, issues0. 기존301대와 match89/신규22/미관측212보존, 타 공급사 차번호 충돌0. 실제 ERP/F01/F86 발행은 아직 미실행이며 기간·월/연 거리·기간별 보증금의 소비처 표현 범위를 사용자에게 확인 중이다. 정확한 digest/private evidence 및 다음 단계는 [전량 수집 기록](NEXT-START-HERE.md#날짜별-작업-이력)에 있다. 수집기는 독립 endpoint 병렬×2worker(최대6), 실패 시 진행 중 요청을 정리하고429/Retry-After를 보존한다.
 

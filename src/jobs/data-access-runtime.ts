@@ -1,5 +1,6 @@
 import { DataAccessGateway } from '../application/data-access-gateway.js';
-import { withdrawIancarPublication } from '../infra/iancar-publication-withdrawal-firestore.js';
+import { withdrawIancarPublication, publishIancarPhaseOne } from '../infra/iancar-publication-withdrawal-firestore.js';
+import { buildIancarOnePublicationProducts, type IancarOneListCapture } from '../adapters/iancar-one-api.js';
 import { iancarErpReadTransport, buildIancarErpRawIntakeBatch } from '../adapters/iancar-source-capture.js';
 import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
 import { gcsDataAccessLogStore } from '../infra/gcs-data-access-log.js';
@@ -89,6 +90,24 @@ export async function runIancarPublicationWithdrawal(input: {
     operation: 'READ_IANCAR_PUBLICATION_WITHDRAWAL_PLAN', summarize }, () => withdrawIancarPublication(input));
   return runtime.access.write({ context, resource, operation: 'WRITE_IANCAR_PUBLICATION_WITHDRAWAL',
     requestDigest: stableDigest(input), summarize }, () => withdrawIancarPublication(input));
+}
+
+export async function runIancarPhaseOnePublication(input: {
+  capture: IancarOneListCapture; apply: boolean; expectedPlanDigest?: string;
+}) {
+  const prepared = { products: buildIancarOnePublicationProducts(input.capture),
+    sourceDigest: input.capture.sourceDigest, sourceSyncedAt: input.capture.syncedAt,
+    apply: input.apply, ...(input.expectedPlanDigest ? { expectedPlanDigest: input.expectedPlanDigest } : {}) };
+  const runtime = createJobDataAccessRuntime();
+  const context = { actor: { id: 'service:freepass-data-iancar-publication', kind: 'SERVICE' as const },
+    clientId: 'job:publish-iancar-phase-one', purpose: 'user-directed RP031 API vehicle/rental publication; policy deferred' };
+  const resource = { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031' };
+  const summarize = (value: Awaited<ReturnType<typeof publishIancarPhaseOne>>) =>
+    ({ count: value.sourceCount, digest: stableDigest(value) });
+  if (!input.apply) return runtime.access.read({ context, resource,
+    operation: 'READ_IANCAR_PHASE_ONE_PLAN', summarize }, () => publishIancarPhaseOne(prepared));
+  return runtime.access.write({ context, resource, operation: 'WRITE_IANCAR_PHASE_ONE_PUBLICATION',
+    requestDigest: stableDigest(input), summarize }, () => publishIancarPhaseOne(prepared));
 }
 
 export async function createConsumerHealthReadOnlyDataAccessRuntime(input: {
