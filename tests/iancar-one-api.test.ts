@@ -3,6 +3,7 @@ import {
   buildIancarOneSourceBatch,
   collectIancarOneVehicleList,
   collectIancarOneFullFacts,
+  collectIancarOnePhaseOneFacts,
   createIancarOneApiClient,
   IANCAR_ONE_API_ORIGIN,
   IancarOneApiError,
@@ -87,6 +88,73 @@ describe('EANCAR ONE official partner API', () => {
       ...(fault === 'wrong-plate' && !path.endsWith('/availability') ? { plate_number: '999나9999' } : {}) } };
     return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
+
+  it('phase one reads only list/rates and reconciles a reservation without mixing policy facts', async () => {
+    let lists = 0;
+    const paths: string[] = [];
+    const fetcher = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      paths.push(path);
+      const response = await fullFetcher()(input); const body = await response.json();
+      if (path === '/v1/vehicles' && ++lists > 1) {
+        body.data[0].inventory_status = 'RESERVED'; body.data[0].available = false;
+      }
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const capture = await collectIancarOnePhaseOneFacts(config, fetcher);
+    expect(paths).toEqual(['/v1/vehicles', '/v1/vehicles/veh1/rates', '/v1/vehicles']);
+    expect(projectIancarOnePhaseOne(capture).vehicles[0]?.displayStatus).toBe('계약중');
+    expect(capture.records[0]?.payload.detail).toBeUndefined();
+    expect(buildIancarOneSourceBatch(capture).coverage.mode).toBe('UNKNOWN');
+    expect(buildIancarOneSourceBatch(capture).source.sourceId).toContain('phase-one-facts');
+  });
+
+  it('phase one fetches rates again when a list plate changes for the same ID', async () => {
+    let lists = 0; let rates = 0;
+    const fetcher = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      const response = await fullFetcher()(input); const body = await response.json();
+      if (path === '/v1/vehicles' && ++lists > 1) body.data[0].plate_number = '999나9999';
+      if (path.endsWith('/rates')) { rates++; body.data[0].monthly_rate = rates * 500000; }
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const capture = await collectIancarOnePhaseOneFacts(config, fetcher);
+    expect(rates).toBe(2);
+    expect(projectIancarOnePhaseOne(capture).vehicles[0]?.terms[0]?.monthlyRent.amount).toBe(1000000);
+  });
+
+  it('phase one holds continuous new identities instead of inventing unfetched rates', async () => {
+    let lists = 0;
+    const fetcher = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      const response = await fullFetcher()(input); const body = await response.json();
+      if (path === '/v1/vehicles') body.data[0].vehicle_id = `veh${++lists}`;
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const capture = await collectIancarOnePhaseOneFacts(config, fetcher);
+    expect(capture.readyForRawIngest).toBe(false);
+    expect(capture.issues).toContain('IANCAR_ONE_PHASE_ONE_IDENTITY_RECONCILIATION_PENDING');
+    expect(buildIancarOneSourceBatch(capture).coverage.mode).toBe('PARTIAL');
+    expect(() => projectIancarOnePhaseOne(capture)).toThrow();
+  });
+
+  it('phase one rejects unknown deposits and expired rate observations despite a fresh final list', async () => {
+    await expect(collectIancarOnePhaseOneFacts(config, fullFetcher('null-deposit')))
+      .rejects.toThrow('RATE_REQUIRES_REVIEW');
+    const capture = await collectIancarOnePhaseOneFacts(config, fullFetcher());
+    const evidence = capture.records[0]!.payload.rateRequestEvidence as Record<string, unknown>;
+    evidence.captured_at = '2026-09-30T23:44:59Z';
+    expect(() => projectIancarOnePhaseOne(capture)).toThrow('IDENTITY_REQUIRES_REVIEW');
+  });
+
+  it('phase-one fingerprints ignore client observation time while retaining real provenance', async () => {
+    const first = await collectIancarOnePhaseOneFacts(config, fullFetcher());
+    vi.advanceTimersByTime(1000);
+    const second = await collectIancarOnePhaseOneFacts(config, fullFetcher());
+    expect(first.records[0]?.fingerprint).toBe(second.records[0]?.fingerprint);
+    expect(first.sourceDigest).toBe(second.sourceDigest);
+    expect(first.records[0]?.payload.rateRequestEvidence).not.toEqual(second.records[0]?.payload.rateRequestEvidence);
+  });
 
   it('accepts a fresh refresh-clock advance only when exact inventory facts remain unchanged', async () => {
     let lists = 0;

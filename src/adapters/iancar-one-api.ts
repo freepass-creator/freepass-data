@@ -64,7 +64,7 @@ export type IancarOneListCapture = {
   sourceDigest: string;
   issues: string[];
   readyForRawIngest: boolean;
-  factScope?: 'FULL_FACTS';
+  factScope?: 'FULL_FACTS' | 'PHASE_ONE_FACTS';
   observationWindow?: {
     startedAt: string; completedAt: string; startInventorySyncedAt: string; endInventorySyncedAt: string;
     consistency: 'BOUNDED_OBSERVATION_NOT_ATOMIC';
@@ -324,7 +324,7 @@ export function projectIancarOneReservation(
 
 /** Phase-one review payload only: no policy/default/deposit mutation or publication grant. */
 export function projectIancarOnePhaseOne(capture: IancarOneListCapture, now = new Date().toISOString()) {
-  if (capture.factScope !== 'FULL_FACTS' || capture.origin !== IANCAR_ONE_API_ORIGIN
+  if (!['FULL_FACTS', 'PHASE_ONE_FACTS'].includes(capture.factScope ?? '') || capture.origin !== IANCAR_ONE_API_ORIGIN
     || !capture.readyForRawIngest || capture.stale || capture.issues.length
     || !instant(now) || !instant(capture.syncedAt)
     || Date.parse(now) - Date.parse(capture.syncedAt) > IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS * 1000
@@ -341,7 +341,13 @@ export function projectIancarOnePhaseOne(capture: IancarOneListCapture, now = ne
     const evidence = isObject(p.rateRequestEvidence) ? p.rateRequestEvidence : null;
     if (!record.vehicleId || ids.has(record.vehicleId) || plates.has(plate)
       || !IANCAR_PLATE.test(plate) || p.vehicle_id !== record.vehicleId
-      || !detail || detail.vehicle_id !== record.vehicleId || detail.plate_number !== p.plate_number
+      || (capture.factScope === 'FULL_FACTS'
+        && (!detail || detail.vehicle_id !== record.vehicleId || detail.plate_number !== p.plate_number))
+      || (capture.factScope === 'PHASE_ONE_FACTS'
+        && (evidence?.attribution !== 'REQUEST_PATH_BOUND_BY_LIST_ID'
+          || !instant(evidence.captured_at)
+          || Date.parse(now) - Date.parse(evidence.captured_at) > IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS * 1000
+          || Date.parse(evidence.captured_at) - Date.parse(now) > 60_000))
       || !rates || rates.success !== true || !Array.isArray(rates.data) || !rates.data.length
       || !instant(rates.updated_at) || Date.parse(rates.updated_at) > Date.parse(now) + 60_000
       || (rates.vehicle_id != null && rates.vehicle_id !== record.vehicleId)
@@ -358,6 +364,7 @@ export function projectIancarOnePhaseOne(capture: IancarOneListCapture, now = ne
     const terms = rates.data.map(rate => {
       if (!isObject(rate) || !integer(rate.rental_period) || rate.rental_period < 1 || rate.rental_period > 60
         || !integer(rate.monthly_rate) || rate.monthly_rate < 100_000 || rate.monthly_rate > 20_000_000
+        || (capture.factScope === 'PHASE_ONE_FACTS' && (!integer(rate.deposit) || rate.deposit < 0))
         || !integer(rate.contracted_mileage) || rate.contracted_mileage < 1
         || !['month', 'year'].includes(String(rate.mileage_period))
         || rate.currency !== 'KRW' || rate.vat_included !== true)
@@ -557,15 +564,79 @@ export async function collectIancarOneFullFacts(
       records: records.map(record => [record.vehicleId, record.fingerprint]) }) };
 }
 
+/** Phase one observes list identity/state and vehicle-scoped rates, not policy/detail facts.
+ * Re-read the list after rates: state transitions do not invalidate unchanged rate identities.
+ * New IDs/plate changes require another bounded pass, never invented rates or deletions.
+ */
+export async function collectIancarOnePhaseOneFacts(
+  config: IancarOneApiConfig, fetcher: Fetcher = fetch,
+  now = new Date().toISOString(), onProgress?: (completed: number, total: number) => void
+): Promise<IancarOneListCapture> {
+  const wallStartedAt = Date.now();
+  const observationNow = () => new Date(Date.parse(now) + Date.now() - wallStartedAt).toISOString();
+  let inventory = await collectIancarOneVehicleList(config, fetcher, now);
+  const started = inventory;
+  const client = createIancarOneApiClient(config, fetcher);
+  const observed = new Map<string, { plate: string; rates: Json; evidence: JsonObject }>();
+  for (let pass = 0; pass < 3; pass++) {
+    if (!inventory.readyForRawIngest) return { ...inventory, factScope: 'PHASE_ONE_FACTS' };
+    let completed = 0;
+    // Sequential rate reads keep provider burst bounded and make failures deterministic.
+    for (const record of inventory.records) {
+      const plate = clean(record.payload.plate_number).replace(/\s/g, '');
+      if (!IANCAR_PLATE.test(plate)) throw new IancarOneApiError('IANCAR_ONE_PLATE_IDENTITY_REQUIRES_REVIEW');
+      if (observed.get(record.vehicleId)?.plate !== plate) {
+        const rates = await client.getRates(record.vehicleId);
+        observed.set(record.vehicleId, { plate, rates, evidence: {
+          vehicle_id: record.vehicleId,
+          path: `/v1/vehicles/${encodeURIComponent(record.vehicleId)}/rates`,
+          captured_at: observationNow(), response_digest: digest(rates),
+          attribution: 'REQUEST_PATH_BOUND_BY_LIST_ID', coverage: 'UNKNOWN'
+        } });
+      }
+      onProgress?.(++completed, inventory.total);
+    }
+    const ending = await collectIancarOneVehicleList(config, fetcher, observationNow());
+    if (Date.parse(ending.syncedAt) < Date.parse(inventory.syncedAt))
+      throw new IancarOneApiError('IANCAR_ONE_ENRICHMENT_CLOCK_REGRESSION');
+    inventory = ending;
+    if (!ending.readyForRawIngest) continue;
+    if (!ending.records.every(record => observed.get(record.vehicleId)?.plate
+      === clean(record.payload.plate_number).replace(/\s/g, ''))) continue;
+    const records = ending.records.map(record => {
+      const rate = observed.get(record.vehicleId)!;
+      const payload = { ...structuredClone(record.payload), rates: structuredClone(rate.rates),
+        rateRequestEvidence: structuredClone(rate.evidence) };
+      const providerFacts = { ...payload, rateRequestEvidence: {
+        ...payload.rateRequestEvidence, captured_at: null } };
+      return { ...record, payload, fingerprint: digest(providerFacts) };
+    });
+    const capture: IancarOneListCapture = { ...ending, records, factScope: 'PHASE_ONE_FACTS',
+      observationWindow: { startedAt: started.capturedAt, completedAt: ending.capturedAt,
+        startInventorySyncedAt: started.syncedAt, endInventorySyncedAt: ending.syncedAt,
+        consistency: 'BOUNDED_OBSERVATION_NOT_ATOMIC' },
+      sourceDigest: digest({ syncedAt: ending.syncedAt,
+        records: records.map(record => [record.vehicleId, record.fingerprint]) }) };
+    projectIancarOnePhaseOne(capture, observationNow());
+    return capture;
+  }
+  return { ...inventory, factScope: 'PHASE_ONE_FACTS', readyForRawIngest: false,
+    issues: [...inventory.issues, 'IANCAR_ONE_PHASE_ONE_IDENTITY_RECONCILIATION_PENDING'] };
+}
+
 export function buildIancarOneSourceBatch(capture: IancarOneListCapture): SourceIntakeBatch {
   const complete = capture.readyForRawIngest;
+  const enriched = capture.factScope != null;
   return {
     laneId: 'PRODUCT_VEHICLE',
     source: {
-      sourceId: capture.factScope === 'FULL_FACTS' ? `${IANCAR_ONE_SOURCE_ID}:full-facts` : IANCAR_ONE_SOURCE_ID,
+      sourceId: enriched ? `${IANCAR_ONE_SOURCE_ID}:${capture.factScope === 'FULL_FACTS' ? 'full-facts' : 'phase-one-facts'}` : IANCAR_ONE_SOURCE_ID,
       kind: 'API',
       displayName: '이안카 ONE 제휴 API',
-      authorityScope: capture.factScope === 'FULL_FACTS' ? [
+      authorityScope: capture.factScope === 'PHASE_ONE_FACTS' ? [
+        'RP031 observed list identity/state and vehicle-scoped rental rates; coverage UNKNOWN',
+        'NO_POLICY_OR_SOURCE_ABSENCE_AUTHORITY'
+      ] : capture.factScope === 'FULL_FACTS' ? [
         'RP031 observed vehicle-scoped rates/deposit; coverage UNKNOWN',
         'RP031 contract conditions',
         'RP031 photo references',
@@ -581,7 +652,7 @@ export function buildIancarOneSourceBatch(capture: IancarOneListCapture): Source
     observedAt: capture.syncedAt,
     sourceRevision: `${IANCAR_ONE_API_VERSION}:${capture.sourceDigest}`,
     checksum: capture.sourceDigest,
-    coverage: capture.factScope === 'FULL_FACTS' && complete ? {
+    coverage: enriched && complete ? {
       mode: 'UNKNOWN', completeness: 'UNKNOWN',
       scope: 'Iancar ONE observed vehicle-scoped facts',
       note: 'Full vehicle list observed. Rate-table response has no completeness declaration; never assert absent terms from this run.'
@@ -595,7 +666,7 @@ export function buildIancarOneSourceBatch(capture: IancarOneListCapture): Source
       : {
           mode: 'PARTIAL',
           completeness: 'INCOMPLETE',
-          scope: capture.factScope === 'FULL_FACTS' ? 'Iancar ONE full-facts attempt' : 'Iancar ONE /v1/vehicles attempted list',
+          scope: enriched ? 'Iancar ONE enriched facts attempt' : 'Iancar ONE /v1/vehicles attempted list',
           note: `HOLD: ${capture.issues.join(',')}`
         },
     records: capture.records.map(record => ({

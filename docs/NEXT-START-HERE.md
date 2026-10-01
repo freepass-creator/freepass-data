@@ -1,5 +1,18 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-01 이안카 1차 적용 재개 — 최신 요금 수집 성공, Data 상품화 우선
+
+- 목적: ERP와 F01/F86에 차량번호·상태·정확한 기간/거리별 대여료를 1차 반영하고 정책은 후속으로 분리한다.
+- 대상: main `65b284c4a9796703ccaa414054fb3383845e1ab8` 기반. 기존 ONE adapter/job/test 확장. 운영 track Academy READY / COMPOSE_OR_EXTEND. 실제 DB·시트 쓰기는 미실행.
+- 변경: PHASE_ONE_FACTS는 목록+rates만 수집하며 마지막 신선한 목록 상태를 사용한다. 상세/availability 변경으로 전체 수집을 실패시키는 불필요한 정책 단계 의존성을 제거했다. 새 ID/번호는 요금을 재조회하며 최대3회 후 미조회 ID가 남으면 HOLD. 요청 경로+목록 ID 귀속, 요금 관측15분, source absence 권한 없음.
+- 실제 수집: source syncedAt `2026-10-01T05:39:49.172Z`, 116대/2784개 요금, AVAILABLE106/RESERVED1/PREPARING3/UNAVAILABLE6, issues0. private capture `1ece1751-39cc-4af6-bce7-a37cb4b2f53a.json`, digest `10705a20d1e5f53aec54575d83d5718f1b5114924a584aa5b6e251d6fb16c7d4`. private 위치는 기존 `.codex/private/freepass-data-iancar-one-captures`; 원문이나 키를 Git에 복제하지 않는다.
+- 적용 전 조회: RP031 기존301/listable0/contract lock0. 전체 products 대사에서 정확한 차량번호 기존91/신규25/미관측 역사210/타 공급사 번호충돌0. 해당 capture는 적용시 다시 신선도·원천 변경을 확인한다.
+- 검증: 전체 npm run check PASS, Vitest1129 PASS/14 SKIP, 전용53 PASS. 새 경로의 정책 조회 없음·예약 변화 수용·번호 변경 재조회·계속 추가되는 ID HOLD·unknown deposit·오래된 요금 관측 회귀 포함. Claude 첫 운영 범위 review는 REVIEW_TIMEOUT, 좁은 수집기 검토 재시도 결과는 아직 대기하며 PASS로 세지 않는다.
+- 사용자 최신 결정: 별도 이안카 요금표를 생성하지 않는다. FreePass Data에서 Product/Offer/PriceTerm으로 상품화하여 기존 ERP·F01·F86 소비처에 반영한다. 공급사 표 형식 자체를 가져오지 않는다. 정책은2차다.
+- Claude 좁은 수집기 독립 검토 ANSWERED: 마지막 목록 대사/귀속/신선도/실패 안전성은 동의. fingerprint에 조회 captured_at이 섞이는 문제를 지적하여 기존 full-facts처럼 captured_at:null 사본으로 hash하고 원문 시각은 보존했다. 시간만 바뀐 동일 원천의 fingerprint/sourceDigest 동일 회귀를 추가했다.
+- 남음: 정책 링크를 그대로 복원하면 consumer 기본 정책이 잘못 노출되므로 분리해야 한다. ERP4 현재 원격 main의 withdrawal guard는 RP031 재노출 스냅샷을 거부하며 운영 pin은 `99a27c90347579e5086b9a538e28e3384f31820f`였다. 단순 atom status 복원/수동 Sheet append로 이 경계를 우회하지 않는다.
+- next_start_here: 기존 canonical candidate/Product/Offer/PriceTerm 경로 확장 → 검증된 phase-one publication plan/backup/동시성·계약락/정책 분리/rollback 구현 → 독립 검토 → 정확한 RP031 범위 적용 → ERP 공개와 F01/F86 새 readback. 소비처 전량 parity나 운영15분 자동화는 아직 미검증이다.
+
 ## 2026-10-01 이안카 15분 eventual convergence 결정
 
 - 사용자 결정: 공급사 15분 갱신 사이 순간 대수 차이는 정상 동기화 지연이며, 다음 회차가 따라잡아야 한다. 같은 벽시계 시각의 완전 일치를 실행 조건으로 강제하지 않는다.

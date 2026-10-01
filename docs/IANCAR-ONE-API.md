@@ -91,6 +91,7 @@ Authorization: Bearer <API key>
 - 동일 sourceDigest/syncedAt의 차량 ID·차량번호·원천 상태·표시 상태·관측된 기간/거리별 요금 전부를 실제 소비처 readback과 대조한다. API의 미관측 기존 재고는 삭제하지 않고 별도로 보존한다. 새로운 snapshot이면 다시 대사한다.
 - 준비 함수 `projectIancarOnePhaseOne`은 정책·보증금·계약락·공개 여부를 수정하지 않는 REVIEW ONLY payload다. `compareIancarOnePhaseOneParity`는 snapshot/차량/상태/요금 검증 gate이며, 운영 writer와 실제 소비처에 연결하기 전에는 cutover 완료가 아니다.
 - 조회 명령: `npm run source:iancar:one -- --phase-one --save-private`. Secret은 실행 프로세스 메모리에서만 주입한다. 기본 실행은 공개/DB 쓰기를 수행하지 않는다. API 503/429 및 source drift는 HOLD이며 과거 캡처로 우회하지 않는다.
+- `--phase-one`은 목록과 차량별 요금 GET만 수집한다. 상세·availability·정책 GET은 하지 않는다. 요금 귀속은 `REQUEST_PATH_BOUND_BY_LIST_ID`로 명시하며 상세 echo 검증과 혼동하지 않는다. 수집 후 마지막 목록의 상태를 사용하고 새 ID/번호 변경은 최대 3회 목록 대사에서 요금을 추가 조회한다. 계속 늘어나는 미조회 ID는 HOLD이며 추정 요금·삭제를 만들지 않는다. 요금 GET 관측도 15분/미래60초를 검사한다. PHASE_ONE_FACTS RAW coverage는 UNKNOWN이며 정책·원천 부재 권한이 없다.
 
 - 금액 단위는 원화, VAT 포함 기준.
 - `rental_period`: 개월.

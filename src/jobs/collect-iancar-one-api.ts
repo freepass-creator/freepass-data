@@ -2,6 +2,7 @@ import {
   buildIancarOneSourceBatch,
   collectIancarOneVehicleList,
   collectIancarOneFullFacts,
+  collectIancarOnePhaseOneFacts,
   createIancarOneApiClient,
   iancarOneApiConfigFromEnv,
   projectIancarOnePhaseOne,
@@ -17,7 +18,10 @@ if ([...requested].some((arg) => !allowed.has(arg))) {
 const config = iancarOneApiConfigFromEnv();
 if (!config.apiKey) throw new Error('EANCAR_ONE_API_KEY_REQUIRED');
 
-const capture = requested.has('--full-facts') || requested.has('--phase-one')
+const capture = requested.has('--phase-one')
+  ? await collectIancarOnePhaseOneFacts(config, fetch, new Date().toISOString(), (completed, total) => {
+    if (completed % 25 === 0) console.log(JSON.stringify({ phase: 'READING_PHASE_ONE_FACTS', completed, total }));
+  }) : requested.has('--full-facts')
   ? await collectIancarOneFullFacts(config, fetch, new Date().toISOString(), (completed, total) => {
     if (completed % 25 === 0) console.log(JSON.stringify({ phase: 'READING_FULL_FACTS', completed, total }));
   }) : await collectIancarOneVehicleList(config);
