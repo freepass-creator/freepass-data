@@ -2,6 +2,16 @@
 
 <a id="data-start"></a>
 
+## 2026-10-01 사용자 지시 — 이안카 API 검증 전 임시 노출 중단
+
+- 목적: RP031 이안카만 ERP/Admin 판매 노출과 F01/F86 출력에서 중단. 원본·계약·다른 공급사는 삭제하거나 초기화하지 않는다.
+- 대상 revision: Data main `291cfb0` 위 최소 변경. ERP4 bridge main `a5011619ad3ecf5e02df5f6916fca384d5dd5fc8`는 RP031 ingest 제외와 과거 스냅샷 재발행 차단을 반영했다.
+- 실행기: `src/jobs/withdraw-iancar-publication.ts`. 기본 DRY RUN. 정확한 Firebase target, 301건/노출223건/계약락0, 비공개 원본 백업+재읽기, updateTime 원자 거래, 전체301건 비노출 readback을 요구한다. 변경은 노출 관련 6필드만, 삭제0/금액변경0.
+- 검증: 독립 Claude 검토 ANSWERED(전체 최초 요청은 TIMEOUT이며 합격 아님). build/전체 check 통과, 회귀 8건 통과. 프로젝트 target 명시 검사 보강. 적용 후 실패는 자동 재실행/복원이 아니라 현재 상태 재조회한다.
+- 현재 단계: 원천 갱신 회차 drain 대기. 운영 원자 및 시트 반영 완료 아님. 소비처별 실제 readback 전 전체 완료 선언 금지.
+- next_start_here: 기존 진행 회차 종료 확인 → 승인된 one-shot 적용 → 같은 원자 스냅샷의 F01/F86 발행 → ERP/화이트라벨/Admin 각각 readback. 재노출은 API 차량 식별·요금 범위·신선도 검증 및 별도 사용자 지시 이후만.
+- 미완 API full-facts 변경 3파일은 `C:\dev\worktrees\freepass-data-commission-audience-20260930`에 보존, 현재 main에 반영하지 않았다. 공급사 원문이나 비밀키는 Git에 저장하지 않는다.
+
 ## 데이터 업무 시작점 — 사람·AI 공통 안내
 
 **프리패스 데이터를 이해하거나 이어서 작업할 때는 이 절부터 읽는다.** 이곳은 문서와 증거를 찾는 고정 안내이며, 아래 날짜별 기록은 당시 관측·변경 이력이다. 최신 사용자 지시와 현재 원천/코드가 과거 기록보다 우선한다.

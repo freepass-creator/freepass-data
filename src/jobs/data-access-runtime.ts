@@ -1,4 +1,5 @@
 import { DataAccessGateway } from '../application/data-access-gateway.js';
+import { withdrawIancarPublication } from '../infra/iancar-publication-withdrawal-firestore.js';
 import { iancarErpReadTransport, buildIancarErpRawIntakeBatch } from '../adapters/iancar-source-capture.js';
 import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
 import { gcsDataAccessLogStore } from '../infra/gcs-data-access-log.js';
@@ -73,6 +74,21 @@ export function createJobDataAccessRuntime() {
   return {
     access: new DataAccessGateway(createFirestoreDataAccessLogStore())
   };
+}
+
+export async function runIancarPublicationWithdrawal(input: {
+  apply: boolean; expectedCount: number; expectedOpen: number;
+}) {
+  const runtime = createJobDataAccessRuntime();
+  const context = { actor: { id: 'service:freepass-data-iancar-withdrawal', kind: 'SERVICE' as const },
+    clientId: 'job:withdraw-iancar-publication', purpose: 'user-directed temporary RP031 publication withdrawal' };
+  const resource = { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031' };
+  const summarize = (value: Awaited<ReturnType<typeof withdrawIancarPublication>>) =>
+    ({ count: value.changedCount, digest: stableDigest(value) });
+  if (!input.apply) return runtime.access.read({ context, resource,
+    operation: 'READ_IANCAR_PUBLICATION_WITHDRAWAL_PLAN', summarize }, () => withdrawIancarPublication(input));
+  return runtime.access.write({ context, resource, operation: 'WRITE_IANCAR_PUBLICATION_WITHDRAWAL',
+    requestDigest: stableDigest(input), summarize }, () => withdrawIancarPublication(input));
 }
 
 export async function createConsumerHealthReadOnlyDataAccessRuntime(input: {
