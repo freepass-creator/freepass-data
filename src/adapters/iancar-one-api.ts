@@ -65,6 +65,10 @@ export type IancarOneListCapture = {
   issues: string[];
   readyForRawIngest: boolean;
   factScope?: 'FULL_FACTS';
+  observationWindow?: {
+    startedAt: string; completedAt: string; startInventorySyncedAt: string; endInventorySyncedAt: string;
+    consistency: 'BOUNDED_OBSERVATION_NOT_ATOMIC';
+  };
 };
 
 export class IancarOneApiError extends Error {
@@ -436,6 +440,8 @@ export async function collectIancarOneFullFacts(
   config: IancarOneApiConfig, fetcher: Fetcher = fetch,
   now = new Date().toISOString(), onProgress?: (completed: number, total: number) => void
 ): Promise<IancarOneListCapture> {
+  const wallStartedAt = Date.now();
+  const observationNow = () => Date.parse(now) + Date.now() - wallStartedAt;
   const capture = await collectIancarOneVehicleList(config, fetcher, now);
   if (!capture.readyForRawIngest) return { ...capture, factScope: 'FULL_FACTS' };
   const plates = capture.records.map(record => clean(record.payload.plate_number).replace(/\s/g, ''));
@@ -475,7 +481,13 @@ export async function collectIancarOneFullFacts(
       if (!isObject(envelope) || envelope.success !== true || !isObject(envelope.data)
         || envelope.data.vehicle_id !== record.vehicleId)
         throw new IancarOneApiError('IANCAR_ONE_DETAIL_IDENTITY_MISMATCH');
-      if (envelope.data.synced_at !== capture.syncedAt || envelope.data.stale !== false)
+      // A supplier refresh clock can advance while unchanged inventory is being read.
+      // Validate freshness and facts separately; clock equality is not fact equality.
+      const responseNow = observationNow();
+      if (!instant(envelope.data.synced_at) || envelope.data.stale !== false
+        || responseNow - Date.parse(envelope.data.synced_at) > IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS * 1000
+        || Date.parse(envelope.data.synced_at) - responseNow > 60_000
+        || Date.parse(capture.syncedAt) > Date.parse(envelope.data.synced_at))
         throw new IancarOneApiError('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
       for (const field of ['inventory_status', 'available', 'available_from']) {
         if (JSON.stringify(envelope.data[field]) !== JSON.stringify(record.payload[field]))
@@ -486,7 +498,7 @@ export async function collectIancarOneFullFacts(
       throw new IancarOneApiError('IANCAR_ONE_PLATE_MISMATCH');
     if (!isObject(rates) || rates.success !== true || !Array.isArray(rates.data)
       || !rates.data.length || !rates.data.every(isObject) || !instant(rates.updated_at)
-      || Date.parse(rates.updated_at) > Date.parse(now) + 60_000
+      || Date.parse(rates.updated_at) > observationNow() + 60_000
       || (rates.vehicle_id != null && rates.vehicle_id !== record.vehicleId))
       throw new IancarOneApiError('INVALID_IANCAR_ONE_RATES_RESPONSE');
     const keys = new Set<string>();
@@ -525,15 +537,21 @@ export async function collectIancarOneFullFacts(
     && result.reason instanceof IancarOneApiError && result.reason.status === 429)
     ?? settled.find(result => result.status === 'rejected');
   if (failed?.status === 'rejected') throw failed.reason;
-  const ending = await collectIancarOneVehicleList(config, fetcher);
+  const ending = await collectIancarOneVehicleList(config, fetcher, new Date(observationNow()).toISOString());
   const issues = [...ending.issues];
   // Photo credentials may be reissued on every GET; do not compare ephemeral URLs.
-  const inventoryFacts = (value: IancarOneListCapture) => ({ syncedAt: value.syncedAt,
-    records: value.records.map(record => [record.vehicleId, record.payload.plate_number,
-      record.payload.inventory_status, record.payload.available, record.payload.available_from]) });
+  const inventoryFacts = (value: IancarOneListCapture) =>
+    value.records.map(record => [record.vehicleId, record.payload.plate_number,
+      record.payload.inventory_status, record.payload.available, record.payload.available_from])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   if (digest(inventoryFacts(ending)) !== digest(inventoryFacts(capture)))
     issues.push('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
+  if (Date.parse(capture.syncedAt) > Date.parse(ending.syncedAt))
+    issues.push('IANCAR_ONE_ENRICHMENT_CLOCK_REGRESSION');
   return { ...capture, records, factScope: 'FULL_FACTS', issues,
+    observationWindow: { startedAt: capture.capturedAt, completedAt: ending.capturedAt,
+      startInventorySyncedAt: capture.syncedAt, endInventorySyncedAt: ending.syncedAt,
+      consistency: 'BOUNDED_OBSERVATION_NOT_ATOMIC' },
     readyForRawIngest: issues.length === 0,
     sourceDigest: digest({ syncedAt: capture.syncedAt,
       records: records.map(record => [record.vehicleId, record.fingerprint]) }) };

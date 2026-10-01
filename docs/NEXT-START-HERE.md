@@ -1,5 +1,14 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-01 이안카 15분 eventual convergence 결정
+
+- 사용자 결정: 공급사 15분 갱신 사이 순간 대수 차이는 정상 동기화 지연이며, 다음 회차가 따라잡아야 한다. 같은 벽시계 시각의 완전 일치를 실행 조건으로 강제하지 않는다.
+- 대상: main `2550e024854cbf203e2a30df17e3a8103d98de08` 이후 ONE adapter/test/API 계약 확장. Academy READY. 원천 시각만 전진한 경우와 실제 차량/상태 변경을 분리한다.
+- 변경: 상세의 fresh timestamp는 시작 timestamp보다 전진해도 허용한다. 신선도15분/미래60초/역행불가를 검증하며, 시작·종료 목록의 ID/번호/상태/available/from 집합은 정확히 비교한다. 원천 시각만 달라졌다는 이유의 false HOLD를 제거했다. 시작·종료 시각은 bounded observation window로 남겨 atomic snapshot이라고 주장하지 않는다.
+- 경계: 재고/상태 실제 변경·페이지 내 drift·stale·API 오류는 해당 회차 재대사 대상이며, 기존 성공 발행본이나 계약락을 파괴하지 않는다. 정책 연결은 2차다. 운영 15분 writer/스케줄러와 첫 발행·소비처 readback은 이 변경에 포함되지 않는다.
+- 검증: 전용49 PASS/build PASS. Claude 독립 검토 ANSWERED는 시각 분리와 정확한 사실 집합 비교에 동의했고, 원천60초 역행 허용과 주입 now/벽시계 혼용을 지적했다. 역행0초, 주입된 시작시각+경과시간으로 통일하고 종료1초 역행 회귀를 추가했다. 전체 check 재실행과 Git remote 확인 뒤 반영한다. 운영 최신 수집/발행 성공을 테스트로 대체하지 않는다.
+- next_start_here: 최소 차량번호/대여료 수집 및 기존 운영 publisher에 이 eventual convergence 규칙을 연결한다. source/last-success/projection-readback 시각을 나눠 지연 상태를 보여주고, 실제 변경분은 다음 회차 재수집한다. 스케줄 실행 자체와 원천 최신성/발행 성공을 구분한다.
+
 ## 2026-10-01 이안카 1차 차량번호·대여료 / 정책 2차 / 대수 일치
 
 - 목적: 최신 사용자 결정은 차량번호·대여료부터 연결하고 정책은 뒤에 붙인다. 이안카 ERP와 화이트라벨 이안카는 같은 원천 버전의 차량 집합·상태별 대수가 일치해야 한다. 예약은 계약중이며 실제 계약을 생성하지 않는다.

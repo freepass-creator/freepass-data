@@ -88,6 +88,64 @@ describe('EANCAR ONE official partner API', () => {
     return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
 
+  it('accepts a fresh refresh-clock advance only when exact inventory facts remain unchanged', async () => {
+    let lists = 0;
+    const fetcher = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      const response = await fullFetcher()(input); const body = await response.json();
+      if (path === '/v1/vehicles') {
+        lists++;
+        if (lists > 1) body.synced_at = '2026-10-01T00:00:30Z';
+      } else if (!path.endsWith('/rates')) body.data.synced_at = '2026-10-01T00:00:30Z';
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const capture = await collectIancarOneFullFacts(config, fetcher);
+    expect(capture.readyForRawIngest).toBe(true);
+    expect(capture.syncedAt).toBe('2026-10-01T00:00:00.000Z');
+    expect(capture.observationWindow).toMatchObject({ endInventorySyncedAt: '2026-10-01T00:00:30Z',
+      consistency: 'BOUNDED_OBSERVATION_NOT_ATOMIC' });
+  });
+
+  it('still holds a real inventory change across fresh supplier refresh clocks', async () => {
+    let lists = 0;
+    const fetcher = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      const response = await fullFetcher()(input); const body = await response.json();
+      if (path === '/v1/vehicles' && ++lists > 1) {
+        body.synced_at = '2026-10-01T00:00:30Z';
+        body.data[0].inventory_status = 'RESERVED'; body.data[0].available = false;
+      }
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const capture = await collectIancarOneFullFacts(config, fetcher);
+    expect(capture.readyForRawIngest).toBe(false);
+    expect(capture.issues).toContain('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
+  });
+
+  it.each(['2026-09-30T23:40:00Z', '2026-10-01T00:02:01Z', 'invalid'])
+    ('rejects stale/future/invalid detail clocks even in eventual mode: %s', async syncedAt => {
+      const fetcher = (async (input: string | URL | Request) => {
+        const path = new URL(String(input)).pathname;
+        const response = await fullFetcher()(input); const body = await response.json();
+        if (path !== '/v1/vehicles' && !path.endsWith('/rates')) body.data.synced_at = syncedAt;
+        return new Response(JSON.stringify(body));
+      }) as typeof fetch;
+      await expect(collectIancarOneFullFacts(config, fetcher)).rejects.toThrow('DETAIL_SOURCE_DRIFT');
+    });
+
+  it('holds even a one-second ending inventory clock regression', async () => {
+    let lists = 0;
+    const fetcher = (async (input: string | URL | Request) => {
+      const response = await fullFetcher()(input); const body = await response.json();
+      if (new URL(String(input)).pathname === '/v1/vehicles' && ++lists > 1)
+        body.synced_at = '2026-09-30T23:59:59Z';
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const capture = await collectIancarOneFullFacts(config, fetcher);
+    expect(capture.issues).toContain('IANCAR_ONE_ENRICHMENT_CLOCK_REGRESSION');
+    expect(capture.readyForRawIngest).toBe(false);
+  });
+
   it('prepares phase-one plate and exact rental tuples without carrying policies or deposits', async () => {
     const capture = await collectIancarOneFullFacts(config, fullFetcher());
     const before = JSON.stringify(capture);
