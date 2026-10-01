@@ -1,5 +1,14 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-02 RP023 AutoPlus only — Sheet primary bridge recovery (NOT APPLIED)
+
+- 목적: 최신 직접 지시대로 오토플러스만 공급사 원본 시트 우선·ERP/홈페이지 보조로 맞춘다. RP006/Iron·RP031/Iancar 원천/데이터는 수정하지 않는다.
+- 대상: Data base `5318ccfadc655a28a708fd645976057fb030941e`; legacy active engine base `ce811592daef6c0283c3637ec94f1b7cf09a3838`. 다른 세션의 dirty UI/Iron/Data 문서는 원래 checkout에 그대로 보존했다. 개발단계 DEV-05/10 COMMIT; MERGE/RELEASE HOLD.
+- 변경: isolated recovery commits `6f9e45dfb39cc351bb2e532236e49a774fd9c39f`, `ab52faf8` — registry RP023 원본 시트로 전환, main/promo 같은 visible snapshot·사진 링크 파서 재사용, 홈페이지 writer 제거·supplementary write 거부, ID/정책/계약락/삭제 보존, 시트 기간가격 map 교체, 수입12개월2만 예외, digest·private immutable backup·transaction precondition·readback. Data 권위는 `docs/NATIVE-SOURCE-COLLECTOR.md`에 기록했다.
+- 검증: AutoPlus recovery assertions + source registry PASS, `tsc --noEmit` PASS, `npm run check:sync` PASS (F01/F86/axes/manual/color regressions), `git diff --check` PASS. `--supplementary-only --apply`는 network/Firestore 접근 전 `AUTOPLUS_SUPPLEMENTARY_WRITE_FORBIDDEN`으로 거부됐다.
+- 남음: 원본 metadata/header는 연결 앱으로 확인했지만 full visible-row source capture·차량별 live 대사·보증금 원문 이미지 대조·독립 구현 검토·CI/운영 pin/실데이터 apply/전 소비처 readback 미완료. local `gws`는 OAuth scope 403. 앞선 run의 참조61/게시40은 사본 대사이며 원본 누락21대의 증거가 아니다. 어떤 운영 writer/pin/schedule/시트 값도 바꾸지 않았다.
+- next_start_here: `C:/dev/worktrees/freepass-autoplus-recovery-20261002/scripts/ingest-reborncar-to-firestore.mts` default dry-run, `--crawl-only` original source-only, `--supplementary-only` website read-only. 원본 전체 capture와 independent review 후 exact source digest/승인/백업/롤백을 확인하고 RP023만 적용한다. 운영 활성화는 별도 승인까지 HOLD; native Data cutover는 이번 수정에 포함하지 않는다.
+
 ## 2026-10-01 이안카 1차 실제 발행 — ERP·F01·F86 readback 완료
 
 - 목적/정본: 공식 ONE API 차량번호·상태·기간/월연거리별 대여료를 Data 소유 RP031 상품으로 반영한다. source syncedAt `2026-10-01T08:13:03.756Z`, digest `3994442e0640d36722b206bac32f2dc55e22468ec05eeebc661c1dc9690fd9a5`, 117대/2,808개 실제 요금. 이 기록은 해당 관측 회차의 완료이며 현재 API의 실시간 신선도를 뜻하지 않는다.
