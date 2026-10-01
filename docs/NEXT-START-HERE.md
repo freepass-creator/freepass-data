@@ -1,5 +1,16 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-01 이안카 1차 차량번호·대여료 / 정책 2차 / 대수 일치
+
+- 목적: 최신 사용자 결정은 차량번호·대여료부터 연결하고 정책은 뒤에 붙인다. 이안카 ERP와 화이트라벨 이안카는 같은 원천 버전의 차량 집합·상태별 대수가 일치해야 한다. 예약은 계약중이며 실제 계약을 생성하지 않는다.
+- 대상 revision: main `455a28d19f0634af2924c9b1e0b4d71e81d0d02f` 기반. 기존 ONE adapter/job/test/API 문서 확장(COMPOSE_OR_EXTEND), Academy READY. 신규 원장/별도 저장 경로 없음.
+- 변경: `projectIancarOnePhaseOne`은 차량 ID/번호·상태·기간/월연거리별 월대여료만 REVIEW ONLY로 추출한다. 정책/보증금/노출/계약락 변경 없음. `--phase-one`은 전체 검증 조회 후 비식별 집계만 출력한다. 실제 sourceDigest/syncedAt·차량 ID·번호·원천/표시 상태·요금 tuple parity gate를 추가했다.
+- 검증: 전용 43 PASS, build PASS, architecture/data-access boundary PASS, 전체 Vitest 1119 PASS / 14 SKIP. 소비처 운영 반영/배포/쓰기는 미실행. 최신 목록 관측은 112대였으며 앞선 111대 고정은 금지한다. 전량 재조회 첫 시도 HTTP503 실패; 두 번째는 50대 이후 DETAIL_SOURCE_DRIFT로 실패(503 재시도0). 서로 다른 원천 갱신 시각을 섞지 않아 발행하지 않았다. 현재 Firestore RP031301문서/listable0, ERP 공개 feed HTTP200/count0 새 조회 확인. 최신 요금 전량 검증은 HOLD다.
+- Claude 독립 검토 ANSWERED: 합계만 같은 차량 집합, 틀린 가격, 다른 snapshot의 false PASS를 지적해 ID/표시/가격/snapshot gate와 upstream invalid-rate 회귀를 추가했다. `rates.updated_at`은 요금표 revision 시각이므로 임의로 inventory 15분 규칙을 적용하지 않았다. 신선한 GET와 inventory freshness를 별도로 검증한다. 지역번호 plate는 추정 변환하지 않고 현재 전체 REVIEW를 HOLD한다.
+- 후속 독립 검토에서 whitespace plate로 가격 검증 건너뜀·빈 집합 PASS·객체 key 순서 오판을 발견해 공통 plate key/빈 집합 HOLD/명시적 scalar tuple 비교로 수정하고 회귀를 추가했다. 세 수정은 Claude ANSWERED 재확인. 별도 inventory utility의 빈 집합 MATCH 잔여도 HOLD로 수정했다. 전체 check PASS. 운영 원천 실패는 테스트 통과로 대체하지 않는다.
+- 남음: 운영 writer/소비처 월·연 거리 tuple 표현/정책 미확인 표시/기존 정책 자동 노출 방지, exact backup+적용 전후 readback, F01/F86·ERP.com·화이트라벨·Admin 소비처별 대사. 기존 RP031 withdrawal와 Sheet 원천 ingest 제외는 유지한다. helper/test 통과는 재노출 완료가 아니다.
+- next_start_here: `docs/IANCAR-ONE-API.md`의 1차 사용자 결정 및 ONE job `--phase-one`을 따른다. 신선한 전체 source를 다시 검증하고 같은 sourceDigest로 적용안을 고정한 뒤 별도 운영 승인 경계를 거쳐 발행한다. 같은 대수라도 missing/extra/duplicate/status/rate mismatch 중 하나가 있으면 HOLD.
+
 ## 2026-09-30 손오공 사진 — 영업자 실제 경로 복구
 
 ### 최신 재검토 및 실행 경계

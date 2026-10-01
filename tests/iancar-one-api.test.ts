@@ -8,6 +8,9 @@ import {
   IancarOneApiError,
   iancarOneApiConfigFromEnv,
   projectIancarOneReservation,
+  projectIancarOnePhaseOne,
+  compareIancarOneInventoryParity,
+  compareIancarOnePhaseOneParity,
   summarizeJsonShape
 } from '../src/adapters/iancar-one-api.js';
 
@@ -84,6 +87,88 @@ describe('EANCAR ONE official partner API', () => {
       ...(fault === 'wrong-plate' && !path.endsWith('/availability') ? { plate_number: '999나9999' } : {}) } };
     return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
+
+  it('prepares phase-one plate and exact rental tuples without carrying policies or deposits', async () => {
+    const capture = await collectIancarOneFullFacts(config, fullFetcher());
+    const before = JSON.stringify(capture);
+    const result = projectIancarOnePhaseOne(capture);
+    expect(result).toMatchObject({ publicationAuthorized: false, policyStage: 'DEFERRED',
+      vehicles: [{ plate: '123가4567', displayStatus: '출고가능', terms: [{ key: '24:20000:year',
+        monthlyRent: { amount: 500000, currency: 'KRW' }, contractedMileage: { km: 20000, period: 'year' } }] }] });
+    expect(JSON.stringify(result)).not.toContain('deposit');
+    expect(JSON.stringify(result)).not.toContain('contract_conditions');
+    expect(JSON.stringify(capture)).toBe(before);
+    vi.advanceTimersByTime(16 * 60 * 1000);
+    expect(() => projectIancarOnePhaseOne(capture)).toThrow('PHASE_ONE_SOURCE_REQUIRES_REVIEW');
+  });
+
+  it('preserves monthly mileage instead of annualizing and rejects altered rates evidence', async () => {
+    const fetcher = (async (input: string | URL | Request) => {
+      const response = await fullFetcher()(input);
+      const body = await response.json();
+      if (new URL(String(input)).pathname.endsWith('/rates')) {
+        body.data[0].rental_period = 3; body.data[0].contracted_mileage = 2000; body.data[0].mileage_period = 'month';
+      }
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const capture = await collectIancarOneFullFacts(config, fetcher);
+    expect(projectIancarOnePhaseOne(capture).vehicles[0]?.terms[0]?.key).toBe('3:2000:month');
+    (capture.records[0]!.payload.rates as any).data[0].monthly_rate = 0;
+    expect(() => projectIancarOnePhaseOne(capture)).toThrow('PHASE_ONE_IDENTITY_REQUIRES_REVIEW');
+  });
+
+  it('rejects non-full or duplicate phase-one identities', async () => {
+    const capture = await collectIancarOneFullFacts(config, fullFetcher());
+    const inventoryOnly = { ...capture }; delete inventoryOnly.factScope;
+    expect(() => projectIancarOnePhaseOne(inventoryOnly)).toThrow('PHASE_ONE_SOURCE_REQUIRES_REVIEW');
+    expect(() => projectIancarOnePhaseOne({ ...capture, total: 2, records: [...capture.records, ...capture.records] }))
+      .toThrow('PHASE_ONE_IDENTITY_REQUIRES_REVIEW');
+  });
+
+  it.each([
+    { monthly_rate: 0 }, { monthly_rate: 20000001 }, { rental_period: 0 },
+    { contracted_mileage: 0 }, { currency: 'USD' }, { vat_included: false }, { mileage_period: 'week' }
+  ])('rejects malformed rates at ingestion with a consistent response digest: %j', async fault => {
+    const fetcher = (async (input: string | URL | Request) => {
+      const response = await fullFetcher()(input); const body = await response.json();
+      if (new URL(String(input)).pathname.endsWith('/rates')) Object.assign(body.data[0], fault);
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    await expect(collectIancarOneFullFacts(config, fetcher)).rejects.toThrow('RATE_FACT_REQUIRES_REVIEW');
+  });
+
+  it('requires plate-set and source-state parity, not just equal totals', () => {
+    expect(compareIancarOneInventoryParity([], []).status).toBe('HOLD');
+    const source = [{ plate: '123가4567', sourceInventoryStatus: 'AVAILABLE' }, { plate: '124가4567', sourceInventoryStatus: 'RESERVED' }];
+    expect(compareIancarOneInventoryParity(source, [...source].reverse()).status).toBe('MATCH');
+    expect(compareIancarOneInventoryParity(source, [source[0]!, { plate: '125가4567', sourceInventoryStatus: 'RESERVED' }]))
+      .toMatchObject({ status: 'HOLD', sourceCount: 2, consumerCount: 2, missing: 1, extra: 1 });
+    expect(compareIancarOneInventoryParity(source, [source[0]!, { ...source[1]!, sourceInventoryStatus: 'AVAILABLE' }]))
+      .toMatchObject({ status: 'HOLD', stateMismatch: 1 });
+    expect(compareIancarOneInventoryParity(source, [source[0]!, source[0]!]))
+      .toMatchObject({ status: 'HOLD', consumerDuplicates: 1 });
+  });
+
+  it('rejects wrong consumer prices, display states, IDs or snapshot despite equal inventory totals', async () => {
+    const source = projectIancarOnePhaseOne(await collectIancarOneFullFacts(config, fullFetcher()));
+    expect(compareIancarOnePhaseOneParity(source, structuredClone(source)).status).toBe('PHASE_ONE_PARITY_VERIFIED');
+    const price = structuredClone(source); price.vehicles[0]!.terms[0]!.monthlyRent.amount++;
+    expect(compareIancarOnePhaseOneParity(source, price)).toMatchObject({ status: 'HOLD', rateMismatch: 1 });
+    const display = structuredClone(source); display.vehicles[0]!.displayStatus = '출고불가';
+    expect(compareIancarOnePhaseOneParity(source, display)).toMatchObject({ status: 'HOLD', displayMismatch: 1 });
+    const identity = structuredClone(source); identity.vehicles[0]!.sourceVehicleId = 'other';
+    expect(compareIancarOnePhaseOneParity(source, identity)).toMatchObject({ status: 'HOLD', identityMismatch: 1 });
+    const snapshot = structuredClone(source); snapshot.sourceDigest = '0'.repeat(64);
+    expect(compareIancarOnePhaseOneParity(source, snapshot)).toMatchObject({ status: 'HOLD', snapshotMismatch: true });
+    const whitespace = structuredClone(price); whitespace.vehicles[0]!.plate += ' ';
+    expect(compareIancarOnePhaseOneParity(source, whitespace)).toMatchObject({ status: 'HOLD', rateMismatch: 1 });
+    const reordered = structuredClone(source);
+    const term = reordered.vehicles[0]!.terms[0]!;
+    reordered.vehicles[0]!.terms[0] = { vatIncluded: term.vatIncluded, monthlyRent: term.monthlyRent,
+      contractedMileage: term.contractedMileage, termMonths: term.termMonths, key: term.key };
+    expect(compareIancarOnePhaseOneParity(source, reordered).status).toBe('PHASE_ONE_PARITY_VERIFIED');
+    expect(compareIancarOnePhaseOneParity({ ...source, vehicles: [] }, { ...source, vehicles: [] }).status).toBe('HOLD');
+  });
 
   it('bounds concurrent enrichment to six GETs while collecting independent endpoints in parallel', async () => {
     const ids = ['veh1', 'veh2', 'veh3'];

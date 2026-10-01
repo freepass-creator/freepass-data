@@ -21,6 +21,8 @@ const instant = (value: unknown): value is string =>
   && Number.isFinite(Date.parse(value));
 const integer = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value);
+const IANCAR_PLATE = /^\d{2,3}[가-힣]\d{4}$/;
+const IANCAR_STATES = ['AVAILABLE', 'RESERVED', 'RENTED', 'PREPARING', 'UNAVAILABLE'];
 
 export const IANCAR_ONE_API_VERSION = 'iancar-one-api/1';
 export const IANCAR_ONE_API_ORIGIN = 'https://eancarone.com';
@@ -314,6 +316,119 @@ export function projectIancarOneReservation(
     status_kind: '선점' as const,
     available: false as const
   };
+}
+
+/** Phase-one review payload only: no policy/default/deposit mutation or publication grant. */
+export function projectIancarOnePhaseOne(capture: IancarOneListCapture, now = new Date().toISOString()) {
+  if (capture.factScope !== 'FULL_FACTS' || capture.origin !== IANCAR_ONE_API_ORIGIN
+    || !capture.readyForRawIngest || capture.stale || capture.issues.length
+    || !instant(now) || !instant(capture.syncedAt)
+    || Date.parse(now) - Date.parse(capture.syncedAt) > IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS * 1000
+    || Date.parse(capture.syncedAt) - Date.parse(now) > 60_000
+    || capture.total < 1 || capture.records.length !== capture.total)
+    throw new IancarOneApiError('IANCAR_ONE_PHASE_ONE_SOURCE_REQUIRES_REVIEW');
+  const ids = new Set<string>();
+  const plates = new Set<string>();
+  const vehicles = capture.records.map(record => {
+    const p = record.payload;
+    const plate = clean(p.plate_number).replace(/\s/g, '');
+    const detail = isObject(p.detail) && isObject(p.detail.data) ? p.detail.data : null;
+    const rates = isObject(p.rates) ? p.rates : null;
+    const evidence = isObject(p.rateRequestEvidence) ? p.rateRequestEvidence : null;
+    if (!record.vehicleId || ids.has(record.vehicleId) || plates.has(plate)
+      || !IANCAR_PLATE.test(plate) || p.vehicle_id !== record.vehicleId
+      || !detail || detail.vehicle_id !== record.vehicleId || detail.plate_number !== p.plate_number
+      || !rates || rates.success !== true || !Array.isArray(rates.data) || !rates.data.length
+      || !instant(rates.updated_at) || Date.parse(rates.updated_at) > Date.parse(now) + 60_000
+      || (rates.vehicle_id != null && rates.vehicle_id !== record.vehicleId)
+      || !evidence || evidence.vehicle_id !== record.vehicleId
+      || evidence.path !== `/v1/vehicles/${encodeURIComponent(record.vehicleId)}/rates`
+      || evidence.response_digest !== digest(rates))
+      throw new IancarOneApiError('IANCAR_ONE_PHASE_ONE_IDENTITY_REQUIRES_REVIEW');
+    ids.add(record.vehicleId); plates.add(plate);
+    const state = clean(p.inventory_status);
+    if (!IANCAR_STATES.includes(state)
+      || p.available !== (state === 'AVAILABLE'))
+      throw new IancarOneApiError('IANCAR_ONE_PHASE_ONE_STATE_REQUIRES_REVIEW');
+    const keys = new Set<string>();
+    const terms = rates.data.map(rate => {
+      if (!isObject(rate) || !integer(rate.rental_period) || rate.rental_period < 1 || rate.rental_period > 60
+        || !integer(rate.monthly_rate) || rate.monthly_rate < 100_000 || rate.monthly_rate > 20_000_000
+        || !integer(rate.contracted_mileage) || rate.contracted_mileage < 1
+        || !['month', 'year'].includes(String(rate.mileage_period))
+        || rate.currency !== 'KRW' || rate.vat_included !== true)
+        throw new IancarOneApiError('IANCAR_ONE_PHASE_ONE_RATE_REQUIRES_REVIEW');
+      const key = `${rate.rental_period}:${rate.contracted_mileage}:${rate.mileage_period}`;
+      if (keys.has(key)) throw new IancarOneApiError('IANCAR_ONE_DUPLICATE_RATE');
+      keys.add(key);
+      return { key, termMonths: rate.rental_period,
+        contractedMileage: { km: rate.contracted_mileage, period: rate.mileage_period as 'month' | 'year' },
+        monthlyRent: { amount: rate.monthly_rate, currency: 'KRW' as const }, vatIncluded: true as const };
+    });
+    return { sourceVehicleId: record.vehicleId, plate, sourceInventoryStatus: state,
+      displayStatus: state === 'AVAILABLE' ? '출고가능' : state === 'RESERVED' ? '계약중' : '출고불가',
+      available: p.available, ratesUpdatedAt: rates.updated_at, terms };
+  });
+  return { stage: 'PHASE_ONE_REVIEW_ONLY' as const, sourceDigest: capture.sourceDigest,
+    syncedAt: capture.syncedAt, policyStage: 'DEFERRED' as const,
+    publicationAuthorized: false as const, vehicles };
+}
+
+/** Count equality alone is insufficient: require the exact plate + source-state multiset. */
+export function compareIancarOneInventoryParity(
+  source: Array<{ plate: string; sourceInventoryStatus: string }>,
+  consumer: Array<{ plate: string; sourceInventoryStatus: string }>
+) {
+  const index = (rows: typeof source) => {
+    const byPlate = new Map<string, string>();
+    let duplicates = 0; let invalid = 0;
+    for (const row of rows) {
+      const plate = clean(row.plate).replace(/\s/g, '');
+      if (!IANCAR_PLATE.test(plate) || !IANCAR_STATES.includes(row.sourceInventoryStatus)) { invalid++; continue; }
+      if (byPlate.has(plate)) { duplicates++; continue; }
+      byPlate.set(plate, row.sourceInventoryStatus);
+    }
+    return { byPlate, duplicates, invalid };
+  };
+  const a = index(source); const b = index(consumer);
+  const missing = [...a.byPlate.keys()].filter(plate => !b.byPlate.has(plate)).length;
+  const extra = [...b.byPlate.keys()].filter(plate => !a.byPlate.has(plate)).length;
+  const stateMismatch = [...a.byPlate].filter(([plate, state]) => b.byPlate.has(plate) && b.byPlate.get(plate) !== state).length;
+  const issues = missing + extra + stateMismatch + a.duplicates + b.duplicates + a.invalid + b.invalid;
+  return { status: issues || !source.length ? 'HOLD' as const : 'MATCH' as const, sourceCount: source.length,
+    consumerCount: consumer.length, missing, extra, stateMismatch,
+    sourceDuplicates: a.duplicates, consumerDuplicates: b.duplicates,
+    sourceInvalid: a.invalid, consumerInvalid: b.invalid };
+}
+
+/** Full phase-one readback gate: snapshot, identity, display state and all observed rental tuples. */
+export function compareIancarOnePhaseOneParity(
+  source: ReturnType<typeof projectIancarOnePhaseOne>,
+  consumer: Pick<ReturnType<typeof projectIancarOnePhaseOne>, 'sourceDigest' | 'syncedAt' | 'vehicles'>,
+  now = new Date().toISOString()
+) {
+  const inventory = compareIancarOneInventoryParity(source.vehicles, consumer.vehicles);
+  const snapshotMismatch = !instant(now) || !instant(source.syncedAt)
+    || !/^[a-f0-9]{64}$/.test(source.sourceDigest)
+    || !source.vehicles.length || source.sourceDigest !== consumer.sourceDigest || source.syncedAt !== consumer.syncedAt
+    || Date.parse(now) - Date.parse(source.syncedAt) > IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS * 1000
+    || Date.parse(source.syncedAt) - Date.parse(now) > 60_000;
+  const plateKey = (plate: string) => clean(plate).replace(/\s/g, '');
+  const lookup = new Map(consumer.vehicles.map(vehicle => [plateKey(vehicle.plate), vehicle]));
+  let displayMismatch = 0; let rateMismatch = 0; let identityMismatch = 0;
+  for (const vehicle of source.vehicles) {
+    const observed = lookup.get(plateKey(vehicle.plate)); if (!observed) continue;
+    if (observed.sourceVehicleId !== vehicle.sourceVehicleId) identityMismatch++;
+    if (observed.displayStatus !== vehicle.displayStatus || observed.available !== vehicle.available) displayMismatch++;
+    const tuples = (v: typeof vehicle) => v.terms.map(term => [term.key, term.termMonths,
+      term.contractedMileage.km, term.contractedMileage.period,
+      term.monthlyRent.amount, term.monthlyRent.currency, term.vatIncluded])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    if (digest(tuples(observed)) !== digest(tuples(vehicle)) || observed.ratesUpdatedAt !== vehicle.ratesUpdatedAt) rateMismatch++;
+  }
+  return { ...inventory, snapshotMismatch, displayMismatch, rateMismatch, identityMismatch,
+    status: inventory.status === 'MATCH' && !snapshotMismatch && !displayMismatch && !rateMismatch && !identityMismatch
+      ? 'PHASE_ONE_PARITY_VERIFIED' as const : 'HOLD' as const };
 }
 
 /** Vehicle-scoped GET evidence binds rates even where the provider does not echo ID. */

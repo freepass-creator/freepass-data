@@ -4,11 +4,12 @@ import {
   collectIancarOneFullFacts,
   createIancarOneApiClient,
   iancarOneApiConfigFromEnv,
+  projectIancarOnePhaseOne,
   summarizeJsonShape
 } from '../adapters/iancar-one-api.js';
 
 const requested = new Set(process.argv.slice(2));
-const allowed = new Set(['--apply-raw', '--inspect-detail-shape', '--full-facts', '--save-private']);
+const allowed = new Set(['--apply-raw', '--inspect-detail-shape', '--full-facts', '--save-private', '--phase-one']);
 if ([...requested].some((arg) => !allowed.has(arg))) {
   throw new Error('UNKNOWN_IANCAR_ONE_OPTION');
 }
@@ -16,7 +17,7 @@ if ([...requested].some((arg) => !allowed.has(arg))) {
 const config = iancarOneApiConfigFromEnv();
 if (!config.apiKey) throw new Error('EANCAR_ONE_API_KEY_REQUIRED');
 
-const capture = requested.has('--full-facts')
+const capture = requested.has('--full-facts') || requested.has('--phase-one')
   ? await collectIancarOneFullFacts(config, fetch, new Date().toISOString(), (completed, total) => {
     if (completed % 25 === 0) console.log(JSON.stringify({ phase: 'READING_FULL_FACTS', completed, total }));
   }) : await collectIancarOneVehicleList(config);
@@ -36,6 +37,17 @@ const report: Record<string, unknown> = {
   canonicalPublication: 'NOT_AUTHORIZED_BY_RAW_COLLECTION',
   consumerReadback: 'NOT_VERIFIED'
 };
+
+if (requested.has('--phase-one')) {
+  const phaseOne = projectIancarOnePhaseOne(capture);
+  report.phaseOne = { stage: phaseOne.stage, policyStage: phaseOne.policyStage,
+    publicationAuthorized: phaseOne.publicationAuthorized, vehicleCount: phaseOne.vehicles.length,
+    observedRateCount: phaseOne.vehicles.reduce((count, vehicle) => count + vehicle.terms.length, 0),
+    stateCounts: phaseOne.vehicles.reduce<Record<string, number>>((counts, vehicle) => {
+      counts[vehicle.sourceInventoryStatus] = (counts[vehicle.sourceInventoryStatus] ?? 0) + 1;
+      return counts;
+    }, {}) };
+}
 
 if (requested.has('--save-private')) {
   const { mkdir, writeFile, readFile } = await import('node:fs/promises');
