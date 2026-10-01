@@ -7,6 +7,7 @@ import {
   IANCAR_ONE_API_ORIGIN,
   IancarOneApiError,
   iancarOneApiConfigFromEnv,
+  projectIancarOneReservation,
   summarizeJsonShape
 } from '../src/adapters/iancar-one-api.js';
 
@@ -39,6 +40,34 @@ const page = (input: {
 });
 
 describe('EANCAR ONE official partner API', () => {
+  const freshCapture = { readyForRawIngest: true, stale: false };
+  it('projects supplier RESERVED as 계약중 without creating contract facts or mutating RAW', () => {
+    const raw = { inventory_status: 'RESERVED', available: false, stale: false };
+    expect(projectIancarOneReservation(raw, freshCapture)).toEqual({ source_inventory_status: 'RESERVED',
+      vehicle_status: '계약중', status: '계약중', status_kind: '선점', available: false });
+    expect(raw).toEqual({ inventory_status: 'RESERVED', available: false, stale: false });
+    expect(projectIancarOneReservation({ inventory_status: 'AVAILABLE' }, freshCapture)).toBeNull();
+    expect(projectIancarOneReservation({ inventory_status: 'UNKNOWN' }, freshCapture)).toBeNull();
+  });
+  it.each([
+    [{ inventory_status: 'RESERVED', available: true }, freshCapture],
+    [{ inventory_status: 'RESERVED', available: false }, { readyForRawIngest: true, stale: true }],
+    [{ inventory_status: 'RESERVED', available: false, stale: false }, { readyForRawIngest: false, stale: false }]
+  ])('does not project contradictory or unaccepted reservations: %j', (raw, capture) => {
+    expect(() => projectIancarOneReservation(raw, capture)).toThrow('IANCAR_ONE_RESERVED_STATE_REQUIRES_REVIEW');
+  });
+  it('uses computed capture freshness and supports envelope-only stale from real list parsing', async () => {
+    const fetcher = (async () => new Response(JSON.stringify(page({ page: 1, total: 1,
+      data: [vehicle('reserved', { inventory_status: 'RESERVED', available: false })] })))) as typeof fetch;
+    const capture = await collectIancarOneVehicleList(config, fetcher);
+    expect(capture.records[0]!.payload.stale).toBeUndefined();
+    expect(projectIancarOneReservation(capture.records[0]!.payload, capture)?.status).toBe('계약중');
+    vi.advanceTimersByTime(16 * 60 * 1000);
+    const expired = await collectIancarOneVehicleList(config, fetcher);
+    expect(expired.readyForRawIngest).toBe(false);
+    expect(() => projectIancarOneReservation(expired.records[0]!.payload, expired))
+      .toThrow('IANCAR_ONE_RESERVED_STATE_REQUIRES_REVIEW');
+  });
   const fullFetcher = (fault = '') => (async (input: string | URL | Request) => {
     const path = new URL(String(input)).pathname;
     const row = vehicle('veh1', { plate_number: '123가4567', inventory_status: 'AVAILABLE',

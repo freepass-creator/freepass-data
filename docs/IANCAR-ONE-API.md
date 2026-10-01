@@ -75,6 +75,8 @@ Authorization: Bearer <API key>
 
 재고 상태는 `AVAILABLE / RESERVED / RENTED / PREPARING / UNAVAILABLE`을 그대로 보존한다. `available_from=null` 등 미확인 값은 추정하지 않는다.
 
+2026-10-01 사용자 직접 결정: 예약 `RESERVED`의 ERP·Admin·F01/F86 공통 표시값은 **계약중**이다. 호환 projection은 `vehicle_status/status=계약중`, `status_kind=선점`, `available=false`, `source_inventory_status=RESERVED`로 보존한다. 출고가능으로 표시하지 않으며 실제 계약 레코드·계약 ID·계약 잠금을 만들어내지 않는다. 기존 adapter의 `projectIancarOneReservation(payload, capture)`은 이 표시 규칙만 준비하며, 신선도 검증된 source를 소비처에 발행하는 writer는 아직 미연결이다. 수집기가 계산한 `readyForRawIngest=true`와 envelope `stale=false`를 모두 요구하며 행의 자체 stale 값으로 신선도 검증을 대체하지 않는다. 미검증 capture 또는 available 모순은 HOLD다. 이 규칙 확정으로 현재 withdrawal guard나 전량 검증 HOLD를 해제하지 않는다.
+
 ## 요금·보증금·계약조건
 
 - 금액 단위는 원화, VAT 포함 기준.

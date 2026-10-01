@@ -299,6 +299,23 @@ export async function collectIancarOneVehicleList(
   };
 }
 
+/** Display-only supplier reservation mapping; does not create a contract or grant publication. */
+export function projectIancarOneReservation(
+  payload: JsonObject,
+  capture: Pick<IancarOneListCapture, 'readyForRawIngest' | 'stale'>
+) {
+  if (payload.inventory_status !== 'RESERVED') return null;
+  if (payload.available !== false || capture.readyForRawIngest !== true || capture.stale !== false)
+    throw new IancarOneApiError('IANCAR_ONE_RESERVED_STATE_REQUIRES_REVIEW');
+  return {
+    source_inventory_status: 'RESERVED' as const,
+    vehicle_status: '계약중' as const,
+    status: '계약중' as const,
+    status_kind: '선점' as const,
+    available: false as const
+  };
+}
+
 /** Vehicle-scoped GET evidence binds rates even where the provider does not echo ID. */
 export async function collectIancarOneFullFacts(
   config: IancarOneApiConfig, fetcher: Fetcher = fetch,
