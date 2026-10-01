@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildIancarOneSourceBatch,
   collectIancarOneVehicleList,
+  collectIancarOneFullFacts,
   createIancarOneApiClient,
   IANCAR_ONE_API_ORIGIN,
   IancarOneApiError,
@@ -38,6 +39,51 @@ const page = (input: {
 });
 
 describe('EANCAR ONE official partner API', () => {
+  const fullFetcher = (fault = '') => (async (input: string | URL | Request) => {
+    const path = new URL(String(input)).pathname;
+    const row = vehicle('veh1', { plate_number: '123가4567', inventory_status: 'AVAILABLE',
+      available: true, available_from: null, synced_at: '2026-10-01T00:00:00.000Z', stale: false });
+    const rate = { rental_period: 24, monthly_rate: 500000, deposit: 700000,
+      contracted_mileage: 20000, mileage_period: 'year', currency: 'KRW', vat_included: true,
+      contract_conditions: { version: 'synthetic-v1' } };
+    let body: unknown = page({ page: 1, total: 1, data: [row] });
+    if (path.endsWith('/rates')) body = { success: true, updated_at: '2026-09-26T00:00:00Z',
+      ...(fault === 'wrong-rate-id' ? { vehicle_id: 'other' } : {}),
+      data: fault === 'duplicate' ? [rate, rate] : [{ ...rate, ...(fault === 'null-deposit' ? { deposit: null } : {}) }] };
+    else if (path !== '/v1/vehicles') body = { success: true, data: { ...row,
+      ...(fault === 'wrong-id' ? { vehicle_id: 'other' } : {}),
+      ...(fault === 'wrong-plate' && !path.endsWith('/availability') ? { plate_number: '999나9999' } : {}) } };
+    return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+
+  it('retains vehicle-scoped rate request evidence and independent policy updated_at', async () => {
+    const capture = await collectIancarOneFullFacts(config, fullFetcher());
+    expect(capture.readyForRawIngest).toBe(true);
+    expect(capture.factScope).toBe('FULL_FACTS');
+    expect(capture.records[0]!.payload.rateRequestEvidence).toMatchObject({
+      vehicle_id: 'veh1', path: '/v1/vehicles/veh1/rates' });
+    expect(buildIancarOneSourceBatch(capture).coverage.scope).toContain('vehicle-scoped');
+    expect(buildIancarOneSourceBatch(capture).coverage.completeness).toBe('UNKNOWN');
+    expect(buildIancarOneSourceBatch(capture).source.sourceId).toMatch(/:full-facts$/);
+    expect(buildIancarOneSourceBatch(capture).source.authorityScope).toContain('NO_INVENTORY_STATE_OR_SOURCE_ABSENCE_AUTHORITY');
+  });
+  it.each([
+    ['wrong-id', 'IANCAR_ONE_DETAIL_IDENTITY_MISMATCH'],
+    ['wrong-plate', 'IANCAR_ONE_PLATE_MISMATCH'],
+    ['wrong-rate-id', 'INVALID_IANCAR_ONE_RATES_RESPONSE'],
+    ['duplicate', 'IANCAR_ONE_DUPLICATE_RATE'],
+    ['null-deposit', 'IANCAR_ONE_RATE_FACT_REQUIRES_REVIEW']
+  ])('fails closed on full-fact %s', async (fault, code) => {
+    await expect(collectIancarOneFullFacts(config, fullFetcher(fault))).rejects.toThrow(code);
+  });
+  it('does not churn provider fingerprints just because request observation time changes', async () => {
+    const first = await collectIancarOneFullFacts(config, fullFetcher());
+    vi.advanceTimersByTime(1000);
+    const second = await collectIancarOneFullFacts(config, fullFetcher());
+    expect(first.records[0]!.payload.rateRequestEvidence).not.toEqual(second.records[0]!.payload.rateRequestEvidence);
+    expect(first.records[0]!.fingerprint).toBe(second.records[0]!.fingerprint);
+    expect(first.sourceDigest).toBe(second.sourceDigest);
+  });
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-01T00:01:00.000Z'));

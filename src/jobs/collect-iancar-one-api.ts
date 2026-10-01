@@ -1,13 +1,14 @@
 import {
   buildIancarOneSourceBatch,
   collectIancarOneVehicleList,
+  collectIancarOneFullFacts,
   createIancarOneApiClient,
   iancarOneApiConfigFromEnv,
   summarizeJsonShape
 } from '../adapters/iancar-one-api.js';
 
 const requested = new Set(process.argv.slice(2));
-const allowed = new Set(['--apply-raw', '--inspect-detail-shape']);
+const allowed = new Set(['--apply-raw', '--inspect-detail-shape', '--full-facts', '--save-private']);
 if ([...requested].some((arg) => !allowed.has(arg))) {
   throw new Error('UNKNOWN_IANCAR_ONE_OPTION');
 }
@@ -15,7 +16,10 @@ if ([...requested].some((arg) => !allowed.has(arg))) {
 const config = iancarOneApiConfigFromEnv();
 if (!config.apiKey) throw new Error('EANCAR_ONE_API_KEY_REQUIRED');
 
-const capture = await collectIancarOneVehicleList(config);
+const capture = requested.has('--full-facts')
+  ? await collectIancarOneFullFacts(config, fetch, new Date().toISOString(), (completed, total) => {
+    if (completed % 25 === 0) console.log(JSON.stringify({ phase: 'READING_FULL_FACTS', completed, total }));
+  }) : await collectIancarOneVehicleList(config);
 const batch = buildIancarOneSourceBatch(capture);
 
 const report: Record<string, unknown> = {
@@ -32,6 +36,20 @@ const report: Record<string, unknown> = {
   canonicalPublication: 'NOT_AUTHORIZED_BY_RAW_COLLECTION',
   consumerReadback: 'NOT_VERIFIED'
 };
+
+if (requested.has('--save-private')) {
+  const { mkdir, writeFile, readFile } = await import('node:fs/promises');
+  const { homedir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { randomUUID } = await import('node:crypto');
+  const directory = join(homedir(), '.codex', 'private', 'freepass-data-iancar-one-captures');
+  await mkdir(directory, { recursive: true });
+  const path = join(directory, `${randomUUID()}.json`);
+  const bytes = JSON.stringify(capture);
+  await writeFile(path, bytes, { flag: 'wx', mode: 0o600 });
+  if (await readFile(path, 'utf8') !== bytes) throw new Error('IANCAR_PRIVATE_CAPTURE_READBACK_FAILED');
+  report.privateCapturePath = path;
+}
 
 if (requested.has('--inspect-detail-shape') && capture.records.length) {
   const vehicleId = capture.records[0]!.vehicleId;

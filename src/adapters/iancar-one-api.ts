@@ -62,6 +62,7 @@ export type IancarOneListCapture = {
   sourceDigest: string;
   issues: string[];
   readyForRawIngest: boolean;
+  factScope?: 'FULL_FACTS';
 };
 
 export class IancarOneApiError extends Error {
@@ -298,15 +299,110 @@ export async function collectIancarOneVehicleList(
   };
 }
 
+/** Vehicle-scoped GET evidence binds rates even where the provider does not echo ID. */
+export async function collectIancarOneFullFacts(
+  config: IancarOneApiConfig, fetcher: Fetcher = fetch,
+  now = new Date().toISOString(), onProgress?: (completed: number, total: number) => void
+): Promise<IancarOneListCapture> {
+  const capture = await collectIancarOneVehicleList(config, fetcher, now);
+  if (!capture.readyForRawIngest) return { ...capture, factScope: 'FULL_FACTS' };
+  const plates = capture.records.map(record => clean(record.payload.plate_number).replace(/\s/g, ''));
+  if (plates.some(plate => !/^\d{2,3}[가-힣]\d{4}$/.test(plate)) || new Set(plates).size !== plates.length)
+    throw new IancarOneApiError('IANCAR_ONE_PLATE_IDENTITY_REQUIRES_REVIEW');
+  for (const record of capture.records) {
+    if (!['AVAILABLE', 'RESERVED', 'RENTED', 'PREPARING', 'UNAVAILABLE'].includes(clean(record.payload.inventory_status))
+      || typeof record.payload.available !== 'boolean'
+      || record.payload.available !== (record.payload.inventory_status === 'AVAILABLE'))
+      throw new IancarOneApiError('IANCAR_ONE_AVAILABILITY_REQUIRES_REVIEW');
+  }
+  const client = createIancarOneApiClient(config, fetcher);
+  const records = new Array<IancarOneListCapture['records'][number]>(capture.records.length);
+  let next = 0;
+  let completed = 0;
+  const worker = async () => {
+  for (;;) {
+    const index = next++;
+    const record = capture.records[index];
+    if (!record) return;
+    const detail = await client.getVehicle(record.vehicleId);
+    const availability = await client.getAvailability(record.vehicleId);
+    const rates = await client.getRates(record.vehicleId);
+    for (const envelope of [detail, availability]) {
+      if (!isObject(envelope) || envelope.success !== true || !isObject(envelope.data)
+        || envelope.data.vehicle_id !== record.vehicleId)
+        throw new IancarOneApiError('IANCAR_ONE_DETAIL_IDENTITY_MISMATCH');
+      if (envelope.data.synced_at !== capture.syncedAt || envelope.data.stale !== false)
+        throw new IancarOneApiError('IANCAR_ONE_DETAIL_SOURCE_DRIFT');
+      for (const field of ['inventory_status', 'available', 'available_from']) {
+        if (JSON.stringify(envelope.data[field]) !== JSON.stringify(record.payload[field]))
+          throw new IancarOneApiError('IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT');
+      }
+    }
+    if (((detail as JsonObject).data as JsonObject).plate_number !== record.payload.plate_number)
+      throw new IancarOneApiError('IANCAR_ONE_PLATE_MISMATCH');
+    if (!isObject(rates) || rates.success !== true || !Array.isArray(rates.data)
+      || !rates.data.length || !rates.data.every(isObject) || !instant(rates.updated_at)
+      || Date.parse(rates.updated_at) > Date.parse(now) + 60_000
+      || (rates.vehicle_id != null && rates.vehicle_id !== record.vehicleId))
+      throw new IancarOneApiError('INVALID_IANCAR_ONE_RATES_RESPONSE');
+    const keys = new Set<string>();
+    for (const rate of rates.data as JsonObject[]) {
+      if (!integer(rate.rental_period) || rate.rental_period < 1 || rate.rental_period > 60
+        || !integer(rate.monthly_rate) || rate.monthly_rate < 100_000 || rate.monthly_rate > 20_000_000
+        || !integer(rate.deposit) || rate.deposit < 0
+        || !integer(rate.contracted_mileage) || rate.contracted_mileage < 1
+        || !['month', 'year'].includes(String(rate.mileage_period))
+        || rate.currency !== 'KRW' || rate.vat_included !== true
+        || !isObject(rate.contract_conditions) || !clean(rate.contract_conditions.version))
+        throw new IancarOneApiError('IANCAR_ONE_RATE_FACT_REQUIRES_REVIEW');
+      const key = `${rate.rental_period}:${rate.contracted_mileage}:${rate.mileage_period}`;
+      if (keys.has(key)) throw new IancarOneApiError('IANCAR_ONE_DUPLICATE_RATE');
+      keys.add(key);
+    }
+    const payload: JsonObject = { ...structuredClone(record.payload),
+      detail: structuredClone(detail), availability: structuredClone(availability),
+      rates: structuredClone(rates), rateRequestEvidence: {
+        vehicle_id: record.vehicleId,
+        path: `/v1/vehicles/${encodeURIComponent(record.vehicleId)}/rates`,
+        captured_at: new Date().toISOString(), response_digest: digest(rates),
+        attribution: 'REQUEST_PATH_BOUND_BY_DETAIL_ECHO', coverage: 'UNKNOWN'
+      } };
+    const providerFacts = { ...payload, rateRequestEvidence: {
+      ...(payload.rateRequestEvidence as JsonObject), captured_at: null } };
+    records[index] = { vehicleId: record.vehicleId, payload, fingerprint: digest(providerFacts) };
+    onProgress?.(++completed, capture.total);
+  }
+  };
+  // A fixed three workers, never an unbounded fan-out. 429 aborts this read-only run.
+  await Promise.all([worker(), worker(), worker()]);
+  const ending = await collectIancarOneVehicleList(config, fetcher);
+  const issues = [...ending.issues];
+  // Photo credentials may be reissued on every GET; do not compare ephemeral URLs.
+  const inventoryFacts = (value: IancarOneListCapture) => ({ syncedAt: value.syncedAt,
+    records: value.records.map(record => [record.vehicleId, record.payload.plate_number,
+      record.payload.inventory_status, record.payload.available, record.payload.available_from]) });
+  if (digest(inventoryFacts(ending)) !== digest(inventoryFacts(capture)))
+    issues.push('IANCAR_ONE_ENRICHMENT_SOURCE_DRIFT');
+  return { ...capture, records, factScope: 'FULL_FACTS', issues,
+    readyForRawIngest: issues.length === 0,
+    sourceDigest: digest({ syncedAt: capture.syncedAt,
+      records: records.map(record => [record.vehicleId, record.fingerprint]) }) };
+}
+
 export function buildIancarOneSourceBatch(capture: IancarOneListCapture): SourceIntakeBatch {
   const complete = capture.readyForRawIngest;
   return {
     laneId: 'PRODUCT_VEHICLE',
     source: {
-      sourceId: IANCAR_ONE_SOURCE_ID,
+      sourceId: capture.factScope === 'FULL_FACTS' ? `${IANCAR_ONE_SOURCE_ID}:full-facts` : IANCAR_ONE_SOURCE_ID,
       kind: 'API',
       displayName: '이안카 ONE 제휴 API',
-      authorityScope: [
+      authorityScope: capture.factScope === 'FULL_FACTS' ? [
+        'RP031 observed vehicle-scoped rates/deposit; coverage UNKNOWN',
+        'RP031 contract conditions',
+        'RP031 photo references',
+        'NO_INVENTORY_STATE_OR_SOURCE_ABSENCE_AUTHORITY'
+      ] : [
         'RP031 vehicle inventory/detail',
         'RP031 partner rates/deposit by rental period and contracted mileage',
         'RP031 contract conditions',
@@ -317,7 +413,11 @@ export function buildIancarOneSourceBatch(capture: IancarOneListCapture): Source
     observedAt: capture.syncedAt,
     sourceRevision: `${IANCAR_ONE_API_VERSION}:${capture.sourceDigest}`,
     checksum: capture.sourceDigest,
-    coverage: complete
+    coverage: capture.factScope === 'FULL_FACTS' && complete ? {
+      mode: 'UNKNOWN', completeness: 'UNKNOWN',
+      scope: 'Iancar ONE observed vehicle-scoped facts',
+      note: 'Full vehicle list observed. Rate-table response has no completeness declaration; never assert absent terms from this run.'
+    } : complete
       ? {
           mode: 'FULL',
           completeness: 'COMPLETE',
@@ -327,7 +427,7 @@ export function buildIancarOneSourceBatch(capture: IancarOneListCapture): Source
       : {
           mode: 'PARTIAL',
           completeness: 'INCOMPLETE',
-          scope: 'Iancar ONE /v1/vehicles attempted list',
+          scope: capture.factScope === 'FULL_FACTS' ? 'Iancar ONE full-facts attempt' : 'Iancar ONE /v1/vehicles attempted list',
           note: `HOLD: ${capture.issues.join(',')}`
         },
     records: capture.records.map(record => ({
