@@ -336,14 +336,26 @@ export async function collectIancarOneFullFacts(
   const records = new Array<IancarOneListCapture['records'][number]>(capture.records.length);
   let next = 0;
   let completed = 0;
+  let aborted = false;
   const worker = async () => {
   for (;;) {
+    if (aborted) return;
     const index = next++;
     const record = capture.records[index];
     if (!record) return;
-    const detail = await client.getVehicle(record.vehicleId);
-    const availability = await client.getAvailability(record.vehicleId);
-    const rates = await client.getRates(record.vehicleId);
+    const responses = await Promise.allSettled([
+      client.getVehicle(record.vehicleId),
+      client.getAvailability(record.vehicleId),
+      client.getRates(record.vehicleId)
+    ]);
+    const requestFailure = responses.find(result => result.status === 'rejected'
+      && result.reason instanceof IancarOneApiError && result.reason.status === 429)
+      ?? responses.find(result => result.status === 'rejected');
+    if (requestFailure?.status === 'rejected') throw requestFailure.reason;
+    const [detail, availability, rates] = responses.map(result => {
+      if (result.status !== 'fulfilled') throw new Error('IANCAR_ONE_UNSETTLED_REQUEST');
+      return result.value;
+    }) as [Json, Json, Json];
     for (const envelope of [detail, availability]) {
       if (!isObject(envelope) || envelope.success !== true || !isObject(envelope.data)
         || envelope.data.vehicle_id !== record.vehicleId)
@@ -390,8 +402,14 @@ export async function collectIancarOneFullFacts(
     onProgress?.(++completed, capture.total);
   }
   };
-  // A fixed three workers, never an unbounded fan-out. 429 aborts this read-only run.
-  await Promise.all([worker(), worker(), worker()]);
+  // Two vehicles / at most six independent GETs in flight; bounded provider burst.
+  // Settle outstanding workers before reporting failure: no dangling requests after return.
+  const guardedWorker = () => worker().catch(error => { aborted = true; throw error; });
+  const settled = await Promise.allSettled([guardedWorker(), guardedWorker()]);
+  const failed = settled.find(result => result.status === 'rejected'
+    && result.reason instanceof IancarOneApiError && result.reason.status === 429)
+    ?? settled.find(result => result.status === 'rejected');
+  if (failed?.status === 'rejected') throw failed.reason;
   const ending = await collectIancarOneVehicleList(config, fetcher);
   const issues = [...ending.issues];
   // Photo credentials may be reissued on every GET; do not compare ephemeral URLs.

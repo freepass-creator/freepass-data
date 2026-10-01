@@ -85,6 +85,65 @@ describe('EANCAR ONE official partner API', () => {
     return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
 
+  it('bounds concurrent enrichment to six GETs while collecting independent endpoints in parallel', async () => {
+    const ids = ['veh1', 'veh2', 'veh3'];
+    const rows = ids.map((id, index) => vehicle(id, { plate_number: `${123 + index}가4567`,
+      inventory_status: 'AVAILABLE', available: true, available_from: null,
+      synced_at: '2026-10-01T00:00:00.000Z', stale: false }));
+    let active = 0;
+    let peak = 0;
+    const fetcher = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/v1/vehicles') return new Response(JSON.stringify(page({ page: 1, total: 3, data: rows })));
+      active++;
+      peak = Math.max(peak, active);
+      try {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        if (path.endsWith('/rates')) return await fullFetcher()(input);
+        const id = path.split('/')[3];
+        return new Response(JSON.stringify({ success: true, data: rows[ids.indexOf(id!)] }));
+      } finally { active--; }
+    }) as typeof fetch;
+    const capture = await collectIancarOneFullFacts(config, fetcher);
+    expect(capture.records).toHaveLength(3);
+    expect(capture.readyForRawIngest).toBe(true);
+    expect(peak).toBe(6);
+    expect(active).toBe(0);
+  });
+
+  it('settles outstanding requests before surfacing transient failure', async () => {
+    let active = 0;
+    const fetcher = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/v1/vehicles') return fullFetcher()(input);
+      active++;
+      try {
+        if (path.endsWith('/availability')) return new Response('', { status: 503 });
+        await new Promise(resolve => setTimeout(resolve, 10));
+        return await fullFetcher()(input);
+      } finally { active--; }
+    }) as typeof fetch;
+    await expect(collectIancarOneFullFacts(config, fetcher)).rejects.toThrow('IANCAR_ONE_API_HTTP_503');
+    expect(active).toBe(0);
+  });
+
+  it('preserves cross-worker 429 and Retry-After instead of masking it with 503', async () => {
+    const rows = ['veh1', 'veh2'].map((id, index) => vehicle(id, {
+      plate_number: `${123 + index}가4567`, inventory_status: 'AVAILABLE', available: true,
+      available_from: null, synced_at: '2026-10-01T00:00:00.000Z', stale: false }));
+    const fetcher = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/v1/vehicles') return new Response(JSON.stringify(page({ page: 1, total: 2, data: rows })));
+      if (path.endsWith('/availability')) {
+        if (path.includes('/veh1/')) { await new Promise(resolve => setTimeout(resolve, 10)); return new Response('', { status: 503 }); }
+        return new Response('', { status: 429, headers: { 'retry-after': '7' } });
+      }
+      if (path.endsWith('/rates')) return fullFetcher()(input);
+      return new Response(JSON.stringify({ success: true, data: rows.find(row => path.endsWith(row.vehicle_id)) }));
+    }) as typeof fetch;
+    await expect(collectIancarOneFullFacts(config, fetcher)).rejects.toMatchObject({ status: 429, retryAfterSeconds: 7 });
+  });
+
   it('retains vehicle-scoped rate request evidence and independent policy updated_at', async () => {
     const capture = await collectIancarOneFullFacts(config, fullFetcher());
     expect(capture.readyForRawIngest).toBe(true);

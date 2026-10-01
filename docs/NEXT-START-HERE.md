@@ -97,6 +97,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-01 이안카 전량 ONE API 수집 성공 — 표시 범위 선택 전
+
+- 목적/대상: 사용자의 ERP·F01·F86 실제 최신화 요청, Data main `56c3e848338814d708ad24f49ef484b9ee5af361`에서 기존 ONE adapter 확장(COMPOSE_OR_EXTEND). Academy READY 확인. 운영 쓰기·삭제·workflow 변경은 하지 않았다.
+- 원천 검증: source `2026-10-01T04:24:36.800Z`(서울13:24), 111대/2페이지, 상세·availability·차량별 rates 전량 및 종료 목록 대사 성공, issues0/stale=false. 2,664개 관측 요금(24조합×111대). source digest `c5f82558cd85be824df6329c0a4a0ac9eefd66d57668ee2cfd8377ea85e5a675`. private evidence `.codex/private/freepass-data-iancar-one-captures/e62ca53c-1237-4ed0-811e-3f4838df502d.json` 보존/readback. 이 관측이 모든 미제공 요금의 부재를 확정하지는 않는다.
+- 식별 대사: 현재 RP031301문서와 exact plate match89/신규22/원천 미관측212; 다른 공급사 차번호 충돌0. 현재301문서 모두 비노출. 원천 상태 AVAILABLE103/RESERVED1/PREPARING2/UNAVAILABLE5. 사진 참조 보유57대이며 사진 전체 가져오기/게시 완료가 아니다.
+- 실제 표시 차이: 1·3·5개월은 월2,000/3,000/4,000km; 12·24·36·48·60개월은 연20,000/30,000/40,000km. 111대 전부 장기 기간별 보증금이 달라 단일 장기보증으로 축약하면 안 된다. 사용처 전체 형식 확장(추천)과 기존 형식에 안전히 담기는 장기 조건만 우선 적용 사이를 사용자에게 질문했다. 선택 전 6개월 요금을 만들거나 월 약정거리를 연으로 둔갑시키지 않는다.
+- 수집 개선: 순차3worker는 최신화 경계에 걸렸다. 독립3GET 병렬×3worker(최대9) 읽기 시도에서 전량 성공. 독립 Claude ANSWERED/exit0는 병렬 검증 유지에 동의했으나 burst 위험을 지적했다. 최종 코드는2worker(최대6), endpoint/worker allSettled 및 실패 후 새 차량 배정 중단으로 보수화했다. 성공한 live 회차는 최대9 버전이며 최종6 버전의 live 전량 성공으로 확대하지 않는다.
+- 검증/남음: 전용31 PASS/build PASS/diff 검사 통과. 전체 테스트1104PASS/14SKIP은 마지막429회귀 추가 전 결과다. 최종 코드 독립 재검토 ANSWERED/exit0는 drain에 동의하고 worker 간429가503에 가려지는 오류를 지적했다. 외부 worker에도429 우선 판정과 Retry-After7초 보존 회귀를 추가했다(수정 후 독립 재검토 미실행). 형식 선택 후 기존 mapper/publisher를 확장하고 dry-run 변경 건수·원본 백업·사용자 직전 실행 승인·ERP/F01/F86 readback까지 수행해야 한다. source 수집 성공은 소비처 반영 완료가 아니다.
+- 소비처 현재 원문: 커넥터 metadata/cells 새 조회로 F01 sheetId668539469/F86 sheetId2029374993, 양쪽 `10.01 11:17 상품리스트 211대`의 A1:BQ1 69열 동일 확인. 기존 열은1/6/12/24/36/48/60개월 및 단일 단기/장기보증이며 새3/5개월·월/연 거리별 보증금을 모두 표현할 수 없다. 이번 셀 수정0이며 기존 서식/구조 보존.
+- next_start_here: 위 private evidence로 관측 요금/기간별 조건을 분석하되 실제 적용 전 새 fresh window에서 다시 수집한다. 예약→계약중/선점, 원문 RESERVED와 실제 계약 생성 없음 유지. 기존 RP031 old-Sheet ingest exclusion은 계속 유지하며 snapshot withdrawal guard는 검증된 새 API publication 증거로만 교체한다.
+
 ## 2026-10-01 이안카 온라인·로컬 구현 동기화
 
 - 최신 사용자 결정/연결: 제공한 기존 키 그대로 사용 승인. `freepasserp5/freepass-data-iancar-one-api` version 1 enabled 등록 및 공식 API 실제 클라이언트 조회 exit 0 확인. 전체 108 / AVAILABLE 101 / UNAVAILABLE 4 / PREPARING 2 / RESERVED 1, 상세/재고/요금/사진 샘플 성공. 상세 증거와 다음 미완료 경계는 [ONE API 실제 연결 확인](IANCAR-ONE-API.md)에서 확인한다. 아래 키 미주입·재발급 경계는 이 결정 이전 이력이며 현재 blocker는 Canonical mapping/writer/consumer 검증이다.
