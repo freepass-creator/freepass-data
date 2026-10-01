@@ -160,6 +160,8 @@ describe('read-only consumer gateway', () => {
               listable: true,
               maker: '기아', model: '쏘렌토', trim_name: '시그니처', product_type: '중고렌트',
               provider_company_code: 'RP013', ext_color: '화이트', deposit_note: '국산: 월 대여료×2',
+              image_urls: ['https://photos.example.test/소나타 사진.jpg', 'https://photos.example.test/interior.jpg'],
+              doc_images: ['https://photos.example.test/registration.jpg'],
               price: { '36': { rent: 800000, deposit: 0 } },
             },
           },
@@ -184,7 +186,10 @@ describe('read-only consumer gateway', () => {
     expect(result.statusCode).toBe(200);
     expect(result.json()).toMatchObject({
       schema: 'freepass-data.kakao-catalog-reference/v1',
-      data: [{ vehicle: { exteriorColor: '화이트' }, offers: [{ priceTerms: [{ depositAmount: 1600000 }] }] }],
+      data: [{ vehicle: { exteriorColor: '화이트' }, vehiclePhotos: {
+        state: 'URLS_PRESENT', imageUrls: ['https://photos.example.test/%EC%86%8C%EB%82%98%ED%83%80%20%EC%82%AC%EC%A7%84.jpg', 'https://photos.example.test/interior.jpg'],
+        representativeUrl: 'https://photos.example.test/%EC%86%8C%EB%82%98%ED%83%80%20%EC%82%AC%EC%A7%84.jpg', accessVerification: 'NOT_CHECKED',
+      }, offers: [{ priceTerms: [{ depositAmount: 1600000 }] }] }],
       meta: { consumerId: 'kakao-ops', authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD' },
     });
     expect(reads).toBe(1);

@@ -1,5 +1,29 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-09-30 손오공 사진 — 영업자 실제 경로 복구
+
+### 최신 재검토 및 실행 경계
+
+- 2026-10-01 사용자 직접 지시: 티카 픽업의 Google Sheet 이동 링크는 `tica_link` 원본 그대로 유지하고 관련 수정을 main에 병합한다. `sheetPlateLink`의 비픽업 갤러리 분기와 픽업 T카 분리는 회귀검사로 확인했다. 기존 `사진` 원천도 보존한다.
+- Claude 좁은 재검토 본문/exit0/ANSWERED: `HOLD_RESOLVED`, F86 API 마스크·정규화·실제 마스크 모방 시험25개 독립 재현 PASS. 아래 재검토 대기 문구는 이전 이력이다. 최신 main 통합 후 전체1,107 PASS/14 SKIP, sheets25 PASS/build PASS. 운영 시트 readback은 병합과 별개로 아직 미검증이다.
+- 최신 main의 RP031 old-Sheet ingest 제외와 snapshot withdrawal guard를 ERP PR546에 그대로 합쳐 보존했다. 티카·사진 변경을 이유로 다른 공급사의 HOLD를 풀지 않는다.
+
+- Claude 최종 독립 검토는 사진 링크/토큰 왕복과 Kakao 관련 10시험을 확인했지만 F86 온라인 조회가 글꼴 증거를 누락하는 상류 결함을 찾아 engine `53b8c18e`를 HOLD했다. 운영 pin/apply는 실행하지 않았다.
+- 상류 Data `bbe6df8d26531b9af9cdbe9b60f864ae4deab7b4`에서 API fields mask와 정규화의 글꼴 보존을 수정하고, mask를 실제 적용하는 F86 온라인 apply/readback/2회째 쓰기 0 시험을 추가했다. sheets 25 PASS, 전체 Vitest 1,045 PASS/14 SKIP, build PASS. 좁은 Claude 재검토 대기.
+- 기존 bridge engine `99a27c90347579e5086b9a538e28e3384f31820f`는 위 정본을 manifest와 함께 재vendor했으며 photo audit에도 동일 origin을 전달한다. `check:sync`/typecheck PASS. ERP PR546 pin 후보 `00032075`는 같은 origin `https://freepasserp.com`을 명시한다. source-contract 24공급사/schedule-map PASS.
+- Kakao 실제 구조 조회 API에는 아직 `vehiclePhotos` 생산자가 연결되지 않았다. PR43 도구의 `NOT_QUERIED`는 사진 없음이 아니라 미조회다. 응대 규칙은 기존 ERP 실제 갤러리를 우선 확인하도록 고쳤지만 master 채택/실제 세션 및 API adoption은 미완료다. Data reference 계약을 legacy shadow의 새 직접 Firestore 경로로 우회하지 않는다.
+- 직전 승인 대상: F01/F86 손오공 차량번호 링크를 기존 ERP 전체 갤러리로 변경하고 자동 갱신에도 유지. F86에서 연결되는 ERP 상품 화면에는 판매 요금도 보인다. 이 범위를 확인받은 뒤 reviewed pin/준비 회차/정확한 ready_run_id apply/새 readback/실제 클릭을 수행한다. 승인 전 **운영 완료 아님**.
+- 아래 기록의 `53b8c18e`/`6b86d655`는 이전 후보 이력이며 최신 후보는 위 두 revision이다.
+
+- 목적: ERP에 이미 있는 사진을 다시 공급사에 요청하지 않고 영업자가 실제로 찾고 전체 갤러리를 확인하도록 한다.
+- 증거: production run `36679486202`, snapshot `20260930065134865-67357865edf8`. 손오공 비픽업 41대 중 직접 차량사진 36대/805장, 폴더 링크만 2대, 직접사진/링크 미제공 3대. F86 `손오공상품 41대` 41행을 차량번호로 대조: 사진 칸이 빈 11대 중 8대는 ERP 직접 사진이 있다. 모든 36대 대표 URL HTTP200/image, 36개 ERP 공개 갤러리 링크 HTML에서 같은 차량 식별 확인. 표본 20장 실제 확대/전환 확인. 전체 805장 이미지 내용/최근 촬영은 미검증.
+- 원인: 기존 sheet bridge `sheetPlateLink`가 `image_urls`를 무시하고 `photo_link` 첫 주소만 연결한다. 대표사진 PR493은 CLOSED/미병합이라 live에 대표사진 열도 없다. 카톡 최신 행동 정본에는 사진을 데이터 미제공/공급사 질문으로 포괄 열거한 부분이 있다.
+- 변경: PR260 reference `vehiclePhotos` 계약 + 기계 시트 정본의 사진 탐색 규칙. 기존 pinned engine의 순수 링크 투영을 복구하며 새 writer/토큰/원천/다운로드 기능은 만들지 않는다. Kakao 기존 구조 조회/직접 응대 도구에 사진 상태 보존과 photo-first 규칙을 추가한다.
+- Claude: 두 번 읽기 전용 독립 검토, 본문/exit0/ANSWERED receipt 확인. origin 하드코딩을 제거하고 실제 36대 링크 왕복을 확인했다. 과거 engine reader와 현재 deployed reader의 key lookup 차이는 실제 운영 응답으로 대조한다. 파일 다운로드 복구 권고는 2026-08-30 사용자 결정에 반하므로 반영하지 않는다.
+- 추가 검증: 기존 engine vendor drift는 Data `52a11c5` 정본 재동기화와 manifest 해시 갱신으로 복구, 전체 `check:sync`/typecheck PASS. 같은 snapshot 62,008칸 비교에서 차량번호 링크 36칸만 변경/다른 칸 0건. 운영 API에서도 같은 차량 36대의 사진 URL 805개가 정확히 일치했다(805장 이미지 내용 검증을 뜻하지 않음). Kakao 사진 관련 10개 시험과 Windows 실제 fixture PASS; baseline master의 전체 시험 실패 52건은 별도 잔여로 유지한다.
+- HOLD: 운영 pin/시트 변경 직전 승인과 새 F01/F86 readback, AI Ops master 채택 및 실제 세션 채택, reference API 배포/adoption. 최종 Claude 검토 대기. 전체 시험 baseline 실패를 이번 사진 변경의 PASS로 숨기지 않는다.
+- next_start_here: engine `53b8c18e2c9143ace2c26f0349fc959d61a28b19`, 운영 pin 후보 `6b86d655`/ERP PR546 (`work/freepass/sonogong-photo-pin-20260930`), AI Ops `24538b3`/PR43을 이어서 검토한다. PR545는 기존 branch 규격 오류로 닫고 동일 수정 PR546으로 대체했다. 승인 질문은 F01/F86 손오공 차량번호 링크→기존 ERP 전체 갤러리와 자동 갱신 유지에 한정한다. 현재 운영 writer pin은 `e6727ff04fcf98380701fa6360c36f313e0e321f`다. 순수 코드/계약 테스트 PASS를 live 완료로 확대하지 않는다.
+
 <a id="data-start"></a>
 
 ## 2026-10-01 이안카 수정 API 재반영 요청 — NOT PUBLISHED / HOLD
@@ -96,6 +120,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+## 2026-09-30 손오공 차량사진 전달
+
+- 목적: 기존 reference 응답에서도 차량 사진을 직접 열어볼 수 있도록 사진 목록과 상태를 전달한다.
+- 대상: `main@f77e581b01c61544bb877fec21e4b0a2ae1607e5` 기반 `work/freepass-data/sonogong-photos-20260930`; 원래 checkout의 dirty 감사 문서 두 개는 보존했다.
+- 변경: 기존 reference builder/schema에 optional `vehiclePhotos` 추가. HTTPS 사진 순서·쿼리 의미를 보존하고 URL 인코딩 후 같은 URL만 중복 제거한다. 대표 URL, 보완 링크 개수, URL 존재/링크만/미제공/해석실패 상태와 거부 개수를 구분하며 네트워크 검증 상태는 `NOT_CHECKED`다. 서류 사진과 불투명 폴더 주소는 제외한다. internal-ai는 기존 공유 builder/schema를 통해 같은 필드를 받는다.
+- 검증: build와 관련 41 tests PASS. architecture/standards/data-access/sheets/runtime-smoke/shadow/dashboard PASS. 기본 병렬 전체 검사에서 기존 runtime-policy 5초 timeout 1건; 제한을 변경하지 않고 `vitest --maxWorkers=2` 재실행 1,045 PASS / 14 SKIP. 운영 snapshot의 손오공 판매 가능 41대 중 대표사진 36대 HTTP 200/image, 링크만 2대, 미제공 3대. 원본 805장 전부의 접근·차량 동일성 검증은 수행하지 않았다. ERP.com 표본에서 20장 갤러리·확대·다른 사진 전환을 실제 확인했다.
+- Claude: 읽기 전용 답변과 exit 0을 확인했다. ANSWERED receipt는 실행기가 출력하지 않아 형식상 검토 PASS로 세지 않는다. 한글 파일명 URL로 전체 route 503을 재현한 뒤 인코딩 수정과 route 회귀검사로 해결했다. 해석실패 count·불투명 폴더 비노출 제안을 반영했다. 필드형태/투영누락 우려는 같은 운영 snapshot dry-run의 손오공 41대·사진 805장·거부 0·전체 schema PASS로 확인했다. canonical media HOLD는 유지한다.
+- 남음: 운영 배포·카톡 consumer adoption, 링크만/미제공 차량의 원본 보완, 독립 검토 형식 receipt. 기존 ERP 화면은 직접 이미지가 표시되므로 프록시 allowlist 변경은 이번 범위에서 하지 않았다.
+- next_start_here: 해당 PR의 최신 검토와 CI를 확인하고, 운영 반영 승인 후 reference 배포와 Kakao 소비자 schema/readback을 진행한다. 사진 URL 제공을 전체 사진 검증 완료로 표시하지 않는다.
 
 ### 2026-10-01 이안카 전량 ONE API 수집 성공 — 표시 범위 선택 전
 

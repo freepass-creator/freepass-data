@@ -116,6 +116,19 @@
         "commercialType": { "enum": ["NEW_RENT", "USED_RENT", "NEW_SUBSCRIPTION", "USED_SUBSCRIPTION", "OGONG_SUBSCRIPTION", "PICKUP_SUBSCRIPTION", "OPLUS_SUBSCRIPTION", "UNKNOWN"] },
         "vehicleModelId": { "type": "string", "minLength": 1 },
         "vehicleAssetId": { "type": "string", "minLength": 1 },
+        "vehiclePhotos": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "imageUrls", "representativeUrl", "sourceLinkCount", "rejectedCount", "accessVerification"],
+          "properties": {
+            "state": { "enum": ["URLS_PRESENT", "LINK_ONLY", "UNUSABLE", "NOT_PROVIDED"] },
+            "imageUrls": { "type": "array", "uniqueItems": true, "items": { "type": "string", "format": "uri", "pattern": "^https://" } },
+            "representativeUrl": { "type": ["string", "null"], "format": "uri", "pattern": "^https://" },
+            "sourceLinkCount": { "type": "integer", "minimum": 0 },
+            "rejectedCount": { "type": "integer", "minimum": 0 },
+            "accessVerification": { "const": "NOT_CHECKED" }
+          }
+        },
         "vehicle": {
           "type": "object",
           "additionalProperties": false,

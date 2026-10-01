@@ -3,6 +3,38 @@ import { parseErp5PriceKey } from '../adapters/erp5-product-mapping.js';
 import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
 
 type Rec = Record<string, unknown>;
+
+/** Supplier vehicle images only; never collect registration/customer document images. */
+export function resolveReferenceVehiclePhotos(source: Rec) {
+  let rejectedCount = 0;
+  const readUrls = (value: unknown): string[] => {
+    if (value == null || value === '') return [];
+    if (Array.isArray(value)) return value.flatMap(readUrls);
+    if (typeof value !== 'string') { rejectedCount += 1; return []; }
+    const raw = value.trim();
+    if (!raw) return [];
+    if (raw.startsWith('[')) {
+      try { return readUrls(JSON.parse(raw)); } catch { rejectedCount += 1; return []; }
+    }
+    if (raw.includes('\n')) return raw.split(/\r?\n/).flatMap(readUrls);
+    try {
+      const url = new URL(raw);
+      if (url.protocol !== 'https:' || url.username || url.password) { rejectedCount += 1; return []; }
+      return [url.href];
+    } catch { rejectedCount += 1; return []; }
+  };
+  const imageUrls = [...new Set([source.image_urls, source.images, source.photos, source.image_url, source.photo].flatMap(readUrls))];
+  const sourceLinks = [...new Set(readUrls(source.photo_link))];
+  return {
+    state: imageUrls.length ? 'URLS_PRESENT' as const : sourceLinks.length ? 'LINK_ONLY' as const : rejectedCount ? 'UNUSABLE' as const : 'NOT_PROVIDED' as const,
+    imageUrls,
+    representativeUrl: imageUrls[0] ?? null,
+    // Opaque folders may also contain registration/customer documents; do not expand access.
+    sourceLinkCount: sourceLinks.length,
+    rejectedCount,
+    accessVerification: 'NOT_CHECKED' as const,
+  };
+}
 type DepositState = 'KNOWN' | 'ZERO' | 'UNKNOWN';
 type VatTreatment = 'EXCLUDED' | 'INCLUDED' | 'UNKNOWN';
 type CommissionState = 'CALCULATED' | 'COORDINATION_REQUIRED' | 'UNKNOWN' | 'NOT_APPLICABLE';
@@ -412,6 +444,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
     commercialType: knownProductType(text(source.product_type)),
     vehicleModelId,
     vehicleAssetId: `reference_va_${documentId}`,
+    vehiclePhotos: resolveReferenceVehiclePhotos(source),
     vehicle: {
       maker,
       model,

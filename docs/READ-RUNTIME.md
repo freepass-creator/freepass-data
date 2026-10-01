@@ -92,6 +92,14 @@ Both responses use `Cache-Control: no-store`.
 - projects current listable ERP5 products in memory without a Firestore write;
 - materializes each period's deposit amount/rule/state, including explicit `ZERO` vs `UNKNOWN`;
 - carries `vehicle.exteriorColor` from ERP5 `products.ext_color`;
+- carries `vehiclePhotos` with ordered HTTPS `imageUrls`, `representativeUrl`, and supplementary
+  `sourceLinkCount`. Supplementary folder URLs are not exposed because opaque folders may contain
+  documents. `URLS_PRESENT` means URLs were supplied, not that every image was verified;
+  `LINK_ONLY` means only a source link was supplied; `UNUSABLE` means evidence was rejected;
+  `NOT_PROVIDED` means no photo evidence was supplied. `rejectedCount` exposes parsing/rejection,
+  including partially usable records. `accessVerification=NOT_CHECKED` prevents a read from implying
+  a network check. Document images (`doc_images`) are excluded. Consumers using a strict schema must update
+  their schema before adopting this additive field; deployed older responses may omit it.
 - returns the verified F80-F85 sales-commission policy snapshot and term-level calculated,
   coordination-required, unknown, or not-applicable result;
 - always returns `authority=REFERENCE_ONLY` and `publicationDecision=HOLD`.

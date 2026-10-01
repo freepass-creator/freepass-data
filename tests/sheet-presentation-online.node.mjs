@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { collectPresentation, runPresentation } from '../scripts/sheet-presentation-online.mjs';
 import { specification as spec } from '../scripts/sheet-presentation.mjs';
 
-function service() {
+function service(workbook = 'F01') {
   const state = { writes: 0, gets: 0, mutateAt: 0, corruptAfterWrite: false, omitColumns: false };
-  const book = { spreadsheetId: spec.workbooks.F01.spreadsheetId, sheets: spec.workbooks.F01.primarySheetIds.map((sheetId, i) => ({
+  const book = { spreadsheetId: spec.workbooks[workbook].spreadsheetId, sheets: spec.workbooks[workbook].primarySheetIds.map((sheetId, i) => ({
     properties: { sheetId, index: i, title: spec.primaryTabs[i].label, gridProperties: { rowCount: 3, columnCount: 3 } },
     data: [{ rowData: [{ values: ['차량번호', '차명(원문)', '옵션(원문)'].map(stringValue => ({ userEnteredValue: { stringValue } })) }, { values: [{ userEnteredValue: { stringValue: `TEST${i}` } }] }], columnMetadata: [{ pixelSize: 90 }, { pixelSize: 90 }, { pixelSize: 90 }] }],
   })) };
@@ -20,6 +20,16 @@ function service() {
         } else if (r.updateDimensionProperties) {
           const rdp = r.updateDimensionProperties;
           Object.assign(book.sheets.find(s => s.properties.sheetId === rdp.range.sheetId).data[0].columnMetadata[rdp.range.startIndex], rdp.properties);
+        } else if (r.repeatCell) {
+          const { range, cell } = r.repeatCell;
+          const sheet = book.sheets.find(s => s.properties.sheetId === range.sheetId);
+          for (let row = range.startRowIndex ?? 0; row < range.endRowIndex; row++) {
+            sheet.data[0].rowData[row] ??= { values: [] };
+            for (let col = range.startColumnIndex ?? 0; col < range.endColumnIndex; col++) {
+              sheet.data[0].rowData[row].values[col] ??= {};
+              sheet.data[0].rowData[row].values[col].userEnteredFormat = structuredClone(cell.userEnteredFormat);
+            }
+          }
         } else if (r.setBasicFilter) book.sheets.find(s => s.properties.sheetId === r.setBasicFilter.filter.range.sheetId).basicFilter = r.setBasicFilter.filter;
         else throw new Error('Unexpected request');
       }
@@ -33,6 +43,10 @@ function service() {
     const sheet = book.sheets.find(s => range.startsWith(`'${s.properties.title}'!`));
     assert.ok(sheet, 'range must resolve the current native title');
     const result = structuredClone({ spreadsheetId: book.spreadsheetId, sheets: [{ properties: { sheetId: sheet.properties.sheetId }, data: sheet.data }] });
+    // Emulate the API fields mask: fixture formats cannot bypass the collector query.
+    if (!new URL(url).searchParams.get('fields').includes('userEnteredFormat(textFormat(fontFamily,fontSize,italic))')) {
+      for (const row of result.sheets[0].data[0].rowData) for (const cell of row.values) delete cell.userEnteredFormat;
+    }
     if (state.omitColumns) result.sheets[0].data[0].columnMetadata.pop();
     return result;
   }
@@ -68,6 +82,18 @@ test('online apply reads back PASS; repeat with same time makes zero additional 
   const first = await runPresentation(opts);
   assert.equal(first.verification, 'FRESH_READBACK');
   assert.deepEqual(events, ['gate', 'backup']);
+  const second = await runPresentation(opts);
+  assert.equal(second.status, 'PASS');
+  assert.equal(second.applied, false);
+  assert.equal(state.writes, 1);
+});
+test('F86 real masked collection retains font evidence and apply is idempotent', async () => {
+  const { state, api } = service('F86');
+  const opts = { api, workbook: 'F86', updatedAt: new Date().toISOString(), apply: true, authorizeWrite: async () => {}, saveBackup: async () => {} };
+  const first = await runPresentation(opts);
+  assert.equal(first.verification, 'FRESH_READBACK');
+  const snapshot = await collectPresentation(api, 'F86');
+  assert.ok(snapshot.spreadsheet.sheets[0].data[0].rowData[0].values[0].userEnteredFormat.textFormat.fontFamily);
   const second = await runPresentation(opts);
   assert.equal(second.status, 'PASS');
   assert.equal(second.applied, false);
