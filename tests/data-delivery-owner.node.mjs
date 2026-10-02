@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { ownershipDecision, privateBucketDecision, PRIVATE_EVIDENCE_BUCKET, runDelivery, STAGES, ENGINE_REVISION } from '../scripts/data-delivery-owner.mjs';
+import { assertCompatibleBackup, ownershipDecision, privateBucketDecision, PRIVATE_EVIDENCE_BUCKET, runDelivery, STAGES, ENGINE_REVISION } from '../scripts/data-delivery-owner.mjs';
+
+test('frozen engine cannot replay pre-ONE rules over API-owned inventory', () => {
+  assert.doesNotThrow(() => assertCompatibleBackup({ products: [] }));
+  assert.throws(() => assertCompatibleBackup({}), /INVALID_BEFORE_BACKUP/);
+  for (const product of [{ source: 'EANCAR_ONE_API' }, { iancar_phase_one: { stage: 'PHASE_ONE' } }]) {
+    assert.throws(() => assertCompatibleBackup({ products: [product] }), /FROZEN_ENGINE_PREDATES_ONE_API/);
+  }
+});
 
 const evidence = () => ({
   env: { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'freepass-creator/freepass-data', GITHUB_REF: 'refs/heads/main', GOOGLE_CLOUD_PROJECT: 'freepasserp5', FREEPASS_DATA_REFRESH_OWNER: 'freepass-data', FREEPASS_DATA_LEGACY_FENCED_AT: new Date(Date.now() - 66 * 60_000).toISOString() },
@@ -53,6 +61,17 @@ function runner(overrides = {}) {
     }
   };
 }
+test('ONE API ownership blocks the bridge before lock, product, policy or Sheet writes', async () => {
+  const r = runner({ sealBackup: async () => {
+    assertCompatibleBackup({ products: [{ source: 'EANCAR_ONE_API' }] });
+  } });
+  const receipt = await runDelivery(r.options);
+  assert.equal(receipt.status, 'PARTIAL');
+  assert.equal(receipt.stages.at(-1).id, 'before-backup');
+  assert.equal(r.calls.length, 5);
+  assert.ok(r.calls.every(call => !call.args.includes('--apply') && !call.args.includes('--main')));
+  assert.ok(receipt.consumers.every(consumer => consumer.status === 'NOT_VERIFIED'));
+});
 test('one snapshot feeds both sheets, web/tenant/Admin are never declared verified', async () => {
   const r = runner(); const receipt = await runDelivery(r.options);
   assert.equal(r.calls.length, STAGES.length);
@@ -60,6 +79,10 @@ test('one snapshot feeds both sheets, web/tenant/Admin are never declared verifi
   assert.equal(receipt.engineRevision, ENGINE_REVISION);
   assert.equal(receipt.authority, 'LEGACY_VERIFIED_BRIDGE');
   assert.equal(receipt.canonicalCutoverVerified, false);
+  assert.equal(receipt.verification.supplierSourceParity, 'NOT_VERIFIED');
+  assert.equal(receipt.verification.newInventory, 'NOT_IMPLEMENTED_BY_THIS_BRIDGE');
+  assert.equal(receipt.verification.policyBodyParity, 'NOT_VERIFIED');
+  assert.equal(receipt.verification.sheetProjectionParity, 'ENGINE_READBACK_VERIFIED');
   assert.match(receipt.snapshot.sha256, /^[a-f0-9]{64}$/);
   assert.deepEqual(receipt.consumers.slice(2).map(c => c.status), ['NOT_VERIFIED', 'NOT_VERIFIED', 'NOT_VERIFIED']);
   for (const call of r.calls.filter(c => c.args.some(a => a.startsWith('--snapshot=')))) assert.ok(call.args.includes('--snapshot=tmp/data-delivery-snapshot.json'));
@@ -72,6 +95,7 @@ test('failure closes downstream delivery and preserves PARTIAL receipt', async (
   assert.equal(receipt.stages.length, 11);
   assert.equal(receipt.stages.at(-1).status, 'FAILED');
   assert.ok(receipt.consumers.every(c => c.status === 'NOT_VERIFIED'));
+  assert.equal(receipt.verification.sheetProjectionParity, 'NOT_VERIFIED');
   assert.ok(!JSON.stringify(receipt).includes('secret supplier'));
   assert.equal(r.persisted.at(-1).status, 'PARTIAL');
 });

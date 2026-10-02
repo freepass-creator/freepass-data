@@ -1,5 +1,15 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-02 공급사 관리 작업 회수 / 기존 운영 보존
+
+- 목적: 사용자 요청의 완료 기준은 공급사 원천 조회·갱신과 대상 시트 대사 및 안전한 main 통합이다. Catalog 전체 전환을 이번 완료 조건으로 확대하지 않는다.
+- 대상: main `298b296` 기반, 기존 PR262 관리 문서 회수. actor-prefixed branch 실패를 기존 Work의 `work/freepass-data/supplier-inventory-management` 이름으로 교정했다. 원래 작업 폴더의 dirty 문서와 타 작업은 보존했다.
+- 변경: 기존 공급사 관리 기준을 통합하고 bridge 영수증에서 원천/신규/정책/시트 투영 검증을 구분한다. frozen `e6727ff0` 실행기는 최신 ONE API 소유 재고를 발견하면 backup 검증 단계에서 중단하여 lock/상품/정책/시트 쓰기를 시작하지 않는다. 현재 ERP 운영 pin·스케줄·실제 데이터 변경0.
+- 회수 판정: 이안카 직접 수집/ONE 계약/공식 API PR265·267·269 및 손오공 사진 PR260은 이미 merged. 오래된 branch 전체를 재병합하여 최신 API·정책·사진 코드를 되돌리지 않는다. Core kit PR264는 별도 규격 작업이며 공급사 구현으로 섞지 않는다.
+- 검증: 전체 check 1144 PASS/14 외부환경 SKIP, Sheets25 PASS/build PASS. delivery-owner 기존+신규 회귀를 별도로 실행한다. 운영 run36944530170의 23개 명령 정상종료 및 원자→F01→F86 mismatch0은 하류 투영 검증이며 공급사 원문 전량 정합성 PASS가 아니다.
+- 남음: 신규 등록대기/공급사별 FULL+COMPLETE 원천 영수증·양방향 집합 대사, 손오공/픽업/오플 보완참조 차이 사유, 이안카 자동 writer 최신성은 미완료. 준비 bridge 활성화로 우회하지 않는다.
+- next_start_here: `docs/BUSINESS-DATA-CONNECTION-MAP.md` 공급사 관리 기준과 `docs/NATIVE-SOURCE-COLLECTOR.md`를 따른다. 기존 SourceIngestionStore 및 공급사 adapter를 확장하고, 현재 운영 publisher의 검증된 rules를 확인한 뒤 별도 적용 경계에서 실제 시트 대사한다.
+
 ## 2026-10-02 이안카 사진 운영 배포 준비 — 아래 로컬 기록을 대체
 
 - 사용자 직접 지시: 사진을 전량 연결하고 배포한다. Data/ERP/기존 F01·F86 publisher 순으로 진행한다. IAM 변경은 기존 runtime SA가 기존 이안카 단일 Secret을 읽는 범위로 한정한다. RTDB는 사용하지 않는다.

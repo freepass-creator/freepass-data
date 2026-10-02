@@ -2,6 +2,21 @@
 
 Status: CODED / TESTED preparation. NOT DEPLOYED / NOT CUTOVER VERIFIED.
 
+## 2026-10-02 integration boundary
+
+The frozen `e6727ff0` engine predates the deployed RP031 ONE API and policy
+isolation. The before-backup stage now rejects any snapshot containing
+`EANCAR_ONE_API` or `iancar_phase_one`, before contract-lock/atom/policy writes.
+Do not activate this bridge against today's API-owned inventory. Replace the
+engine only after reviewing the current production engine and its source rules;
+changing a pin is not source parity evidence. The active ERP refresh is unchanged.
+
+Attempt receipts explicitly distinguish supplier-source parity, new inventory,
+policy-body parity and Sheet projection readback. `SUCCEEDED` means the adapter
+stages completed, not that all supplier originals match. Existing supplier staff
+management requirements are in `BUSINESS-DATA-CONNECTION-MAP.md`; they do not
+add a second source store or turn temporary registration files into durable intake.
+
 ## Purpose and existing assets
 
 The approved distribution map must have an executor, not just an observer.
