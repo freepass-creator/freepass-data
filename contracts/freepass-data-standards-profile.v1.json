@@ -15,7 +15,7 @@
   ],
   "contractInventory": {
     "schemaPattern": "*.schema.json",
-    "instanceContracts": ["f01-f86-sheet-spec.v1.json", "firebase-access-authority.v1.json", "freepass-data-standards-profile.v1.json"]
+    "instanceContracts": ["f01-f86-sheet-spec.v1.json", "supplier-input-sheet-spec.v1.json", "firebase-access-authority.v1.json", "freepass-data-standards-profile.v1.json"]
   },
   "platformRequiredCapabilities": ["STABLE_OPAQUE_IDENTITY","EXPLICIT_NULL_UNKNOWN_ZERO","SCHEMA_AND_CONTRACT_VERSIONING","OPTIMISTIC_REVISION","IDEMPOTENCY_RECEIPT","IMMUTABLE_RAW_EVIDENCE","FIELD_LEVEL_PROVENANCE","CANONICAL_TO_PROJECTION_RELEASE","SOURCE_FRESHNESS","CONSUMER_COMPATIBILITY","ACCESS_AUDIT","FAIL_CLOSED_VALIDATION"],
   "unresolvedCapabilities": ["OPENAPI_PUBLICATION_AND_COMPATIBILITY","RFC_9457_ERROR_ENVELOPE","ISO_3779_VIN_VALIDATION","VEHICLE_MEDIA_ASSET_CONTRACT","RETENTION_ERASURE_PRIVACY_LIFECYCLE","CLOUD_EVENTS_INTEROPERABILITY","MULTI_CURRENCY_MINOR_UNIT_REGISTRY","SUPPLIER_FIELD_COVERAGE_MATRIX","ALL_CONSUMER_CUTOVER_READBACK"],

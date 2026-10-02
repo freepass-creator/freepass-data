@@ -1,5 +1,14 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-02 공급사 원문 입력 시트 영속 규격
+
+- 목적: 단발성 시트 편집을 계약/실행기로 고정한다. 회사명→상태→분류→차량번호→입고일자→점검사항, 단기1/6/12 표시, 옵션은 대여료 뒤, 기타기간 숨김, 정책 입력칸 공개, 숫자 콤마, 일반 dropdown, 탭 자물쇠 제거가 사용자 최신 결정이다.
+- 대상 revision: main `4e437864cf3ff5d84c10493e0b7bb0a070772b66` 기반. 다른 checkout/운영 F01/F86 pin과 원천 데이터를 보존한다.
+- 변경: `contracts/supplier-input-sheet-spec.v1.json`, `scripts/supplier-input-sheet.mjs`, `docs/SUPPLIER-INPUT-SHEET-RUNBOOK.md`. 별도 native binding과 fresh inventory로 dry-run하며 헤더 기준으로 종합/구조 gate를 재생성한다. private plan으로 실제 회사명 이동·보호 해제·종합을 적용했다.
+- 검증: 신규 회귀10 PASS, 시트35 PASS, 전체 check/build PASS (Vitest1160 PASS/외부환경14 SKIP). 실제 입력행210/종합210 일치. Claude independent review는 REVIEW_TIMEOUT으로 답변이 없으며 PASS가 아니다.
+- 남음: 운영 source cutover/공급사 sharing/자동 pin 및 제조사 종속 모델은 미연결. master16/114 목록은 F03 2026-10-02 실조회 snapshot이며 자동 freshness로 주장하지 않는다.
+- next_start_here: `docs/SUPPLIER-INPUT-SHEET-RUNBOOK.md`와 기계 규격을 읽고 private binding/새 metadata/원본 backup부터 시작한다. 실제 worksheet 값은 public repo에 저장하지 않는다.
+
 ## 2026-10-02 공급사 관리 작업 회수 / 기존 운영 보존
 
 - 목적: 사용자 요청의 완료 기준은 공급사 원천 조회·갱신과 대상 시트 대사 및 안전한 main 통합이다. Catalog 전체 전환을 이번 완료 조건으로 확대하지 않는다.
