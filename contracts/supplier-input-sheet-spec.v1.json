@@ -1,6 +1,9 @@
 {
   "version": 1,
   "mode": "SUPPLIER_INPUT",
+  "managementMode": "MANUAL_DIRECT_GOOGLE_SHEETS",
+  "automaticSourceRefresh": false,
+  "manualAuthority": "VISIBLE_SUPPLIER_TABS",
   "summaryTitle": "종합",
   "guideTitle": "관리안내",
   "inputHeaders": [
@@ -420,6 +423,19 @@
   },
   "defaultColumnWidth": 75,
   "protectedTabs": false,
+  "rentalFeeHeaderBackground": "#0891B2",
+  "rentalFeeHeaderForeground": "#FFFFFF",
+  "rentalFeeBodyBackgrounds": {
+    "단기보증": "#EAF7F8",
+    "1개월": "#DCF0F2",
+    "6개월": "#CDE9EC",
+    "12개월": "#BFE2E6",
+    "장기보증": "#EDF0FE",
+    "24개월": "#DFE5FD",
+    "36개월": "#D1DAFC",
+    "48개월": "#C3CFFB",
+    "60개월": "#B5C4FA"
+  },
   "textWrap": "CLIP",
   "rowHeight": 21,
   "leftAlignHeaders": [
