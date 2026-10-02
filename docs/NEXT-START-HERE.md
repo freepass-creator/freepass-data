@@ -167,7 +167,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 | 어떤 데이터가 있고 어떤 경로로 접근하는가? | [데이터 도메인 카탈로그](DATA-DOMAIN-CATALOG.md), [접근 Gateway](DATA-ACCESS-GATEWAY.md) | 제공 상태·권한·계약과 조회 영수증. 내부 collection 경로를 공개 계약으로 사용하지 않음 |
 | F01/F86·ERP·화이트라벨·Admin에 잘 전달되는가? | [소비처별 사용 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md), [소비처 런타임](ERP5-CONSUMER-RUNTIME.md) | 소비처별 release/snapshot·필드·실제 readback. 한 곳 성공을 전체 성공으로 확대하지 않음 |
 | 시트 모양·열·숨김 규칙은 무엇인가? | [시트 규격](F01-F86-SHEET-SPEC.md), [실행 runbook](F01-F86-SHEET-RUNBOOK.md) | 기계 정본 `contracts/f01-f86-sheet-spec.v1.json`. 표시 검사는 원천 최신화 검사가 아님 |
-| ERP4 수집기 없이 공급사 원본을 어떻게 직접 읽는가? | [FreePass Data 원본 직접 수집기](NATIVE-SOURCE-COLLECTOR.md) | 이안카 RP031 RAW-only 첫 단계. 모든 공급사/요금/운영 컷오버 완료 아님 |
+| 공급사 수집 공통 규격과 공급사별 차이는 어디서 보는가? | [FreePass Data 원본 직접 수집기](NATIVE-SOURCE-COLLECTOR.md#common-supplier-adapter-contract--2026-10-02) | 손오공 버킷/상세·이안카 ONE·웰릭스 시트 RAW 계약. 새 손오공/웰릭스 live transport·운영 전환은 미연결 |
 | 원본을 어떻게 읽고 오류·갱신을 확인하는가? | [ERP5 캡처](ERP5-SOURCE-CAPTURE.md), [Source run 안전 규칙](SOURCE-RUN-SAFETY.md) | readTime·digest·전체 범위·갱신 run·accepted head. schedule/종료 성공만으로 최신성 판정 금지 |
 | 어디까지 구현·운영되었고 무엇부터 이어가는가? | [Implementation Status](IMPLEMENTATION-STATUS.md), 이 문서의 업무별 날짜 기록 | CODED/TESTED/PERSISTENCE/DEPLOYMENT/CUTOVER를 구분. 현재 main·진행 PR과 대조 |
 | 프로젝트 책임과 설계 기준은 무엇인가? | [승인 Architecture v2](ARCHITECTURE-V2-APPROVED.md), [Issue #24](https://github.com/freepass-creator/freepass-data/issues/24) | 설계 기준과 최신 도메인 소유권 결정 구분. 과거 charter를 후속 승인보다 우선하지 않음 |
@@ -207,6 +207,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+## 2026-10-02 공급사 수집 공통 규격 / 개별 RAW 어댑터
+
+- 목적: 손오공·이안카·웰릭스의 공통 수집 결과 규격과 공급사별 원천 해석 경계를 코드로 고정하고 기존 PR270에 통합한다.
+- 대상: main `71e9f7a`와 PR270 기존 Work를 이어받았다. primary checkout의 dirty 문서 두 개는 보존했다. 최신 사진/ONE 변경과 기존 공급사 관리 기록을 모두 보존하여 main을 병합했다.
+- 변경: 기존 `SourceIntakeBatch`/원천 저장소를 재사용. 공급사 등록·transport kind/scope·source binding·freshness·fingerprint/coverage 공통 검사와 안전한 요약. 이안카 두 collector에 공통 관측 보고 연결. 새 손오공 bucket/list/detail와 웰릭스 tab/header/cells RAW 어댑터는 재사용 검색 및 CREATE_NEW_JUSTIFIED/Academy READY 뒤 추가했다.
+- 검증: build/architecture 및 전체 check 1,157 PASS/14 외부환경 SKIP, Sheets25 PASS, delivery-owner13 PASS. 공급사 원문 의미·중복 UID/차번·원천 실패·누락 상세·부분 범위 회귀를 포함한다. Claude 최종 영수증과 exact publication revision은 이 Work PR270에 남긴다.
+- 남음: 새 손오공/웰릭스 native transport·CLI·스케줄은 미연결. injected reader로 실제 공급사 metadata/schema와 full coverage를 검증한 뒤 연결해야 한다. 이안카 enriched terms UNKNOWN coverage는 그대로 HOLD. 운영 pin/인증/원천·DB·시트 쓰기/배포 변경 없음; RAW_READY는 정본·게시·삭제 승인이 아니다.
+- next_start_here: `docs/NATIVE-SOURCE-COLLECTOR.md` 공통 계약 → `src/adapters/supplier-source-capture.ts` 읽기 포트 → 승인된 공급사 transport 연결·원천 실조회 검증. 기존 단일 writer를 보존하고 operational cutover는 별도 검증한다.
 
 ## 2026-09-30 손오공 차량사진 전달
 

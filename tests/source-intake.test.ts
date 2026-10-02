@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { sonogongSourceAdapter, welrixSourceAdapter, type WelrixSheetObservation } from '../src/adapters/supplier-source-capture.js';
 import {
   FREEPASS_SOURCE_LANES,
   sourceLane,
@@ -119,5 +120,57 @@ describe('supplier adapter common capture contract', () => {
     expect(() => inspectSupplierSourceBatch(binding, input, now)).toThrow('INVALID_SOURCE_INTAKE_RECORD');
     input.records = [];
     expect(inspectSupplierSourceBatch(binding, input, now)).toMatchObject({ status: 'RAW_READY', retirementAuthorized: false });
+  });
+});
+
+describe('provider-specific RAW adapters', () => {
+  const now = '2026-10-02T04:00:00.000Z';
+  const sonogong = (missing = false, mismatch = false) => sonogongSourceAdapter({
+    expectedFreshnessSeconds: 60, readBucket: async bucket => ({ bucket, observedAt: now,
+      revision: 'original/1', declaredTotal: 1, complete: true,
+      records: [{ list: { id: 'same-id-across-buckets', carNumber: '12가3456' },
+        detail: missing ? null : { id: 'same-id-across-buckets', carNumber: mismatch ? '12가9999' : '12가3456',
+          estimates: [{ monthly12: '10', securityDepositAmount: null }] } }] }),
+  });
+  const grid = (): WelrixSheetObservation => ({ sourceId: 'synthetic-welrix-policy', sheetId: 'approved-sheet',
+    tabId: 'policy-tab', range: 'A1:C3', revision: 'revision/1', observedAt: now,
+    expectedRows: 2, complete: true, identityColumn: 0, headers: ['UID', '금액', '단위'],
+    rows: [['same-policy', '10', '만원'], ['same-policy', '10', '%']] });
+  const welrix = (original: WelrixSheetObservation, scope: 'inventory' | 'policy' = 'policy') => welrixSourceAdapter({
+    sourceId: original.sourceId, sheetId: 'approved-sheet', tabId: 'policy-tab', range: 'A1:C3',
+    scope, expectedFreshnessSeconds: 60, readGrid: async () => original,
+  });
+  it('keeps Sonogong buckets distinct and original term values untouched', async () => {
+    const result = await collectSupplierSource(sonogong(), now);
+    expect(result.evidence.status).toBe('RAW_READY');
+    expect(new Set(result.batch.records.map(r => r.sourceRecordId)).size).toBe(3);
+    expect((result.batch.records[0]!.payload.detail as Record<string, unknown>).estimates)
+      .toEqual([{ monthly12: '10', securityDepositAmount: null }]);
+  });
+  it('holds missing Sonogong detail and rejects conflicting identities', async () => {
+    expect((await collectSupplierSource(sonogong(true), now)).evidence.status).toBe('HOLD');
+    await expect(collectSupplierSource(sonogong(false, true), now)).rejects.toThrow('SONOGONG_DETAIL_IDENTITY_MISMATCH');
+  });
+  it('does not turn a failed source request into an empty successful capture', async () => {
+    const adapter = sonogongSourceAdapter({ expectedFreshnessSeconds: 60,
+      readBucket: async () => { throw new Error('SOURCE_UNAVAILABLE'); } });
+    await expect(collectSupplierSource(adapter, now)).rejects.toThrow('SOURCE_UNAVAILABLE');
+  });
+  it('preserves repeated policy UID conditions and explicit units in separate RAW rows', async () => {
+    const original = grid();
+    const result = await collectSupplierSource(welrix(original), now);
+    expect(result.evidence.status).toBe('RAW_READY');
+    expect(new Set(result.batch.records.map(r => r.sourceRecordId)).size).toBe(2);
+    expect(result.batch.records.map(r => r.payload.cells)).toEqual(original.rows);
+    result.batch.records[0]!.payload.cells = [];
+    expect(original.rows[0]).toEqual(['same-policy', '10', '만원']);
+  });
+  it('rejects wrong Sheet binding and duplicate inventory plates', async () => {
+    await expect(collectSupplierSource(welrix({ ...grid(), sheetId: 'wrong' }), now)).rejects.toThrow('WELRIX_SHEET_BINDING_MISMATCH');
+    const original = grid(); original.rows = [['12가3456', '10', '만원'], ['12 가 3456', '20', '만원']];
+    await expect(collectSupplierSource(welrix(original, 'inventory'), now)).rejects.toThrow('INVALID_SOURCE_INTAKE_RECORD');
+  });
+  it('holds truncated Sheet ranges despite successful transport', async () => {
+    expect((await collectSupplierSource(welrix({ ...grid(), expectedRows: 3 }), now)).evidence.status).toBe('HOLD');
   });
 });
