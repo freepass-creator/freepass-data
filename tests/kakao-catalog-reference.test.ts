@@ -7,6 +7,7 @@ import {
   resolveExpectedGrossMargin,
   resolveSalesCommission,
   resolveSupplierBillingFee,
+  resolveReferenceVehiclePhotos,
 } from '../src/application/kakao-catalog-reference.js';
 
 describe('Kakao catalog reference deposit facts', () => {
@@ -193,6 +194,29 @@ describe('Kakao typed REFERENCE_ONLY projection', () => {
     deposit_note: '국산: 월 대여료×2', year: 2026, mileage: 12000,
     price: { '36_3만': { rent: 800000, deposit: 0 } },
   };
+
+  it('preserves supplier photo order and queries without exposing document images', () => {
+    const first = 'https://photos.example.test/front.jpg?token=source-token';
+    const second = 'https://photos.example.test/interior.jpg';
+    expect(resolveReferenceVehiclePhotos({
+      image_urls: [first, second, first], photos: JSON.stringify([second], null, 2),
+      image_url: 'https://user:password@photos.example.test/private.jpg',
+      photo: 'javascript:alert(1)', doc_images: ['https://photos.example.test/registration.jpg'],
+      photo_link: 'https://drive.google.com/drive/folders/example',
+    })).toEqual({ state: 'URLS_PRESENT', imageUrls: [first, second], representativeUrl: first,
+      sourceLinkCount: 1, rejectedCount: 2, accessVerification: 'NOT_CHECKED' });
+    expect(buildKakaoCatalogReferenceProduct('photo-product', { ...product, image_urls: [first, second] }))
+      .toMatchObject({ vehiclePhotos: { imageUrls: [first, second], representativeUrl: first } });
+  });
+
+  it('distinguishes a folder link from directly supplied images and missing evidence', () => {
+    expect(resolveReferenceVehiclePhotos({ photo_link: 'https://drive.google.com/drive/folders/example' }))
+      .toMatchObject({ state: 'LINK_ONLY', imageUrls: [], representativeUrl: null });
+    expect(resolveReferenceVehiclePhotos({ image_urls: '[broken', doc_images: ['https://photos.example.test/document.jpg'] }))
+      .toMatchObject({ state: 'UNUSABLE', imageUrls: [], representativeUrl: null, rejectedCount: 1 });
+    expect(resolveReferenceVehiclePhotos({ doc_images: ['https://photos.example.test/document.jpg'] }))
+      .toMatchObject({ state: 'NOT_PROVIDED', imageUrls: [], representativeUrl: null, rejectedCount: 0 });
+  });
 
   it('adds exterior color, computed deposit and commission to each period', () => {
     expect(buildKakaoCatalogReferenceProduct('doc-1', product)).toMatchObject({

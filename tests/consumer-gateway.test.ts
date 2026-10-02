@@ -33,6 +33,42 @@ const withAccess = (
 };
 
 describe('read-only consumer gateway', () => {
+  it('authenticates and audits Iancar photos without exposing provider references or credentials', async () => {
+    let reads = 0;
+    const reader = { read: async () => { throw new Error('unused'); }, readIancarPhoto: async (_consumer: string, product: string, index?: number) => {
+      reads++;
+      if (product === 'gone') throw new Error('IANCAR_PHOTO_NOT_FOUND');
+      if (product === 'busy') throw new Error('IANCAR_PHOTO_BUSY');
+      if (product === 'failed') throw new Error('private provider error with credentials');
+      return { count: 2, bytes: index === undefined ? null : Buffer.from([255, 216, 255]), contentType: index === undefined ? 'application/json' : 'image/jpeg' };
+    } };
+    const { app, logs } = withAccess(new MemoryDataStore(), [binding], undefined, reader);
+    const photoUrl = compatUrl + '/products/P1/photos';
+    expect((await app.inject({ url: photoUrl })).statusCode).toBe(401);
+    expect((await app.inject({ url: photoUrl, headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+    expect(reads).toBe(0);
+    const manifest = await app.inject({ url: photoUrl, headers });
+    expect(manifest.json()).toEqual({ schema: 'freepass-data.product-photos/v1', productId: 'P1', count: 2 });
+    const binary = await app.inject({ url: photoUrl + '/0', headers });
+    expect(binary.statusCode).toBe(200);
+    expect(binary.rawPayload).toEqual(Buffer.from([255, 216, 255]));
+    expect(binary.headers['content-type']).toBe('image/jpeg');
+    expect(binary.headers['cache-control']).toBe('private, no-store');
+    expect(binary.headers['x-content-type-options']).toBe('nosniff');
+    expect(logs.events.at(-1)).toMatchObject({ operation: 'READ_IANCAR_PRODUCT_PHOTO', phase: 'SUCCEEDED' });
+    for (const index of ['-1', '200', '1e1', '01', 'NaN']) expect((await app.inject({ url: photoUrl + '/' + index, headers })).statusCode).toBe(400);
+    expect(reads).toBe(2);
+    expect((await app.inject({ url: compatUrl + '/products/gone/photos/0', headers })).statusCode).toBe(404);
+    const failure = await app.inject({ url: compatUrl + '/products/failed/photos/0', headers });
+    expect(failure.statusCode).toBe(503);
+    expect(failure.body).not.toContain('credentials');
+    const busy = await app.inject({ url: compatUrl + '/products/busy/photos/0', headers });
+    expect(busy.statusCode).toBe(429); expect(busy.headers['retry-after']).toBe('2');
+    await app.close();
+    const noCatalog = withAccess(new MemoryDataStore(), [{ id: 'internal-ai-test', projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] }], undefined, reader);
+    expect((await noCatalog.app.inject({ url: '/v1/consumers/internal-ai-test/catalog-compat/products/P1/photos/0', headers })).statusCode).toBe(403);
+    await noCatalog.app.close();
+  });
   it('isolates internal AI project credentials, capabilities and audited typed responses', async () => {
     const ai: ConsumerBinding = { id: 'internal-ai-test-project', projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] };
     for (const capabilities of [undefined, ['catalog'], ['internal-ai-reference', 'admin-workflow']]) {
@@ -160,6 +196,8 @@ describe('read-only consumer gateway', () => {
               listable: true,
               maker: '기아', model: '쏘렌토', trim_name: '시그니처', product_type: '중고렌트',
               provider_company_code: 'RP013', ext_color: '화이트', deposit_note: '국산: 월 대여료×2',
+              image_urls: ['https://photos.example.test/소나타 사진.jpg', 'https://photos.example.test/interior.jpg'],
+              doc_images: ['https://photos.example.test/registration.jpg'],
               price: { '36': { rent: 800000, deposit: 0 } },
             },
           },
@@ -184,7 +222,10 @@ describe('read-only consumer gateway', () => {
     expect(result.statusCode).toBe(200);
     expect(result.json()).toMatchObject({
       schema: 'freepass-data.kakao-catalog-reference/v1',
-      data: [{ vehicle: { exteriorColor: '화이트' }, offers: [{ priceTerms: [{ depositAmount: 1600000 }] }] }],
+      data: [{ vehicle: { exteriorColor: '화이트' }, vehiclePhotos: {
+        state: 'URLS_PRESENT', imageUrls: ['https://photos.example.test/%EC%86%8C%EB%82%98%ED%83%80%20%EC%82%AC%EC%A7%84.jpg', 'https://photos.example.test/interior.jpg'],
+        representativeUrl: 'https://photos.example.test/%EC%86%8C%EB%82%98%ED%83%80%20%EC%82%AC%EC%A7%84.jpg', accessVerification: 'NOT_CHECKED',
+      }, offers: [{ priceTerms: [{ depositAmount: 1600000 }] }] }],
       meta: { consumerId: 'kakao-ops', authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD' },
     });
     expect(reads).toBe(1);

@@ -45,6 +45,19 @@
     "preserveExistingOrder": true
   },
   "retiredTab": "오공구독",
+  "photoNavigation": {
+    "scope": "RP012_non_pickup_and_RP031",
+    "directVehiclePhotoFields": ["image_urls", "images", "photos"],
+    "destination": "existing_erp_full_gallery",
+    "origin": "explicit_approved_runtime_configuration",
+    "identity": "existing_product_share_token_no_new_identifier",
+    "exclude": ["doc_images"],
+    "preserveRawPhotoEvidence": true,
+    "preservePickupTcarAndOtherSupplierLinks": true,
+    "missingFieldIsNotMissingPhoto": true,
+    "verification": "same_snapshot_vehicle_identity_photo_array_parity_and_rendered_gallery_readback",
+    "operationalStatus": "PENDING_PIN_AND_APPROVED_PUBLICATION_READBACK"
+  },
   "sourceClassification": {
     "sonogong": "RP012/SON_NO_KONG: 중고렌트 + 오공구독",
     "pickup": "RP012/TCAR_EXTERNAL",

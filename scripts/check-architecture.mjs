@@ -245,9 +245,11 @@ const watchdogWorkflow = fs.readFileSync(
 // The watchdog must stay outside Google Cloud: the WIF attribute condition admits
 // the audit workflow path alone, so any identity here would require widening it.
 if (
-  !watchdogWorkflow.includes("cron: '7 * * * *'") ||
+    !/cron: ['"]7 \* \* \* \*['"]/.test(watchdogWorkflow) ||
   !watchdogWorkflow.includes('ERP5_AUDIT_MAX_GAP_MINUTES') ||
-  !watchdogWorkflow.includes('actions: read') ||
+    !watchdogWorkflow.includes('actions: write') ||
+    !watchdogWorkflow.includes('Recover a missed audit without duplicating an active run') ||
+    !watchdogWorkflow.includes('gh workflow run "$AUDIT_WORKFLOW" --repo "$GITHUB_REPOSITORY" --ref main') ||
   !watchdogWorkflow.includes('erp5-continuous-audit.yml') ||
   !watchdogWorkflow.includes('erp5-audit-watchdog/2') ||
   !watchdogWorkflow.includes('exit 2') ||
@@ -258,7 +260,7 @@ if (
   watchdogWorkflow.includes('gcloud storage cp') ||
   watchdogWorkflow.includes('--apply')
 ) {
-  console.error('ERP5 audit watchdog must remain independent, hourly and read-only');
+  console.error('ERP5 audit watchdog must remain independent of Google Cloud with bounded audit dispatch');
   process.exit(1);
 }
 

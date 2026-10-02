@@ -1,5 +1,35 @@
 # Iancar source capture
 
+## Direct ERP intake — 2026-09-30
+
+User decision: Iancar supplier ERP is the vehicle source; the Google Sheet is not an inventory-source fallback.
+`iancarErpReadTransport()` now implements the existing authenticated supplier login/inventory protocol in
+FreePass Data. Credentials are supplied only by `IANKA_ACCOUNT_JSON`; response bodies, cookies and credentials
+are never printed on authentication/HTTP failure. Redirects are rejected. No new writer or Firebase path exists.
+
+The existing job supports:
+
+```sh
+node --import tsx src/jobs/ingest-erp5-source.ts --iancar-erp --dry-run
+```
+
+It requires the existing read-audit token/bucket plus the supplier credential. Without `--dry-run`, the existing
+`ERP5_SOURCE_INGEST_APPROVED=true` gate is still required and the existing SourceIngestionStore owns RAW writes.
+This mode does not read either Sheet, and does not filter out previously unregistered vehicles. It preserves
+the full response as one RAW record and separate supplier-vehicle-ID records, including reserved stock.
+The job emits only counts, observation time, checksums and coverage. Canonical review and consumer publication
+are not bypassed by RAW intake.
+
+**Coverage is PARTIAL even when every advertised row is captured.** The observed API exposes available/reserved
+inventory, while `fleetTotal` can be much larger. Per-model counts, inventory/reservation totals and duplicate IDs
+are checked. Stale, future or over-one-hour supplier observations remain INCOMPLETE. An absent vehicle cannot be
+retired from this endpoint. Rental rates are not present: pricing remains UNKNOWN/HOLD, never 0 or a silent Sheet fallback.
+
+Operational cutover is **NOT VERIFIED**: the production legacy bridge still uses its old Sheet source and pin.
+The supplier credential exists in the ERP bridge's GitHub secret but is not present in the local central job or
+central runtime Secret Manager. Do not copy it into code, public workflow logs or artifacts. Actual secure runtime
+binding, reviewed candidate mapping, exact writer/publisher cutover and every consumer readback remain required.
+
 ## Contract
 
 `src/adapters/iancar-source-capture.ts` extends the existing immutable ERP5 capture pattern for two

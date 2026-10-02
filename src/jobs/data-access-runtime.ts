@@ -1,4 +1,7 @@
 import { DataAccessGateway } from '../application/data-access-gateway.js';
+import { withdrawIancarPublication, publishIancarPhaseOne, publishIancarPhotoReferences, restoreIancarPhaseOne } from '../infra/iancar-publication-withdrawal-firestore.js';
+import { buildIancarOnePublicationProducts, type IancarOneListCapture } from '../adapters/iancar-one-api.js';
+import { iancarErpReadTransport, buildIancarErpRawIntakeBatch } from '../adapters/iancar-source-capture.js';
 import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
 import { gcsDataAccessLogStore } from '../infra/gcs-data-access-log.js';
 import {
@@ -52,10 +55,79 @@ function readOnlyAccess(input: { accessToken: string; evidenceBucket: string }) 
   }));
 }
 
+export function createIancarErpInspectionDataAccessRuntime(input: {
+  accessToken: string; evidenceBucket: string; accountJson: string;
+}) {
+  const access = readOnlyAccess(input);
+  const readErp = iancarErpReadTransport(input);
+  return {
+    buildRawIntakeBatch: buildIancarErpRawIntakeBatch,
+    capture: () => access.read({
+      context: { actor: { id: 'service:freepass-data-iancar-source', kind: 'SERVICE' },
+        clientId: 'job:ingest-erp5-source', purpose: 'read supplier ERP inventory directly, not a Sheet mirror' },
+      operation: 'READ_IANCAR_ERP_INVENTORY', resource: { kind: 'SOURCE', name: 'supplier/RP031/erp-inventory' },
+      summarize: value => ({ count: value.vehicles.length, digest: value.sourceRevision })
+    }, readErp)
+  };
+}
+
 export function createJobDataAccessRuntime() {
   return {
     access: new DataAccessGateway(createFirestoreDataAccessLogStore())
   };
+}
+
+export async function runIancarPublicationWithdrawal(input: {
+  apply: boolean; expectedCount: number; expectedOpen: number;
+}) {
+  const runtime = createJobDataAccessRuntime();
+  const context = { actor: { id: 'service:freepass-data-iancar-withdrawal', kind: 'SERVICE' as const },
+    clientId: 'job:withdraw-iancar-publication', purpose: 'user-directed temporary RP031 publication withdrawal' };
+  const resource = { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031' };
+  const summarize = (value: Awaited<ReturnType<typeof withdrawIancarPublication>>) =>
+    ({ count: value.changedCount, digest: stableDigest(value) });
+  if (!input.apply) return runtime.access.read({ context, resource,
+    operation: 'READ_IANCAR_PUBLICATION_WITHDRAWAL_PLAN', summarize }, () => withdrawIancarPublication(input));
+  return runtime.access.write({ context, resource, operation: 'WRITE_IANCAR_PUBLICATION_WITHDRAWAL',
+    requestDigest: stableDigest(input), summarize }, () => withdrawIancarPublication(input));
+}
+
+export async function runIancarPhaseOnePublication(input: {
+  capture: IancarOneListCapture; apply: boolean; expectedPlanDigest?: string;
+}) {
+  const prepared = { products: buildIancarOnePublicationProducts(input.capture),
+    sourceDigest: input.capture.sourceDigest, sourceSyncedAt: input.capture.syncedAt,
+    apply: input.apply, ...(input.expectedPlanDigest ? { expectedPlanDigest: input.expectedPlanDigest } : {}) };
+  const runtime = createJobDataAccessRuntime();
+  const context = { actor: { id: 'service:freepass-data-iancar-publication', kind: 'SERVICE' as const },
+    clientId: 'job:publish-iancar-phase-one', purpose: 'user-directed RP031 API vehicle/rental publication; policy deferred' };
+  const resource = { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031' };
+  const summarize = (value: Awaited<ReturnType<typeof publishIancarPhaseOne>>) =>
+    ({ count: value.sourceCount, digest: stableDigest(value) });
+  if (!input.apply) return runtime.access.read({ context, resource,
+    operation: 'READ_IANCAR_PHASE_ONE_PLAN', summarize }, () => publishIancarPhaseOne(prepared));
+  return runtime.access.write({ context, resource, operation: 'WRITE_IANCAR_PHASE_ONE_PUBLICATION',
+    requestDigest: stableDigest(input), summarize }, () => publishIancarPhaseOne(prepared));
+}
+
+export async function runIancarPhotoPublication(input: Parameters<typeof publishIancarPhotoReferences>[0]) {
+  const runtime = createJobDataAccessRuntime();
+  const spec = { context: { actor: { id: 'service:freepass-data-iancar-photos', kind: 'SERVICE' as const },
+    clientId: 'job:collect-iancar-one-api', purpose: 'user-directed photo-only publication preserving prices and inventory' },
+    resource: { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031/photos' },
+    operation: input.apply ? 'WRITE_IANCAR_PHOTO_REFERENCES' : 'READ_IANCAR_PHOTO_PLAN',
+    summarize: (value: Awaited<ReturnType<typeof publishIancarPhotoReferences>>) => ({ count: value.count, digest: value.planDigest }) };
+  return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => publishIancarPhotoReferences(input))
+    : runtime.access.read(spec, () => publishIancarPhotoReferences(input));
+}
+
+export async function runIancarPhotoRestore(input: Parameters<typeof restoreIancarPhaseOne>[0]) {
+  const prepared = { ...input, expectedSchema: 'iancar-photo-typed-backup/1' };
+  const runtime = createJobDataAccessRuntime();
+  const spec = { context: { actor: { id: 'service:freepass-data-iancar-photos', kind: 'SERVICE' as const }, clientId: 'job:restore-iancar-photos', purpose: 'restore verified RP031 photo-only backup' },
+    resource: { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031/photos' }, operation: input.apply ? 'RESTORE_IANCAR_PHOTOS' : 'READ_IANCAR_PHOTO_RESTORE_PLAN',
+    summarize: (value: Awaited<ReturnType<typeof restoreIancarPhaseOne>>) => ({ count: value.count }) };
+  return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => restoreIancarPhaseOne(prepared)) : runtime.access.read(spec, () => restoreIancarPhaseOne(prepared));
 }
 
 export async function createConsumerHealthReadOnlyDataAccessRuntime(input: {

@@ -60,8 +60,32 @@ const allowedConsumer = (consumerId: string) =>
  * the legacy document shape behind FreePass Data while canonical projections are completed.
  * It must never become a write API or a fallback around the canonical release gate.
  */
+export function isPublicIancarPhotoProduct(product: Record<string, unknown> | undefined): boolean {
+  return !!product && product.provider_company_code === 'RP031' && product.listable === true
+    && !product._deleted && !product.deletedAt && !product.publication_withdrawal
+    && ['가용', '선점'].includes(String(product.status_kind))
+    && typeof product.iancar_one_vehicle_id === 'string' && !!product.iancar_one_vehicle_id.trim()
+    && typeof product.car_number === 'string' && !!product.car_number.trim();
+}
+
 export class FirestoreCatalogCompatibilityReader {
   private readonly db = getFirestore(getTargetFirebaseApp());
+  constructor(private readonly photoReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>) {}
+
+  /** Product identity is resolved here, never accepted as an arbitrary provider path from a caller. */
+  async readIancarPhoto(consumerId: string, productId: string, index?: number) {
+    if (!(consumerId === 'erp-com' || /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId)))
+      throw new Error('IANCAR_PHOTO_CONSUMER_FORBIDDEN');
+    if (!productId || productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(productId)
+      || (index !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= 200)))
+      throw new Error('IANCAR_PHOTO_REQUEST_INVALID');
+    const doc = await this.db.collection('products').doc(productId).get();
+    const product = doc.data();
+    if (!isPublicIancarPhotoProduct(product))
+      throw new Error('IANCAR_PHOTO_NOT_FOUND');
+    if (!this.photoReader) throw new Error('IANCAR_PHOTO_READER_UNAVAILABLE');
+    return this.photoReader(product!.iancar_one_vehicle_id, product!.car_number, index);
+  }
 
   async read(consumerId: string): Promise<CatalogCompatibilitySnapshot> {
     if (!allowedConsumer(consumerId)) throw new Error('CATALOG_COMPAT_CONSUMER_NOT_ALLOWED');
@@ -136,6 +160,6 @@ export class FirestoreCatalogCompatibilityReader {
   }
 }
 
-export function createFirestoreCatalogCompatibilityReader() {
-  return new FirestoreCatalogCompatibilityReader();
+export function createFirestoreCatalogCompatibilityReader(photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0]) {
+  return new FirestoreCatalogCompatibilityReader(photoReader);
 }

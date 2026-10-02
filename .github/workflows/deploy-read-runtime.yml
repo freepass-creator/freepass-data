@@ -28,6 +28,8 @@ jobs:
       RUNTIME_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_RUNTIME_SERVICE_ACCOUNT }}
       CONSUMERS_SECRET_NAME: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_NAME }}
       CONSUMERS_SECRET_VERSION: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_VERSION }}
+      IANCAR_SECRET_NAME: ${{ vars.FREEPASS_DATA_IANCAR_SECRET_NAME }}
+      IANCAR_SECRET_VERSION: ${{ vars.FREEPASS_DATA_IANCAR_SECRET_VERSION }}
 
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +46,8 @@ jobs:
           test -n "$RUNTIME_SERVICE_ACCOUNT"
           test -n "$CONSUMERS_SECRET_NAME"
           [[ "$CONSUMERS_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
+          test "$IANCAR_SECRET_NAME" = 'freepass-data-iancar-one-api'
+          [[ "$IANCAR_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
           test "$GITHUB_REF" = 'refs/heads/main'
 
       - name: Authenticate deploy identity
@@ -95,7 +99,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gcloud run deploy "$SERVICE_NAME"             --project="$PROJECT_ID"             --region="$REGION"             --platform=managed             --image="$IMAGE_REF"             --service-account="$RUNTIME_SERVICE_ACCOUNT"             --ingress=all             --max-instances=10             --no-allow-unauthenticated             --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5"             --set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:$CONSUMERS_SECRET_VERSION"             --quiet
+          gcloud run deploy "$SERVICE_NAME" \
+            --project="$PROJECT_ID" --region="$REGION" --platform=managed \
+            --image="$IMAGE_REF" --service-account="$RUNTIME_SERVICE_ACCOUNT" \
+            --ingress=all --max-instances=10 --concurrency=8 --no-allow-unauthenticated \
+            --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5" \
+            --set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:$CONSUMERS_SECRET_VERSION,EANCAR_ONE_API_KEY=$IANCAR_SECRET_NAME:$IANCAR_SECRET_VERSION" --quiet
 
       - name: Verify service readiness metadata
         id: readiness
@@ -119,6 +128,9 @@ jobs:
           test "$revision_service_account" = "$RUNTIME_SERVICE_ACCOUNT"
           test "$deployed_image" = "$IMAGE_REF"
           test "$secret_version" = "$CONSUMERS_SECRET_VERSION"
+          test "$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "EANCAR_ONE_API_KEY") | .valueFrom.secretKeyRef.name' <<<"$service_json")" = "$IANCAR_SECRET_NAME"
+          test "$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "EANCAR_ONE_API_KEY") | .valueFrom.secretKeyRef.key' <<<"$service_json")" = "$IANCAR_SECRET_VERSION"
+          test "$(jq -r '.spec.template.spec.containerConcurrency' <<<"$service_json")" = '8'
           test "$latest_traffic" = "true"
           policy="$(gcloud run services get-iam-policy "$SERVICE_NAME" \
             --project="$PROJECT_ID" --region="$REGION" --format=json)"
@@ -136,7 +148,7 @@ jobs:
             echo "Region: $REGION"
             echo "URL: $url"
             echo "Image: $IMAGE"
-            echo "Image digest: $image_digest"
+            echo "Image digest: $IMAGE_DIGEST"
             echo "Revision: $revision"
             echo
             echo 'Next: hand this URL to FreePassERP I-01, configure Vercel OIDC caller IAM, then switch ERP.com to OBSERVE.'

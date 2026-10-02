@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DocumentSnapshot } from 'firebase-admin/firestore';
+import { GeoPoint, Timestamp } from 'firebase-admin/firestore';
+import { encodeIancarBackupValue, decodeIancarBackupValue } from '../src/infra/iancar-publication-withdrawal-firestore.js';
 import {
   decodeFirestoreDocument,
   decodeFirestoreIdentityDocument
@@ -15,6 +17,19 @@ function snapshot(id: string, value: Record<string, unknown> | null) {
 }
 
 describe('Firestore document decoding', () => {
+  it('round-trips operational backups without replacing Timestamp, GeoPoint or bytes with maps', () => {
+    const original = { at: new Timestamp(100, 123), point: new GeoPoint(37.5, 127), nested: [Buffer.from('evidence'), { type: 'timestamp', seconds: 9 }], empty: null };
+    const restored = decodeIancarBackupValue(JSON.parse(JSON.stringify(encodeIancarBackupValue(original))), () => { throw new Error('unexpected reference'); });
+    expect(restored.at).toBeInstanceOf(Timestamp);
+    expect(restored.at.isEqual(original.at)).toBe(true);
+    expect(restored.point).toBeInstanceOf(GeoPoint);
+    expect(restored.point.isEqual(original.point)).toBe(true);
+    expect(Buffer.isBuffer(restored.nested[0])).toBe(true);
+    expect(restored).toEqual(original);
+  });
+  it('fails closed before publication for unsupported backup prototypes', () => {
+    expect(() => encodeIancarBackupValue({ value: new Date() })).toThrow('IANCAR_BACKUP_UNSUPPORTED_TYPE');
+  });
   it('uses the document path as canonical entity identity', () => {
     expect(
       decodeFirestoreIdentityDocument<{ id: string; name: string }>(
