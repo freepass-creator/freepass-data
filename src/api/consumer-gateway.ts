@@ -189,6 +189,7 @@ export function createConsumerGateway(
     read(consumerId: string): Promise<CatalogCompatibilitySnapshot>;
     readKakaoReferenceSource?(consumerId: string): Promise<KakaoCatalogReferenceSource>;
     readInternalAiReferenceSource?(consumerId: string): Promise<KakaoCatalogReferenceSource>;
+    readIancarPhoto?(consumerId: string, productId: string, index?: number): Promise<{ count: number; bytes: Buffer | null; contentType: string }>;
   },
   workflowStore?: AdminWorkflowStore,
   estimateArtifactStore?: EstimateArtifactStore,
@@ -212,6 +213,36 @@ export function createConsumerGateway(
   const validateKakaoReference = ajv.compile(kakaoCatalogReferenceSchema);
   const validateInternalAiReference = ajv.compile(internalAiReferenceSchema);
   app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
+  const photoHandler = async (request: { params: { consumerId: string; productId: string; index?: string }; headers: { authorization?: string | undefined }; id: string }, reply: import('fastify').FastifyReply) => {
+    reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
+    const binding = registered.get(request.params.consumerId);
+    const matches = timingSafeEqual(hash(request.headers.authorization ?? ''), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+    const spec = { context: consumerContext(binding?.id ?? 'unregistered-consumer', 'read bound Iancar vehicle photo through FreePass Data', request.id),
+      operation: 'READ_IANCAR_PRODUCT_PHOTO', resource: { kind: 'CATALOG' as const, name: 'iancar-product-photo' } };
+    try {
+      if (!binding || !matches) { await access.deny('READ', spec, 'UNAUTHORIZED'); return reply.code(401).send({ code: 'UNAUTHORIZED' }); }
+      if (!binding.capabilities.includes('catalog') || !(binding.id === 'erp-com' || binding.id.startsWith('whitelabel-'))) {
+        await access.deny('READ', spec, 'FORBIDDEN'); return reply.code(403).send({ code: 'FORBIDDEN' });
+      }
+      const index = request.params.index === undefined ? undefined : Number(request.params.index);
+      if ((request.params.index !== undefined && !/^(0|[1-9]\d{0,2})$/.test(request.params.index)) || (index !== undefined && index >= 200)
+        || !request.params.productId || request.params.productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(request.params.productId)) {
+        await access.deny('READ', spec, 'INVALID_REQUEST'); return reply.code(400).send({ code: 'INVALID_REQUEST' });
+      }
+      if (!compatReader?.readIancarPhoto) return reply.code(503).send({ code: 'IANCAR_PHOTO_READER_UNAVAILABLE' });
+      const read = compatReader.readIancarPhoto.bind(compatReader);
+      const result = await access.read({ ...spec, requestDigest: stableDigest({ productId: request.params.productId, index: index ?? null }),
+        summarize: value => ({ count: value.count }) }, () => read(binding.id, request.params.productId, index));
+      if (index === undefined) return reply.send({ schema: 'freepass-data.product-photos/v1', productId: request.params.productId, count: result.count });
+      if (!result.bytes || !['image/jpeg', 'image/png', 'image/webp'].includes(result.contentType)) return reply.code(503).send({ code: 'IANCAR_PHOTO_RESPONSE_INVALID' });
+      return reply.type(result.contentType).send(result.bytes);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : '';
+      return reply.code(code === 'IANCAR_PHOTO_NOT_FOUND' ? 404 : 503).send({ code: code === 'IANCAR_PHOTO_NOT_FOUND' ? code : 'IANCAR_PHOTO_READ_FAILED' });
+    }
+  };
+  app.get<{ Params: { consumerId: string; productId: string } }>('/v1/consumers/:consumerId/catalog-compat/products/:productId/photos', photoHandler);
+  app.get<{ Params: { consumerId: string; productId: string; index: string } }>('/v1/consumers/:consumerId/catalog-compat/products/:productId/photos/:index', photoHandler);
   app.get<{ Params: { consumerId: string } }>('/v1/consumers/:consumerId/catalog', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const binding = registered.get(request.params.consumerId);

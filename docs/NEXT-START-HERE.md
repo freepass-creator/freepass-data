@@ -1,5 +1,15 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-02 이안카 인증 사진 transport — 코드/실호출 검증, 운영 연결 미완료
+
+- 목적/결정: 사용자가 API 사진을 우리 서버에서 인증해 제공하는 방식을 승인했다. 새 사진 저장소/Drive 재호스팅/공개 API키는 사용하지 않는다. 기존 상품·사진·계약·가격은 변경하지 않는다.
+- 대상: Data `5318ccfadc655a28a708fd645976057fb030941e` 기반 detached worktree `C:\Users\admin\.codex\worktrees\iancar-photo-proxy\freepass-data`; ERP `a00547ce4c794343f5520b03f48df00cac2a4a2d` 기반 detached worktree `C:\dev\worktrees\freepasserp4-iancar-photo-proxy-20261002`. 이전15분 초안/다른 dirty checkout은 보존했다. 두 대상 Academy READY, 기존 ONE client/compatibility reader/consumer gateway 및 ERP api/img COMPOSE_OR_EXTEND.
+- 변경: 기존 Data adapter에 exact vehicle ID+plate/photo path 귀속, 대표사진 우선, raster MIME+magic/8MiB 스트림 제한 추가. Infra는 상품ID를 중앙 target에서 조회하고 공개 RP031만 허용하며 provider 호출은 composition root에 주입한다. 기존 소비처 token/capability/audit 후 `/v1/consumers/{consumerId}/catalog-compat/products/{productId}/photos`(count-only) 및 `/photos/{index}`(image bytes)를 제공한다. 상세 참조30초/128건 bounded coalescing, 이미지 바이트는 저장/캐시하지 않는다. provider 키·만료 URL·photo_id·원문 오류는 공개하지 않는다. ERP 기존 `/api/img?product={docId}&photo={index|manifest}&wl=eancar`는 기존 공개 목록/채널 fence와 consumer token/WIF를 사용하고 Data 사진만 전달한다.
+- 검증: Data 전체 check PASS(1138 PASS/14 SKIP/build/architecture/access/sheets 등), 마지막 coalescing 변경 후 build+targeted76 PASS. Infra→adapter 직접 의존은 첫 architecture 검사에서 실패하여 runtime composition 주입으로 수정했다. ERP TypeScript 및 check-freepass-data-consumer PASS, diff whitespace 오류0. 실제 read-only RP031 상품 `10하8128`로 새 reader에서 사진50장 목록 및 대표 JPEG562156bytes/magic 검증 성공, business writes0. 이것은 로컬 reader 실호출이며 운영 HTTP/UI 표시나 전 차량 반영 완료가 아니다.
+- Claude: 이전 방식 검토는 ANSWERED이며 stable vehicle ID/재배포 범위/소비처 Sheet 쓰기 금지 지적을 반영했다. 이안카 사진 제공 코드를 검토하는 별도 scoped read-only review는 아직 진행 중(session71308), PASS로 세지 않는다. 기존 Drive 폴더 존재는 우리 연결의 exact-ID metadata에서 확인했으나 reviewer의 다른 Drive 연결 검색0과 섞지 않았다.
+- 운영 HOLD: 현재 private Cloud Run `freepass-data-read`에는 소비처 Secret만 바인딩되고 이안카 Secret은 미바인딩이다. 기존 runtime SA `freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com`에 기존 `freepass-data-iancar-one-api` 단일 Secret read 권한 및 Data/ERP 사진 연결 배포 범위를 사용자에게 질문했으며 아직 답을 받지 못했다. IAM mutation/배포/feature 활성화/DB·Sheet 쓰기/commit·push는 미실행. 검사 대상은 미커밋 로컬 초안이다.
+- next_start_here: scoped review 반례 해소 및 ERP photo transport 행동 테스트/빌드 → 중앙 photo manifest/index를 공개 상품에 붙이는 소비처 연결(현재 공개 feed/상세에 proxy URL을 자동으로 붙이는 코드는 아직 없음; 주소만 만든 상태를 반영 완료로 말하지 않음) → 확인된 범위 사용자 승인 후 Secret read/binding 및 기존 deploy workflow에 영속 설정(현재 deploy의 --set-secrets는 기존 consumer Secret만 지정하므로 수동 binding만 하면 다음 배포에서 사라짐) → main 통합/배포 정확한 SHA → 인증 없는 ERP image request의 JPEG와 실제 목록/상세 갤러리 확인 → F01/F86 기존 photo_link/gallery 소비 경로에 Data 사실로 전달하고 새 readback. 무키 provider 사진401/키 인증200은 이전 및 이번 실측으로 확인했다. source photo_id는 영구키라고 가정하지 말고 신선한 상세에서 재조회한다.
+
 ## 2026-10-01 이안카 1차 실제 발행 — ERP·F01·F86 readback 완료
 
 - 목적/정본: 공식 ONE API 차량번호·상태·기간/월연거리별 대여료를 Data 소유 RP031 상품으로 반영한다. source syncedAt `2026-10-01T08:13:03.756Z`, digest `3994442e0640d36722b206bac32f2dc55e22468ec05eeebc661c1dc9690fd9a5`, 117대/2,808개 실제 요금. 이 기록은 해당 관측 회차의 완료이며 현재 API의 실시간 신선도를 뜻하지 않는다.

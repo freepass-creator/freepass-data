@@ -674,6 +674,59 @@ export async function collectIancarOnePhaseOneFacts(
     issues: [...inventory.issues, 'IANCAR_ONE_PHASE_ONE_IDENTITY_RECONCILIATION_PENDING'] };
 }
 
+/** Resolve only provider vehicle photos; ephemeral URLs and credentials never leave the server. */
+export function iancarOnePhotoIds(detail: unknown, vehicleId: string, plate: string): string[] {
+  const envelope = detail as { data?: unknown };
+  const raw = (envelope?.data ?? detail) as Record<string, unknown>;
+  if (!raw || raw.vehicle_id !== vehicleId || clean(raw.plate_number).replace(/\s/g, '') !== plate.replace(/\s/g, '')
+    || raw.stale !== false || !Array.isArray(raw.photos) || raw.photos.length > 200)
+    throw new IancarOneApiError('IANCAR_PHOTO_IDENTITY_OR_SCOPE_INVALID');
+  const ids = new Set<string>();
+  const photos = raw.photos.map((value: unknown) => {
+    const photo = value as Record<string, unknown>;
+    const id = clean(photo?.photo_id);
+    if (!id || id.length > 2048 || ids.has(id) || typeof photo.url !== 'string'
+      || typeof photo.representative !== 'boolean') throw new IancarOneApiError('IANCAR_PHOTO_REFERENCE_INVALID');
+    const expected = `/v1/vehicles/${encodeURIComponent(vehicleId)}/photos/${encodeURIComponent(id)}`;
+    const url = new URL(photo.url, IANCAR_ONE_API_ORIGIN);
+    if (url.origin !== IANCAR_ONE_API_ORIGIN || url.username || url.password || url.search || url.hash || url.pathname !== expected)
+      throw new IancarOneApiError('IANCAR_PHOTO_REFERENCE_INVALID');
+    ids.add(id);
+    return { id, representative: photo.representative };
+  });
+  if (photos.filter(p => p.representative).length > 1) throw new IancarOneApiError('IANCAR_PHOTO_REPRESENTATIVE_AMBIGUOUS');
+  return photos.sort((a, b) => Number(b.representative) - Number(a.representative)).map(p => p.id);
+}
+
+/** Bounded raster-only response. Do not relay upstream headers, URLs, SVG or error bodies. */
+export async function readIancarOnePhotoBytes(response: Response) {
+  const maxBytes = 8 * 1024 * 1024;
+  const contentType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
+  if (!response.ok || !response.body || !['image/jpeg', 'image/png', 'image/webp'].includes(contentType ?? '')
+    || Number(response.headers.get('content-length') ?? 0) > maxBytes) {
+    await response.body?.cancel();
+    throw new IancarOneApiError('IANCAR_PHOTO_MEDIA_INVALID');
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = []; let size = 0;
+  try {
+    for (;;) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > maxBytes) throw new IancarOneApiError('IANCAR_PHOTO_MEDIA_OVERSIZED');
+      chunks.push(part.value);
+    }
+  } catch (error) { await reader.cancel().catch(() => {}); throw error; }
+  finally { reader.releaseLock(); }
+  const bytes = Buffer.concat(chunks);
+  const valid = contentType === 'image/jpeg' ? bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+    : contentType === 'image/png' ? bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    : bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP';
+  if (!valid) throw new IancarOneApiError('IANCAR_PHOTO_MEDIA_SIGNATURE_INVALID');
+  return { bytes, contentType: contentType! };
+}
+
 export function buildIancarOneSourceBatch(capture: IancarOneListCapture): SourceIntakeBatch {
   const complete = capture.readyForRawIngest;
   const enriched = capture.factScope != null;

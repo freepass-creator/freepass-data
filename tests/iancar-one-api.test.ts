@@ -9,6 +9,8 @@ import {
   IANCAR_ONE_API_ORIGIN,
   IancarOneApiError,
   iancarOneApiConfigFromEnv,
+  iancarOnePhotoIds,
+  readIancarOnePhotoBytes,
   projectIancarOneReservation,
   projectIancarOnePhaseOne,
   compareIancarOneInventoryParity,
@@ -20,6 +22,34 @@ const config = {
   baseUrl: IANCAR_ONE_API_ORIGIN,
   apiKey: 'synthetic-key-never-real'
 };
+
+describe('Iancar server photo transport', () => {
+  const detail = { vehicle_id: 'V1', plate_number: '133호1234', stale: false,
+    photos: [ { photo_id: 'other', url: '/v1/vehicles/V1/photos/other', representative: false },
+      { photo_id: 'hero', url: '/v1/vehicles/V1/photos/hero', representative: true } ] };
+  it('binds photos to the exact stable ID and plate and places the representative first', () => {
+    expect(iancarOnePhotoIds({ data: detail }, 'V1', '133 호1234')).toEqual(['hero', 'other']);
+    expect(() => iancarOnePhotoIds(detail, 'V2', '133호1234')).toThrow('IANCAR_PHOTO_IDENTITY_OR_SCOPE_INVALID');
+    expect(() => iancarOnePhotoIds(detail, 'V1', '133호9999')).toThrow();
+    expect(() => iancarOnePhotoIds({ ...detail, stale: true }, 'V1', '133호1234')).toThrow();
+    expect(iancarOnePhotoIds({ ...detail, photos: [] }, 'V1', '133호1234')).toEqual([]);
+  });
+  it('rejects external credential paths, duplicate references and ambiguous representatives', () => {
+    for (const url of ['https://evil.example/v1/vehicles/V1/photos/hero', '/v1/vehicles/V2/photos/hero', '/v1/vehicles/V1/photos/hero?token=secret'])
+      expect(() => iancarOnePhotoIds({ ...detail, photos: [{ ...detail.photos[1], url }] }, 'V1', '133호1234')).toThrow('IANCAR_PHOTO_REFERENCE_INVALID');
+    expect(() => iancarOnePhotoIds({ ...detail, photos: [detail.photos[1], detail.photos[1]] }, 'V1', '133호1234')).toThrow();
+    expect(() => iancarOnePhotoIds({ ...detail, photos: detail.photos.map(p => ({ ...p, representative: true })) }, 'V1', '133호1234')).toThrow('IANCAR_PHOTO_REPRESENTATIVE_AMBIGUOUS');
+  });
+  it('accepts bounded JPEG bytes, not SVG, spoofed raster or large responses', async () => {
+    const bytes = Buffer.from([255, 216, 255, 0]);
+    expect(await readIancarOnePhotoBytes(new Response(bytes, { headers: { 'content-type': 'image/jpeg' } }))).toEqual({ bytes, contentType: 'image/jpeg' });
+    await expect(readIancarOnePhotoBytes(new Response('<svg/>', { headers: { 'content-type': 'image/svg+xml' } }))).rejects.toThrow('IANCAR_PHOTO_MEDIA_INVALID');
+    await expect(readIancarOnePhotoBytes(new Response('<script/>', { headers: { 'content-type': 'image/jpeg' } }))).rejects.toThrow('IANCAR_PHOTO_MEDIA_SIGNATURE_INVALID');
+    await expect(readIancarOnePhotoBytes(new Response(bytes, { headers: { 'content-type': 'image/jpeg', 'content-length': '8388609' } }))).rejects.toThrow('IANCAR_PHOTO_MEDIA_INVALID');
+    const chunks = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(8 * 1024 * 1024)); controller.enqueue(new Uint8Array(1)); controller.close(); } });
+    await expect(readIancarOnePhotoBytes(new Response(chunks, { headers: { 'content-type': 'image/jpeg' } }))).rejects.toThrow('IANCAR_PHOTO_MEDIA_OVERSIZED');
+  });
+});
 
 const vehicle = (id: string, extra: Record<string, unknown> = {}) => ({
   vehicle_id: id,
