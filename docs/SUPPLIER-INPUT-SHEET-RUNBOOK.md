@@ -55,3 +55,6 @@
 - FILTER/HSTACK은 링크 메타데이터를 없애므로 종합은 A:G와 I:BV를 동일한 원문 projection의 CHOOSECOLS로 분리하고 H열의 직접 HYPERLINK 배열을 사용한다. BV 사진용 차량번호는 숨김 보조 열이며 종합 schema74열. 사진 없는 번호에는 링크를 만들지 않는다. 원본 번호와 사진 URI의 행별 일치, 전체 오류0, 빈 supplier를 검증한다. 최초 사진 열 추가는 명시적 migration 뒤 fresh metadata/header를 다시 읽는다.
 - 실행기는 공급사 번호 문자열을 수식으로 바꾸지 않고 textFormat.link만 적용한다. 기존 번호 수식/리치텍스트는 보존, URL 충돌은 HOLD. 새 차량번호에 원문 링크를 붙여넣는 입력은 가능하지만 신규 사진 URL의 별도 자동 수집/writer는 미연결이다.
 - Claude ANSWERED/exit0: 분리 배열 행 정합성과 hyperlink readback을 핵심 검사로 반영. 별도 전체 staging 탭 제안은 두 배열이 동일한 식을 공유하고 실측 row/link parity를 검증하므로 추가하지 않았다. 넓은 첫 검토의 REVIEW_TIMEOUT은 PASS로 계산하지 않았다.
+
+### 2026-10-02 옵션 열 너비 축소
+사용자 요청으로 입력시트 옵션 열을 857px에서 240px로 축소한다. 전체 종합·공급사 탭에 적용하며 CLIP, 좌측 정렬, 21px 행 높이, 원문값은 유지한다. 운영 F01/F86 너비는 바꾸지 않는다.
