@@ -135,3 +135,46 @@ it('a later empty supplier list restores original photos instead of keeping dead
   expect(patch.image_urls).toEqual(['https://old.example/photo.jpg']); expect(patch.iancar_one_photo_state).toBe('API_EMPTY_ORIGINAL_PRESERVED');
   expect(patch).not.toHaveProperty('price');
 });
+
+it('model illustration fills an empty vehicle but cannot overwrite an original photograph', async () => {
+  const illustration = { url: 'https://eancarone.com/catalog-images/neutral/complete-import-108-blue.webp', sourceName: '쿠퍼(4세대) 2.0 C 5 Door 클래식',
+    kind: 'MODEL_ILLUSTRATION' as const, sourcePage: 'https://eancarone.com/', mappingVersion: 'supplier-catalogue-20261002/1' };
+  for (const image of ['', 'https://old.example/photo.jpg']) {
+    mocks.update.mockClear();
+    mocks.writeFile.mockClear();
+    const original = { provider_company_code: 'RP031', listable: true, status_kind: '가용', iancar_one_vehicle_id: 'V1', car_number: '133호1234', image_url: image, image_urls: image ? [image] : [], price: 123 };
+    const snapshot = { ref: { path: 'products/p1' }, updateTime: { toMillis: () => 1, isEqual: () => true }, data: () => original };
+    const records = [{ productId: 'p1', vehicleId: 'V1', plate: '133호1234', count: 0, observedAt: new Date().toISOString(), illustration }];
+    mocks.getAll.mockReset().mockResolvedValue([snapshot]);
+    const plan = await publishIancarPhotoReferences({ records, apply: false });
+    mocks.transaction.mockImplementation(async cb => cb({ getAll: async () => [snapshot], update: mocks.update }));
+    mocks.getAll.mockReset().mockResolvedValueOnce([snapshot]).mockImplementation(async () => [{ data: () => ({ ...original, ...mocks.update.mock.calls[0]![1] }) }]);
+    await publishIancarPhotoReferences({ records, apply: true, expectedPlanDigest: plan.planDigest });
+    const patch = mocks.update.mock.calls[0]![1];
+    expect(patch.iancar_one_photo_count).toBe(0);
+    expect(patch.image_url).toBe(image ? undefined : illustration.url);
+    expect(patch.image_kind).toBe(image ? undefined : 'MODEL_ILLUSTRATION');
+    expect(patch).not.toHaveProperty('price');
+  }
+});
+
+it('re-running an illustration reaffirms its state without rewriting images or trusting a stale kind flag', async () => {
+  const illustration = { url: 'https://eancarone.com/catalog-images/neutral/complete-import-108-blue.webp', sourceName: '쿠퍼(4세대) 2.0 C 5 Door 클래식',
+    kind: 'MODEL_ILLUSTRATION' as const, sourcePage: 'https://eancarone.com/', mappingVersion: 'supplier-catalogue-20261002/1' };
+  for (const image of [illustration.url, 'https://operator.example/new-photo.jpg']) {
+    mocks.update.mockClear(); mocks.writeFile.mockClear();
+    const original = { provider_company_code: 'RP031', listable: true, status_kind: '가용', iancar_one_vehicle_id: 'V1', car_number: '133호1234',
+      image_url: image, image_urls: [image], image_kind: 'MODEL_ILLUSTRATION', iancar_model_illustration: illustration };
+    const snapshot = { ref: { path: 'products/p1' }, updateTime: { toMillis: () => 1, isEqual: () => true }, data: () => original };
+    const records = [{ productId: 'p1', vehicleId: 'V1', plate: '133호1234', count: 0, observedAt: new Date().toISOString(), illustration }];
+    mocks.getAll.mockReset().mockResolvedValue([snapshot]);
+    const plan = await publishIancarPhotoReferences({ records, apply: false });
+    expect(plan.withIllustrations).toBe(image === illustration.url ? 1 : 0);
+    mocks.transaction.mockImplementation(async cb => cb({ getAll: async () => [snapshot], update: mocks.update }));
+    mocks.getAll.mockReset().mockResolvedValueOnce([snapshot]).mockImplementation(async () => [{ data: () => ({ ...original, ...mocks.update.mock.calls[0]![1] }) }]);
+    await publishIancarPhotoReferences({ records, apply: true, expectedPlanDigest: plan.planDigest });
+    const patch = mocks.update.mock.calls[0]![1];
+    expect(patch).not.toHaveProperty('image_url'); expect(patch).not.toHaveProperty('image_urls');
+    expect(patch.iancar_one_photo_state).toBe(image === illustration.url ? 'API_EMPTY_MODEL_ILLUSTRATION' : 'API_EMPTY_ORIGINAL_PRESERVED');
+  }
+});

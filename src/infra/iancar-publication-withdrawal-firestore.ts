@@ -9,7 +9,8 @@ import { isPublicIancarPhotoProduct } from './erp5-compat-catalog-reader.js';
 
 /** Photo-only publication: immutable backup, exact identity, revision fence, no inventory/price edits. */
 export async function publishIancarPhotoReferences(input: {
-  records: { productId: string; vehicleId: string; plate: string; count: number; observedAt: string }[];
+  records: { productId: string; vehicleId: string; plate: string; count: number; observedAt: string;
+    illustration?: { url: string; sourceName: string; kind: 'MODEL_ILLUSTRATION'; sourcePage: string; mappingVersion: string; observedSha256?: string } }[];
   apply: boolean; expectedPlanDigest?: string;
 }) {
   const app = getTargetFirebaseApp();
@@ -45,7 +46,7 @@ export async function publishIancarPhotoReferences(input: {
     };
     // Preserve existing originals, including photos from our own prior storage. Zero never deletes them.
     if (row.count) Object.assign(patch, {
-      image_urls: images, image_url: images[0],
+      image_urls: images, image_url: images[0], image_kind: 'VEHICLE_PHOTO',
       iancar_photo_source_original: original!.iancar_photo_source_original ?? {
         image_urls: original!.image_urls ?? null, image_url: original!.image_url ?? null,
         photo_link: original!.photo_link ?? null,
@@ -60,10 +61,38 @@ export async function publishIancarPhotoReferences(input: {
       // Restore only our own now-unbacked slots. Never overwrite a new operator/supplier photo.
       Object.assign(patch, { image_urls: saved.image_urls ?? [], image_url: saved.image_url ?? '' });
     }
+    if (!row.count && row.illustration) {
+      const evidence = row.illustration;
+      const url = new URL(evidence.url);
+      if (url.origin !== 'https://eancarone.com' || !/^\/catalog-images\/neutral\/[a-z0-9-]+\.webp$/.test(url.pathname)
+        || url.search || url.hash || url.username || url.password || !evidence.sourceName
+        || evidence.kind !== 'MODEL_ILLUSTRATION' || evidence.sourcePage !== 'https://eancarone.com/'
+        || evidence.mappingVersion !== 'supplier-catalogue-20261002/1') throw new Error('IANCAR_ILLUSTRATION_INVALID');
+      const currentImages = patch.image_urls ?? original!.image_urls;
+      const currentImage = patch.image_url ?? original!.image_url;
+      const hasOriginal = (Array.isArray(currentImages) && currentImages.some(url => typeof url === 'string' && url.trim()))
+        || (typeof currentImage === 'string' && !!currentImage.trim()) || (typeof original!.photo_link === 'string' && !!original!.photo_link.trim())
+        || [original!.images, original!.photos, original!.photo].some(value =>
+          typeof value === 'string' ? !!value.trim() : Array.isArray(value) ? value.length > 0 : !!value && typeof value === 'object' && Object.keys(value).length > 0);
+      // Never use a stale kind flag as authority to overwrite newly supplied operator photographs.
+      if (!hasOriginal) Object.assign(patch, {
+        image_urls: [evidence.url], image_url: evidence.url, image_kind: 'MODEL_ILLUSTRATION',
+        iancar_model_illustration: evidence, iancar_one_photo_state: 'API_EMPTY_MODEL_ILLUSTRATION',
+        iancar_photo_source_original: original!.iancar_photo_source_original ?? {
+          image_urls: original!.image_urls ?? null, image_url: original!.image_url ?? null, photo_link: original!.photo_link ?? null,
+        },
+      });
+      else if (currentImage === evidence.url && Array.isArray(currentImages)
+        && currentImages.length > 0 && currentImages.every(url => url === evidence.url)) Object.assign(patch, {
+          image_kind: 'MODEL_ILLUSTRATION', iancar_model_illustration: evidence,
+          iancar_one_photo_state: 'API_EMPTY_MODEL_ILLUSTRATION',
+        });
+    }
     return { row, original: original!, patch, snapshot: before[index]! };
   });
   const planDigest = stableDigest(planned.map(p => ({ id: p.row.productId, revision: p.snapshot.updateTime!.toMillis(), patch: p.patch })));
   const summary = { count: planned.length, withPhotos: planned.filter(p => p.row.count > 0).length,
+    withIllustrations: planned.filter(p => p.patch.image_kind === 'MODEL_ILLUSTRATION').length,
     photoCount: input.records.reduce((n, p) => n + p.count, 0), planDigest, inventoryChanges: 0, priceChanges: 0, deletes: 0 };
   if (!input.apply) return { ...summary, status: 'DRY_RUN', writeExecuted: false };
   if (input.expectedPlanDigest !== planDigest) throw new Error('IANCAR_PHOTO_PLAN_CHANGED');
@@ -251,7 +280,7 @@ export async function restoreIancarPhaseOne(input: { backupPath: string; apply: 
   }
   const refs = backup.documents.map((row: any) => {
     if (!/^products\/[^/]+$/.test(row.path) || row.patch.provider_company_code !== 'RP031') throw new Error('IANCAR_RESTORE_SCOPE_INVALID');
-    if (photoOnly && (!row.exists || Object.keys(row.patch).some(key => !['provider_company_code', 'iancar_one_photo_count', 'iancar_one_photos_observed_at', 'iancar_one_photo_state', 'image_urls', 'image_url', 'iancar_photo_source_original'].includes(key)))) throw new Error('IANCAR_RESTORE_SCOPE_INVALID');
+    if (photoOnly && (!row.exists || Object.keys(row.patch).some(key => !['provider_company_code', 'iancar_one_photo_count', 'iancar_one_photos_observed_at', 'iancar_one_photo_state', 'image_urls', 'image_url', 'image_kind', 'iancar_model_illustration', 'iancar_photo_source_original'].includes(key)))) throw new Error('IANCAR_RESTORE_SCOPE_INVALID');
     return db.doc(row.path);
   });
   await db.runTransaction(async tx => {
