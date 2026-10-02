@@ -11,7 +11,9 @@ This does not add a second CatalogStore, publication writer or scheduler.
 existing `SourceIntakeBatch`: source identity/kind, mapping/source revision, checksum,
 upstream observation time, freshness requirement, scoped coverage, original records
 and per-record fingerprints. Missing evidence, future/stale time or partial/unknown
-coverage produces HOLD. `RAW_READY` is RAW preparation only; it never approves
+coverage produces HOLD. An empty result also requires review, even with a declared
+complete zero count; keep the original zero observation without approving retirement.
+`RAW_READY` is RAW preparation only; it never approves
 Canonical writes, publication, source absence or retirement. Existing source-head
 decisions remain in `decideSourceHead`, not these adapters.
 
@@ -34,6 +36,15 @@ must record unit (원/만원/%), basis, rental period, contracted mileage, produ
 variant and policy effectivity using the [business dictionary](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary).
 Blank, zero, unknown and prohibited remain different. Sonogong amount rounding and
 deposit rules belong to reviewed product normalization, never a generic RAW converter.
+The same vehicle may occur in different Sonogong product buckets. Preserve those
+separate RAW product observations; reviewed VehicleAsset linking must resolve shared
+vehicle identity and contradictory product facts. Do not discard a product variant
+or merge rental/subscription terms because the plate is shared.
+RAW record count is product-observation count, not a distinct vehicle/fleet count.
+The zero-record gate applies to the whole declared batch scope. A successfully
+observed, declared-zero product bucket alongside other nonempty buckets is not a
+failed request and does not delete any vehicle; a failed read still rejects the whole
+collection. Per-bucket operational admission remains a rollout decision.
 
 Reuse: existing intake/store/ONE adapters are COMPOSE_OR_EXTEND. A native RAW adapter
 file was CREATE_NEW_JUSTIFIED after reuse search and Academy READY: no existing Data

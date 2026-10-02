@@ -213,7 +213,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 목적: 손오공·이안카·웰릭스의 공통 수집 결과 규격과 공급사별 원천 해석 경계를 코드로 고정하고 기존 PR270에 통합한다.
 - 대상: main `71e9f7a`와 PR270 기존 Work를 이어받았다. primary checkout의 dirty 문서 두 개는 보존했다. 최신 사진/ONE 변경과 기존 공급사 관리 기록을 모두 보존하여 main을 병합했다.
 - 변경: 기존 `SourceIntakeBatch`/원천 저장소를 재사용. 공급사 등록·transport kind/scope·source binding·freshness·fingerprint/coverage 공통 검사와 안전한 요약. 이안카 두 collector에 공통 관측 보고 연결. 새 손오공 bucket/list/detail와 웰릭스 tab/header/cells RAW 어댑터는 재사용 검색 및 CREATE_NEW_JUSTIFIED/Academy READY 뒤 추가했다.
-- 검증: build/architecture 및 전체 check 1,159 PASS/14 외부환경 SKIP, Sheets25 PASS, delivery-owner13 PASS. 공급사 원문 의미·중복 UID/차번·원천 실패·누락 상세·부분 범위·모든 버킷 시각 회귀를 포함한다. Claude 중복 identity 우려는 adapter.read 반환 전 검사까지 보강했고, 미래 버킷 반례는 각 upstream 시각 검사로 수정했다. 최초 실행기 FAILED 및 광역 REVIEW_TIMEOUT은 PASS가 아니다. Claude 최종 영수증과 exact publication revision은 이 Work PR270에 남긴다.
+- 검증: build/architecture 및 전체 check 1,159 PASS/14 외부환경 SKIP, Sheets25 PASS, delivery-owner13 PASS 뒤 혼합 empty-bucket 회귀를 추가했다. 공급사 원문 의미·중복 UID/차번·원천 실패·누락 상세·부분 범위·모든 버킷 시각 회귀를 포함한다. Claude 중복 identity 우려는 adapter.read 반환 전 검사까지 보강했고, 미래 버킷 반례는 각 upstream 시각 검사로 수정했다. 전체 empty는 HOLD. 교차 버킷 제품관측은 보존하되 차량 수로 세지 않는다. 최초 실행기 FAILED 및 광역 REVIEW_TIMEOUT은 PASS가 아니다. Claude 최종 ANSWERED/GO; exact publication revision과 최종 CI는 이 Work PR270에서 확인한다.
 - 남음: 새 손오공/웰릭스 native transport·CLI·스케줄은 미연결. injected reader로 실제 공급사 metadata/schema와 full coverage를 검증한 뒤 연결해야 한다. 이안카 enriched terms UNKNOWN coverage는 그대로 HOLD. 운영 pin/인증/원천·DB·시트 쓰기/배포 변경 없음; RAW_READY는 정본·게시·삭제 승인이 아니다.
 - next_start_here: `docs/NATIVE-SOURCE-COLLECTOR.md` 공통 계약 → `src/adapters/supplier-source-capture.ts` 읽기 포트 → 승인된 공급사 transport 연결·원천 실조회 검증. 기존 단일 writer를 보존하고 operational cutover는 별도 검증한다.
 

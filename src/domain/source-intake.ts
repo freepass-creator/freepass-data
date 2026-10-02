@@ -128,6 +128,7 @@ export function inspectSupplierSourceBatch(
   if (batch.coverage.mode !== 'FULL' || batch.coverage.completeness !== 'COMPLETE')
     issues.push('SOURCE_COVERAGE_NOT_COMPLETE');
   if (!batch.coverage.scope?.trim()) issues.push('SOURCE_SCOPE_UNKNOWN');
+  if (batch.records.length === 0) issues.push('EMPTY_SOURCE_REQUIRES_REVIEW');
   return {
     adapterId: adapter.adapterId, supplierCode: profile.supplierCode, scope: adapter.scope,
     capturedAt, observedAt: batch.observedAt, recordCount: batch.records.length,

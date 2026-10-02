@@ -108,7 +108,7 @@ describe('supplier adapter common capture contract', () => {
     input.observedAt = '2026-10-02T03:00:00.000Z';
     input.checksum = null;
     expect(inspectSupplierSourceBatch(binding, input, now)).toMatchObject({ status: 'HOLD', issues: [
-      'SOURCE_STALE', 'SOURCE_EVIDENCE_INCOMPLETE', 'SOURCE_COVERAGE_NOT_COMPLETE', 'SOURCE_SCOPE_UNKNOWN' ] });
+      'SOURCE_STALE', 'SOURCE_EVIDENCE_INCOMPLETE', 'SOURCE_COVERAGE_NOT_COMPLETE', 'SOURCE_SCOPE_UNKNOWN', 'EMPTY_SOURCE_REQUIRES_REVIEW' ] });
     input.observedAt = '2026-10-02T04:00:01.000Z';
     input.source.expectedFreshnessSeconds = null;
     expect(inspectSupplierSourceBatch(binding, input, now).issues).toContain('SOURCE_TIME_IN_FUTURE');
@@ -119,7 +119,8 @@ describe('supplier adapter common capture contract', () => {
     input.records.push(input.records[0]!);
     expect(() => inspectSupplierSourceBatch(binding, input, now)).toThrow('INVALID_SOURCE_INTAKE_RECORD');
     input.records = [];
-    expect(inspectSupplierSourceBatch(binding, input, now)).toMatchObject({ status: 'RAW_READY', retirementAuthorized: false });
+    expect(inspectSupplierSourceBatch(binding, input, now)).toMatchObject({ status: 'HOLD', retirementAuthorized: false,
+      issues: ['EMPTY_SOURCE_REQUIRES_REVIEW'] });
   });
 });
 
@@ -156,12 +157,23 @@ describe('provider-specific RAW adapters', () => {
       readBucket: async () => { throw new Error('SOURCE_UNAVAILABLE'); } });
     await expect(collectSupplierSource(adapter, now)).rejects.toThrow('SOURCE_UNAVAILABLE');
   });
+  it('preserves nonempty product buckets alongside an explicitly complete zero bucket without retirement', async () => {
+    const adapter = sonogongSourceAdapter({ expectedFreshnessSeconds: 60, readBucket: async bucket => ({
+      bucket, observedAt: now, revision: 'v1', complete: true,
+      declaredTotal: bucket === 'LOW_TCAR' ? 0 : 1,
+      records: bucket === 'LOW_TCAR' ? [] : [{ list: { id: 'same-vehicle', carNumber: '12가3456' },
+        detail: { id: 'same-vehicle', carNumber: '12가3456' } }],
+    }) });
+    const result = await collectSupplierSource(adapter, now);
+    expect(result.evidence).toMatchObject({ status: 'RAW_READY', recordCount: 2, retirementAuthorized: false });
+    expect(result.batch.records.map(r => r.payload.bucket)).toEqual(['LOW_SONOKONG_DAILY', 'LOW_SONOKONG']);
+  });
   it('checks every bucket time so an oldest current observation cannot hide a future bucket', async () => {
     const adapter = sonogongSourceAdapter({ expectedFreshnessSeconds: 60, readBucket: async bucket => ({
       bucket, observedAt: bucket === 'LOW_TCAR' ? '2099-01-01T00:00:00Z' : now,
       revision: 'v1', declaredTotal: 0, complete: true, records: [],
     }) });
-    expect((await collectSupplierSource(adapter, now)).evidence).toMatchObject({ status: 'HOLD', issues: ['SOURCE_TIME_IN_FUTURE'] });
+    expect((await collectSupplierSource(adapter, now)).evidence.issues).toContain('SOURCE_TIME_IN_FUTURE');
   });
   it('preserves repeated policy UID conditions and explicit units in separate RAW rows', async () => {
     const original = grid();
