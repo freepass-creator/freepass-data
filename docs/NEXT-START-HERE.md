@@ -1150,3 +1150,6 @@ This file exists so another session can continue without re-discovering or re-cr
 
 ### 2026-10-02 행 간격 교정
 자동 행 높이가 긴 정책 때문에 과도해져 CLIP(자르기) + 21px 고정으로 복원한다. 원문과 정책값은 그대로 보존한다. 긴 내용은 셀 선택 후 수식 입력줄에서 확인한다. 최신 규격이 이전 WRAP/AUTO_FIT 지시를 대체한다.
+
+### 2026-10-02 긴 원문 좌측 정렬
+옵션·점검사항·세부 차명·사진링크·정책 설명 15열은 본문 좌측 정렬. 헤더 가운데, 숫자 오른쪽, CLIP과 21px 간격 유지. 원문 값 변경 없음.
