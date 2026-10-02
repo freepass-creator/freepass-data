@@ -156,6 +156,13 @@ describe('provider-specific RAW adapters', () => {
       readBucket: async () => { throw new Error('SOURCE_UNAVAILABLE'); } });
     await expect(collectSupplierSource(adapter, now)).rejects.toThrow('SOURCE_UNAVAILABLE');
   });
+  it('checks every bucket time so an oldest current observation cannot hide a future bucket', async () => {
+    const adapter = sonogongSourceAdapter({ expectedFreshnessSeconds: 60, readBucket: async bucket => ({
+      bucket, observedAt: bucket === 'LOW_TCAR' ? '2099-01-01T00:00:00Z' : now,
+      revision: 'v1', declaredTotal: 0, complete: true, records: [],
+    }) });
+    expect((await collectSupplierSource(adapter, now)).evidence).toMatchObject({ status: 'HOLD', issues: ['SOURCE_TIME_IN_FUTURE'] });
+  });
   it('preserves repeated policy UID conditions and explicit units in separate RAW rows', async () => {
     const original = grid();
     const result = await collectSupplierSource(welrix(original), now);
@@ -169,6 +176,16 @@ describe('provider-specific RAW adapters', () => {
     await expect(collectSupplierSource(welrix({ ...grid(), sheetId: 'wrong' }), now)).rejects.toThrow('WELRIX_SHEET_BINDING_MISMATCH');
     const original = grid(); original.rows = [['12가3456', '10', '만원'], ['12 가 3456', '20', '만원']];
     await expect(collectSupplierSource(welrix(original, 'inventory'), now)).rejects.toThrow('INVALID_SOURCE_INTAKE_RECORD');
+    await expect(welrix(original, 'inventory').read()).rejects.toThrow('INVALID_SOURCE_INTAKE_RECORD');
+  });
+  it('rejects repeated Sonogong IDs within one bucket even when adapter.read is called directly', async () => {
+    const adapter = sonogongSourceAdapter({ expectedFreshnessSeconds: 60, readBucket: async bucket => ({
+      bucket, observedAt: now, revision: 'v1', declaredTotal: 2, complete: true,
+      records: Array.from({ length: 2 }, () => ({ list: { id: 'duplicated', carNumber: '12가3456' },
+        detail: { id: 'duplicated', carNumber: '12가3456' } })),
+    }) });
+    await expect(adapter.read()).rejects.toThrow('INVALID_SOURCE_INTAKE_RECORD');
+    await expect(welrix({ ...grid(), observedAt: 'invalid' }).read()).rejects.toThrow('INVALID_SOURCE_INTAKE_BATCH');
   });
   it('holds truncated Sheet ranges despite successful transport', async () => {
     expect((await collectSupplierSource(welrix({ ...grid(), expectedRows: 3 }), now)).evidence.status).toBe('HOLD');

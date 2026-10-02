@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { collectSupplierSource, type SourceIntakeBatch, type SupplierSourceAdapter } from '../domain/source-intake.js';
+import { collectSupplierSource, validateSourceIntakeBatch, type SourceIntakeBatch, type SupplierSourceAdapter } from '../domain/source-intake.js';
 
 const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
@@ -50,16 +50,19 @@ export function sonogongSourceAdapter(input: {
         }
       }
       const checksum = fingerprint(observations);
-      return {
+      const batch: SourceIntakeBatch = {
         laneId: 'PRODUCT_VEHICLE', source: { sourceId: 'supplier:RP012:sonogong-original-api',
           kind: 'API', displayName: '손오공 원본 API', expectedFreshnessSeconds: input.expectedFreshnessSeconds,
           authorityScope: ['Observed bucket/list/detail only; no inferred rates or source absence'] },
         observedAt: observations.map(o => o.observedAt).sort((a, b) => Date.parse(a) - Date.parse(b))[0]!,
+        observationTimes: observations.map(o => o.observedAt),
         sourceRevision: `sonogong-raw/1:${checksum}`, checksum,
         coverage: { mode: complete ? 'FULL' : 'PARTIAL', completeness: complete ? 'COMPLETE' : 'INCOMPLETE',
           scope: 'LOW_SONOKONG_DAILY + LOW_SONOKONG + LOW_TCAR list and detail',
           note: 'Non-atomic bucket observations; terms/policy completeness and absence authority are not established.' }, records,
       };
+      validateSourceIntakeBatch(batch);
+      return batch;
     },
   };
 }
@@ -98,7 +101,7 @@ export function welrixSourceAdapter(input: {
         return { sourceRecordId, sourceFingerprint: fingerprint(payload), payload };
       });
       const checksum = fingerprint(grid);
-      return {
+      const batch: SourceIntakeBatch = {
         laneId: 'PRODUCT_VEHICLE', source: { sourceId: input.sourceId, kind: 'GOOGLE_SHEET',
           displayName: '웰릭스 원본 시트', expectedFreshnessSeconds: input.expectedFreshnessSeconds,
           authorityScope: [`RP013 ${input.scope} observed original cells only`] },
@@ -106,6 +109,8 @@ export function welrixSourceAdapter(input: {
         coverage: { mode: complete ? 'FULL' : 'PARTIAL', completeness: complete ? 'COMPLETE' : 'INCOMPLETE',
           scope: `RP013 ${input.scope} selected tab/range`, note: 'Inventory and policy are separate observations; no unit inference.' }, records,
       };
+      validateSourceIntakeBatch(batch);
+      return batch;
     },
   };
 }
