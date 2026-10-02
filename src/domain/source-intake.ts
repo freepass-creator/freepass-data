@@ -80,6 +80,67 @@ export type SourceIntakeBatch = {
   }>;
 };
 
+/** Transport stays provider-owned; every adapter returns the existing RAW contract. */
+export const SUPPLIER_SOURCE_ADAPTERS = {
+  'sonogong-api': { supplierCode: 'RP012', kind: 'API', scopes: ['inventory', 'terms', 'photos'] },
+  'iancar-one-api': { supplierCode: 'RP031', kind: 'API', scopes: ['inventory', 'terms', 'policy', 'photos'] },
+  'iancar-original-erp': { supplierCode: 'RP031', kind: 'API', scopes: ['inventory'] },
+  'welrix-sheet': { supplierCode: 'RP013', kind: 'GOOGLE_SHEET', scopes: ['inventory', 'terms', 'policy'] },
+} as const;
+
+export type SupplierSourceAdapterId = keyof typeof SUPPLIER_SOURCE_ADAPTERS;
+export type SupplierCaptureScope = 'inventory' | 'terms' | 'policy' | 'photos';
+export type SupplierSourceAdapter = {
+  adapterId: SupplierSourceAdapterId;
+  sourceId: string;
+  scope: SupplierCaptureScope;
+  // Provider-specific auth, buckets, pagination and Sheet ranges belong here.
+  read: () => Promise<SourceIntakeBatch>;
+};
+
+/** RAW admission only. Never establishes Canonical approval or absence/deletion. */
+export function inspectSupplierSourceBatch(
+  adapter: Pick<SupplierSourceAdapter, 'adapterId' | 'sourceId' | 'scope'>,
+  batch: SourceIntakeBatch,
+  capturedAt: string,
+) {
+  const profile = SUPPLIER_SOURCE_ADAPTERS[adapter.adapterId];
+  if (!profile || !(profile.scopes as readonly string[]).includes(adapter.scope))
+    throw new Error('UNSUPPORTED_SUPPLIER_ADAPTER_SCOPE');
+  validateSourceIntakeBatch(batch);
+  if (batch.laneId !== 'PRODUCT_VEHICLE' || batch.source.sourceId !== adapter.sourceId
+    || batch.source.kind !== profile.kind) throw new Error('SUPPLIER_SOURCE_BINDING_MISMATCH');
+  const issues: string[] = [];
+  const current = Date.parse(capturedAt);
+  const observed = Date.parse(batch.observedAt);
+  const threshold = batch.source.expectedFreshnessSeconds;
+  if (!Number.isFinite(current)) throw new Error('INVALID_SUPPLIER_CAPTURE_TIME');
+  if (observed > current) issues.push('SOURCE_TIME_IN_FUTURE');
+  if (threshold == null || threshold <= 0) issues.push('SOURCE_FRESHNESS_UNKNOWN');
+  else if (current - observed > threshold * 1000) issues.push('SOURCE_STALE');
+  if (!batch.sourceRevision || !batch.checksum || batch.records.some(r => !r.sourceFingerprint))
+    issues.push('SOURCE_EVIDENCE_INCOMPLETE');
+  if (batch.coverage.mode !== 'FULL' || batch.coverage.completeness !== 'COMPLETE')
+    issues.push('SOURCE_COVERAGE_NOT_COMPLETE');
+  if (!batch.coverage.scope?.trim()) issues.push('SOURCE_SCOPE_UNKNOWN');
+  return {
+    adapterId: adapter.adapterId, supplierCode: profile.supplierCode, scope: adapter.scope,
+    capturedAt, observedAt: batch.observedAt, recordCount: batch.records.length,
+    status: issues.length ? 'HOLD' : 'RAW_READY', issues,
+    // Even full captures must pass the existing source-head/authority/review path.
+    canonicalWriteAuthorized: false, publicationAuthorized: false, retirementAuthorized: false,
+  } as const;
+}
+
+export async function collectSupplierSource(adapter: SupplierSourceAdapter, capturedAt?: string) {
+  // Validate registration before invoking transport (including credentials).
+  const profile = SUPPLIER_SOURCE_ADAPTERS[adapter.adapterId];
+  if (!profile || !(profile.scopes as readonly string[]).includes(adapter.scope) || !adapter.sourceId.trim())
+    throw new Error('UNSUPPORTED_SUPPLIER_ADAPTER_SCOPE');
+  const batch = await adapter.read();
+  return { batch, evidence: inspectSupplierSourceBatch(adapter, batch, capturedAt ?? new Date().toISOString()) };
+}
+
 const nonBlank = (value: string) => Boolean(value.trim());
 const sha256 = (value: string) => /^[a-f0-9]{64}$/i.test(value);
 const sourceKinds = new Set<SourceKind>([

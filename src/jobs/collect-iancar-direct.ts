@@ -1,6 +1,7 @@
 import {
   compareIancarInventory, prepareIancarDirectInventory, readOriginalIancarInventory
 } from '../adapters/iancar-direct-source.js';
+import { inspectSupplierSourceBatch } from '../domain/source-intake.js';
 
 const requested = new Set(process.argv.slice(2));
 if ([...requested].some(arg => !['--compare-erp5', '--apply-raw'].includes(arg)))
@@ -17,8 +18,11 @@ try {
 
 const original = await readOriginalIancarInventory(account);
 const prepared = prepareIancarDirectInventory(original);
+const commonEvidence = inspectSupplierSourceBatch({ adapterId: 'iancar-original-erp',
+  sourceId: prepared.batch.source.sourceId, scope: 'inventory' }, prepared.batch, new Date().toISOString());
 const report: Record<string, unknown> = {
   collector: 'freepass-data/iancar-direct',
+  commonEvidence,
   sourceId: prepared.batch.source.sourceId,
   sourceDigest: prepared.evidence.sourceDigest,
   upstreamSyncedAt: prepared.evidence.upstreamSyncedAt,
