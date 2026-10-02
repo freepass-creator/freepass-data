@@ -1,5 +1,14 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-09-30 상품·접수·계약·정산 운영 감사와 사용자 관리 범위
+
+- 목적: 사용자가 요청한 GPT/Claude 공동 검증에 접수·계약·정산 데이터 관리까지 포함한다. 기존 연결 지도 `docs/BUSINESS-DATA-CONNECTION-MAP.md`의 2026-09-30 절에 실측과 관리 경계를 확장했다. 두 번째 원장을 만들지 않는다.
+- 대상 revision: 읽기 정본 `origin/main@af602856fa9f906747c4957d130482adad118bbd`; local baseline `cf06993d5df3876a863f8c379abeb1916e5b9ab8`. 로컬 문서 2개만 변경했으며 commit/push/배포하지 않았다.
+- 검증: ERP4 run `36593017154` 원자↔F01/F86 차이 0, Data run `36595437447` publication HOLD/consumer BLOCKED 8. 인증 live compatibility 200(상품 1,717/정책 82/파트너 64), Canonical catalog 503 NO_ACTIVE_RELEASE. Admin read는 계약 121/정산 472/환수 23, 정산 code 중복 0. 정책 문자열 주행거리 미해석과 timestamp 포함 정책 탈락은 합성 입력으로 재현했다.
+- Claude: 첫 광범위 호출 무응답 종료, 비식별 집계 재검토는 본문·exit 0·ANSWERED 확인. 부분 대사로 전체 정상 보증 불가에 합의했다. 서로 다른 집계 축을 빼서 오류 대수를 산출하는 제안은 채택하지 않았다.
+- 남음: 원천별 최신성/누락, 실제 예약 간격, 변환기 한계, ACTIVE release, 소비처별 실제 사용 증거, 계약-정산 안정 키, 테스트/삭제 구분, 정산 금액과 실제 입출금 원문 대사, 운영 runtime과 main의 보안 경계 차이. 472건은 금액 검산 완료가 아니다.
+- next_start_here: 연결 지도의 최신 감사 절에서 확인된 key/decoder/runtime 문제를 각 수정 패킷으로 분리한다. 운영 값을 추정 보정하거나 빈 event collection을 업무 이력 부재로 확정하지 않는다. runtime `admin-00004-lwg`는 기존 write ON이나 최신 main의 Catalog 범용쓰기 차단 전 revision이므로 배포 차이를 우선 검토한다.
+
 ## 2026-09-29 platform standards conformance baseline
 
 - 목적: FreePass Data 전체를 국제표준 기반 공통 Canonical 규격으로 확장하되, 미구현 영역을 숨기고 완료 선언하지 못하게 한다.

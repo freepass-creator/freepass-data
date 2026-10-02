@@ -1,5 +1,61 @@
 # 상품에서 계약·수수료 정산까지 연결 지도
 
+## 2026-09-30 사용자 관리 범위 확정과 읽기 전용 운영 감사
+
+- 목적: 상품·재고뿐 아니라 계약 접수·계약·정산 데이터의 구조, 오류, 갱신, 소비처 전달을 Codex와 Claude가 증거로 검토한다.
+- 사용자 결정: 접수·계약·정산의 공유 데이터도 FreePass Data 관리 범위에 포함한다. Admin의 접수·계약 업무 처리와 승인 화면은 유지하며, Data는 원본·ID·관계·시점별 조건·정산 사실·변경 이력·조회 계약·품질 검증을 관리한다. 이 결정만으로 은행 송금, 운영 데이터 보정, 배포, writer 전환을 수행하지 않는다.
+- 정본 revision: 원격 main `af602856fa9f906747c4957d130482adad118bbd`. 로컬 checkout `cf06993d5df3876a863f8c379abeb1916e5b9ab8`은 뒤처져 있으므로 코드 판정은 고정 원격 revision을 읽었다. 이 문서는 두 revision 간 동일함을 확인하고 기존 파일만 확장했다(`COMPOSE_OR_EXTEND`).
+- 관측 시각: 2026-09-30 01:03~01:23 KST. 아래 숫자는 이 시점의 증거이며 지속 정상 보증이나 운영 이관 완료를 뜻하지 않는다.
+
+### 확인된 운영 경로
+
+`공급사/API/시트 → 기존 ERP5 갱신기 → freepasserp5 products/policy/partner → 기존 ERP 공개 카탈로그·F01/F86`
+
+`검증된 Source → RAW → Candidate → Canonical → Projection → ACTIVE Release → Consumer`는 목표 중앙 발행 경로다. 현재 동작하는 compatibility read와 Canonical ACTIVE read를 같은 상태로 계산하지 않는다.
+
+- ERP4 운영 갱신 [run 36593017154](https://github.com/freepass-creator/freepasserp4/actions/runs/36593017154): engine pin `e6727ff04fcf98380701fa6360c36f313e0e321f`, snapshot `20260929160337718-f1ecad46913b`. 등록 1,717 / 출고불가 1,031 / 현재 재고 686. 원자↔F01/F86 칸 대조는 누락·추가·값 차이 0. 공개 발행 대사는 기대/실제 681 및 hash 일치. 이는 해당 snapshot의 downstream 대사이며 모든 공급사 원문 최신성, 모든 화이트라벨 실제 화면 검증을 대신하지 않는다.
+- Data 감사 [run 36595437447](https://github.com/freepass-creator/freepass-data/actions/runs/36595437447): products 1,717 / policy 82 / partner 64, 동일 읽기 전용 transaction 관측. 감사 실행 success와 별개로 publication HOLD, mapping HOLD 1,717, consumer health BLOCKED 8/8.
+- 01:19 KST 인증 실조회: read runtime `freepass-data-read-00014-8db`의 `erp-com/catalog-compat` HTTP 200 및 1,717/82/64건; `catalog-health` HTTP 200 / DEGRADED / NO_ACTIVE_RELEASE; `catalog` HTTP 503 / NO_ACTIVE_RELEASE. 중앙 ACTIVE 상품 발행은 확인되지 않았다.
+- 자동화는 매시간 설정이지만 실제 실행 간격은 일정하지 않다. ERP4 성공 완료는 09-29 17:36:54→23:31:05 KST 약 5시간 54분 간격, Data 감사 완료는 16:30:27→23:19:54 약 6시간 49분 간격이 관측됐다. 최신 HEALTHY 한 건으로 하루 전체의 매시간 갱신을 보증하지 않는다.
+
+### 오류와 검증기 한계를 구분
+
+- Canonical 변환기의 정책 주행거리 해석은 정수만 받지만 실제 집계에는 `연 30,000km`, `연 20,000km` 등 문자열이 있다. `MILEAGE_FROM_COMPANY_DEFAULT` 1,421건을 원천 주행거리 자체 오류로 단정하지 않는다.
+- 같은 revision의 `readErp5PolicyFacts`로 합성 입력을 실행해 재현했다: 문자열 `연 30,000km` → 주행거리 미해석, 정수 30000 → 30000, 같은 정책에 Firestore timestamp `updated_at` 추가 → 정책 facts 0건. 원문을 고치는 대신 lossless metadata 처리·업무값 단위 파싱·실패 사유 집계를 별도 수정 검토할 근거다. 435건 전체 원인이 이 한 가지라고 확정하지 않는다.
+- 같은 capture에서 정책 ID 연결 집계는 matched 1,393 / absent 208 / unmatched 0 / product decode failure 116인데 매퍼는 `POLICY_LINK_NOT_FOUND` 435건을 보고한다. 정책 facts decoder와 ID/code 해석 경로를 대조하기 전 435건의 정책 원본이 없다고 보고하거나 자동 보정하지 않는다.
+- `UNSUPPORTED_FIRESTORE_VALUE` 116, 가격 없음 55, 보증금 UNKNOWN 23 등은 변환/품질 검토 항목이다. 전체 상품에는 비활성·과거 자료도 포함되므로 영업 중 상품의 오류 대수로 바로 사용하지 않는다. HOLD 총수도 실제 오류 대수와 같지 않다.
+
+### 접수·계약·정산 실측
+
+운영 Admin gateway `freepass-data-admin-00004-lwg`의 인증된 POST **read**만 사용했다. 각 resource limit 5,000보다 적게 반환됐으며 서로 다른 resource는 별도 조회이므로 원자적 cross-resource snapshot이라고 부르지 않는다. 고객 이름·연락처·계약 원문은 보고서에 보관하지 않았다.
+
+| resource | 문서 수 | 판정 범위 |
+|---|---:|---|
+| contracts | 121 | 테스트 표시 16 / 삭제 표시 31 포함; 두 집합은 겹칠 수 있어 단순 차감 금지 |
+| settlementRows | 472 | 원장 code 472건 존재, 중복 code 그룹 0 |
+| settlementClawbacks | 23 | 기록 존재 확인; 원계약·입출금 원문 대사 전 정확성 HOLD |
+| settlementEvents | 20 | 문서 수이며 내부 이벤트 수와 다름 |
+| contractEvents / settlementInvoices / settlementCashEvents / esignSessions | 각 0 | 이 경로의 조회 결과; 업무 이력이 다른 위치에도 없다는 증거가 아님 |
+
+- 정산 472건 중 비어 있지 않은 `contractNo` 1건, `intakeRequestId` 0건, `sourceProductId` 0건. 필드 존재와 값 존재를 구분했다. 다른 안정 키/기존 연결 규칙을 확인하기 전 미연결 471건을 오류로 확정하거나 번호를 만들어 채우지 않는다.
+- 계약 상태 총계에는 계약요청 73 / 계약완료 27 / 계약취소 13 / 계약철회 3 / 계약대기 1 / 빈 상태 4가 있으나 테스트·삭제를 제외한 실적 집계는 아니다.
+- 운영 Admin write switch는 이미 `on`이며 이미지 revision은 `dd2fc207f4018dd585244ff0a18b357bde8293f4`다. main의 owner 분리·Catalog 범용쓰기 차단 변경은 이 배포 뒤에 있어 운영 반영으로 계산하지 않는다. read/Admin runtime의 consumer secret 참조도 `latest`이며 main의 숫자 pin 변경 반영은 미확인이다. 이번 감사에서 쓰기·권한·배포를 변경하지 않았다.
+
+### 남음 / next_start_here
+
+1. 접수→계약→인도/취소→정산→청구→수금→지급/환수의 실제 writer와 기존 안정 키를 고정한다. 이름·차량번호만으로 다른 계약을 자동 합치지 않는다.
+2. 472건 정산과 기존 계약·정산 원본을 안정 키, 기간, 당시 요금/수수료 snapshot으로 대사한다. 원장 자체 입력액과 실제 입출금 증거를 구분하고 0/UNKNOWN을 유지한다.
+3. 기존 Data Health에 계약/정산의 중복·고아 참조·스냅샷 누락·금액/상태 불일치·최종 갱신·소비처 readback 지표를 확장한다. 상품용 소비처 8개 health를 정산 건강도로 확대 해석하지 않는다.
+4. 변환기 한계, 원천 자료 문제, 운영 배포 차이를 각각 분리한 수정안을 만들고 원본 보존·dry run·Claude 검토·운영 승인 경계를 따른다. 이번 읽기 전용 감사만으로 자동 보정하거나 운영 cutover하지 않는다.
+
+### Claude 독립 검토와 최종 검증 상태
+
+- 첫 광범위 호출은 응답 본문 없이 5분 이상 대기해 종료했다. 정확한 root를 받는 기존 AI Core 실행기로 비식별 집계만 제공한 재검토는 본문, exit 0, `{"status":"ANSWERED","root":"C:\\dev\\freepass-data","exit_code":0}` 영수증을 확인했다. 이는 제공한 증거의 독립 해석이며 Claude가 운영 원본 전체를 직접 감사했다는 뜻은 아니다.
+- 핵심 합의: 한 snapshot의 downstream 일치만으로 원천·주기·전 소비처 정상을 선언할 수 없다. HOLD를 원본 오류로 바꿔 해석하지 않고, 계약-정산 연결·테스트/삭제 분리·검사기 보정·배포 차이를 우선 검토한다.
+- 반영한 반례: 공개 대사 코드는 기대값과 실제값 모두 같은 `publicRows/isListableProduct/sanitizeProductForGuest`를 거친다. hash 일치는 변환 규칙 자체의 정확성이나 실제 고객 화면을 독립 검증하지 않는다. 재고 686과 공개 681의 차이 5건도 필터/제외 근거를 행별 대사하기 전 정상 차이로 확정하지 않는다.
+- 채택하지 않은 추론: Claude의 `absent 208 + decodeFailed 116`과 mapper 435를 빼서 111건 오류로 보는 계산은 집계 대상과 의미가 달라 성립하지 않는다. 또한 nullable 필드의 존재 개수와 값 존재 개수를 혼동하지 않는다. 후속 실조회 기준 정산의 nonempty `contractNo` 1 / `intakeRequestId` 0 / `sourceProductId` 0이다.
+- 검증: 최신 Actions artifact/log, Cloud Run 배포 metadata, 인증 read API, 변환기 합성 재현, 문서 diff 검사. 운영 DB/시트 값·권한·배포·예약은 변경하지 않았다. 최종 상태는 **부분 운영 확인 / 전체 정확성·연결·주기 보증 HOLD**다. 문서 변경은 로컬이며 commit·push하지 않았다.
+
 상태: **연결 설계 / 운영 이관 미완료**. 2026-09-21 사용자 후속 지시로 작성.
 이 문서는 FreePass Data와 소비 앱 사이의 연결 지점이다. Admin의 업무 도메인, 정산 계산식, DB schema를 새로 정의하거나 대체하지 않는다.
 
