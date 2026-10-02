@@ -442,5 +442,6 @@
     "정비",
     "전용계좌",
     "비고"
-  ]
+  ],
+  "companyNameSource": "SUPPLIER_TAB_TITLE_FOR_POPULATED_ROWS"
 }

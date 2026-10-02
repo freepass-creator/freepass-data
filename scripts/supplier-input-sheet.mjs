@@ -22,7 +22,7 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
   if(new Set(ids).size!==ids.length)hold('Duplicate sheet IDs');
   if(JSON.stringify([...ids].sort((a,b)=>a-b))!==JSON.stringify((input.sheetInventory??[]).map(s=>s.sheetId).sort((a,b)=>a-b)))hold('Complete independent inventory required');
   const suppliers=binding.suppliers??[];
-  if(!suppliers.length||new Set(suppliers.map(s=>s.sheetId)).size!==suppliers.length||new Set(suppliers.map(s=>s.code)).size!==suppliers.length||new Set(suppliers.map(s=>s.title)).size!==suppliers.length)hold('Unique supplier bindings required');
+  if(!suppliers.length||suppliers.some(s=>typeof s.title!=='string'||s.title.length===0)||new Set(suppliers.map(s=>s.sheetId)).size!==suppliers.length||new Set(suppliers.map(s=>s.code)).size!==suppliers.length||new Set(suppliers.map(s=>s.title)).size!==suppliers.length)hold('Unique supplier bindings required');
   const summary=sheets.find(s=>s.properties.sheetId===binding.summarySheetId), guide=sheets.find(s=>s.properties.sheetId===binding.guideSheetId);
   if(!summary||!guide||summary===guide||suppliers.some(s=>[binding.summarySheetId,binding.guideSheetId].includes(s.sheetId)))hold('Summary/guide binding invalid');
   const allowed=new Set([binding.summarySheetId,binding.guideSheetId,...suppliers.map(s=>s.sheetId)]);
@@ -36,6 +36,19 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
     if(!headers.length||headers.some(h=>!h)||new Set(headers).size!==headers.length||headers.some(h=>!expected.includes(h)))hold('Unknown/duplicate header');
     if(expected.filter(h=>!headers.includes(h)).some(h=>!['사진링크','기타기간①'].includes(h)))hold('Required column missing; explicit migration required');
     const wanted=expected.filter(h=>headers.includes(h)), working=[...headers];
+    if(!entry.summary&&spec.companyNameSource==='SUPPLIER_TAB_TITLE_FOR_POPULATED_ROWS') {
+      const company=headers.indexOf('회사명');
+      for(let row=1;row<(s.data?.[0]?.rowData?.length??0);row++) {
+        const cells=s.data[0].rowData[row].values??[];
+        const active=cells.some((cell,i)=>{
+          if(i===company)return false;
+          const value=cell.effectiveValue??cell.userEnteredValue;
+          if(value?.errorValue)hold('Cannot label an error row');
+          return value&&(value.stringValue!==undefined?value.stringValue!=='':value.numberValue!==undefined||value.boolValue!==undefined);
+        });
+        if(active&&cells[company]?.userEnteredValue?.stringValue!==entry.title)requests.push({updateCells:{start:{sheetId:entry.sheetId,rowIndex:row,columnIndex:company},rows:[{values:[{userEnteredValue:{stringValue:entry.title}}]}],fields:'userEnteredValue'}});
+      }
+    }
     for(let i=0;i<wanted.length;i++){const at=working.indexOf(wanted[i]);if(at!==i){requests.push({moveDimension:{source:{sheetId:entry.sheetId,dimension:'COLUMNS',startIndex:at,endIndex:at+1},destinationIndex:i}});working.splice(i,0,working.splice(at,1)[0]);}}
     requests.push({updateSheetProperties:{properties:{sheetId:entry.sheetId,title:entry.title,hidden:false,gridProperties:{frozenRowCount:1,frozenColumnCount:entry.summary?6:2},tabColorStyle:{rgbColor:rgb(entry.summary?'#4A86E8':'#7F8C8D')}},fields:'title,hidden,gridProperties.frozenRowCount,gridProperties.frozenColumnCount,tabColorStyle'}});
     const height=s.properties.gridProperties.rowCount, range={sheetId:entry.sheetId,startColumnIndex:0,endColumnIndex:wanted.length,startRowIndex:0,endRowIndex:height};
