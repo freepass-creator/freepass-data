@@ -9,6 +9,7 @@ import {
   summarizeJsonShape
   , iancarOnePhotoIds, IancarOneApiError, iancarOneModelIllustration
 } from '../adapters/iancar-one-api.js';
+import { inspectSupplierSourceBatch } from '../domain/source-intake.js';
 
 const requested = new Set(process.argv.slice(2));
 if ([...requested].some(arg => arg.startsWith('--restore-photos='))) {
@@ -88,9 +89,12 @@ const capture = requested.has('--phase-one')
     if (completed % 25 === 0) console.log(JSON.stringify({ phase: 'READING_FULL_FACTS', completed, total }));
   }) : await collectIancarOneVehicleList(config);
 const batch = buildIancarOneSourceBatch(capture);
+const commonEvidence = inspectSupplierSourceBatch({ adapterId: 'iancar-one-api',
+  sourceId: batch.source.sourceId, scope: capture.factScope ? 'terms' : 'inventory' }, batch, new Date().toISOString());
 
 const report: Record<string, unknown> = {
   collector: 'freepass-data/iancar-one-api',
+  commonEvidence,
   sourceId: batch.source.sourceId,
   origin: capture.origin,
   syncedAt: capture.syncedAt,

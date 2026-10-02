@@ -1,5 +1,14 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-02 공급사 관리 작업 회수 / 기존 운영 보존
+
+- 목적: 사용자 요청의 완료 기준은 공급사 원천 조회·갱신과 대상 시트 대사 및 안전한 main 통합이다. Catalog 전체 전환을 이번 완료 조건으로 확대하지 않는다.
+- 대상: main `298b296` 기반, 기존 PR262 관리 문서 회수. actor-prefixed branch 실패를 기존 Work의 `work/freepass-data/supplier-inventory-management` 이름으로 교정했다. 원래 작업 폴더의 dirty 문서와 타 작업은 보존했다.
+- 변경: 기존 공급사 관리 기준을 통합하고 bridge 영수증에서 원천/신규/정책/시트 투영 검증을 구분한다. frozen `e6727ff0` 실행기는 최신 ONE API 소유 재고를 발견하면 backup 검증 단계에서 중단하여 lock/상품/정책/시트 쓰기를 시작하지 않는다. 현재 ERP 운영 pin·스케줄·실제 데이터 변경0.
+- 회수 판정: 이안카 직접 수집/ONE 계약/공식 API PR265·267·269 및 손오공 사진 PR260은 이미 merged. 오래된 branch 전체를 재병합하여 최신 API·정책·사진 코드를 되돌리지 않는다. Core kit PR264는 별도 규격 작업이며 공급사 구현으로 섞지 않는다.
+- 검증: 전체 check 1144 PASS/14 외부환경 SKIP, Sheets25 PASS/build PASS. delivery-owner 기존+신규 회귀를 별도로 실행한다. 운영 run36944530170의 23개 명령 정상종료 및 원자→F01→F86 mismatch0은 하류 투영 검증이며 공급사 원문 전량 정합성 PASS가 아니다.
+- 남음: 신규 등록대기/공급사별 FULL+COMPLETE 원천 영수증·양방향 집합 대사, 손오공/픽업/오플 보완참조 차이 사유, 이안카 자동 writer 최신성은 미완료. 준비 bridge 활성화로 우회하지 않는다.
+- next_start_here: `docs/BUSINESS-DATA-CONNECTION-MAP.md` 공급사 관리 기준과 `docs/NATIVE-SOURCE-COLLECTOR.md`를 따른다. 기존 SourceIngestionStore 및 공급사 adapter를 확장하고, 현재 운영 publisher의 검증된 rules를 확인한 뒤 별도 적용 경계에서 실제 시트 대사한다.
 ## 2026-10-02 이안카 실사진·차종 연출 이미지 — 운영 증거 최신화
 
 - 목적/사용자 결정: 실제 API 사진을 유지하고, 사진이 없는 차량에는 이안카가 공개한 차종 연출 이미지를 원본 URL 그대로 사용한다. 실제 차량 사진처럼 표시하지 않는다. 기존 adapter/collector/photo-only publication 및 ERP ShopPhoto를 COMPOSE_OR_EXTEND했으며 새 저장소·시트·writer·RTDB 경로는 만들지 않았다. 두 대상 Academy READY, 다른 dirty checkout은 보존했다.
@@ -158,7 +167,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 | 어떤 데이터가 있고 어떤 경로로 접근하는가? | [데이터 도메인 카탈로그](DATA-DOMAIN-CATALOG.md), [접근 Gateway](DATA-ACCESS-GATEWAY.md) | 제공 상태·권한·계약과 조회 영수증. 내부 collection 경로를 공개 계약으로 사용하지 않음 |
 | F01/F86·ERP·화이트라벨·Admin에 잘 전달되는가? | [소비처별 사용 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md), [소비처 런타임](ERP5-CONSUMER-RUNTIME.md) | 소비처별 release/snapshot·필드·실제 readback. 한 곳 성공을 전체 성공으로 확대하지 않음 |
 | 시트 모양·열·숨김 규칙은 무엇인가? | [시트 규격](F01-F86-SHEET-SPEC.md), [실행 runbook](F01-F86-SHEET-RUNBOOK.md) | 기계 정본 `contracts/f01-f86-sheet-spec.v1.json`. 표시 검사는 원천 최신화 검사가 아님 |
-| ERP4 수집기 없이 공급사 원본을 어떻게 직접 읽는가? | [FreePass Data 원본 직접 수집기](NATIVE-SOURCE-COLLECTOR.md) | 이안카 RP031 RAW-only 첫 단계. 모든 공급사/요금/운영 컷오버 완료 아님 |
+| 공급사 수집 공통 규격과 공급사별 차이는 어디서 보는가? | [FreePass Data 원본 직접 수집기](NATIVE-SOURCE-COLLECTOR.md#common-supplier-adapter-contract--2026-10-02) | 손오공 버킷/상세·이안카 ONE·웰릭스 시트 RAW 계약. 새 손오공/웰릭스 live transport·운영 전환은 미연결 |
 | 원본을 어떻게 읽고 오류·갱신을 확인하는가? | [ERP5 캡처](ERP5-SOURCE-CAPTURE.md), [Source run 안전 규칙](SOURCE-RUN-SAFETY.md) | readTime·digest·전체 범위·갱신 run·accepted head. schedule/종료 성공만으로 최신성 판정 금지 |
 | 어디까지 구현·운영되었고 무엇부터 이어가는가? | [Implementation Status](IMPLEMENTATION-STATUS.md), 이 문서의 업무별 날짜 기록 | CODED/TESTED/PERSISTENCE/DEPLOYMENT/CUTOVER를 구분. 현재 main·진행 PR과 대조 |
 | 프로젝트 책임과 설계 기준은 무엇인가? | [승인 Architecture v2](ARCHITECTURE-V2-APPROVED.md), [Issue #24](https://github.com/freepass-creator/freepass-data/issues/24) | 설계 기준과 최신 도메인 소유권 결정 구분. 과거 charter를 후속 승인보다 우선하지 않음 |
@@ -198,6 +207,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+## 2026-10-02 공급사 수집 공통 규격 / 개별 RAW 어댑터
+
+- 목적: 손오공·이안카·웰릭스의 공통 수집 결과 규격과 공급사별 원천 해석 경계를 코드로 고정하고 기존 PR270에 통합한다.
+- 대상: main `71e9f7a`와 PR270 기존 Work를 이어받았다. primary checkout의 dirty 문서 두 개는 보존했다. 최신 사진/ONE 변경과 기존 공급사 관리 기록을 모두 보존하여 main을 병합했다.
+- 변경: 기존 `SourceIntakeBatch`/원천 저장소를 재사용. 공급사 등록·transport kind/scope·source binding·freshness·fingerprint/coverage 공통 검사와 안전한 요약. 이안카 두 collector에 공통 관측 보고 연결. 새 손오공 bucket/list/detail와 웰릭스 tab/header/cells RAW 어댑터는 재사용 검색 및 CREATE_NEW_JUSTIFIED/Academy READY 뒤 추가했다.
+- 검증: build/architecture 및 전체 check 1,159 PASS/14 외부환경 SKIP, Sheets25 PASS, delivery-owner13 PASS 뒤 혼합 empty-bucket 회귀를 추가했다. 공급사 원문 의미·중복 UID/차번·원천 실패·누락 상세·부분 범위·모든 버킷 시각 회귀를 포함한다. Claude 중복 identity 우려는 adapter.read 반환 전 검사까지 보강했고, 미래 버킷 반례는 각 upstream 시각 검사로 수정했다. 전체 empty는 HOLD. 교차 버킷 제품관측은 보존하되 차량 수로 세지 않는다. 최초 실행기 FAILED 및 광역 REVIEW_TIMEOUT은 PASS가 아니다. Claude 최종 ANSWERED/GO; exact publication revision과 최종 CI는 이 Work PR270에서 확인한다.
+- 남음: 새 손오공/웰릭스 native transport·CLI·스케줄은 미연결. injected reader로 실제 공급사 metadata/schema와 full coverage를 검증한 뒤 연결해야 한다. 이안카 enriched terms UNKNOWN coverage는 그대로 HOLD. 운영 pin/인증/원천·DB·시트 쓰기/배포 변경 없음; RAW_READY는 정본·게시·삭제 승인이 아니다.
+- next_start_here: `docs/NATIVE-SOURCE-COLLECTOR.md` 공통 계약 → `src/adapters/supplier-source-capture.ts` 읽기 포트 → 승인된 공급사 transport 연결·원천 실조회 검증. 기존 단일 writer를 보존하고 operational cutover는 별도 검증한다.
 
 ## 2026-09-30 손오공 차량사진 전달
 
@@ -1088,6 +1106,13 @@ This file exists so another session can continue without re-discovering or re-cr
 - 경계: 정산 사실의 기준은 `FREEPASS_DATA_SETTLEMENT`다. Admin은 승인된 업무 command를 수행하는 애플리케이션이며 별도 정본이 아니다. 소비 앱은 `settlement_rows`를 재계산하거나 두 번째 원장으로 복제하지 않는다. 미입력은 `null`이다.
 - 검증: 최신 `origin/main` 병합 후 `npm run check` 전체 PASS. Vitest 962 PASS / 12 SKIP, Sheets 24 PASS, read-runtime 5 PASS, shadow 10 PASS, dashboard 21 PASS. Claude 독립 검토는 두 차례 응답 없이 대기되어 UNAVAILABLE로 기록한다. 운영 토큰 등록·배포·Kakao Ops 실제 호출은 다음 검증 단계다.
 - next_start_here: `src/domain/settlement-ledger-view.ts` → `src/application/settlement-ledger-view.ts` → `src/api/consumer-gateway.ts` → `tests/settlement-ledger-view.test.ts`.
+# 2026-09-30 공급사 재고 관리 기준
+
+- 목적/변경: 사용자 지시로 직원의 공급사별 차량번호 기반 일일 관리 업무와 시스템 자동 대사·영구 등록대기 요구사항을 `docs/BUSINESS-DATA-CONNECTION-MAP.md`의 「공급사 차량 재고 정합성 관리」에 반영했다.
+- 대상: 현재 origin/main 기반의 문서 변경. 기존 작업 폴더의 미커밋 문서는 보존했다.
+- 검증: 관리 항목 6개, 0대/소규모 포함, 기본연령/하향 분리, 예외 담당자·기한, 원천 성공 시각과 수정 시각 분리, 승인 및 재조회 경계를 확인한다.
+- 남음: 자동 관리 기능 구현·운영 데이터 수정·배포는 이번 문서 저장에 포함되지 않는다.
+- next_start_here: 운영 pin `e6727ff04fcf98380701fa6360c36f313e0e321f`의 `scripts/ingest-supplier-to-firestore.mts` 임시 `tmp/등록대기.json` 경로와 `scripts/ingest-all-suppliers.mts`의 하위 로그 축약부터 검토하여 기존 SourceIngestionStore/원천 영수증 경계에 연결한다. 세 번째 저장 경로를 만들지 않는다.
 
 ## 2026-10-02 Iancar API photo deployment and publication
 

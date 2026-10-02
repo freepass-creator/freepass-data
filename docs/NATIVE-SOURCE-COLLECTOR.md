@@ -4,6 +4,53 @@ Status (2026-09-30): **CODED / UNVERIFIED AGAINST LIVE ORIGINAL; RAW-ONLY PILOT.
 Owner: FreePass Data. Existing `SourceIntakeBatch`, `ingestRawSourceBatch` and Firestore Source Store are reused.
 This does not add a second CatalogStore, publication writer or scheduler.
 
+## Common supplier adapter contract — 2026-10-02
+
+`src/domain/source-intake.ts` owns `SUPPLIER_SOURCE_ADAPTERS`,
+`collectSupplierSource` and `inspectSupplierSourceBatch`. All transports return the
+existing `SourceIntakeBatch`: source identity/kind, mapping/source revision, checksum,
+upstream observation time, freshness requirement, scoped coverage, original records
+and per-record fingerprints. Missing evidence, future/stale time or partial/unknown
+coverage produces HOLD. An empty result also requires review, even with a declared
+complete zero count; keep the original zero observation without approving retirement.
+`RAW_READY` is RAW preparation only; it never approves
+Canonical writes, publication, source absence or retirement. Existing source-head
+decisions remain in `decideSourceHead`, not these adapters.
+
+| Supplier | Adapter responsibility | Shared boundary |
+|---|---|---|
+| 손오공 RP012 | `sonogongSourceAdapter` reads LOW_SONOKONG_DAILY, LOW_SONOKONG and LOW_TCAR separately through an injected original API reader. Preserve list/detail, bucket, original term/option/photo fields; require matching product ID and plate. Missing detail/count mismatch stays partial. | Bucket-qualified RAW identity; oldest observation time; immutable original payload, digest and common evidence. Sheet projections do not replace original API inventory. |
+| 이안카 RP031 | Existing ONE API auth, pagination, list/detail/term/conditions/photo attribution remain in `iancar-one-api.ts`. Direct-login pilot is inventory-only and has no term authority. Both collector commands now report the shared evidence contract. | ONE enriched facts deliberately keep UNKNOWN coverage, even with a complete vehicle list; the common report keeps HOLD without blocking existing approved per-field operations. |
+| 웰릭스 RP013 | `welrixSourceAdapter` reads the approved Sheet/tab/range through an injected grid reader. Inventory and policy use separate calls/source IDs. Preserve headers and original cells, including unit text. | Binding/count/identity checks; duplicate inventory plates reject; repeated policy UID rows remain separate condition evidence. RAW row position is not a Canonical policy ID. |
+
+Authentication and network transport remain in the provider reader. The newly added
+Sonogong/Welrix adapters are executable RAW transformations with injected read ports,
+**not yet wired to native live transport, CLI or schedules**. Do not claim a live
+supplier refresh from their fixture tests. Implement the authorized original API/Sheets
+readers against these ports and verify real source metadata/schema before rollout;
+unknown freshness thresholds must not be invented. Native Data has no replacement
+writer activated by this change. Current operational publisher and schedules are unchanged.
+
+The collector does not parse `10` into money or a rate. Later reviewed normalization
+must record unit (원/만원/%), basis, rental period, contracted mileage, product/return
+variant and policy effectivity using the [business dictionary](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary).
+Blank, zero, unknown and prohibited remain different. Sonogong amount rounding and
+deposit rules belong to reviewed product normalization, never a generic RAW converter.
+The same vehicle may occur in different Sonogong product buckets. Preserve those
+separate RAW product observations; reviewed VehicleAsset linking must resolve shared
+vehicle identity and contradictory product facts. Do not discard a product variant
+or merge rental/subscription terms because the plate is shared.
+RAW record count is product-observation count, not a distinct vehicle/fleet count.
+The zero-record gate applies to the whole declared batch scope. A successfully
+observed, declared-zero product bucket alongside other nonempty buckets is not a
+failed request and does not delete any vehicle; a failed read still rejects the whole
+collection. Per-bucket operational admission remains a rollout decision.
+
+Reuse: existing intake/store/ONE adapters are COMPOSE_OR_EXTEND. A native RAW adapter
+file was CREATE_NEW_JUSTIFIED after reuse search and Academy READY: no existing Data
+Sonogong bucket/detail or Welrix cell-to-intake adapter existed; the frozen legacy
+engine is incompatible with current ONE-owned inventory. No new store or engine repository.
+
 ## Non-negotiable topology
 
 ```text

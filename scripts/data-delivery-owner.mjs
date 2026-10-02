@@ -9,6 +9,14 @@ export const ENGINE_REVISION = 'e6727ff04fcf98380701fa6360c36f313e0e321f';
 export const LEGACY_REPOSITORY = 'freepass-creator/freepasserp4';
 export const LEGACY_WORKFLOW = 'erp5-ssot-refresh.yml';
 export const PRIVATE_EVIDENCE_BUCKET = 'freepasserp5-data-audit-evidence';
+// The frozen engine predates ONE API publication and its policy isolation.
+// A successful downstream projection cannot authorize replaying old source rules.
+export function assertCompatibleBackup(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.products)) throw new Error('INVALID_BEFORE_BACKUP');
+  if (snapshot.products.some(product => product?.source === 'EANCAR_ONE_API' || product?.iancar_phase_one)) {
+    throw new Error('FROZEN_ENGINE_PREDATES_ONE_API');
+  }
+}
 export function privateBucketDecision(metadata) {
   return metadata?.name === PRIVATE_EVIDENCE_BUCKET && metadata.public_access_prevention === 'enforced' && metadata.uniform_bucket_level_access === true;
 }
@@ -58,6 +66,12 @@ export async function runDelivery({ execute, assertOwnership, readSnapshot, seal
     authority: 'LEGACY_VERIFIED_BRIDGE', canonicalCutoverVerified: false,
     engineRevision: ENGINE_REVISION, execution, startedAt: now(), completedAt: null,
     status: 'HOLD', failureCode: null, stages: [], snapshot: null,
+    verification: {
+      supplierSourceParity: 'NOT_VERIFIED',
+      newInventory: 'NOT_IMPLEMENTED_BY_THIS_BRIDGE',
+      policyBodyParity: 'NOT_VERIFIED',
+      sheetProjectionParity: 'NOT_VERIFIED'
+    },
     // Registry rows are coverage, never proof that a consumer used this attempt.
     consumers: consumers.map(consumer => ({ consumerId: consumer.consumerId, status: 'NOT_VERIFIED' }))
   };
@@ -94,6 +108,7 @@ export async function runDelivery({ execute, assertOwnership, readSnapshot, seal
     for (const consumer of receipt.consumers) {
       if (['google-sheets-f01', 'google-sheets-f86'].includes(consumer.consumerId)) consumer.status = 'ENGINE_READBACK_VERIFIED';
     }
+    receipt.verification.sheetProjectionParity = 'ENGINE_READBACK_VERIFIED';
     receipt.status = 'SUCCEEDED';
   } catch {
     // Do not include supplier output, customer values or credentials in public receipts.
@@ -171,6 +186,7 @@ async function main() {
       const bucket = process.env.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET;
       if (!bucket) throw new Error('PRIVATE_BACKUP_BUCKET_REQUIRED');
       const backup = join(engineRoot, 'tmp/data-delivery-before.json');
+      assertCompatibleBackup(JSON.parse(readFileSync(backup, 'utf8')));
       const uri = `gs://${bucket}/delivery/${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}/before.json`;
       command('gcloud', ['storage', 'cp', backup, uri, '--if-generation-match=0'], engineRoot);
       const readback = join(engineRoot, 'tmp/data-delivery-before-readback.json');
