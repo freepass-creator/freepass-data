@@ -8,6 +8,7 @@
 - 검증: AutoPlus recovery assertions + source registry PASS, `tsc --noEmit` PASS, `npm run check:sync` PASS (F01/F86/axes/manual/color regressions), `git diff --check` PASS. `--supplementary-only --apply`는 network/Firestore 접근 전 `AUTOPLUS_SUPPLEMENTARY_WRITE_FORBIDDEN`으로 거부됐다.
 - 남음: 원본 metadata/header는 연결 앱으로 확인했지만 full visible-row source capture·차량별 live 대사·보증금 원문 이미지 대조·독립 구현 검토·CI/운영 pin/실데이터 apply/전 소비처 readback 미완료. local `gws`는 OAuth scope 403. 앞선 run의 참조61/게시40은 사본 대사이며 원본 누락21대의 증거가 아니다. 어떤 운영 writer/pin/schedule/시트 값도 바꾸지 않았다.
 - next_start_here: `C:/dev/worktrees/freepass-autoplus-recovery-20261002/scripts/ingest-reborncar-to-firestore.mts` default dry-run, `--crawl-only` original source-only, `--supplementary-only` website read-only. 원본 전체 capture와 independent review 후 exact source digest/승인/백업/롤백을 확인하고 RP023만 적용한다. 운영 활성화는 별도 승인까지 HOLD; native Data cutover는 이번 수정에 포함하지 않는다.
+- Claude: 설계 자문 본문/exit 0은 확보했지만 최신 구현 검토는 장시간 무응답으로 본 작업의 해당 프로세스만 종료했고 `FAILED/CLAUDE_PROCESS_FAILED_WITHOUT_OUTPUT`, exit 1이었다. 구현 독립 검토는 UNAVAILABLE이며 PASS로 세지 않는다. 사용자 시트 우선 결정을 유지했고, 자문의 RTDB 경로·신규 자동 부활 우려를 반영해 이 경로들을 사용하지 않았다.
 
 ## 2026-10-01 이안카 1차 실제 발행 — ERP·F01·F86 readback 완료
 
