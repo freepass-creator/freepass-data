@@ -5,6 +5,84 @@ import { join } from 'node:path';
 import { FieldValue, GeoPoint, Timestamp, getFirestore } from 'firebase-admin/firestore';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { isPublicIancarPhotoProduct } from './erp5-compat-catalog-reader.js';
+
+/** Photo-only publication: immutable backup, exact identity, revision fence, no inventory/price edits. */
+export async function publishIancarPhotoReferences(input: {
+  records: { productId: string; vehicleId: string; plate: string; count: number; observedAt: string }[];
+  apply: boolean; expectedPlanDigest?: string;
+}) {
+  const app = getTargetFirebaseApp();
+  if (app.options.projectId !== 'freepasserp5') throw new Error('IANCAR_PHOTO_WRONG_PROJECT');
+  const db = getFirestore(app);
+  if (!input.records.length || input.records.length > 450
+    || new Set(input.records.map(row => row.productId)).size !== input.records.length)
+    throw new Error('IANCAR_PHOTO_PUBLICATION_INPUT_INVALID');
+  const refs = input.records.map(row => {
+    if (!row.productId || /[\/\u0000-\u001f\u007f]/.test(row.productId)) throw new Error('IANCAR_PHOTO_ID_INVALID');
+    return db.collection('products').doc(row.productId);
+  });
+  const before = await db.getAll(...refs);
+  const assertFresh = () => {
+    for (const row of input.records) if (!Number.isFinite(Date.parse(row.observedAt))
+      || Date.now() - Date.parse(row.observedAt) > 900_000 || Date.parse(row.observedAt) > Date.now() + 60_000)
+      throw new Error('IANCAR_PHOTO_CAPTURE_STALE');
+  };
+  assertFresh();
+  const planned = input.records.map((row, index) => {
+    const original = before[index]!.data();
+    if (!isPublicIancarPhotoProduct(original) || original!.iancar_one_vehicle_id !== row.vehicleId
+      || String(original!.car_number).replace(/\s/g, '') !== row.plate.replace(/\s/g, '')
+      || !Number.isSafeInteger(row.count) || row.count < 0 || row.count > 200)
+      throw new Error('IANCAR_PHOTO_IDENTITY_OR_COUNT_INVALID');
+    // Absolute public ERP proxy references work for Admin/AI and other consumer origins too.
+    // format is only a recognizable raster hint; the server always strips metadata and emits JPEG.
+    const images = Array.from({ length: row.count }, (_, index) => `https://freepasserp.com/api/img?product=${encodeURIComponent(row.productId)}&photo=${index}&format=.jpg`);
+    const patch: Record<string, unknown> = {
+      provider_company_code: 'RP031',
+      iancar_one_photo_count: row.count, iancar_one_photos_observed_at: row.observedAt,
+      iancar_one_photo_state: row.count ? 'AVAILABLE' : 'NONE',
+    };
+    // Preserve existing originals, including photos from our own prior storage. Zero never deletes them.
+    if (row.count) Object.assign(patch, {
+      image_urls: images, image_url: images[0],
+      iancar_photo_source_original: original!.iancar_photo_source_original ?? {
+        image_urls: original!.image_urls ?? null, image_url: original!.image_url ?? null,
+        photo_link: original!.photo_link ?? null,
+      },
+    });
+    return { row, original: original!, patch, snapshot: before[index]! };
+  });
+  const planDigest = stableDigest(planned.map(p => ({ id: p.row.productId, revision: p.snapshot.updateTime!.toMillis(), patch: p.patch })));
+  const summary = { count: planned.length, withPhotos: planned.filter(p => p.row.count > 0).length,
+    photoCount: input.records.reduce((n, p) => n + p.count, 0), planDigest, inventoryChanges: 0, priceChanges: 0, deletes: 0 };
+  if (!input.apply) return { ...summary, status: 'DRY_RUN', writeExecuted: false };
+  if (input.expectedPlanDigest !== planDigest) throw new Error('IANCAR_PHOTO_PLAN_CHANGED');
+  const runId = randomUUID();
+  const directory = join(homedir(), '.codex', 'private', 'freepass-data-iancar-withdrawals');
+  await mkdir(directory, { recursive: true });
+  const backupPath = join(directory, `photos-${runId}.json`);
+  const backup = JSON.stringify({ schema: 'iancar-photo-typed-backup/1', runId, projectId: 'freepasserp5',
+    sourceDigest: planDigest, planDigest, capturedAt: new Date().toISOString(),
+    documents: planned.map(p => ({ path: p.snapshot.ref.path, exists: true,
+      data: encodeIancarBackupValue(p.original), patch: encodeIancarBackupValue(p.patch) })) });
+  await writeFile(backupPath, backup, { flag: 'wx', mode: 0o600 });
+  if (await readFile(backupPath, 'utf8') !== backup) throw new Error('IANCAR_PHOTO_BACKUP_READBACK_FAILED');
+  await db.runTransaction(async tx => {
+    const current = await tx.getAll(...refs);
+    if (current.some((p, i) => !p.updateTime?.isEqual(before[i]!.updateTime!))) throw new Error('IANCAR_PHOTO_REVISION_CHANGED');
+    assertFresh();
+    planned.forEach((p, i) => tx.update(refs[i]!, p.patch));
+  });
+  const after = await db.getAll(...refs);
+  for (let i = 0; i < planned.length; i++) {
+    const p = planned[i]!; const actual = after[i]!.data()!;
+    if (Object.entries(p.patch).some(([key, value]) => stableDigest(actual[key]) !== stableDigest(value))
+      || Object.entries(p.original).some(([key, value]) => !(key in p.patch) && stableDigest(actual[key]) !== stableDigest(value)))
+      throw Object.assign(new Error('IANCAR_PHOTO_COMMITTED_READBACK_FAILED'), { runId, backupPath, writeExecuted: true });
+  }
+  return { ...summary, status: 'PHOTO_ATOM_READBACK_VERIFIED', writeExecuted: true, runId, backupPath };
+}
 
 type PhaseOneProduct = {
   sourceVehicleId: string; car_number: string; price: Record<string, { rent: number; deposit: number }>;
@@ -150,9 +228,11 @@ export async function publishIancarPhaseOne(input: {
 }
 
 /** Restore only a still-unmodified publication. New records are withdrawn, never deleted. */
-export async function restoreIancarPhaseOne(input: { backupPath: string; apply: boolean; expectedSourceDigest: string }) {
+export async function restoreIancarPhaseOne(input: { backupPath: string; apply: boolean; expectedSourceDigest: string; expectedSchema?: string }) {
   const backup = JSON.parse(await readFile(input.backupPath, 'utf8'));
-  if (backup.schema !== 'iancar-phase-one-typed-backup/1' || backup.projectId !== 'freepasserp5' || backup.sourceDigest !== input.expectedSourceDigest || !Array.isArray(backup.documents))
+  const photoOnly = backup.schema === 'iancar-photo-typed-backup/1';
+  if (input.expectedSchema && backup.schema !== input.expectedSchema) throw new Error('IANCAR_RESTORE_BACKUP_INVALID');
+  if ((!photoOnly && backup.schema !== 'iancar-phase-one-typed-backup/1') || backup.projectId !== 'freepasserp5' || backup.sourceDigest !== input.expectedSourceDigest || !Array.isArray(backup.documents))
     throw new Error('IANCAR_RESTORE_BACKUP_INVALID');
   const app = getTargetFirebaseApp();
   if (app.options.projectId !== 'freepasserp5') throw new Error('IANCAR_RESTORE_WRONG_PROJECT');
@@ -163,13 +243,14 @@ export async function restoreIancarPhaseOne(input: { backupPath: string; apply: 
   }
   const refs = backup.documents.map((row: any) => {
     if (!/^products\/[^/]+$/.test(row.path) || row.patch.provider_company_code !== 'RP031') throw new Error('IANCAR_RESTORE_SCOPE_INVALID');
+    if (photoOnly && (!row.exists || Object.keys(row.patch).some(key => !['provider_company_code', 'iancar_one_photo_count', 'iancar_one_photos_observed_at', 'iancar_one_photo_state', 'image_urls', 'image_url', 'iancar_photo_source_original'].includes(key)))) throw new Error('IANCAR_RESTORE_SCOPE_INVALID');
     return db.doc(row.path);
   });
   await db.runTransaction(async tx => {
     const current = await tx.getAll(...refs);
     for (let i = 0; i < current.length; i++) {
       const data = current[i]!.data() as Record<string, unknown> | undefined; const row = backup.documents[i];
-      if (!data || data.locked_by_contract || Object.entries(row.patch).some(([key, value]) => stableDigest(data[key]) !== stableDigest(value)))
+      if (!data || (!photoOnly && data.locked_by_contract) || Object.entries(row.patch).some(([key, value]) => stableDigest(data[key]) !== stableDigest(value)))
         throw new Error('IANCAR_RESTORE_REVISION_CHANGED');
       if (row.exists && Object.entries(row.data).some(([key, value]) => !(key in row.patch) && stableDigest(data[key]) !== stableDigest(value)))
         throw new Error('IANCAR_RESTORE_REVISION_CHANGED');
@@ -182,6 +263,11 @@ export async function restoreIancarPhaseOne(input: { backupPath: string; apply: 
       tx.update(refs[i]!, patch);
     }
   });
+  if (input.apply && photoOnly) {
+    const restored = await db.getAll(...refs);
+    for (let i = 0; i < restored.length; i++) if (stableDigest(restored[i]!.data()) !== stableDigest(backup.documents[i].data)) throw new Error('IANCAR_PHOTO_RESTORE_READBACK_FAILED');
+    return { status: 'PHOTO_RESTORE_READBACK_VERIFIED', count: refs.length, deletes: 0 };
+  }
   return { status: input.apply ? 'RESTORED_REQUIRES_READBACK' : 'RESTORE_PLAN_VERIFIED', count: refs.length, deletes: 0 };
 }
 

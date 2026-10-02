@@ -38,6 +38,7 @@ describe('read-only consumer gateway', () => {
     const reader = { read: async () => { throw new Error('unused'); }, readIancarPhoto: async (_consumer: string, product: string, index?: number) => {
       reads++;
       if (product === 'gone') throw new Error('IANCAR_PHOTO_NOT_FOUND');
+      if (product === 'busy') throw new Error('IANCAR_PHOTO_BUSY');
       if (product === 'failed') throw new Error('private provider error with credentials');
       return { count: 2, bytes: index === undefined ? null : Buffer.from([255, 216, 255]), contentType: index === undefined ? 'application/json' : 'image/jpeg' };
     } };
@@ -61,6 +62,8 @@ describe('read-only consumer gateway', () => {
     const failure = await app.inject({ url: compatUrl + '/products/failed/photos/0', headers });
     expect(failure.statusCode).toBe(503);
     expect(failure.body).not.toContain('credentials');
+    const busy = await app.inject({ url: compatUrl + '/products/busy/photos/0', headers });
+    expect(busy.statusCode).toBe(429); expect(busy.headers['retry-after']).toBe('2');
     await app.close();
     const noCatalog = withAccess(new MemoryDataStore(), [{ id: 'internal-ai-test', projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] }], undefined, reader);
     expect((await noCatalog.app.inject({ url: '/v1/consumers/internal-ai-test/catalog-compat/products/P1/photos/0', headers })).statusCode).toBe(403);

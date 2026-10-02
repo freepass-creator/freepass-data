@@ -6,6 +6,7 @@ import {
   collectIancarOnePhaseOneFacts,
   buildIancarOnePublicationProducts,
   createIancarOneApiClient,
+  createIancarPhotoByteCache,
   IANCAR_ONE_API_ORIGIN,
   IancarOneApiError,
   iancarOneApiConfigFromEnv,
@@ -22,6 +23,28 @@ const config = {
   baseUrl: IANCAR_ONE_API_ORIGIN,
   apiKey: 'synthetic-key-never-real'
 };
+
+it('private photo cache coalesces exact identities and expires without caching failures', async () => {
+  let now = 1;
+  const cache = createIancarPhotoByteCache(() => now);
+  const load = vi.fn(async () => ({ bytes: Buffer.from([255, 216, 255]), contentType: 'image/jpeg' }));
+  await Promise.all([cache('V1', 'P1', load), cache('V1', 'P1', load)]);
+  expect(load).toHaveBeenCalledTimes(1);
+  await cache('V2', 'P1', load); expect(load).toHaveBeenCalledTimes(2);
+  now += 30_001; await cache('V1', 'P1', load); expect(load).toHaveBeenCalledTimes(3);
+  await expect(cache('V1', 'bad', async () => { throw new Error('synthetic'); })).rejects.toThrow('synthetic');
+  await cache('V1', 'bad', load); expect(load).toHaveBeenCalledTimes(4);
+});
+
+it('private photo cache bounds byte memory and concurrent supplier fetches', async () => {
+  const cache = createIancarPhotoByteCache();
+  const load = vi.fn(async () => ({ bytes: Buffer.alloc(8 * 1024 * 1024), contentType: 'image/jpeg' }));
+  for (let i = 0; i < 5; i++) await cache('V1', String(i), load);
+  await cache('V1', '0', load); expect(load).toHaveBeenCalledTimes(6);
+  const pending = Array.from({ length: 8 }, (_, i) => cache('V2', String(i), () => new Promise<any>(() => {})));
+  await expect(cache('V2', 'overflow', load)).rejects.toThrow('IANCAR_PHOTO_BUSY');
+  expect(pending).toHaveLength(8);
+});
 
 describe('Iancar server photo transport', () => {
   const detail = { vehicle_id: 'V1', plate_number: '133호1234', stale: false,

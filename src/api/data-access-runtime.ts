@@ -5,7 +5,8 @@ import { createFirestoreDataHealthReader } from '../infra/firestore-data-health-
 import { createFirestoreCatalogCompatibilityReader } from '../infra/erp5-compat-catalog-reader.js';
 import { createFirestoreProjectionReader } from '../infra/firestore-projection-reader.js';
 import { createFirestoreEstimateArtifactStore } from '../infra/estimate-artifacts-firestore.js';
-import { createIancarOneApiClient, iancarOneApiConfigFromEnv, iancarOnePhotoIds, readIancarOnePhotoBytes } from '../adapters/iancar-one-api.js';
+import { createIancarOneApiClient, createIancarPhotoByteCache, iancarOneApiConfigFromEnv, iancarOnePhotoIds, readIancarOnePhotoBytes } from '../adapters/iancar-one-api.js';
+export { isPublicIancarPhotoProduct } from '../infra/erp5-compat-catalog-reader.js';
 
 /**
  * Composition root for consumer-facing reads.
@@ -13,8 +14,9 @@ import { createIancarOneApiClient, iancarOneApiConfigFromEnv, iancarOnePhotoIds,
  */
 export function createConsumerDataAccessRuntime() {
   const access = new DataAccessGateway(createFirestoreDataAccessLogStore());
-  // A gallery requests several photos together. Coalesce detail lookup only; never cache image bytes.
+  // The reader rechecks public eligibility before either private cache is used.
   const photoSets = new Map<string, { expiresAt: number; ids: Promise<string[]> }>();
+  const photoBytes = createIancarPhotoByteCache();
   return {
     access,
     projection: createFirestoreProjectionReader(),
@@ -37,7 +39,7 @@ export function createConsumerDataAccessRuntime() {
       if (index === undefined) return { count: ids.length, bytes: null, contentType: 'application/json' };
       const id = ids[index];
       if (!id) throw new Error('IANCAR_PHOTO_NOT_FOUND');
-      return { count: ids.length, ...await readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id)) };
+      return { count: ids.length, ...await photoBytes(vehicleId, id, async () => readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id))) };
     }),
     workflow: createFirestoreAdminWorkflowStore(),
     estimateArtifacts: createFirestoreEstimateArtifactStore()

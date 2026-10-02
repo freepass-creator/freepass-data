@@ -46,7 +46,7 @@
   },
   "retiredTab": "오공구독",
   "photoNavigation": {
-    "scope": "RP012_non_pickup",
+    "scope": "RP012_non_pickup_and_RP031",
     "directVehiclePhotoFields": ["image_urls", "images", "photos"],
     "destination": "existing_erp_full_gallery",
     "origin": "explicit_approved_runtime_configuration",

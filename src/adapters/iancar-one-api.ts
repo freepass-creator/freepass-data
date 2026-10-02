@@ -688,7 +688,9 @@ export function iancarOnePhotoIds(detail: unknown, vehicleId: string, plate: str
     if (!id || id.length > 2048 || ids.has(id) || typeof photo.url !== 'string'
       || typeof photo.representative !== 'boolean') throw new IancarOneApiError('IANCAR_PHOTO_REFERENCE_INVALID');
     const expected = `/v1/vehicles/${encodeURIComponent(vehicleId)}/photos/${encodeURIComponent(id)}`;
-    const url = new URL(photo.url, IANCAR_ONE_API_ORIGIN);
+    let url: URL;
+    try { url = new URL(photo.url, IANCAR_ONE_API_ORIGIN); }
+    catch { throw new IancarOneApiError('IANCAR_PHOTO_REFERENCE_INVALID'); }
     if (url.origin !== IANCAR_ONE_API_ORIGIN || url.username || url.password || url.search || url.hash || url.pathname !== expected)
       throw new IancarOneApiError('IANCAR_PHOTO_REFERENCE_INVALID');
     ids.add(id);
@@ -812,6 +814,37 @@ export function iancarOneApiConfigFromEnv(env = process.env): IancarOneApiConfig
     apiKey: clean(env.EANCAR_ONE_API_KEY),
     baseUrl: clean(env.EANCAR_ONE_API_BASE_URL) || IANCAR_ONE_API_ORIGIN,
     ...(timeout ? { timeoutMs: Number(timeout) } : {})
+  };
+}
+
+/** Private bounded byte cache, keyed by exact supplier identity, never mutable gallery index. */
+export function createIancarPhotoByteCache(now = Date.now) {
+  type Photo = Awaited<ReturnType<typeof readIancarOnePhotoBytes>>;
+  const entries = new Map<string, { value: Photo; expires: number }>();
+  const pending = new Map<string, Promise<Photo>>();
+  let bytes = 0;
+  return async (vehicleId: string, photoId: string, load: () => Promise<Photo>): Promise<Photo> => {
+    const key = JSON.stringify([vehicleId, photoId]);
+    for (const [id, entry] of entries) if (entry.expires <= now()) {
+      entries.delete(id); bytes -= entry.value.bytes.length;
+    }
+    const hit = entries.get(key);
+    if (hit) return hit.value;
+    const inflight = pending.get(key);
+    if (inflight) return inflight;
+    if (pending.size >= 8) throw new Error('IANCAR_PHOTO_BUSY');
+    const request = Promise.resolve().then(load).then(value => {
+      if (value.bytes.length > 8 * 1024 * 1024) throw new Error('IANCAR_PHOTO_RESPONSE_INVALID');
+      while (entries.size >= 32 || bytes + value.bytes.length > 32 * 1024 * 1024) {
+        const oldest = entries.keys().next().value;
+        if (oldest === undefined) break;
+        bytes -= entries.get(oldest)!.value.bytes.length; entries.delete(oldest);
+      }
+      entries.set(key, { value, expires: now() + 30_000 }); bytes += value.bytes.length;
+      return value;
+    }).finally(() => { pending.delete(key); });
+    pending.set(key, request);
+    return request;
   };
 }
 

@@ -60,6 +60,14 @@ const allowedConsumer = (consumerId: string) =>
  * the legacy document shape behind FreePass Data while canonical projections are completed.
  * It must never become a write API or a fallback around the canonical release gate.
  */
+export function isPublicIancarPhotoProduct(product: Record<string, unknown> | undefined): boolean {
+  return !!product && product.provider_company_code === 'RP031' && product.listable === true
+    && !product._deleted && !product.deletedAt && !product.publication_withdrawal
+    && ['가용', '선점'].includes(String(product.status_kind))
+    && typeof product.iancar_one_vehicle_id === 'string' && !!product.iancar_one_vehicle_id.trim()
+    && typeof product.car_number === 'string' && !!product.car_number.trim();
+}
+
 export class FirestoreCatalogCompatibilityReader {
   private readonly db = getFirestore(getTargetFirebaseApp());
   constructor(private readonly photoReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>) {}
@@ -73,11 +81,10 @@ export class FirestoreCatalogCompatibilityReader {
       throw new Error('IANCAR_PHOTO_REQUEST_INVALID');
     const doc = await this.db.collection('products').doc(productId).get();
     const product = doc.data();
-    if (!product || product.provider_company_code !== 'RP031' || product.listable !== true
-      || product._deleted || product.deletedAt || !product.iancar_one_vehicle_id || !product.car_number)
+    if (!isPublicIancarPhotoProduct(product))
       throw new Error('IANCAR_PHOTO_NOT_FOUND');
     if (!this.photoReader) throw new Error('IANCAR_PHOTO_READER_UNAVAILABLE');
-    return this.photoReader(product.iancar_one_vehicle_id, product.car_number, index);
+    return this.photoReader(product!.iancar_one_vehicle_id, product!.car_number, index);
   }
 
   async read(consumerId: string): Promise<CatalogCompatibilitySnapshot> {

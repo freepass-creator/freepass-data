@@ -229,15 +229,24 @@ export function createConsumerGateway(
         || !request.params.productId || request.params.productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(request.params.productId)) {
         await access.deny('READ', spec, 'INVALID_REQUEST'); return reply.code(400).send({ code: 'INVALID_REQUEST' });
       }
-      if (!compatReader?.readIancarPhoto) return reply.code(503).send({ code: 'IANCAR_PHOTO_READER_UNAVAILABLE' });
+      spec.resource = { ...spec.resource, ...{ entityId: request.params.productId } };
+      if (!compatReader?.readIancarPhoto) {
+        await access.deny('READ', spec, 'IANCAR_PHOTO_READER_UNAVAILABLE');
+        return reply.code(503).send({ code: 'IANCAR_PHOTO_READER_UNAVAILABLE' });
+      }
       const read = compatReader.readIancarPhoto.bind(compatReader);
       const result = await access.read({ ...spec, requestDigest: stableDigest({ productId: request.params.productId, index: index ?? null }),
         summarize: value => ({ count: value.count }) }, () => read(binding.id, request.params.productId, index));
+      if (!Number.isSafeInteger(result.count) || result.count < 0 || result.count > 200)
+        return reply.code(503).send({ code: 'IANCAR_PHOTO_RESPONSE_INVALID' });
       if (index === undefined) return reply.send({ schema: 'freepass-data.product-photos/v1', productId: request.params.productId, count: result.count });
-      if (!result.bytes || !['image/jpeg', 'image/png', 'image/webp'].includes(result.contentType)) return reply.code(503).send({ code: 'IANCAR_PHOTO_RESPONSE_INVALID' });
+      if (!Buffer.isBuffer(result.bytes) || !result.bytes.length || result.bytes.length > 8 * 1024 * 1024
+        || !['image/jpeg', 'image/png', 'image/webp'].includes(result.contentType)) return reply.code(503).send({ code: 'IANCAR_PHOTO_RESPONSE_INVALID' });
       return reply.type(result.contentType).send(result.bytes);
     } catch (error) {
+      if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
       const code = error instanceof Error ? error.message : '';
+      if (code === 'IANCAR_PHOTO_BUSY') return reply.header('Retry-After', '2').code(429).send({ code });
       return reply.code(code === 'IANCAR_PHOTO_NOT_FOUND' ? 404 : 503).send({ code: code === 'IANCAR_PHOTO_NOT_FOUND' ? code : 'IANCAR_PHOTO_READ_FAILED' });
     }
   };
