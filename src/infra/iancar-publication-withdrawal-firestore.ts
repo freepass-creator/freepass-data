@@ -41,7 +41,7 @@ export async function publishIancarPhotoReferences(input: {
     const patch: Record<string, unknown> = {
       provider_company_code: 'RP031',
       iancar_one_photo_count: row.count, iancar_one_photos_observed_at: row.observedAt,
-      iancar_one_photo_state: row.count ? 'AVAILABLE' : 'NONE',
+      iancar_one_photo_state: row.count ? 'AVAILABLE' : 'API_EMPTY_ORIGINAL_PRESERVED',
     };
     // Preserve existing originals, including photos from our own prior storage. Zero never deletes them.
     if (row.count) Object.assign(patch, {
@@ -51,6 +51,15 @@ export async function publishIancarPhotoReferences(input: {
         photo_link: original!.photo_link ?? null,
       },
     });
+    else if (original!.iancar_photo_source_original && Array.isArray(original!.image_urls)
+      && original!.image_urls.length && [...original!.image_urls, original!.image_url].every((url: unknown) => {
+        try { const u = new URL(String(url)); return u.origin === 'https://freepasserp.com' && u.pathname === '/api/img' && u.searchParams.get('product') === row.productId; }
+        catch { return false; }
+      })) {
+      const saved = original!.iancar_photo_source_original as Record<string, unknown>;
+      // Restore only our own now-unbacked slots. Never overwrite a new operator/supplier photo.
+      Object.assign(patch, { image_urls: saved.image_urls ?? [], image_url: saved.image_url ?? '' });
+    }
     return { row, original: original!, patch, snapshot: before[index]! };
   });
   const planDigest = stableDigest(planned.map(p => ({ id: p.row.productId, revision: p.snapshot.updateTime!.toMillis(), patch: p.patch })));
@@ -77,8 +86,7 @@ export async function publishIancarPhotoReferences(input: {
   const after = await db.getAll(...refs);
   for (let i = 0; i < planned.length; i++) {
     const p = planned[i]!; const actual = after[i]!.data()!;
-    if (Object.entries(p.patch).some(([key, value]) => stableDigest(actual[key]) !== stableDigest(value))
-      || Object.entries(p.original).some(([key, value]) => !(key in p.patch) && stableDigest(actual[key]) !== stableDigest(value)))
+    if (Object.entries(p.patch).some(([key, value]) => stableDigest(actual[key]) !== stableDigest(value)))
       throw Object.assign(new Error('IANCAR_PHOTO_COMMITTED_READBACK_FAILED'), { runId, backupPath, writeExecuted: true });
   }
   return { ...summary, status: 'PHOTO_ATOM_READBACK_VERIFIED', writeExecuted: true, runId, backupPath };
@@ -252,7 +260,8 @@ export async function restoreIancarPhaseOne(input: { backupPath: string; apply: 
       const data = current[i]!.data() as Record<string, unknown> | undefined; const row = backup.documents[i];
       if (!data || (!photoOnly && data.locked_by_contract) || Object.entries(row.patch).some(([key, value]) => stableDigest(data[key]) !== stableDigest(value)))
         throw new Error('IANCAR_RESTORE_REVISION_CHANGED');
-      if (row.exists && Object.entries(row.data).some(([key, value]) => !(key in row.patch) && stableDigest(data[key]) !== stableDigest(value)))
+      if (photoOnly && (data.provider_company_code !== 'RP031' || data.iancar_one_vehicle_id !== row.data.iancar_one_vehicle_id || data.car_number !== row.data.car_number)) throw new Error('IANCAR_RESTORE_IDENTITY_CHANGED');
+      if (!photoOnly && row.exists && Object.entries(row.data).some(([key, value]) => !(key in row.patch) && stableDigest(data[key]) !== stableDigest(value)))
         throw new Error('IANCAR_RESTORE_REVISION_CHANGED');
     }
     if (!input.apply) return;
@@ -265,7 +274,10 @@ export async function restoreIancarPhaseOne(input: { backupPath: string; apply: 
   });
   if (input.apply && photoOnly) {
     const restored = await db.getAll(...refs);
-    for (let i = 0; i < restored.length; i++) if (stableDigest(restored[i]!.data()) !== stableDigest(backup.documents[i].data)) throw new Error('IANCAR_PHOTO_RESTORE_READBACK_FAILED');
+    for (let i = 0; i < restored.length; i++) {
+      const actual = restored[i]!.data(); const row = backup.documents[i];
+      if (!actual || Object.keys(row.patch).some(key => key in row.data ? stableDigest(actual[key]) !== stableDigest(row.data[key]) : key in actual)) throw new Error('IANCAR_PHOTO_RESTORE_READBACK_FAILED');
+    }
     return { status: 'PHOTO_RESTORE_READBACK_VERIFIED', count: refs.length, deletes: 0 };
   }
   return { status: input.apply ? 'RESTORED_REQUIRES_READBACK' : 'RESTORE_PLAN_VERIFIED', count: refs.length, deletes: 0 };

@@ -107,10 +107,10 @@ it('photo rollback rehearses deletion of added fields while restoring original p
   const patch = { provider_company_code: 'RP031', image_url: '/api/img?product=p1&photo=0', iancar_one_photo_count: 1 };
   const backup = { schema: 'iancar-photo-typed-backup/1', projectId: 'freepasserp5', sourceDigest: 'verified-digest', documents: [{ path: 'products/p1', exists: true, data: encodeIancarBackupValue(original), patch: encodeIancarBackupValue(patch) }] };
   mocks.readFile.mockResolvedValue(JSON.stringify(backup));
-  mocks.transaction.mockImplementation(async cb => cb({ getAll: async () => [{ data: () => ({ ...original, ...patch }) }], update: mocks.update }));
+  mocks.transaction.mockImplementation(async cb => cb({ getAll: async () => [{ data: () => ({ ...original, ...patch, price: 456 }) }], update: mocks.update }));
   expect(await restoreIancarPhaseOne({ backupPath: 'synthetic', apply: false, expectedSourceDigest: 'verified-digest' })).toMatchObject({ status: 'RESTORE_PLAN_VERIFIED' });
   expect(mocks.update).not.toHaveBeenCalled();
-  mocks.getAll.mockResolvedValue([{ data: () => original }]);
+  mocks.getAll.mockResolvedValue([{ data: () => ({ ...original, price: 456 }) }]);
   await restoreIancarPhaseOne({ backupPath: 'synthetic', apply: true, expectedSourceDigest: 'verified-digest' });
   expect(mocks.update.mock.calls[0]![1].image_url).toBe('original.jpg');
   expect(mocks.update.mock.calls[0]![1].iancar_one_photo_count).toBeDefined();
@@ -118,4 +118,20 @@ it('photo rollback rehearses deletion of added fields while restoring original p
   backup.documents[0]!.patch = encodeIancarBackupValue({ ...patch, price: 999 });
   mocks.readFile.mockResolvedValue(JSON.stringify(backup));
   await expect(restoreIancarPhaseOne({ backupPath: 'synthetic', apply: true, expectedSourceDigest: 'verified-digest' })).rejects.toThrow('SCOPE_INVALID');
+});
+
+it('a later empty supplier list restores original photos instead of keeping dead API slots', async () => {
+  const proxy = 'https://freepasserp.com/api/img?product=p1&photo=0&format=.jpg';
+  const original = { provider_company_code: 'RP031', listable: true, status_kind: '가용', iancar_one_vehicle_id: 'V1', car_number: '133호1234', image_urls: [proxy], image_url: proxy,
+    iancar_photo_source_original: { image_urls: ['https://old.example/photo.jpg'], image_url: 'https://old.example/photo.jpg', photo_link: null }, price: 123 };
+  const snapshot = { ref: { path: 'products/p1' }, updateTime: { toMillis: () => 1, isEqual: () => true }, data: () => original };
+  const records = [{ productId: 'p1', vehicleId: 'V1', plate: '133호1234', count: 0, observedAt: new Date().toISOString() }];
+  mocks.getAll.mockResolvedValue([snapshot]);
+  const plan = await publishIancarPhotoReferences({ records, apply: false });
+  mocks.transaction.mockImplementation(async cb => cb({ getAll: async () => [snapshot], update: mocks.update }));
+  mocks.getAll.mockReset().mockResolvedValueOnce([snapshot]).mockImplementation(async () => [{ data: () => ({ ...original, ...mocks.update.mock.calls[0]![1], price: 456 }) }]);
+  expect(await publishIancarPhotoReferences({ records, apply: true, expectedPlanDigest: plan.planDigest })).toMatchObject({ status: 'PHOTO_ATOM_READBACK_VERIFIED' });
+  const patch = mocks.update.mock.calls[0]![1];
+  expect(patch.image_urls).toEqual(['https://old.example/photo.jpg']); expect(patch.iancar_one_photo_state).toBe('API_EMPTY_ORIGINAL_PRESERVED');
+  expect(patch).not.toHaveProperty('price');
 });
