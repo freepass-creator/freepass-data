@@ -1147,3 +1147,6 @@ This file exists so another session can continue without re-discovering or re-cr
 - Final ERP revision: `53e1d90a57631bd0b67d9e9e44f42af3f807bfa6`, Vercel status SUCCESS and production `/api/version` sha `53e1d90`; CI `36954202676` SUCCESS. Exact engine/Core receipt alignment guard passed; existing offline server-only shim is now used by the whitelabel regression runner, without changing application auth/runtime isolation.
 - Remaining: seven source404 records and 52 empty API photo lists are not supplier website-absence proof; existing originals/identity/inventory/rates are retained. Representative old-plate photo requires supplier clarification. Admin receives absolute canonical photo URLs, but its rendered UI is not verified. No claim of all 109 vehicles having supplier photos or of a new 15-minute inventory/photo-metadata writer.
 - next_start_here: use private typed backup run `3a40956e-d168-41f8-b6b8-6dfbd068657d` for audited photo-only rollback if needed; seek supplier clarification for unresolved IDs/representative history, then repeat fresh photo evidence -> expected-plan apply -> exact-ready canonical publication. Preserve unrelated dirty worktrees and all unresolved source rows.
+
+### 2026-10-02 행 간격 교정
+자동 행 높이가 긴 정책 때문에 과도해져 CLIP(자르기) + 21px 고정으로 복원한다. 원문과 정책값은 그대로 보존한다. 긴 내용은 셀 선택 후 수식 입력줄에서 확인한다. 최신 규격이 이전 WRAP/AUTO_FIT 지시를 대체한다.
