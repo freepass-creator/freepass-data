@@ -11,6 +11,7 @@ import {
   IancarOneApiError,
   iancarOneApiConfigFromEnv,
   iancarOnePhotoIds,
+  iancarOneModelIllustration,
   readIancarOnePhotoBytes,
   projectIancarOneReservation,
   projectIancarOnePhaseOne,
@@ -18,6 +19,14 @@ import {
   compareIancarOnePhaseOneParity,
   summarizeJsonShape
 } from '../src/adapters/iancar-one-api.js';
+
+it('supplier model illustrations use exact full variants, never actual photo counts or guessed trims', () => {
+  const detail = { vehicle_id: 'V1', plate_number: '133호1234', stale: false, name: '쿠퍼(4세대) 2.0 C 5 Door 클래식' };
+  expect(iancarOneModelIllustration(detail, 'V1', '133호1234')).toMatchObject({ kind: 'MODEL_ILLUSTRATION', url: 'https://eancarone.com/catalog-images/neutral/complete-import-108-blue.webp' });
+  expect(iancarOneModelIllustration({ success: true, data: detail }, 'V1', '133호1234')).toEqual(iancarOneModelIllustration(detail, 'V1', '133호1234'));
+  for (const patch of [{ name: '미니 쿠퍼' }, { name: 'constructor' }, { name: '쿠퍼(4세대) 2.0 C 클래식' }, { stale: true }, { vehicle_id: 'other' }, { plate_number: '999호9999' }])
+    expect(iancarOneModelIllustration({ ...detail, ...patch }, 'V1', '133호1234')).toBeNull();
+});
 
 const config = {
   baseUrl: IANCAR_ONE_API_ORIGIN,

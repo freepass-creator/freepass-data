@@ -30,6 +30,41 @@ export const IANCAR_ONE_SOURCE_ID = 'supplier:RP031:iancar-one-api';
 export const IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS = 15 * 60;
 export const IANCAR_ONE_PAGE_SIZE = 100;
 
+/** Supplier catalogue assets observed on 2026-10-02; not photographs of an individual vehicle.
+ * Exact supplier variant names only. Never infer a trim/generation from our display model.
+ * Source cards use one illustration for mixed inventory colours: colours/options may differ.
+ */
+export function iancarOneModelIllustration(detail: unknown, vehicleId: string, plate: string) {
+  if (!isObject(detail)) return null;
+  if (isObject(detail.data)) detail = detail.data;
+  if (!isObject(detail)) return null;
+  const variants: Record<string, string> = {
+    '아토 3 EV 플러스': 'complete-import-104-white.webp',
+    '아르카나 1.6 GTe Iconic': 'renault-arkana-urban-gray.webp',
+    '트랙스 크로스오버 1.2 가솔린 터보 RS': 'complete-trax-rs-black.webp',
+    '쿠퍼(4세대) 2.0 C 5 Door 클래식': 'complete-import-108-blue.webp',
+    '라브4(6세대) 2.5 HEV 2WD XLE': 'toyota-rav4-2026-v2-white.webp',
+    'E클래스(6세대) E200 익스클루시브': 'complete-import-129-white.webp',
+    '더 뉴기아 레이 트렌디': 'kia-ray-2023-gray.webp',
+  };
+  const name = clean(detail.name);
+  const file = Object.hasOwn(variants, name) ? variants[name] : undefined;
+  if (!file || detail.stale !== false || detail.vehicle_id !== vehicleId
+    || !vehicleId || !plate || clean(detail.plate_number).replace(/\s/g, '') !== plate.replace(/\s/g, '')) return null;
+  // SHA-256 of supplier originals observed/decoded on 2026-10-02. URLs remain supplier-owned/live.
+  const checksums: Record<string, string> = {
+    'complete-import-104-white.webp': '971034fadd67aa0a84d5b9fc30cce560da18bf7626e232c557fc1843eb20fad2',
+    'renault-arkana-urban-gray.webp': 'adf96dbf4775a4050888eb53f5fcc980b2fc53781350300df48a12c60fbb10be',
+    'complete-trax-rs-black.webp': '371bd89335166e09691dd80ade00a19d3922784b8f6e6145e599e1d9b473237a',
+    'complete-import-108-blue.webp': 'f17ea06ef25434e105e0736461b5b0c016b8d0b218fa6a498db8855ad0e293ce',
+    'toyota-rav4-2026-v2-white.webp': 'aca456cd3b1f3d050042f3c9095c1acbf6f372c904d6bee5c25a8921398f5b3b',
+    'complete-import-129-white.webp': '31d527359056aa6f3b0fb427c98f71c24e5148262580299c45ca6529f7bbd916',
+    'kia-ray-2023-gray.webp': '00efe02e9658b5f06a2802fd0f51ef72c457fe9399e374ab7c40164ea19d9180',
+  };
+  return { url: `${IANCAR_ONE_API_ORIGIN}/catalog-images/neutral/${file}`, sourceName: name,
+    kind: 'MODEL_ILLUSTRATION' as const, sourcePage: `${IANCAR_ONE_API_ORIGIN}/`, mappingVersion: 'supplier-catalogue-20261002/1', observedSha256: checksums[file]! };
+}
+
 export type IancarOneApiConfig = {
   apiKey: string;
   baseUrl?: string | null;

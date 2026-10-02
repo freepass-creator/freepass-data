@@ -7,7 +7,7 @@ import {
   iancarOneApiConfigFromEnv,
   projectIancarOnePhaseOne,
   summarizeJsonShape
-  , iancarOnePhotoIds, IancarOneApiError
+  , iancarOnePhotoIds, IancarOneApiError, iancarOneModelIllustration
 } from '../adapters/iancar-one-api.js';
 
 const requested = new Set(process.argv.slice(2));
@@ -50,8 +50,10 @@ if (requested.has('--photos')) {
   await Promise.all(Array.from({ length: 2 }, async () => { while (cursor < rows.length) {
     const [productId, p] = rows[cursor++]!;
     try {
-      const ids = iancarOnePhotoIds(await client.getVehicle(String(p.iancar_one_vehicle_id)), String(p.iancar_one_vehicle_id), String(p.car_number));
-      records.push({ productId, vehicleId: String(p.iancar_one_vehicle_id), plate: String(p.car_number), count: ids.length, observedAt: new Date().toISOString() });
+      const detail = await client.getVehicle(String(p.iancar_one_vehicle_id));
+      const ids = iancarOnePhotoIds(detail, String(p.iancar_one_vehicle_id), String(p.car_number));
+      const illustration = ids.length ? null : iancarOneModelIllustration(detail, String(p.iancar_one_vehicle_id), String(p.car_number));
+      records.push({ productId, vehicleId: String(p.iancar_one_vehicle_id), plate: String(p.car_number), count: ids.length, observedAt: new Date().toISOString(), ...(illustration ? { illustration } : {}) });
     } catch (error) {
       if (!(error instanceof IancarOneApiError)) throw error;
       unresolved.push({ productId, code: error.code });
