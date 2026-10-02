@@ -1,5 +1,13 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-02 입력 텍스트 맞춤 / 정책 원문 복원
+
+- 목적: 셀 안 줄바꿈+행 높이 자동 맞춤, 예전 정책의 실제 내용 이관. 대상 main `fd873c62d6e66220d8b35baa100216364c178de4` 기반.
+- 변경: 기존 input planner/계약을 확장하고 `planPolicyImport`/`buildPolicyArchive`를 추가했다. 원천16파일의71/72열을 헤더로 대조하여72항목을 보존했고173행의 빈 정책2,367칸을 이관했다. raw 기존값/0/수식은 보존, 원천 수식·헤더 hash·셀 provenance 및206행 matched/HOLD ledger를 남겼다.
+- 남음: 정책코드 없는33행은 HOLD이며 기본 정책을 임의 적용하지 않는다. 전체 원문은 `정책원문`, 확인은 `정책확인`(관리안내39행 링크). 운영 F01/F86 발행기·source cutover·sharing·자동 정책 refresh는 이번 scope가 아니다.
+- 독립 검토: Claude ANSWERED/exit0. 읽기 실패/없음 구분, 코드타입, 헤더별 archive/hash, 0/수식/provenance를 반영. 자동 코드 정규화는 원문키 불변성을 위해 반영하지 않고 HOLD.
+- next_start_here: `docs/SUPPLIER-INPUT-SHEET-RUNBOOK.md` 최신 이관 절과 private run `supplier-policy-import-20261002-01`의 source/plan/readback을 확인한다. 실제 원문/계정 정보는 공개 repo에 넣지 않는다.
+
 ## 2026-10-02 공급사 원문 입력 시트 영속 규격
 
 - 목적: 단발성 시트 편집을 계약/실행기로 고정한다. 회사명→상태→분류→차량번호→입고일자→점검사항, 단기1/6/12 표시, 옵션은 대여료 뒤, 기타기간 숨김, 정책 입력칸 공개, 숫자 콤마, 일반 dropdown, 탭 자물쇠 제거가 사용자 최신 결정이다.

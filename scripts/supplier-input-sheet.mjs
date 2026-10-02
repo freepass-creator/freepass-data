@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {createHash} from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { specification } from './sheet-presentation.mjs';
 export const inputSpec = JSON.parse(fs.readFileSync(new URL('../contracts/supplier-input-sheet-spec.v1.json', import.meta.url), 'utf8'));
@@ -38,7 +39,9 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
     for(let i=0;i<wanted.length;i++){const at=working.indexOf(wanted[i]);if(at!==i){requests.push({moveDimension:{source:{sheetId:entry.sheetId,dimension:'COLUMNS',startIndex:at,endIndex:at+1},destinationIndex:i}});working.splice(i,0,working.splice(at,1)[0]);}}
     requests.push({updateSheetProperties:{properties:{sheetId:entry.sheetId,title:entry.title,hidden:false,gridProperties:{frozenRowCount:1,frozenColumnCount:entry.summary?6:2},tabColorStyle:{rgbColor:rgb(entry.summary?'#4A86E8':'#7F8C8D')}},fields:'title,hidden,gridProperties.frozenRowCount,gridProperties.frozenColumnCount,tabColorStyle'}});
     const height=s.properties.gridProperties.rowCount, range={sheetId:entry.sheetId,startColumnIndex:0,endColumnIndex:wanted.length,startRowIndex:0,endRowIndex:height};
-    requests.push({repeatCell:{range,cell:{userEnteredFormat:{textFormat:{fontFamily:'Malgun Gothic',fontSize:9,italic:true,bold:false},horizontalAlignment:'CENTER',verticalAlignment:'MIDDLE',wrapStrategy:'OVERFLOW_CELL',padding:{top:2,right:3,bottom:2,left:3}}},fields:'userEnteredFormat.textFormat.fontFamily,userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.italic,userEnteredFormat.textFormat.bold,userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment,userEnteredFormat.wrapStrategy,userEnteredFormat.padding'}},{updateDimensionProperties:{range:{sheetId:entry.sheetId,dimension:'ROWS',startIndex:0,endIndex:height},properties:{pixelSize:21},fields:'pixelSize'}});
+    // User superseded the fixed-height retro skin: text now stays inside cells.
+    requests.push({repeatCell:{range,cell:{userEnteredFormat:{wrapStrategy:spec.textWrap}},fields:'userEnteredFormat.wrapStrategy'}});
+    requests.push({repeatCell:{range,cell:{userEnteredFormat:{textFormat:{fontFamily:'Malgun Gothic',fontSize:9,italic:true,bold:false},horizontalAlignment:'CENTER',verticalAlignment:'MIDDLE',wrapStrategy:spec.textWrap,padding:{top:2,right:3,bottom:2,left:3}}},fields:'userEnteredFormat.textFormat.fontFamily,userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.italic,userEnteredFormat.textFormat.bold,userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment,userEnteredFormat.wrapStrategy,userEnteredFormat.padding'}},{autoResizeDimensions:{dimensions:{sheetId:entry.sheetId,dimension:'ROWS',startIndex:0,endIndex:height}}});
     for(let i=0;i<wanted.length;i++) {
       const h=wanted[i], r={...range,startColumnIndex:i,endColumnIndex:i+1};
       const period=specification.appearance.semanticColors.periodBackground[h];
@@ -69,7 +72,54 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
   }
   const formula=`=IF(COUNTIF(${quote(spec.guideTitle)}!H14:H${13+suppliers.length},"열 구조 변경 확인")>0,NA(),ARRAYFORMULA(LET(combined,VSTACK(${blocks.join(',')}),IF(COUNTIF(INDEX(combined,,1),"?*")=0,"",FILTER(combined,INDEX(combined,,1)<>"")))))`;
   requests.push({updateSheetProperties:{properties:{sheetId:binding.guideSheetId,title:spec.guideTitle,hidden:true},fields:'title,hidden'}},{updateCells:{start:{sheetId:binding.summarySheetId,rowIndex:1,columnIndex:0},rows:[{values:[{userEnteredValue:{formulaValue:formula}}]}],fields:'userEnteredValue'}});
-  return {status:'PLANNED',scope:'SUPPLIER_INPUT_PRESENTATION_AND_SUMMARY_NOT_SOURCE_CUTOVER',spreadsheetId:binding.spreadsheetId,requests};
+  const resized=requests.filter(r=>r.autoResizeDimensions),rest=requests.filter(r=>!r.autoResizeDimensions);
+  return {status:'PLANNED',scope:'SUPPLIER_INPUT_PRESENTATION_AND_SUMMARY_NOT_SOURCE_CUTOVER',spreadsheetId:binding.spreadsheetId,requests:[...rest,...resized]};
+}
+// Source policies stay in their original units. Blank/duplicate codes never
+// select a generic default. No inventory/monetary field is normalized here.
+export function planPolicyImport({suppliers,captures,destinations,capturedAt,runId},now=Date.now()) {
+  if(!runId)hold('Policy import run ID required');
+  const age=now-Date.parse(capturedAt);if(!Number.isFinite(age)||age< -1000||age>300000)hold('Fresh policy captures required');
+  const read=c=>{const v=c?.effectiveValue??c?.userEnteredValue??{};if(v.errorValue)hold('Source formula error');return v.stringValue??v.numberValue??v.boolValue??'';};
+  const cell=v=>typeof v==='number'?{numberValue:v}:typeof v==='boolean'?{boolValue:v}:{stringValue:String(v)};
+  const writes=[],holds=[],outcomes=[];
+  for(const supplier of suppliers){
+    const capture=captures.find(c=>c.sourceId===supplier.sourceId&&c.sourceTab===supplier.sourceTab);
+    const dest=destinations.find(s=>s.properties.sheetId===supplier.sheetId);
+    if(!capture||!dest||capture.complete!==true)hold('Complete supplier-bound policy capture required');
+    const raw=capture.rows,sh=raw[0]?.values.map(read),rows=dest.data?.[0]?.rowData,h=rows?.[0]?.values.map(read);
+    if(!sh?.includes('정책코드')||!h?.includes('정책코드')||!h?.includes('차량번호')||new Set(sh).size!==sh.length)hold('Policy headers invalid');
+    for(let row=1;row<rows.length;row++){
+      const plate=read(rows[row].values?.[h.indexOf('차량번호')]);if(plate==='')continue;
+      const code=read(rows[row].values?.[h.indexOf('정책코드')]);
+      if(code!==''&&(typeof code!=='string'||code.trim()!==code)){holds.push({sheetId:supplier.sheetId,row,reason:'NON_CANONICAL_CODE'});outcomes.push({sheetId:supplier.sheetId,row,status:'NON_CANONICAL_CODE'});continue;}
+      const hits=code===''?[]:raw.slice(1).filter(r=>read(r.values?.[sh.indexOf('정책코드')])===code);
+      if(hits.length!==1){const reason=code===''?'POLICY_CODE_EMPTY':hits.length>1?'POLICY_CODE_AMBIGUOUS':'POLICY_CODE_UNMATCHED';holds.push({sheetId:supplier.sheetId,row,reason});outcomes.push({sheetId:supplier.sheetId,row,status:reason});continue;}
+      outcomes.push({sheetId:supplier.sheetId,row,status:'MATCHED',sourceId:capture.sourceId,sourceRow:raw.indexOf(hits[0])+1,code});
+      const get=name=>{const c=hits[0].values?.[sh.indexOf(name)],v=read(c);if(typeof v==='number'&&c?.userEnteredFormat?.numberFormat?.type==='PERCENT'){if(!c.formattedValue)hold('Percent display evidence required');return c.formattedValue;}return v;};
+      const join=names=>names.map(name=>{const v=get(name);return v===''?'':name+': '+v;}).filter(Boolean).join('\n');
+      const values={'정비':get('정비'),'전용계좌':get('전용계좌'),'연주행':get('기본주행'),'분납':get('보증금분납'),'21세':get('21세+'),'23세':get('23세+'),'1만+':get('추가주행 금액'),'운전자범위':join(['개인운전자범위','법인운전자범위']),'대인':join(['대인보상한도','대인면책금']),'대물':join(['대물보상한도','대물면책금']),'자손':join(['자손보상','자손면책금']),'무보험':join(['무보험보상','무보험면책금']),'자차':join(['자차보상한도','자차수리비율','자차최소면책금','자차최대면책금']),'비고':join(['정책명','심사조건','특이사항','기타사항 1','기타사항 2','기타사항 3','기타사항 4'])};
+      // 대여지역 is not 차고지. Neither generic template nor bare rate/money
+      // assumptions fill it. Full original source fields must be archived.
+      for(const [name,v]of Object.entries(values)){const col=h.indexOf(name);if(col<0||v==='')continue;const existing=rows[row].values?.[col];if(existing?.userEnteredValue||read(existing)!=='')continue;
+        writes.push({sheetId:supplier.sheetId,row,column:col,header:name,value:cell(v),source:{runId,sourceId:capture.sourceId,sourceTab:capture.sourceTab,sourceRow:raw.indexOf(hits[0])+1,code}});
+      }
+    }
+  }
+  return {status:holds.length?'PARTIAL_WITH_HOLD':'READY',writes,holds,outcomes,scope:'BLANK_POLICY_FIELDS_ONLY_KEEP_RAW_UNITS'};
+}
+export function buildPolicyArchive(captures,runId,capturedAt) {
+  if(!runId||!Number.isFinite(Date.parse(capturedAt)))hold('Archive provenance required');
+  const read=c=>c?.effectiveValue??c?.userEnteredValue??{};
+  const headers=[...new Set(captures.flatMap(c=>c.rows[0].values.map(v=>read(v).stringValue)))];
+  if(headers.some(h=>!h))hold('Archive header missing');
+  const meta=['runId','원천파일','원천탭','원천행','확인시각','원천헤더SHA256'];
+  const rows=[{values:[...meta,...headers].map(stringValue=>({userEnteredValue:{stringValue}}))}];
+  for(const capture of captures){if(capture.complete!==true)hold('Incomplete archive capture');const own=capture.rows[0].values.map(v=>read(v).stringValue);if(new Set(own).size!==own.length)hold('Duplicate archive header');
+    const hash=createHash('sha256').update(JSON.stringify(own)).digest('hex');
+    for(let i=1;i<capture.rows.length;i++)rows.push({values:[runId,capture.sourceId,capture.sourceTab,String(i+1),capturedAt,hash].map(stringValue=>({userEnteredValue:{stringValue}})).concat(headers.map(h=>{const source=capture.rows[i].values?.[own.indexOf(h)];const v=read(source);if(v.errorValue)hold('Source formula error');const note=[source?.note,source?.userEnteredValue?.formulaValue?'원천 수식: '+source.userEnteredValue.formulaValue:null].filter(Boolean).join('\n');return {userEnteredValue:v,...(note?{note}:{}),...(source?.userEnteredFormat?.numberFormat?{userEnteredFormat:{numberFormat:source.userEnteredFormat.numberFormat}}:{})};}))});
+  }
+  return {headers:[...meta,...headers],rows};
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
   try {const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}catch(e){console.error(e.message);process.exitCode=2;}

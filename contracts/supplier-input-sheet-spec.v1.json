@@ -414,5 +414,7 @@
     "정책코드(공급사 전용)": "정책코드"
   },
   "defaultColumnWidth": 75,
-  "protectedTabs": false
+  "protectedTabs": false,
+  "textWrap": "WRAP",
+  "rowHeight": "AUTO_FIT"
 }
