@@ -65,14 +65,34 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
       const src=`${quote(entry.title)}!A2:${column(wanted.length-1)}${height}`;
       const blank=`MAKEARRAY(${n},1,LAMBDA(r,c,""))`, ix=h=>wanted.includes(h)?`INDEX(src,,${wanted.indexOf(h)+1})`:blank;
       const plate=ix('차량번호');
-      const cols=[`IF(keep,${literal(entry.code)},"")`,`IF(keep,${literal(entry.title)},"")`,`SEQUENCE(${n},1,2)`,`IF(${plate}="","차량번호 미입력",IF(COUNTIF(${quote(entry.title)}!${column(wanted.indexOf('차량번호'))}2:${column(wanted.indexOf('차량번호'))}${height},${plate})>1,"중복번호",""))`,...canonical.slice(4).map(h=>h==='정책코드(공급사 전용)'?`IF(${ix('정책코드')}="","",${literal(entry.code+':')}&${ix('정책코드')})`:ix(h))];
+      const photo=ix('사진링크');
+      for(let row=1;row<(s.data?.[0]?.rowData?.length??0);row++) {
+        const cells=s.data[0].rowData[row].values??[],pc=cells[headers.indexOf('차량번호')],fc=cells[headers.indexOf('사진링크')];
+        const uri=fc?.effectiveValue?.stringValue??fc?.userEnteredValue?.stringValue;
+        if(!uri)continue;
+        if(!/^https?:\/\//i.test(uri))hold('Invalid photo URL');
+        const prior=[pc?.hyperlink,pc?.userEnteredFormat?.textFormat?.link?.uri,...(pc?.textFormatRuns??[]).map(v=>v.format?.link?.uri)].filter(Boolean);
+        if(prior.some(v=>v!==uri))hold('Plate/photo link conflict');
+        if(!pc?.userEnteredValue?.stringValue)continue;
+        if(pc.textFormatRuns?.length)continue; // Preserve original rich text runs.
+        requests.push({repeatCell:{range:{sheetId:entry.sheetId,startRowIndex:row,endRowIndex:row+1,startColumnIndex:wanted.indexOf('차량번호'),endColumnIndex:wanted.indexOf('차량번호')+1},cell:{userEnteredFormat:{textFormat:{link:{uri}}}},fields:'userEnteredFormat.textFormat.link'}});
+      }
+      const linkedPlate=`IF(${plate}="","",IF(${photo}="",${plate},HYPERLINK(${photo},${plate})))`;
+      const cols=[`IF(keep,${literal(entry.code)},"")`,`IF(keep,${literal(entry.title)},"")`,`SEQUENCE(${n},1,2)`,`IF(${plate}="","차량번호 미입력",IF(COUNTIF(${quote(entry.title)}!${column(wanted.indexOf('차량번호'))}2:${column(wanted.indexOf('차량번호'))}${height},${plate})>1,"중복번호",""))`,...canonical.slice(4).map(h=>h==='차량번호'?linkedPlate:h==='사진용 차량번호'?plate:h==='정책코드(공급사 전용)'?`IF(${ix('정책코드')}="","",${literal(entry.code+':')}&${ix('정책코드')})`:ix(h))];
       blocks.push(`LET(src,IF(${src}="","",${src}),keep,BYROW(src,LAMBDA(r,SUM(LEN(r))>0)),data,HSTACK(${cols.join(',')}),IF(SUM(N(keep))=0,MAKEARRAY(1,${canonical.length},LAMBDA(r,c,"")),FILTER(data,keep)))`);
       const row=14+suppliers.indexOf(entry), end=column(wanted.length-1);
       requests.push({updateCells:{start:{sheetId:binding.guideSheetId,rowIndex:row-1,columnIndex:7},rows:[{values:[{userEnteredValue:{formulaValue:`=IF(SUM(ARRAYFORMULA(N(${quote(entry.title)}!A1:${end}1<>{${wanted.map(literal).join(',')}})))>0,"열 구조 변경 확인","전환 검토용 / 담당자 미등록")`}}]}],fields:'userEnteredValue'}});
     }
   }
   const formula=`=IF(COUNTIF(${quote(spec.guideTitle)}!H14:H${13+suppliers.length},"열 구조 변경 확인")>0,NA(),ARRAYFORMULA(LET(combined,VSTACK(${blocks.join(',')}),IF(COUNTIF(INDEX(combined,,1),"?*")=0,"",FILTER(combined,INDEX(combined,,1)<>"")))))`;
-  requests.push({updateSheetProperties:{properties:{sheetId:binding.guideSheetId,title:spec.guideTitle,hidden:true},fields:'title,hidden'}},{updateCells:{start:{sheetId:binding.summarySheetId,rowIndex:1,columnIndex:0},rows:[{values:[{userEnteredValue:{formulaValue:formula}}]}],fields:'userEnteredValue'}});
+  // FILTER/HSTACK discard hyperlink metadata. Keep the displayed plate column
+  // outside the data spills so a direct HYPERLINK array can remain clickable.
+  const plateIndex=canonical.indexOf('차량번호'),rawPlateIndex=canonical.indexOf('사진용 차량번호'),photoIndex=canonical.indexOf('사진링크');
+  if(plateIndex<1||rawPlateIndex<0||photoIndex<0)hold('Summary photo helper schema missing');
+  const end=summary.properties.gridProperties.rowCount,raw=`${column(rawPlateIndex)}2:${column(rawPlateIndex)}${end}`,photo=`${column(photoIndex)}2:${column(photoIndex)}${end}`;
+  const select=indices=>`=CHOOSECOLS(${formula.slice(1)},${indices.map(i=>i+1).join(',')})`;
+  requests.push({updateSheetProperties:{properties:{sheetId:binding.guideSheetId,title:spec.guideTitle,hidden:true},fields:'title,hidden'}},
+    ...[{columnIndex:0,formulaValue:select(Array.from({length:plateIndex},(_,i)=>i))},{columnIndex:plateIndex+1,formulaValue:select(Array.from({length:canonical.length-plateIndex-1},(_,i)=>i+plateIndex+1))},{columnIndex:plateIndex,formulaValue:`=ARRAYFORMULA(IF(${raw}="","",IF(${photo}="",${raw},HYPERLINK(${photo},${raw}))))`}].map(({columnIndex,formulaValue})=>({updateCells:{start:{sheetId:binding.summarySheetId,rowIndex:1,columnIndex},rows:[{values:[{userEnteredValue:{formulaValue}}]}],fields:'userEnteredValue'}})));
   const resized=requests.filter(r=>r.autoResizeDimensions),rest=requests.filter(r=>!r.autoResizeDimensions);
   return {status:'PLANNED',scope:'SUPPLIER_INPUT_PRESENTATION_AND_SUMMARY_NOT_SOURCE_CUTOVER',spreadsheetId:binding.spreadsheetId,requests:[...rest,...resized]};
 }
