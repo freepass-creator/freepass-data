@@ -415,6 +415,6 @@
   },
   "defaultColumnWidth": 75,
   "protectedTabs": false,
-  "textWrap": "WRAP",
-  "rowHeight": "AUTO_FIT"
+  "textWrap": "CLIP",
+  "rowHeight": 21
 }
