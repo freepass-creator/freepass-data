@@ -86,15 +86,17 @@ Data RP012 전용 runtime SA **한 개만 accessor**로 지정하고 그 secret 
 4. **사진**: 차량별 대표/상세 배열, 원본 URL·접근 만료·권리·공유 URL 여부, 상세 페이지 주소와 이미지 주소 구분.
 5. 미제공 필드의 공식 의미, 오류/누락 신고와 revision별 대사 방법. 내부 청구/지급 수수료는 별도 허용 원천 확인 전 UNKNOWN.
 
-### 승인 후 실행 — 이번 작업에서 실행 금지
+### 운영 반영 전 남은 단계 — 오더3, 운영 실행 금지
 
-현재는 코드/fixture 단계다. 아래는 **구체 포트 구현·독립 검토·배포 승인을 받은 뒤** 실행할 절차이며 지금 복사 실행하지 않는다. 프로젝트는 `freepasserp5`, Scheduler job 1개 + private Cloud Run 중계 서비스 1개다.
+오더3는 concrete transport/명령과 mock 검증까지다. 아래가 현재 rollout 기준이며 아래쪽 오더1의 App 설계는 역사 자료다. 토큰 발급·Secret 저장 절차는 경영지원실 소관으로 이 문서에 싣지 않는다.
 
-1. 기존 receipt 저장소의 create-only/CAS/owner semantics와 App 설치 상태를 확인한다. Secret Manager App key accessor, OIDC issuer/audience/SA 검증, 전체 writer run 조회(페이지 잘림 UNKNOWN), 재시도 없는 GitHub transport를 구현하고 staging fixture로 검증한다. pending/UNKNOWN 대사·수동 해제 절차와 복구 증거를 먼저 확정한다.
-2. App은 `freepass-creator/freepasserp4` 단일 저장소, Actions write + Metadata read. 중계 SA에는 해당 App key secret accessor와 **기존 비공개 receipt 저장소의 최소 권한만** 부여한다. GCS 구현 후보는 immutable receipt/outcome/completion prefix의 `storage.objects.create/get`, 단일 pending gate object의 `storage.objects.create/get/delete`를 리소스 조건으로 한정한다(list·bucket 관리·일반 receipt delete 금지). gate는 `ifGenerationMatch=0` 선점, 기록된 owner/run 및 정확한 generation에 대한 조건부 delete로만 해제한다. 확정 종료/미전송 증거를 먼저 create-only로 남긴다. Firestore/Sheets/ONE 접근 권한은 부여하지 않는다. 기존 bucket/prefix·CAS 구현·custom role은 승인 후 확정하며 지금 생성/변경하지 않는다.
-3. 승인된 image/region/SA를 고정한 뒤 `gcloud run deploy <relay> --project=freepasserp5 --region=<approved-region> --image=<reviewed-image> --service-account=<relay-sa> --no-allow-unauthenticated --max-instances=1 --concurrency=1`. 이 factory는 아직 배포 entrypoint가 아니므로 포트 wiring/entrypoint/image 검증 전 실행 불가.
-4. Scheduler SA에 이 서비스에만 `roles/run.invoker`, Scheduler service agent 기본 권한 유지. `gcloud scheduler jobs create http <job> --project=freepasserp5 --location=<approved-region> --schedule="2,17,32,47 * * * *" --time-zone=UTC --uri=<relay-url>/schedule --http-method=POST --message-body='{}' --oidc-service-account-email=<scheduler-sa> --oidc-token-audience=<relay-url>`는 승인 후에만 실행한다. jobName binding을 정확히 일치시킨다. 생성 직후 실행 가능하므로 승인 전 생성 금지; payload의 `iancar_apply=true`는 실제 반영이다.
-5. 첫 read-only 검증은 현재 고정 dispatch와 섞지 않는다. 별도로 검토된 `iancar_apply=false` validation artifact와 승인된 수동 검증 절차가 필요하다. 이 서비스는 요청 body로 모드를 바꿀 수 없다. 기존 ERP4 엔진·스케줄·writer 유지; 중복 전달, hourly admission 경합, 응답 유실, crash/pending, source stale/last-good, F01/F86/소비처 readback을 확인한 후에만 활성화한다. rollback은 새 Scheduler 중단과 pending 증거 보존이며 운영 writer 전환이 아니다.
+1. 독립 검토와 정상 환경 전체 `npm run check`를 완료한다. 이 환경에서는 기존 9개 테스트가 `uv_os_get_passwd ENOMEM`/jq 권한/로컬 서버 연결 오류로 실패했다. 새 transport를 포함한 전용 검사는 통과했지만 전체 통과나 운영 검증으로 확대하지 않는다.
+2. 중계의 환경변수 binding(audience·Scheduler SA email·jobName·기존 private evidence bucket·기존 단일 Secret 이름/버전)을 운영 담당자가 검증한다. 기본 열쇠는 고정 저장소 하나의 Actions 쓰기 전용 fine-grained PAT이며 `actionsToken` 포트가 메모리로 읽는다. 실제 권한 범위는 mock으로 증명되지 않는다. 중계에는 Firestore/Sheets/ONE 권한을 주지 않는다.
+3. 기존 bucket의 `iancar-relay/v1` namespace와 최소 권한을 검토하고, 별도 승인 환경에서 immutable receipt/outcome/completion의 create-only와 단일 pending 객체의 generation CAS를 검증한다. pending은 삭제하지 않고 빈 상태도 CAS로 기록하며 lease 만료가 없다. RESERVED/UNKNOWN 장기 보류와 응답 유실은 별도 대사 대상이다. 실제 GCS persistence·동시 인스턴스·장애 복구/수동 해제는 HOLD다.
+4. `serve:iancar:relay`의 image/startup·OIDC·정확한 repo/workflow run 조회·`return_run_details=true` 응답 계약을 승인된 환경에서 확인한다. 페이지 잘림/404/응답 run ID 누락은 UNKNOWN, dispatch 재시도는 없다. 현재 고정 입력은 실제 반영이므로 최초 read-only 검증에는 별도로 검토된 validation artifact가 필요하다. 배포/IAM/Scheduler 생성·설정·dispatch는 별도 승인 전 금지다.
+5. `source:aica:capture`의 승인된 탭/range binding과 읽기 권한, 원문 귀속·신선도·전체성 근거를 확인한다. 기본 출력은 counts/digest/issues뿐이다. `AICA_RAW_INGEST_APPROVED=true`와 `--apply-raw`가 함께 있어도 공통 RAW_READY 검사를 통과해야 기존 SourceIngestionStore 경로로 들어간다. 현재 Sheets reader는 FULL coverage를 증명하지 않으므로 실제 RAW 저장은 HOLD다.
+6. 아이언은 공개 화면 규칙과 대상 차량을 먼저 확정한다. `IRON_FETCH_APPROVED=true` 없이는 robots 요청도 하지 않는다. reader는 명시적인 wildcard 허용 robots만 보수적으로 수용하며 제한/미지원 규칙/조회 실패는 HOLD다. 승인 시에도 동시 2 이하·차량당 1회·명시 User-Agent·리다이렉트 금지를 유지한다. 실제 원문/요금/사진 귀속과 전체성 검증은 별도다.
+7. 기존 writer를 유지한 채 hourly admission 경합·중복 전달·crash/pending·source stale/last-good와 F01/F86/등록 소비처 readback을 별도 승인 후 검증한다. 중계 접수는 갱신 성공이나 native cutover 증거가 아니다. rollback은 새 Scheduler 중단과 pending 증거 보존이며 운영 writer 전환이 아니다.
 
 ### 오더 2 검증 기록
 

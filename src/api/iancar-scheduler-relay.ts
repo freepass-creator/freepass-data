@@ -32,11 +32,11 @@ export type IancarRelayPorts = {
      */
     releaseWithoutDispatch: (key: string) => Promise<void>;
   };
-  /** Read existing Secret Manager App key in memory; mint one installation token
+  /** Read one existing Secret Manager fine-grained PAT into memory; token is
    * scoped to IANCAR_DISPATCH.repository, Actions write + Metadata read only.
-   * No key value/config accepted through the HTTP request. No concrete transport here.
+   * No token value/config accepted through the HTTP request. No App minting required.
    */
-  installationToken: () => Promise<string>;
+  actionsToken: () => Promise<string>;
   /** ALL incomplete writer runs, including queued/waiting/pending hourly/watchdog.
    * A truncated page or failed read MUST return UNKNOWN, never IDLE.
    */
@@ -75,7 +75,7 @@ export function iancarRelayHandler(ports: IancarRelayPorts, expectedJobName: str
         return { status: 'DUPLICATE' as const, key };
       let token: string | undefined;
       const getToken = async () => {
-        token ??= await ports.installationToken();
+        token ??= await ports.actionsToken();
         if (!token || /\s/.test(token)) throw new Error('RELAY_AUTH_UNKNOWN');
         return token;
       };
@@ -99,8 +99,8 @@ export function iancarRelayHandler(ports: IancarRelayPorts, expectedJobName: str
         return { status: 'SKIPPED_BUSY' as const, key };
       }
       if (admission !== 'ACQUIRED') return unknown();
-      const installationToken = await getToken();
-      const runs = await ports.writerRuns(installationToken);
+      const actionsToken = await getToken();
+      const runs = await ports.writerRuns(actionsToken);
       if (runs === 'BUSY') {
         await ports.receipts.recordOutcome(key, 'SKIPPED_BUSY', null);
         await ports.receipts.releaseWithoutDispatch(key);
@@ -108,7 +108,7 @@ export function iancarRelayHandler(ports: IancarRelayPorts, expectedJobName: str
       }
       if (runs !== 'IDLE') return unknown();
       // No retry, including when response parsing, persistence or token transport fails.
-      const response = await ports.dispatch(installationToken, IANCAR_DISPATCH);
+      const response = await ports.dispatch(actionsToken, IANCAR_DISPATCH);
       if (response.status !== 'ACCEPTED' || !response.runId || !/^[1-9]\d*$/.test(response.runId)) return unknown();
       await ports.receipts.recordOutcome(key, 'ACCEPTED_PENDING', response.runId);
       return { status: 'ACCEPTED_PENDING' as const, key, runId: response.runId };
@@ -117,7 +117,7 @@ export function iancarRelayHandler(ports: IancarRelayPorts, expectedJobName: str
 }
 
 /** Cloud Run HTTP service factory. Nothing listens, reads secrets or dispatches on import.
- * Concrete receipt/OIDC/App ports and authorized deployment are separate rollout gates.
+ * Concrete receipt/OIDC/Actions-token ports and authorized deployment are separate rollout gates.
  */
 export function buildIancarRelayServer(ports: IancarRelayPorts, expectedJobName: string) {
   const server = Fastify({ logger: false, bodyLimit: 1024 });

@@ -55,7 +55,9 @@
     "source:iancar:direct": "tsx src/jobs/collect-iancar-direct.ts",
     "test:source:iancar:direct": "vitest run tests/iancar-direct-source.test.ts",
     "test:source:iancar:one-api": "vitest run tests/iancar-one-api.test.ts",
-    "source:iancar:one": "tsx src/jobs/collect-iancar-one-api.ts"
+    "source:iancar:one": "tsx src/jobs/collect-iancar-one-api.ts",
+    "source:aica:capture": "tsx src/jobs/collect-aica.ts",
+    "serve:iancar:relay": "tsx src/jobs/serve-iancar-relay.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",

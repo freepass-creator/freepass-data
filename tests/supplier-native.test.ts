@@ -193,7 +193,7 @@ function relayFixture() {
         if (pending !== key || outcomes.get(key)?.outcome !== 'SKIPPED_BUSY') throw new Error('wrong owner'); pending = null;
       }),
     },
-    installationToken: vi.fn(async () => 'fixture-installation-token'), writerRuns: vi.fn(async () => 'IDLE' as const),
+    actionsToken: vi.fn(async () => 'fixture-installation-token'), writerRuns: vi.fn(async () => 'IDLE' as const),
     runStatus: vi.fn(async () => 'INCOMPLETE' as const),
     dispatch: vi.fn(async () => ({ status: 'ACCEPTED' as const, runId: '1234' })),
   };
@@ -260,7 +260,7 @@ describe('RP031 scheduler relay port contract', () => {
       const fixture = relayFixture();
       fixture.ports.receipts[phase] = vi.fn(async () => { throw new Error('store unknown'); });
       expect(await fixture.handle(request())).toMatchObject({ status: 'UNKNOWN' });
-      expect(fixture.ports.installationToken).not.toHaveBeenCalled();
+      expect(fixture.ports.actionsToken).not.toHaveBeenCalled();
       expect(fixture.ports.dispatch).not.toHaveBeenCalled();
     }
   });
@@ -271,7 +271,7 @@ describe('RP031 scheduler relay port contract', () => {
       { body: { inputs: { apply: true } } }, { body: { ref: 'other' } }, { body: null }])
       expect(await fixture.handle({ ...request(), ...change })).toEqual({ status: 'INVALID_REQUEST' });
     expect(fixture.ports.receipts.createOnly).not.toHaveBeenCalled();
-    expect(fixture.ports.installationToken).not.toHaveBeenCalled();
+    expect(fixture.ports.actionsToken).not.toHaveBeenCalled();
   });
   it('serves only the private POST route and acknowledges UNKNOWN without reporting refresh success', async () => {
     const fixture = relayFixture(); fixture.ports.dispatch = vi.fn(async () => ({ status: 'UNKNOWN' as const }));

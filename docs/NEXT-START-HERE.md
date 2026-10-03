@@ -308,6 +308,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-03 오더3 — 중계 concrete ports와 아이카/아이언 transport (운영 미실행)
+
+- 목적/대상: PR #288 작업선 `work/freepass-data/supplier-native-fixes-20261003`, 시작 revision `b20cd2d6662a9587d87c66bd5af9b262de7d6c40`, 이 checkout만 수정. 로컬에서 `21f1511` ancestor 확인. 실 네트워크 금지에 따라 원격 main/Issue24/PR 재조회는 생략했다.
+- 사전점검: Academy READY. reuse 검색 뒤 기존 relay 계약·GCS audit REST 패턴·rich-grid reader·SourceIntakeBatch/ingestion runtime 재사용 판정. CREATE_NEW_JUSTIFIED: 기존 append-only audit store에는 pending CAS가 없고 concrete 포트/명령이 없어서 composition 모듈만 추가했다.
+- 변경: `iancar-relay-transport.ts` OIDC exact binding·기존 단일 Secret의 Actions PAT·GCS create-only/CAS pending·고정 GitHub fetch/UNKNOWN/무재시도, `serve-iancar-relay.ts` fail-closed 명령. 기존 `installationToken`은 `actionsToken`으로 변경. `collect-aica.ts` 기본 읽기 전용 counts/digest/issues 출력과 이중 승인/RAW_READY 경계, `iron-detail-reader.ts` 기본 비활성·robots 보수 검증·동시2·차량당1회. 새 Firebase app/persistence 경로 없음.
+- 검증: build PASS. 전용 `supplier-transports`17 + `supplier-native`28 + `source-intake`17 = **62 PASS**. 두 진입점 import 시 network/listen 없는 smoke PASS. 전체 `npm.cmd run check`는 **exit1, Vitest 1202 PASS / 9 FAIL / 14 SKIP**(마지막 mock 2개 추가 전) (Codex 샌드박스 환경 오류; Claude 정상 환경 재실행 exit0, Vitest 1213 PASS / 14 SKIP). arch/standards/data-access boundary/시트57/build/read-runtime6/shadow10/dashboard21 통과. 기존 실패4파일은 iancar-source-capture2/read-pilot4/runtime-policy2/vehicle-finder-route1이며 `uv_os_get_passwd ENOMEM`, jq Permission denied, localhost ECONNREFUSED다. 실패/skip을 완화하지 않았다.
+- 남음/HOLD: 정상 환경 전체 검사, 독립 검토(실 네트워크 금지로 외부 Claude 호출 미실행; 로컬 status만 확인), 실제 OIDC/GCS CAS·Secret/GitHub 응답 계약·권한 범위·image/startup·동시 writer admission, 아이카 FULL/fresh 증거 및 아이언 공개 규칙/실물 귀속. 실 공급사/GitHub 호출·운영 쓰기·IAM/Scheduler/Cloud Run/secret/var 변경·dispatch·ERP4 수정·commit/push 없음.
+- next_start_here: `docs/NATIVE-SOURCE-COLLECTOR.md`의 「운영 반영 전 남은 단계」와 `tests/supplier-transports.test.ts` → 정상 환경 check/독립 검토 → 별도 승인된 운영 검증. 이번 결과는 CODED/로컬 TESTED이며 PERSISTENCE/DEPLOYMENT/CUTOVER VERIFIED가 아니다.
+
 ### 2026-10-03 오더2 — 직접 연동 공급사 Data native 수리 (운영 미적용)
 
 - 목적/결정: ERP4 고정 엔진 최소 diff **미채택(Data native로 이관)**. 기존 `SourceIntakeBatch`/RAW 재사용, 두 번째 source store/writer 없음.
