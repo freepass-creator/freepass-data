@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {planSupplierInput,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec} from '../scripts/supplier-input-sheet.mjs';
+import {planSupplierInput,planSupplierDropdowns,planPolicySplit,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec} from '../scripts/supplier-input-sheet.mjs';
 const now=Date.parse('2026-10-03T12:00:00Z');
 const legacy=inputSpec.legacyLayouts['2026-10-02'];
 const sheet=(id,title,headers,grid={frozenRowCount:1,frozenColumnCount:0})=>({properties:{sheetId:id,title,gridProperties:{rowCount:1000,columnCount:headers.length,...grid}},data:[{rowData:[{values:headers.map(h=>({userEnteredValue:{stringValue:h}}))}]}]});
@@ -8,12 +8,14 @@ const shared=inputSpec.supplierChannels.sharedInputSheet;
 const fixture=()=>({capturedAt:new Date(now).toISOString(),binding:{spreadsheetId:'test',summarySheetId:1,guideSheetId:2,suppliers:shared.map((r,i)=>({sheetId:3+i,title:r.tab,code:r.code}))},sheetInventory:[1,2,...shared.map((_,i)=>3+i)].map(sheetId=>({sheetId})),spreadsheet:{spreadsheetId:'test',sheets:[sheet(1,'종합',inputSpec.summaryHeaders),sheet(2,'관리안내',['안내']),...shared.map((r,i)=>sheet(3+i,r.tab,inputSpec.inputHeaders))]}});
 const policyFixture=()=>{const f=fixture(),d=sheet(3,'웰릭스',legacy.inputHeaders);const h=legacy.inputHeaders,values=h.map(()=>({}));values[h.indexOf('차량번호')]={userEnteredValue:{stringValue:'TEST-1'}};values[h.indexOf('정책코드')]={userEnteredValue:{stringValue:'POL-01'}};d.data[0].rowData.push({values});return {runId:'test-run',capturedAt:f.capturedAt,suppliers:[{sheetId:3,sourceId:'source',sourceTab:'policy'}],destinations:[d],captures:[{sourceId:'source',sourceTab:'policy',complete:true,rows:[{values:['정책코드','추가주행 금액','정비'].map(stringValue=>({userEnteredValue:{stringValue}}))},{values:['POL-01','대여료의 10%','연2회오일'].map(stringValue=>({userEnteredValue:{stringValue}}))}]}]};};
 
-test('2026-10-03 layout: 30 vehicle/rate columns then 32 policy columns, no refinement or policy-code columns',()=>{
-  assert.equal(inputSpec.layoutVersion,'2026-10-03');
-  assert.equal(inputSpec.vehicleHeaders.length,30);assert.equal(inputSpec.policyHeaders.length,32);
+test('2026-10-03-split layout: 30 vehicle/rate columns then 41 one-fact policy columns, no refinement or policy-code columns',()=>{
+  assert.equal(inputSpec.layoutVersion,'2026-10-03-split');
+  assert.equal(inputSpec.vehicleHeaders.length,30);assert.equal(inputSpec.policyHeaders.length,41);
+  for(const h of inputSpec.policyHeaders)assert.ok(!h.includes('/')||h==='선불/후불',h);
+  assert.equal(inputSpec.legacyLayouts['2026-10-03'].inputHeaders.length,62);
   assert.deepEqual(inputSpec.inputHeaders,[...inputSpec.vehicleHeaders,...inputSpec.policyHeaders]);
   assert.deepEqual(inputSpec.summaryHeaders,inputSpec.inputHeaders);
-  assert.equal(new Set(inputSpec.inputHeaders).size,62);
+  assert.equal(new Set(inputSpec.inputHeaders).size,71);
   assert.deepEqual(inputSpec.inputHeaders.slice(0,7),['회사명','차량상태','상품구분','차량번호','제조사','세부모델','차명 원문']);
   assert.equal(inputSpec.vehicleHeaders.at(-1),'차량가격');
   assert.deepEqual(inputSpec.policyHeaders.slice(0,8),['예외사항','심사','보험료','기본연령','면허기간','연주행','1만km+','21세+']);
@@ -59,3 +61,32 @@ test('compare: plate-only legacy, duplicate legacy headers, duplicate or unbound
   const b=compareFixture();b.legacy[0].headers=[...legacyHeaders.slice(0,-1),'1개월'];assert.equal(compareSharedToLegacy(b,inputSpec,now).results[0].reason,'duplicate legacy headers');
   const c=compareFixture();c.legacy.push({...c.legacy[0]});assert.throws(()=>compareSharedToLegacy(c,inputSpec,now),/One legacy capture/);
   const d=fullLegacy(compareFixture());d.legacy[0].rows[1][d.legacy[0].headers.indexOf('상태')]='계약중';d.legacy.push({...d.legacy[0],code:'OTHER'});const e=compareSharedToLegacy(d,inputSpec,now);assert.deepEqual(e.unboundLegacy,['OTHER']);assert.equal(e.results[0].status,'IN_SYNC');assert.equal(e.status,'NOT_IN_SYNC');});
+test('dropdown setup: validation-only requests on supplier tabs, every column decided, summary untouched',()=>{const f=fixture(),before=JSON.stringify(f),p=planSupplierDropdowns(f,inputSpec,now);assert.equal(JSON.stringify(f),before);assert.equal(p.scope,'SUPPLIER_TAB_DATA_VALIDATION_ONLY');assert.ok(p.requests.every(r=>Object.keys(r).join()==='setDataValidation'&&r.setDataValidation.rule));assert.equal(p.requests.length,19*Object.keys(inputSpec.dropdowns).length);assert.ok(!p.requests.some(r=>r.setDataValidation.range.sheetId===1||r.setDataValidation.range.sheetId===2));assert.ok(p.requests.every(r=>r.setDataValidation.range.startRowIndex===1));
+  const col=h=>inputSpec.inputHeaders.indexOf(h),at=(h,id=3)=>p.requests.find(r=>r.setDataValidation.range.sheetId===id&&r.setDataValidation.range.startColumnIndex===col(h))?.setDataValidation;
+  assert.deepEqual(at('보험료').rule.condition.values.map(v=>v.userEnteredValue),['포함','불포함']);assert.equal(at('보험료').rule.strict,false);assert.equal(at('비고'),undefined,'free text untouched');assert.equal(at('계좌번호'),undefined);assert.deepEqual(at('대물면책').rule.condition.values.map(v=>v.userEnteredValue),['없음','30만원','50만원','100만원']);assert.ok(at('21세+').rule.condition.values.some(v=>v.userEnteredValue==='대여료의 10%'));
+  for(const h of inputSpec.inputHeaders)assert.ok(Boolean(inputSpec.dropdowns[h])!==inputSpec.dropdownPolicy.freeText.includes(h),h);
+  for(const [h,vals] of Object.entries(inputSpec.dropdownPolicy.existingValuesNotInList))for(const [v] of vals)assert.ok(!inputSpec.dropdowns[h].includes(v),h+v);
+  const g=fixture();g.spreadsheet.sheets[2].data[0].rowData[0].values.reverse();assert.throws(()=>planSupplierDropdowns(g,inputSpec,now),/LAYOUT_MISMATCH/);
+  assert.throws(()=>planSupplierDropdowns(fixture(),{...inputSpec,dropdowns:{...inputSpec.dropdowns,'보험료':undefined}},now),/dropdown or a free-text/);});
+const old=inputSpec.legacyLayouts['2026-10-03'].inputHeaders;
+const splitFixture=(cells={})=>{const f=fixture();f.spreadsheet.sheets=f.spreadsheet.sheets.map(sh=>{const id=sh.properties.sheetId;if(id===2)return sh;const t=sheet(id,sh.properties.title,old);t.properties.gridProperties={...t.properties.gridProperties,rowCount:id===1?1000:3,columnCount:62};if(id!==1){const row=o=>({values:old.map(h=>o[h]===undefined?{}:{userEnteredValue:{stringValue:o[h]}})});t.data[0].rowData.push(row(id===3?cells:{'대인/면책':'무한 / 50만원'}),row({}));}return t;});return f;};
+test('policy split: every observed value shape splits into one fact per cell',()=>{const cases=[['대인/면책','무한 / 50만원',['무한','50만원']],['대물/면책','10억원',['10억원','']],['자차/면책','차량가액 / 수리비 20% / 50~100만원',['차량가액','20%','50~100만원']],['자차/면책','차량가액 / 50~100만원',['차량가액','','50~100만원']],['자차/면책','50~100만원',['','','50~100만원']],['자손/면책','1천5백만원 / 30만원',['1천5백만원','30만원']],['무보험/면책','없음',['없음','']],['무보험/면책','없음 / 없음',['없음','없음']],['운전자범위','개인 계약자 본인 / 법인 대표자 본인',['계약자 본인','대표자 본인']],['추가운전','2인까지 / 무료',['2인까지','무료']],['승계','협의 / 100만원',['협의','100만원']],['승계','',['','']]];for(const [h,v,want] of cases)assert.deepEqual(splitPolicyValue(h,v),want,h+v);
+  for(const [h,v] of [['대인/면책','무한'],['대인/면책','무한 / 50만원 / 기타'],['자차/면책','수리비 20% / 50만원'],['자차/면책','차량가액'],['운전자범위','본인 / 임직원'],['추가운전','1인까지'],['대물/면책','1억원 /  / 50만원']])assert.throws(()=>splitPolicyValue(h,v),/HOLD/,h+v);});
+test('policy split plan: inserts columns right-to-left, rewrites headers and split cells only, regenerates summary; any unparsed cell holds everything',()=>{
+  const f=splitFixture({'자차/면책':'차량가액 / 수리비 20% / 50~100만원','운전자범위':'개인 본인 / 법인 임직원','보험료':'포함'}),before=JSON.stringify(f),p=planPolicySplit(f,inputSpec,now);assert.equal(JSON.stringify(f),before);
+  const ins=p.requests.filter(r=>r.insertDimension&&r.insertDimension.range.sheetId===3).map(r=>r.insertDimension.range.startIndex);assert.deepEqual(ins,[...ins].sort((a,b)=>b-a));assert.equal(ins.length,8);
+  const added=p.requests.filter(r=>r.insertDimension&&r.insertDimension.range.sheetId===3).reduce((n,r)=>n+r.insertDimension.range.endIndex-r.insertDimension.range.startIndex,0);assert.equal(added,9);
+  assert.ok(p.requests.every(r=>['insertDimension','updateCells','updateDimensionProperties','setDataValidation'].includes(Object.keys(r)[0])));
+  const dv=p.requests.filter(r=>r.setDataValidation&&r.setDataValidation.range.sheetId===3);assert.equal(dv.length,17);for(const r of dv){const h=inputSpec.inputHeaders[r.setDataValidation.range.startColumnIndex];assert.deepEqual(r.setDataValidation.rule.condition.values.map(v=>v.userEnteredValue),inputSpec.dropdowns[h],h);}
+  assert.ok(p.requests.findIndex(r=>r.setDataValidation)>p.requests.findLastIndex(r=>r.insertDimension&&r.insertDimension.range.sheetId===3),'validation after inserts');
+  const cellAt=(h,id=3)=>p.requests.find(r=>r.updateCells&&r.updateCells.start.sheetId===id&&r.updateCells.start.rowIndex===1&&r.updateCells.start.columnIndex===inputSpec.inputHeaders.indexOf(h))?.updateCells.rows[0].values[0].userEnteredValue?.stringValue;
+  assert.equal(cellAt('자차한도'),'차량가액');assert.equal(cellAt('자차수리비'),'20%');assert.equal(cellAt('자차면책'),'50~100만원');assert.equal(cellAt('개인운전자'),'본인');assert.equal(cellAt('법인운전자'),'임직원');assert.equal(cellAt('보험료'),undefined,'unsplit columns are not rewritten');
+  const written=p.requests.filter(r=>r.updateCells&&r.updateCells.start.sheetId===3&&r.updateCells.start.rowIndex===1);assert.ok(written.every(r=>r.updateCells.rows.length===1),'only up to the last non-empty row');
+  assert.ok(!p.requests.some(r=>r.updateCells&&r.updateCells.start.sheetId===3&&r.updateCells.start.rowIndex===1&&r.updateCells.start.columnIndex===inputSpec.inputHeaders.indexOf('대인한도')),'empty source column writes nothing');
+  const head=p.requests.find(r=>r.updateCells&&r.updateCells.start.sheetId===3&&r.updateCells.start.rowIndex===0).updateCells.rows[0].values.map(v=>v.userEnteredValue.stringValue);assert.deepEqual(head,inputSpec.inputHeaders);
+  const sum=p.requests.filter(r=>r.updateCells?.start.sheetId===1)[0].updateCells;assert.equal(sum.rows[0].values.length,71);assert.match(sum.rows[1].values[0].userEnteredValue.formulaValue,/'웰릭스'!A2:BS3/);assert.equal(p.requests.find(r=>r.insertDimension?.range.sheetId===1).insertDimension.range.endIndex,71);
+  const offList=splitFixture({'대인/면책':'무한 / 70만원'});assert.throws(()=>planPolicySplit(offList,inputSpec,now),e=>/POLICY_SPLIT_UNPARSED/.test(e.message)&&/드롭다운 목록 밖/.test(e.holds[0]));
+  const bad=splitFixture({'대인/면책':'무한'});assert.throws(()=>planPolicySplit(bad,inputSpec,now),e=>/POLICY_SPLIT_UNPARSED/.test(e.message)&&e.holds.length===1);
+  const formula=splitFixture();formula.spreadsheet.sheets[2].data[0].rowData[1].values[old.indexOf('승계')]={userEnteredValue:{formulaValue:'=A1'}};assert.throws(()=>planPolicySplit(formula,inputSpec,now),/POLICY_SPLIT_UNPARSED/);
+  const short=splitFixture();short.spreadsheet.sheets[2].properties.gridProperties.rowCount=10;assert.throws(()=>planPolicySplit(short,inputSpec,now),/full-height/);
+  assert.throws(()=>planPolicySplit(fixture(),inputSpec,now),/LAYOUT_MISMATCH/,'already split or other layout holds');});

@@ -58,6 +58,100 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
   if(mismatched.length)throw Object.assign(new Error(`HOLD: LAYOUT_MISMATCH — ${mismatched.length} tab(s) differ from spec layout ${spec.layoutVersion}; nothing is written`),{mismatched});
   return {status:drift.length?'LAYOUT_VERIFIED_WITH_PRESENTATION_DRIFT':'LAYOUT_VERIFIED',layoutVersion:spec.layoutVersion,scope:'MANUAL_SUPPLIER_INPUT_LAYOUT_VERIFY_ONLY_NOT_AUTOMATIC_SOURCE_REFRESH',spreadsheetId:binding.spreadsheetId,drift,requests:[]};
 }
+// One-time supplier input setup: dropdowns only. Runs the full verify gate
+// first, then emits a list setDataValidation for spec.dropdowns columns on
+// supplier tabs. Free-text columns are left as they are (existing rules kept).
+// No values, formats, rows, columns or the formula-driven summary tab are touched.
+export function planSupplierDropdowns(input, spec=inputSpec, now=Date.now()) {
+  const verified=planSupplierInput(input,spec,now);
+  const free=new Set(spec.dropdownPolicy?.freeText??[]);
+  const unknown=spec.inputHeaders.filter(h=>!spec.dropdowns?.[h]&&!free.has(h));
+  if(unknown.length)hold(`Every column needs a dropdown or a free-text decision: ${unknown.join(', ')}`);
+  const requests=[];
+  for(const sup of input.binding.suppliers){
+    const s=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);
+    const rows=s.properties.gridProperties.rowCount;
+    spec.inputHeaders.forEach((h,i)=>{
+      const list=spec.dropdowns[h];if(!list)return;
+      const range={sheetId:sup.sheetId,startRowIndex:1,endRowIndex:rows,startColumnIndex:i,endColumnIndex:i+1};
+      requests.push({setDataValidation:{range,rule:{condition:{type:'ONE_OF_LIST',values:list.map(userEnteredValue=>({userEnteredValue}))},strict:spec.dropdownStrict===true,showCustomUi:true}}});
+    });
+  }
+  return {status:'PLANNED',scope:'SUPPLIER_TAB_DATA_VALIDATION_ONLY',layoutVersion:verified.layoutVersion,spreadsheetId:verified.spreadsheetId,drift:verified.drift,requests};
+}
+// "One cell, one fact": split combined policy cells (2026-10-03 → -split).
+// Each combined value must match its exact shape or the whole plan holds;
+// nothing is guessed. Returns the parts in spec.policySplit.columns order.
+export function splitPolicyValue(header,value){
+  const v=typeof value==='string'?value.trim():value;
+  const n=(inputSpec.policySplit.columns[header]??[]).length;
+  if(!n)hold(`Not a split column: ${header}`);
+  if(v===''||v===undefined||v===null)return Array(n).fill('');
+  if(typeof v!=='string')hold(`Non-text value in ${header}`);
+  const parts=v.split(' / ').map(x=>x.trim());
+  if(parts.some(x=>x===''))hold(`Unparsed ${header}: ${v}`);
+  const money=/^[\d,.]+(만원|억원|원)(~[\d,.]+(만원|억원|원))?$|^[\d,.]+~[\d,.]+(만원|억원|원)$/;
+  switch(header){
+    case '대인/면책': case '자손/면책': case '추가운전': if(parts.length===2)return parts; break;
+    case '대물/면책': case '무보험/면책': case '승계': if(parts.length<=2)return [parts[0],parts[1]??'']; break;
+    case '운전자범위': {const m=/^개인 (.+)$/.exec(parts[0]??''),k=/^법인 (.+)$/.exec(parts[1]??'');if(parts.length===2&&m&&k)return [m[1],k[1]];break;}
+    case '자차/면책': {
+      const pct=/^수리비 (\d+%)$/;
+      if(parts.length===3&&pct.test(parts[1])&&!pct.test(parts[0])&&!pct.test(parts[2]))return [parts[0],pct.exec(parts[1])[1],parts[2]];
+      if(parts.length===2&&!pct.test(parts[0])&&!pct.test(parts[1]))return [parts[0],'',parts[1]];
+      if(parts.length===1&&money.test(parts[0]))return ['','',parts[0]];
+      break;}
+  }
+  hold(`Unparsed ${header}: ${v}`);
+}
+const columnLetter=index=>{let out='';for(index++;index;index=Math.floor((index-1)/26))out=String.fromCharCode(65+(index-1)%26)+out;return out;};
+// Moves the workbook from the pre-split layout to spec.layoutVersion: inserts
+// the extra columns (inheriting format from the left), rewrites headers, writes
+// the split parts, widens the summary tab and regenerates its stacking formula.
+export function planPolicySplit(input,spec=inputSpec,now=Date.now()){
+  const rule=spec.policySplit,from=spec.legacyLayouts?.[rule?.from];
+  if(!rule||!from)hold('Spec policySplit with legacy layout required');
+  // The workbook must still be on the pre-split layout; same verify gate.
+  planSupplierInput(input,{...spec,inputHeaders:from.inputHeaders,summaryHeaders:from.inputHeaders},now);
+  const oldH=from.inputHeaders,newH=spec.inputHeaders;
+  const cols=Object.keys(rule.columns).map(h=>({h,old:oldH.indexOf(h),parts:rule.columns[h]}));
+  if(cols.some(c=>c.old<0||c.parts.some(p=>!newH.includes(p))))hold('policySplit does not match layouts');
+  const requests=[],holds=[];let rowsRead=0;
+  for(const sup of input.binding.suppliers){
+    const s=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);
+    const block=s.data?.find(d=>(d.startRow??0)===0&&(d.startColumn??0)===0)?.rowData??[];
+    if(block.length!==s.properties.gridProperties.rowCount)hold(`${sup.title}: full-height capture required`);
+    const parsed=cols.map(c=>({...c,values:block.slice(1).map((r,i)=>{const cell=r.values?.[c.old];
+      if(cell?.userEnteredValue?.formulaValue){holds.push(`${sup.title} ${i+2}행 ${c.h}: 수식`);return null;}
+      const v=cell?.userEnteredValue?.stringValue??cell?.userEnteredValue?.numberValue??'';
+      try{const parts=splitPolicyValue(c.h,v);
+        // A split value outside the new dropdown list would show a warning; hold instead of guessing.
+        const off=parts.map((x,j)=>[c.parts[j],x]).filter(([p,x])=>x!==''&&!(spec.dropdowns?.[p]??[]).includes(x));
+        if(off.length){holds.push(`${sup.title} ${i+2}행 ${off.map(([p,x])=>`${p}=${x}`).join(', ')}: 드롭다운 목록 밖`);return null;}
+        return parts;}catch{holds.push(`${sup.title} ${i+2}행 ${c.h}: ${String(v).slice(0,40)}`);return null;}})}));
+    for(const c of [...cols].sort((a,b)=>b.old-a.old))if(c.parts.length>1)requests.push({insertDimension:{range:{sheetId:sup.sheetId,dimension:'COLUMNS',startIndex:c.old+1,endIndex:c.old+c.parts.length},inheritFromBefore:true}});
+    requests.push({updateCells:{start:{sheetId:sup.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))}],fields:'userEnteredValue'}});
+    for(const c of parsed)c.parts.forEach((p,j)=>{
+      const at=newH.indexOf(p);
+      // Rows after the last non-empty source cell stay empty already; write only up to it.
+      const last=c.values.findLastIndex(v=>v&&v.some(x=>x!==''));
+      if(last>=0)requests.push({updateCells:{start:{sheetId:sup.sheetId,rowIndex:1,columnIndex:at},rows:c.values.slice(0,last+1).map(v=>({values:[v&&v[j]!==''?{userEnteredValue:{stringValue:v[j]}}:{}]})),fields:'userEnteredValue'}});
+      requests.push({updateDimensionProperties:{range:{sheetId:sup.sheetId,dimension:'COLUMNS',startIndex:at,endIndex:at+1},properties:{pixelSize:spec.columnWidths[p]??spec.defaultColumnWidth},fields:'pixelSize'}});
+      // Inserted columns inherit the left column's validation; replace it with this column's own list (or clear it).
+      const list=spec.dropdowns?.[p],range={sheetId:sup.sheetId,startRowIndex:1,endRowIndex:s.properties.gridProperties.rowCount,startColumnIndex:at,endColumnIndex:at+1};
+      requests.push({setDataValidation:list?{range,rule:{condition:{type:'ONE_OF_LIST',values:list.map(userEnteredValue=>({userEnteredValue}))},strict:spec.dropdownStrict===true,showCustomUi:true}}:{range}});
+    });
+    rowsRead+=Math.max(0,block.length-1);
+  }
+  if(holds.length)throw Object.assign(new Error(`HOLD: POLICY_SPLIT_UNPARSED — ${holds.length} cell(s); nothing is written`),{holds});
+  const summary=input.spreadsheet.sheets.find(x=>x.properties.sheetId===input.binding.summarySheetId);
+  const width=summary.properties.gridProperties.columnCount;
+  if(width<newH.length)requests.push({insertDimension:{range:{sheetId:summary.properties.sheetId,dimension:'COLUMNS',startIndex:width,endIndex:newH.length},inheritFromBefore:true}});
+  const last=columnLetter(newH.length-1);
+  const stack=input.binding.suppliers.map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
+  requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
+  return {status:'PLANNED',scope:'POLICY_COLUMN_SPLIT_VALUES_HEADERS_SUMMARY',from:rule.from,to:spec.layoutVersion,tabs:input.binding.suppliers.length,rowsRead,requests};
+}
 // Source policies stay in their original units. Blank/duplicate codes never
 // select a generic default. No inventory/monetary field is normalized here.
 // Historical one-time migration for the 2026-10-02 layout (matched by 정책코드).
@@ -184,5 +278,5 @@ export function compareSharedToLegacy({shared,legacy,binding},spec=inputSpec,now
   return {status:results.every(r=>r.status==='IN_SYNC')&&!unboundLegacy.length?'ALL_IN_SYNC':'NOT_IN_SYNC',scope:'COMPARE_ONLY_VEHICLE_RATE_FIELDS_NO_WRITES_POLICY_NOT_COMPARED',layoutVersion:spec.layoutVersion,summary,unboundLegacy,notCompared,results};
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
-  try {const compare=process.argv.find(a=>a.startsWith('--compare='))?.slice(10);if(compare){console.log(JSON.stringify(compareSharedToLegacy(JSON.parse(fs.readFileSync(compare,'utf8'))),null,2));}else{const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json or --compare=private-compare.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}
+  try {const split=process.argv.find(a=>a.startsWith('--split='))?.slice(8);if(split){console.log(JSON.stringify(planPolicySplit(JSON.parse(split==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(split,'utf8'))),null,2));process.exit(0);}const dropdowns=process.argv.find(a=>a.startsWith('--dropdowns='))?.slice(12);const compare=process.argv.find(a=>a.startsWith('--compare='))?.slice(10);if(dropdowns){console.log(JSON.stringify(planSupplierDropdowns(JSON.parse(dropdowns==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(dropdowns,'utf8'))),null,2));}else if(compare){console.log(JSON.stringify(compareSharedToLegacy(JSON.parse(fs.readFileSync(compare,'utf8'))),null,2));}else{const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json or --compare=private-compare.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}
 }
