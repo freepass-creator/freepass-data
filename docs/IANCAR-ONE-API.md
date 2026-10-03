@@ -34,7 +34,7 @@ reviewed Canonical Product · Offer · Policy · Photo reference
 ERP.com · Admin · 필요한 FreePass 소비처
 ```
 
-RP031의 Google Sheet/F54/F86, 과거 로그인 `/api/inventory`, ERP4 DOM/요금 스크랩은 앞으로 **원천 authority가 아니다**. ONE API 전환 검증 후 비교·이력 외 fallback으로 사용하지 않는다.
+RP031 재고 정본은 이안카 시스템 하나다(2026-10-04 사용자 결정). ONE API가 기본이고, ONE API가 막히면 같은 ERP의 로그인 `/api/inventory`를 기존 열쇠로 대체 사용한다([대체 순서](IANCAR-SOURCE-CAPTURE.md)). Google Sheet(`이안카_프리패스`)/F54/F86과 ERP4 DOM/요금 스크랩은 **원천 authority가 아니며** fallback으로도 쓰지 않는다.
 
 ## 공식 조회 API
 
@@ -76,6 +76,14 @@ Authorization: Bearer <API key>
 `vehicle_id`는 차량번호와 별개의 고정 ID다. FreePass Data의 원천 레코드 키는 차량번호가 아니라 이 provider stable ID를 사용하고 차량번호는 사실 필드로 보존한다.
 
 원천 갱신 기준은 15분이다. `stale=true`이면 신규 대여 가능으로 표시하지 않는다. 페이지별 `synced_at`이 서로 다르거나 전체 행 수가 `pagination.total`과 다르면 FULL source head로 승격하지 않는다.
+
+### 운영 기준 — 2026-10-04 사용자 결정
+
+- **정본:** 이안카 재고는 이안카 시스템 하나만 본다. ONE API가 기본이고, ONE API가 막히면 같은 ERP의 우리 계정 로그인 `/api/inventory`를 기존 열쇠로 대체 사용한다([대체 순서](IANCAR-SOURCE-CAPTURE.md)). 공급사 원본 구글 시트(`이안카_프리패스`)·F54는 출처가 아니다.
+- **신선도 15분 유지:** 공급사 `stale=true` 또는 `synced_at`이 15분을 넘으면 그 회차는 HOLD하고 마지막 정상 자료를 그대로 둔다. 기준을 늘리지 않는다 — 오래된 재고를 출고 가능으로 보여 주는 위험이 더 크다. 우리 기준만 늘려도 공급사가 직접 다는 `stale=true` 때문에 막히므로 효과도 없다.
+- **10-03 관측:** 공급사 `syncedAt`(UTC) 04:55 → 05:13 → 06:34 → 07:36 → 08:44 → 14:29 → 14:56. 갱신 간격 20~60분, 08:44~14:29(한국시간 17:44~23:29) 약 6시간 공백. 같은 날 대체 출처(원본 시트 09-23 수정, 공개 사이트·로그인 경로는 같은 ERP)를 조사했으나 더 최신 출처는 없었다.
+- **공급사 문의:** 갱신 주기·공백 사유 문의를 확인 동선용으로 준비했다. 발송은 대표 확인 뒤(2026-10-04 기준 미발송). 답을 받으면 신선도 기준을 다시 판단한다.
+- **실패 원인 구분:** 사진 상세 검증 오류를 `IANCAR_PHOTO_IDENTITY_MISMATCH` / `IANCAR_PHOTO_DETAIL_STALE` / `IANCAR_PHOTO_LIST_MISSING` / `IANCAR_PHOTO_LIMIT_EXCEEDED` 네 코드로 나눴다([#293](https://github.com/freepass-creator/freepass-data/pull/293)). 운영 로그에 찍히려면 ERP4가 고정한 Data 실행기 버전을 올려야 한다.
 
 재고 상태는 `AVAILABLE / RESERVED / RENTED / PREPARING / UNAVAILABLE`을 그대로 보존한다. `available_from=null` 등 미확인 값은 추정하지 않는다.
 
@@ -174,7 +182,7 @@ RAW 적재는 Canonical 발행이나 ERP.com 전환을 의미하지 않는다.
 4. 차량 상세·요금·계약조건 schema를 값이 없는 shape 보고서로 확인한다.
 5. allowlist 기반 Canonical mapper를 확정한다.
 6. ONE API → Data Canonical → ERP.com/Admin의 같은 vehicle_id/상태/기간·거리별 요금 readback을 대사한다.
-7. 대사 후 RP031의 Sheet/login/ERP4 fallback을 종료한다.
+7. 대사 후 RP031의 Sheet/ERP4 fallback을 종료한다. 로그인 `/api/inventory`는 ONE API가 막힐 때만 쓰는 대체 경로로 남긴다(2026-10-04 사용자 결정).
 8. 이후 Data-owned scheduler에서 15분 freshness 기준으로 수집/감시한다.
 
 사용자가 최종 결정한 운영 기준은 **ONE API → FreePass Data → ERP 직접 연동**이다. 이안카 시트를 다시 운영 원천으로 승격하지 않는다.

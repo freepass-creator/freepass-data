@@ -367,6 +367,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 이안카 정본 = 이안카 시스템 하나
+
+- 목적/결정: 대표 직접 결정(AI 상황실 전달) — 이안카 재고는 이안카 시스템(ONE API + 우리 계정 로그인 `/api/inventory`)만 본다. 공급사 원본 Google Sheet(`이안카_프리패스`)·F54는 이안카 출처로 쓰지 않는다.
+- 조사 근거: 원본 시트 Drive 수정 2026-09-23(10일 경과), 로그인 `/api/inventory`는 ONE API와 같은 `syncedAt`/`stale`(같은 ERP 동기화), 공개 사이트는 ONE API와 같은 호스트이고 robots.txt가 AI 수집기를 거부. 더 최신인 대체 출처 없음.
+- 변경: `src/adapters/iancar-source-capture.ts`에서 운영 호출처 없던 ERP+Sheet 묶음 캡처와 Sheet ID/탭 상수 제거(로그인 ERP 읽기·RAW 배치는 유지), 관련 시험 정리. [IANCAR-SOURCE-CAPTURE.md](IANCAR-SOURCE-CAPTURE.md)에 정본·대체 순서(ONE API → 막히면 로그인 경로, 기존 열쇠만), [IANCAR-ONE-API.md](IANCAR-ONE-API.md) authority 문장 갱신.
+- 운영 변경 없음. 신선도 15분·공급사 stale HOLD 규칙은 그대로(AI 상황실 결정: 규칙 변경 안 함, HOLD 시 마지막 정상값 유지).
+- next_start_here: ONE API 장애가 이어질 때만 로그인 경로 대체를 별도 승인으로 연결한다.
+
 ### 2026-10-03 공급사 중계 job-name 호환 수정 — 로컬 검증 일부 HOLD
 
 - 목적/대상 revision: `work/freepass-data/supplier-relay-jobname-fix-b-20261003`, `10a729f22799eda8b8f90f01ba993b10c6f09d27`. Academy READY. 네트워크·배포·push·커밋 없이 기존 구현 확장.
@@ -501,7 +509,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 - 최신 사용자 결정/연결: 제공한 기존 키 그대로 사용 승인. `freepasserp5/freepass-data-iancar-one-api` version 1 enabled 등록 및 공식 API 실제 클라이언트 조회 exit 0 확인. 전체 108 / AVAILABLE 101 / UNAVAILABLE 4 / PREPARING 2 / RESERVED 1, 상세/재고/요금/사진 샘플 성공. 상세 증거와 다음 미완료 경계는 [ONE API 실제 연결 확인](IANCAR-ONE-API.md)에서 확인한다. 아래 키 미주입·재발급 경계는 이 결정 이전 이력이며 현재 blocker는 Canonical mapping/writer/consumer 검증이다.
 
-- 목적: 온라인 main의 공식 ONE API 구현(PR #269)을 기존 로컬 Work에 통합한다. 다음 원천 수집 시작점은 `docs/IANCAR-ONE-API.md`와 `npm run source:iancar:one`이며 아래 로그인 transport 기록은 과거 준비 이력이다. `/api/inventory` 및 로그인 수집을 운영 fallback으로 활성화하지 않는다.
+- 목적: 온라인 main의 공식 ONE API 구현(PR #269)을 기존 로컬 Work에 통합한다. 다음 원천 수집 시작점은 `docs/IANCAR-ONE-API.md`와 `npm run source:iancar:one`이며 아래 로그인 transport 기록은 과거 준비 이력이다. `/api/inventory` 로그인 수집은 ONE API와 상시 병행하지 않는다. ONE API가 막힐 때만 대체 경로로 쓴다(2026-10-04 사용자 결정, [대체 순서](IANCAR-SOURCE-CAPTURE.md), 연결은 별도 승인).
 - 키 위치 확인: 사용자가 온라인 채팅 `기타 접속 여부 확인`에 제공한 키를 확인했다. 키 값은 파일/Git/로그에 복제하지 않았다. 현재 Data GitHub secret, ERP bridge secret 이름, `freepasserp5` Secret Manager metadata, 로컬 process/user/machine 환경변수에는 공식 ONE 키 binding이 확인되지 않았다. 채팅 노출 키는 재발급 후 서버 비밀 저장소 주입이 필요하다.
 - 남음: 새 키의 안전한 runtime binding, 실제 목록/상세/재고/요금/사진 read-only 검증, reviewed Canonical mapping, ERP/운영시트 readback. 코드 동기화는 운영 전환이 아니다.
 - 검증: `origin/main@e6db81c67368cb4353c07f64aa0560d6ac0b857a`의 ONE adapter/job은 로컬과 diff 0. ONE API 10 + direct source 10 + capture/availability 35 = 관련 테스트 55 PASS, build/architecture/data-access-boundary/diff-check PASS. 실제 collector는 키 미주입 `EANCAR_ONE_API_KEY_REQUIRED`로 중단됨을 확인했으며 외부 API/운영 데이터를 조회하거나 수정하지 않았다. 기존 노출 키 재사용 여부 또는 재발급 키 binding이 다음 승인/입력 경계다.
@@ -509,7 +517,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ## 2026-09-30 운영 시트 반영 승인 — ERP 로그인 접근 HOLD
 
 - 사용자 직접 승인: `운영시트도 바꿔 얼른`. 이안카 범위 반영 승인은 받았으며 같은 수정 승인을 다시 요청하지 않는다. Academy operations READY, 대상 `430b43c`.
-- 현재 원본 재조회: `이안카_프리패스`의 `이안카` 60행 / `이안카 재렌트` 59행, 두 탭 metadata/CellData 전체 기존 범위 확인. 수식/chip/dataValidation 0. 실제 status는 배차가능 118 / 상품화 진행중 1. F01 상품리스트 433, F86 이안카 223은 현재 출력이며 원천 정합성 PASS가 아님.
+- (당시 기록 — 2026-10-04부터 이 시트는 이안카 출처 아님) 원본 재조회: `이안카_프리패스`의 `이안카` 60행 / `이안카 재렌트` 59행, 두 탭 metadata/CellData 전체 기존 범위 확인. 수식/chip/dataValidation 0. 실제 status는 배차가능 118 / 상품화 진행중 1. F01 상품리스트 433, F86 이안카 223은 현재 출력이며 원천 정합성 PASS가 아님.
 - 실제 blocker: supplier `/api/inventory` HTTP 403. 기존 연결의 credential은 ERP bridge GitHub secret에만 있으며 이 PC의 process/user/machine env 및 연결 worktree의 정해진 계정 파일에서 찾지 못함. Chrome 신규 supplier 페이지는 로그인 세션 없음. 비밀번호 추출/공개 로그/공개 artifact 우회 금지.
 - 아직 수행하지 않음: 운영 Sheet/Firestore 쓰기, 원본 백업 생성, publisher 재발행. 원본 ERP를 못 읽은 상태에서 새 값이나 출고불가를 추정하지 않았다. 기존 collector의 partial-inventory absence→출고불가 및 clear/rewrite 경로를 그대로 실행하지 않는다.
 - next_start_here: 사용자에게 Chrome supplier 로그인 화면 인계. 로그인 후 인증된 현재 원본을 확보하고 필드·기간·약정거리·관측 범위를 고정 → source/Sheet/중앙 신규·변경 대사 → private backup → 해당 수정 범위만 patch → 중앙/시트/ERP 실제 readback. 쓰기 전에 각 대상 원본을 새로 읽는다. source hostname 이동은 관측 사실이며 credential을 새 host로 전송하기 전 actual endpoint/권한을 검증한다.
@@ -1327,7 +1335,7 @@ Before each new change:
 This file exists so another session can continue without re-discovering or re-creating the project.
 # 2026-09-28 Iancar policy/source recovery
 
-- Source SSOT: `이안카_프리패스` tabs `이안카`, `이안카 재렌트`; 119 unique plates.
+- (당시 기준 — 2026-10-04 폐기: 이안카 정본은 이안카 시스템이며 이 시트는 출처가 아니다) Source SSOT: `이안카_프리패스` tabs `이안카`, `이안카 재렌트`; 119 unique plates.
 - F54 backup: Drive file `1LwgzNLWI9hENYeJ5q7TTQ5wkyyFDVpowUJO0fTFpiNk`.
 - F54 policy split: `RP031_S01..S04` = 5/10/15/25만원; matched inventory counts 62/35/18/4.
 - Firestore apply run: `2026-09-27T16-37-05-835Z-766258c0-376b-4225-9691-f87303bb953e`; local private rollback evidence retained.
