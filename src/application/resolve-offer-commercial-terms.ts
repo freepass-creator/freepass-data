@@ -1,4 +1,5 @@
 import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
+import type { CommissionInput } from './kakao-catalog-reference.js';
 import { KAKAO_COMMISSION_POLICY, resolveSalesCommission, resolveSupplierBillingFee } from './kakao-catalog-reference.js';
 import type {
   DepositResolution,
@@ -19,6 +20,7 @@ export function precomputeOfferEconomics(
   offer: Pick<Offer, 'id' | 'supplierId' | 'priceTerms'>,
   commercialType?: CommercialType,
   fuel?: string | null,
+  evidenceByTerm: Readonly<Record<string, Partial<Pick<CommissionInput, 'vehicleValue' | 'newProductSubtype' | 'depositTierPercent' | 'subscriptionForm' | 'q12Basis' | 'individualException'>>>> = {},
 ): OfferTermEconomics[] {
   const productType = commercialType ? ({
     NEW_RENT: '신차렌트', USED_RENT: '중고렌트', NEW_SUBSCRIPTION: '신차구독',
@@ -29,13 +31,14 @@ export function precomputeOfferEconomics(
   const policyRef = `${source.repository}@${source.revision}:${source.path}`;
   return offer.priceTerms.map((term) => {
     const priceRef = `catalog_offers/${offer.id}/priceTerms/${term.termKey}`;
-    const args = { supplierId: offer.supplierId, productType, fuel: fuel ?? '',
+    const args = { ...evidenceByTerm[term.termKey], supplierId: offer.supplierId, productType, fuel: fuel ?? '',
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
       const base = { ruleId: result.ruleId, policyId: policy.policyId,
-        sourceRefs: [policyRef, priceRef] };
+        sourceRefs: [policy.currentAuthority, policyRef, priceRef, ...(args.q12Basis?.sourceRef ? [args.q12Basis.sourceRef] : [])],
+        vatTreatment: result.vatTreatment, vatAmount: result.vatAmount, totalAmount: result.totalAmount };
       const unknown = (reasonCode: string): TermEconomicAmount => ({ ...base,
-        state: 'UNKNOWN', amount: null, calculation: null, reasonCode });
+        state: 'UNKNOWN', amount: null, calculation: null, vatAmount: null, totalAmount: null, reasonCode });
       if (!productType) return unknown('PRODUCT_TYPE_REQUIRED');
       if (policy.exceptionSupplierIds.iancar.includes(offer.supplierId as 'RP004') && !fuel?.trim()) {
         return unknown('FUEL_REQUIRED_FOR_SUPPLIER_RULE');
@@ -44,9 +47,10 @@ export function precomputeOfferEconomics(
           term.monthlyRent.currency !== 'KRW' || !Number.isSafeInteger(args.monthlyRent) || args.monthlyRent < 0) {
         return unknown('INVALID_PRICE_TERM_INPUT');
       }
+      if (result.state === 'NOT_APPLICABLE') return { ...base, state: 'NOT_APPLICABLE', amount: null, calculation: null, reasonCode: result.reasonCode };
       if (result.state === 'COORDINATION_REQUIRED') return unknown('COORDINATION_REQUIRED');
       if (result.state !== 'CALCULATED' || result.amount === null) return unknown(result.reasonCode ?? 'NO_MATCHING_RULE');
-      if (result.vatTreatment !== 'EXCLUDED') return unknown('SUPPLY_AMOUNT_EXCLUDING_VAT_REQUIRED');
+
       let calculation: TermEconomicAmount['calculation'];
       if (result.ruleId?.endsWith('_RENT_X_TERM')) {
         // Read rates from the same policy table, including the Switch ladder alias.

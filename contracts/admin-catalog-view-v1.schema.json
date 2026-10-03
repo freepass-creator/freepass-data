@@ -788,6 +788,9 @@
         "sourceRefs"
       ],
       "properties": {
+        "vatTreatment": {"enum": ["EXCLUDED", "INCLUDED", "UNKNOWN"]},
+        "vatAmount": {"type": ["integer", "null"], "minimum": 0},
+        "totalAmount": {"type": ["integer", "null"], "minimum": 0},
         "state": {
           "enum": [
             "KNOWN",

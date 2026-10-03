@@ -320,6 +320,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 남음: 아이언 실제 요금/사진 증거, 아이카 누락·미매칭 대사, 5곳 term별 청구/지급 수수료·정책 효력 연결, native transport, Scheduler 실검증, 운영 Firestore/Sheets·IAM·Scheduler·var/secret·dispatch 변경0, ERP4 수정0, commit/push0.
 - next_start_here: 위 native collector 절의 근거·최소 diff 제안·공급사별 필요한 것부터 검토한다. 원본 rich link를 보존하는 Data reader와 원천 기간 tuple 보존을 기존 RAW 계약으로 연결할 범위를 결정하고, 이 PR은 진단·설계 문서만 머지한다. 이번 결과를 운영 수리/15분 갱신 완료로 표시하지 않는다.
 
+### 2026-10-03 수수료 확정 규칙·VAT 공급가액 — 미커밋 인계
+
+- 목적: 대표 결정 및 같은 날 `commission-research.md` ①③④에 따라 기간별 계산에 확정 규칙 적용. 정본은 `sales-commission-2026-10-03`, 09-28 근거는 이력 보존.
+- 대상 revision: `8cc49bb0921d036fa87185808a96661ae2967972`, `work/freepass-data/term-economics-precompute-20261003`. 사용자가 Git 쓰기를 금지했으므로 커밋·fetch·병합하지 않음. 운영 데이터 쓰기 및 비밀키 탐색 없음.
+- 변경: 스타/스카이 재렌트 실계산, 퍼시픽 차량가액·계약 보증금 등급, 손오공 Q12 출처·형태·기간 가산, 원 반올림·VAT 분리, 아이언 선출고, 마음카 제외. 기간별 저장과 Canonical/Admin/Kakao 스키마 연동. 상세 입력과 ERP 차이는 `READ-RUNTIME.md` 수수료 연동 기준.
+- 검증: 관련 5파일 88테스트 PASS. 최종 `npm.cmd run check`: 구조·규격·데이터 경계·build PASS, Node 테스트 104 PASS, Vitest 1186 PASS / 9 FAIL / 14 SKIP. 9개 실패는 tsx 실행 시 `uv_os_get_passwd ENOMEM` 계열 7개, jq 실행 권한 1개, 로컬 서버 `ECONNREFUSED` 1개. 별도 `node --import tsx -e`만으로 ENOMEM 재현. 전체 검사 PASS로 간주하지 않음. 로그: `%TEMP%/freepass-commission-check-final.log`.
+- 남음: Claude 독립 검토 `FAILED / CLAUDE_PROCESS_FAILED`로 UNAVAILABLE. GitHub Issue #24/현재 PR 조회는 네트워크 차단. 배포·운영 재계산 없음. 계약 등급·Q12 근거 수집은 기존 자동 저장 호출에 없으므로 해당 상품 UNKNOWN 유지.
+- next_start_here: Claude가 미커밋 diff와 조사표를 독립 검토하고 실행환경 제약 없는 곳에서 전체 check 재실행 후 커밋. ERP `settlement-fee-table.ts`는 이번 변경 대상이 아님.
+
 ### 2026-10-03 기간별 수수료 Canonical 선계산 / Admin 내부 읽기
 
 - 목적/대상 revision: `work/freepass-data/term-economics-precompute-20261003`, 기준 `e4dcee5446e70f7342f1bcdc25b170d8aca077d0`. 지정 worktree만 수정, 운영 Firestore/시트 쓰기·push 없음.

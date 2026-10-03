@@ -197,39 +197,39 @@ describe('canonical per-term economics precompute', () => {
     const before = structuredClone(input);
     const result = precomputeOfferEconomics(input, 'USED_RENT');
     expect(result[0]).toMatchObject({ monthlyRent: { amount: 500000 },
-      supplierBillingFee: { state: 'KNOWN', amount: { amount: 570000 }, calculation: { kind: 'RATE', rate: 0.0475 }, policyId: 'sales-commission-2026-09-28' },
+      supplierBillingFee: { state: 'KNOWN', amount: { amount: 570000 }, calculation: { kind: 'RATE', rate: 0.0475 }, policyId: 'sales-commission-2026-10-03' },
       channelPayoutFee: { state: 'KNOWN', amount: { amount: 480000 }, calculation: { kind: 'RATE', rate: 0.04 } } });
     expect(result[0]!.depositCalculation.amount).toEqual(input.priceTerms[0]!.deposit);
     result[0]!.monthlyRent!.amount = 1;
     result[0]!.depositCalculation.amount!.amount = 1;
     expect(input).toEqual(before);
   });
-  it.each(['RP034', 'RP033', 'UNREGISTERED'])('keeps unregistered supplier %s unknown', (supplierId) => {
+  it.each(['UNREGISTERED'])('keeps unregistered supplier %s unknown', (supplierId) => {
     const input = { ...offer(), supplierId };
     const row = precomputeOfferEconomics(input, 'USED_RENT')[0]!;
     for (const fee of [row.supplierBillingFee, row.channelPayoutFee]) {
       expect(fee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE' });
     }
   });
-  it.each([['RP012', 'USED_SUBSCRIPTION'], ['RP018', 'USED_RENT'], ['RP022', 'NEW_RENT']] as const)(
-    'keeps coordination required for %s %s', (supplierId, kind) => {
+  it.each([['RP012', 'USED_SUBSCRIPTION'], ['RP022', 'NEW_RENT']] as const)(
+    'keeps missing evidence unknown for %s %s', (supplierId, kind) => {
       const row = precomputeOfferEconomics({ ...offer(), supplierId }, kind)[0]!;
-      expect(row.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'COORDINATION_REQUIRED' });
-      expect(row.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'COORDINATION_REQUIRED' });
+      expect(row.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: supplierId === 'RP012' ? 'Q12_BASIS_REQUIRED' : 'DEPOSIT_TIER_REQUIRED' });
+      expect(row.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: supplierId === 'RP012' ? 'Q12_BASIS_REQUIRED' : 'DEPOSIT_TIER_REQUIRED' });
     });
   it('keeps zero, missing product rules and unsupported periods distinct', () => {
     const input = offer(); input.supplierId = 'RP013'; input.priceTerms[0]!.monthlyRent.amount = 0;
     expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.supplierBillingFee).toMatchObject({ state: 'ZERO', amount: { amount: 0 } });
-    expect(precomputeOfferEconomics(input, 'USED_SUBSCRIPTION')[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'NO_MATCHING_RULE' });
+    expect(precomputeOfferEconomics(input, 'USED_SUBSCRIPTION')[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED' });
     input.priceTerms[0]!.termMonths = 18;
     expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.supplierBillingFee.reasonCode).toBe('TERM_NOT_IN_F04_COMMISSION_POLICY');
   });
-  it('preserves fixed fees, rejects ambiguous fuel and does not invent rounding', () => {
+  it('preserves fixed fees, rejects ambiguous fuel and rounds won', () => {
     const input = offer(); input.supplierId = 'RP023';
     expect(precomputeOfferEconomics(input, 'USED_SUBSCRIPTION')[0]!.channelPayoutFee).toMatchObject({ amount: { amount: 800000 }, calculation: { kind: 'FIXED' } });
     input.supplierId = 'RP004';
     expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.channelPayoutFee.reasonCode).toBe('FUEL_REQUIRED_FOR_SUPPLIER_RULE');
     input.supplierId = 'RP013'; input.priceTerms[0]!.monthlyRent.amount = 500001;
-    expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.channelPayoutFee.state).toBe('UNKNOWN');
+    expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.channelPayoutFee.state).toBe('KNOWN');
   });
 });

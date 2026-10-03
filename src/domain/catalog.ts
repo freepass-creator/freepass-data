@@ -38,6 +38,9 @@ export type TermAmountCalculation =
   | { kind: 'MULTIPLY'; base: 'MONTHLY_RENT'; multiplier: number }
   | { kind: 'RATE'; base: 'MONTHLY_RENT_X_TERM' | 'VEHICLE_PRICE'; rate: number };
 export type TermEconomicAmount = {
+  vatTreatment?: 'EXCLUDED' | 'INCLUDED' | 'UNKNOWN';
+  vatAmount?: number | null;
+  totalAmount?: number | null;
   state: TermAmountState;
   amount?: Money | null;
   calculation?: TermAmountCalculation | null;
