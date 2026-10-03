@@ -4,6 +4,19 @@ import { fileURLToPath } from 'node:url';
 import { specification } from './sheet-presentation.mjs';
 export const inputSpec = JSON.parse(fs.readFileSync(new URL('../contracts/supplier-input-sheet-spec.v1.json', import.meta.url), 'utf8'));
 const hold = message => { throw new Error(`HOLD: ${message}`); };
+// Only suppliers registered for the shared sheet may be bound, with the exact
+// code↔tab pairing. ERP/homepage/API suppliers are never shared-sheet tabs.
+const registered = (suppliers, spec, requireAll) => {
+  const list=spec.supplierChannels?.sharedInputSheet??[];
+  if(!list.length)hold('Spec supplierChannels.sharedInputSheet required');
+  const excluded=suppliers.filter(s=>(spec.supplierChannels.notInSharedSheet??[]).some(r=>r.code===s.code||r.name===s.title));
+  if(excluded.length)hold(`Direct/own-sheet supplier is excluded from the shared sheet: ${excluded.map(s=>`${s.title}/${s.code}`).join(', ')}`);
+  const bad=suppliers.filter(s=>!list.some(r=>r.code===s.code&&r.tab===s.title));
+  if(bad.length)hold(`Unregistered or mismatched supplier tab: ${bad.map(s=>`${s.title}/${s.code}`).join(', ')}`);
+  const missing=list.filter(r=>!suppliers.some(s=>s.code===r.code));
+  if(requireAll&&missing.length)hold(`Registered supplier tabs not bound: ${missing.map(r=>r.tab).join(', ')}`);
+  return missing;
+};
 const headersOf = sheet => sheet.data?.find(d=>(d.startRow??0)===0&&(d.startColumn??0)===0)?.rowData?.[0]?.values?.map(c=>c.userEnteredValue?.stringValue??'')??[];
 
 // No credentials, network, source ingestion, sharing, or value normalization.
@@ -27,6 +40,7 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
   if(JSON.stringify([...ids].sort((a,b)=>a-b))!==JSON.stringify((input.sheetInventory??[]).map(s=>s.sheetId).sort((a,b)=>a-b)))hold('Complete independent inventory required');
   const suppliers=binding.suppliers??[];
   if(!suppliers.length||suppliers.some(s=>typeof s.title!=='string'||s.title.length===0)||new Set(suppliers.map(s=>s.sheetId)).size!==suppliers.length||new Set(suppliers.map(s=>s.code)).size!==suppliers.length||new Set(suppliers.map(s=>s.title)).size!==suppliers.length)hold('Unique supplier bindings required');
+  registered(suppliers,spec,true);
   const summary=sheets.find(s=>s.properties.sheetId===binding.summarySheetId), guide=sheets.find(s=>s.properties.sheetId===binding.guideSheetId);
   if(!summary||!guide||summary===guide||suppliers.some(s=>[binding.summarySheetId,binding.guideSheetId].includes(s.sheetId)))hold('Summary/guide binding invalid');
   const allowed=new Set([binding.summarySheetId,binding.guideSheetId,...suppliers.map(s=>s.sheetId)]);
@@ -34,6 +48,7 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
   const mismatched=[], drift=[];
   for(const entry of [{sheetId:binding.summarySheetId,title:spec.summaryTitle,summary:true},...suppliers]) {
     const s=sheets.find(s=>s.properties.sheetId===entry.sheetId); if(!s)hold('Supplier sheet missing');
+    if(s.properties.title!==entry.title)hold(`Bound tab title differs: sheet ${entry.sheetId} is "${s.properties.title}", binding says "${entry.title}"`);
     const headers=headersOf(s),expected=entry.summary?spec.summaryHeaders:spec.inputHeaders;
     if(JSON.stringify(headers)!==JSON.stringify(expected))mismatched.push({sheetId:entry.sheetId,title:s.properties.title,missing:expected.filter(h=>!headers.includes(h)),unexpected:headers.filter(h=>!expected.includes(h)),orderOnly:headers.length===expected.length&&expected.every(h=>headers.includes(h))});
     if(s.properties.hidden)mismatched.push({sheetId:entry.sheetId,title:s.properties.title,hidden:true});
@@ -126,6 +141,7 @@ export function compareSharedToLegacy({shared,legacy,binding},spec=inputSpec,now
   if(times.some(t=>!Number.isFinite(t)||t-now>1000||now-t>rule.maxCaptureSkewMinutes*60000))hold('Fresh captures required on both sides');
   const suppliers=binding?.suppliers??[];
   if(!suppliers.length||new Set(suppliers.map(s=>s.code)).size!==suppliers.length||new Set(suppliers.map(s=>s.title)).size!==suppliers.length)hold('Unique supplier bindings required');
+  const notCompared=registered(suppliers,spec,false).map(r=>r.tab);
   const legacyCodes=(legacy??[]).map(l=>l.code);
   if(new Set(legacyCodes).size!==legacyCodes.length)hold('One legacy capture per supplier code required');
   const unboundLegacy=legacyCodes.filter(c=>!suppliers.some(s=>s.code===c));
@@ -165,7 +181,7 @@ export function compareSharedToLegacy({shared,legacy,binding},spec=inputSpec,now
     results.push({code:sup.code,title:sup.title,status:clean?'IN_SYNC':'DIFFERENT',counts:{matched:matched.length,different:different.length,comparedFields:fields.length,onlyShared:onlyShared.length,onlyLegacy:onlyLegacy.length,duplicates:duplicates.length,sharedRowsWithoutPlate:a.noKey,legacyRowsWithoutPlate:b.noKey},different,onlyShared,onlyLegacy,duplicates,notInLegacy});
   }
   const summary=Object.fromEntries(['IN_SYNC','DIFFERENT','LEGACY_UNREADABLE','LEGACY_NOT_CAPTURED'].map(k=>[k,results.filter(r=>r.status===k).length]));
-  return {status:results.every(r=>r.status==='IN_SYNC')&&!unboundLegacy.length?'ALL_IN_SYNC':'NOT_IN_SYNC',scope:'COMPARE_ONLY_VEHICLE_RATE_FIELDS_NO_WRITES_POLICY_NOT_COMPARED',layoutVersion:spec.layoutVersion,summary,unboundLegacy,results};
+  return {status:results.every(r=>r.status==='IN_SYNC')&&!unboundLegacy.length?'ALL_IN_SYNC':'NOT_IN_SYNC',scope:'COMPARE_ONLY_VEHICLE_RATE_FIELDS_NO_WRITES_POLICY_NOT_COMPARED',layoutVersion:spec.layoutVersion,summary,unboundLegacy,notCompared,results};
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
   try {const compare=process.argv.find(a=>a.startsWith('--compare='))?.slice(10);if(compare){console.log(JSON.stringify(compareSharedToLegacy(JSON.parse(fs.readFileSync(compare,'utf8'))),null,2));}else{const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json or --compare=private-compare.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}

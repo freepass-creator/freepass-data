@@ -282,7 +282,7 @@
     "기타기간③",
     "차량가격"
   ],
-  "numberHeadersVerifyNote": "2026-10-03 적용 요청은 연식에도 #,##0을 걸었다(2023→2,023 표시 가능). 연식은 이 목록에서 뺐으며 실제 시트 표시를 재확인해야 한다.",
+  "numberHeadersVerifyNote": "2026-10-03 Codex 커넥터 재조회: 연식 열(J) 표시 형식은 '0'(쉼표 없음). 문제없음.",
   "dropdowns": {
     "차량상태": [
       "즉시출고",
@@ -813,5 +813,142 @@
     },
     "valueEquality": "빈칸=빈값. 문자열은 앞뒤 공백만 무시. 숫자 대 숫자형 문자열은 쉼표·공백을 뺀 순수 숫자일 때만 수치 비교. 단위 환산·의미 추정 없음",
     "policyCompare": "HOLD — 기존 시트 정책은 정책코드로 운영정책 탭에 연결되어 있어 차량별 1:1 비교 규칙을 따로 정해야 한다"
+  },
+  "supplierChannels": {
+    "decision": "2026-10-03 사용자 결정: ERP·홈페이지로 연동하는 공급사는 프리패스 ERP/데이터에 직접 연결하고, 그 밖의 공급사는 이 공동 시트 한 곳에서 입력한다. 프리패스는 시트를 읽기만 한다.",
+    "observedAt": "2026-10-03T05:01:54Z 시트 수정본을 Codex 커넥터로 읽어 탭 19개·헤더 62칸 일치 확인",
+    "sharedInputSheet": [
+      {
+        "code": "RP013",
+        "tab": "웰릭스"
+      },
+      {
+        "code": "RP020",
+        "tab": "우리캐피탈"
+      },
+      {
+        "code": "RP010",
+        "tab": "KH"
+      },
+      {
+        "code": "RP008",
+        "tab": "리더스"
+      },
+      {
+        "code": "RP030",
+        "tab": "제이앤제이"
+      },
+      {
+        "code": "RP032",
+        "tab": "에코"
+      },
+      {
+        "code": "RP017",
+        "tab": "센트로"
+      },
+      {
+        "code": "RP022",
+        "tab": "퍼시픽"
+      },
+      {
+        "code": "RP011",
+        "tab": "연카"
+      },
+      {
+        "code": "RP014",
+        "tab": "스위치플랜"
+      },
+      {
+        "code": "PT-0001",
+        "tab": "렌트존"
+      },
+      {
+        "code": "PT-0023",
+        "tab": "에스에이"
+      },
+      {
+        "code": "RP021",
+        "tab": "빌린카"
+      },
+      {
+        "code": "PT-0026",
+        "tab": "엘씨"
+      },
+      {
+        "code": "RP018",
+        "tab": "스타"
+      },
+      {
+        "code": "RP033",
+        "tab": "스카이"
+      },
+      {
+        "code": "RP016",
+        "tab": "경진카"
+      },
+      {
+        "code": "RP015",
+        "tab": "경진"
+      },
+      {
+        "code": "RP034",
+        "tab": "마음카"
+      }
+    ],
+    "sharedFiles": {
+      "note": "기존 제공시트 한 파일을 둘이 같이 쓰는 공급사. 공동 시트에서는 탭이 따로다",
+      "pairs": [
+        [
+          "RP015",
+          "RP016"
+        ],
+        [
+          "RP018",
+          "RP033"
+        ],
+        [
+          "RP021",
+          "PT-0026"
+        ]
+      ]
+    },
+    "notInSharedSheet": [
+      {
+        "code": "RP031",
+        "name": "이안카",
+        "channel": "DIRECT_API",
+        "detail": "ONE 공식 API → FreePass Data 수집기. 근거: ERP4 erp5-ssot-refresh.yml이 RP031 옛 시트 수집을 제외하고(source.partnerCode !== 'RP031') Data 수집기를 실행. 고정 엔진 fe3eccc의 inventory-source-registry는 아직 RP031을 google_sheet(ianka)로 적고 있어 옛 목록과 다르다"
+      },
+      {
+        "code": "RP012",
+        "name": "손오공",
+        "channel": "DIRECT_API",
+        "detail": "손오공 ERP API(구독·픽업 버킷)"
+      },
+      {
+        "code": "RP006",
+        "name": "아이언",
+        "channel": "HOMEPAGE",
+        "detail": "자사 홈페이지 수집"
+      },
+      {
+        "code": "RP023",
+        "name": "오토플러스",
+        "channel": "HOMEPAGE",
+        "detail": "자사 홈페이지 수집"
+      },
+      {
+        "code": "RP004",
+        "name": "아이카",
+        "channel": "OWN_SOURCE_SHEET",
+        "detail": "공급사 자체 원본 시트를 읽음. 공동 시트 대상 아님(2026-10-03 대표 결정)"
+      }
+    ],
+    "legacyAuthority": "전환 전 운영 수집 목록은 ERP4 lib/domain/inventory-source-registry.ts(고정 엔진 fe3eccc)이며 sharedInputSheet 19곳은 그 generic-sheet 공급사와 같다",
+    "openConflicts": [
+      "src/domain/source-intake.ts의 welrix-sheet(RP013) 어댑터는 웰릭스 기존 제공시트 전용이다. 웰릭스는 공동 시트 대상이므로 이 어댑터는 전환 전 대조용으로만 쓰고 새 원천으로 연결하지 않는다"
+    ],
+    "membershipRule": "2026-10-03 대표 결정: 공동 시트에는 프리패스가 제공한 시트를 쓰던 공급사만 둔다. ERP·API·홈페이지 연동 공급사와 아이카(자체 원본 시트)는 모두 뺀다. notInSharedSheet 공급사가 공동 시트에 묶이면 실행기는 HOLD한다.",
+    "exclusionVerifiedAt": "2026-10-03 Codex 구글 커넥터 읽기 전용: 5곳 탭 0, 공급사 탭·종합 회사명에 5곳 0행, 정책원문·정책확인에 5곳 코드·이름 0행, 관리안내에 직접 연동 업체 제외 문구 있음"
   }
 }
