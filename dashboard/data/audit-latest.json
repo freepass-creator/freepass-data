@@ -6,7 +6,6 @@
     "publicationDecision": "HOLD",
     "publicationHoldReasons": [
       "MAPPING_HOLD_PRESENT",
-      "NO_CANDIDATES_READY_FOR_REVIEW",
       "REVIEW_APPROVALS_NOT_INCLUDED",
       "CANONICAL_RELEASE_NOT_BUILT"
     ]
@@ -14,32 +13,32 @@
   "change": {
     "counts": {
       "ADDED": 0,
-      "CHANGED": 25,
+      "CHANGED": 75,
       "MISSING_FROM_SOURCE": 0,
-      "UNCHANGED": 1734
+      "UNCHANGED": 1684
     },
     "current": {
+      "count": 1759,
+      "digest": "509670581af8b8b95cc874fdf924f98136fd62d1e6118b045848ea42ea319bbf",
+      "readTime": "2026-10-03T14:36:49.509231Z"
+    },
+    "destructiveActionAuthorized": false,
+    "digest": "a4ff1b5bad4e84efb57cf3cac19279005af338b559fd45deea832ec367dc3b5e",
+    "inventoryTransitionCount": 5,
+    "previous": {
       "count": 1759,
       "digest": "bdfc9717b8bef7bb7fbfcf53bd0838a9ed3937513fea23a1070a26855522b6a0",
       "readTime": "2026-10-03T13:40:00.179293Z"
     },
-    "destructiveActionAuthorized": false,
-    "digest": "3dab6d5afaacdae676d11816240fb49030f3209b1b5b34e5e6dc11663685eadd",
-    "inventoryTransitionCount": 0,
-    "previous": {
-      "count": 1759,
-      "digest": "9dc512f8817ed3692ea78cea01d1a66392aecfde16b62065676d37cd7853b700",
-      "readTime": "2026-10-03T12:26:45.041436Z"
-    },
     "status": "HOLD"
   },
   "recognition": {
-    "inventoryTransitionCount": 0,
-    "mappedForReview": 0,
-    "mappingHold": 1759,
-    "productFieldPathCount": 714
+    "inventoryTransitionCount": 5,
+    "mappedForReview": 344,
+    "mappingHold": 1415,
+    "productFieldPathCount": 719
   },
-  "runId": "37126916502-1",
+  "runId": "37130184900-1",
   "source": {
     "collections": {
       "partner": 64,
@@ -48,9 +47,9 @@
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "bdfc9717b8bef7bb7fbfcf53bd0838a9ed3937513fea23a1070a26855522b6a0",
+    "digest": "509670581af8b8b95cc874fdf924f98136fd62d1e6118b045848ea42ea319bbf",
     "projectId": "freepasserp5",
-    "readTime": "2026-10-03T13:40:00.179293Z"
+    "readTime": "2026-10-03T14:36:49.509231Z"
   },
   "version": "erp5-source-inventory/1"
 }
