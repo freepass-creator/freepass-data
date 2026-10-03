@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {planSupplierInput,planSupplierDropdowns,planPolicySplit,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec} from '../scripts/supplier-input-sheet.mjs';
+import {planSupplierInput,planSupplierDropdowns,planPolicySplit,planLayoutReorder,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec} from '../scripts/supplier-input-sheet.mjs';
 const now=Date.parse('2026-10-03T12:00:00Z');
 const legacy=inputSpec.legacyLayouts['2026-10-02'];
 const sheet=(id,title,headers,grid={frozenRowCount:1,frozenColumnCount:0})=>({properties:{sheetId:id,title,gridProperties:{rowCount:1000,columnCount:headers.length,...grid}},data:[{rowData:[{values:headers.map(h=>({userEnteredValue:{stringValue:h}}))}]}]});
@@ -8,15 +8,21 @@ const shared=inputSpec.supplierChannels.sharedInputSheet;
 const fixture=()=>({capturedAt:new Date(now).toISOString(),binding:{spreadsheetId:'test',summarySheetId:1,guideSheetId:2,suppliers:shared.map((r,i)=>({sheetId:3+i,title:r.tab,code:r.code}))},sheetInventory:[1,2,...shared.map((_,i)=>3+i)].map(sheetId=>({sheetId})),spreadsheet:{spreadsheetId:'test',sheets:[sheet(1,'종합',inputSpec.summaryHeaders),sheet(2,'관리안내',['안내']),...shared.map((r,i)=>sheet(3+i,r.tab,inputSpec.inputHeaders))]}});
 const policyFixture=()=>{const f=fixture(),d=sheet(3,'웰릭스',legacy.inputHeaders);const h=legacy.inputHeaders,values=h.map(()=>({}));values[h.indexOf('차량번호')]={userEnteredValue:{stringValue:'TEST-1'}};values[h.indexOf('정책코드')]={userEnteredValue:{stringValue:'POL-01'}};d.data[0].rowData.push({values});return {runId:'test-run',capturedAt:f.capturedAt,suppliers:[{sheetId:3,sourceId:'source',sourceTab:'policy'}],destinations:[d],captures:[{sourceId:'source',sourceTab:'policy',complete:true,rows:[{values:['정책코드','추가주행 금액','정비'].map(stringValue=>({userEnteredValue:{stringValue}}))},{values:['POL-01','대여료의 10%','연2회오일'].map(stringValue=>({userEnteredValue:{stringValue}}))}]}]};};
 
-test('2026-10-03-split layout: 30 vehicle/rate columns then 41 one-fact policy columns, no refinement or policy-code columns',()=>{
-  assert.equal(inputSpec.layoutVersion,'2026-10-03-split');
-  assert.equal(inputSpec.vehicleHeaders.length,30);assert.equal(inputSpec.policyHeaders.length,41);
+test('2026-10-03-order layout: 33 vehicle/rate columns in the 대표 order then 41 one-fact policy columns',()=>{
+  assert.equal(inputSpec.layoutVersion,'2026-10-03-order');
+  assert.equal(inputSpec.vehicleHeaders.length,33);assert.equal(inputSpec.policyHeaders.length,41);
+  const v=inputSpec.vehicleHeaders,before=(a,b)=>assert.ok(v.indexOf(a)<v.indexOf(b),a+'<'+b);
+  assert.deepEqual(v.slice(0,9),['회사명','차량상태','배차상태','상품구분','차량번호','제조사','모델','세부모델','세부트림']);
+  for(const h of ['외부색상','내부색상','최초등록일','입고일자','사진링크','기타기간①','기타기간②','기타기간③'])before('세부트림',h),before(h,'연식');
+  before('연식','주행거리');before('주행거리','배기량');before('배기량','연료');before('연료','단기보증');before('60개월','차명 원문');assert.deepEqual(v.slice(-3),['차명 원문','옵션 원문','차량가격']);
+  assert.equal(inputSpec.policyHeaders[0],'예외사항');assert.ok(inputSpec.dropdowns['모델']?.includes('그랜저'));assert.ok(!inputSpec.dropdowns['세부모델']);
+  assert.equal(inputSpec.legacyLayouts['2026-10-03-split'].inputHeaders.length,71);
   for(const h of inputSpec.policyHeaders)assert.ok(!h.includes('/')||h==='선불/후불',h);
   assert.equal(inputSpec.legacyLayouts['2026-10-03'].inputHeaders.length,62);
   assert.deepEqual(inputSpec.inputHeaders,[...inputSpec.vehicleHeaders,...inputSpec.policyHeaders]);
   assert.deepEqual(inputSpec.summaryHeaders,inputSpec.inputHeaders);
-  assert.equal(new Set(inputSpec.inputHeaders).size,71);
-  assert.deepEqual(inputSpec.inputHeaders.slice(0,7),['회사명','차량상태','상품구분','차량번호','제조사','세부모델','차명 원문']);
+  assert.equal(new Set(inputSpec.inputHeaders).size,74);
+  
   assert.equal(inputSpec.vehicleHeaders.at(-1),'차량가격');
   assert.deepEqual(inputSpec.policyHeaders.slice(0,8),['예외사항','심사','보험료','기본연령','면허기간','연주행','1만km+','21세+']);
   assert.equal(inputSpec.policyHeaders.at(-1),'비고');assert.ok(inputSpec.policyHeaders.includes('계좌번호'));
@@ -70,7 +76,7 @@ test('dropdown setup: validation-only requests on supplier tabs, every column de
   for(const [h,vals] of Object.entries(inputSpec.dropdownPolicy.existingValuesNotInList))for(const [v] of vals)assert.ok(!inputSpec.dropdowns[h].includes(v),h+v);
   const g=fixture();g.spreadsheet.sheets[2].data[0].rowData[0].values.reverse();assert.throws(()=>planSupplierDropdowns(g,inputSpec,now),/LAYOUT_MISMATCH/);
   assert.throws(()=>planSupplierDropdowns(fixture(),{...inputSpec,dropdowns:{...inputSpec.dropdowns,'보험료':undefined}},now),/dropdown or a free-text/);});
-const old=inputSpec.legacyLayouts['2026-10-03'].inputHeaders;
+const old=inputSpec.legacyLayouts['2026-10-03'].inputHeaders,splitH=inputSpec.legacyLayouts['2026-10-03-split'].inputHeaders;
 const splitFixture=(cells={})=>{const f=fixture();f.spreadsheet.sheets=f.spreadsheet.sheets.map(sh=>{const id=sh.properties.sheetId;if(id===2)return sh;const t=sheet(id,sh.properties.title,old);t.properties.gridProperties={...t.properties.gridProperties,rowCount:id===1?1000:3,columnCount:62};if(id!==1){const row=o=>({values:old.map(h=>o[h]===undefined?{}:{userEnteredValue:{stringValue:o[h]}})});t.data[0].rowData.push(row(id===3?cells:{'대인/면책':'무한 / 50만원'}),row({}));}return t;});return f;};
 test('policy split: every observed value shape splits into one fact per cell',()=>{const cases=[['대인/면책','무한 / 50만원',['무한','50만원']],['대물/면책','10억원',['10억원','']],['자차/면책','차량가액 / 수리비 20% / 50~100만원',['차량가액','20%','50~100만원']],['자차/면책','차량가액 / 50~100만원',['차량가액','','50~100만원']],['자차/면책','50~100만원',['','','50~100만원']],['자손/면책','1천5백만원 / 30만원',['1천5백만원','30만원']],['무보험/면책','없음',['없음','']],['무보험/면책','없음 / 없음',['없음','없음']],['운전자범위','개인 계약자 본인 / 법인 대표자 본인',['계약자 본인','대표자 본인']],['추가운전','2인까지 / 무료',['2인까지','무료']],['승계','협의 / 100만원',['협의','100만원']],['승계','',['','']]];for(const [h,v,want] of cases)assert.deepEqual(splitPolicyValue(h,v),want,h+v);
   for(const [h,v] of [['대인/면책','무한'],['대인/면책','무한 / 50만원 / 기타'],['자차/면책','수리비 20% / 50만원'],['자차/면책','차량가액'],['운전자범위','본인 / 임직원'],['추가운전','1인까지'],['대물/면책','1억원 /  / 50만원']])assert.throws(()=>splitPolicyValue(h,v),/HOLD/,h+v);});
@@ -79,16 +85,30 @@ test('policy split plan: inserts columns right-to-left, rewrites headers and spl
   const ins=p.requests.filter(r=>r.insertDimension&&r.insertDimension.range.sheetId===3).map(r=>r.insertDimension.range.startIndex);assert.deepEqual(ins,[...ins].sort((a,b)=>b-a));assert.equal(ins.length,8);
   const added=p.requests.filter(r=>r.insertDimension&&r.insertDimension.range.sheetId===3).reduce((n,r)=>n+r.insertDimension.range.endIndex-r.insertDimension.range.startIndex,0);assert.equal(added,9);
   assert.ok(p.requests.every(r=>['insertDimension','updateCells','updateDimensionProperties','setDataValidation'].includes(Object.keys(r)[0])));
-  const dv=p.requests.filter(r=>r.setDataValidation&&r.setDataValidation.range.sheetId===3);assert.equal(dv.length,17);for(const r of dv){const h=inputSpec.inputHeaders[r.setDataValidation.range.startColumnIndex];assert.deepEqual(r.setDataValidation.rule.condition.values.map(v=>v.userEnteredValue),inputSpec.dropdowns[h],h);}
+  const dv=p.requests.filter(r=>r.setDataValidation&&r.setDataValidation.range.sheetId===3);assert.equal(dv.length,17);for(const r of dv){const h=splitH[r.setDataValidation.range.startColumnIndex];assert.deepEqual(r.setDataValidation.rule.condition.values.map(v=>v.userEnteredValue),inputSpec.dropdowns[h],h);}
   assert.ok(p.requests.findIndex(r=>r.setDataValidation)>p.requests.findLastIndex(r=>r.insertDimension&&r.insertDimension.range.sheetId===3),'validation after inserts');
-  const cellAt=(h,id=3)=>p.requests.find(r=>r.updateCells&&r.updateCells.start.sheetId===id&&r.updateCells.start.rowIndex===1&&r.updateCells.start.columnIndex===inputSpec.inputHeaders.indexOf(h))?.updateCells.rows[0].values[0].userEnteredValue?.stringValue;
+  const cellAt=(h,id=3)=>p.requests.find(r=>r.updateCells&&r.updateCells.start.sheetId===id&&r.updateCells.start.rowIndex===1&&r.updateCells.start.columnIndex===splitH.indexOf(h))?.updateCells.rows[0].values[0].userEnteredValue?.stringValue;
   assert.equal(cellAt('자차한도'),'차량가액');assert.equal(cellAt('자차수리비'),'20%');assert.equal(cellAt('자차면책'),'50~100만원');assert.equal(cellAt('개인운전자'),'본인');assert.equal(cellAt('법인운전자'),'임직원');assert.equal(cellAt('보험료'),undefined,'unsplit columns are not rewritten');
   const written=p.requests.filter(r=>r.updateCells&&r.updateCells.start.sheetId===3&&r.updateCells.start.rowIndex===1);assert.ok(written.every(r=>r.updateCells.rows.length===1),'only up to the last non-empty row');
-  assert.ok(!p.requests.some(r=>r.updateCells&&r.updateCells.start.sheetId===3&&r.updateCells.start.rowIndex===1&&r.updateCells.start.columnIndex===inputSpec.inputHeaders.indexOf('대인한도')),'empty source column writes nothing');
-  const head=p.requests.find(r=>r.updateCells&&r.updateCells.start.sheetId===3&&r.updateCells.start.rowIndex===0).updateCells.rows[0].values.map(v=>v.userEnteredValue.stringValue);assert.deepEqual(head,inputSpec.inputHeaders);
+  assert.ok(!p.requests.some(r=>r.updateCells&&r.updateCells.start.sheetId===3&&r.updateCells.start.rowIndex===1&&r.updateCells.start.columnIndex===splitH.indexOf('대인한도')),'empty source column writes nothing');
+  const head=p.requests.find(r=>r.updateCells&&r.updateCells.start.sheetId===3&&r.updateCells.start.rowIndex===0).updateCells.rows[0].values.map(v=>v.userEnteredValue.stringValue);assert.deepEqual(head,splitH);
   const sum=p.requests.filter(r=>r.updateCells?.start.sheetId===1)[0].updateCells;assert.equal(sum.rows[0].values.length,71);assert.match(sum.rows[1].values[0].userEnteredValue.formulaValue,/'웰릭스'!A2:BS3/);assert.equal(p.requests.find(r=>r.insertDimension?.range.sheetId===1).insertDimension.range.endIndex,71);
   const offList=splitFixture({'대인/면책':'무한 / 70만원'});assert.throws(()=>planPolicySplit(offList,inputSpec,now),e=>/POLICY_SPLIT_UNPARSED/.test(e.message)&&/드롭다운 목록 밖/.test(e.holds[0]));
   const bad=splitFixture({'대인/면책':'무한'});assert.throws(()=>planPolicySplit(bad,inputSpec,now),e=>/POLICY_SPLIT_UNPARSED/.test(e.message)&&e.holds.length===1);
   const formula=splitFixture();formula.spreadsheet.sheets[2].data[0].rowData[1].values[old.indexOf('승계')]={userEnteredValue:{formulaValue:'=A1'}};assert.throws(()=>planPolicySplit(formula,inputSpec,now),/POLICY_SPLIT_UNPARSED/);
   const short=splitFixture();short.spreadsheet.sheets[2].properties.gridProperties.rowCount=10;assert.throws(()=>planPolicySplit(short,inputSpec,now),/full-height/);
   assert.throws(()=>planPolicySplit(fixture(),inputSpec,now),/LAYOUT_MISMATCH/,'already split or other layout holds');});
+const reorderFixture=()=>{const f=fixture();f.spreadsheet.sheets=f.spreadsheet.sheets.map(sh=>{const id=sh.properties.sheetId;if(id===2)return sh;const t=sheet(id,sh.properties.title,splitH);t.properties.gridProperties={...t.properties.gridProperties,columnCount:71};return t;});return f;};
+test('layout reorder: appends new columns, moves whole columns into the 대표 order, renames headers, never rewrites cell values',()=>{
+  const f=reorderFixture(),before=JSON.stringify(f),p=planLayoutReorder(f,inputSpec,now);assert.equal(JSON.stringify(f),before);assert.equal(p.to,'2026-10-03-order');
+  assert.ok(p.requests.every(r=>['insertDimension','moveDimension','updateCells','updateDimensionProperties','setDataValidation'].includes(Object.keys(r)[0])));
+  const mine=p.requests.filter(r=>JSON.stringify(r).includes('"sheetId":3,')||JSON.stringify(r).includes('"sheetId":3}'));
+  // Simulate the moves on the old header order and check the result is the new layout.
+  const sim=[...splitH,...inputSpec.layoutReorder.newColumns.map(h=>'NEW:'+h)];
+  for(const r of mine){if(r.moveDimension){const {startIndex}=r.moveDimension.source;sim.splice(r.moveDimension.destinationIndex,0,sim.splice(startIndex,1)[0]);}}
+  const renamed=sim.map(h=>h.startsWith('NEW:')?h.slice(4):({'세부모델':'모델','옵션':'옵션 원문'}[h]??h));assert.deepEqual(renamed,inputSpec.inputHeaders);
+  const cellWrites=p.requests.filter(r=>r.updateCells&&r.updateCells.start.rowIndex!==0&&r.updateCells.start.sheetId!==1);assert.equal(cellWrites.length,0,'no data cell rewritten');
+  const head=p.requests.find(r=>r.updateCells&&r.updateCells.start.sheetId===3).updateCells.rows[0].values.map(v=>v.userEnteredValue.stringValue);assert.deepEqual(head,inputSpec.inputHeaders);
+  const sum=p.requests.filter(r=>r.updateCells?.start.sheetId===1)[0].updateCells;assert.equal(sum.rows[0].values.length,74);assert.match(sum.rows[1].values[0].userEnteredValue.formulaValue,/'웰릭스'!A2:BV1000/);
+  assert.equal(p.requests.filter(r=>r.setDataValidation&&r.setDataValidation.range.sheetId===3).length,3);
+  assert.throws(()=>planLayoutReorder(fixture(),inputSpec,now),/LAYOUT_MISMATCH/,'only from the split layout');});
