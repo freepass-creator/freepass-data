@@ -38,8 +38,8 @@ test('canon full columns: partial capture HOLDs (majority formats need every row
 test('canon full columns: header-only evidence plans spec fields and holds unknown reference attributes',()=>{
   const f=canonFixture();f.snapshot.sheets.forEach(t=>{t.data[0].rowData=t.data[0].rowData.slice(0,1);delete t.data[0].columnMetadata;delete t.data[0].rowMetadata;});
   // Fail closed: an attribute without a majority withholds every request.
-  const p=planTabConsistencyFix(f.snapshot,f.spec);assert.equal(p.status,'HOLD');assert.deepEqual(p.requests,[]);assert.ok(p.withheldRequestCount>0);
-  assert.ok(p.holds.some(h=>h.reason==='NO_MAJORITY_textFormat.bold'));
+  const p=planTabConsistencyFix(f.snapshot,f.spec);assert.equal(p.status,'HOLD');assert.deepEqual(p.requests,[]);
+  assert.ok(p.holds.some(h=>h.reason==='NO_MAJORITY_textFormat.bold'));assert.ok(p.holds.some(h=>h.reason==='PARTIAL_CAPTURE_MAJORITY_FORMATS'));
 });
 test('canon full columns: supplier lists and four master ranges; no summary validations or value writes',()=>{
   const f=canonFixture(),p=planTabConsistencyFix(f.snapshot,f.spec);
