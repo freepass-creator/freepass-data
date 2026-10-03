@@ -1,7 +1,10 @@
 import { stableDigest } from '../shared/stable-digest.js';
 import { applyAutoplusPolicyRepair } from '../infra/autoplus-policy-repair-firestore.js';
 import { createJobDataAccessRuntime } from './data-access-runtime.js';
+import { assertAutoplusPolicyRepairRunnable } from '../domain/autoplus-policy-invariant.js';
 
+// Retired before the runtime resolves Firebase or writes a gateway STARTED audit.
+assertAutoplusPolicyRepairRunnable();
 const runtime = createJobDataAccessRuntime();
 const result = await runtime.access.write({
   context: {
