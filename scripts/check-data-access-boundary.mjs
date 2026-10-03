@@ -168,6 +168,39 @@ const preservationAllowlist = [
     reason: 'current record; revisions are create-only' }
 ];
 
+/** A '/' opens a regex literal after an operator/punctuator, a keyword, or at file start. */
+function startsRegexLiteral(before) {
+  if (!before) return true;
+  if (/[(,=:[!&|?{};+\-*%<>~^]$/.test(before)) return true;
+  return /(?:^|[^\w$.])(?:return|typeof|case|do|else|in|of|yield|await|void|delete|throw|new)$/.test(before);
+}
+
+/** Start of the receiver expression ending right before `dot` (identifiers, calls, indexing). */
+function receiverStart(masked, dot) {
+  let index = dot;
+  for (;;) {
+    let k = index - 1;
+    while (k >= 0 && /\s/.test(masked[k])) k--;
+    if (masked[k] === ')' || masked[k] === ']') {
+      let depth = 0;
+      for (; k >= 0; k--) {
+        if (masked[k] === ')' || masked[k] === ']') depth++;
+        else if ((masked[k] === '(' || masked[k] === '[') && --depth === 0) break;
+      }
+      index = k;
+      continue;
+    }
+    let start = k;
+    while (start >= 0 && /[\w$]/.test(masked[start])) start--;
+    if (start === k) return index;
+    index = start + 1;
+    let p = start;
+    while (p >= 0 && /\s/.test(masked[p])) p--;
+    if (masked[p] !== '.') return index;
+    index = masked[p - 1] === '?' ? p - 1 : p;
+  }
+}
+
 /** Blank out comments and string/template contents, keeping offsets and newlines. */
 function maskCode(text) {
   const out = text.split('');
@@ -181,7 +214,7 @@ function maskCode(text) {
     } else if (c === '/' && text[i + 1] === '*') {
       const end = text.indexOf('*/', i + 2); const stop = end < 0 ? text.length : end + 2;
       blank(i, stop); i = stop;
-    } else if (c === '/' && /[(,=:[!&|?{};]/.test(text.slice(Math.max(0, i - 200), i).trimEnd().at(-1) ?? ';')) {
+    } else if (c === '/' && startsRegexLiteral(text.slice(Math.max(0, i - 200), i).trimEnd())) {
       // Regex literal: skip so quotes inside it are not read as strings.
       let j = i + 1; let inClass = false;
       while (j < text.length && text[j] !== '\n' && (inClass || text[j] !== '/')) {
@@ -220,7 +253,9 @@ for (const file of walk(src)) {
   const rel = path.relative(root, file).replaceAll('\\', '/');
   const text = fs.readFileSync(file, 'utf8');
   const masked = maskCode(text);
-  if (/\bFieldValue\s+as\b|\bdeleteField\b|\{\s*delete\s*:\s*\w+\s*\}\s*=\s*FieldValue/.test(masked)) {
+  // FieldValue may only be used as `FieldValue.<method>`; aliases and destructuring hide deletes.
+  const withoutImports = masked.replace(/\bimport\s+(?:type\s+)?\{[^}]*\}\s*from\s*['"][^'"]*['"]/g, '');
+  if (/\bFieldValue\s+as\b/.test(masked) || /\bFieldValue\b(?!\s*\.)|\bdeleteField\b/.test(withoutImports)) {
     violations.push({ file: rel, import: 'FieldValue alias', reason: 'aliased field-delete sentinel hides erasure from the preservation check' });
   }
   for (const match of masked.matchAll(/FieldValue\s*\.\s*delete\s*\(/g)) {
@@ -228,14 +263,16 @@ for (const file of walk(src)) {
     const lineEnd = masked.indexOf('\n', match.index);
     observedPreservation.push({ kind: 'fieldDelete', file: rel, call: squash(text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd)) });
   }
-  if (!/from\s+['"]firebase-admin(?:\/firestore)?['"]/.test(text)) continue;
-  for (const match of masked.matchAll(/([\w$]+)\s*\.\s*set\s*\(/g)) {
+  if (!/from\s+['"]firebase-admin(?:\/firestore)?['"]/.test(text) && !/\.\s*doc\s*\(/.test(masked)) continue;
+  for (const match of masked.matchAll(/\.\s*set\s*\(/g)) {
     const { ranges } = callArgumentRanges(masked, match.index + match[0].length);
-    const last = ranges.at(-1);
-    if (ranges.length > 2 && /^\{\s*(?:merge\s*:\s*true|mergeFields\s*:[^}]*)\s*,?\s*\}$/.test(squash(text.slice(last[0], last[1])))) continue;
-    // The written document (receiver + target ref) is the reviewed identity, not the payload.
-    const target = ranges[0] ? text.slice(ranges[0][0], ranges[0][1]) : '';
-    observedPreservation.push({ kind: 'replaceSet', file: rel, call: squash(`${match[1]}.set(${target})`) });
+    const options = ranges.length >= 2 ? squash(text.slice(...ranges.at(-1))) : '';
+    if (/^\{\s*(?:merge\s*:\s*true|mergeFields\s*:[^}]*)\s*,?\s*\}$/.test(options)) continue;
+    // The written document is the reviewed identity, not the payload: tx/batch.set(ref, data)
+    // keeps its ref argument; ref.set(data) keeps the receiver chain.
+    const receiver = text.slice(receiverStart(masked, match.index), match.index);
+    const target = ranges.length >= 2 ? text.slice(...ranges[0]) : '';
+    observedPreservation.push({ kind: 'replaceSet', file: rel, call: squash(`${receiver}.set(${target})`) });
   }
 }
 const preservationKey = (item) => JSON.stringify([item.kind, item.file, squash(item.call)]);
