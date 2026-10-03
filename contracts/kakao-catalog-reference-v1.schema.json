@@ -181,7 +181,7 @@
       "type": "object",
       "required": ["policyId", "sourceRole", "sourceObservedAt", "canonicalSource", "sourceFiles", "standardSupplierIds", "exceptionSupplierIds", "rules", "timingRules", "digest"],
       "properties": {
-        "policyId": { "const": "sales-commission-2026-09-28" },
+        "policyId": { "const": "sales-commission-2026-10-03" },
         "sourceRole": { "const": "REPOSITORY_SSOT_WITH_GOOGLE_SHEET_COPY" },
         "sourceObservedAt": { "type": "string", "format": "date-time" },
         "canonicalSource": {

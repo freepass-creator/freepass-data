@@ -179,6 +179,11 @@ describe('safe catalog canonicalization', () => {
     );
 
     expect(receipt.status).toBe('CANONICAL_COMMITTED');
+    const savedEconomicsOffer = (await store.getOffer(receipt.offerId))!;
+    expect(savedEconomicsOffer.internalEconomicsTerms).toHaveLength(savedEconomicsOffer.priceTerms.length);
+    expect(savedEconomicsOffer.internalEconomicsTerms![0]!.monthlyRent).toEqual(savedEconomicsOffer.priceTerms[0]!.monthlyRent);
+    expect(savedEconomicsOffer.internalEconomicsTerms![0]!.supplierBillingFee.policyId).toBe('sales-commission-2026-10-03');
+
     expect((await store.getVehicleModel('vm_reviewed_gv70_001'))?.model).toBe('GV70');
     expect((await store.getVehicleAsset('va_reviewed_123ga4567'))?.plateNumber).toBe('123가4567');
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { precomputeOfferEconomics } from '../src/application/resolve-offer-commercial-terms.js';
 import {
   KAKAO_COMMISSION_POLICY,
   buildKakaoCatalogReference,
@@ -9,6 +10,66 @@ import {
   resolveSupplierBillingFee,
   resolveReferenceVehiclePhotos,
 } from '../src/application/kakao-catalog-reference.js';
+
+describe('2026-10-03 confirmed commission policy', () => {
+  const base = { supplierId: 'RP018', productType: '재렌트', fuel: '가솔린', termMonths: 24, monthlyRent: 1100000 };
+  it.each(['RP018', 'RP033'])('%s splits included VAT without changing supplier identity', supplierId => {
+    const input = { ...base, supplierId };
+    const billing = resolveSupplierBillingFee(input);
+    const payout = resolveSalesCommission(input);
+    expect(billing).toMatchObject({ amount: 1000000, vatAmount: 100000, totalAmount: 1100000, vatTreatment: 'INCLUDED' });
+    expect(payout).toMatchObject({ amount: 800000, vatAmount: 80000, totalAmount: 880000 });
+    expect(resolveExpectedGrossMargin(billing, payout).amount).toBe(200000);
+    expect(resolveSupplierBillingFee({ ...input, productType: '신차렌트' }).state).toBe('UNKNOWN');
+    expect(resolveSupplierBillingFee({ ...input, productType: '신차렌트', newProductSubtype: 'NEW_PREDELIVERY', vehicleValue: 40000000 })).toMatchObject({ amount: 1400000, vatTreatment: 'EXCLUDED' });
+    const offer = { id: 'test', supplierId, priceTerms: [{ termKey: '24', termMonths: 24, monthlyRent: { amount: 1100000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }] };
+    const row = precomputeOfferEconomics(offer, 'USED_RENT')[0]!;
+    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 1000000 }, vatTreatment: 'INCLUDED', vatAmount: 100000, totalAmount: 1100000, policyId: 'sales-commission-2026-10-03' });
+    expect(offer.supplierId).toBe(supplierId);
+  });
+  it.each([
+    ['NEW_PREDELIVERY', 5, 1200000, 1000000],
+    ['NEW_PREDELIVERY', 10, 1600000, 1200000],
+    ['NEW_MATCHING', 5, 1200000, 1200000],
+    ['NEW_MATCHING', 10, 1320000, 1320000],
+  ] as const)('Pacific %s tier %s uses vehicle value', (newProductSubtype, depositTierPercent, billing, payout) => {
+    const input = { ...base, supplierId: 'RP022', productType: '신차렌트', vehicleValue: 40000000, newProductSubtype, depositTierPercent };
+    for (const [actual, total] of [[resolveSupplierBillingFee(input), billing], [resolveSalesCommission(input), payout]] as const) {
+      expect(actual).toMatchObject({ state: 'CALCULATED', amount: Math.round(total / 1.1), vatAmount: total - Math.round(total / 1.1), totalAmount: total, vatTreatment: 'INCLUDED' });
+    }
+    const offer = { id: 'pacific', supplierId: 'RP022', priceTerms: [{ termKey: '24', termMonths: 24, monthlyRent: { amount: 1100000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }] };
+    expect(precomputeOfferEconomics(offer, 'NEW_RENT', '가솔린', { '24': input })[0]!.supplierBillingFee.amount?.amount).toBe(Math.round(billing / 1.1));
+  });
+  it('requires a contractual tier, never infers it from money', () => {
+    const input = { ...base, supplierId: 'RP022', productType: '신차렌트', vehicleValue: 40000000, newProductSubtype: 'NEW_PREDELIVERY' as const, depositAmount: 2000000 };
+    expect(resolveSupplierBillingFee(input)).toMatchObject({ state: 'UNKNOWN', reasonCode: 'DEPOSIT_TIER_REQUIRED' });
+    expect(resolveSalesCommission(input).reasonCode).toBe('DEPOSIT_TIER_REQUIRED');
+  });
+  it.each([[12, 100000], [24, 300000], [36, 500000], [48, 700000], [60, 700000]])('Sonokong %s uses evidenced Q12 plus %s', (termMonths, addition) => {
+    const input = { ...base, supplierId: 'RP012', productType: '오공구독', termMonths, subscriptionForm: 'BUYOUT' as const, q12Basis: { amount: 800000, sourceRef: 'verified:Q12' } };
+    expect(resolveSupplierBillingFee(input).amount).toBe(800000 + addition);
+    expect(resolveSalesCommission(input).amount).toBe(800000);
+    const { q12Basis: _basis, ...withoutBasis } = input;
+    expect(resolveSupplierBillingFee(withoutBasis)).toMatchObject({ state: 'UNKNOWN', reasonCode: 'Q12_BASIS_REQUIRED' });
+    expect(resolveSupplierBillingFee({ ...input, subscriptionForm: 'RETURN' }).state).toBe(termMonths === 12 ? 'CALCULATED' : 'UNKNOWN');
+  });
+  it('rounds fractional won before splitting VAT and rejects unsupported terms', () => {
+    expect(resolveSalesCommission({ ...base, monthlyRent: 1000001 })).toMatchObject({ amount: 727274, vatAmount: 72727, totalAmount: 800001 });
+    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP013', monthlyRent: 500001 })).toMatchObject({ amount: 570001, vatAmount: 57000, totalAmount: 627001 });
+    expect(resolveSalesCommission({ ...base, supplierId: 'RP013', termMonths: 18 }).reasonCode).toBe('TERM_NOT_IN_F04_COMMISSION_POLICY');
+  });
+  it('keeps confirmed Iron fees and excludes Mindcar', () => {
+    const input = { ...base, supplierId: 'RP006', productType: '신차렌트', vehicleValue: 40000000, newProductSubtype: 'NEW_PREDELIVERY' as const };
+    expect(resolveSupplierBillingFee(input).amount).toBe(1600000);
+    expect(resolveSalesCommission(input).amount).toBe(1200000);
+    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP034' })).toMatchObject({ state: 'NOT_APPLICABLE', amount: null });
+    expect(resolveSalesCommission({ ...base, supplierId: 'RP034' }).state).toBe('NOT_APPLICABLE');
+  });
+  it('does not generalize unresolved subscription or individual exceptions', () => {
+    for (const supplierId of ['RP013', 'RP021', 'PT-0026']) expect(resolveSalesCommission({ ...base, supplierId, productType: '중고구독' }).reasonCode).toBe('SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED');
+    expect(resolveSalesCommission({ ...base, supplierId: 'RP023', productType: '오플구독', individualException: true }).reasonCode).toBe('INDIVIDUAL_EXCEPTION_EVIDENCE_REQUIRED');
+  });
+});
 
 describe('Kakao catalog reference deposit facts', () => {
   it.each([
@@ -76,15 +137,15 @@ describe('Kakao sales commission facts', () => {
     });
   });
 
-  it('returns coordination without an amount for rows marked 영업자 조율', () => {
+  it('requires Q12 evidence without inventing an amount for 영업자 조율', () => {
     expect(resolveSalesCommission({ supplierId: 'RP012', productType: '오공구독', fuel: '디젤', termMonths: 36, monthlyRent: 800000 })).toEqual({
-      state: 'COORDINATION_REQUIRED',
-      ruleId: 'SONOKONG_SUBSCRIPTION_12_MONTH_RENT_100_PERCENT',
+      state: 'UNKNOWN',
+      ruleId: null,
       amount: null,
-      vatTreatment: 'EXCLUDED',
+      vatTreatment: 'UNKNOWN',
       vatAmount: null,
       totalAmount: null,
-      reasonCode: 'SALES_COORDINATION_REQUIRED',
+      reasonCode: 'Q12_BASIS_REQUIRED',
     });
   });
 
@@ -97,10 +158,10 @@ describe('Kakao sales commission facts', () => {
     });
   });
 
-  it('fails closed for unknown suppliers and unspecified won rounding', () => {
+  it('fails closed for unknown suppliers and rounds fractional won', () => {
     expect(resolveSalesCommission({ supplierId: 'UNKNOWN', productType: '중고렌트', fuel: '가솔린', termMonths: 36, monthlyRent: 800000 }).state).toBe('UNKNOWN');
     expect(resolveSalesCommission({ supplierId: 'RP013', productType: '중고렌트', fuel: '가솔린', termMonths: 60, monthlyRent: 800001 })).toMatchObject({
-      state: 'UNKNOWN', reasonCode: 'ROUNDING_RULE_UNSPECIFIED', amount: null,
+      state: 'CALCULATED', reasonCode: null, amount: 840001, vatAmount: 84000, totalAmount: 924001,
     });
   });
 });
@@ -175,12 +236,12 @@ describe('Kakao billing, payout and margin facts', () => {
   it('does not invent margin for human-decided or absent F04 rules', () => {
     const supplierBillingFee = resolveSupplierBillingFee({ supplierId: 'RP012', productType: '오공구독', termMonths: 36, monthlyRent: 800000 });
     const channelPayoutFee = resolveSalesCommission({ supplierId: 'RP012', productType: '오공구독', fuel: '가솔린', termMonths: 36, monthlyRent: 800000 });
-    expect(supplierBillingFee).toMatchObject({ state: 'COORDINATION_REQUIRED' });
+    expect(supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'Q12_BASIS_REQUIRED' });
     expect(resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee)).toMatchObject({
       state: 'UNKNOWN', amount: null, reasonCode: 'BILLING_OR_PAYOUT_UNRESOLVED',
     });
     expect(resolveSupplierBillingFee({ supplierId: 'RP034', productType: '중고렌트', termMonths: 36, monthlyRent: 800000 })).toMatchObject({
-      state: 'UNKNOWN', reasonCode: 'SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE',
+      state: 'NOT_APPLICABLE', reasonCode: 'SUPPLIER_EXCLUDED_BY_DECISION',
     });
   });
 });

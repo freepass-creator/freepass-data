@@ -42,6 +42,29 @@ It does not seed data, publish releases, run workers, or expose Catalog mutation
 
 기존 Kakao `catalog-reference`는 내부 업무용으로 양쪽 수수료와 예상 마진을 포함하는 별도 계약이다. 이 응답과 키를 외부 공급사/영업채널에 전달하지 않는다. 현재 public ERP/화이트라벨 projection에는 내부 수수료를 추가하지 않는다. 외부 연동 완료는 전용 계약·scope 차단 테스트·인증된 운영 readback 이후에만 선언한다.
 
+### Admin 내부 기간별 경제조건 — 2026-10-03
+
+Canonical `catalog_offers.internalEconomicsTerms`는 신규 canonicalization, 승인된 원천 Offer 변경, 가격 변경의 기존 CatalogStore 거래 안에서 다시 계산한다. `precomputeOfferEconomics`는 `sales-commission-2026-10-03`의 공통 resolver를 재사용한다. 09-28 정책 및 ERP `settlement-fee-table.ts@f862d0097f6e83d79d0b699bc369a83716b1d982`는 이전 근거로 보존하고, 현재 변경 근거는 10-03 대표 결정과 `commission-research.md` ①③④다. 대여료·보증금은 `priceTerms`에서 복사하며 별도 `internalPeriodFees` 저장소는 없다. 수수료는 계약 전체 1건의 VAT 별도 공급가액이고 `calculation`, `sourceRefs`, `ruleId`, `policyId`, `vatTreatment`, `vatAmount`, `totalAmount`를 보존한다. Offer의 기존 `policyId`(상품 정책)와 수수료의 `policyId`(규칙 묶음)는 다르다.
+
+Admin 전용 `data[].offers[].priceTerms[].supplierBillingFee` / `channelPayoutFee`만 양쪽 금액을 제공한다. Admin은 FreePass 내부 계약접수 주체이므로 외부 공급사/영업채널의 상대편 수수료 제외 규칙과 구분한다. 서버의 `freepass-admin-catalog` 전용 등록·키 제한을 유지하고 public ERP·화이트라벨·Kakao 응답에는 이번 필드를 추가하지 않는다. Admin projection은 저장된 값만 읽고 누락·중복·무효·가격/기간 불일치를 UNKNOWN으로 내린다. Admin에서 재계산하지 않는다.
+
+`meta.economicsTermCounts.{supplierBillingFee,channelPayoutFee}.{KNOWN,ZERO,UNKNOWN,NOT_APPLICABLE}`는 각 수수료별 기간 행 수다. `meta.economicsCoverage`는 빈 기간 목록 또는 한쪽 UNKNOWN이 있으면 INCOMPLETE, 나머지는 COMPLETE다. 릴리스의 `economics`에도 저장하고 gateway는 검증된 release data로 다시 집계한다. Health `checks.offerEconomics`에도 같은 지표를 쓰되 분모는 전체 Canonical Offer의 기간이며 Admin ACTIVE 대상과 다를 수 있다. COMPLETE는 지급 확정·정산 완료·원천 최신성 확인을 뜻하지 않는다.
+
+#### 수수료 연동 기준
+
+- 스타 RP018·스카이 RP033 재렌트: 월료 100% 청구·80% 지급, VAT 포함. 공급사 ID는 유지하고 규칙만 공유한다. 신차는 이 특칙에 포함하지 않는다.
+- 퍼시픽 RP022 신차: `vehicleValue` × 요율. `newProductSubtype`은 `NEW_PREDELIVERY`/`NEW_MATCHING`, `depositTierPercent`는 계약상 5/10이다. 선출고 청구/지급은 5% 등급 3%/2.5%, 10% 등급 4%/3%; 매칭은 3%/3%, 3.3%/3.3%. 모두 VAT 포함. 등급 없으면 `DEPOSIT_TIER_REQUIRED`이며 보증금 금액으로 추정하지 않는다. 재렌트는 표준, VAT 별도다.
+- 산식 결과를 `Math.round`로 원 단위 반올림한다. VAT 포함은 총액÷1.1을 반올림한 공급가액을 `amount`, 차액을 `vatAmount`로 둔다. VAT 별도는 공급가액×10%를 반올림해 VAT를 더한다. 마진은 공급가액끼리 차감한다.
+- 손오공 구독: `q12Basis: { amount, sourceRef }`는 근거로 선택한 12개월 계약 기준 **월** 구독료다. 없으면 `Q12_BASIS_REQUIRED`. `subscriptionForm`은 `BUYOUT`/`RETURN`; 반납형은 12개월만. 청구는 Q12＋기간 가산(12:10만, 24:30만, 36:50만, 48·60:70만), 지급은 Q12다. 기간 보간은 없다.
+- 아이언 신차 선출고 4%/3%, 일반 표준 신차 3.5%/3%, 오토플러스 일반 구독 100만/80만, 아이카 재렌트 6개월 40만/30만·전기차 100만/80만은 VAT 별도다.
+- 마음카 RP034는 `NOT_APPLICABLE / SUPPLIER_EXCLUDED_BY_DECISION`. 미등록 공급사, 미지원 기간, 표준 매칭 개별율, 아이카 1개월 기준액·연장 조건, 빌린카·엘씨·웰릭스 구독 범위, 스위치 비구독 등은 UNKNOWN과 사유를 유지한다. `individualException: true`는 `INDIVIDUAL_EXCEPTION_EVIDENCE_REQUIRED`; 오토플러스 프로모션 등 개별 거래를 일반 규칙으로 확장하지 않는다.
+
+`precomputeOfferEconomics`의 네 번째 인자 `evidenceByTerm[termKey]`로 위 계약 근거를 전달할 수 있다. 기존 자동 저장 호출은 이 계약 근거를 수집하지 않으므로 입력이 필요한 상품은 UNKNOWN을 유지한다. 월료나 다른 기간 가격에서 Q12를 선택하지 않는다. 저장된 기존 정책 값은 읽기 시 자동 재계산하지 않으며, 새 정책 반영에는 승인된 재저장이 필요하다.
+
+ERP 차이: 이번에는 ERP를 수정하지 않았다. ERP의 스타·퍼시픽·손오공 문자열/`auto:false` 규칙과 달리 Data는 필수 근거가 있으면 계산한다. Data는 스카이 ID, 계약 등급, 구독 형태, Q12 출처, VAT 분리와 UNKNOWN 사유를 명시하며 ERP의 상품 기본 재렌트 분류·형태 무시 fallback을 사용하지 않는다. 청구·지급 시점, 분납·개별 확정액은 별도 정산 업무다.
+
+로컬 구현이며 운영 backfill·발행·배포·cutover는 없다. 저장값이 없는 기존 Offer는 새 승인된 저장까지 UNKNOWN이다. 새 필수 필드가 없는 구형 Admin release는 gateway 계약 검증에서 거절되므로 운영 도입 시 승인된 Canonical 저장 및 Admin release 재생성을 먼저 검증해야 한다.
+
 ## Consumer capabilities
 
 Registration fields:

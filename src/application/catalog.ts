@@ -1,3 +1,4 @@
+import { precomputeOfferEconomics } from './resolve-offer-commercial-terms.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { orderedJsonDigest, stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from './projection-evidence-reader.js';
@@ -122,6 +123,9 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
       ...replacePriceTerm(current, input.termKey, input.monthlyRent),
       revision: current.revision + 1, updatedAt: now, updatedBy: input.actor
     };
+    const product = await tx.getProduct(next.productId);
+    const model = product ? await tx.getVehicleModel(product.vehicleModelId) : null;
+    next.internalEconomicsTerms = precomputeOfferEconomics(next, product?.commercialType, model?.fuel);
     const receipt = {
       idempotencyKey: input.idempotencyKey, commandId: input.commandId,
       status: 'CANONICAL_COMMITTED' as const, entityType: 'offer', entityId: current.id,

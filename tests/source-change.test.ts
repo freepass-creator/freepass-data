@@ -294,6 +294,11 @@ describe('reviewed source change', () => {
     );
 
     expect(result.status).toBe('CANONICAL_COMMITTED');
+    const savedEconomicsOffer = (await store.getOffer(initial.offerId))!;
+    expect(savedEconomicsOffer.internalEconomicsTerms).toHaveLength(savedEconomicsOffer.priceTerms.length);
+    expect(savedEconomicsOffer.internalEconomicsTerms![0]!.monthlyRent).toEqual(savedEconomicsOffer.priceTerms[0]!.monthlyRent);
+    expect(savedEconomicsOffer.internalEconomicsTerms![0]!.supplierBillingFee.policyId).toBe('sales-commission-2026-10-03');
+
     expect(result.bindingRevision).toBe(2);
     expect(result.offerRevision).toBe(2);
     expect(result.vehicleAssetRevision).toBe(2);

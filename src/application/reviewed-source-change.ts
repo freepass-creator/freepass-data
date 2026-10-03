@@ -1,3 +1,4 @@
+import { precomputeOfferEconomics } from './resolve-offer-commercial-terms.js';
 import { randomUUID } from 'node:crypto';
 import {
   assertCommandWriter,
@@ -1068,6 +1069,9 @@ export async function applyReviewedSourceChange(
 
     const offerChanged = nextOffer !== state.offer;
     const assetChanged = nextAsset !== state.asset;
+    if (offerChanged) {
+      nextOffer.internalEconomicsTerms = precomputeOfferEconomics(nextOffer, state.product.commercialType, state.model.fuel);
+    }
 
     const parents = await tx.listLineageForCandidate(state.candidateRecord.candidateId);
     const refreshLineage = buildRefreshLineage({
