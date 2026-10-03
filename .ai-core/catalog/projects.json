@@ -1,0 +1,757 @@
+{
+  "schema_version": "1.1",
+  "observed_at": "2026-10-03T06:19:48Z",
+  "projects": [
+    {
+      "project_id": "ai-core",
+      "name": "AI Core",
+      "organization": "HEADQUARTERS",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "ACTIVE",
+      "mission": "Route work and preserve revision-bound decisions, evidence and authority boundaries across the group.",
+      "repository": "freepass-creator/ai-core",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\ai-core",
+      "head_revision": "52c19202eb8c1e9beeb59495d02d580bc16f1606",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/ai-core",
+          "revision": "52c19202eb8c1e9beeb59495d02d580bc16f1606",
+          "observed_at": "2026-09-22T00:44:26Z"
+        }
+      ],
+      "commands": {
+        "install": "npm ci",
+        "test": "npm test",
+        "build": "npm run verify"
+      },
+      "deploy_targets": [],
+      "required_approvals": [
+        "merge-to-main"
+      ],
+      "known_blockers": [
+        "resolved 2026-09-17: order-control is connected on main (PR #22/#37/#38/#41) and the server readWorkProjection socket is wired (PR #44). What remains is configuration, not code -- orders.connection.json workSources must name the operating registry/snapshot/mappings/ledger, or /api/orders/:id/work answers WORK_SOURCE_MISSING_<source>",
+        "resolved 2026-10-03: the three-checkout split is gone — ai-core-control-tower and ai-core-audit no longer exist; the canonical checkout is C:\\dev\\ai-core (main). C:\\dev\\ai-core-academy-deploy is a detached runner for academy:start, not a work line.",
+        "SELF_REVISION_CYCLE: a committed registry file cannot durably equal the commit SHA that contains itself. registry-refresh must not rewrite/demote the ai-core self entry until self-revision runtime binding is modeled separately."
+      ]
+    },
+    {
+      "project_id": "aiops",
+      "name": "AIOps",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "RETIRE",
+      "execution_readiness_status": "DISABLED",
+      "mission": "RETIRING (2026-10-03 owner decision): legacy AI-OPS repository, frozen (README notice 95a38df). Penalty engine moved to freepass-creator/renman penalty-engine/ (renman#17); Firestore lookup tool bogi moved to freepass-creator/ai-ops scripts/데이터/ (short term, long term renman-data read API); knowhow/maps moved to ai-ops docs/. Remaining: history PII purge then PRIVATE Archive. Plan: ai-ops docs/handoffs/aiops-legacy-정리표-20260929.md.",
+      "repository": "freepass-creator/aiops",
+      "default_branch": "main",
+      "local_path": null,
+      "head_revision": "95a38df98704f989a001a41d362443b83e353548",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/aiops",
+          "revision": "95a38df98704f989a001a41d362443b83e353548",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": "npm ci",
+        "test": "npm test",
+        "build": null
+      },
+      "commands_absent_reason": {
+        "build": "실행 스크립트 모음이라 빌드 산출물이 없다. package.json 에 build 스크립트가 존재하지 않는다(2026-09-17 확인). 검증은 test(ssot-geomsa + sop-lint)와 typecheck 가 맡는다."
+      },
+      "deploy_targets": [],
+      "required_approvals": [
+        "lib/seungin.mjs 행위등급 (local/drive-add/protected)"
+      ],
+      "known_blockers": [
+        "RETIRED 2026-10-03 (owner decision): no new work in freepass-creator/aiops. AI Core routes nothing here — operations.penalty.* moved to renman (penalty-engine/); finance.cash-status, finance.receivables and operations.insurance-status are HOLD on renman-data until a governed read adapter exists; operations.insurance is HOLD on renman.",
+        "Remaining retirement steps: history PII purge, then PRIVATE Archive. Local C:\\dev\\aiops deletion and Archive require a fresh owner confirmation (ai-ops docs/handoffs/aiops-legacy-정리표-20260929.md).",
+        "Windows scheduled tasks aiops-* (6) still point at C:\\dev\\aiops; all are Disabled and must not be re-enabled against this path."
+      ]
+    },
+    {
+      "project_id": "casemap-private",
+      "name": "CaseMap Private",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Repository discovered and indexed by AI Core; mission and operating boundaries require source review before activation.",
+      "repository": "freepass-creator/casemap-private",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\casemap",
+      "head_revision": "b2c4d8882eaa403e907c689ff520b202e39a8f36",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/casemap-private",
+          "revision": "b2c4d8882eaa403e907c689ff520b202e39a8f36",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": null,
+        "test": null,
+        "build": null
+      },
+      "deploy_targets": [],
+      "required_approvals": [],
+      "known_blockers": [
+        "Discovered in the connected GitHub installation but not yet source-reviewed into an AI Core Project Capsule; execution remains HOLD until commands, SSOT and deployment boundaries are verified."
+      ]
+    },
+    {
+      "project_id": "docshub",
+      "name": "DocsHub",
+      "organization": "HEADQUARTERS",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Transitional headquarters document-template source pending migration into AI Core management-support; template bodies remain external until a verified cutover while DevCenter Document Hub owns planning, validation and receipts.",
+      "repository": "freepass-creator/docshub",
+      "default_branch": "main",
+      "local_path": null,
+      "head_revision": "4059d82779b7e1796afa2bbdf644e1d3bbdba3e7",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/docshub",
+          "revision": "4059d82779b7e1796afa2bbdf644e1d3bbdba3e7",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": null,
+        "test": null,
+        "build": null
+      },
+      "deploy_targets": [],
+      "required_approvals": [],
+      "known_blockers": [
+        "Remote DocsHub has been source-reviewed at 4059d82779b7e1796afa2bbdf644e1d3bbdba3e7; its four template source blobs are unchanged from the prior Document Hub binding.",
+        "The larger local C:\\dev\\docshub inventory is not a Git repository and has not been freshly observed in this session; physical import remains HOLD.",
+        "Management-support template ownership and DevCenter Document Hub runtime ownership must cut over atomically so external DocsHub and AI Core never become competing writable template SSOTs."
+      ]
+    },
+    {
+      "project_id": "fp-settlement",
+      "name": "FP Settlement",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Repository discovered and indexed by AI Core; mission and operating boundaries require source review before activation.",
+      "repository": "freepass-creator/fp-settlement",
+      "default_branch": "main",
+      "local_path": null,
+      "head_revision": "7b90d04a4461e605e2ac2987f1f9e371c476e176",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/fp-settlement",
+          "revision": "7b90d04a4461e605e2ac2987f1f9e371c476e176",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": null,
+        "test": null,
+        "build": null
+      },
+      "deploy_targets": [],
+      "required_approvals": [],
+      "known_blockers": [
+        "Discovered in the connected GitHub installation but not yet source-reviewed into an AI Core Project Capsule; execution remains HOLD until commands, SSOT and deployment boundaries are verified."
+      ]
+    },
+    {
+      "project_id": "freepass-admin",
+      "name": "FreePass Admin",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Internal FreePass admin product for canonical product search, application, contract progress and settlement; backend/domain integrity is prioritized while UI/UX waits for the AI Core/DevCenter common standard.",
+      "repository": "freepass-creator/freepass-admin",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\freepass-admin",
+      "head_revision": "1f6f98bbc2f7efe52784ff25c034d7e23b92a927",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/freepass-admin",
+          "revision": "1f6f98bbc2f7efe52784ff25c034d7e23b92a927",
+          "observed_at": "2026-10-03T06:19:48Z"
+        },
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/freepass-admin",
+          "revision": "fb85037969a6c2f4596350b9c66303025be6f19d",
+          "observed_at": "2026-09-19T10:35:12Z"
+        }
+      ],
+      "commands": {
+        "install": "npm ci",
+        "test": "npm test",
+        "build": "npm run build"
+      },
+      "deploy_targets": [],
+      "required_approvals": [
+        "production-persistence-binding",
+        "production-auth-binding",
+        "production-deployment"
+      ],
+      "known_blockers": [
+        "Production persistence adapter is not implemented/verified on canonical main.",
+        "Production auth/permission binding is not implemented/verified; ActorProvider/authorization remains intentionally unbound for production.",
+        "Production audit retention/sink, runtime smoke, deployment target and rollback remain unverified.",
+        "Electronic-contract implementation was CI-verified on feature lineage and merged into work/gpt/esign-port-plan-r1, not canonical main; it requires a bounded replay/reintegration against current main before it can count as main functionality."
+      ]
+    },
+    {
+      "project_id": "freepass-estimate",
+      "name": "FreePass Estimate",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Canonical FreePass estimator/domain SSOT for new-car and used-car quote UI/UX, provider-neutral quote contracts, calculation-provider routing, sharing snapshots and estimator regression evidence.",
+      "repository": "freepass-creator/freepass-estimate",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\freepass-estimate",
+      "head_revision": "f05c4b997bc6268f5526db74bbc65d0ed7cf0f8e",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/freepass-estimate#main",
+          "revision": "f05c4b997bc6268f5526db74bbc65d0ed7cf0f8e",
+          "observed_at": "2026-10-03T06:19:48Z"
+        },
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/freepass-estimate#work/ui-baseline",
+          "revision": "8df0fdfe5ce72ffbc17b3adffcc881c37164ed3a",
+          "observed_at": "2026-09-19T10:46:16Z"
+        }
+      ],
+      "commands": {
+        "install": "npm --prefix apps/new ci",
+        "test": "npm --prefix apps/new run verify",
+        "build": "npm --prefix apps/new run build"
+      },
+      "deploy_targets": [],
+      "required_approvals": [
+        "merge-canonical-work-to-main",
+        "production-deployment"
+      ],
+      "known_blockers": [
+        "Production proof remains HOLD: no verified production deployment/live revision observation is currently bound to FreePass Estimate main.",
+        "FreePass Standard new-car regression remains fail-closed for three Hyundai NEXO cases because hydrogen cost policy is not approved.",
+        "QA SHADOW is now present on canonical main, but recent Actions runs have a runner-entry failure mode with zero executed steps; exact-main CI execution should be re-observed when runners execute."
+      ]
+    },
+    {
+      "project_id": "freepass-homepage",
+      "name": "Freepass Homepage",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Repository discovered and indexed by AI Core; mission and operating boundaries require source review before activation.",
+      "repository": "freepass-creator/freepasshomepage",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\freepasshomepage",
+      "head_revision": "dbf35c85c48a39a7c6d9b75b1a1e8ad157178918",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/freepasshomepage",
+          "revision": "dbf35c85c48a39a7c6d9b75b1a1e8ad157178918",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": null,
+        "test": null,
+        "build": null
+      },
+      "deploy_targets": [],
+      "required_approvals": [],
+      "known_blockers": [
+        "Discovered in the connected GitHub installation but not yet source-reviewed into an AI Core Project Capsule; execution remains HOLD until commands, SSOT and deployment boundaries are verified."
+      ]
+    },
+    {
+      "project_id": "freepass-sales",
+      "name": "Freepass Sales",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Sales inquiry/mail-intake and promotion tooling for Freepass.",
+      "repository": "freepass-creator/freepass-sales",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\freepass-sales",
+      "head_revision": "e2ac9942bca681bca12f167d687e6adcdf23a976",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/freepass-sales",
+          "revision": "e2ac9942bca681bca12f167d687e6adcdf23a976",
+          "observed_at": "2026-10-03T06:19:48Z"
+        },
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/freepass-sales",
+          "revision": "fe69f76d81f4b9acd6f67f7b3f4ef5619f5e33d1",
+          "observed_at": "2026-09-18T14:19:31Z"
+        }
+      ],
+      "commands": {
+        "install": "npm ci",
+        "test": "npm test",
+        "build": "npm run test:android"
+      },
+      "deploy_targets": [],
+      "required_approvals": [],
+      "known_blockers": [
+        "MyData server ingestion/contact-sync code is on canonical main, but production Cloud Run region, runtime/scheduler service accounts, private source bucket and Secret Manager OAuth/Excel values are not yet bound or verified.",
+        "MyData execution remains HOLD: no approved AI Core external-mutation adapter/receipt is bound and no real Gmail/Firestore/Contacts production run was performed by the replay.",
+        "Recent GitHub Actions runs have an observed runner-entry failure mode with zero executed steps; current-main CI should be re-observed when runners execute.",
+        "Historical secondary Sales checkout/branches still contain additional SMS/UI work that has not been fully re-observed against current main.",
+        "Exact-head Sales CI push run 35680212287 succeeded at 05b6ce916b64f3d00c1426d34880c96cb41fb6b5; ACTIVE readiness retained for this observed revision."
+      ]
+    },
+    {
+      "project_id": "freepass-data",
+      "name": "FreePass Data",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Canonical FreePass data contracts, Firebase catalog governance, and deterministic consumer publication specifications.",
+      "repository": "freepass-creator/freepass-data",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\freepass-data",
+      "head_revision": "e49dfb9afa6d8203ed3bf388525179f122aed007",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/freepass-data",
+          "revision": "e49dfb9afa6d8203ed3bf388525179f122aed007",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": "npm ci",
+        "test": "npm test",
+        "build": "npm run build"
+      },
+      "deploy_targets": [],
+      "required_approvals": [
+        "Production Firestore, Google Sheets, or consumer cutover requires the project-specific approval gate."
+      ],
+      "known_blockers": [
+        "Canonical main advanced to 09bc905a...; only scheduled read-only audit evidence was observed, not an exact-head project build/test promotion proof. Execution readiness is HOLD.",
+        "Production catalog publication remains gated by source parity, immutable release validation, and consumer readback."
+      ]
+    },
+    {
+      "project_id": "freepasserp4",
+      "name": "Freepass ERP4",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Freepass ERP platform (partner/settlement/contract/vehicle lifecycle); Firebase ERP5 is the data SSOT candidate pending source reconciliation.",
+      "repository": "freepass-creator/freepasserp4",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\freepasserp4",
+      "head_revision": "6a72da4c60edc075f378730f9176f77c438ea655",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/freepasserp4",
+          "revision": "6a72da4c60edc075f378730f9176f77c438ea655",
+          "observed_at": "2026-10-03T06:19:48Z"
+        },
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/freepasserp4",
+          "revision": "2d9fd07075aae7d6d64687fabbf61126e166c34c",
+          "observed_at": "2026-09-19T10:21:46Z"
+        }
+      ],
+      "commands": {
+        "install": "npm ci",
+        "test": null,
+        "build": "node --max-old-space-size=8192 ./node_modules/next/dist/bin/next build"
+      },
+      "commands_absent_reason": {
+        "test": "단일 test 스크립트가 없다. 검증은 check:* 46 개로 나뉘어 있고 CI 가 그것들을 개별 호출한다 — 무엇을 부를지는 scripts/ci-checker-manifest.json 이 관리한다(2026-09-17 확인)."
+      },
+      "deploy_targets": [
+        "Vercel",
+        "Firebase"
+      ],
+      "required_approvals": [],
+      "known_blockers": [
+        "There is no single package.json test script; CI/checker-manifest owns the required checker set.",
+        "Large historical worktree/branch accumulation remains a cleanup and salvage risk; do not infer all worktrees are obsolete without revision comparison.",
+        "Main is not branch-protected in the latest observed GitHub project audit.",
+        "QA/Governance SHADOW is on main and had successful dedicated + existing CI at its source revision, but production revision/runtime proof remains external.",
+        "Exact-head ERP4 push CI runs 35729027545 (CI) and 35729027528 (SSOT Source Contract) succeeded at f3debda9f70ebb51b7ec965783ed936444e0ad2b; ACTIVE readiness retained for this observed revision."
+      ],
+      "system_aliases": [
+        "ERP4",
+        "ERP5",
+        "FreePass ERP",
+        "freepasserp5"
+      ],
+      "access_entrypoint": {
+        "repository_role": "ERP5 application, workflow, and infrastructure code owner",
+        "clone_repository": "freepass-creator/freepasserp4",
+        "clone_command": "gh repo clone freepass-creator/freepasserp4 C:\\dev\\freepasserp4",
+        "existing_checkout": "C:\\dev\\freepasserp4",
+        "bootstrap_command": "node .ai-core/session-bootstrap.mjs",
+        "data_runtime": {
+          "kind": "Firebase Firestore",
+          "project_id": "freepasserp5",
+          "repository": false
+        },
+        "do_not_clone": [
+          "freepass-creator/jpkerp5"
+        ],
+        "notes": [
+          "ERP5 is the Firebase project and data runtime, not a GitHub repository name.",
+          "jpkerp5 is a RETIRE target and must not be used as the current ERP5 implementation.",
+          "Production data access requires the project existing authorized Firebase path; cloning source code does not grant database credentials."
+        ]
+      }
+    },
+    {
+      "project_id": "sonogong-estimator",
+      "name": "Sonogong Estimator",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "REFERENCE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Repository discovered and indexed by AI Core; mission and operating boundaries require source review before activation.",
+      "repository": "freepass-creator/sonogong-estimator",
+      "default_branch": "main",
+      "local_path": null,
+      "head_revision": "a3627f6e7b8d61f71a83cc7008997b2780522e6f",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/sonogong-estimator",
+          "revision": "a3627f6e7b8d61f71a83cc7008997b2780522e6f",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": null,
+        "test": null,
+        "build": null
+      },
+      "deploy_targets": [],
+      "required_approvals": [],
+      "known_blockers": [
+        "Discovered in the connected GitHub installation but not yet source-reviewed into an AI Core Project Capsule; execution remains HOLD until commands, SSOT and deployment boundaries are verified."
+      ]
+    },
+    {
+      "project_id": "teamjpkwork",
+      "name": "TeamJPK Work",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Repository discovered and indexed by AI Core; mission and operating boundaries require source review before activation.",
+      "repository": "freepass-creator/teamjpkwork",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\teamjpkwork",
+      "head_revision": "44c892ec18858475c4c8d9935aa25169fc0978bc",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/teamjpkwork",
+          "revision": "44c892ec18858475c4c8d9935aa25169fc0978bc",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": null,
+        "test": null,
+        "build": null
+      },
+      "deploy_targets": [],
+      "required_approvals": [],
+      "known_blockers": [
+        "Discovered in the connected GitHub installation but not yet source-reviewed into an AI Core Project Capsule; execution remains HOLD until commands, SSOT and deployment boundaries are verified."
+      ]
+    },
+    {
+      "project_id": "workcontrol",
+      "name": "WorkControl",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "RETIRE",
+      "execution_readiness_status": "DISABLED",
+      "mission": "Repository discovered and indexed by AI Core; mission and operating boundaries require source review before activation.",
+      "repository": "freepass-creator/workcontrol",
+      "default_branch": "main",
+      "local_path": null,
+      "head_revision": "71920aa1a9b7f030b931ab4c009f250d66292002",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/workcontrol",
+          "revision": "71920aa1a9b7f030b931ab4c009f250d66292002",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": null,
+        "test": null,
+        "build": null
+      },
+      "deploy_targets": [],
+      "required_approvals": [],
+      "known_blockers": [
+        "Repository lifecycle is RETIRE after employee-monitoring and shared operational ownership moved to AIOps/TeamJPKWork; execution is DISABLED.",
+        "Archive still requires confirmation that no historical deployment/domain or external runtime binding remains."
+      ]
+    },
+    {
+      "project_id": "mewcar",
+      "name": "Mewcar Automobile Subscription",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Business-content and decision SSOT for the Mewcar automobile-subscription launch: planning, preparation, operating manuals, decisions and evidence pointers. Final formatted documents remain a DocsHub responsibility.",
+      "repository": "freepass-creator/mewcar",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\mewcar",
+      "head_revision": "2b23b0035411f63a6a5396effc6bd8175068a8a1",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/mewcar",
+          "revision": "2b23b0035411f63a6a5396effc6bd8175068a8a1",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": null,
+        "test": null,
+        "build": null
+      },
+      "commands_absent_reason": {
+        "install": "Business-content repository; there is no package/runtime installation step.",
+        "test": "Business SSOT and manuals do not expose an executable automated-test entrypoint.",
+        "build": "Final formatted document production is owned by DocsHub; this repository has no build artifact."
+      },
+      "deploy_targets": [],
+      "required_approvals": [
+        "external-send",
+        "contract-finalization",
+        "legal-or-corporate-action"
+      ],
+      "known_blockers": [
+        "Git intentionally excludes private call recordings/transcripts and personal-detail material; Git source review cannot prove those local-only sources.",
+        "Business decisions and implementation completion must remain distinct: planning/manual presence is not evidence of legal setup, launch, contract approval or external execution.",
+        "Runtime/content parity verified: a0a42cad...→dbe96a42 changes only .ai-core starter-kit files; Mewcar business-content source did not change, so prior readiness is preserved."
+      ]
+    },
+    {
+      "project_id": "welrixtable",
+      "name": "Welrix Table / New-car Quote Runtime",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "REFERENCE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Current executable new-car quote/reference runtime with provider-bound Welrix calculation, quote-contract validation and mobile UI evidence while FreePass Estimate assumes long-term product/domain ownership.",
+      "repository": "freepass-creator/welrixtable",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\welrixtable",
+      "head_revision": "e7010b445ceb52a6b22fd6e64c55b4dd665ab685",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/welrixtable",
+          "revision": "e7010b445ceb52a6b22fd6e64c55b4dd665ab685",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": "npm ci",
+        "test": "npm run check:quote-contract",
+        "build": "npm run build"
+      },
+      "deploy_targets": [],
+      "required_approvals": [
+        "provider-contract-change",
+        "production-deployment"
+      ],
+      "known_blockers": [
+        "Canonical main advanced to 12cadb5c... and the observed exact-head Mobile UX QA run failed. Execution readiness remains HOLD until successful revision-bound verification.",
+        "Long-term estimator product/domain authority is FreePass Estimate; do not promote Welrix Table back into the shared product authority merely because executable new-car evidence currently lives here.",
+        "Live provider parity is a separate external check (`npm run check:welrix-live`) and must not be inferred from offline contract validation."
+      ]
+    },
+    {
+      "project_id": "mewcar-jbwoori-proposal",
+      "name": "Mewcar JB Woori Proposal",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Dedicated JB Woori Capital residual-value-guarantee proposal manuscript, decision log, handoff and editable deliverable history for Mewcar.",
+      "repository": "freepass-creator/mewcar-jbwoori-proposal",
+      "default_branch": "main",
+      "local_path": null,
+      "head_revision": "3fc11053ed46bfd92165bffd26530006b2de2293",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/mewcar-jbwoori-proposal",
+          "revision": "3fc11053ed46bfd92165bffd26530006b2de2293",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": null,
+        "test": null,
+        "build": null
+      },
+      "commands_absent_reason": {
+        "install": "Proposal/reference repository; no package installation is required for source review.",
+        "test": "No canonical automated test entrypoint is defined for this proposal manuscript repository.",
+        "build": "Stored deliverables and manuscript sources are references; no canonical build command is declared."
+      },
+      "deploy_targets": [],
+      "required_approvals": [
+        "external-distribution"
+      ],
+      "known_blockers": [
+        "This repository is proposal-specific and must not override Mewcar business facts/decisions; use freepass-creator/mewcar as the business-content SSOT.",
+        "Internal-review deliverables do not prove external approval or delivery."
+      ]
+    },
+    {
+      "project_id": "ai-ops",
+      "name": "AI Ops",
+      "organization": "SUBSIDIARY",
+      "mission": "Operate the company's AI employee runtime across the Windows PC: observe and act through Computer Use Core, with KakaoTalk as the first app adapter, while consuming project/domain data only through their governed contracts.",
+      "repository": "freepass-creator/ai-ops",
+      "default_branch": "master",
+      "work_branches": [
+        "codex/freepass-data-consumer-20260922"
+      ],
+      "local_path": "C:\\dev\\ai-ops",
+      "head_revision": "8f1812cb181e05e0d215db013bafc5de27e3af79",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/ai-ops",
+          "revision": "8f1812cb181e05e0d215db013bafc5de27e3af79",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": "npm ci",
+        "test": "npm test",
+        "build": null
+      },
+      "deploy_targets": [
+        "Dedicated Windows AI employee PC"
+      ],
+      "required_approvals": [
+        "external message or email send when the active AI Ops policy requires approval",
+        "production consumer credential change",
+        "destructive or irreversible PC action"
+      ],
+      "known_blockers": [
+        "Current production mode is session-direct AI work; the legacy automatic-response pipeline remains blocked unless explicitly forced under the repository's current gate.",
+        "Windows operational verification still requires PowerShell 5.1/BOM compatibility, live DPI sender/read-count verification and outgoing-effect receipts on the target PC.",
+        "Multi-PC duplicate execution prevention and durable LIVE executor boundaries remain operational gates.",
+        "AI Ops may consume FreePass Data and other domain sources only through their governed consumer/read contracts; it must not become a second data SSOT or writer."
+      ],
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "commands_absent_reason": {
+        "build": "The Node.js/PowerShell runtime executes from source and package.json has no build script."
+      }
+    },
+    {
+      "project_id": "renman-data",
+      "name": "Renman Data",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Dedicated Renman data contracts and policy-governed read gateway over teamjpkwork Firestore; preserves source evidence and does not duplicate AI Ops business writers.",
+      "repository": "freepass-creator/renman-data",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\renman-data",
+      "head_revision": "834efc35a78bd09bc4c9f695fc52bb138f8089c6",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/renman-data",
+          "revision": "834efc35a78bd09bc4c9f695fc52bb138f8089c6",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": null,
+        "test": "node scripts/renman-source-audit.mjs --test-profile && node --test scripts/renman-read-api.test.mjs scripts/renman-cloud-hub.test.mjs",
+        "build": null
+      },
+      "commands_absent_reason": {
+        "install": "Native Node runtime modules use no third-party package install.",
+        "build": "No single local build command is registered. Four-file Cloud Build 16e2b1bb-9931-4a26-81eb-c73e3162ffd4 and private read revision renman-data-read-00002-b9z were verified on 2026-10-01; business data publication remains HOLD."
+      },
+      "deploy_targets": [
+        "Cloud Run teamjpkwork/asia-northeast3/renman-data-read"
+      ],
+      "required_approvals": [
+        "production-data-write",
+        "production-deploy",
+        "consumer-permission-change"
+      ],
+      "known_blockers": [
+        "READ_ONLY_DEVELOPMENT_ALLOWED; execution readiness remains HOLD for business-confirmed source publication and production changes.",
+        "Immutable source retention, stable contract mapping, staff confirmation and per-consumer persistent audit remain unimplemented.",
+        "GitHub verify/deploy main runs 36792847815/36792847790 did not start any steps due to billing. Direct read-runtime deployment/readback verified separately; automation remains UNAVAILABLE_BILLING.",
+        "AI Ops owns existing business write paths; this registration does not authorize a second arrears writer or data migration."
+      ]
+    },
+    {
+      "project_id": "renman",
+      "name": "Renman",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Rental-car business ERP web app (jpkerp6, Next.js + Firebase) and, since 2026-10-03, owner of the penalty (과태료) engine moved from the retired aiops repository into penalty-engine/ (renman#17). Reads rental business data through renman-data; does not host the read gateway.",
+      "repository": "freepass-creator/renman",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\renman",
+      "head_revision": "499142f23b91eff38595cfdc022cb7067b3f642b",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/renman",
+          "revision": "499142f23b91eff38595cfdc022cb7067b3f642b",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": "npm ci",
+        "test": "npm test && npm --prefix penalty-engine test",
+        "build": "npm run build"
+      },
+      "deploy_targets": [],
+      "required_approvals": [
+        "external penalty dispatch (관청발송·문서24업로드) stays with staff",
+        "production-data-write",
+        "production-deploy"
+      ],
+      "known_blockers": [
+        "Execution readiness is HOLD: penalty-engine was migrated at renman 499142f (renman#17); its own suite passed 222 of 227 with the same 5 failures as the aiops original, and no AI Core execution has been re-verified at this revision.",
+        "penalty-engine reads keys from C:\\dev\\teamjpkwork\\.env.local (WORK_ENV_PATH) and runs with penalty-engine/ as cwd; canonical tables lib/wonja/*.json, gongmun-damdang.json and beopin-jeongbon.json are absent until rebuilt in Firestore/renman-data.",
+        "Scheduled penalty tasks (aiops-gwataeryo-*) are Disabled and still point at C:\\dev\\aiops; re-register them from penalty-engine/ before enabling."
+      ]
+    }
+  ]
+}
