@@ -65,8 +65,8 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
 export function planSupplierDropdowns(input, spec=inputSpec, now=Date.now()) {
   const verified=planSupplierInput(input,spec,now);
   const free=new Set(spec.dropdownPolicy?.freeText??[]);
-  const unknown=spec.inputHeaders.filter(h=>!spec.dropdowns?.[h]&&!free.has(h));
-  if(unknown.length)hold(`Every column needs a dropdown or a free-text decision: ${unknown.join(', ')}`);
+  const unknown=spec.inputHeaders.filter(h=>[Boolean(spec.dropdowns?.[h]),Boolean(spec.vehicleMaster?.columns?.[h]),free.has(h)].filter(Boolean).length!==1);
+  if(unknown.length)hold(`Every column needs exactly one dropdown, vehicle-master range or free-text decision: ${unknown.join(', ')}`);
   const requests=[];
   for(const sup of input.binding.suppliers){
     const s=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);
@@ -78,6 +78,48 @@ export function planSupplierDropdowns(input, spec=inputSpec, now=Date.now()) {
     });
   }
   return {status:'PLANNED',scope:'SUPPLIER_TAB_DATA_VALIDATION_ONLY',layoutVersion:verified.layoutVersion,spreadsheetId:verified.spreadsheetId,drift:verified.drift,requests};
+}
+// Full master lists, not per-row dependent lists. Only the hidden list tab
+// receives values; supplier tabs receive validation rules only.
+export function planVehicleMasterDropdowns(input,spec=inputSpec,now=Date.now()){
+  planSupplierInput(input,spec,now);
+  const rule=spec.vehicleMaster,master=input.master;
+  const names=['제조사','모델','세부모델','세부트림'];
+  if(!rule||rule.sheetId!==9100||rule.tab!=='차종목록'||rule.hidden!==true||JSON.stringify(rule.columns)!==JSON.stringify({제조사:'A',모델:'B',세부모델:'C',세부트림:'D'}))hold('Vehicle master spec invalid');
+  if(![rule.source,rule.source.split(' / 탭 ')[0]].includes(master?.source)||!Number.isFinite(Date.parse(master?.readAt)))hold('Vehicle master provenance required');
+  if(!Array.isArray(master.header)||names.some(h=>master.header.filter(x=>x===h).length!==1))hold('Vehicle master columns missing or duplicated');
+  if(!Array.isArray(master.rows)||master.rows.some(r=>!Array.isArray(r)))hold('Vehicle master rows required');
+  const lists=names.map(h=>{
+    const at=master.header.indexOf(h),values=master.rows.map(r=>r[at]).filter(v=>v!==undefined&&v!==null&&v!=='');
+    if(values.some(v=>typeof v!=='string'))hold(`Vehicle master non-text value: ${h}`);
+    const list=[...new Set(values.filter(v=>v.trim()!==''))];
+    if(!list.length)hold(`Vehicle master empty list: ${h}`);
+    return list;
+  });
+  const height=Math.max(...lists.map(l=>l.length))+1;
+  const existing=input.spreadsheet.sheets.find(s=>s.properties.sheetId===rule.sheetId);
+  if([input.binding.summarySheetId,input.binding.guideSheetId,...input.binding.suppliers.map(s=>s.sheetId)].includes(rule.sheetId))hold('Vehicle master tab must be unbound');
+  if(input.spreadsheet.sheets.some(s=>s.properties.title===rule.tab&&s.properties.sheetId!==rule.sheetId))hold('Vehicle master title belongs to another sheet');
+  const requests=[];
+  if(existing){
+    const p=existing.properties;
+    if(p.title!==rule.tab||p.hidden!==true)hold('Vehicle master tab title/hidden mismatch');
+    if(!(p.gridProperties?.rowCount>=height)||!(p.gridProperties?.columnCount>=4))hold('Vehicle master grid too small');
+    requests.push({updateCells:{range:{sheetId:rule.sheetId,startColumnIndex:0,endColumnIndex:4},fields:'userEnteredValue'}});
+  }else requests.push({addSheet:{properties:{sheetId:rule.sheetId,title:rule.tab,hidden:true,gridProperties:{rowCount:height,columnCount:4}}}});
+  const rows=[{values:names.map(stringValue=>({userEnteredValue:{stringValue}}))}];
+  for(let i=0;i<height-1;i++)rows.push({values:lists.map(list=>i<list.length?{userEnteredValue:{stringValue:list[i]}}:{})});
+  requests.push({updateCells:{start:{sheetId:rule.sheetId,rowIndex:0,columnIndex:0},rows,fields:'userEnteredValue'}});
+  for(const sup of input.binding.suppliers){
+    const s=input.spreadsheet.sheets.find(s=>s.properties.sheetId===sup.sheetId),headers=headersOf(s),end=s.properties.gridProperties.rowCount;
+    if(!Number.isInteger(end)||end<2)hold('Supplier rowCount invalid');
+    names.forEach((h,i)=>{
+      const at=headers.indexOf(h);if(at<0)hold(`Vehicle master target column missing: ${h}`);
+      const col=rule.columns[h],range={sheetId:sup.sheetId,startRowIndex:1,endRowIndex:end,startColumnIndex:at,endColumnIndex:at+1};
+      requests.push({setDataValidation:{range,rule:{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${rule.tab}'!$${col}$2:$${col}$${lists[i].length+1}`}]},strict:spec.dropdownStrict===true,showCustomUi:true}}});
+    });
+  }
+  return {status:'PLANNED',scope:'VEHICLE_MASTER_RANGE_DROPDOWNS',counts:Object.fromEntries(names.map((h,i)=>[h,lists[i].length])),requests};
 }
 // "One cell, one fact": split combined policy cells (2026-10-03 → -split).
 // Each combined value must match its exact shape or the whole plan holds;
@@ -410,5 +452,5 @@ export function compareSharedToLegacy({shared,legacy,binding},spec=inputSpec,now
   return {status:results.every(r=>r.status==='IN_SYNC')&&!unboundLegacy.length?'ALL_IN_SYNC':'NOT_IN_SYNC',scope:'COMPARE_ONLY_VEHICLE_RATE_FIELDS_NO_WRITES_POLICY_NOT_COMPARED',layoutVersion:spec.layoutVersion,summary,unboundLegacy,notCompared,results};
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
-  try {const change=process.argv.find(a=>a.startsWith('--change-layout='))?.slice(16);if(change){console.log(JSON.stringify(planLayoutChange(JSON.parse(change==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(change,'utf8'))),null,2));process.exit(0);}const add=process.argv.find(a=>a.startsWith('--add-columns='))?.slice(14);if(add){console.log(JSON.stringify(planColumnAdd(JSON.parse(add==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(add,'utf8'))),null,2));process.exit(0);}const reorder=process.argv.find(a=>a.startsWith('--reorder='))?.slice(10);if(reorder){console.log(JSON.stringify(planLayoutReorder(JSON.parse(reorder==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(reorder,'utf8'))),null,2));process.exit(0);}const split=process.argv.find(a=>a.startsWith('--split='))?.slice(8);if(split){console.log(JSON.stringify(planPolicySplit(JSON.parse(split==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(split,'utf8'))),null,2));process.exit(0);}const dropdowns=process.argv.find(a=>a.startsWith('--dropdowns='))?.slice(12);const compare=process.argv.find(a=>a.startsWith('--compare='))?.slice(10);if(dropdowns){console.log(JSON.stringify(planSupplierDropdowns(JSON.parse(dropdowns==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(dropdowns,'utf8'))),null,2));}else if(compare){console.log(JSON.stringify(compareSharedToLegacy(JSON.parse(fs.readFileSync(compare,'utf8'))),null,2));}else{const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json or --compare=private-compare.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}
+  try {const master=process.argv.find(a=>a.startsWith('--vehicle-master='))?.slice(17);if(master){console.log(JSON.stringify(planVehicleMasterDropdowns(JSON.parse(master==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(master,'utf8'))),null,2));process.exit(0);}const change=process.argv.find(a=>a.startsWith('--change-layout='))?.slice(16);if(change){console.log(JSON.stringify(planLayoutChange(JSON.parse(change==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(change,'utf8'))),null,2));process.exit(0);}const add=process.argv.find(a=>a.startsWith('--add-columns='))?.slice(14);if(add){console.log(JSON.stringify(planColumnAdd(JSON.parse(add==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(add,'utf8'))),null,2));process.exit(0);}const reorder=process.argv.find(a=>a.startsWith('--reorder='))?.slice(10);if(reorder){console.log(JSON.stringify(planLayoutReorder(JSON.parse(reorder==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(reorder,'utf8'))),null,2));process.exit(0);}const split=process.argv.find(a=>a.startsWith('--split='))?.slice(8);if(split){console.log(JSON.stringify(planPolicySplit(JSON.parse(split==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(split,'utf8'))),null,2));process.exit(0);}const dropdowns=process.argv.find(a=>a.startsWith('--dropdowns='))?.slice(12);const compare=process.argv.find(a=>a.startsWith('--compare='))?.slice(10);if(dropdowns){console.log(JSON.stringify(planSupplierDropdowns(JSON.parse(dropdowns==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(dropdowns,'utf8'))),null,2));}else if(compare){console.log(JSON.stringify(compareSharedToLegacy(JSON.parse(fs.readFileSync(compare,'utf8'))),null,2));}else{const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json or --compare=private-compare.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}
 }
