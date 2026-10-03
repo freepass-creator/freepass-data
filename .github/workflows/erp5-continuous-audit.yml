@@ -38,7 +38,9 @@ on:
     - cron: '37 * * * *'
 
 concurrency:
-  group: erp5-continuous-read-only-audit
+  # 정시·push·입력 없는 수동 실행의 그룹 값은 이전과 똑같다(erp5-continuous-read-only-audit).
+  # economics_dry_run 수동 실행만 별도 그룹을 써서 정시 감사 대기열을 밀어내지 않는다.
+  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.economics_dry_run) && 'freepass-data-economics-dry-run' || 'erp5-continuous-read-only-audit' }}
   cancel-in-progress: false
 
 permissions:
