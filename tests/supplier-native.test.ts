@@ -237,6 +237,58 @@ describe('RP031 scheduler relay port contract', () => {
       expect(fixture.ports.receipts.recordOutcome).not.toHaveBeenCalled();
     } finally { await server.close(); }
   });
+  it('accepts short job IDs on both routes and preserves the full-path receipt key', async () => {
+    const fixture = relayFixture(), server = buildSupplierRelayServer(fixture.ports, jobName);
+    const headers = { authorization: 'Bearer fixture', 'x-cloudscheduler-jobname': 'supplier-relay-iancar-15m',
+      'x-cloudscheduler-scheduletime': now };
+    try {
+      const verified = await server.inject({ method: 'POST', url: '/verify', payload: {}, headers });
+      expect(verified.statusCode).toBe(200);
+      expect(verified.json().status).toBe('VERIFIED');
+      const scheduled = await server.inject({ method: 'POST', url: '/schedule', payload: {}, headers });
+      expect(scheduled.statusCode).toBe(200);
+      expect(scheduled.json().status).toBe('ACCEPTED_PENDING');
+      expect(fixture.ports.receipts.createOnly).toHaveBeenCalledWith({ key: scheduled.json().key,
+        jobName, scheduleTime: new Date(now).toISOString() });
+      expect(await fixture.handle(request())).toMatchObject({ status: 'DUPLICATE', key: scheduled.json().key });
+      expect(fixture.ports.dispatch).toHaveBeenCalledTimes(1);
+    } finally { await server.close(); }
+  });
+  it.each(['/verify', '/schedule'])('rejects unknown short IDs and foreign paths on %s', async url => {
+    const fixture = relayFixture(), server = buildSupplierRelayServer(fixture.ports, jobName);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      for (const id of ['supplier-relay-unknown', jobName.replace('fixture-region', 'other-region'),
+        'jobs/supplier-relay-iancar-15m']) {
+        const response = await server.inject({ method: 'POST', url, payload: {}, headers: {
+          authorization: 'Bearer fixture', 'x-cloudscheduler-jobname': id, 'x-cloudscheduler-scheduletime': now,
+        } });
+        expect(response.statusCode).toBe(400);
+      }
+      expect(log.mock.calls).toEqual(Array.from({ length: 3 }, () => [JSON.stringify({
+        event: 'supplier_relay_reject', path: url, code: 400, reason: 'JOB_NOT_ALLOWLISTED',
+      })]));
+      expect(fixture.ports.receipts.createOnly).not.toHaveBeenCalled();
+      expect(fixture.ports.dispatch).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); await server.close(); }
+  });
+  it('accepts nine fractional digits and truncates to milliseconds before receipt creation', async () => {
+    const fixture = relayFixture(), server = buildSupplierRelayServer(fixture.ports, jobName);
+    try {
+      const response = await server.inject({ method: 'POST', url: '/schedule', payload: {}, headers: {
+        authorization: 'Bearer fixture', 'x-cloudscheduler-jobname': 'supplier-relay-iancar-15m',
+        'x-cloudscheduler-scheduletime': '2026-10-03T00:00:00.123999999Z',
+      } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().status).toBe('ACCEPTED_PENDING');
+      expect(fixture.ports.receipts.createOnly).toHaveBeenCalledWith({ key: response.json().key,
+        jobName, scheduleTime: '2026-10-03T00:00:00.123Z' });
+      expect(await fixture.handle(request('2026-10-03T00:00:00.123Z')))
+        .toMatchObject({ status: 'DUPLICATE', key: response.json().key });
+      expect(await fixture.handle(request('2026-10-03T00:00:00.1234567890Z')))
+        .toMatchObject({ status: 'INVALID_REQUEST' });
+    } finally { await server.close(); }
+  });
   it('dispatches only fixed inputs once and retains pending admission until run reconciliation', async () => {
     const fixture = relayFixture();
     expect(await fixture.handle(request())).toMatchObject({ status: 'ACCEPTED_PENDING', runId: '1234' });
