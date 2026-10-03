@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {planSupplierInput,planSupplierDropdowns,planPolicySplit,planLayoutReorder,planColumnAdd,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec} from '../scripts/supplier-input-sheet.mjs';
+import {planSupplierInput,planSupplierDropdowns,planPolicySplit,planLayoutReorder,planColumnAdd,planLayoutChange,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec} from '../scripts/supplier-input-sheet.mjs';
 const now=Date.parse('2026-10-03T12:00:00Z');
 const legacy=inputSpec.legacyLayouts['2026-10-02'];
 const sheet=(id,title,headers,grid={frozenRowCount:1,frozenColumnCount:0})=>({properties:{sheetId:id,title,gridProperties:{rowCount:1000,columnCount:headers.length,...grid}},data:[{rowData:[{values:headers.map(h=>({userEnteredValue:{stringValue:h}}))}]}]});
@@ -8,27 +8,17 @@ const shared=inputSpec.supplierChannels.sharedInputSheet;
 const fixture=()=>({capturedAt:new Date(now).toISOString(),binding:{spreadsheetId:'test',summarySheetId:1,guideSheetId:2,suppliers:shared.map((r,i)=>({sheetId:3+i,title:r.tab,code:r.code}))},sheetInventory:[1,2,...shared.map((_,i)=>3+i)].map(sheetId=>({sheetId})),spreadsheet:{spreadsheetId:'test',sheets:[sheet(1,'종합',inputSpec.summaryHeaders),sheet(2,'관리안내',['안내']),...shared.map((r,i)=>sheet(3+i,r.tab,inputSpec.inputHeaders))]}});
 const policyFixture=()=>{const f=fixture(),d=sheet(3,'웰릭스',legacy.inputHeaders);const h=legacy.inputHeaders,values=h.map(()=>({}));values[h.indexOf('차량번호')]={userEnteredValue:{stringValue:'TEST-1'}};values[h.indexOf('정책코드')]={userEnteredValue:{stringValue:'POL-01'}};d.data[0].rowData.push({values});return {runId:'test-run',capturedAt:f.capturedAt,suppliers:[{sheetId:3,sourceId:'source',sourceTab:'policy'}],destinations:[d],captures:[{sourceId:'source',sourceTab:'policy',complete:true,rows:[{values:['정책코드','추가주행 금액','정비'].map(stringValue=>({userEnteredValue:{stringValue}}))},{values:['POL-01','대여료의 10%','연2회오일'].map(stringValue=>({userEnteredValue:{stringValue}}))}]}]};};
 
-test('2026-10-03-spec layout: 대표 order, 제원 6칸 after 차량가격, then 41 one-fact policy columns',()=>{
-  assert.equal(inputSpec.layoutVersion,'2026-10-03-spec');
-  assert.equal(inputSpec.vehicleHeaders.length,39);assert.equal(inputSpec.policyHeaders.length,41);
-  const v=inputSpec.vehicleHeaders,before=(a,b)=>assert.ok(v.indexOf(a)<v.indexOf(b),a+'<'+b);
-  assert.deepEqual(v.slice(0,9),['회사명','차량상태','배차상태','상품구분','차량번호','제조사','모델','세부모델','세부트림']);
-  for(const h of ['외부색상','내부색상','최초등록일','입고일자','사진링크','기타기간①','기타기간②','기타기간③'])before('세부트림',h),before(h,'연식');
-  before('연식','주행거리');before('주행거리','배기량');before('배기량','연료');before('연료','단기보증');before('60개월','차명 원문');assert.deepEqual(v.slice(-9),['차명 원문','옵션 원문','차량가격','인승','차종구분','차종크기','구동방식','배터리용량','원산지']);assert.equal(inputSpec.legacyLayouts['2026-10-03-order'].inputHeaders.length,74);
-  assert.equal(inputSpec.policyHeaders[0],'예외사항');assert.ok(inputSpec.dropdowns['모델']?.includes('그랜저'));assert.ok(!inputSpec.dropdowns['세부모델']);
-  assert.equal(inputSpec.legacyLayouts['2026-10-03-split'].inputHeaders.length,71);
-  for(const h of inputSpec.policyHeaders)assert.ok(!h.includes('/')||h==='선불/후불',h);
-  assert.equal(inputSpec.legacyLayouts['2026-10-03'].inputHeaders.length,62);
-  assert.deepEqual(inputSpec.inputHeaders,[...inputSpec.vehicleHeaders,...inputSpec.policyHeaders]);
-  assert.deepEqual(inputSpec.summaryHeaders,inputSpec.inputHeaders);
-  assert.equal(new Set(inputSpec.inputHeaders).size,80);
-  
-  assert.equal(inputSpec.vehicleHeaders.at(-1),'원산지');
-  assert.deepEqual(inputSpec.policyHeaders.slice(0,8),['예외사항','심사','보험료','기본연령','면허기간','연주행','1만km+','21세+']);
-  assert.equal(inputSpec.policyHeaders.at(-1),'비고');assert.ok(inputSpec.policyHeaders.includes('계좌번호'));
-  for(const gone of ['정책코드','점검사항','차종코드','차명(정제)','제조사(정제)','26세+'])assert.ok(!inputSpec.inputHeaders.includes(gone),gone);
-  assert.equal(inputSpec.frozenRowCount,1);assert.equal(inputSpec.frozenColumnCount,0);assert.equal(inputSpec.font.italic,false);
-  assert.ok(!inputSpec.numberHeaders.includes('연식'));
+test('2026-10-03-sales layout: 영업자 보기 — 어떤 차인지 → 대여료 → 부가 정보, then 예외사항 and 41 one-fact policy columns',()=>{
+  assert.equal(inputSpec.layoutVersion,'2026-10-03-sales');
+  const v=inputSpec.vehicleHeaders;assert.equal(v.length,34);assert.equal(inputSpec.policyHeaders.length,41);
+  assert.deepEqual(v.slice(0,15),['회사명','입고일자','차량상태','상품구분','차량번호','제조사','모델','세부모델','세부트림','외부색상','내부색상','연식','주행거리','배기량','연료']);
+  assert.deepEqual(v.slice(15,24),['단기보증','1개월','6개월','12개월','장기보증','24개월','36개월','48개월','60개월']);
+  assert.deepEqual(v.slice(24),['차명 원문','옵션 원문','차량가격','인승','차종크기','차종구분','구동방식','배터리용량','원산지','최초등록일']);
+  for(const gone of ['배차상태','사진링크','기타기간①','기타기간②','기타기간③','정책코드','점검사항'])assert.ok(!inputSpec.inputHeaders.includes(gone),gone);
+  assert.deepEqual(inputSpec.inputHeaders,[...v,...inputSpec.policyHeaders]);assert.deepEqual(inputSpec.summaryHeaders,inputSpec.inputHeaders);assert.equal(new Set(inputSpec.inputHeaders).size,75);
+  assert.equal(inputSpec.policyHeaders[0],'예외사항');assert.ok(inputSpec.policyHeaders.includes('계좌번호'));for(const h of inputSpec.policyHeaders)assert.ok(!h.includes('/')||h==='선불/후불',h);
+  assert.equal(inputSpec.frozenRowCount,1);assert.equal(inputSpec.frozenColumnCount,0);assert.ok(inputSpec.dropdowns['모델']?.includes('그랜저'));
+  assert.equal(inputSpec.legacyLayouts['2026-10-03-spec'].inputHeaders.length,80);
 });
 test('matching sheet verifies with zero write requests and leaves input untouched',()=>{const f=fixture(),before=JSON.stringify(f),r=planSupplierInput(f,inputSpec,now);assert.equal(JSON.stringify(f),before);assert.equal(r.status,'LAYOUT_VERIFIED');assert.deepEqual(r.requests,[]);assert.match(r.scope,/VERIFY_ONLY/);});
 test('any header difference is LAYOUT_MISMATCH HOLD — old 2026-10-02 layout, reorder, missing, extra',()=>{
@@ -115,14 +105,29 @@ test('layout reorder: appends new columns, moves whole columns into the 대표 o
 const orderH=inputSpec.legacyLayouts['2026-10-03-order'].inputHeaders;
 const addFixture=()=>{const f=fixture();f.spreadsheet.sheets=f.spreadsheet.sheets.map(sh=>{const id=sh.properties.sheetId;if(id===2)return sh;const t=sheet(id,sh.properties.title,orderH);t.properties.gridProperties={...t.properties.gridProperties,columnCount:74};return t;});return f;};
 test('column add: inserts 제원 6칸 after 차량가격, fills only those columns from matched rows, never rewrites existing cells',()=>{
-  const f=addFixture();f.fill={'3':[{row:1,values:{'인승':5,'차종구분':'세단','원산지':'국산'}}],'4':[{row:2,values:{'배터리용량':77.4}}]};const before=JSON.stringify(f),p=planColumnAdd(f,inputSpec,now);assert.equal(JSON.stringify(f),before);assert.equal(p.to,'2026-10-03-spec');
+  const f=addFixture();f.fill={'3':[{row:1,values:{'인승':5,'차종구분':'세단','원산지':'국산'}}],'4':[{row:2,values:{'배터리용량':77.4}}]};const before=JSON.stringify(f),p=planColumnAdd(f,inputSpec,now);assert.equal(JSON.stringify(f),before);assert.equal(p.to,'2026-10-03-spec');const specH=inputSpec.legacyLayouts['2026-10-03-spec'].inputHeaders;
   const at=orderH.indexOf('차량가격')+1;const ins=p.requests.filter(r=>r.insertDimension&&r.insertDimension.range.sheetId===3);assert.deepEqual(ins.map(r=>[r.insertDimension.range.startIndex,r.insertDimension.range.endIndex]),[[at,at+6]]);
   const fills=p.requests.filter(r=>r.updateCells&&r.updateCells.start.rowIndex>0&&r.updateCells.start.sheetId!==1);assert.equal(fills.length,2);assert.ok(fills.every(r=>r.updateCells.start.columnIndex===at&&r.updateCells.rows[0].values.length===6));
   assert.deepEqual(fills[0].updateCells.rows[0].values.map(v=>v.userEnteredValue??null),[{stringValue:'5'},{stringValue:'세단'},null,null,null,{stringValue:'국산'}],'list values stored as list text');
   assert.deepEqual(fills[1].updateCells.rows[0].values[4].userEnteredValue,{numberValue:77.4},'battery stays numeric');
   const fmt=h=>p.requests.find(r=>r.repeatCell&&r.repeatCell.range.sheetId===3&&r.repeatCell.range.startColumnIndex===at+['인승','차종구분','차종크기','구동방식','배터리용량','원산지'].indexOf(h)).repeatCell.cell.userEnteredFormat.numberFormat.type;assert.equal(fmt('배터리용량'),'NUMBER');assert.equal(fmt('차종구분'),'TEXT');assert.equal(fmt('인승'),'TEXT');
-  const head=p.requests.find(r=>r.updateCells&&r.updateCells.start.sheetId===3&&r.updateCells.start.rowIndex===0).updateCells.rows[0].values.map(v=>v.userEnteredValue.stringValue);assert.deepEqual(head,inputSpec.inputHeaders);
+  const head=p.requests.find(r=>r.updateCells&&r.updateCells.start.sheetId===3&&r.updateCells.start.rowIndex===0).updateCells.rows[0].values.map(v=>v.userEnteredValue.stringValue);assert.deepEqual(head,specH);
   const dv=p.requests.filter(r=>r.setDataValidation&&r.setDataValidation.range.sheetId===3);assert.equal(dv.length,6);assert.equal(dv.find(r=>r.setDataValidation.range.startColumnIndex===at+4).setDataValidation.rule,undefined,'배터리용량 free');
   const sum=p.requests.filter(r=>r.updateCells?.start.sheetId===1)[0].updateCells;assert.equal(sum.rows[0].values.length,80);assert.match(sum.rows[1].values[0].userEnteredValue.formulaValue,/'웰릭스'!A2:CB1000/);
   for(const bad of [{'3':[{row:1,values:{'인승':5}},{row:1,values:{'원산지':'국산'}}]},{'3':[{row:1,values:{'차량가격':1}}]},{'3':[{row:0,values:{'인승':5}}]},{'999':[{row:1,values:{'인승':5}}]}]){const g=addFixture();g.fill=bad;assert.throws(()=>planColumnAdd(g,inputSpec,now),/HOLD/);}
   assert.throws(()=>planColumnAdd(fixture(),inputSpec,now),/LAYOUT_MISMATCH/);});
+const specH=inputSpec.legacyLayouts['2026-10-03-spec'].inputHeaders;
+const changeFixture=(rows=[])=>{const f=fixture();f.spreadsheet.sheets=f.spreadsheet.sheets.map(sh=>{const id=sh.properties.sheetId;if(id===2)return sh;const t=sheet(id,sh.properties.title,specH);t.properties.gridProperties={...t.properties.gridProperties,columnCount:80,rowCount:id===1?1000:4};if(id!==1){const row=o=>({values:specH.map(h=>o[h]===undefined?{}:{userEnteredValue:{stringValue:o[h]}})});t.data[0].rowData.push(...(id===3?rows:[]).map(row));while(t.data[0].rowData.length<4)t.data[0].rowData.push({values:[]});}return t;});return f;};
+test('layout change: links plates to photos, deletes removed columns right to left, moves the rest, never rewrites values',()=>{
+  const f=changeFixture([{'차량번호':'12가3456','사진링크':'https://example.com/a'},{'차량번호':'34나5678'}]),before=JSON.stringify(f),p=planLayoutChange(f,inputSpec,now);assert.equal(JSON.stringify(f),before);assert.equal(p.to,'2026-10-03-sales');assert.equal(p.platesLinked,1);
+  assert.ok(p.requests.every(r=>['repeatCell','deleteDimension','moveDimension','updateCells'].includes(Object.keys(r)[0])));
+  const mine=p.requests.filter(r=>{const b=Object.values(r)[0];return (b.range??b.source??b.start)?.sheetId===3;});
+  const link=mine.find(r=>r.repeatCell);assert.equal(link.repeatCell.range.startColumnIndex,specH.indexOf('차량번호'));assert.equal(link.repeatCell.cell.userEnteredFormat.textFormat.link.uri,'https://example.com/a');assert.equal(link.repeatCell.fields,'userEnteredFormat.textFormat.link');
+  assert.ok(mine.findIndex(r=>r.repeatCell)<mine.findIndex(r=>r.deleteDimension),'link before deleting the photo column');
+  const sim=[...specH];for(const r of mine){if(r.deleteDimension)sim.splice(r.deleteDimension.range.startIndex,1);if(r.moveDimension)sim.splice(r.moveDimension.destinationIndex,0,sim.splice(r.moveDimension.source.startIndex,1)[0]);}
+  assert.deepEqual(sim,inputSpec.inputHeaders);
+  assert.equal(p.requests.filter(r=>r.updateCells&&(r.updateCells.start?.rowIndex??0)>0&&r.updateCells.start?.sheetId!==1).length,0,'no data cell rewritten');
+  const sumReqs=p.requests.filter(r=>{const b=Object.values(r)[0];return (b.range??b.start)?.sheetId===1;});assert.match(sumReqs[0].updateCells.rows[1].values[0].userEnteredValue.formulaValue,/'웰릭스'!A2:BW4/);assert.equal(sumReqs.at(-1).deleteDimension.range.startIndex,75);
+  for(const rows of [[{'차량번호':'1','사진링크':'ftp://x'}],[{'사진링크':'https://example.com/b'}]]){assert.throws(()=>planLayoutChange(changeFixture(rows),inputSpec,now),/HOLD/);}
+  const short=changeFixture();short.spreadsheet.sheets[2].data[0].rowData.pop();assert.throws(()=>planLayoutChange(short,inputSpec,now),/full-height/);
+  assert.throws(()=>planLayoutChange(fixture(),inputSpec,now),/LAYOUT_MISMATCH/);});
