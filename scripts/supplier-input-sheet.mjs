@@ -641,7 +641,7 @@ function canonTabAudit(snapshot,spec){
       const baseHeader=canonCell(base,0,i).userEnteredFormat??{};
       const dataRows=[...base.rows.keys()].filter(r=>r>0);
       const font={fontFamily:spec.font.family,fontSize:spec.font.size,italic:spec.font.italic};
-      const attributes=[['font','textFormat.fontFamily',font.fontFamily],['font','textFormat.fontSize',font.fontSize],['font','textFormat.italic',font.italic],['bodyFont','textFormat.bold',null],['alignment','horizontalAlignment',spec.leftAlignHeaders.includes(h)?'LEFT':spec.tabConsistency.horizontalAlignment],['numberFormat','numberFormat',canonNumberFormat(h,spec)]];
+      const attributes=[['font','textFormat.fontFamily',font.fontFamily],['font','textFormat.fontSize',font.fontSize],['font','textFormat.italic',font.italic],['bodyFont','textFormat.bold',null],['alignment','horizontalAlignment',spec.leftAlignHeaders.includes(h)?'LEFT':(spec.rightAlignHeaders??[]).includes(h)?'RIGHT':spec.tabConsistency.horizontalAlignment],['numberFormat','numberFormat',canonNumberFormat(h,spec)]];
       const get=(fmt,path)=>path.split('.').reduce((v,k)=>v?.[k],fmt)??null;
       for(const [item,path,fixed] of attributes){
         const majority=fixed===null?canonMajority(dataRows.map(r=>get(canonCell(base,r,i).userEnteredFormat,path))):{value:fixed};
@@ -688,7 +688,7 @@ export function planTabConsistencyFix(snapshot,spec=inputSpec){
   const headerPaths=[...paths,'backgroundColor','backgroundColorStyle'];
   const bodyRows=[...base.rows.keys()].filter(r=>r>0);
   const formats=spec.inputHeaders.map((h,i)=>{
-    const fixed={'textFormat.fontFamily':spec.font.family,'textFormat.fontSize':spec.font.size,'textFormat.italic':spec.font.italic,horizontalAlignment:spec.leftAlignHeaders.includes(h)?'LEFT':spec.tabConsistency.horizontalAlignment,numberFormat:canonNumberFormat(h,spec)};
+    const fixed={'textFormat.fontFamily':spec.font.family,'textFormat.fontSize':spec.font.size,'textFormat.italic':spec.font.italic,horizontalAlignment:spec.leftAlignHeaders.includes(h)?'LEFT':(spec.rightAlignHeaders??[]).includes(h)?'RIGHT':spec.tabConsistency.horizontalAlignment,numberFormat:canonNumberFormat(h,spec)};
     const body={},bodyPaths=[],header={},baseHeader=canonCell(base,0,i).userEnteredFormat??{};
     const put=(target,path,value)=>{if(value===null)return;const parts=path.split('.');if(parts.length===2)(target[parts[0]]??={})[parts[1]]=value;else target[path]=value;};
     for(const path of paths){
