@@ -14,43 +14,43 @@
   "change": {
     "counts": {
       "ADDED": 0,
-      "CHANGED": 30,
+      "CHANGED": 191,
       "MISSING_FROM_SOURCE": 0,
-      "UNCHANGED": 1713
+      "UNCHANGED": 1557
     },
     "current": {
-      "count": 1743,
-      "digest": "97f1277e4d3b4ea415c9414b7795fe3aa4f7651b06fdcbbeed5a46a9dd40cc06",
-      "readTime": "2026-10-03T02:43:53.282793Z"
+      "count": 1748,
+      "digest": "6f2d6d06ab54d2710518f48ffd4d1c0f048e16cd8331636d5d5a44f6d157df34",
+      "readTime": "2026-10-03T08:31:45.527393Z"
     },
     "destructiveActionAuthorized": false,
-    "digest": "b7e740dca044417e73d19527181c80c1b647c3d5ef3d7a72c74f4c7e44bb03fe",
-    "inventoryTransitionCount": 1,
+    "digest": "ff8d3dc55a6d76ce2de269dfc59796e902040440158a136a29051910b38f6f45",
+    "inventoryTransitionCount": 6,
     "previous": {
-      "count": 1743,
-      "digest": "23586d74503c6c7ea420306aa370b8aa27da0f6899387b55d87ba09a49d426e7",
-      "readTime": "2026-10-03T02:17:12.889792Z"
+      "count": 1748,
+      "digest": "584c43e45a0d9fc9f53b5de83374c8da793f7c800761672f8845f6d469110479",
+      "readTime": "2026-10-03T06:21:57.894183Z"
     },
     "status": "HOLD"
   },
   "recognition": {
-    "inventoryTransitionCount": 1,
+    "inventoryTransitionCount": 6,
     "mappedForReview": 0,
-    "mappingHold": 1743,
-    "productFieldPathCount": 652
+    "mappingHold": 1748,
+    "productFieldPathCount": 693
   },
-  "runId": "37090772480-1",
+  "runId": "37109975813-1",
   "source": {
     "collections": {
       "partner": 64,
       "policy": 82,
-      "products": 1743
+      "products": 1748
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "97f1277e4d3b4ea415c9414b7795fe3aa4f7651b06fdcbbeed5a46a9dd40cc06",
+    "digest": "6f2d6d06ab54d2710518f48ffd4d1c0f048e16cd8331636d5d5a44f6d157df34",
     "projectId": "freepasserp5",
-    "readTime": "2026-10-03T02:43:53.282793Z"
+    "readTime": "2026-10-03T08:31:45.527393Z"
   },
   "version": "erp5-source-inventory/1"
 }
