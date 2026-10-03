@@ -1,5 +1,20 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-03 기존 F86 공급사 공동 입력 전환 — 준비 / 운영 변경 HOLD
+
+**후속 사용자 결정:** 현재 F01 자동 발행과 F86은 그대로 둔다. 먼저 기존 `프리패스 구글시트 상품리스트`의 공급사 입력 작업을 완성·검증하고, 완성본을 나중에 F86으로 그대로 옮긴다. F86 자동 발행 중지는 그 이후의 전환 단계다. 현재 자동 발행 중지 또는 F86 원본 양식으로 재작업하지 않는다.
+
+- 후속 live 감사: 공급사19탭 입력210행/종합210행, 회사명 불일치0/종합 오류0. 사용행 범위 CellData의 `userEnteredValue,effectiveValue`를 새로 읽어 공급사→종합210행14,436칸을 헤더별 대사했고 typed mismatch0/원본행 누락0이다. 정책코드173행은 종합의 공급사코드 namespace를 명시 비교했으며 날짜 표시 차이는 같은 numeric serial 값임을 확인했다. 기존 차량번호 없는4행과 정책코드 없는33행은 그대로 확인 대상이다. 정책확인 ledger는 MATCHED173/POLICY_CODE_EMPTY33이며 정책 누락 해소 또는 공급사 원본 전체 최신성 PASS는 아니다.
+- 현재 next_start_here: 기존 입력 파일의 숫자/원문/정책/사진/종합/입력확인/실제 화면을 먼저 마무리한다. 전체1000행×20탭 CellData 읽기는 지연으로 종료하고, plain 값의 실측 사용행 + raw/effective CellData mask로 좁혀 새 대사를 성공시켰다. 요약 출력 0 mismatch만 보지 말고 checked210/cells14436을 함께 검증한다. 위의 즉시 F86 자동 writer 전환 next_start_here는 이 작업 완료 이후 단계로 미룬다.
+
+- 목적: 하허호 별도 운영을 끝내고 기존 F86을 공급사 직접 입력 장부로 사용한다. 공급사들이 F86 양식에 맞춘다.
+- 대상 revision: `origin/main@b9ebf26ec43bea5def82523d2a1ab9863fd5103b`, work branch `work/freepass-data/f86-supplier-input`. 원래 checkout의 기존 dirty 문서2개는 보존했다.
+- 변경: 기존 `SUPPLIER-INPUT-SHEET-RUNBOOK.md`의 최신 결정과 `f01-f86-sheet-spec.v1.json`의 준비 상태/필수 증거를 추가했다. 현재 운영 동작과 F01/F86 ID 차단은 그대로다.
+- 관측: Google connector pyh 계정의 live F86 전체18탭 CellData를 읽고 private cell observation으로 보존했다(복원 가능한 전체 백업으로 주장하지 않음). 별도 `프리패스 구글시트 상품리스트`는 F01이 아니며 공급사19탭/종합/정책원문/정책확인 파일임을 metadata로 확인했다. 입력 파일 전량 typed-value 대사는 아직 미완료다. 큰 formatting read는 IPC 크기 제한에 실패했으므로 다음 작업은 실측 사용행으로 좁혀 읽는다. 로컬 gws는 Sheets scope403, 커넥터 읽기는 성공했다.
+- 검증: `npm run check:sheets` 47 PASS, `git diff --check` PASS. Claude 읽기 전용 독립검토와 보완 답변은 본문/exit0/ANSWERED를 확인했다. 자동 writer와 수동입력의 충돌, 원문 보존/F01 유지 필요에 합의했다. 정책열이 없다는 검토 추정은 live 헤더로 반증했다. 정책 미연결을 임의 해소하거나 보호/숨김을 비공개로 간주하는 제안은 채택하지 않았다.
+- 남음: F86 자동 writer 경로 중지 exact revision/run, 전체 복원 백업, 19공급사 원본/준비 입력/F86 typed-value·헤더 대사와 이관, live 화면/종합/입력 보존 검증, 확인된 담당자별 권한. 실제 운영 시트/권한/workflow/pin/스케줄을 변경하거나 커밋·배포하지 않았다.
+- next_start_here: 최신 runbook의 전환 절을 읽고 ERP4 current main workflow와 pinned engine의 모든 F86 쓰기를 좁혀 확인한다. 운영 전환 승인 범위를 확정한 뒤 F86 발행만 제외하고 F01은 유지한다. 그 실증 전에는 공급사 입력을 열거나 기존 production-ID guard를 제거하지 않는다. 담당자 계정 재사용 여부 질문도 확인한다.
+
 ## 2026-10-02 공급사 입력 시트 수동관리 / 대여료 헤더 복원
 
 - 목적: `프리패스 구글시트 상품리스트`를 자동 공급사 동기화가 아닌 사람이 공급사 탭에 한 행·한 칸씩 직접 입력하는 장부로 확정한다.
