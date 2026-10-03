@@ -17,7 +17,7 @@
 ### 전환 순서 (Codex 2026-10-03 계획을 이 양식에 맞춤)
 
 1. **양식 고정(완료):** 규격·확인 전용 실행기·회귀 테스트.
-2. **대조 전용 읽기:** 운영 수집기가 공동 시트를 읽어 기존 공급사별 제공시트와 공급사·차량번호·헤더별로 대조만 한다. 쓰기·발행·원천 전환은 하지 않는다. 대조 결과는 공급사별 일치/불일치/한쪽만 있음으로 남긴다.
+2. **대조 전용 읽기(코드·단위 테스트만, 실측 미실행 — 아직 전환 게이트로 쓰지 않는다):** `compareSharedToLegacy`(같은 실행기, CLI `npm run sheets:input:plan -- --compare=<private-compare.json>`)가 공동 시트 공급사 탭과 기존 제공시트 `재고` 탭을 차량번호(공백만 제거)로 맞춰 차량·요금 열을 대조한다. 이름이 바뀐 열(상태→차량상태, 분류→상품구분, 모델명→세부모델, 차명(세부모델+트림)→차명 원문)은 규격 `legacyCompare.fieldMap`으로 잇는다. 결과는 공급사별 `IN_SYNC`/`DIFFERENT`(일치·다른 열·한쪽만 있음·중복[양쪽 행 수]·번호 없는 행·비교 열 수)/`LEGACY_UNREADABLE`(읽기 미완료·다른 탭·차량번호 열 없음·헤더 중복)/`LEGACY_NOT_CAPTURED`. 기존 시트에 없는 fieldMap 열이 하나라도 있으면 그 열은 비교되지 않았으므로 `IN_SYNC`가 될 수 없다. 같은 공급사 코드의 기존 캡처가 둘이면 HOLD, binding 밖 캡처는 `unboundLegacy`로 보고한다. 읽기 실패를 0건으로 세지 않는다. 쓰기·발행·원천 전환 없음. 숫자는 한쪽이 숫자이고 다른 쪽이 쉼표 포함 순수 숫자 문자열일 때만 같게 본다(`90만원`≠900000). 날짜 serial과 날짜 문자열, `true`와 `"TRUE"`는 변환하지 않으므로 다르게 나온다. 정책 열은 비교하지 않는다 — 기존 시트 정책은 정책코드로 운영정책 탭에 연결돼 있어 규칙을 따로 정해야 한다. 입력 JSON: `binding.suppliers[{title,code}]`, `shared{capturedAt,tabs[{title,headers,rows}]}`, `legacy[{code,tab,complete,capturedAt,headers,rows}]`, 양쪽 30분 이내 읽기. 실제 Google 읽기 연결은 아직 없다.
 3. **입력 창구 전환:** 대조가 일치한 공급사부터 공급사 담당 계정에 해당 탭 편집 권한을 준다. 담당 계정은 원본 metadata로 확인하고 추정하지 않는다. 누구나 편집 링크로 열지 않는다.
 4. **원천 전환:** 운영 수집 원천을 기존 제공시트에서 공동 시트로 공급사별로 바꾼다. 전환 전 private backup, 전환 후 F01/F86 readback.
 5. **F86 이관(나중):** 완성된 공동 시트를 F86으로 그대로 옮기며, 그 시점에만 F86 자동 발행을 멈춘다. F01 자동 발행과 API 공급사 원천은 유지한다. 모든 F86 writer 중지를 exact revision/run으로 확인하기 전에는 입력 운영을 열지 않는다. `scripts/supplier-input-sheet.mjs`의 F01/F86 ID 차단을 지우는 것만으로 전환하지 않는다. 기계 상태는 `contracts/f01-f86-sheet-spec.v1.json`의 `supplierInputTransition`.
