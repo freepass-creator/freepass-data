@@ -83,6 +83,11 @@ function assertModelCompatible(model: VehicleModel, candidate: CatalogCandidate)
       `Resolved VehicleModel ${model.id} does not match candidate maker/model`
     );
   }
+  if (!candidate.subModel?.trim() || !model.subModel?.trim() || candidate.subModel !== model.subModel) {
+    throw new CanonicalizationConflictError(
+      `Resolved VehicleModel ${model.id} requires matching known subModel`
+    );
+  }
   const knownPairs: Array<[string, unknown, unknown]> = [
     ['subModel', candidate.subModel, model.subModel],
     ['trimName', candidate.trimName, model.trim],
@@ -459,11 +464,12 @@ export async function canonicalizeCatalogCandidate(
         'Candidate envelope and normalized payload source identity do not match'
       );
     }
-    if (!candidate.maker || !candidate.model || !candidate.commercialType || !candidate.priceTerms.length) {
+    if (!candidate.maker?.trim() || !candidate.model?.trim() || !candidate.commercialType || !candidate.priceTerms.length) {
       throw new CanonicalizationRejectedError(
         'Canonicalization requires maker, model, commercialType and at least one PriceTerm'
       );
     }
+    // 정제 순서: 세부모델이 정해지지 않으면 트림은 확정하지 않고 비운다(상품은 막지 않는다).
     assertPriceTermInvariants(candidate);
     if (!sameIssues(candidate.issues, input.decision.approvedIssues)) {
       throw new CanonicalizationRejectedError(
@@ -532,13 +538,13 @@ export async function canonicalizeCatalogCandidate(
       displayName: [candidate.maker, candidate.model, candidate.subModel, candidate.trimName]
         .filter(Boolean)
         .join(' '),
-      ...(candidate.subModel ? { subModel: candidate.subModel } : {}),
-      ...(candidate.trimName ? { trim: candidate.trimName } : {}),
+      ...(candidate.subModel?.trim() ? { subModel: candidate.subModel } : {}),
+      ...(candidate.subModel?.trim() && candidate.trimName?.trim() ? { trim: candidate.trimName } : {}),
       ...(candidate.fuelType ? { fuel: candidate.fuelType } : {}),
       ...(candidate.driveType ? { drive: candidate.driveType } : {}),
       ...(candidate.seats !== undefined ? { seats: candidate.seats } : {})
     };
-    assertModelCompatible(model, candidate);
+    if (modelExisting) assertModelCompatible(model, candidate);
 
     let asset: VehicleAsset | undefined;
     if (candidate.carNumber) {

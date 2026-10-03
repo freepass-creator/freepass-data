@@ -28,6 +28,9 @@ export type VehicleMasterReconciledOption = {
 };
 
 export type VehicleMasterReconciledTrim = {
+  maker: string;
+  model: string;
+  subModel: string | null;
   modelYear: number;
   powertrainName: string;
   seats: number | null;
@@ -70,6 +73,9 @@ function trimKey(value: string) {
 
 function compatibleGroupKey(record: VehicleMasterParsedTrim) {
   return JSON.stringify([
+    normalized(record.maker),
+    normalized(record.model),
+    normalized(record.subModel ?? ''),
     record.modelYear,
     powertrainKey(record.powertrainName),
     trimKey(record.trimName),
@@ -240,6 +246,9 @@ export function reconcileVehicleMasterTrimFacts(
       );
 
     reconciled.push({
+      maker: first.record.maker,
+      model: first.record.model,
+      subModel: first.record.subModel?.trim() || null,
       modelYear: first.record.modelYear,
       powertrainName: first.record.powertrainName,
       seats: seats.value,
@@ -255,6 +264,9 @@ export function reconcileVehicleMasterTrimFacts(
       options: mergeOptions(group),
       sourceDocumentIds,
       fieldEvidence: {
+        maker: sourceDocumentIds,
+        model: sourceDocumentIds,
+        subModel: first.record.subModel?.trim() ? sourceDocumentIds : [],
         modelYear: sourceDocumentIds,
         powertrainName: sourceDocumentIds,
         trimName: sourceDocumentIds,

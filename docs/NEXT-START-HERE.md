@@ -375,6 +375,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 차종 정제 계층 순서 회귀 수정
+
+- 목적/대상 revision: 제조사→모델→세부모델→세부트림 순서 강제. `ef3630b93cf61de3b1620943d649e40525dfc014`(#296 머지), `work/freepass-data/refine-order-20261004`. 파일 수정·로컬 검사만 수행, Git 쓰기·운영 데이터/Firestore/시트 접속 없음. academy:start READY.
+- 변경: 원문 사실 묶음에 maker/model/subModel·필드 근거 보존, 기존 normalized 저장/로더에 선택 subModel 전달. 승격 selector 전에 모든 원문 계층을 ACTIVE anchor 부모·refs·이름과 대조하여 불일치/미정 HOLD. Catalog는 세부모델 없는 트림 저장을 거부하고 LINK 공백 일치 금지. 정제 순서 정본: `LEGACY-NORMALIZATION-RULES.md`.
+- 기존 시험 조정: `쏘렌토`/`더 뉴 쏘렌토`를 모델명 차이를 무시하고 합치던 fixture를 모델 `쏘렌토` + 세부모델 `더 뉴 쏘렌토`로 명시했다. builder fixture 3곳에 상위 계층을 추가했다. 신규 저장 경로·별칭 추론 없음.
+- 검증: 관련 6개 파일 30 PASS(지정 3개 회귀명 포함, 입력 불변·부모 불일치·세부모델 저장/재읽기·LINK 공백 포함), build PASS. 전체 `npm run check` 실행: 정적/규격/경계/시트/build/Node 시험 PASS, 최종 Vitest 1,334 PASS / 9 FAIL / 14 SKIP(4개 시험 파일의 환경 실패), 전체 exit 1. `check:standards` exit 0, 15 PASS; 기존 capability 미해결 상태 PARTIAL 유지.
+- 남음: 전체 검사 CLI/로컬 서버 환경 실패(`tsx` 초기화 `uv_os_get_passwd ENOMEM`, `jq Permission denied`, 로컬 서버 ECONNREFUSED). 최소 `node --import tsx -e`도 같은 ENOMEM 재현. Claude 검토는 FAILED/CLAUDE_PROCESS_FAILED(exit 1), 독립 검토 UNAVAILABLE이며 PASS 아님. 세부모델 없는 기존 파서 출력은 원문 사실로 보존하지만 승격은 HOLD; PHASE 이름을 임의 보충하지 않는다.
+- next_start_here: 위 diff와 3개 회귀 시험 검토 후 환경을 정상화하여 전체 check 및 Claude 독립 검토 재실행. 커밋·배포·운영 적용은 이 작업 범위 밖이다.
+
 ### 2026-10-04 PR #296 4차 — 경제 금액 근거 분리
 
 - 목적/대상 revision: `e9011ba1709825d70281ea098d6f34cbe016e8b2`, `work/freepass-data/commission-f04-align-20261003`. 파일 수정·로컬 검사만 수행; Git 쓰기·운영 접속 없음.

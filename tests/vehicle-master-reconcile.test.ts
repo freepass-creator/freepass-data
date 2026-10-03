@@ -11,6 +11,7 @@ describe('vehicle master cross-source reconciliation', () => {
         record: {
           maker: '기아',
           model: '쏘렌토',
+          subModel: '더 뉴 쏘렌토',
           modelYear: 2027,
           powertrainName: '2.5 가솔린 터보',
           seats: 5,
@@ -41,7 +42,8 @@ describe('vehicle master cross-source reconciliation', () => {
         sourceDocumentId: 'carnoon',
         record: {
           maker: '기아',
-          model: '더 뉴 쏘렌토',
+          model: '쏘렌토',
+          subModel: '더 뉴 쏘렌토',
           modelYear: 2027,
           powertrainName: '가솔린 2.5 터보',
           seats: 5,
@@ -223,4 +225,29 @@ describe('vehicle master cross-source reconciliation', () => {
     ]);
   });
 
+});
+
+it('동명트림_타제조사모델_분리', () => {
+  const base = {
+    maker: '현대', model: '그랜저', subModel: '더 뉴 그랜저', modelYear: 2027,
+    powertrainName: '2.0 가솔린', seats: 5, drivetrain: '2WD', trimName: '프레스티지',
+    fuelType: 'GASOLINE', basePrice: 30000000, currency: 'KRW' as const,
+    baseItems: [], options: [], sourceText: 'fixture',
+  };
+  const input = [
+    { sourceDocumentId: 'hyundai', record: base },
+    { sourceDocumentId: 'kia', record: { ...base, maker: '기아', model: 'K5', subModel: '더 뉴 K5' } },
+    { sourceDocumentId: 'other-model', record: { ...base, model: '쏘나타' } },
+    { sourceDocumentId: 'other-submodel', record: { ...base, subModel: '그랜저 GN7' } },
+  ];
+  const before = structuredClone(input);
+  const result = reconcileVehicleMasterTrimFacts(input);
+  expect(result).toHaveLength(4);
+  for (const row of input) {
+    expect(result).toContainEqual(expect.objectContaining({
+      maker: row.record.maker, model: row.record.model, subModel: row.record.subModel,
+      sourceDocumentIds: [row.sourceDocumentId],
+    }));
+  }
+  expect(input).toEqual(before);
 });

@@ -130,6 +130,7 @@ function parseTrimPayload(value: unknown, field: string): VehicleMasterParsedTri
   const parsed: VehicleMasterParsedTrim = {
     maker: text(row.maker, `${field}.maker`),
     model: text(row.model, `${field}.model`),
+    subModel: nullableText(row.subModel, `${field}.subModel`),
     modelYear: integer(row.modelYear, `${field}.modelYear`, 1900),
     powertrainName: text(row.powertrainName, `${field}.powertrainName`),
     seats: nullableInteger(row.seats, `${field}.seats`, 1),
