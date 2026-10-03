@@ -172,6 +172,58 @@ describe('EANCAR ONE official partner API', () => {
     expect(buildIancarOneSourceBatch(capture).source.sourceId).toContain('phase-one-facts');
   });
 
+  it('sync reads detail despite zero list photos, retaining representative IDs and deferred policy', async () => {
+    const paths: string[] = [];
+    const fetcher = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname; paths.push(path);
+      const body = await (await fullFetcher()(input)).json();
+      if (path === '/v1/vehicles/veh1') body.data.photos = [
+        { photo_id: 'P1', url: '/v1/vehicles/veh1/photos/P1', representative: true }];
+      else if (path === '/v1/vehicles') body.data[0].photos = [];
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const capture = await collectIancarOnePhaseOneFacts(config, fetcher, new Date().toISOString(), undefined, { photos: true });
+    expect(paths).toEqual(['/v1/vehicles', '/v1/vehicles/veh1/rates', '/v1/vehicles/veh1', '/v1/vehicles']);
+    expect(buildIancarOnePublicationProducts(capture)[0]).toMatchObject({ photo: { count: 1, photoIds: ['P1'] },
+      evidence: { policyStage: 'DEFERRED' } });
+    vi.advanceTimersByTime(900_001);
+    expect(() => buildIancarOnePublicationProducts(capture)).toThrow();
+  });
+
+  it('sync fails before writes on mismatched photo identity or incomplete detail', async () => {
+    const fetcher = (async (input: string | URL | Request) => {
+      const body = await (await fullFetcher()(input)).json();
+      if (new URL(String(input)).pathname === '/v1/vehicles/veh1') body.data.photos = [];
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const capture = await collectIancarOnePhaseOneFacts(config, fetcher, new Date().toISOString(), undefined, { photos: true });
+    expect(buildIancarOnePublicationProducts(capture)[0]?.photo?.count).toBe(0);
+    await expect(collectIancarOnePhaseOneFacts(config, fullFetcher('wrong-plate'), new Date().toISOString(), undefined, { photos: true }))
+      .rejects.toThrow('IANCAR_PHOTO_IDENTITY_OR_SCOPE_INVALID');
+    await expect(collectIancarOnePhaseOneFacts(config, fullFetcher(), new Date().toISOString(), undefined, { photos: true }))
+      .rejects.toThrow('IANCAR_PHOTO_IDENTITY_OR_SCOPE_INVALID');
+  });
+
+  it('full photo sync bounds provider concurrency to two and still reconciles every source identity', async () => {
+    let active = 0; let maximum = 0;
+    const rows = ['V1', 'V2', 'V3'].map((id, i) => vehicle(id, { plate_number: `123가456${i}`,
+      inventory_status: 'AVAILABLE', available: true, available_from: null, stale: false }));
+    const fetcher = (async (input: string | URL | Request) => {
+      active++; maximum = Math.max(maximum, active);
+      try {
+        await Promise.resolve();
+        const path = new URL(String(input)).pathname;
+        const body = await (await fullFetcher()(input)).json();
+        if (path === '/v1/vehicles') Object.assign(body, page({ page: 1, total: 3, data: rows }));
+        else if (!path.endsWith('/rates')) body.data = { ...rows.find(r => r.vehicle_id === path.split('/')[3]), photos: [] };
+        return new Response(JSON.stringify(body));
+      } finally { active--; }
+    }) as typeof fetch;
+    const capture = await collectIancarOnePhaseOneFacts(config, fetcher, new Date().toISOString(), undefined, { photos: true });
+    expect(maximum).toBe(2);
+    expect(buildIancarOnePublicationProducts(capture).map(p => p.sourceVehicleId)).toEqual(['V1', 'V2', 'V3']);
+  });
+
   it('phase one fetches rates again when a list plate changes for the same ID', async () => {
     let lists = 0; let rates = 0;
     const fetcher = (async (input: string | URL | Request) => {

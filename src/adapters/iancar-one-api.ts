@@ -455,6 +455,10 @@ export function buildIancarOnePublicationProducts(capture: IancarOneListCapture,
   const phase = projectIancarOnePhaseOne(capture, now);
   return phase.vehicles.map((vehicle, index) => {
     const raw = capture.records[index]!.payload;
+    const photoIds = raw.photoDetail !== undefined ? iancarOnePhotoIds(raw.photoDetail, vehicle.sourceVehicleId, vehicle.plate) : null;
+    if (photoIds !== null && (!instant(raw.photosObservedAt) || Date.parse(now) - Date.parse(raw.photosObservedAt) > 900_000
+      || Date.parse(raw.photosObservedAt) > Date.parse(now) + 60_000)) throw new IancarOneApiError('IANCAR_PHOTO_CAPTURE_STALE');
+    const illustration = photoIds?.length === 0 ? iancarOneModelIllustration(raw.photoDetail, vehicle.sourceVehicleId, vehicle.plate) : null;
     const envelope = raw.rates as JsonObject;
     const rates = envelope.data as JsonObject[];
     const price: Record<string, { rent: number; deposit: number }> = {};
@@ -478,6 +482,8 @@ export function buildIancarOnePublicationProducts(capture: IancarOneListCapture,
       priceAliases[String(months)] = base.key;
     }
     return { sourceVehicleId: vehicle.sourceVehicleId, car_number: vehicle.plate,
+      ...(photoIds !== null ? { photo: { count: photoIds.length, observedAt: raw.photosObservedAt as string,
+        photoIds, ...(illustration ? { illustration } : {}) } } : {}),
       price, terms, priceAliases, vehicle_status: vehicle.displayStatus,
       status: vehicle.displayStatus, status_kind: vehicle.displayStatus === '출고가능' ? '가용'
         : vehicle.displayStatus === '계약중' ? '선점' : '불가',
@@ -655,32 +661,47 @@ export async function collectIancarOneFullFacts(
  */
 export async function collectIancarOnePhaseOneFacts(
   config: IancarOneApiConfig, fetcher: Fetcher = fetch,
-  now = new Date().toISOString(), onProgress?: (completed: number, total: number) => void
+  now = new Date().toISOString(), onProgress?: (completed: number, total: number) => void,
+  options: { photos?: boolean } = {}
 ): Promise<IancarOneListCapture> {
   const wallStartedAt = Date.now();
   const observationNow = () => new Date(Date.parse(now) + Date.now() - wallStartedAt).toISOString();
   let inventory = await collectIancarOneVehicleList(config, fetcher, now);
   const started = inventory;
   const client = createIancarOneApiClient(config, fetcher);
-  const observed = new Map<string, { plate: string; rates: Json; evidence: JsonObject }>();
+  const observed = new Map<string, { plate: string; rates: Json; evidence: JsonObject; photoDetail?: Json; photosObservedAt?: string }>();
   for (let pass = 0; pass < 3; pass++) {
     if (!inventory.readyForRawIngest) return { ...inventory, factScope: 'PHASE_ONE_FACTS' };
     let completed = 0;
-    // Sequential rate reads keep provider burst bounded and make failures deterministic.
-    for (const record of inventory.records) {
+    // Rates-only behavior remains sequential. Full sync uses two bounded workers to fit the freshness budget.
+    let cursor = 0;
+    let aborted = false;
+    const worker = async () => { while (!aborted && cursor < inventory.records.length) {
+      const record = inventory.records[cursor++]!;
       const plate = clean(record.payload.plate_number).replace(/\s/g, '');
       if (!IANCAR_PLATE.test(plate)) throw new IancarOneApiError('IANCAR_ONE_PLATE_IDENTITY_REQUIRES_REVIEW');
       if (observed.get(record.vehicleId)?.plate !== plate) {
         const rates = await client.getRates(record.vehicleId);
+        const rateCapturedAt = observationNow();
+        if (aborted) return;
+        // List photo summaries are not authoritative: inspect every vehicle detail, including hidden stock.
+        const photoDetail = options.photos ? await client.getVehicle(record.vehicleId) : undefined;
+        if (photoDetail !== undefined) iancarOnePhotoIds(photoDetail, record.vehicleId, plate);
         observed.set(record.vehicleId, { plate, rates, evidence: {
           vehicle_id: record.vehicleId,
           path: `/v1/vehicles/${encodeURIComponent(record.vehicleId)}/rates`,
-          captured_at: observationNow(), response_digest: digest(rates),
+          captured_at: rateCapturedAt, response_digest: digest(rates),
           attribution: 'REQUEST_PATH_BOUND_BY_LIST_ID', coverage: 'UNKNOWN'
-        } });
+        }, ...(photoDetail !== undefined ? { photoDetail, photosObservedAt: observationNow() } : {}) });
       }
       onProgress?.(++completed, inventory.total);
-    }
+    } };
+    const settled = await Promise.allSettled(Array.from({ length: options.photos ? 2 : 1 }, () =>
+      worker().catch(error => { aborted = true; throw error; })));
+    const failed = settled.find(result => result.status === 'rejected'
+      && result.reason instanceof IancarOneApiError && result.reason.status === 429)
+      ?? settled.find(result => result.status === 'rejected');
+    if (failed?.status === 'rejected') throw failed.reason;
     const ending = await collectIancarOneVehicleList(config, fetcher, observationNow());
     if (Date.parse(ending.syncedAt) < Date.parse(inventory.syncedAt))
       throw new IancarOneApiError('IANCAR_ONE_ENRICHMENT_CLOCK_REGRESSION');
@@ -691,9 +712,10 @@ export async function collectIancarOnePhaseOneFacts(
     const records = ending.records.map(record => {
       const rate = observed.get(record.vehicleId)!;
       const payload = { ...structuredClone(record.payload), rates: structuredClone(rate.rates),
-        rateRequestEvidence: structuredClone(rate.evidence) };
+        rateRequestEvidence: structuredClone(rate.evidence),
+        ...(rate.photoDetail !== undefined ? { photoDetail: structuredClone(rate.photoDetail), photosObservedAt: rate.photosObservedAt! } : {}) };
       const providerFacts = { ...payload, rateRequestEvidence: {
-        ...payload.rateRequestEvidence, captured_at: null } };
+        ...payload.rateRequestEvidence, captured_at: null }, ...(options.photos ? { photosObservedAt: null } : {}) };
       return { ...record, payload, fingerprint: digest(providerFacts) };
     });
     const capture: IancarOneListCapture = { ...ending, records, factScope: 'PHASE_ONE_FACTS',

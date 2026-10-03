@@ -23,13 +23,18 @@ if ([...requested].some(arg => arg.startsWith('--restore-photos='))) {
   console.log(JSON.stringify(await runIancarPhotoRestore({ backupPath, expectedSourceDigest, apply: requested.has('--apply') })));
   process.exit(0);
 }
-const allowed = new Set(['--apply-raw', '--inspect-detail-shape', '--full-facts', '--save-private', '--phase-one', '--photos', '--apply-photos']);
+const allowed = new Set(['--apply-raw', '--inspect-detail-shape', '--full-facts', '--save-private', '--phase-one', '--photos', '--apply-photos', '--sync', '--apply-sync']);
 if ([...requested].some((arg) => !allowed.has(arg))) {
   throw new Error('UNKNOWN_IANCAR_ONE_OPTION');
 }
 
 const config = iancarOneApiConfigFromEnv();
 if (!config.apiKey) throw new Error('EANCAR_ONE_API_KEY_REQUIRED');
+if (requested.has('--apply-sync') && !requested.has('--sync')) throw new Error('IANCAR_SYNC_MODE_REQUIRED');
+if (requested.has('--sync')) {
+  if ([...requested].some(arg => !['--sync', '--apply-sync', '--save-private'].includes(arg))) throw new Error('IANCAR_SYNC_OPTIONS_MIXED');
+  if (requested.has('--apply-sync') && process.env.EANCAR_ONE_SYNC_APPROVED !== 'true') throw new Error('IANCAR_SYNC_APPROVAL_REQUIRED');
+}
 
 if (requested.has('--photos')) {
   if ([...requested].some(arg => !['--photos', '--apply-photos', '--save-private'].includes(arg))) throw new Error('IANCAR_PHOTO_OPTIONS_MIXED');
@@ -81,10 +86,10 @@ if (requested.has('--photos')) {
 }
 if (requested.has('--apply-photos')) throw new Error('IANCAR_PHOTOS_MODE_REQUIRED');
 
-const capture = requested.has('--phase-one')
+const capture = requested.has('--phase-one') || requested.has('--sync')
   ? await collectIancarOnePhaseOneFacts(config, fetch, new Date().toISOString(), (completed, total) => {
     if (completed % 25 === 0) console.log(JSON.stringify({ phase: 'READING_PHASE_ONE_FACTS', completed, total }));
-  }) : requested.has('--full-facts')
+  }, { photos: requested.has('--sync') }) : requested.has('--full-facts')
   ? await collectIancarOneFullFacts(config, fetch, new Date().toISOString(), (completed, total) => {
     if (completed % 25 === 0) console.log(JSON.stringify({ phase: 'READING_FULL_FACTS', completed, total }));
   }) : await collectIancarOneVehicleList(config);
@@ -108,7 +113,7 @@ const report: Record<string, unknown> = {
   consumerReadback: 'NOT_VERIFIED'
 };
 
-if (requested.has('--phase-one')) {
+if ((requested.has('--phase-one') || requested.has('--sync')) && capture.readyForRawIngest) {
   const phaseOne = projectIancarOnePhaseOne(capture);
   report.phaseOne = { stage: phaseOne.stage, policyStage: phaseOne.policyStage,
     publicationAuthorized: phaseOne.publicationAuthorized, vehicleCount: phaseOne.vehicles.length,
@@ -168,8 +173,30 @@ if (requested.has('--apply-raw')) {
   };
 }
 
+if (requested.has('--sync')) {
+  if (!capture.readyForRawIngest || capture.issues.length) {
+    console.log(JSON.stringify({ ...report, status: 'HOLD_SOURCE_REVIEW', writeExecuted: false }, null, 2));
+    process.exit(2);
+  }
+  const { runIancarPhaseOnePublication } = await import('./data-access-runtime.js');
+  const input = { capture, apply: false, mirrorInventory: true,
+    ...(process.env.EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET ? { privateEvidenceBucket: process.env.EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET } : {}) };
+  const plan = await runIancarPhaseOnePublication(input);
+  report.publicationPlan = plan;
+  if (requested.has('--apply-sync')) {
+    const result = await runIancarPhaseOnePublication({ ...input, apply: true, expectedPlanDigest: plan.planDigest });
+    // Only redacted counts/references leave the private evidence boundary.
+    report.publication = { status: result.status, sourceDigest: capture.sourceDigest,
+      sourceSyncedAt: capture.syncedAt, open: result.open, created: result.created, absenceHeld: result.absenceHeld,
+      withPhotos: result.withPhotos, photoCount: result.photoCount,
+      runId: 'runId' in result ? result.runId : null,
+      privateBackupObject: 'privateBackupObject' in result ? result.privateBackupObject : null };
+  }
+}
+
 report.status = capture.issues.length
   ? 'HOLD_SOURCE_REVIEW'
+  : requested.has('--apply-sync') ? 'IANCAR_ATOM_SYNC_VERIFIED_CONSUMERS_PENDING'
   : requested.has('--apply-raw')
     ? 'RAW_INGESTED_NOT_CANONICAL'
     : 'OBSERVED_NOT_PUBLISHED';

@@ -234,6 +234,19 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-03 이안카 전체15분 동기화 재개
+
+- 목적/사용자 결정: 모든 ONE API 차량·상태·기간/거리별 요금·사진을15분마다 Data로 상품화하고 ERP/이안카 화이트라벨 및 기존 F01/F86 단일 발행기가 따라간다. 정책은2차이며 삭제·계약 변경은 하지 않는다.
+- 대상: Data main `b9ebf26ec43bea5def82523d2a1ab9863fd5103b`, ERP main `f24ab8133073fad0eb3867613495167f120b147d`. 작업은 기존 photo-proxy 작업 트리에서 계속하며 `period-economics-main`/ERP `e-01-engine`의 미커밋15분 초안은 읽고 재사용했으나 원본은 변경하지 않았다. Academy 두 대상 READY, 기존 collector/transaction/sole workflow COMPOSE_OR_EXTEND.
+- 변경: 기존 ONE collector `--sync [--apply-sync]`. 전체 목록+rates+모든 상세 사진 조회(목록사진0도 포함), 마지막 목록 ID/차번 재조정, source/photo 관측15분 검사. 기존 phase-one 거래에 사진 배열/관측 ID와 미관측 비공개 HOLD를 함께 반영한다. hidden 재고 사진 메타데이터도 보존하지만 공개 사진 read gate는 유지한다. fresh source 실패는 쓰기0·마지막 정상 상태 유지. 새 writer나 local scheduler는 없다.
+- 안전/복구: 기존 typed backup/restore/CAS 재사용. production 실행은 고정 비공개 bucket의 `iancar-one/{runId}/backup.json`을 generation0 생성·byte readback한 뒤에만 transaction한다. 원문 source도 private backup에 포함. 계약락/삭제락·ID/차번 충돌은 HOLD. 미관측 역사 원문/기존 withdrawal은 보존하며 이미 HOLD한 문서는 반복 덮지 않는다.
+- 검증: 최종 전체 check1,168 PASS/14 외부환경 SKIP, 전용89 PASS/build PASS. ERP 지도/YAML 구조 검증 PASS(게시 전 placeholder 차단 회귀 추가). 광역 Claude REVIEW_TIMEOUT은 제외하며 좁은 writer 재검토는 B1/B2/B3 해결 ANSWERED/exit0. Collector는 abort/allSettled/429 우선 처리와2worker 제한을 보완했고 독립 최종 ANSWERED/exit0, bounded eventual 모델에 동의했다. Photo freshness는 product builder와 transaction 직전에서 강제한다. 전체 운영 반영/native15분 증거와 분리한다.
+- 현재 원천 HOLD: `2026-10-03T02:07:38Z` 실제 공식API HTTP200/private,no-store;115대·syncedAt `2026-10-03T01:43:25.268Z`·stale=true. no-cache GET도 동일하다. 오래된 원천을 현재로 위장하거나 freshness gate를 해제하지 않는다. 이 회차 business write0.
+- 후속 원천 회복: source syncedAt `2026-10-03T02:29:46.020Z`, capture completed `02:38:14.957Z` 전수115/2페이지/issues0, AVAILABLE108/UNAVAILABLE5/PREPARING2, observed rates2760, 사진62대/2824장. Private capture `8e7c57c6-e1be-43be-bb5e-1ef918f09094.json`, digest `d37c88a500ecc43ce7850ec8e83804f26ac7dfc91d53798319e50333b2b3bfb8`. DRY_RUN matched109/created6/absenceHeld11/open108/delete0/contractChanges0. 실제 적용이 아니다. 기존 canonical run37090314687이 ingest 진행 중이므로 겹쳐 쓰지 않았다. 다음 apply에는 신선도/동시성을 새로 확인한다.
+- ERP workflow 검토 반영: hourly Data 실패가 다른 공급사 게시를 막지 않도록 warning+redacted HOLD receipt; extra 회차 실패는 자기 게시만 차단; shared writer job에 들어가기 전 busy admission으로 시간당 pending 보호; manual 전용 적용 인자/target 분리. API 복구 dispatch도 같은 Data 원천을 재조회한다. 공개 Data 저장소이므로 cross-repo credential 추가 없음. 보완 시트는 기존처럼 관측 참조이며 중앙 원자의 authority가 아니다. 검토의 extra 시트 게시 금지 제안은 사용자15분 소비처 반영 목적/발행시각 규격과 달라 채택하지 않는다.
+- 운영 HOLD: 기존 writer `github-inventory-writer`에는 이안카 Secret 단일 읽기/비공개 backup prefix create+read가 없다. 해당 최소 IAM 변경만 사용자에게 async 요청했다. IAM·flag·dispatch·운영 시트 쓰기 미실행. ERP draft Data SHA placeholder는 정확한 검증 commit으로 교체 전 게시하지 않는다.
+- next_start_here: 좁은 Claude 검토 및 최종 전체 check → 정확한 Data main SHA/ERP pin+지도 검증 → 최소 IAM 승인 후 허용 범위만 설정·재조회 → fresh source manual cycle 및 ERP/화이트라벨/F01/F86 readback →15분 flag 활성/native 회차 성공·freshness 증거. supplier stale가 지속되면 공급사 API 갱신 상태부터 복구한다.
+
 ## 2026-10-02 공급사 수집 공통 규격 / 개별 RAW 어댑터
 
 - 목적: 손오공·이안카·웰릭스의 공통 수집 결과 규격과 공급사별 원천 해석 경계를 코드로 고정하고 기존 PR270에 통합한다.
