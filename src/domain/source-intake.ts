@@ -91,10 +91,27 @@ export const SUPPLIER_SOURCE_ADAPTERS = {
   // shared supplier input sheet (contracts/supplier-input-sheet-spec.v1.json supplierChannels);
   // do not wire this adapter as the new source.
   'welrix-sheet': { supplierCode: 'RP013', kind: 'GOOGLE_SHEET', scopes: ['inventory', 'terms', 'policy'] },
+  'aica-sheet': { supplierCode: 'RP004', kind: 'GOOGLE_SHEET', scopes: ['inventory', 'terms', 'photos'] },
+  'iron-html': { supplierCode: 'RP006', kind: 'API', scopes: ['inventory', 'terms', 'photos'] },
 } as const;
 
 export type SupplierSourceAdapterId = keyof typeof SUPPLIER_SOURCE_ADAPTERS;
 export type SupplierCaptureScope = 'inventory' | 'terms' | 'policy' | 'photos';
+
+/** Original Google CellData subset; no photo or monetary normalization. */
+export type SupplierGridCell = {
+  userEnteredValue?: Record<string, unknown>; effectiveValue?: Record<string, unknown>;
+  formattedValue?: string; hyperlink?: string;
+  userEnteredFormat?: { textFormat?: { link?: { uri?: string } } };
+  textFormatRuns?: Array<{ startIndex?: number; format?: { link?: { uri?: string } } }>;
+};
+export type AicaGridBinding = { sheetId: string; tabId: number; range: string; plateColumn: number };
+export type AicaGridObservation = AicaGridBinding & {
+  observedAt: string; revision: string; complete: boolean; expectedRows: number | null;
+  /** Zero-based absolute Sheet row of the first data row (headers excluded). */
+  firstDataRow: number; headers: SupplierGridCell[]; rows: SupplierGridCell[][];
+};
+
 export type SupplierSourceAdapter = {
   adapterId: SupplierSourceAdapterId;
   sourceId: string;
@@ -132,6 +149,18 @@ export function inspectSupplierSourceBatch(
     issues.push('SOURCE_COVERAGE_NOT_COMPLETE');
   if (!batch.coverage.scope?.trim()) issues.push('SOURCE_SCOPE_UNKNOWN');
   if (batch.records.length === 0) issues.push('EMPTY_SOURCE_REQUIRES_REVIEW');
+  // Provider diagnostics stay with immutable RAW evidence, not a second store.
+  // Only these versioned native payloads own this diagnostics field.
+  if (adapter.adapterId === 'aica-sheet' || adapter.adapterId === 'iron-html') {
+    for (const record of batch.records) {
+      const diagnostics = record.payload.captureIssues;
+      if (!Array.isArray(diagnostics) || diagnostics.some(issue => typeof issue !== 'string')) {
+        issues.push('SOURCE_DIAGNOSTICS_MISSING');
+      } else {
+        for (const issue of diagnostics as string[]) if (!issues.includes(issue)) issues.push(issue);
+      }
+    }
+  }
   return {
     adapterId: adapter.adapterId, supplierCode: profile.supplierCode, scope: adapter.scope,
     capturedAt, observedAt: batch.observedAt, recordCount: batch.records.length,

@@ -308,6 +308,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-03 오더2 — 직접 연동 공급사 Data native 수리 (운영 미적용)
+
+- 목적/결정: ERP4 고정 엔진 최소 diff **미채택(Data native로 이관)**. 기존 `SourceIntakeBatch`/RAW 재사용, 두 번째 source store/writer 없음.
+- 대상 revision: 이 checkout의 `work/freepass-data/supplier-native-fixes-20261003`, 기반 `5b1d430d7f6e465a7a6379de1a59754286025264`. GitHub connector로 Issue24 및 PR287 merged/main `21f1511878efc9fe8a9fc664142c3d2f552a1031` 확인. main의 추가 공동시트 dropdown 변경4파일은 이번 diff와 비중복. 다른 checkout 수정·commit/push 없음.
+- 변경: `src/adapters/supplier-source-capture.ts` RP004 rich-cell RAW/사진 UNKNOWN/귀속 issue·PARTIAL, RP006 HTML RAW/비표준 기간 tuple/원·만원/보증금 UNKNOWN/gallery/지정 상세 1회 포트. `src/domain/source-intake.ts` 등록·grid 타입·공통 HOLD. `src/infra/aica-sheet-reader.ts` 최소 Sheets GET + 기존 Data ADC의 읽기 scope(기존 google-auth-library10.9.1 직접 의존성 선언). `src/api/iancar-scheduler-relay.ts` Cloud Run용 factory·고정 입력·create-only receipt/원자 pending admission·UNKNOWN 무재전송. concrete 운영 포트/entrypoint 미연결.
+- 문서: [native collector 오더2](NATIVE-SOURCE-COLLECTOR.md#supplier-direct-status)에 손오공 동일 기존 계정의 Secret Manager 단일 accessor/8시간 메모리 토큰 설계, 아이언·오토플러스 제공방식 문의 목록, 승인 후 Scheduler1 + private Cloud Run1 + 최소 IAM 절차를 기록했다. 문의 발송/생성/배포 없음.
+- 검증: native28+공통17 = **45 PASS**, build/diff-check PASS. 전체 `npm.cmd run check` exit1, **Vitest 1,187 PASS / 9 FAIL / 14 SKIP** (Codex 샌드박스 환경 오류; Claude 정상 환경 재실행 exit0, Vitest 1196 PASS / 14 SKIP). 기존 4파일의 환경 오류(`uv_os_get_passwd ENOMEM`, jq Permission denied, local server ECONNREFUSED); 기대값 변경 없음. 아키텍처/standards/data boundary/시트52/build/smoke6/shadow10/dashboard21 통과. `claude:review` 실행 실패 → 독립 검토 UNAVAILABLE. 수정 전 Academy READY, reuse CREATE_NEW_JUSTIFIED PASS; 신규 인자 재조회는 본 작업 dirty 경고 HOLD(세부 native 문서).
+- 남음/HOLD: 정상 환경 전체 검사·Claude 독립 검토; 실제 아이카 귀속/아이언 HTML과 원천 대사; native RAW persistence/Canonical/소비처 연결; 중계 durable receipt/OIDC/App transport wiring·경합/복구 검증; 운영 생성/배포 승인. 운영 Firestore/시트 쓰기·실제 공급사 요청·IAM/secret/var·dispatch·ERP4 수정 **0**.
+- next_start_here: `docs/NATIVE-SOURCE-COLLECTOR.md` 오더2 검증 기록 → `tests/supplier-native.test.ts` → 정상 환경 check/독립 검토. 별도 승인 전 운영 포트를 연결하거나 Scheduler를 생성하지 않는다.
+
 ## 2026-10-03 직접 연동 공급사 5곳 점검
 
 - 목적: 공동 시트 밖 RP031/RP012/RP006/RP023/RP004의 원천 누락·수집 누락을 구분하고 기간별 계산 입력과 15분 트리거 설계를 정리한다.

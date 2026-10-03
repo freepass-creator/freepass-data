@@ -1,6 +1,6 @@
 # FreePass Data native supplier intake — original ERP, not ERP4
 
-Status (2026-09-30): **CODED / UNVERIFIED AGAINST LIVE ORIGINAL; RAW-ONLY PILOT. NOT DEPLOYED. NOT CUT OVER.**
+Status (2026-10-03): **CODED / FIXTURE TESTED; LIVE ORIGINAL / PERSISTENCE / DEPLOYMENT / CUTOVER HOLD.**
 Owner: FreePass Data. Existing `SourceIntakeBatch`, `ingestRawSourceBatch` and Firestore Source Store are reused.
 This does not add a second CatalogStore, publication writer or scheduler.
 
@@ -22,6 +22,8 @@ decisions remain in `decideSourceHead`, not these adapters.
 | 손오공 RP012 | `sonogongSourceAdapter` reads LOW_SONOKONG_DAILY, LOW_SONOKONG and LOW_TCAR separately through an injected original API reader. Preserve list/detail, bucket, original term/option/photo fields; require matching product ID and plate. Missing detail/count mismatch stays partial. | Bucket-qualified RAW identity; oldest observation time; immutable original payload, digest and common evidence. Sheet projections do not replace original API inventory. |
 | 이안카 RP031 | Existing ONE API auth, pagination, list/detail/term/conditions/photo attribution remain in `iancar-one-api.ts`. Direct-login pilot is inventory-only and has no term authority. Both collector commands now report the shared evidence contract. | ONE enriched facts deliberately keep UNKNOWN coverage, even with a complete vehicle list; the common report keeps HOLD without blocking existing approved per-field operations. |
 | 웰릭스 RP013 | `welrixSourceAdapter` reads the approved Sheet/tab/range through an injected grid reader. Inventory and policy use separate calls/source IDs. Preserve headers and original cells, including unit text. | Binding/count/identity checks; duplicate inventory plates reject; repeated policy UID rows remain separate condition evidence. RAW row position is not a Canonical policy ID. |
+| 아이카 RP004 | `aicaSourceAdapter` + injected rich-grid reader; `aicaSheetsGridReader` implements bounded Sheets GET using existing Data ADC. | Original cells/links + plate/tab/row evidence; ambiguities HOLD, photoState UNKNOWN. Fixtures only, no live transport invocation. |
+| 아이언 RP006 | `ironSourceAdapter` + injected detail fetcher; retain original HTML, term tuples, deposit text and gallery references. | Nonstandard months/units preserved. Deposit UNKNOWN; designated details PARTIAL; no network implementation. |
 
 Authentication and network transport remain in the provider reader. The newly added
 Sonogong/Welrix adapters are executable RAW transformations with injected read ports,
@@ -54,6 +56,54 @@ engine is incompatible with current ONE-owned inventory. No new store or engine 
 <a id="supplier-direct-status"></a>
 
 ## 직접 연동 공급사 현황 — 2026-10-03
+
+### 오더 2 — Data native 수리 (코드만, 운영 미적용)
+
+- 결정: **ERP4 최소 diff 미채택(Data native로 이관)**. 아래 진단과 과거 diff는 이력이며 고정 엔진을 수정하지 않는다.
+- 대상: `work/freepass-data/supplier-native-fixes-20261003`, 기반 `5b1d430d7f6e465a7a6379de1a59754286025264` (PR #287 문서 위). 이 checkout만 수정, commit/push 없음. git/gh 네트워크는 차단됐으나 GitHub connector로 Issue #24, PR #287 merged, main `21f1511878efc9fe8a9fc664142c3d2f552a1031`을 확인했다. open PR 검색 0건. 기반 대비 main의 추가 변경은 공동 시트 dropdown 관련 4파일로 이번 변경과 겹치지 않는다. main merge/rebase는 하지 않았다.
+- 재사용: `reuse:check` 검색 후 `CREATE_NEW_JUSTIFIED` PASS. `supplier-source-capture.ts`, `SourceIntakeBatch`, 공통 검사와 기존 테스트는 COMPOSE_OR_EXTEND. 새 `src/infra/aica-sheet-reader.ts`는 기존 values/presentation reader가 공급사 rich-cell RAW 계약을 제공하지 않아 분리했다. 인증은 기존 Data ADC 해석 경로와 `firebase-target.ts::resolveTargetProject`를 재사용하며 Firebase app을 추가하지 않는다. 새 `src/api/iancar-scheduler-relay.ts`는 기존 수집/발행 writer와 다른 HTTP 입장 제어 책임이며 해당 서비스가 없어 신규 정당화했다. 영수증은 주입 포트뿐이고 두 번째 source store가 아니다. 새 fixture 테스트는 실제 사이트/운영 접근 없이 이 두 경계를 검증하기 위한 것이다. 수정 전 Academy READY(11:15:42Z); 신규 인자를 붙인 재조회(11:25:30Z)는 이번 변경 자체의 dirty 경고 `DIRTY_WORKTREE_REVIEW_REQUIRED`로 HOLD였다. 최초 clean 상태 및 본 작업 diff를 재확인했고 타 작업 변경 없음; clean 재실행을 위해 commit/reset하지 않았다. 재조회 HOLD를 READY로 기록하지 않는다.
+- RP004: `aicaSourceAdapter`는 승인된 복수 탭의 grid reader 패턴을 재사용한다. 셀의 typed/formatted/formula 값과 hyperlink / textFormat.link / textFormatRuns 링크를 그대로 보존한다. RAW ID는 sheet+tab+physical row+원문 plate 조합이고 Canonical PK가 아니다. 빈 plate, 정규화 비교상 중복 plate, 여러 plate가 공유한 URL, 알려진 단축 URL은 `captureIssues`와 공통 HOLD. 모든 링크의 `photoState=UNKNOWN`, `image_urls`로 승격하지 않는다. 알 수 없는 단축 서비스도 사진으로 승인되지 않는다.
+- Sheets transport: `spreadsheets.get(includeGridData=true)` + 최소 fields + 승인된 A1 범위만. 단일 응답의 sheet/tab/offset/크기를 확인하며 리디렉션·재시도 없음. 기존 ADC에 Sheets 읽기 scope/원본 권한이 없으면 HOLD(새 키 생성 금지). HTTP 읽기 시각은 공급사 변경시각이 아니며 reader는 `complete=false, expectedRows=null`; live 연결·전체 재고/신선도 증명은 별도다.
+- 인증 의존성: lockfile에 이미 있던 `google-auth-library@10.9.1`을 직접 의존성으로 선언했다(기존 transitive version/integrity 유지). Firebase 기본 Cloud scope를 Sheets 권한으로 오인하지 않고 같은 ADC에 `spreadsheets.readonly`를 요청한다. 사용자 ADC의 기존 grant가 부족하면 재로그인/새 키 없이 HOLD한다. [Sheets scope](https://developers.google.com/workspace/sheets/api/scopes), [ADC 동작](https://docs.cloud.google.com/docs/authentication/application-default-credentials). offline npm 설치는 metadata cache 부재 `ENOTCACHED`; package/lock root 선언만 일치시켰으며 clean install 검증은 미실행이다.
+- RP006: ERP4 `fe3eccc:lib/server/ironrentcar-source.ts`의 선택자만 참고한 Data 독립 RAW 추출기. 원본 HTML과 기간 tuple의 `periodRaw/rentRaw/htmlRaw`, 보증금 원문 배열+`UNKNOWN`, gallery `img[src]` 원문 배열을 보존한다. 72/84/53개월을 표준기간으로 압축하지 않으며 원/만원을 숫자로 바꾸지 않는다. 이미지 proxy/상대 URL도 RAW 그대로이며 페이지 URL로 대체하지 않는다. 파서는 명시적 닫는 태그 형태의 제한된 extractor이고 브라우저의 HTML 자동복구를 구현하지 않는다. 구조 불일치/번호 귀속 실패는 HOLD. 실제 HTML 적합성은 미검증.
+- RP006 포트: `IRON_DETAIL_REQUEST_LIMITS={concurrency:2,requestsPerVehicle:1}`. 명시된 고유 id/plate의 상세만 순차 1회, 실패 재시도/목록 탐색 없음. 실 fetch transport는 제공하지 않는다. 범위는 항상 PARTIAL/UNKNOWN; supplier full inventory나 요금 완전성으로 승격하지 않는다.
+- RP031: private Cloud Run용 Fastify 서비스 **factory만 구현**, import/listen/운영 부작용 없음. OIDC 검증, Secret Manager 기반 App 설치 토큰, GitHub 조회/dispatch, durable receipt는 모두 필수 주입 포트다. 고정 repo/workflow/ref/입력만 사용하고 HTTP body는 `{}`만 허용한다. jobName+UTC scheduleTime SHA256 create-only 영수증과 schedule key 간 원자적 pending admission을 모두 요구한다. BUSY는 skip, 실패·응답 불명확·run ID 없는 응답은 UNKNOWN이며 재전송하지 않는다. ACCEPTED_PENDING도 run 완료가 아니다. 다음 tick은 기존 accepted run ID의 확정 종료를 조회하고 완료 증거+owner CAS 해제 후에만 새로 입장한다. UNKNOWN/RESERVED는 시간 만료나 단순 run 목록 IDLE로 풀지 않으며 별도 대사 전까지 후속 회차를 막는다.
+- 영수증 포트 구현 조건: 기존 비공개 receipt storage를 재사용하고 create-only/CAS 및 owner 검증을 구현해야 한다. 이 작업은 durable backend를 생성/연결하지 않았다. `max-instances=1/concurrency=1`만으로 중복 방지가 된다고 주장하지 않는다. pending 해제는 해당 run의 확정 종료 또는 확정 미전송 증거가 있어야 하며, 모호한 전송은 자동 해제 금지. 기존 workflow precheck→queue 경합은 여전히 rollout HOLD.
+
+### 손오공 RP012 Data runtime 계정 주입 — DESIGNED ONLY
+
+기존 GitHub `SONOGONG_ACCOUNT_JSON`과 **같은 계정 값**을 유지하고 새 계정/키를 만들지 않는다. 값 조회·복사·출력은 이번 작업에서 하지 않았다. 이안카 ONE의 `freepasserp5` Secret Manager `freepass-data-iancar-one-api` 패턴을 재사용해 손오공 전용 secret의 승인된 버전을 runtime에 주입한다(제안 이름 `freepass-data-sonogong-account`, 존재/생성 미확인). ONE secret 자체에 덮어쓰지 않는다. GitHub secret은 readback API가 없으므로 승인된 원 보관자가 비출력 경로로 동일 값을 공급하고 계정 일치 검증을 맡는다. 공개 문서/명령행에 값 또는 그 digest를 남기지 않는다.
+
+Data RP012 전용 runtime SA **한 개만 accessor**로 지정하고 그 secret 하나에만 `roles/secretmanager.secretAccessor`; 프로젝트 전체 권한 금지. 기존 ERP4 경로는 유지하며 Data native writer를 활성화하지 않는다. 로그인 transport의 단일 accessor가 계정 주입을 받아 8시간 토큰을 프로세스 메모리에만 보관한다. 토큰 만료 전에 single-flight 갱신, 재시작 시 재로그인, 로그/파일/RAW/Firestore/공유 cache 영속화 금지. 만료·갱신 실패는 HOLD/last-good 보존이며 빈 수집이나 0 보증금으로 바꾸지 않는다. 계정 교체·권한·운영 연결은 별도 승인 후 검증한다.
+
+### 공급사 문의 목록 — 발송하지 않음, 현재 수신 방식 유지
+
+아이언 RP006과 오토플러스 RP023은 공개 화면 수집 규칙을 확인하지 못했다. 기존 방식은 유지하고, 각 공급사에 아래 항목으로 공식 API 또는 공유 Sheet/정기 파일 제공 가능 여부를 문의할 초안이다.
+
+1. 허용 접근 방식(API 문서·읽기 전용 계정·시트 공유), 사용/재배포/사진 이용 허용 범위, 요청 주기·동시성·제한과 변경 통지 창구.
+2. 고유 상품 ID·차량번호 귀속, 재고/예약/출고/판매완료 상태 원문, 기준시각·수정시각, 전체 목록과 변경/삭제 구분.
+3. **기간별 월대여료·보증금·약정거리**: 비표준 개월수 포함, 원/만원·VAT, 무보증/미정/협의/0 구분, 월/연거리 기준, 반납/인수형과 효력일·예외조건.
+4. **사진**: 차량별 대표/상세 배열, 원본 URL·접근 만료·권리·공유 URL 여부, 상세 페이지 주소와 이미지 주소 구분.
+5. 미제공 필드의 공식 의미, 오류/누락 신고와 revision별 대사 방법. 내부 청구/지급 수수료는 별도 허용 원천 확인 전 UNKNOWN.
+
+### 승인 후 실행 — 이번 작업에서 실행 금지
+
+현재는 코드/fixture 단계다. 아래는 **구체 포트 구현·독립 검토·배포 승인을 받은 뒤** 실행할 절차이며 지금 복사 실행하지 않는다. 프로젝트는 `freepasserp5`, Scheduler job 1개 + private Cloud Run 중계 서비스 1개다.
+
+1. 기존 receipt 저장소의 create-only/CAS/owner semantics와 App 설치 상태를 확인한다. Secret Manager App key accessor, OIDC issuer/audience/SA 검증, 전체 writer run 조회(페이지 잘림 UNKNOWN), 재시도 없는 GitHub transport를 구현하고 staging fixture로 검증한다. pending/UNKNOWN 대사·수동 해제 절차와 복구 증거를 먼저 확정한다.
+2. App은 `freepass-creator/freepasserp4` 단일 저장소, Actions write + Metadata read. 중계 SA에는 해당 App key secret accessor와 **기존 비공개 receipt 저장소의 최소 권한만** 부여한다. GCS 구현 후보는 immutable receipt/outcome/completion prefix의 `storage.objects.create/get`, 단일 pending gate object의 `storage.objects.create/get/delete`를 리소스 조건으로 한정한다(list·bucket 관리·일반 receipt delete 금지). gate는 `ifGenerationMatch=0` 선점, 기록된 owner/run 및 정확한 generation에 대한 조건부 delete로만 해제한다. 확정 종료/미전송 증거를 먼저 create-only로 남긴다. Firestore/Sheets/ONE 접근 권한은 부여하지 않는다. 기존 bucket/prefix·CAS 구현·custom role은 승인 후 확정하며 지금 생성/변경하지 않는다.
+3. 승인된 image/region/SA를 고정한 뒤 `gcloud run deploy <relay> --project=freepasserp5 --region=<approved-region> --image=<reviewed-image> --service-account=<relay-sa> --no-allow-unauthenticated --max-instances=1 --concurrency=1`. 이 factory는 아직 배포 entrypoint가 아니므로 포트 wiring/entrypoint/image 검증 전 실행 불가.
+4. Scheduler SA에 이 서비스에만 `roles/run.invoker`, Scheduler service agent 기본 권한 유지. `gcloud scheduler jobs create http <job> --project=freepasserp5 --location=<approved-region> --schedule="2,17,32,47 * * * *" --time-zone=UTC --uri=<relay-url>/schedule --http-method=POST --message-body='{}' --oidc-service-account-email=<scheduler-sa> --oidc-token-audience=<relay-url>`는 승인 후에만 실행한다. jobName binding을 정확히 일치시킨다. 생성 직후 실행 가능하므로 승인 전 생성 금지; payload의 `iancar_apply=true`는 실제 반영이다.
+5. 첫 read-only 검증은 현재 고정 dispatch와 섞지 않는다. 별도로 검토된 `iancar_apply=false` validation artifact와 승인된 수동 검증 절차가 필요하다. 이 서비스는 요청 body로 모드를 바꿀 수 없다. 기존 ERP4 엔진·스케줄·writer 유지; 중복 전달, hourly admission 경합, 응답 유실, crash/pending, source stale/last-good, F01/F86/소비처 readback을 확인한 후에만 활성화한다. rollback은 새 Scheduler 중단과 pending 증거 보존이며 운영 writer 전환이 아니다.
+
+### 오더 2 검증 기록
+
+- `node node_modules/vitest/vitest.mjs run tests/source-intake.test.ts tests/supplier-native.test.ts`: **45 PASS** (기존 계약17 + native28). 셀 값/3종 링크/원문 불변성, 복수 탭의 중복·빈 번호·공유·단축 링크와 PARTIAL gate, 최소 GET/오류/기존 ADC scope, 72/84/53개월·원/만원·UNKNOWN 보증금·HTML 오귀속, 요청 1회 제한, 중계 동시 admission/중복/기존 run BUSY/확정 종료 후 후속 회차/완료 CAS 실패/응답 유실/영수증 실패/고정 입력/인증/HTTP route 검증.
+- `npm.cmd run build`: PASS. `npm.cmd ls google-auth-library --depth=0`: 기존 10.9.1 일치. `git diff --check`: PASS. 초기 fields 괄호/infra→adapter 타입 의존/테스트 타입 오류는 수정했고 기대값 완화 없음.
+- `npm.cmd run check`: **exit1, Vitest 1,187 PASS / 9 FAIL / 14 SKIP** (Codex 샌드박스 환경 오류; Claude 정상 환경 재실행 exit0, Vitest 1196 PASS / 14 SKIP). 아키텍처, standards 검사(exit0, 기존 capability 상태 PARTIAL), Data Access boundary, 시트52, build, read-runtime smoke6, shadow10, dashboard21 통과. 실패는 기존 `iancar-source-capture`2 / `read-pilot`4 / `runtime-policy`2 / `vehicle-finder-route`1의 샌드박스 경로에서 발생했다. `uv_os_get_passwd ENOMEM`, jq `Permission denied`, local server `ECONNREFUSED`를 원문 그대로 유지; 관련 기대값/skip/환경을 바꾸지 않았다. 정상 실행 환경의 전체 check 재검증은 HOLD.
+- Claude: `claude:status`는 사용 가능이었으나 `claude:review`가 `FAILED / CLAUDE_PROCESS_FAILED`(exit1, 답변 없음). 독립 검토 **UNAVAILABLE**, AI 합의/GO로 세지 않는다.
+- live source 요청·Firestore/시트 쓰기·IAM/Scheduler/Cloud Run/secret/var 변경·dispatch·ERP4 수정·commit/push **0**. native RAW persistence와 실제 사이트 HTML/셀 귀속, 중계 concrete ports 및 정상 환경 전체 검사, 독립 검토, 운영 배포/cutover는 HOLD.
+- next_start_here: 이 절의 오더2와 `tests/supplier-native.test.ts` → 정상 환경 전체 check/Claude 독립 검토 → 별도 승인된 원문 readback과 포트 wiring 검증. 권한/생성/dispatch는 「승인 후 실행」의 별도 게이트를 통과한 뒤에만 수행한다.
 
 ### 범위와 증거 수준
 
@@ -144,11 +194,11 @@ inputs: {iancar_only: true, iancar_apply: true, apply: false, target: ALL}
 
 공식 설계 근거: [Scheduler HTTP 인증](https://docs.cloud.google.com/scheduler/docs/http-target-auth), [Cloud Run Job 예약 실행](https://docs.cloud.google.com/run/docs/execute/jobs-on-schedule), [workflow dispatch 권한](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event), [repository dispatch 권한](https://docs.github.com/en/rest/repos/repos#create-a-repository-dispatch-event), [Scheduler 전달 특성](https://docs.cloud.google.com/scheduler/docs/overview). 이번에는 IAM/secret/var/Scheduler 생성·변경·dispatch 모두0.
 
-### 수리 범위와 후속 diff 제안
+### 수리 범위와 후속 diff 제안 — 미채택(Data native로 이관)
 
-결함이 있는 executable은 ERP4 고정 engine이고 Data에는 RP004/RP006/RP023 native 구현이 없다. 이번 Data 수정은 기존 문서 두 곳의 근거·누락 표·설계·handoff이며, 작동하지 않는 새 adapter나 두 번째 writer를 만들어 운영 수리로 표시하지 않는다. native 이관 시 기존 `SourceIntakeBatch`/RAW/source head를 재사용하고 새 자산 전 reuse check가 필요하다.
+아래는 오더1 당시 진단 이력이다. 당시 결함 executable은 ERP4 고정 engine이고 Data에는 RP004/RP006/RP023 native 구현이 없었다. 오더2는 위에 기록한 RP004/RP006 RAW 구현으로 이관했으며 RP023 adapter와 운영 수리는 여전히 미완료다. 새 writer를 활성화하지 않았다.
 
-ERP4는 수정하지 않았다. 아래는 검토용 **정확한 최소 diff 제안**으로, 전체 수리나 배포 가능한 완료 patch가 아니다. 상세→Row 증거를 별도로 전달하여 기간·사진의 문자열 왕복 손실을 막는 방향이다.
+ERP4는 수정하지 않았다. 아래 과거 최소 diff 제안은 대표 결정으로 **미채택(Data native로 이관)**이다. 실행·적용 대상이 아니며 진단 이력으로만 보존한다.
 
 ```diff
 --- a/lib/domain/mirror-iron-source.ts
