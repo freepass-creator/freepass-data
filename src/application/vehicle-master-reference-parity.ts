@@ -1,4 +1,5 @@
 import { stableDigest } from '../shared/stable-digest.js';
+import { canonicalVehicleMakerName } from '../domain/vehicle-maker-name.js';
 
 export type VehicleNameReferenceRow = {
   maker: string;
@@ -59,7 +60,7 @@ export type VehicleNameParityReport = {
 
 const text = (value: string) => value.normalize('NFKC').trim().replace(/\s+/g, ' ');
 const key = (maker: string, model: string, subModel = '') =>
-  [maker, model, subModel].map(text).join('\u001f');
+  [canonicalVehicleMakerName(maker), model, subModel].map(text).join('\u001f');
 
 const year = (value?: string | null) => {
   const match = text(value ?? '').match(/^(19|20)\d{2}/);
