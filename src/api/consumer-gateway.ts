@@ -935,6 +935,10 @@ export function createConsumerGateway(
         if (code === 'ADMIN_WORKFLOW_CONFLICT' || code === 'ADMIN_WORKFLOW_IDEMPOTENCY_CONFLICT') {
           return reply.code(409).send({ code });
         }
+        if (code === 'ADMIN_WORKFLOW_REPLACEMENT_DROPS_FIELDS') {
+          const { resource: target, droppedFields } = error as { resource?: unknown; droppedFields?: unknown };
+          return reply.code(409).send({ code, resource: target, droppedFields });
+        }
         if (code.startsWith('INVALID_ADMIN_WORKFLOW_')) return reply.code(400).send({ code });
         return reply.code(503).send({ code: 'ADMIN_WORKFLOW_COMMIT_FAILED' });
       }

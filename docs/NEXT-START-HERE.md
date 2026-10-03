@@ -1,5 +1,16 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-03 고도화 전 정리 — Admin workflow 교체쓰기 필드 보존(PR1b)
+
+- 목적: PR1a에서 HOLD로 남긴 Data gateway `admin-workflow/commit`의 merge 없는 `set`(문서 전체 교체)이 저장된 계약·정산·전자서명 필드를 지우지 못하게 한다.
+- 대상 revision: PR1a 브랜치 `claude/data-preservation-guard-pr1a` `c76fc73` 위(main `e49dfb9` 기준).
+- 설계 근거: freepass-admin origin/main의 Data gateway shim(`src/adapters/freepass-data/admin-workflow-firestore.ts:143-146`)이 `docRef.set`을 gateway set으로 보내며, 런타임 merge:false set은 3곳 — `esign-repository.ts:304`·`:362`(결정적 ID 이벤트), `settlement-repository.ts:454`(청구서 재발행, `{...existing, …, history}`). 그래서 교체 차단이나 "부재 기대 필수"는 청구서 재발행을 깨므로 채택하지 않았다. Codex 설계 상의(read-only)로 최소안을 확정했다.
+- 변경: 교체 set 대상 문서를 트랜잭션 쓰기 전에 모두 읽고, 문서가 있으면 저장된 최상위 필드가 새 data에 모두 있어야 한다(값 변경 허용, 필드 제거 거부 → `ADMIN_WORKFLOW_REPLACEMENT_DROPS_FIELDS` 409, `resource`·`droppedFields` 포함, 명령 전체 미기록). 교체 set은 같은 명령에서 그 문서의 유일한 mutation이어야 한다(`INVALID_ADMIN_WORKFLOW_REPLACEMENT_NOT_EXCLUSIVE` 400). receipt 스키마는 바꾸지 않았다.
+- 검증: 단위·gateway 테스트 7건 — 청구서 재발행 spread+history 통과, 이벤트 재실행·신규 문서 통과, JSON 전송에서 `undefined`로 빠진 필드 거부, 비배타 교체 400, 409 응답 형태. 거부 분기를 제거하면 테스트가 실패하는 것을 확인 후 원복. `npm run check` PASS. 운영 배포·쓰기 없음.
+- 운영 영향(HOLD, 배포 승인 필요): Admin runtime write는 `FREEPASS_DATA_ADMIN_WORKFLOW_WRITE=on` 경로라 배포 즉시 적용된다. 기존 이벤트·청구서에 구버전/수동 추가 최상위 필드가 있거나 Admin이 값을 `undefined`로 보내면 재실행·재발행이 409가 된다 — 배포 전 Admin 담당과 대조한다.
+- 남음: 중첩 map 키 제거(`detail`·`snapshot` 통째 교체)와 `update`로 map 통째 교체는 검사하지 않는다(HOLD). 교체 전 값의 보존(revision)은 별도 설계다.
+- next_start_here: PR1c(iancar restore `FieldValue.delete` 축소)는 Codex `period-economics-main` worktree 정리 후, 그다음 상태 사전·plate key 통일.
+
 ## 2026-10-03 고도화 전 정리 — 삭제 금지 원칙 정적 검사(PR1a)
 
 - 목적/결정: 대표 지시 "원본은 보존하고 삭제하지 않는다. 출고불가 같은 상태 전환으로 처리한다"를 코드로 강제한다. Claude 3갈래 읽기 전용 감사(어댑터·삭제 경로·꼬인 데이터) 후 Codex(`gpt-5.5`, read-only) 2회 상의로 순서를 합의했다: ① 쓰기 보존 guard(PR1a 정적 검사+autoplus retire, PR1b admin-workflow 교체쓰기 정책, PR1c iancar restore field delete 축소) → ② 상태 사전·plate key 통일(`UNAVAILABLE`/`WITHDRAWN`) → ③ RP031 sourceId 단일화 → 소비처 발행 경로·ACTIVE release → 공급사 어댑터 순차 확장. 2026-10-03 대표 결정: F86은 이제 공급사 공통 입력 시트이므로 Data가 발행 대상으로 쓰지 않는다. 시트 관리 틀을 바꾸는 중이라(공급사 입력 PR #281→#282→#283) 시트 쪽 발행 설계는 그 틀이 확정된 뒤 다시 잡는다.
