@@ -115,6 +115,58 @@ export function buildPolicyArchive(captures,runId,capturedAt) {
   }
   return {headers:[...meta,...headers],rows};
 }
+// Compare-only: shared input sheet vs each supplier's existing provided sheet.
+// Both sides are caller-supplied fresh reads (header row + data rows of typed
+// values). No network, no writes, no value normalization beyond the spec's
+// equality rule. Policy columns are not compared (spec legacyCompare.policyCompare).
+export function compareSharedToLegacy({shared,legacy,binding},spec=inputSpec,now=Date.now()) {
+  const rule=spec.legacyCompare;
+  if(rule?.mode!=='COMPARE_ONLY_NO_WRITES')hold('Spec legacyCompare must be COMPARE_ONLY_NO_WRITES');
+  const times=[shared?.capturedAt,...(legacy??[]).map(l=>l.capturedAt)].map(Date.parse);
+  if(times.some(t=>!Number.isFinite(t)||t-now>1000||now-t>rule.maxCaptureSkewMinutes*60000))hold('Fresh captures required on both sides');
+  const suppliers=binding?.suppliers??[];
+  if(!suppliers.length||new Set(suppliers.map(s=>s.code)).size!==suppliers.length||new Set(suppliers.map(s=>s.title)).size!==suppliers.length)hold('Unique supplier bindings required');
+  const legacyCodes=(legacy??[]).map(l=>l.code);
+  if(new Set(legacyCodes).size!==legacyCodes.length)hold('One legacy capture per supplier code required');
+  const unboundLegacy=legacyCodes.filter(c=>!suppliers.some(s=>s.code===c));
+  const key=v=>String(v??'').replace(/\s+/g,'');
+  const text=v=>v===undefined||v===null?'':typeof v==='string'?v.trim():v;
+  const same=(a,b)=>{a=text(a);b=text(b);if(a===b)return true;
+    const num=x=>typeof x==='number'?x:typeof x==='string'&&/^-?[\d,\s]+(\.\d+)?$/.test(x)&&/\d/.test(x)?Number(x.replace(/[,\s]/g,'')):null;
+    const na=num(a),nb=num(b);return (typeof a==='number'||typeof b==='number')&&na!==null&&na===nb;};
+  const index=(rows,headers,label)=>{const at=headers.indexOf(rule.key);if(at<0)return null;const map=new Map(),dupes=new Set(),count=new Map();let noKey=0;
+    for(const r of rows){if(!r?.some(v=>text(v)!==''))continue;const k=key(r[at]);if(!k){noKey++;continue;}if(map.has(k))dupes.add(k);map.set(k,r);count.set(k,(count.get(k)??0)+1);}
+    return {map,dupes,noKey,count};};
+  const results=[];
+  for(const sup of suppliers){
+    const tab=shared?.tabs?.find(t=>t.title===sup.title);
+    if(!tab)hold(`Shared tab missing for ${sup.title}`);
+    if(JSON.stringify(tab.headers)!==JSON.stringify(spec.inputHeaders))hold(`Shared tab layout differs from ${spec.layoutVersion}: ${sup.title}`);
+    const src=(legacy??[]).find(l=>l.code===sup.code);
+    if(!src){results.push({code:sup.code,title:sup.title,status:'LEGACY_NOT_CAPTURED'});continue;}
+    if(src.complete!==true||src.tab!==rule.legacySourceTab){results.push({code:sup.code,title:sup.title,status:'LEGACY_UNREADABLE'});continue;}
+    const named=(src.headers??[]).map(h=>text(h)).filter(h=>h!=='');
+    if(new Set(named).size!==named.length){results.push({code:sup.code,title:sup.title,status:'LEGACY_UNREADABLE',reason:'duplicate legacy headers'});continue;}
+    const a=index(tab.rows??[],tab.headers),b=index(src.rows??[],src.headers??[]);
+    if(!b){results.push({code:sup.code,title:sup.title,status:'LEGACY_UNREADABLE',reason:`no ${rule.key} header`});continue;}
+    const fields=Object.entries(rule.fieldMap).filter(([h,old])=>h!==rule.key&&src.headers.includes(old)); // key already matched after normalization
+    const notInLegacy=Object.entries(rule.fieldMap).filter(([,old])=>!src.headers.includes(old)).map(([h])=>h);
+    const matched=[],different=[],onlyShared=[],onlyLegacy=[];
+    for(const [k,row] of a.map){
+      if(a.dupes.has(k)||b.dupes.has(k))continue;
+      const old=b.map.get(k);if(!old){onlyShared.push(k);continue;}
+      const diffs=fields.filter(([h,o])=>!same(row[tab.headers.indexOf(h)],old[src.headers.indexOf(o)])).map(([h])=>h);
+      (diffs.length?different:matched).push(diffs.length?{plate:k,fields:diffs}:k);
+    }
+    for(const k of b.map.keys())if(!a.map.has(k)&&!b.dupes.has(k))onlyLegacy.push(k);
+    const duplicates=[...new Set([...a.dupes,...b.dupes])].map(plate=>({plate,shared:a.count.get(plate)??0,legacy:b.count.get(plate)??0}));
+    // A missing legacy column means those fields were never compared, so it cannot be IN_SYNC.
+    const clean=!different.length&&!onlyShared.length&&!onlyLegacy.length&&!duplicates.length&&!a.noKey&&!b.noKey&&!notInLegacy.filter(h=>h!==rule.key).length;
+    results.push({code:sup.code,title:sup.title,status:clean?'IN_SYNC':'DIFFERENT',counts:{matched:matched.length,different:different.length,comparedFields:fields.length,onlyShared:onlyShared.length,onlyLegacy:onlyLegacy.length,duplicates:duplicates.length,sharedRowsWithoutPlate:a.noKey,legacyRowsWithoutPlate:b.noKey},different,onlyShared,onlyLegacy,duplicates,notInLegacy});
+  }
+  const summary=Object.fromEntries(['IN_SYNC','DIFFERENT','LEGACY_UNREADABLE','LEGACY_NOT_CAPTURED'].map(k=>[k,results.filter(r=>r.status===k).length]));
+  return {status:results.every(r=>r.status==='IN_SYNC')&&!unboundLegacy.length?'ALL_IN_SYNC':'NOT_IN_SYNC',scope:'COMPARE_ONLY_VEHICLE_RATE_FIELDS_NO_WRITES_POLICY_NOT_COMPARED',layoutVersion:spec.layoutVersion,summary,unboundLegacy,results};
+}
 if(process.argv[1]&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
-  try {const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}
+  try {const compare=process.argv.find(a=>a.startsWith('--compare='))?.slice(10);if(compare){console.log(JSON.stringify(compareSharedToLegacy(JSON.parse(fs.readFileSync(compare,'utf8'))),null,2));}else{const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json or --compare=private-compare.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}
 }
