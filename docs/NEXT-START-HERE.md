@@ -1,5 +1,15 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-03 고도화 전 정리 — 삭제 금지 원칙 정적 검사(PR1a)
+
+- 목적/결정: 대표 지시 "원본은 보존하고 삭제하지 않는다. 출고불가 같은 상태 전환으로 처리한다"를 코드로 강제한다. Claude 3갈래 읽기 전용 감사(어댑터·삭제 경로·꼬인 데이터) 후 Codex(`gpt-5.5`, read-only) 2회 상의로 순서를 합의했다: ① 쓰기 보존 guard(PR1a 정적 검사+autoplus retire, PR1b admin-workflow 교체쓰기 정책, PR1c iancar restore field delete 축소) → ② 상태 사전·plate key 통일(`UNAVAILABLE`/`WITHDRAWN`) → ③ RP031 sourceId 단일화 → F01/F86 native publisher·ACTIVE release → 공급사 어댑터 순차 확장.
+- 대상 revision: main `e49dfb9afa6d8203ed3bf388525179f122aed007`.
+- 변경: `scripts/check-data-access-boundary.mjs`가 `src/`의 `FieldValue.delete()`와 firebase-admin 파일의 merge 없는 `set()`을 파일별 개수 allowlist로 막는다(초과·미등록은 실패, allowlist가 실제보다 크면 축소 요구). autoplus 정책 보정은 run `2026-09-29T04-44-30-502Z-42019aec-...` 적용 완료로 retire — Firebase 대상 해석과 백업 쓰기 전에 `AUTOPLUS_POLICY_REPAIR_RETIRED`로 거부한다.
+- 검증: `npm run check` PASS(테스트 1,170 pass / 14 skip). 위반 주입(merge 없는 set·FieldValue.delete)과 allowlist 과대 설정 시 검사 실패를 직접 확인 후 원복. 운영 DB·시트·배포·IAM 변경 없음.
+- 합의된 판정(Claude·Codex): 공급사 어댑터는 등록 4 / `SupplierSourceAdapter` 규격 구현 2(sonogong·welrix); `data-owned-refresh` hourly는 frozen ERP4 엔진 래퍼이며 Data-native 어댑터 스케줄은 0, execute 성공 run 증거는 미확인; iancar publication은 hosted/production에서 GCS 백업 강제. 정책 435/208/116, 주행거리 1,421, 정산 472 미연결은 오류 대수로 확정하지 않는다.
+- 남음: PR1b — admin-workflow merge=false set은 원문 before-image 복제 대신 digest·exists·updateTime receipt와 "exists=false 기대 또는 명시적 교체 권한" 조건(`esign_private` 개인정보 이중 보존 금지, 새 컬렉션은 운영 승인). freepass-admin 런타임은 merge:true만 확인됨. PR1c — iancar restore `FieldValue.delete`는 Codex `period-economics-main` worktree가 같은 파일을 미커밋 수정 중이라 대기. 정적 검사는 별칭 import(`FieldValue as X`)·`deleteField`·Sheets clear는 잡지 않는다.
+- next_start_here: PR1b 설계를 `src/domain/admin-workflow.ts`·`src/infra/admin-workflow-firestore.ts`·`contracts/admin-workflow-receipt-v2.schema.json`에서 시작하고 allowlist 항목을 하나씩 줄인다.
+
 ## 2026-10-03 이안카 15분 자동 수집 활성 / 첫 실반영 검증
 
 - 목적/결정: 사용자 최신 지시는 질문을 반복하지 말고 ONE 전체 재고·상태·대여료·사진을15분마다 계속 맞추는 것이다. 최소 권한 범위 설명 뒤 작업 진행 직접 지시를 받아 기존 계정에만 적용했다. 정책2차/RTDB/새 writer/수동 입력 시트는 제외한다.

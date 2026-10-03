@@ -9,6 +9,7 @@ import {
   AUTOPLUS_CANONICAL_POLICY_CODE,
   AUTOPLUS_POLICY_CODES,
   AUTOPLUS_PROVIDER_CODE,
+  assertAutoplusPolicyRepairRunnable,
 } from '../domain/autoplus-policy-invariant.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 
@@ -20,6 +21,8 @@ function repairedContent(value: unknown) {
 }
 
 export async function applyAutoplusPolicyRepair() {
+  // Retired before any Firebase read or local backup write.
+  assertAutoplusPolicyRepairRunnable();
   const db = getFirestore(getTargetFirebaseApp());
   const refs = AUTOPLUS_POLICY_CODES.map((code) => db.collection('policy').doc(code));
   const before = await db.getAll(...refs);

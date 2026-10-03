@@ -3,7 +3,21 @@ import {
   assertAutoplusPolicyInvariant,
   assertAutoplusProductSet,
   AUTOPLUS_EXPECTED_ACTIVE_PRODUCT_COUNT,
+  AUTOPLUS_POLICY_REPAIR_APPLIED_RUN_ID,
+  assertAutoplusPolicyRepairRunnable,
 } from '../src/domain/autoplus-policy-invariant.js';
+
+describe('RP023 one-time policy repair', () => {
+  it('stays retired after the recorded production run', () => {
+    expect(() => assertAutoplusPolicyRepairRunnable()).toThrow('AUTOPLUS_POLICY_REPAIR_RETIRED');
+    expect(() => assertAutoplusPolicyRepairRunnable()).toThrow(AUTOPLUS_POLICY_REPAIR_APPLIED_RUN_ID);
+  });
+
+  it('refuses before resolving a Firebase target', async () => {
+    const { applyAutoplusPolicyRepair } = await import('../src/infra/autoplus-policy-repair-firestore.js');
+    await expect(applyAutoplusPolicyRepair()).rejects.toThrow('AUTOPLUS_POLICY_REPAIR_RETIRED');
+  });
+});
 
 const valid = {
   basic_driver_age: '만 26세 이상',
