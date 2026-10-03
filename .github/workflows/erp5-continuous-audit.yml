@@ -797,7 +797,7 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v3
         with:
           version: '579.0.0'
-      - run: npm ci --ignore-scripts
+      - run: npm ci --ignore-scripts --include=dev  # NODE_ENV=production 이면 devDependencies(tsx)를 빼므로 명시
       - name: Require the read-only Data audit identity and private bucket
         shell: bash
         env:
