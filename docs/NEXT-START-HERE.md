@@ -392,6 +392,25 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 남음: 전체 검사 환경 오류 및 Claude 독립 검토. Canonical에 없는 입력은 reasonCode 있는 UNKNOWN; 운영 근거 수집·재저장·배포 미실행. 별도 권한/승인을 만들지 않았다.
 - next_start_here: Claude가 최종 diff·READ-RUNTIME 두 대응표·검사 결과를 읽고 정상 실행 환경에서 전체 check 및 독립 검토 후 커밋한다. Codex는 커밋하지 않았다.
 
+### 2026-10-04 공급사 관계사 15탭·연월 허용 — 로컬 변경 / 전체 검사 HOLD
+
+- 목적: 대표·AI 상황실의 관계사 탭 통합 및 일 미상 `yy.mm` 결정을 기존 공급사 시트 규격·계획기에 반영.
+- 대상 revision: `6fdae3146c521a723e4206880ac8acd0ffe08987`, `work/freepass-data/supplier-sheet-drop-account-20261004` / 사용자 지정 PR #299. Git 쓰기·fetch·구글·운영 데이터 접속 없이 작업 트리만 수정. Academy READY.
+- 변경: `sharedInputSheet`는 18개 코드의 `{code, tab, companyName}` 대응이며 물리 탭은 15개. 경진카·엘씨·스카이·마음카 숨김 보관 기록, 물리 탭별 계획·캡처·종합 중복 제거, 회사명 감사, 연월 TEXT 정규화와 서식 보존, 입력 불변 회귀. 운영 기록은 사용자 전달이며 재검증하지 않음.
+- 검증: `npm.cmd run check:sheets` 87/87 PASS(공급사 전용 62개). 전체 `npm.cmd run check`의 architecture·standards 검사·data-access boundary·시트·build·runtime smoke 6·shadow 10·dashboard 21 통과. 최종 Vitest 1265 PASS / 9 FAIL / 14 SKIP(119파일 중 111 PASS / 4 FAIL / 4 SKIP). standards 자체 성숙도는 기존 PARTIAL/미해결 9개 유지.
+- 남음: 전체 검사 실패는 iancar-source-capture / read-pilot / runtime-policy / vehicle-finder-route 4파일. `tsx` 초기화의 `uv_os_get_passwd ENOMEM`, `jq Permission denied`, 로컬 서버 ECONNREFUSED를 관측. `node:os.userInfo()` 단독으로도 ENOMEM 재현. 14 SKIP은 Firestore emulator 미설정 10개와 Windows workflow 4개. Claude 독립 검토는 `CLAUDE_PROCESS_FAILED`로 FAILED이며 PASS 아님.
+- next_start_here: 로컬 diff와 공급사 런북의 최신 규칙·운영 기록을 검토하고 실행 환경 복구 후 전체 check 및 Claude 검토를 재실행한다. 이번 작업은 commit/배포/운영 적용을 포함하지 않는다.
+
+
+### 2026-10-04 공동 입력시트 계좌번호 제외 — 로컬 수정 / 운영 미적용
+
+- 목적/정본: 대표 결정으로 공동 시트 계좌번호만 제외. PR #295 기준 `d6262f11c90befacfdb63bfd015b95b53e83716c`, 가지 `work/freepass-data/supplier-sheet-drop-account-20261004`. academy:start READY. Git 쓰기·구글/운영 데이터 접속 없음.
+- 변경: `2026-10-04-no-account` 74칸(A:BV), 이전 sales 75칸과 전환 규칙은 legacy 보존. `planLayoutChange`의 사진 링크 이동은 선택 사항이며 공급사 값 재쓰기 없이 제거 열을 오른쪽부터 삭제하고 종합 머리글·수식과 남는 열을 정리한다. 값 서식·폭·드롭다운 자유 입력 판정에서 계좌번호 제외.
+- 검증: `npm.cmd run check:sheets` 82 PASS(공급사 57, 신규 3). `npm.cmd run check`의 정적 검사·빌드와 Node 검사 134 PASS; Vitest 1265 PASS / 9 FAIL / 14 SKIP → 전체 check 미통과. 실패는 tsx 진입 시 `uv_os_get_passwd ENOMEM`(최소 `node --import tsx -e`로 재현; CLI 7건 및 같은 tsx 서버의 로컬 연결 거부 1건), jq 실행 Permission denied 1건. 독립 Claude 검토는 `FAILED / CLAUDE_PROCESS_FAILED`, 답변 없음(UNAVAILABLE, PASS 아님).
+- 남음/HOLD: 대표 전달상 기존 9곳 중 8곳 ERP 전용계좌 일치, 퍼시픽은 F01에 없어 대조 HOLD. 제거 전 값은 백업 사본 보존이라고 전달받았으며 이번에는 원문을 재조회하지 않았다. 입금계좌 정본은 ERP 파트너 회사정보(은행·계좌번호·예금주); 판매시트 전용계좌는 그 정본에서 채운다. 운영 적용·재조회 미실행.
+- next_start_here: Claude가 diff와 검사 결과를 검토하고 커밋한다. tsx 사용자정보 조회/jq 권한이 정상인 환경에서 전체 check와 독립 검토를 마친다. 운영 적용 시 런북 현재 기준과 별도 승인 범위를 따른다.
+
+
 ### 2026-10-03 공급사 중계 job-name 호환 수정 — 로컬 검증 일부 HOLD
 
 - 목적/대상 revision: `work/freepass-data/supplier-relay-jobname-fix-b-20261003`, `10a729f22799eda8b8f90f01ba993b10c6f09d27`. Academy READY. 네트워크·배포·push·커밋 없이 기존 구현 확장.
