@@ -77,6 +77,14 @@ Authorization: Bearer <API key>
 
 원천 갱신 기준은 15분이다. `stale=true`이면 신규 대여 가능으로 표시하지 않는다. 페이지별 `synced_at`이 서로 다르거나 전체 행 수가 `pagination.total`과 다르면 FULL source head로 승격하지 않는다.
 
+### 운영 기준 — 2026-10-04 사용자 결정
+
+- **정본:** 이안카 재고는 이안카 시스템 하나만 본다. ONE API가 기본이고, ONE API가 막히면 같은 ERP의 우리 계정 로그인 `/api/inventory`를 기존 열쇠로 대체 사용한다([대체 순서](IANCAR-SOURCE-CAPTURE.md)). 공급사 원본 구글 시트(`이안카_프리패스`)·F54는 출처가 아니다.
+- **신선도 15분 유지:** 공급사 `stale=true` 또는 `synced_at`이 15분을 넘으면 그 회차는 HOLD하고 마지막 정상 자료를 그대로 둔다. 기준을 늘리지 않는다 — 오래된 재고를 출고 가능으로 보여 주는 위험이 더 크다. 우리 기준만 늘려도 공급사가 직접 다는 `stale=true` 때문에 막히므로 효과도 없다.
+- **10-03 관측:** 공급사 `syncedAt`(UTC) 04:55 → 05:13 → 06:34 → 07:36 → 08:44 → 14:29 → 14:56. 갱신 간격 20~60분, 08:44~14:29(한국시간 17:44~23:29) 약 6시간 공백. 같은 날 대체 출처(원본 시트 09-23 수정, 공개 사이트·로그인 경로는 같은 ERP)를 조사했으나 더 최신 출처는 없었다.
+- **공급사 문의:** 갱신 주기·공백 사유 문의를 확인 동선용으로 준비했다. 발송은 대표 확인 뒤(2026-10-04 기준 미발송). 답을 받으면 신선도 기준을 다시 판단한다.
+- **실패 원인 구분:** 사진 상세 검증 오류를 `IANCAR_PHOTO_IDENTITY_MISMATCH` / `IANCAR_PHOTO_DETAIL_STALE` / `IANCAR_PHOTO_LIST_MISSING` / `IANCAR_PHOTO_LIMIT_EXCEEDED` 네 코드로 나눴다([#293](https://github.com/freepass-creator/freepass-data/pull/293)). 운영 로그에 찍히려면 ERP4가 고정한 Data 실행기 버전을 올려야 한다.
+
 재고 상태는 `AVAILABLE / RESERVED / RENTED / PREPARING / UNAVAILABLE`을 그대로 보존한다. `available_from=null` 등 미확인 값은 추정하지 않는다.
 
 2026-10-01 사용자 직접 결정: 예약 `RESERVED`의 ERP·Admin·F01/F86 공통 표시값은 **계약중**이다. 호환 projection은 `vehicle_status/status=계약중`, `status_kind=선점`, `available=false`, `source_inventory_status=RESERVED`로 보존한다. 출고가능으로 표시하지 않으며 실제 계약 레코드·계약 ID·계약 잠금을 만들어내지 않는다. 기존 adapter의 `projectIancarOneReservation(payload, capture)`은 이 표시 규칙만 준비하며, 신선도 검증된 source를 소비처에 발행하는 writer는 아직 미연결이다. 수집기가 계산한 `readyForRawIngest=true`와 envelope `stale=false`를 모두 요구하며 행의 자체 stale 값으로 신선도 검증을 대체하지 않는다. 미검증 capture 또는 available 모순은 HOLD다. 이 규칙 확정으로 현재 withdrawal guard나 전량 검증 HOLD를 해제하지 않는다.
