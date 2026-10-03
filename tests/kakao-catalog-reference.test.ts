@@ -54,9 +54,11 @@ describe('2026-10-04 confirmed commission policy', () => {
     expect(resolveSupplierBillingFee(withoutBasis)).toMatchObject({ state: 'UNKNOWN', reasonCode: 'Q12_BASIS_REQUIRED' });
     expect(resolveSupplierBillingFee({ ...input, subscriptionForm: 'RETURN' }).state).toBe(termMonths === 12 ? 'CALCULATED' : 'UNKNOWN');
   });
-  it('holds fractional won before splitting VAT and rejects unsupported terms', () => {
-    expect(resolveSalesCommission({ ...base, monthlyRent: 1000001 })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'WON_ROUNDING_POLICY_UNCONFIRMED' });
-    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP013', monthlyRent: 500001 })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'WON_ROUNDING_POLICY_UNCONFIRMED' });
+  it('rounds fractional won (F04 practice) and rejects unsupported terms', () => {
+    for (const r of [resolveSalesCommission({ ...base, monthlyRent: 1000001 }), resolveSupplierBillingFee({ ...base, supplierId: 'RP013', monthlyRent: 500001 })]) {
+      expect(r.state).toBe('CALCULATED');
+      expect(Number.isInteger(r.amount) && Number.isInteger(r.vatAmount)).toBe(true);
+    }
     expect(resolveSalesCommission({ ...base, supplierId: 'RP013', termMonths: 18 }).reasonCode).toBe('TERM_NOT_IN_F04_COMMISSION_POLICY');
   });
   it('keeps confirmed Iron fees and excludes Mindcar', () => {
@@ -161,10 +163,10 @@ describe('Kakao sales commission facts', () => {
     });
   });
 
-  it('fails closed for unknown suppliers and holds fractional won', () => {
+  it('fails closed for unknown suppliers and rounds fractional won', () => {
     expect(resolveSalesCommission({ supplierId: 'UNKNOWN', productType: '중고렌트', fuel: '가솔린', termMonths: 36, monthlyRent: 800000 }).state).toBe('UNKNOWN');
     expect(resolveSalesCommission({ supplierId: 'RP013', productType: '중고렌트', fuel: '가솔린', termMonths: 60, monthlyRent: 800001 })).toMatchObject({
-      state: 'UNKNOWN', reasonCode: 'WON_ROUNDING_POLICY_UNCONFIRMED', amount: null, vatAmount: null, totalAmount: null,
+      state: 'CALCULATED', amount: 840001, vatAmount: 84000,
     });
   });
 });
@@ -419,12 +421,16 @@ describe('F04 2026-10-04 alignment regression', () => {
   it.each(['AMR','오토셀렉션','금탑','빌림','퍼스트','SK'])('unregistered %s remains unknown', supplierId => {
     expect(both({ ...base, supplierId }).every(r => r.reasonCode === 'SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE')).toBe(true);
   });
-  it('unconfirmed scopes, rounding and general Sonokong 60 remain unknown', () => {
+  it('unconfirmed scopes and general Sonokong 60 remain unknown; Star VAT-included rerent rounds like F04 R402/R420', () => {
     for (const productType of ['신차발주','구독']) expect(both({ ...base, supplierId: 'RP013', productType }).every(r => r.state === 'UNKNOWN')).toBe(true);
     for (const productType of ['신차렌트','재렌트']) expect(both({ ...base, supplierId: 'RP014', productType }).every(r => r.state === 'UNKNOWN')).toBe(true);
     const sonokong = { ...base, supplierId: 'RP012', subscriptionForm: 'BUYOUT' as const, q12Basis: { amount: 800000, sourceRef: 'private:verified-q12' } };
     expect(both(sonokong).every(r => r.reasonCode === 'SONOKONG_60_ADDITION_CONFLICT')).toBe(true);
     expect(both({ ...sonokong, termMonths: 24, subscriptionForm: 'RETURN' }).every(r => r.reasonCode === 'RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED')).toBe(true);
-    expect(both({ ...base, supplierId: 'RP018', productType: '재렌트', monthlyRent: 780000 }).every(r => r.reasonCode === 'WON_ROUNDING_POLICY_UNCONFIRMED')).toBe(true);
+    // F04 R402 624,000 → 567,273, R420 560,000 → 509,091 (VAT 포함 ÷ 1.1, 원 단위 반올림)
+    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP018', productType: '재렌트', monthlyRent: 624000 })).toMatchObject({ state: 'CALCULATED', amount: 567273, vatAmount: 56727, totalAmount: 624000 });
+    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP018', productType: '재렌트', monthlyRent: 560000 })).toMatchObject({ state: 'CALCULATED', amount: 509091, vatAmount: 50909, totalAmount: 560000 });
+    for (const termMonths of [12, 24, 36, 48]) for (const supplierId of ['RP021', 'PT-0026'])
+      expect(both({ ...base, supplierId, productType: '구독', termMonths }).every(r => r.state === 'UNKNOWN' && r.reasonCode === 'SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED')).toBe(true);
   });
 });

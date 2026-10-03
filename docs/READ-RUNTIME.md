@@ -54,7 +54,7 @@ Admin 전용 `data[].offers[].priceTerms[].supplierBillingFee` / `channelPayoutF
 
 - 스타 RP018·스카이 RP033 재렌트: 월료 100% 청구·80% 지급, VAT 포함. 공급사 ID는 유지하고 규칙만 공유한다. 신차는 이 특칙에 포함하지 않는다.
 - 퍼시픽 RP022 신차: `vehicleValue` × 요율. `newProductSubtype`은 `NEW_PREDELIVERY`/`NEW_MATCHING`, `depositTierPercent`는 계약상 5/10이다. 선출고 청구/지급은 5% 등급 3%/2.5%, 10% 등급 4%/3%; 매칭은 3%/3%, 3.3%/3.3%. 모두 VAT 포함. 등급 없으면 `DEPOSIT_TIER_REQUIRED`이며 보증금 금액으로 추정하지 않는다. 재렌트는 표준, VAT 별도다.
-- 원 단위 반올림은 F04 171행 미확정이다. 산식·공급가·VAT에 소수점이 생기면 `UNKNOWN / WON_ROUNDING_POLICY_UNCONFIRMED`; 정수로 정확히 나누어지는 경우만 계산한다. VAT 포함 공급가 = 총액×10÷11, VAT 별도 = 공급가÷10. 마진은 공급가끼리 차감한다.
+- 원 단위 반올림은 F04 접수 실제 관행으로 확정(2026-10-04 AI 상황실): VAT 포함 금액 ÷ 1.1 → 원 단위 반올림이 공급가, VAT = 총액 − 공급가. 근거 F04 접수 R402 624,000→567,273, R420 560,000→509,091. 산식 금액과 VAT 별도 VAT(공급가÷10)도 원 단위 반올림. 마진은 공급가끼리 차감한다.
 - 손오공 구독: `q12Basis: { amount, sourceRef }`는 근거로 선택한 12개월 계약 기준 **월** 구독료다. 없으면 `Q12_BASIS_REQUIRED`. `subscriptionForm`은 `BUYOUT`/`RETURN`; 반납형은 12개월만. 청구는 Q12＋기간 가산(12:10만, 24:30만, 36:50만, 48:70만; 60: 사용자 명시 HOLD), 지급은 Q12다. 기간 보간은 없다.
 - 아이언 신차 선출고 4%/3%, 일반 표준 신차 3.5%/3%, 오토플러스 일반 구독 100만/80만, 아이카 재렌트 6개월 40만/30만·전기차 100만/80만은 VAT 별도다.
 - 마음카 RP034는 `NOT_APPLICABLE / SUPPLIER_EXCLUDED_BY_DECISION`. 미등록 공급사, 미지원 기간, 표준 매칭 개별율, 아이카 1개월 기준액·연장 조건, 빌린카·엘씨 60개월 외 구독·웰릭스 구독 범위, 스위치 비구독 등은 UNKNOWN과 사유를 유지한다. `individualException: true`만 있고 아래의 유효한 개별 근거가 없으면 `INDIVIDUAL_EXCEPTION_EVIDENCE_REQUIRED`; 오토플러스 프로모션 등 개별 거래를 일반 규칙으로 확장하지 않는다.
@@ -278,7 +278,7 @@ B=BILLING, P=PAYOUT, `{S}`=BILLING 또는 PAYOUT. 표준 재렌트 지급 ruleId
 | 159 | `timingRules.ALL.DEPOSIT_INSTALLMENT` | 같음: 선언 보존 |
 | 160 | `F04_INDIVIDUAL_413_{S}` | 같음: 승인·계약 일치 필수, 최신 사본862000/562000 |
 | 161 | `AUTOPLUS_EV_SUBSCRIPTION_{S}` | 같음:150만/130만 |
-| 162 | `BILLIN_SUBSCRIPTION_60_{S}_RENT_X_TERM` | 같음:60개월만 |
+| 162 | `BILLIN_SUBSCRIPTION_60_{S}_RENT_X_TERM` | 같음:60개월만. 다른 기간 구독은 `SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED`(표준 재렌트로 흘리지 않음) |
 | 163 | `F04_AICA_INDIVIDUAL_PAYOUT / null` | 같음: 지급40만; 청구UNKNOWN (INDIVIDUAL_BILLING_BASIS_UNCONFIRMED) |
 | 164 | `null (WELRIX_ORDER_RULE_UNCONFIRMED)` | UNKNOWN 유지: 발주 근거 없음 |
 | 165 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
@@ -287,7 +287,7 @@ B=BILLING, P=PAYOUT, `{S}`=BILLING 또는 PAYOUT. 표준 재렌트 지급 ruleId
 | 168 | `null (SUPPLIER_EXCLUDED_BY_DECISION)` | 같음: NOT_APPLICABLE, 0원 아님 |
 | 169 | `미구현` | 다름/HOLD: 뮤카 전용 재원·VAT·ID 계약, 이번 범위 밖 |
 | 170 | `미구현` | 다름/HOLD: 뮤카 상세표 확정; 전용 계약 연결은 이번 범위 밖 |
-| 171 | `null (WON_ROUNDING_POLICY_UNCONFIRMED)` | UNKNOWN 유지: 소수점 정책 미확정 |
+| 171 | 반올림 규칙(계산 단계) | 확정: F04 접수 관행 VAT 포함 ÷1.1 원 단위 반올림(R402·R420 근거) |
 | 172 | `null (DEPOSIT_TIER_REQUIRED)` | UNKNOWN 유지: 5/10 등급 외 |
 | 173 | `null (RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED)` | UNKNOWN 유지: 60은 충돌 코드가 우선 |
 | 174 | `null (SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED)` | UNKNOWN 유지 |

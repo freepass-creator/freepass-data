@@ -224,13 +224,13 @@ describe('canonical per-term economics precompute', () => {
     input.priceTerms[0]!.termMonths = 18;
     expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.supplierBillingFee.reasonCode).toBe('TERM_NOT_IN_F04_COMMISSION_POLICY');
   });
-  it('preserves fixed fees, rejects ambiguous fuel and holds fractional won', () => {
+  it('preserves fixed fees, rejects ambiguous fuel and rounds fractional won', () => {
     const input = offer(); input.supplierId = 'RP023';
     expect(precomputeOfferEconomics(input, 'USED_SUBSCRIPTION', '가솔린')[0]!.channelPayoutFee).toMatchObject({ amount: { amount: 800000 }, calculation: { kind: 'FIXED' } });
     input.supplierId = 'RP004';
     expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.channelPayoutFee.reasonCode).toBe('FUEL_REQUIRED_FOR_SUPPLIER_RULE');
     input.supplierId = 'RP013'; input.priceTerms[0]!.monthlyRent.amount = 500001;
-    expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.channelPayoutFee.reasonCode).toBe('WON_ROUNDING_POLICY_UNCONFIRMED');
+    expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.channelPayoutFee.state).toBe('KNOWN');
   });
 });
 

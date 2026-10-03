@@ -259,12 +259,11 @@ const calculatedCommission = (
   amount: number,
   vatTreatment: VatTreatment,
 ): CommissionResolution => {
-  if (Number.isFinite(amount) && !Number.isInteger(amount)) return unknownCommission('WON_ROUNDING_POLICY_UNCONFIRMED');
+  if (Number.isFinite(amount)) amount = Math.round(amount); // 원 단위 반올림(F04 접수 관행, 아래 VAT 근거와 같음)
   if (!Number.isSafeInteger(amount) || amount < 0) return unknownCommission('COMMISSION_AMOUNT_OUT_OF_RANGE');
-  if (vatTreatment === 'INCLUDED' && amount % 11 !== 0) return unknownCommission('WON_ROUNDING_POLICY_UNCONFIRMED');
-  const supply = vatTreatment === 'INCLUDED' ? amount / 11 * 10 : amount;
-  const vatAmount = vatTreatment === 'INCLUDED' ? amount - supply : supply / 10;
-  if (!Number.isInteger(supply) || !Number.isInteger(vatAmount)) return unknownCommission('WON_ROUNDING_POLICY_UNCONFIRMED');
+  // F04 접수 관행(2026-10-04 확정): VAT 포함 금액 ÷ 1.1 → 원 단위 반올림. 근거 R402 624,000→567,273, R420 560,000→509,091.
+  const supply = vatTreatment === 'INCLUDED' ? Math.round(amount / 1.1) : amount;
+  const vatAmount = vatTreatment === 'INCLUDED' ? amount - supply : Math.round(supply / 10);
   const totalAmount = supply + vatAmount;
   if (!Number.isSafeInteger(totalAmount)) return unknownCommission('COMMISSION_AMOUNT_OUT_OF_RANGE');
   return { state: 'CALCULATED', ruleId, amount: supply, vatTreatment, vatAmount, totalAmount, reasonCode: null };
@@ -361,7 +360,11 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     if (!Number.isSafeInteger(input.vehicleValue) || input.vehicleValue! <= 0) return unknownCommission('VEHICLE_VALUE_REQUIRED');
     return fixed(`SONOKONG_PICKUP_${side}`, input.vehicleValue! * (billing ? 400 : 300) / 10000);
   }
-  if (['RP021', 'PT-0026'].includes(supplierId) && subscription && termMonths === 60) return resolveTermLadder(termMonths, monthlyRent, side, 'BILLIN_SUBSCRIPTION');
+  if (['RP021', 'PT-0026'].includes(supplierId) && subscription) {
+    // 탭 162행은 60개월만 정한다. 다른 기간 구독은 표준 재렌트로 흘리지 않고 닫는다.
+    if (termMonths !== 60) return unknownCommission('SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED');
+    return resolveTermLadder(termMonths, monthlyRent, side, 'BILLIN_SUBSCRIPTION');
+  }
   if (supplierId === 'RP012' && subscription) {
     if (termMonths === 60) return unknownCommission('SONOKONG_60_ADDITION_CONFLICT');
     const addition = KAKAO_COMMISSION_POLICY.sonokongAdditions[termMonths as 12];
