@@ -309,6 +309,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-03 공급사 중계 job-name 호환 수정 — 로컬 검증 일부 HOLD
+
+- 목적/대상 revision: `work/freepass-data/supplier-relay-jobname-fix-b-20261003`, `10a729f22799eda8b8f90f01ba993b10c6f09d27`. Academy READY. 네트워크·배포·push·커밋 없이 기존 구현 확장.
+- 변경: `/verify`·`/schedule`이 허용 목록의 전체 경로 또는 설정 prefix와 일치하는 짧은 ID를 받는다. 다른 경로는 거부하고 영수증은 전체 경로로 유지한다. scheduleTime 소수 1~9자리 허용 후 파싱 전 밀리초 절삭. 거부 로그는 event/path/code/reason만 포함한다.
+- 검증: 회귀 4건 추가, supplier-native 35/35 PASS, `npm run build` PASS. `npm run check`의 Vitest 결과 1241 PASS / 9 FAIL / 14 SKIP. 실패 4파일(iancar-source-capture, read-pilot, runtime-policy, vehicle-finder-route)은 단일 워커 재실행에서도 9건 실패. 자식 프로세스 `uv_os_get_passwd ENOMEM`, 로컬 서버 `ECONNREFUSED` 등으로 전체 check 통과는 HOLD.
+- 남음/next_start_here: 경영지원실이 diff 검토 후 커밋. 실행 환경에서 위 4파일 및 전체 check 재검증 필요. 원격 Issue/PR 조회와 Claude 검토는 네트워크 금지로 미실행. 운영 반영·실호출 검증은 수행하지 않음.
+
 ### 2026-10-03 오더4 — PR #288 공급사 중계 일반화 / 운영 HOLD
 
 - 목적: 이안카 전용 중계를 전 공급사 허용 목록·그룹 pending·경합 관측·무쓰기 검증으로 확장.

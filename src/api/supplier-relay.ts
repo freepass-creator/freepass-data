@@ -72,12 +72,13 @@ export function supplierRelayHandler(ports: SupplierRelayPorts, expectedJobName:
     let authenticated = false;
     try { authenticated = await ports.verifyScheduler(input.authorization); } catch { /* fail closed */ }
     if (!authenticated) return { status: 'UNAUTHORIZED' as const };
+    const parseableTime = input.scheduleTime.replace(/(\.\d{3})\d+Z$/, '$1Z');
     // The Scheduler body is deliberately empty. Caller-selected dispatch inputs are rejected.
     if (input.jobName !== expectedJobName || input.body === null || typeof input.body !== 'object'
       || Array.isArray(input.body) || Object.keys(input.body).length !== 0
-      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(input.scheduleTime)
-      || !Number.isFinite(Date.parse(input.scheduleTime))) return { status: 'INVALID_REQUEST' as const };
-    const scheduleTime = new Date(input.scheduleTime).toISOString();
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(input.scheduleTime)
+      || !Number.isFinite(Date.parse(parseableTime))) return { status: 'INVALID_REQUEST' as const };
+    const scheduleTime = new Date(parseableTime).toISOString();
     if (scheduleTime.slice(0, 19) !== input.scheduleTime.slice(0, 19)) return { status: 'INVALID_REQUEST' as const };
     if (entry.hold) return { status: 'HOLD' as const, reason: 'NO_EQUIVALENT_HOURLY_DISPATCH' };
     const key = createHash('sha256').update(JSON.stringify([expectedJobName, scheduleTime])).digest('hex');
@@ -152,28 +153,48 @@ export function buildSupplierRelayServer(ports: SupplierRelayPorts | ((entry: Su
     const scopedPorts = typeof ports === 'function' ? ports(entry) : ports;
     return { entry, jobName, ports: scopedPorts, handle: supplierRelayHandler(scopedPorts, jobName) };
   });
+  const bindingFor = (header: string | string[] | undefined) => typeof header === 'string'
+    ? bindings.find(item => item.jobName === header || (!header.includes('/') && item.jobName === `${prefix}${header}`))
+    : undefined;
+  const reject = (path: '/verify' | '/schedule', code: number,
+    reason: 'AUTH' | 'JOB_NOT_ALLOWLISTED' | 'BODY_NOT_EMPTY_OBJECT' | 'BODY_OR_SCHEDULE_TIME') => {
+    console.log(JSON.stringify({ event: 'supplier_relay_reject', path, code, reason }));
+  };
   server.post('/verify', async (request, reply) => {
     const authorization = typeof request.headers.authorization === 'string' ? request.headers.authorization : '';
-    const binding = bindings.find(item => item.jobName === request.headers['x-cloudscheduler-jobname']);
+    const binding = bindingFor(request.headers['x-cloudscheduler-jobname']);
     const authPorts = binding?.ports ?? bindings[0]!.ports;
     let authorized = false;
     try { authorized = await authPorts.verifyScheduler(authorization); } catch { /* fail closed */ }
-    if (!authorized) return reply.code(401).send({ status: 'UNAUTHORIZED' });
-    if (!binding || !request.body || typeof request.body !== 'object' || Array.isArray(request.body)
-      || Object.keys(request.body).length) return reply.code(400).send({ status: 'INVALID_REQUEST' });
+    if (!authorized) {
+      reject('/verify', 401, 'AUTH');
+      return reply.code(401).send({ status: 'UNAUTHORIZED' });
+    }
+    if (!binding) {
+      reject('/verify', 400, 'JOB_NOT_ALLOWLISTED');
+      return reply.code(400).send({ status: 'INVALID_REQUEST' });
+    }
+    if (!request.body || typeof request.body !== 'object' || Array.isArray(request.body)
+      || Object.keys(request.body).length) {
+      reject('/verify', 400, 'BODY_NOT_EMPTY_OBJECT');
+      return reply.code(400).send({ status: 'INVALID_REQUEST' });
+    }
     try { return await binding.ports.verifyReadOnly(); }
     catch { return { status: 'UNKNOWN', checks: { preflight: 'UNKNOWN' } }; }
   });
   server.post('/schedule', async (request, reply) => {
     const header = (name: string) => typeof request.headers[name] === 'string' ? request.headers[name] as string : '';
-    const binding = bindings.find(item => item.jobName === header('x-cloudscheduler-jobname'));
+    const binding = bindingFor(request.headers['x-cloudscheduler-jobname']);
     if (!binding) {
       let authenticated = false;
       try { authenticated = await bindings[0]!.ports.verifyScheduler(header('authorization')); } catch { /* fail closed */ }
+      reject('/schedule', authenticated ? 400 : 401, authenticated ? 'JOB_NOT_ALLOWLISTED' : 'AUTH');
       return reply.code(authenticated ? 400 : 401).send({ status: authenticated ? 'INVALID_REQUEST' : 'UNAUTHORIZED' });
     }
-    const outcome = await binding.handle({ authorization: header('authorization'), jobName: header('x-cloudscheduler-jobname'),
+    const outcome = await binding.handle({ authorization: header('authorization'), jobName: binding.jobName,
       scheduleTime: header('x-cloudscheduler-scheduletime'), body: request.body });
+    if (outcome.status === 'UNAUTHORIZED') reject('/schedule', 401, 'AUTH');
+    if (outcome.status === 'INVALID_REQUEST') reject('/schedule', 400, 'BODY_OR_SCHEDULE_TIME');
     // UNKNOWN is acknowledged to prevent transport retries. It is never a refresh success.
     return reply.code(outcome.status === 'UNAUTHORIZED' ? 401 : outcome.status === 'INVALID_REQUEST' ? 400 : 200).send(outcome);
   });
