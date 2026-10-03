@@ -1,6 +1,7 @@
 import { mapErp5Product, ERP5_PRODUCT_MAPPER_VERSION, type Erp5PolicyFacts } from './erp5-product-mapping.js';
 import { orderedJsonDigest } from '../shared/stable-digest.js';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
+import { plateIdentityKey } from '../domain/vehicle-plate.js';
 
 export const ERP5_DOCUMENTS = 'projects/freepasserp5/databases/(default)/documents';
 const collections = ['products', 'policy', 'partner'] as const;
@@ -212,7 +213,7 @@ export function inspectErp5Capture(capture: Erp5SourceCapture) {
       const plate = decodeErp5Value(object(doc.fields) ? doc.fields.car_number : undefined);
       if (typeof plate !== 'string' || !plate.trim()) throw new Error('UNKNOWN_PLATE');
       plateChecked++;
-      const identity = plate.replace(/\s+/g, '');
+      const identity = plateIdentityKey(plate);
       if (seenPlates.has(identity)) duplicatePlateCount++;
       seenPlates.add(identity);
     } catch { plateUnchecked++; }

@@ -2,6 +2,8 @@ import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { assessDepositEvidence, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
+import { resolveErp5InventoryStatus } from '../domain/erp5-inventory-status.js';
+import { isStrictKoreanPlate } from '../domain/vehicle-plate.js';
 
 export const ERP5_PRODUCT_MAPPER_VERSION = 'erp5-product-mapping/4';
 
@@ -110,10 +112,6 @@ const types: Record<string, MappedCommercialType> = {
   '신차구독': 'NEW_SUBSCRIPTION', '중고구독': 'USED_SUBSCRIPTION', '재구독': 'USED_SUBSCRIPTION',
   '오공구독': 'OGONG_SUBSCRIPTION', '픽업구독': 'PICKUP_SUBSCRIPTION', '오플구독': 'OPLUS_SUBSCRIPTION'
 };
-const inventoryKinds: Record<string, string> = {
-  '즉시출고': '가용', '출고가능': '가용', '출고협의': '협의',
-  '상품화중': '준비', '차량검수': '준비', '계약중': '선점', '출고불가': '불가'
-};
 const has = (x: ObjectValue, k: string) => Object.hasOwn(x, k);
 const present = (x: Json | undefined) => x !== undefined && x !== null && x !== '';
 
@@ -154,7 +152,7 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
   for (const required of ['carNumber', 'maker', 'model', 'providerCompanyCode', 'vehicleStatusRaw'] as const) {
     if (!candidate[required]) issue(`MISSING_REQUIRED:${required}`);
   }
-  const validPlate = /^(?:[가-힣]{2})?\d{2,3}[가-힣]\d{4}$/.test(candidate.carNumber ?? '');
+  const validPlate = isStrictKoreanPlate(candidate.carNumber ?? '');
   if (!validPlate) issue('INVALID_PLATE');
   const supplier = candidate.providerCompanyCode;
   if (supplier && ['RP012', 'SONOGONG'].includes(supplier.toUpperCase()) && supplier !== 'RP012') {
@@ -189,11 +187,11 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     if (!validPlate || !expected) issue('SONOGONG_CLASSIFICATION_EVIDENCE_MISSING');
     else if (commercialType !== expected) issue('SONOGONG_CLASSIFICATION_CONFLICT');
   }
-  const vehicleStatus = candidate.vehicleStatusRaw;
-  if (!vehicleStatus || !Object.hasOwn(inventoryKinds, vehicleStatus)) issue('UNREVIEWED_VEHICLE_STATUS');
+  const inventory = resolveErp5InventoryStatus(candidate.vehicleStatusRaw);
+  if (!inventory.known) issue('UNREVIEWED_VEHICLE_STATUS');
   else {
-    if (d.listable !== (vehicleStatus !== '출고불가')) issue('INVENTORY_LISTABLE_CONFLICT');
-    if (d.status_kind !== inventoryKinds[vehicleStatus]) issue('INVENTORY_STATUS_KIND_CONFLICT');
+    if (d.listable !== inventory.listable) issue('INVENTORY_LISTABLE_CONFLICT');
+    if (d.status_kind !== inventory.statusKind) issue('INVENTORY_STATUS_KIND_CONFLICT');
   }
   if (typeof d.listable !== 'boolean') issue('UNKNOWN_LISTABLE');
   if (present(d._deleted) && d._deleted !== false && d._deleted !== 0) issue('DELETION_MARKER_REVIEW_REQUIRED');
