@@ -434,3 +434,27 @@ describe('F04 2026-10-04 alignment regression', () => {
       expect(both({ ...base, supplierId, productType: '구독', termMonths }).every(r => r.state === 'UNKNOWN' && r.reasonCode === 'SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED')).toBe(true);
   });
 });
+
+describe('F04 source references and term scope (2026-10-04 review)', () => {
+  const F04_REF = /^F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*$/;
+  it('every Kakao commission sourceRef matches the reference schema pattern (no catalog/private refs leak in)', () => {
+    const suppliers = ['RP004', 'RP006', 'RP008', 'RP010', 'RP012', 'RP013', 'RP014', 'RP018', 'RP021', 'RP022', 'RP023', 'RP031', 'RP033', 'RP034', 'PT-0026', 'XX-9999'];
+    const products = ['신차렌트', '중고렌트', '재렌트', '장기렌트', '선출고', '견적출고', '중고구독', '신차구독', '오공구독', '픽업구독', '신차발주'];
+    let checked = 0;
+    for (const supplierId of suppliers) for (const productType of products) for (const termMonths of [1, 6, 12, 24, 36, 48, 60, 72])
+      for (const r of [resolveSupplierBillingFee, resolveSalesCommission].map((f) => f({ supplierId, productType, fuel: '가솔린', termMonths, monthlyRent: 500000 }))) {
+        expect(r.sourceRefs?.length).toBeGreaterThan(0);
+        for (const ref of r.sourceRefs ?? []) expect(ref).toMatch(F04_REF);
+        checked++;
+      }
+    expect(checked).toBe(16 * 11 * 8 * 2);
+  });
+  it('AutoPlus EV subscription is term-independent because F04 row 161 says 「기간 무관」', () => {
+    for (const termMonths of [12, 24, 36, 48, 60]) {
+      const input = { supplierId: 'RP023', productType: '구독', fuel: '전기', termMonths, monthlyRent: 300000 };
+      expect(resolveSupplierBillingFee(input)).toMatchObject({ state: 'CALCULATED', amount: 1500000 });
+      expect(resolveSalesCommission(input)).toMatchObject({ state: 'CALCULATED', amount: 1300000 });
+      expect(resolveSalesCommission(input).sourceRefs).toContain('F04:수수료표!A161:M161');
+    }
+  });
+});
