@@ -144,7 +144,6 @@ describe('Kakao sales commission facts', () => {
   it('requires Q12 evidence without inventing an amount for 영업자 조율', () => {
     expect(resolveSalesCommission({ supplierId: 'RP012', productType: '오공구독', fuel: '디젤', termMonths: 36, monthlyRent: 800000 })).toEqual({
       state: 'UNKNOWN',
-      sourceRefs: ['F04:수수료표!A12:M12', 'F04:수수료표!A173:M173', 'F04:수수료표!A191:M191'],
       ruleId: null,
       amount: null,
       vatTreatment: 'UNKNOWN',
@@ -443,11 +442,23 @@ describe('F04 source references and term scope (2026-10-04 review)', () => {
     let checked = 0;
     for (const supplierId of suppliers) for (const productType of products) for (const termMonths of [1, 6, 12, 24, 36, 48, 60, 72])
       for (const r of [resolveSupplierBillingFee, resolveSalesCommission].map((f) => f({ supplierId, productType, fuel: '가솔린', termMonths, monthlyRent: 500000 }))) {
-        expect(r.sourceRefs?.length).toBeGreaterThan(0);
-        for (const ref of r.sourceRefs ?? []) expect(ref).toMatch(F04_REF);
+        if (r.state === 'CALCULATED') {
+          expect(r.sourceRefs?.length).toBeGreaterThan(0);
+          for (const ref of r.sourceRefs ?? []) expect(ref).toMatch(F04_REF);
+        } else {
+          // UNKNOWN·NOT_APPLICABLE·협의는 근거 행 없이 사유 코드만
+          expect(r.sourceRefs).toBeUndefined();
+        }
         checked++;
       }
     expect(checked).toBe(16 * 11 * 8 * 2);
+  });
+  it('unregistered suppliers and Mindcar carry no F04 row reference', () => {
+    for (const supplierId of ['XX-9999', 'RP034']) for (const f of [resolveSupplierBillingFee, resolveSalesCommission]) {
+      const r = f({ supplierId, productType: '중고렌트', fuel: '가솔린', termMonths: 36, monthlyRent: 500000 });
+      expect(r.state).not.toBe('CALCULATED');
+      expect(r.sourceRefs).toBeUndefined();
+    }
   });
   it('AutoPlus EV subscription is term-independent because F04 row 161 says 「기간 무관」', () => {
     for (const termMonths of [12, 24, 36, 48, 60]) {

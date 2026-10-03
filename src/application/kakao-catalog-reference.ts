@@ -429,6 +429,8 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   } else rows = [177,178,179,180,181,182];
   if (result.reasonCode === 'WON_ROUNDING_POLICY_UNCONFIRMED') rows.push(171);
   if (result.reasonCode === 'DEPOSIT_TIER_REQUIRED') rows.push(172);
+  // 근거 행은 계산된 결과에만 단다. UNKNOWN·NOT_APPLICABLE·협의는 reasonCode만 — 미등록 공급사가 「근거 있는 규칙」처럼 보이지 않게.
+  if (result.state !== 'CALCULATED') return result;
   return { ...result, sourceRefs: [...new Set(rows)].map(f04Ref) };
 }
 
