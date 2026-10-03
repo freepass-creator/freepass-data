@@ -1,4 +1,5 @@
 import { precomputeOfferEconomics } from './resolve-offer-commercial-terms.js';
+import { KAKAO_COMMISSION_POLICY } from './kakao-catalog-reference.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { orderedJsonDigest, stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from './projection-evidence-reader.js';
@@ -167,6 +168,74 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
     });
     await tx.putCommandReceipt(receipt);
     return receipt;
+  });
+}
+
+/** Pins all calculation inputs, including missing Product/Model and their revisions. */
+export function offerEconomicsInputDigest(offer: Offer, product: Product | null, model: VehicleModel | null) {
+  return stableDigest({ offer, product, model });
+}
+
+export type RecomputeOfferEconomicsInput = {
+  commandId: string; idempotencyKey: string; offerId: string; expectedRevision: number;
+  policyId: string; inputDigest: string; reason: string; actor: ActorRef;
+  writer?: ExecutionWriterRef;
+};
+
+export async function recomputeOfferEconomics(
+  store: CatalogStore, input: RecomputeOfferEconomicsInput, now = new Date().toISOString()
+) {
+  if (input.policyId !== KAKAO_COMMISSION_POLICY.policyId || !input.reason.trim() ||
+      !input.commandId.trim() || !input.idempotencyKey.trim() || !/^[a-f0-9]{64}$/.test(input.inputDigest) ||
+      !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
+    throw new InvalidCommandError('Pinned policy, input digest, revision and command identity are required');
+  }
+  const authority = assertFieldAuthority({ aggregate: 'offer', fieldPath: 'internalEconomicsTerms',
+    command: 'RECOMPUTE_OFFER_ECONOMICS', actor: input.actor });
+  const writer = resolveExecutionWriter(input.actor, input.writer);
+  const requestDigest = stableDigest({ ...input, commandId: undefined, writer,
+    commandType: 'RECOMPUTE_OFFER_ECONOMICS' });
+  return store.transact(async tx => {
+    const ownership = await tx.getCatalogWriterOwnership();
+    if (!ownership) throw new InvalidCommandError('WRITER_OWNERSHIP_REQUIRED: no implicit migration writer for recompute');
+    assertCatalogWriterOwnership(ownership, writer);
+    const previous = await tx.getCommandReceipt(input.idempotencyKey);
+    if (previous) {
+      if (previous.requestDigest !== requestDigest) throw new IdempotencyConflictError(input.idempotencyKey);
+      return { status: 'ALREADY_APPLIED' as const, changed: false, revision: previous.revision };
+    }
+    const current = await tx.getOffer(input.offerId);
+    if (!current) throw new EntityNotFoundError(`Offer not found: ${input.offerId}`);
+    if (current.revision !== input.expectedRevision) throw new RevisionConflictError(input.expectedRevision, current.revision);
+    const product = await tx.getProduct(current.productId);
+    const model = product ? await tx.getVehicleModel(product.vehicleModelId) : null;
+    if (offerEconomicsInputDigest(current, product, model) !== input.inputDigest) {
+      throw new InvalidCommandError('INPUT_DRIFT: regenerate and approve the dry-run plan');
+    }
+    const economics = precomputeOfferEconomics(current, product?.commercialType, model?.fuel);
+    if (stableDigest(current.internalEconomicsTerms ?? []) === stableDigest(economics)) {
+      return { status: 'NO_CHANGE' as const, changed: false, revision: current.revision };
+    }
+    const next: Offer = { ...current, internalEconomicsTerms: economics,
+      revision: current.revision + 1, updatedAt: now, updatedBy: input.actor };
+    await tx.putOffer(next);
+    await tx.appendRevision({ revisionRecordId: revisionRecordId(input.commandId, 'offer', current.id, next.revision),
+      entityType: 'offer', entityId: current.id, revision: next.revision, previousRevision: current.revision,
+      snapshot: next, actor: input.actor, reason: input.reason, origin: 'MANUAL_COMMAND',
+      commandId: input.commandId, occurredAt: now });
+    // Atomic before-image: retained even if the caller loses its response.
+    await tx.appendAudit({ eventId: randomUUID(), commandId: input.commandId, actor: input.actor,
+      entityType: 'offer', entityId: current.id, action: 'RECOMPUTE_OFFER_ECONOMICS',
+      before: current, after: next, reason: input.reason, writerId: writer.id, authorityRuleId: authority.ruleId,
+      revisionBefore: current.revision, revisionAfter: next.revision, occurredAt: now });
+    await tx.appendOutbox({ eventId: randomUUID(), eventType: 'catalog.offer.changed', entityType: 'offer',
+      entityId: current.id, sourceRevision: current.revision, targetRevision: next.revision,
+      commandId: input.commandId, correlationId: input.commandId, causationId: input.commandId,
+      occurredAt: now, status: 'PENDING', attempts: 0 });
+    await tx.putCommandReceipt({ idempotencyKey: input.idempotencyKey, commandId: input.commandId,
+      status: 'CANONICAL_COMMITTED', entityType: 'offer', entityId: current.id, revision: next.revision,
+      committedAt: now, requestDigest, writerId: writer.id, authorityRuleId: authority.ruleId });
+    return { status: 'CANONICAL_COMMITTED' as const, changed: true, revision: next.revision };
   });
 }
 

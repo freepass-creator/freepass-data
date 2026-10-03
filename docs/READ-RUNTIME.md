@@ -44,6 +44,58 @@ It does not seed data, publish releases, run workers, or expose Catalog mutation
 
 기존 Kakao `catalog-reference`는 내부 업무용으로 양쪽 수수료와 예상 마진을 포함하는 별도 계약이다. 이 응답과 키를 외부 공급사/영업채널에 전달하지 않는다. 현재 public ERP/화이트라벨 projection에는 내부 수수료를 추가하지 않는다. 외부 연동 완료는 전용 계약·scope 차단 테스트·인증된 운영 readback 이후에만 선언한다.
 
+### 기존 Offer 일괄 재계산 — PR1 (2026-10-04)
+
+`src/jobs/recompute-offer-economics.ts`는 기본 dry-run이다. `listOffers()`와 기존
+`precomputeOfferEconomics`를 조합하며 거래·파일·감사 로그·outbox·Admin projection을 쓰지 않는다.
+공급사별 상품/기간 수, 청구·지급 각각 전후 KNOWN/ZERO/UNKNOWN/NOT_APPLICABLE,
+변경 기간(금액/state/policyId/sourceRefs/reasonCode), UNKNOWN 사유 빈도와 검토용 plan을 JSON으로 출력한다.
+기간은 전후 termKey 합집합이고 저장값 누락은 UNKNOWN/NOT_STORED로 집계한다. 변경 항목 수는
+서로 중복될 수 있으며 `any`는 기간당 한 번이다. `unknownReasons`는 전후·청구/지급을 구분한 전체 빈도순이다.
+plan에는 원본 Offer 전체(before-image), Offer revision, Product/Model을 포함한 입력 digest,
+정책 ID와 정책 내용 digest, 대상 프로젝트가 고정된다. 내부 금액을 포함하므로 비공개로 보관한다.
+
+로컬 메모리 확인(자격증명 불필요):
+
+```powershell
+npm.cmd run build
+node dist/src/jobs/recompute-offer-economics.js --memory
+```
+
+운영 절차는 **dry-run → 승인 → apply → Admin 재발행 → Admin 응답 집계 확인** 순서다.
+이번 PR은 코드·메모리 시험만이며 운영 실행/재발행 승인이 아니다.
+
+1. 별도 승인된 읽기 환경에서 `FIREBASE_PROJECT_ID`를 명시하고 `--firestore`로 dry-run한다.
+   기존 bootstrap → `createFirestoreDataStore` → `firebase-target.ts`만 사용한다.
+   dry-run은 gateway 감사 쓰기도 수행하지 않는다. 기본 앱/ADC에서 대상을 추정하지 않는다.
+2. 전체 JSON의 `plan` 객체를 비공개 파일로 보존하고 `planDigest`와 집계·UNKNOWN을 검토한다.
+   실행 revision, 프로젝트, 공급사/Offer 범위, 정책 `sales-commission-2026-10-04`, 변경 수,
+   before-image 보관, writer 소유권 및 중단/복구 계획을 고정해 운영 apply 승인을 받는다.
+3. 승인 후에만 아래 형식으로 실행한다(이 PR에서는 운영 실행하지 않음).
+
+   ```powershell
+   node dist/src/jobs/recompute-offer-economics.js --firestore --apply --plan <비공개-plan.json> --policy-id sales-commission-2026-10-04 --expected-plan-digest <승인된-planDigest>
+   ```
+
+   파일에는 보고서 전체가 아닌 `plan` 객체를 넣는다. `--apply` 이외 경로는 쓰지 않는다.
+   거래 안에서 writer·멱등키·expectedRevision·Product/Model 입력을 다시 확인하며,
+   변화가 있는 Offer만 revision/history/audit/outbox/receipt를 원자적으로 저장한다.
+   감사 action은 가격 변경과 별개인 `RECOMPUTE_OFFER_ECONOMICS`; 감사의 `before`가 원자적 before-image다.
+   소유권 기록 누락도 HOLD다. 입력 누락은 0으로 보정하지 않는다.
+   같은 plan 재실행은 receipt로 중복 쓰기를 막고, 새 plan의 동일 결과도 쓰지 않는다.
+   첫 충돌/오류에서 HOLD로 중단하고 앞서 완료한 건수와 미처리 건수를 보고한다.
+   전체 배치는 단일 거래가 아니다. revision을 자동 갱신해 재시도하지 않는다.
+4. 다음 PR에서 별도 승인 아래 `buildAdminCatalogProjection`으로 검증된 READY 릴리스를 만들고
+   활성화한다. 이 job은 dry-run/apply 모두 projection 생성·활성화·outbox worker 실행을 하지 않는다.
+   이미 실행 중인 worker가 `catalog.offer.changed`를 소비할 수 있으므로 운영 apply 전 그 영향도 확인한다.
+5. 인증된 Admin 응답에서 공급사·기간별 청구/지급 상태와 금액, UNKNOWN 사유 및 릴리스/정책을
+   원본·apply 결과와 대사한다. 코드 시험은 운영 저장/발행/소비 확인을 대신하지 않는다.
+
+복구는 층별로 구분한다. **코드 revert**는 새 실행을 중단할 뿐 이미 저장한 금액을 되돌리지 않는다.
+Canonical 복구는 비공개 plan 및 원자적 감사 before-image와 현재 revision을 대조한 **보상 거래**로 한다
+(후속 PR/별도 승인; raw overwrite 및 revision 감소 금지). 소비처 복구는 검증된
+**이전 READY 릴리스 재활성화**로 하며 Canonical 복구와 별개다. 셋 모두 대상·영향을 재확인한다.
+
 ### Admin 내부 기간별 경제조건 — 2026-10-03
 
 Canonical `catalog_offers.internalEconomicsTerms`는 신규 canonicalization, 승인된 원천 Offer 변경, 가격 변경의 기존 CatalogStore 거래 안에서 다시 계산한다. `precomputeOfferEconomics`는 `sales-commission-2026-10-04`의 공통 resolver를 재사용한다. 09-28 정책 및 ERP `settlement-fee-table.ts@f862d0097f6e83d79d0b699bc369a83716b1d982`는 이전 근거로 보존하고, 현재 정본은 아래 10-04 F04 제공 사본이며 10-03 정책 객체는 과거 규칙으로 보존한다. 대여료·보증금은 `priceTerms`에서 복사하며 별도 `internalPeriodFees` 저장소는 없다. 수수료는 계약 전체 1건의 VAT 별도 공급가액이고 `calculation`, `sourceRefs`, `ruleId`, `policyId`, `vatTreatment`, `vatAmount`, `totalAmount`를 보존한다. Offer의 기존 `policyId`(상품 정책)와 수수료의 `policyId`(규칙 묶음)는 다르다.

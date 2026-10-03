@@ -384,6 +384,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 남음: 전체 검사 CLI/로컬 서버 환경 실패(`tsx` 초기화 `uv_os_get_passwd ENOMEM`, `jq Permission denied`, 로컬 서버 ECONNREFUSED). 최소 `node --import tsx -e`도 같은 ENOMEM 재현. Claude 검토는 FAILED/CLAUDE_PROCESS_FAILED(exit 1), 독립 검토 UNAVAILABLE이며 PASS 아님. 세부모델 없는 기존 파서 출력은 원문 사실로 보존하지만 승격은 HOLD; PHASE 이름을 임의 보충하지 않는다.
 - next_start_here: 위 diff와 3개 회귀 시험 검토 후 환경을 정상화하여 전체 check 및 Claude 독립 검토 재실행. 커밋·배포·운영 적용은 이 작업 범위 밖이다.
 
+### 2026-10-04 PR1 — 기간별 경제조건 재계산 job (로컬 구현 / 운영 HOLD)
+
+- 목적/정본: #296 이후 `sales-commission-2026-10-04`로 기존 Offer를 재계산할 dry-run 기본 job과 전용 거래 명령. 대상 `work/freepass-data/recompute-economics-20261004`, 기준 `ef3630b93cf61de3b1620943d649e40525dfc014`. 사용자 범위대로 Git 쓰기·외부 네트워크·운영 Firestore·자격증명 접근 없음.
+- 재사용: Academy READY(`COMPOSE_OR_EXTEND`); `updateOfferPrice` 거래 구조와 `precomputeOfferEconomics`, CatalogStore, bootstrap/firebase-target 재사용. 기존 일괄 재계산 진입점이 없어 전용 job/시험을 추가했다. 가격 변경 명령을 재사용해 감사 의미를 바꾸지 않는다.
+- 변경: `recomputeOfferEconomics`/전용 field-authority, 정책·전체 입력 digest·expectedRevision 고정 plan, 공급사/기간/상태/변경 원인/UNKNOWN 집계. 변경분만 원자적 revision/history/감사 before-image/outbox/receipt 저장. writer 기록 누락·충돌·입력 drift는 HOLD; 첫 오류에서 중단하고 부분 완료 수 표시. Admin projection/worker 호출 없음.
+- 검증: build PASS, 전용 메모리 15/15 PASS, 빌드된 CLI `--memory` dry-run 쓰기0/상품1/기간1/변경1 확인. `npm.cmd run check` 최종 exit1: Vitest 1341 PASS/9 FAIL/14 SKIP(121파일 중113 PASS/4 FAIL/4 SKIP); 앞단 Node 시험131 PASS, 아키텍처·데이터 접근 경계·빌드 PASS. 독립 `check:standards` exit0/15 PASS/스키마30개 컴파일, 기존 profile PARTIAL 유지. 실패는 tsx `uv_os_get_passwd ENOMEM` 계열 실행 시험과 로컬 서버 연결 실패, jq 실행 권한 거부이며 환경 제한으로 전체 통과 선언하지 않는다. `tsx` 대신 빌드된 JS의 메모리 CLI는 정상이다.
+- 남음: 원격 main/Issue24/PR 및 Claude 독립 검토는 네트워크 금지로 UNAVAILABLE. 운영 apply·실제 before-image 보존 검증·Admin 재발행/응답 대사는 미실행/HOLD. 배치는 Offer별 거래이며 전량 원자 적용이 아니다. 기존 worker의 outbox 소비 영향도 운영 승인 전 확인한다.
+- next_start_here: `docs/READ-RUNTIME.md` 재계산 절 순서대로 실행 revision/프로젝트/정책/범위/planDigest/백업·복구·writer를 고정해 운영 apply 승인을 받고, 별도 Admin READY 생성·활성화 승인 후 응답 집계를 대사한다. 코드 revert/보상 거래/이전 READY 재활성화는 각각 별도 복구 단계다. 먼저 제한 없는 로컬 검사 환경에서 기존 실패9개를 재검증한다.
+
 ### 2026-10-04 PR #296 4차 — 경제 금액 근거 분리
 
 - 목적/대상 revision: `e9011ba1709825d70281ea098d6f34cbe016e8b2`, `work/freepass-data/commission-f04-align-20261003`. 파일 수정·로컬 검사만 수행; Git 쓰기·운영 접속 없음.
