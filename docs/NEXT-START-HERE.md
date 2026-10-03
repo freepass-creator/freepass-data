@@ -434,6 +434,25 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 남음/HOLD: Claude 독립 검토 `FAILED/CLAUDE_PROCESS_FAILED`(본문 없음, 미검토). GitHub main/Issue24/PR 읽기는 네트워크 제한으로 실패. 로컬 A 커밋 시도는 공용 Git 관리폴더의 index.lock 권한 거부로 실패해 A/B SHA 없음; 작업파일과 임시 A/B 패치로 보존. 운영 기존 Offer backfill·Admin release 재발행·배포 없음.
 - next_start_here: 권한이 허용된 같은 worktree에서 diff와 A/B 패치를 확인하고 요청된 두 커밋 메시지로 로컬 커밋한다(push 금지). 제한 없는 검사 환경에서 위9건 및 Claude 독립 검토를 완료한다. 미등록 공급사·신차 기준액·협의는 새 사업 규칙 없이 UNKNOWN 유지.
 
+### 2026-10-03 정본 전체 열 계획 / 전체 높이 읽기 / 마음카 제외 — 미커밋 로컬 변경
+
+- 목적/대상: `work/freepass-data/supplier-sheet-canon-v1-20261003`의 `00a159ec9c4681ac7f4a1abf73d012e73aa6ae95` 위에서 요청된 3항목을 구현한다. Academy READY. 기존 규격·실행기·테스트·문서만 확장했다. Git 쓰기, Google/운영 데이터 접속·쓰기, 원본 스냅샷의 저장소 복사 없음.
+- 변경: `planTabConsistencyFix`는 전체 열(2행~metadata rowCount) 요청을 만들며 같은 인접 열 요청을 묶는다. 값 쓰기 없음, 전체 높이 audit coverage HOLD 유지. 헤더/폭/고정/조건부 규칙 통일, 종합 validation 예외. `canonCaptureRequest`/`canonValueCaptureRequest`와 CLI는 운영자가 사용할 읽기 params만 생성한다. 실제 요청 실행 없음.
+- 공급사 정본: 현재 18곳. 마음카 RP034는 `excludedFromSharedSheet`에 대표 결정(공동 시트 제외·숨김 보관·수수료 규칙 없음)을 고정했다. 기존 검증 관문을 재사용하는 `planExcludeSupplierTab`/`--exclude-supplier`는 종합 A2 수식 1개와 마음카 hidden 1개만 계획한다. 실제 숨김/종합 반영은 미실행이다.
+- 검사: check:sheets 77 PASS(공급사 전용 52), 요청 높이 독립·부분 캡처·최소 fields·마음카 전환/대조 제외·원문/링크 보존·RGB 응답 정밀도 회귀 포함. 전체 check는 architecture/standards/data-access/sheets/build 및 Node 검사 통과 후 Vitest 1,159 PASS / 9 FAIL / 14 SKIP. 실패 4파일은 tsx의 `uv_os_get_passwd ENOMEM`(최소 import로 재현), jq 실행 권한 거부 및 tsx 서버 미기동에 따른 localhost 연결 실패다. 제품 코드 실패로 섞거나 전체 PASS로 부르지 않는다. Claude review는 `FAILED/CLAUDE_PROCESS_FAILED`로 독립 검토 UNAVAILABLE. GitHub read-only 조회도 네트워크 권한 차단으로 최신 Issue/PR 확인 불가.
+- 요청 수: **가짜 회귀 입력**(공급사 rowCount 1,000, 종합 20,000, 조건부 규칙 없음)은 공급사 각 131 / 종합 75 / 총 2,433, 마음카 제외 계획은 별도 2. 실제 스냅샷 경로가 제공되지 않아 실제 파일의 `--fix-tabs` 탭별 요청 수는 미확인이다. 이전 인계의 부분 스냅샷 수치를 현재 계획 실측으로 대신하지 않는다.
+- 남음: 실제 스냅샷 경로 확인 후 원위치에서 읽기만 하여 요청 수 집계, 독립 검토, 별도 운영자의 전체 높이 재조회/적용/readback. 20,000행 축소는 사용행+증가 여유와 spill 용량 확인 후 검토할 운영 제안이며 rowCount 변경 요청은 만들지 않는다.
+- next_start_here: [공동 시트 런북 현재 기준](SUPPLIER-INPUT-SHEET-RUNBOOK.md#현재-기준--2026-10-03-양식-고정-이-절이-아래-2026-10-02-기록보다-우선) → diff 검토 → 승인된 로컬 snapshot의 `--fix-tabs` 요청 수(원문 출력 없이) → 향후 운영자가 전체 capture와 값 capture를 좌표로 합쳐 `--check-canon` 검증. Git 반영은 사용자 지정 담당자가 한다.
+
+### 2026-10-03 공통 시트 정본 v1 — 로컬 구현/검사만
+
+- 목적: 공급사 19탭+종합 75칸 값 규격과 반복 가능한 정본 검사. 대상 `work/freepass-data/supplier-sheet-canon-v1-20261003`, baseline `e6ec8368517180d4691442d2f9318df58db2c7db`, academy READY. 기존 실행기 확장, 신규 자산 없음.
+- 변경: spec `valueFormats`/`canonVersion`/미정 2칸; 감사/정리/탭 차이/서식 전용 요청 함수 4개, CLI와 `check:supplier-sheet-canon`, 가짜 스냅샷 회귀 검사. 규격·사용법·칸별 관측 숫자는 `SUPPLIER-INPUT-SHEET-RUNBOOK.md` 현재 기준의 공통 시트 정본 v1 절.
+- 실측(지정 로컬 snapshot 읽기만): 공급사 관측 셀 불일치 1,778 / 정리 가능 1,588 / 값 HOLD 190. 서식 차이 31,646. 모든 탭 부분 행 캡처, 종합 계산 결과 없음 → 전체 검증 HOLD. 원본 복사·Google/운영 접속·Git 쓰기 없음.
+- 검증: 공급사 전용41 / check:sheets66 PASS, diff 검사 PASS. 전체 check는 build까지 통과, Vitest 9 실패/1,159 통과/14 skip(권한/로컬 런타임 환경 오류 상세는 runbook). Claude 검토 실행 FAILED/CLAUDE_PROCESS_FAILED — 독립 검토 미확보, PASS 아님.
+- 남음: 미정 탁송비/정비, 원문 확인 필요한 190셀, 전체 범위·계산 결과 재조회 및 독립 검토, 별도 승인된 적용/readback. 커밋은 Claude 담당.
+- next_start_here: runbook 공통 시트 정본 v1 → 코드 diff 독립 검토 → 전체 private capture로 `npm.cmd run check:supplier-sheet-canon -- <snapshot>`.
+
 
 ### 2026-10-03 이안카 전체15분 동기화 재개
 

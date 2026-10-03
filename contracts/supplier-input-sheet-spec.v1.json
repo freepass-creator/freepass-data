@@ -415,24 +415,24 @@
       "불포함"
     ],
     "기본연령": [
-      "만 21세 이상",
-      "만 23세 이상",
-      "만 26세 이상",
+      "만 21세",
+      "만 23세",
+      "만 26세",
       "협의"
     ],
     "면허기간": [
       "제한없음",
-      "1년 이상",
-      "2년 이상",
-      "3년 이상",
+      "1년",
+      "2년",
+      "3년",
       "협의"
     ],
     "연주행": [
-      "연 10,000km",
-      "연 15,000km",
-      "연 20,000km",
-      "연 25,000km",
-      "연 30,000km",
+      "10,000km",
+      "15,000km",
+      "20,000km",
+      "25,000km",
+      "30,000km",
       "무제한",
       "협의"
     ],
@@ -471,8 +471,8 @@
     "분납": [
       "불가",
       "가능",
-      "2회까지",
-      "3회까지",
+      "2회",
+      "3회",
       "협의"
     ],
     "대여료카드": [
@@ -568,7 +568,6 @@
     "개인운전자": [
       "본인",
       "본인+직계가족",
-      "계약자 본인",
       "본인+추가운전자",
       "협의"
     ],
@@ -579,8 +578,8 @@
     ],
     "추가운전인원": [
       "불가",
-      "1인까지",
-      "2인까지",
+      "1인",
+      "2인",
       "협의"
     ],
     "추가운전요금": [
@@ -639,9 +638,9 @@
       "협의"
     ],
     "최대연령": [
-      "만 60세 이하",
-      "만 65세 이하",
-      "만 70세 이하",
+      "만 60세",
+      "만 65세",
+      "만 70세",
       "제한없음",
       "협의"
     ],
@@ -656,13 +655,18 @@
   "basicFilter": true,
   "summaryFormula": "VSTACK_ALL_SUPPLIER_TABS_A2_TO_LAST_COLUMN_FILTER_NONBLANK",
   "valueConventions": {
-    "빈칸": "미확인",
-    "추가요금": "10만원 / 10% / 무료 / 불가",
-    "보험": "보상한도/면책금",
-    "자차/면책": "보상한도 / 수리비 부담률 / 최소~최대 면책금",
-    "계좌번호": "은행 / 계좌번호 / 예금주",
-    "승계": "불가 / 무료 / 금액 / 협의",
-    "추가운전": "1인 무료 / 1인당 월 5만원 / 불가"
+    "빈칸": "미확인; 0·없음·무료와 구분",
+    "정본": "valueFormats 75칸; 짧게, 단위는 이름 또는 값 끝 한 번",
+    "날짜": "숫자 날짜 serial + DATE yy.mm.dd; 2000~2099만 자동 정리",
+    "연령": "만 N세; 기본연령은 하한, 최대연령은 상한",
+    "면허기간": "N년(최소 경력); 이상 생략",
+    "금액": "대여료·보증금·차량가격: 원 단위 정수 #,##0; 정책: 10만원. 단위 없는 정책 숫자 추정 금지",
+    "거리": "주행거리 숫자 #,##0\"km\"; 연주행 20,000km. 배기량 cc, 배터리용량 kWh 서식으로 단위 한 번 표시",
+    "보험": "한도·면책금 별도; 범위 단위 끝 한 번; 수리비는 %; 비율 기준 삭제 금지",
+    "운전자": "개인·법인 각각 범위만; 계약자 본인은 본인",
+    "예/아니오": "가능·불가, 포함·불포함은 의미가 다르므로 칸별 목록 유지; 예/아니오 자동 치환 금지",
+    "미정": "valueFormatsUndecided 해당 칸 변경 금지",
+    "계좌번호": "은행 / 계좌번호 / 예금주; 원문 보존"
   },
   "protectedTabs": false,
   "legacyLayouts": {
@@ -1848,10 +1852,6 @@
       {
         "code": "RP015",
         "tab": "경진"
-      },
-      {
-        "code": "RP034",
-        "tab": "마음카"
       }
     ],
     "sharedFiles": {
@@ -1903,12 +1903,19 @@
         "detail": "공급사 자체 원본 시트를 읽음. 공동 시트 대상 아님(2026-10-03 대표 결정)"
       }
     ],
-    "legacyAuthority": "전환 전 운영 수집 목록은 ERP4 lib/domain/inventory-source-registry.ts(고정 엔진 fe3eccc)이며 sharedInputSheet 19곳은 그 generic-sheet 공급사와 같다",
+    "legacyAuthority": "전환 전 운영 수집 목록은 ERP4 lib/domain/inventory-source-registry.ts(고정 엔진 fe3eccc)의 generic-sheet 19곳이다. 현재 공동 시트는 2026-10-03 대표 결정으로 RP034 마음카를 제외한 18곳이다",
     "openConflicts": [
       "src/domain/source-intake.ts의 welrix-sheet(RP013) 어댑터는 웰릭스 기존 제공시트 전용이다. 웰릭스는 공동 시트 대상이므로 이 어댑터는 전환 전 대조용으로만 쓰고 새 원천으로 연결하지 않는다"
     ],
     "membershipRule": "2026-10-03 대표 결정: 공동 시트에는 프리패스가 제공한 시트를 쓰던 공급사만 둔다. ERP·API·홈페이지 연동 공급사와 아이카(자체 원본 시트)는 모두 뺀다. notInSharedSheet 공급사가 공동 시트에 묶이면 실행기는 HOLD한다.",
-    "exclusionVerifiedAt": "2026-10-03 Codex 구글 커넥터 읽기 전용: 5곳 탭 0, 공급사 탭·종합 회사명에 5곳 0행, 정책원문·정책확인에 5곳 코드·이름 0행, 관리안내에 직접 연동 업체 제외 문구 있음"
+    "exclusionVerifiedAt": "2026-10-03 Codex 구글 커넥터 읽기 전용: 5곳 탭 0, 공급사 탭·종합 회사명에 5곳 0행, 정책원문·정책확인에 5곳 코드·이름 0행, 관리안내에 직접 연동 업체 제외 문구 있음",
+    "excludedFromSharedSheet": [
+      {
+        "code": "RP034",
+        "tab": "마음카",
+        "decision": "2026-10-03 대표: 공동 시트 제외, 탭 숨김 보관, 수수료 규칙 없음"
+      }
+    ]
   },
   "dropdownPolicy": {
     "source": "2026-10-03 공동 시트 19개 탭 실제 값(차량 206대, Codex 커넥터 읽기 전용)을 모두 포함하고, 흔한 선택지를 일부 보탰다. 차량에 실제로 쓰인 값이 목록에 없으면 목록에 넣는다",
@@ -2079,6 +2086,894 @@
       "세부모델": "C",
       "세부트림": "D"
     },
-    "refresh": "F03가 바뀌면 같은 계획기로 다시 채운다. 자동 갱신 없음"
+    "refresh": "F03가 바뀌면 같은 계획기로 다시 채운다. 자동 갱신 없음",
+    "excludeRows": [
+      {
+        "header": "클로드 엔카대조",
+        "startsWith": "통합→",
+        "reason": "2026-10-03 F03 2차 반영: 「통합→」으로 시작하는 행은 F03에 남긴 중복 보존 행(예: 셀토스 SP2 3행)이라 드롭다운 목록에서 뺀다"
+      }
+    ]
+  },
+  "canonVersion": "공통 시트 정본 v1 (2026-10-03)",
+  "valueFormats": {
+    "회사명": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "공급사 탭 이름",
+      "unit": "",
+      "normalize": false
+    },
+    "입고일자": {
+      "kind": "date",
+      "pattern": "yy.mm.dd",
+      "example": "26.10.03",
+      "unit": "",
+      "normalize": "DATE serial; 2000..2099 only; invalid/ambiguous HOLD"
+    },
+    "차량상태": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "즉시출고",
+      "unit": "",
+      "dropdown": [
+        "즉시출고",
+        "출고가능",
+        "상품화중",
+        "출고협의",
+        "계약중",
+        "출고불가"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "상품구분": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "신차렌트",
+      "unit": "",
+      "dropdown": [
+        "신차렌트",
+        "중고렌트",
+        "신차구독",
+        "중고구독"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "차량번호": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "원문 번호(예시 비공개)",
+      "unit": "",
+      "normalize": false
+    },
+    "제조사": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "현대",
+      "unit": "",
+      "normalize": false
+    },
+    "모델": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "그랜저",
+      "unit": "",
+      "normalize": false
+    },
+    "세부모델": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "디 올 뉴 그랜저",
+      "unit": "",
+      "normalize": false
+    },
+    "세부트림": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "프리미엄",
+      "unit": "",
+      "normalize": false
+    },
+    "외부색상": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "흰색",
+      "unit": "",
+      "normalize": false
+    },
+    "내부색상": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "검정",
+      "unit": "",
+      "normalize": false
+    },
+    "연식": {
+      "kind": "year",
+      "pattern": "0",
+      "example": "2026",
+      "unit": "년",
+      "normalize": false
+    },
+    "주행거리": {
+      "kind": "integer",
+      "pattern": "#,##0\"km\"",
+      "example": "1,000km",
+      "unit": "km",
+      "normalize": "explicit-number-only"
+    },
+    "배기량": {
+      "kind": "integer",
+      "pattern": "#,##0\"cc\"",
+      "example": "1,000cc",
+      "unit": "cc",
+      "normalize": "explicit-number-only"
+    },
+    "연료": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "가솔린",
+      "unit": "",
+      "dropdown": [
+        "가솔린",
+        "디젤",
+        "LPG",
+        "하이브리드",
+        "플러그인하이브리드",
+        "전기",
+        "수소"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "단기보증": {
+      "kind": "integer",
+      "pattern": "#,##0",
+      "example": "1,000",
+      "unit": "원",
+      "normalize": "explicit-number-only"
+    },
+    "1개월": {
+      "kind": "integer",
+      "pattern": "#,##0",
+      "example": "1,000",
+      "unit": "원",
+      "normalize": "explicit-number-only"
+    },
+    "6개월": {
+      "kind": "integer",
+      "pattern": "#,##0",
+      "example": "1,000",
+      "unit": "원",
+      "normalize": "explicit-number-only"
+    },
+    "12개월": {
+      "kind": "integer",
+      "pattern": "#,##0",
+      "example": "1,000",
+      "unit": "원",
+      "normalize": "explicit-number-only"
+    },
+    "장기보증": {
+      "kind": "integer",
+      "pattern": "#,##0",
+      "example": "1,000",
+      "unit": "원",
+      "normalize": "explicit-number-only"
+    },
+    "24개월": {
+      "kind": "integer",
+      "pattern": "#,##0",
+      "example": "1,000",
+      "unit": "원",
+      "normalize": "explicit-number-only"
+    },
+    "36개월": {
+      "kind": "integer",
+      "pattern": "#,##0",
+      "example": "1,000",
+      "unit": "원",
+      "normalize": "explicit-number-only"
+    },
+    "48개월": {
+      "kind": "integer",
+      "pattern": "#,##0",
+      "example": "1,000",
+      "unit": "원",
+      "normalize": "explicit-number-only"
+    },
+    "60개월": {
+      "kind": "integer",
+      "pattern": "#,##0",
+      "example": "1,000",
+      "unit": "원",
+      "normalize": "explicit-number-only"
+    },
+    "차명 원문": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "공급사 차명",
+      "unit": "",
+      "normalize": false
+    },
+    "옵션 원문": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "선루프",
+      "unit": "",
+      "normalize": false
+    },
+    "차량가격": {
+      "kind": "integer",
+      "pattern": "#,##0",
+      "example": "1,000",
+      "unit": "원",
+      "normalize": "explicit-number-only"
+    },
+    "인승": {
+      "kind": "seats",
+      "pattern": "정수 (인승은 칸 이름에 있음)",
+      "example": "5",
+      "unit": "",
+      "dropdown": [
+        "2",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "11",
+        "12",
+        "15"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "차종크기": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "경형",
+      "unit": "",
+      "dropdown": [
+        "경형",
+        "소형",
+        "준중형",
+        "중형",
+        "준대형",
+        "대형"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "차종구분": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "세단",
+      "unit": "",
+      "dropdown": [
+        "세단",
+        "해치백",
+        "SUV",
+        "MPV",
+        "픽업",
+        "쿠페",
+        "컨버터블",
+        "왜건",
+        "밴"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "구동방식": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "FWD",
+      "unit": "",
+      "dropdown": [
+        "FWD",
+        "RWD",
+        "AWD",
+        "4WD",
+        "2WD",
+        "4MATIC",
+        "콰트로"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "배터리용량": {
+      "kind": "decimal",
+      "pattern": "0.###\"kWh\"",
+      "example": "77.4kWh",
+      "unit": "kWh",
+      "normalize": "explicit-number-only"
+    },
+    "원산지": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "국산",
+      "unit": "",
+      "dropdown": [
+        "국산",
+        "수입"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "최초등록일": {
+      "kind": "date",
+      "pattern": "yy.mm.dd",
+      "example": "26.10.03",
+      "unit": "",
+      "normalize": "DATE serial; 2000..2099 only; invalid/ambiguous HOLD"
+    },
+    "예외사항": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "공급사 조건",
+      "unit": "",
+      "normalize": false
+    },
+    "심사": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "무심사",
+      "unit": "",
+      "dropdown": [
+        "무심사",
+        "소득확인",
+        "신용조회",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "보험료": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "포함",
+      "unit": "",
+      "dropdown": [
+        "포함",
+        "불포함"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "기본연령": {
+      "kind": "age",
+      "pattern": "만 N세",
+      "example": "만 26세",
+      "unit": "세",
+      "dropdown": [
+        "만 21세",
+        "만 23세",
+        "만 26세",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "면허기간": {
+      "kind": "duration",
+      "pattern": "N년 | 제한없음 | 협의",
+      "example": "1년",
+      "unit": "년",
+      "dropdown": [
+        "제한없음",
+        "1년",
+        "2년",
+        "3년",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "연주행": {
+      "kind": "distance",
+      "pattern": "N,NNNkm | 무제한 | 협의",
+      "example": "20,000km",
+      "unit": "km",
+      "dropdown": [
+        "10,000km",
+        "15,000km",
+        "20,000km",
+        "25,000km",
+        "30,000km",
+        "무제한",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "1만km+": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "불가",
+        "무료",
+        "5만원",
+        "10만원",
+        "15만원",
+        "20만원",
+        "대여료의 10%",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "21세+": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "불가",
+        "5만원",
+        "7만원",
+        "10만원",
+        "12만원",
+        "15만원",
+        "20만원",
+        "대여료의 10%",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "23세+": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "불가",
+        "3만원",
+        "5만원",
+        "7만원",
+        "10만원",
+        "12만원",
+        "15만원",
+        "대여료의 10%",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "분납": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "불가",
+      "unit": "",
+      "dropdown": [
+        "불가",
+        "가능",
+        "2회",
+        "3회",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "대여료카드": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "가능",
+      "unit": "",
+      "dropdown": [
+        "가능",
+        "불가",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "보증금카드": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "가능",
+      "unit": "",
+      "dropdown": [
+        "가능",
+        "불가",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "대인한도": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "무한",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "대인면책": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "없음",
+        "30만원",
+        "50만원",
+        "100만원",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "대물한도": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "3천만원",
+        "1억원",
+        "2억원",
+        "3억원",
+        "5억원",
+        "10억원",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "대물면책": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "없음",
+        "30만원",
+        "50만원",
+        "100만원",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "자차한도": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "미가입",
+        "차량가액",
+        "500만원",
+        "1천만원",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "자차수리비": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "없음",
+      "unit": "",
+      "dropdown": [
+        "없음",
+        "20%",
+        "30%",
+        "50%",
+        "100%",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "자차면책": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "30~50만원",
+      "unit": "원",
+      "dropdown": [
+        "30~50만원",
+        "50~100만원",
+        "50~200만원",
+        "100~200만원",
+        "200~300만원",
+        "200~400만원",
+        "300~400만원",
+        "300~500만원",
+        "50만원",
+        "100만원",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "자손한도": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "1천5백만원",
+        "3천만원",
+        "5천만원",
+        "1억원",
+        "1억5천만원",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "자손면책": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "없음",
+        "30만원",
+        "50만원",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "무보험한도": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "없음",
+        "2억원",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "무보험면책": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "없음",
+        "30만원",
+        "50만원",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "개인운전자": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "본인",
+      "unit": "",
+      "dropdown": [
+        "본인",
+        "본인+직계가족",
+        "본인+추가운전자",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "법인운전자": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "임직원",
+      "unit": "",
+      "dropdown": [
+        "임직원",
+        "대표자 본인",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "추가운전인원": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "불가",
+      "unit": "",
+      "dropdown": [
+        "불가",
+        "1인",
+        "2인",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "추가운전요금": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "무료",
+        "5만원",
+        "10만원",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "정비": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "미제공",
+      "unit": "",
+      "dropdown": [
+        "미제공",
+        "오일 1회",
+        "포함",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "긴급출동": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "불포함",
+      "unit": "",
+      "dropdown": [
+        "불포함",
+        "연간 3회",
+        "연간 5회",
+        "연간 6회",
+        "무제한",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "차고지": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "서울",
+      "unit": "",
+      "normalize": false
+    },
+    "지역": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "전국",
+      "unit": "",
+      "dropdown": [
+        "전국",
+        "제주도 불가",
+        "수도권",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "탁송비": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "고객부담",
+      "unit": "",
+      "dropdown": [
+        "고객부담",
+        "일부지원",
+        "전액지원",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "접수서류": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "신분증",
+      "unit": "",
+      "normalize": false
+    },
+    "만기조건": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "반납",
+      "unit": "",
+      "dropdown": [
+        "반납",
+        "인수 가능",
+        "반납 또는 인수",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "승계": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "불가",
+      "unit": "",
+      "dropdown": [
+        "불가",
+        "가능",
+        "협의",
+        "무료"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "승계비": {
+      "kind": "policyMoney",
+      "pattern": "10만원 / 1억원 / 30~50만원 / 대여료의 10% / 칸별 목록",
+      "example": "10만원",
+      "unit": "원",
+      "dropdown": [
+        "무료",
+        "50만원",
+        "100만원",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "선불/후불": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "선불",
+      "unit": "",
+      "dropdown": [
+        "선불",
+        "후불",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "최대연령": {
+      "kind": "age",
+      "pattern": "만 N세",
+      "example": "만 65세",
+      "unit": "세",
+      "dropdown": [
+        "만 60세",
+        "만 65세",
+        "만 70세",
+        "제한없음",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "외국인": {
+      "kind": "enum",
+      "pattern": "목록 값 또는 확인된 예외",
+      "example": "불가",
+      "unit": "",
+      "dropdown": [
+        "불가",
+        "가능",
+        "영주권자만",
+        "협의"
+      ],
+      "normalize": "explicit-alias-only"
+    },
+    "계좌번호": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "은행 / 계좌번호 / 예금주",
+      "unit": "",
+      "normalize": false
+    },
+    "비고": {
+      "kind": "text",
+      "pattern": "원문 보존; 양끝 공백 없이",
+      "example": "공급사 메모",
+      "unit": "",
+      "normalize": false
+    }
+  },
+  "valueFormatsUndecided": [
+    {
+      "column": "탁송비",
+      "candidates": [
+        "부담 주체(고객부담·일부지원·전액지원)",
+        "금액(10만원)"
+      ],
+      "reason": "정액과 부담 주체 중 단일 표기 의미 미확정; 기존 값 변경 금지"
+    },
+    {
+      "column": "정비",
+      "candidates": [
+        "포함·미제공",
+        "항목과 횟수(오일 1회)"
+      ],
+      "reason": "포함 범위와 기간 기준 미확정; 기존 값 변경 금지"
+    }
+  ],
+  "tabConsistency": {
+    "authority": "spec first; unspecified header color/font and body attributes use first registered supplier reference; ranges use metadata rowCount only",
+    "summaryExceptions": [
+      "dataValidation: formula output has no supplier input dropdown"
+    ],
+    "coverage": "Only explicit GridData coverage is audited; missing grid rows are HOLD, never assumed blank",
+    "dateStorage": "DATE serial + yy.mm.dd; value updates use userEnteredValue only, format requests separately",
+    "conditionalFormats": "first supplier rules in order; own sheetId and full-grid row endpoint rebased per tab; embedded sheet references HOLD",
+    "horizontalAlignment": "CENTER",
+    "headerBackgrounds": {
+      "단기보증": "#0891B2",
+      "1개월": "#0891B2",
+      "6개월": "#0891B2",
+      "12개월": "#0891B2",
+      "장기보증": "#0891B2",
+      "24개월": "#0891B2",
+      "36개월": "#0891B2",
+      "48개월": "#0891B2",
+      "60개월": "#0891B2"
+    },
+    "headerColorAuthority": "explicit headerBackgrounds first; other columns retain first registered supplier header backgroundColor"
   }
 }
