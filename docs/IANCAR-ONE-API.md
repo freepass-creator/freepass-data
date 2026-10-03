@@ -34,7 +34,7 @@ reviewed Canonical Product · Offer · Policy · Photo reference
 ERP.com · Admin · 필요한 FreePass 소비처
 ```
 
-RP031의 Google Sheet/F54/F86, 과거 로그인 `/api/inventory`, ERP4 DOM/요금 스크랩은 앞으로 **원천 authority가 아니다**. ONE API 전환 검증 후 비교·이력 외 fallback으로 사용하지 않는다.
+RP031 재고 정본은 이안카 시스템 하나다(2026-10-04 사용자 결정). ONE API가 기본이고, ONE API가 막히면 같은 ERP의 로그인 `/api/inventory`를 기존 열쇠로 대체 사용한다([대체 순서](IANCAR-SOURCE-CAPTURE.md)). Google Sheet(`이안카_프리패스`)/F54/F86과 ERP4 DOM/요금 스크랩은 **원천 authority가 아니며** fallback으로도 쓰지 않는다.
 
 ## 공식 조회 API
 
@@ -174,7 +174,7 @@ RAW 적재는 Canonical 발행이나 ERP.com 전환을 의미하지 않는다.
 4. 차량 상세·요금·계약조건 schema를 값이 없는 shape 보고서로 확인한다.
 5. allowlist 기반 Canonical mapper를 확정한다.
 6. ONE API → Data Canonical → ERP.com/Admin의 같은 vehicle_id/상태/기간·거리별 요금 readback을 대사한다.
-7. 대사 후 RP031의 Sheet/login/ERP4 fallback을 종료한다.
+7. 대사 후 RP031의 Sheet/ERP4 fallback을 종료한다. 로그인 `/api/inventory`는 ONE API가 막힐 때만 쓰는 대체 경로로 남긴다(2026-10-04 사용자 결정).
 8. 이후 Data-owned scheduler에서 15분 freshness 기준으로 수집/감시한다.
 
 사용자가 최종 결정한 운영 기준은 **ONE API → FreePass Data → ERP 직접 연동**이다. 이안카 시트를 다시 운영 원천으로 승격하지 않는다.
