@@ -142,3 +142,5 @@
 - 기존 이관값 변경은 rewriteImportedPolicyPresentation.runId를 명시하고 이전 셀 note의 원천 탭·행·코드 및 기존 verbose값이 fresh 원천과 정확히 맞을 때만 허용한다. 소유권/값 불일치는 HOLD. 새 값과 기존 note 및 전체 원문 설명을 atomic userEnteredValue,note mask로 쓴다.
 - 공급사 원본16개를 metadata의 전체 행 범위로 재조회, source/destination 동시 변경 없음 확인 후173행의 설명 칸1207개를 교정했다. 표시 불일치0, 원문 설명 note 누락0, 나머지 값 변경0, 사진 링크 변경0, 종합210행/오류0, 재계획 추가 쓰기0. 기존 정책코드 없음33행은 그대로 HOLD.
 - Claude ANSWERED/exit0: 비율 기준·최소최대·0/없음 구분·원문 보존·소유권 guard를 반영했다. 전체 항목명을 화면에 남기자는 의미 보존 문제는 사용자의 짧은 표시 지시에 맞춰 필요한 수리비/개인·법인/최소·최대만 유지하고 세부는 note와 archive에 보존했다. 단위/범위/소유권/재실행을 포함한 Sheets 테스트45개와 build 통과.
+
+- **차종 드롭다운(2026-10-03 대표 결정):** 제조사·모델·세부모델·세부트림은 F03 전체 목록을 숨김 `차종목록`(sheetId 9100)의 A:D에 담아 범위 드롭다운으로 쓴다. 공급사는 글자를 입력해 목록을 거르며, 목록 밖 값도 입력되고 경고만 보인다(`strict:false`). 행별 자동 연동은 나중 Apps Script 범위다. F03가 바뀌면 새 `master={source,readAt,header,rows}`와 공동 시트의 fresh 조회·전체 inventory·binding을 입력으로 `--vehicle-master=<input.json>`(표준입력은 `-`) 계획기를 다시 실행한다. source는 규격 `vehicleMaster.source` 또는 탭 설명을 뺀 같은 F03 출처여야 한다. 자동 갱신은 없으며, 계획기는 요청만 반환하고 적용하지 않는다. 기존 목록 탭의 행·열이 부족하면 HOLD하므로 크기 확장은 별도 작업이다.
