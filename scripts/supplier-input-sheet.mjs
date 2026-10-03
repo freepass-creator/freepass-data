@@ -451,6 +451,198 @@ export function compareSharedToLegacy({shared,legacy,binding},spec=inputSpec,now
   const summary=Object.fromEntries(['IN_SYNC','DIFFERENT','LEGACY_UNREADABLE','LEGACY_NOT_CAPTURED'].map(k=>[k,results.filter(r=>r.status===k).length]));
   return {status:results.every(r=>r.status==='IN_SYNC')&&!unboundLegacy.length?'ALL_IN_SYNC':'NOT_IN_SYNC',scope:'COMPARE_ONLY_VEHICLE_RATE_FIELDS_NO_WRITES_POLICY_NOT_COMPARED',layoutVersion:spec.layoutVersion,summary,unboundLegacy,notCompared,results};
 }
+// Canon tools are offline: no credentials, transport or writes. Sparse reads never
+// establish whole-grid coverage. Coordinates, not vehicle identifiers, identify HOLDs.
+const canonClone = v => structuredClone(v);
+const canonKey = v => JSON.stringify(v, function(k,x){return x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x;});
+const canonEqual = (a,b) => canonKey(a)===canonKey(b);
+function canonTabs(snapshot,spec){
+  const book=snapshot.spreadsheet??snapshot,all=book?.sheets;
+  if(!Array.isArray(all)||!all.length)hold('Canon requires native Sheets GridData');
+  if(book.spreadsheetId&&Object.values(specification.workbooks).some(w=>w.spreadsheetId===book.spreadsheetId))hold('Production F01/F86 is not an input workbook');
+  if(new Set(all.map(s=>s.properties?.sheetId)).size!==all.length||new Set(all.map(s=>s.properties?.title)).size!==all.length)hold('Canon duplicate tabs');
+  const titles=[spec.summaryTitle,...spec.supplierChannels.sharedInputSheet.map(s=>s.tab)];
+  const tabs=titles.map(t=>all.find(s=>s.properties?.title===t));
+  if(tabs.some(t=>!t))hold('Canon registered tabs missing');
+  if(spec.inputHeaders.some(h=>!spec.valueFormats?.[h]))hold('Canon valueFormats incomplete');
+  return tabs.map(s=>{
+    const rows=new Map(),columns=new Map(),heights=new Map();
+    const g=s.properties.gridProperties;
+    if(!Number.isInteger(g?.rowCount)||g.rowCount<2||!Number.isInteger(g.columnCount))hold('Canon grid dimensions required');
+    for(const d of s.data??[]){
+      const sr=d.startRow??0,sc=d.startColumn??0;
+      for(const [i,r] of (d.rowData??[]).entries()){
+        const at=sr+i;if(at>=g.rowCount)hold('Canon row outside grid');
+        const row=rows.get(at)??new Map();
+        // API trailing omitted cells in an observed row are empty; omitted rows
+        // are unknown. Partial-column captures cannot establish full row coverage.
+        for(let j=0;j<(r.values?.length??0);j++){if(sc+j>=g.columnCount||row.has(sc+j))hold('Canon overlapping or out-of-grid GridData');row.set(sc+j,r.values[j]);}
+        rows.set(at,row);
+      }
+      (d.columnMetadata??[]).forEach((v,i)=>columns.set(sc+i,v));
+      (d.rowMetadata??[]).forEach((v,i)=>heights.set(sr+i,v));
+      if(sc!==0)hold('Canon full-width A1 GridData required');
+    }
+    if(!rows.has(0))hold('Canon header evidence required');
+    return {sheet:s,id:s.properties.sheetId,title:s.properties.title,g,rows,columns,heights};
+  });
+}
+const canonCell=(t,r,c)=>t.rows.get(r)?.get(c)??{};
+const canonCoverage=t=>({tab:t.title,observedRows:t.rows.size,totalRows:t.g.rowCount,complete:t.rows.size===t.g.rowCount});
+const canonValue=c=>c.effectiveValue??c.userEnteredValue??{};
+function canonNumberFormat(h,spec){
+  const f=spec.valueFormats[h];
+  if(f.kind==='date')return {type:'DATE',pattern:f.pattern};
+  if(['integer','decimal','year'].includes(f.kind))return {type:'NUMBER',pattern:f.pattern};
+  return null;
+}
+function canonCheck(c,h,spec){
+  if(c.userEnteredValue?.formulaValue&&!c.effectiveValue)return {bad:true,reason:'FORMULA_EFFECTIVE_VALUE_MISSING'};
+  const v=canonValue(c),raw=v.stringValue??v.numberValue??v.boolValue;
+  if(v.errorValue)return {bad:true,reason:'FORMULA_ERROR'};
+  if(raw===undefined||raw==='')return {bad:false};
+  const f=spec.valueFormats[h],s=String(raw),trim=s.trim(),fmt=canonNumberFormat(h,spec);
+  const finish=value=>{
+    const target=typeof value==='number'?{numberValue:value}:{stringValue:value};
+    const formatBad=fmt&&!canonEqual(c.userEnteredFormat?.numberFormat,fmt);
+    const valueBad=!canonEqual(c.userEnteredValue??v,target);
+    return {bad:Boolean(valueBad||formatBad),target,format:fmt,valueBad,formatBad};
+  };
+  let out;
+  if(f.kind==='date'){
+    let serial;
+    if(typeof raw==='number'&&Number.isInteger(raw))serial=raw;
+    else {const m=trim.match(/^(\d{4}|\d{2})([-.])\s*(\d{1,2})\2\s*(\d{1,2})$/);if(m){const y=Number(m[1])+(m[1].length===2?2000:0),mo=Number(m[3]),d=Number(m[4]),date=new Date(Date.UTC(y,mo-1,d));if(date.getUTCFullYear()===y&&date.getUTCMonth()===mo-1&&date.getUTCDate()===d)serial=(date.getTime()-Date.UTC(1899,11,30))/86400000;}}
+    const y=new Date(Date.UTC(1899,11,30)+(serial??NaN)*86400000).getUTCFullYear();
+    out=Number.isInteger(serial)&&y>=2000&&y<=2099?finish(serial):{bad:true,reason:'INVALID_OR_AMBIGUOUS_DATE'};
+  }else if(['integer','decimal','year'].includes(f.kind)){
+    const valid=typeof raw==='number'&&Number.isFinite(raw)&&raw>=0&&(f.kind==='decimal'||Number.isSafeInteger(raw));
+    const numeric=(f.kind==='decimal'?/^(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)(?:\.\d{1,3})?$/:/^(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$/).test(trim);
+    const n=valid?raw:numeric?Number(trim.replaceAll(',','')):NaN;
+    out=Number.isFinite(n)&&(f.kind==='decimal'?Number.isSafeInteger(Math.round(n*1000)):Number.isSafeInteger(n))&&(f.kind!=='year'||n>=1900&&n<=2099)?finish(n):{bad:true,reason:'NUMBER_UNIT_OR_PRECISION_UNKNOWN'};
+  }else if(f.kind==='text')out={bad:typeof raw!=='string'||trim!==s,reason:'PRESERVE_FREE_TEXT'};
+  else {
+    let target=trim;
+    if(f.kind==='age')target=trim.replace(h==='기본연령'?/^(만 \d{1,3}세) 이상$/:/^(만 \d{1,3}세) 이하$/,'$1');
+    if(f.kind==='duration')target=trim.replace(/^(\d+년) 이상$/,'$1');
+    if(f.kind==='distance')target=trim.replace(/^연 /,'');
+    if(f.kind==='seats')target=trim.replace(/^(\d+)인승$/,'$1');
+    if(['분납','추가운전인원'].includes(h))target=trim.replace(/^(\d+(?:회|인))까지$/,'$1');
+    if(h==='개인운전자'&&trim==='계약자 본인')target='본인';
+    const accepted=(f.dropdown??[]).includes(target)||f.kind==='age'&&/^만 (?:[1-9]\d?|1[01]\d|120)세$/.test(target)||f.kind==='duration'&&/^[1-9]\d*년$/.test(target)||f.kind==='distance'&&/^(?:[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d{0,2})km$/.test(target)||f.kind==='policyMoney'&&/^(?:\d+(?:\.\d+)?(?:~\d+(?:\.\d+)?)?만원|\d+억원|\d+천(?:\d+백)?만원|\d+억\d+천만원|대여료의 \d+(?:\.\d+)?%)$/.test(target);
+    out=accepted?finish(target):{bad:true,reason:'UNCONFIRMED_VALUE_OR_UNIT'};
+  }
+  if(out.bad&&spec.valueFormatsUndecided?.some(x=>x.column===h))return {bad:true,reason:'UNDECIDED_COLUMN'};
+  if(out.bad&&c.userEnteredValue?.formulaValue)return {bad:true,reason:'FORMULA_PRESERVED'};
+  return out;
+}
+const canonSafeExample=(c,h)=>h==='차량번호'||h==='계좌번호'?'[비공개]':String(canonValue(c).stringValue??canonValue(c).numberValue??'[오류]').replace(/\d{2,3}\s*[가-힣]\s*\d{4}/g,'[차량번호]').slice(0,120);
+function canonScan(snapshot,spec){
+  const tabs=canonTabs(snapshot,spec),columns=spec.inputHeaders.map(column=>({column,mismatched:0,normalizable:0,holds:0,summaryMismatched:0,examples:[]})),changes=[],holds=[];
+  for(const t of tabs){
+    if(!canonEqual(spec.inputHeaders,[...t.rows.get(0).values()].map(c=>c.userEnteredValue?.stringValue??'')))hold('Canon LAYOUT_MISMATCH');
+    for(const [r,row] of t.rows){if(!r)continue;
+      for(const [i,c] of row){const h=spec.inputHeaders[i];if(!h||h==='회사명')continue;const result=canonCheck(t.title===spec.summaryTitle&&c.effectiveValue?{...c,userEnteredValue:canonValue(c)}:c,h,spec);if(!result.bad)continue;
+        const stat=columns[i],summary=t.title===spec.summaryTitle;
+        if(summary){stat.summaryMismatched++;continue;}
+        stat.mismatched++;
+        if(stat.examples.length<3)stat.examples.push({tab:t.title,row:r+1,value:canonSafeExample(c,h)});
+        if(result.target){stat.normalizable++;changes.push({t,r,i,result});}
+        else {stat.holds++;holds.push({tab:t.title,row:r+1,column:h,reason:result.reason});}
+      }
+    }
+  }
+  return {tabs,columns,changes,holds};
+}
+export function auditValueFormats(snapshot,spec=inputSpec){
+  const {tabs,columns,holds}=canonScan(snapshot,spec),coverage=tabs.map(canonCoverage);
+  const summary=tabs[0];
+  if([...summary.rows.entries()].some(([r,row])=>r>0&&[...row.values()].some(c=>c.userEnteredValue?.formulaValue&&!c.effectiveValue)))holds.push({tab:summary.title,reason:'SUMMARY_EFFECTIVE_VALUES_MISSING'});
+  return {status:holds.length||columns.some(c=>c.mismatched||c.summaryMismatched)||coverage.some(c=>!c.complete)?'HOLD':'PASS',scope:'OBSERVED_GRID_ONLY',columns,holds,coverage};
+}
+export function planValueNormalize(snapshot,spec=inputSpec,now=Date.now()){
+  if(!Number.isFinite(now))hold('Canon valid planning time required');
+  const {tabs,columns,changes,holds}=canonScan(snapshot,spec),requests=[];
+  for(const {t,r,i,result:x} of changes){const range={sheetId:t.id,startRowIndex:r,endRowIndex:r+1,startColumnIndex:i,endColumnIndex:i+1};
+    if(x.valueBad)requests.push({updateCells:{range,rows:[{values:[{userEnteredValue:x.target}]}],fields:'userEnteredValue'}});
+    if(x.formatBad)requests.push({repeatCell:{range,cell:{userEnteredFormat:{numberFormat:x.format}},fields:'userEnteredFormat.numberFormat'}});
+  }
+  const coverage=tabs.map(canonCoverage);
+  return {status:holds.length||coverage.some(c=>!c.complete)?'PARTIAL_WITH_HOLD':'PLANNED',plannedAt:new Date(now).toISOString(),scope:'OFFLINE_OBSERVED_SUPPLIER_INPUT_ONLY',columns,holds,coverage,requests};
+}
+function canonMajority(values){
+  const groups=new Map();for(const v of values){const k=canonKey(v);groups.set(k,{value:v,count:(groups.get(k)?.count??0)+1});}
+  const best=[...groups.values()].sort((a,b)=>b.count-a.count)[0];
+  return best&&best.count>values.length/2?{value:best.value}:null;
+}
+const canonRule=(rules,t)=>rules.map(rule=>({...canonClone(rule),ranges:(rule.ranges??[]).map(r=>({...r,sheetId:r.sheetId===t.id?'SELF':r.sheetId,...(r.endRowIndex===t.g.rowCount?{endRowIndex:'END'}:{})}))}));
+function canonTabAudit(snapshot,spec){
+  const tabs=canonTabs(snapshot,spec),base=tabs[1],differences=[],holds=[],requests=[];
+  const add=(t,item,column,expected,actual,request)=>{if(canonEqual(expected,actual))return;differences.push({tab:t.title,item,column,expected:canonClone(expected??null),actual:canonClone(actual??null)});if(request)requests.push(request);};
+  const baseRules=canonRule(base.sheet.conditionalFormats??[],base);
+  for(const t of tabs){
+    const header=[...t.rows.get(0).values()].map(c=>c.userEnteredValue?.stringValue??'');
+    if(t.g.columnCount!==spec.inputHeaders.length)holds.push({tab:t.title,reason:'GRID_COLUMN_COUNT_MISMATCH'});
+    if(t.sheet.properties.hidden)holds.push({tab:t.title,reason:'BOUND_TAB_HIDDEN'});
+    if([...t.rows.keys()].some(r=>!t.heights.has(r)))holds.push({tab:t.title,reason:'MISSING_ROW_METADATA'});
+    if(!canonEqual(header,spec.inputHeaders)){add(t,'headers','*',spec.inputHeaders,header);holds.push({tab:t.title,reason:'LAYOUT_MISMATCH_NO_VALUE_OR_COLUMN_MOVES'});continue;}
+    const range=(i,start=1,end=t.g.rowCount)=>({sheetId:t.id,startRowIndex:start,endRowIndex:end,startColumnIndex:i,endColumnIndex:i+1});
+    for(const k of ['frozenRowCount','frozenColumnCount'])add(t,k,'*',spec[k],t.g[k]??0,{updateSheetProperties:{properties:{sheetId:t.id,gridProperties:{[k]:spec[k]}},fields:`gridProperties.${k}`}});
+    for(const [r,m] of t.heights){const expected=r===0?spec.headerRowHeight:spec.rowHeight;add(t,'rowHeight',String(r+1),expected,m.pixelSize??null,{updateDimensionProperties:{range:{sheetId:t.id,dimension:'ROWS',startIndex:r,endIndex:r+1},properties:{pixelSize:expected},fields:'pixelSize'}});}
+    for(const [i,h] of spec.inputHeaders.entries()){
+      const meta=t.columns.get(i);
+      if(!meta){holds.push({tab:t.title,column:h,reason:'MISSING_COLUMN_METADATA'});continue;}
+      for(const [item,k,expected] of [['columnWidth','pixelSize',spec.columnWidths[h]??spec.defaultColumnWidth],['hidden','hiddenByUser',spec.hiddenHeaders.includes(h)]])add(t,item,h,expected,meta[k]??(k==='hiddenByUser'?false:null),{updateDimensionProperties:{range:{sheetId:t.id,dimension:'COLUMNS',startIndex:i,endIndex:i+1},properties:{[k]:expected},fields:k}});
+      const baseHeader=canonCell(base,0,i).userEnteredFormat??{};
+      const dataRows=[...base.rows.keys()].filter(r=>r>0);
+      const font={fontFamily:spec.font.family,fontSize:spec.font.size,italic:spec.font.italic};
+      const attributes=[['font','textFormat.fontFamily',font.fontFamily],['font','textFormat.fontSize',font.fontSize],['font','textFormat.italic',font.italic],['bodyFont','textFormat.bold',null],['bodyFont','textFormat.foregroundColor',null],['bodyFont','textFormat.foregroundColorStyle',null],['wrap','wrapStrategy',spec.textWrap],['alignment','horizontalAlignment',null],['alignment','verticalAlignment',null],['numberFormat','numberFormat',canonNumberFormat(h,spec)]];
+      const get=(fmt,path)=>path.split('.').reduce((v,k)=>v?.[k],fmt)??null;
+      const cellFor=(path,value)=>{const parts=path.split('.');return {userEnteredFormat:parts.length===2?{[parts[0]]:{[parts[1]]:value}}:{[path]:value}};};
+      for(const [item,path,fixed] of attributes){
+        const majority=fixed===null?canonMajority(dataRows.map(r=>get(canonCell(base,r,i).userEnteredFormat,path))):{value:fixed};
+        if(!majority){holds.push({tab:t.title,column:h,reason:`NO_MAJORITY_${path}`});continue;}
+        const expected=majority.value;
+        // Check each captured row against the authority; a minority drift must
+        // not disappear just because the destination majority is correct.
+        for(const r of t.rows.keys()){if(!r)continue;const actual=get(canonCell(t,r,i).userEnteredFormat,path);const cell=expected===null?{userEnteredFormat:{}}:cellFor(path,expected);
+          add(t,item,`${h}:${r+1}`,expected,actual,{repeatCell:{range:range(i,r,r+1),cell,fields:`userEnteredFormat.${path}`}});
+        }
+        const expectedHeader=['font','wrap'].includes(item)?fixed:get(baseHeader,path);
+        const actualHeader=get(canonCell(t,0,i).userEnteredFormat,path);
+        add(t,`header.${item}`,h,expectedHeader,actualHeader,{repeatCell:{range:range(i,0,1),cell:expectedHeader===null?{userEnteredFormat:{}}:cellFor(path,expectedHeader),fields:`userEnteredFormat.${path}`}});
+      }
+      for(const path of ['backgroundColor','backgroundColorStyle','textFormat.foregroundColor','textFormat.foregroundColorStyle','textFormat.bold']){
+        const expected=get(baseHeader,path),actual=get(canonCell(t,0,i).userEnteredFormat,path);
+        add(t,'headerColor',h,expected,actual,{repeatCell:{range:range(i,0,1),cell:expected===null?{userEnteredFormat:{}}:cellFor(path,expected),fields:`userEnteredFormat.${path}`}});
+      }
+      if(t.title!==spec.summaryTitle){
+        let rule=null;
+        if(spec.dropdowns[h])rule={condition:{type:'ONE_OF_LIST',values:spec.dropdowns[h].map(userEnteredValue=>({userEnteredValue}))},strict:spec.dropdownStrict===true,showCustomUi:true};
+        else if(spec.vehicleMaster.columns[h])rule={condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:false,showCustomUi:true};
+        for(const r of t.rows.keys()){if(!r)continue;const actual=canonCell(t,r,i).dataValidation??null;
+          const canonicalActual=actual?{...actual,strict:actual.strict??false,showCustomUi:actual.showCustomUi??false}:null;
+          add(t,'dropdown',`${h}:${r+1}`,rule,canonicalActual,{setDataValidation:{range:range(i,r,r+1),...(rule?{rule}: {})}});
+        }
+      }
+    }
+    const actualRules=canonRule(t.sheet.conditionalFormats??[],t);
+    if(!canonEqual(baseRules,actualRules)){
+      add(t,'conditionalFormats','*',baseRules,actualRules);
+      if(JSON.stringify(baseRules).includes('!')||baseRules.some(rule=>rule.ranges.some(r=>r.sheetId!=='SELF'))){holds.push({tab:t.title,reason:'CONDITIONAL_EXTERNAL_REFERENCE'});}
+      else {for(let i=(t.sheet.conditionalFormats??[]).length-1;i>=0;i--)requests.push({deleteConditionalFormatRule:{sheetId:t.id,index:i}});
+        baseRules.forEach((rule,index)=>requests.push({addConditionalFormatRule:{index,rule:{...canonClone(rule),ranges:rule.ranges.map(r=>({...r,sheetId:t.id,...(r.endRowIndex==='END'?{endRowIndex:t.g.rowCount}:{})}))}}}));}
+    }
+  }
+  const coverage=tabs.map(canonCoverage);for(const c of coverage)if(!c.complete)holds.push({tab:c.tab,reason:'PARTIAL_GRID_COVERAGE'});
+  return {status:differences.length||holds.length?'HOLD':'PASS',referenceTab:base.title,differences,counts:Object.fromEntries([...new Set(differences.map(d=>d.item))].map(k=>[k,differences.filter(d=>d.item===k).length])),holds,coverage,requests:canonClone(requests)};
+}
+export function auditTabConsistency(snapshot,spec=inputSpec){const {requests,...audit}=canonTabAudit(snapshot,spec);return audit;}
+export function planTabConsistencyFix(snapshot,spec=inputSpec){const audit=canonTabAudit(snapshot,spec);if(audit.holds.some(h=>h.reason.startsWith('LAYOUT_MISMATCH')))return {...audit,requests:[]};return {...audit,scope:'OFFLINE_FORMATS_ONLY_OBSERVED_GRID'};}
+
 if(process.argv[1]&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
+  const modes={'--audit-formats':auditValueFormats,'--normalize-values':planValueNormalize,'--audit-tabs':auditTabConsistency,'--fix-tabs':planTabConsistencyFix};
+  const canonArg=process.argv.slice(2).find(a=>Object.keys(modes).some(k=>a.startsWith(k+'='))||a.startsWith('--check-canon'));
+  if(canonArg){try{const mode=canonArg.split('=')[0],path=canonArg.includes('=')?canonArg.slice(mode.length+1):process.argv[process.argv.indexOf(canonArg)+1];if(!path)hold('Snapshot path required');const snapshot=JSON.parse(fs.readFileSync(path==='-'?0:path,'utf8'));const result=mode==='--check-canon'?{formats:auditValueFormats(snapshot),tabs:auditTabConsistency(snapshot)}:modes[mode](snapshot);console.log(JSON.stringify(result,null,2));process.exit(mode==='--check-canon'&&(result.formats.status!=='PASS'||result.tabs.status!=='PASS')?1:0);}catch(e){console.error(e.message);process.exit(2);}}
   try {const master=process.argv.find(a=>a.startsWith('--vehicle-master='))?.slice(17);if(master){console.log(JSON.stringify(planVehicleMasterDropdowns(JSON.parse(master==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(master,'utf8'))),null,2));process.exit(0);}const change=process.argv.find(a=>a.startsWith('--change-layout='))?.slice(16);if(change){console.log(JSON.stringify(planLayoutChange(JSON.parse(change==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(change,'utf8'))),null,2));process.exit(0);}const add=process.argv.find(a=>a.startsWith('--add-columns='))?.slice(14);if(add){console.log(JSON.stringify(planColumnAdd(JSON.parse(add==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(add,'utf8'))),null,2));process.exit(0);}const reorder=process.argv.find(a=>a.startsWith('--reorder='))?.slice(10);if(reorder){console.log(JSON.stringify(planLayoutReorder(JSON.parse(reorder==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(reorder,'utf8'))),null,2));process.exit(0);}const split=process.argv.find(a=>a.startsWith('--split='))?.slice(8);if(split){console.log(JSON.stringify(planPolicySplit(JSON.parse(split==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(split,'utf8'))),null,2));process.exit(0);}const dropdowns=process.argv.find(a=>a.startsWith('--dropdowns='))?.slice(12);const compare=process.argv.find(a=>a.startsWith('--compare='))?.slice(10);if(dropdowns){console.log(JSON.stringify(planSupplierDropdowns(JSON.parse(dropdowns==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(dropdowns,'utf8'))),null,2));}else if(compare){console.log(JSON.stringify(compareSharedToLegacy(JSON.parse(fs.readFileSync(compare,'utf8'))),null,2));}else{const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json or --compare=private-compare.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}
 }

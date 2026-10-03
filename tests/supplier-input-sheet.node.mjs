@@ -1,11 +1,102 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
+import {auditValueFormats,planValueNormalize,auditTabConsistency,planTabConsistencyFix} from '../scripts/supplier-input-sheet.mjs';
 import {planSupplierInput,planSupplierDropdowns,planVehicleMasterDropdowns,planPolicySplit,planLayoutReorder,planColumnAdd,planLayoutChange,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec} from '../scripts/supplier-input-sheet.mjs';
 const now=Date.parse('2026-10-03T12:00:00Z');
 const legacy=inputSpec.legacyLayouts['2026-10-02'];
 const sheet=(id,title,headers,grid={frozenRowCount:1,frozenColumnCount:0})=>({properties:{sheetId:id,title,gridProperties:{rowCount:1000,columnCount:headers.length,...grid}},data:[{rowData:[{values:headers.map(h=>({userEnteredValue:{stringValue:h}}))}]}]});
 const shared=inputSpec.supplierChannels.sharedInputSheet;
+const canonFixture=()=>{
+  const spec=structuredClone(inputSpec);spec.supplierChannels.sharedInputSheet=[{tab:'가',code:'A'},{tab:'나',code:'B'}];
+  const snapshot={sheets:['종합','가','나'].map((title,id)=>({properties:{sheetId:id,title,gridProperties:{rowCount:4,columnCount:75,frozenRowCount:1}},conditionalFormats:[],data:[{
+    columnMetadata:spec.inputHeaders.map(h=>({pixelSize:spec.columnWidths[h]??spec.defaultColumnWidth})),rowMetadata:[{pixelSize:32},...Array.from({length:3},()=>({pixelSize:24}))],
+    rowData:Array.from({length:4},(_,r)=>({values:spec.inputHeaders.map(h=>({...(r===0?{userEnteredValue:{stringValue:h}}:{}),userEnteredFormat:{textFormat:{fontFamily:spec.font.family,fontSize:spec.font.size,italic:false},wrapStrategy:'CLIP',horizontalAlignment:'CENTER',...(r>0&&['date','integer','decimal','year'].includes(spec.valueFormats[h].kind)?{numberFormat:{type:spec.valueFormats[h].kind==='date'?'DATE':'NUMBER',pattern:spec.valueFormats[h].pattern}}:{})},...(r>0&&id>0&&spec.dropdowns[h]?{dataValidation:{condition:{type:'ONE_OF_LIST',values:spec.dropdowns[h].map(userEnteredValue=>({userEnteredValue}))},strict:false,showCustomUi:true}}:r>0&&id>0&&spec.vehicleMaster.columns[h]?{dataValidation:{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='차종목록'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:false,showCustomUi:true}}:{})}))}))
+  }]}))};return {snapshot,spec};
+};
+const canonPut=(f,tab,row,h,value,extra={})=>Object.assign(f.snapshot.sheets[tab].data[0].rowData[row].values[f.spec.inputHeaders.indexOf(h)],{userEnteredValue:typeof value==='number'?{numberValue:value}:{stringValue:value},...extra});
+test('canon: 75 value formats, full identical tabs PASS and company values ignored',()=>{
+  const f=canonFixture();canonPut(f,1,1,'회사명','각 회사');canonPut(f,2,1,'회사명','다른 회사');
+  assert.equal(Object.keys(inputSpec.valueFormats).length,75);assert.equal(auditTabConsistency(f.snapshot,f.spec).status,'PASS');
+  assert.equal(auditValueFormats(f.snapshot,f.spec).status,'PASS');assert.deepEqual(planTabConsistencyFix(f.snapshot,f.spec).requests,[]);
+});
+test('canon: exact dates, ages, seats and aliases normalize; ambiguous values and formulas HOLD; immutable',()=>{
+  const f=canonFixture();canonPut(f,1,1,'입고일자','2026-10-03');canonPut(f,1,2,'입고일자','2026. 10. 3');canonPut(f,1,3,'입고일자',46298,{userEnteredFormat:{}});
+  canonPut(f,1,1,'기본연령','만 26세 이상');canonPut(f,1,1,'최대연령','만 65세 이하');canonPut(f,1,1,'인승','5인승');
+  canonPut(f,1,1,'연주행','연 20,000km');canonPut(f,1,1,'면허기간','1년 이상');canonPut(f,1,1,'1개월','900,000');
+  canonPut(f,1,2,'기본연령','26');canonPut(f,1,2,'1개월','90만원');canonPut(f,1,2,'최초등록일','2026-02-30');canonPut(f,1,2,'정비','오일 연2회');
+  canonPut(f,1,3,'기본연령','',{userEnteredValue:{formulaValue:'="만 26세 이상"'},effectiveValue:{stringValue:'만 26세 이상'}});
+  canonPut(f,0,1,'입고일자','2026-10-03');const before=JSON.stringify(f),p=planValueNormalize(f.snapshot,f.spec,now);
+  assert.equal(JSON.stringify(f),before);assert.equal(p.columns.find(c=>c.column==='입고일자').normalizable,3);assert.equal(p.holds.length,5);
+  assert.ok(p.requests.every(r=>(r.updateCells??r.repeatCell).range.sheetId!==0));
+  assert.ok(p.requests.filter(r=>r.updateCells).every(r=>r.updateCells.fields==='userEnteredValue'));
+  const dates=p.requests.filter(r=>r.updateCells?.range.startColumnIndex===1).map(r=>r.updateCells.rows[0].values[0].userEnteredValue.numberValue);assert.equal(dates[0],dates[1]);
+  assert.ok(p.requests.some(r=>r.repeatCell?.cell.userEnteredFormat.numberFormat.pattern==='yy.mm.dd'));
+});
+test('canon: partial grids cannot PASS, malformed layouts cannot generate fixes, private examples redacted',()=>{
+  const f=canonFixture();f.snapshot.sheets[1].properties.gridProperties.rowCount=1000;
+  canonPut(f,1,1,'차량번호',123);canonPut(f,1,1,'비고',' 12가3456 ');
+  const a=auditValueFormats(f.snapshot,f.spec);assert.equal(a.status,'HOLD');assert.ok(!JSON.stringify(a).includes('12가3456'));assert.equal(a.columns.find(c=>c.column==='차량번호').examples[0].value,'[비공개]');
+  assert.ok(auditTabConsistency(f.snapshot,f.spec).holds.some(h=>h.reason==='PARTIAL_GRID_COVERAGE'));
+  f.snapshot.sheets[1].data[0].rowData[0].values.reverse();assert.equal(planTabConsistencyFix(f.snapshot,f.spec).requests.length,0);assert.throws(()=>planValueNormalize(f.snapshot,f.spec),/LAYOUT_MISMATCH/);
+});
+test('canon: width, minority format, dropdown, frozen, hidden, header color, row and conditional drift detected; formats-only fixes',()=>{
+  const f=canonFixture(),t=f.snapshot.sheets[2],d=t.data[0];t.properties.gridProperties.frozenColumnCount=2;
+  d.columnMetadata[0]={pixelSize:12,hiddenByUser:true};d.rowMetadata[1].pixelSize=99;
+  d.rowData[2].values[0].userEnteredFormat.textFormat.fontSize=40;d.rowData[0].values[0].userEnteredFormat.backgroundColor={red:1};
+  d.rowData[1].values[2].dataValidation.condition.values=[{userEnteredValue:'옛 목록'}];
+  t.conditionalFormats=[{ranges:[{sheetId:2,startRowIndex:1,endRowIndex:4}],booleanRule:{condition:{type:'TEXT_EQ',values:[{userEnteredValue:'예'}]},format:{backgroundColor:{red:1}}}}];
+  const before=JSON.stringify(f),a=auditTabConsistency(f.snapshot,f.spec),p=planTabConsistencyFix(f.snapshot,f.spec);
+  for(const k of ['columnWidth','hidden','font','dropdown','frozenColumnCount','conditionalFormats','headerColor','rowHeight'])assert.ok(a.counts[k]>0,k);
+  assert.equal(JSON.stringify(f),before);assert.ok(p.requests.some(r=>r.deleteConditionalFormatRule));
+  assert.ok(p.requests.every(r=>!r.updateCells&&!r.repeatCell?.fields.includes('userEnteredValue')));
+});
+test('canon: conditional formats rebase own ranges and summary input validation is exempt',()=>{
+  const f=canonFixture();f.snapshot.sheets[1].conditionalFormats=[{ranges:[{sheetId:1,startRowIndex:1,endRowIndex:4}],booleanRule:{condition:{type:'TEXT_EQ',values:[{userEnteredValue:'예'}]},format:{backgroundColor:{red:1}}}}];
+  f.snapshot.sheets[0].data[0].rowData[1].values[2].dataValidation={condition:{type:'BOOLEAN'}};
+  const p=planTabConsistencyFix(f.snapshot,f.spec);assert.equal(p.requests.filter(r=>r.addConditionalFormatRule).length,2);
+  assert.ok(!p.requests.some(r=>r.setDataValidation?.range.sheetId===0));assert.equal(p.requests.find(r=>r.addConditionalFormatRule).addConditionalFormatRule.rule.ranges[0].sheetId,0);
+});
+test('canon: CLI reports nonzero for differences and accepts stdin without network',()=>{
+  const f=fixture();const r=spawnSync(process.execPath,['scripts/supplier-input-sheet.mjs','--check-canon=-'],{input:JSON.stringify(f.spreadsheet),encoding:'utf8',maxBuffer:20*1024*1024});
+  assert.equal(r.status,1,r.stderr);assert.ok(JSON.parse(r.stdout).tabs.holds.length>0);
+});
+test('canon: normalization preserves cell notes and links; second plan is empty after readback',()=>{
+  const f=canonFixture();canonPut(f,1,1,'입고일자','2026. 10. 3',{note:'원문 보존'});canonPut(f,1,1,'기본연령','만 26세 이상');
+  const p=planValueNormalize(f.snapshot,f.spec,now);
+  for(const request of p.requests){const x=request.updateCells??request.repeatCell,t=f.snapshot.sheets.find(s=>s.properties.sheetId===x.range.sheetId),c=t.data[0].rowData[x.range.startRowIndex].values[x.range.startColumnIndex];
+    if(request.updateCells)c.userEnteredValue=structuredClone(x.rows[0].values[0].userEnteredValue);else c.userEnteredFormat.numberFormat=structuredClone(x.cell.userEnteredFormat.numberFormat);
+  }
+  assert.equal(f.snapshot.sheets[1].data[0].rowData[1].values[1].note,'원문 보존');assert.deepEqual(planValueNormalize(f.snapshot,f.spec,now).requests,[]);
+});
+test('canon: no majority, missing metadata and unread summary formulas cannot PASS',()=>{
+  const f=canonFixture(),d=f.snapshot.sheets[1].data[0];d.rowData[1].values[0].userEnteredFormat.horizontalAlignment='LEFT';d.rowData[2].values[0].userEnteredFormat.horizontalAlignment='RIGHT';
+  assert.ok(auditTabConsistency(f.snapshot,f.spec).holds.some(h=>h.reason==='NO_MAJORITY_horizontalAlignment'));
+  delete d.rowMetadata;assert.ok(auditTabConsistency(f.snapshot,f.spec).holds.some(h=>h.reason==='MISSING_ROW_METADATA'));
+  canonPut(f,0,1,'회사명','',{userEnteredValue:{formulaValue:'=VSTACK(A1)'}});assert.ok(auditValueFormats(f.snapshot,f.spec).holds.some(h=>h.reason==='SUMMARY_EFFECTIVE_VALUES_MISSING'));
+});
+test('canon: tab fix requests converge to PASS without changing values, formulas, notes or links',()=>{
+  const f=canonFixture(),t=f.snapshot.sheets[2],d=t.data[0];
+  canonPut(f,2,1,'차량번호','가짜 원문',{note:'유지'});d.rowData[1].values[4].userEnteredFormat.textFormat.link={uri:'https://example.test/photo'};
+  canonPut(f,0,1,'회사명','',{userEnteredValue:{formulaValue:'=TEST()'},effectiveValue:{stringValue:'가'}});
+  t.properties.gridProperties.frozenColumnCount=3;d.columnMetadata[4]={pixelSize:1,hiddenByUser:true};d.rowMetadata[2].pixelSize=1;
+  d.rowData[2].values[4].userEnteredFormat.horizontalAlignment='LEFT';d.rowData[1].values[2].dataValidation={condition:{type:'BOOLEAN'}};
+  t.conditionalFormats=[{ranges:[{sheetId:2}],booleanRule:{condition:{type:'BOOLEAN'},format:{backgroundColor:{red:1}}}}];
+  const before=f.snapshot.sheets.map(s=>s.data[0].rowData.map(r=>r.values.map(c=>({value:c.userEnteredValue,note:c.note,link:c.userEnteredFormat?.textFormat?.link}))));
+  for(const request of planTabConsistencyFix(f.snapshot,f.spec).requests){
+    const x=Object.values(request)[0],id=x.range?.sheetId??x.properties?.sheetId??x.sheetId??x.rule?.ranges[0].sheetId,s=f.snapshot.sheets.find(s=>s.properties.sheetId===id),data=s.data[0];
+    if(request.updateDimensionProperties){const list=x.range.dimension==='ROWS'?data.rowMetadata:data.columnMetadata;for(let i=x.range.startIndex;i<x.range.endIndex;i++)Object.assign(list[i],x.properties);}
+    else if(request.updateSheetProperties)Object.assign(s.properties.gridProperties,x.properties.gridProperties);
+    else if(request.deleteConditionalFormatRule)s.conditionalFormats.splice(x.index,1);
+    else if(request.addConditionalFormatRule)s.conditionalFormats.splice(x.index,0,structuredClone(x.rule));
+    else for(let r=x.range.startRowIndex;r<x.range.endRowIndex;r++)for(let c=x.range.startColumnIndex;c<x.range.endColumnIndex;c++){
+      const cell=data.rowData[r].values[c];if(request.setDataValidation){if(x.rule)cell.dataValidation=structuredClone(x.rule);else delete cell.dataValidation;}
+      else {const path=x.fields.split('.');let dest=cell,source=x.cell;for(const k of path.slice(0,-1)){dest=dest[k]??= {};source=source?.[k];}const k=path.at(-1);if(source?.[k]===undefined)delete dest[k];else dest[k]=structuredClone(source[k]);}
+    }
+  }
+  assert.equal(auditTabConsistency(f.snapshot,f.spec).status,'PASS');assert.equal(planTabConsistencyFix(f.snapshot,f.spec).requests.length,0);
+  assert.deepEqual(f.snapshot.sheets.map(s=>s.data[0].rowData.map(r=>r.values.map(c=>({value:c.userEnteredValue,note:c.note,link:c.userEnteredFormat?.textFormat?.link})))),before);
+});
 const masterFixture=()=>({...fixture(),master:{source:inputSpec.vehicleMaster.source,readAt:new Date(now).toISOString(),header:['원산지','제조사','모델','세부모델','세부트림','생산시작','생산종료'],rows:[['국산','현대','캐스퍼','더 뉴 캐스퍼','스마트'],['국산','현대','캐스퍼','캐스퍼','터보'],['국산','기아','레이','','스마트'],['','','',null,'  ']]}});
 const withMasterTab=f=>{const s=sheet(9100,'차종목록',['old'],{rowCount:20,columnCount:4});s.properties.hidden=true;f.spreadsheet.sheets.push(s);f.sheetInventory.push({sheetId:9100});return f;};
 test('vehicle master: immutable input, unique ordered lists, only list-tab values and supplier range validations',()=>{

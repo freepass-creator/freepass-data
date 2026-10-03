@@ -57,7 +57,8 @@
     "test:source:iancar:one-api": "vitest run tests/iancar-one-api.test.ts",
     "source:iancar:one": "tsx src/jobs/collect-iancar-one-api.ts",
     "source:aica:capture": "tsx src/jobs/collect-aica.ts",
-    "serve:supplier:relay": "tsx src/jobs/serve-supplier-relay.ts"
+    "serve:supplier:relay": "tsx src/jobs/serve-supplier-relay.ts",
+    "check:supplier-sheet-canon": "node scripts/supplier-input-sheet.mjs --check-canon"
   },
   "dependencies": {
     "ajv": "^8.0.0",
