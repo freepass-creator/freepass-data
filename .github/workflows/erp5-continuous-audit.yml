@@ -2,6 +2,11 @@ name: ERP5 continuous read-only audit
 
 on:
   workflow_dispatch:
+    inputs:
+      economics_dry_run:
+        description: '기간별 수수료 일괄 재계산 dry-run 만 실행(쓰기 0). 켜면 정시 감사 단계는 건너뜀'
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -33,7 +38,9 @@ on:
     - cron: '37 * * * *'
 
 concurrency:
-  group: erp5-continuous-read-only-audit
+  # 정시·push·입력 없는 수동 실행의 그룹 값은 이전과 똑같다(erp5-continuous-read-only-audit).
+  # economics_dry_run 수동 실행만 별도 그룹을 써서 정시 감사 대기열을 밀어내지 않는다.
+  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.economics_dry_run) && 'freepass-data-economics-dry-run' || 'erp5-continuous-read-only-audit' }}
   cancel-in-progress: false
 
 permissions:
@@ -42,6 +49,7 @@ permissions:
 
 jobs:
   audit:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.economics_dry_run) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -764,3 +772,64 @@ jobs:
             estimate-master-readiness.json
           retention-days: 90
           if-no-files-found: error
+
+  # 기간별 수수료 일괄 재계산 운영 dry-run(AI 상황실 2026-10-04 승인, 1회). 같은 읽기 전용 감사 신원을 쓴다.
+  # 쓰기 0: --apply 를 넘기지 않고, 결과가 mode=DRY_RUN·writes=0 이 아니면 실패로 끝낸다.
+  # ★apply·Admin 재발행은 이 감사 워크플로에 절대 넣지 않는다(AI 상황실 2026-10-04 조건) — 별도 승인·별도 경로로만.
+  # 공개 저장소: 상품별 before-image 가 든 전체 계획은 비공개 증거 버킷에만 두고, 로그·artifact 에는 집계만 남긴다.
+  economics-dry-run:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.economics_dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NODE_ENV: production
+      FIREBASE_PROJECT_ID: freepasserp5
+      GOOGLE_CLOUD_PROJECT: freepasserp5
+      EVIDENCE_BUCKET: ${{ vars.ERP5_EVIDENCE_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: '579.0.0'
+      - run: npm ci --ignore-scripts
+      - name: Require the read-only Data audit identity and private bucket
+        shell: bash
+        env:
+          ACCOUNT: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          test -n '${{ vars.ERP5_WIF_PROVIDER }}'
+          test "$ACCOUNT" = 'github-data-auditor@freepasserp5.iam.gserviceaccount.com'
+          test -n "$EVIDENCE_BUCKET"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.ERP5_WIF_PROVIDER }}
+          service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+      - name: Recompute dry-run (writes 0, full plan private)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tmp
+          umask 077
+          node --import tsx src/jobs/recompute-offer-economics.ts --firestore > tmp/economics-recompute-full.json
+          node -e "const fs=require('fs');const r=JSON.parse(fs.readFileSync('tmp/economics-recompute-full.json','utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0){console.error('NOT A DRY RUN');process.exit(1)}const {plan,...summary}=r;fs.writeFileSync('tmp/economics-recompute-summary.json',JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2))"
+          uri="gs://$EVIDENCE_BUCKET/economics-recompute/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          gcloud storage cp --no-user-output-enabled tmp/economics-recompute-full.json "$uri/plan.json" --if-generation-match=0
+          gcloud storage cp --no-user-output-enabled "$uri/plan.json" tmp/plan-readback.json
+          cmp tmp/economics-recompute-full.json tmp/plan-readback.json
+          echo "private plan stored and verified (location not printed: public repository)"
+          rm -f tmp/economics-recompute-full.json tmp/plan-readback.json
+      - name: Retain aggregate summary only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: economics-recompute-dry-run-${{ github.run_id }}
+          path: tmp/economics-recompute-summary.json
+          if-no-files-found: warn
+          retention-days: 30
