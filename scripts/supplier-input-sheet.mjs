@@ -282,24 +282,26 @@ export function planColumnAdd(input,spec=inputSpec,now=Date.now()){
   return {status:'PLANNED',scope:'ADD_COLUMNS_AND_FILL_NEW_COLUMNS_ONLY',from:rule.from,to:rule.to,tabs:input.binding.suppliers.length,requests};
 }
 // Layout change with removals (legacy layout → spec layout): link each plate
-// to its photo URL first (plate text unchanged), delete the removed columns
+// to its photo URL first when configured (plate text unchanged), delete the removed columns
 // right to left, then move the remaining columns into place left to right and
 // rewrite the header row. No cell value is rewritten. Back up before running.
 export function planLayoutChange(input,spec=inputSpec,now=Date.now()){
   const rule=spec.layoutChange,from=spec.legacyLayouts?.[rule?.from];
   if(!rule||!from)hold('Spec layoutChange with legacy layout required');
+  if(!Array.isArray(rule.remove)||new Set(rule.remove).size!==rule.remove.length)hold('layoutChange remove must be a unique column list');
   planSupplierInput(input,{...spec,inputHeaders:from.inputHeaders,summaryHeaders:from.inputHeaders},now);
   const oldH=from.inputHeaders,newH=rule.to===spec.layoutVersion?spec.inputHeaders:spec.legacyLayouts?.[rule.to]?.inputHeaders;
   if(!newH)hold(`Target layout ${rule.to} missing`);
   const kept=oldH.filter(h=>!rule.remove.includes(h));
   if(rule.remove.some(h=>!oldH.includes(h))||kept.length!==newH.length||[...kept].sort().join()!==[...newH].sort().join())hold('layoutChange does not account for every column');
   const plateAt=oldH.indexOf('차량번호'),photoAt=oldH.indexOf(rule.linkPlateFrom);
+  if(rule.linkPlateFrom!==undefined&&(typeof rule.linkPlateFrom!=='string'||photoAt<0||plateAt<0))hold('layoutChange photo source and plate columns required');
   const requests=[];let linked=0;
   for(const sup of input.binding.suppliers){
     const s=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId),rc=s.properties.gridProperties.rowCount;
     if(s.properties.gridProperties.columnCount!==oldH.length)hold(`${sup.title}: column count must equal the legacy layout`);
     const block=s.data?.find(d=>(d.startRow??0)===0&&(d.startColumn??0)===0)?.rowData??[];
-    if(block.length!==rc)hold(`${sup.title}: full-height capture of 차량번호/${rule.linkPlateFrom} required`);
+    if(photoAt>=0&&block.length!==rc)hold(`${sup.title}: full-height capture of 차량번호/${rule.linkPlateFrom} required`);
     if(photoAt>=0)block.slice(1).forEach((r,i)=>{
       const plate=r.values?.[plateAt],photo=r.values?.[photoAt],read=c=>c?.effectiveValue?.stringValue??c?.userEnteredValue?.stringValue??'';
       const uri=read(photo).trim();if(!uri)return;
