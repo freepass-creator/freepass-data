@@ -735,9 +735,12 @@ export async function collectIancarOnePhaseOneFacts(
 export function iancarOnePhotoIds(detail: unknown, vehicleId: string, plate: string): string[] {
   const envelope = detail as { data?: unknown };
   const raw = (envelope?.data ?? detail) as Record<string, unknown>;
-  if (!raw || raw.vehicle_id !== vehicleId || clean(raw.plate_number).replace(/\s/g, '') !== plate.replace(/\s/g, '')
-    || raw.stale !== false || !Array.isArray(raw.photos) || raw.photos.length > 200)
-    throw new IancarOneApiError('IANCAR_PHOTO_IDENTITY_OR_SCOPE_INVALID');
+  // Separate codes so a failed round shows which gate stopped it; no vehicle ID/plate in the code.
+  if (!raw || raw.vehicle_id !== vehicleId || clean(raw.plate_number).replace(/\s/g, '') !== plate.replace(/\s/g, ''))
+    throw new IancarOneApiError('IANCAR_PHOTO_IDENTITY_MISMATCH');
+  if (raw.stale !== false) throw new IancarOneApiError('IANCAR_PHOTO_DETAIL_STALE');
+  if (!Array.isArray(raw.photos)) throw new IancarOneApiError('IANCAR_PHOTO_LIST_MISSING');
+  if (raw.photos.length > 200) throw new IancarOneApiError('IANCAR_PHOTO_LIMIT_EXCEEDED');
   const ids = new Set<string>();
   const photos = raw.photos.map((value: unknown) => {
     const photo = value as Record<string, unknown>;
