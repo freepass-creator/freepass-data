@@ -202,7 +202,8 @@ export function planColumnAdd(input,spec=inputSpec,now=Date.now()){
   const rule=spec.columnAdd,from=spec.legacyLayouts?.[rule?.from];
   if(!rule||!from)hold('Spec columnAdd with legacy layout required');
   planSupplierInput(input,{...spec,inputHeaders:from.inputHeaders,summaryHeaders:from.inputHeaders},now);
-  const oldH=from.inputHeaders,newH=spec.inputHeaders,at=oldH.indexOf(rule.after)+1;
+  const oldH=from.inputHeaders,newH=rule.to===spec.layoutVersion?spec.inputHeaders:spec.legacyLayouts?.[rule.to]?.inputHeaders,at=oldH.indexOf(rule.after)+1;
+  if(!newH)hold(`Target layout ${rule.to} missing`);
   if(at<1||JSON.stringify([...oldH.slice(0,at),...rule.columns,...oldH.slice(at)])!==JSON.stringify(newH))hold('columnAdd does not produce the spec layout');
   const requests=[],fill=input.fill??{};
   for(const id of Object.keys(fill))if(!input.binding.suppliers.some(s=>String(s.sheetId)===id))hold(`fill for unbound sheet ${id}`);
@@ -234,6 +235,48 @@ export function planColumnAdd(input,spec=inputSpec,now=Date.now()){
   const stack=input.binding.suppliers.map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
   requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
   return {status:'PLANNED',scope:'ADD_COLUMNS_AND_FILL_NEW_COLUMNS_ONLY',from:rule.from,to:rule.to,tabs:input.binding.suppliers.length,requests};
+}
+// Layout change with removals (legacy layout → spec layout): link each plate
+// to its photo URL first (plate text unchanged), delete the removed columns
+// right to left, then move the remaining columns into place left to right and
+// rewrite the header row. No cell value is rewritten. Back up before running.
+export function planLayoutChange(input,spec=inputSpec,now=Date.now()){
+  const rule=spec.layoutChange,from=spec.legacyLayouts?.[rule?.from];
+  if(!rule||!from)hold('Spec layoutChange with legacy layout required');
+  planSupplierInput(input,{...spec,inputHeaders:from.inputHeaders,summaryHeaders:from.inputHeaders},now);
+  const oldH=from.inputHeaders,newH=rule.to===spec.layoutVersion?spec.inputHeaders:spec.legacyLayouts?.[rule.to]?.inputHeaders;
+  if(!newH)hold(`Target layout ${rule.to} missing`);
+  const kept=oldH.filter(h=>!rule.remove.includes(h));
+  if(rule.remove.some(h=>!oldH.includes(h))||kept.length!==newH.length||[...kept].sort().join()!==[...newH].sort().join())hold('layoutChange does not account for every column');
+  const plateAt=oldH.indexOf('차량번호'),photoAt=oldH.indexOf(rule.linkPlateFrom);
+  const requests=[];let linked=0;
+  for(const sup of input.binding.suppliers){
+    const s=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId),rc=s.properties.gridProperties.rowCount;
+    if(s.properties.gridProperties.columnCount!==oldH.length)hold(`${sup.title}: column count must equal the legacy layout`);
+    const block=s.data?.find(d=>(d.startRow??0)===0&&(d.startColumn??0)===0)?.rowData??[];
+    if(block.length!==rc)hold(`${sup.title}: full-height capture of 차량번호/${rule.linkPlateFrom} required`);
+    if(photoAt>=0)block.slice(1).forEach((r,i)=>{
+      const plate=r.values?.[plateAt],photo=r.values?.[photoAt],read=c=>c?.effectiveValue?.stringValue??c?.userEnteredValue?.stringValue??'';
+      const uri=read(photo).trim();if(!uri)return;
+      if(!/^https?:\/\//i.test(uri))hold(`${sup.title} ${i+2}행: 사진 주소가 http(s)가 아님`);
+      if(!read(plate).trim())hold(`${sup.title} ${i+2}행: 사진 주소는 있는데 차량번호가 없음`);
+      if(plate?.userEnteredValue?.formulaValue)hold(`${sup.title} ${i+2}행: 차량번호가 수식`);
+      requests.push({repeatCell:{range:{sheetId:sup.sheetId,startRowIndex:i+1,endRowIndex:i+2,startColumnIndex:plateAt,endColumnIndex:plateAt+1},cell:{userEnteredFormat:{textFormat:{link:{uri}}}},fields:'userEnteredFormat.textFormat.link'}});linked++;});
+    const order=[...oldH];
+    for(const h of [...rule.remove].sort((a,b)=>oldH.indexOf(b)-oldH.indexOf(a))){const at=order.indexOf(h);
+      requests.push({deleteDimension:{range:{sheetId:sup.sheetId,dimension:'COLUMNS',startIndex:at,endIndex:at+1}}});order.splice(at,1);}
+    newH.forEach((h,i)=>{const at=order.indexOf(h);if(at===i)return;if(at<i)hold('reorder invariant broken');
+      requests.push({moveDimension:{source:{sheetId:sup.sheetId,dimension:'COLUMNS',startIndex:at,endIndex:at+1},destinationIndex:i}});order.splice(i,0,order.splice(at,1)[0]);});
+    requests.push({updateCells:{start:{sheetId:sup.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))}],fields:'userEnteredValue'}});
+  }
+  const summary=input.spreadsheet.sheets.find(x=>x.properties.sheetId===input.binding.summarySheetId);
+  const last=columnLetter(newH.length-1);
+  const stack=input.binding.suppliers.map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
+  // Rewrite the summary first so its spill never targets the columns deleted next.
+  requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
+  const width=summary.properties.gridProperties.columnCount;
+  if(width>newH.length)requests.push({updateCells:{range:{sheetId:summary.properties.sheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:newH.length,endColumnIndex:width},fields:'userEnteredValue'}},{deleteDimension:{range:{sheetId:summary.properties.sheetId,dimension:'COLUMNS',startIndex:newH.length,endIndex:width}}});
+  return {status:'PLANNED',scope:'LAYOUT_CHANGE_LINK_DELETE_MOVE_NO_VALUE_REWRITE',from:rule.from,to:rule.to,tabs:input.binding.suppliers.length,platesLinked:linked,requests};
 }
 // Source policies stay in their original units. Blank/duplicate codes never
 // select a generic default. No inventory/monetary field is normalized here.
@@ -361,5 +404,5 @@ export function compareSharedToLegacy({shared,legacy,binding},spec=inputSpec,now
   return {status:results.every(r=>r.status==='IN_SYNC')&&!unboundLegacy.length?'ALL_IN_SYNC':'NOT_IN_SYNC',scope:'COMPARE_ONLY_VEHICLE_RATE_FIELDS_NO_WRITES_POLICY_NOT_COMPARED',layoutVersion:spec.layoutVersion,summary,unboundLegacy,notCompared,results};
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
-  try {const add=process.argv.find(a=>a.startsWith('--add-columns='))?.slice(14);if(add){console.log(JSON.stringify(planColumnAdd(JSON.parse(add==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(add,'utf8'))),null,2));process.exit(0);}const reorder=process.argv.find(a=>a.startsWith('--reorder='))?.slice(10);if(reorder){console.log(JSON.stringify(planLayoutReorder(JSON.parse(reorder==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(reorder,'utf8'))),null,2));process.exit(0);}const split=process.argv.find(a=>a.startsWith('--split='))?.slice(8);if(split){console.log(JSON.stringify(planPolicySplit(JSON.parse(split==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(split,'utf8'))),null,2));process.exit(0);}const dropdowns=process.argv.find(a=>a.startsWith('--dropdowns='))?.slice(12);const compare=process.argv.find(a=>a.startsWith('--compare='))?.slice(10);if(dropdowns){console.log(JSON.stringify(planSupplierDropdowns(JSON.parse(dropdowns==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(dropdowns,'utf8'))),null,2));}else if(compare){console.log(JSON.stringify(compareSharedToLegacy(JSON.parse(fs.readFileSync(compare,'utf8'))),null,2));}else{const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json or --compare=private-compare.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}
+  try {const change=process.argv.find(a=>a.startsWith('--change-layout='))?.slice(16);if(change){console.log(JSON.stringify(planLayoutChange(JSON.parse(change==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(change,'utf8'))),null,2));process.exit(0);}const add=process.argv.find(a=>a.startsWith('--add-columns='))?.slice(14);if(add){console.log(JSON.stringify(planColumnAdd(JSON.parse(add==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(add,'utf8'))),null,2));process.exit(0);}const reorder=process.argv.find(a=>a.startsWith('--reorder='))?.slice(10);if(reorder){console.log(JSON.stringify(planLayoutReorder(JSON.parse(reorder==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(reorder,'utf8'))),null,2));process.exit(0);}const split=process.argv.find(a=>a.startsWith('--split='))?.slice(8);if(split){console.log(JSON.stringify(planPolicySplit(JSON.parse(split==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(split,'utf8'))),null,2));process.exit(0);}const dropdowns=process.argv.find(a=>a.startsWith('--dropdowns='))?.slice(12);const compare=process.argv.find(a=>a.startsWith('--compare='))?.slice(10);if(dropdowns){console.log(JSON.stringify(planSupplierDropdowns(JSON.parse(dropdowns==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(dropdowns,'utf8'))),null,2));}else if(compare){console.log(JSON.stringify(compareSharedToLegacy(JSON.parse(fs.readFileSync(compare,'utf8'))),null,2));}else{const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json or --compare=private-compare.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}
 }
