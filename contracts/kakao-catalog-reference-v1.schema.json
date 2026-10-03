@@ -50,6 +50,7 @@
       "required": ["state", "ruleId", "amount", "vatTreatment", "vatAmount", "totalAmount", "reasonCode"],
       "properties": {
         "state": { "enum": ["CALCULATED", "COORDINATION_REQUIRED", "UNKNOWN", "NOT_APPLICABLE"] },
+        "sourceRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*$" } },
         "ruleId": { "$ref": "#/$defs/nullableString" },
         "amount": { "$ref": "#/$defs/nullableInteger" },
         "vatTreatment": { "enum": ["EXCLUDED", "INCLUDED", "UNKNOWN"] },
@@ -181,10 +182,11 @@
       "type": "object",
       "required": ["policyId", "sourceRole", "sourceObservedAt", "canonicalSource", "sourceFiles", "standardSupplierIds", "exceptionSupplierIds", "rules", "timingRules", "digest"],
       "properties": {
-        "policyId": { "const": "sales-commission-2026-10-03" },
-        "sourceRole": { "const": "REPOSITORY_SSOT_WITH_GOOGLE_SHEET_COPY" },
-        "sourceObservedAt": { "type": "string", "format": "date-time" },
+        "policyId": { "enum": ["sales-commission-2026-10-03", "sales-commission-2026-10-04"] },
+        "sourceRole": { "enum": ["REPOSITORY_SSOT_WITH_GOOGLE_SHEET_COPY", "F04_GOOGLE_SHEET_SSOT"] },
+        "sourceObservedAt": { "type": "string", "anyOf": [{ "format": "date-time" }, { "format": "date" }] },
         "canonicalSource": {
+          "oneOf": [{
           "type": "object",
           "additionalProperties": false,
           "required": ["repository", "path", "revision"],
@@ -193,6 +195,16 @@
             "path": { "const": "lib/domain/settlement-fee-table.ts" },
             "revision": { "type": "string", "minLength": 1 }
           }
+          }, {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "range", "observedDate"],
+            "properties": {
+              "code": { "const": "F04" },
+              "range": { "const": "수수료표!A1:M191" },
+              "observedDate": { "type": "string", "format": "date" }
+            }
+          }]
         },
         "sourceFiles": { "type": "array", "minItems": 1, "maxItems": 1 },
         "standardSupplierIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },

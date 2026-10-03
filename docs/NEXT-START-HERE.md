@@ -367,6 +367,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+
+### 2026-10-04 F04 수수료표 정렬 — 로컬 수정, 커밋은 Claude
+
+- 목적/정본: 사용자 제공 F04 수수료표 A1:M191(10-04 사본); Data `fd252b2508d4ccda5ecf8de03b587c1f9910cda4`, 가지 `work/freepass-data/commission-f04-align-20261003`. academy:start READY. 원본 자료 복사·Git 쓰기·운영 접속 없음.
+- 변경: 정책 `sales-commission-2026-10-04`(10-03 객체 보존), 오토플러스 EV150만/130만, 손오공 픽업 차량가액4%/3%, 빌린카/엘씨 구독60개월2.25%/1.75%, 아이카 EV 범위 제한, 원장 상품 표현 표준화, 카탈로그/Canonical 명시 근거 전달, 비공개 계약 일치 기반 개별 예외, F04 sourceRefs/응답 스키마. 마음카 NOT_APPLICABLE. 미확정 반올림·일반 손오공60 UNKNOWN.
+- 판단: 최신 JSON의 개별413은 862000/562000(옛 수정안912000 폐기). 일반60개월은 JSON의 +60만 판정보다 사용자 명시 HOLD 우선. 아이카4건은 지급40만만 확정; 청구 UNKNOWN. 뮤카169~170은 별도 재원·VAT·ID 계약 필요로 범위 밖/HOLD. 실명15곳↔19개ID 및 191행 전수 대응표는 `docs/READ-RUNTIME.md` 수수료 절.
+- 검증: 빌드 PASS, 변경 관련5개 테스트파일128 PASS, 대응표 행1~191 누락/중복0, git diff --check PASS. 전체 npm run check의 최종 숫자/환경 한계는 READ-RUNTIME 검증 기록 참조. Claude 검토는 FAILED/CLAUDE_PROCESS_FAILED(exit1), ANSWERED 없음.
+- 남음: 전체 검사 환경 오류 및 Claude 독립 검토. Canonical에 없는 입력은 reasonCode 있는 UNKNOWN; 운영 근거 수집·재저장·배포 미실행. 별도 권한/승인을 만들지 않았다.
+- next_start_here: Claude가 최종 diff·READ-RUNTIME 두 대응표·검사 결과를 읽고 정상 실행 환경에서 전체 check 및 독립 검토 후 커밋한다. Codex는 커밋하지 않았다.
+
 ### 2026-10-03 공급사 중계 job-name 호환 수정 — 로컬 검증 일부 HOLD
 
 - 목적/대상 revision: `work/freepass-data/supplier-relay-jobname-fix-b-20261003`, `10a729f22799eda8b8f90f01ba993b10c6f09d27`. Academy READY. 네트워크·배포·push·커밋 없이 기존 구현 확장.

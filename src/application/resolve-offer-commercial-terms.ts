@@ -1,5 +1,5 @@
 import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
-import type { CommissionInput } from './kakao-catalog-reference.js';
+import type { CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
 import { KAKAO_COMMISSION_POLICY, resolveSalesCommission, resolveSupplierBillingFee } from './kakao-catalog-reference.js';
 import type {
   DepositResolution,
@@ -20,22 +20,20 @@ export function precomputeOfferEconomics(
   offer: Pick<Offer, 'id' | 'supplierId' | 'priceTerms'>,
   commercialType?: CommercialType,
   fuel?: string | null,
-  evidenceByTerm: Readonly<Record<string, Partial<Pick<CommissionInput, 'vehicleValue' | 'newProductSubtype' | 'depositTierPercent' | 'subscriptionForm' | 'q12Basis' | 'individualException'>>>> = {},
+  evidenceByTerm: CommissionEvidenceByTerm = {},
 ): OfferTermEconomics[] {
   const productType = commercialType ? ({
     NEW_RENT: '신차렌트', USED_RENT: '중고렌트', NEW_SUBSCRIPTION: '신차구독',
     USED_SUBSCRIPTION: '중고구독', OGONG_SUBSCRIPTION: '오공구독', PICKUP_SUBSCRIPTION: '픽업구독',
   } as const)[commercialType] : '';
   const policy = KAKAO_COMMISSION_POLICY;
-  const source = policy.canonicalSource;
-  const policyRef = `${source.repository}@${source.revision}:${source.path}`;
   return offer.priceTerms.map((term) => {
     const priceRef = `catalog_offers/${offer.id}/priceTerms/${term.termKey}`;
     const args = { ...evidenceByTerm[term.termKey], supplierId: offer.supplierId, productType, fuel: fuel ?? '',
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
       const base = { ruleId: result.ruleId, policyId: policy.policyId,
-        sourceRefs: [policy.currentAuthority, policyRef, priceRef, ...(args.q12Basis?.sourceRef ? [args.q12Basis.sourceRef] : [])],
+        sourceRefs: [...(result.sourceRefs ?? []), policy.currentAuthority, priceRef, ...(args.q12Basis?.sourceRef ? [args.q12Basis.sourceRef] : [])],
         vatTreatment: result.vatTreatment, vatAmount: result.vatAmount, totalAmount: result.totalAmount };
       const unknown = (reasonCode: string): TermEconomicAmount => ({ ...base,
         state: 'UNKNOWN', amount: null, calculation: null, vatAmount: null, totalAmount: null, reasonCode });
