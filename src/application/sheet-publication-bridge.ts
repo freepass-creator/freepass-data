@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { ERP5_DOCUMENTS, type Erp5ReadRpc } from '../adapters/erp5-source-capture.js';
 import { hasSonokongDepositRuleViolation } from '../domain/consumer-output-contract.js';
+import { ERP5_UNAVAILABLE_STATUS, resolveErp5InventoryStatus } from '../domain/erp5-inventory-status.js';
+import { firestoreSafePlateKey } from '../domain/vehicle-plate.js';
 import {
   hashSheetPublicationHandoff,
   hashSheetPublicationData,
@@ -231,10 +233,8 @@ function decodedRecords(
 
 const normalizeStatus = (value: unknown) =>
   String(value ?? '').replace(/\s+/g, '');
-const plateKey = (value: unknown) =>
-  String(value ?? '').trim().replace(/[\s.$#[\]/-]/g, '');
 const isPlate = (value: unknown) => {
-  const plate = plateKey(value);
+  const plate = firestoreSafePlateKey(value);
   return plate.length >= 5 &&
     plate.length <= 12 &&
     !/^(미정|미배정|미상|없음|-|tbd|n\/a)$/i.test(String(value ?? '').trim()) &&
@@ -242,15 +242,17 @@ const isPlate = (value: unknown) => {
     /\d$/.test(plate);
 };
 const unavailable = (product: Record<string, unknown>) =>
-  normalizeStatus(product.vehicle_status) === '출고불가';
+  normalizeStatus(product.vehicle_status) === ERP5_UNAVAILABLE_STATUS;
 const expectedListable = (product: Record<string, unknown>) => !unavailable(product);
-const expectedStatusKind = (product: Record<string, unknown>) => {
+/**
+ * Drift evidence keeps its historical fallbacks so recorded counts stay comparable:
+ * an empty status counts as 준비 and any unreviewed status as 불가.
+ */
+const legacyExpectedStatusKindForDrift = (product: Record<string, unknown>) => {
   const status = String(product.vehicle_status ?? '').trim();
-  if (status === '즉시출고' || status === '출고가능') return '가용';
-  if (status === '출고협의') return '협의';
-  if (status === '상품화중' || status === '차량검수' || !status) return '준비';
-  if (status === '계약중') return '선점';
-  return '불가';
+  if (!status) return '준비';
+  const resolved = resolveErp5InventoryStatus(status);
+  return resolved.known ? resolved.statusKind : '불가';
 };
 const deletedMarker = (product: Record<string, unknown>) =>
   product._deleted === true ||
@@ -280,7 +282,7 @@ export function buildSheetInventorySummary(
     byStatus[status] = (byStatus[status] ?? 0) + 1;
     if (unavailable(product)) unavailableCount++;
     if (product.listable !== expectedListable(product)) listableDrift++;
-    if (String(product.status_kind ?? '').trim() !== expectedStatusKind(product)) statusKindDrift++;
+    if (String(product.status_kind ?? '').trim() !== legacyExpectedStatusKindForDrift(product)) statusKindDrift++;
 
     const provider =
       String(product.provider_company_code ?? '').trim() ||
@@ -301,7 +303,7 @@ export function buildSheetInventorySummary(
     })) depositRuleViolations++;
 
     const rawPlate = String(product.car_number ?? '').trim();
-    const plate = plateKey(rawPlate);
+    const plate = firestoreSafePlateKey(rawPlate);
     if (!plate) blankPlateViolations++;
     else {
       if (!isPlate(rawPlate)) invalidPlateViolations++;

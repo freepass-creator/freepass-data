@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { collectSupplierSource, validateSourceIntakeBatch, type SourceIntakeBatch, type SupplierSourceAdapter } from '../domain/source-intake.js';
+import { plateIdentityKey } from '../domain/vehicle-plate.js';
 
 const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
 const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
-const plate = (value: unknown) => text(value).replace(/\s+/g, '').toUpperCase();
+const plate = plateIdentityKey;
 const buckets = ['LOW_SONOKONG_DAILY', 'LOW_SONOKONG', 'LOW_TCAR'] as const;
 
 // Transport/auth is injected by an authorized connector. These adapters neither

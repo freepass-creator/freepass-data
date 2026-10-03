@@ -1,5 +1,15 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-03 고도화 전 정리 — 차량번호 키·ERP5 재고 상태 사전 공통화(②, iancar 제외)
+
+- 목적: 같은 차·같은 상태를 어댑터마다 다르게 판정하던 중복을 한 곳으로 모은다. 대표 결정으로 Codex worktree가 미커밋 수정 중인 iancar 파일은 이번에 건드리지 않는다.
+- 대상 revision: main `e49dfb9`(PR1a/PR1b와 독립 브랜치 `claude/plate-status-dictionary`).
+- 변경: `src/domain/vehicle-plate.ts` — `plateIdentityKey`(trim·공백 제거·대문자, 비문자열은 ''), `isStrictKoreanPlate`(매퍼 기존 정규식), `firestoreSafePlateKey`(시트 키 전용, `. $ # [ ] / -` 제거 — 동일 차량 판정에 쓰지 않는다). `src/domain/erp5-inventory-status.ts` — ERP5 `vehicle_status`→`status_kind`·`listable` 사전과 `resolveErp5InventoryStatus`. 사용처: `erp5-product-mapping`(사전·형식), `erp5-source-capture`(중복 차량번호), `supplier-source-capture`(sonogong/welrix identity), `sheet-publication-bridge`(사전·안전 키). bridge의 drift 계산은 기존 운영 증거와 비교 가능하도록 빈 상태=준비, 미검토 상태=불가 fallback을 `legacyExpectedStatusKindForDrift`로 명시 보존했다.
+- Codex 설계 상의(read-only): 하이픈 제거를 identity에 넣으면 `12가-3456`과 `12가3456`이 합쳐지는 반례 → 안전 키와 분리. 매퍼 strict 형식과 consumer 렌트번호 판정(공백 허용, `consumer-output-contract.ts:43-47`)은 정책이 달라 렌트번호 판정은 그대로 둔다. Canonical `VehicleAssetStatus`에 `UNAVAILABLE`/`WITHDRAWN` 추가는 공개 스키마 3종(`catalog-v1`·`erp-public-view-v1`·`admin-catalog-view-v1`)과 `read-pilot` 허용 목록을 바꾸는 계약 변경이라 HOLD — 내부 우선 도입은 source/display 전용 필드로 두고 projection에서 기존 enum으로 매핑하는 길만 열어 둔다.
+- 검증: 신규 테스트(사전 전체 값·미검토/상속 키, identity·strict·안전 키, bridge drift fallback 불변)와 기존 ERP5·bridge·sheet 테스트 PASS, `npm run check` PASS. 운영 변경 없음.
+- 남음: iancar 쪽 plate 정규화 5곳과 하드코딩 상태(`iancar-one-api.ts:373·432·488-490·518·545·681`, `iancar-direct-source.ts:15·168`, `iancar-policy-sync-firestore.ts`, `iancar-publication-withdrawal-firestore.ts:151·222`)는 Codex worktree 정리 후 같은 모듈로 옮긴다. Kakao `점검중→MAINTENANCE` 등 소비처 상태 매핑은 별도.
+- next_start_here: iancar 이관은 `commission-audience`·`period-economics-main` 미커밋 변경이 main에 들어간 뒤 시작한다.
+
 ## 2026-10-03 이안카 15분 자동 수집 활성 / 첫 실반영 검증
 
 - 목적/결정: 사용자 최신 지시는 질문을 반복하지 말고 ONE 전체 재고·상태·대여료·사진을15분마다 계속 맞추는 것이다. 최소 권한 범위 설명 뒤 작업 진행 직접 지시를 받아 기존 계정에만 적용했다. 정책2차/RTDB/새 writer/수동 입력 시트는 제외한다.
