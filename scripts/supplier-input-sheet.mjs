@@ -17,6 +17,9 @@ const registered = (suppliers, spec, requireAll) => {
   if(requireAll&&missing.length)hold(`Registered supplier tabs not bound: ${missing.map(r=>r.tab).join(', ')}`);
   return missing;
 };
+// Physical tab work runs once even when several supplier codes share it.
+const supplierTabs = suppliers => [...new Map(suppliers.map(s=>[s.title,s])).values()];
+const sharedTitles = spec => [...new Set(spec.supplierChannels.sharedInputSheet.map(s=>s.tab))];
 const headersOf = sheet => sheet.data?.find(d=>(d.startRow??0)===0&&(d.startColumn??0)===0)?.rowData?.[0]?.values?.map(c=>c.userEnteredValue?.stringValue??'')??[];
 
 // No credentials, network, source ingestion, sharing, or value normalization.
@@ -39,16 +42,27 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
   if(new Set(ids).size!==ids.length)hold('Duplicate sheet IDs');
   if(JSON.stringify([...ids].sort((a,b)=>a-b))!==JSON.stringify((input.sheetInventory??[]).map(s=>s.sheetId).sort((a,b)=>a-b)))hold('Complete independent inventory required');
   const suppliers=binding.suppliers??[];
-  if(!suppliers.length||suppliers.some(s=>typeof s.title!=='string'||s.title.length===0)||new Set(suppliers.map(s=>s.sheetId)).size!==suppliers.length||new Set(suppliers.map(s=>s.code)).size!==suppliers.length||new Set(suppliers.map(s=>s.title)).size!==suppliers.length)hold('Unique supplier bindings required');
+  if(!suppliers.length||suppliers.some(s=>typeof s.title!=='string'||s.title.length===0)||new Set(suppliers.map(s=>s.code)).size!==suppliers.length)hold('Unique supplier bindings required');
   registered(suppliers,spec,true);
+  if(suppliers.some(s=>!Number.isInteger(s.sheetId)||suppliers.some(other=>(s.title===other.title)!==(s.sheetId===other.sheetId))))hold('Supplier tab and sheetId binding mismatch');
   const summary=sheets.find(s=>s.properties.sheetId===binding.summarySheetId), guide=sheets.find(s=>s.properties.sheetId===binding.guideSheetId);
   if(!summary||!guide||summary===guide||suppliers.some(s=>[binding.summarySheetId,binding.guideSheetId].includes(s.sheetId)))hold('Summary/guide binding invalid');
   const allowed=new Set([binding.summarySheetId,binding.guideSheetId,...suppliers.map(s=>s.sheetId)]);
   if(sheets.some(s=>!s.properties.hidden&&!allowed.has(s.properties.sheetId)))hold('Unbound visible sheet');
-  const mismatched=[], drift=[];
-  for(const entry of [{sheetId:binding.summarySheetId,title:spec.summaryTitle,summary:true},...suppliers]) {
+  const mismatched=[], drift=[], companyAudit=[];
+  for(const entry of [{sheetId:binding.summarySheetId,title:spec.summaryTitle,summary:true},...supplierTabs(suppliers)]) {
     const s=sheets.find(s=>s.properties.sheetId===entry.sheetId); if(!s)hold('Supplier sheet missing');
     if(s.properties.title!==entry.title)hold(`Bound tab title differs: sheet ${entry.sheetId} is "${s.properties.title}", binding says "${entry.title}"`);
+    if(!entry.summary){
+      const names=spec.supplierChannels.sharedInputSheet.filter(r=>r.tab===entry.title).map(r=>r.companyName).filter(Boolean);
+      let observed=0;
+      for(const block of s.data??[])for(const [i,row] of (block.rowData??[]).entries()){
+        const at=(block.startRow??0)+i;if(at===0||(block.startColumn??0)!==0)continue;observed++;
+        const cell=row.values?.[spec.inputHeaders.indexOf('회사명')],value=cell?.effectiveValue??cell?.userEnteredValue;
+        if(row.values?.some(c=>Object.keys(c.effectiveValue??c.userEnteredValue??{}).length)&&!names.includes(value?.stringValue))companyAudit.push({tab:entry.title,row:at+1,reason:names.length?'COMPANY_NAME_NOT_ALLOWED':'COMPANY_NAMES_UNSPECIFIED'});
+      }
+      if(!observed)companyAudit.push({tab:entry.title,reason:'COMPANY_VALUES_NOT_CAPTURED'});
+    }
     const headers=headersOf(s),expected=entry.summary?spec.summaryHeaders:spec.inputHeaders;
     if(JSON.stringify(headers)!==JSON.stringify(expected))mismatched.push({sheetId:entry.sheetId,title:s.properties.title,missing:expected.filter(h=>!headers.includes(h)),unexpected:headers.filter(h=>!expected.includes(h)),orderOnly:headers.length===expected.length&&expected.every(h=>headers.includes(h))});
     if(s.properties.hidden)mismatched.push({sheetId:entry.sheetId,title:s.properties.title,hidden:true});
@@ -56,7 +70,7 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
     if((grid.frozenRowCount??0)!==spec.frozenRowCount||(grid.frozenColumnCount??0)!==spec.frozenColumnCount)drift.push({sheetId:entry.sheetId,title:s.properties.title,frozenRowCount:grid.frozenRowCount??0,frozenColumnCount:grid.frozenColumnCount??0});
   }
   if(mismatched.length)throw Object.assign(new Error(`HOLD: LAYOUT_MISMATCH — ${mismatched.length} tab(s) differ from spec layout ${spec.layoutVersion}; nothing is written`),{mismatched});
-  return {status:drift.length?'LAYOUT_VERIFIED_WITH_PRESENTATION_DRIFT':'LAYOUT_VERIFIED',layoutVersion:spec.layoutVersion,scope:'MANUAL_SUPPLIER_INPUT_LAYOUT_VERIFY_ONLY_NOT_AUTOMATIC_SOURCE_REFRESH',spreadsheetId:binding.spreadsheetId,drift,requests:[]};
+  return {status:drift.length?'LAYOUT_VERIFIED_WITH_PRESENTATION_DRIFT':'LAYOUT_VERIFIED',layoutVersion:spec.layoutVersion,scope:'MANUAL_SUPPLIER_INPUT_LAYOUT_VERIFY_ONLY_NOT_AUTOMATIC_SOURCE_REFRESH',spreadsheetId:binding.spreadsheetId,drift,companyAudit,requests:[]};
 }
 // One-time supplier input setup: dropdowns only. Runs the full verify gate
 // first, then emits a list setDataValidation for spec.dropdowns columns on
@@ -68,7 +82,7 @@ export function planSupplierDropdowns(input, spec=inputSpec, now=Date.now()) {
   const unknown=spec.inputHeaders.filter(h=>[Boolean(spec.dropdowns?.[h]),Boolean(spec.vehicleMaster?.columns?.[h]),free.has(h)].filter(Boolean).length!==1);
   if(unknown.length)hold(`Every column needs exactly one dropdown, vehicle-master range or free-text decision: ${unknown.join(', ')}`);
   const requests=[];
-  for(const sup of input.binding.suppliers){
+  for(const sup of supplierTabs(input.binding.suppliers)){
     const s=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);
     const rows=s.properties.gridProperties.rowCount;
     spec.inputHeaders.forEach((h,i)=>{
@@ -113,7 +127,7 @@ export function planVehicleMasterDropdowns(input,spec=inputSpec,now=Date.now()){
   const rows=[{values:names.map(stringValue=>({userEnteredValue:{stringValue}}))}];
   for(let i=0;i<height-1;i++)rows.push({values:lists.map(list=>i<list.length?{userEnteredValue:{stringValue:list[i]}}:{})});
   requests.push({updateCells:{start:{sheetId:rule.sheetId,rowIndex:0,columnIndex:0},rows,fields:'userEnteredValue'}});
-  for(const sup of input.binding.suppliers){
+  for(const sup of supplierTabs(input.binding.suppliers)){
     const s=input.spreadsheet.sheets.find(s=>s.properties.sheetId===sup.sheetId),headers=headersOf(s),end=s.properties.gridProperties.rowCount;
     if(!Number.isInteger(end)||end<2)hold('Supplier rowCount invalid');
     names.forEach((h,i)=>{
@@ -163,7 +177,7 @@ export function planPolicySplit(input,spec=inputSpec,now=Date.now()){
   const cols=Object.keys(rule.columns).map(h=>({h,old:oldH.indexOf(h),parts:rule.columns[h]}));
   if(cols.some(c=>c.old<0||c.parts.some(p=>!newH.includes(p))))hold('policySplit does not match layouts');
   const requests=[],holds=[];let rowsRead=0;
-  for(const sup of input.binding.suppliers){
+  for(const sup of supplierTabs(input.binding.suppliers)){
     const s=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);
     const block=s.data?.find(d=>(d.startRow??0)===0&&(d.startColumn??0)===0)?.rowData??[];
     if(block.length!==s.properties.gridProperties.rowCount)hold(`${sup.title}: full-height capture required`);
@@ -194,9 +208,9 @@ export function planPolicySplit(input,spec=inputSpec,now=Date.now()){
   const width=summary.properties.gridProperties.columnCount;
   if(width<newH.length)requests.push({insertDimension:{range:{sheetId:summary.properties.sheetId,dimension:'COLUMNS',startIndex:width,endIndex:newH.length},inheritFromBefore:true}});
   const last=columnLetter(newH.length-1);
-  const stack=input.binding.suppliers.map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
+  const stack=supplierTabs(input.binding.suppliers).map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
   requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
-  return {status:'PLANNED',scope:'POLICY_COLUMN_SPLIT_VALUES_HEADERS_SUMMARY',from:rule.from,to:rule.to,tabs:input.binding.suppliers.length,rowsRead,requests};
+  return {status:'PLANNED',scope:'POLICY_COLUMN_SPLIT_VALUES_HEADERS_SUMMARY',from:rule.from,to:rule.to,tabs:supplierTabs(input.binding.suppliers).length,rowsRead,requests};
 }
 // Column order change (legacy layout → spec layout): append the new empty
 // columns at the end, move every column into place left to right (whole
@@ -212,7 +226,7 @@ export function planLayoutReorder(input,spec=inputSpec,now=Date.now()){
   const source=newH.map(h=>Object.hasOwn(rule.renames,h)?rule.renames[h]:rule.newColumns.includes(h)?null:h);
   if(source.some((o,i)=>o!==null&&!oldH.includes(o))||new Set(source.filter(Boolean)).size!==oldH.length||rule.newColumns.length!==newH.length-oldH.length)hold('layoutReorder does not account for every column');
   const requests=[];
-  for(const sup of input.binding.suppliers){
+  for(const sup of supplierTabs(input.binding.suppliers)){
     const s=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);
     if(s.properties.gridProperties.columnCount!==oldH.length)hold(`${sup.title}: column count must equal the legacy layout`);
     // Working model of the current column order; new columns get placeholder ids.
@@ -235,9 +249,9 @@ export function planLayoutReorder(input,spec=inputSpec,now=Date.now()){
   const width=summary.properties.gridProperties.columnCount;
   if(width<newH.length)requests.push({insertDimension:{range:{sheetId:summary.properties.sheetId,dimension:'COLUMNS',startIndex:width,endIndex:newH.length},inheritFromBefore:true}});
   const last=columnLetter(newH.length-1);
-  const stack=input.binding.suppliers.map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
+  const stack=supplierTabs(input.binding.suppliers).map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
   requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
-  return {status:'PLANNED',scope:'COLUMN_ORDER_AND_HEADERS_NO_VALUE_REWRITE',from:rule.from,to:rule.to,tabs:input.binding.suppliers.length,requests};
+  return {status:'PLANNED',scope:'COLUMN_ORDER_AND_HEADERS_NO_VALUE_REWRITE',from:rule.from,to:rule.to,tabs:supplierTabs(input.binding.suppliers).length,requests};
 }
 // Add new columns after one anchor column (legacy layout → spec layout) and
 // optionally fill only those new columns from caller-supplied, plate-matched
@@ -252,7 +266,7 @@ export function planColumnAdd(input,spec=inputSpec,now=Date.now()){
   if(at<1||JSON.stringify([...oldH.slice(0,at),...rule.columns,...oldH.slice(at)])!==JSON.stringify(newH))hold('columnAdd does not produce the spec layout');
   const requests=[],fill=input.fill??{};
   for(const id of Object.keys(fill))if(!input.binding.suppliers.some(s=>String(s.sheetId)===id))hold(`fill for unbound sheet ${id}`);
-  for(const sup of input.binding.suppliers){
+  for(const sup of supplierTabs(input.binding.suppliers)){
     const s=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId),rc=s.properties.gridProperties.rowCount;
     requests.push({insertDimension:{range:{sheetId:sup.sheetId,dimension:'COLUMNS',startIndex:at,endIndex:at+rule.columns.length},inheritFromBefore:true}});
     requests.push({updateCells:{start:{sheetId:sup.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))}],fields:'userEnteredValue'}});
@@ -277,9 +291,9 @@ export function planColumnAdd(input,spec=inputSpec,now=Date.now()){
   const width=summary.properties.gridProperties.columnCount;
   if(width<newH.length)requests.push({insertDimension:{range:{sheetId:summary.properties.sheetId,dimension:'COLUMNS',startIndex:width,endIndex:newH.length},inheritFromBefore:true}});
   const last=columnLetter(newH.length-1);
-  const stack=input.binding.suppliers.map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
+  const stack=supplierTabs(input.binding.suppliers).map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
   requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
-  return {status:'PLANNED',scope:'ADD_COLUMNS_AND_FILL_NEW_COLUMNS_ONLY',from:rule.from,to:rule.to,tabs:input.binding.suppliers.length,requests};
+  return {status:'PLANNED',scope:'ADD_COLUMNS_AND_FILL_NEW_COLUMNS_ONLY',from:rule.from,to:rule.to,tabs:supplierTabs(input.binding.suppliers).length,requests};
 }
 // Layout change with removals (legacy layout → spec layout): link each plate
 // to its photo URL first when configured (plate text unchanged), delete the removed columns
@@ -297,7 +311,7 @@ export function planLayoutChange(input,spec=inputSpec,now=Date.now()){
   const plateAt=oldH.indexOf('차량번호'),photoAt=oldH.indexOf(rule.linkPlateFrom);
   if(rule.linkPlateFrom!==undefined&&(typeof rule.linkPlateFrom!=='string'||photoAt<0||plateAt<0))hold('layoutChange photo source and plate columns required');
   const requests=[];let linked=0;
-  for(const sup of input.binding.suppliers){
+  for(const sup of supplierTabs(input.binding.suppliers)){
     const s=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId),rc=s.properties.gridProperties.rowCount;
     if(s.properties.gridProperties.columnCount!==oldH.length)hold(`${sup.title}: column count must equal the legacy layout`);
     const block=s.data?.find(d=>(d.startRow??0)===0&&(d.startColumn??0)===0)?.rowData??[];
@@ -324,12 +338,12 @@ export function planLayoutChange(input,spec=inputSpec,now=Date.now()){
   }
   const summary=input.spreadsheet.sheets.find(x=>x.properties.sheetId===input.binding.summarySheetId);
   const last=columnLetter(newH.length-1);
-  const stack=input.binding.suppliers.map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
+  const stack=supplierTabs(input.binding.suppliers).map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
   // Rewrite the summary first so its spill never targets the columns deleted next.
   requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
   const width=summary.properties.gridProperties.columnCount;
   if(width>newH.length)requests.push({updateCells:{range:{sheetId:summary.properties.sheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:newH.length,endColumnIndex:width},fields:'userEnteredValue'}},{deleteDimension:{range:{sheetId:summary.properties.sheetId,dimension:'COLUMNS',startIndex:newH.length,endIndex:width}}});
-  return {status:'PLANNED',scope:'LAYOUT_CHANGE_LINK_DELETE_MOVE_NO_VALUE_REWRITE',from:rule.from,to:rule.to,tabs:input.binding.suppliers.length,platesLinked:linked,requests};
+  return {status:'PLANNED',scope:'LAYOUT_CHANGE_LINK_DELETE_MOVE_NO_VALUE_REWRITE',from:rule.from,to:rule.to,tabs:supplierTabs(input.binding.suppliers).length,platesLinked:linked,requests};
 }
 // Source policies stay in their original units. Blank/duplicate codes never
 // select a generic default. No inventory/monetary field is normalized here.
@@ -414,8 +428,8 @@ export function compareSharedToLegacy({shared,legacy,binding},spec=inputSpec,now
   const times=[shared?.capturedAt,...(legacy??[]).map(l=>l.capturedAt)].map(Date.parse);
   if(times.some(t=>!Number.isFinite(t)||t-now>1000||now-t>rule.maxCaptureSkewMinutes*60000))hold('Fresh captures required on both sides');
   const suppliers=binding?.suppliers??[];
-  if(!suppliers.length||new Set(suppliers.map(s=>s.code)).size!==suppliers.length||new Set(suppliers.map(s=>s.title)).size!==suppliers.length)hold('Unique supplier bindings required');
-  const notCompared=registered(suppliers,spec,false).map(r=>r.tab);
+  if(!suppliers.length||new Set(suppliers.map(s=>s.code)).size!==suppliers.length)hold('Unique supplier bindings required');
+  const notCompared=[...new Set(registered(suppliers,spec,false).map(r=>r.tab))];
   const legacyCodes=(legacy??[]).map(l=>l.code);
   if(new Set(legacyCodes).size!==legacyCodes.length)hold('One legacy capture per supplier code required');
   const unboundLegacy=legacyCodes.filter(c=>!suppliers.some(s=>s.code===c));
@@ -437,7 +451,10 @@ export function compareSharedToLegacy({shared,legacy,binding},spec=inputSpec,now
     if(src.complete!==true||src.tab!==rule.legacySourceTab){results.push({code:sup.code,title:sup.title,status:'LEGACY_UNREADABLE'});continue;}
     const named=(src.headers??[]).map(h=>text(h)).filter(h=>h!=='');
     if(new Set(named).size!==named.length){results.push({code:sup.code,title:sup.title,status:'LEGACY_UNREADABLE',reason:'duplicate legacy headers'});continue;}
-    const a=index(tab.rows??[],tab.headers),b=index(src.rows??[],src.headers??[]);
+    const members=spec.supplierChannels.sharedInputSheet.filter(r=>r.tab===sup.title),company=members.find(r=>r.code===sup.code)?.companyName;
+    if(members.length>1&&(tab.rows??[]).some(r=>r.some(v=>text(v)!=='')&&!members.some(m=>m.companyName===r[tab.headers.indexOf('회사명')])))hold('Shared tab company name unassigned');
+    const rows=members.length>1?(tab.rows??[]).filter(r=>r[tab.headers.indexOf('회사명')]===company):tab.rows??[];
+    const a=index(rows,tab.headers),b=index(src.rows??[],src.headers??[]);
     if(!b){results.push({code:sup.code,title:sup.title,status:'LEGACY_UNREADABLE',reason:`no ${rule.key} header`});continue;}
     const fields=Object.entries(rule.fieldMap).filter(([h,old])=>h!==rule.key&&src.headers.includes(old)); // key already matched after normalization
     const notInLegacy=Object.entries(rule.fieldMap).filter(([,old])=>!src.headers.includes(old)).map(([h])=>h);
@@ -467,7 +484,7 @@ function canonTabs(snapshot,spec){
   if(!Array.isArray(all)||!all.length)hold('Canon requires native Sheets GridData');
   if(book.spreadsheetId&&Object.values(specification.workbooks).some(w=>w.spreadsheetId===book.spreadsheetId))hold('Production F01/F86 is not an input workbook');
   if(new Set(all.map(s=>s.properties?.sheetId)).size!==all.length||new Set(all.map(s=>s.properties?.title)).size!==all.length)hold('Canon duplicate tabs');
-  const titles=[spec.summaryTitle,...spec.supplierChannels.sharedInputSheet.map(s=>s.tab)];
+  const titles=[spec.summaryTitle,...sharedTitles(spec)];
   const tabs=titles.map(t=>all.find(s=>s.properties?.title===t));
   if(tabs.some(t=>!t))hold('Canon registered tabs missing');
   // canonCaptureRequest reads formats only; a check without the value capture merged in must not run.
@@ -511,14 +528,14 @@ export function planExcludeSupplierTab(input,spec=inputSpec,now=Date.now()){
     tab.properties.hidden=true;archived.push(tab.properties.sheetId);
   }
   const verified=planSupplierInput(candidate,spec,now),last=columnLetter(spec.inputHeaders.length-1);
-  const stack=candidate.binding.suppliers.map(sup=>{
+  const stack=supplierTabs(candidate.binding.suppliers).map(sup=>{
     const tab=candidate.spreadsheet.sheets.find(s=>s.properties.sheetId===sup.sheetId),end=tab.properties.gridProperties.rowCount;
     if(!Number.isInteger(end)||end<2)hold('Supplier rowCount invalid');
     const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${end}`;
     return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;
   }).join(',');
   const formulaValue=`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`;
-  return {status:'PLANNED',scope:'EXCLUDED_SUPPLIER_ARCHIVE_AND_SUMMARY_ONLY',spreadsheetId:verified.spreadsheetId,supplierCount:candidate.binding.suppliers.length,requests:[
+  return {status:'PLANNED',scope:'EXCLUDED_SUPPLIER_ARCHIVE_AND_SUMMARY_ONLY',spreadsheetId:verified.spreadsheetId,supplierCount:candidate.binding.suppliers.length,tabCount:supplierTabs(candidate.binding.suppliers).length,requests:[
     {updateCells:{start:{sheetId:candidate.binding.summarySheetId,rowIndex:1,columnIndex:0},rows:[{values:[{userEnteredValue:{formulaValue}}]}],fields:'userEnteredValue'}},
     ...archived.map(sheetId=>({updateSheetProperties:{properties:{sheetId,hidden:true},fields:'hidden'}}))
   ]};
@@ -538,19 +555,25 @@ function canonCheck(c,h,spec){
   if(v.errorValue)return {bad:true,reason:'FORMULA_ERROR'};
   if(raw===undefined||raw==='')return {bad:false};
   const f=spec.valueFormats[h],s=String(raw),trim=s.trim(),fmt=canonNumberFormat(h,spec);
-  const finish=value=>{
+  const finish=(value,format=fmt)=>{
     const target=typeof value==='number'?{numberValue:value}:{stringValue:value};
-    const formatBad=fmt&&!canonEqual(c.userEnteredFormat?.numberFormat,fmt);
+    const formatBad=format&&!canonEqual(c.userEnteredFormat?.numberFormat,format);
     const valueBad=!canonEqual(c.userEnteredValue??v,target);
-    return {bad:Boolean(valueBad||formatBad),target,format:fmt,valueBad,formatBad};
+    return {bad:Boolean(valueBad||formatBad),target,format,valueBad,formatBad};
   };
   let out;
   if(f.kind==='date'){
-    let serial;
-    if(typeof raw==='number'&&Number.isInteger(raw))serial=raw;
-    else {const m=trim.match(/^(\d{4}|\d{2})([-.])\s*(\d{1,2})\2\s*(\d{1,2})$/);if(m){const y=Number(m[1])+(m[1].length===2?2000:0),mo=Number(m[3]),d=Number(m[4]),date=new Date(Date.UTC(y,mo-1,d));if(date.getUTCFullYear()===y&&date.getUTCMonth()===mo-1&&date.getUTCDate()===d)serial=(date.getTime()-Date.UTC(1899,11,30))/86400000;}}
-    const y=new Date(Date.UTC(1899,11,30)+(serial??NaN)*86400000).getUTCFullYear();
-    out=Number.isInteger(serial)&&y>=2000&&y<=2099?finish(serial):{bad:true,reason:'INVALID_OR_AMBIGUOUS_DATE'};
+    const month=typeof raw==='string'&&f.monthPattern==='yy.mm'?trim.match(/^(\d{4}|\d{2})[-.]\s*(\d{1,2})$/):null;
+    if(month){
+      const year=Number(month[1])+(month[1].length===2?2000:0),mo=Number(month[2]);
+      out=year>=2000&&year<=2099&&mo>=1&&mo<=12?finish(`${String(year).slice(-2)}.${String(mo).padStart(2,'0')}`,{type:'TEXT'}):{bad:true,reason:'INVALID_OR_AMBIGUOUS_DATE'};
+    }else{
+      let serial;
+      if(typeof raw==='number'&&Number.isInteger(raw))serial=raw;
+      else {const m=trim.match(/^(\d{4}|\d{2})([-.])\s*(\d{1,2})\2\s*(\d{1,2})$/);if(m){const y=Number(m[1])+(m[1].length===2?2000:0),mo=Number(m[3]),d=Number(m[4]),date=new Date(Date.UTC(y,mo-1,d));if(date.getUTCFullYear()===y&&date.getUTCMonth()===mo-1&&date.getUTCDate()===d)serial=(date.getTime()-Date.UTC(1899,11,30))/86400000;}}
+      const y=new Date(Date.UTC(1899,11,30)+(serial??NaN)*86400000).getUTCFullYear();
+      out=Number.isInteger(serial)&&y>=2000&&y<=2099?finish(serial):{bad:true,reason:'INVALID_OR_AMBIGUOUS_DATE'};
+    }
   }else if(['integer','decimal','year'].includes(f.kind)){
     const valid=typeof raw==='number'&&Number.isFinite(raw)&&raw>=0&&(f.kind==='decimal'||Number.isSafeInteger(raw));
     const numeric=(f.kind==='decimal'?/^(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)(?:\.\d{1,3})?$/:/^(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$/).test(trim);
@@ -650,7 +673,8 @@ function canonTabAudit(snapshot,spec){
         // Check each captured row against the authority; a minority drift must
         // not disappear just because the destination majority is correct.
         for(const r of t.rows.keys()){if(!r)continue;const actual=get(canonCell(t,r,i).userEnteredFormat,path);
-          add(t,item,`${h}:${r+1}`,expected,actual);
+          const cellExpected=path==='numberFormat'&&spec.valueFormats[h].kind==='date'?(canonCheck({...canonCell(t,r,i),userEnteredValue:canonValue(canonCell(t,r,i))},h,spec).format??expected):expected;
+          add(t,item,`${h}:${r+1}`,cellExpected,actual);
         }
         const expectedHeader=canonHeaderColor(spec,h,path,['font','wrap'].includes(item)?fixed:get(baseHeader,path));
         const actualHeader=get(canonCell(t,0,i).userEnteredFormat,path);
@@ -717,6 +741,7 @@ export function planTabConsistencyFix(snapshot,spec=inputSpec){
   for(const t of tabs){
     const range=(start,end,row=1,rowEnd=t.g.rowCount)=>({sheetId:t.id,startRowIndex:row,endRowIndex:rowEnd,startColumnIndex:start,endColumnIndex:end});
     runs(formats.map(f=>({format:f.body,paths:f.bodyPaths})),({format,paths:mask},start,end)=>requests.push({repeatCell:{range:range(start,end),cell:{userEnteredFormat:format},fields:mask.map(p=>`userEnteredFormat.${p}`).join(',')}}));
+    for(const [r,row] of t.rows){if(!r)continue;for(const [i,c] of row){const h=spec.inputHeaders[i];if(spec.valueFormats[h]?.kind!=='date')continue;const checked=canonCheck({...c,userEnteredValue:canonValue(c)},h,spec);if(checked.format?.type==='TEXT')requests.push({repeatCell:{range:range(i,i+1,r,r+1),cell:{userEnteredFormat:{numberFormat:checked.format}},fields:'userEnteredFormat.numberFormat'}});}}
     runs(formats.map(f=>f.header),(format,start,end)=>requests.push({repeatCell:{range:range(start,end,0,1),cell:{userEnteredFormat:format},fields:headerPaths.map(p=>`userEnteredFormat.${p}`).join(',')}}));
     runs(spec.inputHeaders.map(h=>({pixelSize:spec.columnWidths[h]??spec.defaultColumnWidth,hiddenByUser:spec.hiddenHeaders.includes(h)})),(properties,startIndex,endIndex)=>requests.push({updateDimensionProperties:{range:{sheetId:t.id,dimension:'COLUMNS',startIndex,endIndex},properties,fields:'pixelSize,hiddenByUser'}}));
     requests.push({updateSheetProperties:{properties:{sheetId:t.id,gridProperties:{frozenRowCount:spec.frozenRowCount,frozenColumnCount:spec.frozenColumnCount}},fields:'gridProperties.frozenRowCount,gridProperties.frozenColumnCount'}});
@@ -738,7 +763,7 @@ function canonCaptureTabs(spec,metadata){
   const book=metadata.spreadsheet??metadata;
   if(!Array.isArray(book.sheets))hold('Capture metadata sheets required');
   if(Object.values(specification.workbooks).some(w=>w.spreadsheetId===book.spreadsheetId))hold('Production F01/F86 is not an input workbook');
-  return [spec.summaryTitle,...spec.supplierChannels.sharedInputSheet.map(s=>s.tab)].map(title=>{
+  return [spec.summaryTitle,...sharedTitles(spec)].map(title=>{
     const matches=book.sheets.filter(s=>s.properties?.title===title);
     if(matches.length!==1)hold(`Capture metadata tab missing or duplicate: ${title}`);
     const tab=matches[0],g=tab.properties.gridProperties;

@@ -392,6 +392,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 남음: 전체 검사 환경 오류 및 Claude 독립 검토. Canonical에 없는 입력은 reasonCode 있는 UNKNOWN; 운영 근거 수집·재저장·배포 미실행. 별도 권한/승인을 만들지 않았다.
 - next_start_here: Claude가 최종 diff·READ-RUNTIME 두 대응표·검사 결과를 읽고 정상 실행 환경에서 전체 check 및 독립 검토 후 커밋한다. Codex는 커밋하지 않았다.
 
+### 2026-10-04 공급사 관계사 15탭·연월 허용 — 로컬 변경 / 전체 검사 HOLD
+
+- 목적: 대표·AI 상황실의 관계사 탭 통합 및 일 미상 `yy.mm` 결정을 기존 공급사 시트 규격·계획기에 반영.
+- 대상 revision: `6fdae3146c521a723e4206880ac8acd0ffe08987`, `work/freepass-data/supplier-sheet-drop-account-20261004` / 사용자 지정 PR #299. Git 쓰기·fetch·구글·운영 데이터 접속 없이 작업 트리만 수정. Academy READY.
+- 변경: `sharedInputSheet`는 18개 코드의 `{code, tab, companyName}` 대응이며 물리 탭은 15개. 경진카·엘씨·스카이·마음카 숨김 보관 기록, 물리 탭별 계획·캡처·종합 중복 제거, 회사명 감사, 연월 TEXT 정규화와 서식 보존, 입력 불변 회귀. 운영 기록은 사용자 전달이며 재검증하지 않음.
+- 검증: `npm.cmd run check:sheets` 87/87 PASS(공급사 전용 62개). 전체 `npm.cmd run check`의 architecture·standards 검사·data-access boundary·시트·build·runtime smoke 6·shadow 10·dashboard 21 통과. 최종 Vitest 1265 PASS / 9 FAIL / 14 SKIP(119파일 중 111 PASS / 4 FAIL / 4 SKIP). standards 자체 성숙도는 기존 PARTIAL/미해결 9개 유지.
+- 남음: 전체 검사 실패는 iancar-source-capture / read-pilot / runtime-policy / vehicle-finder-route 4파일. `tsx` 초기화의 `uv_os_get_passwd ENOMEM`, `jq Permission denied`, 로컬 서버 ECONNREFUSED를 관측. `node:os.userInfo()` 단독으로도 ENOMEM 재현. 14 SKIP은 Firestore emulator 미설정 10개와 Windows workflow 4개. Claude 독립 검토는 `CLAUDE_PROCESS_FAILED`로 FAILED이며 PASS 아님.
+- next_start_here: 로컬 diff와 공급사 런북의 최신 규칙·운영 기록을 검토하고 실행 환경 복구 후 전체 check 및 Claude 검토를 재실행한다. 이번 작업은 commit/배포/운영 적용을 포함하지 않는다.
+
 
 ### 2026-10-04 공동 입력시트 계좌번호 제외 — 로컬 수정 / 운영 미적용
 

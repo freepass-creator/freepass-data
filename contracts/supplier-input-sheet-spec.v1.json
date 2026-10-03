@@ -653,7 +653,7 @@
   "valueConventions": {
     "빈칸": "미확인; 0·없음·무료와 구분",
     "정본": "valueFormats는 inputHeaders 전체 칸과 일치; 짧게, 단위는 이름 또는 값 끝 한 번",
-    "날짜": "숫자 날짜 serial + DATE yy.mm.dd; 2000~2099만 자동 정리",
+    "날짜": "일을 알면 DATE serial + yy.mm.dd, 일 모르면 연월 TEXT yy.mm; 2000~2099, 월 1~12만 자동 정리; 일 추정 금지",
     "연령": "만 N세; 기본연령은 하한, 최대연령은 상한",
     "면허기간": "N년(최소 경력); 이상 생략",
     "금액": "대여료·보증금·차량가격: 원 단위 정수 #,##0; 정책: 10만원. 단위 없는 정책 숫자 추정 금지",
@@ -2027,79 +2027,97 @@
     "sharedInputSheet": [
       {
         "code": "RP013",
-        "tab": "웰릭스"
+        "tab": "웰릭스",
+        "companyName": "웰릭스"
       },
       {
         "code": "RP020",
-        "tab": "우리캐피탈"
+        "tab": "우리캐피탈",
+        "companyName": "우리캐피탈"
       },
       {
         "code": "RP010",
-        "tab": "KH"
+        "tab": "KH",
+        "companyName": "KH"
       },
       {
         "code": "RP008",
-        "tab": "리더스"
+        "tab": "리더스",
+        "companyName": "리더스"
       },
       {
         "code": "RP030",
-        "tab": "제이앤제이"
+        "tab": "제이앤제이",
+        "companyName": "제이앤제이"
       },
       {
         "code": "RP032",
-        "tab": "에코"
+        "tab": "에코",
+        "companyName": "에코"
       },
       {
         "code": "RP017",
-        "tab": "센트로"
+        "tab": "센트로",
+        "companyName": "센트로"
       },
       {
         "code": "RP022",
-        "tab": "퍼시픽"
+        "tab": "퍼시픽",
+        "companyName": "퍼시픽"
       },
       {
         "code": "RP011",
-        "tab": "연카"
+        "tab": "연카",
+        "companyName": "연카"
       },
       {
         "code": "RP014",
-        "tab": "스위치플랜"
+        "tab": "스위치플랜",
+        "companyName": "스위치플랜"
       },
       {
         "code": "PT-0001",
-        "tab": "렌트존"
+        "tab": "렌트존",
+        "companyName": "렌트존"
       },
       {
         "code": "PT-0023",
-        "tab": "에스에이"
+        "tab": "에스에이",
+        "companyName": "에스에이"
       },
       {
         "code": "RP021",
-        "tab": "빌린카"
+        "tab": "빌린카",
+        "companyName": "빌린카"
       },
       {
         "code": "PT-0026",
-        "tab": "엘씨"
+        "tab": "빌린카",
+        "companyName": "엘씨"
       },
       {
         "code": "RP018",
-        "tab": "스타"
+        "tab": "스타",
+        "companyName": "스타"
       },
       {
         "code": "RP033",
-        "tab": "스카이"
+        "tab": "스타",
+        "companyName": "스카이"
       },
       {
         "code": "RP016",
-        "tab": "경진카"
+        "tab": "경진",
+        "companyName": "경진카"
       },
       {
         "code": "RP015",
-        "tab": "경진"
+        "tab": "경진",
+        "companyName": "경진"
       }
     ],
     "sharedFiles": {
-      "note": "기존 제공시트 한 파일을 둘이 같이 쓰는 공급사. 공동 시트에서는 탭이 따로다",
+      "note": "관계사 공급사 코드 묶음. 각 pairs의 코드는 공동 입력시트에서도 한 탭을 공유하고 회사명 칸으로 구분한다. 공급사→탭→회사명 정본은 sharedInputSheet다.",
       "pairs": [
         [
           "RP015",
@@ -2147,7 +2165,7 @@
         "detail": "공급사 자체 원본 시트를 읽음. 공동 시트 대상 아님(2026-10-03 대표 결정)"
       }
     ],
-    "legacyAuthority": "전환 전 운영 수집 목록은 ERP4 lib/domain/inventory-source-registry.ts(고정 엔진 fe3eccc)의 generic-sheet 19곳이다. 현재 공동 시트는 2026-10-03 대표 결정으로 RP034 마음카를 제외한 18곳이다",
+    "legacyAuthority": "전환 전 운영 수집 목록은 ERP4 lib/domain/inventory-source-registry.ts(고정 엔진 fe3eccc)의 generic-sheet 19곳이다. 현재 공동 시트는 2026-10-03 대표 결정으로 RP034 마음카를 제외한 18개 코드이며 2026-10-04 관계사 통합 후 15탭이다",
     "openConflicts": [
       "src/domain/source-intake.ts의 welrix-sheet(RP013) 어댑터는 웰릭스 기존 제공시트 전용이다. 웰릭스는 공동 시트 대상이므로 이 어댑터는 전환 전 대조용으로만 쓰고 새 원천으로 연결하지 않는다"
     ],
@@ -2158,6 +2176,31 @@
         "code": "RP034",
         "tab": "마음카",
         "decision": "2026-10-03 대표: 공동 시트 제외, 탭 숨김 보관, 수수료 규칙 없음"
+      }
+    ],
+    "archivedTabs": [
+      {
+        "tab": "경진카",
+        "sheetId": 8116,
+        "code": "RP016",
+        "mergedInto": "경진"
+      },
+      {
+        "tab": "엘씨",
+        "sheetId": 8113,
+        "code": "PT-0026",
+        "mergedInto": "빌린카"
+      },
+      {
+        "tab": "스카이",
+        "sheetId": 8115,
+        "code": "RP033",
+        "mergedInto": "스타"
+      },
+      {
+        "tab": "마음카",
+        "code": "RP034",
+        "reason": "EXCLUDED_FROM_SHARED_SHEET"
       }
     ]
   },
@@ -2354,7 +2397,9 @@
       "pattern": "yy.mm.dd",
       "example": "26.10.03",
       "unit": "",
-      "normalize": "DATE serial; 2000..2099 only; invalid/ambiguous HOLD"
+      "normalize": "일을 알면 DATE serial yy.mm.dd; 일 모르면 yy.mm TEXT; 2-digit year = 2000s; 2000..2099, month 1..12; invalid/ambiguous HOLD",
+      "monthPattern": "yy.mm",
+      "monthType": "TEXT"
     },
     "차량상태": {
       "kind": "enum",
@@ -2645,7 +2690,9 @@
       "pattern": "yy.mm.dd",
       "example": "26.10.03",
       "unit": "",
-      "normalize": "DATE serial; 2000..2099 only; invalid/ambiguous HOLD"
+      "normalize": "일을 알면 DATE serial yy.mm.dd; 일 모르면 yy.mm TEXT; 2-digit year = 2000s; 2000..2099, month 1..12; invalid/ambiguous HOLD",
+      "monthPattern": "yy.mm",
+      "monthType": "TEXT"
     },
     "예외사항": {
       "kind": "text",
