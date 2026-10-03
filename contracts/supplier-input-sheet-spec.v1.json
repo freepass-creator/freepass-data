@@ -941,12 +941,14 @@
         "code": "RP004",
         "name": "아이카",
         "channel": "OWN_SOURCE_SHEET",
-        "detail": "공급사 자체 원본 시트를 읽음 — 공동 시트로 옮길지 미정(HOLD)"
+        "detail": "공급사 자체 원본 시트를 읽음. 공동 시트 대상 아님(2026-10-03 대표 결정)"
       }
     ],
     "legacyAuthority": "전환 전 운영 수집 목록은 ERP4 lib/domain/inventory-source-registry.ts(고정 엔진 fe3eccc)이며 sharedInputSheet 19곳은 그 generic-sheet 공급사와 같다",
     "openConflicts": [
       "src/domain/source-intake.ts의 welrix-sheet(RP013) 어댑터는 웰릭스 기존 제공시트 전용이다. 웰릭스는 공동 시트 대상이므로 이 어댑터는 전환 전 대조용으로만 쓰고 새 원천으로 연결하지 않는다"
-    ]
+    ],
+    "membershipRule": "2026-10-03 대표 결정: 공동 시트에는 프리패스가 제공한 시트를 쓰던 공급사만 둔다. ERP·API·홈페이지 연동 공급사와 아이카(자체 원본 시트)는 모두 뺀다. notInSharedSheet 공급사가 공동 시트에 묶이면 실행기는 HOLD한다.",
+    "exclusionVerifiedAt": "2026-10-03 Codex 구글 커넥터 읽기 전용: 5곳 탭 0, 공급사 탭·종합 회사명에 5곳 0행, 정책원문·정책확인에 5곳 코드·이름 0행, 관리안내에 직접 연동 업체 제외 문구 있음"
   }
 }

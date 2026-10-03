@@ -9,6 +9,8 @@ const hold = message => { throw new Error(`HOLD: ${message}`); };
 const registered = (suppliers, spec, requireAll) => {
   const list=spec.supplierChannels?.sharedInputSheet??[];
   if(!list.length)hold('Spec supplierChannels.sharedInputSheet required');
+  const excluded=suppliers.filter(s=>(spec.supplierChannels.notInSharedSheet??[]).some(r=>r.code===s.code||r.name===s.title));
+  if(excluded.length)hold(`Direct/own-sheet supplier is excluded from the shared sheet: ${excluded.map(s=>`${s.title}/${s.code}`).join(', ')}`);
   const bad=suppliers.filter(s=>!list.some(r=>r.code===s.code&&r.tab===s.title));
   if(bad.length)hold(`Unregistered or mismatched supplier tab: ${bad.map(s=>`${s.title}/${s.code}`).join(', ')}`);
   const missing=list.filter(r=>!suppliers.some(s=>s.code===r.code));
