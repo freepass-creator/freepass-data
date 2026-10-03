@@ -57,11 +57,20 @@ engine is incompatible with current ONE-owned inventory. No new store or engine 
 
 ## 직접 연동 공급사 현황 — 2026-10-03
 
+### 오더 4 — 전 공급사 수집 중계 일반화 (PR #288, 운영 HOLD)
+
+- 최신 구현은 `supplier-relay.ts`, `supplier-relay-transport.ts`, `serve-supplier-relay.ts`, `serve:supplier:relay`다. Cloud Run `supplier-collect-relay`, SA `supplier-relay-runtime`/`supplier-relay-scheduler`, `SUPPLIER_RELAY_*`, `supplier-relay/v1/`를 사용한다. 아래 오더2/과거 설계의 factory-only·App 발급 설명은 당시 이력이며 현재 구현 근거가 아니다.
+- `SUPPLIER_RELAY_ALLOWLIST`의 job 이름만 받으며 본문 `{}` 고정. iancar-15m과 hourly-all은 writer 그룹 pending 하나를 공유한다. hourly-all은 자동 회차와 같은 이안카 fresh sync를 요청할 dispatch 조합이 없어 HOLD 정의만 둔다.
+- dispatch 후 자기 run을 제외한 미완료 run 재조회, 겹침 UNKNOWN/OVERLAP 및 pending 유지, cancelled/실패 자동 재전송 금지. ERP4 cadence 조회와 queue 입장은 원자적이지 않다. Scheduler 확인 후 ERP4 cron 제거는 별도 승인이다.
+- `/verify`는 OIDC 인증·config·기존 Secret 읽기·GCS 읽기·GitHub 목록 읽기만 수행한다. selftest는 별도 prefix의 조건부 생성 **쓰기1건**이다. 이 검증과 모든 HOLD 해소 전에 Scheduler resume 금지.
+- 항목별 `supplier-relay-status/v1`과 필수 exact-object pending CAS IAM, yml revision/줄 근거, 운영 절차는 [공급사 수집 중계 배포 절차](deploy/supplier-collect-relay-배포절차.md)를 따른다. status 최신 파일 덮어쓰기와 create+read-only IAM 요구는 충돌하므로 사용자 결정 전 활성 HOLD.
+- 검증: 관련51 PASS, 전체 check 빌드 통과 후 Vitest1210 PASS/9 FAIL/14 SKIP(환경 오류 별도 인계). 원격 yml 읽기는 네트워크 차단, 로컬 ERP4 origin/main `094155bd`만 확인했다. Claude 독립 검토는 `CLAUDE_PROCESS_FAILED`로 미검증.
+
 ### 오더 2 — Data native 수리 (코드만, 운영 미적용)
 
 - 결정: **ERP4 최소 diff 미채택(Data native로 이관)**. 아래 진단과 과거 diff는 이력이며 고정 엔진을 수정하지 않는다.
 - 대상: `work/freepass-data/supplier-native-fixes-20261003`, 기반 `5b1d430d7f6e465a7a6379de1a59754286025264` (PR #287 문서 위). 이 checkout만 수정, commit/push 없음. git/gh 네트워크는 차단됐으나 GitHub connector로 Issue #24, PR #287 merged, main `21f1511878efc9fe8a9fc664142c3d2f552a1031`을 확인했다. open PR 검색 0건. 기반 대비 main의 추가 변경은 공동 시트 dropdown 관련 4파일로 이번 변경과 겹치지 않는다. main merge/rebase는 하지 않았다.
-- 재사용: `reuse:check` 검색 후 `CREATE_NEW_JUSTIFIED` PASS. `supplier-source-capture.ts`, `SourceIntakeBatch`, 공통 검사와 기존 테스트는 COMPOSE_OR_EXTEND. 새 `src/infra/aica-sheet-reader.ts`는 기존 values/presentation reader가 공급사 rich-cell RAW 계약을 제공하지 않아 분리했다. 인증은 기존 Data ADC 해석 경로와 `firebase-target.ts::resolveTargetProject`를 재사용하며 Firebase app을 추가하지 않는다. 새 `src/api/iancar-scheduler-relay.ts`는 기존 수집/발행 writer와 다른 HTTP 입장 제어 책임이며 해당 서비스가 없어 신규 정당화했다. 영수증은 주입 포트뿐이고 두 번째 source store가 아니다. 새 fixture 테스트는 실제 사이트/운영 접근 없이 이 두 경계를 검증하기 위한 것이다. 수정 전 Academy READY(11:15:42Z); 신규 인자를 붙인 재조회(11:25:30Z)는 이번 변경 자체의 dirty 경고 `DIRTY_WORKTREE_REVIEW_REQUIRED`로 HOLD였다. 최초 clean 상태 및 본 작업 diff를 재확인했고 타 작업 변경 없음; clean 재실행을 위해 commit/reset하지 않았다. 재조회 HOLD를 READY로 기록하지 않는다.
+- 재사용: `reuse:check` 검색 후 `CREATE_NEW_JUSTIFIED` PASS. `supplier-source-capture.ts`, `SourceIntakeBatch`, 공통 검사와 기존 테스트는 COMPOSE_OR_EXTEND. 새 `src/infra/aica-sheet-reader.ts`는 기존 values/presentation reader가 공급사 rich-cell RAW 계약을 제공하지 않아 분리했다. 인증은 기존 Data ADC 해석 경로와 `firebase-target.ts::resolveTargetProject`를 재사용하며 Firebase app을 추가하지 않는다. 새 `src/api/supplier-relay.ts`는 기존 수집/발행 writer와 다른 HTTP 입장 제어 책임이며 해당 서비스가 없어 신규 정당화했다. 영수증은 주입 포트뿐이고 두 번째 source store가 아니다. 새 fixture 테스트는 실제 사이트/운영 접근 없이 이 두 경계를 검증하기 위한 것이다. 수정 전 Academy READY(11:15:42Z); 신규 인자를 붙인 재조회(11:25:30Z)는 이번 변경 자체의 dirty 경고 `DIRTY_WORKTREE_REVIEW_REQUIRED`로 HOLD였다. 최초 clean 상태 및 본 작업 diff를 재확인했고 타 작업 변경 없음; clean 재실행을 위해 commit/reset하지 않았다. 재조회 HOLD를 READY로 기록하지 않는다.
 - RP004: `aicaSourceAdapter`는 승인된 복수 탭의 grid reader 패턴을 재사용한다. 셀의 typed/formatted/formula 값과 hyperlink / textFormat.link / textFormatRuns 링크를 그대로 보존한다. RAW ID는 sheet+tab+physical row+원문 plate 조합이고 Canonical PK가 아니다. 빈 plate, 정규화 비교상 중복 plate, 여러 plate가 공유한 URL, 알려진 단축 URL은 `captureIssues`와 공통 HOLD. 모든 링크의 `photoState=UNKNOWN`, `image_urls`로 승격하지 않는다. 알 수 없는 단축 서비스도 사진으로 승인되지 않는다.
 - Sheets transport: `spreadsheets.get(includeGridData=true)` + 최소 fields + 승인된 A1 범위만. 단일 응답의 sheet/tab/offset/크기를 확인하며 리디렉션·재시도 없음. 기존 ADC에 Sheets 읽기 scope/원본 권한이 없으면 HOLD(새 키 생성 금지). HTTP 읽기 시각은 공급사 변경시각이 아니며 reader는 `complete=false, expectedRows=null`; live 연결·전체 재고/신선도 증명은 별도다.
 - 인증 의존성: lockfile에 이미 있던 `google-auth-library@10.9.1`을 직접 의존성으로 선언했다(기존 transitive version/integrity 유지). Firebase 기본 Cloud scope를 Sheets 권한으로 오인하지 않고 같은 ADC에 `spreadsheets.readonly`를 요청한다. 사용자 ADC의 기존 grant가 부족하면 재로그인/새 키 없이 HOLD한다. [Sheets scope](https://developers.google.com/workspace/sheets/api/scopes), [ADC 동작](https://docs.cloud.google.com/docs/authentication/application-default-credentials). offline npm 설치는 metadata cache 부재 `ENOTCACHED`; package/lock root 선언만 일치시켰으며 clean install 검증은 미실행이다.
@@ -92,8 +101,8 @@ Data RP012 전용 runtime SA **한 개만 accessor**로 지정하고 그 secret 
 
 1. 독립 검토와 정상 환경 전체 `npm run check`를 완료한다. 이 환경에서는 기존 9개 테스트가 `uv_os_get_passwd ENOMEM`/jq 권한/로컬 서버 연결 오류로 실패했다. 새 transport를 포함한 전용 검사는 통과했지만 전체 통과나 운영 검증으로 확대하지 않는다.
 2. 중계의 환경변수 binding(audience·Scheduler SA email·jobName·기존 private evidence bucket·기존 단일 Secret 이름/버전)을 운영 담당자가 검증한다. 기본 열쇠는 고정 저장소 하나의 Actions 쓰기 전용 fine-grained PAT이며 `actionsToken` 포트가 메모리로 읽는다. 실제 권한 범위는 mock으로 증명되지 않는다. 중계에는 Firestore/Sheets/ONE 권한을 주지 않는다.
-3. 기존 bucket의 `iancar-relay/v1` namespace와 최소 권한을 검토하고, 별도 승인 환경에서 immutable receipt/outcome/completion의 create-only와 단일 pending 객체의 generation CAS를 검증한다. pending은 삭제하지 않고 빈 상태도 CAS로 기록하며 lease 만료가 없다. RESERVED/UNKNOWN 장기 보류와 응답 유실은 별도 대사 대상이다. 실제 GCS persistence·동시 인스턴스·장애 복구/수동 해제는 HOLD다.
-4. `serve:iancar:relay`의 image/startup·OIDC·정확한 repo/workflow run 조회·`return_run_details=true` 응답 계약을 승인된 환경에서 확인한다. 페이지 잘림/404/응답 run ID 누락은 UNKNOWN, dispatch 재시도는 없다. 현재 고정 입력은 실제 반영이므로 최초 read-only 검증에는 별도로 검토된 validation artifact가 필요하다. 배포/IAM/Scheduler 생성·설정·dispatch는 별도 승인 전 금지다.
+3. 기존 bucket의 `supplier-relay/v1` namespace와 최소 권한을 검토하고, 별도 승인 환경에서 immutable receipt/outcome/completion의 create-only와 writer 그룹별 pending 객체의 generation CAS를 검증한다. pending은 삭제하지 않고 빈 상태도 CAS로 기록하며 lease 만료가 없다. RESERVED/UNKNOWN 장기 보류와 응답 유실은 별도 대사 대상이다. 실제 GCS persistence·동시 인스턴스·장애 복구/수동 해제는 HOLD다.
+4. `serve:supplier:relay`의 image/startup·OIDC·정확한 repo/workflow run 조회·`return_run_details=true` 응답 계약을 승인된 환경에서 확인한다. 페이지 잘림/404/응답 run ID 누락은 UNKNOWN, dispatch 재시도는 없다. 현재 고정 입력은 실제 반영이므로 최초 read-only 검증은 `/verify` 경로만 사용한다. 배포/IAM/Scheduler 생성·설정·dispatch는 별도 승인 전 금지다.
 5. `source:aica:capture`의 승인된 탭/range binding과 읽기 권한, 원문 귀속·신선도·전체성 근거를 확인한다. 기본 출력은 counts/digest/issues뿐이다. `AICA_RAW_INGEST_APPROVED=true`와 `--apply-raw`가 함께 있어도 공통 RAW_READY 검사를 통과해야 기존 SourceIngestionStore 경로로 들어간다. 현재 Sheets reader는 FULL coverage를 증명하지 않으므로 실제 RAW 저장은 HOLD다.
 6. 아이언은 공개 화면 규칙과 대상 차량을 먼저 확정한다. `IRON_FETCH_APPROVED=true` 없이는 robots 요청도 하지 않는다. reader는 명시적인 wildcard 허용 robots만 보수적으로 수용하며 제한/미지원 규칙/조회 실패는 HOLD다. 승인 시에도 동시 2 이하·차량당 1회·명시 User-Agent·리다이렉트 금지를 유지한다. 실제 원문/요금/사진 귀속과 전체성 검증은 별도다.
 7. 기존 writer를 유지한 채 hourly admission 경합·중복 전달·crash/pending·source stale/last-good와 F01/F86/등록 소비처 readback을 별도 승인 후 검증한다. 중계 접수는 갱신 성공이나 native cutover 증거가 아니다. rollback은 새 Scheduler 중단과 pending 증거 보존이며 운영 writer 전환이 아니다.
@@ -172,7 +181,7 @@ F86 `아이카 82대`(gid529956002)의 헤더 `A1:AL1`, 차량번호 `D2:D113`�
 
 | 안 | 무엇이 무엇을 호출하는가 | 인증/비밀 | 단일 writer 영향 / 판정 |
 |---|---|---|---|
-| 현재 운영의 최소안 | freepasserp5 Cloud Scheduler → OIDC 인증 private Cloud Run 중계 → GitHub 기존 `erp5-ssot-refresh.yml` workflow_dispatch | 중계가 Secret Manager의 GitHub App private key를 읽고 해당 저장소 설치 토큰을 짧게 발급. Scheduler 설정에는 GitHub 토큰 없음 | 기존 동일 저장소 cadence와 `erp5-inventory-publish` 유지. ERP4 코드 추가 없이 기존 입력 재사용. 구현/배포/생성 미실행 |
+| 현재 운영의 최소안 | freepasserp5 Cloud Scheduler → OIDC 인증 private Cloud Run 중계 → GitHub 기존 `erp5-ssot-refresh.yml` workflow_dispatch | 중계가 기존 Secret Manager 버전1에서 해당 저장소용 Actions PAT를 메모리로 읽음. Scheduler 설정에는 GitHub 토큰 없음 | 기존 cadence와 `erp5-inventory-publish` 유지. 일반 중계 구현은 위 오더4를 따르며 배포/생성 미실행 |
 | 직접 repository_dispatch | Scheduler → GitHub `erp5_refresh_watchdog` | Google OIDC는 GitHub 인증이 아님. PAT/App token 전달·갱신 경로 필요; repository dispatch는 Contents write 요구 | 현재 event는 전체 공급사 회차로 분기해 iancar-only가 아님. 부적합 |
 | 목표 native 운영 | Scheduler → OAuth → Data-owned Cloud Run Job 실행 API → 기존 Data ONE collector | Scheduler SA에 해당 job의 run.invoker; job SA에 해당 ONE secret 읽기와 승인된 대상 권한 | GitHub concurrency와 잠금 공유 안 됨. 기존 writer 중지/drain/IAM fencing 및 native publication parity 뒤에만 가능. 지금 활성화 금지 |
 
@@ -184,11 +193,11 @@ ref: main
 inputs: {iancar_only: true, iancar_apply: true, apply: false, target: ALL}
 ```
 
-`apply=false`는 dry-run이라는 뜻이 아니다. 이 조합은 **새 ONE 수집 후 실제 반영**이며 오래된 ready snapshot replay를 막는다. 실제 적용 승인은 별도다. 중계는 임의 repo/ref/input을 받지 않고 이 조합만 허용한다. 미래 첫 검증 회차는 `iancar_apply=false`로 구분하고 실제 반영 성공으로 세지 않는다.
+`apply=false`는 dry-run이라는 뜻이 아니다. 이 조합은 **새 ONE 수집 후 실제 반영**이며 오래된 ready snapshot replay를 막는다. 실제 적용 승인은 별도다. 중계는 임의 repo/ref/input을 받지 않고 이 조합만 허용한다. 최초 검증은 `/verify`로만 수행하며 dispatch·GCS 쓰기를 하지 않는다. 호출자가 iancar_apply를 바꾸는 경로는 없다.
 
-- 주기 후보 `2,17,32,47 * * * *`, timezone UTC. :17은 전체 회차와 충돌 가능하므로 중계와 기존 cadence 모두 busy면 양보한다. 기존 GitHub 15분 schedule 비활성화는 별도 승인·변경 사항이다. hourly/watchdog는 유지하되 같은 writer에 합류한다.
-- 최소 IAM: Scheduler 호출 SA는 **중계 서비스에만** `roles/run.invoker`; Scheduler service agent의 정상 `roles/cloudscheduler.serviceAgent` 유지. 중계 runtime SA는 **GitHub App key secret 하나에만** `roles/secretmanager.secretAccessor`. 중계에는 Firestore/Sheets/ONE API 접근권한을 주지 않는다. App은 ERP4 저장소 하나의 Actions write(+기본 Metadata read); contents write 불필요. App ID/installation ID/repo/workflow/ref는 비밀이 아닌 고정 config다. 배포자가 필요한 actAs/배포권한은 runtime SA에 부여하지 않는다.
-- 중복 방지: Scheduler는 at-least-once이므로 jobName+scheduleTime을 idempotency key로 삼고 create-only 실행 영수증 저장을 설계한다. 최소 추가권한은 전용 비공개 receipt bucket에 object create/get만(기존 증거 저장소 재사용 검토). dispatch 응답이 불명확하면 재전송하지 않고 UNKNOWN으로 보류한다. 새 API의 run ID 응답을 저장하고, 응답 없는 구버전은 Actions 조회로 대사한다. 발급 토큰/키는 로그·영수증에 남기지 않는다.
+- 주기 후보 `2,17,32,47 * * * *`, timezone UTC. :17은 전체 회차와 충돌할 수 있다. 중계의 사전 조회와 ERP4 cadence는 관측 당시 busy일 때만 양보하며 원자적 입장을 보장하지 않는다. 기존 GitHub 15분 schedule 비활성화는 별도 승인·변경 사항이다. hourly/watchdog는 유지하되 같은 writer에 합류한다.
+- 최소 IAM: Scheduler 호출 SA는 **중계 서비스에만** `roles/run.invoker`; Scheduler service agent의 정상 `roles/cloudscheduler.serviceAgent` 유지. 중계 runtime SA는 **기존 Actions PAT secret 하나에만** `roles/secretmanager.secretAccessor`. 중계에는 Firestore/Sheets/ONE API 접근권한을 주지 않는다. PAT는 ERP4 저장소 하나의 Actions write(+Metadata read) 범위이며 contents write는 불필요하다. repo/workflow/ref는 코드 허용 목록으로 고정한다. 배포자가 필요한 actAs/배포권한은 runtime SA에 부여하지 않는다.
+- 중복 방지: Scheduler는 at-least-once이므로 jobName+scheduleTime을 idempotency key로 삼고 create-only 실행 영수증 저장을 설계한다. 영수증은 기존 비공개 bucket의 전용 prefix create/read, pending은 정확한 그룹 객체의 objectUser CAS 권한이 필수다. status 최신 파일과 create/read-only 요구 충돌은 배포 절차의 HOLD를 따른다. dispatch 응답이 불명확하면 재전송하지 않고 UNKNOWN으로 보류한다. 새 API의 run ID 응답을 저장하고, 응답 없는 구버전은 Actions 조회로 대사한다. 발급 토큰/키는 로그·영수증에 남기지 않는다.
 - 중계 max instances1/concurrency1만으로는 durable 중복 방지가 되지 않는다. run 종료를 기다리는 pending admission을 기록하고 미완료 회차가 있으면 새 dispatch를 건너뛴다. Actions run 조회 실패/페이지 잘림/응답 불명확은 양보/HOLD로 처리한다.
 - 실제 잠금은 기존 workflow의 job-level `erp5-inventory-publish`, cancel-in-progress=false. 이안카 cadence는 자신 외 미완료 run이 있으면 `IANCAR_YIELDED_TO_EXISTING_WRITER`로 종료한다. **현재 조회는 per_page=100이며 precheck→queue가 원자적이지 않다.** 새 scheduler가 이 한계를 없앴다고 주장하지 않는다. hourly와 입장 경합 시 GitHub pending 교체 위험을 검증해야 하며, 양보/중복/시작 경합 시험 전 rollout HOLD.
 - Data `data-owned-refresh.yml`은 owner 미전환에 더해 `e6727ff` 구 engine pin을 사용한다. `data-delivery-owner.mjs`는 legacy workflow disabled+drained, IAM/key fencing, 65분 drain, Data main Actions 환경을 요구한다. Cloud Run에 그대로 실행하거나 owner var만 전환하면 안 된다. 새 수집 writer를 legacy와 병행하지 않는다.
@@ -229,7 +238,7 @@ ERP4는 수정하지 않았다. 아래 과거 최소 diff 제안은 대표 결�
 - 전체 check: Codex 샌드박스에서는 환경 오류(`uv_os_get_passwd`, jq Permission denied, 로컬 서버 ECONNREFUSED)로 Vitest 9 FAIL. 같은 트리를 Claude가 정상 환경에서 `npm run check` 재실행 → **exit0, Vitest 1168 PASS / 14 SKIP**, build PASS. 이 변경은 문서 전용이다.
 - 검토: Codex 쪽 Claude runner 호출은 실패했으나, 오더를 낸 Claude 세션이 이 절의 diff를 직접 읽고 확인했다(문서 전용, 운영 변경0). 설계안 자체의 실행 승인은 별도다.
 - HOLD: 아이언 5대 원문 요금과 13대 사진, 아이카 미매칭33대 및 6대 링크 귀속/소비처 재대사, 두 수수료/정책 계산 입력, native transport, Scheduler admission 경합/실행 증거.
-- 필요한 것: RP031 기존 ONE secret의 승인된 runtime 접근(신규 키 누락으로 단정하지 않음)과 공급사 fresh 응답; RP012 Data runtime용 승인된 계정 주입/토큰 갱신 transport; RP006 공개 규칙/페이지를 읽을 수 있는 연결; RP023 공개 규칙과 허용 세션 reader; RP004 rich-cell reader·원자 readback(원본 connector 접근은 이미 성공). Scheduler 중계는 App 설치/키 보관·전용 IAM 검토가 필요하나 생성 금지 유지.
+- 필요한 것: RP031 기존 ONE secret의 승인된 runtime 접근(신규 키 누락으로 단정하지 않음)과 공급사 fresh 응답; RP012 Data runtime용 승인된 계정 주입/토큰 갱신 transport; RP006 공개 규칙/페이지를 읽을 수 있는 연결; RP023 공개 규칙과 허용 세션 reader; RP004 rich-cell reader·원자 readback(원본 connector 접근은 이미 성공). 공급사 수집 중계는 기존 PAT Secret 버전1 접근·전용 IAM 검토가 필요하며 생성 금지 유지.
 - next_start_here: 이 절의 사진 대사부터 이어서 원본/F86를 같은 창에 재조회하고 6/3/33 분류를 private evidence로 고정한다. 아이언은 robots/규칙 확인 후 지정5대만 원문→parser price→Row→원자 비교. Claude 검토와 정상 환경 전체 check를 거쳐 Data native 이관 또는 bridge 수리 범위를 결정한다. 검토 이후에도 운영 실행 승인은 별도이며 이번 오더는 생성/쓰기 권한을 부여하지 않는다.
 
 ## Non-negotiable topology

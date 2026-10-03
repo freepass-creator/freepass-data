@@ -4,8 +4,8 @@ import { aicaSourceAdapter, ironSourceAdapter, parseIronRawDetail, IRON_DETAIL_R
   type AicaGridObservation, type SupplierGridCell } from '../src/adapters/supplier-source-capture.js';
 import { collectSupplierSource } from '../src/domain/source-intake.js';
 import { aicaSheetsGridReader, AICA_GRID_FIELDS } from '../src/infra/aica-sheet-reader.js';
-import { buildIancarRelayServer, iancarRelayHandler, IANCAR_DISPATCH, type IancarRelayPorts,
-  type RelayOutcome } from '../src/api/iancar-scheduler-relay.js';
+import { buildSupplierRelayServer, supplierRelayHandler, SUPPLIER_DISPATCH, type SupplierRelayPorts,
+  type RelayOutcome } from '../src/api/supplier-relay.js';
 
 const now = '2026-10-03T00:00:00.000Z';
 const cell = (value: string): SupplierGridCell => ({ userEnteredValue: { stringValue: value } });
@@ -168,12 +168,13 @@ describe('RP006 native detail RAW', () => {
   });
 });
 
-const jobName = 'projects/freepasserp5/locations/fixture-region/jobs/iancar-quarter-hour';
+const jobName = 'projects/freepasserp5/locations/fixture-region/jobs/supplier-relay-iancar-15m';
 const request = (scheduleTime = now) => ({ authorization: 'Bearer fixture', jobName, scheduleTime, body: {} });
 function relayFixture() {
   const claims = new Set<string>(), outcomes = new Map<string, { outcome: RelayOutcome; runId: string | null }>();
   let pending: string | null = null;
-  const ports: IancarRelayPorts = {
+  const ports: SupplierRelayPorts = {
+    verifyReadOnly: vi.fn(async () => ({ status: 'VERIFIED' as const, checks: {} })),
     verifyScheduler: vi.fn(async authorization => authorization === 'Bearer fixture'),
     receipts: {
       createOnly: vi.fn(async receipt => { if (claims.has(receipt.key)) return 'EXISTS'; claims.add(receipt.key); return 'CREATED'; }),
@@ -197,14 +198,50 @@ function relayFixture() {
     runStatus: vi.fn(async () => 'INCOMPLETE' as const),
     dispatch: vi.fn(async () => ({ status: 'ACCEPTED' as const, runId: '1234' })),
   };
-  return { ports, claims, outcomes, handle: iancarRelayHandler(ports, jobName) };
+  return { ports, claims, outcomes, handle: supplierRelayHandler(ports, jobName) };
 }
 describe('RP031 scheduler relay port contract', () => {
+  it('detects cron appearing after IDLE and preserves overlapping admission without retry', async () => {
+    const fixture = relayFixture();
+    fixture.ports.writerRuns = vi.fn().mockResolvedValueOnce('IDLE').mockResolvedValueOnce('BUSY');
+    expect(await fixture.handle(request())).toMatchObject({ status: 'UNKNOWN', reason: 'OVERLAP' });
+    expect(fixture.ports.writerRuns).toHaveBeenLastCalledWith('fixture-installation-token', '1234');
+    expect(fixture.ports.receipts.recordOutcome).toHaveBeenCalledWith(expect.any(String), 'UNKNOWN', '1234', 'OVERLAP');
+    expect(await fixture.handle(request('2026-10-03T00:15:00Z'))).toMatchObject({ status: 'SKIPPED_BUSY' });
+    expect(fixture.ports.dispatch).toHaveBeenCalledTimes(1);
+    expect(fixture.ports.receipts.releaseWithoutDispatch).not.toHaveBeenCalled();
+  });
+  it('keeps a pending-replacement cancellation unresolved, including cancellation on a later tick', async () => {
+    const immediate = relayFixture();
+    immediate.ports.runStatus = vi.fn(async () => 'FAILED' as const);
+    expect(await immediate.handle(request())).toMatchObject({ status: 'UNKNOWN', reason: 'DISPATCHED_RUN_FAILED_OR_CANCELLED' });
+    expect(immediate.ports.receipts.completePending).not.toHaveBeenCalled();
+    const later = relayFixture(); await later.handle(request());
+    later.ports.runStatus = vi.fn(async () => 'FAILED' as const);
+    expect(await later.handle(request('2026-10-03T00:15:00Z'))).toMatchObject({ status: 'FAILED' });
+    expect(later.ports.dispatch).toHaveBeenCalledTimes(1);
+    expect(later.ports.receipts.completePending).not.toHaveBeenCalled();
+  });
+  it('verify route authenticates and reads only; hourly definition is HOLD and unknown jobs are rejected', async () => {
+    const fixture = relayFixture(), server = buildSupplierRelayServer(fixture.ports, jobName);
+    try {
+      const headers = { authorization: 'Bearer fixture', 'x-cloudscheduler-jobname': jobName };
+      expect((await server.inject({ method: 'POST', url: '/verify', payload: {}, headers })).json().status).toBe('VERIFIED');
+      expect((await server.inject({ method: 'POST', url: '/verify', payload: {} })).statusCode).toBe(401);
+      expect((await server.inject({ method: 'POST', url: '/verify', payload: { inputs: {} }, headers })).statusCode).toBe(400);
+      expect((await server.inject({ method: 'POST', url: '/schedule', payload: {}, headers: { ...headers,
+        'x-cloudscheduler-jobname': jobName.replace('iancar-15m', 'hourly-all'), 'x-cloudscheduler-scheduletime': now } })).json().status).toBe('HOLD');
+      expect(fixture.ports.dispatch).not.toHaveBeenCalled();
+      expect(fixture.ports.receipts.createOnly).not.toHaveBeenCalled();
+      expect(fixture.ports.receipts.acquirePending).not.toHaveBeenCalled();
+      expect(fixture.ports.receipts.recordOutcome).not.toHaveBeenCalled();
+    } finally { await server.close(); }
+  });
   it('dispatches only fixed inputs once and retains pending admission until run reconciliation', async () => {
     const fixture = relayFixture();
     expect(await fixture.handle(request())).toMatchObject({ status: 'ACCEPTED_PENDING', runId: '1234' });
-    expect(fixture.ports.dispatch).toHaveBeenCalledWith('fixture-installation-token', IANCAR_DISPATCH);
-    expect(IANCAR_DISPATCH.inputs).toEqual({ iancar_only: 'true', iancar_apply: 'true', apply: 'false', target: 'ALL' });
+    expect(fixture.ports.dispatch).toHaveBeenCalledWith('fixture-installation-token', SUPPLIER_DISPATCH);
+    expect(SUPPLIER_DISPATCH.inputs).toEqual({ iancar_only: 'true', iancar_apply: 'true', apply: 'false', target: 'ALL' });
     expect(await fixture.handle(request('2026-10-03T00:00:00Z'))).toMatchObject({ status: 'DUPLICATE' });
     expect(await fixture.handle(request('2026-10-03T00:15:00Z'))).toMatchObject({ status: 'SKIPPED_BUSY' });
     expect(fixture.ports.dispatch).toHaveBeenCalledTimes(1);
@@ -275,7 +312,7 @@ describe('RP031 scheduler relay port contract', () => {
   });
   it('serves only the private POST route and acknowledges UNKNOWN without reporting refresh success', async () => {
     const fixture = relayFixture(); fixture.ports.dispatch = vi.fn(async () => ({ status: 'UNKNOWN' as const }));
-    const server = buildIancarRelayServer(fixture.ports, jobName);
+    const server = buildSupplierRelayServer(fixture.ports, jobName);
     try {
       expect((await server.inject({ method: 'POST', url: '/schedule', payload: {} })).statusCode).toBe(401);
       const response = await server.inject({ method: 'POST', url: '/schedule', payload: {}, headers: {

@@ -1,6 +1,6 @@
 import { GoogleAuth, OAuth2Client } from 'google-auth-library';
 import { resolveTargetProject } from '../infra/firebase-target.js';
-import { IANCAR_DISPATCH, type IancarRelayPorts, type RelayOutcome } from './iancar-scheduler-relay.js';
+import { SUPPLIER_DISPATCH, SUPPLIER_RELAY_ALLOWLIST, type SupplierRelayEntry, type SupplierRelayPorts, type RelayOutcome } from './supplier-relay.js';
 
 export function relayConfig(env: NodeJS.ProcessEnv = process.env) {
   const required = (key: string) => {
@@ -9,25 +9,25 @@ export function relayConfig(env: NodeJS.ProcessEnv = process.env) {
     return value;
   };
   const project = resolveTargetProject(env);
-  const audience = required('IANCAR_RELAY_AUDIENCE');
-  const schedulerEmail = required('IANCAR_RELAY_SCHEDULER_EMAIL');
-  const jobName = required('IANCAR_RELAY_JOB_NAME');
-  const bucket = required('IANCAR_RELAY_PRIVATE_EVIDENCE_BUCKET');
-  const secret = required('IANCAR_RELAY_ACTIONS_SECRET');
-  const version = required('IANCAR_RELAY_ACTIONS_SECRET_VERSION');
+  const audience = required('SUPPLIER_RELAY_AUDIENCE');
+  const schedulerEmail = required('SUPPLIER_RELAY_SCHEDULER_EMAIL');
+  const jobPrefix = required('SUPPLIER_RELAY_JOB_PREFIX');
+  const bucket = required('SUPPLIER_RELAY_PRIVATE_EVIDENCE_BUCKET');
+  const secret = required('SUPPLIER_RELAY_ACTIONS_SECRET');
+  const version = required('SUPPLIER_RELAY_ACTIONS_SECRET_VERSION');
   let audienceUrl: URL;
   try { audienceUrl = new URL(audience); } catch { throw new Error('RELAY_CONFIG_INVALID'); }
   if (project !== 'freepasserp5' || !/^https:\/\/[^/?#]+(?:\/[^?#]*)?$/.test(audience)
     || env.FIREBASE_PROJECT_ID !== project || audienceUrl.username || audienceUrl.password
     || !/^[a-zA-Z0-9-]+@freepasserp5\.iam\.gserviceaccount\.com$/.test(schedulerEmail)
-    || !/^projects\/freepasserp5\/locations\/[a-z0-9-]+\/jobs\/[a-zA-Z0-9_-]+$/.test(jobName)
+    || !/^projects\/freepasserp5\/locations\/[a-z0-9-]+\/jobs\/$/.test(jobPrefix)
     || !/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/.test(bucket)
-    || !/^[a-zA-Z0-9_-]+$/.test(secret) || !/^(?:latest|[1-9]\d*)$/.test(version))
+    || secret !== 'eancar-relay-github-token' || version !== '1')
     throw new Error('RELAY_CONFIG_INVALID');
-  return Object.freeze({ project, audience, schedulerEmail, jobName, bucket, secret, version });
+  return Object.freeze({ project, audience, schedulerEmail, jobPrefix, bucket, secret, version });
 }
 export type RelayConfig = ReturnType<typeof relayConfig>;
-type Pending = { key: string; outcome: RelayOutcome | 'RESERVED'; runId: string | null };
+type Pending = { key: string; outcome: RelayOutcome | 'RESERVED'; runId: string | null; reason?: string };
 type Gate = { generation: string; value: Pending | null };
 const keyPattern = /^[a-f0-9]{64}$/;
 const runId = (value: unknown): string | null => typeof value === 'number' && Number.isSafeInteger(value) && value > 0
@@ -37,10 +37,12 @@ const runId = (value: unknown): string | null => typeof value === 'number' && Nu
  * Pending is a single CAS object, including an empty tombstone; no delete or lease expiry.
  * Factories perform no I/O. SDK retries are not used for mutation transports.
  */
-export function createIancarRelayPorts(config: RelayConfig, deps: {
+export function createSupplierRelayPorts(config: RelayConfig, deps: {
   fetcher?: typeof fetch; accessToken?: () => Promise<string | null>;
   oidc?: Pick<OAuth2Client, 'verifyIdToken'>;
-} = {}): IancarRelayPorts {
+} = {}, entry: SupplierRelayEntry = SUPPLIER_DISPATCH): SupplierRelayPorts {
+  if (!SUPPLIER_RELAY_ALLOWLIST.some(item => JSON.stringify(item) === JSON.stringify(entry)))
+    throw new Error('RELAY_ENTRY_NOT_ALLOWLISTED');
   const fetcher = deps.fetcher ?? fetch;
   const oidc = deps.oidc ?? new OAuth2Client();
   const auth = new GoogleAuth({ projectId: config.project, scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
@@ -53,7 +55,8 @@ export function createIancarRelayPorts(config: RelayConfig, deps: {
   };
   const gcs = async (url: string, init?: RequestInit) => request(url, (await googleToken()) ?? '', init);
   const base = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(config.bucket)}/o/`;
-  const name = (suffix: string) => `iancar-relay/v1/${suffix}.json`;
+  const name = (suffix: string) => `supplier-relay/v1/${suffix}.json`;
+  const pendingName = `pending/${entry.writerGroup}`;
   const objectRead = async (suffix: string): Promise<{ generation: string; value: unknown } | null> => {
     const url = base + encodeURIComponent(name(suffix));
     const metadata = await gcs(url);
@@ -75,12 +78,12 @@ export function createIancarRelayPorts(config: RelayConfig, deps: {
   };
   const assertKey = (key: string) => { if (!keyPattern.test(key)) throw new Error('RELAY_KEY_INVALID'); };
   const gate = async (): Promise<Gate> => {
-    const data = await objectRead('pending');
+    const data = await objectRead(pendingName);
     if (!data) return { generation: '0', value: null };
     const value = data.value as Pending | null;
     if (value !== null && (!value || !keyPattern.test(value.key)
-      || !['RESERVED', 'ACCEPTED_PENDING', 'UNKNOWN'].includes(value.outcome)
-      || (value.outcome === 'ACCEPTED_PENDING' ? !runId(value.runId) : value.runId !== null)))
+      || !['RESERVED', 'ACCEPTED_PENDING', 'UNKNOWN', 'FAILED'].includes(value.outcome)
+      || (value.outcome === 'ACCEPTED_PENDING' ? !runId(value.runId) : value.runId !== null && !runId(value.runId))))
       throw new Error('RELAY_PENDING_INVALID');
     return { generation: data.generation, value };
   };
@@ -90,10 +93,20 @@ export function createIancarRelayPorts(config: RelayConfig, deps: {
     if (!prior || JSON.stringify(prior.value) !== JSON.stringify(value)) throw new Error('RELAY_RECEIPT_CONFLICT');
   };
   const github = (path: string, token: string, init?: RequestInit) => request(
-    `https://api.github.com/repos/${IANCAR_DISPATCH.repository}/actions/${path}`, token,
+    `https://api.github.com/repos/${entry.repository}/actions/${path}`, token,
     { ...init, headers: { accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } });
-  const workflowPath = `.github/workflows/${IANCAR_DISPATCH.workflow}`;
-  return {
+  const workflowPath = `.github/workflows/${entry.workflow}`;
+  const ports: SupplierRelayPorts = {
+    async verifyReadOnly() {
+      const checks: Record<string, string> = { config: 'VERIFIED', secret: 'UNKNOWN', gcsRead: 'UNKNOWN', githubRuns: 'UNKNOWN' };
+      try {
+        const token = await ports.actionsToken(); checks.secret = 'VERIFIED';
+        await gate(); checks.gcsRead = 'VERIFIED';
+        checks.githubRuns = await ports.writerRuns(token);
+      } catch { /* sanitized, read only */ }
+      return { status: checks.secret === 'VERIFIED' && checks.gcsRead === 'VERIFIED'
+        && checks.githubRuns !== 'UNKNOWN' ? 'VERIFIED' : 'UNKNOWN', checks };
+    },
     async verifyScheduler(authorization) {
       try {
         const match = /^Bearer (\S+)$/.exec(authorization);
@@ -110,17 +123,34 @@ export function createIancarRelayPorts(config: RelayConfig, deps: {
         assertKey(key);
         try { const current = await gate();
           if (current.value) return 'BUSY';
-          return await write('pending', { key, outcome: 'RESERVED', runId: null }, current.generation) ? 'ACQUIRED' : 'BUSY';
+          return await write(pendingName, { key, outcome: 'RESERVED', runId: null }, current.generation) ? 'ACQUIRED' : 'BUSY';
         } catch { return 'UNKNOWN'; }
       },
-      async recordOutcome(key, outcome, id) {
+      async recordOutcome(key, outcome, id, reason) {
         assertKey(key);
-        if (outcome === 'ACCEPTED_PENDING' ? !runId(id) : id !== null) throw new Error('RELAY_OUTCOME_INVALID');
-        await immutable(`outcomes/${key}`, { key, outcome, runId: id });
+        if (outcome === 'ACCEPTED_PENDING' ? !runId(id) : id !== null && !runId(id)) throw new Error('RELAY_OUTCOME_INVALID');
+        await immutable(`outcomes/${key}`, { key, outcome, runId: id, ...(reason ? { reason } : {}) });
+        // Latest per-entry observation, CAS prevents a stale request overwriting a newer tick.
+        const receipt = (await objectRead(`receipts/${key}`))?.value as { scheduleTime?: string; jobName?: string } | undefined;
+        if (!receipt?.scheduleTime || !Number.isFinite(Date.parse(receipt.scheduleTime))
+          || receipt.jobName !== `${config.jobPrefix}supplier-relay-${entry.id}`) throw new Error('RELAY_RECEIPT_INVALID');
+        const statusName = `status/${entry.id}`;
+        const prior = await objectRead(statusName);
+        const previous = prior?.value as { schema?: string; scheduleTime?: string } | undefined;
+        if (prior && (previous?.schema !== 'supplier-relay-status/v1'
+          || !previous.scheduleTime || !Number.isFinite(Date.parse(previous.scheduleTime)))) throw new Error('RELAY_STATUS_INVALID');
+        if (!previous?.scheduleTime || Date.parse(previous.scheduleTime) <= Date.parse(receipt.scheduleTime)) {
+          if (!await write(statusName, { schema: 'supplier-relay-status/v1', id: entry.id,
+            writerGroup: entry.writerGroup, key, jobName: receipt.jobName, scheduleTime: receipt.scheduleTime,
+            observedAt: new Date().toISOString(), outcome, runId: id, reason: reason ?? null }, prior?.generation ?? '0'))
+            throw new Error('RELAY_STATUS_CAS_CONFLICT');
+        }
         if (outcome === 'SKIPPED_BUSY') return;
         const current = await gate();
-        if (current.value?.key !== key || current.value.outcome !== 'RESERVED') throw new Error('RELAY_OWNER_CHANGED');
-        if (!await write('pending', { key, outcome, runId: id }, current.generation)) throw new Error('RELAY_CAS_CONFLICT');
+        // A rejected later tick may report failure of a prior run; never mutate its owner.
+        if (current.value?.key !== key) return;
+        if (current.value.outcome !== 'RESERVED') throw new Error('RELAY_OWNER_CHANGED');
+        if (!await write(pendingName, { key, outcome, runId: id, ...(reason ? { reason } : {}) }, current.generation)) throw new Error('RELAY_CAS_CONFLICT');
       },
       async completePending(key, id) {
         assertKey(key);
@@ -128,7 +158,7 @@ export function createIancarRelayPorts(config: RelayConfig, deps: {
         if (current.value?.key !== key || current.value.outcome !== 'ACCEPTED_PENDING' || current.value.runId !== id)
           throw new Error('RELAY_OWNER_CHANGED');
         await immutable(`completed/${key}`, { key, runId: id });
-        if (!await write('pending', null, current.generation)) throw new Error('RELAY_CAS_CONFLICT');
+        if (!await write(pendingName, null, current.generation)) throw new Error('RELAY_CAS_CONFLICT');
       },
       async releaseWithoutDispatch(key) {
         assertKey(key);
@@ -136,7 +166,7 @@ export function createIancarRelayPorts(config: RelayConfig, deps: {
         const value = outcome?.value as { key?: string; outcome?: string; runId?: unknown } | undefined;
         if (current.value?.key !== key || current.value.outcome !== 'RESERVED'
           || value?.key !== key || value.outcome !== 'SKIPPED_BUSY' || value.runId !== null) throw new Error('RELAY_OWNER_CHANGED');
-        if (!await write('pending', null, current.generation)) throw new Error('RELAY_CAS_CONFLICT');
+        if (!await write(pendingName, null, current.generation)) throw new Error('RELAY_CAS_CONFLICT');
       },
     },
     async actionsToken() {
@@ -151,17 +181,17 @@ export function createIancarRelayPorts(config: RelayConfig, deps: {
         return token;
       } catch { throw new Error('RELAY_ACTIONS_TOKEN_UNAVAILABLE'); }
     },
-    async writerRuns(token) {
+    async writerRuns(token, excludeRunId) {
       try {
         // A bounded complete response is required. Never infer IDLE from a truncated page.
         for (const status of ['queued', 'in_progress', 'waiting', 'pending', 'requested']) {
-          const response = await github(`workflows/${IANCAR_DISPATCH.workflow}/runs?status=${status}&per_page=100&page=1`, token);
+          const response = await github(`workflows/${entry.workflow}/runs?status=${status}&per_page=100&page=1`, token);
           if (!response.ok || response.headers.get('link')?.includes('rel="next"')) return 'UNKNOWN';
           const body = await response.json() as { total_count?: number; workflow_runs?: Array<{ id?: unknown; status?: string; path?: string }> };
           if (!Number.isSafeInteger(body.total_count) || !Array.isArray(body.workflow_runs)
             || body.total_count !== body.workflow_runs.length || body.workflow_runs.length >= 100
             || body.workflow_runs.some(run => !runId(run.id) || run.path !== workflowPath || run.status !== status)) return 'UNKNOWN';
-          if (body.workflow_runs.length) return 'BUSY';
+          if (body.workflow_runs.some(run => runId(run.id) !== excludeRunId)) return 'BUSY';
         }
         return 'IDLE';
       } catch { return 'UNKNOWN'; }
@@ -171,17 +201,18 @@ export function createIancarRelayPorts(config: RelayConfig, deps: {
         if (!runId(id)) return 'UNKNOWN';
         const response = await github(`runs/${id}`, token);
         if (!response.ok) return 'UNKNOWN';
-        const body = await response.json() as { id?: unknown; status?: string; path?: string };
+        const body = await response.json() as { id?: unknown; status?: string; path?: string; conclusion?: string };
         if (runId(body.id) !== id || body.path !== workflowPath) return 'UNKNOWN';
-        if (body.status === 'completed') return 'COMPLETED';
+        if (body.status === 'completed') return body.conclusion === 'success' ? 'COMPLETED'
+          : ['failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure'].includes(body.conclusion ?? '') ? 'FAILED' : 'UNKNOWN';
         return ['queued', 'in_progress', 'waiting', 'pending', 'requested'].includes(body.status ?? '') ? 'INCOMPLETE' : 'UNKNOWN';
       } catch { return 'UNKNOWN'; }
     },
     async dispatch(token, binding) {
       try {
-        if (JSON.stringify(binding) !== JSON.stringify(IANCAR_DISPATCH)) return { status: 'UNKNOWN' };
-        const response = await github(`workflows/${IANCAR_DISPATCH.workflow}/dispatches`, token, { method: 'POST',
-          body: JSON.stringify({ ref: IANCAR_DISPATCH.ref, inputs: IANCAR_DISPATCH.inputs, return_run_details: true }) });
+        if (entry.hold || JSON.stringify(binding) !== JSON.stringify(entry)) return { status: 'UNKNOWN' };
+        const response = await github(`workflows/${entry.workflow}/dispatches`, token, { method: 'POST',
+          body: JSON.stringify({ ref: entry.ref, inputs: entry.inputs, return_run_details: true }) });
         if (!response.ok) return { status: 'UNKNOWN' };
         const body = await response.json() as { workflow_run_id?: unknown };
         const id = runId(body.workflow_run_id);
@@ -189,4 +220,5 @@ export function createIancarRelayPorts(config: RelayConfig, deps: {
       } catch { return { status: 'UNKNOWN' }; }
     },
   };
+  return ports;
 }

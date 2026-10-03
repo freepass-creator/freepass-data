@@ -1,21 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { OAuth2Client } from 'google-auth-library';
-import { createIancarRelayPorts, relayConfig } from '../src/api/iancar-relay-transport.js';
-import { IANCAR_DISPATCH } from '../src/api/iancar-scheduler-relay.js';
-import { startIancarRelay } from '../src/jobs/serve-iancar-relay.js';
+import { createSupplierRelayPorts, relayConfig } from '../src/api/supplier-relay-transport.js';
+import { SUPPLIER_DISPATCH, SUPPLIER_RELAY_ALLOWLIST } from '../src/api/supplier-relay.js';
+import { startSupplierRelay } from '../src/jobs/serve-supplier-relay.js';
 import { captureAica, aicaCaptureCommand } from '../src/jobs/collect-aica.js';
 import { ironDetailReader, ironRobotsAllow } from '../src/infra/iron-detail-reader.js';
 import { ironSourceAdapter } from '../src/adapters/supplier-source-capture.js';
 
-const env = { FIREBASE_PROJECT_ID: 'freepasserp5', IANCAR_RELAY_AUDIENCE: 'https://relay.example.test',
-  IANCAR_RELAY_SCHEDULER_EMAIL: 'scheduler@freepasserp5.iam.gserviceaccount.com',
-  IANCAR_RELAY_JOB_NAME: 'projects/freepasserp5/locations/test/jobs/test',
-  IANCAR_RELAY_PRIVATE_EVIDENCE_BUCKET: 'fixture-private', IANCAR_RELAY_ACTIONS_SECRET: 'fixture-actions',
-  IANCAR_RELAY_ACTIONS_SECRET_VERSION: '1' };
+const env = { FIREBASE_PROJECT_ID: 'freepasserp5', SUPPLIER_RELAY_AUDIENCE: 'https://relay.example.test',
+  SUPPLIER_RELAY_SCHEDULER_EMAIL: 'scheduler@freepasserp5.iam.gserviceaccount.com',
+  SUPPLIER_RELAY_JOB_PREFIX: 'projects/freepasserp5/locations/test/jobs/',
+  SUPPLIER_RELAY_PRIVATE_EVIDENCE_BUCKET: 'fixture-private', SUPPLIER_RELAY_ACTIONS_SECRET: 'eancar-relay-github-token',
+  SUPPLIER_RELAY_ACTIONS_SECRET_VERSION: '1' };
 const config = relayConfig(env), key = 'a'.repeat(64), other = 'b'.repeat(64);
 const json = (body: unknown, status = 200, headers?: HeadersInit) => new Response(JSON.stringify(body), { status, ...(headers ? { headers } : {}) });
-const workflowPath = `.github/workflows/${IANCAR_DISPATCH.workflow}`;
-function ports(fetcher: typeof fetch) { return createIancarRelayPorts(config, { fetcher, accessToken: async () => 'fixture-google' }); }
+const workflowPath = `.github/workflows/${SUPPLIER_DISPATCH.workflow}`;
+function ports(fetcher: typeof fetch) { return createSupplierRelayPorts(config, { fetcher, accessToken: async () => 'fixture-google' }); }
 
 function bucket() {
   let counter = 0;
@@ -28,7 +28,7 @@ function bucket() {
       const name = url.searchParams.get('name')!, generation = url.searchParams.get('ifGenerationMatch')!;
       const value = JSON.parse(String(init.body));
       writes.push({ name, generation, value });
-      if (failPending && name.endsWith('/pending.json')) { failPending = false; return json({}, 412); }
+      if (failPending && name.includes('/pending/')) { failPending = false; return json({}, 412); }
       if (failWrite) { const status = failWrite; failWrite = 0; return json({}, status); }
       if ((objects.get(name)?.generation ?? '0') !== generation) return json({}, 412);
       objects.set(name, { generation: String(++counter), value }); return json({});
@@ -54,14 +54,14 @@ describe('relay config and OIDC', () => {
       expect(() => relayConfig({ ...env, [field]: '' })).toThrow();
       expect(() => relayConfig({ ...env, [field]: ' ' })).toThrow();
     }
-    await expect(startIancarRelay({})).rejects.toThrow();
-    await expect(startIancarRelay({ ...env, PORT: '0' })).rejects.toThrow('RELAY_PORT_INVALID');
-    expect(() => relayConfig({ ...env, IANCAR_RELAY_AUDIENCE: 'https://user@host' })).toThrow();
+    await expect(startSupplierRelay({})).rejects.toThrow();
+    await expect(startSupplierRelay({ ...env, PORT: '0' })).rejects.toThrow('RELAY_PORT_INVALID');
+    expect(() => relayConfig({ ...env, SUPPLIER_RELAY_AUDIENCE: 'https://user@host' })).toThrow();
   });
   it('checks exact audience issuer verified email and fixed SA; exceptions fail closed', async () => {
     const good = { iss: 'https://accounts.google.com', aud: config.audience, email_verified: true, email: config.schedulerEmail };
     const verifyIdToken = vi.fn().mockResolvedValue({ getPayload: () => good });
-    const p = createIancarRelayPorts(config, { oidc: { verifyIdToken } as unknown as Pick<OAuth2Client, 'verifyIdToken'> });
+    const p = createSupplierRelayPorts(config, { oidc: { verifyIdToken } as unknown as Pick<OAuth2Client, 'verifyIdToken'> });
     expect(await p.verifyScheduler('Bearer fixture-id')).toBe(true);
     expect(verifyIdToken).toHaveBeenCalledWith({ idToken: 'fixture-id', audience: config.audience });
     for (const change of [{ iss: 'evil' }, { aud: 'wrong' }, { email_verified: false }, { email: 'other@test' }]) {
@@ -75,9 +75,24 @@ describe('relay config and OIDC', () => {
 });
 
 describe('GCS immutable receipts and single-object CAS', () => {
+  it('shares one writer-group object across allowlist entries and records latest status with CAS', async () => {
+    const b = bucket(), second = createSupplierRelayPorts(config, { fetcher: b.fetcher, accessToken: async () => 'fixture-google' }, SUPPLIER_RELAY_ALLOWLIST[1]!);
+    const receipt = { key, jobName: `${config.jobPrefix}supplier-relay-iancar-15m`, scheduleTime: '2026-10-03T00:00:00Z' };
+    await b.p.receipts.createOnly(receipt);
+    expect(await b.p.receipts.acquirePending(key)).toBe('ACQUIRED');
+    expect(await second.receipts.acquirePending(other)).toBe('BUSY');
+    await b.p.receipts.recordOutcome(key, 'UNKNOWN', '12', 'OVERLAP');
+    expect((await b.p.receipts.pending())?.reason).toBe('OVERLAP');
+    const status = b.objects.get('supplier-relay/v1/status/iancar-15m.json');
+    expect(status?.value).toMatchObject({ schema: 'supplier-relay-status/v1', id: 'iancar-15m', outcome: 'UNKNOWN', reason: 'OVERLAP' });
+    await b.p.receipts.createOnly({ ...receipt, key: other, scheduleTime: '2026-10-03T00:15:00Z' });
+    await b.p.receipts.recordOutcome(other, 'SKIPPED_BUSY', null);
+    expect(b.writes.filter(write => write.name.includes('/status/')).map(write => write.generation)).toEqual(['0', status!.generation]);
+    expect((await b.p.receipts.pending())?.key).toBe(key);
+  });
   it('creates receipt only once; empty 404 permits exactly one concurrent admission', async () => {
     const b = bucket();
-    const receipt = { key, jobName: config.jobName, scheduleTime: '2026-10-03T00:00:00Z' };
+    const receipt = { key, jobName: `${config.jobPrefix}supplier-relay-iancar-15m`, scheduleTime: '2026-10-03T00:00:00Z' };
     expect(await b.p.receipts.createOnly(receipt)).toBe('CREATED');
     expect(await b.p.receipts.createOnly(receipt)).toBe('EXISTS');
     expect(await b.p.receipts.pending()).toBeNull();
@@ -87,6 +102,7 @@ describe('GCS immutable receipts and single-object CAS', () => {
   });
   it('records accepted outcome then completes exact owner/run with CAS tombstone', async () => {
     const b = bucket();
+    await b.p.receipts.createOnly({ key: key, jobName: `${config.jobPrefix}supplier-relay-iancar-15m`, scheduleTime: '2026-10-03T00:00:00Z' });
     await b.p.receipts.acquirePending(key);
     await b.p.receipts.recordOutcome(key, 'ACCEPTED_PENDING', '12');
     expect(await b.p.receipts.pending()).toEqual({ key, outcome: 'ACCEPTED_PENDING', runId: '12' });
@@ -100,10 +116,12 @@ describe('GCS immutable receipts and single-object CAS', () => {
   });
   it('never clears UNKNOWN and releases RESERVED only with durable no-dispatch evidence', async () => {
     const b = bucket();
+    await b.p.receipts.createOnly({ key: key, jobName: `${config.jobPrefix}supplier-relay-iancar-15m`, scheduleTime: '2026-10-03T00:00:00Z' });
     await b.p.receipts.acquirePending(key);
     await expect(b.p.receipts.releaseWithoutDispatch(key)).rejects.toThrow();
     await b.p.receipts.recordOutcome(key, 'SKIPPED_BUSY', null);
     await b.p.receipts.releaseWithoutDispatch(key);
+    await b.p.receipts.createOnly({ key: other, jobName: `${config.jobPrefix}supplier-relay-iancar-15m`, scheduleTime: '2026-10-03T00:00:00Z' });
     await b.p.receipts.acquirePending(other);
     await b.p.receipts.recordOutcome(other, 'UNKNOWN', null);
     await expect(b.p.receipts.releaseWithoutDispatch(other)).rejects.toThrow();
@@ -113,6 +131,7 @@ describe('GCS immutable receipts and single-object CAS', () => {
     const b = bucket();
     b.failWrite(404); expect(await b.p.receipts.acquirePending(key)).toBe('UNKNOWN');
     b.failWrite(412); expect(await b.p.receipts.acquirePending(key)).toBe('BUSY');
+    await b.p.receipts.createOnly({ key: key, jobName: `${config.jobPrefix}supplier-relay-iancar-15m`, scheduleTime: '2026-10-03T00:00:00Z' });
     await b.p.receipts.acquirePending(key);
     b.failMedia(404); await expect(b.p.receipts.pending()).rejects.toThrow();
     await b.p.receipts.recordOutcome(key, 'SKIPPED_BUSY', null);
@@ -122,6 +141,7 @@ describe('GCS immutable receipts and single-object CAS', () => {
   });
   it('outcome/complete CAS loss never releases the owner or overwrites immutable evidence', async () => {
     const b = bucket();
+    await b.p.receipts.createOnly({ key: key, jobName: `${config.jobPrefix}supplier-relay-iancar-15m`, scheduleTime: '2026-10-03T00:00:00Z' });
     await b.p.receipts.acquirePending(key);
     b.failPending();
     await expect(b.p.receipts.recordOutcome(key, 'ACCEPTED_PENDING', '12')).rejects.toThrow('CAS_CONFLICT');
@@ -138,6 +158,26 @@ describe('GCS immutable receipts and single-object CAS', () => {
 });
 
 describe('fixed GitHub REST ports', () => {
+  it('excludes only its exact run in post-dispatch reads and treats cancellation as FAILED', async () => {
+    const f = vi.fn<typeof fetch>().mockImplementation(async url => String(url).includes('status=queued')
+      ? json({ total_count: 1, workflow_runs: [{ id: 12, status: 'queued', path: workflowPath }] })
+      : json({ total_count: 0, workflow_runs: [] }));
+    expect(await ports(f).writerRuns('fixture-pat', '12')).toBe('IDLE');
+    f.mockResolvedValue(json({ total_count: 2, workflow_runs: [12, 13].map(id => ({ id, status: 'queued', path: workflowPath })) }));
+    expect(await ports(f).writerRuns('fixture-pat', '12')).toBe('BUSY');
+    f.mockResolvedValue(json({ id: 12, status: 'completed', conclusion: 'cancelled', path: workflowPath }));
+    expect(await ports(f).runStatus('fixture-pat', '12')).toBe('FAILED');
+  });
+  it('read-only preflight performs no POST, including on storage or secret failure', async () => {
+    const f = vi.fn<typeof fetch>().mockImplementation(async url => String(url).includes('secretmanager')
+      ? json({ payload: { data: Buffer.from('fixture-pat').toString('base64') } })
+      : String(url).includes('storage.googleapis') ? json({}, 404) : json({ total_count: 0, workflow_runs: [] }));
+    expect((await ports(f).verifyReadOnly()).status).toBe('VERIFIED');
+    expect(f.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
+    f.mockResolvedValue(json({}, 403));
+    expect((await ports(f).verifyReadOnly()).status).toBe('UNKNOWN');
+    expect(f.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
+  });
   it('queries all incomplete states and rejects truncated/malformed/error responses', async () => {
     const f = vi.fn<typeof fetch>().mockImplementation(async () => json({ total_count: 0, workflow_runs: [] }));
     expect(await ports(f).writerRuns('fixture-pat')).toBe('IDLE'); expect(f).toHaveBeenCalledTimes(5);
@@ -151,10 +191,10 @@ describe('fixed GitHub REST ports', () => {
   it('requires exact correlated run and workflow; 404 and unknown status remain UNKNOWN', async () => {
     const f = vi.fn<typeof fetch>();
     for (const [response, expected] of [[json({}, 404), 'UNKNOWN'],
-      [json({ id: 13, path: workflowPath, status: 'completed' }), 'UNKNOWN'],
+      [json({ id: 13, path: workflowPath, status: 'completed', conclusion: 'success' }), 'UNKNOWN'],
       [json({ id: 12, path: 'other', status: 'completed' }), 'UNKNOWN'],
       [json({ id: 12, path: workflowPath, status: 'new_status' }), 'UNKNOWN'],
-      [json({ id: 12, path: workflowPath, status: 'completed' }), 'COMPLETED'],
+      [json({ id: 12, path: workflowPath, status: 'completed', conclusion: 'success' }), 'COMPLETED'],
       [json({ id: 12, path: workflowPath, status: 'waiting' }), 'INCOMPLETE']] as const) {
       f.mockResolvedValue(response); expect(await ports(f).runStatus('fixture-pat', '12')).toBe(expected);
     }
@@ -163,16 +203,16 @@ describe('fixed GitHub REST ports', () => {
     const f = vi.fn<typeof fetch>();
     for (const response of [new Response(null, { status: 204 }), json({}), json({}, 500)]) {
       f.mockClear().mockResolvedValue(response);
-      expect(await ports(f).dispatch('fixture-pat', IANCAR_DISPATCH)).toEqual({ status: 'UNKNOWN' });
+      expect(await ports(f).dispatch('fixture-pat', SUPPLIER_DISPATCH)).toEqual({ status: 'UNKNOWN' });
       expect(f).toHaveBeenCalledTimes(1);
     }
     f.mockClear().mockResolvedValue(json({ workflow_run_id: 12 }));
-    expect(await ports(f).dispatch('fixture-pat', IANCAR_DISPATCH)).toEqual({ status: 'ACCEPTED', runId: '12' });
+    expect(await ports(f).dispatch('fixture-pat', SUPPLIER_DISPATCH)).toEqual({ status: 'ACCEPTED', runId: '12' });
     const [url, init] = f.mock.calls[0]!;
-    expect(String(url)).toContain(`${IANCAR_DISPATCH.repository}/actions/workflows/${IANCAR_DISPATCH.workflow}/dispatches`);
-    expect(JSON.parse(String(init?.body))).toEqual({ ref: 'main', inputs: IANCAR_DISPATCH.inputs, return_run_details: true });
+    expect(String(url)).toContain(`${SUPPLIER_DISPATCH.repository}/actions/workflows/${SUPPLIER_DISPATCH.workflow}/dispatches`);
+    expect(JSON.parse(String(init?.body))).toEqual({ ref: 'main', inputs: SUPPLIER_DISPATCH.inputs, return_run_details: true });
     f.mockClear().mockRejectedValue(new Error('fixture-pat raw response'));
-    expect(await ports(f).dispatch('fixture-pat', IANCAR_DISPATCH)).toEqual({ status: 'UNKNOWN' });
+    expect(await ports(f).dispatch('fixture-pat', SUPPLIER_DISPATCH)).toEqual({ status: 'UNKNOWN' });
     expect(f).toHaveBeenCalledTimes(1);
   });
   it('reads one configured secret in memory; rejects whitespace and never logs token/raw errors', async () => {
@@ -180,7 +220,7 @@ describe('fixed GitHub REST ports', () => {
     try {
       const f = vi.fn<typeof fetch>().mockResolvedValue(json({ payload: { data: Buffer.from('fixture-pat').toString('base64') } }));
       expect(await ports(f).actionsToken()).toBe('fixture-pat');
-      expect(String(f.mock.calls[0]![0])).toContain('/secrets/fixture-actions/versions/1:access');
+      expect(String(f.mock.calls[0]![0])).toContain('/secrets/eancar-relay-github-token/versions/1:access');
       for (const value of ['', ' ', 'fixture-pat\n']) {
         f.mockResolvedValue(json({ payload: { data: Buffer.from(value).toString('base64') } }));
         await expect(ports(f).actionsToken()).rejects.toThrow('RELAY_ACTIONS_TOKEN_UNAVAILABLE');
