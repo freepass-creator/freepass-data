@@ -15,7 +15,6 @@ permissions:
 
 jobs:
   dry-run:
-    environment: data-production-delivery
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -32,25 +31,24 @@ jobs:
           cache: npm
       - name: Install without lifecycle hooks
         run: npm ci --ignore-scripts
-      # 주의: 이 계정(github-data-inventory-writer)은 쓰기 권한이 있다. 이 워크플로는 --apply 를 넘기지 않고,
-      # 결과가 mode=DRY_RUN·writes=0 이 아니면 실패로 끝내는 코드 가드로 쓰기 0 을 강제한다.
-      # 읽기 전용 계정으로 분리하는 일은 후속 일감(이슈)으로 둔다.
-      - name: Require the dedicated Data identity
+      # 읽기 전용 감사 계정(erp5-continuous-audit 와 같은 신원): Firestore 읽기 + 증거 버킷 create-only.
+      # 쓰기 권한 계정을 쓰지 않는다(#305). 코드 가드(mode=DRY_RUN·writes=0)도 그대로 둔다.
+      - name: Require the read-only Data audit identity
         env:
-          PROVIDER: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
-          ACCOUNT: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
+          PROVIDER: ${{ vars.ERP5_WIF_PROVIDER }}
+          ACCOUNT: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
           test -n "$PROVIDER"
-          test "$ACCOUNT" = 'github-data-inventory-writer@freepasserp5.iam.gserviceaccount.com'
+          test "$ACCOUNT" = 'github-data-auditor@freepasserp5.iam.gserviceaccount.com'
       - uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
-          service_account: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ vars.ERP5_WIF_PROVIDER }}
+          service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
       - name: Recompute dry-run (no --apply, writes 0) — full plan never printed (public repository)
         env:
-          BUCKET: ${{ vars.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET }}
+          BUCKET: ${{ vars.ERP5_EVIDENCE_BUCKET }}
         run: |
           set -euo pipefail
           test -n "$BUCKET"
