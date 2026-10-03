@@ -373,8 +373,12 @@ describe('ERP5 same-transaction raw capture', () => {
     });
   });
   it('parses only unambiguous annual mileage text', () => {
-    expect(['30000', '30,000km', '연 30,000km', '연간 3만km', '3만 ㎞', '25000 KM'].map(parseAnnualMileageText))
-      .toEqual([{ km: 30000 }, { km: 30000 }, { km: 30000 }, { km: 30000 }, { km: 30000 }, { km: 25000 }]);
+    expect(['30000', '30,000km', '연 30,000km', '연간 3만km', '3만 ㎞', '25000 KM', '3만키로', '30000킬로미터']
+      .map(parseAnnualMileageText))
+      .toEqual([{ km: 30000 }, { km: 30000 }, { km: 30000 }, { km: 30000 }, { km: 30000 }, { km: 25000 }, { km: 30000 }, { km: 30000 }]);
+    for (const text of ['3만', '연3만', '03만km', '030000', '30000원', '3만원', '연3회', '30000km/년']) {
+      expect(parseAnnualMileageText(text), text).toEqual({ reason: 'UNRECOGNIZED' });
+    }
     expect(Object.fromEntries(['월 2,500km', '무제한', '2만~3만km', '20000 / 30000', '0km', '2.5만km', '3만km 이상']
       .map(text => [text, parseAnnualMileageText(text)]))).toEqual({
       '월 2,500km': { reason: 'MONTHLY_UNIT' },
