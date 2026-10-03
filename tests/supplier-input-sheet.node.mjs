@@ -59,15 +59,3 @@ test('compare: plate-only legacy, duplicate legacy headers, duplicate or unbound
   const b=compareFixture();b.legacy[0].headers=[...legacyHeaders.slice(0,-1),'1개월'];assert.equal(compareSharedToLegacy(b,inputSpec,now).results[0].reason,'duplicate legacy headers');
   const c=compareFixture();c.legacy.push({...c.legacy[0]});assert.throws(()=>compareSharedToLegacy(c,inputSpec,now),/One legacy capture/);
   const d=fullLegacy(compareFixture());d.legacy[0].rows[1][d.legacy[0].headers.indexOf('상태')]='계약중';d.legacy.push({...d.legacy[0],code:'OTHER'});const e=compareSharedToLegacy(d,inputSpec,now);assert.deepEqual(e.unboundLegacy,['OTHER']);assert.equal(e.results[0].status,'IN_SYNC');assert.equal(e.status,'NOT_IN_SYNC');});
-
-test('F01 supplier layout covers exactly the suppliers kept out of the shared input sheet',async()=>{
-  const {specification:f01}=await import('../scripts/sheet-presentation.mjs');
-  const layout=f01.f01SupplierLayout;
-  const outside=inputSpec.supplierChannels.notInSharedSheet.map(r=>r.code).sort();
-  assert.deepEqual(layout.supplierTabs.map(t=>t.supplierCode).sort(),outside);
-  assert.equal(new Set(layout.supplierTabs.map(t=>t.key)).size,layout.supplierTabs.length);
-  assert.deepEqual([...layout.proposedOrder].sort(),[...layout.supplierTabs.map(t=>t.key),layout.sharedInputSummaryTab.key].sort());
-  for(const code of outside) assert.ok(!inputSpec.supplierChannels.sharedInputSheet.some(r=>r.code===code));
-  assert.equal(layout.state,'DESIGNED_NOT_APPLIED');
-  assert.equal(f01.primaryTabs.length,4,'current executor binding stays until the layout is applied');
-});

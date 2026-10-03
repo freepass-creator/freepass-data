@@ -33,10 +33,14 @@
     "retirementRule": "폐지 탭은 지우지 않고 숨김·retiredSheetIds로 보존한다. 기존 sheetId는 재사용 표시가 있는 탭만 이어 쓴다.",
     "membershipRule": "supplierTabs 5곳은 supplierChannels.notInSharedSheet와 같아야 하고, 공동시트 종합에는 그 5곳이 0행이어야 한다. 한 차량을 회사 탭과 종합 탭에서 두 번 세지 않는다.",
     "openItems": [
-      "primarySheetIds 순서가 primaryTabs 순서(상품리스트·손오공상품·픽업구독·오플구독)와 같다는 가정은 새 readback으로 확인 후 재사용",
+      "primarySheetIds 순서가 primaryTabs 순서(상품리스트·손오공상품·픽업구독·오플구독)와 같다는 가정은 새 readback으로 확인 후 재사용하고, 숨긴 상품리스트·픽업구독 sheetId를 retiredSheetIds에 추가",
       "신규 탭(이안카·아이카·아이언·공동시트 종합) 색과 순서는 제안값 — 적용 전 대표 확인",
-      "F01 열 구성(공동시트 종합 62칸 입력 양식 vs 기존 F01 판매 열)을 하나로 맞출지 결정 필요",
-      "이안카·아이카·아이언 상품이 현재 어느 발행 경로로 F01에 들어오는지 확인 후 회사 탭 공급원 고정"
+      "F01 열 구성(공동 입력 시트 종합 양식 vs 기존 F01 판매 열)을 하나로 맞출지 결정 필요 — 공동 시트 양식은 개편 중이라 칸 수를 여기 고정하지 않는다",
+      "이안카·아이카·아이언 상품의 현재 F01 유입 경로와 원천 운영 증거를 확인한 뒤 회사 탭 공급원 고정",
+      "F86의 기존 회사별 회색 탭(supplierTabs)과 F86 쪽 앞 네 탭의 운명은 공동 입력 시트 전환(supplierInputTransition)에서 결정",
+      "오공구독 retiredTab은 그대로 폐지 유지 — 오공구독 상품은 손오공 탭 안 상품구분으로 계속 구분",
+      "원자↔F01 대조 기준을 '앞 네 탭 + F86'에서 '회사 탭 + 공동시트 종합'으로 바꾸고, 적용 회차 readback에서 회사 탭과 종합 탭 사이 같은 공급사 코드·같은 차량번호 0행을 검증",
+      "아직 F86을 Data 발행 대상으로 다루는 곳 — scripts/data-delivery-owner.mjs의 f86-deliver·f86-readback 단계, docs/DATA-DELIVERY-OWNER-ROLLOUT.md, src/domain/data-domain-catalog.ts의 F86 OUTPUT locator — 은 공동 입력 시트 전환 때 HOLD 또는 발행 폐지로 바꾼다(현재 data-owned-refresh 예약 회차는 skipped)"
     ]
   },
   "supplierInputTransition": {
