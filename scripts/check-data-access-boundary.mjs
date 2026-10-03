@@ -149,7 +149,7 @@ const preservationAllowlist = [
     call: 'const patch = row.exists ? Object.fromEntries(Object.keys(row.patch).map(key => [key, key in row.data ? row.data[key] : FieldValue.delete()]))',
     reason: 'restore from typed backup; PR1c narrows this' },
   { kind: 'replaceSet', file: 'src/infra/admin-workflow-firestore.ts', call: 'tx.set(ref)',
-    reason: 'gateway merge=false set; PR1b replacement-write policy pending' },
+    reason: 'gateway replacement; refused unless every stored top-level field is kept and no other mutation touches the document' },
   { kind: 'replaceSet', file: 'src/infra/estimate-artifacts-firestore.ts', call: 'tx.set(headRef)', count: 2,
     reason: 'head pointer; versions are create-only' },
   { kind: 'replaceSet', file: 'src/infra/firestore-store.ts', call: 'native.set(this.db.collection(C.vehicleAssets).doc(asset.id))',
