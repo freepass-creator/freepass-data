@@ -1,6 +1,6 @@
 {
   "schema_version": "1.1",
-  "observed_at": "2026-09-29T15:15:54Z",
+  "observed_at": "2026-10-03T06:19:48Z",
   "projects": [
     {
       "project_id": "ai-core",
@@ -11,7 +11,7 @@
       "mission": "Route work and preserve revision-bound decisions, evidence and authority boundaries across the group.",
       "repository": "freepass-creator/ai-core",
       "default_branch": "main",
-      "local_path": "C:\\dev\\ai-core-control-tower",
+      "local_path": "C:\\dev\\ai-core",
       "head_revision": "52c19202eb8c1e9beeb59495d02d580bc16f1606",
       "authoritative_sources": [
         {
@@ -32,7 +32,7 @@
       ],
       "known_blockers": [
         "resolved 2026-09-17: order-control is connected on main (PR #22/#37/#38/#41) and the server readWorkProjection socket is wired (PR #44). What remains is configuration, not code -- orders.connection.json workSources must name the operating registry/snapshot/mappings/ledger, or /api/orders/:id/work answers WORK_SOURCE_MISSING_<source>",
-        "three local checkouts exist for this one repo on different branches; not consolidated (re-measured 2026-09-17: ai-core=main, ai-core-audit=feature/cognitive-runtime-v0.6, ai-core-control-tower=docs/2026-09-16-review)",
+        "resolved 2026-10-03: the three-checkout split is gone — ai-core-control-tower and ai-core-audit no longer exist; the canonical checkout is C:\\dev\\ai-core (main). C:\\dev\\ai-core-academy-deploy is a detached runner for academy:start, not a work line.",
         "SELF_REVISION_CYCLE: a committed registry file cannot durably equal the commit SHA that contains itself. registry-refresh must not rewrite/demote the ai-core self entry until self-revision runtime binding is modeled separately."
       ]
     },
@@ -40,19 +40,19 @@
       "project_id": "aiops",
       "name": "AIOps",
       "organization": "SUBSIDIARY",
-      "repository_lifecycle_status": "ACTIVE",
-      "execution_readiness_status": "HOLD",
-      "mission": "Operational control plane for Freepass contracts, receivables, penalties, insurance and cash reconciliation; also hosts generic Google/Drive/Sheets connectors pending shared-service extraction.",
+      "repository_lifecycle_status": "RETIRE",
+      "execution_readiness_status": "DISABLED",
+      "mission": "RETIRING (2026-10-03 owner decision): legacy AI-OPS repository, frozen (README notice 95a38df). Penalty engine moved to freepass-creator/renman penalty-engine/ (renman#17); Firestore lookup tool bogi moved to freepass-creator/ai-ops scripts/데이터/ (short term, long term renman-data read API); knowhow/maps moved to ai-ops docs/. Remaining: history PII purge then PRIVATE Archive. Plan: ai-ops docs/handoffs/aiops-legacy-정리표-20260929.md.",
       "repository": "freepass-creator/aiops",
       "default_branch": "main",
-      "local_path": "C:\\dev\\aiops",
-      "head_revision": "f54be4cdd46074b7d3ff67f58f960c88fab14be2",
+      "local_path": null,
+      "head_revision": "95a38df98704f989a001a41d362443b83e353548",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/aiops",
-          "revision": "f54be4cdd46074b7d3ff67f58f960c88fab14be2",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "95a38df98704f989a001a41d362443b83e353548",
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
@@ -68,10 +68,9 @@
         "lib/seungin.mjs 행위등급 (local/drive-add/protected)"
       ],
       "known_blockers": [
-        "Actual Windows Task Scheduler Enabled/LastRun/LastTaskResult remains operationally unverified from GitHub.",
-        "Security exact-subject SHADOW is on main, but recent GitHub Actions jobs have an observed runner-entry failure mode with zero executed steps; code-level CI enforcement must be re-observed when runners execute.",
-        "Historical local checkout/history-surgery state has not been re-observed after current main advanced; do not reuse the old local-ahead count as current fact.",
-        "Runtime parity verified: f2243643...→3d6ec8c6 changes only .ai-core starter-kit files; no AIOps operational/runtime source file changed, so prior execution readiness is preserved."
+        "RETIRED 2026-10-03 (owner decision): no new work in freepass-creator/aiops. AI Core routes nothing here — operations.penalty.* moved to renman (penalty-engine/); finance.cash-status, finance.receivables and operations.insurance-status are HOLD on renman-data until a governed read adapter exists; operations.insurance is HOLD on renman.",
+        "Remaining retirement steps: history PII purge, then PRIVATE Archive. Local C:\\dev\\aiops deletion and Archive require a fresh owner confirmation (ai-ops docs/handoffs/aiops-legacy-정리표-20260929.md).",
+        "Windows scheduled tasks aiops-* (6) still point at C:\\dev\\aiops; all are Disabled and must not be re-enabled against this path."
       ]
     },
     {
@@ -83,14 +82,14 @@
       "mission": "Repository discovered and indexed by AI Core; mission and operating boundaries require source review before activation.",
       "repository": "freepass-creator/casemap-private",
       "default_branch": "main",
-      "local_path": null,
-      "head_revision": "f7c9c212a1d281f410d82d1949db32cf30f5187a",
+      "local_path": "C:\\dev\\casemap",
+      "head_revision": "b2c4d8882eaa403e907c689ff520b202e39a8f36",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/casemap-private",
-          "revision": "f7c9c212a1d281f410d82d1949db32cf30f5187a",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "b2c4d8882eaa403e907c689ff520b202e39a8f36",
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
@@ -120,7 +119,7 @@
           "kind": "GIT",
           "ref": "freepass-creator/docshub",
           "revision": "4059d82779b7e1796afa2bbdf644e1d3bbdba3e7",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
@@ -152,7 +151,7 @@
           "kind": "GIT",
           "ref": "freepass-creator/fp-settlement",
           "revision": "7b90d04a4461e605e2ac2987f1f9e371c476e176",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
@@ -175,14 +174,14 @@
       "mission": "Internal FreePass admin product for canonical product search, application, contract progress and settlement; backend/domain integrity is prioritized while UI/UX waits for the AI Core/DevCenter common standard.",
       "repository": "freepass-creator/freepass-admin",
       "default_branch": "main",
-      "local_path": null,
-      "head_revision": "932dd42f71d5a33b8794f9523cecff11702eefa1",
+      "local_path": "C:\\dev\\freepass-admin",
+      "head_revision": "1f6f98bbc2f7efe52784ff25c034d7e23b92a927",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/freepass-admin",
-          "revision": "932dd42f71d5a33b8794f9523cecff11702eefa1",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "1f6f98bbc2f7efe52784ff25c034d7e23b92a927",
+          "observed_at": "2026-10-03T06:19:48Z"
         },
         {
           "kind": "GIT",
@@ -218,14 +217,14 @@
       "mission": "Canonical FreePass estimator/domain SSOT for new-car and used-car quote UI/UX, provider-neutral quote contracts, calculation-provider routing, sharing snapshots and estimator regression evidence.",
       "repository": "freepass-creator/freepass-estimate",
       "default_branch": "main",
-      "local_path": null,
-      "head_revision": "5fa8f7f44b9f18dae1261c8f3a49e449701eddbb",
+      "local_path": "C:\\dev\\freepass-estimate",
+      "head_revision": "f05c4b997bc6268f5526db74bbc65d0ed7cf0f8e",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/freepass-estimate#main",
-          "revision": "5fa8f7f44b9f18dae1261c8f3a49e449701eddbb",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "f05c4b997bc6268f5526db74bbc65d0ed7cf0f8e",
+          "observed_at": "2026-10-03T06:19:48Z"
         },
         {
           "kind": "GIT",
@@ -259,14 +258,14 @@
       "mission": "Repository discovered and indexed by AI Core; mission and operating boundaries require source review before activation.",
       "repository": "freepass-creator/freepasshomepage",
       "default_branch": "main",
-      "local_path": null,
-      "head_revision": "5afcdd03f2db7abdf8ee68fde77cdba541f21220",
+      "local_path": "C:\\dev\\freepasshomepage",
+      "head_revision": "dbf35c85c48a39a7c6d9b75b1a1e8ad157178918",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/freepasshomepage",
-          "revision": "5afcdd03f2db7abdf8ee68fde77cdba541f21220",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "dbf35c85c48a39a7c6d9b75b1a1e8ad157178918",
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
@@ -289,14 +288,14 @@
       "mission": "Sales inquiry/mail-intake and promotion tooling for Freepass.",
       "repository": "freepass-creator/freepass-sales",
       "default_branch": "main",
-      "local_path": "C:\\dev\\sales",
-      "head_revision": "76dd85abab0ea795a3f58ef48bc32b47beb9c5ad",
+      "local_path": "C:\\dev\\freepass-sales",
+      "head_revision": "e2ac9942bca681bca12f167d687e6adcdf23a976",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/freepass-sales",
-          "revision": "76dd85abab0ea795a3f58ef48bc32b47beb9c5ad",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "e2ac9942bca681bca12f167d687e6adcdf23a976",
+          "observed_at": "2026-10-03T06:19:48Z"
         },
         {
           "kind": "GIT",
@@ -330,13 +329,13 @@
       "repository": "freepass-creator/freepass-data",
       "default_branch": "main",
       "local_path": "C:\\dev\\freepass-data",
-      "head_revision": "5e1be5f3244be6472ce3693fef100c960c227be6",
+      "head_revision": "e49dfb9afa6d8203ed3bf388525179f122aed007",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/freepass-data",
-          "revision": "5e1be5f3244be6472ce3693fef100c960c227be6",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "e49dfb9afa6d8203ed3bf388525179f122aed007",
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
@@ -363,13 +362,13 @@
       "repository": "freepass-creator/freepasserp4",
       "default_branch": "main",
       "local_path": "C:\\dev\\freepasserp4",
-      "head_revision": "c860364e523f9265c2b80f44938b4c744c07e15d",
+      "head_revision": "6a72da4c60edc075f378730f9176f77c438ea655",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/freepasserp4",
-          "revision": "c860364e523f9265c2b80f44938b4c744c07e15d",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "6a72da4c60edc075f378730f9176f77c438ea655",
+          "observed_at": "2026-10-03T06:19:48Z"
         },
         {
           "kind": "GIT",
@@ -441,7 +440,7 @@
           "kind": "GIT",
           "ref": "freepass-creator/sonogong-estimator",
           "revision": "a3627f6e7b8d61f71a83cc7008997b2780522e6f",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
@@ -464,14 +463,14 @@
       "mission": "Repository discovered and indexed by AI Core; mission and operating boundaries require source review before activation.",
       "repository": "freepass-creator/teamjpkwork",
       "default_branch": "main",
-      "local_path": null,
-      "head_revision": "867ebfdc73ea31106fea83c4320e6973e26f1027",
+      "local_path": "C:\\dev\\teamjpkwork",
+      "head_revision": "44c892ec18858475c4c8d9935aa25169fc0978bc",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/teamjpkwork",
-          "revision": "867ebfdc73ea31106fea83c4320e6973e26f1027",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "44c892ec18858475c4c8d9935aa25169fc0978bc",
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
@@ -501,7 +500,7 @@
           "kind": "GIT",
           "ref": "freepass-creator/workcontrol",
           "revision": "71920aa1a9b7f030b931ab4c009f250d66292002",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
@@ -526,13 +525,13 @@
       "repository": "freepass-creator/mewcar",
       "default_branch": "main",
       "local_path": "C:\\dev\\mewcar",
-      "head_revision": "c929437dd63ac58b4030a189661abe5ec5a4ff7b",
+      "head_revision": "2b23b0035411f63a6a5396effc6bd8175068a8a1",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/mewcar",
-          "revision": "c929437dd63ac58b4030a189661abe5ec5a4ff7b",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "2b23b0035411f63a6a5396effc6bd8175068a8a1",
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
@@ -566,14 +565,14 @@
       "mission": "Current executable new-car quote/reference runtime with provider-bound Welrix calculation, quote-contract validation and mobile UI evidence while FreePass Estimate assumes long-term product/domain ownership.",
       "repository": "freepass-creator/welrixtable",
       "default_branch": "main",
-      "local_path": null,
-      "head_revision": "f86d2f14e98f386045677ab0a63b42f6f378c4db",
+      "local_path": "C:\\dev\\welrixtable",
+      "head_revision": "e7010b445ceb52a6b22fd6e64c55b4dd665ab685",
       "authoritative_sources": [
         {
           "kind": "GIT",
           "ref": "freepass-creator/welrixtable",
-          "revision": "f86d2f14e98f386045677ab0a63b42f6f378c4db",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "revision": "e7010b445ceb52a6b22fd6e64c55b4dd665ab685",
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
@@ -608,7 +607,7 @@
           "kind": "GIT",
           "ref": "freepass-creator/mewcar-jbwoori-proposal",
           "revision": "3fc11053ed46bfd92165bffd26530006b2de2293",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
@@ -631,49 +630,128 @@
       ]
     },
     {
-      "project_id": "kakao-ops",
-      "name": "Kakao Ops",
+      "project_id": "ai-ops",
+      "name": "AI Ops",
       "organization": "SUBSIDIARY",
-      "mission": "Run the local KakaoTalk desktop automation and consume FreePass Data through a dedicated authenticated read contract without exposing Firestore credentials to the messaging PC.",
-      "repository": "freepass-creator/kakao-ops",
+      "mission": "Operate the company's AI employee runtime across the Windows PC: observe and act through Computer Use Core, with KakaoTalk as the first app adapter, while consuming project/domain data only through their governed contracts.",
+      "repository": "freepass-creator/ai-ops",
       "default_branch": "master",
       "work_branches": [
         "codex/freepass-data-consumer-20260922"
       ],
-      "local_path": "C:\\dev\\kakao-remote",
-      "head_revision": "9495c9f5de7994b68ff8af30f2da36f3b697fe9d",
+      "local_path": "C:\\dev\\ai-ops",
+      "head_revision": "8f1812cb181e05e0d215db013bafc5de27e3af79",
       "authoritative_sources": [
         {
           "kind": "GIT",
-          "ref": "freepass-creator/kakao-ops",
-          "revision": "9495c9f5de7994b68ff8af30f2da36f3b697fe9d",
-          "observed_at": "2026-09-29T15:15:54Z"
+          "ref": "freepass-creator/ai-ops",
+          "revision": "8f1812cb181e05e0d215db013bafc5de27e3af79",
+          "observed_at": "2026-10-03T06:19:48Z"
         }
       ],
       "commands": {
-        "install": null,
-        "test": null,
+        "install": "npm ci",
+        "test": "npm test",
         "build": null
       },
       "deploy_targets": [
-        "Dedicated Windows KakaoTalk operator PC"
+        "Dedicated Windows AI employee PC"
       ],
       "required_approvals": [
-        "external KakaoTalk message send",
-        "production consumer credential change"
+        "external message or email send when the active AI Ops policy requires approval",
+        "production consumer credential change",
+        "destructive or irreversible PC action"
       ],
       "known_blockers": [
-        "Dedicated kakao-ops consumer identity is not registered in FreePass Data yet.",
-        "FreePass Data has no non-empty ACTIVE erp-public release, so catalog answers must remain HOLD.",
-        "Repository has no committed deterministic test command yet."
+        "Current production mode is session-direct AI work; the legacy automatic-response pipeline remains blocked unless explicitly forced under the repository's current gate.",
+        "Windows operational verification still requires PowerShell 5.1/BOM compatibility, live DPI sender/read-count verification and outgoing-effect receipts on the target PC.",
+        "Multi-PC duplicate execution prevention and durable LIVE executor boundaries remain operational gates.",
+        "AI Ops may consume FreePass Data and other domain sources only through their governed consumer/read contracts; it must not become a second data SSOT or writer."
       ],
       "repository_lifecycle_status": "ACTIVE",
       "execution_readiness_status": "HOLD",
       "commands_absent_reason": {
-        "install": "The current repository has no package manifest or canonical installation command.",
-        "test": "Deterministic consumer-adapter tests are the next integration change and are not merged yet.",
-        "build": "PowerShell and Node.js runtime scripts execute from source without a build artifact."
+        "build": "The Node.js/PowerShell runtime executes from source and package.json has no build script."
       }
+    },
+    {
+      "project_id": "renman-data",
+      "name": "Renman Data",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Dedicated Renman data contracts and policy-governed read gateway over teamjpkwork Firestore; preserves source evidence and does not duplicate AI Ops business writers.",
+      "repository": "freepass-creator/renman-data",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\renman-data",
+      "head_revision": "834efc35a78bd09bc4c9f695fc52bb138f8089c6",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/renman-data",
+          "revision": "834efc35a78bd09bc4c9f695fc52bb138f8089c6",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": null,
+        "test": "node scripts/renman-source-audit.mjs --test-profile && node --test scripts/renman-read-api.test.mjs scripts/renman-cloud-hub.test.mjs",
+        "build": null
+      },
+      "commands_absent_reason": {
+        "install": "Native Node runtime modules use no third-party package install.",
+        "build": "No single local build command is registered. Four-file Cloud Build 16e2b1bb-9931-4a26-81eb-c73e3162ffd4 and private read revision renman-data-read-00002-b9z were verified on 2026-10-01; business data publication remains HOLD."
+      },
+      "deploy_targets": [
+        "Cloud Run teamjpkwork/asia-northeast3/renman-data-read"
+      ],
+      "required_approvals": [
+        "production-data-write",
+        "production-deploy",
+        "consumer-permission-change"
+      ],
+      "known_blockers": [
+        "READ_ONLY_DEVELOPMENT_ALLOWED; execution readiness remains HOLD for business-confirmed source publication and production changes.",
+        "Immutable source retention, stable contract mapping, staff confirmation and per-consumer persistent audit remain unimplemented.",
+        "GitHub verify/deploy main runs 36792847815/36792847790 did not start any steps due to billing. Direct read-runtime deployment/readback verified separately; automation remains UNAVAILABLE_BILLING.",
+        "AI Ops owns existing business write paths; this registration does not authorize a second arrears writer or data migration."
+      ]
+    },
+    {
+      "project_id": "renman",
+      "name": "Renman",
+      "organization": "SUBSIDIARY",
+      "repository_lifecycle_status": "ACTIVE",
+      "execution_readiness_status": "HOLD",
+      "mission": "Rental-car business ERP web app (jpkerp6, Next.js + Firebase) and, since 2026-10-03, owner of the penalty (과태료) engine moved from the retired aiops repository into penalty-engine/ (renman#17). Reads rental business data through renman-data; does not host the read gateway.",
+      "repository": "freepass-creator/renman",
+      "default_branch": "main",
+      "local_path": "C:\\dev\\renman",
+      "head_revision": "499142f23b91eff38595cfdc022cb7067b3f642b",
+      "authoritative_sources": [
+        {
+          "kind": "GIT",
+          "ref": "freepass-creator/renman",
+          "revision": "499142f23b91eff38595cfdc022cb7067b3f642b",
+          "observed_at": "2026-10-03T06:19:48Z"
+        }
+      ],
+      "commands": {
+        "install": "npm ci",
+        "test": "npm test && npm --prefix penalty-engine test",
+        "build": "npm run build"
+      },
+      "deploy_targets": [],
+      "required_approvals": [
+        "external penalty dispatch (관청발송·문서24업로드) stays with staff",
+        "production-data-write",
+        "production-deploy"
+      ],
+      "known_blockers": [
+        "Execution readiness is HOLD: penalty-engine was migrated at renman 499142f (renman#17); its own suite passed 222 of 227 with the same 5 failures as the aiops original, and no AI Core execution has been re-verified at this revision.",
+        "penalty-engine reads keys from C:\\dev\\teamjpkwork\\.env.local (WORK_ENV_PATH) and runs with penalty-engine/ as cwd; canonical tables lib/wonja/*.json, gongmun-damdang.json and beopin-jeongbon.json are absent until rebuilt in Firestore/renman-data.",
+        "Scheduled penalty tasks (aiops-gwataeryo-*) are Disabled and still point at C:\\dev\\aiops; re-register them from penalty-engine/ before enabling."
+      ]
     }
   ]
 }

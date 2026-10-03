@@ -195,3 +195,21 @@ AI Core의 반복 업무는 다음 네 레인으로 분류한다. **레인은 �
 - 다른 프로젝트 감사에서 수정 필요가 발견되면 기본적으로 **그 프로젝트의 Work branch로 수정 요청을 라우팅**한다. AI Core에 남길 수 있는 것은 전사 공통 규격·검증기·통합 primitive뿐이다.
 
 따라서 `work/core`, `work/integration`, `work/audit`, `work/hardening` 같은 고정 장기 브랜치를 네 개 유지하는 방식도 금지한다. **개념 레인은 네 개지만 실제 branch는 Work 수만큼만 잠깐 존재**한다.
+
+## 11. 프로젝트 이름과 이름 바꾸기
+
+> 보관본 `docs/PROJECT_NAMING_STANDARD.md` @ `37fd3e2`(2026-09-20)에서 **원칙과 이름 바꾸기 단계만** 옮겼다(2026-09-30, Codex 판정 ADOPT_PARTS).
+> 당시의 추천 이름표·`registry/project-names.json` 전제·변경 영향표는 옮기지 않았다 — 미승인·낡은 관측이다. 실제 이름 변경은 `registry/projects.json` 의 별도 결정으로만 한다.
+
+1. `project_id` 는 표시명과 분리된 **불변 ID** 다. 표시명·저장소가 바뀌어도 재사용하거나 바꾸지 않는다.
+2. 사람이 보는 이름(`name`)과 기술 식별자(`system_aliases`)를 나눈다.
+3. 규칙을 어긴 현재 값을 발견하면 숨기지 않고 **현재 값을 먼저 기록**한다. 문서 병합만으로 저장소나 폴더 이름을 바꾸지 않는다.
+4. 같은 저장소의 가지·worktree 는 **별도 프로젝트가 아니다.** 독립 업무 경계가 명시된 하위 기능만 같은 소유 저장소의 논리 프로젝트로 등록한다.
+5. 회사명·제품명·기술 버전을 한 이름에 섞지 않는다. `v2/v4/v5` 는 독립 제품 근거가 없으면 표시명이 아니라 alias·이력에만 둔다.
+6. 비슷해 보여도 **동일성 근거가 부족하면 합치지 않고 HOLD** 한다.
+7. 저장소 수명(`repository_lifecycle_status`)과 실행 준비(`execution_readiness_status`)는 다른 것이다 — ACTIVE 저장소도 실행은 HOLD 일 수 있다.
+
+**이름 바꾸기 단계** (한 번에 저장소 하나):
+- 사전감사: clone·worktree·submodule·workflow·배포·scheduler·secret 경로·절대 로컬 경로·IDE workspace 를 목록화하고, 옛 slug ↔ 새 slug 를 1:1 로 확정한다. 커밋 안 된 checkout·안 올린 가지가 있으면 HOLD.
+- 기술 rename: GitHub rename → canonical clone 재구성 → 로컬 경로 → 문서·자동화 참조 → build/test. redirect 에 기대지 않고 새 URL 을 명시한다.
+- 배포·domain 변경은 rename 과 **별도 change set** 으로, production revision·Firebase/Vercel binding·scheduler·rollback 을 검증하고 실행 영수증 없이는 완료로 적지 않는다.
