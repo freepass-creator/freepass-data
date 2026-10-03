@@ -61,9 +61,18 @@ describe('Iancar server photo transport', () => {
       { photo_id: 'hero', url: '/v1/vehicles/V1/photos/hero', representative: true } ] };
   it('binds photos to the exact stable ID and plate and places the representative first', () => {
     expect(iancarOnePhotoIds({ data: detail }, 'V1', '133 호1234')).toEqual(['hero', 'other']);
-    expect(() => iancarOnePhotoIds(detail, 'V2', '133호1234')).toThrow('IANCAR_PHOTO_IDENTITY_OR_SCOPE_INVALID');
-    expect(() => iancarOnePhotoIds(detail, 'V1', '133호9999')).toThrow();
-    expect(() => iancarOnePhotoIds({ ...detail, stale: true }, 'V1', '133호1234')).toThrow();
+    expect(() => iancarOnePhotoIds(detail, 'V2', '133호1234')).toThrow('IANCAR_PHOTO_IDENTITY_MISMATCH');
+    expect(() => iancarOnePhotoIds(detail, 'V1', '133호9999')).toThrow('IANCAR_PHOTO_IDENTITY_MISMATCH');
+    expect(() => iancarOnePhotoIds(null, 'V1', '133호1234')).toThrow('IANCAR_PHOTO_IDENTITY_MISMATCH');
+    expect(() => iancarOnePhotoIds({ ...detail, stale: true }, 'V1', '133호1234')).toThrow('IANCAR_PHOTO_DETAIL_STALE');
+    expect(() => iancarOnePhotoIds({ ...detail, stale: undefined }, 'V1', '133호1234')).toThrow('IANCAR_PHOTO_DETAIL_STALE');
+    expect(() => iancarOnePhotoIds({ ...detail, photos: undefined }, 'V1', '133호1234')).toThrow('IANCAR_PHOTO_LIST_MISSING');
+    const many = Array.from({ length: 201 }, (_, i) => ({ photo_id: `p${i}`, url: `/v1/vehicles/V1/photos/p${i}`, representative: false }));
+    expect(() => iancarOnePhotoIds({ ...detail, photos: many }, 'V1', '133호1234')).toThrow('IANCAR_PHOTO_LIMIT_EXCEEDED');
+    // Codes never carry the vehicle ID or plate.
+    try { iancarOnePhotoIds({ ...detail, stale: true }, 'V1', '133호1234'); } catch (error) {
+      expect(String((error as Error).message)).not.toMatch(/V1|133/);
+    }
     expect(iancarOnePhotoIds({ ...detail, photos: [] }, 'V1', '133호1234')).toEqual([]);
   });
   it('rejects external credential paths, duplicate references and ambiguous representatives', () => {
@@ -199,9 +208,10 @@ describe('EANCAR ONE official partner API', () => {
     const capture = await collectIancarOnePhaseOneFacts(config, fetcher, new Date().toISOString(), undefined, { photos: true });
     expect(buildIancarOnePublicationProducts(capture)[0]?.photo?.count).toBe(0);
     await expect(collectIancarOnePhaseOneFacts(config, fullFetcher('wrong-plate'), new Date().toISOString(), undefined, { photos: true }))
-      .rejects.toThrow('IANCAR_PHOTO_IDENTITY_OR_SCOPE_INVALID');
+      .rejects.toThrow('IANCAR_PHOTO_IDENTITY_MISMATCH');
+    // The default fixture detail has no photos array.
     await expect(collectIancarOnePhaseOneFacts(config, fullFetcher(), new Date().toISOString(), undefined, { photos: true }))
-      .rejects.toThrow('IANCAR_PHOTO_IDENTITY_OR_SCOPE_INVALID');
+      .rejects.toThrow('IANCAR_PHOTO_LIST_MISSING');
   });
 
   it('full photo sync bounds provider concurrency to two and still reconciles every source identity', async () => {
