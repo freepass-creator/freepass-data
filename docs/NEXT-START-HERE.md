@@ -267,7 +267,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 | 어떤 데이터가 있고 어떤 경로로 접근하는가? | [데이터 도메인 카탈로그](DATA-DOMAIN-CATALOG.md), [접근 Gateway](DATA-ACCESS-GATEWAY.md) | 제공 상태·권한·계약과 조회 영수증. 내부 collection 경로를 공개 계약으로 사용하지 않음 |
 | F01/F86·ERP·화이트라벨·Admin에 잘 전달되는가? | [소비처별 사용 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md), [소비처 런타임](ERP5-CONSUMER-RUNTIME.md) | 소비처별 release/snapshot·필드·실제 readback. 한 곳 성공을 전체 성공으로 확대하지 않음 |
 | 시트 모양·열·숨김 규칙은 무엇인가? | [시트 규격](F01-F86-SHEET-SPEC.md), [실행 runbook](F01-F86-SHEET-RUNBOOK.md) | 기계 정본 `contracts/f01-f86-sheet-spec.v1.json`. 표시 검사는 원천 최신화 검사가 아님 |
-| 공급사 수집 공통 규격과 공급사별 차이는 어디서 보는가? | [FreePass Data 원본 직접 수집기](NATIVE-SOURCE-COLLECTOR.md#common-supplier-adapter-contract--2026-10-02) | 손오공 버킷/상세·이안카 ONE·웰릭스 시트 RAW 계약. 새 손오공/웰릭스 live transport·운영 전환은 미연결 |
+| 공급사 수집 공통 규격과 공급사별 차이는 어디서 보는가? | [FreePass Data 원본 직접 수집기](NATIVE-SOURCE-COLLECTOR.md#common-supplier-adapter-contract--2026-10-02), [직접 연동 5곳 점검](NATIVE-SOURCE-COLLECTOR.md#supplier-direct-status) | 공통 RAW 계약과 공급사별 요금/사진/계산 입력·Scheduler 설계. 10-03 관측은 당시 증거이며 native transport·운영 전환 완료가 아님 |
 | 원본을 어떻게 읽고 오류·갱신을 확인하는가? | [ERP5 캡처](ERP5-SOURCE-CAPTURE.md), [Source run 안전 규칙](SOURCE-RUN-SAFETY.md) | readTime·digest·전체 범위·갱신 run·accepted head. schedule/종료 성공만으로 최신성 판정 금지 |
 | 어디까지 구현·운영되었고 무엇부터 이어가는가? | [Implementation Status](IMPLEMENTATION-STATUS.md), 이 문서의 업무별 날짜 기록 | CODED/TESTED/PERSISTENCE/DEPLOYMENT/CUTOVER를 구분. 현재 main·진행 PR과 대조 |
 | 프로젝트 책임과 설계 기준은 무엇인가? | [승인 Architecture v2](ARCHITECTURE-V2-APPROVED.md), [Issue #24](https://github.com/freepass-creator/freepass-data/issues/24) | 설계 기준과 최신 도메인 소유권 결정 구분. 과거 charter를 후속 승인보다 우선하지 않음 |
@@ -307,6 +307,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+## 2026-10-03 직접 연동 공급사 5곳 점검
+
+- 목적: 공동 시트 밖 RP031/RP012/RP006/RP023/RP004의 원천 누락·수집 누락을 구분하고 기간별 계산 입력과 15분 트리거 설계를 정리한다.
+- 대상 revision: `work/freepass-data/supplier-direct-integration-20261003` / `e4dcee5446e70f7342f1bcdc25b170d8aca077d0`(GitHub main 재확인). ERP4는 `fe3eccc` Git 객체만 읽었다. 변경은 이 파일과 [NATIVE-SOURCE-COLLECTOR.md](NATIVE-SOURCE-COLLECTOR.md)의 `직접 연동 공급사 현황 — 2026-10-03` 절뿐이다.
+- 확인: 운영 run37110200131의 단계 성공/시각과 이안카 syncedAt을 재조회. 아이언은 parser 사진 배열→mirror/Row 전달 단절 및 72/84/비표준 기간 손실 경로가 있다. 지정5대 원문 페이지는 robots 접근 실패/브라우저 차단으로 미확인, 원천 미제공으로 확정하지 않는다.
+- 아이카 새 readback: 원본3개 재고 탭의 차량번호 셀 rich link와 F86 `아이카 82대` 차량번호를 대조. F86 링크40/82, 누락42 중 원본 링크 있음6/원본 같은 행에 링크 없음3/원본3탭 미매칭33. 6대의 전달 누락은 확인했으나 사진 귀속·33대의 원천 범위·동일 시점 원자 대사는 HOLD다. source/API 원문·차량별 링크는 Git에 복제하지 않았다.
+- 설계: Scheduler→OIDC private Cloud Run 중계→기존 ERP4 workflow_dispatch 입력 재사용이 최소안. 기존 cadence 양보/동일 writer concurrency 유지, App Actions write와 secret 단위 accessor만 설계. at-least-once 중복/불명확 응답과 admission 경합 검증 필요. native Cloud Run writer는 legacy fencing 이전 활성화 금지. owner 변수만 전환하면 구 Data engine pin과 충돌한다.
+- 검증: Academy READY. Codex 샌드박스 check는 환경 오류(uv_os_get_passwd·jq 권한·로컬 서버 연결)로 9 FAIL이었고, Claude가 정상 환경에서 같은 트리로 `npm run check` 재실행 → exit0, Vitest 1168 PASS / 14 SKIP, build PASS. `git diff --check` 통과. Claude(B3Q 공급사 연동 세션)가 문서 diff를 읽고 검토함 — 문서 전용 변경, 코드·운영값 변경0.
+- 남음: 아이언 실제 요금/사진 증거, 아이카 누락·미매칭 대사, 5곳 term별 청구/지급 수수료·정책 효력 연결, native transport, Scheduler 실검증, 운영 Firestore/Sheets·IAM·Scheduler·var/secret·dispatch 변경0, ERP4 수정0, commit/push0.
+- next_start_here: 위 native collector 절의 근거·최소 diff 제안·공급사별 필요한 것부터 검토한다. 원본 rich link를 보존하는 Data reader와 원천 기간 tuple 보존을 기존 RAW 계약으로 연결할 범위를 결정하고, 이 PR은 진단·설계 문서만 머지한다. 이번 결과를 운영 수리/15분 갱신 완료로 표시하지 않는다.
 
 ### 2026-10-03 이안카 전체15분 동기화 재개
 
