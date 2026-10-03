@@ -15,11 +15,14 @@ const canonFixture=()=>{
   }]}))};return {snapshot,spec};
 };
 const canonPut=(f,tab,row,h,value,extra={})=>Object.assign(f.snapshot.sheets[tab].data[0].rowData[row].values[f.spec.inputHeaders.indexOf(h)],{userEnteredValue:typeof value==='number'?{numberValue:value}:{stringValue:value},...extra});
-test('canon full columns: partial capture fixes row 61 through metadata end, request count is height independent',()=>{
+test('canon full columns: partial capture HOLDs (majority formats need every row); complete capture plans full columns to metadata end',()=>{
   const f=canonFixture();f.snapshot.sheets.forEach((t,i)=>{t.properties.gridProperties.rowCount=i===0?20000:1000;t.data[0].rowData=t.data[0].rowData.slice(0,2);});
-  const before=JSON.stringify(f),p=planTabConsistencyFix(f.snapshot,f.spec);
-  assert.equal(p.status,'PLANNED');assert.equal(JSON.stringify(f),before);
-  for(const t of f.snapshot.sheets){
+  const before=JSON.stringify(f),partial=planTabConsistencyFix(f.snapshot,f.spec);
+  assert.equal(partial.status,'HOLD');assert.deepEqual(partial.requests,[]);assert.equal(JSON.stringify(f),before);
+  assert.equal(partial.holds.filter(h=>h.reason==='PARTIAL_CAPTURE_MAJORITY_FORMATS').length,f.snapshot.sheets.length);
+  assert.ok(auditTabConsistency(f.snapshot,f.spec).holds.some(h=>h.reason==='PARTIAL_GRID_COVERAGE'));
+  const g=canonFixture(),p=planTabConsistencyFix(g.snapshot,g.spec);assert.equal(p.status,'PLANNED');
+  for(const t of g.snapshot.sheets){
     const id=t.properties.sheetId,end=t.properties.gridProperties.rowCount;
     const requests=p.requests.filter(r=>{const x=Object.values(r)[0];return (x.range?.sheetId??x.properties?.sheetId??x.sheetId??x.rule?.ranges?.[0]?.sheetId)===id;});
     assert.ok(requests.length>=70&&requests.length<=250,`${t.properties.title}: ${requests.length}`);
@@ -31,9 +34,6 @@ test('canon full columns: partial capture fixes row 61 through metadata end, req
     }
     assert.ok(!requests.some(r=>r.updateCells||r.repeatCell?.fields.includes('userEnteredValue')));
   }
-  assert.ok(auditTabConsistency(f.snapshot,f.spec).holds.some(h=>h.reason==='PARTIAL_GRID_COVERAGE'));
-  f.snapshot.sheets.forEach(t=>t.properties.gridProperties.rowCount+=10000);
-  assert.equal(planTabConsistencyFix(f.snapshot,f.spec).requests.length,p.requests.length);
 });
 test('canon full columns: header-only evidence plans spec fields and holds unknown reference attributes',()=>{
   const f=canonFixture();f.snapshot.sheets.forEach(t=>{t.data[0].rowData=t.data[0].rowData.slice(0,1);delete t.data[0].columnMetadata;delete t.data[0].rowMetadata;});

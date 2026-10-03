@@ -704,6 +704,8 @@ export function planTabConsistencyFix(snapshot,spec=inputSpec){
   }
   const baseRules=canonRule(base.sheet.conditionalFormats??[],base);
   if(JSON.stringify(baseRules).includes('!')||baseRules.some(rule=>rule.ranges.some(r=>r.sheetId!=='SELF')))holds.push({tab:base.title,reason:'CONDITIONAL_EXTERNAL_REFERENCE'});
+  // Majority-derived attributes (bold, numberFormat, ...) cover whole columns, so they need every row read.
+  for(const c of tabs.map(canonCoverage))if(!c.complete)holds.push({tab:c.tab,reason:'PARTIAL_CAPTURE_MAJORITY_FORMATS'});
   // Fail closed like planValueNormalize: any hold withholds every request.
   const result=()=>({status:holds.length?'HOLD':'PLANNED',scope:'OFFLINE_FORMATS_ONLY_FULL_COLUMNS',referenceTab:base.title,holds,coverage:tabs.map(canonCoverage),withheldRequestCount:holds.length?requests.length:0,requests:holds.length?[]:requests});
   if(holds.some(h=>!h.reason.startsWith('NO_MAJORITY_')))return result();
