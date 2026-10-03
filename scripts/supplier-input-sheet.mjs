@@ -468,6 +468,8 @@ function canonTabs(snapshot,spec){
   const titles=[spec.summaryTitle,...spec.supplierChannels.sharedInputSheet.map(s=>s.tab)];
   const tabs=titles.map(t=>all.find(s=>s.properties?.title===t));
   if(tabs.some(t=>!t))hold('Canon registered tabs missing');
+  // canonCaptureRequest reads formats only; a check without the value capture merged in must not run.
+  if(tabs.some(t=>!headersOf(t).some(Boolean)))hold('Canon header values missing: merge the canonValueCaptureRequest result with mergeCanonCaptures');
   if(spec.inputHeaders.some(h=>!spec.valueFormats?.[h]))hold('Canon valueFormats incomplete');
   return tabs.map(s=>{
     const rows=new Map(),columns=new Map(),heights=new Map();
@@ -600,7 +602,9 @@ export function planValueNormalize(snapshot,spec=inputSpec,now=Date.now()){
     if(x.formatBad)requests.push({repeatCell:{range,cell:{userEnteredFormat:{numberFormat:x.format}},fields:'userEnteredFormat.numberFormat'}});
   }
   const coverage=tabs.map(canonCoverage);
-  return {status:holds.length||coverage.some(c=>!c.complete)?'PARTIAL_WITH_HOLD':'PLANNED',plannedAt:new Date(now).toISOString(),scope:'OFFLINE_OBSERVED_SUPPLIER_INPUT_ONLY',columns,holds,coverage,requests};
+  // Fail closed: one undecided value or incomplete capture withholds every write, so nothing is applied partially.
+  const blocked=holds.length>0||coverage.some(c=>!c.complete);
+  return {status:blocked?'HOLD':'PLANNED',plannedAt:new Date(now).toISOString(),scope:'OFFLINE_OBSERVED_SUPPLIER_INPUT_ONLY',columns,holds,coverage,withheldRequestCount:blocked?requests.length:0,requests:blocked?[]:requests};
 }
 function canonMajority(values){
   const groups=new Map();for(const v of values){const k=canonKey(v);groups.set(k,{value:v,count:(groups.get(k)?.count??0)+1});}
@@ -700,7 +704,8 @@ export function planTabConsistencyFix(snapshot,spec=inputSpec){
   }
   const baseRules=canonRule(base.sheet.conditionalFormats??[],base);
   if(JSON.stringify(baseRules).includes('!')||baseRules.some(rule=>rule.ranges.some(r=>r.sheetId!=='SELF')))holds.push({tab:base.title,reason:'CONDITIONAL_EXTERNAL_REFERENCE'});
-  const result=()=>({status:holds.length?(requests.length?'PARTIAL_WITH_HOLD':'HOLD'):'PLANNED',scope:'OFFLINE_FORMATS_ONLY_FULL_COLUMNS',referenceTab:base.title,holds,coverage:tabs.map(canonCoverage),requests});
+  // Fail closed like planValueNormalize: any hold withholds every request.
+  const result=()=>({status:holds.length?'HOLD':'PLANNED',scope:'OFFLINE_FORMATS_ONLY_FULL_COLUMNS',referenceTab:base.title,holds,coverage:tabs.map(canonCoverage),withheldRequestCount:holds.length?requests.length:0,requests:holds.length?[]:requests});
   if(holds.some(h=>!h.reason.startsWith('NO_MAJORITY_')))return result();
   // Coalesce adjacent columns with identical payloads. Row endpoints always
   // come from metadata, never the length of a captured GridData block.
@@ -750,10 +755,29 @@ export function canonValueCaptureRequest(spec,metadata){
     return `'${t.properties.title.replaceAll("'","''")}'!A1:${columnLetter(spec.inputHeaders.length-1)}${last}`;
   }),fields:'spreadsheetId,sheets(properties(sheetId,title),data(startRow,startColumn,rowData(values(userEnteredValue,formattedValue,effectiveValue))))'};
 }
+// The canon check needs both captures: formats from canonCaptureRequest and values from
+// canonValueCaptureRequest. Same workbook and same tabs, both anchored at A1; inputs stay untouched.
+export function mergeCanonCaptures(formatCapture,valueCapture){
+  const fb=formatCapture?.spreadsheet??formatCapture,vb=valueCapture?.spreadsheet??valueCapture;
+  if(!Array.isArray(fb?.sheets)||!Array.isArray(vb?.sheets))hold('Both format and value captures required');
+  if(!fb.spreadsheetId||fb.spreadsheetId!==vb.spreadsheetId)hold('Captures come from different workbooks');
+  const key=s=>`${s.properties?.sheetId}:${s.properties?.title}`;
+  if(JSON.stringify(fb.sheets.map(key).sort())!==JSON.stringify(vb.sheets.map(key).sort()))hold('Captures cover different tabs');
+  const anchor=s=>{const d=s.data??[];if(d.length!==1||(d[0].startRow??0)!==0||(d[0].startColumn??0)!==0)hold(`Capture must be one A1 block: ${s.properties.title}`);return d[0];};
+  const merged=structuredClone(fb);
+  for(const sheet of merged.sheets){
+    const block=anchor(sheet),values=anchor(vb.sheets.find(s=>key(s)===key(sheet)));
+    (values.rowData??[]).forEach((row,r)=>{const target=(block.rowData??=[])[r]??={};
+      (row.values??[]).forEach((cell,c)=>{const t=(target.values??=[])[c]??={};for(const k of ['userEnteredValue','formattedValue','effectiveValue'])if(cell[k]!==undefined)t[k]=structuredClone(cell[k]);});
+      if(target.values)for(let c=0;c<target.values.length;c++)target.values[c]??={};});
+    for(let r=0;r<(block.rowData?.length??0);r++)block.rowData[r]??={};
+  }
+  return merged;
+}
 
 if(process.argv[1]&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
   const modes={'--audit-formats':auditValueFormats,'--normalize-values':planValueNormalize,'--audit-tabs':auditTabConsistency,'--fix-tabs':planTabConsistencyFix,'--exclude-supplier':planExcludeSupplierTab,'--capture-canon':metadata=>canonCaptureRequest(inputSpec,metadata),'--capture-values':metadata=>canonValueCaptureRequest(inputSpec,metadata)};
   const canonArg=process.argv.slice(2).find(a=>Object.keys(modes).some(k=>a.startsWith(k+'='))||a.startsWith('--check-canon'));
-  if(canonArg){try{const mode=canonArg.split('=')[0],path=canonArg.includes('=')?canonArg.slice(mode.length+1):process.argv[process.argv.indexOf(canonArg)+1];if(!path)hold('Snapshot path required');const snapshot=JSON.parse(fs.readFileSync(path==='-'?0:path,'utf8'));const result=mode==='--check-canon'?{formats:auditValueFormats(snapshot),tabs:auditTabConsistency(snapshot)}:modes[mode](snapshot);const code=mode==='--check-canon'&&(result.formats.status!=='PASS'||result.tabs.status!=='PASS')?1:0;process.stdout.write(`${JSON.stringify(result,null,2)}\n`,()=>process.exit(code));}catch(e){console.error(e.message);process.exit(2);}}
+  if(canonArg){try{const mode=canonArg.split('=')[0],path=canonArg.includes('=')?canonArg.slice(mode.length+1):process.argv[process.argv.indexOf(canonArg)+1];if(!path)hold('Snapshot path required');const read=JSON.parse(fs.readFileSync(path==='-'?0:path,'utf8')),snapshot=read.formatCapture||read.valueCapture?mergeCanonCaptures(read.formatCapture,read.valueCapture):read;const result=mode==='--check-canon'?{formats:auditValueFormats(snapshot),tabs:auditTabConsistency(snapshot)}:modes[mode](snapshot);const code=mode==='--check-canon'&&(result.formats.status!=='PASS'||result.tabs.status!=='PASS')?1:0;process.stdout.write(`${JSON.stringify(result,null,2)}\n`,()=>process.exit(code));}catch(e){console.error(e.message);process.exit(2);}}
   try {const master=process.argv.find(a=>a.startsWith('--vehicle-master='))?.slice(17);if(master){console.log(JSON.stringify(planVehicleMasterDropdowns(JSON.parse(master==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(master,'utf8'))),null,2));process.exit(0);}const change=process.argv.find(a=>a.startsWith('--change-layout='))?.slice(16);if(change){console.log(JSON.stringify(planLayoutChange(JSON.parse(change==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(change,'utf8'))),null,2));process.exit(0);}const add=process.argv.find(a=>a.startsWith('--add-columns='))?.slice(14);if(add){console.log(JSON.stringify(planColumnAdd(JSON.parse(add==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(add,'utf8'))),null,2));process.exit(0);}const reorder=process.argv.find(a=>a.startsWith('--reorder='))?.slice(10);if(reorder){console.log(JSON.stringify(planLayoutReorder(JSON.parse(reorder==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(reorder,'utf8'))),null,2));process.exit(0);}const split=process.argv.find(a=>a.startsWith('--split='))?.slice(8);if(split){console.log(JSON.stringify(planPolicySplit(JSON.parse(split==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(split,'utf8'))),null,2));process.exit(0);}const dropdowns=process.argv.find(a=>a.startsWith('--dropdowns='))?.slice(12);const compare=process.argv.find(a=>a.startsWith('--compare='))?.slice(10);if(dropdowns){console.log(JSON.stringify(planSupplierDropdowns(JSON.parse(dropdowns==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(dropdowns,'utf8'))),null,2));}else if(compare){console.log(JSON.stringify(compareSharedToLegacy(JSON.parse(fs.readFileSync(compare,'utf8'))),null,2));}else{const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json or --compare=private-compare.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}
 }

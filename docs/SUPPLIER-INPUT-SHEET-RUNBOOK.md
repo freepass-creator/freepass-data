@@ -26,7 +26,7 @@ node scripts/supplier-input-sheet.mjs --fix-tabs=C:/private/sheet-snapshot.json
 
 `planTabConsistencyFix`/`--fix-tabs`는 관측 셀별 차이 목록을 수정 요청으로 바꾸지 않는다. **2행부터 각 탭 metadata의 rowCount 끝까지** 열 범위로 숫자/날짜 서식·가로 정렬·글꼴을 매번 적용한다. 머리글은 1행, 열 너비/숨김·행 높이·고정은 규격 값이다. 인접 열의 payload가 같으면 묶어 탭당 대략 75~250개 요청을 만들며 높이가 늘어도 요청 수는 늘지 않는다. fields는 개별 format 속성만 지정하고 값·수식·note·링크를 쓰지 않는다. 머리글 RGB 적용 시 우선순위가 높은 backgroundColorStyle은 비워 RGB가 적용되게 한다. 공급사 목록은 `dropdowns`, 차종 4칸은 `vehicleMaster` ONE_OF_RANGE, 자유 입력 열의 기존 validation은 지운다. 종합에는 validation 요청 자체가 없다.
 
-부분 스냅샷도 머리글/탭 구조를 확인할 수 있으면 전체 열 계획을 만든다. 기준 속성의 과반이 없으면 그 속성은 생략하고 `PARTIAL_WITH_HOLD`로 보고한다. **계획 PLANNED는 검사 PASS가 아니다.** `auditTabConsistency`의 `PARTIAL_GRID_COVERAGE` HOLD는 그대로이며 전체 높이를 읽어야 PASS가 가능하다. 잘못된 머리글·열 수·숨김 대상 탭·외부 참조 조건부 규칙은 수정 요청 0으로 차단한다. `planSupplierInput`은 계속 양식 확인 전용이다. 원본 셀 값 정리는 `planValueNormalize`만 담당한다(아래 별도 제외 계획의 종합 수식 재생성은 명시된 예외).
+부분 스냅샷도 머리글/탭 구조를 확인할 수 있으면 전체 열 계획을 만든다. 기준 속성의 과반이 없으면 `HOLD`로 보고하고 요청을 하나도 내지 않는다(`withheldRequestCount`에 보류한 수만 적는다). `planValueNormalize`도 같다: 정리할 수 없는 값이 하나라도 있거나 읽은 범위가 불완전하면 `HOLD`와 빈 `requests`를 돌려 부분 적용을 막는다(2026-10-03 접수 검토). **계획 PLANNED는 검사 PASS가 아니다.** `auditTabConsistency`의 `PARTIAL_GRID_COVERAGE` HOLD는 그대로이며 전체 높이를 읽어야 PASS가 가능하다. 잘못된 머리글·열 수·숨김 대상 탭·외부 참조 조건부 규칙은 수정 요청 0으로 차단한다. `planSupplierInput`은 계속 양식 확인 전용이다. 원본 셀 값 정리는 `planValueNormalize`만 담당한다(아래 별도 제외 계획의 종합 수식 재생성은 명시된 예외).
 
 **전체 높이 읽기 요청 생성(오프라인):**
 
@@ -38,6 +38,8 @@ node scripts/supplier-input-sheet.mjs --capture-values=C:/private/metadata-with-
 `canonCaptureRequest(spec, metadata)`는 `{spreadsheetId, includeGridData:true, ranges, fields}`를 반환한다. metadata는 native `{spreadsheetId,sheets:[{properties:{sheetId,title,gridProperties:{rowCount,columnCount}}}]}`이며 모든 등록 탭이 있어야 한다. 각 range는 `'탭'!A1:BW<rowCount>`이고 탭 이름의 작은따옴표를 이스케이프한다. 마음카는 범위에서 제외한다. 출력 JSON을 운영자가 별도로 `gws sheets spreadsheets get --params '<출력 JSON>'`의 params로 사용할 수 있다. 생성 함수/CLI 자체는 Google에 접속하지 않는다.
 
 fields는 위치 식별자와 gridProperties/conditionalFormats, userEnteredFormat의 numberFormat/horizontalAlignment/textFormat(fontFamily,fontSize,bold,italic)/backgroundColor, dataValidation, columnMetadata(pixelSize,hiddenByUser), rowMetadata(pixelSize)로 한정한다. 본문 값·effectiveFormat·note·링크는 읽지 않는다. 헤더/값은 **별도** `canonValueCaptureRequest`로 읽는다. metadata 최상위 `usedRows`에 `{종합:215, 웰릭스:60, ...}`처럼 확인된 마지막 사용 행을 넣으며 추정하거나 rowData 길이로 대체하지 않는다. userEnteredValue/formattedValue와 수식 결과의 typed 검증에 필요한 effectiveValue만 반환한다.
+
+두 캡처는 반드시 같이 쓴다. `mergeCanonCaptures(formatCapture, valueCapture)`가 같은 spreadsheetId·같은 탭·A1 시작 블록인지 확인하고 값 칸만 합친다. 정본 검사는 머리글 값이 없는 탭이 있으면 `Canon header values missing`으로 HOLD하므로 서식 캡처만으로는 돌지 않는다. CLI `--check-canon=<file>`은 합친 스냅샷이나 `{formatCapture, valueCapture}` 둘 다 받는다.
 
 감사 입력은 같은 조회 회차의 두 응답을 sheetId·행·열 좌표로 합친다. 헤더 값이 없는 format-only 응답만 넣으면 헤더 증거 HOLD다. 값이 없는 뒤쪽 행에도 전체 format 응답의 rowData를 유지하며, 요청 범위만 보고 누락 행을 임의로 채워 PASS를 만들지 않는다. API가 뒤쪽 rowData를 생략하면 full-height 요청 사실만으로 coverage PASS가 되지 않으므로 명시적 전체 행 증거를 확보한다.
 

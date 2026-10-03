@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {auditValueFormats,planValueNormalize,auditTabConsistency,planTabConsistencyFix,canonCaptureRequest,canonValueCaptureRequest,planExcludeSupplierTab} from '../scripts/supplier-input-sheet.mjs';
+import {auditValueFormats,planValueNormalize,auditTabConsistency,planTabConsistencyFix,canonCaptureRequest,canonValueCaptureRequest,planExcludeSupplierTab,mergeCanonCaptures} from '../scripts/supplier-input-sheet.mjs';
 import {planSupplierInput,planSupplierDropdowns,planVehicleMasterDropdowns,planPolicySplit,planLayoutReorder,planColumnAdd,planLayoutChange,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec} from '../scripts/supplier-input-sheet.mjs';
 const now=Date.parse('2026-10-03T12:00:00Z');
 const legacy=inputSpec.legacyLayouts['2026-10-02'];
@@ -37,9 +37,9 @@ test('canon full columns: partial capture fixes row 61 through metadata end, req
 });
 test('canon full columns: header-only evidence plans spec fields and holds unknown reference attributes',()=>{
   const f=canonFixture();f.snapshot.sheets.forEach(t=>{t.data[0].rowData=t.data[0].rowData.slice(0,1);delete t.data[0].columnMetadata;delete t.data[0].rowMetadata;});
-  const p=planTabConsistencyFix(f.snapshot,f.spec);assert.equal(p.status,'PARTIAL_WITH_HOLD');assert.ok(p.requests.length>0);
-  const body=p.requests.find(r=>r.repeatCell?.range.startRowIndex===1).repeatCell;
-  assert.match(body.fields,/textFormat.fontFamily/);assert.ok(!body.fields.includes('textFormat.bold'));
+  // Fail closed: an attribute without a majority withholds every request.
+  const p=planTabConsistencyFix(f.snapshot,f.spec);assert.equal(p.status,'HOLD');assert.deepEqual(p.requests,[]);assert.ok(p.withheldRequestCount>0);
+  assert.ok(p.holds.some(h=>h.reason==='NO_MAJORITY_textFormat.bold'));
 });
 test('canon full columns: supplier lists and four master ranges; no summary validations or value writes',()=>{
   const f=canonFixture(),p=planTabConsistencyFix(f.snapshot,f.spec);
@@ -102,8 +102,12 @@ test('canon: exact dates, ages, seats and aliases normalize; ambiguous values an
   canonPut(f,1,1,'연주행','연 20,000km');canonPut(f,1,1,'면허기간','1년 이상');canonPut(f,1,1,'1개월','900,000');
   canonPut(f,1,2,'기본연령','26');canonPut(f,1,2,'1개월','90만원');canonPut(f,1,2,'최초등록일','2026-02-30');canonPut(f,1,2,'정비','오일 연2회');
   canonPut(f,1,3,'기본연령','',{userEnteredValue:{formulaValue:'="만 26세 이상"'},effectiveValue:{stringValue:'만 26세 이상'}});
-  canonPut(f,0,1,'입고일자','2026-10-03');const before=JSON.stringify(f),p=planValueNormalize(f.snapshot,f.spec,now);
-  assert.equal(JSON.stringify(f),before);assert.equal(p.columns.find(c=>c.column==='입고일자').normalizable,3);assert.equal(p.holds.length,5);
+  canonPut(f,0,1,'입고일자','2026-10-03');const before=JSON.stringify(f),held=planValueNormalize(f.snapshot,f.spec,now);
+  assert.equal(JSON.stringify(f),before);assert.equal(held.columns.find(c=>c.column==='입고일자').normalizable,3);assert.equal(held.holds.length,5);
+  // Fail closed: any hold withholds every write.
+  assert.equal(held.status,'HOLD');assert.deepEqual(held.requests,[]);assert.ok(held.withheldRequestCount>0);
+  for(const [r,h] of [[2,'기본연령'],[2,'1개월'],[2,'최초등록일'],[2,'정비'],[3,'기본연령']])canonPut(f,1,r,h,'');
+  const p=planValueNormalize(f.snapshot,f.spec,now);assert.equal(p.status,'PLANNED');assert.equal(p.holds.length,0);assert.equal(p.withheldRequestCount,0);
   assert.ok(p.requests.every(r=>(r.updateCells??r.repeatCell).range.sheetId!==0));
   assert.ok(p.requests.filter(r=>r.updateCells).every(r=>r.updateCells.fields==='userEnteredValue'));
   const dates=p.requests.filter(r=>r.updateCells?.range.startColumnIndex===1).map(r=>r.updateCells.rows[0].values[0].userEnteredValue.numberValue);assert.equal(dates[0],dates[1]);
@@ -378,3 +382,15 @@ test('layout change: links plates to photos, deletes removed columns right to le
   const otherUrl=changeFixture([{'사진링크':'https://drive.example/f'}]);otherUrl.spreadsheet.sheets[2].data[0].rowData[1].values[specH.indexOf('차량번호')]={userEnteredValue:{formulaValue:'=HYPERLINK("https://other/x","125호9158")'},effectiveValue:{stringValue:'125호9158'}};assert.throws(()=>planLayoutChange(otherUrl,inputSpec,now),/수식이고 사진 주소와 다름/);
   const short=changeFixture();short.spreadsheet.sheets[2].data[0].rowData.pop();assert.throws(()=>planLayoutChange(short,inputSpec,now),/full-height/);
   assert.throws(()=>planLayoutChange(fixture(),inputSpec,now),/LAYOUT_MISMATCH/);});
+test('canon captures: format-only capture HOLDs; merged format+value captures audit like the full snapshot; mismatched captures HOLD',()=>{
+  const f=canonFixture(),full=f.snapshot.spreadsheet??f.snapshot,id='input-sheet-test';
+  const strip=(keep)=>({spreadsheetId:id,sheets:full.sheets.map(s=>({...structuredClone(s),data:s.data.map(d=>({...structuredClone(d),rowData:(d.rowData??[]).map(r=>({values:(r.values??[]).map(c=>Object.fromEntries(Object.entries(c).filter(([k])=>keep(k))))}))}))}))});
+  const isValue=k=>['userEnteredValue','formattedValue','effectiveValue'].includes(k);
+  const formats=strip(k=>!isValue(k)),values=strip(isValue),before=JSON.stringify([formats,values]);
+  assert.throws(()=>auditTabConsistency(formats,f.spec),/Canon header values missing/);
+  const merged=mergeCanonCaptures(formats,values);assert.equal(JSON.stringify([formats,values]),before);
+  assert.deepEqual(auditTabConsistency(merged,f.spec),auditTabConsistency({...full,spreadsheetId:id},f.spec));
+  assert.throws(()=>mergeCanonCaptures(formats,{...values,spreadsheetId:'other'}),/different workbooks/);
+  assert.throws(()=>mergeCanonCaptures(formats,{...values,sheets:values.sheets.slice(1)}),/different tabs/);
+  assert.throws(()=>mergeCanonCaptures(formats,null),/HOLD/);
+});
