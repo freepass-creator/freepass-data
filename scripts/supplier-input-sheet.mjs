@@ -260,7 +260,13 @@ export function planLayoutChange(input,spec=inputSpec,now=Date.now()){
       const uri=read(photo).trim();if(!uri)return;
       if(!/^https?:\/\//i.test(uri))hold(`${sup.title} ${i+2}행: 사진 주소가 http(s)가 아님`);
       if(!read(plate).trim())hold(`${sup.title} ${i+2}행: 사진 주소는 있는데 차량번호가 없음`);
-      if(plate?.userEnteredValue?.formulaValue)hold(`${sup.title} ${i+2}행: 차량번호가 수식`);
+      const formula=plate?.userEnteredValue?.formulaValue;
+      if(formula){
+        // Plate already written as =HYPERLINK("<same photo url>","<plate>"): it already opens the photo.
+        const m=/^=HYPERLINK\("([^"]+)"\s*,\s*"[^"]*"\)$/i.exec(formula.trim());
+        if(m&&m[1]===uri)return;
+        hold(`${sup.title} ${i+2}행: 차량번호가 수식이고 사진 주소와 다름`);
+      }
       requests.push({repeatCell:{range:{sheetId:sup.sheetId,startRowIndex:i+1,endRowIndex:i+2,startColumnIndex:plateAt,endColumnIndex:plateAt+1},cell:{userEnteredFormat:{textFormat:{link:{uri}}}},fields:'userEnteredFormat.textFormat.link'}});linked++;});
     const order=[...oldH];
     for(const h of [...rule.remove].sort((a,b)=>oldH.indexOf(b)-oldH.indexOf(a))){const at=order.indexOf(h);
