@@ -1,0 +1,75 @@
+name: FreePass Data economics recompute dry-run (no writes)
+
+# 기간별 수수료 일괄 재계산의 운영 dry-run 전용. 쓰기 0.
+# apply·Admin 재발행은 이 워크플로에 없다 — AI 상황실 승인 뒤 별도 PR로 연다.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: freepass-data-economics-recompute
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  dry-run:
+    environment: data-production-delivery
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NODE_ENV: production
+      FIREBASE_PROJECT_ID: freepasserp5
+      GOOGLE_CLOUD_PROJECT: freepasserp5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install without lifecycle hooks
+        run: npm ci --ignore-scripts
+      # 주의: 이 계정(github-data-inventory-writer)은 쓰기 권한이 있다. 이 워크플로는 --apply 를 넘기지 않고,
+      # 결과가 mode=DRY_RUN·writes=0 이 아니면 실패로 끝내는 코드 가드로 쓰기 0 을 강제한다.
+      # 읽기 전용 계정으로 분리하는 일은 후속 일감(이슈)으로 둔다.
+      - name: Require the dedicated Data identity
+        env:
+          PROVIDER: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
+          ACCOUNT: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          test -n "$PROVIDER"
+          test "$ACCOUNT" = 'github-data-inventory-writer@freepasserp5.iam.gserviceaccount.com'
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
+          service_account: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Recompute dry-run (no --apply, writes 0) — full plan never printed (public repository)
+        env:
+          BUCKET: ${{ vars.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET }}
+        run: |
+          set -euo pipefail
+          test -n "$BUCKET"
+          mkdir -p tmp
+          umask 077
+          node --import tsx src/jobs/recompute-offer-economics.ts --firestore > tmp/economics-recompute-full.json
+          # 공개 저장소: 로그·artifact 에는 집계만. 상품별 before-image 가 든 전체 계획은 비공개 버킷에만.
+          node -e "const fs=require('fs');const r=JSON.parse(fs.readFileSync('tmp/economics-recompute-full.json','utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0){console.error('NOT A DRY RUN');process.exit(1)}const {plan,...summary}=r;fs.writeFileSync('tmp/economics-recompute-summary.json',JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2))"
+          uri="gs://$BUCKET/economics-recompute/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          gcloud storage cp --no-user-output-enabled tmp/economics-recompute-full.json "$uri/plan.json" --if-generation-match=0
+          gcloud storage cp --no-user-output-enabled "$uri/plan.json" tmp/plan-readback.json
+          cmp tmp/economics-recompute-full.json tmp/plan-readback.json
+          echo "private plan stored and verified (location not printed: public repository)"
+          rm -f tmp/economics-recompute-full.json tmp/plan-readback.json
+      - name: Retain aggregate summary only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: economics-recompute-dry-run-${{ github.run_id }}
+          path: tmp/economics-recompute-summary.json
+          if-no-files-found: warn
+          retention-days: 30
