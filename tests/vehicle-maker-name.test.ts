@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { canonicalVehicleMakerName, VEHICLE_MAKER_ALIASES } from '../src/domain/vehicle-maker-name.js';
 import { auditVehicleNameReferenceParity } from '../src/application/vehicle-master-reference-parity.js';
 
-describe('vehicle maker display names (Encar, 2026-10-03)', () => {
+describe('vehicle maker display names (Encar, no brackets, 2026-10-04 final)', () => {
   it('maps the old F03 names to the Encar display name and keeps others', () => {
     expect(Object.fromEntries(Object.keys(VEHICLE_MAKER_ALIASES).map((name) => [name, canonicalVehicleMakerName(name)])))
-      .toEqual({ 토요타: '도요타', 쉐보레: '쉐보레(GM대우)', 르노코리아: '르노코리아(삼성)', KG모빌리티: 'KG모빌리티(쌍용)' });
-    for (const name of ['도요타', '쉐보레(GM대우)', '기아', ' 현대 ', 'constructor']) {
+      .toEqual({ 토요타: '도요타', '쉐보레(GM대우)': '쉐보레', GM대우: '쉐보레', 르노코리아: '르노', '르노코리아(삼성)': '르노', 르노삼성: '르노', KG모빌리티: 'KGM', 'KG모빌리티(쌍용)': 'KGM', 쌍용: 'KGM' });
+    for (const name of ['도요타', '쉐보레', '르노', 'KGM', '기아', ' 현대 ', 'constructor']) {
       expect(canonicalVehicleMakerName(name)).toBe(name.trim());
     }
   });
