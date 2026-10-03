@@ -215,8 +215,10 @@
         "offerEconomics": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["status", "missingTermCount", "unresolvedValueCount", "invalidTermCount"],
+          "required": ["status", "missingTermCount", "unresolvedValueCount", "invalidTermCount", "economicsCoverage", "economicsTermCounts"],
           "properties": {
+            "economicsCoverage": {"enum": ["COMPLETE", "INCOMPLETE"]},
+            "economicsTermCounts": {"type": "object", "additionalProperties": false, "required": ["supplierBillingFee", "channelPayoutFee"], "properties": {"supplierBillingFee": {"type": "object", "additionalProperties": false, "required": ["KNOWN", "ZERO", "UNKNOWN", "NOT_APPLICABLE"], "properties": {"KNOWN": {"type": "integer", "minimum": 0}, "ZERO": {"type": "integer", "minimum": 0}, "UNKNOWN": {"type": "integer", "minimum": 0}, "NOT_APPLICABLE": {"type": "integer", "minimum": 0}}}, "channelPayoutFee": {"type": "object", "additionalProperties": false, "required": ["KNOWN", "ZERO", "UNKNOWN", "NOT_APPLICABLE"], "properties": {"KNOWN": {"type": "integer", "minimum": 0}, "ZERO": {"type": "integer", "minimum": 0}, "UNKNOWN": {"type": "integer", "minimum": 0}, "NOT_APPLICABLE": {"type": "integer", "minimum": 0}}}}},
             "status": {"enum": ["PASS", "WARN", "FAIL"]},
             "missingTermCount": {"type": "integer", "minimum": 0},
             "unresolvedValueCount": {"type": "integer", "minimum": 0},

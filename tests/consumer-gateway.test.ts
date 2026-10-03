@@ -1,3 +1,5 @@
+import { buildAdminCatalogProjection } from '../src/application/admin-catalog.js';
+import { updateOfferPrice } from '../src/application/catalog.js';
 import { describe, expect, it } from 'vitest';
 import { createConsumerGateway, parseConsumerBindings, type ConsumerBinding } from '../src/api/consumer-gateway.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
@@ -511,4 +513,27 @@ describe('read-only consumer gateway', () => {
       expect(() => parseConsumerBindings(JSON.stringify(entries))).toThrow();
     }
   });
+});
+
+
+it('serves Admin stored fees and coverage with an isolated grant, and no public fee leakage', async () => {
+  const store = new MemoryDataStore(); await seedDemoCatalog(store);
+  await updateOfferPrice(store, { commandId: 'fees', idempotencyKey: 'fees-admin-unknown',
+    offerId: 'offer_gv70_demo', expectedRevision: 1, termKey: '36@20000',
+    monthlyRent: { amount: 500000, currency: 'KRW' }, reason: 'test missing supplier policy', actor: { id: 'user:test', kind: 'USER' } });
+  const admin = await buildAdminCatalogProjection(store, store);
+  await buildErpPublicProjection(store, store);
+  const { app } = withAccess(store, [binding, { id: 'freepass-admin-catalog', projectionId: 'admin-catalog', token: token + '-admin' }]);
+  const adminUrl = '/v1/consumers/freepass-admin-catalog/catalog';
+  expect((await app.inject({ url: adminUrl, headers })).statusCode).toBe(401);
+  const response = await app.inject({ url: adminUrl, headers: { authorization: `Bearer ${token}-admin` } });
+  expect(response.statusCode).toBe(200);
+  expect(response.json().meta).toMatchObject({ ...admin.economics, economicsCoverage: 'INCOMPLETE' });
+  expect(response.json().meta.economicsTermCounts.supplierBillingFee.UNKNOWN).toBe(1);
+  expect(response.json().data[0].offers[0].priceTerms[0].channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null });
+  const publicResponse = await app.inject({ url, headers });
+  expect(publicResponse.statusCode).toBe(200);
+  expect(publicResponse.body).not.toContain('supplierBillingFee');
+  expect(publicResponse.body).not.toContain('economicsCoverage');
+  await app.close();
 });

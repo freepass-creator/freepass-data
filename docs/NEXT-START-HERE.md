@@ -261,6 +261,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 | 질문 | 먼저 볼 정본/안내 | 확인할 증거와 경계 |
 |---|---|---|
+| 기간별 선계산과 Admin 수수료 coverage는 어디서 읽는가? | [Admin 내부 기간별 경제조건](READ-RUNTIME.md#admin-내부-기간별-경제조건--2026-10-03) | Canonical 저장 시 계산, Admin 읽기만; 운영 backfill/재발행 미실행 |
 | 프리패스 수수료와 공급사/영업채널 연동은 어떻게 다른가? | [수수료 연동 기준](READ-RUNTIME.md#수수료-연동-기준--사용자-결정-2026-09-30) | 기본은 지급수수료. 상대별 helper PREPARED, 외부 API와 scope 연결은 미구현 |
 | 상품·정책의 숫자와 문구가 무슨 뜻인가? | [Commercial Data Catalog](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary) | 72항목 의미. 공급사별 실제 값·예외·효력일은 원천으로 대조 |
 | 접수·계약·인도·수수료 정산은 어떻게 연결되는가? | [업무 데이터 연결 지도](BUSINESS-DATA-CONNECTION-MAP.md) | ID/버전/스냅샷 관계와 업무 소유권. 실제 계약 확정·수금·지급을 별도로 확인 |
@@ -318,6 +319,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 검증: Academy READY. Codex 샌드박스 check는 환경 오류(uv_os_get_passwd·jq 권한·로컬 서버 연결)로 9 FAIL이었고, Claude가 정상 환경에서 같은 트리로 `npm run check` 재실행 → exit0, Vitest 1168 PASS / 14 SKIP, build PASS. `git diff --check` 통과. Claude(B3Q 공급사 연동 세션)가 문서 diff를 읽고 검토함 — 문서 전용 변경, 코드·운영값 변경0.
 - 남음: 아이언 실제 요금/사진 증거, 아이카 누락·미매칭 대사, 5곳 term별 청구/지급 수수료·정책 효력 연결, native transport, Scheduler 실검증, 운영 Firestore/Sheets·IAM·Scheduler·var/secret·dispatch 변경0, ERP4 수정0, commit/push0.
 - next_start_here: 위 native collector 절의 근거·최소 diff 제안·공급사별 필요한 것부터 검토한다. 원본 rich link를 보존하는 Data reader와 원천 기간 tuple 보존을 기존 RAW 계약으로 연결할 범위를 결정하고, 이 PR은 진단·설계 문서만 머지한다. 이번 결과를 운영 수리/15분 갱신 완료로 표시하지 않는다.
+
+### 2026-10-03 기간별 수수료 Canonical 선계산 / Admin 내부 읽기
+
+- 목적/대상 revision: `work/freepass-data/term-economics-precompute-20261003`, 기준 `e4dcee5446e70f7342f1bcdc25b170d8aca077d0`. 지정 worktree만 수정, 운영 Firestore/시트 쓰기·push 없음.
+- 재사용 판정: `reuse:check` 후보와 09-30 시안 확인. 기존 `resolve-offer-commercial-terms.ts`를 확장하고 Kakao의 고정 수수료 resolver·규칙을 호출한다(EXTEND_EXISTING). 시안의 UNKNOWN 변환 원리를 재사용하며 compatibility `internalPeriodFees` writer는 가져오지 않는다. 신규 저장소·파일 없음.
+- 변경 A: 순수 `precomputeOfferEconomics`, 신규/원천 변경/가격 변경 세 CatalogStore 거래에서 계산값·revision snapshot·audit 동시 보존. 24개월 월50만원 → 청구57만원/지급48만원. 규칙 없음 UNKNOWN, 협의 COORDINATION_REQUIRED, 0원 ZERO, 입력 불변.
+- 변경 B: Admin 기간 행에 양쪽 TermEconomicAmount와 provenance, 상태별 기간 수/economicsCoverage. 공개 projection 변경 없음. 저장 누락·중복·무효·계산 기준 불일치는 UNKNOWN, health도 불일치 차단. 자세한 계약은 [READ-RUNTIME](READ-RUNTIME.md#admin-내부-기간별-경제조건--2026-10-03).
+- 검증: A 관련56 PASS, B 관련48 PASS. 전체 check의 architecture/standards/data-access/sheets/build/runtime-smoke/shadow/dashboard 통과(Node tests 합104 PASS). Vitest1174 PASS/9 FAIL/14 SKIP. 실패9는 OS userInfo ENOMEM, jq 권한 거부, 로컬 dev 서버 연결 실패이며 단일 worker 재검사도 동일(60 PASS/9 FAIL). 최소 node:os.userInfo 호출도 ENOMEM 재현. 외부환경 SKIP14는 검증 완료가 아니다.
+- 남음/HOLD: Claude 독립 검토 `FAILED/CLAUDE_PROCESS_FAILED`(본문 없음, 미검토). GitHub main/Issue24/PR 읽기는 네트워크 제한으로 실패. 로컬 A 커밋 시도는 공용 Git 관리폴더의 index.lock 권한 거부로 실패해 A/B SHA 없음; 작업파일과 임시 A/B 패치로 보존. 운영 기존 Offer backfill·Admin release 재발행·배포 없음.
+- next_start_here: 권한이 허용된 같은 worktree에서 diff와 A/B 패치를 확인하고 요청된 두 커밋 메시지로 로컬 커밋한다(push 금지). 제한 없는 검사 환경에서 위9건 및 Claude 독립 검토를 완료한다. 미등록 공급사·신차 기준액·협의는 새 사업 규칙 없이 UNKNOWN 유지.
+
 
 ### 2026-10-03 이안카 전체15분 동기화 재개
 

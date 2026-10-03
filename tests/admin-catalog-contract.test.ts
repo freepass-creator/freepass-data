@@ -32,6 +32,8 @@ const sample = {
     policyParity: 'COMPLETE',
     missingPolicyOfferIds: [],
     invalidPolicyFactRefs: [],
+    economicsCoverage: 'INCOMPLETE',
+    economicsTermCounts: { supplierBillingFee: { KNOWN: 0, ZERO: 0, UNKNOWN: 2, NOT_APPLICABLE: 0 }, channelPayoutFee: { KNOWN: 0, ZERO: 0, UNKNOWN: 2, NOT_APPLICABLE: 0 } },
     commercialCoverage: 'COMPLETE',
     commercialMissingOfferIds: [],
   },
@@ -73,6 +75,8 @@ const sample = {
       priceTerms: [{
         termKey: '36_2만',
         termMonths: 36,
+        supplierBillingFee: { state: 'UNKNOWN', amount: null, sourceRefs: ['canonical:missing'] },
+        channelPayoutFee: { state: 'UNKNOWN', amount: null, sourceRefs: ['canonical:missing'] },
         monthlyRent: { amount: 920000, currency: 'KRW' },
         deposit: { amount: 0, currency: 'KRW' },
         depositState: 'ZERO',
@@ -80,6 +84,8 @@ const sample = {
       }, {
         termKey: '48_2만',
         termMonths: 48,
+        supplierBillingFee: { state: 'UNKNOWN', amount: null, sourceRefs: ['canonical:missing'] },
+        channelPayoutFee: { state: 'UNKNOWN', amount: null, sourceRefs: ['canonical:missing'] },
         monthlyRent: { amount: 850000, currency: 'KRW' },
         depositState: 'UNKNOWN',
         mileageLimitKmPerYear: 20000,
@@ -115,4 +121,19 @@ test('Admin Catalog V1 includes current OGONG subscription commercial type', () 
   const copy = structuredClone(sample);
   copy.data[0]!.commercialType = 'OGONG_SUBSCRIPTION';
   expect(validate(copy), JSON.stringify(validate.errors)).toBe(true);
+});
+
+
+test('fee contract rejects leaked extra fields and inconsistent zero/unknown amounts', () => {
+  for (const fee of [
+    { state: 'UNKNOWN', amount: { amount: 1, currency: 'KRW' } },
+    { state: 'ZERO', amount: { amount: 1, currency: 'KRW' }, calculation: { kind: 'FIXED', amount: { amount: 1, currency: 'KRW' } } },
+    { state: 'KNOWN', amount: { amount: 0, currency: 'KRW' } },
+    { state: 'KNOWN', amount: null },
+    { state: 'UNKNOWN', amount: null, margin: 100 },
+  ]) {
+    const value = structuredClone(sample);
+    Object.assign(value.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee, fee);
+    expect(validate(value)).toBe(false);
+  }
 });

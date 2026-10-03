@@ -1,3 +1,4 @@
+import { precomputeOfferEconomics } from './resolve-offer-commercial-terms.js';
 import { randomUUID } from 'node:crypto';
 import type {
   ActorRef,
@@ -626,6 +627,8 @@ export async function canonicalizeCatalogCandidate(
       status: 'ACTIVE',
       priceTerms: structuredClone(candidate.priceTerms)
     };
+
+    offer.internalEconomicsTerms = precomputeOfferEconomics(offer, product.commercialType, model.fuel);
 
     const binding: CanonicalSourceBinding = {
       bindingId,

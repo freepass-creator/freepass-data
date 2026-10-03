@@ -42,6 +42,18 @@ It does not seed data, publish releases, run workers, or expose Catalog mutation
 
 기존 Kakao `catalog-reference`는 내부 업무용으로 양쪽 수수료와 예상 마진을 포함하는 별도 계약이다. 이 응답과 키를 외부 공급사/영업채널에 전달하지 않는다. 현재 public ERP/화이트라벨 projection에는 내부 수수료를 추가하지 않는다. 외부 연동 완료는 전용 계약·scope 차단 테스트·인증된 운영 readback 이후에만 선언한다.
 
+### Admin 내부 기간별 경제조건 — 2026-10-03
+
+Canonical `catalog_offers.internalEconomicsTerms`는 신규 canonicalization, 승인된 원천 Offer 변경, 가격 변경의 기존 CatalogStore 거래 안에서 다시 계산한다. `precomputeOfferEconomics`는 `sales-commission-2026-09-28`과 ERP `settlement-fee-table.ts@f862d0097f6e83d79d0b699bc369a83716b1d982`를 참조하는 기존 resolver를 재사용한다. 대여료·보증금은 `priceTerms`에서 복사하며 별도 `internalPeriodFees` 저장소는 없다. 수수료는 계약 전체 1건의 VAT 별도 공급가액이고 `calculation`, `sourceRefs`, `ruleId`, `policyId`를 보존한다. Offer의 기존 `policyId`(상품 정책)와 수수료의 `policyId`(규칙 묶음)는 다르다.
+
+Admin 전용 `data[].offers[].priceTerms[].supplierBillingFee` / `channelPayoutFee`만 양쪽 금액을 제공한다. Admin은 FreePass 내부 계약접수 주체이므로 외부 공급사/영업채널의 상대편 수수료 제외 규칙과 구분한다. 서버의 `freepass-admin-catalog` 전용 등록·키 제한을 유지하고 public ERP·화이트라벨·Kakao 응답에는 이번 필드를 추가하지 않는다. Admin projection은 저장된 값만 읽고 누락·중복·무효·가격/기간 불일치를 UNKNOWN으로 내린다. Admin에서 재계산하지 않는다.
+
+`meta.economicsTermCounts.{supplierBillingFee,channelPayoutFee}.{KNOWN,ZERO,UNKNOWN,NOT_APPLICABLE}`는 각 수수료별 기간 행 수다. `meta.economicsCoverage`는 빈 기간 목록 또는 한쪽 UNKNOWN이 있으면 INCOMPLETE, 나머지는 COMPLETE다. 릴리스의 `economics`에도 저장하고 gateway는 검증된 release data로 다시 집계한다. Health `checks.offerEconomics`에도 같은 지표를 쓰되 분모는 전체 Canonical Offer의 기간이며 Admin ACTIVE 대상과 다를 수 있다. COMPLETE는 지급 확정·정산 완료·원천 최신성 확인을 뜻하지 않는다.
+
+마음카 RP034·스카이 RP033·미등록 공급사는 규칙 없음, 지원하지 않는 기간은 기간 규칙 없음, 미매칭 상품은 NO_MATCHING_RULE로 UNKNOWN이다. 손오공 구독·스타 렌트·퍼시픽 신차 등 협의는 `UNKNOWN / COORDINATION_REQUIRED`다. 신차 세부상품/기준 차량가액 미확정, RP004 연료 누락, 기존 규칙의 반올림/VAT 반올림 미정도 UNKNOWN이며 임의 환산하지 않는다. 명시적 0원만 ZERO다.
+
+로컬 구현이며 운영 backfill·발행·배포·cutover는 없다. 저장값이 없는 기존 Offer는 새 승인된 저장까지 UNKNOWN이다. 새 필수 필드가 없는 구형 Admin release는 gateway 계약 검증에서 거절되므로 운영 도입 시 승인된 Canonical 저장 및 Admin release 재생성을 먼저 검증해야 한다.
+
 ## Consumer capabilities
 
 Registration fields:

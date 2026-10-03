@@ -42,9 +42,14 @@ export type TermEconomicAmount = {
   amount?: Money | null;
   calculation?: TermAmountCalculation | null;
   sourceRefs: string[];
+  ruleId?: string | null;
+  policyId?: string;
+  reasonCode?: string | null;
 };
 export type OfferTermEconomics = {
   termKey: string;
+  termMonths?: number;
+  monthlyRent?: Money;
   depositCalculation: TermEconomicAmount;
   supplierBillingFee: TermEconomicAmount;
   channelPayoutFee: TermEconomicAmount;
@@ -148,6 +153,17 @@ export type AdminPolicyValue =
   | { policyId: string; type: 'MULTI_SELECT'; value: string[] };
 
 export type AdminPolicyState = 'COMPLETE' | 'MISSING' | 'INVALID';
+export type AdminPriceTerm = PriceTerm & {
+  supplierBillingFee: TermEconomicAmount;
+  channelPayoutFee: TermEconomicAmount;
+};
+export type EconomicsCoverage = {
+  economicsCoverage: 'COMPLETE' | 'INCOMPLETE';
+  economicsTermCounts: {
+    supplierBillingFee: Record<TermAmountState, number>;
+    channelPayoutFee: Record<TermAmountState, number>;
+  };
+};
 
 export type AdminCatalogProduct = {
   productId: string;
@@ -181,7 +197,7 @@ export type AdminCatalogProduct = {
     policyState: AdminPolicyState;
     policyValues: AdminPolicyValue[];
     invalidPolicyFactRefs: string[];
-    priceTerms: PriceTerm[];
+    priceTerms: AdminPriceTerm[];
     commercial?: CommercialOfferView;
   }>;
 };
@@ -193,4 +209,6 @@ export type ProjectionRelease<T> = {
   manifestId: string; inputDigest: string; dataDigest: string;
   status: 'BUILDING' | 'VALIDATING' | 'READY' | 'ACTIVE' | 'FAILED';
   generatedAt: string; activatedAt?: string | null; data: T[];
+  /** Internal Admin release only; gateway recomputes from digest-verified data. */
+  economics?: EconomicsCoverage;
 };

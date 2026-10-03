@@ -1,3 +1,4 @@
+import { summarizeEconomicsCoverage } from '../application/resolve-offer-commercial-terms.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import Fastify from 'fastify';
 import { Ajv2020 } from 'ajv/dist/2020.js';
@@ -368,6 +369,7 @@ export function createConsumerGateway(
             meta: {
               ...commonMeta,
               projectionId: 'admin-catalog' as const,
+              ...summarizeEconomicsCoverage(data.flatMap(product => product.offers.flatMap(offer => offer.priceTerms))),
               policyParity: missingPolicyOfferIds.length || invalidPolicyFactRefs.length
                 ? 'INCOMPLETE' as const
                 : 'COMPLETE' as const,
