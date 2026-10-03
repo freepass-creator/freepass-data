@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { analyzeErp5Deposits } from '../src/adapters/erp5-deposit-analysis.js';
-import { buildErp5CanonicalDryRun, captureErp5Source, compareErp5ProductCaptures, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, readErp5PolicyFacts, profileErp5CaptureFields, summarizeErp5DecisionInputs, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
+import { buildErp5CanonicalDryRun, captureErp5Source, compareErp5ProductCaptures, decodeErp5Value, erp5ReadTransport, inspectErp5Capture, readErp5PolicyFacts, parseAnnualMileageText, profileErp5CaptureFields, summarizeErp5DecisionInputs, ERP5_DOCUMENTS } from '../src/adapters/erp5-source-capture.js';
 const readTime = '2026-09-21T10:00:00.123456Z';
 function doc(collection = 'products', id = 'synthetic') {
   return {
@@ -328,33 +328,66 @@ describe('ERP5 same-transaction raw capture', () => {
     const capture = await captureErp5Source(fake({ products: [product] }).rpc);
     expect(inspectErp5Capture(capture).decodeFailed).toBe(1);
   });
-  it('reports skipped policies separately from missing mileage without promoting timestamp records', async () => {
+  it('keeps a policy whose only timestamp is updated_at metadata, without changing the capture', async () => {
     const policy = doc('policy', 'synthetic-private-policy');
     Object.assign(policy.fields, { updated_at: { timestampValue: readTime }, annual_mileage: { integerValue: '30000' } });
     const capture = await captureErp5Source(fake({ policies: [policy] }).rpc);
     const before = JSON.stringify(capture);
     const report = inspectErp5Capture(capture);
-    expect(readErp5PolicyFacts(capture)).toEqual([]);
+    expect(readErp5PolicyFacts(capture)).toEqual([{ policyCode: 'synthetic-private-policy', annualMileageKm: 30000 }]);
     expect(report.policyFactCoverage).toMatchObject({
-      sourceDocuments: 1, factsProduced: 0, skippedDocuments: 1,
-      decodeFailureCounts: { UNSUPPORTED_FIRESTORE_VALUE: 1 },
-      skippedWithTopLevelTimestampFields: 1, factsMissingAnnualMileage: 0
+      sourceDocuments: 1, factsProduced: 1, skippedDocuments: 0, decodeFailureCounts: {},
+      skippedWithTopLevelTimestampFields: 0, factsWithAnnualMileage: 1
     });
     expect(JSON.stringify(report)).not.toContain('synthetic-private-policy');
     expect(JSON.stringify(capture)).toBe(before);
     expect(report.cutoverAuthorized).toBe(false);
   });
-  it('distinguishes explicit zero, uninterpreted units and missing policy mileage', async () => {
-    const policies = ['numeric', 'text', 'missing'].map(id => doc('policy', id));
+  it('still skips a policy with a timestamp outside the metadata allowlist or nested in a map', async () => {
+    const created = doc('policy', 'created-at');
+    Object.assign(created.fields, { created_at: { timestampValue: readTime } });
+    const nested = doc('policy', 'nested');
+    Object.assign(nested.fields, { meta: { mapValue: { fields: { updated_at: { timestampValue: readTime } } } } });
+    const capture = await captureErp5Source(fake({ policies: [created, nested] }).rpc);
+    expect(readErp5PolicyFacts(capture)).toEqual([]);
+    expect(inspectErp5Capture(capture).policyFactCoverage).toMatchObject({
+      sourceDocuments: 2, factsProduced: 0, skippedDocuments: 2,
+      decodeFailureCounts: { UNSUPPORTED_FIRESTORE_VALUE: 2 }, skippedWithTopLevelTimestampFields: 1
+    });
+  });
+  it('distinguishes explicit zero, parsed text, uninterpreted units and missing policy mileage', async () => {
+    const policies = ['numeric', 'text', 'monthly', 'missing'].map(id => doc('policy', id));
     Object.assign(policies[0]!.fields, { annual_mileage: { integerValue: '0' } });
     Object.assign(policies[1]!.fields, { annual_mileage: { stringValue: '연 30,000km' } });
+    Object.assign(policies[2]!.fields, { annual_mileage: { stringValue: '월 2,500km' } });
     const capture = await captureErp5Source(fake({ policies }).rpc);
     const facts = readErp5PolicyFacts(capture);
     expect(facts.find(x => x.policyCode === 'numeric')?.annualMileageKm).toBe(0);
-    expect(facts.find(x => x.policyCode === 'text')).not.toHaveProperty('annualMileageKm');
+    expect(facts.find(x => x.policyCode === 'text')?.annualMileageKm).toBe(30000);
+    expect(facts.find(x => x.policyCode === 'monthly')).not.toHaveProperty('annualMileageKm');
     expect(inspectErp5Capture(capture).policyFactCoverage).toMatchObject({
-      sourceDocuments: 3, factsProduced: 3, skippedDocuments: 0,
-      factsWithAnnualMileage: 1, factsWithUninterpretedAnnualMileage: 1, factsMissingAnnualMileage: 1
+      sourceDocuments: 4, factsProduced: 4, skippedDocuments: 0,
+      factsWithAnnualMileage: 2, factsWithAnnualMileageParsedFromText: 1,
+      factsWithUninterpretedAnnualMileage: 1, uninterpretedAnnualMileageReasons: { MONTHLY_UNIT: 1 },
+      factsMissingAnnualMileage: 1
+    });
+  });
+  it('parses only unambiguous annual mileage text', () => {
+    expect(['30000', '30,000km', '연 30,000km', '연간 3만km', '3만 ㎞', '25000 KM', '3만키로', '30000킬로미터']
+      .map(parseAnnualMileageText))
+      .toEqual([{ km: 30000 }, { km: 30000 }, { km: 30000 }, { km: 30000 }, { km: 30000 }, { km: 25000 }, { km: 30000 }, { km: 30000 }]);
+    for (const text of ['3만', '연3만', '03만km', '030000', '30000원', '3만원', '연3회', '30000km/년']) {
+      expect(parseAnnualMileageText(text), text).toEqual({ reason: 'UNRECOGNIZED' });
+    }
+    expect(Object.fromEntries(['월 2,500km', '무제한', '2만~3만km', '20000 / 30000', '0km', '2.5만km', '3만km 이상']
+      .map(text => [text, parseAnnualMileageText(text)]))).toEqual({
+      '월 2,500km': { reason: 'MONTHLY_UNIT' },
+      무제한: { reason: 'UNLIMITED' },
+      '2만~3만km': { reason: 'RANGE_OR_MULTIPLE' },
+      '20000 / 30000': { reason: 'RANGE_OR_MULTIPLE' },
+      '0km': { reason: 'NON_POSITIVE' },
+      '2.5만km': { reason: 'UNRECOGNIZED' },
+      '3만km 이상': { reason: 'UNRECOGNIZED' },
     });
   });
   it('exposes inactive facts already emitted by the reader rather than silently changing eligibility', async () => {

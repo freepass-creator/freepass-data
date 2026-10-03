@@ -200,4 +200,29 @@ export function assertAdminWorkflowCommitRequest(value: unknown): asserts value 
     const policy = ADMIN_WORKFLOW_RESOURCE_POLICIES[m.resource as AdminWorkflowResource];
     if (!policy.writeThroughGateway) throw new Error('ADMIN_WORKFLOW_RESOURCE_READ_ONLY');
   }
+  // A whole-document replacement is checked against the stored document, so no other
+  // mutation in the same command may reshape that document first.
+  const touches = new Map<string, number>();
+  for (const m of v.mutations as AdminWorkflowMutation[]) {
+    const key = `${m.resource}/${m.id}`;
+    touches.set(key, (touches.get(key) ?? 0) + 1);
+  }
+  for (const m of adminWorkflowReplacements(v.mutations as AdminWorkflowMutation[])) {
+    if (touches.get(`${m.resource}/${m.id}`)! > 1) throw new Error('INVALID_ADMIN_WORKFLOW_REPLACEMENT_NOT_EXCLUSIVE');
+  }
+}
+
+export type AdminWorkflowReplacement = Extract<AdminWorkflowMutation, { op: 'set' }>;
+
+/** `set` without merge replaces the whole stored document. */
+export function adminWorkflowReplacements(mutations: AdminWorkflowMutation[]): AdminWorkflowReplacement[] {
+  return mutations.filter((m): m is AdminWorkflowReplacement => m.op === 'set' && m.merge !== true);
+}
+
+/**
+ * Data is retired by status, never erased: a replacement may change values but must keep
+ * every top-level field of the stored document. Nested map keys are not checked yet (HOLD).
+ */
+export function droppedTopLevelFields(stored: Record<string, unknown>, next: Record<string, unknown>) {
+  return Object.keys(stored).filter((key) => !Object.hasOwn(next, key)).sort();
 }

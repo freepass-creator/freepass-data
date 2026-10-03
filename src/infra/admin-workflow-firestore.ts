@@ -6,8 +6,10 @@ import type { AdminWorkflowStore } from '../ports/admin-workflow.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import {
   ADMIN_WORKFLOW_RESOURCES,
+  adminWorkflowReplacements,
   adminWorkflowSemanticOwners,
   assertAdminWorkflowCommitRequest,
+  droppedTopLevelFields,
   assertAdminWorkflowReadSpec,
   type AdminWorkflowCommitReceipt,
   type AdminWorkflowCommitRequest,
@@ -27,6 +29,13 @@ class AdminWorkflowConflictError extends Error {
 class AdminWorkflowIdempotencyError extends Error {
   readonly code = 'ADMIN_WORKFLOW_IDEMPOTENCY_CONFLICT';
   constructor() { super('ADMIN_WORKFLOW_IDEMPOTENCY_CONFLICT'); }
+}
+
+export class AdminWorkflowReplacementDropsFieldsError extends Error {
+  readonly code = 'ADMIN_WORKFLOW_REPLACEMENT_DROPS_FIELDS';
+  constructor(readonly resource: string, readonly droppedFields: string[]) {
+    super('ADMIN_WORKFLOW_REPLACEMENT_DROPS_FIELDS');
+  }
 }
 
 const collectionName = (resource: keyof typeof ADMIN_WORKFLOW_RESOURCES) =>
@@ -122,6 +131,14 @@ export function adminWorkflowStore(db: Firestore): AdminWorkflowStore {
         for (const expectation of request.expectations) {
           const current = await readWith(db, expectation.spec, tx);
           if (current.digest !== expectation.digest) throw new AdminWorkflowConflictError();
+        }
+
+        // All reads must finish before the first write in a Firestore transaction.
+        for (const mutation of adminWorkflowReplacements(request.mutations)) {
+          const stored = await tx.get(db.collection(collectionName(mutation.resource)).doc(mutation.id));
+          if (!stored.exists) continue;
+          const dropped = droppedTopLevelFields(stored.data() as Record<string, unknown>, mutation.data);
+          if (dropped.length) throw new AdminWorkflowReplacementDropsFieldsError(mutation.resource, dropped);
         }
 
         for (const mutation of request.mutations) applyMutation(db, tx, mutation);

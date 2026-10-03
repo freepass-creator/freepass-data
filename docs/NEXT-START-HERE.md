@@ -1,5 +1,56 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-03 고도화 전 정리 — 묶음 PR 안내
+
+- 아래 네 항목(PR1a·PR1b·②·④)은 모두 이 문서와 일부 같은 소스 경로를 고쳐 따로 올리면 경로 경합으로 막히므로 main `7dbee2f` 위 한 PR(`claude/data-cleanup-bundle`)로 묶었다. 각 항목의 "대상 revision"은 처음 작업한 기준이며, 묶을 때 main의 새 아이카·아이언 어댑터(`supplier-source-capture.ts`)와 import 충돌만 해소했다. 묶은 뒤 `npm run check` PASS.
+- F01 공급사 기준 개편 설계(`claude/f01-supplier-layout`)는 대표가 구성을 다시 정하는 중(구독사만 별도 탭, 이안카와 공동 시트 공급사는 합본 탭, 탭 이름 미정)이라 이 묶음에 넣지 않았다. F86은 공급사 공동 입력 시트이므로 Data 발행 대상이 아니다.
+
+## 2026-10-03 고도화 전 정리 — 정책 연결·주행거리 해석(④, ERP5 매퍼 v5)
+
+- 목적: 2026-09-30 감사에서 원인 후보로 남긴 정책 연결·주행거리 해석 한계를 매퍼/리더에서 고친다. 운영 쓰기 없음 — ERP5 매핑은 dry-run·감사 전용(HOLD)이며, 기록된 435/208/116/1,421은 오류 대수로 확정하지 않는다.
+- 대상 revision: main `e49dfb9`(독립 브랜치 `claude/policy-link-mileage`).
+- 변경(Codex 설계 상의 반영):
+  - 정책 문서 디코드가 최상위 `updated_at` timestamp를 상품과 같은 metadata 문자열로 무손실 허용한다(`POLICY_METADATA_TIMESTAMP_FIELDS`). 허용 목록 밖(`created_at` 등 — 증거 없음, HOLD)이나 중첩 map 안 timestamp는 기존처럼 문서 skip·사유 집계.
+  - `annual_mileage` 문자열 해석 `parseAnnualMileageText`: `30000`·`30,000km`·`연 30,000km`·`연간 3만km`·`3만키로` 허용(만 단위는 km 계열 단위 필수, 앞자리 0 불가), `3만`·`월`·`무제한`·범위/복수·0/음수·소수·`원`/`회` 등 기타는 미해석으로 남기고 사유를 `uninterpretedAnnualMileageReasons`에, 해석 건수를 `factsWithAnnualMileageParsedFromText`에 센다. B-2(가격 키에 주행거리가 없을 때의 의미)와는 별개 결정이다.
+  - 정책 선택을 `selectErp5Policy` 하나로 모아 연결 판정과 주행거리 해석(`resolveErp5Mileage`)이 같이 쓴다. 같은 code 안에서 자기 회사 정책이 먼저이고, 회사 미기재 정책은 자기 회사 정책이 없을 때만 후보다(문서 순서와 무관). 같은 code가 모두 다른 회사면 `POLICY_LINK_COMPANY_MISMATCH`, 후보가 둘 이상이면 신설 `POLICY_LINK_AMBIGUOUS`이며 이때 정책 주행거리를 고르지 않는다(이전에는 첫 문서를 썼다).
+  - `ERP5_PRODUCT_MAPPER_VERSION` `erp5-product-mapping/4` → `/5`(issue code 표면 변경).
+- 의도된 기대값 변화: `updated_at`만 있는 정책은 이제 fact가 되고(skip 0), `연 30,000km`는 30000으로 읽힌다. 다음 감사 실행에서 `POLICY_LINK_NOT_FOUND`·`MILEAGE_FROM_COMPANY_DEFAULT`·정책 skip 수가 줄 수 있으며 이는 해석기 변경 효과다 — 이전 수치와 단순 비교하지 않는다.
+- 검증: ERP5 테스트 165 PASS(신규: metadata 허용·허용 밖/중첩 skip, 텍스트 해석 허용 8·거부 15종, 동일 code 다회사 자기 회사 연결, 회사 미기재보다 자기 회사 우선(순서 무관), 모호 시 정책 주행거리 미사용, 동일 회사 중복 AMBIGUOUS). 선택 우선순위를 옛 방식으로 되돌리면 테스트가 실패함을 확인 후 원복. Codex 구현 검토 지적(회사 미기재 우선순위, 단위 없는 만, 문서 ID 대체 설명) 반영, `npm run check` PASS.
+- 남음: 실제 캡처로 재감사해 새 수치를 기록(읽기 전용 Actions, 별도 실행). `policy_code`가 없는 정책 문서의 문서 ID 대체(`factsUsingDocumentIdAsPolicyCode`)와 `companyId`/`provider_company_code` 이중 필드는 그대로다.
+- next_start_here: 다음 ERP5 continuous audit 결과에서 `policyFactCoverage`의 새 카운터와 issue 분포를 읽고 BUSINESS-DATA-CONNECTION-MAP 감사 절을 갱신한다.
+
+## 2026-10-03 고도화 전 정리 — 차량번호 키·ERP5 재고 상태 사전 공통화(②, iancar 제외)
+
+- 목적: 같은 차·같은 상태를 어댑터마다 다르게 판정하던 중복을 한 곳으로 모은다. 대표 결정으로 Codex worktree가 미커밋 수정 중인 iancar 파일은 이번에 건드리지 않는다.
+- 대상 revision: main `e49dfb9`(PR1a/PR1b와 독립 브랜치 `claude/plate-status-dictionary`).
+- 변경: `src/domain/vehicle-plate.ts` — `plateIdentityKey`(trim·공백 제거·대문자, 비문자열은 ''), `isStrictKoreanPlate`(매퍼 기존 정규식), `firestoreSafePlateKey`(시트 키 전용, `. $ # [ ] / -` 제거 — 동일 차량 판정에 쓰지 않는다). `src/domain/erp5-inventory-status.ts` — ERP5 `vehicle_status`→`status_kind`·`listable` 사전과 `resolveErp5InventoryStatus`. 사용처: `erp5-product-mapping`(사전·형식), `erp5-source-capture`(중복 차량번호), `supplier-source-capture`(sonogong/welrix identity), `sheet-publication-bridge`(사전·안전 키). bridge의 drift 계산은 기존 운영 증거와 비교 가능하도록 빈 상태=준비, 미검토 상태=불가 fallback을 `legacyExpectedStatusKindForDrift`로 명시 보존했다.
+- Codex 설계 상의(read-only): 하이픈 제거를 identity에 넣으면 `12가-3456`과 `12가3456`이 합쳐지는 반례 → 안전 키와 분리. 매퍼 strict 형식과 consumer 렌트번호 판정(공백 허용, `consumer-output-contract.ts:43-47`)은 정책이 달라 렌트번호 판정은 그대로 둔다. Canonical `VehicleAssetStatus`에 `UNAVAILABLE`/`WITHDRAWN` 추가는 공개 스키마 3종(`catalog-v1`·`erp-public-view-v1`·`admin-catalog-view-v1`)과 `read-pilot` 허용 목록을 바꾸는 계약 변경이라 HOLD — 내부 우선 도입은 source/display 전용 필드로 두고 projection에서 기존 enum으로 매핑하는 길만 열어 둔다.
+- 의도된 동작 변경 1건: ERP5 원문 감사의 중복 차량번호 수는 이제 대문자를 같게 본다(`ab12`·`AB12`가 중복 1). 유효 한글 차량번호에는 영향이 없고 영문이 섞인 비정상 번호에서만 수치가 달라질 수 있다(Codex 구현 검토 지적, identity 설계상 수용).
+- 검증: 신규 테스트(사전 전체 값·미검토/상속 키, identity·strict·안전 키, bridge drift fallback 불변)와 기존 ERP5·bridge·sheet 테스트 PASS, `npm run check` PASS. 운영 변경 없음.
+- 남음: iancar 쪽 plate 정규화 5곳과 하드코딩 상태(`iancar-one-api.ts:373·432·488-490·518·545·681`, `iancar-direct-source.ts:15·168`, `iancar-policy-sync-firestore.ts:10`, `iancar-publication-withdrawal-firestore.ts:151·222`)는 Codex worktree 정리 후 같은 모듈로 옮긴다. Kakao `점검중→MAINTENANCE` 등 소비처 상태 매핑은 별도.
+- next_start_here: iancar 이관은 `commission-audience`·`period-economics-main` 미커밋 변경이 main에 들어간 뒤 시작한다.
+
+## 2026-10-03 고도화 전 정리 — Admin workflow 교체쓰기 필드 보존(PR1b)
+
+- 목적: PR1a에서 HOLD로 남긴 Data gateway `admin-workflow/commit`의 merge 없는 `set`(문서 전체 교체)이 저장된 계약·정산·전자서명 필드를 지우지 못하게 한다.
+- 대상 revision: PR1a 브랜치 `claude/data-preservation-guard-pr1a` `c76fc73` 위(main `e49dfb9` 기준).
+- 설계 근거: freepass-admin origin/main의 Data gateway shim(`src/adapters/freepass-data/admin-workflow-firestore.ts:143-146`)이 `docRef.set`을 gateway set으로 보내며, 런타임 merge:false set은 5곳 — `esign-repository.ts:257`(revoked)·`:304`(cancel repair)·`:362`(contract_cancelled)·`:442`(approved, `clean()`으로 undefined 제거) 결정적 ID 이벤트와 `settlement-repository.ts:454`(청구서 재발행, `{...existing, …, history}`). 같은 명령 안에서 교체 set과 같은 문서의 다른 mutation이 함께 오는 흐름은 Codex 대조에서 없었다. 그래서 교체 차단이나 "부재 기대 필수"는 청구서 재발행을 깨므로 채택하지 않았다. Codex 설계 상의(read-only)로 최소안을 확정했다.
+- 변경: 교체 set 대상 문서를 트랜잭션 쓰기 전에 모두 읽고, 문서가 있으면 저장된 최상위 필드가 새 data에 모두 있어야 한다(값 변경 허용, 필드 제거 거부 → `ADMIN_WORKFLOW_REPLACEMENT_DROPS_FIELDS` 409, `resource`·`droppedFields` 포함, 명령 전체 미기록). 교체 set은 같은 명령에서 그 문서의 유일한 mutation이어야 한다(`INVALID_ADMIN_WORKFLOW_REPLACEMENT_NOT_EXCLUSIVE` 400). receipt 스키마는 바꾸지 않았다.
+- 검증: 단위·gateway 테스트 7건 — 청구서 재발행 spread+history 통과, 이벤트 재실행·신규 문서 통과, JSON 전송에서 `undefined`로 빠진 필드 거부, 비배타 교체 400, 409 응답 형태. 거부 분기를 제거하면 테스트가 실패하는 것을 확인 후 원복. `npm run check` PASS. 운영 배포·쓰기 없음.
+- 운영 영향(HOLD, 배포 승인 필요): Admin runtime write는 `FREEPASS_DATA_ADMIN_WORKFLOW_WRITE=on` 경로라 배포 즉시 적용된다. 기존 이벤트·청구서에 구버전/수동 추가 최상위 필드가 있거나 Admin이 값을 `undefined`로 보내면 재실행·재발행이 409가 된다 — 배포 전 Admin 담당과 대조한다.
+- 남음: 중첩 map 키 제거(`detail`·`snapshot` 통째 교체)와 `update`로 map 통째 교체는 검사하지 않는다(HOLD). 교체 전 값의 보존(revision)은 별도 설계다.
+- next_start_here: PR1c(iancar restore `FieldValue.delete` 축소)는 Codex `period-economics-main` worktree 정리 후, 그다음 상태 사전·plate key 통일.
+
+## 2026-10-03 고도화 전 정리 — 삭제 금지 원칙 정적 검사(PR1a)
+
+- 목적/결정: 대표 지시 "원본은 보존하고 삭제하지 않는다. 출고불가 같은 상태 전환으로 처리한다"를 코드로 강제한다. Claude 3갈래 읽기 전용 감사(어댑터·삭제 경로·꼬인 데이터) 후 Codex(`gpt-5.5`, read-only) 2회 상의로 순서를 합의했다: ① 쓰기 보존 guard(PR1a 정적 검사+autoplus retire, PR1b admin-workflow 교체쓰기 정책, PR1c iancar restore field delete 축소) → ② 상태 사전·plate key 통일(`UNAVAILABLE`/`WITHDRAWN`) → ③ RP031 sourceId 단일화 → 소비처 발행 경로·ACTIVE release → 공급사 어댑터 순차 확장. 2026-10-03 대표 결정: F86은 이제 공급사 공통 입력 시트이므로 Data가 발행 대상으로 쓰지 않는다. 시트 관리 틀을 바꾸는 중이라(공급사 입력 PR #281→#282→#283) 시트 쪽 발행 설계는 그 틀이 확정된 뒤 다시 잡는다.
+- 대상 revision: main `e49dfb9afa6d8203ed3bf388525179f122aed007`.
+- 변경: `scripts/check-data-access-boundary.mjs`가 `src/`의 `FieldValue.delete()`와 firebase-admin 파일의 merge 없는 `set()`을 호출 단위 allowlist로 막는다. set은 `receiver.set(대상 문서)`, field delete는 해당 줄이 식별자이며 미등록·대상 변경·사라진 항목은 실패한다. `tx/batch.set(ref, …)`과 `db.collection(…).doc(…).set(…)` 직접 쓰기를 모두 본다. 주석·문자열과 휴리스틱으로 판정한 정규식 리터럴은 무시하고, `{ merge: true }`는 마지막 인자일 때만 인정하며, `FieldValue`를 `.메서드` 외 형태(별칭 import, 변수 대입, 구조분해)나 `deleteField`로 쓰면 실패한다. autoplus 정책 보정은 run `2026-09-29T04-44-30-502Z-42019aec-...` 적용 완료로 retire — npm job 입구에서 runtime 생성(Firebase 대상 해석·gateway STARTED audit) 전에, 직접 호출 시에도 Firebase 접근 전에 `AUTOPLUS_POLICY_REPAIR_RETIRED`로 거부한다.
+- 검증: `npm run check` PASS. 반례 11종(같은 파일 내 대상 바꿔치기, 주석·문자열 언급, 데이터 객체 안 `merge:true`, 정상 merge 옵션, 별칭 import, 변수 대입 별칭, 비 Firestore 파일의 field delete, 직접 DocumentReference set과 그 merge, `return /["]/` 뒤 set, 따옴표 포함 정규식 뒤 set)을 주입해 기대 판정 확인 후 원복. Codex 구현 검토 2회의 수정 지적(job 입구 순서, 파일별 개수 우회, firestore-store 사유 과신, 직접 ref set 미탐, 대입 별칭, 키워드 뒤 정규식)을 반영했다. 운영 DB·시트·배포·IAM 변경 없음.
+- 합의된 판정(Claude·Codex): 공급사 어댑터는 등록 4 / `SupplierSourceAdapter` 규격 구현 2(sonogong·welrix); `data-owned-refresh` hourly는 frozen ERP4 엔진 래퍼이며 Data-native 어댑터 스케줄은 0, execute 성공 run 증거는 미확인; iancar publication은 hosted/production에서 GCS 백업 강제. 정책 435/208/116, 주행거리 1,421, 정산 472 미연결은 오류 대수로 확정하지 않는다.
+- 남음: PR1b — admin-workflow merge=false set은 원문 before-image 복제 대신 digest·exists·updateTime receipt와 "exists=false 기대 또는 명시적 교체 권한" 조건(`esign_private` 개인정보 이중 보존 금지, 새 컬렉션은 운영 승인). freepass-admin 런타임은 merge:true만 확인됨. PR1c — iancar restore `FieldValue.delete`는 Codex `period-economics-main` worktree가 같은 파일을 미커밋 수정 중이라 대기. `firestore-store`의 vehicleAsset·offer·sourceBinding 교체 set은 revision/audit를 호출자가 붙일 뿐 store가 강제하지 않는다. 정적 검사는 정규식 기반이라 동적 호출(`obj['set']`)·update()로 전체 필드 덮어쓰기·Sheets clear는 잡지 않는다.
+- next_start_here: PR1b 설계를 `src/domain/admin-workflow.ts`·`src/infra/admin-workflow-firestore.ts`·`contracts/admin-workflow-receipt-v2.schema.json`에서 시작하고 allowlist 항목을 하나씩 줄인다.
+
 ## 2026-10-03 공동 시트 영업자 보기 순서 정리 — 현재 정본 75칸
 
 - 목적(대표): 대여료 앞 = 어떤 차인지 아는 최소 필수 정보, 대여료 뒤 = 부가 정보 중요한 순. 배차상태(차량상태와 같음)·사진링크·기타기간 제거, 입고일자는 차량상태 앞, 차종크기는 차종구분 앞.

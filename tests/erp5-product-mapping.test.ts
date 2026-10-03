@@ -233,6 +233,61 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.candidate.issues).toContain('POLICY_LINK_COMPANY_MISMATCH');
   });
 
+  it('links to its own company when the same policy code exists for several companies', () => {
+    const input = fixture();
+    input.data.price = { '24': { rent: '750,000', deposit: '3,000,000' } };
+    input.data.policy_code = 'P-1';
+    input.data.provider_company_code = 'RP012';
+    const result = mapErp5Product(input, {
+      policies: [
+        { policyCode: 'P-1', companyId: 'RP023', annualMileageKm: 20000 },
+        { policyCode: 'P-1', companyId: 'RP012', annualMileageKm: 30000 },
+      ]
+    });
+    expect(result.candidate.issues).not.toContain('POLICY_LINK_COMPANY_MISMATCH');
+    expect(result.candidate.issues).not.toContain('POLICY_LINK_AMBIGUOUS');
+    expect(result.candidate.priceTerms[0]!.mileageLimitKmPerYear).toBe(30000);
+  });
+
+  it('prefers its own company over a company-less policy with the same code, whatever the order', () => {
+    const input = fixture();
+    input.data.price = { '24': { rent: '750,000', deposit: '3,000,000' } };
+    input.data.policy_code = 'P-1';
+    input.data.provider_company_code = 'RP012';
+    const result = mapErp5Product(input, {
+      policies: [
+        { policyCode: 'P-1', annualMileageKm: 20000 },
+        { policyCode: 'P-1', companyId: 'RP012', annualMileageKm: 30000 },
+      ]
+    });
+    expect(result.candidate.issues.filter(issue => issue.startsWith('POLICY_LINK_'))).toEqual([]);
+    expect(result.candidate.priceTerms[0]!.mileageLimitKmPerYear).toBe(30000);
+  });
+
+  it('uses no policy mileage when the link is ambiguous', () => {
+    const input = fixture();
+    input.data.price = { '24': { rent: '750,000', deposit: '3,000,000' } };
+    input.data.policy_code = 'P-1';
+    input.data.provider_company_code = 'RP012';
+    const result = mapErp5Product(input, {
+      policies: [{ policyCode: 'P-1', annualMileageKm: 20000 }, { policyCode: 'P-1', annualMileageKm: 25000 }]
+    });
+    expect(result.candidate.issues).toContain('POLICY_LINK_AMBIGUOUS');
+    expect(result.candidate.issues).toContain('MILEAGE_FROM_COMPANY_DEFAULT');
+    expect([20000, 25000]).not.toContain(result.candidate.priceTerms[0]!.mileageLimitKmPerYear);
+  });
+
+  it('flags two policies with the same code for the same company as ambiguous', () => {
+    const input = fixture();
+    input.data.policy_code = 'P-1';
+    input.data.provider_company_code = 'RP012';
+    const result = mapErp5Product(input, {
+      policies: [{ policyCode: 'P-1', companyId: 'RP012' }, { policyCode: 'P-1', companyId: 'RP012' }]
+    });
+    expect(result.candidate.issues).toContain('POLICY_LINK_AMBIGUOUS');
+    expect(result.candidate.issues).not.toContain('POLICY_LINK_COMPANY_MISMATCH');
+  });
+
   it('flags a policy code that resolves to nothing at all', () => {
     const input = fixture();
     input.data.policy_code = 'P-없음';
