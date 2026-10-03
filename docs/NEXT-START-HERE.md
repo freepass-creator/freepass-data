@@ -367,6 +367,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 PR #296 4차 — 경제 금액 근거 분리
+
+- 목적/대상 revision: `e9011ba1709825d70281ea098d6f34cbe016e8b2`, `work/freepass-data/commission-f04-align-20261003`. 파일 수정·로컬 검사만 수행; Git 쓰기·운영 접속 없음.
+- 변경: 수수료 규칙 근거 `sourceRefs`와 가격 출처 `priceSourceRefs` 분리. UNKNOWN/NOT_APPLICABLE의 근거는 빈 배열, Q12 근거는 실제 계산 시에만 포함. 보증금·Admin 미계산 응답·감사와 두 JSON Schema 조건을 맞춤. Admin 복사/게이트웨이 전달/health 집계 경로 확인.
+- 검증: 관련 6파일 164 PASS. `npm.cmd run check`에서 정적검사·빌드 및 Node 검사 109 PASS; Vitest 1324 PASS / 9 FAIL / 14 SKIP. 실패 4파일 단일 워커 재검사도 60 PASS / 9 FAIL. `node --import tsx` 최소 실행에서도 `uv_os_get_passwd ENOMEM` 재현; 로컬 서버 연결 실패 포함. 전체 PASS 아님.
+- 남음/next_start_here: 실행 환경의 tsx 사용자 정보 조회 오류를 해소한 뒤 `npm.cmd run check` 재실행. 전체 로그는 `%TEMP%/commission-f04-r4-check.log`, 재검사는 `%TEMP%/commission-f04-r4-env-recheck.log`. 운영 반영·커밋은 수행하지 않음.
+
 
 ### 2026-10-04 F04 수수료표 정렬 — 로컬 수정, 커밋은 Claude
 

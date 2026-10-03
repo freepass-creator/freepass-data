@@ -33,7 +33,7 @@ export function precomputeOfferEconomics(
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
       const base = { ruleId: result.ruleId, policyId: policy.policyId,
-        sourceRefs: [...(result.sourceRefs ?? []), policy.currentAuthority, priceRef, ...(args.q12Basis?.sourceRef ? [args.q12Basis.sourceRef] : [])],
+        sourceRefs: [] as string[], priceSourceRefs: [priceRef],
         vatTreatment: result.vatTreatment, vatAmount: result.vatAmount, totalAmount: result.totalAmount };
       const unknown = (reasonCode: string): TermEconomicAmount => ({ ...base,
         state: 'UNKNOWN', amount: null, calculation: null, vatAmount: null, totalAmount: null, reasonCode });
@@ -63,6 +63,8 @@ export function precomputeOfferEconomics(
         calculation = { kind: 'FIXED', amount: { amount: result.amount, currency: 'KRW' } };
       }
       return { ...base, state: result.amount === 0 ? 'ZERO' : 'KNOWN',
+        sourceRefs: [...(result.sourceRefs ?? []), policy.currentAuthority,
+          ...(result.ruleId?.startsWith('SONOKONG_SUBSCRIPTION_') && args.q12Basis?.sourceRef ? [args.q12Basis.sourceRef] : [])],
         amount: { amount: result.amount, currency: 'KRW' }, calculation, reasonCode: null };
     };
     const deposit = structuredClone(term.deposit ?? null);
@@ -70,7 +72,8 @@ export function precomputeOfferEconomics(
       termKey: term.termKey, termMonths: term.termMonths, monthlyRent: structuredClone(term.monthlyRent),
       depositCalculation: { state: term.depositState, amount: deposit,
         calculation: deposit ? { kind: 'FIXED', amount: structuredClone(deposit) } : null,
-        sourceRefs: [priceRef] },
+        sourceRefs: deposit && (term.depositState === 'KNOWN' || term.depositState === 'ZERO') ? [priceRef] : [],
+        priceSourceRefs: [priceRef] },
       supplierBillingFee: convert(resolveSupplierBillingFee(args), 'BILLING'),
       channelPayoutFee: convert(resolveSalesCommission(args), 'PAYOUT'),
     };
@@ -285,12 +288,13 @@ function auditEconomicAmount(
   const validRefs = Array.isArray(value.sourceRefs) && value.sourceRefs.length > 0 &&
     value.sourceRefs.every((ref) => typeof ref === 'string' && ref.trim().length > 0);
 
-  if (!validRefs) invalidFacts.push(`ECONOMICS_SOURCE_REQUIRED:${label}`);
   if (value.state === 'UNKNOWN' || value.state === 'NOT_APPLICABLE') {
+    if (!Array.isArray(value.sourceRefs) || value.sourceRefs.length !== 0) invalidFacts.push(`ECONOMICS_UNRESOLVED_WITH_SOURCE:${label}`);
     if (hasAmount || hasCalculation) invalidFacts.push(`ECONOMICS_UNRESOLVED_WITH_VALUE:${label}`);
     if (value.state === 'UNKNOWN') decisions.push(`ECONOMICS_VALUE_REQUIRED:${label}`);
     return;
   }
+  if (!validRefs) invalidFacts.push(`ECONOMICS_SOURCE_REQUIRED:${label}`);
   if (!hasAmount || value.amount?.currency !== 'KRW' || !Number.isSafeInteger(amount) || amount! < 0) {
     invalidFacts.push(`INVALID_ECONOMICS_AMOUNT:${label}`);
     return;
@@ -396,7 +400,7 @@ export function readStoredTermFees(offer: Offer, price: PriceTerm): Pick<AdminPr
     const unknown = (reasonCode: string): TermEconomicAmount => ({
       state: 'UNKNOWN', amount: null, calculation: null, reasonCode,
       ruleId: value?.ruleId ?? null, ...(value?.policyId ? { policyId: value.policyId } : {}),
-      sourceRefs: [`catalog_offers/${offer.id}/internalEconomicsTerms/${price.termKey}/${field}`],
+      sourceRefs: [], priceSourceRefs: [`catalog_offers/${offer.id}/priceTerms/${price.termKey}`],
     });
     if (!value) return unknown(matches.length > 1 ? 'DUPLICATE_ECONOMICS_TERM' : 'ECONOMICS_NOT_PRECOMPUTED');
     if ((row?.monthlyRent && (row.monthlyRent.amount !== price.monthlyRent.amount || row.monthlyRent.currency !== price.monthlyRent.currency)) ||

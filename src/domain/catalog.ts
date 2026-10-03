@@ -44,7 +44,9 @@ export type TermEconomicAmount = {
   state: TermAmountState;
   amount?: Money | null;
   calculation?: TermAmountCalculation | null;
+  /** Rules and evidence actually used; empty for unresolved amounts. */
   sourceRefs: string[];
+  priceSourceRefs?: string[];
   ruleId?: string | null;
   policyId?: string;
   reasonCode?: string | null;

@@ -29,6 +29,8 @@ It does not seed data, publish releases, run workers, or expose Catalog mutation
 
 ## 수수료 연동 기준 — 사용자 결정 2026-09-30
 
+`sourceRefs`는 KNOWN·ZERO 금액의 규칙·실사용 계산 근거만 담고 UNKNOWN·NOT_APPLICABLE이면 비운다. 가격 출처는 수수료·보증금 모두 별도 `priceSourceRefs`에 둔다.
+
 **프리패스 수수료는 지급수수료(`channelPayoutFee`)다.** FreePass가 영업채널에 지급하는 금액이며, 공급사로부터 받는 청구수수료나 내부 마진을 뜻하지 않는다.
 
 | 연동 대상 | 제공할 수수료 | 지급 방향 |
