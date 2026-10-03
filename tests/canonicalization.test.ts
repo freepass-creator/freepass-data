@@ -468,3 +468,35 @@ describe('safe catalog canonicalization', () => {
     expect((await store.getProduct(receipt.productId))?.validationStatus).toBe('WARNING');
   });
 });
+
+it.each([undefined, '', '   '])('세부모델없음_트림확정금지', async (subModel) => {
+  const store = new MemoryDataStore();
+  const fixture = evidence({ runId: 'hierarchy', candidateId: 'hierarchy', fingerprint: 'hierarchy', observedAt: '2026-10-04T00:00:00Z' });
+  if (subModel === undefined) delete fixture.candidate.candidate.subModel;
+  else fixture.candidate.candidate.subModel = subModel;
+  const before = structuredClone(fixture);
+  await store.seed!({ sourceRuns: [fixture.run], sourceHeads: [fixture.head], candidates: [fixture.candidate], lineage: fixture.lineage });
+  await canonicalizeCatalogCandidate(store, command('hierarchy', 'hierarchy', 'hierarchy'));
+  const model = await store.getVehicleModel('vm_reviewed_gv70_001');
+  expect(model).not.toBeNull();
+  expect(model!.subModel).toBeUndefined();
+  expect(model!.trim).toBeUndefined();
+  expect(fixture).toEqual(before);
+});
+
+it('LINK는 양쪽 세부모델 공백도 일치로 보지 않는다', async () => {
+  const store = new MemoryDataStore();
+  const fixture = evidence({ runId: 'hierarchy', candidateId: 'hierarchy', fingerprint: 'hierarchy', observedAt: '2026-10-04T00:00:00Z' });
+  delete fixture.candidate.candidate.subModel;
+  delete fixture.candidate.candidate.trimName;
+  await store.seed!({ sourceRuns: [fixture.run], sourceHeads: [fixture.head], candidates: [fixture.candidate], lineage: fixture.lineage });
+  await canonicalizeCatalogCandidate(store, command('hierarchy', 'hierarchy', 'create-unknown'));
+  const second = structuredClone(fixture);
+  second.candidate.candidateId = 'second';
+  second.candidate.sourceRecordId = 'second';
+  second.candidate.candidate.sourceRecordId = 'second';
+  await store.seed!({ candidates: [second.candidate] });
+  const link = command('second', 'hierarchy', 'link-unknown');
+  link.decision.vehicleModel.action = 'LINK';
+  await expect(canonicalizeCatalogCandidate(store, link)).rejects.toThrow('requires matching known subModel');
+});

@@ -1,3 +1,4 @@
+import { loadNormalizedVehicleMasterTrimRecords } from '../src/application/vehicle-master-normalized-loader.js';
 import { describe, expect, it } from 'vitest';
 import { KiaOfficialPriceParser } from '../src/adapters/kia-official-price-parser.js';
 import { parseFetchedVehicleMasterSource } from '../src/application/vehicle-master-source-parse.js';
@@ -52,7 +53,7 @@ function sourceByteHash(sourceDocument: VehicleMasterSourceDocument, byteLength 
 }
 
 describe('vehicle master parse persistence', () => {
-  it('persists raw pointer, normalized rows and parser summary idempotently', async () => {
+  it.each([undefined, '더 뉴 쏘렌토'])('persists hierarchy and raw pointer idempotently (%s)', async (subModel) => {
     const store = new MemoryVehicleMasterStore();
     const sourceDocument = sealVehicleMasterSourceDocument({
       sourceDocumentId: 'srcdoc_kia_parse_fixture',
@@ -80,8 +81,16 @@ describe('vehicle master parse persistence', () => {
       bytes: html,
     };
 
+    const parser = new KiaOfficialPriceParser();
+    const parse = parser.parse.bind(parser);
+    parser.parse = (input) => {
+      const result = parse(input);
+      if (subModel !== undefined) result.records = result.records.map((row) => ({ ...row, subModel }));
+      return result;
+    };
+
     const first = await parseFetchedVehicleMasterSource(
-      { store, parsers: [new KiaOfficialPriceParser()] },
+      { store, parsers: [parser] },
       { sourceDocument, fetched }
     );
 
@@ -107,13 +116,15 @@ describe('vehicle master parse persistence', () => {
     }));
 
     const second = await parseFetchedVehicleMasterSource(
-      { store, parsers: [new KiaOfficialPriceParser()] },
+      { store, parsers: [parser] },
       { sourceDocument, fetched }
     );
     expect(second.rawRecordId).toBe(first.rawRecordId);
     expect(second.normalizedRecordIds).toEqual(first.normalizedRecordIds);
     expect(second.summaryRecordId).toBe(first.summaryRecordId);
     expect(second.writes).toEqual(['UNCHANGED', 'UNCHANGED', 'UNCHANGED']);
+    const loaded = await loadNormalizedVehicleMasterTrimRecords(store, [sourceDocument.sourceDocumentId]);
+    expect(loaded[0]?.record.subModel).toBe(subModel ?? null);
   });
 
   it('fails closed when persisted source-byte hash evidence is missing', async () => {

@@ -1,3 +1,4 @@
+import { assertAnchor } from '../src/jobs/promote-vehicle-master-canonical.js';
 import { describe, expect, it } from 'vitest';
 import {
   sealVehicleMasterNode,
@@ -108,6 +109,9 @@ function reconciled(
   drivetrain = '2WD'
 ): VehicleMasterReconciledTrim {
   return {
+    maker: '기아',
+    model: '쏘렌토',
+    subModel: '더 뉴 쏘렌토',
     modelYear: 2027,
     powertrainName: '2.5 가솔린 터보',
     seats: 5,
@@ -241,4 +245,31 @@ describe('vehicle master canonical promotion chain', () => {
       [2, 36510000],
     ]);
   });
+});
+
+it('원문_anchor_불일치_차단', async () => {
+  const store = new MemoryVehicleMasterStore();
+  await seed(store);
+  const make = (await store.getNode('make_kia'))!;
+  const model = (await store.getNode('model_sorento'))!;
+  await store.putNode(sealVehicleMasterNode({ ...make, revision: 2, canonicalName: '현대' }));
+  await store.putNode(sealVehicleMasterNode({ ...model, revision: 2, canonicalName: '그랜저' }));
+  const request = { anchor: { makeId: make.id, modelId: model.id, generationId: 'gen_mq4', phaseId: 'phase_mq4_fl' } };
+  const row = { ...reconciled(), maker: '기아', model: 'K5' };
+  const before = structuredClone(row);
+  await expect(assertAnchor(store, request, [row])).rejects.toThrow('HOLD:ANCHOR_SOURCE_MISMATCH:maker');
+  expect(row).toEqual(before);
+});
+
+it('anchor 계층 일치만 허용하고 모델·세부모델 미정 및 부모 불일치는 HOLD한다', async () => {
+  const store = new MemoryVehicleMasterStore();
+  await seed(store);
+  const request = { anchor: { makeId: 'make_kia', modelId: 'model_sorento', generationId: 'gen_mq4', phaseId: 'phase_mq4_fl' } };
+  await expect(assertAnchor(store, request, [reconciled()])).resolves.toBeUndefined();
+  for (const patch of [{ model: 'K5' }, { subModel: null }, { subModel: '다른 세부모델' }]) {
+    await expect(assertAnchor(store, request, [{ ...reconciled(), ...patch }])).rejects.toThrow('HOLD:ANCHOR_SOURCE_MISMATCH');
+  }
+  const phase = (await store.getNode('phase_mq4_fl'))!;
+  await store.putNode(sealVehicleMasterNode({ ...phase, revision: 2, parentId: 'other_generation' }));
+  await expect(assertAnchor(store, request, [reconciled()])).rejects.toThrow('HOLD:ANCHOR_HIERARCHY');
 });
