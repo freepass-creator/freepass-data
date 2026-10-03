@@ -57,7 +57,11 @@
         "vatAmount": { "$ref": "#/$defs/nullableInteger" },
         "totalAmount": { "$ref": "#/$defs/nullableInteger" },
         "reasonCode": { "$ref": "#/$defs/nullableString" }
-      }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "CALCULATED" } }, "required": ["state"] }, "then": { "required": ["sourceRefs"] } },
+        { "if": { "properties": { "state": { "enum": ["UNKNOWN", "NOT_APPLICABLE", "COORDINATION_REQUIRED"] } }, "required": ["state"] }, "then": { "not": { "required": ["sourceRefs"] } } }
+      ]
     },
     "marginResolution": {
       "type": "object",
