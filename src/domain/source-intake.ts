@@ -87,6 +87,9 @@ export const SUPPLIER_SOURCE_ADAPTERS = {
   'sonogong-api': { supplierCode: 'RP012', kind: 'API', scopes: ['inventory', 'terms', 'photos'] },
   'iancar-one-api': { supplierCode: 'RP031', kind: 'API', scopes: ['inventory', 'terms', 'policy', 'photos'] },
   'iancar-original-erp': { supplierCode: 'RP031', kind: 'API', scopes: ['inventory'] },
+  // Welrix's existing provided sheet only (pre-switch comparison). RP013 now enters through the
+  // shared supplier input sheet (contracts/supplier-input-sheet-spec.v1.json supplierChannels);
+  // do not wire this adapter as the new source.
   'welrix-sheet': { supplierCode: 'RP013', kind: 'GOOGLE_SHEET', scopes: ['inventory', 'terms', 'policy'] },
 } as const;
 
