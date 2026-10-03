@@ -773,6 +773,7 @@ jobs:
 
   # 기간별 수수료 일괄 재계산 운영 dry-run(AI 상황실 2026-10-04 승인, 1회). 같은 읽기 전용 감사 신원을 쓴다.
   # 쓰기 0: --apply 를 넘기지 않고, 결과가 mode=DRY_RUN·writes=0 이 아니면 실패로 끝낸다.
+  # ★apply·Admin 재발행은 이 감사 워크플로에 절대 넣지 않는다(AI 상황실 2026-10-04 조건) — 별도 승인·별도 경로로만.
   # 공개 저장소: 상품별 before-image 가 든 전체 계획은 비공개 증거 버킷에만 두고, 로그·artifact 에는 집계만 남긴다.
   economics-dry-run:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.economics_dry_run }}
