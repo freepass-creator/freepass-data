@@ -4,6 +4,41 @@
   "owner": "freepass-data",
   "status": "SPEC_PUBLISHER_PINNED_LIVE_REAPPLY_AND_WATCHDOG_RECOVERY_VERIFIED_NATIVE_SCHEDULE_OBSERVATION_HOLD",
   "timezone": "Asia/Seoul",
+  "f01SupplierLayout": {
+    "decisionDate": "2026-10-03",
+    "decision": "대표 결정: F01은 공급사 기준으로 모은다. 공동 입력 시트를 쓰지 않는 공급사는 회사별 탭 하나씩, 공동 입력 시트(F86 역할)를 쓰는 공급사는 그 시트의 종합을 탭 하나로 둔다. 전체 묶음 상품리스트 탭은 없앤다.",
+    "state": "DESIGNED_NOT_APPLIED",
+    "appliedBy": "시트 관리 틀 개편 작업(공급사 입력 PR #281→#282→#283 계열). 이 섹션은 아직 실행기(scripts/sheet-presentation.mjs)와 발행기에 연결되지 않았고, 연결 전까지 primaryTabs·workbooks.F01이 현재 운영 정본이다.",
+    "supplierTabs": [
+      { "key": "sonogong", "label": "손오공", "supplierCode": "RP012", "includes": ["SON_NO_KONG 중고렌트·오공구독", "TCAR_EXTERNAL 픽업구독"], "channel": "DIRECT_API", "proposedColor": "#8E7CC3", "reuseSheetIdOf": "sonogong" },
+      { "key": "iancar", "label": "이안카", "supplierCode": "RP031", "channel": "DIRECT_API", "proposedColor": "#7F8C8D" },
+      { "key": "autoplus", "label": "오토플러스", "supplierCode": "RP023", "channel": "HOMEPAGE", "proposedColor": "#6AA84F", "reuseSheetIdOf": "autoplus" },
+      { "key": "aica", "label": "아이카", "supplierCode": "RP004", "channel": "OWN_SOURCE_SHEET", "proposedColor": "#7F8C8D" },
+      { "key": "iron", "label": "아이언", "supplierCode": "RP006", "channel": "HOMEPAGE", "proposedColor": "#7F8C8D" }
+    ],
+    "sharedInputSummaryTab": {
+      "key": "sharedInputSummary",
+      "label": "공동시트 종합",
+      "source": "공동 입력 시트(supplier-input-sheet-spec.v1.json, F86 역할)의 종합 탭",
+      "suppliers": "supplier-input-sheet-spec.v1.json#supplierChannels.sharedInputSheet",
+      "proposedColor": "#4A86E8",
+      "copyRule": "F01 발행 회차가 읽은 종합 snapshot을 값으로 복사한다. 공동 시트를 실시간 참조(IMPORTRANGE 등)하지 않고, F01에서 공동 시트로 쓰지 않는다."
+    },
+    "naming": "탭명 N대 (공백 구분, 가운데점·시각 없음, N은 탭 안 고유 차량번호 수)",
+    "proposedOrder": ["sonogong", "iancar", "autoplus", "aica", "iron", "sharedInputSummary"],
+    "retireWithoutDeleting": [
+      { "key": "catalog", "label": "상품리스트", "reason": "전체 묶음 탭 폐지(대표 결정)" },
+      { "key": "pickup", "label": "픽업구독", "reason": "손오공 탭 안의 상품구분으로 흡수" }
+    ],
+    "retirementRule": "폐지 탭은 지우지 않고 숨김·retiredSheetIds로 보존한다. 기존 sheetId는 재사용 표시가 있는 탭만 이어 쓴다.",
+    "membershipRule": "supplierTabs 5곳은 supplierChannels.notInSharedSheet와 같아야 하고, 공동시트 종합에는 그 5곳이 0행이어야 한다. 한 차량을 회사 탭과 종합 탭에서 두 번 세지 않는다.",
+    "openItems": [
+      "primarySheetIds 순서가 primaryTabs 순서(상품리스트·손오공상품·픽업구독·오플구독)와 같다는 가정은 새 readback으로 확인 후 재사용",
+      "신규 탭(이안카·아이카·아이언·공동시트 종합) 색과 순서는 제안값 — 적용 전 대표 확인",
+      "F01 열 구성(공동시트 종합 62칸 입력 양식 vs 기존 F01 판매 열)을 하나로 맞출지 결정 필요",
+      "이안카·아이카·아이언 상품이 현재 어느 발행 경로로 F01에 들어오는지 확인 후 회사 탭 공급원 고정"
+    ]
+  },
   "supplierInputTransition": {
     "decisionDate": "2026-10-03",
     "targetWorkbook": "F86",
