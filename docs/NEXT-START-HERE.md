@@ -1,5 +1,16 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-02 이안카 15분 동기화 — 구현 초안 / 운영 활성화 HOLD
+
+- 목적/사용자 결정: 공식 ONE API를 15분 주기로 Data 상품에 반영하고 기존 ERP·화이트라벨 이안카·F01/F86 발행 경로가 같은 관측 회차를 따라간다. RESERVED=계약중, 정책은2차, 미관측은 공개 HOLD이며 삭제·계약 변경은 금지한다.
+- 대상 revision: Data main `5318ccfadc655a28a708fd645976057fb030941e`, ERP main `a00547ce4c794343f5520b03f48df00cac2a4a2d`, ERP 기존 engine `ce811592daef6c0283c3637ec94f1b7cf09a3838`. Data 작업 트리는 `C:\Users\admin\.codex\worktrees\period-economics-main\freepass-data`, ERP 작업 트리는 `C:\dev\worktrees\freepasserp4-e-01-engine`. 다른 Data checkout의 dirty 문서는 보존했다. Academy 두 대상 READY, 기존 collector/workflow COMPOSE_OR_EXTEND.
+- 변경 상태: 기존 Data collector/runtime/infra와 firestore-document 회귀에 미커밋 초안이 있다. 미관측 공개 HOLD, hosted private backup save/readback 후 transaction, publication CLI 초안이다. ERP 기존 workflow/예약작업 지도도 미커밋: 02/32/47분 이안카 전용 회차+기존17분 전체 공급사 회차, 동일 concurrency/writer 유지. feature flag는 활성화하지 않았으며 checkout ref에 `IANCAR_DATA_REVISION_PENDING`이 남는다. 이 초안을 그대로 commit/push/dispatch하면 안 된다.
+- 실제 read-only capture: source syncedAt `2026-10-01T23:47:27.779Z`, digest `b2beb7919cc882792157d8a895efd65900898c3d1ca5ce8a7f5c262d17af38f3`, 116대/2,784요금, AVAILABLE107/RESERVED1/PREPARING2/UNAVAILABLE6, issues0, public108. private capture `2c7c1d11-530e-4542-933d-442f8b4bbc4c.json`. DRY_RUN source116/matched114/created2/absenceHeld3/open108/deletes0/contractChanges0. 실제 DB·시트 변경은 이번 회차 미실행. 이 capture도 다음 적용에는 신선도를 다시 검증해야 한다.
+- 실제 소비처: ERP RP031 공개109, 화이트라벨 eancar feed109 및 payload 동일. F01/F86 `10.02 06:58 상품리스트 316대` 중 이안카109, 상태·기준요금 대조 mismatch0. source 신규133호6031/133호6589, source 미관측133호5603/181하5373/133호6549. 합계 차이1만 고치면 되는 상황이 아니다. 실제 eancar 페이지109 및 상세24개 요금/정책 확인중 확인. hourly Sheet 성공은 API15분 갱신을 뜻하지 않는다.
+- 검증: build PASS, ONE+Firestore targeted62 PASS, ERP check:schedules PASS. 현재 변경 후 전체 check는 아직 미실행. Claude 읽기 전용 검토 ANSWERED/exit0이며 운영 활성화 반대: 잠금/soft-delete 문서에서 반복 HOLD, 전체 products 동시성 범위, 이미 HOLD한 미관측 문서 재작성/450 cap, hosted rollback 접근·실행 이력, durable backup 기본 정책, raw evidence 보존·권한, 수집시간 신선도 예산, 차량번호 변경 quarantine, summary 정확성/원래 withdrawal 보존을 보완해야 한다. 현재 test PASS를 운영 합격으로 확대하지 않는다.
+- 권한 HOLD: 기존 `github-inventory-writer@freepasserp5.iam.gserviceaccount.com`은 datastore.user만 확인됐다. 기존 Secret `freepass-data-iancar-one-api` 단일 read와 기존 비공개 bucket `freepasserp5-data-audit-evidence`의 `iancar-one/` prefix에 object create/read 권한 추가를 사용자에게 명시적으로 질문했으나 아직 답을 받지 못했다. IAM mutation/flag enable/운영 dispatch는 미실행이며 승인을 추정하지 않는다. 새 계정·키·공개 공유·delete 권한은 요청하지 않았다.
+- next_start_here: Claude 반례를 먼저 해소하고 실패/백업/복구/동시성 회귀와 전체 check → 독립 재검토 → Data 정확한 main SHA commit/push → ERP placeholder를 해당 SHA로 고정하고 workflow 검토/지도 같은 commit → 명시적 최소 IAM 승인 및 readback → fresh capture/manual canonical run → ERP/eancar/F01/F86 실제 차량 집합·상태·24요금 재조회 → feature flag 활성화 → native15분 실행 증거. GitHub cron 지연은 별도로 관측하며 15분 스케줄과 성공한 원천 신선도를 구분한다.
+
 ## 2026-10-01 이안카 1차 실제 발행 — ERP·F01·F86 readback 완료
 
 - 목적/정본: 공식 ONE API 차량번호·상태·기간/월연거리별 대여료를 Data 소유 RP031 상품으로 반영한다. source syncedAt `2026-10-01T08:13:03.756Z`, digest `3994442e0640d36722b206bac32f2dc55e22468ec05eeebc661c1dc9690fd9a5`, 117대/2,808개 실제 요금. 이 기록은 해당 관측 회차의 완료이며 현재 API의 실시간 신선도를 뜻하지 않는다.

@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { FieldValue, GeoPoint, Timestamp, getFirestore } from 'firebase-admin/firestore';
+import { getStorage } from 'firebase-admin/storage';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
@@ -11,6 +12,19 @@ type PhaseOneProduct = {
   vehicle_status: string; status: string; status_kind: string; listable: boolean;
   facts: Record<string, unknown>; evidence: Record<string, unknown>;
 };
+
+/** Complete accepted API observation only: absence means publication HOLD, never sale/deletion. */
+export function iancarAbsencePatch(old: Record<string, any>, observedIds: Set<string>, sourceDigest: string, sourceSyncedAt: string) {
+  if (String(old.provider_company_code ?? '').trim().toUpperCase() !== 'RP031'
+    || (old.iancar_one_vehicle_id && observedIds.has(old.iancar_one_vehicle_id))
+    || (!old.iancar_phase_one && old.listable !== true)) return null;
+  if (old.locked_by_contract || old._deleted || old.deletedAt) throw new Error('IANCAR_ABSENCE_CONTRACT_OR_DELETION_LOCK');
+  return { provider_company_code: 'RP031', listable: false, vehicle_status: '출고불가', status: '출고불가', status_kind: '불가',
+    status_reason: '이안카 최신 API 미관측 / 확인중 / 공개 보류(삭제 아님)',
+    iancar_phase_one: null,
+    iancar_phase_one_source_original: old.iancar_phase_one ?? old.iancar_phase_one_source_original ?? null,
+    publication_withdrawal: { reason: 'SOURCE_ABSENCE_HOLD', sourceDigest, sourceSyncedAt, deleteAuthorized: false } };
+}
 
 export function encodeIancarBackupValue(value: unknown): any {
   if (value === undefined || (typeof value === 'number' && !Number.isFinite(value))) throw new Error('IANCAR_BACKUP_UNSUPPORTED_SCALAR');
@@ -40,7 +54,7 @@ export function decodeIancarBackupValue(value: any, reference: (path: string) =>
 /** RP031-only compatibility publication. Canonical Catalog writer ownership is not cut over here. */
 export async function publishIancarPhaseOne(input: {
   products: PhaseOneProduct[]; sourceDigest: string; sourceSyncedAt: string;
-  apply: boolean; expectedPlanDigest?: string;
+  apply: boolean; expectedPlanDigest?: string; mirrorInventory?: boolean; privateEvidenceBucket?: string; sourceEvidence?: string;
 }) {
   const products = input.products;
   const assertFresh = () => {
@@ -97,10 +111,21 @@ export async function publishIancarPhaseOne(input: {
     }
     return { id, prior, fields };
   });
+  if (input.mirrorInventory) {
+    const observedIds = new Set(products.map(p => p.sourceVehicleId));
+    const observedPlates = new Set(products.map(p => plates(p.car_number)));
+    for (const prior of all.docs) {
+      if (observedPlates.has(plates(prior.data().car_number))) continue;
+      const fields = iancarAbsencePatch(prior.data(), observedIds, input.sourceDigest, input.sourceSyncedAt);
+      if (fields) planned.push({ id: prior.id, prior, fields });
+    }
+  }
+  if (planned.length > 450) throw new Error('IANCAR_PUBLICATION_OVERSIZED_PLAN');
   const planDigest = stableDigest({ sourceDigest: input.sourceDigest,
     records: planned.map(row => ({ id: row.id, updateTime: row.prior?.updateTime.toMillis() ?? null, fields: row.fields })) });
   const summary = { provider: 'RP031', sourceCount: products.length,
-    matched: planned.filter(row => row.prior).length, created: planned.filter(row => !row.prior).length,
+    matched: planned.filter(row => row.prior && row.fields.iancar_phase_one).length, created: planned.filter(row => !row.prior).length,
+    absenceHeld: planned.filter(row => row.fields.publication_withdrawal).length,
     open: products.filter(row => row.listable).length, deletes: 0, contractChanges: 0, policyDocumentChanges: 0,
     policyReferencesDeferred: planned.filter(row => row.prior?.data().policy_code).length,
     policyDeferredTotal: planned.length,
@@ -113,12 +138,23 @@ export async function publishIancarPhaseOne(input: {
   await mkdir(directory, { recursive: true });
   const backupPath = join(directory, `phase-one-${runId}.json`);
   const backup = JSON.stringify({ schema: 'iancar-phase-one-typed-backup/1', runId, projectId: 'freepasserp5', planDigest,
-    sourceDigest: input.sourceDigest, capturedAt: new Date().toISOString(),
+    sourceDigest: input.sourceDigest, capturedAt: new Date().toISOString(), sourceEvidence: input.sourceEvidence ?? null,
     documents: planned.map(row => ({ path: `products/${row.id}`, exists: !!row.prior,
       updateTime: row.prior?.updateTime.toDate().toISOString() ?? null,
       data: encodeIancarBackupValue(row.prior?.data() ?? null), patch: encodeIancarBackupValue(row.fields) })) });
   await writeFile(backupPath, backup, { flag: 'wx', mode: 0o600 });
   if (await readFile(backupPath, 'utf8') !== backup) throw new Error('IANCAR_BACKUP_READBACK_FAILED');
+  // Hosted runners are ephemeral: persist and read back private immutable evidence BEFORE the transaction.
+  let privateBackupObject: string | null = null;
+  if (input.privateEvidenceBucket) {
+    if (input.privateEvidenceBucket !== 'freepasserp5-data-audit-evidence') throw new Error('IANCAR_BACKUP_WRONG_BUCKET');
+    privateBackupObject = `iancar-one/${runId}/backup.json`;
+    const file = getStorage(app).bucket(input.privateEvidenceBucket).file(privateBackupObject);
+    await file.save(backup, { resumable: false, contentType: 'application/json', preconditionOpts: { ifGenerationMatch: 0 } });
+    const [bytes] = await file.download();
+    if (bytes.toString('utf8') !== backup) throw new Error('IANCAR_PRIVATE_BACKUP_READBACK_FAILED');
+  }
+  if (process.env.GITHUB_ACTIONS === 'true' && !privateBackupObject) throw new Error('IANCAR_HOSTED_DURABLE_BACKUP_REQUIRED');
   await db.runTransaction(async tx => {
     // Read the complete collision/contract scope before any write.
     const current = await tx.get(db.collection('products'));
@@ -146,7 +182,7 @@ export async function publishIancarPhaseOne(input: {
     throw Object.assign(new Error('IANCAR_PUBLICATION_COMMITTED_READBACK_FAILED'), { cause: error, runId, backupPath, writeExecuted: true });
   }
   return { ...summary, status: 'PHASE_ONE_ATOM_READBACK_VERIFIED', writeExecuted: true,
-    runId, backupPath, sourceDigest: input.sourceDigest, consumerReadback: 'NOT_VERIFIED' };
+    runId, backupPath, privateBackupObject, sourceDigest: input.sourceDigest, consumerReadback: 'NOT_VERIFIED' };
 }
 
 /** Restore only a still-unmodified publication. New records are withdrawn, never deleted. */

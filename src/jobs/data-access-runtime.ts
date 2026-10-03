@@ -93,11 +93,14 @@ export async function runIancarPublicationWithdrawal(input: {
 }
 
 export async function runIancarPhaseOnePublication(input: {
-  capture: IancarOneListCapture; apply: boolean; expectedPlanDigest?: string;
+  capture: IancarOneListCapture; apply: boolean; expectedPlanDigest?: string; mirrorInventory?: boolean; privateEvidenceBucket?: string;
 }) {
   const prepared = { products: buildIancarOnePublicationProducts(input.capture),
     sourceDigest: input.capture.sourceDigest, sourceSyncedAt: input.capture.syncedAt,
-    apply: input.apply, ...(input.expectedPlanDigest ? { expectedPlanDigest: input.expectedPlanDigest } : {}) };
+    apply: input.apply, sourceEvidence: JSON.stringify(input.capture),
+    ...(input.mirrorInventory !== undefined ? { mirrorInventory: input.mirrorInventory } : {}),
+    ...(input.privateEvidenceBucket ? { privateEvidenceBucket: input.privateEvidenceBucket } : {}),
+    ...(input.expectedPlanDigest ? { expectedPlanDigest: input.expectedPlanDigest } : {}) };
   const runtime = createJobDataAccessRuntime();
   const context = { actor: { id: 'service:freepass-data-iancar-publication', kind: 'SERVICE' as const },
     clientId: 'job:publish-iancar-phase-one', purpose: 'user-directed RP031 API vehicle/rental publication; policy deferred' };

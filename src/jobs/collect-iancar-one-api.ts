@@ -10,13 +10,17 @@ import {
 } from '../adapters/iancar-one-api.js';
 
 const requested = new Set(process.argv.slice(2));
-const allowed = new Set(['--apply-raw', '--inspect-detail-shape', '--full-facts', '--save-private', '--phase-one']);
+const allowed = new Set(['--apply-raw', '--inspect-detail-shape', '--full-facts', '--save-private', '--phase-one', '--publish-phase-one', '--publication-dry-run']);
 if ([...requested].some((arg) => !allowed.has(arg))) {
   throw new Error('UNKNOWN_IANCAR_ONE_OPTION');
 }
 
 const config = iancarOneApiConfigFromEnv();
 if (!config.apiKey) throw new Error('EANCAR_ONE_API_KEY_REQUIRED');
+if ((requested.has('--publish-phase-one') || requested.has('--publication-dry-run'))
+  && (!requested.has('--phase-one') || requested.has('--apply-raw'))) throw new Error('IANCAR_PHASE_ONE_PUBLICATION_OPTIONS_INVALID');
+if (requested.has('--publish-phase-one') && process.env.EANCAR_ONE_PHASE_ONE_PUBLICATION_APPROVED !== 'true')
+  throw new Error('IANCAR_PHASE_ONE_PUBLICATION_APPROVAL_REQUIRED');
 
 const capture = requested.has('--phase-one')
   ? await collectIancarOnePhaseOneFacts(config, fetch, new Date().toISOString(), (completed, total) => {
@@ -102,8 +106,24 @@ if (requested.has('--apply-raw')) {
   };
 }
 
+if (requested.has('--publish-phase-one') || requested.has('--publication-dry-run')) {
+  const { runIancarPhaseOnePublication } = await import('./data-access-runtime.js');
+  const input = { capture, apply: false, mirrorInventory: true,
+    ...(process.env.EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET ? { privateEvidenceBucket: process.env.EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET } : {}) };
+  const plan = await runIancarPhaseOnePublication(input);
+  report.publicationPlan = plan;
+  if (requested.has('--publish-phase-one')) {
+    const result = await runIancarPhaseOnePublication({ ...input, apply: true, expectedPlanDigest: plan.planDigest });
+    report.publication = { status: result.status, sourceDigest: capture.sourceDigest,
+      sourceSyncedAt: capture.syncedAt, open: result.open, runId: 'runId' in result ? result.runId : null,
+      absenceHeld: result.absenceHeld, created: result.created,
+      privateBackupObject: 'privateBackupObject' in result ? result.privateBackupObject : null };
+  }
+}
+
 report.status = capture.issues.length
   ? 'HOLD_SOURCE_REVIEW'
+  : requested.has('--publish-phase-one') ? 'PHASE_ONE_ATOM_READBACK_VERIFIED_CONSUMERS_PENDING'
   : requested.has('--apply-raw')
     ? 'RAW_INGESTED_NOT_CANONICAL'
     : 'OBSERVED_NOT_PUBLISHED';
