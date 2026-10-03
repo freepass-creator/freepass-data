@@ -1,5 +1,19 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-03 고도화 전 정리 — 정책 연결·주행거리 해석(④, ERP5 매퍼 v5)
+
+- 목적: 2026-09-30 감사에서 원인 후보로 남긴 정책 연결·주행거리 해석 한계를 매퍼/리더에서 고친다. 운영 쓰기 없음 — ERP5 매핑은 dry-run·감사 전용(HOLD)이며, 기록된 435/208/116/1,421은 오류 대수로 확정하지 않는다.
+- 대상 revision: main `e49dfb9`(독립 브랜치 `claude/policy-link-mileage`).
+- 변경(Codex 설계 상의 반영):
+  - 정책 문서 디코드가 최상위 `updated_at` timestamp를 상품과 같은 metadata 문자열로 무손실 허용한다(`POLICY_METADATA_TIMESTAMP_FIELDS`). 허용 목록 밖(`created_at` 등 — 증거 없음, HOLD)이나 중첩 map 안 timestamp는 기존처럼 문서 skip·사유 집계.
+  - `annual_mileage` 문자열 해석 `parseAnnualMileageText`: `30000`·`30,000km`·`연 30,000km`·`연간 3만km` 허용, `월`·`무제한`·범위/복수·0/음수·소수·기타는 미해석으로 남기고 사유를 `uninterpretedAnnualMileageReasons`에, 해석 건수를 `factsWithAnnualMileageParsedFromText`에 센다. B-2(가격 키에 주행거리가 없을 때의 의미)와는 별개 결정이다.
+  - 정책 연결은 같은 code 안에서 자기 회사(또는 회사 미기재) 정책을 먼저 찾는다. 같은 code가 모두 다른 회사일 때만 `POLICY_LINK_COMPANY_MISMATCH`, 자기 회사 후보가 둘 이상이면 신설 `POLICY_LINK_AMBIGUOUS`. 주행거리 해석(`resolveErp5Mileage`)의 code+회사 규칙과 맞췄다.
+  - `ERP5_PRODUCT_MAPPER_VERSION` `erp5-product-mapping/4` → `/5`(issue code 표면 변경).
+- 의도된 기대값 변화: `updated_at`만 있는 정책은 이제 fact가 되고(skip 0), `연 30,000km`는 30000으로 읽힌다. 다음 감사 실행에서 `POLICY_LINK_NOT_FOUND`·`MILEAGE_FROM_COMPANY_DEFAULT`·정책 skip 수가 줄 수 있으며 이는 해석기 변경 효과다 — 이전 수치와 단순 비교하지 않는다.
+- 검증: ERP5 테스트 163 PASS(신규: metadata 허용·허용 밖/중첩 skip, 텍스트 해석 허용/거부 13종, 동일 code 다회사 자기 회사 연결, 동일 회사 중복 AMBIGUOUS), `npm run check` PASS.
+- 남음: 실제 캡처로 재감사해 새 수치를 기록(읽기 전용 Actions, 별도 실행). 정책 code 없는 상품의 문서 ID 대체(`factsUsingDocumentIdAsPolicyCode`)와 `companyId`/`provider_company_code` 이중 필드는 그대로다.
+- next_start_here: 다음 ERP5 continuous audit 결과에서 `policyFactCoverage`의 새 카운터와 issue 분포를 읽고 BUSINESS-DATA-CONNECTION-MAP 감사 절을 갱신한다.
+
 ## 2026-10-03 이안카 15분 자동 수집 활성 / 첫 실반영 검증
 
 - 목적/결정: 사용자 최신 지시는 질문을 반복하지 말고 ONE 전체 재고·상태·대여료·사진을15분마다 계속 맞추는 것이다. 최소 권한 범위 설명 뒤 작업 진행 직접 지시를 받아 기존 계정에만 적용했다. 정책2차/RTDB/새 writer/수동 입력 시트는 제외한다.

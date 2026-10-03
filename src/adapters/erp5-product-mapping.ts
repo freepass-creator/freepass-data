@@ -3,7 +3,7 @@ import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { assessDepositEvidence, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
 
-export const ERP5_PRODUCT_MAPPER_VERSION = 'erp5-product-mapping/4';
+export const ERP5_PRODUCT_MAPPER_VERSION = 'erp5-product-mapping/5';
 
 /**
  * 정책이 회사의 기본을 확정한다 — 상품에 안 적힌 값은 여기서 읽는다.
@@ -212,9 +212,12 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
   const policyCode = text(d.policy_code) ? d.policy_code : undefined;
   const companyId = text(d.provider_company_code) ? d.provider_company_code : undefined;
   if (policyCode) {
-    const linked = policies.find(p => p.policyCode === policyCode);
-    if (!linked) issue('POLICY_LINK_NOT_FOUND');
-    else if (companyId && linked.companyId && linked.companyId !== companyId) issue('POLICY_LINK_COMPANY_MISMATCH');
+    // The same code can exist for several companies; only another company's policy is a mismatch.
+    const sameCode = policies.filter(p => p.policyCode === policyCode);
+    const mine = sameCode.filter(p => !companyId || !p.companyId || p.companyId === companyId);
+    if (!sameCode.length) issue('POLICY_LINK_NOT_FOUND');
+    else if (!mine.length) issue('POLICY_LINK_COMPANY_MISMATCH');
+    else if (mine.length > 1) issue('POLICY_LINK_AMBIGUOUS');
   }
   if (!object(d.price) || Object.keys(d.price).length === 0) issue('MISSING_PRICE_TERMS');
   else for (const [sourceKey, terms] of Object.entries(d.price)) {

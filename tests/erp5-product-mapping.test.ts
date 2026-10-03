@@ -233,6 +233,32 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.candidate.issues).toContain('POLICY_LINK_COMPANY_MISMATCH');
   });
 
+  it('links to its own company when the same policy code exists for several companies', () => {
+    const input = fixture();
+    input.data.policy_code = 'P-1';
+    input.data.provider_company_code = 'RP012';
+    const result = mapErp5Product(input, {
+      policies: [
+        { policyCode: 'P-1', companyId: 'RP023', annualMileageKm: 20000 },
+        { policyCode: 'P-1', companyId: 'RP012', annualMileageKm: 30000 },
+      ]
+    });
+    expect(result.candidate.issues).not.toContain('POLICY_LINK_COMPANY_MISMATCH');
+    expect(result.candidate.issues).not.toContain('POLICY_LINK_AMBIGUOUS');
+    expect(result.candidate.priceTerms[0]!.mileageLimitKmPerYear).toBe(30000);
+  });
+
+  it('flags two policies with the same code for the same company as ambiguous', () => {
+    const input = fixture();
+    input.data.policy_code = 'P-1';
+    input.data.provider_company_code = 'RP012';
+    const result = mapErp5Product(input, {
+      policies: [{ policyCode: 'P-1', companyId: 'RP012' }, { policyCode: 'P-1', companyId: 'RP012' }]
+    });
+    expect(result.candidate.issues).toContain('POLICY_LINK_AMBIGUOUS');
+    expect(result.candidate.issues).not.toContain('POLICY_LINK_COMPANY_MISMATCH');
+  });
+
   it('flags a policy code that resolves to nothing at all', () => {
     const input = fixture();
     input.data.policy_code = 'P-없음';
