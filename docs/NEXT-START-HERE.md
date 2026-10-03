@@ -6,12 +6,12 @@
 - 대상 revision: main `e49dfb9`(독립 브랜치 `claude/policy-link-mileage`).
 - 변경(Codex 설계 상의 반영):
   - 정책 문서 디코드가 최상위 `updated_at` timestamp를 상품과 같은 metadata 문자열로 무손실 허용한다(`POLICY_METADATA_TIMESTAMP_FIELDS`). 허용 목록 밖(`created_at` 등 — 증거 없음, HOLD)이나 중첩 map 안 timestamp는 기존처럼 문서 skip·사유 집계.
-  - `annual_mileage` 문자열 해석 `parseAnnualMileageText`: `30000`·`30,000km`·`연 30,000km`·`연간 3만km` 허용, `월`·`무제한`·범위/복수·0/음수·소수·기타는 미해석으로 남기고 사유를 `uninterpretedAnnualMileageReasons`에, 해석 건수를 `factsWithAnnualMileageParsedFromText`에 센다. B-2(가격 키에 주행거리가 없을 때의 의미)와는 별개 결정이다.
-  - 정책 연결은 같은 code 안에서 자기 회사(또는 회사 미기재) 정책을 먼저 찾는다. 같은 code가 모두 다른 회사일 때만 `POLICY_LINK_COMPANY_MISMATCH`, 자기 회사 후보가 둘 이상이면 신설 `POLICY_LINK_AMBIGUOUS`. 주행거리 해석(`resolveErp5Mileage`)의 code+회사 규칙과 맞췄다.
+  - `annual_mileage` 문자열 해석 `parseAnnualMileageText`: `30000`·`30,000km`·`연 30,000km`·`연간 3만km`·`3만키로` 허용(만 단위는 km 계열 단위 필수, 앞자리 0 불가), `3만`·`월`·`무제한`·범위/복수·0/음수·소수·`원`/`회` 등 기타는 미해석으로 남기고 사유를 `uninterpretedAnnualMileageReasons`에, 해석 건수를 `factsWithAnnualMileageParsedFromText`에 센다. B-2(가격 키에 주행거리가 없을 때의 의미)와는 별개 결정이다.
+  - 정책 선택을 `selectErp5Policy` 하나로 모아 연결 판정과 주행거리 해석(`resolveErp5Mileage`)이 같이 쓴다. 같은 code 안에서 자기 회사 정책이 먼저이고, 회사 미기재 정책은 자기 회사 정책이 없을 때만 후보다(문서 순서와 무관). 같은 code가 모두 다른 회사면 `POLICY_LINK_COMPANY_MISMATCH`, 후보가 둘 이상이면 신설 `POLICY_LINK_AMBIGUOUS`이며 이때 정책 주행거리를 고르지 않는다(이전에는 첫 문서를 썼다).
   - `ERP5_PRODUCT_MAPPER_VERSION` `erp5-product-mapping/4` → `/5`(issue code 표면 변경).
 - 의도된 기대값 변화: `updated_at`만 있는 정책은 이제 fact가 되고(skip 0), `연 30,000km`는 30000으로 읽힌다. 다음 감사 실행에서 `POLICY_LINK_NOT_FOUND`·`MILEAGE_FROM_COMPANY_DEFAULT`·정책 skip 수가 줄 수 있으며 이는 해석기 변경 효과다 — 이전 수치와 단순 비교하지 않는다.
-- 검증: ERP5 테스트 163 PASS(신규: metadata 허용·허용 밖/중첩 skip, 텍스트 해석 허용/거부 13종, 동일 code 다회사 자기 회사 연결, 동일 회사 중복 AMBIGUOUS), `npm run check` PASS.
-- 남음: 실제 캡처로 재감사해 새 수치를 기록(읽기 전용 Actions, 별도 실행). 정책 code 없는 상품의 문서 ID 대체(`factsUsingDocumentIdAsPolicyCode`)와 `companyId`/`provider_company_code` 이중 필드는 그대로다.
+- 검증: ERP5 테스트 165 PASS(신규: metadata 허용·허용 밖/중첩 skip, 텍스트 해석 허용 8·거부 15종, 동일 code 다회사 자기 회사 연결, 회사 미기재보다 자기 회사 우선(순서 무관), 모호 시 정책 주행거리 미사용, 동일 회사 중복 AMBIGUOUS). 선택 우선순위를 옛 방식으로 되돌리면 테스트가 실패함을 확인 후 원복. Codex 구현 검토 지적(회사 미기재 우선순위, 단위 없는 만, 문서 ID 대체 설명) 반영, `npm run check` PASS.
+- 남음: 실제 캡처로 재감사해 새 수치를 기록(읽기 전용 Actions, 별도 실행). `policy_code`가 없는 정책 문서의 문서 ID 대체(`factsUsingDocumentIdAsPolicyCode`)와 `companyId`/`provider_company_code` 이중 필드는 그대로다.
 - next_start_here: 다음 ERP5 continuous audit 결과에서 `policyFactCoverage`의 새 카운터와 issue 분포를 읽고 BUSINESS-DATA-CONNECTION-MAP 감사 절을 갱신한다.
 
 ## 2026-10-03 이안카 15분 자동 수집 활성 / 첫 실반영 검증

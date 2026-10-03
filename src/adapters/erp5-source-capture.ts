@@ -270,7 +270,8 @@ export function parseAnnualMileageText(value: string): AnnualMileageTextResult {
   if (/무제한/.test(compact)) return { reason: 'UNLIMITED' };
   if (/\d\.\d/.test(compact)) return { reason: 'UNRECOGNIZED' };
   if (/[~∼〜–]/.test(compact) || (compact.match(/\d+(?:,\d{3})*/g) ?? []).length > 1) return { reason: 'RANGE_OR_MULTIPLE' };
-  const match = /^(?:연간?)?(\d{1,3}(?:,\d{3})+|\d+)(만)?(?:km|㎞|킬로(?:미터)?)?$/i.exec(compact);
+  // A bare number is read as km; the 만 form needs an explicit km unit. No leading zeros.
+  const match = /^(?:연간?)?([1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*|0)(?:(만)(?=km|㎞|킬로|키로)|)(km|㎞|킬로(?:미터)?|키로(?:미터)?)?$/i.exec(compact);
   if (!match) return { reason: 'UNRECOGNIZED' };
   const km = Number(match[1]!.replaceAll(',', '')) * (match[2] ? 10000 : 1);
   return Number.isSafeInteger(km) && km > 0 ? { km } : { reason: 'NON_POSITIVE' };

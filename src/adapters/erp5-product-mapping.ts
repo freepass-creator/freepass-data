@@ -28,6 +28,25 @@ export type Erp5MileageResolution = {
   source: 'PRICE_KEY' | 'POLICY_CODE' | 'COMPANY_SOLE_POLICY' | 'DEFAULT';
 };
 
+export type Erp5PolicyLink =
+  | { kind: 'MATCH'; policy: Erp5PolicyFacts }
+  | { kind: 'NOT_FOUND' | 'COMPANY_MISMATCH' | 'AMBIGUOUS' };
+
+/**
+ * 같은 정책 코드 안에서 자기 회사 정책이 먼저다. 회사가 적히지 않은 정책은 자기 회사 정책이
+ * 하나도 없을 때만 후보가 된다. 후보가 둘 이상이면 아무것도 고르지 않는다.
+ */
+export function selectErp5Policy(
+  policies: Erp5PolicyFacts[], policyCode: string, companyId: string | undefined
+): Erp5PolicyLink {
+  const sameCode = policies.filter(p => p.policyCode === policyCode);
+  if (!sameCode.length) return { kind: 'NOT_FOUND' };
+  const exact = companyId ? sameCode.filter(p => p.companyId === companyId) : [];
+  const candidates = !companyId ? sameCode : exact.length ? exact : sameCode.filter(p => !p.companyId);
+  if (!candidates.length) return { kind: 'COMPANY_MISMATCH' };
+  return candidates.length > 1 ? { kind: 'AMBIGUOUS' } : { kind: 'MATCH', policy: candidates[0]! };
+}
+
 /**
  * 주행거리 사슬. 가격 키에 적혀 있으면 그것이 우선이고(오토플러스 방식),
  * 없으면 그 차의 정책이, 정책 코드가 없으면 회사 정책이 하나뿐일 때 그것이,
@@ -42,9 +61,10 @@ export function resolveErp5Mileage(
   if (explicitKm !== undefined) return { km: explicitKm, source: 'PRICE_KEY' };
   if (policyCode) {
     // 코드만 맞아서는 안 된다 — 그 회사의 차가 그 회사의 정책을 따라야 한다.
-    const matched = policies.find(p => p.policyCode === policyCode
-      && (!companyId || !p.companyId || p.companyId === companyId));
-    if (matched?.annualMileageKm !== undefined) return { km: matched.annualMileageKm, source: 'POLICY_CODE' };
+    const link = selectErp5Policy(policies, policyCode, companyId);
+    if (link.kind === 'MATCH' && link.policy.annualMileageKm !== undefined) {
+      return { km: link.policy.annualMileageKm, source: 'POLICY_CODE' };
+    }
   }
   if (companyId) {
     const mine = policies.filter(p => p.companyId === companyId && p.annualMileageKm !== undefined);
@@ -212,12 +232,8 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
   const policyCode = text(d.policy_code) ? d.policy_code : undefined;
   const companyId = text(d.provider_company_code) ? d.provider_company_code : undefined;
   if (policyCode) {
-    // The same code can exist for several companies; only another company's policy is a mismatch.
-    const sameCode = policies.filter(p => p.policyCode === policyCode);
-    const mine = sameCode.filter(p => !companyId || !p.companyId || p.companyId === companyId);
-    if (!sameCode.length) issue('POLICY_LINK_NOT_FOUND');
-    else if (!mine.length) issue('POLICY_LINK_COMPANY_MISMATCH');
-    else if (mine.length > 1) issue('POLICY_LINK_AMBIGUOUS');
+    const link = selectErp5Policy(policies, policyCode, companyId);
+    if (link.kind !== 'MATCH') issue(`POLICY_LINK_${link.kind}`);
   }
   if (!object(d.price) || Object.keys(d.price).length === 0) issue('MISSING_PRICE_TERMS');
   else for (const [sourceKey, terms] of Object.entries(d.price)) {
