@@ -113,7 +113,8 @@ export function planPolicySplit(input,spec=inputSpec,now=Date.now()){
   if(!rule||!from)hold('Spec policySplit with legacy layout required');
   // The workbook must still be on the pre-split layout; same verify gate.
   planSupplierInput(input,{...spec,inputHeaders:from.inputHeaders,summaryHeaders:from.inputHeaders},now);
-  const oldH=from.inputHeaders,newH=spec.inputHeaders;
+  const oldH=from.inputHeaders,newH=rule.to===spec.layoutVersion?spec.inputHeaders:spec.legacyLayouts?.[rule.to]?.inputHeaders;
+  if(!newH)hold(`Target layout ${rule.to} missing`);
   const cols=Object.keys(rule.columns).map(h=>({h,old:oldH.indexOf(h),parts:rule.columns[h]}));
   if(cols.some(c=>c.old<0||c.parts.some(p=>!newH.includes(p))))hold('policySplit does not match layouts');
   const requests=[],holds=[];let rowsRead=0;
@@ -150,7 +151,47 @@ export function planPolicySplit(input,spec=inputSpec,now=Date.now()){
   const last=columnLetter(newH.length-1);
   const stack=input.binding.suppliers.map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
   requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
-  return {status:'PLANNED',scope:'POLICY_COLUMN_SPLIT_VALUES_HEADERS_SUMMARY',from:rule.from,to:spec.layoutVersion,tabs:input.binding.suppliers.length,rowsRead,requests};
+  return {status:'PLANNED',scope:'POLICY_COLUMN_SPLIT_VALUES_HEADERS_SUMMARY',from:rule.from,to:rule.to,tabs:input.binding.suppliers.length,rowsRead,requests};
+}
+// Column order change (legacy layout → spec layout): append the new empty
+// columns at the end, move every column into place left to right (whole
+// columns move with values, notes, formats and validation), then rewrite the
+// header row with the renamed labels. No cell value is rewritten.
+export function planLayoutReorder(input,spec=inputSpec,now=Date.now()){
+  const rule=spec.layoutReorder,from=spec.legacyLayouts?.[rule?.from];
+  if(!rule||!from)hold('Spec layoutReorder with legacy layout required');
+  planSupplierInput(input,{...spec,inputHeaders:from.inputHeaders,summaryHeaders:from.inputHeaders},now);
+  const oldH=from.inputHeaders,newH=spec.inputHeaders;
+  // Map each new header to the old column it comes from (renames), or null for a new column.
+  const source=newH.map(h=>Object.hasOwn(rule.renames,h)?rule.renames[h]:rule.newColumns.includes(h)?null:h);
+  if(source.some((o,i)=>o!==null&&!oldH.includes(o))||new Set(source.filter(Boolean)).size!==oldH.length||rule.newColumns.length!==newH.length-oldH.length)hold('layoutReorder does not account for every column');
+  const requests=[];
+  for(const sup of input.binding.suppliers){
+    const s=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);
+    if(s.properties.gridProperties.columnCount!==oldH.length)hold(`${sup.title}: column count must equal the legacy layout`);
+    // Working model of the current column order; new columns get placeholder ids.
+    const order=[...oldH,...rule.newColumns.map(h=>`\u0000new:${h}`)];
+    requests.push({insertDimension:{range:{sheetId:sup.sheetId,dimension:'COLUMNS',startIndex:oldH.length,endIndex:newH.length},inheritFromBefore:true}});
+    newH.forEach((h,i)=>{
+      const id=source[i]??`\u0000new:${h}`,at=order.indexOf(id);
+      if(at===i)return;
+      if(at<i)hold('reorder invariant broken');
+      requests.push({moveDimension:{source:{sheetId:sup.sheetId,dimension:'COLUMNS',startIndex:at,endIndex:at+1},destinationIndex:i}});
+      order.splice(i,0,order.splice(at,1)[0]);
+    });
+    requests.push({updateCells:{start:{sheetId:sup.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))}],fields:'userEnteredValue'}});
+    for(const h of rule.newColumns){const at=newH.indexOf(h);
+      requests.push({updateDimensionProperties:{range:{sheetId:sup.sheetId,dimension:'COLUMNS',startIndex:at,endIndex:at+1},properties:{pixelSize:spec.columnWidths[h]??spec.defaultColumnWidth},fields:'pixelSize'}});
+      // Appended columns inherit the last column's rule; new columns start without one.
+      requests.push({setDataValidation:{range:{sheetId:sup.sheetId,startRowIndex:1,endRowIndex:s.properties.gridProperties.rowCount,startColumnIndex:at,endColumnIndex:at+1}}});}
+  }
+  const summary=input.spreadsheet.sheets.find(x=>x.properties.sheetId===input.binding.summarySheetId);
+  const width=summary.properties.gridProperties.columnCount;
+  if(width<newH.length)requests.push({insertDimension:{range:{sheetId:summary.properties.sheetId,dimension:'COLUMNS',startIndex:width,endIndex:newH.length},inheritFromBefore:true}});
+  const last=columnLetter(newH.length-1);
+  const stack=input.binding.suppliers.map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
+  requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
+  return {status:'PLANNED',scope:'COLUMN_ORDER_AND_HEADERS_NO_VALUE_REWRITE',from:rule.from,to:spec.layoutVersion,tabs:input.binding.suppliers.length,requests};
 }
 // Source policies stay in their original units. Blank/duplicate codes never
 // select a generic default. No inventory/monetary field is normalized here.
@@ -278,5 +319,5 @@ export function compareSharedToLegacy({shared,legacy,binding},spec=inputSpec,now
   return {status:results.every(r=>r.status==='IN_SYNC')&&!unboundLegacy.length?'ALL_IN_SYNC':'NOT_IN_SYNC',scope:'COMPARE_ONLY_VEHICLE_RATE_FIELDS_NO_WRITES_POLICY_NOT_COMPARED',layoutVersion:spec.layoutVersion,summary,unboundLegacy,notCompared,results};
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===fs.realpathSync(process.argv[1])){
-  try {const split=process.argv.find(a=>a.startsWith('--split='))?.slice(8);if(split){console.log(JSON.stringify(planPolicySplit(JSON.parse(split==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(split,'utf8'))),null,2));process.exit(0);}const dropdowns=process.argv.find(a=>a.startsWith('--dropdowns='))?.slice(12);const compare=process.argv.find(a=>a.startsWith('--compare='))?.slice(10);if(dropdowns){console.log(JSON.stringify(planSupplierDropdowns(JSON.parse(dropdowns==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(dropdowns,'utf8'))),null,2));}else if(compare){console.log(JSON.stringify(compareSharedToLegacy(JSON.parse(fs.readFileSync(compare,'utf8'))),null,2));}else{const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json or --compare=private-compare.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}
+  try {const reorder=process.argv.find(a=>a.startsWith('--reorder='))?.slice(10);if(reorder){console.log(JSON.stringify(planLayoutReorder(JSON.parse(reorder==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(reorder,'utf8'))),null,2));process.exit(0);}const split=process.argv.find(a=>a.startsWith('--split='))?.slice(8);if(split){console.log(JSON.stringify(planPolicySplit(JSON.parse(split==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(split,'utf8'))),null,2));process.exit(0);}const dropdowns=process.argv.find(a=>a.startsWith('--dropdowns='))?.slice(12);const compare=process.argv.find(a=>a.startsWith('--compare='))?.slice(10);if(dropdowns){console.log(JSON.stringify(planSupplierDropdowns(JSON.parse(dropdowns==='-'?fs.readFileSync(0,'utf8'):fs.readFileSync(dropdowns,'utf8'))),null,2));}else if(compare){console.log(JSON.stringify(compareSharedToLegacy(JSON.parse(fs.readFileSync(compare,'utf8'))),null,2));}else{const path=process.argv.find(a=>a.startsWith('--input='))?.slice(8);if(!path)hold('--input=private-fresh-readback.json or --compare=private-compare.json required'); console.log(JSON.stringify(planSupplierInput(JSON.parse(fs.readFileSync(path,'utf8'))),null,2));}}catch(e){console.error(e.message);if(e.mismatched)console.error(JSON.stringify(e.mismatched,null,2));process.exitCode=2;}
 }
