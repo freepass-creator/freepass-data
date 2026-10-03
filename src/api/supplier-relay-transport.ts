@@ -130,21 +130,16 @@ export function createSupplierRelayPorts(config: RelayConfig, deps: {
         assertKey(key);
         if (outcome === 'ACCEPTED_PENDING' ? !runId(id) : id !== null && !runId(id)) throw new Error('RELAY_OUTCOME_INVALID');
         await immutable(`outcomes/${key}`, { key, outcome, runId: id, ...(reason ? { reason } : {}) });
-        // Latest per-entry observation, CAS prevents a stale request overwriting a newer tick.
+        // Per-tick status file, create-only (no overwrite/delete permission). The name sorts by
+        // scheduleTime, so the latest status is the last object under status/<id>/.
         const receipt = (await objectRead(`receipts/${key}`))?.value as { scheduleTime?: string; jobName?: string } | undefined;
         if (!receipt?.scheduleTime || !Number.isFinite(Date.parse(receipt.scheduleTime))
           || receipt.jobName !== `${config.jobPrefix}supplier-relay-${entry.id}`) throw new Error('RELAY_RECEIPT_INVALID');
-        const statusName = `status/${entry.id}`;
-        const prior = await objectRead(statusName);
-        const previous = prior?.value as { schema?: string; scheduleTime?: string } | undefined;
-        if (prior && (previous?.schema !== 'supplier-relay-status/v1'
-          || !previous.scheduleTime || !Number.isFinite(Date.parse(previous.scheduleTime)))) throw new Error('RELAY_STATUS_INVALID');
-        if (!previous?.scheduleTime || Date.parse(previous.scheduleTime) <= Date.parse(receipt.scheduleTime)) {
-          if (!await write(statusName, { schema: 'supplier-relay-status/v1', id: entry.id,
-            writerGroup: entry.writerGroup, key, jobName: receipt.jobName, scheduleTime: receipt.scheduleTime,
-            observedAt: new Date().toISOString(), outcome, runId: id, reason: reason ?? null }, prior?.generation ?? '0'))
-            throw new Error('RELAY_STATUS_CAS_CONFLICT');
-        }
+        const tick = new Date(receipt.scheduleTime).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+        // An existing file for this key means this tick's status is already recorded; keep it.
+        await write(`status/${entry.id}/${tick}-${key}`, { schema: 'supplier-relay-status/v1', id: entry.id,
+          writerGroup: entry.writerGroup, key, jobName: receipt.jobName, scheduleTime: receipt.scheduleTime,
+          observedAt: new Date().toISOString(), outcome, runId: id, reason: reason ?? null });
         if (outcome === 'SKIPPED_BUSY') return;
         const current = await gate();
         // A rejected later tick may report failure of a prior run; never mutate its owner.

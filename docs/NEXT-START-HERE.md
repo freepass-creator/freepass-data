@@ -316,8 +316,8 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 경합 근거: ERP4 로컬 origin/main `094155bd8e03a4269654a45b2eac6237a7796ad1`, refresh L73–80 cadence 양보 / L84–88 job concurrency / L98–107 수동 전체 회차의 이안카 sync 제한. watchdog L20–22 별도 잠금, L61–70 repository_dispatch. 원격 contents API는 네트워크 차단으로 최신 검증 실패. hourly-all은 동등 dispatch 조합 부재로 HOLD.
 - 검증: 관련 테스트51 PASS, build PASS. `npm run check`의 architecture/standards/boundary/sheets57/build/runtime-smoke6/shadow10/dashboard 통과, 최종 Vitest **1210 PASS / 9 FAIL / 14 SKIP** (Codex 샌드박스 환경 오류; Claude 정상 환경 재실행 exit0, Vitest 1219 PASS / 14 SKIP). 실패 파일: iancar-source-capture2·read-pilot4·runtime-policy2·vehicle-finder-route1. 관측 오류 `uv_os_get_passwd ENOMEM`, `jq Permission denied`, CLI 출력/exit 불일치, `ECONNREFUSED`. 기대값·환경 판정 완화 없음. 결과 JSON 재실행도 같은 수치. diff whitespace 검사 PASS.
 - 독립 검토: Claude status RESET_REACHED였으나 호출 `FAILED / CLAUDE_PROCESS_FAILED`(본문·exit0 없음), 미검증. 합의/PASS 없음.
-- 남음: status/<id>.json 최신 CAS에는 delete가 필요하지만 요청된 status create+read-only와 충돌. 정확한 status 객체 CAS 예외 여부 사용자 답변 대기, 권한 확대/운영 활성 없음. Git mv는 공용 `.git/worktrees/waiting-4218c0/index.lock` 쓰기 권한으로 실패해 checkout 파일만 이동했다(삭제+untracked로 보이며 Claude staging 필요). 원격 main/Issue24/PR 현황 최신 확인·정상 환경 전체 검사·독립 검토·실제 IAM/OIDC/GCS/경합 증거는 HOLD.
-- next_start_here: status IAM 충돌 결정 → 정상 권한 세션에서 원격 yml/PR 재확인·rename staging·전체 check/Claude 검토 → 승인된 운영 담당자만 배포 절차. Scheduler 검증 후 ERP4 cron 제거는 별도 승인. 운영 GCS/Firestore/시트 쓰기·dispatch·공급사 요청·IAM/Scheduler/Cloud Run/Secret 변경·ERP4 수정·commit/push 0.
+- 남음: 상태 파일은 경영지원실 결정으로 회차별 create-only 새 파일(status/<id>/<시각>-<key>.json)로 바꿔 덮어쓰기 권한 문제를 없앰(권한 추가 없음, 30일 수명 규칙은 배포 절차). hourly-all 동등 dispatch 조합 부재로 HOLD. 운영 활성 없음.
+- next_start_here: 경영지원실 Codex 재검토 → #288 머지 → 승인된 운영 담당자만 배포 절차(/verify 무쓰기 검증 통과 후 Scheduler resume). Scheduler 검증 후 ERP4 cron 제거는 별도 승인.
 
 ### 2026-10-03 오더3 — 중계 concrete ports와 아이카/아이언 transport (운영 미실행)
 

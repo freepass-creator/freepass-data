@@ -75,7 +75,7 @@ describe('relay config and OIDC', () => {
 });
 
 describe('GCS immutable receipts and single-object CAS', () => {
-  it('shares one writer-group object across allowlist entries and records latest status with CAS', async () => {
+  it('shares one writer-group object across allowlist entries and records per-tick status create-only', async () => {
     const b = bucket(), second = createSupplierRelayPorts(config, { fetcher: b.fetcher, accessToken: async () => 'fixture-google' }, SUPPLIER_RELAY_ALLOWLIST[1]!);
     const receipt = { key, jobName: `${config.jobPrefix}supplier-relay-iancar-15m`, scheduleTime: '2026-10-03T00:00:00Z' };
     await b.p.receipts.createOnly(receipt);
@@ -83,11 +83,15 @@ describe('GCS immutable receipts and single-object CAS', () => {
     expect(await second.receipts.acquirePending(other)).toBe('BUSY');
     await b.p.receipts.recordOutcome(key, 'UNKNOWN', '12', 'OVERLAP');
     expect((await b.p.receipts.pending())?.reason).toBe('OVERLAP');
-    const status = b.objects.get('supplier-relay/v1/status/iancar-15m.json');
+    const status = b.objects.get(`supplier-relay/v1/status/iancar-15m/20261003T000000Z-${key}.json`);
     expect(status?.value).toMatchObject({ schema: 'supplier-relay-status/v1', id: 'iancar-15m', outcome: 'UNKNOWN', reason: 'OVERLAP' });
     await b.p.receipts.createOnly({ ...receipt, key: other, scheduleTime: '2026-10-03T00:15:00Z' });
     await b.p.receipts.recordOutcome(other, 'SKIPPED_BUSY', null);
-    expect(b.writes.filter(write => write.name.includes('/status/')).map(write => write.generation)).toEqual(['0', status!.generation]);
+    const statusWrites = b.writes.filter(write => write.name.includes('/status/'));
+    // Never overwrites: every status write is create-only and names sort by schedule time.
+    expect(statusWrites.map(write => write.generation)).toEqual(['0', '0']);
+    expect(statusWrites.map(write => write.name)).toEqual([...statusWrites.map(write => write.name)].sort());
+    expect(statusWrites[1]!.name).toContain('/status/iancar-15m/20261003T001500Z-');
     expect((await b.p.receipts.pending())?.key).toBe(key);
   });
   it('creates receipt only once; empty 404 permits exactly one concurrent admission', async () => {

@@ -63,7 +63,7 @@ engine is incompatible with current ONE-owned inventory. No new store or engine 
 - `SUPPLIER_RELAY_ALLOWLIST`의 job 이름만 받으며 본문 `{}` 고정. iancar-15m과 hourly-all은 writer 그룹 pending 하나를 공유한다. hourly-all은 자동 회차와 같은 이안카 fresh sync를 요청할 dispatch 조합이 없어 HOLD 정의만 둔다.
 - dispatch 후 자기 run을 제외한 미완료 run 재조회, 겹침 UNKNOWN/OVERLAP 및 pending 유지, cancelled/실패 자동 재전송 금지. ERP4 cadence 조회와 queue 입장은 원자적이지 않다. Scheduler 확인 후 ERP4 cron 제거는 별도 승인이다.
 - `/verify`는 OIDC 인증·config·기존 Secret 읽기·GCS 읽기·GitHub 목록 읽기만 수행한다. selftest는 별도 prefix의 조건부 생성 **쓰기1건**이다. 이 검증과 모든 HOLD 해소 전에 Scheduler resume 금지.
-- 항목별 `supplier-relay-status/v1`과 필수 exact-object pending CAS IAM, yml revision/줄 근거, 운영 절차는 [공급사 수집 중계 배포 절차](deploy/supplier-collect-relay-배포절차.md)를 따른다. status 최신 파일 덮어쓰기와 create+read-only IAM 요구는 충돌하므로 사용자 결정 전 활성 HOLD.
+- 항목별 `supplier-relay-status/v1`과 필수 exact-object pending CAS IAM, yml revision/줄 근거, 운영 절차는 [공급사 수집 중계 배포 절차](deploy/supplier-collect-relay-배포절차.md)를 따른다. 상태는 회차별 create-only 새 파일(이름순=시각순)이라 덮어쓰기 권한이 필요 없다.
 - 검증: 관련51 PASS, 전체 check 빌드 통과 후 Vitest1210 PASS/9 FAIL/14 SKIP(환경 오류 별도 인계). 원격 yml 읽기는 네트워크 차단, 로컬 ERP4 origin/main `094155bd`만 확인했다. Claude 독립 검토는 `CLAUDE_PROCESS_FAILED`로 미검증.
 
 ### 오더 2 — Data native 수리 (코드만, 운영 미적용)

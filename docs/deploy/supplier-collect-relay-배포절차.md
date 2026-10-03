@@ -73,7 +73,15 @@ gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
   --condition='expression=resource.name.startsWith("projects/_/buckets/freepasserp5-data-audit-evidence/objects/supplier-relay/v1/selftest/"),title=supplier-relay-selftest-create'
 ```
 
-**권한 충돌 HOLD:** 최신 상태 파일 `status/<id>.json`의 2회차 이후 CAS 덮어쓰기에는 delete도 필요하다. status/ create+read만으로는 이 요구를 충족하지 못한다. 현재 사용자에게 정확한 status 객체에만 CAS 예외를 줄지 질의한 상태이며, 승인 없이 권한을 확대하는 명령은 제공하지 않는다. 이 충돌 해소 전 Scheduler resume 금지. create+read만이면 첫 생성 이후 상태 갱신은 UNKNOWN으로 중단될 수 있다.
+**상태 파일은 덮어쓰지 않는다:** 회차마다 `status/<id>/<YYYYMMDDTHHMMSSZ>-<key>.json` 새 파일을 create-only로 만든다(2026-10-03 경영지원실 결정). 위 `status/` 접두사 create+read 외 권한 추가 없음. 오래된 상태 파일은 버킷 수명 규칙으로 30일 뒤 정리한다(접두사 한정, 영수증·outcomes·pending은 대상 아님):
+
+```bash
+cat > /tmp/supplier-relay-lifecycle.json <<'JSON'
+{"rule":[{"action":{"type":"Delete"},"condition":{"age":30,"matchesPrefix":["supplier-relay/v1/status/"]}}]}
+JSON
+gcloud storage buckets describe gs://$BUCKET --format='json(lifecycle_config)'   # 기존 규칙 먼저 확인 — 있으면 합쳐서 넣는다(덮어쓰기 주의)
+gcloud storage buckets update gs://$BUCKET --lifecycle-file=/tmp/supplier-relay-lifecycle.json
+```
 
 ## 비공개 Cloud Run
 
@@ -137,7 +145,7 @@ printf '{"schema":"supplier-relay-selftest/v1"}\n' | gcloud storage cp - \
 
 ### 4. 모든 게이트 통과 후에만 resume
 
-위 검증, 최신 yml 재확인, status IAM 충돌 해소, 독립 검토, 실행 승인을 모두 충족한 뒤 PAUSED 상태에서 URI를 변경하고 resume한다. hourly-all job은 만들지 않는다.
+위 검증, 최신 yml 재확인, 독립 검토, 실행 승인을 모두 충족한 뒤 PAUSED 상태에서 URI를 변경하고 resume한다. hourly-all job은 만들지 않는다.
 
 ```bash
 gcloud scheduler jobs update http $JOB --project=$PROJECT --location=$REGION --uri="$AUDIENCE/schedule"
@@ -146,10 +154,10 @@ gcloud scheduler jobs resume $JOB --project=$PROJECT --location=$REGION
 
 ## 모니터 계약
 
-`gs://<bucket>/supplier-relay/v1/status/<id>.json`:
+`gs://<bucket>/supplier-relay/v1/status/<id>/<YYYYMMDDTHHMMSSZ>-<key>.json` (회차별 새 파일, 이름순 = 시각순):
 `schema="supplier-relay-status/v1"`, `id`, `writerGroup`, `key`(job+scheduleTime SHA256), `jobName`, `scheduleTime`(UTC), `observedAt`(UTC), `outcome`(ACCEPTED_PENDING/SKIPPED_BUSY/UNKNOWN/FAILED), `runId`(string|null), `reason`(string|null).
 
-generation 조건부 갱신이며 오래된 scheduleTime은 새로운 상태를 덮어쓰지 않는다. CAS 실패는 UNKNOWN. status 쓰기 실패 때는 이전 상태가 남으므로 시각 정체도 경보로 처리한다. HOLD 항목·미인증·잘못된 요청은 쓰지 않는다.
+최신 상태 = `status/<id>/` 아래 이름순 마지막 파일. 같은 key 파일이 이미 있으면 그 회차 기록을 유지한다(덮어쓰기·삭제 없음). status 쓰기 실패 때는 새 파일이 생기지 않으므로 시각 정체도 경보로 처리한다. HOLD 항목·미인증·잘못된 요청은 쓰지 않는다.
 
 `receipts/<key>.json`, `outcomes/<key>.json`, `completed/<key>.json`은 create-only. `pending/<writerGroup>.json`은 RESERVED/ACCEPTED_PENDING/UNKNOWN/FAILED와 owner key·runId·reason 또는 CAS tombstone null이다. lease 만료 해제는 없다. UNKNOWN/OVERLAP과 cancelled는 자동 해제하지 않는다. 감시자 읽기 권한은 runtime과 분리해 승인한다.
 
