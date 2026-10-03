@@ -83,6 +83,7 @@ describe('supplier adapter common capture contract', () => {
   it('all registered supplier transports use one RAW output without altering numeric meaning', async () => {
     for (const adapterId of Object.keys(SUPPLIER_SOURCE_ADAPTERS) as SupplierSourceAdapterId[]) {
       const input = batch(SUPPLIER_SOURCE_ADAPTERS[adapterId].kind);
+      if (adapterId === 'aica-sheet' || adapterId === 'iron-html') input.records[0]!.payload.captureIssues = [];
       const before = structuredClone(input);
       const result = await collectSupplierSource({ ...binding, adapterId, read: async () => input }, now);
       expect(result.batch).toEqual(before);

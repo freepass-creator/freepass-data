@@ -55,13 +55,16 @@
     "source:iancar:direct": "tsx src/jobs/collect-iancar-direct.ts",
     "test:source:iancar:direct": "vitest run tests/iancar-direct-source.test.ts",
     "test:source:iancar:one-api": "vitest run tests/iancar-one-api.test.ts",
-    "source:iancar:one": "tsx src/jobs/collect-iancar-one-api.ts"
+    "source:iancar:one": "tsx src/jobs/collect-iancar-one-api.ts",
+    "source:aica:capture": "tsx src/jobs/collect-aica.ts",
+    "serve:supplier:relay": "tsx src/jobs/serve-supplier-relay.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",
     "ajv-formats": "^3.0.0",
     "fastify": "^5.0.0",
-    "firebase-admin": "^13.0.0"
+    "firebase-admin": "^13.0.0",
+    "google-auth-library": "10.9.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
