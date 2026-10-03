@@ -1,24 +1,100 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {auditValueFormats,planValueNormalize,auditTabConsistency,planTabConsistencyFix} from '../scripts/supplier-input-sheet.mjs';
+import {auditValueFormats,planValueNormalize,auditTabConsistency,planTabConsistencyFix,canonCaptureRequest,canonValueCaptureRequest,planExcludeSupplierTab} from '../scripts/supplier-input-sheet.mjs';
 import {planSupplierInput,planSupplierDropdowns,planVehicleMasterDropdowns,planPolicySplit,planLayoutReorder,planColumnAdd,planLayoutChange,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec} from '../scripts/supplier-input-sheet.mjs';
 const now=Date.parse('2026-10-03T12:00:00Z');
 const legacy=inputSpec.legacyLayouts['2026-10-02'];
 const sheet=(id,title,headers,grid={frozenRowCount:1,frozenColumnCount:0})=>({properties:{sheetId:id,title,gridProperties:{rowCount:1000,columnCount:headers.length,...grid}},data:[{rowData:[{values:headers.map(h=>({userEnteredValue:{stringValue:h}}))}]}]});
 const shared=inputSpec.supplierChannels.sharedInputSheet;
 const canonFixture=()=>{
-  const spec=structuredClone(inputSpec);spec.supplierChannels.sharedInputSheet=[{tab:'가',code:'A'},{tab:'나',code:'B'}];
+  const spec=structuredClone(inputSpec);spec.tabConsistency.headerBackgrounds={};spec.tabConsistency.headerForegrounds={};spec.supplierChannels.sharedInputSheet=[{tab:'가',code:'A'},{tab:'나',code:'B'}];
   const snapshot={sheets:['종합','가','나'].map((title,id)=>({properties:{sheetId:id,title,gridProperties:{rowCount:4,columnCount:75,frozenRowCount:1}},conditionalFormats:[],data:[{
     columnMetadata:spec.inputHeaders.map(h=>({pixelSize:spec.columnWidths[h]??spec.defaultColumnWidth})),rowMetadata:[{pixelSize:32},...Array.from({length:3},()=>({pixelSize:24}))],
     rowData:Array.from({length:4},(_,r)=>({values:spec.inputHeaders.map(h=>({...(r===0?{userEnteredValue:{stringValue:h}}:{}),userEnteredFormat:{textFormat:{fontFamily:spec.font.family,fontSize:spec.font.size,italic:false},wrapStrategy:'CLIP',horizontalAlignment:'CENTER',...(r>0&&['date','integer','decimal','year'].includes(spec.valueFormats[h].kind)?{numberFormat:{type:spec.valueFormats[h].kind==='date'?'DATE':'NUMBER',pattern:spec.valueFormats[h].pattern}}:{})},...(r>0&&id>0&&spec.dropdowns[h]?{dataValidation:{condition:{type:'ONE_OF_LIST',values:spec.dropdowns[h].map(userEnteredValue=>({userEnteredValue}))},strict:false,showCustomUi:true}}:r>0&&id>0&&spec.vehicleMaster.columns[h]?{dataValidation:{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='차종목록'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:false,showCustomUi:true}}:{})}))}))
   }]}))};return {snapshot,spec};
 };
 const canonPut=(f,tab,row,h,value,extra={})=>Object.assign(f.snapshot.sheets[tab].data[0].rowData[row].values[f.spec.inputHeaders.indexOf(h)],{userEnteredValue:typeof value==='number'?{numberValue:value}:{stringValue:value},...extra});
+test('canon full columns: partial capture fixes row 61 through metadata end, request count is height independent',()=>{
+  const f=canonFixture();f.snapshot.sheets.forEach((t,i)=>{t.properties.gridProperties.rowCount=i===0?20000:1000;t.data[0].rowData=t.data[0].rowData.slice(0,2);});
+  const before=JSON.stringify(f),p=planTabConsistencyFix(f.snapshot,f.spec);
+  assert.equal(p.status,'PLANNED');assert.equal(JSON.stringify(f),before);
+  for(const t of f.snapshot.sheets){
+    const id=t.properties.sheetId,end=t.properties.gridProperties.rowCount;
+    const requests=p.requests.filter(r=>{const x=Object.values(r)[0];return (x.range?.sheetId??x.properties?.sheetId??x.sheetId??x.rule?.ranges?.[0]?.sheetId)===id;});
+    assert.ok(requests.length>=70&&requests.length<=250,`${t.properties.title}: ${requests.length}`);
+    for(let col=0;col<75;col++){
+      const body=requests.filter(r=>r.repeatCell?.range.startRowIndex===1&&r.repeatCell.range.startColumnIndex<=col&&r.repeatCell.range.endColumnIndex>col);
+      assert.equal(body.length,1);assert.equal(body[0].repeatCell.range.endRowIndex,end);
+      assert.match(body[0].repeatCell.fields,/userEnteredFormat.horizontalAlignment/);
+      if(id!==0){const dropdown=requests.find(r=>r.setDataValidation?.range.startColumnIndex<=col&&r.setDataValidation.range.endColumnIndex>col);assert.equal(dropdown.setDataValidation.range.endRowIndex,end);}
+    }
+    assert.ok(!requests.some(r=>r.updateCells||r.repeatCell?.fields.includes('userEnteredValue')));
+  }
+  assert.ok(auditTabConsistency(f.snapshot,f.spec).holds.some(h=>h.reason==='PARTIAL_GRID_COVERAGE'));
+  f.snapshot.sheets.forEach(t=>t.properties.gridProperties.rowCount+=10000);
+  assert.equal(planTabConsistencyFix(f.snapshot,f.spec).requests.length,p.requests.length);
+});
+test('canon full columns: header-only evidence plans spec fields and holds unknown reference attributes',()=>{
+  const f=canonFixture();f.snapshot.sheets.forEach(t=>{t.data[0].rowData=t.data[0].rowData.slice(0,1);delete t.data[0].columnMetadata;delete t.data[0].rowMetadata;});
+  const p=planTabConsistencyFix(f.snapshot,f.spec);assert.equal(p.status,'PARTIAL_WITH_HOLD');assert.ok(p.requests.length>0);
+  const body=p.requests.find(r=>r.repeatCell?.range.startRowIndex===1).repeatCell;
+  assert.match(body.fields,/textFormat.fontFamily/);assert.ok(!body.fields.includes('textFormat.bold'));
+});
+test('canon full columns: supplier lists and four master ranges; no summary validations or value writes',()=>{
+  const f=canonFixture(),p=planTabConsistencyFix(f.snapshot,f.spec);
+  for(const [h,col] of Object.entries(f.spec.vehicleMaster.columns)){
+    const at=f.spec.inputHeaders.indexOf(h),r=p.requests.find(r=>r.setDataValidation?.range.sheetId===1&&r.setDataValidation.range.startColumnIndex===at).setDataValidation;
+    assert.deepEqual(r.rule.condition,{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='차종목록'!${col}2:${col}`}]});
+  }
+  assert.ok(!p.requests.some(r=>r.setDataValidation?.range.sheetId===0||r.updateCells));
+});
+test('canon full columns: explicit header RGB overrides base ColorStyle without changing body colors',()=>{
+  const f=canonFixture(),at=f.spec.inputHeaders.indexOf('1개월');f.spec.tabConsistency.headerBackgrounds={'1개월':'#0891B2'};
+  f.snapshot.sheets[1].data[0].rowData[0].values[at].userEnteredFormat.backgroundColorStyle={themeColor:'ACCENT1'};
+  const p=planTabConsistencyFix(f.snapshot,f.spec),r=p.requests.find(r=>r.repeatCell?.range.sheetId===0&&r.repeatCell.range.startRowIndex===0&&r.repeatCell.range.startColumnIndex<=at&&r.repeatCell.range.endColumnIndex>at).repeatCell;
+  assert.deepEqual(r.cell.userEnteredFormat.backgroundColor,{red:8/255,green:145/255,blue:178/255});assert.equal(r.cell.userEnteredFormat.backgroundColorStyle,undefined);
+  assert.match(r.fields,/backgroundColorStyle/);assert.ok(!p.requests.some(r=>r.repeatCell?.range.startRowIndex===1&&r.repeatCell.fields.includes('backgroundColor')));
+});
+test('canon full columns: hidden, wrong width and external conditional reference fail closed',()=>{
+  for(const change of [f=>f.snapshot.sheets[1].properties.hidden=true,f=>f.snapshot.sheets[1].properties.gridProperties.columnCount=76,f=>f.snapshot.sheets[1].conditionalFormats=[{ranges:[{sheetId:2}],booleanRule:{condition:{type:'BOOLEAN'}}}]]){
+    const f=canonFixture();change(f);assert.equal(planTabConsistencyFix(f.snapshot,f.spec).requests.length,0);
+  }
+});
+test('canon header colors: API float precision and omitted zero RGB channels compare by 8-bit color',()=>{
+  const f=canonFixture(),at=f.spec.inputHeaders.indexOf('1개월');f.spec.tabConsistency.headerBackgrounds={'1개월':'#0891B2'};
+  for(const t of f.snapshot.sheets)t.data[0].rowData[0].values[at].userEnteredFormat.backgroundColor={red:0.03137255,green:0.5686275,blue:0.69803923};
+  assert.equal(auditTabConsistency(f.snapshot,f.spec).status,'PASS');
+  f.spec.tabConsistency.headerBackgrounds['1개월']='#000000';for(const t of f.snapshot.sheets)t.data[0].rowData[0].values[at].userEnteredFormat.backgroundColor={};
+  assert.equal(auditTabConsistency(f.snapshot,f.spec).status,'PASS');
+});
+test('capture requests: all metadata rows including large summary, escaped titles, excluded tab omitted, values separate',()=>{
+  const f=canonFixture();f.spec.supplierChannels.sharedInputSheet[0].tab="가'나";f.snapshot.sheets[1].properties.title="가'나";f.snapshot.sheets[0].properties.gridProperties.rowCount=20000;
+  f.snapshot.sheets.push({properties:{sheetId:99,title:'마음카',hidden:true,gridProperties:{rowCount:1000,columnCount:75}}});
+  const metadata={spreadsheetId:'private-test',sheets:f.snapshot.sheets.map(({properties})=>({properties})),usedRows:{종합:210,"가'나":60,나:1}},before=JSON.stringify(metadata);
+  const r=canonCaptureRequest(f.spec,metadata);assert.deepEqual(r.ranges,["'종합'!A1:BW20000","'가''나'!A1:BW4","'나'!A1:BW4"]);
+  for(const field of ['numberFormat','horizontalAlignment','fontFamily','fontSize','bold','italic','backgroundColor','dataValidation','columnMetadata','hiddenByUser','rowMetadata','conditionalFormats','gridProperties'])assert.ok(r.fields.includes(field),field);
+  assert.ok(!r.fields.includes('userEnteredValue')&&!r.fields.includes('formattedValue'));
+  metadata.usedRows["가'나"]=3;const v=canonValueCaptureRequest(f.spec,metadata);assert.ok(v.ranges.includes("'종합'!A1:BW210"));assert.match(v.fields,/userEnteredValue,formattedValue/);
+  metadata.usedRows["가'나"]=60;assert.equal(JSON.stringify(metadata),before);assert.throws(()=>canonValueCaptureRequest(f.spec,metadata),/usedRows/);
+  metadata.sheets[1].properties.gridProperties.rowCount=0;assert.throws(()=>canonCaptureRequest(f.spec,metadata),/dimensions/);
+});
 test('canon: 75 value formats, full identical tabs PASS and company values ignored',()=>{
   const f=canonFixture();canonPut(f,1,1,'회사명','각 회사');canonPut(f,2,1,'회사명','다른 회사');
   assert.equal(Object.keys(inputSpec.valueFormats).length,75);assert.equal(auditTabConsistency(f.snapshot,f.spec).status,'PASS');
-  assert.equal(auditValueFormats(f.snapshot,f.spec).status,'PASS');assert.deepEqual(planTabConsistencyFix(f.snapshot,f.spec).requests,[]);
+  assert.equal(auditValueFormats(f.snapshot,f.spec).status,'PASS');assert.ok(planTabConsistencyFix(f.snapshot,f.spec).requests.length>0);
+});
+test('capture minimal format fields plus separately joined header values can pass full-height audit',()=>{
+  const f=canonFixture();
+  for(const t of f.snapshot.sheets)for(const row of t.data[0].rowData)for(const cell of row.values){
+    delete cell.userEnteredFormat.wrapStrategy;
+    cell.userEnteredFormat.textFormat.link={uri:'https://example.test/preserve'};
+  }
+  assert.equal(auditTabConsistency(f.snapshot,f.spec).status,'PASS');
+  const fields=canonCaptureRequest(f.spec,f.snapshot).fields;
+  for(const omitted of ['wrapStrategy','verticalAlignment','foregroundColor','textFormat.link','userEnteredValue','effectiveFormat'])assert.ok(!fields.includes(omitted));
+  const plan=planTabConsistencyFix(f.snapshot,f.spec);assert.ok(plan.requests.length>0);
+  assert.ok(plan.requests.every(r=>!r.repeatCell||!r.repeatCell.fields.includes('link')&&!r.repeatCell.fields.includes('wrapStrategy')));
 });
 test('canon: exact dates, ages, seats and aliases normalize; ambiguous values and formulas HOLD; immutable',()=>{
   const f=canonFixture();canonPut(f,1,1,'입고일자','2026-10-03');canonPut(f,1,2,'입고일자','2026. 10. 3');canonPut(f,1,3,'입고일자',46298,{userEnteredFormat:{}});
@@ -70,8 +146,8 @@ test('canon: normalization preserves cell notes and links; second plan is empty 
   assert.equal(f.snapshot.sheets[1].data[0].rowData[1].values[1].note,'원문 보존');assert.deepEqual(planValueNormalize(f.snapshot,f.spec,now).requests,[]);
 });
 test('canon: no majority, missing metadata and unread summary formulas cannot PASS',()=>{
-  const f=canonFixture(),d=f.snapshot.sheets[1].data[0];d.rowData[1].values[0].userEnteredFormat.horizontalAlignment='LEFT';d.rowData[2].values[0].userEnteredFormat.horizontalAlignment='RIGHT';
-  assert.ok(auditTabConsistency(f.snapshot,f.spec).holds.some(h=>h.reason==='NO_MAJORITY_horizontalAlignment'));
+  const f=canonFixture(),d=f.snapshot.sheets[1].data[0];d.rowData[1].values[0].userEnteredFormat.textFormat.bold=true;d.rowData[2].values[0].userEnteredFormat.textFormat.bold=false;
+  assert.ok(auditTabConsistency(f.snapshot,f.spec).holds.some(h=>h.reason==='NO_MAJORITY_textFormat.bold'));
   delete d.rowMetadata;assert.ok(auditTabConsistency(f.snapshot,f.spec).holds.some(h=>h.reason==='MISSING_ROW_METADATA'));
   canonPut(f,0,1,'회사명','',{userEnteredValue:{formulaValue:'=VSTACK(A1)'}});assert.ok(auditValueFormats(f.snapshot,f.spec).holds.some(h=>h.reason==='SUMMARY_EFFECTIVE_VALUES_MISSING'));
 });
@@ -91,13 +167,13 @@ test('canon: tab fix requests converge to PASS without changing values, formulas
     else if(request.addConditionalFormatRule)s.conditionalFormats.splice(x.index,0,structuredClone(x.rule));
     else for(let r=x.range.startRowIndex;r<x.range.endRowIndex;r++)for(let c=x.range.startColumnIndex;c<x.range.endColumnIndex;c++){
       const cell=data.rowData[r].values[c];if(request.setDataValidation){if(x.rule)cell.dataValidation=structuredClone(x.rule);else delete cell.dataValidation;}
-      else {const path=x.fields.split('.');let dest=cell,source=x.cell;for(const k of path.slice(0,-1)){dest=dest[k]??= {};source=source?.[k];}const k=path.at(-1);if(source?.[k]===undefined)delete dest[k];else dest[k]=structuredClone(source[k]);}
+      else for(const mask of x.fields.split(',')){const path=mask.split('.');let dest=cell,source=x.cell;for(const k of path.slice(0,-1)){dest=dest[k]??= {};source=source?.[k];}const k=path.at(-1);if(source?.[k]===undefined)delete dest[k];else dest[k]=structuredClone(source[k]);}
     }
   }
-  assert.equal(auditTabConsistency(f.snapshot,f.spec).status,'PASS');assert.equal(planTabConsistencyFix(f.snapshot,f.spec).requests.length,0);
+  assert.equal(auditTabConsistency(f.snapshot,f.spec).status,'PASS');assert.ok(planTabConsistencyFix(f.snapshot,f.spec).requests.length>0);
   assert.deepEqual(f.snapshot.sheets.map(s=>s.data[0].rowData.map(r=>r.values.map(c=>({value:c.userEnteredValue,note:c.note,link:c.userEnteredFormat?.textFormat?.link})))),before);
 });
-const masterFixture=()=>({...fixture(),master:{source:inputSpec.vehicleMaster.source,readAt:new Date(now).toISOString(),header:['원산지','제조사','모델','세부모델','세부트림','생산시작','생산종료'],rows:[['국산','현대','캐스퍼','더 뉴 캐스퍼','스마트'],['국산','현대','캐스퍼','캐스퍼','터보'],['국산','기아','레이','','스마트'],['','','',null,'  ']]}});
+const masterFixture=()=>({...fixture(),master:{source:inputSpec.vehicleMaster.source,readAt:new Date(now).toISOString(),header:['원산지','제조사','모델','세부모델','세부트림','생산시작','생산종료','클로드 엔카대조'],rows:[['국산','현대','캐스퍼','더 뉴 캐스퍼','스마트'],['국산','현대','캐스퍼','캐스퍼','터보'],['국산','기아','레이','','스마트'],['','','',null,'  ']]}});
 const withMasterTab=f=>{const s=sheet(9100,'차종목록',['old'],{rowCount:20,columnCount:4});s.properties.hidden=true;f.spreadsheet.sheets.push(s);f.sheetInventory.push({sheetId:9100});return f;};
 test('vehicle master: immutable input, unique ordered lists, only list-tab values and supplier range validations',()=>{
   const f=masterFixture(),before=JSON.stringify(f),specBefore=JSON.stringify(inputSpec),p=planVehicleMasterDropdowns(f,inputSpec,now);
@@ -109,7 +185,7 @@ test('vehicle master: immutable input, unique ordered lists, only list-tab value
   const writes=p.requests.filter(r=>r.updateCells).map(r=>r.updateCells);assert.equal(writes.length,1);
   assert.ok(writes.every(w=>(w.start??w.range).sheetId===9100&&w.fields==='userEnteredValue'));
   assert.deepEqual(writes[0].rows.map(r=>r.values.map(c=>c.userEnteredValue?.stringValue)),[['제조사','모델','세부모델','세부트림'],['현대','캐스퍼','더 뉴 캐스퍼','스마트'],['기아','레이','캐스퍼','터보']]);
-  const validations=p.requests.filter(r=>r.setDataValidation).map(r=>r.setDataValidation);assert.equal(validations.length,19*4);
+  const validations=p.requests.filter(r=>r.setDataValidation).map(r=>r.setDataValidation);assert.equal(validations.length,18*4);
   for(const v of validations){const h=inputSpec.inputHeaders[v.range.startColumnIndex],col=inputSpec.vehicleMaster.columns[h];
     assert.ok(f.binding.suppliers.some(s=>s.sheetId===v.range.sheetId));assert.equal(v.range.startRowIndex,1);assert.equal(v.range.endRowIndex,1000);assert.equal(v.range.endColumnIndex,v.range.startColumnIndex+1);
     assert.deepEqual(v.rule,{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='차종목록'!$${col}$2:$${col}$${p.counts[h]+1}`}]},strict:false,showCustomUi:true});}
@@ -120,6 +196,13 @@ test('vehicle master: existing tab clears all A:D before refill, no addSheet, un
   assert.ok(p.requests.filter(r=>r.updateCells).every(r=>(r.updateCells.start??r.updateCells.range).sheetId===9100));
   assert.deepEqual(p.requests[1].updateCells.rows.at(-1).values,[{},{},{},{userEnteredValue:{stringValue:'추가'}}]);
   for(const {setDataValidation:v} of p.requests.filter(r=>r.setDataValidation)){const h=inputSpec.inputHeaders[v.range.startColumnIndex],c=inputSpec.vehicleMaster.columns[h];assert.equal(v.rule.condition.values[0].userEnteredValue,`='차종목록'!$${c}$2:$${c}$${p.counts[h]+1}`);assert.equal(v.rule.strict,true);}
+});
+test('vehicle master: rows marked 통합→ in the F03 compare column stay out of every list; missing compare column HOLDs',()=>{
+  const f=masterFixture(),at=f.master.header.indexOf('클로드 엔카대조');f.master.rows.push(['국산','기아','셀토스','셀토스 SP2','중복트림',null,null,'통합→셀토스']);
+  const r=['국산','기아','셀토스','더 뉴 셀토스','정상'];r[at]='일치';f.master.rows.push(r);
+  const p=planVehicleMasterDropdowns(f,inputSpec,now),list=p.requests.find(q=>q.updateCells?.rows).updateCells.rows.flatMap(x=>x.values.map(c=>c.userEnteredValue?.stringValue));
+  assert.ok(!list.includes('셀토스 SP2')&&!list.includes('중복트림'));assert.ok(list.includes('더 뉴 셀토스')&&list.includes('정상'));
+  const g=masterFixture();g.master.header[g.master.header.indexOf('클로드 엔카대조')]='other';assert.throws(()=>planVehicleMasterDropdowns(g,inputSpec,now),/HOLD/);
 });
 test('vehicle master: missing columns, empty lists, malformed provenance/rows and tab collisions HOLD',()=>{
   for(const h of Object.keys(inputSpec.vehicleMaster.columns)){
@@ -158,11 +241,41 @@ test('any header difference is LAYOUT_MISMATCH HOLD — old 2026-10-02 layout, r
   for(const mutate of cases){const f=fixture();mutate(f);assert.throws(()=>planSupplierInput(f,inputSpec,now),e=>/HOLD: LAYOUT_MISMATCH/.test(e.message)&&e.mismatched.length===1);}
 });
 test('extra trailing header cells and hidden bound tabs are HOLD; hidden unbound archive tabs are ignored',()=>{const a=fixture();a.spreadsheet.sheets[2].data[0].rowData[0].values.push({});assert.throws(()=>planSupplierInput(a,inputSpec,now),/LAYOUT_MISMATCH/);for(const id of [0,2]){const f=fixture();f.spreadsheet.sheets[id].properties.hidden=true;assert.throws(()=>planSupplierInput(f,inputSpec,now),e=>/LAYOUT_MISMATCH/.test(e.message)&&e.mismatched[0].hidden===true);}const f=fixture();f.spreadsheet.sheets.push({...sheet(9000,'정책원문',['runId']),properties:{sheetId:9000,title:'정책원문',hidden:true,gridProperties:{rowCount:10,columnCount:1}}});f.sheetInventory.push({sheetId:9000});assert.equal(planSupplierInput(f,inputSpec,now).status,'LAYOUT_VERIFIED');});
+const withExcluded=(bound=true)=>{
+  const f=fixture();f.spreadsheet.sheets.push(sheet(999,'마음카',inputSpec.inputHeaders));f.sheetInventory.push({sheetId:999});
+  if(bound)f.binding.suppliers.push({sheetId:999,title:'마음카',code:'RP034'});
+  return f;
+};
+test('exclude RP034: exact two requests, 18-tab formula, only A2 value changes, archive preserves input',()=>{
+  const f=withExcluded(),before=JSON.stringify(f),p=planExcludeSupplierTab(f,inputSpec,now);
+  assert.equal(JSON.stringify(f),before);assert.equal(p.supplierCount,18);assert.equal(p.requests.length,2);
+  const cell=p.requests[0].updateCells;assert.deepEqual(cell.start,{sheetId:f.binding.summarySheetId,rowIndex:1,columnIndex:0});assert.equal(cell.rows.length,1);assert.equal(cell.rows[0].values.length,1);assert.equal(cell.fields,'userEnteredValue');
+  const formula=cell.rows[0].values[0].userEnteredValue.formulaValue;assert.ok(!formula.includes('마음카'));assert.equal((formula.match(/IF\(ISBLANK/g)??[]).length,18);
+  for(const s of shared)assert.ok(formula.includes(`'${s.tab}'!A2:BW1000`));
+  assert.deepEqual(p.requests[1],{updateSheetProperties:{properties:{sheetId:999,hidden:true},fields:'hidden'}});
+  f.binding.suppliers.pop();f.spreadsheet.sheets.at(-1).properties.hidden=true;
+  assert.equal(planSupplierInput(f,inputSpec,now).status,'LAYOUT_VERIFIED');
+  assert.ok(!planSupplierDropdowns(f,inputSpec,now).requests.some(r=>r.setDataValidation.range.sheetId===999));
+  assert.equal(auditTabConsistency(f.spreadsheet).coverage.length,19);
+  assert.ok(!planTabConsistencyFix(f.spreadsheet).coverage.some(t=>t.tab==='마음카'));
+});
+test('exclude RP034: reuse freshness, binding, inventory, layout and hidden-archive gates',()=>{
+  assert.throws(()=>planSupplierInput(withExcluded(),inputSpec,now),/excluded/);
+  assert.throws(()=>planSupplierInput(withExcluded(false),inputSpec,now),/Unbound visible/);
+  for(const change of [f=>f.capturedAt='2020-01-01',f=>f.sheetInventory.pop(),f=>f.binding.suppliers.at(-1).code='RP013',f=>f.spreadsheet.sheets[2].data[0].rowData[0].values.reverse(),f=>f.binding.summarySheetId=999,f=>f.spreadsheet.sheets.pop()]){
+    const f=withExcluded();change(f);assert.throws(()=>planExcludeSupplierTab(f,inputSpec,now),/HOLD/);
+  }
+  assert.equal(planExcludeSupplierTab(withExcluded(false),inputSpec,now).requests.length,2);
+});
+test('exclude RP034: compare omits archive evidence and never reports it as notCompared',()=>{
+  const f=compareFixture();f.legacy.push({code:'RP034',capturedAt:'2000-01-01'});f.shared.tabs.push({title:'마음카',headers:[],rows:[]});
+  const r=compareSharedToLegacy(f,inputSpec,now);assert.ok(!r.notCompared.includes('마음카'));assert.ok(!r.unboundLegacy.includes('RP034'));assert.ok(!r.results.some(x=>x.code==='RP034'));
+});
 test('frozen rows/columns drift is reported, never written',()=>{const f=fixture();f.spreadsheet.sheets[2].properties.gridProperties.frozenColumnCount=2;const r=planSupplierInput(f,inputSpec,now);assert.equal(r.status,'LAYOUT_VERIFIED_WITH_PRESENTATION_DRIFT');assert.deepEqual(r.drift.map(d=>[d.sheetId,d.frozenColumnCount]),[[3,2]]);assert.deepEqual(r.requests,[]);});
 test('fail closed binding freshness inventory duplicate and production workbook',()=>{for(const mutate of [f=>f.binding.spreadsheetId='other',f=>f.capturedAt='2026-09-01',f=>f.sheetInventory.pop(),f=>f.binding.suppliers.push({...f.binding.suppliers[0]}),f=>{f.spreadsheet.sheets.push(sheet(9001,'숨김아님',['x']));f.sheetInventory.push({sheetId:9001});}]){const f=fixture();mutate(f);assert.throws(()=>planSupplierInput(f,inputSpec,now),/HOLD/);}});
-test('channel split: 19 shared-sheet suppliers, 5 direct/own-sheet suppliers, no overlap; binding must match exactly',()=>{const c=inputSpec.supplierChannels,codes=c.sharedInputSheet.map(r=>r.code),outside=c.notInSharedSheet.map(r=>r.code);assert.equal(codes.length,19);assert.equal(new Set(codes).size,19);assert.equal(new Set(c.sharedInputSheet.map(r=>r.tab)).size,19);assert.deepEqual(outside.sort(),['RP004','RP006','RP012','RP023','RP031']);assert.ok(outside.every(o=>!codes.includes(o)));assert.ok(codes.includes('RP013'));assert.match(c.membershipRule,/아이카/);assert.throws(()=>compareSharedToLegacy({...compareFixture(),binding:{suppliers:[{title:'아이카',code:'RP004'}]}},inputSpec,now),/excluded from the shared sheet/);
+test('channel split: 18 shared-sheet suppliers, 5 direct/own-sheet suppliers, no overlap; binding must match exactly',()=>{const c=inputSpec.supplierChannels,codes=c.sharedInputSheet.map(r=>r.code),outside=c.notInSharedSheet.map(r=>r.code);assert.equal(codes.length,18);assert.equal(new Set(codes).size,18);assert.equal(new Set(c.sharedInputSheet.map(r=>r.tab)).size,18);assert.deepEqual(outside.sort(),['RP004','RP006','RP012','RP023','RP031']);assert.ok(outside.every(o=>!codes.includes(o)));assert.ok(codes.includes('RP013'));assert.match(c.membershipRule,/아이카/);assert.throws(()=>compareSharedToLegacy({...compareFixture(),binding:{suppliers:[{title:'아이카',code:'RP004'}]}},inputSpec,now),/excluded from the shared sheet/);
   for(const mutate of [f=>{f.binding.suppliers[0].code='RP031';},f=>{f.binding.suppliers[0].title='이안카';},f=>{f.binding.suppliers[0].code='RP020';f.binding.suppliers[1].code='RP013';},f=>{f.binding.suppliers.pop();f.spreadsheet.sheets.pop();f.sheetInventory.pop();},f=>{f.spreadsheet.sheets[2].properties.title='이안카';},f=>{f.binding.suppliers[0]={...f.binding.suppliers[0],title:'아이카',code:'RP004'};f.spreadsheet.sheets[2].properties.title='아이카';}]){const f=fixture();mutate(f);assert.throws(()=>planSupplierInput(f,inputSpec,now),/HOLD/);}
-  const r=compareSharedToLegacy(compareFixture(),inputSpec,now);assert.equal(r.notCompared.length,18);});
+  const r=compareSharedToLegacy(compareFixture(),inputSpec,now);assert.equal(r.notCompared.length,17);});
 test('planner refuses a spec that is not verify-only',()=>{assert.throws(()=>planSupplierInput(fixture(),{...inputSpec,plannerMode:'WRITE'},now),/VERIFY_ONLY/);});
 test('manual authority is explicit and automatic source refresh stays disabled',()=>{assert.equal(inputSpec.managementMode,'MANUAL_DIRECT_GOOGLE_SHEETS');assert.equal(inputSpec.manualAuthority,'VISIBLE_SUPPLIER_TABS');assert.equal(inputSpec.automaticSourceRefresh,false);});
 test('policy import refuses the current layout because it has no 정책코드',()=>{const f=policyFixture();f.destinations=[sheet(3,'웰릭스',inputSpec.inputHeaders)];assert.throws(()=>planPolicyImport(f,now),/2026-10-02 layout only/);});
@@ -189,7 +302,7 @@ test('compare: plate-only legacy, duplicate legacy headers, duplicate or unbound
   const b=compareFixture();b.legacy[0].headers=[...legacyHeaders.slice(0,-1),'1개월'];assert.equal(compareSharedToLegacy(b,inputSpec,now).results[0].reason,'duplicate legacy headers');
   const c=compareFixture();c.legacy.push({...c.legacy[0]});assert.throws(()=>compareSharedToLegacy(c,inputSpec,now),/One legacy capture/);
   const d=fullLegacy(compareFixture());d.legacy[0].rows[1][d.legacy[0].headers.indexOf('상태')]='계약중';d.legacy.push({...d.legacy[0],code:'OTHER'});const e=compareSharedToLegacy(d,inputSpec,now);assert.deepEqual(e.unboundLegacy,['OTHER']);assert.equal(e.results[0].status,'IN_SYNC');assert.equal(e.status,'NOT_IN_SYNC');});
-test('dropdown setup: validation-only requests on supplier tabs, every column decided, summary untouched',()=>{const f=fixture(),before=JSON.stringify(f),p=planSupplierDropdowns(f,inputSpec,now);assert.equal(JSON.stringify(f),before);assert.equal(p.scope,'SUPPLIER_TAB_DATA_VALIDATION_ONLY');assert.ok(p.requests.every(r=>Object.keys(r).join()==='setDataValidation'&&r.setDataValidation.rule));assert.equal(p.requests.length,19*Object.keys(inputSpec.dropdowns).length);assert.ok(!p.requests.some(r=>r.setDataValidation.range.sheetId===1||r.setDataValidation.range.sheetId===2));assert.ok(p.requests.every(r=>r.setDataValidation.range.startRowIndex===1));
+test('dropdown setup: validation-only requests on supplier tabs, every column decided, summary untouched',()=>{const f=fixture(),before=JSON.stringify(f),p=planSupplierDropdowns(f,inputSpec,now);assert.equal(JSON.stringify(f),before);assert.equal(p.scope,'SUPPLIER_TAB_DATA_VALIDATION_ONLY');assert.ok(p.requests.every(r=>Object.keys(r).join()==='setDataValidation'&&r.setDataValidation.rule));assert.equal(p.requests.length,18*Object.keys(inputSpec.dropdowns).length);assert.ok(!p.requests.some(r=>r.setDataValidation.range.sheetId===1||r.setDataValidation.range.sheetId===2));assert.ok(p.requests.every(r=>r.setDataValidation.range.startRowIndex===1));
   const col=h=>inputSpec.inputHeaders.indexOf(h),at=(h,id=3)=>p.requests.find(r=>r.setDataValidation.range.sheetId===id&&r.setDataValidation.range.startColumnIndex===col(h))?.setDataValidation;
   assert.deepEqual(at('보험료').rule.condition.values.map(v=>v.userEnteredValue),['포함','불포함']);assert.equal(at('보험료').rule.strict,false);assert.equal(at('비고'),undefined,'free text untouched');assert.equal(at('계좌번호'),undefined);assert.deepEqual(at('대물면책').rule.condition.values.map(v=>v.userEnteredValue),['없음','30만원','50만원','100만원','협의']);assert.ok(at('21세+').rule.condition.values.some(v=>v.userEnteredValue==='대여료의 10%'));
   for(const h of inputSpec.inputHeaders)assert.equal([Boolean(inputSpec.dropdowns[h]),Boolean(inputSpec.vehicleMaster.columns[h]),inputSpec.dropdownPolicy.freeText.includes(h)].filter(Boolean).length,1,h);

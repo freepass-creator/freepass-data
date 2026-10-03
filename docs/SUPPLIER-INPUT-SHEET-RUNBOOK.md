@@ -18,11 +18,32 @@ node scripts/supplier-input-sheet.mjs --audit-tabs=C:/private/sheet-snapshot.jso
 node scripts/supplier-input-sheet.mjs --fix-tabs=C:/private/sheet-snapshot.json
 ```
 
-입력은 `spreadsheets.get(includeGridData)`의 native `{sheets:[...]}` 또는 `{spreadsheet:{sheets:[...]}}`이다. `-`는 표준입력. 19개 등록 공급사와 종합 탭이 모두 필요하다. 각 감사는 관측된 범위만 검사하며 `coverage`로 읽은 행 수를 공개한다. 누락 행을 빈 행으로 간주하지 않는다. 정본 검사 종료코드는 PASS 0, 차이/미확인 HOLD 1, 잘못된 입력 2다. 단독 감사 CLI는 보고 성공 0이며 `status`를 함께 읽는다. 계획 CLI는 요청만 출력하며 승인·적용·최신성 검증을 대신하지 않는다. 결과는 실제 셀 값이 포함될 수 있으므로 저장소에 저장하지 않는다.
+입력은 `spreadsheets.get(includeGridData)`의 native `{sheets:[...]}` 또는 `{spreadsheet:{sheets:[...]}}`이다. `-`는 표준입력. **18개 등록 공급사와 종합 탭**이 모두 필요하다. 마음카 RP034는 2026-10-03 대표 결정으로 제외하며 탭은 삭제하지 않고 숨김 보관한다. 각 감사는 관측된 범위만 검사하며 `coverage`로 읽은 행 수를 공개한다. 누락 행을 빈 행으로 간주하지 않는다. 정본 검사 종료코드는 PASS 0, 차이/미확인 HOLD 1, 잘못된 입력 2다. 단독 감사 CLI는 보고 성공 0이며 `status`를 함께 읽는다. 계획 CLI는 요청만 출력하며 승인·적용·최신성 검증을 대신하지 않는다. 결과는 실제 셀 값이 포함될 수 있으므로 저장소에 저장하지 않는다.
 
-**탭 동일성 기준:** 폭·숨김·행 높이·고정·글꼴·숫자/날짜 서식·목록은 규격 우선이다. 그 밖의 정렬·본문 글꼴 세부 속성은 첫 등록 공급사(웰릭스)의 읽힌 데이터 행 2~N에서 **엄격한 과반**을 기준으로 한다. 과반 없으면 해당 속성 HOLD. 머리글 색은 같은 기준 탭의 머리글, 조건부 서식은 기준 탭의 규칙과 순서다. 대상 탭의 모든 관측 행을 대조하므로 소수의 서식 차이도 잡는다. 차이 수는 셀/속성 단위이며 동일 셀의 여러 속성은 각각 센다. 회사명 **값**과 탭 이름은 비교하지 않지만 회사명 열 서식은 비교한다. 머리글 이름·순서 차이는 HOLD이며 값/열 이동 요청을 만들지 않는다.
+**탭 동일성 기준:** 폭·숨김·행 높이·고정·글꼴·숫자/날짜 서식·목록은 규격 우선이다. 가로 정렬은 `tabConsistency.horizontalAlignment`(CENTER), `leftAlignHeaders`에 있는 칸만 LEFT다. 글꼴 검사 항목은 fontFamily/fontSize/bold/italic이며 본문 bold의 미지정 값은 첫 등록 공급사(웰릭스)의 관측 행에서 **엄격한 과반**으로 정한다. 과반이 없으면 해당 속성 HOLD이며 계획에서도 그 속성은 쓰지 않는다. 줄바꿈·세로 정렬·본문 색·링크는 이번 최소 정본 검사/수정 범위 밖으로 보존한다. 머리글 배경색은 규격 `tabConsistency.headerBackgrounds` 우선(기존 규격의 대여료·보증금 청록색 `#0891B2`), 나머지는 기준 탭의 머리글이다. 조건부 서식은 기준 탭의 규칙과 순서다. 대상 탭의 모든 관측 행을 대조하므로 소수의 서식 차이도 잡는다. 차이 수는 셀/속성 단위이며 동일 셀의 여러 속성은 각각 센다. 회사명 **값**과 탭 이름은 비교하지 않지만 회사명 열 서식은 비교한다. 머리글 이름·순서 차이는 HOLD이며 값/열 이동 요청을 만들지 않는다.
 
-종합은 수식 출력이므로 **입력용 드롭다운만 예외**다. 종합의 다른 서식은 동일하게 검사한다. 조건부 서식은 자기 sheetId와 전체 높이 끝점만 대상 탭으로 바꾸며 외부 탭 참조는 HOLD. 차종 목록은 기존 `vehicleMaster` 범위 규칙을 재사용한다. tab 수정 요청은 관측된 차이만 수정하고 셀 값·수식은 쓰지 않는다. 읽히지 않은 범위의 완전성, 보이지 않는 기준 탭, 열 수 불일치, 메타데이터 누락은 HOLD다. 기존 `planSupplierInput`은 계속 양식 확인 전용이며 새 정본 도구와 별개다.
+종합은 수식 출력이므로 **입력용 드롭다운만 예외**다. 사용자가 공급사 값을 선택하는 탭이 아니므로 `setDataValidation`을 만들지 않는다. 나머지 서식과 조건부 서식은 공급사와 동일하게 검사/적용한다. 별도 조건부 규칙을 둘 업무 근거가 없어 기준 탭과 같은 규칙 집합·순서를 사용한다. 자기 sheetId와 전체 높이 끝점만 대상 탭으로 바꾸며 외부 탭 참조는 HOLD다.
+
+`planTabConsistencyFix`/`--fix-tabs`는 관측 셀별 차이 목록을 수정 요청으로 바꾸지 않는다. **2행부터 각 탭 metadata의 rowCount 끝까지** 열 범위로 숫자/날짜 서식·가로 정렬·글꼴을 매번 적용한다. 머리글은 1행, 열 너비/숨김·행 높이·고정은 규격 값이다. 인접 열의 payload가 같으면 묶어 탭당 대략 75~250개 요청을 만들며 높이가 늘어도 요청 수는 늘지 않는다. fields는 개별 format 속성만 지정하고 값·수식·note·링크를 쓰지 않는다. 머리글 RGB 적용 시 우선순위가 높은 backgroundColorStyle은 비워 RGB가 적용되게 한다. 공급사 목록은 `dropdowns`, 차종 4칸은 `vehicleMaster` ONE_OF_RANGE, 자유 입력 열의 기존 validation은 지운다. 종합에는 validation 요청 자체가 없다.
+
+부분 스냅샷도 머리글/탭 구조를 확인할 수 있으면 전체 열 계획을 만든다. 기준 속성의 과반이 없으면 그 속성은 생략하고 `PARTIAL_WITH_HOLD`로 보고한다. **계획 PLANNED는 검사 PASS가 아니다.** `auditTabConsistency`의 `PARTIAL_GRID_COVERAGE` HOLD는 그대로이며 전체 높이를 읽어야 PASS가 가능하다. 잘못된 머리글·열 수·숨김 대상 탭·외부 참조 조건부 규칙은 수정 요청 0으로 차단한다. `planSupplierInput`은 계속 양식 확인 전용이다. 원본 셀 값 정리는 `planValueNormalize`만 담당한다(아래 별도 제외 계획의 종합 수식 재생성은 명시된 예외).
+
+**전체 높이 읽기 요청 생성(오프라인):**
+
+```powershell
+node scripts/supplier-input-sheet.mjs --capture-canon=C:/private/metadata.json
+node scripts/supplier-input-sheet.mjs --capture-values=C:/private/metadata-with-used-rows.json
+```
+
+`canonCaptureRequest(spec, metadata)`는 `{spreadsheetId, includeGridData:true, ranges, fields}`를 반환한다. metadata는 native `{spreadsheetId,sheets:[{properties:{sheetId,title,gridProperties:{rowCount,columnCount}}}]}`이며 모든 등록 탭이 있어야 한다. 각 range는 `'탭'!A1:BW<rowCount>`이고 탭 이름의 작은따옴표를 이스케이프한다. 마음카는 범위에서 제외한다. 출력 JSON을 운영자가 별도로 `gws sheets spreadsheets get --params '<출력 JSON>'`의 params로 사용할 수 있다. 생성 함수/CLI 자체는 Google에 접속하지 않는다.
+
+fields는 위치 식별자와 gridProperties/conditionalFormats, userEnteredFormat의 numberFormat/horizontalAlignment/textFormat(fontFamily,fontSize,bold,italic)/backgroundColor, dataValidation, columnMetadata(pixelSize,hiddenByUser), rowMetadata(pixelSize)로 한정한다. 본문 값·effectiveFormat·note·링크는 읽지 않는다. 헤더/값은 **별도** `canonValueCaptureRequest`로 읽는다. metadata 최상위 `usedRows`에 `{종합:215, 웰릭스:60, ...}`처럼 확인된 마지막 사용 행을 넣으며 추정하거나 rowData 길이로 대체하지 않는다. userEnteredValue/formattedValue와 수식 결과의 typed 검증에 필요한 effectiveValue만 반환한다.
+
+감사 입력은 같은 조회 회차의 두 응답을 sheetId·행·열 좌표로 합친다. 헤더 값이 없는 format-only 응답만 넣으면 헤더 증거 HOLD다. 값이 없는 뒤쪽 행에도 전체 format 응답의 rowData를 유지하며, 요청 범위만 보고 누락 행을 임의로 채워 PASS를 만들지 않는다. API가 뒤쪽 rowData를 생략하면 full-height 요청 사실만으로 coverage PASS가 되지 않으므로 명시적 전체 행 증거를 확보한다.
+
+종합이 20,000행이면 **실제 사용 행+증가 여유로 줄이는 운영 검토는 권장**한다. 다만 현재 18개 공급사의 증가 가능 행 수, 종합 spill 수식, 뒤쪽 값·메모·보호 범위를 먼저 확인해야 한다. 예를 들어 현재 사용행+500행은 검토 출발점일 뿐 확정 규격이 아니다. 확장 절차와 모니터링 없이 현재 관측 행만 보고 줄이지 않는다. 이번 함수들은 rowCount 변경 요청을 전혀 만들지 않으며 승인 전에는 20,000행 전부를 읽는다.
+
+**마음카 제외 계획:** `planExcludeSupplierTab(input,spec,now)` 또는 `--exclude-supplier=<private-input.json>`은 기존 binding·독립 inventory·신선도·머리글 검증 관문을 재사용한다. 기존 19곳 binding 또는 마음카를 이미 뺀 18곳 binding을 받아, 사본에서 마음카 숨김/바인딩 제거 후 검증한다. 코드↔탭↔sheetId 불일치, 다른 보이는 미바인딩 탭은 HOLD다. 요청은 종합 A2의 18개 탭 쌓기 수식 `updateCells` 1개와 마음카 `hidden:true` 1개뿐이다. 탭 삭제·공급사 값 수정·수수료 규칙 추가 없음. 적용 후 18곳 binding으로 다시 읽어 검증하며 숨김 마음카는 바인딩 밖 보관 탭으로 허용한다. 마음카는 dropdown/정본 감사/compare/notCompared에서 제외하고, 과거 RP034 legacy 캡처도 비교하지 않는다. 실제 적용은 이번 코드 작업 범위 밖이다.
 
 **적용 순서:** 권한 있는 담당자가 전체 원본을 private 백업 → 전체 범위와 수식 결과 포함 새 조회 → 두 감사와 두 계획 검토(미정/수식/불완전 증거 HOLD 해소) → 별도 승인된 범위만 값 정리·서식 정리 → 다시 읽기 → 정본 검사와 실제 화면 확인. 백업·신선도·편집 충돌 검증 없는 과거 스냅샷 계획을 바로 적용하지 않는다. 이번 작업은 파일 수정/검사만 하며 Google 접속·적용은 없다.
 
@@ -158,14 +179,15 @@ node scripts/supplier-input-sheet.mjs --fix-tabs=C:/private/sheet-snapshot.json
 
   | 구분 | 공급사 | 데이터가 들어오는 길 |
   |---|---|---|
-  | 공동 시트 입력 (19곳) | 웰릭스 RP013, 우리캐피탈 RP020, KH RP010, 리더스 RP008, 제이앤제이 RP030, 에코 RP032, 센트로 RP017, 퍼시픽 RP022, 연카 RP011, 스위치플랜 RP014, 렌트존 PT-0001, 에스에이 PT-0023, 빌린카 RP021, 엘씨 PT-0026, 스타 RP018, 스카이 RP033, 경진카 RP016, 경진 RP015, 마음카 RP034 | 이 공동 시트의 자기 탭 |
+  | 공동 시트 입력 (18곳) | 웰릭스 RP013, 우리캐피탈 RP020, KH RP010, 리더스 RP008, 제이앤제이 RP030, 에코 RP032, 센트로 RP017, 퍼시픽 RP022, 연카 RP011, 스위치플랜 RP014, 렌트존 PT-0001, 에스에이 PT-0023, 빌린카 RP021, 엘씨 PT-0026, 스타 RP018, 스카이 RP033, 경진카 RP016, 경진 RP015 | 이 공동 시트의 자기 탭 |
+  | 공동 시트 제외·숨김 보관 | 마음카 RP034 | 2026-10-03 대표 결정. 탭 삭제 없음, 수수료 규칙 없음. 종합·목록·정본 검사·대조 대상에서 제외 |
   | ERP·API 직접 연동 | 이안카 RP031, 손오공 RP012 | 공급사 API → FreePass Data (이안카는 ERP4 워크플로가 옛 시트 수집을 빼고 Data ONE API 수집기를 실행. 고정 엔진의 옛 목록에는 아직 원본 시트로 적혀 있음) |
   | 홈페이지 수집 | 아이언 RP006, 오토플러스 RP023 | 공급사 홈페이지 |
   | 자체 원본 시트 | 아이카 RP004 | 공급사 자기 시트. 공동 시트 대상 아님 |
 
   **원칙(2026-10-03 대표 결정):** 공동 시트에는 프리패스가 제공한 시트를 쓰던 공급사만 둔다. ERP·API·홈페이지 연동 공급사와 아이카는 모두 뺀다. 같은 날 실측으로 공동 시트에 이 5곳의 탭·행·정책 원문이 0건임을 확인했다(Codex 구글 커넥터 읽기 전용).
 
-  실행기는 이 표에 없는 탭, 직접 연동·자체 시트 공급사(이름 또는 코드), 코드·탭 이름이 어긋난 묶음, 실제 시트 탭 이름이 묶음과 다른 경우를 HOLD한다. 확인(`planSupplierInput`)은 19곳 전부가 묶여야 하고, 대조(`compareSharedToLegacy`)는 일부만 묶을 수 있으며 빠진 곳을 `notCompared`로 보고한다. 기존 제공시트를 둘이 같이 쓰는 경진/경진카·스타/스카이·빌린카/엘씨는 공동 시트에서 탭이 따로다. `src/domain/source-intake.ts`의 `welrix-sheet` 어댑터는 웰릭스 기존 제공시트 전용이므로 전환 전 대조용으로만 쓰고 새 원천으로 연결하지 않는다.
+  실행기는 이 표에 없는 보이는 탭, 직접 연동·자체 시트·공동 시트 제외 공급사의 binding, 코드·탭 이름이 어긋난 묶음, 실제 시트 탭 이름이 묶음과 다른 경우를 HOLD한다. 확인(`planSupplierInput`)은 18곳 전부가 묶여야 하고 숨김 마음카는 바인딩 밖 보관 탭으로 허용한다. 대조(`compareSharedToLegacy`)는 일부만 묶을 수 있으며 나머지 등록 공급사를 `notCompared`로 보고한다(마음카 제외). 기존 제공시트를 둘이 같이 쓰는 경진/경진카·스타/스카이·빌린카/엘씨는 공동 시트에서 탭이 따로다. `src/domain/source-intake.ts`의 `welrix-sheet` 어댑터는 웰릭스 기존 제공시트 전용이므로 전환 전 대조용으로만 쓰고 새 원천으로 연결하지 않는다.
 - **2026-10-03 실측(Codex 구글 커넥터, 읽기 전용):** 수정본 `2026-10-03T05:01:54Z`. 보이는 탭은 종합+공급사 19개, 모두 헤더 62칸이 규격과 같고 1행 고정·고정열 0. 숨김 탭은 관리안내·정책원문·정책확인. 차량번호 있는 행 207, 번호 없이 값만 있는 행 4(제이앤제이1·스타2·마음카1), 종합 211행·오류 0. 연카·엘씨·스카이는 0대. `정책 확인 필요` 37행(제이앤제이3·에코5·퍼시픽1·스위치플랜8·렌트존8·스타2·경진카4·경진2·마음카4). 자차 관련 표시는 68행(우리캐피탈20·빌린카44·경진카3·경진1)으로 셌는데, Codex가 처음 보고한 '자차 충돌 45행'과 세는 기준이 달라 확정이 필요하다. 연식 표시 형식은 `0`(쉼표 없음).
 - **영업자 보기 순서(2026-10-03 대표 결정, 현재 정본 `layoutVersion:"2026-10-03-sales"`, 75칸):** 원칙은 "대여료 앞에는 영업자가 한눈에 어떤 차인지 아는 최소 필수 정보, 대여료 뒤에는 부가 정보를 중요한 순서로".
   - 대여료 앞: 회사명 · 입고일자 · 차량상태 · 상품구분 · 차량번호 · 제조사 · 모델 · 세부모델 · 세부트림 · 외부색상 · 내부색상 · 연식 · 주행거리 · 배기량 · 연료
