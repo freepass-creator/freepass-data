@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   assertAutoplusPolicyInvariant,
   assertAutoplusProductSet,
@@ -11,6 +11,15 @@ describe('RP023 one-time policy repair', () => {
   it('stays retired after the recorded production run', () => {
     expect(() => assertAutoplusPolicyRepairRunnable()).toThrow('AUTOPLUS_POLICY_REPAIR_RETIRED');
     expect(() => assertAutoplusPolicyRepairRunnable()).toThrow(AUTOPLUS_POLICY_REPAIR_APPLIED_RUN_ID);
+  });
+
+  it('refuses at the npm job entry before building the data-access runtime', async () => {
+    vi.resetModules();
+    const runtime = vi.fn();
+    vi.doMock('../src/jobs/data-access-runtime.js', () => ({ createJobDataAccessRuntime: runtime }));
+    await expect(import('../src/jobs/apply-autoplus-policy-repair.js')).rejects.toThrow('AUTOPLUS_POLICY_REPAIR_RETIRED');
+    expect(runtime).not.toHaveBeenCalled();
+    vi.doUnmock('../src/jobs/data-access-runtime.js');
   });
 
   it('refuses before resolving a Firebase target', async () => {
