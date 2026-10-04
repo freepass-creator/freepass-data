@@ -371,6 +371,13 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
       store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: bad });
       await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: 'gas', trims: ['A'] }], evidence: 'x', trims: ['A'], fromTrimsDigest: stableDigest(bad) }] })).rejects.toThrow(/not a list of strings/);
     }
+    // a stored variants list of the wrong shape is refused before it is replaced
+    store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: ['프리미엄'] });
+    for (const bad of ['x', [3], [{ trims: 'A' }], [{ trims: null }], [{ trims: [3] }]]) {
+      store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, variants: bad });
+      await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(bad), to: [{ fuel: 'gas' }], evidence: 'x' }] })).rejects.toThrow(/stored variants is not a list/);
+    }
+    store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, variants: now });
     store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: undefined });
     // variants without any trim names need no trims list
     await applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린' }], evidence: 'x' }] });
@@ -398,6 +405,8 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     store.set('vehicle_master/m-k', { ...store.get('vehicle_master/m-k')!, sub_model_aliases: '옛 코나' });
     await expect(applyVehicleNameReferenceRepair({ ...base, masterRepairs: [{ id: 'm-k', from: '코나 OS', to: '코나 OS2' }] })).rejects.toThrow(/alias field is not a list/);
     expect(store.get('vehicle_master/m-k')!.sub_model_aliases).toBe('옛 코나');
+    store.set('vehicle_master/m-k', { ...store.get('vehicle_master/m-k')!, sub_model_aliases: ['옛 코나', { x: 1 }] });
+    await expect(applyVehicleNameReferenceRepair({ ...base, masterRepairs: [{ id: 'm-k', from: '코나 OS', to: '코나 OS2' }] })).rejects.toThrow(/not a list of strings/);
     // ④ the stored spelling is kept next to the normalized old name
     store.set('vehicle_master/m-k', { id: 'm-k', maker: '현대', model: '코나', sub_model: ' 코나　OS ', sub_model_aliases: ['KONA'] });
     await applyVehicleNameReferenceRepair({ ...base, masterRepairs: [{ id: 'm-k', from: '코나 OS', to: '코나 OS2' }] });

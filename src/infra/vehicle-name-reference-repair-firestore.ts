@@ -94,6 +94,17 @@ const storedTrimList = (value: unknown, where: string): string[] | undefined => 
   if (!Array.isArray(value) || value.some((t) => typeof t !== 'string' || !t.trim())) throw new Error(`stored trims is not a list of strings ${where}`);
   return value.map(clean);
 };
+/** A stored variants list (being replaced) must still be a list of objects whose trims, when present, are non-empty strings. */
+const storedVariantsShape = (value: unknown, where: string) => {
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.some((v) => !v || typeof v !== 'object' || Array.isArray(v)
+    || ((v as Record<string, unknown>).trims !== undefined && (!Array.isArray((v as Record<string, unknown>).trims)
+      || ((v as Record<string, unknown>).trims as unknown[]).some((t) => typeof t !== 'string' || !t.trim()))))) {
+    throw new Error(`stored variants is not a list of variants ${where}`);
+  }
+};
+/** An alias field, when present, must be a list of strings (kept-alias checks compare by value). */
+const aliasListOk = (value: unknown) => value === undefined || value === null || (Array.isArray(value) && value.every((a) => typeof a === 'string'));
 /** Stored value matches the plan's `from`. A blank `from` only matches a truly blank value: missing, null or an empty string. */
 export const matchesFrom = (stored: unknown, from: string) => clean(from)
   ? clean(stored) === clean(from)
@@ -261,7 +272,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     }
     const aliasField = ALIAS_FIELD[targets[index]!.kind];
     const aliasValue = aliasField ? snapshot.data()?.[aliasField] : undefined;
-    if (aliasValue !== undefined && aliasValue !== null && !Array.isArray(aliasValue)) throw new Error(`alias field is not a list ${snapshot.ref.path}.${aliasField}`);
+    if (!aliasListOk(aliasValue)) throw new Error(`alias field is not a list of strings ${snapshot.ref.path}.${aliasField}`);
   });
   const variantRepairs = plan.masterVariantRepairs ?? [];
   const variantRefs = variantRepairs.map((v) => db.collection('vehicle_master').doc(v.id));
@@ -269,6 +280,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   variantSnaps.forEach((snapshot, index) => {
     const v = variantRepairs[index]!;
     storedTrimList(snapshot.data()?.trims, snapshot.ref.path); // shape, whether or not the list is replaced
+    storedVariantsShape(snapshot.data()?.variants, snapshot.ref.path);
     if (!snapshot.exists || stableDigest(snapshot.data()?.variants ?? null) !== v.fromDigest
       || (v.trims !== undefined && stableDigest(snapshot.data()?.trims ?? null) !== v.fromTrimsDigest)) {
       throw new Error(`variants precondition changed ${snapshot.ref.path}`);
@@ -489,6 +501,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     for (const [index, v] of variantRepairs.entries()) {
       const stored = (await transaction.getAll(variantRefs[index]!))[0]!.data()?.trims;
       storedTrimList(stored, variantRefs[index]!.path); // shape, whether or not the list is replaced
+      storedVariantsShape((await transaction.getAll(variantRefs[index]!))[0]!.data()?.variants, variantRefs[index]!.path);
       if (v.trims !== undefined) continue;
       const names = variantTrimNames(v.to);
       const listed = storedTrimList(stored, variantRefs[index]!.path);
@@ -502,7 +515,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       const aliasField = ALIAS_FIELD[kind];
       if (!aliasField) return;
       const aliasValue = snapshot.data()?.[aliasField];
-      if (aliasValue !== undefined && aliasValue !== null && !Array.isArray(aliasValue)) throw new Error(`transaction alias field is not a list ${ref.path}.${aliasField}`);
+      if (!aliasListOk(aliasValue)) throw new Error(`transaction alias field is not a list of strings ${ref.path}.${aliasField}`);
       // The stored spelling is kept too when it differs from the normalized old name (e.g. stray or full-width spaces).
       const raw = snapshot.data()?.[field];
       // The stored spelling must still be the one read before the backup (the backup and the readback rely on it).
