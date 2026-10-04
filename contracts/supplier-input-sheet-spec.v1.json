@@ -251,14 +251,14 @@
   "frozenRowCount": 1,
   "frozenColumnCount": 0,
   "hiddenHeaders": [],
-  "textWrap": "CLIP",
+  "textWrap": "OVERFLOW_CELL",
   "font": {
-    "family": "맑은 고딕",
-    "size": 10,
-    "italic": false
+    "family": "Malgun Gothic",
+    "size": 9,
+    "italic": true
   },
-  "rowHeight": 24,
-  "headerRowHeight": 32,
+  "rowHeight": 21,
+  "headerRowHeight": 21,
   "columnWidths": {
     "회사명": 88,
     "차량상태": 88,
@@ -2355,12 +2355,7 @@
     "rule": "계좌번호 열만 오른쪽부터 제거하고 나머지 순서를 유지한다. 종합 수식을 다시 만들고 남는 종합 열을 제거한다. 사진 링크 이동과 공급사 값 재쓰기는 없다. 제거 전 값은 백업 사본에 보존한다.",
     "principle": "공급사 입금계좌 정본은 ERP 파트너 회사정보(은행·계좌번호·예금주)이며 판매시트 전용계좌는 이 정본에서 채운다."
   },
-  "leftAlignHeaders": [
-    "세부트림",
-    "차명 원문",
-    "옵션 원문",
-    "비고"
-  ],
+  "leftAlignHeaders": [],
   "vehicleMaster": {
     "source": "F03 차종마스터 1oMB9eoNnQFxUyRK4CSxYh_hKrtCf7s_79xLs-GYwXCE / 탭 차종마스터",
     "tab": "차종목록",
@@ -3290,30 +3285,67 @@
     "conditionalFormats": "first supplier rules in order; own sheetId and full-grid row endpoint rebased per tab; embedded sheet references HOLD",
     "horizontalAlignment": "CENTER",
     "headerBackgrounds": {
-      "단기보증": "#0891B2",
-      "1개월": "#0891B2",
-      "6개월": "#0891B2",
-      "12개월": "#0891B2",
-      "장기보증": "#0891B2",
-      "24개월": "#0891B2",
-      "36개월": "#0891B2",
-      "48개월": "#0891B2",
-      "60개월": "#0891B2"
+      "단기보증": "#E6B8AF",
+      "1개월": "#DD7E6B",
+      "6개월": "#CC4125",
+      "12개월": "#A61C00",
+      "장기보증": "#E6B8AF",
+      "24개월": "#DD7E6B",
+      "36개월": "#CC4125",
+      "48개월": "#A61C00",
+      "60개월": "#85200C"
     },
     "headerColorAuthority": "explicit headerBackgrounds first; other columns retain first registered supplier header backgroundColor"
   },
-  "rightAlignHeaders": [
-    "주행거리",
-    "단기보증",
-    "1개월",
-    "6개월",
-    "12개월",
-    "장기보증",
-    "24개월",
-    "36개월",
-    "48개월",
-    "60개월",
-    "차량가격"
-  ],
-  "alignmentDecision": "2026-10-03 대표: 차량가격까지 오른쪽, 정책 칸은 모두 가운데, 왼쪽은 세부트림·차명 원문·옵션 원문·비고. 머리글·세로는 모두 가운데"
+  "rightAlignHeaders": [],
+  "alignmentDecision": "2026-10-04 대표 «전체 느낌을 우리 레트로 시트랑 동일하게, 과거 느낌 그대로»: 모든 칸 가운데 정렬(레트로 상품시트와 같음). 이전 2026-10-03 결정(차량가격까지 오른쪽, 세부트림·차명 원문·옵션 원문·비고 왼쪽)은 이 결정으로 바뀜.",
+  "retroLook": {
+    "decision": "2026-10-04 대표: 공통 입력 시트 겉모양 = «[미리보기·레트로] 프리패스x하허호 전용 상품시트» 상품 탭과 같게. 색 구분은 칸 배경이 아니라 글자 색(대표 «구분별 색깔은 텍스트로»). 값·수식·숫자 서식·드롭다운·필터·보호·빨간 경고 규칙은 겉모양 작업에서 바꾸지 않는다.",
+    "reference": "레트로 상품 탭: 맑은 고딕(Malgun Gothic) 9pt 기울임·굵게 없음·가운데·테두리 없음·줄무늬 없음·줄 높이 21px·머리줄 1줄 고정·칸 배경 흰색. 머리줄은 흰 바탕, 보증·대여료 머리만 붉은 단계색에 흰 글자. 색 구분은 열 단위 글자 색(조건부 서식 없음).",
+    "headerTextColorOnRamp": "#FFFFFF",
+    "columnTextColors": {
+      "차량번호": "#1155CC",
+      "차량상태": "#0000FF",
+      "상품구분": "#34A853",
+      "단기보증": "#0000FF",
+      "1개월": "#0000FF",
+      "6개월": "#0000FF",
+      "12개월": "#0000FF",
+      "장기보증": "#0000FF",
+      "24개월": "#0000FF",
+      "36개월": "#0000FF",
+      "48개월": "#0000FF",
+      "60개월": "#0000FF",
+      "비고": "#FF0000"
+    },
+    "columnHighlight": {
+      "headers": [
+        "1만km+",
+        "21세+",
+        "23세+",
+        "분납"
+      ],
+      "background": "#FFFF00",
+      "text": "#FF0000"
+    },
+    "valueTextColors": {
+      "차량상태": {
+        "출고불가": "#5F6368",
+        "계약중": "#8E24AA",
+        "출고협의": "#1967D2",
+        "상품화중": "#B06000",
+        "출고가능": "#188038",
+        "즉시출고": "#0D652D"
+      },
+      "상품구분": {
+        "신차렌트": "#137333",
+        "중고렌트": "#34A853",
+        "신차구독": "#00796B",
+        "중고구독": "#00897B"
+      },
+      "style": "조건부 서식 TEXT_EQ, 배경 없음, 굵게 + 글자 색. 종합 탭도 차량상태 칸(C열)에 같은 규칙."
+    },
+    "notByApi": "드롭다운 칩 모양(칩 → 화살표)은 Sheets API 로 바꿀 수 없어 시트 화면에서 손으로 바꾼다(차량상태·상품구분·제조사·모델·세부모델·세부트림).",
+    "appliedAt": "2026-10-04 공통 시트 16개 탭(공급사 15 + 종합) 적용 — 값 변경 0, 백업·실행 기록은 비공개 인수인계(ai-ops)에."
+  }
 }
