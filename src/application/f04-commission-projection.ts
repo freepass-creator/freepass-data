@@ -147,20 +147,31 @@ export function planF04CommissionProjection(input: {
     //  - AJ 열 또는 그 왼쪽: «한 칸만 돌려주는» 허용 함수(아래 목록)만 쓰고, 범위 참조는 조회 함수의 표 인자로만 쓰는 수식만
     //    통과한다. 그 밖의 수식(배열 리터럴 {}, 모르는 함수, 범위를 그대로 돌려줄 수 있는 식)이 하나라도 있으면 계획을 멈춘다.
     const singleCell = /^(IF|IFERROR|IFNA|IFS|VLOOKUP|HLOOKUP|MATCH|AND|OR|NOT|ISBLANK|ISNUMBER|ISTEXT|LEN|TRIM|TEXT|VALUE|ROUND|ROUNDUP|ROUNDDOWN|ABS|N|LEFT|RIGHT|MID|CONCATENATE|UPPER|LOWER|SUBSTITUTE|DATE|YEAR|MONTH|DAY|EDATE|EOMONTH|TODAY|SUM|SUMIF|SUMIFS|COUNTIF|COUNTIFS|MIN|MAX)$/;
-    const rangeRef = /(?:'[^']+'|[A-Za-z0-9_가-힣]+)?!?\$?[A-Z]{1,3}\$?\d*:\$?[A-Z]{1,3}\$?\d*/g;
+    // 수식을 «아는 토큰»으로 끝까지 읽는다: 허용 함수(  · 한 칸 참조 A1 · 열 범위 A1:B9/A:B(대문자) · 시트 접두어 · 숫자 · TRUE/FALSE ·
+    // 연산자·괄호·쉼표·글자 상수. 그 밖(이름 지정 범위, 행 범위 7:8, 소문자 참조, 배열 {}, 모르는 함수)이 하나라도 있으면 안전하지 않다.
+    const token = /\s+|"(?:[^"]|"")*"|(?:'(?:[^']|'')+'|[A-Za-z0-9_가-힣]+)!(?=\$?[A-Z])|\$?[A-Z]{1,3}\$?\d*:\$?[A-Z]{1,3}\$?\d*|\$?[A-Z]{1,3}\$?\d+(?![A-Za-z0-9_(])|[A-Z][A-Z0-9.]*\s*\(|(?:TRUE|FALSE)(?![A-Za-z0-9_(])|\d+(?:\.\d+)?(?:E[+-]?\d+)?|<>|<=|>=|[-+*/^&=<>%(),;]/y;
     const safeSingleCell = (f: string) => {
-      if (/[{}]/.test(f)) return false;
-      const fns = [...f.matchAll(/([A-Z][A-Z0-9.]*)\s*\(/gi)].map(m => m[1]!.toUpperCase());
-      if (fns.some(fn => !singleCell.test(fn))) return false;
-      // 범위 참조는 «범위를 받아 한 값을 돌려주는 함수»(조회·합계·세기)의 바로 안 인자로만 — 그 밖(IF 의 결과 등)에 있으면 배열이 될 수 있다.
-      const code = f.replace(/"(?:[^"]|"")*"/g, m => ' '.repeat(m.length)); // 글자 상수 안은 보지 않는다
-      for (const m of code.matchAll(rangeRef)) {
-        let depth = 0, k = m.index! - 1;
-        for (; k >= 0; k--) { const ch = code[k]; if (ch === ')') depth++; else if (ch === '(') { if (depth === 0) break; depth--; } }
-        const fn = k < 0 ? '' : (/([A-Z][A-Z0-9.]*)\s*$/i.exec(code.slice(0, k))?.[1] ?? '').toUpperCase();
-        if (!/^(VLOOKUP|HLOOKUP|MATCH|SUM|SUMIF|SUMIFS|COUNTIF|COUNTIFS|MIN|MAX)$/.test(fn)) return false;
+      const body = f.trim().replace(/^=/, '');
+      const fnStack: string[] = [];
+      let sheetPrefix = false;
+      token.lastIndex = 0;
+      while (token.lastIndex < body.length) {
+        const at = token.lastIndex, m = token.exec(body);
+        if (!m || m.index !== at) return false; // 모르는 글자·이름
+        const t = m[0];
+        if (/^\s+$|^"/.test(t)) continue;
+        if (t.endsWith('!')) { sheetPrefix = true; continue; }
+        const fn = /^([A-Z][A-Z0-9.]*)\s*\($/.exec(t);
+        if (fn) { if (!singleCell.test(fn[1]!)) return false; fnStack.push(fn[1]!); sheetPrefix = false; continue; }
+        if (t === '(') { fnStack.push(''); continue; }
+        if (t === ')') { if (!fnStack.length) return false; fnStack.pop(); continue; }
+        if (t.includes(':')) {
+          // 범위는 «범위를 받아 한 값을 돌려주는 함수»(조회·합계·세기)의 바로 안 인자로만.
+          if (!/^(VLOOKUP|HLOOKUP|MATCH|SUM|SUMIF|SUMIFS|COUNTIF|COUNTIFS|MIN|MAX)$/.test(fnStack[fnStack.length - 1] ?? '')) return false;
+        } else if (sheetPrefix && !/^\$?[A-Z]{1,3}\$?\d+$/.test(t)) return false;
+        sheetPrefix = false;
       }
-      return true;
+      return fnStack.length === 0 && !sheetPrefix;
     };
     formulas.forEach(r => ((r as unknown[] | undefined) ?? []).forEach((x, c) => {
       if (!formula(x)) return;
