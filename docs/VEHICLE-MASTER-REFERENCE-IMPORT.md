@@ -1,6 +1,6 @@
 # FreePass Vehicle Master — Reference Import
 
-Status: implementation baseline, 2026-10-04.
+Status: implementation baseline, 2026-10-04. **실행 막음(2026-10-04, AI 상황실 사후 검토)** — `npm run ingest:vehicle-reference` 는 어떤 환경 변수로도 쓰지 않고 `VEHICLE_REFERENCE_IMPORT_BLOCKED` 로 끝난다. 기존 차종 마스터 적재 경로(capture → ingest → promote)로 합친 뒤에만 다시 연다. 이유: 시험 실행 기본값·Catalog 쓰기 주인(EXCLUSIVE) 검사·access.write 기록 없이 운영 Firestore·Storage 에 바로 쓰는 두 번째 쓰기 길이었다.
 
 ## Decision
 

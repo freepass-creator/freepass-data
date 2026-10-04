@@ -385,6 +385,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 차종 레퍼런스 적재 실행기 막음(#339 사후 검토)
+
+- #339(e77a7a7, `ingest:vehicle-reference`)는 관문 없이 main 에 들어왔다. `VEHICLE_REFERENCE_IMPORT_APPROVED=true` 와 입력 파일만 있으면 시험 실행 없이, Catalog 쓰기 주인(EXCLUSIVE) 검사·access.write 기록 없이 운영 Firestore(`vehicle_master_source_documents` 등)·Storage 에 바로 썼다. 기존 `capture/ingest/promote-vehicle-master-*` 경로와도 겹친다.
+- 조치: `scripts/import-vehicle-reference.mts` 를 어떤 환경 변수로도 실행하지 않도록 막았다(`VEHICLE_REFERENCE_IMPORT_BLOCKED`, 종료 코드 1). 정규화·봉인 코드와 시험은 그대로 둔다.
+- 운영 흔적(읽기만): `vehicle_master_source_documents` 에 `sourceName == FreePass Vehicle Reference` 0건, 프로젝트 버킷(`freepasserp5-data-audit-evidence`)에 `vehicle-master/reference-import/` 0건 — 실행된 적 없음.
+- 다음 할 일: 레퍼런스 데이터셋을 기존 차종 마스터 적재 경로의 한 원천으로 합친다(시험 실행 기본 → 계획 digest 승인 → 쓰기 주인 검사·access.write → 되읽기). 합친 뒤에만 실행기를 다시 연다. 차종 마스터 정비 순서는 차종 마스터 세션이 정한다.
+
 ### 2026-10-04 차종 마스터 전담 세션 하루 기록 — 휘발성 방지(대표 «작업한 것들 단단히 붙들어 둬라»)
 
 - **세션**: `[B3Q] FREEPASS-DATA · 차종 마스터`(옛 «고도화 전 정리», 대표가 10-04 차종 마스터 전담으로 지정). 대표가 이 창에서 직접 오더·보고.
