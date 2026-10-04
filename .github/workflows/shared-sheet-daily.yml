@@ -14,7 +14,12 @@ on:
         default: dry-run
   schedule:
     # 매일 03:40 KST. 매시 배달(data-owned-refresh)과 같은 동시성 그룹이라 겹치지 않는다.
+    # GitHub 예약은 부하 때 빠지거나 몇 시간 밀린다(10-05 첫 예약 03:40 실행이 아예 만들어지지 않음, «매시» 감사도 4~6시간 간격).
+    # 그래서 04:40·05:40·06:40 KST 에 다시 시도한다 — 관문이 «오늘(KST) 이미 적용 성공»이면 건너뛴다(하루 한 번 그대로).
     - cron: '40 18 * * *'
+    - cron: '40 19 * * *'
+    - cron: '40 20 * * *'
+    - cron: '40 21 * * *'
 
 concurrency:
   group: freepass-data-production-delivery
@@ -55,6 +60,15 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event_name }}" = 'schedule' ]; then
             if [ "$DAILY" != 'on' ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "daily schedule switch is off — skipped"; exit 0; fi
+            # 하루 한 번: 오늘(KST 0시 이후) 이 워크플로의 적용 실행 중 «박제 단계까지 성공»한 것이 있으면 다시 쓰지 않는다.
+            # (관문에서 건너뛴 실행은 박제 단계가 skipped 라 세지 않는다.)
+            since="$(date -u -d "$(TZ=Asia/Seoul date +%F) 00:00 +0900" +%Y-%m-%dT%H:%M:%SZ)"
+            applied=0
+            for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/shared-sheet-daily.yml/runs?branch=main&status=success&created=%3E%3D$since&per_page=30" --jq '.workflow_runs[] | select(.display_title | endswith(" apply")) | .id'); do
+              ok="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100" --jq '[.jobs[].steps[] | select((.name | startswith("Capture, plan and (apply)")) and .conclusion == "success")] | length')"
+              applied=$(( applied + ok ))
+            done
+            if [ "$applied" -gt 0 ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "already applied today (KST) — retry schedule skipped"; exit 0; fi
             # 최근 매시 감사 실행(진행 중 포함 5개)의 daily-writer-guard job 중 «가장 늦게 끝난 것»이 기준 —
             # 진행 중인 실행에서 이미 실패한 감시가 있으면 그것이 이긴다.
             : > "$RUNNER_TEMP/guard-jobs.jsonl"
