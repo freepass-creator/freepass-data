@@ -90,6 +90,35 @@ export async function withSharedSheetCatalogAccess<T>(
     : access.read(spec, () => run(denyWrites(catalog), denyWrites(source)));
 }
 
+/** Catalog writer ownership operator job: read/dry-run uses an in-process log only; apply/rollback is
+ * gateway audited and opens the durable audit only after the read-only preflight passes.
+ */
+export async function withCatalogOwnershipAccess<T>(
+  write: boolean,
+  requestDigest: string,
+  run: (catalog: CatalogStore) => Promise<T>,
+  preflight?: (catalog: CatalogStore) => Promise<void>,
+): Promise<T> {
+  const { MemoryDataAccessLogStore } = await import('../infra/memory-data-access-log.js');
+  const catalog = await createFirestoreDataStore();
+  const readOnly = new Proxy(catalog, { get(target, key) {
+    if (typeof key === 'string' && !key.startsWith('get') && !key.startsWith('list'))
+      return () => { throw new Error('READ_ONLY_PORT'); };
+    const value = Reflect.get(target, key);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  const spec = { context: { actor: { id: 'service:freepass-data', kind: 'SERVICE' as const },
+    clientId: 'job:catalog-writer-ownership', purpose: 'operator Catalog writer ownership transfer' },
+    operation: write ? 'WRITE_CATALOG_WRITER_OWNERSHIP' : 'READ_CATALOG_WRITER_OWNERSHIP',
+    resource: { kind: 'CATALOG' as const, name: 'catalog-writer-ownership' }, requestDigest,
+    summarize: (value: T) => ({ digest: stableDigest(value) }) };
+  if (!write) return new DataAccessGateway(new MemoryDataAccessLogStore()).read(spec, () => run(readOnly));
+  if (preflight) await new DataAccessGateway(new MemoryDataAccessLogStore()).read(
+    { ...spec, operation: 'PREFLIGHT_CATALOG_WRITER_OWNERSHIP', summarize: () => ({ digest: requestDigest }) },
+    () => preflight(readOnly));
+  return new DataAccessGateway(createFirestoreDataAccessLogStore()).write(spec, () => run(catalog));
+}
+
 export function createIancarErpInspectionDataAccessRuntime(input: {
   accessToken: string; evidenceBucket: string; accountJson: string;
 }) {
