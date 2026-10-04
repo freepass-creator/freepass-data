@@ -48,9 +48,18 @@ export const displayMatchesValue = (shown: string, v: number | boolean): boolean
   if (!Number.isFinite(v)) return false;
   const s = shown.trim();
   if (!/\d/.test(s)) return /^[^0-9]*-[^0-9]*$/.test(s) && v === 0; // 회계식 0
-  // 부호를 먼저 정한다 — 숫자를 감싼 괄호(통화 기호가 밖에 있어도) 또는 첫 숫자 앞의 «-». 지수·일반 숫자에 같이 쓴다.
-  const sign = /\([^()]*\d[^()]*\)/.test(s) || /^[^0-9]*-/.test(s) ? -1 : 1;
-  const percent = s.includes('%') ? 2 : 0;
+  // 표시 전체가 한 숫자 형식이어야 한다(일부만 숫자인 «1E3 + 2» 같은 글자는 거부):
+  //   [통화] [-] [(] [통화] 숫자[지수] [단위] [%] [)]  — 숫자는 쉼표 묶음(1,234)·소수, 지수는 E±1~3자리.
+  const m = /^\s*(?:[₩$]\s*)?(-)?\s*(\()?\s*(?:[₩$]\s*)?(-)?\s*(\d[\d,]*(?:\.\d*)?|\.\d+)(?:E([+-]?\d{1,3}))?\s*([A-Za-z가-힣]+)?\s*(%)?\s*(\))?\s*$/i.exec(s);
+  if (!m) return false;
+  const [, minusOut, open, minusIn, number, exponent, unit, pct, close] = m;
+  if (!!open !== !!close || (minusOut && minusIn) || ((minusOut || minusIn) && open)) return false;
+  const [intPart, fracPart] = number!.split('.');
+  if (intPart && intPart.includes(',') && !/^\d{1,3}(,\d{3})+$/.test(intPart)) return false;
+  if (exponent !== undefined && unit !== undefined && /^e/i.test(unit)) return false;
+  const sign = open || minusOut || minusIn ? -1 : 1;
+  const percent = pct ? 2 : 0;
+  const digits = (intPart ?? '').replace(/,/g, '') + (fracPart !== undefined ? '.' + fracPart : '');
   // 보이는 자릿수로 시트처럼 «0 에서 먼 쪽 반올림»한 값과 정확히 같아야 한다(«1» ↔ 1.5 는 «2», «1.23E+05» ↔ 123500 은 «1.24E+05»).
   // 계산은 15 유효숫자 십진 글자와 정수(BigInt)로 — 부동소수 경계 오류가 없다. 0 이 아니면 부호도 같아야 한다.
   const compare = (shownDigits: string, places: number, expected: bigint) => {
@@ -59,18 +68,18 @@ export const displayMatchesValue = (shown: string, v: number | boolean): boolean
     if (shownUnits !== expected) return false;
     return shownUnits === 0n || sign === Math.sign(v);
   };
-  // 지수: 가수(«1.23»·«5.»·«.5», 앞 소수점 보존)를 실제 값 ÷ 10^지수 의 반올림과 비교.
-  const sci = /(\d+(?:\.(\d*))?|\.(\d+))E([+-]?\d+)/i.exec(s.replace(/,/g, ''));
-  if (sci) {
-    const places = (sci[2] ?? sci[3] ?? '').length;
-    return compare(sci[1]!, places, roundedUnits(decimalDigits(v, percent - Number(sci[4])), places));
+  const places = (fracPart ?? '').length;
+  if (exponent !== undefined) {
+    // 지수 표시: 가수는 «한 자리.소수»(0 이 아니면 1~9 로 시작), 지수 ±308 안. 가수가 0 이면 실제 값도 0 이어야 한다.
+    const e = Number(exponent);
+    if (Math.abs(e) > 308) return false;
+    if (/^0*\.?0*$/.test(digits)) return v === 0;
+    if (!/^[1-9](\.\d*)?$/.test(digits)) return false;
+    return compare(digits, places, roundedUnits(decimalDigits(v, percent - e), places));
   }
-  const t = s.replace(/[^0-9.]/g, '');
-  if (!/^\d*\.?\d*$/.test(t) || !/\d/.test(t)) return false;
-  const places = (t.split('.')[1] ?? '').length;
   // 한계: «0.###» 처럼 뒤 0 을 생략하는 형식은 보이는 자릿수가 형식의 최대 자릿수보다 적을 수 있어(77.4 ↔ 77.44 처럼)
   // 표시만으로는 가릴 수 없다 — 두 읽기 사이 변경은 앞뒤 실제 값 동일 검사(sameReads)와 줄마다 글자 칸 대조가 막는다.
-  return compare(t, places, roundedUnits(decimalDigits(v, percent), places));
+  return compare(digits, places, roundedUnits(decimalDigits(v, percent), places));
 };
 
 const IDENTITY_COLUMNS = ['회사명', '차량번호'].map(h => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
