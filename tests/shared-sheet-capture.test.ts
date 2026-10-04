@@ -69,3 +69,21 @@ describe('shared sheet capture reader', () => {
       fetcher: (async () => new Response('', { status: 403 })) as unknown as typeof fetch })).rejects.toThrow('SHARED_SHEET_HTTP_403');
   });
 });
+
+describe('shared sheet capture keeps the year of date cells', () => {
+  it('uses the real serial value of 입고일자·최초등록일 as YYYY-MM-DD; text dates and other columns stay as displayed', () => {
+    const ch = sharedSheetChannels[0]!, H = sharedSheetHeaders, at = (h: string) => H.indexOf(h);
+    const shown = Array.from({ length: H.length }, () => '' as unknown); shown[0] = ch.companyName; shown[4] = '12가3456';
+    shown[at('입고일자')] = '08-12'; shown[at('최초등록일')] = '20-07'; shown[at('연식')] = '2021';
+    const real = [...shown]; real[at('입고일자')] = 46246; real[at('최초등록일')] = '20-07'; real[at('연식')] = 2021;
+    const shownBatch = batch({ [ch.tab]: [shown] }), realBatch = batch({ [ch.tab]: [real] });
+    const c = rawCapture(ID, shownBatch, META(), T, realBatch);
+    const row = c.tabs.find(t => t.title === ch.tab)!.values[1]!;
+    expect(row[at('입고일자')]).toBe('2026-08-12');
+    expect(row[at('최초등록일')]).toBe('20-07');
+    expect(row[at('연식')]).toBe('2021');
+    expect(rawCapture(ID, shownBatch, META(), T).tabs.find(t => t.title === ch.tab)!.values[1]![at('입고일자')]).toBe('08-12');
+    const wrong = { ...realBatch, valueRanges: realBatch.valueRanges.map((r, i) => i === 0 ? { ...r, range: 'x!A1:BV1' } : r) };
+    expect(() => rawCapture(ID, shownBatch, META(), T, wrong)).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+  });
+});

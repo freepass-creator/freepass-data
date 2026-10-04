@@ -43,11 +43,14 @@ export async function readSheetsMetadata(spreadsheetId: string, fields: string, 
   return sheetsGet(url, ports);
 }
 
-/** One bearer-authorized values.batchGet over the given ranges. Returns the raw response; conversion lives in adapters. */
-export async function readSheetsBatchGet(spreadsheetId: string, ranges: string[], ports: Ports = {}): Promise<unknown> {
+/** One bearer-authorized values.batchGet over the given ranges. Returns the raw response; conversion lives in adapters.
+ * render 'SERIAL' reads the real cell values (dates as serial numbers) — used only to keep the year of date cells whose
+ * display format hides it (입고일자 mm-dd). */
+export async function readSheetsBatchGet(spreadsheetId: string, ranges: string[], ports: Ports = {}, render: 'FORMATTED' | 'SERIAL' = 'FORMATTED'): Promise<unknown> {
   const url = sheetsUrl(spreadsheetId, '/values:batchGet');
   for (const r of ranges) url.searchParams.append('ranges', r);
-  url.searchParams.set('valueRenderOption', 'FORMATTED_VALUE');
+  url.searchParams.set('valueRenderOption', render === 'SERIAL' ? 'UNFORMATTED_VALUE' : 'FORMATTED_VALUE');
+  if (render === 'SERIAL') url.searchParams.set('dateTimeRenderOption', 'SERIAL_NUMBER');
   url.searchParams.set('majorDimension', 'ROWS');
   return sheetsGet(url, ports);
 }

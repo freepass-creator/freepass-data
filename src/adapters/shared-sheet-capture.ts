@@ -14,8 +14,19 @@ const LAST_COLUMN = (n => { let s = ''; for (; n > 0; n = Math.floor((n - 1) / 2
 export const sharedSheetTabs = (): string[] => [...new Set(sharedSheetChannels.map(x => x.tab))];
 export const sharedSheetCaptureRanges = () => sharedSheetTabs().map(t => `'${t.replace(/'/g, "''")}'!A1:${LAST_COLUMN}`);
 
-/** One values.batchGet response → validated capture v1. Rows are padded to the 74-column contract, blank rows kept. */
-export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, meta: SheetsGridMeta, readTime: string): SharedSheetCapture {
+/** Date columns whose display format may hide the year (입고일자 mm-dd · 최초등록일 yy-mm-dd): the capture keeps their real
+ * value as YYYY-MM-DD so the RAW of record never loses information to a display choice. */
+const DATE_COLUMNS = Object.entries(spec.valueFormats as Record<string, { kind?: string }>).filter(([, f]) => f.kind === 'date')
+  .map(([h]) => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
+const serialToIsoDate = (v: unknown): string | null => {
+  if (typeof v !== 'number' || !Number.isInteger(v)) return null;
+  const d = new Date(Date.UTC(1899, 11, 30) + v * 86_400_000);
+  return d.getUTCFullYear() >= 2000 && d.getUTCFullYear() <= 2099 ? d.toISOString().slice(0, 10) : null;
+};
+
+/** One values.batchGet response → validated capture v1. Rows are padded to the 74-column contract, blank rows kept.
+ * serials (optional): the same ranges read as real values (dates as serial numbers); only date cells use it. */
+export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, meta: SheetsGridMeta, readTime: string, serials?: SheetsBatchGet): SharedSheetCapture {
   const tabs = sharedSheetTabs();
   if (raw?.spreadsheetId !== spreadsheetId || meta?.spreadsheetId !== spreadsheetId) throw new Error('SHARED_SHEET_CAPTURE_WRONG_SPREADSHEET');
   if (!Array.isArray(raw?.valueRanges) || raw.valueRanges.length !== tabs.length) throw new Error('SHARED_SHEET_CAPTURE_INCOMPLETE');
@@ -28,13 +39,19 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
     if (!m || title !== tabs[i] || m[3] !== LAST_COLUMN || typeof rows !== 'number' || !Number.isSafeInteger(rows) ||
         Number(m[4]) !== rows || (r.values ?? []).length > rows) throw new Error('SHARED_SHEET_CAPTURE_RANGE_MISMATCH');
   });
+  if (serials && (serials.spreadsheetId !== spreadsheetId || !Array.isArray(serials.valueRanges) ||
+      serials.valueRanges.length !== raw.valueRanges.length || serials.valueRanges.some((r, i) => r?.range !== raw.valueRanges![i]?.range)))
+    throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
   const cell = (v: unknown): SheetCell => v === null || v === undefined ? '' :
     typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v)) ? v : (() => { throw new Error('SHARED_SHEET_CAPTURE_CELL_INVALID'); })();
   const capture: SharedSheetCapture = { schema: 'shared-sheet-capture/v1', spreadsheetId, layoutVersion: spec.layoutVersion, readTime,
     tabs: raw.valueRanges.map((range, i) => {
-      const values = (range.values ?? []).map(row => {
+      const real = serials?.valueRanges?.[i]?.values ?? [];
+      const values = (range.values ?? []).map((row, r) => {
         if (!Array.isArray(row) || row.length > WIDTH) throw new Error('SHARED_SHEET_CAPTURE_ROW_INVALID');
-        return Array.from({ length: WIDTH }, (_, c) => cell(row[c]));
+        const out = Array.from({ length: WIDTH }, (_, c) => cell(row[c]));
+        if (r > 0) for (const c of DATE_COLUMNS) { const iso = serialToIsoDate(real[r]?.[c]); if (iso) out[c] = iso; }
+        return out;
       });
       return { title: tabs[i]!, readTime, complete: true as const, rowCount: values.length, values };
     }) };

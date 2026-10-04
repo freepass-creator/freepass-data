@@ -9,18 +9,22 @@ import { writePrivateArtifact } from './ingest-shared-sheet-canonical.js';
 /** Capture the 15-tab shared input sheet into a private capture v1 file. stdout carries counts only (no plates/fees). */
 export async function main(args = process.argv.slice(2)) {
   const get = (k: string) => { const i = args.indexOf(k); const v = i >= 0 ? args[i + 1] : undefined; return v && !v.startsWith('--') ? v : undefined; };
-  const known = new Set(['--spreadsheet', '--out', '--from-batchget', '--grid-meta', '--read-time', '--erp5-capture', '--supplement']);
+  const known = new Set(['--spreadsheet', '--out', '--from-batchget', '--from-batchget-serials', '--grid-meta', '--read-time', '--erp5-capture', '--supplement']);
   for (let i = 0; i < args.length; i += 2) if (!known.has(args[i]!) || !get(args[i]!)) throw new Error('INVALID_ARGUMENT');
   const id = get('--spreadsheet'), out = get('--out');
   if (!id || !out) throw new Error('SPREADSHEET_AND_OUT_REQUIRED');
   const local = get('--from-batchget');
   if (local && (!get('--read-time') || !get('--grid-meta'))) throw new Error('READ_TIME_AND_GRID_META_REQUIRED_FOR_LOCAL_BATCHGET');
   const capture = local
-    ? captureFromBatchGet(id, JSON.parse(await readFile(local, 'utf8')), JSON.parse(await readFile(get('--grid-meta')!, 'utf8')), get('--read-time')!)
+    ? captureFromBatchGet(id, JSON.parse(await readFile(local, 'utf8')), JSON.parse(await readFile(get('--grid-meta')!, 'utf8')), get('--read-time')!,
+      get('--from-batchget-serials') ? JSON.parse(await readFile(get('--from-batchget-serials')!, 'utf8')) : undefined)
     : await (async () => {
       const readTime = new Date().toISOString();
       const meta = await readSheetsMetadata(id, SHEETS_GRID_META_FIELDS) as SheetsGridMeta;
-      return captureFromBatchGet(id, await readSheetsBatchGet(id, sharedSheetCaptureRanges()) as SheetsBatchGet, meta, readTime);
+      const ranges = sharedSheetCaptureRanges();
+      // 날짜 칸은 표시 형식이 연도를 숨길 수 있어(입고일자 mm-dd) 실제 값도 같이 읽는다 — 원문 기록에서 연도를 잃지 않는다.
+      return captureFromBatchGet(id, await readSheetsBatchGet(id, ranges) as SheetsBatchGet, meta, readTime,
+        await readSheetsBatchGet(id, ranges, {}, 'SERIAL') as SheetsBatchGet);
     })();
   // Layer ②: products.원문 from an existing ERP5 capture, plus a reviewed supplement (sheet backup rows · correction history).
   const erp5 = get('--erp5-capture'), supplementPath = get('--supplement');
