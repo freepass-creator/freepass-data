@@ -24,8 +24,9 @@ const commercial: Record<string, CommercialType> = { '신차렌트': 'NEW_RENT',
 const absentPrice = (s: string) => ['', '-', '불가'].includes(s);
 function number(s: string, unit = '', decimal = false): number | null {
   const body = unit ? s.replace(new RegExp(`\\s*${unit}$`, 'i'), '') : s;
-  if (!(decimal ? /^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/ : /^(?:\d+|\d{1,3}(?:,\d{3})+)$/).test(body)) return null;
-  const n = Number(body.replaceAll(',', ''));
+  // 소수 칸의 «0.###» 표시 형식은 정수를 «22.»처럼 끝에 점을 붙여 보인다(2026-10-04 서식 통일) — 같은 값으로 받는다.
+  if (!(decimal ? /^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d*)?$/ : /^(?:\d+|\d{1,3}(?:,\d{3})+)$/).test(body)) return null;
+  const n = Number(body.replaceAll(',', '').replace(/\.$/, ''));
   return Number.isFinite(n) && n >= 0 && n <= Number.MAX_SAFE_INTEGER ? n : null;
 }
 function year(s: string): number | null {

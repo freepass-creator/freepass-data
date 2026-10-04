@@ -71,6 +71,11 @@ describe('shared sheet local source to Canonical', () => {
     expect(f.displacementCc!.value).toBe(1234); expect(f.batteryKwh!.value).toBe(77.7); expect(f.drive!.value).toBe('2WD');
     expect(n.record.candidate.priceTerms[0]!.depositState).toBe('ZERO');
   });
+  // 소수 칸 표시 형식 «0.###"kWh"»는 정수를 «22.kWh»로 보인다(2026-10-04 서식 통일) — 같은 값. 점 두 개·글자는 여전히 거부.
+  it.each([['22.kWh', 22], ['54.kWh', 54], ['77.4kWh', 77.4], ['84kWh', 84]])('battery %s → %s', (shown, value) =>
+    expect(normalized(capture({ 배터리용량: shown })).record.candidate.vehicleFacts!.fields.batteryKwh!.value).toBe(value));
+  it.each(['22..kWh', '.5kWh', '약 70kWh'])('battery %s stays invalid', shown =>
+    expect(JSON.stringify(normalized(capture({ 배터리용량: shown })))).toContain('INVALID_BATTERYKWH'));
   it.each(['26년식', '2026'])('accepts explicit year %s', value => expect(normalized(capture({ 연식: value })).record.candidate.vehicleFacts!.fields.modelYear!.value).toBe(2026));
   it('distinguishes company codes inside a shared tab', () => {
     const c = capture({}, '빌린카'), tab = c.tabs.find(x => x.title === '빌린카')!;
