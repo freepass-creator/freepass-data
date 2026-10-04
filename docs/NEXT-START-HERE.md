@@ -375,6 +375,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 공통 시트 첫 적재 운영 적용 · Catalog writer 소유권 이전 · 이름 정정 적용
+
+- products 이름 정정 59건(표기 56·분류 3) 운영 적용: F03 최종안 재조회로 to 이름·현재 from 59/59 확인 뒤 기존 `apply-vehicle-name-reference-repair`, run `2026-10-04T03-56-13-433Z-3cabe1de-dd89-4f36-889e-eaebcfff6c60`, 개인 백업 뒤 단일 트랜잭션, 되읽기 59/59. 적용 뒤 parity audit: 공통 시트 차 이슈 61→0, 전체 이슈 721→648, 영향 products 466→394.
+- Catalog writer 소유권: SHARED_MIGRATION(data·admin) → EXCLUSIVE `service:freepass-data`, revision 1, 되읽기 OK(plan digest `d7081c10…`, rollback = before-image).
+- 첫 적재(공통 시트 + `--erp5-capture` + `--supplement`): run COMPLETED·head CURRENT, RAW 206(차 203 + 번호 빈 행 3, HOLD 47 포함)·공급사 입력값 198·정정 이력 168행·후보 206. Canonical products 159(노출 ACTIVE 92 · 비노출 HOLD 67)·자산 159(차량번호 유일)·offer 159·sourceFirstRunId 159. 기간 대사 저장 566 = 제공 566(+HOLD 146 = 712), 되읽기 어긋남 0. 수수료 KNOWN 391·UNKNOWN 175(전부 null). plan digest `b76bfc3c…`.
+- 3대 조회(query-canonical-by-plate): 노출 1·비노출 1 정상, 가격 기간 없는 HOLD 1 은 Canonical 0건(RAW·공급사 입력값만).
+- vehicle_trim_master 세부트림 정정: 기존 이름 정정 job 을 `trimRepairs` 로 확장(옛 이름 `trim_aliases` 보존, 승인은 계획 전체 digest). 계획 25건(표기 14·XM3 엔진/E-TECH 접두 11), MINI `JCW ALL4` 1건은 같은 등급 근거가 없어 제외.
+- ★다음에 할 일: 가격 기간이 없는 차(10-04 6대 — NO_PRICE_TERMS 단독 HOLD)의 정본 구조 — 가격 없으면 정본값 ③을 만들 근거가 없어 지금은 RAW·공급사 입력값만 둔다(AI 상황실 10-04).
+
 ### 2026-10-04 F03 차종 4단 구조 최종 적용(세부트림·셀토스 SP3·별칭·제원·파워트레인_보조)
 
 - 목적: 차종 기준 한 장(ai-ops `docs/차종-기준-한장.md`)대로 F03 세부트림에서 파워트레인을 통째로 버리고, 버린 파워트레인은 새 탭 `파워트레인_보조`에 모은다. 제원 구동은 2WD·4WD·AWD 세 값.
