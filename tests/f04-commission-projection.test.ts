@@ -108,6 +108,11 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
     (formulasRead[2] as unknown[])[at('계약형태')] = '=ARRAYFORMULA(…)'; (formulasRead[3] as unknown[])[at('계약형태')] = '';
     expect(() => planF04CommissionProjection({ intake: values, intakeFormulas: formulasRead, installments: INST, openFromMonth: '2026-09', readAt: 'x' })).not.toThrow();
   });
+  it('a plain formula in one cell of a column does not hide changes in the other cells of that column', () => {
+    const v1 = row({ 차량번호: '12가3456' }), v2 = row({ 차량번호: '12가3457' });
+    const f1 = [...v1], f2 = [...v2]; f1[at('청구')] = '=FALSE()'; f2[at('청구')] = true; // 4행 청구가 그 사이 TRUE 로
+    expect(() => planF04CommissionProjection({ intake: intake(v1, v2), intakeFormulas: intake(f1, f2), installments: INST, openFromMonth: '2026-09', readAt: 'x' })).toThrow('F04_FORMULA_READ_MISMATCH');
+  });
   it('an AE·AJ column carrying an array formula anywhere is never filled (its spilled blanks are not empty cells)', () => {
     const v1 = row({ 차량번호: '12가3456' }), v2 = row({ 차량번호: '12가3457' });
     const f1 = [...v1], f2 = [...v2]; f1[at('판매수수료')] = '=ARRAYFORMULA(L3:L*0)';
