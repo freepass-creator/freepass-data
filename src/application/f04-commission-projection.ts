@@ -66,6 +66,14 @@ const int = (v: unknown): number | null => {
  * 일반 규칙 금액을 제안하지 않는다. */
 const INDIVIDUAL_LEDGER_ROWS = new Set([413, 466, 473, 474, 475]);
 const empty = (v: unknown) => v === undefined || v === null || v === '';
+/** FORMULA 로 읽은 칸의 수식(«=…»). 수식이 빈 글자를 돌려줘도 빈칸이 아니다 — 수식 칸은 절대 채우지 않는다. */
+const formula = (v: unknown) => typeof v === 'string' && v.trim().startsWith('=');
+/** 날짜를 YYYY-MM-DD 로: 시트 일련번호(1899-12-30 기준), «2026-09-20», «2026. 9. 20», «2026/9/20». 못 읽으면 원래 글자. */
+export const isoDate = (v: unknown): string => {
+  if (typeof v === 'number' && Number.isFinite(v)) return new Date(Date.UTC(1899, 11, 30) + Math.floor(v) * 86_400_000).toISOString().slice(0, 10);
+  const m = /^(\d{4})\s*[-./]\s*(\d{1,2})\s*[-./]\s*(\d{1,2})\.?$/.exec(text(v));
+  return m ? `${m[1]}-${m[2]!.padStart(2, '0')}-${m[3]!.padStart(2, '0')}` : text(v);
+};
 const plateKey = (v: unknown) => text(v).replace(/\s+/g, '');
 
 /** 접수 줄 하나 → 엔진 입력. 엔진이 받지 못하는 상품은 null 과 사유. */
@@ -103,6 +111,8 @@ export function planF04CommissionProjection(input: {
   intake: unknown[][]; installments: unknown[][]; openFromMonth: string; readAt: string; facts?: Record<string, { fuel?: string }>;
   /** 개별 합의 계약의 열쇠(차량번호|접수일) — 비공개 목록. 행 번호가 바뀌어도 계약으로 보호한다. */
   individualKeys?: string[];
+  /** 같은 접수 탭을 FORMULA 로 읽은 값. 있으면 AE·AJ 가 수식 칸인지 이것으로 본다(값 읽기에서는 빈 글자 수식이 빈칸처럼 보인다). */
+  intakeFormulas?: unknown[][];
 }): F04ProjectionPlan {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.openFromMonth)) throw new Error('F04_OPEN_MONTH_INVALID');
   const hi = input.intake.findIndex(r => Array.isArray(r) && r.includes('차량번호'));
@@ -122,13 +132,22 @@ export function planF04CommissionProjection(input: {
   const installmentRows = new Set(installmentLinks.filter(l => l.row !== null).map(l => `${l.plate}|${l.row}`));
   // 같은 차량번호의 회차청구 줄이 있는데 원 접수행이 이 줄을 가리키지 않거나 못 읽으면(행 이동 등) 연결 불명 — AE 를 쓰지 않는다.
   const installmentPlates = new Set(installmentLinks.map(l => l.plate));
-  const individualKeys = new Set(input.individualKeys ?? []);
+  // 개별 합의 목록의 날짜도 같은 규칙으로 맞춘다(일련번호·날짜 글자 어느 쪽이든).
+  const individualKeys = new Set((input.individualKeys ?? []).map(k => { const [p, d = ''] = k.split('|'); return `${plateKey(p)}|${isoDate(d)}`; }));
 
+  // 수식 읽기는 값 읽기와 같은 줄·같은 차량번호여야 한다(두 번 읽는 사이 줄이 바뀌면 멈춘다).
+  const formulas = input.intakeFormulas;
+  if (formulas) {
+    if (formulas.length !== input.intake.length) throw new Error('F04_FORMULA_READ_MISMATCH');
+    const pc = header.indexOf('차량번호');
+    input.intake.forEach((r, i) => { if (plateKey((r as unknown[] | undefined)?.[pc]) !== plateKey((formulas[i] as unknown[] | undefined)?.[pc])) throw new Error('F04_FORMULA_READ_MISMATCH'); });
+  }
+  const formulaAt = (sheetRow: number, col: number) => (formulas?.[sheetRow - 1] as unknown[] | undefined)?.[col];
   const rows = input.intake.slice(hi + 1).map((r, i) => ({ sheetRow: hi + 2 + i, cells: Array.isArray(r) ? r : [] }))
     .filter(r => !empty(r.cells[header.indexOf('차량번호')]));
   // 열쇠 = 차량번호 + 접수일. 겹치면 그 줄들은 판독 실패로 건드리지 않는다.
   const keyCount = new Map<string, number>();
-  const key = (cells: unknown[]) => `${plateKey(cells[header.indexOf('차량번호')])}|${text(cells[header.indexOf('접수일')])}`;
+  const key = (cells: unknown[]) => `${plateKey(cells[header.indexOf('차량번호')])}|${isoDate(cells[header.indexOf('접수일')])}`;
   for (const r of rows) keyCount.set(key(r.cells), (keyCount.get(key(r.cells)) ?? 0) + 1);
 
   const plan: F04ProjectionPlan = { schema: 'freepass-data.f04-commission-projection-plan/v1', policyId: KAKAO_COMMISSION_POLICY.policyId,
@@ -154,13 +173,14 @@ export function planF04CommissionProjection(input: {
       if ('input' in built) for (const column of ['AE', 'AJ'] as const) {
         const result = column === 'AE' ? resolveSupplierBillingFee(built.input) : resolveSalesCommission(built.input);
         const projected = projectedAmount(result), current = cells[colOf(column)];
-        if (empty(current) || (column === 'AE' && installmentPlates.has(plate)) || 'reason' in projected) continue;
+        if (empty(current) || formula(current) || formula(formulaAt(sheetRow, colOf(column))) || (column === 'AE' && installmentPlates.has(plate)) || 'reason' in projected) continue;
         if (int(current) !== projected.value) plan.closedDiffs.push(diffOf(sheetRow, column, column, plate, current, projected.value, projected.ruleId));
       }
       continue;
     }
     for (const column of ['AE', 'AJ'] as const) {
       const current = cells[colOf(column)];
+      if (formula(current) || formula(formulaAt(sheetRow, colOf(column)))) { skip('FORMULA_CELL'); continue; }
       if (column === 'AE' && installmentPlates.has(plate)) {
         const reason = installmentRows.has(`${plate}|${sheetRow}`) ? 'INSTALLMENT_TAB_HAS_CONTRACT' : 'INSTALLMENT_LINK_UNCLEAR';
         if (empty(current)) plan.blanks.push({ row: sheetRow, column, plate, reason }); else skip('AE_KEPT_INSTALLMENT_TAB');

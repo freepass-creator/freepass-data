@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { planF04CommissionProjection, protectedSides } from '../src/application/f04-commission-projection.js';
+import { isoDate, planF04CommissionProjection, protectedSides } from '../src/application/f04-commission-projection.js';
 
+// 시험 자료는 모두 합성값이다 — 차량번호(12가3456 등)·금액·날짜는 실제 계약이 아니다.
 // F04 접수 탭 머리글(실제 순서 A~AZ). 1행은 탭 설명, 2행이 머리글.
 const H = ['접수일', '차량번호', '공급사', '모델명', '영업채널', '영업담당자', '영업자연락처', '고객명', '특이사항', '상품구분', '계약기간', '렌탈료',
   '보증금', '차량가액', '분납여부', '계약서', '인도완료', '인도일', '청구년', '청구월', '청구액', '지급액', '취소', '다음회차일', '환수', '환수사유',
@@ -102,6 +103,19 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
     const p = planF04CommissionProjection({ intake: intake(row({ 차량번호: '12가3456' })), installments: INST, openFromMonth: '2026-09', readAt: 'x', individualKeys: ['12가3456|2026-09-20'] });
     expect(p.fills).toEqual([]);
     expect(p.blanks.map(b => b.reason)).toEqual(['INDIVIDUAL_AGREEMENT', 'INDIVIDUAL_AGREEMENT']);
+  });
+  it('a formula cell (read with FORMULA) is never filled even when it shows an empty string', () => {
+    const p = plan([row({ 차량번호: '12가3456', 판매수수료: '=IF(L3="","",L3*0)', 출고수수료: '=""' })]);
+    expect(p.fills).toEqual([]);
+    expect(p.skipped.FORMULA_CELL).toBe(2);
+  });
+  it('dates are compared as YYYY-MM-DD: a serial 접수일 still matches the individual list written as text (and vice versa)', () => {
+    expect(isoDate(46285)).toBe('2026-09-20');
+    expect(isoDate('2026. 9. 20')).toBe('2026-09-20');
+    const serial = planF04CommissionProjection({ intake: intake(row({ 차량번호: '12가3456', 접수일: 46285 })), installments: INST, openFromMonth: '2026-09', readAt: 'x', individualKeys: ['12가 3456|2026-09-20'] });
+    expect(serial.blanks.map(b => b.reason)).toEqual(['INDIVIDUAL_AGREEMENT', 'INDIVIDUAL_AGREEMENT']);
+    const textDate = planF04CommissionProjection({ intake: intake(row({ 차량번호: '12가3456', 접수일: '2026/9/20' })), installments: INST, openFromMonth: '2026-09', readAt: 'x', individualKeys: ['12가3456|2026-09-20'] });
+    expect(textDate.fills).toEqual([]);
   });
   it('stops when the layout moved or the month is malformed', () => {
     const moved = [...H]; moved.splice(30, 0, 'x');
