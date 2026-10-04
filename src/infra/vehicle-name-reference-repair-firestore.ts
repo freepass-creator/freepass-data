@@ -48,7 +48,16 @@ export const masterNameKey = (data: Record<string, unknown>) => [data.maker, dat
 const MASTER_CREATE_KEYS = ['id', 'maker', 'model', 'sub_model', 'origin'] as const;
 const TRIM_CREATE_KEYS = ['maker', 'model', 'sub_model', 'trim', 'master_id', 'trim_row_key'] as const;
 
-const clean = (value: unknown) => String(value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+/**
+ * Name text normalization — one rule for checking and storing: NFC, full-width ASCII (Ｌ·Ｅ·１) and ideographic space
+ * to half-width, trim, collapse spaces. Not NFKC: that would turn real names such as 포터 Ⅱ·플래티넘Ⅰ into «II»/«I».
+ */
+export const normalizeName = (value: unknown) => String(value ?? '').normalize('NFC')
+  .replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)).replace(/\u3000/g, ' ')
+  .trim().replace(/\s+/g, ' ');
+const clean = normalizeName;
+/** Names written by this tool must already be normalized — a value that changes under normalizeName is refused. */
+const NAME_KINDS = new Set(['master', 'product', 'trim', 'productTrim', 'trimSubModel']);
 /** Stored value matches the plan's `from`. A blank `from` only matches a truly blank value: missing, null or an empty string. */
 export const matchesFrom = (stored: unknown, from: string) => clean(from)
   ? clean(stored) === clean(from)
@@ -77,6 +86,11 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     if (!c.id?.trim() || typeof c.data !== 'object' || c.data === null || Array.isArray(c.data)) throw new Error(`${c.kind} requires id and data`);
     if (typeof c.evidence !== 'string' || !c.evidence.trim()) throw new Error(`${c.kind} ${c.id} requires evidence`);
     for (const key of c.keys) if (key !== 'id' && !clean(c.data[key])) throw new Error(`${c.kind} ${c.id} requires data.${key}`);
+    if (c.kind === 'trimCreate') {
+      for (const key of ['maker', 'model', 'sub_model', 'trim'] as const) {
+        if (typeof c.data[key] !== 'string' || c.data[key] !== clean(c.data[key])) throw new Error(`trimCreate ${c.id} ${key} must be normalized text`);
+      }
+    }
     if (c.kind === 'masterCreate' && c.data.id !== c.id) throw new Error(`masterCreate ${c.id} data.id must equal id`);
     if (c.id !== c.id.trim()) throw new Error(`${c.kind} id must have no surrounding spaces`);
     if (c.kind === 'trimCreate' && (typeof c.data.master_id !== 'string' || c.data.master_id !== c.data.master_id.trim())) throw new Error(`trimCreate ${c.id} master_id must be an exact id`);
@@ -114,6 +128,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !blankFill)) throw new Error('repair item requires id/from/to');
     if (clean(item.from) === clean(item.to)) throw new Error(`no-op repair ${item.kind}:${item.id}`);
     if (item.kind === 'trimMasterLink' && item.to !== item.to.trim()) throw new Error(`trimMasterLink ${item.id} to must be an exact master id`);
+    if (NAME_KINDS.has(item.kind) && item.to !== clean(item.to)) throw new Error(`${item.kind} ${item.id} to must be normalized text`);
     const key = `${item.kind}:${item.id}`;
     if (keys.has(key)) throw new Error(`duplicate repair ${key}`);
     keys.add(key);

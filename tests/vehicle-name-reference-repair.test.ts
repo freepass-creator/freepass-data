@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_VEHICLE_NAME_REPAIR_TARGETS, matchesFrom, validateVehicleNameRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
+import { MAX_VEHICLE_NAME_REPAIR_TARGETS, matchesFrom, normalizeName, validateVehicleNameRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
 
 describe('vehicle-name reference repair gate', () => {
   it('accepts exact non-overlapping master and product repairs', () => {
@@ -54,6 +54,20 @@ describe('vehicle-name reference repair gate', () => {
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], masterCreates: [{ ...master, data: { ...master.data, id: 'other' } }] })).toThrow(/data.id/);
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], trimCreates: [{ ...trim, data: { ...trim.data, master_id: '' } }] })).toThrow(/master_id/);
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], masterCreates: [master, master] })).toThrow(/duplicate/);
+  });
+  it('accepts only normalized name text in creates and renames — spaces and full-width letters are refused, Ⅱ is kept', () => {
+    const trim = (t: string) => ({ id: 'k1', evidence: 'x', data: { maker: '기아', model: '카니발', sub_model: '카니발 KA4', trim: t, master_id: 'm', trim_row_key: 'k1' } });
+    const plan = (t: string) => ({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], trimCreates: [trim(t)] });
+    expect(() => validateVehicleNameRepairPlan(plan(' 프리미엄'))).toThrow(/normalized/);
+    expect(() => validateVehicleNameRepairPlan(plan('ＬＥ'))).toThrow(/normalized/); // 전각
+    expect(() => validateVehicleNameRepairPlan(plan('X  Line'))).toThrow(/normalized/);
+    expect(validateVehicleNameRepairPlan(plan('마스터즈 Ⅱ'))).toMatchObject({ trimCreateCount: 1 });
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [],
+      trimSubModelRepairs: [{ id: 't', from: 'A', to: '그랜저 GN7 ' }] })).toThrow(/normalized/);
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [],
+      trimRepairs: [{ id: 't', from: 'TCe LE', to: 'ＬＥ' }] })).toThrow(/normalized/);
+    expect(normalizeName('포터 Ⅱ')).toBe('포터 Ⅱ');
+    expect(normalizeName('　ＬＥ  플러스 ')).toBe('LE 플러스');
   });
   it('caps one plan below the Firestore transaction write limit', () => {
     const many = Array.from({ length: MAX_VEHICLE_NAME_REPAIR_TARGETS + 1 }, (_, i) => ({ id: `t${i}`, from: 'A', to: 'B' }));
