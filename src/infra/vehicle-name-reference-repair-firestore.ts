@@ -19,6 +19,8 @@ export type VehicleNameRepairPlan = {
   productRepairs: VehicleNameRepairItem[];
   /** vehicle_trim_master.trim → F03 세부트림 name (old name kept in trim_aliases). Optional; absent = no trim repairs. */
   trimRepairs?: VehicleNameRepairItem[];
+  /** products.trim_name → F03 세부트림 name. Optional; `from` must be a non-blank name. */
+  productTrimRepairs?: VehicleNameRepairItem[];
 };
 
 const clean = (value: unknown) => String(value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ');
@@ -30,22 +32,27 @@ export const matchesFrom = (stored: unknown, from: string) => clean(from)
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   if (!plan.sourceDigest?.trim()) throw new Error('sourceDigest is required');
   const all = [...plan.masterRepairs.map((item) => ({ ...item, kind: 'master' })), ...plan.productRepairs.map((item) => ({ ...item, kind: 'product' })),
-    ...(plan.trimRepairs ?? []).map((item) => ({ ...item, kind: 'trim' }))];
+    ...(plan.trimRepairs ?? []).map((item) => ({ ...item, kind: 'trim' })),
+    ...(plan.productTrimRepairs ?? []).map((item) => ({ ...item, kind: 'productTrim' }))];
   if (!all.length) throw new Error('repair plan is empty');
+  const productIds = new Set(plan.productRepairs.map((item) => item.id));
+  if ((plan.productTrimRepairs ?? []).some((item) => productIds.has(item.id))) throw new Error('one product per plan: sub_model and trim_name repairs must not overlap');
   const keys = new Set<string>();
   for (const item of all) {
-    // A blank `from` fills an empty name; it is only allowed with source-text evidence, and the transaction
-    // precondition still requires the stored value to be blank at write time.
+    // A blank `from` fills an empty products.sub_model only, with source-text evidence; the transaction
+    // precondition still requires the stored value to be blank at write time. Every other kind needs a name.
     const evidenceOk = typeof item.evidence === 'string' && item.evidence.trim() !== '';
     if (item.evidence !== undefined && !evidenceOk) throw new Error('repair item evidence must be a non-empty string');
-    if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !evidenceOk)) throw new Error('repair item requires id/from/to');
+    const blankFill = !clean(item.from) && item.kind === 'product' && evidenceOk;
+    if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !blankFill)) throw new Error('repair item requires id/from/to');
     if (clean(item.from) === clean(item.to)) throw new Error(`no-op repair ${item.kind}:${item.id}`);
     const key = `${item.kind}:${item.id}`;
     if (keys.has(key)) throw new Error(`duplicate repair ${key}`);
     keys.add(key);
   }
   return { masterCount: plan.masterRepairs.length, productCount: plan.productRepairs.length,
-    ...(plan.trimRepairs ? { trimCount: plan.trimRepairs.length } : {}) };
+    ...(plan.trimRepairs ? { trimCount: plan.trimRepairs.length } : {}),
+    ...(plan.productTrimRepairs ? { productTrimCount: plan.productTrimRepairs.length } : {}) };
 }
 
 export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan) {
@@ -56,6 +63,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     ...plan.masterRepairs.map((item) => ({ item, ref: db.collection('vehicle_master').doc(item.id), field: 'sub_model' as const })),
     ...plan.productRepairs.map((item) => ({ item, ref: db.collection('products').doc(item.id), field: 'sub_model' as const })),
     ...(plan.trimRepairs ?? []).map((item) => ({ item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'trim' as const })),
+    ...(plan.productTrimRepairs ?? []).map((item) => ({ item, ref: db.collection('products').doc(item.id), field: 'trim_name' as const })),
   ];
   const refs = targets.map((x) => x.ref);
   const snapshots = await db.getAll(...refs);
@@ -91,7 +99,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       const { item, field } = targets[index]!;
       transaction.update(snapshot.ref, {
         [field]: clean(item.to),
-        ...(field === 'trim' ? { trim_aliases: FieldValue.arrayUnion(clean(item.from)) } : {}),
+        ...(field === 'trim' && clean(item.from) ? { trim_aliases: FieldValue.arrayUnion(clean(item.from)) } : {}),
         vehicle_name_reference_checked_at: FieldValue.serverTimestamp(),
         vehicle_name_reference_source_digest: plan.sourceDigest,
         ...(item.evidence ? { vehicle_name_reference_evidence: item.evidence } : {}),
