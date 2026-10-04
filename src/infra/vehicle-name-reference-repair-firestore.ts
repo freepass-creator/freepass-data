@@ -77,12 +77,12 @@ const MASTER_DOC_KINDS = new Set(['master', 'masterModel', 'masterGenCode']);
 /** Every trim name inside variants must also be in the top-level trims list (consumers read both). */
 /** Shape check too: variants is a list of objects; a variant's trims, when present, is a list of strings — anything else is refused. */
 const variantTrimNames = (variants: unknown): string[] => {
-  if (variants === undefined || variants === null) return [];
+  if (variants === undefined) return [];
   if (!Array.isArray(variants)) throw new Error('variants must be a list');
   return variants.flatMap((v) => {
     if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('each variant must be an object');
     const trims = (v as Record<string, unknown>).trims;
-    if (trims === undefined || trims === null) return [];
+    if (trims === undefined) return [];
     if (!Array.isArray(trims) || trims.some((t) => typeof t !== 'string')) throw new Error('variant trims must be a list of strings');
     return trims.map(clean);
   });
@@ -173,6 +173,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     for (const key of ['maker', 'model', 'sub_model'] as const) {
       if (typeof c.data[key] !== 'string' || c.data[key] !== clean(c.data[key])) throw new Error(`masterCreate ${c.id} ${key} must be normalized text`);
     }
+    if (c.data.trims !== undefined && (!Array.isArray(c.data.trims) || c.data.trims.some((t) => typeof t !== 'string' || t !== clean(t)))) throw new Error(`masterCreate ${c.id} trims must be a list of normalized strings`);
     if (variantTrimNames(c.data.variants).length && !Array.isArray(c.data.trims)) throw new Error(`masterCreate ${c.id} variants name trims but trims is not a list`);
     if (Array.isArray(c.data.variants) && Array.isArray(c.data.trims)) {
       const listed = new Set((c.data.trims as unknown[]).map(clean));
