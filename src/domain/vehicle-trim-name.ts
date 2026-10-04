@@ -1,5 +1,5 @@
 /**
- * F03 세부트림 표시명 = 엔카 경로의 끝 이름에서 파워트레인 표시(배기량·연료·엔진 방식·구동)만 뗀 등급 이름
+ * F03 세부트림 표시명 = 엔카 경로의 끝 이름에서 파워트레인 표시(배기량·연료·구동)만 뗀 등급 이름 — 엔진 이름은 남긴다
  * (대표 2026-10-04 확정 「배기량을 뺀 LT · TCe 인스파이어 · 기본형」). 뗀 뒤 남는 것이 없으면 「기본형」.
  * 엔진·연료·구동은 공통 시트 배기량·연료 칸이 맡는다. 인승(「9인승 노블레스」)은 등급 이름의 일부라 남긴다.
  * 예외: 모델 번호가 곧 등급인 수입차(520d · C300 4MATIC · S350 d 4MATIC · xDrive20i · B5 …)는 떼지 않는다.
@@ -9,12 +9,13 @@
  * 낱말은 TRIM_UNDECIDED_TOKENS 에 두고 떼지 않는다(결정되면 이 파일을 고친다).
  */
 
-/** 정확히 이 낱말(대소문자 무시)이면 뗀다. */
+/**
+ * 정확히 이 낱말(대소문자 무시)이면 뗀다 — 대표 최종 기준은 배기량·연료·구동뿐이다.
+ * HEV·PHEV·전기·바이퓨얼은 연료의, RWD·FWD는 구동의 다른 표기라 같이 뗀다.
+ */
 export const TRIM_POWERTRAIN_WORDS: readonly string[] = Object.freeze([
-  // 연료 — LPe(르노)·LPLI(르노 SM7)는 LPG 연료 표시라 뗀다
+  // 연료 — LPe(르노)·LPLI(르노 SM7)는 LPG 연료 표시, 바이퓨얼은 LPG 겸용 연료 표시
   '가솔린', '디젤', 'LPG', 'LPi', 'LPe', 'LPLI', '하이브리드', 'HEV', 'PHEV', '전기', '바이퓨얼',
-  // 엔진 방식
-  'T-GDi', 'GDi', 'MPi', 'CRDi', 'VVT', 'CVVT', 'V6', 'V8',
   // 구동
   '2WD', '4WD', 'AWD', 'RWD', 'FWD',
 ]);
@@ -22,8 +23,14 @@ export const TRIM_POWERTRAIN_WORDS: readonly string[] = Object.freeze([
 /** 모양으로 떼는 배기량 표시: 1.6 · 2.0T · 1.6T · 1600cc. */
 export const TRIM_DISPLACEMENT_PATTERNS: readonly RegExp[] = Object.freeze([/^\d\.\dT?$/i, /^\d{3,4}cc$/i]);
 
-/** 엔진 이름 — 떼지 않는다(대표 예시 「TCe 인스파이어」, AI 상황실 판단 2026-10-04). */
-export const TRIM_KEPT_ENGINE_NAMES: readonly string[] = Object.freeze(['TCe', 'dCi', 'TSI', 'TDI', 'VGT', 'e-VGT', '터보', '에코부스트', 'S/C']);
+/**
+ * 엔진 이름 — 떼지 않는다(대표 예시 「TCe 인스파이어」, AI 상황실 판단 2026-10-04). 엔진 방식 표기
+ * (GDi·T-GDi·CRDi·MPi·VVT·CVVT·V6·V8)도 TSI·TDI와 같은 엔진 이름이라 남긴다.
+ */
+export const TRIM_KEPT_ENGINE_NAMES: readonly string[] = Object.freeze([
+  'TCe', 'dCi', 'TSI', 'TDI', 'VGT', 'e-VGT', '터보', '에코부스트', 'S/C',
+  'GDi', 'T-GDi', 'CRDi', 'MPi', 'VVT', 'CVVT', 'V6', 'V8',
+]);
 
 /** 판단이 갈리는 낱말 — 떼지 않고 표시만 한다(지금은 없음). 새로 생기면 여기에 두고 결정되면 위 목록으로 옮긴다. */
 export const TRIM_UNDECIDED_TOKENS: readonly string[] = Object.freeze([]);
