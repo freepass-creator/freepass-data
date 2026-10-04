@@ -22,18 +22,23 @@ export async function main(args = process.argv.slice(2)) {
     ? captureFromBatchGet(id, await json('--from-batchget'), await json('--grid-meta'), get('--read-time')!,
       await json('--from-batchget-serials'), await json('--from-batchget-serials-after'), stats)
     : await (async () => {
-      const meta = await readSheetsMetadata(id, SHEETS_GRID_META_FIELDS) as SheetsGridMeta;
       const ranges = sharedSheetCaptureRanges();
       // 날짜 칸은 표시 형식이 연도를 숨길 수 있어(입고일자 mm-dd) 실제 값도 읽는다 — 원문 기록에서 연도를 잃지 않는다.
-      // 실제 값 → 표시값 → 실제 값 순서로 읽고 앞뒤 실제 값이 같아야 쓴다(그 사이 누가 고쳤으면 멈춤). 사람이 고치는 중이면
-      // 잠시 뒤 다시 읽되 세 번까지만, 그래도 다르면 멈춘다(쓰기 전이라 프리패스 데이터에는 아무것도 쓰이지 않는다).
+      // 실제 값 → 표시값 → 실제 값 순서로 읽고 앞뒤 실제 값이 같아야 쓴다(그 사이 누가 고쳤으면 멈춤). 사람이 고치는 중이거나
+      // 시트 읽기가 일시로 실패하면(시간 초과·429·5xx) 30초 뒤 다시 읽되 세 번까지만, 그래도 안 되면 멈춘다
+      // (쓰기 전이라 프리패스 데이터에는 아무것도 쓰이지 않는다).
+      const retryable = /^(SHARED_SHEET_CAPTURE_CHANGED_DURING_READ|SHARED_SHEET_CAPTURE_SERIALS_MISMATCH|SHARED_SHEET_READ_UNKNOWN|SHARED_SHEET_RESPONSE_INVALID|SHARED_SHEET_HTTP_(429|500|502|503|504))$/;
       for (let attempt = 1; ; attempt++) {
-        const readTime = new Date().toISOString();
-        const before = await readSheetsBatchGet(id, ranges, {}, 'SERIAL') as SheetsBatchGet;
-        const shown = await readSheetsBatchGet(id, ranges) as SheetsBatchGet;
-        const after = await readSheetsBatchGet(id, ranges, {}, 'SERIAL') as SheetsBatchGet;
-        try { stats.datesFromSerial = 0; return captureFromBatchGet(id, shown, meta, readTime, before, after, stats); } catch (e) {
-          if (attempt >= 3 || !(e instanceof Error) || !['SHARED_SHEET_CAPTURE_CHANGED_DURING_READ', 'SHARED_SHEET_CAPTURE_SERIALS_MISMATCH'].includes(e.message)) throw e;
+        try {
+          const readTime = new Date().toISOString();
+          const meta = await readSheetsMetadata(id, SHEETS_GRID_META_FIELDS) as SheetsGridMeta;
+          const before = await readSheetsBatchGet(id, ranges, {}, 'SERIAL') as SheetsBatchGet;
+          const shown = await readSheetsBatchGet(id, ranges) as SheetsBatchGet;
+          const after = await readSheetsBatchGet(id, ranges, {}, 'SERIAL') as SheetsBatchGet;
+          stats.datesFromSerial = 0;
+          return captureFromBatchGet(id, shown, meta, readTime, before, after, stats);
+        } catch (e) {
+          if (attempt >= 3 || !(e instanceof Error) || !retryable.test(e.message)) throw e;
           await new Promise(r => setTimeout(r, 30_000));
         }
       }
