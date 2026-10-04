@@ -136,7 +136,17 @@ jobs:
               if grep -qiE 'not found|No URLs matched|matched no objects|404' <<<"$err"; then continue; fi
               echo "SUPPLEMENT_READ_FAILED $d"; exit 1
             fi
-            node -e "const fs=require('fs');const [a,b]=process.argv.slice(1);const s=JSON.parse(fs.readFileSync(a,'utf8')),x=JSON.parse(fs.readFileSync(b,'utf8'));if(!Array.isArray(x.corrections))process.exit(1);s.corrections.push(...x.corrections);if(x.supplierEntered)(s.supplierEntered??=[]).push(...x.supplierEntered);fs.writeFileSync(a,JSON.stringify(s))" "$T/supplement.json" "$T/supplement-$d.json"
+            # 엔진 이력의 시각(+09:00)은 UTC «Z» 로 바꾸고(박제 규격), 같은 정정은 한 번만. 오류는 고정 코드만(원문 노출 금지).
+            node -e "
+              const fs=require('fs');const [a,b]=process.argv.slice(1);
+              try{const s=JSON.parse(fs.readFileSync(a,'utf8')),x=JSON.parse(fs.readFileSync(b,'utf8'));
+                if(!Array.isArray(x.corrections))throw 0;
+                const seen=new Set(s.corrections.map(c=>[c.supplierCode,c.plate,c.at,c.column].join('|')));
+                for(const c of x.corrections){const t=new Date(c.at);if(!c||isNaN(t))throw 0;c.at=t.toISOString();
+                  const k=[c.supplierCode,c.plate,c.at,c.column].join('|');if(!seen.has(k)){seen.add(k);s.corrections.push(c);}}
+                if(x.supplierEntered){if(!Array.isArray(x.supplierEntered))throw 0;(s.supplierEntered??=[]).push(...x.supplierEntered);}
+                fs.writeFileSync(a,JSON.stringify(s));
+              }catch{console.error('SUPPLEMENT_INVALID');process.exit(1);}" "$T/supplement.json" "$T/supplement-$d.json"
           done
           node -e "const s=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));console.log('supplement corrections',s.corrections.length,'supplierEntered',(s.supplierEntered??[]).length)" "$T/supplement.json"
           node --import tsx src/jobs/capture-shared-sheet.ts --spreadsheet "$SHARED_SHEET_ID" --erp5-capture "$ERP5_CAPTURE" --supplement "$T/supplement.json" --out "$T/capture.json"
