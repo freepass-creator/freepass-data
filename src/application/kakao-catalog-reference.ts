@@ -350,6 +350,8 @@ export type CommissionInput = {
   extraDeposit?: number;
   /** A suspected individual promotion must not silently use the general rule. */
   individualException?: boolean;
+  /** Legacy private input name. Its shape is intentionally unsupported; callers must migrate to individualAgreement. */
+  individualExceptionEvidence?: unknown;
   /**
    * 개별 합의(F04 수수료표 160·163행 유형). 신뢰된 비공개 호출자가 비공개 목록(ai-ops 인수인계)의 합의를 이 계약에 묶어 넘긴다 —
    * 금액·대상 계약은 공개 저장소에 두지 않는다. HTTP 등 신뢰할 수 없는 입력으로 받지 않는다.
@@ -395,6 +397,9 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   if (supplierId === 'RP034') return { ...unknownCommission('SUPPLIER_EXCLUDED_BY_DECISION'), state: 'NOT_APPLICABLE' };
   if (!Number.isSafeInteger(termMonths) || termMonths < 1 || !Number.isSafeInteger(monthlyRent) || monthlyRent < 0) return unknownCommission('INVALID_PRICE_TERM_INPUT');
   const agreement = input.individualAgreement;
+  if (!agreement && input.individualExceptionEvidence !== undefined) {
+    return unknownCommission('LEGACY_INDIVIDUAL_EXCEPTION_INPUT');
+  }
   if (input.individualException || agreement) {
     if (!agreement || !/^opaque:[a-zA-Z0-9_-]{16,}$/.test(agreement.contractRef) || agreement.contractRef !== agreement.matchedContractRef
       || !/^private:[a-zA-Z0-9_-]{4,}$/.test(agreement.agreementId) || ![160, 163].includes(agreement.sourceRow)) return unknownCommission('INDIVIDUAL_EXCEPTION_EVIDENCE_REQUIRED');
@@ -463,7 +468,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   const product = input.productType.trim();
   const first = supplierFirstRow[input.supplierId];
   let rows: number[] = [];
-  if (input.individualException || input.individualAgreement) rows = input.individualAgreement ? [input.individualAgreement.sourceRow] : [160, 163];
+  if (input.individualException || input.individualAgreement || input.individualExceptionEvidence !== undefined) rows = input.individualAgreement ? [input.individualAgreement.sourceRow] : [160, 163];
   else if (input.supplierId === 'RP034') rows = [168];
   else if (input.supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId) rows = [...KAKAO_COMMISSION_POLICY.mewcar.sourceRows];
   else if (input.supplierId === 'RP012' && /^픽업\s*구독/.test(product)) rows = [190];
@@ -540,7 +545,7 @@ const assetStatus = (value: unknown) => ({
 } as const)[text(value)] ?? null;
 
 export type CommissionEvidenceByTerm = Readonly<Record<string, Partial<Pick<CommissionInput,
-  'vehicleValue' | 'newProductSubtype' | 'depositTierPercent' | 'subscriptionForm' | 'q12Basis' | 'individualException' | 'individualAgreement'>>>>;
+  'vehicleValue' | 'newProductSubtype' | 'depositTierPercent' | 'subscriptionForm' | 'q12Basis' | 'individualException' | 'individualAgreement' | 'individualExceptionEvidence'>>>>;
 
 export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}) {
   if (source.listable !== true) return null;
