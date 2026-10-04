@@ -104,7 +104,9 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
         entry.action = 'CREATE';
         entry.create = { ...base, decision: { supplierId: supplier,
           vehicleModel: { action: 'CREATE', id: opaque('vm', p.sourceId, c.sourceRecordId) },
-          vehicleAsset: { action: 'CREATE', id: opaque('va', p.sourceId, c.sourceRecordId), status: statusPolicy?.assetStatus ?? 'AVAILABLE' },
+          // Asset identity = plate («차량번호 하나 = 정본 한 줄»): a second CREATE for the same plate, from any source or a
+          // concurrent run, meets the existing-asset conflict inside the canonicalize transaction instead of a new va_*.
+          vehicleAsset: { action: 'CREATE', id: opaque('va', 'plate', c.carNumber!), status: statusPolicy?.assetStatus ?? 'AVAILABLE' },
           productStatus, approvedIssues: [] } };
         if (await store.getVehicleModel(entry.create.decision.vehicleModel.id) ||
             await store.getVehicleAsset(entry.create.decision.vehicleAsset!.id) ||

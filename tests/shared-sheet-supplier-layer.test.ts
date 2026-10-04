@@ -117,3 +117,31 @@ describe('one plate = one canonical row (AI 상황실 #324 review)', () => {
     expect(of(b.companyName, 'TEST-FAKE-003').payload).not.toHaveProperty('supplierEntered');
   });
 });
+
+describe('#324 third review', () => {
+  it('counts a readable plate on a malformed row in the cross-supplier check', () => {
+    const a = sharedSheetChannels.find(x => x.companyName === '웰릭스')!, b = sharedSheetChannels.find(x => x.code !== a.code && x.tab !== a.tab)!;
+    const row = (company: string, plate: string) => sharedSheetHeaders.map(h => ({ 회사명: company, 차량번호: plate, 차량상태: '출고가능' } as Record<string, string>)[h] ?? '');
+    const capture: SharedSheetCapture = { schema: 'shared-sheet-capture/v1', spreadsheetId: 'synthetic-sheet', layoutVersion: '2026-10-04-no-account',
+      readTime: T, revision: 'r', tabs: [...new Set(sharedSheetChannels.map(x => x.tab))].map(title => {
+        const values: (string | null)[][] = [[...sharedSheetHeaders], ...(title === a.tab ? [row(a.companyName, 'TEST-FAKE-001')] : []),
+          ...(title === b.tab ? [row(b.companyName, 'TEST-FAKE-001').slice(0, 10)] : [])];
+        return { title, readTime: T, complete: true as const, rowCount: values.length, values };
+      }) };
+    const recs = buildSharedSheetBatch({ ...capture, digest: undefined }).records;
+    expect(recs.map(r => r.payload.quarantine).sort()).toEqual(['PLATE_ON_MULTIPLE_SUPPLIERS', 'ROW_SHAPE_INVALID']);
+  });
+  it('rejects a supplement without a supplier code instead of dropping it', () => {
+    const c = sheet(['TEST-FAKE-001']);
+    expect(() => withSupplements(c, [{ plate: 'TEST-FAKE-001', source: 'SHEET_BACKUP', sourceRef: 'b', observedAt: T, values: {} } as never], []))
+      .toThrow('INVALID_SHARED_SHEET_SUPPLEMENT');
+  });
+  it('keeps the first run when a later run has the same observation time', async () => {
+    const store = new MemorySourceStore();
+    const first = await ingestRawSourceBatch(store, buildSharedSheetBatch({ ...sheet(['TEST-FAKE-001']), digest: undefined }), T, normalizeSharedSheet);
+    const again = { ...sheet(['TEST-FAKE-001']), revision: 'r-other' };
+    const second = await ingestRawSourceBatch(store, buildSharedSheetBatch(again), T, normalizeSharedSheet);
+    expect(second.runId).not.toBe(first.runId);
+    expect((await store.listRaw(second.runId))[0]!.firstRunId).toBe(first.runId);
+  });
+});

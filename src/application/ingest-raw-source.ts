@@ -133,7 +133,8 @@ export async function ingestRawSourceBatch(
       if (normalize) {
         const prior = firstSeen.get(raw.sourceRecordId);
         raw.firstObservedAt = prior && Date.parse(prior) < Date.parse(raw.observedAt) ? prior : raw.observedAt;
-        raw.firstRunId = prior && Date.parse(prior) < Date.parse(raw.observedAt) ? firstRun.get(raw.sourceRecordId) ?? null : raw.runId;
+        // An earlier run at the same observation time is still the earlier run (e.g. a re-capture with a new revision).
+        raw.firstRunId = prior && Date.parse(prior) <= Date.parse(raw.observedAt) ? firstRun.get(raw.sourceRecordId) ?? null : raw.runId;
       }
       await store.appendRaw(raw);
       if (normalize) {

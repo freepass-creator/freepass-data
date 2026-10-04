@@ -69,9 +69,10 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
       const company = String(values[0] ?? '').trim();
       const supplier = sharedSheetChannels.find(x => x.tab === tab.title && x.companyName === company);
       // Placeholders such as 「신차」 are not vehicle identities: keep RAW by position and let normalization HOLD the row.
-      const plate = shapeOk && isAssignedPlate(values[4]) ? plateIdentityKey(values[4]) : '';
+      // A readable plate counts for cross-supplier checks even on a malformed row; identity still needs a valid row.
+      const plate = isAssignedPlate(values[4]) ? plateIdentityKey(values[4]) : '';
       rows.push({ tab, index, values, supplierCode: supplier?.code ?? null,
-        identity: supplier && plate ? stableDigest([supplier.code, plate]) : null, quarantine: shapeOk ? null : 'ROW_SHAPE_INVALID', plateKey: plate });
+        identity: supplier && plate && shapeOk ? stableDigest([supplier.code, plate]) : null, quarantine: shapeOk ? null : 'ROW_SHAPE_INVALID', plateKey: plate });
     }
   }
   const seen = new Map<string, number>();

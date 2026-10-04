@@ -130,6 +130,18 @@ describe('shared sheet local source to Canonical', () => {
     const next = await planSharedSheetCanonical(s.store, later(capture({ 차량상태: '계약중' })), 'synthetic-target');
     expect(next.plan.entries[0]).toMatchObject({ action: 'HOLD', reasons: expect.arrayContaining(['STATUS_CHANGE_REQUIRES_REVIEW']) });
   });
+  it('two sources racing on the same plate: the second CREATE meets the plate asset inside the transaction', async () => {
+    const s = await stores();
+    const other = { ...capture(), spreadsheetId: 'synthetic-sheet-2' };
+    const p1 = await planSharedSheetCanonical(s.store, capture(), 'synthetic-target');
+    const p2 = await planSharedSheetCanonical(s.store, other, 'synthetic-target');
+    expect(p1.plan.entries[0]!.create!.decision.vehicleAsset!.id).toBe(p2.plan.entries[0]!.create!.decision.vehicleAsset!.id);
+    await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true, plan: p1.plan, expectedPlanDigest: p1.report.planDigest });
+    const second = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true, plan: p2.plan, expectedPlanDigest: p2.report.planDigest })
+      .catch((e: Error) => ({ error: e.message }));
+    expect(second).toEqual({ error: 'SHARED_SHEET_PLAN_STALE' });
+    expect(await s.store.listVehicleAssets()).toHaveLength(1);
+  });
   it('never creates a second asset for a plate that already has one (even without offers)', async () => {
     const s = await stores();
     await s.store.seed({ vehicleAssets: [{ id: 'va_existing', vehicleModelId: 'vm_existing', status: 'AVAILABLE', plateNumber: 'TEST-FAKE-001',

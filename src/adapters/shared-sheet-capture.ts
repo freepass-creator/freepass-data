@@ -71,6 +71,9 @@ export function withSupplements(capture: SharedSheetCapture, supplierEntered: Su
     const code = sharedSheetChannels.find(x => x.tab === t.title && x.companyName === String(r[0] ?? '').trim())?.code;
     return code && isAssignedPlate(r[4]) ? `${code}|${plateIdentityKey(r[4])}` : '';
   })).filter(Boolean));
+  // Validate before matching: a supplement without supplier code/plate is an error, not something to drop silently.
+  for (const x of [...supplierEntered, ...corrections])
+    if (!x || typeof x.supplierCode !== 'string' || !x.supplierCode.trim() || !isAssignedPlate(x.plate)) throw new Error('INVALID_SHARED_SHEET_SUPPLEMENT');
   const key = (x: { supplierCode: string; plate: string }) => `${x.supplierCode}|${plateIdentityKey(x.plate)}`;
   const keep = supplierEntered.filter(x => rowKeys.has(key(x)));
   const fixes = corrections.filter(x => rowKeys.has(key(x)));
