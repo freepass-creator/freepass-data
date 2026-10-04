@@ -102,6 +102,9 @@ describe('shared sheet capture keeps the year of date cells', () => {
     // 월/일/연 표시도 같은 날이면 통과한다.
     const usShown = [...shown]; usShown[at('최초등록일')] = '7/3/2020';
     expect(rawCapture(ID, batch({ [ch.tab]: [usShown] }), META(), T, batch({ [ch.tab]: [fullReal] })).tabs.find(t => t.title === ch.tab)!.values[1]![at('최초등록일')]).toBe('2020-07-03');
+    // 일/월 순서로 읽힐 뿐인 다른 날(3월 7일 표시 ↔ 7월 3일 값)은 멈춘다.
+    const dmShown = [...shown]; dmShown[at('최초등록일')] = '3/7/2020';
+    expect(() => rawCapture(ID, batch({ [ch.tab]: [dmShown] }), META(), T, batch({ [ch.tab]: [fullReal] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
     // 글자 칸이 다르면(같은 회사·같은 번호라도) 멈춘다.
     const otherText = [...real]; otherText[at('비고')] = '다른 차';
     expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherText] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
