@@ -6,7 +6,7 @@ const sub = (value: string) => trimDisplayName(value, '국산', { isSubGrade: tr
 
 describe('F03 세부트림 = 엔카 등급 이름에서 파워트레인 부분을 통째로 버린 것 (모델 → 세부모델 → 파워트레인 → 세부트림, 2026-10-04)', () => {
   it('세부등급이 있으면 그 글자 그대로', () => {
-    for (const value of ['프레스티지', '시그니처 X Line', 'GT-Line', 'TCe 인스파이어', '플래티넘Ⅰ', '마스터즈 Ⅱ', '9인승 노블레스']) expect(sub(value)).toBe(value);
+    for (const value of ['프레스티지', 'GT-Line', 'TCe 인스파이어', '플래티넘Ⅰ', '마스터즈 Ⅱ']) expect(sub(value)).toBe(value);
   });
 
   it('세부등급이 없으면 등급 이름에서 파워트레인(배기량·엔진·연료·구동)을 버린다', () => {
@@ -18,7 +18,7 @@ describe('F03 세부트림 = 엔카 등급 이름에서 파워트레인 부분�
     expect(name('퀘스트 2.0 LPe 밴')).toBe('퀘스트 밴');
     expect(name('LPLI 2.0 LPe 택시렌터카')).toBe('택시렌터카');
     expect(name('1.2 LT')).toBe('LT');
-    expect(name('HEV 9인승 노블레스')).toBe('9인승 노블레스');
+    expect(name('HEV 9인승 노블레스')).toBe('노블레스');
     expect(name('터보 인스퍼레이션')).toBe('인스퍼레이션');
     expect(name('SS 6.2 V8')).toBe('SS');
     expect(name('2.2 CRDi 프레스티지')).toBe('프레스티지');
@@ -53,6 +53,24 @@ describe('F03 세부트림 = 엔카 등급 이름에서 파워트레인 부분�
     expect(name('2.0 디젤 패키지')).toBe('패키지');
     expect(name('1.6 터보 프레스티지')).toBe('프레스티지');
     expect(name('터보 인스퍼레이션')).toBe('인스퍼레이션');
+  });
+
+  it('인승은 제원 칸이라 뗀다 — 엔카가 인승으로 등급을 나눠도 세부트림은 하나 (대표 2026-10-04)', () => {
+    expect(sub('9인승 노블레스')).toBe('노블레스');
+    expect(name('디젤 7인승 노블레스')).toBe('노블레스');
+    expect(name('가솔린 9인승 하이리무진 (특장업체)')).toBe('하이리무진 (특장업체)');
+    expect(name('11인승 어린이 보호차')).toBe('어린이 보호차');
+    expect(name('가솔린 5인승 휠체어 리프트')).toBe('휠체어 리프트');
+    expect(trimDisplayName('HEV 7인승 X Line', '국산').removed).toEqual(['HEV', '7인승']);
+    expect(sub('9인승')).toBe('기본형');
+  });
+
+  it('제조사 공식 표기 낱말은 엔카 대신 그 표기 — X Line → X-Line (기준 한 장 2절 6번)', () => {
+    expect(sub('시그니처 X Line')).toBe('시그니처 X-Line');
+    expect(name('HEV 9인승 X Line')).toBe('X-Line');
+    expect(name('xDrive20i X Line', '수입')).toBe('xDrive20i X-Line');
+    expect(sub('X-Line')).toBe('X-Line');
+    expect(sub('X Liner')).toBe('X Liner');
   });
 
   it('파워트레인뿐이면 기본형', () => {

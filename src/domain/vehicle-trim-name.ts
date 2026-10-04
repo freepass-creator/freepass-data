@@ -6,7 +6,8 @@
  * - 세부등급이 없으면 등급 이름에서 파워트레인 부분을 버린 나머지(「1.4 VVT 스타일」 → 「스타일」, 「M16 GDI 프리미어」 →
  *   「프리미어」, 「1.8 TCe 인스파이어」 → 「인스파이어」). 남는 게 없으면 「기본형」.
  * - 예외: 모델 번호가 곧 등급인 수입차(520d M 스포츠 · C300 4MATIC · S350 d 4MATIC · 40 TDI 콰트로 프리미엄 · B5 …)는 그대로.
- * 인승(「9인승 노블레스」)과 용도 괄호(「트렌디(렌터카)」)는 세부트림의 일부라 남긴다.
+ * 인승(「9인승 노블레스」의 9인승)은 제원 칸이라 뗀다(2026-10-04). 용도 괄호(「트렌디(렌터카)」)는 세부트림의 일부라 남긴다.
+ * 제조사 공식 표기 낱말(X Line → X-Line)은 엔카 대신 그 표기로 쓴다(TRIM_OFFICIAL_SPELLINGS).
  *
  * 아래 낱말 목록은 «파워트레인 부분»을 알아보는 수단일 뿐이다 — 정의는 위 4단 구조다. 목록은 이 파일 하나로 고정해
  * 세션마다 다르게 고르지 않는다. 새로 판단이 갈리는 낱말은 TRIM_UNDECIDED_TOKENS 에 두고 떼지 않는다.
@@ -32,6 +33,18 @@ export const TRIM_POWERTRAIN_WORDS: readonly string[] = Object.freeze([
 
 /** 모양으로 떼는 배기량 표시: 1.6 · 2.0T · 1.6T · 1600cc · LPG 배기량 L3.5(스타리아·스타렉스). */
 export const TRIM_DISPLACEMENT_PATTERNS: readonly RegExp[] = Object.freeze([/^\d\.\dT?$/i, /^\d{3,4}cc$/i, /^L\d\.\d$/]);
+
+/** 인승(7인승·9인승·11인승)은 제원 칸이라 세부트림에서 뗀다 — 엔카가 «9인승 노블레스»로 나눠도 세부트림은 «노블레스»(대표 2026-10-04 「인승 같은 건 제원」). */
+const SEATS = /^\d{1,2}인승$/;
+
+/**
+ * 제조사 공식 표기 낱말 — 엔카를 따라 하지 않는 것(기준 한 장 2절 6번, 대표 2026-10-04). 목록은 대표가 정하고 그 장에만 둔다.
+ * 세부등급 글자·모델 번호 등급에도 똑같이 적용한다.
+ */
+export const TRIM_OFFICIAL_SPELLINGS: readonly (readonly [string, string])[] = Object.freeze([['X Line', 'X-Line']] as const);
+
+const officialSpelling = (name: string) =>
+  TRIM_OFFICIAL_SPELLINGS.reduce((acc, [encar, ours]) => acc.replace(new RegExp(`(^| )${encar.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?= |$)`, 'g'), `$1${ours}`), name);
 
 /** 판단이 갈리는 낱말 — 떼지 않고 표시만 한다(지금은 없음). 새로 생기면 여기에 두고 결정되면 위 목록으로 옮긴다. */
 export const TRIM_UNDECIDED_TOKENS: readonly string[] = Object.freeze([]);
@@ -68,8 +81,10 @@ export function isTrimPowertrainToken(token: string): boolean {
 /** Encar trim (세부등급, or 등급 when there is no 세부등급) → F03 세부트림 display name. */
 export function trimDisplayName(value: string, origin: TrimOrigin, options: TrimDisplayOptions = {}): TrimDisplayName {
   if (options.isSubGrade) {
-    const name = text(value);
-    return { name: name || '기본형', removed: [], undecided: [], modelDesignation: false };
+    const all = text(value).split(' ').filter(Boolean);
+    const removed = all.filter((token) => SEATS.test(token));
+    const name = all.filter((token) => !SEATS.test(token)).join(' ');
+    return { name: name ? officialSpelling(name) : '기본형', removed, undecided: [], modelDesignation: false };
   }
   // 「구조변경(LPG)」처럼 붙은 괄호도 파워트레인이면 떼어 낸다. 「트렌디(렌터카)」 같은 용도 괄호는 그대로.
   const spaced = text(value).replace(/\(([^()]+)\)/g, (whole, inner: string) => (isTrimPowertrainToken(inner) ? ` (${inner}) ` : whole));
@@ -80,17 +95,18 @@ export function trimDisplayName(value: string, origin: TrimOrigin, options: Trim
     return m && !TRIM_DISPLACEMENT_PATTERNS.some((pattern) => pattern.test(token)) ? [m[1]!, m[2]!] : [token];
   });
   if (origin === '수입' && tokens.length > 0 && MODEL_DESIGNATION.test(tokens[0]!)) {
-    return { name: tokens.join(' '), removed: [], undecided: [], modelDesignation: true };
+    return { name: officialSpelling(tokens.join(' ')), removed: [], undecided: [], modelDesignation: true };
   }
   // 배기량 숫자 바로 뒤 「T」·디젤 표시 「D」(「2.2D」)도 배기량 표기의 일부로 같이 뗀다(「터보」는 위 목록에서 뗀다).
   // 옵션 이름 「터보 패키지」(「GT 마스터즈 터보 패키지」)의 「터보」만 파워트레인이 아니다 — 이 한 묶음만 남긴다.
   const drop = tokens.map((token, i) =>
     (isTrimPowertrainToken(token) && !(token === '터보' && tokens[i + 1] === '패키지'))
-    || (/^(?:T|D)$/i.test(token) && i > 0 && /^\d\.\d$/.test(tokens[i - 1]!)));
+    || (/^(?:T|D)$/i.test(token) && i > 0 && /^\d\.\d$/.test(tokens[i - 1]!))
+    || SEATS.test(token));
   const removed = tokens.filter((_, i) => drop[i]);
   const kept = tokens.filter((_, i) => !drop[i]);
   return {
-    name: kept.length ? kept.join(' ') : '기본형',
+    name: kept.length ? officialSpelling(kept.join(' ')) : '기본형',
     removed,
     undecided: kept.filter((token) => UNDECIDED.has(token.toLowerCase())),
     modelDesignation: false,
