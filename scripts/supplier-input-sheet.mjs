@@ -163,6 +163,15 @@ export function splitPolicyValue(header,value){
   }
   hold(`Unparsed ${header}: ${v}`);
 }
+// 종합 탭 = 공급사 탭을 쌓아 빈 줄을 빼고, 차량상태가 summaryKeepStatuses(출고가능·즉시출고)인 줄만 남긴다(대표 10-04 «출고 가능차만 종합탭에»).
+// 차량상태 칸 위치는 그 양식의 머리글에서 찾는다 — 칸 순서가 바뀌어도 맞는 칸을 본다.
+export const summaryFormula=(stack,headers,spec=inputSpec)=>{
+  const at=headers.indexOf('차량상태'),keepStatuses=spec.summaryKeepStatuses;
+  if(at<0)hold('Summary status column missing');
+  if(!Array.isArray(keepStatuses)||!keepStatuses.length||keepStatuses.some(v=>typeof v!=='string'||!v||v.includes('"')))hold('summaryKeepStatuses invalid');
+  const status=keepStatuses.map(v=>`INDEX(r,1,${at+1})="${v}"`).join(',');
+  return `=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,AND(SUM(ARRAYFORMULA(LEN(r)))>0,OR(${status})))),IFNA(FILTER(src,keep),""))`;
+};
 const columnLetter=index=>{let out='';for(index++;index;index=Math.floor((index-1)/26))out=String.fromCharCode(65+(index-1)%26)+out;return out;};
 // Moves the workbook from the pre-split layout to spec.layoutVersion: inserts
 // the extra columns (inheriting format from the left), rewrites headers, writes
@@ -209,7 +218,7 @@ export function planPolicySplit(input,spec=inputSpec,now=Date.now()){
   if(width<newH.length)requests.push({insertDimension:{range:{sheetId:summary.properties.sheetId,dimension:'COLUMNS',startIndex:width,endIndex:newH.length},inheritFromBefore:true}});
   const last=columnLetter(newH.length-1);
   const stack=supplierTabs(input.binding.suppliers).map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
-  requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
+  requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:summaryFormula(stack,newH,spec)}}]}],fields:'userEnteredValue'}});
   return {status:'PLANNED',scope:'POLICY_COLUMN_SPLIT_VALUES_HEADERS_SUMMARY',from:rule.from,to:rule.to,tabs:supplierTabs(input.binding.suppliers).length,rowsRead,requests};
 }
 // Column order change (legacy layout → spec layout): append the new empty
@@ -250,7 +259,7 @@ export function planLayoutReorder(input,spec=inputSpec,now=Date.now()){
   if(width<newH.length)requests.push({insertDimension:{range:{sheetId:summary.properties.sheetId,dimension:'COLUMNS',startIndex:width,endIndex:newH.length},inheritFromBefore:true}});
   const last=columnLetter(newH.length-1);
   const stack=supplierTabs(input.binding.suppliers).map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
-  requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
+  requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:summaryFormula(stack,newH,spec)}}]}],fields:'userEnteredValue'}});
   return {status:'PLANNED',scope:'COLUMN_ORDER_AND_HEADERS_NO_VALUE_REWRITE',from:rule.from,to:rule.to,tabs:supplierTabs(input.binding.suppliers).length,requests};
 }
 // Add new columns after one anchor column (legacy layout → spec layout) and
@@ -292,7 +301,7 @@ export function planColumnAdd(input,spec=inputSpec,now=Date.now()){
   if(width<newH.length)requests.push({insertDimension:{range:{sheetId:summary.properties.sheetId,dimension:'COLUMNS',startIndex:width,endIndex:newH.length},inheritFromBefore:true}});
   const last=columnLetter(newH.length-1);
   const stack=supplierTabs(input.binding.suppliers).map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
-  requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
+  requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:summaryFormula(stack,newH,spec)}}]}],fields:'userEnteredValue'}});
   return {status:'PLANNED',scope:'ADD_COLUMNS_AND_FILL_NEW_COLUMNS_ONLY',from:rule.from,to:rule.to,tabs:supplierTabs(input.binding.suppliers).length,requests};
 }
 // Layout change with removals (legacy layout → spec layout): link each plate
@@ -340,7 +349,7 @@ export function planLayoutChange(input,spec=inputSpec,now=Date.now()){
   const last=columnLetter(newH.length-1);
   const stack=supplierTabs(input.binding.suppliers).map(sup=>{const t=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${t.properties.gridProperties.rowCount}`;return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;}).join(',');
   // Rewrite the summary first so its spill never targets the columns deleted next.
-  requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`}}]}],fields:'userEnteredValue'}});
+  requests.push({updateCells:{start:{sheetId:summary.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:newH.map(stringValue=>({userEnteredValue:{stringValue}}))},{values:[{userEnteredValue:{formulaValue:summaryFormula(stack,newH,spec)}}]}],fields:'userEnteredValue'}});
   const width=summary.properties.gridProperties.columnCount;
   if(width>newH.length)requests.push({updateCells:{range:{sheetId:summary.properties.sheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:newH.length,endColumnIndex:width},fields:'userEnteredValue'}},{deleteDimension:{range:{sheetId:summary.properties.sheetId,dimension:'COLUMNS',startIndex:newH.length,endIndex:width}}});
   return {status:'PLANNED',scope:'LAYOUT_CHANGE_LINK_DELETE_MOVE_NO_VALUE_REWRITE',from:rule.from,to:rule.to,tabs:supplierTabs(input.binding.suppliers).length,platesLinked:linked,requests};
@@ -534,7 +543,7 @@ export function planExcludeSupplierTab(input,spec=inputSpec,now=Date.now()){
     const r=`'${sup.title.replaceAll("'","''")}'!A2:${last}${end}`;
     return `ARRAYFORMULA(IF(ISBLANK(${r}),"",${r}))`;
   }).join(',');
-  const formulaValue=`=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,SUM(ARRAYFORMULA(LEN(r)))>0)),IFNA(FILTER(src,keep),""))`;
+  const formulaValue=summaryFormula(stack,spec.inputHeaders,spec);
   return {status:'PLANNED',scope:'EXCLUDED_SUPPLIER_ARCHIVE_AND_SUMMARY_ONLY',spreadsheetId:verified.spreadsheetId,supplierCount:candidate.binding.suppliers.length,tabCount:supplierTabs(candidate.binding.suppliers).length,requests:[
     {updateCells:{start:{sheetId:candidate.binding.summarySheetId,rowIndex:1,columnIndex:0},rows:[{values:[{userEnteredValue:{formulaValue}}]}],fields:'userEnteredValue'}},
     ...archived.map(sheetId=>({updateSheetProperties:{properties:{sheetId,hidden:true},fields:'hidden'}}))
