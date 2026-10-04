@@ -43,30 +43,39 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
   return capture;
 }
 
-/** Layer ②: products.원문 (written by the supplier-sheet collectors, never by the shared sheet) per plate, from an existing
- * verified ERP5 capture. Plates whose products disagree on 원문 are left out rather than guessed. */
+/** Layer ②: products.원문 (written by the supplier-sheet collectors, never by the shared sheet) per «공급사 코드 + 차량번호»,
+ * from an existing verified ERP5 capture. Records whose products disagree on 원문 are left out rather than guessed. */
 export function supplierEnteredFromErp5(capture: Erp5SourceCapture): SupplierEnteredRecord[] {
   inspectErp5Capture(capture);
-  const byPlate = new Map<string, SupplierEnteredRecord | null>();
+  const byKey = new Map<string, SupplierEnteredRecord | null>();
   for (const doc of capture.collections.products.documents as Array<{ name?: string; fields?: Record<string, unknown> }>) {
-    let plate: unknown, text: unknown;
-    try { plate = decodeErp5Value(doc.fields?.car_number ?? { nullValue: null }); text = decodeErp5Value(doc.fields?.['원문'] ?? { nullValue: null }); }
-    catch { continue; }
-    if (!isAssignedPlate(plate) || !text || typeof text !== 'object' || Array.isArray(text)) continue;
-    const key = plateIdentityKey(plate);
-    const record: SupplierEnteredRecord = { plate: key, source: 'ERP5_PRODUCTS_SOURCE_TEXT', sourceRef: String(doc.name ?? '').split('/').pop() ?? '',
-      observedAt: capture.readTime, values: text as Record<string, unknown> };
-    const seen = byPlate.get(key);
-    byPlate.set(key, seen === undefined ? record : seen && stableDigest(seen.values) === stableDigest(record.values) ? seen : null);
+    let plate: unknown, text: unknown, supplier: unknown;
+    try {
+      plate = decodeErp5Value(doc.fields?.car_number ?? { nullValue: null });
+      text = decodeErp5Value(doc.fields?.['원문'] ?? { nullValue: null });
+      supplier = decodeErp5Value(doc.fields?.provider_company_code ?? { nullValue: null });
+    } catch { continue; }
+    if (!isAssignedPlate(plate) || typeof supplier !== 'string' || !supplier.trim() || !text || typeof text !== 'object' || Array.isArray(text)) continue;
+    const record: SupplierEnteredRecord = { supplierCode: supplier.trim(), plate: plateIdentityKey(plate), source: 'ERP5_PRODUCTS_SOURCE_TEXT',
+      sourceRef: String(doc.name ?? '').split('/').pop() ?? '', observedAt: capture.readTime, values: text as Record<string, unknown> };
+    const key = `${record.supplierCode}|${record.plate}`;
+    const seen = byKey.get(key);
+    byKey.set(key, seen === undefined ? record : seen && stableDigest(seen.values) === stableDigest(record.values) ? seen : null);
   }
-  return [...byPlate.values()].filter((x): x is SupplierEnteredRecord => x !== null).sort((a, b) => a.plate.localeCompare(b.plate));
+  return [...byKey.values()].filter((x): x is SupplierEnteredRecord => x !== null)
+    .sort((a, b) => `${a.supplierCode}|${a.plate}`.localeCompare(`${b.supplierCode}|${b.plate}`));
 }
-/** Merge supplements into a capture and re-seal its digest. Sheet plates without a products record may come from a backup. */
+/** Merge supplements into a capture and re-seal its digest. Only supplements whose «공급사 코드 + 차량번호» is a sheet row are kept. */
 export function withSupplements(capture: SharedSheetCapture, supplierEntered: SupplierEnteredRecord[], corrections: SheetCorrection[]): SharedSheetCapture {
-  const sheetPlates = new Set(capture.tabs.flatMap(t => t.values.slice(1).map(r => isAssignedPlate(r[4]) ? plateIdentityKey(r[4]) : '')).filter(Boolean));
-  const keep = supplierEntered.filter(x => sheetPlates.has(plateIdentityKey(x.plate)));
+  const rowKeys = new Set(capture.tabs.flatMap(t => t.values.slice(1).map(r => {
+    const code = sharedSheetChannels.find(x => x.tab === t.title && x.companyName === String(r[0] ?? '').trim())?.code;
+    return code && isAssignedPlate(r[4]) ? `${code}|${plateIdentityKey(r[4])}` : '';
+  })).filter(Boolean));
+  const key = (x: { supplierCode: string; plate: string }) => `${x.supplierCode}|${plateIdentityKey(x.plate)}`;
+  const keep = supplierEntered.filter(x => rowKeys.has(key(x)));
+  const fixes = corrections.filter(x => rowKeys.has(key(x)));
   const out: SharedSheetCapture = { ...structuredClone(capture), ...(keep.length ? { supplierEntered: keep } : {}),
-    ...(corrections.length ? { corrections: corrections.filter(x => sheetPlates.has(plateIdentityKey(x.plate))) } : {}) };
+    ...(fixes.length ? { corrections: fixes } : {}) };
   delete out.digest;
   out.digest = sharedSheetCaptureDigest(out);
   buildSharedSheetBatch(out);

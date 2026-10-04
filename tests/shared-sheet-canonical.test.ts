@@ -130,6 +130,13 @@ describe('shared sheet local source to Canonical', () => {
     const next = await planSharedSheetCanonical(s.store, later(capture({ 차량상태: '계약중' })), 'synthetic-target');
     expect(next.plan.entries[0]).toMatchObject({ action: 'HOLD', reasons: expect.arrayContaining(['STATUS_CHANGE_REQUIRES_REVIEW']) });
   });
+  it('never creates a second asset for a plate that already has one (even without offers)', async () => {
+    const s = await stores();
+    await s.store.seed({ vehicleAssets: [{ id: 'va_existing', vehicleModelId: 'vm_existing', status: 'AVAILABLE', plateNumber: 'TEST-FAKE-001',
+      revision: 1, createdAt: time, updatedAt: time } as never] });
+    const p = await planSharedSheetCanonical(s.store, capture(), 'synthetic-target');
+    expect(p.plan.entries[0]).toMatchObject({ action: 'HOLD', reasons: expect.arrayContaining(['EXISTING_ASSET_REQUIRES_REVIEW']) });
+  });
   it('HOLDs refinement order violations and preserves missing upstream cells', async () => {
     const c = capture({ 모델: '' }); const n = normalized(c);
     expect(n.record.candidate.issues).toContain('REFINEMENT_ORDER_VIOLATION');

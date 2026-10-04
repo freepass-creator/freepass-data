@@ -14,16 +14,17 @@ export type SharedSheetCapture = {
   /** Cell edits made on the shared sheet by people/AI sessions (who·when·before→after). */
   corrections?: SheetCorrection[];
 };
-export type SupplierEnteredRecord = { plate: string; source: 'ERP5_PRODUCTS_SOURCE_TEXT' | 'SHEET_BACKUP'; sourceRef: string;
+export type SupplierEnteredRecord = { supplierCode: string; plate: string; source: 'ERP5_PRODUCTS_SOURCE_TEXT' | 'SHEET_BACKUP'; sourceRef: string;
   observedAt: string; values: Record<string, unknown> };
-export type SheetCorrection = { plate: string; at: string; column: string; before: SheetCell; after: SheetCell; source: string };
-function supplementByPlate<T extends { plate: string }>(items: T[] | undefined, unique: boolean, fail: () => never): Map<string, T[]> {
+export type SheetCorrection = { supplierCode: string; plate: string; at: string; column: string; before: SheetCell; after: SheetCell; source: string };
+/** Supplements match one row by «공급사 코드 + 차량번호» — the same identity as the row itself, never the plate alone. */
+function supplementByPlate<T extends { plate: string; supplierCode: string }>(items: T[] | undefined, unique: boolean, fail: () => never): Map<string, T[]> {
   const out = new Map<string, T[]>();
   if (items === undefined) return out;
   if (!Array.isArray(items)) fail();
   for (const item of items) {
-    if (!item || typeof item !== 'object' || !isAssignedPlate(item.plate)) fail();
-    const key = plateIdentityKey(item.plate);
+    if (!item || typeof item !== 'object' || !isAssignedPlate(item.plate) || typeof item.supplierCode !== 'string' || !item.supplierCode) fail();
+    const key = `${item.supplierCode}|${plateIdentityKey(item.plate)}`;
     if (unique && out.has(key)) fail();
     (out.get(key) ?? out.set(key, []).get(key)!).push(structuredClone(item));
   }
@@ -75,6 +76,9 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
   }
   const seen = new Map<string, number>();
   for (const r of rows) if (r.identity) seen.set(r.identity, (seen.get(r.identity) ?? 0) + 1);
+  // One plate = one canonical row: the same plate offered by two suppliers at once is quarantined on every row.
+  const suppliersByPlate = new Map<string, Set<string>>();
+  for (const r of rows) if (r.plateKey && r.supplierCode) (suppliersByPlate.get(r.plateKey) ?? suppliersByPlate.set(r.plateKey, new Set()).get(r.plateKey)!).add(r.supplierCode);
   for (const s of c.supplierEntered ?? []) if (!timestamp(s?.observedAt) || !['ERP5_PRODUCTS_SOURCE_TEXT', 'SHEET_BACKUP'].includes(s?.source) ||
     typeof s.sourceRef !== 'string' || !s.values || typeof s.values !== 'object' || Array.isArray(s.values)) fail();
   const cell = (v: unknown) => v === null || typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v));
@@ -84,7 +88,9 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
   const corrections = supplementByPlate(c.corrections, false, fail);
   const records: SourceIntakeBatch['records'] = rows.map(r => {
     const duplicate = r.identity !== null && seen.get(r.identity)! > 1;
-    const quarantine = r.quarantine ?? (duplicate ? 'DUPLICATE_IDENTITY' : null);
+    const quarantine = r.quarantine ?? (duplicate ? 'DUPLICATE_IDENTITY'
+      : r.plateKey && (suppliersByPlate.get(r.plateKey)?.size ?? 0) > 1 ? 'PLATE_ON_MULTIPLE_SUPPLIERS' : null);
+    const rowKey = r.supplierCode && r.plateKey ? `${r.supplierCode}|${r.plateKey}` : '';
     const rowDigest = stableDigest(r.values);
     const sourceRecordId = r.identity && !quarantine ? r.identity : stableDigest([r.tab.title, r.index, rowDigest]);
     return { sourceRecordId, sourceFingerprint: stableDigest({ rowDigest, supplierCode: r.supplierCode }),
@@ -92,8 +98,8 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
         spreadsheetId: c.spreadsheetId, revision: c.revision ?? null, captureDigest: digest, rowDigest,
         supplierCode: r.supplierCode, quarantine,
         // Evidence beside the row, outside rowDigest/fingerprint: the sheet values themselves stay the RAW of record.
-        ...(r.plateKey && entered.has(r.plateKey) ? { supplierEntered: entered.get(r.plateKey)![0] } : {}),
-        ...(r.plateKey && corrections.has(r.plateKey) ? { corrections: corrections.get(r.plateKey) } : {}) } };
+        ...(rowKey && entered.has(rowKey) ? { supplierEntered: entered.get(rowKey)![0] } : {}),
+        ...(rowKey && corrections.has(rowKey) ? { corrections: corrections.get(rowKey) } : {}) } };
   });
   if (Math.min(...c.tabs.map(t => Date.parse(t.readTime))) !== Date.parse(c.readTime)) fail();
   return { laneId: 'PRODUCT_VEHICLE', source: { sourceId, kind: 'GOOGLE_SHEET', displayName: 'Shared supplier input',

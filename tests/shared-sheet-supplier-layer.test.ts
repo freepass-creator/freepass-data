@@ -9,8 +9,9 @@ import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js'
 
 const T = '2026-10-04T00:00:00.000Z', T2 = '2026-10-05T00:00:00.000Z';
 const mapValue = (o: Record<string, string>) => ({ mapValue: { fields: Object.fromEntries(Object.entries(o).map(([k, v]) => [k, { stringValue: v }])) } });
-const doc = (id: string, plate: string, source: Record<string, string>) => ({ name: `${ERP5_DOCUMENTS}/products/${id}`,
-  createTime: '2026-09-21T00:00:00Z', updateTime: '2026-09-21T00:00:00Z', fields: { car_number: { stringValue: plate }, '원문': mapValue(source) } });
+const doc = (id: string, plate: string, source: Record<string, string>, supplier = 'RP013') => ({ name: `${ERP5_DOCUMENTS}/products/${id}`,
+  createTime: '2026-09-21T00:00:00Z', updateTime: '2026-09-21T00:00:00Z',
+  fields: { car_number: { stringValue: plate }, provider_company_code: { stringValue: supplier }, '원문': mapValue(source) } });
 function erp5(products: ReturnType<typeof doc>[]): Erp5SourceCapture {
   const unsigned = { version: 'erp5-source-capture/1' as const, projectId: 'freepasserp5' as const, databaseId: '(default)' as const,
     consistency: 'READ_ONLY_TRANSACTION' as const, readTime: '2026-09-21T00:00:00Z', capturedAt: '2026-09-21T00:00:01Z',
@@ -32,15 +33,15 @@ describe('layer ② supplier-entered values and correction history', () => {
   it('reads products.원문 per plate and drops plates whose products disagree', () => {
     const got = supplierEnteredFromErp5(erp5([doc('p1', 'TEST-FAKE-001', { 전체: '공급사가 쓴 값' }),
       doc('p2', 'TEST-FAKE-002', { 차명: 'A' }), doc('p3', 'TEST-FAKE-002', { 차명: 'B' })]));
-    expect(got).toEqual([{ plate: 'TEST-FAKE-001', source: 'ERP5_PRODUCTS_SOURCE_TEXT', sourceRef: 'p1', observedAt: '2026-09-21T00:00:00Z',
+    expect(got).toEqual([{ supplierCode: 'RP013', plate: 'TEST-FAKE-001', source: 'ERP5_PRODUCTS_SOURCE_TEXT', sourceRef: 'p1', observedAt: '2026-09-21T00:00:00Z',
       values: { 전체: '공급사가 쓴 값' } }]);
   });
   it('attaches beside the row without changing the sheet RAW digest or fingerprint', () => {
     const base = buildSharedSheetBatch({ ...sheet(['TEST-FAKE-001', 'TEST-FAKE-002']), digest: undefined });
     const sealed = withSupplements(sheet(['TEST-FAKE-001', 'TEST-FAKE-002']),
-      [{ plate: 'TEST-FAKE-001', source: 'ERP5_PRODUCTS_SOURCE_TEXT', sourceRef: 'p1', observedAt: T, values: { 차명: '원래 값' } },
-       { plate: 'TEST-FAKE-999', source: 'SHEET_BACKUP', sourceRef: 'backup', observedAt: T, values: {} }],
-      [{ plate: 'TEST-FAKE-002', at: T, column: '세부트림', before: 'ECH 아이코닉', after: '아이코닉', source: '기준 한 장' }]);
+      [{ supplierCode: 'RP013', plate: 'TEST-FAKE-001', source: 'ERP5_PRODUCTS_SOURCE_TEXT', sourceRef: 'p1', observedAt: T, values: { 차명: '원래 값' } },
+       { supplierCode: 'RP013', plate: 'TEST-FAKE-999', source: 'SHEET_BACKUP', sourceRef: 'backup', observedAt: T, values: {} }],
+      [{ supplierCode: 'RP013', plate: 'TEST-FAKE-002', at: T, column: '세부트림', before: 'ECH 아이코닉', after: '아이코닉', source: '기준 한 장' }]);
     const batch = buildSharedSheetBatch(sealed);
     const by = new Map(batch.records.map(r => [(r.payload.values as unknown[])[4], r]));
     expect(by.get('TEST-FAKE-001')!.payload.supplierEntered).toMatchObject({ values: { 차명: '원래 값' } });
@@ -51,7 +52,7 @@ describe('layer ② supplier-entered values and correction history', () => {
   });
   it('rejects a supplement with two supplier-entered records for one plate', () => {
     const c = sheet(['TEST-FAKE-001']);
-    const rec = { plate: 'TEST-FAKE-001', source: 'SHEET_BACKUP' as const, sourceRef: 'b', observedAt: T, values: {} };
+    const rec = { supplierCode: 'RP013', plate: 'TEST-FAKE-001', source: 'SHEET_BACKUP' as const, sourceRef: 'b', observedAt: T, values: {} };
     expect(() => withSupplements(c, [rec, { ...rec }], [])).toThrow();
   });
 });
@@ -88,9 +89,31 @@ describe('Codex #324 review', () => {
   });
   it('rejects corrections without valid before/after cells', () => {
     const c = sheet(['TEST-FAKE-001']);
-    const ok = { plate: 'TEST-FAKE-001', at: T, column: '세부트림', before: 'A', after: 'B', source: 's' };
+    const ok = { supplierCode: 'RP013', plate: 'TEST-FAKE-001', at: T, column: '세부트림', before: 'A', after: 'B', source: 's' };
     expect(() => withSupplements(c, [], [ok])).not.toThrow();
     for (const bad of [{ ...ok, before: undefined }, { ...ok, after: { x: 1 } }, (({ after: _, ...x }) => x)(ok)])
       expect(() => withSupplements(c, [], [bad as unknown as typeof ok])).toThrow();
+  });
+});
+
+describe('one plate = one canonical row (AI 상황실 #324 review)', () => {
+  it('quarantines the same plate offered by two suppliers and attaches supplements only by supplier+plate', () => {
+    const a = sharedSheetChannels.find(x => x.companyName === '웰릭스')!, b = sharedSheetChannels.find(x => x.code !== a.code && x.tab !== a.tab)!;
+    const row = (company: string, plate: string) => sharedSheetHeaders.map(h => ({ 회사명: company, 차량번호: plate, 차량상태: '출고가능' } as Record<string, string>)[h] ?? '');
+    const capture: SharedSheetCapture = { schema: 'shared-sheet-capture/v1', spreadsheetId: 'synthetic-sheet', layoutVersion: '2026-10-04-no-account',
+      readTime: T, revision: 'r', tabs: [...new Set(sharedSheetChannels.map(x => x.tab))].map(title => {
+        const values = [[...sharedSheetHeaders], ...(title === a.tab ? [row(a.companyName, 'TEST-FAKE-001'), row(a.companyName, 'TEST-FAKE-002')] : []),
+          ...(title === b.tab ? [row(b.companyName, 'TEST-FAKE-001'), row(b.companyName, 'TEST-FAKE-003')] : [])];
+        return { title, readTime: T, complete: true as const, rowCount: values.length, values };
+      }) };
+    const sealed = withSupplements(capture, [
+      { supplierCode: a.code, plate: 'TEST-FAKE-002', source: 'SHEET_BACKUP', sourceRef: 'x', observedAt: T, values: { 차명: 'A값' } },
+      { supplierCode: a.code, plate: 'TEST-FAKE-003', source: 'SHEET_BACKUP', sourceRef: 'x', observedAt: T, values: { 차명: '다른 공급사 차' } }], []);
+    const recs = buildSharedSheetBatch(sealed).records;
+    const of = (company: string, plate: string) => recs.find(r => (r.payload.values as unknown[])[0] === company && (r.payload.values as unknown[])[4] === plate)!;
+    expect(of(a.companyName, 'TEST-FAKE-001').payload.quarantine).toBe('PLATE_ON_MULTIPLE_SUPPLIERS');
+    expect(of(b.companyName, 'TEST-FAKE-001').payload.quarantine).toBe('PLATE_ON_MULTIPLE_SUPPLIERS');
+    expect(of(a.companyName, 'TEST-FAKE-002').payload.supplierEntered).toMatchObject({ values: { 차명: 'A값' } });
+    expect(of(b.companyName, 'TEST-FAKE-003').payload).not.toHaveProperty('supplierEntered');
   });
 });

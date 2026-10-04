@@ -98,6 +98,9 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
         const matchingAssets = new Set(assets.filter(x => plateIdentityKey(x.plateNumber) === c.carNumber).map(x => x.id));
         const matchingProducts = new Set(products.filter(x => x.vehicleAssetId && matchingAssets.has(x.vehicleAssetId)).map(x => x.id));
         if (offers.some(x => x.supplierId === supplier && matchingProducts.has(x.productId))) reasons.push('EXISTING_IDENTITY_REQUIRES_SOURCE_LINK');
+        // One plate = one canonical vehicle: an existing asset with this plate (any supplier, with or without offers)
+        // is never duplicated by a new CREATE; linking it needs review.
+        else if (matchingAssets.size) reasons.push('EXISTING_ASSET_REQUIRES_REVIEW');
         entry.action = 'CREATE';
         entry.create = { ...base, decision: { supplierId: supplier,
           vehicleModel: { action: 'CREATE', id: opaque('vm', p.sourceId, c.sourceRecordId) },

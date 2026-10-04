@@ -26,9 +26,9 @@ export async function main(args = process.argv.slice(2)) {
   const erp5 = get('--erp5-capture'), supplementPath = get('--supplement');
   const supplement = supplementPath ? JSON.parse(await readFile(supplementPath, 'utf8')) as { supplierEntered?: SupplierEnteredRecord[]; corrections?: SheetCorrection[] } : {};
   const fromErp5 = erp5 ? supplierEnteredFromErp5(JSON.parse(await readFile(erp5, 'utf8'))) : [];
-  const covered = new Set(fromErp5.map(x => x.plate));
+  const covered = new Set(fromErp5.map(x => `${x.supplierCode}|${x.plate}`));
   const sealed = erp5 || supplementPath ? withSupplements(capture,
-    [...fromErp5, ...(supplement.supplierEntered ?? []).filter(x => !covered.has(x.plate))], supplement.corrections ?? []) : capture;
+    [...fromErp5, ...(supplement.supplierEntered ?? []).filter(x => !covered.has(`${x.supplierCode}|${x.plate}`))], supplement.corrections ?? []) : capture;
   const batch = buildSharedSheetBatch(sealed);
   await writePrivateArtifact(out, sealed);
   console.log(JSON.stringify({ schema: sealed.schema, tabs: sealed.tabs.length, records: batch.records.length,
