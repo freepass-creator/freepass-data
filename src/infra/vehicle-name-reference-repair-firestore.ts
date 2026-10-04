@@ -75,7 +75,24 @@ const NAME_KINDS = new Set(['master', 'product', 'trim', 'productTrim', 'trimSub
 /** Kinds that write a vehicle_master document (a retired master is frozen for all of them). */
 const MASTER_DOC_KINDS = new Set(['master', 'masterModel', 'masterGenCode']);
 /** Every trim name inside variants must also be in the top-level trims list (consumers read both). */
-const variantTrimNames = (variants: unknown) => (Array.isArray(variants) ? variants : []).flatMap((v) => (Array.isArray((v as Record<string, unknown>)?.trims) ? (v as Record<string, unknown>).trims as unknown[] : []).map(clean));
+/** Shape check too: variants is a list of objects; a variant's trims, when present, is a list of strings — anything else is refused. */
+const variantTrimNames = (variants: unknown): string[] => {
+  if (variants === undefined || variants === null) return [];
+  if (!Array.isArray(variants)) throw new Error('variants must be a list');
+  return variants.flatMap((v) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('each variant must be an object');
+    const trims = (v as Record<string, unknown>).trims;
+    if (trims === undefined || trims === null) return [];
+    if (!Array.isArray(trims) || trims.some((t) => typeof t !== 'string')) throw new Error('variant trims must be a list of strings');
+    return trims.map(clean);
+  });
+};
+/** A stored top-level trims list used for the ⊆ check must be a list of strings. */
+const storedTrimList = (value: unknown, where: string): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  if (value.some((t) => typeof t !== 'string')) throw new Error(`stored trims must be a list of strings ${where}`);
+  return value.map(clean);
+};
 /** Stored value matches the plan's `from`. A blank `from` only matches a truly blank value: missing, null or an empty string. */
 export const matchesFrom = (stored: unknown, from: string) => clean(from)
   ? clean(stored) === clean(from)
@@ -97,6 +114,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   for (const v of variantRepairs) {
     if (!v.id?.trim() || !/^[0-9a-f]{64}$/.test(v.fromDigest ?? '') || !Array.isArray(v.to) || !v.to.length) throw new Error('masterVariantRepair requires id, fromDigest and a non-empty variants list');
     if (typeof v.evidence !== 'string' || !v.evidence.trim()) throw new Error(`masterVariantRepair ${v.id} requires evidence`);
+    variantTrimNames(v.to); // shape
     if ((v.trims === undefined) !== (v.fromTrimsDigest === undefined)) throw new Error(`masterVariantRepair ${v.id} needs trims and fromTrimsDigest together`);
     if (v.trims !== undefined) {
       if (!/^[0-9a-f]{64}$/.test(v.fromTrimsDigest ?? '') || !Array.isArray(v.trims) || !v.trims.length) throw new Error(`masterVariantRepair ${v.id} requires a non-empty trims list and fromTrimsDigest`);
@@ -256,7 +274,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       throw new Error(`masterVariantRepair ${v.id} stored trims is not a list — pass trims`);
     }
     if (v.trims === undefined && Array.isArray(snapshot.data()?.trims)) {
-      const listed = new Set((snapshot.data()!.trims as unknown[]).map(clean));
+      const listed = new Set(storedTrimList(snapshot.data()!.trims, snapshot.ref.path));
       const missing = variantTrimNames(v.to).filter((t) => !listed.has(t));
       if (missing.length) throw new Error(`masterVariantRepair ${v.id} variants name trims missing from the stored trims (pass trims): ${[...new Set(missing)].join(', ')}`);
     }
@@ -470,7 +488,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (v.trims !== undefined) continue;
       const stored = (await transaction.getAll(variantRefs[index]!))[0]!.data()?.trims;
       const names = variantTrimNames(v.to);
-      if (!Array.isArray(stored) ? names.length > 0 : names.some((t) => !stored.map(clean).includes(t))) throw new Error(`transaction variants name trims missing from the stored trims ${variantRefs[index]!.path}`);
+      const listed = storedTrimList(stored, variantRefs[index]!.path);
+      if (!listed ? names.length > 0 : names.some((t) => !listed.includes(t))) throw new Error(`transaction variants name trims missing from the stored trims ${variantRefs[index]!.path}`);
     }
     current.forEach((snapshot, index) => {
       if (!snapshot.exists || !matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
@@ -513,14 +532,14 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     const stored = field === 'master_id' ? data?.[field] : clean(data?.[field]);
     if (stored !== (field === 'master_id' ? item.to : clean(item.to))) throw new Error(`readback mismatch ${snapshot.ref.path}`);
     const aliasField = ALIAS_FIELD[kind];
-    if (aliasField && clean(item.from)) {
-      // The old name must be kept as an alias, and aliases present before the repair must still be there.
+    if (aliasField) {
+      // Aliases present before the repair must still be there (also for a blank fill); a non-blank old name must be added.
       const aliases: unknown[] = Array.isArray(data?.[aliasField]) ? data[aliasField] : [];
       const before = snapshots[index]!.data()?.[aliasField];
       const kept = Array.isArray(before) ? before.every((a: unknown) => aliases.includes(a)) : before === undefined || before === null;
       const raw = snapshots[index]!.data()?.[field];
       const rawKept = typeof raw !== 'string' || !clean(raw) || raw === clean(item.from) || aliases.includes(raw);
-      if (!aliases.map(clean).includes(clean(item.from)) || !kept || !rawKept) throw new Error(`readback alias mismatch ${snapshot.ref.path}`);
+      if ((clean(item.from) && !aliases.map(clean).includes(clean(item.from))) || !kept || !rawKept) throw new Error(`readback alias mismatch ${snapshot.ref.path}`);
     }
   });
   const retireReadback = retireRefs.length ? await db.getAll(...retireRefs) : [];

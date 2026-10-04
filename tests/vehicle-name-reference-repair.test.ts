@@ -126,6 +126,12 @@ describe('vehicle-name reference repair gate', () => {
     const create = { id: 'n', evidence: 'x', data: { id: 'n', maker: '현대', model: '그랜저', sub_model: '그랜저 X', origin: '국산', trims: ['A'], variants: [{ trims: ['A', 'Z'] }] } };
     expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [create] })).toThrow(/missing from trims: Z/);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, trims: undefined } }] })).toThrow(/not a list/);
+    // variants shape: a variant's trims must be a list of strings, variants a list of objects
+    for (const bad of [[{ trims: 'B' }], [{ trims: ['A', 3] }], ['x'], { trims: ['A'] }]) {
+      expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, to: bad as never, trims: ['A'] }] })).toThrow(/variant|variants/);
+      expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ id: 'm', fromDigest: 'a'.repeat(64), to: bad as never, evidence: 'x' }] })).toThrow(/variant|variants/);
+      expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, variants: bad } }] })).toThrow(/variant|variants/);
+    }
     expect(validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, trims: undefined, variants: [{ fuel: '가솔린' }] } }] })).toMatchObject({ masterCreateCount: 1 });
   });
   it('caps one plan below the Firestore transaction write limit', () => {

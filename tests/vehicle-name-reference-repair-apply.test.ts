@@ -318,6 +318,11 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     await applyVehicleNameReferenceRepair({ ...base, masterGenCodeRepairs: [{ id: 'm-9', from: '', to: 'ME', evidence: '세부모델 이름의 개발코드' }] });
     expect(store.get('vehicle_master/m-9')).toMatchObject({ gen_code: 'ME' });
     expect(store.get('vehicle_master/m-9')!.gen_code_aliases).toBeUndefined();
+    // a blank fill still keeps the aliases that were there (readback catches a loss)
+    store.set('vehicle_master/m-8', { id: 'm-8', maker: '현대', model: '아이오닉 9', sub_model: '아이오닉 8', gen_code: '', gen_code_aliases: ['OLD'] });
+    const original = db.runTransaction;
+    db.runTransaction = async (fn) => { await original(fn); store.set('vehicle_master/m-8', { ...store.get('vehicle_master/m-8')!, gen_code_aliases: [] }); };
+    try { await expect(applyVehicleNameReferenceRepair({ ...base, masterGenCodeRepairs: [{ id: 'm-8', from: '', to: 'ME', evidence: 'x' }] })).rejects.toThrow(/readback alias mismatch/); } finally { db.runTransaction = original; }
     // a stored code is not a blank: the plan's blank from no longer matches
     await expect(applyVehicleNameReferenceRepair({ ...base, masterGenCodeRepairs: [{ id: 'm-9', from: '', to: 'ME1', evidence: 'x' }] })).rejects.toThrow(/precondition/);
   });
@@ -352,6 +357,10 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
       store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: bad });
       await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] })).rejects.toThrow(/not a list/);
     }
+    // a stored trims list with non-string entries is refused
+    store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: ['프리미엄', 3] });
+    await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] })).rejects.toThrow(/list of strings/);
+    store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: ['프리미엄'] });
     // variants without any trim names need no trims list
     await applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린' }], evidence: 'x' }] });
   });
