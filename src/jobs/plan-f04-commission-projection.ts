@@ -13,14 +13,21 @@ export async function main(args = process.argv.slice(2)) {
   const parsed = new Map<string, string>();
   for (let i = 0; i < args.length; i += 2) {
     const k = args[i]!, v = args[i + 1];
-    if (!['--from-batchget', '--facts', '--open-from', '--out'].includes(k) || parsed.has(k) || !v || v.startsWith('--')) throw new Error('INVALID_ARGUMENT');
+    if (!['--from-batchget', '--grid-meta', '--facts', '--open-from', '--out'].includes(k) || parsed.has(k) || !v || v.startsWith('--')) throw new Error('INVALID_ARGUMENT');
     parsed.set(k, v);
   }
   const batchPath = parsed.get('--from-batchget'), out = parsed.get('--out'), openFromMonth = parsed.get('--open-from');
   if (!batchPath || !out || !openFromMonth) throw new Error('F04_PLAN_ARGUMENTS_REQUIRED');
   const batch = JSON.parse(await readFile(batchPath, 'utf8')) as { valueRanges?: Array<{ range?: string; values?: unknown[][] }> };
   const [intake, installments] = batch.valueRanges ?? [];
-  if (!/^'?접수'?!/.test(intake?.range ?? '') || !/^'?회차청구'?!/.test(installments?.range ?? '')) throw new Error('F04_BATCHGET_RANGES_MISMATCH');
+  // 행 번호를 시트 행과 맞추려면 두 탭 모두 A1 부터, 그 탭의 마지막 행까지 읽어야 한다(일부만 읽으면 회차청구 대조가 빠진다).
+  const meta = JSON.parse(await readFile(parsed.get('--grid-meta') ?? '', 'utf8').catch(() => { throw new Error('F04_GRID_META_REQUIRED'); })) as { sheets?: Array<{ properties?: { title?: string; gridProperties?: { rowCount?: number } } }> };
+  const rowsOf = (title: string) => meta.sheets?.find(x => x.properties?.title === title)?.properties?.gridProperties?.rowCount;
+  const whole = (range: string | undefined, title: string) => {
+    const m = /^'?([^'!]+)'?!A1:[A-Z]+(\d+)$/.exec(range ?? '');
+    return !!m && m[1] === title && Number(m[2]) === rowsOf(title);
+  };
+  if (!whole(intake?.range, '접수') || !whole(installments?.range, '회차청구')) throw new Error('F04_BATCHGET_RANGES_MISMATCH');
   const factsPath = parsed.get('--facts');
   const facts = factsPath ? JSON.parse(await readFile(factsPath, 'utf8')) as Record<string, { fuel?: string }> : {};
   const plan = planF04CommissionProjection({ intake: intake!.values ?? [], installments: installments!.values ?? [], openFromMonth, readAt: new Date().toISOString(), facts });

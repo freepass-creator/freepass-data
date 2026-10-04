@@ -77,6 +77,22 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
     expect(p.blanks.map(b => `${b.row}${b.column}:${b.reason}`)).toEqual(['3AE:SUPPLIER_CODE_UNRESOLVED', '3AJ:SUPPLIER_CODE_UNRESOLVED', '4AE:NOT_A_COMMISSION_ROW', '4AJ:NOT_A_COMMISSION_ROW']);
     expect(p.skipped.DUPLICATE_KEY).toBe(2);
   });
+  it('an empty or text rent is unknown, never 0 — no 0-won fill', () => {
+    const p = plan([row({ 차량번호: '1', 렌탈료: '' }), row({ 차량번호: '2', 렌탈료: '협의' })]);
+    expect(p.fills).toEqual([]);
+    expect(new Set(p.blanks.map(b => b.reason))).toEqual(new Set(['INVALID_PRICE_TERM_INPUT']));
+  });
+  it('billing year/month: both blank = open, one missing or unreadable («8월») = not touched', () => {
+    const p = plan([row({ 차량번호: '1', 청구년: '', 청구월: '' }), row({ 차량번호: '2', 청구월: '8월' }), row({ 차량번호: '3', 청구년: '' })]);
+    expect(p.fills.map(f => f.row)).toEqual([3, 3]);
+    expect(p.skipped).toEqual({ BILLING_MONTH_UNREADABLE: 2 });
+  });
+  it('individual agreements (접수 행 413·466·473·474·475, or 비고 «개별») never get the general amount', () => {
+    const filler = Array.from({ length: 410 }, (_, i) => row({ 차량번호: `x${i}`, 취소: true }));
+    const p = plan([...filler, row({ 차량번호: '413행' }), row({ 차량번호: 'y', 비고: '개별 합의 40만' })]);
+    expect(p.fills).toEqual([]);
+    expect(p.blanks.map(b => `${b.row}${b.column}:${b.reason}`)).toEqual(['413AE:INDIVIDUAL_AGREEMENT', '413AJ:INDIVIDUAL_AGREEMENT', '414AE:INDIVIDUAL_AGREEMENT', '414AJ:INDIVIDUAL_AGREEMENT']);
+  });
   it('stops when the layout moved or the month is malformed', () => {
     const moved = [...H]; moved.splice(30, 0, 'x');
     expect(() => planF04CommissionProjection({ intake: [['설명'], moved], installments: INST, openFromMonth: '2026-09', readAt: 'x' })).toThrow('F04_FEE_COLUMN_MOVED');

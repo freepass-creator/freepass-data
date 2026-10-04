@@ -57,9 +57,14 @@ export const protectedSides = (remark: string): Set<F04Column> => {
 const text = (v: unknown) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
 const truthy = (v: unknown) => v === true || /^(TRUE|true|1|예|Y)$/.test(text(v));
 const int = (v: unknown): number | null => {
-  const n = typeof v === 'number' ? v : Number(text(v).replace(/[,\s원₩]/g, ''));
+  const raw = typeof v === 'number' ? '' : text(v).replace(/[,\s원₩]/g, '');
+  if (typeof v !== 'number' && !/^\d+$/.test(raw)) return null; // 빈칸·글자는 0 이 아니라 «모름»
+  const n = typeof v === 'number' ? v : Number(raw);
   return Number.isSafeInteger(n) && n >= 0 ? n : null;
 };
+/** F04 수수료표 160·163행이 정한 개별 합의 계약의 접수 행(손오공 413 · 아이카 466·473·474·475). 엔진의 개별 근거 없이는
+ * 일반 규칙 금액을 제안하지 않는다. */
+const INDIVIDUAL_LEDGER_ROWS = new Set([413, 466, 473, 474, 475]);
 const empty = (v: unknown) => v === undefined || v === null || v === '';
 const plateKey = (v: unknown) => text(v).replace(/\s+/g, '');
 
@@ -137,10 +142,13 @@ export function planF04CommissionProjection(input: {
     const plate = plateKey(row['차량번호']);
     if ((keyCount.get(key(cells)) ?? 0) > 1) { skip('DUPLICATE_KEY'); continue; }
     if (truthy(row['취소'])) { skip('CANCELLED'); continue; }
+    // 청구년·청구월: 둘 다 빈칸이면 아직 안 정한 열린 줄. 하나만 있거나 숫자로 못 읽으면(«8월» 등) 판독 실패로 건드리지 않는다.
     const y = int(row['청구년']), m = int(row['청구월']);
+    if ((empty(row['청구년']) !== empty(row['청구월'])) || (!empty(row['청구년']) && (y === null || m === null || m < 1 || m > 12))) { skip('BILLING_MONTH_UNREADABLE'); continue; }
     const closed = truthy(row['청구']) ? 'ALREADY_BILLED' : y !== null && m !== null && (y < by || (y === by && m < bm)) ? 'BILLING_MONTH_CLOSED' : null;
     const guarded = protectedSides(text(row['비고']));
-    const built = f04RowInput(row, input.facts);
+    const individual = INDIVIDUAL_LEDGER_ROWS.has(sheetRow) || /개별/.test(text(row['비고']));
+    const built = individual ? { reason: 'INDIVIDUAL_AGREEMENT' } : f04RowInput(row, input.facts);
     if (closed) {
       // 닫힌 줄은 쓰지 않는다. 적힌 값이 계산과 다르면 사람 확인 목록에만.
       skip(closed);
