@@ -145,6 +145,9 @@ export function planF04CommissionProjection(input: {
     formulas.forEach((r, i) => { if (i >= hi) ((r as unknown[] | undefined) ?? []).forEach((x, c) => {
       if (formula(x) && /ARRAYFORMULA|FILTER\(|QUERY\(|SORT\(|UNIQUE\(|MAP\(|BYROW\(|SEQUENCE\(|IMPORTRANGE\(|\{/i.test(String(x))) spill.add(c);
     }); });
+    // 흐르는 수식은 오른쪽·아래로 펼쳐진다 — AJ 열 또는 그 왼쪽에 있으면 AE·AJ 칸을 덮을 수 있어 어느 칸이 결과인지 알 수 없다.
+    // 그런 시트는 계획을 멈춘다(fail-closed). 지금 접수 탭의 흐르는 수식은 AJ 오른쪽(청구상태·지급상태)에만 있다.
+    if ([...spill].some(c => c <= colOf('AJ'))) throw new Error('F04_SPILL_FORMULA_MAY_COVER_FEE_COLUMNS');
     const dateCols = new Set(['접수일', '인도일', '다음회차일', '환수일'].map(h => header.indexOf(h)).filter(c => c >= 0));
     const sameCell = (a: unknown, b: unknown, c: number) => {
       if (empty(a) && empty(b)) return true;

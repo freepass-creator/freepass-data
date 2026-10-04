@@ -113,12 +113,14 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
     const f1 = [...v1], f2 = [...v2]; f1[at('청구')] = '=FALSE()'; f2[at('청구')] = true; // 4행 청구가 그 사이 TRUE 로
     expect(() => planF04CommissionProjection({ intake: intake(v1, v2), intakeFormulas: intake(f1, f2), installments: INST, openFromMonth: '2026-09', readAt: 'x' })).toThrow('F04_FORMULA_READ_MISMATCH');
   });
-  it('an AE·AJ column carrying an array formula anywhere is never filled (its spilled blanks are not empty cells)', () => {
+  it('a spilling formula at or left of AJ (it may cover AE·AJ) stops the plan; one to the right of AJ is fine', () => {
     const v1 = row({ 차량번호: '12가3456' }), v2 = row({ 차량번호: '12가3457' });
-    const f1 = [...v1], f2 = [...v2]; f1[at('판매수수료')] = '=ARRAYFORMULA(L3:L*0)';
-    const p = planF04CommissionProjection({ intake: intake(v1, v2), intakeFormulas: intake(f1, f2), installments: INST, openFromMonth: '2026-09', readAt: 'x' });
-    expect(p.fills.map(f => `${f.row}${f.column}`)).toEqual(['3AJ', '4AJ']);
-    expect(p.skipped.FORMULA_CELL).toBe(2);
+    for (const h of ['판매수수료', '공급사수수료율', '렌탈료']) {
+      const f1 = [...v1]; f1[at(h)] = '={0,""}';
+      expect(() => planF04CommissionProjection({ intake: intake(v1, v2), intakeFormulas: intake(f1, [...v2]), installments: INST, openFromMonth: '2026-09', readAt: 'x' }), h).toThrow('F04_SPILL_FORMULA_MAY_COVER_FEE_COLUMNS');
+    }
+    const right = [...v1]; right[at('계약형태')] = '=ARRAYFORMULA(A3:A)';
+    expect(() => planF04CommissionProjection({ intake: intake(v1, v2), intakeFormulas: intake(right, [...v2]), installments: INST, openFromMonth: '2026-09', readAt: 'x' })).not.toThrow();
   });
   it('a number typed between the two reads (value read empty, second read has it) is compared, never filled', () => {
     const values = intake(row({ 차량번호: '12가3456' }));
