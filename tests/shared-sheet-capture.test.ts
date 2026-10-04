@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { captureFromBatchGet, readSharedSheetCapture, sharedSheetTabs, sharedSheetCaptureRanges } from '../src/infra/shared-sheet-capture-reader.js';
+import { captureFromBatchGet, sharedSheetTabs, sharedSheetCaptureRanges, type SheetsBatchGet } from '../src/adapters/shared-sheet-capture.js';
+import { readSheetsBatchGet } from '../src/infra/shared-sheet-capture-reader.js';
+const readSharedSheetCapture = async (id: string, ports: { accessToken: () => Promise<string>; now: () => string; fetcher: typeof fetch }) =>
+  captureFromBatchGet(id, await readSheetsBatchGet(id, sharedSheetCaptureRanges(), ports) as SheetsBatchGet, ports.now());
 import { buildSharedSheetBatch, sharedSheetChannels, sharedSheetHeaders } from '../src/adapters/shared-sheet-source.js';
 import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
 import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';

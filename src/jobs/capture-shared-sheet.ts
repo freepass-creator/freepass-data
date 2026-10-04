@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { captureFromBatchGet, readSharedSheetCapture } from '../infra/shared-sheet-capture-reader.js';
+import { captureFromBatchGet, sharedSheetCaptureRanges, type SheetsBatchGet } from '../adapters/shared-sheet-capture.js';
+import { readSheetsBatchGet } from '../infra/shared-sheet-capture-reader.js';
 import { buildSharedSheetBatch } from '../adapters/shared-sheet-source.js';
 import { writePrivateArtifact } from './ingest-shared-sheet-canonical.js';
 
@@ -14,7 +15,8 @@ export async function main(args = process.argv.slice(2)) {
   const local = get('--from-batchget');
   if (local && !get('--read-time')) throw new Error('READ_TIME_REQUIRED_FOR_LOCAL_BATCHGET');
   const capture = local ? captureFromBatchGet(id, JSON.parse(await readFile(local, 'utf8')), get('--read-time')!)
-    : await readSharedSheetCapture(id);
+    : await (async () => { const readTime = new Date().toISOString();
+      return captureFromBatchGet(id, await readSheetsBatchGet(id, sharedSheetCaptureRanges()) as SheetsBatchGet, readTime); })();
   const batch = buildSharedSheetBatch(capture);
   await writePrivateArtifact(out, capture);
   console.log(JSON.stringify({ schema: capture.schema, tabs: capture.tabs.length, records: batch.records.length,
