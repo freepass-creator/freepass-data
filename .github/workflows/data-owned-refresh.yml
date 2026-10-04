@@ -5,10 +5,12 @@ on:
     inputs:
       mode:
         type: choice
-        options: [shadow, execute]
+        options: [shadow, execute, shared-sheet-dry-run, shared-sheet-apply]
         default: shadow
   schedule:
     - cron: '17 * * * *'
+    # 공통 시트 데일리 박제(대표 «두 갈래»): 매일 03:40 KST. 같은 동시성 그룹이라 매시 배달과 겹치지 않는다.
+    - cron: '40 18 * * *'
 
 # Repository concurrency is NOT cross-repository locking. The adapter also
 # requires the old writer disabled, drained and fenced at its IAM identity.
@@ -23,7 +25,10 @@ permissions:
 
 jobs:
   refresh:
-    if: vars.FREEPASS_DATA_REFRESH_OWNER == 'freepass-data' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'shadow')
+    if: >-
+      github.event.schedule != '40 18 * * *' &&
+      (github.event_name != 'workflow_dispatch' || !startsWith(inputs.mode, 'shared-sheet')) &&
+      (vars.FREEPASS_DATA_REFRESH_OWNER == 'freepass-data' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'shadow'))
     environment: data-production-delivery
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -125,3 +130,93 @@ jobs:
         if: always()
         run: |
           rm -f engine/tmp/firebase-auth/sheets.json engine/sonokong/lib/wonja/.손오공계정.json engine/sonokong/lib/wonja/.손오공토큰.json
+
+  # 공통 입력시트 → FreePass Data Canonical 데일리 박제. ERP4 를 거치지 않고 Data 자기 신원(위 refresh 와 같은 신원·환경)으로 돈다.
+  # 순서: ERP5 products 캡처(공급사 입력값 ②) → 공통 시트 캡처 → 계획(dry-run) → (apply 일 때만) 같은 계획 digest 로 적용·되읽기.
+  shared-sheet-daily:
+    if: github.event.schedule == '40 18 * * *' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.mode, 'shared-sheet'))
+    environment: data-production-delivery
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GOOGLE_CLOUD_PROJECT: freepasserp5
+      FIREBASE_PROJECT_ID: freepasserp5
+      GOOGLE_SHEETS_SUBJECT: pyh@teamjpk.com
+      SHARED_SHEET_ID: ${{ vars.FREEPASS_DATA_SHARED_SHEET_ID }}
+      EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET }}
+      # 예약 실행은 적용까지, 수동 실행은 고른 모드대로.
+      APPLY: ${{ github.event_name == 'schedule' || inputs.mode == 'shared-sheet-apply' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Require the Data delivery identity, sheet and private evidence bucket
+        env:
+          PROVIDER: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
+          ACCOUNT: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          test -n "$PROVIDER"
+          test "$ACCOUNT" = 'github-data-inventory-writer@freepasserp5.iam.gserviceaccount.com'
+          test -n "$SHARED_SHEET_ID"
+          test -n "$EVIDENCE_BUCKET"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
+          service_account: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Prepare private Sheets delegation credential
+        env:
+          SHEETS_SA: ${{ secrets.GOOGLE_SA_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "$SHEETS_SA"
+          umask 077
+          mkdir -p "$RUNNER_TEMP/shared-sheet"
+          printf '%s' "$SHEETS_SA" > "$RUNNER_TEMP/shared-sheet/sheets.json"
+      - name: Capture, plan and (apply) — counts only in the public log
+        run: |
+          set -euo pipefail
+          umask 077
+          T="$RUNNER_TEMP/shared-sheet"
+          export GOOGLE_SHEETS_APPLICATION_CREDENTIALS="$T/sheets.json"
+          export FREEPASS_ERP5_READ_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+          export FREEPASS_DATA_EVIDENCE_BUCKET="$EVIDENCE_BUCKET"
+          node --import tsx src/jobs/inspect-erp5-source.ts --live-read-only > "$T/erp5-report.json"
+          ERP5_CAPTURE="$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).privateCapturePath)" "$T/erp5-report.json")"
+          node --import tsx src/jobs/capture-shared-sheet.ts --spreadsheet "$SHARED_SHEET_ID" --erp5-capture "$ERP5_CAPTURE" --out "$T/capture.json"
+          node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --capture "$T/capture.json" --plan-out "$T/plan.json" > "$T/report.json"
+          node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0)process.exit(1);const {suppliers,...s}=r;console.log(JSON.stringify(s,null,2))" "$T/report.json"
+          if [ "$APPLY" = 'true' ]; then
+            DIGEST="$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).planDigest)" "$T/report.json")"
+            set +e
+            node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --apply --plan "$T/plan.json" --expected-plan-digest "$DIGEST" > "$T/apply.json"
+            code=$?
+            set -e
+            cat "$T/apply.json"
+            # PARTIAL_HOLD(=2) is expected while some cars are held; anything else, or a read-back mismatch, fails the run.
+            node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));const ok=['APPLIED','PARTIAL_HOLD'].includes(r.status)&&(r.reconciliation?.readbackMismatches??1)===0;process.exit(ok?0:1)" "$T/apply.json"
+            test "$code" = 0 -o "$code" = 2
+          fi
+      - name: Preserve private capture, plan and reports (location not printed)
+        if: always()
+        run: |
+          set -euo pipefail
+          T="$RUNNER_TEMP/shared-sheet"
+          uri="gs://$EVIDENCE_BUCKET/shared-sheet-daily/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          for f in capture.json plan.json report.json apply.json; do
+            if test -f "$T/$f"; then
+              gcloud storage cp --no-user-output-enabled "$T/$f" "$uri/$f" --if-generation-match=0
+              gcloud storage cp --no-user-output-enabled "$uri/$f" "$T/$f.readback"
+              cmp "$T/$f" "$T/$f.readback"
+            fi
+          done
+          echo "private evidence stored and verified"
+      - name: Remove temporary credentials
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/shared-sheet"
