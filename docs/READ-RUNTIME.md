@@ -108,7 +108,7 @@ Admin 전용 `data[].offers[].priceTerms[].supplierBillingFee` / `channelPayoutF
 
 - 스타 RP018·스카이 RP033 재렌트: 월료 100% 청구·80% 지급, VAT 포함. 공급사 ID는 유지하고 규칙만 공유한다. 신차는 이 특칙에 포함하지 않는다.
 - 퍼시픽 RP022 신차: `vehicleValue` × 요율. `newProductSubtype`은 `NEW_PREDELIVERY`/`NEW_MATCHING`, `depositTierPercent`는 계약상 5/10이다. 선출고 청구/지급은 5% 등급 3%/2.5%, 10% 등급 4%/3%; 매칭은 3%/3%, 3.3%/3.3%. 모두 VAT 포함. 등급 없으면 `DEPOSIT_TIER_REQUIRED`이며 보증금 금액으로 추정하지 않는다. 재렌트는 표준, VAT 별도다.
-- 원 단위 반올림은 F04 접수 실제 관행으로 확정(2026-10-04 AI 상황실): VAT 포함 금액 ÷ 1.1 → 원 단위 반올림이 공급가, VAT = 총액 − 공급가. 근거 F04 접수 R402 624,000→567,273, R420 560,000→509,091. 산식 금액과 VAT 별도 VAT(공급가÷10)도 원 단위 반올림. 마진은 공급가끼리 차감한다.
+- 원 단위 반올림은 F04 접수 실제 관행으로 확정(2026-10-04 AI 상황실, 근거 원장 줄은 비공개 기록): VAT 포함 금액 ÷ 1.1 → 원 단위 반올림이 공급가, VAT = 총액 − 공급가. 산식 금액과 VAT 별도 VAT(공급가÷10)도 원 단위 반올림. 마진은 공급가끼리 차감한다.
 - 손오공 구독: `q12Basis: { amount, sourceRef }`는 근거로 선택한 12개월 계약 기준 **월** 구독료다. 없으면 `Q12_BASIS_REQUIRED`. `subscriptionForm`은 `BUYOUT`/`RETURN`; 반납형은 12개월만. 청구는 Q12＋기간 가산(12:10만, 24:30만, 36:50만, 48:70만; 60: 사용자 명시 HOLD), 지급은 Q12다. 기간 보간은 없다.
 - 아이언 신차 선출고 4%/3%, 일반 표준 신차 3.5%/3%, 오토플러스 일반 구독 100만/80만, 아이카 재렌트 6개월 40만/30만·전기차 100만/80만은 VAT 별도다.
 - 마음카 RP034는 `NOT_APPLICABLE / SUPPLIER_EXCLUDED_BY_DECISION`. 미등록 공급사, 미지원 기간, 표준 매칭 개별율, 아이카 1개월 기준액·연장 조건, 빌린카·엘씨 60개월 외 구독·웰릭스 구독 범위, 스위치 비구독 등은 UNKNOWN과 사유를 유지한다. `individualException: true`만 있고 아래의 유효한 개별 근거가 없으면 `INDIVIDUAL_EXCEPTION_EVIDENCE_REQUIRED`; 오토플러스 프로모션 등 개별 거래를 일반 규칙으로 확장하지 않는다.
@@ -128,8 +128,8 @@ ERP 차이: 이번에는 ERP를 수정하지 않았다. ERP의 스타·퍼시픽
 - 오토플러스 전기차 구독 150만/130만(161행); 일반 구독 100만/80만. 연료 누락은 `FUEL_REQUIRED_FOR_SUPPLIER_RULE`. 손오공 픽업은 차량가액×4%/3%(190행); 빌린카/엘씨 구독은 60개월에만 대여료×60×2.25%/1.75%(162행).
 - 입력 정규화: `선출고` → 신차/NEW_PREDELIVERY, `견적출고` → 신차/NEW_MATCHING, `장기렌트` → 재렌트. 명시 subtype과 표현이 충돌하면 `CONFLICTING_NEW_PRODUCT_SUBTYPE`.
 - 카탈로그 입력: `buildKakaoCatalogReference`의 `commissionEvidenceByProduct[productId][원본 priceKey]` → `buildKakaoCatalogReferenceProduct`의 세 번째 인자 `evidenceByTerm` → 양쪽 resolver. 차량가액, Q12+출처, 구독 형태, 신차 subtype, 계약 보증금 등급과 개별 근거를 전달한다. `precomputeOfferEconomics`도 동일 근거 타입을 받는다. 이 경로는 신뢰된 비공개 호출자 전용이며 원천 JSON의 임의 필드·월료·보증금으로 근거를 만들지 않는다. 기존 자동 Canonical 저장 호출에는 근거 수집이 없으므로 해당 값 부재는 여전히 UNKNOWN이다. 운영 수집 연결 완료가 아니다.
-- 개별 근거: `individualExceptionEvidence = { sourceRow, status, contractRef, matchedContractRef, ledgerRow }`. 비공개 호출자가 원장 계약과 일치시킨 **opaque 토큰**(`opaque:` + 16자 이상 영문/숫자/밑줄/하이픈)을 양쪽 ref에 전달한다. 서버가 일치·승인을 검증해야 하며 이 순수 함수는 승인 인증 수단이 아니다. 공개 저장소에 차량번호·실제 계약 토큰을 넣지 않는다. 단순 차량번호 SHA256은 열거 가능하므로 비공개 랜덤 계약 ID 또는 비밀키 HMAC을 권장한다. 원장 행 번호만으로 자동 매칭하지 않는다.
-- 160행/원장413 + APPROVED + 손오공 구독60: 최신 사본의 청구 **862,000**, 지급 **562,000**. 옛 수정안 912,000은 사용하지 않는다. 163행/원장466·473·474·475 + PAYOUT_CONFIRMED + 아이카 선출고: 지급400,000; 청구는 차량가액을 주더라도 `INDIVIDUAL_BILLING_BASIS_UNCONFIRMED`. 미확정 상태·범위 불일치·토큰 불일치는 UNKNOWN.
+- 개별 합의: `individualAgreement = { agreementId, sourceRow(160|163), status, contractRef, matchedContractRef, billing, payout }`. 금액·대상 계약은 공개 저장소에 두지 않고, 신뢰된 비공개 호출자가 비공개 목록(ai-ops 인수인계)의 합의를 이 계약에 묶어 넘긴다. `agreementId` 는 `private:` + 4자 이상, 계약 토큰은 **opaque**(`opaque:` + 16자 이상)로 양쪽이 같아야 한다. 이 순수 함수는 승인 인증 수단이 아니며 서버가 일치·승인을 검증해야 한다. 차량번호·실제 계약 토큰·원장 행을 넣지 않는다(단순 차량번호 SHA256 은 열거 가능 — 비공개 랜덤 ID 또는 비밀키 HMAC 권장).
+- 상태: `APPROVED` = 청구·지급 모두 합의 금액(`INDIVIDUAL_AGREEMENT_{S}`), `PAYOUT_CONFIRMED` = 지급만(청구는 `INDIVIDUAL_BILLING_BASIS_UNCONFIRMED`), `UNCONFIRMED`·금액 null = 미확정. 같은 입력이면 같은 금액. 개별 표시(`individualException`)만 있고 합의 입력이 없으면 일반 규칙을 쓰지 않고 `INDIVIDUAL_EXCEPTION_EVIDENCE_REQUIRED`. (2026-10-05 정리: 예전엔 엔진에 원장 행·합의 금액을 상수로 두었다 — 비공개 입력으로 옮김.)
 - **2026-10-05 AI 상황실 결정(정책 `sales-commission-2026-10-05`)**: 손오공 오공 구독 60개월 청구 가산 = **+600,000**(14행), 지급은 Q12. 원 단위는 **원 미만 반올림**. 근거(실제 청구 줄 대조)는 비공개 ai-ops 인수인계(정산-수수료규칙-20261005)에 있다 — 공개 문서에는 원장 행·개별 금액을 적지 않는다. (옛 판단: 일반 60개월 충돌 UNKNOWN — 폐기.) 이전 정책으로 저장된 기간별 수수료는 그 정책 ID 그대로 남고, 새 정책 값은 명시적 재계산(일괄 재계산 작업·새 적재) 때만 바뀐다.
 - **169~170행 뮤카(2026-10-05 구현, 공급사 RP035 — freepass-data #365 발급)**: freepass-admin DEC-2026-10-04-01 8번대로. 청구(프리패스 몫) `MEWCAR_FREEPASS_SHARE_BILLING` = 차량 기준가 × 1%(전 기간). 지급(영업 GA) `MEWCAR_GA_{PREPAID|INSTALLMENT}_{12|24|36|48}_PAYOUT` = 선납 12개월 100만·24~48개월 120만 / 분납 12개월 80만·24~48개월 100만 + min(추가보증금 × 10%, 40만). 선납/분납(`depositPayment`)·추가보증금(`extraDeposit`, 없으면 0 명시)·기준가를 모르면 계산하지 않음(사유 `MEWCAR_*`). 별도 지급 재원이라 예상 마진은 `NOT_APPLICABLE`(`SEPARATE_FUNDING_NO_MARGIN`). 공급가(VAT 별도) 기준 — VAT·원천세 처리 근거는 지급 단계에서. «분납 완납 전 미지급»은 계약 단계 지급 가능 상태(`payoutEligibility`)로 다룬다.
 - 미확정 공급사 AMR·오토셀렉션·금탑·빌림·퍼스트·SK는 로컬 근거에서 확정 ID를 찾지 못했다. 이름을 임의 표준 ID로 연결하지 않으며 미등록 ID는 `SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE`이다. 웰릭스 발주는 `WELRIX_ORDER_RULE_UNCONFIRMED`, 기타 미확정 구독은 `SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED`, 기간 누락은 `TERM_NOT_IN_F04_COMMISSION_POLICY`.
@@ -330,10 +330,10 @@ B=BILLING, P=PAYOUT, `{S}`=BILLING 또는 PAYOUT. 표준 재렌트 지급 ruleId
 | 157 | `timingRules.OTHERS` | 같음: 선언 보존, 시점 실행은 정산 경계 |
 | 158 | `timingRules.ALL.LUMP_SUM` | 같음: 선언 보존 |
 | 159 | `timingRules.ALL.DEPOSIT_INSTALLMENT` | 같음: 선언 보존 |
-| 160 | `F04_INDIVIDUAL_413_{S}` | 같음: 승인·계약 일치 필수, 최신 사본862000/562000 |
+| 160 | `INDIVIDUAL_AGREEMENT_{S}` | 같음: 비공개 합의 입력(APPROVED·계약 일치) 금액 그대로 |
 | 161 | `AUTOPLUS_EV_SUBSCRIPTION_{S}` | 같음:150만/130만 |
 | 162 | `BILLIN_SUBSCRIPTION_60_{S}_RENT_X_TERM` | 같음:60개월만. 다른 기간 구독은 `SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED`(표준 재렌트로 흘리지 않음) |
-| 163 | `F04_AICA_INDIVIDUAL_PAYOUT / null` | 같음: 지급40만; 청구UNKNOWN (INDIVIDUAL_BILLING_BASIS_UNCONFIRMED) |
+| 163 | `INDIVIDUAL_AGREEMENT_PAYOUT / null` | 같음: 비공개 합의 입력(PAYOUT_CONFIRMED) 지급만; 청구UNKNOWN (INDIVIDUAL_BILLING_BASIS_UNCONFIRMED) |
 | 164 | `null (WELRIX_ORDER_RULE_UNCONFIRMED)` | UNKNOWN 유지: 발주 근거 없음 |
 | 165 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
 | 166 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
@@ -341,7 +341,7 @@ B=BILLING, P=PAYOUT, `{S}`=BILLING 또는 PAYOUT. 표준 재렌트 지급 ruleId
 | 168 | `null (SUPPLIER_EXCLUDED_BY_DECISION)` | 같음: NOT_APPLICABLE, 0원 아님 |
 | 169 | `MEWCAR_FREEPASS_SHARE_BILLING` / `MEWCAR_GA_*_PAYOUT` | 같음(2026-10-05): 170행 표로 계산, 마진 없음 |
 | 170 | `MEWCAR_GA_{PREPAID\|INSTALLMENT}_{기간}_PAYOUT` | 같음(2026-10-05): 선납·분납 × 기간 + 추가보증금 가산; 입력 부재 UNKNOWN |
-| 171 | 반올림 규칙(계산 단계) | 확정: F04 접수 관행 VAT 포함 ÷1.1 원 단위 반올림(R402·R420 근거) |
+| 171 | 반올림 규칙(계산 단계) | 확정: F04 접수 관행 VAT 포함 ÷1.1 원 단위 반올림(근거 원장 줄은 비공개 기록) |
 | 172 | `null (DEPOSIT_TIER_REQUIRED)` | UNKNOWN 유지: 5/10 등급 외 |
 | 173 | `null (RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED)` | UNKNOWN 유지: 60은 충돌 코드가 우선 |
 | 174 | `null (SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED)` | UNKNOWN 유지 |
