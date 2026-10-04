@@ -195,6 +195,8 @@ export function planF04CommissionProjection(input: {
 
   const inputColumns = ['접수일', '차량번호', '공급사', '상품구분', '계약기간', '렌탈료', '차량가액', '분납여부', '청구년', '청구월', '청구액', '지급액', '취소', '비고', '청구']
     .map(h => header.indexOf(h)).filter(c => c >= 0);
+  // 입력 칸이 배열 수식이 흐르는 열이면(아래 줄은 수식 읽기에서 비어 보여) 줄마다 확인할 수 없다 — 계획 전체를 멈춘다.
+  if (inputColumns.some(c => spill.has(c))) throw new Error('F04_INPUT_COLUMN_IS_ARRAY_FORMULA');
   for (const { sheetRow, cells } of rows) {
     const row = Object.fromEntries(header.map((h, i) => [h, cells[i]]));
     const plate = plateKey(row['차량번호']);

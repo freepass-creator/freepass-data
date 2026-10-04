@@ -117,6 +117,11 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
       expect(p.blanks.map(b => b.reason), h).toEqual(['INPUT_FORMULA_UNVERIFIED', 'INPUT_FORMULA_UNVERIFIED']);
     }
   });
+  it('an input column filled by an array formula (e.g. 청구 = ARRAYFORMULA) stops the whole plan', () => {
+    const v1 = row({ 차량번호: '12가3456' }), v2 = row({ 차량번호: '12가3457' });
+    const f1 = [...v1], f2 = [...v2]; f1[at('청구')] = '=ARRAYFORMULA(IF(A3:A="","",FALSE))'; f2[at('청구')] = '';
+    expect(() => planF04CommissionProjection({ intake: intake(v1, v2), intakeFormulas: intake(f1, f2), installments: INST, openFromMonth: '2026-09', readAt: 'x' })).toThrow('F04_INPUT_COLUMN_IS_ARRAY_FORMULA');
+  });
   it('a plain formula in one cell of a column does not hide changes in the other cells of that column', () => {
     const v1 = row({ 차량번호: '12가3456' }), v2 = row({ 차량번호: '12가3457' });
     const f1 = [...v1], f2 = [...v2]; f1[at('청구')] = '=FALSE()'; f2[at('청구')] = true; // 4행 청구가 그 사이 TRUE 로
