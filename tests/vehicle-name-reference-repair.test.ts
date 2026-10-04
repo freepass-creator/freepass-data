@@ -90,6 +90,14 @@ describe('vehicle-name reference repair gate', () => {
     expect(() => validateVehicleNameRepairPlan({ ...base, masterRetires: [{ id: 'm1', into: 'm2', evidence: 'x' }],
       masterCreates: [{ id: 'm2', evidence: 'x', data: { id: 'm2', maker: '현대', model: '그랜저', sub_model: '그랜저 GN7', retired: true } }] })).toThrow(/active master/);
   });
+  it('accepts a top-level trims list only with its digest, normalized and without duplicates', () => {
+    const base = { sourceDigest: 'd', masterRepairs: [], productRepairs: [] };
+    const v = { id: 'm', fromDigest: 'a'.repeat(64), to: [{ fuel: '가솔린' }], evidence: 'x' };
+    expect(validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: ['C 에센셜'], fromTrimsDigest: 'b'.repeat(64) }] })).toMatchObject({ masterVariantCount: 1 });
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: ['C 에센셜'] }] })).toThrow(/together/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: [' C 에센셜'], fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/normalized/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: ['A', 'A'], fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/duplicate/);
+  });
   it('caps one plan below the Firestore transaction write limit', () => {
     const many = Array.from({ length: MAX_VEHICLE_NAME_REPAIR_TARGETS + 1 }, (_, i) => ({ id: `t${i}`, from: 'A', to: 'B' }));
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], trimSubModelRepairs: many })).toThrow(/too large/);

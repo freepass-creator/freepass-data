@@ -39,7 +39,8 @@ export type VehicleNameRepairPlan = {
 };
 
 export type VehicleMasterDocCreate = { id: string; data: Record<string, unknown>; evidence: string };
-export type VehicleMasterVariantRepair = { id: string; fromDigest: string; to: Record<string, unknown>[]; evidence: string };
+/** `trims` (with `fromTrimsDigest` of the current top-level list) also replaces vehicle_master.trims — consumers match trim names against it. */
+export type VehicleMasterVariantRepair = { id: string; fromDigest: string; to: Record<string, unknown>[]; evidence: string; trims?: string[]; fromTrimsDigest?: string };
 /** `into` = the master that replaces it (must exist or be created by the same plan). */
 export type VehicleMasterRetire = { id: string; into: string; evidence: string };
 
@@ -83,7 +84,13 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   for (const v of variantRepairs) {
     if (!v.id?.trim() || !/^[0-9a-f]{64}$/.test(v.fromDigest ?? '') || !Array.isArray(v.to) || !v.to.length) throw new Error('masterVariantRepair requires id, fromDigest and a non-empty variants list');
     if (typeof v.evidence !== 'string' || !v.evidence.trim()) throw new Error(`masterVariantRepair ${v.id} requires evidence`);
-    if (stableDigest(v.to) === v.fromDigest) throw new Error(`no-op masterVariantRepair ${v.id}`);
+    if ((v.trims === undefined) !== (v.fromTrimsDigest === undefined)) throw new Error(`masterVariantRepair ${v.id} needs trims and fromTrimsDigest together`);
+    if (v.trims !== undefined) {
+      if (!/^[0-9a-f]{64}$/.test(v.fromTrimsDigest ?? '') || !Array.isArray(v.trims) || !v.trims.length) throw new Error(`masterVariantRepair ${v.id} requires a non-empty trims list and fromTrimsDigest`);
+      if (v.trims.some((t) => typeof t !== 'string' || !t || t !== normalizeName(t))) throw new Error(`masterVariantRepair ${v.id} trims must be normalized names`);
+      if (new Set(v.trims).size !== v.trims.length) throw new Error(`masterVariantRepair ${v.id} has duplicate trims`);
+    }
+    if (stableDigest(v.to) === v.fromDigest && (v.trims === undefined || stableDigest(v.trims) === v.fromTrimsDigest)) throw new Error(`no-op masterVariantRepair ${v.id}`);
   }
   if (new Set(variantRepairs.map((v) => v.id)).size !== variantRepairs.length) throw new Error('duplicate masterVariantRepair');
   const retires = plan.masterRetires ?? [];
@@ -207,7 +214,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const variantRefs = variantRepairs.map((v) => db.collection('vehicle_master').doc(v.id));
   const variantSnaps = variantRefs.length ? await db.getAll(...variantRefs) : [];
   variantSnaps.forEach((snapshot, index) => {
-    if (!snapshot.exists || stableDigest(snapshot.data()?.variants ?? null) !== variantRepairs[index]!.fromDigest) {
+    const v = variantRepairs[index]!;
+    if (!snapshot.exists || stableDigest(snapshot.data()?.variants ?? null) !== v.fromDigest
+      || (v.trims !== undefined && stableDigest(snapshot.data()?.trims ?? null) !== v.fromTrimsDigest)) {
       throw new Error(`variants precondition changed ${snapshot.ref.path}`);
     }
   });
@@ -276,7 +285,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     ...variantRepairs.map((v, index): AuditEvent => ({
       eventId: auditId(variantRefs[index]!.path, 'variants'), commandId: `vehicle-name-repair:${runId}`, actor,
       entityType: 'vehicle_master', entityId: v.id, action: 'VEHICLE_MASTER_VARIANTS_REPAIRED',
-      before: { variantsDigest: v.fromDigest }, after: { variantsDigest: stableDigest(v.to) },
+      before: { variantsDigest: v.fromDigest, ...(v.trims ? { trimsDigest: v.fromTrimsDigest } : {}) }, after: { variantsDigest: stableDigest(v.to), ...(v.trims ? { trims: v.trims } : {}) },
       reason: `차종 마스터 파워트레인 목록 정정 근거: ${v.evidence} (${plan.sourceDigest})`,
       revisionBefore: 0, revisionAfter: 0, occurredAt,
     })),
@@ -312,6 +321,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     byPath[r.path] = byPath[r.path] ?? { ref: r, fields: {}, aliases: {} };
   });
   const variantsByPath: Record<string, Record<string, unknown>[]> = Object.fromEntries(variantRepairs.map((v, i) => [variantRefs[i]!.path, v.to]));
+  const masterTrimsByPath: Record<string, string[]> = Object.fromEntries(variantRepairs.filter((v) => v.trims).map((v) => [`vehicle_master/${v.id}`, v.trims!]));
 
   await db.runTransaction(async (transaction) => {
     const current = refs.length ? await transaction.getAll(...refs) : [];
@@ -376,7 +386,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (used) throw new Error(`master name still used by products products/${used.id}`);
     }
     if (variantRefs.length && (await transaction.getAll(...variantRefs)).some((snapshot, index) =>
-      !snapshot.exists || snapshot.data()?.retired === true || stableDigest(snapshot.data()?.variants ?? null) !== variantRepairs[index]!.fromDigest)) {
+      !snapshot.exists || snapshot.data()?.retired === true || stableDigest(snapshot.data()?.variants ?? null) !== variantRepairs[index]!.fromDigest
+      || (variantRepairs[index]!.trims !== undefined && stableDigest(snapshot.data()?.trims ?? null) !== variantRepairs[index]!.fromTrimsDigest))) {
       throw new Error('transaction variants precondition changed or master retired');
     }
     current.forEach((snapshot, index) => {
@@ -388,6 +399,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       transaction.update(ref, {
         ...fields,
         ...(variantsByPath[ref.path] ? { variants: variantsByPath[ref.path] } : {}),
+        ...(masterTrimsByPath[ref.path] ? { trims: masterTrimsByPath[ref.path] } : {}),
         ...(retireByPath[ref.path] ? { retired: true, retired_into: retireByPath[ref.path], retired_at: FieldValue.serverTimestamp() } : {}),
         ...Object.fromEntries(Object.entries(aliases).map(([k, v]) => [k, FieldValue.arrayUnion(...v!)])),
         vehicle_name_reference_checked_at: FieldValue.serverTimestamp(),
@@ -421,6 +433,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const variantReadback = variantRefs.length ? await db.getAll(...variantRefs) : [];
   variantReadback.forEach((snapshot, index) => {
     if (stableDigest(snapshot.data()?.variants ?? null) !== stableDigest(variantRepairs[index]!.to)) throw new Error(`readback variants mismatch ${snapshot.ref.path}`);
+    if (variantRepairs[index]!.trims && stableDigest(snapshot.data()?.trims ?? null) !== stableDigest(variantRepairs[index]!.trims)) throw new Error(`readback trims mismatch ${snapshot.ref.path}`);
   });
   const createReadback = createRefs.length ? await db.getAll(...createRefs) : [];
   createReadback.forEach((snapshot, index) => {

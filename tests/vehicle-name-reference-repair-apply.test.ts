@@ -228,6 +228,17 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     expect(store.get('vehicle_master/m-old')).toMatchObject({ sub_model: '그랜저 옛이름', retired: true });
     expect(store.get('products/p7')!.sub_model).toBe('그랜저 GN7');
   });
+  it('replaces the top-level trims list together with variants, guarded by its own digest', async () => {
+    const { stableDigest } = await import('../src/shared/stable-digest.js');
+    const variants = [{ fuel: '가솔린', trims: ['프리미엄', '아너스'] }];
+    store.set('vehicle_master/m-gn7', { id: 'm-gn7', maker: '현대', model: '그랜저', sub_model: '그랜저 GN7', variants, trims: ['아너스', '프리미엄'] });
+    const repair = { id: 'm-gn7', fromDigest: stableDigest(variants), to: [{ fuel: '가솔린', trims: ['프리미엄', '블랙 잉크'] }], evidence: '행 기준',
+      trims: ['프리미엄', '블랙 잉크'], fromTrimsDigest: stableDigest(['프리미엄']) };
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterVariantRepairs: [repair] })).rejects.toThrow(/precondition/);
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterVariantRepairs: [{ ...repair, fromTrimsDigest: stableDigest(['아너스', '프리미엄']) }] });
+    expect(store.get('vehicle_master/m-gn7')).toMatchObject({ trims: ['프리미엄', '블랙 잉크'], variants: repair.to });
+  });
   it('refuses to link a trim row to a retired master in a later plan', async () => {
     store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
     await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
