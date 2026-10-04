@@ -27,10 +27,11 @@ export function validateVehicleModelRenamePlan(plan: VehicleModelRenamePlan) {
 export async function applyVehicleModelRenamePlan(store: CatalogStore, plan: VehicleModelRenamePlan, planDigest: string) {
   const results = [];
   const all = await store.listProducts();
+  const applied = new Set<string>();
   for (const i of plan.items) {
-    // Already committed by this plan: the command replays its receipt (revisions have moved on, so skip the pre-check).
+    // Already committed by this plan: counted as «이미 적용», the command replays its receipt and readback still checks names.
     const key = `idem-rename-model:${planDigest}:${i.vehicleModelId}`;
-    if (await store.transact((tx) => tx.getCommandReceipt(key))) continue;
+    if (await store.transact((tx) => tx.getCommandReceipt(key))) { applied.add(i.vehicleModelId); continue; }
     // Every Product referencing the model must be in the plan with its current revision (displayName follows the model).
     const referencing = all.filter((p) => p.vehicleModelId === i.vehicleModelId).map((p) => [p.id, p.revision]).sort();
     const planned = i.products.map((p) => [p.productId, p.expectedRevision]).sort();
@@ -52,9 +53,11 @@ export async function applyVehicleModelRenamePlan(store: CatalogStore, plan: Veh
       ok = ok && !!product && product.vehicleModelId === i.vehicleModelId && product.revision === ref.expectedRevision + 1 &&
         product.displayName === expectedName;
     }
-    results.push({ revision: receipt.revision, readbackOk: ok });
+    results.push({ alreadyApplied: applied.has(i.vehicleModelId), readbackOk: ok });
   }
-  return { renamed: results.length, readbackOk: results.every((r) => r.readbackOk) };
+  // renamed = changed by this run; alreadyApplied = committed by an earlier run of the same plan (rerun is a no-op).
+  return { renamed: results.filter((r) => !r.alreadyApplied).length, alreadyApplied: results.filter((r) => r.alreadyApplied).length,
+    readbackOk: results.every((r) => r.readbackOk) };
 }
 
 export async function main(args = process.argv.slice(2)) {

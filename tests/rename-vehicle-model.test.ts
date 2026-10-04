@@ -24,11 +24,12 @@ describe('rename shared VehicleModel to F03 name', () => {
   it('renames trim, follows product displayName, records revision/audit/receipt and is idempotent', async () => {
     const store = await seeded();
     const p = plan(); const { planDigest } = validateVehicleModelRenamePlan(p);
-    expect(await applyVehicleModelRenamePlan(store, p, planDigest)).toEqual({ renamed: 1, readbackOk: true });
+    expect(await applyVehicleModelRenamePlan(store, p, planDigest)).toEqual({ renamed: 1, alreadyApplied: 0, readbackOk: true });
     const model = await store.getVehicleModel('vm1');
     expect(model).toMatchObject({ trim: '프레스티지', revision: 2, displayName: '기아 카니발 더 뉴 카니발 KA4 프레스티지' });
     expect(await store.getProduct('p1')).toMatchObject({ displayName: '기아 카니발 더 뉴 카니발 KA4 프레스티지', revision: 2 });
-    expect(await applyVehicleModelRenamePlan(store, p, planDigest)).toEqual({ renamed: 1, readbackOk: true });
+    // Rerun of the same plan: nothing changes, counted as already applied, names verified by readback.
+    expect(await applyVehicleModelRenamePlan(store, p, planDigest)).toEqual({ renamed: 0, alreadyApplied: 1, readbackOk: true });
     expect((await store.getVehicleModel('vm1'))!.revision).toBe(2);
   });
   it('rejects stale revisions, foreign products, missing evidence and non-exclusive writers', async () => {
