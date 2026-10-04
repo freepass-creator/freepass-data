@@ -25,7 +25,7 @@ export const TRIM_DISPLACEMENT_PATTERNS: readonly RegExp[] = Object.freeze([/^\d
  * 엔진 이름이기도 하고 등급처럼 쓰이기도 해서 판단이 갈리는 낱말 — 떼지 않고 표시만 한다.
  * TCe 는 대표 예시(「TCe 인스파이어」)로 남긴다는 것이 확정이다. 나머지는 결정 대기.
  */
-export const TRIM_UNDECIDED_TOKENS: readonly string[] = Object.freeze(['dCi', 'LPe', 'LPLI', 'VGT', 'e-VGT', '터보', 'TSI', 'TDI']);
+export const TRIM_UNDECIDED_TOKENS: readonly string[] = Object.freeze(['dCi', 'LPe', 'LPLI', 'VGT', 'e-VGT', '터보', 'TSI', 'TDI', '에코부스트', 'S/C']);
 export const TRIM_KEPT_ENGINE_NAMES: readonly string[] = Object.freeze(['TCe']);
 
 /** 수입차 트림 첫 낱말이 모델 번호이면(520d · C300 · M135i · AMG · xDrive20i · B5 · T5) 트림 전체를 그대로 둔다. */
