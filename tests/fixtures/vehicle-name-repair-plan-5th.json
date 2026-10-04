@@ -1,0 +1,43 @@
+{
+ "sourceDigest": "subModel-names-v1 5차 수입차 부분변경 2026-10-05",
+ "masterRepairs": [],
+ "productRepairs": [],
+ "masterCreates": [
+  {
+   "id": "fp-v1.2ff9867a6a89a55e",
+   "evidence": "subModel-names-v1 5차 2026-10-05 · 수입사는 완전변경에도 «뉴»·«더 뉴»를 붙여 이름으로 부분변경이 안 갈림 → 규칙대로 코드 뒤 FL(공통 시트 값과 같음) · BMW Group PressClub Korea 2020-10-05 «뉴 5시리즈»(G30) 출시",
+   "data": {
+    "id": "fp-v1.2ff9867a6a89a55e",
+    "maker": "BMW",
+    "model": "5시리즈",
+    "sub_model": "5시리즈 G30 FL",
+    "origin": "수입",
+    "title": "BMW 5시리즈 G30 FL",
+    "gen_code": "G30",
+    "market_class": "중고",
+    "newcar_priced": false,
+    "year_start": "2020",
+    "year_end": "2023",
+    "sub_model_aliases": []
+   }
+  },
+  {
+   "id": "fp-v1.b6f7fc1f15ee0c95",
+   "evidence": "subModel-names-v1 5차 2026-10-05 · 수입사는 완전변경에도 «뉴»·«더 뉴»를 붙여 이름으로 부분변경이 안 갈림 → 규칙대로 코드 뒤 FL(공통 시트 값과 같음) · 메르세데스-벤츠 코리아 2020-10 «더 뉴 E-클래스»(W213 부분변경) 출시",
+   "data": {
+    "id": "fp-v1.b6f7fc1f15ee0c95",
+    "maker": "벤츠",
+    "model": "E-클래스",
+    "sub_model": "E-클래스 W213 FL",
+    "origin": "수입",
+    "title": "벤츠 E-클래스 W213 FL",
+    "gen_code": "W213",
+    "market_class": "중고",
+    "newcar_priced": false,
+    "year_start": "2020",
+    "year_end": "2023",
+    "sub_model_aliases": []
+   }
+  }
+ ]
+}

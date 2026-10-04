@@ -461,7 +461,7 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
 describe('product identity repair apply path', () => {
   it('repairs product maker/model/sub_model together when the target active master exists', async () => {
     store.set('vehicle_master/m-alpha', { id: 'm-alpha', maker: 'Maker', model: 'Model A', sub_model: 'Model A New' });
-    store.set('products/p-identity', { maker: '', model: ' Model A ', sub_model: '' });
+    store.set('products/p-identity', { maker: '', model: 'Model A', sub_model: '' });
     const result = await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       productIdentityRepairs: [{ id: 'p-identity', from: { maker: '', model: 'Model A', sub_model: '' }, to: { maker: 'Maker', model: 'Model A', sub_model: 'Model A New' }, evidence: 'source text' }] });
     expect(store.get('products/p-identity')).toMatchObject({
@@ -490,6 +490,17 @@ describe('product identity repair apply path', () => {
       productIdentityRepairs: [{ ...repair, to: { maker: 'Maker', model: 'Old', sub_model: 'Old New' } }] })).rejects.toThrow(/retired master/);
   });
 
+  it('compares product identity from cells by exact stored spelling only', async () => {
+    store.set('vehicle_master/m-alpha', { id: 'm-alpha', maker: 'Maker', model: 'Model A', sub_model: 'Model A New' });
+    const repair = { id: 'p-identity', from: { maker: '', model: 'Model A', sub_model: '' }, to: { maker: 'Maker', model: 'Model A', sub_model: 'Model A New' }, evidence: 'source text' };
+    store.set('products/p-identity', { maker: '', model: ' Model A ', sub_model: '' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).rejects.toThrow(/productIdentity precondition changed/);
+    store.set('products/p-identity', { maker: ' ', model: 'Model A', sub_model: '' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).rejects.toThrow(/productIdentity precondition changed/);
+    store.set('products/p-identity', { model: 'Model A' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).resolves.toMatchObject({ productIdentityCount: 1 });
+  });
+
   it('matches product identity repairs against masters created in the same plan and catches readback drift', async () => {
     const created = { id: 'm-created-identity', evidence: 'source text', data: { id: 'm-created-identity', maker: 'Maker', model: 'Created', sub_model: 'Created New', origin: 'local' } };
     store.set('products/p-identity', { maker: '', model: '', sub_model: '' });
@@ -503,6 +514,21 @@ describe('product identity repair apply path', () => {
     try {
       await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
         productIdentityRepairs: [{ id: 'p-readback', from: { maker: '', model: '', sub_model: '' }, to: { maker: 'Maker', model: 'Readback', sub_model: 'Readback New' }, evidence: 'source text' }] })).rejects.toThrow(/readback productIdentity mismatch/);
+    } finally { db.runTransaction = original; }
+  });
+
+  it('rejects product identity when stored spelling changes between backup and transaction', async () => {
+    store.set('vehicle_master/m-spelling', { id: 'm-spelling', maker: 'Maker', model: 'Spelling', sub_model: 'Spelling New' });
+    store.set('products/p-spelling', { model: 'Spelling' });
+    const original = db.runTransaction;
+    db.runTransaction = async (fn) => {
+      store.set('products/p-spelling', { maker: null, model: 'Spelling', sub_model: undefined });
+      return original(fn);
+    };
+    try {
+      await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+        productIdentityRepairs: [{ id: 'p-spelling', from: { maker: '', model: 'Spelling', sub_model: '' }, to: { maker: 'Maker', model: 'Spelling', sub_model: 'Spelling New' }, evidence: 'source text' }] }))
+        .rejects.toThrow(/stored spelling changed since backup/);
     } finally { db.runTransaction = original; }
   });
 });

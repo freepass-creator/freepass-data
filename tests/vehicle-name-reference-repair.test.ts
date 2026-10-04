@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { stableDigest } from '../src/shared/stable-digest.js';
 import { MAX_VEHICLE_NAME_REPAIR_TARGETS, matchesFrom, normalizeName, validateVehicleNameRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
@@ -182,6 +183,29 @@ describe('vehicle-name reference repair gate', () => {
     expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [item, item] })).toThrow(/duplicate/);
     expect(() => validateVehicleNameRepairPlan({ ...base, productRepairs: [{ id: 'p1', from: 'A', to: 'B' }], productIdentityRepairs: [item] })).toThrow(/overlap/);
     expect(() => validateVehicleNameRepairPlan({ ...base, productTrimRepairs: [{ id: 'p1', from: 'A', to: 'B' }], productIdentityRepairs: [item] })).toThrow(/overlap/);
+  });
+  it('keeps product identity repairs separate from master renames and retires', () => {
+    const base = { sourceDigest: 'd', productRepairs: [], productIdentityRepairs: [{
+      id: 'p1',
+      from: { maker: '', model: '', sub_model: '' },
+      to: { maker: 'Maker', model: 'Model', sub_model: 'Sub' },
+      evidence: 'source text',
+    }] };
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterRepairs: [{ id: 'm1', from: 'Old', to: 'New' }] }))
+      .toThrow(/상품 차종 칸 고치기는 마스터 이름 바꾸기·퇴역과 다른 계획으로/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterRepairs: [], masterModelRepairs: [{ id: 'm1', from: 'Old', to: 'New' }] }))
+      .toThrow(/상품 차종 칸 고치기는 마스터 이름 바꾸기·퇴역과 다른 계획으로/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterRepairs: [], masterRetires: [{ id: 'm1', into: 'm2', evidence: 'merge' }] }))
+      .toThrow(/상품 차종 칸 고치기는 마스터 이름 바꾸기·퇴역과 다른 계획으로/);
+    expect(validateVehicleNameRepairPlan({ ...base, masterRepairs: [], masterCreates: [{
+      id: 'm-new',
+      evidence: 'source text',
+      data: { id: 'm-new', maker: 'Maker', model: 'Model', sub_model: 'Sub', origin: 'local' },
+    }] })).toMatchObject({ productIdentityCount: 1, masterCreateCount: 1 });
+  });
+  it('keeps the 5th operating plan digest pinned', () => {
+    const plan = JSON.parse(readFileSync('tests/fixtures/vehicle-name-repair-plan-5th.json', 'utf8'));
+    expect(stableDigest(plan)).toBe('44c8ce365e316e6b67e6998cf42e491a7f8ad3bdc6b56a7d11d541091e3387d8');
   });
   it('keeps existing plan digest unchanged when product identity repairs are absent', () => {
     const base = { sourceDigest: 'd', masterRepairs: [], productRepairs: [{ id: 'p', from: 'A', to: 'B' }] };

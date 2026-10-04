@@ -168,8 +168,11 @@ export const matchesFrom = (stored: unknown, from: string) => clean(from)
   ? typeof stored === 'string' && clean(stored) === clean(from) // a number or other type never matches a name
   : stored === undefined || stored === null || (typeof stored === 'string' && stored.trim() === '');
 const identityKeyFrom = (data: Partial<Record<(typeof PRODUCT_IDENTITY_FIELDS)[number], unknown>>) => PRODUCT_IDENTITY_FIELDS.map((field) => clean(data[field])).join('|');
+const matchesProductIdentityFromField = (stored: unknown, from: string) => from === ''
+  ? stored === undefined || stored === null || stored === ''
+  : typeof stored === 'string' && stored === from;
 const matchesIdentityFrom = (stored: Record<string, unknown> | undefined, from: VehicleProductIdentityRepairItem['from']) =>
-  PRODUCT_IDENTITY_FIELDS.every((field) => matchesFrom(stored?.[field], from[field]));
+  PRODUCT_IDENTITY_FIELDS.every((field) => matchesProductIdentityFromField(stored?.[field], from[field]));
 const productIdentityToObject = (item: VehicleProductIdentityRepairItem) => ({
   maker: clean(item.to.maker), model: clean(item.to.model), sub_model: clean(item.to.sub_model),
 });
@@ -185,6 +188,9 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     ...(plan.trimModelRepairs ?? []).map((item) => ({ ...item, kind: 'trimModel' })),
     ...(plan.masterGenCodeRepairs ?? []).map((item) => ({ ...item, kind: 'masterGenCode' }))];
   const productIdentityRepairs = plan.productIdentityRepairs ?? [];
+  if (productIdentityRepairs.length && (plan.masterRepairs.length || (plan.masterModelRepairs ?? []).length || (plan.masterRetires ?? []).length)) {
+    throw new Error('상품 차종 칸 고치기는 마스터 이름 바꾸기·퇴역과 다른 계획으로');
+  }
   const creates = [...(plan.masterCreates ?? []).map((c) => ({ ...c, kind: 'masterCreate', keys: MASTER_CREATE_KEYS })),
     ...(plan.trimCreates ?? []).map((c) => ({ ...c, kind: 'trimCreate', keys: TRIM_CREATE_KEYS }))];
   const variantRepairs = plan.masterVariantRepairs ?? [];
@@ -529,6 +535,11 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     identityCurrent.forEach((snapshot, index) => {
       if (!snapshot.exists || !matchesIdentityFrom(snapshot.data(), identityTargets[index]!.item.from)) {
         throw new Error(`transaction productIdentity precondition changed ${snapshot.ref.path}`);
+      }
+      for (const field of PRODUCT_IDENTITY_FIELDS) {
+        if (snapshot.data()?.[field] !== identitySnapshots[index]!.data()?.[field]) {
+          throw new Error(`transaction stored spelling changed since backup ${snapshot.ref.path}.${field}`);
+        }
       }
     });
     // A retired master is frozen: its name is not changed again (a rename would let products use it under a new name).
