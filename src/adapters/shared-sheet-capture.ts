@@ -45,7 +45,13 @@ export const displayMatchesValue = (shown: string, v: number | boolean): boolean
   const t = s.replace(/[^0-9.]/g, ''), n = Number(t);
   if (!Number.isFinite(n)) return false;
   const decimals = (t.split('.')[1] ?? '').length;
-  return near(sign * n, 0.5 * 10 ** -decimals);
+  // 일반 표시는 시트처럼 «0 에서 먼 쪽 반올림»으로 보이는 자릿수에 맞춰 같은지 본다(«1» ↔ 1.5 는 «2» 라 다르다).
+  // 한계: «0.###» 처럼 뒤 0 을 생략하는 형식은 보이는 자릿수가 형식의 최대 자릿수보다 적을 수 있어(77.4 ↔ 77.44 처럼)
+  // 표시만으로는 가릴 수 없다 — 두 읽기 사이 변경은 앞뒤 실제 값 동일 검사(sameReads)와 줄마다 글자 칸 대조가 막는다.
+  const scale = 10 ** decimals, shownNumber = sign * n;
+  const scaled = Math.abs(target) * scale, frac = scaled - Math.floor(scaled);
+  const rounded = Math.sign(target) * (Math.abs(frac - 0.5) < 1e-9 ? Math.floor(scaled) + 1 : Math.round(scaled)) / scale; // .5 근처 부동소수 찌꺼기는 .5 로
+  return Math.abs(rounded - shownNumber) <= 1e-9 / scale && (target === 0 || shownNumber === 0 || Math.sign(shownNumber) === Math.sign(target));
 };
 
 const IDENTITY_COLUMNS = ['회사명', '차량번호'].map(h => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
