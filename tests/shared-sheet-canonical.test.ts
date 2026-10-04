@@ -4,7 +4,10 @@ import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { buildSharedSheetBatch, sharedSheetChannels, sharedSheetHeaders, sharedSheetCaptureDigest, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
 import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
 import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
-import { planSharedSheetCanonical, runSharedSheetCanonical } from '../src/jobs/ingest-shared-sheet-canonical.js';
+import { planSharedSheetCanonical, runSharedSheetCanonical, preflightSharedSheetApply, writePrivateArtifact } from '../src/jobs/ingest-shared-sheet-canonical.js';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { queryCanonicalByPlate } from '../src/jobs/query-canonical-by-plate.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
@@ -241,5 +244,24 @@ describe('shared sheet local source to Canonical', () => {
     const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
     expect(p.plan.entries[0]!.reasons).toContain('EXISTING_IDENTITY_REQUIRES_SOURCE_LINK');
     expect(p.plan.entries[0]!.action).toBe('HOLD');
+  });
+});
+
+describe('shared sheet apply/output guards (Codex review)', () => {
+  it('preflight rejects an apply without a reviewed plan before any store call', async () => {
+    const store = new MemoryDataStore();
+    const spy = vi.spyOn(store, 'getCatalogWriterOwnership');
+    await expect(preflightSharedSheetApply(store, undefined, undefined, 'memory')).rejects.toThrow('SHARED_SHEET_PLAN_REQUIRED_OR_CHANGED');
+    expect(spy).not.toHaveBeenCalled();
+  });
+  it('private output refuses this repository even when cwd is elsewhere, and accepts a temp dir', async () => {
+    const cwd = process.cwd();
+    const outside = await mkdtemp(join(tmpdir(), 'fp-private-'));
+    try {
+      process.chdir(outside);
+      await expect(writePrivateArtifact(resolve(cwd, 'plan-leak.json'), {})).rejects.toThrow('PRIVATE_OUTPUT_MUST_BE_OUTSIDE_CHECKOUT');
+      await expect(writePrivateArtifact(resolve(cwd, 'src', 'plan-leak.json'), {})).rejects.toThrow('PRIVATE_OUTPUT_MUST_BE_OUTSIDE_CHECKOUT');
+      await expect(writePrivateArtifact(join(outside, 'plan.json'), { ok: true })).resolves.toBeUndefined();
+    } finally { process.chdir(cwd); }
   });
 });

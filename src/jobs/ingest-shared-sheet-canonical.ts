@@ -170,6 +170,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
     return planSharedSheetCanonical(store, options.capture, options.target);
   }
   const plan = options.plan;
+  assertSharedSheetPlan(plan, options.expectedPlanDigest, options.target);
   await preflightSharedSheetApply(store, plan, options.expectedPlanDigest, options.target);
   const p = prepared(plan.capture);
   const head = await store.getSourceHead(p.sourceId);
