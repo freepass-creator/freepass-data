@@ -194,7 +194,7 @@ export function planF04CommissionProjection(input: {
       // 설명·머리글 줄도 대조한다(두 번째 읽기에서 열 이름·배치가 바뀌면 멈춘다). AE·AJ·흐르는 수식 열 제외는 자료 줄에만.
       const v = (r as unknown[] | undefined) ?? [], f = (formulas[i] as unknown[] | undefined) ?? [], data = i > hi;
       for (let c = 0; c < Math.max(v.length, f.length, header.length); c++) {
-        if (formula(f[c]) || (data && (fee.has(c) || (spill.has(c) && empty(f[c]))))) continue;
+        if (data && (formula(f[c]) || fee.has(c) || (spill.has(c) && empty(f[c])))) continue;
         if (!sameCell(v[c], f[c], c)) throw new Error('F04_FORMULA_READ_MISMATCH');
       }
     });

@@ -126,6 +126,8 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
     const v = row({ 차량번호: '12가3456' });
     const renamed = [...H]; renamed[at('판매수수료')] = '판매수수료(공급가)';
     expect(() => planF04CommissionProjection({ intake: intake(v), intakeFormulas: [['접수 누적원장 — 설명'], renamed, [...v]], installments: INST, openFromMonth: '2026-09', readAt: 'x' })).toThrow('F04_FORMULA_READ_MISMATCH');
+    const formulaHeader = [...H]; formulaHeader[at('판매수수료')] = '="다른 항목"';
+    expect(() => planF04CommissionProjection({ intake: intake(v), intakeFormulas: [['접수 누적원장 — 설명'], formulaHeader, [...v]], installments: INST, openFromMonth: '2026-09', readAt: 'x' })).toThrow('F04_FORMULA_READ_MISMATCH');
     const moved = [...H]; [moved[30], moved[35]] = [moved[35]!, moved[30]!];
     expect(() => planF04CommissionProjection({ intake: intake(v), intakeFormulas: [['접수 누적원장 — 설명'], moved, [...v]], installments: INST, openFromMonth: '2026-09', readAt: 'x' })).toThrow('F04_FORMULA_READ_MISMATCH');
     expect(() => planF04CommissionProjection({ intake: intake(v), intakeFormulas: [['다른 설명'], [...H], [...v]], installments: INST, openFromMonth: '2026-09', readAt: 'x' })).toThrow('F04_FORMULA_READ_MISMATCH');
