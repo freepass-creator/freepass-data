@@ -93,6 +93,17 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
     expect(p.fills).toEqual([]);
     expect(p.blanks.map(b => `${b.row}${b.column}:${b.reason}`)).toEqual(['413AE:INDIVIDUAL_AGREEMENT', '413AJ:INDIVIDUAL_AGREEMENT', '414AE:INDIVIDUAL_AGREEMENT', '414AJ:INDIVIDUAL_AGREEMENT']);
   });
+  it('a 회차청구 line for the same plate that does not point to this row (moved or unreadable) blocks AE as unclear', () => {
+    const inst = [...INST, ['12가3456', 99, '2026-09-20', 2, 2026, 10, 1, '근거', false], ['12가3457', '', '2026-09-20', 2, 2026, 10, 1, '근거', false]];
+    const p = plan([row({ 차량번호: '12가3456' }), row({ 차량번호: '12가3457' })], inst);
+    expect(p.blanks.map(b => `${b.row}${b.column}:${b.reason}`)).toEqual(['3AE:INSTALLMENT_LINK_UNCLEAR', '4AE:INSTALLMENT_LINK_UNCLEAR']);
+    expect(p.fills.map(f => `${f.row}${f.column}`)).toEqual(['3AJ', '4AJ']);
+  });
+  it('the private individual-agreement list protects the contract by key wherever its row moved', () => {
+    const p = planF04CommissionProjection({ intake: intake(row({ 차량번호: '12가3456' })), installments: INST, openFromMonth: '2026-09', readAt: 'x', individualKeys: ['12가3456|2026-09-20'] });
+    expect(p.fills).toEqual([]);
+    expect(p.blanks.map(b => b.reason)).toEqual(['INDIVIDUAL_AGREEMENT', 'INDIVIDUAL_AGREEMENT']);
+  });
   it('stops when the layout moved or the month is malformed', () => {
     const moved = [...H]; moved.splice(30, 0, 'x');
     expect(() => planF04CommissionProjection({ intake: [['설명'], moved], installments: INST, openFromMonth: '2026-09', readAt: 'x' })).toThrow('F04_FEE_COLUMN_MOVED');

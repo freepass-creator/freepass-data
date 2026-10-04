@@ -108,6 +108,8 @@ export function projectedAmount(result: ReturnType<typeof resolveSupplierBilling
  */
 export function planF04CommissionProjection(input: {
   intake: unknown[][]; installments: unknown[][]; openFromMonth: string; readAt: string; facts?: Record<string, { fuel?: string }>;
+  /** 개별 합의 계약의 열쇠(차량번호|접수일) — 비공개 목록. 행 번호가 바뀌어도 계약으로 보호한다. */
+  individualKeys?: string[];
 }): F04ProjectionPlan {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.openFromMonth)) throw new Error('F04_OPEN_MONTH_INVALID');
   const hi = input.intake.findIndex(r => Array.isArray(r) && r.includes('차량번호'));
@@ -121,9 +123,13 @@ export function planF04CommissionProjection(input: {
   const ih = input.installments.findIndex(r => Array.isArray(r) && r.includes('차량번호') && r.includes('원 접수행'));
   if (ih < 0) throw new Error('F04_INSTALLMENT_HEADER_MISSING');
   const iHeader = input.installments[ih]!.map(text);
-  const installmentRows = new Set(input.installments.slice(ih + 1)
+  const installmentLinks = input.installments.slice(ih + 1)
     .filter(r => Array.isArray(r) && !empty(r[iHeader.indexOf('차량번호')]))
-    .map(r => `${plateKey(r[iHeader.indexOf('차량번호')])}|${int(r[iHeader.indexOf('원 접수행')])}`));
+    .map(r => ({ plate: plateKey(r[iHeader.indexOf('차량번호')]), row: int(r[iHeader.indexOf('원 접수행')]) }));
+  const installmentRows = new Set(installmentLinks.filter(l => l.row !== null).map(l => `${l.plate}|${l.row}`));
+  // 같은 차량번호의 회차청구 줄이 있는데 원 접수행이 이 줄을 가리키지 않거나 못 읽으면(행 이동 등) 연결 불명 — AE 를 쓰지 않는다.
+  const installmentPlates = new Set(installmentLinks.map(l => l.plate));
+  const individualKeys = new Set(input.individualKeys ?? []);
 
   const rows = input.intake.slice(hi + 1).map((r, i) => ({ sheetRow: hi + 2 + i, cells: Array.isArray(r) ? r : [] }))
     .filter(r => !empty(r.cells[header.indexOf('차량번호')]));
@@ -147,7 +153,7 @@ export function planF04CommissionProjection(input: {
     if ((empty(row['청구년']) !== empty(row['청구월'])) || (!empty(row['청구년']) && (y === null || m === null || m < 1 || m > 12))) { skip('BILLING_MONTH_UNREADABLE'); continue; }
     const closed = truthy(row['청구']) ? 'ALREADY_BILLED' : y !== null && m !== null && (y < by || (y === by && m < bm)) ? 'BILLING_MONTH_CLOSED' : null;
     const guarded = protectedSides(text(row['비고']));
-    const individual = INDIVIDUAL_LEDGER_ROWS.has(sheetRow) || /개별/.test(text(row['비고']));
+    const individual = individualKeys.has(key(cells)) || INDIVIDUAL_LEDGER_ROWS.has(sheetRow) || /개별/.test(text(row['비고']));
     const built = individual ? { reason: 'INDIVIDUAL_AGREEMENT' } : f04RowInput(row, input.facts);
     if (closed) {
       // 닫힌 줄은 쓰지 않는다. 적힌 값이 계산과 다르면 사람 확인 목록에만.
@@ -155,7 +161,7 @@ export function planF04CommissionProjection(input: {
       if ('input' in built) for (const column of ['AE', 'AJ'] as const) {
         const result = column === 'AE' ? resolveSupplierBillingFee(built.input) : resolveSalesCommission(built.input);
         const projected = projectedAmount(result), current = cells[colOf(column)];
-        if (empty(current) || (column === 'AE' && installmentRows.has(`${plate}|${sheetRow}`))) continue;
+        if (empty(current) || (column === 'AE' && installmentPlates.has(plate))) continue;
         if (!('reason' in projected)) { if (int(current) !== projected.value) plan.closedDiffs.push(diffOf(sheetRow, column, column, plate, current, projected.value, projected.ruleId)); continue; }
         const rough = projected.reason === 'WON_ROUNDING_UNDECIDED' ? roughAmount(result) : null;
         if (rough && int(current) !== rough.value) plan.closedDiffs.push(diffOf(sheetRow, column, column, plate, current, rough.value, rough.ruleId, 'WON_ROUNDING_UNDECIDED'));
@@ -164,8 +170,9 @@ export function planF04CommissionProjection(input: {
     }
     for (const column of ['AE', 'AJ'] as const) {
       const current = cells[colOf(column)];
-      if (column === 'AE' && installmentRows.has(`${plate}|${sheetRow}`)) {
-        if (empty(current)) plan.blanks.push({ row: sheetRow, column, plate, reason: 'INSTALLMENT_TAB_HAS_CONTRACT' }); else skip('AE_KEPT_INSTALLMENT_TAB');
+      if (column === 'AE' && installmentPlates.has(plate)) {
+        const reason = installmentRows.has(`${plate}|${sheetRow}`) ? 'INSTALLMENT_TAB_HAS_CONTRACT' : 'INSTALLMENT_LINK_UNCLEAR';
+        if (empty(current)) plan.blanks.push({ row: sheetRow, column, plate, reason }); else skip('AE_KEPT_INSTALLMENT_TAB');
         continue;
       }
       if ('reason' in built) { if (empty(current)) plan.blanks.push({ row: sheetRow, column, plate, reason: built.reason }); continue; }

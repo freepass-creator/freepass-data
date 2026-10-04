@@ -13,7 +13,7 @@ export async function main(args = process.argv.slice(2)) {
   const parsed = new Map<string, string>();
   for (let i = 0; i < args.length; i += 2) {
     const k = args[i]!, v = args[i + 1];
-    if (!['--from-batchget', '--grid-meta', '--facts', '--open-from', '--out'].includes(k) || parsed.has(k) || !v || v.startsWith('--')) throw new Error('INVALID_ARGUMENT');
+    if (!['--from-batchget', '--grid-meta', '--facts', '--individual', '--open-from', '--out'].includes(k) || parsed.has(k) || !v || v.startsWith('--')) throw new Error('INVALID_ARGUMENT');
     parsed.set(k, v);
   }
   const batchPath = parsed.get('--from-batchget'), out = parsed.get('--out'), openFromMonth = parsed.get('--open-from');
@@ -30,7 +30,12 @@ export async function main(args = process.argv.slice(2)) {
   if (!whole(intake?.range, '접수') || !whole(installments?.range, '회차청구')) throw new Error('F04_BATCHGET_RANGES_MISMATCH');
   const factsPath = parsed.get('--facts');
   const facts = factsPath ? JSON.parse(await readFile(factsPath, 'utf8')) as Record<string, { fuel?: string }> : {};
-  const plan = planF04CommissionProjection({ intake: intake!.values ?? [], installments: installments!.values ?? [], openFromMonth, readAt: new Date().toISOString(), facts });
+  // 개별 합의 계약 목록(차량번호|접수일, 비공개)은 필수 — 없으면 행 번호만으로는 계약을 보호할 수 없다.
+  const individualPath = parsed.get('--individual');
+  if (!individualPath) throw new Error('F04_INDIVIDUAL_LIST_REQUIRED');
+  const individualKeys = JSON.parse(await readFile(individualPath, 'utf8')) as unknown;
+  if (!Array.isArray(individualKeys) || individualKeys.some(k => typeof k !== 'string' || !k.includes('|'))) throw new Error('F04_INDIVIDUAL_LIST_INVALID');
+  const plan = planF04CommissionProjection({ intake: intake!.values ?? [], installments: installments!.values ?? [], openFromMonth, readAt: new Date().toISOString(), facts, individualKeys });
   await writePrivateArtifact(out, plan);
   const count = <T,>(items: T[], key: (x: T) => string) => items.reduce<Record<string, number>>((m, x) => ((m[key(x)] = (m[key(x)] ?? 0) + 1), m), {});
   console.log(JSON.stringify({ schema: plan.schema, policyId: plan.policyId, openFromMonth, rowsRead: plan.rowsRead,

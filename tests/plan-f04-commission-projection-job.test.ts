@@ -23,6 +23,11 @@ describe('F04 투영 계획 작업: 두 탭을 A1 부터 마지막 행까지 읽
       await expect(main(['--from-batchget', f.batch, '--grid-meta', f.meta, '--open-from', '2026-09', '--out', f.out])).rejects.toThrow('F04_BATCHGET_RANGES_MISMATCH');
       expect(existsSync(f.out)).toBe(false);
     });
+  it('requires the private individual-agreement list', async () => {
+    const f = await files(["'접수'!A1:BF518", "'회차청구'!A1:J50"]);
+    await expect(main(['--from-batchget', f.batch, '--grid-meta', f.meta, '--open-from', '2026-09', '--out', f.out])).rejects.toThrow('F04_INDIVIDUAL_LIST_REQUIRED');
+    expect(existsSync(f.out)).toBe(false);
+  });
   it('requires the grid meta', async () => {
     const f = await files(["'접수'!A1:BF518", "'회차청구'!A1:J50"]);
     await expect(main(['--from-batchget', f.batch, '--open-from', '2026-09', '--out', f.out])).rejects.toThrow('F04_GRID_META_REQUIRED');
