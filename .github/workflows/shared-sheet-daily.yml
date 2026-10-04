@@ -162,7 +162,7 @@ jobs:
           set -euo pipefail
           T="$RUNNER_TEMP/shared-sheet"
           uri="gs://$EVIDENCE_BUCKET/shared-sheet-daily/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          for f in capture.json plan.json report.json apply.json; do
+          for f in supplement.json capture.json plan.json report.json apply.json; do
             if test -f "$T/$f"; then
               gcloud storage cp --no-user-output-enabled "$T/$f" "$uri/$f" --if-generation-match=0
               gcloud storage cp --no-user-output-enabled "$uri/$f" "$T/$f.readback"
