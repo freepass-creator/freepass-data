@@ -19,19 +19,76 @@ export const sharedSheetCaptureRanges = () => sharedSheetTabs().map(t => `'${t.r
 const DATE_COLUMNS = Object.entries(spec.valueFormats as Record<string, { kind?: string }>).filter(([, f]) => f.kind === 'date')
   .map(([h]) => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
 /** Serial (days since 1899-12-30, a fraction is the time of day) → YYYY-MM-DD; null when not a usable date (1900~2099). */
-const serialToIsoDate = (v: unknown): string | null => {
+export const serialToIsoDate = (v: unknown): string | null => {
   if (typeof v !== 'number' || !Number.isFinite(v)) return null;
   const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(v) * 86_400_000);
   return d.getUTCFullYear() >= 1900 && d.getUTCFullYear() <= 2099 ? d.toISOString().slice(0, 10) : null;
 };
-/** A displayed number («12,345km» · «77.4kWh» · «2021» · «15%») shows the same real value, to the decimals it shows. */
-const displayMatchesValue = (shown: string, v: number | boolean): boolean => {
+/** |x| 를 15 유효숫자 십진 글자로(지수 없이), 소수점을 k 자리 옮겨서. 스프레드시트도 15 유효숫자로 보여 주므로 같은 규칙이고,
+ * 부동소수 찌꺼기(1.005 → 1.00499…)도 함께 지운다. */
+const decimalDigits = (x: number, shift = 0): { int: string; frac: string } => {
+  const [mantissa, e = '0'] = Math.abs(x).toPrecision(15).split('e');
+  const [i, f = ''] = mantissa!.split('.');
+  let digits = i! + f, point = i!.length + Number(e) + shift;
+  if (point <= 0) { digits = '0'.repeat(1 - point) + digits; point = 1; }
+  if (point > digits.length) digits += '0'.repeat(point - digits.length);
+  return { int: digits.slice(0, point), frac: digits.slice(point) };
+};
+/** 십진 글자를 places 자리에서 «0 에서 먼 쪽 반올림»한 정수(×10^places). */
+const roundedUnits = (d: { int: string; frac: string }, places: number): bigint => {
+  const frac = d.frac.padEnd(places + 1, '0');
+  const kept = BigInt(d.int + frac.slice(0, places));
+  return frac[places]! >= '5' ? kept + 1n : kept;
+};
+
+const ACCOUNTING_ZERO_DISPLAY = /^[\s$\u00a3\u00a5\u20a9\u20ac]*-[\s$\u00a3\u00a5\u20a9\u20ac]*$/u;
+
+/** A displayed number shows the same real value, to the precision it shows: «12,345km» · «77.4kWh» · «2021» · «15%» ·
+ * 회계식 0 «-» · 음수 «-1,000» / «(1,000)» · 지수 «1.23E+05». */
+export const displayMatchesValue = (shown: string, v: number | boolean): boolean => {
   if (typeof v === 'boolean') return shown.trim().toUpperCase() === String(v).toUpperCase();
-  const t = shown.replace(/[^0-9.\-]/g, '');
-  const n = Number(t);
-  if (!t || !Number.isFinite(n)) return false;
-  const target = shown.includes('%') ? v * 100 : v, decimals = (t.split('.')[1] ?? '').length;
-  return Math.abs(n - target) <= 0.5 * 10 ** -decimals + 1e-9;
+  if (!Number.isFinite(v)) return false;
+  const s = shown.trim();
+  if (/^(?:[-+]?Infinity|NaN)$/i.test(s)) return false;
+  if (!/\d/.test(s)) return ACCOUNTING_ZERO_DISPLAY.test(s) && v === 0; // 회계식 0
+  // 표시 전체가 한 숫자 형식이어야 한다(일부만 숫자인 «1E3 + 2» 같은 글자는 거부):
+  //   [통화] [-] [(] [통화] 숫자[지수] [단위] [%] [)]  — 숫자는 쉼표 묶음(1,234)·소수, 지수는 E±1~3자리.
+  const m = /^\s*(?:[₩$]\s*)?(-)?\s*(\()?\s*(?:[₩$]\s*)?(-)?\s*(\d[\d,]*(?:\.\d*)?|\.\d+)(?:E([+-]?\d{1,3}))?\s*([A-Za-z가-힣]+)?\s*(%)?\s*(\))?\s*$/i.exec(s);
+  if (!m) return false;
+  const [, minusOut, open, minusIn, number, exponent, unit, pct, close] = m;
+  if (!!open !== !!close || (minusOut && minusIn) || ((minusOut || minusIn) && open)) return false;
+  const [intPart, fracPart] = number!.split('.');
+  if (intPart && intPart.includes(',') && !/^\d{1,3}(,\d{3})+$/.test(intPart)) return false;
+  if (exponent !== undefined && unit !== undefined && /^e/i.test(unit)) return false;
+  const sign = open || minusOut || minusIn ? -1 : 1;
+  const percent = pct ? 2 : 0;
+  const digits = (intPart ?? '').replace(/,/g, '') + (fracPart !== undefined ? '.' + fracPart : '');
+  // 보이는 자릿수로 시트처럼 «0 에서 먼 쪽 반올림»한 값과 정확히 같아야 한다(«1» ↔ 1.5 는 «2», «1.23E+05» ↔ 123500 은 «1.24E+05»).
+  // 계산은 15 유효숫자 십진 글자와 정수(BigInt)로 — 부동소수 경계 오류가 없다. 0 이 아니면 부호도 같아야 한다.
+  const compare = (shownDigits: string, places: number, expected: bigint) => {
+    const [si, sf = ''] = shownDigits.split('.');
+    const shownUnits = BigInt((si || '0') + sf.padEnd(places, '0'));
+    if (shownUnits !== expected) return false;
+    return shownUnits === 0n || sign === Math.sign(v);
+  };
+  const places = (fracPart ?? '').length;
+  if (exponent !== undefined) {
+    // 지수 표시: 가수는 «한 자리.소수»(0 이 아니면 1~9 로 시작), 지수 ±308 안. 가수가 0 이면 실제 값도 0 이어야 한다.
+    const e = Number(exponent);
+    if (Math.abs(e) > 308) return false;
+    if (/^0*\.?0*$/.test(digits)) return v === 0;
+    if (!/^[1-9](\.\d*)?$/.test(digits)) return false;
+    if (v === 0) return false;
+    // 실제 값의 정규 지수(15 유효숫자)와 가수 반올림 — 반올림이 10 이 되면 지수를 하나 올린다(9.995E+02 → 1.00E+03).
+    const [mant, ex] = Math.abs(v).toExponential(14).split('e');
+    let expectedExp = Number(ex) + percent;
+    let units = roundedUnits({ int: mant!.split('.')[0]!, frac: mant!.split('.')[1] ?? '' }, places);
+    if (units >= 10n ** BigInt(places + 1)) { units = roundedUnits({ int: '1', frac: '0'.repeat(places + 1) }, places); expectedExp += 1; }
+    return e === expectedExp && compare(digits, places, units);
+  }
+  // 한계: «0.###» 처럼 뒤 0 을 생략하는 형식은 보이는 자릿수가 형식의 최대 자릿수보다 적을 수 있어(77.4 ↔ 77.44 처럼)
+  // 표시만으로는 가릴 수 없다 — 두 읽기 사이 변경은 앞뒤 실제 값 동일 검사(sameReads)와 줄마다 글자 칸 대조가 막는다.
+  return compare(digits, places, roundedUnits(decimalDigits(v, percent), places));
 };
 
 const IDENTITY_COLUMNS = ['회사명', '차량번호'].map(h => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
@@ -47,7 +104,8 @@ const displayMatchesIso = (shown: string, iso: string): boolean => {
 };
 
 /** Two reads of the same ranges are identical (same ranges, same row counts, same cells — dates and numbers included).
- * Limit: a change that is made and fully undone between the two reads is not seen. */
+ * Limit: a change that is made and fully undone between the two reads is not seen, and two rows identical in every
+ * non-date cell that are swapped and swapped back in that window cannot be told apart. */
 export const sameReads = (a: SheetsBatchGet, b: SheetsBatchGet): boolean =>
   a?.spreadsheetId === b?.spreadsheetId && JSON.stringify(a?.valueRanges ?? null) === JSON.stringify(b?.valueRanges ?? null);
 

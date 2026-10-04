@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captureFromBatchGet as rawCapture, sharedSheetTabs, sharedSheetCaptureRanges, SHEETS_GRID_META_FIELDS, type SheetsBatchGet, type SheetsGridMeta } from '../src/adapters/shared-sheet-capture.js';
+import { captureFromBatchGet as rawCapture, serialToIsoDate, displayMatchesValue, sharedSheetTabs, sharedSheetCaptureRanges, SHEETS_GRID_META_FIELDS, type SheetsBatchGet, type SheetsGridMeta } from '../src/adapters/shared-sheet-capture.js';
 import { readSheetsBatchGet, readSheetsMetadata } from '../src/infra/shared-sheet-capture-reader.js';
 const ROWS = 1000;
 const META = (): SheetsGridMeta => ({ spreadsheetId: ID, sheets: sharedSheetTabs().map(title => ({ properties: { title, gridProperties: { rowCount: ROWS } } })) });
@@ -155,5 +155,31 @@ describe('shared sheet capture keeps the year of date cells', () => {
     const twin = batch({ [ch.tab]: [real, real] });
     rawCapture(ID, batch({ [ch.tab]: [shown, shown] }), META(), T, twin, twin, stats);
     expect(stats).toEqual({ datesFromSerial: 2 });
+  });
+});
+
+describe('shared sheet capture — date boundaries and displayed numbers', () => {
+  it('reads serials as dates only between 1900 and 2099, a time of day kept on the same date', () => {
+    expect(serialToIsoDate(1)).toBeNull();
+    expect(serialToIsoDate(2)).toBe('1900-01-01');
+    expect(serialToIsoDate(36525)).toBe('1999-12-31');
+    expect(serialToIsoDate(36526)).toBe('2000-01-01');
+    expect(serialToIsoDate(73050)).toBe('2099-12-31');
+    expect(serialToIsoDate(73051)).toBeNull();
+    expect(serialToIsoDate(46246.99)).toBe('2026-08-12');
+    expect(serialToIsoDate('46246')).toBeNull();
+    expect(serialToIsoDate(Number.NaN)).toBeNull();
+  });
+  it('matches a displayed number to its real value in every format the sheet may show', () => {
+    for (const [shown, v] of [['12,345km', 12345], ['77.4kWh', 77.4], ['2021', 2021], ['15%', 0.15], ['12.5%', 0.125], ['-', 0], ['₩ -', 0],
+      ['-1,000', -1000], ['(1,000)', -1000], ['1.23E+05', 123000], ['1.23E+05', 123456], ['1E-10', 1e-10], ['-1E-10', -1e-10], ['1.5E-10', 1.54e-10], ['0.00E+00', 0], ['1.20E+02', 120], ['5E+02', 500], ['9.95E+02', 995], ['1.00E+03', 999.6], ['1.5E+01%', 0.15], ['-1.23E+05', -123456], ['5.E+03', 5000], ['1000000000000000', 1000000000000000], ['1000000000000000', 1000000000000001], ['2', 1.5], ['-2', -1.5], ['1', 1.4], ['1', 1.4999999999], ['1km', 1.4999999999], ['1.24E+05', 123500], ['1.00E+06', 999500], ['2,000,000,001', 2000000000.4999990463], ['2,000,000,001km', 2000000000.4999990463], ['2,000,000,001', 2000000000.5], ['14157445380%', 141574453.795], ['0.15%', 0.0015], ['-0', -0.0001], ['1%', 0.014999999999], ['101', 100.49999999999999], ['1.01', 1.005], ['77.4kWh', 77.44], ['12,346km', 12345.5], ['15%', 0.1549], ['(1.23E+05)', -123000], ['-1.23E+05', -123000], ['1.5E-03', 0.0015], ['₩ (1,000)', -1000], ['₩-1,000', -1000], ['0', 0], ['TRUE', true], ['false', false]] as const)
+      expect(displayMatchesValue(shown, v), `${shown} ↔ ${v}`).toBe(true);
+    expect(displayMatchesValue(' \u20a9 - ', 0)).toBe(true);
+    expect(displayMatchesValue('-Infinity', 0)).toBe(false);
+    expect(displayMatchesValue('Infinity', 0)).toBe(false);
+    expect(displayMatchesValue('NaN', 0)).toBe(false);
+    for (const [shown, v] of [['12,345km', 12346], ['77.4kWh', 77.5], ['15%', 0.16], ['-', 1], ['(1,000)', 1000], ['1,000', -1000],
+      ['1.23E+05', 124000], ['1E-10', 0], ['1E-10', -1e-10], ['-1E-10', 1e-10], ['1E309', 123], ['1E309', Infinity], ['0E309', 123], ['0E+00', 5], ['1E+03', 500], ['1.00E+03', 995], ['1.23E+04', 123000], ['1E3 + 2', 1000], ['1,2,3', 123], ['12E+01', 120], ['abc12', 12], ['1-2', -12], ['.5E+03', 5000], ['.5E+03', 500], ['100000000000001', 100000000000000], ['1', 1.5], ['2', 1.4], ['77.4kWh', 77.46], ['2', 1.4999999999], ['2km', 1.4999999999], ['2%', 0.014999999999], ['1.23E+05', 123500], ['-1.23E+05', -123500], ['2,000,000,000', 2000000000.4999990463], ['2,000,000,000km', 2000000000.4999990463], ['14157445379%', 141574453.795], ['(1.23E+05)', 123000], ['-1.23E+05', 123000], ['₩ (1,000)', 1000], ['1.5E-03', -0.0015], ['', 0], ['TRUE', false], ['예', true]] as const)
+      expect(displayMatchesValue(shown, v), `${shown} ↔ ${v}`).toBe(false);
   });
 });
