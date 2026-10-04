@@ -1,9 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import type { AuditEvent } from '../domain/catalog.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
+import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 
 export type VehicleNameRepairItem = {
   id: string;
@@ -88,6 +90,19 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     repairs: targets.map(({ item, field, ref }) => ({ path: ref.path, field, ...item })),
   }, null, 2), { flag: 'wx', mode: 0o600 });
 
+  // Evidence never goes into the repaired documents (products are served to consumers field-for-field);
+  // each repair is recorded as an audit event in the same transaction instead.
+  const occurredAt = new Date().toISOString();
+  const audits = targets.map(({ item, field, ref }): AuditEvent => ({
+    eventId: 'vnr_' + createHash('sha256').update([runId, ref.path, field].join('|')).digest('hex').slice(0, 32),
+    commandId: `vehicle-name-repair:${runId}`, actor: { id: 'service:freepass-data-vehicle-name-repair', kind: 'SERVICE' },
+    entityType: ref.parent.id, entityId: ref.id, action: 'VEHICLE_NAME_REFERENCE_REPAIRED',
+    before: { [field]: item.from }, after: { [field]: clean(item.to) },
+    reason: item.evidence ? `원문 근거: ${item.evidence}` : `F03 이름 정정 (${plan.sourceDigest})`,
+    revisionBefore: 0, revisionAfter: 0, occurredAt,
+  }));
+  const auditRefs = audits.map((a) => db.collection(FIRESTORE_COLLECTIONS.evidence.audits).doc(a.eventId));
+
   await db.runTransaction(async (transaction) => {
     const current = await transaction.getAll(...refs);
     current.forEach((snapshot, index) => {
@@ -102,9 +117,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         ...(field === 'trim' && clean(item.from) ? { trim_aliases: FieldValue.arrayUnion(clean(item.from)) } : {}),
         vehicle_name_reference_checked_at: FieldValue.serverTimestamp(),
         vehicle_name_reference_source_digest: plan.sourceDigest,
-        ...(item.evidence ? { vehicle_name_reference_evidence: item.evidence } : {}),
       });
     });
+    audits.forEach((audit, index) => transaction.create(auditRefs[index]!, audit));
   });
 
   const readback = await db.getAll(...refs);
@@ -120,5 +135,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (!aliases.map(clean).includes(clean(item.from)) || !kept) throw new Error(`readback alias mismatch ${snapshot.ref.path}`);
     }
   });
-  return { runId, backupPath, ...counts, readbackCount: readback.length };
+  const auditReadback = await db.getAll(...auditRefs);
+  if (auditReadback.some((s, index) => !s.exists || s.data()?.reason !== audits[index]!.reason)) throw new Error('readback audit mismatch');
+  return { runId, backupPath, ...counts, readbackCount: readback.length, auditCount: auditReadback.length };
 }
