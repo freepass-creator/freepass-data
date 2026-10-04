@@ -9,6 +9,8 @@ export type VehicleNameRepairItem = {
   id: string;
   from: string;
   to: string;
+  /** Required when `from` is blank (filling an empty name): the supplier source text that names it. */
+  evidence?: string;
 };
 
 export type VehicleNameRepairPlan = {
@@ -28,7 +30,9 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   if (!all.length) throw new Error('repair plan is empty');
   const keys = new Set<string>();
   for (const item of all) {
-    if (!item.id?.trim() || !clean(item.from) || !clean(item.to)) throw new Error('repair item requires id/from/to');
+    // A blank `from` fills an empty name; it is only allowed with source-text evidence, and the transaction
+    // precondition still requires the stored value to be blank at write time.
+    if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !clean(item.evidence))) throw new Error('repair item requires id/from/to');
     if (clean(item.from) === clean(item.to)) throw new Error(`no-op repair ${item.kind}:${item.id}`);
     const key = `${item.kind}:${item.id}`;
     if (keys.has(key)) throw new Error(`duplicate repair ${key}`);

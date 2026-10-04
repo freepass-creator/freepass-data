@@ -22,4 +22,12 @@ describe('vehicle-name reference repair gate', () => {
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [],
       trimRepairs: [{ id: 't1', from: 'A', to: 'B' }, { id: 't1', from: 'A', to: 'C' }] })).toThrow(/duplicate/);
   });
+  it('fills a blank name only with source-text evidence', () => {
+    expect(validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [],
+      productRepairs: [{ id: 'p1', from: '', to: '더 뉴 기아 레이', evidence: '원문: 더 뉴기아 레이 트렌디' }] })).toEqual({ masterCount: 0, productCount: 1 });
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [],
+      productRepairs: [{ id: 'p1', from: '', to: '더 뉴 기아 레이' }] })).toThrow(/requires/);
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [],
+      productRepairs: [{ id: 'p1', from: ' ', to: '', evidence: 'x' }] })).toThrow(/requires/);
+  });
 });
