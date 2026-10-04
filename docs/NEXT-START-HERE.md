@@ -1,5 +1,15 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-04 Vehicle Master 직접 정본 전환
+
+- 대표 결정: 차종마스터는 FreePass Data 안에서 직접 관리한다. 새 수집·정규화 경로는 F03을 읽거나 갱신하지 않는다.
+- 신규 경로: `freepass-vehicle-reference/v1` → immutable RAW archive → `VEHICLE_REFERENCE_MODEL` normalized evidence → 기존 Vehicle Master canonical 승격 규칙.
+- 내부 명칭은 `vehicle-reference` / `FreePass Vehicle Reference`로 통일하고 외부 사업자명은 브랜치·폴더·job·스키마 명칭에 넣지 않는다.
+- 외부 원천 식별은 감사에 필요한 최소 정보만 opaque reference digest로 보존한다. 실제 원천의 이용권한·라이선스 확인 전 공개 웹사이트 전수 복제는 하지 않는다.
+- 실행: `npm run ingest:vehicle-reference`; 입력 파일은 저장소 밖의 승인된 JSON이며 `VEHICLE_REFERENCE_IMPORT_APPROVED=true`, `VEHICLE_REFERENCE_IMPORT_FILE=<absolute path>`를 요구한다.
+- next_start_here: 승인된 전량 export를 이 계약으로 적재하고, 제조사·시리즈·모델 건수와 normalized readback을 확인한 뒤 canonical bootstrap/승격을 이어간다.
+
+
 ## 2026-10-04 F03 차종마스터 운영 규칙 고정
 
 - 목적: 10-03~04 대표 결정(엔카 기준 4단계, 기아만 개발명, 제조사 엔카 표기, 별칭 탭, 불변 ID, 신규 행 추가 절차, 직접 쓰기 금지 예외)을 휘발되지 않게 정본 문서에 고정한다.
