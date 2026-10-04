@@ -36,7 +36,7 @@ export type VehicleNameRepairPlan = {
   masterModelRepairs?: VehicleNameRepairItem[];
   /** vehicle_trim_master.model, same rename as its master. Old name kept in model_aliases. */
   trimModelRepairs?: VehicleNameRepairItem[];
-  /** vehicle_master.gen_code → 개발코드(예: CV1 → CV). Old code kept in gen_code_aliases. */
+  /** vehicle_master.gen_code → 개발코드(예: CV1 → CV). Old code kept in gen_code_aliases. A blank code may be filled with evidence. */
   masterGenCodeRepairs?: VehicleNameRepairItem[];
   /** New vehicle_master docs (new sub-model). Created only when absent; `data.id` must equal `id`. */
   masterCreates?: VehicleMasterDocCreate[];
@@ -173,7 +173,8 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     // precondition still requires the stored value to be blank at write time. Every other kind needs a name.
     const evidenceOk = typeof item.evidence === 'string' && item.evidence.trim() !== '';
     if (item.evidence !== undefined && !evidenceOk) throw new Error('repair item evidence must be a non-empty string');
-    const blankFill = !clean(item.from) && item.kind === 'product' && evidenceOk;
+    // A blank gen_code may be filled too (the code is already in the sub-model name), with evidence.
+    const blankFill = !clean(item.from) && (item.kind === 'product' || item.kind === 'masterGenCode') && evidenceOk;
     if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !blankFill)) throw new Error('repair item requires id/from/to');
     if (clean(item.from) === clean(item.to)) throw new Error(`no-op repair ${item.kind}:${item.id}`);
     if (item.kind === 'trimMasterLink' && item.to !== item.to.trim()) throw new Error(`trimMasterLink ${item.id} to must be an exact master id`);
@@ -488,7 +489,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     const stored = field === 'master_id' ? data?.[field] : clean(data?.[field]);
     if (stored !== (field === 'master_id' ? item.to : clean(item.to))) throw new Error(`readback mismatch ${snapshot.ref.path}`);
     const aliasField = ALIAS_FIELD[kind];
-    if (aliasField) {
+    if (aliasField && clean(item.from)) {
       // The old name must be kept as an alias, and aliases present before the repair must still be there.
       const aliases: unknown[] = Array.isArray(data?.[aliasField]) ? data[aliasField] : [];
       const before = snapshots[index]!.data()?.[aliasField];

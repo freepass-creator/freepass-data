@@ -310,6 +310,16 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     db.runTransaction = async (fn) => { await original(fn); store.set('vehicle_master/m-x', { ...store.get('vehicle_master/m-x')!, model: '변조' }); };
     try { await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterModelRepairs: [{ id: 'm-x', from: '아이오닉6', to: '아이오닉 6' }] })).rejects.toThrow(/readback mismatch/); } finally { db.runTransaction = original; }
   });
+  it('fills a blank gen_code only with evidence, without an alias', async () => {
+    store.set('vehicle_master/m-9', { id: 'm-9', maker: '현대', model: '아이오닉 9', sub_model: '아이오닉 9 ME', gen_code: '' });
+    const base = { sourceDigest: 'v1', masterRepairs: [], productRepairs: [] };
+    await expect(applyVehicleNameReferenceRepair({ ...base, masterGenCodeRepairs: [{ id: 'm-9', from: '', to: 'ME' }] })).rejects.toThrow(/requires/);
+    await applyVehicleNameReferenceRepair({ ...base, masterGenCodeRepairs: [{ id: 'm-9', from: '', to: 'ME', evidence: '세부모델 이름의 개발코드' }] });
+    expect(store.get('vehicle_master/m-9')).toMatchObject({ gen_code: 'ME' });
+    expect(store.get('vehicle_master/m-9')!.gen_code_aliases).toBeUndefined();
+    // a stored code is not a blank: the plan's blank from no longer matches
+    await expect(applyVehicleNameReferenceRepair({ ...base, masterGenCodeRepairs: [{ id: 'm-9', from: '', to: 'ME1', evidence: 'x' }] })).rejects.toThrow(/precondition/);
+  });
   it('checks names with model and sub-model renamed together, and against a created master', async () => {
     store.set('vehicle_master/m-a', { id: 'm-a', maker: '현대', model: '아이오닉5', sub_model: '옛 이름' });
     store.set('vehicle_master/m-b', { id: 'm-b', maker: '현대', model: '아이오닉 5', sub_model: '아이오닉 5 NE' });
