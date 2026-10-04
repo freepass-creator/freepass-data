@@ -45,6 +45,7 @@
     "dry-run:estimate-master-canonical": "tsx src/jobs/build-estimate-newcar-master-canonical-dry-run.ts",
     "check:estimate-master-readiness": "tsx src/jobs/check-estimate-master-readiness.ts --scheduled-read-only",
     "ingest:erp5-source": "tsx src/jobs/ingest-erp5-source.ts",
+    "build:vehicle-identity-inputs": "tsx src/jobs/build-vehicle-identity-inputs.ts",
     "capture:shared-sheet": "tsx src/jobs/capture-shared-sheet.ts",
     "ingest:shared-sheet-canonical": "tsx src/jobs/ingest-shared-sheet-canonical.ts",
     "query:canonical-by-plate": "tsx src/jobs/query-canonical-by-plate.ts",

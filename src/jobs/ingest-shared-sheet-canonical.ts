@@ -2,7 +2,9 @@ import { readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { buildSharedSheetBatch, sharedSheetChannels, SHARED_SHEET_SPEC_DIGEST, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
-import { normalizeSharedSheet, SHARED_SHEET_RULE_VERSION, sharedSheetStatusPolicy } from '../adapters/normalize-shared-sheet.js';
+import { sharedSheetNormalizer, SHARED_SHEET_RULE_VERSION, sharedSheetStatusPolicy, type SharedSheetIdentityResolver } from '../adapters/normalize-shared-sheet.js';
+import { assertVehicleIdentityInputs, type VehicleIdentityInputs } from '../adapters/vehicle-identity-inputs.js';
+import { chooseVehicleIdentity, indexF03, VEHICLE_IDENTITY_RULE_VERSION } from '../domain/vehicle-identity-resolution.js';
 import { ingestRawSourceBatch, prepareRawSourceBatch } from '../application/ingest-raw-source.js';
 import { canonicalizeCatalogCandidate, type CanonicalizeCatalogCandidateInput } from '../application/canonicalize-catalog-candidate.js';
 import { reviewSourceChange, applyReviewedSourceChange } from '../application/reviewed-source-change.js';
@@ -26,18 +28,29 @@ export type SharedSheetPlan = {
   schema: 'shared-sheet-canonical-plan/v1'; target: string; capture: SharedSheetCapture;
   ruleVersion: string; specDigest: string; policyDigest: string; ownershipDigest: string;
   previousHeadDigest: string; runId: string; entries: Entry[];
+  /** «Data 정리값 먼저 → F03 → 원문과 모순 없을 때만» inputs. Absent = sheet cells as entered (previous behavior). */
+  identityInputs?: VehicleIdentityInputs; identityRuleVersion?: string;
 };
-function prepared(capture: SharedSheetCapture) {
+export function identityResolver(inputs: VehicleIdentityInputs | undefined): SharedSheetIdentityResolver | undefined {
+  if (!inputs) return undefined;
+  assertVehicleIdentityInputs(inputs);
+  const f03 = indexF03(inputs.f03);
+  const data = new Map(inputs.data.map(x => [x.plate, x.identity]));
+  return row => chooseVehicleIdentity(f03, { sheet: row.sheet, data: data.get(row.plate) ?? null, raw: row.raw,
+    firstRegistration: row.firstRegistration, modelYear: row.modelYear });
+}
+function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs) {
   const batch = buildSharedSheetBatch(capture);
   const p = prepareRawSourceBatch(batch);
-  const normalized = p.rawRecords.map(normalizeSharedSheet);
+  const normalize = sharedSheetNormalizer(identityResolver(identityInputs));
+  const normalized = p.rawRecords.map(r => normalize(r));
   const checkpoint = { sourceId: p.sourceId, observedAt: batch.observedAt, sourceRevision: batch.sourceRevision!, checksum: p.sourceChecksum };
   const run: SourceRun = { runId: p.runId, sourceId: p.sourceId, status: 'COMPLETED', startedAt: batch.observedAt,
     completedAt: batch.observedAt, observedAt: batch.observedAt, checkpoint, coverage: batch.coverage, headStatus: 'CURRENT',
     rawCount: p.rawRecords.length, candidateCount: normalized.length,
     lineageCount: normalized.reduce((n, x) => n + x.lineage.length, 0), warningCount: normalized.filter(x => x.record.status !== 'VALID').length };
   const head: SourceHead = { sourceId: p.sourceId, runId: p.runId, observedAt: batch.observedAt, acceptedAt: batch.observedAt, checkpoint, coverage: batch.coverage };
-  return { ...p, batch, normalized, run, head };
+  return { ...p, batch, normalized, run, head, normalize };
 }
 function overlay(store: CatalogStore, p: ReturnType<typeof prepared>): CatalogStore {
   // Read-only prospective evidence. No transaction or SourceIngestionStore write in planning.
@@ -52,15 +65,17 @@ function overlay(store: CatalogStore, p: ReturnType<typeof prepared>): CatalogSt
     return typeof value === 'function' ? value.bind(target) : value;
   } });
 }
-export async function planSharedSheetCanonical(store: CatalogStore, capture: SharedSheetCapture, target: string) {
-  const p = prepared(capture);
+export async function planSharedSheetCanonical(store: CatalogStore, capture: SharedSheetCapture, target: string,
+  identityInputs?: VehicleIdentityInputs) {
+  const p = prepared(capture, identityInputs);
   const currentHead = await store.getSourceHead(p.sourceId);
   const ownership = await store.getCatalogWriterOwnership();
   const sourceEligible = currentHead?.runId === p.runId || decideSourceHead(p.batch.coverage, p.batch.observedAt, currentHead?.observedAt).acceptedAsHead;
   const plan: SharedSheetPlan = { schema: 'shared-sheet-canonical-plan/v1', target, capture: structuredClone(capture),
     ruleVersion: SHARED_SHEET_RULE_VERSION, specDigest: SHARED_SHEET_SPEC_DIGEST,
     policyDigest: stableDigest(KAKAO_COMMISSION_POLICY), ownershipDigest: stableDigest(ownership),
-    previousHeadDigest: stableDigest(currentHead), runId: p.runId, entries: [] };
+    previousHeadDigest: stableDigest(currentHead), runId: p.runId, entries: [],
+    ...(identityInputs ? { identityInputs: structuredClone(identityInputs), identityRuleVersion: VEHICLE_IDENTITY_RULE_VERSION } : {}) };
   const suppliers: Record<string, ReturnType<typeof group>> = Object.fromEntries(sharedSheetChannels.map(x => [x.code, group()]));
   const holdReasons: Record<string, number> = {};
   const unknownFeeReasons: Record<string, number> = {};
@@ -161,6 +176,10 @@ export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest:
       plan.policyDigest !== stableDigest(KAKAO_COMMISSION_POLICY) || digest !== stableDigest(plan) || !Array.isArray(plan.entries)) {
     throw new Error('SHARED_SHEET_PLAN_REQUIRED_OR_CHANGED');
   }
+  if (plan.identityInputs !== undefined || plan.identityRuleVersion !== undefined) {
+    assertVehicleIdentityInputs(plan.identityInputs);
+    if (plan.identityRuleVersion !== VEHICLE_IDENTITY_RULE_VERSION) throw new Error('SHARED_SHEET_PLAN_REQUIRED_OR_CHANGED');
+  }
   if (prepared(plan.capture).runId !== plan.runId) throw new Error('SHARED_SHEET_PLAN_CAPTURE_MISMATCH');
 }
 /** Read-only apply guard. The CLI runs it before opening the audited write, so a rejected apply writes nothing (not even an audit event). */
@@ -172,19 +191,20 @@ export async function preflightSharedSheetApply(store: CatalogStore, plan: Share
 }
 export async function runSharedSheetCanonical(store: CatalogStore, source: SourceIngestionStore, options: {
   target: string; capture?: SharedSheetCapture; apply?: boolean; plan?: SharedSheetPlan; expectedPlanDigest?: string;
+  identityInputs?: VehicleIdentityInputs;
 }) {
   if (!options.apply) {
     if (!options.capture) throw new Error('SHARED_SHEET_CAPTURE_REQUIRED');
-    return planSharedSheetCanonical(store, options.capture, options.target);
+    return planSharedSheetCanonical(store, options.capture, options.target, options.identityInputs);
   }
   const plan = options.plan;
   assertSharedSheetPlan(plan, options.expectedPlanDigest, options.target);
   await preflightSharedSheetApply(store, plan, options.expectedPlanDigest, options.target);
-  const p = prepared(plan.capture);
+  const p = prepared(plan.capture, plan.identityInputs);
   const head = await store.getSourceHead(p.sourceId);
   if (head?.runId !== p.runId && stableDigest(head) !== plan.previousHeadDigest) throw new Error('SHARED_SHEET_HEAD_CHANGED');
   // Reconstruct the automatic decision, including all expected revisions, before any write.
-  const fresh = await planSharedSheetCanonical(store, plan.capture, plan.target);
+  const fresh = await planSharedSheetCanonical(store, plan.capture, plan.target, plan.identityInputs);
   if (fresh.plan.entries.length !== plan.entries.length) throw new Error('SHARED_SHEET_PLAN_ENTRIES_CHANGED');
   const replay = new Set<string>();
   for (let i = 0; i < plan.entries.length; i++) {
@@ -196,7 +216,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
       replay.add(entry.recordId);
     } else if (stableDigest(entry) !== stableDigest(fresh.plan.entries[i])) throw new Error('SHARED_SHEET_PLAN_STALE');
   }
-  const run = await ingestRawSourceBatch(source, p.batch, new Date().toISOString(), normalizeSharedSheet);
+  const run = await ingestRawSourceBatch(source, p.batch, new Date().toISOString(), p.normalize);
   if (run.headStatus !== 'CURRENT' || run.candidateCount !== p.normalized.length) throw new Error('SHARED_SHEET_INTAKE_NOT_READY');
   let committed = 0, noChange = 0, held = 0;
   for (const entry of plan.entries) {
@@ -264,19 +284,22 @@ export function parseLocalArgs(args: string[], flags: string[], values: string[]
   return parsed;
 }
 export async function main(args = process.argv.slice(2)) {
-  const a = parseLocalArgs(args, ['--memory', '--firestore', '--apply'], ['--capture', '--plan', '--plan-out', '--expected-plan-digest']);
+  const a = parseLocalArgs(args, ['--memory', '--firestore', '--apply'], ['--capture', '--plan', '--plan-out', '--expected-plan-digest', '--identity-inputs']);
   const apply = a.has('--apply');
   if (apply && (!a.has('--plan') || !a.has('--expected-plan-digest'))) throw new Error('APPLY_REQUIRES_PLAN_AND_DIGEST');
   if (apply && (a.has('--capture') || a.has('--plan-out'))) throw new Error('APPLY_USES_REVIEWED_PLAN_ONLY');
   if (!apply && (a.has('--plan') || a.has('--expected-plan-digest'))) throw new Error('PLAN_FLAGS_REQUIRE_APPLY');
   if (!apply && !a.has('--capture')) throw new Error('CAPTURE_REQUIRED');
+  if (apply && a.has('--identity-inputs')) throw new Error('APPLY_USES_REVIEWED_PLAN_ONLY');
+  const identityInputs = a.has('--identity-inputs') ? JSON.parse(await readFile(a.get('--identity-inputs')!, 'utf8')) as VehicleIdentityInputs : undefined;
+  if (identityInputs) assertVehicleIdentityInputs(identityInputs);
   const { resolveTargetProject } = await import('../infra/firebase-target.js');
   const target = a.has('--memory') ? 'memory' : resolveTargetProject();
   const plan = a.has('--plan') ? JSON.parse(await readFile(a.get('--plan')!, 'utf8')) as SharedSheetPlan : undefined;
   const capture = a.has('--capture') ? JSON.parse(await readFile(a.get('--capture')!, 'utf8')) as SharedSheetCapture : undefined;
   if (apply) assertSharedSheetPlan(plan, a.get('--expected-plan-digest'), target);
   else buildSharedSheetBatch(capture);
-  const options = { target, apply, ...(capture ? { capture } : {}), ...(plan ? { plan } : {}),
+  const options = { target, apply, ...(capture ? { capture } : {}), ...(plan ? { plan } : {}), ...(identityInputs ? { identityInputs } : {}),
     ...(a.has('--expected-plan-digest') ? { expectedPlanDigest: a.get('--expected-plan-digest')! } : {}) };
   let result: Awaited<ReturnType<typeof runSharedSheetCanonical>>;
   if (a.has('--memory')) {

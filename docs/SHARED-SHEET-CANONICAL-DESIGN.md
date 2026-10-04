@@ -87,3 +87,12 @@ npm run query:canonical-by-plate -- --firestore --plate-file <운영자-번호�
 - `npm run capture:shared-sheet -- --spreadsheet <ID> --out <비공개-절대경로>` — Sheets 읽기 전용 토큰(`GOOGLE_SHEETS_APPLICATION_CREDENTIALS` 파일이 있으면 그것, 없으면 ADC). stdout 은 탭 수·레코드 수·digest 만.
 - 로컬 확인용 `--from-batchget <gws batchGet JSON> --read-time <ISO>` 도 같은 검증을 거친다.
 - 숫자 없는 차량번호(「신차」「미정」 등)는 차량 식별자로 쓰지 않는다. RAW 는 위치로 보존하고 정리 단계에서 `PLATE_NOT_ASSIGNED` HOLD.
+
+## 차종 4칸: «Data 정리값 먼저 → F03 → 원문과 모순 없을 때만» (2026-10-04)
+
+- 흐름(대표 확정): 공급사 원문 → FreePass Data 정리값(F03 이름) → 공통 시트 차종 칸은 Data 값을 되써 준다. 공통 시트를 손으로 먼저 고치는 것은 «바로 넣어» 지시 때만.
+- 입력: `npm run build:vehicle-identity-inputs -- --erp5-capture <inspect-erp5-source 캡처> [--f03-batchget <F03 batchGet JSON> --f03-read-time <ISO>] --out <비공개 경로>` — F03 본표(「통합→」 행 제외)·별칭 탭 + 차량번호별 기존 Data 4칸(같은 번호에 값이 엇갈리면 Data 없음 처리).
+- 적재: `ingest:shared-sheet-canonical -- --capture … --identity-inputs <위 파일>`. 계획에 입력이 통째로 들어가고(digest 검사) apply 는 같은 입력으로 다시 계산한다.
+- 규칙(`src/domain/vehicle-identity-resolution.ts`): Data 4칸을 별칭·기본형 규칙으로 F03 이름으로 바꾼다 → F03 행이 아니면 시트. 다음이면 Data 를 쓰지 않는다: 최초등록(없으면 연식)이 F03 생산기간 밖(시작 1개월 전·종료 18개월 뒤까지 허용), 원문에 하이브리드/전기 표시가 있는데 이름에 없음(그 모델에 그런 행이 있을 때)·그 반대, 세부모델의 고유 낱말이 원문에 없음, 시트 값이 원문과 더 잘 맞음(「더 뉴」 등 생략은 감점 안 함). 원문은 Data 쪽이 더 맞는데 생산기간과 어긋나면 HOLD(`VEHICLE_IDENTITY_DATA_CONFLICT`). 둘 다 F03 행이 아니면 HOLD.
+- 기록: `sourceVehicleFacts.vehicleIdentitySource` = FREEPASS_DATA / SHEET(근거: 시트 4칸·Data 4칸·판단 메모). 시트 칸 원문은 evidence 로 그대로 남는다.
+- 검증: 10-04 시트↔Data 대조 99줄의 수동 판정과 99/99 일치(규칙을 이 판정에 맞춰 다듬었으므로 독립 검증은 아니다).
