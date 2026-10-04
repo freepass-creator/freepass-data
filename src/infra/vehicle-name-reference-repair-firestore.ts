@@ -562,14 +562,14 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (retiredHit) throw new Error(`product ${retiredHit.ref.path} would take the identity of a retired master`);
       const stored = await transaction.get(db.collection('vehicle_master').select('maker', 'model', 'sub_model', 'retired').limit(MAX_MASTER_IDENTITY_SCAN + 1));
       if (stored.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`vehicle_master has more than ${MAX_MASTER_IDENTITY_SCAN} entries — product identity check would be unbounded`);
-      const activeKeys = new Map<string, string[]>();
+      const activeKeys: Record<string, string[]> = {};
       const addActive = (key: string, id: string, retired?: unknown) => {
         if (retired === true) return;
-        activeKeys.set(key, [...(activeKeys.get(key) ?? []), id]);
+        activeKeys[key] = [...(activeKeys[key] ?? []), id];
       };
       for (const doc of stored.docs) addActive(identityKeyFrom(doc.data()), doc.id, doc.data().retired);
       for (const c of plan.masterCreates ?? []) addActive(masterNameKey(c.data), c.id);
-      const miss = identityTargets.find((x) => (activeKeys.get(identityKeyFrom(x.item.to)) ?? []).length !== 1);
+      const miss = identityTargets.find((x) => (activeKeys[identityKeyFrom(x.item.to)] ?? []).length !== 1);
       if (miss) throw new Error(`productIdentity target does not match exactly one active vehicle_master ${miss.ref.path}`);
     }
     // Linked masters and create targets are read inside the transaction too, so a concurrent delete/create aborts it.
