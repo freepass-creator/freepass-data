@@ -81,9 +81,9 @@ export function trimDisplayName(value: string, origin: TrimOrigin, options: Trim
     return { name: tokens.join(' '), removed: [], undecided: [], modelDesignation: true };
   }
   // 배기량 숫자 바로 뒤 「T」·디젤 표시 「D」(「2.2D」)도 배기량 표기의 일부로 같이 뗀다(「터보」는 위 목록에서 뗀다).
-  // 옵션 이름 속 낱말(「GT 마스터즈 터보 패키지」의 「터보 패키지」)은 파워트레인이 아니다 — 뒤에 「패키지」가 오면 남긴다.
+  // 옵션 이름 「터보 패키지」(「GT 마스터즈 터보 패키지」)의 「터보」만 파워트레인이 아니다 — 이 한 묶음만 남긴다.
   const drop = tokens.map((token, i) =>
-    (isTrimPowertrainToken(token) && tokens[i + 1] !== '패키지')
+    (isTrimPowertrainToken(token) && !(token === '터보' && tokens[i + 1] === '패키지'))
     || (/^(?:T|D)$/i.test(token) && i > 0 && /^\d\.\d$/.test(tokens[i - 1]!)));
   const removed = tokens.filter((_, i) => drop[i]);
   const kept = tokens.filter((_, i) => !drop[i]);
