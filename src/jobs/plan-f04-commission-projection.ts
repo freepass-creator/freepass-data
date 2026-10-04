@@ -34,7 +34,8 @@ export async function main(args = process.argv.slice(2)) {
   const formulaPath = parsed.get('--from-batchget-formula');
   if (!formulaPath) throw new Error('F04_FORMULA_READ_REQUIRED');
   const formulaBatch = JSON.parse(await readFile(formulaPath, 'utf8')) as { valueRanges?: Array<{ range?: string; values?: unknown[][] }> };
-  if (!whole(formulaBatch.valueRanges?.[0]?.range, '접수')) throw new Error('F04_BATCHGET_RANGES_MISMATCH');
+  // 수식 읽기는 값 읽기와 «같은 범위»여야 한다(열이 모자라면 AE·AJ 수식을 못 본다).
+  if (formulaBatch.valueRanges?.[0]?.range !== intake!.range) throw new Error('F04_BATCHGET_RANGES_MISMATCH');
   // 개별 합의 계약 목록(차량번호|접수일, 비공개)은 필수 — 없으면 행 번호만으로는 계약을 보호할 수 없다.
   const individualPath = parsed.get('--individual');
   if (!individualPath) throw new Error('F04_INDIVIDUAL_LIST_REQUIRED');

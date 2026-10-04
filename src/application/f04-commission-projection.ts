@@ -70,7 +70,8 @@ const empty = (v: unknown) => v === undefined || v === null || v === '';
 const formula = (v: unknown) => typeof v === 'string' && v.trim().startsWith('=');
 /** 날짜를 YYYY-MM-DD 로: 시트 일련번호(1899-12-30 기준), «2026-09-20», «2026. 9. 20», «2026/9/20». 못 읽으면 원래 글자. */
 export const isoDate = (v: unknown): string => {
-  if (typeof v === 'number' && Number.isFinite(v)) return new Date(Date.UTC(1899, 11, 30) + Math.floor(v) * 86_400_000).toISOString().slice(0, 10);
+  const serial = typeof v === 'number' ? v : /^\d{5}(?:\.\d+)?$/.test(text(v)) ? Number(text(v)) : NaN; // 글자로 온 일련번호도
+  if (Number.isFinite(serial)) return new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86_400_000).toISOString().slice(0, 10);
   const m = /^(\d{4})\s*[-./]\s*(\d{1,2})\s*[-./]\s*(\d{1,2})\.?$/.exec(text(v));
   return m ? `${m[1]}-${m[2]!.padStart(2, '0')}-${m[3]!.padStart(2, '0')}` : text(v);
 };

@@ -112,6 +112,9 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
   it('dates are compared as YYYY-MM-DD: a serial 접수일 still matches the individual list written as text (and vice versa)', () => {
     expect(isoDate(46285)).toBe('2026-09-20');
     expect(isoDate('2026. 9. 20')).toBe('2026-09-20');
+    expect(isoDate('46285')).toBe('2026-09-20');
+    const listSerial = planF04CommissionProjection({ intake: intake(row({ 차량번호: '12가3456' })), installments: INST, openFromMonth: '2026-09', readAt: 'x', individualKeys: ['12가3456|46285'] });
+    expect(listSerial.fills).toEqual([]);
     const serial = planF04CommissionProjection({ intake: intake(row({ 차량번호: '12가3456', 접수일: 46285 })), installments: INST, openFromMonth: '2026-09', readAt: 'x', individualKeys: ['12가 3456|2026-09-20'] });
     expect(serial.blanks.map(b => b.reason)).toEqual(['INDIVIDUAL_AGREEMENT', 'INDIVIDUAL_AGREEMENT']);
     const textDate = planF04CommissionProjection({ intake: intake(row({ 차량번호: '12가3456', 접수일: '2026/9/20' })), installments: INST, openFromMonth: '2026-09', readAt: 'x', individualKeys: ['12가3456|2026-09-20'] });
