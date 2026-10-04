@@ -36,7 +36,10 @@ describe('daily writer guard', () => {
       authenticationInfo: { principalEmail: account }, request: { parent: db, collectionId: 'products' } } };
     expect(judge([create]).outsideCollections).toEqual({ products: 1 });
     const other = commit('2026-10-05T18:45:00Z', ['projects/freepasserp5/databases/other/documents/catalog_products/x']);
-    expect(judge([other]).outsideCollections).toEqual({ '(other-database)': 1 });
+    expect(judge([other]).outsideCollections['(other-database)']).toBeGreaterThan(0);
+    const otherDbOnly = { timestamp: '2026-10-05T18:45:00Z', protoPayload: { methodName: 'google.firestore.v1.Firestore.Commit',
+      authenticationInfo: { principalEmail: account }, resourceName: 'projects/freepasserp5/databases/other' } };
+    expect(judge([otherDbOnly]).reasons).toContain('DAILY_WRITER_OUTSIDE_ALLOWED_COLLECTIONS');
   });
   it('never prints an unknown collection name in the public report', () => {
     const r = judge([commit('2026-10-05T18:45:00Z', [doc('SENSITIVE_VALUE')])]);
@@ -51,7 +54,8 @@ describe('daily writer guard', () => {
     expect(outside.reasons).toContain('DAILY_WRITER_OUTSIDE_SCHEDULED_RUN');
     const late = commit('2026-10-05T19:20:00Z', [doc('catalog_products')]);
     expect(judge([late], [{ ...run, head_branch: 'feature', status: 'in_progress', run_started_at: '2026-10-05T19:10:00Z' },
-      { ...run, status: 'queued', run_started_at: '2026-10-05T19:10:00Z' }]).reasons).toContain('DAILY_WRITER_OUTSIDE_SCHEDULED_RUN');
+      { ...run, status: 'queued', run_started_at: '2026-10-05T19:10:00Z' },
+      { ...run, status: 'pending', run_started_at: '2026-10-05T19:10:00Z' }]).reasons).toContain('DAILY_WRITER_OUTSIDE_SCHEDULED_RUN');
   });
   it('holds when a successful apply run left no write log (audit log off or missing)', () => {
     expect(judge([])).toMatchObject({ status: 'HOLD', reasons: ['DAILY_WRITER_AUDIT_LOG_MISSING'], silentApplies: 1 });

@@ -49,6 +49,20 @@ function writtenPaths(entry: DailyWriterLogEntry): string[] {
   return [...new Set(out)];
 }
 
+/** Every «projects/…/databases/…» named anywhere in the entry — checked apart from document paths, so a write against
+ * another database is caught even when the log carries no document path. */
+function databasesNamed(entry: DailyWriterLogEntry): string[] {
+  const out = new Set<string>();
+  const scan = (value: unknown) => {
+    if (typeof value === 'string') { for (const m of value.matchAll(/projects\/[^/\s]+\/databases\/[^/\s]+/g)) out.add(m[0]); return; }
+    if (Array.isArray(value)) { value.forEach(scan); return; }
+    if (value && typeof value === 'object') Object.values(value).forEach(scan);
+  };
+  scan(entry.protoPayload?.resourceName);
+  scan(entry.protoPayload?.request);
+  return [...out];
+}
+
 /** '' = database-level path (no collection), '(other-database)' = not this project's default database. */
 function collectionOf(path: string): string {
   if (!path.startsWith(DATABASE_PREFIX)) return '(other-database)';
@@ -64,8 +78,8 @@ export function evaluateDailyWriterGuard(input: {
 }) {
   const grace = (input.graceMinutes ?? 10) * 60_000;
   const since = input.now.getTime() - input.lookbackHours * 3_600_000;
-  // Only started runs of the daily workflow on main open a window; queued/waiting runs do not.
-  const windows = input.runs.filter((run) => run.head_branch === 'main' && run.status !== 'queued' && run.status !== 'waiting')
+  // Only runs of the daily workflow on main that actually ran (in_progress / completed) open a window.
+  const windows = input.runs.filter((run) => run.head_branch === 'main' && (run.status === 'in_progress' || run.status === 'completed'))
     .flatMap((run) => {
       const start = Date.parse(run.run_started_at ?? '');
       const end = run.status === 'completed' ? Date.parse(run.updated_at ?? '') : input.now.getTime();
@@ -78,6 +92,8 @@ export function evaluateDailyWriterGuard(input: {
   for (const entry of writes) {
     const paths = writtenPaths(entry);
     if (paths.length) withPaths += 1;
+    if (databasesNamed(entry).some((d) => `${d}/documents` !== DATABASE_PREFIX))
+      outsideCollections['(other-database)'] = (outsideCollections['(other-database)'] ?? 0) + 1;
     for (const path of paths) {
       const collection = collectionOf(path);
       if (collection === '') continue;
