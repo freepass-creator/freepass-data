@@ -64,9 +64,11 @@ export async function withSharedSheetCatalogAccess<T>(
   apply: boolean,
   requestDigest: string,
   run: (catalog: CatalogStore, source: SourceIngestionStore) => Promise<T>,
+  preflight?: (catalog: CatalogStore) => Promise<void>,
 ): Promise<T> {
   const { createFirestoreSourceStore } = await import('../infra/source-firestore-store.js');
   const { MemoryDataAccessLogStore } = await import('../infra/memory-data-access-log.js');
+  // Read mode keeps only an in-process gateway log (no durable write). Apply opens the durable audit only after preflight.
   const access = new DataAccessGateway(apply ? createFirestoreDataAccessLogStore() : new MemoryDataAccessLogStore());
   const catalog = await createFirestoreDataStore();
   const source = createFirestoreSourceStore();
@@ -81,6 +83,9 @@ export async function withSharedSheetCatalogAccess<T>(
     operation: apply ? 'WRITE_SHARED_SHEET_CANONICAL' : 'READ_SHARED_SHEET_CANONICAL',
     resource: { kind: 'CATALOG' as const, name: 'shared-sheet-canonical' }, requestDigest,
     summarize: (value: T) => ({ digest: stableDigest(value) }) };
+  if (apply && preflight) await new DataAccessGateway(new MemoryDataAccessLogStore()).read(
+    { ...spec, operation: 'PREFLIGHT_SHARED_SHEET_CANONICAL', summarize: () => ({ digest: requestDigest }) },
+    () => preflight(denyWrites(catalog)));
   return apply ? access.write(spec, () => run(catalog, source))
     : access.read(spec, () => run(denyWrites(catalog), denyWrites(source)));
 }

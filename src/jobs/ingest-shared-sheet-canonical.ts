@@ -1,6 +1,6 @@
-import { readFile, writeFile, realpath } from 'node:fs/promises';
+import { readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, dirname } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { buildSharedSheetBatch, sharedSheetChannels, SHARED_SHEET_SPEC_DIGEST, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
 import { normalizeSharedSheet, SHARED_SHEET_RULE_VERSION } from '../adapters/normalize-shared-sheet.js';
 import { ingestRawSourceBatch, prepareRawSourceBatch } from '../application/ingest-raw-source.js';
@@ -155,6 +155,13 @@ export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest:
   }
   if (prepared(plan.capture).runId !== plan.runId) throw new Error('SHARED_SHEET_PLAN_CAPTURE_MISMATCH');
 }
+/** Read-only apply guard. The CLI runs it before opening the audited write, so a rejected apply writes nothing (not even an audit event). */
+export async function preflightSharedSheetApply(store: CatalogStore, plan: SharedSheetPlan | undefined, digest: string | undefined, target: string): Promise<void> {
+  assertSharedSheetPlan(plan, digest, target);
+  const ownership = await store.getCatalogWriterOwnership();
+  if (!ownership || ownership.mode !== 'EXCLUSIVE' || ownership.primaryWriterId !== actor.id || stableDigest(ownership) !== plan.ownershipDigest)
+    throw new Error('SHARED_SHEET_EXCLUSIVE_WRITER_REQUIRED');
+}
 export async function runSharedSheetCanonical(store: CatalogStore, source: SourceIngestionStore, options: {
   target: string; capture?: SharedSheetCapture; apply?: boolean; plan?: SharedSheetPlan; expectedPlanDigest?: string;
 }) {
@@ -163,10 +170,7 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
     return planSharedSheetCanonical(store, options.capture, options.target);
   }
   const plan = options.plan;
-  assertSharedSheetPlan(plan, options.expectedPlanDigest, options.target);
-  const ownership = await store.getCatalogWriterOwnership();
-  if (!ownership || ownership.mode !== 'EXCLUSIVE' || ownership.primaryWriterId !== actor.id || stableDigest(ownership) !== plan.ownershipDigest)
-    throw new Error('SHARED_SHEET_EXCLUSIVE_WRITER_REQUIRED');
+  await preflightSharedSheetApply(store, plan, options.expectedPlanDigest, options.target);
   const p = prepared(plan.capture);
   const head = await store.getSourceHead(p.sourceId);
   if (head?.runId !== p.runId && stableDigest(head) !== plan.previousHeadDigest) throw new Error('SHARED_SHEET_HEAD_CHANGED');
@@ -225,8 +229,14 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
 /** Private plans/query results may contain RAW and fees. Never save inside the checkout or overwrite evidence. */
 export async function writePrivateArtifact(path: string, value: unknown) {
   if (!isAbsolute(path) || /^[/\\]{2}/.test(path)) throw new Error('PRIVATE_OUTPUT_MUST_BE_LOCAL_ABSOLUTE');
-  const local = relative(await realpath(process.cwd()), await realpath(dirname(resolve(path))));
-  if (!local.startsWith('..') && !isAbsolute(local)) throw new Error('PRIVATE_OUTPUT_MUST_BE_OUTSIDE_CHECKOUT');
+  const dir = await realpath(dirname(resolve(path)));
+  // Anchor on this module's repository, not process.cwd(), and refuse any other git checkout too.
+  const inside = (root: string) => { const r = relative(root, dir); return !r.startsWith('..') && !isAbsolute(r); };
+  if (inside(await realpath(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')))) throw new Error('PRIVATE_OUTPUT_MUST_BE_OUTSIDE_CHECKOUT');
+  for (let d = dir; ; d = dirname(d)) {
+    if (await stat(resolve(d, '.git')).then(() => true, () => false)) throw new Error('PRIVATE_OUTPUT_MUST_BE_OUTSIDE_CHECKOUT');
+    if (dirname(d) === d) break;
+  }
   await writeFile(path, JSON.stringify(value, null, 2), { flag: 'wx', mode: 0o600 });
 }
 export function parseLocalArgs(args: string[], flags: string[], values: string[]) {
@@ -264,7 +274,8 @@ export async function main(args = process.argv.slice(2)) {
   } else {
     const { withSharedSheetCatalogAccess } = await import('./data-access-runtime.js');
     result = await withSharedSheetCatalogAccess(apply, stableDigest(plan ?? capture),
-      (store, source) => runSharedSheetCanonical(store, source, options));
+      (store, source) => runSharedSheetCanonical(store, source, options),
+      apply ? store => preflightSharedSheetApply(store, plan, options.expectedPlanDigest, target) : undefined);
   }
   if ('plan' in result && a.has('--plan-out')) await writePrivateArtifact(a.get('--plan-out')!, result.plan);
   console.log(JSON.stringify(result.report, null, 2));
