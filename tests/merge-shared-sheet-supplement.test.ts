@@ -22,9 +22,21 @@ describe('merge shared-sheet supplement', () => {
     expect(() => mergeSupplements([{ corrections: [c({ at: null })] }])).toThrow('SUPPLEMENT_INVALID');
     expect(() => mergeSupplements([{ corrections: 'x' }])).toThrow('SUPPLEMENT_INVALID');
   });
-  it('skips corrections of rows without an assigned plate (신차·미정·빈칸) and counts them', () => {
-    const out = mergeSupplements([{ corrections: [c(), c({ plate: '신차', column: '비고' }), c({ plate: '미정', column: '인승' }), c({ plate: '', column: '연식' })] }]);
+  it('skips corrections of rows without a real plate shape (신차·미정·신차1·빈칸) and lists them as evidence', () => {
+    const out = mergeSupplements([{ corrections: [c(), c({ plate: '신차', column: '비고' }), c({ plate: '미정', column: '인승' }),
+      c({ plate: '', column: '연식' }), c({ plate: '신차1', column: '색상' }), c({ plate: 1234, column: '배기량' })] }]);
     expect(out.corrections).toHaveLength(1);
-    expect(out.skippedWithoutPlate).toBe(3);
+    expect(out.skipped).toHaveLength(5);
+    expect(out.skipped![0]).toEqual({ supplierCode: 'RP013', column: '비고', at: '2026-10-04T09:17:55.000Z', plate: '신차', reason: 'PLATE_NOT_ASSIGNED' });
+  });
+  it('keeps real plates: region prefix, inner spaces, three-digit numbers', () => {
+    const out = mergeSupplements([{ corrections: [c({ plate: '서울12가3456' }), c({ plate: '123 가 4567', column: '비고' }), c({ plate: '12가3456', column: '인승' })] }]);
+    expect(out.corrections).toHaveLength(3);
+    expect(out.skipped).toBeUndefined();
+  });
+  it('does not check conflicts among skipped rows — they attach to no car', () => {
+    const out = mergeSupplements([{ corrections: [c({ plate: '미정', after: 'A' })] }, { corrections: [c({ plate: '미정', after: 'B' })] }]);
+    expect(out.corrections).toHaveLength(0);
+    expect(out.skipped).toHaveLength(2);
   });
 });
