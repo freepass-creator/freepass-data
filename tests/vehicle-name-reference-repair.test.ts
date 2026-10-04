@@ -72,6 +72,16 @@ describe('vehicle-name reference repair gate', () => {
     for (const v of ['Ａ̊', 'ｅ́', '　ＬＥ  플러스 ']) expect(normalizeName(normalizeName(v))).toBe(normalizeName(v));
     expect(matchesFrom('Ａ̊', 'Å')).toBe(true);
   });
+  it('validates retire items: exact ids, not into itself, not combined with a rename of the same master', () => {
+    const base = { sourceDigest: 'd', masterRepairs: [], productRepairs: [] };
+    expect(validateVehicleNameRepairPlan({ ...base, masterRetires: [{ id: 'm1', into: 'm2', evidence: '합쳐짐' }] })).toMatchObject({ masterRetireCount: 1 });
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterRetires: [{ id: 'm1', into: 'm1', evidence: 'x' }] })).toThrow(/itself/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterRetires: [{ id: ' m1', into: 'm2', evidence: 'x' }] })).toThrow(/exact/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterRetires: [{ id: 'm1', into: 'm2', evidence: ' ' }] })).toThrow(/evidence/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterRetires: [{ id: 'm1', into: 'm2', evidence: 'x' }, { id: 'm1', into: 'm3', evidence: 'x' }] })).toThrow(/duplicate/);
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', productRepairs: [], masterRepairs: [{ id: 'm1', from: 'A', to: 'B' }],
+      masterRetires: [{ id: 'm1', into: 'm2', evidence: 'x' }] })).toThrow(/same plan/);
+  });
   it('caps one plan below the Firestore transaction write limit', () => {
     const many = Array.from({ length: MAX_VEHICLE_NAME_REPAIR_TARGETS + 1 }, (_, i) => ({ id: `t${i}`, from: 'A', to: 'B' }));
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], trimSubModelRepairs: many })).toThrow(/too large/);
