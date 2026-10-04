@@ -6,7 +6,17 @@ import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
-export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/1';
+export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/2';
+/** AI 상황실 2026-10-04 (대표): every car is stored. The sheet status text is kept as-is; it only decides sale exposure.
+ * assetStatus is the reviewed physical-state mapping; an unlisted status is HOLD, never guessed. */
+export const SHARED_SHEET_STATUS_POLICY: Record<string, { exposure: 'VISIBLE' | 'HIDDEN'; assetStatus: 'AVAILABLE' | 'RESERVED' | 'MAINTENANCE' }> = {
+  '출고가능': { exposure: 'VISIBLE', assetStatus: 'AVAILABLE' },
+  '즉시출고': { exposure: 'VISIBLE', assetStatus: 'AVAILABLE' },
+  '출고협의': { exposure: 'HIDDEN', assetStatus: 'AVAILABLE' },
+  '계약중': { exposure: 'HIDDEN', assetStatus: 'RESERVED' },
+  '상품화중': { exposure: 'HIDDEN', assetStatus: 'MAINTENANCE' },
+  '출고불가': { exposure: 'HIDDEN', assetStatus: 'RESERVED' },
+};
 const commercial: Record<string, CommercialType> = { '신차렌트': 'NEW_RENT', '중고렌트': 'USED_RENT', '신차구독': 'NEW_SUBSCRIPTION', '중고구독': 'USED_SUBSCRIPTION' };
 const absentPrice = (s: string) => ['', '-', '불가'].includes(s);
 function number(s: string, unit = '', decimal = false): number | null {
@@ -100,7 +110,9 @@ export function normalizeSharedSheet(raw: RawRecord): { record: NormalizedCandid
   else if (!isAssignedPlate(plate)) issues.push('PLATE_NOT_ASSIGNED');
   const type = commercial[text('상품구분')];
   if (!type) issues.push('COMMERCIAL_TYPE_UNRESOLVED');
-  if (!['즉시출고', '출고가능'].includes(text('차량상태'))) issues.push('ASSET_STATUS_REQUIRES_REVIEW');
+  const quarantine = raw.payload.quarantine;
+  if (typeof quarantine === 'string') issues.push(quarantine);
+  field('supplierStatus', '차량상태', v => SHARED_SHEET_STATUS_POLICY[v] ? v : null);
   const candidate: CatalogCandidate = { sourceRecordId: raw.sourceRecordId, sourceFingerprint: raw.sourceFingerprint,
     firstObservedAt: raw.firstObservedAt ?? raw.observedAt,
     carNumber: plate, priceTerms, issues: [...new Set(issues)], vehicleFacts: facts,
