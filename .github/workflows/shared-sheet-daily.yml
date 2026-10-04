@@ -141,11 +141,12 @@ jobs:
               const fs=require('fs');const [a,b]=process.argv.slice(1);
               try{const s=JSON.parse(fs.readFileSync(a,'utf8')),x=JSON.parse(fs.readFileSync(b,'utf8'));
                 if(!Array.isArray(x.corrections))throw 0;
-                const seen=new Map(s.corrections.map(c=>[[c.supplierCode,c.plate,c.at,c.column].join('|'),JSON.stringify(c)]));
+                const body=c=>JSON.stringify(['supplierCode','plate','at','column','before','after','source'].map(f=>c[f]??null));
+                const seen=new Map(s.corrections.map(c=>[[c.supplierCode,c.plate,c.at,c.column].join('|'),body(c)]));
                 for(const c of x.corrections){if(!c||typeof c.at!=='string')throw 0;const t=new Date(c.at);if(isNaN(t))throw 0;c.at=t.toISOString();
-                  const k=[c.supplierCode,c.plate,c.at,c.column].join('|'),body=JSON.stringify(c);
-                  if(seen.has(k)){if(seen.get(k)!==body){console.error('SUPPLEMENT_CONFLICT');process.exit(1);}continue;}
-                  seen.set(k,body);s.corrections.push(c);}
+                  const k=[c.supplierCode,c.plate,c.at,c.column].join('|'),b=body(c);
+                  if(seen.has(k)){if(seen.get(k)!==b){console.error('SUPPLEMENT_CONFLICT');process.exit(1);}continue;}
+                  seen.set(k,b);s.corrections.push(c);}
                 if(x.supplierEntered){if(!Array.isArray(x.supplierEntered))throw 0;(s.supplierEntered??=[]).push(...x.supplierEntered);}
                 fs.writeFileSync(a,JSON.stringify(s));
               }catch{console.error('SUPPLEMENT_INVALID');process.exit(1);}" "$T/supplement.json" "$T/supplement-$d.json"
