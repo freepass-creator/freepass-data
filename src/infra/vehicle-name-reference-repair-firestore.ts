@@ -46,6 +46,8 @@ export type VehicleNameRepairPlan = {
   trimModelRepairs?: VehicleNameRepairItem[];
   /** vehicle_master.gen_code → 개발코드(예: CV1 → CV). Old code kept in gen_code_aliases. A blank code may be filled with evidence. */
   masterGenCodeRepairs?: VehicleNameRepairItem[];
+  /** vehicle_master.title display name. Old title is kept only in backup/audit; no alias field is written. */
+  masterTitleRepairs?: VehicleNameRepairItem[];
   /** New vehicle_master docs (new sub-model). Created only when absent; `data.id` must equal `id`. */
   masterCreates?: VehicleMasterDocCreate[];
   /** New vehicle_trim_master rows. Created only when absent; `data.master_id` must point to an existing or created master. */
@@ -79,10 +81,10 @@ export const normalizeName = (value: unknown) => String(value ?? '')
   .trim().replace(/\s+/g, ' ');
 const clean = normalizeName;
 /** Names written by this tool must already be normalized — a value that changes under normalizeName is refused. */
-const NAME_KINDS = new Set(['master', 'product', 'trim', 'productTrim', 'trimSubModel', 'masterModel', 'trimModel', 'masterGenCode']);
+const NAME_KINDS = new Set(['master', 'product', 'trim', 'productTrim', 'trimSubModel', 'masterModel', 'trimModel', 'masterGenCode', 'masterTitle']);
 const PRODUCT_IDENTITY_FIELDS = ['maker', 'model', 'sub_model'] as const;
 /** Kinds that write a vehicle_master document (a retired master is frozen for all of them). */
-const MASTER_DOC_KINDS = new Set(['master', 'masterModel', 'masterGenCode']);
+const MASTER_DOC_KINDS = new Set(['master', 'masterModel', 'masterGenCode', 'masterTitle']);
 /** Every trim name inside variants must also be in the top-level trims list (consumers read both). */
 /** A Firestore document id inside one collection: no path separator, not «.»/«..», not reserved «__…__», no surrounding spaces. */
 export const isDocId = (value: unknown): value is string => typeof value === 'string' && value !== '' && value === value.trim()
@@ -186,7 +188,8 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     ...(plan.trimMasterLinkRepairs ?? []).map((item) => ({ ...item, kind: 'trimMasterLink' })),
     ...(plan.masterModelRepairs ?? []).map((item) => ({ ...item, kind: 'masterModel' })),
     ...(plan.trimModelRepairs ?? []).map((item) => ({ ...item, kind: 'trimModel' })),
-    ...(plan.masterGenCodeRepairs ?? []).map((item) => ({ ...item, kind: 'masterGenCode' }))];
+    ...(plan.masterGenCodeRepairs ?? []).map((item) => ({ ...item, kind: 'masterGenCode' })),
+    ...(plan.masterTitleRepairs ?? []).map((item) => ({ ...item, kind: 'masterTitle' }))];
   const productIdentityRepairs = plan.productIdentityRepairs ?? [];
   if (productIdentityRepairs.length && (plan.masterRepairs.length || (plan.masterModelRepairs ?? []).length || (plan.masterRetires ?? []).length)) {
     throw new Error('상품 차종 칸 고치기는 마스터 이름 바꾸기·퇴역과 다른 계획으로');
@@ -220,7 +223,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     if (typeof r.evidence !== 'string' || !r.evidence.trim()) throw new Error(`masterRetire ${r.id} requires evidence`);
   }
   if (new Set(retires.map((r) => r.id)).size !== retires.length) throw new Error('duplicate masterRetire');
-  if (retires.some((r) => [...(plan.masterRepairs ?? []), ...(plan.masterVariantRepairs ?? []), ...(plan.masterModelRepairs ?? []), ...(plan.masterGenCodeRepairs ?? [])].some((m) => m.id === r.id))) throw new Error('a retired master must not be renamed or edited in the same plan');
+  if (retires.some((r) => [...(plan.masterRepairs ?? []), ...(plan.masterVariantRepairs ?? []), ...(plan.masterModelRepairs ?? []), ...(plan.masterGenCodeRepairs ?? []), ...(plan.masterTitleRepairs ?? [])].some((m) => m.id === r.id))) throw new Error('a retired master must not be renamed or edited in the same plan');
   const retiredIds = new Set(retires.map((r) => r.id));
   if (retires.some((r) => retiredIds.has(r.into))) throw new Error('masterRetire into must not itself be retired in the same plan (no chains or cycles)');
   if ((plan.trimCreates ?? []).some((c) => retiredIds.has(String(c.data.master_id))) || (plan.trimMasterLinkRepairs ?? []).some((l) => retiredIds.has(l.to))) {
@@ -331,10 +334,11 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     ...(plan.trimCreates ? { trimCreateCount: plan.trimCreates.length } : {}),
     ...(plan.masterModelRepairs ? { masterModelCount: plan.masterModelRepairs.length } : {}),
     ...(plan.trimModelRepairs ? { trimModelCount: plan.trimModelRepairs.length } : {}),
-    ...(plan.masterGenCodeRepairs ? { masterGenCodeCount: plan.masterGenCodeRepairs.length } : {}) };
+    ...(plan.masterGenCodeRepairs ? { masterGenCodeCount: plan.masterGenCodeRepairs.length } : {}),
+    ...(plan.masterTitleRepairs ? { masterTitleCount: plan.masterTitleRepairs.length } : {}) };
 }
 
-type RepairField = 'sub_model' | 'trim' | 'trim_name' | 'master_id' | 'model' | 'gen_code';
+type RepairField = 'sub_model' | 'trim' | 'trim_name' | 'master_id' | 'model' | 'gen_code' | 'title';
 type AliasField = 'trim_aliases' | 'sub_model_aliases' | 'model_aliases' | 'gen_code_aliases';
 /** The old name is kept in an alias list on these kinds (rule 20: sub-model aliases live in FreePass Data). */
 const ALIAS_FIELD: Partial<Record<string, AliasField>> = {
@@ -356,6 +360,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     ...(plan.masterModelRepairs ?? []).map((item) => ({ kind: 'masterModel', item, ref: db.collection('vehicle_master').doc(item.id), field: 'model' as RepairField })),
     ...(plan.trimModelRepairs ?? []).map((item) => ({ kind: 'trimModel', item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'model' as RepairField })),
     ...(plan.masterGenCodeRepairs ?? []).map((item) => ({ kind: 'masterGenCode', item, ref: db.collection('vehicle_master').doc(item.id), field: 'gen_code' as RepairField })),
+    ...(plan.masterTitleRepairs ?? []).map((item) => ({ kind: 'masterTitle', item, ref: db.collection('vehicle_master').doc(item.id), field: 'title' as RepairField })),
   ];
   const identityTargets = (plan.productIdentityRepairs ?? []).map((item) => ({ kind: 'productIdentity', item, ref: db.collection('products').doc(item.id) }));
   const creates = [
@@ -545,6 +550,14 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     // A retired master is frozen: its name is not changed again (a rename would let products use it under a new name).
     const frozen = targets.findIndex((t, i) => MASTER_DOC_KINDS.has(t.kind) && current[i]?.data()?.retired === true);
     if (frozen >= 0) throw new Error(`retired master cannot be renamed ${targets[frozen]!.ref.path}`);
+    const finalMasterSubModels: Record<string, string> = {};
+    for (const t of targets) if (t.kind === 'master') finalMasterSubModels[t.ref.id] = clean(t.item.to);
+    targets.forEach((t, index) => {
+      if (t.kind !== 'masterTitle') return;
+      const data = current[index]?.data();
+      const expected = clean(`${clean(data?.maker)} ${finalMasterSubModels[t.ref.id] ?? clean(data?.sub_model)}`);
+      if (clean(t.item.to) !== expected) throw new Error(`masterTitle ${t.ref.path} must equal final maker + sub_model (${expected})`);
+    });
     // A product must not be renamed onto the name of a master that is already retired (in any earlier plan).
     const productTargets = targets.map((t, i) => ({ t, data: current[i]?.data() })).filter((x) => x.t.kind === 'product');
     if (productTargets.length) {
@@ -675,6 +688,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       }
       const { kind, item, field, ref } = targets[index]!;
       const aliasField = ALIAS_FIELD[kind];
+      if (kind === 'masterTitle' && snapshot.data()?.[field] !== snapshots[index]!.data()?.[field]) {
+        throw new Error(`transaction stored spelling changed since backup ${ref.path}.${field}`);
+      }
       if (!aliasField) return;
       const aliasValue = snapshot.data()?.[aliasField];
       if (!aliasListOk(aliasValue)) throw new Error(`transaction alias field is not a list of strings ${ref.path}.${aliasField}`);
