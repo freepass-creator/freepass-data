@@ -34,24 +34,28 @@ export const displayMatchesValue = (shown: string, v: number | boolean): boolean
   if (!Number.isFinite(target)) return false;
   // 부호를 먼저 정한다 — 숫자를 감싼 괄호(통화 기호가 밖에 있어도) 또는 첫 숫자 앞의 «-». 지수·일반 숫자에 같이 쓴다.
   const sign = /\([^()]*\d[^()]*\)/.test(s) || /^[^0-9]*-/.test(s) ? -1 : 1;
-  // 허용 오차는 보이는 자릿수의 반 칸(유효숫자 기준)뿐 — 고정 오차를 더하지 않는다(«1E-10» 이 0 과 같다고 통과하지 않게).
-  // 부동소수 반올림 찌꺼기만 반 칸의 1e-9 배만큼 너그럽게(값 크기에 비례해 넓히지 않는다).
-  const near = (shownValue: number, halfStep: number) =>
-    Number.isFinite(shownValue) && Math.abs(shownValue - target) <= halfStep * (1 + 1e-9)
+  // 보이는 자릿수로 시트처럼 «0 에서 먼 쪽 반올림»한 값과 정확히 같아야 한다(«1» ↔ 1.5 는 «2», «1.23E+05» ↔ 123500 은 «1.24E+05»).
+  // .5 판정은 곱셈 찌꺼기(몇 ULP, 최대 1e-6)만 너그럽게 — 1.4999999999 를 올리지 않는다. 부호 일치·유한값만.
+  const roundAway = (x: number, digits: number) => {
+    const scale = 10 ** digits, scaled = Math.abs(x) * scale, frac = scaled - Math.floor(scaled);
+    const half = Math.abs(frac - 0.5) <= Math.min(Math.max(scaled, 1) * Number.EPSILON * 4, 1e-6);
+    return Math.sign(x) * (half ? Math.floor(scaled) + 1 : Math.round(scaled)) / scale;
+  };
+  const same = (shownValue: number, expected: number, digits: number) =>
+    Number.isFinite(shownValue) && Math.abs(expected - shownValue) <= 1e-9 / 10 ** digits
     && (target === 0 || shownValue === 0 || Math.sign(shownValue) === Math.sign(target));
-  // 가수는 «1.23»·«5.»·«.5» 모두(앞 소수점을 버리지 않는다).
+  // 지수: 가수(«1.23»·«5.»·«.5», 앞 소수점 보존)를 실제 값 ÷ 10^지수 의 반올림과 비교.
   const sci = /(\d+(?:\.(\d*))?|\.(\d+))E([+-]?\d+)/i.exec(s.replace(/,/g, ''));
-  if (sci) return near(sign * Number(sci[0]), 0.5 * 10 ** (Number(sci[4]) - (sci[2] ?? sci[3] ?? '').length));
+  if (sci) {
+    const digits = (sci[2] ?? sci[3] ?? '').length, exponent = Number(sci[4]);
+    return same(sign * Number(sci[1]), roundAway(target / 10 ** exponent, digits), digits);
+  }
   const t = s.replace(/[^0-9.]/g, ''), n = Number(t);
   if (!Number.isFinite(n)) return false;
   const decimals = (t.split('.')[1] ?? '').length;
-  // 일반 표시는 시트처럼 «0 에서 먼 쪽 반올림»으로 보이는 자릿수에 맞춰 같은지 본다(«1» ↔ 1.5 는 «2» 라 다르다).
   // 한계: «0.###» 처럼 뒤 0 을 생략하는 형식은 보이는 자릿수가 형식의 최대 자릿수보다 적을 수 있어(77.4 ↔ 77.44 처럼)
   // 표시만으로는 가릴 수 없다 — 두 읽기 사이 변경은 앞뒤 실제 값 동일 검사(sameReads)와 줄마다 글자 칸 대조가 막는다.
-  const scale = 10 ** decimals, shownNumber = sign * n;
-  const scaled = Math.abs(target) * scale, frac = scaled - Math.floor(scaled);
-  const rounded = Math.sign(target) * (Math.abs(frac - 0.5) <= Math.min(Math.max(scaled, 1) * Number.EPSILON * 4, 1e-6) ? Math.floor(scaled) + 1 : Math.round(scaled)) / scale; // 곱셈 찌꺼기(몇 ULP)만 .5 로 본다
-  return Math.abs(rounded - shownNumber) <= 1e-9 / scale && (target === 0 || shownNumber === 0 || Math.sign(shownNumber) === Math.sign(target));
+  return same(sign * n, roundAway(target, decimals), decimals);
 };
 
 const IDENTITY_COLUMNS = ['회사명', '차량번호'].map(h => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
