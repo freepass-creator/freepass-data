@@ -385,6 +385,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 하루 한 번 박제 자동 실행 권한 적용(대표 승인 ①안)
+
+- 코드·문서: #347(전용 워크플로 `shared-sheet-daily.yml` · 장기 키 없는 시트 읽기 · 매시 감사 `daily-writer-guard` job · 예약 관문 = 최근 감시 성공 · 수동 apply 변수 관문) · #337(`docs/SHARED-SHEET-DAILY-IDENTITY-PLAN.md` 확정판). 실행 명령 묶음(실행·되돌리기 분리, ID 포함)은 ai-ops 비공개 인수인계에만 있다.
+- 실행(AI 상황실, 단계마다 되읽기): 서비스 계정 `github-data-inventory-writer` · 맞춤 역할 `freepassDataDailyWriter`(권한 다섯, 지우기 없음) · `(default)` 데이터베이스 조건 바인딩 · 새 WIF 풀(이 저장소·main·`shared-sheet-daily.yml`·environment) · 증거 버킷 만들기·보기(버킷 정책에 조건이 있어 `--condition=None` 필요) · 공통 시트 «보기» 공유 · environment 변수 · Firestore 쓰기 감사 로그 + 다른 계정 쓰기 로그 저장 전 제외 + 감사 계정 data_access 로그 보기.
+- 검증: 시험 실행 run 37188258463(레코드 206 · 공급사 입력값 192 · 보류 47 · 기간 712=712 · writerReady) → 통제된 첫 적용 run 37188552323(PARTIAL_HOLD · committed 3 · held 47 · readbackMismatches 0, 감사 로그에 쓴 문서 경로가 남음 확인, 수동 apply 변수 바로 지움) → 감시 run 37190197244(daily-writer-guard OK · writes 5,632 · 경로 없는 쓰기 0 · 허용 밖 0 · 실행 구간 밖 0 · 조용한 적용 0).
+- 상태: `FREEPASS_DATA_SHARED_SHEET_DAILY=on`, 첫 예약 실행 10-05 03:40 KST. 이때부터 공통 시트 → 프리패스 데이터 박제는 사람 손 없이 돈다. 운영자 PC 수동 박제는 멈춘다(예외는 AI 상황실 지시).
+- next_start_here: 10-05 아침 첫 예약 실행(관문 통과·적용·되읽기 0)과 다음 매시 감시 OK 를 확인해 이 아래에 «2026-10-05 첫 예약 실행» 으로 남긴다. 남는 점: 증거 버킷 «보기»가 버킷 전체 범위 — 접두어 조건으로 따로 좁힌다.
+
 ### 2026-10-04 다나와 사본 삭제 · 기준 규칙 17~22
 
 - 기준 한 장(ai-ops): 2aaed92 규칙 17(먼저 완성할 범위 = 최근 10년, 그랜저 IG부터) · 98d0ad5 규칙 18(하이브리드·EV는 꾸밈말 — 더 뉴 토레스 하이브리드 J140)·19(판단 원칙: 영업자 혼동 → 우리 규칙 → 제조사, 셋 추천 합의; 테슬라 FL, 미니 C·S 세부트림) · aef3f64 규칙 20(세부모델 별칭 칸을 프리패스 데이터에)·21(다나와는 한 건씩 근거로만)·22(세부모델 이름 v1 반영 후 «기준 v1» 잠금).
