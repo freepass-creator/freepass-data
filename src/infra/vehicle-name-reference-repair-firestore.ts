@@ -1,14 +1,18 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import type { AuditEvent } from '../domain/catalog.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
+import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 
 export type VehicleNameRepairItem = {
   id: string;
   from: string;
   to: string;
+  /** Required when `from` is blank (filling an empty name): the supplier source text that names it. */
+  evidence?: string;
 };
 
 export type VehicleNameRepairPlan = {
@@ -17,25 +21,40 @@ export type VehicleNameRepairPlan = {
   productRepairs: VehicleNameRepairItem[];
   /** vehicle_trim_master.trim → F03 세부트림 name (old name kept in trim_aliases). Optional; absent = no trim repairs. */
   trimRepairs?: VehicleNameRepairItem[];
+  /** products.trim_name → F03 세부트림 name. Optional; `from` must be a non-blank name. */
+  productTrimRepairs?: VehicleNameRepairItem[];
 };
 
 const clean = (value: unknown) => String(value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+/** Stored value matches the plan's `from`. A blank `from` only matches a truly blank value: missing, null or an empty string. */
+export const matchesFrom = (stored: unknown, from: string) => clean(from)
+  ? clean(stored) === clean(from)
+  : stored === undefined || stored === null || (typeof stored === 'string' && stored.trim() === '');
 
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   if (!plan.sourceDigest?.trim()) throw new Error('sourceDigest is required');
   const all = [...plan.masterRepairs.map((item) => ({ ...item, kind: 'master' })), ...plan.productRepairs.map((item) => ({ ...item, kind: 'product' })),
-    ...(plan.trimRepairs ?? []).map((item) => ({ ...item, kind: 'trim' }))];
+    ...(plan.trimRepairs ?? []).map((item) => ({ ...item, kind: 'trim' })),
+    ...(plan.productTrimRepairs ?? []).map((item) => ({ ...item, kind: 'productTrim' }))];
   if (!all.length) throw new Error('repair plan is empty');
+  const productIds = new Set(plan.productRepairs.map((item) => item.id));
+  if ((plan.productTrimRepairs ?? []).some((item) => productIds.has(item.id))) throw new Error('one product per plan: sub_model and trim_name repairs must not overlap');
   const keys = new Set<string>();
   for (const item of all) {
-    if (!item.id?.trim() || !clean(item.from) || !clean(item.to)) throw new Error('repair item requires id/from/to');
+    // A blank `from` fills an empty products.sub_model only, with source-text evidence; the transaction
+    // precondition still requires the stored value to be blank at write time. Every other kind needs a name.
+    const evidenceOk = typeof item.evidence === 'string' && item.evidence.trim() !== '';
+    if (item.evidence !== undefined && !evidenceOk) throw new Error('repair item evidence must be a non-empty string');
+    const blankFill = !clean(item.from) && item.kind === 'product' && evidenceOk;
+    if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !blankFill)) throw new Error('repair item requires id/from/to');
     if (clean(item.from) === clean(item.to)) throw new Error(`no-op repair ${item.kind}:${item.id}`);
     const key = `${item.kind}:${item.id}`;
     if (keys.has(key)) throw new Error(`duplicate repair ${key}`);
     keys.add(key);
   }
   return { masterCount: plan.masterRepairs.length, productCount: plan.productRepairs.length,
-    ...(plan.trimRepairs ? { trimCount: plan.trimRepairs.length } : {}) };
+    ...(plan.trimRepairs ? { trimCount: plan.trimRepairs.length } : {}),
+    ...(plan.productTrimRepairs ? { productTrimCount: plan.productTrimRepairs.length } : {}) };
 }
 
 export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan) {
@@ -46,12 +65,13 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     ...plan.masterRepairs.map((item) => ({ item, ref: db.collection('vehicle_master').doc(item.id), field: 'sub_model' as const })),
     ...plan.productRepairs.map((item) => ({ item, ref: db.collection('products').doc(item.id), field: 'sub_model' as const })),
     ...(plan.trimRepairs ?? []).map((item) => ({ item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'trim' as const })),
+    ...(plan.productTrimRepairs ?? []).map((item) => ({ item, ref: db.collection('products').doc(item.id), field: 'trim_name' as const })),
   ];
   const refs = targets.map((x) => x.ref);
   const snapshots = await db.getAll(...refs);
   if (snapshots.some((snapshot) => !snapshot.exists)) throw new Error('repair target missing');
   snapshots.forEach((snapshot, index) => {
-    if (clean(snapshot.data()?.[targets[index]!.field]) !== clean(targets[index]!.item.from)) {
+    if (!matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
       throw new Error(`precondition changed ${snapshot.ref.path}`);
     }
   });
@@ -66,12 +86,27 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     sourceDigest: plan.sourceDigest,
     capturedAt: new Date().toISOString(),
     documents: snapshots.map((snapshot) => ({ path: snapshot.ref.path, data: snapshot.data() })),
+    // The reviewed items (incl. source-text evidence for blank fills) are kept with the before-images.
+    repairs: targets.map(({ item, field, ref }) => ({ path: ref.path, field, ...item })),
   }, null, 2), { flag: 'wx', mode: 0o600 });
+
+  // Evidence never goes into the repaired documents (products are served to consumers field-for-field);
+  // each repair is recorded as an audit event in the same transaction instead.
+  const occurredAt = new Date().toISOString();
+  const audits = targets.map(({ item, field, ref }): AuditEvent => ({
+    eventId: 'vnr_' + createHash('sha256').update([runId, ref.path, field].join('|')).digest('hex').slice(0, 32),
+    commandId: `vehicle-name-repair:${runId}`, actor: { id: 'service:freepass-data-vehicle-name-repair', kind: 'SERVICE' },
+    entityType: ref.parent.id, entityId: ref.id, action: 'VEHICLE_NAME_REFERENCE_REPAIRED',
+    before: { [field]: item.from }, after: { [field]: clean(item.to) },
+    reason: item.evidence ? `원문 근거: ${item.evidence}` : `F03 이름 정정 (${plan.sourceDigest})`,
+    revisionBefore: 0, revisionAfter: 0, occurredAt,
+  }));
+  const auditRefs = audits.map((a) => db.collection(FIRESTORE_COLLECTIONS.evidence.audits).doc(a.eventId));
 
   await db.runTransaction(async (transaction) => {
     const current = await transaction.getAll(...refs);
     current.forEach((snapshot, index) => {
-      if (!snapshot.exists || clean(snapshot.data()?.[targets[index]!.field]) !== clean(targets[index]!.item.from)) {
+      if (!snapshot.exists || !matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
         throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
       }
     });
@@ -79,11 +114,12 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       const { item, field } = targets[index]!;
       transaction.update(snapshot.ref, {
         [field]: clean(item.to),
-        ...(field === 'trim' ? { trim_aliases: FieldValue.arrayUnion(clean(item.from)) } : {}),
+        ...(field === 'trim' && clean(item.from) ? { trim_aliases: FieldValue.arrayUnion(clean(item.from)) } : {}),
         vehicle_name_reference_checked_at: FieldValue.serverTimestamp(),
         vehicle_name_reference_source_digest: plan.sourceDigest,
       });
     });
+    audits.forEach((audit, index) => transaction.create(auditRefs[index]!, audit));
   });
 
   const readback = await db.getAll(...refs);
@@ -99,5 +135,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (!aliases.map(clean).includes(clean(item.from)) || !kept) throw new Error(`readback alias mismatch ${snapshot.ref.path}`);
     }
   });
-  return { runId, backupPath, ...counts, readbackCount: readback.length };
+  const auditReadback = await db.getAll(...auditRefs);
+  if (auditReadback.some((s, index) => !s.exists || s.data()?.reason !== audits[index]!.reason)) throw new Error('readback audit mismatch');
+  return { runId, backupPath, ...counts, readbackCount: readback.length, auditCount: auditReadback.length };
 }

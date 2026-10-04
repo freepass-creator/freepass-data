@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateVehicleNameRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
+import { matchesFrom, validateVehicleNameRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
 
 describe('vehicle-name reference repair gate', () => {
   it('accepts exact non-overlapping master and product repairs', () => {
@@ -21,5 +21,30 @@ describe('vehicle-name reference repair gate', () => {
       trimRepairs: [{ id: 't1', from: 'LE', to: ' LE ' }] })).toThrow(/no-op/);
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [],
       trimRepairs: [{ id: 't1', from: 'A', to: 'B' }, { id: 't1', from: 'A', to: 'C' }] })).toThrow(/duplicate/);
+  });
+  it('fills a blank name only with source-text evidence', () => {
+    expect(validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [],
+      productRepairs: [{ id: 'p1', from: '', to: '더 뉴 기아 레이', evidence: '원문: 더 뉴기아 레이 트렌디' }] })).toEqual({ masterCount: 0, productCount: 1 });
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [],
+      productRepairs: [{ id: 'p1', from: '', to: '더 뉴 기아 레이' }] })).toThrow(/requires/);
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [],
+      productRepairs: [{ id: 'p1', from: ' ', to: '', evidence: 'x' }] })).toThrow(/requires/);
+  });
+  it('rejects non-string evidence and treats only missing/null/empty-string as blank', () => {
+    for (const evidence of [{}, false, 123]) expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [],
+      productRepairs: [{ id: 'p1', from: '', to: 'X', evidence } as never] })).toThrow();
+    expect([undefined, null, '', '  '].map((v) => matchesFrom(v, ''))).toEqual([true, true, true, true]);
+    expect([[], [null], 0, false, '레이'].map((v) => matchesFrom(v, ''))).toEqual([false, false, false, false, false]);
+    expect(matchesFrom(' G80 ', 'G80')).toBe(true);
+  });
+  it('allows a blank fill only for products.sub_model, and repairs products.trim_name by name', () => {
+    const blank = { id: 'x', from: '', to: 'Y', evidence: '원문' };
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [blank], productRepairs: [] })).toThrow(/requires/);
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], trimRepairs: [blank] })).toThrow(/requires/);
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], productTrimRepairs: [blank] })).toThrow(/requires/);
+    expect(validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [],
+      productTrimRepairs: [{ id: 'p', from: '프리미엄', to: 'CVX 프리미엄' }] })).toEqual({ masterCount: 0, productCount: 0, productTrimCount: 1 });
+    expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [{ id: 'p', from: 'A', to: 'B' }],
+      productTrimRepairs: [{ id: 'p', from: 'C', to: 'D' }] })).toThrow(/overlap/);
   });
 });
