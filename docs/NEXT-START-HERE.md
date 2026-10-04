@@ -375,6 +375,12 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 vehicle_trim_master 세부트림 정정 운영 적용
+
+- main `5e04298`(#328) 의 `apply-vehicle-name-reference-repair` 로 적용: run `2026-10-04T04-17-25-043Z-e50b50f4-73bc-4133-89b6-345f9f609ee6`, plan digest `8a5d4d9c8302352489037562ba5fcd33e50ee7ecab51fba96cf2f3005dd4c542`, 개인 백업 뒤 단일 트랜잭션, trimCount 25 · 되읽기 25(옛 이름 `trim_aliases` 보존 확인 포함).
+- 재조회: 표기·엔진 접두 차이 26건 중 25건 F03 이름과 일치, 남은 1건은 같은 등급 근거가 없어 제외한 MINI `JCW ALL4`. sub_model parity audit 은 변화 없음(이슈 648 · 영향 products 394 — 세부트림 정정은 sub_model 을 건드리지 않는다).
+- 기존 HOLD(이번 범위 밖, 다음 순서는 AI 상황실이 정함): F03 대조 기준 vehicle_trim_master 일치 803 · 세부모델은 맞으나 F03 세부트림에 같은 이름이 없는 행 241 · 세부모델 이름이 달라 대조 못 한 행 1,008.
+
 ### 2026-10-04 공통 시트 첫 적재 운영 적용 · Catalog writer 소유권 이전 · 이름 정정 적용
 
 - products 이름 정정 59건(표기 56·분류 3) 운영 적용: F03 최종안 재조회로 to 이름·현재 from 59/59 확인 뒤 기존 `apply-vehicle-name-reference-repair`, run `2026-10-04T03-56-13-433Z-3cabe1de-dd89-4f36-889e-eaebcfff6c60`, 개인 백업 뒤 단일 트랜잭션, 되읽기 59/59. 적용 뒤 parity audit: 공통 시트 차 이슈 61→0, 전체 이슈 721→648, 영향 products 466→394.
