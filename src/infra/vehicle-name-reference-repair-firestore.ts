@@ -315,6 +315,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
 
   await db.runTransaction(async (transaction) => {
     const current = refs.length ? await transaction.getAll(...refs) : [];
+    // A retired master is frozen: its name is not changed again (a rename would let products use it under a new name).
+    const frozen = targets.findIndex((t, i) => t.kind === 'master' && current[i]?.data()?.retired === true);
+    if (frozen >= 0) throw new Error(`retired master cannot be renamed ${targets[frozen]!.ref.path}`);
     // A product must not be renamed onto the name of a master that is already retired (in any earlier plan).
     const productTargets = targets.map((t, i) => ({ t, data: current[i]?.data() })).filter((x) => x.t.kind === 'product');
     if (productTargets.length) {
@@ -373,8 +376,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (used) throw new Error(`master name still used by products products/${used.id}`);
     }
     if (variantRefs.length && (await transaction.getAll(...variantRefs)).some((snapshot, index) =>
-      !snapshot.exists || stableDigest(snapshot.data()?.variants ?? null) !== variantRepairs[index]!.fromDigest)) {
-      throw new Error('transaction variants precondition changed');
+      !snapshot.exists || snapshot.data()?.retired === true || stableDigest(snapshot.data()?.variants ?? null) !== variantRepairs[index]!.fromDigest)) {
+      throw new Error('transaction variants precondition changed or master retired');
     }
     current.forEach((snapshot, index) => {
       if (!snapshot.exists || !matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {

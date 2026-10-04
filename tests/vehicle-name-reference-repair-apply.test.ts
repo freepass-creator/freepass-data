@@ -212,6 +212,22 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
       productRepairs: [{ id: 'p7', from: '그랜저 GN7', to: '그랜저 옛이름' }] })).rejects.toThrow(/retired master/);
     expect(store.get('products/p7')!.sub_model).toBe('그랜저 GN7');
   });
+  it('freezes a retired master: no rename (alone or together with a product rename) and no variants edit', async () => {
+    const { stableDigest } = await import('../src/shared/stable-digest.js');
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    store.set('products/p7', { model: '그랜저', sub_model: '그랜저 GN7' });
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: '합쳐짐' }] });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', productRepairs: [],
+      masterRepairs: [{ id: 'm-old', from: '그랜저 옛이름', to: '그랜저 다른이름' }] })).rejects.toThrow(/cannot be renamed/);
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1',
+      masterRepairs: [{ id: 'm-old', from: '그랜저 옛이름', to: '그랜저 새이름' }],
+      productRepairs: [{ id: 'p7', from: '그랜저 GN7', to: '그랜저 새이름' }] })).rejects.toThrow(/cannot be renamed/);
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterVariantRepairs: [{ id: 'm-old', fromDigest: stableDigest(null), to: [{ name: 'x' }], evidence: 'x' }] })).rejects.toThrow(/retired/);
+    expect(store.get('vehicle_master/m-old')).toMatchObject({ sub_model: '그랜저 옛이름', retired: true });
+    expect(store.get('products/p7')!.sub_model).toBe('그랜저 GN7');
+  });
   it('refuses to link a trim row to a retired master in a later plan', async () => {
     store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
     await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
