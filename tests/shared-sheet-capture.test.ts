@@ -99,5 +99,16 @@ describe('shared sheet capture keeps the year of date cells', () => {
     expect(row2[1]![at('최초등록일')]).toBe('2020-07-03');
     expect(row2[1]![at('입고일자')]).toBe('08-12');
     expect(row2[0]![at('입고일자')]).toBe('입고일자');
+    // 월/일/연 표시도 같은 날이면 통과한다.
+    const usShown = [...shown]; usShown[at('최초등록일')] = '7/3/2020';
+    expect(rawCapture(ID, batch({ [ch.tab]: [usShown] }), META(), T, batch({ [ch.tab]: [fullReal] })).tabs.find(t => t.title === ch.tab)!.values[1]![at('최초등록일')]).toBe('2020-07-03');
+    // 글자 칸이 다르면(같은 회사·같은 번호라도) 멈춘다.
+    const otherText = [...real]; otherText[at('비고')] = '다른 차';
+    expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherText] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    // 날짜 말고 글자가 모두 같은 두 줄(«미정» 둘)은 서로 바뀌어도 알 수 없으니 날짜를 바꾸지 않는다.
+    const twinA = [...real], twinB = [...real]; twinB[at('입고일자')] = 45881;
+    const dup = rawCapture(ID, batch({ [ch.tab]: [shown, shown] }), META(), T, batch({ [ch.tab]: [twinB, twinA] })).tabs.find(t => t.title === ch.tab)!.values;
+    expect(dup[1]![at('입고일자')]).toBe('08-12');
+    expect(dup[2]![at('입고일자')]).toBe('08-12');
   });
 });
