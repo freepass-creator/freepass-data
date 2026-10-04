@@ -64,11 +64,10 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
     expect(p.fills.map(f => f.column)).toEqual(['AE']);
     expect(p.blanks).toEqual([{ row: 3, column: 'AJ', plate: '12가3456', reason: 'REMARK_AGREEMENT_NEEDS_PERSON' }]);
   });
-  it('VAT-included rules (스타·스카이) fill only when ÷1.1 is a whole won; otherwise blank, and a sheet value is compared as a rough diff', () => {
+  it('VAT-included rules (스타·스카이) use the engine supply amount: ÷1.1, rounded to the won (상황실 2026-10-05)', () => {
     const p = plan([row({ 차량번호: '1', 공급사: '스타스카이', 렌탈료: 1100000 }), row({ 차량번호: '2', 공급사: '스타스카이', 렌탈료: 700000, 판매수수료: 1092000 })]);
-    expect(p.fills.filter(f => f.row === 3).map(f => [f.column, f.value])).toEqual([['AE', 1000000], ['AJ', 800000]]);
-    expect(p.blanks.filter(b => b.row === 4).map(b => [b.column, b.reason])).toEqual([['AJ', 'WON_ROUNDING_UNDECIDED']]);
-    expect(p.diffs).toEqual([{ row: 4, column: 'AE', against: 'AE', plate: '2', sheet: 1092000, computed: 636364, difference: 455636, ruleId: 'STAR_RERENT_ONE_MONTH_RENT_BILLING', note: 'WON_ROUNDING_UNDECIDED' }]);
+    expect(p.fills.map(f => [f.row, f.column, f.value])).toEqual([[3, 'AE', 1000000], [3, 'AJ', 800000], [4, 'AJ', 509091]]);
+    expect(p.diffs).toEqual([{ row: 4, column: 'AE', against: 'AE', plate: '2', sheet: 1092000, computed: 636364, difference: 455636, ruleId: 'STAR_RERENT_ONE_MONTH_RENT_BILLING' }]);
   });
   it('unknown supplier names, 지원금 rows and duplicate keys are never guessed', () => {
     const dup = row({ 차량번호: '9' });

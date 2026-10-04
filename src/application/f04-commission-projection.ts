@@ -10,14 +10,14 @@ import { resolveSalesCommission, resolveSupplierBillingFee, KAKAO_COMMISSION_POL
  * - 회차청구 탭에 있는 계약(차량번호+원 접수행)은 AE 를 쓰지 않는다(이중 청구).
  * - 분납 계약의 AE 는 «원 줄이 청구한 몫»: 다음 회차가 회차청구 탭에 있으면 원 줄 AE 는 쓰지 않고, 없으면 계약 전체.
  * - 비고에 합의·정정 표시가 있는 줄의 빈칸은 채우지 않고 사람 확인 목록으로.
- * - VAT 포함 규칙(스타·스카이)은 ÷1.1 이 정수일 때만(원 단위 처리 정본 미정, F04 수수료표 171행).
+ * - VAT 포함 규칙(스타·스카이)은 ÷1.1 원 미만 반올림(AI 상황실 2026-10-05 결정, F04 수수료표 171행).
  */
 
 export type F04Column = 'AE' | 'AJ';
 export type F04Fill = { row: number; column: F04Column; plate: string; value: number; ruleId: string };
 export type F04Blank = { row: number; column: F04Column; plate: string; reason: string };
 /** against: 비교한 시트 칸 — 그 칸 자신(AE·AJ) 또는 사람이 적은 청구액(U)·지급액(V). */
-export type F04Diff = { row: number; column: F04Column; against: F04Column | 'U' | 'V'; plate: string; sheet: unknown; computed: number; difference: number | null; ruleId: string; note?: 'WON_ROUNDING_UNDECIDED' };
+export type F04Diff = { row: number; column: F04Column; against: F04Column | 'U' | 'V'; plate: string; sheet: unknown; computed: number; difference: number | null; ruleId: string };
 export type F04ProjectionPlan = {
   schema: 'freepass-data.f04-commission-projection-plan/v1';
   policyId: string;
@@ -82,22 +82,15 @@ export function f04RowInput(row: Record<string, unknown>, facts: Record<string, 
   return { input: { supplierId, productType, termMonths, monthlyRent, ...(vehicleValue ? { vehicleValue } : {}), ...(fuel ? { fuel } : {}) } };
 }
 
-/** 원 단위 처리 미정으로 쓰지는 못하지만 사람 비교용으로 보여 줄 값(엔진 반올림 공급가). */
-const roughAmount = (result: ReturnType<typeof resolveSupplierBillingFee>) =>
-  result.state === 'CALCULATED' && result.amount !== null && result.ruleId ? { value: result.amount, ruleId: result.ruleId } : null;
-const diffOf = (row: number, column: F04Column, against: F04Diff['against'], plate: string, sheetValue: unknown, computed: number, ruleId: string, note?: F04Diff['note']): F04Diff => {
+const diffOf = (row: number, column: F04Column, against: F04Diff['against'], plate: string, sheetValue: unknown, computed: number, ruleId: string): F04Diff => {
   const sheet = int(sheetValue);
-  return { row, column, against, plate, sheet: sheetValue, computed, difference: sheet === null ? null : sheet - computed, ruleId, ...(note ? { note } : {}) };
+  return { row, column, against, plate, sheet: sheetValue, computed, difference: sheet === null ? null : sheet - computed, ruleId };
 };
 
 /** 엔진 결과 → 시트에 쓸 공급가 정수, 아니면 빈칸 사유. */
 export function projectedAmount(result: ReturnType<typeof resolveSupplierBillingFee>): { value: number; ruleId: string } | { reason: string } {
   if (result.state !== 'CALCULATED' || result.amount === null || !result.ruleId) return { reason: result.reasonCode ?? result.state };
-  if (result.vatTreatment === 'INCLUDED') {
-    // VAT 포함 금액(total) ÷ 1.1 이 정수가 아니면 원 단위 처리 정본이 없어 빈칸.
-    if (result.totalAmount === null || (result.totalAmount * 10) % 11 !== 0) return { reason: 'WON_ROUNDING_UNDECIDED' };
-    return { value: (result.totalAmount * 10) / 11, ruleId: result.ruleId };
-  }
+  // VAT 포함 규칙도 엔진의 공급가(÷1.1, 원 미만 반올림 — AI 상황실 2026-10-05 결정, 원장 41줄 관행)를 그대로 쓴다.
   return { value: result.amount, ruleId: result.ruleId };
 }
 
@@ -161,10 +154,8 @@ export function planF04CommissionProjection(input: {
       if ('input' in built) for (const column of ['AE', 'AJ'] as const) {
         const result = column === 'AE' ? resolveSupplierBillingFee(built.input) : resolveSalesCommission(built.input);
         const projected = projectedAmount(result), current = cells[colOf(column)];
-        if (empty(current) || (column === 'AE' && installmentPlates.has(plate))) continue;
-        if (!('reason' in projected)) { if (int(current) !== projected.value) plan.closedDiffs.push(diffOf(sheetRow, column, column, plate, current, projected.value, projected.ruleId)); continue; }
-        const rough = projected.reason === 'WON_ROUNDING_UNDECIDED' ? roughAmount(result) : null;
-        if (rough && int(current) !== rough.value) plan.closedDiffs.push(diffOf(sheetRow, column, column, plate, current, rough.value, rough.ruleId, 'WON_ROUNDING_UNDECIDED'));
+        if (empty(current) || (column === 'AE' && installmentPlates.has(plate)) || 'reason' in projected) continue;
+        if (int(current) !== projected.value) plan.closedDiffs.push(diffOf(sheetRow, column, column, plate, current, projected.value, projected.ruleId));
       }
       continue;
     }
@@ -178,12 +169,7 @@ export function planF04CommissionProjection(input: {
       if ('reason' in built) { if (empty(current)) plan.blanks.push({ row: sheetRow, column, plate, reason: built.reason }); continue; }
       const result = column === 'AE' ? resolveSupplierBillingFee(built.input) : resolveSalesCommission(built.input);
       const projected = projectedAmount(result);
-      if ('reason' in projected) {
-        const rough = projected.reason === 'WON_ROUNDING_UNDECIDED' ? roughAmount(result) : null;
-        if (empty(current)) plan.blanks.push({ row: sheetRow, column, plate, reason: projected.reason });
-        else if (rough && int(current) !== rough.value) plan.diffs.push(diffOf(sheetRow, column, column, plate, current, rough.value, rough.ruleId, 'WON_ROUNDING_UNDECIDED'));
-        continue;
-      }
+      if ('reason' in projected) { if (empty(current)) plan.blanks.push({ row: sheetRow, column, plate, reason: projected.reason }); continue; }
       if (!empty(current)) {
         if (int(current) === projected.value) plan.same++;
         else plan.diffs.push(diffOf(sheetRow, column, column, plate, current, projected.value, projected.ruleId));
