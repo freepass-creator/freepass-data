@@ -18,16 +18,16 @@ const applyUpdate = (path: string, update: Record<string, unknown>) => {
   }
   store.set(path, doc);
 };
-type Query = { collection: string; filters: Array<[string, unknown]>; where: (f: string, op: string, v: unknown) => Query };
+type Query = { collection: string; filters: Array<[string, unknown]>; where: (f: string, op: string, v: unknown) => Query; select: (...f: string[]) => Query };
 const query = (collection: string, filters: Array<[string, unknown]> = []): Query => ({
-  collection, filters, where: (f, _op, v) => query(collection, [...filters, [f, v]]),
+  collection, filters, where: (f, _op, v) => query(collection, [...filters, [f, v]]), select: () => query(collection, filters),
 });
 const runQuery = (q: Query) => {
   const docs = [...store.entries()].filter(([path, data]) => path.startsWith(`${q.collection}/`) && q.filters.every(([f, v]) => data[f] === v));
   return { empty: docs.length === 0, size: docs.length, docs: docs.map(([path, data]) => ({ id: path.split('/')[1]!, data: () => structuredClone(data) })) };
 };
 const db = {
-  collection: (c: string) => ({ doc: (id: string) => ref(c, id), where: (f: string, op: string, v: unknown) => query(c).where(f, op, v) }),
+  collection: (c: string) => ({ doc: (id: string) => ref(c, id), where: (f: string, op: string, v: unknown) => query(c).where(f, op, v), select: (...f: string[]) => query(c).select(...f) }),
   getAll: async (...refs: Ref[]) => refs.map(snap),
   runTransaction: async (fn: (t: unknown) => Promise<void>) => {
     const writes: Array<() => void> = [];
@@ -140,6 +140,12 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', productRepairs: [],
       masterRepairs: [{ id: 'm-ig', from: '그랜저 IG', to: '그랜저 GN7' }, { id: 'm-gn7', from: '그랜저 GN7', to: '그랜저 IG' }] });
     expect(store.get('vehicle_master/m-ig')!.sub_model).toBe('그랜저 GN7');
+  });
+  it('compares stored names normalized — a stray space in stored maker text does not hide a duplicate', async () => {
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: ' 현대 ', model: '그랜저', sub_model: '그랜저 TG' });
+    const createB = { id: 'm-b', data: { id: 'm-b', maker: '현대', model: '그랜저', sub_model: '그랜저 B', origin: '국산' }, evidence: 'x' };
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', productRepairs: [],
+      masterRepairs: [{ id: 'm-old', from: '그랜저 TG', to: '그랜저 B' }], masterCreates: [createB] })).rejects.toThrow(/would be stored twice/);
   });
   it('accepts only normalized maker/model/sub-model text for a new master', async () => {
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],

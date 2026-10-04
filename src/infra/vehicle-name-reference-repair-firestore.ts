@@ -248,27 +248,24 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       const same = await transaction.get(db.collection('vehicle_trim_master').where('trim_row_key', '==', c.id));
       if (!same.empty) throw new Error(`trim_row_key already stored ${c.id}`);
     }
-    // Final identity check: stored masters of every touched maker|model, with this plan's renames and creates applied,
-    // must not end up with the same (normalized) sub-model twice.
-    const renamedMasters = new Map<string, string>();
-    targets.forEach((t) => { if (t.kind === 'master') renamedMasters.set(t.ref.id, clean(t.item.to)); });
-    const touched = new Map<string, { maker: unknown; model: unknown }>();
-    targets.forEach((t, index) => {
-      if (t.kind !== 'master') return;
-      const data = current[index]!.data() ?? {};
-      if (!clean(data.maker) || !clean(data.model)) throw new Error(`renamed master has no maker/model ${t.ref.path}`);
-      touched.set(`${clean(data.maker)}|${clean(data.model)}`, { maker: data.maker, model: data.model });
-    });
-    for (const c of plan.masterCreates ?? []) touched.set(`${clean(c.data.maker)}|${clean(c.data.model)}`, { maker: c.data.maker, model: c.data.model });
-    for (const [group, { maker, model }] of touched) {
-      const stored = await transaction.get(db.collection('vehicle_master').where('maker', '==', maker).where('model', '==', model));
-      const finalNames = new Map<string, string>();
-      for (const doc of stored.docs) finalNames.set(doc.id, renamedMasters.get(doc.id) ?? clean(doc.data().sub_model));
-      for (const c of plan.masterCreates ?? []) if (`${clean(c.data.maker)}|${clean(c.data.model)}` === group) finalNames.set(c.id, clean(c.data.sub_model));
-      const seen = new Map<string, string>();
-      for (const [id, name] of finalNames) {
-        if (seen.has(name)) throw new Error(`master sub-model would be stored twice ${group}|${name} (${seen.get(name)}, ${id})`);
-        seen.set(name, id);
+    // Final identity check (값 하나): every stored master (names only, normalized — stored values may carry stray spaces),
+    // with this plan's renames and creates applied, must not end up with the same maker|model|sub_model twice.
+    if (targets.some((t) => t.kind === 'master') || (plan.masterCreates ?? []).length) {
+      const renamedMasters: Record<string, string> = {};
+      for (const t of targets) if (t.kind === 'master') renamedMasters[t.ref.id] = clean(t.item.to);
+      const stored = await transaction.get(db.collection('vehicle_master').select('maker', 'model', 'sub_model'));
+      const finalKeys: Record<string, string> = {};
+      for (const doc of stored.docs) {
+        const data = doc.data();
+        finalKeys[doc.id] = [clean(data.maker), clean(data.model), renamedMasters[doc.id] ?? clean(data.sub_model)].join('|');
+      }
+      for (const c of plan.masterCreates ?? []) finalKeys[c.id] = masterNameKey(c.data);
+      const touched = new Set([...Object.keys(renamedMasters), ...(plan.masterCreates ?? []).map((c) => c.id)].map((id) => finalKeys[id]));
+      const owners: Record<string, string> = {};
+      for (const [id, key] of Object.entries(finalKeys)) {
+        if (!touched.has(key)) continue;
+        if (owners[key] !== undefined) throw new Error(`master sub-model would be stored twice ${key} (${owners[key]}, ${id})`);
+        owners[key] = id;
       }
     }
     if (variantRefs.length && (await transaction.getAll(...variantRefs)).some((snapshot, index) =>
