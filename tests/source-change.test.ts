@@ -297,7 +297,7 @@ describe('reviewed source change', () => {
     const savedEconomicsOffer = (await store.getOffer(initial.offerId))!;
     expect(savedEconomicsOffer.internalEconomicsTerms).toHaveLength(savedEconomicsOffer.priceTerms.length);
     expect(savedEconomicsOffer.internalEconomicsTerms![0]!.monthlyRent).toEqual(savedEconomicsOffer.priceTerms[0]!.monthlyRent);
-    expect(savedEconomicsOffer.internalEconomicsTerms![0]!.supplierBillingFee.policyId).toBe('sales-commission-2026-10-04');
+    expect(savedEconomicsOffer.internalEconomicsTerms![0]!.supplierBillingFee.policyId).toBe('sales-commission-2026-10-05');
 
     expect(result.bindingRevision).toBe(2);
     expect(result.offerRevision).toBe(2);
