@@ -112,6 +112,20 @@ describe('vehicle-name reference repair gate', () => {
     expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: ['A'], fromTrimsDigest: 'b'.repeat(64) }],
       masterRetires: [{ id: 'm', into: 'm2', evidence: 'x' }] })).toThrow(/same plan/);
   });
+  it('validates model and gen_code repairs and the variants-trims ⊆ trims rule', () => {
+    const base = { sourceDigest: 'd', masterRepairs: [], productRepairs: [] };
+    expect(validateVehicleNameRepairPlan({ ...base, masterModelRepairs: [{ id: 'm', from: '아이오닉5', to: '아이오닉 5' }],
+      trimModelRepairs: [{ id: 't', from: '아이오닉5', to: '아이오닉 5' }], masterGenCodeRepairs: [{ id: 'm', from: 'CV1', to: 'CV' }] }))
+      .toMatchObject({ masterModelCount: 1, trimModelCount: 1, masterGenCodeCount: 1 });
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterModelRepairs: [{ id: 'm', from: '아이오닉5', to: '아이오닉  5' }] })).toThrow(/normalized/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterGenCodeRepairs: [{ id: 'm', from: 'CV1', to: 'CV' }],
+      masterRetires: [{ id: 'm', into: 'm2', evidence: 'x' }] })).toThrow(/same plan/);
+    const v = { id: 'm', fromDigest: 'a'.repeat(64), to: [{ fuel: '가솔린', trims: ['A', 'B'] }], evidence: 'x', fromTrimsDigest: 'b'.repeat(64) };
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: ['A'] }] })).toThrow(/missing from trims: B/);
+    expect(validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: ['A', 'B', 'C'] }] })).toMatchObject({ masterVariantCount: 1 });
+    const create = { id: 'n', evidence: 'x', data: { id: 'n', maker: '현대', model: '그랜저', sub_model: '그랜저 X', origin: '국산', trims: ['A'], variants: [{ trims: ['A', 'Z'] }] } };
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [create] })).toThrow(/missing from trims: Z/);
+  });
   it('caps one plan below the Firestore transaction write limit', () => {
     const many = Array.from({ length: MAX_VEHICLE_NAME_REPAIR_TARGETS + 1 }, (_, i) => ({ id: `t${i}`, from: 'A', to: 'B' }));
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], trimSubModelRepairs: many })).toThrow(/too large/);

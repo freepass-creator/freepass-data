@@ -267,6 +267,37 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     await expect(applyVehicleNameReferenceRepair(plan)).rejects.toThrow(/retired/);
     expect(store.get('vehicle_master/m-gn7')!.trims).toEqual(['아너스']);
   });
+  it('renames the model on a master and its trim rows and the gen_code, keeping old values as aliases', async () => {
+    store.set('vehicle_master/m-i5', { id: 'm-i5', maker: '현대', model: '아이오닉5', sub_model: '아이오닉 5 NE', gen_code: 'NE1' });
+    store.set('vehicle_trim_master/r1', { model: '아이오닉5', sub_model: '아이오닉 5 NE', master_id: 'm-i5', trim: '프레스티지' });
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterModelRepairs: [{ id: 'm-i5', from: '아이오닉5', to: '아이오닉 5' }], trimModelRepairs: [{ id: 'r1', from: '아이오닉5', to: '아이오닉 5' }],
+      masterGenCodeRepairs: [{ id: 'm-i5', from: 'NE1', to: 'NE' }] });
+    expect(store.get('vehicle_master/m-i5')).toMatchObject({ model: '아이오닉 5', model_aliases: ['아이오닉5'], gen_code: 'NE', gen_code_aliases: ['NE1'] });
+    expect(store.get('vehicle_trim_master/r1')).toMatchObject({ model: '아이오닉 5', model_aliases: ['아이오닉5'] });
+  });
+  it('refuses a model rename that would store the same maker|model|sub_model twice, and model or gen_code edits on a retired master', async () => {
+    store.set('vehicle_master/m-a', { id: 'm-a', maker: '현대', model: '아이오닉5', sub_model: '아이오닉 5 NE' });
+    store.set('vehicle_master/m-b', { id: 'm-b', maker: '현대', model: '아이오닉 5', sub_model: '아이오닉 5 NE' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterModelRepairs: [{ id: 'm-a', from: '아이오닉5', to: '아이오닉 5' }] })).rejects.toThrow(/stored twice/);
+    store.set('vehicle_master/m-b', { id: 'm-b', maker: '현대', model: '아이오닉5', sub_model: '옛 이름', gen_code: 'X', retired: true, retired_into: 'm-a' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterModelRepairs: [{ id: 'm-b', from: '아이오닉5', to: '아이오닉 5' }] })).rejects.toThrow(/retired master/);
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterGenCodeRepairs: [{ id: 'm-b', from: 'X', to: 'Y' }] })).rejects.toThrow(/retired master/);
+    expect(store.get('vehicle_master/m-a')!.model).toBe('아이오닉5');
+  });
+  it('refuses a variants edit without trims when the stored trims list does not cover the new variant trims', async () => {
+    const { stableDigest } = await import('../src/shared/stable-digest.js');
+    const variants = [{ fuel: '가솔린', trims: ['프리미엄'] }];
+    store.set('vehicle_master/m-gn7', { id: 'm-gn7', maker: '현대', model: '그랜저', sub_model: '그랜저 GN7', variants, trims: ['프리미엄'] });
+    const base = { sourceDigest: 'v1', masterRepairs: [], productRepairs: [] };
+    await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(variants), to: [{ fuel: '가솔린', trims: ['프리미엄', '블랙 잉크'] }], evidence: 'x' }] }))
+      .rejects.toThrow(/missing from the stored trims/);
+    await applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(variants), to: [{ fuel: 'LPG', trims: ['프리미엄'] }], evidence: 'x' }] });
+    expect(store.get('vehicle_master/m-gn7')!.variants).toEqual([{ fuel: 'LPG', trims: ['프리미엄'] }]);
+  });
   it('refuses to link a trim row to a retired master in a later plan', async () => {
     store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
     await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
