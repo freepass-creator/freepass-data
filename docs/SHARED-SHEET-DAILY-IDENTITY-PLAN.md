@@ -15,10 +15,27 @@
 |---|---|
 | 서비스 계정 | `github-data-inventory-writer@freepasserp5.iam.gserviceaccount.com`(없으면 생성 — 기존 ERP4 `github-inventory-writer` 는 쓰지 않는다: ERP4 는 화이트 라벨만) |
 | GitHub 연결 | Workload Identity Federation 공급자, 조건: `repository == freepass-creator/freepass-data` · `ref == refs/heads/main` · `workflow == data-owned-refresh.yml` |
-| Firestore | freepasserp5 `roles/datastore.user`(Canonical·source 컬렉션 쓰기 — 코드가 writer 소유권 EXCLUSIVE `service:freepass-data` 로 다시 막는다) |
+| Firestore | **좁힌 맞춤 역할**(아래 «Firestore 권한 좁히기») + 데이터베이스 조건 `resource.name == "projects/freepasserp5/databases/(default)"`. 넓은 `roles/datastore.user` 는 쓰지 않는다 |
 | 증거 버킷 | 비공개 버킷 1개, 서비스 계정에 객체 생성·읽기만(`roles/storage.objectCreator` + `objectViewer`), 덮어쓰기 금지(`--if-generation-match=0`) |
 | 공통 시트 | 소유자(pyh)가 서비스 계정 이메일에 **보기** 공유 — 위임·키 없음. 읽기 토큰은 WIF 로 받은 서비스 계정 ADC + `spreadsheets.readonly` |
 | GitHub 설정 | environment `data-production-delivery` 변수 3개(공급자·서비스 계정·버킷) + secret `FREEPASS_DATA_SHARED_SHEET_ID`(있음) + 스위치 변수 `FREEPASS_DATA_SHARED_SHEET_DAILY`(dry-run 숫자 확인 뒤 `on`) |
+
+## Firestore 권한 좁히기 (상황실 검토 10-04 반영)
+
+**한계(공식 문서 확인):** Firestore 의 IAM 조건은 «데이터베이스 단위»까지만 걸린다(`resource.name == "projects/<프로젝트>/databases/<DB>"`). 모음(컬렉션) 단위 IAM 조건은 없다. 보안 규칙(Security Rules)은 서비스 계정·서버 라이브러리에 적용되지 않는다. 그래서 «catalog_*·source_* 에만 쓰기»를 IAM 하나로는 강제할 수 없다.
+
+**그래서 겹으로 좁힌다:**
+
+1. **맞춤 역할 `freepassDataDailyWriter`** — `datastore.entities.get` · `list` · `create` · `update` 와 거래·조회에 필요한 최소 권한만. **`datastore.entities.delete` 없음**, 색인·가져오기/내보내기·데이터베이스 관리 권한 없음. 매일 박제는 지우기를 하지 않는다(만들기·고치기·읽기만).
+2. **데이터베이스 조건** — 위 조건으로 `(default)` 한 곳에만. 다른 데이터베이스는 못 건드린다.
+3. **실행 경로 고정** — WIF 조건(저장소·main·`data-owned-refresh.yml`) + environment `data-production-delivery` 보호(검토자 승인). 코드는 `src/infra/firestore-layout.ts` 의 모음 이름으로만 쓰고, Canonical 쓰기는 writer 소유권 EXCLUSIVE `service:freepass-data` 로 다시 막는다.
+4. **감지** — Firestore «데이터 접근 감사 로그(DATA_WRITE)»를 켜고, 이 서비스 계정의 쓰기가 아래 허용 모음 밖으로 나가면 매일 점검에서 «보류»로 알린다.
+
+**매일 박제가 쓰는 모음(허용 목록):** `catalog_vehicle_models` · `catalog_vehicle_assets` · `catalog_products` · `catalog_offers` · `catalog_policies` · `canonical_source_bindings` · `catalog_entity_revisions` · `sources` · `source_runs` · `source_heads` · `raw_records` · `normalized_candidates` · `field_lineage` · `command_receipts` · `canonicalization_receipts` · `reviewed_source_change_receipts` · `audit_events` · `outbox_events` · `data_access_events` (읽기만: `writer_ownership`).
+
+**남는 위험:** 이 신원은 `(default)` 안의 다른 모음(예: ERP4 화면이 쓰는 `products`)에도 문서를 만들거나 고칠 «권한»은 갖는다(지우기는 못 함). 막는 것은 고정된 실행 경로·코드·소유권이고, 넘으면 감사 로그로 다음 날 잡힌다 — 사전 차단이 아니라 사후 감지다.
+
+**완전히 막으려면(별도 승인):** Canonical·source 모음을 freepasserp5 안의 «전용 데이터베이스»(예: `freepass-data`)로 옮기고 조건을 그 데이터베이스로 건다. 이동·소비처 연결 변경이 큰 일이라 이 계획에 넣지 않고 따로 올린다.
 
 ## 승인 뒤 코드 변경(작은 PR)
 
