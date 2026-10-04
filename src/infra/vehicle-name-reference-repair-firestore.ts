@@ -28,6 +28,8 @@ export type VehicleNameRepairPlan = {
   trimSubModelRepairs?: VehicleNameRepairItem[];
   /** vehicle_trim_master.master_id → the vehicle_master doc of the row's new sub-model (hybrid split). */
   trimMasterLinkRepairs?: VehicleNameRepairItem[];
+  /** vehicle_master.variants after a hybrid split: the reviewed current list (by digest) is replaced with the remaining powertrains. */
+  masterVariantRepairs?: VehicleMasterVariantRepair[];
   /** New vehicle_master docs (new sub-model). Created only when absent; `data.id` must equal `id`. */
   masterCreates?: VehicleMasterDocCreate[];
   /** New vehicle_trim_master rows. Created only when absent; `data.master_id` must point to an existing or created master. */
@@ -35,9 +37,12 @@ export type VehicleNameRepairPlan = {
 };
 
 export type VehicleMasterDocCreate = { id: string; data: Record<string, unknown>; evidence: string };
+export type VehicleMasterVariantRepair = { id: string; fromDigest: string; to: Record<string, unknown>[]; evidence: string };
 
 /** One transaction carries every target write plus one audit per target — keep well under Firestore's 500-write limit. */
 export const MAX_VEHICLE_NAME_REPAIR_TARGETS = 200;
+/** The identity of a master entry: maker|model|sub_model (one entry per sub-model). */
+export const masterNameKey = (data: Record<string, unknown>) => [data.maker, data.model, data.sub_model].map(clean).join('|');
 const MASTER_CREATE_KEYS = ['id', 'maker', 'model', 'sub_model', 'origin'] as const;
 const TRIM_CREATE_KEYS = ['maker', 'model', 'sub_model', 'trim', 'master_id', 'trim_row_key'] as const;
 
@@ -56,8 +61,15 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     ...(plan.trimMasterLinkRepairs ?? []).map((item) => ({ ...item, kind: 'trimMasterLink' }))];
   const creates = [...(plan.masterCreates ?? []).map((c) => ({ ...c, kind: 'masterCreate', keys: MASTER_CREATE_KEYS })),
     ...(plan.trimCreates ?? []).map((c) => ({ ...c, kind: 'trimCreate', keys: TRIM_CREATE_KEYS }))];
-  if (!all.length && !creates.length) throw new Error('repair plan is empty');
-  if (all.length + creates.length > MAX_VEHICLE_NAME_REPAIR_TARGETS) throw new Error(`repair plan too large (max ${MAX_VEHICLE_NAME_REPAIR_TARGETS} targets) — split it`);
+  const variantRepairs = plan.masterVariantRepairs ?? [];
+  for (const v of variantRepairs) {
+    if (!v.id?.trim() || !/^[0-9a-f]{64}$/.test(v.fromDigest ?? '') || !Array.isArray(v.to) || !v.to.length) throw new Error('masterVariantRepair requires id, fromDigest and a non-empty variants list');
+    if (typeof v.evidence !== 'string' || !v.evidence.trim()) throw new Error(`masterVariantRepair ${v.id} requires evidence`);
+    if (stableDigest(v.to) === v.fromDigest) throw new Error(`no-op masterVariantRepair ${v.id}`);
+  }
+  if (new Set(variantRepairs.map((v) => v.id)).size !== variantRepairs.length) throw new Error('duplicate masterVariantRepair');
+  if (!all.length && !creates.length && !variantRepairs.length) throw new Error('repair plan is empty');
+  if (all.length + creates.length + variantRepairs.length > MAX_VEHICLE_NAME_REPAIR_TARGETS) throw new Error(`repair plan too large (max ${MAX_VEHICLE_NAME_REPAIR_TARGETS} targets) — split it`);
   const createKeys = new Set<string>();
   for (const c of creates) {
     if (!c.id?.trim() || typeof c.data !== 'object' || c.data === null || Array.isArray(c.data)) throw new Error(`${c.kind} requires id and data`);
@@ -69,6 +81,20 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     const key = `${c.kind}:${c.id}`;
     if (createKeys.has(key)) throw new Error(`duplicate create ${key}`);
     createKeys.add(key);
+  }
+  // «값 하나»: a trim row key and a master's maker|model|sub_model may appear only once — inside the plan here,
+  // and against stored data inside the transaction at apply time.
+  const trimKeys = new Set<string>();
+  for (const c of plan.trimCreates ?? []) {
+    if (c.data.trim_row_key !== c.id) throw new Error(`trimCreate ${c.id} trim_row_key must equal id`);
+    if (trimKeys.has(c.id)) throw new Error(`duplicate trim_row_key ${c.id}`);
+    trimKeys.add(c.id);
+  }
+  const masterNames = new Set<string>();
+  for (const c of plan.masterCreates ?? []) {
+    const name = masterNameKey(c.data);
+    if (masterNames.has(name)) throw new Error(`duplicate master sub-model ${name}`);
+    masterNames.add(name);
   }
   // Linked masters must exist already or be created by this plan — checked against Firestore at apply time.
   const productIds = new Set(plan.productRepairs.map((item) => item.id));
@@ -92,6 +118,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     ...(plan.productTrimRepairs ? { productTrimCount: plan.productTrimRepairs.length } : {}),
     ...(plan.trimSubModelRepairs ? { trimSubModelCount: plan.trimSubModelRepairs.length } : {}),
     ...(plan.trimMasterLinkRepairs ? { trimMasterLinkCount: plan.trimMasterLinkRepairs.length } : {}),
+    ...(plan.masterVariantRepairs ? { masterVariantCount: plan.masterVariantRepairs.length } : {}),
     ...(plan.masterCreates ? { masterCreateCount: plan.masterCreates.length } : {}),
     ...(plan.trimCreates ? { trimCreateCount: plan.trimCreates.length } : {}) };
 }
@@ -134,6 +161,14 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       throw new Error(`precondition changed ${snapshot.ref.path}`);
     }
   });
+  const variantRepairs = plan.masterVariantRepairs ?? [];
+  const variantRefs = variantRepairs.map((v) => db.collection('vehicle_master').doc(v.id));
+  const variantSnaps = variantRefs.length ? await db.getAll(...variantRefs) : [];
+  variantSnaps.forEach((snapshot, index) => {
+    if (!snapshot.exists || stableDigest(snapshot.data()?.variants ?? null) !== variantRepairs[index]!.fromDigest) {
+      throw new Error(`variants precondition changed ${snapshot.ref.path}`);
+    }
+  });
   const createRefs = creates.map((x) => x.ref);
   if (createRefs.length && (await db.getAll(...createRefs)).some((snapshot) => snapshot.exists)) throw new Error('create target already exists');
 
@@ -146,10 +181,11 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     projectId: process.env.FIREBASE_PROJECT_ID,
     sourceDigest: plan.sourceDigest,
     capturedAt: new Date().toISOString(),
-    documents: snapshots.map((snapshot) => ({ path: snapshot.ref.path, data: snapshot.data() })),
+    documents: [...snapshots, ...variantSnaps].map((snapshot) => ({ path: snapshot.ref.path, data: snapshot.data() })),
     // The reviewed items (incl. source-text evidence for blank fills) are kept with the before-images.
     repairs: targets.map(({ item, field, ref }) => ({ path: ref.path, field, ...item })),
     creates: creates.map(({ c, ref }) => ({ path: ref.path, evidence: c.evidence, data: c.data })),
+    variantRepairs: variantRepairs.map((v) => ({ path: `vehicle_master/${v.id}`, ...v })),
   }, null, 2), { flag: 'wx', mode: 0o600 });
 
   // Evidence never goes into the repaired documents (products are served to consumers field-for-field);
@@ -163,6 +199,13 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       entityType: ref.parent.id, entityId: ref.id, action: 'VEHICLE_NAME_REFERENCE_REPAIRED',
       before: { [field]: item.from }, after: { [field]: clean(item.to) },
       reason: item.evidence ? `원문 근거: ${item.evidence}` : `F03 이름 정정 (${plan.sourceDigest})`,
+      revisionBefore: 0, revisionAfter: 0, occurredAt,
+    })),
+    ...variantRepairs.map((v, index): AuditEvent => ({
+      eventId: auditId(variantRefs[index]!.path, 'variants'), commandId: `vehicle-name-repair:${runId}`, actor,
+      entityType: 'vehicle_master', entityId: v.id, action: 'VEHICLE_MASTER_VARIANTS_REPAIRED',
+      before: { variantsDigest: v.fromDigest }, after: { variantsDigest: stableDigest(v.to) },
+      reason: `차종 마스터 파워트레인 목록 정정 근거: ${v.evidence} (${plan.sourceDigest})`,
       revisionBefore: 0, revisionAfter: 0, occurredAt,
     })),
     ...creates.map(({ c, ref }): AuditEvent => ({
@@ -186,11 +229,31 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     byPath[ref.path] = entry;
   }
 
+  // A master's variants list joins that document's single update (it may also be renamed in the same plan).
+  variantRepairs.forEach((_, index) => {
+    const r = variantRefs[index]!;
+    byPath[r.path] = byPath[r.path] ?? { ref: r, fields: {}, aliases: {} };
+  });
+  const variantsByPath: Record<string, Record<string, unknown>[]> = Object.fromEntries(variantRepairs.map((v, i) => [variantRefs[i]!.path, v.to]));
+
   await db.runTransaction(async (transaction) => {
     const current = refs.length ? await transaction.getAll(...refs) : [];
     // Linked masters and create targets are read inside the transaction too, so a concurrent delete/create aborts it.
     if (linkRefs.length && (await transaction.getAll(...linkRefs)).some((snapshot) => !snapshot.exists)) throw new Error('transaction linked vehicle_master missing');
     if (createRefs.length && (await transaction.getAll(...createRefs)).some((snapshot) => snapshot.exists)) throw new Error('transaction create target already exists');
+    for (const c of plan.trimCreates ?? []) {
+      const same = await transaction.get(db.collection('vehicle_trim_master').where('trim_row_key', '==', c.id));
+      if (!same.empty) throw new Error(`trim_row_key already stored ${c.id}`);
+    }
+    for (const c of plan.masterCreates ?? []) {
+      const same = await transaction.get(db.collection('vehicle_master')
+        .where('maker', '==', c.data.maker).where('model', '==', c.data.model).where('sub_model', '==', c.data.sub_model));
+      if (!same.empty) throw new Error(`master sub-model already stored ${masterNameKey(c.data)}`);
+    }
+    if (variantRefs.length && (await transaction.getAll(...variantRefs)).some((snapshot, index) =>
+      !snapshot.exists || stableDigest(snapshot.data()?.variants ?? null) !== variantRepairs[index]!.fromDigest)) {
+      throw new Error('transaction variants precondition changed');
+    }
     current.forEach((snapshot, index) => {
       if (!snapshot.exists || !matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
         throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
@@ -199,6 +262,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     for (const { ref, fields, aliases } of Object.values(byPath)) {
       transaction.update(ref, {
         ...fields,
+        ...(variantsByPath[ref.path] ? { variants: variantsByPath[ref.path] } : {}),
         ...Object.fromEntries(Object.entries(aliases).map(([k, v]) => [k, FieldValue.arrayUnion(...v!)])),
         vehicle_name_reference_checked_at: FieldValue.serverTimestamp(),
         vehicle_name_reference_source_digest: plan.sourceDigest,
@@ -224,6 +288,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (!aliases.map(clean).includes(clean(item.from)) || !kept) throw new Error(`readback alias mismatch ${snapshot.ref.path}`);
     }
   });
+  const variantReadback = variantRefs.length ? await db.getAll(...variantRefs) : [];
+  variantReadback.forEach((snapshot, index) => {
+    if (stableDigest(snapshot.data()?.variants ?? null) !== stableDigest(variantRepairs[index]!.to)) throw new Error(`readback variants mismatch ${snapshot.ref.path}`);
+  });
   const createReadback = createRefs.length ? await db.getAll(...createRefs) : [];
   createReadback.forEach((snapshot, index) => {
     const want = creates[index]!.c.data;
@@ -233,5 +301,5 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   });
   const auditReadback = await db.getAll(...auditRefs);
   if (auditReadback.some((s, index) => !s.exists || s.data()?.reason !== audits[index]!.reason)) throw new Error('readback audit mismatch');
-  return { runId, backupPath, ...counts, readbackCount: readback.length + createReadback.length, auditCount: auditReadback.length };
+  return { runId, backupPath, ...counts, readbackCount: readback.length + createReadback.length + variantReadback.length, auditCount: auditReadback.length };
 }

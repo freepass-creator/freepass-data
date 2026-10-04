@@ -18,13 +18,22 @@ const applyUpdate = (path: string, update: Record<string, unknown>) => {
   }
   store.set(path, doc);
 };
+type Query = { collection: string; filters: Array<[string, unknown]>; where: (f: string, op: string, v: unknown) => Query };
+const query = (collection: string, filters: Array<[string, unknown]> = []): Query => ({
+  collection, filters, where: (f, _op, v) => query(collection, [...filters, [f, v]]),
+});
+const runQuery = (q: Query) => {
+  const docs = [...store.entries()].filter(([path, data]) => path.startsWith(`${q.collection}/`) && q.filters.every(([f, v]) => data[f] === v));
+  return { empty: docs.length === 0, size: docs.length };
+};
 const db = {
-  collection: (c: string) => ({ doc: (id: string) => ref(c, id) }),
+  collection: (c: string) => ({ doc: (id: string) => ref(c, id), where: (f: string, op: string, v: unknown) => query(c).where(f, op, v) }),
   getAll: async (...refs: Ref[]) => refs.map(snap),
   runTransaction: async (fn: (t: unknown) => Promise<void>) => {
     const writes: Array<() => void> = [];
     const t = {
       getAll: async (...refs: Ref[]) => refs.map(snap),
+      get: async (q: Query) => runQuery(q),
       update: (r: Ref, u: Record<string, unknown>) => writes.push(() => applyUpdate(r.path, u)),
       create: (r: Ref, d: Record<string, unknown>) => writes.push(() => {
         if (store.has(r.path)) throw new Error('ALREADY_EXISTS');
@@ -96,6 +105,34 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       trimCreates: [{ id: 'n1', evidence: 'x', data: { maker: '현대', model: '그랜저', sub_model: 'S', trim: 'T', master_id: ' m-gn7 ', trim_row_key: 'n1' } }] }))
       .rejects.toThrow(/exact id/);
+  });
+  it('keeps one trim row key and one master per sub-model — inside the plan and against stored data (값 하나)', async () => {
+    const trimData = (key: string) => ({ maker: '현대', model: '그랜저', sub_model: '그랜저 하이브리드 GN7', trim: '프리미엄', master_id: 'm-gn7', trim_row_key: key });
+    // two different ids carrying the same trim_row_key inside one plan
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      trimCreates: [{ id: 'k1', evidence: 'x', data: trimData('k1') }, { id: 'k2', evidence: 'x', data: trimData('k1') }] })).rejects.toThrow(/trim_row_key must equal id/);
+    // a stored row (different document id) already carries the key
+    store.set('vehicle_trim_master/legacy-doc', { trim_row_key: 'k9', sub_model: '그랜저 GN7' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      trimCreates: [{ id: 'k9', evidence: 'x', data: trimData('k9') }] })).rejects.toThrow(/trim_row_key already stored/);
+    expect(store.has('vehicle_trim_master/k9')).toBe(false);
+    // the same maker|model|sub_model twice in one plan, or already stored under another id
+    const m2 = { ...hevMaster, id: 'm-gn7-hev-2', data: { ...hevMaster.data, id: 'm-gn7-hev-2' } };
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterCreates: [hevMaster, m2] }))
+      .rejects.toThrow(/duplicate master sub-model/);
+    store.set('vehicle_master/old-hev', { id: 'old-hev', maker: '현대', model: '그랜저', sub_model: '그랜저 하이브리드 GN7' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterCreates: [hevMaster] }))
+      .rejects.toThrow(/master sub-model already stored/);
+  });
+  it('replaces a master variants list only when it still matches the reviewed digest', async () => {
+    const variants = [{ fuel: '가솔린', trims: ['프리미엄'] }, { fuel: '하이브리드', trims: ['프리미엄'] }];
+    store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, variants });
+    const { stableDigest } = await import('../src/shared/stable-digest.js');
+    const repair = { id: 'm-gn7', fromDigest: stableDigest(variants), to: [variants[0]!], evidence: '하이브리드는 그랜저 하이브리드 GN7 로' };
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterVariantRepairs: [repair] });
+    expect(store.get('vehicle_master/m-gn7')!.variants).toEqual([variants[0]]);
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterVariantRepairs: [repair] }))
+      .rejects.toThrow(/variants precondition changed/);
   });
   it('aborts the whole plan when a precondition changed before commit', async () => {
     store.set('vehicle_trim_master/t1', { ...store.get('vehicle_trim_master/t1')!, sub_model: '다른 이름' });
