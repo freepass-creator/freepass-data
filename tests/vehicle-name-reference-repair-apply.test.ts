@@ -63,7 +63,7 @@ beforeEach(() => {
   store.set('vehicle_master/m-mx5', { id: 'm-mx5', maker: '현대', model: '싼타페', sub_model: '디 올 뉴 싼타페 MX5' });
 });
 
-const hevMaster = { id: 'm-gn7-hev', data: { id: 'm-gn7-hev', maker: '현대', model: '그랜저', sub_model: '그랜저 하이브리드 GN7', origin: '국산', meta: { z: 1, a: 2 } }, evidence: '규칙 15·18' };
+const hevMaster = { id: 'm-gn7-hev', data: { id: 'm-gn7-hev', maker: '현대', model: '그랜저', sub_model: '그랜저 하이브리드 GN7', origin: '국산', variants: [{ turbo: true, label: '하이브리드 1.6', fuel: '하이브리드', trims: ['프리미엄'] }], trims: ['프리미엄'] }, evidence: '규칙 15·18' };
 
 describe('vehicle-name repair apply path (in-memory Firestore)', () => {
   it('moves a hybrid row to a new sub-model master in one transaction and keeps the old name as an alias', async () => {
@@ -160,7 +160,7 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
       masterCreates: [{ ...hevMaster, data: { ...hevMaster.data, sub_model: ' 그랜저 하이브리드 GN7 ' } }] })).rejects.toThrow(/normalized/);
   });
   it('replaces a master variants list only when it still matches the reviewed digest', async () => {
-    const variants = [{ fuel: '가솔린', trims: ['프리미엄'] }, { fuel: '하이브리드', trims: ['프리미엄'] }];
+    const variants = [{ label: 'v', fuel: '가솔린', trims: ['프리미엄'] }, { label: 'v', fuel: '하이브리드', trims: ['프리미엄'] }];
     store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, variants, trims: ['프리미엄'] });
     const { stableDigest } = await import('../src/shared/stable-digest.js');
     const repair = { id: 'm-gn7', fromDigest: stableDigest(variants), to: [variants[0]!], evidence: '하이브리드는 그랜저 하이브리드 GN7 로' };
@@ -225,15 +225,15 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
       masterRepairs: [{ id: 'm-old', from: '그랜저 옛이름', to: '그랜저 새이름' }],
       productRepairs: [{ id: 'p7', from: '그랜저 GN7', to: '그랜저 새이름' }] })).rejects.toThrow(/cannot be renamed/);
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
-      masterVariantRepairs: [{ id: 'm-old', fromDigest: stableDigest(null), to: [{ name: 'x' }], evidence: 'x' }] })).rejects.toThrow(/retired/);
+      masterVariantRepairs: [{ id: 'm-old', fromDigest: stableDigest(null), to: [{ label: 'x', fuel: '가솔린' }], evidence: 'x' }] })).rejects.toThrow(/retired/);
     expect(store.get('vehicle_master/m-old')).toMatchObject({ sub_model: '그랜저 옛이름', retired: true });
     expect(store.get('products/p7')!.sub_model).toBe('그랜저 GN7');
   });
   it('replaces the top-level trims list together with variants, guarded by its own digest', async () => {
     const { stableDigest } = await import('../src/shared/stable-digest.js');
-    const variants = [{ fuel: '가솔린', trims: ['프리미엄', '아너스'] }];
+    const variants = [{ label: 'v', fuel: '가솔린', trims: ['프리미엄', '아너스'] }];
     store.set('vehicle_master/m-gn7', { id: 'm-gn7', maker: '현대', model: '그랜저', sub_model: '그랜저 GN7', variants, trims: ['아너스', '프리미엄'] });
-    const repair = { id: 'm-gn7', fromDigest: stableDigest(variants), to: [{ fuel: '가솔린', trims: ['프리미엄', '블랙 잉크'] }], evidence: '행 기준',
+    const repair = { id: 'm-gn7', fromDigest: stableDigest(variants), to: [{ label: 'v', fuel: '가솔린', trims: ['프리미엄', '블랙 잉크'] }], evidence: '행 기준',
       trims: ['프리미엄', '블랙 잉크'], fromTrimsDigest: stableDigest(['프리미엄']) };
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterVariantRepairs: [repair] })).rejects.toThrow(/precondition/);
     await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
@@ -242,7 +242,7 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
   });
   it('trims edit: audit carries before/after, a trims change after the early check aborts with no writes, readback catches a mismatch, retired masters are frozen', async () => {
     const { stableDigest } = await import('../src/shared/stable-digest.js');
-    const variants = [{ fuel: '가솔린', trims: ['프리미엄'] }];
+    const variants = [{ label: 'v', fuel: '가솔린', trims: ['프리미엄'] }];
     const seed = () => store.set('vehicle_master/m-gn7', { id: 'm-gn7', maker: '현대', model: '그랜저', sub_model: '그랜저 GN7', variants, trims: ['아너스'] });
     const repair = { id: 'm-gn7', fromDigest: stableDigest(variants), to: variants, evidence: '행 기준', trims: ['프리미엄'], fromTrimsDigest: stableDigest(['아너스']) };
     const plan = { sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterVariantRepairs: [repair] };
@@ -339,48 +339,48 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
   });
   it('refuses a variants edit without trims when the stored trims list does not cover the new variant trims', async () => {
     const { stableDigest } = await import('../src/shared/stable-digest.js');
-    const variants = [{ fuel: '가솔린', trims: ['프리미엄'] }];
+    const variants = [{ label: 'v', fuel: '가솔린', trims: ['프리미엄'] }];
     store.set('vehicle_master/m-gn7', { id: 'm-gn7', maker: '현대', model: '그랜저', sub_model: '그랜저 GN7', variants, trims: ['프리미엄'] });
     const base = { sourceDigest: 'v1', masterRepairs: [], productRepairs: [] };
-    await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(variants), to: [{ fuel: '가솔린', trims: ['프리미엄', '블랙 잉크'] }], evidence: 'x' }] }))
+    await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(variants), to: [{ label: 'v', fuel: '가솔린', trims: ['프리미엄', '블랙 잉크'] }], evidence: 'x' }] }))
       .rejects.toThrow(/missing from the stored trims/);
-    await applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(variants), to: [{ fuel: 'LPG', trims: ['프리미엄'] }], evidence: 'x' }] });
-    expect(store.get('vehicle_master/m-gn7')!.variants).toEqual([{ fuel: 'LPG', trims: ['프리미엄'] }]);
+    await applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(variants), to: [{ label: 'v', fuel: 'LPG', trims: ['프리미엄'] }], evidence: 'x' }] });
+    expect(store.get('vehicle_master/m-gn7')!.variants).toEqual([{ label: 'v', fuel: 'LPG', trims: ['프리미엄'] }]);
     // the stored list shrinks after the early check → refused inside the transaction
     const now = store.get('vehicle_master/m-gn7')!.variants;
     const original = db.runTransaction;
     db.runTransaction = async (fn) => { store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: [] }); return original(fn); };
-    try { await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] })).rejects.toThrow(/transaction variants name trims missing/); } finally { db.runTransaction = original; }
+    try { await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ label: 'v', fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] })).rejects.toThrow(/transaction variants name trims missing/); } finally { db.runTransaction = original; }
     // an empty stored list refuses non-empty variant trims; a missing, null or non-list trims also refuses them (pass trims)
-    await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] })).rejects.toThrow(/missing from the stored trims/);
+    await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ label: 'v', fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] })).rejects.toThrow(/missing from the stored trims/);
     for (const bad of [null, '프리미엄', undefined]) {
       store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: bad });
-      await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] })).rejects.toThrow(/not a list/);
+      await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ label: 'v', fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] })).rejects.toThrow(/not a list/);
     }
     // a stored trims list with non-string entries is refused
     store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: ['프리미엄', 3] });
-    await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] })).rejects.toThrow(/list of strings/);
+    await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ label: 'v', fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] })).rejects.toThrow(/list of strings/);
     store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: ['프리미엄'] });
     // a stored trims of the wrong type is refused even when the new variants name no trims
     for (const bad of [null, 3, 'A', {}]) {
       store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: bad });
-      await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: 'gas' }], evidence: 'x' }] })).rejects.toThrow(/not a list of strings/);
+      await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ label: 'v', fuel: 'gas' }], evidence: 'x' }] })).rejects.toThrow(/not a list of strings/);
     }
     // ... and also when the plan replaces the list (the stored value must still be a valid list or absent)
     for (const bad of [null, 3, 'A', {}, ['A', 3], ['']]) {
       store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: bad });
-      await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: 'gas', trims: ['A'] }], evidence: 'x', trims: ['A'], fromTrimsDigest: stableDigest(bad) }] })).rejects.toThrow(/not a list of strings/);
+      await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ label: 'v', fuel: 'gas', trims: ['A'] }], evidence: 'x', trims: ['A'], fromTrimsDigest: stableDigest(bad) }] })).rejects.toThrow(/not a list of strings/);
     }
     // a stored variants list of the wrong shape is refused before it is replaced
     store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: ['프리미엄'] });
     for (const bad of ['x', [3], [{ trims: 'A' }], [{ trims: null }], [{ trims: [3] }]]) {
       store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, variants: bad });
-      await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(bad), to: [{ fuel: 'gas' }], evidence: 'x' }] })).rejects.toThrow(/stored variants is not a list/);
+      await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(bad), to: [{ label: 'v', fuel: 'gas' }], evidence: 'x' }] })).rejects.toThrow(/stored variants is not a list/);
     }
     store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, variants: now });
     store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: undefined });
     // variants without any trim names need no trims list
-    await applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린' }], evidence: 'x' }] });
+    await applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ label: 'v', fuel: '가솔린' }], evidence: 'x' }] });
   });
   it('checks the model of every relink destination, refuses non-list alias fields, and keeps the stored spelling as an alias', async () => {
     // ② a row relinked away from a master whose model changes, to a master with another model, is refused

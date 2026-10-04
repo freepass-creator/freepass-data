@@ -75,6 +75,55 @@ const NAME_KINDS = new Set(['master', 'product', 'trim', 'productTrim', 'trimSub
 /** Kinds that write a vehicle_master document (a retired master is frozen for all of them). */
 const MASTER_DOC_KINDS = new Set(['master', 'masterModel', 'masterGenCode']);
 /** Every trim name inside variants must also be in the top-level trims list (consumers read both). */
+/** A Firestore document id inside one collection: no path separator, not «.»/«..», not reserved «__…__», no surrounding spaces. */
+export const isDocId = (value: unknown): value is string => typeof value === 'string' && value !== '' && value === value.trim()
+  && !value.includes('/') && value !== '.' && value !== '..' && !/^__.*__$/.test(value);
+type FieldType = 'string' | 'number' | 'boolean' | 'stringList' | 'nullableString' | 'nullableNumber' | 'variants';
+const isStringList = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x !== '' && x === clean(x)) && new Set(v).size === v.length;
+const fieldOk = (type: FieldType, v: unknown): boolean => {
+  switch (type) {
+    case 'string': return typeof v === 'string';
+    case 'number': return typeof v === 'number' && Number.isFinite(v);
+    case 'boolean': return typeof v === 'boolean';
+    case 'stringList': return isStringList(v);
+    case 'nullableString': return v === null || typeof v === 'string';
+    case 'nullableNumber': return v === null || (typeof v === 'number' && Number.isFinite(v));
+    case 'variants': return Array.isArray(v);
+  }
+};
+/** Fields a created vehicle_master / vehicle_trim_master document may carry, with their types (as the stored data has them). */
+const MASTER_CREATE_SCHEMA: Record<string, FieldType> = {
+  id: 'string', maker: 'string', model: 'string', sub_model: 'string', origin: 'string', title: 'string', gen_code: 'string',
+  market_class: 'string', newcar_priced: 'boolean', year_start: 'string', year_end: 'string', variants: 'variants', trims: 'stringList',
+  sub_model_aliases: 'stringList', model_aliases: 'stringList', gen_code_aliases: 'stringList',
+};
+const TRIM_CREATE_SCHEMA: Record<string, FieldType> = {
+  maker: 'string', model: 'string', sub_model: 'string', trim: 'string', master_id: 'string', trim_row_key: 'string', origin: 'string',
+  development_code: 'string', trim_seq: 'number', trim_aliases: 'stringList', sub_model_aliases: 'stringList', model_aliases: 'stringList',
+  management_status: 'string', verification_status: 'string', production_start: 'string', production_end: 'string', data_as_of: 'string', usage_tier: 'string',
+};
+/** A variant's fields and types (the stored variants use exactly these). */
+const VARIANT_SCHEMA: Record<string, FieldType> = {
+  label: 'string', fuel: 'nullableString', displacement_l: 'nullableNumber', drivetrain: 'nullableString', seat: 'nullableNumber',
+  battery_kwh: 'nullableNumber', turbo: 'boolean', default: 'boolean', trims: 'stringList',
+};
+const checkSchema = (data: Record<string, unknown>, schema: Record<string, FieldType>, where: string) => {
+  for (const [k, v] of Object.entries(data)) {
+    if (v === undefined) continue; // absent
+    const type = schema[k];
+    if (!type) throw new Error(`${where} has a field this tool does not create: ${k}`);
+    if (!fieldOk(type, v)) throw new Error(`${where} ${k} has the wrong type`);
+  }
+};
+/** Planned variants: each one is checked against VARIANT_SCHEMA (label and fuel required). */
+const checkPlannedVariants = (variants: unknown, where: string) => {
+  if (!Array.isArray(variants)) throw new Error(`${where} variants must be a list`);
+  variants.forEach((v, i) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(`${where} variant ${i} must be an object`);
+    checkSchema(v as Record<string, unknown>, VARIANT_SCHEMA, `${where} variant ${i}`);
+    if (!('label' in (v as object)) || !('fuel' in (v as object))) throw new Error(`${where} variant ${i} requires label and fuel`);
+  });
+};
 /** Shape check too: variants is a list of objects; a variant's trims, when present, is a list of strings — anything else is refused. */
 const variantTrimNames = (variants: unknown): string[] => {
   if (variants === undefined) return [];
@@ -127,6 +176,8 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     if (!v.id?.trim() || !/^[0-9a-f]{64}$/.test(v.fromDigest ?? '') || !Array.isArray(v.to) || !v.to.length) throw new Error('masterVariantRepair requires id, fromDigest and a non-empty variants list');
     if (typeof v.evidence !== 'string' || !v.evidence.trim()) throw new Error(`masterVariantRepair ${v.id} requires evidence`);
     variantTrimNames(v.to); // shape
+    checkPlannedVariants(v.to, `masterVariantRepair ${v.id}`);
+    if (!isDocId(v.id)) throw new Error('masterVariantRepair id must be a single document id');
     if ((v.trims === undefined) !== (v.fromTrimsDigest === undefined)) throw new Error(`masterVariantRepair ${v.id} needs trims and fromTrimsDigest together`);
     if (v.trims !== undefined) {
       if (!/^[0-9a-f]{64}$/.test(v.fromTrimsDigest ?? '') || !Array.isArray(v.trims) || !v.trims.length) throw new Error(`masterVariantRepair ${v.id} requires a non-empty trims list and fromTrimsDigest`);
@@ -142,6 +193,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   const retires = plan.masterRetires ?? [];
   for (const r of retires) {
     if (!r.id?.trim() || r.id !== r.id.trim() || !r.into?.trim() || r.into !== r.into.trim()) throw new Error('masterRetire requires exact id and into');
+    if (!isDocId(r.id) || !isDocId(r.into)) throw new Error('masterRetire id and into must be single document ids');
     if (r.id === r.into) throw new Error(`masterRetire ${r.id} cannot retire into itself`);
     if (typeof r.evidence !== 'string' || !r.evidence.trim()) throw new Error(`masterRetire ${r.id} requires evidence`);
   }
@@ -166,6 +218,11 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
       }
     }
     if (c.kind === 'masterCreate' && c.data.id !== c.id) throw new Error(`masterCreate ${c.id} data.id must equal id`);
+    if (!isDocId(c.id)) throw new Error(`${c.kind} id must be a single document id`);
+    checkSchema(c.data, c.kind === 'masterCreate' ? MASTER_CREATE_SCHEMA : TRIM_CREATE_SCHEMA, `${c.kind} ${c.id}`);
+    if (c.data.variants !== undefined) checkPlannedVariants(c.data.variants, `${c.kind} ${c.id}`);
+    if (c.kind === 'trimCreate' && !isDocId(c.data.master_id)) throw new Error(`trimCreate ${c.id} master_id must be an exact id (single document id)`);
+    if (c.data.gen_code !== undefined && c.data.gen_code !== clean(c.data.gen_code)) throw new Error(`${c.kind} ${c.id} gen_code must be normalized text`);
     for (const f of ['sub_model_aliases', 'model_aliases', 'gen_code_aliases', 'trim_aliases'] as const) {
       if (c.data[f] !== undefined && !(Array.isArray(c.data[f]) && (c.data[f] as unknown[]).every((a) => typeof a === 'string'))) throw new Error(`${c.kind} ${c.id} ${f} must be a list of strings`);
     }
@@ -213,6 +270,8 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     const blankFill = !clean(item.from) && (item.kind === 'product' || item.kind === 'masterGenCode') && evidenceOk;
     if (typeof item.id !== 'string' || typeof item.from !== 'string' || typeof item.to !== 'string') throw new Error('repair item id/from/to must be strings');
     if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !blankFill)) throw new Error('repair item requires id/from/to');
+    if (!isDocId(item.id)) throw new Error(`repair item ${item.kind} id must be a single document id`);
+    if (item.kind === 'trimMasterLink' && (!isDocId(item.to) || !isDocId(item.from))) throw new Error(`trimMasterLink ${item.id} from/to must be exact master ids`);
     if (clean(item.from) === clean(item.to)) throw new Error(`no-op repair ${item.kind}:${item.id}`);
     if (item.kind === 'trimMasterLink' && item.to !== item.to.trim()) throw new Error(`trimMasterLink ${item.id} to must be an exact master id`);
     if (NAME_KINDS.has(item.kind) && item.to !== clean(item.to)) throw new Error(`${item.kind} ${item.id} to must be normalized text`);
