@@ -142,12 +142,26 @@ export function planF04CommissionProjection(input: {
   if (formulas) {
     if (formulas.length !== input.intake.length) throw new Error('F04_FORMULA_READ_MISMATCH');
     const fee = new Set([header.indexOf('판매수수료'), header.indexOf('출고수수료')]);
-    formulas.forEach((r, i) => { if (i >= hi) ((r as unknown[] | undefined) ?? []).forEach((x, c) => {
-      if (formula(x) && /ARRAYFORMULA|FILTER\(|QUERY\(|SORT\(|UNIQUE\(|MAP\(|BYROW\(|SEQUENCE\(|IMPORTRANGE\(|\{/i.test(String(x))) spill.add(c);
-    }); });
-    // 흐르는 수식은 오른쪽·아래로 펼쳐진다 — AJ 열 또는 그 왼쪽에 있으면 AE·AJ 칸을 덮을 수 있어 어느 칸이 결과인지 알 수 없다.
-    // 그런 시트는 계획을 멈춘다(fail-closed). 지금 접수 탭의 흐르는 수식은 AJ 오른쪽(청구상태·지급상태)에만 있다.
-    if ([...spill].some(c => c <= colOf('AJ'))) throw new Error('F04_SPILL_FORMULA_MAY_COVER_FEE_COLUMNS');
+    // 수식은 맨 윗줄부터(머리글 위 포함) 본다. 흐르는 수식(배열 결과)은 오른쪽·아래로 펼쳐져 AE·AJ 를 덮을 수 있다.
+    //  - AJ 오른쪽 열: ARRAYFORMULA·FILTER 등은 «흐르는 열»로 표시만 하고 그 열의 수식 읽기 빈 칸을 대조에서 뺀다.
+    //  - AJ 열 또는 그 왼쪽: «한 칸만 돌려주는» 허용 함수(아래 목록)만 쓰고, 범위 참조는 조회 함수의 표 인자로만 쓰는 수식만
+    //    통과한다. 그 밖의 수식(배열 리터럴 {}, 모르는 함수, 범위를 그대로 돌려줄 수 있는 식)이 하나라도 있으면 계획을 멈춘다.
+    const singleCell = /^(IF|IFERROR|IFNA|IFS|VLOOKUP|HLOOKUP|MATCH|AND|OR|NOT|ISBLANK|ISNUMBER|ISTEXT|LEN|TRIM|TEXT|VALUE|ROUND|ROUNDUP|ROUNDDOWN|ABS|N|LEFT|RIGHT|MID|CONCATENATE|UPPER|LOWER|SUBSTITUTE|DATE|YEAR|MONTH|DAY|EDATE|EOMONTH|TODAY|SUM|SUMIF|SUMIFS|COUNTIF|COUNTIFS|MIN|MAX)$/;
+    const rangeRef = /(?:'[^']+'|[A-Za-z0-9_가-힣]+)?!?\$?[A-Z]{1,3}\$?\d*:\$?[A-Z]{1,3}\$?\d*/g;
+    const safeSingleCell = (f: string) => {
+      if (/[{}]/.test(f)) return false;
+      const fns = [...f.matchAll(/([A-Z][A-Z0-9.]*)\s*\(/gi)].map(m => m[1]!.toUpperCase());
+      if (fns.some(fn => !singleCell.test(fn))) return false;
+      // 범위 참조 수 ≤ 범위를 받아 한 값을 돌려주는 함수 수(조회·합계·세기).
+      const ranges = (f.match(rangeRef) ?? []).length;
+      const consumers = fns.filter(fn => /^(VLOOKUP|HLOOKUP|MATCH|SUM|SUMIF|SUMIFS|COUNTIF|COUNTIFS|MIN|MAX)$/.test(fn)).length;
+      return ranges <= consumers * 2;
+    };
+    formulas.forEach(r => ((r as unknown[] | undefined) ?? []).forEach((x, c) => {
+      if (!formula(x)) return;
+      if (c <= colOf('AJ')) { if (!safeSingleCell(String(x))) throw new Error('F04_SPILL_FORMULA_MAY_COVER_FEE_COLUMNS'); return; }
+      if (/ARRAYFORMULA|FILTER\(|QUERY\(|SORT\(|UNIQUE\(|MAP\(|BYROW\(|SEQUENCE\(|IMPORTRANGE\(|\{/i.test(String(x)) || !safeSingleCell(String(x))) spill.add(c);
+    }));
     const dateCols = new Set(['접수일', '인도일', '다음회차일', '환수일'].map(h => header.indexOf(h)).filter(c => c >= 0));
     const sameCell = (a: unknown, b: unknown, c: number) => {
       if (empty(a) && empty(b)) return true;

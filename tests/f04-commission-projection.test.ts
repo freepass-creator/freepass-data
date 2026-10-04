@@ -115,10 +115,15 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
   });
   it('a spilling formula at or left of AJ (it may cover AE·AJ) stops the plan; one to the right of AJ is fine', () => {
     const v1 = row({ 차량번호: '12가3456' }), v2 = row({ 차량번호: '12가3457' });
-    for (const h of ['판매수수료', '공급사수수료율', '렌탈료']) {
-      const f1 = [...v1]; f1[at(h)] = '={0,""}';
+    for (const [h, f] of [['판매수수료', '={0,""}'], ['공급사수수료율', '=HSTACK(0,"","","","","","")'], ['렌탈료', '=TRANSPOSE(A3:A9)'], ['모델명', '=B3:B9'], ['공급사', '=IF(TRUE,C3:H3)']] as const) {
+      const f1 = [...v1]; f1[at(h)] = f;
       expect(() => planF04CommissionProjection({ intake: intake(v1, v2), intakeFormulas: intake(f1, [...v2]), installments: INST, openFromMonth: '2026-09', readAt: 'x' }), h).toThrow('F04_SPILL_FORMULA_MAY_COVER_FEE_COLUMNS');
     }
+    // 한 칸만 돌려주는 조회 수식(지금 시트의 공급사·모델명 칸)은 그대로 통과, 머리글 위 줄의 흐르는 수식도 본다.
+    const lookup = [...v1]; lookup[at('공급사')] = `=IF($B3="","",IFERROR(VLOOKUP($B3,'차량대장'!$A$3:$E,5,FALSE),""))`;
+    expect(() => planF04CommissionProjection({ intake: intake(v1, v2), intakeFormulas: intake(lookup, [...v2]), installments: INST, openFromMonth: '2026-09', readAt: 'x' })).not.toThrow();
+    const top = intake(v1, v2); (top[0] as unknown[])[at('렌탈료')] = '=HSTACK(1,2,3)';
+    expect(() => planF04CommissionProjection({ intake: intake(v1, v2), intakeFormulas: top, installments: INST, openFromMonth: '2026-09', readAt: 'x' })).toThrow('F04_SPILL_FORMULA_MAY_COVER_FEE_COLUMNS');
     const right = [...v1]; right[at('계약형태')] = '=ARRAYFORMULA(A3:A)';
     expect(() => planF04CommissionProjection({ intake: intake(v1, v2), intakeFormulas: intake(right, [...v2]), installments: INST, openFromMonth: '2026-09', readAt: 'x' })).not.toThrow();
   });
