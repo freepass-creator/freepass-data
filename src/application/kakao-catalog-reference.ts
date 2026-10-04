@@ -115,7 +115,7 @@ export const KAKAO_COMMISSION_POLICY_2026_10_03 = {
 } as const;
 
 /** Previous published rules remain available for historical evidence, never rewritten. */
-export const KAKAO_COMMISSION_POLICY = {
+export const KAKAO_COMMISSION_POLICY_2026_10_04 = {
   ...KAKAO_COMMISSION_POLICY_2026_10_03,
   policyId: 'sales-commission-2026-10-04',
   decisionDate: '2026-10-04',
@@ -134,6 +134,32 @@ export const KAKAO_COMMISSION_POLICY = {
     { id: 'F04_INDIVIDUAL_413', sourceRows: [160], billing: 862000, payout: 562000 },
     { id: 'F04_AICA_INDIVIDUAL', sourceRows: [163], payout: 400000 },
   ],
+} as const;
+
+/**
+ * 2026-10-05 AI 상황실 결정(대표 10-05 «정산 확실하게 맞춰놔»):
+ * - 손오공 오공 구독 60개월 청구 가산 = +600,000 (F04 수수료표 14행). 지급은 다른 기간과 같이 Q12.
+ * - 원 단위: 원 미만 반올림 — calculatedCommission 의 Math.round 그대로.
+ * 근거(실제 청구 줄 대조)는 비공개 ai-ops 인수인계(정산-수수료규칙-20261005)에 둔다 — 공개 저장소에는 원장 행·개별 금액을 적지 않는다.
+ */
+export const KAKAO_COMMISSION_POLICY = {
+  ...KAKAO_COMMISSION_POLICY_2026_10_04,
+  policyId: 'sales-commission-2026-10-05',
+  decisionDate: '2026-10-05',
+  currentAuthority: 'F04 수수료표 A1:M191(2026-10-04 사본) + AI 상황실 2026-10-05 결정(손오공 60개월 +60만, 원 미만 반올림)',
+  evidenceHistory: [...KAKAO_COMMISSION_POLICY_2026_10_04.evidenceHistory,
+    { policyId: KAKAO_COMMISSION_POLICY_2026_10_04.policyId, observedAt: '2026-10-04', revision: '35de6d9fa96ad07fba2fb2d68a4cb1c9113b61a5' }],
+  sonokongAdditions: { ...KAKAO_COMMISSION_POLICY_2026_10_04.sonokongAdditions, 60: 600000 },
+  sonokong60Evidence: { sourceRows: [14], evidence: 'private:ai-ops/정산-수수료규칙-20261005', decidedBy: 'AI 상황실 2026-10-05' },
+  roundingRule: { rule: 'ROUND_HALF_UP_TO_WON', sourceRows: [171], evidence: 'private:ai-ops/정산-수수료규칙-20261005', decidedBy: 'AI 상황실 2026-10-05' },
+  /** 뮤카(RP035, 2026-10-05 발급) 구독 — freepass-admin DEC-2026-10-04-01 8번 = F04 수수료표 169·170행. 일반·픽업 공통.
+   * 청구(프리패스 몫) = 차량 기준가 × 1%(전 기간). 지급(영업 GA) = 선납/분납 × 기간 정액 + min(추가보증금 × 10%, 40만)(전 기간).
+   * 별도 지급 재원 — 청구 − 지급 마진으로 계산하지 않는다. «분납 완납 전 미지급»은 계약 단계의 지급 가능 상태로 따로 다룬다. */
+  mewcar: {
+    supplierId: 'RP035', sourceRows: [169, 170], billingBasisPoints: 100,
+    payout: { PREPAID: { 12: 1000000, 24: 1200000, 36: 1200000, 48: 1200000 }, INSTALLMENT: { 12: 800000, 24: 1000000, 36: 1000000, 48: 1000000 } },
+    extraDepositPercent: 10, extraDepositCap: 400000, separateFunding: true,
+  },
 } as const;
 
 const f04Ref = (row: number) => `F04:수수료표!A${row}:M${row}`;
@@ -318,6 +344,10 @@ export type CommissionInput = {
   depositTierPercent?: 5 | 10;
   subscriptionForm?: 'BUYOUT' | 'RETURN';
   q12Basis?: { amount: number; sourceRef: string };
+  /** 뮤카: 보증금 선납/분납(접수 납입 방식). 추정하지 않는다. */
+  depositPayment?: 'PREPAID' | 'INSTALLMENT';
+  /** 뮤카: 추가보증금(원, 없으면 0 을 명시). 모르면 넣지 않는다 — 계산하지 않는다. */
+  extraDeposit?: number;
   /** A suspected individual promotion must not silently use the general rule. */
   individualException?: boolean;
   /** Private trusted caller binds evidence to this contract. Never accept untrusted HTTP claims. */
@@ -329,6 +359,22 @@ export type CommissionInput = {
     ledgerRow: number;
   };
 };
+
+/** 뮤카 구독(RP035). 사유 코드는 모두 MEWCAR_ 로 시작한다 — 마진 계산이 이 표시로 별도 재원임을 안다. */
+function resolveMewcar(input: CommissionInput, productType: string, side: 'BILLING' | 'PAYOUT'): CommissionResolution {
+  const rule = KAKAO_COMMISSION_POLICY.mewcar;
+  if (!/구독/.test(productType)) return unknownCommission('MEWCAR_SUBSCRIPTION_ONLY');
+  const term = input.termMonths as 12 | 24 | 36 | 48;
+  if (![12, 24, 36, 48].includes(term)) return unknownCommission('MEWCAR_TERM_NOT_IN_POLICY');
+  if (side === 'BILLING') {
+    if (!Number.isSafeInteger(input.vehicleValue) || input.vehicleValue! <= 0) return unknownCommission('MEWCAR_BASE_PRICE_REQUIRED');
+    return calculatedCommission('MEWCAR_FREEPASS_SHARE_BILLING', input.vehicleValue! * rule.billingBasisPoints / 10000, 'EXCLUDED');
+  }
+  if (input.depositPayment !== 'PREPAID' && input.depositPayment !== 'INSTALLMENT') return unknownCommission('MEWCAR_DEPOSIT_PAYMENT_REQUIRED');
+  if (!Number.isSafeInteger(input.extraDeposit) || input.extraDeposit! < 0) return unknownCommission('MEWCAR_EXTRA_DEPOSIT_REQUIRED');
+  const addition = Math.min(Math.round(input.extraDeposit! * rule.extraDepositPercent / 100), rule.extraDepositCap);
+  return calculatedCommission(`MEWCAR_GA_${input.depositPayment}_${term}_PAYOUT`, rule.payout[input.depositPayment][term] + addition, 'EXCLUDED');
+}
 
 function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): CommissionResolution {
   const { supplierId, termMonths, monthlyRent } = input;
@@ -353,6 +399,8 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     }
     return unknownCommission('INDIVIDUAL_EXCEPTION_SCOPE_OR_STATUS_MISMATCH');
   }
+  // 뮤카는 개별 예외 검사 뒤에 — 개별 표시가 있는 계약에 일반 정액을 내지 않는다.
+  if (supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId) return resolveMewcar(input, productType, side);
   const rerent = /^(중고렌트|재렌트)$/.test(productType);
   const subscription = /구독/.test(productType);
   if (supplierId === 'RP013' && /발주/.test(productType)) return unknownCommission('WELRIX_ORDER_RULE_UNCONFIRMED');
@@ -366,7 +414,6 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     return resolveTermLadder(termMonths, monthlyRent, side, 'BILLIN_SUBSCRIPTION');
   }
   if (supplierId === 'RP012' && subscription) {
-    if (termMonths === 60) return unknownCommission('SONOKONG_60_ADDITION_CONFLICT');
     const addition = KAKAO_COMMISSION_POLICY.sonokongAdditions[termMonths as 12];
     if (addition === undefined) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
     if (input.subscriptionForm === 'RETURN' && termMonths !== 12) return unknownCommission('RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED');
@@ -413,6 +460,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   let rows: number[] = [];
   if (input.individualException || input.individualExceptionEvidence) rows = input.individualExceptionEvidence ? [input.individualExceptionEvidence.sourceRow] : [160, 163];
   else if (input.supplierId === 'RP034') rows = [168];
+  else if (input.supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId) rows = [...KAKAO_COMMISSION_POLICY.mewcar.sourceRows];
   else if (input.supplierId === 'RP012' && /^픽업\s*구독/.test(product)) rows = [190];
   else if (input.supplierId === 'RP012' && /구독/.test(product)) rows = [({12:10,24:11,36:12,48:13,60:14} as Record<number, number>)[input.termMonths] ?? 183, 173, 191];
   else if (input.supplierId === 'RP023' && /구독/.test(product)) rows = /전기/.test(input.fuel ?? '') ? [161] : [123, 161];
@@ -446,6 +494,13 @@ export function resolveExpectedGrossMargin(
   supplierBillingFee: CommissionResolution,
   channelPayoutFee: CommissionResolution,
 ): MarginResolution {
+  // 뮤카: 프리패스 몫과 영업 GA 지급은 재원이 따로라 청구 − 지급 마진을 만들지 않는다(F04 169·170행).
+  if ([supplierBillingFee, channelPayoutFee].some(r => r.ruleId?.startsWith('MEWCAR_') || r.reasonCode?.startsWith('MEWCAR_'))) {
+    return {
+      state: 'NOT_APPLICABLE', amount: null, currency: 'KRW',
+      basis: 'SUPPLY_AMOUNT_EXCLUDING_VAT', reasonCode: 'SEPARATE_FUNDING_NO_MARGIN',
+    };
+  }
   if (supplierBillingFee.state === 'NOT_APPLICABLE' && channelPayoutFee.state === 'NOT_APPLICABLE') {
     return {
       state: 'NOT_APPLICABLE', amount: null, currency: 'KRW',
