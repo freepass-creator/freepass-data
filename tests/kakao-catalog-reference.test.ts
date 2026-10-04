@@ -420,6 +420,13 @@ describe('F04 2026-10-04 alignment regression', () => {
     ]);
     expect(amounts({ ...base, supplierId: 'RP012', individualAgreement: agreement })).toEqual([777000, 444000]);
   });
+  it('7: RP034 with only legacy individual exception evidence stays unknown before exclusion', () => {
+    const legacyOnly = { ...base, supplierId: 'RP034', individualExceptionEvidence: { sourceRow: 160, privateRef: 'legacy-private-ref' } };
+    expect(both(legacyOnly)).toEqual([
+      expect.objectContaining({ state: 'UNKNOWN', amount: null, reasonCode: 'LEGACY_INDIVIDUAL_EXCEPTION_INPUT' }),
+      expect.objectContaining({ state: 'UNKNOWN', amount: null, reasonCode: 'LEGACY_INDIVIDUAL_EXCEPTION_INPUT' }),
+    ]);
+  });
   it('7: a payout-confirmed agreement pays only the payout; billing stays unknown even with vehicle input', () => {
     const input = { ...base, supplierId: 'RP004', productType: '선출고', vehicleValue: 40000000,
       individualAgreement: { ...agreement, sourceRow: 163 as const, status: 'PAYOUT_CONFIRMED' as const, billing: 999000, payout: 333000 } };
