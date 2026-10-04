@@ -497,6 +497,10 @@ describe('뮤카 RP035 구독 — F04 169·170행(DEC-2026-10-04-01 8번)', () =
     expect(resolveSalesCommission({ ...base, termMonths: 60, depositPayment: 'PREPAID', extraDeposit: 0 })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_TERM_NOT_IN_POLICY' });
     expect(resolveSupplierBillingFee({ ...base, productType: '재렌트' })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_SUBSCRIPTION_ONLY' });
   });
+  it('개별 예외 표시가 있으면 일반 정액을 내지 않는다', () => {
+    const r = resolveSalesCommission({ ...base, depositPayment: 'PREPAID', extraDeposit: 0, individualException: true });
+    expect(r).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'INDIVIDUAL_EXCEPTION_EVIDENCE_REQUIRED' });
+  });
   it('별도 재원이라 청구 − 지급 마진을 만들지 않고, 근거 행은 169·170', () => {
     const b = resolveSupplierBillingFee(base), p = resolveSalesCommission({ ...base, depositPayment: 'PREPAID', extraDeposit: 0 });
     expect(resolveExpectedGrossMargin(b, p)).toMatchObject({ state: 'NOT_APPLICABLE', amount: null, reasonCode: 'SEPARATE_FUNDING_NO_MARGIN' });

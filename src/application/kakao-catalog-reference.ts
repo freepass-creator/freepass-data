@@ -387,7 +387,6 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   const billing = side === 'BILLING';
   const fixed = (id: string, amount: number, vat: VatTreatment = 'EXCLUDED') => calculatedCommission(id, amount, vat);
   if (supplierId === 'RP034') return { ...unknownCommission('SUPPLIER_EXCLUDED_BY_DECISION'), state: 'NOT_APPLICABLE' };
-  if (supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId) return resolveMewcar(input, productType, side);
   if (!Number.isSafeInteger(termMonths) || termMonths < 1 || !Number.isSafeInteger(monthlyRent) || monthlyRent < 0) return unknownCommission('INVALID_PRICE_TERM_INPUT');
   const exception = input.individualExceptionEvidence;
   if (input.individualException || exception) {
@@ -401,6 +400,8 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     }
     return unknownCommission('INDIVIDUAL_EXCEPTION_SCOPE_OR_STATUS_MISMATCH');
   }
+  // 뮤카는 개별 예외 검사 뒤에 — 개별 표시가 있는 계약에 일반 정액을 내지 않는다.
+  if (supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId) return resolveMewcar(input, productType, side);
   const rerent = /^(중고렌트|재렌트)$/.test(productType);
   const subscription = /구독/.test(productType);
   if (supplierId === 'RP013' && /발주/.test(productType)) return unknownCommission('WELRIX_ORDER_RULE_UNCONFIRMED');
