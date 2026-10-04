@@ -4,7 +4,7 @@ import type { CommercialType, PriceTerm } from '../domain/catalog.js';
 import type { SourceVehicleFacts } from '../domain/source-vehicle-facts.js';
 import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
-import { plateIdentityKey } from '../domain/vehicle-plate.js';
+import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
 export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/1';
 const commercial: Record<string, CommercialType> = { '신차렌트': 'NEW_RENT', '중고렌트': 'USED_RENT', '신차구독': 'NEW_SUBSCRIPTION', '중고구독': 'USED_SUBSCRIPTION' };
@@ -97,6 +97,7 @@ export function normalizeSharedSheet(raw: RawRecord): { record: NormalizedCandid
   if (typeof supplier !== 'string') issues.push('SUPPLIER_UNRESOLVED');
   const plate = plateIdentityKey(at('차량번호'));
   if (!plate) issues.push('PLATE_MISSING');
+  else if (!isAssignedPlate(plate)) issues.push('PLATE_NOT_ASSIGNED');
   const type = commercial[text('상품구분')];
   if (!type) issues.push('COMMERCIAL_TYPE_UNRESOLVED');
   if (!['즉시출고', '출고가능'].includes(text('차량상태'))) issues.push('ASSET_STATUS_REQUIRES_REVIEW');

@@ -1,6 +1,6 @@
 import spec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
-import { plateIdentityKey } from '../domain/vehicle-plate.js';
+import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 export type SheetCell = string | number | boolean | null;
@@ -44,7 +44,8 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
       if (values.every(v => v === '' || v === null)) continue;
       const company = String(values[0] ?? '').trim();
       const supplier = sharedSheetChannels.find(x => x.tab === tab.title && x.companyName === company);
-      const plate = plateIdentityKey(values[4]);
+      // Placeholders such as 「신차」 are not vehicle identities: keep RAW by position and let normalization HOLD the row.
+      const plate = isAssignedPlate(values[4]) ? plateIdentityKey(values[4]) : '';
       const rowDigest = stableDigest(values);
       const sourceRecordId = supplier && plate ? stableDigest([supplier.code, plate]) : stableDigest([tab.title, index, rowDigest]);
       if (identities.has(sourceRecordId)) throw new Error('DUPLICATE_SHARED_SHEET_IDENTITY');
