@@ -477,3 +477,31 @@ describe('F04 source references and term scope (2026-10-04 review)', () => {
     }
   });
 });
+
+describe('뮤카 RP035 구독 — F04 169·170행(DEC-2026-10-04-01 8번)', () => {
+  const base = { supplierId: 'RP035', productType: '구독', termMonths: 24, monthlyRent: 700000, vehicleValue: 40000000 };
+  it('청구(프리패스 몫) = 차량 기준가 × 1%, 전 기간; 기준가 없으면 모름', () => {
+    for (const termMonths of [12, 24, 36, 48]) expect(resolveSupplierBillingFee({ ...base, termMonths })).toMatchObject({ state: 'CALCULATED', ruleId: 'MEWCAR_FREEPASS_SHARE_BILLING', amount: 400000, vatTreatment: 'EXCLUDED' });
+    { const { vehicleValue: _omit, ...noBase } = base; expect(resolveSupplierBillingFee(noBase)).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_BASE_PRICE_REQUIRED' }); }
+  });
+  it('지급(영업 GA) = 선납/분납 × 기간 정액 + min(추가보증금 × 10%, 40만)', () => {
+    const pay = (over: object) => resolveSalesCommission({ ...base, ...over });
+    expect(pay({ termMonths: 12, depositPayment: 'PREPAID', extraDeposit: 0 })).toMatchObject({ ruleId: 'MEWCAR_GA_PREPAID_12_PAYOUT', amount: 1000000 });
+    expect(pay({ termMonths: 48, depositPayment: 'PREPAID', extraDeposit: 1000000 })).toMatchObject({ amount: 1300000 });
+    expect(pay({ termMonths: 12, depositPayment: 'INSTALLMENT', extraDeposit: 2000000 })).toMatchObject({ ruleId: 'MEWCAR_GA_INSTALLMENT_12_PAYOUT', amount: 1000000 });
+    expect(pay({ termMonths: 36, depositPayment: 'INSTALLMENT', extraDeposit: 9000000 })).toMatchObject({ amount: 1400000 }); // 가산 상한 40만
+  });
+  it('선납/분납·추가보증금을 모르면 계산하지 않고(0 으로 두지 않음), 기간 밖·구독 아님도 모름', () => {
+    expect(resolveSalesCommission({ ...base, extraDeposit: 0 })).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'MEWCAR_DEPOSIT_PAYMENT_REQUIRED' });
+    expect(resolveSalesCommission({ ...base, depositPayment: 'PREPAID' })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_EXTRA_DEPOSIT_REQUIRED' });
+    expect(resolveSalesCommission({ ...base, termMonths: 60, depositPayment: 'PREPAID', extraDeposit: 0 })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_TERM_NOT_IN_POLICY' });
+    expect(resolveSupplierBillingFee({ ...base, productType: '재렌트' })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_SUBSCRIPTION_ONLY' });
+  });
+  it('별도 재원이라 청구 − 지급 마진을 만들지 않고, 근거 행은 169·170', () => {
+    const b = resolveSupplierBillingFee(base), p = resolveSalesCommission({ ...base, depositPayment: 'PREPAID', extraDeposit: 0 });
+    expect(resolveExpectedGrossMargin(b, p)).toMatchObject({ state: 'NOT_APPLICABLE', amount: null, reasonCode: 'SEPARATE_FUNDING_NO_MARGIN' });
+    expect(resolveExpectedGrossMargin(b, resolveSalesCommission(base))).toMatchObject({ state: 'NOT_APPLICABLE' });
+    expect(b.sourceRefs).toEqual(['F04:수수료표!A169:M169', 'F04:수수료표!A170:M170']);
+  });
+});
+

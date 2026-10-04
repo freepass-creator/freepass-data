@@ -131,7 +131,7 @@ ERP 차이: 이번에는 ERP를 수정하지 않았다. ERP의 스타·퍼시픽
 - 개별 근거: `individualExceptionEvidence = { sourceRow, status, contractRef, matchedContractRef, ledgerRow }`. 비공개 호출자가 원장 계약과 일치시킨 **opaque 토큰**(`opaque:` + 16자 이상 영문/숫자/밑줄/하이픈)을 양쪽 ref에 전달한다. 서버가 일치·승인을 검증해야 하며 이 순수 함수는 승인 인증 수단이 아니다. 공개 저장소에 차량번호·실제 계약 토큰을 넣지 않는다. 단순 차량번호 SHA256은 열거 가능하므로 비공개 랜덤 계약 ID 또는 비밀키 HMAC을 권장한다. 원장 행 번호만으로 자동 매칭하지 않는다.
 - 160행/원장413 + APPROVED + 손오공 구독60: 최신 사본의 청구 **862,000**, 지급 **562,000**. 옛 수정안 912,000은 사용하지 않는다. 163행/원장466·473·474·475 + PAYOUT_CONFIRMED + 아이카 선출고: 지급400,000; 청구는 차량가액을 주더라도 `INDIVIDUAL_BILLING_BASIS_UNCONFIRMED`. 미확정 상태·범위 불일치·토큰 불일치는 UNKNOWN.
 - **2026-10-05 AI 상황실 결정(정책 `sales-commission-2026-10-05`)**: 손오공 오공 구독 60개월 청구 가산 = **+600,000**(14행). 근거: 실제 청구 두 건 모두 +60만(접수 R396 «12개월구독료 + 추가인센 600,000», 접수 R413 862,000 = (1,124,000 + 600,000) × 50%), +70만은 erp4 상수·옛 수수료표뿐이고 그 금액 청구 줄이 없다. 지급은 Q12. 원 단위는 **원 미만 반올림**(원장 공급가 41줄 전부 반올림 확인, R402·R420). (옛 판단: 일반 60개월 충돌 UNKNOWN — 폐기.) 160행의 승인된 개별 계약만 예외다. Q12 정상가/할인가 선택은 추측하지 않으며 명시 근거가 없으면 `Q12_BASIS_REQUIRED`; 24개월 이상 반납형은 UNKNOWN이다.
-- 169~170행 뮤카는 최신 사본에 상세 값이 확정되어 있으나 이번 1~8 구현 범위 밖이고 엔진 공급사 ID·지급 재원/VAT 계약 미연결이다. **다름/HOLD**로 남긴다. 프리패스 1%와 GA 금액을 이 엔진의 청구-지급 마진으로 임의 계산하지 않는다.
+- **169~170행 뮤카(2026-10-05 구현, 공급사 RP035 — freepass-data #365 발급)**: freepass-admin DEC-2026-10-04-01 8번대로. 청구(프리패스 몫) `MEWCAR_FREEPASS_SHARE_BILLING` = 차량 기준가 × 1%(전 기간). 지급(영업 GA) `MEWCAR_GA_{PREPAID|INSTALLMENT}_{12|24|36|48}_PAYOUT` = 선납 12개월 100만·24~48개월 120만 / 분납 12개월 80만·24~48개월 100만 + min(추가보증금 × 10%, 40만). 선납/분납(`depositPayment`)·추가보증금(`extraDeposit`, 없으면 0 명시)·기준가를 모르면 계산하지 않음(사유 `MEWCAR_*`). 별도 지급 재원이라 예상 마진은 `NOT_APPLICABLE`(`SEPARATE_FUNDING_NO_MARGIN`). 공급가(VAT 별도) 기준 — VAT·원천세 처리 근거는 지급 단계에서. «분납 완납 전 미지급»은 계약 단계 지급 가능 상태(`payoutEligibility`)로 다룬다.
 - 미확정 공급사 AMR·오토셀렉션·금탑·빌림·퍼스트·SK는 로컬 근거에서 확정 ID를 찾지 못했다. 이름을 임의 표준 ID로 연결하지 않으며 미등록 ID는 `SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE`이다. 웰릭스 발주는 `WELRIX_ORDER_RULE_UNCONFIRMED`, 기타 미확정 구독은 `SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED`, 기간 누락은 `TERM_NOT_IN_F04_COMMISSION_POLICY`.
 - 검증/운영 경계: 로컬 검사만. 저장된 기존 economics 자동 재작성, 배포, 지급 승인 없음. Claude 독립 검토 호출은 `FAILED / CLAUDE_PROCESS_FAILED`(exit 1)이며 검토 완료로 세지 않는다. Claude 오더자가 diff/검사 후 커밋한다.
 
@@ -339,8 +339,8 @@ B=BILLING, P=PAYOUT, `{S}`=BILLING 또는 PAYOUT. 표준 재렌트 지급 ruleId
 | 166 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
 | 167 | `STAR_RERENT_ONE_MONTH_RENT_BILLING / STAR_RERENT_ONE_MONTH_RENT_X_80_PERCENT` | 같음: VAT 포함, 소수점 HOLD |
 | 168 | `null (SUPPLIER_EXCLUDED_BY_DECISION)` | 같음: NOT_APPLICABLE, 0원 아님 |
-| 169 | `미구현` | 다름/HOLD: 뮤카 전용 재원·VAT·ID 계약, 이번 범위 밖 |
-| 170 | `미구현` | 다름/HOLD: 뮤카 상세표 확정; 전용 계약 연결은 이번 범위 밖 |
+| 169 | `MEWCAR_FREEPASS_SHARE_BILLING` / `MEWCAR_GA_*_PAYOUT` | 같음(2026-10-05): 170행 표로 계산, 마진 없음 |
+| 170 | `MEWCAR_GA_{PREPAID\|INSTALLMENT}_{기간}_PAYOUT` | 같음(2026-10-05): 선납·분납 × 기간 + 추가보증금 가산; 입력 부재 UNKNOWN |
 | 171 | 반올림 규칙(계산 단계) | 확정: F04 접수 관행 VAT 포함 ÷1.1 원 단위 반올림(R402·R420 근거) |
 | 172 | `null (DEPOSIT_TIER_REQUIRED)` | UNKNOWN 유지: 5/10 등급 외 |
 | 173 | `null (RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED)` | UNKNOWN 유지: 60은 충돌 코드가 우선 |

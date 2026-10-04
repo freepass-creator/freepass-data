@@ -153,6 +153,14 @@ export const KAKAO_COMMISSION_POLICY = {
   sonokongAdditions: { ...KAKAO_COMMISSION_POLICY_2026_10_04.sonokongAdditions, 60: 600000 },
   sonokong60Evidence: { sourceRows: [14], ledgerRows: [396, 413], decidedBy: 'AI 상황실 2026-10-05' },
   roundingRule: { rule: 'ROUND_HALF_UP_TO_WON', sourceRows: [171], ledgerRows: [402, 420], decidedBy: 'AI 상황실 2026-10-05' },
+  /** 뮤카(RP035, 2026-10-05 발급) 구독 — freepass-admin DEC-2026-10-04-01 8번 = F04 수수료표 169·170행. 일반·픽업 공통.
+   * 청구(프리패스 몫) = 차량 기준가 × 1%(전 기간). 지급(영업 GA) = 선납/분납 × 기간 정액 + min(추가보증금 × 10%, 40만)(전 기간).
+   * 별도 지급 재원 — 청구 − 지급 마진으로 계산하지 않는다. «분납 완납 전 미지급»은 계약 단계의 지급 가능 상태로 따로 다룬다. */
+  mewcar: {
+    supplierId: 'RP035', sourceRows: [169, 170], billingBasisPoints: 100,
+    payout: { PREPAID: { 12: 1000000, 24: 1200000, 36: 1200000, 48: 1200000 }, INSTALLMENT: { 12: 800000, 24: 1000000, 36: 1000000, 48: 1000000 } },
+    extraDepositPercent: 10, extraDepositCap: 400000, separateFunding: true,
+  },
 } as const;
 
 const f04Ref = (row: number) => `F04:수수료표!A${row}:M${row}`;
@@ -337,6 +345,10 @@ export type CommissionInput = {
   depositTierPercent?: 5 | 10;
   subscriptionForm?: 'BUYOUT' | 'RETURN';
   q12Basis?: { amount: number; sourceRef: string };
+  /** 뮤카: 보증금 선납/분납(접수 납입 방식). 추정하지 않는다. */
+  depositPayment?: 'PREPAID' | 'INSTALLMENT';
+  /** 뮤카: 추가보증금(원, 없으면 0 을 명시). 모르면 넣지 않는다 — 계산하지 않는다. */
+  extraDeposit?: number;
   /** A suspected individual promotion must not silently use the general rule. */
   individualException?: boolean;
   /** Private trusted caller binds evidence to this contract. Never accept untrusted HTTP claims. */
@@ -349,6 +361,22 @@ export type CommissionInput = {
   };
 };
 
+/** 뮤카 구독(RP035). 사유 코드는 모두 MEWCAR_ 로 시작한다 — 마진 계산이 이 표시로 별도 재원임을 안다. */
+function resolveMewcar(input: CommissionInput, productType: string, side: 'BILLING' | 'PAYOUT'): CommissionResolution {
+  const rule = KAKAO_COMMISSION_POLICY.mewcar;
+  if (!/구독/.test(productType)) return unknownCommission('MEWCAR_SUBSCRIPTION_ONLY');
+  const term = input.termMonths as 12 | 24 | 36 | 48;
+  if (![12, 24, 36, 48].includes(term)) return unknownCommission('MEWCAR_TERM_NOT_IN_POLICY');
+  if (side === 'BILLING') {
+    if (!Number.isSafeInteger(input.vehicleValue) || input.vehicleValue! <= 0) return unknownCommission('MEWCAR_BASE_PRICE_REQUIRED');
+    return calculatedCommission('MEWCAR_FREEPASS_SHARE_BILLING', input.vehicleValue! * rule.billingBasisPoints / 10000, 'EXCLUDED');
+  }
+  if (input.depositPayment !== 'PREPAID' && input.depositPayment !== 'INSTALLMENT') return unknownCommission('MEWCAR_DEPOSIT_PAYMENT_REQUIRED');
+  if (!Number.isSafeInteger(input.extraDeposit) || input.extraDeposit! < 0) return unknownCommission('MEWCAR_EXTRA_DEPOSIT_REQUIRED');
+  const addition = Math.min(Math.round(input.extraDeposit! * rule.extraDepositPercent / 100), rule.extraDepositCap);
+  return calculatedCommission(`MEWCAR_GA_${input.depositPayment}_${term}_PAYOUT`, rule.payout[input.depositPayment][term] + addition, 'EXCLUDED');
+}
+
 function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): CommissionResolution {
   const { supplierId, termMonths, monthlyRent } = input;
   const rawProduct = input.productType.trim();
@@ -359,6 +387,7 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   const billing = side === 'BILLING';
   const fixed = (id: string, amount: number, vat: VatTreatment = 'EXCLUDED') => calculatedCommission(id, amount, vat);
   if (supplierId === 'RP034') return { ...unknownCommission('SUPPLIER_EXCLUDED_BY_DECISION'), state: 'NOT_APPLICABLE' };
+  if (supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId) return resolveMewcar(input, productType, side);
   if (!Number.isSafeInteger(termMonths) || termMonths < 1 || !Number.isSafeInteger(monthlyRent) || monthlyRent < 0) return unknownCommission('INVALID_PRICE_TERM_INPUT');
   const exception = input.individualExceptionEvidence;
   if (input.individualException || exception) {
@@ -431,6 +460,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   let rows: number[] = [];
   if (input.individualException || input.individualExceptionEvidence) rows = input.individualExceptionEvidence ? [input.individualExceptionEvidence.sourceRow] : [160, 163];
   else if (input.supplierId === 'RP034') rows = [168];
+  else if (input.supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId) rows = [...KAKAO_COMMISSION_POLICY.mewcar.sourceRows];
   else if (input.supplierId === 'RP012' && /^픽업\s*구독/.test(product)) rows = [190];
   else if (input.supplierId === 'RP012' && /구독/.test(product)) rows = [({12:10,24:11,36:12,48:13,60:14} as Record<number, number>)[input.termMonths] ?? 183, 173, 191];
   else if (input.supplierId === 'RP023' && /구독/.test(product)) rows = /전기/.test(input.fuel ?? '') ? [161] : [123, 161];
@@ -464,6 +494,13 @@ export function resolveExpectedGrossMargin(
   supplierBillingFee: CommissionResolution,
   channelPayoutFee: CommissionResolution,
 ): MarginResolution {
+  // 뮤카: 프리패스 몫과 영업 GA 지급은 재원이 따로라 청구 − 지급 마진을 만들지 않는다(F04 169·170행).
+  if ([supplierBillingFee, channelPayoutFee].some(r => r.ruleId?.startsWith('MEWCAR_') || r.reasonCode?.startsWith('MEWCAR_'))) {
+    return {
+      state: 'NOT_APPLICABLE', amount: null, currency: 'KRW',
+      basis: 'SUPPLY_AMOUNT_EXCLUDING_VAT', reasonCode: 'SEPARATE_FUNDING_NO_MARGIN',
+    };
+  }
   if (supplierBillingFee.state === 'NOT_APPLICABLE' && channelPayoutFee.state === 'NOT_APPLICABLE') {
     return {
       state: 'NOT_APPLICABLE', amount: null, currency: 'KRW',
