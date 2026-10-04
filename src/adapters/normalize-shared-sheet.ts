@@ -9,6 +9,9 @@ import { stableDigest } from '../shared/stable-digest.js';
 export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/2';
 /** AI 상황실 2026-10-04 (대표): every car is stored. The sheet status text is kept as-is; it only decides sale exposure.
  * assetStatus is the reviewed physical-state mapping; an unlisted status is HOLD, never guessed. */
+/** Own-key lookup only: inherited names (constructor, __proto__) are never a registered status. */
+export const sharedSheetStatusPolicy = (status: unknown) =>
+  typeof status === 'string' && Object.hasOwn(SHARED_SHEET_STATUS_POLICY, status) ? SHARED_SHEET_STATUS_POLICY[status]! : null;
 export const SHARED_SHEET_STATUS_POLICY: Record<string, { exposure: 'VISIBLE' | 'HIDDEN'; assetStatus: 'AVAILABLE' | 'RESERVED' | 'MAINTENANCE' }> = {
   '출고가능': { exposure: 'VISIBLE', assetStatus: 'AVAILABLE' },
   '즉시출고': { exposure: 'VISIBLE', assetStatus: 'AVAILABLE' },
@@ -112,7 +115,7 @@ export function normalizeSharedSheet(raw: RawRecord): { record: NormalizedCandid
   if (!type) issues.push('COMMERCIAL_TYPE_UNRESOLVED');
   const quarantine = raw.payload.quarantine;
   if (typeof quarantine === 'string') issues.push(quarantine);
-  field('supplierStatus', '차량상태', v => SHARED_SHEET_STATUS_POLICY[v] ? v : null);
+  field('supplierStatus', '차량상태', v => sharedSheetStatusPolicy(v) ? v : null);
   const candidate: CatalogCandidate = { sourceRecordId: raw.sourceRecordId, sourceFingerprint: raw.sourceFingerprint,
     firstObservedAt: raw.firstObservedAt ?? raw.observedAt,
     carNumber: plate, priceTerms, issues: [...new Set(issues)], vehicleFacts: facts,

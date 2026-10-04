@@ -124,6 +124,11 @@ describe('shared sheet local source to Canonical', () => {
     expect((await s.store.listVehicleAssets())[0]!.sourceVehicleFacts!.fields.displacementCc!.value).toBe(1235);
     expect((await s.source.listRaw(first.plan.runId))[0]!.payload.values).toEqual(capture().tabs[0]!.values[1]);
   });
+  it('a later status change (even HOLD→HOLD with a different asset state) is held, not silently diverged', async () => {
+    const s = await stores(); await apply(s, capture({ 차량상태: '상품화중' }));
+    const next = await planSharedSheetCanonical(s.store, later(capture({ 차량상태: '계약중' })), 'synthetic-target');
+    expect(next.plan.entries[0]).toMatchObject({ action: 'HOLD', reasons: expect.arrayContaining(['STATUS_CHANGE_REQUIRES_REVIEW']) });
+  });
   it('HOLDs refinement order violations and preserves missing upstream cells', async () => {
     const c = capture({ 모델: '' }); const n = normalized(c);
     expect(n.record.candidate.issues).toContain('REFINEMENT_ORDER_VIOLATION');
@@ -160,8 +165,10 @@ describe('shared sheet local source to Canonical', () => {
       expect(p.plan.entries[0]).toMatchObject({ action: 'CREATE', create: { decision: { productStatus: product, vehicleAsset: { status: asset } } } });
     }
     const s = await stores();
-    const held = await planSharedSheetCanonical(s.store, capture({ 차량상태: '알수없음' }), 'synthetic-target');
-    expect(held.plan.entries[0]!.action).toBe('HOLD');
+    for (const unlisted of ['알수없음', 'constructor', '__proto__', 'toString']) {
+      const held = await planSharedSheetCanonical(s.store, capture({ 차량상태: unlisted }), 'synthetic-target');
+      expect(held.plan.entries[0]!.action).toBe('HOLD');
+    }
   });
   it('rejects missing/tampered plans and ownership before intake', async () => {
     const s = await stores(); const begin = vi.spyOn(s.source, 'beginRun');

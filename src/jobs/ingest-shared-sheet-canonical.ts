@@ -2,7 +2,7 @@ import { readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { buildSharedSheetBatch, sharedSheetChannels, SHARED_SHEET_SPEC_DIGEST, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
-import { normalizeSharedSheet, SHARED_SHEET_RULE_VERSION, SHARED_SHEET_STATUS_POLICY } from '../adapters/normalize-shared-sheet.js';
+import { normalizeSharedSheet, SHARED_SHEET_RULE_VERSION, sharedSheetStatusPolicy } from '../adapters/normalize-shared-sheet.js';
 import { ingestRawSourceBatch, prepareRawSourceBatch } from '../application/ingest-raw-source.js';
 import { canonicalizeCatalogCandidate, type CanonicalizeCatalogCandidateInput } from '../application/canonicalize-catalog-candidate.js';
 import { reviewSourceChange, applyReviewedSourceChange } from '../application/reviewed-source-change.js';
@@ -83,7 +83,7 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
     }
     const reasons = [...c.issues];
     if (!sourceEligible) reasons.push('SOURCE_HEAD_NOT_CURRENT');
-    const statusPolicy = SHARED_SHEET_STATUS_POLICY[String(c.vehicleFacts?.fields.supplierStatus?.value ?? '')];
+    const statusPolicy = sharedSheetStatusPolicy(c.vehicleFacts?.fields.supplierStatus?.value);
     if (!statusPolicy) reasons.push('ASSET_STATUS_MISSING');
     const productStatus = statusPolicy?.exposure === 'VISIBLE' ? 'ACTIVE' as const : 'HOLD' as const;
     const entry: Entry = { recordId: c.sourceRecordId, action: 'HOLD', reasons };
@@ -107,9 +107,10 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
             await store.getVehicleAsset(entry.create.decision.vehicleAsset!.id) ||
             await store.getOffer(opaque('off', p.sourceId, c.sourceRecordId)) ||
             await store.getProduct(opaque('prd', p.sourceId, c.sourceRecordId))) reasons.push('UNBOUND_IDENTITY_COLLISION');
-      } else if ((await store.getProduct(binding.productId))?.status !== productStatus) {
-        // Exposure changes are not part of the generic reviewed source change yet: hold instead of silently diverging.
-        reasons.push('EXPOSURE_CHANGE_REQUIRES_REVIEW');
+      } else if ((await store.getProduct(binding.productId))?.status !== productStatus ||
+          (binding.vehicleAssetId && (await store.getVehicleAsset(binding.vehicleAssetId))?.status !== statusPolicy?.assetStatus)) {
+        // Exposure/asset status changes are not part of the generic reviewed source change yet: hold instead of silently diverging.
+        reasons.push('STATUS_CHANGE_REQUIRES_REVIEW');
       } else if (binding.sourceFingerprint === c.sourceFingerprint) {
         entry.action = 'NO_CHANGE';
         const current = await store.getOffer(binding.offerId);
@@ -224,7 +225,11 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
     const expected = precomputeOfferEconomics({ id: opaque('off', p.sourceId, c.sourceRecordId),
       supplierId: c.providerCompanyCode!, priceTerms: c.priceTerms }, c.commercialType, c.fuelType);
     storedTerms += offer?.internalEconomicsTerms?.length ?? 0;
-    if (!asset || stableDigest(asset.sourceVehicleFacts ?? null) !== stableDigest(c.vehicleFacts) ||
+    const policy = sharedSheetStatusPolicy(c.vehicleFacts?.fields.supplierStatus?.value);
+    const product = binding ? await store.getProduct(binding.productId) : null;
+    if (!asset || !policy || asset.status !== policy.assetStatus ||
+        product?.status !== (policy.exposure === 'VISIBLE' ? 'ACTIVE' : 'HOLD') ||
+        stableDigest(asset.sourceVehicleFacts ?? null) !== stableDigest(c.vehicleFacts) ||
         !offer || stableDigest(offer.priceTerms) !== stableDigest(c.priceTerms) ||
         stableDigest(offer.internalEconomicsTerms ?? []) !== stableDigest(expected)) readbackMismatches++;
   }
