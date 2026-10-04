@@ -18,9 +18,10 @@ const applyUpdate = (path: string, update: Record<string, unknown>) => {
   }
   store.set(path, doc);
 };
-type Query = { collection: string; filters: Array<[string, unknown]>; cap?: number; where: (f: string, op: string, v: unknown) => Query; select: (...f: string[]) => Query; limit: (n: number) => Query };
+type Query = { collection: string; filters: Array<[string, unknown]>; cap?: number; where: (f: string, op: string, v: unknown) => Query; select: (...f: string[]) => Query; limit: (n: number) => Query; get: () => Promise<ReturnType<typeof runQuery>> };
 const query = (collection: string, filters: Array<[string, unknown]> = [], cap?: number): Query => ({
   collection, filters, ...(cap !== undefined ? { cap } : {}), where: (f, _op, v) => query(collection, [...filters, [f, v]], cap), select: () => query(collection, filters, cap), limit: (n) => query(collection, filters, n),
+  get: async () => runQuery(query(collection, filters, cap)),
 });
 const runQuery = (q: Query) => {
   const docs = [...store.entries()].filter(([path, data]) => path.startsWith(`${q.collection}/`) && q.filters.every(([f, v]) => data[f] === v)).slice(0, q.cap ?? Infinity);
@@ -166,6 +167,99 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     expect(store.get('vehicle_master/m-gn7')!.variants).toEqual([variants[0]]);
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterVariantRepairs: [repair] }))
       .rejects.toThrow(/variants precondition changed/);
+  });
+  it('retires a leftover master only when no trim row or product still uses it (never deletes)', async () => {
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    store.set('vehicle_trim_master/t9', { sub_model: '그랜저 옛이름', master_id: 'm-old', trim: '프리미엄' });
+    // a row still links to it → refused
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: '합쳐짐' }] })).rejects.toThrow(/still linked by trim rows/);
+    // relinking that row away in the same plan makes the retire possible
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      trimSubModelRepairs: [{ id: 't9', from: '그랜저 옛이름', to: '그랜저 GN7' }], trimMasterLinkRepairs: [{ id: 't9', from: 'm-old', to: 'm-gn7' }],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: '합쳐짐' }] });
+    expect(store.get('vehicle_master/m-old')).toMatchObject({ retired: true, retired_into: 'm-gn7', sub_model: '그랜저 옛이름' });
+    // already retired → refused
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: 'x' }] })).rejects.toThrow(/already retired/);
+  });
+  it('refuses a retire when products carry the name only in another spelling, or the plan renames a product into it', async () => {
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    store.set('products/p1', { model: '그랜저', sub_model: ' 그랜저  옛이름' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: 'x' }] })).rejects.toThrow(/still used by products/);
+    store.set('products/p1', { model: '그랜저', sub_model: '그랜저 GN7' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [{ id: 'p1', from: '그랜저 GN7', to: '그랜저 옛이름' }],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: 'x' }] })).rejects.toThrow(/name of a master it retires/);
+    expect(store.get('vehicle_master/m-old')!.retired).toBeUndefined();
+  });
+  it('refuses a chain: after A is retired into B, B cannot be retired', async () => {
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    store.set('vehicle_master/m-new', { id: 'm-new', maker: '현대', model: '그랜저', sub_model: '그랜저 새이름' });
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: '합쳐짐' }] });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      trimMasterLinkRepairs: [{ id: 't1', from: 'm-gn7', to: 'm-new' }],
+      masterRetires: [{ id: 'm-gn7', into: 'm-new', evidence: 'x' }] })).rejects.toThrow(/retired into/);
+    expect(store.get('vehicle_master/m-gn7')!.retired).toBeUndefined();
+  });
+  it('refuses to rename a product onto a retired master name in a later plan', async () => {
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    store.set('products/p7', { model: '그랜저', sub_model: '그랜저 GN7' });
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: '합쳐짐' }] });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [],
+      productRepairs: [{ id: 'p7', from: '그랜저 GN7', to: '그랜저 옛이름' }] })).rejects.toThrow(/retired master/);
+    expect(store.get('products/p7')!.sub_model).toBe('그랜저 GN7');
+  });
+  it('freezes a retired master: no rename (alone or together with a product rename) and no variants edit', async () => {
+    const { stableDigest } = await import('../src/shared/stable-digest.js');
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    store.set('products/p7', { model: '그랜저', sub_model: '그랜저 GN7' });
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: '합쳐짐' }] });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', productRepairs: [],
+      masterRepairs: [{ id: 'm-old', from: '그랜저 옛이름', to: '그랜저 다른이름' }] })).rejects.toThrow(/cannot be renamed/);
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1',
+      masterRepairs: [{ id: 'm-old', from: '그랜저 옛이름', to: '그랜저 새이름' }],
+      productRepairs: [{ id: 'p7', from: '그랜저 GN7', to: '그랜저 새이름' }] })).rejects.toThrow(/cannot be renamed/);
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterVariantRepairs: [{ id: 'm-old', fromDigest: stableDigest(null), to: [{ name: 'x' }], evidence: 'x' }] })).rejects.toThrow(/retired/);
+    expect(store.get('vehicle_master/m-old')).toMatchObject({ sub_model: '그랜저 옛이름', retired: true });
+    expect(store.get('products/p7')!.sub_model).toBe('그랜저 GN7');
+  });
+  it('refuses to link a trim row to a retired master in a later plan', async () => {
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: '합쳐짐' }] });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      trimMasterLinkRepairs: [{ id: 't1', from: 'm-gn7', to: 'm-old' }] })).rejects.toThrow(/missing or retired/);
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      trimCreates: [{ id: 'k9', evidence: 'x', data: { maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름', trim: '프리미엄', master_id: 'm-old', trim_row_key: 'k9' } }] })).rejects.toThrow(/missing or retired/);
+    expect(store.get('vehicle_trim_master/t1')!.master_id).toBe('m-gn7');
+  });
+  it('catches a product added in another spelling after the early check (checked again inside the transaction)', async () => {
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    const original = db.runTransaction;
+    db.runTransaction = async (fn) => {
+      store.set('products/p9', { model: '그랜저', sub_model: '그랜저\u3000옛이름' }); // 전각 공백, 사전 확인 뒤에 들어옴
+      return original(fn);
+    };
+    try {
+      await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+        masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: 'x' }] })).rejects.toThrow(/still used by products/);
+    } finally { db.runTransaction = original; }
+    expect(store.get('vehicle_master/m-old')!.retired).toBeUndefined();
+  });
+  it('refuses to retire a master whose name products still carry, or into a missing master', async () => {
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    store.set('products/p1', { model: '그랜저', sub_model: '그랜저 옛이름' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: 'x' }] })).rejects.toThrow(/still used by products/);
+    store.delete('products/p1');
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-none', evidence: 'x' }] })).rejects.toThrow(/into-master missing/);
+    expect(store.get('vehicle_master/m-old')!.retired).toBeUndefined();
   });
   it('aborts the whole plan when a precondition changed before commit', async () => {
     store.set('vehicle_trim_master/t1', { ...store.get('vehicle_trim_master/t1')!, sub_model: '다른 이름' });
