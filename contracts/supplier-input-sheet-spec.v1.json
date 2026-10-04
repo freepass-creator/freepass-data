@@ -2168,6 +2168,12 @@
         "name": "아이카",
         "channel": "OWN_SOURCE_SHEET",
         "detail": "공급사 자체 원본 시트를 읽음. 공동 시트 대상 아님(2026-10-03 대표 결정)"
+      },
+      {
+        "code": "RP035",
+        "name": "뮤카",
+        "channel": "NOT_CONNECTED",
+        "detail": "2026-10-05 AI 상황실 오더로 프리패스 데이터가 발급(공급사 코드 발급 주인 = 프리패스 데이터). 발급 전 확인: freepass-data·freepasserp4·ai-ops·kakao-ops 기본 가지와 프리패스 데이터 products·settlement_rows 에서 RP035 사용 0, 최대 실사용 번호 RP034(마음카), RP099 는 ai-ops·kakao-ops 시험용 가짜 값. 수수료 근거: freepass-admin DEC-2026-10-04-01 8번 = F04 수수료표 169·170행(선납 12개월 100만·24~48개월 120만, 분납 12개월 80만·24~48개월 100만 + min(추가보증금×10%, 40만), 분납 완납 전 미지급, 프리패스 몫 차량 기준가×1%). 재고 수집 경로는 아직 없음 — 공동 시트 대상 아님"
       }
     ],
     "legacyAuthority": "전환 전 운영 수집 목록은 ERP4 lib/domain/inventory-source-registry.ts(고정 엔진 fe3eccc)의 generic-sheet 19곳이다. 현재 공동 시트는 2026-10-03 대표 결정으로 RP034 마음카를 제외한 18개 코드이며 2026-10-04 관계사 통합 후 15탭이다",
