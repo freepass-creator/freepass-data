@@ -401,6 +401,35 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         owners[key] = id;
       }
     }
+    // Model consistency (one model name per master and its rows): for every master whose model changes, and every master
+    // of a row whose model changes, the final model of each linked row (after this plan's relinks, row renames and creates)
+    // must equal the master's final model — a master renamed without its rows, or a row added meanwhile, aborts.
+    if (targets.some((t) => t.kind === 'masterModel' || t.kind === 'trimModel')) {
+      const linkTo: Record<string, string> = Object.fromEntries((plan.trimMasterLinkRepairs ?? []).map((l) => [l.id, l.to]));
+      const rowModelTo: Record<string, string> = {};
+      const masterModelTo: Record<string, string> = {};
+      const affected = new Set<string>();
+      targets.forEach((t, i) => {
+        if (t.kind === 'masterModel') { masterModelTo[t.ref.id] = clean(t.item.to); affected.add(t.ref.id); }
+        if (t.kind === 'trimModel') { rowModelTo[t.ref.id] = clean(t.item.to); affected.add(linkTo[t.ref.id] ?? String(current[i]?.data()?.master_id ?? '')); }
+      });
+      const createdMaster: Record<string, Record<string, unknown>> = Object.fromEntries((plan.masterCreates ?? []).map((c) => [c.id, c.data]));
+      for (const mid of affected) {
+        if (!mid) throw new Error('trim row without master_id cannot change model');
+        const masterData = createdMaster[mid] ?? (await transaction.getAll(db.collection('vehicle_master').doc(mid)))[0]!.data();
+        if (!masterData) throw new Error(`model check: master missing vehicle_master/${mid}`);
+        const want = masterModelTo[mid] ?? clean(masterData.model);
+        const stored = await transaction.get(db.collection('vehicle_trim_master').where('master_id', '==', mid).limit(MAX_MASTER_IDENTITY_SCAN + 1));
+        if (stored.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`model check: too many rows on vehicle_master/${mid}`);
+        const rows: Record<string, unknown> = {};
+        for (const doc of stored.docs) if ((linkTo[doc.id] ?? mid) === mid) rows[doc.id] = doc.data().model;
+        const incomingIds = Object.entries(linkTo).filter(([id, to]) => to === mid && rows[id] === undefined).map(([id]) => id);
+        if (incomingIds.length) for (const snap of await transaction.getAll(...incomingIds.map((id) => db.collection('vehicle_trim_master').doc(id)))) rows[snap.id] = snap.data()?.model;
+        for (const c of plan.trimCreates ?? []) if (c.data.master_id === mid) rows[c.id] = c.data.model;
+        const off = Object.entries(rows).find(([id, model]) => (rowModelTo[id] ?? clean(model)) !== want);
+        if (off) throw new Error(`model would differ between vehicle_master/${mid} (${want}) and vehicle_trim_master/${off[0]}`);
+      }
+    }
     if (retireIntoRefs.length && (await transaction.getAll(...retireIntoRefs)).some((snapshot) => !snapshot.exists || snapshot.data()?.retired === true)) throw new Error('transaction retire into-master missing or retired');
     // Retire only when nothing still uses the master: no trim row links to it (after this plan's relinks) and no product carries its name.
     for (const [index, x] of retires.entries()) {

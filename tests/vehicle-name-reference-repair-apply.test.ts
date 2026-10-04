@@ -288,6 +288,39 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
       masterGenCodeRepairs: [{ id: 'm-b', from: 'X', to: 'Y' }] })).rejects.toThrow(/retired master/);
     expect(store.get('vehicle_master/m-a')!.model).toBe('아이오닉5');
   });
+  it('keeps one model name per master and its rows: master-only rename, a missed row, a row added meanwhile are refused', async () => {
+    store.set('vehicle_master/m-i5', { id: 'm-i5', maker: '현대', model: '아이오닉5', sub_model: '아이오닉 5 NE', model_aliases: ['IONIQ5'] });
+    store.set('vehicle_trim_master/r1', { model: '아이오닉5', sub_model: '아이오닉 5 NE', master_id: 'm-i5', trim: 'A' });
+    store.set('vehicle_trim_master/r2', { model: '아이오닉5', sub_model: '아이오닉 5 NE', master_id: 'm-i5', trim: 'B' });
+    const base = { sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterModelRepairs: [{ id: 'm-i5', from: '아이오닉5', to: '아이오닉 5' }] };
+    await expect(applyVehicleNameReferenceRepair(base)).rejects.toThrow(/model would differ/);
+    await expect(applyVehicleNameReferenceRepair({ ...base, trimModelRepairs: [{ id: 'r1', from: '아이오닉5', to: '아이오닉 5' }] })).rejects.toThrow(/model would differ.*r2/);
+    // a row only on the trim side is refused as well
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], trimModelRepairs: [{ id: 'r1', from: '아이오닉5', to: '아이오닉 5' }] })).rejects.toThrow(/model would differ/);
+    const full = { ...base, trimModelRepairs: [{ id: 'r1', from: '아이오닉5', to: '아이오닉 5' }, { id: 'r2', from: '아이오닉5', to: '아이오닉 5' }] };
+    const original = db.runTransaction;
+    db.runTransaction = async (fn) => { store.set('vehicle_trim_master/r3', { model: '아이오닉5', sub_model: '아이오닉 5 NE', master_id: 'm-i5', trim: 'C' }); return original(fn); };
+    try { await expect(applyVehicleNameReferenceRepair(full)).rejects.toThrow(/model would differ.*r3/); } finally { db.runTransaction = original; }
+    store.delete('vehicle_trim_master/r3');
+    await applyVehicleNameReferenceRepair(full);
+    // existing aliases are kept next to the old name
+    expect(store.get('vehicle_master/m-i5')).toMatchObject({ model: '아이오닉 5', model_aliases: ['IONIQ5', '아이오닉5'] });
+    // readback catches a tampered model
+    store.set('vehicle_master/m-x', { id: 'm-x', maker: '현대', model: '아이오닉6', sub_model: '아이오닉 6 CE' });
+    db.runTransaction = async (fn) => { await original(fn); store.set('vehicle_master/m-x', { ...store.get('vehicle_master/m-x')!, model: '변조' }); };
+    try { await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterModelRepairs: [{ id: 'm-x', from: '아이오닉6', to: '아이오닉 6' }] })).rejects.toThrow(/readback mismatch/); } finally { db.runTransaction = original; }
+  });
+  it('checks names with model and sub-model renamed together, and against a created master', async () => {
+    store.set('vehicle_master/m-a', { id: 'm-a', maker: '현대', model: '아이오닉5', sub_model: '옛 이름' });
+    store.set('vehicle_master/m-b', { id: 'm-b', maker: '현대', model: '아이오닉 5', sub_model: '아이오닉 5 NE' });
+    const both = { sourceDigest: 'v1', productRepairs: [], masterModelRepairs: [{ id: 'm-a', from: '아이오닉5', to: '아이오닉 5' }] };
+    await expect(applyVehicleNameReferenceRepair({ ...both, masterRepairs: [{ id: 'm-a', from: '옛 이름', to: '아이오닉 5 NE' }] })).rejects.toThrow(/stored twice/);
+    await applyVehicleNameReferenceRepair({ ...both, masterRepairs: [{ id: 'm-a', from: '옛 이름', to: '아이오닉 5 N' }] });
+    expect(store.get('vehicle_master/m-a')).toMatchObject({ model: '아이오닉 5', sub_model: '아이오닉 5 N' });
+    store.set('vehicle_master/m-c', { id: 'm-c', maker: '현대', model: '아이오닉6', sub_model: '아이오닉 6 CE' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterModelRepairs: [{ id: 'm-c', from: '아이오닉6', to: '아이오닉 6' }],
+      masterCreates: [{ id: 'm-new', evidence: 'x', data: { id: 'm-new', maker: '현대', model: '아이오닉 6', sub_model: '아이오닉 6 CE', origin: '국산' } }] })).rejects.toThrow(/stored twice/);
+  });
   it('refuses a variants edit without trims when the stored trims list does not cover the new variant trims', async () => {
     const { stableDigest } = await import('../src/shared/stable-digest.js');
     const variants = [{ fuel: '가솔린', trims: ['프리미엄'] }];
@@ -297,6 +330,15 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
       .rejects.toThrow(/missing from the stored trims/);
     await applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(variants), to: [{ fuel: 'LPG', trims: ['프리미엄'] }], evidence: 'x' }] });
     expect(store.get('vehicle_master/m-gn7')!.variants).toEqual([{ fuel: 'LPG', trims: ['프리미엄'] }]);
+    // the stored list shrinks after the early check → refused inside the transaction
+    const now = store.get('vehicle_master/m-gn7')!.variants;
+    const original = db.runTransaction;
+    db.runTransaction = async (fn) => { store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: [] }); return original(fn); };
+    try { await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] })).rejects.toThrow(/transaction variants name trims missing/); } finally { db.runTransaction = original; }
+    // an empty stored list refuses non-empty variant trims; a missing or null list is not checked
+    await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] })).rejects.toThrow(/missing from the stored trims/);
+    store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: null });
+    await applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린', trims: ['프리미엄'] }], evidence: 'x' }] });
   });
   it('refuses to link a trim row to a retired master in a later plan', async () => {
     store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
