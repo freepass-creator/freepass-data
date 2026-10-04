@@ -68,6 +68,9 @@ describe('vehicle-name reference repair gate', () => {
       trimRepairs: [{ id: 't', from: 'TCe LE', to: 'ＬＥ' }] })).toThrow(/normalized/);
     expect(normalizeName('포터 Ⅱ')).toBe('포터 Ⅱ');
     expect(normalizeName('　ＬＥ  플러스 ')).toBe('LE 플러스');
+    // Stable: the width change runs before NFC, so a second pass changes nothing.
+    for (const v of ['Ａ̊', 'ｅ́', '　ＬＥ  플러스 ']) expect(normalizeName(normalizeName(v))).toBe(normalizeName(v));
+    expect(matchesFrom('Ａ̊', 'Å')).toBe(true);
   });
   it('caps one plan below the Firestore transaction write limit', () => {
     const many = Array.from({ length: MAX_VEHICLE_NAME_REPAIR_TARGETS + 1 }, (_, i) => ({ id: `t${i}`, from: 'A', to: 'B' }));
