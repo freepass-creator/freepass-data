@@ -409,10 +409,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         owners[key] = id;
       }
     }
-    // Model consistency (one model name per master and its rows): for every master whose model changes, and every master
-    // of a row whose model changes, the final model of each linked row (after this plan's relinks, row renames and creates)
+    // Model consistency (one model name per master and its rows): for every master whose model changes, every master
+    // of a row whose model changes, every relink destination and every master that gets a created row, the final model of each linked row (after this plan's relinks, row renames and creates)
     // must equal the master's final model — a master renamed without its rows, or a row added meanwhile, aborts.
-    if (targets.some((t) => t.kind === 'masterModel' || t.kind === 'trimModel')) {
+    if (targets.some((t) => t.kind === 'masterModel' || t.kind === 'trimModel' || t.kind === 'trimMasterLink') || (plan.trimCreates ?? []).length) {
       const linkTo: Record<string, string> = Object.fromEntries((plan.trimMasterLinkRepairs ?? []).map((l) => [l.id, l.to]));
       const rowModelTo: Record<string, string> = {};
       const masterModelTo: Record<string, string> = {};
@@ -423,6 +423,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       });
       // Rows relinked away from a master whose model changes keep their model unless renamed — so every relink destination is checked as well.
       for (const to of Object.values(linkTo)) affected.add(to);
+      for (const c of plan.trimCreates ?? []) affected.add(String(c.data.master_id));
       const createdMaster: Record<string, Record<string, unknown>> = Object.fromEntries((plan.masterCreates ?? []).map((c) => [c.id, c.data]));
       for (const mid of affected) {
         if (!mid) throw new Error('trim row without master_id cannot change model');
@@ -434,7 +435,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         const rows: Record<string, unknown> = {};
         for (const doc of stored.docs) if ((linkTo[doc.id] ?? mid) === mid) rows[doc.id] = doc.data().model;
         const incomingIds = Object.entries(linkTo).filter(([id, to]) => to === mid && rows[id] === undefined).map(([id]) => id);
-        if (incomingIds.length) for (const snap of await transaction.getAll(...incomingIds.map((id) => db.collection('vehicle_trim_master').doc(id)))) rows[snap.id] = snap.data()?.model;
+        if (incomingIds.length) for (const snap of await transaction.getAll(...incomingIds.map((id) => db.collection('vehicle_trim_master').doc(id)))) rows[snap.ref.id] = snap.data()?.model;
         for (const c of plan.trimCreates ?? []) if (c.data.master_id === mid) rows[c.id] = c.data.model;
         const off = Object.entries(rows).find(([id, model]) => (rowModelTo[id] ?? clean(model)) !== want);
         if (off) throw new Error(`model would differ between vehicle_master/${mid} (${want}) and vehicle_trim_master/${off[0]}`);
@@ -482,6 +483,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (aliasValue !== undefined && aliasValue !== null && !Array.isArray(aliasValue)) throw new Error(`transaction alias field is not a list ${ref.path}.${aliasField}`);
       // The stored spelling is kept too when it differs from the normalized old name (e.g. stray or full-width spaces).
       const raw = snapshot.data()?.[field];
+      // The stored spelling must still be the one read before the backup (the backup and the readback rely on it).
+      if (raw !== snapshots[index]!.data()?.[field]) throw new Error(`transaction stored spelling changed since backup ${ref.path}.${field}`);
       const entry = byPath[ref.path]!;
       if (typeof raw === 'string' && clean(raw) && raw !== clean(item.from) && !(entry.aliases[aliasField] ?? []).includes(raw)) {
         entry.aliases[aliasField] = [...(entry.aliases[aliasField] ?? []), raw];

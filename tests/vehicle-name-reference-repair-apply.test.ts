@@ -58,8 +58,8 @@ const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN } = await impo
 beforeEach(() => {
   store.clear();
   store.set('vehicle_master/m-gn7', { id: 'm-gn7', maker: '현대', model: '그랜저', sub_model: '그랜저 GN7' });
-  store.set('vehicle_trim_master/t1', { sub_model: '그랜저 GN7', master_id: 'm-gn7', trim: '프리미엄', fuel: '하이브리드' });
-  store.set('vehicle_trim_master/t2', { sub_model: '디 올 뉴 싼타페 MX5', master_id: 'm-mx5', trim: '익스클루시브', sub_model_aliases: ['싼타페 MX5 신형'] });
+  store.set('vehicle_trim_master/t1', { model: '그랜저', sub_model: '그랜저 GN7', master_id: 'm-gn7', trim: '프리미엄', fuel: '하이브리드' });
+  store.set('vehicle_trim_master/t2', { model: '싼타페', sub_model: '디 올 뉴 싼타페 MX5', master_id: 'm-mx5', trim: '익스클루시브', sub_model_aliases: ['싼타페 MX5 신형'] });
   store.set('vehicle_master/m-mx5', { id: 'm-mx5', maker: '현대', model: '싼타페', sub_model: '디 올 뉴 싼타페 MX5' });
 });
 
@@ -114,7 +114,7 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       trimCreates: [{ id: 'k1', evidence: 'x', data: trimData('k1') }, { id: 'k2', evidence: 'x', data: trimData('k1') }] })).rejects.toThrow(/trim_row_key must equal id/);
     // a stored row (different document id) already carries the key
-    store.set('vehicle_trim_master/legacy-doc', { trim_row_key: 'k9', sub_model: '그랜저 GN7' });
+    store.set('vehicle_trim_master/legacy-doc', { model: '그랜저', trim_row_key: 'k9', sub_model: '그랜저 GN7' });
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       trimCreates: [{ id: 'k9', evidence: 'x', data: trimData('k9') }] })).rejects.toThrow(/trim_row_key already stored/);
     expect(store.has('vehicle_trim_master/k9')).toBe(false);
@@ -171,7 +171,7 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
   });
   it('retires a leftover master only when no trim row or product still uses it (never deletes)', async () => {
     store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
-    store.set('vehicle_trim_master/t9', { sub_model: '그랜저 옛이름', master_id: 'm-old', trim: '프리미엄' });
+    store.set('vehicle_trim_master/t9', { model: '그랜저', sub_model: '그랜저 옛이름', master_id: 'm-old', trim: '프리미엄' });
     // a row still links to it → refused
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: '합쳐짐' }] })).rejects.toThrow(/still linked by trim rows/);
@@ -365,6 +365,15 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     await expect(applyVehicleNameReferenceRepair({ ...base, masterModelRepairs: [{ id: 'm-i5', from: '아이오닉5', to: '아이오닉 5' }],
       trimModelRepairs: [{ id: 'r1', from: '아이오닉5', to: '아이오닉 5' }], trimMasterLinkRepairs: [{ id: 'r2', from: 'm-i5', to: 'm-k' }] }))
       .rejects.toThrow(/model would differ between vehicle_master\/m-k/);
+    // ② a relink-only plan is checked too: a row of another model cannot move under a master
+    await expect(applyVehicleNameReferenceRepair({ ...base, trimMasterLinkRepairs: [{ id: 'r2', from: 'm-i5', to: 'm-k' }] })).rejects.toThrow(/model would differ between vehicle_master\/m-k/);
+    await expect(applyVehicleNameReferenceRepair({ ...base, trimCreates: [{ id: 'k1', evidence: 'x', data: { maker: '현대', model: '아이오닉5', sub_model: '코나 OS', trim: 'A', master_id: 'm-k', trim_row_key: 'k1' } }] })).rejects.toThrow(/model would differ/);
+    // ④ the stored spelling changing between the early read and the transaction aborts before any write
+    store.set('vehicle_master/m-s', { id: 'm-s', maker: '현대', model: '코나', sub_model: ' S1 ' });
+    const orig0 = db.runTransaction;
+    db.runTransaction = async (fn) => { store.set('vehicle_master/m-s', { ...store.get('vehicle_master/m-s')!, sub_model: 'S1' }); return orig0(fn); };
+    try { await expect(applyVehicleNameReferenceRepair({ ...base, masterRepairs: [{ id: 'm-s', from: 'S1', to: 'S2' }] })).rejects.toThrow(/stored spelling changed/); } finally { db.runTransaction = orig0; }
+    expect(store.get('vehicle_master/m-s')!.sub_model).toBe('S1');
     // ③ an alias field that is not a list is refused (it would be overwritten)
     store.set('vehicle_master/m-k', { ...store.get('vehicle_master/m-k')!, sub_model_aliases: '옛 코나' });
     await expect(applyVehicleNameReferenceRepair({ ...base, masterRepairs: [{ id: 'm-k', from: '코나 OS', to: '코나 OS2' }] })).rejects.toThrow(/alias field is not a list/);
