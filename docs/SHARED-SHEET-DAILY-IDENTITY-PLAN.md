@@ -26,14 +26,14 @@
 
 **그래서 겹으로 좁힌다:**
 
-1. **맞춤 역할 `freepassDataDailyWriter`** — `datastore.entities.get` · `list` · `create` · `update` 와 거래·조회에 필요한 최소 권한만. **`datastore.entities.delete` 없음**, 색인·가져오기/내보내기·데이터베이스 관리 권한 없음. 매일 박제는 지우기를 하지 않는다(만들기·고치기·읽기만).
+1. **맞춤 역할 `freepassDataDailyWriter`** — 권한은 정확히 다섯 개: `datastore.databases.get`(거래 시작·되돌리기에 필요) · `datastore.entities.get` · `datastore.entities.list` · `datastore.entities.create` · `datastore.entities.update`. **`datastore.entities.delete` 없음**, 색인·가져오기/내보내기·데이터베이스 관리 권한 없음. 매일 박제는 지우기를 하지 않는다(만들기·고치기·읽기만). 승인 뒤 첫 시험 실행에서 거래가 이 다섯 개로 도는지 확인하고, 모자라면 이 문서를 고친 뒤에만 더한다.
 2. **데이터베이스 조건** — 위 조건으로 `(default)` 한 곳에만. 다른 데이터베이스는 못 건드린다.
 3. **실행 경로 고정** — WIF 조건(저장소·main·`data-owned-refresh.yml`) + environment `data-production-delivery` 보호(검토자 승인). 코드는 `src/infra/firestore-layout.ts` 의 모음 이름으로만 쓰고, Canonical 쓰기는 writer 소유권 EXCLUSIVE `service:freepass-data` 로 다시 막는다.
-4. **감지** — Firestore «데이터 접근 감사 로그(DATA_WRITE)»를 켜고, 이 서비스 계정의 쓰기가 아래 허용 모음 밖으로 나가면 매일 점검에서 «보류»로 알린다.
+4. **감지(아직 계획 — 만들고 시험한 뒤에만 «감지된다»고 말한다)** — Firestore «데이터 접근 감사 로그(DATA_WRITE)»를 켜고, 이 서비스 계정의 쓰기가 아래 허용 모음 밖으로 나가면 매일 점검에서 «보류»로 알리는 점검을 만든다.
 
-**매일 박제가 쓰는 모음(허용 목록):** `catalog_vehicle_models` · `catalog_vehicle_assets` · `catalog_products` · `catalog_offers` · `catalog_policies` · `canonical_source_bindings` · `catalog_entity_revisions` · `sources` · `source_runs` · `source_heads` · `raw_records` · `normalized_candidates` · `field_lineage` · `command_receipts` · `canonicalization_receipts` · `reviewed_source_change_receipts` · `audit_events` · `outbox_events` · `data_access_events` (읽기만: `writer_ownership`).
+**매일 박제가 쓰는 모음(허용 목록 — 이 실행 경로가 실제로 쓰는 것만):** `catalog_vehicle_models` · `catalog_vehicle_assets` · `catalog_products` · `catalog_offers` · `canonical_source_bindings` · `catalog_entity_revisions` · `sources` · `source_runs` · `source_heads` · `raw_records` · `normalized_candidates` · `field_lineage` · `canonicalization_receipts` · `reviewed_source_change_receipts` · `audit_events` · `outbox_events` · `data_access_events` (읽기만: `writer_ownership`). `capture-shared-sheet` 는 Firestore 에 쓰지 않는다(시트 읽기·증거 버킷만).
 
-**남는 위험:** 이 신원은 `(default)` 안의 다른 모음(예: ERP4 화면이 쓰는 `products`)에도 문서를 만들거나 고칠 «권한»은 갖는다(지우기는 못 함). 막는 것은 고정된 실행 경로·코드·소유권이고, 넘으면 감사 로그로 다음 날 잡힌다 — 사전 차단이 아니라 사후 감지다.
+**남는 위험:** 이 신원은 `(default)` 안의 다른 모음(예: ERP4 화면이 쓰는 `products`)에도 문서를 만들거나 고칠 «권한»은 갖는다. 문서를 지우지는 못하지만 `update` 로 기존 필드·내용을 덮거나 필드를 지워 훼손할 수는 있다. 막는 것은 고정된 실행 경로·코드·소유권뿐이고, 감지 점검(4번)은 아직 만들지 않았다 — 사전 차단이 아니고, 감지도 만든 뒤에야 사후 감지가 된다.
 
 **완전히 막으려면(별도 승인):** Canonical·source 모음을 freepasserp5 안의 «전용 데이터베이스»(예: `freepass-data`)로 옮기고 조건을 그 데이터베이스로 건다. 이동·소비처 연결 변경이 큰 일이라 이 계획에 넣지 않고 따로 올린다.
 
