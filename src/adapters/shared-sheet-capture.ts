@@ -24,38 +24,53 @@ export const serialToIsoDate = (v: unknown): string | null => {
   const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(v) * 86_400_000);
   return d.getUTCFullYear() >= 1900 && d.getUTCFullYear() <= 2099 ? d.toISOString().slice(0, 10) : null;
 };
+/** |x| 를 15 유효숫자 십진 글자로(지수 없이), 소수점을 k 자리 옮겨서. 스프레드시트도 15 유효숫자로 보여 주므로 같은 규칙이고,
+ * 부동소수 찌꺼기(1.005 → 1.00499…)도 함께 지운다. */
+const decimalDigits = (x: number, shift = 0): { int: string; frac: string } => {
+  const [mantissa, e = '0'] = Math.abs(x).toPrecision(15).split('e');
+  const [i, f = ''] = mantissa!.split('.');
+  let digits = i! + f, point = i!.length + Number(e) + shift;
+  if (point <= 0) { digits = '0'.repeat(1 - point) + digits; point = 1; }
+  if (point > digits.length) digits += '0'.repeat(point - digits.length);
+  return { int: digits.slice(0, point), frac: digits.slice(point) };
+};
+/** 십진 글자를 places 자리에서 «0 에서 먼 쪽 반올림»한 정수(×10^places). */
+const roundedUnits = (d: { int: string; frac: string }, places: number): bigint => {
+  const frac = d.frac.padEnd(places + 1, '0');
+  const kept = BigInt(d.int + frac.slice(0, places));
+  return frac[places]! >= '5' ? kept + 1n : kept;
+};
+
 /** A displayed number shows the same real value, to the precision it shows: «12,345km» · «77.4kWh» · «2021» · «15%» ·
  * 회계식 0 «-» · 음수 «-1,000» / «(1,000)» · 지수 «1.23E+05». */
 export const displayMatchesValue = (shown: string, v: number | boolean): boolean => {
   if (typeof v === 'boolean') return shown.trim().toUpperCase() === String(v).toUpperCase();
+  if (!Number.isFinite(v)) return false;
   const s = shown.trim();
   if (!/\d/.test(s)) return /^[^0-9]*-[^0-9]*$/.test(s) && v === 0; // 회계식 0
-  const target = s.includes('%') ? v * 100 : v;
-  if (!Number.isFinite(target)) return false;
   // 부호를 먼저 정한다 — 숫자를 감싼 괄호(통화 기호가 밖에 있어도) 또는 첫 숫자 앞의 «-». 지수·일반 숫자에 같이 쓴다.
   const sign = /\([^()]*\d[^()]*\)/.test(s) || /^[^0-9]*-/.test(s) ? -1 : 1;
+  const percent = s.includes('%') ? 2 : 0;
   // 보이는 자릿수로 시트처럼 «0 에서 먼 쪽 반올림»한 값과 정확히 같아야 한다(«1» ↔ 1.5 는 «2», «1.23E+05» ↔ 123500 은 «1.24E+05»).
-  // .5 판정은 곱셈 찌꺼기(약 2 ULP, 최대 1e-6)만 너그럽게 — 1.4999999999 를 올리지 않는다. 부호 일치·유한값만.
-  const roundAway = (x: number, digits: number) => {
-    const scale = 10 ** digits, scaled = Math.abs(x) * scale, frac = scaled - Math.floor(scaled);
-    const half = Math.abs(frac - 0.5) <= Math.min(Math.max(scaled, 1) * Number.EPSILON * 2, 1e-6);
-    return Math.sign(x) * (half ? Math.floor(scaled) + 1 : Math.round(scaled)) / scale;
+  // 계산은 15 유효숫자 십진 글자와 정수(BigInt)로 — 부동소수 경계 오류가 없다. 0 이 아니면 부호도 같아야 한다.
+  const compare = (shownDigits: string, places: number, expected: bigint) => {
+    const [si, sf = ''] = shownDigits.split('.');
+    const shownUnits = BigInt((si || '0') + sf.padEnd(places, '0'));
+    if (shownUnits !== expected) return false;
+    return shownUnits === 0n || sign === Math.sign(v);
   };
-  const same = (shownValue: number, expected: number, digits: number) =>
-    Number.isFinite(shownValue) && Math.abs(expected - shownValue) <= 1e-9 / 10 ** digits
-    && (target === 0 || shownValue === 0 || Math.sign(shownValue) === Math.sign(target));
   // 지수: 가수(«1.23»·«5.»·«.5», 앞 소수점 보존)를 실제 값 ÷ 10^지수 의 반올림과 비교.
   const sci = /(\d+(?:\.(\d*))?|\.(\d+))E([+-]?\d+)/i.exec(s.replace(/,/g, ''));
   if (sci) {
-    const digits = (sci[2] ?? sci[3] ?? '').length, exponent = Number(sci[4]);
-    return same(sign * Number(sci[1]), roundAway(target / 10 ** exponent, digits), digits);
+    const places = (sci[2] ?? sci[3] ?? '').length;
+    return compare(sci[1]!, places, roundedUnits(decimalDigits(v, percent - Number(sci[4])), places));
   }
-  const t = s.replace(/[^0-9.]/g, ''), n = Number(t);
-  if (!Number.isFinite(n)) return false;
-  const decimals = (t.split('.')[1] ?? '').length;
+  const t = s.replace(/[^0-9.]/g, '');
+  if (!/^\d*\.?\d*$/.test(t) || !/\d/.test(t)) return false;
+  const places = (t.split('.')[1] ?? '').length;
   // 한계: «0.###» 처럼 뒤 0 을 생략하는 형식은 보이는 자릿수가 형식의 최대 자릿수보다 적을 수 있어(77.4 ↔ 77.44 처럼)
   // 표시만으로는 가릴 수 없다 — 두 읽기 사이 변경은 앞뒤 실제 값 동일 검사(sameReads)와 줄마다 글자 칸 대조가 막는다.
-  return same(sign * n, roundAway(target, decimals), decimals);
+  return compare(t, places, roundedUnits(decimalDigits(v, percent), places));
 };
 
 const IDENTITY_COLUMNS = ['회사명', '차량번호'].map(h => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
