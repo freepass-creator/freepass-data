@@ -76,9 +76,11 @@ export async function runOwnershipCommand(store: CatalogStore, kind: 'apply' | '
   const { revision: _e, ...want } = { revision: 0, ...expected };
   const readbackOk = stableDigest({ ...shape, allowedWriterIds: [...shape.allowedWriterIds].sort(), previousWriterIds: [...shape.previousWriterIds].sort() })
     === stableDigest({ ...want, allowedWriterIds: [...want.allowedWriterIds].sort(), previousWriterIds: [...want.previousWriterIds].sort() });
-  return { mode: kind === 'apply' ? 'APPLY' : 'ROLLBACK', status: readbackOk ? receipt.status : 'HOLD',
+  // The read-back must be the exact revision this command produced, not a later write with the same shape.
+  const ok = readbackOk && after.revision === receipt.revision;
+  return { mode: kind === 'apply' ? 'APPLY' : 'ROLLBACK', status: ok ? receipt.status : 'HOLD',
     receipt: { status: receipt.status, previousRevision: receipt.previousRevision, revision: receipt.revision },
-    readback: summary(after), readbackOk };
+    readback: summary(after), readbackOk: ok };
 }
 
 export async function main(args = process.argv.slice(2)) {
