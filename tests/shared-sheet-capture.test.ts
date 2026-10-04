@@ -3,10 +3,11 @@ import { captureFromBatchGet as rawCapture, sharedSheetTabs, sharedSheetCaptureR
 import { readSheetsBatchGet, readSheetsMetadata } from '../src/infra/shared-sheet-capture-reader.js';
 const ROWS = 1000;
 const META = (): SheetsGridMeta => ({ spreadsheetId: ID, sheets: sharedSheetTabs().map(title => ({ properties: { title, gridProperties: { rowCount: ROWS } } })) });
-const captureFromBatchGet = (id: string, raw: SheetsBatchGet, t: string) => rawCapture(id, raw, META(), t);
+// 글자만 있는 시험 자료는 실제 값 조회도 같은 글자다 — 같은 자료를 앞뒤 실제 값 조회로도 넣는다.
+const captureFromBatchGet = (id: string, raw: SheetsBatchGet, t: string) => rawCapture(id, raw, META(), t, raw, raw);
 const readSharedSheetCapture = async (id: string, ports: { accessToken: () => Promise<string>; now: () => string; fetcher: typeof fetch }) =>
-  rawCapture(id, await readSheetsBatchGet(id, sharedSheetCaptureRanges(), ports) as SheetsBatchGet,
-    await readSheetsMetadata(id, SHEETS_GRID_META_FIELDS, ports) as SheetsGridMeta, ports.now());
+  (async (raw: SheetsBatchGet) => rawCapture(id, raw, await readSheetsMetadata(id, SHEETS_GRID_META_FIELDS, ports) as SheetsGridMeta, ports.now(), raw, raw))(
+    await readSheetsBatchGet(id, sharedSheetCaptureRanges(), ports) as SheetsBatchGet);
 import { buildSharedSheetBatch, sharedSheetChannels, sharedSheetHeaders } from '../src/adapters/shared-sheet-source.js';
 import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
 import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
@@ -55,7 +56,7 @@ describe('shared sheet capture reader', () => {
     expect(() => captureFromBatchGet(ID, narrow, T)).toThrow('SHARED_SHEET_CAPTURE_RANGE_MISMATCH');
     const noRange = { ...b, valueRanges: b.valueRanges.map((r, i) => i ? r : { values: r.values }) };
     expect(() => captureFromBatchGet(ID, noRange as SheetsBatchGet, T)).toThrow('SHARED_SHEET_CAPTURE_RANGE_MISMATCH');
-    expect(() => rawCapture(ID, b, { ...META(), spreadsheetId: 'other' }, T)).toThrow('SHARED_SHEET_CAPTURE_WRONG_SPREADSHEET');
+    expect(() => rawCapture(ID, b, { ...META(), spreadsheetId: 'other' }, T, b, b)).toThrow('SHARED_SHEET_CAPTURE_WRONG_SPREADSHEET');
   });
 
   it('reads through one bearer-authorized batchGet and maps HTTP errors to codes', async () => {
@@ -82,7 +83,11 @@ describe('shared sheet capture keeps the year of date cells', () => {
     expect(row[at('입고일자')]).toBe('2026-08-12');
     expect(row[at('최초등록일')]).toBe('20-07');
     expect(row[at('연식')]).toBe('2021');
-    expect(rawCapture(ID, shownBatch, META(), T).tabs.find(t => t.title === ch.tab)!.values[1]![at('입고일자')]).toBe('08-12');
+    // 실제 값 조회가 없으면(파일 입력 경로 포함) 연도 없는 값을 박제하지 않게 멈춘다.
+    expect(() => (rawCapture as (...a: unknown[]) => unknown)(ID, shownBatch, META(), T)).toThrow('SHARED_SHEET_CAPTURE_SERIALS_REQUIRED');
+    // 글자로 적힌 날짜는 실제 값과 보이는 값이 같은 글자여야 한다(«20-07» ↔ «21-07» 이면 멈춤).
+    const textOff = [...real]; textOff[at('최초등록일')] = '21-07';
+    expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [textOff] }), batch({ [ch.tab]: [textOff] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
     const wrong = { ...realBatch, valueRanges: realBatch.valueRanges.map((r, i) => i === 0 ? { ...r, range: 'x!A1:BV1' } : r) };
     expect(() => rawCapture(ID, shownBatch, META(), T, wrong, wrong)).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
     // 두 번 읽는 사이 바뀐 시트: 줄 수가 다르거나, 같은 자리에 다른 차가 오거나, 날짜가 보이는 값과 다르면 멈춘다.
@@ -144,7 +149,7 @@ describe('shared sheet capture keeps the year of date cells', () => {
     const numOnly = [...real]; numOnly[at('연식')] = 2020;
     for (const after of [batch({ [ch.tab]: [yearOnly] }), batch({ [ch.tab]: [numOnly] }), batch({ [ch.tab]: [real, real] })])
       expect(() => rawCapture(ID, S, META(), T, R, after)).toThrow('SHARED_SHEET_CAPTURE_CHANGED_DURING_READ');
-    expect(() => rawCapture(ID, S, META(), T, R)).toThrow('SHARED_SHEET_CAPTURE_CHANGED_DURING_READ');
+    expect(() => (rawCapture as (...a: unknown[]) => unknown)(ID, S, META(), T, R)).toThrow('SHARED_SHEET_CAPTURE_SERIALS_REQUIRED');
     // 바꾼 날짜 수를 센다 — 글자가 똑같은 두 줄도 둘 다 바꾼다.
     const stats = { datesFromSerial: 0 };
     const twin = batch({ [ch.tab]: [real, real] });

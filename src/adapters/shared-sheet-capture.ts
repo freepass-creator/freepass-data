@@ -59,7 +59,7 @@ export type CaptureDateStats = { datesFromSerial: number };
  * serialsAfter the same read right AFTER it. Both must be identical, so nothing (row order, a date's year, a number) changed
  * while the displayed values were read; only date cells take the serial value. */
 export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, meta: SheetsGridMeta, readTime: string,
-  serials?: SheetsBatchGet, serialsAfter?: SheetsBatchGet, stats?: CaptureDateStats): SharedSheetCapture {
+  serials: SheetsBatchGet, serialsAfter: SheetsBatchGet, stats?: CaptureDateStats): SharedSheetCapture {
   const tabs = sharedSheetTabs();
   if (raw?.spreadsheetId !== spreadsheetId || meta?.spreadsheetId !== spreadsheetId) throw new Error('SHARED_SHEET_CAPTURE_WRONG_SPREADSHEET');
   if (!Array.isArray(raw?.valueRanges) || raw.valueRanges.length !== tabs.length) throw new Error('SHARED_SHEET_CAPTURE_INCOMPLETE');
@@ -72,6 +72,8 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
     if (!m || title !== tabs[i] || m[3] !== LAST_COLUMN || typeof rows !== 'number' || !Number.isSafeInteger(rows) ||
         Number(m[4]) !== rows || (r.values ?? []).length > rows) throw new Error('SHARED_SHEET_CAPTURE_RANGE_MISMATCH');
   });
+  // 실제 값 조회는 모든 경로(온라인·파일)에서 필수 — 없으면 연도 없는 보이는 값을 «성공»으로 박제하게 되므로 멈춘다.
+  if (!serials || !serialsAfter) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_REQUIRED');
   if (serials && (serials.spreadsheetId !== spreadsheetId || !Array.isArray(serials.valueRanges) ||
       serials.valueRanges.length !== raw.valueRanges.length || serials.valueRanges.some((r, i) => r?.range !== raw.valueRanges![i]?.range)))
     throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
@@ -101,7 +103,11 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
             if (!same) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
           }
           for (const c of DATE_COLUMNS) {
-            if (typeof twin[c] !== 'number') continue; // 글자로 적힌 날짜(«20-07» 등)는 원문 그대로 둔다
+            // 글자로 적힌 날짜(«20-07» 등)는 원문 그대로 두되, 실제 값과 보이는 값이 같은 글자여야 한다.
+            if (typeof twin[c] !== 'number') {
+              if (String(twin[c] ?? '').trim() !== String(row[c] ?? '').trim()) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+              continue;
+            }
             const iso = serialToIsoDate(twin[c]);
             // 숫자인데 날짜로 못 읽으면(범위 밖) 보이는 값으로 연도를 잃지 않게 멈춘다.
             if (!iso) throw new Error('SHARED_SHEET_CAPTURE_DATE_UNREADABLE');

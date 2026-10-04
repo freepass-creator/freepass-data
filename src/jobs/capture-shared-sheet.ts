@@ -15,6 +15,7 @@ export async function main(args = process.argv.slice(2)) {
   if (!id || !out) throw new Error('SPREADSHEET_AND_OUT_REQUIRED');
   const local = get('--from-batchget');
   if (local && (!get('--read-time') || !get('--grid-meta'))) throw new Error('READ_TIME_AND_GRID_META_REQUIRED_FOR_LOCAL_BATCHGET');
+  if (local && (!get('--from-batchget-serials') || !get('--from-batchget-serials-after'))) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_REQUIRED');
   const json = async (k: string) => (get(k) ? JSON.parse(await readFile(get(k)!, 'utf8')) : undefined);
   const stats: CaptureDateStats = { datesFromSerial: 0 };
   const capture = local
