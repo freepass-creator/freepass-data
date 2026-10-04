@@ -28,6 +28,9 @@ export async function applyVehicleModelRenamePlan(store: CatalogStore, plan: Veh
   const results = [];
   const all = await store.listProducts();
   for (const i of plan.items) {
+    // Already committed by this plan: the command replays its receipt (revisions have moved on, so skip the pre-check).
+    const key = `idem-rename-model:${planDigest}:${i.vehicleModelId}`;
+    if (await store.transact((tx) => tx.getCommandReceipt(key))) continue;
     // Every Product referencing the model must be in the plan with its current revision (displayName follows the model).
     const referencing = all.filter((p) => p.vehicleModelId === i.vehicleModelId).map((p) => [p.id, p.revision]).sort();
     const planned = i.products.map((p) => [p.productId, p.expectedRevision]).sort();
