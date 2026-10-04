@@ -38,6 +38,8 @@ on:
       - 'src/jobs/check-sheet-consumer-health.ts'
       - 'src/jobs/build-data-control-tower.ts'
       - 'src/jobs/data-access-runtime.ts'
+      - 'src/domain/daily-writer-guard.ts'
+      - 'src/jobs/check-daily-writer-guard.ts'
   schedule:
     - cron: '37 * * * *'
 
@@ -776,6 +778,52 @@ jobs:
             estimate-master-readiness.json
           retention-days: 90
           if-no-files-found: error
+
+
+  # 매일 박제 계정(github-data-inventory-writer) «정해진 작업이 아닌 쓰기» 감시 — 대표 승인 10-04 ①안의 감지 점검.
+  # 정시 감사(audit)와 따로 도는 job: 감사 결과·포인터 갱신에 영향을 주지 않고, 읽기 전용 감사 계정으로 새로 인증한다
+  # (로그 읽기 권한은 그 계정에 «매일 박제 쓰기 로그 보기(log view)»로만 준다). 저장소 변수
+  # FREEPASS_DATA_DAILY_WRITER_GUARD=on 일 때만 돈다. 최근 26시간의 그 계정 Firestore 쓰기 감사 로그와 shared-sheet-daily
+  # 실행 목록으로 판정해, 허용 모음 밖·실행 구간 밖 쓰기면 실패(경보), 적용했는데 로그가 없으면 실패(보류).
+  # 공개 로그에는 개수와 정해진 모음 이름만 남긴다.
+  daily-writer-guard:
+    if: ${{ vars.FREEPASS_DATA_DAILY_WRITER_GUARD == 'on' && !(github.event_name == 'workflow_dispatch' && (inputs.economics_dry_run || inputs.ownership_dry_run)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      DAILY_WRITER_ACCOUNT: github-data-inventory-writer@freepasserp5.iam.gserviceaccount.com
+      DAILY_WRITER_LOOKBACK_HOURS: '26'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: '579.0.0'
+      - run: npm ci
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.ERP5_WIF_PROVIDER }}
+          service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+      - name: Judge Firestore writes by the daily snapshot identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "${{ vars.ERP5_READ_SERVICE_ACCOUNT }}" = 'github-data-auditor@freepasserp5.iam.gserviceaccount.com'
+          gcloud logging read             "LOG_ID(\"cloudaudit.googleapis.com/data_access\") AND protoPayload.authenticationInfo.principalEmail=\"$DAILY_WRITER_ACCOUNT\" AND (protoPayload.serviceName=\"firestore.googleapis.com\" OR protoPayload.serviceName=\"datastore.googleapis.com\")"             --project=freepasserp5 --bucket=_Default --location=global --view=daily-writer             --freshness="${DAILY_WRITER_LOOKBACK_HOURS}h" --format=json > "$RUNNER_TEMP/daily-writer-log.json"
+          since="$(date -u -d "-$((DAILY_WRITER_LOOKBACK_HOURS + 2)) hours" +%Y-%m-%dT%H:%M:%SZ)"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/shared-sheet-daily.yml/runs?per_page=100&created=>=$since"             --jq '.workflow_runs[]' | jq -s '.' > "$RUNNER_TEMP/daily-writer-runs.json"
+          DAILY_WRITER_LOG_JSON="$RUNNER_TEMP/daily-writer-log.json" DAILY_WRITER_RUNS_JSON="$RUNNER_TEMP/daily-writer-runs.json"             npx tsx src/jobs/check-daily-writer-guard.ts
 
   # 기간별 수수료 일괄 재계산 운영 dry-run(AI 상황실 2026-10-04 승인, 1회). 같은 읽기 전용 감사 신원을 쓴다.
   # 쓰기 0: --apply 를 넘기지 않고, 결과가 mode=DRY_RUN·writes=0 이 아니면 실패로 끝낸다.

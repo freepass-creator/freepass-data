@@ -1,0 +1,158 @@
+name: Shared sheet daily snapshot
+# 실행 제목에 모드를 남긴다 — 매시 감시(daily-writer-guard)가 적용 실행을 이 제목으로 알아본다.
+run-name: shared-sheet-daily ${{ github.event_name == 'schedule' && 'apply' || inputs.mode }}
+
+# 공통 시트 → FreePass Data 하루 한 번 박제(대표 «두 갈래», 신원 승인 10-04 ①안).
+# 이 파일만 매일 박제 계정(github-data-inventory-writer)을 빌릴 수 있다: WIF 공급자 조건이 이 파일의 workflow_ref·main·
+# environment 로 묶여 있고, 변수 이름도 refresh(매시 배달)와 따로 쓴다(FREEPASS_DATA_DAILY_*).
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [dry-run, apply]
+        default: dry-run
+  schedule:
+    # 매일 03:40 KST. 매시 배달(data-owned-refresh)과 같은 동시성 그룹이라 겹치지 않는다.
+    - cron: '40 18 * * *'
+
+concurrency:
+  group: freepass-data-production-delivery
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  # 예약 실행 전 최근 매시 감사의 daily-writer-guard 결과를 읽는다
+  actions: read
+
+jobs:
+  shared-sheet-daily:
+    environment: data-production-delivery
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GOOGLE_CLOUD_PROJECT: freepasserp5
+      FIREBASE_PROJECT_ID: freepasserp5
+      # Secret (masked in logs): the sheet ID must not appear in this public repository's run logs.
+      SHARED_SHEET_ID: ${{ secrets.FREEPASS_DATA_SHARED_SHEET_ID }}
+      # 예약 실행은 적용까지, 수동 실행은 고른 모드대로.
+      APPLY: ${{ github.event_name == 'schedule' || inputs.mode == 'apply' }}
+    steps:
+      # 관문(environment 변수는 job if 에서 안 보이므로 첫 단계):
+      #  - 예약 실행: FREEPASS_DATA_SHARED_SHEET_DAILY == 'on' 이고, 최근(3시간 안) 매시 감사의 daily-writer-guard 가
+      #    성공이어야 한다 — 감시가 꺼졌거나 보류·경보(경로 없는 쓰기 포함)면 쓰지 않고 실패로 알린다.
+      #  - 수동 apply: environment data-production-delivery 에 사람 승인(필수 검토자)이 없으므로(10-04 확인)
+      #    FREEPASS_DATA_DAILY_MANUAL_APPLY == 'on' 일 때만. 통제된 첫 적용 때만 켜고 끝나면 지운다.
+      #  - 수동 dry-run: 쓰기 0 이라 항상.
+      - name: Daily schedule and manual apply gate
+        id: gate
+        env:
+          DAILY: ${{ vars.FREEPASS_DATA_SHARED_SHEET_DAILY }}
+          MANUAL_APPLY: ${{ vars.FREEPASS_DATA_DAILY_MANUAL_APPLY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = 'schedule' ]; then
+            if [ "$DAILY" != 'on' ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "daily schedule switch is off — skipped"; exit 0; fi
+            # 최근 매시 감사 실행(진행 중 포함 5개)의 daily-writer-guard job 중 «가장 늦게 끝난 것»이 기준 —
+            # 진행 중인 실행에서 이미 실패한 감시가 있으면 그것이 이긴다.
+            : > "$RUNNER_TEMP/guard-jobs.jsonl"
+            for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/erp5-continuous-audit.yml/runs?branch=main&per_page=5" --jq '.workflow_runs[].id'); do
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100"                 --jq '.jobs[] | select(.name == "daily-writer-guard" and .status == "completed") | {conclusion, completed_at}' >> "$RUNNER_TEMP/guard-jobs.jsonl"
+            done
+            latest="$(jq -s 'sort_by(.completed_at) | last // {}' "$RUNNER_TEMP/guard-jobs.jsonl")"
+            guard="$(jq -r '.conclusion // "missing"' <<<"$latest")"
+            done_at="$(jq -r '.completed_at // empty' <<<"$latest")"
+            test -n "$done_at" || { echo "DAILY_WRITER_GUARD_NOT_OK: no completed guard job — scheduled snapshot not run"; exit 1; }
+            age=$(( $(date -u +%s) - $(date -u -d "$done_at" +%s) ))
+            if [ "$guard" != 'success' ] || [ "$age" -lt 0 ] || [ "$age" -gt 10800 ]; then
+              echo "DAILY_WRITER_GUARD_NOT_OK: latest guard=$guard age=${age}s — scheduled snapshot not run"; exit 1
+            fi
+          elif [ "${{ inputs.mode }}" = 'apply' ] && [ "$MANUAL_APPLY" != 'on' ]; then
+            echo "MANUAL_APPLY_DISABLED: set FREEPASS_DATA_DAILY_MANUAL_APPLY=on only for the controlled apply"; exit 1
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+        if: steps.gate.outputs.run == 'true'
+      - name: Require the Data delivery identity, sheet and private evidence bucket
+        if: steps.gate.outputs.run == 'true'
+        env:
+          PROVIDER: ${{ vars.FREEPASS_DATA_DAILY_WIF_PROVIDER }}
+          ACCOUNT: ${{ vars.FREEPASS_DATA_DAILY_SERVICE_ACCOUNT }}
+          EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_DAILY_EVIDENCE_BUCKET }}
+        run: |
+          set -euo pipefail
+          test -n "$PROVIDER"
+          test "$ACCOUNT" = 'github-data-inventory-writer@freepasserp5.iam.gserviceaccount.com'
+          test -n "$SHARED_SHEET_ID"
+          test -n "$EVIDENCE_BUCKET"
+      - uses: google-github-actions/auth@v2
+        if: steps.gate.outputs.run == 'true'
+        with:
+          workload_identity_provider: ${{ vars.FREEPASS_DATA_DAILY_WIF_PROVIDER }}
+          service_account: ${{ vars.FREEPASS_DATA_DAILY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+        if: steps.gate.outputs.run == 'true'
+      - name: Capture, plan and (apply) — counts only in the public log
+        if: steps.gate.outputs.run == 'true'
+        env:
+          EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_DAILY_EVIDENCE_BUCKET }}
+        run: |
+          set -euo pipefail
+          umask 077
+          T="$RUNNER_TEMP/shared-sheet"
+          mkdir -p "$T"
+          # 장기 개인 키·위임 없음(대표 승인 10-04): 공통 시트는 이 WIF 계정에 «보기» 공유, WIF 임시 자격(ADC)으로 spreadsheets.readonly.
+          export FREEPASS_ERP5_READ_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+          export FREEPASS_DATA_EVIDENCE_BUCKET="$EVIDENCE_BUCKET"
+          # inspect-erp5-source exits 2 when it reports HOLD items, yet still writes a verified private capture.
+          set +e
+          node --import tsx src/jobs/inspect-erp5-source.ts --live-read-only > "$T/erp5-report.json"
+          erp5_code=$?
+          set -e
+          test "$erp5_code" = 0 -o "$erp5_code" = 2
+          ERP5_CAPTURE="$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).privateCapturePath)" "$T/erp5-report.json")"
+          test -f "$ERP5_CAPTURE"
+          node --import tsx src/jobs/capture-shared-sheet.ts --spreadsheet "$SHARED_SHEET_ID" --erp5-capture "$ERP5_CAPTURE" --out "$T/capture.json"
+          node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --capture "$T/capture.json" --plan-out "$T/plan.json" > "$T/report.json"
+          node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0)process.exit(1);const {suppliers,...s}=r;console.log(JSON.stringify(s,null,2))" "$T/report.json"
+          if [ "$APPLY" = 'true' ]; then
+            DIGEST="$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).planDigest)" "$T/report.json")"
+            set +e
+            node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --apply --plan "$T/plan.json" --expected-plan-digest "$DIGEST" > "$T/apply.json"
+            code=$?
+            set -e
+            cat "$T/apply.json"
+            # PARTIAL_HOLD(=2) is expected while some cars are held; anything else, or a read-back mismatch, fails the run.
+            node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));const ok=['APPLIED','PARTIAL_HOLD'].includes(r.status)&&(r.reconciliation?.readbackMismatches??1)===0;process.exit(ok?0:1)" "$T/apply.json"
+            test "$code" = 0 -o "$code" = 2
+          fi
+      - name: Preserve private capture, plan and reports (location not printed)
+        if: always() && steps.gate.outputs.run == 'true'
+        env:
+          EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_DAILY_EVIDENCE_BUCKET }}
+        run: |
+          set -euo pipefail
+          T="$RUNNER_TEMP/shared-sheet"
+          uri="gs://$EVIDENCE_BUCKET/shared-sheet-daily/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          for f in capture.json plan.json report.json apply.json; do
+            if test -f "$T/$f"; then
+              gcloud storage cp --no-user-output-enabled "$T/$f" "$uri/$f" --if-generation-match=0
+              gcloud storage cp --no-user-output-enabled "$uri/$f" "$T/$f.readback"
+              cmp "$T/$f" "$T/$f.readback"
+            fi
+          done
+          echo "private evidence stored and verified"
+      - name: Remove temporary files
+        if: always() && steps.gate.outputs.run == 'true'
+        run: rm -rf "$RUNNER_TEMP/shared-sheet"
