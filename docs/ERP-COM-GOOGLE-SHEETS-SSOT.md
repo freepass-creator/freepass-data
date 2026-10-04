@@ -118,6 +118,23 @@ A visible `SSOT 운영기준` tab records this boundary.
 - **직접 쓰기 금지와 예외**: 위 「direct live Canonical writes are prohibited」는 평소 규칙이다. 대표가 명시적으로 승인한 정정만 예외로 하며, 예외는 이 절에 날짜·내용·백업 위치를 한 줄로 남긴다.
 - **코드 별칭(2026-10-04 대표 지적 「쏘나타 DN8인데 세부모델 안 적었다」)**: `별칭` 탭 구분 `코드` 줄은 세대·개발 코드 토큰(DN8·CN7·NQ5·KA4·GL3·LX2·SP2·W222 등)으로 같은 제조사·모델 안의 F03 세부모델을 가리킨다. 출처는 F03 세부모델 이름 속 코드와, 이미 검토한 공급사 원본 정제명의 코드다. 코드가 한 세부모델에만 걸리면 조건 없이, 페이스리프트 전후·연료별로 여러 세부모델에 걸리면 `생산기간으로 가름`(F03 생산기간 vs 원문 연식·최초등록)과 `원문 연료` 조건을 적는다. 연료 조건은 세부모델 이름이 아니라 차종의 실제 연료로 적는다(예: 니로는 하이브리드 차종). 원문으로 가르지 못하면 채우지 않는다. 코드는 그 모델 안에서만 적용한다.
 
+#### F03 → 프리패스 데이터 차종 마스터 옮기기 (대표 2026-10-04 «F03은 프리패스 데이터를 투영하는 정도여야지», 기준 한 장 ai-ops 72ff613·ed8a872)
+
+- **정본**: 차종 마스터의 정본은 프리패스 데이터(freepasserp5 `vehicle_master`·`vehicle_trim_master`·별칭)다. F03 시트는 그것을 보여 주는 사본(투영)이다. F03 쓰기는 2026-10-04 멈췄고, 네 탭(`차종마스터`·`별칭`·`제원마스터`·`파워트레인_보조`) A1 칸에 «투영 — 직접 수정 금지» 메모를 달았다(값 변경 없음, 되읽어 확인). 시트 삭제는 대표가 따로 말할 때만.
+- **이름 규칙**: 엔카·다나와는 둘 다 근거 자료(개발코드·출시/부분변경 시기·등급 이름)이고 이름은 기준 한 장 2절 우리 규칙으로 짓는다(어느 한쪽 글자를 베끼지 않음). 다나와 13개 브랜드 타임라인(2026-10-04 수집)은 참고 자료로만 둔다.
+- **대조(2026-10-04, 읽기만)**: F03 세부모델 268·활성 세부트림 1,605 ↔ 프리패스 데이터 `vehicle_trim_master` 2,078행(세부모델 203)·`vehicle_master` 1,816. F03 활성 세부트림 중 같음 490 · 별칭/띄어쓰기만 다름 5 · 데이터에 그 이름 없음 449 · 데이터에 세부모델 없음 661. F03 세부모델 135개가 `vehicle_trim_master`에 없고 그중 75개는 `vehicle_master`에도 없음.
+- **범위(대표 «우리에게 필요한 것만»)**: 프리패스 데이터 `products` 1,760대가 실제로 쓰는 F03 세부모델 129·세부트림 224행만 옮김 대상. 그중 데이터 마스터에 없는 세부모델 34개(차 많은 순 K8 기본형 57·캐스퍼 기본형 35·더 뉴 K8 23·쏘나타 디 엣지 DN8 19·팰리세이드 기본형 16·더 뉴 기아 레이 14·셀토스 SP3 13 …)를 우리 규칙 이름으로 마스터에 더한다. 나머지 F03 행은 참고로만 둔다. `products` 쪽: 마스터와 세부모델·세부트림 다 맞음 751 · 세부모델 이름이 마스터에 없음 817 · 세부트림 없음 53 · 세부트림 빈칸 72 · 세부모델 빈칸 67.
+- **F03을 읽거나 쓰는 곳(바꿀 대상)**:
+  - ★자동으로 F03에 쓰는 곳: freepasserp4 `scripts/repair-f03-ssot-projection.mts`(`run-hourly-with-ssot-gate.mts` ⑤-9, `.github/workflows/sync-now-once.yml` `--apply`) — F03 표기 보정 + 공급사 정제칸 투영. 투영 원칙과 어긋나므로 먼저 멈추거나 프리패스 데이터를 읽게 바꿔야 한다.
+  - F03을 읽어 하류에 씀(수동): freepasserp4 `publish-vehicle-master-to-erp5-firestore`, `fill-supplier-from-encar-sheet`, `stamp-encar-codes-on-supplier`/`learn-encar`, `fix-refine-vehicle-class`, `publish-vehicle-master-tab`(IMPORTRANGE), 손오공 정제(`sonokong/scripts/손오공-정제.mjs`, hourly-sync ⓪).
+  - F03 스냅샷을 기준값으로(이 저장소): `audit:vehicle-name-parity`(`VEHICLE_NAME_REFERENCE_JSON`), `repair:vehicle-name-parity`(trim 정정 방향이 거꾸로 됨 — 뜻 다시 정함), `rename-vehicle-models`, `scripts/supplier-input-sheet.mjs --vehicle-master`(공통 시트 `차종목록`), `contracts/supplier-input-sheet-spec.v1.json` `vehicleMaster.source`, `src/domain/authority.ts` 설명, `src/domain/vehicle-trim-name.ts` 설명.
+  - 읽기 전용 감사: freepasserp4 `audit-refine-vs-master`(monitor), `audit-encar-work-sheet`, `audit-encar-work-vs-sheets`, `check-stamp-name-lock`, `plan-inventory-master-gap`, freepass-sales `supplier-coverage`.
+  - 정본 표기 고칠 문서·레지스트리: ai-core `registry/data-owners.json`(차종제원 정본 = F03 → 프리패스 데이터), ai-ops 지도(`SHEET_MAP`·`연동지도`·`업무지도`), freepasserp4 `ai-operating-manual.ts`·`vehicle-master-playbook.ts`.
+  - 헷갈리기 쉬운 다른 시트: freepasserp4 `MASTER_SHEET_ID 1T_RrErmGoj_yG9S1u7n--2NDolTOw8wA8ROQjPWuAlg`(ERP4 원천대장)도 탭 이름이 `차종마스터`다 — F03 아님.
+- **순서**: ① F03 자동 쓰기(`repair-f03-ssot-projection`) 멈춤 ② 우리 규칙 이름 확정(부분변경 «더 뉴» 통일·하이브리드 세부모델 합치기 — 대표 결정 대기) ③ 쓰이는 세부모델 34개 정비안 → Codex → 프리패스 데이터 마스터 반영(별칭·파워트레인·엔카 근거는 그 34개에 필요한 것만) ④ `products` 817대 이름을 마스터에 맞춤(기존 정정 경로) ⑤ 위 읽는 곳들을 프리패스 데이터 마스터로 바꿈(공급사 입력 드롭다운 → 감사 기준 → 정정·이름 변경 → freepasserp4 수동 스크립트) ⑥ F03을 프리패스 데이터에서 다시 그리는 투영 작업.
+- **세부모델 별칭 칸**: 세부트림 별칭은 `vehicle_trim_master.trim_aliases`에 있으나 세부모델 별칭(공급사 원문 «더 뉴 토레스 J116/J140» 등)을 둘 칸이 데이터에 없다 — 새로 만들지 대표 결정 대기.
+
+
 #### F03 검증 기록
 
 - **2026-10-04 엔카 일치 독립 검증(모델·세부모델 단계)** — 표본: 씨앗값 `f03-encar-verify-20261004`, 제조사별 층 `max(4, round(150×제조사행수/1,678))`개를 `sha256(seed|원자ID)` 오름차순으로 + 그날 변경·추가 63행 전부 = 225행(세부모델 ID 121개). 증거: 엔카 공개 화면 검색 패널 「제조사/모델/등급」 원문(모델 그룹 82개, 한 화면씩 약 7초 간격, 로그인·API 직접 호출 없음, 관측 시각 2026-10-03T16:29~16:42Z UTC). 판정: Codex `gpt-6-astra` read-only가 표본과 증거만으로 글자 단위 판정(Claude는 판정에 관여하지 않음).
