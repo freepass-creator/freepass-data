@@ -60,22 +60,26 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event_name }}" = 'schedule' ]; then
             if [ "$DAILY" != 'on' ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "daily schedule switch is off — skipped"; exit 0; fi
-            # 하루 한 번: 날짜는 «실행 생성 시각의 KST 날짜» 하나로 센다. 오늘(KST) 생성된 apply 실행 중 «쓰기 단계
+            # 하루 한 번: 날짜는 «실행 생성 시각의 KST 날짜» 하나로 센다. 이 실행과 같은 날(KST) 생성된 apply 실행 중 «쓰기 단계
             # (Apply to FreePass Data)에 들어간 것»이 있으면 다시 쓰지 않는다.
             # - 쓰기 단계는 성공·실패·취소·진행 중 모두 센다(쓰고 나서 보류·되읽기 실패로 끝날 수 있다 — 그날은 상황실이 본다).
             # - 캡처·계획·관문에서 멈춘 실행(쓰기 단계 skipped·미시작)은 세지 않는다 — 읽기 실패로 하루를 놓치지 않게.
             # - 같은 실행의 이전 시도도 센다(filter=all). 지금 시도의 쓰기 단계는 아직 시작 전이라 세지 않는다.
-            # - 오늘 생성 범위를 페이지 끝까지 읽는다. 조회가 실패하면 «이력 없음»으로 보지 않고 멈춘다.
+            # - 그 날 생성 범위를 페이지 끝까지 읽는다. 조회가 실패하면 «이력 없음»으로 보지 않고 멈춘다.
             # - 수동 apply(FREEPASS_DATA_DAILY_MANUAL_APPLY=on)는 상황실이 통제하는 예외라 이 검사를 하지 않는다.
             # - 이 단계를 나누기 전 판의 한 단계(«Capture, plan and (apply)»)도 쓰기 단계로 센다(캡처·쓰기를 가릴 수 없어 보수적으로).
-            since="$(date -u -d "$(TZ=Asia/Seoul date +%F) 00:00 +0900" +%Y-%m-%dT%H:%M:%SZ)"
-            ids="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/shared-sheet-daily.yml/runs?branch=main&created=%3E%3D$since&per_page=100" --jq '.workflow_runs[] | select(.display_title | endswith(" apply")) | .id')"               || { echo "DAILY_ONCE_CHECK_FAILED: run list"; exit 1; }
+            # 기준 날짜 = 이 실행(재실행이어도 처음 생성된 실행)의 생성 시각을 KST 로 바꾼 날짜. 그 날 0시~다음 날 0시에 생성된 실행만 본다.
+            created="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq '.created_at')" || { echo "DAILY_ONCE_CHECK_FAILED: this run"; exit 1; }
+            day="$(date -u -d "@$(( $(date -u -d "$created" +%s) + 32400 ))" +%F)"  # KST = UTC+9, 서머타임 없음
+            since_s=$(( $(date -u -d "$day 00:00" +%s) - 32400 )); since="$(date -u -d "@$since_s" +%Y-%m-%dT%H:%M:%SZ)"
+            until="$(date -u -d "@$(( since_s + 86399 ))" +%Y-%m-%dT%H:%M:%SZ)"  # 범위 양 끝 포함이라 다음 날 0시는 빼고
+            ids="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/shared-sheet-daily.yml/runs?branch=main&created=$since..$until&per_page=100" --jq '.workflow_runs[] | select(.display_title | endswith(" apply")) | .id')"               || { echo "DAILY_ONCE_CHECK_FAILED: run list"; exit 1; }
             applied=0
             for id in $ids; do
               ok="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?filter=all&per_page=100" --jq '[.jobs[].steps[] | select(((.name | startswith("Apply to FreePass Data")) or (.name | startswith("Capture, plan and (apply)"))) and .conclusion != "skipped" and .started_at != null)] | length' | awk '{s+=$1} END {print s+0}')"                 || { echo "DAILY_ONCE_CHECK_FAILED: jobs of $id"; exit 1; }
               applied=$(( applied + ok ))
             done
-            if [ "$applied" -gt 0 ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "already wrote today (KST) — retry schedule skipped"; exit 0; fi
+            if [ "$applied" -gt 0 ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "already wrote on $day (KST) — retry schedule skipped"; exit 0; fi
             # 최근 매시 감사 실행(진행 중 포함 5개)의 daily-writer-guard job 중 «가장 늦게 끝난 것»이 기준 —
             # 진행 중인 실행에서 이미 실패한 감시가 있으면 그것이 이긴다.
             : > "$RUNNER_TEMP/guard-jobs.jsonl"
