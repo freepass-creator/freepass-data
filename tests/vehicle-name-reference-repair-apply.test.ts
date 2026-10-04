@@ -24,7 +24,7 @@ const query = (collection: string, filters: Array<[string, unknown]> = []): Quer
 });
 const runQuery = (q: Query) => {
   const docs = [...store.entries()].filter(([path, data]) => path.startsWith(`${q.collection}/`) && q.filters.every(([f, v]) => data[f] === v));
-  return { empty: docs.length === 0, size: docs.length };
+  return { empty: docs.length === 0, size: docs.length, docs: docs.map(([path, data]) => ({ id: path.split('/')[1]!, data: () => structuredClone(data) })) };
 };
 const db = {
   collection: (c: string) => ({ doc: (id: string) => ref(c, id), where: (f: string, op: string, v: unknown) => query(c).where(f, op, v) }),
@@ -55,10 +55,10 @@ const { applyVehicleNameReferenceRepair } = await import('../src/infra/vehicle-n
 
 beforeEach(() => {
   store.clear();
-  store.set('vehicle_master/m-gn7', { id: 'm-gn7', sub_model: '그랜저 GN7' });
+  store.set('vehicle_master/m-gn7', { id: 'm-gn7', maker: '현대', model: '그랜저', sub_model: '그랜저 GN7' });
   store.set('vehicle_trim_master/t1', { sub_model: '그랜저 GN7', master_id: 'm-gn7', trim: '프리미엄', fuel: '하이브리드' });
   store.set('vehicle_trim_master/t2', { sub_model: '디 올 뉴 싼타페 MX5', master_id: 'm-mx5', trim: '익스클루시브', sub_model_aliases: ['싼타페 MX5 신형'] });
-  store.set('vehicle_master/m-mx5', { id: 'm-mx5', sub_model: '디 올 뉴 싼타페 MX5' });
+  store.set('vehicle_master/m-mx5', { id: 'm-mx5', maker: '현대', model: '싼타페', sub_model: '디 올 뉴 싼타페 MX5' });
 });
 
 const hevMaster = { id: 'm-gn7-hev', data: { id: 'm-gn7-hev', maker: '현대', model: '그랜저', sub_model: '그랜저 하이브리드 GN7', origin: '국산', meta: { z: 1, a: 2 } }, evidence: '규칙 15·18' };
@@ -122,7 +122,28 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
       .rejects.toThrow(/duplicate master sub-model/);
     store.set('vehicle_master/old-hev', { id: 'old-hev', maker: '현대', model: '그랜저', sub_model: '그랜저 하이브리드 GN7' });
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterCreates: [hevMaster] }))
-      .rejects.toThrow(/master sub-model already stored/);
+      .rejects.toThrow(/would be stored twice/);
+  });
+  it('rejects renames that would leave two masters with the same final sub-model name', async () => {
+    store.set('vehicle_master/m-ig', { id: 'm-ig', maker: '현대', model: '그랜저', sub_model: '그랜저 IG' });
+    // rename onto a name another stored master already has
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', productRepairs: [],
+      masterRepairs: [{ id: 'm-ig', from: '그랜저 IG', to: '그랜저 GN7' }] })).rejects.toThrow(/would be stored twice/);
+    // two renames onto the same new name
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', productRepairs: [],
+      masterRepairs: [{ id: 'm-ig', from: '그랜저 IG', to: '그랜저 X' }, { id: 'm-gn7', from: '그랜저 GN7', to: '그랜저 X' }] })).rejects.toThrow(/would be stored twice/);
+    // rename A→B and create B in the same plan
+    const createB = { id: 'm-b', data: { id: 'm-b', maker: '현대', model: '그랜저', sub_model: '그랜저 B', origin: '국산' }, evidence: 'x' };
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', productRepairs: [],
+      masterRepairs: [{ id: 'm-ig', from: '그랜저 IG', to: '그랜저 B' }], masterCreates: [createB] })).rejects.toThrow(/would be stored twice/);
+    // a swap (A→B, B→A) is allowed: the final names stay unique
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', productRepairs: [],
+      masterRepairs: [{ id: 'm-ig', from: '그랜저 IG', to: '그랜저 GN7' }, { id: 'm-gn7', from: '그랜저 GN7', to: '그랜저 IG' }] });
+    expect(store.get('vehicle_master/m-ig')!.sub_model).toBe('그랜저 GN7');
+  });
+  it('accepts only normalized maker/model/sub-model text for a new master', async () => {
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterCreates: [{ ...hevMaster, data: { ...hevMaster.data, sub_model: ' 그랜저 하이브리드 GN7 ' } }] })).rejects.toThrow(/normalized/);
   });
   it('replaces a master variants list only when it still matches the reviewed digest', async () => {
     const variants = [{ fuel: '가솔린', trims: ['프리미엄'] }, { fuel: '하이브리드', trims: ['프리미엄'] }];

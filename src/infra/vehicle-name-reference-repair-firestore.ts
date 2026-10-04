@@ -92,6 +92,9 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   }
   const masterNames = new Set<string>();
   for (const c of plan.masterCreates ?? []) {
+    for (const key of ['maker', 'model', 'sub_model'] as const) {
+      if (typeof c.data[key] !== 'string' || c.data[key] !== clean(c.data[key])) throw new Error(`masterCreate ${c.id} ${key} must be normalized text`);
+    }
     const name = masterNameKey(c.data);
     if (masterNames.has(name)) throw new Error(`duplicate master sub-model ${name}`);
     masterNames.add(name);
@@ -245,10 +248,28 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       const same = await transaction.get(db.collection('vehicle_trim_master').where('trim_row_key', '==', c.id));
       if (!same.empty) throw new Error(`trim_row_key already stored ${c.id}`);
     }
-    for (const c of plan.masterCreates ?? []) {
-      const same = await transaction.get(db.collection('vehicle_master')
-        .where('maker', '==', c.data.maker).where('model', '==', c.data.model).where('sub_model', '==', c.data.sub_model));
-      if (!same.empty) throw new Error(`master sub-model already stored ${masterNameKey(c.data)}`);
+    // Final identity check: stored masters of every touched maker|model, with this plan's renames and creates applied,
+    // must not end up with the same (normalized) sub-model twice.
+    const renamedMasters = new Map<string, string>();
+    targets.forEach((t) => { if (t.kind === 'master') renamedMasters.set(t.ref.id, clean(t.item.to)); });
+    const touched = new Map<string, { maker: unknown; model: unknown }>();
+    targets.forEach((t, index) => {
+      if (t.kind !== 'master') return;
+      const data = current[index]!.data() ?? {};
+      if (!clean(data.maker) || !clean(data.model)) throw new Error(`renamed master has no maker/model ${t.ref.path}`);
+      touched.set(`${clean(data.maker)}|${clean(data.model)}`, { maker: data.maker, model: data.model });
+    });
+    for (const c of plan.masterCreates ?? []) touched.set(`${clean(c.data.maker)}|${clean(c.data.model)}`, { maker: c.data.maker, model: c.data.model });
+    for (const [group, { maker, model }] of touched) {
+      const stored = await transaction.get(db.collection('vehicle_master').where('maker', '==', maker).where('model', '==', model));
+      const finalNames = new Map<string, string>();
+      for (const doc of stored.docs) finalNames.set(doc.id, renamedMasters.get(doc.id) ?? clean(doc.data().sub_model));
+      for (const c of plan.masterCreates ?? []) if (`${clean(c.data.maker)}|${clean(c.data.model)}` === group) finalNames.set(c.id, clean(c.data.sub_model));
+      const seen = new Map<string, string>();
+      for (const [id, name] of finalNames) {
+        if (seen.has(name)) throw new Error(`master sub-model would be stored twice ${group}|${name} (${seen.get(name)}, ${id})`);
+        seen.set(name, id);
+      }
     }
     if (variantRefs.length && (await transaction.getAll(...variantRefs)).some((snapshot, index) =>
       !snapshot.exists || stableDigest(snapshot.data()?.variants ?? null) !== variantRepairs[index]!.fromDigest)) {
