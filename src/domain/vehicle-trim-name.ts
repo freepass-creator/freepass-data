@@ -63,14 +63,19 @@ export function isTrimPowertrainToken(token: string): boolean {
 export function trimDisplayName(value: string, origin: TrimOrigin): TrimDisplayName {
   // 「구조변경(LPG)」처럼 붙은 괄호도 파워트레인이면 떼어 낸다. 「트렌디(렌터카)」 같은 용도 괄호는 그대로.
   const spaced = text(value).replace(/\(([^()]+)\)/g, (whole, inner: string) => (isTrimPowertrainToken(inner) ? ` (${inner}) ` : whole));
-  const tokens = spaced.split(' ').filter(Boolean);
+  // 「1.6T-GDi」·「2.0T-GDi」처럼 배기량이 엔진 이름에 붙어 있으면 앞의 배기량만 떼어 낸다(→ 「1.6」 + 「T-GDi」).
+  // 통째로 배기량 모양인 「2.5T」는 그대로 한 낱말이다.
+  const tokens = spaced.split(' ').filter(Boolean).flatMap((token) => {
+    const m = /^(\d\.\d)([A-Za-z].*)$/.exec(token);
+    return m && !TRIM_DISPLACEMENT_PATTERNS.some((pattern) => pattern.test(token)) ? [m[1]!, m[2]!] : [token];
+  });
   if (origin === '수입' && tokens.length > 0 && MODEL_DESIGNATION.test(tokens[0]!)) {
     return { name: tokens.join(' '), removed: [], undecided: [], modelDesignation: true };
   }
-  // 배기량 숫자 바로 뒤 「터보」·「T」는 배기량 표기의 일부로 같이 뗀다(AI 상황실 판단 2026-10-04: 「2.5T」와 「3.5 터보」가
+  // 배기량 숫자 바로 뒤 「터보」·「T」(·디젤 표시 「D」 — 「2.2D」)는 배기량 표기의 일부로 같이 뗀다(AI 상황실 판단 2026-10-04: 「2.5T」와 「3.5 터보」가
   // 같은 결과). 배기량 없이 쓰인 「터보」(캐스퍼 「터보 인스퍼레이션」)는 엔진 이름으로 남긴다.
   const drop = tokens.map((token, i) =>
-    isTrimPowertrainToken(token) || (/^(?:터보|T)$/i.test(token) && i > 0 && /^\d\.\d$/.test(tokens[i - 1]!)));
+    isTrimPowertrainToken(token) || (/^(?:터보|T|D)$/i.test(token) && i > 0 && /^\d\.\d$/.test(tokens[i - 1]!)));
   const removed = tokens.filter((_, i) => drop[i]);
   const kept = tokens.filter((_, i) => !drop[i]);
   return {

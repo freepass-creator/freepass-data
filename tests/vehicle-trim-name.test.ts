@@ -55,6 +55,14 @@ describe('F03 세부트림 display name (Encar end level minus powertrain, 2026-
     expect(name('가솔린 1.6 터보 2WD')).toBe('기본형');
   });
 
+  it('splits a displacement joined to an engine name and drops only the displacement', () => {
+    expect(name('1.6T-GDi')).toBe('T-GDi');
+    expect(name('2.0T-GDi 프리미엄')).toBe('T-GDi 프리미엄');
+    expect(name('1.6 T-GDi')).toBe('T-GDi');
+    expect(name('2.2D 럭셔리')).toBe('럭셔리');
+    expect(name('2.5T')).toBe('기본형');
+  });
+
   it('keeps engine names and drops LPG fuel labels (decided 2026-10-04)', () => {
     expect(trimDisplayName('위트 디젤 1.6 VGT 스마트', '국산')).toEqual({ name: '위트 VGT 스마트', removed: ['디젤', '1.6'], undecided: [], modelDesignation: false });
     expect(name('dCi RE')).toBe('dCi RE');
