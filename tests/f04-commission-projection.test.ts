@@ -94,7 +94,7 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
   });
   it('any other cell changed between the two reads (청구·취소·청구월·지급액·비고·렌탈료) stops the whole plan; formula cells and dates are compared sensibly', () => {
     const base = row({ 차량번호: '12가3456' });
-    for (const [h, v] of [['청구', true], ['취소', true], ['청구월', 8], ['지급액', 1416000], ['비고', '개별 합의'], ['렌탈료', 900000]] as const) {
+    for (const [h, v] of [['청구', true], ['취소', true], ['청구월', 8], ['지급액', 1416000], ['비고', '개별 합의'], ['렌탈료', 900000], ['렌탈료', 820000.5]] as const) {
       const changed = [...base]; changed[at(h)] = v;
       expect(() => planF04CommissionProjection({ intake: intake(base), intakeFormulas: intake(changed), installments: INST, openFromMonth: '2026-09', readAt: 'x' }), h).toThrow('F04_FORMULA_READ_MISMATCH');
     }
@@ -107,6 +107,13 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
     (values[2] as unknown[])[at('계약형태')] = '파생값'; (values[3] as unknown[])[at('계약형태')] = '파생값';
     (formulasRead[2] as unknown[])[at('계약형태')] = '=ARRAYFORMULA(…)'; (formulasRead[3] as unknown[])[at('계약형태')] = '';
     expect(() => planF04CommissionProjection({ intake: values, intakeFormulas: formulasRead, installments: INST, openFromMonth: '2026-09', readAt: 'x' })).not.toThrow();
+  });
+  it('an AE·AJ column carrying an array formula anywhere is never filled (its spilled blanks are not empty cells)', () => {
+    const v1 = row({ 차량번호: '12가3456' }), v2 = row({ 차량번호: '12가3457' });
+    const f1 = [...v1], f2 = [...v2]; f1[at('판매수수료')] = '=ARRAYFORMULA(L3:L*0)';
+    const p = planF04CommissionProjection({ intake: intake(v1, v2), intakeFormulas: intake(f1, f2), installments: INST, openFromMonth: '2026-09', readAt: 'x' });
+    expect(p.fills.map(f => `${f.row}${f.column}`)).toEqual(['3AJ', '4AJ']);
+    expect(p.skipped.FORMULA_CELL).toBe(2);
   });
   it('a number typed between the two reads (value read empty, second read has it) is compared, never filled', () => {
     const values = intake(row({ 차량번호: '12가3456' }));

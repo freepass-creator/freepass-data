@@ -136,25 +136,28 @@ export function planF04CommissionProjection(input: {
   // 수식 읽기는 값 읽기와 같은 시트 상태여야 한다: 줄 수가 같고, AE·AJ 와 수식 칸을 뺀 모든 칸이 같아야 한다
   // (두 번 읽는 사이 취소·청구·청구월·청구액·지급액·비고·계산 입력이 바뀌면 계획 전체를 멈춘다). 날짜 칸은 YYYY-MM-DD 로 맞춰 비교.
   const formulas = input.intakeFormulas;
+  // 수식이 하나라도 있는 열(배열 수식이 아래로 흘러 맨 위 한 칸에만 수식이 보이는 파생 칸 포함) — 대조에서 빼고, AE·AJ 라면 채우지도 않는다.
+  const derived = new Set<number>();
   if (formulas) {
     if (formulas.length !== input.intake.length) throw new Error('F04_FORMULA_READ_MISMATCH');
     const fee = new Set([header.indexOf('판매수수료'), header.indexOf('출고수수료')]);
     // 수식이 하나라도 있는 열(배열 수식이 아래로 흘러 위 한 칸에만 수식이 보이는 파생 칸 포함)은 통째로 대조에서 뺀다.
-    const derived = new Set<number>();
     formulas.forEach((r, i) => { if (i > hi) ((r as unknown[] | undefined) ?? []).forEach((x, c) => { if (formula(x)) derived.add(c); }); });
-    const sameCell = (a: unknown, b: unknown) => {
+    const dateCols = new Set(['접수일', '인도일', '다음회차일', '환수일'].map(h => header.indexOf(h)).filter(c => c >= 0));
+    const sameCell = (a: unknown, b: unknown, c: number) => {
       if (empty(a) && empty(b)) return true;
       if (a === b) return true;
       if (typeof a === 'boolean' || typeof b === 'boolean') return false;
       if (text(a) === text(b)) return true;
-      return /^\d{4}\D/.test(isoDate(a)) && isoDate(a) === isoDate(b);
+      // 날짜 칸만 글자 날짜 ↔ 일련번호를 같은 날로 본다(다른 칸의 소수 차이를 날짜로 뭉개지 않게).
+      return dateCols.has(c) && /^\d{4}-\d{2}-\d{2}$/.test(isoDate(a)) && isoDate(a) === isoDate(b);
     };
     input.intake.forEach((r, i) => {
       if (i <= hi) return; // 설명·머리글 줄
       const v = (r as unknown[] | undefined) ?? [], f = (formulas[i] as unknown[] | undefined) ?? [];
       for (let c = 0; c < Math.max(v.length, f.length, header.length); c++) {
         if (fee.has(c) || derived.has(c)) continue;
-        if (!sameCell(v[c], f[c])) throw new Error('F04_FORMULA_READ_MISMATCH');
+        if (!sameCell(v[c], f[c], c)) throw new Error('F04_FORMULA_READ_MISMATCH');
       }
     });
   }
@@ -197,7 +200,7 @@ export function planF04CommissionProjection(input: {
     for (const column of ['AE', 'AJ'] as const) {
       // 두 읽기(값·수식) 중 하나라도 대상 칸에 값이 있으면 빈칸이 아니다 — 그 사이 사람이 적은 값은 채우지 않고 대조한다.
       const second = formulaAt(sheetRow, colOf(column));
-      if (formula(cells[colOf(column)]) || formula(second)) { skip('FORMULA_CELL'); continue; }
+      if (formula(cells[colOf(column)]) || formula(second) || derived.has(colOf(column))) { skip('FORMULA_CELL'); continue; }
       const current = empty(cells[colOf(column)]) && formulas && !empty(second) ? second : cells[colOf(column)];
       if (column === 'AE' && installmentPlates.has(plate)) {
         const reason = installmentRows.has(`${plate}|${sheetRow}`) ? 'INSTALLMENT_TAB_HAS_CONTRACT' : 'INSTALLMENT_LINK_UNCLEAR';
