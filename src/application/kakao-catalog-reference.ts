@@ -115,7 +115,7 @@ export const KAKAO_COMMISSION_POLICY_2026_10_03 = {
 } as const;
 
 /** Previous published rules remain available for historical evidence, never rewritten. */
-export const KAKAO_COMMISSION_POLICY = {
+export const KAKAO_COMMISSION_POLICY_2026_10_04 = {
   ...KAKAO_COMMISSION_POLICY_2026_10_03,
   policyId: 'sales-commission-2026-10-04',
   decisionDate: '2026-10-04',
@@ -134,6 +134,25 @@ export const KAKAO_COMMISSION_POLICY = {
     { id: 'F04_INDIVIDUAL_413', sourceRows: [160], billing: 862000, payout: 562000 },
     { id: 'F04_AICA_INDIVIDUAL', sourceRows: [163], payout: 400000 },
   ],
+} as const;
+
+/**
+ * 2026-10-05 AI 상황실 결정(대표 10-05 «정산 확실하게 맞춰놔»):
+ * - 손오공 오공 구독 60개월 청구 가산 = +600,000 (F04 수수료표 14행). 근거: 실제 청구 두 건 모두 +60만 — 접수 R396
+ *   «12개월구독료 + 추가인센 600,000», 접수 R413 862,000 = (1,124,000 + 600,000) × 50%. +70만은 erp4 상수·옛 수수료표뿐이고
+ *   그 금액의 청구 줄이 없다. 지급은 다른 기간과 같이 Q12.
+ * - 원 단위: 원 미만 반올림(원장 공급가 41줄 전부 반올림 확인, R402·R420) — calculatedCommission 의 Math.round 그대로.
+ */
+export const KAKAO_COMMISSION_POLICY = {
+  ...KAKAO_COMMISSION_POLICY_2026_10_04,
+  policyId: 'sales-commission-2026-10-05',
+  decisionDate: '2026-10-05',
+  currentAuthority: 'F04 수수료표 A1:M191(2026-10-04 사본) + AI 상황실 2026-10-05 결정(손오공 60개월 +60만, 원 미만 반올림)',
+  evidenceHistory: [...KAKAO_COMMISSION_POLICY_2026_10_04.evidenceHistory,
+    { policyId: KAKAO_COMMISSION_POLICY_2026_10_04.policyId, observedAt: '2026-10-04', revision: '35de6d9fa96ad07fba2fb2d68a4cb1c9113b61a5' }],
+  sonokongAdditions: { ...KAKAO_COMMISSION_POLICY_2026_10_04.sonokongAdditions, 60: 600000 },
+  sonokong60Evidence: { sourceRows: [14], ledgerRows: [396, 413], decidedBy: 'AI 상황실 2026-10-05' },
+  roundingRule: { rule: 'ROUND_HALF_UP_TO_WON', sourceRows: [171], ledgerRows: [402, 420], decidedBy: 'AI 상황실 2026-10-05' },
 } as const;
 
 const f04Ref = (row: number) => `F04:수수료표!A${row}:M${row}`;
@@ -366,7 +385,6 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     return resolveTermLadder(termMonths, monthlyRent, side, 'BILLIN_SUBSCRIPTION');
   }
   if (supplierId === 'RP012' && subscription) {
-    if (termMonths === 60) return unknownCommission('SONOKONG_60_ADDITION_CONFLICT');
     const addition = KAKAO_COMMISSION_POLICY.sonokongAdditions[termMonths as 12];
     if (addition === undefined) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
     if (input.subscriptionForm === 'RETURN' && termMonths !== 12) return unknownCommission('RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED');

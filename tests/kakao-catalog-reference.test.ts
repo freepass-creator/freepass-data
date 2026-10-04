@@ -3,6 +3,7 @@ import { precomputeOfferEconomics } from '../src/application/resolve-offer-comme
 import {
   KAKAO_COMMISSION_POLICY,
   KAKAO_COMMISSION_POLICY_2026_10_03,
+  KAKAO_COMMISSION_POLICY_2026_10_04,
   buildKakaoCatalogReference,
   buildKakaoCatalogReferenceProduct,
   resolveReferenceDeposit,
@@ -25,7 +26,7 @@ describe('2026-10-04 confirmed commission policy', () => {
     expect(resolveSupplierBillingFee({ ...input, productType: '신차렌트', newProductSubtype: 'NEW_PREDELIVERY', vehicleValue: 40000000 })).toMatchObject({ amount: 1400000, vatTreatment: 'EXCLUDED' });
     const offer = { id: 'test', supplierId, priceTerms: [{ termKey: '24', termMonths: 24, monthlyRent: { amount: 1100000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }] };
     const row = precomputeOfferEconomics(offer, 'USED_RENT')[0]!;
-    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 1000000 }, vatTreatment: 'INCLUDED', vatAmount: 100000, totalAmount: 1100000, policyId: 'sales-commission-2026-10-04' });
+    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 1000000 }, vatTreatment: 'INCLUDED', vatAmount: 100000, totalAmount: 1100000, policyId: 'sales-commission-2026-10-05' });
     expect(offer.supplierId).toBe(supplierId);
   });
   it.each([
@@ -347,7 +348,12 @@ describe('F04 2026-10-04 alignment regression', () => {
   it('preserves previous policy facts and versions the new authority', () => {
     expect(KAKAO_COMMISSION_POLICY_2026_10_03.policyId).toBe('sales-commission-2026-10-03');
     expect(KAKAO_COMMISSION_POLICY_2026_10_03.sonokongAdditions[60]).toBe(700000);
-    expect(KAKAO_COMMISSION_POLICY.policyId).toBe('sales-commission-2026-10-04');
+    expect(KAKAO_COMMISSION_POLICY_2026_10_04.policyId).toBe('sales-commission-2026-10-04');
+    expect(KAKAO_COMMISSION_POLICY_2026_10_04.sonokongAdditions).not.toHaveProperty('60');
+    // 2026-10-05 AI 상황실 결정: 손오공 60개월 +60만(F04 14행, 접수 R396·R413 실제 청구), 원 미만 반올림.
+    expect(KAKAO_COMMISSION_POLICY.policyId).toBe('sales-commission-2026-10-05');
+    expect(KAKAO_COMMISSION_POLICY.sonokongAdditions[60]).toBe(600000);
+    expect(KAKAO_COMMISSION_POLICY.sonokong60Evidence).toEqual({ sourceRows: [14], ledgerRows: [396, 413], decidedBy: 'AI 상황실 2026-10-05' });
     expect(KAKAO_COMMISSION_POLICY.sourceRole).toBe('F04_GOOGLE_SHEET_SSOT');
   });
   it.each([12,24,36,48,60,84])('1: EV subscription overrides general at %s months', termMonths => {
@@ -420,11 +426,13 @@ describe('F04 2026-10-04 alignment regression', () => {
   it.each(['AMR','오토셀렉션','금탑','빌림','퍼스트','SK'])('unregistered %s remains unknown', supplierId => {
     expect(both({ ...base, supplierId }).every(r => r.reasonCode === 'SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE')).toBe(true);
   });
-  it('unconfirmed scopes and general Sonokong 60 remain unknown; Star VAT-included rerent rounds like F04 R402/R420', () => {
+  it('unconfirmed scopes stay unknown; Sonokong 60 = Q12 + 600,000 billing / Q12 payout; Star VAT-included rerent rounds like F04 R402/R420', () => {
     for (const productType of ['신차발주','구독']) expect(both({ ...base, supplierId: 'RP013', productType }).every(r => r.state === 'UNKNOWN')).toBe(true);
     for (const productType of ['신차렌트','재렌트']) expect(both({ ...base, supplierId: 'RP014', productType }).every(r => r.state === 'UNKNOWN')).toBe(true);
     const sonokong = { ...base, supplierId: 'RP012', subscriptionForm: 'BUYOUT' as const, q12Basis: { amount: 800000, sourceRef: 'private:verified-q12' } };
-    expect(both(sonokong).every(r => r.reasonCode === 'SONOKONG_60_ADDITION_CONFLICT')).toBe(true);
+    expect(both(sonokong).map(r => [r.state, r.ruleId, r.amount])).toEqual([['CALCULATED', 'SONOKONG_SUBSCRIPTION_60_BILLING', 1400000], ['CALCULATED', 'SONOKONG_SUBSCRIPTION_60_PAYOUT', 800000]]);
+    // 접수 R413 검산: (1,124,000 + 600,000) × 50% = 862,000 — 개별 413(2회분납 절반)과 같은 가산.
+    expect(resolveSupplierBillingFee({ ...sonokong, q12Basis: { amount: 1124000, sourceRef: 'private:verified-q12' } }).amount! / 2).toBe(862000);
     expect(both({ ...sonokong, termMonths: 24, subscriptionForm: 'RETURN' }).every(r => r.reasonCode === 'RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED')).toBe(true);
     // F04 R402 624,000 → 567,273, R420 560,000 → 509,091 (VAT 포함 ÷ 1.1, 원 단위 반올림)
     expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP018', productType: '재렌트', monthlyRent: 624000 })).toMatchObject({ state: 'CALCULATED', amount: 567273, vatAmount: 56727, totalAmount: 624000 });

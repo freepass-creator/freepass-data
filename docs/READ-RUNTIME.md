@@ -130,7 +130,7 @@ ERP 차이: 이번에는 ERP를 수정하지 않았다. ERP의 스타·퍼시픽
 - 카탈로그 입력: `buildKakaoCatalogReference`의 `commissionEvidenceByProduct[productId][원본 priceKey]` → `buildKakaoCatalogReferenceProduct`의 세 번째 인자 `evidenceByTerm` → 양쪽 resolver. 차량가액, Q12+출처, 구독 형태, 신차 subtype, 계약 보증금 등급과 개별 근거를 전달한다. `precomputeOfferEconomics`도 동일 근거 타입을 받는다. 이 경로는 신뢰된 비공개 호출자 전용이며 원천 JSON의 임의 필드·월료·보증금으로 근거를 만들지 않는다. 기존 자동 Canonical 저장 호출에는 근거 수집이 없으므로 해당 값 부재는 여전히 UNKNOWN이다. 운영 수집 연결 완료가 아니다.
 - 개별 근거: `individualExceptionEvidence = { sourceRow, status, contractRef, matchedContractRef, ledgerRow }`. 비공개 호출자가 원장 계약과 일치시킨 **opaque 토큰**(`opaque:` + 16자 이상 영문/숫자/밑줄/하이픈)을 양쪽 ref에 전달한다. 서버가 일치·승인을 검증해야 하며 이 순수 함수는 승인 인증 수단이 아니다. 공개 저장소에 차량번호·실제 계약 토큰을 넣지 않는다. 단순 차량번호 SHA256은 열거 가능하므로 비공개 랜덤 계약 ID 또는 비밀키 HMAC을 권장한다. 원장 행 번호만으로 자동 매칭하지 않는다.
 - 160행/원장413 + APPROVED + 손오공 구독60: 최신 사본의 청구 **862,000**, 지급 **562,000**. 옛 수정안 912,000은 사용하지 않는다. 163행/원장466·473·474·475 + PAYOUT_CONFIRMED + 아이카 선출고: 지급400,000; 청구는 차량가액을 주더라도 `INDIVIDUAL_BILLING_BASIS_UNCONFIRMED`. 미확정 상태·범위 불일치·토큰 불일치는 UNKNOWN.
-- 판단 차이: 제공 JSON 14행은 +60만/판단 확정으로 바뀌었지만 사용자 최신 지시는 일반 60개월 충돌 UNKNOWN 유지다. 양쪽 `SONOKONG_60_ADDITION_CONFLICT`로 둔다. 160행의 승인된 개별 계약만 예외다. Q12 정상가/할인가 선택은 추측하지 않으며 명시 근거가 없으면 `Q12_BASIS_REQUIRED`; 24개월 이상 반납형은 UNKNOWN이다.
+- **2026-10-05 AI 상황실 결정(정책 `sales-commission-2026-10-05`)**: 손오공 오공 구독 60개월 청구 가산 = **+600,000**(14행). 근거: 실제 청구 두 건 모두 +60만(접수 R396 «12개월구독료 + 추가인센 600,000», 접수 R413 862,000 = (1,124,000 + 600,000) × 50%), +70만은 erp4 상수·옛 수수료표뿐이고 그 금액 청구 줄이 없다. 지급은 Q12. 원 단위는 **원 미만 반올림**(원장 공급가 41줄 전부 반올림 확인, R402·R420). (옛 판단: 일반 60개월 충돌 UNKNOWN — 폐기.) 160행의 승인된 개별 계약만 예외다. Q12 정상가/할인가 선택은 추측하지 않으며 명시 근거가 없으면 `Q12_BASIS_REQUIRED`; 24개월 이상 반납형은 UNKNOWN이다.
 - 169~170행 뮤카는 최신 사본에 상세 값이 확정되어 있으나 이번 1~8 구현 범위 밖이고 엔진 공급사 ID·지급 재원/VAT 계약 미연결이다. **다름/HOLD**로 남긴다. 프리패스 1%와 GA 금액을 이 엔진의 청구-지급 마진으로 임의 계산하지 않는다.
 - 미확정 공급사 AMR·오토셀렉션·금탑·빌림·퍼스트·SK는 로컬 근거에서 확정 ID를 찾지 못했다. 이름을 임의 표준 ID로 연결하지 않으며 미등록 ID는 `SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE`이다. 웰릭스 발주는 `WELRIX_ORDER_RULE_UNCONFIRMED`, 기타 미확정 구독은 `SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED`, 기간 누락은 `TERM_NOT_IN_F04_COMMISSION_POLICY`.
 - 검증/운영 경계: 로컬 검사만. 저장된 기존 economics 자동 재작성, 배포, 지급 승인 없음. Claude 독립 검토 호출은 `FAILED / CLAUDE_PROCESS_FAILED`(exit 1)이며 검토 완료로 세지 않는다. Claude 오더자가 diff/검사 후 커밋한다.
@@ -184,7 +184,7 @@ B=BILLING, P=PAYOUT, `{S}`=BILLING 또는 PAYOUT. 표준 재렌트 지급 ruleId
 | 11 | `SONOKONG_SUBSCRIPTION_24_{S}` | 같음: Q12 출처·형태 필수; 부재 UNKNOWN |
 | 12 | `SONOKONG_SUBSCRIPTION_36_{S}` | 같음: Q12 출처·형태 필수; 부재 UNKNOWN |
 | 13 | `SONOKONG_SUBSCRIPTION_48_{S}` | 같음: Q12 출처·형태 필수; 부재 UNKNOWN |
-| 14 | `null (SONOKONG_60_ADDITION_CONFLICT)` | UNKNOWN 유지: 사용자 최신 HOLD 지시 우선; 사본 +60만과 다름 |
+| 14 | `SONOKONG_SUBSCRIPTION_60_{S}` | 같음(2026-10-05 결정): 청구 Q12+60만, 지급 Q12; Q12 출처·형태 필수 |
 | 15 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
 | 16 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
 | 17 | `STANDARD_RERENT(12)` | 같음 |
