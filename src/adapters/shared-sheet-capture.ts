@@ -18,10 +18,20 @@ export const sharedSheetCaptureRanges = () => sharedSheetTabs().map(t => `'${t.r
  * value as YYYY-MM-DD so the RAW of record never loses information to a display choice. */
 const DATE_COLUMNS = Object.entries(spec.valueFormats as Record<string, { kind?: string }>).filter(([, f]) => f.kind === 'date')
   .map(([h]) => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
+/** Serial (days since 1899-12-30, a fraction is the time of day) → YYYY-MM-DD; null when not a usable date (1900~2099). */
 const serialToIsoDate = (v: unknown): string | null => {
-  if (typeof v !== 'number' || !Number.isInteger(v)) return null;
-  const d = new Date(Date.UTC(1899, 11, 30) + v * 86_400_000);
-  return d.getUTCFullYear() >= 2000 && d.getUTCFullYear() <= 2099 ? d.toISOString().slice(0, 10) : null;
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+  const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(v) * 86_400_000);
+  return d.getUTCFullYear() >= 1900 && d.getUTCFullYear() <= 2099 ? d.toISOString().slice(0, 10) : null;
+};
+/** A displayed number («12,345km» · «77.4kWh» · «2021» · «15%») shows the same real value, to the decimals it shows. */
+const displayMatchesValue = (shown: string, v: number | boolean): boolean => {
+  if (typeof v === 'boolean') return shown.trim().toUpperCase() === String(v).toUpperCase();
+  const t = shown.replace(/[^0-9.\-]/g, '');
+  const n = Number(t);
+  if (!t || !Number.isFinite(n)) return false;
+  const target = shown.includes('%') ? v * 100 : v, decimals = (t.split('.')[1] ?? '').length;
+  return Math.abs(n - target) <= 0.5 * 10 ** -decimals + 1e-9;
 };
 
 const IDENTITY_COLUMNS = ['회사명', '차량번호'].map(h => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
@@ -82,14 +92,19 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
         if (serials && r > 0) {
           const twin = real[r] ?? [];
           for (const c of IDENTITY_COLUMNS) if (String(twin[c] ?? '').trim() !== String(row[c] ?? '').trim()) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
-          // 글자 칸(숫자 아닌 값)은 두 조회에서 글자 그대로 같아야 한다 — 같은 회사 «미정» 차끼리 자리가 바뀐 것도 잡는다.
+          // 날짜 말고 모든 칸이 두 조회에서 같은 값이어야 한다 — 글자는 글자 그대로, 숫자·참거짓은 보이는 값이 같은 실제 값을
+          // 가리켜야 한다. 그래서 표시값 줄과 실제 값 줄이 같은 차의 같은 줄임을 줄마다 확인한다(되돌린 정렬도 잡는다).
           for (let c = 0; c < WIDTH; c++) {
-            if (DATE_COLUMNS.includes(c) || typeof twin[c] !== 'string') continue;
-            if (String(twin[c]).trim() !== String(row[c] ?? '').trim()) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+            if (DATE_COLUMNS.includes(c)) continue;
+            const v = twin[c], shownCell = String(row[c] ?? '');
+            const same = typeof v === 'number' || typeof v === 'boolean' ? displayMatchesValue(shownCell, v) : String(v ?? '').trim() === shownCell.trim();
+            if (!same) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
           }
           for (const c of DATE_COLUMNS) {
+            if (typeof twin[c] !== 'number') continue; // 글자로 적힌 날짜(«20-07» 등)는 원문 그대로 둔다
             const iso = serialToIsoDate(twin[c]);
-            if (!iso) continue;
+            // 숫자인데 날짜로 못 읽으면(범위 밖) 보이는 값으로 연도를 잃지 않게 멈춘다.
+            if (!iso) throw new Error('SHARED_SHEET_CAPTURE_DATE_UNREADABLE');
             if (!displayMatchesIso(String(row[c] ?? ''), iso)) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
             out[c] = iso;
             if (stats) stats.datesFromSerial++;

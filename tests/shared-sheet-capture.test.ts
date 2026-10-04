@@ -92,13 +92,19 @@ describe('shared sheet capture keeps the year of date cells', () => {
     expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherCar] }), batch({ [ch.tab]: [otherCar] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
     const otherDate = [...real]; otherDate[at('입고일자')] = 46247;
     expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherDate] }), batch({ [ch.tab]: [otherDate] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
-    // 연도가 보이는 형식(yy-mm-dd)도 맞춰 본다; 머리줄과 1999 이전·소수 값은 바꾸지 않는다.
+    // 연도가 보이는 형식(yy-mm-dd)도 맞춰 본다; 시각이 붙은 값(소수)은 그날 날짜로, 머리줄은 그대로.
     const fullShown = [...shown]; fullShown[at('최초등록일')] = '20-07-03';
     const fullReal = [...real]; fullReal[at('최초등록일')] = 44015; fullReal[at('입고일자')] = 46246.5;
     const row2 = rawCapture(ID, batch({ [ch.tab]: [fullShown] }), META(), T, batch({ [ch.tab]: [fullReal] }), batch({ [ch.tab]: [fullReal] })).tabs.find(t => t.title === ch.tab)!.values;
     expect(row2[1]![at('최초등록일')]).toBe('2020-07-03');
-    expect(row2[1]![at('입고일자')]).toBe('08-12');
+    expect(row2[1]![at('입고일자')]).toBe('2026-08-12');
     expect(row2[0]![at('입고일자')]).toBe('입고일자');
+    // 숫자인데 날짜로 못 읽는 값(2100년 이후)은 연도를 잃지 않게 멈춘다.
+    const farReal = [...real]; farReal[at('입고일자')] = 80000;
+    expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [farReal] }), batch({ [ch.tab]: [farReal] }))).toThrow('SHARED_SHEET_CAPTURE_DATE_UNREADABLE');
+    // 숫자 칸도 보이는 값이 같은 실제 값을 가리켜야 한다(«2021» ↔ 2020 이면 멈춤).
+    const numOff = [...real]; numOff[at('연식')] = 2020;
+    expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [numOff] }), batch({ [ch.tab]: [numOff] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
     // 월/일/연 표시도 같은 날이면 통과한다.
     const usShown = [...shown]; usShown[at('최초등록일')] = '7/3/2020';
     expect(rawCapture(ID, batch({ [ch.tab]: [usShown] }), META(), T, batch({ [ch.tab]: [fullReal] }), batch({ [ch.tab]: [fullReal] })).tabs.find(t => t.title === ch.tab)!.values[1]![at('최초등록일')]).toBe('2020-07-03');
@@ -120,11 +126,12 @@ describe('shared sheet capture keeps the year of date cells', () => {
     const dup = rawCapture(ID, batch({ [ch.tab]: [shown, shown] }), META(), T, batch({ [ch.tab]: [twinB, twinA] }), batch({ [ch.tab]: [twinB, twinA] })).tabs.find(t => t.title === ch.tab)!.values;
     expect(dup[1]![at('입고일자')]).toBe('2025-08-12');
     expect(dup[2]![at('입고일자')]).toBe('2026-08-12');
-    // 연식 숫자만 다른 두 줄도 줄 위치로 짝짓는다.
+    // 연식 숫자만 다른 두 줄: 같은 순서면 줄 위치로 짝짓고, 표시값과 실제 값의 줄 순서가 다르면(되돌린 정렬) 멈춘다.
     const yA = [...real], yB = [...real]; yB[at('연식')] = 2019; yB[at('입고일자')] = 45881;
     const sA = [...shown], sB = [...shown]; sA[at('연식')] = '2021'; sB[at('연식')] = '2019';
-    const yr = rawCapture(ID, batch({ [ch.tab]: [sA, sB] }), META(), T, batch({ [ch.tab]: [yB, yA] }), batch({ [ch.tab]: [yB, yA] })).tabs.find(t => t.title === ch.tab)!.values;
+    const yr = rawCapture(ID, batch({ [ch.tab]: [sB, sA] }), META(), T, batch({ [ch.tab]: [yB, yA] }), batch({ [ch.tab]: [yB, yA] })).tabs.find(t => t.title === ch.tab)!.values;
     expect([yr[1]![at('입고일자')], yr[2]![at('입고일자')]]).toEqual(['2025-08-12', '2026-08-12']);
+    expect(() => rawCapture(ID, batch({ [ch.tab]: [sA, sB] }), META(), T, batch({ [ch.tab]: [yB, yA] }), batch({ [ch.tab]: [yB, yA] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
   });
   it('stops when anything changed between the serial reads before and after the displayed read, and counts what it did', () => {
     const ch = sharedSheetChannels[0]!, H = sharedSheetHeaders, at = (h: string) => H.indexOf(h);
