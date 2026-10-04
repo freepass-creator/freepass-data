@@ -152,10 +152,15 @@ export function planF04CommissionProjection(input: {
       if (/[{}]/.test(f)) return false;
       const fns = [...f.matchAll(/([A-Z][A-Z0-9.]*)\s*\(/gi)].map(m => m[1]!.toUpperCase());
       if (fns.some(fn => !singleCell.test(fn))) return false;
-      // 범위 참조 수 ≤ 범위를 받아 한 값을 돌려주는 함수 수(조회·합계·세기).
-      const ranges = (f.match(rangeRef) ?? []).length;
-      const consumers = fns.filter(fn => /^(VLOOKUP|HLOOKUP|MATCH|SUM|SUMIF|SUMIFS|COUNTIF|COUNTIFS|MIN|MAX)$/.test(fn)).length;
-      return ranges <= consumers * 2;
+      // 범위 참조는 «범위를 받아 한 값을 돌려주는 함수»(조회·합계·세기)의 바로 안 인자로만 — 그 밖(IF 의 결과 등)에 있으면 배열이 될 수 있다.
+      const code = f.replace(/"(?:[^"]|"")*"/g, m => ' '.repeat(m.length)); // 글자 상수 안은 보지 않는다
+      for (const m of code.matchAll(rangeRef)) {
+        let depth = 0, k = m.index! - 1;
+        for (; k >= 0; k--) { const ch = code[k]; if (ch === ')') depth++; else if (ch === '(') { if (depth === 0) break; depth--; } }
+        const fn = k < 0 ? '' : (/([A-Z][A-Z0-9.]*)\s*$/i.exec(code.slice(0, k))?.[1] ?? '').toUpperCase();
+        if (!/^(VLOOKUP|HLOOKUP|MATCH|SUM|SUMIF|SUMIFS|COUNTIF|COUNTIFS|MIN|MAX)$/.test(fn)) return false;
+      }
+      return true;
     };
     formulas.forEach(r => ((r as unknown[] | undefined) ?? []).forEach((x, c) => {
       if (!formula(x)) return;

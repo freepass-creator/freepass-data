@@ -129,7 +129,7 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
   });
   it('a spilling formula at or left of AJ (it may cover AE·AJ) stops the plan; one to the right of AJ is fine', () => {
     const v1 = row({ 차량번호: '12가3456' }), v2 = row({ 차량번호: '12가3457' });
-    for (const [h, f] of [['판매수수료', '={0,""}'], ['공급사수수료율', '=HSTACK(0,"","","","","","")'], ['렌탈료', '=TRANSPOSE(A3:A9)'], ['모델명', '=B3:B9'], ['공급사', '=IF(TRUE,C3:H3)']] as const) {
+    for (const [h, f] of [['판매수수료', '={0,""}'], ['공급사수수료율', '=HSTACK(0,"","","","","","")'], ['렌탈료', '=TRANSPOSE(A3:A9)'], ['모델명', '=B3:B9'], ['공급사', '=IF(TRUE,C3:H3)'], ['공급사수수료율', '=IF(SUM(BG3:BG4)>0,BH3:BI3,SUM(BJ3:BJ4))']] as const) {
       const f1 = [...v1]; f1[at(h)] = f;
       expect(() => planF04CommissionProjection({ intake: intake(v1, v2), intakeFormulas: intake(f1, [...v2]), installments: INST, openFromMonth: '2026-09', readAt: 'x' }), h).toThrow('F04_SPILL_FORMULA_MAY_COVER_FEE_COLUMNS');
     }
