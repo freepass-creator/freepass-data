@@ -31,12 +31,14 @@ export const displayMatchesValue = (shown: string, v: number | boolean): boolean
   const s = shown.trim();
   if (!/\d/.test(s)) return /^[^0-9]*-[^0-9]*$/.test(s) && v === 0; // 회계식 0
   const target = s.includes('%') ? v * 100 : v;
-  const sci = /(-?\d+(?:\.(\d+))?)E([+-]?\d+)/i.exec(s.replace(/,/g, ''));
-  if (sci) return Math.abs(Number(sci[0]) - target) <= 0.5 * 10 ** (Number(sci[3]) - (sci[2]?.length ?? 0)) + 1e-9;
+  // 부호를 먼저 정한다 — 숫자를 감싼 괄호(통화 기호가 밖에 있어도) 또는 첫 숫자 앞의 «-». 지수·일반 숫자에 같이 쓴다.
+  const sign = /\([^()]*\d[^()]*\)/.test(s) || /^[^0-9]*-/.test(s) ? -1 : 1;
+  const sci = /(\d+(?:\.(\d+))?)E([+-]?\d+)/i.exec(s.replace(/,/g, ''));
+  if (sci) return Math.abs(sign * Number(sci[0]) - target) <= 0.5 * 10 ** (Number(sci[3]) - (sci[2]?.length ?? 0)) + 1e-9;
   const t = s.replace(/[^0-9.]/g, ''), n = Number(t);
   if (!Number.isFinite(n)) return false;
-  const negative = /^\(.*\)$/.test(s) || /^[^0-9]*-/.test(s), decimals = (t.split('.')[1] ?? '').length;
-  return Math.abs((negative ? -n : n) - target) <= 0.5 * 10 ** -decimals + 1e-9;
+  const decimals = (t.split('.')[1] ?? '').length;
+  return Math.abs(sign * n - target) <= 0.5 * 10 ** -decimals + 1e-9;
 };
 
 const IDENTITY_COLUMNS = ['회사명', '차량번호'].map(h => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
