@@ -32,10 +32,21 @@ export type TransferCatalogWriterOwnershipInput = {
   reason: string;
 };
 
+/** Rollback restores the reviewed before-image (mode/writers) as a new revision; history stays append-only. */
+export type RollbackCatalogWriterOwnershipInput = {
+  commandId: string;
+  idempotencyKey: string;
+  expectedRevision: number;
+  restore: Pick<CatalogWriterOwnership, 'mode' | 'primaryWriterId' | 'allowedWriterIds' | 'previousWriterIds'>;
+  actor: ActorRef;
+  writer?: ExecutionWriterRef;
+  reason: string;
+};
+
 export type WriterOwnershipTransferReceipt = {
   idempotencyKey: string;
   commandId: string;
-  status: 'TRANSFERRED' | 'NO_CHANGE';
+  status: 'TRANSFERRED' | 'NO_CHANGE' | 'ROLLED_BACK';
   requestDigest: string;
   scope: 'catalog';
   previousRevision: number;

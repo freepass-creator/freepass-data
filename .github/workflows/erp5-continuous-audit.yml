@@ -40,7 +40,7 @@ on:
 concurrency:
   # 정시·push·입력 없는 수동 실행의 그룹 값은 이전과 똑같다(erp5-continuous-read-only-audit).
   # economics_dry_run 수동 실행만 별도 그룹을 써서 정시 감사 대기열을 밀어내지 않는다.
-  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.economics_dry_run) && 'freepass-data-economics-dry-run' || 'erp5-continuous-read-only-audit' }}
+  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.economics_dry_run) && 'freepass-data-economics-dry-run' || (github.event_name == 'workflow_dispatch' && inputs.ownership_dry_run) && 'freepass-data-ownership-dry-run' || 'erp5-continuous-read-only-audit' }}
   cancel-in-progress: false
 
 permissions:
@@ -49,7 +49,7 @@ permissions:
 
 jobs:
   audit:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.economics_dry_run) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.economics_dry_run || inputs.ownership_dry_run)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -833,3 +833,51 @@ jobs:
           path: tmp/economics-recompute-summary.json
           if-no-files-found: warn
           retention-days: 30
+
+  ownership-dry-run:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.ownership_dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_ENV: production
+      FIREBASE_PROJECT_ID: freepasserp5
+      GOOGLE_CLOUD_PROJECT: freepasserp5
+      EVIDENCE_BUCKET: ${{ vars.ERP5_EVIDENCE_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: '579.0.0'
+      - run: npm ci --ignore-scripts --include=dev  # NODE_ENV=production 이면 devDependencies(tsx)를 빼므로 명시
+      - name: Require the read-only Data audit identity and private bucket
+        shell: bash
+        env:
+          ACCOUNT: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          test -n '${{ vars.ERP5_WIF_PROVIDER }}'
+          test "$ACCOUNT" = 'github-data-auditor@freepasserp5.iam.gserviceaccount.com'
+          test -n "$EVIDENCE_BUCKET"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.ERP5_WIF_PROVIDER }}
+          service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+      - name: Ownership transfer dry-run (writes 0, plan private)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/own"
+          umask 077
+          node --import tsx src/jobs/transfer-catalog-writer-ownership.ts --firestore --approved-by owner             --reason 'Data Canonical cutover: Catalog writer EXCLUSIVE service:freepass-data (AI 상황실 오더 10-04)'             --plan-out "$RUNNER_TEMP/own/plan.json" > "$RUNNER_TEMP/own/report.json"
+          node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0){console.error('NOT A DRY RUN');process.exit(1)}console.log(JSON.stringify(r,null,2))" "$RUNNER_TEMP/own/report.json"
+          uri="gs://$EVIDENCE_BUCKET/ownership-transfer/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          gcloud storage cp --no-user-output-enabled "$RUNNER_TEMP/own/plan.json" "$uri/plan.json" --if-generation-match=0
+          gcloud storage cp --no-user-output-enabled "$uri/plan.json" "$RUNNER_TEMP/own/readback.json"
+          cmp "$RUNNER_TEMP/own/plan.json" "$RUNNER_TEMP/own/readback.json"
+          echo "private plan stored and verified (location not printed: public repository)"
