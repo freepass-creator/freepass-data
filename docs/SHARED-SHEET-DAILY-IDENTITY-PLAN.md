@@ -1,6 +1,6 @@
 # 공통 시트 데일리 박제 — 자동 실행 신원 계획 (2026-10-04, 승인 대기)
 
-> 상태: **계획만**. IAM·WIF 변경은 대표 승인 뒤 인프라 담당이 한다(이 저장소 코드·세션은 IAM 을 바꾸지 않는다). 그 전까지 데일리 박제는 운영자 PC 수동 실행으로 대신한다(AI 상황실 결정 10-04).
+> 상태: **대표 승인 10-04(①안: 맞춤 역할 + (default) 데이터베이스 조건 + 감지 점검)**. IAM·WIF 실행은 AI 상황실이 ai-ops 비공개 명령 묶음(되돌리기 명령 포함)으로 하고 되읽기로 확인한다. 코드 쪽은 #347(열쇠 없는 시트 읽기 + 매시 감사의 매일 박제 계정 쓰기 감시). 실행 전까지 매일 박제는 운영자 PC 수동 실행.
 
 ## 왜 필요한가
 
@@ -45,3 +45,10 @@
 ## 그 전까지 (수동 대체)
 
 운영자 PC 에서 같은 순서: `inspect-erp5-source --live-read-only` → `capture-shared-sheet --erp5-capture …` → `ingest-shared-sheet-canonical --firestore` 계획 → 숫자 확인 → 같은 계획 digest 로 `--apply` → 되읽기. AI 상황실 지시가 있을 때만 apply.
+
+## 승인 뒤 확정 설계 (10-04)
+
+- WIF: 기존 풀 `github-actions` 의 `attribute.repository/freepass-creator/freepass-data` 는 매시 감사 공급자에서도 나오므로, 쓰기 계정은 **새 풀**(이 저장소 · main · `data-owned-refresh.yml` · environment `data-production-delivery` 조건의 공급자 하나)로만 빌릴 수 있게 묶는다.
+- 맞춤 역할 권한 다섯은 운영 중인 `freepassEstimateArtifactWriter` 와 같은 구성이다(그 역할로 거래가 돌고 있다).
+- 감지: Firestore 쓰기 감사 로그(DATA_WRITE)를 켜되, 매일 박제 계정이 아닌 로그는 `_Default` 싱크 제외 규칙으로 저장 전에 버린다(비용). 매시 감사(`erp5-continuous-audit.yml`)가 감사 계정의 로그 읽기 권한으로 최근 2시간을 읽어 판정한다(#347). 감사 로그 본문에 쓴 문서 경로가 남는지는 공식 문서에 없어, 첫 시험 실행 뒤 로그 모양을 1회 확인한다 — 경로가 없으면 «실행 시간 밖 쓰기»만으로 판정한다.
+- 순서: IAM·WIF·버킷·시트 공유·environment 변수 → #347 반영 → 수동 `shared-sheet-dry-run` 1회 → 숫자 확인 → 감사 로그·로그 읽기 권한 → `FREEPASS_DATA_DAILY_WRITER_GUARD=on` → `FREEPASS_DATA_SHARED_SHEET_DAILY=on`.
