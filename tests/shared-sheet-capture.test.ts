@@ -77,49 +77,74 @@ describe('shared sheet capture keeps the year of date cells', () => {
     shown[at('입고일자')] = '08-12'; shown[at('최초등록일')] = '20-07'; shown[at('연식')] = '2021';
     const real = [...shown]; real[at('입고일자')] = 46246; real[at('최초등록일')] = '20-07'; real[at('연식')] = 2021;
     const shownBatch = batch({ [ch.tab]: [shown] }), realBatch = batch({ [ch.tab]: [real] });
-    const c = rawCapture(ID, shownBatch, META(), T, realBatch);
+    const c = rawCapture(ID, shownBatch, META(), T, realBatch, realBatch);
     const row = c.tabs.find(t => t.title === ch.tab)!.values[1]!;
     expect(row[at('입고일자')]).toBe('2026-08-12');
     expect(row[at('최초등록일')]).toBe('20-07');
     expect(row[at('연식')]).toBe('2021');
     expect(rawCapture(ID, shownBatch, META(), T).tabs.find(t => t.title === ch.tab)!.values[1]![at('입고일자')]).toBe('08-12');
     const wrong = { ...realBatch, valueRanges: realBatch.valueRanges.map((r, i) => i === 0 ? { ...r, range: 'x!A1:BV1' } : r) };
-    expect(() => rawCapture(ID, shownBatch, META(), T, wrong)).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    expect(() => rawCapture(ID, shownBatch, META(), T, wrong, wrong)).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
     // 두 번 읽는 사이 바뀐 시트: 줄 수가 다르거나, 같은 자리에 다른 차가 오거나, 날짜가 보이는 값과 다르면 멈춘다.
     const extraRow = batch({ [ch.tab]: [real, real] });
-    expect(() => rawCapture(ID, shownBatch, META(), T, extraRow)).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    expect(() => rawCapture(ID, shownBatch, META(), T, extraRow, extraRow)).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
     const otherCar = [...real]; otherCar[4] = '34나5678';
-    expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherCar] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherCar] }), batch({ [ch.tab]: [otherCar] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
     const otherDate = [...real]; otherDate[at('입고일자')] = 46247;
-    expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherDate] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherDate] }), batch({ [ch.tab]: [otherDate] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
     // 연도가 보이는 형식(yy-mm-dd)도 맞춰 본다; 머리줄과 1999 이전·소수 값은 바꾸지 않는다.
     const fullShown = [...shown]; fullShown[at('최초등록일')] = '20-07-03';
     const fullReal = [...real]; fullReal[at('최초등록일')] = 44015; fullReal[at('입고일자')] = 46246.5;
-    const row2 = rawCapture(ID, batch({ [ch.tab]: [fullShown] }), META(), T, batch({ [ch.tab]: [fullReal] })).tabs.find(t => t.title === ch.tab)!.values;
+    const row2 = rawCapture(ID, batch({ [ch.tab]: [fullShown] }), META(), T, batch({ [ch.tab]: [fullReal] }), batch({ [ch.tab]: [fullReal] })).tabs.find(t => t.title === ch.tab)!.values;
     expect(row2[1]![at('최초등록일')]).toBe('2020-07-03');
     expect(row2[1]![at('입고일자')]).toBe('08-12');
     expect(row2[0]![at('입고일자')]).toBe('입고일자');
     // 월/일/연 표시도 같은 날이면 통과한다.
     const usShown = [...shown]; usShown[at('최초등록일')] = '7/3/2020';
-    expect(rawCapture(ID, batch({ [ch.tab]: [usShown] }), META(), T, batch({ [ch.tab]: [fullReal] })).tabs.find(t => t.title === ch.tab)!.values[1]![at('최초등록일')]).toBe('2020-07-03');
-    // 일/월 순서로 읽힐 뿐인 다른 날(3월 7일 표시 ↔ 7월 3일 값)은 멈춘다.
-    const dmShown = [...shown]; dmShown[at('최초등록일')] = '3/7/2020';
-    expect(() => rawCapture(ID, batch({ [ch.tab]: [dmShown] }), META(), T, batch({ [ch.tab]: [fullReal] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
-    // 두 자리 연도는 앞에 올 때만 연도로 읽는다 — «03-07-20» 은 2003-07-20 이지 2020-03-07 이 아니다.
-    const yyShown = [...shown]; yyShown[at('최초등록일')] = '07-03-20';
-    expect(() => rawCapture(ID, batch({ [ch.tab]: [yyShown] }), META(), T, batch({ [ch.tab]: [fullReal] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    expect(rawCapture(ID, batch({ [ch.tab]: [usShown] }), META(), T, batch({ [ch.tab]: [fullReal] }), batch({ [ch.tab]: [fullReal] })).tabs.find(t => t.title === ch.tab)!.values[1]![at('최초등록일')]).toBe('2020-07-03');
+    // 보이는 값은 어떤 읽기로든 실제 날짜와 어긋나지 않으면 된다(일/월/연 · 연-월만 · 두 자리 연도 끝) — 그 사이 변경은
+    // 앞뒤 실제 값 조회가 같다는 것으로 따로 막는다. 어떤 읽기로도 안 맞는 날은 멈춘다.
+    for (const ok of ['3/7/2020', '07-03-20', '20-07', '2020-07']) {
+      const v = [...shown]; v[at('최초등록일')] = ok;
+      expect(rawCapture(ID, batch({ [ch.tab]: [v] }), META(), T, batch({ [ch.tab]: [fullReal] }), batch({ [ch.tab]: [fullReal] })).tabs.find(t => t.title === ch.tab)!.values[1]![at('최초등록일')]).toBe('2020-07-03');
+    }
+    for (const bad of ['3/8/2020', '21-07', '20-08-03']) {
+      const v = [...shown]; v[at('최초등록일')] = bad;
+      expect(() => rawCapture(ID, batch({ [ch.tab]: [v] }), META(), T, batch({ [ch.tab]: [fullReal] }), batch({ [ch.tab]: [fullReal] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    }
     // 글자 칸이 다르면(같은 회사·같은 번호라도) 멈춘다.
     const otherText = [...real]; otherText[at('비고')] = '다른 차';
-    expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherText] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherText] }), batch({ [ch.tab]: [otherText] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
     // 날짜 말고 글자가 모두 같은 두 줄(«미정» 둘)은 서로 바뀌어도 알 수 없으니 날짜를 바꾸지 않는다.
     const twinA = [...real], twinB = [...real]; twinB[at('입고일자')] = 45881;
-    const dup = rawCapture(ID, batch({ [ch.tab]: [shown, shown] }), META(), T, batch({ [ch.tab]: [twinB, twinA] })).tabs.find(t => t.title === ch.tab)!.values;
+    const dup = rawCapture(ID, batch({ [ch.tab]: [shown, shown] }), META(), T, batch({ [ch.tab]: [twinB, twinA] }), batch({ [ch.tab]: [twinB, twinA] })).tabs.find(t => t.title === ch.tab)!.values;
     expect(dup[1]![at('입고일자')]).toBe('08-12');
     expect(dup[2]![at('입고일자')]).toBe('08-12');
     // 연식 숫자만 다른 두 줄도 글자로는 구분이 안 되니 날짜를 바꾸지 않는다.
     const yA = [...real], yB = [...real]; yB[at('연식')] = 2019; yB[at('입고일자')] = 45881;
     const sA = [...shown], sB = [...shown]; sA[at('연식')] = '2021'; sB[at('연식')] = '2019';
-    const yr = rawCapture(ID, batch({ [ch.tab]: [sA, sB] }), META(), T, batch({ [ch.tab]: [yB, yA] })).tabs.find(t => t.title === ch.tab)!.values;
+    const yr = rawCapture(ID, batch({ [ch.tab]: [sA, sB] }), META(), T, batch({ [ch.tab]: [yB, yA] }), batch({ [ch.tab]: [yB, yA] })).tabs.find(t => t.title === ch.tab)!.values;
     expect([yr[1]![at('입고일자')], yr[2]![at('입고일자')]]).toEqual(['08-12', '08-12']);
+  });
+  it('stops when anything changed between the serial reads before and after the displayed read, and counts what it did', () => {
+    const ch = sharedSheetChannels[0]!, H = sharedSheetHeaders, at = (h: string) => H.indexOf(h);
+    const shown = Array.from({ length: H.length }, () => '' as unknown); shown[0] = ch.companyName; shown[4] = '12가3456';
+    shown[at('입고일자')] = '08-12'; shown[at('연식')] = '2021';
+    const real = [...shown]; real[at('입고일자')] = 46246; real[at('연식')] = 2021;
+    const S = batch({ [ch.tab]: [shown] }), R = batch({ [ch.tab]: [real] });
+    // 연도만 바뀐 날짜(같은 08-12, 다른 해)·숫자 칸만 바뀐 것·줄이 하나 더 생긴 것 — 표시값으로는 못 잡아도 앞뒤 실제 값이 달라 멈춘다.
+    const yearOnly = [...real]; yearOnly[at('입고일자')] = 45881;
+    const numOnly = [...real]; numOnly[at('연식')] = 2020;
+    for (const after of [batch({ [ch.tab]: [yearOnly] }), batch({ [ch.tab]: [numOnly] }), batch({ [ch.tab]: [real, real] })])
+      expect(() => rawCapture(ID, S, META(), T, R, after)).toThrow('SHARED_SHEET_CAPTURE_CHANGED_DURING_READ');
+    expect(() => rawCapture(ID, S, META(), T, R)).toThrow('SHARED_SHEET_CAPTURE_CHANGED_DURING_READ');
+    // 바꾼 날짜 수·구분이 안 돼 보이는 값 그대로 둔 줄 수를 센다(조용히 넘어가지 않게).
+    const stats = { datesFromSerial: 0, rowsKeptAsShown: 0 };
+    const twin = batch({ [ch.tab]: [real, real] });
+    rawCapture(ID, batch({ [ch.tab]: [shown, shown] }), META(), T, twin, twin, stats);
+    expect(stats).toEqual({ datesFromSerial: 0, rowsKeptAsShown: 2 });
+    const one = { datesFromSerial: 0, rowsKeptAsShown: 0 };
+    rawCapture(ID, S, META(), T, R, R, one);
+    expect(one).toEqual({ datesFromSerial: 1, rowsKeptAsShown: 0 });
   });
 });

@@ -25,21 +25,30 @@ const serialToIsoDate = (v: unknown): string | null => {
 };
 
 const IDENTITY_COLUMNS = ['회사명', '차량번호'].map(h => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
-/** The displayed date (mm-dd · yy-mm-dd · yyyy-mm-dd, any separator) must name the same month/day (and year if shown). */
+/** The displayed date must not contradict the serial: whatever parts it shows (월-일 · 연-월 · 연-월-일 · 월/일/연 · 일/월/연)
+ * must fit the serial date under at least one reading. This is a second guard only — that nothing changed between the
+ * displayed read and the serial reads is proven by the two serial reads around it being identical (sameReads). */
 const displayMatchesIso = (shown: string, iso: string): boolean => {
   const g = shown.match(/\d+/g)?.map(Number) ?? [], [y, m, d] = iso.split('-').map(Number) as [number, number, number];
   const yr = (v: number | undefined) => v === y || v === y % 100;
-  if (g.length === 2) return g[0] === m && g[1] === d;
-  // 연-월-일(규격) 또는 네 자리 연도가 끝에 오는 월/일/연(시트 기본 날짜 표시)만 — 일/월 순서, 두 자리 연도가 끝에 오는
-  // 형식은 받지 않는다(03-07-04 를 2003-07-04 와 2004-03-07 로 겹쳐 읽지 않게).
-  const digits = shown.match(/\d+/g) ?? [];
-  if (g.length === 3) return (yr(g[0]) && g[1] === m && g[2] === d) || (digits[2]?.length === 4 && g[2] === y && g[0] === m && g[1] === d);
+  if (g.length === 2) return (g[0] === m && g[1] === d) || (yr(g[0]) && g[1] === m);
+  if (g.length === 3) return (yr(g[0]) && g[1] === m && g[2] === d) || (yr(g[2]) && ((g[0] === m && g[1] === d) || (g[0] === d && g[1] === m)));
   return false;
 };
 
+/** Two reads of the same ranges are identical (same ranges, same row counts, same cells — dates and numbers included). */
+export const sameReads = (a: SheetsBatchGet, b: SheetsBatchGet): boolean =>
+  a?.spreadsheetId === b?.spreadsheetId && JSON.stringify(a?.valueRanges ?? null) === JSON.stringify(b?.valueRanges ?? null);
+
+/** Counts the capture reports on the side (public log: numbers only). */
+export type CaptureDateStats = { datesFromSerial: number; rowsKeptAsShown: number };
+
 /** One values.batchGet response → validated capture v1. Rows are padded to the 74-column contract, blank rows kept.
- * serials (optional): the same ranges read as real values (dates as serial numbers); only date cells use it. */
-export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, meta: SheetsGridMeta, readTime: string, serials?: SheetsBatchGet): SharedSheetCapture {
+ * serials (optional): the same ranges read as real values (dates as serial numbers) right BEFORE the displayed read, and
+ * serialsAfter the same read right AFTER it. Both must be identical, so nothing (row order, a date's year, a number) changed
+ * while the displayed values were read; only date cells take the serial value. */
+export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, meta: SheetsGridMeta, readTime: string,
+  serials?: SheetsBatchGet, serialsAfter?: SheetsBatchGet, stats?: CaptureDateStats): SharedSheetCapture {
   const tabs = sharedSheetTabs();
   if (raw?.spreadsheetId !== spreadsheetId || meta?.spreadsheetId !== spreadsheetId) throw new Error('SHARED_SHEET_CAPTURE_WRONG_SPREADSHEET');
   if (!Array.isArray(raw?.valueRanges) || raw.valueRanges.length !== tabs.length) throw new Error('SHARED_SHEET_CAPTURE_INCOMPLETE');
@@ -55,6 +64,7 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
   if (serials && (serials.spreadsheetId !== spreadsheetId || !Array.isArray(serials.valueRanges) ||
       serials.valueRanges.length !== raw.valueRanges.length || serials.valueRanges.some((r, i) => r?.range !== raw.valueRanges![i]?.range)))
     throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+  if (serials && (!serialsAfter || !sameReads(serials, serialsAfter))) throw new Error('SHARED_SHEET_CAPTURE_CHANGED_DURING_READ');
   const cell = (v: unknown): SheetCell => v === null || v === undefined ? '' :
     typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v)) ? v : (() => { throw new Error('SHARED_SHEET_CAPTURE_CELL_INVALID'); })();
   const capture: SharedSheetCapture = { schema: 'shared-sheet-capture/v1', spreadsheetId, layoutVersion: spec.layoutVersion, readTime,
@@ -79,12 +89,12 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
             if (DATE_COLUMNS.includes(c) || typeof twin[c] !== 'string') continue;
             if (String(twin[c]).trim() !== String(row[c] ?? '').trim()) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
           }
-          if ((keyCount.get(textKey(twin)) ?? 0) > 1) return out;
-          for (const c of DATE_COLUMNS) {
-            const iso = serialToIsoDate(twin[c]);
-            if (!iso) continue;
+          const isos = DATE_COLUMNS.map(c => [c, serialToIsoDate(twin[c])] as const).filter((x): x is readonly [number, string] => !!x[1]);
+          if (isos.length && (keyCount.get(textKey(twin)) ?? 0) > 1) { if (stats) stats.rowsKeptAsShown++; return out; }
+          for (const [c, iso] of isos) {
             if (!displayMatchesIso(String(row[c] ?? ''), iso)) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
             out[c] = iso;
+            if (stats) stats.datesFromSerial++;
           }
         }
         return out;
