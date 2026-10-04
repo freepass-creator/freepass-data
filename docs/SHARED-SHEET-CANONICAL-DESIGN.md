@@ -5,7 +5,7 @@
 | 원천 | 같은 수집 틀 | 이번 범위 |
 |---|---|---|
 | ERP5 브리지 | 캡처 → `SourceIntakeBatch` → 고정 RAW → 후보·lineage → 검토 → Canonical | 기존 RAW 어댑터 유지. 차량 전체 Canonical 이관은 다음 단계 |
-| 공통 입력시트 | 같은 틀, `shared-sheet-source` + `normalize-shared-sheet` | 74칸·15탭·18코드 검증부터 Canonical 저장·되읽기까지 구현. 캡처 수집기는 제외 |
+| 공통 입력시트 | 같은 틀, `shared-sheet-source` + `normalize-shared-sheet` | 74칸·15탭·18코드 검증부터 Canonical 저장·되읽기까지 구현. 캡처 수집기 `capture:shared-sheet`(Sheets values.batchGet 한 번 → capture v1, 74칸 채움·빈 행 보존, 비공개 파일만) |
 
 **소유:** `SourceIngestionStore`는 RAW/run/head/후보/lineage, `CatalogStore`는 Canonical 트랜잭션만 맡는다. 물리 이름·문서 ID는 `firestore-layout`, Firebase 대상은 `firebase-target`, head 판정은 `decideSourceHead`를 그대로 쓴다. ERP5와 시트를 동시에 같은 차량의 writer로 켜지 않는다.
 
@@ -81,3 +81,9 @@ npm run query:canonical-by-plate -- --firestore --plate-file <운영자-번호�
 | `tests/shared-sheet-canonical.test.ts` | 58 | 가짜 값 시험 30개 |
 | `docs/NEXT-START-HERE.md` | 378 | revision·검사·HOLD·다음 시작점 |
 | `docs/SHARED-SHEET-CANONICAL-DESIGN.md` | 1 | PR 상단용 설계·운영 절차·변경 목록 |
+
+## 캡처 수집기 (2026-10-04)
+
+- `npm run capture:shared-sheet -- --spreadsheet <ID> --out <비공개-절대경로>` — Sheets 읽기 전용 토큰(`GOOGLE_SHEETS_APPLICATION_CREDENTIALS` 파일이 있으면 그것, 없으면 ADC). stdout 은 탭 수·레코드 수·digest 만.
+- 로컬 확인용 `--from-batchget <gws batchGet JSON> --read-time <ISO>` 도 같은 검증을 거친다.
+- 숫자 없는 차량번호(「신차」「미정」 등)는 차량 식별자로 쓰지 않는다. RAW 는 위치로 보존하고 정리 단계에서 `PLATE_NOT_ASSIGNED` HOLD.

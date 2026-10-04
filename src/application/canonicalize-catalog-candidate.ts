@@ -631,7 +631,7 @@ export async function canonicalizeCatalogCandidate(
       vehicleModelId: model.id,
       ...(asset ? { vehicleAssetId: asset.id } : {}),
       commercialType: candidate.commercialType,
-      status: 'ACTIVE',
+      status: input.decision.productStatus ?? 'ACTIVE',
       displayName: model.displayName
     };
 

@@ -124,6 +124,11 @@ describe('shared sheet local source to Canonical', () => {
     expect((await s.store.listVehicleAssets())[0]!.sourceVehicleFacts!.fields.displacementCc!.value).toBe(1235);
     expect((await s.source.listRaw(first.plan.runId))[0]!.payload.values).toEqual(capture().tabs[0]!.values[1]);
   });
+  it('a later status change (even HOLD→HOLD with a different asset state) is held, not silently diverged', async () => {
+    const s = await stores(); await apply(s, capture({ 차량상태: '상품화중' }));
+    const next = await planSharedSheetCanonical(s.store, later(capture({ 차량상태: '계약중' })), 'synthetic-target');
+    expect(next.plan.entries[0]).toMatchObject({ action: 'HOLD', reasons: expect.arrayContaining(['STATUS_CHANGE_REQUIRES_REVIEW']) });
+  });
   it('HOLDs refinement order violations and preserves missing upstream cells', async () => {
     const c = capture({ 모델: '' }); const n = normalized(c);
     expect(n.record.candidate.issues).toContain('REFINEMENT_ORDER_VIOLATION');
@@ -135,16 +140,35 @@ describe('shared sheet local source to Canonical', () => {
   it.each([{ 최초등록일: '26.02.30' }, { 최초등록일: '25.04' }, { '12개월': '협의' }, { 단기보증: '10~20' }])('HOLDs ambiguous values without guessing', data => {
     expect(normalized(capture(data)).record.status).toBe('REJECTED');
   });
-  it('rejects missing tabs, reordered headers, incomplete widths and wrong digest', () => {
+  it('rejects missing tabs, reordered headers and wrong digest; a malformed row is quarantined, not the batch', () => {
     const a = capture(); a.tabs.pop(); expect(() => buildSharedSheetBatch(a)).toThrow();
     const b = capture(); b.tabs[0]!.values[0]!.reverse(); expect(() => buildSharedSheetBatch(b)).toThrow();
-    const c = capture(); c.tabs[0]!.values[1]!.pop(); expect(() => buildSharedSheetBatch(c)).toThrow();
+    const c = capture(); c.tabs[0]!.values[1]!.pop(); c.tabs[0]!.values.push(row('웰릭스', { 차량번호: 'TEST-FAKE-009' })); c.tabs[0]!.rowCount++;
+    c.digest = sharedSheetCaptureDigest(c);
+    const rc = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords.map(normalizeSharedSheet);
+    expect(rc.map(x => x.record.candidate.issues.includes('ROW_SHAPE_INVALID')).sort()).toEqual([false, true]);
     const d = capture(); d.digest = 'wrong'; expect(() => buildSharedSheetBatch(d)).toThrow();
     const e = capture(); delete e.revision; e.digest = sharedSheetCaptureDigest(e); expect(buildSharedSheetBatch(e).records).toHaveLength(1);
   });
-  it('rejects duplicate normalized supplier/plate identity', () => {
-    const c = capture(); c.tabs[0]!.values.push(row('웰릭스', { 차량번호: ' test-fake-001 ' })); c.tabs[0]!.rowCount++;
-    expect(() => buildSharedSheetBatch(c)).toThrow('DUPLICATE_SHARED_SHEET_IDENTITY');
+  it('quarantines every row of a duplicate supplier/plate identity and keeps the rest', () => {
+    const c = capture(); c.tabs[0]!.values.push(row('웰릭스', { 차량번호: ' test-fake-001 ' }), row('웰릭스', { 차량번호: 'TEST-FAKE-002' }));
+    c.tabs[0]!.rowCount += 2; c.digest = sharedSheetCaptureDigest(c);
+    const batch = buildSharedSheetBatch(c);
+    expect(new Set(batch.records.map(r => r.sourceRecordId)).size).toBe(3);
+    const issues = prepareRawSourceBatch(batch).rawRecords.map(normalizeSharedSheet).map(x => x.record.candidate.issues.includes('DUPLICATE_IDENTITY'));
+    expect(issues.filter(Boolean)).toHaveLength(2); expect(issues).toHaveLength(3);
+  });
+  it('stores every sheet status; only 출고가능/즉시출고 are exposed, an unlisted status is held', async () => {
+    for (const [status, product, asset] of [['출고가능', 'ACTIVE', 'AVAILABLE'], ['출고불가', 'HOLD', 'RESERVED'], ['상품화중', 'HOLD', 'MAINTENANCE']] as const) {
+      const s = await stores();
+      const p = await planSharedSheetCanonical(s.store, capture({ 차량상태: status }), 'synthetic-target');
+      expect(p.plan.entries[0]).toMatchObject({ action: 'CREATE', create: { decision: { productStatus: product, vehicleAsset: { status: asset } } } });
+    }
+    const s = await stores();
+    for (const unlisted of ['알수없음', 'constructor', '__proto__', 'toString']) {
+      const held = await planSharedSheetCanonical(s.store, capture({ 차량상태: unlisted }), 'synthetic-target');
+      expect(held.plan.entries[0]!.action).toBe('HOLD');
+    }
   });
   it('rejects missing/tampered plans and ownership before intake', async () => {
     const s = await stores(); const begin = vi.spyOn(s.source, 'beginRun');
