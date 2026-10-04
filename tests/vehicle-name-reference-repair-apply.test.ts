@@ -18,12 +18,12 @@ const applyUpdate = (path: string, update: Record<string, unknown>) => {
   }
   store.set(path, doc);
 };
-type Query = { collection: string; filters: Array<[string, unknown]>; where: (f: string, op: string, v: unknown) => Query; select: (...f: string[]) => Query };
-const query = (collection: string, filters: Array<[string, unknown]> = []): Query => ({
-  collection, filters, where: (f, _op, v) => query(collection, [...filters, [f, v]]), select: () => query(collection, filters),
+type Query = { collection: string; filters: Array<[string, unknown]>; cap?: number; where: (f: string, op: string, v: unknown) => Query; select: (...f: string[]) => Query; limit: (n: number) => Query };
+const query = (collection: string, filters: Array<[string, unknown]> = [], cap?: number): Query => ({
+  collection, filters, ...(cap !== undefined ? { cap } : {}), where: (f, _op, v) => query(collection, [...filters, [f, v]], cap), select: () => query(collection, filters, cap), limit: (n) => query(collection, filters, n),
 });
 const runQuery = (q: Query) => {
-  const docs = [...store.entries()].filter(([path, data]) => path.startsWith(`${q.collection}/`) && q.filters.every(([f, v]) => data[f] === v));
+  const docs = [...store.entries()].filter(([path, data]) => path.startsWith(`${q.collection}/`) && q.filters.every(([f, v]) => data[f] === v)).slice(0, q.cap ?? Infinity);
   return { empty: docs.length === 0, size: docs.length, docs: docs.map(([path, data]) => ({ id: path.split('/')[1]!, data: () => structuredClone(data) })) };
 };
 const db = {
@@ -51,7 +51,7 @@ vi.mock('firebase-admin/firestore', () => ({
 vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: () => ({}) }));
 vi.mock('node:fs/promises', () => ({ mkdir: async () => undefined, writeFile: async () => undefined }));
 
-const { applyVehicleNameReferenceRepair } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
+const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
 
 beforeEach(() => {
   store.clear();
@@ -146,6 +146,12 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     const createB = { id: 'm-b', data: { id: 'm-b', maker: '현대', model: '그랜저', sub_model: '그랜저 B', origin: '국산' }, evidence: 'x' };
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', productRepairs: [],
       masterRepairs: [{ id: 'm-old', from: '그랜저 TG', to: '그랜저 B' }], masterCreates: [createB] })).rejects.toThrow(/would be stored twice/);
+  });
+  it('stops instead of scanning an unbounded vehicle_master inside the transaction', async () => {
+    for (let i = 0; i <= MAX_MASTER_IDENTITY_SCAN; i += 1) store.set(`vehicle_master/x${i}`, { maker: 'M', model: 'X', sub_model: `S${i}` });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', productRepairs: [],
+      masterRepairs: [{ id: 'm-gn7', from: '그랜저 GN7', to: '그랜저 GN7 새이름' }] })).rejects.toThrow(/unbounded/);
+    expect(store.get('vehicle_master/m-gn7')!.sub_model).toBe('그랜저 GN7');
   });
   it('accepts only normalized maker/model/sub-model text for a new master', async () => {
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],

@@ -41,6 +41,8 @@ export type VehicleMasterVariantRepair = { id: string; fromDigest: string; to: R
 
 /** One transaction carries every target write plus one audit per target — keep well under Firestore's 500-write limit. */
 export const MAX_VEHICLE_NAME_REPAIR_TARGETS = 200;
+/** Upper bound for the in-transaction identity scan of vehicle_master (1,816 entries on 2026-10-04). */
+export const MAX_MASTER_IDENTITY_SCAN = 5000;
 /** The identity of a master entry: maker|model|sub_model (one entry per sub-model). */
 export const masterNameKey = (data: Record<string, unknown>) => [data.maker, data.model, data.sub_model].map(clean).join('|');
 const MASTER_CREATE_KEYS = ['id', 'maker', 'model', 'sub_model', 'origin'] as const;
@@ -253,7 +255,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (targets.some((t) => t.kind === 'master') || (plan.masterCreates ?? []).length) {
       const renamedMasters: Record<string, string> = {};
       for (const t of targets) if (t.kind === 'master') renamedMasters[t.ref.id] = clean(t.item.to);
-      const stored = await transaction.get(db.collection('vehicle_master').select('maker', 'model', 'sub_model'));
+      // Bounded read: names only, at most MAX_MASTER_IDENTITY_SCAN documents (stop rather than run an unbounded transaction).
+      const stored = await transaction.get(db.collection('vehicle_master').select('maker', 'model', 'sub_model').limit(MAX_MASTER_IDENTITY_SCAN + 1));
+      if (stored.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`vehicle_master has more than ${MAX_MASTER_IDENTITY_SCAN} entries — identity check would be unbounded`);
       const finalKeys: Record<string, string> = {};
       for (const doc of stored.docs) {
         const data = doc.data();
