@@ -88,8 +88,15 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
 
   const readback = await db.getAll(...refs);
   readback.forEach((snapshot, index) => {
-    if (clean(snapshot.data()?.[targets[index]!.field]) !== clean(targets[index]!.item.to)) {
-      throw new Error(`readback mismatch ${snapshot.ref.path}`);
+    const { item, field } = targets[index]!;
+    const data = snapshot.data();
+    if (clean(data?.[field]) !== clean(item.to)) throw new Error(`readback mismatch ${snapshot.ref.path}`);
+    if (field === 'trim') {
+      // The old name must be kept as an alias, and aliases present before the repair must still be there.
+      const aliases: unknown[] = Array.isArray(data?.trim_aliases) ? data.trim_aliases : [];
+      const before = snapshots[index]!.data()?.trim_aliases;
+      const kept = Array.isArray(before) ? before.every((a: unknown) => aliases.includes(a)) : true;
+      if (!aliases.map(clean).includes(clean(item.from)) || !kept) throw new Error(`readback alias mismatch ${snapshot.ref.path}`);
     }
   });
   return { runId, backupPath, ...counts, readbackCount: readback.length };
