@@ -118,7 +118,8 @@ export function normalizeSharedSheet(raw: RawRecord): { record: NormalizedCandid
   field('supplierStatus', '차량상태', v => sharedSheetStatusPolicy(v) ? v : null);
   const candidate: CatalogCandidate = { sourceRecordId: raw.sourceRecordId, sourceFingerprint: raw.sourceFingerprint,
     firstObservedAt: raw.firstObservedAt ?? raw.observedAt,
-    firstRunId: raw.firstRunId ?? raw.runId,
+    // null = first run unknown (older RAW history): never substitute the current run.
+    ...(raw.firstRunId === undefined ? { firstRunId: raw.runId } : raw.firstRunId ? { firstRunId: raw.firstRunId } : {}),
     carNumber: plate, priceTerms, issues: [...new Set(issues)], vehicleFacts: facts,
     ...(typeof supplier === 'string' ? { providerCompanyCode: supplier } : {}), ...(type ? { commercialType: type } : {}) };
   for (const [key, fact] of Object.entries(facts.fields)) {

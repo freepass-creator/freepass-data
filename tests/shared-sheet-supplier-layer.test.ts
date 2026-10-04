@@ -68,3 +68,29 @@ describe('first run link (layer ① first source text)', () => {
     expect((await store.listCandidates(second.runId))[0]!.candidate.firstRunId).toBe(first.runId);
   });
 });
+
+describe('Codex #324 review', () => {
+  it('leaves the first run unknown when older RAW history has no firstRunId (never links to a re-observation run)', async () => {
+    const store = new MemorySourceStore();
+    const T3 = '2026-10-06T00:00:00.000Z';
+    await ingestRawSourceBatch(store, buildSharedSheetBatch({ ...sheet(['TEST-FAKE-001']), digest: undefined }), T, normalizeSharedSheet);
+    const b = sheet(['TEST-FAKE-001'], T2); b.tabs[0]!.values[1]![10] = 'b';
+    const second = await ingestRawSourceBatch(store, buildSharedSheetBatch(b), T2, normalizeSharedSheet);
+    // Simulate RAW written before this change: drop firstRunId from the re-observation run.
+    for (const r of (store as unknown as { raw: Map<string, { runId: string; firstRunId?: string | null }> }).raw.values())
+      if (r.runId === second.runId) delete r.firstRunId;
+    const c = sheet(['TEST-FAKE-001'], T3); c.tabs[0]!.values[1]![10] = 'c';
+    const third = await ingestRawSourceBatch(store, buildSharedSheetBatch(c), T3, normalizeSharedSheet);
+    const raw = (await store.listRaw(third.runId))[0]!;
+    expect(raw.firstObservedAt).toBe(T);
+    expect(raw.firstRunId).toBeNull();
+    expect((await store.listCandidates(third.runId))[0]!.candidate).not.toHaveProperty('firstRunId');
+  });
+  it('rejects corrections without valid before/after cells', () => {
+    const c = sheet(['TEST-FAKE-001']);
+    const ok = { plate: 'TEST-FAKE-001', at: T, column: '세부트림', before: 'A', after: 'B', source: 's' };
+    expect(() => withSupplements(c, [], [ok])).not.toThrow();
+    for (const bad of [{ ...ok, before: undefined }, { ...ok, after: { x: 1 } }, (({ after: _, ...x }) => x)(ok)])
+      expect(() => withSupplements(c, [], [bad as unknown as typeof ok])).toThrow();
+  });
+});

@@ -77,7 +77,9 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
   for (const r of rows) if (r.identity) seen.set(r.identity, (seen.get(r.identity) ?? 0) + 1);
   for (const s of c.supplierEntered ?? []) if (!timestamp(s?.observedAt) || !['ERP5_PRODUCTS_SOURCE_TEXT', 'SHEET_BACKUP'].includes(s?.source) ||
     typeof s.sourceRef !== 'string' || !s.values || typeof s.values !== 'object' || Array.isArray(s.values)) fail();
-  for (const x of c.corrections ?? []) if (!timestamp(x?.at) || typeof x.column !== 'string' || typeof x.source !== 'string') fail();
+  const cell = (v: unknown) => v === null || typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v));
+  for (const x of c.corrections ?? []) if (!timestamp(x?.at) || typeof x.column !== 'string' || !x.column || typeof x.source !== 'string' ||
+    !('before' in x) || !('after' in x) || !cell(x.before) || !cell(x.after)) fail();
   const entered = supplementByPlate(c.supplierEntered, true, fail);
   const corrections = supplementByPlate(c.corrections, false, fail);
   const records: SourceIntakeBatch['records'] = rows.map(r => {
