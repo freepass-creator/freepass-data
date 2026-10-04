@@ -50,7 +50,7 @@ export const displayMatchesValue = (shown: string, v: number | boolean): boolean
   // 표시만으로는 가릴 수 없다 — 두 읽기 사이 변경은 앞뒤 실제 값 동일 검사(sameReads)와 줄마다 글자 칸 대조가 막는다.
   const scale = 10 ** decimals, shownNumber = sign * n;
   const scaled = Math.abs(target) * scale, frac = scaled - Math.floor(scaled);
-  const rounded = Math.sign(target) * (Math.abs(frac - 0.5) < 1e-9 ? Math.floor(scaled) + 1 : Math.round(scaled)) / scale; // .5 근처 부동소수 찌꺼기는 .5 로
+  const rounded = Math.sign(target) * (Math.abs(frac - 0.5) <= Math.min(Math.max(scaled, 1) * Number.EPSILON * 4, 1e-6) ? Math.floor(scaled) + 1 : Math.round(scaled)) / scale; // 곱셈 찌꺼기(몇 ULP)만 .5 로 본다
   return Math.abs(rounded - shownNumber) <= 1e-9 / scale && (target === 0 || shownNumber === 0 || Math.sign(shownNumber) === Math.sign(target));
 };
 
