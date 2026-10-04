@@ -15,11 +15,19 @@ export type VehicleNameRepairItem = {
   /** Required when `from` is blank (filling an empty name): the supplier source text that names it. */
   evidence?: string;
 };
+export type VehicleProductIdentityRepairItem = {
+  id: string;
+  from: { maker: string; model: string; sub_model: string };
+  to: { maker: string; model: string; sub_model: string };
+  evidence: string;
+};
 
 export type VehicleNameRepairPlan = {
   sourceDigest: string;
   masterRepairs: VehicleNameRepairItem[];
   productRepairs: VehicleNameRepairItem[];
+  /** products.maker/model/sub_model repaired together after matching an active vehicle_master identity. */
+  productIdentityRepairs?: VehicleProductIdentityRepairItem[];
   /** vehicle_trim_master.trim → F03 세부트림 name (old name kept in trim_aliases). Optional; absent = no trim repairs. */
   trimRepairs?: VehicleNameRepairItem[];
   /** products.trim_name → F03 세부트림 name. Optional; `from` must be a non-blank name. */
@@ -72,6 +80,7 @@ export const normalizeName = (value: unknown) => String(value ?? '')
 const clean = normalizeName;
 /** Names written by this tool must already be normalized — a value that changes under normalizeName is refused. */
 const NAME_KINDS = new Set(['master', 'product', 'trim', 'productTrim', 'trimSubModel', 'masterModel', 'trimModel', 'masterGenCode']);
+const PRODUCT_IDENTITY_FIELDS = ['maker', 'model', 'sub_model'] as const;
 /** Kinds that write a vehicle_master document (a retired master is frozen for all of them). */
 const MASTER_DOC_KINDS = new Set(['master', 'masterModel', 'masterGenCode']);
 /** Every trim name inside variants must also be in the top-level trims list (consumers read both). */
@@ -158,6 +167,15 @@ const aliasListOk = (value: unknown) => value === undefined || value === null ||
 export const matchesFrom = (stored: unknown, from: string) => clean(from)
   ? typeof stored === 'string' && clean(stored) === clean(from) // a number or other type never matches a name
   : stored === undefined || stored === null || (typeof stored === 'string' && stored.trim() === '');
+const identityKeyFrom = (data: Partial<Record<(typeof PRODUCT_IDENTITY_FIELDS)[number], unknown>>) => PRODUCT_IDENTITY_FIELDS.map((field) => clean(data[field])).join('|');
+const matchesProductIdentityFromField = (stored: unknown, from: string) => from === ''
+  ? stored === undefined || stored === null || stored === ''
+  : typeof stored === 'string' && stored === from;
+const matchesIdentityFrom = (stored: Record<string, unknown> | undefined, from: VehicleProductIdentityRepairItem['from']) =>
+  PRODUCT_IDENTITY_FIELDS.every((field) => matchesProductIdentityFromField(stored?.[field], from[field]));
+const productIdentityToObject = (item: VehicleProductIdentityRepairItem) => ({
+  maker: clean(item.to.maker), model: clean(item.to.model), sub_model: clean(item.to.sub_model),
+});
 
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   if (!plan.sourceDigest?.trim()) throw new Error('sourceDigest is required');
@@ -169,6 +187,10 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     ...(plan.masterModelRepairs ?? []).map((item) => ({ ...item, kind: 'masterModel' })),
     ...(plan.trimModelRepairs ?? []).map((item) => ({ ...item, kind: 'trimModel' })),
     ...(plan.masterGenCodeRepairs ?? []).map((item) => ({ ...item, kind: 'masterGenCode' }))];
+  const productIdentityRepairs = plan.productIdentityRepairs ?? [];
+  if (productIdentityRepairs.length && (plan.masterRepairs.length || (plan.masterModelRepairs ?? []).length || (plan.masterRetires ?? []).length)) {
+    throw new Error('상품 차종 칸 고치기는 마스터 이름 바꾸기·퇴역과 다른 계획으로');
+  }
   const creates = [...(plan.masterCreates ?? []).map((c) => ({ ...c, kind: 'masterCreate', keys: MASTER_CREATE_KEYS })),
     ...(plan.trimCreates ?? []).map((c) => ({ ...c, kind: 'trimCreate', keys: TRIM_CREATE_KEYS }))];
   const variantRepairs = plan.masterVariantRepairs ?? [];
@@ -205,8 +227,8 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     throw new Error('the same plan must not link a trim row to a master it retires');
   }
   if ((plan.masterCreates ?? []).some((c) => c.data.retired !== undefined || c.data.retired_into !== undefined)) throw new Error('masterCreate must create an active master (no retired fields)');
-  if (!all.length && !creates.length && !variantRepairs.length && !retires.length) throw new Error('repair plan is empty');
-  if (all.length + creates.length + variantRepairs.length + retires.length > MAX_VEHICLE_NAME_REPAIR_TARGETS) throw new Error(`repair plan too large (max ${MAX_VEHICLE_NAME_REPAIR_TARGETS} targets) — split it`);
+  if (!all.length && !productIdentityRepairs.length && !creates.length && !variantRepairs.length && !retires.length) throw new Error('repair plan is empty');
+  if (all.length + productIdentityRepairs.length + creates.length + variantRepairs.length + retires.length > MAX_VEHICLE_NAME_REPAIR_TARGETS) throw new Error(`repair plan too large (max ${MAX_VEHICLE_NAME_REPAIR_TARGETS} targets) — split it`);
   const createKeys = new Set<string>();
   for (const c of creates) {
     if (!c.id?.trim() || typeof c.data !== 'object' || c.data === null || Array.isArray(c.data)) throw new Error(`${c.kind} requires id and data`);
@@ -260,6 +282,24 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   // Linked masters must exist already or be created by this plan — checked against Firestore at apply time.
   const productIds = new Set(plan.productRepairs.map((item) => item.id));
   if ((plan.productTrimRepairs ?? []).some((item) => productIds.has(item.id))) throw new Error('one product per plan: sub_model and trim_name repairs must not overlap');
+  const productIdentityIds = new Set<string>();
+  for (const item of productIdentityRepairs) {
+    if (!isDocId(item.id)) throw new Error('productIdentity repair id must be a single document id');
+    if (productIdentityIds.has(item.id)) throw new Error(`duplicate productIdentity repair productIdentity:${item.id}`);
+    productIdentityIds.add(item.id);
+    if (productIds.has(item.id) || (plan.productTrimRepairs ?? []).some((p) => p.id === item.id)) {
+      throw new Error('one product per plan: product identity, sub_model and trim_name repairs must not overlap');
+    }
+    if (typeof item.evidence !== 'string' || !item.evidence.trim()) throw new Error(`productIdentity ${item.id} requires evidence`);
+    for (const side of ['from', 'to'] as const) {
+      for (const field of PRODUCT_IDENTITY_FIELDS) if (typeof item[side]?.[field] !== 'string') throw new Error(`productIdentity ${item.id} ${side}.${field} must be a string`);
+    }
+    for (const field of PRODUCT_IDENTITY_FIELDS) {
+      if (!clean(item.to[field])) throw new Error(`productIdentity ${item.id} to.${field} requires a non-empty value`);
+      if (item.to[field] !== clean(item.to[field])) throw new Error(`productIdentity ${item.id} to.${field} must be normalized text`);
+    }
+    if (PRODUCT_IDENTITY_FIELDS.every((field) => clean(item.from[field]) === clean(item.to[field]))) throw new Error(`no-op productIdentity:${item.id}`);
+  }
   const keys = new Set<string>();
   for (const item of all) {
     // A blank `from` fills an empty products.sub_model only, with source-text evidence; the transaction
@@ -280,6 +320,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     keys.add(key);
   }
   return { masterCount: plan.masterRepairs.length, productCount: plan.productRepairs.length,
+    ...(plan.productIdentityRepairs ? { productIdentityCount: plan.productIdentityRepairs.length } : {}),
     ...(plan.trimRepairs ? { trimCount: plan.trimRepairs.length } : {}),
     ...(plan.productTrimRepairs ? { productTrimCount: plan.productTrimRepairs.length } : {}),
     ...(plan.trimSubModelRepairs ? { trimSubModelCount: plan.trimSubModelRepairs.length } : {}),
@@ -316,6 +357,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     ...(plan.trimModelRepairs ?? []).map((item) => ({ kind: 'trimModel', item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'model' as RepairField })),
     ...(plan.masterGenCodeRepairs ?? []).map((item) => ({ kind: 'masterGenCode', item, ref: db.collection('vehicle_master').doc(item.id), field: 'gen_code' as RepairField })),
   ];
+  const identityTargets = (plan.productIdentityRepairs ?? []).map((item) => ({ kind: 'productIdentity', item, ref: db.collection('products').doc(item.id) }));
   const creates = [
     ...(plan.masterCreates ?? []).map((c) => ({ c, ref: db.collection('vehicle_master').doc(c.id) })),
     ...(plan.trimCreates ?? []).map((c) => ({ c, ref: db.collection('vehicle_trim_master').doc(c.id) })),
@@ -337,6 +379,12 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     const aliasField = ALIAS_FIELD[targets[index]!.kind];
     const aliasValue = aliasField ? snapshot.data()?.[aliasField] : undefined;
     if (!aliasListOk(aliasValue)) throw new Error(`alias field is not a list of strings ${snapshot.ref.path}.${aliasField}`);
+  });
+  const identityRefs = identityTargets.map((x) => x.ref);
+  const identitySnapshots = identityRefs.length ? await db.getAll(...identityRefs) : [];
+  if (identitySnapshots.some((snapshot) => !snapshot.exists)) throw new Error('productIdentity repair target missing');
+  identitySnapshots.forEach((snapshot, index) => {
+    if (!matchesIdentityFrom(snapshot.data(), identityTargets[index]!.item.from)) throw new Error(`productIdentity precondition changed ${snapshot.ref.path}`);
   });
   const variantRepairs = plan.masterVariantRepairs ?? [];
   const variantRefs = variantRepairs.map((v) => db.collection('vehicle_master').doc(v.id));
@@ -367,7 +415,11 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const retireDigests = retireSnaps.map((snapshot) => stableDigest(snapshot.data() ?? null));
   const retiredNameKeys = new Set(retireSnaps.map((snapshot) => `${clean(snapshot.data()?.model)}|${clean(snapshot.data()?.sub_model)}`));
   const retiredSubModels = new Set(retireSnaps.map((snapshot) => clean(snapshot.data()?.sub_model)));
+  const retiredIdentityKeys = new Set(retireSnaps.map((snapshot) => identityKeyFrom({
+    maker: snapshot.data()?.maker, model: snapshot.data()?.model, sub_model: snapshot.data()?.sub_model,
+  })));
   if (plan.productRepairs.some((item) => retiredSubModels.has(clean(item.to)))) throw new Error('the same plan must not give a product the name of a master it retires');
+  if ((plan.productIdentityRepairs ?? []).some((item) => retiredIdentityKeys.has(identityKeyFrom(item.to)))) throw new Error('the same plan must not give a product the identity of a master it retires');
   if (retires.length) {
     // Early refusal only; the binding check repeats inside the transaction. Maker is not compared (spellings differ), so this only errs toward refusing.
     const products = await db.collection('products').select('model', 'sub_model').limit(MAX_PRODUCT_NAME_SCAN + 1).get();
@@ -391,9 +443,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     projectId: process.env.FIREBASE_PROJECT_ID,
     sourceDigest: plan.sourceDigest,
     capturedAt: new Date().toISOString(),
-    documents: [...snapshots, ...variantSnaps, ...retireSnaps].map((snapshot) => ({ path: snapshot.ref.path, data: snapshot.data() })),
+    documents: [...snapshots, ...identitySnapshots, ...variantSnaps, ...retireSnaps].map((snapshot) => ({ path: snapshot.ref.path, data: snapshot.data() })),
     // The reviewed items (incl. source-text evidence for blank fills) are kept with the before-images.
     repairs: targets.map(({ item, field, ref }) => ({ path: ref.path, field, ...item })),
+    productIdentityRepairs: identityTargets.map(({ item, ref }) => ({ path: ref.path, ...item })),
     creates: creates.map(({ c, ref }) => ({ path: ref.path, evidence: c.evidence, data: c.data })),
     variantRepairs: variantRepairs.map((v) => ({ path: `vehicle_master/${v.id}`, ...v })),
     retires: retires.map((x) => ({ path: `vehicle_master/${x.id}`, ...x })),
@@ -410,6 +463,14 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       entityType: ref.parent.id, entityId: ref.id, action: 'VEHICLE_NAME_REFERENCE_REPAIRED',
       before: { [field]: item.from }, after: { [field]: clean(item.to) },
       reason: item.evidence ? `원문 근거: ${item.evidence}` : `F03 이름 정정 (${plan.sourceDigest})`,
+      revisionBefore: 0, revisionAfter: 0, occurredAt,
+    })),
+    ...identityTargets.map(({ item, ref }): AuditEvent => ({
+      eventId: auditId(ref.path, 'identity'), commandId: `vehicle-name-repair:${runId}`, actor,
+      entityType: ref.parent.id, entityId: ref.id, action: 'VEHICLE_NAME_REFERENCE_REPAIRED',
+      before: Object.fromEntries(PRODUCT_IDENTITY_FIELDS.map((field) => [field, item.from[field]])),
+      after: productIdentityToObject(item),
+      reason: `원문 근거: ${item.evidence}`,
       revisionBefore: 0, revisionAfter: 0, occurredAt,
     })),
     ...retires.map((x, index): AuditEvent => ({
@@ -446,6 +507,14 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (aliasField && clean(item.from)) entry.aliases[aliasField] = [...(entry.aliases[aliasField] ?? []), clean(item.from)];
     byPath[ref.path] = entry;
   }
+  for (const { item, ref } of identityTargets) {
+    const entry = byPath[ref.path] ?? { ref, fields: {}, aliases: {} };
+    for (const field of PRODUCT_IDENTITY_FIELDS) {
+      if (entry.fields[field] !== undefined) throw new Error(`two repairs write ${ref.path}.${field}`);
+      entry.fields[field] = clean(item.to[field]);
+    }
+    byPath[ref.path] = entry;
+  }
 
   // A master's variants list joins that document's single update (it may also be renamed in the same plan).
   retires.forEach((_, index) => {
@@ -462,6 +531,17 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
 
   await db.runTransaction(async (transaction) => {
     const current = refs.length ? await transaction.getAll(...refs) : [];
+    const identityCurrent = identityRefs.length ? await transaction.getAll(...identityRefs) : [];
+    identityCurrent.forEach((snapshot, index) => {
+      if (!snapshot.exists || !matchesIdentityFrom(snapshot.data(), identityTargets[index]!.item.from)) {
+        throw new Error(`transaction productIdentity precondition changed ${snapshot.ref.path}`);
+      }
+      for (const field of PRODUCT_IDENTITY_FIELDS) {
+        if (snapshot.data()?.[field] !== identitySnapshots[index]!.data()?.[field]) {
+          throw new Error(`transaction stored spelling changed since backup ${snapshot.ref.path}.${field}`);
+        }
+      }
+    });
     // A retired master is frozen: its name is not changed again (a rename would let products use it under a new name).
     const frozen = targets.findIndex((t, i) => MASTER_DOC_KINDS.has(t.kind) && current[i]?.data()?.retired === true);
     if (frozen >= 0) throw new Error(`retired master cannot be renamed ${targets[frozen]!.ref.path}`);
@@ -473,6 +553,24 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       const retiredKeys = new Set(retired.docs.map((doc) => `${clean(doc.data().model)}|${clean(doc.data().sub_model)}`));
       const hit = productTargets.find((x) => retiredKeys.has(`${clean(x.data?.model)}|${clean(x.t.item.to)}`));
       if (hit) throw new Error(`product ${hit.t.ref.path} would take the name of a retired master`);
+    }
+    if (identityTargets.length) {
+      const retired = await transaction.get(db.collection('vehicle_master').where('retired', '==', true).select('maker', 'model', 'sub_model').limit(MAX_MASTER_IDENTITY_SCAN + 1));
+      if (retired.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`more than ${MAX_MASTER_IDENTITY_SCAN} retired masters — product identity check would be unbounded`);
+      const retiredKeys = new Set(retired.docs.map((doc) => identityKeyFrom(doc.data())));
+      const retiredHit = identityTargets.find((x) => retiredKeys.has(identityKeyFrom(x.item.to)));
+      if (retiredHit) throw new Error(`product ${retiredHit.ref.path} would take the identity of a retired master`);
+      const stored = await transaction.get(db.collection('vehicle_master').select('maker', 'model', 'sub_model', 'retired').limit(MAX_MASTER_IDENTITY_SCAN + 1));
+      if (stored.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`vehicle_master has more than ${MAX_MASTER_IDENTITY_SCAN} entries — product identity check would be unbounded`);
+      const activeKeys: Record<string, string[]> = {};
+      const addActive = (key: string, id: string, retired?: unknown) => {
+        if (retired === true) return;
+        activeKeys[key] = [...(activeKeys[key] ?? []), id];
+      };
+      for (const doc of stored.docs) addActive(identityKeyFrom(doc.data()), doc.id, doc.data().retired);
+      for (const c of plan.masterCreates ?? []) addActive(masterNameKey(c.data), c.id);
+      const miss = identityTargets.find((x) => (activeKeys[identityKeyFrom(x.item.to)] ?? []).length !== 1);
+      if (miss) throw new Error(`productIdentity target does not match exactly one active vehicle_master ${miss.ref.path}`);
     }
     // Linked masters and create targets are read inside the transaction too, so a concurrent delete/create aborts it.
     if (linkRefs.length && (await transaction.getAll(...linkRefs)).some((snapshot) => !snapshot.exists || snapshot.data()?.retired === true)) throw new Error('transaction linked vehicle_master missing or retired');
@@ -622,6 +720,12 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if ((clean(item.from) && !aliases.map(clean).includes(clean(item.from))) || !kept || !rawKept) throw new Error(`readback alias mismatch ${snapshot.ref.path}`);
     }
   });
+  const identityReadback = identityRefs.length ? await db.getAll(...identityRefs) : [];
+  identityReadback.forEach((snapshot, index) => {
+    const want = productIdentityToObject(identityTargets[index]!.item);
+    const data = snapshot.data();
+    if (!snapshot.exists || PRODUCT_IDENTITY_FIELDS.some((field) => clean(data?.[field]) !== want[field])) throw new Error(`readback productIdentity mismatch ${snapshot.ref.path}`);
+  });
   const retireReadback = retireRefs.length ? await db.getAll(...retireRefs) : [];
   retireReadback.forEach((snapshot, index) => {
     if (snapshot.data()?.retired !== true || snapshot.data()?.retired_into !== retires[index]!.into) throw new Error(`readback retire mismatch ${snapshot.ref.path}`);
@@ -640,5 +744,5 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   });
   const auditReadback = await db.getAll(...auditRefs);
   if (auditReadback.some((s, index) => !s.exists || s.data()?.reason !== audits[index]!.reason)) throw new Error('readback audit mismatch');
-  return { runId, backupPath, ...counts, readbackCount: readback.length + createReadback.length + variantReadback.length + retireReadback.length, auditCount: auditReadback.length };
+  return { runId, backupPath, ...counts, readbackCount: readback.length + identityReadback.length + createReadback.length + variantReadback.length + retireReadback.length, auditCount: auditReadback.length };
 }

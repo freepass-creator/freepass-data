@@ -24,6 +24,7 @@ const query = (collection: string, filters: Array<[string, unknown]> = [], cap?:
   collection, filters, ...(cap !== undefined ? { cap } : {}), where: (f, _op, v) => query(collection, [...filters, [f, v]], cap), select: () => query(collection, filters, cap), limit: (n) => query(collection, filters, n),
   get: async () => runQuery(query(collection, filters, cap)),
 });
+
 const runQuery = (q: Query) => {
   const docs = [...store.entries()].filter(([path, data]) => path.startsWith(`${q.collection}/`) && q.filters.every(([f, v]) => data[f] === v)).slice(0, q.cap ?? Infinity);
   return { empty: docs.length === 0, size: docs.length, docs: docs.map(([path, data]) => ({ id: path.split('/')[1]!, data: () => structuredClone(data) })) };
@@ -454,5 +455,80 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     store.set('vehicle_trim_master/t1', { ...store.get('vehicle_trim_master/t1')!, sub_model: '다른 이름' });
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       trimSubModelRepairs: [{ id: 't1', from: '그랜저 GN7', to: '그랜저 하이브리드 GN7' }] })).rejects.toThrow(/precondition changed/);
+  });
+});
+
+describe('product identity repair apply path', () => {
+  it('repairs product maker/model/sub_model together when the target active master exists', async () => {
+    store.set('vehicle_master/m-alpha', { id: 'm-alpha', maker: 'Maker', model: 'Model A', sub_model: 'Model A New' });
+    store.set('products/p-identity', { maker: '', model: 'Model A', sub_model: '' });
+    const result = await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productIdentityRepairs: [{ id: 'p-identity', from: { maker: '', model: 'Model A', sub_model: '' }, to: { maker: 'Maker', model: 'Model A', sub_model: 'Model A New' }, evidence: 'source text' }] });
+    expect(store.get('products/p-identity')).toMatchObject({
+      maker: 'Maker',
+      model: 'Model A',
+      sub_model: 'Model A New',
+      vehicle_name_reference_checked_at: 'ts',
+      vehicle_name_reference_source_digest: 'v1',
+    });
+    expect(result).toMatchObject({ productIdentityCount: 1, readbackCount: 1, auditCount: 1 });
+    const audit = [...store.entries()].find(([k]) => k.startsWith('audit_events/'))![1];
+    expect(audit.before).toEqual({ maker: '', model: 'Model A', sub_model: '' });
+    expect(audit.after).toEqual({ maker: 'Maker', model: 'Model A', sub_model: 'Model A New' });
+  });
+
+  it('rejects product identity repairs on precondition mismatch, missing master, or retired master', async () => {
+    store.set('vehicle_master/m-alpha', { id: 'm-alpha', maker: 'Maker', model: 'Model A', sub_model: 'Model A New' });
+    store.set('products/p-identity', { maker: 'Other', model: 'Model A', sub_model: '' });
+    const repair = { id: 'p-identity', from: { maker: '', model: 'Model A', sub_model: '' }, to: { maker: 'Maker', model: 'Model A', sub_model: 'Model A New' }, evidence: 'source text' };
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).rejects.toThrow(/precondition/);
+    store.set('products/p-identity', { maker: '', model: 'Model A', sub_model: '' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productIdentityRepairs: [{ ...repair, to: { maker: 'Maker', model: 'Missing', sub_model: 'Missing New' } }] })).rejects.toThrow(/exactly one active vehicle_master/);
+    store.set('vehicle_master/m-old-identity', { id: 'm-old-identity', maker: 'Maker', model: 'Old', sub_model: 'Old New', retired: true });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productIdentityRepairs: [{ ...repair, to: { maker: 'Maker', model: 'Old', sub_model: 'Old New' } }] })).rejects.toThrow(/retired master/);
+  });
+
+  it('compares product identity from cells by exact stored spelling only', async () => {
+    store.set('vehicle_master/m-alpha', { id: 'm-alpha', maker: 'Maker', model: 'Model A', sub_model: 'Model A New' });
+    const repair = { id: 'p-identity', from: { maker: '', model: 'Model A', sub_model: '' }, to: { maker: 'Maker', model: 'Model A', sub_model: 'Model A New' }, evidence: 'source text' };
+    store.set('products/p-identity', { maker: '', model: ' Model A ', sub_model: '' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).rejects.toThrow(/productIdentity precondition changed/);
+    store.set('products/p-identity', { maker: ' ', model: 'Model A', sub_model: '' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).rejects.toThrow(/productIdentity precondition changed/);
+    store.set('products/p-identity', { model: 'Model A' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], productIdentityRepairs: [repair] })).resolves.toMatchObject({ productIdentityCount: 1 });
+  });
+
+  it('matches product identity repairs against masters created in the same plan and catches readback drift', async () => {
+    const created = { id: 'm-created-identity', evidence: 'source text', data: { id: 'm-created-identity', maker: 'Maker', model: 'Created', sub_model: 'Created New', origin: 'local' } };
+    store.set('products/p-identity', { maker: '', model: '', sub_model: '' });
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterCreates: [created],
+      productIdentityRepairs: [{ id: 'p-identity', from: { maker: '', model: '', sub_model: '' }, to: { maker: 'Maker', model: 'Created', sub_model: 'Created New' }, evidence: 'source text' }] });
+    expect(store.get('products/p-identity')).toMatchObject({ maker: 'Maker', model: 'Created', sub_model: 'Created New' });
+    const original = db.runTransaction;
+    store.set('vehicle_master/m-readback', { id: 'm-readback', maker: 'Maker', model: 'Readback', sub_model: 'Readback New' });
+    store.set('products/p-readback', { maker: '', model: '', sub_model: '' });
+    db.runTransaction = async (fn) => { await original(fn); store.set('products/p-readback', { ...store.get('products/p-readback')!, model: 'tampered' }); };
+    try {
+      await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+        productIdentityRepairs: [{ id: 'p-readback', from: { maker: '', model: '', sub_model: '' }, to: { maker: 'Maker', model: 'Readback', sub_model: 'Readback New' }, evidence: 'source text' }] })).rejects.toThrow(/readback productIdentity mismatch/);
+    } finally { db.runTransaction = original; }
+  });
+
+  it('rejects product identity when stored spelling changes between backup and transaction', async () => {
+    store.set('vehicle_master/m-spelling', { id: 'm-spelling', maker: 'Maker', model: 'Spelling', sub_model: 'Spelling New' });
+    store.set('products/p-spelling', { model: 'Spelling' });
+    const original = db.runTransaction;
+    db.runTransaction = async (fn) => {
+      store.set('products/p-spelling', { maker: null, model: 'Spelling', sub_model: undefined });
+      return original(fn);
+    };
+    try {
+      await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+        productIdentityRepairs: [{ id: 'p-spelling', from: { maker: '', model: 'Spelling', sub_model: '' }, to: { maker: 'Maker', model: 'Spelling', sub_model: 'Spelling New' }, evidence: 'source text' }] }))
+        .rejects.toThrow(/stored spelling changed since backup/);
+    } finally { db.runTransaction = original; }
   });
 });
