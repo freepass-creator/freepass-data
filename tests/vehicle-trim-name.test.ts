@@ -32,6 +32,14 @@ describe('F03 세부트림 = 엔카 등급 이름에서 파워트레인 부분�
     expect(name('3.3 리미티드 4WD', '수입')).toBe('리미티드');
     expect(name('롱 레인지 AWD', '수입')).toBe('롱 레인지');
     expect(name('2.0 에코부스트 2WD', '수입')).toBe('기본형');
+    // 옵션 이름 속 「터보 패키지」는 파워트레인이 아니다
+    expect(name('3.3 GT 마스터즈 터보 패키지')).toBe('GT 마스터즈 터보 패키지');
+    expect(name('3.3 GT AWD 마스터즈 터보 패키지')).toBe('GT 마스터즈 터보 패키지');
+    // 반례: 예외는 「터보 패키지」 한 묶음뿐
+    expect(name('AWD 패키지')).toBe('패키지');
+    expect(name('2.0 디젤 패키지')).toBe('패키지');
+    expect(name('1.6 터보 프레스티지')).toBe('프레스티지');
+    expect(name('터보 인스퍼레이션')).toBe('인스퍼레이션');
   });
 
   it('파워트레인뿐이면 기본형', () => {
