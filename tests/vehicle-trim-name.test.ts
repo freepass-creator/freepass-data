@@ -8,7 +8,7 @@ describe('F03 세부트림 display name (Encar end level minus powertrain, 2026-
     expect(name('1.2 LT')).toBe('LT');
     expect(name('1.8 TCe 인스파이어')).toBe('TCe 인스파이어');
     expect(name('가솔린 1.6 터보 2WD')).toBe('터보');
-    expect(name('SS 6.2 V8')).toBe('SS');
+    expect(name('SS 6.2 V8')).toBe('SS V8');
     expect(name('HEV 9인승 노블레스')).toBe('9인승 노블레스');
     expect(name('3.3 리미티드 4WD', '수입')).toBe('리미티드');
     expect(name('롱 레인지 AWD', '수입')).toBe('롱 레인지');
@@ -32,6 +32,17 @@ describe('F03 세부트림 display name (Encar end level minus powertrain, 2026-
       expect(trimDisplayName(trim, '수입')).toEqual({ name: trim, removed: [], undecided: [], modelDesignation: true });
     }
     expect(trimDisplayName('2.0 LPI 프레스티지', '국산').modelDesignation).toBe(false);
+  });
+
+  it('keeps engine-type names like TSI/TDI (GDi·T-GDi·CRDi·MPi·VVT·V6), drops only displacement·fuel·drive', () => {
+    expect(name('3.3 GDI 구조변경 (LPG)')).toBe('GDI 구조변경');
+    expect(name('3.3 T-GDI 구조변경 (LPG)')).toBe('T-GDI 구조변경');
+    expect(name('2.2 CRDi 프레스티지')).toBe('CRDi 프레스티지');
+    expect(name('1.4 VVT 모던')).toBe('VVT 모던');
+    expect(name('2.5 V6')).toBe('V6');
+    expect(name('1.6 MPi 스마트')).toBe('MPi 스마트');
+    expect(name('HEV 9인승 노블레스')).toBe('9인승 노블레스');
+    expect(name('프리미엄 RWD', '수입')).toBe('프리미엄');
   });
 
   it('keeps engine names and drops LPG fuel labels (decided 2026-10-04)', () => {
