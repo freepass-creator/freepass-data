@@ -107,7 +107,7 @@ const storedVariantsShape = (value: unknown, where: string) => {
 const aliasListOk = (value: unknown) => value === undefined || value === null || (Array.isArray(value) && value.every((a) => typeof a === 'string'));
 /** Stored value matches the plan's `from`. A blank `from` only matches a truly blank value: missing, null or an empty string. */
 export const matchesFrom = (stored: unknown, from: string) => clean(from)
-  ? clean(stored) === clean(from)
+  ? typeof stored === 'string' && clean(stored) === clean(from) // a number or other type never matches a name
   : stored === undefined || stored === null || (typeof stored === 'string' && stored.trim() === '');
 
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
@@ -166,6 +166,10 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
       }
     }
     if (c.kind === 'masterCreate' && c.data.id !== c.id) throw new Error(`masterCreate ${c.id} data.id must equal id`);
+    for (const f of ['sub_model_aliases', 'model_aliases', 'gen_code_aliases', 'trim_aliases'] as const) {
+      if (c.data[f] !== undefined && !(Array.isArray(c.data[f]) && (c.data[f] as unknown[]).every((a) => typeof a === 'string'))) throw new Error(`${c.kind} ${c.id} ${f} must be a list of strings`);
+    }
+    if (c.data.gen_code !== undefined && typeof c.data.gen_code !== 'string') throw new Error(`${c.kind} ${c.id} gen_code must be a string`);
     if (c.id !== c.id.trim()) throw new Error(`${c.kind} id must have no surrounding spaces`);
     if (c.kind === 'trimCreate' && (typeof c.data.master_id !== 'string' || c.data.master_id !== c.data.master_id.trim())) throw new Error(`trimCreate ${c.id} master_id must be an exact id`);
     const key = `${c.kind}:${c.id}`;
@@ -207,6 +211,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     if (item.evidence !== undefined && !evidenceOk) throw new Error('repair item evidence must be a non-empty string');
     // A blank gen_code may be filled too (the code is already in the sub-model name), with evidence.
     const blankFill = !clean(item.from) && (item.kind === 'product' || item.kind === 'masterGenCode') && evidenceOk;
+    if (typeof item.id !== 'string' || typeof item.from !== 'string' || typeof item.to !== 'string') throw new Error('repair item id/from/to must be strings');
     if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !blankFill)) throw new Error('repair item requires id/from/to');
     if (clean(item.from) === clean(item.to)) throw new Error(`no-op repair ${item.kind}:${item.id}`);
     if (item.kind === 'trimMasterLink' && item.to !== item.to.trim()) throw new Error(`trimMasterLink ${item.id} to must be an exact master id`);

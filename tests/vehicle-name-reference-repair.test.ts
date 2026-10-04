@@ -129,6 +129,10 @@ describe('vehicle-name reference repair gate', () => {
     // variants shape: a variant's trims must be a list of strings, variants a list of objects
     expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, variants: [{ trims: ['3'] }], trims: [3] } }] })).toThrow(/normalized strings/);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, variants: null } }] })).toThrow(/variants must be a list/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, model_aliases: [{ x: 1 }] } }] })).toThrow(/list of strings/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, gen_code: 123 } }] })).toThrow(/gen_code must be a string/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterRepairs: [{ id: 'm', from: 123 as never, to: 'B' }] })).toThrow(/must be strings/);
+    expect(matchesFrom(123, '123')).toBe(false);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, variants: [], trims: [''] } }] })).toThrow(/normalized strings/);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, variants: [{ trims: [''] }], trims: ['A'] } }] })).toThrow(/non-empty/);
     for (const bad of [[{ trims: 'B' }], [{ trims: ['A', 3] }], [{ trims: null }], [{ trims: [' A '] }], [{ trims: ['Ａ'] }], ['x'], { trims: ['A'] }]) {
