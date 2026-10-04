@@ -5,7 +5,9 @@ const store = new Map<string, Record<string, unknown>>();
 const UNION = Symbol('union');
 type Ref = { path: string; id: string; parent: { id: string } };
 const ref = (collection: string, id: string): Ref => ({ path: `${collection}/${id}`, id, parent: { id: collection } });
-const snap = (r: Ref) => ({ ref: r, exists: store.has(r.path), data: () => (store.has(r.path) ? structuredClone(store.get(r.path)) : undefined) });
+// Firestore returns map keys in sorted order — the stand-in does too, so readback must not depend on key order.
+const sortKeys = (v: unknown): unknown => Array.isArray(v) ? v.map(sortKeys) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys((v as Record<string, unknown>)[k])])) : v;
+const snap = (r: Ref) => ({ ref: r, exists: store.has(r.path), data: () => (store.has(r.path) ? sortKeys(structuredClone(store.get(r.path))) as Record<string, unknown> : undefined) });
 const applyUpdate = (path: string, update: Record<string, unknown>) => {
   const doc = { ...store.get(path)! };
   for (const [k, v] of Object.entries(update)) {
