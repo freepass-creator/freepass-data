@@ -43,6 +43,8 @@ import { createFirestoreDataStore } from '../infra/firestore-store.js';
 import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
 import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
 import { createHttpVehicleMasterSourceFetcher } from '../infra/vehicle-master-source-fetcher.js';
+import type { CatalogStore } from '../ports/catalog-store.js';
+import type { SourceIngestionStore } from '../ports/source-store.js';
 import {
   buildEstimateMasterFromCanonicalVehicleMaster,
   type EstimateMasterCanonicalBridge,
@@ -53,6 +55,39 @@ function readOnlyAccess(input: { accessToken: string; evidenceBucket: string }) 
     accessToken: input.accessToken,
     bucket: input.evidenceBucket
   }));
+}
+
+/** Shared-sheet operator jobs: read mode has zero durable audit writes; apply is gateway audited.
+ * Reads use an ephemeral access log and deny all mutation capabilities at the port boundary.
+ */
+export async function withSharedSheetCatalogAccess<T>(
+  apply: boolean,
+  requestDigest: string,
+  run: (catalog: CatalogStore, source: SourceIngestionStore) => Promise<T>,
+  preflight?: (catalog: CatalogStore) => Promise<void>,
+): Promise<T> {
+  const { createFirestoreSourceStore } = await import('../infra/source-firestore-store.js');
+  const { MemoryDataAccessLogStore } = await import('../infra/memory-data-access-log.js');
+  // Read mode keeps only an in-process gateway log (no durable write). Apply opens the durable audit only after preflight.
+  const access = new DataAccessGateway(apply ? createFirestoreDataAccessLogStore() : new MemoryDataAccessLogStore());
+  const catalog = await createFirestoreDataStore();
+  const source = createFirestoreSourceStore();
+  const denyWrites = <S extends object>(store: S): S => new Proxy(store, { get(target, key) {
+    if (typeof key === 'string' && !key.startsWith('get') && !key.startsWith('list'))
+      return () => { throw new Error('READ_ONLY_PORT'); };
+    const value = Reflect.get(target, key);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  const spec = { context: { actor: { id: 'service:freepass-data', kind: 'SERVICE' as const },
+    clientId: 'job:shared-sheet-catalog', purpose: 'operator shared-sheet Canonical evidence' },
+    operation: apply ? 'WRITE_SHARED_SHEET_CANONICAL' : 'READ_SHARED_SHEET_CANONICAL',
+    resource: { kind: 'CATALOG' as const, name: 'shared-sheet-canonical' }, requestDigest,
+    summarize: (value: T) => ({ digest: stableDigest(value) }) };
+  if (apply && preflight) await new DataAccessGateway(new MemoryDataAccessLogStore()).read(
+    { ...spec, operation: 'PREFLIGHT_SHARED_SHEET_CANONICAL', summarize: () => ({ digest: requestDigest }) },
+    () => preflight(denyWrites(catalog)));
+  return apply ? access.write(spec, () => run(catalog, source))
+    : access.read(spec, () => run(denyWrites(catalog), denyWrites(source)));
 }
 
 export function createIancarErpInspectionDataAccessRuntime(input: {

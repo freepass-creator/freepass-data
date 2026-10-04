@@ -55,6 +55,7 @@ export type ApplyReviewedSourceChangeInput = {
   approvedIssues?: string[];
   actor: ActorRef;
   writer?: ExecutionWriterRef;
+  expectedOwnershipDigest?: string;
   reason: string;
 };
 

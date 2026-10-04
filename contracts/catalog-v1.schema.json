@@ -81,11 +81,31 @@
         "seats": {"type": ["integer", "null"]}, "displayName": {"type": "string"}
       }}]
     },
+    "sourceVehicleFacts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ruleVersion", "fields", "reasons"],
+      "properties": {
+        "ruleVersion": {"type": "string", "minLength": 1},
+        "reasons": {"type": "array", "items": {"type": "string"}},
+        "fields": {"type": "object", "additionalProperties": {
+          "type": "object", "additionalProperties": false,
+          "required": ["value", "state", "evidence", "ruleVersion", "reasons"],
+          "properties": {
+            "value": {"type": ["string", "number", "null"]},
+            "state": {"enum": ["KNOWN", "MISSING", "REVIEW_REQUIRED"]},
+            "evidence": {"type": "string"}, "ruleVersion": {"type": "string", "minLength": 1},
+            "reasons": {"type": "array", "items": {"type": "string"}}
+          }
+        }}
+      }
+    },
     "vehicleAsset": {
       "allOf": [{"$ref": "#/$defs/meta"}, {"type": "object", "required": ["id", "vehicleModelId", "status"], "properties": {
         "id": {"type": "string"}, "vehicleModelId": {"type": "string"},
         "plateNumber": {"type": ["string", "null"]}, "vin": {"type": ["string", "null"]},
         "odometerKm": {"type": ["integer", "null"], "minimum": 0},
+        "sourceVehicleFacts": {"$ref": "#/$defs/sourceVehicleFacts"},
+        "sourceFirstObservedAt": {"type": "string", "format": "date-time"},
         "status": {"enum": ["AVAILABLE", "RESERVED", "IN_USE", "RETURNED", "MAINTENANCE", "ACCIDENT", "SOLD", "RETIRED"]}
       }}]
     },
