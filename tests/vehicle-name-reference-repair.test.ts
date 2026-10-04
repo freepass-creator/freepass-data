@@ -166,4 +166,25 @@ describe('vehicle-name reference repair gate', () => {
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [{ id: 'p', from: 'A', to: 'B' }],
       productTrimRepairs: [{ id: 'p', from: 'C', to: 'D' }] })).toThrow(/overlap/);
   });
+  it('validates product identity repairs as one product target', () => {
+    const base = { sourceDigest: 'd', masterRepairs: [], productRepairs: [] };
+    const item = {
+      id: 'p1',
+      from: { maker: '', model: 'Model A', sub_model: '' },
+      to: { maker: 'Maker', model: 'Model A', sub_model: 'Model A New' },
+      evidence: 'source text',
+    };
+    expect(validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [item] })).toEqual({ masterCount: 0, productCount: 0, productIdentityCount: 1 });
+    expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [{ ...item, evidence: '' }] })).toThrow(/evidence/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [{ ...item, to: { ...item.to, maker: ' Maker ' } }] })).toThrow(/normalized/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [{ ...item, to: { ...item.to, model: '' } }] })).toThrow(/requires/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [{ ...item, from: { maker: 'Maker', model: 'Model A', sub_model: 'Model A New' } }] })).toThrow(/no-op/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, productIdentityRepairs: [item, item] })).toThrow(/duplicate/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, productRepairs: [{ id: 'p1', from: 'A', to: 'B' }], productIdentityRepairs: [item] })).toThrow(/overlap/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, productTrimRepairs: [{ id: 'p1', from: 'A', to: 'B' }], productIdentityRepairs: [item] })).toThrow(/overlap/);
+  });
+  it('keeps existing plan digest unchanged when product identity repairs are absent', () => {
+    const base = { sourceDigest: 'd', masterRepairs: [], productRepairs: [{ id: 'p', from: 'A', to: 'B' }] };
+    expect(stableDigest(base)).toBe(stableDigest({ ...base, productIdentityRepairs: undefined }));
+  });
 });
