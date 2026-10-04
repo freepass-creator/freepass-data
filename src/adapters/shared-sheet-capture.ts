@@ -24,6 +24,15 @@ const serialToIsoDate = (v: unknown): string | null => {
   return d.getUTCFullYear() >= 2000 && d.getUTCFullYear() <= 2099 ? d.toISOString().slice(0, 10) : null;
 };
 
+const IDENTITY_COLUMNS = ['회사명', '차량번호'].map(h => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
+/** The displayed date (mm-dd · yy-mm-dd · yyyy-mm-dd, any separator) must name the same month/day (and year if shown). */
+const displayMatchesIso = (shown: string, iso: string): boolean => {
+  const g = shown.match(/\d+/g)?.map(Number) ?? [], [y, m, d] = iso.split('-').map(Number) as [number, number, number];
+  if (g.length === 2) return g[0] === m && g[1] === d;
+  if (g.length === 3) return (g[0] === y || g[0] === y % 100) && g[1] === m && g[2] === d;
+  return false;
+};
+
 /** One values.batchGet response → validated capture v1. Rows are padded to the 74-column contract, blank rows kept.
  * serials (optional): the same ranges read as real values (dates as serial numbers); only date cells use it. */
 export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, meta: SheetsGridMeta, readTime: string, serials?: SheetsBatchGet): SharedSheetCapture {
@@ -47,10 +56,22 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
   const capture: SharedSheetCapture = { schema: 'shared-sheet-capture/v1', spreadsheetId, layoutVersion: spec.layoutVersion, readTime,
     tabs: raw.valueRanges.map((range, i) => {
       const real = serials?.valueRanges?.[i]?.values ?? [];
+      // 두 번 읽는 사이 줄이 지워지거나 정렬되면 다른 차의 날짜가 붙는다 — 줄 수·회사명·차량번호가 같고, 바꾸는 날짜가
+      // 보이는 값(08-12 · 20-07-03)과 맞을 때만 쓴다. 하나라도 다르면 멈춘다(fail closed).
+      if (serials && real.length !== (range.values ?? []).length) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
       const values = (range.values ?? []).map((row, r) => {
         if (!Array.isArray(row) || row.length > WIDTH) throw new Error('SHARED_SHEET_CAPTURE_ROW_INVALID');
         const out = Array.from({ length: WIDTH }, (_, c) => cell(row[c]));
-        if (r > 0) for (const c of DATE_COLUMNS) { const iso = serialToIsoDate(real[r]?.[c]); if (iso) out[c] = iso; }
+        if (serials && r > 0) {
+          const twin = real[r] ?? [];
+          for (const c of IDENTITY_COLUMNS) if (String(twin[c] ?? '').trim() !== String(row[c] ?? '').trim()) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+          for (const c of DATE_COLUMNS) {
+            const iso = serialToIsoDate(twin[c]);
+            if (!iso) continue;
+            if (!displayMatchesIso(String(row[c] ?? ''), iso)) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+            out[c] = iso;
+          }
+        }
         return out;
       });
       return { title: tabs[i]!, readTime, complete: true as const, rowCount: values.length, values };

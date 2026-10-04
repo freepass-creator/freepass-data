@@ -85,5 +85,19 @@ describe('shared sheet capture keeps the year of date cells', () => {
     expect(rawCapture(ID, shownBatch, META(), T).tabs.find(t => t.title === ch.tab)!.values[1]![at('입고일자')]).toBe('08-12');
     const wrong = { ...realBatch, valueRanges: realBatch.valueRanges.map((r, i) => i === 0 ? { ...r, range: 'x!A1:BV1' } : r) };
     expect(() => rawCapture(ID, shownBatch, META(), T, wrong)).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    // 두 번 읽는 사이 바뀐 시트: 줄 수가 다르거나, 같은 자리에 다른 차가 오거나, 날짜가 보이는 값과 다르면 멈춘다.
+    const extraRow = batch({ [ch.tab]: [real, real] });
+    expect(() => rawCapture(ID, shownBatch, META(), T, extraRow)).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    const otherCar = [...real]; otherCar[4] = '34나5678';
+    expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherCar] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    const otherDate = [...real]; otherDate[at('입고일자')] = 46247;
+    expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherDate] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    // 연도가 보이는 형식(yy-mm-dd)도 맞춰 본다; 머리줄과 1999 이전·소수 값은 바꾸지 않는다.
+    const fullShown = [...shown]; fullShown[at('최초등록일')] = '20-07-03';
+    const fullReal = [...real]; fullReal[at('최초등록일')] = 44015; fullReal[at('입고일자')] = 46246.5;
+    const row2 = rawCapture(ID, batch({ [ch.tab]: [fullShown] }), META(), T, batch({ [ch.tab]: [fullReal] })).tabs.find(t => t.title === ch.tab)!.values;
+    expect(row2[1]![at('최초등록일')]).toBe('2020-07-03');
+    expect(row2[1]![at('입고일자')]).toBe('08-12');
+    expect(row2[0]![at('입고일자')]).toBe('입고일자');
   });
 });
