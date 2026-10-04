@@ -143,7 +143,6 @@ jobs:
       FIREBASE_PROJECT_ID: freepasserp5
       GOOGLE_SHEETS_SUBJECT: pyh@teamjpk.com
       SHARED_SHEET_ID: ${{ vars.FREEPASS_DATA_SHARED_SHEET_ID }}
-      EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET }}
       # 예약 실행은 적용까지, 수동 실행은 고른 모드대로.
       APPLY: ${{ github.event_name == 'schedule' || inputs.mode == 'shared-sheet-apply' }}
     steps:
@@ -159,6 +158,7 @@ jobs:
         env:
           PROVIDER: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
           ACCOUNT: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
+          EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET }}
         run: |
           set -euo pipefail
           test -n "$PROVIDER"
@@ -180,6 +180,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/shared-sheet"
           printf '%s' "$SHEETS_SA" > "$RUNNER_TEMP/shared-sheet/sheets.json"
       - name: Capture, plan and (apply) — counts only in the public log
+        env:
+          EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET }}
         run: |
           set -euo pipefail
           umask 077
@@ -187,8 +189,14 @@ jobs:
           export GOOGLE_SHEETS_APPLICATION_CREDENTIALS="$T/sheets.json"
           export FREEPASS_ERP5_READ_ACCESS_TOKEN="$(gcloud auth print-access-token)"
           export FREEPASS_DATA_EVIDENCE_BUCKET="$EVIDENCE_BUCKET"
+          # inspect-erp5-source exits 2 when it reports HOLD items, yet still writes a verified private capture.
+          set +e
           node --import tsx src/jobs/inspect-erp5-source.ts --live-read-only > "$T/erp5-report.json"
+          erp5_code=$?
+          set -e
+          test "$erp5_code" = 0 -o "$erp5_code" = 2
           ERP5_CAPTURE="$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).privateCapturePath)" "$T/erp5-report.json")"
+          test -f "$ERP5_CAPTURE"
           node --import tsx src/jobs/capture-shared-sheet.ts --spreadsheet "$SHARED_SHEET_ID" --erp5-capture "$ERP5_CAPTURE" --out "$T/capture.json"
           node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --capture "$T/capture.json" --plan-out "$T/plan.json" > "$T/report.json"
           node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0)process.exit(1);const {suppliers,...s}=r;console.log(JSON.stringify(s,null,2))" "$T/report.json"
@@ -205,6 +213,8 @@ jobs:
           fi
       - name: Preserve private capture, plan and reports (location not printed)
         if: always()
+        env:
+          EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET }}
         run: |
           set -euo pipefail
           T="$RUNNER_TEMP/shared-sheet"
