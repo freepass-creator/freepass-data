@@ -108,6 +108,15 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
     (formulasRead[2] as unknown[])[at('계약형태')] = '=ARRAYFORMULA(…)'; (formulasRead[3] as unknown[])[at('계약형태')] = '';
     expect(() => planF04CommissionProjection({ intake: values, intakeFormulas: formulasRead, installments: INST, openFromMonth: '2026-09', readAt: 'x' })).not.toThrow();
   });
+  it('a row whose calculation/decision input is a formula (청구·청구월·렌탈료·지급액·공급사 …) is never filled', () => {
+    const v = row({ 차량번호: '12가3456' });
+    for (const [h, f] of [['청구', '=TRUE'], ['청구월', '=8'], ['렌탈료', '=900000'], ['지급액', '=1'], ['공급사', '=IFERROR(VLOOKUP(B3,차량대장!A:E,5,FALSE),"")']] as const) {
+      const fr = [...v]; fr[at(h)] = f;
+      const p = planF04CommissionProjection({ intake: intake(v), intakeFormulas: intake(fr), installments: INST, openFromMonth: '2026-09', readAt: 'x' });
+      expect(p.fills, h).toEqual([]);
+      expect(p.blanks.map(b => b.reason), h).toEqual(['INPUT_FORMULA_UNVERIFIED', 'INPUT_FORMULA_UNVERIFIED']);
+    }
+  });
   it('a plain formula in one cell of a column does not hide changes in the other cells of that column', () => {
     const v1 = row({ 차량번호: '12가3456' }), v2 = row({ 차량번호: '12가3457' });
     const f1 = [...v1], f2 = [...v2]; f1[at('청구')] = '=FALSE()'; f2[at('청구')] = true; // 4행 청구가 그 사이 TRUE 로

@@ -193,10 +193,18 @@ export function planF04CommissionProjection(input: {
   const skip = (why: string) => { plan.skipped[why] = (plan.skipped[why] ?? 0) + 1; };
   const [by, bm] = input.openFromMonth.split('-').map(Number) as [number, number];
 
+  const inputColumns = ['접수일', '차량번호', '공급사', '상품구분', '계약기간', '렌탈료', '차량가액', '분납여부', '청구년', '청구월', '청구액', '지급액', '취소', '비고', '청구']
+    .map(h => header.indexOf(h)).filter(c => c >= 0);
   for (const { sheetRow, cells } of rows) {
     const row = Object.fromEntries(header.map((h, i) => [h, cells[i]]));
     const plate = plateKey(row['차량번호']);
     if ((keyCount.get(key(cells)) ?? 0) > 1) { skip('DUPLICATE_KEY'); continue; }
+    // 계산·판정에 쓰는 칸이 수식이면 두 읽기 사이 평가값이 같은지 확인할 수 없다 — 그 줄은 채우지 않는다(사유 남김).
+    if (formulas && inputColumns.some(c => formula(formulaAt(sheetRow, c)))) {
+      skip('INPUT_FORMULA_UNVERIFIED');
+      for (const column of ['AE', 'AJ'] as const) if (empty(cells[colOf(column)])) plan.blanks.push({ row: sheetRow, column, plate, reason: 'INPUT_FORMULA_UNVERIFIED' });
+      continue;
+    }
     if (truthy(row['취소'])) { skip('CANCELLED'); continue; }
     // 청구년·청구월: 둘 다 빈칸이면 아직 안 정한 열린 줄. 하나만 있거나 숫자로 못 읽으면(«8월» 등) 판독 실패로 건드리지 않는다.
     const y = int(row['청구년']), m = int(row['청구월']);
