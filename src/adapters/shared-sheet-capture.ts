@@ -41,13 +41,16 @@ const roundedUnits = (d: { int: string; frac: string }, places: number): bigint 
   return frac[places]! >= '5' ? kept + 1n : kept;
 };
 
+const ACCOUNTING_ZERO_DISPLAY = /^[\s$\u00a3\u00a5\u20a9\u20ac]*-[\s$\u00a3\u00a5\u20a9\u20ac]*$/u;
+
 /** A displayed number shows the same real value, to the precision it shows: «12,345km» · «77.4kWh» · «2021» · «15%» ·
  * 회계식 0 «-» · 음수 «-1,000» / «(1,000)» · 지수 «1.23E+05». */
 export const displayMatchesValue = (shown: string, v: number | boolean): boolean => {
   if (typeof v === 'boolean') return shown.trim().toUpperCase() === String(v).toUpperCase();
   if (!Number.isFinite(v)) return false;
   const s = shown.trim();
-  if (!/\d/.test(s)) return /^[^0-9]*-[^0-9]*$/.test(s) && v === 0; // 회계식 0
+  if (/^(?:[-+]?Infinity|NaN)$/i.test(s)) return false;
+  if (!/\d/.test(s)) return ACCOUNTING_ZERO_DISPLAY.test(s) && v === 0; // 회계식 0
   // 표시 전체가 한 숫자 형식이어야 한다(일부만 숫자인 «1E3 + 2» 같은 글자는 거부):
   //   [통화] [-] [(] [통화] 숫자[지수] [단위] [%] [)]  — 숫자는 쉼표 묶음(1,234)·소수, 지수는 E±1~3자리.
   const m = /^\s*(?:[₩$]\s*)?(-)?\s*(\()?\s*(?:[₩$]\s*)?(-)?\s*(\d[\d,]*(?:\.\d*)?|\.\d+)(?:E([+-]?\d{1,3}))?\s*([A-Za-z가-힣]+)?\s*(%)?\s*(\))?\s*$/i.exec(s);
