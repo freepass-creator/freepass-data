@@ -11,8 +11,8 @@ const tabTitles=[...new Set(shared.map(r=>r.tab))];
 const canonFixture=()=>{
   const spec=structuredClone(inputSpec);spec.tabConsistency.headerBackgrounds={};spec.tabConsistency.headerForegrounds={};spec.supplierChannels.sharedInputSheet=[{tab:'가',code:'A'},{tab:'나',code:'B'}];
   const snapshot={sheets:['종합','가','나'].map((title,id)=>({properties:{sheetId:id,title,gridProperties:{rowCount:4,columnCount:spec.inputHeaders.length,frozenRowCount:1}},conditionalFormats:[],data:[{
-    columnMetadata:spec.inputHeaders.map(h=>({pixelSize:spec.columnWidths[h]??spec.defaultColumnWidth})),rowMetadata:[{pixelSize:32},...Array.from({length:3},()=>({pixelSize:24}))],
-    rowData:Array.from({length:4},(_,r)=>({values:spec.inputHeaders.map(h=>({...(r===0?{userEnteredValue:{stringValue:h}}:{}),userEnteredFormat:{textFormat:{fontFamily:spec.font.family,fontSize:spec.font.size,italic:false},wrapStrategy:'CLIP',horizontalAlignment:r>0&&spec.leftAlignHeaders.includes(h)?'LEFT':r>0&&(spec.rightAlignHeaders??[]).includes(h)?'RIGHT':'CENTER',...(r>0&&['date','integer','decimal','year'].includes(spec.valueFormats[h].kind)?{numberFormat:{type:spec.valueFormats[h].kind==='date'?'DATE':'NUMBER',pattern:spec.valueFormats[h].pattern}}:{})},...(r>0&&id>0&&spec.dropdowns[h]?{dataValidation:{condition:{type:'ONE_OF_LIST',values:spec.dropdowns[h].map(userEnteredValue=>({userEnteredValue}))},strict:false,showCustomUi:true}}:r>0&&id>0&&spec.vehicleMaster.columns[h]?{dataValidation:{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='차종목록'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:false,showCustomUi:true}}:{})}))}))
+    columnMetadata:spec.inputHeaders.map(h=>({pixelSize:spec.columnWidths[h]??spec.defaultColumnWidth})),rowMetadata:[{pixelSize:spec.headerRowHeight},...Array.from({length:3},()=>({pixelSize:spec.rowHeight}))],
+    rowData:Array.from({length:4},(_,r)=>({values:spec.inputHeaders.map(h=>({...(r===0?{userEnteredValue:{stringValue:h}}:{}),userEnteredFormat:{textFormat:{fontFamily:spec.font.family,fontSize:spec.font.size,italic:spec.font.italic},wrapStrategy:spec.textWrap,horizontalAlignment:r>0&&spec.leftAlignHeaders.includes(h)?'LEFT':r>0&&(spec.rightAlignHeaders??[]).includes(h)?'RIGHT':'CENTER',...(r>0&&['date','integer','decimal','year'].includes(spec.valueFormats[h].kind)?{numberFormat:{type:spec.valueFormats[h].kind==='date'?'DATE':'NUMBER',pattern:spec.valueFormats[h].pattern}}:{})},...(r>0&&id>0&&spec.dropdowns[h]?{dataValidation:{condition:{type:'ONE_OF_LIST',values:spec.dropdowns[h].map(userEnteredValue=>({userEnteredValue}))},strict:false,showCustomUi:true}}:r>0&&id>0&&spec.vehicleMaster.columns[h]?{dataValidation:{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='차종목록'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:false,showCustomUi:true}}:{})}))}))
   }]}))};return {snapshot,spec};
 };
 const canonPut=(f,tab,row,h,value,extra={})=>Object.assign(f.snapshot.sheets[tab].data[0].rowData[row].values[f.spec.inputHeaders.indexOf(h)],{userEnteredValue:typeof value==='number'?{numberValue:value}:{stringValue:value},...extra});
@@ -112,7 +112,7 @@ test('canon: exact dates, ages, seats and aliases normalize; ambiguous values an
   assert.ok(p.requests.every(r=>(r.updateCells??r.repeatCell).range.sheetId!==0));
   assert.ok(p.requests.filter(r=>r.updateCells).every(r=>r.updateCells.fields==='userEnteredValue'));
   const dates=p.requests.filter(r=>r.updateCells?.range.startColumnIndex===1).map(r=>r.updateCells.rows[0].values[0].userEnteredValue.numberValue);assert.equal(dates[0],dates[1]);
-  assert.ok(p.requests.some(r=>r.repeatCell?.cell.userEnteredFormat.numberFormat.pattern==='yy.mm.dd'));
+  assert.ok(p.requests.some(r=>r.repeatCell?.cell.userEnteredFormat.numberFormat.pattern===f.spec.valueFormats['입고일자'].pattern));
 });
 test('canon: partial grids cannot PASS, malformed layouts cannot generate fixes, private examples redacted',()=>{
   const f=canonFixture();f.snapshot.sheets[1].properties.gridProperties.rowCount=1000;
@@ -478,7 +478,7 @@ test('partial dates: confirmed month text, no invented day, invalid month HOLD, 
   for(const header of ['최초등록일','입고일자'])for(const raw of ['25-04','2025-4','25.4','25.04','00-1','99-12']){
     const f=canonFixture();canonPut(f,1,1,header,raw);const before=JSON.stringify(f);
     const p=planValueNormalize(f.snapshot,f.spec,now);assert.equal(p.status,'PLANNED');
-    const expected=raw==='00-1'?'00.01':raw==='99-12'?'99.12':'25.04';
+    const expected=raw==='00-1'?'00-01':raw==='99-12'?'99-12':'25-04';
     const write=p.requests.find(r=>r.updateCells);if(raw!==expected)assert.deepEqual(write.updateCells.rows[0].values[0].userEnteredValue,{stringValue:expected});
     assert.ok(p.requests.some(r=>r.repeatCell?.cell.userEnteredFormat.numberFormat.type==='TEXT'));
     assert.equal(JSON.stringify(f),before);
@@ -504,7 +504,7 @@ test('shared legacy comparison partitions affiliates by company and rejects unas
   f.shared.tabs[0].rows.push(row('미확인','TEST-C'));assert.throws(()=>compareSharedToLegacy(f,inputSpec,now),/company/);
 });
 test('month formula results retain TEXT in summary format fixes while supplier formulas are preserved',()=>{
-  const f=canonFixture();canonPut(f,0,1,'입고일자','25.04',{userEnteredValue:{formulaValue:'=A2'},effectiveValue:{stringValue:'25.04'}});
+  const f=canonFixture();canonPut(f,0,1,'입고일자','25-04',{userEnteredValue:{formulaValue:'=A2'},effectiveValue:{stringValue:'25-04'}});
   const at=f.spec.inputHeaders.indexOf('입고일자');f.snapshot.sheets[0].data[0].rowData[1].values[at].userEnteredFormat.numberFormat={type:'TEXT'};
   assert.equal(auditTabConsistency(f.snapshot,f.spec).status,'PASS');
   const p=planTabConsistencyFix(f.snapshot,f.spec);assert.ok(p.requests.some(r=>r.repeatCell?.range.sheetId===0&&r.repeatCell.range.startRowIndex===1&&r.repeatCell.range.startColumnIndex===at&&r.repeatCell.cell.userEnteredFormat.numberFormat?.type==='TEXT'));

@@ -563,10 +563,11 @@ function canonCheck(c,h,spec){
   };
   let out;
   if(f.kind==='date'){
-    const month=typeof raw==='string'&&f.monthPattern==='yy.mm'?trim.match(/^(\d{4}|\d{2})[-.]\s*(\d{1,2})$/):null;
+    const monthSep=['yy.mm','yy-mm'].includes(f.monthPattern)?f.monthPattern[2]:null;
+    const month=typeof raw==='string'&&monthSep?trim.match(/^(\d{4}|\d{2})[-.]\s*(\d{1,2})$/):null;
     if(month){
       const year=Number(month[1])+(month[1].length===2?2000:0),mo=Number(month[2]);
-      out=year>=2000&&year<=2099&&mo>=1&&mo<=12?finish(`${String(year).slice(-2)}.${String(mo).padStart(2,'0')}`,{type:'TEXT'}):{bad:true,reason:'INVALID_OR_AMBIGUOUS_DATE'};
+      out=year>=2000&&year<=2099&&mo>=1&&mo<=12?finish(`${String(year).slice(-2)}${monthSep}${String(mo).padStart(2,'0')}`,{type:'TEXT'}):{bad:true,reason:'INVALID_OR_AMBIGUOUS_DATE'};
     }else{
       let serial;
       if(typeof raw==='number'&&Number.isInteger(raw))serial=raw;
