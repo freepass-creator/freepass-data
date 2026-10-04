@@ -31,7 +31,10 @@
    - 허용 모음 밖(특히 ERP4 화면의 `products`)·다른 데이터베이스 쓰기 → 경보(감사 job 실패)
    - `shared-sheet-daily`(main) 실행 구간 밖 쓰기 → 경보
    - 적용 실행이 성공했는데 쓰기 로그가 없음(로그 꺼짐·누락) → 보류(실패)
-   - 공개 로그에는 개수와 정해진 모음 이름만. 로그 본문에 쓴 문서 경로가 남는지는 공식 문서에 없어 첫 적용 뒤 1회 확인한다 — 경로가 없으면 실행 구간 판정만 남는다.
+   - **쓴 문서 경로를 읽을 수 없는 쓰기 기록이 하나라도 있음 → 보류(실패)** — 실행 구간 안이어도 허용 모음 밖(products 등) 쓰기를 가릴 수 없기 때문이다. 로그 본문에 경로가 남는지는 공식 문서에 없어 첫 적용 뒤 확인한다.
+   - 공개 로그에는 개수와 정해진 모음 이름만.
+5. **예약 실행 관문(코드, `shared-sheet-daily.yml` 첫 단계)** — 예약 실행은 `FREEPASS_DATA_SHARED_SHEET_DAILY == on` **이고** 최근(3시간 안) 매시 감사의 `daily-writer-guard` 가 성공일 때만 쓴다. 감시가 꺼졌거나 보류·경보(경로 없는 쓰기 포함)면 쓰지 않고 실패로 알린다 — 경로 없는 쓰기 기록이 남아 있는 동안 자동 실행은 켜지지 않는다.
+6. **수동 apply 관문** — environment `data-production-delivery` 에는 사람 승인(필수 검토자)이 **없다**(10-04 확인: protection_rules 0). 그래서 수동 apply 는 변수 `FREEPASS_DATA_DAILY_MANUAL_APPLY == on` 일 때만 되고, 통제된 첫 적용 때만 켰다가 끝나면 지운다. 수동 dry-run(쓰기 0)은 항상 된다.
 
 **허용 모음(이 실행 경로가 실제로 쓰는 것):** `catalog_vehicle_models` · `catalog_vehicle_assets` · `catalog_products` · `catalog_offers` · `canonical_source_bindings` · `catalog_entity_revisions` · `sources` · `source_runs` · `source_heads` · `raw_records` · `normalized_candidates` · `field_lineage` · `canonicalization_receipts` · `reviewed_source_change_receipts` · `audit_events` · `outbox_events` · `data_access_events` (읽기만: `writer_ownership`). 기계 정본은 `src/domain/daily-writer-guard.ts`.
 
@@ -41,7 +44,7 @@
 
 ## 실행 순서 (명령 묶음과 같음)
 
-1) #347 반영 → 2) 서비스 계정·맞춤 역할·조건부 바인딩·새 WIF 풀·버킷·시트 공유·environment 변수(각 되읽기) → 3) 쓰기 감사 로그·제외 규칙·감사 계정 로그 보기(첫 적용 «전») → 4) 수동 `shared-sheet-daily` dry-run 1회 → 숫자 확인 → 5) 통제된 첫 apply 1회 → 되읽기 0 불일치 · 로그 모양 확인 → 6) `FREEPASS_DATA_DAILY_WRITER_GUARD=on` → 감시 OK 확인 → 7) `FREEPASS_DATA_SHARED_SHEET_DAILY=on`(매일 03:40 KST). 되돌릴 때는 예약·감시 끄기 → 진행 중 실행 끝 확인 → 변수·공유·바인딩·역할·계정·로그 설정 역순.
+1) #347 반영 → 2) 서비스 계정·맞춤 역할·조건부 바인딩·새 WIF 풀·버킷·시트 공유·environment 변수(각 되읽기) → 3) 쓰기 감사 로그·제외 규칙·감사 계정 로그 보기(첫 적용 «전») → 4) 수동 `shared-sheet-daily` dry-run 1회 → 숫자 확인 → 5) `FREEPASS_DATA_DAILY_MANUAL_APPLY=on` → 통제된 첫 apply 1회 → 되읽기 0 불일치 · 로그 모양 확인 → 변수 지움 → 6) `FREEPASS_DATA_DAILY_WRITER_GUARD=on` → 감시 OK 확인(경로 없는 쓰기 보류가 나오면 여기서 멈추고 자동 실행을 켜지 않는다) → 7) `FREEPASS_DATA_SHARED_SHEET_DAILY=on`(매일 03:40 KST, 관문이 매번 최근 감시 성공을 확인). 되돌릴 때는 예약·감시 끄기 → 진행 중 실행 끝 확인 → 변수·공유·바인딩·역할·계정·로그 설정 역순.
 
 ## 그 전까지 (수동 대체)
 
