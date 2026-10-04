@@ -656,7 +656,7 @@
   "valueConventions": {
     "빈칸": "미확인; 0·없음·무료와 구분",
     "정본": "valueFormats는 inputHeaders 전체 칸과 일치; 짧게, 단위는 이름 또는 값 끝 한 번",
-    "날짜": "일을 알면 DATE serial + yy.mm.dd, 일 모르면 연월 TEXT yy.mm; 2000~2099, 월 1~12만 자동 정리; 일 추정 금지",
+    "날짜": "일을 알면 DATE serial — 입고일자 mm-dd, 최초등록일 yy-mm-dd(valueFormats); 일 모르면 연월 TEXT yy-mm; 2000~2099, 월 1~12만 자동 정리; 일 추정 금지",
     "연령": "만 N세; 기본연령은 하한, 최대연령은 상한",
     "면허기간": "N년(최소 경력); 이상 생략",
     "금액": "대여료·보증금·차량가격: 원 단위 정수 #,##0; 정책: 10만원. 단위 없는 정책 숫자 추정 금지",
@@ -3290,7 +3290,7 @@
       "dataValidation: formula output has no supplier input dropdown"
     ],
     "coverage": "Only explicit GridData coverage is audited; missing grid rows are HOLD, never assumed blank",
-    "dateStorage": "DATE serial + yy.mm.dd; value updates use userEnteredValue only, format requests separately",
+    "dateStorage": "DATE serial + 입고일자 mm-dd · 최초등록일 yy-mm-dd(일 모르면 연월 TEXT yy-mm, valueFormats 가 정본); value updates use userEnteredValue only, format requests separately",
     "conditionalFormats": "first supplier rules in order; own sheetId and full-grid row endpoint rebased per tab; embedded sheet references HOLD",
     "horizontalAlignment": "CENTER",
     "headerBackgrounds": {
