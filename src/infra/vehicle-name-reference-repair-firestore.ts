@@ -223,7 +223,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const retiredSubModels = new Set(retireSnaps.map((snapshot) => clean(snapshot.data()?.sub_model)));
   if (plan.productRepairs.some((item) => retiredSubModels.has(clean(item.to)))) throw new Error('the same plan must not give a product the name of a master it retires');
   if (retires.length) {
-    // Normalized comparison over every product name (maker is not compared: maker spellings differ, so this only errs toward refusing).
+    // Early refusal only; the binding check repeats inside the transaction. Maker is not compared (spellings differ), so this only errs toward refusing.
     const products = await db.collection('products').select('model', 'sub_model').limit(MAX_PRODUCT_NAME_SCAN + 1).get();
     if (products.docs.length > MAX_PRODUCT_NAME_SCAN) throw new Error(`products has more than ${MAX_PRODUCT_NAME_SCAN} entries — retire name check would be unbounded`);
     const used = products.docs.find((doc) => retiredNameKeys.has(`${clean(doc.data().model)}|${clean(doc.data().sub_model)}`));
@@ -352,11 +352,16 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (!current[0]!.exists || stableDigest(data ?? null) !== retireDigests[index]) throw new Error(`transaction retire target changed since backup ${retireRefs[index]!.path}`);
       const rows = await transaction.get(db.collection('vehicle_trim_master').where('master_id', '==', x.id).limit(MAX_VEHICLE_NAME_REPAIR_TARGETS + 1));
       if (rows.docs.some((row) => !relinkedAway.has(`${x.id}|${row.id}`))) throw new Error(`master still linked by trim rows ${retireRefs[index]!.path}`);
-      // Exact re-check inside the transaction for the stored and the normalized spelling (the full normalized scan ran before).
-      for (const [model, subModel] of [[data?.model, data?.sub_model], [clean(data?.model), clean(data?.sub_model)]]) {
-        const products = await transaction.get(db.collection('products').where('model', '==', model).where('sub_model', '==', subModel).limit(1));
-        if (!products.empty) throw new Error(`master name still used by products ${retireRefs[index]!.path}`);
-      }
+      // No chains: a master that others were already retired into stays active (its incoming retired_into would dangle).
+      const incoming = await transaction.get(db.collection('vehicle_master').where('retired_into', '==', x.id).limit(1));
+      if (!incoming.empty) throw new Error(`other masters are retired into ${retireRefs[index]!.path} — it cannot be retired`);
+    }
+    if (retires.length) {
+      // Binding product check inside the transaction, normalized, so a product added in another spelling after the early check is still caught.
+      const products = await transaction.get(db.collection('products').select('model', 'sub_model').limit(MAX_PRODUCT_NAME_SCAN + 1));
+      if (products.docs.length > MAX_PRODUCT_NAME_SCAN) throw new Error(`products has more than ${MAX_PRODUCT_NAME_SCAN} entries — retire name check would be unbounded`);
+      const used = products.docs.find((doc) => retiredNameKeys.has(`${clean(doc.data().model)}|${clean(doc.data().sub_model)}`));
+      if (used) throw new Error(`master name still used by products products/${used.id}`);
     }
     if (variantRefs.length && (await transaction.getAll(...variantRefs)).some((snapshot, index) =>
       !snapshot.exists || stableDigest(snapshot.data()?.variants ?? null) !== variantRepairs[index]!.fromDigest)) {

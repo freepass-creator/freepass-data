@@ -193,6 +193,29 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
       masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: 'x' }] })).rejects.toThrow(/name of a master it retires/);
     expect(store.get('vehicle_master/m-old')!.retired).toBeUndefined();
   });
+  it('refuses a chain: after A is retired into B, B cannot be retired', async () => {
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    store.set('vehicle_master/m-new', { id: 'm-new', maker: '현대', model: '그랜저', sub_model: '그랜저 새이름' });
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: '합쳐짐' }] });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      trimMasterLinkRepairs: [{ id: 't1', from: 'm-gn7', to: 'm-new' }],
+      masterRetires: [{ id: 'm-gn7', into: 'm-new', evidence: 'x' }] })).rejects.toThrow(/retired into/);
+    expect(store.get('vehicle_master/m-gn7')!.retired).toBeUndefined();
+  });
+  it('catches a product added in another spelling after the early check (checked again inside the transaction)', async () => {
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    const original = db.runTransaction;
+    db.runTransaction = async (fn) => {
+      store.set('products/p9', { model: '그랜저', sub_model: '그랜저\u3000옛이름' }); // 전각 공백, 사전 확인 뒤에 들어옴
+      return original(fn);
+    };
+    try {
+      await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+        masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: 'x' }] })).rejects.toThrow(/still used by products/);
+    } finally { db.runTransaction = original; }
+    expect(store.get('vehicle_master/m-old')!.retired).toBeUndefined();
+  });
   it('refuses to retire a master whose name products still carry, or into a missing master', async () => {
     store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
     store.set('products/p1', { model: '그랜저', sub_model: '그랜저 옛이름' });
