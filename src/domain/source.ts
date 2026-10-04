@@ -111,6 +111,8 @@ export function decideSourceHead(
 
 export type RawRecord = {
   firstObservedAt?: string;
+  /** Run holding the first RAW of this record (direct link to the first source text). */
+  firstRunId?: string;
   rawRecordId: string;
   runId: string;
   sourceId: string;

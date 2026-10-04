@@ -1,4 +1,8 @@
-import { sharedSheetChannels, sharedSheetCaptureDigest, buildSharedSheetBatch, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from './shared-sheet-source.js';
+import { sharedSheetChannels, sharedSheetCaptureDigest, buildSharedSheetBatch, sharedSheetHeaders, type SharedSheetCapture, type SheetCell,
+  type SupplierEnteredRecord, type SheetCorrection } from './shared-sheet-source.js';
+import { decodeErp5Value, inspectErp5Capture, type Erp5SourceCapture } from './erp5-source-capture.js';
+import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import spec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
 
 export type SheetsBatchGet = { spreadsheetId?: string; valueRanges?: Array<{ range?: string; values?: unknown[][] }> };
@@ -37,4 +41,34 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
   capture.digest = sharedSheetCaptureDigest(capture);
   buildSharedSheetBatch(capture); // fail closed: header, tabs, widths, identities
   return capture;
+}
+
+/** Layer ②: products.원문 (written by the supplier-sheet collectors, never by the shared sheet) per plate, from an existing
+ * verified ERP5 capture. Plates whose products disagree on 원문 are left out rather than guessed. */
+export function supplierEnteredFromErp5(capture: Erp5SourceCapture): SupplierEnteredRecord[] {
+  inspectErp5Capture(capture);
+  const byPlate = new Map<string, SupplierEnteredRecord | null>();
+  for (const doc of capture.collections.products.documents as Array<{ name?: string; fields?: Record<string, unknown> }>) {
+    let plate: unknown, text: unknown;
+    try { plate = decodeErp5Value(doc.fields?.car_number ?? { nullValue: null }); text = decodeErp5Value(doc.fields?.['원문'] ?? { nullValue: null }); }
+    catch { continue; }
+    if (!isAssignedPlate(plate) || !text || typeof text !== 'object' || Array.isArray(text)) continue;
+    const key = plateIdentityKey(plate);
+    const record: SupplierEnteredRecord = { plate: key, source: 'ERP5_PRODUCTS_SOURCE_TEXT', sourceRef: String(doc.name ?? '').split('/').pop() ?? '',
+      observedAt: capture.readTime, values: text as Record<string, unknown> };
+    const seen = byPlate.get(key);
+    byPlate.set(key, seen === undefined ? record : seen && stableDigest(seen.values) === stableDigest(record.values) ? seen : null);
+  }
+  return [...byPlate.values()].filter((x): x is SupplierEnteredRecord => x !== null).sort((a, b) => a.plate.localeCompare(b.plate));
+}
+/** Merge supplements into a capture and re-seal its digest. Sheet plates without a products record may come from a backup. */
+export function withSupplements(capture: SharedSheetCapture, supplierEntered: SupplierEnteredRecord[], corrections: SheetCorrection[]): SharedSheetCapture {
+  const sheetPlates = new Set(capture.tabs.flatMap(t => t.values.slice(1).map(r => isAssignedPlate(r[4]) ? plateIdentityKey(r[4]) : '')).filter(Boolean));
+  const keep = supplierEntered.filter(x => sheetPlates.has(plateIdentityKey(x.plate)));
+  const out: SharedSheetCapture = { ...structuredClone(capture), ...(keep.length ? { supplierEntered: keep } : {}),
+    ...(corrections.length ? { corrections: corrections.filter(x => sheetPlates.has(plateIdentityKey(x.plate))) } : {}) };
+  delete out.digest;
+  out.digest = sharedSheetCaptureDigest(out);
+  buildSharedSheetBatch(out);
+  return out;
 }

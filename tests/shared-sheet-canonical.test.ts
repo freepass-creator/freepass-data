@@ -122,6 +122,7 @@ describe('shared sheet local source to Canonical', () => {
     expect(next.plan.entries[0]!.action).toBe('CHANGE'); expect(next.result.report).toMatchObject({ status: 'APPLIED' });
     expect((await s.store.listOffers())[0]!.revision).toBe(2);
     expect((await s.store.listVehicleAssets())[0]!.sourceVehicleFacts!.fields.displacementCc!.value).toBe(1235);
+    expect((await s.store.listVehicleAssets())[0]!.sourceFirstRunId).toBe(first.plan.runId);
     expect((await s.source.listRaw(first.plan.runId))[0]!.payload.values).toEqual(capture().tabs[0]!.values[1]);
   });
   it('a later status change (even HOLD→HOLD with a different asset state) is held, not silently diverged', async () => {

@@ -9,7 +9,26 @@ export type SharedSheetCapture = {
   readTime: string; revision?: string; digest?: string;
   /** values includes the exact header and every row, including blank rows; trailing cells padded by capturer. */
   tabs: Array<{ title: string; readTime: string; complete: true; rowCount: number; values: SheetCell[][] }>;
+  /** Layer ② «공급사 입력값»: what the supplier itself entered, before any of our edits (kept apart from our values). */
+  supplierEntered?: SupplierEnteredRecord[];
+  /** Cell edits made on the shared sheet by people/AI sessions (who·when·before→after). */
+  corrections?: SheetCorrection[];
 };
+export type SupplierEnteredRecord = { plate: string; source: 'ERP5_PRODUCTS_SOURCE_TEXT' | 'SHEET_BACKUP'; sourceRef: string;
+  observedAt: string; values: Record<string, unknown> };
+export type SheetCorrection = { plate: string; at: string; column: string; before: SheetCell; after: SheetCell; source: string };
+function supplementByPlate<T extends { plate: string }>(items: T[] | undefined, unique: boolean, fail: () => never): Map<string, T[]> {
+  const out = new Map<string, T[]>();
+  if (items === undefined) return out;
+  if (!Array.isArray(items)) fail();
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || !isAssignedPlate(item.plate)) fail();
+    const key = plateIdentityKey(item.plate);
+    if (unique && out.has(key)) fail();
+    (out.get(key) ?? out.set(key, []).get(key)!).push(structuredClone(item));
+  }
+  return out;
+}
 export const SHARED_SHEET_SPEC_DIGEST = stableDigest(spec);
 export const sharedSheetHeaders: readonly string[] = spec.inputHeaders;
 export const sharedSheetChannels = spec.supplierChannels.sharedInputSheet;
@@ -33,7 +52,7 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
   // One bad row must not stop the rest from being preserved: shape errors and duplicate identities are quarantined
   // per row (RAW kept under a position key, normalization HOLDs it). Only capture-level defects reject the batch.
   type Row = { tab: SharedSheetCapture['tabs'][number]; index: number; values: unknown[]; supplierCode: string | null;
-    identity: string | null; quarantine: string | null };
+    identity: string | null; quarantine: string | null; plateKey: string };
   const rows: Row[] = [];
   for (const tab of c.tabs) {
     if (!titles.includes(tab.title) || !timestamp(tab.readTime) || Date.parse(tab.readTime) < Date.parse(c.readTime) ||
@@ -51,11 +70,16 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
       // Placeholders such as 「신차」 are not vehicle identities: keep RAW by position and let normalization HOLD the row.
       const plate = shapeOk && isAssignedPlate(values[4]) ? plateIdentityKey(values[4]) : '';
       rows.push({ tab, index, values, supplierCode: supplier?.code ?? null,
-        identity: supplier && plate ? stableDigest([supplier.code, plate]) : null, quarantine: shapeOk ? null : 'ROW_SHAPE_INVALID' });
+        identity: supplier && plate ? stableDigest([supplier.code, plate]) : null, quarantine: shapeOk ? null : 'ROW_SHAPE_INVALID', plateKey: plate });
     }
   }
   const seen = new Map<string, number>();
   for (const r of rows) if (r.identity) seen.set(r.identity, (seen.get(r.identity) ?? 0) + 1);
+  for (const s of c.supplierEntered ?? []) if (!timestamp(s?.observedAt) || !['ERP5_PRODUCTS_SOURCE_TEXT', 'SHEET_BACKUP'].includes(s?.source) ||
+    typeof s.sourceRef !== 'string' || !s.values || typeof s.values !== 'object' || Array.isArray(s.values)) fail();
+  for (const x of c.corrections ?? []) if (!timestamp(x?.at) || typeof x.column !== 'string' || typeof x.source !== 'string') fail();
+  const entered = supplementByPlate(c.supplierEntered, true, fail);
+  const corrections = supplementByPlate(c.corrections, false, fail);
   const records: SourceIntakeBatch['records'] = rows.map(r => {
     const duplicate = r.identity !== null && seen.get(r.identity)! > 1;
     const quarantine = r.quarantine ?? (duplicate ? 'DUPLICATE_IDENTITY' : null);
@@ -64,7 +88,10 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
     return { sourceRecordId, sourceFingerprint: stableDigest({ rowDigest, supplierCode: r.supplierCode }),
       payload: { values: structuredClone(r.values), tab: r.tab.title, row: r.index + 1, readTime: r.tab.readTime,
         spreadsheetId: c.spreadsheetId, revision: c.revision ?? null, captureDigest: digest, rowDigest,
-        supplierCode: r.supplierCode, quarantine } };
+        supplierCode: r.supplierCode, quarantine,
+        // Evidence beside the row, outside rowDigest/fingerprint: the sheet values themselves stay the RAW of record.
+        ...(r.plateKey && entered.has(r.plateKey) ? { supplierEntered: entered.get(r.plateKey)![0] } : {}),
+        ...(r.plateKey && corrections.has(r.plateKey) ? { corrections: corrections.get(r.plateKey) } : {}) } };
   });
   if (Math.min(...c.tabs.map(t => Date.parse(t.readTime))) !== Date.parse(c.readTime)) fail();
   return { laneId: 'PRODUCT_VEHICLE', source: { sourceId, kind: 'GOOGLE_SHEET', displayName: 'Shared supplier input',

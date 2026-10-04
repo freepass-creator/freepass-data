@@ -20,6 +20,8 @@ export type VehicleAsset = EntityMeta & {
   /** Internal evidence, excluded from consumer projections. */
   sourceVehicleFacts?: SourceVehicleFacts;
   sourceFirstObservedAt?: string;
+  /** First source run of this asset (its RAW is the first supplier text, never overwritten). */
+  sourceFirstRunId?: string;
   id: string; vehicleModelId: string; status: VehicleAssetStatus;
   plateNumber?: string | null; vin?: string | null; odometerKm?: number | null;
 };

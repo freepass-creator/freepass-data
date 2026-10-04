@@ -80,6 +80,7 @@ export async function ingestRawSourceBatch(
   const previousHead = await store.getSourceHead(sourceId);
   // Preserve first observation even after an absence/reappearance; all evidence stays in existing RAW/runs.
   const firstSeen = new Map<string, string>();
+  const firstRun = new Map<string, string>();
   const wanted = new Set(rawRecords.map(x => x.sourceRecordId));
   const visited = new Set<string>();
   let historyRunId: string | null = previousHead?.runId ?? null;
@@ -89,6 +90,7 @@ export async function ingestRawSourceBatch(
     for (const prior of await store.listRaw(historyRunId)) {
       if (wanted.has(prior.sourceRecordId)) {
         firstSeen.set(prior.sourceRecordId, prior.firstObservedAt ?? prior.observedAt);
+        firstRun.set(prior.sourceRecordId, prior.firstRunId ?? prior.runId);
         wanted.delete(prior.sourceRecordId);
       }
     }
@@ -129,6 +131,7 @@ export async function ingestRawSourceBatch(
       if (normalize) {
         const prior = firstSeen.get(raw.sourceRecordId);
         raw.firstObservedAt = prior && Date.parse(prior) < Date.parse(raw.observedAt) ? prior : raw.observedAt;
+        raw.firstRunId = prior && Date.parse(prior) < Date.parse(raw.observedAt) ? firstRun.get(raw.sourceRecordId)! : raw.runId;
       }
       await store.appendRaw(raw);
       if (normalize) {
