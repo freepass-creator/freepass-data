@@ -375,6 +375,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 공통 시트 캡처 수집기 · 모든 차 박제 규칙 · 시트 차종 정리 운영 기록
+
+- 결정(AI 상황실 = 대표 오더, 10-04): ① 들어온 모든 차를 Canonical 에 넣는다. 시트 «차량상태»는 원문 그대로(`sourceVehicleFacts.supplierStatus`) 보존하고 노출만 가른다 — 출고가능·즉시출고 = Product ACTIVE(노출), 출고협의·계약중·상품화중·출고불가 = Product HOLD(비노출). 목록 밖 상태·이후 상태 변경은 HOLD(`SHARED_SHEET_STATUS_POLICY`, `STATUS_CHANGE_REQUIRES_REVIEW`). 자산 상태 매핑 중 출고불가 → RESERVED 는 임시값이다. ② 한 줄이 틀려도 나머지는 박제 — 74칸 형식이 깨진 줄·같은 공급사+차량번호 중복은 그 줄만 위치 키로 RAW 보존 후 HOLD. 숫자 없는 차량번호(「신차」 등)는 식별자가 아니다. ③ 정리값은 «FreePass Data 에 이미 있는 값 → F03 별칭으로 F03 이름» 이 먼저, 원문 재해석은 Data 에 값이 없거나 원문과 모순일 때만.
+- 변경: `capture:shared-sheet`(Sheets values.batchGet + 격자 행 수로 15탭 전체 범위일 때만 complete), 위 ①② 규칙, `CanonicalizationDecision.productStatus`. 계획 사전검사·소유권 이전 job 은 #313.
+- 실측(로컬, 실제 시트 캡처 → 빈 Catalog 기준 계획, 쓰기 0): 레코드 206(차 203 + 차량번호 빈 줄 3), CREATE 157 / HOLD 49(연식↔최초등록 불일치 26, 차종 식별 불완전 12 등). 제공 기간 712 = 계산 712. CREATE 중 수수료 확정 기간이 있는 차 120, 모든 기간 확정 86. 계획·캡처는 비공개 경로에만 있다.
+- 시트 작업(빠른 길, 백업 → 쓰기 → 되읽기, 모든 회차 되읽기 불일치 0). 백업 Drive 사본: `1MOZOlbofJiZoLucn3p6PWJW33q8tCPuqgNe_N7YpGuc`(원문 판정·지지오토 전), `16iZFQOWCL8hdDrTsMQAFMK9tyUJRATr-jXz_wcGzqi4`(제원 정정 전), `1K9eVE5TM_EDEMv5icdjo0UmmBgcwhG8iKCWKQG663cI`(Data 대조 전). 바꾼 칸: 원문 판정·지지오토 36, 제원·연식 27+10, F03 신규 행 반영 14+13+6, Data 대조·F03 개명 6. 차명 원문을 지지오토로 정정한 줄은 비고에 «지지오토 정정 10-04 / 공급사 원문: …». 결과: 시트 203대 중 F03 4칸 일치 190 이상, 세부트림 빈칸 9 → 8(남은 것은 원문·Data·F03 어느 쪽으로도 하나로 안 정해지는 차 — 확인 필요).
+- Data(ERP5 products) ↔ 시트 대조(104줄): 이름 규칙 차이만 23, 세부모델 같고 Data 트림이 F03 이름 아님·빈칸 29, 시트가 원문과 맞음 33, Data 가 원문과 맞아 시트를 고침 3, 확인 필요 10, Data 없음 6. Data 쪽은 하이브리드·E-TECH 누락, 「더 뉴」 세대 누락, 제조사 오류 등 원문과 어긋나는 값이 있어 그대로 채택하지 않는다.
+- 남음: Data 우선 단계(Data 값 → F03 → 원문과 모순 없을 때만 채택)를 적재 계획에 넣기. ERP4 수동 단계(쓰기 신원으로 캡처·dry-run·apply) — 시트 공유 대상은 `github-inventory-writer@freepasserp5`, 공유는 대표 답 대기. 확인 동선 등록 스크립트 장애(AI-OPS 수리 중). 상태 변경(노출 전환)을 검토 명령으로 반영하는 경로.
+- next_start_here: #313·#315 머지 → `ownership_dry_run` 실행(숫자) → Codex → ERP4 수동 단계 PR → 203대 운영 dry-run → apply → `query-canonical-by-plate` 3대 되읽기.
+- Data(ERP5 products) 쪽 정정 목록(원문과 어긋남 — 시트는 원문 기준 F03 값을 유지, Data 는 고칠 대상. 차량별 목록은 비공개 판정표 `시트-vs-Data-판정-20261004.md`): 그랑 콜레오스 E-TECH 하이브리드를 비하이브리드 등급으로(ECH 누락) 16대, 하이브리드 세부모델 누락(카니발 KA4 HEV 3·그랜저 4·K5 1) 8대, 「더 뉴」·세대 누락(카니발 KA4·그랜저 GN7·쏘나타 디 엣지·모닝 JA·K9 RJ 등) 9대, 니로 세대 오류(더 뉴 니로 SG2 → 디 올 뉴 니로) 2대, 렉스턴 → 렉스턴 스포츠 오류 1대, 아반떼 MD·뉴모닝·SM7 New Art 를 최신 세대/기본형으로 잘못 둔 것 3대, 제조사 오류(아우디를 기아) 1대, 등급을 옵션·런칭 표기로 둔 것(파이니스트→런칭, 아이코닉 컬러패키지, S350 d → S350 BlueTEC) 5대. 반대로 Data 가 맞아 시트를 고친 것 3대(세대·N Line·기본형), Data 근거로 시트 연식·최초등록을 고친 것 1대(더 뉴 팰리세이드 2023).
+
 ### 2026-10-04 F03 세부트림 규칙 남은 행 · 신규 행 · 기아 세대 별칭
 
 - 목적: 세부트림 규칙(정본 `src/domain/vehicle-trim-name.ts` — #310·#312·#314: 배기량·연료·구동만 뗌, 엔진 이름 남김, 배기량 뒤 터보·T·D와 붙은 배기량도 뗌)을 F03 전체에 반영하고, 공통 시트에 나왔지만 F03에 없던 차를 추가.
