@@ -1,0 +1,5 @@
+Warning: True color (24-bit) support not detected. Using a terminal with true color enabled will result in a better visual experience.
+Ripgrep is not available. Falling back to GrepTool.
+No input provided via stdin. Input can be provided by piping data into gemini or using the --prompt option.
+gemini-exit=42
+gemini-exit=1

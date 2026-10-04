@@ -23,7 +23,22 @@ export type VehicleNameRepairPlan = {
   trimRepairs?: VehicleNameRepairItem[];
   /** products.trim_name → F03 세부트림 name. Optional; `from` must be a non-blank name. */
   productTrimRepairs?: VehicleNameRepairItem[];
+  /** vehicle_trim_master.sub_model → 세부모델 이름 v1 (rename, or move a hybrid row to its own sub-model). Old name kept in sub_model_aliases. */
+  trimSubModelRepairs?: VehicleNameRepairItem[];
+  /** vehicle_trim_master.master_id → the vehicle_master doc of the row's new sub-model (hybrid split). */
+  trimMasterLinkRepairs?: VehicleNameRepairItem[];
+  /** New vehicle_master docs (new sub-model). Created only when absent; `data.id` must equal `id`. */
+  masterCreates?: VehicleMasterDocCreate[];
+  /** New vehicle_trim_master rows. Created only when absent; `data.master_id` must point to an existing or created master. */
+  trimCreates?: VehicleMasterDocCreate[];
 };
+
+export type VehicleMasterDocCreate = { id: string; data: Record<string, unknown>; evidence: string };
+
+/** One transaction carries every target write plus one audit per target — keep well under Firestore's 500-write limit. */
+export const MAX_VEHICLE_NAME_REPAIR_TARGETS = 200;
+const MASTER_CREATE_KEYS = ['id', 'maker', 'model', 'sub_model', 'origin'] as const;
+const TRIM_CREATE_KEYS = ['maker', 'model', 'sub_model', 'trim', 'master_id', 'trim_row_key'] as const;
 
 const clean = (value: unknown) => String(value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ');
 /** Stored value matches the plan's `from`. A blank `from` only matches a truly blank value: missing, null or an empty string. */
@@ -35,8 +50,24 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   if (!plan.sourceDigest?.trim()) throw new Error('sourceDigest is required');
   const all = [...plan.masterRepairs.map((item) => ({ ...item, kind: 'master' })), ...plan.productRepairs.map((item) => ({ ...item, kind: 'product' })),
     ...(plan.trimRepairs ?? []).map((item) => ({ ...item, kind: 'trim' })),
-    ...(plan.productTrimRepairs ?? []).map((item) => ({ ...item, kind: 'productTrim' }))];
-  if (!all.length) throw new Error('repair plan is empty');
+    ...(plan.productTrimRepairs ?? []).map((item) => ({ ...item, kind: 'productTrim' })),
+    ...(plan.trimSubModelRepairs ?? []).map((item) => ({ ...item, kind: 'trimSubModel' })),
+    ...(plan.trimMasterLinkRepairs ?? []).map((item) => ({ ...item, kind: 'trimMasterLink' }))];
+  const creates = [...(plan.masterCreates ?? []).map((c) => ({ ...c, kind: 'masterCreate', keys: MASTER_CREATE_KEYS })),
+    ...(plan.trimCreates ?? []).map((c) => ({ ...c, kind: 'trimCreate', keys: TRIM_CREATE_KEYS }))];
+  if (!all.length && !creates.length) throw new Error('repair plan is empty');
+  if (all.length + creates.length > MAX_VEHICLE_NAME_REPAIR_TARGETS) throw new Error(`repair plan too large (max ${MAX_VEHICLE_NAME_REPAIR_TARGETS} targets) — split it`);
+  const createKeys = new Set<string>();
+  for (const c of creates) {
+    if (!c.id?.trim() || typeof c.data !== 'object' || c.data === null || Array.isArray(c.data)) throw new Error(`${c.kind} requires id and data`);
+    if (typeof c.evidence !== 'string' || !c.evidence.trim()) throw new Error(`${c.kind} ${c.id} requires evidence`);
+    for (const key of c.keys) if (key !== 'id' && !clean(c.data[key])) throw new Error(`${c.kind} ${c.id} requires data.${key}`);
+    if (c.kind === 'masterCreate' && c.data.id !== c.id) throw new Error(`masterCreate ${c.id} data.id must equal id`);
+    const key = `${c.kind}:${c.id}`;
+    if (createKeys.has(key)) throw new Error(`duplicate create ${key}`);
+    createKeys.add(key);
+  }
+  // Linked masters must exist already or be created by this plan — checked against Firestore at apply time.
   const productIds = new Set(plan.productRepairs.map((item) => item.id));
   if ((plan.productTrimRepairs ?? []).some((item) => productIds.has(item.id))) throw new Error('one product per plan: sub_model and trim_name repairs must not overlap');
   const keys = new Set<string>();
@@ -54,27 +85,53 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   }
   return { masterCount: plan.masterRepairs.length, productCount: plan.productRepairs.length,
     ...(plan.trimRepairs ? { trimCount: plan.trimRepairs.length } : {}),
-    ...(plan.productTrimRepairs ? { productTrimCount: plan.productTrimRepairs.length } : {}) };
+    ...(plan.productTrimRepairs ? { productTrimCount: plan.productTrimRepairs.length } : {}),
+    ...(plan.trimSubModelRepairs ? { trimSubModelCount: plan.trimSubModelRepairs.length } : {}),
+    ...(plan.trimMasterLinkRepairs ? { trimMasterLinkCount: plan.trimMasterLinkRepairs.length } : {}),
+    ...(plan.masterCreates ? { masterCreateCount: plan.masterCreates.length } : {}),
+    ...(plan.trimCreates ? { trimCreateCount: plan.trimCreates.length } : {}) };
 }
+
+type RepairField = 'sub_model' | 'trim' | 'trim_name' | 'master_id';
+type AliasField = 'trim_aliases' | 'sub_model_aliases';
+/** The old name is kept in an alias list on these kinds (rule 20: sub-model aliases live in FreePass Data). */
+const ALIAS_FIELD: Partial<Record<string, AliasField>> = {
+  trim: 'trim_aliases', master: 'sub_model_aliases', trimSubModel: 'sub_model_aliases',
+};
 
 export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan) {
   const counts = validateVehicleNameRepairPlan(plan);
   const db = getFirestore(getTargetFirebaseApp());
-  // Each target = collection + field; vehicle_master/products repair sub_model, vehicle_trim_master repairs trim.
+  // Each target = collection + field. vehicle_master.sub_model and vehicle_trim_master.trim/sub_model keep the old name as an alias.
   const targets = [
-    ...plan.masterRepairs.map((item) => ({ item, ref: db.collection('vehicle_master').doc(item.id), field: 'sub_model' as const })),
-    ...plan.productRepairs.map((item) => ({ item, ref: db.collection('products').doc(item.id), field: 'sub_model' as const })),
-    ...(plan.trimRepairs ?? []).map((item) => ({ item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'trim' as const })),
-    ...(plan.productTrimRepairs ?? []).map((item) => ({ item, ref: db.collection('products').doc(item.id), field: 'trim_name' as const })),
+    ...plan.masterRepairs.map((item) => ({ kind: 'master', item, ref: db.collection('vehicle_master').doc(item.id), field: 'sub_model' as RepairField })),
+    ...plan.productRepairs.map((item) => ({ kind: 'product', item, ref: db.collection('products').doc(item.id), field: 'sub_model' as RepairField })),
+    ...(plan.trimRepairs ?? []).map((item) => ({ kind: 'trim', item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'trim' as RepairField })),
+    ...(plan.productTrimRepairs ?? []).map((item) => ({ kind: 'productTrim', item, ref: db.collection('products').doc(item.id), field: 'trim_name' as RepairField })),
+    ...(plan.trimSubModelRepairs ?? []).map((item) => ({ kind: 'trimSubModel', item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'sub_model' as RepairField })),
+    ...(plan.trimMasterLinkRepairs ?? []).map((item) => ({ kind: 'trimMasterLink', item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'master_id' as RepairField })),
   ];
+  const creates = [
+    ...(plan.masterCreates ?? []).map((c) => ({ c, ref: db.collection('vehicle_master').doc(c.id) })),
+    ...(plan.trimCreates ?? []).map((c) => ({ c, ref: db.collection('vehicle_trim_master').doc(c.id) })),
+  ];
+  // Rows may only be linked to a master that already exists or that this plan creates.
+  const createdMasterIds = new Set((plan.masterCreates ?? []).map((c) => c.id));
+  const linkedMasterIds = [...new Set([...(plan.trimMasterLinkRepairs ?? []).map((i) => clean(i.to)),
+    ...(plan.trimCreates ?? []).map((c) => clean(c.data.master_id))])].filter((id) => !createdMasterIds.has(id));
+  const linkRefs = linkedMasterIds.map((id) => db.collection('vehicle_master').doc(id));
+  if (linkRefs.length && (await db.getAll(...linkRefs)).some((snapshot) => !snapshot.exists)) throw new Error('linked vehicle_master missing');
+
   const refs = targets.map((x) => x.ref);
-  const snapshots = await db.getAll(...refs);
+  const snapshots = refs.length ? await db.getAll(...refs) : [];
   if (snapshots.some((snapshot) => !snapshot.exists)) throw new Error('repair target missing');
   snapshots.forEach((snapshot, index) => {
     if (!matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
       throw new Error(`precondition changed ${snapshot.ref.path}`);
     }
   });
+  const createRefs = creates.map((x) => x.ref);
+  if (createRefs.length && (await db.getAll(...createRefs)).some((snapshot) => snapshot.exists)) throw new Error('create target already exists');
 
   const backupDir = join(homedir(), '.codex', 'private', 'freepass-data-vehicle-name-backups');
   await mkdir(backupDir, { recursive: true });
@@ -88,54 +145,85 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     documents: snapshots.map((snapshot) => ({ path: snapshot.ref.path, data: snapshot.data() })),
     // The reviewed items (incl. source-text evidence for blank fills) are kept with the before-images.
     repairs: targets.map(({ item, field, ref }) => ({ path: ref.path, field, ...item })),
+    creates: creates.map(({ c, ref }) => ({ path: ref.path, evidence: c.evidence, data: c.data })),
   }, null, 2), { flag: 'wx', mode: 0o600 });
 
   // Evidence never goes into the repaired documents (products are served to consumers field-for-field);
   // each repair is recorded as an audit event in the same transaction instead.
   const occurredAt = new Date().toISOString();
-  const audits = targets.map(({ item, field, ref }): AuditEvent => ({
-    eventId: 'vnr_' + createHash('sha256').update([runId, ref.path, field].join('|')).digest('hex').slice(0, 32),
-    commandId: `vehicle-name-repair:${runId}`, actor: { id: 'service:freepass-data-vehicle-name-repair', kind: 'SERVICE' },
-    entityType: ref.parent.id, entityId: ref.id, action: 'VEHICLE_NAME_REFERENCE_REPAIRED',
-    before: { [field]: item.from }, after: { [field]: clean(item.to) },
-    reason: item.evidence ? `원문 근거: ${item.evidence}` : `F03 이름 정정 (${plan.sourceDigest})`,
-    revisionBefore: 0, revisionAfter: 0, occurredAt,
-  }));
+  const actor = { id: 'service:freepass-data-vehicle-name-repair', kind: 'SERVICE' } as const;
+  const auditId = (path: string, field: string) => 'vnr_' + createHash('sha256').update([runId, path, field].join('|')).digest('hex').slice(0, 32);
+  const audits: AuditEvent[] = [
+    ...targets.map(({ item, field, ref }): AuditEvent => ({
+      eventId: auditId(ref.path, field), commandId: `vehicle-name-repair:${runId}`, actor,
+      entityType: ref.parent.id, entityId: ref.id, action: 'VEHICLE_NAME_REFERENCE_REPAIRED',
+      before: { [field]: item.from }, after: { [field]: clean(item.to) },
+      reason: item.evidence ? `원문 근거: ${item.evidence}` : `F03 이름 정정 (${plan.sourceDigest})`,
+      revisionBefore: 0, revisionAfter: 0, occurredAt,
+    })),
+    ...creates.map(({ c, ref }): AuditEvent => ({
+      eventId: auditId(ref.path, 'create'), commandId: `vehicle-name-repair:${runId}`, actor,
+      entityType: ref.parent.id, entityId: ref.id, action: 'VEHICLE_MASTER_ENTRY_CREATED',
+      before: {}, after: { sub_model: clean(c.data.sub_model), ...(c.data.trim !== undefined ? { trim: clean(c.data.trim) } : {}) },
+      reason: `차종 마스터 추가 근거: ${c.evidence} (${plan.sourceDigest})`,
+      revisionBefore: 0, revisionAfter: 1, occurredAt,
+    })),
+  ];
   const auditRefs = audits.map((a) => db.collection(FIRESTORE_COLLECTIONS.evidence.audits).doc(a.eventId));
 
+  // One update per document: a trim row can be renamed and relinked in the same plan.
+  const byPath: Record<string, { ref: (typeof refs)[number]; fields: Record<string, string>; aliases: Partial<Record<AliasField, string[]>> }> = {};
+  for (const { kind, item, field, ref } of targets) {
+    const entry = byPath[ref.path] ?? { ref, fields: {}, aliases: {} };
+    if (entry.fields[field] !== undefined) throw new Error(`two repairs write ${ref.path}.${field}`);
+    entry.fields[field] = clean(item.to);
+    const aliasField = ALIAS_FIELD[kind];
+    if (aliasField && clean(item.from)) entry.aliases[aliasField] = [...(entry.aliases[aliasField] ?? []), clean(item.from)];
+    byPath[ref.path] = entry;
+  }
+
   await db.runTransaction(async (transaction) => {
-    const current = await transaction.getAll(...refs);
+    const current = refs.length ? await transaction.getAll(...refs) : [];
     current.forEach((snapshot, index) => {
       if (!snapshot.exists || !matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
         throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
       }
     });
-    current.forEach((snapshot, index) => {
-      const { item, field } = targets[index]!;
-      transaction.update(snapshot.ref, {
-        [field]: clean(item.to),
-        ...(field === 'trim' && clean(item.from) ? { trim_aliases: FieldValue.arrayUnion(clean(item.from)) } : {}),
+    for (const { ref, fields, aliases } of Object.values(byPath)) {
+      transaction.update(ref, {
+        ...fields,
+        ...Object.fromEntries(Object.entries(aliases).map(([k, v]) => [k, FieldValue.arrayUnion(...v!)])),
         vehicle_name_reference_checked_at: FieldValue.serverTimestamp(),
         vehicle_name_reference_source_digest: plan.sourceDigest,
       });
-    });
+    }
+    // create() fails the whole transaction if the document appeared meanwhile.
+    for (const { c, ref } of creates) transaction.create(ref, { ...c.data, vehicle_name_reference_source_digest: plan.sourceDigest });
     audits.forEach((audit, index) => transaction.create(auditRefs[index]!, audit));
   });
 
-  const readback = await db.getAll(...refs);
+  const readback = refs.length ? await db.getAll(...refs) : [];
   readback.forEach((snapshot, index) => {
-    const { item, field } = targets[index]!;
+    const { kind, item, field } = targets[index]!;
     const data = snapshot.data();
     if (clean(data?.[field]) !== clean(item.to)) throw new Error(`readback mismatch ${snapshot.ref.path}`);
-    if (field === 'trim') {
+    const aliasField = ALIAS_FIELD[kind];
+    if (aliasField) {
       // The old name must be kept as an alias, and aliases present before the repair must still be there.
-      const aliases: unknown[] = Array.isArray(data?.trim_aliases) ? data.trim_aliases : [];
-      const before = snapshots[index]!.data()?.trim_aliases;
+      const aliases: unknown[] = Array.isArray(data?.[aliasField]) ? data[aliasField] : [];
+      const before = snapshots[index]!.data()?.[aliasField];
       const kept = Array.isArray(before) ? before.every((a: unknown) => aliases.includes(a)) : true;
       if (!aliases.map(clean).includes(clean(item.from)) || !kept) throw new Error(`readback alias mismatch ${snapshot.ref.path}`);
     }
   });
+  const createReadback = createRefs.length ? await db.getAll(...createRefs) : [];
+  createReadback.forEach((snapshot, index) => {
+    const want = creates[index]!.c.data;
+    if (!snapshot.exists || Object.keys(want).some((k) => JSON.stringify(snapshot.data()?.[k]) !== JSON.stringify(want[k]))) {
+      throw new Error(`readback create mismatch ${snapshot.ref.path}`);
+    }
+  });
   const auditReadback = await db.getAll(...auditRefs);
   if (auditReadback.some((s, index) => !s.exists || s.data()?.reason !== audits[index]!.reason)) throw new Error('readback audit mismatch');
-  return { runId, backupPath, ...counts, readbackCount: readback.length, auditCount: auditReadback.length };
+  return { runId, backupPath, ...counts, readbackCount: readback.length + createReadback.length, auditCount: auditReadback.length };
 }
