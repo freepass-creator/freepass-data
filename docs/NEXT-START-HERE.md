@@ -375,6 +375,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 공통 시트 203대 ↔ FreePass Data 마스터 연결 대조 · 이름 정정 계획(적용 전)
+
+- 목적: 대표 «차종·제원 마스터를 그대로 갖다 써라 · 새 코드 만들지 마라». freepasserp5 `products` 1,760 · `vehicle_master` 1,816 · `vehicle_trim_master` 2,078(읽기 전용)과 기존 `npm run audit:vehicle-name-parity` 로 공통 시트 203대를 대조했다. #319(Data 우선 적재 규칙)는 기존 parity·repair 경로와 겹쳐 닫았다.
+- 결과(203대): products → vehicle_master → vehicle_trim_master 끝까지 연결 137(이름으로 108, `master_id` 로 29), vehicle_master 까지만 47(그 master 에 trim 행 없음 24 · 트림 표기 다름 23), 연결 안 됨 8(세부모델 이름이 master 에 없음 7 · 제조사·모델 조합 오류 1), products 없음 11. F03 행 매칭 195/203(96%), 제원마스터 매칭 연료 100% · 배기량 95% · 구동 19%(구동 별칭 결정 뒤 예상 91%, 남은 18대는 빈칸).
+- parity audit(F03 266 세부모델 / master 1,816 / products 1,760): FAIL, issues 721(HOLD 711 · ERROR 10), 공통 시트 차 61대가 `PRODUCT_USES_DRIFTED_MASTER_NAME` 55 · `PRODUCT_REFERENCE_NAME_MISMATCH` 6.
+- 이름 정정 계획 생성 절차(한 번 쓰는 절차 — 코드로 만들지 않는다, 9-28 과 같은 방식): ① freepasserp5 세 컬렉션과 공통 시트를 읽기 전용으로 받는다 ② parity audit 의 PRODUCT 이슈 차 + 마스터 미연결 차 중 공통 시트에 있는 차만 고른다 ③ `to` = 공통 시트의 F03 세부모델(원문 대조로 확정한 값), `from` = products.sub_model. 시트 세부모델이 F03 행이 아니거나, 제조사·모델이 다르거나(이 job 은 sub_model 만 바꾼다), 확인 필요 차는 제외 ④ 기아 개발코드 규칙과 어긋나는 F03 이름(「셀토스 2세대」)으로 바꾸는 줄은 제외하고 고도화 전 정리로 넘긴다 ⑤ Codex 검토에서 «다른 차종·세대로 바뀌는» 분류 정정은 별도 승인 목록으로 뺀다 ⑥ 기존 `apply-vehicle-name-reference-repair` dry-run 으로 형식을 확인한다.
+- 계획: product 57건(master 0), sourceDigest `0e3f1d5abba038d93cfc254832ab727c9081d2e8b440cb54d1ea9924f6d7fa70`, dry-run DRY_RUN. 분류 정정 2건(픽업→SUV 1 · 다른 세대 1)은 별도 승인 목록. 계획·차량별 목록은 비공개 위치에만 있다(공개 저장소라 차량번호 없음).
+- 적용 조건: F03 전체 정비(고도화 전 정리) 뒤 기존 apply 경로(정확한 sourceDigest 승인 · 개인 백업 · 단일 transaction 전제조건 · 감사 · 되읽기). 적용 전 F03 재조회로 `to` 이름이 그대로인지 다시 맞춘다.
+- 남음: trim_master 행 없는 24대분 · 트림 표기 차이 23대(고도화 전 정리), 제원마스터 구동 별칭(FWD·RWD→2WD, 4MATIC·콰트로·xDrive·4MOTION·HTRAC→AWD, 4WD 는 원문이 4WD 일 때만), 공통 시트 차종 칸 되쓰기(Data → 시트, gws 백업·쓰기·되읽기, 공급사·사람 입력값은 덮지 않고 표시) — F03 정비와 이름 정정 뒤 한 번에.
+
 ### 2026-10-04 공통 시트 캡처 수집기 · 모든 차 박제 규칙 · 시트 차종 정리 운영 기록
 
 - 결정(AI 상황실 = 대표 오더, 10-04): ① 들어온 모든 차를 Canonical 에 넣는다. 시트 «차량상태»는 원문 그대로(`sourceVehicleFacts.supplierStatus`) 보존하고 노출만 가른다 — 출고가능·즉시출고 = Product ACTIVE(노출), 출고협의·계약중·상품화중·출고불가 = Product HOLD(비노출). 목록 밖 상태·이후 상태 변경은 HOLD(`SHARED_SHEET_STATUS_POLICY`, `STATUS_CHANGE_REQUIRES_REVIEW`). 자산 상태 매핑 중 출고불가 → RESERVED 는 임시값이다. ② 한 줄이 틀려도 나머지는 박제 — 74칸 형식이 깨진 줄·같은 공급사+차량번호 중복은 그 줄만 위치 키로 RAW 보존 후 HOLD. 숫자 없는 차량번호(「신차」 등)는 식별자가 아니다. ③ 정리값은 «FreePass Data 에 이미 있는 값 → F03 별칭으로 F03 이름» 이 먼저, 원문 재해석은 Data 에 값이 없거나 원문과 모순일 때만.
