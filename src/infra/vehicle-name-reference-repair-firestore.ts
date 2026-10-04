@@ -84,14 +84,14 @@ const variantTrimNames = (variants: unknown): string[] => {
     const trims = (v as Record<string, unknown>).trims;
     if (trims === undefined) return [];
     if (!Array.isArray(trims) || trims.some((t) => typeof t !== 'string')) throw new Error('variant trims must be a list of strings');
-    if (trims.some((t) => t !== clean(t))) throw new Error('variant trims must be normalized names');
+    if (trims.some((t) => !t || t !== clean(t))) throw new Error('variant trims must be non-empty normalized names');
     return trims as string[];
   });
 };
 /** A stored top-level trims list used for the ⊆ check must be a list of strings. */
 const storedTrimList = (value: unknown, where: string): string[] | undefined => {
   if (value === undefined) return undefined; // absent: only variants without trim names may be written
-  if (!Array.isArray(value) || value.some((t) => typeof t !== 'string')) throw new Error(`stored trims is not a list of strings ${where}`);
+  if (!Array.isArray(value) || value.some((t) => typeof t !== 'string' || !t.trim())) throw new Error(`stored trims is not a list of strings ${where}`);
   return value.map(clean);
 };
 /** Stored value matches the plan's `from`. A blank `from` only matches a truly blank value: missing, null or an empty string. */
@@ -174,7 +174,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     for (const key of ['maker', 'model', 'sub_model'] as const) {
       if (typeof c.data[key] !== 'string' || c.data[key] !== clean(c.data[key])) throw new Error(`masterCreate ${c.id} ${key} must be normalized text`);
     }
-    if (c.data.trims !== undefined && (!Array.isArray(c.data.trims) || c.data.trims.some((t) => typeof t !== 'string' || t !== clean(t)))) throw new Error(`masterCreate ${c.id} trims must be a list of normalized strings`);
+    if (c.data.trims !== undefined && (!Array.isArray(c.data.trims) || c.data.trims.some((t) => typeof t !== 'string' || !t || t !== clean(t)))) throw new Error(`masterCreate ${c.id} trims must be a list of normalized strings`);
     if (variantTrimNames(c.data.variants).length && !Array.isArray(c.data.trims)) throw new Error(`masterCreate ${c.id} variants name trims but trims is not a list`);
     if (Array.isArray(c.data.variants) && Array.isArray(c.data.trims)) {
       const listed = new Set((c.data.trims as unknown[]).map(clean));
@@ -268,6 +268,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const variantSnaps = variantRefs.length ? await db.getAll(...variantRefs) : [];
   variantSnaps.forEach((snapshot, index) => {
     const v = variantRepairs[index]!;
+    storedTrimList(snapshot.data()?.trims, snapshot.ref.path); // shape, whether or not the list is replaced
     if (!snapshot.exists || stableDigest(snapshot.data()?.variants ?? null) !== v.fromDigest
       || (v.trims !== undefined && stableDigest(snapshot.data()?.trims ?? null) !== v.fromTrimsDigest)) {
       throw new Error(`variants precondition changed ${snapshot.ref.path}`);
@@ -486,8 +487,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     }
     // trims is pinned by fromTrimsDigest when given; otherwise the stored list (read again here) must still cover the new variants.
     for (const [index, v] of variantRepairs.entries()) {
-      if (v.trims !== undefined) continue;
       const stored = (await transaction.getAll(variantRefs[index]!))[0]!.data()?.trims;
+      storedTrimList(stored, variantRefs[index]!.path); // shape, whether or not the list is replaced
+      if (v.trims !== undefined) continue;
       const names = variantTrimNames(v.to);
       const listed = storedTrimList(stored, variantRefs[index]!.path);
       if (!listed ? names.length > 0 : names.some((t) => !listed.includes(t))) throw new Error(`transaction variants name trims missing from the stored trims ${variantRefs[index]!.path}`);

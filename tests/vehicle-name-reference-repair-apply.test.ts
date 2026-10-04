@@ -366,6 +366,11 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
       store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: bad });
       await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: 'gas' }], evidence: 'x' }] })).rejects.toThrow(/not a list of strings/);
     }
+    // ... and also when the plan replaces the list (the stored value must still be a valid list or absent)
+    for (const bad of [null, 3, 'A', {}, ['A', 3], ['']]) {
+      store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: bad });
+      await expect(applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: 'gas', trims: ['A'] }], evidence: 'x', trims: ['A'], fromTrimsDigest: stableDigest(bad) }] })).rejects.toThrow(/not a list of strings/);
+    }
     store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: undefined });
     // variants without any trim names need no trims list
     await applyVehicleNameReferenceRepair({ ...base, masterVariantRepairs: [{ id: 'm-gn7', fromDigest: stableDigest(now), to: [{ fuel: '가솔린' }], evidence: 'x' }] });
