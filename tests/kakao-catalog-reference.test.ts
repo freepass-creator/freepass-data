@@ -344,7 +344,8 @@ describe('F04 2026-10-04 alignment regression', () => {
   const both = (input: Parameters<typeof resolveSalesCommission>[0]) => [resolveSupplierBillingFee(input), resolveSalesCommission(input)];
   const amounts = (input: Parameters<typeof resolveSalesCommission>[0]) => both(input).map(row => row.amount);
   const opaque = 'opaque:synthetic_contract_0001';
-  const exception = { sourceRow: 160 as const, status: 'APPROVED' as const, contractRef: opaque, matchedContractRef: opaque, ledgerRow: 413 };
+  // 합성 개별 합의(비공개 목록에서 오는 형태). 금액은 시험용 가짜 값이다.
+  const agreement = { agreementId: 'private:synthetic-01', sourceRow: 160 as const, status: 'APPROVED' as const, contractRef: opaque, matchedContractRef: opaque, billing: 777000, payout: 444000 };
   it('preserves previous policy facts and versions the new authority', () => {
     expect(KAKAO_COMMISSION_POLICY_2026_10_03.policyId).toBe('sales-commission-2026-10-03');
     expect(KAKAO_COMMISSION_POLICY_2026_10_03.sonokongAdditions[60]).toBe(700000);
@@ -397,24 +398,47 @@ describe('F04 2026-10-04 alignment regression', () => {
     expect(product).toEqual(sourceBefore);
     expect(evidence).toEqual({ vehicleValue: 44000000, depositTierPercent: 5, newProductSubtype: 'NEW_PREDELIVERY' });
   });
-  it('7: approved 413 uses latest row 160, independent of general 60-month conflict', () => {
-    const input = { ...base, supplierId: 'RP012', individualException: true, individualExceptionEvidence: exception };
+  it('7: an approved private individual agreement pays exactly its amounts (same input → same amount), with row 160 provenance', () => {
+    const input = { ...base, supplierId: 'RP012', individualException: true, individualAgreement: agreement };
     const before = structuredClone(input);
-    expect(amounts(input)).toEqual([862000,562000]);
+    expect(amounts(input)).toEqual([777000, 444000]);
+    expect(amounts(structuredClone(input))).toEqual(amounts(input));
+    expect(both(input).map(r => r.ruleId)).toEqual(['INDIVIDUAL_AGREEMENT_BILLING', 'INDIVIDUAL_AGREEMENT_PAYOUT']);
     expect(both(input)[0]!.sourceRefs).toEqual(['F04:수수료표!A160:M160']);
     expect(input).toEqual(before);
-    for (const changed of [{ matchedContractRef: 'opaque:another_contract_0001' }, { status: 'UNCONFIRMED' as const }, { ledgerRow: 414 }, { contractRef: 'plaintext' }]) {
-      expect(both({ ...input, individualExceptionEvidence: { ...exception, ...changed } }).every(r => r.state === 'UNKNOWN')).toBe(true);
+    for (const changed of [{ matchedContractRef: 'opaque:another_contract_0001' }, { status: 'UNCONFIRMED' as const }, { contractRef: 'plaintext' }, { agreementId: 'plain-id' }, { sourceRow: 999 as never }]) {
+      expect(both({ ...input, individualAgreement: { ...agreement, ...changed } }).every(r => r.state === 'UNKNOWN')).toBe(true);
     }
-    expect(both({ ...input, supplierId: 'RP023' }).every(r => r.state === 'UNKNOWN')).toBe(true);
-    expect(both({ ...input, termMonths: 48 }).every(r => r.state === 'UNKNOWN')).toBe(true);
+    expect(both({ ...input, individualAgreement: { ...agreement, billing: null } }).map(r => r.state)).toEqual(['UNKNOWN', 'CALCULATED']);
+    expect(both({ ...input, individualAgreement: { ...agreement, payout: -1 } })[1]!.reasonCode).toBe('INDIVIDUAL_AGREEMENT_AMOUNT_INVALID');
   });
-  it.each([466,473,474,475])('7: Aica individual %s payout confirmed, billing unknown even with vehicle input', ledgerRow => {
+  it('7: legacy individual exception evidence fails closed instead of falling through to the general rule', () => {
+    const legacyOnly = { ...base, supplierId: 'RP012', individualExceptionEvidence: { sourceRow: 160, privateRef: 'legacy-private-ref' } };
+    expect(both(legacyOnly)).toEqual([
+      expect.objectContaining({ state: 'UNKNOWN', amount: null, reasonCode: 'LEGACY_INDIVIDUAL_EXCEPTION_INPUT' }),
+      expect.objectContaining({ state: 'UNKNOWN', amount: null, reasonCode: 'LEGACY_INDIVIDUAL_EXCEPTION_INPUT' }),
+    ]);
+    expect(amounts({ ...base, supplierId: 'RP012', individualAgreement: agreement })).toEqual([777000, 444000]);
+  });
+  it.each([null, false, 'opaque:bad-shape', []])('7: invalid individualAgreement %p fails closed instead of falling through', individualAgreement => {
+    expect(both({ ...base, supplierId: 'RP012', individualAgreement } as never)).toEqual([
+      expect.objectContaining({ state: 'UNKNOWN', amount: null, reasonCode: 'INDIVIDUAL_AGREEMENT_INVALID' }),
+      expect.objectContaining({ state: 'UNKNOWN', amount: null, reasonCode: 'INDIVIDUAL_AGREEMENT_INVALID' }),
+    ]);
+  });
+  it('7: RP034 with only legacy individual exception evidence stays unknown before exclusion', () => {
+    const legacyOnly = { ...base, supplierId: 'RP034', individualExceptionEvidence: { sourceRow: 160, privateRef: 'legacy-private-ref' } };
+    expect(both(legacyOnly)).toEqual([
+      expect.objectContaining({ state: 'UNKNOWN', amount: null, reasonCode: 'LEGACY_INDIVIDUAL_EXCEPTION_INPUT' }),
+      expect.objectContaining({ state: 'UNKNOWN', amount: null, reasonCode: 'LEGACY_INDIVIDUAL_EXCEPTION_INPUT' }),
+    ]);
+  });
+  it('7: a payout-confirmed agreement pays only the payout; billing stays unknown even with vehicle input', () => {
     const input = { ...base, supplierId: 'RP004', productType: '선출고', vehicleValue: 40000000,
-      individualExceptionEvidence: { ...exception, sourceRow: 163 as const, status: 'PAYOUT_CONFIRMED' as const, ledgerRow } };
-    expect(resolveSalesCommission(input).amount).toBe(400000);
+      individualAgreement: { ...agreement, sourceRow: 163 as const, status: 'PAYOUT_CONFIRMED' as const, billing: 999000, payout: 333000 } };
+    expect(resolveSalesCommission(input)).toMatchObject({ state: 'CALCULATED', amount: 333000, ruleId: 'INDIVIDUAL_AGREEMENT_PAYOUT' });
     expect(resolveSupplierBillingFee(input).reasonCode).toBe('INDIVIDUAL_BILLING_BASIS_UNCONFIRMED');
-    expect(resolveSalesCommission({ ...input, productType: '구독' }).state).toBe('UNKNOWN');
+    expect(resolveSalesCommission(input).sourceRefs).toEqual(['F04:수수료표!A163:M163']);
   });
   it('8: mindcar stays not applicable, never zero', () => {
     expect(both({ ...base, supplierId: 'RP034' }).every(r => r.state === 'NOT_APPLICABLE' && r.amount === null)).toBe(true);
@@ -434,9 +458,9 @@ describe('F04 2026-10-04 alignment regression', () => {
     // 합성 예: Q12 1,000,000 → 청구 1,600,000 · 지급 1,000,000.
     expect(both({ ...sonokong, q12Basis: { amount: 1000000, sourceRef: 'private:verified-q12' } }).map(r => r.amount)).toEqual([1600000, 1000000]);
     expect(both({ ...sonokong, termMonths: 24, subscriptionForm: 'RETURN' }).every(r => r.reasonCode === 'RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED')).toBe(true);
-    // F04 R402 624,000 → 567,273, R420 560,000 → 509,091 (VAT 포함 ÷ 1.1, 원 단위 반올림)
-    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP018', productType: '재렌트', monthlyRent: 624000 })).toMatchObject({ state: 'CALCULATED', amount: 567273, vatAmount: 56727, totalAmount: 624000 });
-    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP018', productType: '재렌트', monthlyRent: 560000 })).toMatchObject({ state: 'CALCULATED', amount: 509091, vatAmount: 50909, totalAmount: 560000 });
+    // 합성 예: VAT 포함 금액 ÷ 1.1, 원 단위 반올림(…5 이상 올림·미만 버림).
+    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP018', productType: '재렌트', monthlyRent: 612000 })).toMatchObject({ state: 'CALCULATED', amount: 556364, vatAmount: 55636, totalAmount: 612000 });
+    expect(resolveSupplierBillingFee({ ...base, supplierId: 'RP018', productType: '재렌트', monthlyRent: 570000 })).toMatchObject({ state: 'CALCULATED', amount: 518182, vatAmount: 51818, totalAmount: 570000 });
     for (const termMonths of [12, 24, 36, 48]) for (const supplierId of ['RP021', 'PT-0026'])
       expect(both({ ...base, supplierId, productType: '구독', termMonths }).every(r => r.state === 'UNKNOWN' && r.reasonCode === 'SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED')).toBe(true);
   });
