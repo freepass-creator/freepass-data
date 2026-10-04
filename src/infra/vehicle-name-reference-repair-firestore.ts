@@ -84,13 +84,14 @@ const variantTrimNames = (variants: unknown): string[] => {
     const trims = (v as Record<string, unknown>).trims;
     if (trims === undefined) return [];
     if (!Array.isArray(trims) || trims.some((t) => typeof t !== 'string')) throw new Error('variant trims must be a list of strings');
-    return trims.map(clean);
+    if (trims.some((t) => t !== clean(t))) throw new Error('variant trims must be normalized names');
+    return trims as string[];
   });
 };
 /** A stored top-level trims list used for the ⊆ check must be a list of strings. */
 const storedTrimList = (value: unknown, where: string): string[] | undefined => {
-  if (!Array.isArray(value)) return undefined;
-  if (value.some((t) => typeof t !== 'string')) throw new Error(`stored trims must be a list of strings ${where}`);
+  if (value === undefined) return undefined; // absent: only variants without trim names may be written
+  if (!Array.isArray(value) || value.some((t) => typeof t !== 'string')) throw new Error(`stored trims is not a list of strings ${where}`);
   return value.map(clean);
 };
 /** Stored value matches the plan's `from`. A blank `from` only matches a truly blank value: missing, null or an empty string. */
@@ -271,11 +272,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       || (v.trims !== undefined && stableDigest(snapshot.data()?.trims ?? null) !== v.fromTrimsDigest)) {
       throw new Error(`variants precondition changed ${snapshot.ref.path}`);
     }
-    if (v.trims === undefined && !Array.isArray(snapshot.data()?.trims) && variantTrimNames(v.to).length) {
-      throw new Error(`masterVariantRepair ${v.id} stored trims is not a list — pass trims`);
-    }
-    if (v.trims === undefined && Array.isArray(snapshot.data()?.trims)) {
-      const listed = new Set(storedTrimList(snapshot.data()!.trims, snapshot.ref.path));
+    if (v.trims === undefined) {
+      const stored = storedTrimList(snapshot.data()?.trims, snapshot.ref.path);
+      if (!stored && variantTrimNames(v.to).length) throw new Error(`masterVariantRepair ${v.id} stored trims is not a list — pass trims`);
+      const listed = new Set(stored ?? []);
       const missing = variantTrimNames(v.to).filter((t) => !listed.has(t));
       if (missing.length) throw new Error(`masterVariantRepair ${v.id} variants name trims missing from the stored trims (pass trims): ${[...new Set(missing)].join(', ')}`);
     }
