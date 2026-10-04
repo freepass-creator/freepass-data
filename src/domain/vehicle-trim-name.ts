@@ -4,14 +4,15 @@
  * 엔진·연료·구동은 공통 시트 배기량·연료 칸이 맡는다. 인승(「9인승 노블레스」)은 등급 이름의 일부라 남긴다.
  * 예외: 모델 번호가 곧 등급인 수입차(520d · C300 4MATIC · S350 d 4MATIC · xDrive20i · B5 …)는 떼지 않는다.
  *
- * 떼는 낱말은 이 파일 하나로 고정한다 — 세션마다 다르게 떼지 않는다. 판단이 갈리는 낱말은
- * TRIM_UNDECIDED_TOKENS 에 두고 떼지 않는다(결정되면 이 파일을 고친다).
+ * 떼는 낱말은 이 파일 하나로 고정한다 — 세션마다 다르게 떼지 않는다. 엔진 이름(TCe·dCi·TSI·TDI·VGT·터보·
+ * 에코부스트·S/C)은 남기고 연료 표시(LPe·LPLI 포함)는 뗀다(AI 상황실 판단 2026-10-04). 새로 판단이 갈리는
+ * 낱말은 TRIM_UNDECIDED_TOKENS 에 두고 떼지 않는다(결정되면 이 파일을 고친다).
  */
 
 /** 정확히 이 낱말(대소문자 무시)이면 뗀다. */
 export const TRIM_POWERTRAIN_WORDS: readonly string[] = Object.freeze([
-  // 연료
-  '가솔린', '디젤', 'LPG', 'LPi', '하이브리드', 'HEV', 'PHEV', '전기', '바이퓨얼',
+  // 연료 — LPe(르노)·LPLI(르노 SM7)는 LPG 연료 표시라 뗀다
+  '가솔린', '디젤', 'LPG', 'LPi', 'LPe', 'LPLI', '하이브리드', 'HEV', 'PHEV', '전기', '바이퓨얼',
   // 엔진 방식
   'T-GDi', 'GDi', 'MPi', 'CRDi', 'VVT', 'CVVT', 'V6', 'V8',
   // 구동
@@ -21,12 +22,11 @@ export const TRIM_POWERTRAIN_WORDS: readonly string[] = Object.freeze([
 /** 모양으로 떼는 배기량 표시: 1.6 · 2.0T · 1.6T · 1600cc. */
 export const TRIM_DISPLACEMENT_PATTERNS: readonly RegExp[] = Object.freeze([/^\d\.\dT?$/i, /^\d{3,4}cc$/i]);
 
-/**
- * 엔진 이름이기도 하고 등급처럼 쓰이기도 해서 판단이 갈리는 낱말 — 떼지 않고 표시만 한다.
- * TCe 는 대표 예시(「TCe 인스파이어」)로 남긴다는 것이 확정이다. 나머지는 결정 대기.
- */
-export const TRIM_UNDECIDED_TOKENS: readonly string[] = Object.freeze(['dCi', 'LPe', 'LPLI', 'VGT', 'e-VGT', '터보', 'TSI', 'TDI', '에코부스트', 'S/C']);
-export const TRIM_KEPT_ENGINE_NAMES: readonly string[] = Object.freeze(['TCe']);
+/** 엔진 이름 — 떼지 않는다(대표 예시 「TCe 인스파이어」, AI 상황실 판단 2026-10-04). */
+export const TRIM_KEPT_ENGINE_NAMES: readonly string[] = Object.freeze(['TCe', 'dCi', 'TSI', 'TDI', 'VGT', 'e-VGT', '터보', '에코부스트', 'S/C']);
+
+/** 판단이 갈리는 낱말 — 떼지 않고 표시만 한다(지금은 없음). 새로 생기면 여기에 두고 결정되면 위 목록으로 옮긴다. */
+export const TRIM_UNDECIDED_TOKENS: readonly string[] = Object.freeze([]);
 
 /** 수입차 트림 첫 낱말이 모델 번호이면(520d · C300 · M135i · AMG · xDrive20i · B5 · T5) 트림 전체를 그대로 둔다. */
 const MODEL_DESIGNATION = /^(?:AMG|xDrive\d{0,2}[a-z]?|sDrive\d{0,2}[a-z]?|[A-Z]{0,2}\d{1,3}[A-Za-z]{0,3}\+?)$/;

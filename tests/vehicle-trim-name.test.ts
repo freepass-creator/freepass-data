@@ -34,8 +34,14 @@ describe('F03 세부트림 display name (Encar end level minus powertrain, 2026-
     expect(trimDisplayName('2.0 LPI 프레스티지', '국산').modelDesignation).toBe(false);
   });
 
-  it('keeps undecided engine words and reports them', () => {
-    expect(trimDisplayName('위트 디젤 1.6 VGT 스마트', '국산')).toEqual({ name: '위트 VGT 스마트', removed: ['디젤', '1.6'], undecided: ['VGT'], modelDesignation: false });
-    expect(trimDisplayName('dCi RE', '국산').undecided).toEqual(['dCi']);
+  it('keeps engine names and drops LPG fuel labels (decided 2026-10-04)', () => {
+    expect(trimDisplayName('위트 디젤 1.6 VGT 스마트', '국산')).toEqual({ name: '위트 VGT 스마트', removed: ['디젤', '1.6'], undecided: [], modelDesignation: false });
+    expect(name('dCi RE')).toBe('dCi RE');
+    expect(name('터보 인스퍼레이션')).toBe('터보 인스퍼레이션');
+    expect(name('1.4 TSI 프레스티지', '수입')).toBe('TSI 프레스티지');
+    expect(name('2.0 에코부스트 2WD', '수입')).toBe('에코부스트');
+    expect(name('퀘스트 2.0 LPe 밴')).toBe('퀘스트 밴');
+    expect(name('LPLI 2.0 LPe 택시렌터카')).toBe('택시렌터카');
+    expect(name('LPe RE')).toBe('RE');
   });
 });
