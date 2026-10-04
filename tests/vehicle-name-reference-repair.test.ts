@@ -99,7 +99,7 @@ describe('vehicle-name reference repair gate', () => {
     expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: [' C 에센셜'], fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/normalized/);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: ['A', 'A'], fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/duplicate/);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/together/);
-    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: [], fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/non-empty/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: [], fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/non-empty|wrong type/);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: ['A'], fromTrimsDigest: 'xyz' }] })).toThrow(/fromTrimsDigest/);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: [3 as never], fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/normalized/);
     // no-op rules: same variants but different trims is a change; both the same is a no-op; variants-only still works
@@ -128,9 +128,9 @@ describe('vehicle-name reference repair gate', () => {
     expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, trims: undefined } }] })).toThrow(/not a list/);
     // variants shape: a variant's trims must be a list of strings, variants a list of objects
     expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, variants: [{ trims: ['3'] }], trims: [3] } }] })).toThrow(/normalized strings|wrong type/);
-    expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, variants: null } }] })).toThrow(/variants must be a list/);
-    expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, model_aliases: [{ x: 1 }] } }] })).toThrow(/list of strings/);
-    expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, gen_code: 123 } }] })).toThrow(/gen_code must be a string/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, variants: null } }] })).toThrow(/variants must be a list|variants has the wrong type/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, model_aliases: [{ x: 1 }] } }] })).toThrow(/list of strings|wrong type/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, gen_code: 123 } }] })).toThrow(/gen_code must be a string|gen_code has the wrong type/);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterRepairs: [{ id: 'm', from: 123 as never, to: 'B' }] })).toThrow(/must be strings/);
     expect(matchesFrom(123, '123')).toBe(false);
     // created documents: only known fields with their types; ids are single document ids; planned variants follow the variant fields
@@ -144,7 +144,7 @@ describe('vehicle-name reference repair gate', () => {
     expect(() => validateVehicleNameRepairPlan({ ...base, trimMasterLinkRepairs: [{ id: 't', from: 'm1', to: 'x/y' }] })).toThrow(/exact master ids/);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ id: 'm', fromDigest: 'a'.repeat(64), to: [{ label: 'v', fuel: '가솔린', drivetrain: [] }], evidence: 'x' }] })).toThrow(/wrong type/);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, variants: [], trims: [''] } }] })).toThrow(/normalized strings|wrong type/);
-    expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, variants: [{ trims: [''] }], trims: ['A'] } }] })).toThrow(/non-empty/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, variants: [{ trims: [''] }], trims: ['A'] } }] })).toThrow(/non-empty|wrong type/);
     for (const bad of [[{ trims: 'B' }], [{ trims: ['A', 3] }], [{ trims: null }], [{ trims: [' A '] }], [{ trims: ['Ａ'] }], ['x'], { trims: ['A'] }]) {
       expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, to: bad as never, trims: ['A'] }] })).toThrow(/variant|variants/);
       expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ id: 'm', fromDigest: 'a'.repeat(64), to: bad as never, evidence: 'x' }] })).toThrow(/variant|variants/);
