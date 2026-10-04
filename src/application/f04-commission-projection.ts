@@ -96,7 +96,7 @@ const diffOf = (row: number, column: F04Column, against: F04Diff['against'], pla
 /** 엔진 결과 → 시트에 쓸 공급가 정수, 아니면 빈칸 사유. */
 export function projectedAmount(result: ReturnType<typeof resolveSupplierBillingFee>): { value: number; ruleId: string } | { reason: string } {
   if (result.state !== 'CALCULATED' || result.amount === null || !result.ruleId) return { reason: result.reasonCode ?? result.state };
-  // VAT 포함 규칙도 엔진의 공급가(÷1.1, 원 미만 반올림 — AI 상황실 2026-10-05 결정, 원장 41줄 관행)를 그대로 쓴다.
+  // VAT 포함 규칙도 엔진의 공급가(÷1.1, 원 미만 반올림 — AI 상황실 2026-10-05 결정, 근거는 비공개 기록)를 그대로 쓴다.
   return { value: result.amount, ruleId: result.ruleId };
 }
 
@@ -188,10 +188,10 @@ export function planF04CommissionProjection(input: {
       return dateCols.has(c) && /^\d{4}-\d{2}-\d{2}$/.test(isoDate(a)) && isoDate(a) === isoDate(b);
     };
     input.intake.forEach((r, i) => {
-      if (i <= hi) return; // 설명·머리글 줄
-      const v = (r as unknown[] | undefined) ?? [], f = (formulas[i] as unknown[] | undefined) ?? [];
+      // 설명·머리글 줄도 대조한다(두 번째 읽기에서 열 이름·배치가 바뀌면 멈춘다). AE·AJ·흐르는 수식 열 제외는 자료 줄에만.
+      const v = (r as unknown[] | undefined) ?? [], f = (formulas[i] as unknown[] | undefined) ?? [], data = i > hi;
       for (let c = 0; c < Math.max(v.length, f.length, header.length); c++) {
-        if (fee.has(c) || formula(f[c]) || (spill.has(c) && empty(f[c]))) continue;
+        if (formula(f[c]) || (data && (fee.has(c) || (spill.has(c) && empty(f[c]))))) continue;
         if (!sameCell(v[c], f[c], c)) throw new Error('F04_FORMULA_READ_MISMATCH');
       }
     });
