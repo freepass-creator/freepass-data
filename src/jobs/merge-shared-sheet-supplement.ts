@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { plateIdentityKey } from '../domain/vehicle-plate.js';
+import { isAssignedPlate, plateIdentityKey } from '../domain/vehicle-plate.js';
 
 /**
  * Merges dated correction-history exports (시트 긴급 수정 엔진 «--이력내보내기») into one capture supplement for the
@@ -8,7 +8,7 @@ import { plateIdentityKey } from '../domain/vehicle-plate.js';
  * spellings of one car («12가 3456» / «12가3456») cannot both pass. Timestamps become UTC «Z» (snapshot format).
  */
 type Correction = { supplierCode?: unknown; plate?: unknown; at?: unknown; column?: unknown; before?: unknown; after?: unknown; source?: unknown };
-export type Supplement = { corrections: Correction[]; supplierEntered?: unknown[] };
+export type Supplement = { corrections: Correction[]; supplierEntered?: unknown[]; skippedWithoutPlate?: number };
 
 export class SupplementError extends Error {}
 const FIELDS = ['before', 'after', 'source'] as const;
@@ -24,6 +24,8 @@ export function mergeSupplements(parts: unknown[]): Supplement {
         || !raw.supplierCode || typeof raw.column !== 'string') throw new SupplementError('SUPPLEMENT_INVALID');
       const at = new Date(raw.at);
       if (Number.isNaN(at.getTime())) throw new SupplementError('SUPPLEMENT_INVALID');
+      // 번호가 아직 없는 줄(«신차»·«미정»·빈칸)의 정정은 붙일 차가 없다 — 박제는 이런 보충값을 통째로 거부하므로 건너뛰고 개수만 센다.
+      if (!isAssignedPlate(raw.plate)) { out.skippedWithoutPlate = (out.skippedWithoutPlate ?? 0) + 1; continue; }
       const c = { ...raw, at: at.toISOString() };
       const key = [c.supplierCode, plateIdentityKey(c.plate), c.at, c.column].join('|');
       const body = JSON.stringify(FIELDS.map((f) => c[f] ?? null));
@@ -51,9 +53,10 @@ export async function main(args = process.argv.slice(2)) {
     try { parts.push(JSON.parse(await readFile(path, 'utf8'))); } catch { throw new SupplementError('SUPPLEMENT_INVALID'); }
   }
   const merged = mergeSupplements(parts);
-  await writeFile(outPath, JSON.stringify(merged));
+  const { skippedWithoutPlate = 0, ...supplement } = merged;
+  await writeFile(outPath, JSON.stringify(supplement));
   // Public log: counts only.
-  console.log(`supplement corrections ${merged.corrections.length} supplierEntered ${merged.supplierEntered?.length ?? 0}`);
+  console.log(`supplement corrections ${merged.corrections.length} supplierEntered ${merged.supplierEntered?.length ?? 0} skippedWithoutPlate ${skippedWithoutPlate}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

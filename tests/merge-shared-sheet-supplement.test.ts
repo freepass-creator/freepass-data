@@ -22,4 +22,9 @@ describe('merge shared-sheet supplement', () => {
     expect(() => mergeSupplements([{ corrections: [c({ at: null })] }])).toThrow('SUPPLEMENT_INVALID');
     expect(() => mergeSupplements([{ corrections: 'x' }])).toThrow('SUPPLEMENT_INVALID');
   });
+  it('skips corrections of rows without an assigned plate (신차·미정·빈칸) and counts them', () => {
+    const out = mergeSupplements([{ corrections: [c(), c({ plate: '신차', column: '비고' }), c({ plate: '미정', column: '인승' }), c({ plate: '', column: '연식' })] }]);
+    expect(out.corrections).toHaveLength(1);
+    expect(out.skippedWithoutPlate).toBe(3);
+  });
 });
