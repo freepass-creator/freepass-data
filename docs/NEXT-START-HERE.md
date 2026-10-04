@@ -375,6 +375,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 F03 인승 뗌 · 제조사 공식 표기(X-Line·xLine·H-Pick) 적용
+
+- 목적: 기준 한 장 2절 5번(인승은 제원)·6번(제조사 공식 표기)을 F03 에 반영. 정본 함수 #331·#332.
+- 증거: `docs/ERP-COM-GOOGLE-SHEETS-SSOT.md` F03 운영 규칙 두 줄 — 백업 `13zmgPsSpBbOj7ONv9kGqO6Hi8ZoMaJRz69FZbk-lzYU`·`16s1hcIYWre5rT5Q_Jxrt6HrwLBxPA4PX8nVXa7ozPlo`, 되읽기 다른 행 0, 재감사 위반 0. 시트 쓰기는 이 세션 권한 판정에 막혀 대표 승인으로 AI 상황실이 실행.
+- 남음(HOLD): 카니발 하이리무진 3·카니발 KA4 2·코란도 투리스모 6·옛 익스플로러 13 등 확인 필요. 행 추가 후보 묶음(그랜드 스타렉스 `CVX 프리미엄` 1행 + Data 세대코드 세부모델 별칭 5) Codex GO, 실행 대기.
+- next_start_here: 후보 묶음 실행 결과 재감사 → 남은 확인 필요 행을 엔카 공개 화면으로.
+
 ### 2026-10-04 vehicle_trim_master 세부트림 정정 운영 적용
 
 - main `5e04298`(#328) 의 `apply-vehicle-name-reference-repair` 로 적용: run `2026-10-04T04-17-25-043Z-e50b50f4-73bc-4133-89b6-345f9f609ee6`, plan digest `8a5d4d9c8302352489037562ba5fcd33e50ee7ecab51fba96cf2f3005dd4c542`, 개인 백업 뒤 단일 트랜잭션, trimCount 25 · 되읽기 25(옛 이름 `trim_aliases` 보존 확인 포함).
