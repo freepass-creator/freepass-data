@@ -203,6 +203,15 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
       masterRetires: [{ id: 'm-gn7', into: 'm-new', evidence: 'x' }] })).rejects.toThrow(/retired into/);
     expect(store.get('vehicle_master/m-gn7')!.retired).toBeUndefined();
   });
+  it('refuses to rename a product onto a retired master name in a later plan', async () => {
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    store.set('products/p7', { model: '그랜저', sub_model: '그랜저 GN7' });
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: '합쳐짐' }] });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [],
+      productRepairs: [{ id: 'p7', from: '그랜저 GN7', to: '그랜저 옛이름' }] })).rejects.toThrow(/retired master/);
+    expect(store.get('products/p7')!.sub_model).toBe('그랜저 GN7');
+  });
   it('refuses to link a trim row to a retired master in a later plan', async () => {
     store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
     await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],

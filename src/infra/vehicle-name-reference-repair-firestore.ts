@@ -315,6 +315,15 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
 
   await db.runTransaction(async (transaction) => {
     const current = refs.length ? await transaction.getAll(...refs) : [];
+    // A product must not be renamed onto the name of a master that is already retired (in any earlier plan).
+    const productTargets = targets.map((t, i) => ({ t, data: current[i]?.data() })).filter((x) => x.t.kind === 'product');
+    if (productTargets.length) {
+      const retired = await transaction.get(db.collection('vehicle_master').where('retired', '==', true).select('model', 'sub_model').limit(MAX_MASTER_IDENTITY_SCAN + 1));
+      if (retired.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`more than ${MAX_MASTER_IDENTITY_SCAN} retired masters — product name check would be unbounded`);
+      const retiredKeys = new Set(retired.docs.map((doc) => `${clean(doc.data().model)}|${clean(doc.data().sub_model)}`));
+      const hit = productTargets.find((x) => retiredKeys.has(`${clean(x.data?.model)}|${clean(x.t.item.to)}`));
+      if (hit) throw new Error(`product ${hit.t.ref.path} would take the name of a retired master`);
+    }
     // Linked masters and create targets are read inside the transaction too, so a concurrent delete/create aborts it.
     if (linkRefs.length && (await transaction.getAll(...linkRefs)).some((snapshot) => !snapshot.exists || snapshot.data()?.retired === true)) throw new Error('transaction linked vehicle_master missing or retired');
     if (createRefs.length && (await transaction.getAll(...createRefs)).some((snapshot) => snapshot.exists)) throw new Error('transaction create target already exists');
