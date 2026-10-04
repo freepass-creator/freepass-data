@@ -395,12 +395,14 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   const billing = side === 'BILLING';
   const fixed = (id: string, amount: number, vat: VatTreatment = 'EXCLUDED') => calculatedCommission(id, amount, vat);
   const agreement = input.individualAgreement;
-  if (!agreement && input.individualExceptionEvidence !== undefined) {
+  const hasAgreement = agreement !== undefined;
+  if (!hasAgreement && input.individualExceptionEvidence !== undefined) {
     return unknownCommission('LEGACY_INDIVIDUAL_EXCEPTION_INPUT');
   }
   if (supplierId === 'RP034') return { ...unknownCommission('SUPPLIER_EXCLUDED_BY_DECISION'), state: 'NOT_APPLICABLE' };
   if (!Number.isSafeInteger(termMonths) || termMonths < 1 || !Number.isSafeInteger(monthlyRent) || monthlyRent < 0) return unknownCommission('INVALID_PRICE_TERM_INPUT');
-  if (input.individualException || agreement) {
+  if (hasAgreement && (!agreement || typeof agreement !== 'object' || Array.isArray(agreement))) return unknownCommission('INDIVIDUAL_AGREEMENT_INVALID');
+  if (input.individualException || hasAgreement) {
     if (!agreement || !/^opaque:[a-zA-Z0-9_-]{16,}$/.test(agreement.contractRef) || agreement.contractRef !== agreement.matchedContractRef
       || !/^private:[a-zA-Z0-9_-]{4,}$/.test(agreement.agreementId) || ![160, 163].includes(agreement.sourceRow)) return unknownCommission('INDIVIDUAL_EXCEPTION_EVIDENCE_REQUIRED');
     const allowed = agreement.status === 'APPROVED' || (agreement.status === 'PAYOUT_CONFIRMED' && !billing);

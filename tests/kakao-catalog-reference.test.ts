@@ -420,6 +420,12 @@ describe('F04 2026-10-04 alignment regression', () => {
     ]);
     expect(amounts({ ...base, supplierId: 'RP012', individualAgreement: agreement })).toEqual([777000, 444000]);
   });
+  it.each([null, false, 'opaque:bad-shape', []])('7: invalid individualAgreement %p fails closed instead of falling through', individualAgreement => {
+    expect(both({ ...base, supplierId: 'RP012', individualAgreement } as never)).toEqual([
+      expect.objectContaining({ state: 'UNKNOWN', amount: null, reasonCode: 'INDIVIDUAL_AGREEMENT_INVALID' }),
+      expect.objectContaining({ state: 'UNKNOWN', amount: null, reasonCode: 'INDIVIDUAL_AGREEMENT_INVALID' }),
+    ]);
+  });
   it('7: RP034 with only legacy individual exception evidence stays unknown before exclusion', () => {
     const legacyOnly = { ...base, supplierId: 'RP034', individualExceptionEvidence: { sourceRow: 160, privateRef: 'legacy-private-ref' } };
     expect(both(legacyOnly)).toEqual([
