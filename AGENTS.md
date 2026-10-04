@@ -1,5 +1,7 @@
 # freepass-data — AI / Codex Work Entry Rules
 
+> **★★차종·제원(제조사·모델·세부모델·세부트림·연료·배기량·구동)을 채우거나 고치거나 판단하는 모든 AI·로직은 ai-ops `docs/차종-기준-한장.md`(https://github.com/freepass-creator/ai-ops/blob/master/docs/차종-기준-한장.md) 한 장만 따른다 — 대표 2026-10-04 「어떤 AI가 오든 어떤 로직이 오든 흔들리지 않게」. 이 저장소의 SSOT 「차종 4단 구조」 절과 코드는 그 장의 구현이다. 그 장은 대표만 바꾼다. 더 나은 규칙이 보이면 코드·문서를 먼저 바꾸지 말고 AI 상황실에 `결정필요:`.**
+
 ## 0. Mandatory entrypoint
 
 Every Codex/Work/development AI working in this repository must start in this order:
