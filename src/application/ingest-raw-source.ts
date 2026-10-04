@@ -1,5 +1,6 @@
 import { stableDigest } from '../shared/stable-digest.js';
-import type { SourceRun } from '../domain/source.js';
+import type { SourceRun, RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
+import type { FieldLineageRecord } from '../domain/lineage.js';
 import {
   sourceLane,
   validateSourceIntakeBatch,
@@ -7,7 +8,7 @@ import {
 } from '../domain/source-intake.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 
-function preparedBatch(input: SourceIntakeBatch) {
+export function preparedBatch(input: SourceIntakeBatch) {
   validateSourceIntakeBatch(input);
 
   const records = input.records
@@ -36,27 +37,32 @@ function preparedBatch(input: SourceIntakeBatch) {
   return { records, batchDigest };
 }
 
+/** Shared deterministic identity for offline planning and actual intake. */
+export function prepareRawSourceBatch(input: SourceIntakeBatch) {
+  const { records, batchDigest } = preparedBatch(input);
+  const sourceId = input.source.sourceId.trim();
+  const sourceChecksum = input.checksum?.toLowerCase() ?? batchDigest;
+  const runId = `run_${stableDigest({ sourceId, laneId: input.laneId, observedAt: input.observedAt,
+    sourceRevision: input.sourceRevision ?? null, sourceChecksum, batchDigest }).slice(0, 40)}`;
+  const rawRecords: RawRecord[] = records.map(record => ({ rawRecordId: `${runId}:${record.sourceRecordId}`,
+    runId, sourceId, sourceRecordId: record.sourceRecordId, sourceFingerprint: record.sourceFingerprint,
+    observedAt: input.observedAt, intakeLaneId: input.laneId, sourceRevision: input.sourceRevision ?? null,
+    sourceChecksum, payload: record.payload }));
+  return { runId, sourceId, sourceChecksum, rawRecords };
+}
+
 export async function ingestRawSourceBatch(
   store: SourceIngestionStore,
   input: SourceIntakeBatch,
-  now = new Date().toISOString()
+  now = new Date().toISOString(),
+  normalize?: (raw: RawRecord) => { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[] }
 ): Promise<SourceRun> {
   if (!Number.isFinite(Date.parse(now))) {
     throw new Error('INVALID_SOURCE_INTAKE_COMPLETED_AT');
   }
 
   const lane = sourceLane(input.laneId);
-  const { records, batchDigest } = preparedBatch(input);
-  const sourceId = input.source.sourceId.trim();
-  const sourceChecksum = input.checksum?.toLowerCase() ?? batchDigest;
-  const runId = `run_${stableDigest({
-    sourceId,
-    laneId: input.laneId,
-    observedAt: input.observedAt,
-    sourceRevision: input.sourceRevision ?? null,
-    sourceChecksum,
-    batchDigest,
-  }).slice(0, 40)}`;
+  const { rawRecords, sourceId, sourceChecksum, runId } = prepareRawSourceBatch(input);
 
   const existing = await store.getRun(runId);
   if (existing) {
@@ -71,6 +77,23 @@ export async function ingestRawSourceBatch(
     throw new Error('SOURCE_INTAKE_RUN_ALREADY_EXISTS');
   }
 
+  const previousHead = await store.getSourceHead(sourceId);
+  // Preserve first observation even after an absence/reappearance; all evidence stays in existing RAW/runs.
+  const firstSeen = new Map<string, string>();
+  const wanted = new Set(rawRecords.map(x => x.sourceRecordId));
+  const visited = new Set<string>();
+  let historyRunId: string | null = previousHead?.runId ?? null;
+  while (normalize && historyRunId && wanted.size) {
+    if (visited.has(historyRunId)) throw new Error('SOURCE_HISTORY_CYCLE');
+    visited.add(historyRunId);
+    for (const prior of await store.listRaw(historyRunId)) {
+      if (wanted.has(prior.sourceRecordId)) {
+        firstSeen.set(prior.sourceRecordId, prior.firstObservedAt ?? prior.observedAt);
+        wanted.delete(prior.sourceRecordId);
+      }
+    }
+    historyRunId = (await store.getRun(historyRunId))?.previousHeadRunId ?? null;
+  }
   await store.upsertSource({
     sourceId,
     kind: input.source.kind,
@@ -90,6 +113,7 @@ export async function ingestRawSourceBatch(
     runId,
     sourceId,
     status: 'RUNNING',
+    previousHeadRunId: previousHead?.runId ?? null,
     startedAt: now,
     coverage: structuredClone(input.coverage),
     headStatus: 'PENDING',
@@ -100,19 +124,21 @@ export async function ingestRawSourceBatch(
   });
 
   try {
-    for (const record of records) {
-      await store.appendRaw({
-        rawRecordId: `${runId}:${record.sourceRecordId}`,
-        runId,
-        sourceId,
-        sourceRecordId: record.sourceRecordId,
-        sourceFingerprint: record.sourceFingerprint,
-        observedAt: input.observedAt,
-        intakeLaneId: input.laneId,
-        sourceRevision: input.sourceRevision ?? null,
-        sourceChecksum,
-        payload: record.payload,
-      });
+    let candidateCount = 0, lineageCount = 0, warningCount = 0;
+    for (const raw of rawRecords) {
+      if (normalize) {
+        const prior = firstSeen.get(raw.sourceRecordId);
+        raw.firstObservedAt = prior && Date.parse(prior) < Date.parse(raw.observedAt) ? prior : raw.observedAt;
+      }
+      await store.appendRaw(raw);
+      if (normalize) {
+        const normalized = normalize(structuredClone(raw));
+        await store.appendCandidate(normalized.record);
+        for (const item of normalized.lineage) await store.appendLineage(item);
+        candidateCount++;
+        lineageCount += normalized.lineage.length;
+        if (normalized.record.status !== 'VALID') warningCount++;
+      }
     }
 
     await store.completeRun({
@@ -126,10 +152,10 @@ export async function ingestRawSourceBatch(
         observedAt: input.observedAt,
       },
       coverage: structuredClone(input.coverage),
-      rawCount: records.length,
-      candidateCount: 0,
-      lineageCount: 0,
-      warningCount: 0,
+      rawCount: rawRecords.length,
+      candidateCount,
+      lineageCount,
+      warningCount,
     });
 
     const completed = await store.getRun(runId);

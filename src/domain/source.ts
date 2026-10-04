@@ -38,6 +38,8 @@ export type SourceDefinition = {
 };
 
 export type SourceRun = {
+  /** Accepted predecessor for immutable observation history, never an alternate head policy. */
+  previousHeadRunId?: string | null;
   runId: string;
   sourceId: string;
   status: 'RUNNING' | 'COMPLETED' | 'FAILED';
@@ -108,6 +110,7 @@ export function decideSourceHead(
 }
 
 export type RawRecord = {
+  firstObservedAt?: string;
   rawRecordId: string;
   runId: string;
   sourceId: string;

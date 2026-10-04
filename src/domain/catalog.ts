@@ -1,4 +1,5 @@
 import type { CommercialOfferView } from './commercial-product-view.js';
+import type { SourceVehicleFacts } from './source-vehicle-facts.js';
 export type ValidationStatus = 'VALID' | 'WARNING' | 'INVALID';
 export type ActorRef = { id: string; kind: 'USER' | 'SERVICE'; organizationId?: string | null };
 export type Money = { amount: number; currency: 'KRW' };
@@ -16,6 +17,9 @@ export type VehicleAssetStatus =
   | 'AVAILABLE' | 'RESERVED' | 'IN_USE' | 'RETURNED'
   | 'MAINTENANCE' | 'ACCIDENT' | 'SOLD' | 'RETIRED';
 export type VehicleAsset = EntityMeta & {
+  /** Internal evidence, excluded from consumer projections. */
+  sourceVehicleFacts?: SourceVehicleFacts;
+  sourceFirstObservedAt?: string;
   id: string; vehicleModelId: string; status: VehicleAssetStatus;
   plateNumber?: string | null; vin?: string | null; odometerKm?: number | null;
 };

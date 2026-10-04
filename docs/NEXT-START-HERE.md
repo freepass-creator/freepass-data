@@ -375,6 +375,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 공통 시트 RAW → Canonical 로컬 구현
+
+- 목적/정본: 74칸 공통 입력시트의 원문·정리값·기간별 수수료를 기존 SourceIngestionStore/CatalogStore로 연결. `work/freepass-data/sheet-to-canonical-20261004`, HEAD 및 로컬 origin/main `515845dd4a8a113f1c1a908be73b928cd1003338`(#296/#302/#303 포함). Git 쓰기·운영 Firestore/구글/원격 접속 없음.
+- 변경: [설계 한 장 및 운영 준비](SHARED-SHEET-CANONICAL-DESIGN.md). 캡처 JSON 어댑터, 순수 정리기, 계획 digest/expectedRevision/EXCLUSIVE writer를 검사하는 dry-run·apply job, 운영자 로컬 조회 job. RAW/최초 관측/lineage/revision 보존. 공급사별 집계·수수료 UNKNOWN·기간 대사, 원천 변경/부분 재실행 시험. 기존 구조 변경 BLOCKED는 HOLD.
+- 검증: Academy READY. 신규 30/30, 관련 회귀 포함 64/64 PASS. `npm run check` 실행: 아키텍처·데이터 접근 경계·build 및 Node 시험 139/139 PASS; Vitest 1,379 PASS / 9 FAIL / 14 SKIP(총 1,402, 122파일). 9 FAIL은 기존 4파일의 실행 환경 문제: tsx 자식 프로세스의 `uv_os_get_passwd ENOMEM` 계열 7, jq 실행 권한 거부 1, 로컬 Finder 서버 연결 거부 1. 해당 4파일을 단일 worker로 다시 실행해 동일 9건 재현. 전체 check는 미통과다. `npm run check:standards` 별도 실행 PASS(30 schemas, 시험 15/15); 기존 platform profile PARTIAL·미해결 capability 9개 유지. `git diff --check` PASS.
+- 남음: 운영 203대 캡처/대사·저장/조회 실물 확인, 실제 writer 소유권과 ADC/IAM 확인, 다른 원천의 기존 차량 binding 정리. Claude 독립 검토는 네트워크 금지로 UNAVAILABLE. 15분 상시 엔진/워크플로/소비처 발행 미연결. 운영 완료로 판정하지 않는다.
+- next_start_here: 정상 실행 환경에서 실패한 기존 9검사와 Claude 읽기 전용 검토 → 설계 문서의 운영 준비 → 비공개 실제 캡처를 `--firestore` dry-run하여 계획·HOLD·기간 대사 검토 → 해당 계획 digest로 apply → 운영자 로컬 조회. 이번 로컬 세션에는 운영 실행 권한을 사용하지 않았다.
+
 ### 2026-10-04 F03 차종마스터 대표 최종 규칙 적용 · 세부트림 «끝 단» 대조
 
 - 목적/대상: AI 상황실 오더(대표 최종 10-04 — 엔카와 다른 점은 기아 개발코드·괄호 없음·기본형·제조사 짧게). F03 `1oMB9eoNnQFxUyRK4CSxYh_hKrtCf7s_79xLs-GYwXCE`, 문서 기준 main `609e82a`.
