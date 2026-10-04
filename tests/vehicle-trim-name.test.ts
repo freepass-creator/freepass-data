@@ -32,6 +32,19 @@ describe('F03 세부트림 = 엔카 등급 이름에서 파워트레인 부분�
     expect(name('3.3 리미티드 4WD', '수입')).toBe('리미티드');
     expect(name('롱 레인지 AWD', '수입')).toBe('롱 레인지');
     expect(name('2.0 에코부스트 2WD', '수입')).toBe('기본형');
+    // 르노 GTe·GDe·E-TECH, LPG 배기량 L3.5, 전기 EV, 미니 ALL4, F03 에 잘려 남은 ECH·Ce
+    expect(name('1.6 GTe LE Plus')).toBe('LE Plus');
+    expect(name('2.0 GDe LE')).toBe('LE');
+    expect(name('1.6 E-TECH 인스파이어 e-시프터')).toBe('인스파이어 e-시프터');
+    expect(name('1.5 E-TECH 에스프리 알핀 1955 2WD')).toBe('에스프리 알핀 1955');
+    expect(name('L3.5 캠핑카')).toBe('캠핑카');
+    expect(name('EV LT 디럭스')).toBe('LT 디럭스');
+    expect(name('EV')).toBe('기본형');
+    expect(name('ECH 아이코닉')).toBe('아이코닉');
+    expect(name('Ce RE 시그니처')).toBe('RE 시그니처');
+    expect(name('ALL4 클래식', '수입')).toBe('클래식');
+    expect(name('ALL4', '수입')).toBe('기본형');
+    expect(trimDisplayName('ALL4 JCW', '수입').modelDesignation).toBe(false);
     // 옵션 이름 속 「터보 패키지」는 파워트레인이 아니다
     expect(name('3.3 GT 마스터즈 터보 패키지')).toBe('GT 마스터즈 터보 패키지');
     expect(name('3.3 GT AWD 마스터즈 터보 패키지')).toBe('GT 마스터즈 터보 패키지');
