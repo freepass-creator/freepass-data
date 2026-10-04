@@ -123,7 +123,23 @@ jobs:
           test "$erp5_code" = 0 -o "$erp5_code" = 2
           ERP5_CAPTURE="$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).privateCapturePath)" "$T/erp5-report.json")"
           test -f "$ERP5_CAPTURE"
-          node --import tsx src/jobs/capture-shared-sheet.ts --spreadsheet "$SHARED_SHEET_ID" --erp5-capture "$ERP5_CAPTURE" --out "$T/capture.json"
+          # 정정 이력(누가·언제·전→후): 시트 긴급 수정 엔진이 «--이력내보내기 YYYY-MM-DD» 로 뽑아 비공개 증거 버킷
+          # shared-sheet-supplement/<KST 날짜>.json 에 올린 것 — 어제·오늘 두 날짜를 합쳐 보충값으로 넣는다.
+          # 파일이 없으면 넘어가고, 그 밖의 실패(권한 등)는 멈춘다. 공개 로그에는 개수만.
+          echo '{"corrections":[]}' > "$T/supplement.json"
+          for d in "$(TZ=Asia/Seoul date -d yesterday +%F)" "$(TZ=Asia/Seoul date +%F)"; do
+            set +e
+            err="$(gcloud storage cp --no-user-output-enabled "gs://$FREEPASS_DATA_EVIDENCE_BUCKET/shared-sheet-supplement/$d.json" "$T/supplement-$d.json" 2>&1)"
+            code=$?
+            set -e
+            if [ "$code" != 0 ]; then
+              if grep -qiE 'not found|No URLs matched|matched no objects|404' <<<"$err"; then continue; fi
+              echo "SUPPLEMENT_READ_FAILED $d"; exit 1
+            fi
+            node -e "const fs=require('fs');const [a,b]=process.argv.slice(1);const s=JSON.parse(fs.readFileSync(a,'utf8')),x=JSON.parse(fs.readFileSync(b,'utf8'));if(!Array.isArray(x.corrections))process.exit(1);s.corrections.push(...x.corrections);if(x.supplierEntered)(s.supplierEntered??=[]).push(...x.supplierEntered);fs.writeFileSync(a,JSON.stringify(s))" "$T/supplement.json" "$T/supplement-$d.json"
+          done
+          node -e "const s=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));console.log('supplement corrections',s.corrections.length,'supplierEntered',(s.supplierEntered??[]).length)" "$T/supplement.json"
+          node --import tsx src/jobs/capture-shared-sheet.ts --spreadsheet "$SHARED_SHEET_ID" --erp5-capture "$ERP5_CAPTURE" --supplement "$T/supplement.json" --out "$T/capture.json"
           node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --capture "$T/capture.json" --plan-out "$T/plan.json" > "$T/report.json"
           node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0)process.exit(1);const {suppliers,...s}=r;console.log(JSON.stringify(s,null,2))" "$T/report.json"
           if [ "$APPLY" = 'true' ]; then
