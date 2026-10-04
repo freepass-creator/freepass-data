@@ -61,6 +61,9 @@ describe('daily writer guard', () => {
     const bare = { timestamp: '2026-10-05T18:45:00Z', protoPayload: { methodName: 'google.firestore.v1.Firestore.Commit',
       authenticationInfo: { principalEmail: account } } };
     expect(judge([bare])).toMatchObject({ status: 'HOLD', reasons: ['DAILY_WRITER_DOCUMENT_PATH_MISSING'], writesWithoutDocumentPaths: 1 });
+    // A database-level resourceName or a stray string elsewhere in the request is not a document path.
+    const dbOnly = { ...bare, protoPayload: { ...bare.protoPayload, resourceName: db, request: { note: doc('catalog_products') } } };
+    expect(judge([dbOnly])).toMatchObject({ status: 'HOLD', writesWithoutDocumentPaths: 1 });
   });
   it('holds when a successful apply run left no write log (audit log off or missing)', () => {
     expect(judge([])).toMatchObject({ status: 'HOLD', reasons: ['DAILY_WRITER_AUDIT_LOG_MISSING'], silentApplies: 1 });

@@ -34,20 +34,26 @@ const isWrite = (entry: DailyWriterLogEntry) => {
   return DAILY_WRITER_WRITE_METHODS.some((m) => method.endsWith(`.${m}`));
 };
 
-/** Every document path a write request names: resourceName, writes[].update.name / delete / transform.document,
- * CreateDocument parent + collectionId — any string holding «/documents». */
+/** A document path down to at least a collection: projects/{p}/databases/{d}/documents/{collection}[/…]. */
+const DOCUMENT_PATH = /^projects\/[^/]+\/databases\/[^/]+\/documents\/[^/]+(\/[^/]+)*$/;
+
+/** Document paths a write names, read only from the fields Firestore write requests use — never from arbitrary strings:
+ * resourceName · writes[].update.name / delete / transform.document · name · document.name · parent + collectionId.
+ * A database-level path («…/documents» alone) is not a document path, so such a write counts as «path unknown». */
 function writtenPaths(entry: DailyWriterLogEntry): string[] {
   const out: string[] = [];
-  const add = (v: unknown) => { if (typeof v === 'string' && v.includes('/documents')) out.push(v); };
+  const add = (v: unknown) => { if (typeof v === 'string' && DOCUMENT_PATH.test(v)) out.push(v); };
   add(entry.protoPayload?.resourceName);
-  const visit = (value: unknown) => {
-    if (Array.isArray(value)) { value.forEach(visit); return; }
-    if (!value || typeof value !== 'object') { add(value); return; }
-    const record = value as Record<string, unknown>;
-    if (typeof record.parent === 'string' && typeof record.collectionId === 'string') out.push(`${record.parent}/${record.collectionId}/(new)`);
-    for (const v of Object.values(record)) visit(v);
-  };
-  visit(entry.protoPayload?.request);
+  const request = (entry.protoPayload?.request ?? {}) as Record<string, unknown>;
+  const writes = Array.isArray(request.writes) ? request.writes as Array<Record<string, unknown>> : [];
+  for (const w of writes) {
+    add((w.update as Record<string, unknown> | undefined)?.name);
+    add(w.delete);
+    add((w.transform as Record<string, unknown> | undefined)?.document);
+  }
+  add(request.name);
+  add((request.document as Record<string, unknown> | undefined)?.name);
+  if (typeof request.parent === 'string' && typeof request.collectionId === 'string') add(`${request.parent}/${request.collectionId}`);
   return [...new Set(out)];
 }
 

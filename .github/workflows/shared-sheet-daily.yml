@@ -55,12 +55,18 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event_name }}" = 'schedule' ]; then
             if [ "$DAILY" != 'on' ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "daily schedule switch is off — skipped"; exit 0; fi
-            run_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/erp5-continuous-audit.yml/runs?branch=main&status=completed&per_page=1" --jq '.workflow_runs[0] | {id, created_at}')"
-            run_id="$(jq -r '.id' <<<"$run_json")"; created="$(jq -r '.created_at' <<<"$run_json")"
-            test "$run_id" != null
-            age=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
-            guard="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" --jq '[.jobs[] | select(.name == "daily-writer-guard")][0].conclusion // "missing"')"
-            if [ "$age" -gt 10800 ] || [ "$guard" != 'success' ]; then
+            # 최근 매시 감사 실행(진행 중 포함 5개)의 daily-writer-guard job 중 «가장 늦게 끝난 것»이 기준 —
+            # 진행 중인 실행에서 이미 실패한 감시가 있으면 그것이 이긴다.
+            : > "$RUNNER_TEMP/guard-jobs.jsonl"
+            for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/erp5-continuous-audit.yml/runs?branch=main&per_page=5" --jq '.workflow_runs[].id'); do
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100"                 --jq '.jobs[] | select(.name == "daily-writer-guard" and .status == "completed") | {conclusion, completed_at}' >> "$RUNNER_TEMP/guard-jobs.jsonl"
+            done
+            latest="$(jq -s 'sort_by(.completed_at) | last // {}' "$RUNNER_TEMP/guard-jobs.jsonl")"
+            guard="$(jq -r '.conclusion // "missing"' <<<"$latest")"
+            done_at="$(jq -r '.completed_at // empty' <<<"$latest")"
+            test -n "$done_at" || { echo "DAILY_WRITER_GUARD_NOT_OK: no completed guard job — scheduled snapshot not run"; exit 1; }
+            age=$(( $(date -u +%s) - $(date -u -d "$done_at" +%s) ))
+            if [ "$guard" != 'success' ] || [ "$age" -lt 0 ] || [ "$age" -gt 10800 ]; then
               echo "DAILY_WRITER_GUARD_NOT_OK: latest guard=$guard age=${age}s — scheduled snapshot not run"; exit 1
             fi
           elif [ "${{ inputs.mode }}" = 'apply' ] && [ "$MANUAL_APPLY" != 'on' ]; then
