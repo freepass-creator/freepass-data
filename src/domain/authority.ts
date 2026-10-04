@@ -5,7 +5,8 @@ export type CatalogCommandType =
   | 'UPDATE_OFFER_PRICE'
   | 'CREATE_MANUAL_CATALOG_ENTRY'
   | 'CANONICALIZE_CATALOG_CANDIDATE'
-  | 'APPLY_REVIEWED_SOURCE_CHANGE';
+  | 'APPLY_REVIEWED_SOURCE_CHANGE'
+  | 'RENAME_VEHICLE_MODEL';
 
 export type AuthorityConflictPolicy =
   | 'EXPECTED_REVISION'
@@ -185,6 +186,29 @@ export const CATALOG_FIELD_AUTHORITY: readonly FieldAuthorityRule[] = [
     override: 'DISALLOWED',
     effectiveTime: 'IMMEDIATE',
     sourceRefresh: 'PRESERVE_CANONICAL_AND_REVIEW'
+  },
+  {
+    // F03 «이름 하나»: the shared VehicleModel 세부모델/세부트림 follow F03 through a reviewed rename only.
+    ruleId: 'catalog.vehicle-model.sub-model.v1',
+    domain: 'catalog',
+    aggregate: 'vehicle_model',
+    fieldPath: 'subModel',
+    semanticOwner: 'catalog-vehicle',
+    allowedCommands: ['RENAME_VEHICLE_MODEL'],
+    allowedWriters: [{ kind: 'SERVICE', ids: ['service:freepass-data'] }],
+    approval: 'REQUIRED', conflict: 'EXPECTED_REVISION', override: 'DISALLOWED',
+    effectiveTime: 'IMMEDIATE', sourceRefresh: 'PRESERVE_CANONICAL_AND_REVIEW'
+  },
+  {
+    ruleId: 'catalog.vehicle-model.trim.v1',
+    domain: 'catalog',
+    aggregate: 'vehicle_model',
+    fieldPath: 'trim',
+    semanticOwner: 'catalog-vehicle',
+    allowedCommands: ['RENAME_VEHICLE_MODEL'],
+    allowedWriters: [{ kind: 'SERVICE', ids: ['service:freepass-data'] }],
+    approval: 'REQUIRED', conflict: 'EXPECTED_REVISION', override: 'DISALLOWED',
+    effectiveTime: 'IMMEDIATE', sourceRefresh: 'PRESERVE_CANONICAL_AND_REVIEW'
   },
   {
     ruleId: 'catalog.vehicle-asset.source-facts.v1',
