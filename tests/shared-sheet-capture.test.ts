@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captureFromBatchGet as rawCapture, sharedSheetTabs, sharedSheetCaptureRanges, SHEETS_GRID_META_FIELDS, type SheetsBatchGet, type SheetsGridMeta } from '../src/adapters/shared-sheet-capture.js';
+import { captureFromBatchGet as rawCapture, serialToIsoDate, displayMatchesValue, sharedSheetTabs, sharedSheetCaptureRanges, SHEETS_GRID_META_FIELDS, type SheetsBatchGet, type SheetsGridMeta } from '../src/adapters/shared-sheet-capture.js';
 import { readSheetsBatchGet, readSheetsMetadata } from '../src/infra/shared-sheet-capture-reader.js';
 const ROWS = 1000;
 const META = (): SheetsGridMeta => ({ spreadsheetId: ID, sheets: sharedSheetTabs().map(title => ({ properties: { title, gridProperties: { rowCount: ROWS } } })) });
@@ -155,5 +155,27 @@ describe('shared sheet capture keeps the year of date cells', () => {
     const twin = batch({ [ch.tab]: [real, real] });
     rawCapture(ID, batch({ [ch.tab]: [shown, shown] }), META(), T, twin, twin, stats);
     expect(stats).toEqual({ datesFromSerial: 2 });
+  });
+});
+
+describe('shared sheet capture — date boundaries and displayed numbers', () => {
+  it('reads serials as dates only between 1900 and 2099, a time of day kept on the same date', () => {
+    expect(serialToIsoDate(1)).toBeNull();
+    expect(serialToIsoDate(2)).toBe('1900-01-01');
+    expect(serialToIsoDate(36525)).toBe('1999-12-31');
+    expect(serialToIsoDate(36526)).toBe('2000-01-01');
+    expect(serialToIsoDate(73050)).toBe('2099-12-31');
+    expect(serialToIsoDate(73051)).toBeNull();
+    expect(serialToIsoDate(46246.99)).toBe('2026-08-12');
+    expect(serialToIsoDate('46246')).toBeNull();
+    expect(serialToIsoDate(Number.NaN)).toBeNull();
+  });
+  it('matches a displayed number to its real value in every format the sheet may show', () => {
+    for (const [shown, v] of [['12,345km', 12345], ['77.4kWh', 77.4], ['2021', 2021], ['15%', 0.15], ['12.5%', 0.125], ['-', 0], ['₩ -', 0],
+      ['-1,000', -1000], ['(1,000)', -1000], ['1.23E+05', 123000], ['1.23E+05', 123456], ['0', 0], ['TRUE', true], ['false', false]] as const)
+      expect(displayMatchesValue(shown, v), `${shown} ↔ ${v}`).toBe(true);
+    for (const [shown, v] of [['12,345km', 12346], ['77.4kWh', 77.5], ['15%', 0.16], ['-', 1], ['(1,000)', 1000], ['1,000', -1000],
+      ['1.23E+05', 124000], ['', 0], ['TRUE', false], ['예', true]] as const)
+      expect(displayMatchesValue(shown, v), `${shown} ↔ ${v}`).toBe(false);
   });
 });

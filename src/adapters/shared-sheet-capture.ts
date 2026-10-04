@@ -19,19 +19,24 @@ export const sharedSheetCaptureRanges = () => sharedSheetTabs().map(t => `'${t.r
 const DATE_COLUMNS = Object.entries(spec.valueFormats as Record<string, { kind?: string }>).filter(([, f]) => f.kind === 'date')
   .map(([h]) => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
 /** Serial (days since 1899-12-30, a fraction is the time of day) → YYYY-MM-DD; null when not a usable date (1900~2099). */
-const serialToIsoDate = (v: unknown): string | null => {
+export const serialToIsoDate = (v: unknown): string | null => {
   if (typeof v !== 'number' || !Number.isFinite(v)) return null;
   const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(v) * 86_400_000);
   return d.getUTCFullYear() >= 1900 && d.getUTCFullYear() <= 2099 ? d.toISOString().slice(0, 10) : null;
 };
-/** A displayed number («12,345km» · «77.4kWh» · «2021» · «15%») shows the same real value, to the decimals it shows. */
-const displayMatchesValue = (shown: string, v: number | boolean): boolean => {
+/** A displayed number shows the same real value, to the precision it shows: «12,345km» · «77.4kWh» · «2021» · «15%» ·
+ * 회계식 0 «-» · 음수 «-1,000» / «(1,000)» · 지수 «1.23E+05». */
+export const displayMatchesValue = (shown: string, v: number | boolean): boolean => {
   if (typeof v === 'boolean') return shown.trim().toUpperCase() === String(v).toUpperCase();
-  const t = shown.replace(/[^0-9.\-]/g, '');
-  const n = Number(t);
-  if (!t || !Number.isFinite(n)) return false;
-  const target = shown.includes('%') ? v * 100 : v, decimals = (t.split('.')[1] ?? '').length;
-  return Math.abs(n - target) <= 0.5 * 10 ** -decimals + 1e-9;
+  const s = shown.trim();
+  if (!/\d/.test(s)) return /^[^0-9]*-[^0-9]*$/.test(s) && v === 0; // 회계식 0
+  const target = s.includes('%') ? v * 100 : v;
+  const sci = /(-?\d+(?:\.(\d+))?)E([+-]?\d+)/i.exec(s.replace(/,/g, ''));
+  if (sci) return Math.abs(Number(sci[0]) - target) <= 0.5 * 10 ** (Number(sci[3]) - (sci[2]?.length ?? 0)) + 1e-9;
+  const t = s.replace(/[^0-9.]/g, ''), n = Number(t);
+  if (!Number.isFinite(n)) return false;
+  const negative = /^\(.*\)$/.test(s) || /^[^0-9]*-/.test(s), decimals = (t.split('.')[1] ?? '').length;
+  return Math.abs((negative ? -n : n) - target) <= 0.5 * 10 ** -decimals + 1e-9;
 };
 
 const IDENTITY_COLUMNS = ['회사명', '차량번호'].map(h => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
@@ -47,7 +52,8 @@ const displayMatchesIso = (shown: string, iso: string): boolean => {
 };
 
 /** Two reads of the same ranges are identical (same ranges, same row counts, same cells — dates and numbers included).
- * Limit: a change that is made and fully undone between the two reads is not seen. */
+ * Limit: a change that is made and fully undone between the two reads is not seen, and two rows identical in every
+ * non-date cell that are swapped and swapped back in that window cannot be told apart. */
 export const sameReads = (a: SheetsBatchGet, b: SheetsBatchGet): boolean =>
   a?.spreadsheetId === b?.spreadsheetId && JSON.stringify(a?.valueRanges ?? null) === JSON.stringify(b?.valueRanges ?? null);
 
