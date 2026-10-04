@@ -133,12 +133,30 @@ export function planF04CommissionProjection(input: {
   // 개별 합의 목록의 날짜도 같은 규칙으로 맞춘다(일련번호·날짜 글자 어느 쪽이든).
   const individualKeys = new Set((input.individualKeys ?? []).map(k => { const [p, d = ''] = k.split('|'); return `${plateKey(p)}|${isoDate(d)}`; }));
 
-  // 수식 읽기는 값 읽기와 같은 줄·같은 차량번호여야 한다(두 번 읽는 사이 줄이 바뀌면 멈춘다).
+  // 수식 읽기는 값 읽기와 같은 시트 상태여야 한다: 줄 수가 같고, AE·AJ 와 수식 칸을 뺀 모든 칸이 같아야 한다
+  // (두 번 읽는 사이 취소·청구·청구월·청구액·지급액·비고·계산 입력이 바뀌면 계획 전체를 멈춘다). 날짜 칸은 YYYY-MM-DD 로 맞춰 비교.
   const formulas = input.intakeFormulas;
   if (formulas) {
     if (formulas.length !== input.intake.length) throw new Error('F04_FORMULA_READ_MISMATCH');
-    const pc = header.indexOf('차량번호');
-    input.intake.forEach((r, i) => { if (plateKey((r as unknown[] | undefined)?.[pc]) !== plateKey((formulas[i] as unknown[] | undefined)?.[pc])) throw new Error('F04_FORMULA_READ_MISMATCH'); });
+    const fee = new Set([header.indexOf('판매수수료'), header.indexOf('출고수수료')]);
+    // 수식이 하나라도 있는 열(배열 수식이 아래로 흘러 위 한 칸에만 수식이 보이는 파생 칸 포함)은 통째로 대조에서 뺀다.
+    const derived = new Set<number>();
+    formulas.forEach((r, i) => { if (i > hi) ((r as unknown[] | undefined) ?? []).forEach((x, c) => { if (formula(x)) derived.add(c); }); });
+    const sameCell = (a: unknown, b: unknown) => {
+      if (empty(a) && empty(b)) return true;
+      if (a === b) return true;
+      if (typeof a === 'boolean' || typeof b === 'boolean') return false;
+      if (text(a) === text(b)) return true;
+      return /^\d{4}\D/.test(isoDate(a)) && isoDate(a) === isoDate(b);
+    };
+    input.intake.forEach((r, i) => {
+      if (i <= hi) return; // 설명·머리글 줄
+      const v = (r as unknown[] | undefined) ?? [], f = (formulas[i] as unknown[] | undefined) ?? [];
+      for (let c = 0; c < Math.max(v.length, f.length, header.length); c++) {
+        if (fee.has(c) || derived.has(c)) continue;
+        if (!sameCell(v[c], f[c])) throw new Error('F04_FORMULA_READ_MISMATCH');
+      }
+    });
   }
   const formulaAt = (sheetRow: number, col: number) => (formulas?.[sheetRow - 1] as unknown[] | undefined)?.[col];
   const rows = input.intake.slice(hi + 1).map((r, i) => ({ sheetRow: hi + 2 + i, cells: Array.isArray(r) ? r : [] }))

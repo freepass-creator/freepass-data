@@ -92,6 +92,22 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
     expect(p.fills).toEqual([]);
     expect(p.blanks.map(b => `${b.row}${b.column}:${b.reason}`)).toEqual(['3AE:INDIVIDUAL_AGREEMENT', '3AJ:INDIVIDUAL_AGREEMENT']);
   });
+  it('any other cell changed between the two reads (청구·취소·청구월·지급액·비고·렌탈료) stops the whole plan; formula cells and dates are compared sensibly', () => {
+    const base = row({ 차량번호: '12가3456' });
+    for (const [h, v] of [['청구', true], ['취소', true], ['청구월', 8], ['지급액', 1416000], ['비고', '개별 합의'], ['렌탈료', 900000]] as const) {
+      const changed = [...base]; changed[at(h)] = v;
+      expect(() => planF04CommissionProjection({ intake: intake(base), intakeFormulas: intake(changed), installments: INST, openFromMonth: '2026-09', readAt: 'x' }), h).toThrow('F04_FORMULA_READ_MISMATCH');
+    }
+    // 공급사 칸이 수식이면 건너뛰고, 접수일은 글자 날짜 ↔ 일련번호를 같은 날로 본다.
+    const asFormula = [...base]; asFormula[at('공급사')] = '=VLOOKUP(B3,차량대장!A:E,5,FALSE)'; asFormula[at('접수일')] = 46285;
+    expect(() => planF04CommissionProjection({ intake: intake(base), intakeFormulas: intake(asFormula), installments: INST, openFromMonth: '2026-09', readAt: 'x' })).not.toThrow();
+    // 배열 수식 파생 칸: 수식은 맨 위 한 칸에만 보이고 아래 칸은 수식 읽기에서 비어 있다 — 그 열은 통째로 뺀다.
+    const v1 = [...base], v2 = row({ 차량번호: '12가3457' }); v1[at('비고')] = ''; v2[at('비고')] = '';
+    const values = intake(v1, v2), formulasRead = intake([...v1], [...v2]);
+    (values[2] as unknown[])[at('계약형태')] = '파생값'; (values[3] as unknown[])[at('계약형태')] = '파생값';
+    (formulasRead[2] as unknown[])[at('계약형태')] = '=ARRAYFORMULA(…)'; (formulasRead[3] as unknown[])[at('계약형태')] = '';
+    expect(() => planF04CommissionProjection({ intake: values, intakeFormulas: formulasRead, installments: INST, openFromMonth: '2026-09', readAt: 'x' })).not.toThrow();
+  });
   it('a number typed between the two reads (value read empty, second read has it) is compared, never filled', () => {
     const values = intake(row({ 차량번호: '12가3456' }));
     const p = planF04CommissionProjection({ intake: values, intakeFormulas: intake(row({ 차량번호: '12가3456', 판매수수료: 1300000, 출고수수료: 984000 })), installments: INST, openFromMonth: '2026-09', readAt: 'x' });
