@@ -75,7 +75,13 @@ export const displayMatchesValue = (shown: string, v: number | boolean): boolean
     if (Math.abs(e) > 308) return false;
     if (/^0*\.?0*$/.test(digits)) return v === 0;
     if (!/^[1-9](\.\d*)?$/.test(digits)) return false;
-    return compare(digits, places, roundedUnits(decimalDigits(v, percent - e), places));
+    if (v === 0) return false;
+    // 실제 값의 정규 지수(15 유효숫자)와 가수 반올림 — 반올림이 10 이 되면 지수를 하나 올린다(9.995E+02 → 1.00E+03).
+    const [mant, ex] = Math.abs(v).toExponential(14).split('e');
+    let expectedExp = Number(ex) + percent;
+    let units = roundedUnits({ int: mant!.split('.')[0]!, frac: mant!.split('.')[1] ?? '' }, places);
+    if (units >= 10n ** BigInt(places + 1)) { units = roundedUnits({ int: '1', frac: '0'.repeat(places + 1) }, places); expectedExp += 1; }
+    return e === expectedExp && compare(digits, places, units);
   }
   // 한계: «0.###» 처럼 뒤 0 을 생략하는 형식은 보이는 자릿수가 형식의 최대 자릿수보다 적을 수 있어(77.4 ↔ 77.44 처럼)
   // 표시만으로는 가릴 수 없다 — 두 읽기 사이 변경은 앞뒤 실제 값 동일 검사(sameReads)와 줄마다 글자 칸 대조가 막는다.
