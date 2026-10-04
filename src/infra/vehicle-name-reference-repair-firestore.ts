@@ -155,6 +155,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     for (const key of ['maker', 'model', 'sub_model'] as const) {
       if (typeof c.data[key] !== 'string' || c.data[key] !== clean(c.data[key])) throw new Error(`masterCreate ${c.id} ${key} must be normalized text`);
     }
+    if (variantTrimNames(c.data.variants).length && !Array.isArray(c.data.trims)) throw new Error(`masterCreate ${c.id} variants name trims but trims is not a list`);
     if (Array.isArray(c.data.variants) && Array.isArray(c.data.trims)) {
       const listed = new Set((c.data.trims as unknown[]).map(clean));
       const missing = variantTrimNames(c.data.variants).filter((t) => !listed.has(t));
@@ -238,6 +239,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (!matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
       throw new Error(`precondition changed ${snapshot.ref.path}`);
     }
+    const aliasField = ALIAS_FIELD[targets[index]!.kind];
+    const aliasValue = aliasField ? snapshot.data()?.[aliasField] : undefined;
+    if (aliasValue !== undefined && aliasValue !== null && !Array.isArray(aliasValue)) throw new Error(`alias field is not a list ${snapshot.ref.path}.${aliasField}`);
   });
   const variantRepairs = plan.masterVariantRepairs ?? [];
   const variantRefs = variantRepairs.map((v) => db.collection('vehicle_master').doc(v.id));
@@ -247,6 +251,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (!snapshot.exists || stableDigest(snapshot.data()?.variants ?? null) !== v.fromDigest
       || (v.trims !== undefined && stableDigest(snapshot.data()?.trims ?? null) !== v.fromTrimsDigest)) {
       throw new Error(`variants precondition changed ${snapshot.ref.path}`);
+    }
+    if (v.trims === undefined && !Array.isArray(snapshot.data()?.trims) && variantTrimNames(v.to).length) {
+      throw new Error(`masterVariantRepair ${v.id} stored trims is not a list — pass trims`);
     }
     if (v.trims === undefined && Array.isArray(snapshot.data()?.trims)) {
       const listed = new Set((snapshot.data()!.trims as unknown[]).map(clean));
@@ -414,6 +421,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         if (t.kind === 'masterModel') { masterModelTo[t.ref.id] = clean(t.item.to); affected.add(t.ref.id); }
         if (t.kind === 'trimModel') { rowModelTo[t.ref.id] = clean(t.item.to); affected.add(linkTo[t.ref.id] ?? String(current[i]?.data()?.master_id ?? '')); }
       });
+      // Rows relinked away from a master whose model changes keep their model unless renamed — so every relink destination is checked as well.
+      for (const to of Object.values(linkTo)) affected.add(to);
       const createdMaster: Record<string, Record<string, unknown>> = Object.fromEntries((plan.masterCreates ?? []).map((c) => [c.id, c.data]));
       for (const mid of affected) {
         if (!mid) throw new Error('trim row without master_id cannot change model');
@@ -459,11 +468,23 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     for (const [index, v] of variantRepairs.entries()) {
       if (v.trims !== undefined) continue;
       const stored = (await transaction.getAll(variantRefs[index]!))[0]!.data()?.trims;
-      if (Array.isArray(stored) && variantTrimNames(v.to).some((t) => !stored.map(clean).includes(t))) throw new Error(`transaction variants name trims missing from the stored trims ${variantRefs[index]!.path}`);
+      const names = variantTrimNames(v.to);
+      if (!Array.isArray(stored) ? names.length > 0 : names.some((t) => !stored.map(clean).includes(t))) throw new Error(`transaction variants name trims missing from the stored trims ${variantRefs[index]!.path}`);
     }
     current.forEach((snapshot, index) => {
       if (!snapshot.exists || !matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
         throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
+      }
+      const { kind, item, field, ref } = targets[index]!;
+      const aliasField = ALIAS_FIELD[kind];
+      if (!aliasField) return;
+      const aliasValue = snapshot.data()?.[aliasField];
+      if (aliasValue !== undefined && aliasValue !== null && !Array.isArray(aliasValue)) throw new Error(`transaction alias field is not a list ${ref.path}.${aliasField}`);
+      // The stored spelling is kept too when it differs from the normalized old name (e.g. stray or full-width spaces).
+      const raw = snapshot.data()?.[field];
+      const entry = byPath[ref.path]!;
+      if (typeof raw === 'string' && clean(raw) && raw !== clean(item.from) && !(entry.aliases[aliasField] ?? []).includes(raw)) {
+        entry.aliases[aliasField] = [...(entry.aliases[aliasField] ?? []), raw];
       }
     });
     for (const { ref, fields, aliases } of Object.values(byPath)) {
@@ -493,8 +514,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       // The old name must be kept as an alias, and aliases present before the repair must still be there.
       const aliases: unknown[] = Array.isArray(data?.[aliasField]) ? data[aliasField] : [];
       const before = snapshots[index]!.data()?.[aliasField];
-      const kept = Array.isArray(before) ? before.every((a: unknown) => aliases.includes(a)) : true;
-      if (!aliases.map(clean).includes(clean(item.from)) || !kept) throw new Error(`readback alias mismatch ${snapshot.ref.path}`);
+      const kept = Array.isArray(before) ? before.every((a: unknown) => aliases.includes(a)) : before === undefined || before === null;
+      const raw = snapshots[index]!.data()?.[field];
+      const rawKept = typeof raw !== 'string' || !clean(raw) || raw === clean(item.from) || aliases.includes(raw);
+      if (!aliases.map(clean).includes(clean(item.from)) || !kept || !rawKept) throw new Error(`readback alias mismatch ${snapshot.ref.path}`);
     }
   });
   const retireReadback = retireRefs.length ? await db.getAll(...retireRefs) : [];
