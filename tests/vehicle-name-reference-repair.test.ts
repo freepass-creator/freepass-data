@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { stableDigest } from '../src/shared/stable-digest.js';
 import { MAX_VEHICLE_NAME_REPAIR_TARGETS, matchesFrom, normalizeName, validateVehicleNameRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
 
 describe('vehicle-name reference repair gate', () => {
@@ -97,6 +98,19 @@ describe('vehicle-name reference repair gate', () => {
     expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: ['C 에센셜'] }] })).toThrow(/together/);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: [' C 에센셜'], fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/normalized/);
     expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: ['A', 'A'], fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/duplicate/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/together/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: [], fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/non-empty/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: ['A'], fromTrimsDigest: 'xyz' }] })).toThrow(/fromTrimsDigest/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: [3 as never], fromTrimsDigest: 'b'.repeat(64) }] })).toThrow(/normalized/);
+    // no-op rules: same variants but different trims is a change; both the same is a no-op; variants-only still works
+    const same = { ...v, fromDigest: stableDigest(v.to) };
+    expect(validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...same, trims: ['A'], fromTrimsDigest: stableDigest(['B']) }] })).toMatchObject({ masterVariantCount: 1 });
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...same, trims: ['A'], fromTrimsDigest: stableDigest(['A']) }] })).toThrow(/no-op/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [same] })).toThrow(/no-op/);
+    expect(validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [v] })).toMatchObject({ masterVariantCount: 1 });
+    // a master retired in the same plan cannot get a trims edit
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterVariantRepairs: [{ ...v, trims: ['A'], fromTrimsDigest: 'b'.repeat(64) }],
+      masterRetires: [{ id: 'm', into: 'm2', evidence: 'x' }] })).toThrow(/same plan/);
   });
   it('caps one plan below the Firestore transaction write limit', () => {
     const many = Array.from({ length: MAX_VEHICLE_NAME_REPAIR_TARGETS + 1 }, (_, i) => ({ id: `t${i}`, from: 'A', to: 'B' }));

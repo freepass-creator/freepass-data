@@ -239,6 +239,34 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
       masterVariantRepairs: [{ ...repair, fromTrimsDigest: stableDigest(['아너스', '프리미엄']) }] });
     expect(store.get('vehicle_master/m-gn7')).toMatchObject({ trims: ['프리미엄', '블랙 잉크'], variants: repair.to });
   });
+  it('trims edit: audit carries before/after, a trims change after the early check aborts with no writes, readback catches a mismatch, retired masters are frozen', async () => {
+    const { stableDigest } = await import('../src/shared/stable-digest.js');
+    const variants = [{ fuel: '가솔린', trims: ['프리미엄'] }];
+    const seed = () => store.set('vehicle_master/m-gn7', { id: 'm-gn7', maker: '현대', model: '그랜저', sub_model: '그랜저 GN7', variants, trims: ['아너스'] });
+    const repair = { id: 'm-gn7', fromDigest: stableDigest(variants), to: variants, evidence: '행 기준', trims: ['프리미엄'], fromTrimsDigest: stableDigest(['아너스']) };
+    const plan = { sourceDigest: 'v1', masterRepairs: [], productRepairs: [], masterVariantRepairs: [repair] };
+    const audits = () => [...store.entries()].filter(([k]) => k.startsWith('audit_events/')).map(([, v]) => v);
+    const original = db.runTransaction;
+    // 1) trims changed by someone else after the early check → aborted, nothing written
+    seed();
+    db.runTransaction = async (fn) => { store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: ['아너스', '르블랑'] }); return original(fn); };
+    try { await expect(applyVehicleNameReferenceRepair(plan)).rejects.toThrow(/precondition/); } finally { db.runTransaction = original; }
+    expect(store.get('vehicle_master/m-gn7')!.trims).toEqual(['아너스', '르블랑']);
+    expect(audits()).toHaveLength(0);
+    // 2) trims-only change (variants identical) succeeds; audit records before digest and after list
+    seed();
+    await applyVehicleNameReferenceRepair(plan);
+    expect(store.get('vehicle_master/m-gn7')!.trims).toEqual(['프리미엄']);
+    expect(audits()).toEqual(expect.arrayContaining([expect.objectContaining({ before: expect.objectContaining({ trimsDigest: stableDigest(['아너스']) }), after: expect.objectContaining({ trims: ['프리미엄'] }) })]));
+    // 3) readback mismatch is detected
+    store.clear(); seed();
+    db.runTransaction = async (fn) => { await original(fn); store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, trims: ['다른 값'] }); };
+    try { await expect(applyVehicleNameReferenceRepair(plan)).rejects.toThrow(/readback trims mismatch/); } finally { db.runTransaction = original; }
+    // 4) a retired master is frozen for trims edits too
+    store.clear(); seed(); store.set('vehicle_master/m-gn7', { ...store.get('vehicle_master/m-gn7')!, retired: true, retired_into: 'm-x' });
+    await expect(applyVehicleNameReferenceRepair(plan)).rejects.toThrow(/retired/);
+    expect(store.get('vehicle_master/m-gn7')!.trims).toEqual(['아너스']);
+  });
   it('refuses to link a trim row to a retired master in a later plan', async () => {
     store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
     await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
