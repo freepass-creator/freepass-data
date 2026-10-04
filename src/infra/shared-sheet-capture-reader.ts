@@ -6,7 +6,13 @@ type Ports = { accessToken?: () => Promise<string>; fetcher?: typeof fetch };
 async function sheetsAccessToken(): Promise<string> {
   try {
     const keyFile = process.env.GOOGLE_SHEETS_APPLICATION_CREDENTIALS;
-    const auth = new GoogleAuth({ ...(keyFile ? { keyFile } : {}), scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'] });
+    // Same delegation as data-owned-refresh: the sheet owner (GOOGLE_SHEETS_SUBJECT) is impersonated read-only.
+    const subject = process.env.GOOGLE_SHEETS_SUBJECT?.trim();
+    // Domain-wide delegation only grants the scope already authorized for that client (the existing refresh uses
+    // «spreadsheets»); without delegation the narrower read-only scope is requested. This reader only issues GETs.
+    const delegated = Boolean(keyFile && subject);
+    const auth = new GoogleAuth({ ...(keyFile ? { keyFile } : {}), ...(keyFile && subject ? { clientOptions: { subject } } : {}),
+      scopes: [delegated ? 'https://www.googleapis.com/auth/spreadsheets' : 'https://www.googleapis.com/auth/spreadsheets.readonly'] });
     const token = await auth.getAccessToken();
     if (!token) throw new Error('missing token');
     return token;
