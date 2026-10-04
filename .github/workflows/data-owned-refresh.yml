@@ -146,15 +146,31 @@ jobs:
       # 예약 실행은 적용까지, 수동 실행은 고른 모드대로.
       APPLY: ${{ github.event_name == 'schedule' || inputs.mode == 'shared-sheet-apply' }}
     steps:
+      # Scheduled runs need the environment switch FREEPASS_DATA_SHARED_SHEET_DAILY == 'on' (set only after a manual
+      # dry-run was reviewed). Environment variables are not visible to job-level if, so the gate is the first step.
+      - name: Daily schedule switch
+        id: gate
+        env:
+          DAILY: ${{ vars.FREEPASS_DATA_SHARED_SHEET_DAILY }}
+        run: |
+          if [ "${{ github.event_name }}" = 'schedule' ] && [ "$DAILY" != 'on' ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "daily schedule switch is off — skipped"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4
+        if: steps.gate.outputs.run == 'true'
         with:
           node-version: '22'
           cache: npm
       - run: npm ci --ignore-scripts
+        if: steps.gate.outputs.run == 'true'
       - name: Require the Data delivery identity, sheet and private evidence bucket
+        if: steps.gate.outputs.run == 'true'
         env:
           PROVIDER: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
           ACCOUNT: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
@@ -166,11 +182,14 @@ jobs:
           test -n "$SHARED_SHEET_ID"
           test -n "$EVIDENCE_BUCKET"
       - uses: google-github-actions/auth@v2
+        if: steps.gate.outputs.run == 'true'
         with:
           workload_identity_provider: ${{ vars.FREEPASS_DATA_REFRESH_WIF_PROVIDER }}
           service_account: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
+        if: steps.gate.outputs.run == 'true'
       - name: Prepare private Sheets delegation credential
+        if: steps.gate.outputs.run == 'true'
         env:
           SHEETS_SA: ${{ secrets.GOOGLE_SA_JSON }}
         run: |
@@ -180,6 +199,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/shared-sheet"
           printf '%s' "$SHEETS_SA" > "$RUNNER_TEMP/shared-sheet/sheets.json"
       - name: Capture, plan and (apply) — counts only in the public log
+        if: steps.gate.outputs.run == 'true'
         env:
           EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET }}
         run: |
@@ -212,7 +232,7 @@ jobs:
             test "$code" = 0 -o "$code" = 2
           fi
       - name: Preserve private capture, plan and reports (location not printed)
-        if: always()
+        if: always() && steps.gate.outputs.run == 'true'
         env:
           EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET }}
         run: |
@@ -228,5 +248,5 @@ jobs:
           done
           echo "private evidence stored and verified"
       - name: Remove temporary credentials
-        if: always()
+        if: always() && steps.gate.outputs.run == 'true'
         run: rm -rf "$RUNNER_TEMP/shared-sheet"
