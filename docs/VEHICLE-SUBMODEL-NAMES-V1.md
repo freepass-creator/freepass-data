@@ -131,3 +131,11 @@
 - 미니 쿠퍼 C·S는 세부트림으로(규칙 19), 3도어 F66·5도어 F65는 차마다 원문으로 가름.
 - 확인 필요: 더 뉴 티볼리 코드(데이터 X100 ↔ 우리 X170), EV6 코드(데이터 CV1 ↔ 우리 CV), 볼트 EV 개발코드, 뉴 토레스 하이브리드 코드.
 - 옛 이름(F03·데이터·공급사 원문)은 모두 별칭으로 새 이름에 잇고, 불변 ID는 그대로(규칙 10).
+
+## 프리패스 데이터 반영 — 실행 방법(정정기 `repair:vehicle-name-parity`)
+
+- 실행 환경: `FIREBASE_PROJECT_ID=freepasserp5` 필수(빠지면 시작에서 멈춤, 쓰기 0). freepass-data main 의 #348 이후 실행기.
+- 묶음마다 시험: `VEHICLE_NAME_REPAIR_PLAN=<묶음 JSON> npx tsx src/jobs/apply-vehicle-name-reference-repair.ts` → `planDigest` 확인.
+- 적용: `FIREBASE_PROJECT_ID=freepasserp5 AUTHORIZE_VEHICLE_NAME_REPAIR=<planDigest> VEHICLE_NAME_REPAIR_PLAN=<묶음 JSON> npx tsx src/jobs/apply-vehicle-name-reference-repair.ts --apply`
+- 실행기가 묶음 안에서: 사전조건, 비공개 백업, 한 트랜잭션, 최종 이름 유일성·trim_row_key·variants 다이제스트, 감사 기록, 되읽기.
+- 1차 적용 2026-10-04: 5묶음, 되읽기·감사 176·176·193·197·90, 재감사 차이 0(NEXT-START-HERE 같은 날 항목).
