@@ -38,6 +38,8 @@ on:
       - 'src/jobs/check-sheet-consumer-health.ts'
       - 'src/jobs/build-data-control-tower.ts'
       - 'src/jobs/data-access-runtime.ts'
+      - 'src/domain/daily-writer-guard.ts'
+      - 'src/jobs/check-daily-writer-guard.ts'
   schedule:
     - cron: '37 * * * *'
 
@@ -50,6 +52,8 @@ concurrency:
 permissions:
   contents: read
   id-token: write
+  # daily writer guard: data-owned-refresh 실행 시간 목록 읽기
+  actions: read
 
 jobs:
   audit:
@@ -756,6 +760,21 @@ jobs:
           test "$generation" -gt '${{ steps.previous.outputs.generation }}'
           jq -e --arg runId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             '.version == "erp5-continuous-pointer/1" and .runId == $runId' latest-readback.json >/dev/null
+      # 매일 박제 계정(github-data-inventory-writer) «정해진 작업이 아닌 쓰기» 감시 — 대표 승인 10-04 ①안의 감지 점검.
+      # IAM 은 데이터베이스 단위까지만 좁혀지므로, 그 계정의 Firestore 쓰기 감사 로그를 매시 읽어 허용 모음 밖(특히 products)
+      # 쓰기나 data-owned-refresh 실행 시간 밖 쓰기면 이 감사를 실패(경보)로 끝낸다. 로그 켜기·로그 읽기 권한 뒤 저장소 변수
+      # FREEPASS_DATA_DAILY_WRITER_GUARD=on 으로만 켠다. 공개 로그에는 개수·모음 이름만 남긴다.
+      - name: Daily writer guard (Firestore writes by the daily snapshot identity)
+        if: always() && vars.FREEPASS_DATA_DAILY_WRITER_GUARD == 'on'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAILY_WRITER_ACCOUNT: github-data-inventory-writer@freepasserp5.iam.gserviceaccount.com
+        run: |
+          set -euo pipefail
+          gcloud logging read "logName:\"cloudaudit.googleapis.com%2Fdata_access\" AND protoPayload.authenticationInfo.principalEmail=\"$DAILY_WRITER_ACCOUNT\""             --project=freepasserp5 --freshness=2h --format=json > "$RUNNER_TEMP/daily-writer-log.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/data-owned-refresh.yml/runs?per_page=30" > "$RUNNER_TEMP/daily-writer-runs.json"
+          DAILY_WRITER_LOG_JSON="$RUNNER_TEMP/daily-writer-log.json" DAILY_WRITER_RUNS_JSON="$RUNNER_TEMP/daily-writer-runs.json"             npx tsx src/jobs/check-daily-writer-guard.ts
       - name: Retain non-sensitive summaries for operator inspection
         if: always()
         uses: actions/upload-artifact@v4

@@ -141,7 +141,6 @@ jobs:
     env:
       GOOGLE_CLOUD_PROJECT: freepasserp5
       FIREBASE_PROJECT_ID: freepasserp5
-      GOOGLE_SHEETS_SUBJECT: pyh@teamjpk.com
       # Secret (masked in logs): the sheet ID must not appear in this public repository's run logs.
       SHARED_SHEET_ID: ${{ secrets.FREEPASS_DATA_SHARED_SHEET_ID }}
       # 예약 실행은 적용까지, 수동 실행은 고른 모드대로.
@@ -189,16 +188,6 @@ jobs:
           service_account: ${{ vars.FREEPASS_DATA_REFRESH_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
         if: steps.gate.outputs.run == 'true'
-      - name: Prepare private Sheets delegation credential
-        if: steps.gate.outputs.run == 'true'
-        env:
-          SHEETS_SA: ${{ secrets.GOOGLE_SA_JSON }}
-        run: |
-          set -euo pipefail
-          test -n "$SHEETS_SA"
-          umask 077
-          mkdir -p "$RUNNER_TEMP/shared-sheet"
-          printf '%s' "$SHEETS_SA" > "$RUNNER_TEMP/shared-sheet/sheets.json"
       - name: Capture, plan and (apply) — counts only in the public log
         if: steps.gate.outputs.run == 'true'
         env:
@@ -207,7 +196,8 @@ jobs:
           set -euo pipefail
           umask 077
           T="$RUNNER_TEMP/shared-sheet"
-          export GOOGLE_SHEETS_APPLICATION_CREDENTIALS="$T/sheets.json"
+          mkdir -p "$T"
+          # 열쇠 파일·위임 없음(대표 승인 10-04): 공통 시트는 이 WIF 계정에 «보기» 공유, ADC 로 spreadsheets.readonly.
           export FREEPASS_ERP5_READ_ACCESS_TOKEN="$(gcloud auth print-access-token)"
           export FREEPASS_DATA_EVIDENCE_BUCKET="$EVIDENCE_BUCKET"
           # inspect-erp5-source exits 2 when it reports HOLD items, yet still writes a verified private capture.
