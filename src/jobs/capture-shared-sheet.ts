@@ -16,7 +16,7 @@ export async function main(args = process.argv.slice(2)) {
   const local = get('--from-batchget');
   if (local && (!get('--read-time') || !get('--grid-meta'))) throw new Error('READ_TIME_AND_GRID_META_REQUIRED_FOR_LOCAL_BATCHGET');
   const json = async (k: string) => (get(k) ? JSON.parse(await readFile(get(k)!, 'utf8')) : undefined);
-  const stats: CaptureDateStats = { datesFromSerial: 0, rowsKeptAsShown: 0 };
+  const stats: CaptureDateStats = { datesFromSerial: 0 };
   const capture = local
     ? captureFromBatchGet(id, await json('--from-batchget'), await json('--grid-meta'), get('--read-time')!,
       await json('--from-batchget-serials'), await json('--from-batchget-serials-after'), stats)
@@ -31,7 +31,7 @@ export async function main(args = process.argv.slice(2)) {
         const before = await readSheetsBatchGet(id, ranges, {}, 'SERIAL') as SheetsBatchGet;
         const shown = await readSheetsBatchGet(id, ranges) as SheetsBatchGet;
         const after = await readSheetsBatchGet(id, ranges, {}, 'SERIAL') as SheetsBatchGet;
-        try { stats.datesFromSerial = 0; stats.rowsKeptAsShown = 0; return captureFromBatchGet(id, shown, meta, readTime, before, after, stats); } catch (e) {
+        try { stats.datesFromSerial = 0; return captureFromBatchGet(id, shown, meta, readTime, before, after, stats); } catch (e) {
           if (attempt >= 3 || !(e instanceof Error) || !['SHARED_SHEET_CAPTURE_CHANGED_DURING_READ', 'SHARED_SHEET_CAPTURE_SERIALS_MISMATCH'].includes(e.message)) throw e;
           await new Promise(r => setTimeout(r, 30_000));
         }
@@ -48,7 +48,7 @@ export async function main(args = process.argv.slice(2)) {
   await writePrivateArtifact(out, sealed);
   console.log(JSON.stringify({ schema: sealed.schema, tabs: sealed.tabs.length, records: batch.records.length,
     supplierEntered: sealed.supplierEntered?.length ?? 0, corrections: sealed.corrections?.length ?? 0,
-    datesFromSerial: stats.datesFromSerial, rowsKeptAsShown: stats.rowsKeptAsShown,
+    datesFromSerial: stats.datesFromSerial,
     readTime: sealed.readTime, digest: sealed.digest }, null, 2));
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

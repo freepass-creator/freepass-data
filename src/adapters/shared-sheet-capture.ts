@@ -36,12 +36,13 @@ const displayMatchesIso = (shown: string, iso: string): boolean => {
   return false;
 };
 
-/** Two reads of the same ranges are identical (same ranges, same row counts, same cells — dates and numbers included). */
+/** Two reads of the same ranges are identical (same ranges, same row counts, same cells — dates and numbers included).
+ * Limit: a change that is made and fully undone between the two reads is not seen. */
 export const sameReads = (a: SheetsBatchGet, b: SheetsBatchGet): boolean =>
   a?.spreadsheetId === b?.spreadsheetId && JSON.stringify(a?.valueRanges ?? null) === JSON.stringify(b?.valueRanges ?? null);
 
 /** Counts the capture reports on the side (public log: numbers only). */
-export type CaptureDateStats = { datesFromSerial: number; rowsKeptAsShown: number };
+export type CaptureDateStats = { datesFromSerial: number };
 
 /** One values.batchGet response → validated capture v1. Rows are padded to the 74-column contract, blank rows kept.
  * serials (optional): the same ranges read as real values (dates as serial numbers) right BEFORE the displayed read, and
@@ -73,11 +74,8 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
       // 두 번 읽는 사이 줄이 지워지거나 정렬되면 다른 차의 날짜가 붙는다 — 줄 수·회사명·차량번호가 같고, 바꾸는 날짜가
       // 보이는 값(08-12 · 20-07-03)과 맞을 때만 쓴다. 하나라도 다르면 멈춘다(fail closed).
       if (serials && real.length !== (range.values ?? []).length) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
-      // 글자 칸이 모두 같은 줄(«미정» 차 둘 등 — 숫자·날짜만 다름)은 서로 바뀌어도 알 수 없다 — 그런 줄은 날짜를 바꾸지 않고 보이는 값 그대로 둔다.
-      // 열쇠는 실제 값 조회의 글자 칸만으로 만든다(숫자 칸은 표시값과 글자 그대로 비교할 수 없어 빼고).
-      const textKey = (row: unknown[]) => JSON.stringify(Array.from({ length: WIDTH }, (_, c) => (DATE_COLUMNS.includes(c) || typeof row[c] !== 'string' ? '' : String(row[c]).trim())));
-      const keyCount = new Map<string, number>();
-      for (const row of real.slice(1)) if (Array.isArray(row)) { const k = textKey(row); keyCount.set(k, (keyCount.get(k) ?? 0) + 1); }
+      // 짝은 줄 위치(같은 범위·같은 줄 번호)로 짓는다 — 앞뒤 실제 값 조회가 같다는 것이 그 사이 줄 배치가 안 바뀌었음을
+      // 보장하므로, 글자가 똑같은 줄(«미정» 둘 등)도 제 줄의 날짜를 받는다(연도를 잃지 않는다).
       const values = (range.values ?? []).map((row, r) => {
         if (!Array.isArray(row) || row.length > WIDTH) throw new Error('SHARED_SHEET_CAPTURE_ROW_INVALID');
         const out = Array.from({ length: WIDTH }, (_, c) => cell(row[c]));
@@ -89,9 +87,9 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
             if (DATE_COLUMNS.includes(c) || typeof twin[c] !== 'string') continue;
             if (String(twin[c]).trim() !== String(row[c] ?? '').trim()) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
           }
-          const isos = DATE_COLUMNS.map(c => [c, serialToIsoDate(twin[c])] as const).filter((x): x is readonly [number, string] => !!x[1]);
-          if (isos.length && (keyCount.get(textKey(twin)) ?? 0) > 1) { if (stats) stats.rowsKeptAsShown++; return out; }
-          for (const [c, iso] of isos) {
+          for (const c of DATE_COLUMNS) {
+            const iso = serialToIsoDate(twin[c]);
+            if (!iso) continue;
             if (!displayMatchesIso(String(row[c] ?? ''), iso)) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
             out[c] = iso;
             if (stats) stats.datesFromSerial++;

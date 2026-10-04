@@ -115,16 +115,16 @@ describe('shared sheet capture keeps the year of date cells', () => {
     // 글자 칸이 다르면(같은 회사·같은 번호라도) 멈춘다.
     const otherText = [...real]; otherText[at('비고')] = '다른 차';
     expect(() => rawCapture(ID, shownBatch, META(), T, batch({ [ch.tab]: [otherText] }), batch({ [ch.tab]: [otherText] }))).toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
-    // 날짜 말고 글자가 모두 같은 두 줄(«미정» 둘)은 서로 바뀌어도 알 수 없으니 날짜를 바꾸지 않는다.
+    // 날짜 말고 글자가 모두 같은 두 줄(«미정» 둘)도 줄 위치로 짝지어 제 날짜(연도 포함)를 받는다.
     const twinA = [...real], twinB = [...real]; twinB[at('입고일자')] = 45881;
     const dup = rawCapture(ID, batch({ [ch.tab]: [shown, shown] }), META(), T, batch({ [ch.tab]: [twinB, twinA] }), batch({ [ch.tab]: [twinB, twinA] })).tabs.find(t => t.title === ch.tab)!.values;
-    expect(dup[1]![at('입고일자')]).toBe('08-12');
-    expect(dup[2]![at('입고일자')]).toBe('08-12');
-    // 연식 숫자만 다른 두 줄도 글자로는 구분이 안 되니 날짜를 바꾸지 않는다.
+    expect(dup[1]![at('입고일자')]).toBe('2025-08-12');
+    expect(dup[2]![at('입고일자')]).toBe('2026-08-12');
+    // 연식 숫자만 다른 두 줄도 줄 위치로 짝짓는다.
     const yA = [...real], yB = [...real]; yB[at('연식')] = 2019; yB[at('입고일자')] = 45881;
     const sA = [...shown], sB = [...shown]; sA[at('연식')] = '2021'; sB[at('연식')] = '2019';
     const yr = rawCapture(ID, batch({ [ch.tab]: [sA, sB] }), META(), T, batch({ [ch.tab]: [yB, yA] }), batch({ [ch.tab]: [yB, yA] })).tabs.find(t => t.title === ch.tab)!.values;
-    expect([yr[1]![at('입고일자')], yr[2]![at('입고일자')]]).toEqual(['08-12', '08-12']);
+    expect([yr[1]![at('입고일자')], yr[2]![at('입고일자')]]).toEqual(['2025-08-12', '2026-08-12']);
   });
   it('stops when anything changed between the serial reads before and after the displayed read, and counts what it did', () => {
     const ch = sharedSheetChannels[0]!, H = sharedSheetHeaders, at = (h: string) => H.indexOf(h);
@@ -138,13 +138,10 @@ describe('shared sheet capture keeps the year of date cells', () => {
     for (const after of [batch({ [ch.tab]: [yearOnly] }), batch({ [ch.tab]: [numOnly] }), batch({ [ch.tab]: [real, real] })])
       expect(() => rawCapture(ID, S, META(), T, R, after)).toThrow('SHARED_SHEET_CAPTURE_CHANGED_DURING_READ');
     expect(() => rawCapture(ID, S, META(), T, R)).toThrow('SHARED_SHEET_CAPTURE_CHANGED_DURING_READ');
-    // 바꾼 날짜 수·구분이 안 돼 보이는 값 그대로 둔 줄 수를 센다(조용히 넘어가지 않게).
-    const stats = { datesFromSerial: 0, rowsKeptAsShown: 0 };
+    // 바꾼 날짜 수를 센다 — 글자가 똑같은 두 줄도 둘 다 바꾼다.
+    const stats = { datesFromSerial: 0 };
     const twin = batch({ [ch.tab]: [real, real] });
     rawCapture(ID, batch({ [ch.tab]: [shown, shown] }), META(), T, twin, twin, stats);
-    expect(stats).toEqual({ datesFromSerial: 0, rowsKeptAsShown: 2 });
-    const one = { datesFromSerial: 0, rowsKeptAsShown: 0 };
-    rawCapture(ID, S, META(), T, R, R, one);
-    expect(one).toEqual({ datesFromSerial: 1, rowsKeptAsShown: 0 });
+    expect(stats).toEqual({ datesFromSerial: 2 });
   });
 });
