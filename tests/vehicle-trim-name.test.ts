@@ -65,12 +65,19 @@ describe('F03 세부트림 = 엔카 등급 이름에서 파워트레인 부분�
     expect(sub('9인승')).toBe('기본형');
   });
 
-  it('제조사 공식 표기 낱말은 엔카 대신 그 표기 — X Line → X-Line (기준 한 장 2절 6번)', () => {
-    expect(sub('시그니처 X Line')).toBe('시그니처 X-Line');
-    expect(name('HEV 9인승 X Line')).toBe('X-Line');
-    expect(name('xDrive20i X Line', '수입')).toBe('xDrive20i X Line'); // 모델 번호 등급은 엔카 글자 그대로
-    expect(sub('X-Line')).toBe('X-Line');
-    expect(sub('X Liner')).toBe('X Liner');
+  it('제조사 공식 표기 낱말은 엔카 대신 제조사 표기 — 기아 X-Line · BMW xLine · 현대 H-Pick (기준 한 장 2절 6번)', () => {
+    const kia = (v: string, isSubGrade = true) => trimDisplayName(v, '국산', { isSubGrade, maker: '기아' }).name;
+    expect(kia('시그니처 X Line')).toBe('시그니처 X-Line');
+    expect(kia('HEV 9인승 X Line', false)).toBe('X-Line');
+    expect(kia('X-Line')).toBe('X-Line');
+    expect(kia('X Liner')).toBe('X Liner');
+    // BMW: 목록이 모델 번호 예외보다 앞선다
+    expect(trimDisplayName('xDrive20i X Line', '수입', { maker: 'BMW' })).toEqual({ name: 'xDrive20i xLine', removed: [], undecided: [], modelDesignation: true });
+    expect(trimDisplayName('sDrive 18d X Line', '수입', { maker: 'BMW' }).name).toBe('sDrive 18d xLine');
+    expect(trimDisplayName('H Pick', '국산', { isSubGrade: true, maker: '현대' }).name).toBe('H-Pick');
+    // 제조사를 모르거나 목록 밖 제조사면 바꾸지 않는다
+    expect(sub('시그니처 X Line')).toBe('시그니처 X Line');
+    expect(trimDisplayName('H Pick', '국산', { isSubGrade: true, maker: '기아' }).name).toBe('H Pick');
   });
 
   it('파워트레인뿐이면 기본형', () => {

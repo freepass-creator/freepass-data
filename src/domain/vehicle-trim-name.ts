@@ -7,7 +7,7 @@
  *   「프리미어」, 「1.8 TCe 인스파이어」 → 「인스파이어」). 남는 게 없으면 「기본형」.
  * - 예외: 모델 번호가 곧 등급인 수입차(520d M 스포츠 · C300 4MATIC · S350 d 4MATIC · 40 TDI 콰트로 프리미엄 · B5 …)는 그대로.
  * 인승(「9인승 노블레스」의 9인승)은 제원 칸이라 뗀다(2026-10-04). 용도 괄호(「트렌디(렌터카)」)는 세부트림의 일부라 남긴다.
- * 제조사 공식 표기 낱말(X Line → X-Line)은 엔카 대신 그 표기로 쓴다(TRIM_OFFICIAL_SPELLINGS).
+ * 제조사 공식 표기 낱말(기아 X Line → X-Line · BMW X Line → xLine · 현대 H Pick → H-Pick)은 엔카 대신 그 표기로 쓴다(TRIM_OFFICIAL_SPELLINGS, 제조사 필요).
  *
  * 아래 낱말 목록은 «파워트레인 부분»을 알아보는 수단일 뿐이다 — 정의는 위 4단 구조다. 목록은 이 파일 하나로 고정해
  * 세션마다 다르게 고르지 않는다. 새로 판단이 갈리는 낱말은 TRIM_UNDECIDED_TOKENS 에 두고 떼지 않는다.
@@ -39,12 +39,25 @@ const SEATS = /^\d{1,2}인승$/;
 
 /**
  * 제조사 공식 표기 낱말 — 엔카를 따라 하지 않는 것(기준 한 장 2절 6번, 대표 2026-10-04). 목록은 대표가 정하고 그 장에만 둔다.
- * 세부등급 글자에도 적용한다. 모델 번호 등급(BMW 「xDrive20i X Line」)은 엔카 글자 전체 그대로라 대지 않는다.
+ * 같은 엔카 낱말도 제조사마다 공식 표기가 다르다(기아 「X-Line」 · BMW 「xLine」) — 그래서 제조사(F03 표시명)를 받아야 바꾼다.
+ * 제조사를 모르면 바꾸지 않는다(틀린 표기로 바꾸지 않게). 이 목록은 수입차 모델 번호 예외보다 앞선다(BMW 「xDrive20i X Line」 → 「xDrive20i xLine」).
  */
-export const TRIM_OFFICIAL_SPELLINGS: readonly (readonly [string, string])[] = Object.freeze([['X Line', 'X-Line']] as const);
+export interface TrimOfficialSpelling {
+  readonly maker: string;
+  readonly encar: string;
+  readonly ours: string;
+}
 
-const officialSpelling = (name: string) =>
-  TRIM_OFFICIAL_SPELLINGS.reduce((acc, [encar, ours]) => acc.replace(new RegExp(`(^| )${encar.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?= |$)`, 'g'), `$1${ours}`), name);
+export const TRIM_OFFICIAL_SPELLINGS: readonly TrimOfficialSpelling[] = Object.freeze([
+  { maker: '기아', encar: 'X Line', ours: 'X-Line' },
+  { maker: 'BMW', encar: 'X Line', ours: 'xLine' },
+  { maker: '현대', encar: 'H Pick', ours: 'H-Pick' },
+]);
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const officialSpelling = (name: string, maker: string | undefined) =>
+  TRIM_OFFICIAL_SPELLINGS.filter((entry) => entry.maker === maker)
+    .reduce((acc, { encar, ours }) => acc.replace(new RegExp(`(^| )${escapeRegExp(encar)}(?= |$)`, 'g'), `$1${ours}`), name);
 
 /** 판단이 갈리는 낱말 — 떼지 않고 표시만 한다(지금은 없음). 새로 생기면 여기에 두고 결정되면 위 목록으로 옮긴다. */
 export const TRIM_UNDECIDED_TOKENS: readonly string[] = Object.freeze([]);
@@ -64,6 +77,8 @@ export interface TrimDisplayName {
 export interface TrimDisplayOptions {
   /** 값이 엔카 «세부등급» 칸이면 true — 그 글자 그대로 쓴다. */
   readonly isSubGrade?: boolean;
+  /** F03 제조사 표시명(기아·BMW·현대 …) — 제조사 공식 표기 낱말을 고를 때 쓴다. 없으면 공식 표기를 대지 않는다. */
+  readonly maker?: string;
 }
 
 // NFKC 는 쓰지 않는다 — 엔카 글자(플래티넘Ⅰ·포터 Ⅱ 같은 로마 숫자 글자)를 그대로 지킨다.
@@ -84,7 +99,7 @@ export function trimDisplayName(value: string, origin: TrimOrigin, options: Trim
     const all = text(value).split(' ').filter(Boolean);
     const removed = all.filter((token) => SEATS.test(token));
     const name = all.filter((token) => !SEATS.test(token)).join(' ');
-    return { name: name ? officialSpelling(name) : '기본형', removed, undecided: [], modelDesignation: false };
+    return { name: name ? officialSpelling(name, options.maker) : '기본형', removed, undecided: [], modelDesignation: false };
   }
   // 「구조변경(LPG)」처럼 붙은 괄호도 파워트레인이면 떼어 낸다. 「트렌디(렌터카)」 같은 용도 괄호는 그대로.
   const spaced = text(value).replace(/\(([^()]+)\)/g, (whole, inner: string) => (isTrimPowertrainToken(inner) ? ` (${inner}) ` : whole));
@@ -95,8 +110,8 @@ export function trimDisplayName(value: string, origin: TrimOrigin, options: Trim
     return m && !TRIM_DISPLACEMENT_PATTERNS.some((pattern) => pattern.test(token)) ? [m[1]!, m[2]!] : [token];
   });
   if (origin === '수입' && tokens.length > 0 && MODEL_DESIGNATION.test(tokens[0]!)) {
-    // 모델 번호 등급은 엔카 글자 전체 그대로(2절 5번 예외) — 공식 표기 목록도 대지 않는다(BMW 「xLine」은 대표 결정 대기).
-    return { name: tokens.join(' '), removed: [], undecided: [], modelDesignation: true };
+    // 모델 번호 등급은 엔카 글자 전체 그대로(2절 5번 예외) — 단 공식 표기 목록(6번)은 이 예외보다 앞선다.
+    return { name: officialSpelling(tokens.join(' '), options.maker), removed: [], undecided: [], modelDesignation: true };
   }
   // 배기량 숫자 바로 뒤 「T」·디젤 표시 「D」(「2.2D」)도 배기량 표기의 일부로 같이 뗀다(「터보」는 위 목록에서 뗀다).
   // 옵션 이름 「터보 패키지」(「GT 마스터즈 터보 패키지」)의 「터보」만 파워트레인이 아니다 — 이 한 묶음만 남긴다.
@@ -107,7 +122,7 @@ export function trimDisplayName(value: string, origin: TrimOrigin, options: Trim
   const removed = tokens.filter((_, i) => drop[i]);
   const kept = tokens.filter((_, i) => !drop[i]);
   return {
-    name: kept.length ? officialSpelling(kept.join(' ')) : '기본형',
+    name: kept.length ? officialSpelling(kept.join(' '), options.maker) : '기본형',
     removed,
     undecided: kept.filter((token) => UNDECIDED.has(token.toLowerCase())),
     modelDesignation: false,
