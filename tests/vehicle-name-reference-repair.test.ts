@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateVehicleNameRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
+import { matchesFrom, validateVehicleNameRepairPlan } from '../src/infra/vehicle-name-reference-repair-firestore.js';
 
 describe('vehicle-name reference repair gate', () => {
   it('accepts exact non-overlapping master and product repairs', () => {
@@ -29,5 +29,12 @@ describe('vehicle-name reference repair gate', () => {
       productRepairs: [{ id: 'p1', from: '', to: '더 뉴 기아 레이' }] })).toThrow(/requires/);
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [],
       productRepairs: [{ id: 'p1', from: ' ', to: '', evidence: 'x' }] })).toThrow(/requires/);
+  });
+  it('rejects non-string evidence and treats only missing/null/empty-string as blank', () => {
+    for (const evidence of [{}, false, 123]) expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [],
+      productRepairs: [{ id: 'p1', from: '', to: 'X', evidence } as never] })).toThrow();
+    expect([undefined, null, '', '  '].map((v) => matchesFrom(v, ''))).toEqual([true, true, true, true]);
+    expect([[], [null], 0, false, '레이'].map((v) => matchesFrom(v, ''))).toEqual([false, false, false, false, false]);
+    expect(matchesFrom(' G80 ', 'G80')).toBe(true);
   });
 });

@@ -22,6 +22,10 @@ export type VehicleNameRepairPlan = {
 };
 
 const clean = (value: unknown) => String(value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+/** Stored value matches the plan's `from`. A blank `from` only matches a truly blank value: missing, null or an empty string. */
+export const matchesFrom = (stored: unknown, from: string) => clean(from)
+  ? clean(stored) === clean(from)
+  : stored === undefined || stored === null || (typeof stored === 'string' && stored.trim() === '');
 
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   if (!plan.sourceDigest?.trim()) throw new Error('sourceDigest is required');
@@ -32,7 +36,9 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   for (const item of all) {
     // A blank `from` fills an empty name; it is only allowed with source-text evidence, and the transaction
     // precondition still requires the stored value to be blank at write time.
-    if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !clean(item.evidence))) throw new Error('repair item requires id/from/to');
+    const evidenceOk = typeof item.evidence === 'string' && item.evidence.trim() !== '';
+    if (item.evidence !== undefined && !evidenceOk) throw new Error('repair item evidence must be a non-empty string');
+    if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !evidenceOk)) throw new Error('repair item requires id/from/to');
     if (clean(item.from) === clean(item.to)) throw new Error(`no-op repair ${item.kind}:${item.id}`);
     const key = `${item.kind}:${item.id}`;
     if (keys.has(key)) throw new Error(`duplicate repair ${key}`);
@@ -55,7 +61,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const snapshots = await db.getAll(...refs);
   if (snapshots.some((snapshot) => !snapshot.exists)) throw new Error('repair target missing');
   snapshots.forEach((snapshot, index) => {
-    if (clean(snapshot.data()?.[targets[index]!.field]) !== clean(targets[index]!.item.from)) {
+    if (!matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
       throw new Error(`precondition changed ${snapshot.ref.path}`);
     }
   });
@@ -70,12 +76,14 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     sourceDigest: plan.sourceDigest,
     capturedAt: new Date().toISOString(),
     documents: snapshots.map((snapshot) => ({ path: snapshot.ref.path, data: snapshot.data() })),
+    // The reviewed items (incl. source-text evidence for blank fills) are kept with the before-images.
+    repairs: targets.map(({ item, field, ref }) => ({ path: ref.path, field, ...item })),
   }, null, 2), { flag: 'wx', mode: 0o600 });
 
   await db.runTransaction(async (transaction) => {
     const current = await transaction.getAll(...refs);
     current.forEach((snapshot, index) => {
-      if (!snapshot.exists || clean(snapshot.data()?.[targets[index]!.field]) !== clean(targets[index]!.item.from)) {
+      if (!snapshot.exists || !matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
         throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
       }
     });
@@ -86,6 +94,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
         ...(field === 'trim' ? { trim_aliases: FieldValue.arrayUnion(clean(item.from)) } : {}),
         vehicle_name_reference_checked_at: FieldValue.serverTimestamp(),
         vehicle_name_reference_source_digest: plan.sourceDigest,
+        ...(item.evidence ? { vehicle_name_reference_evidence: item.evidence } : {}),
       });
     });
   });
