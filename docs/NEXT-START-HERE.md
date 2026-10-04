@@ -375,6 +375,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 이름 정정 3건 운영 적용 (빈 세부모델 채우기 · 상품 세부트림 · 공유 차종 이름 변경)
+
+- 코드: main `d650022`(#333 빈칸 채우기·상품 세부트림, 근거는 `audit_events`) · `a451d17`(#336 `rename-vehicle-models`, 거래 안 참조 상품 전체 대조). 각 건 시험 실행 → Codex OK → 계획 digest 승인 → 적용 → REST 따로 되읽기.
+- ① 레이 5대 빈 `products.sub_model` 채우기(F03 «더 뉴 기아 레이» 4 · «더 뉴 기아 레이 EV» 1, 세부트림은 안 건드림): plan digest `3ae9aef0d081659825b43458fb7f01b1ed46d366195174fb0703db4afb502512`, run `2026-10-04T05-26-05-436Z-fb146bcb-c2e2-40f0-ac94-6c8d8feffde9`, 되읽기 5 · 감사 5. 상품 문서에 근거 필드 없음 확인.
+- ② 그랜드 스타렉스 1대 `products.trim_name` «프리미엄 → CVX 프리미엄»(원문 CVX Premium, F03 신규 행): plan digest `61885abc54ea963dddd4706fb844c1ec6b73b044d737b12fd42153dfb24193a3`, run `2026-10-04T05-26-13-568Z-21ab7599-e57c-4ae1-a5c0-8c848e5f3fca`, 되읽기 1 · 감사 1.
+- ③ 정본 공유 차종 3개(더 뉴 카니발 KA4) 세부트림 «9인승 프레스티지 → 프레스티지»(인승은 제원, F03 HEV 프레스티지 행은 통합→프레스티지, 다나와 기준도 같다고 차종 마스터 세션 확인): plan digest `23c7bd579cb22f2b72fd49f4486aef2478461cfa9b4db9248ca9d09bf6d991f7`, renamed 3 · alreadyApplied 0 · readbackOk — 모델·상품 revision 2, displayName 일치.
+- 계획·백업은 운영자 PC 비공개 폴더(`~/.codex/private/freepass-data-vehicle-name-backups`)에. 차량번호는 이 공개 문서에 적지 않는다.
+- 남음: 세부모델·세부트림 기준이 다나와 글자로 바뀜(ai-ops 9f87452). F03 정비 뒤 «F03 갱신» 알림을 받아 프리패스 데이터·시트 이름 맞추기. #337(매일 박제 신원)은 대표 승인 대기 — 그 전까지 매일 박제는 운영자 PC 수동.
+
 ### 2026-10-04 F03 인승 뗌 · 제조사 공식 표기(X-Line·xLine·H-Pick) 적용
 
 - 목적: 기준 한 장 2절 5번(인승은 제원)·6번(제조사 공식 표기)을 F03 에 반영. 정본 함수 #331·#332.
