@@ -46,6 +46,17 @@ describe('capture-shared-sheet job: no output unless every check passes', () => 
     expect(JSON.parse(String(log.mock.calls.at(-1)?.[0])).datesFromSerial).toBe(1);
     log.mockRestore();
   });
+  it('online: a number cell whose display disagrees with its real value (both serial reads equal) stops after retries and writes nothing', async () => {
+    vi.useFakeTimers();
+    const out = await fresh();
+    const withYear = (b: ReturnType<typeof batch>, year: unknown) => { const r = b.valueRanges.find(x => x.values.length > 1)!.values[1]!; r[at('연식')] = year; return b; };
+    for (let i = 0; i < 3; i++) reads.push(withYear(batch(46246), 2020), withYear(batch('08-12'), '2021'), withYear(batch(46246), 2020));
+    const run = main(['--spreadsheet', ID, '--out', out]);
+    const settled = expect(run).rejects.toThrow('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settled;
+    expect(existsSync(out)).toBe(false);
+  });
   it('online: still changing after three tries → stops with a fixed code and writes nothing', async () => {
     vi.useFakeTimers();
     const out = await fresh();

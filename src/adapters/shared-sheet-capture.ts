@@ -31,14 +31,20 @@ export const displayMatchesValue = (shown: string, v: number | boolean): boolean
   const s = shown.trim();
   if (!/\d/.test(s)) return /^[^0-9]*-[^0-9]*$/.test(s) && v === 0; // 회계식 0
   const target = s.includes('%') ? v * 100 : v;
+  if (!Number.isFinite(target)) return false;
   // 부호를 먼저 정한다 — 숫자를 감싼 괄호(통화 기호가 밖에 있어도) 또는 첫 숫자 앞의 «-». 지수·일반 숫자에 같이 쓴다.
   const sign = /\([^()]*\d[^()]*\)/.test(s) || /^[^0-9]*-/.test(s) ? -1 : 1;
+  // 허용 오차는 보이는 자릿수의 반 칸(유효숫자 기준)뿐 — 고정 오차를 더하지 않는다(«1E-10» 이 0 과 같다고 통과하지 않게).
+  // 부동소수 반올림 찌꺼기만 상대적으로 조금 너그럽게(1e-12 배).
+  const near = (shownValue: number, halfStep: number) =>
+    Number.isFinite(shownValue) && Math.abs(shownValue - target) <= halfStep * (1 + 1e-12) + Math.abs(target) * 1e-15
+    && (target === 0 || shownValue === 0 || Math.sign(shownValue) === Math.sign(target));
   const sci = /(\d+(?:\.(\d+))?)E([+-]?\d+)/i.exec(s.replace(/,/g, ''));
-  if (sci) return Math.abs(sign * Number(sci[0]) - target) <= 0.5 * 10 ** (Number(sci[3]) - (sci[2]?.length ?? 0)) + 1e-9;
+  if (sci) return near(sign * Number(sci[0]), 0.5 * 10 ** (Number(sci[3]) - (sci[2]?.length ?? 0)));
   const t = s.replace(/[^0-9.]/g, ''), n = Number(t);
   if (!Number.isFinite(n)) return false;
   const decimals = (t.split('.')[1] ?? '').length;
-  return Math.abs(sign * n - target) <= 0.5 * 10 ** -decimals + 1e-9;
+  return near(sign * n, 0.5 * 10 ** -decimals);
 };
 
 const IDENTITY_COLUMNS = ['회사명', '차량번호'].map(h => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
