@@ -81,6 +81,14 @@ describe('vehicle-name reference repair gate', () => {
     expect(() => validateVehicleNameRepairPlan({ ...base, masterRetires: [{ id: 'm1', into: 'm2', evidence: 'x' }, { id: 'm1', into: 'm3', evidence: 'x' }] })).toThrow(/duplicate/);
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', productRepairs: [], masterRepairs: [{ id: 'm1', from: 'A', to: 'B' }],
       masterRetires: [{ id: 'm1', into: 'm2', evidence: 'x' }] })).toThrow(/same plan/);
+    // final-state rules: no chain or cycle, no new link into a retired master, created masters are active
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterRetires: [{ id: 'm1', into: 'm2', evidence: 'x' }, { id: 'm2', into: 'm1', evidence: 'x' }] })).toThrow(/chains or cycles/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterRetires: [{ id: 'm1', into: 'm2', evidence: 'x' }],
+      trimMasterLinkRepairs: [{ id: 't1', from: 'm3', to: 'm1' }] })).toThrow(/link a trim row/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterRetires: [{ id: 'm1', into: 'm2', evidence: 'x' }],
+      trimCreates: [{ id: 'k1', evidence: 'x', data: { maker: '현대', model: '그랜저', sub_model: '그랜저 GN7', trim: '프리미엄', master_id: 'm1', trim_row_key: 'k1' } }] })).toThrow(/link a trim row/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterRetires: [{ id: 'm1', into: 'm2', evidence: 'x' }],
+      masterCreates: [{ id: 'm2', evidence: 'x', data: { id: 'm2', maker: '현대', model: '그랜저', sub_model: '그랜저 GN7', retired: true } }] })).toThrow(/active master/);
   });
   it('caps one plan below the Firestore transaction write limit', () => {
     const many = Array.from({ length: MAX_VEHICLE_NAME_REPAIR_TARGETS + 1 }, (_, i) => ({ id: `t${i}`, from: 'A', to: 'B' }));

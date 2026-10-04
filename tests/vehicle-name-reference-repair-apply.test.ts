@@ -18,9 +18,10 @@ const applyUpdate = (path: string, update: Record<string, unknown>) => {
   }
   store.set(path, doc);
 };
-type Query = { collection: string; filters: Array<[string, unknown]>; cap?: number; where: (f: string, op: string, v: unknown) => Query; select: (...f: string[]) => Query; limit: (n: number) => Query };
+type Query = { collection: string; filters: Array<[string, unknown]>; cap?: number; where: (f: string, op: string, v: unknown) => Query; select: (...f: string[]) => Query; limit: (n: number) => Query; get: () => Promise<ReturnType<typeof runQuery>> };
 const query = (collection: string, filters: Array<[string, unknown]> = [], cap?: number): Query => ({
   collection, filters, ...(cap !== undefined ? { cap } : {}), where: (f, _op, v) => query(collection, [...filters, [f, v]], cap), select: () => query(collection, filters, cap), limit: (n) => query(collection, filters, n),
+  get: async () => runQuery(query(collection, filters, cap)),
 });
 const runQuery = (q: Query) => {
   const docs = [...store.entries()].filter(([path, data]) => path.startsWith(`${q.collection}/`) && q.filters.every(([f, v]) => data[f] === v)).slice(0, q.cap ?? Infinity);
@@ -181,6 +182,16 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     // already retired → refused
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: 'x' }] })).rejects.toThrow(/already retired/);
+  });
+  it('refuses a retire when products carry the name only in another spelling, or the plan renames a product into it', async () => {
+    store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
+    store.set('products/p1', { model: '그랜저', sub_model: ' 그랜저  옛이름' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: 'x' }] })).rejects.toThrow(/still used by products/);
+    store.set('products/p1', { model: '그랜저', sub_model: '그랜저 GN7' });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [{ id: 'p1', from: '그랜저 GN7', to: '그랜저 옛이름' }],
+      masterRetires: [{ id: 'm-old', into: 'm-gn7', evidence: 'x' }] })).rejects.toThrow(/name of a master it retires/);
+    expect(store.get('vehicle_master/m-old')!.retired).toBeUndefined();
   });
   it('refuses to retire a master whose name products still carry, or into a missing master', async () => {
     store.set('vehicle_master/m-old', { id: 'm-old', maker: '현대', model: '그랜저', sub_model: '그랜저 옛이름' });
