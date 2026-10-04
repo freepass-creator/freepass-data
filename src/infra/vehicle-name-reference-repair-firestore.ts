@@ -188,12 +188,12 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     ...(plan.masterCreates ?? []).map((c) => ({ c, ref: db.collection('vehicle_master').doc(c.id) })),
     ...(plan.trimCreates ?? []).map((c) => ({ c, ref: db.collection('vehicle_trim_master').doc(c.id) })),
   ];
-  // Rows may only be linked to a master that already exists or that this plan creates.
+  // Rows may only be linked to an active (not retired) master that already exists or that this plan creates.
   const createdMasterIds = new Set((plan.masterCreates ?? []).map((c) => c.id));
   const linkedMasterIds = [...new Set([...(plan.trimMasterLinkRepairs ?? []).map((i) => i.to),
     ...(plan.trimCreates ?? []).map((c) => String(c.data.master_id))])].filter((id) => !createdMasterIds.has(id));
   const linkRefs = linkedMasterIds.map((id) => db.collection('vehicle_master').doc(id));
-  if (linkRefs.length && (await db.getAll(...linkRefs)).some((snapshot) => !snapshot.exists)) throw new Error('linked vehicle_master missing');
+  if (linkRefs.length && (await db.getAll(...linkRefs)).some((snapshot) => !snapshot.exists || snapshot.data()?.retired === true)) throw new Error('linked vehicle_master missing or retired');
 
   const refs = targets.map((x) => x.ref);
   const snapshots = refs.length ? await db.getAll(...refs) : [];
@@ -316,7 +316,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   await db.runTransaction(async (transaction) => {
     const current = refs.length ? await transaction.getAll(...refs) : [];
     // Linked masters and create targets are read inside the transaction too, so a concurrent delete/create aborts it.
-    if (linkRefs.length && (await transaction.getAll(...linkRefs)).some((snapshot) => !snapshot.exists)) throw new Error('transaction linked vehicle_master missing');
+    if (linkRefs.length && (await transaction.getAll(...linkRefs)).some((snapshot) => !snapshot.exists || snapshot.data()?.retired === true)) throw new Error('transaction linked vehicle_master missing or retired');
     if (createRefs.length && (await transaction.getAll(...createRefs)).some((snapshot) => snapshot.exists)) throw new Error('transaction create target already exists');
     for (const c of plan.trimCreates ?? []) {
       const same = await transaction.get(db.collection('vehicle_trim_master').where('trim_row_key', '==', c.id));
