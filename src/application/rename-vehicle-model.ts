@@ -59,7 +59,7 @@ export async function renameVehicleModel(store: CatalogStore, input: RenameVehic
       products.push([product, { ...product, displayName, revision: product.revision + 1, updatedAt: now, updatedBy: input.actor }]);
     }
 
-    await tx.putVehicleModel(next);
+    await tx.updateVehicleModel(next);
     await tx.appendRevision({ revisionRecordId: revisionId(input.commandId, 'vehicle_model', current.id, next.revision),
       entityType: 'vehicle_model', entityId: current.id, revision: next.revision, previousRevision: current.revision,
       snapshot: next, actor: input.actor, reason: input.reason, origin: 'MANUAL_COMMAND', commandId: input.commandId, occurredAt: now });
@@ -67,7 +67,7 @@ export async function renameVehicleModel(store: CatalogStore, input: RenameVehic
       entityId: current.id, action: 'VEHICLE_MODEL_RENAMED', before: current, after: next, reason: input.reason, writerId: writer.id,
       authorityRuleId: authority.ruleId, revisionBefore: current.revision, revisionAfter: next.revision, occurredAt: now });
     for (const [before, after] of products) {
-      await tx.putProduct(after);
+      await tx.updateProduct(after);
       await tx.appendRevision({ revisionRecordId: revisionId(input.commandId, 'product', before.id, after.revision),
         entityType: 'product', entityId: before.id, revision: after.revision, previousRevision: before.revision,
         snapshot: after, actor: input.actor, reason: input.reason, origin: 'MANUAL_COMMAND', commandId: input.commandId, occurredAt: now });

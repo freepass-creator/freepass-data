@@ -26,14 +26,27 @@ export function validateVehicleModelRenamePlan(plan: VehicleModelRenamePlan) {
 
 export async function applyVehicleModelRenamePlan(store: CatalogStore, plan: VehicleModelRenamePlan, planDigest: string) {
   const results = [];
+  const all = await store.listProducts();
+  for (const i of plan.items) {
+    // Every Product referencing the model must be in the plan with its current revision (displayName follows the model).
+    const referencing = all.filter((p) => p.vehicleModelId === i.vehicleModelId).map((p) => [p.id, p.revision]).sort();
+    const planned = i.products.map((p) => [p.productId, p.expectedRevision]).sort();
+    if (stableDigest(referencing) !== stableDigest(planned)) throw new Error('VEHICLE_MODEL_RENAME_PRODUCTS_CHANGED');
+  }
   for (const i of plan.items) {
     const key = `rename-model:${planDigest}:${i.vehicleModelId}`;
     const receipt = await renameVehicleModel(store, { commandId: `cmd-${key}`, idempotencyKey: `idem-${key}`, vehicleModelId: i.vehicleModelId,
       expectedRevision: i.expectedRevision, ...(i.subModel !== undefined ? { subModel: i.subModel } : {}),
       ...(i.trim !== undefined ? { trim: i.trim } : {}), products: i.products, reason: `${plan.reason} · ${i.evidence}`, actor });
     const model = await store.getVehicleModel(i.vehicleModelId);
-    const ok = !!model && model.revision === receipt.revision && (i.subModel === undefined || model.subModel === i.subModel) &&
-      (i.trim === undefined || model.trim === i.trim);
+    const expectedName = model ? [model.maker, model.model, model.subModel, model.trim].filter(Boolean).join(' ') : '';
+    let ok = !!model && model.revision === receipt.revision && (i.subModel === undefined || model.subModel === i.subModel) &&
+      (i.trim === undefined || model.trim === i.trim) && model.displayName === expectedName;
+    for (const ref of i.products) {
+      const product = await store.getProduct(ref.productId);
+      ok = ok && !!product && product.vehicleModelId === i.vehicleModelId && product.revision === ref.expectedRevision + 1 &&
+        product.displayName === expectedName;
+    }
     results.push({ revision: receipt.revision, readbackOk: ok });
   }
   return { renamed: results.length, readbackOk: results.every((r) => r.readbackOk) };
@@ -52,5 +65,13 @@ export async function main(args = process.argv.slice(2)) {
   if (!result.readbackOk) process.exitCode = 2;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((e) => { console.error(`VEHICLE_MODEL_RENAME_HOLD ${e instanceof Error && /^[A-Z0-9_ ]+/.test(e.message) ? e.message.split(':')[0] : ''}`.trim()); process.exitCode = 1; });
+  // Public log: only fixed codes, never identifiers or names.
+  const CODES = ['VEHICLE_MODEL_RENAME_PLAN_INVALID', 'VEHICLE_MODEL_RENAME_PRODUCTS_CHANGED', 'REVISION_CONFLICT', 'WRITER_OWNERSHIP_DENIED',
+    'IDEMPOTENCY_CONFLICT', 'ENTITY_NOT_FOUND', 'INVALID_COMMAND', 'AUTHORITY_DENIED'];
+  main().catch((e: unknown) => {
+    const code = (e as { code?: unknown })?.code;
+    const message = e instanceof Error ? e.message : '';
+    const found = typeof code === 'string' && CODES.includes(code) ? code : CODES.find((c) => message === c) ?? '';
+    console.error(`VEHICLE_MODEL_RENAME_HOLD ${found}`.trim()); process.exitCode = 1;
+  });
 }

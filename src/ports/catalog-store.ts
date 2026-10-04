@@ -41,6 +41,9 @@ export interface CatalogTransaction {
   getVehicleAsset(id: string): Promise<VehicleAsset | null>;
   putVehicleAsset(asset: VehicleAsset): Promise<void>;
   updateVehicleAsset(asset: VehicleAsset): Promise<void>;
+  /** Overwrite an existing VehicleModel / Product (rename commands). Missing documents are an error. */
+  updateVehicleModel(model: VehicleModel): Promise<void>;
+  updateProduct(product: Product): Promise<void>;
   getProduct(id: string): Promise<Product | null>;
   putProduct(product: Product): Promise<void>;
   getOffer(id: string): Promise<Offer | null>;

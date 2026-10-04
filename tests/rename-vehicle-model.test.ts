@@ -40,4 +40,10 @@ describe('rename shared VehicleModel to F03 name', () => {
       products: [], reason: 'r', actor: { id: 'service:freepass-admin', kind: 'SERVICE' } })).rejects.toThrow();
     expect((await store.getVehicleModel('vm1'))!.trim).toBe('9인승 프레스티지');
   });
+  it('refuses a plan that leaves out a product referencing the model', async () => {
+    const store = await seeded();
+    await expect(applyVehicleModelRenamePlan(store, plan({ products: [] }), 'd')).rejects.toThrow('VEHICLE_MODEL_RENAME_PRODUCTS_CHANGED');
+    await expect(applyVehicleModelRenamePlan(store, plan({ products: [{ productId: 'p1', expectedRevision: 7 }] }), 'd')).rejects.toThrow('VEHICLE_MODEL_RENAME_PRODUCTS_CHANGED');
+    expect((await store.getVehicleModel('vm1'))!.revision).toBe(1);
+  });
 });
