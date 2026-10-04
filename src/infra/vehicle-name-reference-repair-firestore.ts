@@ -49,11 +49,12 @@ const MASTER_CREATE_KEYS = ['id', 'maker', 'model', 'sub_model', 'origin'] as co
 const TRIM_CREATE_KEYS = ['maker', 'model', 'sub_model', 'trim', 'master_id', 'trim_row_key'] as const;
 
 /**
- * Name text normalization — one rule for checking and storing: NFC, full-width ASCII (Ｌ·Ｅ·１) and ideographic space
- * to half-width, trim, collapse spaces. Not NFKC: that would turn real names such as 포터 Ⅱ·플래티넘Ⅰ into «II»/«I».
+ * Name text normalization — one rule for checking and storing: full-width ASCII (Ｌ·Ｅ·１) and ideographic space
+ * to half-width, then NFC, trim, collapse spaces. Not NFKC: that would turn real names such as 포터 Ⅱ·플래티넘Ⅰ into «II»/«I».
  */
-export const normalizeName = (value: unknown) => String(value ?? '').normalize('NFC')
+export const normalizeName = (value: unknown) => String(value ?? '')
   .replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)).replace(/\u3000/g, ' ')
+  .normalize('NFC') // after the width change, so a second pass changes nothing
   .trim().replace(/\s+/g, ' ');
 const clean = normalizeName;
 /** Names written by this tool must already be normalized — a value that changes under normalizeName is refused. */
