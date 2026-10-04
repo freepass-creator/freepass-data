@@ -110,5 +110,10 @@ describe('shared sheet capture keeps the year of date cells', () => {
     const dup = rawCapture(ID, batch({ [ch.tab]: [shown, shown] }), META(), T, batch({ [ch.tab]: [twinB, twinA] })).tabs.find(t => t.title === ch.tab)!.values;
     expect(dup[1]![at('입고일자')]).toBe('08-12');
     expect(dup[2]![at('입고일자')]).toBe('08-12');
+    // 연식 숫자만 다른 두 줄도 글자로는 구분이 안 되니 날짜를 바꾸지 않는다.
+    const yA = [...real], yB = [...real]; yB[at('연식')] = 2019; yB[at('입고일자')] = 45881;
+    const sA = [...shown], sB = [...shown]; sA[at('연식')] = '2021'; sB[at('연식')] = '2019';
+    const yr = rawCapture(ID, batch({ [ch.tab]: [sA, sB] }), META(), T, batch({ [ch.tab]: [yB, yA] })).tabs.find(t => t.title === ch.tab)!.values;
+    expect([yr[1]![at('입고일자')], yr[2]![at('입고일자')]]).toEqual(['08-12', '08-12']);
   });
 });
