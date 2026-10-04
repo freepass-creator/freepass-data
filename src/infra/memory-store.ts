@@ -161,6 +161,8 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
         if (!this.products.has(product.id)) throw new Error(`Product not found: ${product.id}`);
         this.products.set(product.id, copy(product));
       },
+      listProductsByVehicleModel: async (vehicleModelId) =>
+        copy([...this.products.values()].filter((p) => p.vehicleModelId === vehicleModelId)),
       getProduct: async (id) => copy(this.products.get(id) ?? null),
       putProduct: async (product) => { this.products.set(product.id, copy(product)); },
       getOffer: async (id) => copy(this.offers.get(id) ?? null),

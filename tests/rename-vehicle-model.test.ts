@@ -46,4 +46,14 @@ describe('rename shared VehicleModel to F03 name', () => {
     await expect(applyVehicleModelRenamePlan(store, plan({ products: [{ productId: 'p1', expectedRevision: 7 }] }), 'd')).rejects.toThrow('VEHICLE_MODEL_RENAME_PRODUCTS_CHANGED');
     expect((await store.getVehicleModel('vm1'))!.revision).toBe(1);
   });
+  it('fails closed inside the transaction when a product was LINKed to the model after planning', async () => {
+    const store = await seeded();
+    // Simulates a Product created after the job's pre-check: the command itself must see it and refuse.
+    await store.transact((tx) => tx.putProduct({ id: 'p2', vehicleModelId: 'vm1', commercialType: 'USED_RENT', status: 'ACTIVE',
+      displayName: '기아 카니발 더 뉴 카니발 KA4 9인승 프레스티지', revision: 1, createdAt: t, updatedAt: t, createdBy: svc, updatedBy: svc } as never));
+    await expect(renameVehicleModel(store, { commandId: 'c', idempotencyKey: 'i', vehicleModelId: 'vm1', expectedRevision: 1, trim: '프레스티지',
+      products: [{ productId: 'p1', expectedRevision: 1 }], reason: 'r', actor: svc })).rejects.toThrow('do not match');
+    expect((await store.getVehicleModel('vm1'))!.revision).toBe(1);
+    expect((await store.getProduct('p2'))!.displayName).toContain('9인승');
+  });
 });

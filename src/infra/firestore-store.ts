@@ -113,6 +113,10 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         updateProduct: async (product) => {
           native.update(this.db.collection(C.products).doc(product.id), product);
         },
+        listProductsByVehicleModel: async (vehicleModelId) => {
+          const snap = await native.get(this.db.collection(C.products).where('vehicleModelId', '==', vehicleModelId));
+          return snap.docs.map((doc) => catalogEntity<Product>(doc)).filter((p): p is Product => !!p);
+        },
         getProduct: async (id) =>
           catalogEntity<Product>(await native.get(this.db.collection(C.products).doc(id))),
         putProduct: async (product) => {

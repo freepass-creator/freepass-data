@@ -51,6 +51,11 @@ export async function renameVehicleModel(store: CatalogStore, input: RenameVehic
     const displayName = [current.maker, current.model, subModel, trim].filter(Boolean).join(' ');
     const next: VehicleModel = { ...current, subModel, trim, displayName, revision: current.revision + 1, updatedAt: now, updatedBy: input.actor };
 
+    // Read the referencing set inside the transaction: a Product LINKed to this model after planning fails closed here.
+    const referencing = (await tx.listProductsByVehicleModel(current.id)).map((p) => p.id).sort();
+    const planned = input.products.map((p) => p.productId).sort();
+    if (referencing.length !== planned.length || referencing.some((id, n) => id !== planned[n]))
+      throw new InvalidCommandError('products referencing the model do not match the command');
     const products: Array<[Product, Product]> = [];
     for (const ref of input.products) {
       const product = await tx.getProduct(ref.productId);

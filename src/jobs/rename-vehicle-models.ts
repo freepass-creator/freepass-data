@@ -45,6 +45,8 @@ export async function applyVehicleModelRenamePlan(store: CatalogStore, plan: Veh
     const expectedName = model ? [model.maker, model.model, model.subModel, model.trim].filter(Boolean).join(' ') : '';
     let ok = !!model && model.revision === receipt.revision && (i.subModel === undefined || model.subModel === i.subModel) &&
       (i.trim === undefined || model.trim === i.trim) && model.displayName === expectedName;
+    const after = (await store.listProducts()).filter((p) => p.vehicleModelId === i.vehicleModelId);
+    ok = ok && after.length === i.products.length && after.every((p) => p.displayName === expectedName);
     for (const ref of i.products) {
       const product = await store.getProduct(ref.productId);
       ok = ok && !!product && product.vehicleModelId === i.vehicleModelId && product.revision === ref.expectedRevision + 1 &&
