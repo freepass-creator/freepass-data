@@ -57,6 +57,11 @@ describe('daily writer guard', () => {
       { ...run, status: 'queued', run_started_at: '2026-10-05T19:10:00Z' },
       { ...run, status: 'pending', run_started_at: '2026-10-05T19:10:00Z' }]).reasons).toContain('DAILY_WRITER_OUTSIDE_SCHEDULED_RUN');
   });
+  it('holds on a write whose document path cannot be read, even inside a daily run', () => {
+    const bare = { timestamp: '2026-10-05T18:45:00Z', protoPayload: { methodName: 'google.firestore.v1.Firestore.Commit',
+      authenticationInfo: { principalEmail: account } } };
+    expect(judge([bare])).toMatchObject({ status: 'HOLD', reasons: ['DAILY_WRITER_DOCUMENT_PATH_MISSING'], writesWithoutDocumentPaths: 1 });
+  });
   it('holds when a successful apply run left no write log (audit log off or missing)', () => {
     expect(judge([])).toMatchObject({ status: 'HOLD', reasons: ['DAILY_WRITER_AUDIT_LOG_MISSING'], silentApplies: 1 });
     const dryRun = { ...run, event: 'workflow_dispatch', display_title: 'shared-sheet-daily dry-run' };

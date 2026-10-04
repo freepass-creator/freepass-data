@@ -4,6 +4,8 @@
  *  - 로그에 쓴 문서 경로가 있으면: 허용 모음 밖(특히 ERP4 화면의 `products`)·다른 데이터베이스 쓰기 → 경보
  *  - 경로가 있든 없든: shared-sheet-daily(main) 실행 구간 밖의 쓰기 → 경보
  *  - 적용 실행이 성공했는데 그 구간의 쓰기 로그가 하나도 없으면(감사 로그 꺼짐·누락) → 보류
+ *  - 쓴 문서 경로를 읽을 수 없는 쓰기 기록이 하나라도 있으면 → 보류(실행 구간 안이어도 허용 모음 밖 쓰기를 가릴 수 없다).
+ *    보류·경보가 하나라도 있으면 감시 job 이 실패하고, 매일 박제 예약 실행은 최근 감시가 성공일 때만 돈다(shared-sheet-daily.yml).
  * 공개 로그에 나가므로 모음 이름은 정해진 목록만 그대로 내보내고, 나머지는 «(other)» 로 센다.
  */
 export const DAILY_WRITER_ALLOWED_COLLECTIONS = Object.freeze([
@@ -88,10 +90,11 @@ export function evaluateDailyWriterGuard(input: {
   const writes = input.entries.filter((e) => e.protoPayload?.authenticationInfo?.principalEmail === input.account && isWrite(e));
   const outsideCollections: Record<string, number> = {};
   let withPaths = 0;
+  let withoutPaths = 0;
   let outsideRuns = 0;
   for (const entry of writes) {
     const paths = writtenPaths(entry);
-    if (paths.length) withPaths += 1;
+    if (paths.length) withPaths += 1; else withoutPaths += 1;
     if (databasesNamed(entry).some((d) => `${d}/documents` !== DATABASE_PREFIX))
       outsideCollections['(other-database)'] = (outsideCollections['(other-database)'] ?? 0) + 1;
     for (const path of paths) {
@@ -113,9 +116,12 @@ export function evaluateDailyWriterGuard(input: {
     ...(Object.keys(outsideCollections).length ? ['DAILY_WRITER_OUTSIDE_ALLOWED_COLLECTIONS'] : []),
     ...(outsideRuns ? ['DAILY_WRITER_OUTSIDE_SCHEDULED_RUN'] : []),
     ...(silentApplies ? ['DAILY_WRITER_AUDIT_LOG_MISSING'] : []),
+    ...(withoutPaths ? ['DAILY_WRITER_DOCUMENT_PATH_MISSING'] : []),
   ];
-  const status = reasons.some((r) => r !== 'DAILY_WRITER_AUDIT_LOG_MISSING') ? 'ALERT' as const
+  const holdOnly = ['DAILY_WRITER_AUDIT_LOG_MISSING', 'DAILY_WRITER_DOCUMENT_PATH_MISSING'];
+  const status = reasons.some((r) => !holdOnly.includes(r)) ? 'ALERT' as const
     : reasons.length ? 'HOLD' as const : 'OK' as const;
-  return { status, reasons, writes: writes.length, writesWithDocumentPaths: withPaths, outsideCollections, outsideRuns,
+  return { status, reasons, writes: writes.length, writesWithDocumentPaths: withPaths, writesWithoutDocumentPaths: withoutPaths,
+    outsideCollections, outsideRuns,
     dailyRunsInWindow: windows.length, silentApplies };
 }

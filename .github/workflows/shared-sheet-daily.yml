@@ -23,6 +23,8 @@ concurrency:
 permissions:
   contents: read
   id-token: write
+  # 예약 실행 전 최근 매시 감사의 daily-writer-guard 결과를 읽는다
+  actions: read
 
 jobs:
   shared-sheet-daily:
@@ -37,18 +39,34 @@ jobs:
       # 예약 실행은 적용까지, 수동 실행은 고른 모드대로.
       APPLY: ${{ github.event_name == 'schedule' || inputs.mode == 'apply' }}
     steps:
-      # Scheduled runs need the environment switch FREEPASS_DATA_SHARED_SHEET_DAILY == 'on' (set only after a manual
-      # dry-run was reviewed). Environment variables are not visible to job-level if, so the gate is the first step.
-      - name: Daily schedule switch
+      # 관문(environment 변수는 job if 에서 안 보이므로 첫 단계):
+      #  - 예약 실행: FREEPASS_DATA_SHARED_SHEET_DAILY == 'on' 이고, 최근(3시간 안) 매시 감사의 daily-writer-guard 가
+      #    성공이어야 한다 — 감시가 꺼졌거나 보류·경보(경로 없는 쓰기 포함)면 쓰지 않고 실패로 알린다.
+      #  - 수동 apply: environment data-production-delivery 에 사람 승인(필수 검토자)이 없으므로(10-04 확인)
+      #    FREEPASS_DATA_DAILY_MANUAL_APPLY == 'on' 일 때만. 통제된 첫 적용 때만 켜고 끝나면 지운다.
+      #  - 수동 dry-run: 쓰기 0 이라 항상.
+      - name: Daily schedule and manual apply gate
         id: gate
         env:
           DAILY: ${{ vars.FREEPASS_DATA_SHARED_SHEET_DAILY }}
+          MANUAL_APPLY: ${{ vars.FREEPASS_DATA_DAILY_MANUAL_APPLY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event_name }}" = 'schedule' ] && [ "$DAILY" != 'on' ]; then
-            echo "run=false" >> "$GITHUB_OUTPUT"; echo "daily schedule switch is off — skipped"
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = 'schedule' ]; then
+            if [ "$DAILY" != 'on' ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "daily schedule switch is off — skipped"; exit 0; fi
+            run_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/erp5-continuous-audit.yml/runs?branch=main&status=completed&per_page=1" --jq '.workflow_runs[0] | {id, created_at}')"
+            run_id="$(jq -r '.id' <<<"$run_json")"; created="$(jq -r '.created_at' <<<"$run_json")"
+            test "$run_id" != null
+            age=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
+            guard="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" --jq '[.jobs[] | select(.name == "daily-writer-guard")][0].conclusion // "missing"')"
+            if [ "$age" -gt 10800 ] || [ "$guard" != 'success' ]; then
+              echo "DAILY_WRITER_GUARD_NOT_OK: latest guard=$guard age=${age}s — scheduled snapshot not run"; exit 1
+            fi
+          elif [ "${{ inputs.mode }}" = 'apply' ] && [ "$MANUAL_APPLY" != 'on' ]; then
+            echo "MANUAL_APPLY_DISABLED: set FREEPASS_DATA_DAILY_MANUAL_APPLY=on only for the controlled apply"; exit 1
           fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         if: steps.gate.outputs.run == 'true'
         with:
