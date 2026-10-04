@@ -68,7 +68,7 @@ describe('F03 세부트림 = 엔카 등급 이름에서 파워트레인 부분�
   it('제조사 공식 표기 낱말은 엔카 대신 그 표기 — X Line → X-Line (기준 한 장 2절 6번)', () => {
     expect(sub('시그니처 X Line')).toBe('시그니처 X-Line');
     expect(name('HEV 9인승 X Line')).toBe('X-Line');
-    expect(name('xDrive20i X Line', '수입')).toBe('xDrive20i X-Line');
+    expect(name('xDrive20i X Line', '수입')).toBe('xDrive20i X Line'); // 모델 번호 등급은 엔카 글자 그대로
     expect(sub('X-Line')).toBe('X-Line');
     expect(sub('X Liner')).toBe('X Liner');
   });

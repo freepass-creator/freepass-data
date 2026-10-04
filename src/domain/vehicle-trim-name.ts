@@ -39,7 +39,7 @@ const SEATS = /^\d{1,2}인승$/;
 
 /**
  * 제조사 공식 표기 낱말 — 엔카를 따라 하지 않는 것(기준 한 장 2절 6번, 대표 2026-10-04). 목록은 대표가 정하고 그 장에만 둔다.
- * 세부등급 글자·모델 번호 등급에도 똑같이 적용한다.
+ * 세부등급 글자에도 적용한다. 모델 번호 등급(BMW 「xDrive20i X Line」)은 엔카 글자 전체 그대로라 대지 않는다.
  */
 export const TRIM_OFFICIAL_SPELLINGS: readonly (readonly [string, string])[] = Object.freeze([['X Line', 'X-Line']] as const);
 
@@ -95,7 +95,8 @@ export function trimDisplayName(value: string, origin: TrimOrigin, options: Trim
     return m && !TRIM_DISPLACEMENT_PATTERNS.some((pattern) => pattern.test(token)) ? [m[1]!, m[2]!] : [token];
   });
   if (origin === '수입' && tokens.length > 0 && MODEL_DESIGNATION.test(tokens[0]!)) {
-    return { name: officialSpelling(tokens.join(' ')), removed: [], undecided: [], modelDesignation: true };
+    // 모델 번호 등급은 엔카 글자 전체 그대로(2절 5번 예외) — 공식 표기 목록도 대지 않는다(BMW 「xLine」은 대표 결정 대기).
+    return { name: tokens.join(' '), removed: [], undecided: [], modelDesignation: true };
   }
   // 배기량 숫자 바로 뒤 「T」·디젤 표시 「D」(「2.2D」)도 배기량 표기의 일부로 같이 뗀다(「터보」는 위 목록에서 뗀다).
   // 옵션 이름 「터보 패키지」(「GT 마스터즈 터보 패키지」)의 「터보」만 파워트레인이 아니다 — 이 한 묶음만 남긴다.
