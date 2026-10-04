@@ -24,7 +24,7 @@ if (!process.argv.includes('--apply')) {
     context: {
       actor: { id: 'service:freepass-data-vehicle-name-repair', kind: 'SERVICE' },
       clientId: 'job:apply-vehicle-name-reference-repair',
-      purpose: 'apply exact F03/Encar vehicle-name repairs with private backup and readback',
+      purpose: 'apply exact vehicle-name repairs and vehicle-master v1 entries (rename, hybrid move, create) with private backup and readback',
     },
     operation: 'WRITE_VEHICLE_NAME_REFERENCE_REPAIR',
     resource: { kind: 'CATALOG', name: 'freepasserp5/vehicle-name-reference' },
