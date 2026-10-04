@@ -19,17 +19,19 @@
  * 2026-10-04 「남김」에서 「뗌」으로 바뀜).
  */
 export const TRIM_POWERTRAIN_WORDS: readonly string[] = Object.freeze([
-  // 연료
-  '가솔린', '디젤', 'LPG', 'LPi', 'LPe', 'LPLI', '하이브리드', 'HEV', 'PHEV', '전기', '바이퓨얼',
-  // 구동
-  '2WD', '4WD', 'AWD', 'RWD', 'FWD',
-  // 엔진 이름
-  'TCe', 'dCi', 'TSI', 'TDI', 'VGT', 'e-VGT', '터보', '에코부스트', 'S/C', 'e-S/C',
+  // 연료 — E-TECH(르노 하이브리드)·EV(쉐보레 볼트 「EV LT」)도 연료 표시
+  '가솔린', '디젤', 'LPG', 'LPi', 'LPe', 'LPLI', '하이브리드', 'HEV', 'PHEV', '전기', '바이퓨얼', 'E-TECH', 'EV',
+  // 구동 — ALL4 는 미니 사륜(AWD). 숫자 모델번호가 아니라 수입차 모델번호 예외에 걸리지 않는다
+  '2WD', '4WD', 'AWD', 'RWD', 'FWD', 'ALL4',
+  // 엔진 이름 — GTe·GDe 는 르노 엔진 이름
+  'TCe', 'GTe', 'GDe', 'dCi', 'TSI', 'TDI', 'VGT', 'e-VGT', '터보', '에코부스트', 'S/C', 'e-S/C',
   'GDi', 'T-GDi', 'CRDi', 'MPi', 'VVT', 'CVVT', 'V6', 'V8', 'M16',
+  // 앞 글자가 잘린 채 F03 에 남아 있던 옛 표기(E-TECH → 「ECH」, TCe → 「Ce」) — 엔카 원문에는 없고 F03 정비 때만 만난다
+  'ECH', 'Ce',
 ]);
 
-/** 모양으로 떼는 배기량 표시: 1.6 · 2.0T · 1.6T · 1600cc. */
-export const TRIM_DISPLACEMENT_PATTERNS: readonly RegExp[] = Object.freeze([/^\d\.\dT?$/i, /^\d{3,4}cc$/i]);
+/** 모양으로 떼는 배기량 표시: 1.6 · 2.0T · 1.6T · 1600cc · LPG 배기량 L3.5(스타리아·스타렉스). */
+export const TRIM_DISPLACEMENT_PATTERNS: readonly RegExp[] = Object.freeze([/^\d\.\dT?$/i, /^\d{3,4}cc$/i, /^L\d\.\d$/]);
 
 /** 판단이 갈리는 낱말 — 떼지 않고 표시만 한다(지금은 없음). 새로 생기면 여기에 두고 결정되면 위 목록으로 옮긴다. */
 export const TRIM_UNDECIDED_TOKENS: readonly string[] = Object.freeze([]);
