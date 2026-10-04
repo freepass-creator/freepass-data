@@ -32,6 +32,12 @@ export type VehicleNameRepairPlan = {
   masterVariantRepairs?: VehicleMasterVariantRepair[];
   /** Retire a vehicle_master entry left over after a merge: mark it (never delete). Refused while trim rows or products still use it. */
   masterRetires?: VehicleMasterRetire[];
+  /** vehicle_master.model → 모델 이름(예: 아이오닉5 → 아이오닉 5). Old name kept in model_aliases. */
+  masterModelRepairs?: VehicleNameRepairItem[];
+  /** vehicle_trim_master.model, same rename as its master. Old name kept in model_aliases. */
+  trimModelRepairs?: VehicleNameRepairItem[];
+  /** vehicle_master.gen_code → 개발코드(예: CV1 → CV). Old code kept in gen_code_aliases. A blank code may be filled with evidence. */
+  masterGenCodeRepairs?: VehicleNameRepairItem[];
   /** New vehicle_master docs (new sub-model). Created only when absent; `data.id` must equal `id`. */
   masterCreates?: VehicleMasterDocCreate[];
   /** New vehicle_trim_master rows. Created only when absent; `data.master_id` must point to an existing or created master. */
@@ -65,10 +71,92 @@ export const normalizeName = (value: unknown) => String(value ?? '')
   .trim().replace(/\s+/g, ' ');
 const clean = normalizeName;
 /** Names written by this tool must already be normalized — a value that changes under normalizeName is refused. */
-const NAME_KINDS = new Set(['master', 'product', 'trim', 'productTrim', 'trimSubModel']);
+const NAME_KINDS = new Set(['master', 'product', 'trim', 'productTrim', 'trimSubModel', 'masterModel', 'trimModel', 'masterGenCode']);
+/** Kinds that write a vehicle_master document (a retired master is frozen for all of them). */
+const MASTER_DOC_KINDS = new Set(['master', 'masterModel', 'masterGenCode']);
+/** Every trim name inside variants must also be in the top-level trims list (consumers read both). */
+/** A Firestore document id inside one collection: no path separator, not «.»/«..», not reserved «__…__», no surrounding spaces. */
+export const isDocId = (value: unknown): value is string => typeof value === 'string' && value !== '' && value === value.trim()
+  && !value.includes('/') && value !== '.' && value !== '..' && !/^__.*__$/.test(value);
+type FieldType = 'string' | 'number' | 'boolean' | 'stringList' | 'nullableString' | 'nullableNumber' | 'variants';
+const isStringList = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x !== '' && x === clean(x)) && new Set(v).size === v.length;
+const fieldOk = (type: FieldType, v: unknown): boolean => {
+  switch (type) {
+    case 'string': return typeof v === 'string';
+    case 'number': return typeof v === 'number' && Number.isFinite(v);
+    case 'boolean': return typeof v === 'boolean';
+    case 'stringList': return isStringList(v);
+    case 'nullableString': return v === null || typeof v === 'string';
+    case 'nullableNumber': return v === null || (typeof v === 'number' && Number.isFinite(v));
+    case 'variants': return Array.isArray(v);
+  }
+};
+/** Fields a created vehicle_master / vehicle_trim_master document may carry, with their types (as the stored data has them). */
+const MASTER_CREATE_SCHEMA: Record<string, FieldType> = {
+  id: 'string', maker: 'string', model: 'string', sub_model: 'string', origin: 'string', title: 'string', gen_code: 'string',
+  market_class: 'string', newcar_priced: 'boolean', year_start: 'string', year_end: 'string', variants: 'variants', trims: 'stringList',
+  sub_model_aliases: 'stringList', model_aliases: 'stringList', gen_code_aliases: 'stringList',
+};
+const TRIM_CREATE_SCHEMA: Record<string, FieldType> = {
+  maker: 'string', model: 'string', sub_model: 'string', trim: 'string', master_id: 'string', trim_row_key: 'string', origin: 'string',
+  development_code: 'string', trim_seq: 'number', trim_aliases: 'stringList', sub_model_aliases: 'stringList', model_aliases: 'stringList',
+  management_status: 'string', verification_status: 'string', production_start: 'string', production_end: 'string', data_as_of: 'string', usage_tier: 'string',
+};
+/** A variant's fields and types (the stored variants use exactly these). */
+const VARIANT_SCHEMA: Record<string, FieldType> = {
+  label: 'string', fuel: 'nullableString', displacement_l: 'nullableNumber', drivetrain: 'nullableString', seat: 'nullableNumber',
+  battery_kwh: 'nullableNumber', turbo: 'boolean', default: 'boolean', trims: 'stringList',
+};
+const checkSchema = (data: Record<string, unknown>, schema: Record<string, FieldType>, where: string) => {
+  for (const [k, v] of Object.entries(data)) {
+    if (v === undefined) continue; // absent
+    const type = schema[k];
+    if (!type) throw new Error(`${where} has a field this tool does not create: ${k}`);
+    if (!fieldOk(type, v)) throw new Error(`${where} ${k} has the wrong type`);
+  }
+};
+/** Planned variants: each one is checked against VARIANT_SCHEMA (label and fuel required). */
+const checkPlannedVariants = (variants: unknown, where: string) => {
+  if (!Array.isArray(variants)) throw new Error(`${where} variants must be a list`);
+  variants.forEach((v, i) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(`${where} variant ${i} must be an object`);
+    checkSchema(v as Record<string, unknown>, VARIANT_SCHEMA, `${where} variant ${i}`);
+    if (!('label' in (v as object)) || !('fuel' in (v as object))) throw new Error(`${where} variant ${i} requires label and fuel`);
+  });
+};
+/** Shape check too: variants is a list of objects; a variant's trims, when present, is a list of strings — anything else is refused. */
+const variantTrimNames = (variants: unknown): string[] => {
+  if (variants === undefined) return [];
+  if (!Array.isArray(variants)) throw new Error('variants must be a list');
+  return variants.flatMap((v) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('each variant must be an object');
+    const trims = (v as Record<string, unknown>).trims;
+    if (trims === undefined) return [];
+    if (!Array.isArray(trims) || trims.some((t) => typeof t !== 'string')) throw new Error('variant trims must be a list of strings');
+    if (trims.some((t) => !t || t !== clean(t))) throw new Error('variant trims must be non-empty normalized names');
+    return trims as string[];
+  });
+};
+/** A stored top-level trims list used for the ⊆ check must be a list of strings. */
+const storedTrimList = (value: unknown, where: string): string[] | undefined => {
+  if (value === undefined) return undefined; // absent: only variants without trim names may be written
+  if (!Array.isArray(value) || value.some((t) => typeof t !== 'string' || !t.trim())) throw new Error(`stored trims is not a list of strings ${where}`);
+  return value.map(clean);
+};
+/** A stored variants list (being replaced) must still be a list of objects whose trims, when present, are non-empty strings. */
+const storedVariantsShape = (value: unknown, where: string) => {
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.some((v) => !v || typeof v !== 'object' || Array.isArray(v)
+    || ((v as Record<string, unknown>).trims !== undefined && (!Array.isArray((v as Record<string, unknown>).trims)
+      || ((v as Record<string, unknown>).trims as unknown[]).some((t) => typeof t !== 'string' || !t.trim()))))) {
+    throw new Error(`stored variants is not a list of variants ${where}`);
+  }
+};
+/** An alias field, when present, must be a list of strings (kept-alias checks compare by value). */
+const aliasListOk = (value: unknown) => value === undefined || value === null || (Array.isArray(value) && value.every((a) => typeof a === 'string'));
 /** Stored value matches the plan's `from`. A blank `from` only matches a truly blank value: missing, null or an empty string. */
 export const matchesFrom = (stored: unknown, from: string) => clean(from)
-  ? clean(stored) === clean(from)
+  ? typeof stored === 'string' && clean(stored) === clean(from) // a number or other type never matches a name
   : stored === undefined || stored === null || (typeof stored === 'string' && stored.trim() === '');
 
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
@@ -77,18 +165,27 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     ...(plan.trimRepairs ?? []).map((item) => ({ ...item, kind: 'trim' })),
     ...(plan.productTrimRepairs ?? []).map((item) => ({ ...item, kind: 'productTrim' })),
     ...(plan.trimSubModelRepairs ?? []).map((item) => ({ ...item, kind: 'trimSubModel' })),
-    ...(plan.trimMasterLinkRepairs ?? []).map((item) => ({ ...item, kind: 'trimMasterLink' }))];
+    ...(plan.trimMasterLinkRepairs ?? []).map((item) => ({ ...item, kind: 'trimMasterLink' })),
+    ...(plan.masterModelRepairs ?? []).map((item) => ({ ...item, kind: 'masterModel' })),
+    ...(plan.trimModelRepairs ?? []).map((item) => ({ ...item, kind: 'trimModel' })),
+    ...(plan.masterGenCodeRepairs ?? []).map((item) => ({ ...item, kind: 'masterGenCode' }))];
   const creates = [...(plan.masterCreates ?? []).map((c) => ({ ...c, kind: 'masterCreate', keys: MASTER_CREATE_KEYS })),
     ...(plan.trimCreates ?? []).map((c) => ({ ...c, kind: 'trimCreate', keys: TRIM_CREATE_KEYS }))];
   const variantRepairs = plan.masterVariantRepairs ?? [];
   for (const v of variantRepairs) {
     if (!v.id?.trim() || !/^[0-9a-f]{64}$/.test(v.fromDigest ?? '') || !Array.isArray(v.to) || !v.to.length) throw new Error('masterVariantRepair requires id, fromDigest and a non-empty variants list');
     if (typeof v.evidence !== 'string' || !v.evidence.trim()) throw new Error(`masterVariantRepair ${v.id} requires evidence`);
+    variantTrimNames(v.to); // shape
+    checkPlannedVariants(v.to, `masterVariantRepair ${v.id}`);
+    if (!isDocId(v.id)) throw new Error('masterVariantRepair id must be a single document id');
     if ((v.trims === undefined) !== (v.fromTrimsDigest === undefined)) throw new Error(`masterVariantRepair ${v.id} needs trims and fromTrimsDigest together`);
     if (v.trims !== undefined) {
       if (!/^[0-9a-f]{64}$/.test(v.fromTrimsDigest ?? '') || !Array.isArray(v.trims) || !v.trims.length) throw new Error(`masterVariantRepair ${v.id} requires a non-empty trims list and fromTrimsDigest`);
       if (v.trims.some((t) => typeof t !== 'string' || !t || t !== normalizeName(t))) throw new Error(`masterVariantRepair ${v.id} trims must be normalized names`);
       if (new Set(v.trims).size !== v.trims.length) throw new Error(`masterVariantRepair ${v.id} has duplicate trims`);
+      const listed = new Set(v.trims);
+      const missing = variantTrimNames(v.to).filter((t) => !listed.has(t));
+      if (missing.length) throw new Error(`masterVariantRepair ${v.id} variants name trims missing from trims: ${[...new Set(missing)].join(', ')}`);
     }
     if (stableDigest(v.to) === v.fromDigest && (v.trims === undefined || stableDigest(v.trims) === v.fromTrimsDigest)) throw new Error(`no-op masterVariantRepair ${v.id}`);
   }
@@ -96,11 +193,12 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   const retires = plan.masterRetires ?? [];
   for (const r of retires) {
     if (!r.id?.trim() || r.id !== r.id.trim() || !r.into?.trim() || r.into !== r.into.trim()) throw new Error('masterRetire requires exact id and into');
+    if (!isDocId(r.id) || !isDocId(r.into)) throw new Error('masterRetire id and into must be single document ids');
     if (r.id === r.into) throw new Error(`masterRetire ${r.id} cannot retire into itself`);
     if (typeof r.evidence !== 'string' || !r.evidence.trim()) throw new Error(`masterRetire ${r.id} requires evidence`);
   }
   if (new Set(retires.map((r) => r.id)).size !== retires.length) throw new Error('duplicate masterRetire');
-  if (retires.some((r) => (plan.masterRepairs ?? []).some((m) => m.id === r.id) || (plan.masterVariantRepairs ?? []).some((v) => v.id === r.id))) throw new Error('a retired master must not be renamed or edited in the same plan');
+  if (retires.some((r) => [...(plan.masterRepairs ?? []), ...(plan.masterVariantRepairs ?? []), ...(plan.masterModelRepairs ?? []), ...(plan.masterGenCodeRepairs ?? [])].some((m) => m.id === r.id))) throw new Error('a retired master must not be renamed or edited in the same plan');
   const retiredIds = new Set(retires.map((r) => r.id));
   if (retires.some((r) => retiredIds.has(r.into))) throw new Error('masterRetire into must not itself be retired in the same plan (no chains or cycles)');
   if ((plan.trimCreates ?? []).some((c) => retiredIds.has(String(c.data.master_id))) || (plan.trimMasterLinkRepairs ?? []).some((l) => retiredIds.has(l.to))) {
@@ -120,6 +218,15 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
       }
     }
     if (c.kind === 'masterCreate' && c.data.id !== c.id) throw new Error(`masterCreate ${c.id} data.id must equal id`);
+    if (!isDocId(c.id)) throw new Error(`${c.kind} id must be a single document id`);
+    checkSchema(c.data, c.kind === 'masterCreate' ? MASTER_CREATE_SCHEMA : TRIM_CREATE_SCHEMA, `${c.kind} ${c.id}`);
+    if (c.data.variants !== undefined) checkPlannedVariants(c.data.variants, `${c.kind} ${c.id}`);
+    if (c.kind === 'trimCreate' && !isDocId(c.data.master_id)) throw new Error(`trimCreate ${c.id} master_id must be an exact id (single document id)`);
+    if (c.data.gen_code !== undefined && c.data.gen_code !== clean(c.data.gen_code)) throw new Error(`${c.kind} ${c.id} gen_code must be normalized text`);
+    for (const f of ['sub_model_aliases', 'model_aliases', 'gen_code_aliases', 'trim_aliases'] as const) {
+      if (c.data[f] !== undefined && !(Array.isArray(c.data[f]) && (c.data[f] as unknown[]).every((a) => typeof a === 'string'))) throw new Error(`${c.kind} ${c.id} ${f} must be a list of strings`);
+    }
+    if (c.data.gen_code !== undefined && typeof c.data.gen_code !== 'string') throw new Error(`${c.kind} ${c.id} gen_code must be a string`);
     if (c.id !== c.id.trim()) throw new Error(`${c.kind} id must have no surrounding spaces`);
     if (c.kind === 'trimCreate' && (typeof c.data.master_id !== 'string' || c.data.master_id !== c.data.master_id.trim())) throw new Error(`trimCreate ${c.id} master_id must be an exact id`);
     const key = `${c.kind}:${c.id}`;
@@ -139,6 +246,13 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     for (const key of ['maker', 'model', 'sub_model'] as const) {
       if (typeof c.data[key] !== 'string' || c.data[key] !== clean(c.data[key])) throw new Error(`masterCreate ${c.id} ${key} must be normalized text`);
     }
+    if (c.data.trims !== undefined && (!Array.isArray(c.data.trims) || c.data.trims.some((t) => typeof t !== 'string' || !t || t !== clean(t)))) throw new Error(`masterCreate ${c.id} trims must be a list of normalized strings`);
+    if (variantTrimNames(c.data.variants).length && !Array.isArray(c.data.trims)) throw new Error(`masterCreate ${c.id} variants name trims but trims is not a list`);
+    if (Array.isArray(c.data.variants) && Array.isArray(c.data.trims)) {
+      const listed = new Set((c.data.trims as unknown[]).map(clean));
+      const missing = variantTrimNames(c.data.variants).filter((t) => !listed.has(t));
+      if (missing.length) throw new Error(`masterCreate ${c.id} variants name trims missing from trims: ${[...new Set(missing)].join(', ')}`);
+    }
     const name = masterNameKey(c.data);
     if (masterNames.has(name)) throw new Error(`duplicate master sub-model ${name}`);
     masterNames.add(name);
@@ -152,8 +266,12 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     // precondition still requires the stored value to be blank at write time. Every other kind needs a name.
     const evidenceOk = typeof item.evidence === 'string' && item.evidence.trim() !== '';
     if (item.evidence !== undefined && !evidenceOk) throw new Error('repair item evidence must be a non-empty string');
-    const blankFill = !clean(item.from) && item.kind === 'product' && evidenceOk;
+    // A blank gen_code may be filled too (the code is already in the sub-model name), with evidence.
+    const blankFill = !clean(item.from) && (item.kind === 'product' || item.kind === 'masterGenCode') && evidenceOk;
+    if (typeof item.id !== 'string' || typeof item.from !== 'string' || typeof item.to !== 'string') throw new Error('repair item id/from/to must be strings');
     if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !blankFill)) throw new Error('repair item requires id/from/to');
+    if (!isDocId(item.id)) throw new Error(`repair item ${item.kind} id must be a single document id`);
+    if (item.kind === 'trimMasterLink' && (!isDocId(item.to) || !isDocId(item.from))) throw new Error(`trimMasterLink ${item.id} from/to must be exact master ids`);
     if (clean(item.from) === clean(item.to)) throw new Error(`no-op repair ${item.kind}:${item.id}`);
     if (item.kind === 'trimMasterLink' && item.to !== item.to.trim()) throw new Error(`trimMasterLink ${item.id} to must be an exact master id`);
     if (NAME_KINDS.has(item.kind) && item.to !== clean(item.to)) throw new Error(`${item.kind} ${item.id} to must be normalized text`);
@@ -169,14 +287,18 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     ...(plan.masterVariantRepairs ? { masterVariantCount: plan.masterVariantRepairs.length } : {}),
     ...(plan.masterRetires ? { masterRetireCount: plan.masterRetires.length } : {}),
     ...(plan.masterCreates ? { masterCreateCount: plan.masterCreates.length } : {}),
-    ...(plan.trimCreates ? { trimCreateCount: plan.trimCreates.length } : {}) };
+    ...(plan.trimCreates ? { trimCreateCount: plan.trimCreates.length } : {}),
+    ...(plan.masterModelRepairs ? { masterModelCount: plan.masterModelRepairs.length } : {}),
+    ...(plan.trimModelRepairs ? { trimModelCount: plan.trimModelRepairs.length } : {}),
+    ...(plan.masterGenCodeRepairs ? { masterGenCodeCount: plan.masterGenCodeRepairs.length } : {}) };
 }
 
-type RepairField = 'sub_model' | 'trim' | 'trim_name' | 'master_id';
-type AliasField = 'trim_aliases' | 'sub_model_aliases';
+type RepairField = 'sub_model' | 'trim' | 'trim_name' | 'master_id' | 'model' | 'gen_code';
+type AliasField = 'trim_aliases' | 'sub_model_aliases' | 'model_aliases' | 'gen_code_aliases';
 /** The old name is kept in an alias list on these kinds (rule 20: sub-model aliases live in FreePass Data). */
 const ALIAS_FIELD: Partial<Record<string, AliasField>> = {
   trim: 'trim_aliases', master: 'sub_model_aliases', trimSubModel: 'sub_model_aliases',
+  masterModel: 'model_aliases', trimModel: 'model_aliases', masterGenCode: 'gen_code_aliases',
 };
 
 export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan) {
@@ -190,6 +312,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     ...(plan.productTrimRepairs ?? []).map((item) => ({ kind: 'productTrim', item, ref: db.collection('products').doc(item.id), field: 'trim_name' as RepairField })),
     ...(plan.trimSubModelRepairs ?? []).map((item) => ({ kind: 'trimSubModel', item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'sub_model' as RepairField })),
     ...(plan.trimMasterLinkRepairs ?? []).map((item) => ({ kind: 'trimMasterLink', item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'master_id' as RepairField })),
+    ...(plan.masterModelRepairs ?? []).map((item) => ({ kind: 'masterModel', item, ref: db.collection('vehicle_master').doc(item.id), field: 'model' as RepairField })),
+    ...(plan.trimModelRepairs ?? []).map((item) => ({ kind: 'trimModel', item, ref: db.collection('vehicle_trim_master').doc(item.id), field: 'model' as RepairField })),
+    ...(plan.masterGenCodeRepairs ?? []).map((item) => ({ kind: 'masterGenCode', item, ref: db.collection('vehicle_master').doc(item.id), field: 'gen_code' as RepairField })),
   ];
   const creates = [
     ...(plan.masterCreates ?? []).map((c) => ({ c, ref: db.collection('vehicle_master').doc(c.id) })),
@@ -209,15 +334,27 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (!matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
       throw new Error(`precondition changed ${snapshot.ref.path}`);
     }
+    const aliasField = ALIAS_FIELD[targets[index]!.kind];
+    const aliasValue = aliasField ? snapshot.data()?.[aliasField] : undefined;
+    if (!aliasListOk(aliasValue)) throw new Error(`alias field is not a list of strings ${snapshot.ref.path}.${aliasField}`);
   });
   const variantRepairs = plan.masterVariantRepairs ?? [];
   const variantRefs = variantRepairs.map((v) => db.collection('vehicle_master').doc(v.id));
   const variantSnaps = variantRefs.length ? await db.getAll(...variantRefs) : [];
   variantSnaps.forEach((snapshot, index) => {
     const v = variantRepairs[index]!;
+    storedTrimList(snapshot.data()?.trims, snapshot.ref.path); // shape, whether or not the list is replaced
+    storedVariantsShape(snapshot.data()?.variants, snapshot.ref.path);
     if (!snapshot.exists || stableDigest(snapshot.data()?.variants ?? null) !== v.fromDigest
       || (v.trims !== undefined && stableDigest(snapshot.data()?.trims ?? null) !== v.fromTrimsDigest)) {
       throw new Error(`variants precondition changed ${snapshot.ref.path}`);
+    }
+    if (v.trims === undefined) {
+      const stored = storedTrimList(snapshot.data()?.trims, snapshot.ref.path);
+      if (!stored && variantTrimNames(v.to).length) throw new Error(`masterVariantRepair ${v.id} stored trims is not a list — pass trims`);
+      const listed = new Set(stored ?? []);
+      const missing = variantTrimNames(v.to).filter((t) => !listed.has(t));
+      if (missing.length) throw new Error(`masterVariantRepair ${v.id} variants name trims missing from the stored trims (pass trims): ${[...new Set(missing)].join(', ')}`);
     }
   });
   const retires = plan.masterRetires ?? [];
@@ -326,7 +463,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   await db.runTransaction(async (transaction) => {
     const current = refs.length ? await transaction.getAll(...refs) : [];
     // A retired master is frozen: its name is not changed again (a rename would let products use it under a new name).
-    const frozen = targets.findIndex((t, i) => t.kind === 'master' && current[i]?.data()?.retired === true);
+    const frozen = targets.findIndex((t, i) => MASTER_DOC_KINDS.has(t.kind) && current[i]?.data()?.retired === true);
     if (frozen >= 0) throw new Error(`retired master cannot be renamed ${targets[frozen]!.ref.path}`);
     // A product must not be renamed onto the name of a master that is already retired (in any earlier plan).
     const productTargets = targets.map((t, i) => ({ t, data: current[i]?.data() })).filter((x) => x.t.kind === 'product');
@@ -346,24 +483,58 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     }
     // Final identity check (값 하나): every stored master (names only, normalized — stored values may carry stray spaces),
     // with this plan's renames and creates applied, must not end up with the same maker|model|sub_model twice.
-    if (targets.some((t) => t.kind === 'master') || (plan.masterCreates ?? []).length) {
+    if (targets.some((t) => t.kind === 'master' || t.kind === 'masterModel') || (plan.masterCreates ?? []).length) {
       const renamedMasters: Record<string, string> = {};
+      const remodeledMasters: Record<string, string> = {};
       for (const t of targets) if (t.kind === 'master') renamedMasters[t.ref.id] = clean(t.item.to);
+      for (const t of targets) if (t.kind === 'masterModel') remodeledMasters[t.ref.id] = clean(t.item.to);
       // Bounded read: names only, at most MAX_MASTER_IDENTITY_SCAN documents (stop rather than run an unbounded transaction).
       const stored = await transaction.get(db.collection('vehicle_master').select('maker', 'model', 'sub_model').limit(MAX_MASTER_IDENTITY_SCAN + 1));
       if (stored.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`vehicle_master has more than ${MAX_MASTER_IDENTITY_SCAN} entries — identity check would be unbounded`);
       const finalKeys: Record<string, string> = {};
       for (const doc of stored.docs) {
         const data = doc.data();
-        finalKeys[doc.id] = [clean(data.maker), clean(data.model), renamedMasters[doc.id] ?? clean(data.sub_model)].join('|');
+        finalKeys[doc.id] = [clean(data.maker), remodeledMasters[doc.id] ?? clean(data.model), renamedMasters[doc.id] ?? clean(data.sub_model)].join('|');
       }
       for (const c of plan.masterCreates ?? []) finalKeys[c.id] = masterNameKey(c.data);
-      const touched = new Set([...Object.keys(renamedMasters), ...(plan.masterCreates ?? []).map((c) => c.id)].map((id) => finalKeys[id]));
+      const touched = new Set([...Object.keys(renamedMasters), ...Object.keys(remodeledMasters), ...(plan.masterCreates ?? []).map((c) => c.id)].map((id) => finalKeys[id]));
       const owners: Record<string, string> = {};
       for (const [id, key] of Object.entries(finalKeys)) {
         if (!touched.has(key)) continue;
         if (owners[key] !== undefined) throw new Error(`master sub-model would be stored twice ${key} (${owners[key]}, ${id})`);
         owners[key] = id;
+      }
+    }
+    // Model consistency (one model name per master and its rows): for every master whose model changes, every master
+    // of a row whose model changes, every relink destination and every master that gets a created row, the final model of each linked row (after this plan's relinks, row renames and creates)
+    // must equal the master's final model — a master renamed without its rows, or a row added meanwhile, aborts.
+    if (targets.some((t) => t.kind === 'masterModel' || t.kind === 'trimModel' || t.kind === 'trimMasterLink') || (plan.trimCreates ?? []).length) {
+      const linkTo: Record<string, string> = Object.fromEntries((plan.trimMasterLinkRepairs ?? []).map((l) => [l.id, l.to]));
+      const rowModelTo: Record<string, string> = {};
+      const masterModelTo: Record<string, string> = {};
+      const affected = new Set<string>();
+      targets.forEach((t, i) => {
+        if (t.kind === 'masterModel') { masterModelTo[t.ref.id] = clean(t.item.to); affected.add(t.ref.id); }
+        if (t.kind === 'trimModel') { rowModelTo[t.ref.id] = clean(t.item.to); affected.add(linkTo[t.ref.id] ?? String(current[i]?.data()?.master_id ?? '')); }
+      });
+      // Rows relinked away from a master whose model changes keep their model unless renamed — so every relink destination is checked as well.
+      for (const to of Object.values(linkTo)) affected.add(to);
+      for (const c of plan.trimCreates ?? []) affected.add(String(c.data.master_id));
+      const createdMaster: Record<string, Record<string, unknown>> = Object.fromEntries((plan.masterCreates ?? []).map((c) => [c.id, c.data]));
+      for (const mid of affected) {
+        if (!mid) throw new Error('trim row without master_id cannot change model');
+        const masterData = createdMaster[mid] ?? (await transaction.getAll(db.collection('vehicle_master').doc(mid)))[0]!.data();
+        if (!masterData) throw new Error(`model check: master missing vehicle_master/${mid}`);
+        const want = masterModelTo[mid] ?? clean(masterData.model);
+        const stored = await transaction.get(db.collection('vehicle_trim_master').where('master_id', '==', mid).limit(MAX_MASTER_IDENTITY_SCAN + 1));
+        if (stored.docs.length > MAX_MASTER_IDENTITY_SCAN) throw new Error(`model check: too many rows on vehicle_master/${mid}`);
+        const rows: Record<string, unknown> = {};
+        for (const doc of stored.docs) if ((linkTo[doc.id] ?? mid) === mid) rows[doc.id] = doc.data().model;
+        const incomingIds = Object.entries(linkTo).filter(([id, to]) => to === mid && rows[id] === undefined).map(([id]) => id);
+        if (incomingIds.length) for (const snap of await transaction.getAll(...incomingIds.map((id) => db.collection('vehicle_trim_master').doc(id)))) rows[snap.ref.id] = snap.data()?.model;
+        for (const c of plan.trimCreates ?? []) if (c.data.master_id === mid) rows[c.id] = c.data.model;
+        const off = Object.entries(rows).find(([id, model]) => (rowModelTo[id] ?? clean(model)) !== want);
+        if (off) throw new Error(`model would differ between vehicle_master/${mid} (${want}) and vehicle_trim_master/${off[0]}`);
       }
     }
     if (retireIntoRefs.length && (await transaction.getAll(...retireIntoRefs)).some((snapshot) => !snapshot.exists || snapshot.data()?.retired === true)) throw new Error('transaction retire into-master missing or retired');
@@ -390,9 +561,32 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       || (variantRepairs[index]!.trims !== undefined && stableDigest(snapshot.data()?.trims ?? null) !== variantRepairs[index]!.fromTrimsDigest))) {
       throw new Error('transaction variants precondition changed or master retired');
     }
+    // trims is pinned by fromTrimsDigest when given; otherwise the stored list (read again here) must still cover the new variants.
+    for (const [index, v] of variantRepairs.entries()) {
+      const stored = (await transaction.getAll(variantRefs[index]!))[0]!.data()?.trims;
+      storedTrimList(stored, variantRefs[index]!.path); // shape, whether or not the list is replaced
+      storedVariantsShape((await transaction.getAll(variantRefs[index]!))[0]!.data()?.variants, variantRefs[index]!.path);
+      if (v.trims !== undefined) continue;
+      const names = variantTrimNames(v.to);
+      const listed = storedTrimList(stored, variantRefs[index]!.path);
+      if (!listed ? names.length > 0 : names.some((t) => !listed.includes(t))) throw new Error(`transaction variants name trims missing from the stored trims ${variantRefs[index]!.path}`);
+    }
     current.forEach((snapshot, index) => {
       if (!snapshot.exists || !matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
         throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
+      }
+      const { kind, item, field, ref } = targets[index]!;
+      const aliasField = ALIAS_FIELD[kind];
+      if (!aliasField) return;
+      const aliasValue = snapshot.data()?.[aliasField];
+      if (!aliasListOk(aliasValue)) throw new Error(`transaction alias field is not a list of strings ${ref.path}.${aliasField}`);
+      // The stored spelling is kept too when it differs from the normalized old name (e.g. stray or full-width spaces).
+      const raw = snapshot.data()?.[field];
+      // The stored spelling must still be the one read before the backup (the backup and the readback rely on it).
+      if (raw !== snapshots[index]!.data()?.[field]) throw new Error(`transaction stored spelling changed since backup ${ref.path}.${field}`);
+      const entry = byPath[ref.path]!;
+      if (typeof raw === 'string' && clean(raw) && raw !== clean(item.from) && !(entry.aliases[aliasField] ?? []).includes(raw)) {
+        entry.aliases[aliasField] = [...(entry.aliases[aliasField] ?? []), raw];
       }
     });
     for (const { ref, fields, aliases } of Object.values(byPath)) {
@@ -419,11 +613,13 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (stored !== (field === 'master_id' ? item.to : clean(item.to))) throw new Error(`readback mismatch ${snapshot.ref.path}`);
     const aliasField = ALIAS_FIELD[kind];
     if (aliasField) {
-      // The old name must be kept as an alias, and aliases present before the repair must still be there.
+      // Aliases present before the repair must still be there (also for a blank fill); a non-blank old name must be added.
       const aliases: unknown[] = Array.isArray(data?.[aliasField]) ? data[aliasField] : [];
       const before = snapshots[index]!.data()?.[aliasField];
-      const kept = Array.isArray(before) ? before.every((a: unknown) => aliases.includes(a)) : true;
-      if (!aliases.map(clean).includes(clean(item.from)) || !kept) throw new Error(`readback alias mismatch ${snapshot.ref.path}`);
+      const kept = Array.isArray(before) ? before.every((a: unknown) => aliases.includes(a)) : before === undefined || before === null;
+      const raw = snapshots[index]!.data()?.[field];
+      const rawKept = typeof raw !== 'string' || !clean(raw) || raw === clean(item.from) || aliases.includes(raw);
+      if ((clean(item.from) && !aliases.map(clean).includes(clean(item.from))) || !kept || !rawKept) throw new Error(`readback alias mismatch ${snapshot.ref.path}`);
     }
   });
   const retireReadback = retireRefs.length ? await db.getAll(...retireRefs) : [];
