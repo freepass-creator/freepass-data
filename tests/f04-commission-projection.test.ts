@@ -183,6 +183,10 @@ describe('F04 접수 탭 AE·AJ 투영 계획', () => {
     const textDate = planF04CommissionProjection({ intake: intake(row({ 차량번호: '12가3456', 접수일: '2026/9/20' })), installments: INST, openFromMonth: '2026-09', readAt: 'x', individualKeys: ['12가3456|2026-09-20'] });
     expect(textDate.fills).toEqual([]);
   });
+  it('stops on a duplicated header name (e.g. two «청구» columns)', () => {
+    const dup = [...H, '청구'];
+    expect(() => planF04CommissionProjection({ intake: [['설명'], dup, [...row({ 차량번호: '1' }), '']], installments: INST, openFromMonth: '2026-09', readAt: 'x' })).toThrow('F04_INTAKE_HEADER_DUPLICATE');
+  });
   it('stops when the layout moved or the month is malformed', () => {
     const moved = [...H]; moved.splice(30, 0, 'x');
     expect(() => planF04CommissionProjection({ intake: [['설명'], moved], installments: INST, openFromMonth: '2026-09', readAt: 'x' })).toThrow('F04_FEE_COLUMN_MOVED');

@@ -118,12 +118,15 @@ export function planF04CommissionProjection(input: {
   const header = input.intake[hi]!.map(text);
   for (const need of ['접수일', '차량번호', '공급사', '상품구분', '계약기간', '렌탈료', '분납여부', '청구년', '청구월', '취소', '판매수수료', '출고수수료', '비고', '청구', '청구액', '지급액'])
     if (header.indexOf(need) < 0) throw new Error('F04_INTAKE_COLUMN_MISSING');
+  // 머리글 이름이 겹치면(같은 이름 두 칸) 어느 칸을 읽는지 갈려 판정이 틀어진다 — 빈칸이 아닌 이름의 중복은 멈춘다.
+  { const named = header.filter(h => h !== ''); if (new Set(named).size !== named.length) throw new Error('F04_INTAKE_HEADER_DUPLICATE'); }
   const colOf = (c: F04Column) => header.indexOf(c === 'AE' ? '판매수수료' : '출고수수료');
   if (colOf('AE') !== 30 || colOf('AJ') !== 35) throw new Error('F04_FEE_COLUMN_MOVED'); // AE=31번째, AJ=36번째 칸
 
   const ih = input.installments.findIndex(r => Array.isArray(r) && r.includes('차량번호') && r.includes('원 접수행'));
   if (ih < 0) throw new Error('F04_INSTALLMENT_HEADER_MISSING');
   const iHeader = input.installments[ih]!.map(text);
+  { const named = iHeader.filter(h => h !== ''); if (new Set(named).size !== named.length) throw new Error('F04_INSTALLMENT_HEADER_DUPLICATE'); }
   const installmentLinks = input.installments.slice(ih + 1)
     .filter(r => Array.isArray(r) && !empty(r[iHeader.indexOf('차량번호')]))
     .map(r => ({ plate: plateKey(r[iHeader.indexOf('차량번호')]), row: int(r[iHeader.indexOf('원 접수행')]) }));
