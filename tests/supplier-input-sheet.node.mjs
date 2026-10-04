@@ -112,7 +112,7 @@ test('canon: exact dates, ages, seats and aliases normalize; ambiguous values an
   assert.ok(p.requests.every(r=>(r.updateCells??r.repeatCell).range.sheetId!==0));
   assert.ok(p.requests.filter(r=>r.updateCells).every(r=>r.updateCells.fields==='userEnteredValue'));
   const dates=p.requests.filter(r=>r.updateCells?.range.startColumnIndex===1).map(r=>r.updateCells.rows[0].values[0].userEnteredValue.numberValue);assert.equal(dates[0],dates[1]);
-  assert.ok(p.requests.some(r=>r.repeatCell?.cell.userEnteredFormat.numberFormat.pattern==='yy.mm.dd'));
+  assert.ok(p.requests.some(r=>r.repeatCell?.cell.userEnteredFormat.numberFormat.pattern===f.spec.valueFormats['입고일자'].pattern));
 });
 test('canon: partial grids cannot PASS, malformed layouts cannot generate fixes, private examples redacted',()=>{
   const f=canonFixture();f.snapshot.sheets[1].properties.gridProperties.rowCount=1000;
@@ -478,7 +478,7 @@ test('partial dates: confirmed month text, no invented day, invalid month HOLD, 
   for(const header of ['최초등록일','입고일자'])for(const raw of ['25-04','2025-4','25.4','25.04','00-1','99-12']){
     const f=canonFixture();canonPut(f,1,1,header,raw);const before=JSON.stringify(f);
     const p=planValueNormalize(f.snapshot,f.spec,now);assert.equal(p.status,'PLANNED');
-    const expected=raw==='00-1'?'00.01':raw==='99-12'?'99.12':'25.04';
+    const expected=raw==='00-1'?'00-01':raw==='99-12'?'99-12':'25-04';
     const write=p.requests.find(r=>r.updateCells);if(raw!==expected)assert.deepEqual(write.updateCells.rows[0].values[0].userEnteredValue,{stringValue:expected});
     assert.ok(p.requests.some(r=>r.repeatCell?.cell.userEnteredFormat.numberFormat.type==='TEXT'));
     assert.equal(JSON.stringify(f),before);
@@ -504,7 +504,7 @@ test('shared legacy comparison partitions affiliates by company and rejects unas
   f.shared.tabs[0].rows.push(row('미확인','TEST-C'));assert.throws(()=>compareSharedToLegacy(f,inputSpec,now),/company/);
 });
 test('month formula results retain TEXT in summary format fixes while supplier formulas are preserved',()=>{
-  const f=canonFixture();canonPut(f,0,1,'입고일자','25.04',{userEnteredValue:{formulaValue:'=A2'},effectiveValue:{stringValue:'25.04'}});
+  const f=canonFixture();canonPut(f,0,1,'입고일자','25-04',{userEnteredValue:{formulaValue:'=A2'},effectiveValue:{stringValue:'25-04'}});
   const at=f.spec.inputHeaders.indexOf('입고일자');f.snapshot.sheets[0].data[0].rowData[1].values[at].userEnteredFormat.numberFormat={type:'TEXT'};
   assert.equal(auditTabConsistency(f.snapshot,f.spec).status,'PASS');
   const p=planTabConsistencyFix(f.snapshot,f.spec);assert.ok(p.requests.some(r=>r.repeatCell?.range.sheetId===0&&r.repeatCell.range.startRowIndex===1&&r.repeatCell.range.startColumnIndex===at&&r.repeatCell.cell.userEnteredFormat.numberFormat?.type==='TEXT'));
