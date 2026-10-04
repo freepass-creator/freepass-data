@@ -35,12 +35,13 @@ export const displayMatchesValue = (shown: string, v: number | boolean): boolean
   // 부호를 먼저 정한다 — 숫자를 감싼 괄호(통화 기호가 밖에 있어도) 또는 첫 숫자 앞의 «-». 지수·일반 숫자에 같이 쓴다.
   const sign = /\([^()]*\d[^()]*\)/.test(s) || /^[^0-9]*-/.test(s) ? -1 : 1;
   // 허용 오차는 보이는 자릿수의 반 칸(유효숫자 기준)뿐 — 고정 오차를 더하지 않는다(«1E-10» 이 0 과 같다고 통과하지 않게).
-  // 부동소수 반올림 찌꺼기만 상대적으로 조금 너그럽게(1e-12 배).
+  // 부동소수 반올림 찌꺼기만 반 칸의 1e-9 배만큼 너그럽게(값 크기에 비례해 넓히지 않는다).
   const near = (shownValue: number, halfStep: number) =>
-    Number.isFinite(shownValue) && Math.abs(shownValue - target) <= halfStep * (1 + 1e-12) + Math.abs(target) * 1e-15
+    Number.isFinite(shownValue) && Math.abs(shownValue - target) <= halfStep * (1 + 1e-9)
     && (target === 0 || shownValue === 0 || Math.sign(shownValue) === Math.sign(target));
-  const sci = /(\d+(?:\.(\d+))?)E([+-]?\d+)/i.exec(s.replace(/,/g, ''));
-  if (sci) return near(sign * Number(sci[0]), 0.5 * 10 ** (Number(sci[3]) - (sci[2]?.length ?? 0)));
+  // 가수는 «1.23»·«5.»·«.5» 모두(앞 소수점을 버리지 않는다).
+  const sci = /(\d+(?:\.(\d*))?|\.(\d+))E([+-]?\d+)/i.exec(s.replace(/,/g, ''));
+  if (sci) return near(sign * Number(sci[0]), 0.5 * 10 ** (Number(sci[4]) - (sci[2] ?? sci[3] ?? '').length));
   const t = s.replace(/[^0-9.]/g, ''), n = Number(t);
   if (!Number.isFinite(n)) return false;
   const decimals = (t.split('.')[1] ?? '').length;
