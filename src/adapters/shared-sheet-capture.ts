@@ -30,8 +30,10 @@ const displayMatchesIso = (shown: string, iso: string): boolean => {
   const g = shown.match(/\d+/g)?.map(Number) ?? [], [y, m, d] = iso.split('-').map(Number) as [number, number, number];
   const yr = (v: number | undefined) => v === y || v === y % 100;
   if (g.length === 2) return g[0] === m && g[1] === d;
-  // 연-월-일(규격) 또는 월/일/연(시트 기본 날짜 표시)만 — 일/월 순서는 받지 않는다(3/7 과 7/3 을 섞지 않게).
-  if (g.length === 3) return (yr(g[0]) && g[1] === m && g[2] === d) || (yr(g[2]) && g[0] === m && g[1] === d);
+  // 연-월-일(규격) 또는 네 자리 연도가 끝에 오는 월/일/연(시트 기본 날짜 표시)만 — 일/월 순서, 두 자리 연도가 끝에 오는
+  // 형식은 받지 않는다(03-07-04 를 2003-07-04 와 2004-03-07 로 겹쳐 읽지 않게).
+  const digits = shown.match(/\d+/g) ?? [];
+  if (g.length === 3) return (yr(g[0]) && g[1] === m && g[2] === d) || (digits[2]?.length === 4 && g[2] === y && g[0] === m && g[1] === d);
   return false;
 };
 
