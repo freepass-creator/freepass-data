@@ -67,8 +67,12 @@ export function trimDisplayName(value: string, origin: TrimOrigin): TrimDisplayN
   if (origin === '수입' && tokens.length > 0 && MODEL_DESIGNATION.test(tokens[0]!)) {
     return { name: tokens.join(' '), removed: [], undecided: [], modelDesignation: true };
   }
-  const removed = tokens.filter(isTrimPowertrainToken);
-  const kept = tokens.filter((token) => !isTrimPowertrainToken(token));
+  // 배기량 숫자 바로 뒤 「터보」·「T」는 배기량 표기의 일부로 같이 뗀다(AI 상황실 판단 2026-10-04: 「2.5T」와 「3.5 터보」가
+  // 같은 결과). 배기량 없이 쓰인 「터보」(캐스퍼 「터보 인스퍼레이션」)는 엔진 이름으로 남긴다.
+  const drop = tokens.map((token, i) =>
+    isTrimPowertrainToken(token) || (/^(?:터보|T)$/i.test(token) && i > 0 && /^\d\.\d$/.test(tokens[i - 1]!)));
+  const removed = tokens.filter((_, i) => drop[i]);
+  const kept = tokens.filter((_, i) => !drop[i]);
   return {
     name: kept.length ? kept.join(' ') : '기본형',
     removed,

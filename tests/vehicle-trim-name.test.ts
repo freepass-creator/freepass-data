@@ -7,7 +7,7 @@ describe('F03 세부트림 display name (Encar end level minus powertrain, 2026-
   it('drops displacement, fuel, engine and drive markers and keeps the grade', () => {
     expect(name('1.2 LT')).toBe('LT');
     expect(name('1.8 TCe 인스파이어')).toBe('TCe 인스파이어');
-    expect(name('가솔린 1.6 터보 2WD')).toBe('터보');
+    expect(name('가솔린 1.6 터보 2WD')).toBe('기본형');
     expect(name('SS 6.2 V8')).toBe('SS V8');
     expect(name('HEV 9인승 노블레스')).toBe('9인승 노블레스');
     expect(name('3.3 리미티드 4WD', '수입')).toBe('리미티드');
@@ -43,6 +43,16 @@ describe('F03 세부트림 display name (Encar end level minus powertrain, 2026-
     expect(name('1.6 MPi 스마트')).toBe('MPi 스마트');
     expect(name('HEV 9인승 노블레스')).toBe('9인승 노블레스');
     expect(name('프리미엄 RWD', '수입')).toBe('프리미엄');
+  });
+
+  it('drops 터보/T right after a displacement as part of it, keeps standalone 터보 (decided 2026-10-04)', () => {
+    expect(name('가솔린 3.5 터보 2WD')).toBe('기본형');
+    expect(name('2.5T 가솔린 AWD')).toBe('기본형');
+    expect(name('3.3 T AWD 구조변경 (바이퓨얼)')).toBe('구조변경');
+    expect(name('가솔린 3.5 터보 e-S/C AWD LWB')).toBe('e-S/C LWB');
+    expect(name('1.6 터보 프리미엄')).toBe('프리미엄');
+    expect(name('터보 인스퍼레이션')).toBe('터보 인스퍼레이션');
+    expect(name('가솔린 1.6 터보 2WD')).toBe('기본형');
   });
 
   it('keeps engine names and drops LPG fuel labels (decided 2026-10-04)', () => {
