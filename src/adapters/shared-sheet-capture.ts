@@ -1,4 +1,8 @@
-import { sharedSheetChannels, sharedSheetCaptureDigest, buildSharedSheetBatch, sharedSheetHeaders, type SharedSheetCapture, type SheetCell } from './shared-sheet-source.js';
+import { sharedSheetChannels, sharedSheetCaptureDigest, buildSharedSheetBatch, sharedSheetHeaders, type SharedSheetCapture, type SheetCell,
+  type SupplierEnteredRecord, type SheetCorrection } from './shared-sheet-source.js';
+import { decodeErp5Value, inspectErp5Capture, type Erp5SourceCapture } from './erp5-source-capture.js';
+import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import spec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
 
 export type SheetsBatchGet = { spreadsheetId?: string; valueRanges?: Array<{ range?: string; values?: unknown[][] }> };
@@ -37,4 +41,46 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
   capture.digest = sharedSheetCaptureDigest(capture);
   buildSharedSheetBatch(capture); // fail closed: header, tabs, widths, identities
   return capture;
+}
+
+/** Layer ②: products.원문 (written by the supplier-sheet collectors, never by the shared sheet) per «공급사 코드 + 차량번호»,
+ * from an existing verified ERP5 capture. Records whose products disagree on 원문 are left out rather than guessed. */
+export function supplierEnteredFromErp5(capture: Erp5SourceCapture): SupplierEnteredRecord[] {
+  inspectErp5Capture(capture);
+  const byKey = new Map<string, SupplierEnteredRecord | null>();
+  for (const doc of capture.collections.products.documents as Array<{ name?: string; fields?: Record<string, unknown> }>) {
+    let plate: unknown, text: unknown, supplier: unknown;
+    try {
+      plate = decodeErp5Value(doc.fields?.car_number ?? { nullValue: null });
+      text = decodeErp5Value(doc.fields?.['원문'] ?? { nullValue: null });
+      supplier = decodeErp5Value(doc.fields?.provider_company_code ?? { nullValue: null });
+    } catch { continue; }
+    if (!isAssignedPlate(plate) || typeof supplier !== 'string' || !supplier.trim() || !text || typeof text !== 'object' || Array.isArray(text)) continue;
+    const record: SupplierEnteredRecord = { supplierCode: supplier.trim(), plate: plateIdentityKey(plate), source: 'ERP5_PRODUCTS_SOURCE_TEXT',
+      sourceRef: String(doc.name ?? '').split('/').pop() ?? '', observedAt: capture.readTime, values: text as Record<string, unknown> };
+    const key = `${record.supplierCode}|${record.plate}`;
+    const seen = byKey.get(key);
+    byKey.set(key, seen === undefined ? record : seen && stableDigest(seen.values) === stableDigest(record.values) ? seen : null);
+  }
+  return [...byKey.values()].filter((x): x is SupplierEnteredRecord => x !== null)
+    .sort((a, b) => `${a.supplierCode}|${a.plate}`.localeCompare(`${b.supplierCode}|${b.plate}`));
+}
+/** Merge supplements into a capture and re-seal its digest. Only supplements whose «공급사 코드 + 차량번호» is a sheet row are kept. */
+export function withSupplements(capture: SharedSheetCapture, supplierEntered: SupplierEnteredRecord[], corrections: SheetCorrection[]): SharedSheetCapture {
+  const rowKeys = new Set(capture.tabs.flatMap(t => t.values.slice(1).map(r => {
+    const code = sharedSheetChannels.find(x => x.tab === t.title && x.companyName === String(r[0] ?? '').trim())?.code;
+    return code && isAssignedPlate(r[4]) ? `${code}|${plateIdentityKey(r[4])}` : '';
+  })).filter(Boolean));
+  // Validate before matching: a supplement without supplier code/plate is an error, not something to drop silently.
+  for (const x of [...supplierEntered, ...corrections])
+    if (!x || typeof x.supplierCode !== 'string' || !x.supplierCode.trim() || !isAssignedPlate(x.plate)) throw new Error('INVALID_SHARED_SHEET_SUPPLEMENT');
+  const key = (x: { supplierCode: string; plate: string }) => `${x.supplierCode}|${plateIdentityKey(x.plate)}`;
+  const keep = supplierEntered.filter(x => rowKeys.has(key(x)));
+  const fixes = corrections.filter(x => rowKeys.has(key(x)));
+  const out: SharedSheetCapture = { ...structuredClone(capture), ...(keep.length ? { supplierEntered: keep } : {}),
+    ...(fixes.length ? { corrections: fixes } : {}) };
+  delete out.digest;
+  out.digest = sharedSheetCaptureDigest(out);
+  buildSharedSheetBatch(out);
+  return out;
 }

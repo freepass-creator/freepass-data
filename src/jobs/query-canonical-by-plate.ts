@@ -19,7 +19,7 @@ export async function queryCanonicalByPlate(store: CatalogStore, plate: string) 
         results.push({ supplierId: offer.supplierId, assetRevision: asset.revision, offerRevision: offer.revision,
           vehicle: { maker: model?.maker ?? null, model: model?.model ?? null, subModel: model?.subModel ?? null,
             trim: model?.trim ?? null, odometerKm: asset.odometerKm ?? null, facts: asset.sourceVehicleFacts ?? null,
-            sourceFirstObservedAt: asset.sourceFirstObservedAt ?? null },
+            sourceFirstObservedAt: asset.sourceFirstObservedAt ?? null, sourceFirstRunId: asset.sourceFirstRunId ?? null },
           terms: offer.priceTerms.map(term => {
             const stored = offer.internalEconomicsTerms?.find(x => x.termKey === term.termKey);
             return { ...term, supplierBillingFee: stored?.supplierBillingFee ?? { state: 'UNKNOWN', amount: null },

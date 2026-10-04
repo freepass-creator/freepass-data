@@ -581,7 +581,8 @@ export async function canonicalizeCatalogCandidate(
           vehicleModelId: model.id,
           status: assetResolution.status,
           plateNumber: candidate.carNumber,
-          ...(candidate.vehicleFacts ? { sourceVehicleFacts: structuredClone(candidate.vehicleFacts), sourceFirstObservedAt: candidate.firstObservedAt ?? head.observedAt } : {}),
+          ...(candidate.vehicleFacts ? { sourceVehicleFacts: structuredClone(candidate.vehicleFacts), sourceFirstObservedAt: candidate.firstObservedAt ?? head.observedAt,
+            ...(candidate.firstRunId ? { sourceFirstRunId: candidate.firstRunId } : {}) } : {}),
           ...(candidate.mileageKm !== undefined ? { odometerKm: candidate.mileageKm } : {})
         };
       } else {

@@ -375,6 +375,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-04 차량번호 한 줄 세 겹 — 공급사 입력값(②) 보존 · 최초 회차 연결(①)
+
+- 종착지(AI 상황실·대표, ai-ops 「차종 기준 한 장」 5절): 차량번호 한 줄 = ① 원문(처음 + 최신) ② 공급사 입력값(덮지 않고 따로) ③ 우리 정본값(F03 이름·제원·기간별 가격·수수료, 값마다 근거).
+- ①: RAW 는 회차마다 74칸 전부 보존(기존). 이번에 `firstRunId`(RAW·후보) → `VehicleAsset.sourceFirstRunId` 를 더해 자산에서 처음 원문 RAW 로 바로 간다.
+- ②: 공통 시트는 우리가 고친 값이 섞이므로 ②의 출처로 쓰지 않는다. `capture:shared-sheet --erp5-capture <inspect-erp5-source 캡처>` 가 기존 products 읽기의 `원문`(공급사 시트 수집기가 쓴 값)을 차량번호별로 캡처에 붙이고, 각 행 RAW 옆 `payload.supplierEntered` 로 박제한다. 같은 번호에 원문이 엇갈리면 넣지 않는다. 시트 행 digest·fingerprint 는 바뀌지 않는다.
+- products 에 없는 차(10-04 기준 11대)와 정정 이력은 `--supplement <JSON>`(`supplierEntered[]`·`corrections[]`) — 한 번 쓰는 생성 절차: 그날 아침(우리가 고치기 전) Drive 백업 사본의 그 차 행을 칸 이름으로 맞춰 `SHEET_BACKUP` 으로, 칸 변경 기록(10-04 첫 묶음 488줄, Drive 비공개 사본)을 `corrections`(차량번호·시각·칸·전→후·출처)로. 이후 AI 가 시트를 고칠 때마다 같은 형식의 기록을 남기고 데일리 박제에 같이 넣는다.
+- 다음에 할 일(코드 없음, 결정 대기): 정리값 `powertrainText`(F03 「파워트레인_보조」 탭 완성 뒤 판단), 원산지·차종구분·차종크기·색상·차량가격·옵션 정리값(지금은 RAW 에만 있다).
+
 ### 2026-10-04 공통 시트 203대 ↔ FreePass Data 마스터 연결 대조 · 이름 정정 계획(적용 전)
 
 - 목적: 대표 «차종·제원 마스터를 그대로 갖다 써라 · 새 코드 만들지 마라». freepasserp5 `products` 1,760 · `vehicle_master` 1,816 · `vehicle_trim_master` 2,078(읽기 전용)과 기존 `npm run audit:vehicle-name-parity` 로 공통 시트 203대를 대조했다. #319(Data 우선 적재 규칙)는 기존 parity·repair 경로와 겹쳐 닫았다.
