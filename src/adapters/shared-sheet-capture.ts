@@ -35,10 +35,10 @@ export const displayMatchesValue = (shown: string, v: number | boolean): boolean
   // 부호를 먼저 정한다 — 숫자를 감싼 괄호(통화 기호가 밖에 있어도) 또는 첫 숫자 앞의 «-». 지수·일반 숫자에 같이 쓴다.
   const sign = /\([^()]*\d[^()]*\)/.test(s) || /^[^0-9]*-/.test(s) ? -1 : 1;
   // 보이는 자릿수로 시트처럼 «0 에서 먼 쪽 반올림»한 값과 정확히 같아야 한다(«1» ↔ 1.5 는 «2», «1.23E+05» ↔ 123500 은 «1.24E+05»).
-  // .5 판정은 곱셈 찌꺼기(몇 ULP, 최대 1e-6)만 너그럽게 — 1.4999999999 를 올리지 않는다. 부호 일치·유한값만.
+  // .5 판정은 곱셈 찌꺼기(약 2 ULP, 최대 1e-6)만 너그럽게 — 1.4999999999 를 올리지 않는다. 부호 일치·유한값만.
   const roundAway = (x: number, digits: number) => {
     const scale = 10 ** digits, scaled = Math.abs(x) * scale, frac = scaled - Math.floor(scaled);
-    const half = Math.abs(frac - 0.5) <= Math.min(Math.max(scaled, 1) * Number.EPSILON * 4, 1e-6);
+    const half = Math.abs(frac - 0.5) <= Math.min(Math.max(scaled, 1) * Number.EPSILON * 2, 1e-6);
     return Math.sign(x) * (half ? Math.floor(scaled) + 1 : Math.round(scaled)) / scale;
   };
   const same = (shownValue: number, expected: number, digits: number) =>
