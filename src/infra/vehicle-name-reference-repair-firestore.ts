@@ -6,6 +6,7 @@ import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import type { AuditEvent } from '../domain/catalog.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 export type VehicleNameRepairItem = {
   id: string;
@@ -63,6 +64,8 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     if (typeof c.evidence !== 'string' || !c.evidence.trim()) throw new Error(`${c.kind} ${c.id} requires evidence`);
     for (const key of c.keys) if (key !== 'id' && !clean(c.data[key])) throw new Error(`${c.kind} ${c.id} requires data.${key}`);
     if (c.kind === 'masterCreate' && c.data.id !== c.id) throw new Error(`masterCreate ${c.id} data.id must equal id`);
+    if (c.id !== c.id.trim()) throw new Error(`${c.kind} id must have no surrounding spaces`);
+    if (c.kind === 'trimCreate' && (typeof c.data.master_id !== 'string' || c.data.master_id !== c.data.master_id.trim())) throw new Error(`trimCreate ${c.id} master_id must be an exact id`);
     const key = `${c.kind}:${c.id}`;
     if (createKeys.has(key)) throw new Error(`duplicate create ${key}`);
     createKeys.add(key);
@@ -79,6 +82,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     const blankFill = !clean(item.from) && item.kind === 'product' && evidenceOk;
     if (!item.id?.trim() || !clean(item.to) || (!clean(item.from) && !blankFill)) throw new Error('repair item requires id/from/to');
     if (clean(item.from) === clean(item.to)) throw new Error(`no-op repair ${item.kind}:${item.id}`);
+    if (item.kind === 'trimMasterLink' && item.to !== item.to.trim()) throw new Error(`trimMasterLink ${item.id} to must be an exact master id`);
     const key = `${item.kind}:${item.id}`;
     if (keys.has(key)) throw new Error(`duplicate repair ${key}`);
     keys.add(key);
@@ -117,8 +121,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   ];
   // Rows may only be linked to a master that already exists or that this plan creates.
   const createdMasterIds = new Set((plan.masterCreates ?? []).map((c) => c.id));
-  const linkedMasterIds = [...new Set([...(plan.trimMasterLinkRepairs ?? []).map((i) => clean(i.to)),
-    ...(plan.trimCreates ?? []).map((c) => clean(c.data.master_id))])].filter((id) => !createdMasterIds.has(id));
+  const linkedMasterIds = [...new Set([...(plan.trimMasterLinkRepairs ?? []).map((i) => i.to),
+    ...(plan.trimCreates ?? []).map((c) => String(c.data.master_id))])].filter((id) => !createdMasterIds.has(id));
   const linkRefs = linkedMasterIds.map((id) => db.collection('vehicle_master').doc(id));
   if (linkRefs.length && (await db.getAll(...linkRefs)).some((snapshot) => !snapshot.exists)) throw new Error('linked vehicle_master missing');
 
@@ -176,7 +180,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   for (const { kind, item, field, ref } of targets) {
     const entry = byPath[ref.path] ?? { ref, fields: {}, aliases: {} };
     if (entry.fields[field] !== undefined) throw new Error(`two repairs write ${ref.path}.${field}`);
-    entry.fields[field] = clean(item.to);
+    entry.fields[field] = field === 'master_id' ? item.to : clean(item.to);
     const aliasField = ALIAS_FIELD[kind];
     if (aliasField && clean(item.from)) entry.aliases[aliasField] = [...(entry.aliases[aliasField] ?? []), clean(item.from)];
     byPath[ref.path] = entry;
@@ -184,6 +188,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
 
   await db.runTransaction(async (transaction) => {
     const current = refs.length ? await transaction.getAll(...refs) : [];
+    // Linked masters and create targets are read inside the transaction too, so a concurrent delete/create aborts it.
+    if (linkRefs.length && (await transaction.getAll(...linkRefs)).some((snapshot) => !snapshot.exists)) throw new Error('transaction linked vehicle_master missing');
+    if (createRefs.length && (await transaction.getAll(...createRefs)).some((snapshot) => snapshot.exists)) throw new Error('transaction create target already exists');
     current.forEach((snapshot, index) => {
       if (!snapshot.exists || !matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
         throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
@@ -206,7 +213,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   readback.forEach((snapshot, index) => {
     const { kind, item, field } = targets[index]!;
     const data = snapshot.data();
-    if (clean(data?.[field]) !== clean(item.to)) throw new Error(`readback mismatch ${snapshot.ref.path}`);
+    const stored = field === 'master_id' ? data?.[field] : clean(data?.[field]);
+    if (stored !== (field === 'master_id' ? item.to : clean(item.to))) throw new Error(`readback mismatch ${snapshot.ref.path}`);
     const aliasField = ALIAS_FIELD[kind];
     if (aliasField) {
       // The old name must be kept as an alias, and aliases present before the repair must still be there.
@@ -219,7 +227,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const createReadback = createRefs.length ? await db.getAll(...createRefs) : [];
   createReadback.forEach((snapshot, index) => {
     const want = creates[index]!.c.data;
-    if (!snapshot.exists || Object.keys(want).some((k) => JSON.stringify(snapshot.data()?.[k]) !== JSON.stringify(want[k]))) {
+    if (!snapshot.exists || Object.keys(want).some((k) => stableDigest(snapshot.data()?.[k] ?? null) !== stableDigest(want[k] ?? null))) {
       throw new Error(`readback create mismatch ${snapshot.ref.path}`);
     }
   });
