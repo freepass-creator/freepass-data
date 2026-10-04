@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {auditValueFormats,planValueNormalize,auditTabConsistency,planTabConsistencyFix,canonCaptureRequest,canonValueCaptureRequest,planExcludeSupplierTab,mergeCanonCaptures} from '../scripts/supplier-input-sheet.mjs';
+import {auditValueFormats,planValueNormalize,auditTabConsistency,planTabConsistencyFix,canonCaptureRequest,canonValueCaptureRequest,planExcludeSupplierTab,mergeCanonCaptures,summaryFormula} from '../scripts/supplier-input-sheet.mjs';
 import {planSupplierInput,planSupplierDropdowns,planVehicleMasterDropdowns,planPolicySplit,planLayoutReorder,planColumnAdd,planLayoutChange,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec} from '../scripts/supplier-input-sheet.mjs';
 const now=Date.parse('2026-10-03T12:00:00Z');
 const legacy=inputSpec.legacyLayouts['2026-10-02'];
@@ -418,7 +418,7 @@ test('account removal: header-only capture needs no photo scan, deletes columns 
   assert.throws(()=>planLayoutChange(f,{...inputSpec,layoutChange:{...inputSpec.layoutChange,linkPlateFrom:'사진링크'}},now),/HOLD/);
 });
 test('layout removal without links: multiple removed columns are deleted right to left',()=>{
-  const spec=structuredClone(inputSpec);spec.layoutChange.remove=['차량상태','계좌번호','비고'];
+  const spec=structuredClone(inputSpec);spec.layoutChange.remove=['상품구분','계좌번호','비고'];
   spec.inputHeaders=spec.legacyLayouts[spec.layoutChange.from].inputHeaders.filter(h=>!spec.layoutChange.remove.includes(h));spec.summaryHeaders=[...spec.inputHeaders];
   const p=planLayoutChange(accountFixture(),spec,now),old=spec.legacyLayouts[spec.layoutChange.from].inputHeaders;
   const indices=p.requests.filter(r=>r.deleteDimension?.range.sheetId===3).map(r=>r.deleteDimension.range.startIndex);
@@ -510,4 +510,20 @@ test('month formula results retain TEXT in summary format fixes while supplier f
   const p=planTabConsistencyFix(f.snapshot,f.spec);assert.ok(p.requests.some(r=>r.repeatCell?.range.sheetId===0&&r.repeatCell.range.startRowIndex===1&&r.repeatCell.range.startColumnIndex===at&&r.repeatCell.cell.userEnteredFormat.numberFormat?.type==='TEXT'));
   canonPut(f,1,1,'입고일자','25-04',{userEnteredValue:{formulaValue:'=A2'},effectiveValue:{stringValue:'25-04'}});
   assert.equal(planValueNormalize(f.snapshot,f.spec,now).status,'HOLD');
+});
+test('summary formula keeps only 출고가능·즉시출고 rows and drops blank rows; status column follows the layout',()=>{
+  const H=inputSpec.inputHeaders,f=summaryFormula("ARRAYFORMULA(IF(ISBLANK('가'!A2:BV9),\"\",'가'!A2:BV9))",H);
+  assert.deepEqual(inputSpec.summaryKeepStatuses,['출고가능','즉시출고']);
+  assert.equal(f,`=LET(src,VSTACK(ARRAYFORMULA(IF(ISBLANK('가'!A2:BV9),"",'가'!A2:BV9))),keep,BYROW(src,LAMBDA(r,AND(SUM(ARRAYFORMULA(LEN(r)))>0,OR(INDEX(r,1,3)="출고가능",INDEX(r,1,3)="즉시출고")))),IFNA(FILTER(src,keep),""))`);
+  // 수식의 keep 조건을 그대로 읽어 표본 줄에 적용: 빈 줄 아님 AND 상태 칸이 목록 중 하나.
+  const conds=[...f.matchAll(/INDEX\(r,1,(\d+)\)="([^"]+)"/g)].map(m=>[Number(m[1])-1,m[2]]);
+  const keep=row=>row.some(v=>String(v).length>0)&&conds.some(([c,v])=>row[c]===v);
+  const at=H.indexOf('차량상태'),row=v=>{const r=H.map(()=>'');r[0]='회사';r[at]=v;return r;};
+  const sample=[row('출고가능'),row('즉시출고'),row('출고불가'),row('출고협의'),row('상품화중'),row('계약중'),row(''),H.map(()=>'')];
+  assert.deepEqual(sample.filter(keep).map(r=>r[at]),['출고가능','즉시출고']);
+  // 칸 순서가 바뀌면 차량상태가 있는 칸을 본다; 차량상태가 없거나 목록이 잘못되면 HOLD.
+  const moved=[...H];moved.splice(at,1);moved.push('차량상태');
+  assert.ok(summaryFormula('x',moved).includes(`INDEX(r,1,${moved.length})="출고가능"`));
+  assert.throws(()=>summaryFormula('x',H.filter(h=>h!=='차량상태')),/Summary status column missing/);
+  for(const bad of [[],['출고"가능'],[''],undefined])assert.throws(()=>summaryFormula('x',H,{...inputSpec,summaryKeepStatuses:bad}),/summaryKeepStatuses invalid/);
 });
