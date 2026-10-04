@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { captureFromBatchGet, sharedSheetTabs, sharedSheetCaptureRanges, type SheetsBatchGet } from '../src/adapters/shared-sheet-capture.js';
-import { readSheetsBatchGet } from '../src/infra/shared-sheet-capture-reader.js';
+import { captureFromBatchGet as rawCapture, sharedSheetTabs, sharedSheetCaptureRanges, SHEETS_GRID_META_FIELDS, type SheetsBatchGet, type SheetsGridMeta } from '../src/adapters/shared-sheet-capture.js';
+import { readSheetsBatchGet, readSheetsMetadata } from '../src/infra/shared-sheet-capture-reader.js';
+const ROWS = 1000;
+const META = (): SheetsGridMeta => ({ spreadsheetId: ID, sheets: sharedSheetTabs().map(title => ({ properties: { title, gridProperties: { rowCount: ROWS } } })) });
+const captureFromBatchGet = (id: string, raw: SheetsBatchGet, t: string) => rawCapture(id, raw, META(), t);
 const readSharedSheetCapture = async (id: string, ports: { accessToken: () => Promise<string>; now: () => string; fetcher: typeof fetch }) =>
-  captureFromBatchGet(id, await readSheetsBatchGet(id, sharedSheetCaptureRanges(), ports) as SheetsBatchGet, ports.now());
+  rawCapture(id, await readSheetsBatchGet(id, sharedSheetCaptureRanges(), ports) as SheetsBatchGet,
+    await readSheetsMetadata(id, SHEETS_GRID_META_FIELDS, ports) as SheetsGridMeta, ports.now());
 import { buildSharedSheetBatch, sharedSheetChannels, sharedSheetHeaders } from '../src/adapters/shared-sheet-source.js';
 import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
 import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
@@ -10,7 +14,7 @@ import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
 const ID = 'synthetic_spreadsheet_id_0001';
 const T = '2026-10-04T02:00:00.000Z';
 function batch(extra: Record<string, unknown[][]> = {}) {
-  return { spreadsheetId: ID, valueRanges: sharedSheetTabs().map(t => ({ values: [[...sharedSheetHeaders], ...(extra[t] ?? [])] })) };
+  return { spreadsheetId: ID, valueRanges: sharedSheetTabs().map(t => ({ range: `'${t}'!A1:BV${ROWS}`, values: [[...sharedSheetHeaders], ...(extra[t] ?? [])] })) };
 }
 
 describe('shared sheet capture reader', () => {
@@ -41,13 +45,26 @@ describe('shared sheet capture reader', () => {
     expect(() => captureFromBatchGet(ID, wide, T)).toThrow('SHARED_SHEET_CAPTURE_ROW_INVALID');
   });
 
+  it('claims complete only when every returned range is the whole expected tab, in order', () => {
+    const b = batch();
+    const swap = { ...b, valueRanges: [b.valueRanges[1]!, b.valueRanges[0]!, ...b.valueRanges.slice(2)] };
+    expect(() => captureFromBatchGet(ID, swap, T)).toThrow('SHARED_SHEET_CAPTURE_RANGE_MISMATCH');
+    const partial = { ...b, valueRanges: b.valueRanges.map((r, i) => i ? r : { ...r, range: r.range.replace(`BV${ROWS}`, 'BV5') }) };
+    expect(() => captureFromBatchGet(ID, partial, T)).toThrow('SHARED_SHEET_CAPTURE_RANGE_MISMATCH');
+    const narrow = { ...b, valueRanges: b.valueRanges.map((r, i) => i ? r : { ...r, range: r.range.replace('BV', 'H') }) };
+    expect(() => captureFromBatchGet(ID, narrow, T)).toThrow('SHARED_SHEET_CAPTURE_RANGE_MISMATCH');
+    const noRange = { ...b, valueRanges: b.valueRanges.map((r, i) => i ? r : { values: r.values }) };
+    expect(() => captureFromBatchGet(ID, noRange as SheetsBatchGet, T)).toThrow('SHARED_SHEET_CAPTURE_RANGE_MISMATCH');
+    expect(() => rawCapture(ID, b, { ...META(), spreadsheetId: 'other' }, T)).toThrow('SHARED_SHEET_CAPTURE_WRONG_SPREADSHEET');
+  });
+
   it('reads through one bearer-authorized batchGet and maps HTTP errors to codes', async () => {
     let seen: URL | undefined;
     const ok = await readSharedSheetCapture(ID, { accessToken: async () => 'tok', now: () => T,
       fetcher: (async (u: URL, init: RequestInit) => { seen = u; expect((init.headers as Record<string, string>).authorization).toBe('Bearer tok');
-        return new Response(JSON.stringify(batch())); }) as unknown as typeof fetch });
+        return new Response(JSON.stringify(u.pathname.endsWith(':batchGet') ? batch() : META())); }) as unknown as typeof fetch });
     expect(ok.tabs).toHaveLength(sharedSheetTabs().length);
-    expect(seen!.searchParams.getAll('ranges')).toHaveLength(sharedSheetTabs().length);
+    expect(seen!.searchParams.get('fields')).toBe(SHEETS_GRID_META_FIELDS);
     await expect(readSharedSheetCapture(ID, { accessToken: async () => 'tok', now: () => T,
       fetcher: (async () => new Response('', { status: 403 })) as unknown as typeof fetch })).rejects.toThrow('SHARED_SHEET_HTTP_403');
   });
