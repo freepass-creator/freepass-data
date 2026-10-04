@@ -139,3 +139,6 @@
 - 적용: `FIREBASE_PROJECT_ID=freepasserp5 AUTHORIZE_VEHICLE_NAME_REPAIR=<planDigest> VEHICLE_NAME_REPAIR_PLAN=<묶음 JSON> npx tsx src/jobs/apply-vehicle-name-reference-repair.ts --apply`
 - 실행기가 묶음 안에서: 사전조건, 비공개 백업, 한 트랜잭션, 최종 이름 유일성·trim_row_key·variants 다이제스트, 감사 기록, 되읽기.
 - 1차 적용 2026-10-04: 5묶음, 되읽기·감사 176·176·193·197·90, 재감사 차이 0(NEXT-START-HERE 같은 날 항목).
+- 2차 적용 2026-10-04: 2묶음, 되읽기·감사 171·160, 재감사 차이 0. #352(옛 마스터 퇴역 표시)·#353(마스터 최상위 trims 같이 고치기 — 관리 화면 세부트림 대조가 이 칸을 씀) 이후 실행기.
+- 2차에서 정한 것: QM6 2019·2023 부분변경 둘 다 «더 뉴 QM6 HZG»(FL 은 부분변경 이름이 없을 때만, 대표 10-04) · 티볼리 «더 뉴 티볼리 X170» · EV6 «EV6 CV»·«더 뉴 EV6 CV»·«더 뉴 EV6 GT CV» · 캐스퍼 «캐스퍼 일렉트릭 AX1» · 그랜저 2026 부분변경 «더 뉴 그랜저 GN7»(GN11 아님) · 볼트 «볼트 EV»·«볼트 EV FL»(공식 코드 없음) · 미니 3도어 «쿠퍼 F66»·5도어 «쿠퍼 F65», 세부트림 «C 에센셜»·«S 페이버드»·«S JCW»(S 의 JCW 사양).
+- 아직 남음: 마스터 gen_code(AX1e·CV1·X100·F66/F65)와 모델명 띄어쓰기는 정정기가 바꾸지 못하는 칸 — 다음 확장(이때 «variants 안 세부트림 ⊆ 최상위 trims» 검증도 코드에). 스타리아 세부트림(대표 답 대기), 렉스턴 스포츠 칸·V60 크로스컨트리 코드 보류.
