@@ -60,4 +60,19 @@ describe('policy correction domain validation', () => {
     expect(validatePolicyCorrectionPlan(plan([item({ field: 'age_21_cost', layer: 'salesPolicy', from: null, to: '불가' })]),
       { documents: docs(base) })).toMatchObject({ itemCount: 1 });
   });
+  it('refuses stored values whose shape is not what the corrector writes (never read as absent)', () => {
+    const sales = (field: string) => item({ field, layer: 'salesPolicy', from: null, to: '불가' });
+    const run = (stored: Record<string, unknown>, it = sales('age_21_cost')) => () => validatePolicyCorrectionPlan(plan([it]), { documents: docs(stored) });
+    expect(run({ sales_policy: { age_21_cost: '협의' } })).toThrow(/STORED_SHAPE_MISMATCH/);
+    expect(run({ sales_policy: { age_21_cost: 7 } })).toThrow(/STORED_SHAPE_MISMATCH/);
+    expect(run({ sales_policy: { age_21_cost: ['협의'] } })).toThrow(/STORED_SHAPE_MISMATCH/);
+    expect(run({ sales_policy: { age_21_cost: { source: '대표결정' } } })).toThrow(/STORED_SHAPE_MISMATCH/);
+    expect(run({ sales_policy: '협의' })).toThrow(/STORED_SHAPE_MISMATCH/);
+    expect(run({ sales_policy: ['x'] })).toThrow(/STORED_SHAPE_MISMATCH/);
+    expect(run({ driver_age_lowering: '협의', field_evidence: { driver_age_lowering: '협의' } }, item())).toThrow(/STORED_SHAPE_MISMATCH/);
+    expect(run({ field_evidence: 3 }, item())).toThrow(/STORED_SHAPE_MISMATCH/);
+    // a well-formed entry keeps its original stored value for the from check
+    expect(run({ sales_policy: { age_21_cost: { value: '협의', effectiveDate: '2026-10-01' } } }, item({ field: 'age_21_cost', layer: 'salesPolicy', from: '협의', to: '불가' }))).not.toThrow();
+    expect(run({ sales_policy: { age_21_cost: { value: '협의', effectiveDate: '2026-10-01' } } })).toThrow(/CONFLICT/);
+  });
 });

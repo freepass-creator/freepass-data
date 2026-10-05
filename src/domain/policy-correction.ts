@@ -120,6 +120,17 @@ const layerMap = (data: Record<string, unknown>, layer: PolicyCorrectionLayer): 
     : data;
 const storedEvidence = (data: Record<string, unknown>, layer: PolicyCorrectionLayer, field: string): Record<string, unknown> | undefined =>
   layer === 'salesPolicy' ? objectValue(objectValue(data.sales_policy)?.[field]) : objectValue(objectValue(data.field_evidence)?.[field]);
+/** The stored layer container / entry must have the shape this corrector writes (a map, entries as maps with a «value»).
+ * Anything else (string, number, array …) is refused — never read as «absent», so «from: null» cannot overwrite it. */
+export const assertStoredShape = (policyCode: string, data: Record<string, unknown>, layer: PolicyCorrectionLayer, field: string) => {
+  const container = layer === 'salesPolicy' ? data.sales_policy : data.field_evidence;
+  const label = layer === 'salesPolicy' ? 'sales_policy' : 'field_evidence';
+  if (container !== undefined && container !== null && !objectValue(container)) throw new Error(`STORED_SHAPE_MISMATCH ${policyCode}.${label}`);
+  const entry = objectValue(container)?.[field];
+  if (entry === undefined || entry === null) return;
+  const entryMap = objectValue(entry);
+  if (!entryMap || (layer === 'salesPolicy' && !('value' in entryMap))) throw new Error(`STORED_SHAPE_MISMATCH ${policyCode}.${label}.${field}`);
+};
 export const storedPolicyValue = (data: Record<string, unknown>, layer: PolicyCorrectionLayer, field: string): unknown => {
   if (layer === 'salesPolicy') return objectValue(objectValue(data.sales_policy)?.[field])?.value;
   return data[field];
@@ -192,6 +203,7 @@ export function validatePolicyCorrectionPlan(plan: PolicyCorrectionPlan, context
     if (!data.provider_company_code) throw new Error(`SUPPLIER_CODE_MISSING ${policyCode}`);
     for (const item of items) {
       if (data.provider_company_code !== item.supplierCode) throw new Error(`SUPPLIER_MISMATCH ${policyCode}`);
+      assertStoredShape(policyCode, data, item.layer, item.field);
       const current = storedPolicyValue(data, item.layer, item.field);
       if (!exactSame(current === undefined ? null : current, item.from)) throw new Error(`CONFLICT ${policyCode}.${item.field}`);
       const lastDate = lastEvidenceDate(data, item.layer, item.field);
