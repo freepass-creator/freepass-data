@@ -27,17 +27,22 @@ const query = (collection: string, filters: Array<[string, unknown]> = [], cap?:
   get: async () => runQuery(query(collection, filters, cap)),
 });
 
+// Like the real client: Firestore.getAll() with no references throws (10-05 운영 실행에서 커밋 뒤 감사 되읽기가 이것으로 실패).
+const getAllLikeFirestore = (refs: Ref[]) => {
+  if (!refs.length) throw new Error('Function "Firestore.getAll()" requires at least 1 argument');
+  return refs.map(snap);
+};
 const runQuery = (q: Query) => {
   const docs = [...store.entries()].filter(([path, data]) => path.startsWith(`${q.collection}/`) && q.filters.every(([f, v]) => data[f] === v)).slice(0, q.cap ?? Infinity);
   return { empty: docs.length === 0, size: docs.length, docs: docs.map(([path, data]) => ({ id: path.split('/')[1]!, data: () => structuredClone(data) })) };
 };
 const db = {
   collection: (c: string) => ({ doc: (id: string) => ref(c, id), where: (f: string, op: string, v: unknown) => query(c).where(f, op, v), select: (...f: string[]) => query(c).select(...f) }),
-  getAll: async (...refs: Ref[]) => refs.map(snap),
+  getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
   runTransaction: async (fn: (t: unknown) => Promise<void>) => {
     const writes: Array<() => void> = [];
     const t = {
-      getAll: async (...refs: Ref[]) => refs.map(snap),
+      getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
       get: async (q: Query) => runQuery(q),
       update: (r: Ref, u: Record<string, unknown>) => writes.push(() => applyUpdate(r.path, u)),
       create: (r: Ref, d: Record<string, unknown>) => writes.push(() => {
@@ -56,7 +61,7 @@ vi.mock('firebase-admin/firestore', () => ({
 vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: () => ({}) }));
 vi.mock('node:fs/promises', () => ({ mkdir: async () => undefined, writeFile: async () => undefined }));
 
-const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
+const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN, readbackAuditEvents } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
 
 beforeEach(() => {
   store.clear();
@@ -709,5 +714,23 @@ describe('product source correction apply path', () => {
     expect(doc.원문_정정_이력).toHaveLength(2);
     expect((doc.원문_정정_이력 as unknown[])[0]).toEqual(previous);
     expect((doc.원문_정정_이력 as unknown[])[1]).toEqual(doc.원문_정정);
+  });
+});
+
+describe('audit readback', () => {
+  const fakeDb = (docs: Array<{ reason: string }>) => ({ getAll: async (...refs: number[]) => {
+    if (!refs.length) throw new Error('Function "Firestore.getAll()" requires at least 1 argument');
+    return refs.map((i) => ({ exists: true, data: () => docs[i] }));
+  } });
+  it('skips the read only when there are no audits and no refs', async () => {
+    await expect(readbackAuditEvents(fakeDb([]), [], [], 'm')).resolves.toEqual([]);
+  });
+  it('refuses refs that do not match the audits (count) instead of skipping', async () => {
+    await expect(readbackAuditEvents(fakeDb([{ reason: 'a' }]), [], [{ reason: 'a' }], 'readback audit mismatch')).rejects.toThrow(/0 audit refs for 1 audits/);
+    await expect(readbackAuditEvents(fakeDb([{ reason: 'a' }]), [0], [], 'readback audit mismatch')).rejects.toThrow(/1 audit refs for 0 audits/);
+  });
+  it('checks each audit reason', async () => {
+    await expect(readbackAuditEvents(fakeDb([{ reason: 'a' }]), [0], [{ reason: 'a' }], 'm')).resolves.toHaveLength(1);
+    await expect(readbackAuditEvents(fakeDb([{ reason: 'x' }]), [0], [{ reason: 'a' }], 'readback audit mismatch')).rejects.toThrow(/readback audit mismatch/);
   });
 });

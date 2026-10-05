@@ -408,6 +408,18 @@ const ALIAS_FIELD: Partial<Record<string, AliasField>> = {
   masterModel: 'model_aliases', trimModel: 'model_aliases', masterGenCode: 'gen_code_aliases',
 };
 
+/**
+ * Reads back written audit events. The refs must be exactly the audits' refs (same count); only when both are empty
+ * is the read skipped — Firestore.getAll() refuses an empty list, and a mismatch is a bug, not «nothing to check».
+ */
+export async function readbackAuditEvents<R>(db: { getAll: (...refs: R[]) => Promise<Array<{ exists: boolean; data: () => Record<string, unknown> | undefined }>> }, refs: R[], audits: Array<{ reason: string }>, message: string) {
+  if (refs.length !== audits.length) throw new Error(`${message}: ${refs.length} audit refs for ${audits.length} audits`);
+  if (!refs.length) return [];
+  const readback = await db.getAll(...refs);
+  if (readback.length !== audits.length || readback.some((s, index) => !s.exists || s.data()?.reason !== audits[index]!.reason)) throw new Error(message);
+  return readback;
+}
+
 export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan) {
   const counts = validateVehicleNameRepairPlan(plan);
   const planDigest = stableDigest(plan);
@@ -912,11 +924,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       throw new Error(`readback create mismatch ${snapshot.ref.path}`);
     }
   });
-  const auditReadback = await db.getAll(...auditRefs);
-  if (auditReadback.some((s, index) => !s.exists || s.data()?.reason !== audits[index]!.reason)) throw new Error('readback audit mismatch');
+  // A plan with only source corrections has no other audits (Firestore.getAll() refuses an empty list).
+  const auditReadback = await readbackAuditEvents(db, auditRefs, audits, 'readback audit mismatch');
   const activeSourceCorrectionAudits = sourceCorrectionAudits.filter((_, index) => activeSourceCorrectionIndexes.has(index));
   const activeSourceCorrectionAuditRefs = sourceCorrectionAuditRefs.filter((_, index) => activeSourceCorrectionIndexes.has(index));
-  const sourceCorrectionAuditReadback = activeSourceCorrectionAuditRefs.length ? await db.getAll(...activeSourceCorrectionAuditRefs) : [];
-  if (sourceCorrectionAuditReadback.some((s, index) => !s.exists || s.data()?.reason !== activeSourceCorrectionAudits[index]!.reason)) throw new Error('readback source correction audit mismatch');
+  const sourceCorrectionAuditReadback = await readbackAuditEvents(db, activeSourceCorrectionAuditRefs, activeSourceCorrectionAudits, 'readback source correction audit mismatch');
   return { runId, backupPath, ...counts, skippedAlreadyApplied, readbackCount: readback.length + identityReadback.length + activeSourceCorrectionIndexes.size + createReadback.length + variantReadback.length + retireReadback.length, auditCount: auditReadback.length + sourceCorrectionAuditReadback.length };
 }
