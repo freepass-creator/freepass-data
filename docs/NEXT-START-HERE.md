@@ -6,7 +6,7 @@
 - 대상 revision: `work/freepass-data/sheet-blank-fill-adapter-20261005` `106d565c788e8ef39cf8b136951eb8e55f069913` 기반.
 - 변경: `src/application/sheet-blank-fill-input.ts`, `src/jobs/export-sheet-blank-fill-input.ts`, reader FORMULA 옵션, `export:sheet-blank-fill-input`, 가상 데이터 테스트 8개, `docs/SHEET-BLANK-FILL.md`.
 - 검증: `npm.cmd run build` PASS, `npx.cmd vitest run tests/sheet-blank-fill-input.test.ts` PASS. 네트워크 금지로 실제 Sheets/Firestore 읽기와 push는 실행하지 않음(BLOCKED_NETWORK).
-- next_start_here: 비공개 환경에서 export → plan → 줄확인 지원 시트고치기(ai-ops#62 이상)로 dry-run, 처음 2주는 사람이 `report.json`/줄확인을 확인. products 확정 기준은 `확정 === true` 또는 `검수상태 === "확정"`.
+- next_start_here: 비공개 환경에서 export → plan → 줄확인 지원 시트고치기(ai-ops#62 이상)로 dry-run, 처음 2주는 사람이 `report.json`/줄확인을 확인. products 확정 기준은 `확정 === true` 그리고 `검수상태 === "확정"` 둘 다(하나라도 아니면 confirmed false).
 
 ## 2026-10-04 Vehicle Master 직접 정본 전환
 
