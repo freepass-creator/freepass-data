@@ -66,11 +66,41 @@ function normalizeRows(rows: unknown[][]): Array<Array<string | number | null>> 
   return rows.map((row) => Array.from({ length: width }, (_, index) => cell(row[index])));
 }
 
-function normalizeFormulaRows(rows: unknown[][], rowCount: number, width: number): string[][] {
-  return Array.from({ length: rowCount }, (_, rowIndex) => {
-    const row = rows[rowIndex] ?? [];
-    return Array.from({ length: width }, (_, index) => formulaCell(row[index]));
+function present(value: unknown): boolean {
+  return value !== null && value !== undefined && !(typeof value === 'string' && value.trim() === '');
+}
+
+function assertFormulaShape(valueRows: unknown[][], formulaRows: unknown[][]): void {
+  for (let rowIndex = 0; rowIndex < valueRows.length; rowIndex++) {
+    const valueRow = valueRows[rowIndex] ?? [];
+    const formulaRow = formulaRows[rowIndex];
+    for (let col = 0; col < valueRow.length; col++) {
+      if (!present(valueRow[col])) continue;
+      if (!formulaRow || col >= formulaRow.length || formulaRow[col] === undefined) {
+        throw new Error('SHEET_BLANK_FILL_INPUT_SHAPE');
+      }
+    }
+  }
+}
+
+function normalizeTabRows(valueRawRows: unknown[][], formulaRawRows: unknown[][]): {
+  headerRow: Array<string | number | null>;
+  valueRows: Array<Array<string | number | null>>;
+  formulaRows: string[][];
+} {
+  assertFormulaShape(valueRawRows, formulaRawRows);
+  const dataRowCount = Math.max(Math.max(0, valueRawRows.length - 1), Math.max(0, formulaRawRows.length - 1));
+  const width = Math.max(0, ...valueRawRows.map((row) => row.length), ...formulaRawRows.map((row) => row.length));
+  const normalizedValues = normalizeRows(valueRawRows).map((row) => Array.from({ length: width }, (_, index) => row[index] ?? null));
+  const dataFormulaRows = Array.from({ length: dataRowCount }, (_, dataIndex) => {
+    const formulaRow = formulaRawRows[dataIndex + 1] ?? [];
+    return Array.from({ length: width }, (_, index) => formulaCell(formulaRow[index]));
   });
+  return {
+    headerRow: normalizedValues[0] ?? [],
+    valueRows: Array.from({ length: dataRowCount }, (_, dataIndex) => normalizedValues[dataIndex + 1] ?? Array.from({ length: width }, () => null)),
+    formulaRows: dataFormulaRows,
+  };
 }
 
 function metadataTabIds(meta: Metadata): Record<string, number> {
@@ -108,11 +138,9 @@ export async function exportSheetBlankFillInput(deps: ExportDeps) {
   const rawTabs: SheetBlankFillRawInput['tabs'] = {};
   const plates: string[] = [];
   for (const tab of tabs) {
-    const rows = normalizeRows(byTab[tab] ?? []);
-    if (rows.length > MAX_ROWS_PER_TAB + 1) throw new Error('SHEET_BLANK_FILL_TAB_TOO_LARGE');
-    const headerRow = rows[0] ?? [];
-    const valueRows = rows.slice(1);
-    const formulaRows = normalizeFormulaRows((formulaByTab[tab] ?? []).slice(1), valueRows.length, headerRow.length || Math.max(0, ...valueRows.map((row) => row.length)));
+    const rawValueRows = byTab[tab] ?? [];
+    if (rawValueRows.length > MAX_ROWS_PER_TAB + 1) throw new Error('SHEET_BLANK_FILL_TAB_TOO_LARGE');
+    const { headerRow, valueRows, formulaRows } = normalizeTabRows(rawValueRows, formulaByTab[tab] ?? []);
     rawTabs[tab] = { headerRow, valueRows, formulaRows };
     const plateCol = headerRow.map((item) => text(item)).indexOf('차량번호');
     if (plateCol >= 0) for (const row of valueRows) {

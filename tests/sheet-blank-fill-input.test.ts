@@ -197,6 +197,36 @@ describe('sheet blank fill input export job', () => {
     await expect(runExport([batch(baseRows()), batch(baseRows(), true), batch(baseRows()), batch(baseRows(), true)])).rejects.toThrow('SHEET_BLANK_FILL_INPUT_SHAPE');
   });
 
+  it('fails closed when FORMULA ranges are present but values are empty arrays', async () => {
+    const emptyFormulaValues = Object.fromEntries(titles.map((title) => [title, []])) as Record<string, unknown[][]>;
+    await expect(runExport([batch(baseRows()), batch(emptyFormulaValues), batch(baseRows()), batch(emptyFormulaValues)])).rejects.toThrow('SHEET_BLANK_FILL_INPUT_SHAPE');
+  });
+
+  it('fails closed when a value row has no matching FORMULA row', async () => {
+    const formulas = baseRows();
+    formulas[jobTab] = [headers];
+    await expect(runExport([batch(baseRows()), batch(formulas), batch(baseRows()), batch(formulas)])).rejects.toThrow('SHEET_BLANK_FILL_INPUT_SHAPE');
+  });
+
+  it('fails closed when a non-empty value cell has no matching FORMULA cell', async () => {
+    const formulas = baseRows();
+    formulas[jobTab] = [headers, headers.slice(0, makerCol)];
+    await expect(runExport([batch(baseRows()), batch(formulas), batch(baseRows()), batch(formulas)])).rejects.toThrow('SHEET_BLANK_FILL_INPUT_SHAPE');
+  });
+
+  it('keeps extra FORMULA rows and records their formula columns when value rows are empty', async () => {
+    const values = baseRows();
+    values[jobTab] = [headers];
+    const formulas = baseRows();
+    const formulaOnlyRow = headers.map(() => '');
+    formulaOnlyRow[makerCol] = '=IF(A2="","",FALSE)';
+    formulas[jobTab] = [headers, formulaOnlyRow];
+    const { artifact } = await runExport([batch(values), batch(formulas), batch(values), batch(formulas)], values);
+    expect(artifact.tabs[jobTab]!.rows).toHaveLength(1);
+    expect(artifact.tabs[jobTab]!.rows[0]!.formulaCols).toContain(makerCol);
+    expect(fills(planSheetBlankFill(artifact))).toHaveLength(0);
+  });
+
   it('keeps header-name mapping when a tab header order changes', async () => {
     const movedHeaders = [...headers];
     const [removed] = movedHeaders.splice(makerCol, 1);

@@ -38,6 +38,8 @@ npm.cmd run plan:sheet-blank-fill
 
 `export:sheet-blank-fill-input`은 쓰기 0 읽기 전용 job이다. `SHEET_BLANK_FILL_SPREADSHEET`에는 비공개 시트 ID를, `SHEET_BLANK_FILL_INPUT_OUT`에는 체크아웃 밖 비공개 출력 파일의 절대경로를 넣는다. 공급사 탭은 `contracts/supplier-input-sheet-spec.v1.json`의 `supplierChannels.sharedInputSheet` 탭만 읽고, 읽기 순서는 값 `UNFORMATTED_VALUE` → 수식 `FORMULA` → 값 `UNFORMATTED_VALUE` → 수식 `FORMULA`다. 값 앞뒤와 수식 앞뒤가 모두 같아야 진행하며, FORMULA 응답 범위 수가 요청 수와 다르거나 누락되면 `SHEET_BLANK_FILL_INPUT_SHAPE` 로 멈춘다. 한 탭의 데이터 행이 5,000행을 초과하면 `SHEET_BLANK_FILL_TAB_TOO_LARGE` 로 멈춘다.
 
+FORMULA response is not padded or defaulted. For every non-empty `UNFORMATTED_VALUE` cell, the same row/column in the `FORMULA` response must exist and must not be `undefined`; `values: []`, a missing FORMULA row, a shorter FORMULA row, or a missing FORMULA cell for a non-empty value cell stops with `SHEET_BLANK_FILL_INPUT_SHAPE`. Extra FORMULA rows are allowed; formula cells on value-empty rows are still recorded in `formulaCols`, and the planner skips those rows when they have no plate.
+
 ```powershell
 $env:SHEET_BLANK_FILL_SPREADSHEET="<private sheet id>"
 $env:SHEET_BLANK_FILL_INPUT_OUT="D:\private\sheet-blank-fill\input.json"
