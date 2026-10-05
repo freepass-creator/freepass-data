@@ -15,7 +15,7 @@
 ## 입력 필수 사항(검토 반영 2026-10-05)
 
 - 모든 행에 formulaCols(수식 칸 열 인덱스, 없으면 빈 배열)가 있어야 한다 — 수식 읽기(FORMULA)를 캡처에 포함하지 않으면 SHEET_BLANK_FILL_FORMULA_READ_REQUIRED 로 멈춘다(결과가 빈 글자인 수식 칸을 빈 칸으로 오인하지 않기 위해).
-- policyLinks 값은 {code, plate} — 정책확인 줄의 차량번호가 시트 줄의 차량번호와 다르면 POLICY_LINK_MISMATCH 로 건너뛴다(정렬 변경 대비).
+- policyLinks 값은 {code, plate} — 정책확인 탭에는 차량번호 열이 없으므로 시트 줄 차량번호의 products 문서 `policy_code` 가 정책확인 정책코드와 같을 때만 만든다. 상품 문서가 없거나 코드가 다르면 연결하지 않고 정책 칸은 NO_POLICY_LINK 로 건너뛴다.
 - 숫자 칸(연식·배기량·인승)의 정본 값은 순수 숫자여야 한다. «1,598»·«2024년» 같은 값은 INVALID_NUMBER 로 건너뛴다(글자로 넣지 않는다).
 
 ## 줄확인(2026-10-05)
@@ -33,6 +33,23 @@ npm.cmd run plan:sheet-blank-fill
 ```
 
 `plan.json`은 시트고치기 엔진에 넘길 계획이다. 이 저장소의 계획기는 적용하지 않는다.
+
+## 읽기 어댑터
+
+`export:sheet-blank-fill-input`은 쓰기 0 읽기 전용 job이다. `SHEET_BLANK_FILL_SPREADSHEET`에는 비공개 시트 ID를, `SHEET_BLANK_FILL_INPUT_OUT`에는 체크아웃 밖 비공개 출력 파일의 절대경로를 넣는다. 공급사 탭은 `contracts/supplier-input-sheet-spec.v1.json`의 `supplierChannels.sharedInputSheet` 탭만 읽고, 읽기 순서는 값 `UNFORMATTED_VALUE` → 수식 `FORMULA` → 값 `UNFORMATTED_VALUE` → 수식 `FORMULA`다. 값 앞뒤와 수식 앞뒤가 모두 같아야 진행하며, FORMULA 응답 범위 수가 요청 수와 다르거나 누락되면 `SHEET_BLANK_FILL_INPUT_SHAPE` 로 멈춘다. 한 탭의 데이터 행이 5,000행을 초과하면 `SHEET_BLANK_FILL_TAB_TOO_LARGE` 로 멈춘다.
+
+FORMULA response is not padded or defaulted. For every non-empty `UNFORMATTED_VALUE` cell, the same row/column in the `FORMULA` response must exist and must not be `undefined`; `values: []`, a missing FORMULA row, a shorter FORMULA row, or a missing FORMULA cell for a non-empty value cell stops with `SHEET_BLANK_FILL_INPUT_SHAPE`. Extra FORMULA rows are allowed; formula cells on value-empty rows are still recorded in `formulaCols`, and the planner skips those rows when they have no plate.
+
+값이 빈 셀의 FORMULA 누락은 API가 행 끝의 빈 셀을 줄이는 특성상 구별할 수 없다. 마지막 방어는 시트고치기 엔진이 쓰기 직전 FORMULA를 다시 읽어 수식 칸을 거부하고 종료 4로 멈추는 것이다.
+
+```powershell
+$env:SHEET_BLANK_FILL_SPREADSHEET="<private sheet id>"
+$env:SHEET_BLANK_FILL_INPUT_OUT="D:\private\sheet-blank-fill\input.json"
+npm.cmd run export:sheet-blank-fill-input
+npm.cmd run plan:sheet-blank-fill
+```
+
+이후 `plan.json`은 줄확인 지원 시트고치기(ai-ops#62 이상)로만 시험 실행·적용한다. 처음 2주는 `report.json`의 차이/스킵과 `plan.json` 줄확인을 사람이 확인한 뒤 적용한다.
 
 ## 후속
 

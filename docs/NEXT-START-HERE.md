@@ -1,5 +1,13 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-05 공통 시트 빈 칸 채우기 읽기 어댑터
+
+- 목적: 기존 빈 칸 채우기 계획기의 입력 JSON을 공통 시트 + FreePass Data products/policy에서 읽기 전용으로 만든다. 시트·Firestore 쓰기 0, 커밋·push 없음.
+- 대상 revision: `work/freepass-data/sheet-blank-fill-adapter-20261005` `106d565c788e8ef39cf8b136951eb8e55f069913` 기반.
+- 변경: `src/application/sheet-blank-fill-input.ts`, `src/jobs/export-sheet-blank-fill-input.ts`, reader FORMULA 옵션, `export:sheet-blank-fill-input`, 가상 데이터 테스트 8개, `docs/SHEET-BLANK-FILL.md`.
+- 검증: `npm.cmd run build` PASS, `npx.cmd vitest run tests/sheet-blank-fill-input.test.ts` PASS. 네트워크 금지로 실제 Sheets/Firestore 읽기와 push는 실행하지 않음(BLOCKED_NETWORK).
+- next_start_here: 비공개 환경에서 export → plan → 줄확인 지원 시트고치기(ai-ops#62 이상)로 dry-run, 처음 2주는 사람이 `report.json`/줄확인을 확인. products 확정 기준은 `확정 === true` 그리고 `검수상태 === "확정"` 둘 다(하나라도 아니면 confirmed false).
+
 ## 2026-10-05 Iancar policy sync transaction hardening
 
 - RP031 policy sync intentionally refuses missing policy documents: `RP031_S01`~`RP031_S04` must already exist, and the sync updates those documents instead of recreating the old `set(merge)` implicit-create path.
@@ -392,7 +400,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ### 2026-10-05 후속 목록 (정책 정정기·빈 칸 채우기 반영 뒤)
 
 - [완료 2026-10-05] 이안카 정책 동기화(`src/infra/iancar-policy-sync-firestore.ts`): 상품 119 + 정책 4를 한 `db.runTransaction`으로 묶고 사전 `updateTime` 조건을 재확인한다. 소유 가드(#388)는 백업·쓰기 전과 트랜잭션 내부 현재 데이터 기준으로 모두 검사한다.
-- 빈 칸 채우기 계획기: 프리패스 데이터(products·policy) → 입력 JSON 읽기 전용 어댑터와 매일 박제 뒤 연결, 정본 차량값 `confirmed` 기준 정하기. 적용은 줄확인 지원 시트고치기(ai-ops#62)로만.
+- 빈 칸 채우기 읽기 어댑터: 완료(confirmed 기준 = products `확정 === true` 그리고 `검수상태 === "확정"` 둘 다). 적용은 줄확인 지원 시트고치기(ai-ops#62)로만.
 - 배움 → 프리패스 데이터 다리 코드(docs/POLICY-CORRECTION.md 설계 메모).
 
 ### 2026-10-05 이안카 정책 동기화 한 트랜잭션
