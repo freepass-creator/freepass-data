@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import type { AuditEvent } from '../domain/catalog.js';
 import {
+  isPlainObject,
   policyCorrectionItemDigest,
   storedPolicyValue,
   validatePolicyCorrectionPlan,
@@ -17,7 +18,7 @@ import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { readbackAuditEvents } from './vehicle-name-reference-repair-firestore.js';
 
 type Snapshot = { ref: { path: string; id: string; parent?: { id: string } }; exists: boolean; data: () => Record<string, unknown> | undefined; updateTime?: { toMillis: () => number } };
-const objectValue = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+const objectValue = (value: unknown): Record<string, unknown> => (isPlainObject(value) ? value : {});
 const sameStored = (data: Record<string, unknown>, item: PolicyCorrectionItem) => storedPolicyValue(data, item.layer, item.field) === item.to;
 const storedEvidence = (data: Record<string, unknown>, item: PolicyCorrectionItem) =>
   item.layer === 'salesPolicy' ? objectValue(objectValue(data.sales_policy)[item.field]) : objectValue(objectValue(data.field_evidence)[item.field]);

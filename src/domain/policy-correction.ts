@@ -111,8 +111,13 @@ const dateOnly = (value: unknown): string | null => {
   if (ts && typeof ts === 'object' && typeof ts.toDate === 'function') return dateOnly(ts.toDate());
   return isoDateTime(value) ? String(value).slice(0, 10) : null;
 };
-const objectValue = (value: unknown): Record<string, unknown> | undefined =>
-  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+// A «map» is a plain object only — Date, Firestore Timestamp / GeoPoint / DocumentReference, arrays and class instances are not maps.
+export const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+const objectValue = (value: unknown): Record<string, unknown> | undefined => (isPlainObject(value) ? value : undefined);
 // salesPolicy entries are stored as { value, …evidence }; compare the plain values, never the wrapper objects.
 const layerMap = (data: Record<string, unknown>, layer: PolicyCorrectionLayer): Record<string, unknown> =>
   layer === 'salesPolicy'

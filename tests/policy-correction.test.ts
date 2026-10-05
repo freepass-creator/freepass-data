@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validatePolicyCorrectionPlan, type PolicyCorrectionPlan } from '../src/domain/policy-correction.js';
+import { isPlainObject, validatePolicyCorrectionPlan, type PolicyCorrectionPlan } from '../src/domain/policy-correction.js';
 
 const item = (over: Partial<PolicyCorrectionPlan['items'][number]> = {}): PolicyCorrectionPlan['items'][number] => ({
   policyCode: 'POL-0023',
@@ -74,5 +74,15 @@ describe('policy correction domain validation', () => {
     // a well-formed entry keeps its original stored value for the from check
     expect(run({ sales_policy: { age_21_cost: { value: '협의', effectiveDate: '2026-10-01' } } }, item({ field: 'age_21_cost', layer: 'salesPolicy', from: '협의', to: '불가' }))).not.toThrow();
     expect(run({ sales_policy: { age_21_cost: { value: '협의', effectiveDate: '2026-10-01' } } })).toThrow(/CONFLICT/);
+  });
+  it('does not accept Date, Timestamp-like or class instances as stored maps (plain objects only)', () => {
+    class FakeTimestamp { seconds = 1; nanoseconds = 0; toDate() { return new Date(0); } }
+    const salesItem = item({ field: 'age_21_cost', layer: 'salesPolicy', from: null, to: '불가' });
+    for (const bad of [new Date('2026-10-01'), new FakeTimestamp(), Object.create({ inherited: true })]) {
+      expect(() => validatePolicyCorrectionPlan(plan([salesItem]), { documents: docs({ sales_policy: { age_21_cost: bad } }) })).toThrow(/STORED_SHAPE_MISMATCH/);
+      expect(() => validatePolicyCorrectionPlan(plan([salesItem]), { documents: docs({ sales_policy: bad }) })).toThrow(/STORED_SHAPE_MISMATCH/);
+      expect(() => validatePolicyCorrectionPlan(plan([item()]), { documents: docs({ driver_age_lowering: '협의', field_evidence: { driver_age_lowering: bad } }) })).toThrow(/STORED_SHAPE_MISMATCH/);
+    }
+    expect(isPlainObject(Object.create(null))).toBe(true);
   });
 });
