@@ -532,3 +532,77 @@ describe('product identity repair apply path', () => {
     } finally { db.runTransaction = original; }
   });
 });
+
+describe('product source correction apply path', () => {
+  const correction = {
+    차명: '쏘나타',
+    연식: '2021',
+    최초등록: null,
+    연료: '가솔린',
+    배기량: '1999',
+    출처: '외부 차량번호 사양 조회',
+    조회일: '2026-10-05',
+    비고: '원문으로 단정 불가',
+  };
+
+  it('archives a product source correction without changing 원문', async () => {
+    store.set('products/p-source', { 원문: { supplier: 'first raw' } });
+    const result = await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productSourceCorrections: [{ id: 'p-source', correction, evidence: 'plate lookup result' }] });
+    expect(store.get('products/p-source')).toMatchObject({
+      원문: { supplier: 'first raw' },
+      원문_정정: { ...correction, 기록시각: expect.stringMatching(/^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/), sourceDigest: 'v1' },
+      원문_정정_이력: [{ ...correction, 기록시각: expect.stringMatching(/^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/), sourceDigest: 'v1' }],
+      vehicle_name_reference_checked_at: 'ts',
+      vehicle_name_reference_source_digest: 'v1',
+    });
+    expect(result).toMatchObject({ productSourceCorrectionCount: 1, readbackCount: 1, auditCount: 1 });
+    const audit = [...store.entries()].find(([k]) => k.startsWith('audit_events/'))![1];
+    expect(audit.before).toEqual({ 원문_정정: null });
+    expect(audit.after).toEqual({ 원문_정정: { ...correction, sourceDigest: 'v1' } });
+  });
+
+  it('combines source correction with a product trim repair for the same product', async () => {
+    store.set('products/p-source', { 원문: 'raw text', trim_name: 'Old Trim' });
+    const result = await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productTrimRepairs: [{ id: 'p-source', from: 'Old Trim', to: 'New Trim' }],
+      productSourceCorrections: [{ id: 'p-source', correction, evidence: 'plate lookup result' }] });
+    expect(store.get('products/p-source')).toMatchObject({
+      원문: 'raw text',
+      trim_name: 'New Trim',
+      원문_정정: { ...correction, 기록시각: expect.stringMatching(/^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/), sourceDigest: 'v1' },
+    });
+    expect(result).toMatchObject({ productTrimCount: 1, productSourceCorrectionCount: 1, readbackCount: 2, auditCount: 2 });
+  });
+
+  it('rejects missing product and catches concurrent source-correction changes', async () => {
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productSourceCorrections: [{ id: 'missing-source', correction, evidence: 'plate lookup result' }] })).rejects.toThrow(/target missing/);
+    store.set('products/p-source', { 원문: 'raw text', 원문_정정: { ...correction, sourceDigest: 'old' } });
+    const original = db.runTransaction;
+    db.runTransaction = async (fn) => {
+      store.set('products/p-source', { ...store.get('products/p-source')!, 원문_정정: { ...correction, sourceDigest: 'changed' } });
+      return original(fn);
+    };
+    try {
+      await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+        productSourceCorrections: [{ id: 'p-source', correction, evidence: 'plate lookup result' }] }))
+        .rejects.toThrow(/productSourceCorrection precondition changed/);
+    } finally { db.runTransaction = original; }
+    expect(store.get('products/p-source')!.원문_정정).toMatchObject({ sourceDigest: 'changed' });
+  });
+
+  it('catches a 원문 change between backup and transaction', async () => {
+    store.set('products/p-source', { 원문: 'raw text' });
+    const original = db.runTransaction;
+    db.runTransaction = async (fn) => {
+      store.set('products/p-source', { ...store.get('products/p-source')!, 원문: 'changed raw text' });
+      return original(fn);
+    };
+    try {
+      await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+        productSourceCorrections: [{ id: 'p-source', correction, evidence: 'plate lookup result' }] }))
+        .rejects.toThrow(/original source changed/);
+    } finally { db.runTransaction = original; }
+  });
+});
