@@ -148,6 +148,17 @@ describe('iancar policy sync transaction', () => {
     expect(store.get('policy/RP031_S04')!.data).toMatchObject({ provider_company_code: 'RP031', mileage_upcharge_per_10000km: IANCAR_POLICY_UPCHARGES.RP031_S04 });
   });
 
+  it('completes when an original product had no policy code and preserves null original source', async () => {
+    store.get('products/p-0')!.data = { car_number: plate(0) };
+    const result = await call();
+    expect(result).toMatchObject({ matched: 119 });
+    expect(store.get('products/p-0')!.data).toMatchObject({
+      policy_code: 'RP031_S01',
+      policy_code_source_original: null,
+      policy_reference_checked_at: 'server-ts',
+    });
+  });
+
   it('does not update products when a policy precondition changes inside the transaction', async () => {
     beforeTransaction = () => { store.get('policy/RP031_S02')!.updateTime.nanoseconds += 1; };
     await expect(call()).rejects.toThrow(/transaction precondition changed policy\/RP031_S02/);
@@ -189,6 +200,30 @@ describe('iancar policy sync transaction', () => {
   it('throws when product readback finds a mismatched policy code', async () => {
     afterTransaction = () => { store.get('products/p-33')!.data.policy_code = 'RP031_S04'; };
     await expect(call()).rejects.toThrow(/Product readback mismatch products\/p-33/);
+  });
+
+  it('throws when product readback finds a mismatched preserved original policy code', async () => {
+    afterTransaction = () => { store.get('products/p-44')!.data.policy_code_source_original = 'DRIFTED'; };
+    await expect(call()).rejects.toThrow(/Product readback mismatch products\/p-44/);
+  });
+
+  it('refuses before writes when one required policy document is missing', async () => {
+    store.delete('policy/RP031_S04');
+    await expect(call()).rejects.toThrow(/Required policy document missing policy\/RP031_S04/);
+    expect(stats.transactions).toBe(0);
+    expect(stats.writes).toBe(0);
+  });
+
+  it('throws when policy readback finds a mismatched policy field', async () => {
+    afterTransaction = () => { store.get('policy/RP031_S02')!.data.age_21_cost = 123456; };
+    await expect(call()).rejects.toThrow(/Policy readback mismatch policy\/RP031_S02/);
+  });
+
+  it('refuses when the same plate is present in two product documents before writes', async () => {
+    store.get('products/p-118')!.data.car_number = plate(0);
+    await expect(call()).rejects.toThrow(/Exact product match failed: 119/);
+    expect(stats.transactions).toBe(0);
+    expect(stats.writes).toBe(0);
   });
 
   it('does not enter the transaction when backup writing fails', async () => {

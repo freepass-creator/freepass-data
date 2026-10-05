@@ -52,12 +52,19 @@ export async function applyIancarPolicySync(input: IancarPolicySyncInput, deps: 
   const productSnaps = await db.collection('products').get();
   const matches = productSnaps.docs.filter((doc) =>
     byPlate.has(normalize(doc.data().car_number ?? doc.data().vehicle_number)));
-  if (
-    matches.length !== 119 ||
-    new Set(matches.map((doc) => normalize(doc.data().car_number ?? doc.data().vehicle_number))).size !== 119
-  ) {
+  const matchedDocIds = new Set(matches.map((doc) => doc.id));
+  const matchedPlates = new Set(matches.map((doc) => normalize(doc.data().car_number ?? doc.data().vehicle_number)));
+  if (matches.length !== 119 || matchedDocIds.size !== 119 || matchedPlates.size !== 119) {
     throw new Error(`Exact product match failed: ${matches.length}`);
   }
+  const productExpectations = new Map(matches.map((snap) => {
+    const data = snap.data() ?? {};
+    const plate = normalize(data.car_number ?? data.vehicle_number);
+    return [snap.id, {
+      policyCode: byPlate.get(plate),
+      policyCodeSourceOriginal: data.policy_code_source_original ?? data.policy_code ?? null,
+    }];
+  }));
 
   const policies = IANCAR_POLICY_UPCHARGES;
   const policyRefs = Object.keys(policies).map((code) => db.collection('policy').doc(code));
@@ -108,22 +115,31 @@ export async function applyIancarPolicySync(input: IancarPolicySyncInput, deps: 
     }
   });
 
-  const verifyProducts = await db.collection('products').get();
+  const verifyProducts = await db.getAll(...matches.map((snap) => snap.ref));
   const counts: Record<string, number> = {};
-  let verifiedProductCount = 0;
-  for (const doc of verifyProducts.docs) {
-    const data = doc.data();
+  const verifiedDocIds = new Set<string>();
+  const verifiedPlates = new Set<string>();
+  for (const snap of verifyProducts) {
+    const data = snap.data() ?? {};
+    const expected = productExpectations.get(snap.id);
     const plate = normalize(data.car_number ?? data.vehicle_number);
-    if (byPlate.has(plate)) {
-      verifiedProductCount += 1;
-      const expectedCode = byPlate.get(plate);
-      if (data.policy_code !== expectedCode || data.policy_code_source_original == null) {
-        throw new Error(`Product readback mismatch ${doc.ref.path}`);
-      }
-      counts[data.policy_code] = (counts[data.policy_code] ?? 0) + 1;
+    if (!snap.exists || !expected || verifiedDocIds.has(snap.id) || !byPlate.has(plate)) {
+      throw new Error(`Product readback mismatch ${snap.ref.path}`);
     }
+    verifiedDocIds.add(snap.id);
+    verifiedPlates.add(plate);
+    if (
+      data.policy_code !== expected.policyCode ||
+      !Object.prototype.hasOwnProperty.call(data, 'policy_code_source_original') ||
+      data.policy_code_source_original !== expected.policyCodeSourceOriginal
+    ) {
+      throw new Error(`Product readback mismatch ${snap.ref.path}`);
+    }
+    counts[data.policy_code as string] = (counts[data.policy_code as string] ?? 0) + 1;
   }
-  if (verifiedProductCount !== 119) throw new Error(`Product readback count mismatch ${verifiedProductCount}`);
+  if (verifiedDocIds.size !== 119 || verifiedPlates.size !== 119) {
+    throw new Error(`Product readback count mismatch ${verifiedDocIds.size}`);
+  }
   const verifyPolicies = await db.getAll(...policyRefs);
   for (const snap of verifyPolicies) {
     const expectedUpcharge = policies[snap.id as keyof typeof policies];
