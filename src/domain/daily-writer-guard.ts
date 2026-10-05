@@ -29,9 +29,8 @@ export type DailyWriterLogEntry = {
 };
 export type DailyWriterRun = { id?: number; head_branch?: string; event?: string; display_title?: string; status?: string;
   conclusion?: string | null; created_at?: string; run_started_at?: string; updated_at?: string;
-  /** Whether the run's write step («Apply to FreePass Data» / legacy «Capture, plan and (apply)») actually ran.
-   * `false` = every write step was skipped (e.g. the once-a-day gate). Absent / null = unknown → fail-closed (still counted). */
-  applyStepRan?: boolean | null };
+  /** shared-sheet-daily job steps from the same run attempt. Unknown / unreadable steps are null/absent and fail closed. */
+  jobSteps?: { name?: string; conclusion?: string | null }[] | null };
 
 const isWrite = (entry: DailyWriterLogEntry) => {
   const method = entry.protoPayload?.methodName ?? '';
@@ -85,6 +84,28 @@ function collectionOf(path: string): string {
 const publicName = (collection: string) =>
   ([...DAILY_WRITER_ALLOWED_COLLECTIONS, ...KNOWN_FORBIDDEN, '(other-database)'] as string[]).includes(collection) ? collection : '(other)';
 
+const GATE_STEP = 'Daily schedule and manual apply gate';
+const CAPTURE_STEP = 'Capture and plan (no writes) — counts only in the public log';
+const APPLY_STEP = 'Apply to FreePass Data (writes) — counts only in the public log';
+const WRITE_STEP_PREFIXES = ['Apply to FreePass Data', 'Capture, plan and (apply)'] as const;
+
+export function writeStepsSkippedConfirmed(steps: DailyWriterRun['jobSteps']): boolean {
+  if (!Array.isArray(steps) || steps.length === 0) return false;
+  const exact = (name: string, conclusion: string) => steps.filter((s) => s.name === name && s.conclusion === conclusion).length;
+  if (exact(GATE_STEP, 'success') !== 1) return false;
+  if (exact(CAPTURE_STEP, 'skipped') !== 1) return false;
+  if (exact(APPLY_STEP, 'skipped') !== 1) return false;
+  if (steps.filter((s) => s.name === GATE_STEP).length !== 1) return false;
+  if (steps.filter((s) => s.name === CAPTURE_STEP).length !== 1) return false;
+  if (steps.filter((s) => s.name === APPLY_STEP).length !== 1) return false;
+  return steps.every((step) => {
+    const name = step.name ?? '';
+    if (name === CAPTURE_STEP || name === APPLY_STEP) return true;
+    if (WRITE_STEP_PREFIXES.some((prefix) => name.startsWith(prefix))) return step.conclusion === 'skipped';
+    return true;
+  });
+}
+
 export function evaluateDailyWriterGuard(input: {
   entries: DailyWriterLogEntry[]; runs: DailyWriterRun[]; account: string; now: Date; lookbackHours: number; graceMinutes?: number;
 }) {
@@ -118,10 +139,10 @@ export function evaluateDailyWriterGuard(input: {
     const at = Date.parse(entry.timestamp ?? '');
     if (!Number.isFinite(at) || !windows.some((w) => at >= w.from && at <= w.to)) outsideRuns += 1;
   }
-  // A successful apply run (schedule, or a dispatch whose title names «apply») inside the lookback must have left write logs —
-  // unless its write step was verifiably skipped (applyStepRan === false); unknown step info stays counted (fail-closed).
+  // A successful apply run (schedule, or a dispatch whose title names "apply") inside the lookback must have left write logs
+  // unless the shared-sheet-daily job steps prove the gate ran and every write step was skipped. Unknown step info fails closed.
   const silentApplies = windows.filter(({ run, from, to }) => run.status === 'completed' && run.conclusion === 'success' &&
-    (run.event === 'schedule' || /\bapply\b/.test(run.display_title ?? '')) && run.applyStepRan !== false && from >= since &&
+    (run.event === 'schedule' || /\bapply\b/.test(run.display_title ?? '')) && !writeStepsSkippedConfirmed(run.jobSteps) && from >= since &&
     !writes.some((e) => { const at = Date.parse(e.timestamp ?? ''); return at >= from && at <= to; })).length;
   const reasons = [
     ...(Object.keys(outsideCollections).length ? ['DAILY_WRITER_OUTSIDE_ALLOWED_COLLECTIONS'] : []),

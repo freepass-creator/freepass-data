@@ -10,6 +10,15 @@ const commit = (at: string, names: string[], who = account) => ({ timestamp: at,
   request: { writes: names.map((name) => ({ update: { name } })) } } });
 const run = { head_branch: 'main', event: 'schedule', status: 'completed', conclusion: 'success',
   run_started_at: '2026-10-05T18:40:00Z', updated_at: '2026-10-05T18:55:00Z' };
+const skippedJobSteps = [
+  { name: 'Set up job', conclusion: 'success' },
+  { name: 'Daily schedule and manual apply gate', conclusion: 'success' },
+  { name: 'Run actions/checkout@v4', conclusion: 'skipped' },
+  { name: 'Capture and plan (no writes) — counts only in the public log', conclusion: 'skipped' },
+  { name: 'Apply to FreePass Data (writes) — counts only in the public log', conclusion: 'skipped' },
+  { name: 'Post Run actions/checkout@v4', conclusion: 'skipped' },
+  { name: 'Complete job', conclusion: 'success' },
+];
 const now = new Date('2026-10-05T19:30:00Z');
 const judge = (entries: unknown[], runs: unknown[] = [run]) =>
   evaluateDailyWriterGuard({ entries: entries as never, runs: runs as never, account, now, lookbackHours: 26 });
@@ -70,12 +79,23 @@ describe('daily writer guard', () => {
     const dryRun = { ...run, event: 'workflow_dispatch', display_title: 'shared-sheet-daily dry-run' };
     expect(judge([], [dryRun]).status).toBe('OK');
   });
-  it('does not count a scheduled run whose write step was skipped (once-a-day gate), but still holds when it ran with no log', () => {
-    expect(judge([], [{ ...run, applyStepRan: false }])).toMatchObject({ status: 'OK', silentApplies: 0 });
-    expect(judge([], [{ ...run, applyStepRan: true }])).toMatchObject({ status: 'HOLD', reasons: ['DAILY_WRITER_AUDIT_LOG_MISSING'], silentApplies: 1 });
+  it('does not count only when shared-sheet-daily steps prove the gate ran and write steps were skipped', () => {
+    expect(judge([], [{ ...run, jobSteps: skippedJobSteps }])).toMatchObject({ status: 'OK', silentApplies: 0 });
   });
-  it('fails closed when the step info could not be read (null / absent)', () => {
-    expect(judge([], [{ ...run, applyStepRan: null }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+  it('fails closed unless the exact gate/capture/apply skipped pattern is confirmed', () => {
+    const changedName = skippedJobSteps.map((s) => s.name === 'Daily schedule and manual apply gate'
+      ? { ...s, name: 'Daily schedule apply gate' } : s);
+    const partialSkipped = skippedJobSteps.map((s) => s.name === 'Apply to FreePass Data (writes) — counts only in the public log'
+      ? { ...s, conclusion: 'success' } : s);
+    const gateNotSuccess = skippedJobSteps.map((s) => s.name === 'Daily schedule and manual apply gate'
+      ? { ...s, conclusion: 'skipped' } : s);
+    expect(judge([], [{ ...run, jobSteps: changedName }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobSteps: [] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobSteps: partialSkipped }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobSteps: [{ name: 'Apply to FreePass Data (writes) — counts only in the public log', conclusion: 'success' }] }]))
+      .toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobSteps: gateNotSuccess }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobSteps: null }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
     expect(judge([], [run])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
   });
 });
