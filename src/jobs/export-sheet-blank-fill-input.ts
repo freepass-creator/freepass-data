@@ -70,13 +70,27 @@ function present(value: unknown): boolean {
   return value !== null && value !== undefined && !(typeof value === 'string' && value.trim() === '');
 }
 
-function assertFormulaShape(valueRows: unknown[][], formulaRows: unknown[][]): void {
+function comparableCell(value: unknown): string | number | null {
+  return cell(value);
+}
+
+function assertFormulaShape(valueRows: unknown[][], formulaRows: unknown[][], plateCol: number): void {
   for (let rowIndex = 0; rowIndex < valueRows.length; rowIndex++) {
     const valueRow = valueRows[rowIndex] ?? [];
     const formulaRow = formulaRows[rowIndex];
+    if (rowIndex > 0 && plateCol >= 0 && present(valueRow[plateCol])) {
+      if (!formulaRow || plateCol >= formulaRow.length || formulaRow[plateCol] === undefined) {
+        throw new Error('SHEET_BLANK_FILL_INPUT_SHAPE');
+      }
+    }
     for (let col = 0; col < valueRow.length; col++) {
       if (!present(valueRow[col])) continue;
       if (!formulaRow || col >= formulaRow.length || formulaRow[col] === undefined) {
+        throw new Error('SHEET_BLANK_FILL_INPUT_SHAPE');
+      }
+      const formula = formulaRow[col];
+      if (typeof formula === 'string' && formula.startsWith('=')) continue;
+      if (comparableCell(valueRow[col]) !== comparableCell(formula)) {
         throw new Error('SHEET_BLANK_FILL_INPUT_SHAPE');
       }
     }
@@ -88,7 +102,9 @@ function normalizeTabRows(valueRawRows: unknown[][], formulaRawRows: unknown[][]
   valueRows: Array<Array<string | number | null>>;
   formulaRows: string[][];
 } {
-  assertFormulaShape(valueRawRows, formulaRawRows);
+  const rawHeader = valueRawRows[0] ?? [];
+  const plateCol = rawHeader.map((item) => text(item)).indexOf('李⑤웾踰덊샇');
+  assertFormulaShape(valueRawRows, formulaRawRows, plateCol);
   const dataRowCount = Math.max(Math.max(0, valueRawRows.length - 1), Math.max(0, formulaRawRows.length - 1));
   const width = Math.max(0, ...valueRawRows.map((row) => row.length), ...formulaRawRows.map((row) => row.length));
   const normalizedValues = normalizeRows(valueRawRows).map((row) => Array.from({ length: width }, (_, index) => row[index] ?? null));

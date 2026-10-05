@@ -40,6 +40,8 @@ npm.cmd run plan:sheet-blank-fill
 
 FORMULA response is not padded or defaulted. For every non-empty `UNFORMATTED_VALUE` cell, the same row/column in the `FORMULA` response must exist and must not be `undefined`; `values: []`, a missing FORMULA row, a shorter FORMULA row, or a missing FORMULA cell for a non-empty value cell stops with `SHEET_BLANK_FILL_INPUT_SHAPE`. Extra FORMULA rows are allowed; formula cells on value-empty rows are still recorded in `formulaCols`, and the planner skips those rows when they have no plate.
 
+값이 빈 셀의 FORMULA 누락은 API가 행 끝의 빈 셀을 줄이는 특성상 구별할 수 없다. 마지막 방어는 시트고치기 엔진이 쓰기 직전 FORMULA를 다시 읽어 수식 칸을 거부하고 종료 4로 멈추는 것이다.
+
 ```powershell
 $env:SHEET_BLANK_FILL_SPREADSHEET="<private sheet id>"
 $env:SHEET_BLANK_FILL_INPUT_OUT="D:\private\sheet-blank-fill\input.json"

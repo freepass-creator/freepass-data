@@ -214,6 +214,36 @@ describe('sheet blank fill input export job', () => {
     await expect(runExport([batch(baseRows()), batch(formulas), batch(baseRows()), batch(formulas)])).rejects.toThrow('SHEET_BLANK_FILL_INPUT_SHAPE');
   });
 
+  it('fails closed when a non-formula FORMULA cell disagrees with its value cell', async () => {
+    const formulas = baseRows();
+    formulas[jobTab]![1]![makerCol] = 'TRUE';
+    await expect(runExport([batch(baseRows()), batch(formulas), batch(baseRows()), batch(formulas)])).rejects.toThrow('SHEET_BLANK_FILL_INPUT_SHAPE');
+  });
+
+  it('fails closed when a plate row has no FORMULA row or no FORMULA plate cell', async () => {
+    const noFormulaRow = baseRows();
+    noFormulaRow[jobTab] = [headers];
+    await expect(runExport([batch(baseRows()), batch(noFormulaRow), batch(baseRows()), batch(noFormulaRow)])).rejects.toThrow('SHEET_BLANK_FILL_INPUT_SHAPE');
+
+    const noPlateFormulaCell = baseRows();
+    noPlateFormulaCell[jobTab] = [headers, headers.slice(0, plateCol)];
+    await expect(runExport([batch(baseRows()), batch(noPlateFormulaCell), batch(baseRows()), batch(noPlateFormulaCell)])).rejects.toThrow('SHEET_BLANK_FILL_INPUT_SHAPE');
+  });
+
+  it('allows a missing FORMULA cell for an empty value cell trimmed from the row end', async () => {
+    const values = baseRows();
+    const row = emptyRow();
+    row[plateCol] = plate;
+    values[jobTab] = [headers, row];
+    const formulas = baseRows();
+    const formulaRow = emptyRow().slice(0, plateCol + 1);
+    formulaRow[plateCol] = plate;
+    formulas[jobTab] = [headers, formulaRow];
+    const { artifact } = await runExport([batch(values), batch(formulas), batch(values), batch(formulas)], values);
+    expect(artifact.tabs[jobTab]!.rows[0]!.values[plateCol]).toBe(plate);
+    expect(artifact.tabs[jobTab]!.rows[0]!.formulaCols).not.toContain(makerCol);
+  });
+
   it('keeps extra FORMULA rows and records their formula columns when value rows are empty', async () => {
     const values = baseRows();
     values[jobTab] = [headers];
