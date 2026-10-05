@@ -169,6 +169,10 @@ const aliasListOk = (value: unknown) => value === undefined || value === null ||
 export const matchesFrom = (stored: unknown, from: string) => clean(from)
   ? typeof stored === 'string' && clean(stored) === clean(from) // a number or other type never matches a name
   : stored === undefined || stored === null || (typeof stored === 'string' && stored.trim() === '');
+/** A display title is compared exactly as stored (no normalization), like the product identity fields. */
+const targetFromMatches = (kind: string, stored: unknown, from: string) => kind === 'masterTitle'
+  ? typeof stored === 'string' && stored === from
+  : matchesFrom(stored, from);
 const identityKeyFrom = (data: Partial<Record<(typeof PRODUCT_IDENTITY_FIELDS)[number], unknown>>) => PRODUCT_IDENTITY_FIELDS.map((field) => clean(data[field])).join('|');
 const matchesProductIdentityFromField = (stored: unknown, from: string) => from === ''
   ? stored === undefined || stored === null || stored === ''
@@ -378,7 +382,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const snapshots = refs.length ? await db.getAll(...refs) : [];
   if (snapshots.some((snapshot) => !snapshot.exists)) throw new Error('repair target missing');
   snapshots.forEach((snapshot, index) => {
-    if (!matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
+    if (!targetFromMatches(targets[index]!.kind, snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
       throw new Error(`precondition changed ${snapshot.ref.path}`);
     }
     const aliasField = ALIAS_FIELD[targets[index]!.kind];
@@ -683,7 +687,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       if (!listed ? names.length > 0 : names.some((t) => !listed.includes(t))) throw new Error(`transaction variants name trims missing from the stored trims ${variantRefs[index]!.path}`);
     }
     current.forEach((snapshot, index) => {
-      if (!snapshot.exists || !matchesFrom(snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
+      if (!snapshot.exists || !targetFromMatches(targets[index]!.kind, snapshot.data()?.[targets[index]!.field], targets[index]!.item.from)) {
         throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
       }
       const { kind, item, field, ref } = targets[index]!;
