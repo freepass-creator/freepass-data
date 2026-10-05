@@ -19,6 +19,8 @@ export type SheetBlankFillPlan = {
   요청자: 'B3Q FREEPASS-DATA 빈 칸 채우기 계획기';
   근거: '프리패스 데이터 정본(차량 확인·정책 정정기 근거)';
   바꿀칸: Array<{ 범위: string; 전: ''; 후: string | number }>;
+  /** 시트고치기 «줄확인»: 쓰지 않고 같은 줄의 차량번호 칸만 대조 — 계획 뒤 줄이 움직여 다른 차에 쓰는 일을 막는다(시트고치기 줄확인 지원 판 필요). */
+  줄확인: Array<{ 범위: string; 값: string }>;
 };
 
 export type SheetBlankFillReport = {
@@ -59,7 +61,10 @@ const empty = (v: unknown) => v === null || v === undefined || (typeof v === 'st
 const normalize = (v: unknown) => text(v).replace(/\s+/g, '').replace(/^보험료/, '').replace(/불가능/g, '불가');
 const colName = (i: number) => { let n = i + 1, s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; };
 // 숫자 칸(연식·배기량·인승)은 순수 숫자(또는 순수 숫자 글자)만 넣는다. «1,598»·«2024년» 같은 값은 숫자가 아니라 건너뜀.
-const toSheetNumber = (v: unknown): number | null => typeof v === 'number' ? (Number.isFinite(v) ? v : null) : /^\d+(?:\.\d+)?$/.test(text(v)) ? Number(text(v)) : null;
+const toSheetNumber = (v: unknown): number | null => {
+  const n = typeof v === 'number' ? v : /^\d+(?:\.\d+)?$/.test(text(v)) ? Number(text(v)) : NaN;
+  return Number.isFinite(n) ? n : null;
+};
 const fieldEvidence = (policy: Record<string, unknown>, field: string) =>
   (policy.field_evidence as Record<string, { writer?: string }> | undefined)?.[field]?.writer === 'policy-corrector';
 const policyValue = (policy: Record<string, unknown>, field: string) => (policy as Record<string, unknown>)[field];
@@ -67,7 +72,7 @@ const policyValue = (policy: Record<string, unknown>, field: string) => (policy 
 export function planSheetBlankFill(input: SheetBlankFillInput): { plan: SheetBlankFillPlan; report: SheetBlankFillReport } {
   const captured = Date.parse(input.capturedAt);
   if (!Number.isFinite(captured) || Date.now() - captured > 15 * 60_000) throw new Error('SHEET_BLANK_FILL_CAPTURE_STALE');
-  const plan: SheetBlankFillPlan = { 시트ID: input.spreadsheetId, 이유: '공통 시트 빈 칸 채우기(정본 값)', 요청자: 'B3Q FREEPASS-DATA 빈 칸 채우기 계획기', 근거: '프리패스 데이터 정본(차량 확인·정책 정정기 근거)', 바꿀칸: [] };
+  const plan: SheetBlankFillPlan = { 시트ID: input.spreadsheetId, 이유: '공통 시트 빈 칸 채우기(정본 값)', 요청자: 'B3Q FREEPASS-DATA 빈 칸 채우기 계획기', 근거: '프리패스 데이터 정본(차량 확인·정책 정정기 근거)', 바꿀칸: [], 줄확인: [] };
   const report: SheetBlankFillReport = { capturedAt: input.capturedAt, counts: { 채울칸: 0, 탭별: {}, 칸별: {} }, skipped: [], differences: [], skippedCounts: {} };
   const addSkip = (탭: string, 행: number, 차량번호: string, 칸: string, 사유: SkipReason) => {
     report.skipped.push({ 탭, 행, 차량번호, 칸, 사유 });
@@ -149,6 +154,18 @@ export function planSheetBlankFill(input: SheetBlankFillInput): { plan: SheetBla
       }
     }
   }
+  // 줄확인: 채우는 줄마다 같은 줄의 차량번호 칸을 «대조만» 하도록 계획에 같이 넣는다.
+  const plateByRow = new Map<string, { 범위: string; 값: string }>();
+  for (const [tab, sheet] of Object.entries(input.tabs)) {
+    const plateCol = sheet.headers.indexOf('차량번호');
+    if (plateCol < 0) continue;
+    for (const r of sheet.rows) {
+      const plate = text(r.values[plateCol]);
+      if (!plate) continue;
+      if (plan.바꿀칸.some((c) => c.범위.startsWith(`${tab}!`) && Number(c.범위.slice(tab.length + 1).replace(/^[A-Z]+/, '')) === r.row)) plateByRow.set(`${tab}:${r.row}`, { 범위: `${tab}!${colName(plateCol)}${r.row}`, 값: plate });
+    }
+  }
+  plan.줄확인 = [...plateByRow.values()].sort((a, b) => a.범위.localeCompare(b.범위, 'ko', { numeric: true }));
   plan.바꿀칸.sort((a, b) => a.범위.localeCompare(b.범위, 'ko', { numeric: true }));
   const seen = new Set<string>();
   for (const c of plan.바꿀칸) { if (seen.has(c.범위)) throw new Error('SHEET_BLANK_FILL_DUPLICATE_CELL'); seen.add(c.범위); }

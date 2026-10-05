@@ -115,4 +115,20 @@ describe('공통 시트 빈 칸 채우기 계획기', () => {
     expect(plan.바꿀칸).toContainEqual({ 범위: '가상공급사!I2', 전: '', 후: 5 });
     expect(report.skippedCounts.INVALID_NUMBER).toBe(2);
   });
+
+  it('adds a row-confirm (줄확인) of the plate cell for every row that gets a fill, and none for untouched rows', () => {
+    const { plan } = planSheetBlankFill(base([row(2, '11가1111'), row(3, '11가1111', Object.fromEntries(headers.map(h => [h, 'x'])))]));
+    expect(plan.줄확인).toContainEqual({ 범위: '가상공급사!A2', 값: '11가1111' });
+    expect(plan.줄확인.some(c => c.범위 === '가상공급사!A3')).toBe(false);
+    for (const c of plan.줄확인) expect(plan.바꿀칸.some(f => f.범위 === c.범위)).toBe(false);
+  });
+
+  it('rejects non-finite numeric text (309 digits) and handles real null cells', () => {
+    const input = base([{ row: 2, values: headers.map((h, i) => (i === 0 ? '11가1111' : null)), formulaCols: [] }]);
+    input.vehicles['11가1111']!.fields = { ...input.vehicles['11가1111']!.fields, year: '9'.repeat(309) };
+    const { plan, report } = planSheetBlankFill(input);
+    expect(plan.바꿀칸.some(c => c.범위 === '가상공급사!F2')).toBe(false);
+    expect(report.skippedCounts.INVALID_NUMBER).toBeGreaterThanOrEqual(1);
+    expect(plan.바꿀칸.some(c => c.범위 === '가상공급사!B2')).toBe(true);
+  });
 });
