@@ -153,6 +153,18 @@ describe('vehicle-name reference repair gate', () => {
     }
     expect(validateVehicleNameRepairPlan({ ...base, masterCreates: [{ ...create, data: { ...create.data, trims: undefined, variants: [{ label: 'v', fuel: '가솔린' }] } }] })).toMatchObject({ masterCreateCount: 1 });
   });
+  it('validates master title repairs without changing existing absent-plan digests', () => {
+    const base = { sourceDigest: 'd', masterRepairs: [], productRepairs: [] };
+    expect(validateVehicleNameRepairPlan({ ...base, masterTitleRepairs: [{ id: 'm', from: 'Maker Old', to: 'Maker New' }] }))
+      .toMatchObject({ masterTitleCount: 1 });
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterTitleRepairs: [{ id: 'm', from: '', to: 'Maker New', evidence: 'x' }] }))
+      .toThrow(/requires/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterTitleRepairs: [{ id: 'm', from: 'Maker Old', to: ' Maker  New ' }] }))
+      .toThrow(/normalized/);
+    expect(() => validateVehicleNameRepairPlan({ ...base, masterTitleRepairs: [{ id: 'm', from: 'Maker Old', to: 'Maker Old' }] }))
+      .toThrow(/no-op/);
+    expect(stableDigest(base)).toBe(stableDigest({ ...base, masterTitleRepairs: undefined }));
+  });
   it('caps one plan below the Firestore transaction write limit', () => {
     const many = Array.from({ length: MAX_VEHICLE_NAME_REPAIR_TARGETS + 1 }, (_, i) => ({ id: `t${i}`, from: 'A', to: 'B' }));
     expect(() => validateVehicleNameRepairPlan({ sourceDigest: 'd', masterRepairs: [], productRepairs: [], trimSubModelRepairs: many })).toThrow(/too large/);

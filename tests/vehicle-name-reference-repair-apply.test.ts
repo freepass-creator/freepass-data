@@ -85,6 +85,47 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     expect(store.get('vehicle_master/m-mx5')).toMatchObject({ sub_model: '싼타페 MX5', sub_model_aliases: ['디 올 뉴 싼타페 MX5'] });
     expect(store.get('vehicle_trim_master/t2')!.sub_model_aliases).toEqual(['싼타페 MX5 신형', '디 올 뉴 싼타페 MX5']);
   });
+  it('repairs a master title alone when it matches final maker and sub-model', async () => {
+    const master = store.get('vehicle_master/m-gn7')!;
+    master.title = `${master.maker} Old`;
+    const to = `${master.maker} ${master.sub_model}`;
+    const result = await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterTitleRepairs: [{ id: 'm-gn7', from: String(master.title), to }] });
+    expect(store.get('vehicle_master/m-gn7')).toMatchObject({ title: to, vehicle_name_reference_source_digest: 'v1' });
+    expect(store.get('vehicle_master/m-gn7')!.sub_model_aliases).toBeUndefined();
+    expect(result).toMatchObject({ masterTitleCount: 1, readbackCount: 1, auditCount: 1 });
+    const audit = [...store.entries()].find(([k]) => k.startsWith('audit_events/'))![1];
+    expect(audit.before).toEqual({ title: `${master.maker} Old` });
+    expect(audit.after).toEqual({ title: to });
+  });
+  it('repairs a master title together with a sub-model rename using the final sub-model', async () => {
+    const master = store.get('vehicle_master/m-gn7')!;
+    master.title = `${master.maker} Old`;
+    const toTitle = `${master.maker} GN7 Final`;
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', productRepairs: [],
+      masterRepairs: [{ id: 'm-gn7', from: String(master.sub_model), to: 'GN7 Final' }],
+      masterTitleRepairs: [{ id: 'm-gn7', from: String(master.title), to: toTitle }] });
+    expect(store.get('vehicle_master/m-gn7')).toMatchObject({ sub_model: 'GN7 Final', title: toTitle });
+  });
+  it('rejects master title mismatch, retired masters, and title precondition mismatches', async () => {
+    const master = store.get('vehicle_master/m-gn7')!;
+    master.title = `${master.maker} Old`;
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterTitleRepairs: [{ id: 'm-gn7', from: String(master.title), to: `${master.maker} Wrong` }] })).rejects.toThrow(/maker \+ sub_model/);
+    expect(store.get('vehicle_master/m-gn7')!.title).toBe(`${master.maker} Old`);
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterTitleRepairs: [{ id: 'm-gn7', from: 'Other Old', to: `${master.maker} ${master.sub_model}` }] })).rejects.toThrow(/precondition/);
+    master.retired = true;
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterTitleRepairs: [{ id: 'm-gn7', from: String(master.title), to: `${master.maker} ${master.sub_model}` }] })).rejects.toThrow(/retired master/);
+  });
+  it('compares the stored title exactly — extra spaces in the stored title are not the plan from', async () => {
+    const master = store.get('vehicle_master/m-gn7')!;
+    master.title = `${master.maker}  Old`;
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterTitleRepairs: [{ id: 'm-gn7', from: `${master.maker} Old`, to: `${master.maker} ${master.sub_model}` }] })).rejects.toThrow(/precondition/);
+    expect(store.get('vehicle_master/m-gn7')!.title).toBe(`${master.maker}  Old`);
+  });
   it('refuses to link a row to a master that does not exist', async () => {
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       trimMasterLinkRepairs: [{ id: 't1', from: 'm-gn7', to: 'm-missing' }] })).rejects.toThrow(/linked vehicle_master missing/);
