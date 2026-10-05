@@ -385,6 +385,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-05 공통 시트 빈 칸 채우기 계획기
+
+- 목적: 공급사 15탭 차량 줄의 빈 칸만 프리패스 데이터 정본 값으로 채우는 비공개 시트고치기 계획 파일을 만든다. 시트 쓰기·커밋·push 없음.
+- 대상 revision: work/freepass-data/sheet-blank-fill-20261005 `0ed468a6c753e842e86648d8aebd614d801cd8db` 기준.
+- 변경: `src/application/sheet-blank-fill.ts`, `src/jobs/plan-sheet-blank-fill.ts`, `tests/sheet-blank-fill.test.ts`, `docs/SHEET-BLANK-FILL.md`, `package.json` 스크립트 추가.
+- 검증: `npm.cmd run check`와 `npm.cmd run check:standards` 실행 결과를 최종 보고에 남긴다.
+- next_start_here: 비공개 캡처 JSON을 15분 안에 넣어 `SHEET_BLANK_FILL_INPUT`/`SHEET_BLANK_FILL_OUT`으로 계획·보고서만 만들고, 적용은 상황실 시트고치기 엔진에서 별도 수행한다.
+
 ### 2026-10-05 하루 한 번 박제 첫 예약 실행 — 예약이 만들어지지 않음(읽기만 점검)
 
 - 점검(05:17 KST, 읽기만): `shared-sheet-daily.yml` 의 03:40 KST(`40 18 * * *`) 예약 실행이 **만들어지지 않았다**. 이 워크플로 실행 목록은 10-04 수동 실행 셋(시험 37188258463 · 첫 적용 37188552323 · 날짜 실제 값 시험 37203529314)뿐이다. 워크플로 상태 active, 변수·권한 변경 없음.
