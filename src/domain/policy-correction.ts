@@ -127,6 +127,8 @@ const storedEvidence = (data: Record<string, unknown>, layer: PolicyCorrectionLa
   layer === 'salesPolicy' ? objectValue(objectValue(data.sales_policy)?.[field]) : objectValue(objectValue(data.field_evidence)?.[field]);
 /** The stored layer container / entry must have the shape this corrector writes (a map, entries as maps with a «value»).
  * Anything else (string, number, array …) is refused — never read as «absent», so «from: null» cannot overwrite it. */
+// A stored sales_policy «value» is a scalar: string, finite number, boolean or null — arrays/objects would slip past the contradiction check.
+const scalarValue = (v: unknown) => v === null || typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v));
 export const assertStoredShape = (policyCode: string, data: Record<string, unknown>, layer: PolicyCorrectionLayer, field: string) => {
   const container = layer === 'salesPolicy' ? data.sales_policy : data.field_evidence;
   const label = layer === 'salesPolicy' ? 'sales_policy' : 'field_evidence';
@@ -134,7 +136,7 @@ export const assertStoredShape = (policyCode: string, data: Record<string, unkno
   const entry = objectValue(container)?.[field];
   if (entry === undefined || entry === null) return;
   const entryMap = objectValue(entry);
-  if (!entryMap || (layer === 'salesPolicy' && !('value' in entryMap))) throw new Error(`STORED_SHAPE_MISMATCH ${policyCode}.${label}.${field}`);
+  if (!entryMap || (layer === 'salesPolicy' && (!('value' in entryMap) || !scalarValue(entryMap.value)))) throw new Error(`STORED_SHAPE_MISMATCH ${policyCode}.${label}.${field}`);
 };
 /** Whole-document shape check: EVERY entry of sales_policy and field_evidence must be a plain map (sales entries with a «value»).
  * A malformed sibling must not be silently read as «absent» by the contradiction check — the whole policy is refused. */
@@ -145,7 +147,7 @@ export const assertAllStoredShapes = (policyCode: string, data: Record<string, u
     if (!isPlainObject(container)) throw new Error(`STORED_SHAPE_MISMATCH ${policyCode}.${label}`);
     for (const [field, entry] of Object.entries(container)) {
       if (entry === undefined || entry === null) continue;
-      if (!isPlainObject(entry) || (layer === 'salesPolicy' && !('value' in entry))) throw new Error(`STORED_SHAPE_MISMATCH ${policyCode}.${label}.${field}`);
+      if (!isPlainObject(entry) || (layer === 'salesPolicy' && (!('value' in entry) || !scalarValue(entry.value)))) throw new Error(`STORED_SHAPE_MISMATCH ${policyCode}.${label}.${field}`);
     }
   }
 };

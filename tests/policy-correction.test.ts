@@ -94,4 +94,11 @@ describe('policy correction domain validation', () => {
     // well-formed siblings still feed the contradiction check with their real stored values
     expect(() => validatePolicyCorrectionPlan(plan([salesItem]), { documents: docs({ sales_policy: { driver_age_lowering: { value: '불가' } } }) })).toThrow(/CONTRADICTION/);
   });
+  it('refuses non-scalar sales_policy values (array / object / NaN) so they cannot bypass the contradiction check', () => {
+    const salesItem = item({ field: 'age_21_cost', layer: 'salesPolicy', from: null, to: '10만원' });
+    for (const bad of [['불가'], { x: 1 }, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => validatePolicyCorrectionPlan(plan([salesItem]), { documents: docs({ sales_policy: { driver_age_lowering: { value: bad } } }) })).toThrow(/STORED_SHAPE_MISMATCH/);
+    }
+    expect(() => validatePolicyCorrectionPlan(plan([salesItem]), { documents: docs({ sales_policy: { driver_age_lowering: { value: null } } }) })).not.toThrow();
+  });
 });
