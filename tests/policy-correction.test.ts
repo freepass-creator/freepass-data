@@ -1,0 +1,63 @@
+import { describe, expect, it } from 'vitest';
+import { validatePolicyCorrectionPlan, type PolicyCorrectionPlan } from '../src/domain/policy-correction.js';
+
+const item = (over: Partial<PolicyCorrectionPlan['items'][number]> = {}): PolicyCorrectionPlan['items'][number] => ({
+  policyCode: 'POL-0023',
+  supplierCode: 'RP000',
+  field: 'driver_age_lowering',
+  layer: 'supplierCondition',
+  from: '협의',
+  to: '불가',
+  evidence: { source: '공급사답', location: '문의건 1', effectiveDate: '2026-10-05' },
+  ...over,
+});
+const plan = (items: PolicyCorrectionPlan['items'] = [item()]): PolicyCorrectionPlan => ({
+  planId: 'p1',
+  createdAt: '2026-10-05T00:00:00.000Z',
+  items,
+});
+const docs = (data: Record<string, unknown>) => ({ 'POL-0023': { data: { provider_company_code: 'RP000', updated_at: '2026-10-04T00:00:00.000Z', ...data } } });
+
+describe('policy correction domain validation', () => {
+  it('accepts a valid correction and returns counts plus digest', () => {
+    expect(validatePolicyCorrectionPlan(plan(), { documents: docs({ driver_age_lowering: '협의' }) })).toMatchObject({ itemCount: 1, policyCount: 1 });
+  });
+  it('rejects unknown fields, empty to, old source, and empty location', () => {
+    expect(() => validatePolicyCorrectionPlan(plan([item({ field: 'unknown' })]))).toThrow(/FIELD_NOT_ALLOWED/);
+    expect(() => validatePolicyCorrectionPlan(plan([item({ to: '' })]))).toThrow(/EMPTY_TO/);
+    expect(() => validatePolicyCorrectionPlan(plan([item({ evidence: { source: '옛입력' as never, location: 'x', effectiveDate: '2026-10-05' } })]))).toThrow(/INVALID_EVIDENCE_SOURCE/);
+    expect(() => validatePolicyCorrectionPlan(plan([item({ evidence: { source: '공급사답', location: ' ', effectiveDate: '2026-10-05' } })]))).toThrow(/EVIDENCE_LOCATION_REQUIRED/);
+  });
+  it('keeps 0 and text states distinct', () => {
+    expect(validatePolicyCorrectionPlan(plan([item({ field: 'over_mileage_rate_domestic', from: 100, to: 0 })]))).toMatchObject({ itemCount: 1 });
+    expect(() => validatePolicyCorrectionPlan(plan([item({ field: 'over_mileage_rate_domestic', from: '없음', to: '' })]))).toThrow(/EMPTY_TO/);
+  });
+  it('rejects supplier-layer age lowering contradictions but keeps salesPolicy separate', () => {
+    expect(() => validatePolicyCorrectionPlan(plan([item({ field: 'driver_age_lowering', from: '협의', to: '불가' })]),
+      { documents: docs({ driver_age_lowering: '협의', age_21_cost: '10만원' }) })).toThrow(/CONTRADICTION/);
+    expect(validatePolicyCorrectionPlan(plan([item({ field: 'driver_age_lowering', layer: 'salesPolicy', from: '협의', to: '불가' })]),
+      { documents: docs({ driver_age_lowering: '협의', age_21_cost: '10만원', sales_policy: { driver_age_lowering: { value: '협의' } } }) })).toMatchObject({ itemCount: 1 });
+  });
+  it('rejects stale evidence, succession contradiction, deductible min greater than max, supplier mismatch, and too many items', () => {
+    expect(() => validatePolicyCorrectionPlan(plan(), { documents: docs({ driver_age_lowering: '협의', field_evidence: { driver_age_lowering: { effectiveDate: '2026-10-05' } } }) })).toThrow(/STALE_EVIDENCE/);
+    expect(() => validatePolicyCorrectionPlan(plan([item({ field: 'succession_allowed', from: '가능', to: '불가' })]), { documents: docs({ succession_allowed: '가능', succession_fee: '10만원' }) })).toThrow(/CONTRADICTION/);
+    expect(() => validatePolicyCorrectionPlan(plan([item({ field: 'own_damage_min_deductible', from: '50만원', to: '100만원' })]), { documents: docs({ own_damage_min_deductible: '50만원', own_damage_max_deductible: '50만원' }) })).toThrow(/CONTRADICTION/);
+    expect(() => validatePolicyCorrectionPlan(plan(), { documents: { 'POL-0023': { data: { provider_company_code: 'RP999', driver_age_lowering: '협의' } } } })).toThrow(/SUPPLIER_MISMATCH/);
+    expect(() => validatePolicyCorrectionPlan(plan(Array.from({ length: 501 }, (_, i) => item({ policyCode: `P${i}` }))))).toThrow(/MAX_ITEMS/);
+  });
+  it('rejects duplicate items for the same policy, layer and field', () => {
+    expect(() => validatePolicyCorrectionPlan(plan([item(), item({ to: '협의' })]))).toThrow(/DUPLICATE_ITEM/);
+  });
+  it('reads updated_at given as epoch milliseconds and refuses evidence not newer than it', () => {
+    const at = Date.parse('2026-10-05T12:00:00Z');
+    expect(() => validatePolicyCorrectionPlan(plan(), { documents: docs({ driver_age_lowering: '협의', updated_at: at }) })).toThrow(/STALE_EVIDENCE/);
+    expect(validatePolicyCorrectionPlan(plan(), { documents: docs({ driver_age_lowering: '협의', updated_at: Date.parse('2026-10-01T00:00:00Z') }) })).toMatchObject({ itemCount: 1 });
+  });
+  it('checks salesPolicy contradictions on unwrapped values', () => {
+    const base = { driver_age_lowering: '협의', sales_policy: { driver_age_lowering: { value: '불가' } } };
+    expect(() => validatePolicyCorrectionPlan(plan([item({ field: 'age_21_cost', layer: 'salesPolicy', from: null, to: '10만원' })]),
+      { documents: docs(base) })).toThrow(/CONTRADICTION/);
+    expect(validatePolicyCorrectionPlan(plan([item({ field: 'age_21_cost', layer: 'salesPolicy', from: null, to: '불가' })]),
+      { documents: docs(base) })).toMatchObject({ itemCount: 1 });
+  });
+});
