@@ -131,4 +131,11 @@ describe('공통 시트 빈 칸 채우기 계획기', () => {
     expect(report.skippedCounts.INVALID_NUMBER).toBeGreaterThanOrEqual(1);
     expect(plan.바꿀칸.some(c => c.범위 === '가상공급사!B2')).toBe(true);
   });
+  it('holds a whole tab when the same row number appears twice in the input', () => {
+    const input = base([row(2, '11가1111'), row(2, '22나2222'), row(3, '11가1111')]);
+    const { plan, report } = planSheetBlankFill(input);
+    expect(plan.바꿀칸).toHaveLength(0);
+    expect(plan.줄확인).toHaveLength(0);
+    expect(report.skippedCounts.DUPLICATE_ROW).toBe(3);
+  });
 });
