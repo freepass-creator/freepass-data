@@ -527,6 +527,12 @@ describe('뮤카 RP035 구독 — F04 169·170행(DEC-2026-10-04-01 8번)', () =
     for (const contractDate of ['2026-10-05', '2026-10-06', '2027-01-01']) {
       expect(pay({ depositPayment: 'INSTALLMENT', extraDeposit: 0, contractDate })).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'MEWCAR_INSTALLMENT_ABOLISHED_CONFIRM_REQUIRED' });
     }
+    // 달력에 없는 날은 Date.parse 보정으로 통과하면 안 된다(옛 정액을 내지 않는다).
+    for (const contractDate of ['2026-02-29', '2026-04-31', '2026-09-31', '2026-02-30', '2026-00-10', '2026-10-00']) {
+      expect(pay({ depositPayment: 'INSTALLMENT', extraDeposit: 0, contractDate })).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'MEWCAR_CONTRACT_DATE_REQUIRED' });
+    }
+    // 실제 있는 날(윤일 포함)은 통과
+    expect(pay({ depositPayment: 'INSTALLMENT', extraDeposit: 0, contractDate: '2024-02-29' })).toMatchObject({ state: 'CALCULATED', ruleId: 'MEWCAR_GA_INSTALLMENT_24_PAYOUT' });
     for (const contractDate of [undefined, '', '2026-10-5', '2026-13-01', 'x']) {
       expect(pay({ depositPayment: 'INSTALLMENT', extraDeposit: 0, contractDate })).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'MEWCAR_CONTRACT_DATE_REQUIRED' });
     }

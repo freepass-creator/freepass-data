@@ -374,6 +374,15 @@ export type CommissionInput = {
   };
 };
 
+/** YYYY-MM-DD 가 «달력에 실제로 있는 날»인지(Date.parse 는 2026-02-30 을 03-02 로 보정하므로 연·월·일을 되확인한다). */
+function isCalendarDate(value: unknown): boolean {
+  const m = typeof value === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(value) : null;
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(Date.UTC(y, mo - 1, d));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d;
+}
+
 /** 뮤카 구독(RP035). 사유 코드는 모두 MEWCAR_ 로 시작한다 — 마진 계산이 이 표시로 별도 재원임을 안다. */
 function resolveMewcar(input: CommissionInput, productType: string, side: 'BILLING' | 'PAYOUT'): CommissionResolution {
   const rule = KAKAO_COMMISSION_POLICY.mewcar;
@@ -387,7 +396,7 @@ function resolveMewcar(input: CommissionInput, productType: string, side: 'BILLI
   if (input.depositPayment !== 'PREPAID' && input.depositPayment !== 'INSTALLMENT') return unknownCommission('MEWCAR_DEPOSIT_PAYMENT_REQUIRED');
   if (input.depositPayment === 'INSTALLMENT') {
     // 분납은 10-05 이후 폐지 — 계약일을 모르면 어느 규칙인지 모르므로 멈추고, 효력일 이후면 «확인 필요»로 멈춘다(옛 정액을 내지 않는다).
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.contractDate ?? '') || Number.isNaN(Date.parse(`${input.contractDate}T00:00:00Z`))) return unknownCommission('MEWCAR_CONTRACT_DATE_REQUIRED');
+    if (!isCalendarDate(input.contractDate)) return unknownCommission('MEWCAR_CONTRACT_DATE_REQUIRED');
     if (input.contractDate! >= rule.installmentAbolishedFrom) return unknownCommission('MEWCAR_INSTALLMENT_ABOLISHED_CONFIRM_REQUIRED');
   }
   if (!Number.isSafeInteger(input.extraDeposit) || input.extraDeposit! < 0) return unknownCommission('MEWCAR_EXTRA_DEPOSIT_REQUIRED');
