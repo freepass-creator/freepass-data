@@ -52,7 +52,7 @@ const textRule = rule('text', text);
 
 export const ALLOWED_FIELDS: Record<string, Rule> = {
   screening_criteria: textRule,
-  insurance_included: yn,
+  insurance_included: rule('insurance', matches(/^(?:보험료 )?(?:포함|별도)$/)),
   maintenance_service: yn,
   additional_driver_allowance_count: rule('count', matches(/^\d+인까지$/)),
   additional_driver_cost: amount,

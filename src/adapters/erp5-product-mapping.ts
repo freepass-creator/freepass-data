@@ -1,7 +1,7 @@
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import { assessDepositEvidence, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositFromYearsRuleNote, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
 import { resolveErp5InventoryStatus } from '../domain/erp5-inventory-status.js';
 import { isStrictKoreanPlate } from '../domain/vehicle-plate.js';
 
@@ -252,9 +252,13 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     const depositEvidence = assessDepositEvidence({ supplierId: d.provider_company_code, productType: d.product_type,
       note: d.deposit_note, depositFree: d.deposit_free, sourceAmount: terms.deposit,
       hasPositivePaidDeposit: hasConflictingPaidDeposit(d.price) });
-    const depositAmount = complex.length || privateTerms.length || depositEvidence.state === 'UNKNOWN'
-      ? undefined : depositEvidence.amount ?? undefined;
-    if (depositEvidence.state === 'UNKNOWN') issue(depositEvidence.reason);
+    // RP012 구독의 입력 보증금 0 은 자리표시자다 — 공급사 자기 규칙 메모(월 대여료 × 약정연수, 최대 3개월)로 읽을 때 계산한다(쓰지 않음).
+    const ruleDerived = depositEvidence.state === 'UNKNOWN' && ['ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY', 'DEPOSIT_RULE_REQUIRES_RESOLUTION'].includes(depositEvidence.reason)
+      && String(d.provider_company_code ?? '').trim() === 'RP012' && /구독/.test(String(d.product_type ?? ''))
+      ? depositFromYearsRuleNote(d.deposit_note, months, amount) : null;
+    const depositAmount = complex.length || privateTerms.length || (depositEvidence.state === 'UNKNOWN' && !ruleDerived)
+      ? undefined : ruleDerived ? ruleDerived.amount : depositEvidence.amount ?? undefined;
+    if (depositEvidence.state === 'UNKNOWN' && !ruleDerived) issue(depositEvidence.reason);
     if (depositAmount === undefined) issue('UNKNOWN_DEPOSIT');
     // 기본값으로 떨어진 주행거리는 원천이 말한 값이 아니다. 지우지 말고 검토 표시를 남긴다.
     if (mileage.source === 'DEFAULT') issue('MILEAGE_FROM_COMPANY_DEFAULT');

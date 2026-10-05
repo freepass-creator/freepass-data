@@ -418,4 +418,21 @@ describe('가격 키 읽기', () => {
       expect(parseErp5PriceKey(bad)).toBeUndefined();
     }
   });
+
+  it('derives RP012 subscription deposits from the supplier rule note when the stored deposit is the 0 placeholder (read-time only)', () => {
+    const input = fixture();
+    Object.assign(input.data, {
+      provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '월 대여료 × 약정연수 (최대 3개월)',
+      price: { '12': { rent: 1262000, deposit: 0 }, '24': { rent: 994000, deposit: 0 }, '48': { rent: 809000, deposit: 0 } },
+    });
+    const result = mapErp5Product(input);
+    const byKey = Object.fromEntries(result.candidate.priceTerms.map(t => [t.termMonths, t]));
+    expect(byKey[12]).toMatchObject({ deposit: { amount: 1262000 }, depositState: 'KNOWN' });
+    expect(byKey[24]).toMatchObject({ deposit: { amount: 1988000 }, depositState: 'KNOWN' });
+    expect(byKey[48]).toMatchObject({ deposit: { amount: 2427000 }, depositState: 'KNOWN' });
+    expect(result.candidate.issues).not.toContain('UNKNOWN_DEPOSIT');
+    // without the rule note the placeholder stays unresolved
+    delete (input.data as Record<string, unknown>).deposit_note;
+    expect(mapErp5Product(input).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
+  });
 });
