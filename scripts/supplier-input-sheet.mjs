@@ -163,14 +163,14 @@ export function splitPolicyValue(header,value){
   }
   hold(`Unparsed ${header}: ${v}`);
 }
-// 종합 탭 = 공급사 탭을 쌓아 빈 줄을 빼고, 차량상태가 summaryKeepStatuses(출고가능·즉시출고)인 줄만 남긴다(대표 10-04 «출고 가능차만 종합탭에»).
+// 종합 탭 = 공급사 탭을 쌓아 빈 줄을 빼고, 차량상태가 summaryExcludeStatuses(출고불가)가 아닌 모든 줄을 남긴다(대표 10-05 «종합탭은 출고불가만 빼고 그대로 가져와서 복사한 거야» — 10-04 summaryKeepStatuses 를 대체).
 // 차량상태 칸 위치는 그 양식의 머리글에서 찾는다 — 칸 순서가 바뀌어도 맞는 칸을 본다.
 export const summaryFormula=(stack,headers,spec=inputSpec)=>{
-  const at=headers.indexOf('차량상태'),keepStatuses=spec.summaryKeepStatuses;
+  const at=headers.indexOf('차량상태'),excludeStatuses=spec.summaryExcludeStatuses;
   if(at<0)hold('Summary status column missing');
-  if(!Array.isArray(keepStatuses)||!keepStatuses.length||keepStatuses.some(v=>typeof v!=='string'||!v||v.includes('"')))hold('summaryKeepStatuses invalid');
-  const status=keepStatuses.map(v=>`INDEX(r,1,${at+1})="${v}"`).join(',');
-  return `=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,AND(SUM(ARRAYFORMULA(LEN(r)))>0,OR(${status})))),IFNA(FILTER(src,keep),""))`;
+  if(!Array.isArray(excludeStatuses)||!excludeStatuses.length||excludeStatuses.some(v=>typeof v!=='string'||!v||v.includes('"')))hold('summaryExcludeStatuses invalid');
+  const status=excludeStatuses.map(v=>`INDEX(r,1,${at+1})<>"${v}"`).join(',');
+  return `=LET(src,VSTACK(${stack}),keep,BYROW(src,LAMBDA(r,AND(SUM(ARRAYFORMULA(LEN(r)))>0,${status}))),IFNA(FILTER(src,keep),""))`;
 };
 const columnLetter=index=>{let out='';for(index++;index;index=Math.floor((index-1)/26))out=String.fromCharCode(65+(index-1)%26)+out;return out;};
 // Moves the workbook from the pre-split layout to spec.layoutVersion: inserts

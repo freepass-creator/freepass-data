@@ -669,12 +669,7 @@
   },
   "dropdownStrict": false,
   "basicFilter": true,
-  "summaryFormula": "VSTACK_ALL_SUPPLIER_TABS_A2_TO_LAST_COLUMN_FILTER_NONBLANK_AND_STATUS_IN_KEEP",
-  "summaryKeepStatuses": [
-    "출고가능",
-    "즉시출고"
-  ],
-  "summaryKeepNote": "2026-10-04 대표 «출고 가능차만 종합탭에»: 종합 탭에는 차량상태가 출고가능·즉시출고인 줄만. 공급사 탭과 매일 박제(공급사 탭만 읽음)는 그대로 전체.",
+  "summaryFormula": "VSTACK_ALL_SUPPLIER_TABS_A2_TO_LAST_COLUMN_FILTER_NONBLANK_AND_STATUS_NOT_EXCLUDED",
   "valueConventions": {
     "빈칸": "미확인; 0·없음·무료와 구분",
     "정본": "valueFormats는 inputHeaders 전체 칸과 일치; 짧게, 단위는 이름 또는 값 끝 한 번",
@@ -3478,5 +3473,9 @@
     "dateColumns": "입고일자·최초등록일 모두 yy-mm-dd.",
     "keep": "값별 색(차량상태·상품구분 지정 색, 계약중 가운데줄, 빨간 경고)과 정책 칸 열 색(분납·21세+·23세+·1만km+ 빨강, 비고 빨강)은 유지. 열 전체 파랑(차량상태·보증금 등)은 걷어낸다.",
     "summaryTab": "종합 탭도 공급사 탭과 같은 서식. 종합 차량번호는 수식 결과라 사진 링크가 없어 검정 굵게로만 보인다(링크는 공급사 탭에 있음)."
-  }
+  },
+  "summaryExcludeStatuses": [
+    "출고불가"
+  ],
+  "summaryExcludeNote": "2026-10-05 대표 «종합탭은 출고불가만 빼고 그대로 가져와서 복사한 거야»: 종합 탭에는 차량상태가 출고불가가 아닌 모든 줄(출고협의·상품화중·계약중·상태 빈칸 포함). 10-04 «출고 가능차만 종합탭에»(summaryKeepStatuses 출고가능·즉시출고)를 대체한다. 공급사 탭과 매일 박제(공급사 탭만 읽음)는 그대로 전체."
 }
