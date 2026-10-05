@@ -119,6 +119,13 @@ describe('vehicle-name repair apply path (in-memory Firestore)', () => {
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       masterTitleRepairs: [{ id: 'm-gn7', from: String(master.title), to: `${master.maker} ${master.sub_model}` }] })).rejects.toThrow(/retired master/);
   });
+  it('compares the stored title exactly — extra spaces in the stored title are not the plan from', async () => {
+    const master = store.get('vehicle_master/m-gn7')!;
+    master.title = `${master.maker}  Old`;
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      masterTitleRepairs: [{ id: 'm-gn7', from: `${master.maker} Old`, to: `${master.maker} ${master.sub_model}` }] })).rejects.toThrow(/precondition/);
+    expect(store.get('vehicle_master/m-gn7')!.title).toBe(`${master.maker}  Old`);
+  });
   it('refuses to link a row to a master that does not exist', async () => {
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       trimMasterLinkRepairs: [{ id: 't1', from: 'm-gn7', to: 'm-missing' }] })).rejects.toThrow(/linked vehicle_master missing/);
