@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPlainObject, validatePolicyCorrectionPlan, type PolicyCorrectionPlan } from '../src/domain/policy-correction.js';
+import { assertNoCorrectorOverwrite, correctorOwnedFields, isPlainObject, validatePolicyCorrectionPlan, type PolicyCorrectionPlan } from '../src/domain/policy-correction.js';
 
 const item = (over: Partial<PolicyCorrectionPlan['items'][number]> = {}): PolicyCorrectionPlan['items'][number] => ({
   policyCode: 'POL-0023',
@@ -100,5 +100,15 @@ describe('policy correction domain validation', () => {
       expect(() => validatePolicyCorrectionPlan(plan([salesItem]), { documents: docs({ sales_policy: { driver_age_lowering: { value: bad } } }) })).toThrow(/STORED_SHAPE_MISMATCH/);
     }
     expect(() => validatePolicyCorrectionPlan(plan([salesItem]), { documents: docs({ sales_policy: { driver_age_lowering: { value: null } } }) })).not.toThrow();
+  });
+  it('older writers may not overwrite corrector-owned fields or its bookkeeping (identical plain rewrite is allowed)', () => {
+    const data = { driver_age_lowering: '불가', license_period: '1년 이상', policy_field_owner: 'policy-corrector',
+      field_evidence: { license_period: { writer: 'policy-corrector' }, driver_age_lowering: { writer: 'someone-else' } } };
+    expect(correctorOwnedFields(data)).toEqual(['license_period']);
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { license_period: '제한없음' })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { sales_policy: {} })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { license_period: { sentinel: true } })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+    expect(() => assertNoCorrectorOverwrite('POL-0023', data, { license_period: '1년 이상', driver_age_lowering: '협의' })).not.toThrow();
+    expect(() => assertNoCorrectorOverwrite('POL-0023', { license_period: '1년 이상' }, { license_period: '제한없음' })).not.toThrow();
   });
 });

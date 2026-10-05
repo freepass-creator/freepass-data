@@ -11,6 +11,7 @@ import {
   AUTOPLUS_PROVIDER_CODE,
   assertAutoplusPolicyRepairRunnable,
 } from '../domain/autoplus-policy-invariant.js';
+import { assertNoCorrectorOverwrite } from '../domain/policy-correction.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 
 function repairedContent(value: unknown) {
@@ -61,6 +62,7 @@ export async function applyAutoplusPolicyRepair() {
         throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
       }
       const data = snapshot.data()!;
+      assertNoCorrectorOverwrite(snapshot.ref.id, data, { basic_driver_age: '만 26세 이상', driver_age_lowering: '불가', insurance_included: '보험료 포함', age_lowering_cost: null /* removed by the repair below */, ...(typeof data.content === 'string' ? { content: repairedContent(data.content) } : {}) });
       transaction.update(snapshot.ref, {
         basic_driver_age: '만 26세 이상',
         driver_age_lowering: '불가',

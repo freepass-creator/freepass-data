@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { assertNoCorrectorOverwrite } from '../domain/policy-correction.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 
 export type IancarPolicySyncInput = { plate: string; code: string }[];
@@ -71,7 +72,7 @@ export async function applyIancarPolicySync(input: IancarPolicySyncInput) {
 
   const policyBatch = db.batch();
   for (const [code, upcharge] of Object.entries(policies)) {
-    policyBatch.set(db.collection('policy').doc(code), {
+    const policyPatch = {
       policy_code: code,
       policy_name: `RP031 이안카 연 2만km / 1만km 추가 ${upcharge}`,
       provider_company_code: 'RP031',
@@ -93,7 +94,11 @@ export async function applyIancarPolicySync(input: IancarPolicySyncInput) {
       own_damage_min_deductible: '50만원',
       own_damage_max_deductible: '100만원',
       updated_at: now,
-    }, { merge: true });
+    };
+    // The policy corrector owns fields it wrote with evidence — a sync must never overwrite them.
+    const stored = policySnaps.find((snap) => snap.id === code);
+    if (stored?.exists) assertNoCorrectorOverwrite(code, stored.data() ?? {}, policyPatch);
+    policyBatch.set(db.collection('policy').doc(code), policyPatch, { merge: true });
   }
   await policyBatch.commit();
 
