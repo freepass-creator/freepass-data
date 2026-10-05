@@ -15,7 +15,27 @@ type IancarPolicySyncDeps = {
 };
 
 const normalize = (value: unknown) => String(value ?? '').replace(/\s+/g, '').toUpperCase();
-const snapshotMillis = (snapshot: { updateTime?: { toMillis?: () => number } }) => snapshot.updateTime?.toMillis?.();
+type FirestoreTimestampLike = {
+  isEqual?(other: FirestoreTimestampLike): boolean;
+  toMillis?: () => number;
+  seconds?: number;
+  nanoseconds?: number;
+};
+
+const sameTimestamp = (a: FirestoreTimestampLike | undefined, b: FirestoreTimestampLike | undefined) => {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (typeof a.isEqual === 'function' && typeof b.isEqual === 'function') return a.isEqual(b);
+  if (typeof a.seconds === 'number' && typeof b.seconds === 'number') {
+    return a.seconds === b.seconds && a.nanoseconds === b.nanoseconds;
+  }
+  return typeof a.toMillis === 'function' && typeof b.toMillis === 'function' && a.toMillis() === b.toMillis();
+};
+
+const snapshotsHaveSameUpdateTime = (
+  a: { updateTime?: FirestoreTimestampLike | undefined },
+  b: { updateTime?: FirestoreTimestampLike | undefined },
+) => sameTimestamp(a.updateTime, b.updateTime);
 
 export async function applyIancarPolicySync(input: IancarPolicySyncInput, deps: IancarPolicySyncDeps = {}) {
   if (!Array.isArray(input) || input.length !== 119) {
@@ -42,6 +62,10 @@ export async function applyIancarPolicySync(input: IancarPolicySyncInput, deps: 
   const policies = IANCAR_POLICY_UPCHARGES;
   const policyRefs = Object.keys(policies).map((code) => db.collection('policy').doc(code));
   const policySnaps = await db.getAll(...policyRefs);
+  // RP031_S01~S04 are pre-existing canonical policy documents; this sync updates them and refuses implicit creation.
+  for (const snap of policySnaps) {
+    if (!snap.exists) throw new Error(`Required policy document missing ${snap.ref.path}`);
+  }
   // Before ANY write (product re-linking included): a policy holding corrector-owned fields refuses the whole sync.
   assertIancarPolicySyncNotBlocked(Object.fromEntries(policySnaps.filter((snap) => snap.exists).map((snap) => [snap.id, snap.data() ?? {}])));
   const backupDir = deps.backupDir ?? join(homedir(), '.codex', 'private', 'freepass-data-iancar-policy-backups');
@@ -62,7 +86,7 @@ export async function applyIancarPolicySync(input: IancarPolicySyncInput, deps: 
     const current = await transaction.getAll(...matches.map((snap) => snap.ref), ...policyRefs);
     const expected = [...matches, ...policySnaps];
     current.forEach((snap, index) => {
-      if (!snap.exists || snapshotMillis(snap) !== snapshotMillis(expected[index]!)) {
+      if (!snap.exists || !snapshotsHaveSameUpdateTime(snap, expected[index]!)) {
         throw new Error(`transaction precondition changed ${snap.ref.path}`);
       }
     });
@@ -86,21 +110,29 @@ export async function applyIancarPolicySync(input: IancarPolicySyncInput, deps: 
 
   const verifyProducts = await db.collection('products').get();
   const counts: Record<string, number> = {};
+  let verifiedProductCount = 0;
   for (const doc of verifyProducts.docs) {
-    const plate = normalize(doc.data().car_number ?? doc.data().vehicle_number);
+    const data = doc.data();
+    const plate = normalize(data.car_number ?? data.vehicle_number);
     if (byPlate.has(plate)) {
-      counts[doc.data().policy_code] = (counts[doc.data().policy_code] ?? 0) + 1;
+      verifiedProductCount += 1;
+      const expectedCode = byPlate.get(plate);
+      if (data.policy_code !== expectedCode || data.policy_code_source_original == null) {
+        throw new Error(`Product readback mismatch ${doc.ref.path}`);
+      }
+      counts[data.policy_code] = (counts[data.policy_code] ?? 0) + 1;
     }
   }
+  if (verifiedProductCount !== 119) throw new Error(`Product readback count mismatch ${verifiedProductCount}`);
   const verifyPolicies = await db.getAll(...policyRefs);
   for (const snap of verifyPolicies) {
     const expectedUpcharge = policies[snap.id as keyof typeof policies];
     const expectedPatch = iancarPolicyPatch(snap.id, expectedUpcharge, '<updated_at>');
-    if (
-      !snap.exists ||
-      snap.data()?.annual_mileage !== expectedPatch.annual_mileage ||
-      snap.data()?.mileage_upcharge_per_10000km !== expectedUpcharge
-    ) {
+    const data = snap.data() ?? {};
+    const mismatchedField = Object.entries(expectedPatch)
+      .filter(([key]) => key !== 'updated_at')
+      .find(([key, value]) => data[key] !== value);
+    if (!snap.exists || mismatchedField) {
       throw new Error(`Policy readback mismatch ${snap.ref.path}`);
     }
   }

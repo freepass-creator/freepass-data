@@ -1,5 +1,9 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-05 Iancar policy sync transaction hardening
+
+- RP031 policy sync intentionally refuses missing policy documents: `RP031_S01`~`RP031_S04` must already exist, and the sync updates those documents instead of recreating the old `set(merge)` implicit-create path.
+
 ## 2026-10-04 Vehicle Master 직접 정본 전환
 
 - 대표 결정: 차종마스터는 FreePass Data 안에서 직접 관리한다. 새 수집·정규화 경로는 F03을 읽거나 갱신하지 않는다.

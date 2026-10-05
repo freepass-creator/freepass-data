@@ -3,38 +3,55 @@ import { IANCAR_POLICY_UPCHARGES } from '../src/domain/iancar-policy-patch.js';
 
 type DocData = Record<string, unknown>;
 type Ref = { path: string; id: string };
+type FakeTimestampSeed = { seconds: number; nanoseconds: number };
 
-const store = new Map<string, { data: DocData; version: number }>();
+const store = new Map<string, { data: DocData; updateTime: FakeTimestampSeed }>();
 const stats = { batchCommits: 0, transactions: 0, writes: 0 };
 let beforeTransaction: (() => void) | undefined;
+let afterTransaction: (() => void) | undefined;
 let failOnWritePath: string | undefined;
 
 const ref = (collection: string, id: string): Ref => ({ path: `${collection}/${id}`, id });
 const clone = <T>(value: T): T => structuredClone(value);
-const updateTime = (version: number) => ({ toMillis: () => version });
+const timestampSeed = (version: number): FakeTimestampSeed => ({ seconds: Math.floor(version / 1000), nanoseconds: (version % 1000) * 1_000_000 });
+const updateTime = (value: FakeTimestampSeed) => ({
+  seconds: value.seconds,
+  nanoseconds: value.nanoseconds,
+  toMillis: () => (value.seconds * 1000) + Math.floor(value.nanoseconds / 1_000_000),
+  isEqual: (other: unknown) =>
+    typeof other === 'object' &&
+    other !== null &&
+    'seconds' in other &&
+    'nanoseconds' in other &&
+    (other as FakeTimestampSeed).seconds === value.seconds &&
+    (other as FakeTimestampSeed).nanoseconds === value.nanoseconds,
+});
 const snap = (r: Ref) => {
   const entry = store.get(r.path);
   const data = entry ? clone(entry.data) : undefined;
-  const version = entry?.version;
+  const timestamp = entry?.updateTime;
   return {
     ref: r,
     id: r.id,
     exists: data !== undefined,
-    updateTime: version === undefined ? undefined : updateTime(version),
+    updateTime: timestamp === undefined ? undefined : updateTime(timestamp),
     data: () => (data === undefined ? undefined : clone(data)),
   };
 };
-const put = (path: string, data: DocData, version = 1) => store.set(path, { data: clone(data), version });
+const put = (path: string, data: DocData, version = 1) => store.set(path, { data: clone(data), updateTime: timestampSeed(version) });
 const applyUpdate = (path: string, patch: DocData) => {
   if (failOnWritePath === path) throw new Error(`write failed ${path}`);
   const current = store.get(path);
   if (!current) throw new Error(`missing ${path}`);
-  store.set(path, { data: { ...current.data, ...clone(patch) }, version: current.version + 1 });
+  store.set(path, { data: { ...current.data, ...clone(patch) }, updateTime: { ...current.updateTime, nanoseconds: current.updateTime.nanoseconds + 1 } });
 };
 const applySet = (path: string, patch: DocData, options?: { merge?: boolean }) => {
   if (failOnWritePath === path) throw new Error(`write failed ${path}`);
   const current = store.get(path);
-  store.set(path, { data: options?.merge && current ? { ...current.data, ...clone(patch) } : clone(patch), version: (current?.version ?? 0) + 1 });
+  store.set(path, {
+    data: options?.merge && current ? { ...current.data, ...clone(patch) } : clone(patch),
+    updateTime: current ? { ...current.updateTime, nanoseconds: current.updateTime.nanoseconds + 1 } : timestampSeed(1),
+  });
 };
 
 const db = {
@@ -74,6 +91,7 @@ const db = {
       next.forEach((value, key) => store.set(key, value));
       throw error;
     }
+    afterTransaction?.();
   },
 };
 
@@ -112,6 +130,7 @@ beforeEach(() => {
   stats.transactions = 0;
   stats.writes = 0;
   beforeTransaction = undefined;
+  afterTransaction = undefined;
   failOnWritePath = undefined;
   vi.mocked(fsPromises.writeFile).mockClear();
   seedProducts();
@@ -130,7 +149,7 @@ describe('iancar policy sync transaction', () => {
   });
 
   it('does not update products when a policy precondition changes inside the transaction', async () => {
-    beforeTransaction = () => { store.get('policy/RP031_S02')!.version += 1; };
+    beforeTransaction = () => { store.get('policy/RP031_S02')!.updateTime.nanoseconds += 1; };
     await expect(call()).rejects.toThrow(/transaction precondition changed policy\/RP031_S02/);
     expect(stats.writes).toBe(0);
     expect(store.get('products/p-0')!.data.policy_code).toBe('OLD');
@@ -145,10 +164,38 @@ describe('iancar policy sync transaction', () => {
   });
 
   it('does not update anything when a product updateTime changes inside the transaction', async () => {
-    beforeTransaction = () => { store.get('products/p-77')!.version += 1; };
+    beforeTransaction = () => { store.get('products/p-77')!.updateTime.nanoseconds += 1; };
     await expect(call()).rejects.toThrow(/transaction precondition changed products\/p-77/);
     expect(stats.writes).toBe(0);
     expect(store.get('products/p-77')!.data.policy_code).toBe('OLD');
+  });
+
+  it('does not miss a same-millisecond updateTime change with different nanoseconds', async () => {
+    beforeTransaction = () => { store.get('products/p-12')!.updateTime.nanoseconds += 100; };
+    await expect(call()).rejects.toThrow(/transaction precondition changed products\/p-12/);
+    expect(stats.writes).toBe(0);
+    expect(store.get('products/p-12')!.data.policy_code).toBe('OLD');
+  });
+
+  it('refuses corrector-owned policy fields discovered by the transaction reread', async () => {
+    beforeTransaction = () => {
+      store.get('policy/RP031_S03')!.data.field_evidence = { annual_mileage: { writer: 'policy-corrector' } };
+    };
+    await expect(call()).rejects.toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+    expect(stats.writes).toBe(0);
+    expect(store.get('products/p-0')!.data.policy_code).toBe('OLD');
+  });
+
+  it('throws when product readback finds a mismatched policy code', async () => {
+    afterTransaction = () => { store.get('products/p-33')!.data.policy_code = 'RP031_S04'; };
+    await expect(call()).rejects.toThrow(/Product readback mismatch products\/p-33/);
+  });
+
+  it('does not enter the transaction when backup writing fails', async () => {
+    vi.mocked(fsPromises.writeFile).mockRejectedValueOnce(new Error('backup failed'));
+    await expect(call()).rejects.toThrow(/backup failed/);
+    expect(stats.transactions).toBe(0);
+    expect(stats.writes).toBe(0);
   });
 
   it('refuses corrector-owned policy fields before backup and writes', async () => {
