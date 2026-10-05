@@ -392,6 +392,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 변경: `src/application/sheet-blank-fill.ts`, `src/jobs/plan-sheet-blank-fill.ts`, `tests/sheet-blank-fill.test.ts`, `docs/SHEET-BLANK-FILL.md`, `package.json` 스크립트 추가.
 - 검증: `npm.cmd run check`와 `npm.cmd run check:standards` 실행 결과를 최종 보고에 남긴다.
 - next_start_here: 비공개 캡처 JSON을 15분 안에 넣어 `SHEET_BLANK_FILL_INPUT`/`SHEET_BLANK_FILL_OUT`으로 계획·보고서만 만들고, 적용은 상황실 시트고치기 엔진에서 별도 수행한다.
+### 2026-10-05 정책 정정기 일반 경로 추가
+
+- 목적: `policy/<정책코드>`의 공급사 조건층과 판매 방침층을 근거·시행일·계획 digest로 정정하는 일반 정정기를 추가했다.
+- 변경: `policy-correction` 도메인 검증, Firestore 적용기, `repair:policy-correction` job, 테스트, 짧은 운영 문서 추가. 기존 공급사 전용 정정기 코드는 건드리지 않고 `package.json` 스크립트만 추가했다.
+- 검증: `tests/policy-correction*.test.ts` 추가. 전체 `npm.cmd run check`와 `npm.cmd run check:standards`는 이 작업 마지막에 실행 결과를 보고한다.
+- 남음: `policy_field_owner: "policy-corrector"` 표시는 이번에 쓰지만, 기존 공급사 전용 보정기·매일 수집기가 이 표시를 보고 덮어쓰지 않게 하는 방어 로직은 후속 작업이다.
+- next_start_here: 실제 운영 적용은 `POLICY_CORRECTION_PLAN` dry-run의 `planDigest`를 확인한 뒤 같은 digest를 `AUTHORIZE_POLICY_CORRECTION`으로 넣고 `--apply`를 붙인다.
 
 ### 2026-10-05 하루 한 번 박제 첫 예약 실행 — 예약이 만들어지지 않음(읽기만 점검)
 
