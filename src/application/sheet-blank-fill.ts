@@ -31,7 +31,7 @@ export type SheetBlankFillReport = {
   skippedCounts: Partial<Record<SkipReason, number>>;
 };
 
-type SkipReason = 'DUPLICATE_ROW' | 'WHITESPACE_ONLY' | 'POLICY_LINK_MISMATCH' | 'INVALID_NUMBER' | 'NEEDS_CONFIRMATION' | 'NO_EVIDENCE' | 'NOT_CONFIRMED' | 'NO_CANON' | 'POLICY_NOT_CORRECTED' | 'NO_POLICY_LINK' | 'FORMULA_CELL' | 'HEADER_MISSING' | 'HEADER_DUPLICATE';
+type SkipReason = 'INVALID_ROW_NUMBER' | 'DUPLICATE_ROW' | 'WHITESPACE_ONLY' | 'POLICY_LINK_MISMATCH' | 'INVALID_NUMBER' | 'NEEDS_CONFIRMATION' | 'NO_EVIDENCE' | 'NOT_CONFIRMED' | 'NO_CANON' | 'POLICY_NOT_CORRECTED' | 'NO_POLICY_LINK' | 'FORMULA_CELL' | 'HEADER_MISSING' | 'HEADER_DUPLICATE';
 type Canon = { value: string | number; layer: '차량' | '정책' | '판매방침' } | { skip: SkipReason };
 
 const VEHICLE_FIELDS: Record<string, string> = {
@@ -131,6 +131,11 @@ export function planSheetBlankFill(input: SheetBlankFillInput): { plan: SheetBla
     const duplicates = new Set<string>();
     sheet.headers.forEach((h, i) => { if (!h) return; if (index.has(h)) duplicates.add(h); else index.set(h, i); });
     // 같은 탭에서 행 번호가 두 번 오면(캡처 오류·병합 실수) 줄확인·칸 주소가 어느 줄인지 알 수 없다 — 그 탭 전체를 멈춘다.
+    // 행 번호는 2 이상의 정수여야 한다(«2» 글자·소수·0·음수·NaN 이면 칸 주소·줄확인이 틀어진다) — 하나라도 아니면 그 탭 전체를 멈춘다.
+    if (sheet.rows.some((r) => typeof r.row !== 'number' || !Number.isSafeInteger(r.row) || r.row < 2)) {
+      for (const r of sheet.rows) addSkip(tab, Number(r.row), text(r.values[sheet.headers.indexOf('차량번호')]), '(행 번호 이상)', 'INVALID_ROW_NUMBER');
+      continue;
+    }
     const rowSeen = new Set<number>();
     const dupRows = new Set<number>();
     for (const r of sheet.rows) { if (rowSeen.has(r.row)) dupRows.add(r.row); rowSeen.add(r.row); }

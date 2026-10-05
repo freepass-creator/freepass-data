@@ -138,4 +138,14 @@ describe('공통 시트 빈 칸 채우기 계획기', () => {
     expect(plan.줄확인).toHaveLength(0);
     expect(report.skippedCounts.DUPLICATE_ROW).toBe(3);
   });
+  it('holds a whole tab when any input row number is not an integer >= 2 (string, fraction, 0, NaN)', () => {
+    for (const bad of ['2', 2.5, 0, 1, Number.NaN, -3]) {
+      const good = row(3, '11가1111');
+      const broken = { ...row(2, '11가1111'), row: bad as unknown as number };
+      const { plan, report } = planSheetBlankFill(base([broken, good]));
+      expect(plan.바꿀칸).toHaveLength(0);
+      expect(plan.줄확인).toHaveLength(0);
+      expect(report.skippedCounts.INVALID_ROW_NUMBER).toBe(2);
+    }
+  });
 });
