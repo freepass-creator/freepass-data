@@ -61,7 +61,7 @@ vi.mock('firebase-admin/firestore', () => ({
 vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: () => ({}) }));
 vi.mock('node:fs/promises', () => ({ mkdir: async () => undefined, writeFile: async () => undefined }));
 
-const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
+const { applyVehicleNameReferenceRepair, MAX_MASTER_IDENTITY_SCAN, readbackAuditEvents } = await import('../src/infra/vehicle-name-reference-repair-firestore.js');
 
 beforeEach(() => {
   store.clear();
@@ -714,5 +714,23 @@ describe('product source correction apply path', () => {
     expect(doc.원문_정정_이력).toHaveLength(2);
     expect((doc.원문_정정_이력 as unknown[])[0]).toEqual(previous);
     expect((doc.원문_정정_이력 as unknown[])[1]).toEqual(doc.원문_정정);
+  });
+});
+
+describe('audit readback', () => {
+  const fakeDb = (docs: Array<{ reason: string }>) => ({ getAll: async (...refs: number[]) => {
+    if (!refs.length) throw new Error('Function "Firestore.getAll()" requires at least 1 argument');
+    return refs.map((i) => ({ exists: true, data: () => docs[i] }));
+  } });
+  it('skips the read only when there are no audits and no refs', async () => {
+    await expect(readbackAuditEvents(fakeDb([]), [], [], 'm')).resolves.toEqual([]);
+  });
+  it('refuses refs that do not match the audits (count) instead of skipping', async () => {
+    await expect(readbackAuditEvents(fakeDb([{ reason: 'a' }]), [], [{ reason: 'a' }], 'readback audit mismatch')).rejects.toThrow(/0 audit refs for 1 audits/);
+    await expect(readbackAuditEvents(fakeDb([{ reason: 'a' }]), [0], [], 'readback audit mismatch')).rejects.toThrow(/1 audit refs for 0 audits/);
+  });
+  it('checks each audit reason', async () => {
+    await expect(readbackAuditEvents(fakeDb([{ reason: 'a' }]), [0], [{ reason: 'a' }], 'm')).resolves.toHaveLength(1);
+    await expect(readbackAuditEvents(fakeDb([{ reason: 'x' }]), [0], [{ reason: 'a' }], 'readback audit mismatch')).rejects.toThrow(/readback audit mismatch/);
   });
 });
