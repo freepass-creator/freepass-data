@@ -85,4 +85,13 @@ describe('policy correction domain validation', () => {
     }
     expect(isPlainObject(Object.create(null))).toBe(true);
   });
+  it('refuses the whole policy when ANY sales_policy / field_evidence entry is malformed, even a sibling of the corrected field', () => {
+    const salesItem = item({ field: 'age_21_cost', layer: 'salesPolicy', from: null, to: '10만원' });
+    // sibling driver_age_lowering stored as the bare string '불가' (not a map): must not be dropped before the contradiction check
+    expect(() => validatePolicyCorrectionPlan(plan([salesItem]), { documents: docs({ sales_policy: { driver_age_lowering: '불가' } }) })).toThrow(/STORED_SHAPE_MISMATCH/);
+    expect(() => validatePolicyCorrectionPlan(plan([salesItem]), { documents: docs({ sales_policy: { driver_age_lowering: { note: 'no value' } } }) })).toThrow(/STORED_SHAPE_MISMATCH/);
+    expect(() => validatePolicyCorrectionPlan(plan([item()]), { documents: docs({ driver_age_lowering: '협의', field_evidence: { age_21_cost: 'x' } }) })).toThrow(/STORED_SHAPE_MISMATCH/);
+    // well-formed siblings still feed the contradiction check with their real stored values
+    expect(() => validatePolicyCorrectionPlan(plan([salesItem]), { documents: docs({ sales_policy: { driver_age_lowering: { value: '불가' } } }) })).toThrow(/CONTRADICTION/);
+  });
 });

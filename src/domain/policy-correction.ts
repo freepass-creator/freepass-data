@@ -136,6 +136,19 @@ export const assertStoredShape = (policyCode: string, data: Record<string, unkno
   const entryMap = objectValue(entry);
   if (!entryMap || (layer === 'salesPolicy' && !('value' in entryMap))) throw new Error(`STORED_SHAPE_MISMATCH ${policyCode}.${label}.${field}`);
 };
+/** Whole-document shape check: EVERY entry of sales_policy and field_evidence must be a plain map (sales entries with a «value»).
+ * A malformed sibling must not be silently read as «absent» by the contradiction check — the whole policy is refused. */
+export const assertAllStoredShapes = (policyCode: string, data: Record<string, unknown>) => {
+  for (const [layer, label] of [['salesPolicy', 'sales_policy'], ['supplierCondition', 'field_evidence']] as const) {
+    const container = layer === 'salesPolicy' ? data.sales_policy : data.field_evidence;
+    if (container === undefined || container === null) continue;
+    if (!isPlainObject(container)) throw new Error(`STORED_SHAPE_MISMATCH ${policyCode}.${label}`);
+    for (const [field, entry] of Object.entries(container)) {
+      if (entry === undefined || entry === null) continue;
+      if (!isPlainObject(entry) || (layer === 'salesPolicy' && !('value' in entry))) throw new Error(`STORED_SHAPE_MISMATCH ${policyCode}.${label}.${field}`);
+    }
+  }
+};
 export const storedPolicyValue = (data: Record<string, unknown>, layer: PolicyCorrectionLayer, field: string): unknown => {
   if (layer === 'salesPolicy') return objectValue(objectValue(data.sales_policy)?.[field])?.value;
   return data[field];
@@ -206,6 +219,7 @@ export function validatePolicyCorrectionPlan(plan: PolicyCorrectionPlan, context
     if (!doc) continue;
     const data = doc.data;
     if (!data.provider_company_code) throw new Error(`SUPPLIER_CODE_MISSING ${policyCode}`);
+    assertAllStoredShapes(policyCode, data);
     for (const item of items) {
       if (data.provider_company_code !== item.supplierCode) throw new Error(`SUPPLIER_MISMATCH ${policyCode}`);
       assertStoredShape(policyCode, data, item.layer, item.field);
