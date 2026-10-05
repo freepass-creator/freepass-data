@@ -210,6 +210,9 @@ const correctionHistory = (stored: unknown, path: string): Record<string, unknow
 };
 const sourceCorrectionKey = (planDigest: string, item: ProductSourceCorrectionItem) => stableDigest({ planDigest, id: item.id, 출처: item.correction.출처 });
 const historyHasKey = (history: Record<string, unknown>[], key: string) => history.some((entry) => entry?.key === key);
+/** A stored 원문_정정 (latest) must already be in the history; otherwise overwriting it would drop it from the product. */
+const currentCorrectionKeptInHistory = (current: unknown, history: Record<string, unknown>[]) =>
+  current === undefined || current === null || history.some((entry) => stableDigest(entry) === stableDigest(current));
 
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   if (!plan.sourceDigest?.trim()) throw new Error('sourceDigest is required');
@@ -454,6 +457,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     if (sourceCorrectionDigests[index] !== item.expectedCurrentDigest) {
       throw new Error(`productSourceCorrection expectedCurrentDigest mismatch ${ref.path}.원문_정정`);
     }
+    if (!currentCorrectionKeptInHistory(sourceCorrectionSnapshots[index]!.data()?.원문_정정, sourceCorrectionHistories[index]!)) {
+      throw new Error(`productSourceCorrection current 원문_정정 is not in 원문_정정_이력 — it would be lost ${ref.path}`);
+    }
   });
   const originalSourceDigests = sourceCorrectionSnapshots.map((snapshot) => stableDigest(snapshot.data()?.원문 ?? null));
   const variantRepairs = plan.masterVariantRepairs ?? [];
@@ -652,6 +658,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       const currentDigest = stableDigest(snapshot.data()?.원문_정정 ?? null);
       if (currentDigest !== sourceCorrectionTargets[index]!.item.expectedCurrentDigest) {
         throw new Error(`transaction productSourceCorrection expectedCurrentDigest mismatch ${snapshot.ref.path}.원문_정정`);
+      }
+      if (!currentCorrectionKeptInHistory(snapshot.data()?.원문_정정, history)) {
+        throw new Error(`transaction productSourceCorrection current 원문_정정 is not in 원문_정정_이력 — it would be lost ${snapshot.ref.path}`);
       }
       if (stableDigest(snapshot.data()?.원문 ?? null) !== originalSourceDigests[index]) {
         throw new Error(`transaction product original source changed since backup ${snapshot.ref.path}.원문`);

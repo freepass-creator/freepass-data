@@ -580,7 +580,7 @@ describe('product source correction apply path', () => {
   it('rejects missing product and catches concurrent source-correction changes', async () => {
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       productSourceCorrections: [{ id: 'missing-source', correction, expectedCurrentDigest: stableDigest(null), evidence: 'plate lookup result' }] })).rejects.toThrow(/target missing/);
-    store.set('products/p-source', { 원문: 'raw text', 원문_정정: { ...correction, sourceDigest: 'old' } });
+    store.set('products/p-source', { 원문: 'raw text', 원문_정정: { ...correction, sourceDigest: 'old' }, 원문_정정_이력: [{ ...correction, sourceDigest: 'old' }] });
     const expectedCurrentDigest = stableDigest(store.get('products/p-source')!.원문_정정);
     const original = db.runTransaction;
     db.runTransaction = async (fn) => {
@@ -593,6 +593,15 @@ describe('product source correction apply path', () => {
         .rejects.toThrow(/expectedCurrentDigest mismatch/);
     } finally { db.runTransaction = original; }
     expect(store.get('products/p-source')!.원문_정정).toMatchObject({ sourceDigest: 'changed' });
+  });
+
+  it('refuses to overwrite a stored 원문_정정 that is missing from 원문_정정_이력 (it would be lost)', async () => {
+    store.set('products/p-source', { 원문: 'raw text', 원문_정정: { ...correction, sourceDigest: 'old' } });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productSourceCorrections: [{ id: 'p-source', correction, expectedCurrentDigest: stableDigest(store.get('products/p-source')!.원문_정정), evidence: 'plate lookup result' }] }))
+      .rejects.toThrow(/would be lost/);
+    expect(store.get('products/p-source')).toMatchObject({ 원문_정정: { sourceDigest: 'old' } });
+    expect(store.get('products/p-source')!.원문_정정_이력).toBeUndefined();
   });
 
   it('catches a 원문 change between backup and transaction', async () => {
