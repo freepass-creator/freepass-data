@@ -27,17 +27,22 @@ const query = (collection: string, filters: Array<[string, unknown]> = [], cap?:
   get: async () => runQuery(query(collection, filters, cap)),
 });
 
+// Like the real client: Firestore.getAll() with no references throws (10-05 운영 실행에서 커밋 뒤 감사 되읽기가 이것으로 실패).
+const getAllLikeFirestore = (refs: Ref[]) => {
+  if (!refs.length) throw new Error('Function "Firestore.getAll()" requires at least 1 argument');
+  return refs.map(snap);
+};
 const runQuery = (q: Query) => {
   const docs = [...store.entries()].filter(([path, data]) => path.startsWith(`${q.collection}/`) && q.filters.every(([f, v]) => data[f] === v)).slice(0, q.cap ?? Infinity);
   return { empty: docs.length === 0, size: docs.length, docs: docs.map(([path, data]) => ({ id: path.split('/')[1]!, data: () => structuredClone(data) })) };
 };
 const db = {
   collection: (c: string) => ({ doc: (id: string) => ref(c, id), where: (f: string, op: string, v: unknown) => query(c).where(f, op, v), select: (...f: string[]) => query(c).select(...f) }),
-  getAll: async (...refs: Ref[]) => refs.map(snap),
+  getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
   runTransaction: async (fn: (t: unknown) => Promise<void>) => {
     const writes: Array<() => void> = [];
     const t = {
-      getAll: async (...refs: Ref[]) => refs.map(snap),
+      getAll: async (...refs: Ref[]) => getAllLikeFirestore(refs),
       get: async (q: Query) => runQuery(q),
       update: (r: Ref, u: Record<string, unknown>) => writes.push(() => applyUpdate(r.path, u)),
       create: (r: Ref, d: Record<string, unknown>) => writes.push(() => {

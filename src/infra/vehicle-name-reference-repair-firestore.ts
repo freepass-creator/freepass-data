@@ -912,7 +912,8 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       throw new Error(`readback create mismatch ${snapshot.ref.path}`);
     }
   });
-  const auditReadback = await db.getAll(...auditRefs);
+  // Firestore.getAll() refuses an empty list — a plan with only source corrections has no other audits.
+  const auditReadback = auditRefs.length ? await db.getAll(...auditRefs) : [];
   if (auditReadback.some((s, index) => !s.exists || s.data()?.reason !== audits[index]!.reason)) throw new Error('readback audit mismatch');
   const activeSourceCorrectionAudits = sourceCorrectionAudits.filter((_, index) => activeSourceCorrectionIndexes.has(index));
   const activeSourceCorrectionAuditRefs = sourceCorrectionAuditRefs.filter((_, index) => activeSourceCorrectionIndexes.has(index));
