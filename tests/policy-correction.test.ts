@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertNoCorrectorOverwrite, correctorOwnedFields, isPlainObject, validatePolicyCorrectionPlan, type PolicyCorrectionPlan } from '../src/domain/policy-correction.js';
+import { POLICY_PATCH_DELETE, assertNoCorrectorOverwrite, correctorOwnedFields, isPlainObject, validatePolicyCorrectionPlan, type PolicyCorrectionPlan } from '../src/domain/policy-correction.js';
 
 const item = (over: Partial<PolicyCorrectionPlan['items'][number]> = {}): PolicyCorrectionPlan['items'][number] => ({
   policyCode: 'POL-0023',
@@ -110,5 +110,12 @@ describe('policy correction domain validation', () => {
     expect(() => assertNoCorrectorOverwrite('POL-0023', data, { license_period: { sentinel: true } })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
     expect(() => assertNoCorrectorOverwrite('POL-0023', data, { license_period: '1년 이상', driver_age_lowering: '협의' })).not.toThrow();
     expect(() => assertNoCorrectorOverwrite('POL-0023', { license_period: '1년 이상' }, { license_period: '제한없음' })).not.toThrow();
+  });
+  it('treats a field DELETE (or null) on a corrector-owned field as a different value and refuses it', () => {
+    const data = { age_lowering_cost: '불가', field_evidence: { age_lowering_cost: { writer: 'policy-corrector' } } };
+    expect(() => assertNoCorrectorOverwrite('POL-0047', data, { age_lowering_cost: POLICY_PATCH_DELETE })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+    expect(() => assertNoCorrectorOverwrite('POL-0047', data, { age_lowering_cost: null })).toThrow(/POLICY_FIELD_OWNED_BY_CORRECTOR/);
+    expect(() => assertNoCorrectorOverwrite('POL-0047', { ...data, age_lowering_cost: null }, { age_lowering_cost: null })).not.toThrow();
+    expect(() => assertNoCorrectorOverwrite('POL-0047', { age_lowering_cost: '불가' }, { age_lowering_cost: POLICY_PATCH_DELETE })).not.toThrow();
   });
 });

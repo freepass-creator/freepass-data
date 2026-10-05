@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { assertNoCorrectorOverwrite } from '../domain/policy-correction.js';
+import { IANCAR_POLICY_UPCHARGES, assertIancarPolicySyncNotBlocked, iancarPolicyPatch } from '../domain/iancar-policy-patch.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 
 export type IancarPolicySyncInput = { plate: string; code: string }[];
@@ -35,14 +35,11 @@ export async function applyIancarPolicySync(input: IancarPolicySyncInput) {
     throw new Error(`Exact product match failed: ${matches.length}`);
   }
 
-  const policies = {
-    RP031_S01: '5만원',
-    RP031_S02: '10만원',
-    RP031_S03: '15만원',
-    RP031_S04: '25만원',
-  } as const;
+  const policies = IANCAR_POLICY_UPCHARGES;
   const policyRefs = Object.keys(policies).map((code) => db.collection('policy').doc(code));
   const policySnaps = await db.getAll(...policyRefs);
+  // Before ANY write (product re-linking included): a policy holding corrector-owned fields refuses the whole sync.
+  assertIancarPolicySyncNotBlocked(Object.fromEntries(policySnaps.filter((snap) => snap.exists).map((snap) => [snap.id, snap.data() ?? {}])));
   const backupDir = join(homedir(), '.codex', 'private', 'freepass-data-iancar-policy-backups');
   await mkdir(backupDir, { recursive: true });
   const runId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
@@ -72,32 +69,7 @@ export async function applyIancarPolicySync(input: IancarPolicySyncInput) {
 
   const policyBatch = db.batch();
   for (const [code, upcharge] of Object.entries(policies)) {
-    const policyPatch = {
-      policy_code: code,
-      policy_name: `RP031 이안카 연 2만km / 1만km 추가 ${upcharge}`,
-      provider_company_code: 'RP031',
-      maintenance_service: '미제공',
-      deposit_installment: '불가',
-      annual_mileage: '연 20,000km',
-      mileage_upcharge_per_10000km: upcharge,
-      driver_age_lowering: '불가',
-      age_21_cost: '불가',
-      age_23_cost: '불가',
-      personal_driver_scope: '개인/사업자',
-      injury_compensation_limit: '무한',
-      injury_deductible: '50만원',
-      property_compensation_limit: '1억원',
-      property_deductible: '50만원',
-      self_body_accident: '1천5백만원',
-      self_body_deductible: '50만원',
-      uninsured_damage: '없음',
-      own_damage_min_deductible: '50만원',
-      own_damage_max_deductible: '100만원',
-      updated_at: now,
-    };
-    // The policy corrector owns fields it wrote with evidence — a sync must never overwrite them.
-    const stored = policySnaps.find((snap) => snap.id === code);
-    if (stored?.exists) assertNoCorrectorOverwrite(code, stored.data() ?? {}, policyPatch);
+    const policyPatch = iancarPolicyPatch(code, upcharge, now);
     policyBatch.set(db.collection('policy').doc(code), policyPatch, { merge: true });
   }
   await policyBatch.commit();

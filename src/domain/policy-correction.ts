@@ -236,6 +236,9 @@ export function validatePolicyCorrectionPlan(plan: PolicyCorrectionPlan, context
   return { itemCount: plan.items.length, policyCount: Object.keys(byDoc).length, planDigest: stableDigest(plan) };
 }
 
+/** Marker for a patch that DELETES a field (FieldValue.delete() in the writers). A delete counts as a different value. */
+export const POLICY_PATCH_DELETE = Symbol('policy-patch-delete');
+
 /** Policy fields whose stored value was written by the policy corrector (field_evidence[field].writer === 'policy-corrector'). */
 export const correctorOwnedFields = (data: Record<string, unknown>): string[] => {
   const evidence = objectValue(data.field_evidence);
@@ -253,8 +256,9 @@ export const assertNoCorrectorOverwrite = (policyCode: string, data: Record<stri
   const bookkeeping = new Set(['field_evidence', 'sales_policy', 'policy_field_owner', 'policy_correction_last']);
   const sameValue = (key: string) => {
     const next = patch[key];
+    if (next === POLICY_PATCH_DELETE) return false; // deleting an owned field is a change, never an idempotent rewrite
     const plain = next === null || ['string', 'number', 'boolean'].includes(typeof next);
-    return plain && data[key] === next;
+    return plain && key in data && data[key] === next;
   };
   const hits = Object.keys(patch).filter((key) => (owned.has(key) && !sameValue(key)) || (bookkeeping.has(key) && data.policy_field_owner === 'policy-corrector'));
   if (hits.length) throw new Error(`POLICY_FIELD_OWNED_BY_CORRECTOR ${policyCode}.${hits.join(',')}`);
