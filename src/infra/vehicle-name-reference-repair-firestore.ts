@@ -21,6 +21,22 @@ export type VehicleProductIdentityRepairItem = {
   to: { maker: string; model: string; sub_model: string };
   evidence: string;
 };
+export type ProductSourceCorrection = {
+  차명: string | null;
+  연식: string | null;
+  최초등록: string | null;
+  연료: string | null;
+  배기량: string | null;
+  출처: string;
+  조회일: string;
+  비고?: string;
+};
+export type ProductSourceCorrectionItem = {
+  id: string;
+  expectedCurrentDigest: string;
+  correction: ProductSourceCorrection;
+  evidence: string;
+};
 
 export type VehicleNameRepairPlan = {
   sourceDigest: string;
@@ -28,6 +44,8 @@ export type VehicleNameRepairPlan = {
   productRepairs: VehicleNameRepairItem[];
   /** products.maker/model/sub_model repaired together after matching an active vehicle_master identity. */
   productIdentityRepairs?: VehicleProductIdentityRepairItem[];
+  /** products.원문 is immutable; reviewed source correction text is archived separately. */
+  productSourceCorrections?: ProductSourceCorrectionItem[];
   /** vehicle_trim_master.trim → F03 세부트림 name (old name kept in trim_aliases). Optional; absent = no trim repairs. */
   trimRepairs?: VehicleNameRepairItem[];
   /** products.trim_name → F03 세부트림 name. Optional; `from` must be a non-blank name. */
@@ -83,6 +101,7 @@ const clean = normalizeName;
 /** Names written by this tool must already be normalized — a value that changes under normalizeName is refused. */
 const NAME_KINDS = new Set(['master', 'product', 'trim', 'productTrim', 'trimSubModel', 'masterModel', 'trimModel', 'masterGenCode', 'masterTitle']);
 const PRODUCT_IDENTITY_FIELDS = ['maker', 'model', 'sub_model'] as const;
+const PRODUCT_SOURCE_CORRECTION_KEYS = ['차명', '연식', '최초등록', '연료', '배기량', '출처', '조회일', '비고'] as const;
 /** Kinds that write a vehicle_master document (a retired master is frozen for all of them). */
 const MASTER_DOC_KINDS = new Set(['master', 'masterModel', 'masterGenCode', 'masterTitle']);
 /** Every trim name inside variants must also be in the top-level trims list (consumers read both). */
@@ -182,6 +201,24 @@ const matchesIdentityFrom = (stored: Record<string, unknown> | undefined, from: 
 const productIdentityToObject = (item: VehicleProductIdentityRepairItem) => ({
   maker: clean(item.to.maker), model: clean(item.to.model), sub_model: clean(item.to.sub_model),
 });
+const sameProductSourceCorrection = (stored: unknown, item: ProductSourceCorrectionItem, sourceDigest: string) => {
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return false;
+  const data = stored as Record<string, unknown>;
+  return PRODUCT_SOURCE_CORRECTION_KEYS.every((field) => {
+    if (field === '비고' && item.correction[field] === undefined) return data[field] === undefined;
+    return data[field] === item.correction[field];
+  }) && data.sourceDigest === sourceDigest;
+};
+const correctionHistory = (stored: unknown, path: string): Record<string, unknown>[] => {
+  if (stored === undefined || stored === null) return [];
+  if (!Array.isArray(stored)) throw new Error(`productSourceCorrection history is not a list ${path}.원문_정정_이력`);
+  return stored as Record<string, unknown>[];
+};
+const sourceCorrectionKey = (planDigest: string, item: ProductSourceCorrectionItem) => stableDigest({ planDigest, id: item.id, 출처: item.correction.출처 });
+const historyHasKey = (history: Record<string, unknown>[], key: string) => history.some((entry) => entry?.key === key);
+/** A stored 원문_정정 (latest) must already be in the history; otherwise overwriting it would drop it from the product. */
+const currentCorrectionKeptInHistory = (current: unknown, history: Record<string, unknown>[]) =>
+  current === undefined || current === null || history.some((entry) => stableDigest(entry) === stableDigest(current));
 
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   if (!plan.sourceDigest?.trim()) throw new Error('sourceDigest is required');
@@ -201,6 +238,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   const creates = [...(plan.masterCreates ?? []).map((c) => ({ ...c, kind: 'masterCreate', keys: MASTER_CREATE_KEYS })),
     ...(plan.trimCreates ?? []).map((c) => ({ ...c, kind: 'trimCreate', keys: TRIM_CREATE_KEYS }))];
   const variantRepairs = plan.masterVariantRepairs ?? [];
+  const sourceCorrections = plan.productSourceCorrections ?? [];
   for (const v of variantRepairs) {
     if (!v.id?.trim() || !/^[0-9a-f]{64}$/.test(v.fromDigest ?? '') || !Array.isArray(v.to) || !v.to.length) throw new Error('masterVariantRepair requires id, fromDigest and a non-empty variants list');
     if (typeof v.evidence !== 'string' || !v.evidence.trim()) throw new Error(`masterVariantRepair ${v.id} requires evidence`);
@@ -234,8 +272,8 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     throw new Error('the same plan must not link a trim row to a master it retires');
   }
   if ((plan.masterCreates ?? []).some((c) => c.data.retired !== undefined || c.data.retired_into !== undefined)) throw new Error('masterCreate must create an active master (no retired fields)');
-  if (!all.length && !productIdentityRepairs.length && !creates.length && !variantRepairs.length && !retires.length) throw new Error('repair plan is empty');
-  if (all.length + productIdentityRepairs.length + creates.length + variantRepairs.length + retires.length > MAX_VEHICLE_NAME_REPAIR_TARGETS) throw new Error(`repair plan too large (max ${MAX_VEHICLE_NAME_REPAIR_TARGETS} targets) — split it`);
+  if (!all.length && !productIdentityRepairs.length && !sourceCorrections.length && !creates.length && !variantRepairs.length && !retires.length) throw new Error('repair plan is empty');
+  if (all.length + productIdentityRepairs.length + sourceCorrections.length + creates.length + variantRepairs.length + retires.length > MAX_VEHICLE_NAME_REPAIR_TARGETS) throw new Error(`repair plan too large (max ${MAX_VEHICLE_NAME_REPAIR_TARGETS} targets) — split it`);
   const createKeys = new Set<string>();
   for (const c of creates) {
     if (!c.id?.trim() || typeof c.data !== 'object' || c.data === null || Array.isArray(c.data)) throw new Error(`${c.kind} requires id and data`);
@@ -307,6 +345,25 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     }
     if (PRODUCT_IDENTITY_FIELDS.every((field) => clean(item.from[field]) === clean(item.to[field]))) throw new Error(`no-op productIdentity:${item.id}`);
   }
+  const productSourceCorrectionIds = new Set<string>();
+  for (const item of sourceCorrections) {
+    if (!isDocId(item.id)) throw new Error('productSourceCorrection repair id must be a single document id');
+    if (productSourceCorrectionIds.has(item.id)) throw new Error(`duplicate productSourceCorrection productSourceCorrection:${item.id}`);
+    productSourceCorrectionIds.add(item.id);
+    if (typeof item.expectedCurrentDigest !== 'string' || !item.expectedCurrentDigest.trim()) throw new Error(`productSourceCorrection ${item.id} requires expectedCurrentDigest`);
+    if (typeof item.evidence !== 'string' || !item.evidence.trim()) throw new Error(`productSourceCorrection ${item.id} requires evidence`);
+    if (!item.correction || typeof item.correction !== 'object' || Array.isArray(item.correction)) throw new Error(`productSourceCorrection ${item.id} requires correction`);
+    for (const key of Object.keys(item.correction)) {
+      if (!(PRODUCT_SOURCE_CORRECTION_KEYS as readonly string[]).includes(key)) throw new Error(`productSourceCorrection ${item.id} rejects correction key ${key}`);
+    }
+    for (const key of PRODUCT_SOURCE_CORRECTION_KEYS) {
+      const value = item.correction[key];
+      if (key === '비고' && value === undefined) continue;
+      if (value !== null && typeof value !== 'string') throw new Error(`productSourceCorrection ${item.id} ${key} must be a string or null`);
+    }
+    if (!item.correction.출처?.trim()) throw new Error(`productSourceCorrection ${item.id} requires 출처`);
+    if (!item.correction.조회일?.trim()) throw new Error(`productSourceCorrection ${item.id} requires 조회일`);
+  }
   const keys = new Set<string>();
   for (const item of all) {
     // A blank `from` fills an empty products.sub_model only, with source-text evidence; the transaction
@@ -328,6 +385,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   }
   return { masterCount: plan.masterRepairs.length, productCount: plan.productRepairs.length,
     ...(plan.productIdentityRepairs ? { productIdentityCount: plan.productIdentityRepairs.length } : {}),
+    ...(plan.productSourceCorrections ? { productSourceCorrectionCount: plan.productSourceCorrections.length } : {}),
     ...(plan.trimRepairs ? { trimCount: plan.trimRepairs.length } : {}),
     ...(plan.productTrimRepairs ? { productTrimCount: plan.productTrimRepairs.length } : {}),
     ...(plan.trimSubModelRepairs ? { trimSubModelCount: plan.trimSubModelRepairs.length } : {}),
@@ -352,6 +410,7 @@ const ALIAS_FIELD: Partial<Record<string, AliasField>> = {
 
 export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan) {
   const counts = validateVehicleNameRepairPlan(plan);
+  const planDigest = stableDigest(plan);
   const db = getFirestore(getTargetFirebaseApp());
   // Each target = collection + field. vehicle_master.sub_model and vehicle_trim_master.trim/sub_model keep the old name as an alias.
   const targets = [
@@ -367,6 +426,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     ...(plan.masterTitleRepairs ?? []).map((item) => ({ kind: 'masterTitle', item, ref: db.collection('vehicle_master').doc(item.id), field: 'title' as RepairField })),
   ];
   const identityTargets = (plan.productIdentityRepairs ?? []).map((item) => ({ kind: 'productIdentity', item, ref: db.collection('products').doc(item.id) }));
+  const sourceCorrectionTargets = (plan.productSourceCorrections ?? []).map((item) => ({ kind: 'productSourceCorrection', item, ref: db.collection('products').doc(item.id) }));
   const creates = [
     ...(plan.masterCreates ?? []).map((c) => ({ c, ref: db.collection('vehicle_master').doc(c.id) })),
     ...(plan.trimCreates ?? []).map((c) => ({ c, ref: db.collection('vehicle_trim_master').doc(c.id) })),
@@ -395,6 +455,22 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   identitySnapshots.forEach((snapshot, index) => {
     if (!matchesIdentityFrom(snapshot.data(), identityTargets[index]!.item.from)) throw new Error(`productIdentity precondition changed ${snapshot.ref.path}`);
   });
+  const sourceCorrectionRefs = sourceCorrectionTargets.map((x) => x.ref);
+  const sourceCorrectionSnapshots = sourceCorrectionRefs.length ? await db.getAll(...sourceCorrectionRefs) : [];
+  if (sourceCorrectionSnapshots.some((snapshot) => !snapshot.exists)) throw new Error('productSourceCorrection repair target missing');
+  const sourceCorrectionDigests = sourceCorrectionSnapshots.map((snapshot) => stableDigest(snapshot.data()?.원문_정정 ?? null));
+  const sourceCorrectionHistories = sourceCorrectionSnapshots.map((snapshot) => correctionHistory(snapshot.data()?.원문_정정_이력, snapshot.ref.path));
+  const sourceCorrectionKeys = sourceCorrectionTargets.map(({ item }) => sourceCorrectionKey(planDigest, item));
+  sourceCorrectionTargets.forEach(({ item, ref }, index) => {
+    if (historyHasKey(sourceCorrectionHistories[index]!, sourceCorrectionKeys[index]!)) return;
+    if (sourceCorrectionDigests[index] !== item.expectedCurrentDigest) {
+      throw new Error(`productSourceCorrection expectedCurrentDigest mismatch ${ref.path}.원문_정정`);
+    }
+    if (!currentCorrectionKeptInHistory(sourceCorrectionSnapshots[index]!.data()?.원문_정정, sourceCorrectionHistories[index]!)) {
+      throw new Error(`productSourceCorrection current 원문_정정 is not in 원문_정정_이력 — it would be lost ${ref.path}`);
+    }
+  });
+  const originalSourceDigests = sourceCorrectionSnapshots.map((snapshot) => stableDigest(snapshot.data()?.원문 ?? null));
   const variantRepairs = plan.masterVariantRepairs ?? [];
   const variantRefs = variantRepairs.map((v) => db.collection('vehicle_master').doc(v.id));
   const variantSnaps = variantRefs.length ? await db.getAll(...variantRefs) : [];
@@ -452,10 +528,11 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     projectId: process.env.FIREBASE_PROJECT_ID,
     sourceDigest: plan.sourceDigest,
     capturedAt: new Date().toISOString(),
-    documents: [...snapshots, ...identitySnapshots, ...variantSnaps, ...retireSnaps].map((snapshot) => ({ path: snapshot.ref.path, data: snapshot.data() })),
+    documents: [...snapshots, ...identitySnapshots, ...sourceCorrectionSnapshots, ...variantSnaps, ...retireSnaps].map((snapshot) => ({ path: snapshot.ref.path, data: snapshot.data() })),
     // The reviewed items (incl. source-text evidence for blank fills) are kept with the before-images.
     repairs: targets.map(({ item, field, ref }) => ({ path: ref.path, field, ...item })),
     productIdentityRepairs: identityTargets.map(({ item, ref }) => ({ path: ref.path, ...item })),
+    productSourceCorrections: sourceCorrectionTargets.map(({ item, ref }) => ({ path: ref.path, ...item })),
     creates: creates.map(({ c, ref }) => ({ path: ref.path, evidence: c.evidence, data: c.data })),
     variantRepairs: variantRepairs.map((v) => ({ path: `vehicle_master/${v.id}`, ...v })),
     retires: retires.map((x) => ({ path: `vehicle_master/${x.id}`, ...x })),
@@ -466,6 +543,16 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const occurredAt = new Date().toISOString();
   const actor = { id: 'service:freepass-data-vehicle-name-repair', kind: 'SERVICE' } as const;
   const auditId = (path: string, field: string) => 'vnr_' + createHash('sha256').update([runId, path, field].join('|')).digest('hex').slice(0, 32);
+  let skippedAlreadyApplied = 0;
+  const activeSourceCorrectionIndexes = new Set<number>();
+  const sourceCorrectionAudits = sourceCorrectionTargets.map(({ item, ref }, index): AuditEvent => ({
+    eventId: auditId(ref.path, '원문_정정'), commandId: `vehicle-name-repair:${runId}`, actor,
+    entityType: ref.parent.id, entityId: ref.id, action: 'PRODUCT_SOURCE_CORRECTION_ARCHIVED',
+    before: { 원문_정정: sourceCorrectionSnapshots[index]!.data()?.원문_정정 ?? null },
+    after: { 원문_정정: { ...item.correction, sourceDigest: plan.sourceDigest, key: sourceCorrectionKeys[index] } },
+    reason: `상품 정정 원문 박제 근거: ${item.evidence} (${plan.sourceDigest})`,
+    revisionBefore: 0, revisionAfter: 0, occurredAt,
+  }));
   const audits: AuditEvent[] = [
     ...targets.map(({ item, field, ref }): AuditEvent => ({
       eventId: auditId(ref.path, field), commandId: `vehicle-name-repair:${runId}`, actor,
@@ -505,9 +592,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     })),
   ];
   const auditRefs = audits.map((a) => db.collection(FIRESTORE_COLLECTIONS.evidence.audits).doc(a.eventId));
+  const sourceCorrectionAuditRefs = sourceCorrectionAudits.map((a) => db.collection(FIRESTORE_COLLECTIONS.evidence.audits).doc(a.eventId));
 
   // One update per document: a trim row can be renamed and relinked in the same plan.
-  const byPath: Record<string, { ref: (typeof refs)[number]; fields: Record<string, string>; aliases: Partial<Record<AliasField, string[]>> }> = {};
+  const byPath: Record<string, { ref: (typeof refs)[number]; fields: Record<string, unknown>; aliases: Partial<Record<AliasField, string[]>> }> = {};
   for (const { kind, item, field, ref } of targets) {
     const entry = byPath[ref.path] ?? { ref, fields: {}, aliases: {} };
     if (entry.fields[field] !== undefined) throw new Error(`two repairs write ${ref.path}.${field}`);
@@ -524,6 +612,17 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     }
     byPath[ref.path] = entry;
   }
+  // The planned corrections never change; each transaction attempt (Firestore may retry the callback) rebuilds
+  // correctionByPath / correctionHistoryByPath from them, so a skip decided in one attempt does not leak into the next.
+  const plannedCorrectionByPath: Record<string, Record<string, unknown>> = {};
+  let correctionByPath: Record<string, Record<string, unknown>> = {};
+  let correctionHistoryByPath: Record<string, Record<string, unknown>[]> = {};
+  sourceCorrectionTargets.forEach(({ item, ref }, index) => {
+    const entry = byPath[ref.path] ?? { ref, fields: {}, aliases: {} };
+    // Firestore refuses serverTimestamp() inside arrays (원문_정정_이력), so the run time is stored as an ISO string.
+    plannedCorrectionByPath[ref.path] = { ...item.correction, key: sourceCorrectionKeys[index], 기록시각: occurredAt, sourceDigest: plan.sourceDigest };
+    byPath[ref.path] = entry;
+  });
 
   // A master's variants list joins that document's single update (it may also be renamed in the same plan).
   retires.forEach((_, index) => {
@@ -539,8 +638,13 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const masterTrimsByPath: Record<string, string[]> = Object.fromEntries(variantRepairs.filter((v) => v.trims).map((v) => [`vehicle_master/${v.id}`, v.trims!]));
 
   await db.runTransaction(async (transaction) => {
+    skippedAlreadyApplied = 0;
+    activeSourceCorrectionIndexes.clear();
+    correctionByPath = { ...plannedCorrectionByPath };
+    correctionHistoryByPath = {};
     const current = refs.length ? await transaction.getAll(...refs) : [];
     const identityCurrent = identityRefs.length ? await transaction.getAll(...identityRefs) : [];
+    const sourceCorrectionCurrent = sourceCorrectionRefs.length ? await transaction.getAll(...sourceCorrectionRefs) : [];
     identityCurrent.forEach((snapshot, index) => {
       if (!snapshot.exists || !matchesIdentityFrom(snapshot.data(), identityTargets[index]!.item.from)) {
         throw new Error(`transaction productIdentity precondition changed ${snapshot.ref.path}`);
@@ -550,6 +654,28 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
           throw new Error(`transaction stored spelling changed since backup ${snapshot.ref.path}.${field}`);
         }
       }
+    });
+    sourceCorrectionCurrent.forEach((snapshot, index) => {
+      if (!snapshot.exists) throw new Error(`transaction productSourceCorrection target missing ${snapshot.ref.path}`);
+      const history = correctionHistory(snapshot.data()?.원문_정정_이력, snapshot.ref.path);
+      if (historyHasKey(history, sourceCorrectionKeys[index]!)) {
+        skippedAlreadyApplied += 1;
+        delete correctionByPath[snapshot.ref.path];
+        delete correctionHistoryByPath[snapshot.ref.path];
+        return;
+      }
+      const currentDigest = stableDigest(snapshot.data()?.원문_정정 ?? null);
+      if (currentDigest !== sourceCorrectionTargets[index]!.item.expectedCurrentDigest) {
+        throw new Error(`transaction productSourceCorrection expectedCurrentDigest mismatch ${snapshot.ref.path}.원문_정정`);
+      }
+      if (!currentCorrectionKeptInHistory(snapshot.data()?.원문_정정, history)) {
+        throw new Error(`transaction productSourceCorrection current 원문_정정 is not in 원문_정정_이력 — it would be lost ${snapshot.ref.path}`);
+      }
+      if (stableDigest(snapshot.data()?.원문 ?? null) !== originalSourceDigests[index]) {
+        throw new Error(`transaction product original source changed since backup ${snapshot.ref.path}.원문`);
+      }
+      activeSourceCorrectionIndexes.add(index);
+      correctionHistoryByPath[snapshot.ref.path] = [...history, correctionByPath[snapshot.ref.path]!];
     });
     // A retired master is frozen: its name is not changed again (a rename would let products use it under a new name).
     const frozen = targets.findIndex((t, i) => MASTER_DOC_KINDS.has(t.kind) && current[i]?.data()?.retired === true);
@@ -708,19 +834,25 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       }
     });
     for (const { ref, fields, aliases } of Object.values(byPath)) {
-      transaction.update(ref, {
+      const update = {
         ...fields,
         ...(variantsByPath[ref.path] ? { variants: variantsByPath[ref.path] } : {}),
         ...(masterTrimsByPath[ref.path] ? { trims: masterTrimsByPath[ref.path] } : {}),
         ...(retireByPath[ref.path] ? { retired: true, retired_into: retireByPath[ref.path], retired_at: FieldValue.serverTimestamp() } : {}),
+        ...(correctionByPath[ref.path] ? { 원문_정정: correctionByPath[ref.path], 원문_정정_이력: correctionHistoryByPath[ref.path] } : {}),
         ...Object.fromEntries(Object.entries(aliases).map(([k, v]) => [k, FieldValue.arrayUnion(...v!)])),
         vehicle_name_reference_checked_at: FieldValue.serverTimestamp(),
         vehicle_name_reference_source_digest: plan.sourceDigest,
-      });
+      };
+      if (Object.keys(update).length <= 2) continue;
+      transaction.update(ref, update);
     }
     // create() fails the whole transaction if the document appeared meanwhile.
     for (const { c, ref } of creates) transaction.create(ref, { ...c.data, vehicle_name_reference_source_digest: plan.sourceDigest });
     audits.forEach((audit, index) => transaction.create(auditRefs[index]!, audit));
+    sourceCorrectionAudits.forEach((audit, index) => {
+      if (activeSourceCorrectionIndexes.has(index)) transaction.create(sourceCorrectionAuditRefs[index]!, audit);
+    });
   });
 
   const readback = refs.length ? await db.getAll(...refs) : [];
@@ -746,6 +878,24 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     const data = snapshot.data();
     if (!snapshot.exists || PRODUCT_IDENTITY_FIELDS.some((field) => clean(data?.[field]) !== want[field])) throw new Error(`readback productIdentity mismatch ${snapshot.ref.path}`);
   });
+  const sourceCorrectionReadback = sourceCorrectionRefs.length ? await db.getAll(...sourceCorrectionRefs) : [];
+  sourceCorrectionReadback.forEach((snapshot, index) => {
+    if (!activeSourceCorrectionIndexes.has(index)) return;
+    const data = snapshot.data();
+    if (!snapshot.exists || !sameProductSourceCorrection(data?.원문_정정, sourceCorrectionTargets[index]!.item, plan.sourceDigest)) {
+      throw new Error(`readback productSourceCorrection mismatch ${snapshot.ref.path}.원문_정정`);
+    }
+    const beforeHistory = sourceCorrectionHistories[index]!;
+    const afterHistory = correctionHistory(data?.원문_정정_이력, snapshot.ref.path);
+    if (afterHistory.length !== beforeHistory.length + 1) throw new Error(`readback productSourceCorrection history mismatch ${snapshot.ref.path}.원문_정정_이력`);
+    if (beforeHistory.some((entry, historyIndex) => stableDigest(entry) !== stableDigest(afterHistory[historyIndex]))) {
+      throw new Error(`readback productSourceCorrection history prefix mismatch ${snapshot.ref.path}.원문_정정_이력`);
+    }
+    if (stableDigest(afterHistory[afterHistory.length - 1]) !== stableDigest(data?.원문_정정)) {
+      throw new Error(`readback productSourceCorrection history tail mismatch ${snapshot.ref.path}.원문_정정_이력`);
+    }
+    if (stableDigest(data?.원문 ?? null) !== originalSourceDigests[index]) throw new Error(`readback product original source changed ${snapshot.ref.path}.원문`);
+  });
   const retireReadback = retireRefs.length ? await db.getAll(...retireRefs) : [];
   retireReadback.forEach((snapshot, index) => {
     if (snapshot.data()?.retired !== true || snapshot.data()?.retired_into !== retires[index]!.into) throw new Error(`readback retire mismatch ${snapshot.ref.path}`);
@@ -764,5 +914,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   });
   const auditReadback = await db.getAll(...auditRefs);
   if (auditReadback.some((s, index) => !s.exists || s.data()?.reason !== audits[index]!.reason)) throw new Error('readback audit mismatch');
-  return { runId, backupPath, ...counts, readbackCount: readback.length + identityReadback.length + createReadback.length + variantReadback.length + retireReadback.length, auditCount: auditReadback.length };
+  const activeSourceCorrectionAudits = sourceCorrectionAudits.filter((_, index) => activeSourceCorrectionIndexes.has(index));
+  const activeSourceCorrectionAuditRefs = sourceCorrectionAuditRefs.filter((_, index) => activeSourceCorrectionIndexes.has(index));
+  const sourceCorrectionAuditReadback = activeSourceCorrectionAuditRefs.length ? await db.getAll(...activeSourceCorrectionAuditRefs) : [];
+  if (sourceCorrectionAuditReadback.some((s, index) => !s.exists || s.data()?.reason !== activeSourceCorrectionAudits[index]!.reason)) throw new Error('readback source correction audit mismatch');
+  return { runId, backupPath, ...counts, skippedAlreadyApplied, readbackCount: readback.length + identityReadback.length + activeSourceCorrectionIndexes.size + createReadback.length + variantReadback.length + retireReadback.length, auditCount: auditReadback.length + sourceCorrectionAuditReadback.length };
 }
