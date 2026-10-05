@@ -8,7 +8,8 @@ export type SheetBlankFillInput = {
     needsConfirmation?: string[];
     fields: Record<string, string | number | null | undefined>;
   }>;
-  policyLinks: Record<string, string>;
+  /** 정책확인 탭 MATCHED 줄: «탭:행» → 정책코드 + 그 줄의 차량번호(시트 줄의 차량번호와 대조 — 정렬이 바뀌면 건너뜀). */
+  policyLinks: Record<string, { code: string; plate: string }>;
   policies: Record<string, Record<string, unknown>>;
 };
 
@@ -28,7 +29,7 @@ export type SheetBlankFillReport = {
   skippedCounts: Partial<Record<SkipReason, number>>;
 };
 
-type SkipReason = 'NEEDS_CONFIRMATION' | 'NO_EVIDENCE' | 'NOT_CONFIRMED' | 'NO_CANON' | 'POLICY_NOT_CORRECTED' | 'NO_POLICY_LINK' | 'FORMULA_CELL' | 'HEADER_MISSING' | 'HEADER_DUPLICATE';
+type SkipReason = 'WHITESPACE_ONLY' | 'POLICY_LINK_MISMATCH' | 'INVALID_NUMBER' | 'NEEDS_CONFIRMATION' | 'NO_EVIDENCE' | 'NOT_CONFIRMED' | 'NO_CANON' | 'POLICY_NOT_CORRECTED' | 'NO_POLICY_LINK' | 'FORMULA_CELL' | 'HEADER_MISSING' | 'HEADER_DUPLICATE';
 type Canon = { value: string | number; layer: '차량' | '정책' | '판매방침' } | { skip: SkipReason };
 
 const VEHICLE_FIELDS: Record<string, string> = {
@@ -50,10 +51,15 @@ const SALES_AGE: Record<string, string> = { '21세+': 'age_21_cost', '23세+': '
 const TARGET_HEADERS = [...Object.keys(VEHICLE_FIELDS), ...Object.keys(POLICY_FIELDS), ...Object.keys(SALES_AGE), '자차면책'];
 
 const text = (v: unknown) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
+// 시트 칸의 «빈 칸» = null·undefined·'' 만. 공백만 있는 칸은 사람이 지운 흔적일 수 있어 빈 칸이 아니다(건너뜀).
+const blankCell = (v: unknown) => v === null || v === undefined || v === '';
+const whitespaceOnly = (v: unknown) => typeof v === 'string' && v !== '' && v.trim() === '';
+// 정본 값이 비었는지(공백만 있어도 빔).
 const empty = (v: unknown) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
 const normalize = (v: unknown) => text(v).replace(/\s+/g, '').replace(/^보험료/, '').replace(/불가능/g, '불가');
 const colName = (i: number) => { let n = i + 1, s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; };
-const asNumber = (v: unknown) => typeof v === 'number' ? v : /^-?\d+(?:\.\d+)?$/.test(text(v)) ? Number(text(v)) : v;
+// 숫자 칸(연식·배기량·인승)은 순수 숫자(또는 순수 숫자 글자)만 넣는다. «1,598»·«2024년» 같은 값은 숫자가 아니라 건너뜀.
+const toSheetNumber = (v: unknown): number | null => typeof v === 'number' ? (Number.isFinite(v) ? v : null) : /^\d+(?:\.\d+)?$/.test(text(v)) ? Number(text(v)) : null;
 const fieldEvidence = (policy: Record<string, unknown>, field: string) =>
   (policy.field_evidence as Record<string, { writer?: string }> | undefined)?.[field]?.writer === 'policy-corrector';
 const policyValue = (policy: Record<string, unknown>, field: string) => (policy as Record<string, unknown>)[field];
@@ -80,19 +86,24 @@ export function planSheetBlankFill(input: SheetBlankFillInput): { plan: SheetBla
       if (vehicle.needsConfirmation?.includes(header)) return { skip: 'NEEDS_CONFIRMATION' };
       const raw = vehicle.fields[VEHICLE_FIELDS[header]!];
       if (empty(raw)) return { skip: 'NO_CANON' };
-      return { value: NUMBER_HEADERS.has(header) ? asNumber(raw) as string | number : text(raw), layer: '차량' };
+      if (NUMBER_HEADERS.has(header)) {
+        const n = toSheetNumber(raw);
+        return n === null ? { skip: 'INVALID_NUMBER' } : { value: n, layer: '차량' };
+      }
+      return { value: text(raw), layer: '차량' };
     }
-    const code = input.policyLinks[`${tab}:${row}`];
-    if (!code) return { skip: 'NO_POLICY_LINK' };
-    const policy = input.policies[code];
+    const link = input.policyLinks[`${tab}:${row}`];
+    if (!link?.code) return { skip: 'NO_POLICY_LINK' };
+    if (link.plate !== plate) return { skip: 'POLICY_LINK_MISMATCH' };
+    const policy = input.policies[link.code];
     if (!policy) return { skip: 'NO_POLICY_LINK' };
     if (SALES_AGE[header]) {
       const field = SALES_AGE[header]!;
       const sales = (policy.sales_policy as Record<string, { value?: unknown }> | undefined)?.[field]?.value;
-      if (!empty(sales)) return { value: asNumber(sales) as string | number, layer: '판매방침' };
+      if (!empty(sales)) return { value: typeof sales === 'number' ? sales : text(sales), layer: '판매방침' };
       if (!fieldEvidence(policy, field)) return { skip: 'POLICY_NOT_CORRECTED' };
       const v = policyValue(policy, field);
-      return empty(v) ? { skip: 'NO_CANON' } : { value: asNumber(v) as string | number, layer: '정책' };
+      return empty(v) ? { skip: 'NO_CANON' } : { value: typeof v === 'number' ? v : text(v), layer: '정책' };
     }
     if (header === '자차면책') {
       if (!fieldEvidence(policy, 'own_damage_min_deductible') || !fieldEvidence(policy, 'own_damage_max_deductible')) return { skip: 'POLICY_NOT_CORRECTED' };
@@ -107,7 +118,7 @@ export function planSheetBlankFill(input: SheetBlankFillInput): { plan: SheetBla
     const raw = policyValue(policy, field);
     if (empty(raw)) return { skip: 'NO_CANON' };
     const value = header === '보험료' && typeof raw === 'string' ? raw.trim().replace(/^보험료\s*/, '') : raw;
-    return { value: asNumber(value) as string | number, layer: '정책' };
+    return { value: typeof value === 'number' ? value : text(value), layer: '정책' };
   };
 
   for (const [tab, sheet] of Object.entries(input.tabs)) {
@@ -124,14 +135,16 @@ export function planSheetBlankFill(input: SheetBlankFillInput): { plan: SheetBla
       if (r.row < 2) continue;
       const plate = text(r.values[index.get('차량번호')!]);
       if (!plate) continue;
-      const formulaCols = new Set(r.formulaCols ?? []);
+      if (!Array.isArray(r.formulaCols)) throw new Error('SHEET_BLANK_FILL_FORMULA_READ_REQUIRED');
+      const formulaCols = new Set(r.formulaCols);
       for (const header of TARGET_HEADERS) {
         const col = index.get(header)!;
         const current = r.values[col];
         const canon = canonFor(tab, r.row, plate, header);
         if (formulaCols.has(col)) { addSkip(tab, r.row, plate, header, 'FORMULA_CELL'); continue; }
-        if ('skip' in canon) { if (empty(current)) addSkip(tab, r.row, plate, header, canon.skip); continue; }
-        if (empty(current)) addFill(tab, r.row, col, header, canon.value);
+        if (whitespaceOnly(current)) { addSkip(tab, r.row, plate, header, 'WHITESPACE_ONLY'); continue; }
+        if ('skip' in canon) { if (blankCell(current)) addSkip(tab, r.row, plate, header, canon.skip); continue; }
+        if (blankCell(current)) addFill(tab, r.row, col, header, canon.value);
         else if (normalize(current) !== normalize(canon.value)) report.differences.push({ 탭: tab, 행: r.row, 차량번호: plate, 칸: header, 시트값: current, 정본값: canon.value, 층: canon.layer });
       }
     }

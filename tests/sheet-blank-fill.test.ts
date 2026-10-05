@@ -25,7 +25,7 @@ const base = (rows = [row(2, '11가1111')]): SheetBlankFillInput => ({
     '33다3333': { confirmed: true, evidence: '', fields: { maker: '기아' } },
     '44라4444': { confirmed: true, evidence: 'virtual-canonical', needsConfirmation: ['제조사'], fields: { maker: '르노' } },
   },
-  policyLinks: { '가상공급사:2': 'POL-1', '가상공급사:3': 'POL-1', '가상공급사:4': 'POL-1', '가상공급사:5': 'POL-1' },
+  policyLinks: Object.fromEntries(rows.map(r => [`가상공급사:${r.row}`, { code: 'POL-1', plate: String(r.values[0]) }])),
   policies: { 'POL-1': policy({ basic_driver_age: '만 26세 이상', insurance_included: '보험료 포함', age_21_cost: '7만원', age_23_cost: '5만원', own_damage_min_deductible: '50만원', own_damage_max_deductible: '200만원' }) },
 });
 
@@ -68,6 +68,7 @@ describe('공통 시트 빈 칸 채우기 계획기', () => {
   it('uses only policy-corrector fields, prefers sales policy for 21/23, and skips missing policy links', () => {
     const input = base([row(2, '11가1111'), row(6, '11가1111')]);
     input.policies['POL-1'] = { ...policy({ basic_driver_age: '만 26세 이상', age_21_cost: '9만원', age_23_cost: '8만원' }, ['basic_driver_age', 'age_21_cost', 'age_23_cost']), sales_policy: { age_21_cost: { value: '6만원' }, age_23_cost: { value: '4만원' } } };
+    delete input.policyLinks['가상공급사:6'];
     const { plan, report } = planSheetBlankFill(input);
     expect(plan.바꿀칸).toContainEqual({ 범위: '가상공급사!AQ2', 전: '', 후: '6만원' });
     expect(plan.바꿀칸).toContainEqual({ 범위: '가상공급사!AR2', 전: '', 후: '4만원' });
@@ -79,10 +80,39 @@ describe('공통 시트 빈 칸 채우기 계획기', () => {
     const stale = base(); stale.capturedAt = new Date(Date.now() - 16 * 60_000).toISOString();
     expect(() => planSheetBlankFill(stale)).toThrow('SHEET_BLANK_FILL_CAPTURE_STALE');
     const many = base(Array.from({ length: 201 }, (_, i) => row(i + 2, '11가1111')));
-    for (let i = 2; i < 203; i++) many.policyLinks[`가상공급사:${i}`] = 'POL-1';
     expect(() => planSheetBlankFill(many)).toThrow('SHEET_BLANK_FILL_TOO_MANY_CELLS');
     const ok = planSheetBlankFill(base([row(3, '11가1111'), row(2, '11가1111')])).plan.바꿀칸.map(c => c.범위);
     expect(ok).toEqual([...ok].sort((a, b) => a.localeCompare(b, 'ko', { numeric: true })));
     expect(new Set(ok).size).toBe(ok.length);
+  });
+
+  it('treats only null/undefined/empty string as blank; whitespace-only cells are left alone (a human cleared them)', () => {
+    const { plan, report } = planSheetBlankFill(base([row(2, '11가1111', { 제조사: '   ', 모델: null })]));
+    expect(plan.바꿀칸.some(c => c.범위 === '가상공급사!B2')).toBe(false);
+    expect(plan.바꿀칸.some(c => c.범위 === '가상공급사!C2')).toBe(true);
+    expect(report.skippedCounts.WHITESPACE_ONLY).toBe(1);
+  });
+
+  it('stops when the formula read is missing for a row', () => {
+    const input = base();
+    delete (input.tabs['가상공급사']!.rows[0] as { formulaCols?: number[] }).formulaCols;
+    expect(() => planSheetBlankFill(input)).toThrow('SHEET_BLANK_FILL_FORMULA_READ_REQUIRED');
+  });
+
+  it('skips policy fills when the policy-check plate differs from the sheet row plate', () => {
+    const input = base();
+    input.policyLinks['가상공급사:2'] = { code: 'POL-1', plate: '99하9999' };
+    const { plan, report } = planSheetBlankFill(input);
+    expect(plan.바꿀칸.some(c => c.후 === '포함' || c.후 === '50~200만원')).toBe(false);
+    expect(report.skippedCounts.POLICY_LINK_MISMATCH).toBeGreaterThan(0);
+  });
+
+  it('skips number columns whose canonical value is not a plain number and never writes them as text', () => {
+    const input = base();
+    input.vehicles['11가1111']!.fields = { ...input.vehicles['11가1111']!.fields, year: '2024년', engine_cc: '1,598', seats: '5' };
+    const { plan, report } = planSheetBlankFill(input);
+    expect(plan.바꿀칸.some(c => c.범위 === '가상공급사!F2' || c.범위 === '가상공급사!G2')).toBe(false);
+    expect(plan.바꿀칸).toContainEqual({ 범위: '가상공급사!I2', 전: '', 후: 5 });
+    expect(report.skippedCounts.INVALID_NUMBER).toBe(2);
   });
 });
