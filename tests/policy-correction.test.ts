@@ -120,7 +120,7 @@ describe('policy correction domain validation', () => {
   });
   it('accepts insurance_included values 보험료 포함 / 보험료 별도 (and the short forms) but not unrelated words', () => {
     const insurance = (to: string) => item({ field: 'insurance_included', from: '보험료 별도', to });
-    for (const ok of ['보험료 포함', '보험료 별도', '포함', '별도']) expect(() => validatePolicyCorrectionPlan(plan([insurance(ok)]))).not.toThrow();
-    for (const bad of ['가능', '불가', '보험료포함', '포함(회사 가입)']) expect(() => validatePolicyCorrectionPlan(plan([insurance(bad)]))).toThrow(/INVALID_VALUE/);
+    for (const ok of ['보험료 포함', '보험료 별도', '포함', '별도', '가능', '불가', '협의']) expect(() => validatePolicyCorrectionPlan(plan([insurance(ok)]))).not.toThrow();
+    for (const bad of ['보험료포함', '포함(회사 가입)', '미제공']) expect(() => validatePolicyCorrectionPlan(plan([insurance(bad)]))).toThrow(/INVALID_VALUE/);
   });
 });

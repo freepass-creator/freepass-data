@@ -431,6 +431,17 @@ describe('가격 키 읽기', () => {
     expect(byKey[24]).toMatchObject({ deposit: { amount: 1988000 }, depositState: 'KNOWN' });
     expect(byKey[48]).toMatchObject({ deposit: { amount: 2427000 }, depositState: 'KNOWN' });
     expect(result.candidate.issues).not.toContain('UNKNOWN_DEPOSIT');
+    // 원문 보증금이 «정확히 0» 이 아니면(칸 없음·null·빈 문자열) 계산하지 않는다 — 누락은 UNKNOWN 유지
+    for (const deposit of [undefined, null, '', ' ', 'x']) {
+      const missing = fixture();
+      Object.assign(missing.data, { provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '월 대여료 × 약정연수 (최대 3개월)',
+        price: { '24': deposit === undefined ? { rent: 1000000 } : { rent: 1000000, deposit } } });
+      expect(mapErp5Product(missing).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
+    }
+    // 글자 '0' 도 자리표시자 0 으로 본다
+    const stringZero = fixture();
+    Object.assign(stringZero.data, { provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '월 대여료 × 약정연수 (최대 3개월)', price: { '24': { rent: 1000000, deposit: '0' } } });
+    expect(mapErp5Product(stringZero).candidate.priceTerms[0]).toMatchObject({ deposit: { amount: 2000000 }, depositState: 'KNOWN' });
     // without the rule note the placeholder stays unresolved
     delete (input.data as Record<string, unknown>).deposit_note;
     expect(mapErp5Product(input).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });

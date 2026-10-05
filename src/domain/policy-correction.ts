@@ -52,7 +52,8 @@ const textRule = rule('text', text);
 
 export const ALLOWED_FIELDS: Record<string, Rule> = {
   screening_criteria: textRule,
-  insurance_included: rule('insurance', matches(/^(?:보험료 )?(?:포함|별도)$/)),
+  // 기존 가능/불가/협의 형식도 유지하고, 정책 문서에 실제로 쓰이는 «보험료 포함/별도» 형식을 추가한다.
+  insurance_included: rule('insurance', (value) => matches(YES_NO_DISCUSS)(value) || matches(/^(?:보험료 )?(?:포함|별도)$/)(value)),
   maintenance_service: yn,
   additional_driver_allowance_count: rule('count', matches(/^\d+인까지$/)),
   additional_driver_cost: amount,
