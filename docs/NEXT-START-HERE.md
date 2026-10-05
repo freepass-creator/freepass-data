@@ -1,5 +1,9 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-05 Iancar policy sync transaction hardening
+
+- RP031 policy sync intentionally refuses missing policy documents: `RP031_S01`~`RP031_S04` must already exist, and the sync updates those documents instead of recreating the old `set(merge)` implicit-create path.
+
 ## 2026-10-04 Vehicle Master 직접 정본 전환
 
 - 대표 결정: 차종마스터는 FreePass Data 안에서 직접 관리한다. 새 수집·정규화 경로는 F03을 읽거나 갱신하지 않는다.
@@ -387,9 +391,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ### 2026-10-05 후속 목록 (정책 정정기·빈 칸 채우기 반영 뒤)
 
-- 이안카 정책 동기화(`src/infra/iancar-policy-sync-firestore.ts`): 상품 연결과 정책 쓰기를 따로 커밋한다 — 정책 커밋이 실패하면 상품만 반영된다(옛 도구의 원래 구조). 후속: 상품·정책을 한 트랜잭션으로(빌린카 보정처럼). 소유 가드(#388)는 모든 쓰기 앞에서 검사하도록 이미 앞당겼다.
+- [완료 2026-10-05] 이안카 정책 동기화(`src/infra/iancar-policy-sync-firestore.ts`): 상품 119 + 정책 4를 한 `db.runTransaction`으로 묶고 사전 `updateTime` 조건을 재확인한다. 소유 가드(#388)는 백업·쓰기 전과 트랜잭션 내부 현재 데이터 기준으로 모두 검사한다.
 - 빈 칸 채우기 계획기: 프리패스 데이터(products·policy) → 입력 JSON 읽기 전용 어댑터와 매일 박제 뒤 연결, 정본 차량값 `confirmed` 기준 정하기. 적용은 줄확인 지원 시트고치기(ai-ops#62)로만.
 - 배움 → 프리패스 데이터 다리 코드(docs/POLICY-CORRECTION.md 설계 메모).
+
+### 2026-10-05 이안카 정책 동기화 한 트랜잭션
+
+- 목적: `applyIancarPolicySync`가 상품 정책 연결 119건과 정책 4건을 따로 커밋해 생기던 반쪽 반영 위험을 제거한다.
+- 대상 revision: `work/freepass-data/iancar-sync-one-transaction-20261005` `106d565c788e8ef39cf8b136951eb8e55f069913` 기준.
+- 변경: `applyIancarPolicySync(input, deps?)` 주입점을 추가하고, 사전 상품 119·정책 4 읽기/백업 뒤 단일 `db.runTransaction`에서 123개 문서 `updateTime` 사전조건, 소유 가드, 상품 `update`, 정책 `set(merge)`을 수행한다. 기존 호출부는 변경 없음.
+- 검증: `npm.cmd test -- tests/iancar-policy-sync-transaction.test.ts` 6 PASS, `npm.cmd run build` PASS, `npm.cmd run check:standards` PASS(standards status는 기존 PARTIAL 유지: unresolved capability 9개).
+- 남음: 실제 Firestore 쓰기·fetch·push·commit은 사용자 실행 규칙상 미실행. next_start_here: 네트워크 가능한 운영 환경에서 동일 코드로 dry-run/승인 실행 시 backupPath와 정책 4개 readback을 확인한다.
 
 ### 2026-10-05 공통 시트 빈 칸 채우기 계획기
 
