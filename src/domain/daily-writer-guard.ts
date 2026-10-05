@@ -30,7 +30,9 @@ export type DailyWriterLogEntry = {
 export type DailyWriterRun = { id?: number; head_branch?: string; event?: string; display_title?: string; status?: string;
   conclusion?: string | null; created_at?: string; run_started_at?: string; updated_at?: string;
   /** shared-sheet-daily job steps from the same run attempt. Unknown / unreadable steps are null/absent and fail closed. */
-  jobSteps?: { name?: string; conclusion?: string | null }[] | null };
+  run_attempt?: number;
+  /** One entry per run attempt (1..run_attempt): that attempt's shared-sheet-daily job steps, or null when unreadable. Absent / null fail closed. */
+  jobAttempts?: ({ name?: string; conclusion?: string | null }[] | null)[] | null };
 
 const isWrite = (entry: DailyWriterLogEntry) => {
   const method = entry.protoPayload?.methodName ?? '';
@@ -89,7 +91,18 @@ const CAPTURE_STEP = 'Capture and plan (no writes) — counts only in the public
 const APPLY_STEP = 'Apply to FreePass Data (writes) — counts only in the public log';
 const SUCCESS_ALLOWED_STEPS = new Set(['Set up job', GATE_STEP, 'Complete job']);
 
-export function writeStepsSkippedConfirmed(steps: DailyWriterRun['jobSteps']): boolean {
+type JobSteps = { name?: string; conclusion?: string | null }[] | null | undefined;
+
+/** A skip is confirmed only when EVERY attempt of the run (1..run_attempt) is a confirmed skip — an earlier attempt that wrote
+ * and failed cannot hide behind a later all-skipped attempt. A missing / unreadable / wrong-length attempt list fails closed. */
+export function runWriteStepsSkippedConfirmed(run: DailyWriterRun): boolean {
+  const attempts = run.jobAttempts;
+  const expected = run.run_attempt ?? 1;
+  if (!Array.isArray(attempts) || !Number.isInteger(expected) || expected < 1 || attempts.length !== expected) return false;
+  return attempts.every((steps) => writeStepsSkippedConfirmed(steps));
+}
+
+export function writeStepsSkippedConfirmed(steps: JobSteps): boolean {
   if (!Array.isArray(steps) || steps.length === 0) return false;
   // Malformed input never throws and never confirms a skip: every element must be an object with a non-empty string name
   // and a string conclusion, and no name may repeat.
@@ -144,7 +157,7 @@ export function evaluateDailyWriterGuard(input: {
   // A successful apply run (schedule, or a dispatch whose title names "apply") inside the lookback must have left write logs
   // unless the shared-sheet-daily job steps prove the gate ran and every write step was skipped. Unknown step info fails closed.
   const silentApplies = windows.filter(({ run, from, to }) => run.status === 'completed' && run.conclusion === 'success' &&
-    (run.event === 'schedule' || /\bapply\b/.test(run.display_title ?? '')) && !writeStepsSkippedConfirmed(run.jobSteps) && from >= since &&
+    (run.event === 'schedule' || /\bapply\b/.test(run.display_title ?? '')) && !runWriteStepsSkippedConfirmed(run) && from >= since &&
     !writes.some((e) => { const at = Date.parse(e.timestamp ?? ''); return at >= from && at <= to; })).length;
   const reasons = [
     ...(Object.keys(outsideCollections).length ? ['DAILY_WRITER_OUTSIDE_ALLOWED_COLLECTIONS'] : []),

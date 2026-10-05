@@ -103,27 +103,42 @@ describe('daily writer guard', () => {
     expect(judge([], [dryRun]).status).toBe('OK');
   });
   it('does not count only when shared-sheet-daily steps prove the gate ran and write steps were skipped', () => {
-    expect(judge([], [{ ...run, jobSteps: skippedJobSteps }])).toMatchObject({ status: 'OK', silentApplies: 0 });
+    expect(judge([], [{ ...run, jobAttempts: [skippedJobSteps] }])).toMatchObject({ status: 'OK', silentApplies: 0 });
   });
   it('holds for the actual older write run because non-allowlisted steps succeeded', () => {
-    expect(judge([], [{ ...run, jobSteps: oldWritingJobSteps }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [oldWritingJobSteps] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+  });
+  it('checks every run attempt: an earlier attempt that wrote cannot hide behind a later all-skipped attempt', () => {
+    const rerun = { ...run, run_attempt: 2 };
+    expect(judge([], [{ ...rerun, jobAttempts: [oldWritingJobSteps, skippedJobSteps] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...rerun, jobAttempts: [skippedJobSteps, skippedJobSteps] }])).toMatchObject({ status: 'OK', silentApplies: 0 });
+    expect(judge([], [{ ...{ ...run, run_attempt: 3 }, jobAttempts: [skippedJobSteps, skippedJobSteps, skippedJobSteps] }])).toMatchObject({ status: 'OK', silentApplies: 0 });
+  });
+  it('holds when any attempt could not be read or the attempt list is missing / the wrong length', () => {
+    const rerun = { ...run, run_attempt: 2 };
+    expect(judge([], [{ ...rerun, jobAttempts: [skippedJobSteps, null] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...rerun, jobAttempts: [null, skippedJobSteps] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...rerun, jobAttempts: [skippedJobSteps] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...rerun, jobAttempts: null }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...rerun }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
   });
   it('malformed step entries (null, non-object, missing / empty / non-string name or conclusion) hold instead of throwing', () => {
     const bad: unknown[] = [null, 'x', 7, [], { conclusion: 'skipped' }, { name: '', conclusion: 'skipped' }, { name: '  ', conclusion: 'skipped' },
       { name: 42, conclusion: 'skipped' }, { name: 'Run something', conclusion: null }, { name: 'Run something' }];
     for (const entry of bad) {
-      expect(() => judge([], [{ ...run, jobSteps: [...skippedJobSteps, entry] }])).not.toThrow();
-      expect(judge([], [{ ...run, jobSteps: [...skippedJobSteps, entry] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+      expect(() => judge([], [{ ...run, jobAttempts: [[...skippedJobSteps, entry]] }])).not.toThrow();
+      expect(judge([], [{ ...run, jobAttempts: [[...skippedJobSteps, entry]] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
     }
   });
   it('a nameless step holds even when it is skipped', () => {
-    expect(judge([], [{ ...run, jobSteps: [...skippedJobSteps, { conclusion: 'skipped' }] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [[...skippedJobSteps, { conclusion: 'skipped' }]] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
   });
   it('any repeated step name holds, not only the three required steps', () => {
     const dup = [...skippedJobSteps, { name: 'Run actions/checkout@v4', conclusion: 'skipped' }];
-    expect(judge([], [{ ...run, jobSteps: dup }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [dup] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
     const dupSetup = [...skippedJobSteps, { name: 'Set up job', conclusion: 'success' }];
-    expect(judge([], [{ ...run, jobSteps: dupSetup }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [dupSetup] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
   });
   it('fails closed unless the exact gate/capture/apply skipped pattern is confirmed', () => {
     const changedName = skippedJobSteps.map((s) => s.name === 'Daily schedule and manual apply gate'
@@ -137,17 +152,17 @@ describe('daily writer guard', () => {
     const renamedApply = skippedJobSteps.map((s) => s.name === 'Apply to FreePass Data (writes) — counts only in the public log'
       ? { ...s, name: 'Apply to FreePass Data (writes)' } : s);
     const duplicateGate = [...skippedJobSteps, { name: 'Daily schedule and manual apply gate', conclusion: 'success' }];
-    expect(judge([], [{ ...run, jobSteps: changedName }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
-    expect(judge([], [{ ...run, jobSteps: [] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
-    expect(judge([], [{ ...run, jobSteps: partialSkipped }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
-    expect(judge([], [{ ...run, jobSteps: [{ name: 'Apply to FreePass Data (writes) — counts only in the public log', conclusion: 'success' }] }]))
+    expect(judge([], [{ ...run, jobAttempts: [changedName] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [[]] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [partialSkipped] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [[{ name: 'Apply to FreePass Data (writes) — counts only in the public log', conclusion: 'success' }]] }]))
       .toMatchObject({ status: 'HOLD', silentApplies: 1 });
-    expect(judge([], [{ ...run, jobSteps: gateNotSuccess }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
-    expect(judge([], [{ ...run, jobSteps: unknownSuccess }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
-    expect(judge([], [{ ...run, jobSteps: failureStep }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
-    expect(judge([], [{ ...run, jobSteps: renamedApply }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
-    expect(judge([], [{ ...run, jobSteps: duplicateGate }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
-    expect(judge([], [{ ...run, jobSteps: null }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [gateNotSuccess] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [unknownSuccess] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [failureStep] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [renamedApply] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [duplicateGate] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [null] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
     expect(judge([], [run])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
   });
 });
