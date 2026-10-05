@@ -91,20 +91,21 @@ const SUCCESS_ALLOWED_STEPS = new Set(['Set up job', GATE_STEP, 'Complete job'])
 
 export function writeStepsSkippedConfirmed(steps: DailyWriterRun['jobSteps']): boolean {
   if (!Array.isArray(steps) || steps.length === 0) return false;
-  const exact = (name: string, conclusion: string) => steps.filter((s) => s.name === name && s.conclusion === conclusion).length;
-  if (exact(GATE_STEP, 'success') !== 1) return false;
-  if (exact(CAPTURE_STEP, 'skipped') !== 1) return false;
-  if (exact(APPLY_STEP, 'skipped') !== 1) return false;
-  if (steps.filter((s) => s.name === GATE_STEP).length !== 1) return false;
-  if (steps.filter((s) => s.name === CAPTURE_STEP).length !== 1) return false;
-  if (steps.filter((s) => s.name === APPLY_STEP).length !== 1) return false;
-  if (steps.filter((s) => s.name === 'Set up job').length > 1) return false;
-  if (steps.filter((s) => s.name === 'Complete job').length > 1) return false;
-  return steps.every((step) => {
-    const name = step.name ?? '';
-    if (SUCCESS_ALLOWED_STEPS.has(name)) return step.conclusion === 'success';
-    return step.conclusion === 'skipped';
-  });
+  // Malformed input never throws and never confirms a skip: every element must be an object with a non-empty string name
+  // and a string conclusion, and no name may repeat.
+  const named: { name: string; conclusion: string }[] = [];
+  for (const step of steps as unknown[]) {
+    if (!step || typeof step !== 'object' || Array.isArray(step)) return false;
+    const { name, conclusion } = step as { name?: unknown; conclusion?: unknown };
+    if (typeof name !== 'string' || name.trim() === '' || typeof conclusion !== 'string') return false;
+    named.push({ name, conclusion });
+  }
+  if (new Set(named.map((s) => s.name)).size !== named.length) return false;
+  const conclusionOf = (name: string) => named.find((s) => s.name === name)?.conclusion;
+  if (conclusionOf(GATE_STEP) !== 'success') return false;
+  if (conclusionOf(CAPTURE_STEP) !== 'skipped') return false;
+  if (conclusionOf(APPLY_STEP) !== 'skipped') return false;
+  return named.every(({ name, conclusion }) => (SUCCESS_ALLOWED_STEPS.has(name) ? conclusion === 'success' : conclusion === 'skipped'));
 }
 
 export function evaluateDailyWriterGuard(input: {

@@ -108,6 +108,23 @@ describe('daily writer guard', () => {
   it('holds for the actual older write run because non-allowlisted steps succeeded', () => {
     expect(judge([], [{ ...run, jobSteps: oldWritingJobSteps }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
   });
+  it('malformed step entries (null, non-object, missing / empty / non-string name or conclusion) hold instead of throwing', () => {
+    const bad: unknown[] = [null, 'x', 7, [], { conclusion: 'skipped' }, { name: '', conclusion: 'skipped' }, { name: '  ', conclusion: 'skipped' },
+      { name: 42, conclusion: 'skipped' }, { name: 'Run something', conclusion: null }, { name: 'Run something' }];
+    for (const entry of bad) {
+      expect(() => judge([], [{ ...run, jobSteps: [...skippedJobSteps, entry] }])).not.toThrow();
+      expect(judge([], [{ ...run, jobSteps: [...skippedJobSteps, entry] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    }
+  });
+  it('a nameless step holds even when it is skipped', () => {
+    expect(judge([], [{ ...run, jobSteps: [...skippedJobSteps, { conclusion: 'skipped' }] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+  });
+  it('any repeated step name holds, not only the three required steps', () => {
+    const dup = [...skippedJobSteps, { name: 'Run actions/checkout@v4', conclusion: 'skipped' }];
+    expect(judge([], [{ ...run, jobSteps: dup }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    const dupSetup = [...skippedJobSteps, { name: 'Set up job', conclusion: 'success' }];
+    expect(judge([], [{ ...run, jobSteps: dupSetup }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+  });
   it('fails closed unless the exact gate/capture/apply skipped pattern is confirmed', () => {
     const changedName = skippedJobSteps.map((s) => s.name === 'Daily schedule and manual apply gate'
       ? { ...s, name: 'Daily schedule apply gate' } : s);
