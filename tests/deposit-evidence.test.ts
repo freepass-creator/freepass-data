@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assessDepositEvidence, auditDepositEvidence, depositStatusLabel } from '../src/domain/deposit-evidence.js';
+import { assessDepositEvidence, auditDepositEvidence, depositFromYearsRuleNote, depositStatusLabel } from '../src/domain/deposit-evidence.js';
 import { buildKakaoCatalogReferenceProduct, resolveReferenceDeposit } from '../src/application/kakao-catalog-reference.js';
 
 describe('deposit evidence never promotes a placeholder to waiver', () => {
@@ -69,5 +69,18 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     const before = structuredClone(products);
     expect(auditDepositEvidence(products)).toMatchObject({ productCount: 3, paidTermCount: 3, counts: { KNOWN: 1, ZERO: 1, UNKNOWN: 1 }, writeAuthorized: false });
     expect(products).toEqual(before);
+  });
+
+  it('derives the RP012 subscription deposit from the supplier note rule (1 / 2 / 3 months of rent, capped at 3), never from a zero placeholder', () => {
+    const note = '월 대여료 × 약정연수 (최대 3개월)';
+    expect(depositFromYearsRuleNote(note, 12, 1000000)).toEqual({ amount: 1000000, multiplier: 1 });
+    expect(depositFromYearsRuleNote(note, 24, 994000)).toEqual({ amount: 1988000, multiplier: 2 });
+    for (const months of [36, 48, 60]) expect(depositFromYearsRuleNote(note, months, 800000)).toEqual({ amount: 2400000, multiplier: 3 });
+    expect(depositFromYearsRuleNote(note, 18, 1000000)).toBeNull();
+    expect(depositFromYearsRuleNote(note, 24, 0)).toBeNull();
+    expect(depositFromYearsRuleNote('대여료×2', 24, 1000000)).toBeNull();
+    expect(depositFromYearsRuleNote(undefined, 24, 1000000)).toBeNull();
+    // the placeholder 0 itself stays UNKNOWN in the evidence layer (derivation is a separate, explicit step)
+    expect(assessDepositEvidence({ supplierId: 'RP012', productType: '픽업구독', note, sourceAmount: 0 }).state).toBe('UNKNOWN');
   });
 });
