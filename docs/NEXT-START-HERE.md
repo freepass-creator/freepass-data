@@ -397,6 +397,12 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-05 뮤카(RP035) 조건 변경 — 분납 폐지 반영
+
+- 목적: 대표 10-05 지시. 보증금 분납 폐지 + 영업 분납 정액 줄 삭제. 선납 정액(100만·120만)·추가보증금×10%(40만 한도)·프리패스 차량가×1% 는 그대로. 정책 효력일 2026-10-05.
+- 변경: `src/application/kakao-catalog-reference.ts` 뮤카 지급 — 분납은 `contractDate` 가 효력일 이후면 `MEWCAR_INSTALLMENT_ABOLISHED_CONFIRM_REQUIRED`(확인 필요, 계산 안 함), 계약일을 모르면 `MEWCAR_CONTRACT_DATE_REQUIRED`, 그 전 계약은 옛 규칙. `tests/kakao-catalog-reference.test.ts`·`docs/READ-RUNTIME.md` 갱신.
+- 남음: 호출부(접수·정산 입력)가 `contractDate` 를 넘기게 하는 일(넘기지 않으면 분납은 멈춘다). 근거 문서는 비공개(ai-ops).
+
 ### 2026-10-05 후속 목록 (정책 정정기·빈 칸 채우기 반영 뒤)
 
 - [완료 2026-10-05] 이안카 정책 동기화(`src/infra/iancar-policy-sync-firestore.ts`): 상품 119 + 정책 4를 한 `db.runTransaction`으로 묶고 사전 `updateTime` 조건을 재확인한다. 소유 가드(#388)는 백업·쓰기 전과 트랜잭션 내부 현재 데이터 기준으로 모두 검사한다.

@@ -159,6 +159,9 @@ export const KAKAO_COMMISSION_POLICY = {
     supplierId: 'RP035', sourceRows: [169, 170], billingBasisPoints: 100,
     payout: { PREPAID: { 12: 1000000, 24: 1200000, 36: 1200000, 48: 1200000 }, INSTALLMENT: { 12: 800000, 24: 1000000, 36: 1000000, 48: 1000000 } },
     extraDepositPercent: 10, extraDepositCap: 400000, separateFunding: true,
+    /** 2026-10-05 뮤카 조건 변경: 보증금 분납 폐지 + 영업 분납 정액 줄 삭제. 효력일(포함) 이후 계약일의 신규 분납 계약은 계산하지 않고 «확인 필요»로 멈춘다.
+     * 그 전 계약(계약일 < 효력일)은 위 INSTALLMENT 옛 정액으로 계산한다. 선납 정액·추가보증금 10%(40만 한도)·프리패스 1% 는 그대로. */
+    installmentAbolishedFrom: '2026-10-05',
   },
 } as const;
 
@@ -346,6 +349,8 @@ export type CommissionInput = {
   q12Basis?: { amount: number; sourceRef: string };
   /** 뮤카: 보증금 선납/분납(접수 납입 방식). 추정하지 않는다. */
   depositPayment?: 'PREPAID' | 'INSTALLMENT';
+  /** 계약일(YYYY-MM-DD). 뮤카 분납은 계약일이 정책 효력일(2026-10-05) 전이냐 후냐로 갈린다 — 모르면 분납을 계산하지 않는다. */
+  contractDate?: string;
   /** 뮤카: 추가보증금(원, 없으면 0 을 명시). 모르면 넣지 않는다 — 계산하지 않는다. */
   extraDeposit?: number;
   /** A suspected individual promotion must not silently use the general rule. */
@@ -380,6 +385,11 @@ function resolveMewcar(input: CommissionInput, productType: string, side: 'BILLI
     return calculatedCommission('MEWCAR_FREEPASS_SHARE_BILLING', input.vehicleValue! * rule.billingBasisPoints / 10000, 'EXCLUDED');
   }
   if (input.depositPayment !== 'PREPAID' && input.depositPayment !== 'INSTALLMENT') return unknownCommission('MEWCAR_DEPOSIT_PAYMENT_REQUIRED');
+  if (input.depositPayment === 'INSTALLMENT') {
+    // 분납은 10-05 이후 폐지 — 계약일을 모르면 어느 규칙인지 모르므로 멈추고, 효력일 이후면 «확인 필요»로 멈춘다(옛 정액을 내지 않는다).
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.contractDate ?? '') || Number.isNaN(Date.parse(`${input.contractDate}T00:00:00Z`))) return unknownCommission('MEWCAR_CONTRACT_DATE_REQUIRED');
+    if (input.contractDate! >= rule.installmentAbolishedFrom) return unknownCommission('MEWCAR_INSTALLMENT_ABOLISHED_CONFIRM_REQUIRED');
+  }
   if (!Number.isSafeInteger(input.extraDeposit) || input.extraDeposit! < 0) return unknownCommission('MEWCAR_EXTRA_DEPOSIT_REQUIRED');
   const addition = Math.min(Math.round(input.extraDeposit! * rule.extraDepositPercent / 100), rule.extraDepositCap);
   return calculatedCommission(`MEWCAR_GA_${input.depositPayment}_${term}_PAYOUT`, rule.payout[input.depositPayment][term] + addition, 'EXCLUDED');
