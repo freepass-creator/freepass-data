@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildSheetBlankFillInput, type SheetBlankFillRawInput } from '../src/application/sheet-blank-fill-input.js';
 import { planSheetBlankFill } from '../src/application/sheet-blank-fill.js';
+import { exportSheetBlankFillInput } from '../src/jobs/export-sheet-blank-fill-input.js';
 import spec from '../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
 
 const headers = spec.inputHeaders as string[];
@@ -26,7 +27,7 @@ const raw = (overrides: Partial<SheetBlankFillRawInput> = {}): SheetBlankFillRaw
     checkRows: [['공급사탭ID', '원본행', '상태', '정책코드', '원천행', 'runId'], [101, 2, 'MATCHED', policyCode, 777, 'run-1']],
     tabIds: { [tab]: 101 },
     products: {
-      [plate]: { 확정: true, 검수상태: '확정', maker: '현대', model: '아반떼', sub_model: 'CN7', trim_name: '모던', year: 2024, engine_cc: 1598, fuel_type: '가솔린', seats: 5, drive_type: '2WD', origin: '국산', vehicle_class: '준중형 세단' },
+      [plate]: { 확정: true, 검수상태: '확정', maker: '현대', model: '아반떼', sub_model: 'CN7', trim_name: '모던', year: 2024, engine_cc: 1598, fuel_type: '가솔린', seats: 5, drive_type: '2WD', origin: '국산', vehicle_class: '준중형 세단', policy_code: policyCode },
     },
     policies: { [policyCode]: policy({ basic_driver_age: '만 26세 이상', insurance_included: '보험료 포함', own_damage_min_deductible: '50만원', own_damage_max_deductible: '200만원' }) },
     ...overrides,
@@ -73,6 +74,15 @@ describe('sheet blank fill input adapter', () => {
     expect(report(result).skippedCounts.NOT_CONFIRMED).toBeGreaterThan(0);
   });
 
+  it('treats conflicting confirmed fields as unconfirmed', () => {
+    const input = raw({ products: { [plate]: { 확정: true, 검수상태: '확인필요', maker: '현대', policy_code: policyCode } } });
+    const built = buildSheetBlankFillInput(input);
+    expect(built.vehicles[plate]!.confirmed).toBe(false);
+    const result = planSheetBlankFill(built);
+    expect(fills(result).some((cell) => rangeOf(cell) === `${tab}!F2`)).toBe(false);
+    expect(report(result).skippedCounts.NOT_CONFIRMED).toBeGreaterThan(0);
+  });
+
   it('links only MATCHED policy rows whose tab id and sheet plate match', () => {
     const input = raw({
       checkRows: [['공급사탭ID', '원본행', '상태', '정책코드', '원천행', 'runId'], [101, 2, 'MATCHED', policyCode, 1, 'r'], [999, 2, 'MATCHED', 'OTHER', 1, 'r'], [101, 3, 'PENDING', 'OTHER', 1, 'r']],
@@ -82,6 +92,15 @@ describe('sheet blank fill input adapter', () => {
     input.tabs[tab]!.formulaRows.push(headers.map(() => ''));
     const built = buildSheetBlankFillInput(input);
     expect(built.policyLinks).toEqual({ [`${tab}:2`]: { code: policyCode, plate } });
+  });
+
+  it('does not link policy rows when product policy_code disagrees, so policy fields are skipped', () => {
+    const input = raw({ products: { [plate]: { 확정: true, 검수상태: '확정', maker: '현대', policy_code: 'OTHER-POLICY' } } });
+    const built = buildSheetBlankFillInput(input);
+    expect(built.policyLinks).toEqual({});
+    const result = planSheetBlankFill(built);
+    expect(fills(result).some((cell) => rangeOf(cell) === `${tab}!AL2`)).toBe(false);
+    expect(report(result).skippedCounts.NO_POLICY_LINK).toBeGreaterThan(0);
   });
 
   it('fills policy fields only with policy-corrector evidence', () => {
@@ -104,5 +123,97 @@ describe('sheet blank fill input adapter', () => {
   it('emits planner row-confirm entries for filled rows', () => {
     const result = planSheetBlankFill(buildSheetBlankFillInput(raw()));
     expect(lineChecks(result).some((cell) => rangeOf(cell) === `${tab}!E2` && valueOf(cell) === plate)).toBe(true);
+  });
+});
+
+describe('sheet blank fill input export job', () => {
+  const allTabs = [...new Set(spec.supplierChannels.sharedInputSheet.map((channel) => channel.tab as string))];
+  const jobTab = allTabs[0]!;
+  const titles = [...allTabs, '정책확인'];
+  const batch = (byTitle: Record<string, unknown[][]>, omitLast = false) => ({
+    valueRanges: titles.slice(0, omitLast ? -1 : undefined).map((title) => ({ range: `'${title}'!A:ZZ`, values: byTitle[title] ?? [] })),
+  });
+  const baseRows = () => {
+    const row = emptyRow();
+    row[plateCol] = plate;
+    (row as unknown[])[makerCol] = false;
+    return {
+      [jobTab]: [headers, row],
+      정책확인: [['공급사탭ID', '원본행', '상태', '정책코드', '원천행', 'runId'], [101, 2, 'MATCHED', policyCode, 1, 'run-1']],
+    };
+  };
+  const runExport = async (reads: unknown[], byTitle = baseRows()) => {
+    const oldSheet = process.env.SHEET_BLANK_FILL_SPREADSHEET;
+    const oldOut = process.env.SHEET_BLANK_FILL_INPUT_OUT;
+    process.env.SHEET_BLANK_FILL_SPREADSHEET = 'env-sheet-id';
+    process.env.SHEET_BLANK_FILL_INPUT_OUT = 'virtual-output.json';
+    let artifact: unknown;
+    let call = 0;
+    try {
+      await exportSheetBlankFillInput({
+        readSheetsBatchGet: async () => reads[call++] ?? batch(byTitle),
+        readSheetsMetadata: async () => ({ sheets: [{ properties: { title: jobTab, sheetId: 101 } }] }),
+        readCanonDocuments: async (collection, ids) => collection === 'products'
+          ? Object.fromEntries(ids.map((id) => [id, { 확정: true, 검수상태: '확정', maker: '현대', policy_code: policyCode }]))
+          : Object.fromEntries(ids.map((id) => [id, policy({ basic_driver_age: '만 26세 이상' })])),
+        writePrivateArtifact: async (_out, input) => { artifact = input; },
+        now: () => new Date(),
+        sleep: async () => {},
+      });
+      return { artifact: artifact as ReturnType<typeof buildSheetBlankFillInput>, calls: call };
+    } finally {
+      if (oldSheet === undefined) delete process.env.SHEET_BLANK_FILL_SPREADSHEET; else process.env.SHEET_BLANK_FILL_SPREADSHEET = oldSheet;
+      if (oldOut === undefined) delete process.env.SHEET_BLANK_FILL_INPUT_OUT; else process.env.SHEET_BLANK_FILL_INPUT_OUT = oldOut;
+    }
+  };
+
+  it('passes boolean sheet values as TRUE/FALSE text instead of blanking them', async () => {
+    const { artifact } = await runExport([batch(baseRows()), batch(baseRows()), batch(baseRows()), batch(baseRows())]);
+    expect(artifact.tabs[jobTab]!.rows[0]!.values[makerCol]).toBe('FALSE');
+  });
+
+  it('retries changed values and stops on the third unstable read', async () => {
+    const changed = baseRows();
+    changed[jobTab] = [headers, (() => { const row = emptyRow(); row[plateCol] = plate; row[makerCol] = 'changed'; return row; })()];
+    await expect(runExport([
+      batch(baseRows()), batch(baseRows()), batch(changed), batch(baseRows()),
+      batch(baseRows()), batch(baseRows()), batch(changed), batch(baseRows()),
+      batch(baseRows()), batch(baseRows()), batch(changed), batch(baseRows()),
+    ])).rejects.toThrow('SHARED_SHEET_CAPTURE_CHANGED_DURING_READ');
+  });
+
+  it('stops when formulas change between the two formula reads', async () => {
+    const formulas = baseRows();
+    const formulasChanged = baseRows();
+    formulasChanged[jobTab]![1]![makerCol] = '=IF(A2="","",FALSE)';
+    await expect(runExport([
+      batch(baseRows()), batch(formulas), batch(baseRows()), batch(formulasChanged),
+      batch(baseRows()), batch(formulas), batch(baseRows()), batch(formulasChanged),
+      batch(baseRows()), batch(formulas), batch(baseRows()), batch(formulasChanged),
+    ])).rejects.toThrow('SHARED_SHEET_CAPTURE_CHANGED_DURING_READ');
+  });
+
+  it('fails closed when the FORMULA response omits a requested range', async () => {
+    await expect(runExport([batch(baseRows()), batch(baseRows(), true), batch(baseRows()), batch(baseRows(), true)])).rejects.toThrow('SHEET_BLANK_FILL_INPUT_SHAPE');
+  });
+
+  it('keeps header-name mapping when a tab header order changes', async () => {
+    const movedHeaders = [...headers];
+    const [removed] = movedHeaders.splice(makerCol, 1);
+    movedHeaders.splice(modelCol + 2, 0, removed!);
+    const makerIndex = movedHeaders.indexOf(headers[makerCol]!);
+    const plateIndex = movedHeaders.indexOf(headers[plateCol]!);
+    const row = movedHeaders.map(() => null) as Array<string | number | null>;
+    row[plateIndex] = plate;
+    const byTitle = { [jobTab]: [movedHeaders, row], 정책확인: baseRows().정책확인 };
+    const { artifact } = await runExport([batch(byTitle), batch(byTitle), batch(byTitle), batch(byTitle)], byTitle);
+    const result = planSheetBlankFill(artifact);
+    expect(fills(result).some((cell) => rangeOf(cell) === `${jobTab}!${String.fromCharCode(65 + makerIndex)}2`)).toBe(true);
+  });
+
+  it('stops when one tab is over the row safety limit', async () => {
+    const tooLargeRows = Array.from({ length: 5001 }, () => emptyRow());
+    const byTitle = { ...baseRows(), [jobTab]: [headers, ...tooLargeRows] };
+    await expect(runExport([batch(byTitle), batch(byTitle), batch(byTitle), batch(byTitle)], byTitle)).rejects.toThrow('SHEET_BLANK_FILL_TAB_TOO_LARGE');
   });
 });

@@ -52,7 +52,7 @@ function buildVehicles(products: Record<string, Record<string, unknown>>): Sheet
   for (const [plate, product] of Object.entries(products)) {
     if (!plate.trim()) continue;
     const reviewStatus = text(product['검수상태']);
-    const confirmed = product['확정'] === true || reviewStatus === '확정';
+    const confirmed = product['확정'] === true && reviewStatus === '확정';
     const fields: Record<string, string | number> = {};
     for (const [source, target] of Object.entries(VEHICLE_FIELD_MAP)) {
       const value = product[source];
@@ -104,6 +104,8 @@ function buildPolicyLinks(raw: SheetBlankFillRawInput, tabs: SheetBlankFillInput
     const sheetRow = tabs[tab].rows.find((item) => item.row === sourceRow);
     const plate = text(sheetRow?.values[plateCol]);
     if (!plate) continue;
+    const product = raw.products[plate];
+    if (!product || text(product.policy_code) !== code) continue;
     links[`${tab}:${sourceRow}`] = { code, plate };
   }
   return links;

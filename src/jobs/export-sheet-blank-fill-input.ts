@@ -8,17 +8,30 @@ import { writePrivateArtifact } from './ingest-shared-sheet-canonical.js';
 type ValueRange = { range?: string; values?: unknown[][] };
 type BatchGet = { valueRanges?: ValueRange[] };
 type Metadata = { sheets?: Array<{ properties?: { title?: string; sheetId?: number } }> };
+type ExportDeps = {
+  readSheetsBatchGet: typeof readSheetsBatchGet;
+  readSheetsMetadata: typeof readSheetsMetadata;
+  readCanonDocuments: typeof readCanonDocuments;
+  writePrivateArtifact: typeof writePrivateArtifact;
+  now: () => Date;
+  sleep: (ms: number) => Promise<void>;
+};
 
 const CHECK_TAB = '정책확인';
+const MAX_ROWS_PER_TAB = 5000;
 const retryable = /^(SHARED_SHEET_CAPTURE_CHANGED_DURING_READ|SHARED_SHEET_READ_UNKNOWN|SHARED_SHEET_RESPONSE_INVALID|SHARED_SHEET_HTTP_(429|500|502|503|504))$/;
-const cell = (value: unknown): string | number | null => (typeof value === 'number' && Number.isFinite(value)) || typeof value === 'string' ? value : null;
+const cell = (value: unknown): string | number | null => typeof value === 'boolean' ? (value ? 'TRUE' : 'FALSE') : (typeof value === 'number' && Number.isFinite(value)) || typeof value === 'string' ? value : null;
 const formulaCell = (value: unknown): string => typeof value === 'string' ? value : '';
 const text = (value: unknown) => typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : '';
 
 function valuesByTitle(response: BatchGet, titles: string[]): Record<string, unknown[][]> {
+  if (!Array.isArray(response.valueRanges) || response.valueRanges.length !== titles.length) throw new Error('SHEET_BLANK_FILL_INPUT_SHAPE');
   const out: Record<string, unknown[][]> = {};
   const ranges = response.valueRanges ?? [];
-  titles.forEach((title, index) => { out[title] = ranges[index]?.values ?? []; });
+  titles.forEach((title, index) => {
+    if (!ranges[index] || !Array.isArray(ranges[index]!.values)) throw new Error('SHEET_BLANK_FILL_INPUT_SHAPE');
+    out[title] = ranges[index]!.values!;
+  });
   return out;
 }
 
@@ -30,18 +43,20 @@ function rangeFor(tab: string): string {
   return `'${tab.replaceAll("'", "''")}'!A:ZZ`;
 }
 
-async function readStable(spreadsheetId: string, ranges: string[]) {
+async function readStable(deps: ExportDeps, spreadsheetId: string, ranges: string[]) {
   for (let attempt = 1; ; attempt++) {
     try {
-      const capturedAt = new Date().toISOString();
-      const before = await readSheetsBatchGet(spreadsheetId, ranges, {}, 'SERIAL') as BatchGet;
-      const formulas = await readSheetsBatchGet(spreadsheetId, ranges, {}, 'FORMULA') as BatchGet;
-      const after = await readSheetsBatchGet(spreadsheetId, ranges, {}, 'SERIAL') as BatchGet;
+      const capturedAt = deps.now().toISOString();
+      const before = await deps.readSheetsBatchGet(spreadsheetId, ranges, {}, 'SERIAL') as BatchGet;
+      const formulasBefore = await deps.readSheetsBatchGet(spreadsheetId, ranges, {}, 'FORMULA') as BatchGet;
+      const after = await deps.readSheetsBatchGet(spreadsheetId, ranges, {}, 'SERIAL') as BatchGet;
+      const formulasAfter = await deps.readSheetsBatchGet(spreadsheetId, ranges, {}, 'FORMULA') as BatchGet;
       if (!equalBatch(before, after)) throw new Error('SHARED_SHEET_CAPTURE_CHANGED_DURING_READ');
-      return { capturedAt, values: before, formulas };
+      if (!equalBatch(formulasBefore, formulasAfter)) throw new Error('SHARED_SHEET_CAPTURE_CHANGED_DURING_READ');
+      return { capturedAt, values: before, formulas: formulasBefore };
     } catch (error) {
       if (attempt >= 3 || !(error instanceof Error) || !retryable.test(error.message)) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 30_000));
+      await deps.sleep(30_000);
     }
   }
 }
@@ -69,20 +84,32 @@ function metadataTabIds(meta: Metadata): Record<string, number> {
 }
 
 export async function main() {
+  await exportSheetBlankFillInput({
+    readSheetsBatchGet,
+    readSheetsMetadata,
+    readCanonDocuments,
+    writePrivateArtifact,
+    now: () => new Date(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+}
+
+export async function exportSheetBlankFillInput(deps: ExportDeps) {
   const spreadsheetId = process.env.SHEET_BLANK_FILL_SPREADSHEET?.trim();
   const out = process.env.SHEET_BLANK_FILL_INPUT_OUT?.trim();
   if (!spreadsheetId || !out) throw new Error('SHEET_BLANK_FILL_EXPORT_ENV_REQUIRED');
   const tabs = [...new Set(spec.supplierChannels.sharedInputSheet.map((channel) => channel.tab as string))];
   const titles = [...tabs, CHECK_TAB];
   const ranges = titles.map(rangeFor);
-  const meta = await readSheetsMetadata(spreadsheetId, 'sheets.properties(sheetId,title)') as Metadata;
-  const { capturedAt, values, formulas } = await readStable(spreadsheetId, ranges);
+  const meta = await deps.readSheetsMetadata(spreadsheetId, 'sheets.properties(sheetId,title)') as Metadata;
+  const { capturedAt, values, formulas } = await readStable(deps, spreadsheetId, ranges);
   const byTab = valuesByTitle(values, titles);
   const formulaByTab = valuesByTitle(formulas, titles);
   const rawTabs: SheetBlankFillRawInput['tabs'] = {};
   const plates: string[] = [];
   for (const tab of tabs) {
     const rows = normalizeRows(byTab[tab] ?? []);
+    if (rows.length > MAX_ROWS_PER_TAB + 1) throw new Error('SHEET_BLANK_FILL_TAB_TOO_LARGE');
     const headerRow = rows[0] ?? [];
     const valueRows = rows.slice(1);
     const formulaRows = normalizeFormulaRows((formulaByTab[tab] ?? []).slice(1), valueRows.length, headerRow.length || Math.max(0, ...valueRows.map((row) => row.length)));
@@ -97,10 +124,10 @@ export async function main() {
   const checkHeader = checkRows[0] ?? [];
   const codeCol = checkHeader.map((item) => text(item)).indexOf('정책코드');
   const policyCodes = codeCol >= 0 ? checkRows.slice(1).map((row) => text(row[codeCol])).filter(Boolean) : [];
-  const products = await readCanonDocuments('products', plates);
-  const policies = await readCanonDocuments('policy', policyCodes);
+  const products = await deps.readCanonDocuments('products', plates);
+  const policies = await deps.readCanonDocuments('policy', policyCodes);
   const input = buildSheetBlankFillInput({ spreadsheetId, capturedAt, tabs: rawTabs, checkRows, tabIds: metadataTabIds(meta), products, policies });
-  await writePrivateArtifact(out, input);
+  await deps.writePrivateArtifact(out, input);
   console.log(JSON.stringify({ tabs: Object.keys(input.tabs).length, rows: Object.values(input.tabs).reduce((sum, tab) => sum + tab.rows.length, 0),
     vehicles: Object.keys(input.vehicles).length, policyLinks: Object.keys(input.policyLinks).length, policies: Object.keys(input.policies).length }, null, 2));
 }
