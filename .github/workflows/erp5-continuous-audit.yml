@@ -823,6 +823,14 @@ jobs:
           gcloud logging read             "LOG_ID(\"cloudaudit.googleapis.com/data_access\") AND protoPayload.authenticationInfo.principalEmail=\"$DAILY_WRITER_ACCOUNT\" AND (protoPayload.serviceName=\"firestore.googleapis.com\" OR protoPayload.serviceName=\"datastore.googleapis.com\")"             --project=freepasserp5 --bucket=_Default --location=global --view=daily-writer             --freshness="${DAILY_WRITER_LOOKBACK_HOURS}h" --format=json > "$RUNNER_TEMP/daily-writer-log.json"
           since="$(date -u -d "-$((DAILY_WRITER_LOOKBACK_HOURS + 2)) hours" +%Y-%m-%dT%H:%M:%SZ)"
           gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/shared-sheet-daily.yml/runs?per_page=100&created=>=$since"             --jq '.workflow_runs[]' | jq -s '.' > "$RUNNER_TEMP/daily-writer-runs.json"
+          # 각 성공 실행의 쓰기 단계가 실제로 돌았는지(건너뜀 제외) — 못 읽으면 null(알 수 없음 → 가드가 보류로 둔다)
+          jq -r '.[] | select(.status == "completed" and .conclusion == "success") | .id' "$RUNNER_TEMP/daily-writer-runs.json" | while read -r rid; do
+            n="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$rid/jobs?filter=all&per_page=100" --jq '[.jobs[].steps[] | select(((.name | startswith("Apply to FreePass Data")) or (.name | startswith("Capture, plan and (apply)"))) and .conclusion != "skipped" and .started_at != null)] | length' | awk '{s+=$1} END {print s+0}')" || n=unknown
+            echo "$rid $n"
+          done > "$RUNNER_TEMP/daily-writer-steps.txt"
+          jq -Rn '[inputs | split(" ") | {key: .[0], value: (if .[1] == "unknown" then null else ((.[1] | tonumber) > 0) end)}] | from_entries' "$RUNNER_TEMP/daily-writer-steps.txt" > "$RUNNER_TEMP/daily-writer-steps.json"
+          jq --slurpfile m "$RUNNER_TEMP/daily-writer-steps.json" '[.[] | . + {applyStepRan: ($m[0][(.id | tostring)])}]' "$RUNNER_TEMP/daily-writer-runs.json" > "$RUNNER_TEMP/daily-writer-runs-enriched.json"
+          mv "$RUNNER_TEMP/daily-writer-runs-enriched.json" "$RUNNER_TEMP/daily-writer-runs.json"
           DAILY_WRITER_LOG_JSON="$RUNNER_TEMP/daily-writer-log.json" DAILY_WRITER_RUNS_JSON="$RUNNER_TEMP/daily-writer-runs.json"             npx tsx src/jobs/check-daily-writer-guard.ts
 
   # 기간별 수수료 일괄 재계산 운영 dry-run(AI 상황실 2026-10-04 승인, 1회). 같은 읽기 전용 감사 신원을 쓴다.

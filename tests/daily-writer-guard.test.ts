@@ -70,4 +70,12 @@ describe('daily writer guard', () => {
     const dryRun = { ...run, event: 'workflow_dispatch', display_title: 'shared-sheet-daily dry-run' };
     expect(judge([], [dryRun]).status).toBe('OK');
   });
+  it('does not count a scheduled run whose write step was skipped (once-a-day gate), but still holds when it ran with no log', () => {
+    expect(judge([], [{ ...run, applyStepRan: false }])).toMatchObject({ status: 'OK', silentApplies: 0 });
+    expect(judge([], [{ ...run, applyStepRan: true }])).toMatchObject({ status: 'HOLD', reasons: ['DAILY_WRITER_AUDIT_LOG_MISSING'], silentApplies: 1 });
+  });
+  it('fails closed when the step info could not be read (null / absent)', () => {
+    expect(judge([], [{ ...run, applyStepRan: null }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [run])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+  });
 });

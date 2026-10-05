@@ -4,6 +4,7 @@
  *  - 로그에 쓴 문서 경로가 있으면: 허용 모음 밖(특히 ERP4 화면의 `products`)·다른 데이터베이스 쓰기 → 경보
  *  - 경로가 있든 없든: shared-sheet-daily(main) 실행 구간 밖의 쓰기 → 경보
  *  - 적용 실행이 성공했는데 그 구간의 쓰기 로그가 하나도 없으면(감사 로그 꺼짐·누락) → 보류
+ *    (단 쓰기 단계가 «건너뜀»으로 확인된 실행 — 하루 한 번 관문이 막은 재시도 등 — 은 제외. 단계 정보를 못 읽으면 건너뜀으로 치지 않고 보류)
  *  - 쓴 문서 경로를 읽을 수 없는 쓰기 기록이 하나라도 있으면 → 보류(실행 구간 안이어도 허용 모음 밖 쓰기를 가릴 수 없다).
  *    보류·경보가 하나라도 있으면 감시 job 이 실패하고, 매일 박제 예약 실행은 최근 감시가 성공일 때만 돈다(shared-sheet-daily.yml).
  * 공개 로그에 나가므로 모음 이름은 정해진 목록만 그대로 내보내고, 나머지는 «(other)» 로 센다.
@@ -27,7 +28,10 @@ export type DailyWriterLogEntry = {
     authenticationInfo?: { principalEmail?: string } };
 };
 export type DailyWriterRun = { id?: number; head_branch?: string; event?: string; display_title?: string; status?: string;
-  conclusion?: string | null; created_at?: string; run_started_at?: string; updated_at?: string };
+  conclusion?: string | null; created_at?: string; run_started_at?: string; updated_at?: string;
+  /** Whether the run's write step («Apply to FreePass Data» / legacy «Capture, plan and (apply)») actually ran.
+   * `false` = every write step was skipped (e.g. the once-a-day gate). Absent / null = unknown → fail-closed (still counted). */
+  applyStepRan?: boolean | null };
 
 const isWrite = (entry: DailyWriterLogEntry) => {
   const method = entry.protoPayload?.methodName ?? '';
@@ -114,9 +118,10 @@ export function evaluateDailyWriterGuard(input: {
     const at = Date.parse(entry.timestamp ?? '');
     if (!Number.isFinite(at) || !windows.some((w) => at >= w.from && at <= w.to)) outsideRuns += 1;
   }
-  // A successful apply run (schedule, or a dispatch whose title names «apply») inside the lookback must have left write logs.
+  // A successful apply run (schedule, or a dispatch whose title names «apply») inside the lookback must have left write logs —
+  // unless its write step was verifiably skipped (applyStepRan === false); unknown step info stays counted (fail-closed).
   const silentApplies = windows.filter(({ run, from, to }) => run.status === 'completed' && run.conclusion === 'success' &&
-    (run.event === 'schedule' || /\bapply\b/.test(run.display_title ?? '')) && from >= since &&
+    (run.event === 'schedule' || /\bapply\b/.test(run.display_title ?? '')) && run.applyStepRan !== false && from >= since &&
     !writes.some((e) => { const at = Date.parse(e.timestamp ?? ''); return at >= from && at <= to; })).length;
   const reasons = [
     ...(Object.keys(outsideCollections).length ? ['DAILY_WRITER_OUTSIDE_ALLOWED_COLLECTIONS'] : []),
