@@ -511,19 +511,22 @@ test('month formula results retain TEXT in summary format fixes while supplier f
   canonPut(f,1,1,'입고일자','25-04',{userEnteredValue:{formulaValue:'=A2'},effectiveValue:{stringValue:'25-04'}});
   assert.equal(planValueNormalize(f.snapshot,f.spec,now).status,'HOLD');
 });
-test('summary formula keeps only 출고가능·즉시출고 rows and drops blank rows; status column follows the layout',()=>{
+test('summary formula keeps every row except 출고불가 and drops blank rows; status column follows the layout',()=>{
   const H=inputSpec.inputHeaders,f=summaryFormula("ARRAYFORMULA(IF(ISBLANK('가'!A2:BV9),\"\",'가'!A2:BV9))",H);
-  assert.deepEqual(inputSpec.summaryKeepStatuses,['출고가능','즉시출고']);
-  assert.equal(f,`=LET(src,VSTACK(ARRAYFORMULA(IF(ISBLANK('가'!A2:BV9),"",'가'!A2:BV9))),keep,BYROW(src,LAMBDA(r,AND(SUM(ARRAYFORMULA(LEN(r)))>0,OR(INDEX(r,1,3)="출고가능",INDEX(r,1,3)="즉시출고")))),IFNA(FILTER(src,keep),""))`);
-  // 수식의 keep 조건을 그대로 읽어 표본 줄에 적용: 빈 줄 아님 AND 상태 칸이 목록 중 하나.
-  const conds=[...f.matchAll(/INDEX\(r,1,(\d+)\)="([^"]+)"/g)].map(m=>[Number(m[1])-1,m[2]]);
-  const keep=row=>row.some(v=>String(v).length>0)&&conds.some(([c,v])=>row[c]===v);
+  assert.deepEqual(inputSpec.summaryExcludeStatuses,['출고불가']);
+  assert.equal(inputSpec.summaryKeepStatuses,undefined);
+  assert.equal(f,`=LET(src,VSTACK(ARRAYFORMULA(IF(ISBLANK('가'!A2:BV9),"",'가'!A2:BV9))),keep,BYROW(src,LAMBDA(r,AND(SUM(ARRAYFORMULA(LEN(r)))>0,INDEX(r,1,3)<>"출고불가"))),IFNA(FILTER(src,keep),""))`);
+  // 수식의 keep 조건을 그대로 읽어 표본 줄에 적용: 빈 줄 아님 AND 상태 칸이 제외 목록 어느 것도 아님.
+  const conds=[...f.matchAll(/INDEX\(r,1,(\d+)\)<>"([^"]+)"/g)].map(m=>[Number(m[1])-1,m[2]]);
+  const keep=row=>row.some(v=>String(v).length>0)&&conds.every(([c,v])=>row[c]!==v);
   const at=H.indexOf('차량상태'),row=v=>{const r=H.map(()=>'');r[0]='회사';r[at]=v;return r;};
   const sample=[row('출고가능'),row('즉시출고'),row('출고불가'),row('출고협의'),row('상품화중'),row('계약중'),row(''),H.map(()=>'')];
-  assert.deepEqual(sample.filter(keep).map(r=>r[at]),['출고가능','즉시출고']);
+  assert.deepEqual(sample.filter(keep).map(r=>r[at]),['출고가능','즉시출고','출고협의','상품화중','계약중','']);
+  // 제외 목록이 둘이면 둘 다 뺀다.
+  assert.ok(summaryFormula('x',H,{...inputSpec,summaryExcludeStatuses:['출고불가','계약중']}).includes('INDEX(r,1,3)<>"출고불가",INDEX(r,1,3)<>"계약중"'));
   // 칸 순서가 바뀌면 차량상태가 있는 칸을 본다; 차량상태가 없거나 목록이 잘못되면 HOLD.
   const moved=[...H];moved.splice(at,1);moved.push('차량상태');
-  assert.ok(summaryFormula('x',moved).includes(`INDEX(r,1,${moved.length})="출고가능"`));
+  assert.ok(summaryFormula('x',moved).includes(`INDEX(r,1,${moved.length})<>"출고불가"`));
   assert.throws(()=>summaryFormula('x',H.filter(h=>h!=='차량상태')),/Summary status column missing/);
-  for(const bad of [[],['출고"가능'],[''],undefined])assert.throws(()=>summaryFormula('x',H,{...inputSpec,summaryKeepStatuses:bad}),/summaryKeepStatuses invalid/);
+  for(const bad of [[],['출고"가능'],[''],undefined])assert.throws(()=>summaryFormula('x',H,{...inputSpec,summaryExcludeStatuses:bad}),/summaryExcludeStatuses invalid/);
 });
