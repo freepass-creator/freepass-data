@@ -61,6 +61,7 @@ export async function applyIancarPolicySync(input: IancarPolicySyncInput, deps: 
     const data = snap.data() ?? {};
     const plate = normalize(data.car_number ?? data.vehicle_number);
     return [snap.id, {
+      plate,
       policyCode: byPlate.get(plate),
       policyCodeSourceOriginal: data.policy_code_source_original ?? data.policy_code ?? null,
     }];
@@ -103,8 +104,12 @@ export async function applyIancarPolicySync(input: IancarPolicySyncInput, deps: 
     for (const snap of currentProducts) {
       const data = snap.data() ?? {};
       const plate = normalize(data.car_number ?? data.vehicle_number);
+      const expected = productExpectations.get(snap.id);
+      if (!expected || plate !== expected.plate) {
+        throw new Error(`transaction product plate changed ${snap.ref.path}`);
+      }
       transaction.update(snap.ref, {
-        policy_code: byPlate.get(plate),
+        policy_code: byPlate.get(expected.plate),
         policy_code_source_original: data.policy_code_source_original ?? data.policy_code ?? null,
         policy_reference_checked_at: now,
       });
@@ -129,6 +134,8 @@ export async function applyIancarPolicySync(input: IancarPolicySyncInput, deps: 
     verifiedDocIds.add(snap.id);
     verifiedPlates.add(plate);
     if (
+      plate !== expected.plate ||
+      byPlate.get(expected.plate) !== expected.policyCode ||
       data.policy_code !== expected.policyCode ||
       !Object.prototype.hasOwnProperty.call(data, 'policy_code_source_original') ||
       data.policy_code_source_original !== expected.policyCodeSourceOriginal

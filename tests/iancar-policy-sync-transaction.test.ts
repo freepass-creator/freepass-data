@@ -202,6 +202,17 @@ describe('iancar policy sync transaction', () => {
     await expect(call()).rejects.toThrow(/Product readback mismatch products\/p-33/);
   });
 
+  it('throws when product readback finds two product plates swapped by document id', async () => {
+    afterTransaction = () => {
+      const first = store.get('products/p-0')!;
+      const second = store.get('products/p-1')!;
+      const firstPlate = first.data.car_number;
+      first.data.car_number = second.data.car_number;
+      second.data.car_number = firstPlate;
+    };
+    await expect(call()).rejects.toThrow(/Product readback mismatch products\/p-0/);
+  });
+
   it('throws when product readback finds a mismatched preserved original policy code', async () => {
     afterTransaction = () => { store.get('products/p-44')!.data.policy_code_source_original = 'DRIFTED'; };
     await expect(call()).rejects.toThrow(/Product readback mismatch products\/p-44/);
