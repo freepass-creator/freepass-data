@@ -512,14 +512,34 @@ describe('뮤카 RP035 구독 — F04 169·170행(DEC-2026-10-04-01 8번)', () =
     const pay = (over: object) => resolveSalesCommission({ ...base, ...over });
     expect(pay({ termMonths: 12, depositPayment: 'PREPAID', extraDeposit: 0 })).toMatchObject({ ruleId: 'MEWCAR_GA_PREPAID_12_PAYOUT', amount: 1000000 });
     expect(pay({ termMonths: 48, depositPayment: 'PREPAID', extraDeposit: 1000000 })).toMatchObject({ amount: 1300000 });
-    expect(pay({ termMonths: 12, depositPayment: 'INSTALLMENT', extraDeposit: 2000000 })).toMatchObject({ ruleId: 'MEWCAR_GA_INSTALLMENT_12_PAYOUT', amount: 1000000 });
-    expect(pay({ termMonths: 36, depositPayment: 'INSTALLMENT', extraDeposit: 9000000 })).toMatchObject({ amount: 1400000 }); // 가산 상한 40만
+    // 분납은 효력일(2026-10-05) 전 계약만 옛 정액으로 계산한다.
+    expect(pay({ termMonths: 12, depositPayment: 'INSTALLMENT', extraDeposit: 2000000, contractDate: '2026-10-04' })).toMatchObject({ ruleId: 'MEWCAR_GA_INSTALLMENT_12_PAYOUT', amount: 1000000 });
+    expect(pay({ termMonths: 36, depositPayment: 'INSTALLMENT', extraDeposit: 9000000, contractDate: '2026-09-30' })).toMatchObject({ amount: 1400000 }); // 가산 상한 40만
   });
   it('선납/분납·추가보증금을 모르면 계산하지 않고(0 으로 두지 않음), 기간 밖·구독 아님도 모름', () => {
     expect(resolveSalesCommission({ ...base, extraDeposit: 0 })).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'MEWCAR_DEPOSIT_PAYMENT_REQUIRED' });
     expect(resolveSalesCommission({ ...base, depositPayment: 'PREPAID' })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_EXTRA_DEPOSIT_REQUIRED' });
     expect(resolveSalesCommission({ ...base, termMonths: 60, depositPayment: 'PREPAID', extraDeposit: 0 })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_TERM_NOT_IN_POLICY' });
     expect(resolveSupplierBillingFee({ ...base, productType: '재렌트' })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'MEWCAR_SUBSCRIPTION_ONLY' });
+  });
+  it('2026-10-05 이후 신규 분납 계약은 계산하지 않고 «확인 필요»로 멈춘다(계약일 모르면 멈춤, 선납·청구는 그대로)', () => {
+    const pay = (over: object) => resolveSalesCommission({ ...base, ...over });
+    for (const contractDate of ['2026-10-05', '2026-10-06', '2027-01-01']) {
+      expect(pay({ depositPayment: 'INSTALLMENT', extraDeposit: 0, contractDate })).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'MEWCAR_INSTALLMENT_ABOLISHED_CONFIRM_REQUIRED' });
+    }
+    // 달력에 없는 날은 Date.parse 보정으로 통과하면 안 된다(옛 정액을 내지 않는다).
+    for (const contractDate of ['2026-02-29', '2026-04-31', '2026-09-31', '2026-02-30', '2026-00-10', '2026-10-00']) {
+      expect(pay({ depositPayment: 'INSTALLMENT', extraDeposit: 0, contractDate })).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'MEWCAR_CONTRACT_DATE_REQUIRED' });
+    }
+    // 실제 있는 날(윤일 포함)은 통과
+    expect(pay({ depositPayment: 'INSTALLMENT', extraDeposit: 0, contractDate: '2024-02-29' })).toMatchObject({ state: 'CALCULATED', ruleId: 'MEWCAR_GA_INSTALLMENT_24_PAYOUT' });
+    for (const contractDate of [undefined, '', '2026-10-5', '2026-13-01', 'x']) {
+      expect(pay({ depositPayment: 'INSTALLMENT', extraDeposit: 0, contractDate })).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'MEWCAR_CONTRACT_DATE_REQUIRED' });
+    }
+    // 선납 정액·추가보증금 10%(40만 한도)·프리패스 1% 는 계약일과 무관하게 그대로
+    expect(pay({ depositPayment: 'PREPAID', extraDeposit: 0, contractDate: '2026-10-06' })).toMatchObject({ ruleId: 'MEWCAR_GA_PREPAID_24_PAYOUT', amount: 1200000 });
+    expect(pay({ depositPayment: 'PREPAID', extraDeposit: 9000000, contractDate: '2026-10-06' })).toMatchObject({ amount: 1600000 });
+    expect(resolveSupplierBillingFee({ ...base, contractDate: '2026-10-06' })).toMatchObject({ state: 'CALCULATED', amount: 400000 });
   });
   it('개별 예외 표시가 있으면 일반 정액을 내지 않는다', () => {
     const r = resolveSalesCommission({ ...base, depositPayment: 'PREPAID', extraDeposit: 0, individualException: true });
