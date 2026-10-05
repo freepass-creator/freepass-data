@@ -385,6 +385,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-05 정책 정정기 일반 경로 추가
+
+- 목적: `policy/<정책코드>`의 공급사 조건층과 판매 방침층을 근거·시행일·계획 digest로 정정하는 일반 정정기를 추가했다.
+- 변경: `policy-correction` 도메인 검증, Firestore 적용기, `repair:policy-correction` job, 테스트, 짧은 운영 문서 추가. 기존 공급사 전용 정정기 코드는 건드리지 않고 `package.json` 스크립트만 추가했다.
+- 검증: `tests/policy-correction*.test.ts` 추가. 전체 `npm.cmd run check`와 `npm.cmd run check:standards`는 이 작업 마지막에 실행 결과를 보고한다.
+- 남음: `policy_field_owner: "policy-corrector"` 표시는 이번에 쓰지만, 기존 공급사 전용 보정기·매일 수집기가 이 표시를 보고 덮어쓰지 않게 하는 방어 로직은 후속 작업이다.
+- next_start_here: 실제 운영 적용은 `POLICY_CORRECTION_PLAN` dry-run의 `planDigest`를 확인한 뒤 같은 digest를 `AUTHORIZE_POLICY_CORRECTION`으로 넣고 `--apply`를 붙인다.
+
 ### 2026-10-05 하루 한 번 박제 첫 예약 실행 — 예약이 만들어지지 않음(읽기만 점검)
 
 - 점검(05:17 KST, 읽기만): `shared-sheet-daily.yml` 의 03:40 KST(`40 18 * * *`) 예약 실행이 **만들어지지 않았다**. 이 워크플로 실행 목록은 10-04 수동 실행 셋(시험 37188258463 · 첫 적용 37188552323 · 날짜 실제 값 시험 37203529314)뿐이다. 워크플로 상태 active, 변수·권한 변경 없음.
