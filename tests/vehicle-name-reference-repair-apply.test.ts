@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { stableDigest } from '../src/shared/stable-digest.js';
 
 // In-memory Firestore stand-in: enough of getAll/runTransaction/update/create/FieldValue for the repair path.
 const store = new Map<string, Record<string, unknown>>();
+const put = (path: string, data: Record<string, unknown>) => { store['set'](path, data); };
 const UNION = Symbol('union');
 type Ref = { path: string; id: string; parent: { id: string } };
 const ref = (collection: string, id: string): Ref => ({ path: `${collection}/${id}`, id, parent: { id: collection } });
@@ -548,37 +550,38 @@ describe('product source correction apply path', () => {
   it('archives a product source correction without changing 원문', async () => {
     store.set('products/p-source', { 원문: { supplier: 'first raw' } });
     const result = await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
-      productSourceCorrections: [{ id: 'p-source', correction, evidence: 'plate lookup result' }] });
+      productSourceCorrections: [{ id: 'p-source', correction, expectedCurrentDigest: stableDigest(null), evidence: 'plate lookup result' }] });
     expect(store.get('products/p-source')).toMatchObject({
       원문: { supplier: 'first raw' },
-      원문_정정: { ...correction, 기록시각: expect.stringMatching(/^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/), sourceDigest: 'v1' },
-      원문_정정_이력: [{ ...correction, 기록시각: expect.stringMatching(/^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/), sourceDigest: 'v1' }],
+      원문_정정: { ...correction, key: expect.any(String), 기록시각: expect.stringMatching(/^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/), sourceDigest: 'v1' },
+      원문_정정_이력: [{ ...correction, key: expect.any(String), 기록시각: expect.stringMatching(/^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/), sourceDigest: 'v1' }],
       vehicle_name_reference_checked_at: 'ts',
       vehicle_name_reference_source_digest: 'v1',
     });
     expect(result).toMatchObject({ productSourceCorrectionCount: 1, readbackCount: 1, auditCount: 1 });
     const audit = [...store.entries()].find(([k]) => k.startsWith('audit_events/'))![1];
     expect(audit.before).toEqual({ 원문_정정: null });
-    expect(audit.after).toEqual({ 원문_정정: { ...correction, sourceDigest: 'v1' } });
+    expect(audit.after).toEqual({ 원문_정정: { ...correction, sourceDigest: 'v1', key: expect.any(String) } });
   });
 
   it('combines source correction with a product trim repair for the same product', async () => {
     store.set('products/p-source', { 원문: 'raw text', trim_name: 'Old Trim' });
     const result = await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
       productTrimRepairs: [{ id: 'p-source', from: 'Old Trim', to: 'New Trim' }],
-      productSourceCorrections: [{ id: 'p-source', correction, evidence: 'plate lookup result' }] });
+      productSourceCorrections: [{ id: 'p-source', correction, expectedCurrentDigest: stableDigest(null), evidence: 'plate lookup result' }] });
     expect(store.get('products/p-source')).toMatchObject({
       원문: 'raw text',
       trim_name: 'New Trim',
-      원문_정정: { ...correction, 기록시각: expect.stringMatching(/^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/), sourceDigest: 'v1' },
+      원문_정정: { ...correction, key: expect.any(String), 기록시각: expect.stringMatching(/^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/), sourceDigest: 'v1' },
     });
     expect(result).toMatchObject({ productTrimCount: 1, productSourceCorrectionCount: 1, readbackCount: 2, auditCount: 2 });
   });
 
   it('rejects missing product and catches concurrent source-correction changes', async () => {
     await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
-      productSourceCorrections: [{ id: 'missing-source', correction, evidence: 'plate lookup result' }] })).rejects.toThrow(/target missing/);
+      productSourceCorrections: [{ id: 'missing-source', correction, expectedCurrentDigest: stableDigest(null), evidence: 'plate lookup result' }] })).rejects.toThrow(/target missing/);
     store.set('products/p-source', { 원문: 'raw text', 원문_정정: { ...correction, sourceDigest: 'old' } });
+    const expectedCurrentDigest = stableDigest(store.get('products/p-source')!.원문_정정);
     const original = db.runTransaction;
     db.runTransaction = async (fn) => {
       store.set('products/p-source', { ...store.get('products/p-source')!, 원문_정정: { ...correction, sourceDigest: 'changed' } });
@@ -586,8 +589,8 @@ describe('product source correction apply path', () => {
     };
     try {
       await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
-        productSourceCorrections: [{ id: 'p-source', correction, evidence: 'plate lookup result' }] }))
-        .rejects.toThrow(/productSourceCorrection precondition changed/);
+        productSourceCorrections: [{ id: 'p-source', correction, expectedCurrentDigest, evidence: 'plate lookup result' }] }))
+        .rejects.toThrow(/expectedCurrentDigest mismatch/);
     } finally { db.runTransaction = original; }
     expect(store.get('products/p-source')!.원문_정정).toMatchObject({ sourceDigest: 'changed' });
   });
@@ -601,8 +604,60 @@ describe('product source correction apply path', () => {
     };
     try {
       await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
-        productSourceCorrections: [{ id: 'p-source', correction, evidence: 'plate lookup result' }] }))
+        productSourceCorrections: [{ id: 'p-source', correction, expectedCurrentDigest: stableDigest(null), evidence: 'plate lookup result' }] }))
         .rejects.toThrow(/original source changed/);
     } finally { db.runTransaction = original; }
+  });
+
+  it('skips a rerun when the same correction key is already in history', async () => {
+    put('products/p-source', { 원문: 'raw text' });
+    const plan = { sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productSourceCorrections: [{ id: 'p-source', correction, expectedCurrentDigest: stableDigest(null), evidence: 'plate lookup result' }] };
+    const first = await applyVehicleNameReferenceRepair(plan);
+    const afterFirst = structuredClone(store.get('products/p-source')!);
+    const second = await applyVehicleNameReferenceRepair(plan);
+    expect(second).toMatchObject({ productSourceCorrectionCount: 1, skippedAlreadyApplied: 1, readbackCount: 0, auditCount: 0 });
+    expect(first.skippedAlreadyApplied).toBe(0);
+    expect(store.get('products/p-source')!.원문_정정_이력).toHaveLength(1);
+    expect(store.get('products/p-source')).toEqual(afterFirst);
+    expect([...store.keys()].filter((k) => k.startsWith('audit_events/'))).toHaveLength(1);
+  });
+
+  it('rejects stale expectedCurrentDigest before writing anything', async () => {
+    put('products/p-source', { 원문: 'raw text', 원문_정정: { ...correction, sourceDigest: 'current' } });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productSourceCorrections: [{ id: 'p-source', correction, expectedCurrentDigest: stableDigest(null), evidence: 'plate lookup result' }] }))
+      .rejects.toThrow(/expectedCurrentDigest mismatch/);
+    expect(store.get('products/p-source')!.원문_정정).toMatchObject({ sourceDigest: 'current' });
+    expect([...store.keys()].filter((k) => k.startsWith('audit_events/'))).toHaveLength(0);
+  });
+
+  it('rejects non-array source correction history before and inside the transaction', async () => {
+    put('products/p-source', { 원문: 'raw text', 원문_정정_이력: { bad: true } });
+    await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productSourceCorrections: [{ id: 'p-source', correction, expectedCurrentDigest: stableDigest(null), evidence: 'plate lookup result' }] }))
+      .rejects.toThrow(/history is not a list/);
+    put('products/p-source', { 원문: 'raw text' });
+    const original = db.runTransaction;
+    db.runTransaction = async (fn) => {
+      put('products/p-source', { ...store.get('products/p-source')!, 원문_정정_이력: 'bad' });
+      return original(fn);
+    };
+    try {
+      await expect(applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+        productSourceCorrections: [{ id: 'p-source', correction, expectedCurrentDigest: stableDigest(null), evidence: 'plate lookup result' }] }))
+        .rejects.toThrow(/history is not a list/);
+    } finally { db.runTransaction = original; }
+  });
+
+  it('preserves existing history order and appends exactly one new correction', async () => {
+    const previous = { key: 'old-key', sourceDigest: 'old', 기록시각: '2026-10-04T00:00:00.000Z', 출처: 'old source' };
+    put('products/p-source', { 원문: 'raw text', 원문_정정_이력: [previous] });
+    await applyVehicleNameReferenceRepair({ sourceDigest: 'v1', masterRepairs: [], productRepairs: [],
+      productSourceCorrections: [{ id: 'p-source', correction, expectedCurrentDigest: stableDigest(null), evidence: 'plate lookup result' }] });
+    const doc = store.get('products/p-source')!;
+    expect(doc.원문_정정_이력).toHaveLength(2);
+    expect((doc.원문_정정_이력 as unknown[])[0]).toEqual(previous);
+    expect((doc.원문_정정_이력 as unknown[])[1]).toEqual(doc.원문_정정);
   });
 });

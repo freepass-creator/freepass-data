@@ -33,6 +33,7 @@ export type ProductSourceCorrection = {
 };
 export type ProductSourceCorrectionItem = {
   id: string;
+  expectedCurrentDigest: string;
   correction: ProductSourceCorrection;
   evidence: string;
 };
@@ -202,6 +203,13 @@ const sameProductSourceCorrection = (stored: unknown, item: ProductSourceCorrect
     return data[field] === item.correction[field];
   }) && data.sourceDigest === sourceDigest;
 };
+const correctionHistory = (stored: unknown, path: string): Record<string, unknown>[] => {
+  if (stored === undefined || stored === null) return [];
+  if (!Array.isArray(stored)) throw new Error(`productSourceCorrection history is not a list ${path}.원문_정정_이력`);
+  return stored as Record<string, unknown>[];
+};
+const sourceCorrectionKey = (planDigest: string, item: ProductSourceCorrectionItem) => stableDigest({ planDigest, id: item.id, 출처: item.correction.출처 });
+const historyHasKey = (history: Record<string, unknown>[], key: string) => history.some((entry) => entry?.key === key);
 
 export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
   if (!plan.sourceDigest?.trim()) throw new Error('sourceDigest is required');
@@ -332,6 +340,7 @@ export function validateVehicleNameRepairPlan(plan: VehicleNameRepairPlan) {
     if (!isDocId(item.id)) throw new Error('productSourceCorrection repair id must be a single document id');
     if (productSourceCorrectionIds.has(item.id)) throw new Error(`duplicate productSourceCorrection productSourceCorrection:${item.id}`);
     productSourceCorrectionIds.add(item.id);
+    if (typeof item.expectedCurrentDigest !== 'string' || !item.expectedCurrentDigest.trim()) throw new Error(`productSourceCorrection ${item.id} requires expectedCurrentDigest`);
     if (typeof item.evidence !== 'string' || !item.evidence.trim()) throw new Error(`productSourceCorrection ${item.id} requires evidence`);
     if (!item.correction || typeof item.correction !== 'object' || Array.isArray(item.correction)) throw new Error(`productSourceCorrection ${item.id} requires correction`);
     for (const key of Object.keys(item.correction)) {
@@ -390,6 +399,7 @@ const ALIAS_FIELD: Partial<Record<string, AliasField>> = {
 
 export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPlan) {
   const counts = validateVehicleNameRepairPlan(plan);
+  const planDigest = stableDigest(plan);
   const db = getFirestore(getTargetFirebaseApp());
   // Each target = collection + field. vehicle_master.sub_model and vehicle_trim_master.trim/sub_model keep the old name as an alias.
   const targets = [
@@ -437,6 +447,14 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const sourceCorrectionSnapshots = sourceCorrectionRefs.length ? await db.getAll(...sourceCorrectionRefs) : [];
   if (sourceCorrectionSnapshots.some((snapshot) => !snapshot.exists)) throw new Error('productSourceCorrection repair target missing');
   const sourceCorrectionDigests = sourceCorrectionSnapshots.map((snapshot) => stableDigest(snapshot.data()?.원문_정정 ?? null));
+  const sourceCorrectionHistories = sourceCorrectionSnapshots.map((snapshot) => correctionHistory(snapshot.data()?.원문_정정_이력, snapshot.ref.path));
+  const sourceCorrectionKeys = sourceCorrectionTargets.map(({ item }) => sourceCorrectionKey(planDigest, item));
+  sourceCorrectionTargets.forEach(({ item, ref }, index) => {
+    if (historyHasKey(sourceCorrectionHistories[index]!, sourceCorrectionKeys[index]!)) return;
+    if (sourceCorrectionDigests[index] !== item.expectedCurrentDigest) {
+      throw new Error(`productSourceCorrection expectedCurrentDigest mismatch ${ref.path}.원문_정정`);
+    }
+  });
   const originalSourceDigests = sourceCorrectionSnapshots.map((snapshot) => stableDigest(snapshot.data()?.원문 ?? null));
   const variantRepairs = plan.masterVariantRepairs ?? [];
   const variantRefs = variantRepairs.map((v) => db.collection('vehicle_master').doc(v.id));
@@ -510,6 +528,16 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const occurredAt = new Date().toISOString();
   const actor = { id: 'service:freepass-data-vehicle-name-repair', kind: 'SERVICE' } as const;
   const auditId = (path: string, field: string) => 'vnr_' + createHash('sha256').update([runId, path, field].join('|')).digest('hex').slice(0, 32);
+  let skippedAlreadyApplied = 0;
+  const activeSourceCorrectionIndexes = new Set<number>();
+  const sourceCorrectionAudits = sourceCorrectionTargets.map(({ item, ref }, index): AuditEvent => ({
+    eventId: auditId(ref.path, '원문_정정'), commandId: `vehicle-name-repair:${runId}`, actor,
+    entityType: ref.parent.id, entityId: ref.id, action: 'PRODUCT_SOURCE_CORRECTION_ARCHIVED',
+    before: { 원문_정정: sourceCorrectionSnapshots[index]!.data()?.원문_정정 ?? null },
+    after: { 원문_정정: { ...item.correction, sourceDigest: plan.sourceDigest, key: sourceCorrectionKeys[index] } },
+    reason: `상품 정정 원문 박제 근거: ${item.evidence} (${plan.sourceDigest})`,
+    revisionBefore: 0, revisionAfter: 0, occurredAt,
+  }));
   const audits: AuditEvent[] = [
     ...targets.map(({ item, field, ref }): AuditEvent => ({
       eventId: auditId(ref.path, field), commandId: `vehicle-name-repair:${runId}`, actor,
@@ -524,14 +552,6 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       before: Object.fromEntries(PRODUCT_IDENTITY_FIELDS.map((field) => [field, item.from[field]])),
       after: productIdentityToObject(item),
       reason: `원문 근거: ${item.evidence}`,
-      revisionBefore: 0, revisionAfter: 0, occurredAt,
-    })),
-    ...sourceCorrectionTargets.map(({ item, ref }, index): AuditEvent => ({
-      eventId: auditId(ref.path, '원문_정정'), commandId: `vehicle-name-repair:${runId}`, actor,
-      entityType: ref.parent.id, entityId: ref.id, action: 'PRODUCT_SOURCE_CORRECTION_ARCHIVED',
-      before: { 원문_정정: sourceCorrectionSnapshots[index]!.data()?.원문_정정 ?? null },
-      after: { 원문_정정: { ...item.correction, sourceDigest: plan.sourceDigest } },
-      reason: `상품 정정 원문 박제 근거: ${item.evidence} (${plan.sourceDigest})`,
       revisionBefore: 0, revisionAfter: 0, occurredAt,
     })),
     ...retires.map((x, index): AuditEvent => ({
@@ -557,6 +577,7 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     })),
   ];
   const auditRefs = audits.map((a) => db.collection(FIRESTORE_COLLECTIONS.evidence.audits).doc(a.eventId));
+  const sourceCorrectionAuditRefs = sourceCorrectionAudits.map((a) => db.collection(FIRESTORE_COLLECTIONS.evidence.audits).doc(a.eventId));
 
   // One update per document: a trim row can be renamed and relinked in the same plan.
   const byPath: Record<string, { ref: (typeof refs)[number]; fields: Record<string, unknown>; aliases: Partial<Record<AliasField, string[]>> }> = {};
@@ -576,14 +597,17 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     }
     byPath[ref.path] = entry;
   }
-  const correctionByPath: Record<string, Record<string, unknown>> = {};
-  for (const { item, ref } of sourceCorrectionTargets) {
+  // The planned corrections never change; each transaction attempt (Firestore may retry the callback) rebuilds
+  // correctionByPath / correctionHistoryByPath from them, so a skip decided in one attempt does not leak into the next.
+  const plannedCorrectionByPath: Record<string, Record<string, unknown>> = {};
+  let correctionByPath: Record<string, Record<string, unknown>> = {};
+  let correctionHistoryByPath: Record<string, Record<string, unknown>[]> = {};
+  sourceCorrectionTargets.forEach(({ item, ref }, index) => {
     const entry = byPath[ref.path] ?? { ref, fields: {}, aliases: {} };
     // Firestore refuses serverTimestamp() inside arrays (원문_정정_이력), so the run time is stored as an ISO string.
-    const correction = { ...item.correction, 기록시각: occurredAt, sourceDigest: plan.sourceDigest };
-    correctionByPath[ref.path] = correction;
+    plannedCorrectionByPath[ref.path] = { ...item.correction, key: sourceCorrectionKeys[index], 기록시각: occurredAt, sourceDigest: plan.sourceDigest };
     byPath[ref.path] = entry;
-  }
+  });
 
   // A master's variants list joins that document's single update (it may also be renamed in the same plan).
   retires.forEach((_, index) => {
@@ -599,6 +623,10 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   const masterTrimsByPath: Record<string, string[]> = Object.fromEntries(variantRepairs.filter((v) => v.trims).map((v) => [`vehicle_master/${v.id}`, v.trims!]));
 
   await db.runTransaction(async (transaction) => {
+    skippedAlreadyApplied = 0;
+    activeSourceCorrectionIndexes.clear();
+    correctionByPath = { ...plannedCorrectionByPath };
+    correctionHistoryByPath = {};
     const current = refs.length ? await transaction.getAll(...refs) : [];
     const identityCurrent = identityRefs.length ? await transaction.getAll(...identityRefs) : [];
     const sourceCorrectionCurrent = sourceCorrectionRefs.length ? await transaction.getAll(...sourceCorrectionRefs) : [];
@@ -614,12 +642,22 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
     });
     sourceCorrectionCurrent.forEach((snapshot, index) => {
       if (!snapshot.exists) throw new Error(`transaction productSourceCorrection target missing ${snapshot.ref.path}`);
-      if (stableDigest(snapshot.data()?.원문_정정 ?? null) !== sourceCorrectionDigests[index]) {
-        throw new Error(`transaction productSourceCorrection precondition changed ${snapshot.ref.path}.원문_정정`);
+      const history = correctionHistory(snapshot.data()?.원문_정정_이력, snapshot.ref.path);
+      if (historyHasKey(history, sourceCorrectionKeys[index]!)) {
+        skippedAlreadyApplied += 1;
+        delete correctionByPath[snapshot.ref.path];
+        delete correctionHistoryByPath[snapshot.ref.path];
+        return;
+      }
+      const currentDigest = stableDigest(snapshot.data()?.원문_정정 ?? null);
+      if (currentDigest !== sourceCorrectionTargets[index]!.item.expectedCurrentDigest) {
+        throw new Error(`transaction productSourceCorrection expectedCurrentDigest mismatch ${snapshot.ref.path}.원문_정정`);
       }
       if (stableDigest(snapshot.data()?.원문 ?? null) !== originalSourceDigests[index]) {
         throw new Error(`transaction product original source changed since backup ${snapshot.ref.path}.원문`);
       }
+      activeSourceCorrectionIndexes.add(index);
+      correctionHistoryByPath[snapshot.ref.path] = [...history, correctionByPath[snapshot.ref.path]!];
     });
     // A retired master is frozen: its name is not changed again (a rename would let products use it under a new name).
     const frozen = targets.findIndex((t, i) => MASTER_DOC_KINDS.has(t.kind) && current[i]?.data()?.retired === true);
@@ -767,20 +805,25 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
       }
     });
     for (const { ref, fields, aliases } of Object.values(byPath)) {
-      transaction.update(ref, {
+      const update = {
         ...fields,
         ...(variantsByPath[ref.path] ? { variants: variantsByPath[ref.path] } : {}),
         ...(masterTrimsByPath[ref.path] ? { trims: masterTrimsByPath[ref.path] } : {}),
         ...(retireByPath[ref.path] ? { retired: true, retired_into: retireByPath[ref.path], retired_at: FieldValue.serverTimestamp() } : {}),
-        ...(correctionByPath[ref.path] ? { 원문_정정: correctionByPath[ref.path], 원문_정정_이력: FieldValue.arrayUnion(correctionByPath[ref.path]) } : {}),
+        ...(correctionByPath[ref.path] ? { 원문_정정: correctionByPath[ref.path], 원문_정정_이력: correctionHistoryByPath[ref.path] } : {}),
         ...Object.fromEntries(Object.entries(aliases).map(([k, v]) => [k, FieldValue.arrayUnion(...v!)])),
         vehicle_name_reference_checked_at: FieldValue.serverTimestamp(),
         vehicle_name_reference_source_digest: plan.sourceDigest,
-      });
+      };
+      if (Object.keys(update).length <= 2) continue;
+      transaction.update(ref, update);
     }
     // create() fails the whole transaction if the document appeared meanwhile.
     for (const { c, ref } of creates) transaction.create(ref, { ...c.data, vehicle_name_reference_source_digest: plan.sourceDigest });
     audits.forEach((audit, index) => transaction.create(auditRefs[index]!, audit));
+    sourceCorrectionAudits.forEach((audit, index) => {
+      if (activeSourceCorrectionIndexes.has(index)) transaction.create(sourceCorrectionAuditRefs[index]!, audit);
+    });
   });
 
   const readback = refs.length ? await db.getAll(...refs) : [];
@@ -808,9 +851,19 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   });
   const sourceCorrectionReadback = sourceCorrectionRefs.length ? await db.getAll(...sourceCorrectionRefs) : [];
   sourceCorrectionReadback.forEach((snapshot, index) => {
+    if (!activeSourceCorrectionIndexes.has(index)) return;
     const data = snapshot.data();
     if (!snapshot.exists || !sameProductSourceCorrection(data?.원문_정정, sourceCorrectionTargets[index]!.item, plan.sourceDigest)) {
       throw new Error(`readback productSourceCorrection mismatch ${snapshot.ref.path}.원문_정정`);
+    }
+    const beforeHistory = sourceCorrectionHistories[index]!;
+    const afterHistory = correctionHistory(data?.원문_정정_이력, snapshot.ref.path);
+    if (afterHistory.length !== beforeHistory.length + 1) throw new Error(`readback productSourceCorrection history mismatch ${snapshot.ref.path}.원문_정정_이력`);
+    if (beforeHistory.some((entry, historyIndex) => stableDigest(entry) !== stableDigest(afterHistory[historyIndex]))) {
+      throw new Error(`readback productSourceCorrection history prefix mismatch ${snapshot.ref.path}.원문_정정_이력`);
+    }
+    if (stableDigest(afterHistory[afterHistory.length - 1]) !== stableDigest(data?.원문_정정)) {
+      throw new Error(`readback productSourceCorrection history tail mismatch ${snapshot.ref.path}.원문_정정_이력`);
     }
     if (stableDigest(data?.원문 ?? null) !== originalSourceDigests[index]) throw new Error(`readback product original source changed ${snapshot.ref.path}.원문`);
   });
@@ -832,5 +885,9 @@ export async function applyVehicleNameReferenceRepair(plan: VehicleNameRepairPla
   });
   const auditReadback = await db.getAll(...auditRefs);
   if (auditReadback.some((s, index) => !s.exists || s.data()?.reason !== audits[index]!.reason)) throw new Error('readback audit mismatch');
-  return { runId, backupPath, ...counts, readbackCount: readback.length + identityReadback.length + sourceCorrectionReadback.length + createReadback.length + variantReadback.length + retireReadback.length, auditCount: auditReadback.length };
+  const activeSourceCorrectionAudits = sourceCorrectionAudits.filter((_, index) => activeSourceCorrectionIndexes.has(index));
+  const activeSourceCorrectionAuditRefs = sourceCorrectionAuditRefs.filter((_, index) => activeSourceCorrectionIndexes.has(index));
+  const sourceCorrectionAuditReadback = activeSourceCorrectionAuditRefs.length ? await db.getAll(...activeSourceCorrectionAuditRefs) : [];
+  if (sourceCorrectionAuditReadback.some((s, index) => !s.exists || s.data()?.reason !== activeSourceCorrectionAudits[index]!.reason)) throw new Error('readback source correction audit mismatch');
+  return { runId, backupPath, ...counts, skippedAlreadyApplied, readbackCount: readback.length + identityReadback.length + activeSourceCorrectionIndexes.size + createReadback.length + variantReadback.length + retireReadback.length, auditCount: auditReadback.length + sourceCorrectionAuditReadback.length };
 }

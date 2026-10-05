@@ -196,20 +196,23 @@ describe('vehicle-name reference repair gate', () => {
       비고: '원문으로 단정 불가',
     };
     const base = { sourceDigest: 'd', masterRepairs: [], productRepairs: [] };
-    expect(validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [{ id: 'p1', correction, evidence: 'plate lookup result' }] }))
+    const sourceBase = { id: 'p1', correction, expectedCurrentDigest: stableDigest(null), evidence: 'plate lookup result' };
+    expect(() => validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [{ id: 'p1', correction, evidence: 'plate lookup result' } as never] }))
+      .toThrow(/expectedCurrentDigest/);
+    expect(validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [sourceBase] }))
       .toMatchObject({ productSourceCorrectionCount: 1 });
     expect(validateVehicleNameRepairPlan({ ...base, productTrimRepairs: [{ id: 'p1', from: 'Old', to: 'New' }],
-      productSourceCorrections: [{ id: 'p1', correction, evidence: 'plate lookup result' }] }))
+      productSourceCorrections: [sourceBase] }))
       .toMatchObject({ productTrimCount: 1, productSourceCorrectionCount: 1 });
-    expect(() => validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [{ id: 'p1', correction, evidence: 'x' }, { id: 'p1', correction, evidence: 'y' }] }))
+    expect(() => validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [{ ...sourceBase, evidence: 'x' }, { ...sourceBase, evidence: 'y' }] }))
       .toThrow(/duplicate productSourceCorrection/);
-    expect(() => validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [{ id: 'p1', correction: { ...correction, 색상: '검정' } as never, evidence: 'x' }] }))
+    expect(() => validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [{ ...sourceBase, correction: { ...correction, 색상: '검정' } as never, evidence: 'x' }] }))
       .toThrow(/rejects correction key/);
-    expect(() => validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [{ id: 'p1', correction: { ...correction, 출처: '' }, evidence: 'x' }] }))
+    expect(() => validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [{ ...sourceBase, correction: { ...correction, 출처: '' }, evidence: 'x' }] }))
       .toThrow(/requires 출처/);
-    expect(() => validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [{ id: 'p1', correction, evidence: '' }] }))
+    expect(() => validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [{ ...sourceBase, evidence: '' }] }))
       .toThrow(/requires evidence/);
-    expect(() => validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [{ id: 'p1', correction: { ...correction, 배기량: 1999 } as never, evidence: 'x' }] }))
+    expect(() => validateVehicleNameRepairPlan({ ...base, productSourceCorrections: [{ ...sourceBase, correction: { ...correction, 배기량: 1999 } as never, evidence: 'x' }] }))
       .toThrow(/string or null/);
   });
   it('keeps product identity repairs separate from master renames and retires', () => {
