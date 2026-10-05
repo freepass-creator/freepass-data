@@ -828,7 +828,7 @@ jobs:
             rid="$(jq -r '.id' <<<"$row")"
             attempt="$(jq -r '.attempt' <<<"$row")"
             if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$rid/attempts/$attempt/jobs?per_page=100" \
-              --jq 'if ([.jobs[] | select(.name == "shared-sheet-daily")] | length) == 1 then ([.jobs[] | select(.name == "shared-sheet-daily")][0].steps // [] | map({name, conclusion})) else null end' \
+              --jq 'if ((.jobs | length) == 1 and .jobs[0].name == "shared-sheet-daily") then (.jobs[0].steps // [] | map({name, conclusion})) else null end' \
               > "$RUNNER_TEMP/daily-writer-job-steps-$rid.json"; then
               jq -c --arg rid "$rid" '{key: $rid, value: .}' "$RUNNER_TEMP/daily-writer-job-steps-$rid.json"
             else

@@ -14,9 +14,32 @@ const skippedJobSteps = [
   { name: 'Set up job', conclusion: 'success' },
   { name: 'Daily schedule and manual apply gate', conclusion: 'success' },
   { name: 'Run actions/checkout@v4', conclusion: 'skipped' },
+  { name: 'Run actions/setup-node@v4', conclusion: 'skipped' },
+  { name: 'Run npm ci --ignore-scripts', conclusion: 'skipped' },
+  { name: 'Require the Data delivery identity, sheet and private evidence bucket', conclusion: 'skipped' },
+  { name: 'Run google-github-actions/auth@v2', conclusion: 'skipped' },
+  { name: 'Run google-github-actions/setup-gcloud@v2', conclusion: 'skipped' },
   { name: 'Capture and plan (no writes) — counts only in the public log', conclusion: 'skipped' },
   { name: 'Apply to FreePass Data (writes) — counts only in the public log', conclusion: 'skipped' },
-  { name: 'Post Run actions/checkout@v4', conclusion: 'skipped' },
+  { name: 'Preserve private capture, plan and reports (location not printed)', conclusion: 'skipped' },
+  { name: 'Remove temporary files', conclusion: 'skipped' },
+  { name: 'Complete job', conclusion: 'success' },
+];
+const oldWritingJobSteps = [
+  { name: 'Set up job', conclusion: 'success' },
+  { name: 'Daily schedule and manual apply gate', conclusion: 'success' },
+  { name: 'Run actions/checkout@v4', conclusion: 'success' },
+  { name: 'Run actions/setup-node@v4', conclusion: 'success' },
+  { name: 'Run npm ci --ignore-scripts', conclusion: 'success' },
+  { name: 'Require the Data delivery identity, sheet and private evidence bucket', conclusion: 'success' },
+  { name: 'Run google-github-actions/auth@v2', conclusion: 'success' },
+  { name: 'Run google-github-actions/setup-gcloud@v2', conclusion: 'success' },
+  { name: 'Capture, plan and (apply) — counts only in the public log', conclusion: 'success' },
+  { name: 'Preserve private capture, plan and reports (location not printed)', conclusion: 'success' },
+  { name: 'Remove temporary files', conclusion: 'success' },
+  { name: 'Post Run google-github-actions/auth@v2', conclusion: 'success' },
+  { name: 'Post Run actions/setup-node@v4', conclusion: 'success' },
+  { name: 'Post Run actions/checkout@v4', conclusion: 'success' },
   { name: 'Complete job', conclusion: 'success' },
 ];
 const now = new Date('2026-10-05T19:30:00Z');
@@ -82,6 +105,9 @@ describe('daily writer guard', () => {
   it('does not count only when shared-sheet-daily steps prove the gate ran and write steps were skipped', () => {
     expect(judge([], [{ ...run, jobSteps: skippedJobSteps }])).toMatchObject({ status: 'OK', silentApplies: 0 });
   });
+  it('holds for the actual older write run because non-allowlisted steps succeeded', () => {
+    expect(judge([], [{ ...run, jobSteps: oldWritingJobSteps }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+  });
   it('fails closed unless the exact gate/capture/apply skipped pattern is confirmed', () => {
     const changedName = skippedJobSteps.map((s) => s.name === 'Daily schedule and manual apply gate'
       ? { ...s, name: 'Daily schedule apply gate' } : s);
@@ -89,12 +115,21 @@ describe('daily writer guard', () => {
       ? { ...s, conclusion: 'success' } : s);
     const gateNotSuccess = skippedJobSteps.map((s) => s.name === 'Daily schedule and manual apply gate'
       ? { ...s, conclusion: 'skipped' } : s);
+    const unknownSuccess = [...skippedJobSteps, { name: 'Persist snapshot', conclusion: 'success' }];
+    const failureStep = skippedJobSteps.map((s) => s.name === 'Run actions/checkout@v4' ? { ...s, conclusion: 'failure' } : s);
+    const renamedApply = skippedJobSteps.map((s) => s.name === 'Apply to FreePass Data (writes) — counts only in the public log'
+      ? { ...s, name: 'Apply to FreePass Data (writes)' } : s);
+    const duplicateGate = [...skippedJobSteps, { name: 'Daily schedule and manual apply gate', conclusion: 'success' }];
     expect(judge([], [{ ...run, jobSteps: changedName }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
     expect(judge([], [{ ...run, jobSteps: [] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
     expect(judge([], [{ ...run, jobSteps: partialSkipped }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
     expect(judge([], [{ ...run, jobSteps: [{ name: 'Apply to FreePass Data (writes) — counts only in the public log', conclusion: 'success' }] }]))
       .toMatchObject({ status: 'HOLD', silentApplies: 1 });
     expect(judge([], [{ ...run, jobSteps: gateNotSuccess }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobSteps: unknownSuccess }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobSteps: failureStep }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobSteps: renamedApply }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobSteps: duplicateGate }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
     expect(judge([], [{ ...run, jobSteps: null }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
     expect(judge([], [run])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
   });

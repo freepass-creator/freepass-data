@@ -87,7 +87,7 @@ const publicName = (collection: string) =>
 const GATE_STEP = 'Daily schedule and manual apply gate';
 const CAPTURE_STEP = 'Capture and plan (no writes) — counts only in the public log';
 const APPLY_STEP = 'Apply to FreePass Data (writes) — counts only in the public log';
-const WRITE_STEP_PREFIXES = ['Apply to FreePass Data', 'Capture, plan and (apply)'] as const;
+const SUCCESS_ALLOWED_STEPS = new Set(['Set up job', GATE_STEP, 'Complete job']);
 
 export function writeStepsSkippedConfirmed(steps: DailyWriterRun['jobSteps']): boolean {
   if (!Array.isArray(steps) || steps.length === 0) return false;
@@ -98,11 +98,12 @@ export function writeStepsSkippedConfirmed(steps: DailyWriterRun['jobSteps']): b
   if (steps.filter((s) => s.name === GATE_STEP).length !== 1) return false;
   if (steps.filter((s) => s.name === CAPTURE_STEP).length !== 1) return false;
   if (steps.filter((s) => s.name === APPLY_STEP).length !== 1) return false;
+  if (steps.filter((s) => s.name === 'Set up job').length > 1) return false;
+  if (steps.filter((s) => s.name === 'Complete job').length > 1) return false;
   return steps.every((step) => {
     const name = step.name ?? '';
-    if (name === CAPTURE_STEP || name === APPLY_STEP) return true;
-    if (WRITE_STEP_PREFIXES.some((prefix) => name.startsWith(prefix))) return step.conclusion === 'skipped';
-    return true;
+    if (SUCCESS_ALLOWED_STEPS.has(name)) return step.conclusion === 'success';
+    return step.conclusion === 'skipped';
   });
 }
 
