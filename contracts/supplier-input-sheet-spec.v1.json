@@ -662,7 +662,7 @@
     "연령": "만 N세; 기본연령은 하한, 최대연령은 상한",
     "면허기간": "N년(최소 경력); 이상 생략",
     "금액": "대여료·보증금·차량가격: 원 단위 정수 #,##0; 정책: 10만원. 단위 없는 정책 숫자 추정 금지",
-    "거리": "주행거리 숫자 #,##0\"km\"; 연주행 20,000km. 배기량 cc, 배터리용량 kWh 서식으로 단위 한 번 표시",
+    "거리": "주행거리·배기량 숫자 #,##0(단위 글자 없음 — 단위는 머리글 의미); 배터리용량은 자동 표시(22 · 77.4, 끝 점 없음); 연주행은 정책 칸 글 20,000km",
     "보험": "한도·면책금 별도; 범위 단위 끝 한 번; 수리비는 %; 비율 기준 삭제 금지",
     "운전자": "개인·법인 각각 범위만; 계약자 본인은 본인",
     "예/아니오": "가능·불가, 포함·불포함은 의미가 다르므로 칸별 목록 유지; 예/아니오 자동 치환 금지",
@@ -2540,15 +2540,15 @@
     },
     "주행거리": {
       "kind": "integer",
-      "pattern": "#,##0\"km\"",
-      "example": "1,000km",
+      "pattern": "#,##0",
+      "example": "1,000",
       "unit": "km",
       "normalize": "explicit-number-only"
     },
     "배기량": {
       "kind": "integer",
-      "pattern": "#,##0\"cc\"",
-      "example": "1,000cc",
+      "pattern": "#,##0",
+      "example": "1,000",
       "unit": "cc",
       "normalize": "explicit-number-only"
     },
@@ -2722,8 +2722,8 @@
     },
     "배터리용량": {
       "kind": "decimal",
-      "pattern": "0.###\"kWh\"",
-      "example": "77.4kWh",
+      "pattern": "자동(Automatic) — 정수는 22, 소수는 77.4",
+      "example": "77.4",
       "unit": "kWh",
       "normalize": "explicit-number-only"
     },
@@ -3302,16 +3302,28 @@
     "conditionalFormats": "first supplier rules in order; own sheetId and full-grid row endpoint rebased per tab; embedded sheet references HOLD",
     "horizontalAlignment": "CENTER",
     "headerBackgrounds": {
-      "단기보증": "#E6B8AF",
-      "1개월": "#DD7E6B",
-      "6개월": "#CC4125",
-      "12개월": "#A61C00",
+      "단기보증": "#A4C2F4",
+      "1개월": "#6D9EEB",
+      "6개월": "#3C78D8",
+      "12개월": "#1155CC",
       "장기보증": "#E6B8AF",
       "24개월": "#DD7E6B",
       "36개월": "#CC4125",
       "48개월": "#A61C00",
       "60개월": "#85200C"
     },
+    "headerForegrounds": {
+      "단기보증": "#1C4587",
+      "1개월": "#FFFFFF",
+      "6개월": "#FFFFFF",
+      "12개월": "#FFFFFF"
+    },
+    "boldColumns": [
+      "단기보증",
+      "장기보증"
+    ],
+    "boldColumnsNote": "2026-10-05 대표: 보증금이 가장 중요 — 단기보증·장기보증은 머리와 값 모두 굵게",
+    "shortLongHeaderDecision": "2026-10-05 대표: 단기(단기보증·1·6·12개월)=파란 단계색, 장기(장기보증·24·36·48·60개월)=붉은 단계색. 단기보증 머리는 옅은 파랑이라 진한 글자 #1C4587",
     "headerColorAuthority": "explicit headerBackgrounds first; other columns retain first registered supplier header backgroundColor"
   },
   "rightAlignHeaders": [],
