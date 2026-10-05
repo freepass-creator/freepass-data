@@ -34,6 +34,19 @@ npm.cmd run plan:sheet-blank-fill
 
 `plan.json`은 시트고치기 엔진에 넘길 계획이다. 이 저장소의 계획기는 적용하지 않는다.
 
+## 읽기 어댑터
+
+`export:sheet-blank-fill-input`은 쓰기 0 읽기 전용 job이다. `SHEET_BLANK_FILL_SPREADSHEET`에는 비공개 시트 ID를, `SHEET_BLANK_FILL_INPUT_OUT`에는 체크아웃 밖 비공개 출력 파일의 절대경로를 넣는다. 공급사 탭은 `contracts/supplier-input-sheet-spec.v1.json`의 `supplierChannels.sharedInputSheet` 탭만 읽고, 값은 `UNFORMATTED_VALUE`, 수식은 `FORMULA`로 각각 읽는다. 값 읽기는 앞뒤 두 번 대조해 바뀌면 멈춘다.
+
+```powershell
+$env:SHEET_BLANK_FILL_SPREADSHEET="<private sheet id>"
+$env:SHEET_BLANK_FILL_INPUT_OUT="D:\private\sheet-blank-fill\input.json"
+npm.cmd run export:sheet-blank-fill-input
+npm.cmd run plan:sheet-blank-fill
+```
+
+이후 `plan.json`은 줄확인 지원 시트고치기(ai-ops#62 이상)로만 시험 실행·적용한다. 처음 2주는 `report.json`의 차이/스킵과 `plan.json` 줄확인을 사람이 확인한 뒤 적용한다.
+
 ## 후속
 
 상황실/사람이 `report.json`의 HOLD 사유와 차이를 확인한 뒤, 비공개 경로의 `plan.json`만 별도 시트고치기 엔진으로 적용한다.
