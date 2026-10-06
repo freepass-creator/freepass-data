@@ -400,6 +400,8 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ### 2026-10-06 공통시트 비휘발성·브랜치 정합 감사 / 삭제 금지
 
+- exact safety implementation commit: `e8bff40939ef2e59fcd7ff6e5a183622d8e8fc68`, PR397.
+
 - user: 이제 삭제 금지, 규격 정합·main/브랜치 분기 확인. 라이브 쓰기0.
 - main 6df910c74561cf1cfc589abf3fde8fcf02ca347b: UI/규격 lock 미포함. PR397 OPEN, 현재 작업 HEAD845eef7의 규격 .4만 최신. ERP branch 9bb60b6a3efeea4a42a2a6c3f6a23111a8d60542는 .3, UI 소유권 미포함. 별도 런타임4파일 변경과 겹치는 NEXT는 통합 시 양쪽 이력 보존 필요. 자동 merge/rebase/브랜치 삭제 없음.
 - 실제 읽기: 12입력100행×74열, 종합296행×74열, 각14개 유한 상태/상품 TEXT_EQ. 962헤더와 표본 날짜/9pt/상태9목록 drift0. 종합300정본과4행 차이는 HOLD, 자동 복구 없음. 보호13개는 이전 적용 영수증 근거이며 이번 기본 metadata가 보호를 반환하지 않아 현재 보호 재확인은 HOLD.
