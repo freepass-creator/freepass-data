@@ -400,7 +400,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ### 2026-10-06 대여료 앞 경량 드롭다운·색상, 업체100/종합300행 — PERSISTENCE VERIFIED
 
 - 최신 사용자 지시대로 앞 7항목 고정 목록과 상태·상품 두 열 TEXT_EQ 색을 적용. 현재 입력 14탭 100행, 종합 300행(머리 포함). 값·차종명·금액 유지, 스타 아래 7행은 위 빈 행에 보존. 자세한 실행 정본과 필터 복사 주의는 SUPPLIER-INPUT-SHEET-RUNBOOK 최신 절.
-- 코드: dropdownPolicy.lightweight 및 scripts/shared-sheet-lightweight.mjs. 이전 일반 전체 복원·행별 연쇄 빌드/배포는 계속 차단. check:sheets 102/102 PASS. 정확 구현 pin은 후속 기록 참조.
+- 코드: dropdownPolicy.lightweight 및 scripts/shared-sheet-lightweight.mjs. 이전 일반 전체 복원·행별 연쇄 빌드/배포는 계속 차단. check:sheets 102/102 PASS. 구현 pin `c5b16437cea0a07aa620d2c8a904553d4118a9c1` (PR #397).
 - HOLD: 열림 속도 실측/화면 검증, 외부에서 없어진 연카 입력 탭의 운영 의미. 종합은 외부 갱신으로 95→148행, 이번 작업은 종합 값 쓰기 없음.
 
 
