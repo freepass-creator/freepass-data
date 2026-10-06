@@ -401,6 +401,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 - 대표 요청: 조건별 차종 드롭다운은 유지하되, 선택·편집한 행만 갱신해 44,955개 숨김 후보 수식을 걷어낸다. `ai-ops/docs/차종-기준-한장.md` 기준에 따라 마스터 이름·차종 값·제원은 변경하지 않고 게시된 목록만 소비한다.
 - 기준: main `076d32bb98aa516003435ae3fd8b8fd00c26a162`, 앞 작업 commit `eba195aa495faa6e9ebd34d4a3eae4c8c0a7c793`, 기존 PR #397/같은 작업 가지에 추가.
+- 구현 commit `07f24004bb3548da228444ae94e8f20944a8c094` pushed. 시트 전용99 PASS(신규10), diff 검사 PASS. 실제 게시 목록527키·중복0·제조사17 확인. 비공개 생성 산출물은 이번 작업 PC의 Codex tmp `freepass-cascade-20261006/script-content.json`; 운영 파일 ID·인증을 Git에 복제하지 않는다.
 - 구현: bound Apps Script onEdit/onSelectionChange·선택 행 복구 메뉴, 다중 행 붙여넣기, 값 보존·불일치 경고·정확한 workbook/sheet/header binding, 같은 계층 규칙의 API 검증 계획기. 생성/설치 CLI는 운영 ID를 private artifact에만 넣고 기존 코드·trigger 충돌을 HOLD하며 설치 후 되읽기를 남긴다.
 - 실제 확인: Sheets 연결 `pyh@teamjpk.com`, 40탭/4,383,859칸/조건부 서식309, 숨김 helper15탭/전체 열 참조 XLOOKUP44,955. 설치 CLI는 `APPS_SCRIPT_AUTH_UNAVAILABLE`로 네트워크·시트 쓰기 전 종료. Apps Script 설치가 가능한 인증 경로가 없으며 Sheets 권한을 대체로 쓰지 않는다. 현재 시트 변경 0, 기존 helper 수식 제거 0.
 - 검증: 신규 Node 테스트 10 PASS(계층 부모·미확인 값 보존·다중 행·범위/ID·동시 값 변경·API 생성·기존 script 충돌 보존·인증 없을 때 무쓰기). 운영 이벤트·seed·helper 참조 제거·속도 개선·API publisher 연결은 미검증 HOLD.
