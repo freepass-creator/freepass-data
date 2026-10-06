@@ -4,7 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {auditValueFormats,planValueNormalize,auditTabConsistency,planTabConsistencyFix,canonCaptureRequest,canonValueCaptureRequest,planExcludeSupplierTab,mergeCanonCaptures,summaryFormula} from '../scripts/supplier-input-sheet.mjs';
 import {planSupplierInput,planSupplierDropdowns,planVehicleMasterDropdowns,planPolicySplit,planLayoutReorder,planColumnAdd,planLayoutChange,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec as currentSpec} from '../scripts/supplier-input-sheet.mjs';
 // Earlier-policy fixtures keep historical planner coverage; current policy has its own regression below.
-const inputSpec=structuredClone(currentSpec);inputSpec.dropdownPolicy.disabled=false;inputSpec.dropdownPolicy.freeText=inputSpec.inputHeaders.filter((h,i)=>i>=inputSpec.inputHeaders.indexOf('1개월')||(!inputSpec.dropdowns[h]&&!inputSpec.vehicleMaster.columns[h]));delete inputSpec.performancePolicy;
+const inputSpec=structuredClone(currentSpec);delete inputSpec.dropdownPolicy.lightweight;inputSpec.dropdownPolicy.disabled=false;inputSpec.dropdownPolicy.freeText=inputSpec.inputHeaders.filter((h,i)=>i>=inputSpec.inputHeaders.indexOf('1개월')||(!inputSpec.dropdowns[h]&&!inputSpec.vehicleMaster.columns[h]));delete inputSpec.performancePolicy;
 const now=Date.parse('2026-10-03T12:00:00Z');
 const legacy=inputSpec.legacyLayouts['2026-10-02'];
 const sheet=(id,title,headers,grid={frozenRowCount:1,frozenColumnCount:0})=>({properties:{sheetId:id,title,gridProperties:{rowCount:1000,columnCount:headers.length,...grid}},data:[{rowData:[{values:headers.map(h=>({userEnteredValue:{stringValue:h}}))}]}]});
@@ -278,7 +278,7 @@ test('exclude RP034: exact two requests, 15-tab formula, only A2 value changes, 
   assert.equal(planSupplierInput(f,inputSpec,now).status,'LAYOUT_VERIFIED');
   assert.ok(!planSupplierDropdowns(f,inputSpec,now).requests.some(r=>r.setDataValidation.range.sheetId===999));
   assert.equal(auditTabConsistency(f.spreadsheet).coverage.length,16);
-  assert.ok(!planTabConsistencyFix(f.spreadsheet).coverage.some(t=>t.tab==='마음카'));
+  assert.ok(!planTabConsistencyFix(f.spreadsheet,inputSpec).coverage.some(t=>t.tab==='마음카'));
 });
 test('exclude RP034: reuse freshness, binding, inventory, layout and hidden-archive gates',()=>{
   assert.throws(()=>planSupplierInput(withExcluded(),inputSpec,now),/excluded/);
@@ -546,4 +546,4 @@ test('summary formula keeps every row except 출고불가 and drops blank rows; 
   for(const bad of [[],['출고"가능'],[''],undefined])assert.throws(()=>summaryFormula('x',H,{...inputSpec,summaryExcludeStatuses:bad}),/summaryExcludeStatuses invalid/);
 });
 
-test("latest user policy clears every column and blocks vehicle dropdown regeneration",()=>{ const p=planSupplierDropdowns(fixture(),currentSpec,now);assert.equal(p.requests.length,15*currentSpec.inputHeaders.length);assert.ok(p.requests.every(r=>!r.setDataValidation.rule&&r.setDataValidation.filteredRowsIncluded));assert.throws(()=>planVehicleMasterDropdowns(masterFixture(),currentSpec,now),/disabled/);const f=canonFixture();f.spec.dropdownPolicy=structuredClone(currentSpec.dropdownPolicy);f.spec.performancePolicy=currentSpec.performancePolicy;const fix=planTabConsistencyFix(f.snapshot,f.spec);assert.ok(fix.requests.filter(r=>r.setDataValidation).every(r=>!r.setDataValidation.rule));assert.ok(!fix.requests.some(r=>r.addConditionalFormatRule));});
+test("latest user policy clears every column and blocks vehicle dropdown regeneration",()=>{ const removalSpec=structuredClone(currentSpec);delete removalSpec.dropdownPolicy.lightweight;const p=planSupplierDropdowns(fixture(),removalSpec,now);assert.equal(p.requests.length,15*currentSpec.inputHeaders.length);assert.ok(p.requests.every(r=>!r.setDataValidation.rule&&r.setDataValidation.filteredRowsIncluded));assert.throws(()=>planVehicleMasterDropdowns(masterFixture(),currentSpec,now),/disabled/);const f=canonFixture();f.spec.dropdownPolicy=structuredClone(removalSpec.dropdownPolicy);f.spec.performancePolicy=currentSpec.performancePolicy;const fix=planTabConsistencyFix(f.snapshot,f.spec);assert.ok(fix.requests.filter(r=>r.setDataValidation).every(r=>!r.setDataValidation.rule));assert.ok(!fix.requests.some(r=>r.addConditionalFormatRule));});

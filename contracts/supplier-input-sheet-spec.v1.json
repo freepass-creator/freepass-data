@@ -2339,7 +2339,36 @@
     "dropdownEndBeforeHeader": "1개월",
     "listDefinitionsNote": "dropdowns의 Q:BV 목록은 과거 분리/변환용 정의만 보존. 현행 입력 검증은 dropdownEndBeforeHeader 앞에서만 허용한다.",
     "disabled": true,
-    "latestDecision20261006": "대표 최신 지시: 느려지는 요소 제거. 모든 드롭다운·조건부 서식·차종 보조 수식 제거, 전 열 자유 입력. A:P 유지/행별 연쇄 설치 결정은 폐기."
+    "latestDecision20261006": "2026-10-06 대표: 대여료 앞 색깔·드롭다운, 업체별 100줄·종합 300줄. 고정 목록과 두 열 TEXT_EQ 색 규칙만 허용. 기존 전체 열/연쇄 재생성기는 차단 유지.",
+    "lightweight": {
+      "enabled": true,
+      "mode": "PRE_RENT_FIXED_PUBLISHED_LISTS",
+      "beforeHeader": "1개월",
+      "supplierRows": 100,
+      "summaryRows": 300,
+      "headerIncluded": true,
+      "listHeaders": [
+        "차량상태",
+        "상품구분",
+        "연료"
+      ],
+      "masterHeaders": [
+        "제조사",
+        "모델",
+        "세부모델",
+        "세부트림"
+      ],
+      "masterRangeEnd": 942,
+      "colorHeaders": [
+        "차량상태",
+        "상품구분"
+      ],
+      "colors": "retroLook.valueTextColors",
+      "preserveUnmatchedValues": true,
+      "conditionalCascade": false,
+      "helperFormulas": false,
+      "decision": "2026-10-06 대표: 대여료 앞 색깔·드롭다운, 업체별 100줄·종합 300줄. 고정 목록과 두 열 TEXT_EQ 색 규칙만 허용. 기존 전체 열/연쇄 재생성기는 차단 유지."
+    }
   },
   "policySplit": {
     "from": "2026-10-03",
@@ -3553,6 +3582,7 @@
     "vehicleCascadeFormulas": false,
     "rowEventDeployment": false,
     "preserveInputValues": true,
-    "preserveSummaryFormulas": true
+    "preserveSummaryFormulas": true,
+    "lightweightOnly": true
   }
 }

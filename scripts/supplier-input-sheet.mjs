@@ -79,6 +79,7 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
 // supplier tabs. Explicit free-text decisions clear old validation when enabled.
 // No values, formats, rows, columns or the formula-driven summary tab are touched.
 export function planSupplierDropdowns(input, spec=inputSpec, now=Date.now()) {
+  if(spec.dropdownPolicy?.lightweight?.enabled)hold('Use planLightweightPresentation for bounded fixed-list presentation');
   const verified=planSupplierInput(input,spec,now);
   const free=new Set(spec.dropdownPolicy?.freeText??[]);
   const unknown=spec.inputHeaders.filter(h=>[Boolean(inputDropdown(spec,h)),Boolean(inputMasterColumn(spec,h)),free.has(h)].filter(Boolean).length!==1);
@@ -723,6 +724,7 @@ function canonTabAudit(snapshot,spec){
 }
 export function auditTabConsistency(snapshot,spec=inputSpec){return canonTabAudit(snapshot,spec);}
 export function planTabConsistencyFix(snapshot,spec=inputSpec){
+  if(spec.dropdownPolicy?.lightweight?.enabled)hold('Use planLightweightPresentation; generic formatting must not erase lightweight rules');
   const tabs=canonTabs(snapshot,spec),base=tabs[1],holds=[],requests=[];
   const get=(format,path)=>path.split('.').reduce((v,k)=>v?.[k],format)??null;
   const paths=['textFormat.fontFamily','textFormat.fontSize','textFormat.italic','textFormat.bold','horizontalAlignment','numberFormat'];
