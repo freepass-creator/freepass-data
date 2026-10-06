@@ -400,6 +400,8 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ### 2026-10-06 공통시트 UI·수정 소유권 고정 — PERSISTENCE VERIFIED
 
+- exact implementation commit: `4e9eceae213367ef8aebd3c75ec4f329c21c0a08`, PR397.
+
 - 대표 최신 지시: UI/UX와 수정 주체 고정, 날짜 yy-mm-dd, 작은 글씨, 인도완료·취소·진행중 표시. 정본 baseline supplier-input-presentation/2026-10-06.4 / uiOwnership.
 - main 6df910c 확인, 겹침은 dashboard 감사 산출물만; PR397 기존 공급사 시트 작업 이어감. 입력은 공급사 담당자, 표시 규격은 대표 승인 Data 관리 경로, 종합은 기존 생성 경로, helper는 Data 관리.
 - 실제: 13탭 9pt / 날짜 두 열 yy-mm-dd / 머리글 소유권 메모 962칸 / 상태 9개 고정 목록(공급사12탭) / 세 가지 정확한 상태 색 추가. 전체 행 색·수식·정책 드롭다운 추가 없음. 머리글 A1:BV1 실제 보호13개, pyh 관리 계정·Google 소유자 수정 가능, 본문 입력 유지.
