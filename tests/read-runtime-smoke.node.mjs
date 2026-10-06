@@ -108,6 +108,43 @@ test('compatibility-only rejects identity, authority, collection shape and count
   }
 });
 
+test('ERP required partner/user collections fail closed even when core compatibility payload is valid', async () => {
+  await withServer((_request, response) => {
+    response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(compat));
+  }, async url => {
+    const result = await run({ READ_RUNTIME_URL: url, READ_RUNTIME_CONSUMER_ID: 'erp-com',
+      READ_RUNTIME_TOKEN: 'secret', READ_RUNTIME_CHECK_COMPAT_ONLY: '1', READ_RUNTIME_CHECK_CATALOG: '0',
+      READ_RUNTIME_REQUIRED_COMPAT_COLLECTIONS: 'products,policies,partners,users' });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Required compatibility collection missing: users/);
+    assert.equal(result.stdout, '');
+  });
+});
+
+test('Canonical checker rejects matching release ID with bridge authority or missing manifest', async () => {
+  const catalog = { data: [{}], meta: { consumerId: 'erp-com', projectionId: 'erp-public',
+    authority: 'CANONICAL_ACTIVE', schemaVersion: '1.0.0', releaseId: 'rel_test',
+    manifestId: 'manifest_test', inputDigest: 'input_digest', dataDigest: 'data_digest' } };
+  for (const mutate of [
+    x => {},
+    x => { x.meta.authority = 'FREEPASS_DATA_COMPATIBILITY_BRIDGE'; },
+    x => { delete x.meta.manifestId; },
+    x => { x.meta.consumerId = 'another-tenant'; },
+    x => { x.data = []; }
+  ]) {
+    const payload = structuredClone(catalog); mutate(payload);
+    await withServer((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify(request.url.endsWith('/catalog-health') ? baseHealth : payload));
+    }, async url => {
+      const result = await run({ READ_RUNTIME_URL: url, READ_RUNTIME_CONSUMER_ID: 'erp-com',
+        READ_RUNTIME_TOKEN: 'secret', READ_RUNTIME_CHECK_COMPAT_ONLY: '0', READ_RUNTIME_CHECK_CATALOG: '1' });
+      assert.equal(result.code === 0, payload.meta.authority === 'CANONICAL_ACTIVE' &&
+        !!payload.meta.manifestId && payload.meta.consumerId === 'erp-com' && payload.data.length > 0);
+    });
+  }
+});
+
 test('smoke checker rejects the retired catalog health schema version', async () => {
   await withServer((_request, response) => {
     response.setHeader('content-type', 'application/json');

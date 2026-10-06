@@ -14,6 +14,10 @@ const allowDegraded = process.env.READ_RUNTIME_ALLOW_DEGRADED === '1';
 const checkCatalog = process.env.READ_RUNTIME_CHECK_CATALOG === '1';
 const checkCompatOnly = process.env.READ_RUNTIME_CHECK_COMPAT_ONLY === '1';
 if (checkCompatOnly && checkCatalog) throw new Error('Select compatibility transport or Canonical release check');
+const requiredCompatCollections = (process.env.READ_RUNTIME_REQUIRED_COMPAT_COLLECTIONS ?? 'products,policies')
+  .split(',').map(value => value.trim());
+if (requiredCompatCollections.some(key => !['products', 'policies', 'partners', 'users', 'vehicleMaster'].includes(key)))
+  throw new Error('Invalid required compatibility collection');
 const healthContract = JSON.parse(await readFile(
   new URL('../contracts/catalog-data-health-v1.schema.json', import.meta.url),
   'utf8'
@@ -64,6 +68,9 @@ if (checkCompatOnly) {
     throw new Error(`Compatibility response invalid: HTTP ${response.status}`);
   }
   const counts = {};
+  for (const key of requiredCompatCollections) {
+    if (!record(body.data[key])) throw new Error(`Required compatibility collection missing: ${key}`);
+  }
   for (const [key, countKey] of Object.entries({ products: 'products', policies: 'policy',
     partners: 'partner', users: 'user', vehicleMaster: 'vehicle_master' })) {
     const value = body.data[key];
@@ -77,6 +84,7 @@ if (checkCompatOnly) {
   console.log(JSON.stringify({ transportOk: true, httpStatus: response.status,
     authority: body.meta.authority, consumerId, observedAt: body.meta.observedAt,
     collectionCounts: counts, canonicalReleaseVerified: false, cutoverAuthorized: false,
+    requiredCollections: requiredCompatCollections,
     status: 'COMPATIBILITY_TRANSPORT_VERIFIED_CANONICAL_HOLD' }, null, 2));
 } else {
 const healthPath =
@@ -147,6 +155,13 @@ if (checkCatalog) {
   if (
     !catalog.body ||
     !Array.isArray(catalog.body.data) ||
+    catalog.body.data.length === 0 ||
+    catalog.body.meta?.consumerId !== consumerId ||
+    catalog.body.meta?.projectionId !== 'erp-public' ||
+    catalog.body.meta?.authority !== 'CANONICAL_ACTIVE' ||
+    catalog.body.meta?.schemaVersion !== '1.0.0' ||
+    !['manifestId', 'inputDigest', 'dataDigest'].every(key =>
+      typeof catalog.body.meta?.[key] === 'string' && catalog.body.meta[key].trim()) ||
     typeof catalog.body.meta?.releaseId !== 'string' ||
     !catalog.body.meta.releaseId ||
     catalog.body.meta.releaseId !== activeReleaseId

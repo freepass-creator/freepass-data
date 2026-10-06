@@ -4,9 +4,13 @@
 
 공통 시트의 입력값·서식·드롭다운·행 수를 변경하지 않고 기존 RAW/후보 → 검토된 Canonical → ACTIVE release → 인증 API를 사용한다. PR #397의 12탭/15코드 범위를 전제로 한다. absent 3탭은 HOLD이며 기존 재고 삭제/판매완료 근거가 아니다. 차량·기간 대사는 기존 `pilot:check`의 원천/기존 소비처/Data 3자 비교를 사용한다([읽기 대사](CONSUMER-READ-PILOT.md)); 단순 HTTP 200이나 대수 일치를 cutover로 인정하지 않는다.
 
+현행 공급사 관리 권한은 `supplier-input-presentation/2026-10-06.3`의 `supplierManagement`다. 공통 입력 관리값을 옛 공급사 시트와의 차이만으로 되돌리지 않는다. API/홈페이지 직접 공급사 경로는 해당 기존 정본을 유지한다. 종착역은 기존 수집·저장·release·consumer 경계를 완성하는 것이며 별도 ERP 원천 writer나 중복 Canonical을 추가하지 않는다. 기존 브리지의 종료는 consumer readback·rollback·대체 경로 보존 후에만 판정한다.
+
 ERP 코드의 실제 환경변수 이름은 `FREEPASS_DATA_BASE_URL`, `FREEPASS_DATA_ERP_COM_TOKEN`, `FREEPASS_DATA_ERP_COM_READ_MODE`다. 축약 `ERP_COM_TOKEN`/`ERP_COM_READ_MODE`를 새 설정으로 만들지 않는다. private Cloud Run 호출은 기존 Vercel OIDC → `FREEPASS_DATA_GCP_WIF_AUDIENCE` → `FREEPASS_DATA_GCP_CALLER_SERVICE_ACCOUNT_EMAIL` → ID token 경로를 사용한다. 사용자 계정 비밀번호·새 키 파일은 필요하지 않다. 배포된 설정·IAM·토큰 검증은 현재 로컬 코드 확인과 별개다.
 
 기존 `scripts/check-read-runtime.mjs`는 `READ_RUNTIME_CHECK_COMPAT_ONLY=1`에서 인증된 `/catalog-compat`만 검사한다. consumer identity/authority/project/관측시각/map/독립 collection count를 검증하고 원문·토큰 대신 대수만 출력한다. Health/ACTIVE release가 없는 상태에서도 호환 transport를 진단할 수 있으며 결과는 항상 `canonicalReleaseVerified=false`, `cutoverAuthorized=false`다. optional partners/users는 응답에 있으면 검사하지만 필요한 collection의 포함 여부는 ERP의 요청 범위와 추가 대사해야 한다. 관측시각 유효성은 최신성 검증이 아니다.
+
+`READ_RUNTIME_REQUIRED_COMPAT_COLLECTIONS=products,policies,partners,users`처럼 ERP 요청 범위의 필수 collection을 지정하면 누락을 실패로 처리한다(기본 products,policies). Canonical 검사도 non-empty data, 해당 consumer, `erp-public`/`1.0.0`/`CANONICAL_ACTIVE`, release/manifest/input/data digest metadata를 요구한다. 이 점검은 gateway의 실제 digest 무결성 검증이나 3자 parity 대사를 대체하지 않는다.
 
 ```powershell
 # 승인된 secret 공급 경로에서 환경변수를 프로세스에 주입한다. 값을 명령/로그에 적지 않는다.
