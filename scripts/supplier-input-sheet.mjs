@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { specification } from './sheet-presentation.mjs';
 export const inputSpec = JSON.parse(fs.readFileSync(new URL('../contracts/supplier-input-sheet-spec.v1.json', import.meta.url), 'utf8'));
 const hold = message => { throw new Error(`HOLD: ${message}`); };
-const inputDropdown = (spec,h) => spec.dropdownPolicy?.freeText?.includes(h) ? null : spec.dropdowns?.[h];
+const inputDropdown = (spec,h) => spec.dropdownPolicy?.disabled || spec.dropdownPolicy?.freeText?.includes(h) ? null : spec.dropdowns?.[h];
+const inputMasterColumn = (spec,h) => spec.dropdownPolicy?.disabled || spec.dropdownPolicy?.freeText?.includes(h) ? null : spec.vehicleMaster?.columns?.[h];
 // Only suppliers registered for the shared sheet may be bound, with the exact
 // code↔tab pairing. ERP/homepage/API suppliers are never shared-sheet tabs.
 const registered = (suppliers, spec, requireAll) => {
@@ -80,7 +81,7 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
 export function planSupplierDropdowns(input, spec=inputSpec, now=Date.now()) {
   const verified=planSupplierInput(input,spec,now);
   const free=new Set(spec.dropdownPolicy?.freeText??[]);
-  const unknown=spec.inputHeaders.filter(h=>[Boolean(inputDropdown(spec,h)),Boolean(spec.vehicleMaster?.columns?.[h]),free.has(h)].filter(Boolean).length!==1);
+  const unknown=spec.inputHeaders.filter(h=>[Boolean(inputDropdown(spec,h)),Boolean(inputMasterColumn(spec,h)),free.has(h)].filter(Boolean).length!==1);
   if(unknown.length)hold(`Every column needs exactly one dropdown, vehicle-master range or free-text decision: ${unknown.join(', ')}`);
   const requests=[];
   for(const sup of supplierTabs(input.binding.suppliers)){
@@ -101,6 +102,7 @@ export function planSupplierDropdowns(input, spec=inputSpec, now=Date.now()) {
 // Full master lists, not per-row dependent lists. Only the hidden list tab
 // receives values; supplier tabs receive validation rules only.
 export function planVehicleMasterDropdowns(input,spec=inputSpec,now=Date.now()){
+  if(spec.dropdownPolicy?.disabled)hold('Dropdowns disabled by latest user decision');
   planSupplierInput(input,spec,now);
   const rule=spec.vehicleMaster,master=input.master;
   const names=['제조사','모델','세부모델','세부트림'];
@@ -663,7 +665,7 @@ const canonHeaderColor=(spec,h,path,fallback)=>{
 function canonTabAudit(snapshot,spec){
   const tabs=canonTabs(snapshot,spec),base=tabs[1],differences=[],holds=[];
   const add=(t,item,column,expected,actual)=>{if(canonEqual(expected,actual))return;differences.push({tab:t.title,item,column,expected:canonClone(expected??null),actual:canonClone(actual??null)});};
-  const baseRules=canonRule(base.sheet.conditionalFormats??[],base);
+  const baseRules=spec.performancePolicy?.conditionalFormats===false?[]:canonRule(base.sheet.conditionalFormats??[],base);
   for(const t of tabs){
     const header=[...t.rows.get(0).values()].map(c=>c.userEnteredValue?.stringValue??'');
     if(t.g.columnCount!==spec.inputHeaders.length)holds.push({tab:t.title,reason:'GRID_COLUMN_COUNT_MISMATCH'});
@@ -703,7 +705,7 @@ function canonTabAudit(snapshot,spec){
       if(t.title!==spec.summaryTitle){
         let rule=null;
         if(inputDropdown(spec,h))rule={condition:{type:'ONE_OF_LIST',values:inputDropdown(spec,h).map(userEnteredValue=>({userEnteredValue}))},strict:spec.dropdownStrict===true,showCustomUi:true};
-        else if(spec.vehicleMaster.columns[h])rule={condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:spec.dropdownStrict===true,showCustomUi:true};
+        else if(inputMasterColumn(spec,h))rule={condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:spec.dropdownStrict===true,showCustomUi:true};
         for(const r of t.rows.keys()){if(!r)continue;const actual=canonCell(t,r,i).dataValidation??null;
           const canonicalActual=actual?{...actual,strict:actual.strict??false,showCustomUi:actual.showCustomUi??false}:null;
           add(t,'dropdown',`${h}:${r+1}`,rule,canonicalActual);
@@ -743,7 +745,7 @@ export function planTabConsistencyFix(snapshot,spec=inputSpec){
     if(t.g.columnCount!==spec.inputHeaders.length)holds.push({tab:t.title,reason:'GRID_COLUMN_COUNT_MISMATCH'});
     if(t.sheet.properties.hidden)holds.push({tab:t.title,reason:'BOUND_TAB_HIDDEN'});
   }
-  const baseRules=canonRule(base.sheet.conditionalFormats??[],base);
+  const baseRules=spec.performancePolicy?.conditionalFormats===false?[]:canonRule(base.sheet.conditionalFormats??[],base);
   if(JSON.stringify(baseRules).includes('!')||baseRules.some(rule=>rule.ranges.some(r=>r.sheetId!=='SELF')))holds.push({tab:base.title,reason:'CONDITIONAL_EXTERNAL_REFERENCE'});
   // Majority-derived attributes (bold, numberFormat, ...) cover whole columns, so they need every row read.
   for(const c of tabs.map(canonCoverage))if(!c.complete)holds.push({tab:c.tab,reason:'PARTIAL_CAPTURE_MAJORITY_FORMATS'});
@@ -762,7 +764,7 @@ export function planTabConsistencyFix(snapshot,spec=inputSpec){
     requests.push({updateSheetProperties:{properties:{sheetId:t.id,gridProperties:{frozenRowCount:spec.frozenRowCount,frozenColumnCount:spec.frozenColumnCount}},fields:'gridProperties.frozenRowCount,gridProperties.frozenColumnCount'}});
     for(const [startIndex,endIndex,pixelSize] of [[0,1,spec.headerRowHeight],[1,t.g.rowCount,spec.rowHeight]])requests.push({updateDimensionProperties:{range:{sheetId:t.id,dimension:'ROWS',startIndex,endIndex},properties:{pixelSize},fields:'pixelSize'}});
     if(t.title!==spec.summaryTitle)runs(spec.inputHeaders.map(h=>{
-      const condition=inputDropdown(spec,h)?{type:'ONE_OF_LIST',values:inputDropdown(spec,h).map(userEnteredValue=>({userEnteredValue}))}:spec.vehicleMaster.columns[h]?{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]}:null;
+      const condition=inputDropdown(spec,h)?{type:'ONE_OF_LIST',values:inputDropdown(spec,h).map(userEnteredValue=>({userEnteredValue}))}:inputMasterColumn(spec,h)?{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]}:null;
       return condition?{condition,strict:spec.dropdownStrict===true,showCustomUi:true}:null;
     }),(rule,start,end)=>requests.push({setDataValidation:{range:range(start,end),filteredRowsIncluded:true,...(rule?{rule}:{})}}));
     if(!canonEqual(baseRules,canonRule(t.sheet.conditionalFormats??[],t))){

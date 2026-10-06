@@ -30,6 +30,7 @@ export function planCascadeValidationRefresh(input,spec=inputSpec,now=Date.now()
 }
 
 export function buildCascadeBundle(metadata, spec=inputSpec) {
+  if(spec.dropdownPolicy?.disabled)throw new Error('HOLD: Dropdowns disabled by latest user decision');
   if(!metadata?.spreadsheetId || !Array.isArray(metadata.sheets))throw new Error('HOLD: fresh workbook metadata required');
   const titles=[...new Set(spec.supplierChannels.sharedInputSheet.map(s=>s.tab))];
   const suppliers=titles.map(title=>{

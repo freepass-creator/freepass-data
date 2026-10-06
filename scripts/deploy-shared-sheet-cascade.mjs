@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {inputSpec} from './supplier-input-sheet.mjs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -22,6 +23,7 @@ export function mergeCascadeContent(existing,bundle) {
 }
 
 export async function deployCascade({bundle,token,scriptId,receiptPath},fetcher=fetch) {
+  if(inputSpec.dropdownPolicy?.disabled)throw new Error('HOLD: Dropdowns disabled by latest user decision');
   if(!token)throw new Error('APPS_SCRIPT_AUTH_UNAVAILABLE: configure FREEPASS_APPS_SCRIPT_ACCESS_TOKEN with script.projects and userinfo.email scopes; Sheets connector auth is separate');
   const headers={Authorization:`Bearer ${token}`,'Content-Type':'application/json'};
   const call=async(url,method='GET',body)=>{

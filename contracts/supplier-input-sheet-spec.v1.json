@@ -2236,12 +2236,19 @@
     "freeText": [
       "회사명",
       "입고일자",
+      "차량상태",
+      "상품구분",
       "차량번호",
+      "제조사",
+      "모델",
+      "세부모델",
+      "세부트림",
       "외부색상",
       "내부색상",
       "연식",
       "주행거리",
       "배기량",
+      "연료",
       "단기보증",
       "1개월",
       "6개월",
@@ -2330,7 +2337,9 @@
     ],
     "decision20261006": "대표: 느려서 대여료 앞에만 드롭다운. A:P 기존 규칙 유지, 첫 대여료 1개월(Q)부터 비고(BV)까지 자유 입력. 값·수식·서식 변경 없음. 이전 정책 칸 드롭다운 결정을 대체한다.",
     "dropdownEndBeforeHeader": "1개월",
-    "listDefinitionsNote": "dropdowns의 Q:BV 목록은 과거 분리/변환용 정의만 보존. 현행 입력 검증은 dropdownEndBeforeHeader 앞에서만 허용한다."
+    "listDefinitionsNote": "dropdowns의 Q:BV 목록은 과거 분리/변환용 정의만 보존. 현행 입력 검증은 dropdownEndBeforeHeader 앞에서만 허용한다.",
+    "disabled": true,
+    "latestDecision20261006": "대표 최신 지시: 느려지는 요소 제거. 모든 드롭다운·조건부 서식·차종 보조 수식 제거, 전 열 자유 입력. A:P 유지/행별 연쇄 설치 결정은 폐기."
   },
   "policySplit": {
     "from": "2026-10-03",
@@ -2499,7 +2508,7 @@
         "decision": "2026-10-06 대표: 선택한 행의 다음 드롭다운만 갱신. 44,955개 보조 수식 대신 onEdit 행별 입력 검증. 앞 항목 변경에도 기존 차종 값은 임의로 지우지 않는다.",
         "implementation": "scripts/shared-sheet-cascade-runtime.gs",
         "builder": "scripts/build-shared-sheet-cascade.mjs",
-        "mode": "CODED_NOT_DEPLOYED",
+        "mode": "DISABLED_BY_USER_ALL_FREE_TEXT",
         "authority": "기존 차종연쇄는 FreePass Data 차종 정본의 게시된 목록만 사용. 마스터 이름 생성·값 정정 없음.",
         "refresh": "사람 편집 onEdit / 한 행 선택 onSelectionChange(누락 가능) / 메뉴로 선택 행 복구. Sheets API 입력은 planCascadeValidationRefresh로 별도 갱신.",
         "cutoverGate": "pyh@teamjpk.com Apps Script 설치·실제 편집·새 행·여러 행 붙여넣기·API 갱신·값 보존 검증 전에는 기존 보조 탭 수식과 참조를 삭제하지 않는다."
@@ -3538,5 +3547,12 @@
   "summaryExcludeStatuses": [
     "출고불가"
   ],
-  "summaryExcludeNote": "2026-10-05 대표 «종합탭은 출고불가만 빼고 그대로 가져와서 복사한 거야»: 종합 탭에는 차량상태가 출고불가가 아닌 모든 줄(출고협의·상품화중·계약중·상태 빈칸 포함). 10-04 «출고 가능차만 종합탭에»(summaryKeepStatuses 출고가능·즉시출고)를 대체한다. 공급사 탭과 매일 박제(공급사 탭만 읽음)는 그대로 전체."
+  "summaryExcludeNote": "2026-10-05 대표 «종합탭은 출고불가만 빼고 그대로 가져와서 복사한 거야»: 종합 탭에는 차량상태가 출고불가가 아닌 모든 줄(출고협의·상품화중·계약중·상태 빈칸 포함). 10-04 «출고 가능차만 종합탭에»(summaryKeepStatuses 출고가능·즉시출고)를 대체한다. 공급사 탭과 매일 박제(공급사 탭만 읽음)는 그대로 전체.",
+  "performancePolicy": {
+    "conditionalFormats": false,
+    "vehicleCascadeFormulas": false,
+    "rowEventDeployment": false,
+    "preserveInputValues": true,
+    "preserveSummaryFormulas": true
+  }
 }
