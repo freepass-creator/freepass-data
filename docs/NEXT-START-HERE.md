@@ -397,6 +397,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-06 ERP 후속 — AI Core 종착역 재점검 / DEV-06 PR
+
+- 목적: 대표 «종착역으로 업무, AI Core 확인» 정정에 따라 기존 PR #398을 이어서 보강. Core main `6088a502915408853d2607bbea56d7d57a2d450c`의 AGENTS/WORK_READ_FIRST/헌법/continuity/sunset을 확인하고 target `001cd03f311c610620bb15fcbe02544ee96597c6`의 Academy READY를 받았다. 앞선 작업은 시작 전 Core 확인 누락이 있었고 사후 READY를 최초 작업 승인으로 소급하지 않는다.
+- 작업 연속성: 새 PR·원천 writer·중복 저장 경로 없음. 기존 actor-prefix 가지는 PR #398의 역사적 이름으로 유지하며 새 가지를 복제하지 않았다. PR #397 최신 `754f69d251996b0828df20c0d5e424108724edd0`를 merge `a39c951`로 받아 supplierManagement/현행2026-10-06.3 및 두 세션 handoff를 모두 보존했다. 시트 쓰기0.
+- 구현 exact commit `646700ed814d1c2186ed7160eefbcd12a078f26d`: 기존 점검기의 필수 compat collection 선택 추가(누락 fail-closed), Canonical consumer/projection/schema/authority/non-empty/manifest/digest metadata 검사 보강. digest 내용·최신성·원천 parity는 기존 gateway/3자 대사 책임을 유지한다. 종착역은 기존 경계를 완성하고 대체 경로 보존·readback·rollback 이후 임시 브리지 종료를 판정하는 것.
+- 검증: runtime smoke10/10, architecture/data-access boundary, diff check PASS. 운영/TypeScript 변경 없음, 전체 Vitest 미재실행. tool doctor는 gcloud·Claude CLI MISSING. claude:status AVAILABLE는 신원/실행 성공 증거가 아니며 공식 exact-head review 호출은 FAILED/CLAUDE_PROCESS_FAILED, 답변 없음. Core CROSS_AI_LOG에 로컬 기록(아직 원격 미반영), 독립 검토 미통과.
+- 학습환류: 사용자 수정1/재작업1/false completion0, Episode FREEPASS-DATA-ERP-CORE-20261006(대상646700e). 기존 academy:closeout 결과 HOLD/EPISODE_FEEDBACK_HOLD, 원인 INDEPENDENT_REVIEW_UNCONFIRMED. 비공개 임시 work-result/episode에 세부 증거 보존; 공통 규칙 자동 채택이나 운영 승인으로 표현하지 않는다.
+- 남음: 독립 검토·CI·#397→#398 main 통합, 기존 daily WIF fresh dry-run/실제 ownership/head/Canonical 대사, 승인된 저장·release 및 ERP.com readback. 인증 접근 없는 PC에서 별도 로그인·키 복제·fallback·새 예약으로 우회하지 않음. 현재 DEV-06/10 PR, 다음 독립 검토/CI와 main 통합; PERSISTENCE/DEPLOYMENT/CUTOVER HOLD.
+- next_start_here: [ERP 소비처 런타임](ERP5-CONSUMER-RUNTIME.md#공통-시트--erp-연결-준비--2026-10-06) 현행 supplierManagement 및 필수 collection 설정 → PR #398 exact head 검토 → 기존 daily WIF fresh dry-run → 해당 계획 운영 경계 및 소비자 대사. Core 로컬 상의 기록은 담당 Core 작업선으로 반영해야 함.
+
 ### 2026-10-06 공통 시트 ERP 연동 별도 작업 — CODED / STATIC CHECKED / TESTED, 운영 HOLD
 
 - 작업선 `codex/shared-sheet-erp-integration`, 별도 managed worktree. 기반 `86392a056ccb03fac43eaf1722c6ec86f3c90b7e`/PR #397, fetch한 main `43201d4773c301bb0344777a9235309d17558ddc`. 열린 #395(차종 판정 옵션)는 미통합, 원래 checkout/시트 관리 변경 보존. 시트 값/서식/드롭다운/행 수 쓰기0, ERP 저장소 수정0.
