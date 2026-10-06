@@ -400,6 +400,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ### 2026-10-06 공통 시트→Data→ERP 수집 범위 정합 — CODED / TESTED / 실제 시트 읽기 검증
 
 - 대표 «프리패스데이터에서 공통시트 데이터 잘 연동해서 erp 구성». ERP 대상은 기존 계약의 ERP.com으로 잠정 해석(대상 확인 질문 답 미수신). ERP 소비자 인증/호환 API는 기존 구현을 사용하며 ERP의 별도 원천 writer를 만들지 않는다.
+- 구현 pin: `ccc5094ddf54d698e71dd64b45f097c871c6cab5` (PR #397). 이 다음 기록 커밋은 구현 pin을 명시하는 handoff다.
 - 현행 기계 정본 버전 supplier-input-presentation/2026-10-06.2. 수집기 및 빈 칸 입력 export를 현재12탭/15코드에 맞췄다. 전체 등록15탭/18코드는 보존, absent3탭은 보고서 HOLD. PARTIAL/COMPLETE coverage와 Domain head 판정 유지; canAssertSourceAbsence=false, 부재로 기존 재고 삭제/판매완료 금지. 없어진 등록 탭이 다시 나타나면 capture는 scope drift로 멈춘다.
 - 실제 Sheets connector 조회12탭/171행 전후 effectiveValue 동일, 날짜 실제 값 보존 캡처·정규화 확인: VALID133, 나머지38행은 연식/등록일23·차종확인5 등 차량번호/값 근거 문제로 HOLD. UI 후보를 차종 정본으로 인정하지 않음. 원문·보고서는 checkout 밖 비공개 증거 디렉터리, 운영 쓰기0.
 - 검증: 관련 Vitest147/147, 시트104/104, TypeScript build 및 architecture/data-access checks PASS. 전체 Vitest1651 PASS/14 SKIP, runtime-policy watchdog1 FAIL(로컬 Git Bash의 jq 미설치); 전체 PASS로 표현하지 않는다.
