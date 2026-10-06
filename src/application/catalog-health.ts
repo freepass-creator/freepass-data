@@ -2,7 +2,8 @@ import type { CatalogStore, ProjectionEvidenceSnapshotStore, ProjectionStore } f
 import { stableDigest } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from './projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
-import { auditOfferEconomicsTerms } from './resolve-offer-commercial-terms.js';
+import type { EconomicsCoverage } from '../domain/catalog.js';
+import { readStoredTermFees, summarizeEconomicsCoverage, auditOfferEconomicsTerms } from './resolve-offer-commercial-terms.js';
 
 export type CatalogHealthStatus = 'HEALTHY' | 'DEGRADED' | 'BLOCKED';
 export type CatalogHealthCheckStatus = 'PASS' | 'WARN' | 'FAIL';
@@ -136,7 +137,7 @@ export type CatalogHealthReport = {
       status: CatalogHealthCheckStatus;
       issueCount: number;
     };
-    offerEconomics: {
+    offerEconomics: EconomicsCoverage & {
       status: CatalogHealthCheckStatus;
       missingTermCount: number;
       unresolvedValueCount: number;
@@ -896,6 +897,7 @@ export async function readCatalogDataHealth(
         issueCount: referentialIssues.length
       },
       offerEconomics: {
+        ...summarizeEconomicsCoverage(offers.flatMap(offer => offer.priceTerms.map(term => readStoredTermFees(offer, term)))),
         status: checkStatus(economicsIssues),
         missingTermCount: economicsIssues.filter((issue) => issue.code === 'OFFER_ECONOMICS_TERM_MISSING').length,
         unresolvedValueCount: economicsIssues.filter((issue) => issue.code === 'OFFER_ECONOMICS_VALUE_UNRESOLVED').length,

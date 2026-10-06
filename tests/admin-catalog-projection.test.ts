@@ -1,3 +1,6 @@
+import { readCatalogDataHealth } from '../src/application/catalog-health.js';
+import { precomputeOfferEconomics, summarizeEconomicsCoverage } from '../src/application/resolve-offer-commercial-terms.js';
+import { buildErpPublicProjection } from '../src/application/catalog.js';
 import { describe, expect, it } from 'vitest';
 import type { Offer, Policy, Product, VehicleAsset, VehicleModel } from '../src/domain/catalog.js';
 import type { EntityRevisionRecord } from '../src/domain/history.js';
@@ -174,4 +177,59 @@ describe('Admin Catalog projection on current release evidence', () => {
     const second = await buildAdminCatalogProjection(store, store, '2026-09-25T00:01:00.000Z');
     expect(second.releaseId).toBe(first.releaseId);
   });
+});
+
+
+it('projects stored canonical fees only in Admin and binds them to release evidence', async () => {
+  const { store, f } = await seeded(f => {
+    f.offer.supplierId = 'RP013';
+    f.offer.internalEconomicsTerms = precomputeOfferEconomics(f.offer, f.product.commercialType, f.model.fuel);
+  });
+  const before = structuredClone(f.offer);
+  const release = await buildAdminCatalogProjection(store, store, now);
+  expect(release.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toEqual(f.offer.internalEconomicsTerms![0]!.supplierBillingFee);
+  expect(release.economics).toMatchObject({ economicsCoverage: 'COMPLETE', economicsTermCounts: {
+    supplierBillingFee: { KNOWN: 2, ZERO: 0, UNKNOWN: 0, NOT_APPLICABLE: 0 },
+    channelPayoutFee: { KNOWN: 2, ZERO: 0, UNKNOWN: 0, NOT_APPLICABLE: 0 },
+  } });
+  expect(await store.getOffer(f.offer.id)).toEqual(before);
+  const evidence = await store.listProjectionLineage(release.releaseId);
+  expect(evidence.some(row => row.canonical.fieldPath === 'internalEconomicsTerms')).toBe(true);
+  const publicRelease = await buildErpPublicProjection(store, store, now);
+  expect(JSON.stringify(publicRelease.data)).not.toContain('supplierBillingFee');
+  expect(JSON.stringify(publicRelease.data)).not.toContain('channelPayoutFee');
+  expect(JSON.stringify(publicRelease.data)).not.toContain('priceSourceRefs');
+});
+
+it('never calculates missing, duplicated, invalid or stale stored fees during projection', async () => {
+  for (const mode of ['missing', 'duplicate', 'invalid', 'stale'] as const) {
+    const { store } = await seeded(f => {
+      f.offer.supplierId = 'RP013';
+      if (mode === 'missing') return;
+      f.offer.internalEconomicsTerms = precomputeOfferEconomics(f.offer, 'USED_RENT');
+      if (mode === 'duplicate') f.offer.internalEconomicsTerms.push(structuredClone(f.offer.internalEconomicsTerms[0]!));
+      if (mode === 'invalid') f.offer.internalEconomicsTerms[0]!.supplierBillingFee.amount!.amount = -1;
+      if (mode === 'stale') f.offer.priceTerms[0]!.monthlyRent.amount += 100000;
+    });
+    const release = await buildAdminCatalogProjection(store, store, now);
+    expect(release.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, sourceRefs: [],
+      priceSourceRefs: [expect.stringMatching(/^catalog_offers\/.+\/priceTerms\//)] });
+    expect(release.economics!.economicsCoverage).toBe('INCOMPLETE');
+    if (mode === 'stale') {
+      const health = await readCatalogDataHealth(store, store, now);
+      expect(health.checks.offerEconomics.status).toBe('FAIL');
+      expect(health.checks.offerEconomics.economicsCoverage).toBe('INCOMPLETE');
+    }
+  }
+});
+
+it('counts each state separately for each fee and treats an empty release as incomplete', () => {
+  const terms = (['KNOWN', 'ZERO', 'UNKNOWN', 'NOT_APPLICABLE'] as const).map(state => ({
+    supplierBillingFee: { state, sourceRefs: ['test'] }, channelPayoutFee: { state, sourceRefs: ['test'] },
+  }));
+  expect(summarizeEconomicsCoverage(terms)).toEqual({ economicsCoverage: 'INCOMPLETE', economicsTermCounts: {
+    supplierBillingFee: { KNOWN: 1, ZERO: 1, UNKNOWN: 1, NOT_APPLICABLE: 1 },
+    channelPayoutFee: { KNOWN: 1, ZERO: 1, UNKNOWN: 1, NOT_APPLICABLE: 1 },
+  } });
+  expect(summarizeEconomicsCoverage([]).economicsCoverage).toBe('INCOMPLETE');
 });

@@ -1,6 +1,10 @@
 import type { CommercialType, PriceTerm } from './catalog.js';
+import type { SourceVehicleFacts } from './source-vehicle-facts.js';
 
 export type CatalogCandidate = {
+  vehicleFacts?: SourceVehicleFacts;
+  firstObservedAt?: string;
+  firstRunId?: string;
   sourceRecordId: string;
   sourceFingerprint: string;
   productCode?: string;

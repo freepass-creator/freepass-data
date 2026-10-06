@@ -9,6 +9,7 @@ on:
         default: shadow
   schedule:
     - cron: '17 * * * *'
+    # 공통 시트 데일리 박제는 자기 신원(WIF 조건 = 그 워크플로 파일)으로 shared-sheet-daily.yml 에서 돈다(대표 승인 10-04).
 
 # Repository concurrency is NOT cross-repository locking. The adapter also
 # requires the old writer disabled, drained and fenced at its IAM identity.
@@ -23,7 +24,8 @@ permissions:
 
 jobs:
   refresh:
-    if: vars.FREEPASS_DATA_REFRESH_OWNER == 'freepass-data' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'shadow')
+    if: >-
+      (vars.FREEPASS_DATA_REFRESH_OWNER == 'freepass-data' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'shadow'))
     environment: data-production-delivery
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -125,3 +127,6 @@ jobs:
         if: always()
         run: |
           rm -f engine/tmp/firebase-auth/sheets.json engine/sonokong/lib/wonja/.손오공계정.json engine/sonokong/lib/wonja/.손오공토큰.json
+
+  # 공통 입력시트 → FreePass Data Canonical 데일리 박제. ERP4 를 거치지 않고 Data 자기 신원(위 refresh 와 같은 신원·환경)으로 돈다.
+  # 순서: ERP5 products 캡처(공급사 입력값 ②) → 공통 시트 캡처 → 계획(dry-run) → (apply 일 때만) 같은 계획 digest 로 적용·되읽기.

@@ -38,6 +38,7 @@
     "check:sheet-consumer-health": "tsx src/jobs/check-sheet-consumer-health.ts",
     "check:consumer-runtime-evidence": "tsx src/jobs/check-consumer-runtime-evidence.ts",
     "ingest:vehicle-master-source": "tsx src/jobs/ingest-vehicle-master-source.ts",
+    "ingest:vehicle-reference": "tsx scripts/import-vehicle-reference.mts",
     "backfill:vehicle-master": "tsx src/jobs/backfill-vehicle-master.ts",
     "check:consumer-health": "tsx src/jobs/check-consumer-health.ts",
     "check:consumer-readiness": "tsx src/jobs/check-consumer-readiness.ts",
@@ -45,23 +46,33 @@
     "dry-run:estimate-master-canonical": "tsx src/jobs/build-estimate-newcar-master-canonical-dry-run.ts",
     "check:estimate-master-readiness": "tsx src/jobs/check-estimate-master-readiness.ts --scheduled-read-only",
     "ingest:erp5-source": "tsx src/jobs/ingest-erp5-source.ts",
+    "capture:shared-sheet": "tsx src/jobs/capture-shared-sheet.ts",
+    "ingest:shared-sheet-canonical": "tsx src/jobs/ingest-shared-sheet-canonical.ts",
+    "query:canonical-by-plate": "tsx src/jobs/query-canonical-by-plate.ts",
     "ingest:settlement-source": "tsx src/jobs/ingest-settlement-source.ts",
     "promote:vehicle-master-canonical": "tsx src/jobs/promote-vehicle-master-canonical.ts",
     "audit:vehicle-name-parity": "tsx src/jobs/audit-vehicle-name-reference-parity.ts",
     "repair:vehicle-name-parity": "tsx src/jobs/apply-vehicle-name-reference-repair.ts",
+    "repair:policy-correction": "tsx src/jobs/apply-policy-correction.ts",
     "repair:autoplus-policy": "tsx src/jobs/apply-autoplus-policy-repair.ts",
     "repair:billincar-policy": "tsx src/jobs/apply-billincar-policy-repair.ts",
     "probe:estimate-writer-canary": "tsx src/jobs/probe-estimate-writer-canary.ts",
     "source:iancar:direct": "tsx src/jobs/collect-iancar-direct.ts",
     "test:source:iancar:direct": "vitest run tests/iancar-direct-source.test.ts",
     "test:source:iancar:one-api": "vitest run tests/iancar-one-api.test.ts",
-    "source:iancar:one": "tsx src/jobs/collect-iancar-one-api.ts"
+    "source:iancar:one": "tsx src/jobs/collect-iancar-one-api.ts",
+    "source:aica:capture": "tsx src/jobs/collect-aica.ts",
+    "serve:supplier:relay": "tsx src/jobs/serve-supplier-relay.ts",
+    "check:supplier-sheet-canon": "node scripts/supplier-input-sheet.mjs --check-canon",
+    "plan:sheet-blank-fill": "tsx src/jobs/plan-sheet-blank-fill.ts",
+    "export:sheet-blank-fill-input": "tsx src/jobs/export-sheet-blank-fill-input.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",
     "ajv-formats": "^3.0.0",
     "fastify": "^5.0.0",
-    "firebase-admin": "^13.0.0"
+    "firebase-admin": "^13.0.0",
+    "google-auth-library": "10.9.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

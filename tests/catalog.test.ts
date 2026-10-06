@@ -48,6 +48,25 @@ describe('counterparty commission contract', () => {
 });
 
 describe('Catalog V1 vertical slice', () => {
+  it('recomputes fees in the same price transaction and revision snapshot', async () => {
+    const store = new MemoryDataStore(); await seedDemoCatalog(store);
+    const original = (await store.getOffer('offer_gv70_demo'))!;
+    await store.transact(async tx => { await tx.putOffer({ ...original, supplierId: 'RP013' }); });
+    const input = { commandId: 'recompute-1', idempotencyKey: 'recompute-price-1',
+      offerId: original.id, expectedRevision: 1, termKey: '36@20000',
+      monthlyRent: { amount: 500000, currency: 'KRW' as const }, reason: 'fee recompute',
+      actor: { id: 'user:test', kind: 'USER' as const } };
+    await updateOfferPrice(store, input);
+    const first = (await store.getOffer(original.id))!;
+    expect(first.internalEconomicsTerms![0]!.supplierBillingFee.amount?.amount).toBe(675000);
+    await updateOfferPrice(store, { ...input, commandId: 'recompute-2', idempotencyKey: 'recompute-price-2',
+      expectedRevision: 2, monthlyRent: { amount: 600000, currency: 'KRW' } });
+    const second = (await store.getOffer(original.id))!;
+    expect(second.internalEconomicsTerms![0]!.supplierBillingFee.amount?.amount).toBe(810000);
+    expect(second.internalEconomicsTerms![0]!.channelPayoutFee.amount?.amount).toBe(648000);
+    expect((await store.listEntityHistory('offer', original.id)).at(-1)!.snapshot).toEqual(second);
+    expect(first.priceTerms[0]!.monthlyRent.amount).toBe(500000);
+  });
   it('is idempotent and rejects stale revisions', async () => {
     const store=new MemoryDataStore(); await seedDemoCatalog(store);
     const command={

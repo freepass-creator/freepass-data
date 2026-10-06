@@ -307,12 +307,12 @@
         "과태료 처리",
         "변경부과"
       ],
-      "target_project_id": "aiops",
+      "target_project_id": "renman",
       "approval_boundary": "PROJECT_RULES",
       "completion_condition": "현재 SOP에 따라 대상/관청/차량/계약을 대조하고 실제 쓰기 전 승인 경계를 지킨다.",
       "source_pointers": [
         "registry/projects.json",
-        "freepass-creator/aiops"
+        "freepass-creator/renman/penalty-engine"
       ],
       "capability_id": "operations.penalty.prepare"
     },
@@ -326,12 +326,12 @@
         "돈 관련",
         "현금 현황"
       ],
-      "target_project_id": "aiops",
+      "target_project_id": "renman-data",
       "approval_boundary": "READ_ONLY",
       "completion_condition": "실제 자금 정본을 읽어 기준시점·불일치·미확인을 구분해 반환한다.",
       "source_pointers": [
         "registry/projects.json",
-        "freepass-creator/aiops"
+        "freepass-creator/renman-data"
       ],
       "capability_id": "finance.cash-status"
     },
@@ -345,12 +345,12 @@
         "입금 불일치",
         "미수금"
       ],
-      "target_project_id": "aiops",
+      "target_project_id": "renman-data",
       "approval_boundary": "PROJECT_RULES",
       "completion_condition": "수납/입금/미수 정본을 대조하고 변경이 필요한 경우 승인 전에서 멈춘다.",
       "source_pointers": [
         "registry/projects.json",
-        "freepass-creator/aiops"
+        "freepass-creator/renman-data"
       ],
       "capability_id": "finance.receivables"
     },
@@ -364,12 +364,12 @@
         "차량 보험",
         "보험"
       ],
-      "target_project_id": "aiops",
+      "target_project_id": "renman",
       "approval_boundary": "PROJECT_RULES",
       "completion_condition": "현재 보험 SOP와 대상 계약/차량 정본을 기준으로 결과와 예외를 반환한다.",
       "source_pointers": [
         "registry/projects.json",
-        "freepass-creator/aiops"
+        "freepass-creator/renman"
       ],
       "capability_id": "operations.insurance"
     },
@@ -518,12 +518,12 @@
         "보험 상태 확인",
         "보험 이상 확인"
       ],
-      "target_project_id": "aiops",
+      "target_project_id": "renman-data",
       "approval_boundary": "READ_ONLY",
-      "completion_condition": "오늘 기준 AIOps 보험 evidence의 freshness, 연령 정합성, 고위험 불일치를 읽기 전용으로 반환한다.",
+      "completion_condition": "오늘 기준 보험 정본의 freshness, 연령 정합성, 고위험 불일치를 읽기 전용으로 반환한다.",
       "source_pointers": [
         "registry/projects.json",
-        "freepass-creator/aiops/lib/ai-core-insurance-adapter.mjs"
+        "freepass-creator/renman-data"
       ],
       "capability_id": "operations.insurance-status"
     },
@@ -545,6 +545,31 @@
         "freepass-creator/freepass-sales/server/"
       ],
       "capability_id": "sales.mydata-intake"
+    },
+    {
+      "work_type_id": "google-workspace-direct",
+      "name": "구글 시트·드라이브·지메일 직접 작업",
+      "domain": "operations",
+      "aliases": [
+        "구글 시트",
+        "시트 읽어",
+        "시트 읽기",
+        "시트에 값",
+        "시트 쓰기",
+        "시트 수정",
+        "구글 드라이브",
+        "드라이브에서",
+        "드라이브 파일",
+        "지메일"
+      ],
+      "target_project_id": "ai-core",
+      "approval_boundary": "USER_APPROVAL_FOR_EXTERNAL_WRITE",
+      "completion_condition": "세션이 gws 로 직접 처리한다. 대상 파일 ID·탭·범위를 고정하고, 쓰기는 전후로 같은 범위를 읽어 바뀐 값을 확인해 반환한다. 메일 발송·공유/권한 변경·삭제는 사용자 지시가 있을 때만.",
+      "source_pointers": [
+        "memory/TOOL_CONNECTIONS.md",
+        "registry/operating-knowledge.json#platform.google-workspace"
+      ],
+      "capability_id": "workspace.google-direct"
     }
   ],
   "hub_routes": {

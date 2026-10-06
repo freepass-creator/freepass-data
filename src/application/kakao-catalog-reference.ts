@@ -42,8 +42,13 @@ type MarginState = 'CALCULATED' | 'UNKNOWN' | 'NOT_APPLICABLE';
 
 export const KAKAO_CATALOG_REFERENCE_SCHEMA = 'freepass-data.kakao-catalog-reference/v1' as const;
 
-export const KAKAO_COMMISSION_POLICY = {
-  policyId: 'sales-commission-2026-09-28',
+export const KAKAO_COMMISSION_POLICY_2026_10_03 = {
+  policyId: 'sales-commission-2026-10-03',
+  decisionDate: '2026-10-03',
+  evidenceHistory: [{ policyId: 'sales-commission-2026-09-28', observedAt: '2026-09-28T00:09:22.575Z', revision: 'f862d0097f6e83d79d0b699bc369a83716b1d982' }],
+  currentAuthority: '2026-10-03 대표 결정 및 commission-research.md ①③④',
+  sonokongAdditions: { 12: 100000, 24: 300000, 36: 500000, 48: 700000, 60: 700000 },
+  pacificRates: { NEW_PREDELIVERY: { 5: [300, 250], 10: [400, 300] }, NEW_MATCHING: { 5: [300, 300], 10: [330, 330] } },
   sourceRole: 'REPOSITORY_SSOT_WITH_GOOGLE_SHEET_COPY',
   sourceObservedAt: '2026-09-28T00:09:22.575Z',
   canonicalSource: {
@@ -61,15 +66,18 @@ export const KAKAO_COMMISSION_POLICY = {
   ],
   exceptionSupplierIds: {
     sonokong: ['RP012'],
-    star: ['RP018'],
+    star: ['RP018', 'RP033'],
     autoplus: ['RP023'],
     switchplan: ['RP014'],
     iancar: ['RP004'],
     iron: ['RP006'],
     pacific: ['RP022'],
-    mindcarWithoutPublishedRule: ['RP034'],
+    excludedMindcar: ['RP034'],
   },
   rules: [
+    { id: 'IRON_NEW_PREDELIVERY_BILLING', supplierGroup: 'IRON', product: 'NEW_PREDELIVERY', basis: 'VEHICLE_VALUE', rateBasisPoints: 400, vatTreatment: 'EXCLUDED', coordinationRequired: false },
+    { id: 'STAR_RERENT_ONE_MONTH_RENT_BILLING', supplierGroup: 'STAR', product: 'RERENT', basis: 'MONTHLY_RENT', rateBasisPoints: 10000, vatTreatment: 'INCLUDED', coordinationRequired: false },
+    { id: 'SONOKONG_SUBSCRIPTION_BILLING_Q12_PLUS_ADDITION', supplierGroup: 'SONOKONG', product: 'SUBSCRIPTION', basis: 'Q12_PLUS_TERM_ADDITION', vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'STANDARD_NEW_PREDELIVERY_BILLING_3_5_PERCENT', supplierGroup: 'STANDARD', product: 'NEW_PREDELIVERY', basis: 'VEHICLE_VALUE', rateBasisPoints: 350, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'STANDARD_NEW_PREDELIVERY_3_PERCENT', supplierGroup: 'STANDARD', product: 'NEW_PREDELIVERY', basis: 'VEHICLE_VALUE', rateBasisPoints: 300, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'STANDARD_NEW_MATCHING_UP_TO_9_PERCENT', supplierGroup: 'STANDARD', product: 'NEW_MATCHING', basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'EXCLUDED', coordinationRequired: true },
@@ -85,8 +93,8 @@ export const KAKAO_COMMISSION_POLICY = {
       { termMonths: 48, basis: 'MONTHLY_RENT_X_TERM', rateBasisPoints: 325 },
       { termMonths: 60, basis: 'MONTHLY_RENT_X_TERM', rateBasisPoints: 225 },
     ], vatTreatment: 'EXCLUDED', coordinationRequired: false },
-    { id: 'SONOKONG_SUBSCRIPTION_12_MONTH_RENT_100_PERCENT', supplierGroup: 'SONOKONG', product: 'SUBSCRIPTION', basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'EXCLUDED', coordinationRequired: true },
-    { id: 'STAR_RERENT_ONE_MONTH_RENT_X_80_PERCENT', supplierGroup: 'STAR', product: 'RERENT', basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'INCLUDED', coordinationRequired: true },
+    { id: 'SONOKONG_SUBSCRIPTION_12_MONTH_RENT_100_PERCENT', supplierGroup: 'SONOKONG', product: 'SUBSCRIPTION', basis: 'Q12_WITH_EVIDENCE', rateBasisPoints: 10000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
+    { id: 'STAR_RERENT_ONE_MONTH_RENT_X_80_PERCENT', supplierGroup: 'STAR', product: 'RERENT', basis: 'MONTHLY_RENT', rateBasisPoints: 8000, vatTreatment: 'INCLUDED', coordinationRequired: false },
     { id: 'AUTOPLUS_SUBSCRIPTION_FIXED', supplierGroup: 'AUTOPLUS', product: 'SUBSCRIPTION', basis: 'FIXED', fixedAmount: 800000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'AUTOPLUS_SUBSCRIPTION_BILLING_FIXED', supplierGroup: 'AUTOPLUS', product: 'SUBSCRIPTION', basis: 'FIXED', fixedAmount: 1000000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'SWITCH_SUBSCRIPTION_LADDER', supplierGroup: 'SWITCH', product: 'SUBSCRIPTION', basis: 'TERM_LADDER', vatTreatment: 'EXCLUDED', coordinationRequired: false },
@@ -95,8 +103,8 @@ export const KAKAO_COMMISSION_POLICY = {
     { id: 'IANCAR_RERENT_6_MONTH_FIXED', supplierGroup: 'IANCAR', product: 'RERENT', termMonths: 6, basis: 'FIXED', fixedAmount: 300000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'IANCAR_EV_BILLING_FIXED', supplierGroup: 'IANCAR', product: 'EV', basis: 'FIXED', fixedAmount: 1000000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
     { id: 'IANCAR_EV_FIXED', supplierGroup: 'IANCAR', product: 'EV', basis: 'FIXED', fixedAmount: 800000, vatTreatment: 'EXCLUDED', coordinationRequired: false },
-    { id: 'PACIFIC_NEW_PREDELIVERY_DEPOSIT_TIER', supplierGroup: 'PACIFIC', product: 'NEW_PREDELIVERY', basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'INCLUDED', coordinationRequired: true },
-    { id: 'PACIFIC_NEW_MATCHING_DEPOSIT_TIER', supplierGroup: 'PACIFIC', product: 'NEW_MATCHING', basis: 'COORDINATION', rateBasisPoints: null, vatTreatment: 'INCLUDED', coordinationRequired: true },
+    { id: 'PACIFIC_NEW_PREDELIVERY_DEPOSIT_TIER', supplierGroup: 'PACIFIC', product: 'NEW_PREDELIVERY', basis: 'VEHICLE_VALUE_DEPOSIT_TIER', rateBasisPoints: null, vatTreatment: 'INCLUDED', coordinationRequired: false },
+    { id: 'PACIFIC_NEW_MATCHING_DEPOSIT_TIER', supplierGroup: 'PACIFIC', product: 'NEW_MATCHING', basis: 'VEHICLE_VALUE_DEPOSIT_TIER', rateBasisPoints: null, vatTreatment: 'INCLUDED', coordinationRequired: false },
   ],
   timingRules: [
     { supplierGroup: 'STAR_IANCAR', case: 'INSTALLMENT', billingAndPayout: 'AFTER_ALL_INSTALLMENTS_RECEIVED', broken: 'NO_FEE' },
@@ -106,7 +114,69 @@ export const KAKAO_COMMISSION_POLICY = {
   ],
 } as const;
 
+/** Previous published rules remain available for historical evidence, never rewritten. */
+export const KAKAO_COMMISSION_POLICY_2026_10_04 = {
+  ...KAKAO_COMMISSION_POLICY_2026_10_03,
+  policyId: 'sales-commission-2026-10-04',
+  decisionDate: '2026-10-04',
+  currentAuthority: 'F04 수수료표 A1:M191, 2026-10-04 제공 사본 및 사용자 명시 HOLD',
+  sourceRole: 'F04_GOOGLE_SHEET_SSOT',
+  canonicalSource: { code: 'F04', range: '수수료표!A1:M191', observedDate: '2026-10-04' },
+  sourceObservedAt: '2026-10-04',
+  sourceFiles: [{ code: 'F04', id: '1BjGBqAjRLEb9ZMKarpQsMF-q_UjdgmEqBAl1uVk8SR4', sheetId: 1982531660, range: '수수료표!A1:M191' }],
+  evidenceHistory: [...KAKAO_COMMISSION_POLICY_2026_10_03.evidenceHistory,
+    { policyId: KAKAO_COMMISSION_POLICY_2026_10_03.policyId, observedAt: '2026-10-03', revision: 'fd252b2508d4ccda5ecf8de03b587c1f9910cda4' }],
+  sonokongAdditions: { 12: 100000, 24: 300000, 36: 500000, 48: 700000 },
+  rules: [...KAKAO_COMMISSION_POLICY_2026_10_03.rules,
+    { id: 'AUTOPLUS_EV_SUBSCRIPTION', sourceRows: [161], billing: 1500000, payout: 1300000 },
+    { id: 'SONOKONG_PICKUP', sourceRows: [190], billingBasisPoints: 400, payoutBasisPoints: 300 },
+    { id: 'BILLIN_SUBSCRIPTION_60', sourceRows: [162], billingBasisPoints: 225, payoutBasisPoints: 175 },
+    // 개별 합의(F04 수수료표 160·163행): 금액·대상 계약은 공개 저장소에 두지 않고 비공개 목록에서 입력(individualAgreement)으로 받는다.
+    { id: 'INDIVIDUAL_AGREEMENT', sourceRows: [160, 163], amounts: 'PRIVATE_INPUT' },
+  ],
+} as const;
+
+/**
+ * 2026-10-05 AI 상황실 결정(대표 10-05 «정산 확실하게 맞춰놔»):
+ * - 손오공 오공 구독 60개월 청구 가산 = +600,000 (F04 수수료표 14행). 지급은 다른 기간과 같이 Q12.
+ * - 원 단위: 원 미만 반올림 — calculatedCommission 의 Math.round 그대로.
+ * 근거(실제 청구 줄 대조)는 비공개 ai-ops 인수인계(정산-수수료규칙-20261005)에 둔다 — 공개 저장소에는 원장 행·개별 금액을 적지 않는다.
+ */
+export const KAKAO_COMMISSION_POLICY = {
+  ...KAKAO_COMMISSION_POLICY_2026_10_04,
+  policyId: 'sales-commission-2026-10-05',
+  decisionDate: '2026-10-05',
+  currentAuthority: 'F04 수수료표 A1:M191(2026-10-04 사본) + AI 상황실 2026-10-05 결정(손오공 60개월 +60만, 원 미만 반올림)',
+  evidenceHistory: [...KAKAO_COMMISSION_POLICY_2026_10_04.evidenceHistory,
+    { policyId: KAKAO_COMMISSION_POLICY_2026_10_04.policyId, observedAt: '2026-10-04', revision: '35de6d9fa96ad07fba2fb2d68a4cb1c9113b61a5' }],
+  sonokongAdditions: { ...KAKAO_COMMISSION_POLICY_2026_10_04.sonokongAdditions, 60: 600000 },
+  sonokong60Evidence: { sourceRows: [14], evidence: 'private:ai-ops/정산-수수료규칙-20261005', decidedBy: 'AI 상황실 2026-10-05' },
+  roundingRule: { rule: 'ROUND_HALF_UP_TO_WON', sourceRows: [171], evidence: 'private:ai-ops/정산-수수료규칙-20261005', decidedBy: 'AI 상황실 2026-10-05' },
+  /** 뮤카(RP035, 2026-10-05 발급) 구독 — freepass-admin DEC-2026-10-04-01 8번 = F04 수수료표 169·170행. 일반·픽업 공통.
+   * 청구(프리패스 몫) = 차량 기준가 × 1%(전 기간). 지급(영업 GA) = 선납/분납 × 기간 정액 + min(추가보증금 × 10%, 40만)(전 기간).
+   * 별도 지급 재원 — 청구 − 지급 마진으로 계산하지 않는다. «분납 완납 전 미지급»은 계약 단계의 지급 가능 상태로 따로 다룬다. */
+  mewcar: {
+    supplierId: 'RP035', sourceRows: [169, 170], billingBasisPoints: 100,
+    payout: { PREPAID: { 12: 1000000, 24: 1200000, 36: 1200000, 48: 1200000 }, INSTALLMENT: { 12: 800000, 24: 1000000, 36: 1000000, 48: 1000000 } },
+    extraDepositPercent: 10, extraDepositCap: 400000, separateFunding: true,
+    /** 2026-10-05 뮤카 조건 변경: 보증금 분납 폐지 + 영업 분납 정액 줄 삭제. 효력일(포함) 이후 계약일의 신규 분납 계약은 계산하지 않고 «확인 필요»로 멈춘다.
+     * 그 전 계약(계약일 < 효력일)은 위 INSTALLMENT 옛 정액으로 계산한다. 선납 정액·추가보증금 10%(40만 한도)·프리패스 1% 는 그대로. */
+    installmentAbolishedFrom: '2026-10-05',
+  },
+} as const;
+
+const f04Ref = (row: number) => `F04:수수료표!A${row}:M${row}`;
+// Supplier IDs from local supplierChannels and ERP4 origin/main partner-code/cleanup-partners.
+const supplierFirstRow: Readonly<Record<string, number>> = {
+  RP012: 3, RP013: 15, RP031: 22, RP016: 29, RP015: 36, RP019: 43,
+  RP020: 50, RP032: 57, 'PT-0023': 64, RP017: 71, RP011: 78,
+  RP021: 85, 'PT-0026': 85, RP010: 92, RP030: 99, 'PT-0012': 99,
+  RP008: 106, 'PT-0001': 113, RP007: 113, RP018: 120, RP004: 129,
+  RP006: 139, RP022: 146, RP033: 165,
+};
+
 type CommissionResolution = {
+  sourceRefs?: string[];
   state: CommissionState;
   ruleId: string | null;
   amount: number | null;
@@ -218,22 +288,16 @@ const calculatedCommission = (
   amount: number,
   vatTreatment: VatTreatment,
 ): CommissionResolution => {
-  if (!Number.isSafeInteger(amount) || amount < 0) {
-    return { state: 'UNKNOWN', ruleId, amount: null, vatTreatment, vatAmount: null, totalAmount: null, reasonCode: 'ROUNDING_RULE_UNSPECIFIED' };
-  }
-  if (vatTreatment === 'INCLUDED') {
-    return { state: 'CALCULATED', ruleId, amount, vatTreatment, vatAmount: null, totalAmount: amount, reasonCode: null };
-  }
-  const vatAmount = amount / 10;
-  if (!Number.isSafeInteger(vatAmount)) {
-    return { state: 'UNKNOWN', ruleId, amount: null, vatTreatment, vatAmount: null, totalAmount: null, reasonCode: 'VAT_ROUNDING_RULE_UNSPECIFIED' };
-  }
-  return { state: 'CALCULATED', ruleId, amount, vatTreatment, vatAmount, totalAmount: amount + vatAmount, reasonCode: null };
+  if (Number.isFinite(amount)) amount = Math.round(amount); // 원 단위 반올림(F04 접수 관행, 아래 VAT 근거와 같음)
+  if (!Number.isSafeInteger(amount) || amount < 0) return unknownCommission('COMMISSION_AMOUNT_OUT_OF_RANGE');
+  // F04 접수 관행(2026-10-04 확정): VAT 포함 금액 ÷ 1.1 → 원 단위 반올림. 근거(원장 줄)는 비공개 기록.
+  const supply = vatTreatment === 'INCLUDED' ? Math.round(amount / 1.1) : amount;
+  const vatAmount = vatTreatment === 'INCLUDED' ? amount - supply : Math.round(supply / 10);
+  const totalAmount = supply + vatAmount;
+  if (!Number.isSafeInteger(totalAmount)) return unknownCommission('COMMISSION_AMOUNT_OUT_OF_RANGE');
+  return { state: 'CALCULATED', ruleId, amount: supply, vatTreatment, vatAmount, totalAmount, reasonCode: null };
 };
 
-const coordination = (ruleId: string, vatTreatment: VatTreatment): CommissionResolution => ({
-  state: 'COORDINATION_REQUIRED', ruleId, amount: null, vatTreatment, vatAmount: null, totalAmount: null, reasonCode: 'SALES_COORDINATION_REQUIRED',
-});
 const unknownCommission = (reasonCode: string): CommissionResolution => ({
   state: 'UNKNOWN', ruleId: null, amount: null, vatTreatment: 'UNKNOWN', vatAmount: null, totalAmount: null, reasonCode,
 });
@@ -271,82 +335,203 @@ const resolveTermLadder = (
   );
 };
 
-export function resolveSalesCommission(input: {
-  supplierId: string;
-  productType: string;
-  fuel: string;
-  termMonths: number;
-  monthlyRent: number;
-}): CommissionResolution {
-  const { supplierId, productType, fuel, termMonths, monthlyRent } = input;
-  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.sonokong.includes(supplierId as 'RP012') && /구독/.test(productType)) {
-    return coordination('SONOKONG_SUBSCRIPTION_12_MONTH_RENT_100_PERCENT', 'EXCLUDED');
-  }
-  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.star.includes(supplierId as 'RP018') && /렌트/.test(productType)) {
-    return coordination('STAR_RERENT_ONE_MONTH_RENT_X_80_PERCENT', 'INCLUDED');
-  }
-  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.autoplus.includes(supplierId as 'RP023') && /구독/.test(productType)) {
-    return calculatedCommission('AUTOPLUS_SUBSCRIPTION_FIXED', 800000, 'EXCLUDED');
-  }
-  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.switchplan.includes(supplierId as 'RP014') && /구독/.test(productType)) {
-    return resolveTermLadder(termMonths, monthlyRent, 'PAYOUT', 'SWITCH_SUBSCRIPTION');
-  }
-  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.iancar.includes(supplierId as 'RP004')) {
-    if (/전기/.test(fuel)) return calculatedCommission('IANCAR_EV_FIXED', 800000, 'EXCLUDED');
-    if (/렌트/.test(productType) && termMonths === 6) return calculatedCommission('IANCAR_RERENT_6_MONTH_FIXED', 300000, 'EXCLUDED');
-    if (/렌트/.test(productType) && termMonths === 1) return coordination('IANCAR_RERENT_1_MONTH', 'EXCLUDED');
-  }
-  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.pacific.includes(supplierId as 'RP022') && /신차/.test(productType)) {
-    return coordination('PACIFIC_NEW_PREDELIVERY_DEPOSIT_TIER', 'INCLUDED');
-  }
-  if (!standardLadderSupplier(supplierId)) {
-    return unknownCommission('SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE');
-  }
-  if (/중고렌트|재렌트/.test(productType)) {
-    return resolveTermLadder(termMonths, monthlyRent, 'PAYOUT');
-  }
-  if (/신차/.test(productType)) return unknownCommission('NEW_PRODUCT_SUBTYPE_OR_VEHICLE_VALUE_NOT_RESOLVED');
-  return { state: 'NOT_APPLICABLE', ruleId: null, amount: null, vatTreatment: 'UNKNOWN', vatAmount: null, totalAmount: null, reasonCode: 'NO_MATCHING_RULE' };
-}
-
-export function resolveSupplierBillingFee(input: {
+export type CommissionInput = {
   supplierId: string;
   productType: string;
   fuel?: string;
   termMonths: number;
   monthlyRent: number;
-}): CommissionResolution {
-  const { supplierId, productType, termMonths, monthlyRent } = input;
-  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.sonokong.includes(supplierId as 'RP012') && /구독/.test(productType)) {
-    return coordination('SONOKONG_SUBSCRIPTION_BILLING_12_MONTH_RENT_PLUS_FIXED', 'EXCLUDED');
+  vehicleValue?: number;
+  newProductSubtype?: 'NEW_PREDELIVERY' | 'NEW_MATCHING';
+  /** Explicit contractual tier, never inferred from a deposit amount. */
+  depositTierPercent?: 5 | 10;
+  subscriptionForm?: 'BUYOUT' | 'RETURN';
+  q12Basis?: { amount: number; sourceRef: string };
+  /** 뮤카: 보증금 선납/분납(접수 납입 방식). 추정하지 않는다. */
+  depositPayment?: 'PREPAID' | 'INSTALLMENT';
+  /** 계약일(YYYY-MM-DD). 뮤카 분납은 계약일이 정책 효력일(2026-10-05) 전이냐 후냐로 갈린다 — 모르면 분납을 계산하지 않는다. */
+  contractDate?: string;
+  /** 뮤카: 추가보증금(원, 없으면 0 을 명시). 모르면 넣지 않는다 — 계산하지 않는다. */
+  extraDeposit?: number;
+  /** A suspected individual promotion must not silently use the general rule. */
+  individualException?: boolean;
+  /** Legacy private input name. Its shape is intentionally unsupported; callers must migrate to individualAgreement. */
+  individualExceptionEvidence?: unknown;
+  /**
+   * 개별 합의(F04 수수료표 160·163행 유형). 신뢰된 비공개 호출자가 비공개 목록(ai-ops 인수인계)의 합의를 이 계약에 묶어 넘긴다 —
+   * 금액·대상 계약은 공개 저장소에 두지 않는다. HTTP 등 신뢰할 수 없는 입력으로 받지 않는다.
+   * status: APPROVED = 청구·지급 모두 합의 금액, PAYOUT_CONFIRMED = 지급만(청구는 미확정), UNCONFIRMED = 둘 다 미확정.
+   * 금액은 공급가(VAT 별도) 원 단위 정수, 미확정이면 null.
+   */
+  individualAgreement?: {
+    agreementId: string;
+    sourceRow: 160 | 163;
+    status: 'APPROVED' | 'PAYOUT_CONFIRMED' | 'UNCONFIRMED';
+    contractRef: string;
+    matchedContractRef: string;
+    billing: number | null;
+    payout: number | null;
+  };
+};
+
+/** YYYY-MM-DD 가 «달력에 실제로 있는 날»인지(Date.parse 는 2026-02-30 을 03-02 로 보정하므로 연·월·일을 되확인한다). */
+function isCalendarDate(value: unknown): boolean {
+  const m = typeof value === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(value) : null;
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(Date.UTC(y, mo - 1, d));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d;
+}
+
+/** 뮤카 구독(RP035). 사유 코드는 모두 MEWCAR_ 로 시작한다 — 마진 계산이 이 표시로 별도 재원임을 안다. */
+function resolveMewcar(input: CommissionInput, productType: string, side: 'BILLING' | 'PAYOUT'): CommissionResolution {
+  const rule = KAKAO_COMMISSION_POLICY.mewcar;
+  if (!/구독/.test(productType)) return unknownCommission('MEWCAR_SUBSCRIPTION_ONLY');
+  const term = input.termMonths as 12 | 24 | 36 | 48;
+  if (![12, 24, 36, 48].includes(term)) return unknownCommission('MEWCAR_TERM_NOT_IN_POLICY');
+  if (side === 'BILLING') {
+    if (!Number.isSafeInteger(input.vehicleValue) || input.vehicleValue! <= 0) return unknownCommission('MEWCAR_BASE_PRICE_REQUIRED');
+    return calculatedCommission('MEWCAR_FREEPASS_SHARE_BILLING', input.vehicleValue! * rule.billingBasisPoints / 10000, 'EXCLUDED');
   }
-  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.star.includes(supplierId as 'RP018') && /렌트/.test(productType)) {
-    return coordination('STAR_RERENT_ONE_MONTH_RENT_BILLING', 'INCLUDED');
+  if (input.depositPayment !== 'PREPAID' && input.depositPayment !== 'INSTALLMENT') return unknownCommission('MEWCAR_DEPOSIT_PAYMENT_REQUIRED');
+  if (input.depositPayment === 'INSTALLMENT') {
+    // 분납은 10-05 이후 폐지 — 계약일을 모르면 어느 규칙인지 모르므로 멈추고, 효력일 이후면 «확인 필요»로 멈춘다(옛 정액을 내지 않는다).
+    if (!isCalendarDate(input.contractDate)) return unknownCommission('MEWCAR_CONTRACT_DATE_REQUIRED');
+    if (input.contractDate! >= rule.installmentAbolishedFrom) return unknownCommission('MEWCAR_INSTALLMENT_ABOLISHED_CONFIRM_REQUIRED');
   }
-  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.autoplus.includes(supplierId as 'RP023') && /구독/.test(productType)) {
-    return calculatedCommission('AUTOPLUS_SUBSCRIPTION_BILLING_FIXED', 1000000, 'EXCLUDED');
+  if (!Number.isSafeInteger(input.extraDeposit) || input.extraDeposit! < 0) return unknownCommission('MEWCAR_EXTRA_DEPOSIT_REQUIRED');
+  const addition = Math.min(Math.round(input.extraDeposit! * rule.extraDepositPercent / 100), rule.extraDepositCap);
+  return calculatedCommission(`MEWCAR_GA_${input.depositPayment}_${term}_PAYOUT`, rule.payout[input.depositPayment][term] + addition, 'EXCLUDED');
+}
+
+function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): CommissionResolution {
+  const { supplierId, termMonths, monthlyRent } = input;
+  const rawProduct = input.productType.trim();
+  const inferredSubtype = rawProduct === '견적출고' ? 'NEW_MATCHING' : rawProduct === '선출고' ? 'NEW_PREDELIVERY' : undefined;
+  if (inferredSubtype && input.newProductSubtype && inferredSubtype !== input.newProductSubtype) return unknownCommission('CONFLICTING_NEW_PRODUCT_SUBTYPE');
+  if (inferredSubtype && !input.newProductSubtype) input = { ...input, newProductSubtype: inferredSubtype };
+  const productType = inferredSubtype ? '신차렌트' : rawProduct === '장기렌트' ? '재렌트' : rawProduct;
+  const billing = side === 'BILLING';
+  const fixed = (id: string, amount: number, vat: VatTreatment = 'EXCLUDED') => calculatedCommission(id, amount, vat);
+  const agreement = input.individualAgreement;
+  const hasAgreement = agreement !== undefined;
+  if (!hasAgreement && input.individualExceptionEvidence !== undefined) {
+    return unknownCommission('LEGACY_INDIVIDUAL_EXCEPTION_INPUT');
   }
-  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.switchplan.includes(supplierId as 'RP014') && /구독/.test(productType)) {
-    return resolveTermLadder(termMonths, monthlyRent, 'BILLING', 'SWITCH_SUBSCRIPTION');
+  if (supplierId === 'RP034') return { ...unknownCommission('SUPPLIER_EXCLUDED_BY_DECISION'), state: 'NOT_APPLICABLE' };
+  if (!Number.isSafeInteger(termMonths) || termMonths < 1 || !Number.isSafeInteger(monthlyRent) || monthlyRent < 0) return unknownCommission('INVALID_PRICE_TERM_INPUT');
+  if (hasAgreement && (!agreement || typeof agreement !== 'object' || Array.isArray(agreement))) return unknownCommission('INDIVIDUAL_AGREEMENT_INVALID');
+  if (input.individualException || hasAgreement) {
+    if (!agreement || !/^opaque:[a-zA-Z0-9_-]{16,}$/.test(agreement.contractRef) || agreement.contractRef !== agreement.matchedContractRef
+      || !/^private:[a-zA-Z0-9_-]{4,}$/.test(agreement.agreementId) || ![160, 163].includes(agreement.sourceRow)) return unknownCommission('INDIVIDUAL_EXCEPTION_EVIDENCE_REQUIRED');
+    const allowed = agreement.status === 'APPROVED' || (agreement.status === 'PAYOUT_CONFIRMED' && !billing);
+    const amount = billing ? agreement.billing : agreement.payout;
+    if (!allowed || amount === null) return unknownCommission(billing ? 'INDIVIDUAL_BILLING_BASIS_UNCONFIRMED' : 'INDIVIDUAL_PAYOUT_BASIS_UNCONFIRMED');
+    if (!Number.isSafeInteger(amount) || amount < 0) return unknownCommission('INDIVIDUAL_AGREEMENT_AMOUNT_INVALID');
+    return fixed(`INDIVIDUAL_AGREEMENT_${side}`, amount);
   }
-  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.iancar.includes(supplierId as 'RP004')) {
-    if (/전기/.test(input.fuel ?? '')) return calculatedCommission('IANCAR_EV_BILLING_FIXED', 1000000, 'EXCLUDED');
-    if (/렌트/.test(productType) && termMonths === 6) return calculatedCommission('IANCAR_RERENT_6_MONTH_BILLING_FIXED', 400000, 'EXCLUDED');
-    if (/렌트/.test(productType) && termMonths === 1) return coordination('IANCAR_RERENT_1_MONTH_BILLING', 'EXCLUDED');
+  // 뮤카는 개별 예외 검사 뒤에 — 개별 표시가 있는 계약에 일반 정액을 내지 않는다.
+  if (supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId) return resolveMewcar(input, productType, side);
+  const rerent = /^(중고렌트|재렌트)$/.test(productType);
+  const subscription = /구독/.test(productType);
+  if (supplierId === 'RP013' && /발주/.test(productType)) return unknownCommission('WELRIX_ORDER_RULE_UNCONFIRMED');
+  if (supplierId === 'RP012' && /^픽업\s*구독(?:\(롯데T카\))?$/.test(productType)) {
+    if (!Number.isSafeInteger(input.vehicleValue) || input.vehicleValue! <= 0) return unknownCommission('VEHICLE_VALUE_REQUIRED');
+    return fixed(`SONOKONG_PICKUP_${side}`, input.vehicleValue! * (billing ? 400 : 300) / 10000);
   }
-  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.pacific.includes(supplierId as 'RP022') && /신차/.test(productType)) {
-    return coordination('PACIFIC_NEW_PREDELIVERY_BILLING_DEPOSIT_TIER', 'INCLUDED');
+  if (['RP021', 'PT-0026'].includes(supplierId) && subscription) {
+    // 탭 162행은 60개월만 정한다. 다른 기간 구독은 표준 재렌트로 흘리지 않고 닫는다.
+    if (termMonths !== 60) return unknownCommission('SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED');
+    return resolveTermLadder(termMonths, monthlyRent, side, 'BILLIN_SUBSCRIPTION');
+  }
+  if (supplierId === 'RP012' && subscription) {
+    const addition = KAKAO_COMMISSION_POLICY.sonokongAdditions[termMonths as 12];
+    if (addition === undefined) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
+    if (input.subscriptionForm === 'RETURN' && termMonths !== 12) return unknownCommission('RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED');
+    if (!input.q12Basis || !Number.isSafeInteger(input.q12Basis.amount) || input.q12Basis.amount <= 0 || !text(input.q12Basis.sourceRef)) return unknownCommission('Q12_BASIS_REQUIRED');
+    if (input.subscriptionForm !== 'BUYOUT' && input.subscriptionForm !== 'RETURN') return unknownCommission('SUBSCRIPTION_FORM_REQUIRED');
+    return fixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, input.q12Basis.amount + (billing ? addition : 0));
+  }
+  if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.star.includes(supplierId as 'RP018') && rerent) {
+    return fixed(billing ? 'STAR_RERENT_ONE_MONTH_RENT_BILLING' : 'STAR_RERENT_ONE_MONTH_RENT_X_80_PERCENT', monthlyRent * (billing ? 1 : 0.8), 'INCLUDED');
+  }
+  // F04 161행 계약기간 「기간 무관」(123행 일반 구독과 같음): 기간 검증 없이 정액.
+  if (supplierId === 'RP023' && subscription && /전기/.test(input.fuel ?? '')) return fixed(`AUTOPLUS_EV_SUBSCRIPTION_${side}`, billing ? 1500000 : 1300000);
+  if (supplierId === 'RP023' && subscription && !text(input.fuel)) return unknownCommission('FUEL_REQUIRED_FOR_SUPPLIER_RULE');
+  if (supplierId === 'RP023' && subscription) return fixed(billing ? 'AUTOPLUS_SUBSCRIPTION_BILLING_FIXED' : 'AUTOPLUS_SUBSCRIPTION_FIXED', billing ? 1000000 : 800000);
+  if (supplierId === 'RP014' && subscription) return resolveTermLadder(termMonths, monthlyRent, side, 'SWITCH_SUBSCRIPTION');
+  if (supplierId === 'RP004') {
+    if (!subscription && (rerent || input.newProductSubtype === 'NEW_PREDELIVERY') && !text(input.fuel)) return unknownCommission('FUEL_REQUIRED_FOR_SUPPLIER_RULE');
+    if (!subscription && (rerent || (productType === '신차렌트' && input.newProductSubtype === 'NEW_PREDELIVERY')) && /전기/.test(input.fuel ?? '')) return fixed(billing ? 'IANCAR_EV_BILLING_FIXED' : 'IANCAR_EV_FIXED', billing ? 1000000 : 800000);
+    if (rerent && termMonths === 6) return fixed(billing ? 'IANCAR_RERENT_6_MONTH_BILLING_FIXED' : 'IANCAR_RERENT_6_MONTH_FIXED', billing ? 400000 : 300000);
+    if (rerent && termMonths === 1) return unknownCommission('IANCAR_SHORT_TERM_BASIS_REQUIRED');
   }
   if (!standardLadderSupplier(supplierId)) return unknownCommission('SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE');
-  if (/중고렌트|재렌트/.test(productType)) return resolveTermLadder(termMonths, monthlyRent, 'BILLING');
-  if (/신차/.test(productType)) return unknownCommission('NEW_PRODUCT_SUBTYPE_OR_VEHICLE_VALUE_NOT_RESOLVED');
-  return { state: 'NOT_APPLICABLE', ruleId: null, amount: null, vatTreatment: 'UNKNOWN', vatAmount: null, totalAmount: null, reasonCode: 'NO_MATCHING_RULE' };
+  if (rerent) return resolveTermLadder(termMonths, monthlyRent, side);
+  if (/^신차/.test(productType) && !subscription) {
+    if (supplierId === 'RP022' && input.depositTierPercent !== 5 && input.depositTierPercent !== 10) return unknownCommission('DEPOSIT_TIER_REQUIRED');
+    const subtype = input.newProductSubtype;
+    if (subtype !== 'NEW_PREDELIVERY' && subtype !== 'NEW_MATCHING') return unknownCommission('NEW_PRODUCT_SUBTYPE_REQUIRED');
+    if (!Number.isSafeInteger(input.vehicleValue) || input.vehicleValue! <= 0) return unknownCommission('VEHICLE_VALUE_REQUIRED');
+    if (supplierId === 'RP022') {
+      const rates = KAKAO_COMMISSION_POLICY.pacificRates[subtype][input.depositTierPercent!];
+      return fixed(`PACIFIC_${subtype}_${input.depositTierPercent}_${side}`, input.vehicleValue! * rates[billing ? 0 : 1] / 10000, 'INCLUDED');
+    }
+    if (subtype === 'NEW_MATCHING') return unknownCommission('MATCHING_AGREED_RATE_REQUIRED');
+    return fixed(`${supplierId === 'RP006' ? 'IRON' : 'STANDARD'}_NEW_PREDELIVERY_${side}`, input.vehicleValue! * (billing ? supplierId === 'RP006' ? 400 : 350 : 300) / 10000);
+  }
+  return unknownCommission(subscription ? 'SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED' : 'NO_MATCHING_RULE');
+}
+
+function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): CommissionResolution {
+  const result = resolveCommissionAmount(input, side);
+  const id = result.ruleId ?? '';
+  const product = input.productType.trim();
+  const first = supplierFirstRow[input.supplierId];
+  let rows: number[] = [];
+  if (input.individualException || input.individualAgreement || input.individualExceptionEvidence !== undefined) rows = input.individualAgreement ? [input.individualAgreement.sourceRow] : [160, 163];
+  else if (input.supplierId === 'RP034') rows = [168];
+  else if (input.supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId) rows = [...KAKAO_COMMISSION_POLICY.mewcar.sourceRows];
+  else if (input.supplierId === 'RP012' && /^픽업\s*구독/.test(product)) rows = [190];
+  else if (input.supplierId === 'RP012' && /구독/.test(product)) rows = [({12:10,24:11,36:12,48:13,60:14} as Record<number, number>)[input.termMonths] ?? 183, 173, 191];
+  else if (input.supplierId === 'RP023' && /구독/.test(product)) rows = /전기/.test(input.fuel ?? '') ? [161] : [123, 161];
+  else if (['RP021', 'PT-0026'].includes(input.supplierId) && /구독/.test(product)) rows = [162];
+  else if (input.supplierId === 'RP014') rows = /구독/.test(product) ? ([12,24,36,48,60].includes(input.termMonths) ? [124 + [12,24,36,48,60].indexOf(input.termMonths)] : [183,184,185,186,187,188,189]) : [175,176];
+  else if (input.supplierId === 'RP013' && /구독|발주/.test(product)) rows = /구독/.test(product) ? [174] : [164];
+  else if (id.startsWith('IANCAR_EV')) rows = [138];
+  else if (id.startsWith('IANCAR_RERENT_6')) rows = [132];
+  else if (result.reasonCode === 'IANCAR_SHORT_TERM_BASIS_REQUIRED') rows = [131];
+  else if (first) {
+    if (/신차|선출고|견적출고/.test(product) && !/구독/.test(product)) rows = [first + (input.newProductSubtype === 'NEW_MATCHING' || product === '견적출고' ? 1 : 0)];
+    else if (['RP018','RP033'].includes(input.supplierId)) rows = [first + 2];
+    else { const offset = [12,24,36,48,60].indexOf(input.termMonths); rows = offset < 0 ? [183,184,185,186,187,188,189] : [first + (input.supplierId === 'RP004' ? 4 : 2) + offset]; }
+  } else rows = [177,178,179,180,181,182];
+  if (result.reasonCode === 'WON_ROUNDING_POLICY_UNCONFIRMED') rows.push(171);
+  if (result.reasonCode === 'DEPOSIT_TIER_REQUIRED') rows.push(172);
+  // 근거 행은 계산된 결과에만 단다. UNKNOWN·NOT_APPLICABLE·협의는 reasonCode만 — 미등록 공급사가 「근거 있는 규칙」처럼 보이지 않게.
+  if (result.state !== 'CALCULATED') return result;
+  return { ...result, sourceRefs: [...new Set(rows)].map(f04Ref) };
+}
+
+export function resolveSalesCommission(input: CommissionInput): CommissionResolution {
+  return resolveCommission(input, 'PAYOUT');
+}
+
+export function resolveSupplierBillingFee(input: CommissionInput): CommissionResolution {
+  return resolveCommission(input, 'BILLING');
 }
 
 export function resolveExpectedGrossMargin(
   supplierBillingFee: CommissionResolution,
   channelPayoutFee: CommissionResolution,
 ): MarginResolution {
+  // 뮤카: 프리패스 몫과 영업 GA 지급은 재원이 따로라 청구 − 지급 마진을 만들지 않는다(F04 169·170행).
+  if ([supplierBillingFee, channelPayoutFee].some(r => r.ruleId?.startsWith('MEWCAR_') || r.reasonCode?.startsWith('MEWCAR_'))) {
+    return {
+      state: 'NOT_APPLICABLE', amount: null, currency: 'KRW',
+      basis: 'SUPPLY_AMOUNT_EXCLUDING_VAT', reasonCode: 'SEPARATE_FUNDING_NO_MARGIN',
+    };
+  }
   if (supplierBillingFee.state === 'NOT_APPLICABLE' && channelPayoutFee.state === 'NOT_APPLICABLE') {
     return {
       state: 'NOT_APPLICABLE', amount: null, currency: 'KRW',
@@ -380,7 +565,10 @@ const assetStatus = (value: unknown) => ({
   '계약중': 'RESERVED', '점검중': 'MAINTENANCE',
 } as const)[text(value)] ?? null;
 
-export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec) {
+export type CommissionEvidenceByTerm = Readonly<Record<string, Partial<Pick<CommissionInput,
+  'vehicleValue' | 'newProductSubtype' | 'depositTierPercent' | 'subscriptionForm' | 'q12Basis' | 'individualException' | 'individualAgreement' | 'individualExceptionEvidence'>>>>;
+
+export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}) {
   if (source.listable !== true) return null;
   const supplierId = text(source.provider_company_code);
   if (!supplierId) return null;
@@ -402,6 +590,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       hasPositivePaidDeposit: hasConflictingPaidDeposit(price),
     });
     const channelPayoutFee = resolveSalesCommission({
+      ...evidenceByTerm[sourceKey],
       supplierId,
       productType: text(source.product_type),
       fuel: text(source.fuel_type),
@@ -409,6 +598,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       monthlyRent,
     });
     const supplierBillingFee = resolveSupplierBillingFee({
+      ...evidenceByTerm[sourceKey],
       supplierId,
       productType: text(source.product_type),
       fuel: text(source.fuel_type),
@@ -478,6 +668,8 @@ export function buildKakaoCatalogReference(input: {
   consumerId: string;
   products: Record<string, Rec>;
   observedAt: string;
+  /** Trusted private evidence, keyed by product ID then exact ERP price key. */
+  commissionEvidenceByProduct?: Readonly<Record<string, CommissionEvidenceByTerm>>;
 }) {
   if (input.consumerId !== 'kakao-ops') throw new Error('KAKAO_REFERENCE_CONSUMER_NOT_ALLOWED');
   return buildReferenceFacts(input);
@@ -490,9 +682,9 @@ export function buildInternalAiReference(input: KakaoCatalogReferenceSource) {
     meta: { ...result.meta, consumerId: input.consumerId, projectionId: 'internal-ai-reference' as const } };
 }
 
-function buildReferenceFacts(input: { consumerId: string; products: Record<string, Rec>; observedAt: string }) {
+function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
   const data = Object.entries(input.products)
-    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source))
+    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id]))
     .filter((row): row is NonNullable<typeof row> => row !== null)
     .sort((a, b) => a.productId.localeCompare(b.productId));
   if (!data.length) throw new Error('KAKAO_REFERENCE_EMPTY');

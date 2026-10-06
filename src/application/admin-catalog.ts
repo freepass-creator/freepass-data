@@ -1,3 +1,4 @@
+import { readStoredTermFees, summarizeEconomicsCoverage } from './resolve-offer-commercial-terms.js';
 import { randomUUID } from 'node:crypto';
 import { stableDigest, stableRecordSetDigest } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from './projection-evidence-reader.js';
@@ -131,7 +132,11 @@ function projectPolicy(
   };
 }
 
-const sortedTerms = (offer: Offer) => structuredClone(offer.priceTerms).sort((a, b) =>
+// Internal Admin grant only: counterpart-only projections must continue excluding the other fee.
+// Read Canonical economics; missing values stay UNKNOWN, never computed during projection.
+const sortedTerms = (offer: Offer) => offer.priceTerms.map(term => ({
+  ...structuredClone(term), ...readStoredTermFees(offer, term),
+})).sort((a, b) =>
   a.termMonths - b.termMonths ||
   (a.mileageLimitKmPerYear ?? -1) - (b.mileageLimitKmPerYear ?? -1) ||
   a.termKey.localeCompare(b.termKey)
@@ -295,6 +300,16 @@ export async function buildAdminCatalogProjection(
         }
       }
 
+      // Bind each stored economics row (or its explicit absence) to this offer revision.
+      for (const term of terms) for (const field of ['supplierBillingFee', 'channelPayoutFee'] as const) {
+        evidenceContext.addField({
+          entityType: 'offer', entityId: offer.id, revision: offer.revision,
+          fieldPath: 'internalEconomicsTerms', canonicalValue: offer.internalEconomicsTerms ?? null,
+          projectionFieldPath: `${offerPath}.priceTerms.${term.termKey}.${field}`,
+          projectionValue: term[field],
+        });
+      }
+
       const commercial = buildCommercialOfferView({
         product,
         vehicleModel: model,
@@ -392,6 +407,7 @@ export async function buildAdminCatalogProjection(
     manifestId,
     inputDigest,
     dataDigest,
+    economics: summarizeEconomicsCoverage(data.flatMap(product => product.offers.flatMap(offer => offer.priceTerms))),
     status: 'BUILDING',
     generatedAt: now,
     data,

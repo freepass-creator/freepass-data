@@ -40,6 +40,20 @@ export function assessDepositEvidence(input: {
   return unknown(note ? 'DEPOSIT_RULE_REQUIRES_RESOLUTION' : 'ZERO_OR_MISSING_WITHOUT_WAIVER_EVIDENCE');
 }
 
+/**
+ * Supplier note rule «월 대여료 × 약정연수 (최대 3개월)» (RP012 subscriptions: 12개월 = 1개월분, 24개월 = 2개월분, 36개월 이상 = 3개월분).
+ * The stored placeholder deposit (0) is not a waiver; the amount is derived from the supplier's own rule note at read time —
+ * nothing is written back (source stays untouched). Returns null unless the note is exactly that rule and the term is whole years.
+ */
+export function depositFromYearsRuleNote(note: unknown, termMonths: unknown, monthlyRent: unknown): { amount: number; multiplier: number } | null {
+  if (typeof note !== 'string' || !/^월 대여료 × 약정연수 \(최대 3개월\)$/.test(note.trim())) return null;
+  if (!Number.isSafeInteger(termMonths) || (termMonths as number) <= 0 || (termMonths as number) % 12 !== 0) return null;
+  if (!Number.isSafeInteger(monthlyRent) || (monthlyRent as number) <= 0) return null;
+  const multiplier = Math.min((termMonths as number) / 12, 3);
+  const amount = (monthlyRent as number) * multiplier;
+  return Number.isSafeInteger(amount) ? { amount, multiplier } : null;
+}
+
 export function hasConflictingPaidDeposit(price: unknown) {
   if (!price || typeof price !== 'object' || Array.isArray(price)) return false;
   return Object.values(price as Record<string, unknown>).some(value => {

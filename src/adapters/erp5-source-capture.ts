@@ -1,6 +1,7 @@
 import { mapErp5Product, ERP5_PRODUCT_MAPPER_VERSION, type Erp5PolicyFacts } from './erp5-product-mapping.js';
 import { orderedJsonDigest } from '../shared/stable-digest.js';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
+import { plateIdentityKey } from '../domain/vehicle-plate.js';
 
 export const ERP5_DOCUMENTS = 'projects/freepasserp5/databases/(default)/documents';
 const collections = ['products', 'policy', 'partner'] as const;
@@ -128,10 +129,14 @@ function metadataTimestamp(value: unknown): string {
     || (match[7] && (Number(match[8]) > 23 || Number(match[9]) > 59))) fail('INVALID_METADATA_TIMESTAMP');
   return text;
 }
-function decodeFields(fields: unknown, productMetadata = false): ObjectValue {
+/** Top-level Firestore timestamps observed as metadata per collection; anything else stays unsupported. */
+const PRODUCT_METADATA_TIMESTAMP_FIELDS = ['policy_reference_checked_at', 'updated_at'] as const;
+const POLICY_METADATA_TIMESTAMP_FIELDS = ['updated_at'] as const;
+
+function decodeFields(fields: unknown, metadataTimestampFields: readonly string[] = []): ObjectValue {
   if (!object(fields)) fail('INVALID_FIRESTORE_FIELDS');
   return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key,
-    productMetadata && ['policy_reference_checked_at', 'updated_at'].includes(key)
+    metadataTimestampFields.includes(key)
       && object(value) && 'timestampValue' in value ? metadataTimestamp(value) : decodeErp5Value(value)
   ]));
 }
@@ -212,12 +217,12 @@ export function inspectErp5Capture(capture: Erp5SourceCapture) {
       const plate = decodeErp5Value(object(doc.fields) ? doc.fields.car_number : undefined);
       if (typeof plate !== 'string' || !plate.trim()) throw new Error('UNKNOWN_PLATE');
       plateChecked++;
-      const identity = plate.replace(/\s+/g, '');
+      const identity = plateIdentityKey(plate);
       if (seenPlates.has(identity)) duplicatePlateCount++;
       seenPlates.add(identity);
     } catch { plateUnchecked++; }
     try {
-      const data = decodeFields(doc.fields ?? {}, true);
+      const data = decodeFields(doc.fields ?? {}, PRODUCT_METADATA_TIMESTAMP_FIELDS);
       if (object(doc.fields)) for (const key of ['policy_reference_checked_at', 'updated_at']) {
         const value = doc.fields[key];
         if (object(value) && 'timestampValue' in value) metadataTimestampFields++;
@@ -252,6 +257,27 @@ export function readErp5PolicyFacts(capture: Erp5SourceCapture): Erp5PolicyFacts
   return collectErp5PolicyFacts(capture).facts;
 }
 
+export type AnnualMileageTextResult =
+  | { km: number }
+  | { reason: 'MONTHLY_UNIT' | 'UNLIMITED' | 'RANGE_OR_MULTIPLE' | 'NON_POSITIVE' | 'UNRECOGNIZED' };
+
+/**
+ * Reads the policy `annual_mileage` text lossless-ly: `30000`, `30,000km`, `연 30,000km`, `연간 3만km`.
+ * Monthly units, unlimited, ranges/multiple values and anything else stay uninterpreted with a reason.
+ */
+export function parseAnnualMileageText(value: string): AnnualMileageTextResult {
+  const compact = value.replace(/\s+/g, '');
+  if (/월/.test(compact)) return { reason: 'MONTHLY_UNIT' };
+  if (/무제한/.test(compact)) return { reason: 'UNLIMITED' };
+  if (/\d\.\d/.test(compact)) return { reason: 'UNRECOGNIZED' };
+  if (/[~∼〜–]/.test(compact) || (compact.match(/\d+(?:,\d{3})*/g) ?? []).length > 1) return { reason: 'RANGE_OR_MULTIPLE' };
+  // A bare number is read as km; the 만 form needs an explicit km unit. No leading zeros.
+  const match = /^(?:연간?)?([1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*|0)(?:(만)(?=km|㎞|킬로|키로)|)(km|㎞|킬로(?:미터)?|키로(?:미터)?)?$/i.exec(compact);
+  if (!match) return { reason: 'UNRECOGNIZED' };
+  const km = Number(match[1]!.replaceAll(',', '')) * (match[2] ? 10000 : 1);
+  return Number.isSafeInteger(km) && km > 0 ? { km } : { reason: 'NON_POSITIVE' };
+}
+
 /** Count-only diagnostics; collecting evidence does not broaden decoding or approve policy facts. */
 function collectErp5PolicyFacts(capture: Erp5SourceCapture) {
   const facts: Erp5PolicyFacts[] = [];
@@ -266,7 +292,9 @@ function collectErp5PolicyFacts(capture: Erp5SourceCapture) {
     extraFactsWithDuplicatePolicyCode: 0,
     explicitInactiveFactsProduced: 0,
     factsWithAnnualMileage: 0,
+    factsWithAnnualMileageParsedFromText: 0,
     factsWithUninterpretedAnnualMileage: 0,
+    uninterpretedAnnualMileageReasons: {} as Record<string, number>,
     factsMissingAnnualMileage: 0,
     factsWithBasicDriverAge: 0,
     factsWithUninterpretedBasicDriverAge: 0,
@@ -278,7 +306,7 @@ function collectErp5PolicyFacts(capture: Erp5SourceCapture) {
   const codeCounts = new Map<string, number>();
   for (const doc of capture.collections.policy.documents) {
     let data: ObjectValue;
-    try { data = decodeFields(doc.fields ?? {}); } catch (error) {
+    try { data = decodeFields(doc.fields ?? {}, POLICY_METADATA_TIMESTAMP_FIELDS); } catch (error) {
       coverage.skippedDocuments++;
       const code = error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : 'UNKNOWN_DECODE_ERROR';
       coverage.decodeFailureCounts[code] = (coverage.decodeFailureCounts[code] ?? 0) + 1;
@@ -296,8 +324,15 @@ function collectErp5PolicyFacts(capture: Erp5SourceCapture) {
     const company = typeof data.companyId === 'string' && data.companyId.trim() ? data.companyId.trim()
       : typeof data.provider_company_code === 'string' && data.provider_company_code.trim() ? data.provider_company_code.trim()
       : undefined;
+    const mileageText = typeof data.annual_mileage === 'string' && data.annual_mileage.trim()
+      ? parseAnnualMileageText(data.annual_mileage) : undefined;
     const mileage = typeof data.annual_mileage === 'number' && Number.isSafeInteger(data.annual_mileage)
-      ? data.annual_mileage : undefined;
+      ? data.annual_mileage : mileageText && 'km' in mileageText ? mileageText.km : undefined;
+    if (mileageText && 'km' in mileageText) coverage.factsWithAnnualMileageParsedFromText++;
+    else if (mileageText) {
+      coverage.uninterpretedAnnualMileageReasons[mileageText.reason] =
+        (coverage.uninterpretedAnnualMileageReasons[mileageText.reason] ?? 0) + 1;
+    }
     const age = typeof data.basic_driver_age === 'number' && Number.isSafeInteger(data.basic_driver_age)
       ? data.basic_driver_age : undefined;
     // Report existing behavior, including inactive facts, without changing the mapping result.
@@ -486,7 +521,7 @@ export function summarizeErp5DecisionInputs(capture: Erp5SourceCapture) {
 
   for (const doc of capture.collections.products.documents) {
     let data: ObjectValue;
-    try { data = decodeFields(doc.fields ?? {}, true); } catch { add('undecodable', 'DECODE_FAILED'); continue; }
+    try { data = decodeFields(doc.fields ?? {}, PRODUCT_METADATA_TIMESTAMP_FIELDS); } catch { add('undecodable', 'DECODE_FAILED'); continue; }
 
     add('productType', typeof data.product_type === 'string' ? data.product_type : '(없음)');
     add('sourceBucket', typeof data.source_bucket === 'string' ? data.source_bucket : '(없음)');
@@ -523,7 +558,7 @@ export function summarizeErp5DecisionInputs(capture: Erp5SourceCapture) {
   const policyShortValues = new Map<string, Map<string, number>>();
   for (const doc of capture.collections.policy.documents) {
     let data: ObjectValue;
-    try { data = decodeFields(doc.fields ?? {}); } catch { continue; }
+    try { data = decodeFields(doc.fields ?? {}, POLICY_METADATA_TIMESTAMP_FIELDS); } catch { continue; }
     for (const [key, value] of Object.entries(data)) {
       policyFieldPaths[key] = (policyFieldPaths[key] ?? 0) + 1;
       // 숫자로 쓰는 줄 알았던 필드가 실제로 어떤 꼴인지 — 이걸 몰라서 정책 조회가 통째로 헛돌았다.
@@ -595,7 +630,7 @@ export function buildErp5CanonicalDryRun(capture: Erp5SourceCapture) {
         documentId,
         sourceRevision: `capture:${capture.digest}`,
         observedAt: new Date(capture.readTime).toISOString(),
-        data: decodeFields(doc.fields ?? {}, true)
+        data: decodeFields(doc.fields ?? {}, PRODUCT_METADATA_TIMESTAMP_FIELDS)
       }, { policies });
       const holdReasons = [...mapped.candidate.issues].sort();
       return {

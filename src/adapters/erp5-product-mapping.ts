@@ -1,9 +1,11 @@
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import { assessDepositEvidence, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositFromYearsRuleNote, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
+import { resolveErp5InventoryStatus } from '../domain/erp5-inventory-status.js';
+import { isStrictKoreanPlate } from '../domain/vehicle-plate.js';
 
-export const ERP5_PRODUCT_MAPPER_VERSION = 'erp5-product-mapping/4';
+export const ERP5_PRODUCT_MAPPER_VERSION = 'erp5-product-mapping/5';
 
 /**
  * 정책이 회사의 기본을 확정한다 — 상품에 안 적힌 값은 여기서 읽는다.
@@ -28,6 +30,25 @@ export type Erp5MileageResolution = {
   source: 'PRICE_KEY' | 'POLICY_CODE' | 'COMPANY_SOLE_POLICY' | 'DEFAULT';
 };
 
+export type Erp5PolicyLink =
+  | { kind: 'MATCH'; policy: Erp5PolicyFacts }
+  | { kind: 'NOT_FOUND' | 'COMPANY_MISMATCH' | 'AMBIGUOUS' };
+
+/**
+ * 같은 정책 코드 안에서 자기 회사 정책이 먼저다. 회사가 적히지 않은 정책은 자기 회사 정책이
+ * 하나도 없을 때만 후보가 된다. 후보가 둘 이상이면 아무것도 고르지 않는다.
+ */
+export function selectErp5Policy(
+  policies: Erp5PolicyFacts[], policyCode: string, companyId: string | undefined
+): Erp5PolicyLink {
+  const sameCode = policies.filter(p => p.policyCode === policyCode);
+  if (!sameCode.length) return { kind: 'NOT_FOUND' };
+  const exact = companyId ? sameCode.filter(p => p.companyId === companyId) : [];
+  const candidates = !companyId ? sameCode : exact.length ? exact : sameCode.filter(p => !p.companyId);
+  if (!candidates.length) return { kind: 'COMPANY_MISMATCH' };
+  return candidates.length > 1 ? { kind: 'AMBIGUOUS' } : { kind: 'MATCH', policy: candidates[0]! };
+}
+
 /**
  * 주행거리 사슬. 가격 키에 적혀 있으면 그것이 우선이고(오토플러스 방식),
  * 없으면 그 차의 정책이, 정책 코드가 없으면 회사 정책이 하나뿐일 때 그것이,
@@ -42,9 +63,10 @@ export function resolveErp5Mileage(
   if (explicitKm !== undefined) return { km: explicitKm, source: 'PRICE_KEY' };
   if (policyCode) {
     // 코드만 맞아서는 안 된다 — 그 회사의 차가 그 회사의 정책을 따라야 한다.
-    const matched = policies.find(p => p.policyCode === policyCode
-      && (!companyId || !p.companyId || p.companyId === companyId));
-    if (matched?.annualMileageKm !== undefined) return { km: matched.annualMileageKm, source: 'POLICY_CODE' };
+    const link = selectErp5Policy(policies, policyCode, companyId);
+    if (link.kind === 'MATCH' && link.policy.annualMileageKm !== undefined) {
+      return { km: link.policy.annualMileageKm, source: 'POLICY_CODE' };
+    }
   }
   if (companyId) {
     const mine = policies.filter(p => p.companyId === companyId && p.annualMileageKm !== undefined);
@@ -110,10 +132,6 @@ const types: Record<string, MappedCommercialType> = {
   '신차구독': 'NEW_SUBSCRIPTION', '중고구독': 'USED_SUBSCRIPTION', '재구독': 'USED_SUBSCRIPTION',
   '오공구독': 'OGONG_SUBSCRIPTION', '픽업구독': 'PICKUP_SUBSCRIPTION', '오플구독': 'OPLUS_SUBSCRIPTION'
 };
-const inventoryKinds: Record<string, string> = {
-  '즉시출고': '가용', '출고가능': '가용', '출고협의': '협의',
-  '상품화중': '준비', '차량검수': '준비', '계약중': '선점', '출고불가': '불가'
-};
 const has = (x: ObjectValue, k: string) => Object.hasOwn(x, k);
 const present = (x: Json | undefined) => x !== undefined && x !== null && x !== '';
 
@@ -154,7 +172,7 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
   for (const required of ['carNumber', 'maker', 'model', 'providerCompanyCode', 'vehicleStatusRaw'] as const) {
     if (!candidate[required]) issue(`MISSING_REQUIRED:${required}`);
   }
-  const validPlate = /^(?:[가-힣]{2})?\d{2,3}[가-힣]\d{4}$/.test(candidate.carNumber ?? '');
+  const validPlate = isStrictKoreanPlate(candidate.carNumber ?? '');
   if (!validPlate) issue('INVALID_PLATE');
   const supplier = candidate.providerCompanyCode;
   if (supplier && ['RP012', 'SONOGONG'].includes(supplier.toUpperCase()) && supplier !== 'RP012') {
@@ -189,11 +207,11 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     if (!validPlate || !expected) issue('SONOGONG_CLASSIFICATION_EVIDENCE_MISSING');
     else if (commercialType !== expected) issue('SONOGONG_CLASSIFICATION_CONFLICT');
   }
-  const vehicleStatus = candidate.vehicleStatusRaw;
-  if (!vehicleStatus || !Object.hasOwn(inventoryKinds, vehicleStatus)) issue('UNREVIEWED_VEHICLE_STATUS');
+  const inventory = resolveErp5InventoryStatus(candidate.vehicleStatusRaw);
+  if (!inventory.known) issue('UNREVIEWED_VEHICLE_STATUS');
   else {
-    if (d.listable !== (vehicleStatus !== '출고불가')) issue('INVENTORY_LISTABLE_CONFLICT');
-    if (d.status_kind !== inventoryKinds[vehicleStatus]) issue('INVENTORY_STATUS_KIND_CONFLICT');
+    if (d.listable !== inventory.listable) issue('INVENTORY_LISTABLE_CONFLICT');
+    if (d.status_kind !== inventory.statusKind) issue('INVENTORY_STATUS_KIND_CONFLICT');
   }
   if (typeof d.listable !== 'boolean') issue('UNKNOWN_LISTABLE');
   if (present(d._deleted) && d._deleted !== false && d._deleted !== 0) issue('DELETION_MARKER_REVIEW_REQUIRED');
@@ -212,9 +230,8 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
   const policyCode = text(d.policy_code) ? d.policy_code : undefined;
   const companyId = text(d.provider_company_code) ? d.provider_company_code : undefined;
   if (policyCode) {
-    const linked = policies.find(p => p.policyCode === policyCode);
-    if (!linked) issue('POLICY_LINK_NOT_FOUND');
-    else if (companyId && linked.companyId && linked.companyId !== companyId) issue('POLICY_LINK_COMPANY_MISMATCH');
+    const link = selectErp5Policy(policies, policyCode, companyId);
+    if (link.kind !== 'MATCH') issue(`POLICY_LINK_${link.kind}`);
   }
   if (!object(d.price) || Object.keys(d.price).length === 0) issue('MISSING_PRICE_TERMS');
   else for (const [sourceKey, terms] of Object.entries(d.price)) {
@@ -235,9 +252,15 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     const depositEvidence = assessDepositEvidence({ supplierId: d.provider_company_code, productType: d.product_type,
       note: d.deposit_note, depositFree: d.deposit_free, sourceAmount: terms.deposit,
       hasPositivePaidDeposit: hasConflictingPaidDeposit(d.price) });
-    const depositAmount = complex.length || privateTerms.length || depositEvidence.state === 'UNKNOWN'
-      ? undefined : depositEvidence.amount ?? undefined;
-    if (depositEvidence.state === 'UNKNOWN') issue(depositEvidence.reason);
+    // RP012 구독의 입력 보증금 0 은 자리표시자다 — 공급사 자기 규칙 메모(월 대여료 × 약정연수, 최대 3개월)로 읽을 때 계산한다(쓰지 않음).
+    // 원문 보증금이 «정확히 0»(숫자 0 또는 글자 '0')일 때만 — 칸 없음·null·빈 문자열·잘못된 값은 자리표시자가 아니라 누락이므로 UNKNOWN 유지.
+    const placeholderZero = terms.deposit === 0 || terms.deposit === '0';
+    const ruleDerived = placeholderZero && depositEvidence.state === 'UNKNOWN' && ['ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY', 'DEPOSIT_RULE_REQUIRES_RESOLUTION'].includes(depositEvidence.reason)
+      && String(d.provider_company_code ?? '').trim() === 'RP012' && /구독/.test(String(d.product_type ?? ''))
+      ? depositFromYearsRuleNote(d.deposit_note, months, amount) : null;
+    const depositAmount = complex.length || privateTerms.length || (depositEvidence.state === 'UNKNOWN' && !ruleDerived)
+      ? undefined : ruleDerived ? ruleDerived.amount : depositEvidence.amount ?? undefined;
+    if (depositEvidence.state === 'UNKNOWN' && !ruleDerived) issue(depositEvidence.reason);
     if (depositAmount === undefined) issue('UNKNOWN_DEPOSIT');
     // 기본값으로 떨어진 주행거리는 원천이 말한 값이 아니다. 지우지 말고 검토 표시를 남긴다.
     if (mileage.source === 'DEFAULT') issue('MILEAGE_FROM_COMPANY_DEFAULT');

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Offer, Policy } from '../src/domain/catalog.js';
-import { auditOfferEconomicsTerms, resolveOfferCommercialTerms, summarizeCommercialTerms } from '../src/application/resolve-offer-commercial-terms.js';
+import { precomputeOfferEconomics, auditOfferEconomicsTerms, resolveOfferCommercialTerms, summarizeCommercialTerms } from '../src/application/resolve-offer-commercial-terms.js';
 
 const meta = {
   schemaVersion: '1', revision: 1, validationStatus: 'VALID' as const,
@@ -72,8 +72,8 @@ describe('offer commercial terms resolution', () => {
         calculation: { kind: 'FIXED', amount: { amount: 0, currency: 'KRW' } },
         sourceRefs: ['source:product.price.36@default.deposit'],
       },
-      supplierBillingFee: { state: 'UNKNOWN', sourceRefs: ['source:fee-table:supplier:36'] },
-      channelPayoutFee: { state: 'NOT_APPLICABLE', sourceRefs: ['source:fee-table:channel:36'] },
+      supplierBillingFee: { state: 'UNKNOWN', sourceRefs: [] },
+      channelPayoutFee: { state: 'NOT_APPLICABLE', sourceRefs: [] },
     }];
     const result = auditOfferEconomicsTerms(input);
     expect(result.status).toBe('NEEDS_DECISION');
@@ -95,7 +95,7 @@ describe('offer commercial terms resolution', () => {
         calculation: { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.03 },
         sourceRefs: ['source:billing'],
       },
-      channelPayoutFee: { state: 'UNKNOWN', sourceRefs: ['source:payout'] },
+      channelPayoutFee: { state: 'UNKNOWN', sourceRefs: [] },
     }];
     const result = auditOfferEconomicsTerms(input);
     expect(result.status).toBe('INVALID');
@@ -186,5 +186,116 @@ describe('offer commercial terms resolution', () => {
     expect(summary.byStatus).toEqual({ READY: 1, NEEDS_DECISION: 1, INVALID: 0 });
     expect(summary.decisionCounts.DEFAULT_MILEAGE_REQUIRED).toBe(1);
     expect(summary.decisionCounts.MILEAGE_REQUIRED).toBe(2);
+  });
+});
+
+
+describe('canonical per-term economics precompute', () => {
+  it('uses the pinned 24 month policy, preserves prices and does not mutate inputs', () => {
+    const input = offer(); input.supplierId = 'RP013';
+    input.priceTerms[0]!.monthlyRent.amount = 500000;
+    const before = structuredClone(input);
+    const result = precomputeOfferEconomics(input, 'USED_RENT');
+    expect(result[0]).toMatchObject({ monthlyRent: { amount: 500000 },
+      supplierBillingFee: { state: 'KNOWN', amount: { amount: 570000 }, calculation: { kind: 'RATE', rate: 0.0475 }, policyId: 'sales-commission-2026-10-05' },
+      channelPayoutFee: { state: 'KNOWN', amount: { amount: 480000 }, calculation: { kind: 'RATE', rate: 0.04 } } });
+    expect(result[0]!.depositCalculation.amount).toEqual(input.priceTerms[0]!.deposit);
+    result[0]!.monthlyRent!.amount = 1;
+    result[0]!.depositCalculation.amount!.amount = 1;
+    expect(input).toEqual(before);
+  });
+  it.each(['UNREGISTERED'])('keeps unregistered supplier %s unknown', (supplierId) => {
+    const input = { ...offer(), supplierId };
+    const row = precomputeOfferEconomics(input, 'USED_RENT')[0]!;
+    for (const fee of [row.supplierBillingFee, row.channelPayoutFee]) {
+      expect(fee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE' });
+    }
+  });
+  it.each([['RP012', 'USED_SUBSCRIPTION'], ['RP022', 'NEW_RENT']] as const)(
+    'keeps missing evidence unknown for %s %s', (supplierId, kind) => {
+      const row = precomputeOfferEconomics({ ...offer(), supplierId }, kind)[0]!;
+      expect(row.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: supplierId === 'RP012' ? 'Q12_BASIS_REQUIRED' : 'DEPOSIT_TIER_REQUIRED' });
+      expect(row.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: supplierId === 'RP012' ? 'Q12_BASIS_REQUIRED' : 'DEPOSIT_TIER_REQUIRED' });
+    });
+  it('keeps zero, missing product rules and unsupported periods distinct', () => {
+    const input = offer(); input.supplierId = 'RP013'; input.priceTerms[0]!.monthlyRent.amount = 0;
+    const zeroFee = precomputeOfferEconomics(input, 'USED_RENT')[0]!.supplierBillingFee;
+    expect(zeroFee).toMatchObject({ state: 'ZERO', amount: { amount: 0 } });
+    expect(zeroFee.sourceRefs.some(ref => ref.startsWith('F04:'))).toBe(true);
+    expect(zeroFee.sourceRefs.some(ref => ref.startsWith('catalog_offers/'))).toBe(false);
+    expect(precomputeOfferEconomics(input, 'USED_SUBSCRIPTION', '가솔린')[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED' });
+    input.priceTerms[0]!.termMonths = 18;
+    expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.supplierBillingFee.reasonCode).toBe('TERM_NOT_IN_F04_COMMISSION_POLICY');
+  });
+  it('preserves fixed fees, rejects ambiguous fuel and rounds fractional won', () => {
+    const input = offer(); input.supplierId = 'RP023';
+    expect(precomputeOfferEconomics(input, 'USED_SUBSCRIPTION', '가솔린')[0]!.channelPayoutFee).toMatchObject({ amount: { amount: 800000 }, calculation: { kind: 'FIXED' } });
+    input.supplierId = 'RP004';
+    expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.channelPayoutFee.reasonCode).toBe('FUEL_REQUIRED_FOR_SUPPLIER_RULE');
+    input.supplierId = 'RP013'; input.priceTerms[0]!.monthlyRent.amount = 500001;
+    expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.channelPayoutFee.state).toBe('KNOWN');
+  });
+});
+
+
+describe('F04 explicit canonical evidence', () => {
+  it('passes pickup vehicle evidence and persists row provenance without mutating evidence', () => {
+    const offer = { id: 'synthetic', supplierId: 'RP012', priceTerms: [{ termKey: '60', termMonths: 60, monthlyRent: { amount: 200000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }] };
+    const evidence = { '60': { vehicleValue: 30000000 } };
+    const before = structuredClone({ offer, evidence });
+    const row = precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION', '가솔린', evidence)[0]!;
+    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 1200000 }, policyId: 'sales-commission-2026-10-05' });
+    expect(row.channelPayoutFee.amount?.amount).toBe(900000);
+    expect(row.supplierBillingFee.sourceRefs).toContain('F04:수수료표!A190:M190');
+    expect(precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee.reasonCode).toBe('VEHICLE_VALUE_REQUIRED');
+    expect({ offer, evidence }).toEqual(before);
+  });
+  it('preserves Billin 60-month rate calculation and F04 row rather than a made-up fixed amount', () => {
+    const offer = { id: 'synthetic', supplierId: 'RP021', priceTerms: [{ termKey: '60', termMonths: 60, monthlyRent: { amount: 200000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }] };
+    const row = precomputeOfferEconomics(offer, 'USED_SUBSCRIPTION')[0]!;
+    expect(row.supplierBillingFee).toMatchObject({ amount: { amount: 270000 }, calculation: { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.0225 } });
+    expect(row.channelPayoutFee).toMatchObject({ amount: { amount: 210000 }, calculation: { kind: 'RATE', rate: 0.0175 } });
+    expect(row.channelPayoutFee.sourceRefs).toContain('F04:수수료표!A162:M162');
+  });
+});
+
+describe('economic rule and price provenance separation', () => {
+  it.each(['UNREGISTERED', 'RP034', 'RP013'])('separates fee references for %s', (supplierId) => {
+    const input = { ...offer(), supplierId };
+    const evidence = { '24@default': { q12Basis: { amount: 800000, sourceRef: 'unused:q12' } } };
+    const before = structuredClone({ input, evidence });
+    const row = precomputeOfferEconomics(input, 'USED_RENT', undefined, evidence)[0]!;
+    const priceRef = `catalog_offers/${input.id}/priceTerms/${row.termKey}`;
+    for (const fee of [row.supplierBillingFee, row.channelPayoutFee]) {
+      expect(fee.priceSourceRefs).toEqual([priceRef]);
+      if (supplierId === 'RP013') {
+        expect(fee.state).toBe('KNOWN');
+        expect(fee.sourceRefs.some(ref => ref.startsWith('F04:'))).toBe(true);
+        expect(fee.sourceRefs.some(ref => ref.startsWith('catalog_offers/'))).toBe(false);
+        expect(fee.sourceRefs).not.toContain('unused:q12');
+      } else expect(fee.sourceRefs).toEqual([]);
+    }
+    row.supplierBillingFee.priceSourceRefs!.push('mutated');
+    expect({ input, evidence }).toEqual(before);
+  });
+  it('includes Q12 evidence only when the Q12 rule was calculated', () => {
+    const input = { ...offer(), supplierId: 'RP012' };
+    const evidence = { '24@default': { q12Basis: { amount: 800000, sourceRef: 'verified:q12' }, subscriptionForm: 'BUYOUT' as const } };
+    expect(precomputeOfferEconomics(input, 'USED_SUBSCRIPTION', undefined, evidence)[0]!.supplierBillingFee.sourceRefs).toContain('verified:q12');
+    delete (evidence['24@default'] as { subscriptionForm?: string }).subscriptionForm;
+    const fee = precomputeOfferEconomics(input, 'USED_SUBSCRIPTION', undefined, evidence)[0]!.supplierBillingFee;
+    expect(fee.state).toBe('UNKNOWN');
+    expect(fee.sourceRefs).toEqual([]);
+  });
+  it.each(['UNKNOWN', 'KNOWN', 'ZERO', 'NOT_APPLICABLE'] as const)('separates %s deposit references', state => {
+    const input = offer();
+    input.priceTerms[0]!.depositState = state;
+    input.priceTerms[0]!.deposit = state === 'KNOWN' ? { amount: 100, currency: 'KRW' } : state === 'ZERO' ? { amount: 0, currency: 'KRW' } : null;
+    const before = structuredClone(input);
+    const value = precomputeOfferEconomics(input, 'USED_RENT')[0]!.depositCalculation;
+    const priceRef = `catalog_offers/${input.id}/priceTerms/${input.priceTerms[0]!.termKey}`;
+    expect(value.sourceRefs).toEqual(state === 'KNOWN' || state === 'ZERO' ? [priceRef] : []);
+    expect(value.priceSourceRefs).toEqual([priceRef]);
+    expect(input).toEqual(before);
   });
 });

@@ -1,0 +1,226 @@
+import { sharedSheetChannels, sharedSheetCaptureDigest, buildSharedSheetBatch, sharedSheetHeaders, type SharedSheetCapture, type SheetCell,
+  type SupplierEnteredRecord, type SheetCorrection } from './shared-sheet-source.js';
+import { decodeErp5Value, inspectErp5Capture, type Erp5SourceCapture } from './erp5-source-capture.js';
+import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
+import { stableDigest } from '../shared/stable-digest.js';
+import spec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+
+export type SheetsBatchGet = { spreadsheetId?: string; valueRanges?: Array<{ range?: string; values?: unknown[][] }> };
+/** spreadsheets.get?fields=… — the tab grid sizes that prove each returned range covered the whole tab. */
+export type SheetsGridMeta = { spreadsheetId?: string; sheets?: Array<{ properties?: { title?: string; gridProperties?: { rowCount?: number } } }> };
+export const SHEETS_GRID_META_FIELDS = 'spreadsheetId,sheets.properties(title,gridProperties(rowCount))';
+const WIDTH = sharedSheetHeaders.length;
+const LAST_COLUMN = (n => { let s = ''; for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; })(WIDTH);
+export const sharedSheetTabs = (): string[] => [...new Set(sharedSheetChannels.map(x => x.tab))];
+export const sharedSheetCaptureRanges = () => sharedSheetTabs().map(t => `'${t.replace(/'/g, "''")}'!A1:${LAST_COLUMN}`);
+
+/** Date columns whose display format may hide the year (입고일자 mm-dd · 최초등록일 yy-mm-dd): the capture keeps their real
+ * value as YYYY-MM-DD so the RAW of record never loses information to a display choice. */
+const DATE_COLUMNS = Object.entries(spec.valueFormats as Record<string, { kind?: string }>).filter(([, f]) => f.kind === 'date')
+  .map(([h]) => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
+/** Serial (days since 1899-12-30, a fraction is the time of day) → YYYY-MM-DD; null when not a usable date (1900~2099). */
+export const serialToIsoDate = (v: unknown): string | null => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+  const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(v) * 86_400_000);
+  return d.getUTCFullYear() >= 1900 && d.getUTCFullYear() <= 2099 ? d.toISOString().slice(0, 10) : null;
+};
+/** |x| 를 15 유효숫자 십진 글자로(지수 없이), 소수점을 k 자리 옮겨서. 스프레드시트도 15 유효숫자로 보여 주므로 같은 규칙이고,
+ * 부동소수 찌꺼기(1.005 → 1.00499…)도 함께 지운다. */
+const decimalDigits = (x: number, shift = 0): { int: string; frac: string } => {
+  const [mantissa, e = '0'] = Math.abs(x).toPrecision(15).split('e');
+  const [i, f = ''] = mantissa!.split('.');
+  let digits = i! + f, point = i!.length + Number(e) + shift;
+  if (point <= 0) { digits = '0'.repeat(1 - point) + digits; point = 1; }
+  if (point > digits.length) digits += '0'.repeat(point - digits.length);
+  return { int: digits.slice(0, point), frac: digits.slice(point) };
+};
+/** 십진 글자를 places 자리에서 «0 에서 먼 쪽 반올림»한 정수(×10^places). */
+const roundedUnits = (d: { int: string; frac: string }, places: number): bigint => {
+  const frac = d.frac.padEnd(places + 1, '0');
+  const kept = BigInt(d.int + frac.slice(0, places));
+  return frac[places]! >= '5' ? kept + 1n : kept;
+};
+
+const ACCOUNTING_ZERO_DISPLAY = /^[\s$\u00a3\u00a5\u20a9\u20ac]*-[\s$\u00a3\u00a5\u20a9\u20ac]*$/u;
+
+/** A displayed number shows the same real value, to the precision it shows: «12,345km» · «77.4kWh» · «2021» · «15%» ·
+ * 회계식 0 «-» · 음수 «-1,000» / «(1,000)» · 지수 «1.23E+05». */
+export const displayMatchesValue = (shown: string, v: number | boolean): boolean => {
+  if (typeof v === 'boolean') return shown.trim().toUpperCase() === String(v).toUpperCase();
+  if (!Number.isFinite(v)) return false;
+  const s = shown.trim();
+  if (/^(?:[-+]?Infinity|NaN)$/i.test(s)) return false;
+  if (!/\d/.test(s)) return ACCOUNTING_ZERO_DISPLAY.test(s) && v === 0; // 회계식 0
+  // 표시 전체가 한 숫자 형식이어야 한다(일부만 숫자인 «1E3 + 2» 같은 글자는 거부):
+  //   [통화] [-] [(] [통화] 숫자[지수] [단위] [%] [)]  — 숫자는 쉼표 묶음(1,234)·소수, 지수는 E±1~3자리.
+  const m = /^\s*(?:[₩$]\s*)?(-)?\s*(\()?\s*(?:[₩$]\s*)?(-)?\s*(\d[\d,]*(?:\.\d*)?|\.\d+)(?:E([+-]?\d{1,3}))?\s*([A-Za-z가-힣]+)?\s*(%)?\s*(\))?\s*$/i.exec(s);
+  if (!m) return false;
+  const [, minusOut, open, minusIn, number, exponent, unit, pct, close] = m;
+  if (!!open !== !!close || (minusOut && minusIn) || ((minusOut || minusIn) && open)) return false;
+  const [intPart, fracPart] = number!.split('.');
+  if (intPart && intPart.includes(',') && !/^\d{1,3}(,\d{3})+$/.test(intPart)) return false;
+  if (exponent !== undefined && unit !== undefined && /^e/i.test(unit)) return false;
+  const sign = open || minusOut || minusIn ? -1 : 1;
+  const percent = pct ? 2 : 0;
+  const digits = (intPart ?? '').replace(/,/g, '') + (fracPart !== undefined ? '.' + fracPart : '');
+  // 보이는 자릿수로 시트처럼 «0 에서 먼 쪽 반올림»한 값과 정확히 같아야 한다(«1» ↔ 1.5 는 «2», «1.23E+05» ↔ 123500 은 «1.24E+05»).
+  // 계산은 15 유효숫자 십진 글자와 정수(BigInt)로 — 부동소수 경계 오류가 없다. 0 이 아니면 부호도 같아야 한다.
+  const compare = (shownDigits: string, places: number, expected: bigint) => {
+    const [si, sf = ''] = shownDigits.split('.');
+    const shownUnits = BigInt((si || '0') + sf.padEnd(places, '0'));
+    if (shownUnits !== expected) return false;
+    return shownUnits === 0n || sign === Math.sign(v);
+  };
+  const places = (fracPart ?? '').length;
+  if (exponent !== undefined) {
+    // 지수 표시: 가수는 «한 자리.소수»(0 이 아니면 1~9 로 시작), 지수 ±308 안. 가수가 0 이면 실제 값도 0 이어야 한다.
+    const e = Number(exponent);
+    if (Math.abs(e) > 308) return false;
+    if (/^0*\.?0*$/.test(digits)) return v === 0;
+    if (!/^[1-9](\.\d*)?$/.test(digits)) return false;
+    if (v === 0) return false;
+    // 실제 값의 정규 지수(15 유효숫자)와 가수 반올림 — 반올림이 10 이 되면 지수를 하나 올린다(9.995E+02 → 1.00E+03).
+    const [mant, ex] = Math.abs(v).toExponential(14).split('e');
+    let expectedExp = Number(ex) + percent;
+    let units = roundedUnits({ int: mant!.split('.')[0]!, frac: mant!.split('.')[1] ?? '' }, places);
+    if (units >= 10n ** BigInt(places + 1)) { units = roundedUnits({ int: '1', frac: '0'.repeat(places + 1) }, places); expectedExp += 1; }
+    return e === expectedExp && compare(digits, places, units);
+  }
+  // 한계: «0.###» 처럼 뒤 0 을 생략하는 형식은 보이는 자릿수가 형식의 최대 자릿수보다 적을 수 있어(77.4 ↔ 77.44 처럼)
+  // 표시만으로는 가릴 수 없다 — 두 읽기 사이 변경은 앞뒤 실제 값 동일 검사(sameReads)와 줄마다 글자 칸 대조가 막는다.
+  return compare(digits, places, roundedUnits(decimalDigits(v, percent), places));
+};
+
+const IDENTITY_COLUMNS = ['회사명', '차량번호'].map(h => sharedSheetHeaders.indexOf(h)).filter(i => i >= 0);
+/** The displayed date must not contradict the serial: whatever parts it shows (월-일 · 연-월 · 연-월-일 · 월/일/연 · 일/월/연)
+ * must fit the serial date under at least one reading. This is a second guard only — that nothing changed between the
+ * displayed read and the serial reads is proven by the two serial reads around it being identical (sameReads). */
+const displayMatchesIso = (shown: string, iso: string): boolean => {
+  const g = shown.match(/\d+/g)?.map(Number) ?? [], [y, m, d] = iso.split('-').map(Number) as [number, number, number];
+  const yr = (v: number | undefined) => v === y || v === y % 100;
+  if (g.length === 2) return (g[0] === m && g[1] === d) || (yr(g[0]) && g[1] === m);
+  if (g.length === 3) return (yr(g[0]) && g[1] === m && g[2] === d) || (yr(g[2]) && ((g[0] === m && g[1] === d) || (g[0] === d && g[1] === m)));
+  return false;
+};
+
+/** Two reads of the same ranges are identical (same ranges, same row counts, same cells — dates and numbers included).
+ * Limit: a change that is made and fully undone between the two reads is not seen, and two rows identical in every
+ * non-date cell that are swapped and swapped back in that window cannot be told apart. */
+export const sameReads = (a: SheetsBatchGet, b: SheetsBatchGet): boolean =>
+  a?.spreadsheetId === b?.spreadsheetId && JSON.stringify(a?.valueRanges ?? null) === JSON.stringify(b?.valueRanges ?? null);
+
+/** Counts the capture reports on the side (public log: numbers only). */
+export type CaptureDateStats = { datesFromSerial: number };
+
+/** One values.batchGet response → validated capture v1. Rows are padded to the 74-column contract, blank rows kept.
+ * serials (optional): the same ranges read as real values (dates as serial numbers) right BEFORE the displayed read, and
+ * serialsAfter the same read right AFTER it. Both must be identical, so nothing (row order, a date's year, a number) changed
+ * while the displayed values were read; only date cells take the serial value. */
+export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, meta: SheetsGridMeta, readTime: string,
+  serials: SheetsBatchGet, serialsAfter: SheetsBatchGet, stats?: CaptureDateStats): SharedSheetCapture {
+  const tabs = sharedSheetTabs();
+  if (raw?.spreadsheetId !== spreadsheetId || meta?.spreadsheetId !== spreadsheetId) throw new Error('SHARED_SHEET_CAPTURE_WRONG_SPREADSHEET');
+  if (!Array.isArray(raw?.valueRanges) || raw.valueRanges.length !== tabs.length) throw new Error('SHARED_SHEET_CAPTURE_INCOMPLETE');
+  // complete:true is only claimed when each returned range is exactly A1:<last column><full grid rows> of the expected tab, in order.
+  const gridRows = new Map((meta.sheets ?? []).map(x => [x.properties?.title, x.properties?.gridProperties?.rowCount]));
+  raw.valueRanges.forEach((r, i) => {
+    const m = /^(?:'((?:[^']|'')+)'|([^'!]+))!A1:([A-Z]+)(\d+)$/.exec(r?.range ?? '');
+    const title = m ? (m[1] !== undefined ? m[1].replace(/''/g, "'") : m[2]) : undefined;
+    const rows = gridRows.get(tabs[i]);
+    if (!m || title !== tabs[i] || m[3] !== LAST_COLUMN || typeof rows !== 'number' || !Number.isSafeInteger(rows) ||
+        Number(m[4]) !== rows || (r.values ?? []).length > rows) throw new Error('SHARED_SHEET_CAPTURE_RANGE_MISMATCH');
+  });
+  // 실제 값 조회는 모든 경로(온라인·파일)에서 필수 — 없으면 연도 없는 보이는 값을 «성공»으로 박제하게 되므로 멈춘다.
+  if (!serials || !serialsAfter) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_REQUIRED');
+  if (serials && (serials.spreadsheetId !== spreadsheetId || !Array.isArray(serials.valueRanges) ||
+      serials.valueRanges.length !== raw.valueRanges.length || serials.valueRanges.some((r, i) => r?.range !== raw.valueRanges![i]?.range)))
+    throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+  if (serials && (!serialsAfter || !sameReads(serials, serialsAfter))) throw new Error('SHARED_SHEET_CAPTURE_CHANGED_DURING_READ');
+  const cell = (v: unknown): SheetCell => v === null || v === undefined ? '' :
+    typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v)) ? v : (() => { throw new Error('SHARED_SHEET_CAPTURE_CELL_INVALID'); })();
+  const capture: SharedSheetCapture = { schema: 'shared-sheet-capture/v1', spreadsheetId, layoutVersion: spec.layoutVersion, readTime,
+    tabs: raw.valueRanges.map((range, i) => {
+      const real = serials?.valueRanges?.[i]?.values ?? [];
+      // 두 번 읽는 사이 줄이 지워지거나 정렬되면 다른 차의 날짜가 붙는다 — 줄 수·회사명·차량번호가 같고, 바꾸는 날짜가
+      // 보이는 값(08-12 · 20-07-03)과 맞을 때만 쓴다. 하나라도 다르면 멈춘다(fail closed).
+      if (serials && real.length !== (range.values ?? []).length) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+      // 짝은 줄 위치(같은 범위·같은 줄 번호)로 짓는다 — 앞뒤 실제 값 조회가 같다는 것이 그 사이 줄 배치가 안 바뀌었음을
+      // 보장하므로, 글자가 똑같은 줄(«미정» 둘 등)도 제 줄의 날짜를 받는다(연도를 잃지 않는다).
+      const values = (range.values ?? []).map((row, r) => {
+        if (!Array.isArray(row) || row.length > WIDTH) throw new Error('SHARED_SHEET_CAPTURE_ROW_INVALID');
+        const out = Array.from({ length: WIDTH }, (_, c) => cell(row[c]));
+        if (serials && r > 0) {
+          const twin = real[r] ?? [];
+          for (const c of IDENTITY_COLUMNS) if (String(twin[c] ?? '').trim() !== String(row[c] ?? '').trim()) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+          // 날짜 말고 모든 칸이 두 조회에서 같은 값이어야 한다 — 글자는 글자 그대로, 숫자·참거짓은 보이는 값이 같은 실제 값을
+          // 가리켜야 한다. 그래서 표시값 줄과 실제 값 줄이 같은 차의 같은 줄임을 줄마다 확인한다(되돌린 정렬도 잡는다).
+          for (let c = 0; c < WIDTH; c++) {
+            if (DATE_COLUMNS.includes(c)) continue;
+            const v = twin[c], shownCell = String(row[c] ?? '');
+            const same = typeof v === 'number' || typeof v === 'boolean' ? displayMatchesValue(shownCell, v) : String(v ?? '').trim() === shownCell.trim();
+            if (!same) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+          }
+          for (const c of DATE_COLUMNS) {
+            // 글자로 적힌 날짜(«20-07» 등)는 원문 그대로 두되, 실제 값과 보이는 값이 같은 글자여야 한다.
+            if (typeof twin[c] !== 'number') {
+              if (String(twin[c] ?? '').trim() !== String(row[c] ?? '').trim()) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+              continue;
+            }
+            const iso = serialToIsoDate(twin[c]);
+            // 숫자인데 날짜로 못 읽으면(범위 밖) 보이는 값으로 연도를 잃지 않게 멈춘다.
+            if (!iso) throw new Error('SHARED_SHEET_CAPTURE_DATE_UNREADABLE');
+            if (!displayMatchesIso(String(row[c] ?? ''), iso)) throw new Error('SHARED_SHEET_CAPTURE_SERIALS_MISMATCH');
+            out[c] = iso;
+            if (stats) stats.datesFromSerial++;
+          }
+        }
+        return out;
+      });
+      return { title: tabs[i]!, readTime, complete: true as const, rowCount: values.length, values };
+    }) };
+  capture.digest = sharedSheetCaptureDigest(capture);
+  buildSharedSheetBatch(capture); // fail closed: header, tabs, widths, identities
+  return capture;
+}
+
+/** Layer ②: products.원문 (written by the supplier-sheet collectors, never by the shared sheet) per «공급사 코드 + 차량번호»,
+ * from an existing verified ERP5 capture. Records whose products disagree on 원문 are left out rather than guessed. */
+export function supplierEnteredFromErp5(capture: Erp5SourceCapture): SupplierEnteredRecord[] {
+  inspectErp5Capture(capture);
+  const byKey = new Map<string, SupplierEnteredRecord | null>();
+  for (const doc of capture.collections.products.documents as Array<{ name?: string; fields?: Record<string, unknown> }>) {
+    let plate: unknown, text: unknown, supplier: unknown;
+    try {
+      plate = decodeErp5Value(doc.fields?.car_number ?? { nullValue: null });
+      text = decodeErp5Value(doc.fields?.['원문'] ?? { nullValue: null });
+      supplier = decodeErp5Value(doc.fields?.provider_company_code ?? { nullValue: null });
+    } catch { continue; }
+    if (!isAssignedPlate(plate) || typeof supplier !== 'string' || !supplier.trim() || !text || typeof text !== 'object' || Array.isArray(text)) continue;
+    const record: SupplierEnteredRecord = { supplierCode: supplier.trim(), plate: plateIdentityKey(plate), source: 'ERP5_PRODUCTS_SOURCE_TEXT',
+      sourceRef: String(doc.name ?? '').split('/').pop() ?? '', observedAt: capture.readTime, values: text as Record<string, unknown> };
+    const key = `${record.supplierCode}|${record.plate}`;
+    const seen = byKey.get(key);
+    byKey.set(key, seen === undefined ? record : seen && stableDigest(seen.values) === stableDigest(record.values) ? seen : null);
+  }
+  return [...byKey.values()].filter((x): x is SupplierEnteredRecord => x !== null)
+    .sort((a, b) => `${a.supplierCode}|${a.plate}`.localeCompare(`${b.supplierCode}|${b.plate}`));
+}
+/** Merge supplements into a capture and re-seal its digest. Only supplements whose «공급사 코드 + 차량번호» is a sheet row are kept. */
+export function withSupplements(capture: SharedSheetCapture, supplierEntered: SupplierEnteredRecord[], corrections: SheetCorrection[]): SharedSheetCapture {
+  const rowKeys = new Set(capture.tabs.flatMap(t => t.values.slice(1).map(r => {
+    const code = sharedSheetChannels.find(x => x.tab === t.title && x.companyName === String(r[0] ?? '').trim())?.code;
+    return code && isAssignedPlate(r[4]) ? `${code}|${plateIdentityKey(r[4])}` : '';
+  })).filter(Boolean));
+  // Validate before matching: a supplement without supplier code/plate is an error, not something to drop silently.
+  for (const x of [...supplierEntered, ...corrections])
+    if (!x || typeof x.supplierCode !== 'string' || !x.supplierCode.trim() || !isAssignedPlate(x.plate)) throw new Error('INVALID_SHARED_SHEET_SUPPLEMENT');
+  const key = (x: { supplierCode: string; plate: string }) => `${x.supplierCode}|${plateIdentityKey(x.plate)}`;
+  const keep = supplierEntered.filter(x => rowKeys.has(key(x)));
+  const fixes = corrections.filter(x => rowKeys.has(key(x)));
+  const out: SharedSheetCapture = { ...structuredClone(capture), ...(keep.length ? { supplierEntered: keep } : {}),
+    ...(fixes.length ? { corrections: fixes } : {}) };
+  delete out.digest;
+  out.digest = sharedSheetCaptureDigest(out);
+  buildSharedSheetBatch(out);
+  return out;
+}

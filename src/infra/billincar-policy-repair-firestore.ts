@@ -14,6 +14,7 @@ import {
   BILLINCAR_SOURCE_POLICY_CODES,
   BILLINCAR_SOURCE_POLICY_UID,
 } from '../domain/billincar-policy-invariant.js';
+import { assertNoCorrectorOverwrite } from '../domain/policy-correction.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 
 const sourcePolicyPatch = {
@@ -56,6 +57,7 @@ export async function applyBillincarPolicyRepair() {
     current.forEach((snapshot, index) => {
       if (!snapshot.exists || snapshot.updateTime?.toMillis() !== expected[index]!.updateTime?.toMillis()) throw new Error(`transaction precondition changed ${snapshot.ref.path}`);
     });
+    assertNoCorrectorOverwrite(policyRefs[0]!.id, current[0]?.data() ?? {}, { ...sourcePolicyPatch });
     transaction.update(policyRefs[0]!, { ...sourcePolicyPatch, updated_at: FieldValue.serverTimestamp(), policy_correction_reason: '빌린카 운영정책 pol_freepassstd 원본 정합' });
     transaction.update(policyRefs.at(-1)!, { status: 'retired', _deleted: true, superseded_by: 'POL-0035', retired_at: FieldValue.serverTimestamp(), retirement_reason: '빌린카 운영정책 원본에 없는 미사용 중복' });
     current.slice(policyRefs.length).forEach((snapshot) => {

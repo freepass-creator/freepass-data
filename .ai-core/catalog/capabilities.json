@@ -112,13 +112,13 @@
         "finance"
       ],
       "projects": [
-        "aiops"
+        "renman"
       ],
       "mode": "EXTERNAL_MUTATION",
       "priority": 100,
       "adapter": {
         "kind": "PROJECT_MODULE",
-        "entrypoint": "lib/gwataeryo-ai-core-executor.mjs",
+        "entrypoint": "penalty-engine/lib/gwataeryo-ai-core-executor.mjs",
         "export": "executeAiCorePenalty"
       },
       "inputs": [],
@@ -137,7 +137,7 @@
       "result_contract": "ai-core-work-result/v1",
       "receipt": {
         "kind": "NEW_JSON_TERMINAL_RECEIPT",
-        "directory": "tmp/과태료",
+        "directory": "penalty-engine/tmp/과태료",
         "prefix": "실행기록-",
         "suffix": ".json",
         "schema_field": "schema",
@@ -164,13 +164,13 @@
         "analysis"
       ],
       "projects": [
-        "aiops"
+        "renman"
       ],
       "mode": "READ_ONLY",
       "priority": 96,
       "adapter": {
         "kind": "PROJECT_MODULE",
-        "entrypoint": "lib/gwataeryo-ai-core-adapter.mjs",
+        "entrypoint": "penalty-engine/lib/gwataeryo-ai-core-adapter.mjs",
         "export": "buildAiCorePenaltyAuditEnvelope"
       },
       "inputs": [
@@ -579,12 +579,12 @@
     {
       "id": "finance.cash-status",
       "title": "자금 현황/자금일보",
-      "status": "ACTIVE",
+      "status": "HOLD",
       "domains": [
         "finance"
       ],
       "projects": [
-        "aiops"
+        "renman-data"
       ],
       "mode": "READ_ONLY",
       "priority": 82,
@@ -597,21 +597,17 @@
       "required_scopes": [],
       "walls": [],
       "result_contract": "ai-core-work-result/v1",
-      "adapter": {
-        "kind": "PROJECT_MODULE",
-        "entrypoint": "lib/ai-core-finance-adapters.mjs",
-        "export": "aiCoreCashStatus"
-      }
+      "hold_reason": "2026-10-03 aiops 은퇴: 옛 adapter(aiops lib/ai-core-finance-adapters.mjs → jageum/status.mjs)는 보관만(ARCHIVE_ONLY). 자금(계좌 입금) 정본 읽기는 renman-data 몫이나 읽기 정책에 입금 자료가 없고 ai-core-work-result adapter도 아직 없다."
     },
     {
       "id": "finance.receivables",
       "title": "미수/수납 대조",
-      "status": "ACTIVE",
+      "status": "HOLD",
       "domains": [
         "finance"
       ],
       "projects": [
-        "aiops"
+        "renman-data"
       ],
       "mode": "READ_ONLY",
       "priority": 82,
@@ -619,11 +615,7 @@
       "required_scopes": [],
       "walls": [],
       "result_contract": "ai-core-work-result/v1",
-      "adapter": {
-        "kind": "PROJECT_MODULE",
-        "entrypoint": "lib/ai-core-finance-adapters.mjs",
-        "export": "aiCoreReceivables"
-      }
+      "hold_reason": "2026-10-03 aiops 은퇴: 옛 adapter는 이미 없는 lib/wonja 미수 정본 JSON을 읽었다(재생성 금지). 미수 정본 읽기는 renman-data 읽기 API(view domain=arrears)로 옮길 adapter가 아직 없고, 응답은 SOURCE_OBSERVED·staffConfirmed=false 단계다."
     },
     {
       "id": "operations.insurance",
@@ -633,7 +625,7 @@
         "operations"
       ],
       "projects": [
-        "aiops"
+        "renman"
       ],
       "mode": "LOCAL_MUTATION",
       "priority": 72,
@@ -641,17 +633,17 @@
       "required_scopes": [],
       "walls": [],
       "result_contract": "ai-core-work-result/v1",
-      "hold_reason": "보험 SOP 실행 adapter와 외부/내부 변경 경계를 아직 고정하지 않았다."
+      "hold_reason": "보험 SOP 실행 adapter와 외부/내부 변경 경계를 아직 고정하지 않았다. 2026-10-03 aiops 은퇴로 렌터카 업무 처리 주인 renman 쪽에서 다시 세워야 한다."
     },
     {
       "id": "operations.insurance-status",
       "title": "보험 상태 조회",
-      "status": "ACTIVE",
+      "status": "HOLD",
       "domains": [
         "operations"
       ],
       "projects": [
-        "aiops"
+        "renman-data"
       ],
       "mode": "READ_ONLY",
       "priority": 73,
@@ -659,11 +651,7 @@
       "required_scopes": [],
       "walls": [],
       "result_contract": "ai-core-work-result/v1",
-      "adapter": {
-        "kind": "PROJECT_MODULE",
-        "entrypoint": "lib/ai-core-insurance-adapter.mjs",
-        "export": "aiCoreInsuranceStatus"
-      }
+      "hold_reason": "2026-10-03 aiops 은퇴: 옛 adapter(aiops lib/ai-core-insurance-adapter.mjs, boheom 산출물 읽기)는 보관만(ARCHIVE_ONLY). renman-data 읽기 정책에 보험 자료가 없고 adapter도 아직 없다."
     },
     {
       "id": "web.homepage",
@@ -772,6 +760,37 @@
       "walls": [],
       "result_contract": "ai-core-work-result/v1",
       "hold_reason": "Mewcar is registered as the business-content/decision SSOT, but AI Core has not yet formalized a revision-bound business-planning reader/result adapter for this project. Track and route the work; do not claim execution from document presence."
+    },
+    {
+      "id": "workspace.google-direct",
+      "title": "구글 시트·드라이브·지메일 — 세션이 gws 로 직접",
+      "status": "REFERENCE",
+      "domains": [
+        "general",
+        "operations",
+        "document",
+        "analysis"
+      ],
+      "projects": [
+        "*"
+      ],
+      "mode": "EXTERNAL_MUTATION",
+      "priority": 90,
+      "inputs": [],
+      "required_scopes": [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.compose",
+        "https://www.googleapis.com/auth/gmail.send"
+      ],
+      "walls": [
+        "메일발송",
+        "공유·권한변경",
+        "파일삭제"
+      ],
+      "result_contract": "ai-core-work-result/v1",
+      "hold_reason": "REFERENCE — Capability Engine 이 실행하지 않는다. 각 AI 세션이 이 PC 의 gws CLI 로 직접 쓴다(다른 AI·대표를 거치지 않는다). 절차는 memory/TOOL_CONNECTIONS.md «Google Workspace direct use». 시트 쓰기는 쓰기 전 같은 범위 읽기 → 쓰기 → 다시 읽어 확인. 메일 발송·공유/권한 변경·삭제는 대표 지시가 있을 때만. 2026-10-03 대표: 「왜 구글 시트를 직접 못 만지고 코덱스를 통해서 만지냐 … 세션마다 노하우를 모르고 헤맨다」. B3Q 시험: gws(pyh@teamjpk.com)로 시트 읽기 성공, 범위 drive·spreadsheets·gmail(readonly·compose·send) 확인."
     }
   ]
 }

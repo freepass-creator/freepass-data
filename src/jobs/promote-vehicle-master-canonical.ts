@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import { loadNormalizedVehicleMasterTrimRecords } from '../application/vehicle-master-normalized-loader.js';
 import { reconcileVehicleMasterTrimFacts } from '../application/vehicle-master-reconcile.js';
 import { buildVehicleMasterTrimProposalSet } from '../application/vehicle-master-canonical-builder.js';
@@ -111,9 +112,10 @@ function matchesSelector(
   return true;
 }
 
-async function assertAnchor(
+export async function assertAnchor(
   store: VehicleMasterStore,
-  request: PromotionRequest
+  request: Pick<PromotionRequest, 'anchor'>,
+  rows: readonly { maker: string; model: string; subModel?: string | null }[]
 ) {
   const expected = [
     ['makeId', request.anchor.makeId, 'MAKE'],
@@ -121,11 +123,32 @@ async function assertAnchor(
     ['generationId', request.anchor.generationId, 'GENERATION'],
     ['phaseId', request.anchor.phaseId, 'PHASE'],
   ] as const;
+  const nodes: VehicleMasterNode[] = [];
   for (const [field, id, nodeType] of expected) {
     const node = await store.getNode(id);
     if (!node) throw new Error(`VEHICLE_MASTER_PROMOTION_ANCHOR_MISSING:${field}:${id}`);
     if (node.nodeType !== nodeType) {
       throw new Error(`VEHICLE_MASTER_PROMOTION_ANCHOR_TYPE:${field}:${node.nodeType}`);
+    }
+    if (node.status !== 'ACTIVE' || (nodes.length > 0 && node.parentId !== nodes.at(-1)!.id)) {
+      throw new Error(`VEHICLE_MASTER_PROMOTION_HOLD:ANCHOR_HIERARCHY:${field}`);
+    }
+    for (const [ancestorField, ancestorId] of expected.slice(0, nodes.length)) {
+      if (node.refs[ancestorField] !== ancestorId) {
+        throw new Error(`VEHICLE_MASTER_PROMOTION_HOLD:ANCHOR_REFS:${field}:${ancestorField}`);
+      }
+    }
+    nodes.push(node);
+  }
+  for (const row of rows) {
+    for (const [field, value, node] of [
+      ['maker', row.maker, nodes[0]!],
+      ['model', row.model, nodes[1]!],
+      ['subModel', row.subModel, nodes[3]!],
+    ] as const) {
+      if (!value?.trim() || normalized(value) !== normalized(node.canonicalName)) {
+        throw new Error(`VEHICLE_MASTER_PROMOTION_HOLD:ANCHOR_SOURCE_MISMATCH:${field}`);
+      }
     }
   }
 }
@@ -175,90 +198,97 @@ async function preflightRule(
   }
 }
 
-const request = parseRequest(process.env.VEHICLE_MASTER_PROMOTION_JSON);
-if (process.env.VEHICLE_MASTER_PROMOTION_APPROVED !== 'true') {
-  throw new Error('VEHICLE_MASTER_PROMOTION_APPROVED=true is required');
-}
+async function main() {
+  const request = parseRequest(process.env.VEHICLE_MASTER_PROMOTION_JSON);
+  if (process.env.VEHICLE_MASTER_PROMOTION_APPROVED !== 'true') {
+    throw new Error('VEHICLE_MASTER_PROMOTION_APPROVED=true is required');
+  }
 
-const { store } = createVehicleMasterJobRuntime();
-await assertAnchor(store, request);
+  const { store } = createVehicleMasterJobRuntime();
 
-const normalizedRows = await loadNormalizedVehicleMasterTrimRecords(
-  store,
-  request.sourceDocumentIds
-);
-const reconciled = reconcileVehicleMasterTrimFacts(normalizedRows)
-  .filter((row) => matchesSelector(row, request.selector));
-
-if (reconciled.length !== 1) {
-  throw new Error(`VEHICLE_MASTER_PROMOTION_SELECTOR_MATCH_COUNT:${reconciled.length}`);
-}
-const selected = reconciled[0]!;
-if (selected.conflicts.length || selected.seats === null || selected.drivetrain === null) {
-  throw new Error('VEHICLE_MASTER_PROMOTION_STRUCTURAL_HOLD');
-}
-
-const observedAt = new Date().toISOString();
-const trimSet = buildVehicleMasterTrimProposalSet({
-  anchor: request.anchor,
-  reconciled: selected,
-  observedAt,
-});
-const optionSet = buildVehicleMasterOptionProposalSet({
-  reconciled: selected,
-  trimProposalSet: trimSet,
-  observedAt,
-});
-const baseItemSet = buildVehicleMasterBaseItemProposalSet({
-  reconciled: selected,
-  trimProposalSet: trimSet,
-  observedAt,
-});
-
-if (optionSet.unresolvedConditions.length) {
-  throw new Error(
-    `VEHICLE_MASTER_PROMOTION_UNRESOLVED_OPTION_RULES:${optionSet.unresolvedConditions.length}`
+  const normalizedRows = await loadNormalizedVehicleMasterTrimRecords(
+    store,
+    request.sourceDocumentIds
   );
+  await assertAnchor(store, request, normalizedRows.map((row) => row.record));
+  const hierarchyRows = reconcileVehicleMasterTrimFacts(normalizedRows);
+  const reconciled = hierarchyRows
+    .filter((row) => matchesSelector(row, request.selector));
+
+  if (reconciled.length !== 1) {
+    throw new Error(`VEHICLE_MASTER_PROMOTION_SELECTOR_MATCH_COUNT:${reconciled.length}`);
+  }
+  const selected = reconciled[0]!;
+  if (selected.conflicts.length || selected.seats === null || selected.drivetrain === null) {
+    throw new Error('VEHICLE_MASTER_PROMOTION_STRUCTURAL_HOLD');
+  }
+
+  const observedAt = new Date().toISOString();
+  const trimSet = buildVehicleMasterTrimProposalSet({
+    anchor: request.anchor,
+    reconciled: selected,
+    observedAt,
+  });
+  const optionSet = buildVehicleMasterOptionProposalSet({
+    reconciled: selected,
+    trimProposalSet: trimSet,
+    observedAt,
+  });
+  const baseItemSet = buildVehicleMasterBaseItemProposalSet({
+    reconciled: selected,
+    trimProposalSet: trimSet,
+    observedAt,
+  });
+
+  if (optionSet.unresolvedConditions.length) {
+    throw new Error(
+      `VEHICLE_MASTER_PROMOTION_UNRESOLVED_OPTION_RULES:${optionSet.unresolvedConditions.length}`
+    );
+  }
+
+  await preflightNode(store, trimSet.modelYear);
+  await preflightNode(store, trimSet.powertrain);
+  await preflightNode(store, trimSet.variant);
+  await preflightNode(store, trimSet.trim);
+  await preflightPrice(store, trimSet.basePrice);
+  for (const option of optionSet.options) {
+    await preflightNode(store, option.node);
+    if (option.price) await preflightPrice(store, option.price);
+    await preflightRule(store, option.availability);
+    for (const dependency of option.dependencies) await preflightRule(store, dependency);
+  }
+  for (const item of baseItemSet.items) {
+    await preflightNode(store, item.node);
+    await preflightRule(store, item.inclusion);
+  }
+
+  const trimResult = await promoteVehicleMasterTrimProposalSet(store, trimSet);
+  const optionResult = await promoteVehicleMasterOptionProposalSet(store, optionSet);
+  const baseItemResult = await promoteVehicleMasterBaseItemProposalSet(store, baseItemSet);
+
+  process.stdout.write(JSON.stringify({
+    status: 'PROMOTED',
+    selector: request.selector,
+    sourceDocumentIds: request.sourceDocumentIds,
+    trimId: trimSet.trim.record.id,
+    trim: {
+      modelYear: trimResult.modelYear.canonicalWrite,
+      powertrain: trimResult.powertrain.canonicalWrite,
+      variant: trimResult.variant.canonicalWrite,
+      trim: trimResult.trim.canonicalWrite,
+      basePrice: trimResult.basePrice.canonicalWrite,
+    },
+    options: {
+      count: optionResult.options.length,
+      structuralSelections: optionResult.structuralSelections,
+      unresolvedConditions: optionResult.unresolvedConditions,
+    },
+    baseItems: {
+      count: baseItemResult.items.length,
+    },
+  }, null, 2) + '\n');
 }
 
-await preflightNode(store, trimSet.modelYear);
-await preflightNode(store, trimSet.powertrain);
-await preflightNode(store, trimSet.variant);
-await preflightNode(store, trimSet.trim);
-await preflightPrice(store, trimSet.basePrice);
-for (const option of optionSet.options) {
-  await preflightNode(store, option.node);
-  if (option.price) await preflightPrice(store, option.price);
-  await preflightRule(store, option.availability);
-  for (const dependency of option.dependencies) await preflightRule(store, dependency);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
 }
-for (const item of baseItemSet.items) {
-  await preflightNode(store, item.node);
-  await preflightRule(store, item.inclusion);
-}
-
-const trimResult = await promoteVehicleMasterTrimProposalSet(store, trimSet);
-const optionResult = await promoteVehicleMasterOptionProposalSet(store, optionSet);
-const baseItemResult = await promoteVehicleMasterBaseItemProposalSet(store, baseItemSet);
-
-process.stdout.write(JSON.stringify({
-  status: 'PROMOTED',
-  selector: request.selector,
-  sourceDocumentIds: request.sourceDocumentIds,
-  trimId: trimSet.trim.record.id,
-  trim: {
-    modelYear: trimResult.modelYear.canonicalWrite,
-    powertrain: trimResult.powertrain.canonicalWrite,
-    variant: trimResult.variant.canonicalWrite,
-    trim: trimResult.trim.canonicalWrite,
-    basePrice: trimResult.basePrice.canonicalWrite,
-  },
-  options: {
-    count: optionResult.options.length,
-    structuralSelections: optionResult.structuralSelections,
-    unresolvedConditions: optionResult.unresolvedConditions,
-  },
-  baseItems: {
-    count: baseItemResult.items.length,
-  },
-}, null, 2) + '\n');

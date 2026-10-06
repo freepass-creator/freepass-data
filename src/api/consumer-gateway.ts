@@ -1,3 +1,4 @@
+import { summarizeEconomicsCoverage } from '../application/resolve-offer-commercial-terms.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import Fastify from 'fastify';
 import { Ajv2020 } from 'ajv/dist/2020.js';
@@ -368,6 +369,7 @@ export function createConsumerGateway(
             meta: {
               ...commonMeta,
               projectionId: 'admin-catalog' as const,
+              ...summarizeEconomicsCoverage(data.flatMap(product => product.offers.flatMap(offer => offer.priceTerms))),
               policyParity: missingPolicyOfferIds.length || invalidPolicyFactRefs.length
                 ? 'INCOMPLETE' as const
                 : 'COMPLETE' as const,
@@ -934,6 +936,10 @@ export function createConsumerGateway(
           : error instanceof Error ? error.message : '';
         if (code === 'ADMIN_WORKFLOW_CONFLICT' || code === 'ADMIN_WORKFLOW_IDEMPOTENCY_CONFLICT') {
           return reply.code(409).send({ code });
+        }
+        if (code === 'ADMIN_WORKFLOW_REPLACEMENT_DROPS_FIELDS') {
+          const { resource: target, droppedFields } = error as { resource?: unknown; droppedFields?: unknown };
+          return reply.code(409).send({ code, resource: target, droppedFields });
         }
         if (code.startsWith('INVALID_ADMIN_WORKFLOW_')) return reply.code(400).send({ code });
         return reply.code(503).send({ code: 'ADMIN_WORKFLOW_COMMIT_FAILED' });

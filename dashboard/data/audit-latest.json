@@ -6,7 +6,6 @@
     "publicationDecision": "HOLD",
     "publicationHoldReasons": [
       "MAPPING_HOLD_PRESENT",
-      "NO_CANDIDATES_READY_FOR_REVIEW",
       "REVIEW_APPROVALS_NOT_INCLUDED",
       "CANONICAL_RELEASE_NOT_BUILT"
     ]
@@ -14,43 +13,43 @@
   "change": {
     "counts": {
       "ADDED": 0,
-      "CHANGED": 30,
+      "CHANGED": 60,
       "MISSING_FROM_SOURCE": 0,
-      "UNCHANGED": 1713
+      "UNCHANGED": 1707
     },
     "current": {
-      "count": 1743,
-      "digest": "97f1277e4d3b4ea415c9414b7795fe3aa4f7651b06fdcbbeed5a46a9dd40cc06",
-      "readTime": "2026-10-03T02:43:53.282793Z"
+      "count": 1767,
+      "digest": "ff1f00ba960fce62f607ea32cecd4d81294c9fd0bf3449afe409445b12760a62",
+      "readTime": "2026-10-06T10:44:21.115387Z"
     },
     "destructiveActionAuthorized": false,
-    "digest": "b7e740dca044417e73d19527181c80c1b647c3d5ef3d7a72c74f4c7e44bb03fe",
-    "inventoryTransitionCount": 1,
+    "digest": "7cadddaaee4c121763deb5dbd5d1d94060fac9d9c4e7b5da31f46a1c19e0866d",
+    "inventoryTransitionCount": 0,
     "previous": {
-      "count": 1743,
-      "digest": "23586d74503c6c7ea420306aa370b8aa27da0f6899387b55d87ba09a49d426e7",
-      "readTime": "2026-10-03T02:17:12.889792Z"
+      "count": 1767,
+      "digest": "4fd86961b73651838f06730cc2e2f6b6268fb16e1c297ba00accb231a956fb49",
+      "readTime": "2026-10-06T10:05:33.995302Z"
     },
     "status": "HOLD"
   },
   "recognition": {
-    "inventoryTransitionCount": 1,
-    "mappedForReview": 0,
-    "mappingHold": 1743,
-    "productFieldPathCount": 652
+    "inventoryTransitionCount": 0,
+    "mappedForReview": 184,
+    "mappingHold": 1583,
+    "productFieldPathCount": 742
   },
-  "runId": "37090772480-1",
+  "runId": "37451690653-1",
   "source": {
     "collections": {
       "partner": 64,
       "policy": 82,
-      "products": 1743
+      "products": 1767
     },
     "coverage": "FULL_SAME_READ_ONLY_TRANSACTION",
     "databaseId": "(default)",
-    "digest": "97f1277e4d3b4ea415c9414b7795fe3aa4f7651b06fdcbbeed5a46a9dd40cc06",
+    "digest": "ff1f00ba960fce62f607ea32cecd4d81294c9fd0bf3449afe409445b12760a62",
     "projectId": "freepasserp5",
-    "readTime": "2026-10-03T02:43:53.282793Z"
+    "readTime": "2026-10-06T10:44:21.115387Z"
   },
   "version": "erp5-source-inventory/1"
 }

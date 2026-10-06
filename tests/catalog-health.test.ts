@@ -22,6 +22,8 @@ describe('Catalog Data Health v1', () => {
     );
 
     expect(report.status).toBe('HEALTHY');
+    expect(report.checks.offerEconomics.economicsCoverage).toBe('COMPLETE');
+    expect(report.checks.offerEconomics.economicsTermCounts.supplierBillingFee).toEqual({ KNOWN: 0, ZERO: 1, UNKNOWN: 0, NOT_APPLICABLE: 0 });
     expect(report.counts).toMatchObject({
       vehicleModels: 1,
       vehicleAssets: 1,
@@ -49,7 +51,7 @@ describe('Catalog Data Health v1', () => {
       status: 'PASS',
       issueCount: 0
     });
-    expect(report.checks.offerEconomics).toEqual({
+    expect(report.checks.offerEconomics).toMatchObject({
       status: 'PASS',
       missingTermCount: 0,
       unresolvedValueCount: 0,
@@ -100,7 +102,7 @@ describe('Catalog Data Health v1', () => {
     }));
   });
 
-  it('degrades when ACTIVE release changes during the health observation window', async () => {
+  it('degrades when ACTIVE release changes during the health observation window while unknown recalculated fees block overall health', async () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
     const first = await buildErpPublicProjection(
@@ -144,7 +146,9 @@ describe('Catalog Data Health v1', () => {
       '2026-09-21T10:01:00.000Z'
     );
 
-    expect(report.status).toBe('DEGRADED');
+    expect(report.status).toBe('BLOCKED');
+    expect(report.checks.offerEconomics.economicsCoverage).toBe('INCOMPLETE');
+    expect(report.issues).toContainEqual(expect.objectContaining({ code: 'OFFER_ECONOMICS_VALUE_UNRESOLVED' }));
     expect(report.observation).toMatchObject({
       startActiveReleaseId: first.releaseId,
       endActiveReleaseId: second.releaseId,
@@ -204,7 +208,7 @@ describe('Catalog Data Health v1', () => {
     }));
   });
 
-  it('degrades when ACTIVE manifest inputs lag current Canonical revisions', async () => {
+  it('degrades when ACTIVE manifest inputs lag current Canonical revisions while unknown recalculated fees block overall health', async () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
     await buildErpPublicProjection(
@@ -230,7 +234,9 @@ describe('Catalog Data Health v1', () => {
       '2026-09-21T10:01:00.000Z'
     );
 
-    expect(report.status).toBe('DEGRADED');
+    expect(report.status).toBe('BLOCKED');
+    expect(report.checks.offerEconomics.economicsCoverage).toBe('INCOMPLETE');
+    expect(report.issues).toContainEqual(expect.objectContaining({ code: 'OFFER_ECONOMICS_VALUE_UNRESOLVED' }));
     expect(report.checks.activeInputParity).toEqual({
       status: 'WARN',
       missingCount: 0,

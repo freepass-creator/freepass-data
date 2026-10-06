@@ -233,6 +233,61 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.candidate.issues).toContain('POLICY_LINK_COMPANY_MISMATCH');
   });
 
+  it('links to its own company when the same policy code exists for several companies', () => {
+    const input = fixture();
+    input.data.price = { '24': { rent: '750,000', deposit: '3,000,000' } };
+    input.data.policy_code = 'P-1';
+    input.data.provider_company_code = 'RP012';
+    const result = mapErp5Product(input, {
+      policies: [
+        { policyCode: 'P-1', companyId: 'RP023', annualMileageKm: 20000 },
+        { policyCode: 'P-1', companyId: 'RP012', annualMileageKm: 30000 },
+      ]
+    });
+    expect(result.candidate.issues).not.toContain('POLICY_LINK_COMPANY_MISMATCH');
+    expect(result.candidate.issues).not.toContain('POLICY_LINK_AMBIGUOUS');
+    expect(result.candidate.priceTerms[0]!.mileageLimitKmPerYear).toBe(30000);
+  });
+
+  it('prefers its own company over a company-less policy with the same code, whatever the order', () => {
+    const input = fixture();
+    input.data.price = { '24': { rent: '750,000', deposit: '3,000,000' } };
+    input.data.policy_code = 'P-1';
+    input.data.provider_company_code = 'RP012';
+    const result = mapErp5Product(input, {
+      policies: [
+        { policyCode: 'P-1', annualMileageKm: 20000 },
+        { policyCode: 'P-1', companyId: 'RP012', annualMileageKm: 30000 },
+      ]
+    });
+    expect(result.candidate.issues.filter(issue => issue.startsWith('POLICY_LINK_'))).toEqual([]);
+    expect(result.candidate.priceTerms[0]!.mileageLimitKmPerYear).toBe(30000);
+  });
+
+  it('uses no policy mileage when the link is ambiguous', () => {
+    const input = fixture();
+    input.data.price = { '24': { rent: '750,000', deposit: '3,000,000' } };
+    input.data.policy_code = 'P-1';
+    input.data.provider_company_code = 'RP012';
+    const result = mapErp5Product(input, {
+      policies: [{ policyCode: 'P-1', annualMileageKm: 20000 }, { policyCode: 'P-1', annualMileageKm: 25000 }]
+    });
+    expect(result.candidate.issues).toContain('POLICY_LINK_AMBIGUOUS');
+    expect(result.candidate.issues).toContain('MILEAGE_FROM_COMPANY_DEFAULT');
+    expect([20000, 25000]).not.toContain(result.candidate.priceTerms[0]!.mileageLimitKmPerYear);
+  });
+
+  it('flags two policies with the same code for the same company as ambiguous', () => {
+    const input = fixture();
+    input.data.policy_code = 'P-1';
+    input.data.provider_company_code = 'RP012';
+    const result = mapErp5Product(input, {
+      policies: [{ policyCode: 'P-1', companyId: 'RP012' }, { policyCode: 'P-1', companyId: 'RP012' }]
+    });
+    expect(result.candidate.issues).toContain('POLICY_LINK_AMBIGUOUS');
+    expect(result.candidate.issues).not.toContain('POLICY_LINK_COMPANY_MISMATCH');
+  });
+
   it('flags a policy code that resolves to nothing at all', () => {
     const input = fixture();
     input.data.policy_code = 'P-없음';
@@ -362,5 +417,33 @@ describe('가격 키 읽기', () => {
     for (const bad of ['', '0', '월정액', '36_', '_2만', '36_2', 'abc', '36_0만']) {
       expect(parseErp5PriceKey(bad)).toBeUndefined();
     }
+  });
+
+  it('derives RP012 subscription deposits from the supplier rule note when the stored deposit is the 0 placeholder (read-time only)', () => {
+    const input = fixture();
+    Object.assign(input.data, {
+      provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '월 대여료 × 약정연수 (최대 3개월)',
+      price: { '12': { rent: 1262000, deposit: 0 }, '24': { rent: 994000, deposit: 0 }, '48': { rent: 809000, deposit: 0 } },
+    });
+    const result = mapErp5Product(input);
+    const byKey = Object.fromEntries(result.candidate.priceTerms.map(t => [t.termMonths, t]));
+    expect(byKey[12]).toMatchObject({ deposit: { amount: 1262000 }, depositState: 'KNOWN' });
+    expect(byKey[24]).toMatchObject({ deposit: { amount: 1988000 }, depositState: 'KNOWN' });
+    expect(byKey[48]).toMatchObject({ deposit: { amount: 2427000 }, depositState: 'KNOWN' });
+    expect(result.candidate.issues).not.toContain('UNKNOWN_DEPOSIT');
+    // 원문 보증금이 «정확히 0» 이 아니면(칸 없음·null·빈 문자열) 계산하지 않는다 — 누락은 UNKNOWN 유지
+    for (const deposit of [undefined, null, '', ' ', 'x']) {
+      const missing = fixture();
+      Object.assign(missing.data, { provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '월 대여료 × 약정연수 (최대 3개월)',
+        price: { '24': deposit === undefined ? { rent: 1000000 } : { rent: 1000000, deposit } } });
+      expect(mapErp5Product(missing).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
+    }
+    // 글자 '0' 도 자리표시자 0 으로 본다
+    const stringZero = fixture();
+    Object.assign(stringZero.data, { provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '월 대여료 × 약정연수 (최대 3개월)', price: { '24': { rent: 1000000, deposit: '0' } } });
+    expect(mapErp5Product(stringZero).candidate.priceTerms[0]).toMatchObject({ deposit: { amount: 2000000 }, depositState: 'KNOWN' });
+    // without the rule note the placeholder stays unresolved
+    delete (input.data as Record<string, unknown>).deposit_note;
+    expect(mapErp5Product(input).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
   });
 });

@@ -1,4 +1,5 @@
 import type { CommercialOfferView } from './commercial-product-view.js';
+import type { SourceVehicleFacts } from './source-vehicle-facts.js';
 export type ValidationStatus = 'VALID' | 'WARNING' | 'INVALID';
 export type ActorRef = { id: string; kind: 'USER' | 'SERVICE'; organizationId?: string | null };
 export type Money = { amount: number; currency: 'KRW' };
@@ -16,6 +17,11 @@ export type VehicleAssetStatus =
   | 'AVAILABLE' | 'RESERVED' | 'IN_USE' | 'RETURNED'
   | 'MAINTENANCE' | 'ACCIDENT' | 'SOLD' | 'RETIRED';
 export type VehicleAsset = EntityMeta & {
+  /** Internal evidence, excluded from consumer projections. */
+  sourceVehicleFacts?: SourceVehicleFacts;
+  sourceFirstObservedAt?: string;
+  /** First source run of this asset (its RAW is the first supplier text, never overwritten). */
+  sourceFirstRunId?: string;
   id: string; vehicleModelId: string; status: VehicleAssetStatus;
   plateNumber?: string | null; vin?: string | null; odometerKm?: number | null;
 };
@@ -38,13 +44,23 @@ export type TermAmountCalculation =
   | { kind: 'MULTIPLY'; base: 'MONTHLY_RENT'; multiplier: number }
   | { kind: 'RATE'; base: 'MONTHLY_RENT_X_TERM' | 'VEHICLE_PRICE'; rate: number };
 export type TermEconomicAmount = {
+  vatTreatment?: 'EXCLUDED' | 'INCLUDED' | 'UNKNOWN';
+  vatAmount?: number | null;
+  totalAmount?: number | null;
   state: TermAmountState;
   amount?: Money | null;
   calculation?: TermAmountCalculation | null;
+  /** Rules and evidence actually used; empty for unresolved amounts. */
   sourceRefs: string[];
+  priceSourceRefs?: string[];
+  ruleId?: string | null;
+  policyId?: string;
+  reasonCode?: string | null;
 };
 export type OfferTermEconomics = {
   termKey: string;
+  termMonths?: number;
+  monthlyRent?: Money;
   depositCalculation: TermEconomicAmount;
   supplierBillingFee: TermEconomicAmount;
   channelPayoutFee: TermEconomicAmount;
@@ -148,6 +164,17 @@ export type AdminPolicyValue =
   | { policyId: string; type: 'MULTI_SELECT'; value: string[] };
 
 export type AdminPolicyState = 'COMPLETE' | 'MISSING' | 'INVALID';
+export type AdminPriceTerm = PriceTerm & {
+  supplierBillingFee: TermEconomicAmount;
+  channelPayoutFee: TermEconomicAmount;
+};
+export type EconomicsCoverage = {
+  economicsCoverage: 'COMPLETE' | 'INCOMPLETE';
+  economicsTermCounts: {
+    supplierBillingFee: Record<TermAmountState, number>;
+    channelPayoutFee: Record<TermAmountState, number>;
+  };
+};
 
 export type AdminCatalogProduct = {
   productId: string;
@@ -181,7 +208,7 @@ export type AdminCatalogProduct = {
     policyState: AdminPolicyState;
     policyValues: AdminPolicyValue[];
     invalidPolicyFactRefs: string[];
-    priceTerms: PriceTerm[];
+    priceTerms: AdminPriceTerm[];
     commercial?: CommercialOfferView;
   }>;
 };
@@ -193,4 +220,6 @@ export type ProjectionRelease<T> = {
   manifestId: string; inputDigest: string; dataDigest: string;
   status: 'BUILDING' | 'VALIDATING' | 'READY' | 'ACTIVE' | 'FAILED';
   generatedAt: string; activatedAt?: string | null; data: T[];
+  /** Internal Admin release only; gateway recomputes from digest-verified data. */
+  economics?: EconomicsCoverage;
 };

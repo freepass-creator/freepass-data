@@ -100,6 +100,9 @@ async function seed(store: MemoryVehicleMasterStore) {
 
 function reconciled(): VehicleMasterReconciledTrim {
   return {
+    maker: '기아',
+    model: '쏘렌토',
+    subModel: '더 뉴 쏘렌토',
     modelYear: 2027,
     powertrainName: '2.5 가솔린 터보',
     seats: 5,
