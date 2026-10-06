@@ -3,6 +3,7 @@ import { buildSheetBlankFillInput, type SheetBlankFillRawInput } from '../src/ap
 import { planSheetBlankFill } from '../src/application/sheet-blank-fill.js';
 import { exportSheetBlankFillInput } from '../src/jobs/export-sheet-blank-fill-input.js';
 import spec from '../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+import { sharedSheetChannels } from '../src/adapters/shared-sheet-source.js';
 
 const headers = spec.inputHeaders as string[];
 const tab = '가상공급사';
@@ -127,7 +128,7 @@ describe('sheet blank fill input adapter', () => {
 });
 
 describe('sheet blank fill input export job', () => {
-  const allTabs = [...new Set(spec.supplierChannels.sharedInputSheet.map((channel) => channel.tab as string))];
+  const allTabs = [...new Set(sharedSheetChannels.map((channel) => channel.tab as string))];
   const jobTab = allTabs[0]!;
   const titles = [...allTabs, '정책확인'];
   const batch = (byTitle: Record<string, unknown[][]>, omitLast = false) => ({

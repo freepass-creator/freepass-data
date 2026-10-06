@@ -3596,7 +3596,7 @@
   },
   "changeControl": {
     "status": "LOCKED_BY_USER",
-    "baselineVersion": "supplier-input-presentation/2026-10-06.1",
+    "baselineVersion": "supplier-input-presentation/2026-10-06.2",
     "authority": "대표 최신 명시 지시 > 이 파일의 현행 설정 > 과거 이력. 현행 설정 변경은 대표 지시에 따른다.",
     "decision": "2026-10-06 대표: 규격으로 딱 정한다. 절대 흔들리지 않고 휘발되지 않으며 지금부터 수정은 영구 기록한다.",
     "currentPresentation": "dropdownPolicy.lightweight + inputHeaders + valueFormats + columnWidths + retroLook.valueTextColors",
@@ -3631,6 +3631,13 @@
     "legacyPolicy": "과거 정책은 이력만 보존하며 자동 재적용 금지",
     "noSilentRepair": "다른 세션의 변경·설정 차이는 drift로 보고한다. 데이터·차종·가격을 과거 상태로 자동 되돌리지 않는다.",
     "automationState": "MANUAL_VERIFIED_NOT_CONTINUOUSLY_ENFORCED",
-    "latestDecisionRecord": "2026-10-06 사용자 규격 고정"
+    "latestDecisionRecord": "2026-10-06 사용자 규격 고정 및 공통시트→FreePass Data→ERP 연동",
+    "dataCapturePolicy": {
+      "decision": "대표 2026-10-06 공통시트 데이터를 FreePass Data에서 연동해 ERP 구성",
+      "tabAuthority": "changeControl.activeSupplierTabs",
+      "coverage": "현재 입력 범위는 COMPLETE, 전체 공급사 등록 대비 PARTIAL",
+      "absentSuppliers": "등록·기존 Canonical 재고 보존, 탭 부재로 삭제/판매완료 금지",
+      "consumer": "기존 인증 Data consumer API; ERP.com을 기본 대상으로 점검, 운영전환 별도 검증"
+    }
   }
 }

@@ -32,7 +32,15 @@ function supplementByPlate<T extends { plate: string; supplierCode: string }>(it
 }
 export const SHARED_SHEET_SPEC_DIGEST = stableDigest(spec);
 export const sharedSheetHeaders: readonly string[] = spec.inputHeaders;
-export const sharedSheetChannels = spec.supplierChannels.sharedInputSheet;
+/** Registration is retained even when an input tab is absent. Absence is never a sold-out signal. */
+export const sharedSheetRegisteredChannels = spec.supplierChannels.sharedInputSheet;
+const registeredTabs = [...new Set(sharedSheetRegisteredChannels.map(x => x.tab))].sort();
+const configuredTabs = [...spec.changeControl.activeSupplierTabs, ...spec.changeControl.absentRegisteredTabs].sort();
+if (stableDigest(registeredTabs) !== stableDigest(configuredTabs)) throw new Error('SHARED_SHEET_SCOPE_CONTRACT_INVALID');
+export const sharedSheetChannels = sharedSheetRegisteredChannels.filter(channel =>
+  (spec.changeControl.activeSupplierTabs as readonly string[]).includes(channel.tab));
+export const sharedSheetUnavailableChannels = sharedSheetRegisteredChannels.filter(channel =>
+  !(spec.changeControl.activeSupplierTabs as readonly string[]).includes(channel.tab));
 const timestamp = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d\d-\d\dT.*Z$/.test(v) && Number.isFinite(Date.parse(v));
 export function sharedSheetCaptureDigest(capture: SharedSheetCapture) {
   const { digest: _, ...body } = capture;
@@ -105,5 +113,9 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
   if (Math.min(...c.tabs.map(t => Date.parse(t.readTime))) !== Date.parse(c.readTime)) fail();
   return { laneId: 'PRODUCT_VEHICLE', source: { sourceId, kind: 'GOOGLE_SHEET', displayName: 'Shared supplier input',
       expectedFreshnessSeconds: 1800 }, observedAt: c.readTime, sourceRevision: c.revision ?? digest, checksum: digest,
-    coverage: { mode: 'FULL', completeness: 'COMPLETE', scope: 'shared-input:15-tabs:18-codes' }, records };
+    // Complete within the explicitly configured input scope, partial against supplier registration.
+    // PARTIAL prevents canAssertSourceAbsence from authorizing retirement of absent suppliers' stock.
+    coverage: { mode: sharedSheetUnavailableChannels.length ? 'PARTIAL' : 'FULL', completeness: 'COMPLETE',
+      scope: `shared-input:${titles.length}-tabs:${sharedSheetChannels.length}-codes`,
+      note: `Registered tabs outside capture scope: ${[...new Set(sharedSheetUnavailableChannels.map(x => x.tab))].join(',')}; absence/retirement not authorized.` }, records };
 }
