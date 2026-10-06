@@ -371,7 +371,10 @@
       "상품화중",
       "출고협의",
       "계약중",
-      "출고불가"
+      "출고불가",
+      "인도완료",
+      "취소",
+      "진행중"
     ],
     "상품구분": [
       "신차렌트",
@@ -2387,7 +2390,8 @@
         "source": "Published 차종목록 and exact existing workbook values; input UI only, not canonical facts",
         "decision": "2026-10-06 대표: 잘못됨 경고 개선. 기존값을 선택 목록에 포함, 원래 값·차종 정본은 바꾸지 않음. 향후 완전히 새 자유 입력값은 다시 목록 갱신 필요."
       },
-      "yellowBackground": false
+      "yellowBackground": false,
+      "statusChoiceSource": "ONE_OF_LIST fixed 9 exact labels; other 6 columns remain bounded published helper lists"
     }
   },
   "policySplit": {
@@ -2596,7 +2600,10 @@
         "상품화중",
         "출고협의",
         "계약중",
-        "출고불가"
+        "출고불가",
+        "인도완료",
+        "취소",
+        "진행중"
       ],
       "normalize": "explicit-alias-only"
     },
@@ -3521,7 +3528,10 @@
         "상품화중": "#FF9900",
         "출고협의": "#FF9900",
         "계약중": "#999999",
-        "출고불가": "#999999"
+        "출고불가": "#999999",
+        "인도완료": "#008000",
+        "취소": "#CC0000",
+        "진행중": "#FF9900"
       },
       "상품구분": {
         "신차렌트": "#FF00FF",
@@ -3608,7 +3618,7 @@
   },
   "changeControl": {
     "status": "LOCKED_BY_USER",
-    "baselineVersion": "supplier-input-presentation/2026-10-06.3",
+    "baselineVersion": "supplier-input-presentation/2026-10-06.4",
     "authority": "대표 최신 명시 지시 > 이 파일의 현행 설정 > 과거 이력. 현행 설정 변경은 대표 지시에 따른다.",
     "decision": "2026-10-06 대표: 규격으로 딱 정한다. 절대 흔들리지 않고 휘발되지 않으며 지금부터 수정은 영구 기록한다.",
     "currentPresentation": "dropdownPolicy.lightweight + inputHeaders + valueFormats + columnWidths + retroLook.valueTextColors",
@@ -3643,13 +3653,40 @@
     "legacyPolicy": "과거 정책은 이력만 보존하며 자동 재적용 금지",
     "noSilentRepair": "다른 세션의 변경·설정 차이는 drift로 보고한다. 데이터·차종·가격을 과거 상태로 자동 되돌리지 않는다.",
     "automationState": "MANUAL_VERIFIED_NOT_CONTINUOUSLY_ENFORCED",
-    "latestDecisionRecord": "2026-10-06 사용자 규격 고정 및 공통시트→FreePass Data→ERP 연동",
+    "latestDecisionRecord": "대표 2026-10-06 UI/UX·수정 주체 고정, yy-mm-dd, 작은 글씨, 인도완료·취소·진행중 표시",
     "dataCapturePolicy": {
       "decision": "대표 2026-10-06 공통시트 데이터를 FreePass Data에서 연동해 ERP 구성",
       "tabAuthority": "changeControl.activeSupplierTabs",
       "coverage": "현재 입력 범위는 COMPLETE, 전체 공급사 등록 대비 PARTIAL",
       "absentSuppliers": "등록·기존 Canonical 재고 보존, 탭 부재로 삭제/판매완료 금지",
       "consumer": "기존 인증 Data consumer API; ERP.com을 기본 대상으로 점검, 운영전환 별도 검증"
+    }
+  },
+  "uiOwnership": {
+    "headerOwner": "대표 승인 규격 / Data 시트 관리 실행기",
+    "inputOwner": "공급사 담당자: 자기 입력 탭 2~100행 본문",
+    "summaryOwner": "기존 종합 생성 경로; 직접 입력 금지",
+    "helperOwner": "Data 시트 관리 실행기; 차종 정본으로 승격 금지",
+    "aiPolicy": "대표 명시 지시 없이 본문 값·수식·열 순서·탭·드롭다운 범위 수정 금지. UI 실행기는 값 쓰기 차단.",
+    "headerNote": "본문은 공급사 담당자 입력. 머리글·열 순서·서식은 대표 승인 정본만 변경. AI 본문 추정 수정 금지. 규격 supplier-input-presentation/2026-10-06.4",
+    "statusNote": "인도완료=인도 확인 완료, 취소=취소 확인, 진행중=진행 사실 확인. 출고불가·계약중을 자동 변환하지 않는다.",
+    "statusDisplay": {
+      "인도완료": "#008000",
+      "취소": "#CC0000",
+      "진행중": "#FF9900"
+    },
+    "dateDisplay": "yy-mm-dd; 일 미확정 연월 원문 유지",
+    "fontSize": 9,
+    "enforcement": "UI writer field allowlist; owner/authorized API can bypass; continuous monitoring not configured",
+    "headerProtection": {
+      "range": "각 visible 탭 A1:BV1",
+      "warningOnly": false,
+      "editors": [
+        "pyh@teamjpk.com"
+      ],
+      "ownerBypass": true,
+      "body": "보호하지 않음; 공급사 입력 유지",
+      "summaryBody": "기존 생성 경로 소유권만 선언; 계정 미확인으로 전체 보호 미적용"
     }
   }
 }

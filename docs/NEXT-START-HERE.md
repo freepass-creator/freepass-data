@@ -355,6 +355,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 | 접수·계약·인도·수수료 정산은 어떻게 연결되는가? | [업무 데이터 연결 지도](BUSINESS-DATA-CONNECTION-MAP.md) | ID/버전/스냅샷 관계와 업무 소유권. 실제 계약 확정·수금·지급을 별도로 확인 |
 | 어떤 데이터가 있고 어떤 경로로 접근하는가? | [데이터 도메인 카탈로그](DATA-DOMAIN-CATALOG.md), [접근 Gateway](DATA-ACCESS-GATEWAY.md) | 제공 상태·권한·계약과 조회 영수증. 내부 collection 경로를 공개 계약으로 사용하지 않음 |
 | F01/F86·ERP·화이트라벨·Admin에 잘 전달되는가? | [소비처별 사용 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md), [소비처 런타임](ERP5-CONSUMER-RUNTIME.md) | 소비처별 release/snapshot·필드·실제 readback. 한 곳 성공을 전체 성공으로 확대하지 않음 |
+| 공통 입력 UI와 수정 소유권은 어디에 고정됐는가? | [공급사 RUNBOOK](SUPPLIER-INPUT-SHEET-RUNBOOK.md) | supplier-input-sheet-spec.v1.json uiOwnership; 입력·머리글·종합·helper 소유권, 관리자 우회/자동 감시 HOLD |
 | 시트 모양·열·숨김 규칙은 무엇인가? | [시트 규격](F01-F86-SHEET-SPEC.md), [실행 runbook](F01-F86-SHEET-RUNBOOK.md) | 기계 정본 `contracts/f01-f86-sheet-spec.v1.json`. 표시 검사는 원천 최신화 검사가 아님 |
 | 공급사 수집 공통 규격과 공급사별 차이는 어디서 보는가? | [FreePass Data 원본 직접 수집기](NATIVE-SOURCE-COLLECTOR.md#common-supplier-adapter-contract--2026-10-02), [직접 연동 5곳 점검](NATIVE-SOURCE-COLLECTOR.md#supplier-direct-status) | 공통 RAW 계약과 공급사별 요금/사진/계산 입력·Scheduler 설계. 10-03 관측은 당시 증거이며 native transport·운영 전환 완료가 아님 |
 | 원본을 어떻게 읽고 오류·갱신을 확인하는가? | [ERP5 캡처](ERP5-SOURCE-CAPTURE.md), [Source run 안전 규칙](SOURCE-RUN-SAFETY.md) | readTime·digest·전체 범위·갱신 run·accepted head. schedule/종료 성공만으로 최신성 판정 금지 |
@@ -396,6 +397,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+### 2026-10-06 공통시트 UI·수정 소유권 고정 — PERSISTENCE VERIFIED
+
+- 대표 최신 지시: UI/UX와 수정 주체 고정, 날짜 yy-mm-dd, 작은 글씨, 인도완료·취소·진행중 표시. 정본 baseline supplier-input-presentation/2026-10-06.4 / uiOwnership.
+- main 6df910c 확인, 겹침은 dashboard 감사 산출물만; PR397 기존 공급사 시트 작업 이어감. 입력은 공급사 담당자, 표시 규격은 대표 승인 Data 관리 경로, 종합은 기존 생성 경로, helper는 Data 관리.
+- 실제: 13탭 9pt / 날짜 두 열 yy-mm-dd / 머리글 소유권 메모 962칸 / 상태 9개 고정 목록(공급사12탭) / 세 가지 정확한 상태 색 추가. 전체 행 색·수식·정책 드롭다운 추가 없음. 머리글 A1:BV1 실제 보호13개, pyh 관리 계정·Google 소유자 수정 가능, 본문 입력 유지.
+- 실행기 scripts/shared-sheet-ux.mjs는 입력값·수식·구조 쓰기 차단, 정확한 inventory·머리글 및 보호 소유권 drift HOLD. before/after와 원본 사본은 비공개 증거로 보존. 새 조회 입력값/수식 차이0, 9pt/날짜 drift0. 72 tests PASS.
+- HOLD: 소유자/관리계정 직접 API 우회 가능, 자동 감시 미설정, 실제 렌더/속도 미측정(현재 IAB 탭 없음), 종합 실측296행 vs 정본300행(이번 UI 작업 구조변경0). 공급사 입력 권한을 확인하지 않고 종합/helper 전체를 잠그지 않음. ERP 연결은 별도 세션.
+- next_start_here: RUNBOOK 맨 위 UI 현행 규격과 JSON uiOwnership을 먼저 읽고 승인된 표시 계획기 사용. 새 지시 없는 데이터 변환/삭제/탭 복원 금지.
+
 
 ### 2026-10-06 공급사 공통 시트 관리 기준 확정 — CODED / 운영 자동 감시 미설정
 

@@ -101,3 +101,4 @@ Do not call a consumer cutover complete from code/test parity alone.
 - 공통 입력 시트를 고치기 전에 `contracts/supplier-input-sheet-spec.v1.json`의 `changeControl`과 현행 `dropdownPolicy.lightweight`, `docs/SUPPLIER-INPUT-SHEET-RUNBOOK.md` 맨 위 현행 규격을 읽는다. 과거 날짜의 드롭다운·서식을 다시 적용하지 않는다.
 - 앞으로 대표가 수정 지시하면 같은 작업에서 정본 현행값·baselineVersion·이유, 실행 코드/필요 검증, 라이브 되읽기와 전후 이력, NEXT-START-HERE의 exact commit/남은 HOLD를 함께 남긴다. 채팅 기억만으로 수정하거나 문서만 변경하고 적용 완료라고 하지 않는다.
 - 현재 없는 공급사 입력 탭은 새 지시 없이 복원하지 않는다. 차종 정본과 입력 UI 후보를 혼동하지 않는다. 운영 자동 감시·pin이 없으면 항상 강제된다고 표현하지 않는다.
+- UI 변경은 `uiOwnership`의 입력/머리글/종합/helper 소유권과 `scripts/shared-sheet-ux.mjs` 표시 필드 허용 검사를 따른다. 머리글 보호는 관리 계정·Google 소유자가 우회할 수 있으며 AI 전체 불변 보장으로 표현하지 않는다. 인도완료·취소·진행중을 출고불가·계약중에서 추정하지 않는다.
