@@ -56,6 +56,58 @@ const baseHealth = {
   issues: []
 };
 
+const compat = {
+  schema: 'freepass-data.catalog-compat/v1',
+  data: { products: { privateVehicle: { plate: 'PRIVATE_RAW_VALUE' } }, policies: {}, partners: {} },
+  meta: { consumerId: 'erp-com', authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE',
+    sourceProject: 'freepasserp5', observedAt: '2026-10-06T00:00:00Z',
+    collectionCounts: { products: 1, policy: 0, partner: 0 } }
+};
+test('compatibility-only checks existing transport without claiming ACTIVE or exposing payload', async () => {
+  await withServer((request, response) => {
+    assert.equal(request.url, '/v1/consumers/erp-com/catalog-compat');
+    assert.equal(request.headers.authorization, 'Bearer app-secret');
+    assert.equal(request.headers['x-serverless-authorization'], 'Bearer google-secret');
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify(compat));
+  }, async url => {
+    const result = await run({ READ_RUNTIME_URL: url, READ_RUNTIME_CONSUMER_ID: 'erp-com',
+      READ_RUNTIME_TOKEN: 'app-secret', READ_RUNTIME_CLOUD_RUN_ID_TOKEN: 'google-secret',
+      READ_RUNTIME_CHECK_COMPAT_ONLY: '1', READ_RUNTIME_CHECK_CATALOG: '0' });
+    assert.equal(result.code, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.canonicalReleaseVerified, false);
+    assert.equal(report.cutoverAuthorized, false);
+    assert.deepEqual(report.collectionCounts, { products: 1, policies: 0, partners: 0 });
+    for (const value of ['PRIVATE_RAW_VALUE', 'privateVehicle', 'app-secret', 'google-secret'])
+      assert.equal((result.stdout + result.stderr).includes(value), false);
+  });
+});
+test('compatibility-only rejects identity, authority, collection shape and count drift', async () => {
+  for (const mutate of [
+    x => { x.meta.consumerId = 'another-tenant'; },
+    x => { x.meta.authority = 'CANONICAL_ACTIVE'; },
+    x => { x.meta.sourceProject = 'another-project'; },
+    x => { x.meta.observedAt = 'invalid'; },
+    x => { x.data.products = []; },
+    x => { x.data.products.privateVehicle = 'raw'; },
+    x => { delete x.data.policies; },
+    x => { x.meta.collectionCounts.products = 2; },
+    x => { x.data.partners = []; }
+  ]) {
+    const payload = structuredClone(compat); mutate(payload);
+    await withServer((_request, response) => {
+      response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(payload));
+    }, async url => {
+      const result = await run({ READ_RUNTIME_URL: url, READ_RUNTIME_CONSUMER_ID: 'erp-com',
+        READ_RUNTIME_TOKEN: 'secret', READ_RUNTIME_CHECK_COMPAT_ONLY: '1', READ_RUNTIME_CHECK_CATALOG: '0' });
+      assert.notEqual(result.code, 0);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr.includes('PRIVATE_RAW_VALUE'), false);
+    });
+  }
+});
+
 test('smoke checker rejects the retired catalog health schema version', async () => {
   await withServer((_request, response) => {
     response.setHeader('content-type', 'application/json');

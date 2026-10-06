@@ -1,5 +1,38 @@
 # freepasserp5 중앙 연결과 소비처 전환 상태
 
+## 공통 시트 → ERP 연결 준비 — 2026-10-06
+
+공통 시트의 입력값·서식·드롭다운·행 수를 변경하지 않고 기존 RAW/후보 → 검토된 Canonical → ACTIVE release → 인증 API를 사용한다. PR #397의 12탭/15코드 범위를 전제로 한다. absent 3탭은 HOLD이며 기존 재고 삭제/판매완료 근거가 아니다. 차량·기간 대사는 기존 `pilot:check`의 원천/기존 소비처/Data 3자 비교를 사용한다([읽기 대사](CONSUMER-READ-PILOT.md)); 단순 HTTP 200이나 대수 일치를 cutover로 인정하지 않는다.
+
+ERP 코드의 실제 환경변수 이름은 `FREEPASS_DATA_BASE_URL`, `FREEPASS_DATA_ERP_COM_TOKEN`, `FREEPASS_DATA_ERP_COM_READ_MODE`다. 축약 `ERP_COM_TOKEN`/`ERP_COM_READ_MODE`를 새 설정으로 만들지 않는다. private Cloud Run 호출은 기존 Vercel OIDC → `FREEPASS_DATA_GCP_WIF_AUDIENCE` → `FREEPASS_DATA_GCP_CALLER_SERVICE_ACCOUNT_EMAIL` → ID token 경로를 사용한다. 사용자 계정 비밀번호·새 키 파일은 필요하지 않다. 배포된 설정·IAM·토큰 검증은 현재 로컬 코드 확인과 별개다.
+
+기존 `scripts/check-read-runtime.mjs`는 `READ_RUNTIME_CHECK_COMPAT_ONLY=1`에서 인증된 `/catalog-compat`만 검사한다. consumer identity/authority/project/관측시각/map/독립 collection count를 검증하고 원문·토큰 대신 대수만 출력한다. Health/ACTIVE release가 없는 상태에서도 호환 transport를 진단할 수 있으며 결과는 항상 `canonicalReleaseVerified=false`, `cutoverAuthorized=false`다. optional partners/users는 응답에 있으면 검사하지만 필요한 collection의 포함 여부는 ERP의 요청 범위와 추가 대사해야 한다. 관측시각 유효성은 최신성 검증이 아니다.
+
+```powershell
+# 승인된 secret 공급 경로에서 환경변수를 프로세스에 주입한다. 값을 명령/로그에 적지 않는다.
+# READ_RUNTIME_URL = FREEPASS_DATA_BASE_URL
+# READ_RUNTIME_CONSUMER_ID = erp-com
+# READ_RUNTIME_TOKEN = FREEPASS_DATA_ERP_COM_TOKEN
+# READ_RUNTIME_CLOUD_RUN_ID_TOKEN = 기존 신원으로 발급한 audience-bound ID token
+$env:READ_RUNTIME_CHECK_COMPAT_ONLY = '1'
+$env:READ_RUNTIME_CHECK_CATALOG = '0'
+node scripts/check-read-runtime.mjs
+# ACTIVE release/Health 검사 단계는 별도로 실행한다.
+$env:READ_RUNTIME_CHECK_COMPAT_ONLY = '0'
+$env:READ_RUNTIME_CHECK_CATALOG = '1'
+node scripts/check-read-runtime.mjs
+```
+
+운영 순서:
+
+1. PR #397과 이 연동 후속의 exact-head 검토·통합을 확인한다. 기존 `shared-sheet-daily.yml`의 WIF/전용 계정/비공개 증거 경로를 재사용한다. 해당 workflow는 이미 존재하므로 새 수집 writer/예약을 만들지 않는다. 현행 main의 run·pin·감시 결과를 확인한 뒤 승인된 `dry-run`에서 fresh capture/기존 Canonical/source head/writer ownership을 대사한다. 이 세션은 workflow를 실행하거나 변수를 바꾸지 않았다.
+2. dry-run의 planDigest/target/specDigest·HOLD·실제 writer를 고정하고, 기존 운영 백업과 last-known-good ACTIVE를 보존한다. 운영 적재·writer 전환이 필요한 경우 각각 별도 승인 경계를 따른다. 로컬 `--memory` 계획은 운영 계획을 대체하지 않는다.
+3. 승인된 계획 apply·Canonical 가격/수수료 되읽기·lineage 확인 후 기존 projection/READY/ACTIVE 게이트로 게시한다. ingestion 성공만으로 release가 발행되지는 않는다. UNKNOWN 수수료를 0으로 바꾸지 않는다.
+4. 위 호환 transport와 Canonical API를 각각 조회한다. 기존 ERP `OBSERVE`는 compatibility transport이고 `FREEPASS_DATA_READ`는 아직 consumer 구현에서 fail-closed다. 공개 필드 coverage·기간별 조건·실시간 계약락·화이트라벨별 권한·rollback 증거가 없으면 스위치를 바꾸지 않는다.
+5. 동일 release와 원천 범위로 `pilot:check`를 실행하고 ERP.com 실제 목록/상세/API readback을 남긴다. 각 화이트라벨/Admin/F01/F86은 개별 증거가 필요하며 ERP.com만으로 전체 완료를 선언하지 않는다.
+
+현재 PC에는 PATH 및 표준 설치 위치에서 gcloud 실행기, 표준 Roaming 경로의 `freepass-data` configuration/ADC, 관련 consumer 환경변수가 관측되지 않았다. 운영 인증은 **HOLD_ENVIRONMENT_AUTH_UNAVAILABLE**이며 기존 WIF가 실패했다는 판정은 아니다. 10-06 private capture 171행을 memory로 재실행한 결과 38행 HOLD, 675개 공급 기간/675개 선계산 항목 일치, 각 수수료 측 UNKNOWN214였다. 이는 오프라인 미리보기이며 PERSISTENCE/DEPLOYMENT/CUTOVER 증거가 아니다.
+
 2026-09-21 사용자 직접 지정: 중앙 저장용 Firebase 프로젝트는 **freepasserp5**.
 Firestore `(default)`, `asia-northeast3`를 실조회했다. RTDB는 사용하지 않는다.
 

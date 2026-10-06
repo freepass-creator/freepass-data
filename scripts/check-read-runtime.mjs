@@ -12,6 +12,8 @@ const consumerToken = required('READ_RUNTIME_TOKEN');
 const cloudRunIdToken = process.env.READ_RUNTIME_CLOUD_RUN_ID_TOKEN;
 const allowDegraded = process.env.READ_RUNTIME_ALLOW_DEGRADED === '1';
 const checkCatalog = process.env.READ_RUNTIME_CHECK_CATALOG === '1';
+const checkCompatOnly = process.env.READ_RUNTIME_CHECK_COMPAT_ONLY === '1';
+if (checkCompatOnly && checkCatalog) throw new Error('Select compatibility transport or Canonical release check');
 const healthContract = JSON.parse(await readFile(
   new URL('../contracts/catalog-data-health-v1.schema.json', import.meta.url),
   'utf8'
@@ -52,6 +54,31 @@ async function request(path) {
   return { response, body };
 }
 
+if (checkCompatOnly) {
+  const { response, body } = await request(`/v1/consumers/${encodeURIComponent(consumerId)}/catalog-compat`);
+  const record = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (response.status !== 200 || body?.schema !== 'freepass-data.catalog-compat/v1' ||
+      body?.meta?.consumerId !== consumerId || body?.meta?.authority !== 'FREEPASS_DATA_COMPATIBILITY_BRIDGE' ||
+      body?.meta?.sourceProject !== 'freepasserp5' || !Number.isFinite(Date.parse(body?.meta?.observedAt)) ||
+      !record(body?.data) || !record(body?.meta?.collectionCounts)) {
+    throw new Error(`Compatibility response invalid: HTTP ${response.status}`);
+  }
+  const counts = {};
+  for (const [key, countKey] of Object.entries({ products: 'products', policies: 'policy',
+    partners: 'partner', users: 'user', vehicleMaster: 'vehicle_master' })) {
+    const value = body.data[key];
+    if (value === undefined && !['products', 'policies'].includes(key)) continue;
+    if (!record(value) || !Object.values(value).every(record) ||
+        body.meta.collectionCounts[countKey] !== Object.keys(value).length) {
+      throw new Error(`Compatibility collection invalid: ${key}`);
+    }
+    counts[key] = Object.keys(value).length;
+  }
+  console.log(JSON.stringify({ transportOk: true, httpStatus: response.status,
+    authority: body.meta.authority, consumerId, observedAt: body.meta.observedAt,
+    collectionCounts: counts, canonicalReleaseVerified: false, cutoverAuthorized: false,
+    status: 'COMPATIBILITY_TRANSPORT_VERIFIED_CANONICAL_HOLD' }, null, 2));
+} else {
 const healthPath =
   `/v1/consumers/${encodeURIComponent(consumerId)}/catalog-health`;
 const health = await request(healthPath);
@@ -142,4 +169,5 @@ if (healthStatus === 'BLOCKED') {
   process.exitCode = 2;
 } else if (healthStatus === 'DEGRADED' && !allowDegraded) {
   process.exitCode = 2;
+}
 }
