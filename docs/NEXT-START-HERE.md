@@ -1,5 +1,10 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-06 F04 입력 화면 / 수수료 원천 수집 갱신
+
+- 접수는 기존 열 순서·셀값을 보존하고 기본정보/계약/진행/청구·지급 헤더를 구분했다. 취소행 전체 연분홍+가운데줄, 금액 천단위 표시, 산출근거·비고 줄바꿈, 상세/증빙 보조열 숨김, 고정열 해제. 기존 경고조건 보존. 원본 전체 Drive backup 및 native metadata 재조회 PASS. 취소행은 표시하고 정산 대상에서는 기존 규칙대로 제외한다.
+- 채팅 수수료 수집은 기존 ai-ops 공급사확인사실 장부에 USER_DECISION 출처로2개 사실을 추가하고, 기존 Data SETTLEMENT source intake로 F04 수수료표191행 원문과 대표확정2건을 수집했다. RAW 내용 전체 재조회 PASS, 기존 기록 삭제0. 개별 추가 수수료는 계약범위로 제한하며 기존 공급사 일반요율을 덮지 않았다. 수집 완료를 소비 계산기의 자동 최신화 완료로 확대하지 않는다. private 접수복구 실행영수증의 feeCollectionUpdate/intakePresentation에서 run/backup을 확인한다.
+
 ## 2026-10-06 F04 산출근거 / 사람 입력 보존
 
 - 목적: 접수 기반 정산과 사람 입력 보존 기준을 Data 기존 규격에 고정한다. revision e49dfb9afa6d8203ed3bf388525179f122aed007 기반.
