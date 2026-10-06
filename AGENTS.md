@@ -95,3 +95,9 @@ Do not call a consumer cutover complete from code/test parity alone.
 - 온라인 연결·후속 실행은 `docs/F01-F86-ONLINE-HANDOFF.md`에서 엔진/PR/실측 증거를 찾고 GitHub의 현재 pin을 다시 확인한다. 검증 전용 workflow 가지를 운영 main에 병합하지 않는다.
 - 중앙 정본을 F01·F86·ERP.com과 각 화이트라벨·Admin이 가져다 쓰는 구조는 `docs/F01-F86-ERP-PUBLICATION-CONTRACT.md`를 따른다. 소비처를 세 곳으로 고정하거나 Admin/화이트라벨을 누락하지 않는다. 시트 표시 PASS를 전체 소비처 연결 완료로 확대하지 않는다.
 - 원본과 다른 작업의 변경을 보존한다. RTDB는 영구 폐기 상태이며 복원/fallback/배포하지 않는다.
+
+## 공급사 공통 입력 시트 규격 잠금 (대표 2026-10-06)
+
+- 공통 입력 시트를 고치기 전에 `contracts/supplier-input-sheet-spec.v1.json`의 `changeControl`과 현행 `dropdownPolicy.lightweight`, `docs/SUPPLIER-INPUT-SHEET-RUNBOOK.md` 맨 위 현행 규격을 읽는다. 과거 날짜의 드롭다운·서식을 다시 적용하지 않는다.
+- 앞으로 대표가 수정 지시하면 같은 작업에서 정본 현행값·baselineVersion·이유, 실행 코드/필요 검증, 라이브 되읽기와 전후 이력, NEXT-START-HERE의 exact commit/남은 HOLD를 함께 남긴다. 채팅 기억만으로 수정하거나 문서만 변경하고 적용 완료라고 하지 않는다.
+- 현재 없는 공급사 입력 탭은 새 지시 없이 복원하지 않는다. 차종 정본과 입력 UI 후보를 혼동하지 않는다. 운영 자동 감시·pin이 없으면 항상 강제된다고 표현하지 않는다.

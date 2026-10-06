@@ -3593,5 +3593,44 @@
     "preserveInputValues": true,
     "preserveSummaryFormulas": true,
     "lightweightOnly": true
+  },
+  "changeControl": {
+    "status": "LOCKED_BY_USER",
+    "baselineVersion": "supplier-input-presentation/2026-10-06.1",
+    "authority": "대표 최신 명시 지시 > 이 파일의 현행 설정 > 과거 이력. 현행 설정 변경은 대표 지시에 따른다.",
+    "decision": "2026-10-06 대표: 규격으로 딱 정한다. 절대 흔들리지 않고 휘발되지 않으며 지금부터 수정은 영구 기록한다.",
+    "currentPresentation": "dropdownPolicy.lightweight + inputHeaders + valueFormats + columnWidths + retroLook.valueTextColors",
+    "activeSupplierTabs": [
+      "웰릭스",
+      "우리캐피탈",
+      "KH",
+      "리더스",
+      "제이앤제이",
+      "에코",
+      "센트로",
+      "퍼시픽",
+      "렌트존",
+      "빌린카",
+      "스타",
+      "경진"
+    ],
+    "absentRegisteredTabs": [
+      "연카",
+      "스위치플랜",
+      "에스에이"
+    ],
+    "absentTabPolicy": "현재 구성에 없는 등록 탭은 새 대표 지시 없이 재생성·숨김해제·등록삭제하지 않는다. 원천/코드 등록과 실제 입력 탭 구성은 분리한다.",
+    "futureChangeRequirements": [
+      "대표 지시와 변경 이유 기록",
+      "정본 현행 설정 및 baselineVersion 갱신",
+      "실행 코드와 필요한 회귀 검증 함께 수정",
+      "원본 및 타 작업 보존, 불명확한 사실은 HOLD",
+      "라이브 반영 후 새 조회 검증과 변경 전후 이력 보관",
+      "NEXT-START-HERE에 exact commit·검증·남은 HOLD 기록"
+    ],
+    "legacyPolicy": "과거 정책은 이력만 보존하며 자동 재적용 금지",
+    "noSilentRepair": "다른 세션의 변경·설정 차이는 drift로 보고한다. 데이터·차종·가격을 과거 상태로 자동 되돌리지 않는다.",
+    "automationState": "MANUAL_VERIFIED_NOT_CONTINUOUSLY_ENFORCED",
+    "latestDecisionRecord": "2026-10-06 사용자 규격 고정"
   }
 }

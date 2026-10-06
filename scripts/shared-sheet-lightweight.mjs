@@ -1,8 +1,18 @@
 import {inputSpec} from './supplier-input-sheet.mjs';
 
+export function verifyLockedTabInventory(metadata,spec=inputSpec){
+  const lock=spec.changeControl;
+  if(!lock)return;
+  if(lock.status!=='LOCKED_BY_USER'||!lock.baselineVersion)throw new Error('HOLD: versioned user specification required');
+  const expected=[spec.summaryTitle,...lock.activeSupplierTabs].sort();
+  const actual=metadata.sheets.filter(s=>!s.properties.hidden).map(s=>s.properties.title).sort();
+  if(JSON.stringify(actual)!==JSON.stringify(expected))throw new Error('HOLD: locked tab inventory drift; update specification from user decision before writing');
+}
+
 // UI choices are not a vehicle master: published labels plus exact values
 // already entered on this workbook. Nothing is renamed or promoted here.
 export function planInputWarningCleanup(metadata,captures,masterCapture,spec=inputSpec){
+  verifyLockedTabInventory(metadata,spec);
   const policy=spec.dropdownPolicy.lightweight,helper=policy.validationChoices;
   if(!helper?.enabled)throw new Error('HOLD: input choice policy required');
   const headers=[...policy.listHeaders,...policy.masterHeaders],read=c=>{
@@ -52,6 +62,7 @@ export function planInputWarningCleanup(metadata,captures,masterCapture,spec=inp
 
 // Published static lists only: no vehicle facts, helper formulas, or triggers.
 export function planLightweightPresentation(metadata, captures, spec=inputSpec) {
+  verifyLockedTabInventory(metadata,spec);
   const policy=spec.dropdownPolicy.lightweight;
   const hold=message=>{throw new Error(`HOLD: ${message}`);};
   if(!policy?.enabled||policy.conditionalCascade||policy.helperFormulas)hold('Lightweight fixed-list policy required');
