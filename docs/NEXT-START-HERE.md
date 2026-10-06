@@ -397,6 +397,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-06 공통 시트 차종 행별 드롭다운 — CODED / TESTED, DEPLOYMENT HOLD
+
+- 대표 요청: 조건별 차종 드롭다운은 유지하되, 선택·편집한 행만 갱신해 44,955개 숨김 후보 수식을 걷어낸다. `ai-ops/docs/차종-기준-한장.md` 기준에 따라 마스터 이름·차종 값·제원은 변경하지 않고 게시된 목록만 소비한다.
+- 기준: main `076d32bb98aa516003435ae3fd8b8fd00c26a162`, 앞 작업 commit `eba195aa495faa6e9ebd34d4a3eae4c8c0a7c793`, 기존 PR #397/같은 작업 가지에 추가.
+- 구현: bound Apps Script onEdit/onSelectionChange·선택 행 복구 메뉴, 다중 행 붙여넣기, 값 보존·불일치 경고·정확한 workbook/sheet/header binding, 같은 계층 규칙의 API 검증 계획기. 생성/설치 CLI는 운영 ID를 private artifact에만 넣고 기존 코드·trigger 충돌을 HOLD하며 설치 후 되읽기를 남긴다.
+- 실제 확인: Sheets 연결 `pyh@teamjpk.com`, 40탭/4,383,859칸/조건부 서식309, 숨김 helper15탭/전체 열 참조 XLOOKUP44,955. 설치 CLI는 `APPS_SCRIPT_AUTH_UNAVAILABLE`로 네트워크·시트 쓰기 전 종료. Apps Script 설치가 가능한 인증 경로가 없으며 Sheets 권한을 대체로 쓰지 않는다. 현재 시트 변경 0, 기존 helper 수식 제거 0.
+- 검증: 신규 Node 테스트 10 PASS(계층 부모·미확인 값 보존·다중 행·범위/ID·동시 값 변경·API 생성·기존 script 충돌 보존·인증 없을 때 무쓰기). 운영 이벤트·seed·helper 참조 제거·속도 개선·API publisher 연결은 미검증 HOLD.
+- next_start_here: 공급사 runbook의 2026-10-06 추가 결정/운영 전환 순서. 기존 pyh Apps Script API 인증 경로를 확보하고 생성된 private bundle로 설치·이벤트·API 입력 검증을 먼저 끝낸다. 보조 수식부터 제거하거나 설치 코드만으로 완료 선언하지 않는다.
+
 ### 2026-10-06 공통 입력 시트 드롭다운 축소·연주행 표기 고정
 
 - 대표 결정: 속도 때문에 대여료 앞(A:P)만 기존 드롭다운 유지. 첫 대여료 `1개월`(Q)~`비고`(BV)는 자유 입력. `연 20,000km`는 `2만km`. 대화 기억으로만 두지 않고 `supplier-input-sheet-spec.v1.json` 및 `SUPPLIER-INPUT-SHEET-RUNBOOK.md`에 기록한다.

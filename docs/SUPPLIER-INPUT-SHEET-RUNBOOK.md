@@ -7,6 +7,21 @@
 - 기계 정본은 `contracts/supplier-input-sheet-spec.v1.json`의 `dropdownPolicy.freeText`·`clearsFreeTextRules` 및 `valueFormats.연주행.displayAliases`다. 기존 `dropdowns`의 뒤쪽 목록은 과거 변환용 정의로만 보존하며 입력 검증으로 재설정하지 않는다. 이 결정은 아래 과거 정책 드롭다운 지시보다 우선한다.
 - 드롭다운 작업은 데이터 검증만 변경하며, 연주행 작업은 위에서 명시한 같은 거리의 문자열만 변경한다. 차량 사실·금액·수식·서식은 보존한다.
 
+### 2026-10-06 추가 결정 — 차종 연쇄를 편집한 행에서만 갱신 (CODED / TESTED, 미설치)
+
+대표 승인: 제조사 → 모델 → 세부모델 → 세부트림의 다음 목록은 선택·편집한 행만 갱신한다. 이는 아래 10-04의 «Apps Script 없음» 설계 결정을 대체하는 **새 구현 방향**이다. 실제 운영 전환 완료가 아니다.
+
+- 실측: 숨김 `_연쇄_*` 15탭의 S·AS·BA열에 44,955개 XLOOKUP이 있고 빈 999~1000행에도 전체 열 참조 수식이 존재한다. 전체 4,383,859칸·조건부 서식 309개. 개별 병목의 시간 기여는 아직 측정하지 않았다.
+- 구현: `scripts/shared-sheet-cascade-runtime.gs`의 onEdit는 현재 입력 행을 읽어 F:I **검증 규칙만** 변경한다. 여러 행 붙여넣기는 전체 편집 범위를 처리한다. 앞 단계가 맞지 않으면 뒤 목록은 제공하지 않고 기존 값을 보존하며 기본 검증 경고를 남긴다. 차종 이름을 생성·정정하거나 F03를 읽고 쓰지 않는다. 게시된 `차종연쇄`를 그대로 사용한다.
+- 선택 행 복구: onSelectionChange와 「차종 목록 → 선택한 행 드롭다운 갱신」 메뉴. Google은 빠른 이벤트를 생략할 수 있으므로 선택 이벤트 자체를 신뢰성 보장으로 표현하지 않는다. API 변경에는 onEdit가 발생하지 않으므로 `planCascadeValidationRefresh`로 같은 계층 규칙의 Sheets API 요청을 별도 생성·적용한다. publisher 자동 연결은 아직 미실행이다.
+- 생성: `node scripts/build-shared-sheet-cascade.mjs --metadata=<private-fresh-metadata.json> --out=<private-script-content.json>`. 공급사 15탭·차종 머리글 순서·sheetId·목록 탭을 정확히 묶는다. 운영 파일 ID는 생성된 비공개 산출물에만 넣는다.
+- 설치: `node scripts/deploy-shared-sheet-cascade.mjs --bundle=<private-script-content.json> --receipt=<private-receipt.json> [--script-id=<existing-bound-id>]`. `FREEPASS_APPS_SCRIPT_ACCESS_TOKEN`은 외부에서 안전하게 제공하며 채팅이나 로그에 출력하지 않는다. API 호출자는 script.projects + userinfo.email 권한과 `pyh@teamjpk.com`이 필요하다. 생성 결과 불명확 시 receipt가 중복 생성을 막으며, 기존 프로젝트의 parentId를 확인하고 다른 코드·manifest를 보존한다. 기존 onEdit/onOpen/onSelectionChange 충돌은 HOLD다. 업로드 후 되읽기는 PERSISTENCE만 확인하며 CUTOVER가 아니다.
+- 2026-10-06 현재: 현재 세션에는 Apps Script API 인증·호출 도구와 인증된 gws/gcloud/clasp가 없어 설치 CLI가 `APPS_SCRIPT_AUTH_UNAVAILABLE`로 쓰기 전 종료했다. Sheets 연결 프로필은 `pyh@teamjpk.com`이며 이 권한을 Apps Script 권한으로 간주하지 않는다. 현재 보조 수식·검증·조건부 서식은 그대로 유지한다.
+
+**운영 전환 순서 (미완료):** 전체 파일 백업 → 기존 bound 프로젝트/trigger 조사 → 설치·코드 되읽기 → 실제 제조사·모델 변경, 새 행, 여러 행 붙여넣기, API 입력 후 갱신과 기존 값 보존 검증 → 전체 현재 행의 F:I 검증을 새 목록으로 seed → 기존 helper 참조의 조건부 서식 교체(빨간 경고 유지 여부 별도 검증) → 검증/수식/조건부 서식에서 `_연쇄_*` 참조 0 확인 → 그때만 helper 수식·탭 정리 → 열기 시간 전후 비교. 종합은 입력 대상이 아니며 종합 검증 목록을 설치하지 않는다.
+
+Google 참고: [편집·선택 trigger 제한](https://developers.google.com/apps-script/guides/triggers), [프로젝트 생성·바인딩](https://developers.google.com/apps-script/api/reference/rest/v1/projects/create), [Apps Script API 별도 활성화](https://developers.google.com/apps-script/api/how-tos/enable).
+
 <a id="현재-기준--2026-10-03-양식-고정-이-절이-아래-2026-10-02-기록보다-우선"></a>
 ## 현재 기준 — 2026-10-04 계좌번호 제외 74칸 (이 절이 아래 2026-10-02 기록보다 우선)
 

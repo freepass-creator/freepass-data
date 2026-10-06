@@ -2493,7 +2493,17 @@
       "makerOrderEvidence": "F01 판매시트 2026-10-04 00:24 게시 534대 제조사 대수(엔카 표기), 같은 대수는 국산 먼저",
       "originIndependent": true,
       "mismatch": "strict:false 경고 + 조건부 서식 연한 빨강, 값 보존",
-      "noScript": "Apps Script 권한 없음 — 대표 결정으로 수식·검증 방식"
+      "legacyNoScript20261004": "Apps Script 권한 없음 — 대표 결정으로 수식·검증 방식",
+      "rowEvent": {
+        "version": "shared-sheet-row-cascade/1",
+        "decision": "2026-10-06 대표: 선택한 행의 다음 드롭다운만 갱신. 44,955개 보조 수식 대신 onEdit 행별 입력 검증. 앞 항목 변경에도 기존 차종 값은 임의로 지우지 않는다.",
+        "implementation": "scripts/shared-sheet-cascade-runtime.gs",
+        "builder": "scripts/build-shared-sheet-cascade.mjs",
+        "mode": "CODED_NOT_DEPLOYED",
+        "authority": "기존 차종연쇄는 FreePass Data 차종 정본의 게시된 목록만 사용. 마스터 이름 생성·값 정정 없음.",
+        "refresh": "사람 편집 onEdit / 한 행 선택 onSelectionChange(누락 가능) / 메뉴로 선택 행 복구. Sheets API 입력은 planCascadeValidationRefresh로 별도 갱신.",
+        "cutoverGate": "pyh@teamjpk.com Apps Script 설치·실제 편집·새 행·여러 행 붙여넣기·API 갱신·값 보존 검증 전에는 기존 보조 탭 수식과 참조를 삭제하지 않는다."
+      }
     },
     "makerNames": "대표 2026-10-04 최종: 제조사 표기는 쉐보레 · 르노 · KGM(괄호 없음). 르노코리아(삼성)·르노코리아·르노삼성·KG모빌리티(쌍용)·KG모빌리티·쌍용·쉐보레(GM대우)·토요타는 별칭(src/domain/vehicle-maker-name.ts)",
     "basicTrimRule": "차종은 모델 → 세부모델 → 파워트레인 → 세부트림 4단, 파워트레인(배기량·엔진·연료·구동)은 제원 칸이라 차종 칸에 쓰지 않는다(대표 2026-10-04 최종). 세부트림 = 엔카 세부등급 그대로, 없으면 등급 이름에서 파워트레인을 버린 나머지, 남는 게 없으면 「기본형」(구현 정본 src/domain/vehicle-trim-name.ts). 모델과 세부모델이 같은 축이면 세부모델 「기본형」(예: G80 / 기본형)",
