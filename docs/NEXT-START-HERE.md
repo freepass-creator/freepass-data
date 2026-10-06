@@ -400,6 +400,8 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ### 2026-10-06 AI Core·AI-OPS 실제 학습과 공통시트 적용 체크포인트
 
+- learning implementation commit cb2717e65324702a6a9e8fb38f3f35ff8e859eca. B3Q 기존 상황실 thread01a10e59-61f0-75f0-9516-b08e71622caa에 send_message_to_thread 성공 영수증 확인. 수신 전달 완료이며 담당 인수/main 통합은 아직 미확인.
+
 - 읽은 정본: C:/dev/ai-core AGENTS.md → WORK_READ_FIRST.md → docs/AI_WORKING_STANDARD.md, Core revision6088a502915408853d2607bbea56d7d57a2d450c. C:/dev/ai-ops AGENTS.md → docs/README.md → docs/AI-OPS-PC-세션-규격.md 및 GPT-인수인계-20261006.md, Ops revision24d11d2b6305f60205ece9961dfafc37e1ae7738. 문서를 복제하지 않고 이 경로로 이어 읽는다. 현행 GHD 오더 → B3Q 상황실 경로가 과거 B3Q/Claude 고정 표기보다 우선한다.
 - 실제 활용: Core scripts/duo.mjs inbox 실행(열린 과거2건은 타 업무, 본 세션이 인수하지 않음). academy-start.mjs --task 공통시트 삭제 금지·규격 정합 및 기존 인계 기록 --root C:/dev/freepass-data --track document: READY, target acefa2e85571b6b4fcee7b7d7a92e8b3ca3e7d70, blockers0, warnings0, 새 자산 없음. 시작 receipt가 main 반영/시트 적용 완료를 뜻하지 않는다.
 - 재사용 실행조건: supplier-input-sheet-spec.v1.json .5 + RUNBOOK 맨 위 및 AGENTS가 공통시트 기준. shared-sheet-ux의 표시 허용 검사, shared-sheet-lightweight의 tab inventory/축소금지, 기존 Node73 회귀 및 NEXT 정확한 commit pin 사용. Google Sheets connector는 이전 실제 live read/write 증거가 있는 pyh 계정 경로를 재사용하며 이번 학습 작업에서 시트 쓰기0. 차종 판단은 ai-ops 차종-기준-한장만, 정책 의미는 기존 Commercial Catalog. bogi.mjs는 기존 정본 숫자 조회 후보이나 이 업무에서 숫자 조회/실행하지 않았으며 접근 가능 판정으로 세지 않음.
