@@ -397,6 +397,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-06 공통 시트 ERP 연동 별도 작업 — CODED / STATIC CHECKED / TESTED, 운영 HOLD
+
+- 작업선 `codex/shared-sheet-erp-integration`, 별도 managed worktree. 기반 `86392a056ccb03fac43eaf1722c6ec86f3c90b7e`/PR #397, fetch한 main `43201d4773c301bb0344777a9235309d17558ddc`. 열린 #395(차종 판정 옵션)는 미통합, 원래 checkout/시트 관리 변경 보존. 시트 값/서식/드롭다운/행 수 쓰기0, ERP 저장소 수정0.
+- 구현 exact commit `2ea3c5d396c57085aba806cc27691d2b0153d264`: 기존 runtime smoke에 `READ_RUNTIME_CHECK_COMPAT_ONLY=1` 추가. consumer identity/bridge authority/target/시각/map/count 검증, 원문·토큰 미출력. 성공도 Canonical/release/cutover false. 실제 ERP 설정 이름과 WIF·운영 순서는 [ERP 소비처 런타임의 공통 시트 연결 준비](ERP5-CONSUMER-RUNTIME.md#공통-시트--erp-연결-준비--2026-10-06).
+- 검증: node runtime smoke8/8 PASS(오염 authority·다른 tenant·잘못된 collection/count·원문 비노출 포함), architecture/data-access boundary PASS, git diff --check PASS. TypeScript 코드 변경 없음; 전체 Vitest 재실행 없음.
+- 기존 private 10-06 캡처171행을 memory 계획기로 재실행: writes0, held38, 공급기간675/선계산675 일치, 수수료 각 측 UNKNOWN214. empty memory writerReady=false는 운영 ownership 관측이 아니다. fresh 운영 source/기존 Canonical 대사·저장 증거로 확대하지 않는다.
+- 현재 PC PATH/표준 설치 위치에 native gcloud 실행기 없음, 표준 Roaming freepass-data config/ADC 없음, consumer 환경변수 없음: HOLD_ENVIRONMENT_AUTH_UNAVAILABLE. 기존 shared-sheet-daily workflow/WIF가 존재함을 코드로 확인했으며 운영 pin·현재 변수·새 run은 미검증. 운영 적재/배포/스케줄/IAM/writer 변경/ERP 전환 미실행.
+- next_start_here: #397 범위 통합 검토 → 기존 daily WIF의 fresh dry-run과 exact-head/private evidence → 승인된 Canonical apply·되읽기 → 기존 READY/ACTIVE 게시 → 호환 transport와 Canonical 읽기를 별도 검증 → 기존 pilot:check 3자 대사와 ERP.com/각 대상 실제 readback. 인증 접근이 복구되기 전 비밀번호/키 복제/legacy fallback으로 우회하지 않는다. 운영 승인 대상은 구체적인 fresh 계획을 준비한 뒤 정한다.
+
 ### 2026-10-06 공통 시트→Data→ERP 수집 범위 정합 — CODED / TESTED / 실제 시트 읽기 검증
 
 - 대표 «프리패스데이터에서 공통시트 데이터 잘 연동해서 erp 구성». ERP 대상은 기존 계약의 ERP.com으로 잠정 해석(대상 확인 질문 답 미수신). ERP 소비자 인증/호환 API는 기존 구현을 사용하며 ERP의 별도 원천 writer를 만들지 않는다.
