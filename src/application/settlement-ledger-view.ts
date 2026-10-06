@@ -70,6 +70,7 @@ export function projectSettlementLedgerRecord(
       claimAdjustment: numberOrNull(data.claimAdjust),
       payAdjustment: numberOrNull(data.payAdjust),
       adjustmentReason: stringOrNull(data.adjustReason),
+      calculationBasis: stringOrNull(data.calculationBasis),
       supplierFeeRaw: rawScalar(data.supplierRate),
       channelFeeRaw: rawScalar(data.agentRate),
     },

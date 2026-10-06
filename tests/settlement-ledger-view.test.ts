@@ -45,6 +45,7 @@ const rowData = {
   payWritten: 800_000,
   supplierRate: 0.0325,
   agentRate: 500_000,
+  calculationBasis: '사람이 입력한 기준료 × 기간 + 추가금',
 };
 
 function workflowStore(): AdminWorkflowStore {
@@ -85,6 +86,7 @@ describe('settlement ledger data product', () => {
         payAmount: 800_000,
         supplierFeeRaw: 0.0325,
         channelFeeRaw: 500_000,
+        calculationBasis: rowData.calculationBasis,
       },
       source: { authority: 'FREEPASS_DATA_SETTLEMENT', documentId: '12가3456_2026-09-01' },
     });

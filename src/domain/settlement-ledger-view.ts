@@ -71,6 +71,7 @@ export type SettlementLedgerRecord = {
     claimAdjustment: number | null;
     payAdjustment: number | null;
     adjustmentReason: string | null;
+    calculationBasis: string | null;
     supplierFeeRaw: SettlementLedgerValue;
     channelFeeRaw: SettlementLedgerValue;
   };

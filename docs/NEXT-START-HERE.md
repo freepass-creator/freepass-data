@@ -4,8 +4,10 @@
 
 - 목적: 접수 기반 정산과 사람 입력 보존 기준을 Data 기존 규격에 고정한다. revision e49dfb9afa6d8203ed3bf388525179f122aed007 기반.
 - 변경/검증: F04 접수 BT 산출근거 입력열 추가, 보호 예외와 헤더·확정 건 근거 재조회 PASS. 기존 사람 원문 수정 없음. 기존 Business Data Connection Map 및 AGENTS에 자동 삭제·덮어쓰기 금지를 명시했다. 고객·차번·개별 금액은 공개 저장소에 넣지 않는다.
-- 남음: 운영 Data gateway 연결값이 로컬 Admin에 없고, 기존 유지보수 도구가 지정한 ERP5 서비스계정 파일도 없어 운영 Firestore 정산 수정은 미실행이다. 규정 기록을 DB 반영이나 런타임 차단 완료로 확대하지 않는다.
-- next_start_here: 기존 Admin workflow gateway의 운영 인증 경로 확보 후 private 접수복구 실행영수증의 확정값만 대조한다. 기존값 변경은 사용자 지정 정정 범위에 한해 백업·digest expectation·감사 이력·재조회로 실행한다.
+- 운영 재확인: 기존 ADC와 중앙 target/AdminWorkflowStore 경로로 실제 Data 읽기·쓰기가 가능했다. 대표 지정 차량의 모델/렌탈료/보증금/추가금액을 전후 감사·digest expectation·재조회로 적용했다. 접수 원문에만 있던 신규4건은 검증보류로 복구했다. 실조회 9월35개 계약키의 Data 누락0/중복0, 취소 제외34건. private 실행영수증에 전체 원문·정정안·재조회를 보존한다.
+- 변경/검증: 기존 정산 조회 계약에 calculationBasis nullable 원문 필드를 추가하고 Admin F04 reader가 BT 산출근거를 담는다. Data build PASS/정산조회4 PASS. AI-OPS 실행기는 사람 확인·정정 원문을 금액 변경·행 제외로 지우지 않고 충돌 시 중단한다(28 PASS).
+- 남음: 기존26건의 청구월·금액·취소 불일치 정정안은 사람 입력 출처 불명으로 승인대기이며 원문 유지. Data API/reader와 AI-OPS 보호 코드는 PR상태이며 운영 배포/전체 기술적 접근 통제 완료가 아니다. BT34행 산출근거 미입력도 원본 확인 전 임의 채우지 않는다.
+- next_start_here: private 접수복구 실행영수증의 dataCanonReview35 전후 대조표와 사용자 이번 정정 승인을 확인한다. 승인 후 최신 접수와 Data를 다시 읽고 백업·digest expectation·감사 이력·재조회로 실행한다. 사람이 입력한 계약정보/메모/산출근거는 자동변경하지 않는다.
 
 
 ## 2026-10-03 이안카 15분 자동 수집 활성 / 첫 실반영 검증
