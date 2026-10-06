@@ -93,3 +93,7 @@ Do not call a consumer cutover complete from code/test parity alone.
 - 온라인 연결·후속 실행은 `docs/F01-F86-ONLINE-HANDOFF.md`에서 엔진/PR/실측 증거를 찾고 GitHub의 현재 pin을 다시 확인한다. 검증 전용 workflow 가지를 운영 main에 병합하지 않는다.
 - 중앙 정본을 F01·F86·ERP.com과 각 화이트라벨·Admin이 가져다 쓰는 구조는 `docs/F01-F86-ERP-PUBLICATION-CONTRACT.md`를 따른다. 소비처를 세 곳으로 고정하거나 Admin/화이트라벨을 누락하지 않는다. 시트 표시 PASS를 전체 소비처 연결 완료로 확대하지 않는다.
 - 원본과 다른 작업의 변경을 보존한다. RTDB는 영구 폐기 상태이며 복원/fallback/배포하지 않는다.
+
+## 정산 사람 입력 보존 (2026-10-06 사용자 직접 결정)
+
+정산 작업은 docs/BUSINESS-DATA-CONNECTION-MAP.md의 「2026-10-06 정산 원장과 사람 입력값 보존」을 따른다. 사람 입력 또는 출처 불명의 기존값을 AI가 자동 삭제·덮어쓰기하지 않는다. 직접 지정된 정정만 전후 감사 이력과 함께 적용한다. 접수 BT 산출근거는 사람 입력열이다.
