@@ -406,6 +406,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 현재 PC PATH/표준 설치 위치에 native gcloud 실행기 없음, 표준 Roaming freepass-data config/ADC 없음, consumer 환경변수 없음: HOLD_ENVIRONMENT_AUTH_UNAVAILABLE. 기존 shared-sheet-daily workflow/WIF가 존재함을 코드로 확인했으며 운영 pin·현재 변수·새 run은 미검증. 운영 적재/배포/스케줄/IAM/writer 변경/ERP 전환 미실행.
 - next_start_here: #397 범위 통합 검토 → 기존 daily WIF의 fresh dry-run과 exact-head/private evidence → 승인된 Canonical apply·되읽기 → 기존 READY/ACTIVE 게시 → 호환 transport와 Canonical 읽기를 별도 검증 → 기존 pilot:check 3자 대사와 ERP.com/각 대상 실제 readback. 인증 접근이 복구되기 전 비밀번호/키 복제/legacy fallback으로 우회하지 않는다. 운영 승인 대상은 구체적인 fresh 계획을 준비한 뒤 정한다.
 
+### 2026-10-06 공급사 공통 시트 관리 기준 확정 — CODED / 운영 자동 감시 미설정
+
+- 구현 pin `88004cfe57bd14a4f66714b7b93605d0838e55b5` (PR #397), 관련 시트 검증69/69 PASS. 다음 handoff 커밋은 이 pin 기록만 추가한다.
+
+- 대표 «이제 공급사들 여기서 관리할거니까». 현행 supplierManagement와 버전2026-10-06.3에 공통 입력 권한·기존 시트 대조 전용/자동 덮어쓰기 금지·공급사코드+차량번호 식별·미확인 차이 HOLD·공통 시트/ERP 세션 분리를 기록했다. API/홈페이지 직접 공급사 경로는 변경하지 않음.
+- 읽기 대조: 공급사 원본15파일/18코드 및 현재12입력 탭, 추가 F01 주상품 조회. 현재 입력의 실제 차량번호 누락 발견0, J&J 상태2차이·스타2대 원본빈값/공통금액 존재·연식15차이. 표시 차이와 원본 오류 가능성을 구분하며 수정0. absent 스위치플랜8·에스에이30·연카0행은 탭 부재로 별도 HOLD. F01의 실제차량12개 미조회는 게시 조건/검증 HOLD 원인 확인 필요. 정책은 현재 차량 귀속 근거 부족으로 비교 HOLD.
+- 비공개 전수 조회 및 차이 기록: checkout 밖 freepass-sheet-comparison-20261006의 snapshots.json/audit.json/비교결과.md. 종합296행 drift 관측/재복원 없음. 이번 관리 결정은 규격/권한 기록이며 라이브 값·서식 변경0, 자동 감시·운영 cutover 완료 아님.
+
 ### 2026-10-06 공통 시트→Data→ERP 수집 범위 정합 — CODED / TESTED / 실제 시트 읽기 검증
 
 - 대표 «프리패스데이터에서 공통시트 데이터 잘 연동해서 erp 구성». ERP 대상은 기존 계약의 ERP.com으로 잠정 해석(대상 확인 질문 답 미수신). ERP 소비자 인증/호환 API는 기존 구현을 사용하며 ERP의 별도 원천 writer를 만들지 않는다.
