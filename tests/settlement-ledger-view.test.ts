@@ -45,7 +45,7 @@ const rowData = {
   payWritten: 800_000,
   supplierRate: 0.0325,
   agentRate: 500_000,
-  calculationBasis: '사람이 입력한 기준료 × 기간 + 추가금',
+  calculationBasis: '  사람이 입력한 기준료 × 기간 + 추가금\n  원문 공백 보존  ',
 };
 
 function workflowStore(): AdminWorkflowStore {
