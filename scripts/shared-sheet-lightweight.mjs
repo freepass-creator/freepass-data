@@ -75,6 +75,7 @@ export function planLightweightPresentation(metadata, captures, spec=inputSpec) 
   const rgb=h=>({red:parseInt(h.slice(1,3),16)/255,green:parseInt(h.slice(3,5),16)/255,blue:parseInt(h.slice(5,7),16)/255});
   for(const sheet of targets){
     const p=sheet.properties,summary=p.title===spec.summaryTitle,end=summary?policy.summaryRows:policy.supplierRows;
+    if(spec.changeControl?.destructiveChanges==='FORBIDDEN'&&p.gridProperties.rowCount>end)hold('Deletion forbidden: row shrinking/compaction requires a new explicit user decision');
     const capture=captures.sheets.find(s=>s.properties.title===p.title),rows=new Map();
     if(!capture)hold(`Full value capture required: ${p.title}`);
     for(const b of capture.data??[])for(const [i,r]of(b.rowData??[]).entries())rows.set((b.startRow??0)+i,r.values??[]);

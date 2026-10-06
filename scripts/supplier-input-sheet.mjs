@@ -317,6 +317,7 @@ export function planColumnAdd(input,spec=inputSpec,now=Date.now()){
 // right to left, then move the remaining columns into place left to right and
 // rewrite the header row. No cell value is rewritten. Back up before running.
 export function planLayoutChange(input,spec=inputSpec,now=Date.now()){
+  if(spec.changeControl?.destructiveChanges==='FORBIDDEN')hold('Deletion forbidden by current user specification; historical layout migration disabled');
   const rule=spec.layoutChange,from=spec.legacyLayouts?.[rule?.from];
   if(!rule||!from)hold('Spec layoutChange with legacy layout required');
   if(!Array.isArray(rule.remove)||new Set(rule.remove).size!==rule.remove.length)hold('layoutChange remove must be a unique column list');

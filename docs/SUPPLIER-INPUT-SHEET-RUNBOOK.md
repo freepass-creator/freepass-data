@@ -1,5 +1,10 @@
 # 공급사 원문 입력 시트 — 다음 작업은 여기서 시작
 
+## 현행 삭제 금지 잠금 — 대표 2026-10-06.5
+
+탭·행·열 삭제와 행수 축소를 금지한다. changeControl.destructiveChanges=FORBIDDEN. 과거 planLayoutChange와 경량 행 축소/압축은 새 명시 지시로 정본을 바꾸기 전 HOLD한다. 화면 적용 규격은 .4 그대로이며 이번 .5는 삭제 방지 코드·정본만 추가, 라이브 쓰기0. 시트 소유자/API 전체를 막는 강제 정책은 아니며 main/ERP 브랜치 반영 전에는 그 브랜치에 적용됐다고 말하지 않는다.
+
+
 ## 현행 UI·수정 소유권 — 대표 2026-10-06.4
 
 - 기계 정본 uiOwnership / changeControl.baselineVersion. 날짜 두 열 yy-mm-dd, 글씨 9pt. 일 없는 연월 원문은 그대로 보존한다.

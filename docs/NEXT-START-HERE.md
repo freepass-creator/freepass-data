@@ -398,6 +398,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-06 공통시트 비휘발성·브랜치 정합 감사 / 삭제 금지
+
+- user: 이제 삭제 금지, 규격 정합·main/브랜치 분기 확인. 라이브 쓰기0.
+- main 6df910c74561cf1cfc589abf3fde8fcf02ca347b: UI/규격 lock 미포함. PR397 OPEN, 현재 작업 HEAD845eef7의 규격 .4만 최신. ERP branch 9bb60b6a3efeea4a42a2a6c3f6a23111a8d60542는 .3, UI 소유권 미포함. 별도 런타임4파일 변경과 겹치는 NEXT는 통합 시 양쪽 이력 보존 필요. 자동 merge/rebase/브랜치 삭제 없음.
+- 실제 읽기: 12입력100행×74열, 종합296행×74열, 각14개 유한 상태/상품 TEXT_EQ. 962헤더와 표본 날짜/9pt/상태9목록 drift0. 종합300정본과4행 차이는 HOLD, 자동 복구 없음. 보호13개는 이전 적용 영수증 근거이며 이번 기본 metadata가 보호를 반환하지 않아 현재 보호 재확인은 HOLD.
+- 빈틈: 과거 열삭제 계획기 및 경량 rowCount 축소/압축 경로가 남아 있음. 최신 사용자 삭제 금지를 정본 .5 destructiveChanges=FORBIDDEN에 기록하고 두 경로를 데이터 접근 전 차단. 현재 UI 적용은 .4 유지, 라이브 쓰기0. 73 Node tests PASS(과거 정책 fixture는 명시적으로 현재 잠금 제외).
+- HOLD: PR397 미병합, ERP .3 미동기화, 전체 공급사 본문/금액·정책 audit 미수행(이번 규격 표본 검사), 관리자 API 우회, 운영 pin/자동 감시 미설정.
+- next_start_here: PR397의 .5 정본·삭제 방지 코드를 main 통합할 때 현재 main 및 ERP 겹침 확인 후 동일 정본 사용. 오래된 브랜치로 라이브 시트 쓰기 금지. 새 explicit user decision 없이는 삭제/축소 경로 활성화 금지.
+
+
 ### 2026-10-06 공통시트 UI·수정 소유권 고정 — PERSISTENCE VERIFIED
 
 - exact implementation commit: `4e9eceae213367ef8aebd3c75ec4f329c21c0a08`, PR397.

@@ -2,6 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {assertUxRequests,planSharedSheetUx,planHeaderProtection} from '../scripts/shared-sheet-ux.mjs';
 import {inputSpec} from '../scripts/supplier-input-sheet.mjs';
+import {planLayoutChange} from '../scripts/supplier-input-sheet.mjs';
+import {planLightweightPresentation} from '../scripts/shared-sheet-lightweight.mjs';
+test('current user lock blocks historical deletions and shrinking before data access',()=>{
+  assert.throws(()=>planLayoutChange({}),/Deletion forbidden/);
+  const metadata={sheets:[inputSpec.summaryTitle,...inputSpec.changeControl.activeSupplierTabs].map((title,i)=>({properties:{title,sheetId:i,gridProperties:{rowCount:1000}}})),};
+  metadata.sheets.push({properties:{title:inputSpec.vehicleMaster.tab,hidden:true,gridProperties:{rowCount:942}}});
+  assert.throws(()=>planLightweightPresentation(metadata,{sheets:[]}),/Deletion forbidden/);
+});
 test('UI writer rejects input, formula and structural mutation',()=>{
   for(const fields of ['userEnteredValue','userEnteredFormat','userEnteredFormat,note'])assert.throws(()=>assertUxRequests([{updateCells:{start:{rowIndex:0},fields}}]),/HOLD/);
   assert.throws(()=>assertUxRequests([{deleteDimension:{}}]),/HOLD/);

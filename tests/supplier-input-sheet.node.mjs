@@ -4,8 +4,10 @@ import {spawnSync} from 'node:child_process';
 import {auditValueFormats,planValueNormalize,auditTabConsistency,planTabConsistencyFix,canonCaptureRequest,canonValueCaptureRequest,planExcludeSupplierTab,mergeCanonCaptures,summaryFormula} from '../scripts/supplier-input-sheet.mjs';
 import {planSupplierInput,planSupplierDropdowns,planVehicleMasterDropdowns,planPolicySplit,planLayoutReorder,planColumnAdd,planLayoutChange,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec as currentSpec} from '../scripts/supplier-input-sheet.mjs';
 // Earlier-policy fixtures keep historical planner coverage; current policy has its own regression below.
+// Historical layout deletion fixtures explicitly exclude today's no-deletion lock.
 const inputSpec=structuredClone(currentSpec);delete inputSpec.dropdownPolicy.lightweight;inputSpec.dropdownPolicy.disabled=false;inputSpec.dropdownPolicy.freeText=inputSpec.inputHeaders.filter((h,i)=>i>=inputSpec.inputHeaders.indexOf('1개월')||(!inputSpec.dropdowns[h]&&!inputSpec.vehicleMaster.columns[h]));delete inputSpec.performancePolicy;
 const now=Date.parse('2026-10-03T12:00:00Z');
+delete inputSpec.changeControl;
 const legacy=inputSpec.legacyLayouts['2026-10-02'];
 const sheet=(id,title,headers,grid={frozenRowCount:1,frozenColumnCount:0})=>({properties:{sheetId:id,title,gridProperties:{rowCount:1000,columnCount:headers.length,...grid}},data:[{rowData:[{values:headers.map(h=>({userEnteredValue:{stringValue:h}}))}]}]});
 const shared=inputSpec.supplierChannels.sharedInputSheet;
