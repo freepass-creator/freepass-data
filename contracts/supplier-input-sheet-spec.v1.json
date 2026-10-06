@@ -5,6 +5,18 @@
   "managementMode": "MANUAL_DIRECT_GOOGLE_SHEETS",
   "automaticSourceRefresh": false,
   "manualAuthority": "VISIBLE_SUPPLIER_TABS",
+  "supplierManagement": {
+    "decision": "대표 2026-10-06: 이제 공급사들은 공통시트에서 관리한다",
+    "scope": "supplierChannels.sharedInputSheet에 등록된 공급사; 직접 API/홈페이지 연동 공급사의 경로는 유지",
+    "inputAuthority": "공통 시트의 현재 공급사 입력 탭",
+    "legacySheetsRole": "대조·과거 근거용, 자동 덮어쓰기 및 양방향 동기화 금지",
+    "identity": "공급사코드 + 차량번호, 공용 탭은 회사명으로 계열사 구분; 신차/미정은 확정 차량 식별자 아님",
+    "unresolvedDifferences": "비교 차이는 확인 목록으로 남기고 원본이 더 최신이라고 추정해 수정하지 않는다",
+    "absentTabs": "연카·스위치플랜·에스에이의 현재 탭 부재는 별도 확인; 자동 복원/재고 삭제 금지",
+    "changeEvidence": "변경 전후 값·근거·검증 결과를 지속 기록하며 미확인 정책/차종/금액은 HOLD",
+    "sessionBoundary": "이 세션은 공통 시트 관리, ERP 연동은 별도 세션",
+    "continuousMonitoring": "NOT_CONFIGURED"
+  },
   "summaryTitle": "종합",
   "guideTitle": "관리안내",
   "layoutAuthority": "2026-10-03 사용자 확정 양식 + 같은 날 '한 칸에 정보 하나' 결정(보험 한도/면책, 운전자 개인/법인, 추가운전 인원/요금, 승계/승계비 분리, 자차면책은 범위 한 칸). 양식이 다르면 실행기는 쓰지 않고 HOLD한다. 같은 날 대표 결정으로 칸 순서 재배치: 회사명→차량상태→배차상태→상품구분→차량번호→제조사→모델→세부모델→세부트림→(색상·등록일·입고일·사진·기타기간)→연식→주행거리→배기량→연료→대여료→차명 원문→옵션 원문→차량가격→예외사항→정책. 같은 날 대표 결정으로 차량가격 뒤에 제원 6칸(인승·차종구분·차종크기·구동방식·배터리용량·원산지) 추가. 같은 날 대표 결정(영업자 보기 원칙): 대여료 앞에는 어떤 차인지 아는 최소 필수 정보, 대여료 뒤에는 부가 정보를 중요한 순서로. 배차상태(차량상태와 같음)·사진링크·기타기간①②③ 제거, 입고일자는 차량상태 앞. 2026-10-03 밤 대표 결정: 공동 입력시트 계좌번호 제거. 공급사 입금계좌 정본은 ERP 파트너 회사정보의 은행·계좌번호·예금주이며 판매시트 전용계좌는 여기서 채운다.",
@@ -3596,7 +3608,7 @@
   },
   "changeControl": {
     "status": "LOCKED_BY_USER",
-    "baselineVersion": "supplier-input-presentation/2026-10-06.2",
+    "baselineVersion": "supplier-input-presentation/2026-10-06.3",
     "authority": "대표 최신 명시 지시 > 이 파일의 현행 설정 > 과거 이력. 현행 설정 변경은 대표 지시에 따른다.",
     "decision": "2026-10-06 대표: 규격으로 딱 정한다. 절대 흔들리지 않고 휘발되지 않으며 지금부터 수정은 영구 기록한다.",
     "currentPresentation": "dropdownPolicy.lightweight + inputHeaders + valueFormats + columnWidths + retroLook.valueTextColors",
