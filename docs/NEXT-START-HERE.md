@@ -399,6 +399,18 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-07 보증금 P0 — 근거 판정 통합과 갱신 삭제 방지
+
+- 목적/오더: 대표 최신 지시를 지휘가 단일쓰기 관리담당에 배정. 공란·누락을 무보증/0으로 추정하지 않고 미확인은 보증금 확인 필요. ERP 소비처 코드는 별도 담당이며 이 작업은 Data 경로만 수정.
+- 시작:506ce1104d0faf3ba36198efb292fc355f0ce7cc clean, fetched main72d486dc5f64f2a70c9ddc548ac7bdeb7f1f6ccc. Issue24·PR397·398·399 조회, 관련 Data 보증금 파일 겹침 없음(기존 NEXT 경합은 단일쓰기 유지). academy:start READY.
+- 구현 exact commit:0cc15a850096c0fed9fd629be33325e71bb4a10f. legacy 및 공통시트 정규화가 기존 assessDepositEvidence 재사용: 미해석 문자열을 숫자제거→0으로 만들지 않음; 누락/placeholder/금지/유료규칙 충돌은 UNKNOWN과 검수 사유. 무보증 근거와 실제0이 함께 있어야 ZERO. 양수와 조건 기간/거리 귀속 보존, 이안카 원천 조건별 판정/발행 경로 변경0.
+- 기존 반환 계약의 UNKNOWN 표시를 보증금 확인 필요로 정합화. legacy RAW 근거 lineage에 공급사/상품종류/메모/free표시/형제요금 원문 연결(transform1.1.0), shared 규칙3으로 후보 버전 분리. RAW 자체 수정0.
+- 이전 KNOWN/ZERO 금액이 새 UNKNOWN에서 제거되는 경우 source-change diff는 DEPOSIT_EVIDENCE_LOST_REQUIRES_REVIEW/BLOCKED. 승인해도 전체 refresh 거절, 이전 state/amount/revision/binding/outbox/ACTIVE 불변을 검사. 이전값은 이전 증거로 보존되며 새 원천 binding으로 승격하지 않음.
+- 검사: 전체 npm check의 arch/standards(기존 PARTIAL 의미 유지)/data-access/sheets104/build/read-smoke/shadow/dashboard 통과. 전체 Vitest1668PASS14SKIP4FAIL: 환경 jq 부재1, 동시실행5초 timeout3. 새 missing-evidence 검사 추가 후 관련6+ingestion+실패3파일을 workers2/timeout20초로 실행:298PASS/1SKIP(jq 의존 검사만 명시 제외), build 재통과. 전체 PASS라고 표현하지 않음. git diff --check PASS. 비공개 전체로그는 로컬 tmp에 보존.
+- HOLD: jq 환경 필수검사 미통과, 원천 실제 회차/전후 영수증·DB persistence·배포·ERP 소비처 실측 미수행. 기존 KNOWN/ACTIVE 보존 가드는 삭제방지이며 새 보류원천을 현재확정으로 보이지 않게 하는 freshness/보류 표시 연결 완료가 아님. ERP compat의 최신UNKNOWN 소비와 old ACTIVE를 구분해 검증해야 한다. PR397의 기존 branch Guard/main 미통합도 별도 HOLD.
+- next_start_here: 기능·개발 담당의 exact0cc15a8 읽기전용 독립검토 → 지휘 취합 → ERP 담당의 기존 소비계약에서 조건별 state/amount/근거 및 보류현재성 검증. 이번 DB/시트값/권한/배포/스케줄 쓰기0, 새branch0, 운영값 일괄채우기0.
+
+
 ### 2026-10-07 현행 담당 지도 — 4개 채팅으로 통합
 
 대표가 지휘채팅에서 “탭이 너무 많은데 한번 다시 잘 생각해서 봐봐”라고 지시한 뒤 지휘 담당이 기존 결과를 인계하고 4방으로 통합했다. 해당 턴의 기능·개발 이름 변경 및 아래 5방 archive 성공 영수증을 read_thread로 확인했다. 아래 9방 생성 기록은 과거 이력이며 현행 배정은 이 표를 따른다.
