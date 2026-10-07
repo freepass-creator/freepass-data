@@ -399,6 +399,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-07 보증금 P0 운영 반영 진입 — CI 통과 / 정본 작업선 차단
+
+- 현재 main fetched72d486dc5f64f2a70c9ddc548ac7bdeb7f1f6ccc, PR397 head5f0df92f9f996284c7dc154fc95fc779d795b83f open/unmerged. GitHub Core CI37564624512 SUCCESS 확인: 로컬 jq 환경 HOLD와 구분하여 CI 실행은 통과로 기록한다.
+- Canon Guard37564625055/job112609418563 로그 직접 조회: behind-main5(max30) 통과, laterPR399 contracts겹침 안내, ACTOR_OWNED_BRANCH_FORBIDDEN(codex/shared-sheet-dropdowns-before-rent) 실패. 요구는 work/<project-id>/<work-id>. 새 작업선 금지·실패 Guard 우회 금지 지시로 remote rename/새 PR/예외등록/force merge 없음. 기존 별개 work/freepass-data 작업선 임의 사용도 없음.
+- 기존 deploy-read-runtime.yml은 main ref만 허용. 그러므로 아직 미통합 보증금 코드를 branch에서 운영 배포하지 않음. DB/시트값/IAM 변경0. 이전 ACTIVE/소비처 현재성 HOLD 유지.
+- 지휘에 정확한 실패증거와 기존 B3Q Data 사진 계약·발행 담당(01a0e3f6-791d-7022-be65-71562fb87870), B3Q 지휘통제실(01a10e59-61f0-75f0-9516-b08e71622caa) 조정 경로를 전달. 공식 기존업무 이관/통합 line 결정 후 동일 코드 보존→main/필수검사→기존 읽기서비스 배포→실제 rate state 응답 대사를 이어간다. 운영 반영 완료 아님.
+
+
 ### 2026-10-07 보증금 P0 후속 — ERP compatibility 조건별 응답 판정
 
 - 1차 Data수정0cc15a850096c0fed9fd629be33325e71bb4a10f에 이어 ERP 담당이 소비할 per-rate 판정 추가. exact code382f65bfb3c671d40310ab0e3d8e911e857769de. 기존 branch/단일쓰기 유지, DB·시트·권한·배포·스케줄 쓰기0.
