@@ -1,6 +1,22 @@
 import {inputSpec} from './supplier-input-sheet.mjs';
 import {verifyLockedTabInventory} from './shared-sheet-lightweight.mjs';
 
+export function supplierHeaderNote(header,spec=inputSpec){
+  const guide=spec.uiOwnership?.supplierHeaderNotes?.[header];
+  if(!guide)throw new Error(`HOLD: supplier input guidance missing for ${header}`);
+  return `${guide}\n\n${spec.uiOwnership.headerNote}`;
+}
+
+export function planSupplierHeaderNotes(metadata,capture,spec=inputSpec){
+  verifyLockedTabInventory(metadata,spec);
+  const requests=metadata.sheets.filter(s=>!s.properties.hidden).map(s=>{
+    const cells=capture.sheets.find(t=>t.properties.sheetId===s.properties.sheetId)?.data?.[0]?.rowData?.[0]?.values;
+    if(JSON.stringify(cells?.map(c=>c.userEnteredValue?.stringValue))!==JSON.stringify(spec.inputHeaders))throw new Error('HOLD: exact fresh header capture required');
+    return {updateCells:{start:{sheetId:s.properties.sheetId,rowIndex:0,columnIndex:0},rows:[{values:spec.inputHeaders.map(h=>({note:supplierHeaderNote(h,spec)}))}],fields:'note'}};
+  });
+  assertUxRequests(requests);return requests;
+}
+
 export function planFilterRangeRepair(metadata,spec=inputSpec){
   verifyLockedTabInventory(metadata,spec);
   return metadata.sheets.filter(s=>!s.properties.hidden).flatMap(s=>{
@@ -58,7 +74,7 @@ export function planSharedSheetUx(metadata,capture,spec=inputSpec){
       const col=spec.inputHeaders.indexOf(h);
       requests.push({repeatCell:{range:{...range,startRowIndex:1,startColumnIndex:col,endColumnIndex:col+1},cell:{userEnteredFormat:{numberFormat:{type:'DATE',pattern:spec.valueFormats[h].pattern}}},fields:'userEnteredFormat.numberFormat'}});
     }
-    requests.push({updateCells:{start:{sheetId:p.sheetId,rowIndex:0,columnIndex:0},rows:[{values:spec.inputHeaders.map(h=>({note:`${spec.uiOwnership.headerNote}\n${h==='차량상태'?spec.uiOwnership.statusNote:h==='입고일자'||h==='최초등록일'?'날짜 yy-mm-dd. 일 미확정 연월은 yy-mm 원문 유지.':''}`}))}],fields:'note'}});
+    requests.push({updateCells:{start:{sheetId:p.sheetId,rowIndex:0,columnIndex:0},rows:[{values:spec.inputHeaders.map(h=>({note:supplierHeaderNote(h,spec)}))}],fields:'note'}});
     for(const [value,color] of Object.entries(spec.uiOwnership.statusDisplay)){
       const hex=color.slice(1),rgb={red:parseInt(hex.slice(0,2),16)/255,green:parseInt(hex.slice(2,4),16)/255,blue:parseInt(hex.slice(4,6),16)/255};
       if(!(sheet.conditionalFormats??[]).some(r=>r.booleanRule?.condition.values?.[0]?.userEnteredValue===value&&r.ranges?.some(r=>r.startColumnIndex===2)))requests.push({addConditionalFormatRule:{index:0,rule:{ranges:[{...range,startRowIndex:1,startColumnIndex:2,endColumnIndex:3}],booleanRule:{condition:{type:'TEXT_EQ',values:[{userEnteredValue:value}]},format:{textFormat:{foregroundColor:rgb,bold:true}}}}}});

@@ -1,9 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assertUxRequests,planSharedSheetUx,planHeaderProtection,planFilterRangeRepair} from '../scripts/shared-sheet-ux.mjs';
+import {assertUxRequests,planSharedSheetUx,planHeaderProtection,planFilterRangeRepair,supplierHeaderNote,planSupplierHeaderNotes} from '../scripts/shared-sheet-ux.mjs';
 import {inputSpec} from '../scripts/supplier-input-sheet.mjs';
 import {planLayoutChange} from '../scripts/supplier-input-sheet.mjs';
 import {planLightweightPresentation} from '../scripts/shared-sheet-lightweight.mjs';
+test('supplier notes cover every column, put input guidance first and never write values',()=>{
+  for(const h of inputSpec.inputHeaders){const note=supplierHeaderNote(h);assert.ok(note.startsWith(inputSpec.uiOwnership.supplierHeaderNotes[h]));assert.ok(!/AI|supplier-input-presentation|정본/.test(note));assert.ok(note.endsWith(inputSpec.uiOwnership.headerNote));}
+  assert.throws(()=>supplierHeaderNote('없는 항목'),/guidance missing/);
+  const metadata={sheets:[inputSpec.summaryTitle,...inputSpec.changeControl.activeSupplierTabs].map((title,i)=>({properties:{title,sheetId:i}}))};
+  const capture={sheets:metadata.sheets.map(s=>({...s,data:[{rowData:[{values:inputSpec.inputHeaders.map(h=>({userEnteredValue:{stringValue:h}}))}]}]}))};
+  const requests=planSupplierHeaderNotes(metadata,capture);assert.equal(requests.length,13);
+  for(const r of requests){assert.equal(r.updateCells.fields,'note');assert.equal(r.updateCells.start.rowIndex,0);assert.equal(r.updateCells.rows[0].values.length,74);assert.ok(r.updateCells.rows[0].values.every(c=>Object.keys(c).join()==='note'));}
+});
 test('filter repairs cover full rows and columns, preserve conditions, and refuse re-sort',()=>{
   const metadata={sheets:[inputSpec.summaryTitle,...inputSpec.changeControl.activeSupplierTabs].map((title,i)=>({properties:{title,sheetId:i,gridProperties:{rowCount:100}},basicFilter:{range:{sheetId:i,startRowIndex:0,endRowIndex:100,startColumnIndex:0,endColumnIndex:74}}}))};
   metadata.sheets[0].basicFilter.range.endColumnIndex=62;
