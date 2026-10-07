@@ -398,6 +398,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-07 필터 오류 조사 / 전체 열 범위 정정 — PERSISTENCE VERIFIED / UI HOLD
+
+- 사용자: 필터 시 문제가 발생했다고 표시. 정확한 탭/동작/문구 clarification 대기. 현 브랜치 e4a28a1e92ea6de99d9025ab7eed6624fcb21edd, main e486d0e 확인; 신규 branch/merge 없음.
+- 기존 보호13개 현재 full metadata 재확인. 모두 pyh관리계정 편집가능. 기본 메타데이터에 보호필드가 없는 것을 부재로 보지 않는다. 원인으로 단정하거나 보호 해제하지 않음.
+- 실제 불일치: 종합 basicFilter A1:BJ174(62열), 현재74열·184그리드. 기존 criteria 출고불가 숨김 유지, setBasicFilter 한 요청으로74열·그리드전체 설정. 공급사12탭100×74는 정상범위, 수정0. 삭제/입력값/수식 요청0, 첫 full metadata 조회용 A1 폰트9 재설정1요청 별도.
+- 새 조회에서 전체74열·그리드182 필터 범위 확인. 관측 사이 종합 행수184→183→182와 본문2714좌표 변화, 전후 값동일 검증 불성립. setBasicFilter에는 행삭제/값변경 없음; 외부 작업/동시편집 가능성 HOLD, 자동 원복 금지. 비공개 before/after 증거 tmp 보관.
+- 정본 baseline2026-10-07.1 filterPolicy·planFilterRangeRepair·테스트74PASS. 첫 academy 검사 DIRTY_WORKTREE(내 준비코드) HOLD, 준비코드 커밋 후 실제 READY receipt 확인하고 라이브 실행.
+- HOLD: 사용자 실제 오류 재현·해소 미확인, 브라우저 시트탭없음, 계속 줄어드는 종합 작업주체 미확인, capacity300불일치. 보호 관련 가설과 확인된 범위 오류를 구분한다.
+- next_start_here: 사용자 exact 탭/동작 답 → 보호/필터 조건·세션 계정으로 재현. 범위만 맞췄다고 필터 오류 완전해결 선언하지 않는다. 동시 입력/삭제 원인 조사 전 값·행 복원/반복 쓰기 금지.
+
+
 ### 2026-10-06 AI Core·AI-OPS 실제 학습과 공통시트 적용 체크포인트
 
 - learning implementation commit cb2717e65324702a6a9e8fb38f3f35ff8e859eca. B3Q 기존 상황실 thread01a10e59-61f0-75f0-9516-b08e71622caa에 send_message_to_thread 성공 영수증 확인. 수신 전달 완료이며 담당 인수/main 통합은 아직 미확인.
