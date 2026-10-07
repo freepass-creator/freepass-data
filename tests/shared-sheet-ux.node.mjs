@@ -1,9 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assertUxRequests,planSharedSheetUx,planHeaderProtection} from '../scripts/shared-sheet-ux.mjs';
+import {assertUxRequests,planSharedSheetUx,planHeaderProtection,planFilterRangeRepair} from '../scripts/shared-sheet-ux.mjs';
 import {inputSpec} from '../scripts/supplier-input-sheet.mjs';
 import {planLayoutChange} from '../scripts/supplier-input-sheet.mjs';
 import {planLightweightPresentation} from '../scripts/shared-sheet-lightweight.mjs';
+test('filter repairs cover full rows and columns, preserve conditions, and refuse re-sort',()=>{
+  const metadata={sheets:[inputSpec.summaryTitle,...inputSpec.changeControl.activeSupplierTabs].map((title,i)=>({properties:{title,sheetId:i,gridProperties:{rowCount:100}},basicFilter:{range:{sheetId:i,startRowIndex:0,endRowIndex:100,startColumnIndex:0,endColumnIndex:74}}}))};
+  metadata.sheets[0].basicFilter.range.endColumnIndex=62;
+  metadata.sheets[0].basicFilter.criteria={'2':{hiddenValues:['출고불가']}};
+  const before=JSON.stringify(metadata),r=planFilterRangeRepair(metadata);
+  assert.equal(r.length,1);assert.equal(r[0].setBasicFilter.filter.range.endColumnIndex,74);
+  assert.deepEqual(r[0].setBasicFilter.filter.criteria,metadata.sheets[0].basicFilter.criteria);
+  assert.equal(JSON.stringify(metadata),before);
+  metadata.sheets[0].basicFilter.sortSpecs=[{dimensionIndex:2,sortOrder:'ASCENDING'}];
+  assert.throws(()=>planFilterRangeRepair(metadata),/preservation review/);
+});
 test('current user lock blocks historical deletions and shrinking before data access',()=>{
   assert.throws(()=>planLayoutChange({}),/Deletion forbidden/);
   const metadata={sheets:[inputSpec.summaryTitle,...inputSpec.changeControl.activeSupplierTabs].map((title,i)=>({properties:{title,sheetId:i,gridProperties:{rowCount:1000}}})),};

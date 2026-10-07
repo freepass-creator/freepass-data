@@ -1,6 +1,18 @@
 import {inputSpec} from './supplier-input-sheet.mjs';
 import {verifyLockedTabInventory} from './shared-sheet-lightweight.mjs';
 
+export function planFilterRangeRepair(metadata,spec=inputSpec){
+  verifyLockedTabInventory(metadata,spec);
+  return metadata.sheets.filter(s=>!s.properties.hidden).flatMap(s=>{
+    const p=s.properties,f=s.basicFilter;
+    if(!f)return []; // Do not invent a missing filter or erase user's selection.
+    const range={sheetId:p.sheetId,startRowIndex:0,endRowIndex:p.gridProperties.rowCount,startColumnIndex:0,endColumnIndex:spec.inputHeaders.length};
+    if(JSON.stringify(f.range)===JSON.stringify(range))return [];
+    if((f.sortSpecs??[]).length)throw new Error('HOLD: sorted filter requires value-order preservation review');
+    return [{setBasicFilter:{filter:{...f,range}}}];
+  });
+}
+
 export function planHeaderProtection(metadata,spec=inputSpec){
   verifyLockedTabInventory(metadata,spec);
   if(!spec.uiOwnership?.headerProtection)throw new Error('HOLD: protection ownership required');
