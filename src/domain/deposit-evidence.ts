@@ -36,6 +36,7 @@ export function assessDepositEvidence(input: {
     return { state: 'KNOWN' as const, amount, reason: 'SOURCE_AMOUNT' };
   }
   if (forbidden) return unknown('ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY');
+  if (missing) return unknown('MISSING_DEPOSIT_AMOUNT');
   if (explicitZero) return { state: 'ZERO' as const, amount: 0, reason: 'EXPLICIT_ZERO_DEPOSIT' };
   return unknown(note ? 'DEPOSIT_RULE_REQUIRES_RESOLUTION' : 'ZERO_OR_MISSING_WITHOUT_WAIVER_EVIDENCE');
 }
@@ -66,12 +67,10 @@ export function hasConflictingPaidDeposit(price: unknown) {
 }
 
 /** Full input universe including inactive products. Details stay in private evidence, not public API. */
-export function depositStatusLabel(state: 'KNOWN' | 'ZERO' | 'UNKNOWN', sourceAmount: unknown, note?: unknown) {
+export function depositStatusLabel(state: 'KNOWN' | 'ZERO' | 'UNKNOWN', _sourceAmount: unknown, _note?: unknown) {
   if (state === 'ZERO') return '무보증' as const;
   if (state === 'KNOWN') return '보증금 있음' as const;
-  const missing = sourceAmount === undefined || sourceAmount === null || (typeof sourceAmount === 'string' && !sourceAmount.trim());
-  return missing && (note === undefined || note === null || (typeof note === 'string' && !note.trim()))
-    ? '미입력' as const : '확인중' as const;
+  return '보증금 확인 필요' as const;
 }
 
 export function auditDepositEvidence(products: Record<string, Record<string, unknown>>) {

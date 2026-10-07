@@ -4,7 +4,7 @@ import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 
 const TRANSFORM_ID = 'legacy-freepasserp3-product-normalizer';
-const TRANSFORM_VERSION = '1.0.0';
+const TRANSFORM_VERSION = '1.1.0';
 
 function getPath(input: Record<string, unknown>, path: string): unknown {
   return path.split('.').reduce<unknown>((value, part) => {
@@ -119,6 +119,12 @@ export function buildLegacyCandidateLineage(
       normalizedFieldPath: `${normalizedPrefix}.depositState`,
       normalizedValue: term.depositState
     }));
+
+    // Preserve the exact RAW decision inputs alongside the per-term amount.
+    for (const path of ['provider_company_code', 'product_type', 'deposit_note', 'deposit_free', 'price']) {
+      out.push(record({ raw, runId, candidateId, sourceFieldPath: path,
+        normalizedFieldPath: `${normalizedPrefix}.depositState`, normalizedValue: term.depositState }));
+    }
 
     if (term.deposit) {
       out.push(record({
