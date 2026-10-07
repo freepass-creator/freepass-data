@@ -13,6 +13,10 @@ Firestore `(default)`, `asia-northeast3`를 실조회했다. RTDB는 사용하�
 
 ## 독립된 소비처 읽기 서버
 
+2026-10-07 보증금 판정 추가 계약: `catalog-compat/v1`의 기존 `products.price[key]`에 `depositState`(KNOWN/ZERO/UNKNOWN), `depositStatusLabel`, `depositEvidenceReason`를 응답에서 파생한다. `meta.depositEvidenceVersion`은 `catalog-compat-deposit/1`. 기존 기간/거리 key와 rent는 보존하고, UNKNOWN의 `deposit`은 null, 문구는 **보증금 확인 필요**다. 소비처는 금액만으로 상태를 추정하지 않는다. 원문 저장값·DB는 변경하지 않는다.
+
+일반 상품은 `assessDepositEvidence`를 재사용한다. 이안카는 기존 승인 발행기가 저장한 `iancar_phase_one` typed 조건과 동일 차량/발행 schema/digest 형식/갱신 시각(기존 15분 신선도)/가격/최저거리 alias를 모두 대조한 경우만 확인된 금액과 0을 전달한다. digest 형식 검사는 비공개 RAW 재해싱이 아니며, 원문 근거를 응답에 새로 추가하지 않는다. 누락·충돌·미등록 발행 경로·오래된 근거는 UNKNOWN이다. 이 코드 변경은 운영 배포·ERP 화면 반영 증거가 아니며, Canonical의 이전 ACTIVE와 새 보류 원천의 현재성 연결은 별도 HOLD다.
+
 `npm run serve:consumers`는 읽기 전용 서버다. worker, 시드, command endpoint, 게시 기능이 없다.
 서버 환경에 `FIREBASE_PROJECT_ID=freepasserp5`, `FREEPASS_DATA_DRIVER=firestore`, 서비스의 ADC/workload identity,
 `FREEPASS_DATA_CONSUMERS_JSON`을 설정한다. 운영에서는 `NODE_ENV=production`도 명시한다.

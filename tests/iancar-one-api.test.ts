@@ -1,3 +1,4 @@
+import { readIancarPublishedDeposit } from '../src/domain/deposit-evidence.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildIancarOneSourceBatch,
@@ -19,6 +20,7 @@ import {
   compareIancarOnePhaseOneParity,
   summarizeJsonShape
 } from '../src/adapters/iancar-one-api.js';
+import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 
 it('supplier model illustrations use exact full variants, never actual photo counts or guessed trims', () => {
   const detail = { vehicle_id: 'V1', plate_number: '133호1234', stale: false, name: '쿠퍼(4세대) 2.0 C 5 Door 클래식' };
@@ -291,6 +293,40 @@ describe('EANCAR ONE official partner API', () => {
     expect(product?.evidence.policyStage).toBe('DEFERRED');
     expect(product?.facts.maker).toBe('현대');
     expect(product?.evidence).not.toHaveProperty('contract_conditions');
+  });
+
+  it('reads confirmed zero only from the approved producer tuple and exact stored alias', async () => {
+    const fetcher = (async (input: string | URL | Request) => {
+      const response = await fullFetcher()(input); const body = await response.json();
+      if (new URL(String(input)).pathname.endsWith('/rates')) {
+        body.data[0].deposit = 0;
+        body.data.push({ ...body.data[0], contracted_mileage: 30000, monthly_rate: 600000, deposit: 1000000 });
+      }
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const [p] = buildIancarOnePublicationProducts(await collectIancarOnePhaseOneFacts(config, fetcher));
+    const stored = { provider_company_code: 'RP031', source: 'EANCAR_ONE_API', source_schema: 'iancar-one-phase-one-product/1',
+      iancar_one_vehicle_id: p!.sourceVehicleId, car_number: p!.car_number, price: p!.price,
+      iancar_phase_one: p!.evidence, _direct_ingest_at: Date.parse(p!.evidence.sourceSyncedAt),
+      deposit_note: '기간·주행거리별 보증금 상이: 상품 요금 조건 확인' };
+    const before = structuredClone(stored);
+    for (const key of ['24', '24_연20000km']) {
+      expect(readIancarPublishedDeposit(stored, key)).toMatchObject({ state: 'ZERO', amount: 0 });
+      expect((withCompatibilityDepositEvidence(stored).price as Record<string, Record<string, unknown>>)[key])
+        .toMatchObject({ depositState: 'ZERO', deposit: 0 });
+    }
+    expect(readIancarPublishedDeposit(stored, '24_연30000km')).toMatchObject({ state: 'KNOWN', amount: 1000000 });
+    for (const patch of [{ source_schema: 'unknown' }, { iancar_one_vehicle_id: 'other' }, { provider_company_code: 'RP004' },
+      { price: { ...p!.price, '24': { rent: 500000, deposit: 10 } } },
+      { iancar_phase_one: { ...p!.evidence, priceAliases: { '24': 'wrong' } } },
+      { iancar_phase_one: { ...p!.evidence, priceAliases: { '24': '24:30000:year' } } },
+      { iancar_phase_one: { ...p!.evidence, ratesDigest: '' } }, { iancar_phase_one: null },
+      { iancar_phase_one: { ...p!.evidence, sourceSyncedAt: '2026-09-01T00:00:00Z' } },
+      { product_type: '픽업구독' }, { deposit_note: '월 대여료×2' }, { deposit_free: false }]) {
+      expect(readIancarPublishedDeposit({ ...stored, ...patch }, '24').state).toBe('UNKNOWN');
+    }
+    expect(readIancarPublishedDeposit(stored, '6').state).toBe('UNKNOWN');
+    expect(stored).toEqual(before);
   });
 
   it('products never annualize monthly limits and never create an unobserved six-month rate', async () => {

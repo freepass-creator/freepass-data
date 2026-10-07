@@ -1,8 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { assessDepositEvidence, auditDepositEvidence, depositFromYearsRuleNote, depositStatusLabel } from '../src/domain/deposit-evidence.js';
 import { buildKakaoCatalogReferenceProduct, resolveReferenceDeposit } from '../src/application/kakao-catalog-reference.js';
+import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 
 describe('deposit evidence never promotes a placeholder to waiver', () => {
+  it('compatibility derives per-rate state without changing storage or unrelated fields', () => {
+    const product = { provider_company_code: 'RP004', product_type: '중고렌트', model: 'synthetic',
+      price: { '12': { rent: 500000, deposit: '미확인', depositState: 'ZERO' }, '24': { rent: 400000, deposit: '1,000,000' } } };
+    const before = structuredClone(product);
+    const result = withCompatibilityDepositEvidence(product);
+    expect(result.price).toMatchObject({ '12': { rent: 500000, deposit: null, depositState: 'UNKNOWN', depositStatusLabel: '보증금 확인 필요' },
+      '24': { rent: 400000, deposit: 1000000, depositState: 'KNOWN' } });
+    expect(product).toEqual(before); expect(result.model).toBe('synthetic');
+    const zero = { ...product, deposit_note: '무보증', price: { '12': { rent: 500000, deposit: 0 } } };
+    expect(withCompatibilityDepositEvidence(zero).price).toMatchObject({ '12': { deposit: 0, depositState: 'ZERO' } });
+    expect(withCompatibilityDepositEvidence({ ...zero, provider_company_code: 'RP012' }).price)
+      .toMatchObject({ '12': { deposit: null, depositState: 'UNKNOWN' } });
+    expect(withCompatibilityDepositEvidence({ ...zero, price: { '12': { rent: 500000, deposit: null } } }).price)
+      .toMatchObject({ '12': { deposit: null, depositState: 'UNKNOWN' } });
+  });
   it.each([undefined, null, ''])('requires an observed amount even when waiver flags exist: %j', sourceAmount => {
     expect(assessDepositEvidence({ supplierId: 'RP004', productType: '중고렌트', note: '무보증', depositFree: true, sourceAmount }))
       .toMatchObject({ state: 'UNKNOWN', amount: null, reason: 'MISSING_DEPOSIT_AMOUNT' });
