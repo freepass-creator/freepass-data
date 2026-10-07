@@ -400,6 +400,8 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ### 2026-10-07.3 공급사용 머리글 메모 — 현행
 
+- exact implementation commit `0641316457cbd52a997f637785ddff4783b60fad`, 기존 PR397.
+
 대표 지시: 입력 안내를 먼저, AI 문구 제외, 관리 설명은 아래 짧게. uiOwnership.supplierHeaderNotes의 74개 안내를 각 머리글 메모 첫 부분에 두고, 마지막에 관리 안내 한 줄만 둔다. 정책 의미는 기존 Commercial Catalog를 따르며 새 정책 사전/공급사 조건을 만들지 않는다. planSupplierHeaderNotes는 정확한 전체 머리글을 확인하고 note 필드만 쓴다. 이후 UI 계획기도 같은 메모를 사용하여 과거 기술 문구를 복원하지 않는다.
 실제13탭×74열=962개 메모 새 조회 모두 일치, 머리글 값 변경0, 본문값/수식/행/열/보호/필터 쓰기0. 비공개 전후 보존.75tests PASS. 정본 baseline2026-10-07.3. UI 렌더는 미확인이나 메모 내용은 API 되읽기로 확인. next_start_here: RUNBOOK 이 최신 절 → spec supplierHeaderNotes → planSupplierHeaderNotes.
 
