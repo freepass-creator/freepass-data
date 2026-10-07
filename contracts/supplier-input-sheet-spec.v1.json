@@ -3618,7 +3618,7 @@
   },
   "changeControl": {
     "status": "LOCKED_BY_USER",
-    "baselineVersion": "supplier-input-presentation/2026-10-07.1",
+    "baselineVersion": "supplier-input-presentation/2026-10-07.2",
     "authority": "대표 최신 명시 지시 > 이 파일의 현행 설정 > 과거 이력. 현행 설정 변경은 대표 지시에 따른다.",
     "decision": "2026-10-06 대표: 규격으로 딱 정한다. 절대 흔들리지 않고 휘발되지 않으며 지금부터 수정은 영구 기록한다.",
     "currentPresentation": "dropdownPolicy.lightweight + inputHeaders + valueFormats + columnWidths + retroLook.valueTextColors",
@@ -3653,7 +3653,7 @@
     "legacyPolicy": "과거 정책은 이력만 보존하며 자동 재적용 금지",
     "noSilentRepair": "다른 세션의 변경·설정 차이는 drift로 보고한다. 데이터·차종·가격을 과거 상태로 자동 되돌리지 않는다.",
     "automationState": "MANUAL_VERIFIED_NOT_CONTINUOUSLY_ENFORCED",
-    "latestDecisionRecord": "대표 2026-10-07 필터 오류 수정: 전체74열/현재그리드 범위, 기존 조건·보호·값 보존",
+    "latestDecisionRecord": "2026-10-07 사용자 웰릭스 필터 오류 화면: 강제 머리글 보호가 필터 막음, 경고형 보호로 전환",
     "dataCapturePolicy": {
       "decision": "대표 2026-10-06 공통시트 데이터를 FreePass Data에서 연동해 ERP 구성",
       "tabAuthority": "changeControl.activeSupplierTabs",
@@ -3684,13 +3684,14 @@
     "enforcement": "UI writer field allowlist; owner/authorized API can bypass; continuous monitoring not configured",
     "headerProtection": {
       "range": "각 visible 탭 A1:BV1",
-      "warningOnly": false,
+      "warningOnly": true,
       "editors": [
         "pyh@teamjpk.com"
       ],
       "ownerBypass": true,
       "body": "보호하지 않음; 공급사 입력 유지",
-      "summaryBody": "기존 생성 경로 소유권만 선언; 계정 미확인으로 전체 보호 미적용"
+      "summaryBody": "기존 생성 경로 소유권만 선언; 계정 미확인으로 전체 보호 미적용",
+      "reason": "기본 필터 조작 호환. 머리글 편집 경고, 강제 차단 아님. 삭제금지/AI 표시필드 제한 유지"
     },
     "filterPolicy": {
       "width": "inputHeaders.length (74)",

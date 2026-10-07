@@ -20,10 +20,10 @@ export function planHeaderProtection(metadata,spec=inputSpec){
     const range={sheetId:s.properties.sheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:spec.inputHeaders.length};
     const existing=(s.protectedRanges??[]).find(p=>JSON.stringify(p.range)===JSON.stringify(range));
     if(existing){
-      if(existing.warningOnly||JSON.stringify(existing.editors?.users)!==JSON.stringify(spec.uiOwnership.headerProtection.editors))throw new Error('HOLD: existing protection owner drift; no silent ACL rewrite');
+      if(Boolean(existing.warningOnly)!==Boolean(spec.uiOwnership.headerProtection.warningOnly)||(!existing.warningOnly&&JSON.stringify(existing.editors?.users)!==JSON.stringify(spec.uiOwnership.headerProtection.editors)))throw new Error('HOLD: existing protection owner drift; no silent ACL rewrite');
       return [];
     }
-    return [{addProtectedRange:{protectedRange:{range,description:`공통시트 정본 머리글 / ${spec.changeControl.baselineVersion}`,warningOnly:false,editors:{users:spec.uiOwnership.headerProtection.editors}}}}];
+    return [{addProtectedRange:{protectedRange:{range,description:`공통시트 정본 머리글 / ${spec.changeControl.baselineVersion}`,warningOnly:spec.uiOwnership.headerProtection.warningOnly,...(spec.uiOwnership.headerProtection.warningOnly?{}:{editors:{users:spec.uiOwnership.headerProtection.editors}})}}}];
   });
 }
 

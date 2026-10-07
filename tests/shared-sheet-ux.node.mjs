@@ -36,7 +36,7 @@ test('header ACL is idempotent and refuses owner drift, leaves body open',()=>{
     metadata.sheets[i].protectedRanges=[r.addProtectedRange.protectedRange];
   }
   assert.deepEqual(planHeaderProtection(metadata),[]);
-  metadata.sheets[0].protectedRanges[0].warningOnly=true;
+  metadata.sheets[0].protectedRanges[0].warningOnly=!inputSpec.uiOwnership.headerProtection.warningOnly;
   assert.throws(()=>planHeaderProtection(metadata),/owner drift/);
 });
 test('locked inventory and headers stop UX changes before requests',()=>{
