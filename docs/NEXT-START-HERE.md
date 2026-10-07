@@ -399,6 +399,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-07 보증금 P0 후속 — ERP compatibility 조건별 응답 판정
+
+- 1차 Data수정0cc15a850096c0fed9fd629be33325e71bb4a10f에 이어 ERP 담당이 소비할 per-rate 판정 추가. exact code382f65bfb3c671d40310ab0e3d8e911e857769de. 기존 branch/단일쓰기 유지, DB·시트·권한·배포·스케줄 쓰기0.
+- 기존 catalog-compat/v1 products.price[key] 응답에 depositState/label/reason 추가, UNKNOWN deposit:null, 확인필요 문구. meta.depositEvidenceVersion=catalog-compat-deposit/1. 기존 rent/기간·거리 key 및 다른 product필드 유지, 모든 등록 ERP/Admin/화이트라벨 compatibility소비자에 동일계약. 정책·파트너·사용자·차종 자료 변경0, reference RAW 조회 경로는 그대로.
+- readIancarPublishedDeposit는 기존 승인 producer와 typed저장근거를 재사용: source/schema·vehicle·digest형식·sourceSyncedAt/direct ingest 연결·기존15분freshness·KRW금액/기간/거리·exacttuple·최저tier alias 및금지/유료규칙 충돌 검사. 확인된0만ZERO, 다른조건 양수는해당조건KNOWN. missing/불일치/stale는UNKNOWN. digest형식 검사는 비공개RAW 재해싱 검증이 아님. 판정은 기존Domain파일, adapter/infra가 공유하여 architecture경계 보존.
+- 검증: npm check 정적/Node104/build/smoke/shadow/dashboard 통과, Vitest1673PASS14SKIP2FAIL(jq환경1+새reader테스트mock export누락1). mock수정 후 관련4파일134PASS/buildPASS. workers2/timeout20초 전체Vitest(환경jq1검사 명시제외)는1673PASS15SKIP1FAIL(수정전mock), 해당실패 수정후4파일 재검사PASS. alias최저tier와별도양수tier 보강 후 이안카66PASS/buildPASS. diff --check의EOF공백도 수정 후PASS. jq미실행을전체PASS로표현하지않음.
+- 검토: 기능·개발 담당에 exactHEAD 읽기전용 독립검토 요청, ERP 담당에 rate state우선/null금액/표시문구 계약 인계. 검토·운영 반영 결과는 수령 전 완료로 세지 않는다.
+- HOLD/next_start_here: 독립검토 및ERP에서새계약반영 후실제조건별화면/조회되읽기; 배포·DB persistence·원천실회차·수정전후운영증거 미수행, jq필수검사 환경HOLD, PR397/main미통합. Canonical oldACTIVE 보존과새보류원천의현재성표시 연결은여전히HOLD. 코드/로컬검증을운영반영으로확대하지않는다.
+
+
 ### 2026-10-07 보증금 P0 — 근거 판정 통합과 갱신 삭제 방지
 
 - 목적/오더: 대표 최신 지시를 지휘가 단일쓰기 관리담당에 배정. 공란·누락을 무보증/0으로 추정하지 않고 미확인은 보증금 확인 필요. ERP 소비처 코드는 별도 담당이며 이 작업은 Data 경로만 수정.
