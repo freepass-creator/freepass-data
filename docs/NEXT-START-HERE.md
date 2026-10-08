@@ -399,6 +399,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 과거 실행 폐기 / 현행 소비처 연결 안내 / 사진 최소 안정화
+
+- 목적/정본: 대표의 과거 버전 폐기 및 현재 사용처 연결 지시. PR397을 동일 이력/커밋으로 rename한 승계 PR401, 기준 e783f12(origin/main5bbe271 병합, behind0), Academy READY. 다른 dirty 작업 보존.
+- 변경: pre-ONE frozen delivery CLI를 모든 모드에서 외부 명령 전에 RETIRED로 거부한다. workflow는 예약/신원/secret/외부 engine checkout/쓰기 없는 폐기 안내만 유지. 예외를 연장하지 않고 실제 pin 의존성을 제거하여 만료 baseline도 삭제. 원본/과거 receipt와 회귀 함수는 역사 근거로 보존. 현행 shared-sheet-daily 및 ERP 활성 writer는 이 변경으로 대체/중지하지 않는다.
+- 현재 연결: ERP5-CONSUMER-RUNTIME 최상단에 실제 소비 계약/역사 관측 구분. ERP.com의 current main consumer가 Data catalog-compat/photo 경로를 사용하는 코드 확인. read runtime00015 READY와 실제 사진3개 JPEG200은 관측했지만 최근100개 요청8개503/동시25초timeout이 있어 전체 안정화 PASS 아님.
+- 사진 코드: 기존 8-inflight/32MiB/30초TTL/공개상품 재검증/identity-key coalescing 유지. entry cap만32→64로 51장 album의 불필요한 count eviction 방지. 2초 미만 HTTP502/503/504만1회 재시도(동일 총 deadline). 느린 실패/timeout/401/403/404/429는 자동 재시도하지 않는다. TIMEOUT/TRANSPORT_FAILED의 비민감 typed audit code를 제공한다.
+- 검증: 관련사진93PASS, delivery-owner15PASS, build/diffcheck PASS, repository canon-guard PASS. 전체 테스트 결과는 PR CI로 exact head 재확인한다. 운영 DB/시트/IAM/배포0.
+- 남음: PR401의 contracts/ 선점 검사(PR399/400) 미해결, main/배포미반영. Claude 조직 접근 제한 FAILED/PASS아님. 사진수정 배포 후 대표 전체 album decode/readback 필수; 이미 관측한 사진200을 새 수정 효과로 계산하지 않는다. Canonical 전체전환/기존 ERP writer 폐기는 별도 권한·회차·원천대사 필요.
+- next_start_here: PR401 exact head 검사 확인, 기존 정본 선점 PR과 통합 범위 결정 후 main 병합. 독립 검토 복구 및 승인된 read-runtime 배포 후 실제 사진/소비처 readback. 실패 guard를 지우거나 다른 PR임의폐기하지 않는다.
+
 ### 2026-10-09 최신 공통시트 주소 고정 / 과거 입력 연결 폐기 준비
 
 - 목적/대상: 대표 지정 최신 공통시트의 각 공급사 탭만 정본으로 사용. PR397 `41a49213879027129f527bf31251c39300d56cab` 위 로컬 `020e47103880286dad0aa4ec34656a1f1d92b610`에서 수행, Academy READY. 다른 작업 트리 보존.

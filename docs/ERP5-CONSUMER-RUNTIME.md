@@ -1,5 +1,15 @@
 # freepasserp5 중앙 연결과 소비처 전환 상태
 
+## 2026-10-09 현행 연결 안내 — 아래 날짜별 과거 관측과 구분
+
+- 중앙 저장 대상은 `freepasserp5` Firestore이며 서버 연결은 `src/infra/firebase-target.ts` 한 곳이다. RTDB 경로는 폐기·사용 금지.
+- 공통시트 입력은 `shared-sheet-daily.yml`로 지정 최신 파일의 현재 공급사 탭만 읽는다. 종합·과거 개별 시트 fallback은 금지한다. 원본/이력은 보존한다.
+- ERP.com/등록 화이트라벨의 현행 호환 조회는 소비처별 인증을 사용하는 `/v1/consumers/{consumerId}/catalog-compat`, 사진은 그 아래 `/products/{productId}/photos[/{index}]`다. 공개 차량 자격을 재확인하며 사진 원본주소·공급사 토큰을 브라우저에 전달하지 않는다. 이번 코드의 UNKNOWN 보증금 계약은 null + 미확인이며 기존 배포의 표시 반영은 별도 확인한다.
+- `/catalog`는 검증된 Canonical ACTIVE 전용이다. 호환 조회가 성공해도 Canonical 전체 전환을 선언하거나 `/catalog` 실패를 숨겨 대체하지 않는다. Admin/Estimate/Kakao도 각자 기존 등록 계약을 유지한다.
+- pre-ONE `data-owned-refresh.yml`/`data-delivery-owner.mjs` 실행은 **폐기·사용 금지**다. 현행 ERP writer를 이 오래된 실행기로 옮기지 않는다.
+- 2026-10-09 직접 관측: `freepass-data-read-00015-649` READY, ERP.com 공개 사진 샘플 3개 JPEG 200. 동시에 최근 사진 요청 100건 중 503 8건과 25초 timeout도 관측했다. READY/샘플 성공은 전체 소비처·앨범 안정화 완료가 아니다.
+- 아래의 2026-09 관측, 전환 전 표, 초기 Cloud Run 미활성 기록은 **역사 관측**이며 현재 운영 상태로 사용하지 않는다. 전체 화이트라벨/Admin/Estimate readback 및 원천→소비처 현재성은 미검증 상태를 유지한다.
+
 2026-09-21 사용자 직접 지정: 중앙 저장용 Firebase 프로젝트는 **freepasserp5**.
 Firestore `(default)`, `asia-northeast3`를 실조회했다. RTDB는 사용하지 않는다.
 

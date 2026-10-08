@@ -4,7 +4,8 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-// Transitional adapter, not a second CatalogStore or a Canonical release builder.
+// RETIRED historical adapter. Its CLI cannot execute; exports retain regression evidence.
+export const DELIVERY_ENGINE_STATUS = 'RETIRED_PRE_ONE_DELIVERY_ENGINE';
 export const ENGINE_REVISION = 'e6727ff04fcf98380701fa6360c36f313e0e321f';
 export const LEGACY_REPOSITORY = 'freepass-creator/freepasserp4';
 export const LEGACY_WORKFLOW = 'erp5-ssot-refresh.yml';
@@ -148,7 +149,8 @@ function command(command, args, cwd, env = process.env) {
   return result.stdout;
 }
 
-async function main() {
+// Audit-only historical implementation; deliberately not connected to the entrypoint.
+async function historicalMain() {
   const engineRoot = resolve(process.env.FREEPASS_DATA_ENGINE_ROOT || '');
   if (!process.env.FREEPASS_DATA_ENGINE_ROOT || command('git', ['rev-parse', 'HEAD'], engineRoot).trim() !== ENGINE_REVISION) throw new Error('ENGINE_PIN_MISMATCH');
   command('git', ['diff', '--exit-code', 'HEAD'], engineRoot);
@@ -225,5 +227,7 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main().catch(error => { console.error(error.message); process.exitCode = 2; });
+  // Fail before credentials, engine checkout, backup or any external command.
+  console.error(DELIVERY_ENGINE_STATUS);
+  process.exitCode = 2;
 }
