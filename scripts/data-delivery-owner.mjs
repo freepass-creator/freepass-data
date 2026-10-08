@@ -9,6 +9,22 @@ export const ENGINE_REVISION = 'e6727ff04fcf98380701fa6360c36f313e0e321f';
 export const LEGACY_REPOSITORY = 'freepass-creator/freepasserp4';
 export const LEGACY_WORKFLOW = 'erp5-ssot-refresh.yml';
 export const PRIVATE_EVIDENCE_BUCKET = 'freepasserp5-data-audit-evidence';
+const supplierSpec = JSON.parse(readFileSync(new URL('../contracts/supplier-input-sheet-spec.v1.json', import.meta.url), 'utf8'));
+// Shared-tab suppliers never run through the frozen individual-sheet adapters.
+// RP031 belongs to the dedicated ONE API path, not this pre-ONE engine.
+export const RETAINED_ENGINE_SOURCE_CODES = Object.freeze(['RP004', 'RP006', 'RP012', 'RP023', 'RP034']);
+const sharedCodes = new Set(supplierSpec.supplierChannels.sharedInputSheet.map(channel => channel.code));
+if (!RETAINED_ENGINE_SOURCE_CODES.length || RETAINED_ENGINE_SOURCE_CODES.some(code => sharedCodes.has(code) || code === 'RP031')) {
+  throw new Error('LEGACY_SOURCE_ROUTING_CONFLICT');
+}
+export function assertCurrentSharedSheet(spreadsheetId) {
+  const binding = supplierSpec.supplierManagement.sourceBinding;
+  if (!spreadsheetId || !/^[a-f0-9]{64}$/.test(binding?.spreadsheetIdSha256 ?? '') ||
+      binding.legacyInputEnabled !== false || binding.fallbackAllowed !== false || binding.summaryIsSource !== false ||
+      createHash('sha256').update(spreadsheetId).digest('hex') !== binding.spreadsheetIdSha256) {
+    throw new Error('SHARED_SHEET_SOURCE_BINDING_MISMATCH');
+  }
+}
 // The frozen engine predates ONE API publication and its policy isolation.
 // A successful downstream projection cannot authorize replaying old source rules.
 export function assertCompatibleBackup(snapshot) {
@@ -29,7 +45,7 @@ export const STAGES = [
   ['contract-lock', 'npx', ['tsx', '--require', './scripts/lib/server-only-shim.cjs', 'scripts/sync-vehicle-lock-from-ledger.mts', '--apply']],
   // Keep unknown/new-source coverage explicit. Never infer retirement from a
   // partial collection. New-atom import and retirement need their own review.
-  ['atom-refresh', 'npx', ['tsx', 'scripts/ingest-all-suppliers.mts', '--apply', '--variable']],
+  ['atom-refresh', 'npx', ['tsx', 'scripts/ingest-all-suppliers.mts', '--apply', '--variable', `--only=${RETAINED_ENGINE_SOURCE_CODES.join(',')}`]],
   ['policy-reference', 'npx', ['tsx', 'scripts/reconcile-product-policy-references.mts', '--erp5', '--apply']],
   ['snapshot', 'npx', ['tsx', 'scripts/capture-sales-publish-snapshot.mts', '--erp5', '--out=tmp/data-delivery-snapshot.json']],
   ['public-projection-parity', 'npx', ['tsx', 'scripts/verify-whitelabel-publication.mts', '--snapshot=tmp/data-delivery-snapshot.json', '--write-receipt']],

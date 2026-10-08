@@ -399,6 +399,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 최신 공통시트 주소 고정 / 과거 입력 연결 폐기 준비
+
+- 목적/대상: 대표 지정 최신 공통시트의 각 공급사 탭만 정본으로 사용. PR397 `41a49213879027129f527bf31251c39300d56cab` 위 로컬 `020e47103880286dad0aa4ec34656a1f1d92b610`에서 수행, Academy READY. 다른 작업 트리 보존.
+- 변경: supplier-input spec에 주소 SHA256와 fallback/종합 입력 금지, 과거 근거 보존 계약을 고정. daily workflow는 인증 전에 주소 불일치로 중단. frozen atom-refresh는 명시적 RP004/RP006/RP012/RP023/RP034만 사용하여 공통시트 등록 공급사 18개 코드의 과거 개별 시트와 RP031 pre-ONE 경로를 제외한다. 다른 온라인/개별 원천은 변경하지 않았다.
+- 검증: delivery-owner 15 + shared-sheet capture/canonical 59 = 74 PASS, 대표 지정 실제 주소 binding PASS, tsc --noEmit 및 diff check PASS. 원본/이력 삭제 및 운영 쓰기 0.
+- 남음: CODED/TESTED일 뿐 운영 폐기 완료 아님. PR397/main 미반영, 운영 secret 값과 최신 실행 readback 미검증. frozen engine ONE API 차단 및 owner/IAM safety gate 유지. Claude 조직 접근 제한 FAILED는 필수 독립 검토 PASS 아님.
+- next_start_here: PR397 현재 head/중복 작업을 재확인하고 독립 검토를 복구하여 이 변경을 통합한다. 승인된 운영 전환 후 최신 주소 캡처와 소비처 readback으로 실제 전환을 입증한다. absent 탭을 옛 시트 fallback으로 복원하거나 상품 자동 삭제하지 않는다.
+
 ### 2026-10-07 보증금 P0 운영 반영 진입 — CI 통과 / 정본 작업선 차단
 
 - 현재 main fetched72d486dc5f64f2a70c9ddc548ac7bdeb7f1f6ccc, PR397 head5f0df92f9f996284c7dc154fc95fc779d795b83f open/unmerged. GitHub Core CI37564624512 SUCCESS 확인: 로컬 jq 환경 HOLD와 구분하여 CI 실행은 통과로 기록한다.

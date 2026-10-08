@@ -9,6 +9,14 @@
     "decision": "대표 2026-10-06: 이제 공급사들은 공통시트에서 관리한다",
     "scope": "supplierChannels.sharedInputSheet에 등록된 공급사; 직접 API/홈페이지 연동 공급사의 경로는 유지",
     "inputAuthority": "공통 시트의 현재 공급사 입력 탭",
+    "sourceBinding": {
+      "spreadsheetIdSha256": "552c86134d05f6c287ea072ef93006c1610f4aac5d5bdfe4082cebdb25f71696",
+      "decision": "대표 2026-10-09: 최신 공통시트 각 공급사 탭으로 고정, 과거 개별 시트 입력 연결 폐기",
+      "legacyInputEnabled": false,
+      "fallbackAllowed": false,
+      "summaryIsSource": false,
+      "historicalEvidenceRetention": "PRESERVE"
+    },
     "legacySheetsRole": "대조·과거 근거용, 자동 덮어쓰기 및 양방향 동기화 금지",
     "identity": "공급사코드 + 차량번호, 공용 탭은 회사명으로 계열사 구분; 신차/미정은 확정 차량 식별자 아님",
     "unresolvedDifferences": "비교 차이는 확인 목록으로 남기고 원본이 더 최신이라고 추정해 수정하지 않는다",
