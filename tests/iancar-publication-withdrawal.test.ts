@@ -20,7 +20,7 @@ it('compatibility read derives unresolved deposits and performs no transaction o
     .mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(snapshot());
   const result = await new FirestoreCatalogCompatibilityReader().read('erp-com');
   expect(result.data.products.synthetic!.price).toMatchObject({ '12': { rent: 500000, deposit: null, depositState: 'UNKNOWN',
-    depositStatusLabel: '보증금 확인 필요' } });
+    depositStatusLabel: '미확인' } });
   expect(result.meta.depositEvidenceVersion).toBe('catalog-compat-deposit/1');
   expect(mocks.transaction).not.toHaveBeenCalled(); expect(mocks.update).not.toHaveBeenCalled();
 });

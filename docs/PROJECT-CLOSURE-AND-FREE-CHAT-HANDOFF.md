@@ -1,5 +1,15 @@
 # FreePass Data 종료 계획과 무료 채팅 인계
 
+## 2026-10-08 공급사 탭 원천 수집 실측 / 미확인 표시
+
+- 목적: 종합을 제외하고 실제 공급사 탭을 직접 수집한다. 기존 PR397 `41a49213879027129f527bf31251c39300d56cab`의 12개 active 탭 경로를 재사용했다. Academy READY, 원본 및 다른 worktree 변경 보존.
+- 변경: 기존 depositStatusLabel UNKNOWN을 대표 지정 `미확인`으로 통일했다. nullable amount와 UNKNOWN state는 유지하며 확인된 무보증/ZERO 판정은 변경하지 않았다. 참조 schema는 새 표시를 허용하고 과거 표시도 이전 응답 호환용으로 유지한다.
+- 실제 검증: 2026-10-08 18:52 KST Google Sheets metadata 및 실제값→표시값→실제값 재조회로 12개 공급사 탭 캡처 성공. RAW 171행, 범위 내 COMPLETE/전체 공급사 PARTIAL. 종합/helper 수집 없음, 없는 연카·스위치플랜·에스에이는 보류, 재고 삭제 권한 없음. 개인정보·차량번호·원문은 이 문서에 기록하지 않는다.
+- 발견: 차량번호 placeholder 5행/빈칸 1행은 원문 보존되나 Canonical HOLD. 연식/최초등록 연도 차이 23행은 이상 탐지이지 확정 오류가 아니다. 공급사 미해석 1행, 여러 기간 보증금 미확정과 차종 미확정도 원문 보존/HOLD. 무근거 0원 보정 없음.
+- 검증: shared-sheet-capture/canonical/deposit-evidence/iancar-publication-withdrawal 및 kakao-catalog-reference 200 PASS, 표준 검사 15 PASS(status PARTIAL 유지), tsc --noEmit PASS, diff check PASS. 운영 적재/소비처 반영 검증으로 확대하지 않는다.
+- 남음: PR397 미병합, main/배포/스케줄 변경 0, Firestore/시트 쓰기 0. 자동 적재 실패와 Data 배달 skipped 미해결. Claude 독립 검토는 조직 접근 제한으로 FAILED이며 PASS 아님.
+- next_start_here: 같은 PR397 개발선에 이 표시 변경을 통합하고 원천/미확인 회귀검사 후 독립 검토·main/배포 readback을 수행한다. 번호 없는 상품은 immutable 상품키와 상품/차량 분리 계약 검증이 필요하며 행 번호나 차명으로 임의 합치지 않는다. 다른 fd-guard 미커밋 마스터/패키징 변경을 덮어쓰지 않는다.
+
 상태: **READ-ONLY OPERATIONS v1.0 / COST-AWARE HANDOFF**
 작성 기준 revision: `ff591ef835179439828f81aa5b4f605356964c84`
 기준일: 2026-09-28

@@ -9,7 +9,7 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
       price: { '12': { rent: 500000, deposit: '미확인', depositState: 'ZERO' }, '24': { rent: 400000, deposit: '1,000,000' } } };
     const before = structuredClone(product);
     const result = withCompatibilityDepositEvidence(product);
-    expect(result.price).toMatchObject({ '12': { rent: 500000, deposit: null, depositState: 'UNKNOWN', depositStatusLabel: '보증금 확인 필요' },
+    expect(result.price).toMatchObject({ '12': { rent: 500000, deposit: null, depositState: 'UNKNOWN', depositStatusLabel: '미확인' },
       '24': { rent: 400000, deposit: 1000000, depositState: 'KNOWN' } });
     expect(product).toEqual(before); expect(result.model).toBe('synthetic');
     const zero = { ...product, deposit_note: '무보증', price: { '12': { rent: 500000, deposit: 0 } } };
@@ -24,10 +24,10 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
       .toMatchObject({ state: 'UNKNOWN', amount: null, reason: 'MISSING_DEPOSIT_AMOUNT' });
   });
   it('labels all unresolved evidence as requiring confirmation', () => {
-    expect(depositStatusLabel('UNKNOWN', null)).toBe('보증금 확인 필요');
-    expect(depositStatusLabel('UNKNOWN', '')).toBe('보증금 확인 필요');
-    expect(depositStatusLabel('UNKNOWN', 0)).toBe('보증금 확인 필요');
-    expect(depositStatusLabel('UNKNOWN', null, '대여료×2')).toBe('보증금 확인 필요');
+    expect(depositStatusLabel('UNKNOWN', null)).toBe('미확인');
+    expect(depositStatusLabel('UNKNOWN', '')).toBe('미확인');
+    expect(depositStatusLabel('UNKNOWN', 0)).toBe('미확인');
+    expect(depositStatusLabel('UNKNOWN', null, '대여료×2')).toBe('미확인');
     expect(depositStatusLabel('ZERO', 0, '무보증')).toBe('무보증');
   });
   it.each(['1,500,000원', '150만', '1500000.5', -500000, true, {}, ' 0 '])('holds malformed nonempty amount %j even with an explicit waiver', sourceAmount => {
@@ -50,10 +50,10 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
   it('does not ignore malformed positive sibling evidence under a product waiver', () => {
     const product = buildKakaoCatalogReferenceProduct('P2', { listable: true, provider_company_code: 'RP004', product_type: '중고렌트', deposit_note: '무보증',
       price: { '12': { rent: 500000, deposit: 0 }, '24': { rent: 400000, deposit: '150만' } } });
-    expect(product!.offers[0]!.priceTerms.every(row => row.depositState === 'UNKNOWN' && row.depositStatusLabel === '보증금 확인 필요')).toBe(true);
+    expect(product!.offers[0]!.priceTerms.every(row => row.depositState === 'UNKNOWN' && row.depositStatusLabel === '미확인')).toBe(true);
     const rentlessSibling = buildKakaoCatalogReferenceProduct('P3', { listable: true, provider_company_code: 'RP004', product_type: '중고렌트', deposit_note: '무보증',
       price: { '12': { rent: 500000, deposit: 0 }, '24': { deposit: 1000000 } } });
-    expect(rentlessSibling!.offers[0]!.priceTerms[0]).toMatchObject({ depositState: 'UNKNOWN', depositStatusLabel: '보증금 확인 필요' });
+    expect(rentlessSibling!.offers[0]!.priceTerms[0]).toMatchObject({ depositState: 'UNKNOWN', depositStatusLabel: '미확인' });
   });
   it.each(['중고렌트', '재렌트', '오공구독', '픽업구독'])('prohibits zero for Sonogong %s, even with a contradictory explicit flag', productType => {
     for (const note of ['', '무보증', '월 대여료 × 약정연수 (최대 3개월)']) {

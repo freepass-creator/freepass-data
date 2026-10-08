@@ -70,7 +70,7 @@ export function hasConflictingPaidDeposit(price: unknown) {
 export function depositStatusLabel(state: 'KNOWN' | 'ZERO' | 'UNKNOWN', _sourceAmount: unknown, _note?: unknown) {
   if (state === 'ZERO') return '무보증' as const;
   if (state === 'KNOWN') return '보증금 있음' as const;
-  return '보증금 확인 필요' as const;
+  return '미확인' as const;
 }
 
 export function auditDepositEvidence(products: Record<string, Record<string, unknown>>) {
