@@ -399,6 +399,10 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 사진·폐기 최소 회수 main 병합 확인
+
+- PR402 exact head d80a17aa073c74f83d921a321430aab403c0ffcd의 Canon/Core 원격검사 모두PASS 후 main563bfd214c0732ac6d1f815a15721f33ccf5cf1b에MERGED. 원본PR401에main을합쳐동일slice중복회수, 아래이력양쪽보존. PR399/400·정산/발행계약은손대지않음. 사진새코드배포/앨범readback미완료, Claude접근실패PASS아님. 이절이아래같은날의미병합관측보다최신이다.
+
 ### 2026-10-09 과거 실행 폐기 / 현행 소비처 연결 안내 / 사진 최소 안정화
 
 - 목적/정본: 대표의 과거 버전 폐기 및 현재 사용처 연결 지시. PR397을 동일 이력/커밋으로 rename한 승계 PR401, 기준 e783f12(origin/main5bbe271 병합, behind0), Academy READY. 다른 dirty 작업 보존.
@@ -655,6 +659,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 코드: 자유 입력 칸의 과거 목록 정의는 변환 이력용으로 보존하되 드롭다운 설정·탭 일관성 계획기에서는 재적용하지 않는다. 명시한 연주행 별칭은 정규화 계획기에 연결했고 `2만km` 재실행은 변경 0.
 - 검증: 시트 전용 Node 테스트 89 PASS, git diff --check PASS. 운영 쓰기 응답과 새 API 조회 확인. 브라우저 화면 검증·응답 시간 개선 실측·자동 동기화 연결은 미검증이며 이번 완료 주장에 포함하지 않는다.
 - next_start_here: 이 절과 공급사 runbook의 2026-10-06 결정을 먼저 읽고 옛 정책 드롭다운 목록을 복원하지 않는다. 코드 변경의 main 반영은 별도 PR로 추적한다.
+### 2026-10-09 사진 보강 + 폐기 엔진 최소 slice (정산/발행 계약 제외)
+
+- 목적/정본: 현재 사진 소비 연결 보강과 과거 버전 폐기. main5bbe271 기준, PR401의07dbf71에서 사진 변경과 pre-ONE 실행 폐기만 재사용. 새 구현/저장소/정본 없음. Academy READY, 다른 dirty 작업 보존.
+- 분리 이유: 사진 두 파일만 떼면 main에 남은 expired workflow-ref-pin으로 모든 PR의 Canon이 실패한다. 예외를 늘리지 않고 구 실행기 폐기7파일과 본 인계만 회수한다. contracts/·정산·F01/F86발행 정책·보증금/기간 freshness 변경은 포함하지 않는다. PR401 전체이력/그밖변경 보존, 이 slice가 main에 합쳐지면 PR401에서중복개발하지 않고main을 합쳐회수한다.
+- 변경: 사진 immediate HTTP502/503/504만1회 동일 총deadline 재시도, 느린 실패/timeout/권한/404/429 재시도 금지. 정확사진 identity cache의64-entry cap,32MiB/30초TTL/8inflight 및 공개상품 재검증 유지. safe TIMEOUT/TRANSPORT_FAILED audit code. pre-ONE workflow는 실행/예약/신원/외부engine없이 RETIRED 안내, CLI모든모드는외부명령전거부. 원문/이력보존.
+- 검증: 관련사진92PASS, historical delivery13PASS, build/diffcheck/repository canon PASS. exact 원격 CI로 전체 검사 확인한다.
+- 남음: 미배포, 새 수정 효과를 과거 JPEG200/ERP5 local51장decode 성공으로 입증하지 않는다. Claude 조직 접근제한 FAILED는독립검토PASS아님. 운영전체94대/전체화이트라벨 안정화 미검증. DB/시트/IAM/현행ERP writer/15분스케줄 변경0.
+- next_start_here: 이최소slice 원격CI확인→main병합→승인된사진runtime 배포·exact revision/대표앨범readback. PR401/399/400의 계약 선점 통합은 이slice로해결했다고선언하지 않는다.
 
 ### 2026-10-05 손오공 구독 보증금 0·보험료 별도 점검
 
