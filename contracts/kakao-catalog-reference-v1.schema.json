@@ -206,7 +206,7 @@
       "type": "object",
       "required": ["policyId", "sourceRole", "sourceObservedAt", "canonicalSource", "sourceFiles", "standardSupplierIds", "exceptionSupplierIds", "rules", "timingRules", "digest"],
       "properties": {
-        "policyId": { "enum": ["sales-commission-2026-10-03", "sales-commission-2026-10-04", "sales-commission-2026-10-05"] },
+        "policyId": { "enum": ["sales-commission-2026-10-03", "sales-commission-2026-10-04", "sales-commission-2026-10-05", "sales-commission-2026-10-09"] },
         "sourceRole": { "enum": ["REPOSITORY_SSOT_WITH_GOOGLE_SHEET_COPY", "F04_GOOGLE_SHEET_SSOT"] },
         "sourceObservedAt": { "type": "string", "anyOf": [{ "format": "date-time" }, { "format": "date" }] },
         "canonicalSource": {

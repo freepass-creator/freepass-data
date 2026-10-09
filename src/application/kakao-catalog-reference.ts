@@ -146,8 +146,21 @@ export const KAKAO_COMMISSION_POLICY_2026_10_04 = {
  */
 export const KAKAO_COMMISSION_POLICY = {
   ...KAKAO_COMMISSION_POLICY_2026_10_04,
-  policyId: 'sales-commission-2026-10-05',
-  decisionDate: '2026-10-05',
+  policyId: 'sales-commission-2026-10-09',
+  decisionDate: '2026-10-09',
+  supplierPolicyAssignments: {
+    decisionDate: '2026-10-09',
+    authority: 'USER_DIRECT_DECISION',
+    basicSupplierIds: ['RP020', 'RP030', 'PT-0001', 'RP016', 'PT-0023', 'RP015', 'RP013', 'RP010'],
+    policyKind: 'BASIC',
+    policyRef: 'FREEPASS_BASIC',
+    subscriptionUsesBasicTermLadder: true,
+    unspecifiedNewDeliveryForm: 'REQUIRES_EVIDENCE',
+    unspecifiedShortTerms: 'REQUIRES_EVIDENCE',
+    billinProposal: { supplierId: 'RP021', state: 'UNCONFIRMED', termMonths: 36,
+      billingBasis: 'RENT_BASIS_REQUIRES_CONFIRMATION', payoutPercentOfBilling: 80,
+      authority: 'USER_TENTATIVE_STATEMENT_2026_10_09' },
+  },
   currentAuthority: 'F04 수수료표 A1:M191(2026-10-04 사본) + AI 상황실 2026-10-05 결정(손오공 60개월 +60만, 원 미만 반올림)',
   evidenceHistory: [...KAKAO_COMMISSION_POLICY_2026_10_04.evidenceHistory,
     { policyId: KAKAO_COMMISSION_POLICY_2026_10_04.policyId, observedAt: '2026-10-04', revision: '35de6d9fa96ad07fba2fb2d68a4cb1c9113b61a5' }],
@@ -469,6 +482,9 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     if (rerent && termMonths === 1) return unknownCommission('IANCAR_SHORT_TERM_BASIS_REQUIRED');
   }
   if (!standardLadderSupplier(supplierId)) return unknownCommission('SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE');
+  if (subscription && KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds.some(id => id === supplierId)) {
+    return resolveTermLadder(termMonths, monthlyRent, side);
+  }
   if (rerent) return resolveTermLadder(termMonths, monthlyRent, side);
   if (/^신차/.test(productType) && !subscription) {
     if (supplierId === 'RP022' && input.depositTierPercent !== 5 && input.depositTierPercent !== 10) return unknownCommission('DEPOSIT_TIER_REQUIRED');
@@ -499,6 +515,10 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   else if (input.supplierId === 'RP023' && /구독/.test(product)) rows = /전기/.test(input.fuel ?? '') ? [161] : [123, 161];
   else if (['RP021', 'PT-0026'].includes(input.supplierId) && /구독/.test(product)) rows = [162];
   else if (input.supplierId === 'RP014') rows = /구독/.test(product) ? ([12,24,36,48,60].includes(input.termMonths) ? [124 + [12,24,36,48,60].indexOf(input.termMonths)] : [183,184,185,186,187,188,189]) : [175,176];
+  else if (/구독/.test(product) && first && KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds.some(supplierId => supplierId === input.supplierId)) {
+    const index = [12,24,36,48,60].indexOf(input.termMonths);
+    rows = index >= 0 ? [first + 2 + index] : [183,184,185,186,187,188,189];
+  }
   else if (input.supplierId === 'RP013' && /구독|발주/.test(product)) rows = /구독/.test(product) ? [174] : [164];
   else if (id.startsWith('IANCAR_EV')) rows = [138];
   else if (id.startsWith('IANCAR_RERENT_6')) rows = [132];

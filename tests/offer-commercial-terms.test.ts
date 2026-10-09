@@ -197,7 +197,7 @@ describe('canonical per-term economics precompute', () => {
     const before = structuredClone(input);
     const result = precomputeOfferEconomics(input, 'USED_RENT');
     expect(result[0]).toMatchObject({ monthlyRent: { amount: 500000 },
-      supplierBillingFee: { state: 'KNOWN', amount: { amount: 570000 }, calculation: { kind: 'RATE', rate: 0.0475 }, policyId: 'sales-commission-2026-10-05' },
+      supplierBillingFee: { state: 'KNOWN', amount: { amount: 570000 }, calculation: { kind: 'RATE', rate: 0.0475 }, policyId: 'sales-commission-2026-10-09' },
       channelPayoutFee: { state: 'KNOWN', amount: { amount: 480000 }, calculation: { kind: 'RATE', rate: 0.04 } } });
     expect(result[0]!.depositCalculation.amount).toEqual(input.priceTerms[0]!.deposit);
     result[0]!.monthlyRent!.amount = 1;
@@ -223,7 +223,7 @@ describe('canonical per-term economics precompute', () => {
     expect(zeroFee).toMatchObject({ state: 'ZERO', amount: { amount: 0 } });
     expect(zeroFee.sourceRefs.some(ref => ref.startsWith('F04:'))).toBe(true);
     expect(zeroFee.sourceRefs.some(ref => ref.startsWith('catalog_offers/'))).toBe(false);
-    expect(precomputeOfferEconomics(input, 'USED_SUBSCRIPTION', '가솔린')[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED' });
+    expect(precomputeOfferEconomics(input, 'USED_SUBSCRIPTION', '가솔린')[0]!.supplierBillingFee).toMatchObject({ state: 'ZERO', amount: { amount: 0 }, reasonCode: null });
     input.priceTerms[0]!.termMonths = 18;
     expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.supplierBillingFee.reasonCode).toBe('TERM_NOT_IN_F04_COMMISSION_POLICY');
   });
@@ -244,7 +244,7 @@ describe('F04 explicit canonical evidence', () => {
     const evidence = { '60': { vehicleValue: 30000000 } };
     const before = structuredClone({ offer, evidence });
     const row = precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION', '가솔린', evidence)[0]!;
-    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 1200000 }, policyId: 'sales-commission-2026-10-05' });
+    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 1200000 }, policyId: 'sales-commission-2026-10-09' });
     expect(row.channelPayoutFee.amount?.amount).toBe(900000);
     expect(row.supplierBillingFee.sourceRefs).toContain('F04:수수료표!A190:M190');
     expect(precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee.reasonCode).toBe('VEHICLE_VALUE_REQUIRED');
