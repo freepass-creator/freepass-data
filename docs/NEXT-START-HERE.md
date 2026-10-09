@@ -2299,3 +2299,10 @@ This file exists so another session can continue without re-discovering or re-cr
 - 변경: ISO timestamp→Asia/Seoul date adapter 및 v2 raw 날짜근거 보존. v1/v2 schema 유지, invalid date null. 날짜경계 회귀검증.
 - 발행기: 기존 정산담당 실행영수증/명령에서 실제 rangeBT1000(defaultFORMATTED)와 JSON.stringify(values) SHA256을 회수. 과거영수증은 sourceDigest와일치/현재같은조건 원본은불일치. 운영원본 최신성HOLD유지, data/source쓰기0.
 - next_start_here: hotfix fullCI/독립검토/main 뒤 기존 두 서비스 재배포 및 Kakao v1/v2 authenticated200/금액대사. source dryrun의491 raw차이는padding·신규행·수식·identity별 실제금액차이로 분류한 plan만 준비.
+
+### 2026-10-09 운영 날짜 회귀 복구 종결 / 후속 금액 source HOLD
+
+- main/배포: e0afae9 PR406, read00017-wk6(run37898833623)/Admin00006-jbk(run37898836852), 둘다SUCCESS READY traffic100.
+- 검증:1698testsPASS/14skip, 독립CLI 중대지적없음, v1/v2월·단건200schemaPASS, root독립prod재조회일치. Kakao485상품3037기간필드/state누락0,2223수수료조건미확정. Admin기존workflow200, 무인증양쪽403,IAM/identity/write-mode보존.
+- 남음: 원본 source실금액검토4건(row441/431/461/413), 표시정밀도3건분리. sourceFreshnessUNVERIFIED, 운영원장·금액·과거작성자write0. Canonical 정책일괄apply/Admin재발행별도승인필요.
+- next_start_here: READ-RUNTIME 최종운영증거→private classified sourceplan(before원본/source/humanWritten)→지휘가4건scope/원본보존/금액차이판정. nullfee조건결핍은 해당원천규격/공급사근거를 확보한뒤같은engine으로dryrun한다.
