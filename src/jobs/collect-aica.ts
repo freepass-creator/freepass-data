@@ -6,6 +6,7 @@ import { collectSupplierSource, type AicaGridBinding, type AicaGridObservation, 
 export async function captureAica(input: {
   bindings: readonly AicaGridBinding[]; expectedFreshnessSeconds: number | null;
   applyRaw: boolean; approved: boolean;
+  verifyBoundTabs?: boolean;
 }, ports: {
   readGrid?: (binding: AicaGridBinding) => Promise<AicaGridObservation>;
   ingestRawBatch?: (batch: SourceIntakeBatch) => Promise<unknown>;
@@ -14,7 +15,7 @@ export async function captureAica(input: {
   if (input.applyRaw && !input.approved) throw new Error('AICA_RAW_APPROVAL_REQUIRED');
   const adapter = aicaSourceAdapter({ sourceId: 'supplier:RP004:aica-original-sheet',
     bindings: input.bindings, expectedFreshnessSeconds: input.expectedFreshnessSeconds,
-    readGrid: ports.readGrid ?? aicaSheetsGridReader() });
+    readGrid: ports.readGrid ?? aicaSheetsGridReader({ verifyBoundTab: input.verifyBoundTabs === true }) });
   const { batch, evidence } = await collectSupplierSource(adapter, ports.now?.());
   if (input.applyRaw) {
     if (evidence.status !== 'RAW_READY') throw new Error('AICA_RAW_SOURCE_HOLD');
@@ -24,7 +25,9 @@ export async function captureAica(input: {
     });
     await ingest(batch);
   }
-  return { counts: { records: batch.records.length }, digest: batch.checksum, issues: evidence.issues };
+  return { counts: { records: batch.records.length }, digest: batch.checksum, issues: evidence.issues,
+    sourceId: batch.source.sourceId, sourceRevision: batch.sourceRevision, observedAt: batch.observedAt,
+    coverage: batch.coverage, status: evidence.status, wholeSupplierInventoryVerified: false };
 }
 
 export async function aicaCaptureCommand(args: string[], env: NodeJS.ProcessEnv = process.env) {
@@ -38,7 +41,7 @@ export async function aicaCaptureCommand(args: string[], env: NodeJS.ProcessEnv 
   const freshness = env.AICA_EXPECTED_FRESHNESS_SECONDS === undefined ? null : Number(env.AICA_EXPECTED_FRESHNESS_SECONDS);
   if (freshness !== null && (!Number.isSafeInteger(freshness) || freshness <= 0)) throw new Error('AICA_FRESHNESS_INVALID');
   return captureAica({ bindings, expectedFreshnessSeconds: freshness, applyRaw: args.includes('--apply-raw'),
-    approved: env.AICA_RAW_INGEST_APPROVED === 'true' });
+    approved: env.AICA_RAW_INGEST_APPROVED === 'true', verifyBoundTabs: env.AICA_VERIFY_BOUND_TABS === 'true' });
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   aicaCaptureCommand(process.argv.slice(2)).then(report => {
