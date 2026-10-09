@@ -806,7 +806,7 @@ export type KakaoCatalogReferenceSource = Parameters<typeof buildKakaoCatalogRef
 export function filterReferenceZeroDeposit<T extends KakaoCatalogReference | ReturnType<typeof buildInternalAiReference>>(reference: T, query: Record<string, unknown>): T {
   const keys = ['depositState', 'termMonths', 'depositScope'];
   if (!keys.some(key => query[key] !== undefined)) return reference;
-  if (query.depositState !== 'ZERO' || (query.depositScope !== undefined && !['ANY_TERM', 'ALL_TERMS'].includes(String(query.depositScope)))
+  if (query.depositState !== 'ZERO' || (query.depositScope !== undefined && (typeof query.depositScope !== 'string' || !['ANY_TERM', 'ALL_TERMS'].includes(query.depositScope)))
     || (query.termMonths !== undefined && (typeof query.termMonths !== 'string' || !/^[1-9]\d?$/.test(query.termMonths) || Number(query.termMonths) > 60))) {
     throw new Error('REFERENCE_DEPOSIT_FILTER_INVALID');
   }

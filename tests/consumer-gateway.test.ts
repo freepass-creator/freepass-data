@@ -55,6 +55,7 @@ describe('read-only consumer gateway', () => {
     expect(all.json().meta.depositFilter).toEqual({ state: 'ZERO', termMonths: 36, scope: 'ALL_TERMS' });
     expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=61', headers })).statusCode).toBe(400);
     expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&termMonths=48', headers })).statusCode).toBe(400);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&depositScope=ALL_TERMS&depositScope=ALL_TERMS', headers })).statusCode).toBe(400);
     expect((await app.inject({ url: endpoint + '?depositState=ZERO', headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
     await app.close();
   });

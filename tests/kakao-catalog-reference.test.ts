@@ -65,7 +65,7 @@ describe('shared reference policy context', () => {
     expect(filterReferenceZeroDeposit(mixed, { depositState: 'ZERO', termMonths: '36', depositScope: 'ALL_TERMS' }).data).toEqual([]);
     mixed.data.find(p => p.sourceProductId === 'free')!.offers[0]!.priceTerms = [];
     expect(filterReferenceZeroDeposit(mixed, { depositState: 'ZERO', depositScope: 'ALL_TERMS' }).data).toEqual([]);
-    for (const query of [{ depositState: 'UNKNOWN' }, { termMonths: '36' }, { depositState: 'ZERO', termMonths: '0' }, { depositState: 'ZERO', termMonths: '36.0' }, { depositState: 'ZERO', depositScope: 'all' }]) {
+    for (const query of [{ depositState: 'UNKNOWN' }, { termMonths: '36' }, { depositState: 'ZERO', termMonths: '0' }, { depositState: 'ZERO', termMonths: '36.0' }, { depositState: 'ZERO', depositScope: 'all' }, { depositState: 'ZERO', depositScope: ['ALL_TERMS'] }, { depositState: 'ZERO', depositScope: { toString: () => 'ALL_TERMS' } }]) {
       expect(() => filterReferenceZeroDeposit(reference, query)).toThrow('REFERENCE_DEPOSIT_FILTER_INVALID');
     }
     expect(filterReferenceZeroDeposit(reference, {})).toBe(reference);
