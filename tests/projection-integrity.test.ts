@@ -37,6 +37,58 @@ describe('Projection release integrity verifier', () => {
     return { store, head };
   }
 
+  it('claims only the specified event behind other pending events', async () => {
+    const { store, head } = await scheduledFixture();
+    const other = structuredClone(store.outbox.get('synthetic-event')!);
+    store.outbox.set('other-event', { ...other, eventId: 'other-event', occurredAt: '2000-01-01T00:00:00.000Z' });
+    const before = structuredClone(store.outbox.get('other-event'));
+    expect(await processOneOutboxEvent(store, store, store, { workerId: 'single', eventId: 'synthetic-event',
+      expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(), requireFreshSources: true }, new Date(head.observedAt))).toBe('DONE');
+    expect(store.outbox.get('other-event')).toEqual(before);
+    expect(store.outbox.get('synthetic-event')?.status).toBe('DONE');
+    expect(await store.getDeliveryReceipt('synthetic-event')).not.toBeNull();
+  });
+
+  it('missing, busy and expired targets leave every outbox document unchanged', async () => {
+    for (const mode of ['missing', 'busy', 'expired']) {
+      const { store, head } = await scheduledFixture();
+      if (mode === 'busy') Object.assign(store.outbox.get('synthetic-event')!, { status: 'PROCESSING', leaseOwner: 'other',
+        leaseUntil: new Date(Date.parse(head.observedAt) + 60000).toISOString() });
+      const before = structuredClone([...store.outbox]);
+      const activate = vi.spyOn(store, 'activate');
+      const receipt = vi.spyOn(store, 'putDeliveryReceipt');
+      expect(await processOneOutboxEvent(store, store, store, { workerId: 'single',
+        eventId: mode === 'missing' ? 'missing' : 'synthetic-event', expiresAt: mode === 'expired' ? head.observedAt :
+          new Date(Date.parse(head.observedAt) + 30000).toISOString(), requireFreshSources: true }, new Date(head.observedAt)))
+        .toBe(mode === 'expired' ? 'HOLD' : 'IDLE');
+      expect([...store.outbox]).toEqual(before);
+      expect(activate).not.toHaveBeenCalled();
+      expect(receipt).not.toHaveBeenCalled();
+    }
+  });
+
+  it('does not reset the claim when approval expires after atomic ACTIVE and receipt', async () => {
+    const { store, head } = await scheduledFixture();
+    let elapsed = 0;
+    const timer = vi.spyOn(performance, 'now').mockImplementation(() => elapsed);
+    const activate = store.activate.bind(store);
+    vi.spyOn(store, 'activate').mockImplementation(async (...args) => {
+      await activate(...args);
+      elapsed = 31000;
+    });
+    const retry = vi.spyOn(store, 'markRetry');
+    const done = vi.spyOn(store, 'markDone');
+    try {
+      expect(await processOneOutboxEvent(store, store, store, { workerId: 'single', eventId: 'synthetic-event',
+        expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(), requireFreshSources: true }, new Date(head.observedAt))).toBe('HOLD');
+      expect(await store.getActive('erp-public')).not.toBeNull();
+      expect(await store.getDeliveryReceipt('synthetic-event')).not.toBeNull();
+      expect(store.outbox.get('synthetic-event')?.status).toBe('PROCESSING');
+      expect(retry).not.toHaveBeenCalled();
+      expect(done).not.toHaveBeenCalled();
+    } finally { timer.mockRestore(); }
+  });
+
   async function repriceFixture(store: MemoryDataStore, now: string) {
     await updateOfferPrice(store, { commandId: 'synthetic-reprice', idempotencyKey: 'synthetic-reprice',
       offerId: 'offer_gv70_demo', expectedRevision: 1, termKey: '36@20000',

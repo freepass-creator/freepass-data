@@ -519,9 +519,13 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     );
   }
 
-  async claimNext(input: { workerId: string; now: string; leaseUntil: string }) {
-    const item = [...this.outbox.values()]
-      .filter((x) =>
+  async claimNext(input: { workerId: string; now: string; leaseUntil: string; eventId?: string; expiresAt?: string }) {
+    if (input.eventId !== undefined && !/^[A-Za-z0-9:_-]{1,200}$/.test(input.eventId)) return null;
+    if (input.expiresAt && (!Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= Date.parse(input.now))) return null;
+    if (!Number.isFinite(Date.parse(input.leaseUntil)) || Date.parse(input.leaseUntil) <= Date.parse(input.now)) return null;
+    const candidates = input.eventId ? [this.outbox.get(input.eventId)].filter((x): x is OutboxEvent => Boolean(x)) : [...this.outbox.values()];
+    const item = candidates
+      .filter((x) => (!input.eventId || x.eventId === input.eventId) &&
         (x.status === 'PENDING' || (x.status === 'PROCESSING' && Boolean(x.leaseUntil) && x.leaseUntil! <= input.now)) &&
         (!x.nextAttemptAt || x.nextAttemptAt <= input.now)
       )

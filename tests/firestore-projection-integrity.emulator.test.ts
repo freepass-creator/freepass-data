@@ -27,6 +27,38 @@ function createEmulatorFixture() {
 }
 
 describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () => {
+  it('claims the exact document only and rejects mismatch, expiry and a live lease without writes', async () => {
+    const { app, db, store } = createEmulatorFixture();
+    try {
+      const now = new Date().toISOString();
+      const later = new Date(Date.now() + 60000).toISOString();
+      const event = { eventId: 'target', eventType: 'catalog.offer.changed', occurredAt: now,
+        status: 'PENDING', attempts: 0 };
+      await db.collection(FIRESTORE_COLLECTIONS.evidence.outbox).doc('other').set({ ...event, eventId: 'other' });
+      const target = db.collection(FIRESTORE_COLLECTIONS.evidence.outbox).doc('target');
+      const input = { workerId: 'single', now, leaseUntil: later, eventId: 'target', expiresAt: later };
+      const otherBefore = (await db.collection(FIRESTORE_COLLECTIONS.evidence.outbox).doc('other').get()).data();
+      expect(await store.claimNext(input)).toBeNull();
+      await target.set({ ...event, eventId: 'mismatch' });
+      for (const patch of [{}, { eventId: 'target', status: 'PROCESSING', leaseOwner: 'other', leaseUntil: later }]) {
+        if (Object.keys(patch).length) await target.set({ ...event, ...patch });
+        const before = await target.get();
+        expect(await store.claimNext(input)).toBeNull();
+        expect((await target.get()).updateTime).toEqual(before.updateTime);
+      }
+      await target.set(event);
+      const before = await target.get();
+      expect(await store.claimNext({ ...input, expiresAt: now })).toBeNull();
+      expect((await target.get()).updateTime).toEqual(before.updateTime);
+      expect((await store.claimNext(input))?.eventId).toBe('target');
+      await target.update({ leaseOwner: 'replacement' });
+      const replaced = await target.get();
+      await expect(store.markDone('target', { leaseOwner: 'single', leaseUntil: later })).rejects.toThrow('OUTBOX_LEASE_LOST');
+      expect((await target.get()).updateTime).toEqual(replaced.updateTime);
+      expect((await db.collection(FIRESTORE_COLLECTIONS.evidence.outbox).doc('other').get()).data()).toEqual(otherBefore);
+    } finally { await deleteApp(app); }
+  });
+
   it('promotes a multi-chunk evidence set and reads it atomically', async () => {
     const { app, db, store } = createEmulatorFixture();
 

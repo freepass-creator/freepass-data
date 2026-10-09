@@ -580,8 +580,15 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     );
   }
 
-  async claimNext(input: { workerId: string; now: string; leaseUntil: string }) {
-    const snap = await this.db.collection(C.outbox)
+  async claimNext(input: { workerId: string; now: string; leaseUntil: string; eventId?: string; expiresAt?: string }) {
+    if (input.eventId !== undefined && !/^[A-Za-z0-9:_-]{1,200}$/.test(input.eventId)) return null;
+    const started = performance.now();
+    const currentTime = () => new Date(Date.parse(input.now) + Math.floor(performance.now() - started)).toISOString();
+    const valid = () => Date.parse(input.leaseUntil) > Date.parse(currentTime()) && (!input.expiresAt || (Number.isFinite(Date.parse(input.expiresAt)) && Date.parse(input.expiresAt) > Date.parse(currentTime())));
+    if (!valid()) return null;
+    const snap = input.eventId
+      ? { docs: [await this.db.collection(C.outbox).doc(input.eventId).get()] }
+      : await this.db.collection(C.outbox)
       .where('status', 'in', ['PENDING', 'PROCESSING'])
       .orderBy('occurredAt', 'asc')
       .limit(20)
@@ -590,8 +597,9 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     for (const candidate of snap.docs) {
       const claimed = await this.db.runTransaction(async (tx) => {
         const fresh = await tx.get(candidate.ref);
-        if (!fresh.exists) return null;
+        if (!fresh.exists || !valid()) return null;
         const event = { id: fresh.id, ...fresh.data() } as unknown as OutboxEvent;
+        if (input.eventId && event.eventId !== input.eventId) return null;
         const leaseExpired = event.status === 'PROCESSING' && Boolean(event.leaseUntil) && event.leaseUntil! <= input.now;
         const due = !event.nextAttemptAt || event.nextAttemptAt <= input.now;
         if (!due || (event.status !== 'PENDING' && !leaseExpired)) return null;

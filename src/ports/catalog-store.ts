@@ -179,7 +179,7 @@ export interface SheetDeliveryEvidenceStore {
 
 export type OutboxLease = { leaseOwner: string; leaseUntil: string };
 export interface OutboxStore {
-  claimNext(input: { workerId: string; now: string; leaseUntil: string }): Promise<OutboxEvent | null>;
+  claimNext(input: { workerId: string; now: string; leaseUntil: string; eventId?: string; expiresAt?: string }): Promise<OutboxEvent | null>;
   markDone(eventId: string, lease: OutboxLease): Promise<void>;
   markRetry(input: { eventId: string; attempts: number; nextAttemptAt: string; error: string; lease: OutboxLease }): Promise<void>;
   moveToDeadLetter(input: { eventId: string; attempts: number; error: string; lease: OutboxLease }): Promise<void>;

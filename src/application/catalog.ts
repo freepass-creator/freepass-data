@@ -825,10 +825,15 @@ function backoffMs(base: number, attempts: number) {
 }
 export async function processOneOutboxEvent(
   catalog: CatalogStore, outbox: OutboxStore, projections: ProjectionStore,
-  options: {workerId: string; maxAttempts?: number; baseBackoffMs?: number; leaseMs?: number; requireFreshSources?: boolean}, now = new Date()
+  options: {workerId: string; maxAttempts?: number; baseBackoffMs?: number; leaseMs?: number; requireFreshSources?: boolean; eventId?: string; expiresAt?: string}, now = new Date()
 ): Promise<'IDLE'|'DONE'|'RETRY'|'DEAD_LETTER'|'HOLD'> {
+  if (options.eventId !== undefined && (!/^[A-Za-z0-9:_-]{1,200}$/.test(options.eventId) || !options.expiresAt)) return 'HOLD';
   const started = performance.now();
-  const currentTime = () => new Date(now.getTime() + Math.floor(performance.now() - started)).toISOString();
+  const currentTime = () => {
+    const time = new Date(now.getTime() + Math.floor(performance.now() - started)).toISOString();
+    if (options.expiresAt && (!Number.isFinite(Date.parse(options.expiresAt)) || Date.parse(time) >= Date.parse(options.expiresAt))) throw new Error('PROJECTION_SOURCE_EXECUTION_EXPIRED');
+    return time;
+  };
   // A source outage is not an event failure: preserve PENDING, attempts and
   // the old ACTIVE release instead of claiming and exhausting the retry budget.
   try {
@@ -840,7 +845,7 @@ export async function processOneOutboxEvent(
   const claimTime = currentTime();
   const lease = { leaseOwner: options.workerId,
     leaseUntil: new Date(Date.parse(claimTime) + (options.leaseMs ?? 30000)).toISOString() };
-  const event = await outbox.claimNext({ workerId: options.workerId, now: claimTime, leaseUntil: lease.leaseUntil });
+  const event = await outbox.claimNext({ workerId: options.workerId, now: claimTime, leaseUntil: lease.leaseUntil, ...(options.eventId ? { eventId: options.eventId } : {}), ...(options.expiresAt ? { expiresAt: options.expiresAt } : {}) });
   if (!event) return 'IDLE';
   const attempts = event.attempts + 1;
   try {
@@ -860,10 +865,11 @@ export async function processOneOutboxEvent(
         );
       }
     }
+    currentTime();
     await outbox.markDone(event.eventId, lease); return 'DONE';
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message === 'OUTBOX_LEASE_LOST') return 'HOLD';
+    if (message === 'OUTBOX_LEASE_LOST' || message === 'PROJECTION_SOURCE_EXECUTION_EXPIRED') return 'HOLD';
     try {
       if (error instanceof Error && message.startsWith('PROJECTION_SOURCE_')) {
         // The source can change between the preflight and claim. Release the
