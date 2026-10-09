@@ -77,6 +77,21 @@ describe('one active Data master authority', () => {
     expect(result).toMatchObject({ pick: 'HOLD', identity: null });
     expect(result).not.toHaveProperty('trimId');
   });
+  it('rejects IDs selected from another snapshot even when all display names are identical', () => {
+    const old = snapshot(), current = snapshot();
+    current.masters[0]!.id = 'different-native-master';
+    current.trims[0]!.id = 'different-native-trim';
+    current.trims[0]!.data.master_id = 'different-native-master';
+    const { readAt, masters, trims } = current;
+    current.digest = createHash('sha256').update(JSON.stringify({ readAt, masters, trims })).digest('hex');
+    const selected = chooseVehicleIdentity(indexVehicleMaster(verifiedMasterRecords(old)), input(names));
+    if (selected.pick === 'HOLD') throw new Error('fixture must resolve uniquely');
+    expect(verifiedVehicleMasterReference(current, selected)).toEqual({ state: 'HOLD', reason: 'MASTER_TRIM_PAIR_NOT_VERIFIED' });
+    const next = chooseVehicleIdentity(indexVehicleMaster(verifiedMasterRecords(current)), input(names));
+    if (next.pick === 'HOLD') throw new Error('fixture must resolve uniquely');
+    expect(verifiedVehicleMasterReference(current, next)).toMatchObject({ state: 'KNOWN',
+      masterId: 'different-native-master', trimId: 'different-native-trim', snapshotDigest: current.digest });
+  });
   it('excludes a drifting pair without blocking an independent valid pair or inventing an ID', () => {
     const master = snapshot();
     master.trims.push({ id: 'drifting-trim', data: { ...master.trims[0]!.data, sub_model: 'unclassified source name' } });
