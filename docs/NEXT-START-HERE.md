@@ -416,6 +416,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 16:36 KST same-task Claude reconnect / academy rules applied
+
+- Existing task/branch resumed, no duplicate capability/asset/schedule/session. Baseline `acfa9ba227f76475017694aa25c7d7debd27e8ac`; latest main freshly fetched/read `6faca67627a7df884587eb4294a5aa12d58a4fbe` (PR407). Pending audit-to-daily patch is still NOT on main; main workflow still lacks this workflow_run connection.
+- Read current AI Core constitution/curriculum and existing gpt-consult skill at Core `9493878148448e304ed74d8d37daa9ce9fdf221c`; operations minimal rules previously fully read remain applicable. Apply: RESUME before CREATE, actual SSOT/revision first, no FAILED-as-PASS, no RTDB, immutable private evidence and before-write authorization, separate tested/merged/deployed/observed. B3Q monitoring/control and Kakao sending remain Claude-owned; no UI takeover or new monitor created.
+- Academy operations `READY` for this same checkpoint update, exact baseline acfa9ba; new-asset reuse NOT_REQUIRED because no new asset. Existing public workflow/test/docs only used in review prompt, no credentials/private captures disclosed.
+- Human recovery news prompted one actual fresh status → review attempt. Status reports available=true / RESET_REACHED but retained blocked_until is old `2026-09-22T04:00:00Z`; it is only a usage gate, not proof of current organizational access. Actual claude:review exited1, `FAILED/CLAUDE_PROCESS_FAILED`, organization has disabled Claude subscription access for Claude Code. No review body or ANSWERED receipt. This is organizational access failure, NOT a newly observed token limit. No repeated call, key setup, login/account change or permission expansion.
+- Remains: high-risk operational activation's required Claude review HOLD; today's source freshness and individual consumer readback gaps remain as separately documented. Existing deterministic/source/photo evidence and scoped regression work preserved; no operation/write/cutover claimed. next_start_here: when the approved Claude connection actually changes, resume one scoped read-only review of this exact workflow; then rebase/retest against current main and proceed only through previously authorized single owner/immutable plan/guarded source-write/readback path. Token reset alone does not resolve organization policy.
+
+
 ### 2026-10-09 audit-success → shared-sheet-daily activation safety follow-up
 
 #### 2026-10-09 16:20 KST read-only operating evidence / exact continuation
