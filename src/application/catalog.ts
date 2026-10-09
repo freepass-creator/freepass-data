@@ -404,7 +404,8 @@ export function buildProjectionEvidenceContext(input: {
 }
 
 export async function buildErpPublicProjection(
-  catalog: CatalogStore, projections: ProjectionStore, now = new Date().toISOString()
+  catalog: CatalogStore, projections: ProjectionStore, now = new Date().toISOString(),
+  options: { activate?: boolean } = {}
 ): Promise<ProjectionRelease<ErpPublicProduct>> {
   const releaseId = `rel_${randomUUID()}`;
   const [models, assets, products, offers, policies, sourceLineage, revisionHistory] = await Promise.all([
@@ -699,7 +700,7 @@ export async function buildErpPublicProjection(
   );
   const currentActive = currentEvidence.release;
   if (
-    currentActive &&
+    options.activate !== false && currentActive &&
     currentActive.status === 'ACTIVE' &&
     currentActive.inputDigest === inputDigest &&
     currentActive.dataDigest === dataDigest &&
@@ -750,6 +751,9 @@ export async function buildErpPublicProjection(
     lineage: evidenceContext.evidence
   });
   await projections.markReady(release.releaseId);
+  // Preparation stages validated evidence only. Use an in-memory ProjectionStore
+  // for a read-only production dry-run; preparation alone is not a cutover.
+  if (options.activate === false) return { ...release, status: 'READY' };
   await projections.activate(release.releaseId);
   const active = await projections.getActive('erp-public');
   if (!active) throw new Error('Projection activation failed');

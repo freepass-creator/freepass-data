@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildErpPublicProjection } from '../src/application/catalog.js';
 import { readActiveProjectionEvidence } from '../src/application/projection-evidence-reader.js';
 import { assertProjectionReleaseIntegrity, verifyProjectionReleaseIntegrity } from '../src/shared/projection-integrity.js';
@@ -21,6 +21,41 @@ async function fixture() {
 }
 
 describe('Projection release integrity verifier', () => {
+  it('prepares a validated release without activating or replacing the old good release', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const previous = await buildErpPublicProjection(store, store);
+    const activate = vi.spyOn(store, 'activate');
+    const ready = await buildErpPublicProjection(store, store, '2026-10-09T00:00:00.000Z', { activate: false });
+    expect(ready.status).toBe('READY');
+    expect(ready.releaseId).not.toBe(previous.releaseId);
+    expect(activate).not.toHaveBeenCalled();
+    expect((await store.getActive('erp-public'))?.releaseId).toBe(previous.releaseId);
+    const manifest = await store.getManifest(ready.releaseId);
+    expect(verifyProjectionReleaseIntegrity(ready, manifest!, await store.listProjectionLineage(ready.releaseId)).valid).toBe(true);
+  });
+
+  it('retains old ACTIVE evidence after a staging failure and retries through a fresh release', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const previous = await buildErpPublicProjection(store, store);
+    vi.spyOn(store, 'stageEvidence').mockRejectedValueOnce(new Error('EVIDENCE_STAGE_FAILED'));
+    await expect(buildErpPublicProjection(store, store, '2026-10-09T00:00:00.000Z', { activate: false }))
+      .rejects.toThrow('EVIDENCE_STAGE_FAILED');
+    expect((await store.getActive('erp-public'))?.releaseId).toBe(previous.releaseId);
+    const ready = await buildErpPublicProjection(store, store, '2026-10-09T00:00:00.000Z', { activate: false });
+    expect(ready.status).toBe('READY');
+    expect((await store.getActive('erp-public'))?.releaseId).toBe(previous.releaseId);
+  });
+
+  it('prepares the first release without silently performing the first cutover', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const ready = await buildErpPublicProjection(store, store, '2026-10-09T00:00:00.000Z', { activate: false });
+    expect(ready.status).toBe('READY');
+    expect(await store.getActive('erp-public')).toBeNull();
+  });
+
   it('reads Memory active evidence through the atomic snapshot capability', async () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);

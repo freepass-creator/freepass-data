@@ -123,8 +123,14 @@ export class FirestoreSourceStore implements SourceIngestionStore {
     });
   }
   async failRun(input: Parameters<SourceIngestionStore['failRun']>[0]) {
-    await this.db.collection(C.runs).doc(input.runId).update({
-      status: 'FAILED', completedAt: input.completedAt, error: input.error
+    await this.db.runTransaction(async (tx) => {
+      const ref = this.db.collection(C.runs).doc(input.runId);
+      const snap = await tx.get(ref);
+      if (!snap.exists) throw new Error(`Source run not found: ${input.runId}`);
+      // Completion may have committed before its response/readback failed.
+      // A delayed failure must never invalidate an accepted immutable run.
+      if (snap.get('status') !== 'RUNNING') return;
+      tx.update(ref, { status: 'FAILED', completedAt: input.completedAt, error: input.error });
     });
   }
   async getRun(runId: string) {

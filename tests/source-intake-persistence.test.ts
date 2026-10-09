@@ -1,9 +1,76 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { Firestore } from 'firebase-admin/firestore';
+import { FirestoreSourceStore } from '../src/infra/source-firestore-store.js';
 import { ingestRawSourceBatch } from '../src/application/ingest-raw-source.js';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { canAssertSourceAbsence } from '../src/domain/source.js';
 
 describe('raw-first source intake', () => {
+  const retryBatch = (observedAt = '2026-10-09T00:00:00.000Z') => ({
+    laneId: 'SUPPLIER' as const,
+    source: { sourceId: 'synthetic/retry', kind: 'FILE' as const, displayName: 'Synthetic retry' },
+    observedAt, coverage: { mode: 'FULL' as const, completeness: 'COMPLETE' as const },
+    records: [{ sourceRecordId: 'one', payload: { amount: null } },
+      { sourceRecordId: 'two', payload: { amount: 0 } }]
+  });
+
+  it('preserves the accepted head after a committed completion loses its response', async () => {
+    const store = new MemorySourceStore();
+    const complete = store.completeRun.bind(store);
+    vi.spyOn(store, 'completeRun').mockImplementationOnce(async input => {
+      await complete(input);
+      throw new Error('COMPLETION_RESPONSE_LOST');
+    });
+    await expect(ingestRawSourceBatch(store, retryBatch())).rejects.toThrow('COMPLETION_RESPONSE_LOST');
+    const head = await store.getSourceHead('synthetic/retry');
+    const committed = await store.getRun(head!.runId);
+    expect(committed).toMatchObject({ status: 'COMPLETED', headStatus: 'CURRENT', rawCount: 2 });
+    const replay = await ingestRawSourceBatch(store, retryBatch());
+    expect(replay).toEqual(committed);
+    expect(await store.listRaw(replay.runId)).toHaveLength(2);
+  });
+
+  it('keeps partial RAW immutable and the old head usable, then accepts a fresh capture', async () => {
+    const store = new MemorySourceStore();
+    const good = await ingestRawSourceBatch(store, retryBatch());
+    const append = store.appendRaw.bind(store);
+    let calls = 0;
+    const spy = vi.spyOn(store, 'appendRaw').mockImplementation(async row => {
+      if (++calls === 2) throw new Error('SECOND_RAW_FAILED');
+      await append(row);
+    });
+    const failedBatch = retryBatch('2026-10-09T00:01:00.000Z');
+    await expect(ingestRawSourceBatch(store, failedBatch)).rejects.toThrow('SECOND_RAW_FAILED');
+    expect((await store.getSourceHead('synthetic/retry'))?.runId).toBe(good.runId);
+    await expect(ingestRawSourceBatch(store, failedBatch)).rejects.toThrow('SOURCE_INTAKE_RUN_ALREADY_EXISTS');
+    spy.mockRestore();
+    const recovered = await ingestRawSourceBatch(store, retryBatch('2026-10-09T00:02:00.000Z'));
+    expect(recovered.headStatus).toBe('CURRENT');
+    expect((await store.getRun(good.runId))?.headStatus).toBe('STALE');
+    expect(await store.listRaw(recovered.runId)).toHaveLength(2);
+  });
+
+  it('checks Firestore run status in the failure transaction before mutating it', async () => {
+    const update = vi.fn();
+    const ref = {};
+    let status = 'COMPLETED';
+    const db = { collection: () => ({ doc: () => ref }),
+      runTransaction: async (fn: (tx: unknown) => Promise<void>) => fn({
+        get: async () => ({ exists: true, get: () => status }), update
+      }) } as unknown as Firestore;
+    const store = new FirestoreSourceStore(db);
+    const input = { runId: 'synthetic', completedAt: '2026-10-09T00:00:00.000Z', error: 'late failure' };
+    await store.failRun(input);
+    expect(update).not.toHaveBeenCalled();
+    status = 'RUNNING';
+    await store.failRun(input);
+    expect(update).toHaveBeenCalledWith(ref, { status: 'FAILED', completedAt: input.completedAt, error: input.error });
+    status = 'FAILED';
+    update.mockClear();
+    await store.failRun({ ...input, error: 'second failure' });
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('persists settlement source rows as RAW evidence without inventing Canonical facts', async () => {
     const store = new MemorySourceStore();
     const run = await ingestRawSourceBatch(store, {

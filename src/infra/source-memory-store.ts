@@ -113,6 +113,7 @@ export class MemorySourceStore implements SourceIngestionStore {
   async failRun(input: Parameters<SourceIngestionStore['failRun']>[0]) {
     const run = this.runs.get(input.runId);
     if (!run) throw new Error(`Source run not found: ${input.runId}`);
+    if (run.status !== 'RUNNING') return;
     Object.assign(run, { status: 'FAILED', completedAt: input.completedAt, error: input.error });
   }
 
