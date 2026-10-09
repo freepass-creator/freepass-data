@@ -76,7 +76,8 @@ export async function inspectVehicleMediaEvidence(input: {
   now: string;
   probe?: (url: string) => Promise<ImageHeadEvidence>;
 }) {
-  const photos = resolveReferenceVehiclePhotos(input.product);
+  // Inspect raw candidates so upstream gallery filtering cannot hide document-image contamination.
+  const photos = resolveReferenceVehiclePhotos({ ...input.product, doc_images: undefined });
   const issues: string[] = [];
   if (input.sourceHttpStatus === 401) issues.push('SOURCE_ACCESS_UNAUTHORIZED');
   else if (input.sourceHttpStatus === 403) issues.push('SOURCE_ACCESS_FORBIDDEN');
@@ -141,7 +142,8 @@ export async function inspectVehicleMediaEvidence(input: {
     observedAt: input.now,
     verdict: issues.length ? 'HOLD' as const : 'HEAD_AND_SOURCE_FIELDS_MATCHED' as const,
     issues: [...new Set(issues)],
-    photoState: photos.state,
+    // Public usability reflects the filtered resolver, not the raw diagnostic candidates.
+    photoState: resolveReferenceVehiclePhotos(input.product).state,
     colorState: color === null ? 'NOT_PROVIDED' as const : source ? 'SOURCE_COMPARISON_ATTEMPTED' as const : 'VALUE_PRESENT_SOURCE_UNVERIFIED' as const,
     typedColorVerification: 'NOT_CHECKED' as const,
     checks,
