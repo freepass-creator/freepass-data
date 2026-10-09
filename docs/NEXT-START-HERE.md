@@ -449,6 +449,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 남음: Claude 실호출 exit 1/FAILED(조직 Claude Code 구독 비활성), 독립 검토 UNAVAILABLE. 따라서 정책 metadata 재작성·운영 apply/재발행/배포는 수행하지 않았다. 저장된 전체 금액을 실제 소비 API가 제공하는지 인증 readback과 legacy 상품 범위 대사가 남는다.
 - next_start_here: 미확정 175기간의 원천 추가근거를 기존 Source Intake로 확인 → 사람 입력 보존과 정책 적용범위를 독립 검토 → 최신 dry-run 생성 → 필요한 변경만 기존 거래로 apply/readback. 10-09 plan은 시점 증거이며 변경 후 그대로 실행하지 않는다.
 
+### 2026-10-09 사진 보강 + 폐기 엔진 최소 slice (정산/발행 계약 제외)
+
+- 목적/정본: 현재 사진 소비 연결 보강과 과거 버전 폐기. main5bbe271 기준, PR401의07dbf71에서 사진 변경과 pre-ONE 실행 폐기만 재사용. 새 구현/저장소/정본 없음. Academy READY, 다른 dirty 작업 보존.
+- 분리 이유: 사진 두 파일만 떼면 main에 남은 expired workflow-ref-pin으로 모든 PR의 Canon이 실패한다. 예외를 늘리지 않고 구 실행기 폐기7파일과 본 인계만 회수한다. contracts/·정산·F01/F86발행 정책·보증금/기간 freshness 변경은 포함하지 않는다. PR401 전체이력/그밖변경 보존, 이 slice가 main에 합쳐지면 PR401에서중복개발하지 않고main을 합쳐회수한다.
+- 변경: 사진 immediate HTTP502/503/504만1회 동일 총deadline 재시도, 느린 실패/timeout/권한/404/429 재시도 금지. 정확사진 identity cache의64-entry cap,32MiB/30초TTL/8inflight 및 공개상품 재검증 유지. safe TIMEOUT/TRANSPORT_FAILED audit code. pre-ONE workflow는 실행/예약/신원/외부engine없이 RETIRED 안내, CLI모든모드는외부명령전거부. 원문/이력보존.
+- 검증: 관련사진92PASS, historical delivery13PASS, build/diffcheck/repository canon PASS. exact 원격 CI로 전체 검사 확인한다.
+- 남음: 미배포, 새 수정 효과를 과거 JPEG200/ERP5 local51장decode 성공으로 입증하지 않는다. Claude 조직 접근제한 FAILED는독립검토PASS아님. 운영전체94대/전체화이트라벨 안정화 미검증. DB/시트/IAM/현행ERP writer/15분스케줄 변경0.
+- next_start_here: 이최소slice 원격CI확인→main병합→승인된사진runtime 배포·exact revision/대표앨범readback. PR401/399/400의 계약 선점 통합은 이slice로해결했다고선언하지 않는다.
+
 ### 2026-10-05 손오공 구독 보증금 0·보험료 별도 점검
 
 - 원인: 상품 price.<기간>.deposit 의 0 은 공급사 API 의 자리표시자이고 규칙은 deposit_note «월 대여료 × 약정연수 (최대 3개월)» 에 있다(원문은 손으로 안 덮음). 카톡 참조 카탈로그는 이미 이 규칙으로 계산했지만 정본 매핑(erp5-product-mapping)은 UNKNOWN_DEPOSIT 이었다. 이제 도메인 `depositFromYearsRuleNote` 로 읽을 때 계산(12개월 1배·24개월 2배·36개월↑ 3배)하고 쓰지 않는다. 날것 price.deposit 을 직접 읽는 소비처는 0 을 보증금 없음으로 읽지 말고 매핑·카탈로그 값을 써야 한다.

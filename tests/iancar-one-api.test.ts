@@ -55,6 +55,49 @@ it('private photo cache bounds byte memory and concurrent supplier fetches', asy
   expect(pending).toHaveLength(8);
 });
 
+it('a bounded 51-photo album retains exact-ID cached bytes without increasing the memory or freshness limits', async () => {
+  const cache = createIancarPhotoByteCache(() => 1);
+  const load = vi.fn(async () => ({ bytes: Buffer.alloc(330_000), contentType: 'image/jpeg' }));
+  for (let index = 0; index < 51; index++) await cache('synthetic-vehicle', String(index), load);
+  for (let index = 0; index < 51; index++) await cache('synthetic-vehicle', String(index), load);
+  expect(load).toHaveBeenCalledTimes(51);
+});
+
+it('photo transport retries only an immediate transient failure once under the same deadline', async () => {
+  const fetcher = vi.fn().mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
+    .mockResolvedValueOnce(new Response(Buffer.from([255,216,255]), { headers: { 'content-type': 'image/jpeg' } }));
+  expect((await createIancarOneApiClient(config, fetcher).getPhoto('V1', 'P1')).status).toBe(200);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(fetcher.mock.calls[0]![1]!.signal).toBe(fetcher.mock.calls[1]![1]!.signal);
+});
+
+it.each([401, 403, 404, 429])('photo transport does not retry authority/not-found/rate-limit status %s', async status => {
+  const fetcher = vi.fn(async () => new Response('synthetic', { status }));
+  await expect(createIancarOneApiClient(config, fetcher).getPhoto('V1', 'P1')).rejects.toThrow(`IANCAR_ONE_API_HTTP_${status}`);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+it('photo transport exposes a safe audit timeout code without leaking upstream errors', async () => {
+  const fetcher = vi.fn(async () => { throw new DOMException('private-upstream-url', 'TimeoutError'); });
+  await expect(createIancarOneApiClient(config, fetcher).getPhoto('V1', 'P1')).rejects.toMatchObject({ code: 'IANCAR_ONE_PHOTO_TIMEOUT', message: 'IANCAR_ONE_PHOTO_TIMEOUT' });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+it('photo transport never loops indefinitely on repeated transient failure', async () => {
+  const fetcher = vi.fn(async () => new Response('synthetic', { status: 503 }));
+  await expect(createIancarOneApiClient(config, fetcher).getPhoto('V1', 'P1')).rejects.toThrow('IANCAR_ONE_API_HTTP_503');
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
+it('photo transport does not retry a slow failure into the consumer deadline', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(2_001);
+  try {
+    const fetcher = vi.fn(async () => new Response('synthetic', { status: 503 }));
+    await expect(createIancarOneApiClient(config, fetcher).getPhoto('V1', 'P1')).rejects.toThrow('IANCAR_ONE_API_HTTP_503');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  } finally { clock.mockRestore(); }
+});
+
 describe('Iancar server photo transport', () => {
   const detail = { vehicle_id: 'V1', plate_number: '133호1234', stale: false,
     photos: [ { photo_id: 'other', url: '/v1/vehicles/V1/photos/other', representative: false },

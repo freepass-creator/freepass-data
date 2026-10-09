@@ -1,5 +1,7 @@
 # Data-owned source collection and delivery
 
+> **폐기 / 실행 금지 — 2026-10-09 대표 결정.** 아래 pre-ONE frozen engine 배달 계획은 역사 자료다. CLI는 `RETIRED_PRE_ONE_DELIVERY_ENGINE`으로 외부 실행 전에 중단하며 workflow는 예약·신원·원천/DB/시트 쓰기 없는 폐기 안내만 남긴다. 현재 공통시트 수집은 `shared-sheet-daily.yml`, 소비처 조회 계약은 `ERP5-CONSUMER-RUNTIME.md`를 따른다. 과거 ERP 저장소의 활성 writer는 이 코드 변경으로 중지되지 않으며 별도 전환/검증이 필요하다. 폐기는 새 배달 완료나 Canonical 전환 완료를 뜻하지 않는다.
+
 Status: CODED / TESTED preparation. NOT DEPLOYED / NOT CUTOVER VERIFIED.
 
 ## 2026-10-02 integration boundary
