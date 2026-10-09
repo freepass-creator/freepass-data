@@ -2306,3 +2306,11 @@ This file exists so another session can continue without re-discovering or re-cr
 - 검증:1698testsPASS/14skip, 독립CLI 중대지적없음, v1/v2월·단건200schemaPASS, root독립prod재조회일치. Kakao485상품3037기간필드/state누락0,2223수수료조건미확정. Admin기존workflow200, 무인증양쪽403,IAM/identity/write-mode보존.
 - 남음: 원본 source실금액검토4건(row441/431/461/413), 표시정밀도3건분리. sourceFreshnessUNVERIFIED, 운영원장·금액·과거작성자write0. Canonical 정책일괄apply/Admin재발행별도승인필요.
 - next_start_here: READ-RUNTIME 최종운영증거→private classified sourceplan(before원본/source/humanWritten)→지휘가4건scope/원본보존/금액차이판정. nullfee조건결핍은 해당원천규격/공급사근거를 확보한뒤같은engine으로dryrun한다.
+
+### 2026-10-09 후속 기간금액 저장 전 재계산 / Claude 연결 재확인
+
+- 목적/대상 revision: 기존 기간금액 작업선 유지, main `6faca67627a7df884587eb4294a5aa12d58a4fbe`에서 기존 recompute 실행기로 운영 Canonical 읽기만 수행. Academy data READY. 헌법 hash `4bd5be6d90fa5cbb4b5b7f38ada533a3de90b6f7725fab7c20bcaf85c0e27148`, curriculum hash `fec2b99ec070799db3593b599078c26e36b290a3e9c53917783a14d4b78ebde5`; 신규 자산 없음.
+- 변경/검증: 기존 `recompute-offer-economics.ts --firestore` exit0, DRY_RUN/PLANNED/writes0. 저장 상품160개/568기간 중 최신 확정 정책 적용안은 수수료 KNOWN393→457, UNKNOWN111. 금액 변경73기간(빌린카54/웰릭스19), 정책·근거 포함 변경상품160개. 비공개 TEMP/period-economics-next-dryrun.json에 before-image 포함; planDigest `0ca0ad14b4703fb56afc7383d0d7530fd875eef6e6d472e52153f28ef09aea07`.
+- 독립 검토: claude:status는 RESET_REACHED/available true였으나 실제 claude:review는 조직 Claude Code subscription 접근 제한, exit1/FAILED/CLAUDE_PROCESS_FAILED. 토큰 복구를 검토 성공으로 계산하지 않는다. 이번 Claude 의견·합의 없음; 기존 독립 CLI 검증과 운영 readback은 앞 기록대로 별도 유지한다.
+- 남음: 신규 원천485상품을 Canonical160상품과 동일시하지 않는다. 기존 저장568기간 UNKNOWN111은 신차 subtype79/미지원기간30/보증금구간2. 운영 APPLY·ACTIVE 발행·원장 정정0; 원본 금액 검토4건은 별도 보존한다.
+- next_start_here: 같은 비공개 plan과 최신 상품 revision/policy digest를 재대조하고 필수 독립 검토 및 해당 운영 저장 승인 경계를 확인한 뒤 기존 apply/readback 경로로 이어간다. UNKNOWN 근거 없는 금액을 만들거나 기존 정산 사람 입력을 덮지 않는다.
