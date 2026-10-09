@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { chooseVehicleIdentity, indexVehicleMaster, type VehicleIdentity } from '../src/domain/vehicle-identity-resolution.js';
-import { assertVehicleIdentityInputs, buildVehicleIdentityInputs, verifiedMasterRecords, type VehicleMasterSnapshot } from '../src/adapters/vehicle-identity-inputs.js';
+import { assertVehicleIdentityInputs, buildVehicleIdentityInputs, verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../src/adapters/vehicle-identity-inputs.js';
 import type { Erp5SourceCapture } from '../src/adapters/erp5-source-capture.js';
 const names = ['현대', '쏘나타', '쏘나타 DN8', '스마트'] as const;
 function snapshot(extra: Record<string, unknown> = {}): VehicleMasterSnapshot {
@@ -20,6 +20,40 @@ function capture(): Erp5SourceCapture {
 const input = (sheet: VehicleIdentity, data: VehicleIdentity | null = null) =>
   ({ sheet, data, raw: '쏘나타 DN8 스마트', firstRegistration: '', modelYear: '' });
 describe('one active Data master authority', () => {
+  it('publishes native ID provenance tied to the exact verified snapshot', () => {
+    const master = snapshot();
+    expect(verifiedVehicleMasterReference(master, { masterId: 'm1', trimId: 't1' })).toEqual({
+      state: 'KNOWN', authority: 'FREEPASS_DATA_VEHICLE_MASTER', identityKind: 'FIRESTORE_DOCUMENT_ID',
+      masterId: 'm1', trimId: 't1', snapshotDigest: master.digest, readAt: master.readAt,
+    });
+    expect(verifiedVehicleMasterReference(master, { masterId: 'reference_vm_name_hash', trimId: 't1' }))
+      .toEqual({ state: 'HOLD', reason: 'MASTER_TRIM_PAIR_NOT_VERIFIED' });
+    expect(verifiedVehicleMasterReference(master, { masterId: 'm1', trimId: 'other-trim' }).state).toBe('HOLD');
+  });
+  it('retains native IDs after an evidenced rename while changing snapshot provenance', () => {
+    const old = snapshot(), renamed = snapshot();
+    renamed.masters[0]!.data.sub_model = '쏘나타 디 엣지 DN8';
+    renamed.masters[0]!.data.sub_model_aliases = [names[2]];
+    renamed.trims[0]!.data.sub_model = '쏘나타 디 엣지 DN8';
+    const { readAt, masters, trims } = renamed;
+    renamed.digest = createHash('sha256').update(JSON.stringify({ readAt, masters, trims })).digest('hex');
+    const choice = chooseVehicleIdentity(indexVehicleMaster(verifiedMasterRecords(renamed)), input(names));
+    expect(choice).toMatchObject({ pick: 'SHEET', masterId: 'm1', trimId: 't1' });
+    expect(verifiedVehicleMasterReference(renamed, { masterId: 'm1', trimId: 't1' }))
+      .toMatchObject({ state: 'KNOWN', masterId: 'm1', trimId: 't1', snapshotDigest: renamed.digest });
+    expect(renamed.digest).not.toBe(old.digest);
+  });
+  it('does not issue verified IDs for parent drift, retirement, stale or tampered snapshots', () => {
+    const drift = snapshot({ sub_model: 'unverified old name' });
+    expect(() => verifiedVehicleMasterReference(drift, { masterId: 'm1', trimId: 't1' })).toThrow('HOLD');
+    const retired = snapshot();
+    retired.masters[0]!.data.retired = true;
+    const { readAt, masters, trims } = retired;
+    retired.digest = createHash('sha256').update(JSON.stringify({ readAt, masters, trims })).digest('hex');
+    expect(() => verifiedVehicleMasterReference(retired, { masterId: 'm1', trimId: 't1' })).toThrow('HOLD');
+    expect(() => verifiedVehicleMasterReference(snapshot(), { masterId: 'm1', trimId: 't1' }, Date.now() + 300001)).toThrow();
+    expect(() => verifiedVehicleMasterReference({ ...snapshot(), digest: 'tampered' }, { masterId: 'm1', trimId: 't1' })).toThrow();
+  });
   it('uses aliases for search and returns current names plus immutable IDs', () => {
     const master = indexVehicleMaster(verifiedMasterRecords(snapshot()));
     expect(chooseVehicleIdentity(master, input(['현대', '쏘나타', '소나타 DN8', '스마트 초이스'])))

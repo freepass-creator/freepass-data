@@ -1,6 +1,6 @@
 import { decodeErp5Value, inspectErp5Capture, type Erp5SourceCapture } from './erp5-source-capture.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
-import type { VehicleIdentity, VehicleMasterRecord } from '../domain/vehicle-identity-resolution.js';
+import type { VehicleIdentity, VehicleMasterRecord, VehicleMasterReference } from '../domain/vehicle-identity-resolution.js';
 import { stableDigest } from '../shared/stable-digest.js';
 // @ts-expect-error Existing pure planner has no TypeScript declaration.
 import { vehicleMasterSnapshotRows } from '../../scripts/supplier-input-sheet.mjs';
@@ -15,6 +15,17 @@ export type VehicleIdentityInputs = {
 };
 export function verifiedMasterRecords(master: VehicleMasterSnapshot, now = Date.now()): VehicleMasterRecord[] {
   return vehicleMasterSnapshotRows(master, now).records;
+}
+/** Check the immutable pair itself; matching display names or a reference_vm_ hash is not proof. */
+export function verifiedVehicleMasterReference(master: VehicleMasterSnapshot,
+  ids: Pick<VehicleMasterRecord, 'masterId' | 'trimId'>, now = Date.now()): VehicleMasterReference |
+  { state: 'HOLD'; reason: 'MASTER_TRIM_PAIR_NOT_VERIFIED' } {
+  const records = verifiedMasterRecords(master, now);
+  if (records.filter(record => record.masterId === ids.masterId && record.trimId === ids.trimId).length !== 1) {
+    return { state: 'HOLD', reason: 'MASTER_TRIM_PAIR_NOT_VERIFIED' };
+  }
+  return { state: 'KNOWN', authority: 'FREEPASS_DATA_VEHICLE_MASTER', identityKind: 'FIRESTORE_DOCUMENT_ID',
+    masterId: ids.masterId, trimId: ids.trimId, snapshotDigest: master.digest, readAt: master.readAt };
 }
 /** Existing plate values are evidence; contradictory rows are excluded, never silently deduplicated. */
 export function dataIdentitiesFromErp5(capture: Erp5SourceCapture): VehicleIdentityInputs['data'] {
