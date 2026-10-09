@@ -102,7 +102,7 @@ describe('shared reference policy context', () => {
     expect(filterReferenceZeroDeposit(mixed, { depositState: 'ZERO', termMonths: '36', depositScope: 'ALL_TERMS' }).data).toEqual([]);
     mixed.data.find(p => p.sourceProductId === 'free')!.offers[0]!.priceTerms = [];
     expect(filterReferenceZeroDeposit(mixed, { depositState: 'ZERO', depositScope: 'ALL_TERMS' }).data).toEqual([]);
-    for (const query of [{ depositState: 'UNKNOWN' }, { termMonths: '36' }, { depositState: 'ZERO', termMonths: '0' }, { depositState: 'ZERO', termMonths: '36.0' }, { depositState: 'ZERO', depositScope: 'all' }, { depositState: 'ZERO', depositScope: ['ALL_TERMS'] }, { depositState: 'ZERO', depositScope: { toString: () => 'ALL_TERMS' } }]) {
+    for (const query of [{ depositState: 'PAID' }, { termMonths: ['36'] }, { depositState: 'ZERO', termMonths: '0' }, { depositState: 'ZERO', termMonths: '36.0' }, { depositState: 'ZERO', depositScope: 'all' }, { depositState: 'ZERO', depositScope: ['ALL_TERMS'] }, { depositState: 'ZERO', depositScope: { toString: () => 'ALL_TERMS' } }]) {
       expect(() => filterReferenceZeroDeposit(reference, query)).toThrow('REFERENCE_DEPOSIT_FILTER_INVALID');
     }
     expect(filterReferenceZeroDeposit(reference, {})).toBe(reference);
@@ -710,3 +710,22 @@ describe('정책을 올려도 이미 저장된 기간별 수수료는 조용히 
   });
 });
 
+
+describe('general reference query', () => {
+  it('keeps all products by default and intersects every term condition on one term', () => {
+    const ref = buildKakaoCatalogReference({consumerId:'kakao-ops',observedAt:new Date().toISOString(),products:{a:{listable:true,provider_company_code:'RP013',maker:'Maker',model:'Model',price:{'36':{rent:500000,deposit:1000000},'48':{rent:400000,deposit:null}}}}});
+    const apply = (q: Record<string,unknown>) => filterReferenceZeroDeposit(ref,q);
+    expect(apply({})).toBe(ref);
+    for (const q of [{supplierId:'RP013'},{maker:'Maker'},{model:'Model'},{commercialType:ref.data[0]!.commercialType!},{termMonths:'36'},{monthlyRentMin:'500000'},{depositState:'KNOWN'},{depositState:'UNKNOWN'},{depositMin:'1000000'}]) expect(apply(q).data).toHaveLength(1);
+    expect(apply({supplierId:'RP013',maker:'Maker',termMonths:'36',monthlyRentMin:'500000',depositMin:'1000000',depositState:'KNOWN'}).data[0]!.offers).toEqual(ref.data[0]!.offers);
+    expect(apply({termMonths:'48',monthlyRentMin:'500000'}).data).toEqual([]);
+    expect(apply({depositState:'UNKNOWN',depositMax:'0'}).data).toEqual([]);
+    expect(apply({depositState:'ZERO'}).data).toEqual([]);
+    expect(apply({supplierId:'absent'}).data).toEqual([]);
+    const t = ref.data[0]!.offers[0]!.priceTerms[0]!;
+    t.contractedMileage={km:1000,period:'month'};
+    expect(apply({termMonths:'36',mileageKm:'1000',mileagePeriod:'month'}).data).toHaveLength(1);
+    expect(apply({termMonths:'36',mileageKm:'1000',mileagePeriod:'year'}).data).toEqual([]);
+    for(const q of [{limit:'1'},{cursor:'x'},{unknown:'x'},{model:['Model']},{monthlyRentMin:'-1'},{depositMin:'10',depositMax:'1'},{mileageKm:'1000'},{mileagePeriod:'week'},{maker:' '}]) expect(()=>apply(q)).toThrow('REFERENCE_DEPOSIT_FILTER_INVALID');
+  });
+});

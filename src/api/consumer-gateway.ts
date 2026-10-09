@@ -36,7 +36,7 @@ import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-
 import {
   buildKakaoCatalogReference,
   buildInternalAiReference,
-  filterReferenceZeroDeposit,
+  filterReferenceProducts,
   type KakaoCatalogReference,
   type KakaoCatalogReferenceSource,
 } from '../application/kakao-catalog-reference.js';
@@ -562,7 +562,7 @@ export function createConsumerGateway(
         const source = await readSource(binding.id);
         if (source.consumerId !== binding.id) throw new Error('REFERENCE_SOURCE_CONSUMER_MISMATCH');
         const reference = internalAi ? buildInternalAiReference(source) : buildKakaoCatalogReference(source);
-        return filterReferenceZeroDeposit(reference, request.query as Record<string, unknown>);
+        return filterReferenceProducts(reference, request.query as Record<string, unknown>);
       });
 
       if (
@@ -572,7 +572,7 @@ export function createConsumerGateway(
         result.meta.authority !== 'REFERENCE_ONLY' ||
         result.meta.publicationDecision !== 'HOLD' ||
         result.meta.sourceProject !== 'freepasserp5' ||
-        (!result.data.length && !(request.query as Record<string, unknown>).depositState) ||
+        (!result.data.length && !Object.keys(request.query as Record<string, unknown>).length) ||
         !result.commissionPolicy.digest
       ) {
         return reply.code(503).send({ code: `${errorPrefix}_RESPONSE_INVALID` });

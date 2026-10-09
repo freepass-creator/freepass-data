@@ -69,6 +69,15 @@ describe('read-only consumer gateway', () => {
       } }),
     });
     const endpoint = '/v1/consumers/kakao-ops/catalog-reference';
+    const complete = await app.inject({url:endpoint,headers});
+    expect(complete.statusCode).toBe(200);
+    expect(complete.json().data).toHaveLength(2);
+    for (const q of ['supplierId=RP013&termMonths=36&monthlyRentMin=500000','depositState=UNKNOWN']) {
+      const found=await app.inject({url:endpoint+'?'+q,headers}); expect(found.statusCode).toBe(200); expect(found.json().data.length).toBeGreaterThan(0);
+    }
+    const missing=await app.inject({url:endpoint+'?supplierId=absent',headers}); expect(missing.statusCode).toBe(200); expect(missing.json().data).toEqual([]);
+    for(const q of ['limit=1','cursor=x','model=A&model=B','monthlyRentMin=bad','mileageKm=1000']) expect((await app.inject({url:endpoint+'?'+q,headers})).statusCode).toBe(400);
+
     const result = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&depositScope=ALL_TERMS', headers });
     expect(result.statusCode).toBe(200);
     expect(result.json().data.map((p: { sourceProductId: string }) => p.sourceProductId)).toEqual(['free']);

@@ -834,22 +834,37 @@ function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
 export type KakaoCatalogReference = ReturnType<typeof buildKakaoCatalogReference>;
 export type KakaoCatalogReferenceSource = Parameters<typeof buildKakaoCatalogReference>[0];
 
-/** Retains every offered term, so a match never conceals a paid/unknown sibling. */
-export function filterReferenceZeroDeposit<T extends KakaoCatalogReference | ReturnType<typeof buildInternalAiReference>>(reference: T, query: Record<string, unknown>): T {
-  const keys = ['depositState', 'termMonths', 'depositScope'];
-  if (!keys.some(key => query[key] !== undefined)) return reference;
-  if (query.depositState !== 'ZERO' || (query.depositScope !== undefined && (typeof query.depositScope !== 'string' || !['ANY_TERM', 'ALL_TERMS'].includes(query.depositScope)))
-    || (query.termMonths !== undefined && (typeof query.termMonths !== 'string' || !/^[1-9]\d?$/.test(query.termMonths) || Number(query.termMonths) > 60))) {
-    throw new Error('REFERENCE_DEPOSIT_FILTER_INVALID');
+/** All term conditions match one item; sibling terms remain visible. */
+export function filterReferenceProducts<T extends KakaoCatalogReference | ReturnType<typeof buildInternalAiReference>>(reference: T, query: Record<string, unknown>): T {
+  const fields = ['supplierId','maker','model','commercialType','assetStatus'];
+  const numeric = ['termMonths','mileageKm','monthlyRentMin','monthlyRentMax','depositMin','depositMax'];
+  const keys = [...fields,...numeric,'mileagePeriod','depositState','depositScope'];
+  const invalid = () => { throw new Error('REFERENCE_DEPOSIT_FILTER_INVALID'); };
+  if (!Object.keys(query).length) return reference;
+  for (const [key,value] of Object.entries(query)) {
+    if (!keys.includes(key) || typeof value !== 'string' || !value.trim() || value !== value.trim()) invalid();
+    if (numeric.includes(key) && (!/^(0|[1-9]\d*)$/.test(String(value)) || !Number.isSafeInteger(Number(value)))) invalid();
   }
-  const termMonths = query.termMonths === undefined ? null : Number(query.termMonths);
-  const scope = query.depositScope === 'ALL_TERMS' ? 'ALL_TERMS' : 'ANY_TERM';
-  const confirmedZero = (term: T['data'][number]['offers'][number]['priceTerms'][number]) => term.depositState === 'ZERO' && term.depositAmount === 0 && term.deposit?.amount === 0;
-  const data = reference.data.filter(product => {
-    const terms = product.offers.flatMap(offer => offer.priceTerms);
-    return terms.some(term => confirmedZero(term) && (termMonths === null || term.termMonths === termMonths))
-      && (scope === 'ANY_TERM' || terms.every(confirmedZero));
-  });
-  return { ...reference, data, meta: { ...reference.meta, projectedCount: data.length,
-    dataDigest: hash(JSON.stringify(data)), depositFilter: { state: 'ZERO', termMonths, scope } } } as T;
+  if (query.termMonths !== undefined && (Number(query.termMonths)<1 || Number(query.termMonths)>60)) invalid();
+  if (query.depositState !== undefined && !['ZERO','KNOWN','UNKNOWN'].includes(String(query.depositState))) invalid();
+  if (query.depositScope !== undefined && (query.depositState !== 'ZERO' || !['ANY_TERM','ALL_TERMS'].includes(String(query.depositScope)))) invalid();
+  if (query.mileagePeriod !== undefined && !['year','month'].includes(String(query.mileagePeriod))) invalid();
+  if ((query.mileageKm === undefined) !== (query.mileagePeriod === undefined)) invalid();
+  for (const prefix of ['monthlyRent','deposit']) if (query[prefix+'Min'] !== undefined && query[prefix+'Max'] !== undefined && Number(query[prefix+'Min'])>Number(query[prefix+'Max'])) invalid();
+  type Term = T['data'][number]['offers'][number]['priceTerms'][number];
+  const zero = (t: Term) => t.depositState === 'ZERO' && t.depositAmount === 0 && t.deposit?.amount === 0;
+  const range = (v: number | null | undefined, k: string) => (query[k+'Min'] === undefined && query[k+'Max'] === undefined) ||
+    (v !== null && v !== undefined && (query[k+'Min'] === undefined || v>=Number(query[k+'Min'])) && (query[k+'Max'] === undefined || v<=Number(query[k+'Max'])));
+  const match = (t: Term) => (query.termMonths === undefined || t.termMonths === Number(query.termMonths)) &&
+    (query.depositState === undefined || (query.depositState === 'ZERO' ? zero(t) : t.depositState === query.depositState)) &&
+    range(t.monthlyRent.amount,'monthlyRent') && range(t.depositAmount,'deposit') &&
+    (query.mileageKm === undefined || (t.contractedMileage ? t.contractedMileage.km === Number(query.mileageKm) && t.contractedMileage.period === query.mileagePeriod : query.mileagePeriod === 'year' && t.mileageLimitKmPerYear === Number(query.mileageKm)));
+  const data = reference.data.filter(p => (query.maker === undefined || p.vehicle.maker === query.maker) &&
+    (query.model === undefined || p.vehicle.model === query.model) && (query.commercialType === undefined || p.commercialType === query.commercialType) &&
+    (query.assetStatus === undefined || p.vehicle.assetStatus === query.assetStatus) &&
+    p.offers.some(o => (query.supplierId === undefined || o.supplierId === query.supplierId) && o.priceTerms.some(match)) &&
+    (query.depositScope !== 'ALL_TERMS' || p.offers.flatMap(o => o.priceTerms).every(zero)));
+  return { ...reference,data,meta: { ...reference.meta,projectedCount:data.length,dataDigest:hash(JSON.stringify(data)),queryFilter:{...query},
+    ...(query.depositState === 'ZERO' ? {depositFilter:{state:'ZERO',termMonths:query.termMonths === undefined ? null : Number(query.termMonths),scope:query.depositScope === 'ALL_TERMS' ? 'ALL_TERMS' : 'ANY_TERM'}} : {}) } } as T;
 }
+export const filterReferenceZeroDeposit = filterReferenceProducts;
