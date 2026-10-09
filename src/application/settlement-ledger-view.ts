@@ -250,6 +250,7 @@ export async function readSettlementLedgerView(
       sourceDigest: source.digest,
       dataDigest: stableDigest(data),
       ...(summary ? { snapshotSummary: summary } : {}),
+      ...(extended ? { sourceFreshness: { state: 'UNVERIFIED' as const, reason: 'SOURCE_NOT_VERIFIED_BY_THIS_READ' as const } } : {}),
     },
   };
 }

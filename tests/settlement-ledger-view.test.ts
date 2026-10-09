@@ -134,6 +134,7 @@ describe('settlement ledger data product', () => {
       kind: 'query', viewVersion: 2, filters: [{ field: 'billMonth', value: '2026-09' }], limit: 3,
     });
     expect(result.schema).toBe('freepass-data.settlement-ledger/v2');
+    expect(result.meta.sourceFreshness).toEqual({ state: 'UNVERIFIED', reason: 'SOURCE_NOT_VERIFIED_BY_THIS_READ' });
     expect(result.meta.snapshotSummary).toMatchObject({
       scope: 'MONTH', completeness: 'LIMIT_REACHED', entryIds: ['one', 'two'], excludedIds: ['cancelled'],
       totals: {
@@ -148,6 +149,7 @@ describe('settlement ledger data product', () => {
     expect(legacy.schema).toBe('freepass-data.settlement-ledger/v1');
     expect(legacy.data[0]).not.toHaveProperty('reconciliation');
     expect(legacy.meta).not.toHaveProperty('snapshotSummary');
+    expect(legacy.meta).not.toHaveProperty('sourceFreshness');
     expect(() => assertSettlementLedgerReadRequest({ kind: 'doc', id: 'one', viewVersion: 3 })).toThrow();
   });
   it('projects FreePass Data settlement facts without guessing missing booleans or money', async () => {

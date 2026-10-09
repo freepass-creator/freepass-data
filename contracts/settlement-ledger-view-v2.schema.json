@@ -31,7 +31,8 @@
         "count",
         "sourceDigest",
         "dataDigest",
-        "snapshotSummary"
+        "snapshotSummary",
+        "sourceFreshness"
       ],
       "properties": {
         "consumerId": {
@@ -63,6 +64,22 @@
         },
         "snapshotSummary": {
           "$ref": "#/$defs/snapshotSummary"
+        },
+        "sourceFreshness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "reason"
+          ],
+          "properties": {
+            "state": {
+              "const": "UNVERIFIED"
+            },
+            "reason": {
+              "const": "SOURCE_NOT_VERIFIED_BY_THIS_READ"
+            }
+          }
         }
       }
     }

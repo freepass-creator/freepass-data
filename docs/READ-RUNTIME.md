@@ -519,3 +519,14 @@ node --import tsx src/jobs/recompute-offer-economics.ts --firestore --apply --pl
 - 기존 settlementRules/f04-confirmed-receipt-sync의 monthlyReceiptSummaries와 IDs·공급가·VAT·총액을 독립 대사한다. components MATCH/MISMATCH/UNKNOWN을 분리해 VAT미확인이 공급가 불일치로 오인되지 않게 한다. 이 비교는 저장 요약의 동시 관측을 보장하지 않는다.
 - CREATE_NEW_JUSTIFIED: reuse check에서 기존 v1 strict schema/기존 gateway/projection을 검토했다. v1의 $id와 의미를 보존하려고 v2 schema만 별도로 추가했다. 새 엔진·원장·가지 없음.
 - 운영 읽기 2026-10-09T05:35:51.701Z: 35행, 취소 제외34 IDs 정확일치; 청구 공급가36,582,600/VAT3,658,260/합계40,240,860; 지급 공급가29,322,051/VAT2,932,205/합계32,254,256. 기존 월 요약 일치. 이력READ34/identity미상1, cash read35. 직접 DB 쓰기·배포0.
+
+### 2026-10-09 원본 최신성 binding 검증 패킷
+
+settlement v2 meta.sourceFreshness는 UNVERIFIED / SOURCE_NOT_VERIFIED_BY_THIS_READ다. 저장 행·요약 MATCH, sourceReceiptSyncedAt, 서버 observedAt 어느 것도 최신 원본 검증을 뜻하지 않는다. 원본과 원장을 자동 수정하지 않는다.
+
+- 실제 read binding 조회 2026-10-09T05:44:20.118Z: source=F04_RECEIPT, sourceTab=접수, monthlySummaryObservedAt=2026-10-07T06:32:13.553Z. sourceRange/valueRenderOption/digestAlgorithm/publisherRevision/publisherId/sourceSnapshotId는 없음.
+- 기존 역사 조회에서 접수!A1:BT600 / UNFORMATTED_VALUE / stableDigest(values) 비교가 확인됐다. 이것은 검증자가 사용한 범위이며 실제 publisher 범위를 입증하지 않는다. 다른 기존 F04 전체 snapshot 도구 scripts/f04-ssot.mts는 A1:CZ2000을 읽는다. 이 범위는 대체 발행 계약으로 쓰지 않는다.
+- 실제 owner 역할: FreePass Data settlementRules 월요약 publisher, 소비처 Admin은 reader. 현재 저장소의 기존 scripts/문서와 관련 ERP4/Admin/AI Ops scripts에서 해당 monthlySummarySourceDigest writer 구현·executor pin을 찾지 못했다. 실행 주체/실제 파일은 미확인이다.
+- 동일 작업의 다음 입력: 실제 publisher 경로/immutable revision 및 실행 영수증; spreadsheetId/tab/range/valueRenderOption/dateTimeRenderOption/majorDimension; digest의 정확한 입력 형태·공백/빈셀/행열 padding·날짜/수식 정규화·알고리즘 버전; 실제 sourceObservedAt/sourceSnapshotId/executorRevision. 확인 전 값을 생성하지 않는다.
+- dry-run 패킷 절차: 확인된 원본 binding으로 권한 있는 읽기 → private before evidence → publisher와 동일 정규화/digest 계산 → 기록된 sourceDigest 대조 → 같은 sourceReceipt IDs/공급가/VAT/총액/사람입력 보존 diff → 원장/요약을 다시 읽어 drift 검출. 불일치가 range/normalization/source change 중 어느 것인지 증거로 분류한다. apply는 이 단계에서 실행하지 않는다.
+- 허용 결과: MATCH는 원본 binding·revision·동일digest·변경없는 재조회가 모두 입증된 시점에만. 그전에는 원본 최신성 HOLD, 저장원장과 요약 비교만 별도로 제공한다.

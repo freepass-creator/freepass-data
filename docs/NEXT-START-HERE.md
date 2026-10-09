@@ -2286,3 +2286,9 @@ This file exists so another session can continue without re-discovering or re-cr
 - 검증: PR403 CI core/canon PASS 및 main 재조회. 정산 확장은 build/schema/auth/API/한도/eligibility/부가세미상/이력·불변cash 회귀를 수행. 실제9월35행→34대상과 기존 월요약 IDs·공급가·VAT·총액 일치; 개인정보 원문은 TEMP private evidence에만 보관.
 - 남음: 운영 read runtime 배포와 consumer 응답 재조회, 기간 정책 dry-run reviewed apply/릴리스 대사 별도. 계산/확정/과거 작성자 원천 필드 미상은 null. 은행 입출금 검증은 미확인.
 - next_start_here: PR395 최신main을 같은 작업선에 합치고 최종 full check/독립검토/exacthead CI 뒤 정산v2 후속 PR을 순서통합. 운영별 권한 경계를 유지한다.
+
+### 2026-10-09 원본 최신성 후속 패킷
+
+- 대상 main: 정산 v2 PR404 a09d50c6cf13d58329542537d36971bed79f47f7. 동일 작업선에서 sourceFreshness 미검증 명시만 보강.
+- 변경/검증: 기존 v2 응답에 sourceFreshness UNVERIFIED; v1 불변. READ-RUNTIME의 binding 패킷에 현재 사실/부족한 publisher owner evidence/정규화 dry-run과 drift 재조회 순서를 기록했다. sourceReceiptSyncedAt으로 최신 확정 금지.
+- 남음/next_start_here: 실제 settlementRules 월요약 publisher의 immutable 파일·revision·원본 range/render/digest 규격·executor 영수증을 확인하고 해당 기존 writer로 dry-run. 새로운 writer/추정 timestamp/운영쓰기0.
