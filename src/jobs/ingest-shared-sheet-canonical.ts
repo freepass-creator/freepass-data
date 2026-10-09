@@ -28,7 +28,7 @@ export type SharedSheetPlan = {
   schema: 'shared-sheet-canonical-plan/v1'; target: string; capture: SharedSheetCapture;
   ruleVersion: string; specDigest: string; policyDigest: string; ownershipDigest: string;
   previousHeadDigest: string; runId: string; entries: Entry[];
-  /** Active Data master names with matching source evidence inputs. Absent = sheet cells as entered (previous behavior). */
+  /** Optional per-plate Data evidence; every chosen name still requires the same sealed active master. */
   identityInputs?: VehicleIdentityInputs; identityRuleVersion?: string;
 };
 export function identityResolver(inputs: VehicleIdentityInputs | undefined): SharedSheetIdentityResolver | undefined {
