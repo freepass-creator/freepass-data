@@ -78,7 +78,7 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
     holdReasons: [
       '2026-10-09T08:16:43.179Z: erp-com catalog-compat returned 200 with FREEPASS_DATA_COMPATIBILITY_BRIDGE; this is not Canonical or downstream cutover evidence',
       '2026-10-09: authenticated erp-com catalog returned 503; downstream active read mode and same-product/term parity remain unverified',
-      '2026-10-09T08:27:51.878Z: ERP public feed retained 3890 UNKNOWN deposit terms as numeric zero without depositState; 752 positive-rent source keys absent require alias/term reconciliation',
+      '2026-10-09T08:27:51.878Z: ERP public feed retained 3890 UNKNOWN deposit terms as numeric zero without depositState; 752 omitted basic keys have equal-rent composite terms and are aliases, not missing distinct offers',
       'non-empty ACTIVE erp-public release parity and shadow latency require production evidence'
     ]
   },
