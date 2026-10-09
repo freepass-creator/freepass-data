@@ -2314,3 +2314,11 @@ This file exists so another session can continue without re-discovering or re-cr
 - 독립 검토: claude:status는 RESET_REACHED/available true였으나 실제 claude:review는 조직 Claude Code subscription 접근 제한, exit1/FAILED/CLAUDE_PROCESS_FAILED. 토큰 복구를 검토 성공으로 계산하지 않는다. 이번 Claude 의견·합의 없음; 기존 독립 CLI 검증과 운영 readback은 앞 기록대로 별도 유지한다.
 - 남음: 신규 원천485상품을 Canonical160상품과 동일시하지 않는다. 기존 저장568기간 UNKNOWN111은 신차 subtype79/미지원기간30/보증금구간2. 운영 APPLY·ACTIVE 발행·원장 정정0; 원본 금액 검토4건은 별도 보존한다.
 - next_start_here: 같은 비공개 plan과 최신 상품 revision/policy digest를 재대조하고 필수 독립 검토 및 해당 운영 저장 승인 경계를 확인한 뒤 기존 apply/readback 경로로 이어간다. UNKNOWN 근거 없는 금액을 만들거나 기존 정산 사람 입력을 덮지 않는다.
+
+### 2026-10-09 무보증 기간별 조회·검색 보완 준비
+
+- 목적/대상: main6faca676 기반 기존 reference 작업선, source parser/수집 담당 파일 변경0. READY/reuse COMPOSE_OR_EXTEND.
+- 재현: 운영e0afae9 HTTP200, source175확인ZERO기간 중 listable·유효대여료34기간/31상품이 API와 정확키 일치. 나머지를 판매상품 누락이라고 세지 않는다. 원천무보증+양수보증금2상품은 충돌 UNKNOWN 보존.
+- 변경: 기존 Kakao/internal AI builder가 approved Iancar 월/연거리 키와 freshness 검증기 재사용, sourceamount/note/ref/사유 보존. ZERO·기간·ANY_TERM/ALL_TERMS query 지원, 전체 기간 유지, 빈검색200/잘못된필터400/인증유지. 동일 source 기준 복합키2256행 추가 보존(3037→5293기간); 오래된 근거는 미확정.
+- 검증: fullcheck1701PASS/14skip, 최종 관련116PASS. 지휘 독립116PASS 및 독립 Codex CLI exit0/중대지적0(코드검토, 자체 테스트 실행은 안 함). Claude 조직 접근FAILED는 별도 미통과이며 대신 PASS로 쓰지 않는다.
+- 남음/next_start_here: 단일 PR의 정확head·CI·필수 검토 확인→main 통합 통제→허용된 read runtime 배포 및 query별 실제인증 재조회. 운영은 아직e0afae9, 새 검색 CUTOVER 아님. 원천 최신화·원장금액·경제조건APPLY·IAM 변경0. READ-RUNTIME 무보증 절과 TEMP source/API 정확키 증거를 사용한다.

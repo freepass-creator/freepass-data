@@ -36,6 +36,7 @@ import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-
 import {
   buildKakaoCatalogReference,
   buildInternalAiReference,
+  filterReferenceZeroDeposit,
   type KakaoCatalogReference,
   type KakaoCatalogReferenceSource,
 } from '../application/kakao-catalog-reference.js';
@@ -560,7 +561,8 @@ export function createConsumerGateway(
       }, async () => {
         const source = await readSource(binding.id);
         if (source.consumerId !== binding.id) throw new Error('REFERENCE_SOURCE_CONSUMER_MISMATCH');
-        return internalAi ? buildInternalAiReference(source) : buildKakaoCatalogReference(source);
+        const reference = internalAi ? buildInternalAiReference(source) : buildKakaoCatalogReference(source);
+        return filterReferenceZeroDeposit(reference, request.query as Record<string, unknown>);
       });
 
       if (
@@ -570,13 +572,16 @@ export function createConsumerGateway(
         result.meta.authority !== 'REFERENCE_ONLY' ||
         result.meta.publicationDecision !== 'HOLD' ||
         result.meta.sourceProject !== 'freepasserp5' ||
-        !result.data.length ||
+        (!result.data.length && !(request.query as Record<string, unknown>).depositState) ||
         !result.commissionPolicy.digest
       ) {
         return reply.code(503).send({ code: `${errorPrefix}_RESPONSE_INVALID` });
       }
       return result;
     } catch (error) {
+      if (error instanceof Error && error.message === 'REFERENCE_DEPOSIT_FILTER_INVALID') {
+        return reply.code(400).send({ code: error.message });
+      }
       if (error instanceof DataAccessAuditUnavailableError) {
         return reply.code(503).send({ code: error.code });
       }

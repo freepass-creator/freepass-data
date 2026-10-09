@@ -35,6 +35,28 @@ const withAccess = (
 };
 
 describe('read-only consumer gateway', () => {
+  it('filters zero deposit through authenticated reference query, accepts no matches, rejects invalid periods', async () => {
+    const base = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트' };
+    const { app } = withAccess(new MemoryDataStore(), [{ id: 'kakao-ops', projectionId: 'erp-public', token, capabilities: ['catalog-reference'] }], undefined, {
+      read: async () => { throw new Error('unused'); },
+      readKakaoReferenceSource: async () => ({ consumerId: 'kakao-ops', observedAt: '2026-10-09T00:00:00Z', products: {
+        free: { ...base, deposit_note: '무보증', price: { '36': { rent: 500000, deposit: 0 } } },
+        unknown: { ...base, price: { '36': { rent: 500000, deposit: 0 } } },
+      } }),
+    });
+    const endpoint = '/v1/consumers/kakao-ops/catalog-reference';
+    const result = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&depositScope=ALL_TERMS', headers });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().data.map((p: { sourceProductId: string }) => p.sourceProductId)).toEqual(['free']);
+    expect(result.json().meta.depositFilter).toEqual({ state: 'ZERO', termMonths: 36, scope: 'ALL_TERMS' });
+    const none = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=48', headers });
+    expect(none.statusCode).toBe(200);
+    expect(none.json().data).toEqual([]);
+    expect(none.json().meta.projectedCount).toBe(0);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=0', headers })).statusCode).toBe(400);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36' })).statusCode).toBe(401);
+    await app.close();
+  });
   it('authenticates and audits Iancar photos without exposing provider references or credentials', async () => {
     let reads = 0;
     const reader = { read: async () => { throw new Error('unused'); }, readIancarPhoto: async (_consumer: string, product: string, index?: number) => {

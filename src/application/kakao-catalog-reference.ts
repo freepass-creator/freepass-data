@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { parseErp5PriceKey } from '../adapters/erp5-product-mapping.js';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
 import { policyScalar } from './product-pricing-policy.js';
-import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit, readIancarPublishedDeposit } from '../domain/deposit-evidence.js';
 
 type Rec = Record<string, unknown>;
 
@@ -621,7 +621,7 @@ export function resolveReferencePolicyContext(source: Rec, policies: Record<stri
     reasonCode: facts.length ? null : 'POLICY_FACTS_MISSING' };
 }
 
-export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}) {
+export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}, observedAt?: string) {
   if (source.listable !== true) return null;
   const supplierId = text(source.provider_company_code);
   if (!supplierId) return null;
@@ -629,7 +629,14 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
   if (!price || typeof price !== 'object' || Array.isArray(price)) return null;
   const priceTerms = Object.entries(price as Rec).flatMap(([sourceKey, raw]) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
-    const parsed = parseErp5PriceKey(sourceKey);
+    // Approved Iancar producer keys carry mileage period; the legacy ERP key parser does not.
+    const iancarKey = supplierId === 'RP031' && source.iancar_phase_one
+      ? /^([1-9]\d*)_(월|연)([1-9]\d*)km$/.exec(sourceKey) : null;
+    const iancarMileage = iancarKey && Number.isSafeInteger(Number(iancarKey[1])) && Number(iancarKey[1]) <= 60
+      && Number.isSafeInteger(Number(iancarKey[3]))
+      ? { km: Number(iancarKey[3]), period: iancarKey[2] === '연' ? 'year' as const : 'month' as const } : null;
+    const parsed = iancarMileage ? { months: Number(iancarKey![1]), mileageKm: iancarMileage.period === 'year' ? iancarMileage.km : undefined, settlement: 'RETURN' as const }
+      : parseErp5PriceKey(sourceKey);
     const monthlyRent = integer((raw as Rec).rent);
     if (!parsed || monthlyRent === null || monthlyRent <= 0) return [];
     const basis36 = Object.entries(price as Rec).flatMap(([key, value]) => {
@@ -639,7 +646,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       return amount !== null && amount > 0 ? [amount] : [];
     });
     const billin36MonthlyRent = basis36.length === 1 ? basis36[0] : undefined;
-    const deposit = resolveReferenceDeposit({
+    const depositInput = {
       note: source.deposit_note,
       termMonths: parsed.months,
       monthlyRent,
@@ -648,7 +655,22 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       productType: source.product_type,
       depositFree: source.deposit_free,
       hasPositivePaidDeposit: hasConflictingPaidDeposit(price),
-    });
+    };
+    const publishedDeposit = supplierId === 'RP031' && source.iancar_phase_one
+      ? readIancarPublishedDeposit(source, sourceKey, observedAt) : null;
+    const deposit = publishedDeposit ? {
+      depositAmount: publishedDeposit.amount,
+      depositState: publishedDeposit.state,
+      depositRule: publishedDeposit.state === 'UNKNOWN' ? null : {
+        code: 'IANCAR_PUBLISHED_CONDITION_EVIDENCE', multiplier: null, label: '공급사 기간·주행거리 조건',
+      },
+    } : resolveReferenceDeposit(depositInput);
+    const depositEvidence = {
+      sourceRef: `source-product:${documentId}#price:${sourceKey}`,
+      sourceAmount: typeof (raw as Rec).deposit === 'number' || typeof (raw as Rec).deposit === 'string' ? (raw as Rec).deposit as number | string : null,
+      sourceNote: text(source.deposit_note) || null,
+      reasonCode: publishedDeposit?.reason ?? deposit.depositRule?.code ?? assessDepositEvidence(depositInput).reason,
+    };
     const channelPayoutFee = resolveSalesCommission({
       ...evidenceByTerm[sourceKey],
       supplierId,
@@ -674,8 +696,10 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       monthlyRent: { amount: monthlyRent, currency: 'KRW' as const },
       deposit: deposit.depositAmount === null ? null : { amount: deposit.depositAmount, currency: 'KRW' as const },
       ...deposit,
+      depositEvidence,
       depositStatusLabel: depositStatusLabel(deposit.depositState, (raw as Rec).deposit, source.deposit_note),
       mileageLimitKmPerYear: parsed.mileageKm ?? null,
+      ...(iancarMileage ? { contractedMileage: iancarMileage } : {}),
       settlement: parsed.settlement,
       // Backward-compatible alias for the existing Kakao consumer.
       salesCommission: channelPayoutFee,
@@ -749,7 +773,7 @@ export function buildInternalAiReference(input: KakaoCatalogReferenceSource) {
 
 function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
   const data = Object.entries(input.products)
-    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id], input.policies))
+    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id], input.policies, input.observedAt))
     .filter((row): row is NonNullable<typeof row> => row !== null)
     .sort((a, b) => a.productId.localeCompare(b.productId));
   if (!data.length) throw new Error('KAKAO_REFERENCE_EMPTY');
@@ -777,3 +801,23 @@ function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
 
 export type KakaoCatalogReference = ReturnType<typeof buildKakaoCatalogReference>;
 export type KakaoCatalogReferenceSource = Parameters<typeof buildKakaoCatalogReference>[0];
+
+/** Retains every offered term, so a match never conceals a paid/unknown sibling. */
+export function filterReferenceZeroDeposit<T extends KakaoCatalogReference | ReturnType<typeof buildInternalAiReference>>(reference: T, query: Record<string, unknown>): T {
+  const keys = ['depositState', 'termMonths', 'depositScope'];
+  if (!keys.some(key => query[key] !== undefined)) return reference;
+  if (query.depositState !== 'ZERO' || (query.depositScope !== undefined && !['ANY_TERM', 'ALL_TERMS'].includes(String(query.depositScope)))
+    || (query.termMonths !== undefined && (typeof query.termMonths !== 'string' || !/^[1-9]\d?$/.test(query.termMonths) || Number(query.termMonths) > 60))) {
+    throw new Error('REFERENCE_DEPOSIT_FILTER_INVALID');
+  }
+  const termMonths = query.termMonths === undefined ? null : Number(query.termMonths);
+  const scope = query.depositScope === 'ALL_TERMS' ? 'ALL_TERMS' : 'ANY_TERM';
+  const confirmedZero = (term: T['data'][number]['offers'][number]['priceTerms'][number]) => term.depositState === 'ZERO' && term.depositAmount === 0 && term.deposit?.amount === 0;
+  const data = reference.data.filter(product => {
+    const terms = product.offers.flatMap(offer => offer.priceTerms);
+    return terms.some(term => confirmedZero(term) && (termMonths === null || term.termMonths === termMonths))
+      && (scope === 'ANY_TERM' || terms.every(confirmedZero));
+  });
+  return { ...reference, data, meta: { ...reference.meta, projectedCount: data.length,
+    dataDigest: hash(JSON.stringify(data)), depositFilter: { state: 'ZERO', termMonths, scope } } } as T;
+}
