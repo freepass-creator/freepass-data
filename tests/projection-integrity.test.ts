@@ -51,6 +51,34 @@ describe('Projection release integrity verifier', () => {
       .rejects.toThrow('PROJECTION_SOURCE_STALE');
   });
 
+  it('releases a claim without spending retries when the source becomes stale after preflight', async () => {
+    const { store, head } = await scheduledFixture();
+    const old = await buildErpPublicProjection(store, store, head.observedAt);
+    const event = store.outbox.get('synthetic-event')!;
+    event.attempts = 2;
+    const claim = store.claimNext.bind(store);
+    vi.spyOn(store, 'claimNext').mockImplementation(async (input) => {
+      const claimed = await claim(input);
+      await store.seed({ sourceHeads: [{ ...head, observedAt: new Date(Date.parse(head.observedAt) - 60_001).toISOString() }] });
+      return claimed;
+    });
+    expect(await processOneOutboxEvent(store, store, store,
+      { workerId: 'synthetic', requireFreshSources: true, maxAttempts: 2 }, new Date(head.observedAt))).toBe('HOLD');
+    expect(store.outbox.get(event.eventId)).toMatchObject({ status: 'PENDING', attempts: 2 });
+    expect((await store.getActive('erp-public'))?.releaseId).toBe(old.releaseId);
+    expect(await store.getDeliveryReceipt(event.eventId)).toBeNull();
+  });
+
+  it('surfaces source-store failures without disguising them as freshness HOLD', async () => {
+    const { store, head } = await scheduledFixture();
+    vi.spyOn(store, 'getSourceDefinition').mockRejectedValue(new Error('TEST_PERMISSION_DENIED'));
+    const claim = vi.spyOn(store, 'claimNext');
+    await expect(processOneOutboxEvent(store, store, store,
+      { workerId: 'synthetic', requireFreshSources: true }, new Date(head.observedAt)))
+      .rejects.toThrow('TEST_PERMISSION_DENIED');
+    expect(claim).not.toHaveBeenCalled();
+  });
+
   it('accepts the exact freshness boundary and holds a future or missing head', async () => {
     const { store, head } = await scheduledFixture();
     const boundary = new Date(Date.parse(head.observedAt) + 60_000);
