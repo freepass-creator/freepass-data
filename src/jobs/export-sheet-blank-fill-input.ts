@@ -1,5 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import spec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+import { sharedSheetChannels } from '../adapters/shared-sheet-source.js';
 import { buildSheetBlankFillInput, type SheetBlankFillRawInput } from '../application/sheet-blank-fill-input.js';
 import { readCanonDocuments } from '../infra/sheet-blank-fill-canon-reader.js';
 import { readSheetsBatchGet, readSheetsMetadata } from '../infra/shared-sheet-capture-reader.js';
@@ -144,7 +145,7 @@ export async function exportSheetBlankFillInput(deps: ExportDeps) {
   const spreadsheetId = process.env.SHEET_BLANK_FILL_SPREADSHEET?.trim();
   const out = process.env.SHEET_BLANK_FILL_INPUT_OUT?.trim();
   if (!spreadsheetId || !out) throw new Error('SHEET_BLANK_FILL_EXPORT_ENV_REQUIRED');
-  const tabs = [...new Set(spec.supplierChannels.sharedInputSheet.map((channel) => channel.tab as string))];
+  const tabs = [...new Set(sharedSheetChannels.map((channel) => channel.tab as string))];
   const titles = [...tabs, CHECK_TAB];
   const ranges = titles.map(rangeFor);
   const meta = await deps.readSheetsMetadata(spreadsheetId, 'sheets.properties(sheetId,title)') as Metadata;

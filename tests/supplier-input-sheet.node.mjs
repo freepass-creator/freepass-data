@@ -2,8 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {auditValueFormats,planValueNormalize,auditTabConsistency,planTabConsistencyFix,canonCaptureRequest,canonValueCaptureRequest,planExcludeSupplierTab,mergeCanonCaptures,summaryFormula} from '../scripts/supplier-input-sheet.mjs';
-import {planSupplierInput,planSupplierDropdowns,planVehicleMasterDropdowns,planPolicySplit,planLayoutReorder,planColumnAdd,planLayoutChange,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec} from '../scripts/supplier-input-sheet.mjs';
+import {planSupplierInput,planSupplierDropdowns,planVehicleMasterDropdowns,planPolicySplit,planLayoutReorder,planColumnAdd,planLayoutChange,splitPolicyValue,planPolicyImport,buildPolicyArchive,compareSharedToLegacy,inputSpec as currentSpec} from '../scripts/supplier-input-sheet.mjs';
+// Earlier-policy fixtures keep historical planner coverage; current policy has its own regression below.
+// Historical layout deletion fixtures explicitly exclude today's no-deletion lock.
+const inputSpec=structuredClone(currentSpec);delete inputSpec.dropdownPolicy.lightweight;inputSpec.dropdownPolicy.disabled=false;inputSpec.dropdownPolicy.freeText=inputSpec.inputHeaders.filter((h,i)=>i>=inputSpec.inputHeaders.indexOf('1개월')||(!inputSpec.dropdowns[h]&&!inputSpec.vehicleMaster.columns[h]));delete inputSpec.performancePolicy;
 const now=Date.parse('2026-10-03T12:00:00Z');
+delete inputSpec.changeControl;
 const legacy=inputSpec.legacyLayouts['2026-10-02'];
 const sheet=(id,title,headers,grid={frozenRowCount:1,frozenColumnCount:0})=>({properties:{sheetId:id,title,gridProperties:{rowCount:1000,columnCount:headers.length,...grid}},data:[{rowData:[{values:headers.map(h=>({userEnteredValue:{stringValue:h}}))}]}]});
 const shared=inputSpec.supplierChannels.sharedInputSheet;
@@ -12,7 +16,7 @@ const canonFixture=()=>{
   const spec=structuredClone(inputSpec);spec.tabConsistency.headerBackgrounds={};spec.tabConsistency.headerForegrounds={};spec.supplierChannels.sharedInputSheet=[{tab:'가',code:'A'},{tab:'나',code:'B'}];
   const snapshot={sheets:['종합','가','나'].map((title,id)=>({properties:{sheetId:id,title,gridProperties:{rowCount:4,columnCount:spec.inputHeaders.length,frozenRowCount:1}},conditionalFormats:[],data:[{
     columnMetadata:spec.inputHeaders.map(h=>({pixelSize:spec.columnWidths[h]??spec.defaultColumnWidth})),rowMetadata:[{pixelSize:spec.headerRowHeight},...Array.from({length:3},()=>({pixelSize:spec.rowHeight}))],
-    rowData:Array.from({length:4},(_,r)=>({values:spec.inputHeaders.map(h=>({...(r===0?{userEnteredValue:{stringValue:h}}:{}),userEnteredFormat:{textFormat:{fontFamily:spec.font.family,fontSize:spec.font.size,italic:spec.font.italic},wrapStrategy:spec.textWrap,horizontalAlignment:r>0&&spec.leftAlignHeaders.includes(h)?'LEFT':r>0&&(spec.rightAlignHeaders??[]).includes(h)?'RIGHT':'CENTER',...(r>0&&['date','integer','decimal','year'].includes(spec.valueFormats[h].kind)?{numberFormat:{type:spec.valueFormats[h].kind==='date'?'DATE':'NUMBER',pattern:spec.valueFormats[h].pattern}}:{})},...(r>0&&id>0&&spec.dropdowns[h]?{dataValidation:{condition:{type:'ONE_OF_LIST',values:spec.dropdowns[h].map(userEnteredValue=>({userEnteredValue}))},strict:false,showCustomUi:true}}:r>0&&id>0&&spec.vehicleMaster.columns[h]?{dataValidation:{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='차종목록'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:false,showCustomUi:true}}:{})}))}))
+    rowData:Array.from({length:4},(_,r)=>({values:spec.inputHeaders.map(h=>({...(r===0?{userEnteredValue:{stringValue:h}}:{}),userEnteredFormat:{textFormat:{fontFamily:spec.font.family,fontSize:spec.font.size,italic:spec.font.italic},wrapStrategy:spec.textWrap,horizontalAlignment:r>0&&spec.leftAlignHeaders.includes(h)?'LEFT':r>0&&(spec.rightAlignHeaders??[]).includes(h)?'RIGHT':'CENTER',...(r>0&&['date','integer','decimal','year'].includes(spec.valueFormats[h].kind)?{numberFormat:{type:spec.valueFormats[h].kind==='date'?'DATE':'NUMBER',pattern:spec.valueFormats[h].pattern}}:{})},...(r>0&&id>0&&spec.dropdowns[h]&&!spec.dropdownPolicy.freeText.includes(h)?{dataValidation:{condition:{type:'ONE_OF_LIST',values:spec.dropdowns[h].map(userEnteredValue=>({userEnteredValue}))},strict:false,showCustomUi:true}}:r>0&&id>0&&spec.vehicleMaster.columns[h]?{dataValidation:{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='차종목록'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:false,showCustomUi:true}}:{})}))}))
   }]}))};return {snapshot,spec};
 };
 const canonPut=(f,tab,row,h,value,extra={})=>Object.assign(f.snapshot.sheets[tab].data[0].rowData[row].values[f.spec.inputHeaders.indexOf(h)],{userEnteredValue:typeof value==='number'?{numberValue:value}:{stringValue:value},...extra});
@@ -142,6 +146,19 @@ test('canon: CLI reports nonzero for differences and accepts stdin without netwo
   const f=fixture();const r=spawnSync(process.execPath,['scripts/supplier-input-sheet.mjs','--check-canon=-'],{input:JSON.stringify(f.spreadsheet),encoding:'utf8',maxBuffer:20*1024*1024});
   assert.equal(r.status,1,r.stderr);assert.ok(JSON.parse(r.stdout).tabs.holds.length>0);
 });
+test('annual mileage: representative 2만km decision is persistent and idempotent',()=>{
+  const f=canonFixture();
+  canonPut(f,1,1,'연주행','연 20,000km');
+  canonPut(f,1,2,'연주행','2만km');
+  canonPut(f,1,3,'연주행','협의');
+  const p=planValueNormalize(f.snapshot,f.spec,now),at=f.spec.inputHeaders.indexOf('연주행');
+  const changes=p.requests.filter(r=>r.updateCells?.range.startColumnIndex===at);
+  assert.equal(changes.length,1);
+  assert.equal(changes[0].updateCells.rows[0].values[0].userEnteredValue.stringValue,'2만km');
+  assert.equal(changes[0].updateCells.fields,'userEnteredValue');
+  canonPut(f,1,1,'연주행','2만km');
+  assert.ok(!planValueNormalize(f.snapshot,f.spec,now).requests.some(r=>r.updateCells?.range.startColumnIndex===at));
+});
 test('canon: normalization preserves cell notes and links; second plan is empty after readback',()=>{
   const f=canonFixture();canonPut(f,1,1,'입고일자','2026. 10. 3',{note:'원문 보존'});canonPut(f,1,1,'기본연령','만 26세 이상');
   const p=planValueNormalize(f.snapshot,f.spec,now);
@@ -220,10 +237,10 @@ test('vehicle master: original layout, freshness and inventory gates run first',
   const f=masterFixture();f.spreadsheet.sheets[2].data[0].rowData[0].values.reverse();delete f.master;assert.throws(()=>planVehicleMasterDropdowns(f,inputSpec,now),/LAYOUT_MISMATCH/);
   for(const mutate of [f=>f.capturedAt='2000-01-01',f=>f.sheetInventory.pop()]){const f=masterFixture();mutate(f);assert.throws(()=>planVehicleMasterDropdowns(f,inputSpec,now),/HOLD/);}
 });
-test('vehicle master CLI: stdin uses the first branch and emits requests only',()=>{
+test('vehicle master CLI: latest disabled policy refuses regeneration',()=>{
   const f=masterFixture();f.capturedAt=new Date().toISOString();f.master.source=inputSpec.vehicleMaster.source.split(' / 탭 ')[0];
   const r=spawnSync(process.execPath,['scripts/supplier-input-sheet.mjs','--vehicle-master=-','--change-layout=unused'],{input:JSON.stringify(f),encoding:'utf8'});
-  assert.equal(r.status,0,r.stderr);assert.equal(JSON.parse(r.stdout).scope,'VEHICLE_MASTER_RANGE_DROPDOWNS');
+  assert.equal(r.status,2);assert.match(r.stderr,/disabled/);assert.equal(r.stdout,'');
 });
 const fixture=()=>({capturedAt:new Date(now).toISOString(),binding:{spreadsheetId:'test',summarySheetId:1,guideSheetId:2,suppliers:shared.map((r,i)=>({sheetId:3+tabTitles.indexOf(r.tab),title:r.tab,code:r.code}))},sheetInventory:[1,2,...tabTitles.map((_,i)=>3+i)].map(sheetId=>({sheetId})),spreadsheet:{spreadsheetId:'test',sheets:[sheet(1,'종합',inputSpec.summaryHeaders),sheet(2,'관리안내',['안내']),...tabTitles.map((title,i)=>sheet(3+i,title,inputSpec.inputHeaders))]}});
 const policyFixture=()=>{const f=fixture(),d=sheet(3,'웰릭스',legacy.inputHeaders);const h=legacy.inputHeaders,values=h.map(()=>({}));values[h.indexOf('차량번호')]={userEnteredValue:{stringValue:'TEST-1'}};values[h.indexOf('정책코드')]={userEnteredValue:{stringValue:'POL-01'}};d.data[0].rowData.push({values});return {runId:'test-run',capturedAt:f.capturedAt,suppliers:[{sheetId:3,sourceId:'source',sourceTab:'policy'}],destinations:[d],captures:[{sourceId:'source',sourceTab:'policy',complete:true,rows:[{values:['정책코드','추가주행 금액','정비'].map(stringValue=>({userEnteredValue:{stringValue}}))},{values:['POL-01','대여료의 10%','연2회오일'].map(stringValue=>({userEnteredValue:{stringValue}}))}]}]};};
@@ -263,7 +280,7 @@ test('exclude RP034: exact two requests, 15-tab formula, only A2 value changes, 
   assert.equal(planSupplierInput(f,inputSpec,now).status,'LAYOUT_VERIFIED');
   assert.ok(!planSupplierDropdowns(f,inputSpec,now).requests.some(r=>r.setDataValidation.range.sheetId===999));
   assert.equal(auditTabConsistency(f.spreadsheet).coverage.length,16);
-  assert.ok(!planTabConsistencyFix(f.spreadsheet).coverage.some(t=>t.tab==='마음카'));
+  assert.ok(!planTabConsistencyFix(f.spreadsheet,inputSpec).coverage.some(t=>t.tab==='마음카'));
 });
 test('exclude RP034: reuse freshness, binding, inventory, layout and hidden-archive gates',()=>{
   assert.throws(()=>planSupplierInput(withExcluded(),inputSpec,now),/excluded/);
@@ -308,15 +325,15 @@ test('compare: plate-only legacy, duplicate legacy headers, duplicate or unbound
   const b=compareFixture();b.legacy[0].headers=[...legacyHeaders.slice(0,-1),'1개월'];assert.equal(compareSharedToLegacy(b,inputSpec,now).results[0].reason,'duplicate legacy headers');
   const c=compareFixture();c.legacy.push({...c.legacy[0]});assert.throws(()=>compareSharedToLegacy(c,inputSpec,now),/One legacy capture/);
   const d=fullLegacy(compareFixture());d.legacy[0].rows[1][d.legacy[0].headers.indexOf('상태')]='계약중';d.legacy.push({...d.legacy[0],code:'OTHER'});const e=compareSharedToLegacy(d,inputSpec,now);assert.deepEqual(e.unboundLegacy,['OTHER']);assert.equal(e.results[0].status,'IN_SYNC');assert.equal(e.status,'NOT_IN_SYNC');});
-test('dropdown setup: validation-only requests on supplier tabs, every column decided, summary untouched',()=>{const f=fixture(),before=JSON.stringify(f),p=planSupplierDropdowns(f,inputSpec,now);assert.equal(JSON.stringify(f),before);assert.equal(p.scope,'SUPPLIER_TAB_DATA_VALIDATION_ONLY');assert.ok(p.requests.every(r=>Object.keys(r).join()==='setDataValidation'&&r.setDataValidation.rule));assert.equal(p.requests.length,15*Object.keys(inputSpec.dropdowns).length);assert.ok(!p.requests.some(r=>r.setDataValidation.range.sheetId===1||r.setDataValidation.range.sheetId===2));assert.ok(p.requests.every(r=>r.setDataValidation.range.startRowIndex===1));
-  const col=h=>inputSpec.inputHeaders.indexOf(h),at=(h,id=3)=>p.requests.find(r=>r.setDataValidation.range.sheetId===id&&r.setDataValidation.range.startColumnIndex===col(h))?.setDataValidation;
-  assert.deepEqual(at('보험료').rule.condition.values.map(v=>v.userEnteredValue),['포함','불포함']);assert.equal(at('보험료').rule.strict,false);assert.equal(at('비고'),undefined,'free text untouched');assert.equal(at('계좌번호'),undefined);assert.deepEqual(at('대물면책').rule.condition.values.map(v=>v.userEnteredValue),['없음','30만원','50만원','100만원','협의']);assert.ok(at('21세+').rule.condition.values.some(v=>v.userEnteredValue==='대여료의 10%'));
-  for(const h of inputSpec.inputHeaders)assert.equal([Boolean(inputSpec.dropdowns[h]),Boolean(inputSpec.vehicleMaster.columns[h]),inputSpec.dropdownPolicy.freeText.includes(h)].filter(Boolean).length,1,h);
-  for(const h of inputSpec.policyHeaders)if(inputSpec.dropdowns[h])assert.equal(inputSpec.dropdowns[h].includes('협의'),!inputSpec.dropdownPolicy.negotiableExceptions.includes(h),'협의 rule for '+h);
-  for(const r of ['50~100만원','100~200만원','200~400만원','300~400만원','300~500만원'])assert.ok(inputSpec.dropdowns['자차면책'].includes(r),r);
-  for(const [h,vals] of Object.entries(inputSpec.dropdownPolicy.existingValuesNotInList))for(const [v] of vals)assert.ok(!inputSpec.dropdowns[h].includes(v),h+v);
+test('dropdown setup: only pre-rent lists remain; free text clears filtered rows without writing values',()=>{
+  const f=fixture(),before=JSON.stringify(f),p=planSupplierDropdowns(f,inputSpec,now);
+  assert.equal(JSON.stringify(f),before);
+  const col=h=>inputSpec.inputHeaders.indexOf(h);
+  for(const r of p.requests){assert.deepEqual(Object.keys(r),['setDataValidation']);assert.ok(![1,2].includes(r.setDataValidation.range.sheetId));assert.equal(r.setDataValidation.range.startRowIndex,1);if(r.setDataValidation.rule)assert.ok(r.setDataValidation.range.startColumnIndex<col('1개월'));else assert.equal(r.setDataValidation.filteredRowsIncluded,true);}
+  for(const h of inputSpec.inputHeaders.slice(col('1개월'))){const rs=p.requests.filter(r=>r.setDataValidation.range.startColumnIndex===col(h));assert.equal(rs.length,15,h);assert.ok(rs.every(r=>!r.setDataValidation.rule),h);}
   const g=fixture();g.spreadsheet.sheets[2].data[0].rowData[0].values.reverse();assert.throws(()=>planSupplierDropdowns(g,inputSpec,now),/LAYOUT_MISMATCH/);
-  assert.throws(()=>planSupplierDropdowns(fixture(),{...inputSpec,dropdowns:{...inputSpec.dropdowns,'보험료':undefined}},now),/exactly one dropdown/);});
+  assert.throws(()=>planSupplierDropdowns(fixture(),{...inputSpec,dropdowns:{...inputSpec.dropdowns,'연료':undefined}},now),/exactly one dropdown/);
+});
 const old=inputSpec.legacyLayouts['2026-10-03'].inputHeaders,splitH=inputSpec.legacyLayouts['2026-10-03-split'].inputHeaders;
 const splitFixture=(cells={})=>{const f=fixture();f.spreadsheet.sheets=f.spreadsheet.sheets.map(sh=>{const id=sh.properties.sheetId;if(id===2)return sh;const t=sheet(id,sh.properties.title,old);t.properties.gridProperties={...t.properties.gridProperties,rowCount:id===1?1000:3,columnCount:62};if(id!==1){const row=o=>({values:old.map(h=>o[h]===undefined?{}:{userEnteredValue:{stringValue:o[h]}})});t.data[0].rowData.push(row(id===3?cells:{'대인/면책':'무한 / 50만원'}),row({}));}return t;});return f;};
 test('policy split: every observed value shape splits into one fact per cell',()=>{const cases=[['대인/면책','무한 / 50만원',['무한','50만원']],['대물/면책','10억원',['10억원','']],['자차/면책','차량가액 / 수리비 20% / 50~100만원',['차량가액','20%','50~100만원']],['자차/면책','차량가액 / 50~100만원',['차량가액','','50~100만원']],['자차/면책','50~100만원',['','','50~100만원']],['자손/면책','1천5백만원 / 30만원',['1천5백만원','30만원']],['무보험/면책','없음',['없음','']],['무보험/면책','없음 / 없음',['없음','없음']],['운전자범위','개인 계약자 본인 / 법인 대표자 본인',['계약자 본인','대표자 본인']],['추가운전','2인까지 / 무료',['2인까지','무료']],['승계','협의 / 100만원',['협의','100만원']],['승계','',['','']]];for(const [h,v,want] of cases)assert.deepEqual(splitPolicyValue(h,v),want,h+v);
@@ -530,3 +547,5 @@ test('summary formula keeps every row except 출고불가 and drops blank rows; 
   assert.throws(()=>summaryFormula('x',H.filter(h=>h!=='차량상태')),/Summary status column missing/);
   for(const bad of [[],['출고"가능'],[''],undefined])assert.throws(()=>summaryFormula('x',H,{...inputSpec,summaryExcludeStatuses:bad}),/summaryExcludeStatuses invalid/);
 });
+
+test("latest user policy clears every column and blocks vehicle dropdown regeneration",()=>{ const removalSpec=structuredClone(currentSpec);delete removalSpec.dropdownPolicy.lightweight;const p=planSupplierDropdowns(fixture(),removalSpec,now);assert.equal(p.requests.length,15*currentSpec.inputHeaders.length);assert.ok(p.requests.every(r=>!r.setDataValidation.rule&&r.setDataValidation.filteredRowsIncluded));assert.throws(()=>planVehicleMasterDropdowns(masterFixture(),currentSpec,now),/disabled/);const f=canonFixture();f.spec.dropdownPolicy=structuredClone(removalSpec.dropdownPolicy);f.spec.performancePolicy=currentSpec.performancePolicy;const fix=planTabConsistencyFix(f.snapshot,f.spec);assert.ok(fix.requests.filter(r=>r.setDataValidation).every(r=>!r.setDataValidation.rule));assert.ok(!fix.requests.some(r=>r.addConditionalFormatRule));});

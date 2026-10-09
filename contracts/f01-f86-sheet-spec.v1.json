@@ -1,8 +1,20 @@
 {
-  "version": "1.1",
-  "effectiveDate": "2026-09-21",
+  "version": "1.2",
+  "effectiveDate": "2026-10-08",
   "owner": "freepass-data",
-  "status": "SPEC_PUBLISHER_PINNED_LIVE_REAPPLY_AND_WATCHDOG_RECOVERY_VERIFIED_NATIVE_SCHEDULE_OBSERVATION_HOLD",
+  "status": "F01_ONLY_PUBLICATION_MERGED_LIVE_READBACK_PENDING",
+  "publication": {
+    "activeWorkbooks": ["F01"],
+    "inactiveWorkbooks": ["F86"],
+    "decisionDate": "2026-10-08",
+    "authority": "REPRESENTATIVE_DIRECT_ORDER",
+    "workflowRepository": "freepass-creator/freepasserp4",
+    "workflowPath": ".github/workflows/erp5-ssot-refresh.yml",
+    "workflowCommit": "c9fcf96b272ba5a89f5a36a28189fa2b716b212c",
+    "verificationRun": "37703068220",
+    "verificationStatus": "PENDING",
+    "preserveInactiveWorkbook": true
+  },
   "timezone": "Asia/Seoul",
   "supplierInputTransition": {
     "decisionDate": "2026-10-03",
@@ -13,7 +25,7 @@
     "templateLayout": "supplier-input-sheet-spec.v1.json#layoutVersion=2026-10-03",
     "preserveCurrentF86UntilSourceWorkbookComplete": true,
     "f01AutomaticPublication": "PRESERVE",
-    "f86AutomaticPublication": "PRESERVE_NOW_STOP_AT_APPROVED_LATER_TRANSITION",
+    "f86AutomaticPublication": "STOPPED_PER_REPRESENTATIVE_ORDER_2026_10_08",
     "preserveOriginalWorkbooks": true,
     "preserveTypedValuesAndUnmappedRawColumns": true,
     "automaticOverwriteAllowedAfterCutover": false,

@@ -1,5 +1,11 @@
 # 설계 한 장 — 공통 입력시트 → Canonical
 
+## 현행 수집 범위 — 2026-10-06
+
+공통 시트 수집과 빈 칸 입력 export는 기계 정본 `changeControl.activeSupplierTabs`의 현재 12개 탭(15개 코드)을 읽는다. 전체 등록 15개 탭/18개 코드는 삭제하지 않는다. 현재 없는 연카·스위치플랜·에스에이는 보고서의 unavailableSuppliers에 HOLD로 남는다. 현재 입력 범위 안의 완전한 조회는 `PARTIAL/COMPLETE`로 기록한다. Domain `decideSourceHead`가 head를 판정하며 `canAssertSourceAbsence`는 PARTIAL에서 false이므로 탭/행 부재를 재고 삭제·판매완료로 해석하지 않는다. 아래 15탭 전수 표현은 초기 설계 이력이다.
+
+ERP.com은 기존 인증된 Data consumer API를 사용한다. 공통 시트 → RAW/후보 → 검토된 Canonical → 게시된 ACTIVE release → ERP 읽기 경로를 유지한다. `/catalog-compat` 호환 읽기와 Canonical `/catalog` 전환은 별개이며 최신 운영 readback/배포/전환 증거 없이는 ERP 화면 반영 완료로 표현하지 않는다.
+
 **목적:** 공급사가 입력한 차량 한 대의 원문, 정리값, 제공 기간별 대여료·보증금·청구/지급 수수료를 기존 Firestore Canonical 경로에 저장한다. 이번 변경은 로컬 구현이다. 운영 캡처·실행·203대 대사·소비처 전환 증거는 아니다.
 
 | 원천 | 같은 수집 틀 | 이번 범위 |

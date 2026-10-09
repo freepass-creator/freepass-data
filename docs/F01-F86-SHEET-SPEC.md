@@ -1,5 +1,13 @@
 # F01 · F86 시트 표시 규격 v1
 
+## 현행 발행 대상 — 대표 2026-10-08
+
+**상품 시트는 F01 하나다.** 기계 정본 `publication.activeWorkbooks`는 F01만 지정한다. ERP4 PR557의 main `c9fcf96b272ba5a89f5a36a28189fa2b716b212c`가 기존 단일 writer에서 F86 발행/검증 의존성을 제거하고 F01 칸·핵심축·요금·보증금·사진 및 120분 스냅샷 신선도 대사를 유지한다. 아래 F86 표시 규격과 불변 ID는 과거 이력/원본 보존용이며 운영 발행 허가가 아니다. F86을 새 입력 시트로 전환하거나 원본을 지우는 지시도 아니다.
+
+실제 검증 회차는 [37703068220](https://github.com/freepass-creator/freepasserp4/actions/runs/37703068220)이다. 완료 전에는 live 되읽기 PASS로 세지 않는다. 원천 신선도·중앙 데이터·ERP 및 다른 소비처의 완료 여부는 각자의 실제 증거로 판정한다.
+
+`preserveCurrentF86UntilSourceWorkbookComplete`는 기존 문서 보존 의미이며 자동 발행 허가가 아니다. 현행 발행 대상은 `publication.activeWorkbooks`와 `f86AutomaticPublication=STOPPED_PER_REPRESENTATIVE_ORDER_2026_10_08`가 결정한다. 표시 계획기의 F86 fixture는 역사적 서식 회귀 검사로만 보존한다.
+
 확정일: 2026-09-21. 사용자 요청으로 탭명·대수·색상·표시 원칙을 통일했다.
 기계 판독 정본은 `contracts/f01-f86-sheet-spec.v1.json`이다. 이 문서는 그 규격의 설명이다.
 이전의 날짜/대수 없는 탭명 규칙과 별도 오공구독 탭 규칙보다 이 규격이 우선한다.

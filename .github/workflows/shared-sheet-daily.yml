@@ -120,6 +120,7 @@ jobs:
           test -n "$PROVIDER"
           test "$ACCOUNT" = 'github-data-inventory-writer@freepasserp5.iam.gserviceaccount.com'
           test -n "$SHARED_SHEET_ID"
+          node --input-type=module -e "import { assertCurrentSharedSheet } from './scripts/data-delivery-owner.mjs'; assertCurrentSharedSheet(process.env.SHARED_SHEET_ID);"
           test -n "$EVIDENCE_BUCKET"
       - uses: google-github-actions/auth@v2
         if: steps.gate.outputs.run == 'true'
