@@ -53,6 +53,7 @@ export function compareVehicleMediaConsumerEvidence(input: {
     // Describe existing consumer behavior; cache/link agreement does not certify its contents.
     outputEvidence: cacheMatchesOutput ? 'EXISTING_LINK_BOUND_CACHE' as const
       : original.imageUrls.length ? 'DIRECT_URL_COMPARISON' as const : 'NO_DIRECT_URL_EVIDENCE' as const,
+    typedColorVerification: 'NOT_CHECKED' as const,
     visualVehicleIdentity: 'NOT_CHECKED' as const,
   };
 }
@@ -123,6 +124,7 @@ export async function inspectVehicleMediaEvidence(input: {
     issues: [...new Set(issues)],
     photoState: photos.state,
     colorState: color === null ? 'NOT_PROVIDED' as const : source ? 'SOURCE_COMPARISON_ATTEMPTED' as const : 'VALUE_PRESENT_SOURCE_UNVERIFIED' as const,
+    typedColorVerification: 'NOT_CHECKED' as const,
     checks,
     visualVehicleIdentity: 'NOT_CHECKED' as const,
     imageBytes: 'NOT_CHECKED' as const,
