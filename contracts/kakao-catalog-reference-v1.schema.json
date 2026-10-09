@@ -50,7 +50,7 @@
       "required": ["state", "ruleId", "amount", "vatTreatment", "vatAmount", "totalAmount", "reasonCode"],
       "properties": {
         "state": { "enum": ["CALCULATED", "COORDINATION_REQUIRED", "UNKNOWN", "NOT_APPLICABLE"] },
-        "sourceRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*$" } },
+        "sourceRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80)$" } },
         "ruleId": { "$ref": "#/$defs/nullableString" },
         "amount": { "$ref": "#/$defs/nullableInteger" },
         "vatTreatment": { "enum": ["EXCLUDED", "INCLUDED", "UNKNOWN"] },

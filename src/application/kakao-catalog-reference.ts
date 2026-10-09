@@ -157,11 +157,12 @@ export const KAKAO_COMMISSION_POLICY = {
     subscriptionUsesBasicTermLadder: true,
     unspecifiedNewDeliveryForm: 'REQUIRES_EVIDENCE',
     unspecifiedShortTerms: 'REQUIRES_EVIDENCE',
-    billinProposal: { supplierId: 'RP021', state: 'UNCONFIRMED', termMonths: 36,
-      billingBasis: 'RENT_BASIS_REQUIRES_CONFIRMATION', payoutPercentOfBilling: 80,
-      authority: 'USER_TENTATIVE_STATEMENT_2026_10_09' },
+    billinProposal: { supplierIds: ['RP021', 'PT-0026'], state: 'CONFIRMED', termMonths: 36,
+      billingBasis: 'MONTHLY_RENT_AT_36_MONTHS', billingPercent: 100, payoutPercentOfBilling: 80,
+      authority: 'USER_DIRECT_DECISION_2026_10_09', appliesTo: 'SUBSCRIPTION',
+      historicalSettlementRewrite: false },
   },
-  currentAuthority: 'F04 수수료표 A1:M191(2026-10-04 사본) + AI 상황실 2026-10-05 결정(손오공 60개월 +60만, 원 미만 반올림)',
+  currentAuthority: 'F04 수수료표 A1:M191(2026-10-04 사본) + AI 상황실 2026-10-05 결정(손오공 60개월 +60만, 원 미만 반올림) + 2026-10-09 대표 기본회사 지정 및 빌린카 LC 36개월 월대여료100/80 확정',
   evidenceHistory: [...KAKAO_COMMISSION_POLICY_2026_10_04.evidenceHistory,
     { policyId: KAKAO_COMMISSION_POLICY_2026_10_04.policyId, observedAt: '2026-10-04', revision: '35de6d9fa96ad07fba2fb2d68a4cb1c9113b61a5' }],
   sonokongAdditions: { ...KAKAO_COMMISSION_POLICY_2026_10_04.sonokongAdditions, 60: 600000 },
@@ -357,6 +358,8 @@ export type CommissionInput = {
   termMonths: number;
   monthlyRent: number;
   vehicleValue?: number;
+  /** Same product and pricing variant: 36-month monthly rental amount, not total rent. */
+  billin36MonthlyRent?: number | undefined;
   newProductSubtype?: 'NEW_PREDELIVERY' | 'NEW_MATCHING';
   /** Explicit contractual tier, never inferred from a deposit amount. */
   depositTierPercent?: 5 | 10;
@@ -455,9 +458,10 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     return fixed(`SONOKONG_PICKUP_${side}`, input.vehicleValue! * (billing ? 400 : 300) / 10000);
   }
   if (['RP021', 'PT-0026'].includes(supplierId) && subscription) {
-    // 탭 162행은 60개월만 정한다. 다른 기간 구독은 표준 재렌트로 흘리지 않고 닫는다.
-    if (termMonths !== 60) return unknownCommission('SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED');
-    return resolveTermLadder(termMonths, monthlyRent, side, 'BILLIN_SUBSCRIPTION');
+    const basis = input.billin36MonthlyRent ?? (termMonths === 36 ? monthlyRent : undefined);
+    if (!Number.isSafeInteger(basis) || basis! <= 0) return unknownCommission('BILLIN_36_MONTH_RENT_REQUIRED');
+    if (termMonths === 36 && basis !== monthlyRent) return unknownCommission('BILLIN_36_MONTH_RENT_CONFLICT');
+    return fixed(`BILLIN_SUBSCRIPTION_36_RENT_${side}`, basis! * (billing ? 1 : 0.8));
   }
   if (supplierId === 'RP012' && subscription) {
     const addition = KAKAO_COMMISSION_POLICY.sonokongAdditions[termMonths as 12];
@@ -532,6 +536,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   if (result.reasonCode === 'DEPOSIT_TIER_REQUIRED') rows.push(172);
   // 근거 행은 계산된 결과에만 단다. UNKNOWN·NOT_APPLICABLE·협의는 reasonCode만 — 미등록 공급사가 「근거 있는 규칙」처럼 보이지 않게.
   if (result.state !== 'CALCULATED') return result;
+  if (id.startsWith('BILLIN_SUBSCRIPTION_36_RENT')) return { ...result, sourceRefs: ['USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80'] };
   return { ...result, sourceRefs: [...new Set(rows)].map(f04Ref) };
 }
 
@@ -627,6 +632,13 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
     const parsed = parseErp5PriceKey(sourceKey);
     const monthlyRent = integer((raw as Rec).rent);
     if (!parsed || monthlyRent === null || monthlyRent <= 0) return [];
+    const basis36 = Object.entries(price as Rec).flatMap(([key, value]) => {
+      const candidate = parseErp5PriceKey(key);
+      if (!candidate || candidate.months !== 36 || candidate.settlement !== parsed.settlement || candidate.mileageKm !== parsed.mileageKm || !value || typeof value !== 'object' || Array.isArray(value)) return [];
+      const amount = integer((value as Rec).rent);
+      return amount !== null && amount > 0 ? [amount] : [];
+    });
+    const billin36MonthlyRent = basis36.length === 1 ? basis36[0] : undefined;
     const deposit = resolveReferenceDeposit({
       note: source.deposit_note,
       termMonths: parsed.months,
@@ -644,6 +656,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       fuel: text(source.fuel_type),
       termMonths: parsed.months,
       monthlyRent,
+      billin36MonthlyRent,
     });
     const supplierBillingFee = resolveSupplierBillingFee({
       ...evidenceByTerm[sourceKey],
@@ -652,6 +665,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       fuel: text(source.fuel_type),
       termMonths: parsed.months,
       monthlyRent,
+      billin36MonthlyRent,
     });
     const expectedGrossMargin = resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee);
     return [{

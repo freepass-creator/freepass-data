@@ -29,12 +29,19 @@ export function precomputeOfferEconomics(
   const policy = KAKAO_COMMISSION_POLICY;
   return offer.priceTerms.map((term) => {
     const priceRef = `catalog_offers/${offer.id}/priceTerms/${term.termKey}`;
+    const basis36 = offer.priceTerms.filter(candidate => candidate.termMonths === 36 &&
+      candidate.mileageLimitKmPerYear === term.mileageLimitKmPerYear && candidate.monthlyRent.currency === 'KRW' &&
+      positiveSafeInteger(candidate.monthlyRent.amount));
     const args = { ...evidenceByTerm[term.termKey], supplierId: offer.supplierId, productType, fuel: fuel ?? '',
-      termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount };
+      termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
+      billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
       const base = { ruleId: result.ruleId, policyId: policy.policyId,
         sourceRefs: [] as string[], priceSourceRefs: [priceRef],
         vatTreatment: result.vatTreatment, vatAmount: result.vatAmount, totalAmount: result.totalAmount };
+      if (result.ruleId?.startsWith('BILLIN_SUBSCRIPTION_36_RENT') && basis36.length === 1) {
+        base.priceSourceRefs = [...new Set([priceRef, `catalog_offers/${offer.id}/priceTerms/${basis36[0]!.termKey}`])];
+      }
       const unknown = (reasonCode: string): TermEconomicAmount => ({ ...base,
         state: 'UNKNOWN', amount: null, calculation: null, vatAmount: null, totalAmount: null, reasonCode });
       if (!productType) return unknown('PRODUCT_TYPE_REQUIRED');
