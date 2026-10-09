@@ -15,6 +15,8 @@ export type ApprovedReleaseEvidence = {
 };
 
 export type ConsumerCutoverEvidence = {
+  // These flags concern the registered Canonical cutover contract. Compatibility
+  // transport or REFERENCE_ONLY readback must not satisfy them automatically.
   contractReady: boolean;
   authenticationVerified: boolean;
   legacyReadVerified: boolean;
@@ -74,8 +76,9 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       approvedRelease: null
     },
     holdReasons: [
-      'ERP.com public catalog still serves the ERP5 active reader; FreePass Data is shadow-only',
-      'authenticated FreePass Data consumer identity and production readback are not verified',
+      '2026-10-09T08:16:43.179Z: erp-com catalog-compat returned 200 with FREEPASS_DATA_COMPATIBILITY_BRIDGE; this is not Canonical or downstream cutover evidence',
+      '2026-10-09: authenticated erp-com catalog returned 503; downstream active read mode and same-product/term parity remain unverified',
+      '2026-10-09T08:27:51.878Z: ERP public feed retained 3890 UNKNOWN deposit terms as numeric zero without depositState; 752 positive-rent source keys absent require alias/term reconciliation',
       'non-empty ACTIVE erp-public release parity and shadow latency require production evidence'
     ]
   },
@@ -99,7 +102,9 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       approvedRelease: null
     },
     holdReasons: [
-      'each registered white-label needs an individual identity and read receipt',
+      '2026-10-09T08:16:49.293Z to 08:17:44.949Z: catalog-compat returned 200 individually for whitelabel-uniplan, whitelabel-freepassmobility, whitelabel-haheoho, whitelabel-eancar, whitelabel-chashoong, whitelabel-krautoplan, whitelabel-withautoplan, whitelabel-ksautoplan, whitelabel-carping, whitelabel-siauto; catalog returned 503 for each identity',
+      'compatibility transport receipts do not verify each downstream channel read mode, product/term parity or Canonical ACTIVE release',
+      '2026-10-09T08:27:57.867Z to 08:29:36.174Z: public feeds dropped UNKNOWN deposit state and returned numeric zero for 3890 terms per general channel, 2256 for eancar; public economics and term parity remain HOLD',
       'tenant exposure parity is not verified'
     ]
   },
@@ -196,9 +201,10 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       approvedRelease: null
     },
     holdReasons: [
-      'dedicated kakao-ops token is not provisioned',
+      '2026-10-09T08:16:02.295Z: dedicated kakao-ops authentication and catalog-reference 200 observed with REFERENCE_ONLY/HOLD; this does not verify Canonical reads',
       'non-empty ACTIVE erp-public release is not verified',
-      'Kakao operator PC readback is not verified'
+      'Kakao operator PC entrypoint and reference-contract adoption are not verified',
+      '2026-10-09: deployed e0afae9 ignores ZERO/term/scope reference filters; PR408 is the single implementation line and is not deployed'
     ]
   },
   {
@@ -245,8 +251,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       approvedRelease: null
     },
     holdReasons: [
-      'publisher does not consume an approved FreePass Data release',
-      'release-bound F86 delivery receipt is not verified'
+      '2026-10-08 user decision: F86 is supplier-managed input, not an active product publication target; this registration retains historical migration evidence only',
+      'historical F86 delivery evidence must not authorize current publication or consumer cutover'
     ]
   }
 ];
@@ -287,6 +293,15 @@ export function evaluateConsumerCutover(
   const currentIndex = ORDER.indexOf(registration.stage);
   const targetIndex = ORDER.indexOf(target);
   const blockers: string[] = [];
+
+  if (currentIndex < 0 || targetIndex < 0) {
+    return {
+      allowed: false,
+      from: registration.stage,
+      to: target,
+      blockers: ['invalid consumer cutover stage']
+    };
+  }
 
   if (targetIndex > currentIndex + 1) {
     blockers.push(`stage skip is forbidden: ${registration.stage} -> ${target}`);

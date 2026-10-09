@@ -3,6 +3,7 @@ import {
   CONSUMER_SWITCH_REGISTRY,
   evaluateConsumerCutover,
   findConsumerSwitch,
+  type ConsumerCutoverStage,
   type ConsumerSwitchRegistration
 } from '../src/domain/consumer-cutover.js';
 
@@ -146,7 +147,7 @@ describe('consumer cutover registry', () => {
     });
   });
 
-  it('keeps ERP.com at OBSERVE while the downstream main serves ERP5 and FreePass Data stays shadow-only', () => {
+  it('keeps compatibility readback separate from ERP Canonical cutover evidence', () => {
     const erp = findConsumerSwitch('erp-com-public-catalog');
     expect(erp).not.toBeNull();
     expect(erp?.stage).toBe('OBSERVE');
@@ -155,8 +156,9 @@ describe('consumer cutover registry', () => {
     expect(erp?.evidence.freepassReadVerified).toBe(false);
     expect(erp?.activeReadOwner).toBe('freepasserp5/products-policy');
     expect(erp?.holdReasons).toEqual([
-      'ERP.com public catalog still serves the ERP5 active reader; FreePass Data is shadow-only',
-      'authenticated FreePass Data consumer identity and production readback are not verified',
+      '2026-10-09T08:16:43.179Z: erp-com catalog-compat returned 200 with FREEPASS_DATA_COMPATIBILITY_BRIDGE; this is not Canonical or downstream cutover evidence',
+      '2026-10-09: authenticated erp-com catalog returned 503; downstream active read mode and same-product/term parity remain unverified',
+      '2026-10-09T08:27:51.878Z: ERP public feed retained 3890 UNKNOWN deposit terms as numeric zero without depositState; 752 positive-rent source keys absent require alias/term reconciliation',
       'non-empty ACTIVE erp-public release parity and shadow latency require production evidence'
     ]);
   });
@@ -203,5 +205,33 @@ describe('consumer cutover registry', () => {
   it('finds a switch by stable consumer id', () => {
     expect(findConsumerSwitch('freepass-sales-catalog')?.project).toBe('FreePass Sales');
     expect(findConsumerSwitch('missing')).toBeNull();
+  });
+
+  it('does not promote compatibility or reference observations into shadow or final cutover', () => {
+    for (const id of ['erp-com-public-catalog', 'erp-whitelabel-catalogs', 'kakao-ops-catalog']) {
+      const registration = findConsumerSwitch(id)!;
+      expect(registration.evidence.approvedRelease).toBeNull();
+      expect(registration.evidence.freepassReadVerified).toBe(false);
+      expect(evaluateConsumerCutover(registration, 'SHADOW_READ').allowed).toBe(false);
+      expect(evaluateConsumerCutover(registration, 'FREEPASS_DATA_READ').allowed).toBe(false);
+    }
+    const kakao = findConsumerSwitch('kakao-ops-catalog')!;
+    expect(kakao.holdReasons.some(reason => reason.includes('REFERENCE_ONLY/HOLD'))).toBe(true);
+    expect(kakao.holdReasons.some(reason => reason.includes('token is not provisioned'))).toBe(false);
+  });
+
+  it('retains F86 only as historical evidence after the current publication target changed', () => {
+    const f86 = findConsumerSwitch('google-sheets-f86')!;
+    expect(f86.holdReasons.some(reason => reason.includes('not an active product publication target'))).toBe(true);
+    expect(evaluateConsumerCutover(f86, 'FREEPASS_DATA_READ').allowed).toBe(false);
+  });
+
+  it('fails closed on unsupported stages rather than treating index -1 as a valid transition', () => {
+    const registration = readyRegistration('OBSERVE');
+    expect(evaluateConsumerCutover(registration, 'ACTIVE' as ConsumerCutoverStage)).toMatchObject({
+      allowed: false, blockers: ['invalid consumer cutover stage']
+    });
+    registration.stage = 'ACTIVE' as ConsumerCutoverStage;
+    expect(evaluateConsumerCutover(registration, 'LEGACY_DIRECT').allowed).toBe(false);
   });
 });
