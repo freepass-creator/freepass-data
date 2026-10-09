@@ -1,5 +1,20 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-06 F04 입력 화면 / 수수료 원천 수집 갱신
+
+- 접수는 기존 열 순서·셀값을 보존하고 기본정보/계약/진행/청구·지급 헤더를 구분했다. 취소행 전체 연분홍+가운데줄, 금액 천단위 표시, 산출근거·비고 줄바꿈, 상세/증빙 보조열 숨김, 고정열 해제. 기존 경고조건 보존. 원본 전체 Drive backup 및 native metadata 재조회 PASS. 취소행은 표시하고 정산 대상에서는 기존 규칙대로 제외한다.
+- 채팅 수수료 수집은 기존 ai-ops 공급사확인사실 장부에 USER_DECISION 출처로2개 사실을 추가하고, 기존 Data SETTLEMENT source intake로 F04 수수료표191행 원문과 대표확정2건을 수집했다. RAW 내용 전체 재조회 PASS, 기존 기록 삭제0. 개별 추가 수수료는 계약범위로 제한하며 기존 공급사 일반요율을 덮지 않았다. 수집 완료를 소비 계산기의 자동 최신화 완료로 확대하지 않는다. private 접수복구 실행영수증의 feeCollectionUpdate/intakePresentation에서 run/backup을 확인한다.
+
+## 2026-10-06 F04 산출근거 / 사람 입력 보존
+
+- 목적: 접수 기반 정산과 사람 입력 보존 기준을 Data 기존 규격에 고정한다. revision e49dfb9afa6d8203ed3bf388525179f122aed007 기반.
+- 변경/검증: F04 접수 BT 산출근거 입력열 추가, 보호 예외와 헤더·확정 건 근거 재조회 PASS. 기존 사람 원문 수정 없음. 기존 Business Data Connection Map 및 AGENTS에 자동 삭제·덮어쓰기 금지를 명시했다. 고객·차번·개별 금액은 공개 저장소에 넣지 않는다.
+- 운영 재확인: 기존 ADC와 중앙 target/AdminWorkflowStore 경로로 실제 Data 읽기·쓰기가 가능했다. 대표 지정 차량의 모델/렌탈료/보증금/추가금액을 전후 감사·digest expectation·재조회로 적용했다. 접수 원문에만 있던 신규4건은 검증보류로 복구했다. 실조회 9월35개 계약키의 Data 누락0/중복0, 취소 제외34건. private 실행영수증에 전체 원문·정정안·재조회를 보존한다.
+- 변경/검증: 기존 정산 조회 계약에 calculationBasis nullable 원문 필드를 추가하고 Admin F04 reader가 BT 산출근거를 담는다. Data build PASS/정산조회4 PASS. AI-OPS 실행기는 사람 확인·정정 원문을 금액 변경·행 제외로 지우지 않고 충돌 시 중단한다(29 PASS).
+- 남음: 기존26건의 청구월·금액·취소 불일치 정정안은 사람 입력 출처 불명으로 승인대기이며 원문 유지. Data API/reader와 AI-OPS 보호 코드는 PR상태이며 운영 배포/전체 기술적 접근 통제 완료가 아니다. BT34행 산출근거 미입력도 원본 확인 전 임의 채우지 않는다.
+- next_start_here: private 접수복구 실행영수증의 dataCanonReview35 전후 대조표와 사용자 이번 정정 승인을 확인한다. 승인 후 최신 접수와 Data를 다시 읽고 백업·digest expectation·감사 이력·재조회로 실행한다. 사람이 입력한 계약정보/메모/산출근거는 자동변경하지 않는다.
+
+
 ## 2026-10-05 공통 시트 빈 칸 채우기 읽기 어댑터
 
 - 목적: 기존 빈 칸 채우기 계획기의 입력 JSON을 공통 시트 + FreePass Data products/policy에서 읽기 전용으로 만든다. 시트·Firestore 쓰기 0, 커밋·push 없음.
@@ -2109,3 +2124,12 @@ This file exists so another session can continue without re-discovering or re-cr
 - 기존 이관값 변경은 rewriteImportedPolicyPresentation.runId를 명시하고 이전 셀 note의 원천 탭·행·코드 및 기존 verbose값이 fresh 원천과 정확히 맞을 때만 허용한다. 소유권/값 불일치는 HOLD. 새 값과 기존 note 및 전체 원문 설명을 atomic userEnteredValue,note mask로 쓴다.
 - 공급사 원본16개를 metadata의 전체 행 범위로 재조회, source/destination 동시 변경 없음 확인 후173행의 설명 칸1207개를 교정했다. 표시 불일치0, 원문 설명 note 누락0, 나머지 값 변경0, 사진 링크 변경0, 종합210행/오류0, 재계획 추가 쓰기0. 기존 정책코드 없음33행은 그대로 HOLD.
 - Claude ANSWERED/exit0: 비율 기준·최소최대·0/없음 구분·원문 보존·소유권 guard를 반영했다. 전체 항목명을 화면에 남기자는 의미 보존 문제는 사용자의 짧은 표시 지시에 맞춰 필요한 수리비/개인·법인/최소·최대만 유지하고 세부는 note와 archive에 보존했다. 단위/범위/소유권/재실행을 포함한 Sheets 테스트45개와 build 통과.
+
+
+## 2026-10-06 정산 세션 Core / Ops 실제 활용 인계
+
+- 목적 / 대상: 진행 정산을 유지하며 공통 규격과 기존 실행 도구를 연결. Core 9493878148448e304ed74d8d37daa9ce9fdf221c, Ops 853f95787dc0c0a80a35e49cb77f46b94d1565c3, Data c9c733dabaaf42cd38b310dc51e4b33f1fd5a369. Core AGENTS → WORK_READ_FIRST → AI_WORKING_STANDARD, Ops AGENTS → docs/README → PC 세션 규격과 Data AGENTS/이 인계 실제 읽음; academy READY. 문서별 SHA256은 기존 private 복구 영수증 coreOpsLearning에 보존.
+- 적용: Sheets는 기존 gws 범위 조회/반영/되읽기, Data는 firebase-target + AdminWorkflowStore digest/감사, 수수료는 기존 공급사사실 append-only + source ingestion 재사용. 원문 보존과 계약별 예외 범위 유지. 접수 진행중 흰 배경 및 두 탭 Roboto 10pt는 native effectiveFormat 재조회 PASS.
+- 요청 / 완료조건: B3Q 지휘통제실에 기존 정산 담당과 단일 active_owner 조정 및 기존 PR399/181/88 반영 검토 요청. 기존 확인 동선 담당의 산출근거 회신은 동일 건과 출처로 인수하고 Data/접수/영업자 projection 되읽기로 종결. 이 기록은 추가 고객/공급사 발송이나 운영 배포 승인 아님.
+- 남음: 기존26건 사람 입력 출처 불명 충돌 정정은 승인대기. 현재 원격 조회 PR399 OPEN/UNSTABLE,181 OPEN/BLOCKED,88 OPEN/CLEAN; 미병합/미배포를 정산 완료로 표현하지 않음. RAW 수집은 소비 계산기의 자동 최신화 증거가 아님.
+- next_start_here: 기존 private 영수증 dataCanonReview35/robotoWhitePresentation/coreOpsLearning → 지휘통제실 단일 담당 확인 → 최신 원본 및 기존 PR 게이트를 재조회 후 동일 작업선에서 계속. 새 정본·브랜치·DB·예약·프로세스 생성0.

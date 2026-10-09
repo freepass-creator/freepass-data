@@ -100,13 +100,14 @@
         "money": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["claimAmount", "payAmount", "claimAdjustment", "payAdjustment", "adjustmentReason", "supplierFeeRaw", "channelFeeRaw"],
+          "required": ["claimAmount", "payAmount", "claimAdjustment", "payAdjustment", "adjustmentReason", "calculationBasis", "supplierFeeRaw", "channelFeeRaw"],
           "properties": {
             "claimAmount": { "$ref": "#/$defs/nullableNumber" },
             "payAmount": { "$ref": "#/$defs/nullableNumber" },
             "claimAdjustment": { "$ref": "#/$defs/nullableNumber" },
             "payAdjustment": { "$ref": "#/$defs/nullableNumber" },
             "adjustmentReason": { "$ref": "#/$defs/nullableString" },
+            "calculationBasis": { "$ref": "#/$defs/nullableString" },
             "supplierFeeRaw": { "type": ["string", "number", "boolean", "null"] },
             "channelFeeRaw": { "type": ["string", "number", "boolean", "null"] }
           }
