@@ -14,6 +14,7 @@ import estimateQuoteWriteReceiptSchema from '../../contracts/estimate-quote-writ
 import estimateShareEnvelopeReadReceiptSchema from '../../contracts/estimate-share-envelope-read-receipt-v1.schema.json' with { type: 'json' };
 import estimateShareEnvelopeWriteReceiptSchema from '../../contracts/estimate-share-envelope-write-receipt-v1.schema.json' with { type: 'json' };
 import settlementLedgerSchema from '../../contracts/settlement-ledger-view-v1.schema.json' with { type: 'json' };
+import settlementLedgerSchemaV2 from '../../contracts/settlement-ledger-view-v2.schema.json' with { type: 'json' };
 import kakaoCatalogReferenceSchema from '../../contracts/kakao-catalog-reference-v1.schema.json' with { type: 'json' };
 import internalAiReferenceSchema from '../../contracts/internal-ai-reference-v1.schema.json' with { type: 'json' };
 import type { ProjectionEvidenceSnapshotStore, ProjectionStore } from '../ports/catalog-store.js';
@@ -211,6 +212,7 @@ export function createConsumerGateway(
   const validateEstimateShareEnvelopeReadReceipt = ajv.compile(estimateShareEnvelopeReadReceiptSchema);
   const validateEstimateShareEnvelopeWriteReceipt = ajv.compile(estimateShareEnvelopeWriteReceiptSchema);
   const validateSettlementLedger = ajv.compile(settlementLedgerSchema);
+  const validateSettlementLedgerV2 = ajv.compile(settlementLedgerSchemaV2);
   const validateKakaoReference = ajv.compile(kakaoCatalogReferenceSchema);
   const validateInternalAiReference = ajv.compile(internalAiReferenceSchema);
   app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
@@ -810,7 +812,7 @@ export function createConsumerGateway(
           requestDigest: stableDigest(request.body),
           summarize: (value) => ({ count: value.meta.count, digest: value.meta.dataDigest })
         }, () => readSettlementLedgerView(workflowStore, binding.id, request.body));
-        if (!validateSettlementLedger(result)) {
+        if (!(request.body.viewVersion === 2 ? validateSettlementLedgerV2(result) : validateSettlementLedger(result))) {
           return reply.code(503).send({ code: 'SETTLEMENT_LEDGER_RESPONSE_INVALID' });
         }
         return result;
