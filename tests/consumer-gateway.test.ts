@@ -105,7 +105,7 @@ describe('read-only consumer gateway', () => {
     expect(row.vehicleMediaEvidence).toMatchObject({verdict:'HOLD',typedColorVerification:'NOT_CHECKED',visualVehicleIdentity:'NOT_CHECKED',consumerReadback:'NOT_CHECKED',imageBytes:'NOT_CHECKED'});
     expect(row.vehicleMediaEvidence.issues).toContain('SOURCE_EVIDENCE_MISSING');
     expect(result.json().meta.dataDigest).toBe(createHash('sha256').update(JSON.stringify(result.json().data)).digest('hex'));
-    expect(row.vehicleMediaEvidence.checks).toEqual([expect.objectContaining({state:'HEAD_NOT_CHECKED',status:null})]);
+    expect(row.vehicleMediaEvidence.checks).toEqual([expect.objectContaining({state:'DOCUMENT_IMAGE_EXCLUDED',status:null}),expect.objectContaining({state:'HEAD_NOT_CHECKED',status:null})]);
     expect(result.json().data).toHaveLength(2);
     expect(result.json().data.find((p:{sourceProductId:string})=>p.sourceProductId==='withoutPhotos').vehicle.exteriorColor).toBeNull();
     expect(product.photo_link).toBe('https://supplier.example/tcar');
