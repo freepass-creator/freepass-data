@@ -1157,6 +1157,11 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 검증: build PASS, 전용 메모리 15/15 PASS, 빌드된 CLI `--memory` dry-run 쓰기0/상품1/기간1/변경1 확인. `npm.cmd run check` 최종 exit1: Vitest 1341 PASS/9 FAIL/14 SKIP(121파일 중113 PASS/4 FAIL/4 SKIP); 앞단 Node 시험131 PASS, 아키텍처·데이터 접근 경계·빌드 PASS. 독립 `check:standards` exit0/15 PASS/스키마30개 컴파일, 기존 profile PARTIAL 유지. 실패는 tsx `uv_os_get_passwd ENOMEM` 계열 실행 시험과 로컬 서버 연결 실패, jq 실행 권한 거부이며 환경 제한으로 전체 통과 선언하지 않는다. `tsx` 대신 빌드된 JS의 메모리 CLI는 정상이다.
 - 남음: 원격 main/Issue24/PR 및 Claude 독립 검토는 네트워크 금지로 UNAVAILABLE. 운영 apply·실제 before-image 보존 검증·Admin 재발행/응답 대사는 미실행/HOLD. 배치는 Offer별 거래이며 전량 원자 적용이 아니다. 기존 worker의 outbox 소비 영향도 운영 승인 전 확인한다.
 - next_start_here: `docs/READ-RUNTIME.md` 재계산 절 순서대로 실행 revision/프로젝트/정책/범위/planDigest/백업·복구·writer를 고정해 운영 apply 승인을 받고, 별도 Admin READY 생성·활성화 승인 후 응답 집계를 대사한다. 코드 revert/보상 거래/이전 READY 재활성화는 각각 별도 복구 단계다. 먼저 제한 없는 로컬 검사 환경에서 기존 실패9개를 재검증한다.
+### 2026-10-04 차량 원문·차종·제원·요금 검증 1차(읽기 전용)
+
+- 목적: 대표 지시 «한 번 들어온 차는 공급사 원문 기준으로 정확하게». 수정 없음.
+- 결과·판정 기준: [ERP5-CONTINUOUS-AUDIT.md](ERP5-CONTINUOUS-AUDIT.md#vehicle-verification-20261004). 등록 1,760 규칙 거르기 100%, 발행 중 의심 302대 Codex 독립 판정. 원문 누락 49·손상 1·부분 보존 884, 09-15 이후 원문 덮어쓰기 392대. 발행 중 오류 있는 차 259/534. 결론: 원문→정리값 재계산 불가 구조.
+- next_start_here: 만료 중인 freepasserp4 발행 스냅샷 아티팩트 정식 보존(30일, 남은 162개) → 원본 시트 대조·비발행 1,226대 판정 → 고치는 길은 AI 상황실이 정규화 규칙·별칭·F03으로 나눔.
 
 ### 2026-10-04 PR #296 4차 — 경제 금액 근거 분리
 
