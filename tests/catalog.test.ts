@@ -360,6 +360,41 @@ describe('Catalog V1 vertical slice', () => {
     expect(await store.getActive('erp-public')).toBeNull();
   });
 
+  it('prepares paid and zero deposit terms together without pruning Canonical unknown economics', async () => {
+    const store = new MemoryDataStore(); await seedDemoCatalog(store);
+    const offer = (await store.getOffer('offer_gv70_demo'))!;
+    const base = offer.priceTerms[0]!;
+    const economics = offer.internalEconomicsTerms![0]!;
+    const updated = { ...offer, priceTerms: [base,
+      { ...base, termKey: '48@30000', termMonths: 48, mileageLimitKmPerYear: 30000,
+        monthlyRent: { amount: 610000, currency: 'KRW' as const }, depositState: 'ZERO' as const,
+        deposit: { amount: 0, currency: 'KRW' as const } },
+      { ...base, termKey: '12@10000', termMonths: 12, mileageLimitKmPerYear: 10000,
+        monthlyRent: { amount: 800000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const, deposit: null }],
+      internalEconomicsTerms: [economics,
+        { ...economics, termKey: '48@30000', depositCalculation: { ...economics.depositCalculation,
+          state: 'ZERO' as const, amount: { amount: 0, currency: 'KRW' as const },
+          calculation: { kind: 'FIXED' as const, amount: { amount: 0, currency: 'KRW' as const } } } },
+        { ...economics, termKey: '12@10000', depositCalculation: { state: 'UNKNOWN' as const, sourceRefs: ['synthetic:unknown'] } }] };
+    const [history] = await store.listEntityHistory('offer', offer.id);
+    await store.seed({ offers: [updated], revisionHistory: [{ ...history!, snapshot: updated }] });
+    const before = await store.getOffer(offer.id);
+    const release = await buildErpPublicProjection(store, store, '2026-09-20T10:00:00.000Z', { activate: false });
+    const projected = release.data[0]!.offers[0]!;
+    expect(projected.supplierId).toBe(offer.supplierId);
+    expect(projected.priceTerms.map(t => [t.termKey, t.termMonths, t.mileageLimitKmPerYear,
+      t.monthlyRent.amount, t.depositState, t.deposit?.amount])).toEqual([
+      ['36@20000', 36, 20000, 690000, 'KNOWN', 3000000],
+      ['48@30000', 48, 30000, 610000, 'ZERO', 0],
+    ]);
+    expect(release.status).toBe('READY');
+    expect(await store.getActive('erp-public')).toBeNull();
+    expect(await store.getOffer(offer.id)).toEqual(before);
+    expect(before?.priceTerms.find(t => t.termKey === '12@10000'))
+      .toMatchObject({ depositState: 'UNKNOWN', deposit: null, monthlyRent: { amount: 800000 } });
+    expect(before?.internalEconomicsTerms?.find(t => t.termKey === '12@10000')?.depositCalculation.state).toBe('UNKNOWN');
+  });
+
   it('excludes UNKNOWN deposit terms from ERP public projection', async () => {
     const store=new MemoryDataStore(); await seedDemoCatalog(store);
     const offer = await store.getOffer('offer_gv70_demo');
