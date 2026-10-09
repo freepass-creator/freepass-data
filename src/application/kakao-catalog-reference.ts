@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto';
 import { parseErp5PriceKey } from '../adapters/erp5-product-mapping.js';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
 import { policyScalar } from './product-pricing-policy.js';
-import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit, readIancarPublishedDeposit } from '../domain/deposit-evidence.js';
+import { verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
+import { chooseVehicleIdentity, indexVehicleMaster, type VehicleMasterReference } from '../domain/vehicle-identity-resolution.js';
 
 type Rec = Record<string, unknown>;
 
@@ -25,7 +27,12 @@ export function resolveReferenceVehiclePhotos(source: Rec) {
       return [url.href];
     } catch { rejectedCount += 1; return []; }
   };
-  const imageUrls = [...new Set([source.image_urls, source.images, source.photos, source.image_url, source.photo].flatMap(readUrls))];
+  const candidates = [...new Set([source.image_urls, source.images, source.photos, source.image_url, source.photo].flatMap(readUrls))];
+  const rejectedBeforeDocuments = rejectedCount;
+  const documentUrls = new Set(readUrls(source.doc_images));
+  rejectedCount = rejectedBeforeDocuments;
+  const imageUrls = candidates.filter(url => !documentUrls.has(url));
+  rejectedCount += candidates.length - imageUrls.length;
   const sourceLinks = [...new Set(readUrls(source.photo_link))];
   return {
     state: imageUrls.length ? 'URLS_PRESENT' as const : sourceLinks.length ? 'LINK_ONLY' as const : rejectedCount ? 'UNUSABLE' as const : 'NOT_PROVIDED' as const,
@@ -621,7 +628,7 @@ export function resolveReferencePolicyContext(source: Rec, policies: Record<stri
     reasonCode: facts.length ? null : 'POLICY_FACTS_MISSING' };
 }
 
-export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}) {
+export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}, observedAt?: string) {
   if (source.listable !== true) return null;
   const supplierId = text(source.provider_company_code);
   if (!supplierId) return null;
@@ -629,7 +636,14 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
   if (!price || typeof price !== 'object' || Array.isArray(price)) return null;
   const priceTerms = Object.entries(price as Rec).flatMap(([sourceKey, raw]) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
-    const parsed = parseErp5PriceKey(sourceKey);
+    // Approved Iancar producer keys carry mileage period; the legacy ERP key parser does not.
+    const iancarKey = supplierId === 'RP031' && source.iancar_phase_one
+      ? /^([1-9]\d*)_(월|연)([1-9]\d*)km$/.exec(sourceKey) : null;
+    const iancarMileage = iancarKey && Number.isSafeInteger(Number(iancarKey[1])) && Number(iancarKey[1]) <= 60
+      && Number.isSafeInteger(Number(iancarKey[3]))
+      ? { km: Number(iancarKey[3]), period: iancarKey[2] === '연' ? 'year' as const : 'month' as const } : null;
+    const parsed = iancarMileage ? { months: Number(iancarKey![1]), mileageKm: iancarMileage.period === 'year' ? iancarMileage.km : undefined, settlement: 'RETURN' as const }
+      : parseErp5PriceKey(sourceKey);
     const monthlyRent = integer((raw as Rec).rent);
     if (!parsed || monthlyRent === null || monthlyRent <= 0) return [];
     const basis36 = Object.entries(price as Rec).flatMap(([key, value]) => {
@@ -639,7 +653,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       return amount !== null && amount > 0 ? [amount] : [];
     });
     const billin36MonthlyRent = basis36.length === 1 ? basis36[0] : undefined;
-    const deposit = resolveReferenceDeposit({
+    const depositInput = {
       note: source.deposit_note,
       termMonths: parsed.months,
       monthlyRent,
@@ -648,7 +662,22 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       productType: source.product_type,
       depositFree: source.deposit_free,
       hasPositivePaidDeposit: hasConflictingPaidDeposit(price),
-    });
+    };
+    const publishedDeposit = supplierId === 'RP031' && source.iancar_phase_one
+      ? readIancarPublishedDeposit(source, sourceKey, observedAt) : null;
+    const deposit = publishedDeposit ? {
+      depositAmount: publishedDeposit.amount,
+      depositState: publishedDeposit.state,
+      depositRule: publishedDeposit.state === 'UNKNOWN' ? null : {
+        code: 'IANCAR_PUBLISHED_CONDITION_EVIDENCE', multiplier: null, label: '공급사 기간·주행거리 조건',
+      },
+    } : resolveReferenceDeposit(depositInput);
+    const depositEvidence = {
+      sourceRef: `source-product:${documentId}#price:${sourceKey}`,
+      sourceAmount: typeof (raw as Rec).deposit === 'number' || typeof (raw as Rec).deposit === 'string' ? (raw as Rec).deposit as number | string : null,
+      sourceNote: text(source.deposit_note) || null,
+      reasonCode: publishedDeposit?.reason ?? deposit.depositRule?.code ?? assessDepositEvidence(depositInput).reason,
+    };
     const channelPayoutFee = resolveSalesCommission({
       ...evidenceByTerm[sourceKey],
       supplierId,
@@ -674,8 +703,10 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       monthlyRent: { amount: monthlyRent, currency: 'KRW' as const },
       deposit: deposit.depositAmount === null ? null : { amount: deposit.depositAmount, currency: 'KRW' as const },
       ...deposit,
+      depositEvidence,
       depositStatusLabel: depositStatusLabel(deposit.depositState, (raw as Rec).deposit, source.deposit_note),
       mileageLimitKmPerYear: parsed.mileageKm ?? null,
+      ...(iancarMileage ? { contractedMileage: iancarMileage } : {}),
       settlement: parsed.settlement,
       // Backward-compatible alias for the existing Kakao consumer.
       salesCommission: channelPayoutFee,
@@ -735,6 +766,9 @@ export function buildKakaoCatalogReference(input: {
   policies?: Record<string, Rec>;
   /** Trusted private evidence, keyed by product ID then exact ERP price key. */
   commissionEvidenceByProduct?: Readonly<Record<string, CommissionEvidenceByTerm>>;
+  /** Master/trim share their sealed snapshot. Products/policies are separate reads. */
+  vehicleMasterSnapshot?: VehicleMasterSnapshot | null;
+  vehicleMasterReadState?: 'AVAILABLE' | 'UNAVAILABLE';
 }) {
   if (input.consumerId !== 'kakao-ops') throw new Error('KAKAO_REFERENCE_CONSUMER_NOT_ALLOWED');
   return buildReferenceFacts(input);
@@ -748,9 +782,36 @@ export function buildInternalAiReference(input: KakaoCatalogReferenceSource) {
 }
 
 function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
+  type NativeReference = (VehicleMasterReference & { reasonCode: null }) | {
+    state: 'HOLD'; authority: 'FREEPASS_DATA_VEHICLE_MASTER'; identityKind: 'FIRESTORE_DOCUMENT_ID';
+    masterId: null; trimId: null; snapshotDigest: string | null; readAt: string | null; reasonCode: string;
+  };
+  const hold = (reasonCode: string, snapshot?: VehicleMasterSnapshot): NativeReference => ({ state: 'HOLD',
+    authority: 'FREEPASS_DATA_VEHICLE_MASTER', identityKind: 'FIRESTORE_DOCUMENT_ID', masterId: null, trimId: null,
+    snapshotDigest: snapshot?.digest ?? null, readAt: snapshot?.readAt ?? null, reasonCode });
+  const master = input.vehicleMasterSnapshot;
+  let resolveMaster: (source: Rec) => NativeReference = () => hold(input.vehicleMasterReadState === 'UNAVAILABLE'
+    ? 'VEHICLE_MASTER_READ_UNAVAILABLE' : 'VEHICLE_MASTER_SNAPSHOT_MISSING');
+  if (master && input.vehicleMasterReadState !== 'UNAVAILABLE') {
+    try {
+      const now = Date.parse(input.observedAt);
+      const index = indexVehicleMaster(verifiedMasterRecords(master, now));
+      resolveMaster = source => {
+        const choice = chooseVehicleIdentity(index, { sheet: [text(source.maker), text(source.model), text(source.sub_model), text(source.trim_name)],
+          data: null, raw: '', firstRegistration: '', modelYear: '' });
+        if (choice.pick === 'HOLD') return hold('VEHICLE_MASTER_IDENTITY_NOT_UNIQUE', master);
+        const verified = verifiedVehicleMasterReference(master, choice, now);
+        return verified.state === 'KNOWN' ? { ...verified, reasonCode: null } : hold(verified.reason, master);
+      };
+    } catch {
+      // No credentials/raw exception strings; unavailable identity must not remove economic terms.
+      resolveMaster = () => hold('VEHICLE_MASTER_SNAPSHOT_UNVERIFIED');
+    }
+  }
   const data = Object.entries(input.products)
-    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id], input.policies))
+    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id], input.policies, input.observedAt))
     .filter((row): row is NonNullable<typeof row> => row !== null)
+    .map(row => ({ ...row, vehicleMasterReference: resolveMaster(input.products[row.sourceProductId]!) }))
     .sort((a, b) => a.productId.localeCompare(b.productId));
   if (!data.length) throw new Error('KAKAO_REFERENCE_EMPTY');
   const dataDigest = hash(JSON.stringify(data));
@@ -777,3 +838,38 @@ function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
 
 export type KakaoCatalogReference = ReturnType<typeof buildKakaoCatalogReference>;
 export type KakaoCatalogReferenceSource = Parameters<typeof buildKakaoCatalogReference>[0];
+
+/** All term conditions match one item; sibling terms remain visible. */
+export function filterReferenceProducts<T extends KakaoCatalogReference | ReturnType<typeof buildInternalAiReference>>(reference: T, query: Record<string, unknown>): T {
+  const fields = ['supplierId','maker','model','commercialType','assetStatus'];
+  const numeric = ['termMonths','mileageKm','monthlyRentMin','monthlyRentMax','depositMin','depositMax'];
+  const keys = [...fields,...numeric,'mileagePeriod','depositState','depositScope'];
+  const invalid = () => { throw new Error('REFERENCE_DEPOSIT_FILTER_INVALID'); };
+  if (!Object.keys(query).length) return reference;
+  for (const [key,value] of Object.entries(query)) {
+    if (!keys.includes(key) || typeof value !== 'string' || !value.trim() || value !== value.trim()) invalid();
+    if (numeric.includes(key) && (!/^(0|[1-9]\d*)$/.test(String(value)) || !Number.isSafeInteger(Number(value)))) invalid();
+  }
+  if (query.termMonths !== undefined && (Number(query.termMonths)<1 || Number(query.termMonths)>60)) invalid();
+  if (query.depositState !== undefined && !['ZERO','KNOWN','UNKNOWN'].includes(String(query.depositState))) invalid();
+  if (query.depositScope !== undefined && (query.depositState !== 'ZERO' || !['ANY_TERM','ALL_TERMS'].includes(String(query.depositScope)))) invalid();
+  if (query.mileagePeriod !== undefined && !['year','month'].includes(String(query.mileagePeriod))) invalid();
+  if ((query.mileageKm === undefined) !== (query.mileagePeriod === undefined)) invalid();
+  for (const prefix of ['monthlyRent','deposit']) if (query[prefix+'Min'] !== undefined && query[prefix+'Max'] !== undefined && Number(query[prefix+'Min'])>Number(query[prefix+'Max'])) invalid();
+  type Term = T['data'][number]['offers'][number]['priceTerms'][number];
+  const zero = (t: Term) => t.depositState === 'ZERO' && t.depositAmount === 0 && t.deposit?.amount === 0;
+  const range = (v: number | null | undefined, k: string) => (query[k+'Min'] === undefined && query[k+'Max'] === undefined) ||
+    (v !== null && v !== undefined && (query[k+'Min'] === undefined || v>=Number(query[k+'Min'])) && (query[k+'Max'] === undefined || v<=Number(query[k+'Max'])));
+  const match = (t: Term) => (query.termMonths === undefined || t.termMonths === Number(query.termMonths)) &&
+    (query.depositState === undefined || (query.depositState === 'ZERO' ? zero(t) : t.depositState === query.depositState)) &&
+    range(t.monthlyRent.amount,'monthlyRent') && range(t.depositAmount,'deposit') &&
+    (query.mileageKm === undefined || (t.contractedMileage ? t.contractedMileage.km === Number(query.mileageKm) && t.contractedMileage.period === query.mileagePeriod : query.mileagePeriod === 'year' && t.mileageLimitKmPerYear === Number(query.mileageKm)));
+  const data = reference.data.filter(p => (query.maker === undefined || p.vehicle.maker === query.maker) &&
+    (query.model === undefined || p.vehicle.model === query.model) && (query.commercialType === undefined || p.commercialType === query.commercialType) &&
+    (query.assetStatus === undefined || p.vehicle.assetStatus === query.assetStatus) &&
+    p.offers.some(o => (query.supplierId === undefined || o.supplierId === query.supplierId) && o.priceTerms.some(match)) &&
+    (query.depositScope !== 'ALL_TERMS' || p.offers.flatMap(o => o.priceTerms).every(zero)));
+  return { ...reference,data,meta: { ...reference.meta,projectedCount:data.length,dataDigest:hash(JSON.stringify(data)),queryFilter:{...query},
+    ...(query.depositState === 'ZERO' ? {depositFilter:{state:'ZERO',termMonths:query.termMonths === undefined ? null : Number(query.termMonths),scope:query.depositScope === 'ALL_TERMS' ? 'ALL_TERMS' : 'ANY_TERM'}} : {}) } } as T;
+}
+export const filterReferenceZeroDeposit = filterReferenceProducts;

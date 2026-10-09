@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { buildAdminCatalogProjection } from '../src/application/admin-catalog.js';
 import { updateOfferPrice } from '../src/application/catalog.js';
 import { describe, expect, it } from 'vitest';
@@ -35,6 +36,81 @@ const withAccess = (
 };
 
 describe('read-only consumer gateway', () => {
+  it('keeps an unknown sibling in internal AI ANY_TERM and excludes it from ALL_TERMS', async () => {
+    const consumerId = 'internal-ai-test';
+    const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트', deposit_note: '무보증',
+      price: { '36': { rent: 500000, deposit: 0 }, '48': { rent: 450000, deposit: null } } };
+    const { app } = withAccess(new MemoryDataStore(), [{ id: consumerId, projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] }], undefined, {
+      read: async () => { throw new Error('unused'); },
+      readInternalAiReferenceSource: async () => ({ consumerId, observedAt: '2026-10-09T00:00:00Z', products: { mixed: product } }),
+    });
+    const endpoint = `/v1/consumers/${consumerId}/internal-ai-reference`;
+    const any = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36', headers });
+    expect(any.statusCode).toBe(200);
+    expect(any.json().schema).toBe('freepass-data.internal-ai-reference/v1');
+    expect(any.json().data[0].vehicleMediaEvidence).toMatchObject({verdict:'HOLD',consumerReadback:'NOT_CHECKED'});
+    expect(any.json().data[0].offers[0].priceTerms.map((t: { depositState: string }) => t.depositState)).toEqual(['ZERO', 'UNKNOWN']);
+    expect(any.json().data[0].offers[0].priceTerms[1]).toMatchObject({ termKey: 'source:48', depositAmount: null, deposit: null });
+    const all = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&depositScope=ALL_TERMS', headers });
+    expect(all.statusCode).toBe(200);
+    expect(all.json().data).toEqual([]);
+    expect(all.json().meta.depositFilter).toEqual({ state: 'ZERO', termMonths: 36, scope: 'ALL_TERMS' });
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=61', headers })).statusCode).toBe(400);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&termMonths=48', headers })).statusCode).toBe(400);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&depositScope=ALL_TERMS&depositScope=ALL_TERMS', headers })).statusCode).toBe(400);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO', headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+    await app.close();
+  });
+  it('filters zero deposit through authenticated reference query, accepts no matches, rejects invalid periods', async () => {
+    const base = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트' };
+    const { app } = withAccess(new MemoryDataStore(), [{ id: 'kakao-ops', projectionId: 'erp-public', token, capabilities: ['catalog-reference'] }], undefined, {
+      read: async () => { throw new Error('unused'); },
+      readKakaoReferenceSource: async () => ({ consumerId: 'kakao-ops', observedAt: '2026-10-09T00:00:00Z', products: {
+        free: { ...base, deposit_note: '무보증', price: { '36': { rent: 500000, deposit: 0 } } },
+        unknown: { ...base, price: { '36': { rent: 500000, deposit: 0 } } },
+      } }),
+    });
+    const endpoint = '/v1/consumers/kakao-ops/catalog-reference';
+    const complete = await app.inject({url:endpoint,headers});
+    expect(complete.statusCode).toBe(200);
+    expect(complete.json().data).toHaveLength(2);
+    for (const q of ['supplierId=RP013&termMonths=36&monthlyRentMin=500000','depositState=UNKNOWN']) {
+      const found=await app.inject({url:endpoint+'?'+q,headers}); expect(found.statusCode).toBe(200); expect(found.json().data.length).toBeGreaterThan(0);
+    }
+    const missing=await app.inject({url:endpoint+'?supplierId=absent',headers}); expect(missing.statusCode).toBe(200); expect(missing.json().data).toEqual([]);
+    for(const q of ['limit=1','cursor=x','model=A&model=B','monthlyRentMin=bad','mileageKm=1000']) expect((await app.inject({url:endpoint+'?'+q,headers})).statusCode).toBe(400);
+
+    const result = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&depositScope=ALL_TERMS', headers });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().data.map((p: { sourceProductId: string }) => p.sourceProductId)).toEqual(['free']);
+    expect(result.json().meta.depositFilter).toEqual({ state: 'ZERO', termMonths: 36, scope: 'ALL_TERMS' });
+    const none = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=48', headers });
+    expect(none.statusCode).toBe(200);
+    expect(none.json().data).toEqual([]);
+    expect(none.json().meta.projectedCount).toBe(0);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=0', headers })).statusCode).toBe(400);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36' })).statusCode).toBe(401);
+    await app.close();
+  });
+  it('delivers gallery, representative and color with unverified diagnostics and excludes documents', async () => {
+    const image='https://supplier.example/car.jpg', document='https://supplier.example/document.jpg';
+    const product={listable:true,provider_company_code:'RP013',price:{'36':{rent:500000,deposit:null}},image_urls:[document,image],doc_images:[document],ext_color:'black',photo_link:'https://supplier.example/tcar'};
+    const {app}=withAccess(new MemoryDataStore(),[{id:'kakao-ops',projectionId:'erp-public',token,capabilities:['catalog-reference']}],undefined,{
+      read:async()=>{throw new Error('unused');},readKakaoReferenceSource:async()=>({consumerId:'kakao-ops',observedAt:'2026-10-09T00:00:00Z',products:{withPhotos:product,withoutPhotos:{...product,image_urls:[],ext_color:null}}})});
+    const result=await app.inject({url:'/v1/consumers/kakao-ops/catalog-reference',headers});
+    expect(result.statusCode).toBe(200);
+    const row=result.json().data.find((p:{sourceProductId:string})=>p.sourceProductId==='withPhotos');
+    expect(row.vehiclePhotos).toMatchObject({imageUrls:[image],representativeUrl:image,sourceLinkCount:1,accessVerification:'NOT_CHECKED'});
+    expect(row.vehicle.exteriorColor).toBe('black');
+    expect(row.vehicleMediaEvidence).toMatchObject({verdict:'HOLD',typedColorVerification:'NOT_CHECKED',visualVehicleIdentity:'NOT_CHECKED',consumerReadback:'NOT_CHECKED',imageBytes:'NOT_CHECKED'});
+    expect(row.vehicleMediaEvidence.issues).toContain('SOURCE_EVIDENCE_MISSING');
+    expect(result.json().meta.dataDigest).toBe(createHash('sha256').update(JSON.stringify(result.json().data)).digest('hex'));
+    expect(row.vehicleMediaEvidence.checks).toEqual([expect.objectContaining({state:'DOCUMENT_IMAGE_EXCLUDED',status:null}),expect.objectContaining({state:'HEAD_NOT_CHECKED',status:null})]);
+    expect(result.json().data).toHaveLength(2);
+    expect(result.json().data.find((p:{sourceProductId:string})=>p.sourceProductId==='withoutPhotos').vehicle.exteriorColor).toBeNull();
+    expect(product.photo_link).toBe('https://supplier.example/tcar');
+    await app.close();
+  });
   it('authenticates and audits Iancar photos without exposing provider references or credentials', async () => {
     let reads = 0;
     const reader = { read: async () => { throw new Error('unused'); }, readIancarPhoto: async (_consumer: string, product: string, index?: number) => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { chooseVehicleIdentity, indexVehicleMaster, type VehicleIdentity } from '../src/domain/vehicle-identity-resolution.js';
-import { assertVehicleIdentityInputs, buildVehicleIdentityInputs, verifiedMasterRecords, type VehicleMasterSnapshot } from '../src/adapters/vehicle-identity-inputs.js';
+import { assertVehicleIdentityInputs, buildVehicleIdentityInputs, verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../src/adapters/vehicle-identity-inputs.js';
 import type { Erp5SourceCapture } from '../src/adapters/erp5-source-capture.js';
 const names = ['현대', '쏘나타', '쏘나타 DN8', '스마트'] as const;
 function snapshot(extra: Record<string, unknown> = {}): VehicleMasterSnapshot {
@@ -20,6 +20,88 @@ function capture(): Erp5SourceCapture {
 const input = (sheet: VehicleIdentity, data: VehicleIdentity | null = null) =>
   ({ sheet, data, raw: '쏘나타 DN8 스마트', firstRegistration: '', modelYear: '' });
 describe('one active Data master authority', () => {
+  it('publishes native ID provenance tied to the exact verified snapshot', () => {
+    const master = snapshot();
+    expect(verifiedVehicleMasterReference(master, { masterId: 'm1', trimId: 't1' })).toEqual({
+      state: 'KNOWN', authority: 'FREEPASS_DATA_VEHICLE_MASTER', identityKind: 'FIRESTORE_DOCUMENT_ID',
+      masterId: 'm1', trimId: 't1', snapshotDigest: master.digest, readAt: master.readAt,
+    });
+    expect(verifiedVehicleMasterReference(master, { masterId: 'reference_vm_name_hash', trimId: 't1' }))
+      .toEqual({ state: 'HOLD', reason: 'MASTER_TRIM_PAIR_NOT_VERIFIED' });
+    expect(verifiedVehicleMasterReference(master, { masterId: 'm1', trimId: 'other-trim' }).state).toBe('HOLD');
+  });
+  it('resolves an alias then attaches provenance from that same snapshot without changing source keys', () => {
+    const master = snapshot();
+    const source = { sourceProductId: 'synthetic-product', supplierId: 'RP001', termKey: 'source:24_2만' };
+    const choice = chooseVehicleIdentity(indexVehicleMaster(verifiedMasterRecords(master)),
+      input(['현대', '쏘나타', '소나타 DN8', '스마트 초이스']));
+    if (choice.pick === 'HOLD') throw new Error('fixture must resolve uniquely');
+    const reference = verifiedVehicleMasterReference(master, choice);
+    expect({ ...source, vehicleMasterReference: reference }).toEqual({ ...source, vehicleMasterReference: {
+      state: 'KNOWN', authority: 'FREEPASS_DATA_VEHICLE_MASTER', identityKind: 'FIRESTORE_DOCUMENT_ID',
+      masterId: 'm1', trimId: 't1', snapshotDigest: master.digest, readAt: master.readAt,
+    } });
+    expect(source).toEqual({ sourceProductId: 'synthetic-product', supplierId: 'RP001', termKey: 'source:24_2만' });
+  });
+  it('retains native IDs after an evidenced rename while changing snapshot provenance', () => {
+    const old = snapshot(), renamed = snapshot();
+    renamed.masters[0]!.data.sub_model = '쏘나타 디 엣지 DN8';
+    renamed.masters[0]!.data.sub_model_aliases = [names[2]];
+    renamed.trims[0]!.data.sub_model = '쏘나타 디 엣지 DN8';
+    const { readAt, masters, trims } = renamed;
+    renamed.digest = createHash('sha256').update(JSON.stringify({ readAt, masters, trims })).digest('hex');
+    const choice = chooseVehicleIdentity(indexVehicleMaster(verifiedMasterRecords(renamed)), input(names));
+    expect(choice).toMatchObject({ pick: 'SHEET', masterId: 'm1', trimId: 't1' });
+    expect(verifiedVehicleMasterReference(renamed, { masterId: 'm1', trimId: 't1' }))
+      .toMatchObject({ state: 'KNOWN', masterId: 'm1', trimId: 't1', snapshotDigest: renamed.digest });
+    expect(renamed.digest).not.toBe(old.digest);
+  });
+  it('does not issue verified IDs for parent drift, retirement, stale or tampered snapshots', () => {
+    const drift = snapshot({ sub_model: 'unverified old name' });
+    expect(() => verifiedVehicleMasterReference(drift, { masterId: 'm1', trimId: 't1' })).toThrow('HOLD');
+    const retired = snapshot();
+    retired.masters[0]!.data.retired = true;
+    const { readAt, masters, trims } = retired;
+    retired.digest = createHash('sha256').update(JSON.stringify({ readAt, masters, trims })).digest('hex');
+    expect(() => verifiedVehicleMasterReference(retired, { masterId: 'm1', trimId: 't1' })).toThrow('HOLD');
+    expect(() => verifiedVehicleMasterReference(snapshot(), { masterId: 'm1', trimId: 't1' }, Date.now() + 300001)).toThrow();
+    expect(() => verifiedVehicleMasterReference({ ...snapshot(), digest: 'tampered' }, { masterId: 'm1', trimId: 't1' })).toThrow();
+  });
+  it('holds duplicate alias matches instead of publishing the first trim ID', () => {
+    const master = snapshot();
+    master.trims.push({ id: 't2', data: { ...master.trims[0]!.data, trim: '프리미엄' } });
+    const { readAt, masters, trims } = master;
+    master.digest = createHash('sha256').update(JSON.stringify({ readAt, masters, trims })).digest('hex');
+    const result = chooseVehicleIdentity(indexVehicleMaster(verifiedMasterRecords(master)),
+      input(['현대', '쏘나타', '소나타 DN8', '스마트 초이스']));
+    expect(result).toMatchObject({ pick: 'HOLD', identity: null });
+    expect(result).not.toHaveProperty('trimId');
+  });
+  it('rejects IDs selected from another snapshot even when all display names are identical', () => {
+    const old = snapshot(), current = snapshot();
+    current.masters[0]!.id = 'different-native-master';
+    current.trims[0]!.id = 'different-native-trim';
+    current.trims[0]!.data.master_id = 'different-native-master';
+    const { readAt, masters, trims } = current;
+    current.digest = createHash('sha256').update(JSON.stringify({ readAt, masters, trims })).digest('hex');
+    const selected = chooseVehicleIdentity(indexVehicleMaster(verifiedMasterRecords(old)), input(names));
+    if (selected.pick === 'HOLD') throw new Error('fixture must resolve uniquely');
+    expect(verifiedVehicleMasterReference(current, selected)).toEqual({ state: 'HOLD', reason: 'MASTER_TRIM_PAIR_NOT_VERIFIED' });
+    const next = chooseVehicleIdentity(indexVehicleMaster(verifiedMasterRecords(current)), input(names));
+    if (next.pick === 'HOLD') throw new Error('fixture must resolve uniquely');
+    expect(verifiedVehicleMasterReference(current, next)).toMatchObject({ state: 'KNOWN',
+      masterId: 'different-native-master', trimId: 'different-native-trim', snapshotDigest: current.digest });
+  });
+  it('excludes a drifting pair without blocking an independent valid pair or inventing an ID', () => {
+    const master = snapshot();
+    master.trims.push({ id: 'drifting-trim', data: { ...master.trims[0]!.data, sub_model: 'unclassified source name' } });
+    const { readAt, masters, trims } = master;
+    master.digest = createHash('sha256').update(JSON.stringify({ readAt, masters, trims })).digest('hex');
+    expect(verifiedVehicleMasterReference(master, { masterId: 'm1', trimId: 't1' }).state).toBe('KNOWN');
+    expect(verifiedVehicleMasterReference(master, { masterId: 'm1', trimId: 'drifting-trim' }).state).toBe('HOLD');
+    expect(chooseVehicleIdentity(indexVehicleMaster(verifiedMasterRecords(master)),
+      input(['현대', '쏘나타', 'unclassified source name', '스마트'])).pick).toBe('HOLD');
+  });
   it('uses aliases for search and returns current names plus immutable IDs', () => {
     const master = indexVehicleMaster(verifiedMasterRecords(snapshot()));
     expect(chooseVehicleIdentity(master, input(['현대', '쏘나타', '소나타 DN8', '스마트 초이스'])))

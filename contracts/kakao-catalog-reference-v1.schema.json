@@ -8,7 +8,7 @@
     "schema": { "const": "freepass-data.kakao-catalog-reference/v1" },
     "data": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "items": { "$ref": "#/$defs/product" }
     },
     "commissionPolicy": { "$ref": "#/$defs/commissionPolicy" },
@@ -25,13 +25,17 @@
         "sourceProject": { "const": "freepasserp5" },
         "sourceCollection": { "const": "products" },
         "sourceCount": { "type": "integer", "minimum": 1 },
-        "projectedCount": { "type": "integer", "minimum": 1 },
+        "projectedCount": { "type": "integer", "minimum": 0 },
+    "depositFilter": { "$ref": "#/$defs/depositFilter" },
+    "queryFilter": {"type":"object","additionalProperties":false,"minProperties":1,"properties":{"supplierId": {"type": "string", "minLength": 1}, "maker": {"type": "string", "minLength": 1}, "model": {"type": "string", "minLength": 1}, "commercialType": {"type": "string", "minLength": 1}, "assetStatus": {"type": "string", "minLength": 1}, "termMonths": {"type": "string", "minLength": 1}, "mileageKm": {"type": "string", "minLength": 1}, "monthlyRentMin": {"type": "string", "minLength": 1}, "monthlyRentMax": {"type": "string", "minLength": 1}, "depositMin": {"type": "string", "minLength": 1}, "depositMax": {"type": "string", "minLength": 1}, "mileagePeriod": {"type": "string", "minLength": 1}, "depositState": {"type": "string", "minLength": 1}, "depositScope": {"type": "string", "minLength": 1}}},
         "dataDigest": { "$ref": "#/$defs/digest" },
         "warning": { "type": "string", "minLength": 1 }
       }
     }
   },
   "$defs": {
+    "vehicleMasterReference": {"type": "object", "additionalProperties": false, "required": ["state", "authority", "identityKind", "masterId", "trimId", "snapshotDigest", "readAt", "reasonCode"], "properties": {"state": {"enum": ["KNOWN", "HOLD"]}, "authority": {"const": "FREEPASS_DATA_VEHICLE_MASTER"}, "identityKind": {"const": "FIRESTORE_DOCUMENT_ID"}, "masterId": {"type": ["string", "null"], "minLength": 1}, "trimId": {"type": ["string", "null"], "minLength": 1}, "snapshotDigest": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}, "readAt": {"anyOf": [{"type": "null"}, {"type": "string", "format": "date-time"}]}, "reasonCode": {"type": ["string", "null"]}}, "allOf": [{"if": {"properties": {"state": {"const": "KNOWN"}}}, "then": {"properties": {"masterId": {"type": "string"}, "trimId": {"type": "string"}, "snapshotDigest": {"type": "string"}, "readAt": {"type": "string", "format": "date-time"}, "reasonCode": {"type": "null"}}}, "else": {"properties": {"masterId": {"type": "null"}, "trimId": {"type": "null"}, "reasonCode": {"type": "string", "minLength": 1}}}}]},
+    "depositFilter": {"type": "object", "additionalProperties": false, "required": ["state", "termMonths", "scope"], "properties": {"state": {"const": "ZERO"}, "termMonths": {"type": ["integer", "null"], "minimum": 1, "maximum": 60}, "scope": {"enum": ["ANY_TERM", "ALL_TERMS"]}}},
     "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "nullableString": { "type": ["string", "null"] },
     "nullableInteger": { "type": ["integer", "null"], "minimum": 0 },
@@ -85,6 +89,7 @@
         "monthlyRent": { "$ref": "#/$defs/money" },
         "deposit": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/money" }] },
         "depositAmount": { "$ref": "#/$defs/nullableInteger" },
+        "depositEvidence": {"type": "object", "additionalProperties": false, "required": ["sourceRef", "sourceAmount", "sourceNote", "reasonCode"], "properties": {"sourceRef": {"type": "string", "minLength": 1}, "sourceAmount": {"type": ["number", "string", "null"]}, "sourceNote": {"type": ["string", "null"]}, "reasonCode": {"type": "string", "minLength": 1}}},
         "depositState": { "enum": ["KNOWN", "ZERO", "UNKNOWN"] },
         "depositStatusLabel": { "enum": ["보증금 있음", "무보증", "미확인", "보증금 확인 필요"] },
         "depositRule": {
@@ -95,13 +100,14 @@
               "additionalProperties": false,
               "required": ["code", "multiplier", "label"],
               "properties": {
-                "code": { "enum": ["RENT_X_CONTRACT_YEARS_MAX3", "RENT_X_2", "IMPORT_12_X3_18_PLUS_X6", "ZERO_DEPOSIT", "SOURCE_AMOUNT"] },
+                "code": { "enum": ["RENT_X_CONTRACT_YEARS_MAX3", "RENT_X_2", "IMPORT_12_X3_18_PLUS_X6", "ZERO_DEPOSIT", "SOURCE_AMOUNT", "IANCAR_PUBLISHED_CONDITION_EVIDENCE"] },
                 "multiplier": { "type": ["integer", "null"], "minimum": 0 },
                 "label": { "type": "string", "minLength": 1 }
               }
             }
           ]
         },
+        "contractedMileage": { "type": "object", "additionalProperties": false, "required": ["km", "period"], "properties": { "km": { "type": "integer", "minimum": 1 }, "period": { "enum": ["year", "month"] } } },
         "mileageLimitKmPerYear": { "$ref": "#/$defs/nullableInteger" },
         "settlement": { "enum": ["RETURN", "BUYOUT"] },
         "salesCommission": { "$ref": "#/$defs/commissionResolution" },
@@ -119,8 +125,10 @@
         "sourceProductId": { "type": "string", "minLength": 1 },
         "displayName": { "type": "string", "minLength": 1 },
         "commercialType": { "enum": ["NEW_RENT", "USED_RENT", "NEW_SUBSCRIPTION", "USED_SUBSCRIPTION", "OGONG_SUBSCRIPTION", "PICKUP_SUBSCRIPTION", "OPLUS_SUBSCRIPTION", "UNKNOWN"] },
+        "vehicleMasterReference": { "$ref": "#/$defs/vehicleMasterReference" },
         "vehicleModelId": { "type": "string", "minLength": 1 },
         "vehicleAssetId": { "type": "string", "minLength": 1 },
+        "vehicleMediaEvidence": {"type": "object", "additionalProperties": false, "required": ["productKeyDigest", "observedAt", "verdict", "issues", "photoState", "colorState", "checks", "typedColorVerification", "visualVehicleIdentity", "imageBytes", "consumerReadback"], "properties": {"productKeyDigest": {"$ref": "#/$defs/digest"}, "observedAt": {"type": "string", "format": "date-time"}, "verdict": {"enum": ["HOLD", "HEAD_AND_SOURCE_FIELDS_MATCHED"]}, "issues": {"type": "array", "items": {"type": "string"}}, "photoState": {"enum": ["URLS_PRESENT", "LINK_ONLY", "UNUSABLE", "NOT_PROVIDED"]}, "colorState": {"enum": ["NOT_PROVIDED", "SOURCE_COMPARISON_ATTEMPTED", "VALUE_PRESENT_SOURCE_UNVERIFIED"]}, "checks": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["urlDigest", "state", "status"], "properties": {"urlDigest": {"$ref": "#/$defs/digest"}, "state": {"type": "string"}, "status": {"type": ["integer", "null"]}}}}, "typedColorVerification": {"const": "NOT_CHECKED"}, "visualVehicleIdentity": {"const": "NOT_CHECKED"}, "imageBytes": {"const": "NOT_CHECKED"}, "consumerReadback": {"const": "NOT_CHECKED"}}},
         "vehiclePhotos": {
           "type": "object",
           "additionalProperties": false,

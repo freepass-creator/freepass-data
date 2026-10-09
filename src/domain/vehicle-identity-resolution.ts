@@ -5,6 +5,12 @@
 import { canonicalVehicleMakerName } from './vehicle-maker-name.js';
 export type VehicleIdentity = readonly [maker: string, model: string, subModel: string, trimName: string];
 export type VehicleMasterRecord = { masterId: string; trimId: string; names: VehicleIdentity; aliases: string[][] };
+/** Native document IDs verified against one sealed snapshot, never a name-derived reference hash. */
+export type VehicleMasterReference = {
+  state: 'KNOWN'; authority: 'FREEPASS_DATA_VEHICLE_MASTER';
+  identityKind: 'FIRESTORE_DOCUMENT_ID'; masterId: string; trimId: string;
+  snapshotDigest: string; readAt: string;
+};
 export type IdentityChoice =
   | { pick: 'DATA' | 'SHEET'; identity: VehicleIdentity; dataIdentity: VehicleIdentity | null; notes: string[]; masterId: string; trimId: string }
   | { pick: 'HOLD'; identity: null; dataIdentity: VehicleIdentity | null; notes: string[] };

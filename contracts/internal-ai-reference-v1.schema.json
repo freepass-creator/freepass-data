@@ -20,7 +20,9 @@
         "sourceProject": { "const": "freepasserp5" },
         "sourceCollection": { "const": "products" },
         "sourceCount": { "type": "integer", "minimum": 1 },
-        "projectedCount": { "type": "integer", "minimum": 1 },
+        "projectedCount": { "type": "integer", "minimum": 0 },
+        "depositFilter": { "$ref": "https://freepass.teamjpk.com/contracts/kakao-catalog-reference-v1.schema.json#/$defs/depositFilter" },
+        "queryFilter": {"type": "object", "additionalProperties": false, "minProperties": 1, "properties": {"supplierId": {"type": "string", "minLength": 1}, "maker": {"type": "string", "minLength": 1}, "model": {"type": "string", "minLength": 1}, "commercialType": {"type": "string", "minLength": 1}, "assetStatus": {"type": "string", "minLength": 1}, "termMonths": {"type": "string", "minLength": 1}, "mileageKm": {"type": "string", "minLength": 1}, "monthlyRentMin": {"type": "string", "minLength": 1}, "monthlyRentMax": {"type": "string", "minLength": 1}, "depositMin": {"type": "string", "minLength": 1}, "depositMax": {"type": "string", "minLength": 1}, "mileagePeriod": {"type": "string", "minLength": 1}, "depositState": {"type": "string", "minLength": 1}, "depositScope": {"type": "string", "minLength": 1}}},
         "dataDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "warning": { "type": "string", "minLength": 1 }
       }

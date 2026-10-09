@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { precomputeOfferEconomics, readStoredTermFees } from '../src/application/resolve-offer-commercial-terms.js';
 import {
   KAKAO_COMMISSION_POLICY,
@@ -6,6 +7,7 @@ import {
   KAKAO_COMMISSION_POLICY_2026_10_04,
   buildKakaoCatalogReference,
   buildInternalAiReference,
+  filterReferenceZeroDeposit,
   resolveReferencePolicyContext,
   buildKakaoCatalogReferenceProduct,
   resolveReferenceDeposit,
@@ -16,6 +18,95 @@ import {
 } from '../src/application/kakao-catalog-reference.js';
 
 describe('shared reference policy context', () => {
+  it('attaches only native pairs from the provided sealed snapshot, preserving source and period identities', () => {
+    const observedAt = new Date().toISOString();
+    const body = { readAt: observedAt, masters: [{ id: 'native-master', data: { maker: '현대', model: '쏘나타', sub_model: '쏘나타 DN8', sub_model_aliases: ['소나타 DN8'] } }],
+      trims: [{ id: 'native-trim', data: { master_id: 'native-master', maker: '현대', model: '쏘나타', sub_model: '쏘나타 DN8', trim: '스마트' } }] };
+    const seal = (value: typeof body) => ({ source: 'freepasserp5/vehicle_master+vehicle_trim_master' as const, complete: true as const, ...value,
+      digest: createHash('sha256').update(JSON.stringify(value)).digest('hex') });
+    const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트', maker: '현대', model: '쏘나타', sub_model: '소나타 DN8', trim_name: '스마트',
+      deposit_note: '무보증', price: { '36_2만': { rent: 500000, deposit: 0 } } };
+    const source = { consumerId: 'kakao-ops', products: { synthetic: product }, observedAt };
+    const original = structuredClone(source);
+    const plain = buildKakaoCatalogReference(source);
+    const master = seal(body);
+    const linked = buildKakaoCatalogReference({ ...source, vehicleMasterSnapshot: master });
+    expect(linked.data[0]!.vehicleMasterReference).toEqual({ state: 'KNOWN', authority: 'FREEPASS_DATA_VEHICLE_MASTER', identityKind: 'FIRESTORE_DOCUMENT_ID',
+      masterId: 'native-master', trimId: 'native-trim', snapshotDigest: master.digest, readAt: observedAt, reasonCode: null });
+    expect(linked.data[0]!.sourceProductId).toBe(plain.data[0]!.sourceProductId);
+    expect(linked.data[0]!.vehicleModelId).toBe(plain.data[0]!.vehicleModelId);
+    expect(linked.data[0]!.offers).toEqual(plain.data[0]!.offers);
+    expect(source).toEqual(original);
+    expect(buildInternalAiReference({ ...source, consumerId: 'internal-ai-test', vehicleMasterSnapshot: master }).data).toEqual(linked.data);
+    const unknownInputs = [
+      { ...source },
+      { ...source, vehicleMasterReadState: 'UNAVAILABLE' as const, vehicleMasterSnapshot: null },
+      { ...source, vehicleMasterReadState: 'UNAVAILABLE' as const, vehicleMasterSnapshot: master },
+      { ...source, vehicleMasterSnapshot: { ...master, digest: 'tampered' } },
+      { ...source, observedAt: new Date(Date.parse(observedAt) + 300001).toISOString(), vehicleMasterSnapshot: master },
+      { ...source, vehicleMasterSnapshot: seal({ ...body, trims: [...body.trims, { ...body.trims[0]!, id: 'ambiguous-trim' }] }) },
+      { ...source, products: { synthetic: { ...product, trim_name: 'unconfirmed' } }, vehicleMasterSnapshot: master },
+    ];
+    for (const input of unknownInputs) {
+      const result = buildKakaoCatalogReference(input);
+      expect(result.data[0]!.vehicleMasterReference).toMatchObject({ state: 'HOLD', masterId: null, trimId: null });
+      expect(result.data[0]!.vehicleMasterReference.reasonCode).toBeTruthy();
+      expect(result.data[0]!.offers).toEqual(plain.data[0]!.offers);
+    }
+  });
+  it('preserves approved Iancar zero per mileage term, rejects stale or mismatched published evidence', () => {
+    const now = '2026-10-09T00:00:00Z';
+    const terms = [
+      { key: '24:20000:year', compatibilityPriceKey: '24_연20000km', termMonths: 24, contractedMileage: { km: 20000, period: 'year' }, monthlyRent: { amount: 500000, currency: 'KRW' }, deposit: { amount: 0, currency: 'KRW' }, depositState: 'ZERO', vatIncluded: true },
+      { key: '24:30000:year', compatibilityPriceKey: '24_연30000km', termMonths: 24, contractedMileage: { km: 30000, period: 'year' }, monthlyRent: { amount: 600000, currency: 'KRW' }, deposit: { amount: 1000000, currency: 'KRW' }, depositState: 'KNOWN', vatIncluded: true },
+      { key: '48:1000:month', compatibilityPriceKey: '48_월1000km', termMonths: 48, contractedMileage: { km: 1000, period: 'month' }, monthlyRent: { amount: 700000, currency: 'KRW' }, deposit: { amount: 0, currency: 'KRW' }, depositState: 'ZERO', vatIncluded: true },
+    ];
+    const product = { listable: true, provider_company_code: 'RP031', product_type: '중고렌트', source: 'EANCAR_ONE_API', source_schema: 'iancar-one-phase-one-product/1',
+      iancar_one_vehicle_id: 'synthetic', car_number: '123가4567', _direct_ingest_at: Date.parse(now), deposit_note: '기간·주행거리별 보증금 상이: 상품 요금 조건 확인',
+      price: { '24': { rent: 500000, deposit: 0 }, '24_연20000km': { rent: 500000, deposit: 0 }, '24_연30000km': { rent: 600000, deposit: 1000000 }, '48_월1000km': { rent: 700000, deposit: 0 } },
+      iancar_phase_one: { stage: 'PHASE_ONE', publicationPlane: 'ERP5_COMPATIBILITY_BRIDGE', sourceVehicleId: 'synthetic', sourceSyncedAt: now, sourceDigest: 'a'.repeat(64), ratesDigest: 'b'.repeat(64), terms, priceAliases: { '24': '24:20000:year' } } };
+    const input = { consumerId: 'kakao-ops', observedAt: now, products: { synthetic: product } };
+    const reference = buildKakaoCatalogReference(input);
+    expect(reference.data[0]!.offers[0]!.priceTerms.map(t => t.depositState)).toEqual(['ZERO', 'ZERO', 'KNOWN', 'ZERO']);
+    expect(reference.data[0]!.offers[0]!.priceTerms[3]).toMatchObject({ contractedMileage: { km: 1000, period: 'month' }, mileageLimitKmPerYear: null });
+    expect(filterReferenceZeroDeposit(reference, { depositState: 'ZERO', termMonths: '24' }).data).toHaveLength(1);
+    expect(filterReferenceZeroDeposit(reference, { depositState: 'ZERO', depositScope: 'ALL_TERMS' }).data).toEqual([]);
+    expect(buildInternalAiReference({ ...input, consumerId: 'internal-ai-test' }).data).toEqual(reference.data);
+    const stale = buildKakaoCatalogReference({ ...input, observedAt: '2026-10-09T00:15:01Z' });
+    expect(stale.data[0]!.offers[0]!.priceTerms.every(t => t.depositState === 'UNKNOWN' && t.depositAmount === null)).toBe(true);
+    expect(filterReferenceZeroDeposit(stale, { depositState: 'ZERO' }).data).toEqual([]);
+    const mismatch = structuredClone(product); mismatch.price['24'].deposit = 1;
+    expect(buildKakaoCatalogReferenceProduct('synthetic', mismatch, {}, {}, now)!.offers[0]!.priceTerms[0]!.depositState).toBe('UNKNOWN');
+    expect(resolveReferenceDeposit({ supplierId: 'RP012', productType: '중고렌트', note: '무보증', depositFree: true, sourceAmount: 0, termMonths: 24, monthlyRent: 500000 }).depositState).toBe('UNKNOWN');
+  });
+  it('searches confirmed zero without treating placeholders or mixed periods as all-free', () => {
+    const base = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트' };
+    const reference = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-09T00:00:00Z', products: {
+      free: { ...base, deposit_note: '무보증', price: { '24': { rent: 600000, deposit: 0 }, '36': { rent: 500000, deposit: 0 } } },
+      unknown: { ...base, price: { '36': { rent: 500000, deposit: 0 } } },
+      conflict: { ...base, deposit_note: '무보증', price: { '36': { rent: 500000, deposit: 100000 } } },
+    } });
+    const free = filterReferenceZeroDeposit(reference, { depositState: 'ZERO', termMonths: '36', depositScope: 'ALL_TERMS' });
+    expect(free.data.map(p => p.sourceProductId)).toEqual(['free']);
+    expect(free.data[0]!.offers[0]!.priceTerms).toHaveLength(2);
+    expect(free.data[0]!.offers[0]!.priceTerms[0]!.depositEvidence).toMatchObject({ sourceAmount: 0, sourceNote: '무보증', reasonCode: 'ZERO_DEPOSIT' });
+    expect(free.meta).toMatchObject({ projectedCount: 1, depositFilter: { state: 'ZERO', termMonths: 36, scope: 'ALL_TERMS' } });
+    expect(filterReferenceZeroDeposit(reference, { depositState: 'ZERO', termMonths: '48' }).data).toEqual([]);
+    const mixed = structuredClone(reference);
+    mixed.data.find(p => p.sourceProductId === 'free')!.offers[0]!.priceTerms[0]!.depositState = 'KNOWN';
+    mixed.data.find(p => p.sourceProductId === 'free')!.offers[0]!.priceTerms[0]!.depositAmount = 100000;
+    mixed.data.find(p => p.sourceProductId === 'free')!.offers[0]!.priceTerms[0]!.deposit = { amount: 100000, currency: 'KRW' };
+    expect(filterReferenceZeroDeposit(mixed, { depositState: 'ZERO', termMonths: '36' }).data).toHaveLength(1);
+    expect(filterReferenceZeroDeposit(mixed, { depositState: 'ZERO', termMonths: '36', depositScope: 'ALL_TERMS' }).data).toEqual([]);
+    mixed.data.find(p => p.sourceProductId === 'free')!.offers[0]!.priceTerms[0]!.depositState = 'UNKNOWN';
+    expect(filterReferenceZeroDeposit(mixed, { depositState: 'ZERO', termMonths: '36', depositScope: 'ALL_TERMS' }).data).toEqual([]);
+    mixed.data.find(p => p.sourceProductId === 'free')!.offers[0]!.priceTerms = [];
+    expect(filterReferenceZeroDeposit(mixed, { depositState: 'ZERO', depositScope: 'ALL_TERMS' }).data).toEqual([]);
+    for (const query of [{ depositState: 'PAID' }, { termMonths: ['36'] }, { depositState: 'ZERO', termMonths: '0' }, { depositState: 'ZERO', termMonths: '36.0' }, { depositState: 'ZERO', depositScope: 'all' }, { depositState: 'ZERO', depositScope: ['ALL_TERMS'] }, { depositState: 'ZERO', depositScope: { toString: () => 'ALL_TERMS' } }]) {
+      expect(() => filterReferenceZeroDeposit(reference, query)).toThrow('REFERENCE_DEPOSIT_FILTER_INVALID');
+    }
+    expect(filterReferenceZeroDeposit(reference, {})).toBe(reference);
+  });
   it('applies the user-assigned basic ladder to the eight suppliers without inventing short terms', () => {
     for (const supplierId of KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds) {
       const input = { supplierId, productType: '구독', termMonths: 36, monthlyRent: 800000 };
@@ -619,3 +710,22 @@ describe('정책을 올려도 이미 저장된 기간별 수수료는 조용히 
   });
 });
 
+
+describe('general reference query', () => {
+  it('keeps all products by default and intersects every term condition on one term', () => {
+    const ref = buildKakaoCatalogReference({consumerId:'kakao-ops',observedAt:new Date().toISOString(),products:{a:{listable:true,provider_company_code:'RP013',maker:'Maker',model:'Model',price:{'36':{rent:500000,deposit:1000000},'48':{rent:400000,deposit:null}}}}});
+    const apply = (q: Record<string,unknown>) => filterReferenceZeroDeposit(ref,q);
+    expect(apply({})).toBe(ref);
+    for (const q of [{supplierId:'RP013'},{maker:'Maker'},{model:'Model'},{commercialType:ref.data[0]!.commercialType!},{termMonths:'36'},{monthlyRentMin:'500000'},{depositState:'KNOWN'},{depositState:'UNKNOWN'},{depositMin:'1000000'}]) expect(apply(q).data).toHaveLength(1);
+    expect(apply({supplierId:'RP013',maker:'Maker',termMonths:'36',monthlyRentMin:'500000',depositMin:'1000000',depositState:'KNOWN'}).data[0]!.offers).toEqual(ref.data[0]!.offers);
+    expect(apply({termMonths:'48',monthlyRentMin:'500000'}).data).toEqual([]);
+    expect(apply({depositState:'UNKNOWN',depositMax:'0'}).data).toEqual([]);
+    expect(apply({depositState:'ZERO'}).data).toEqual([]);
+    expect(apply({supplierId:'absent'}).data).toEqual([]);
+    const t = ref.data[0]!.offers[0]!.priceTerms[0]!;
+    t.contractedMileage={km:1000,period:'month'};
+    expect(apply({termMonths:'36',mileageKm:'1000',mileagePeriod:'month'}).data).toHaveLength(1);
+    expect(apply({termMonths:'36',mileageKm:'1000',mileagePeriod:'year'}).data).toEqual([]);
+    for(const q of [{limit:'1'},{cursor:'x'},{unknown:'x'},{model:['Model']},{monthlyRentMin:'-1'},{depositMin:'10',depositMax:'1'},{mileageKm:'1000'},{mileagePeriod:'week'},{maker:' '}]) expect(()=>apply(q)).toThrow('REFERENCE_DEPOSIT_FILTER_INVALID');
+  });
+});
