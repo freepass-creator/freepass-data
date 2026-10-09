@@ -768,3 +768,9 @@ it('keeps all 24 explicit mileage keys independently of supplier codes and phase
   expect(new Set(terms.map(t=>t.termKey))).toEqual(new Set(keys.map(k=>'source:'+k)));
   for(const t of terms){expect(t.monthlyRent.amount).toBe(500000);expect(t.contractedMileage).toBeDefined();if(t.contractedMileage!.period==='month')expect(t.mileageLimitKmPerYear).toBeNull();else expect(t.mileageLimitKmPerYear).toBe(t.contractedMileage!.km);}
 });
+
+it('never borrows a Billin36 monthly basis from a different mileage or period',()=>{
+  const make=(key:string)=>buildKakaoCatalogReferenceProduct('synthetic',{listable:true,provider_company_code:'RP021',product_type:'\uad6c\ub3c5',price:{[key]:{rent:400000,deposit:1000000},'24_\uc6d41500km':{rent:500000,deposit:1000000}}})!.offers[0]!.priceTerms.find(t=>t.termMonths===24)!;
+  for(const key of ['36_\uc6d43000km','36_\uc5f01500km'])expect(make(key).supplierBillingFee).toMatchObject({state:'UNKNOWN',reasonCode:'BILLIN_36_MONTH_RENT_REQUIRED'});
+  const same=make('36_\uc6d41500km');expect(same.supplierBillingFee).toMatchObject({state:'CALCULATED',amount:400000});expect(same.channelPayoutFee.amount).toBe(320000);
+});

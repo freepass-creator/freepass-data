@@ -84,7 +84,7 @@ export function parseErp5PriceKey(key: string):
   const explicit = /^([1-9]\d*)_(\uc6d4|\uc5f0)([1-9]\d*)km$/.exec(key);
   if (explicit) {
     const months = Number(explicit[1]), km = Number(explicit[3]);
-    if (!Number.isSafeInteger(months) || !Number.isSafeInteger(km)) return undefined;
+    if (!Number.isSafeInteger(months) || months > 60 || !Number.isSafeInteger(km)) return undefined;
     const period = explicit[2] === '\uc6d4' ? 'month' as const : 'year' as const;
     return { months, settlement: 'RETURN', contractedMileage: { km, period }, ...(period === 'year' ? { mileageKm: km } : {}) };
   }

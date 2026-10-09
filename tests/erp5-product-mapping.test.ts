@@ -461,5 +461,5 @@ describe('explicit monthly and yearly price keys', () => {
     const result=mapErp5Product(input);expect(result.status).toBe('HOLD');expect(result.raw.data.price).toEqual(input.data.price);
     expect(result.candidate.priceTerms).toEqual([]);
   });
-  it.each(['0_\uc6d42000km','1_\uc6d40km','1_\uc6d4-1km','1_\uc6d42000.5km','12_\uc5f020000','9007199254740992_\uc5f020000km'])('rejects malformed explicit key %s',key=>expect(parseErp5PriceKey(key)).toBeUndefined());
+  it.each(['72_\uc5f020000km','0_\uc6d42000km','1_\uc6d40km','1_\uc6d4-1km','1_\uc6d42000.5km','12_\uc5f020000','9007199254740992_\uc5f020000km'])('rejects malformed explicit key %s',key=>expect(parseErp5PriceKey(key)).toBeUndefined());
 });

@@ -642,7 +642,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
     if (!parsed || monthlyRent === null || monthlyRent <= 0) return [];
     const basis36 = Object.entries(price as Rec).flatMap(([key, value]) => {
       const candidate = parseErp5PriceKey(key);
-      if (!candidate || candidate.months !== 36 || candidate.settlement !== parsed.settlement || candidate.mileageKm !== parsed.mileageKm || (candidate.contractedMileage?.period ?? 'year') !== (parsed.contractedMileage?.period ?? 'year') || !value || typeof value !== 'object' || Array.isArray(value)) return [];
+      if (!candidate || candidate.months !== 36 || candidate.settlement !== parsed.settlement || (candidate.contractedMileage?.km ?? candidate.mileageKm) !== (parsed.contractedMileage?.km ?? parsed.mileageKm) || (candidate.contractedMileage?.period ?? 'year') !== (parsed.contractedMileage?.period ?? 'year') || !value || typeof value !== 'object' || Array.isArray(value)) return [];
       const amount = integer((value as Rec).rent);
       return amount !== null && amount > 0 ? [amount] : [];
     });
