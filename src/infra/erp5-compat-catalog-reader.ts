@@ -151,10 +151,13 @@ export class FirestoreCatalogCompatibilityReader {
   }
 
   private async readReferenceProducts(consumerId: string) {
-    const products = await this.db.collection('products').get();
+    const [products, policies] = await Promise.all([
+      this.db.collection('products').get(), this.db.collection('policy').get(),
+    ]);
     return {
       consumerId,
       products: asMap(products),
+      policies: asMap(policies),
       observedAt: new Date().toISOString(),
     };
   }

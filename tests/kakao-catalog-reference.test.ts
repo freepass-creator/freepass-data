@@ -5,6 +5,8 @@ import {
   KAKAO_COMMISSION_POLICY_2026_10_03,
   KAKAO_COMMISSION_POLICY_2026_10_04,
   buildKakaoCatalogReference,
+  buildInternalAiReference,
+  resolveReferencePolicyContext,
   buildKakaoCatalogReferenceProduct,
   resolveReferenceDeposit,
   resolveExpectedGrossMargin,
@@ -12,6 +14,40 @@ import {
   resolveSupplierBillingFee,
   resolveReferenceVehiclePhotos,
 } from '../src/application/kakao-catalog-reference.js';
+
+describe('shared reference policy context', () => {
+  const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트',
+    policy_code: 'POL1', price: { '24': { rent: 600000, deposit: 0 } } };
+  const policy = { policy_code: 'POL1', provider_company_code: 'RP013', annual_mileage: 20000,
+    insurance_included: false, basic_driver_age: 26, secret: 'private', customer_name: 'private' };
+  it('keeps a no-plate product and its terms with the same facts for Kakao and internal AI', () => {
+    const source = { consumerId: 'kakao-ops', products: { supplierProduct1: product },
+      policies: { POL1: policy }, observedAt: '2026-10-09T00:00:00.000Z' };
+    const kakao = buildKakaoCatalogReference(source);
+    const ai = buildInternalAiReference({ ...source, consumerId: 'internal-ai-ops' });
+    expect(ai.data).toEqual(kakao.data);
+    expect(kakao.data[0]!.vehicle.plateNumber).toBeNull();
+    expect(kakao.data[0]!.sourceProductId).toBe('supplierProduct1');
+    const offer = kakao.data[0]!.offers[0]!;
+    expect(offer.priceTerms).toHaveLength(1);
+    expect(offer.policyContext).toMatchObject({ state: 'REFERENCE', reasonCode: null });
+    expect(offer.policyContext.facts).toContainEqual({ key: 'insurance_included', label: '보험 포함 여부',
+      value: false, sourceRef: 'policy/POL1/insurance_included' });
+    expect(JSON.stringify(offer.policyContext)).not.toContain('private');
+  });
+  it('never chooses one of conflicting links or another supplier policy', () => {
+    expect(resolveReferencePolicyContext(product, {})).toMatchObject({ state: 'UNKNOWN', reasonCode: 'POLICY_NOT_FOUND' });
+    expect(resolveReferencePolicyContext(product, { POL1: policy, other: policy })).toMatchObject({
+      state: 'UNKNOWN', facts: [], reasonCode: 'POLICY_LINK_AMBIGUOUS' });
+    expect(resolveReferencePolicyContext(product, { POL1: { ...policy, provider_company_code: 'RP023' } })).toMatchObject({
+      state: 'UNKNOWN', facts: [], reasonCode: 'POLICY_SUPPLIER_MISMATCH' });
+    expect(resolveReferencePolicyContext({ ...product, policy_code: '' })).toMatchObject({ reasonCode: 'POLICY_LINK_MISSING' });
+  });
+  it('empty or invalid recognized fields are not interpreted as an approved policy', () => {
+    expect(resolveReferencePolicyContext(product, { POL1: { annual_mileage: { arbitrary: true } } })).toMatchObject({
+      state: 'UNKNOWN', facts: [], reasonCode: 'POLICY_FACTS_MISSING' });
+  });
+});
 
 describe('2026-10-04 confirmed commission policy', () => {
   const base = { supplierId: 'RP018', productType: '재렌트', fuel: '가솔린', termMonths: 24, monthlyRent: 1100000 };

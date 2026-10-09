@@ -396,6 +396,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+### 2026-10-09 Kakao / internal AI policy context
+
+- 목적: 기간별 금액을 읽는 권한 있는 Kakao/internal AI 조회에 연결된 정책 본문과 출처를 함께 제공한다.
+- 대상 revision: origin/main 5bbe27175b1e79b1d03841cc3d43b07cfc248130 기반; work/freepass-data/reference-policy-context-20261009.
+- 변경: 기존 compatibility reader가 products/policy를 함께 읽고, 기존 조건 규격의 허용값만 policyContext로 투영한다. 무번호 상품의 기존 document ID를 유지한다. 누락/중복/공급사 불일치는 UNKNOWN 사유로 반환한다. REFERENCE는 정책 검증 또는 가입 가능 확정이 아니다.
+- 검증: npm run check exit 0; Vitest 1654 PASS / 14 SKIP, 137 files PASS / 4 SKIP. 실제 freepasserp5 읽기(쓰기 0): 조회 상품 486, 기간 3047, 정책 본문 연결 329, POLICY_LINK_MISSING 157. 숫자는 이 조회 범위이며 전체 차량 재고 대수가 아니다.
+- 남음: main/배포/소비처 실측 미완료. 157개 정책 링크 원본 확보, 수수료 기본/프로모션/개별약정과 유효기간 증거, canonical 무번호 상품 수집 및 미확정 수수료 해소가 별도 남는다. 기존 금액이나 사람 입력을 변경하지 않았다. Claude 독립 검토는 조직의 구독 접근 차단으로 UNAVAILABLE이며 PASS가 아니다.
+- next_start_here: 이 변경 PR을 검토하고 main 반영 통제 경로로 진행; 이후 운영 조회 응답을 재읽고 누락 정책을 원본 근거와 안정적 상품 ID로 연결한다.
 
 ### 2026-10-09 대표 추가 요구 — 기본/프로모션 구분 · 무번호 상품 · 외부 경제조건 조회
 

@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { parseErp5PriceKey } from '../adapters/erp5-product-mapping.js';
+import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
+import { policyScalar } from './product-pricing-policy.js';
 import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
 
 type Rec = Record<string, unknown>;
@@ -568,7 +570,33 @@ const assetStatus = (value: unknown) => ({
 export type CommissionEvidenceByTerm = Readonly<Record<string, Partial<Pick<CommissionInput,
   'vehicleValue' | 'newProductSubtype' | 'depositTierPercent' | 'subscriptionForm' | 'q12Basis' | 'individualException' | 'individualAgreement' | 'individualExceptionEvidence'>>>>;
 
-export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}) {
+export function resolveReferencePolicyContext(source: Rec, policies: Record<string, Rec> = {}) {
+  const policyId = text(source.policy_code) || null;
+  const matches = policyId ? Object.entries(policies).filter(([id, policy]) =>
+    id === policyId || text(policy.policy_code) === policyId) : [];
+  const reasonCode = !policyId ? 'POLICY_LINK_MISSING' : matches.length === 0 ? 'POLICY_NOT_FOUND'
+    : matches.length > 1 ? 'POLICY_LINK_AMBIGUOUS' : null;
+  const empty = (reason: string) => ({ state: 'UNKNOWN' as const, policyId, sourceRef: null,
+    facts: [] as Array<{ key: string; label: string; value: NonNullable<ReturnType<typeof policyScalar>>; sourceRef: string }>, reasonCode: reason });
+  if (reasonCode) return empty(reasonCode);
+  const [id, policy] = matches[0]!;
+  if (text(policy.provider_company_code) && text(policy.provider_company_code) !== text(source.provider_company_code)) {
+    return empty('POLICY_SUPPLIER_MISMATCH');
+  }
+  const values = policy.facts && typeof policy.facts === 'object' && !Array.isArray(policy.facts) ? policy.facts as Rec : policy;
+  const allowed = new Map(CONDITION_DIMENSION_SPECS.flatMap(spec => spec.sourcePolicyKeys.map(key => [key, spec.label] as const)));
+  const sourceRef = `policy/${id}`;
+  const facts = [...allowed].flatMap(([key, label]) => {
+    const value = policyScalar(values[key]);
+    return value === undefined || value === '' || (Array.isArray(value) && !value.length) ? []
+      : [{ key, label, value, sourceRef: `${sourceRef}/${key}` }];
+  });
+  // Raw allowed facts only: availability is not policy verification or eligibility approval.
+  return { state: facts.length ? 'REFERENCE' as const : 'UNKNOWN' as const, policyId, sourceRef, facts,
+    reasonCode: facts.length ? null : 'POLICY_FACTS_MISSING' };
+}
+
+export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}) {
   if (source.listable !== true) return null;
   const supplierId = text(source.provider_company_code);
   if (!supplierId) return null;
@@ -659,6 +687,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       supplierId,
       supplierName: text(source.provider_name) || null,
       policyId: text(source.policy_code) || null,
+      policyContext: resolveReferencePolicyContext(source, policies),
       priceTerms,
     }],
   };
@@ -668,6 +697,8 @@ export function buildKakaoCatalogReference(input: {
   consumerId: string;
   products: Record<string, Rec>;
   observedAt: string;
+  /** Policy documents captured with the same source read. Only approved fact keys are projected. */
+  policies?: Record<string, Rec>;
   /** Trusted private evidence, keyed by product ID then exact ERP price key. */
   commissionEvidenceByProduct?: Readonly<Record<string, CommissionEvidenceByTerm>>;
 }) {
@@ -684,7 +715,7 @@ export function buildInternalAiReference(input: KakaoCatalogReferenceSource) {
 
 function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
   const data = Object.entries(input.products)
-    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id]))
+    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id], input.policies))
     .filter((row): row is NonNullable<typeof row> => row !== null)
     .sort((a, b) => a.productId.localeCompare(b.productId));
   if (!data.length) throw new Error('KAKAO_REFERENCE_EMPTY');

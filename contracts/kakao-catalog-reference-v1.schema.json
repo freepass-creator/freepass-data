@@ -170,12 +170,32 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["offerId", "supplierId", "supplierName", "policyId", "priceTerms"],
+            "required": ["offerId", "supplierId", "supplierName", "policyId", "policyContext", "priceTerms"],
             "properties": {
               "offerId": { "type": "string", "minLength": 1 },
               "supplierId": { "type": "string", "minLength": 1 },
               "supplierName": { "$ref": "#/$defs/nullableString" },
               "policyId": { "$ref": "#/$defs/nullableString" },
+              "policyContext": {
+                "type": "object", "additionalProperties": false,
+                "required": ["state", "policyId", "sourceRef", "facts", "reasonCode"],
+                "properties": {
+                  "state": { "enum": ["REFERENCE", "UNKNOWN"] },
+                  "policyId": { "$ref": "#/$defs/nullableString" },
+                  "sourceRef": { "$ref": "#/$defs/nullableString" },
+                  "reasonCode": { "$ref": "#/$defs/nullableString" },
+                  "facts": { "type": "array", "items": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["key", "label", "value", "sourceRef"],
+                    "properties": {
+                      "key": { "type": "string", "minLength": 1 },
+                      "label": { "type": "string", "minLength": 1 },
+                      "sourceRef": { "type": "string", "minLength": 1 },
+                      "value": { "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }, { "type": "array", "items": { "type": "string" } }] }
+                    }
+                  } }
+                }
+              },
               "priceTerms": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/priceTerm" } }
             }
           }
