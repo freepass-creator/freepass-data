@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Firestore } from 'firebase-admin/firestore';
 import { FirestoreSourceStore } from '../src/infra/source-firestore-store.js';
-import { ingestRawSourceBatch } from '../src/application/ingest-raw-source.js';
+import { ingestRawSourceBatch, prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { canAssertSourceAbsence } from '../src/domain/source.js';
 
@@ -42,6 +42,15 @@ describe('raw-first source intake', () => {
     const failedBatch = retryBatch('2026-10-09T00:01:00.000Z');
     await expect(ingestRawSourceBatch(store, failedBatch)).rejects.toThrow('SECOND_RAW_FAILED');
     expect((await store.getSourceHead('synthetic/retry'))?.runId).toBe(good.runId);
+    const failedId = prepareRawSourceBatch(failedBatch).runId;
+    expect((await store.getRun(failedId))?.status).toBe('FAILED');
+    expect(await store.listRaw(failedId)).toHaveLength(1);
+    await expect(store.completeRun({ runId: failedId, completedAt: failedBatch.observedAt,
+      observedAt: failedBatch.observedAt, checkpoint: { sourceId: failedBatch.source.sourceId,
+        observedAt: failedBatch.observedAt }, coverage: failedBatch.coverage,
+      rawCount: 2, candidateCount: 0, lineageCount: 0, warningCount: 0 }))
+      .rejects.toThrow('SOURCE_RUN_NOT_RUNNING');
+    expect((await store.getSourceHead('synthetic/retry'))?.runId).toBe(good.runId);
     await expect(ingestRawSourceBatch(store, failedBatch)).rejects.toThrow('SOURCE_INTAKE_RUN_ALREADY_EXISTS');
     spy.mockRestore();
     const recovered = await ingestRawSourceBatch(store, retryBatch('2026-10-09T00:02:00.000Z'));
@@ -69,6 +78,25 @@ describe('raw-first source intake', () => {
     update.mockClear();
     await store.failRun({ ...input, error: 'second failure' });
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a late Firestore completion after failure has already committed', async () => {
+    const update = vi.fn(), set = vi.fn();
+    const runRef = {}, headRef = {};
+    const db = { collection: (name: string) => ({ doc: () => name === 'source_runs' ? runRef : headRef }),
+      runTransaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({
+        get: async (ref: unknown) => ref === runRef
+          ? { exists: true, data: () => ({ sourceId: 'synthetic', status: 'FAILED' }) }
+          : { exists: false }, update, set
+      }) } as unknown as Firestore;
+    await expect(new FirestoreSourceStore(db).completeRun({ runId: 'synthetic',
+      completedAt: '2026-10-09T00:00:00.000Z', observedAt: '2026-10-09T00:00:00.000Z',
+      checkpoint: { sourceId: 'synthetic', observedAt: '2026-10-09T00:00:00.000Z' },
+      coverage: { mode: 'FULL', completeness: 'COMPLETE' },
+      rawCount: 2, candidateCount: 0, lineageCount: 0, warningCount: 0 }))
+      .rejects.toThrow('SOURCE_RUN_NOT_RUNNING');
+    expect(update).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
   });
 
   it('persists settlement source rows as RAW evidence without inventing Canonical facts', async () => {

@@ -80,6 +80,7 @@ export class FirestoreSourceStore implements SourceIngestionStore {
           headRunId: currentHead?.runId ?? null
         };
       }
+      if (run.status !== 'RUNNING') throw new Error('SOURCE_RUN_NOT_RUNNING');
 
       const decision = decideSourceHead(
         input.coverage,

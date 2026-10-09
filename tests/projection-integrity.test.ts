@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { buildErpPublicProjection } from '../src/application/catalog.js';
 import { readActiveProjectionEvidence } from '../src/application/projection-evidence-reader.js';
 import { assertProjectionReleaseIntegrity, verifyProjectionReleaseIntegrity } from '../src/shared/projection-integrity.js';
@@ -21,6 +22,17 @@ async function fixture() {
 }
 
 describe('Projection release integrity verifier', () => {
+  it('runs the existing worker preparation entrypoint once without activating a release', () => {
+    for (const args of [ ['src/worker.ts', '--prepare'], ['scripts/run-memory.mjs', 'worker', '--prepare'] ]) {
+      const output = execFileSync(process.execPath, ['--import', 'tsx', ...args], {
+        encoding: 'utf8', timeout: 8000,
+        env: { ...process.env, FREEPASS_DATA_DRIVER: 'memory', NODE_ENV: 'test' }
+      });
+      expect(JSON.parse(output)).toMatchObject({ mode: 'PREPARE', status: 'READY',
+        persistentWrites: 0, projectionStore: 'memory' });
+    }
+  });
+
   it('prepares a validated release without activating or replacing the old good release', async () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
