@@ -89,6 +89,11 @@ const data = <T>(snap: FirebaseFirestore.DocumentSnapshot) =>
 const catalogEntity = <T>(snap: FirebaseFirestore.DocumentSnapshot) =>
   decodeFirestoreIdentityDocument<T>(snap, 'id');
 
+export type FirstActivationPreimage = {
+  schema: 'first-activation-preimage/v1'; eventId: string; event: OutboxEvent;
+  eventUpdateTime: string; active: null; receipt: null; digest: string;
+};
+
 export class FirestoreDataStore implements CatalogStore, ProjectionStore, OutboxStore, SheetDeliveryEvidenceStore {
   constructor(private readonly db: Firestore) {}
 
@@ -389,6 +394,68 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async listProducts() { return this.all<Product>(C.products); }
   async listOffers() { return this.all<Offer>(C.offers); }
   async listPolicies() { return this.all<Policy>(C.policies); }
+
+  /** Read-only backup. Private persistence/readback and operating approval remain external gates. */
+  async captureFirstActivationPreimage(eventId: string): Promise<FirstActivationPreimage> {
+    if (!/^[A-Za-z0-9:_-]{1,200}$/.test(eventId)) throw new Error('RECOVERY_EVENT_INVALID');
+    return this.db.runTransaction(async tx => {
+      const [event, active, receipt] = await Promise.all([
+        tx.get(this.db.collection(C.outbox).doc(eventId)),
+        tx.get(this.db.collection(C.activeReleases).doc('erp-public')),
+        tx.get(this.db.collection(C.projectionDeliveryReceipts).doc(encodeURIComponent(eventId)))
+      ]);
+      if (!event.exists || event.get('eventId') !== eventId || event.get('status') !== 'PENDING' || active.exists || receipt.exists)
+        throw new Error('RECOVERY_FIRST_ACTIVATION_REQUIRED');
+      const backup = { schema: 'first-activation-preimage/v1' as const, eventId,
+        event: event.data() as OutboxEvent, eventUpdateTime: event.updateTime!.toDate().toISOString(), active: null, receipt: null };
+      return { ...backup, digest: stableDigest(backup) };
+    });
+  }
+
+  /** Builds exact document preconditions; never writes or deletes operational data. */
+  async planFirstActivationRecovery(backup: FirstActivationPreimage) {
+    const { digest, ...body } = backup;
+    if (backup.schema !== 'first-activation-preimage/v1' || stableDigest(body) !== digest ||
+        backup.active !== null || backup.receipt !== null || backup.eventId !== backup.event.eventId || backup.event.status !== 'PENDING')
+      throw new Error('RECOVERY_PREIMAGE_INVALID');
+    return this.db.runTransaction(async tx => {
+      const eventRef = this.db.collection(C.outbox).doc(backup.eventId);
+      const activeRef = this.db.collection(C.activeReleases).doc('erp-public');
+      const receiptRef = this.db.collection(C.projectionDeliveryReceipts).doc(encodeURIComponent(backup.eventId));
+      const [event, active, receipt] = await Promise.all([tx.get(eventRef), tx.get(activeRef), tx.get(receiptRef)]);
+      const releaseId = receipt.get('releaseId') as string | undefined;
+      if (!releaseId || !/^rel_[A-Za-z0-9_-]+$/.test(releaseId) || active.get('releaseId') !== releaseId ||
+          receipt.get('eventId') !== backup.eventId || receipt.get('eventType') !== backup.event.eventType ||
+          receipt.get('targetRevision') !== backup.event.targetRevision || receipt.get('projectionId') !== 'erp-public' ||
+          event.get('eventId') !== backup.eventId || !['PROCESSING', 'DONE'].includes(event.get('status')))
+        throw new Error('RECOVERY_SCOPE_CHANGED');
+      // The event's business payload must still be the backed-up event.
+      const control = new Set(['status', 'leaseOwner', 'leaseUntil', 'attempts', 'nextAttemptAt', 'lastError']);
+      const business = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(value).filter(([key]) => !control.has(key)));
+      if (stableDigest(business(event.data()!)) !== stableDigest(business(backup.event as unknown as Record<string, unknown>)))
+        throw new Error('RECOVERY_EVENT_CHANGED');
+      const releaseRef = this.db.collection(C.releases).doc(releaseId);
+      const [release, manifest, lineage] = await Promise.all([
+        tx.get(releaseRef), tx.get(this.db.collection(C.releaseManifests).doc(releaseId)),
+        tx.get(this.db.collection(C.projectionLineage).where('releaseId', '==', releaseId))
+      ]);
+      if (!release.exists || release.get('status') !== 'ACTIVE' || release.get('projectionId') !== 'erp-public' ||
+          receipt.get('inputDigest') !== release.get('inputDigest') || receipt.get('dataDigest') !== release.get('dataDigest'))
+        throw new Error('RECOVERY_RELEASE_CHANGED');
+      if (!manifest.exists) throw new Error('RECOVERY_MANIFEST_MISSING');
+      assertProjectionReleaseIntegrity(release.data() as ProjectionRelease<ProjectionProduct>,
+        manifest.data() as ProjectionReleaseManifest, lineage.docs.map(doc => doc.data() as ProjectionFieldLineageRecord));
+      const fence = (doc: typeof event) => ({ path: doc.ref.path, updateTime: doc.updateTime!.toDate().toISOString(),
+        updateSeconds: doc.updateTime!.seconds, updateNanos: doc.updateTime!.nanoseconds, digest: stableDigest(doc.data()) });
+      const plan = { schema: 'first-activation-recovery/v1' as const, backupDigest: backup.digest, eventId: backup.eventId, releaseId,
+        restore: [ { ...fence(active), action: 'DELETE' as const, value: null },
+          { ...fence(event), action: 'SET' as const, value: backup.event },
+          { ...fence(release), action: 'SET' as const, value: { ...release.data(), status: 'READY', activatedAt: null } } ],
+        preserve: [fence(receipt), fence(manifest), ...lineage.docs.map(fence)],
+        newDocuments: [release.ref.path, manifest.ref.path, receipt.ref.path, ...lineage.docs.map(doc => doc.ref.path)] };
+      return { ...plan, digest: stableDigest(plan) };
+    });
+  }
 
   async stage(release: ProjectionRelease<ProjectionProduct>) {
     await this.db.collection(C.releases).doc(release.releaseId).create(release);

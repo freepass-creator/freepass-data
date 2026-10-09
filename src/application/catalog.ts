@@ -856,6 +856,12 @@ export async function processOneOutboxEvent(
         targetRevision: event.targetRevision, processedAt: currentTime() } };
     if (event.eventType.startsWith('catalog.')) {
       const existingDelivery = await projections.getDeliveryReceipt(event.eventId);
+      if (existingDelivery) {
+        const active = await projections.getActive('erp-public');
+        if (active?.releaseId !== existingDelivery.releaseId || active.inputDigest !== existingDelivery.inputDigest ||
+            active.dataDigest !== existingDelivery.dataDigest || existingDelivery.eventType !== event.eventType ||
+            existingDelivery.targetRevision !== event.targetRevision) return 'HOLD';
+      }
       if (!existingDelivery) {
         await buildErpPublicProjection(
           catalog,
