@@ -50,7 +50,7 @@
       "required": ["state", "ruleId", "amount", "vatTreatment", "vatAmount", "totalAmount", "reasonCode"],
       "properties": {
         "state": { "enum": ["CALCULATED", "COORDINATION_REQUIRED", "UNKNOWN", "NOT_APPLICABLE"] },
-        "sourceRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*$" } },
+        "sourceRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80)$" } },
         "ruleId": { "$ref": "#/$defs/nullableString" },
         "amount": { "$ref": "#/$defs/nullableInteger" },
         "vatTreatment": { "enum": ["EXCLUDED", "INCLUDED", "UNKNOWN"] },
@@ -170,12 +170,32 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["offerId", "supplierId", "supplierName", "policyId", "priceTerms"],
+            "required": ["offerId", "supplierId", "supplierName", "policyId", "policyContext", "priceTerms"],
             "properties": {
               "offerId": { "type": "string", "minLength": 1 },
               "supplierId": { "type": "string", "minLength": 1 },
               "supplierName": { "$ref": "#/$defs/nullableString" },
               "policyId": { "$ref": "#/$defs/nullableString" },
+              "policyContext": {
+                "type": "object", "additionalProperties": false,
+                "required": ["state", "policyId", "sourceRef", "facts", "reasonCode"],
+                "properties": {
+                  "state": { "enum": ["REFERENCE", "UNKNOWN"] },
+                  "policyId": { "$ref": "#/$defs/nullableString" },
+                  "sourceRef": { "$ref": "#/$defs/nullableString" },
+                  "reasonCode": { "$ref": "#/$defs/nullableString" },
+                  "facts": { "type": "array", "items": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["key", "label", "value", "sourceRef"],
+                    "properties": {
+                      "key": { "type": "string", "minLength": 1 },
+                      "label": { "type": "string", "minLength": 1 },
+                      "sourceRef": { "type": "string", "minLength": 1 },
+                      "value": { "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }, { "type": "array", "items": { "type": "string" } }] }
+                    }
+                  } }
+                }
+              },
               "priceTerms": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/priceTerm" } }
             }
           }
@@ -186,7 +206,7 @@
       "type": "object",
       "required": ["policyId", "sourceRole", "sourceObservedAt", "canonicalSource", "sourceFiles", "standardSupplierIds", "exceptionSupplierIds", "rules", "timingRules", "digest"],
       "properties": {
-        "policyId": { "enum": ["sales-commission-2026-10-03", "sales-commission-2026-10-04", "sales-commission-2026-10-05"] },
+        "policyId": { "enum": ["sales-commission-2026-10-03", "sales-commission-2026-10-04", "sales-commission-2026-10-05", "sales-commission-2026-10-09"] },
         "sourceRole": { "enum": ["REPOSITORY_SSOT_WITH_GOOGLE_SHEET_COPY", "F04_GOOGLE_SHEET_SSOT"] },
         "sourceObservedAt": { "type": "string", "anyOf": [{ "format": "date-time" }, { "format": "date" }] },
         "canonicalSource": {

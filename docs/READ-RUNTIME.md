@@ -486,3 +486,25 @@ The Health reader exposes no `stage`, `activate`, `transact`, `put*`, or other w
 
 This runtime is not a consumer cutover authorization and does not prove Source freshness,
 Source-to-Canonical parity, or a whole-Catalog atomic snapshot.
+
+## 2026-10-09 기간 금액 수정·저장·조회 실행 경로
+
+- 계산 정본: `KAKAO_COMMISSION_POLICY` 및 Commercial Data Catalog 최신 대표 확정. 새 정책은 code/contract 검사를 통과한 revision으로 고정한다. 현재 확정 정책은 `sales-commission-2026-10-09`.
+- 가격·보증금 정정은 기존 `UPDATE_OFFER_PRICE`의 expectedRevision/idempotency 경로를 쓴다. 사람 입력 원본과 과거 계약 정산은 자동 덮어쓰지 않는다.
+- 정책 정정은 아래 dry-run → reviewed plan apply를 쓴다. plan에는 모든 Offer before-image/inputDigest가 포함된다. 저장 변경은 CatalogStore 거래의 revision/audit/history/outbox/receipt로 남는다.
+- apply는 각 상품을 새로 getOffer 해서 가격 불변과 정책 재계산 결과를 대조한다. `readbackVerifiedOffers === processedOffers`이고 status APPLIED여야 저장 검증 성공이다. PERSISTENCE_READBACK_MISMATCH면 부분 커밋 건수를 남기고 HOLD로 중단한다.
+- 빌린카 LC는 referenceRentBasis에36개월 termKey·월료·100%/80% 배율을 보존한다. 별도 감사가 가격행/월료/통화/배율/금액을 다시 검증한다. 기준36개월 가격 수정 후 재계산하면 다른 기간 수수료도 바뀐다.
+- 중앙 정본은 `catalog_offers.priceTerms/internalEconomicsTerms`. 모든 기간의 금액 또는 UNKNOWN/null/사유를 함께 둔다. 차량 번호 유무는 상품 식별자를 대체하지 않는다. 등록되지 않은 원천 상품을 저장했다고 확대하지 않는다.
+- Kakao/internal AI 외부 조회: 기존 인증된 `/v1/consumers/:consumerId/catalog-reference` 및 `/v1/consumers/:consumerId/internal-ai-reference` 경로. Admin 저장값은 검증된 admin-catalog 릴리스 발행 뒤 별도 응답을 대사한다. 모든 소비처는 기존 grant를 유지하며 내부 청구수수료를 공개 화이트라벨에 노출하지 않는다.
+- main 반영 및 consumer schema 배포 전에 새 referenceRentBasis 저장을 운영 실행하지 않는다. 운영 read runtime과 Admin 계약이 새 필드를 받는 것을 확인한 뒤 apply/재발행/조회 대사를 진행한다.
+
+```powershell
+$env:FIREBASE_PROJECT_ID='freepasserp5'
+$env:NODE_ENV='production'
+node --import tsx src/jobs/recompute-offer-economics.ts --firestore
+# JSON 보고서의 plan만 비공개 UTF-8 파일로 보존하고 실제 planDigest를 고정한다.
+node --import tsx src/jobs/recompute-offer-economics.ts --firestore --apply --plan <비공개-plan.json> --policy-id sales-commission-2026-10-09 --expected-plan-digest <검토한-planDigest>
+```
+### 정산 원장과 상품 기준표의 금액 의미
+
+상품 기간별 수수료는 계약 전 기준 계산액이다. 같은 settlement_rows 문서의 접수 기록액(sourceReceiptClaim/Pay), 사람 입력액(claimWritten/payWritten), 계산액, 공급사·채널 확인 확정액, 증빙 있는 실입출금은 서로 다른 사실이다. 2026-10-09 새 조회에서도9월34개 동일ID의 청구 차이3,934,879원/지급차이0원이 재현됐다. sourceReceipt* VAT/Gross가 있다고 모든 계약이 공급사 확정됐다는 뜻은 아니다. 사람이 넣은 금액/근거를 상품 엔진 재계산으로 덮어쓰지 않는다. 계산액/확정액/공급가·VAT·합계/실입출금 증빙/처리자/업무일/변경이력 구분은 기존 PR399 정산 작업선과 연결하며, 현재 누락은 null/상태로 유지하고 영업자나 작성 시각으로 처리자를 발명하지 않는다.

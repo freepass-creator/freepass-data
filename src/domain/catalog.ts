@@ -53,6 +53,7 @@ export type TermEconomicAmount = {
   /** Rules and evidence actually used; empty for unresolved amounts. */
   sourceRefs: string[];
   priceSourceRefs?: string[];
+  referenceRentBasis?: { termKey: string; termMonths: 36; monthlyRent: Money; multiplier: number };
   ruleId?: string | null;
   policyId?: string;
   reasonCode?: string | null;

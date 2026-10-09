@@ -24,6 +24,19 @@ async function prepare(store: MemoryDataStore) {
 }
 
 describe('offer economics recompute', () => {
+  it('stops with HOLD if the committed economics cannot be verified by a fresh read', async () => {
+    const store = await fixture(), options = await prepare(store);
+    const getOffer = store.getOffer.bind(store);
+    vi.spyOn(store, 'getOffer').mockImplementation(async id => {
+      const offer = await getOffer(id);
+      return offer && offer.revision > 1 ? { ...offer, internalEconomicsTerms: [] } : offer;
+    });
+    const report = await runOfferEconomicsRecompute(store, options);
+    expect(report).toMatchObject({ status: 'HOLD', changedOffers: 1, readbackVerifiedOffers: 0 });
+    if (report.mode !== 'APPLY') throw new Error('Expected apply');
+    expect(report.results[0]!.reason).toBe('PERSISTENCE_READBACK_MISMATCH');
+    expect(store.audits).toHaveLength(1);
+  });
   it('dry-run performs zero transactions, audits, revisions, receipts and outbox writes', async () => {
     const store = await fixture();
     const offers = await store.listOffers(), history = await store.listRevisionHistory();

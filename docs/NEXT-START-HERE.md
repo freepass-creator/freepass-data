@@ -415,6 +415,75 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+### 2026-10-09 14:17 KST 기존 정산 원장·상품 수수료 통합 대조
+
+- 담당범위/기존Work: PR403 work/freepass-data/reference-policy-context-20261009; 61b14bde 기반. main b2777b59819d5fbaa4c650cd637c80b5e000c591 최신 조회. academy READY. 새 원장/엔진/Task/branch0, 원본·사람입력·과거 작성자 정정0.
+- 최신 원장 검증: 중앙 firebase-target → AdminWorkflowStore로 settlementRows billMonth2026-09 및 settlementRules/f04-confirmed-receipt-sync 읽기만 실행. 관측2026-10-09T05:16:58.156Z. 원장35개 중 취소 제외34개와 월요약 entryIds34개 동일, 누락0/추가0. 접수기록 청구36,582,600 대 claimWritten32,647,721 차이3,934,879; 지급29,322,051 양쪽 일치. sourceReceiptRow459/431/461/413의 차이 각각+2,300,189/-145,760/+918,450/+862,000. 계약별 금액 정정 또는 실제 입출금 합격이 아니다.
+- 계약 누락: 현재 main 정산 조회는 claimWritten/payWritten을 claimAmount/payAmount로 반환한다. sourceReceiptClaim/Pay 및 그 VAT/Gross34개 원문은 있으나 기존 조회 계약에 별도 기록액 필드가 없다. computedBillingFee/computedPayoutFee/confirmedClaimAmount/confirmedPayAmount 원문 필드0(다른 이름의 근거까지 없다는 증명은 아님). createdBy/updatedBy/businessDate0; 영업자 필드를 처리자로 추정 금지. collectedAmt/paidAmt34개 있으나 collectedAt/paidAt 유효값0; 금액 필드만으로 실제 입출금 확정 금지. calculationBasis34개 있음.
+- 기존 정산 담당 연결: PR399 head6ede6198275309c9cc1e7da65c6e83dc064a0602는 calculationBasis 원문을 조회 계약에 보존하는 scoped diff다. 기록액/계산액/확정액/실입출금/VAT/처리자/업무일/변경이력의 별도 상태는 이 기존 작업선에서 순서대로 확장할 항목이며 PR403에 새 정산 계약을 만들지 않는다. 기존 sourceReceipt* 기록을 confirmed*로 복사하지 않는다.
+- 통합 순서 근거: PR399 기존 Canon failure는 codex/ actor-owned 가지와 당시 PR397 점유; PR400도 actor-owned 가지 및 PR399/397 점유. PR403 현재 contracts/ 점유는399/400/401. 실제 계약 파일은399 settlement-ledger-view,400 f01-f86-sheet-spec,403 catalog/admin-catalog/kakao이므로 파일단위 직접 충돌과 concern 점유를 구별한다. 예외/검사 우회0. 원장 담당/merge-owner가 기존399·400 작업선 규격과 승계부터 정리→401→403 후속 main 재조회. 다른 담당 가지를 새로 만들거나 원격 head를 임의 이동하지 않는다.
+- 검증명령: gh pr view399/400/403 및 실패로그 조회, git diff origin/main...origin/codex/settlement-human-input-preservation, 기존 AdminWorkflowStore.read 쿼리/문서(운영 쓰기0), 기존 전체check1666PASS/14SKIP 및 scoped CoreCI PASS. 실제 외부 조회/배포/main 반영은 미완료.
+- next_start_here: 본 Data 지휘가 이 항목과 PR403/399 exactdiff를 읽어 기존 merge-owner 통합 순서를 확정. private period-fee-settlement-live-20261009.json 원문은 TEMP 보존, 개인정보 원문은 Git 미포함. 통합 후 최신 정책 계산/저장/조회 대사와 정산 필드별 authority/state/provenance 계약을 각각 검증.
+### 2026-10-09 기간별 금액 엔진 지속 수정·검증 준비
+
+- 목적: 차량/상품의 기간별 월료·보증금·청구·지급 저장과 정책 수정 후 재산출/조회 실행경로를 고정한다.
+- 대상 revision: cca301b → 0a7f0f8 + origin/main b2777b5 merge 기반 PR403.
+- 변경: 재산출 apply fresh readback와 중단 사유; 빌린카 기준36개월 termKey/월료/배율을 referenceRentBasis로 보존, 가격 근거와 독립 감사; Catalog/Admin 계약 확장; READ-RUNTIME 운영 순서와 기존 가격수정 경로 명시.
+- 검증: 전체 check PASS,137 files1666 tests PASS/14 SKIP. Codex CLI 읽기전용 독립검토 exit0+비어있지않은 보고서: FIXED 근거 혼동 지적1건 → basis/독립감사/변조회귀로 해결 재검토. Claude 조직 접근 차단 UNAVAILABLE 유지. 실제 Firestore exclusive writer service:freepass-data 확인;160 Offers 재산출 plan/private before-image 확보, 쓰기0.
+- 남음: PR403 Canon Guard가 PR401/400/399의 contracts/ 정본 작업 점유로 CANONICAL_PATH_CONTESTED. 사용자 오더는 저장/조회 적용까지이나 main 반영 통제와 새 consumer schema 배포 전 운영 쓰기는 안전하지 않아 미실행. 조회 원천과 중앙 저장 상품 범위가 달라 등록 누락도 별도 정합 필요.
+- next_start_here: 정본 점유 통제 경로에서 PR403 통합 → 새 consumer 계약 배포 확인 → 최신 dry-run/backups/digest 재생성 → apply의readbackVerifiedOffers 확인 → Admin 재발행과 인증된 카톡/internalAI/Admin 조회 대사. 실제 대사 전 전체 조회 가능/운영 완료로 보고하지 않는다.
+### 2026-10-09 빌린카 LC 구독 수수료 대표 확정
+
+- 목적/변경: 빌린카·LC 구독 36개월 월대여료100% 청구/80% 지급 확정. 이전 잠정 및 60개월 구독률 대체. 카톡/내부AI와 canonical precompute가 같은 기준료를 사용한다. 기간마다 현재 월료를 대신 쓰거나 전체36개월 합계를 쓰지 않는다.
+- 대상 revision: e871fca 기반 PR403. 같은 상품/주행거리/반납·인수 조건의 기준료가 없거나 모호하면 UNKNOWN 유지. 저장 근거에36개월 가격 참조 보존.
+- 검증: npm run check PASS(1655 PASS/14 SKIP). 실제 canonical dry-run RP021 미확정66→21, 구독45개 기간 해소 계획 확인. 운영 DB/과거 정산 쓰기0. Claude 독립 검토 조직 차단 UNAVAILABLE.
+- 남음/next_start_here: main·운영 반영 및 재산출 apply/소비처 readback 필요. 재렌트 기본/신차 회사별 선출고·견적 발주 분리 유지. 신차 실제 합의 조건은 추가 근거 필요.
+### 2026-10-09 대표 기본 수수료 정책 지정
+
+- 목적: 8개 회사의 기본 정책 지정과 빌린카 잠정 제안을 조회 가능한 기존 정책에 반영.
+- 대상 revision: 4fcb364 기반, 기존 PR403 확장. 정책 sales-commission-2026-10-09.
+- 변경: 8개 회사 BASIC/FREEPASS_BASIC 지정, 구독 기본 기간표 적용, 빌린카 36개월 제안 UNCONFIRMED 기록. 정책 사전에도 최신 직접 결정 명시.
+- 검증: 빌드/아키텍처/계약/접근경계 검사 및 전체 Vitest 1655 PASS, 14 SKIP. 실제 Firestore 재산출 dry-run 쓰기0, 웰릭스 미확정19개 기간 해소 계획 확인(175→156). 운영 저장값은 미변경.
+- 남음: main/배포/DB apply 미실행. 빌린카 대여료 기준 및 효력 미확정; 신차 구분79, 기본표 밖 기간30, 빌린카 구독45, 퍼시픽 보증금 구간2는 근거 필요. Claude 검토 UNAVAILABLE(조직 접근 차단).
+- next_start_here: 전체 검사 결과와 PR diff 확인, 기본 조건 반영의 운영 경로 진행. 빌린카 답변을 확인한 후 확정 정책으로 승격.
+### 2026-10-09 Kakao / internal AI policy context
+
+- 목적: 기간별 금액을 읽는 권한 있는 Kakao/internal AI 조회에 연결된 정책 본문과 출처를 함께 제공한다.
+- 대상 revision: origin/main 5bbe27175b1e79b1d03841cc3d43b07cfc248130 기반; work/freepass-data/reference-policy-context-20261009.
+- 변경: 기존 compatibility reader가 products/policy를 함께 읽고, 기존 조건 규격의 허용값만 policyContext로 투영한다. 무번호 상품의 기존 document ID를 유지한다. 누락/중복/공급사 불일치는 UNKNOWN 사유로 반환한다. REFERENCE는 정책 검증 또는 가입 가능 확정이 아니다.
+- 검증: npm run check exit 0; Vitest 1654 PASS / 14 SKIP, 137 files PASS / 4 SKIP. 실제 freepasserp5 읽기(쓰기 0): 조회 상품 486, 기간 3047, 정책 본문 연결 329, POLICY_LINK_MISSING 157. 숫자는 이 조회 범위이며 전체 차량 재고 대수가 아니다.
+- 남음: main/배포/소비처 실측 미완료. 157개 정책 링크 원본 확보, 수수료 기본/프로모션/개별약정과 유효기간 증거, canonical 무번호 상품 수집 및 미확정 수수료 해소가 별도 남는다. 기존 금액이나 사람 입력을 변경하지 않았다. Claude 독립 검토는 조직의 구독 접근 차단으로 UNAVAILABLE이며 PASS가 아니다.
+- next_start_here: 이 변경 PR을 검토하고 main 반영 통제 경로로 진행; 이후 운영 조회 응답을 재읽고 누락 정책을 원본 근거와 안정적 상품 ID로 연결한다.
+
+### 2026-10-09 대표 추가 요구 — 기본/프로모션 구분 · 무번호 상품 · 외부 경제조건 조회
+
+- 최신 직접 요구: 기본 수수료인지 프로모션인지 원문으로 확인한다. 번호 유무와 무관하게 모든 차량/상품의 제공 기간별 월대여료·보증금·공급사 청구·영업채널 지급이 데이터에 함께 있어야 하며 승인된 외부 연동에서 바로 조회돼야 한다. 기존 568기간 저장 검증은 이 전체 요구의 완료가 아니다.
+- 현재 확인된 누락: `normalize-shared-sheet.ts`는 PLATE_MISSING/PLATE_NOT_ASSIGNED를 REJECTED로 분류하고 `shared-sheet-source.ts`의 무번호 fallback은 행 위치+내용 hash라 영속 상품 ID로 사용할 수 없다. `precomputeOfferEconomics`는 추가 근거를 받지만 자동 저장 호출이 수집 근거를 전달하지 않는다. 외부 상대별 commission helper는 PREPARED이며 공용 조회 완료가 아니다.
+- 구현 조건: 차량번호는 선택 속성으로 두고 supplier ID+공급사 영속 product ID 또는 최초 발급된 내부 product ID에 source binding을 유지한다. 행번호/현재 내용 hash/차종 이름으로 영속 ID를 만들거나 무번호 상품들을 한 건으로 합치지 않는다. 이후 번호 배정은 동일 product ID에 연결한다. 실차 재고와 주문 가능한 모델 상품을 구분해 잘못된 자산을 생성하지 않는다.
+- 정책 조건: BASIC / PROMOTION / INDIVIDUAL_AGREEMENT / UNCONFIRMED를 원문 증거로 판정한다. 적용 공급사·상품·기간·채널·유효 시작/끝·기준일(계약/출고 등)·근거 revision·우선순위를 고정한다. 한시 요율을 회사의 영구 기본 요율로 승격하지 않는다. 프로모션 여부/기간/대상이 불명확하면 값을 확정으로 제공하지 않는다. 만료 시 근거 있는 기본 조건으로 복귀하며 기존 계약 snapshot과 사람 입력은 유지한다.
+- 기간 저장/읽기 조건: 제공하는 모든 termKey마다 월료·보증금·양쪽 수수료·상태·사유·근거·적용 정책을 저장하고 조회는 저장된 동일 조건을 사용한다. 미확정도 행 자체를 누락하지 않고 null+사유로 응답한다. 연동 응답에는 지급 방향을 명시한다. 양쪽 경제조건을 조회할 승인된 consumer scope를 별도로 연결하고 기존 공개/화이트라벨 API에 내부 수수료를 무조건 노출하지 않는다.
+- 검증 조건: 무번호 두 상품의 별도 식별·행 이동/수정·번호 배정 후 동일 ID, 기본/프로모션/개별합의 우선순위·효력 경계·만료·원천충돌, 전 상품의 제공기간↔저장기간 양방향 대사, 저장 금액↔인증 consumer 응답 대사, 미권한 요청 차단. 신규 적재·기존 backfill·API 읽기를 각각 실제 검증한다.
+- next_start_here: 위 두 미연결 경로와 promotion 분류를 현재 수집/연동 작업선에 통합한다. 운영 backfill/노출 확대 전 충돌 PR/담당과 원문 근거를 확인한다. 이 항목은 요구/구현조건 고정이며 구현·운영 완료 선언이 아니다.
+
+### 2026-10-09 회사별 수수료 정책 원문 대조
+
+- 목적: 대표가 지적한 순서대로 회사별 정책부터 확인하여 기간 금액에 적용한다. 미확정 175기간을 정책 부재로 일괄 판단하지 않는다.
+- 원문: F04 `1BjGBqAjRLEb9ZMKarpQsMF-q_UjdgmEqBAl1uVk8SR4`, `수수료표!A1:M191`, gws 새 조회 성공. private 원문 `%TEMP%/freepass-fee-source-20261009.json`. 조회 시점과 코드 기준은 아래 저장 재조회 작업의 main revision을 따른다. 시트 쓰기 0.
+- 비교: 기본 150행(3~152행)의 22회사 표기에 대해 기존 F04 공급사 코드와 READ-RUNTIME 별칭 지도를 재사용. 숫자로 독립 계산할 수 있는 123행의 청구/지급 공급가액을 현재 resolver와 대조하여 차이 0. 다른 27행은 매칭출고 협의·손오공 Q12 기준료·아이카 1개월·퍼시픽 보증금 등급 같은 추가 근거가 필요하며 수치 PASS로 계산하지 않는다. 일반/특약 우선순위는 별도로 보존한다.
+- 확인된 특칙: 오토플러스 일반/EV 정액, 스타·스카이 월료100%/80%(VAT 포함), 손오공 Q12+기간 가산, 아이언 선출고4%/3%, 빌린카·엘씨 60개월 구독, 스위치 구독 기간식, 아이카 EV/6개월/1개월, 퍼시픽 출고형태·보증금 등급, 뮤카 별도 지급 재원. 대표 결정과 실제 원문을 합의 요율의 대용으로 추정하지 않는다.
+- 미확정 분해(기존 운영 저장 175기간): 신차 subtype 79 = 우리캐피탈51/J&J11/렌트존8/경진카6/SA2/경진렌트카1. 구독 범위64 = 빌린카45/웰릭스19. 미등재 기간30 = 빌린카21/J&J8/KH1. 퍼시픽 보증금 등급2. 이는 실제 정책·입력 연결에 필요한 후속이며 단순 저장 필드 누락이 아니다.
+- 남음/next_start_here: 원천의 출고 형태·차량가액·구독 범위·보증금 등급을 해당 차량과 기간에 연결할 증거를 확인한다. subtype을 모든 신차에 선출고로 가정하거나 구독에 재렌트 요율을 복사하지 않는다. 운영 금액 변경 및 미확정 해소 완료는 아직 아니다. 개인 합의 행과 금액은 공개 보고에 포함하지 않는다.
+
+### 2026-10-09 차량별 기간 금액 운영 저장 재조회
+
+- 목적: 대표의 직접 요청대로 차량에 기간별 대여료·보증금·청구·지급 수수료를 함께 보관하는 상태를 운영 정본에서 확인한다. 새 화면/저장소는 만들지 않는다.
+- 정본/revision: `origin/main@5bbe27175b1e79b1d03841cc3d43b07cfc248130`, 운영 Firebase `freepasserp5`, 기존 `CatalogStore.listOffers` 및 `recompute-offer-economics.ts`의 읽기 전용 dry-run. academy READY. 원 checkout의 다른 문서 수정은 보존했다.
+- 실측: Offer 문서 160개, `priceTerms` 568행, 저장된 `internalEconomicsTerms` 568행. termKey별 누락/중복 0, 저장된 기간·월대여료·보증금 값/상태와 원 가격행 불일치 0. 청구/지급 양쪽 KNOWN 또는 ZERO 393행, 미확정 175행. 문서/기간 수이며 운영 차량 대수와 동일하다고 단정하지 않는다.
+- 미확정: 신차 subtype 필요 79기간, 구독 규칙 적용범위 미확인 64기간, 규칙표에 없는 기간 30기간, 보증금 등급 근거 필요 2기간. 양쪽 수수료 같은 사유이며 0원으로 보정하지 않았다.
+- 재계산 비교: 159 Offer/566기간의 정책 ID·근거 업데이트 차이가 있으나 금액/state/reasonCode 변화는 0이다. 기존 저장이 없다는 이전 채팅 설명은 이 실측으로 정정한다. 실제 저장 문서 전체 범위가 모든 legacy 상품을 포괄한다는 뜻은 아니다.
+- 검증: 관련 Vitest 42 PASS, build PASS. dry-run writes=0. private 보고서 `%TEMP%/freepass-period-economics-dry-run-20261009.json`, planDigest `6e889cb3a43a9e43d55e1222f945666fbbe13651a8e44541ad6016aa9009ce90`. before-image/내부 금액은 Git에 기록하지 않는다.
+- 남음: Claude 실호출 exit 1/FAILED(조직 Claude Code 구독 비활성), 독립 검토 UNAVAILABLE. 따라서 정책 metadata 재작성·운영 apply/재발행/배포는 수행하지 않았다. 저장된 전체 금액을 실제 소비 API가 제공하는지 인증 readback과 legacy 상품 범위 대사가 남는다.
+- next_start_here: 미확정 175기간의 원천 추가근거를 기존 Source Intake로 확인 → 사람 입력 보존과 정책 적용범위를 독립 검토 → 최신 dry-run 생성 → 필요한 변경만 기존 거래로 apply/readback. 10-09 plan은 시점 증거이며 변경 후 그대로 실행하지 않는다.
 
 ### 2026-10-09 PR399/400 통합 승계 — 기존 PR401 단일 개발선
 
