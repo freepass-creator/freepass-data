@@ -144,6 +144,7 @@ export type SettlementLedgerView = {
     sourceDigest: string;
     dataDigest: string;
     snapshotSummary?: SettlementSnapshotSummary;
+    sourceFreshness?: { state: 'UNVERIFIED'; reason: 'SOURCE_NOT_VERIFIED_BY_THIS_READ' };
   };
 };
 
