@@ -95,19 +95,41 @@ export function planSupplierDropdowns(input, spec=inputSpec, now=Date.now()) {
 }
 // Full master lists, not per-row dependent lists. Only the hidden list tab
 // receives values; supplier tabs receive validation rules only.
+export function vehicleMasterSnapshotRows(master,now=Date.now()) {
+  const age=now-Date.parse(master?.readAt);
+  if(master?.source!=='freepasserp5/vehicle_master+vehicle_trim_master'||master.complete!==true||!Number.isFinite(age)||age< -1000||age>300000)hold('Active Data vehicle master snapshot required');
+  if(!Array.isArray(master.masters)||!Array.isArray(master.trims))hold('Complete master and trim documents required');
+  const digest=createHash('sha256').update(JSON.stringify({readAt:master.readAt,masters:master.masters,trims:master.trims})).digest('hex');
+  if(master.digest!==digest)hold('Vehicle master snapshot digest mismatch');
+  const parents=new Map(),seen=new Set(),rows=[],holds=[],records=[];
+  for(const doc of master.masters) {
+    if(!doc?.id||typeof doc.id!=='string'||!doc.data||parents.has(doc.id))hold('Unique immutable master IDs required');
+    parents.set(doc.id,doc.data);
+  }
+  for(const doc of master.trims) {
+    if(!doc?.id||typeof doc.id!=='string'||!doc.data||seen.has(doc.id))hold('Unique immutable trim IDs required');
+    seen.add(doc.id);
+    const t=doc.data,p=parents.get(t.master_id);
+    const reason=t.retired===true?'RETIRED_TRIM':!p?'PARENT_MISSING':p.retired===true?'PARENT_RETIRED':
+      ['maker','model','sub_model'].some(k=>typeof p[k]!=='string'||!p[k].trim()||t[k]!==p[k])?'PARENT_NAME_DRIFT':
+      typeof t.trim!=='string'||!t.trim.trim()?'TRIM_NAME_MISSING':null;
+    if(reason){holds.push({masterId:t.master_id??null,trimId:doc.id,reason});continue;}
+    // Aliases remain search evidence on the immutable documents, never display choices.
+    for(const d of [p,t])for(const key of ['model_aliases','sub_model_aliases','trim_aliases'])if(d[key]!==undefined&&(!Array.isArray(d[key])||d[key].some(v=>typeof v!=='string')))hold('Vehicle alias list invalid');
+    rows.push([p.maker,p.model,p.sub_model,t.trim]);
+    records.push({masterId:t.master_id,trimId:doc.id,names:[p.maker,p.model,p.sub_model,t.trim],aliases:[[p.maker],[p.model,...(p.model_aliases??[])],[p.sub_model,...(p.sub_model_aliases??[]),...(t.sub_model_aliases??[])],[t.trim,...(t.trim_aliases??[])]]});
+  }
+  if(!rows.length)hold('No eligible active vehicle master rows');
+  return {rows,records,readAt:master.readAt,snapshotDigest:digest,holds,eligibleTrimIds:master.trims.filter(d=>!holds.some(h=>h.trimId===d.id)).map(d=>d.id)};
+}
 export function planVehicleMasterDropdowns(input,spec=inputSpec,now=Date.now()){
   planSupplierInput(input,spec,now);
   const rule=spec.vehicleMaster,master=input.master;
   const names=['제조사','모델','세부모델','세부트림'];
   if(!rule||rule.sheetId!==9100||rule.tab!=='차종목록'||rule.hidden!==true||JSON.stringify(rule.columns)!==JSON.stringify({제조사:'A',모델:'B',세부모델:'C',세부트림:'D'}))hold('Vehicle master spec invalid');
-  if(![rule.source,rule.source.split(' / 탭 ')[0]].includes(master?.source)||!Number.isFinite(Date.parse(master?.readAt)))hold('Vehicle master provenance required');
-  if(!Array.isArray(master.header)||names.some(h=>master.header.filter(x=>x===h).length!==1))hold('Vehicle master columns missing or duplicated');
-  if(!Array.isArray(master.rows)||master.rows.some(r=>!Array.isArray(r)))hold('Vehicle master rows required');
-  // F03 keeps merged duplicates as marked rows; they stay in F03 but never reach the dropdown lists.
-  const excludes=(rule.excludeRows??[]).map(x=>{const at=master.header.indexOf(x.header);if(at<0||master.header.filter(h=>h===x.header).length!==1||typeof x.startsWith!=='string'||!x.startsWith)hold(`Vehicle master exclude column missing: ${x.header}`);return {at,prefix:x.startsWith};});
-  const kept=master.rows.filter(r=>!excludes.some(x=>typeof r[x.at]==='string'&&r[x.at].trim().startsWith(x.prefix)));
+  const snapshot=vehicleMasterSnapshotRows(master,now),kept=snapshot.rows;
   const lists=names.map(h=>{
-    const at=master.header.indexOf(h),values=kept.map(r=>r[at]).filter(v=>v!==undefined&&v!==null&&v!=='');
+    const at=names.indexOf(h),values=kept.map(r=>r[at]).filter(v=>v!==undefined&&v!==null&&v!=='');
     if(values.some(v=>typeof v!=='string'))hold(`Vehicle master non-text value: ${h}`);
     const list=[...new Set(values.filter(v=>v.trim()!==''))];
     if(!list.length)hold(`Vehicle master empty list: ${h}`);
@@ -136,7 +158,7 @@ export function planVehicleMasterDropdowns(input,spec=inputSpec,now=Date.now()){
       requests.push({setDataValidation:{range,rule:{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${rule.tab}'!$${col}$2:$${col}$${lists[i].length+1}`}]},strict:spec.dropdownStrict===true,showCustomUi:true}}});
     });
   }
-  return {status:'PLANNED',scope:'VEHICLE_MASTER_RANGE_DROPDOWNS',counts:Object.fromEntries(names.map((h,i)=>[h,lists[i].length])),requests};
+  return {status:snapshot.holds.length?'PLANNED_WITH_HOLD':'PLANNED',snapshotDigest:snapshot.snapshotDigest,holds:snapshot.holds,eligibleTrimIds:snapshot.eligibleTrimIds,scope:'VEHICLE_MASTER_RANGE_DROPDOWNS',counts:Object.fromEntries(names.map((h,i)=>[h,lists[i].length])),requests};
 }
 // "One cell, one fact": split combined policy cells (2026-10-03 → -split).
 // Each combined value must match its exact shape or the whole plan holds;

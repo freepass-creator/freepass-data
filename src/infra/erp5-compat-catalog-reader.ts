@@ -1,7 +1,22 @@
+import { createHash } from 'node:crypto';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
 
 type Rec = Record<string, unknown>;
+
+/** Reuse the bound Data target and read-only transaction; no alternate transport or writer. */
+export async function readVehicleMasterSnapshot() {
+  const db = getFirestore(getTargetFirebaseApp());
+  return db.runTransaction(async tx => {
+    const masters = await tx.get(db.collection('vehicle_master'));
+    const trims = await tx.get(db.collection('vehicle_trim_master'));
+    const documents = (q: QuerySnapshot) => q.docs.map(d => ({ id: d.id, data: jsonSafe(d.data()) as Rec }));
+    const body = { readAt: masters.readTime.toDate().toISOString(), masters: documents(masters), trims: documents(trims) };
+    if (!masters.readTime.isEqual(trims.readTime)) throw new Error('VEHICLE_MASTER_NON_ATOMIC_READ');
+    return { source: 'freepasserp5/vehicle_master+vehicle_trim_master' as const, complete: true as const, ...body,
+      digest: createHash('sha256').update(JSON.stringify(body)).digest('hex') };
+  }, { readOnly: true });
+}
 
 export type CatalogCompatibilitySnapshot = {
   schema: 'freepass-data.catalog-compat/v1';

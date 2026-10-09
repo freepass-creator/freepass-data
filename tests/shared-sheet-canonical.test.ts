@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../src/adapters/vehicle-identity-inputs.js';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
@@ -12,6 +14,16 @@ import { queryCanonicalByPlate } from '../src/jobs/query-canonical-by-plate.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
+function masterSnapshot(): VehicleMasterSnapshot {
+  const names = { maker: '시험제조사', model: '시험모델', sub_model: '시험세부모델' };
+  const body = { readAt: new Date().toISOString(), masters: [{ id: 'master', data: names }],
+    trims: [{ id: 'trim', data: { ...names, master_id: 'master', trim: '시험트림' } }] };
+  return { source: 'freepasserp5/vehicle_master+vehicle_trim_master', complete: true, ...body,
+    digest: createHash('sha256').update(JSON.stringify(body)).digest('hex') };
+}
+function masterEvidence(snapshot = masterSnapshot()) {
+  return { records: verifiedMasterRecords(snapshot), readAt: snapshot.readAt, snapshotDigest: snapshot.digest };
+}
 const time = '2026-10-04T00:00:00.000Z';
 function row(company: string, overrides: Record<string, SheetCell> = {}) {
   const data: Record<string, SheetCell> = { 회사명: company, 차량번호: 'TEST-FAKE-001', 차량상태: '출고가능', 상품구분: '중고렌트',
@@ -23,12 +35,12 @@ function row(company: string, overrides: Record<string, SheetCell> = {}) {
 function capture(overrides: Record<string, SheetCell> = {}, company = '웰릭스'): SharedSheetCapture {
   const channel = sharedSheetChannels.find(x => x.companyName === company)!;
   return { schema: 'shared-sheet-capture/v1', spreadsheetId: 'synthetic-sheet', layoutVersion: '2026-10-04-no-account',
-    readTime: time, revision: 'synthetic-revision-1', tabs: [...new Set(sharedSheetChannels.map(x => x.tab))].map(title => {
+    readTime: time, vehicleMasterSnapshot: masterSnapshot(), revision: 'synthetic-revision-1', tabs: [...new Set(sharedSheetChannels.map(x => x.tab))].map(title => {
       const values: SheetCell[][] = [[...sharedSheetHeaders], ...(title === channel.tab ? [row(company, overrides)] : [])];
       return { title, readTime: time, complete: true, rowCount: values.length, values };
     }) };
 }
-function normalized(c = capture()) { return normalizeSharedSheet(prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords[0]!); }
+function normalized(c = capture()) { return normalizeSharedSheet(prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords[0]!, masterEvidence(c.vehicleMasterSnapshot as VehicleMasterSnapshot)); }
 async function stores() {
   const store = new MemoryDataStore();
   await store.seed({ catalogWriterOwnership: { scope: 'catalog', revision: 1, mode: 'EXCLUSIVE', primaryWriterId: 'service:freepass-data',
@@ -170,7 +182,7 @@ describe('shared sheet local source to Canonical', () => {
     const b = capture(); b.tabs[0]!.values[0]!.reverse(); expect(() => buildSharedSheetBatch(b)).toThrow();
     const c = capture(); c.tabs[0]!.values[1]!.pop(); c.tabs[0]!.values.push(row('웰릭스', { 차량번호: 'TEST-FAKE-009' })); c.tabs[0]!.rowCount++;
     c.digest = sharedSheetCaptureDigest(c);
-    const rc = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords.map(normalizeSharedSheet);
+    const rc = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords.map(r => normalizeSharedSheet(r));
     expect(rc.map(x => x.record.candidate.issues.includes('ROW_SHAPE_INVALID')).sort()).toEqual([false, true]);
     const d = capture(); d.digest = 'wrong'; expect(() => buildSharedSheetBatch(d)).toThrow();
     const e = capture(); delete e.revision; e.digest = sharedSheetCaptureDigest(e); expect(buildSharedSheetBatch(e).records).toHaveLength(1);
@@ -180,7 +192,7 @@ describe('shared sheet local source to Canonical', () => {
     c.tabs[0]!.rowCount += 2; c.digest = sharedSheetCaptureDigest(c);
     const batch = buildSharedSheetBatch(c);
     expect(new Set(batch.records.map(r => r.sourceRecordId)).size).toBe(3);
-    const issues = prepareRawSourceBatch(batch).rawRecords.map(normalizeSharedSheet).map(x => x.record.candidate.issues.includes('DUPLICATE_IDENTITY'));
+    const issues = prepareRawSourceBatch(batch).rawRecords.map(r => normalizeSharedSheet(r)).map(x => x.record.candidate.issues.includes('DUPLICATE_IDENTITY'));
     expect(issues.filter(Boolean)).toHaveLength(2); expect(issues).toHaveLength(3);
   });
   it('stores every sheet status; only 출고가능/즉시출고 are exposed, an unlisted status is held', async () => {
@@ -313,4 +325,23 @@ describe('shared sheet apply/output guards (Codex review)', () => {
       await expect(writePrivateArtifact(join(outside, 'plan.json'), { ok: true })).resolves.toBeUndefined();
     } finally { process.chdir(cwd); }
   });
+});
+
+it('requires a freshly re-read master before production apply and rejects changed content before ingestion', async () => {
+  const s = await stores(), c = capture(), p = await planSharedSheetCanonical(s.store, c, 'freepasserp5');
+  const spy = vi.spyOn(s.source, 'completeRun');
+  await expect(runSharedSheetCanonical(s.store, s.source, { target: 'freepasserp5', apply: true,
+    plan: p.plan, expectedPlanDigest: p.report.planDigest })).rejects.toThrow('CURRENT_VEHICLE_MASTER_REQUIRED_BEFORE_APPLY');
+  const changed = structuredClone(c.vehicleMasterSnapshot) as VehicleMasterSnapshot;
+  changed.trims[0]!.data.trim = '다른 트림';
+  changed.digest = createHash('sha256').update(JSON.stringify({ readAt: changed.readAt, masters: changed.masters, trims: changed.trims })).digest('hex');
+  await expect(runSharedSheetCanonical(s.store, s.source, { target: 'freepasserp5', apply: true,
+    plan: p.plan, expectedPlanDigest: p.report.planDigest, currentVehicleMasterSnapshot: changed }))
+    .rejects.toThrow('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED');
+  expect(spy).not.toHaveBeenCalled();
+});
+it('does not fill names when an offline capture has no master evidence', async () => {
+  const c = capture(); delete c.vehicleMasterSnapshot;
+  const p = await planSharedSheetCanonical(new MemoryDataStore(), c, 'synthetic-target');
+  expect(p.plan.entries.every(x => x.action === 'HOLD' && x.reasons.includes('VEHICLE_MASTER_SNAPSHOT_REQUIRED'))).toBe(true);
 });

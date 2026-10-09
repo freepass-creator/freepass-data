@@ -2392,7 +2392,7 @@
     "비고"
   ],
   "vehicleMaster": {
-    "source": "F03 차종마스터(프리패스 데이터 차종 마스터의 투영 사본) / 탭 차종마스터",
+    "source": "freepasserp5/vehicle_master+vehicle_trim_master",
     "tab": "차종목록",
     "sheetId": 9100,
     "hidden": true,
@@ -2410,7 +2410,7 @@
         "reason": "2026-10-03 F03 2차 반영: 「통합→」으로 시작하는 행은 F03에 남긴 중복 보존 행(예: 셀토스 SP2 3행)이라 드롭다운 목록에서 뺀다"
       }
     ],
-    "fillRule": "2026-10-04 대표: 제조사→모델→세부모델→세부트림 순서로, 그 행의 공급사 원문(차명 원문·옵션 원문·연식·최초등록일·연료)이 «뜻으로» F03 행 하나를 가리킬 때 F03 본표+별칭(코드 포함)을 거쳐 F03 표시명으로 넣는다. 글자 일치는 필요 없고, 하나로 안 갈리는데 추정해 넣는 것만 금지. 앞 단계가 안 정해지면 뒤 단계는 비운다. 판정 기준은 docs/SUPPLIER-INPUT-SHEET-RUNBOOK.md 「지켜야 할 규칙」 1번",
+    "fillRule": "차종 의미는 ai-ops docs/차종-기준-한장.md 하나를 따른다. 제조사→모델→세부모델→세부트림 순서로 공급사 원문과 조건을 대조해 active Data vehicle_master·vehicle_trim_master의 불변 ID 한 경로를 선택한다. 별칭은 검색 근거이며 표시는 현재 마스터 이름만 쓴다. 부모 이름 불일치·조건 모호·미확정은 HOLD, 앞 단계가 미확정이면 뒤 단계는 비운다. F03은 투영이며 입력 정본으로 쓰지 않는다",
     "aliasTab": "F03 별칭 탭: 옛 이름 → F03 표시명(+세부모델행키, 조건). 조건은 그 행 원문으로 갈릴 때만 쓴다. 「확인 필요」는 비운다",
     "refineOrder": [
       "제조사",
@@ -2452,8 +2452,24 @@
       "noScript": "Apps Script 권한 없음 — 대표 결정으로 수식·검증 방식"
     },
     "makerNames": "대표 2026-10-04 최종: 제조사 표기는 쉐보레 · 르노 · KGM(괄호 없음). 르노코리아(삼성)·르노코리아·르노삼성·KG모빌리티(쌍용)·KG모빌리티·쌍용·쉐보레(GM대우)·토요타는 별칭(src/domain/vehicle-maker-name.ts)",
-    "basicTrimRule": "차종은 모델 → 세부모델 → 파워트레인 → 세부트림 4단, 파워트레인(배기량·엔진·연료·구동)은 제원 칸이라 차종 칸에 쓰지 않는다(대표 2026-10-04 최종). 세부트림 = 엔카 세부등급 그대로, 없으면 등급 이름에서 파워트레인을 버린 나머지, 남는 게 없으면 「기본형」(구현 정본 src/domain/vehicle-trim-name.ts). 모델과 세부모델이 같은 축이면 세부모델 「기본형」(예: G80 / 기본형)",
-    "sourceIdNote": "시트 ID 는 공개 저장소에 쓰지 않는다 — ai-ops docs/지도/SHEET_MAP.md(비공개)의 F03 줄을 본다."
+    "basicTrimRule": "ai-ops docs/차종-기준-한장.md 기준 v1: 차종 4칸은 제조사·모델·세부모델·세부트림. 파워트레인·인승은 제원/보조 칸이다. 표시 이름은 active Data 마스터에서만 선택한다. 개발코드가 없는 차의 세부모델은 모델명이며 세부모델 「기본형」은 금지한다. 등급이 없는 세부트림만 「기본형」을 쓴다. 제조사 표기·수입차 예외는 기준 한 장을 따르며 이 규격에서 별도 이름 규칙을 만들지 않는다",
+    "sourceIdNote": "Name authority is the bound Data master snapshot. F03 is a read-only projection.",
+    "snapshotContract": {
+      "required": [
+        "readAt",
+        "complete",
+        "digest",
+        "masters",
+        "trims"
+      ],
+      "digest": "sha256(JSON.stringify({readAt,masters,trims})); document order preserved",
+      "documentShape": "{id: immutable document ID, data: original master/trim fields}",
+      "maximumAgeMs": 300000,
+      "eligibility": "retired!==true; trim.master_id resolves to non-retired parent; maker/model/sub_model exact parent match",
+      "nameDrift": "HOLD/exclude with immutable IDs and counts; never silently replace names",
+      "aliases": "sub_model_aliases/trim_aliases are search-only; display current names; ambiguous lookup remains HOLD",
+      "projection": "F03 only displays Data; legacy F03 capture is not accepted"
+    }
   },
   "canonVersion": "공통 시트 정본 v1 (2026-10-03)",
   "valueFormats": {

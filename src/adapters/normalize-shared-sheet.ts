@@ -5,9 +5,10 @@ import type { SourceVehicleFacts } from '../domain/source-vehicle-facts.js';
 import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
-import { VEHICLE_IDENTITY_RULE_VERSION, type IdentityChoice, type VehicleIdentity } from '../domain/vehicle-identity-resolution.js';
+import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION, type IdentityChoice, type VehicleIdentity, type VehicleMasterRecord } from '../domain/vehicle-identity-resolution.js';
 import { stableDigest } from '../shared/stable-digest.js';
-export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/2';
+export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/3';
+export type SharedSheetMasterEvidence = { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
 /** AI 상황실 2026-10-04 (대표): every car is stored. The sheet status text is kept as-is; it only decides sale exposure.
  * assetStatus is the reviewed physical-state mapping; an unlisted status is HOLD, never guessed. */
 /** Own-key lookup only: inherited names (constructor, __proto__) are never a registered status. */
@@ -50,10 +51,10 @@ function registration(s: string, raw: unknown): string | null {
 export type SharedSheetNormalized = { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[]; suppliedTerms: number };
 /** Vehicle identity policy for one row: sheet 4 cells, source text and dates in → DATA/SHEET/HOLD decision out. */
 export type SharedSheetIdentityResolver = (row: { sheet: VehicleIdentity; plate: string; raw: string; firstRegistration: string; modelYear: string }) => IdentityChoice;
-export const normalizeSharedSheet = (raw: RawRecord): SharedSheetNormalized => normalizeSharedSheetWith(raw);
-/** «Data 정리값 먼저 → F03 → 원문과 모순 없을 때만» normalizer. Without a resolver the sheet cells are used as before. */
-export const sharedSheetNormalizer = (identity?: SharedSheetIdentityResolver) => (raw: RawRecord): SharedSheetNormalized => normalizeSharedSheetWith(raw, identity);
-function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentityResolver): SharedSheetNormalized {
+export const normalizeSharedSheet = (raw: RawRecord, master?: SharedSheetMasterEvidence): SharedSheetNormalized => normalizeSharedSheetWith(raw, undefined, master);
+/** Names must resolve to the sealed active Data master. Missing or conflicting evidence remains HOLD. */
+export const sharedSheetNormalizer = (identity?: SharedSheetIdentityResolver, master?: SharedSheetMasterEvidence) => (raw: RawRecord): SharedSheetNormalized => normalizeSharedSheetWith(raw, identity, master);
+function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentityResolver, master?: SharedSheetMasterEvidence): SharedSheetNormalized {
   const values = raw.payload.values as unknown[];
   const at = (header: string) => values[spec.inputHeaders.indexOf(header)];
   const text = (header: string) => String(at(header) ?? '').trim();
@@ -68,15 +69,19 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     return value;
   };
   const sheetIdentity = spec.vehicleMaster.refineOrder.map(h => text(h)) as unknown as VehicleIdentity;
-  const choice = identity && typeof raw.payload.quarantine !== 'string' ? identity({ sheet: sheetIdentity,
-    plate: plateIdentityKey(at('차량번호')), raw: text('차명 원문'), firstRegistration: text('최초등록일'), modelYear: text('연식') }) : null;
+  const row = { sheet: sheetIdentity, plate: plateIdentityKey(at('차량번호')), raw: text('차명 원문'),
+    firstRegistration: text('최초등록일'), modelYear: text('연식') };
+  const choice: IdentityChoice = typeof raw.payload.quarantine === 'string'
+    ? { pick: 'HOLD', identity: null, dataIdentity: null, notes: ['SOURCE_QUARANTINED'] }
+    : identity ? identity(row) : master ? chooseVehicleIdentity(indexVehicleMaster(master.records), { ...row, data: null })
+    : { pick: 'HOLD', identity: null, dataIdentity: null, notes: ['VEHICLE_MASTER_SNAPSHOT_REQUIRED'] };
   if (choice) {
     // The sheet cells stay as evidence; the decision and the Data value are recorded beside them.
     facts.fields.vehicleIdentitySource = { value: choice.pick === 'HOLD' ? null : choice.pick === 'DATA' ? 'FREEPASS_DATA' : 'SHEET',
       state: choice.pick === 'HOLD' ? 'REVIEW_REQUIRED' : 'KNOWN',
-      evidence: JSON.stringify({ sheet: sheetIdentity, data: choice.dataIdentity, notes: choice.notes }),
+      evidence: JSON.stringify({ sheet: sheetIdentity, data: choice.dataIdentity, notes: choice.notes, snapshotDigest: master?.snapshotDigest ?? null }),
       ruleVersion: VEHICLE_IDENTITY_RULE_VERSION, reasons: choice.pick === 'HOLD' ? ['VEHICLE_IDENTITY_DATA_CONFLICT'] : [] };
-    if (choice.pick === 'HOLD') issues.push('VEHICLE_IDENTITY_DATA_CONFLICT');
+    if (choice.pick === 'HOLD') issues.push('VEHICLE_IDENTITY_DATA_CONFLICT', ...choice.notes);
   }
   let missing = false;
   for (const [i, h] of spec.vehicleMaster.refineOrder.entries()) {
@@ -85,7 +90,9 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     if (/확인\s*필요|미확인|미정/.test(v)) { missing = true; issues.push('VEHICLE_IDENTITY_REVIEW_REQUIRED'); }
     if (missing && v) issues.push('REFINEMENT_ORDER_VIOLATION');
     if (!v) missing = true;
-    if (choice?.identity) facts.fields[key] = { value: missing ? null : v, state: missing ? 'MISSING' : 'KNOWN',
+    if (choice.pick === 'HOLD') {
+      facts.fields[key] = { value: null, state: 'REVIEW_REQUIRED', evidence: text(h), ruleVersion: VEHICLE_IDENTITY_RULE_VERSION, reasons: choice.notes };
+    } else if (choice.identity) facts.fields[key] = { value: missing ? null : v, state: missing ? 'MISSING' : 'KNOWN',
       evidence: text(h), ruleVersion: SHARED_SHEET_RULE_VERSION, reasons: [] };
     else field(key, h, s => missing ? null : s);
     if (!v) issues.push('VEHICLE_IDENTITY_INCOMPLETE');

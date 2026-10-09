@@ -3,8 +3,8 @@ import { isAbsolute, relative, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { buildSharedSheetBatch, sharedSheetChannels, SHARED_SHEET_SPEC_DIGEST, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
 import { sharedSheetNormalizer, SHARED_SHEET_RULE_VERSION, sharedSheetStatusPolicy, type SharedSheetIdentityResolver } from '../adapters/normalize-shared-sheet.js';
-import { assertVehicleIdentityInputs, type VehicleIdentityInputs } from '../adapters/vehicle-identity-inputs.js';
-import { chooseVehicleIdentity, indexF03, VEHICLE_IDENTITY_RULE_VERSION } from '../domain/vehicle-identity-resolution.js';
+import { assertVehicleIdentityInputs, verifiedMasterRecords, type VehicleIdentityInputs, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
+import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION } from '../domain/vehicle-identity-resolution.js';
 import { ingestRawSourceBatch, prepareRawSourceBatch } from '../application/ingest-raw-source.js';
 import { canonicalizeCatalogCandidate, type CanonicalizeCatalogCandidateInput } from '../application/canonicalize-catalog-candidate.js';
 import { reviewSourceChange, applyReviewedSourceChange } from '../application/reviewed-source-change.js';
@@ -28,21 +28,25 @@ export type SharedSheetPlan = {
   schema: 'shared-sheet-canonical-plan/v1'; target: string; capture: SharedSheetCapture;
   ruleVersion: string; specDigest: string; policyDigest: string; ownershipDigest: string;
   previousHeadDigest: string; runId: string; entries: Entry[];
-  /** «Data 정리값 먼저 → F03 → 원문과 모순 없을 때만» inputs. Absent = sheet cells as entered (previous behavior). */
+  /** Active Data master names with matching source evidence inputs. Absent = sheet cells as entered (previous behavior). */
   identityInputs?: VehicleIdentityInputs; identityRuleVersion?: string;
 };
 export function identityResolver(inputs: VehicleIdentityInputs | undefined): SharedSheetIdentityResolver | undefined {
   if (!inputs) return undefined;
   assertVehicleIdentityInputs(inputs);
-  const f03 = indexF03(inputs.f03);
+  const master = indexVehicleMaster(verifiedMasterRecords(inputs.master));
   const data = new Map(inputs.data.map(x => [x.plate, x.identity]));
-  return row => chooseVehicleIdentity(f03, { sheet: row.sheet, data: data.get(row.plate) ?? null, raw: row.raw,
+  return row => chooseVehicleIdentity(master, { sheet: row.sheet, data: data.get(row.plate) ?? null, raw: row.raw,
     firstRegistration: row.firstRegistration, modelYear: row.modelYear });
 }
 function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs) {
   const batch = buildSharedSheetBatch(capture);
   const p = prepareRawSourceBatch(batch);
-  const normalize = sharedSheetNormalizer(identityResolver(identityInputs));
+  const snapshot = capture.vehicleMasterSnapshot as VehicleMasterSnapshot | undefined ?? identityInputs?.master;
+  if (capture.vehicleMasterSnapshot && identityInputs &&
+      stableDigest(capture.vehicleMasterSnapshot) !== stableDigest(identityInputs.master)) throw new Error('VEHICLE_MASTER_SNAPSHOT_MISMATCH');
+  const master = snapshot ? { records: verifiedMasterRecords(snapshot), readAt: snapshot.readAt, snapshotDigest: snapshot.digest } : undefined;
+  const normalize = sharedSheetNormalizer(identityResolver(identityInputs), master);
   const normalized = p.rawRecords.map(r => normalize(r));
   const checkpoint = { sourceId: p.sourceId, observedAt: batch.observedAt, sourceRevision: batch.sourceRevision!, checksum: p.sourceChecksum };
   const run: SourceRun = { runId: p.runId, sourceId: p.sourceId, status: 'COMPLETED', startedAt: batch.observedAt,
@@ -185,7 +189,7 @@ export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest:
     assertVehicleIdentityInputs(plan.identityInputs);
     if (plan.identityRuleVersion !== VEHICLE_IDENTITY_RULE_VERSION) throw new Error('SHARED_SHEET_PLAN_REQUIRED_OR_CHANGED');
   }
-  if (prepared(plan.capture).runId !== plan.runId) throw new Error('SHARED_SHEET_PLAN_CAPTURE_MISMATCH');
+  if (prepared(plan.capture, plan.identityInputs).runId !== plan.runId) throw new Error('SHARED_SHEET_PLAN_CAPTURE_MISMATCH');
 }
 /** Read-only apply guard. The CLI runs it before opening the audited write, so a rejected apply writes nothing (not even an audit event). */
 export async function preflightSharedSheetApply(store: CatalogStore, plan: SharedSheetPlan | undefined, digest: string | undefined, target: string): Promise<void> {
@@ -196,7 +200,7 @@ export async function preflightSharedSheetApply(store: CatalogStore, plan: Share
 }
 export async function runSharedSheetCanonical(store: CatalogStore, source: SourceIngestionStore, options: {
   target: string; capture?: SharedSheetCapture; apply?: boolean; plan?: SharedSheetPlan; expectedPlanDigest?: string;
-  identityInputs?: VehicleIdentityInputs;
+  identityInputs?: VehicleIdentityInputs; currentVehicleMasterSnapshot?: VehicleMasterSnapshot;
 }) {
   if (!options.apply) {
     if (!options.capture) throw new Error('SHARED_SHEET_CAPTURE_REQUIRED');
@@ -204,6 +208,14 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
   }
   const plan = options.plan;
   assertSharedSheetPlan(plan, options.expectedPlanDigest, options.target);
+  if (options.target === 'freepasserp5') {
+    const current = options.currentVehicleMasterSnapshot;
+    if (!current) throw new Error('CURRENT_VEHICLE_MASTER_REQUIRED_BEFORE_APPLY');
+    verifiedMasterRecords(current);
+    const planned = plan.capture.vehicleMasterSnapshot as VehicleMasterSnapshot | undefined ?? plan.identityInputs?.master;
+    if (!planned || stableDigest({ masters: current.masters, trims: current.trims }) !==
+        stableDigest({ masters: planned.masters, trims: planned.trims })) throw new Error('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED');
+  }
   await preflightSharedSheetApply(store, plan, options.expectedPlanDigest, options.target);
   const p = prepared(plan.capture, plan.identityInputs);
   const head = await store.getSourceHead(p.sourceId);
@@ -313,9 +325,11 @@ export async function main(args = process.argv.slice(2)) {
     if (apply) throw new Error('MEMORY_CLI_IS_OFFLINE_PLAN_ONLY');
     result = await runSharedSheetCanonical(new MemoryDataStore(), new MemorySourceStore(), options);
   } else {
-    const { withSharedSheetCatalogAccess } = await import('./data-access-runtime.js');
+    const { withSharedSheetCatalogAccess, captureVehicleMasterSnapshotReadOnly } = await import('./data-access-runtime.js');
+    const currentVehicleMasterSnapshot = apply ? await captureVehicleMasterSnapshotReadOnly() : undefined;
     result = await withSharedSheetCatalogAccess(apply, stableDigest(plan ?? capture),
-      (store, source) => runSharedSheetCanonical(store, source, options),
+      (store, source) => runSharedSheetCanonical(store, source, { ...options,
+        ...(apply ? { currentVehicleMasterSnapshot: currentVehicleMasterSnapshot! } : {}) }),
       apply ? store => preflightSharedSheetApply(store, plan, options.expectedPlanDigest, target) : undefined);
   }
   if ('plan' in result && a.has('--plan-out')) await writePrivateArtifact(a.get('--plan-out')!, result.plan);

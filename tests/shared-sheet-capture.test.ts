@@ -33,7 +33,7 @@ describe('shared sheet capture reader', () => {
     const ch = sharedSheetChannels[0]!;
     const c = captureFromBatchGet(ID, batch({ [ch.tab]: [[ch.companyName, '', '', '', '신차'], [ch.companyName, '', '', '', '신차']] }), T);
     const p = prepareRawSourceBatch(buildSharedSheetBatch(c));
-    const issues = p.rawRecords.map(normalizeSharedSheet).map(x => x.record.candidate.issues);
+    const issues = p.rawRecords.map(r => normalizeSharedSheet(r)).map(x => x.record.candidate.issues);
     expect(issues).toHaveLength(2);
     expect(issues.every(i => i.includes('PLATE_NOT_ASSIGNED'))).toBe(true);
   });

@@ -20,7 +20,7 @@
     "ingest:legacy-products": "tsx src/jobs/ingest-legacy-products.ts",
     "pilot:check": "tsx src/jobs/check-read-pilot.ts",
     "data:catalog": "tsx src/jobs/query-data-catalog.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node --input-type=module -e \"import {mkdirSync,copyFileSync} from 'node:fs'; mkdirSync('dist/scripts',{recursive:true}); mkdirSync('dist/contracts',{recursive:true}); for(const name of ['supplier-input-sheet.mjs','sheet-presentation.mjs']) copyFileSync('scripts/'+name,'dist/scripts/'+name); for(const name of ['supplier-input-sheet-spec.v1.json','f01-f86-sheet-spec.v1.json']) copyFileSync('contracts/'+name,'dist/contracts/'+name);\"",
     "test": "vitest run",
     "check": "npm run check:arch && npm run check:standards && npm run check:data-access-boundary && npm run check:sheets && npm run build && npm run test:read-runtime-smoke && npm run test:shadow && npm run test:dashboard && npm test",
     "test:dashboard": "node --test tests/dashboard-authority.node.mjs && node --test --experimental-test-module-mocks tests/dashboard-api.node.mjs",

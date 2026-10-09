@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
@@ -178,53 +179,31 @@ test('canon: tab fix requests converge to PASS without changing values, formulas
   assert.equal(auditTabConsistency(f.snapshot,f.spec).status,'PASS');assert.ok(planTabConsistencyFix(f.snapshot,f.spec).requests.length>0);
   assert.deepEqual(f.snapshot.sheets.map(s=>s.data[0].rowData.map(r=>r.values.map(c=>({value:c.userEnteredValue,note:c.note,link:c.userEnteredFormat?.textFormat?.link})))),before);
 });
-const masterFixture=()=>({...fixture(),master:{source:inputSpec.vehicleMaster.source,readAt:new Date(now).toISOString(),header:['원산지','제조사','모델','세부모델','세부트림','생산시작','생산종료','클로드 엔카대조'],rows:[['국산','현대','캐스퍼','더 뉴 캐스퍼','스마트'],['국산','현대','캐스퍼','캐스퍼','터보'],['국산','기아','레이','','스마트'],['','','',null,'  ']]}});
-const withMasterTab=f=>{const s=sheet(9100,'차종목록',['old'],{rowCount:20,columnCount:4});s.properties.hidden=true;f.spreadsheet.sheets.push(s);f.sheetInventory.push({sheetId:9100});return f;};
-test('vehicle master: immutable input, unique ordered lists, only list-tab values and supplier range validations',()=>{
-  const f=masterFixture(),before=JSON.stringify(f),specBefore=JSON.stringify(inputSpec),p=planVehicleMasterDropdowns(f,inputSpec,now);
-  assert.equal(JSON.stringify(f),before);assert.equal(JSON.stringify(inputSpec),specBefore);
-  assert.equal(p.status,'PLANNED');assert.equal(p.scope,'VEHICLE_MASTER_RANGE_DROPDOWNS');
-  assert.deepEqual(p.counts,{제조사:2,모델:2,세부모델:2,세부트림:2});
-  assert.ok(p.requests.every(r=>Object.keys(r).length===1&&['addSheet','updateCells','setDataValidation'].includes(Object.keys(r)[0])));
-  assert.deepEqual(p.requests[0],{addSheet:{properties:{sheetId:9100,title:'차종목록',hidden:true,gridProperties:{rowCount:3,columnCount:4}}}});
-  const writes=p.requests.filter(r=>r.updateCells).map(r=>r.updateCells);assert.equal(writes.length,1);
-  assert.ok(writes.every(w=>(w.start??w.range).sheetId===9100&&w.fields==='userEnteredValue'));
-  assert.deepEqual(writes[0].rows.map(r=>r.values.map(c=>c.userEnteredValue?.stringValue)),[['제조사','모델','세부모델','세부트림'],['현대','캐스퍼','더 뉴 캐스퍼','스마트'],['기아','레이','캐스퍼','터보']]);
-  const validations=p.requests.filter(r=>r.setDataValidation).map(r=>r.setDataValidation);assert.equal(validations.length,15*4);
-  for(const v of validations){const h=inputSpec.inputHeaders[v.range.startColumnIndex],col=inputSpec.vehicleMaster.columns[h];
-    assert.ok(f.binding.suppliers.some(s=>s.sheetId===v.range.sheetId));assert.equal(v.range.startRowIndex,1);assert.equal(v.range.endRowIndex,1000);assert.equal(v.range.endColumnIndex,v.range.startColumnIndex+1);
-    assert.deepEqual(v.rule,{condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='차종목록'!$${col}$2:$${col}$${p.counts[h]+1}`}]},strict:false,showCustomUi:true});}
+const masterFixture=()=>{
+  const body={readAt:new Date(now).toISOString(),masters:[{id:'m1',data:{maker:'현대',model:'캐스퍼',sub_model:'캐스퍼 AX1'}}],
+    trims:[{id:'t1',data:{master_id:'m1',maker:'현대',model:'캐스퍼',sub_model:'캐스퍼 AX1',trim:'스마트',trim_aliases:['옛 스마트']}}]};
+  return {...fixture(),master:{source:'freepasserp5/vehicle_master+vehicle_trim_master',complete:true,...body,digest:createHash('sha256').update(JSON.stringify(body)).digest('hex')}};
+};
+test('vehicle master: only active Data names are displayed; aliases and supplier cells remain intact',()=>{
+  const f=masterFixture(),before=JSON.stringify(f),p=planVehicleMasterDropdowns(f,inputSpec,now);
+  assert.equal(JSON.stringify(f),before);assert.equal(p.status,'PLANNED');assert.equal(p.snapshotDigest,f.master.digest);
+  const written=p.requests.filter(q=>q.updateCells?.rows).flatMap(q=>q.updateCells.rows.flatMap(r=>r.values.map(v=>v.userEnteredValue?.stringValue)));
+  assert.ok(written.includes('스마트'));assert.ok(!written.includes('옛 스마트'));
+  assert.ok(p.requests.filter(q=>q.updateCells).every(q=>(q.updateCells.start??q.updateCells.range).sheetId===9100));
 });
-test('vehicle master: existing tab clears all A:D before refill, no addSheet, unequal list lengths and strict option',()=>{
-  const f=withMasterTab(masterFixture());f.master.rows.push(['국산','현대','캐스퍼','캐스퍼','추가']);const p=planVehicleMasterDropdowns(f,{...inputSpec,dropdownStrict:true},now);
-  assert.ok(!p.requests.some(r=>r.addSheet));assert.deepEqual(p.requests[0],{updateCells:{range:{sheetId:9100,startColumnIndex:0,endColumnIndex:4},fields:'userEnteredValue'}});
-  assert.ok(p.requests.filter(r=>r.updateCells).every(r=>(r.updateCells.start??r.updateCells.range).sheetId===9100));
-  assert.deepEqual(p.requests[1].updateCells.rows.at(-1).values,[{},{},{},{userEnteredValue:{stringValue:'추가'}}]);
-  for(const {setDataValidation:v} of p.requests.filter(r=>r.setDataValidation)){const h=inputSpec.inputHeaders[v.range.startColumnIndex],c=inputSpec.vehicleMaster.columns[h];assert.equal(v.rule.condition.values[0].userEnteredValue,`='차종목록'!$${c}$2:$${c}$${p.counts[h]+1}`);assert.equal(v.rule.strict,true);}
-});
-test('vehicle master: rows marked 통합→ in the F03 compare column stay out of every list; missing compare column HOLDs',()=>{
-  const f=masterFixture(),at=f.master.header.indexOf('클로드 엔카대조');f.master.rows.push(['국산','기아','셀토스','셀토스 SP2','중복트림',null,null,'통합→셀토스']);
-  const r=['국산','기아','셀토스','더 뉴 셀토스','정상'];r[at]='일치';f.master.rows.push(r);
-  const p=planVehicleMasterDropdowns(f,inputSpec,now),list=p.requests.find(q=>q.updateCells?.rows).updateCells.rows.flatMap(x=>x.values.map(c=>c.userEnteredValue?.stringValue));
-  assert.ok(!list.includes('셀토스 SP2')&&!list.includes('중복트림'));assert.ok(list.includes('더 뉴 셀토스')&&list.includes('정상'));
-  const g=masterFixture();g.master.header[g.master.header.indexOf('클로드 엔카대조')]='other';assert.throws(()=>planVehicleMasterDropdowns(g,inputSpec,now),/HOLD/);
-});
-test('vehicle master: missing columns, empty lists, malformed provenance/rows and tab collisions HOLD',()=>{
-  for(const h of Object.keys(inputSpec.vehicleMaster.columns)){
-    const f=masterFixture();f.master.header[f.master.header.indexOf(h)]='missing';assert.throws(()=>planVehicleMasterDropdowns(f,inputSpec,now),/HOLD/);
-    const empty=masterFixture();empty.master.rows.forEach(r=>r[empty.master.header.indexOf(h)]='');assert.throws(()=>planVehicleMasterDropdowns(empty,inputSpec,now),/HOLD/);
+test('vehicle master: F03, incomplete, stale and modified snapshots are refused',()=>{
+  for(const change of [m=>m.source='F03',m=>m.complete=false,m=>m.readAt='2020-01-01',m=>m.digest='changed']) {
+    const f=masterFixture();change(f.master);assert.throws(()=>planVehicleMasterDropdowns(f,inputSpec,now),/HOLD/);
   }
-  for(const mutate of [f=>delete f.master,f=>f.master.source='other',f=>f.master.readAt='bad',f=>f.master.rows=[null],f=>f.master.rows[0][1]=12,f=>f.master.header.push('모델'),f=>withMasterTab(f).spreadsheet.sheets.at(-1).properties.title='other',f=>withMasterTab(f).spreadsheet.sheets.at(-1).properties.hidden=false,f=>withMasterTab(f).spreadsheet.sheets.at(-1).properties.gridProperties.rowCount=2,f=>withMasterTab(f).spreadsheet.sheets.at(-1).properties.sheetId=9101]){const f=masterFixture();mutate(f);assert.throws(()=>planVehicleMasterDropdowns(f,inputSpec,now),/HOLD/);}
 });
-test('vehicle master: original layout, freshness and inventory gates run first',()=>{
-  const f=masterFixture();f.spreadsheet.sheets[2].data[0].rowData[0].values.reverse();delete f.master;assert.throws(()=>planVehicleMasterDropdowns(f,inputSpec,now),/LAYOUT_MISMATCH/);
-  for(const mutate of [f=>f.capturedAt='2000-01-01',f=>f.sheetInventory.pop()]){const f=masterFixture();mutate(f);assert.throws(()=>planVehicleMasterDropdowns(f,inputSpec,now),/HOLD/);}
+test('vehicle master: inconsistent parent links are held without deleting documents',()=>{
+  const f=masterFixture();f.master.trims.push({id:'t2',data:{...f.master.trims[0].data,sub_model:'옛 이름'}});
+  const body={readAt:f.master.readAt,masters:f.master.masters,trims:f.master.trims};
+  f.master.digest=createHash('sha256').update(JSON.stringify(body)).digest('hex');
+  const p=planVehicleMasterDropdowns(f,inputSpec,now);
+  assert.equal(p.status,'PLANNED_WITH_HOLD');assert.equal(p.holds[0].reason,'PARENT_NAME_DRIFT');assert.equal(f.master.trims.length,2);
 });
-test('vehicle master CLI: stdin uses the first branch and emits requests only',()=>{
-  const f=masterFixture();f.capturedAt=new Date().toISOString();f.master.source=inputSpec.vehicleMaster.source.split(' / 탭 ')[0];
-  const r=spawnSync(process.execPath,['scripts/supplier-input-sheet.mjs','--vehicle-master=-','--change-layout=unused'],{input:JSON.stringify(f),encoding:'utf8'});
-  assert.equal(r.status,0,r.stderr);assert.equal(JSON.parse(r.stdout).scope,'VEHICLE_MASTER_RANGE_DROPDOWNS');
-});
+
 const fixture=()=>({capturedAt:new Date(now).toISOString(),binding:{spreadsheetId:'test',summarySheetId:1,guideSheetId:2,suppliers:shared.map((r,i)=>({sheetId:3+tabTitles.indexOf(r.tab),title:r.tab,code:r.code}))},sheetInventory:[1,2,...tabTitles.map((_,i)=>3+i)].map(sheetId=>({sheetId})),spreadsheet:{spreadsheetId:'test',sheets:[sheet(1,'종합',inputSpec.summaryHeaders),sheet(2,'관리안내',['안내']),...tabTitles.map((title,i)=>sheet(3+i,title,inputSpec.inputHeaders))]}});
 const policyFixture=()=>{const f=fixture(),d=sheet(3,'웰릭스',legacy.inputHeaders);const h=legacy.inputHeaders,values=h.map(()=>({}));values[h.indexOf('차량번호')]={userEnteredValue:{stringValue:'TEST-1'}};values[h.indexOf('정책코드')]={userEnteredValue:{stringValue:'POL-01'}};d.data[0].rowData.push({values});return {runId:'test-run',capturedAt:f.capturedAt,suppliers:[{sheetId:3,sourceId:'source',sourceTab:'policy'}],destinations:[d],captures:[{sourceId:'source',sourceTab:'policy',complete:true,rows:[{values:['정책코드','추가주행 금액','정비'].map(stringValue=>({userEnteredValue:{stringValue}}))},{values:['POL-01','대여료의 10%','연2회오일'].map(stringValue=>({userEnteredValue:{stringValue}}))}]}]};};
 
