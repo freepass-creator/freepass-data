@@ -705,6 +705,24 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - HOLD: 소유자/관리계정 직접 API 우회 가능, 자동 감시 미설정, 실제 렌더/속도 미측정(현재 IAB 탭 없음), 종합 실측296행 vs 정본300행(이번 UI 작업 구조변경0). 공급사 입력 권한을 확인하지 않고 종합/helper 전체를 잠그지 않음. ERP 연결은 별도 세션.
 - next_start_here: RUNBOOK 맨 위 UI 현행 규격과 JSON uiOwnership을 먼저 읽고 승인된 표시 계획기 사용. 새 지시 없는 데이터 변환/삭제/탭 복원 금지.
 
+### 2026-10-06 ERP 후속 — AI Core 종착역 재점검 / DEV-06 PR
+
+- 목적: 대표 «종착역으로 업무, AI Core 확인» 정정에 따라 기존 PR #398을 이어서 보강. Core main `6088a502915408853d2607bbea56d7d57a2d450c`의 AGENTS/WORK_READ_FIRST/헌법/continuity/sunset을 확인하고 target `001cd03f311c610620bb15fcbe02544ee96597c6`의 Academy READY를 받았다. 앞선 작업은 시작 전 Core 확인 누락이 있었고 사후 READY를 최초 작업 승인으로 소급하지 않는다.
+- 작업 연속성: 새 PR·원천 writer·중복 저장 경로 없음. 기존 actor-prefix 가지는 PR #398의 역사적 이름으로 유지하며 새 가지를 복제하지 않았다. PR #397 최신 `754f69d251996b0828df20c0d5e424108724edd0`를 merge `a39c951`로 받아 supplierManagement/현행2026-10-06.3 및 두 세션 handoff를 모두 보존했다. 시트 쓰기0.
+- 구현 exact commit `646700ed814d1c2186ed7160eefbcd12a078f26d`: 기존 점검기의 필수 compat collection 선택 추가(누락 fail-closed), Canonical consumer/projection/schema/authority/non-empty/manifest/digest metadata 검사 보강. digest 내용·최신성·원천 parity는 기존 gateway/3자 대사 책임을 유지한다. 종착역은 기존 경계를 완성하고 대체 경로 보존·readback·rollback 이후 임시 브리지 종료를 판정하는 것.
+- 검증: runtime smoke10/10, architecture/data-access boundary, diff check PASS. 운영/TypeScript 변경 없음, 전체 Vitest 미재실행. tool doctor는 gcloud·Claude CLI MISSING. claude:status AVAILABLE는 신원/실행 성공 증거가 아니며 공식 exact-head review 호출은 FAILED/CLAUDE_PROCESS_FAILED, 답변 없음. Core CROSS_AI_LOG에 로컬 기록(아직 원격 미반영), 독립 검토 미통과.
+- 학습환류: 사용자 수정1/재작업1/false completion0, Episode FREEPASS-DATA-ERP-CORE-20261006(대상646700e). 기존 academy:closeout 결과 HOLD/EPISODE_FEEDBACK_HOLD, 원인 INDEPENDENT_REVIEW_UNCONFIRMED. 비공개 임시 work-result/episode에 세부 증거 보존; 공통 규칙 자동 채택이나 운영 승인으로 표현하지 않는다.
+- 남음: 독립 검토·CI·#397→#398 main 통합, 기존 daily WIF fresh dry-run/실제 ownership/head/Canonical 대사, 승인된 저장·release 및 ERP.com readback. 인증 접근 없는 PC에서 별도 로그인·키 복제·fallback·새 예약으로 우회하지 않음. 현재 DEV-06/10 PR, 다음 독립 검토/CI와 main 통합; PERSISTENCE/DEPLOYMENT/CUTOVER HOLD.
+- next_start_here: [ERP 소비처 런타임](ERP5-CONSUMER-RUNTIME.md#공통-시트--erp-연결-준비--2026-10-06) 현행 supplierManagement 및 필수 collection 설정 → PR #398 exact head 검토 → 기존 daily WIF fresh dry-run → 해당 계획 운영 경계 및 소비자 대사. Core 로컬 상의 기록은 담당 Core 작업선으로 반영해야 함.
+
+### 2026-10-06 공통 시트 ERP 연동 별도 작업 — CODED / STATIC CHECKED / TESTED, 운영 HOLD
+
+- 작업선 `codex/shared-sheet-erp-integration`, 별도 managed worktree. 기반 `86392a056ccb03fac43eaf1722c6ec86f3c90b7e`/PR #397, fetch한 main `43201d4773c301bb0344777a9235309d17558ddc`. 열린 #395(차종 판정 옵션)는 미통합, 원래 checkout/시트 관리 변경 보존. 시트 값/서식/드롭다운/행 수 쓰기0, ERP 저장소 수정0.
+- 구현 exact commit `2ea3c5d396c57085aba806cc27691d2b0153d264`: 기존 runtime smoke에 `READ_RUNTIME_CHECK_COMPAT_ONLY=1` 추가. consumer identity/bridge authority/target/시각/map/count 검증, 원문·토큰 미출력. 성공도 Canonical/release/cutover false. 실제 ERP 설정 이름과 WIF·운영 순서는 [ERP 소비처 런타임의 공통 시트 연결 준비](ERP5-CONSUMER-RUNTIME.md#공통-시트--erp-연결-준비--2026-10-06).
+- 검증: node runtime smoke8/8 PASS(오염 authority·다른 tenant·잘못된 collection/count·원문 비노출 포함), architecture/data-access boundary PASS, git diff --check PASS. TypeScript 코드 변경 없음; 전체 Vitest 재실행 없음.
+- 기존 private 10-06 캡처171행을 memory 계획기로 재실행: writes0, held38, 공급기간675/선계산675 일치, 수수료 각 측 UNKNOWN214. empty memory writerReady=false는 운영 ownership 관측이 아니다. fresh 운영 source/기존 Canonical 대사·저장 증거로 확대하지 않는다.
+- 현재 PC PATH/표준 설치 위치에 native gcloud 실행기 없음, 표준 Roaming freepass-data config/ADC 없음, consumer 환경변수 없음: HOLD_ENVIRONMENT_AUTH_UNAVAILABLE. 기존 shared-sheet-daily workflow/WIF가 존재함을 코드로 확인했으며 운영 pin·현재 변수·새 run은 미검증. 운영 적재/배포/스케줄/IAM/writer 변경/ERP 전환 미실행.
+- next_start_here: #397 범위 통합 검토 → 기존 daily WIF의 fresh dry-run과 exact-head/private evidence → 승인된 Canonical apply·되읽기 → 기존 READY/ACTIVE 게시 → 호환 transport와 Canonical 읽기를 별도 검증 → 기존 pilot:check 3자 대사와 ERP.com/각 대상 실제 readback. 인증 접근이 복구되기 전 비밀번호/키 복제/legacy fallback으로 우회하지 않는다. 운영 승인 대상은 구체적인 fresh 계획을 준비한 뒤 정한다.
 
 ### 2026-10-06 공급사 공통 시트 관리 기준 확정 — CODED / 운영 자동 감시 미설정
 
