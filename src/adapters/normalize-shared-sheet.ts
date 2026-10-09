@@ -7,7 +7,8 @@ import type { FieldLineageRecord } from '../domain/lineage.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION, type IdentityChoice, type VehicleIdentity, type VehicleMasterRecord } from '../domain/vehicle-identity-resolution.js';
 import { stableDigest } from '../shared/stable-digest.js';
-export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/3';
+import { assessDepositEvidence } from '../domain/deposit-evidence.js';
+export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/4';
 export type SharedSheetMasterEvidence = { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
 /** AI 상황실 2026-10-04 (대표): every car is stored. The sheet status text is kept as-is; it only decides sale exposure.
  * assetStatus is the reviewed physical-state mapping; an unlisted status is HOLD, never guessed. */
@@ -77,7 +78,7 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     : { pick: 'HOLD', identity: null, dataIdentity: null, notes: ['VEHICLE_MASTER_SNAPSHOT_REQUIRED'] };
   if (choice) {
     // The sheet cells stay as evidence; the decision and the Data value are recorded beside them.
-    facts.fields.vehicleIdentitySource = { value: choice.pick === 'HOLD' ? null : choice.pick === 'DATA' ? 'FREEPASS_DATA' : 'SHEET',
+    facts.fields.vehicleIdentitySource = { value: choice.pick === 'HOLD' ? null : 'FREEPASS_DATA',
       state: choice.pick === 'HOLD' ? 'REVIEW_REQUIRED' : 'KNOWN',
       evidence: JSON.stringify({ sheet: sheetIdentity, data: choice.dataIdentity, notes: choice.notes, snapshotDigest: master?.snapshotDigest ?? null }),
       ruleVersion: VEHICLE_IDENTITY_RULE_VERSION, reasons: choice.pick === 'HOLD' ? ['VEHICLE_IDENTITY_DATA_CONFLICT'] : [] };
@@ -127,10 +128,14 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     const rent = number(rentText, '원');
     if (rent === null) { issues.push('RENT_REVIEW_REQUIRED'); continue; }
     const depositText = text(months <= 12 ? '단기보증' : '장기보증');
-    const deposit = depositText === '무보증' ? 0 : number(depositText, '원');
-    if (deposit === null && !absentPrice(depositText)) issues.push('DEPOSIT_REVIEW_REQUIRED');
+    const parsedDeposit = depositText === '무보증' ? 0 : number(depositText, '원');
+    const evidence = assessDepositEvidence({ supplierId: raw.payload.supplierCode, productType: text('상품구분'),
+      note: depositText === '무보증' ? depositText : undefined,
+      sourceAmount: parsedDeposit ?? depositText });
+    const deposit = evidence.amount;
+    if (evidence.state === 'UNKNOWN') issues.push(`DEPOSIT_REVIEW_REQUIRED:m${months}:${evidence.reason}`);
     priceTerms.push({ termKey: `m${months}`, termMonths: months, monthlyRent: { amount: rent, currency: 'KRW' },
-      depositState: deposit === null ? 'UNKNOWN' : deposit === 0 ? 'ZERO' : 'KNOWN',
+      depositState: evidence.state,
       ...(deposit !== null ? { deposit: { amount: deposit, currency: 'KRW' as const } } : {}) });
   }
   if (!priceTerms.length) issues.push('NO_PRICE_TERMS');

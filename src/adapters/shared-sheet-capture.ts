@@ -1,4 +1,4 @@
-import { sharedSheetChannels, sharedSheetCaptureDigest, buildSharedSheetBatch, sharedSheetHeaders, type SharedSheetCapture, type SheetCell,
+import { sharedSheetChannels, sharedSheetUnavailableChannels, sharedSheetCaptureDigest, buildSharedSheetBatch, sharedSheetHeaders, type SharedSheetCapture, type SheetCell,
   type SupplierEnteredRecord, type SheetCorrection } from './shared-sheet-source.js';
 import { decodeErp5Value, inspectErp5Capture, type Erp5SourceCapture } from './erp5-source-capture.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
@@ -120,6 +120,8 @@ export function captureFromBatchGet(spreadsheetId: string, raw: SheetsBatchGet, 
   serials: SheetsBatchGet, serialsAfter: SheetsBatchGet, stats?: CaptureDateStats): SharedSheetCapture {
   const tabs = sharedSheetTabs();
   if (raw?.spreadsheetId !== spreadsheetId || meta?.spreadsheetId !== spreadsheetId) throw new Error('SHARED_SHEET_CAPTURE_WRONG_SPREADSHEET');
+  if (meta.sheets?.some(x => sharedSheetUnavailableChannels.some(channel => channel.tab === x.properties?.title)))
+    throw new Error('SHARED_SHEET_SCOPE_DRIFT');
   if (!Array.isArray(raw?.valueRanges) || raw.valueRanges.length !== tabs.length) throw new Error('SHARED_SHEET_CAPTURE_INCOMPLETE');
   // complete:true is only claimed when each returned range is exactly A1:<last column><full grid rows> of the expected tab, in order.
   const gridRows = new Map((meta.sheets ?? []).map(x => [x.properties?.title, x.properties?.gridProperties?.rowCount]));

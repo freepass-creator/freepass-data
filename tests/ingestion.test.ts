@@ -59,6 +59,9 @@ describe('legacy catalog ingestion', () => {
       item.normalized.value === 750000
     )).toBe(true);
     expect(lineage.every((item) => item.stage === 'RAW_TO_NORMALIZED')).toBe(true);
+    for (const path of ['provider_company_code', 'product_type', 'deposit_note', 'deposit_free', 'price']) {
+      expect(lineage.some(item => item.source.fieldPath === path && item.normalized?.fieldPath === 'priceTerms.source:24_3만.depositState')).toBe(true);
+    }
   });
 
   it('does not let a late older observation replace the accepted source head', async () => {

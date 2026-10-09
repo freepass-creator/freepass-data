@@ -1,4 +1,5 @@
 import spec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+import { createHash } from 'node:crypto';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -32,8 +33,23 @@ function supplementByPlate<T extends { plate: string; supplierCode: string }>(it
   return out;
 }
 export const SHARED_SHEET_SPEC_DIGEST = stableDigest(spec);
+/** Executable online capture is bound to the approved current source, not an old fallback. */
+export function assertCurrentSharedSheetSource(id: string | undefined) {
+  const binding = spec.supplierManagement.sourceBinding;
+  if (!id || binding.legacyInputEnabled !== false || binding.fallbackAllowed !== false || binding.summaryIsSource !== false ||
+      !/^[a-f0-9]{64}$/.test(binding.spreadsheetIdSha256) ||
+      createHash('sha256').update(id).digest('hex') !== binding.spreadsheetIdSha256) throw new Error('SHARED_SHEET_SOURCE_BINDING_MISMATCH');
+}
 export const sharedSheetHeaders: readonly string[] = spec.inputHeaders;
-export const sharedSheetChannels = spec.supplierChannels.sharedInputSheet;
+/** Registration is retained even when an input tab is absent. Absence is never a sold-out signal. */
+export const sharedSheetRegisteredChannels = spec.supplierChannels.sharedInputSheet;
+const registeredTabs = [...new Set(sharedSheetRegisteredChannels.map(x => x.tab))].sort();
+const configuredTabs = [...spec.changeControl.activeSupplierTabs, ...spec.changeControl.absentRegisteredTabs].sort();
+if (stableDigest(registeredTabs) !== stableDigest(configuredTabs)) throw new Error('SHARED_SHEET_SCOPE_CONTRACT_INVALID');
+export const sharedSheetChannels = sharedSheetRegisteredChannels.filter(channel =>
+  (spec.changeControl.activeSupplierTabs as readonly string[]).includes(channel.tab));
+export const sharedSheetUnavailableChannels = sharedSheetRegisteredChannels.filter(channel =>
+  !(spec.changeControl.activeSupplierTabs as readonly string[]).includes(channel.tab));
 const timestamp = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d\d-\d\dT.*Z$/.test(v) && Number.isFinite(Date.parse(v));
 export function sharedSheetCaptureDigest(capture: SharedSheetCapture) {
   const { digest: _, ...body } = capture;
@@ -106,5 +122,9 @@ export function buildSharedSheetBatch(input: unknown): SourceIntakeBatch {
   if (Math.min(...c.tabs.map(t => Date.parse(t.readTime))) !== Date.parse(c.readTime)) fail();
   return { laneId: 'PRODUCT_VEHICLE', source: { sourceId, kind: 'GOOGLE_SHEET', displayName: 'Shared supplier input',
       expectedFreshnessSeconds: 1800 }, observedAt: c.readTime, sourceRevision: c.revision ?? digest, checksum: digest,
-    coverage: { mode: 'FULL', completeness: 'COMPLETE', scope: 'shared-input:15-tabs:18-codes' }, records };
+    // Complete within the explicitly configured input scope, partial against supplier registration.
+    // PARTIAL prevents canAssertSourceAbsence from authorizing retirement of absent suppliers' stock.
+    coverage: { mode: sharedSheetUnavailableChannels.length ? 'PARTIAL' : 'FULL', completeness: 'COMPLETE',
+      scope: `shared-input:${titles.length}-tabs:${sharedSheetChannels.length}-codes`,
+      note: `Registered tabs outside capture scope: ${[...new Set(sharedSheetUnavailableChannels.map(x => x.tab))].join(',')}; absence/retirement not authorized.` }, records };
 }

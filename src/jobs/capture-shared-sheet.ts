@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { captureFromBatchGet, type CaptureDateStats, sharedSheetCaptureRanges, supplierEnteredFromErp5, withSupplements, SHEETS_GRID_META_FIELDS, type SheetsBatchGet, type SheetsGridMeta } from '../adapters/shared-sheet-capture.js';
 import type { SupplierEnteredRecord, SheetCorrection } from '../adapters/shared-sheet-source.js';
 import { readSheetsBatchGet, readSheetsMetadata } from '../infra/shared-sheet-capture-reader.js';
-import { buildSharedSheetBatch, sharedSheetCaptureDigest } from '../adapters/shared-sheet-source.js';
+import { assertCurrentSharedSheetSource, buildSharedSheetBatch, sharedSheetCaptureDigest } from '../adapters/shared-sheet-source.js';
 import { captureVehicleMasterSnapshotReadOnly } from './data-access-runtime.js';
 import { writePrivateArtifact } from './ingest-shared-sheet-canonical.js';
 
@@ -64,5 +64,12 @@ export async function main(args = process.argv.slice(2)) {
     readTime: sealed.readTime, digest: sealed.digest }, null, 2));
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(e => { console.error(`SHARED_SHEET_CAPTURE_HOLD ${e instanceof Error && /^[A-Z0-9_]+$/.test(e.message) ? e.message : ''}`.trim()); process.exitCode = 1; });
+  Promise.resolve().then(() => {
+    // The explicit local evidence importer does not contact legacy supplier sheets.
+    if (!process.argv.includes('--from-batchget')) {
+      const position = process.argv.indexOf('--spreadsheet');
+      assertCurrentSharedSheetSource(position < 0 ? undefined : process.argv[position + 1]);
+    }
+    return main();
+  }).catch(e => { console.error(`SHARED_SHEET_CAPTURE_HOLD ${e instanceof Error && /^[A-Z0-9_]+$/.test(e.message) ? e.message : ''}`.trim()); process.exitCode = 1; });
 }

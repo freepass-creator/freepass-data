@@ -622,7 +622,16 @@ function buildChanges(state: LoadedState) {
         value: structuredClone(next.monthlyRent)
       }
     );
-    reviewable(
+    // Missing current evidence cannot authorize erasing a previously evidenced amount.
+    // Block the whole refresh: keep the old revision, never bind it to the new source head.
+    const depositEvidenceLost = Boolean(current.deposit) && next.depositState === 'UNKNOWN';
+    if (depositEvidenceLost) {
+      blocked('offer', offer.id, `priceTerms.${termKey}.depositState`, current.depositState,
+        next.depositState, 'DEPOSIT_EVIDENCE_LOST_REQUIRES_REVIEW');
+      blocked('offer', offer.id, `priceTerms.${termKey}.deposit`, current.deposit ?? null,
+        next.deposit ?? null, 'DEPOSIT_EVIDENCE_LOST_REQUIRES_REVIEW');
+    }
+    if (!depositEvidenceLost) reviewable(
       'offer',
       offer.id,
       `priceTerms.${termKey}.depositState`,
@@ -636,7 +645,7 @@ function buildChanges(state: LoadedState) {
         value: next.depositState
       }
     );
-    reviewable(
+    if (!depositEvidenceLost) reviewable(
       'offer',
       offer.id,
       `priceTerms.${termKey}.deposit`,

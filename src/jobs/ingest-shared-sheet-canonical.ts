@@ -1,7 +1,7 @@
 import { readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { buildSharedSheetBatch, sharedSheetChannels, SHARED_SHEET_SPEC_DIGEST, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
+import { buildSharedSheetBatch, sharedSheetRegisteredChannels, sharedSheetUnavailableChannels, SHARED_SHEET_SPEC_DIGEST, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
 import { sharedSheetNormalizer, SHARED_SHEET_RULE_VERSION, sharedSheetStatusPolicy, type SharedSheetIdentityResolver } from '../adapters/normalize-shared-sheet.js';
 import { assertVehicleIdentityInputs, verifiedMasterRecords, type VehicleIdentityInputs, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION } from '../domain/vehicle-identity-resolution.js';
@@ -80,7 +80,7 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
     policyDigest: stableDigest(KAKAO_COMMISSION_POLICY), ownershipDigest: stableDigest(ownership),
     previousHeadDigest: stableDigest(currentHead), runId: p.runId, entries: [],
     ...(identityInputs ? { identityInputs: structuredClone(identityInputs), identityRuleVersion: VEHICLE_IDENTITY_RULE_VERSION } : {}) };
-  const suppliers: Record<string, ReturnType<typeof group>> = Object.fromEntries(sharedSheetChannels.map(x => [x.code, group()]));
+  const suppliers: Record<string, ReturnType<typeof group>> = Object.fromEntries(sharedSheetRegisteredChannels.map(x => [x.code, group()]));
   const holdReasons: Record<string, number> = {};
   const unknownFeeReasons: Record<string, number> = {};
   const [assets, products, offers] = await Promise.all([store.listVehicleAssets(), store.listProducts(), store.listOffers()]);
@@ -172,6 +172,8 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
   const suppliedTerms = Object.values(suppliers).reduce((n, g) => n + g.suppliedTerms, 0);
   const economicsTerms = Object.values(suppliers).reduce((n, g) => n + g.economicsTerms, 0);
   return { plan, report: { mode: 'DRY_RUN', writes: 0, vehicles: plan.entries.length, suppliers, holdReasons,
+    sourceCoverage: p.batch.coverage,
+    unavailableSuppliers: sharedSheetUnavailableChannels.map(x => ({ code: x.code, tab: x.tab, status: 'HOLD', retirementAuthorized: false })),
     heldVehicles: plan.entries.filter(x => x.action === 'HOLD').length,
     unknownFeeReasons,
     reconciliation: { stage: 'PRECOMPUTE_PREVIEW', suppliedTerms, economicsTerms, equal: suppliedTerms === economicsTerms },
