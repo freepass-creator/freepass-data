@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { parseErp5PriceKey } from '../adapters/erp5-product-mapping.js';
+import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
+import { policyScalar } from './product-pricing-policy.js';
 import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
 
 type Rec = Record<string, unknown>;
@@ -144,9 +146,23 @@ export const KAKAO_COMMISSION_POLICY_2026_10_04 = {
  */
 export const KAKAO_COMMISSION_POLICY = {
   ...KAKAO_COMMISSION_POLICY_2026_10_04,
-  policyId: 'sales-commission-2026-10-05',
-  decisionDate: '2026-10-05',
-  currentAuthority: 'F04 수수료표 A1:M191(2026-10-04 사본) + AI 상황실 2026-10-05 결정(손오공 60개월 +60만, 원 미만 반올림)',
+  policyId: 'sales-commission-2026-10-09',
+  decisionDate: '2026-10-09',
+  supplierPolicyAssignments: {
+    decisionDate: '2026-10-09',
+    authority: 'USER_DIRECT_DECISION',
+    basicSupplierIds: ['RP020', 'RP030', 'PT-0001', 'RP016', 'PT-0023', 'RP015', 'RP013', 'RP010'],
+    policyKind: 'BASIC',
+    policyRef: 'FREEPASS_BASIC',
+    subscriptionUsesBasicTermLadder: true,
+    unspecifiedNewDeliveryForm: 'REQUIRES_EVIDENCE',
+    unspecifiedShortTerms: 'REQUIRES_EVIDENCE',
+    billinProposal: { supplierIds: ['RP021', 'PT-0026'], state: 'CONFIRMED', termMonths: 36,
+      billingBasis: 'MONTHLY_RENT_AT_36_MONTHS', billingPercent: 100, payoutPercentOfBilling: 80,
+      authority: 'USER_DIRECT_DECISION_2026_10_09', appliesTo: 'SUBSCRIPTION',
+      historicalSettlementRewrite: false },
+  },
+  currentAuthority: 'F04 수수료표 A1:M191(2026-10-04 사본) + AI 상황실 2026-10-05 결정(손오공 60개월 +60만, 원 미만 반올림) + 2026-10-09 대표 기본회사 지정 및 빌린카 LC 36개월 월대여료100/80 확정',
   evidenceHistory: [...KAKAO_COMMISSION_POLICY_2026_10_04.evidenceHistory,
     { policyId: KAKAO_COMMISSION_POLICY_2026_10_04.policyId, observedAt: '2026-10-04', revision: '35de6d9fa96ad07fba2fb2d68a4cb1c9113b61a5' }],
   sonokongAdditions: { ...KAKAO_COMMISSION_POLICY_2026_10_04.sonokongAdditions, 60: 600000 },
@@ -342,6 +358,8 @@ export type CommissionInput = {
   termMonths: number;
   monthlyRent: number;
   vehicleValue?: number;
+  /** Same product and pricing variant: 36-month monthly rental amount, not total rent. */
+  billin36MonthlyRent?: number | undefined;
   newProductSubtype?: 'NEW_PREDELIVERY' | 'NEW_MATCHING';
   /** Explicit contractual tier, never inferred from a deposit amount. */
   depositTierPercent?: 5 | 10;
@@ -440,9 +458,10 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     return fixed(`SONOKONG_PICKUP_${side}`, input.vehicleValue! * (billing ? 400 : 300) / 10000);
   }
   if (['RP021', 'PT-0026'].includes(supplierId) && subscription) {
-    // 탭 162행은 60개월만 정한다. 다른 기간 구독은 표준 재렌트로 흘리지 않고 닫는다.
-    if (termMonths !== 60) return unknownCommission('SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED');
-    return resolveTermLadder(termMonths, monthlyRent, side, 'BILLIN_SUBSCRIPTION');
+    const basis = input.billin36MonthlyRent ?? (termMonths === 36 ? monthlyRent : undefined);
+    if (!Number.isSafeInteger(basis) || basis! <= 0) return unknownCommission('BILLIN_36_MONTH_RENT_REQUIRED');
+    if (termMonths === 36 && basis !== monthlyRent) return unknownCommission('BILLIN_36_MONTH_RENT_CONFLICT');
+    return fixed(`BILLIN_SUBSCRIPTION_36_RENT_${side}`, basis! * (billing ? 1 : 0.8));
   }
   if (supplierId === 'RP012' && subscription) {
     const addition = KAKAO_COMMISSION_POLICY.sonokongAdditions[termMonths as 12];
@@ -467,6 +486,9 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     if (rerent && termMonths === 1) return unknownCommission('IANCAR_SHORT_TERM_BASIS_REQUIRED');
   }
   if (!standardLadderSupplier(supplierId)) return unknownCommission('SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE');
+  if (subscription && KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds.some(id => id === supplierId)) {
+    return resolveTermLadder(termMonths, monthlyRent, side);
+  }
   if (rerent) return resolveTermLadder(termMonths, monthlyRent, side);
   if (/^신차/.test(productType) && !subscription) {
     if (supplierId === 'RP022' && input.depositTierPercent !== 5 && input.depositTierPercent !== 10) return unknownCommission('DEPOSIT_TIER_REQUIRED');
@@ -497,6 +519,10 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   else if (input.supplierId === 'RP023' && /구독/.test(product)) rows = /전기/.test(input.fuel ?? '') ? [161] : [123, 161];
   else if (['RP021', 'PT-0026'].includes(input.supplierId) && /구독/.test(product)) rows = [162];
   else if (input.supplierId === 'RP014') rows = /구독/.test(product) ? ([12,24,36,48,60].includes(input.termMonths) ? [124 + [12,24,36,48,60].indexOf(input.termMonths)] : [183,184,185,186,187,188,189]) : [175,176];
+  else if (/구독/.test(product) && first && KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds.some(supplierId => supplierId === input.supplierId)) {
+    const index = [12,24,36,48,60].indexOf(input.termMonths);
+    rows = index >= 0 ? [first + 2 + index] : [183,184,185,186,187,188,189];
+  }
   else if (input.supplierId === 'RP013' && /구독|발주/.test(product)) rows = /구독/.test(product) ? [174] : [164];
   else if (id.startsWith('IANCAR_EV')) rows = [138];
   else if (id.startsWith('IANCAR_RERENT_6')) rows = [132];
@@ -510,6 +536,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   if (result.reasonCode === 'DEPOSIT_TIER_REQUIRED') rows.push(172);
   // 근거 행은 계산된 결과에만 단다. UNKNOWN·NOT_APPLICABLE·협의는 reasonCode만 — 미등록 공급사가 「근거 있는 규칙」처럼 보이지 않게.
   if (result.state !== 'CALCULATED') return result;
+  if (id.startsWith('BILLIN_SUBSCRIPTION_36_RENT')) return { ...result, sourceRefs: ['USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80'] };
   return { ...result, sourceRefs: [...new Set(rows)].map(f04Ref) };
 }
 
@@ -568,7 +595,33 @@ const assetStatus = (value: unknown) => ({
 export type CommissionEvidenceByTerm = Readonly<Record<string, Partial<Pick<CommissionInput,
   'vehicleValue' | 'newProductSubtype' | 'depositTierPercent' | 'subscriptionForm' | 'q12Basis' | 'individualException' | 'individualAgreement' | 'individualExceptionEvidence'>>>>;
 
-export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}) {
+export function resolveReferencePolicyContext(source: Rec, policies: Record<string, Rec> = {}) {
+  const policyId = text(source.policy_code) || null;
+  const matches = policyId ? Object.entries(policies).filter(([id, policy]) =>
+    id === policyId || text(policy.policy_code) === policyId) : [];
+  const reasonCode = !policyId ? 'POLICY_LINK_MISSING' : matches.length === 0 ? 'POLICY_NOT_FOUND'
+    : matches.length > 1 ? 'POLICY_LINK_AMBIGUOUS' : null;
+  const empty = (reason: string) => ({ state: 'UNKNOWN' as const, policyId, sourceRef: null,
+    facts: [] as Array<{ key: string; label: string; value: NonNullable<ReturnType<typeof policyScalar>>; sourceRef: string }>, reasonCode: reason });
+  if (reasonCode) return empty(reasonCode);
+  const [id, policy] = matches[0]!;
+  if (text(policy.provider_company_code) && text(policy.provider_company_code) !== text(source.provider_company_code)) {
+    return empty('POLICY_SUPPLIER_MISMATCH');
+  }
+  const values = policy.facts && typeof policy.facts === 'object' && !Array.isArray(policy.facts) ? policy.facts as Rec : policy;
+  const allowed = new Map(CONDITION_DIMENSION_SPECS.flatMap(spec => spec.sourcePolicyKeys.map(key => [key, spec.label] as const)));
+  const sourceRef = `policy/${id}`;
+  const facts = [...allowed].flatMap(([key, label]) => {
+    const value = policyScalar(values[key]);
+    return value === undefined || value === '' || (Array.isArray(value) && !value.length) ? []
+      : [{ key, label, value, sourceRef: `${sourceRef}/${key}` }];
+  });
+  // Raw allowed facts only: availability is not policy verification or eligibility approval.
+  return { state: facts.length ? 'REFERENCE' as const : 'UNKNOWN' as const, policyId, sourceRef, facts,
+    reasonCode: facts.length ? null : 'POLICY_FACTS_MISSING' };
+}
+
+export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}) {
   if (source.listable !== true) return null;
   const supplierId = text(source.provider_company_code);
   if (!supplierId) return null;
@@ -579,6 +632,13 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
     const parsed = parseErp5PriceKey(sourceKey);
     const monthlyRent = integer((raw as Rec).rent);
     if (!parsed || monthlyRent === null || monthlyRent <= 0) return [];
+    const basis36 = Object.entries(price as Rec).flatMap(([key, value]) => {
+      const candidate = parseErp5PriceKey(key);
+      if (!candidate || candidate.months !== 36 || candidate.settlement !== parsed.settlement || candidate.mileageKm !== parsed.mileageKm || !value || typeof value !== 'object' || Array.isArray(value)) return [];
+      const amount = integer((value as Rec).rent);
+      return amount !== null && amount > 0 ? [amount] : [];
+    });
+    const billin36MonthlyRent = basis36.length === 1 ? basis36[0] : undefined;
     const deposit = resolveReferenceDeposit({
       note: source.deposit_note,
       termMonths: parsed.months,
@@ -596,6 +656,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       fuel: text(source.fuel_type),
       termMonths: parsed.months,
       monthlyRent,
+      billin36MonthlyRent,
     });
     const supplierBillingFee = resolveSupplierBillingFee({
       ...evidenceByTerm[sourceKey],
@@ -604,6 +665,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       fuel: text(source.fuel_type),
       termMonths: parsed.months,
       monthlyRent,
+      billin36MonthlyRent,
     });
     const expectedGrossMargin = resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee);
     return [{
@@ -659,6 +721,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       supplierId,
       supplierName: text(source.provider_name) || null,
       policyId: text(source.policy_code) || null,
+      policyContext: resolveReferencePolicyContext(source, policies),
       priceTerms,
     }],
   };
@@ -668,6 +731,8 @@ export function buildKakaoCatalogReference(input: {
   consumerId: string;
   products: Record<string, Rec>;
   observedAt: string;
+  /** Policy documents captured with the same source read. Only approved fact keys are projected. */
+  policies?: Record<string, Rec>;
   /** Trusted private evidence, keyed by product ID then exact ERP price key. */
   commissionEvidenceByProduct?: Readonly<Record<string, CommissionEvidenceByTerm>>;
 }) {
@@ -684,7 +749,7 @@ export function buildInternalAiReference(input: KakaoCatalogReferenceSource) {
 
 function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
   const data = Object.entries(input.products)
-    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id]))
+    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id], input.policies))
     .filter((row): row is NonNullable<typeof row> => row !== null)
     .sort((a, b) => a.productId.localeCompare(b.productId));
   if (!data.length) throw new Error('KAKAO_REFERENCE_EMPTY');

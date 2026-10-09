@@ -197,7 +197,7 @@ describe('canonical per-term economics precompute', () => {
     const before = structuredClone(input);
     const result = precomputeOfferEconomics(input, 'USED_RENT');
     expect(result[0]).toMatchObject({ monthlyRent: { amount: 500000 },
-      supplierBillingFee: { state: 'KNOWN', amount: { amount: 570000 }, calculation: { kind: 'RATE', rate: 0.0475 }, policyId: 'sales-commission-2026-10-05' },
+      supplierBillingFee: { state: 'KNOWN', amount: { amount: 570000 }, calculation: { kind: 'RATE', rate: 0.0475 }, policyId: 'sales-commission-2026-10-09' },
       channelPayoutFee: { state: 'KNOWN', amount: { amount: 480000 }, calculation: { kind: 'RATE', rate: 0.04 } } });
     expect(result[0]!.depositCalculation.amount).toEqual(input.priceTerms[0]!.deposit);
     result[0]!.monthlyRent!.amount = 1;
@@ -223,7 +223,7 @@ describe('canonical per-term economics precompute', () => {
     expect(zeroFee).toMatchObject({ state: 'ZERO', amount: { amount: 0 } });
     expect(zeroFee.sourceRefs.some(ref => ref.startsWith('F04:'))).toBe(true);
     expect(zeroFee.sourceRefs.some(ref => ref.startsWith('catalog_offers/'))).toBe(false);
-    expect(precomputeOfferEconomics(input, 'USED_SUBSCRIPTION', '가솔린')[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED' });
+    expect(precomputeOfferEconomics(input, 'USED_SUBSCRIPTION', '가솔린')[0]!.supplierBillingFee).toMatchObject({ state: 'ZERO', amount: { amount: 0 }, reasonCode: null });
     input.priceTerms[0]!.termMonths = 18;
     expect(precomputeOfferEconomics(input, 'USED_RENT')[0]!.supplierBillingFee.reasonCode).toBe('TERM_NOT_IN_F04_COMMISSION_POLICY');
   });
@@ -244,18 +244,30 @@ describe('F04 explicit canonical evidence', () => {
     const evidence = { '60': { vehicleValue: 30000000 } };
     const before = structuredClone({ offer, evidence });
     const row = precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION', '가솔린', evidence)[0]!;
-    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 1200000 }, policyId: 'sales-commission-2026-10-05' });
+    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 1200000 }, policyId: 'sales-commission-2026-10-09' });
     expect(row.channelPayoutFee.amount?.amount).toBe(900000);
     expect(row.supplierBillingFee.sourceRefs).toContain('F04:수수료표!A190:M190');
     expect(precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee.reasonCode).toBe('VEHICLE_VALUE_REQUIRED');
     expect({ offer, evidence }).toEqual(before);
   });
-  it('preserves Billin 60-month rate calculation and F04 row rather than a made-up fixed amount', () => {
+  it('uses the same-product 36-month basis for Billin and records its exact price provenance', () => {
     const offer = { id: 'synthetic', supplierId: 'RP021', priceTerms: [{ termKey: '60', termMonths: 60, monthlyRent: { amount: 200000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }] };
+    expect(precomputeOfferEconomics(offer, 'USED_SUBSCRIPTION')[0]!.supplierBillingFee.reasonCode).toBe('BILLIN_36_MONTH_RENT_REQUIRED');
+    offer.priceTerms.push({ ...offer.priceTerms[0]!, termKey: '36', termMonths: 36, monthlyRent: { amount: 500000, currency: 'KRW' } });
     const row = precomputeOfferEconomics(offer, 'USED_SUBSCRIPTION')[0]!;
-    expect(row.supplierBillingFee).toMatchObject({ amount: { amount: 270000 }, calculation: { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.0225 } });
-    expect(row.channelPayoutFee).toMatchObject({ amount: { amount: 210000 }, calculation: { kind: 'RATE', rate: 0.0175 } });
-    expect(row.channelPayoutFee.sourceRefs).toContain('F04:수수료표!A162:M162');
+    expect(row.supplierBillingFee).toMatchObject({ amount: { amount: 500000 }, calculation: { kind: 'FIXED' } });
+    expect(row.channelPayoutFee.amount?.amount).toBe(400000);
+    expect(row.channelPayoutFee.sourceRefs).toContain('USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80');
+    expect(row.channelPayoutFee.priceSourceRefs).toContain('catalog_offers/synthetic/priceTerms/36');
+    expect(row.supplierBillingFee.referenceRentBasis).toEqual({ termKey: '36', termMonths: 36, monthlyRent: { amount: 500000, currency: 'KRW' }, multiplier: 1 });
+    expect(row.channelPayoutFee.referenceRentBasis?.multiplier).toBe(0.8);
+  });
+  it('detects a changed or corrupted reference monthly rent independently of the stored fixed amount', () => {
+    const input = { ...offer(), supplierId: 'RP021' };
+    input.internalEconomicsTerms = precomputeOfferEconomics(input, 'USED_SUBSCRIPTION');
+    expect(auditOfferEconomicsTerms(input).invalidFacts).toHaveLength(0);
+    input.internalEconomicsTerms[0]!.supplierBillingFee.referenceRentBasis!.monthlyRent.amount += 100;
+    expect(auditOfferEconomicsTerms(input).invalidFacts).toContain('ECONOMICS_REFERENCE_RENT_MISMATCH:24@default:supplierBillingFee');
   });
 });
 
