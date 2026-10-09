@@ -57,6 +57,56 @@ This does not add a second CatalogStore, publication writer or scheduler.
 
 ERP 상세는 `components/ProductDetail.tsx:71` → `components/use-product-photos.ts:33`/`:37`/`:44` → `lib/domain/product-photos.ts`를 읽고, 목록 카드도 공용 사진 경로를 사용한다(`components/ProductCard.tsx:47`). `app/api/extract-photos/route.ts:25`/`:76`에 Drive 서비스 계정 조회가 있지만, **이번 비공개 파일 링크가 실제 사진으로 표시되고 원문 접근 경계를 지키는지는 미확인**이다. Data 이안카 사진 프록시는 `src/api/consumer-gateway.ts:226`의 별도 인증·감사 경로이며 일반 Drive 프록시라고 가정하지 않는다. `ERP_PRIVATE_MEDIA_DISPLAY_UNVERIFIED`를 모든 사진 계획에 남긴다. 이번에 스키마 변경·사진용 새 칸은 없다.
 
+### 2단계 — 공통 시트 사진 표시 계획 (2026-10-09)
+
+기준 revision은 1단계 `dd529ac19acc0fae73de35e91c8d3704e74d094e`, 동일 PR #412 브랜치다. 사용자가 제공한 main `a6ac21c`/PR MERGEABLE/Issue #24 확인을 사용했으며 네트워크 재조회는 하지 않았다. Academy `READY` (`2026-10-09T13:01:51.934Z`). 재사용 판정은 **COMPOSE_OR_EXTEND**: 1단계 adapter/application/domain/port/job·시험과 이 문서를 확장한다. 새 파일·DB·workflow 자산 생성이 없어 `CREATE_NEW_JUSTIFIED` 대상도 없다. 과거 1단계의 신규 생성 근거는 위에 보존한다.
+
+현행 시트의 사진 전용 열은 없다. `contracts/supplier-input-sheet-spec.v1.json:110`의 `inputHeaders` 마지막 `비고`(`:184`, BV)가 기존 표시 후보이며, `:30`/legacy sales 전환은 사진링크 열 제거·차량번호 링크 이전의 역사다. 옛 숨김 사진 열을 현행으로 복원하지 않는다. `docs/SUPPLIER-INPUT-SHEET-RUNBOOK.md:396`과 `:102`도 과거 사진 전환과 현행 전환을 구분한다. 규격 파일·머리글·시트는 변경하지 않았다.
+
+기존 Data → 공통 시트 경로는 `src/application/sheet-blank-fill-input.ts::buildSheetBlankFillInput`(products/policy 읽기) → `src/application/sheet-blank-fill.ts::planSheetBlankFill` → `src/jobs/plan-sheet-blank-fill.ts`의 비공개 plan/report → 별도 승인된 AI-OPS 시트 실행기다. 현재 FIELD_MAP/TARGET_HEADERS에는 사진이 없어 products에 링크가 생겼다고 자동 표시되지 않는다. `scripts/supplier-input-sheet.mjs`는 규격 표시/종합 투영 경로이고, `summaryFormula`는 공급사 탭 A:BV를 종합한다. 이 스크립트를 새 원문 writer로 사용하지 않는다.
+
+`planKakaoSheetPhoto`는 같은 `바꿀칸 {범위,전:'',후}`·`줄확인` 형식의 **사진 전용 계획 조각**만 만든다. 입력 헤더를 기존 `sharedSheetHeaders`와 완전 일치 검사하고, 최신 products.photo_link와 공급사/기존 차량 ID/행 식별 값을 대조한다. 현행 목적지는 비고이며, 15분 이내 셀 캡처·정확한 열/행·수식/링크 메타데이터 완전성이 필요하다. 공급사/사람 값, 공백, 0, false, 빈 결과 수식, 기존 링크는 보존한다. 비고가 차 있으면 덧붙이거나 지우지 않고 HOLD한다. 원문 문서 링크는 넣지 않으며 1단계에서 검증한 차량사진 링크의 products 되읽기만 전달한다.
+
+자동 export/job 연결과 시트 쓰기는 아직 없다. 운영 연결 시 기존 비공개 계획에 이 조각을 합치되 시트 바인딩/등록된 현재 탭·상품 단일 매칭·productDigest/rowDigest·사진 lineage/권한·행 이동을 재검증해야 한다. `SHEET_PRIVATE_MEDIA_DISPLAY_UNVERIFIED`, `SHEET_WRITE_NOT_AUTHORIZED`는 계획에 남으며 일반 plan writer로 바로 전달하면 안 된다. 기존 비공개 링크만 표시하고 공유 권한을 확대하지 않는다. 사진/비고 열 모두 없는 미래 규격은 `SHEET_PHOTO_SPEC_DESIGN_REQUIRED`: 그때 별도 규격 설계만 제안하고 열 생성 금지다.
+
+### 2단계 — 상시 수신·비공개 대기열·정리 계약
+
+AI-OPS 감시가 메시지와 첨부 원본을 확보해 비공개 대기열에 원자적으로 게시 → Data 소유 실행기가 묶음을 읽고 기본 dry-run → 승인된 원문 보관 실행이 기존 Source/Drive 포트로 적재 → RAW/사건 영수증/첨부 바이트·권한 되읽기 → digest가 같은 ACK를 AI-OPS가 인증된 경로로 확인 → 그 묶음의 로컬 사본만 정리한다. 상품 반영·시트 쓰기는 독립 승인 경로다. 실행/예약은 **설계 상태**이며 이번 작업으로 상시 가동됐다는 뜻이 아니다.
+
+- JSON은 1단계 CLI와 같은 `KakaoQueueInput = {bundle, products?}`다. bundle의 supplierCode/roomId/collectorId/observedAt/messages, 메시지·첨부 타입과 크기 제한은 `src/adapters/kakao-source-intake.ts` 하나를 재사용한다. 실행 모듈·명령·삭제 경로를 JSON에 추가하지 않는다. products는 선택적 계획 snapshot이며 운영 writer의 최신 읽기를 대체하지 않는다.
+- 대기열 포트 `list() → [{key,inputDigest}]`, `read(key) → KakaoQueueInput`; key는 비공개 opaque key이고 inputDigest는 `stableDigest(input)`이다. 게시자는 임시 파일 완성 후 atomic rename/create로 공개하며 immutable key의 내용은 바꾸지 않는다. 재시작 시 같은 JSON·관측시각·version을 유지한다. PC ID를 사건 ID에 넣거나 재시도마다 revision을 올리지 않는다.
+- `processKakaoQueue`는 순차 처리하고 읽기/해시 실패를 해당 묶음의 HOLD/UNKNOWN으로 격리한다. 목록 자체 실패는 `QUEUE_LIST_FAILED`로 실행 실패. 기본은 dry-run, 삭제 0. Source/Drive apply는 기존 승인 두 관문과 주입 포트가 필요하다. 사용자가 원문 보관 실행을 승인하기 전 상시 apply를 켜지 않는다.
+- 성공 조건: 묶음 **모든** 메시지가 ARCHIVED이며 COMPLETED Source run, 동일 RAW payload/지문, 동일 관측 참조를 가진 ARCHIVED 사건 receipt를 새로 읽는다. 원문 JSON 및 첨부마다 유일한 eventId/sha256 파일·receipt 참조·다운로드 해시·경로·전체/상속 비공개 권한을 다시 확인한다. 이후만 `ACK_ELIGIBLE/deleteAllowed=true`. 제품 표시 HOLD는 원문 보관과 별개이며 사진 표시 완료를 뜻하지 않는다.
+- 응답 `{inputDigest,status,deleteAllowed,issues}`에서 DRY_RUN/HOLD/UNKNOWN은 삭제 불가. CLI apply는 이 receipt를 출력하고 정리 불가면 exit 2다. 원문·파일 경로·공급사 이름·개인정보 없이 digest/사유 코드만 알림용 반환한다. 알림 실제 전송 포트는 연결하지 않았다.
+- AI-OPS는 ACK를 Data 인증 경로에서 되읽고 **자신의 원본 digest와 동일한 묶음**에 한해 정리한다. 성공 exit만으로 삭제 금지. 부분 성공은 묶음 전체 보존, 보류/실패/연결 단절은 무기한 보존·격리하고 시간 기반 자동 삭제 금지. ACK 응답 유실은 같은 묶음 재대사; 업로드 응답 유실/lease 만료는 1단계의 검색·되읽기 규칙을 지킨다. JSON과 첨부를 공유하는 다른 pending 항목이 있으면 참조가 해소될 때까지 첨부 보존. 중앙 원본 삭제는 이 계약 범위 밖이다.
+
+**Data 소유 실행 설계(문서 초안, 비활성):** 요청에 언급된 `.github/workflows/data-owned-refresh.yml:1`은 현재 `RETIRED` 안내로, 되살리지 않는다. 현행 `.github/workflows/shared-sheet-daily.yml:25` 이후의 Data 소유 concurrency(`freepass-data-production-delivery`), cancel-in-progress=false, 환경·target binding·승인 gate 패턴만 참고한다. 카톡용 workflow_ref에는 별도 최소 WIF/IAM 검토가 필요하며 기존 daily 신원을 자동 재사용하지 않는다. 이후 승인된 Data 실행기가 매일 정해진 수신 창 및 수동 재대사에서 같은 processKakaoQueue를 호출하도록 설계한다. 정확한 주기/신원/비공개 queue transport/멈춤 스위치가 확정되기 전 cron·repository_dispatch·workflow 파일을 만들거나 켜지 않는다. ERP4 예약 추가 금지. backlog의 가장 오래된 항목 나이·HOLD/UNKNOWN 수·마지막 중앙 ACK 시각을 감시하고, 상태 이상 시 신규 업로드 중단 및 비식별 알림을 반환한다. 일일 성공 여부만으로 나중에 들어온 새 묶음을 건너뛰지 않는다.
+
+AI-OPS에 필요한 변경 요청(이번에 해당 저장소 수정 없음):
+1. 같은 CLI envelope와 공통 메시지 ID/검증된 revision·원본 바이트를 만드는 capture, 비공개 atomic queue 게시 및 digest 계산.
+2. 인증된 queue 읽기/ACK 되읽기 transport와 Data 실행기에게 필요한 최소 접근 범위. 공개 Actions artifact·로그에 원문/첨부 저장 금지.
+3. 동일 digest의 ACK만 수락하는 정리기, 공유 첨부 참조 보존, 부분 실패 격리, 재시작 시 immutable 묶음 복원.
+4. 반환 사유 코드를 기존 감시/알림에 연결하고 중복 경보를 digest 기준으로 묶기. HOLD 해제 전 맹목 재업로드 금지.
+5. Data 실행 주기·일일 수신 마감/지연 경보 기준·중단 스위치를 확정하고 실제 transport/권한/되읽기 증거를 확보한 뒤 별도 활성화 검토.
+
+### 2단계 — 공급사 원천 성향·관측 기반 시범 선택
+
+`readSupplierSourceSummary`는 기존 SourceIngestionStore.getRun/getSource/listRaw만 사용한다. 저장 위치는 기존 `sources/source_runs/raw_records/source_event_receipts`; 별도 성향 DB/모음/사람 지정 우선순위는 없다. 성향은 읽을 때 계산하고 원본은 기존 모음에 그대로 보존한다. 호출자는 대상 기간의 run manifest를 주며 응답에 그 목록과 `PROVIDED_SOURCE_RUNS_ONLY`를 남긴다. 자동 전체 이력 검색은 미연결이고, 누락된 manifest를 전 공급사 관측 완료로 해석하면 안 된다.
+
+계산은 `summarizeSupplierSources`: 최근 N일(1~365일, 경계 포함)에서 미래/오래된 사건을 제외하고 공급사코드+사건키로 중복 제거한다. 카톡은 원발송시각과 eventId 기준이며 PC별 재관측으로 수가 늘지 않는다. 검증된 표를 가진 메시지는 KAKAO_TABLE, 나머지 검증된 메모는 KAKAO_MEMO다. 시트는 공급사별 완료된 capture run 하나를 사건 하나로 센다(차량 행 수가 아님). API/기타도 관측 종류·최근 시각을 보존한다. kind 충돌은 오류, RAW 누락·미완료 run·격리/미검증 관측은 HOLD이며 시범 자동 선택을 막는다.
+
+전체 관측 사건의 과반이 카톡 메모면 KAKAO_MEMO_PRIMARY, 시트면 SHEET_PRIMARY, 동률·표 중심·기타 중심은 MIXED_OR_INSUFFICIENT다. 사건수·종류별 수·최근 시각·기간을 함께 반환한다. API 관측이 있으면 `crossCheckObserved=true`지만 이는 홈페이지 존재/이용허가를 증명하지 않는다. 수집 주기가 다르면 비율도 달라지므로 **관측 성향일 뿐 field authority나 원천 우선순위를 변경하지 않는다**. 관측 0인 공급사는 누락/UNKNOWN이며 0 재고나 특정 성향으로 만들지 않는다.
+
+`selectKakaoPilotSuppliers`는 최근 N일 카톡 고유 사건(메모+표)이 있는 공급사를 실제 도착 수 내림차순 → 최근 관측시각 → opaque 공급사코드 순으로 정렬해 limit개 반환한다. 특정 공급사 이름/코드를 선택 규칙에 넣지 않는다. 홈페이지는 이용약관·접근 허용 확인 전 수집 금지이며, 허용 후에도 한 건씩 교차 확인 근거로만 기존 Source 경로에 보존한다. API 관측에서 홈페이지 사실을 추정하거나 일괄 크롤링하지 않는다.
+
+### 2단계 검증 및 남은 HOLD
+
+- 변경: 1단계 기존 파일 6개(adapter/application/domain/job/port/시험)와 이 문서·NEXT-START-HERE, 총 8개. 신규 파일·규격 수정·워크플로 수정·운영 쓰기·커밋·푸시 없음.
+- 가짜 포트 시험: 현행 비고 계획, 사람 값/공백/수식/링크 보존, 헤더·행·상품 불일치 HOLD, queue dry-run/여러 묶음/부분 실패/재시작/응답 유실/최종 되읽기·권한 실패, RAW 관측 중복 제거/시트 capture 단위/관측 변화/시범 선택을 검증했다. 최종 build PASS, 카카오33+기존 Source persistence4=37 PASS, diff 공백 검사 PASS.
+- `npm.cmd run check`: 첫 실행은 추가 테스트의 exactOptionalPropertyTypes 오류로 build 실패했고 테스트 구성에서 undefined 속성을 제거해 수정. 이후 build·architecture·Data boundary·standards 검사(규격 상태 PARTIAL)·시트105·runtime smoke12·shadow10·dashboard21 단계 통과. 최종 전체 실행은 Vitest 1777 PASS / 9 FAIL / 14 SKIP, exit 1(카카오33 PASS 포함). 9건은 기존 CLI의 `uv_os_get_passwd ENOMEM`, jq Permission denied, read-pilot exit/JSON 오류, 로컬 서버 ECONNREFUSED다. 환경/기존 경로 실패를 기대값 변경으로 통과시키지 않았다. 후속 행 식별/알림 digest 방어 변경은 build·관련 시험을 다시 검증한다. 최종 추가 검증 수는 NEXT-START-HERE에 기록한다.
+- HOLD: 독립 Claude 검토는 네트워크 금지로 UNAVAILABLE(호출 없음). 실제 queue transport/감시/ACK 정리 연결, Drive/Firestore 운영 권한과 트랜잭션, 상품→공통 시트 입력 exporter 결합, 비공개 링크의 실제 시트/ERP 화면, 정상 환경 전체 check가 남는다. 로컬 코드·계획 시험을 상시 운영/시트 표시 완료로 확대하지 않는다.
+- next_start_here: 이 절과 같은 미커밋 diff를 지휘통제실에서 독립 검토하고, 네트워크 있는 환경의 별도 승인 절차에서 transport/권한·원문 보관·ACK 되읽기부터 진행한다. 원천 성향 manifest의 기간·공급사 coverage도 먼저 확정한다.
+
 ### CLI와 운영 실측 절차
 
 입력은 비공개 JSON 하나: `{ "bundle": { supplierCode, roomId, collectorId, observedAt, messages }, "products": [...] }`. 타입 전체는 `src/adapters/kakao-source-intake.ts`와 `src/ports/kakao-archive.ts`. `messages`에는 messageId(또는 fallback 식별 근거), sentAt, text, captureVerified, version, attachments를 넣는다. 첨부는 bytesBase64/mediaType/role, 차량 대조는 원문 evidenceText와 식별자다. products는 `{id,data,supplierVehicleIdField?}`로 기존 공급사 차량 ID 필드를 명시한다. 공급사 ID 필드 이름을 임의 추정하지 않는다. 입력 파일/출력 계획/영수증은 공개 Git에 넣지 않는다.

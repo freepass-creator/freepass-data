@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { prepareKakaoBundle, type KakaoBundle, type PreparedKakaoMessage } from '../adapters/kakao-source-intake.js';
+import { prepareKakaoBundle, type KakaoBundle, type PreparedKakaoMessage, type KakaoQueueInput } from '../adapters/kakao-source-intake.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { plateIdentityKey } from '../domain/vehicle-plate.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { KakaoDriveArchivePort, DriveArchiveFile, KakaoProductSnapshot, KakaoPhotoPlan, KakaoPhotoWriterPort } from '../ports/kakao-archive.js';
 import { ingestRawSourceBatch, prepareRawSourceBatch } from './ingest-raw-source.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
+import type { KakaoQueueReadPort, KakaoQueueReceipt } from '../ports/kakao-archive.js';
+import { summarizeSupplierSources, selectKakaoPilotSuppliers, type SupplierSourceObservation } from '../domain/source-event.js';
+import { sharedSheetHeaders } from '../adapters/shared-sheet-source.js';
 
 /** Evidence only: these cells are not CatalogCandidate facts and do not approve amounts/specifications. */
 export function kakaoTableLineage(item: PreparedKakaoMessage): FieldLineageRecord[] {
@@ -173,4 +176,150 @@ export async function ingestKakaoBundle(bundle: KakaoBundle, ports: {
     }
   }
   return results;
+}
+
+/** Plan shape follows the existing blank-fill writer (before='', row guard); never executes writes. */
+export function planKakaoSheetPhoto(input: {
+  headers: string[]; capturedAt: string; now: string; product: KakaoProductSnapshot;
+  row: { supplierCode: string; supplierVehicleId: string; range: string; identityRange: string;
+    identityValue: string; value: unknown; formula: boolean; metadataComplete: boolean; hasLink: boolean };
+}) {
+  const holds: string[] = [];
+  const target = sharedSheetHeaders.includes('사진링크') ? '사진링크' : sharedSheetHeaders.includes('비고') ? '비고' : null;
+  const row = input.row;
+  const age = Date.parse(input.now) - Date.parse(input.capturedAt);
+  if (!Number.isFinite(age) || age < 0 || age > 900_000) holds.push('SHEET_CAPTURE_STALE');
+  if (!target || input.headers.filter(h => h === target).length !== 1) holds.push('SHEET_PHOTO_SPEC_DESIGN_REQUIRED');
+  if (stableDigest(input.headers) !== stableDigest(sharedSheetHeaders)) holds.push('SHEET_LAYOUT_MISMATCH');
+  const column = target ? input.headers.indexOf(target) + 1 : 0;
+  const colName = (columnNumber: number) => {
+    let n = columnNumber, letters = '';
+    while (n > 0) { n--; letters = String.fromCharCode(65 + n % 26) + letters; n = Math.floor(n / 26); }
+    return letters;
+  };
+  const cell = /^('(?:[^']|'')+'|[^'!]+)!([A-Z]+)([1-9][0-9]*)$/;
+  const destination = cell.exec(row.range), identity = cell.exec(row.identityRange);
+  if (!destination || !identity || !row.identityValue || Number(destination[3]) < 2
+    || !Number.isSafeInteger(Number(destination[3])) || destination[2] !== colName(column)
+    || identity[2] !== colName(sharedSheetHeaders.indexOf('차량번호') + 1)
+    || destination[1] !== identity[1] || destination[3] !== identity[3]) holds.push('SHEET_ROW_BINDING_REQUIRED');
+  if (!row.metadataComplete || row.formula || row.hasLink || row.value != null && row.value !== '')
+    holds.push('EXISTING_SHEET_VALUE_PRESERVED');
+  const field = input.product.supplierVehicleIdField;
+  if (!row.supplierCode || !row.supplierVehicleId || !field
+    || input.product.data.provider_company_code !== row.supplierCode
+    || input.product.data[field] !== row.supplierVehicleId
+    || row.identityValue !== input.product.data.car_number)
+    holds.push('PRODUCT_MATCH_UNRESOLVED');
+  const photo = input.product.data.photo_link;
+  if (typeof photo !== 'string' || !photo || photo.split('\n').some(link =>
+    !/^https:\/\/drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+\/view$/.test(link))) holds.push('PRODUCT_PHOTO_LINK_UNRESOLVED');
+  return { status: 'PLAN_ONLY' as const, writes: 0, target, holds,
+    productDigest: stableDigest(input.product.data), rowDigest: stableDigest(row),
+    바꿀칸: holds.length ? [] : [{ 범위: row.range, 전: '', 후: photo as string }],
+    줄확인: holds.length ? [] : [{ 범위: row.identityRange, 값: row.identityValue }],
+    // A private link is not a proof that a sheet viewer can open it.
+    applyHolds: ['SHEET_PRIVATE_MEDIA_DISPLAY_UNVERIFIED', 'SHEET_WRITE_NOT_AUTHORIZED'] };
+}
+
+/** Verify every message again after ingestion, including the committed Source receipt. */
+export async function processKakaoQueueInput(input: KakaoQueueInput,
+  ports: Parameters<typeof ingestKakaoBundle>[1],
+  options: { apply: boolean; approval: string | undefined; now: string }): Promise<KakaoQueueReceipt> {
+  const inputDigest = stableDigest(input);
+  const receipt = (status: KakaoQueueReceipt['status'], issues: string[]): KakaoQueueReceipt =>
+    ({ inputDigest, status, deleteAllowed: status === 'ACK_ELIGIBLE', issues });
+  try {
+    const prepared = prepareKakaoBundle(input.bundle);
+    if (!options.apply) { planKakaoIntake(input.bundle, input.products); return receipt('DRY_RUN', []); }
+    const results = await ingestKakaoBundle(input.bundle, ports, options);
+    if (results.some(r => r.status !== 'ARCHIVED')) return receipt(
+      results.some(r => r.status === 'UNKNOWN') ? 'UNKNOWN' : 'HOLD', [...new Set(results.flatMap(r => r.issues))]);
+    for (const item of prepared) {
+      const raw = prepareRawSourceBatch(item.batch).rawRecords[0]!;
+      const run = await ports.store.getRun(raw.runId);
+      const stored = (await ports.store.listRaw(raw.runId)).find(r => r.rawRecordId === raw.rawRecordId);
+      const event = item.eventId ? await ports.store.getEvent(item.eventId) : null;
+      if (run?.status !== 'COMPLETED' || !stored || stored.sourceId !== raw.sourceId
+        || stored.sourceRecordId !== raw.sourceRecordId || stored.sourceFingerprint !== raw.sourceFingerprint
+        || stableDigest(stored.payload) !== stableDigest(raw.payload)
+        || !event || event.state !== 'ARCHIVED' || event.sourceId !== raw.sourceId
+        || event.fingerprint !== item.fingerprint || !event.observations.some(o =>
+          o.observationId === item.observationId && o.rawRef === raw.rawRecordId && o.fingerprint === item.fingerprint))
+        return receipt('HOLD', ['CENTRAL_READBACK_REQUIRED']);
+      for (const attachment of item.archives) {
+        const matches = await ports.drive.find({ eventId: item.eventId!, sha256: attachment.sha256 });
+        if (matches.length !== 1 || !event.archiveRefs.includes(matches[0]!.id)) return receipt('HOLD', ['ARCHIVE_READBACK_REQUIRED']);
+        const file = await ports.drive.verify(matches[0]!.id);
+        assertPrivateDrive(file, ports.organizationDomain);
+        if (file.id !== matches[0]!.id || file.directory !== item.directory || file.sha256 !== attachment.sha256
+          || file.appProperties.eventId !== item.eventId || file.appProperties.sha256 !== attachment.sha256)
+          return receipt('HOLD', ['ARCHIVE_READBACK_REQUIRED']);
+      }
+    }
+    return receipt('ACK_ELIGIBLE', []);
+  } catch { return receipt('UNKNOWN', ['QUEUE_PROCESSING_OR_READBACK_FAILED']); }
+}
+
+/** One bad bundle cannot drop the rest. Returned alerts contain no source text or queue paths. */
+export async function processKakaoQueue(queue: KakaoQueueReadPort<KakaoQueueInput>,
+  ports: Parameters<typeof ingestKakaoBundle>[1],
+  options: Parameters<typeof processKakaoQueueInput>[2] = { apply: false, approval: undefined, now: new Date().toISOString() }) {
+  const results: KakaoQueueReceipt[] = [];
+  let entries: Awaited<ReturnType<typeof queue.list>>;
+  try { entries = await queue.list(); } catch { throw new Error('QUEUE_LIST_FAILED'); }
+  for (const entry of entries) {
+    if (!/^[a-f0-9]{64}$/.test(entry.inputDigest)) {
+      results.push({ inputDigest: stableDigest(entry.inputDigest), status: 'HOLD', deleteAllowed: false, issues: ['QUEUE_DIGEST_INVALID'] });
+      continue;
+    }
+    try {
+      const input = await queue.read(entry.key);
+      if (stableDigest(input) !== entry.inputDigest) {
+        results.push({ inputDigest: entry.inputDigest, status: 'HOLD', deleteAllowed: false, issues: ['QUEUE_DIGEST_CONFLICT'] });
+      } else results.push(await processKakaoQueueInput(input, ports, options));
+    } catch { results.push({ inputDigest: entry.inputDigest, status: 'UNKNOWN', deleteAllowed: false, issues: ['QUEUE_READ_FAILED'] }); }
+  }
+  return { results, alerts: results.filter(r => r.status === 'HOLD' || r.status === 'UNKNOWN'), deletions: 0 };
+}
+
+/** Explicit run manifest, read-only existing Source store. Missing runs are never silently complete. */
+export async function readSupplierSourceSummary(store: SourceIngestionStore, runIds: string[],
+  options: { now: string; days: number; limit: number }) {
+  const observations: SupplierSourceObservation[] = [];
+  const holds: string[] = [];
+  for (const runId of new Set(runIds)) {
+    const run = await store.getRun(runId);
+    if (!run || run.status !== 'COMPLETED') { holds.push('SOURCE_RUN_UNAVAILABLE'); continue; }
+    const source = await store.getSource(run.sourceId);
+    const rows = await store.listRaw(runId);
+    if (!source || rows.length !== run.rawCount) { holds.push('SOURCE_READ_INCOMPLETE'); continue; }
+    for (const raw of rows) {
+      const p = raw.payload;
+      if (raw.sourceId !== run.sourceId || raw.runId !== runId || typeof p.supplierCode !== 'string' || !p.supplierCode) {
+        holds.push('SOURCE_SUPPLIER_BINDING_UNAVAILABLE'); continue;
+      }
+      if (p.ruleVersion === 'kakao-intake/1') {
+        const original = p.original as Record<string, unknown> | undefined;
+        if (typeof p.eventId !== 'string' || !/^[a-f0-9]{64}$/.test(p.eventId) || original?.captureVerified !== true
+          || typeof original.sentAt !== 'string' || !Array.isArray(p.issues) || p.issues.length) {
+          holds.push('SOURCE_OBSERVATION_UNVERIFIED'); continue;
+        }
+        const hasTable = Array.isArray(original.tables) && original.tables.some(t => t?.verified === true);
+        observations.push({ supplierCode: p.supplierCode, eventKey: p.eventId, observedAt: original.sentAt,
+          kind: hasTable ? 'KAKAO_TABLE' : 'KAKAO_MEMO' });
+      } else {
+        if (run.coverage.completeness !== 'COMPLETE' || p.quarantine != null && p.quarantine !== '') {
+          holds.push('SOURCE_OBSERVATION_UNVERIFIED'); continue;
+        }
+        // One capture per supplier, not one event per inventory row. Re-reading a run cannot inflate counts.
+        observations.push({ supplierCode: p.supplierCode, eventKey: `${raw.sourceId}:${runId}`,
+          observedAt: run.observedAt ?? raw.observedAt,
+          kind: source.kind === 'GOOGLE_SHEET' ? 'SHEET' : source.kind === 'API' ? 'API' : 'OTHER' });
+      }
+    }
+  }
+  return { scope: 'PROVIDED_SOURCE_RUNS_ONLY' as const, runIds: [...new Set(runIds)], holds: [...new Set(holds)],
+    summaries: summarizeSupplierSources(observations, options),
+    pilots: holds.length ? [] : selectKakaoPilotSuppliers(observations, options), writes: 0 };
 }

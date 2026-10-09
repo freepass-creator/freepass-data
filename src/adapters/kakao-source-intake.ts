@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
+import type { KakaoProductSnapshot } from '../ports/kakao-archive.js';
 
 export type KakaoAttachment = { bytesBase64: string; mediaType: string; role: 'VEHICLE_PHOTO' | 'DOCUMENT' | 'UNKNOWN' };
 export type KakaoMessage = {
@@ -18,6 +19,8 @@ export type KakaoBundle = {
   supplierCode: string; roomId: string; collectorId: string; observedAt: string;
   messages: KakaoMessage[];
 };
+/** Identical to the original CLI envelope; transport metadata is not source content. */
+export type KakaoQueueInput = { bundle: KakaoBundle; products?: KakaoProductSnapshot[] };
 export const bytesSha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const instant = (v: unknown): v is string => typeof v === 'string'
   && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(v)

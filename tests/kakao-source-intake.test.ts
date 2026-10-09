@@ -7,11 +7,15 @@ import { prepareKakaoBundle, bytesSha256, type KakaoBundle } from '../src/adapte
 import { planKakaoIntake, ingestKakaoBundle, assertPrivateDrive, applyKakaoPhotoPlan } from '../src/application/kakao-source-intake.js';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { FirestoreSourceStore } from '../src/infra/source-firestore-store.js';
-import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
+import { prepareRawSourceBatch, ingestRawSourceBatch } from '../src/application/ingest-raw-source.js';
 import { canAssertSourceAbsence } from '../src/domain/source.js';
 import type { KakaoDriveArchivePort, DriveArchiveFile, DriveArchiveRequest } from '../src/ports/kakao-archive.js';
 import { runKakaoSourceCli } from '../src/jobs/ingest-kakao-source.js';
 import type { Firestore } from 'firebase-admin/firestore';
+import { planKakaoSheetPhoto, processKakaoQueue, processKakaoQueueInput, readSupplierSourceSummary } from '../src/application/kakao-source-intake.js';
+import { summarizeSupplierSources, selectKakaoPilotSuppliers, type SupplierSourceObservation } from '../src/domain/source-event.js';
+import { stableDigest } from '../src/shared/stable-digest.js';
+import { readFileSync } from 'node:fs';
 
 const now = () => new Date().toISOString();
 function bundle(pc = 'PC-A'): KakaoBundle {
@@ -45,6 +49,126 @@ function setup(store = new MemorySourceStore()) {
   const ingest = (input: KakaoBundle) => ingestKakaoBundle(input, ports, { apply: true, approval: 'approved', now: now() });
   return { store, drive, ports, ingest };
 }
+
+describe('Kakao queue, sheet plan and observed source tendencies', () => {
+  const sheetInput = () => {
+    const spec = JSON.parse(readFileSync('contracts/supplier-input-sheet-spec.v1.json', 'utf8'));
+    const headers = spec.inputHeaders as string[];
+    expect(headers).not.toContain('사진링크');
+    expect(headers.indexOf('비고')).toBe(73);
+    return { headers, capturedAt: now(), now: now(),
+      product: { ...products[0]!, data: { ...products[0]!.data, car_number: 'synthetic-row-identity', photo_link: 'https://drive.google.com/file/d/fake-photo/view' } },
+      row: { supplierCode: 'FAKE_SUPPLIER', supplierVehicleId: 'FAKE-VEHICLE-A', range: 'fixture!BV2',
+        identityRange: 'fixture!E2', identityValue: 'synthetic-row-identity', value: '', formula: false, metadataComplete: true, hasLink: false } };
+  };
+  it('uses the current remarks column, returns the existing blank-fill shape and no writer', () => {
+    const input = sheetInput(); const plan = planKakaoSheetPhoto(input);
+    expect(plan.holds).toEqual([]);
+    expect(plan.바꿀칸).toEqual([{ 범위: 'fixture!BV2', 전: '', 후: input.product.data.photo_link }]);
+    expect(plan.writes).toBe(0);
+    expect(plan.applyHolds).toContain('SHEET_PRIVATE_MEDIA_DISPLAY_UNVERIFIED');
+    expect(input.row.value).toBe('');
+  });
+  it.each(['supplier text', ' ', 0, false])('preserves every existing human value: %s', value => {
+    const input = sheetInput();
+    expect(planKakaoSheetPhoto({ ...input, row: { ...input.row, value } }).바꿀칸).toEqual([]);
+  });
+  it('preserves blank-result formulas, links and incomplete cell metadata', () => {
+    for (const patch of [{ formula: true }, { hasLink: true }, { metadataComplete: false }]) {
+      const input = sheetInput();
+      expect(planKakaoSheetPhoto({ ...input, row: { ...input.row, ...patch } }).holds).toContain('EXISTING_SHEET_VALUE_PRESERVED');
+    }
+  });
+  it('holds absent column, wrong column/row/product binding and future captures', () => {
+    const input = sheetInput();
+    for (const patch of [{ headers: ['차량번호'] }, { capturedAt: '2099-01-01T00:00:00Z' },
+      { row: { ...input.row, range: 'fixture!BU2' } }, { row: { ...input.row, identityRange: 'fixture!E3' } },
+      { row: { ...input.row, identityRange: 'fixture!D2' } },
+      { row: { ...input.row, supplierCode: 'ANOTHER' } }, { row: { ...input.row, identityValue: 'ANOTHER' } }]) {
+      expect(planKakaoSheetPhoto({ ...input, ...patch }).바꿀칸).toEqual([]);
+    }
+  });
+  it('queue defaults to dry-run and does not touch archive or Source ports', async () => {
+    const { ports, drive } = setup(); const input = { bundle: bundle() };
+    const result = await processKakaoQueue({ list: async () => [{ key: 'opaque', inputDigest: stableDigest(input) }], read: async () => input }, ports);
+    expect(result.results[0]?.status).toBe('DRY_RUN'); expect(result.results[0]?.deleteAllowed).toBe(false);
+    expect(drive.uploads).toBe(0); expect(result.deletions).toBe(0);
+  });
+  it('processes multiple bundles, isolates a digest failure and permits only verified cleanup', async () => {
+    const { ports } = setup(); const input = { bundle: bundle() };
+    const result = await processKakaoQueue({ list: async () => [
+      { key: 'bad', inputDigest: 'bad' }, { key: 'good', inputDigest: stableDigest(input) }], read: async () => input },
+    ports, { apply: true, approval: 'approved', now: now() });
+    expect(result.results.map(r => r.deleteAllowed)).toEqual([false, true]);
+    expect(result.alerts).toHaveLength(1); expect(result.deletions).toBe(0);
+  });
+  it('restarts with the same bundle and reconciles a lost upload reply before acknowledgement', async () => {
+    const { ports, drive } = setup(); const input = { bundle: bundle() };
+    const upload = drive.upload.bind(drive);
+    drive.upload = async request => { if (drive.uploads === 1) drive.loseNextReply = true; return upload(request); };
+    const options = { apply: true, approval: 'approved', now: now() };
+    expect((await processKakaoQueueInput(input, ports, options)).deleteAllowed).toBe(false);
+    expect((await processKakaoQueueInput(input, ports, options)).deleteAllowed).toBe(true);
+    expect(drive.uploads).toBe(2);
+  });
+  it('never acknowledges an uncommitted archive receipt or partly archived bundle', async () => {
+    const { ports, store } = setup();
+    const get = store.getEvent.bind(store); let reads = 0;
+    store.getEvent = async id => { const result = await get(id); return ++reads > 1 ? null : result; };
+    expect((await processKakaoQueueInput({ bundle: bundle() }, ports, { apply: true, approval: 'approved', now: now() })).deleteAllowed).toBe(false);
+    const second = setup(); const input = bundle();
+    const unresolved = { ...input.messages[0]! }; delete unresolved.messageId; delete unresolved.vehicle;
+    input.messages.push(unresolved);
+    expect((await processKakaoQueueInput({ bundle: input }, second.ports, { apply: true, approval: 'approved', now: now() })).deleteAllowed).toBe(false);
+  });
+  const window = { now: '2026-10-09T10:00:00Z', days: 7, limit: 1 };
+  const observation = (eventKey: string, kind: SupplierSourceObservation['kind']): SupplierSourceObservation =>
+    ({ supplierCode: 'SYNTHETIC', eventKey, kind, observedAt: '2026-10-09T08:00:00Z' });
+  it('changes source tendency from memo to sheet as observations change, without an authority change', () => {
+    const first = [observation('m1', 'KAKAO_MEMO')];
+    expect(summarizeSupplierSources(first, window)[0]?.primary).toBe('KAKAO_MEMO_PRIMARY');
+    const second = [...first, observation('s1', 'SHEET'), observation('s2', 'SHEET')];
+    expect(summarizeSupplierSources(second, window)[0]?.primary).toBe('SHEET_PRIMARY');
+    expect(summarizeSupplierSources([...second, observation('a1', 'API')], window)[0]?.crossCheckObserved).toBe(true);
+    expect(summarizeSupplierSources(second, window)[0]?.authorityChanged).toBe(false);
+  });
+  it('deduplicates events, excludes old/future observations and chooses a pilot by actual Kakao arrivals', () => {
+    const one = observation('m1', 'KAKAO_MEMO');
+    const input = [one, { ...one }, { ...one, eventKey: 'old', observedAt: '2026-01-01T00:00:00Z' },
+      { ...one, eventKey: 'future', observedAt: '2099-01-01T00:00:00Z' },
+      { ...observation('m2', 'KAKAO_MEMO'), supplierCode: 'SYNTHETIC_B' },
+      { ...observation('m3', 'KAKAO_MEMO'), supplierCode: 'SYNTHETIC_B' }];
+    expect(summarizeSupplierSources(input, window)[0]?.eventCount).toBe(1);
+    expect(selectKakaoPilotSuppliers(input, window)[0]?.supplierCode).toBe('SYNTHETIC_B');
+  });
+  it('reads existing Source RAW runs, deduplicates PC observations, and holds missing evidence', async () => {
+    const { store, ingest } = setup(); await ingest(bundle()); await ingest(bundle('PC-B'));
+    const runs = [bundle(), bundle('PC-B')].map(b => prepareRawSourceBatch(prepareKakaoBundle(b)[0]!.batch).runId);
+    const result = await readSupplierSourceSummary(store, runs, window);
+    expect(result.holds).toEqual([]); expect(result.summaries[0]?.eventCount).toBe(1); expect(result.writes).toBe(0);
+    expect((await readSupplierSourceSummary(store, [...runs, 'missing'], window)).pilots).toEqual([]);
+  });
+  it('counts a sheet capture once per supplier, regardless of inventory rows; quarantine stays HOLD', async () => {
+    const { store } = setup();
+    const batch = prepareKakaoBundle(bundle())[0]!.batch;
+    batch.source = { ...batch.source, sourceId: 'synthetic-sheet', kind: 'GOOGLE_SHEET' };
+    batch.records = ['row-a', 'row-b'].map(sourceRecordId => ({ sourceRecordId,
+      payload: { supplierCode: 'SYNTHETIC', quarantine: null } }));
+    await ingestRawSourceBatch(store, batch, now());
+    const run = prepareRawSourceBatch(batch).runId;
+    expect((await readSupplierSourceSummary(store, [run, run], window)).summaries[0]?.counts.SHEET).toBe(1);
+    batch.sourceRevision = 'next'; batch.records[0]!.payload.quarantine = 'DUPLICATE_IDENTITY';
+    await ingestRawSourceBatch(store, batch, now());
+    expect((await readSupplierSourceSummary(store, [prepareRawSourceBatch(batch).runId], window)).holds)
+      .toContain('SOURCE_OBSERVATION_UNVERIFIED');
+  });
+  it('retains local data after permission loss at final readback', async () => {
+    const { ports, drive } = setup(); const verify = drive.verify.bind(drive); let reads = 0;
+    drive.verify = async id => { const file = await verify(id); if (++reads > 2) file.permissionsComplete = false; return file; };
+    const result = await processKakaoQueueInput({ bundle: bundle() }, ports, { apply: true, approval: 'approved', now: now() });
+    expect(result.deleteAllowed).toBe(false); expect(result.status).toBe('UNKNOWN');
+  });
+});
 
 describe('Kakao RAW intake and private photo branch', () => {
   it('two PCs yield one event, two RAW observations, one upload per event/hash', async () => {

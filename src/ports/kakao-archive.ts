@@ -33,3 +33,13 @@ export interface KakaoPhotoWriterPort {
   dryRun(plan: KakaoPhotoPlan): Promise<{ planDigest: string; ready: boolean }>;
   apply(plan: KakaoPhotoPlan, approval: { planDigest: string }): Promise<{ verified: boolean }>;
 }
+
+export type KakaoQueueReceipt = {
+  inputDigest: string; status: 'DRY_RUN' | 'ACK_ELIGIBLE' | 'HOLD' | 'UNKNOWN';
+  deleteAllowed: boolean; issues: string[];
+};
+/** No delete/send operation: AI-OPS owns cleanup after authenticated, digest-bound acknowledgement. */
+export interface KakaoQueueReadPort<T> {
+  list(): Promise<Array<{ key: string; inputDigest: string }>>;
+  read(key: string): Promise<T>;
+}

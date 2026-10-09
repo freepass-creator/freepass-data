@@ -52,3 +52,48 @@ export function finishSourceEvent(previous: SourceEventReceipt, input: {
   return { ...previous, revision: previous.revision + 1, state: input.state,
     archiveRefs: [...new Set([...previous.archiveRefs, ...input.archiveRefs])] };
 }
+
+export type SupplierSourceObservation = {
+  supplierCode: string; eventKey: string; observedAt: string;
+  kind: 'KAKAO_MEMO' | 'KAKAO_TABLE' | 'SHEET' | 'API' | 'OTHER';
+};
+
+/** Descriptive frequency, never a field-authority decision or permission to collect a website. */
+export function summarizeSupplierSources(observations: SupplierSourceObservation[], options: { now: string; days: number }) {
+  const end = Date.parse(options.now);
+  if (!Number.isFinite(end) || !Number.isSafeInteger(options.days) || options.days < 1 || options.days > 365)
+    throw new Error('INVALID_OBSERVATION_WINDOW');
+  const start = end - options.days * 86_400_000;
+  const unique = new Map<string, SupplierSourceObservation>();
+  for (const o of observations) {
+    const time = Date.parse(o.observedAt);
+    if (!o.supplierCode || !o.eventKey || !Number.isFinite(time) || time < start || time > end) continue;
+    const key = JSON.stringify([o.supplierCode, o.eventKey]);
+    const previous = unique.get(key);
+    if (previous && previous.kind !== o.kind) throw new Error('SOURCE_OBSERVATION_KIND_CONFLICT');
+    if (!previous || time < Date.parse(previous.observedAt)) unique.set(key, o);
+  }
+  const grouped = new Map<string, SupplierSourceObservation[]>();
+  for (const o of unique.values()) grouped.set(o.supplierCode, [...(grouped.get(o.supplierCode) ?? []), o]);
+  return [...grouped].map(([supplierCode, events]) => {
+    const counts = { KAKAO_MEMO: 0, KAKAO_TABLE: 0, SHEET: 0, API: 0, OTHER: 0 };
+    for (const event of events) counts[event.kind]++;
+    const primary = counts.KAKAO_MEMO > events.length / 2
+      ? 'KAKAO_MEMO_PRIMARY' : counts.SHEET > events.length / 2
+        ? 'SHEET_PRIMARY' : 'MIXED_OR_INSUFFICIENT';
+    return { supplierCode, counts, eventCount: events.length, primary,
+      crossCheckObserved: counts.API > 0, // No inference that an unobserved website exists or is usable.
+      latestAt: events.map(e => e.observedAt).sort((a, b) => Date.parse(b) - Date.parse(a))[0]!,
+      window: { from: new Date(start).toISOString(), to: new Date(end).toISOString() },
+      authorityChanged: false as const };
+  }).sort((a, b) => a.supplierCode.localeCompare(b.supplierCode));
+}
+
+export function selectKakaoPilotSuppliers(observations: SupplierSourceObservation[], options: { now: string; days: number; limit: number }) {
+  if (!Number.isSafeInteger(options.limit) || options.limit < 1) throw new Error('INVALID_PILOT_LIMIT');
+  return summarizeSupplierSources(observations, options)
+    .filter(s => s.counts.KAKAO_MEMO + s.counts.KAKAO_TABLE > 0)
+    .sort((a, b) => (b.counts.KAKAO_MEMO + b.counts.KAKAO_TABLE) - (a.counts.KAKAO_MEMO + a.counts.KAKAO_TABLE)
+      || Date.parse(b.latestAt) - Date.parse(a.latestAt) || a.supplierCode.localeCompare(b.supplierCode))
+    .slice(0, options.limit);
+}
