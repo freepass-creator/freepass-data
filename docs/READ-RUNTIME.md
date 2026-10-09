@@ -508,3 +508,14 @@ node --import tsx src/jobs/recompute-offer-economics.ts --firestore --apply --pl
 ### 정산 원장과 상품 기준표의 금액 의미
 
 상품 기간별 수수료는 계약 전 기준 계산액이다. 같은 settlement_rows 문서의 접수 기록액(sourceReceiptClaim/Pay), 사람 입력액(claimWritten/payWritten), 계산액, 공급사·채널 확인 확정액, 증빙 있는 실입출금은 서로 다른 사실이다. 2026-10-09 새 조회에서도9월34개 동일ID의 청구 차이3,934,879원/지급차이0원이 재현됐다. sourceReceipt* VAT/Gross가 있다고 모든 계약이 공급사 확정됐다는 뜻은 아니다. 사람이 넣은 금액/근거를 상품 엔진 재계산으로 덮어쓰지 않는다. 계산액/확정액/공급가·VAT·합계/실입출금 증빙/처리자/업무일/변경이력 구분은 기존 PR399 정산 작업선과 연결하며, 현재 누락은 null/상태로 유지하고 영업자나 작성 시각으로 처리자를 발명하지 않는다.
+### 2026-10-09 정산 조회 opt-in v2
+
+기존 POST `/v1/consumers/:consumerId/settlement-ledger/read`에 `viewVersion: 2`를 전달한다. 생략/1은 기존 v1 응답이며 v1 schema와 금액 의미는 그대로다. 기존 settlement-ledger-read 인증·권한·감사 경로만 재사용하며 쓰기는 없다.
+
+- reconciliation: 접수 기록/sourceReceipt 공급가·VAT·합계, 사람 입력, 명시적으로 저장된 계산액·확정액을 구분한다. 없는 계산액/확정액/VAT는 null; 상태나 수수료율로 추정하지 않는다.
+- cash: 행의 수금/지급 projection과 settlementCashEvents의 불변 거래를 따로 제공한다. 거래의 code/axis/kind/amount/day/by/createdAt만 노출하고 원문 전체를 반환하지 않는다. 은행 대사 검증은 RECORDED_UNVERIFIED다.
+- audit: createdBy/updatedBy/businessDate는 해당 필드만 사용하고 영업담당을 작성자로 바꾸지 않는다. 숫자와 Firestore Timestamp는 ISO로 읽는다. 기존 Admin intakeEventDocId/auditEventId에 연결된 aud_ 이력의 id/at/by/field/from/to만 조회한다. 없는 identity/조회 실패는 각각 IDENTITY_MISSING/UNAVAILABLE. 이력은 별도 관측이며 원장과 다중 읽기의 atomic snapshot을 주장하지 않는다.
+- snapshotSummary: 조회한 동일 settlement_rows snapshot의 문서 IDs만 합산. 취소/정산제외 true는 제외, 미상 eligibility IDs는 명시. 한도 도달 또는 eligibility 미상이면 확정 supply/VAT/total은 null이고 관측 subtotal만 반환한다. billMonth 단일필터일 때만 MONTH이며 다른 조회는 FILTERED다. 공급가/VAT/총액별 누락수도 각각 제공한다.
+- 기존 settlementRules/f04-confirmed-receipt-sync의 monthlyReceiptSummaries와 IDs·공급가·VAT·총액을 독립 대사한다. components MATCH/MISMATCH/UNKNOWN을 분리해 VAT미확인이 공급가 불일치로 오인되지 않게 한다. 이 비교는 저장 요약의 동시 관측을 보장하지 않는다.
+- CREATE_NEW_JUSTIFIED: reuse check에서 기존 v1 strict schema/기존 gateway/projection을 검토했다. v1의 $id와 의미를 보존하려고 v2 schema만 별도로 추가했다. 새 엔진·원장·가지 없음.
+- 운영 읽기 2026-10-09T05:35:51.701Z: 35행, 취소 제외34 IDs 정확일치; 청구 공급가36,582,600/VAT3,658,260/합계40,240,860; 지급 공급가29,322,051/VAT2,932,205/합계32,254,256. 기존 월 요약 일치. 이력READ34/identity미상1, cash read35. 직접 DB 쓰기·배포0.

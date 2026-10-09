@@ -158,7 +158,7 @@ function snapshotSummary(data: SettlementLedgerRecord[], request: SettlementLedg
     ? request.filters[0].value : null;
   return {
     scope: month ? 'MONTH' : 'FILTERED', billingMonth: month,
-    completeness: limited ? 'LIMIT_REACHED' : 'COMPLETE',
+    completeness: limited ? 'LIMIT_REACHED' : uncertainEligibilityIds.length ? 'ELIGIBILITY_UNKNOWN' : 'COMPLETE',
     entryIds: included.map((row) => row.source.documentId), excludedIds: excluded.map((row) => row.source.documentId),
     uncertainEligibilityIds,
     storedSummaryComparison: { state: 'NOT_COMPARABLE', sourceDigest: null },
@@ -214,7 +214,7 @@ export async function readSettlementLedgerView(
     }));
   }
   const summary = extended ? snapshotSummary(data, request) : undefined;
-  if (summary?.scope === 'MONTH' && summary.completeness === 'COMPLETE') {
+  if (summary?.scope === 'MONTH' && summary.completeness !== 'LIMIT_REACHED') {
     try {
       const rules = await store.read({ kind: 'doc', resource: 'settlementRules', id: 'f04-confirmed-receipt-sync' });
       const months = rules.docs[0]?.data.monthlyReceiptSummaries as Record<string, unknown> | undefined;
@@ -223,9 +223,17 @@ export async function readSettlementLedgerView(
         summary.storedSummaryComparison = { state: 'UNAVAILABLE', sourceDigest: rules.digest };
       } else {
         const sameIds = stableDigest([...summary.entryIds].sort()) === stableDigest([...raw.entryIds].sort());
-        const sameAmounts = ([['recordedClaim', 'claimAmount'], ['recordedPay', 'payAmount']] as const).every(([key, field]) => summary.totals[key].missingCount === 0 && summary.totals[key].knownSubtotal === numberOrNull(raw[field]));
-        const sameVatGross = ([['recordedClaim', 'claimVatAmount', 'claimGrossAmount'], ['recordedPay', 'payVatAmount', 'payGrossAmount']] as const).every(([key, vat, gross]) => summary.totals[key].vat.missingCount === 0 && summary.totals[key].total.missingCount === 0 && summary.totals[key].vat.knownSubtotal === numberOrNull(raw[vat]) && summary.totals[key].total.knownSubtotal === numberOrNull(raw[gross]));
-        summary.storedSummaryComparison = { state: sameIds && sameAmounts && sameVatGross ? 'MATCH' : 'MISMATCH', sourceDigest: rules.digest };
+        const compare = (component: 'supply' | 'vat' | 'total', fields: [string, string]): 'MATCH' | 'MISMATCH' | 'UNKNOWN' => {
+          const values = (['recordedClaim', 'recordedPay'] as const).map((key, index) => {
+            const value = component === 'supply' ? summary.totals[key] : summary.totals[key][component];
+            return { missing: value.missingCount, actual: value.knownSubtotal, expected: numberOrNull(raw[fields[index]!]) };
+          });
+          if (values.some((value) => value.missing > 0 || value.expected === null)) return 'UNKNOWN';
+          return values.every((value) => value.actual === value.expected) ? 'MATCH' : 'MISMATCH';
+        };
+        const components = { ids: sameIds ? 'MATCH' as const : 'MISMATCH' as const, supply: compare('supply', ['claimAmount', 'payAmount']), vat: compare('vat', ['claimVatAmount', 'payVatAmount']), total: compare('total', ['claimGrossAmount', 'payGrossAmount']) };
+        const states = Object.values(components);
+        summary.storedSummaryComparison = { state: states.includes('MISMATCH') ? 'MISMATCH' : states.includes('UNKNOWN') ? 'UNAVAILABLE' : 'MATCH', sourceDigest: rules.digest, components };
       }
     } catch { summary.storedSummaryComparison = { state: 'UNAVAILABLE', sourceDigest: null }; }
   }

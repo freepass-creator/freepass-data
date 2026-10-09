@@ -56,11 +56,11 @@ export type SettlementReconciliation = {
 export type SettlementSnapshotSummary = {
   scope: 'MONTH' | 'FILTERED';
   billingMonth: string | null;
-  completeness: 'COMPLETE' | 'LIMIT_REACHED';
+  completeness: 'COMPLETE' | 'LIMIT_REACHED' | 'ELIGIBILITY_UNKNOWN';
   entryIds: string[];
   excludedIds: string[];
   uncertainEligibilityIds: string[];
-  storedSummaryComparison: { state: 'MATCH' | 'MISMATCH' | 'UNAVAILABLE' | 'NOT_COMPARABLE'; sourceDigest: string | null };
+  storedSummaryComparison: { state: 'MATCH' | 'MISMATCH' | 'UNAVAILABLE' | 'NOT_COMPARABLE'; sourceDigest: string | null; components?: Record<'ids' | 'supply' | 'vat' | 'total', 'MATCH' | 'MISMATCH' | 'UNKNOWN'> };
   totals: Record<'recordedClaim' | 'recordedPay' | 'writtenClaim' | 'writtenPay' | 'calculatedClaim' | 'calculatedPay' | 'confirmedClaim' | 'confirmedPay', {
     knownSubtotal: number;
     missingCount: number;

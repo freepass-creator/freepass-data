@@ -2223,3 +2223,12 @@ This file exists so another session can continue without re-discovering or re-cr
 - 요청 / 완료조건: B3Q 지휘통제실에 기존 정산 담당과 단일 active_owner 조정 및 기존 PR399/181/88 반영 검토 요청. 기존 확인 동선 담당의 산출근거 회신은 동일 건과 출처로 인수하고 Data/접수/영업자 projection 되읽기로 종결. 이 기록은 추가 고객/공급사 발송이나 운영 배포 승인 아님.
 - 남음: 기존26건 사람 입력 출처 불명 충돌 정정은 승인대기. 현재 원격 조회 PR399 OPEN/UNSTABLE,181 OPEN/BLOCKED,88 OPEN/CLEAN; 미병합/미배포를 정산 완료로 표현하지 않음. RAW 수집은 소비 계산기의 자동 최신화 증거가 아님.
 - next_start_here: 기존 private 영수증 dataCanonReview35/robotoWhitePresentation/coreOpsLearning → 지휘통제실 단일 담당 확인 → 최신 원본 및 기존 PR 게이트를 재조회 후 동일 작업선에서 계속. 새 정본·브랜치·DB·예약·프로세스 생성0.
+
+### 2026-10-09 기간금액 main 통합 후 정산조회 v2
+
+- 목적: 차량 기간별 금액·정책 수정 엔진을 main에 통합하고, 계약 정산 기록/계산/확정/실입출금 의미를 분리한다.
+- 대상 revision: PR401 main26da1a7 뒤 PR403 main d91124304bd082d0654e0d3bd3f743864d84f6ee. 기존 work/freepass-data/reference-policy-context-20261009 작업선 이어감.
+- 변경: 기존 gateway/projection/read store 재사용, opt-in viewVersion2와 독립 v2schema; v1schema 원형보존. READ-RUNTIME의 정산 v2 절이 조회 규격이다.
+- 검증: PR403 CI core/canon PASS 및 main 재조회. 정산 확장은 build/schema/auth/API/한도/eligibility/부가세미상/이력·불변cash 회귀를 수행. 실제9월35행→34대상과 기존 월요약 IDs·공급가·VAT·총액 일치; 개인정보 원문은 TEMP private evidence에만 보관.
+- 남음: 운영 read runtime 배포와 consumer 응답 재조회, 기간 정책 dry-run reviewed apply/릴리스 대사 별도. 계산/확정/과거 작성자 원천 필드 미상은 null. 은행 입출금 검증은 미확인.
+- next_start_here: PR395 최신main을 같은 작업선에 합치고 최종 full check/독립검토/exacthead CI 뒤 정산v2 후속 PR을 순서통합. 운영별 권한 경계를 유지한다.

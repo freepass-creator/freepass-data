@@ -2,6 +2,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
 import schema from '../contracts/settlement-ledger-view-v1.schema.json' with { type: 'json' };
+import schemaV2 from '../contracts/settlement-ledger-view-v2.schema.json' with { type: 'json' };
 import { createConsumerGateway, parseConsumerBindings, type ConsumerBinding } from '../src/api/consumer-gateway.js';
 import { DataAccessGateway } from '../src/application/data-access-gateway.js';
 import { readSettlementLedgerView, projectSettlementReconciliation } from '../src/application/settlement-ledger-view.js';
@@ -63,6 +64,21 @@ function workflowStore(): AdminWorkflowStore {
 }
 
 describe('settlement ledger data product', () => {
+  it('distinguishes matching monthly IDs/supply from missing VAT evidence and withholds uncertain eligibility totals', async () => {
+    const store: AdminWorkflowStore = {
+      async read(spec) {
+        const docs = spec.resource === 'settlementRows'
+          ? [{ id: 'one', data: { billMonth: '2026-09', sourceReceiptClaim: 100, sourceReceiptPay: 80, cancelled: false } }]
+          : [{ id: 'rules', data: { monthlyReceiptSummaries: { '2026-09': { entryIds: ['one'], claimAmount: 100, payAmount: 80 } } } }];
+        return { schema: 'freepass-data.admin-workflow-read/v1', docs, digest: 'd'.repeat(64) };
+      }, async commit() { throw new Error('WRITES_FORBIDDEN'); },
+    };
+    const result = await readSettlementLedgerView(store, 'kakao-ops', { kind: 'query', viewVersion: 2, filters: [{ field: 'billMonth', value: '2026-09' }] });
+    expect(result.meta.snapshotSummary).toMatchObject({
+      completeness: 'ELIGIBILITY_UNKNOWN', uncertainEligibilityIds: ['one'], totals: { recordedClaim: { knownSubtotal: 100, supply: null, vat: { missingCount: 1, amount: null } } },
+      storedSummaryComparison: { state: 'UNAVAILABLE', components: { ids: 'MATCH', supply: 'MATCH', vat: 'UNKNOWN', total: 'UNKNOWN' } },
+    });
+  });
   it('reads immutable cash and audit records using the existing identity, never treating agent as author', async () => {
     const store: AdminWorkflowStore = {
       async read(spec) {
@@ -85,7 +101,7 @@ describe('settlement ledger data product', () => {
     expect(detail.cash.events[0]).toMatchObject({ amount: 100, by: '실제처리자' });
     expect(detail.cash.claim.amount).toBeNull();
     const ajv = new Ajv2020({ strict: false }); addFormats(ajv);
-    expect(ajv.compile(schema)(result)).toBe(true);
+    expect(ajv.compile(result.schema.endsWith('/v2') ? schemaV2 : schema)(result)).toBe(true);
   });
   it('keeps recorded, written, calculated, confirmed and cash facts separate, preserving genuine zero', () => {
     const result = projectSettlementReconciliation({
@@ -127,7 +143,7 @@ describe('settlement ledger data product', () => {
       },
     });
     const ajv = new Ajv2020({ strict: false }); addFormats(ajv);
-    expect(ajv.compile(schema)(result)).toBe(true);
+    expect(ajv.compile(result.schema.endsWith('/v2') ? schemaV2 : schema)(result)).toBe(true);
     const legacy = await readSettlementLedgerView(store, 'kakao-ops', { kind: 'doc', id: 'one' });
     expect(legacy.schema).toBe('freepass-data.settlement-ledger/v1');
     expect(legacy.data[0]).not.toHaveProperty('reconciliation');
@@ -163,7 +179,7 @@ describe('settlement ledger data product', () => {
     });
     const ajv = new Ajv2020({ strict: false });
     addFormats(ajv);
-    expect(ajv.compile(schema)(result)).toBe(true);
+    expect(ajv.compile(result.schema.endsWith('/v2') ? schemaV2 : schema)(result)).toBe(true);
   });
 
   it('allows agent plus customer lookup but blocks either personal field alone', () => {
