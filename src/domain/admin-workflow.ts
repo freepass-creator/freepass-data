@@ -1,3 +1,5 @@
+import { stableDigest } from '../shared/stable-digest.js';
+
 export const ADMIN_WORKFLOW_RESOURCES = {
   products: true,
   policies: true,
@@ -199,6 +201,9 @@ export function assertAdminWorkflowCommitRequest(value: unknown): asserts value 
     if (m.merge !== undefined && typeof m.merge !== 'boolean') throw new Error('INVALID_ADMIN_WORKFLOW_MUTATION');
     const policy = ADMIN_WORKFLOW_RESOURCE_POLICIES[m.resource as AdminWorkflowResource];
     if (!policy.writeThroughGateway) throw new Error('ADMIN_WORKFLOW_RESOURCE_READ_ONLY');
+    if (m.resource === 'settlementEvents' && Object.keys(m.data).some((key) => key.startsWith('aud_') && key.includes('.'))) {
+      throw new Error('INVALID_ADMIN_WORKFLOW_AUDIT_FIELD_PATH');
+    }
   }
   // A whole-document replacement is checked against the stored document, so no other
   // mutation in the same command may reshape that document first.
@@ -213,6 +218,12 @@ export function assertAdminWorkflowCommitRequest(value: unknown): asserts value 
 }
 
 export type AdminWorkflowReplacement = Extract<AdminWorkflowMutation, { op: 'set' }>;
+
+/** Existing audit objects are immutable; only new keys or identical retries are allowed. */
+export function changedSettlementAuditKeys(stored: Record<string, unknown>, next: Record<string, unknown>): string[] {
+  return Object.keys(stored).filter((key) => key.startsWith('aud_')
+    && (!Object.hasOwn(next, key) || stableDigest(stored[key]) !== stableDigest(next[key]))).sort();
+}
 
 /** `set` without merge replaces the whole stored document. */
 export function adminWorkflowReplacements(mutations: AdminWorkflowMutation[]): AdminWorkflowReplacement[] {
