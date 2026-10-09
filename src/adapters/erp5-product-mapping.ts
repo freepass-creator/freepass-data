@@ -80,7 +80,14 @@ export function resolveErp5Mileage(
  * 인수형은 그것을 운영하는 회사의 «별도 상품»이므로 기간 축과 섞지 않고 따로 표시한다.
  */
 export function parseErp5PriceKey(key: string):
-  { months: number; mileageKm?: number; settlement: 'RETURN' | 'BUYOUT' } | undefined {
+  { months: number; mileageKm?: number; contractedMileage?: { km: number; period: 'month' | 'year' }; settlement: 'RETURN' | 'BUYOUT' } | undefined {
+  const explicit = /^([1-9]\d*)_(\uc6d4|\uc5f0)([1-9]\d*)km$/.exec(key);
+  if (explicit) {
+    const months = Number(explicit[1]), km = Number(explicit[3]);
+    if (!Number.isSafeInteger(months) || !Number.isSafeInteger(km)) return undefined;
+    const period = explicit[2] === '\uc6d4' ? 'month' as const : 'year' as const;
+    return { months, settlement: 'RETURN', contractedMileage: { km, period }, ...(period === 'year' ? { mileageKm: km } : {}) };
+  }
   const buyout = /^([1-9]\d*)_인수형$/.exec(key);
   if (buyout) return { months: Number(buyout[1]), settlement: 'BUYOUT' };
   const parsed = /^([1-9]\d*)(?:_([1-9]\d*)만)?$/.exec(key);
@@ -238,6 +245,8 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     const parsedKey = parseErp5PriceKey(sourceKey);
     if (!parsedKey) { issue('UNSUPPORTED_PRICE_KEY'); continue; }
     const months = parsedKey.months;
+    // Canonical V1 has only annual mileage; retain RAW/HOLD rather than invent a conversion.
+    if (parsedKey.contractedMileage?.period === 'month') { issue('MONTHLY_MILEAGE_CANONICAL_CONTRACT_UNSUPPORTED'); continue; }
     // 키에 없으면 정책이 답한다. 기본값으로 떨어진 것도 값이지만 «출처»를 남겨 구분한다.
     const mileage = resolveErp5Mileage(parsedKey.mileageKm, policyCode, companyId, policies);
     const km = mileage.km;

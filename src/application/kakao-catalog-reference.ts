@@ -637,19 +637,12 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
   if (!price || typeof price !== 'object' || Array.isArray(price)) return null;
   const priceTerms = Object.entries(price as Rec).flatMap(([sourceKey, raw]) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
-    // Approved Iancar producer keys carry mileage period; the legacy ERP key parser does not.
-    const iancarKey = supplierId === 'RP031' && source.iancar_phase_one
-      ? /^([1-9]\d*)_(월|연)([1-9]\d*)km$/.exec(sourceKey) : null;
-    const iancarMileage = iancarKey && Number.isSafeInteger(Number(iancarKey[1])) && Number(iancarKey[1]) <= 60
-      && Number.isSafeInteger(Number(iancarKey[3]))
-      ? { km: Number(iancarKey[3]), period: iancarKey[2] === '연' ? 'year' as const : 'month' as const } : null;
-    const parsed = iancarMileage ? { months: Number(iancarKey![1]), mileageKm: iancarMileage.period === 'year' ? iancarMileage.km : undefined, settlement: 'RETURN' as const }
-      : parseErp5PriceKey(sourceKey);
+    const parsed = parseErp5PriceKey(sourceKey);
     const monthlyRent = integer((raw as Rec).rent);
     if (!parsed || monthlyRent === null || monthlyRent <= 0) return [];
     const basis36 = Object.entries(price as Rec).flatMap(([key, value]) => {
       const candidate = parseErp5PriceKey(key);
-      if (!candidate || candidate.months !== 36 || candidate.settlement !== parsed.settlement || candidate.mileageKm !== parsed.mileageKm || !value || typeof value !== 'object' || Array.isArray(value)) return [];
+      if (!candidate || candidate.months !== 36 || candidate.settlement !== parsed.settlement || candidate.mileageKm !== parsed.mileageKm || (candidate.contractedMileage?.period ?? 'year') !== (parsed.contractedMileage?.period ?? 'year') || !value || typeof value !== 'object' || Array.isArray(value)) return [];
       const amount = integer((value as Rec).rent);
       return amount !== null && amount > 0 ? [amount] : [];
     });
@@ -707,7 +700,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       depositEvidence,
       depositStatusLabel: depositStatusLabel(deposit.depositState, (raw as Rec).deposit, source.deposit_note),
       mileageLimitKmPerYear: parsed.mileageKm ?? null,
-      ...(iancarMileage ? { contractedMileage: iancarMileage } : {}),
+      ...(parsed.contractedMileage ? { contractedMileage: parsed.contractedMileage } : {}),
       settlement: parsed.settlement,
       // Backward-compatible alias for the existing Kakao consumer.
       salesCommission: channelPayoutFee,

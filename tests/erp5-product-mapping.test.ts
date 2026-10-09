@@ -447,3 +447,19 @@ describe('가격 키 읽기', () => {
     expect(mapErp5Product(input).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
   });
 });
+
+describe('explicit monthly and yearly price keys', () => {
+  const keys=[...[1,3,5].flatMap(m=>[2000,3000,4000].map(k=>`${m}_\uc6d4${k}km`)),...[12,24,36,48,60].flatMap(m=>[20000,30000,40000].map(k=>`${m}_\uc5f0${k}km`))];
+  it.each(keys)('parses actual key %s without annualizing monthly mileage', key => {
+    const parsed=parseErp5PriceKey(key)!;expect(parsed).toBeDefined();expect(parsed.months).toBe(Number(key.split('_')[0]));
+    expect(parsed.contractedMileage!.period).toBe(key.includes('\uc6d4')?'month':'year');
+    expect(parsed.contractedMileage!.km).toBe(Number(key.split('_')[1]!.slice(1,-2)));
+    expect(parsed.mileageKm).toBe(key.includes('\uc6d4')?undefined:parsed.contractedMileage!.km);
+  });
+  it('keeps monthly RAW under HOLD where canonical V1 cannot represent it',()=>{
+    const input=fixture();input.data.price={'1_\uc6d42000km':{rent:500000,deposit:1000000}};
+    const result=mapErp5Product(input);expect(result.status).toBe('HOLD');expect(result.raw.data.price).toEqual(input.data.price);
+    expect(result.candidate.priceTerms).toEqual([]);
+  });
+  it.each(['0_\uc6d42000km','1_\uc6d40km','1_\uc6d4-1km','1_\uc6d42000.5km','12_\uc5f020000','9007199254740992_\uc5f020000km'])('rejects malformed explicit key %s',key=>expect(parseErp5PriceKey(key)).toBeUndefined());
+});

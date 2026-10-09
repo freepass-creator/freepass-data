@@ -759,3 +759,12 @@ describe('supplier and plate exact lookup', () => {
 
   });
 });
+
+it('keeps all 24 explicit mileage keys independently of supplier codes and phase-one metadata',()=>{
+  const keys=[...[1,3,5].flatMap(m=>[2000,3000,4000].map(k=>`${m}_\uc6d4${k}km`)),...[12,24,36,48,60].flatMap(m=>[20000,30000,40000].map(k=>`${m}_\uc5f0${k}km`))];
+  const price=Object.fromEntries(keys.map(k=>[k,{rent:500000,deposit:1000000}]));
+  const product=buildKakaoCatalogReferenceProduct('synthetic',{listable:true,provider_company_code:'FUTURE_IMMUTABLE_ID',price})!;
+  const terms=product.offers[0]!.priceTerms;expect(terms).toHaveLength(24);
+  expect(new Set(terms.map(t=>t.termKey))).toEqual(new Set(keys.map(k=>'source:'+k)));
+  for(const t of terms){expect(t.monthlyRent.amount).toBe(500000);expect(t.contractedMileage).toBeDefined();if(t.contractedMileage!.period==='month')expect(t.mileageLimitKmPerYear).toBeNull();else expect(t.mileageLimitKmPerYear).toBe(t.contractedMileage!.km);}
+});
