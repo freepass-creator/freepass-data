@@ -49,7 +49,7 @@ export type SettlementReconciliation = {
     historyState: 'IDENTITY_MISSING' | 'READ' | 'UNAVAILABLE';
     history: Array<{ id: string; at: string | null; by: string | null; field: string | null; from: SettlementLedgerValue; to: SettlementLedgerValue }>;
     historyDigest: string | null;
-    dateSourceValues: Array<{ field: 'receivedAt' | 'deliveredAt' | 'billedAt' | 'invoiceAt'; value: SettlementLedgerValue }>;
+    dateSourceValues: Array<{ field: 'receivedAt' | 'deliveredAt' | 'billedAt' | 'invoiceAt'; rawValue: SettlementLedgerValue }>;
   };
   evidence: { sourceDigest: string | null; receiptRow: number | null; syncedAt: string | null };
 };

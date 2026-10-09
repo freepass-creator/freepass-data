@@ -72,7 +72,7 @@ describe('settlement ledger data product', () => {
     expect(projectSettlementLedgerRecord('equivalent', { ...raw, billedAt: '2026-09-09T03:46:31.427+09:00' }).progress.billedAt).toBe(row.progress.billedAt);
     expect(projectSettlementLedgerRecord('invalid-time', { ...raw, billedAt: '2026-09-08T24:00:00Z' }).progress.billedAt).toBeNull();
     const evidence = projectSettlementReconciliation(raw);
-    expect(evidence.audit.dateSourceValues).toEqual(expect.arrayContaining([{ field: 'billedAt', value: raw.billedAt }, { field: 'invoiceAt', value: raw.invoiceAt }]));
+    expect(evidence.audit.dateSourceValues).toEqual(expect.arrayContaining([{ field: 'billedAt', rawValue: raw.billedAt }, { field: 'invoiceAt', rawValue: raw.invoiceAt }]));
     const ajv = new Ajv2020({ strict: false }); addFormats(ajv);
     const store: AdminWorkflowStore = {
       async read(spec) { return { schema: 'freepass-data.admin-workflow-read/v1', docs: spec.resource === 'settlementRows' ? [{ id: 'date-test', data: raw }] : [], digest: 'e'.repeat(64) }; },

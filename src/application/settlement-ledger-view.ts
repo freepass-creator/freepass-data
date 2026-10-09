@@ -141,7 +141,7 @@ export function projectSettlementReconciliation(data: Record<string, unknown>): 
       createdBy: stringOrNull(data.createdBy), updatedBy: stringOrNull(data.updatedBy),
       createdAt: timestampOrNull(data.createdAt), updatedAt: timestampOrNull(data.updatedAt),
       businessDate: stringOrNull(data.businessDate), historyState: 'IDENTITY_MISSING', history: [], historyDigest: null,
-      dateSourceValues: (['receivedAt', 'deliveredAt', 'billedAt', 'invoiceAt'] as const).map((field) => ({ field, value: rawScalar(data[field]) })),
+      dateSourceValues: (['receivedAt', 'deliveredAt', 'billedAt', 'invoiceAt'] as const).map((field) => ({ field, rawValue: rawScalar(data[field]) })),
     },
     evidence: { sourceDigest: stringOrNull(data.sourceReceiptDigest), receiptRow: numberOrNull(data.sourceReceiptRow), syncedAt: timestampOrNull(data.sourceReceiptSyncedAt) },
   };
