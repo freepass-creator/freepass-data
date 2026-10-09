@@ -27,7 +27,12 @@ export function resolveReferenceVehiclePhotos(source: Rec) {
       return [url.href];
     } catch { rejectedCount += 1; return []; }
   };
-  const imageUrls = [...new Set([source.image_urls, source.images, source.photos, source.image_url, source.photo].flatMap(readUrls))];
+  const candidates = [...new Set([source.image_urls, source.images, source.photos, source.image_url, source.photo].flatMap(readUrls))];
+  const rejectedBeforeDocuments = rejectedCount;
+  const documentUrls = new Set(readUrls(source.doc_images));
+  rejectedCount = rejectedBeforeDocuments;
+  const imageUrls = candidates.filter(url => !documentUrls.has(url));
+  rejectedCount += candidates.length - imageUrls.length;
   const sourceLinks = [...new Set(readUrls(source.photo_link))];
   return {
     state: imageUrls.length ? 'URLS_PRESENT' as const : sourceLinks.length ? 'LINK_ONLY' as const : rejectedCount ? 'UNUSABLE' as const : 'NOT_PROVIDED' as const,

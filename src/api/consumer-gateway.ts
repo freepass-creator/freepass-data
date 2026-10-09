@@ -1,3 +1,4 @@
+import { inspectVehicleMediaEvidence } from '../application/vehicle-media-evidence.js';
 import { summarizeEconomicsCoverage } from '../application/resolve-offer-commercial-terms.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import Fastify from 'fastify';
@@ -562,7 +563,12 @@ export function createConsumerGateway(
         const source = await readSource(binding.id);
         if (source.consumerId !== binding.id) throw new Error('REFERENCE_SOURCE_CONSUMER_MISMATCH');
         const reference = internalAi ? buildInternalAiReference(source) : buildKakaoCatalogReference(source);
-        return filterReferenceProducts(reference, request.query as Record<string, unknown>);
+        const filtered = filterReferenceProducts(reference, request.query as Record<string, unknown>);
+        const data = await Promise.all(filtered.data.map(async product => ({ ...product,
+          vehicleMediaEvidence: await inspectVehicleMediaEvidence({ productId: product.sourceProductId,
+            product: source.products[product.sourceProductId]!, now: source.observedAt }),
+        })));
+        return { ...filtered, data, meta: { ...filtered.meta, dataDigest: hash(JSON.stringify(data)).toString('hex') } } as typeof filtered;
       });
 
       if (

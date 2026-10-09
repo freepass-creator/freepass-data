@@ -128,6 +128,7 @@
         "vehicleMasterReference": { "$ref": "#/$defs/vehicleMasterReference" },
         "vehicleModelId": { "type": "string", "minLength": 1 },
         "vehicleAssetId": { "type": "string", "minLength": 1 },
+        "vehicleMediaEvidence": {"type": "object", "additionalProperties": false, "required": ["productKeyDigest", "observedAt", "verdict", "issues", "photoState", "colorState", "checks", "typedColorVerification", "visualVehicleIdentity", "imageBytes", "consumerReadback"], "properties": {"productKeyDigest": {"$ref": "#/$defs/digest"}, "observedAt": {"type": "string", "format": "date-time"}, "verdict": {"enum": ["HOLD", "HEAD_AND_SOURCE_FIELDS_MATCHED"]}, "issues": {"type": "array", "items": {"type": "string"}}, "photoState": {"enum": ["URLS_PRESENT", "LINK_ONLY", "UNUSABLE", "NOT_PROVIDED"]}, "colorState": {"enum": ["NOT_PROVIDED", "SOURCE_COMPARISON_ATTEMPTED", "VALUE_PRESENT_SOURCE_UNVERIFIED"]}, "checks": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["urlDigest", "state", "status"], "properties": {"urlDigest": {"$ref": "#/$defs/digest"}, "state": {"type": "string"}, "status": {"type": ["integer", "null"]}}}}, "typedColorVerification": {"const": "NOT_CHECKED"}, "visualVehicleIdentity": {"const": "NOT_CHECKED"}, "imageBytes": {"const": "NOT_CHECKED"}, "consumerReadback": {"const": "NOT_CHECKED"}}},
         "vehiclePhotos": {
           "type": "object",
           "additionalProperties": false,
