@@ -2,6 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {inputSpec as currentSpec} from '../scripts/supplier-input-sheet.mjs';
 import {planLightweightPresentation,planInputWarningCleanup,verifyLockedTabInventory} from '../scripts/shared-sheet-lightweight.mjs';
+import {planSupplierDropdowns,planTabConsistencyFix,planVehicleMasterDropdowns} from '../scripts/supplier-input-sheet.mjs';
+
+test('current disabled flag fences historical restorers without silently deleting approved lightweight choices',()=>{
+  assert.equal(currentSpec.dropdownPolicy.disabled,true);
+  assert.equal(currentSpec.dropdownPolicy.lightweight.enabled,true);
+  assert.throws(()=>planSupplierDropdowns({},currentSpec),/Use planLightweightPresentation/);
+  assert.throws(()=>planTabConsistencyFix({},currentSpec),/must not erase lightweight rules/);
+  assert.throws(()=>planVehicleMasterDropdowns({},currentSpec),/disabled/);
+  assert.equal(currentSpec.dropdownPolicy.lightweight.conditionalCascade,false);
+  assert.equal(currentSpec.dropdownPolicy.lightweight.helperFormulas,false);
+  for(const h of [...currentSpec.dropdownPolicy.lightweight.listHeaders,...currentSpec.dropdownPolicy.lightweight.masterHeaders])
+    assert.ok(currentSpec.inputHeaders.indexOf(h)<currentSpec.inputHeaders.indexOf('1개월'));
+});
 const inputSpec=structuredClone(currentSpec);delete inputSpec.changeControl;delete inputSpec.dropdownPolicy.lightweight.validationChoices;
 const fixture=()=>{
   const properties=(sheetId,title,rowCount,hidden=false)=>({sheetId,title,hidden,gridProperties:{rowCount,columnCount:74}});
