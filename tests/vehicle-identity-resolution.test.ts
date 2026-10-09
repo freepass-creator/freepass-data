@@ -30,6 +30,19 @@ describe('one active Data master authority', () => {
       .toEqual({ state: 'HOLD', reason: 'MASTER_TRIM_PAIR_NOT_VERIFIED' });
     expect(verifiedVehicleMasterReference(master, { masterId: 'm1', trimId: 'other-trim' }).state).toBe('HOLD');
   });
+  it('resolves an alias then attaches provenance from that same snapshot without changing source keys', () => {
+    const master = snapshot();
+    const source = { sourceProductId: 'synthetic-product', supplierId: 'RP001', termKey: 'source:24_2만' };
+    const choice = chooseVehicleIdentity(indexVehicleMaster(verifiedMasterRecords(master)),
+      input(['현대', '쏘나타', '소나타 DN8', '스마트 초이스']));
+    if (choice.pick === 'HOLD') throw new Error('fixture must resolve uniquely');
+    const reference = verifiedVehicleMasterReference(master, choice);
+    expect({ ...source, vehicleMasterReference: reference }).toEqual({ ...source, vehicleMasterReference: {
+      state: 'KNOWN', authority: 'FREEPASS_DATA_VEHICLE_MASTER', identityKind: 'FIRESTORE_DOCUMENT_ID',
+      masterId: 'm1', trimId: 't1', snapshotDigest: master.digest, readAt: master.readAt,
+    } });
+    expect(source).toEqual({ sourceProductId: 'synthetic-product', supplierId: 'RP001', termKey: 'source:24_2만' });
+  });
   it('retains native IDs after an evidenced rename while changing snapshot provenance', () => {
     const old = snapshot(), renamed = snapshot();
     renamed.masters[0]!.data.sub_model = '쏘나타 디 엣지 DN8';
