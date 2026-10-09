@@ -163,8 +163,8 @@ describe('RP004 native rich-cell RAW', () => {
     expect(ingestRawBatch).not.toHaveBeenCalled();
     const report = await captureAicaJob({ bindings: [original], expectedFreshnessSeconds: 60,
       applyRaw: false, approved: false }, { readGrid: async () => original, now: () => now });
-    expect(report).toMatchObject({ sourceId: 'supplier:RP004:aica-original-sheet', observedAt: now,
-      status: 'HOLD', wholeSupplierInventoryVerified: false, coverage: { mode: 'PARTIAL' } });
+    expect(report).toMatchObject({ counts: { records: 1 }, issues: expect.arrayContaining(['AICA_SHORT_LINK']) });
+    expect(Object.keys(report).sort()).toEqual(['counts', 'digest', 'issues']);
   });
   it.each([
     { spreadsheetId: 'wrong', sheets: [] },

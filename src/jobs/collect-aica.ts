@@ -25,9 +25,7 @@ export async function captureAica(input: {
     });
     await ingest(batch);
   }
-  return { counts: { records: batch.records.length }, digest: batch.checksum, issues: evidence.issues,
-    sourceId: batch.source.sourceId, sourceRevision: batch.sourceRevision, observedAt: batch.observedAt,
-    coverage: batch.coverage, status: evidence.status, wholeSupplierInventoryVerified: false };
+  return { counts: { records: batch.records.length }, digest: batch.checksum, issues: evidence.issues };
 }
 
 export async function aicaCaptureCommand(args: string[], env: NodeJS.ProcessEnv = process.env) {
