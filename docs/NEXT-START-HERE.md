@@ -416,6 +416,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 PR399/400 통합 승계 — 기존 PR401 단일 개발선
+
+- 목적/권한: 대표 「전체적으로 통합되는 것까지 작업해」를 Data 지휘가 기존 PR401 실행 담당에 배정했다. 다른 active merge writer는 지휘 최신 실행 기록에 없으며 이 개발선을 단일 통합선으로 지정했다. Academy READY, 새 branch/PR/엔진0, 운영 배포/DB/시트/IAM/예약 변경0.
+- 원문 보존: PR399 exact head `6ede6198275309c9cc1e7da65c6e83dc064a0602`를 merge `fd9a651`로 승계했다. schema/type/projection/test의 calculationBasis nullable 원문을 함께 보존하며 공백·줄바꿈을 trim하지 않는다. AGENTS의 공급사 입력 잠금과 사람 정산 입력 보존 양쪽을 유지했다. 원본 작업 폴더의 dirty 문서2개는 읽어 옮기거나 수정하지 않았다.
+- 원문 보존: PR400 exact head `3b4b803e9ad18b013935a347d4ce0f491558a18e`를 merge `35f8e10`으로 승계했다. F01-only publication, F86 STOPPED, 비활성 원본/서식 보존을 유지하고 NEXT 충돌의 양쪽 이력을 모두 보존했다. AGENTS의 현재 소비처 안내와 F86 보존 의미도 최신 지시에 맞췄다. 원PR 원문 커밋 모두 HEAD ancestry 검사 PASS.
+- 검증: `npm run check` 전체 PASS(build/architecture/standards/access-boundary/Sheets/runtime-smoke/shadow/dashboard 포함; Vitest1685 PASS/14 SKIP). 추가 source+settlement71 PASS(67+4), F01/F86 presentation26 PASS(현행 F01-only 회귀1개 포함), diffcheck PASS. SKIP14는 emulator 미실행이며 persistence/cutover PASS가 아니다.
+- 승계 절차: 이 내용과 검증을 기존 PR401에 push·원격 head 확인한 다음에만 #399/#400을 superseded 종료한다. 원PR/커밋/원문을 삭제하지 않고 공개 승계 설명을 남긴다. Canon 검사 예외/우회/기한 연장 없이 선점 충돌을 해소한다. 전체 원격 CI가 통과한 exact head만 main 통합한다.
+- 남음/next_start_here: #401 main 통합 후 #403 담당이 최신 main으로 계약/보증금 상태명/수수료 근거를 함께 보존해 후속 통합한다. 기존 실패 수집 run37869754663과 runtime00015/미배포 사진 보강은 별도 운영 HOLD다. Claude 구독 접근 차단은 검토 PASS가 아니다. 최종 main/CI/readback 증거는 후속 이력으로 갱신한다.
+
 ### 2026-10-09 온라인 원천 주소 실행 경계 재검증
 
 - 목적/대상 revision: 기존 PR401 `work/freepass-data/shared-sheet-dropdowns-before-rent`에서 main `b2777b59819d5fbaa4c650cd637c80b5e000c591`을 병합한 `173a53e4df3552d6a17bd14e097880d0dff4d25e` 기준. 새 엔진/개발선을 만들지 않는다.

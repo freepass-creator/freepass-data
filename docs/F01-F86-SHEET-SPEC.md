@@ -6,6 +6,8 @@
 
 실제 검증 회차는 [37703068220](https://github.com/freepass-creator/freepasserp4/actions/runs/37703068220)이다. 완료 전에는 live 되읽기 PASS로 세지 않는다. 원천 신선도·중앙 데이터·ERP 및 다른 소비처의 완료 여부는 각자의 실제 증거로 판정한다.
 
+`preserveCurrentF86UntilSourceWorkbookComplete`는 기존 문서 보존 의미이며 자동 발행 허가가 아니다. 현행 발행 대상은 `publication.activeWorkbooks`와 `f86AutomaticPublication=STOPPED_PER_REPRESENTATIVE_ORDER_2026_10_08`가 결정한다. 표시 계획기의 F86 fixture는 역사적 서식 회귀 검사로만 보존한다.
+
 확정일: 2026-09-21. 사용자 요청으로 탭명·대수·색상·표시 원칙을 통일했다.
 기계 판독 정본은 `contracts/f01-f86-sheet-spec.v1.json`이다. 이 문서는 그 규격의 설명이다.
 이전의 날짜/대수 없는 탭명 규칙과 별도 오공구독 탭 규칙보다 이 규격이 우선한다.
