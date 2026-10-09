@@ -416,6 +416,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 16:47 KST correction — Claude CLI cause remains unconfirmed
+
+- Supersedes causal/account interpretations in earlier notes, not the observed FAILED receipts. Representative correction: current Claude account `dudguq@gmail.com` is normal; any assumption of the root using a different/jpkpyh account is withdrawn. Do not infer account error or an administrator's actual action from the CLI error string.
+- Same owner/Work preserved at `dbb5de11a88dc45ee5b0495a0a01fb725607572b`; academy operations READY at `2026-10-09T07:47:13.901Z`. Existing constitution/curriculum/operations rules remain applied: actual evidence over causal guesses, no duplicate assets, no FAILED-as-PASS, no credential or operating authority expansion.
+- Commander read-only diagnostic evidence: CLI2.1.220, loggedIn=true, max, firstParty, claude.ai; no ANTHROPIC/CLAUDE environment routing, no user.settings forceLoginMethod/forceLoginOrgUUID/apiKeyHelper/environment routing; existing AI Core wrapper invokes `claude -p --permission-mode plan --output-format text`. These checks narrow possibilities but do not establish the server-side rejection cause.
+- This owner freshly verified `claude --version`2.1.220 and `claude auth status` exit0: loggedIn=true / claude.ai / firstParty / dudguq account / max. No review retry performed. Successful auth-status read does not negate the observed review denial.
+- Confirmed failure only: previous actual scoped claude:review exited1 with organization-subscription-denial response, FAILED/CLAUDE_PROCESS_FAILED, no review body/ANSWERED receipt. Detailed cause remains UNKNOWN. gate available is local usage-time eligibility, not connectivity/authentication/subscription proof. Use the existing CLI path only; no app/browser fallback, repeated failing review, login change, key creation or permission change.
+- next_start_here: keep exact pending source Work and reviewed four-file activation packet HOLD; allow responsible Claude/connection owner to investigate the known CLI denial with the existing read-only evidence. After a real connection-state change, one scoped existing CLI review must produce body + exit0 + ANSWERED before clearing that review gate; then refresh main/dry-run/backup/authorization/readback as already documented. No assumption that changing account or creating an API key is required.
+
+
 ### 2026-10-09 16:36 KST same-task Claude reconnect / academy rules applied
 
 - Existing task/branch resumed, no duplicate capability/asset/schedule/session. Baseline `acfa9ba227f76475017694aa25c7d7debd27e8ac`; latest main freshly fetched/read `6faca67627a7df884587eb4294a5aa12d58a4fbe` (PR407). Pending audit-to-daily patch is still NOT on main; main workflow still lacks this workflow_run connection.
