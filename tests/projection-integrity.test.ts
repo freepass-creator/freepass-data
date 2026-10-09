@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { buildErpPublicProjection, processOneOutboxEvent, updateOfferPrice } from '../src/application/catalog.js';
+import { assertCatalogSourceFreshness, buildErpPublicProjection, processOneOutboxEvent, updateOfferPrice } from '../src/application/catalog.js';
 import { readActiveProjectionEvidence } from '../src/application/projection-evidence-reader.js';
 import { assertProjectionReleaseIntegrity, verifyProjectionReleaseIntegrity } from '../src/shared/projection-integrity.js';
 import { stableDigest, stableRecordSetDigest } from '../src/shared/stable-digest.js';
@@ -92,9 +92,11 @@ describe('Projection release integrity verifier', () => {
   it('accepts the exact freshness boundary and holds a future or missing head', async () => {
     const { store, head } = await scheduledFixture();
     const boundary = new Date(Date.parse(head.observedAt) + 60_000);
-    expect(await processOneOutboxEvent(store, store, store, { workerId: 'synthetic', requireFreshSources: true }, boundary)).toBe('DONE');
+    await expect(assertCatalogSourceFreshness(store, boundary.toISOString(), true)).resolves.toHaveLength(1);
+    expect(await processOneOutboxEvent(store, store, store, { workerId: 'synthetic', requireFreshSources: true },
+      new Date(boundary.getTime() - 1000))).toBe('DONE');
     await store.seed({ sourceHeads: [{ ...head, observedAt: new Date(boundary.getTime() + 1).toISOString() }] });
-    await expect(buildErpPublicProjection(store, store, boundary.toISOString(), { activate: false, requireFreshSources: true }))
+    await expect(assertCatalogSourceFreshness(store, boundary.toISOString(), true))
       .rejects.toThrow('PROJECTION_SOURCE_TIME_INVALID');
     vi.spyOn(store, 'getSourceHead').mockResolvedValue(null);
     await expect(buildErpPublicProjection(store, store, boundary.toISOString(), { requireFreshSources: true }))
@@ -113,7 +115,7 @@ describe('Projection release integrity verifier', () => {
     'recovers a lost %s response without duplicate delivery', async (operation) => {
       const { store, head } = await scheduledFixture();
       const old = await buildErpPublicProjection(store, store, head.observedAt);
-      await repriceFixture(store, head.observedAt);
+      if (operation !== 'putDeliveryReceipt') await repriceFixture(store, head.observedAt);
       const original = store[operation].bind(store) as (...args: any[]) => Promise<void>;
       vi.spyOn(store, operation).mockImplementationOnce(async (...args: any[]) => {
         await original(...args);
@@ -134,7 +136,7 @@ describe('Projection release integrity verifier', () => {
       expect(await processOneOutboxEvent(store, store, store, options,
         new Date(Date.parse(head.observedAt) + 1000))).toBe(operation === 'markDone' ? 'IDLE' : 'DONE');
       const final = await store.getActive('erp-public');
-      expect(final?.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(735000);
+      expect(final?.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(operation === 'putDeliveryReceipt' ? 690000 : 735000);
       expect((await store.getDeliveryReceipt('synthetic-event'))?.releaseId).toBe(final?.releaseId);
       expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'DONE', attempts: operation === 'markDone' ? 0 : 1 });
       if (['activate', 'putDeliveryReceipt', 'markDone'].includes(operation)) {
@@ -172,18 +174,43 @@ describe('Projection release integrity verifier', () => {
     expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PENDING', attempts: 0 });
   });
 
-  it('recovers an interrupted worker after ACTIVE commit and before receipt persistence', async () => {
+  it('uses elapsed build time when the source itself has not changed', async () => {
+    const { store, head } = await scheduledFixture();
+    const old = await buildErpPublicProjection(store, store, head.observedAt);
+    await repriceFixture(store, head.observedAt);
+    let elapsed = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => elapsed);
+    const markReady = store.markReady.bind(store);
+    vi.spyOn(store, 'markReady').mockImplementationOnce(async id => {
+      await markReady(id);
+      elapsed = 60001;
+    });
+    try {
+      expect(await processOneOutboxEvent(store, store, store,
+        { workerId: 'synthetic', requireFreshSources: true }, new Date(head.observedAt))).toBe('HOLD');
+      expect(await store.getSourceHead(head.sourceId)).toEqual(head);
+      expect((await store.getActive('erp-public'))?.releaseId).toBe(old.releaseId);
+      expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
+      expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PENDING', attempts: 0 });
+    } finally { clock.mockRestore(); }
+  });
+
+  it('recovers an interrupted worker after atomic ACTIVE and receipt commit', async () => {
     const { store, head } = await scheduledFixture();
     await buildErpPublicProjection(store, store, head.observedAt);
     await repriceFixture(store, head.observedAt);
-    vi.spyOn(store, 'putDeliveryReceipt').mockRejectedValueOnce(new Error('SIMULATED_CRASH'));
+    const activateCommit = store.activate.bind(store);
+    vi.spyOn(store, 'activate').mockImplementationOnce(async (id, guard) => {
+      await activateCommit(id, guard);
+      throw new Error('SIMULATED_CRASH');
+    });
     vi.spyOn(store, 'markRetry').mockRejectedValueOnce(new Error('PROCESS_TERMINATED'));
     const options = { workerId: 'synthetic', requireFreshSources: true, leaseMs: 1000 };
     await expect(processOneOutboxEvent(store, store, store, options, new Date(head.observedAt)))
       .rejects.toThrow('PROCESS_TERMINATED');
     const committed = await store.getActive('erp-public');
     expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PROCESSING', attempts: 0 });
-    expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
+    expect((await store.getDeliveryReceipt('synthetic-event'))?.releaseId).toBe(committed?.releaseId);
     const activate = vi.spyOn(store, 'activate');
     expect(await processOneOutboxEvent(store, store, store, options,
       new Date(Date.parse(head.observedAt) + 1000))).toBe('DONE');
@@ -265,6 +292,56 @@ describe('Projection release integrity verifier', () => {
     expect(retry).not.toHaveBeenCalled();
     expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PROCESSING', leaseOwner: 'replacement', attempts: 0 });
     expect(await store.getDeliveryReceipt('synthetic-event')).not.toBeNull();
+  });
+
+  it.each(['activate', 'receipt'] as const)('fences Firestore %s source snapshot, claim and elapsed time in its transaction', async operation => {
+    const { store, head } = await scheduledFixture();
+    const release = await buildErpPublicProjection(store, store, head.observedAt, { activate: false });
+    const manifest = (await store.getManifest(release.releaseId))!;
+    const lineage = await store.listProjectionLineage(release.releaseId);
+    const definition = await store.getSourceDefinition(head.sourceId);
+    const run = await store.getSourceRun(head.runId);
+    const lease = { leaseOwner: 'synthetic', leaseUntil: new Date(Date.parse(head.observedAt) + 30000).toISOString() };
+    let current = head.observedAt;
+    let changedHead = head;
+    let owner = lease.leaseOwner;
+    const guard = { now: () => current, sources: [{ sourceId: head.sourceId, runId: head.runId,
+      digest: stableDigest([definition, head, run]), expiresAt: Date.parse(head.observedAt) + 60000 }],
+      claim: { eventId: 'synthetic-event', lease } };
+    const write = vi.fn();
+    const get = vi.fn(async (ref: { name: string; id?: string; query?: boolean }) => {
+      if (ref.query) return { docs: lineage.map(value => ({ data: () => value })) };
+      const values: Record<string, unknown> = {
+        projection_releases: release, projection_release_manifests: manifest,
+        projection_active: { releaseId: release.releaseId }, sources: definition,
+        source_heads: changedHead, source_runs: run,
+        outbox_events: { status: 'PROCESSING', leaseOwner: owner, leaseUntil: lease.leaseUntil },
+      };
+      const value = values[ref.name];
+      return { exists: !!value, data: () => value,
+        get: (key: string) => (value as Record<string, unknown>)?.[key] };
+    });
+    const db = { collection: (name: string) => ({ doc: (id: string) => ({ name, id }),
+      where: () => ({ name, query: true }) }), runTransaction: async (body: any) => body({ get, update: write, set: write, create: write }) } as unknown as Firestore;
+    const target = new FirestoreDataStore(db);
+    const receipt = { eventId: 'synthetic-event', eventType: 'catalog.canonicalized', projectionId: release.projectionId,
+      releaseId: release.releaseId, inputDigest: release.inputDigest, dataDigest: release.dataDigest,
+      targetRevision: 1, processedAt: head.observedAt };
+    const publish = () => operation === 'activate' ? target.activate(release.releaseId, { ...guard, receipt }) : target.putDeliveryReceipt(receipt, guard);
+    await publish();
+    expect(write).toHaveBeenCalled();
+    if (operation === 'activate') expect(write).toHaveBeenCalledWith(
+      { name: 'projection_delivery_receipts', id: receipt.eventId }, receipt);
+    write.mockClear();
+    changedHead = { ...head, observedAt: new Date(Date.parse(head.observedAt) + 1).toISOString() };
+    await expect(publish()).rejects.toThrow('PROJECTION_SOURCE_CHANGED');
+    changedHead = head; owner = 'replacement';
+    await expect(publish()).rejects.toThrow('OUTBOX_LEASE_LOST');
+    owner = lease.leaseOwner; current = lease.leaseUntil;
+    await expect(publish()).rejects.toThrow('OUTBOX_LEASE_LOST');
+    current = new Date(Date.parse(head.observedAt) + 60001).toISOString();
+    await expect(publish()).rejects.toThrow('PROJECTION_SOURCE_STALE');
+    expect(write).not.toHaveBeenCalled();
   });
 
   it('runs the existing worker preparation entrypoint once without activating a release', () => {

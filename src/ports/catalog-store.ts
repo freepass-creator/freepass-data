@@ -136,6 +136,13 @@ export interface CatalogStore {
     writerOwnershipTransferReceipts?: WriterOwnershipTransferReceipt[];
   }): Promise<void>;
 }
+export type ProjectionPublishGuard = {
+  now: () => string;
+  sources: Array<{ sourceId: string; runId: string; digest: string; expiresAt: number }>;
+  claim?: { eventId: string; lease: OutboxLease };
+  delivery?: Pick<ProjectionDeliveryReceipt, 'eventId' | 'eventType' | 'targetRevision' | 'processedAt'>;
+  receipt?: ProjectionDeliveryReceipt;
+};
 export interface ProjectionStore {
   stage<T extends ProjectionProduct>(release: ProjectionRelease<T>): Promise<void>;
   stageEvidence(input: {
@@ -143,14 +150,14 @@ export interface ProjectionStore {
     lineage: ProjectionFieldLineageRecord[];
   }): Promise<void>;
   markReady(releaseId: string): Promise<void>;
-  activate(releaseId: string): Promise<void>;
+  activate(releaseId: string, guard?: ProjectionPublishGuard): Promise<void>;
   getActive<T extends ProjectionProduct = ErpPublicProduct>(
     projectionId: string
   ): Promise<ProjectionRelease<T> | null>;
   getManifest(releaseId: string): Promise<ProjectionReleaseManifest | null>;
   listProjectionLineage(releaseId: string): Promise<ProjectionFieldLineageRecord[]>;
   getDeliveryReceipt(eventId: string): Promise<ProjectionDeliveryReceipt | null>;
-  putDeliveryReceipt(receipt: ProjectionDeliveryReceipt): Promise<void>;
+  putDeliveryReceipt(receipt: ProjectionDeliveryReceipt, guard?: ProjectionPublishGuard): Promise<void>;
 }
 export interface ProjectionEvidenceSnapshotStore {
   getActiveEvidenceSnapshot<T extends ProjectionProduct = ErpPublicProduct>(

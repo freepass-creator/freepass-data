@@ -3,9 +3,10 @@ import type {
   Product, ProjectionProduct, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
-  CatalogStore, CatalogTransaction, OutboxStore, OutboxLease, ProjectionStore,
+  CatalogStore, CatalogTransaction, OutboxStore, OutboxLease, ProjectionStore, ProjectionPublishGuard,
   SheetDeliveryEvidenceStore
 } from '../ports/catalog-store.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import type {
   CanonicalSourceBinding,
   CanonicalizationReceipt
@@ -414,7 +415,22 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     assertProjectionReleaseIntegrity(release, manifest, evidence);
     release.status = 'READY';
   }
-  async activate(releaseId: string) {
+  private checkPublishGuard(guard?: ProjectionPublishGuard) {
+    if (!guard) return;
+    const now = Date.parse(guard.now());
+    if (!Number.isFinite(now)) throw new Error('PROJECTION_SOURCE_TIME_INVALID');
+    for (const witness of guard.sources) {
+      if (stableDigest([this.sourceDefinitions.get(witness.sourceId) ?? null,
+        this.sourceHeads.get(witness.sourceId) ?? null, this.sourceRuns.get(witness.runId) ?? null]) !== witness.digest)
+        throw new Error('PROJECTION_SOURCE_CHANGED');
+      if (now > witness.expiresAt) throw new Error('PROJECTION_SOURCE_STALE');
+    }
+    if (guard.claim) {
+      this.requireOutboxLease(guard.claim.eventId, guard.claim.lease);
+      if (now >= Date.parse(guard.claim.lease.leaseUntil)) throw new Error('OUTBOX_LEASE_LOST');
+    }
+  }
+  async activate(releaseId: string, guard?: ProjectionPublishGuard) {
     const release = this.releases.get(releaseId);
     if (!release || release.status !== 'READY') throw new Error('Only READY release can activate');
     const manifest = this.manifests.get(releaseId);
@@ -422,12 +438,16 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     const evidence = [...this.projectionLineage.values()]
       .filter((item) => item.releaseId === releaseId);
     assertProjectionReleaseIntegrity(release, manifest, evidence);
+    this.checkPublishGuard(guard);
+    if (guard?.receipt && this.deliveryReceipts.has(guard.receipt.eventId))
+      throw new Error('Projection delivery receipt already exists');
     const previousId = this.active.get(release.projectionId);
     const previous = previousId ? this.releases.get(previousId) : undefined;
     if (previous) previous.status = 'READY';
     release.status = 'ACTIVE';
     release.activatedAt = new Date().toISOString();
     this.active.set(release.projectionId, releaseId);
+    if (guard?.receipt) this.deliveryReceipts.set(guard.receipt.eventId, copy(guard.receipt));
   }
   async getActive<T extends ProjectionProduct = ErpPublicProduct>(
     projectionId: string
@@ -474,7 +494,10 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async getDeliveryReceipt(eventId: string) {
     return copy(this.deliveryReceipts.get(eventId) ?? null);
   }
-  async putDeliveryReceipt(receipt: ProjectionDeliveryReceipt) {
+  async putDeliveryReceipt(receipt: ProjectionDeliveryReceipt, guard?: ProjectionPublishGuard) {
+    this.checkPublishGuard(guard);
+    if (guard && this.active.get(receipt.projectionId) !== receipt.releaseId)
+      throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
     if (this.deliveryReceipts.has(receipt.eventId)) {
       throw new Error(`Projection delivery receipt already exists: ${receipt.eventId}`);
     }

@@ -22,7 +22,7 @@ import {
   resolveExecutionWriter,
   type ExecutionWriterRef
 } from '../domain/writer-ownership.js';
-import type { CatalogStore, OutboxStore, ProjectionStore } from '../ports/catalog-store.js';
+import type { CatalogStore, OutboxStore, ProjectionStore, ProjectionPublishGuard } from '../ports/catalog-store.js';
 import type { CatalogEntityType, EntityRevisionRecord } from '../domain/history.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import type {
@@ -405,11 +405,12 @@ export function buildProjectionEvidenceContext(input: {
 
 export async function assertCatalogSourceFreshness(
   catalog: CatalogStore, now: string, requireFreshSources = false
-): Promise<void> {
+): Promise<ProjectionPublishGuard['sources']> {
   const current = Date.parse(now);
   if (!Number.isFinite(current)) throw new Error('PROJECTION_SOURCE_TIME_INVALID');
   const lineage = await catalog.listLineageByStage('NORMALIZED_TO_CANONICAL');
   const sources = [...new Set(lineage.map(item => item.sourceId))];
+  const witnesses: ProjectionPublishGuard['sources'] = [];
   if (requireFreshSources && !sources.length) throw new Error('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
   for (const sourceId of sources) {
     const definition = await catalog.getSourceDefinition(sourceId);
@@ -434,14 +435,27 @@ export async function assertCatalogSourceFreshness(
     const observed = Date.parse(head.observedAt);
     if (!Number.isFinite(observed) || observed > current) throw new Error('PROJECTION_SOURCE_TIME_INVALID');
     if (current - observed > threshold * 1000) throw new Error('PROJECTION_SOURCE_STALE');
+    witnesses.push({ sourceId, runId: head.runId, digest: stableDigest([definition, head, run]),
+      expiresAt: observed + threshold * 1000 });
   }
+  return witnesses.sort((a, b) => a.sourceId.localeCompare(b.sourceId));
 }
 
 export async function buildErpPublicProjection(
   catalog: CatalogStore, projections: ProjectionStore, now = new Date().toISOString(),
-  options: { activate?: boolean; requireFreshSources?: boolean } = {}
+  options: { activate?: boolean; requireFreshSources?: boolean; publishGuard?: ProjectionPublishGuard } = {}
 ): Promise<ProjectionRelease<ErpPublicProduct>> {
-  await assertCatalogSourceFreshness(catalog, now, options.requireFreshSources);
+  const started = performance.now();
+  const currentTime = options.publishGuard?.now ?? (() => new Date(Date.parse(now) + Math.floor(performance.now() - started)).toISOString());
+  const sources = await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources);
+  if (options.publishGuard && stableDigest(sources) !== stableDigest(options.publishGuard.sources))
+    throw new Error('PROJECTION_SOURCE_CHANGED');
+  const guard: ProjectionPublishGuard = { now: currentTime, sources,
+    ...(options.publishGuard?.claim ? { claim: options.publishGuard.claim } : {}) };
+  const deliveryGuard = (release: ProjectionRelease<ErpPublicProduct>): ProjectionPublishGuard => ({ ...guard,
+    ...(options.publishGuard?.delivery ? { receipt: { ...options.publishGuard.delivery,
+      projectionId: release.projectionId, releaseId: release.releaseId,
+      inputDigest: release.inputDigest, dataDigest: release.dataDigest } } : {}) });
   const releaseId = `rel_${randomUUID()}`;
   const [models, assets, products, offers, policies, sourceLineage, revisionHistory] = await Promise.all([
     catalog.listVehicleModels(),
@@ -736,7 +750,8 @@ export async function buildErpPublicProjection(
   const currentActive = currentEvidence.release;
   // Canonical/evidence reads can outlast or observe changes after preflight.
   // Recheck before accepting an existing ACTIVE as delivery evidence.
-  await assertCatalogSourceFreshness(catalog, now, options.requireFreshSources);
+  if (stableDigest(await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources)) !== stableDigest(sources))
+    throw new Error('PROJECTION_SOURCE_CHANGED');
   if (
     options.activate !== false && currentActive &&
     currentActive.status === 'ACTIVE' &&
@@ -750,6 +765,8 @@ export async function buildErpPublicProjection(
       currentEvidence.lineage
     );
     if (integrity.valid) {
+      const existingGuard = deliveryGuard(currentActive);
+      if (existingGuard.receipt) await projections.putDeliveryReceipt(existingGuard.receipt, existingGuard);
       return currentActive;
     }
   }
@@ -791,11 +808,12 @@ export async function buildErpPublicProjection(
   await projections.markReady(release.releaseId);
   // Preparation stages validated evidence only. Use an in-memory ProjectionStore
   // for a read-only production dry-run; preparation alone is not a cutover.
-  if (options.activate === false) return { ...release, status: 'READY' };
   // READY persistence is separate from source ingestion. Keep last-good ACTIVE
   // if the source became ineligible or stale while persisting this release.
-  await assertCatalogSourceFreshness(catalog, now, options.requireFreshSources);
-  await projections.activate(release.releaseId);
+  if (stableDigest(await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources)) !== stableDigest(sources))
+    throw new Error('PROJECTION_SOURCE_CHANGED');
+  if (options.activate === false) return { ...release, status: 'READY' };
+  await projections.activate(release.releaseId, deliveryGuard(release));
   const active = await projections.getActive('erp-public');
   if (!active) throw new Error('Projection activation failed');
   return active;
@@ -809,42 +827,37 @@ export async function processOneOutboxEvent(
   catalog: CatalogStore, outbox: OutboxStore, projections: ProjectionStore,
   options: {workerId: string; maxAttempts?: number; baseBackoffMs?: number; leaseMs?: number; requireFreshSources?: boolean}, now = new Date()
 ): Promise<'IDLE'|'DONE'|'RETRY'|'DEAD_LETTER'|'HOLD'> {
+  const started = performance.now();
+  const currentTime = () => new Date(now.getTime() + Math.floor(performance.now() - started)).toISOString();
   // A source outage is not an event failure: preserve PENDING, attempts and
   // the old ACTIVE release instead of claiming and exhausting the retry budget.
   try {
-    await assertCatalogSourceFreshness(catalog, now.toISOString(), options.requireFreshSources);
+    await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources);
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('PROJECTION_SOURCE_')) return 'HOLD';
     throw error;
   }
-  const event = await outbox.claimNext({
-    workerId: options.workerId, now: now.toISOString(),
-    leaseUntil: new Date(now.getTime() + (options.leaseMs ?? 30000)).toISOString()
-  });
-  if (!event) return 'IDLE';
+  const claimTime = currentTime();
   const lease = { leaseOwner: options.workerId,
-    leaseUntil: new Date(now.getTime() + (options.leaseMs ?? 30000)).toISOString() };
+    leaseUntil: new Date(Date.parse(claimTime) + (options.leaseMs ?? 30000)).toISOString() };
+  const event = await outbox.claimNext({ workerId: options.workerId, now: claimTime, leaseUntil: lease.leaseUntil });
+  if (!event) return 'IDLE';
   const attempts = event.attempts + 1;
   try {
+    const publishGuard: ProjectionPublishGuard = { now: currentTime,
+      sources: await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources),
+      claim: { eventId: event.eventId, lease },
+      delivery: { eventId: event.eventId, eventType: event.eventType,
+        targetRevision: event.targetRevision, processedAt: currentTime() } };
     if (event.eventType.startsWith('catalog.')) {
       const existingDelivery = await projections.getDeliveryReceipt(event.eventId);
       if (!existingDelivery) {
-        const release = await buildErpPublicProjection(
+        await buildErpPublicProjection(
           catalog,
           projections,
           now.toISOString(),
-          { requireFreshSources: options.requireFreshSources ?? false }
+          { requireFreshSources: options.requireFreshSources ?? false, publishGuard }
         );
-        await projections.putDeliveryReceipt({
-          eventId: event.eventId,
-          eventType: event.eventType,
-          projectionId: release.projectionId,
-          releaseId: release.releaseId,
-          inputDigest: release.inputDigest,
-          dataDigest: release.dataDigest,
-          targetRevision: event.targetRevision,
-          processedAt: now.toISOString()
-        });
       }
     }
     await outbox.markDone(event.eventId, lease); return 'DONE';

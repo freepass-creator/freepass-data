@@ -10,9 +10,10 @@ import type {
   Product, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
-  CatalogStore, CatalogTransaction, OutboxStore, OutboxLease, ProjectionStore,
+  CatalogStore, CatalogTransaction, OutboxStore, OutboxLease, ProjectionStore, ProjectionPublishGuard,
   SheetDeliveryEvidenceStore
 } from '../ports/catalog-store.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import type {
   CanonicalSourceBinding,
   CanonicalizationReceipt
@@ -462,7 +463,27 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       tx.update(releaseRef, { status: 'READY' });
     });
   }
-  async activate(releaseId: string) {
+  private async readPublishGuard(tx: Transaction, guard?: ProjectionPublishGuard) {
+    if (!guard) throw new Error('PROJECTION_SOURCE_GUARD_REQUIRED');
+    if (!guard.sources.length) throw new Error('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
+    for (const witness of guard.sources) {
+      const definition = data<SourceDefinition>(await tx.get(this.db.collection(C.sources).doc(sourceFirestoreDocumentId(witness.sourceId))));
+      const head = data<SourceHead>(await tx.get(this.db.collection(C.sourceHeads).doc(sourceFirestoreDocumentId(witness.sourceId))));
+      const run = data<SourceRun>(await tx.get(this.db.collection(C.sourceRuns).doc(witness.runId)));
+      if (stableDigest([definition, head, run]) !== witness.digest) throw new Error('PROJECTION_SOURCE_CHANGED');
+    }
+    if (guard.claim) {
+      const snap = await tx.get(this.db.collection(C.outbox).doc(guard.claim.eventId));
+      const event = data<OutboxEvent>(snap);
+      if (!event || event.status !== 'PROCESSING' || event.leaseOwner !== guard.claim.lease.leaseOwner ||
+        event.leaseUntil !== guard.claim.lease.leaseUntil) throw new Error('OUTBOX_LEASE_LOST');
+    }
+    const now = Date.parse(guard.now());
+    if (!Number.isFinite(now)) throw new Error('PROJECTION_SOURCE_TIME_INVALID');
+    if (guard.sources.some(witness => now > witness.expiresAt)) throw new Error('PROJECTION_SOURCE_STALE');
+    if (guard.claim && now >= Date.parse(guard.claim.lease.leaseUntil)) throw new Error('OUTBOX_LEASE_LOST');
+  }
+  async activate(releaseId: string, guard?: ProjectionPublishGuard) {
     await this.db.runTransaction(async (tx) => {
       const ref = this.db.collection(C.releases).doc(releaseId);
       const manifestRef = this.db.collection(C.releaseManifests).doc(releaseId);
@@ -492,6 +513,9 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       const activeRef = this.db.collection(C.activeReleases).doc(projectionId);
       const activeSnap = await tx.get(activeRef);
       const previousId = activeSnap.exists ? activeSnap.get('releaseId') as string : null;
+      if (projectionId === 'erp-public') await this.readPublishGuard(tx, guard);
+      if (guard?.receipt) tx.create(this.db.collection(C.projectionDeliveryReceipts)
+        .doc(encodeURIComponent(guard.receipt.eventId)), guard.receipt);
 
       if (previousId && previousId !== releaseId) {
         tx.update(this.db.collection(C.releases).doc(previousId), { status: 'READY' });
@@ -523,10 +547,17 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         .get()
     );
   }
-  async putDeliveryReceipt(receipt: ProjectionDeliveryReceipt) {
-    await this.db.collection(C.projectionDeliveryReceipts)
-      .doc(encodeURIComponent(receipt.eventId))
-      .create(receipt);
+  async putDeliveryReceipt(receipt: ProjectionDeliveryReceipt, guard?: ProjectionPublishGuard) {
+    if (receipt.projectionId !== 'erp-public') {
+      await this.db.collection(C.projectionDeliveryReceipts).doc(encodeURIComponent(receipt.eventId)).create(receipt);
+      return;
+    }
+    await this.db.runTransaction(async tx => {
+      const active = await tx.get(this.db.collection(C.activeReleases).doc(receipt.projectionId));
+      if (!active.exists || active.get('releaseId') !== receipt.releaseId) throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
+      await this.readPublishGuard(tx, guard);
+      tx.create(this.db.collection(C.projectionDeliveryReceipts).doc(encodeURIComponent(receipt.eventId)), receipt);
+    });
   }
   async getSheetDeliveryEvidence(receiptId: string) {
     return data<StoredSheetDeliveryEvidence>(

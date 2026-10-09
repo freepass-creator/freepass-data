@@ -8,7 +8,8 @@ import { seedDemoCatalog } from '../src/demo-seed.js';
 import { FirestoreDataStore } from '../src/infra/firestore-store.js';
 import { dataHealthReader } from '../src/infra/firestore-data-health-reader.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
-import { stableRecordSetDigest } from '../src/shared/stable-digest.js';
+import { stableDigest, stableRecordSetDigest } from '../src/shared/stable-digest.js';
+import { FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from '../src/infra/firestore-layout.js';
 
 const emulatorEnabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
 
@@ -68,7 +69,15 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
     await store.stage(release);
     await store.stageEvidence({ manifest, lineage });
     await store.markReady(releaseId);
-    await store.activate(releaseId);
+    const sourceId = 'local-demo/catalog-file';
+    const head = (await memory.getSourceHead(sourceId))!;
+    const source = { ...(await memory.getSourceDefinition(sourceId))!, expectedFreshnessSeconds: 86400 };
+    const run = (await memory.getSourceRun(head.runId))!;
+    await db.collection(FIRESTORE_COLLECTIONS.source.definitions).doc(sourceFirestoreDocumentId(sourceId)).set(source);
+    await db.collection(FIRESTORE_COLLECTIONS.source.heads).doc(sourceFirestoreDocumentId(sourceId)).set(head);
+    await db.collection(FIRESTORE_COLLECTIONS.source.runs).doc(run.runId).set(run);
+    await store.activate(releaseId, { now: () => head.observedAt, sources: [{ sourceId, runId: run.runId,
+      digest: stableDigest([source, head, run]), expiresAt: Date.parse(head.observedAt) + 86400000 }] });
 
     const snapshot = await store.getActiveEvidenceSnapshot('erp-public');
     expect(snapshot.consistency).toBe('ATOMIC');
