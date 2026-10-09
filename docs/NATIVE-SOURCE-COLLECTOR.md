@@ -142,6 +142,8 @@ node dist/src/jobs/ingest-kakao-source.js <비공개-묶음.json>
 | 실행/시험 | `src/jobs/ingest-kakao-source.ts`, `package.json`, `tests/kakao-source-intake.test.ts` |
 | 인계 | `docs/NATIVE-SOURCE-COLLECTOR.md`, `docs/NEXT-START-HERE.md` |
 
+- 2026-10-09 두 결함 수정(기반 `8e85637`, 커밋·푸시 없음): 사건별 선점 직전 주입 시계로 lease 계산·검사, stableValue로 보관 JSON 키 정렬. 6분 지연 후 다음 사건 보관·키 순서가 다른 두 PC 동일 해시/ACK·만료 후 재선점 금지 회귀 포함 카카오 36 PASS. `npm.cmd run check` 최초 시계 옵션 타입 누락 수정 후 재실행: build/선행 검사 PASS, Vitest 1780 PASS / 9 FAIL / 14 SKIP, exit 1. 기존 ENOMEM·jq 권한·로컬 ECONNREFUSED 환경 오류 및 read-pilot 4건 exit/JSON 실패(원인 분리 필요); 전체 PASS 아님. next_start_here: 정상 환경 전체 check 재검증.
+- 재검토(Codex) 지적 «키 정렬로 바뀐 보관 해시가 예전 보관본과 맞지 않음»: 이 코드는 2026-10-09 기준 운영에서 한 번도 실행되지 않아 예전 방식 보관본이 0건이므로 호환 경로를 두지 않는다. 운영 첫 보관부터 정규 직렬화만 쓴다. 이후 직렬화를 다시 바꿀 때는 그때 보관본 호환·재처리 시험을 함께 넣는다.
 - 카카오 전용 17 PASS, 기존 RAW 적재 4 PASS. 가짜 Drive/Firestore 포트로 두 PC(사건1·관측2), restart/응답 유실, 같은 문장 재발화, 같은 파일 재전송, PARTIAL 삭제0, 식별불명, 사진 매칭 성공/실패, 공개권한 거부, 최초/최신 참조, CSV 증거/lineage 및 재실행, 승인/CLI 경계를 검증했다. Firestore emulator/실서비스 통과라는 뜻이 아니다.
 - `npm.cmd run check` 첫 실행은 신규 테스트 override의 반환 타입 오류로 build 실패. Promise<never>로 고친 뒤 build 및 관련 21개 시험 PASS.
 - 두 번째 `npm.cmd run check`: **exit 1**. architecture/data-access 경계 PASS, standards 15 PASS(프로젝트 상태 PARTIAL 유지), sheets 105 PASS, build PASS, read-runtime 12 PASS, shadow 10 PASS, dashboard 7+14 PASS. Vitest **1761 PASS / 9 FAIL / 14 SKIP**, 파일 136 PASS / 4 FAIL / 4 SKIP.

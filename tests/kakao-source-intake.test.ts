@@ -171,6 +171,40 @@ describe('Kakao queue, sheet plan and observed source tendencies', () => {
 });
 
 describe('Kakao RAW intake and private photo branch', () => {
+  it('claims the next event with a fresh lease after processing takes over five minutes', async () => {
+    const { ports, drive, store } = setup(); const input = bundle();
+    input.messages.push({ ...structuredClone(input.messages[0]!), messageId: 'fake-message-2' });
+    let time = Date.parse('2026-10-09T09:00:00Z');
+    const startedAt = time; const verify = drive.verify.bind(drive);
+    drive.verify = async id => {
+      const result = await verify(id);
+      if (id === 'fake-file-2') time += 360_000;
+      return result;
+    };
+    const results = await ingestKakaoBundle(input, ports, {
+      apply: true, approval: 'approved', now: new Date(startedAt).toISOString(), clock: () => time,
+    });
+    expect(results.map(result => result.status)).toEqual(['ARCHIVED', 'ARCHIVED']);
+    expect(drive.uploads).toBe(4);
+    const event = await store.getEvent(prepareKakaoBundle(input)[1]!.eventId!);
+    expect(event?.leaseUntil).toBe(new Date(startedAt + 360_000 + 300_000).toISOString());
+  });
+  it('archives reordered message and nested keys identically and acknowledges both PCs', async () => {
+    const { ports, drive, store } = setup(); const first = bundle(); const second = bundle('PC-B');
+    const message = second.messages[0]!;
+    second.messages[0] = Object.fromEntries(Object.entries(message).reverse()) as typeof message;
+    second.messages[0]!.vehicle = { evidenceText: message.vehicle!.evidenceText,
+      supplierVehicleId: message.vehicle!.supplierVehicleId! };
+    const a = prepareKakaoBundle(first)[0]!; const b = prepareKakaoBundle(second)[0]!;
+    expect(a.fingerprint).toBe(b.fingerprint);
+    expect(a.archives[0]!.sha256).toBe(b.archives[0]!.sha256);
+    expect(a.archives[0]!.bytes).toEqual(b.archives[0]!.bytes);
+    const options = { apply: true, approval: 'approved', now: now() };
+    expect((await processKakaoQueueInput({ bundle: first }, ports, options)).status).toBe('ACK_ELIGIBLE');
+    expect((await processKakaoQueueInput({ bundle: second }, ports, options)).status).toBe('ACK_ELIGIBLE');
+    expect(drive.uploads).toBe(2);
+    expect((await store.getEvent(a.eventId!))?.observations).toHaveLength(2);
+  });
   it('two PCs yield one event, two RAW observations, one upload per event/hash', async () => {
     const { store, drive, ingest } = setup();
     await Promise.all([ingest(bundle()), ingest(bundle('PC-B'))]);
@@ -195,6 +229,15 @@ describe('Kakao RAW intake and private photo branch', () => {
     const { drive, ingest } = setup(); drive.loseNextReply = true;
     await ingest(bundle());
     expect((await ingest(bundle()))[0]?.status).toBe('UNKNOWN');
+    expect(drive.uploads).toBe(1);
+  });
+  it('never grants another upload after the original lease expires', async () => {
+    const { ports, drive } = setup(); drive.loseNextReply = true;
+    let time = Date.parse('2026-10-09T09:00:00Z');
+    const options = { apply: true, approval: 'approved', now: new Date(time).toISOString(), clock: () => time };
+    expect((await ingestKakaoBundle(bundle(), ports, options))[0]?.status).toBe('UNKNOWN');
+    time += 360_000;
+    expect((await ingestKakaoBundle(bundle(), ports, options))[0]?.status).toBe('UNKNOWN');
     expect(drive.uploads).toBe(1);
   });
   it('lost claim reply triggers a read and never an upload', async () => {

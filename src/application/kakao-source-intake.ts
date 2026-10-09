@@ -92,8 +92,9 @@ export function planKakaoIntake(bundle: KakaoBundle, products: KakaoProductSnaps
 export async function ingestKakaoBundle(bundle: KakaoBundle, ports: {
   store: SourceIngestionStore; drive: KakaoDriveArchivePort; organizationDomain: string;
   products: KakaoProductSnapshot[];
-}, options: { apply: boolean; approval: string | undefined; now: string }) {
+}, options: { apply: boolean; approval: string | undefined; now: string; clock?: () => number }) {
   if (!options.apply || options.approval !== 'approved') throw new Error('KAKAO_APPLY_NOT_APPROVED');
+  const clock = options.clock ?? Date.now;
   const prepared = prepareKakaoBundle(bundle);
   const results = [];
   for (const item of prepared) {
@@ -117,8 +118,9 @@ export async function ingestKakaoBundle(bundle: KakaoBundle, ports: {
     if (!item.eventId || !item.directory) {
       results.push({ eventId: null, status: 'HOLD', issues: item.issues }); continue;
     }
+    const claimedAt = clock();
     const claimInput = { eventId: item.eventId, sourceId: item.batch.source.sourceId, owner: randomUUID(),
-      now: options.now, leaseUntil: new Date(Date.parse(options.now) + 300_000).toISOString(),
+      now: new Date(claimedAt).toISOString(), leaseUntil: new Date(claimedAt + 300_000).toISOString(),
       observation: { observationId: item.observationId, rawRef: raw.rawRecordId,
         fingerprint: item.fingerprint, version: item.message.version, verified: item.message.captureVerified } };
     let claim;
@@ -143,7 +145,7 @@ export async function ingestKakaoBundle(bundle: KakaoBundle, ports: {
         if (!id) {
           // Only the first successful atomic claimant may upload, within its original lease.
           // Existing/expired/UNKNOWN receipts allow searches only, including after a restart.
-          if (!claim.acquired || Date.now() > Date.parse(claim.receipt.leaseUntil)) throw new Error('DRIVE_RECONCILIATION_REQUIRED');
+          if (!claim.acquired || clock() > Date.parse(claim.receipt.leaseUntil)) throw new Error('DRIVE_RECONCILIATION_REQUIRED');
           id = (await ports.drive.upload({ directory: item.directory, name: attachment.sha256,
             bytes: attachment.bytes, mediaType: attachment.mediaType, appProperties: properties })).id;
         }

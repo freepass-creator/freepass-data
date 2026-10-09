@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { stableDigest } from '../shared/stable-digest.js';
+import { stableDigest, stableValue } from '../shared/stable-digest.js';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
 import type { KakaoProductSnapshot } from '../ports/kakao-archive.js';
 
@@ -91,7 +91,7 @@ export function prepareKakaoBundle(bundle: KakaoBundle) {
         payload: { eventId, observationId, collectorId: bundle.collectorId, supplierCode: bundle.supplierCode,
           roomId: bundle.roomId, original, issues, classification, directory, ruleVersion: 'kakao-intake/1' } }],
     };
-    const originalBytes = Buffer.from(JSON.stringify(original), 'utf8');
+    const originalBytes = Buffer.from(JSON.stringify(stableValue(original)), 'utf8');
     return { eventId, observationId, fingerprint, message, batch, directory, issues, classification,
       archives: [{ sha256: bytesSha256(originalBytes), mediaType: 'application/json', role: 'DOCUMENT' as const, bytes: originalBytes }, ...attachments],
       attachments, deletionCount: 0 as const, stockZeroAsserted: false as const };
