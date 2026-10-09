@@ -93,3 +93,15 @@ npm run query:canonical-by-plate -- --firestore --plate-file <운영자-번호�
 - `npm run capture:shared-sheet -- --spreadsheet <ID> --out <비공개-절대경로>` — Sheets 읽기 전용 토큰(`GOOGLE_SHEETS_APPLICATION_CREDENTIALS` 파일이 있으면 그것, 없으면 ADC). stdout 은 탭 수·레코드 수·digest 만.
 - 로컬 확인용 `--from-batchget <gws batchGet JSON> --read-time <ISO>` 도 같은 검증을 거친다.
 - 숫자 없는 차량번호(「신차」「미정」 등)는 차량 식별자로 쓰지 않는다. RAW 는 위치로 보존하고 정리 단계에서 `PLATE_NOT_ASSIGNED` HOLD.
+
+
+## 차종 4칸: active Data 마스터 단일화 (2026-10-09, 기존 PR395)
+
+- 이름 정본은 `vehicle_master`·`vehicle_trim_master` 및 검색 별칭이다. F03은 출력 투영이며 읽기 입력·이름 선택·기본형 추정에 사용하지 않는다. 기준 한 장 자체는 변경하지 않았다.
+- 기존 수집 job은 중앙 Firebase target과 read-only transaction에서 master/trim을 동일 readTime으로 캡처한다. 원문 캡처 digest에 그 snapshot을 봉인하고 기존 Data Access 감사 경계를 재사용한다.
+- 기존 `build:vehicle-identity-inputs`는 `--erp5-capture <기존 캡처> --master-snapshot <수집 snapshot> --out <비공개 경로>`로 v2 입력을 만든다. 옛 F03/v1 입력, 5분을 넘긴 자료, digest 변조, 모호한 ID는 거부한다. Data 차량별 원문도 별도로 보존한다.
+- 입력 차종은 정확한 현행 이름 또는 마스터 별칭으로 불변 master/trim ID 한 경로에만 연결한다. 같은 이름의 서로 다른 ID, Data/시트 모순, 퇴역·끊긴 부모·부모 이름 불일치는 HOLD다. 별칭을 표시 이름으로 쓰거나 원문을 덮어쓰지 않는다.
+- snapshot이 없는 offline 입력도 RAW는 보존하지만 차종값은 null/REVIEW_REQUIRED다. production APPLY는 계획 snapshot과 적용 직전 재조회한 master/trim 내용이 다르면 재계획으로 중단한다.
+- 과거 F03 생산기간/임의 1개월·18개월 허용 및 고유 낱말 점수로 이름을 자동 선택하던 추론은 사용하지 않는다. 제원·기간은 별도 원문 증거 확인 사항이며 날짜를 추정해 채우지 않는다.
+- 운영 관측 2026-10-09 14:26 KST: master1871(퇴역6), trim2097, 끊긴 부모0/퇴역 부모 연결0, 부모 이름 불일치272. products1776 중 active master 3단 이름 대조1673/미일치103, catalog_vehicle_models160 중미일치4. 제조사 별칭 비교를 적용한 이름 대조이며 차량별 identity/제원 확정이 아니다. REST 페이지 전체 읽기이며 원자적 운영 snapshot 증거로 확대하지 않는다.
+- Claude 검토는 조직 구독 접근 비활성 FAILED(exit1)다. 운영 DB/시트 대량 정정·배포는 실행하지 않았다. 최신 수집 PR401의 변경과 main 통합 후 전체 검사 및 소비처 readback을 별도로 확인한다.

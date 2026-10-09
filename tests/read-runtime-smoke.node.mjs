@@ -11,6 +11,34 @@ const healthContract = JSON.parse(await readFile(
 const healthContractVersion = healthContract.properties.contractVersion.const;
 const healthSchemaVersion = healthContract.properties.schemaVersion.const;
 
+test('Docker build supplies the script and contract inputs required by packaging', async () => {
+  const dockerfile = await readFile(new URL('../Dockerfile', import.meta.url), 'utf8');
+  const buildStage = dockerfile.split('FROM node:22-bookworm-slim AS runtime')[0];
+  const beforeBuild = buildStage.split('RUN npm run build')[0];
+  assert.match(beforeBuild, /^COPY scripts\/supplier-input-sheet\.mjs scripts\/sheet-presentation\.mjs \.\/scripts\/$/m);
+  assert.match(beforeBuild, /^COPY contracts \.\/contracts$/m);
+  for (const path of ['scripts/supplier-input-sheet.mjs', 'scripts/sheet-presentation.mjs',
+    'contracts/supplier-input-sheet-spec.v1.json', 'contracts/f01-f86-sheet-spec.v1.json']) {
+    assert.ok((await readFile(new URL('../' + path, import.meta.url))).length, path);
+  }
+  assert.match(dockerfile, /^COPY --from=build \/app\/dist \.\/dist$/m);
+});
+
+test('built shared-sheet canonical job imports without tsx or source scripts', async () => {
+  const result = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e',
+      "await import('./dist/src/jobs/ingest-shared-sheet-canonical.js'); console.log('DIST_IMPORT_OK');"],
+    { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { output += chunk; });
+    child.on('error', reject);
+    child.on('close', code => resolve({ code, output }));
+  });
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /DIST_IMPORT_OK/);
+});
+
 function run(env) {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -55,6 +83,95 @@ const baseHealth = {
   checks: { activeProjection: { activeReleaseId: 'rel_test' } },
   issues: []
 };
+
+const compat = {
+  schema: 'freepass-data.catalog-compat/v1',
+  data: { products: { privateVehicle: { plate: 'PRIVATE_RAW_VALUE' } }, policies: {}, partners: {} },
+  meta: { consumerId: 'erp-com', authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE',
+    sourceProject: 'freepasserp5', observedAt: '2026-10-06T00:00:00Z',
+    collectionCounts: { products: 1, policy: 0, partner: 0 } }
+};
+test('compatibility-only checks existing transport without claiming ACTIVE or exposing payload', async () => {
+  await withServer((request, response) => {
+    assert.equal(request.url, '/v1/consumers/erp-com/catalog-compat');
+    assert.equal(request.headers.authorization, 'Bearer app-secret');
+    assert.equal(request.headers['x-serverless-authorization'], 'Bearer google-secret');
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify(compat));
+  }, async url => {
+    const result = await run({ READ_RUNTIME_URL: url, READ_RUNTIME_CONSUMER_ID: 'erp-com',
+      READ_RUNTIME_TOKEN: 'app-secret', READ_RUNTIME_CLOUD_RUN_ID_TOKEN: 'google-secret',
+      READ_RUNTIME_CHECK_COMPAT_ONLY: '1', READ_RUNTIME_CHECK_CATALOG: '0' });
+    assert.equal(result.code, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.canonicalReleaseVerified, false);
+    assert.equal(report.cutoverAuthorized, false);
+    assert.deepEqual(report.collectionCounts, { products: 1, policies: 0, partners: 0 });
+    for (const value of ['PRIVATE_RAW_VALUE', 'privateVehicle', 'app-secret', 'google-secret'])
+      assert.equal((result.stdout + result.stderr).includes(value), false);
+  });
+});
+test('compatibility-only rejects identity, authority, collection shape and count drift', async () => {
+  for (const mutate of [
+    x => { x.meta.consumerId = 'another-tenant'; },
+    x => { x.meta.authority = 'CANONICAL_ACTIVE'; },
+    x => { x.meta.sourceProject = 'another-project'; },
+    x => { x.meta.observedAt = 'invalid'; },
+    x => { x.data.products = []; },
+    x => { x.data.products.privateVehicle = 'raw'; },
+    x => { delete x.data.policies; },
+    x => { x.meta.collectionCounts.products = 2; },
+    x => { x.data.partners = []; }
+  ]) {
+    const payload = structuredClone(compat); mutate(payload);
+    await withServer((_request, response) => {
+      response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(payload));
+    }, async url => {
+      const result = await run({ READ_RUNTIME_URL: url, READ_RUNTIME_CONSUMER_ID: 'erp-com',
+        READ_RUNTIME_TOKEN: 'secret', READ_RUNTIME_CHECK_COMPAT_ONLY: '1', READ_RUNTIME_CHECK_CATALOG: '0' });
+      assert.notEqual(result.code, 0);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr.includes('PRIVATE_RAW_VALUE'), false);
+    });
+  }
+});
+
+test('ERP required partner/user collections fail closed even when core compatibility payload is valid', async () => {
+  await withServer((_request, response) => {
+    response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(compat));
+  }, async url => {
+    const result = await run({ READ_RUNTIME_URL: url, READ_RUNTIME_CONSUMER_ID: 'erp-com',
+      READ_RUNTIME_TOKEN: 'secret', READ_RUNTIME_CHECK_COMPAT_ONLY: '1', READ_RUNTIME_CHECK_CATALOG: '0',
+      READ_RUNTIME_REQUIRED_COMPAT_COLLECTIONS: 'products,policies,partners,users' });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Required compatibility collection missing: users/);
+    assert.equal(result.stdout, '');
+  });
+});
+
+test('Canonical checker rejects matching release ID with bridge authority or missing manifest', async () => {
+  const catalog = { data: [{}], meta: { consumerId: 'erp-com', projectionId: 'erp-public',
+    authority: 'CANONICAL_ACTIVE', schemaVersion: '1.0.0', releaseId: 'rel_test',
+    manifestId: 'manifest_test', inputDigest: 'input_digest', dataDigest: 'data_digest' } };
+  for (const mutate of [
+    x => {},
+    x => { x.meta.authority = 'FREEPASS_DATA_COMPATIBILITY_BRIDGE'; },
+    x => { delete x.meta.manifestId; },
+    x => { x.meta.consumerId = 'another-tenant'; },
+    x => { x.data = []; }
+  ]) {
+    const payload = structuredClone(catalog); mutate(payload);
+    await withServer((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify(request.url.endsWith('/catalog-health') ? baseHealth : payload));
+    }, async url => {
+      const result = await run({ READ_RUNTIME_URL: url, READ_RUNTIME_CONSUMER_ID: 'erp-com',
+        READ_RUNTIME_TOKEN: 'secret', READ_RUNTIME_CHECK_COMPAT_ONLY: '0', READ_RUNTIME_CHECK_CATALOG: '1' });
+      assert.equal(result.code === 0, payload.meta.authority === 'CANONICAL_ACTIVE' &&
+        !!payload.meta.manifestId && payload.meta.consumerId === 'erp-com' && payload.data.length > 0);
+    });
+  }
+});
 
 test('smoke checker rejects the retired catalog health schema version', async () => {
   await withServer((_request, response) => {

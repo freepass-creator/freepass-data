@@ -1,3 +1,11 @@
+import { readVehicleMasterSnapshot } from '../infra/erp5-compat-catalog-reader.js';
+export async function captureVehicleMasterSnapshotReadOnly() {
+  return createJobDataAccessRuntime().access.read({
+    context: { actor: { id: 'service:freepass-data', kind: 'SERVICE' }, clientId: 'job:capture-shared-sheet', purpose: 'read the existing active Data vehicle master snapshot' },
+    operation: 'READ_VEHICLE_MASTER_SNAPSHOT', resource: { kind: 'SOURCE', name: 'vehicle-master' },
+    summarize: value => ({ count: value.masters.length + value.trims.length, digest: value.digest })
+  }, readVehicleMasterSnapshot);
+}
 import { DataAccessGateway } from '../application/data-access-gateway.js';
 import { withdrawIancarPublication, publishIancarPhaseOne, publishIancarPhotoReferences, restoreIancarPhaseOne } from '../infra/iancar-publication-withdrawal-firestore.js';
 import { buildIancarOnePublicationProducts, type IancarOneListCapture } from '../adapters/iancar-one-api.js';

@@ -8,6 +8,7 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY contracts ./contracts
 COPY src ./src
+COPY scripts/supplier-input-sheet.mjs scripts/sheet-presentation.mjs ./scripts/
 
 RUN npm run build
 

@@ -25,41 +25,19 @@ inventory, while `fleetTotal` can be much larger. Per-model counts, inventory/re
 are checked. Stale, future or over-one-hour supplier observations remain INCOMPLETE. An absent vehicle cannot be
 retired from this endpoint. Rental rates are not present: pricing remains UNKNOWN/HOLD, never 0 or a silent Sheet fallback.
 
-Operational cutover is **NOT VERIFIED**: the production legacy bridge still uses its old Sheet source and pin.
+(2026-09-30 기록) Operational cutover was **NOT VERIFIED** then: the production legacy bridge used its old Sheet source and pin. 2026-10-03 기준 ERP4 refresh는 RP031 옛 Sheet 수집을 제외하고(`RP031_API_CUTOVER_HOLD`) ONE API Data 실행기를 쓴다.
 The supplier credential exists in the ERP bridge's GitHub secret but is not present in the local central job or
 central runtime Secret Manager. Do not copy it into code, public workflow logs or artifacts. Actual secure runtime
 binding, reviewed candidate mapping, exact writer/publisher cutover and every consumer readback remain required.
 
-## Contract
+## 이안카 정본과 대체 순서 — 2026-10-04 사용자 결정
 
-`src/adapters/iancar-source-capture.ts` extends the existing immutable ERP5 capture pattern for two
-independent upstreams. One bundle contains the Iancar ERP raw response, its vehicle/rate evidence, and
-the complete raw CSV of both fixed Google Sheet tabs (`이안카`, `이안카 재렌트`). A SHA-256 digest covers
-the entire bundle. Failure of either Sheet tab fails the run instead of producing a partial success.
-ERP failure also rejects the whole Promise. ERP raw, parsed vehicle list, and parsed rate list have separate
-digests plus a required parser version so derivation drift is visible.
+이안카(RP031) 재고 정본은 **이안카 시스템 하나**다.
 
-This is `REUSE_WITH_ADAPTER`: the ERP5 capture's immutable evidence/digest pattern is reused, while a
-new adapter is necessary because Iancar has no cross-system transaction and has two independent sources.
+1. 기본: ONE 공식 API([IANCAR-ONE-API.md](IANCAR-ONE-API.md)).
+2. 대체: ONE API가 막히면(인증 실패·연속 오류) 이 문서의 로그인 `/api/inventory` 경로를 쓴다. 열쇠는 기존 `IANKA_ACCOUNT_JSON` 하나이며 새로 만들지 않는다. 두 경로는 같은 공급사 ERP 동기화(`syncedAt`/`stale`)에서 나오므로, ONE API가 정상이면 로그인 경로를 함께 돌리지 않는다. 대체로 바꿀 때도 같은 freshness/stale HOLD 규칙을 그대로 적용한다.
 
-## Non-volatile boundary
-
-`persistIancarCapture()` saves each bundle with exclusive-create semantics under
-`~/.codex/private/freepass-data-iancar-captures/<runId>/capture.json` and verifies the digest after readback.
-There is no caller-selected output path and no overwrite. The existing append-only RAW store is the later
-operational destination after authorization. Neither inspection nor mapping overwrites an earlier capture.
-The collector must provide source revision, observation time, full-collection evidence, and separate ERP
-rate coverage. Collection success alone does not prove freshness.
-
-ERP and Google Sheets cannot be read in one cross-system transaction. Every bundle therefore declares
-`crossSourceConsistency=NON_ATOMIC`; its digest proves bundle integrity, not simultaneous source state.
-Downstream freshness/parity review must account for the independent observation times.
-The digest covers the exact captured representation and is intentionally order-sensitive; it is not a
-semantic equality hash across independently serialized provider responses.
-
-The local private file is plaintext and is only a preparation/evidence boundary. UUID naming and file modes
-are not encryption or a complete Windows ACL/retention policy. Long-term operational storage must use the
-authorized encrypted append-only RAW store with explicit access and retention controls.
+공급사 원본 Google Sheet(`이안카_프리패스`)와 F54는 **이안카 출처로 쓰지 않는다**(정본·대체·비교 기준 모두 아님). 이전의 ERP+Sheet 두 원천 묶음 캡처(`captureIancarSource`/`persistIancarCapture`)는 운영 호출처가 없어 2026-10-04 코드에서 제거했다. 아래 날짜 이력의 Sheet 수치는 당시 기록일 뿐이다.
 
 The existing authenticated `/api/inventory` path contains inventory facts but does not establish complete
 rental-rate coverage. Until the ERP rate source is captured and `rateCoverageComplete=true` is supported by
