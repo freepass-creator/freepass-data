@@ -403,10 +403,45 @@ export function buildProjectionEvidenceContext(input: {
   return { canonicalInputs, evidence, requireRevision, addField };
 }
 
+export async function assertCatalogSourceFreshness(
+  catalog: CatalogStore, now: string, requireFreshSources = false
+): Promise<void> {
+  const current = Date.parse(now);
+  if (!Number.isFinite(current)) throw new Error('PROJECTION_SOURCE_TIME_INVALID');
+  const lineage = await catalog.listLineageByStage('NORMALIZED_TO_CANONICAL');
+  const sources = [...new Set(lineage.map(item => item.sourceId))];
+  if (requireFreshSources && !sources.length) throw new Error('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
+  for (const sourceId of sources) {
+    const definition = await catalog.getSourceDefinition(sourceId);
+    const threshold = definition?.expectedFreshnessSeconds;
+    // Unscheduled local/static fixtures retain their existing behavior. The
+    // operational worker requires an explicit policy for every source.
+    if (threshold == null) {
+      if (requireFreshSources) throw new Error('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
+      continue;
+    }
+    if (!definition?.enabled || !Number.isSafeInteger(threshold) || threshold <= 0) {
+      throw new Error('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
+    }
+    const head = await catalog.getSourceHead(sourceId);
+    const run = head ? await catalog.getSourceRun(head.runId) : null;
+    if (!head || head.sourceId !== sourceId || !run || run.sourceId !== sourceId ||
+        run.status !== 'COMPLETED' || run.headStatus !== 'CURRENT' ||
+        run.coverage.mode !== 'FULL' || run.coverage.completeness !== 'COMPLETE' ||
+        head.coverage.mode !== 'FULL' || head.coverage.completeness !== 'COMPLETE') {
+      throw new Error('PROJECTION_SOURCE_HEAD_UNVERIFIED');
+    }
+    const observed = Date.parse(head.observedAt);
+    if (!Number.isFinite(observed) || observed > current) throw new Error('PROJECTION_SOURCE_TIME_INVALID');
+    if (current - observed > threshold * 1000) throw new Error('PROJECTION_SOURCE_STALE');
+  }
+}
+
 export async function buildErpPublicProjection(
   catalog: CatalogStore, projections: ProjectionStore, now = new Date().toISOString(),
-  options: { activate?: boolean } = {}
+  options: { activate?: boolean; requireFreshSources?: boolean } = {}
 ): Promise<ProjectionRelease<ErpPublicProduct>> {
+  await assertCatalogSourceFreshness(catalog, now, options.requireFreshSources);
   const releaseId = `rel_${randomUUID()}`;
   const [models, assets, products, offers, policies, sourceLineage, revisionHistory] = await Promise.all([
     catalog.listVehicleModels(),
@@ -766,8 +801,15 @@ function backoffMs(base: number, attempts: number) {
 }
 export async function processOneOutboxEvent(
   catalog: CatalogStore, outbox: OutboxStore, projections: ProjectionStore,
-  options: {workerId: string; maxAttempts?: number; baseBackoffMs?: number; leaseMs?: number}, now = new Date()
-): Promise<'IDLE'|'DONE'|'RETRY'|'DEAD_LETTER'> {
+  options: {workerId: string; maxAttempts?: number; baseBackoffMs?: number; leaseMs?: number; requireFreshSources?: boolean}, now = new Date()
+): Promise<'IDLE'|'DONE'|'RETRY'|'DEAD_LETTER'|'HOLD'> {
+  // A source outage is not an event failure: preserve PENDING, attempts and
+  // the old ACTIVE release instead of claiming and exhausting the retry budget.
+  try {
+    await assertCatalogSourceFreshness(catalog, now.toISOString(), options.requireFreshSources);
+  } catch {
+    return 'HOLD';
+  }
   const event = await outbox.claimNext({
     workerId: options.workerId, now: now.toISOString(),
     leaseUntil: new Date(now.getTime() + (options.leaseMs ?? 30000)).toISOString()
@@ -781,7 +823,8 @@ export async function processOneOutboxEvent(
         const release = await buildErpPublicProjection(
           catalog,
           projections,
-          now.toISOString()
+          now.toISOString(),
+          { requireFreshSources: options.requireFreshSources ?? false }
         );
         await projections.putDeliveryReceipt({
           eventId: event.eventId,

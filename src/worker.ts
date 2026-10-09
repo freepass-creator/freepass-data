@@ -10,11 +10,14 @@ if (args.some(arg => arg !== '--prepare') || args.length > 1) {
 
 const stores = await createRuntimeStores();
 const workerId = process.env.WORKER_ID ?? `worker:${process.pid}`;
+const requireFreshSources = process.env.FREEPASS_DATA_DRIVER === 'firestore';
 
 if (args.includes('--prepare')) {
   // Read the configured Canonical store, but never stage, claim, or activate in Firestore.
   const memory = new MemoryDataStore();
-  const ready = await buildErpPublicProjection(stores.catalog, memory, new Date().toISOString(), { activate: false });
+  const ready = await buildErpPublicProjection(stores.catalog, memory, new Date().toISOString(), {
+    activate: false, requireFreshSources
+  });
   const manifest = await memory.getManifest(ready.releaseId);
   const report = { mode: 'PREPARE', status: ready.status, persistentWrites: 0,
     projectionStore: 'memory', products: ready.data.length, offers: manifest?.offerCount,
@@ -29,9 +32,9 @@ if (args.includes('--prepare')) {
     stores.catalog,
     stores.outbox,
     stores.projections,
-    { workerId }
+    { workerId, requireFreshSources }
   );
-  if (result === 'IDLE') {
+  if (result === 'IDLE' || result === 'HOLD') {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 }

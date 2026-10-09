@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { buildErpPublicProjection } from '../src/application/catalog.js';
+import { buildErpPublicProjection, processOneOutboxEvent } from '../src/application/catalog.js';
 import { readActiveProjectionEvidence } from '../src/application/projection-evidence-reader.js';
 import { assertProjectionReleaseIntegrity, verifyProjectionReleaseIntegrity } from '../src/shared/projection-integrity.js';
 import { stableDigest, stableRecordSetDigest } from '../src/shared/stable-digest.js';
@@ -22,6 +22,55 @@ async function fixture() {
 }
 
 describe('Projection release integrity verifier', () => {
+  async function scheduledFixture() {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const source = (await store.getSourceDefinition('local-demo/catalog-file'))!;
+    const head = (await store.getSourceHead(source.sourceId))!;
+    await store.seed({ sourceDefinitions: [{ ...source, expectedFreshnessSeconds: 60 }] });
+    store.outbox.set('synthetic-event', { eventId: 'synthetic-event', eventType: 'catalog.canonicalized',
+      entityType: 'product', entityId: 'prod_gv70_demo', sourceRevision: 0, targetRevision: 1,
+      commandId: 'synthetic', correlationId: 'synthetic', causationId: 'synthetic',
+      occurredAt: head.observedAt, status: 'PENDING', attempts: 0 });
+    return { store, head };
+  }
+
+  it('holds a CURRENT but stale source before claiming and preserves old ACTIVE and retries', async () => {
+    const { store, head } = await scheduledFixture();
+    const old = await buildErpPublicProjection(store, store, head.observedAt);
+    const before = structuredClone(store.outbox.get('synthetic-event'));
+    const claim = vi.spyOn(store, 'claimNext');
+    const late = new Date(Date.parse(head.observedAt) + 60_001);
+    expect((await store.getSourceRun(head.runId))?.headStatus).toBe('CURRENT');
+    expect(await processOneOutboxEvent(store, store, store, { workerId: 'synthetic', requireFreshSources: true }, late)).toBe('HOLD');
+    expect(claim).not.toHaveBeenCalled();
+    expect(store.outbox.get('synthetic-event')).toEqual(before);
+    expect((await store.getActive('erp-public'))?.releaseId).toBe(old.releaseId);
+    expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
+    await expect(buildErpPublicProjection(store, store, late.toISOString(), { activate: false, requireFreshSources: true }))
+      .rejects.toThrow('PROJECTION_SOURCE_STALE');
+  });
+
+  it('accepts the exact freshness boundary and holds a future or missing head', async () => {
+    const { store, head } = await scheduledFixture();
+    const boundary = new Date(Date.parse(head.observedAt) + 60_000);
+    expect(await processOneOutboxEvent(store, store, store, { workerId: 'synthetic', requireFreshSources: true }, boundary)).toBe('DONE');
+    await store.seed({ sourceHeads: [{ ...head, observedAt: new Date(boundary.getTime() + 1).toISOString() }] });
+    await expect(buildErpPublicProjection(store, store, boundary.toISOString(), { activate: false, requireFreshSources: true }))
+      .rejects.toThrow('PROJECTION_SOURCE_TIME_INVALID');
+    vi.spyOn(store, 'getSourceHead').mockResolvedValue(null);
+    await expect(buildErpPublicProjection(store, store, boundary.toISOString(), { requireFreshSources: true }))
+      .rejects.toThrow('PROJECTION_SOURCE_HEAD_UNVERIFIED');
+  });
+
+  it('holds an operational source without a freshness policy while local static preparation stays compatible', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await expect(buildErpPublicProjection(store, store, '2026-10-09T00:00:00.000Z', { activate: false, requireFreshSources: true }))
+      .rejects.toThrow('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
+    expect((await buildErpPublicProjection(store, store, '2026-10-09T00:00:00.000Z', { activate: false })).status).toBe('READY');
+  });
+
   it('runs the existing worker preparation entrypoint once without activating a release', () => {
     for (const args of [ ['src/worker.ts', '--prepare'], ['scripts/run-memory.mjs', 'worker', '--prepare'] ]) {
       const output = execFileSync(process.execPath, ['--import', 'tsx', ...args], {
