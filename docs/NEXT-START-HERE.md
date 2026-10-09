@@ -399,6 +399,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 온라인 원천 주소 실행 경계 재검증
+
+- 목적/대상 revision: 기존 PR401 `work/freepass-data/shared-sheet-dropdowns-before-rent`에서 main `b2777b59819d5fbaa4c650cd637c80b5e000c591`을 병합한 `173a53e4df3552d6a17bd14e097880d0dff4d25e` 기준. 새 엔진/개발선을 만들지 않는다.
+- 변경: 기존 supplier-input 계약의 sourceBinding을 실제 온라인 capture CLI에서도 검사한다. 미지정/과거 주소는 Google 호출·출력 생성 전에 `SHARED_SHEET_SOURCE_BINDING_MISMATCH`로 HOLD. 명시적 `--from-batchget` 로컬 증거 import는 보존한다. 종합은 원천이 아니며 공급사 탭만 수집한다.
+- 검증: build PASS, capture/canonical/job/retry 67 tests PASS, 잘못된 주소 실제 CLI exit1 및 출력 artifact 없음, diff check PASS.
+- 운영 관측/남음: shared-sheet daily run `37869754663`은 2026-10-09T01:26:09Z에 원천 읽기 전 `DAILY_WRITER_GUARD_NOT_OK`(age10951s)로 실패했다. 유효시간을 임의 완화하지 않는다. 사진/과거 엔진 폐기 PR402는 main 병합됐지만 관측 runtime `freepass-data-read-00015-649`에 새 사진 보강 배포는 미확인이다. main 병합을 CUTOVER로 표현하지 않는다.
+- 원천 역할: 손오공 RP012 ERP API가 차량/사진 원천이며 티카 기존 `tica_link`는 원문 이동 링크로 보존한다. 금액/차종 엔진을 복제하지 않는다. Claude 독립 검토는 구독 접근 차단으로 UNAVAILABLE이며 PASS가 아니다.
+- next_start_here: 필요한 선점 diff는 #399 calculationBasis 원문 보존 → #400 F01-only 발행 계약 → #401 원천 연결 → #403 기간별 금액 순서로 기존 소유자가 통합한다. #399/#400은 main 미반영이며 계약 guard 예외 연장/우회/임의 close 금지. 이 기록은 운영 DB·시트 쓰기/배포/IAM/일정 변경 승인이 아니다.
+
 ### 2026-10-09 사진·폐기 최소 회수 main 병합 확인
 
 - PR402 exact head d80a17aa073c74f83d921a321430aab403c0ffcd의 Canon/Core 원격검사 모두PASS 후 main563bfd214c0732ac6d1f815a15721f33ccf5cf1b에MERGED. 원본PR401에main을합쳐동일slice중복회수, 아래이력양쪽보존. PR399/400·정산/발행계약은손대지않음. 사진새코드배포/앨범readback미완료, Claude접근실패PASS아님. 이절이아래같은날의미병합관측보다최신이다.

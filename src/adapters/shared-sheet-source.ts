@@ -1,4 +1,5 @@
 import spec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+import { createHash } from 'node:crypto';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -31,6 +32,13 @@ function supplementByPlate<T extends { plate: string; supplierCode: string }>(it
   return out;
 }
 export const SHARED_SHEET_SPEC_DIGEST = stableDigest(spec);
+/** Executable online capture is bound to the approved current source, not an old fallback. */
+export function assertCurrentSharedSheetSource(id: string | undefined) {
+  const binding = spec.supplierManagement.sourceBinding;
+  if (!id || binding.legacyInputEnabled !== false || binding.fallbackAllowed !== false || binding.summaryIsSource !== false ||
+      !/^[a-f0-9]{64}$/.test(binding.spreadsheetIdSha256) ||
+      createHash('sha256').update(id).digest('hex') !== binding.spreadsheetIdSha256) throw new Error('SHARED_SHEET_SOURCE_BINDING_MISMATCH');
+}
 export const sharedSheetHeaders: readonly string[] = spec.inputHeaders;
 /** Registration is retained even when an input tab is absent. Absence is never a sold-out signal. */
 export const sharedSheetRegisteredChannels = spec.supplierChannels.sharedInputSheet;

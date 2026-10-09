@@ -8,12 +8,15 @@ const captureFromBatchGet = (id: string, raw: SheetsBatchGet, t: string) => rawC
 const readSharedSheetCapture = async (id: string, ports: { accessToken: () => Promise<string>; now: () => string; fetcher: typeof fetch }) =>
   (async (raw: SheetsBatchGet) => rawCapture(id, raw, await readSheetsMetadata(id, SHEETS_GRID_META_FIELDS, ports) as SheetsGridMeta, ports.now(), raw, raw))(
     await readSheetsBatchGet(id, sharedSheetCaptureRanges(), ports) as SheetsBatchGet);
-import { buildSharedSheetBatch, sharedSheetChannels, sharedSheetHeaders, sharedSheetRegisteredChannels, sharedSheetUnavailableChannels } from '../src/adapters/shared-sheet-source.js';
+import { assertCurrentSharedSheetSource, buildSharedSheetBatch, sharedSheetChannels, sharedSheetHeaders, sharedSheetRegisteredChannels, sharedSheetUnavailableChannels } from '../src/adapters/shared-sheet-source.js';
 import { canAssertSourceAbsence, decideSourceHead } from '../src/domain/source.js';
 import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
 import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
 
 const ID = 'synthetic_spreadsheet_id_0001';
+it('online capture rejects absent and obsolete source addresses without disclosing them', () => {
+  for (const id of [undefined, '', ID, 'old-individual-supplier-sheet']) expect(() => assertCurrentSharedSheetSource(id)).toThrow('SHARED_SHEET_SOURCE_BINDING_MISMATCH');
+});
 const T = '2026-10-04T02:00:00.000Z';
 function batch(extra: Record<string, unknown[][]> = {}) {
   return { spreadsheetId: ID, valueRanges: sharedSheetTabs().map(t => ({ range: `'${t}'!A1:BV${ROWS}`, values: [[...sharedSheetHeaders], ...(extra[t] ?? [])] })) };
