@@ -852,6 +852,7 @@ export function filterReferenceProducts<T extends KakaoCatalogReference | Return
     if (numeric.includes(key) && (!/^(0|[1-9]\d*)$/.test(String(value)) || !Number.isSafeInteger(Number(value)))) invalid();
   }
   const nameKey = (value: unknown) => typeof value === 'string' ? value.normalize('NFC').replace(/\s+/g,'') : '';
+  // Lookup-only normalization explicitly requested by the user; never changes stored identity.
   const plateKey = (value: unknown) => plateIdentityKey(typeof value === 'string' ? value.normalize('NFC') : value).replace(/-/g,'');
   if (query.plateNumber !== undefined && !isStrictKoreanPlate(plateKey(query.plateNumber))) invalid();
   if (query.termMonths !== undefined && (Number(query.termMonths)<1 || Number(query.termMonths)>60)) invalid();
@@ -873,8 +874,8 @@ export function filterReferenceProducts<T extends KakaoCatalogReference | Return
     (query.assetStatus === undefined || p.vehicle.assetStatus === query.assetStatus) &&
     p.offers.some(o => (query.supplierId === undefined || o.supplierId === query.supplierId) && (query.supplierName === undefined || nameKey(o.supplierName) === nameKey(query.supplierName)) && o.priceTerms.some(match)) &&
     (query.depositScope !== 'ALL_TERMS' || p.offers.flatMap(o => o.priceTerms).every(zero)));
-  const supplierCodes = new Set(reference.data.flatMap(p => p.offers).filter(o => query.supplierName !== undefined && nameKey(o.supplierName) === nameKey(query.supplierName) && (query.supplierId === undefined || o.supplierId === query.supplierId)).map(o => o.supplierId));
-  const plateCandidates = query.plateNumber === undefined ? [] : reference.data.filter(p => plateKey(p.vehicle.plateNumber) === plateKey(query.plateNumber));
+  const supplierCodes = new Set(data.flatMap(p => p.offers).filter(o => query.supplierName !== undefined && nameKey(o.supplierName) === nameKey(query.supplierName) && (query.supplierId === undefined || o.supplierId === query.supplierId) && o.priceTerms.some(match)).map(o => o.supplierId));
+  const plateCandidates = query.plateNumber === undefined ? [] : data.filter(p => plateKey(p.vehicle.plateNumber) === plateKey(query.plateNumber));
   const queryResolution = { state: supplierCodes.size > 1 || plateCandidates.length > 1 ? 'HOLD' : data.length ? 'MATCHED' : 'NO_MATCH', reasonCode: supplierCodes.size > 1 ? 'SUPPLIER_NAME_MULTIPLE_CODES' : plateCandidates.length > 1 ? 'PLATE_MULTIPLE_PRODUCTS' : null, matchedProductCount: data.length };
   return { ...reference,data,meta: { ...reference.meta,projectedCount:data.length,dataDigest:hash(JSON.stringify(data)),queryFilter:{...query},...(query.supplierName !== undefined || query.plateNumber !== undefined ? {queryResolution} : {}),
     ...(query.depositState === 'ZERO' ? {depositFilter:{state:'ZERO',termMonths:query.termMonths === undefined ? null : Number(query.termMonths),scope:query.depositScope === 'ALL_TERMS' ? 'ALL_TERMS' : 'ANY_TERM'}} : {}) } } as T;

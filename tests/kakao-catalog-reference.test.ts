@@ -749,5 +749,13 @@ describe('supplier and plate exact lookup', () => {
     const supplier=filterReferenceZeroDeposit(duplicate,{supplierName:name});expect(supplier.data).toHaveLength(2);
     expect((supplier.meta as typeof supplier.meta & {queryResolution:unknown}).queryResolution).toMatchObject({state:'HOLD',reasonCode:'SUPPLIER_NAME_MULTIPLE_CODES'});
     expect(filterReferenceZeroDeposit(duplicate,{supplierName:name,supplierId:'RP013'}).data).toHaveLength(1);
+    const narrowed=filterReferenceZeroDeposit(duplicate,{plateNumber:plate,supplierId:'RP013'});
+    expect((narrowed.meta as typeof narrowed.meta & {queryResolution:unknown}).queryResolution).toMatchObject({state:'MATCHED',matchedProductCount:1});
+    const empty=filterReferenceZeroDeposit(duplicate,{plateNumber:plate,termMonths:'24'});
+    expect((empty.meta as typeof empty.meta & {queryResolution:unknown}).queryResolution).toMatchObject({state:'NO_MATCH',reasonCode:null,matchedProductCount:0});
+    duplicate.data[1]!.offers[0]!.priceTerms=duplicate.data[1]!.offers[0]!.priceTerms.filter(t=>t.termMonths!==36);
+    const byTerm=filterReferenceZeroDeposit(duplicate,{supplierName:name,termMonths:'36'});
+    expect((byTerm.meta as typeof byTerm.meta & {queryResolution:unknown}).queryResolution).toMatchObject({state:'MATCHED',matchedProductCount:1});
+
   });
 });
