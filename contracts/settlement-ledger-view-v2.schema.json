@@ -1,0 +1,1332 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/settlement-ledger-view-v2.schema.json",
+  "title": "FreePass Data Settlement Ledger View V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "data",
+    "meta"
+  ],
+  "properties": {
+    "schema": {
+      "const": "freepass-data.settlement-ledger/v2"
+    },
+    "data": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/record"
+      }
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consumerId",
+        "authority",
+        "sourceProject",
+        "sourceCollection",
+        "observedAt",
+        "count",
+        "sourceDigest",
+        "dataDigest",
+        "snapshotSummary"
+      ],
+      "properties": {
+        "consumerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authority": {
+          "const": "FREEPASS_DATA_SETTLEMENT"
+        },
+        "sourceProject": {
+          "const": "freepasserp5"
+        },
+        "sourceCollection": {
+          "const": "settlement_rows"
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sourceDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "dataDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "snapshotSummary": {
+          "$ref": "#/$defs/snapshotSummary"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "nullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "nullableDate": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullableNumber": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "nullableBoolean": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "moneyFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "supply",
+        "vat",
+        "total",
+        "sourceFields"
+      ],
+      "properties": {
+        "supply": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "vat": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "total": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "sourceFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recorded",
+        "written",
+        "calculated",
+        "confirmed",
+        "cash",
+        "audit",
+        "evidence"
+      ],
+      "properties": {
+        "recorded": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "claim",
+            "pay"
+          ],
+          "properties": {
+            "claim": {
+              "$ref": "#/$defs/moneyFact"
+            },
+            "pay": {
+              "$ref": "#/$defs/moneyFact"
+            }
+          }
+        },
+        "written": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "claim",
+            "pay"
+          ],
+          "properties": {
+            "claim": {
+              "$ref": "#/$defs/moneyFact"
+            },
+            "pay": {
+              "$ref": "#/$defs/moneyFact"
+            }
+          }
+        },
+        "calculated": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "claim",
+            "pay"
+          ],
+          "properties": {
+            "claim": {
+              "$ref": "#/$defs/moneyFact"
+            },
+            "pay": {
+              "$ref": "#/$defs/moneyFact"
+            }
+          }
+        },
+        "confirmed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "claim",
+            "pay"
+          ],
+          "properties": {
+            "claim": {
+              "$ref": "#/$defs/moneyFact"
+            },
+            "pay": {
+              "$ref": "#/$defs/moneyFact"
+            }
+          }
+        },
+        "cash": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "claim",
+            "pay",
+            "verification",
+            "eventsState",
+            "eventsDigest",
+            "events"
+          ],
+          "properties": {
+            "claim": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "amount",
+                "at",
+                "reportedComplete"
+              ],
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/nullableNumber"
+                },
+                "at": {
+                  "$ref": "#/$defs/nullableString"
+                },
+                "reportedComplete": {
+                  "$ref": "#/$defs/nullableBoolean"
+                }
+              }
+            },
+            "pay": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "amount",
+                "at",
+                "reportedComplete"
+              ],
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/nullableNumber"
+                },
+                "at": {
+                  "$ref": "#/$defs/nullableString"
+                },
+                "reportedComplete": {
+                  "$ref": "#/$defs/nullableBoolean"
+                }
+              }
+            },
+            "verification": {
+              "const": "RECORDED_UNVERIFIED"
+            },
+            "eventsState": {
+              "enum": [
+                "READ",
+                "UNAVAILABLE",
+                "LIMIT_REACHED",
+                "IDENTITY_MISSING"
+              ]
+            },
+            "eventsDigest": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "events": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "axis",
+                  "kind",
+                  "amount",
+                  "day",
+                  "by",
+                  "createdAt"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "axis": {
+                    "$ref": "#/$defs/nullableString"
+                  },
+                  "kind": {
+                    "$ref": "#/$defs/nullableString"
+                  },
+                  "amount": {
+                    "$ref": "#/$defs/nullableNumber"
+                  },
+                  "day": {
+                    "$ref": "#/$defs/nullableString"
+                  },
+                  "by": {
+                    "$ref": "#/$defs/nullableString"
+                  },
+                  "createdAt": {
+                    "$ref": "#/$defs/nullableTimestamp"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "createdBy",
+            "updatedBy",
+            "createdAt",
+            "updatedAt",
+            "businessDate",
+            "historyState",
+            "history",
+            "historyDigest"
+          ],
+          "properties": {
+            "createdBy": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "updatedBy": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "createdAt": {
+              "$ref": "#/$defs/nullableTimestamp"
+            },
+            "updatedAt": {
+              "$ref": "#/$defs/nullableTimestamp"
+            },
+            "businessDate": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "historyState": {
+              "enum": [
+                "IDENTITY_MISSING",
+                "READ",
+                "UNAVAILABLE"
+              ]
+            },
+            "history": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "at",
+                  "by",
+                  "field",
+                  "from",
+                  "to"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "at": {
+                    "$ref": "#/$defs/nullableString"
+                  },
+                  "by": {
+                    "$ref": "#/$defs/nullableString"
+                  },
+                  "field": {
+                    "$ref": "#/$defs/nullableString"
+                  },
+                  "from": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "to": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            },
+            "historyDigest": {
+              "$ref": "#/$defs/nullableString"
+            }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sourceDigest",
+            "receiptRow",
+            "syncedAt"
+          ],
+          "properties": {
+            "sourceDigest": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "receiptRow": {
+              "$ref": "#/$defs/nullableNumber"
+            },
+            "syncedAt": {
+              "$ref": "#/$defs/nullableTimestamp"
+            }
+          }
+        }
+      }
+    },
+    "snapshotSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "billingMonth",
+        "completeness",
+        "entryIds",
+        "excludedIds",
+        "uncertainEligibilityIds",
+        "totals",
+        "storedSummaryComparison"
+      ],
+      "properties": {
+        "scope": {
+          "enum": [
+            "MONTH",
+            "FILTERED"
+          ]
+        },
+        "billingMonth": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "completeness": {
+          "enum": [
+            "COMPLETE",
+            "LIMIT_REACHED",
+            "ELIGIBILITY_UNKNOWN"
+          ]
+        },
+        "entryIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "excludedIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "uncertainEligibilityIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "totals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "recordedClaim",
+            "recordedPay",
+            "writtenClaim",
+            "writtenPay",
+            "calculatedClaim",
+            "calculatedPay",
+            "confirmedClaim",
+            "confirmedPay"
+          ],
+          "properties": {
+            "recordedClaim": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "knownSubtotal",
+                "missingCount",
+                "supply",
+                "vat",
+                "total"
+              ],
+              "properties": {
+                "knownSubtotal": {
+                  "type": "number"
+                },
+                "missingCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "supply": {
+                  "$ref": "#/$defs/nullableNumber"
+                },
+                "vat": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                },
+                "total": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                }
+              }
+            },
+            "recordedPay": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "knownSubtotal",
+                "missingCount",
+                "supply",
+                "vat",
+                "total"
+              ],
+              "properties": {
+                "knownSubtotal": {
+                  "type": "number"
+                },
+                "missingCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "supply": {
+                  "$ref": "#/$defs/nullableNumber"
+                },
+                "vat": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                },
+                "total": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                }
+              }
+            },
+            "writtenClaim": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "knownSubtotal",
+                "missingCount",
+                "supply",
+                "vat",
+                "total"
+              ],
+              "properties": {
+                "knownSubtotal": {
+                  "type": "number"
+                },
+                "missingCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "supply": {
+                  "$ref": "#/$defs/nullableNumber"
+                },
+                "vat": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                },
+                "total": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                }
+              }
+            },
+            "writtenPay": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "knownSubtotal",
+                "missingCount",
+                "supply",
+                "vat",
+                "total"
+              ],
+              "properties": {
+                "knownSubtotal": {
+                  "type": "number"
+                },
+                "missingCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "supply": {
+                  "$ref": "#/$defs/nullableNumber"
+                },
+                "vat": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                },
+                "total": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                }
+              }
+            },
+            "calculatedClaim": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "knownSubtotal",
+                "missingCount",
+                "supply",
+                "vat",
+                "total"
+              ],
+              "properties": {
+                "knownSubtotal": {
+                  "type": "number"
+                },
+                "missingCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "supply": {
+                  "$ref": "#/$defs/nullableNumber"
+                },
+                "vat": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                },
+                "total": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                }
+              }
+            },
+            "calculatedPay": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "knownSubtotal",
+                "missingCount",
+                "supply",
+                "vat",
+                "total"
+              ],
+              "properties": {
+                "knownSubtotal": {
+                  "type": "number"
+                },
+                "missingCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "supply": {
+                  "$ref": "#/$defs/nullableNumber"
+                },
+                "vat": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                },
+                "total": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                }
+              }
+            },
+            "confirmedClaim": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "knownSubtotal",
+                "missingCount",
+                "supply",
+                "vat",
+                "total"
+              ],
+              "properties": {
+                "knownSubtotal": {
+                  "type": "number"
+                },
+                "missingCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "supply": {
+                  "$ref": "#/$defs/nullableNumber"
+                },
+                "vat": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                },
+                "total": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                }
+              }
+            },
+            "confirmedPay": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "knownSubtotal",
+                "missingCount",
+                "supply",
+                "vat",
+                "total"
+              ],
+              "properties": {
+                "knownSubtotal": {
+                  "type": "number"
+                },
+                "missingCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "supply": {
+                  "$ref": "#/$defs/nullableNumber"
+                },
+                "vat": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                },
+                "total": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "knownSubtotal",
+                    "missingCount",
+                    "amount"
+                  ],
+                  "properties": {
+                    "knownSubtotal": {
+                      "type": "number"
+                    },
+                    "missingCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "amount": {
+                      "$ref": "#/$defs/nullableNumber"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "storedSummaryComparison": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "sourceDigest"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "MATCH",
+                "MISMATCH",
+                "UNAVAILABLE",
+                "NOT_COMPARABLE"
+              ]
+            },
+            "sourceDigest": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "components": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "ids",
+                "supply",
+                "vat",
+                "total"
+              ],
+              "properties": {
+                "ids": {
+                  "enum": [
+                    "MATCH",
+                    "MISMATCH",
+                    "UNKNOWN"
+                  ]
+                },
+                "supply": {
+                  "enum": [
+                    "MATCH",
+                    "MISMATCH",
+                    "UNKNOWN"
+                  ]
+                },
+                "vat": {
+                  "enum": [
+                    "MATCH",
+                    "MISMATCH",
+                    "UNKNOWN"
+                  ]
+                },
+                "total": {
+                  "enum": [
+                    "MATCH",
+                    "MISMATCH",
+                    "UNKNOWN"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "nullableTimestamp": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ledgerId",
+        "identity",
+        "contract",
+        "parties",
+        "progress",
+        "money",
+        "source",
+        "reconciliation"
+      ],
+      "properties": {
+        "ledgerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "vehicleNumber",
+            "receivedAt"
+          ],
+          "properties": {
+            "vehicleNumber": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "receivedAt": {
+              "$ref": "#/$defs/nullableDate"
+            }
+          }
+        },
+        "contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "customerName",
+            "model",
+            "productKind",
+            "paymentKind",
+            "paidRounds"
+          ],
+          "properties": {
+            "customerName": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "model": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "productKind": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "paymentKind": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "paidRounds": {
+              "$ref": "#/$defs/nullableNumber"
+            }
+          }
+        },
+        "parties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "supplierName",
+            "supplierCode",
+            "channelName",
+            "channelCode",
+            "agentName",
+            "agentCode"
+          ],
+          "properties": {
+            "supplierName": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "supplierCode": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "channelName": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "channelCode": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "agentName": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "agentCode": {
+              "$ref": "#/$defs/nullableString"
+            }
+          }
+        },
+        "progress": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "contractDocumentReceived",
+            "delivered",
+            "deliveredAt",
+            "cancelled",
+            "billed",
+            "billingMonth",
+            "billedAt",
+            "invoiceIssued",
+            "invoiceAt",
+            "collected",
+            "collectedAmount",
+            "paid",
+            "paidAmount",
+            "billingHold",
+            "settlementExcluded",
+            "claimStage",
+            "payStage"
+          ],
+          "properties": {
+            "contractDocumentReceived": {
+              "$ref": "#/$defs/nullableBoolean"
+            },
+            "delivered": {
+              "$ref": "#/$defs/nullableBoolean"
+            },
+            "deliveredAt": {
+              "$ref": "#/$defs/nullableDate"
+            },
+            "cancelled": {
+              "$ref": "#/$defs/nullableBoolean"
+            },
+            "billed": {
+              "$ref": "#/$defs/nullableBoolean"
+            },
+            "billingMonth": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "billedAt": {
+              "$ref": "#/$defs/nullableDate"
+            },
+            "invoiceIssued": {
+              "$ref": "#/$defs/nullableBoolean"
+            },
+            "invoiceAt": {
+              "$ref": "#/$defs/nullableDate"
+            },
+            "collected": {
+              "$ref": "#/$defs/nullableBoolean"
+            },
+            "collectedAmount": {
+              "$ref": "#/$defs/nullableNumber"
+            },
+            "paid": {
+              "$ref": "#/$defs/nullableBoolean"
+            },
+            "paidAmount": {
+              "$ref": "#/$defs/nullableNumber"
+            },
+            "billingHold": {
+              "$ref": "#/$defs/nullableBoolean"
+            },
+            "settlementExcluded": {
+              "$ref": "#/$defs/nullableBoolean"
+            },
+            "claimStage": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "payStage": {
+              "$ref": "#/$defs/nullableString"
+            }
+          }
+        },
+        "money": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "claimAmount",
+            "payAmount",
+            "claimAdjustment",
+            "payAdjustment",
+            "adjustmentReason",
+            "calculationBasis",
+            "supplierFeeRaw",
+            "channelFeeRaw"
+          ],
+          "properties": {
+            "claimAmount": {
+              "$ref": "#/$defs/nullableNumber"
+            },
+            "payAmount": {
+              "$ref": "#/$defs/nullableNumber"
+            },
+            "claimAdjustment": {
+              "$ref": "#/$defs/nullableNumber"
+            },
+            "payAdjustment": {
+              "$ref": "#/$defs/nullableNumber"
+            },
+            "adjustmentReason": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "calculationBasis": {
+              "$ref": "#/$defs/nullableString"
+            },
+            "supplierFeeRaw": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            "channelFeeRaw": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "project",
+            "collection",
+            "documentId"
+          ],
+          "properties": {
+            "authority": {
+              "const": "FREEPASS_DATA_SETTLEMENT"
+            },
+            "project": {
+              "const": "freepasserp5"
+            },
+            "collection": {
+              "const": "settlement_rows"
+            },
+            "documentId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "reconciliation": {
+          "$ref": "#/$defs/reconciliation"
+        }
+      }
+    }
+  }
+}
