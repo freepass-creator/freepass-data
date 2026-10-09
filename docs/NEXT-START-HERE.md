@@ -416,6 +416,26 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 남은 과거 PR 재감사 / 기존 PR297 승계 통합
+
+| PR / exact 원문 head | main9b56967 대비 고유 내용 | 현재 정본 / 안전 조치 |
+|---|---|---|
+|297 / 8ad9c5e669d9ad1603c1518d596323d0ec122f90|ERP+Sheet bundle export/시트주소 제거, 같은 ERP transport/RAW 유지|ONE API→같은 ERP 정본. 기존 먼저 열린 Work선에서 최신 main을 merge4f10fa2로 수용. 삭제 export 실제호출0, 독립 정적검토 PASS. 미사용 IANCAR_SHEET availability 판정 잔여는 운영 허가 아닌 별도 migration debt.|
+|398 / 9bb60b6a3efeea4a42a2a6c3f6a23111a8d60542|호환 transport의 identity/authority/count/필수collection 검사, Canonical manifest/release 구분|기존297에 merge83105d8로 committed 원문 전체 승계. erp-public 전용 검사는 Admin 범용으로 쓰지 않는다. 독립 정적검토 PASS, 실제 cutover 주장0.|
+|301 / ce8e1c08f29706098de014ccc7d14a41a70b172d|10-04 차량 원문 손상/덮어쓰기/부분보존 감사 역사81줄|기존297에 merge0f64d69로 원문 전체 승계. 당시 대수/규칙/권고를 현재 상태나 최신 차종 기준으로 사용하지 않는다. 독립 정적검토 PASS.|
+|394 / abe300e481023ba25f4df477857b296675b09eb4|옛 시트 정책 RAW ingestion131줄 / 명령 / access 등록|HOLD 유지. archival source가 아니라 active GOOGLE_SHEET authorityScope와 FULL COMPLETE current policy source를 선택해 head 승격 가능. ONE/같은 ERP 정본과 충돌하며 #390 적용 후 고유 필요성 미확정. merge/close/실행0, 원문·기존 RAW 보존.|
+
+- 범위/검증: Academy READY; 새 branch/PR/Task/엔진0. 기존 PR297의 원문 커밋과 #398/#301 원문 커밋을 모두 ancestor로 보존하고 문서 충돌 양쪽 이력 유지. `npm run check` PASS(architecture/standards/access/Sheets/build/smoke/shadow/dashboard), Vitest1693 PASS/14 emulator SKIP, runtime smoke12 PASS, historical delivery15 PASS, diffcheck PASS. 검토는 기존 gpt_merge_review read-only 완료 답변이며 Claude 구독 접근 제한을 PASS로 바꾸지 않는다.
+- 승계: 원격297 exact head와 검증 증거 확인 후에만 #398/#301을 superseded 종료한다. #394는 보류 유지. Canon/CI를 우회하지 않고 최종 exact head가 통과한 뒤 main 통합한다. 자동기동 준비0bc7e53은 이 통합선 ancestor에 포함하지 않았으며 승인 대기 유지. 운영 배포/DB/시트/IAM/스케줄 쓰기0.
+- next_start_here: 기존297 최종 원격 CI/main 반영 되읽기 → #394 필요성을 현행 ERP 원천/RAW 계약 기준으로 판단(옛 active 시트 경로 부활 금지) → 자동기동 단일scope 승인전까지0bc7e53 미병합. 전체 소비처 전환은 별도 실제 증거가 필요하다.
+
+### 2026-10-04 이안카 정본 = 이안카 시스템 하나
+
+- 목적/결정: 대표 직접 결정(AI 상황실 전달) — 이안카 재고는 이안카 시스템(ONE API + 우리 계정 로그인 `/api/inventory`)만 본다. 공급사 원본 Google Sheet(`이안카_프리패스`)·F54는 이안카 출처로 쓰지 않는다.
+- 조사 근거: 원본 시트 Drive 수정 2026-09-23(10일 경과), 로그인 `/api/inventory`는 ONE API와 같은 `syncedAt`/`stale`(같은 ERP 동기화), 공개 사이트는 ONE API와 같은 호스트이고 robots.txt가 AI 수집기를 거부. 더 최신인 대체 출처 없음.
+- 변경: `src/adapters/iancar-source-capture.ts`에서 운영 호출처 없던 ERP+Sheet 묶음 캡처와 Sheet ID/탭 상수 제거(로그인 ERP 읽기·RAW 배치는 유지), 관련 시험 정리. [IANCAR-SOURCE-CAPTURE.md](IANCAR-SOURCE-CAPTURE.md)에 정본·대체 순서(ONE API → 막히면 로그인 경로, 기존 열쇠만), [IANCAR-ONE-API.md](IANCAR-ONE-API.md) authority 문장 갱신.
+- 운영 변경 없음. 신선도 15분·공급사 stale HOLD 규칙은 그대로(AI 상황실 결정: 규칙 변경 안 함, HOLD 시 마지막 정상값 유지).
+- next_start_here: ONE API 장애가 이어질 때만 로그인 경로 대체를 별도 승인으로 연결한다.
 ### 2026-10-09 차종마스터 담당 — 기존 PR395 / PR397→401 순서 통합
 
 - 목적/기존 Work: `work/freepass-data/data-first-identity-port-20261005`, PR395를 재사용한다. 신규 Task/branch/엔진/원장 없음. PR397은 같은 작업의 승계 PR401이며 main에 반영된 수집 변경을 이 가지에 병합했다.
@@ -698,6 +718,24 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - HOLD: 소유자/관리계정 직접 API 우회 가능, 자동 감시 미설정, 실제 렌더/속도 미측정(현재 IAB 탭 없음), 종합 실측296행 vs 정본300행(이번 UI 작업 구조변경0). 공급사 입력 권한을 확인하지 않고 종합/helper 전체를 잠그지 않음. ERP 연결은 별도 세션.
 - next_start_here: RUNBOOK 맨 위 UI 현행 규격과 JSON uiOwnership을 먼저 읽고 승인된 표시 계획기 사용. 새 지시 없는 데이터 변환/삭제/탭 복원 금지.
 
+### 2026-10-06 ERP 후속 — AI Core 종착역 재점검 / DEV-06 PR
+
+- 목적: 대표 «종착역으로 업무, AI Core 확인» 정정에 따라 기존 PR #398을 이어서 보강. Core main `6088a502915408853d2607bbea56d7d57a2d450c`의 AGENTS/WORK_READ_FIRST/헌법/continuity/sunset을 확인하고 target `001cd03f311c610620bb15fcbe02544ee96597c6`의 Academy READY를 받았다. 앞선 작업은 시작 전 Core 확인 누락이 있었고 사후 READY를 최초 작업 승인으로 소급하지 않는다.
+- 작업 연속성: 새 PR·원천 writer·중복 저장 경로 없음. 기존 actor-prefix 가지는 PR #398의 역사적 이름으로 유지하며 새 가지를 복제하지 않았다. PR #397 최신 `754f69d251996b0828df20c0d5e424108724edd0`를 merge `a39c951`로 받아 supplierManagement/현행2026-10-06.3 및 두 세션 handoff를 모두 보존했다. 시트 쓰기0.
+- 구현 exact commit `646700ed814d1c2186ed7160eefbcd12a078f26d`: 기존 점검기의 필수 compat collection 선택 추가(누락 fail-closed), Canonical consumer/projection/schema/authority/non-empty/manifest/digest metadata 검사 보강. digest 내용·최신성·원천 parity는 기존 gateway/3자 대사 책임을 유지한다. 종착역은 기존 경계를 완성하고 대체 경로 보존·readback·rollback 이후 임시 브리지 종료를 판정하는 것.
+- 검증: runtime smoke10/10, architecture/data-access boundary, diff check PASS. 운영/TypeScript 변경 없음, 전체 Vitest 미재실행. tool doctor는 gcloud·Claude CLI MISSING. claude:status AVAILABLE는 신원/실행 성공 증거가 아니며 공식 exact-head review 호출은 FAILED/CLAUDE_PROCESS_FAILED, 답변 없음. Core CROSS_AI_LOG에 로컬 기록(아직 원격 미반영), 독립 검토 미통과.
+- 학습환류: 사용자 수정1/재작업1/false completion0, Episode FREEPASS-DATA-ERP-CORE-20261006(대상646700e). 기존 academy:closeout 결과 HOLD/EPISODE_FEEDBACK_HOLD, 원인 INDEPENDENT_REVIEW_UNCONFIRMED. 비공개 임시 work-result/episode에 세부 증거 보존; 공통 규칙 자동 채택이나 운영 승인으로 표현하지 않는다.
+- 남음: 독립 검토·CI·#397→#398 main 통합, 기존 daily WIF fresh dry-run/실제 ownership/head/Canonical 대사, 승인된 저장·release 및 ERP.com readback. 인증 접근 없는 PC에서 별도 로그인·키 복제·fallback·새 예약으로 우회하지 않음. 현재 DEV-06/10 PR, 다음 독립 검토/CI와 main 통합; PERSISTENCE/DEPLOYMENT/CUTOVER HOLD.
+- next_start_here: [ERP 소비처 런타임](ERP5-CONSUMER-RUNTIME.md#공통-시트--erp-연결-준비--2026-10-06) 현행 supplierManagement 및 필수 collection 설정 → PR #398 exact head 검토 → 기존 daily WIF fresh dry-run → 해당 계획 운영 경계 및 소비자 대사. Core 로컬 상의 기록은 담당 Core 작업선으로 반영해야 함.
+
+### 2026-10-06 공통 시트 ERP 연동 별도 작업 — CODED / STATIC CHECKED / TESTED, 운영 HOLD
+
+- 작업선 `codex/shared-sheet-erp-integration`, 별도 managed worktree. 기반 `86392a056ccb03fac43eaf1722c6ec86f3c90b7e`/PR #397, fetch한 main `43201d4773c301bb0344777a9235309d17558ddc`. 열린 #395(차종 판정 옵션)는 미통합, 원래 checkout/시트 관리 변경 보존. 시트 값/서식/드롭다운/행 수 쓰기0, ERP 저장소 수정0.
+- 구현 exact commit `2ea3c5d396c57085aba806cc27691d2b0153d264`: 기존 runtime smoke에 `READ_RUNTIME_CHECK_COMPAT_ONLY=1` 추가. consumer identity/bridge authority/target/시각/map/count 검증, 원문·토큰 미출력. 성공도 Canonical/release/cutover false. 실제 ERP 설정 이름과 WIF·운영 순서는 [ERP 소비처 런타임의 공통 시트 연결 준비](ERP5-CONSUMER-RUNTIME.md#공통-시트--erp-연결-준비--2026-10-06).
+- 검증: node runtime smoke8/8 PASS(오염 authority·다른 tenant·잘못된 collection/count·원문 비노출 포함), architecture/data-access boundary PASS, git diff --check PASS. TypeScript 코드 변경 없음; 전체 Vitest 재실행 없음.
+- 기존 private 10-06 캡처171행을 memory 계획기로 재실행: writes0, held38, 공급기간675/선계산675 일치, 수수료 각 측 UNKNOWN214. empty memory writerReady=false는 운영 ownership 관측이 아니다. fresh 운영 source/기존 Canonical 대사·저장 증거로 확대하지 않는다.
+- 현재 PC PATH/표준 설치 위치에 native gcloud 실행기 없음, 표준 Roaming freepass-data config/ADC 없음, consumer 환경변수 없음: HOLD_ENVIRONMENT_AUTH_UNAVAILABLE. 기존 shared-sheet-daily workflow/WIF가 존재함을 코드로 확인했으며 운영 pin·현재 변수·새 run은 미검증. 운영 적재/배포/스케줄/IAM/writer 변경/ERP 전환 미실행.
+- next_start_here: #397 범위 통합 검토 → 기존 daily WIF의 fresh dry-run과 exact-head/private evidence → 승인된 Canonical apply·되읽기 → 기존 READY/ACTIVE 게시 → 호환 transport와 Canonical 읽기를 별도 검증 → 기존 pilot:check 3자 대사와 ERP.com/각 대상 실제 readback. 인증 접근이 복구되기 전 비밀번호/키 복제/legacy fallback으로 우회하지 않는다. 운영 승인 대상은 구체적인 fresh 계획을 준비한 뒤 정한다.
 
 ### 2026-10-06 공급사 공통 시트 관리 기준 확정 — CODED / 운영 자동 감시 미설정
 
@@ -1132,6 +1170,11 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 검증: build PASS, 전용 메모리 15/15 PASS, 빌드된 CLI `--memory` dry-run 쓰기0/상품1/기간1/변경1 확인. `npm.cmd run check` 최종 exit1: Vitest 1341 PASS/9 FAIL/14 SKIP(121파일 중113 PASS/4 FAIL/4 SKIP); 앞단 Node 시험131 PASS, 아키텍처·데이터 접근 경계·빌드 PASS. 독립 `check:standards` exit0/15 PASS/스키마30개 컴파일, 기존 profile PARTIAL 유지. 실패는 tsx `uv_os_get_passwd ENOMEM` 계열 실행 시험과 로컬 서버 연결 실패, jq 실행 권한 거부이며 환경 제한으로 전체 통과 선언하지 않는다. `tsx` 대신 빌드된 JS의 메모리 CLI는 정상이다.
 - 남음: 원격 main/Issue24/PR 및 Claude 독립 검토는 네트워크 금지로 UNAVAILABLE. 운영 apply·실제 before-image 보존 검증·Admin 재발행/응답 대사는 미실행/HOLD. 배치는 Offer별 거래이며 전량 원자 적용이 아니다. 기존 worker의 outbox 소비 영향도 운영 승인 전 확인한다.
 - next_start_here: `docs/READ-RUNTIME.md` 재계산 절 순서대로 실행 revision/프로젝트/정책/범위/planDigest/백업·복구·writer를 고정해 운영 apply 승인을 받고, 별도 Admin READY 생성·활성화 승인 후 응답 집계를 대사한다. 코드 revert/보상 거래/이전 READY 재활성화는 각각 별도 복구 단계다. 먼저 제한 없는 로컬 검사 환경에서 기존 실패9개를 재검증한다.
+### 2026-10-04 차량 원문·차종·제원·요금 검증 1차(읽기 전용)
+
+- 목적: 대표 지시 «한 번 들어온 차는 공급사 원문 기준으로 정확하게». 수정 없음.
+- 결과·판정 기준: [ERP5-CONTINUOUS-AUDIT.md](ERP5-CONTINUOUS-AUDIT.md#vehicle-verification-20261004). 등록 1,760 규칙 거르기 100%, 발행 중 의심 302대 Codex 독립 판정. 원문 누락 49·손상 1·부분 보존 884, 09-15 이후 원문 덮어쓰기 392대. 발행 중 오류 있는 차 259/534. 결론: 원문→정리값 재계산 불가 구조.
+- next_start_here: 만료 중인 freepasserp4 발행 스냅샷 아티팩트 정식 보존(30일, 남은 162개) → 원본 시트 대조·비발행 1,226대 판정 → 고치는 길은 AI 상황실이 정규화 규칙·별칭·F03으로 나눔.
 
 ### 2026-10-04 PR #296 4차 — 경제 금액 근거 분리
 
@@ -1303,7 +1346,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 - 최신 사용자 결정/연결: 제공한 기존 키 그대로 사용 승인. `freepasserp5/freepass-data-iancar-one-api` version 1 enabled 등록 및 공식 API 실제 클라이언트 조회 exit 0 확인. 전체 108 / AVAILABLE 101 / UNAVAILABLE 4 / PREPARING 2 / RESERVED 1, 상세/재고/요금/사진 샘플 성공. 상세 증거와 다음 미완료 경계는 [ONE API 실제 연결 확인](IANCAR-ONE-API.md)에서 확인한다. 아래 키 미주입·재발급 경계는 이 결정 이전 이력이며 현재 blocker는 Canonical mapping/writer/consumer 검증이다.
 
-- 목적: 온라인 main의 공식 ONE API 구현(PR #269)을 기존 로컬 Work에 통합한다. 다음 원천 수집 시작점은 `docs/IANCAR-ONE-API.md`와 `npm run source:iancar:one`이며 아래 로그인 transport 기록은 과거 준비 이력이다. `/api/inventory` 및 로그인 수집을 운영 fallback으로 활성화하지 않는다.
+- 목적: 온라인 main의 공식 ONE API 구현(PR #269)을 기존 로컬 Work에 통합한다. 다음 원천 수집 시작점은 `docs/IANCAR-ONE-API.md`와 `npm run source:iancar:one`이며 아래 로그인 transport 기록은 과거 준비 이력이다. `/api/inventory` 로그인 수집은 ONE API와 상시 병행하지 않는다. ONE API가 막힐 때만 대체 경로로 쓴다(2026-10-04 사용자 결정, [대체 순서](IANCAR-SOURCE-CAPTURE.md), 연결은 별도 승인).
 - 키 위치 확인: 사용자가 온라인 채팅 `기타 접속 여부 확인`에 제공한 키를 확인했다. 키 값은 파일/Git/로그에 복제하지 않았다. 현재 Data GitHub secret, ERP bridge secret 이름, `freepasserp5` Secret Manager metadata, 로컬 process/user/machine 환경변수에는 공식 ONE 키 binding이 확인되지 않았다. 채팅 노출 키는 재발급 후 서버 비밀 저장소 주입이 필요하다.
 - 남음: 새 키의 안전한 runtime binding, 실제 목록/상세/재고/요금/사진 read-only 검증, reviewed Canonical mapping, ERP/운영시트 readback. 코드 동기화는 운영 전환이 아니다.
 - 검증: `origin/main@e6db81c67368cb4353c07f64aa0560d6ac0b857a`의 ONE adapter/job은 로컬과 diff 0. ONE API 10 + direct source 10 + capture/availability 35 = 관련 테스트 55 PASS, build/architecture/data-access-boundary/diff-check PASS. 실제 collector는 키 미주입 `EANCAR_ONE_API_KEY_REQUIRED`로 중단됨을 확인했으며 외부 API/운영 데이터를 조회하거나 수정하지 않았다. 기존 노출 키 재사용 여부 또는 재발급 키 binding이 다음 승인/입력 경계다.
@@ -1311,7 +1354,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ## 2026-09-30 운영 시트 반영 승인 — ERP 로그인 접근 HOLD
 
 - 사용자 직접 승인: `운영시트도 바꿔 얼른`. 이안카 범위 반영 승인은 받았으며 같은 수정 승인을 다시 요청하지 않는다. Academy operations READY, 대상 `430b43c`.
-- 현재 원본 재조회: `이안카_프리패스`의 `이안카` 60행 / `이안카 재렌트` 59행, 두 탭 metadata/CellData 전체 기존 범위 확인. 수식/chip/dataValidation 0. 실제 status는 배차가능 118 / 상품화 진행중 1. F01 상품리스트 433, F86 이안카 223은 현재 출력이며 원천 정합성 PASS가 아님.
+- (당시 기록 — 2026-10-04부터 이 시트는 이안카 출처 아님) 원본 재조회: `이안카_프리패스`의 `이안카` 60행 / `이안카 재렌트` 59행, 두 탭 metadata/CellData 전체 기존 범위 확인. 수식/chip/dataValidation 0. 실제 status는 배차가능 118 / 상품화 진행중 1. F01 상품리스트 433, F86 이안카 223은 현재 출력이며 원천 정합성 PASS가 아님.
 - 실제 blocker: supplier `/api/inventory` HTTP 403. 기존 연결의 credential은 ERP bridge GitHub secret에만 있으며 이 PC의 process/user/machine env 및 연결 worktree의 정해진 계정 파일에서 찾지 못함. Chrome 신규 supplier 페이지는 로그인 세션 없음. 비밀번호 추출/공개 로그/공개 artifact 우회 금지.
 - 아직 수행하지 않음: 운영 Sheet/Firestore 쓰기, 원본 백업 생성, publisher 재발행. 원본 ERP를 못 읽은 상태에서 새 값이나 출고불가를 추정하지 않았다. 기존 collector의 partial-inventory absence→출고불가 및 clear/rewrite 경로를 그대로 실행하지 않는다.
 - next_start_here: 사용자에게 Chrome supplier 로그인 화면 인계. 로그인 후 인증된 현재 원본을 확보하고 필드·기간·약정거리·관측 범위를 고정 → source/Sheet/중앙 신규·변경 대사 → private backup → 해당 수정 범위만 patch → 중앙/시트/ERP 실제 readback. 쓰기 전에 각 대상 원본을 새로 읽는다. source hostname 이동은 관측 사실이며 credential을 새 host로 전송하기 전 actual endpoint/권한을 검증한다.
@@ -2129,7 +2172,7 @@ Before each new change:
 This file exists so another session can continue without re-discovering or re-creating the project.
 # 2026-09-28 Iancar policy/source recovery
 
-- Source SSOT: `이안카_프리패스` tabs `이안카`, `이안카 재렌트`; 119 unique plates.
+- (당시 기준 — 2026-10-04 폐기: 이안카 정본은 이안카 시스템이며 이 시트는 출처가 아니다) Source SSOT: `이안카_프리패스` tabs `이안카`, `이안카 재렌트`; 119 unique plates.
 - F54 backup: Drive file `1LwgzNLWI9hENYeJ5q7TTQ5wkyyFDVpowUJO0fTFpiNk`.
 - F54 policy split: `RP031_S01..S04` = 5/10/15/25만원; matched inventory counts 62/35/18/4.
 - Firestore apply run: `2026-09-27T16-37-05-835Z-766258c0-376b-4225-9691-f87303bb953e`; local private rollback evidence retained.
