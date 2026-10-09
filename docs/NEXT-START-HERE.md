@@ -416,6 +416,19 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 남은 과거 PR 재감사 / 기존 PR297 승계 통합
+
+| PR / exact 원문 head | main9b56967 대비 고유 내용 | 현재 정본 / 안전 조치 |
+|---|---|---|
+|297 / 8ad9c5e669d9ad1603c1518d596323d0ec122f90|ERP+Sheet bundle export/시트주소 제거, 같은 ERP transport/RAW 유지|ONE API→같은 ERP 정본. 기존 먼저 열린 Work선에서 최신 main을 merge4f10fa2로 수용. 삭제 export 실제호출0, 독립 정적검토 PASS. 미사용 IANCAR_SHEET availability 판정 잔여는 운영 허가 아닌 별도 migration debt.|
+|398 / 9bb60b6a3efeea4a42a2a6c3f6a23111a8d60542|호환 transport의 identity/authority/count/필수collection 검사, Canonical manifest/release 구분|기존297에 merge83105d8로 committed 원문 전체 승계. erp-public 전용 검사는 Admin 범용으로 쓰지 않는다. 독립 정적검토 PASS, 실제 cutover 주장0.|
+|301 / ce8e1c08f29706098de014ccc7d14a41a70b172d|10-04 차량 원문 손상/덮어쓰기/부분보존 감사 역사81줄|기존297에 merge0f64d69로 원문 전체 승계. 당시 대수/규칙/권고를 현재 상태나 최신 차종 기준으로 사용하지 않는다. 독립 정적검토 PASS.|
+|394 / abe300e481023ba25f4df477857b296675b09eb4|옛 시트 정책 RAW ingestion131줄 / 명령 / access 등록|HOLD 유지. archival source가 아니라 active GOOGLE_SHEET authorityScope와 FULL COMPLETE current policy source를 선택해 head 승격 가능. ONE/같은 ERP 정본과 충돌하며 #390 적용 후 고유 필요성 미확정. merge/close/실행0, 원문·기존 RAW 보존.|
+
+- 범위/검증: Academy READY; 새 branch/PR/Task/엔진0. 기존 PR297의 원문 커밋과 #398/#301 원문 커밋을 모두 ancestor로 보존하고 문서 충돌 양쪽 이력 유지. `npm run check` PASS(architecture/standards/access/Sheets/build/smoke/shadow/dashboard), Vitest1693 PASS/14 emulator SKIP, runtime smoke12 PASS, historical delivery15 PASS, diffcheck PASS. 검토는 기존 gpt_merge_review read-only 완료 답변이며 Claude 구독 접근 제한을 PASS로 바꾸지 않는다.
+- 승계: 원격297 exact head와 검증 증거 확인 후에만 #398/#301을 superseded 종료한다. #394는 보류 유지. Canon/CI를 우회하지 않고 최종 exact head가 통과한 뒤 main 통합한다. 자동기동 준비0bc7e53은 이 통합선 ancestor에 포함하지 않았으며 승인 대기 유지. 운영 배포/DB/시트/IAM/스케줄 쓰기0.
+- next_start_here: 기존297 최종 원격 CI/main 반영 되읽기 → #394 필요성을 현행 ERP 원천/RAW 계약 기준으로 판단(옛 active 시트 경로 부활 금지) → 자동기동 단일scope 승인전까지0bc7e53 미병합. 전체 소비처 전환은 별도 실제 증거가 필요하다.
+
 ### 2026-10-04 이안카 정본 = 이안카 시스템 하나
 
 - 목적/결정: 대표 직접 결정(AI 상황실 전달) — 이안카 재고는 이안카 시스템(ONE API + 우리 계정 로그인 `/api/inventory`)만 본다. 공급사 원본 Google Sheet(`이안카_프리패스`)·F54는 이안카 출처로 쓰지 않는다.
