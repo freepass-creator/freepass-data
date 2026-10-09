@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { resolveReferenceVehiclePhotos } from './kakao-catalog-reference.js';
 import { plateIdentityKey } from '../domain/vehicle-plate.js';
+import { resolveErp5InventoryStatus } from '../domain/erp5-inventory-status.js';
+import { validateSheetPublicationHandoff, type SheetPublicationHandoff } from '../domain/sheet-publication-handoff.js';
 
 type RecordValue = Record<string, unknown>;
 export type VehicleMediaSourceEvidence = {
@@ -29,15 +31,22 @@ export function compareVehicleMediaConsumerEvidence(input: {
   if (!input.consumerSnapshotRef.trim() || !Number.isFinite(Date.parse(input.observedAt))) issues.push('CONSUMER_SNAPSHOT_EVIDENCE_MISSING');
   const original = resolveReferenceVehiclePhotos(input.product);
   const output = resolveReferenceVehiclePhotos(input.consumer);
+  if (original.rejectedCount) issues.push('SOURCE_PHOTO_URL_REJECTED');
+  if (output.rejectedCount) issues.push('CONSUMER_PHOTO_URL_REJECTED');
   const cache = input.product.photo_cache;
   const cacheRecord = cache && typeof cache === 'object' && !Array.isArray(cache)
     ? cache as RecordValue : null;
   const cachePhotos = resolveReferenceVehiclePhotos({ image_urls: cacheRecord?.urls });
-  const cacheBoundToLink = typeof input.product.photo_link === 'string' && !!input.product.photo_link.trim()
+  const cacheBoundToLink = original.state === 'LINK_ONLY' && original.sourceLinkCount === 1
+    && original.rejectedCount === 0 && typeof input.product.photo_link === 'string' && !!input.product.photo_link.trim()
     && cacheRecord?.src === input.product.photo_link;
   const cacheMatchesOutput = original.imageUrls.length === 0 && cacheBoundToLink
     && cachePhotos.imageUrls.length > 0 && cachePhotos.rejectedCount === 0
     && JSON.stringify(cachePhotos.imageUrls) === JSON.stringify(output.imageUrls);
+  const documentUrls = resolveReferenceVehiclePhotos({ image_urls: [input.product.doc_images, input.consumer.doc_images] }).imageUrls;
+  if (output.imageUrls.some(url => documentUrls.includes(url))) issues.push('DOCUMENT_IMAGE_IN_CONSUMER_PHOTOS');
+  if (cacheRecord && !cacheBoundToLink && output.imageUrls.length && !original.imageUrls.length) issues.push('CACHE_SOURCE_BINDING_UNVERIFIED');
+  if (cacheRecord && cachePhotos.rejectedCount && output.imageUrls.length && !original.imageUrls.length) issues.push('CACHE_PHOTO_URL_REJECTED');
   if (original.representativeUrl !== output.representativeUrl) issues.push('REPRESENTATIVE_DIFFERENT_EVIDENCE');
   const color = (value: unknown) => typeof value === 'string' && value.trim() ? value : null;
   if (color(input.product.ext_color) !== color(input.consumer.ext_color)) issues.push('CONSUMER_COLOR_MISMATCH');
@@ -63,11 +72,16 @@ export async function inspectVehicleMediaEvidence(input: {
   productId: string;
   product: RecordValue;
   source?: VehicleMediaSourceEvidence;
+  sourceHttpStatus?: number;
   now: string;
   probe: (url: string) => Promise<ImageHeadEvidence>;
 }) {
   const photos = resolveReferenceVehiclePhotos(input.product);
   const issues: string[] = [];
+  if (input.sourceHttpStatus === 401) issues.push('SOURCE_ACCESS_UNAUTHORIZED');
+  else if (input.sourceHttpStatus === 403) issues.push('SOURCE_ACCESS_FORBIDDEN');
+  else if (input.sourceHttpStatus !== undefined && (!Number.isInteger(input.sourceHttpStatus)
+    || input.sourceHttpStatus < 200 || input.sourceHttpStatus >= 300)) issues.push('SOURCE_ACCESS_FAILED');
   if (!Number.isFinite(Date.parse(input.now))) issues.push('OBSERVATION_TIME_INVALID');
   if (!input.productId.trim()) issues.push('PRODUCT_ID_MISSING');
   if (!photos.imageUrls.length) issues.push(photos.state === 'LINK_ONLY' ? 'PHOTO_LINK_ONLY' : 'PHOTO_NOT_USABLE');
@@ -129,5 +143,71 @@ export async function inspectVehicleMediaEvidence(input: {
     visualVehicleIdentity: 'NOT_CHECKED' as const,
     imageBytes: 'NOT_CHECKED' as const,
     consumerReadback: 'NOT_CHECKED' as const,
+  };
+}
+
+/** Publisher review only: exclude from the next projection, never delete source records or sheet cells. */
+export function planF01UnavailableMediaRows(input: {
+  handoff?: SheetPublicationHandoff;
+  readback: {
+    snapshotId: string | null;
+    dataDigest: string | null;
+    observedAt: string;
+    complete: boolean;
+    rows: Array<{ rowNumber: number; productId: string; plate: string }>;
+  };
+  now: string;
+  maxAgeSeconds: number;
+}) {
+  const issues: string[] = [];
+  const exclusions: Array<{ rowNumber: number; productKeyDigest: string; action: 'EXCLUDE_FROM_NEXT_PUBLICATION' }> = [];
+  const handoff = input.handoff;
+  if (!handoff) issues.push('RELEASE_BOUND_HANDOFF_MISSING');
+  else {
+    try {
+      const check = validateSheetPublicationHandoff(handoff);
+      if (check.status !== 'PASS') issues.push(...check.violations);
+    } catch { issues.push('INVALID_RELEASE_BOUND_HANDOFF'); }
+    if (handoff.workbook !== 'F01') issues.push('F01_WORKBOOK_REQUIRED');
+    if (input.readback.snapshotId !== handoff.snapshot?.snapshotId
+      || input.readback.dataDigest !== handoff.manifest?.dataDigest) issues.push('READBACK_SNAPSHOT_MISMATCH');
+    const age = Date.parse(input.now) - Date.parse(handoff.manifest?.sourceReadTime);
+    if (!Number.isFinite(age) || age < 0 || age > input.maxAgeSeconds * 1000) issues.push('SOURCE_SNAPSHOT_STALE');
+  }
+  const readbackAge = Date.parse(input.now) - Date.parse(input.readback.observedAt);
+  if (!Number.isFinite(readbackAge) || readbackAge < 0 || !Number.isFinite(input.maxAgeSeconds)
+    || input.maxAgeSeconds <= 0 || readbackAge > input.maxAgeSeconds * 1000) issues.push('READBACK_FRESHNESS_UNVERIFIED');
+  if (!input.readback.complete) issues.push('READBACK_INCOMPLETE');
+  if (issues.length) return {
+    verdict: 'HOLD' as const, issues: [...new Set(issues)], exclusions,
+    sourceMutation: 'NONE' as const, directSheetMutation: 'NONE' as const,
+  };
+  const rowKeys = new Set<string>();
+  const rowNumbers = new Set<number>();
+  const rowPlates = new Set<string>();
+  for (const row of input.readback.rows) {
+    const plate = plateIdentityKey(row.plate);
+    if (!row.productId.trim() || !plate || !Number.isSafeInteger(row.rowNumber) || row.rowNumber < 2
+      || rowKeys.has(row.productId) || rowNumbers.has(row.rowNumber) || rowPlates.has(plate)) issues.push('READBACK_ROW_IDENTITY_AMBIGUOUS');
+    rowKeys.add(row.productId); rowNumbers.add(row.rowNumber); rowPlates.add(plate);
+    if (!handoff?.snapshot?.products) continue;
+    const matches = handoff.snapshot.products.filter(p => p._key === row.productId);
+    if (matches.length !== 1 || plateIdentityKey(matches[0]?.car_number) !== plate
+      || handoff.snapshot.products.filter(p => plateIdentityKey(p.car_number) === plate).length !== 1) {
+      issues.push('READBACK_PRODUCT_IDENTITY_MISMATCH'); continue;
+    }
+    const product = matches[0]!;
+    const status = resolveErp5InventoryStatus(product.vehicle_status);
+    if (typeof product.listable !== 'boolean' || !status.known || product.listable !== status.listable
+      || product.status_kind !== status.statusKind) { issues.push('PUBLICATION_STATUS_UNVERIFIED'); continue; }
+    if (product.listable === false) exclusions.push({ rowNumber: row.rowNumber,
+      productKeyDigest: createHash('sha256').update(row.productId).digest('hex'), action: 'EXCLUDE_FROM_NEXT_PUBLICATION' });
+  }
+  return {
+    verdict: issues.length ? 'HOLD' as const : 'PLAN_ONLY' as const,
+    issues: [...new Set(issues)],
+    exclusions: issues.length ? [] : exclusions,
+    sourceMutation: 'NONE' as const,
+    directSheetMutation: 'NONE' as const,
   };
 }
