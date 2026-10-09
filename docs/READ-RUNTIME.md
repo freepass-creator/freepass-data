@@ -530,3 +530,11 @@ settlement v2 meta.sourceFreshness는 UNVERIFIED / SOURCE_NOT_VERIFIED_BY_THIS_R
 - 동일 작업의 다음 입력: 실제 publisher 경로/immutable revision 및 실행 영수증; spreadsheetId/tab/range/valueRenderOption/dateTimeRenderOption/majorDimension; digest의 정확한 입력 형태·공백/빈셀/행열 padding·날짜/수식 정규화·알고리즘 버전; 실제 sourceObservedAt/sourceSnapshotId/executorRevision. 확인 전 값을 생성하지 않는다.
 - dry-run 패킷 절차: 확인된 원본 binding으로 권한 있는 읽기 → private before evidence → publisher와 동일 정규화/digest 계산 → 기록된 sourceDigest 대조 → 같은 sourceReceipt IDs/공급가/VAT/총액/사람입력 보존 diff → 원장/요약을 다시 읽어 drift 검출. 불일치가 range/normalization/source change 중 어느 것인지 증거로 분류한다. apply는 이 단계에서 실행하지 않는다.
 - 허용 결과: MATCH는 원본 binding·revision·동일digest·변경없는 재조회가 모두 입증된 시점에만. 그전에는 원본 최신성 HOLD, 저장원장과 요약 비교만 별도로 제공한다.
+
+### 2026-10-09 운영 배포·실조회 날짜 회귀 및 발행기 실근거
+
+read 배포 run37897561059/Admin run37897564010은 main2044416으로 성공했고 runtime identity/IAM 불변, Admin 기존 write on과 같은 secret내용을 보존했다. read00016-266/Admin00005-p4n READY. Kakao 상품기준 HTTP200/정책2026-10-09/schemaPASS, Admin workflow 9월 원장35개 HTTP200. 정산월조회 v1/v2는 billedAt ISO timestamp21개가 date schema를 위반해 HTTP503을 재현했다. 스키마 완화 없이 adapter만 수정: 날짜문자열은 그대로, RFC3339 timestamp는 Asia/Seoul 날짜로 투영, 불명/잘못된 날짜는 null. v2 dateSourceValues에 필드명과 원래 scalar를 보존하며 businessDate는 추정하지 않는다. UTC18시→KST다음날 반례와 v1/v2 schema 회귀를 추가했다.
+
+실제 publisher 근거를 정산 담당 기존 실행 영수증에서 회수했다: ai-ops/state/정산-원본대조-20261006/접수복구-실행영수증.json의 partyNormalization.sheetAfter/sourceDigest와 ruleReceipt. 실행 대화01a11034-a593-7bd1-8062-57f889a30e3f의 2026-10-07T06:24:36.150Z 원본/06:25:48.401Z 요약발행 명령. 원본 요청 접수!A1:BT1000, valueRenderOption 생략(default FORMATTED_VALUE), majorDimension ROWS, SHA256 UTF8 JSON.stringify(values); 추가 padding/trim 없음. 반환range BT539는 요청범위와 구분한다. immutable 실행기 Git revision은 기록에 없어 확인되지 않았으며 새 pin을 만들지 않는다.
+
+2026-10-09T07:18:55.987Z 같은 조건 dry-read: 당시 영수증 values digest는 저장 sourceDigest와 정확일치; 현재 원본 digest는 불일치. 당시539행/현재1000행이며 raw 행렬 비교491행 차이(행 삭제/추가/수식패딩은 별도분류해야 하므로 491개 계약변경으로 확대하지 않는다). 과거 검증자의 UNFORMATTED/BT600 차이뿐인 false alarm이라고 결론내릴 수 없다. 원본, 사람입력, 원장, 요약 변경0. 비공개 dryrun 증거는 TEMP/f04-publisher-binding-dryrun.json. 후속은 동일row/sourceReceiptRow와 실제 source identity로 금액·부가세·신규행·빈패딩을 분류하고 before/after plan을 지휘 판단에 제출하며 apply하지 않는다.

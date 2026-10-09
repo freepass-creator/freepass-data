@@ -2292,3 +2292,10 @@ This file exists so another session can continue without re-discovering or re-cr
 - 대상 main: 정산 v2 PR404 a09d50c6cf13d58329542537d36971bed79f47f7. 동일 작업선에서 sourceFreshness 미검증 명시만 보강.
 - 변경/검증: 기존 v2 응답에 sourceFreshness UNVERIFIED; v1 불변. READ-RUNTIME의 binding 패킷에 현재 사실/부족한 publisher owner evidence/정규화 dry-run과 drift 재조회 순서를 기록했다. sourceReceiptSyncedAt으로 최신 확정 금지.
 - 남음/next_start_here: 실제 settlementRules 월요약 publisher의 immutable 파일·revision·원본 range/render/digest 규격·executor 영수증을 확인하고 해당 기존 writer로 dry-run. 새로운 writer/추정 timestamp/운영쓰기0.
+
+### 2026-10-09 운영 실조회 정산 날짜 hotfix
+
+- 배포 main2044416 read00016-266/Admin00005-p4n, 상품조회200/Admin원장200, 정산 v1/v2월조회503 billedAt timestamp21개. IAM/identity/기존Admin쓰기on불변.
+- 변경: ISO timestamp→Asia/Seoul date adapter 및 v2 raw 날짜근거 보존. v1/v2 schema 유지, invalid date null. 날짜경계 회귀검증.
+- 발행기: 기존 정산담당 실행영수증/명령에서 실제 rangeBT1000(defaultFORMATTED)와 JSON.stringify(values) SHA256을 회수. 과거영수증은 sourceDigest와일치/현재같은조건 원본은불일치. 운영원본 최신성HOLD유지, data/source쓰기0.
+- next_start_here: hotfix fullCI/독립검토/main 뒤 기존 두 서비스 재배포 및 Kakao v1/v2 authenticated200/금액대사. source dryrun의491 raw차이는padding·신규행·수식·identity별 실제금액차이로 분류한 plan만 준비.

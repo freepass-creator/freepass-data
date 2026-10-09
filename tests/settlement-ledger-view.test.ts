@@ -5,7 +5,7 @@ import schema from '../contracts/settlement-ledger-view-v1.schema.json' with { t
 import schemaV2 from '../contracts/settlement-ledger-view-v2.schema.json' with { type: 'json' };
 import { createConsumerGateway, parseConsumerBindings, type ConsumerBinding } from '../src/api/consumer-gateway.js';
 import { DataAccessGateway } from '../src/application/data-access-gateway.js';
-import { readSettlementLedgerView, projectSettlementReconciliation } from '../src/application/settlement-ledger-view.js';
+import { readSettlementLedgerView, projectSettlementReconciliation, projectSettlementLedgerRecord } from '../src/application/settlement-ledger-view.js';
 import { assertSettlementLedgerReadRequest } from '../src/domain/settlement-ledger-view.js';
 import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
@@ -64,6 +64,25 @@ function workflowStore(): AdminWorkflowStore {
 }
 
 describe('settlement ledger data product', () => {
+  it('projects ISO timestamp source dates without breaking either response schema or changing raw evidence', async () => {
+    const raw = { ...rowData, billedAt: '2026-09-08T18:46:31.427Z', deliveredAt: '2026-09-08T01:46:31+09:00', invoiceAt: '2026-02-30', receivedAt: 'unknown' };
+    const row = projectSettlementLedgerRecord('date-test', raw);
+    expect(row.progress).toMatchObject({ billedAt: '2026-09-09', deliveredAt: '2026-09-08', invoiceAt: null });
+    expect(row.identity.receivedAt).toBeNull();
+    expect(projectSettlementLedgerRecord('equivalent', { ...raw, billedAt: '2026-09-09T03:46:31.427+09:00' }).progress.billedAt).toBe(row.progress.billedAt);
+    expect(projectSettlementLedgerRecord('invalid-time', { ...raw, billedAt: '2026-09-08T24:00:00Z' }).progress.billedAt).toBeNull();
+    const evidence = projectSettlementReconciliation(raw);
+    expect(evidence.audit.dateSourceValues).toEqual(expect.arrayContaining([{ field: 'billedAt', rawValue: raw.billedAt }, { field: 'invoiceAt', rawValue: raw.invoiceAt }]));
+    const ajv = new Ajv2020({ strict: false }); addFormats(ajv);
+    const store: AdminWorkflowStore = {
+      async read(spec) { return { schema: 'freepass-data.admin-workflow-read/v1', docs: spec.resource === 'settlementRows' ? [{ id: 'date-test', data: raw }] : [], digest: 'e'.repeat(64) }; },
+      async commit() { throw new Error('WRITES_FORBIDDEN'); },
+    };
+    for (const version of [1, 2] as const) {
+      const response = await readSettlementLedgerView(store, 'kakao-ops', { kind: 'doc', id: 'date-test', viewVersion: version });
+      expect(ajv.compile(version === 1 ? schema : schemaV2)(response)).toBe(true);
+    }
+  });
   it('distinguishes matching monthly IDs/supply from missing VAT evidence and withholds uncertain eligibility totals', async () => {
     const store: AdminWorkflowStore = {
       async read(spec) {
