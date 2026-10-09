@@ -100,6 +100,29 @@ describe('Projection release integrity verifier', () => {
     expect(store.outbox.get('synthetic-event')?.attempts).toBe(0);
   });
 
+  it('rechecks approval and lease expiry after receipt reads before the native claim write', async () => {
+    for (const elapsedAfterRead of [31000, 61000]) {
+      let elapsed = 0;
+      const clock = vi.spyOn(performance, 'now').mockImplementation(() => elapsed);
+      const update = vi.fn();
+      const row = { eventId: 'approved', status: 'PENDING' };
+      const ref = { get: async () => ({ exists: true, ref, data: () => row }) };
+      const receipt = {};
+      const db = { collection: (name: string) => ({ doc: () => name === 'outbox_events' ? ref : receipt }),
+        runTransaction: async (body: any) => body({ get: async (target: any) => {
+          if (target === ref) return { exists: true, data: () => row };
+          elapsed = elapsedAfterRead;
+          return { exists: false };
+        }, update }) };
+      try {
+        expect(await new FirestoreDataStore(db as unknown as Firestore).claimNext({ workerId: 'approved',
+          eventId: 'approved', now: '2026-10-09T00:00:00.000Z', leaseUntil: '2026-10-09T00:01:00.000Z',
+          expiresAt: elapsedAfterRead === 31000 ? '2026-10-09T00:00:30.000Z' : '2026-10-09T00:02:00.000Z' })).toBeNull();
+        expect(update).not.toHaveBeenCalled();
+      } finally { clock.mockRestore(); }
+    }
+  });
+
   async function repriceFixture(store: MemoryDataStore, now: string) {
     await updateOfferPrice(store, { commandId: 'synthetic-reprice', idempotencyKey: 'synthetic-reprice',
       offerId: 'offer_gv70_demo', expectedRevision: 1, termKey: '36@20000',

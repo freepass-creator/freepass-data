@@ -681,6 +681,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
           const active = await tx.get(this.db.collection(C.activeReleases).doc(receipt.get('projectionId')));
           if (!active.exists || active.get('releaseId') !== receipt.get('releaseId')) return null;
         }
+        if (!valid()) return null;
         tx.update(candidate.ref, {
           status: 'PROCESSING',
           leaseOwner: input.workerId,
