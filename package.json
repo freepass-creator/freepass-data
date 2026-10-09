@@ -66,7 +66,8 @@
     "serve:supplier:relay": "tsx src/jobs/serve-supplier-relay.ts",
     "check:supplier-sheet-canon": "node scripts/supplier-input-sheet.mjs --check-canon",
     "plan:sheet-blank-fill": "tsx src/jobs/plan-sheet-blank-fill.ts",
-    "export:sheet-blank-fill-input": "tsx src/jobs/export-sheet-blank-fill-input.ts"
+    "export:sheet-blank-fill-input": "tsx src/jobs/export-sheet-blank-fill-input.ts",
+    "ingest:kakao-source": "tsx src/jobs/ingest-kakao-source.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",

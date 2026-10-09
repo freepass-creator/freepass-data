@@ -8,6 +8,7 @@ import type {
   SourceRun
 } from '../domain/source.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
+import type { SourceEventClaim, SourceEventReceipt } from '../domain/source-event.js';
 
 /**
  * Source-run ingestion lifecycle only.
@@ -17,6 +18,9 @@ import type { FieldLineageRecord } from '../domain/lineage.js';
  * evidence layout in infra.
  */
 export interface SourceIngestionStore {
+  claimEvent(input: SourceEventClaim): Promise<{ acquired: boolean; conflict: boolean; receipt: SourceEventReceipt }>;
+  getEvent(eventId: string): Promise<SourceEventReceipt | null>;
+  finishEvent(eventId: string, input: { revision: number; state: 'UNKNOWN' | 'ARCHIVED'; archiveRefs: string[] }): Promise<SourceEventReceipt>;
   upsertSource(source: SourceDefinition): Promise<void>;
   getSource(sourceId: string): Promise<SourceDefinition | null>;
 
