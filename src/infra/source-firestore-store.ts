@@ -5,6 +5,7 @@ import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import { FIRESTORE_COLLECTIONS, sourceFirestoreDocumentId } from './firestore-layout.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
+import { observeSourceEvent, finishSourceEvent, type SourceEventReceipt } from '../domain/source-event.js';
 
 const C = {
   sources: FIRESTORE_COLLECTIONS.source.definitions,
@@ -17,6 +18,31 @@ const C = {
 
 export class FirestoreSourceStore implements SourceIngestionStore {
   constructor(private readonly db: Firestore) {}
+
+  async claimEvent(input: Parameters<SourceIngestionStore['claimEvent']>[0]) {
+    return this.db.runTransaction(async tx => {
+      const ref = this.db.collection(FIRESTORE_COLLECTIONS.source.eventReceipts).doc(sourceFirestoreDocumentId(input.eventId));
+      const snap = await tx.get(ref);
+      const result = observeSourceEvent(snap.exists ? snap.data() as SourceEventReceipt : null, input);
+      if (snap.exists) tx.update(ref, { ...result.receipt });
+      else tx.create(ref, result.receipt);
+      return result;
+    });
+  }
+  async getEvent(eventId: string) {
+    const snap = await this.db.collection(FIRESTORE_COLLECTIONS.source.eventReceipts).doc(sourceFirestoreDocumentId(eventId)).get();
+    return snap.exists ? snap.data() as SourceEventReceipt : null;
+  }
+  async finishEvent(eventId: string, input: Parameters<SourceIngestionStore['finishEvent']>[1]) {
+    return this.db.runTransaction(async tx => {
+      const ref = this.db.collection(FIRESTORE_COLLECTIONS.source.eventReceipts).doc(sourceFirestoreDocumentId(eventId));
+      const snap = await tx.get(ref);
+      if (!snap.exists) throw new Error('SOURCE_EVENT_NOT_FOUND');
+      const receipt = finishSourceEvent(snap.data() as SourceEventReceipt, input);
+      tx.update(ref, { ...receipt });
+      return receipt;
+    });
+  }
 
   async upsertSource(source: SourceDefinition) {
     await this.db.collection(C.sources).doc(sourceFirestoreDocumentId(source.sourceId)).set(source, { merge: true });

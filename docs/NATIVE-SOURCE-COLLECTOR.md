@@ -4,6 +4,102 @@ Status (2026-10-03): **CODED / FIXTURE TESTED; LIVE ORIGINAL / PERSISTENCE / DEP
 Owner: FreePass Data. Existing `SourceIntakeBatch`, `ingestRawSourceBatch` and Firestore Source Store are reused.
 This does not add a second CatalogStore, publication writer or scheduler.
 
+## 카카오톡 원천 — 2026-10-09
+
+### 범위와 재사용 판정
+
+- 기준: Data `a6ac21c9ea438c3eb1b3d7b2653261782637b632`, 브랜치 `work/freepass-data/kakao-source-intake-20261009`, 설계는 AI-OPS `ea4c0f2a:docs/handoffs/카톡자료-데이터화-설계-20261009.md`. 로컬 코드/가짜 포트 검증이며 운영 보관·상품 반영 완료가 아니다. 커밋·푸시 없음.
+- 수정 전 Academy `READY` (`2026-10-09T12:42:33.093Z`), 재사용 `COMPOSE_OR_EXTEND`. 첫 시도는 잘못된 판정 문자열 `EXTEND`로 `REUSE_DECISION_REQUIRED`였고 허용된 판정으로 바로잡았다.
+- 기존 `SourceIntakeBatch`, `ingestRawSourceBatch`, `SourceIngestionStore`, `firestore-layout.ts`, `firebase-target.ts`, `FieldLineageRecord`를 확장한다. 새 원천 DB·별도 product writer·스케줄러는 없다.
+- **CREATE_NEW_JUSTIFIED**: 로컬 `reuse:check` PASS. 기존 AI-OPS `카톡파일-드라이브.mjs`의 계획/실행 분리와 공급사별 경로를 재사용하되 로컬 SHA-1 중복 장부는 중앙 멱등을 보장하지 못한다. 기존 Data 어댑터에 메시지 사건 선점·Drive 응답 유실 대사·오프라인 묶음 CLI가 없어 `source-event.ts`, 카카오 adapter/application/port/job 및 가짜 시험만 새 파일로 분리했다. 저장은 기존 Source 저장 계층이다.
+- AI-OPS `문서읽기.mjs`의 CSV/XLSX 읽기 결과를 검증된 표 입력으로 받는다. 원본 바이트 SHA256, extractorVersion, sheet/startRow/행·열을 함께 보존한다. 실제 문서 리더 실행·OCR·PDF 추출은 이번 Data 실행기에 포함하지 않는다. 검증되지 않은 표/사진 OCR/PDF 해석은 HOLD다. 표의 문자열을 가격·차종·재고 확정값으로 승격하지 않는다.
+
+### 흐름·키·HOLD
+
+1. 공급사 1곳·공통 roomId 1개의 묶음을 로컬에서 검증한다. 기본 CLI는 파일 읽기와 계획 생성만 한다(쓰기 0).
+2. 승인된 포트 실행에서 PC별 관측을 기존 `sources → source_runs → raw_records`로 적재하고 새 조회로 payload를 대조한다. 검증된 표 셀은 기존 `field_lineage`에 원문 경로/추출기 버전을 붙여 보관하고 run의 lineageCount에 포함한다. 표 후보가 완성된 CatalogCandidate인 것처럼 `normalized_candidates`에 넣지 않는다.
+3. `SourceIngestionStore.claimEvent`가 `source_event_receipts`에서 트랜잭션 `create`로 처음 한 실행자만 업로드 권한을 얻는다. 기존 사건은 관측 참조만 합친다. 메모리 구현도 같은 도메인 전이를 사용한다. 모음 이름/문서 ID는 `firestore-layout.ts`에만 정의한다.
+4. Drive 목적지와 상속 권한 검사 → `appProperties(eventId, sha256)` 재검색 → 최초 선점자만 업로드 → 원본 재다운로드 SHA256/경로/속성/권한 대조 → 영수증 revision CAS 확정. 실제 전송은 `KakaoDriveArchivePort` 뒤에 있다.
+5. 차량 사진만 products 대조/`photo_link` 쓰기 계획으로 연결한다. 일반 문서·대화 원문 파일과 혼합 폴더는 상품에 연결하지 않는다. 이번 수집 함수는 상품 writer를 호출하지 않는다.
+
+키 규칙:
+
+- 메시지 ID가 있으면 `SHA256(UTF8(JSON.stringify(["카카오톡", roomId, messageId])))`. 문자열 경계를 보존하는 JSON tuple을 공통 인코딩으로 고정한다. PC명·수집시각·문장 내용은 사건 키에서 제외한다.
+- ID가 없으면 `["카카오톡", roomId, senderKey, 원발송시각 UTC, sequence]`의 SHA256. `sequenceScope="ROOM"`인 공통 대화 순서가 필수다. PC 로컬 행번호나 문장+분 단위 시각은 식별 근거가 아니다.
+- 식별 불충분이면 `eventId=null`, `IDENTITY_UNRESOLVED`; RAW 관측은 보존하고 Drive/상품 연결은 HOLD. 첨부 본체는 중앙 보관 확인 전 AI-OPS 비공개 로컬 대기열에서 삭제하지 않는다.
+- `observationId=stableDigest([eventId, collectorId, observedAt, fingerprint])`. 두 PC 관측은 서로 다른 RAW 참조로 같은 사건에 매달린다. 재시작 시 같은 관측을 재사용한다.
+- 첨부 동일성은 **원본 바이트 SHA256**이다. 같은 사건의 같은 파일은 한 번만 업로드하고, 다른 메시지가 같은 파일을 재전송하면 사건/원문 이력을 별도로 보존한다.
+- `firstRawRef`는 처음 기록 후 불변. `latestRawRef`는 `captureVerified=true`이고 version이 더 큰 원문만 갱신한다. version은 공급사 원문의 검증된 후속 revision이며 PC 수집 횟수로 증가시키지 않는다. 같은/이전 version에서 원문이 달라지면 CONFLICT다.
+- 선점 기한은 5분. 만료가 업로드 권한 재발급을 뜻하지 않는다. 선점/업로드/확정 응답 유실은 UNKNOWN, 재조회 전용이다. 첫 업로드 이후 미전송 파일이 남거나 새로운 원문 version의 파일이 없으면 자동 재업로드하지 않고 수동 대사 HOLD다.
+- “오늘 매물”은 항상 PARTIAL이며 미관측 기존 차량의 삭제/품절 0. “2차 없습니다”는 STATUS_NOTICE_CANDIDATE이고 재고 0으로 바꾸지 않는다. 시트 충돌은 CONFLICT/HOLD다.
+- 원문 내 공급사 차량 ID 또는 차량번호 증거가 없거나 products 대조가 0건/복수이면 HOLD. 공급사 코드가 다르면 매칭하지 않는다. 기존 `photo_link`가 있으면 보존/HOLD한다.
+
+### 비공개 Drive 계약
+
+경로는 `원문/카카오톡/{공급사코드}/{YYYY-MM}/{eventId}/`이고 실제 루트 폴더 ID는 비공개 운영 설정에만 둔다. 파일명은 SHA256이며 원래 대화와 첨부 메타데이터는 JSON 원문 파일에 보존한다. 속성은 `eventId`, `sha256`이다.
+
+포트는 `inspectDestination`, `find`, `upload`, `verify`를 구현한다. `inspectDestination`은 쓰기 없이 해당 목적지 또는 생성할 목적지의 부모 ACL을 확인해야 한다. `upload`는 경로의 동일 부모/상속 ACL을 유지하고 공유 권한을 확대하지 않는다. `verify`의 sha256은 메타데이터를 믿는 값이 아니라 다운로드한 원본 바이트로 계산한 값이어야 한다.
+
+현재 접근 검사는 전체/상속 권한 확인이 모두 있어야 한다. 지정 조직 domain의 reader(검색 공개 금지) 및 같은 조직 user만 허용하고 anyone·외부 사용자·확인되지 않은 group 권한은 거부한다. 서비스 계정/공유 드라이브 역할을 실제로 사용할 경우 이 엄격한 검사와 충돌할 수 있으며 허용 대상을 별도 검토해야 한다. 공개 링크로 우회하지 않는다. 파일 URL 문자열의 존재만으로 권한 검증 PASS가 되지 않는다.
+
+### products 사진 칸과 ERP 소비 근거
+
+읽기만 한 ERP4 로컬 HEAD는 `fa260f63c10838a667dddad589071f0c73322a70`이며 운영 배포 revision으로 간주하지 않는다. ERP4 수정 없음.
+
+| 기존 칸 | 형식/소유자/소비 근거 |
+|---|---|
+| `products.photo_link` | 외부 사진 링크 문자열, 복수 링크는 줄바꿈. 이번 계획의 대상이다. Data `src/application/kakao-catalog-reference.ts:36`은 원천 링크로 구분한다. ERP4 `lib/domain/product-photos.ts:138`/`:174`에서 줄바꿈·쉼표를 분리해 직접 이미지/서버 해석 대상으로 나눈다. |
+| `products.image_urls`, `image_url` | 이미지 URL 배열과 대표 이미지 문자열. Data `src/infra/iancar-publication-withdrawal-firestore.ts:35`에서 이안카의 기존 검토된 발행 경로가 쓴다. 일반 카톡 수집이 해당 이안카 writer를 다른 공급사에 사용하지 않는다. |
+| `images`, `photos`, `photo` | 기존 호환 reader가 허용하는 별칭. Data `src/application/kakao-catalog-reference.ts:30`. 신규 표준 칸을 만들지 않는다. |
+| `doc_images` | 문서 사진, 차량 대표사진으로 승격 금지. Data reader `src/application/kakao-catalog-reference.ts:32`에서 제외한다. 카톡 연결안도 VEHICLE_PHOTO만 선택한다. |
+
+제품 의미 소유자는 `FREEPASS_DATA_CATALOG`, 일반 Admin gateway의 products 쓰기는 금지(`src/domain/admin-workflow.ts:35`). 따라서 이 작업은 Admin commit을 우회 writer로 만들지 않는다. 승인 적용은 기존 검토된 product writer의 `KakaoPhotoWriterPort` adapter로만 구성해야 하며 **그 운영 adapter는 미연결**이다.
+
+ERP 상세는 `components/ProductDetail.tsx:71` → `components/use-product-photos.ts:33`/`:37`/`:44` → `lib/domain/product-photos.ts`를 읽고, 목록 카드도 공용 사진 경로를 사용한다(`components/ProductCard.tsx:47`). `app/api/extract-photos/route.ts:25`/`:76`에 Drive 서비스 계정 조회가 있지만, **이번 비공개 파일 링크가 실제 사진으로 표시되고 원문 접근 경계를 지키는지는 미확인**이다. Data 이안카 사진 프록시는 `src/api/consumer-gateway.ts:226`의 별도 인증·감사 경로이며 일반 Drive 프록시라고 가정하지 않는다. `ERP_PRIVATE_MEDIA_DISPLAY_UNVERIFIED`를 모든 사진 계획에 남긴다. 이번에 스키마 변경·사진용 새 칸은 없다.
+
+### CLI와 운영 실측 절차
+
+입력은 비공개 JSON 하나: `{ "bundle": { supplierCode, roomId, collectorId, observedAt, messages }, "products": [...] }`. 타입 전체는 `src/adapters/kakao-source-intake.ts`와 `src/ports/kakao-archive.ts`. `messages`에는 messageId(또는 fallback 식별 근거), sentAt, text, captureVerified, version, attachments를 넣는다. 첨부는 bytesBase64/mediaType/role, 차량 대조는 원문 evidenceText와 식별자다. products는 `{id,data,supplierVehicleIdField?}`로 기존 공급사 차량 ID 필드를 명시한다. 공급사 ID 필드 이름을 임의 추정하지 않는다. 입력 파일/출력 계획/영수증은 공개 Git에 넣지 않는다.
+
+```powershell
+npm.cmd run ingest:kakao-source -- <비공개-묶음.json>
+npm.cmd run check
+# 이 샌드박스에서 tsx가 os.userInfo 오류이면, 빌드된 동일 CLI를 로컬 검증한다.
+npm.cmd run build
+node dist/src/jobs/ingest-kakao-source.js <비공개-묶음.json>
+```
+
+기본 실행 결과는 eventId·observationId·첨부 해시·Drive 경로/appProperties 계획·표 증거 수·products 대조/연결안이며 쓰기 0이다. 원문 본문/첨부 bytes는 출력하지 않는다.
+
+운영 재개는 네트워크가 있는 승인된 환경에서 아래 순서로 공급사 1곳·사진 1대만 진행한다.
+
+1. 실제 공급사/공통 방 식별, 메시지 revision, 사진 원문 귀속, 제품 snapshot digest, 비공개 Drive 루트와 전체/상속 권한을 확인한다. Drive 원본 생성·검색·다운로드와 Source Firestore read/create/transaction 권한, 기존 상품 writer 승인/소유권을 각각 확인한다. 인증은 기존 연결, Firebase는 `firebase-target.ts`만 사용한다.
+2. `KakaoDriveArchivePort`의 실제 transport와 기존 Source Store/제품 read를 운영 composition root에 주입한다. CLI 함수 `runKakaoSourceCli(args, env, ports)`를 재사용하거나, 비공개 로컬 모듈의 `createKakaoPorts()` export를 `FREEPASS_KAKAO_PORTS_MODULE=<검토된-로컬-module.mjs>`로 지정한다. CLI는 승인+apply 확인 후에만 그 모듈을 로드한다. 카톡 JSON에서 실행 모듈을 지정할 수 없다. 포트 미설정이면 `HOLD_KAKAO_LIVE_PORTS_NOT_CONFIGURED`; `--apply`만으로 live ports가 만들어지지 않는다.
+3. 검토된 원문 보관 실행에 한해 `FREEPASS_KAKAO_SOURCE_APPLY=approved` **및** `--apply` 둘 다 필요하다. `runKakaoSourceCli`의 주입 경로를 통해 Drive 업로드→다운로드 해시→RAW/영수증 되읽기를 증명한다. 이 승인으로 products는 쓰지 않는다.
+4. 사진 plan의 현재 product 전체 digest/기존 photo_link를 재확인한다. 승인된 비공개 접근 경로의 ERP 표시/문서 미노출 증거로 HOLD를 해소한 뒤 기존 product writer port의 dryRun 결과 digest를 검토한다. `applyKakaoPhotoPlan`은 apply=true·approval=approved·동일 dry-run digest가 모두 있어야 port.apply를 호출한다. 실제 product adapter는 snapshot CAS·전후 이력·승인·쓰기 소유권·되읽기를 기존 경로에서 강제해야 한다. 적용 응답 유실은 재조회하며 자동 재실행하지 않는다.
+5. products 사진 칸 되읽기, ERP 목록/상세에서 동일 사진 표시, 미로그인/다른 권한에서 원문 노출 여부를 확인한다. 표시 실패 시 공개 공유하지 않고 HOLD한다. 실패 복구도 당시 digest를 확인한 기존 writer를 통해 원래 사진 칸 값만 되돌리는 검토안을 사용한다.
+
+남음: 실제 Drive transport/product writer adapter 연결, Firestore 실제 트랜잭션/권한, 비공개 ERP 표시·접근 검증, 운영 backup/readback, Claude 독립 검토. 원문/첨부가 일부만 업로드된 UNKNOWN 사건과 후속 revision의 새 첨부는 자동 lease takeover 없이 별도 대사/승인 재개가 필요하다. 소스 수집 승인은 상품 확정·시트 발행 승인이 아니다.
+
+### 검증 기록
+
+변경 파일(14개):
+
+| 구분 | 경로 |
+|---|---|
+| 기존 Source 확장 | `src/application/ingest-raw-source.ts`, `src/ports/source-store.ts`, `src/infra/source-memory-store.ts`, `src/infra/source-firestore-store.ts`, `src/infra/firestore-layout.ts` |
+| 카톡/Drive/사진 경계 신규 | `src/domain/source-event.ts`, `src/adapters/kakao-source-intake.ts`, `src/application/kakao-source-intake.ts`, `src/ports/kakao-archive.ts` |
+| 실행/시험 | `src/jobs/ingest-kakao-source.ts`, `package.json`, `tests/kakao-source-intake.test.ts` |
+| 인계 | `docs/NATIVE-SOURCE-COLLECTOR.md`, `docs/NEXT-START-HERE.md` |
+
+- 카카오 전용 17 PASS, 기존 RAW 적재 4 PASS. 가짜 Drive/Firestore 포트로 두 PC(사건1·관측2), restart/응답 유실, 같은 문장 재발화, 같은 파일 재전송, PARTIAL 삭제0, 식별불명, 사진 매칭 성공/실패, 공개권한 거부, 최초/최신 참조, CSV 증거/lineage 및 재실행, 승인/CLI 경계를 검증했다. Firestore emulator/실서비스 통과라는 뜻이 아니다.
+- `npm.cmd run check` 첫 실행은 신규 테스트 override의 반환 타입 오류로 build 실패. Promise<never>로 고친 뒤 build 및 관련 21개 시험 PASS.
+- 두 번째 `npm.cmd run check`: **exit 1**. architecture/data-access 경계 PASS, standards 15 PASS(프로젝트 상태 PARTIAL 유지), sheets 105 PASS, build PASS, read-runtime 12 PASS, shadow 10 PASS, dashboard 7+14 PASS. Vitest **1761 PASS / 9 FAIL / 14 SKIP**, 파일 136 PASS / 4 FAIL / 4 SKIP.
+- FAIL 원문: 이안카 CLI 2건과 runtime entrypoint 1건은 `uv_os_get_passwd returned ENOMEM` (`tsx`의 `os.userInfo`); runtime-policy 1건은 설치된 `jq: Permission denied`; read-pilot CLI 4건은 exit/JSON 결과 불일치(원인 분리 필요); vehicle-finder-route 1건은 `ECONNREFUSED 127.0.0.1` 환경 기동 실패. 기존 기대값·환경·스킵 조건을 바꾸지 않았다. 전체 PASS로 보고하지 않는다.
+- 원격 fetch/Issue/PR 조회, Drive/Firestore/웹 실호출, 커밋/푸시/운영 쓰기 없음. Claude 검토는 이번 오더의 후속 검토 단계이며 실행하지 않았다.
+- 별도 환경 확인: `node --import tsx -e ...`와 `npm.cmd run ingest:kakao-source --` 모두 같은 `uv_os_get_passwd ENOMEM`을 재현했다. 샌드박스 계정 조회 오류로 구분하며 tsx/기존 시험 기대값은 변경하지 않는다. 빌드된 동일 CLI의 가짜 JSON subprocess dry-run은 전용 시험에서 별도로 확인한다.
+- 전체 check 이후 CLI의 승인 후 로컬 포트 모듈 주입, 사진 plan 링크/기존값 불변 검사와 적용 후 verified 응답 검사를 보강했다. 최종 build/관련21개 시험/diff 검사 PASS. 가짜 JSON을 사용한 빌드 CLI subprocess는 exit0/DRY_RUN/쓰기0을 확인했다. 전체 check를 최종 PASS로 바꾸지 않는다.
+
 ## Common supplier adapter contract — 2026-10-02
 
 `src/domain/source-intake.ts` owns `SUPPLIER_SOURCE_ADAPTERS`,

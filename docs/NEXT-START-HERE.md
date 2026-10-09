@@ -469,6 +469,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 카카오톡 원천 1단계 / 공급사 사진 연결 계획
+
+- 목적: 공급사 1곳·공통 방 1개 카톡 원문/첨부를 기존 Source 경로로 접수하고 products 사진 연결안을 만든다. 정본/규격/운영 순서는 [카카오톡 원천](NATIVE-SOURCE-COLLECTOR.md#카카오톡-원천--2026-10-09)에 통합했다.
+- 대상 revision: `a6ac21c9ea438c3eb1b3d7b2653261782637b632`, `work/freepass-data/kakao-source-intake-20261009`, 이 작업 트리 미커밋 변경. 설계 AI-OPS `ea4c0f2a`; Academy READY, reuse COMPOSE_OR_EXTEND/CREATE_NEW_JUSTIFIED 근거는 위 문서. 다른 checkout 수정/커밋/푸시 없음.
+- 변경: 카톡 어댑터·중앙 사건 receipt(기존 Source 저장 계층의 create/CAS)·주입형 비공개 Drive 포트·RAW/표 lineage·photo_link 계획·기본 쓰기0 CLI와 가짜 테스트. 최초 RAW 불변, 응답 유실 UNKNOWN/재조회, PARTIAL 미관측 삭제0, 충돌/HOLD 유지. 상품 스키마/운영 데이터 변경 없음.
+- 검증: build PASS, 카카오17+기존RAW4 PASS. 전체 `npm.cmd run check` 재실행 exit1: Vitest1761 PASS/9 FAIL/14 SKIP(기존 CLI의 os.userInfo ENOMEM, jq 접근 거부, read-pilot exit/JSON 불일치, 로컬 서버 연결 거부; 기대값 수정 없음). 첫 실행의 새 테스트 반환 타입 오류는 수정했다. 상세 단계 결과는 위 문서.
+- 남음: 실제 Drive transport/기존 product writer adapter 미연결, ERP 비공개 사진 표시/권한·Firestore 실측·독립 검토 HOLD. `photo_link` 존재와 화면 표시 성공은 별개이며 적용 승인 플래그만으로 live ports가 만들어지지 않는다.
+- next_start_here: 위 문서의 운영 절차와 로컬 diff를 Claude가 검토 → 환경 실패 분리 → 네트워크 있는 환경에서 공급사1곳/사진1대 원문 보관·되읽기 → 기존 writer dry-run digest 승인 → products/ERP 화면 되읽기. 공개 링크·RTDB·ERP4 수정·시트 자동 발행 금지는 유지한다.
+
 ### 2026-10-07 수수료 정책 적용범위 분리 — 원본 인계 보존
 
 - 목적: 대표 지시대로 수수료 정책을 별도 절로 두고 공통/공급사별 자체 조건/개별계약/미확정을 구분한다.
