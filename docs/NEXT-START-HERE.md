@@ -415,6 +415,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+### 2026-10-09 선행 감사 완료 → 일일 수집 연결 승인전 patch (MAIN 미반영)
+
+- 대상: main `d911243`까지 기존 PR401 작업 가지에 fast-forward한 후 준비. 새 branch/PR/task/엔진0. 아래 workflow 변경은 작업 가지에만 보존하며 main 자동기동 변경·dispatch·DB/시트/IAM 쓰기0.
+- 원인 실측: 일일 실행37869754663은 main563bfd2/runner2.337.0/Ubuntu20261004.327에서 2026-10-09T01:26:18Z 검사. 선행 감사37853141171의 daily-writer-guard는22:23:47Z SUCCESS였으므로 age10951s로 기존10800s 한도를 초과했다. 다음 감사37872351890은01:58:46Z에 생성됐다. 독립 cron 순서/지연 문제이며 유효시간 확대가 해법이 아니다.
+- 준비 patch: 기존 shared-sheet-daily workflow에 기존 read-only audit 완료 이벤트를 연결한다. GitHub API로 정확 run ID/repository/head repository/main/path/완료성공/current main SHA를 재검증하고 가장 최근 완료 guard의 run ID가 trigger와 같은지 확인한다. 더 최근 실패/guard없음/옛main은 HOLD. 기존10800초/미래시각 거부 및 DAILY on, 같은 concurrency와 cancel=false, 당일 모든 attempt의 쓰기진입 검사 그대로 유지한다. guard 성공만으로 기록이나 원본 없음 판정을 바꾸지 않는다.
+- 영향: 기존 cron 시간·WIF·계정·actions:read·수동apply 스위치는 그대로다. 승인 후에는 감사 완료가 추가 apply 실행을 생성하지만 당일 쓰기진입이 있으면 건너뛴다. 감사 전체 실패/구버전/current SHA불일치는 자동쓰기 금지. 처음 쓰기가 실패/부분이어도 당일 자동 재적용은 금지된다. 기존 원본 주소/백업/드라이런/적용/readback 게이트도 유지한다. 감사 완료 후 그날 원천을 읽을 수 있는 시점이 cron보다 앞당겨질 수 있어 운영 변경 승인이 필요하다.
+- 검증 범위: 실제 workflow의 jq predicate를 추출해 exact run/외부fork/다른workflow/branch/oldSHA/진행중/실패/skip 거부와 최신실패 덮기 금지를 실행 검증한다. 만료·미래·once-only·filter=all·concurrency·스위치·권한 유지도 회귀 검사한다. 이는 fixture/정적검증이며 GitHub 이벤트/WIF 토큰/당일 실적재 검증이 아니다.
+- 최종 승인 단일 scope: **기존 일일 수집의 감사완료 이벤트 결속 patch 활성화**. 승인 후 기존 통합 경로로 exact commit 검토/CI→main 반영→해당 감사 run과 수집 run 되읽기→RAW/Canonical/소비조회 대사를 수행한다. 별도 강제apply·만료완화·새IAM·schedule시간변경·원본삭제는 포함하지 않는다.
+- rollback: 활성화한 exact commit의 변경만 되돌려 workflow_run trigger/결속 코드를 제거하고 기존 cron 게이트로 복귀한다. 계정/원천/기존데이터는 건드리지 않으며 rollback이 이미 쓴 원문/Canonical 값을 자동 되돌리지 않는다. 부분쓰기 발생시 기존 private backup/receipt 기반 별도 승인 복구다. 승인 전 본 patch를 main에 합치지 않는다.
 ### 2026-10-09 14:17 KST 기존 정산 원장·상품 수수료 통합 대조
 
 - 담당범위/기존Work: PR403 work/freepass-data/reference-policy-context-20261009; 61b14bde 기반. main b2777b59819d5fbaa4c650cd637c80b5e000c591 최신 조회. academy READY. 새 원장/엔진/Task/branch0, 원본·사람입력·과거 작성자 정정0.

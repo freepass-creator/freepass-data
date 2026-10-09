@@ -1,11 +1,17 @@
 name: Shared sheet daily snapshot
 # 실행 제목에 모드를 남긴다 — 매시 감시(daily-writer-guard)가 적용 실행을 이 제목으로 알아본다.
-run-name: shared-sheet-daily ${{ github.event_name == 'schedule' && 'apply' || inputs.mode }}
+run-name: shared-sheet-daily ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_run') && 'apply' || inputs.mode }}
 
 # 공통 시트 → FreePass Data 하루 한 번 박제(대표 «두 갈래», 신원 승인 10-04 ①안).
 # 이 파일만 매일 박제 계정(github-data-inventory-writer)을 빌릴 수 있다: WIF 공급자 조건이 이 파일의 workflow_ref·main·
 # environment 로 묶여 있고, 변수 이름도 refresh(매시 배달)와 따로 쓴다(FREEPASS_DATA_DAILY_*).
 on:
+  # APPROVAL-PENDING PATCH: do not merge/activate before the scoped operational approval.
+  # Reuses the existing read-only auditor; no WIF expansion or new principal.
+  workflow_run:
+    workflows: ["ERP5 continuous read-only audit"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       mode:
@@ -42,7 +48,7 @@ jobs:
       # Secret (masked in logs): the sheet ID must not appear in this public repository's run logs.
       SHARED_SHEET_ID: ${{ secrets.FREEPASS_DATA_SHARED_SHEET_ID }}
       # 예약 실행은 적용까지, 수동 실행은 고른 모드대로.
-      APPLY: ${{ github.event_name == 'schedule' || inputs.mode == 'apply' }}
+      APPLY: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || inputs.mode == 'apply' }}
     steps:
       # 관문(environment 변수는 job if 에서 안 보이므로 첫 단계):
       #  - 예약 실행: FREEPASS_DATA_SHARED_SHEET_DAILY == 'on' 이고, 최근(3시간 안) 매시 감사의 daily-writer-guard 가
@@ -56,10 +62,22 @@ jobs:
           DAILY: ${{ vars.FREEPASS_DATA_SHARED_SHEET_DAILY }}
           MANUAL_APPLY: ${{ vars.FREEPASS_DATA_DAILY_MANUAL_APPLY }}
           GH_TOKEN: ${{ github.token }}
+          TRIGGER_EVENT: ${{ github.event_name }}
+          TRIGGER_AUDIT_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = 'schedule' ]; then
+          if [ "$TRIGGER_EVENT" = 'schedule' ] || [ "$TRIGGER_EVENT" = 'workflow_run' ]; then
             if [ "$DAILY" != 'on' ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "daily schedule switch is off — skipped"; exit 0; fi
+            if [ "$TRIGGER_EVENT" = 'workflow_run' ]; then
+              case "$TRIGGER_AUDIT_RUN_ID" in *[!0-9]*|'') echo 'AUDIT_TRIGGER_INVALID'; exit 1;; esac
+              # Re-read server metadata rather than trusting the event payload or a latest-success lookup.
+              trigger="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TRIGGER_AUDIT_RUN_ID")"
+              jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$GITHUB_SHA" --argjson id "$TRIGGER_AUDIT_RUN_ID" '
+                .id == $id and .repository.full_name == $repo and .head_repository.full_name == $repo and
+                .path == ".github/workflows/erp5-continuous-audit.yml" and .head_branch == "main" and
+                .head_sha == $sha and .status == "completed" and .conclusion == "success"
+              ' <<<"$trigger" >/dev/null || { echo 'AUDIT_TRIGGER_NOT_ACCEPTED'; exit 1; }
+            fi
             # 하루 한 번: 날짜는 «실행 생성 시각의 KST 날짜» 하나로 센다. 이 실행과 같은 날(KST) 생성된 apply 실행 중 «쓰기 단계
             # (Apply to FreePass Data)에 들어간 것»이 있으면 다시 쓰지 않는다.
             # - 쓰기 단계는 성공·실패·취소·진행 중 모두 센다(쓰고 나서 보류·되읽기 실패로 끝날 수 있다 — 그날은 상황실이 본다).
@@ -84,9 +102,13 @@ jobs:
             # 진행 중인 실행에서 이미 실패한 감시가 있으면 그것이 이긴다.
             : > "$RUNNER_TEMP/guard-jobs.jsonl"
             for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/erp5-continuous-audit.yml/runs?branch=main&per_page=5" --jq '.workflow_runs[].id'); do
-              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100"                 --jq '.jobs[] | select(.name == "daily-writer-guard" and .status == "completed") | {conclusion, completed_at}' >> "$RUNNER_TEMP/guard-jobs.jsonl"
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100"                 --jq ".jobs[] | select(.name == \"daily-writer-guard\" and .status == \"completed\") | {conclusion, completed_at, auditRunId: $id}" >> "$RUNNER_TEMP/guard-jobs.jsonl"
             done
             latest="$(jq -s 'sort_by(.completed_at) | last // {}' "$RUNNER_TEMP/guard-jobs.jsonl")"
+            if [ "$TRIGGER_EVENT" = 'workflow_run' ]; then
+              # A newer failed guard cannot be hidden by an older successful completion trigger.
+              jq -e --argjson id "$TRIGGER_AUDIT_RUN_ID" '.auditRunId == $id' <<<"$latest" >/dev/null || { echo 'AUDIT_TRIGGER_SUPERSEDED_OR_GUARD_MISSING'; exit 1; }
+            fi
             guard="$(jq -r '.conclusion // "missing"' <<<"$latest")"
             done_at="$(jq -r '.completed_at // empty' <<<"$latest")"
             test -n "$done_at" || { echo "DAILY_WRITER_GUARD_NOT_OK: no completed guard job — scheduled snapshot not run"; exit 1; }

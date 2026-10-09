@@ -163,3 +163,37 @@ test('failed durable checkpoint prevents its engine effect', async () => {
   await assert.rejects(runDelivery(r.options));
   assert.equal(r.calls.length, 0);
 });
+
+test('approval-pending audit completion patch binds exact main run and keeps expiry and once-only gates', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/shared-sheet-daily.yml', import.meta.url), 'utf8');
+  const predicate = workflow.match(/--argjson id "\$TRIGGER_AUDIT_RUN_ID" '\n([\s\S]*?)\n\s*' <<<"\$trigger"/)[1];
+  const accepted = {id:42,repository:{full_name:'owner/data'},head_repository:{full_name:'owner/data'},
+    path:'.github/workflows/erp5-continuous-audit.yml',head_branch:'main',head_sha:'exact',status:'completed',conclusion:'success'};
+  const judge = value => spawnSync('jq', ['-e','--arg','repo','owner/data','--arg','sha','exact','--argjson','id','42',predicate],
+    {input:JSON.stringify(value),encoding:'utf8'});
+  assert.equal(judge(accepted).status,0);
+  for (const changed of [{id:43},{repository:{full_name:'other/data'}},{head_repository:{full_name:'fork/data'}},
+    {path:'.github/workflows/other.yml'},{head_branch:'other'},{head_sha:'old'},
+    {status:'in_progress'},{conclusion:'failure'},{conclusion:'skipped'}]) assert.notEqual(judge({...accepted,...changed}).status,0);
+  const latestPredicate = workflow.match(/--argjson id "\$TRIGGER_AUDIT_RUN_ID" '([^']+)' <<<"\$latest"/)[1];
+  const latest = rows => {
+    const sorted = spawnSync('jq',['-s','sort_by(.completed_at) | last // {}'],{input:rows.map(x=>JSON.stringify(x)).join('\n'),encoding:'utf8'});
+    assert.equal(sorted.status,0);
+    return spawnSync('jq',['-e','--argjson','id','42',latestPredicate],{input:sorted.stdout,encoding:'utf8'}).status;
+  };
+  const guard={auditRunId:42,conclusion:'success',completed_at:'2026-10-09T01:58:00Z'};
+  assert.equal(latest([guard]),0);
+  assert.notEqual(latest([]),0);
+  assert.notEqual(latest([guard,{auditRunId:43,conclusion:'failure',completed_at:'2026-10-09T01:59:00Z'}]),0);
+  assert.equal(latest([guard,{auditRunId:41,conclusion:'failure',completed_at:'2026-10-09T01:57:00Z'}]),0);
+  assert.match(workflow,/AUDIT_TRIGGER_SUPERSEDED_OR_GUARD_MISSING/);
+  assert.match(workflow,/\[ "\$age" -gt 10800 \]/);
+  assert.match(workflow,/\[ "\$age" -lt 0 \]/);
+  assert.match(workflow,/\[ "\$applied" -gt 0 \]/);
+  assert.match(workflow,/filter=all/);
+  assert.match(workflow,/group: freepass-data-production-delivery/);
+  assert.match(workflow,/cancel-in-progress: false/);
+  assert.match(workflow,/if \[ "\$DAILY" != 'on' \]/);
+  assert.match(workflow,/actions: read/);
+  assert.ok(!workflow.includes('actions: write'));
+});
