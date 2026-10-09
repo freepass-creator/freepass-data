@@ -129,7 +129,7 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
     },
     holdReasons: [
       '2026-10-09T08:42:24.364Z: dedicated freepass-data-admin runtime authenticated freepass-admin-catalog catalog-compat with 200; Canonical catalog returned NO_ACTIVE_RELEASE 503',
-      'Admin main dd065349 has compatibility transport and Canonical switchboard; deployed application read mode and revision-scoped intake/policy parity remain unverified'
+      '2026-10-09: Admin Production environment command resolved OBSERVE with transport configuration present; code selects the legacy-shape bridge, while deployed revision and intake/policy parity remain unverified'
     ]
   },
   {
@@ -177,6 +177,7 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
     },
     holdReasons: [
       '2026-10-09: Estimate main 1925dd4a includes apps/new/api/freepass-data-master.js and the authoritative request consumer; code presence is verified, deployed consumer contract readiness is not',
+      '2026-10-09: existing apps/new Vercel link resolves freepass-estimator prj_udO3Y62bU2dFLQqy3Tfc2Tj4dgDd; Production environment command observed master URL and token absent, so code presence is not transport adoption',
       '2026-10-09: dedicated freepass-data-estimate-writer runtime authenticated freepass-estimate estimate-newcar-master and returned NO_ACTIVE_RELEASE 503; ACTIVE readback and cutover remain HOLD',
       'quote calculation and provider ownership must remain in Estimate'
     ]
