@@ -232,7 +232,8 @@ export async function processKakaoQueueInput(input: KakaoQueueInput,
   options: { apply: boolean; approval: string | undefined; now: string }): Promise<KakaoQueueReceipt> {
   const inputDigest = stableDigest(input);
   const receipt = (status: KakaoQueueReceipt['status'], issues: string[]): KakaoQueueReceipt =>
-    ({ inputDigest, status, deleteAllowed: status === 'ACK_ELIGIBLE', issues });
+    ({ inputDigest, status, deleteAllowed: status === 'ACK_ELIGIBLE', issues,
+      ...(ports.drive.getWarnings ? { warnings: ports.drive.getWarnings() } : {}) });
   try {
     const prepared = prepareKakaoBundle(input.bundle);
     if (!options.apply) { planKakaoIntake(input.bundle, input.products); return receipt('DRY_RUN', []); }

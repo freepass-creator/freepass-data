@@ -8,6 +8,8 @@ This does not add a second CatalogStore, publication writer or scheduler.
 
 ### 실제 연결 — 2026-10-09
 
+P1 수정 검증(2026-10-09, HEAD `8508e9f` 기반 미커밋): RP023 실제 문서 차단, 중복 폴더 결정적 선택·재시작 수렴·경고 요약 회귀 시험을 추가했다. `npm.cmd run check` 실행: 카카오 live ports 23/23, source intake 38/38 PASS; 전체 Vitest 1,805 PASS / 9 FAIL / 14 SKIP(4개 파일 실패), exit 1. 실패는 iancar-source-capture/read-pilot/runtime-policy의 하위 실행 환경 및 jq, vehicle-finder-route의 localhost ECONNREFUSED를 포함한다. 전체 check PASS 아님. 네트워크 제한으로 연결 재시도 중지(BLOCKED_NETWORK). 원문 로그 `.kakao-p1-check.log`. 커밋·푸시·운영 실행 없음. next_start_here: 호출 세션에서 환경 제한과 실패 9건을 확인하고 전체 check 재검증.
+
 **CODED / OFFLINE TESTED, 운영 실측 HOLD.** 기준 `503aee8aff28c52a0d55f39d23cc753d15e328ed`, `work/freepass-data/kakao-live-ports-20261009`. 사용자 제공 main/Issue #24/겹치는 PR 확인을 사용했다. Academy READY `2026-10-09T13:26:04.539Z`, reuse COMPOSE_OR_EXTEND. **CREATE_NEW_JUSTIFIED**: 기존 SourceStore·사건 선점·카카오 CLI·사진 계획과 이안카 typed backup codec을 재사용한다. 기존 포트에는 Drive REST transport/사용자 ADC 조합/일반 카톡 사진 CAS 구현이 없어 `kakao-drive-archive.ts`, `kakao-live-ports.ts`, 가짜 transport 시험만 추가했다. 새 DB·예약 작업·서비스·공유 권한은 만들지 않았다.
 
 아래 결정이 이 절의 과거 domain reader 허용, Actions 실행 초안, live ports 미구현 안내를 대체한다. 실행자는 **카톡 비공개 대기열이 있는 Windows PC의 예약 작업**, 인증자는 **pyh@teamjpk.com 사용자 ADC**다. 기존 gws 사용자 인증과 gcloud ADC는 별개 토큰 저장소이므로 gws 성공만으로 ADC 접근을 판단하지 않는다. 서비스 계정 키·폴더 공유·공개 링크 없음. 예약 작업은 해당 Windows 사용자로 실행하고 중복 인스턴스를 시작하지 않도록 설정해야 한다. 이번 작업은 예약을 등록/활성화하지 않았다.
@@ -24,9 +26,10 @@ This does not add a second CatalogStore, publication writer or scheduler.
 | `FREEPASS_KAKAO_PHOTO_APPLY` | 사진 writer 전용 별도 `approved` gate. 원문 보관 승인으로 설정하지 않는다. |
 | `FREEPASS_KAKAO_PHOTO_BACKUP_DIR` | 사진 쓰기 시 필수 절대 경로. 저장소 밖의 사용자 전용 비공개 디렉터리. Windows ACL은 운영에서 확인한다. |
 
-`KakaoDriveArchive`는 Drive v3 REST의 files.get/list/create, permissions.list, alt=media만 사용한다. ADC가 UserRefreshClient인지와 Drive about의 실제 사용자 이메일을 확인한다. 목적지와 루트 위 모든 부모를 읽어 **같은 사용자 소유자 정확히 1명 외 권한이 하나라도 있으면 거부**한다. 조직 내부 reader도 거부하며 공유 드라이브도 허용하지 않는다. 목록·권한 pagination을 끝까지 읽고 incompleteSearch/중복 이름/미확인 권한을 거부한다. inspectDestination은 쓰기 0, upload에서 부모별 검색 후 폴더를 생성하고 다시 검색한다. 같은 포트 인스턴스의 동시 upload는 직렬화한다. 서로 다른 PC/프로세스의 folder create는 Drive의 원자적 이름 유일성이 없어 보장하지 못하므로 **운영 실행자는 한 PC·한 인스턴스로 한정**하고 불확실한 폴더 생성 이후에는 신규 사건도 중지하고 대사한다.
+`KakaoDriveArchive`는 Drive v3 REST의 files.get/list/create, permissions.list, alt=media만 사용한다. ADC가 UserRefreshClient인지와 Drive about의 실제 사용자 이메일을 확인한다. 목적지와 루트 위 모든 부모를 읽어 **같은 사용자 소유자 정확히 1명 외 권한이 하나라도 있으면 거부**한다. 조직 내부 reader도 거부하며 공유 드라이브도 허용하지 않는다. 목록·권한 pagination을 끝까지 읽고 incompleteSearch/미확인 권한을 거부한다. inspectDestination은 쓰기 0, upload에서 부모별 검색 후 폴더를 생성하고 다시 검색한다. 같은 포트 인스턴스의 동시 upload는 직렬화한다. 서로 다른 인스턴스의 동시 생성으로 폴더가 중복될 수 있으므로, 같은 부모·같은 이름·폴더 MIME 검색 결과에서 `createdTime`이 가장 이른 폴더(동률이면 ID 사전순)를 항상 선택한다. 생성 성공 뒤에도 재검색하여 같은 규칙으로 수렴한다. 중복 발견 시 결과 요약 `warnings`에 `DRIVE_DUPLICATE_FOLDER`를 남기고 삭제·이동하지 않는다. 폴더 생성 응답 유실은 같은 실행에서 재생성하지 않으며, 재시작 뒤 재검색이 0건일 때만 생성한다. 파일 `find`는 선택 폴더에 한정하지 않고 `appProperties(eventId·sha256)`로 검색한 뒤 실제 루트 아래 경로·바이트·권한을 검증하므로 비선택 중복 폴더의 기존 파일도 재사용한다. 폴더 선택은 파일 동시 업로드의 원자적 잠금이 아니며 동일 사건의 동시 처리는 기존 SourceStore 사건 선점이 담당한다.
+- 알려진 한계(재검토 Codex 지적, Claude 판정 2026-10-09): 폴더 생성 응답이 끊긴 사건은 `UNKNOWN`으로 남고, 재시작해도 선점을 다시 얻지 못해 자동으로 업로드하지 않는다. 설계상 «응답 유실 = 재조회·수동 대사 뒤 재개»이므로 안전 정지(중복 업로드·원문 유실 없음)다. 운영에서 `UNKNOWN` 사건이 쌓이면 상황실 알림 대상이며, 폴더 준비 실패와 파일 전송 불확실을 영속 상태로 나눠 자동 재개하는 것은 후속 과제다.
 
-파일은 eventId·sha256 appProperties로 검색하고 multipart 원본 업로드 후 새 다운로드 바이트 SHA256·경로·속성·권한을 대조한다. POST 자동 재시도 없음. 응답 유실·5xx·본문 유실은 `DRIVE_RESPONSE_UNKNOWN`이며 기존 수집기가 UNKNOWN 영수증을 남긴다. 최초 사건 선점이 재업로드를 차단한다. 같은 프로세스의 불확실한 폴더/파일 POST에도 fence가 남는다. 재시작은 검색·검증만으로 대사하고, 누락을 재업로드 승인으로 해석하지 않는다. `find`도 원본 다운로드/검증을 하므로 비용이 들며 성공 목록만 믿지 않는다.
+파일은 eventId·sha256 appProperties로 검색하고 multipart 원본 업로드 후 새 다운로드 바이트 SHA256·경로·속성·권한을 대조한다. POST 자동 재시도 없음. 응답 유실·5xx·본문 유실은 `DRIVE_RESPONSE_UNKNOWN`이며 기존 수집기가 UNKNOWN 영수증을 남긴다. 최초 사건 선점이 재업로드를 차단한다. 같은 프로세스의 불확실한 폴더/파일 POST에도 fence가 남는다. 파일 응답 유실의 재시작은 검색·검증으로 대사하고, 누락을 재업로드 승인으로 해석하지 않는다. 폴더 응답 유실의 재시작은 위 재검색 규칙을 따른다. `find`도 원본 다운로드/검증을 하므로 비용이 들며 성공 목록만 믿지 않는다.
 
 Source는 기존 `FirestoreSourceStore` 그대로다. `KakaoProductReader`는 `products`의 공급사 전체 목록과 지정 문서를 읽고, 수집기는 입력 JSON snapshot 대신 그 최신 목록으로 대조한다. 공급사별 차량 ID 칸은 추정하지 않으므로 내장 reader의 ID-only 매칭은 HOLD, 원문 차량번호 매칭은 가능하다. 공급사 ID 전용 매칭을 켜려면 기존 칸의 검증된 mapping을 가진 reader를 호환 모듈로 주입해야 한다.
 
@@ -51,7 +54,7 @@ Source는 기존 `FirestoreSourceStore` 그대로다. `KakaoProductReader`는 `p
 | RP012 | 없음 — 사진은 `image_urls`·`tica_link` | 없음 | 같은 파일 `:257-258,327,532-533`, `lib/domain/photo-atom.ts:24-33` |
 | RP023 시트 적재 | **있음(조건부)** — 상태 전용 회차가 아니고 계약 잠금이 없으며 원천 사진 링크가 비어 있지 않으면 기존 값을 덮어씀 | 없음 | `lib/domain/sheet-autoplus.ts:60-79`, `scripts/ingest-reborncar-to-firestore.mts:114-116` |
 
-판정: RP023 외 공급사는 Data가 쓴 `photo_link`가 다음 매시 회차에 남는다. RP023은 원천 시트에 사진 링크가 생기면 덮어써지므로 카톡 사진 쓰기를 보류한다(이미 `KakaoPhotoWriter` HOLD). `mirror-to-firestore.mts:56`의 CARRY는 이 오케스트레이터 경로가 아니다. 고정 엔진이 바뀌면 이 표를 다시 확인한다.
+판정: RP023 외 공급사는 Data가 쓴 `photo_link`가 다음 매시 회차에 남는다. RP023은 원천 시트에 사진 링크가 생기면 덮어써지므로 카톡 사진 쓰기를 보류한다. **RP023 보류는 코드에서 강제**: 실제 상품 문서의 `provider_company_code` 또는 `partner_code`가 RP023이면 계획의 holds가 비어 있어도 dry-run/apply 모두 `PHOTO_SUPPLIER_OVERWRITE_HOLD`로 거부한다. `mirror-to-firestore.mts:56`의 CARRY는 이 오케스트레이터 경로가 아니다. 고정 엔진이 바뀌면 이 표를 다시 확인한다.
 
 이것은 현재 운영 writer 배타성이나 표시 성공 증명이 아니다. RP023의 빈칸 판단은 읽기 후 쓰기까지 CAS가 없어 **동시 실행 중 이미 읽어 둔 빈 값으로 뒤늦게 덮는 경합**이 가능하다. 운영 사진 적용 전 매시 회차와 겹치지 않는 창 및 현행 pin/다른 writer를 확인해야 하며, 보장 불가면 사진 적용 HOLD다. image_urls는 매시 사진 writer의 칸이므로 대체 저장 칸으로 쓰지 않는다. 향후 photo_link 덮어쓰기 엔진으로 바뀌면 직접 writer를 중지하고 기존 `raw_records`(VEHICLE_PHOTO 원문 귀속) + `source_event_receipts.archiveRefs`(검증된 Drive 증거)를 Data reader가 조합해 ERP에 제공하는 안을 우선 검토한다. 전용 이안카 보존 칸 재사용이나 새 photos 컬렉션 생성은 하지 않는다. 비공개 Drive 사진의 ERP 접근은 계속 `ERP_PRIVATE_MEDIA_DISPLAY_UNVERIFIED`다.
 

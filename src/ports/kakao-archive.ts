@@ -11,6 +11,8 @@ export type DriveArchiveFile = {
     domain?: string; emailAddress?: string; allowFileDiscovery?: boolean }>;
 };
 export interface KakaoDriveArchivePort {
+  /** Non-fatal diagnostics accumulated during this port instance. */
+  getWarnings?(): string[];
   /** Check destination and inherited ACLs before transmitting any source bytes. */
   inspectDestination(directory: string): Promise<Pick<DriveArchiveFile, 'permissions' | 'permissionsComplete' | 'ancestorPermissionsChecked'>>;
   find(properties: DriveArchiveRequest['appProperties']): Promise<DriveArchiveFile[]>;
@@ -40,7 +42,7 @@ export interface KakaoProductReadPort {
 
 export type KakaoQueueReceipt = {
   inputDigest: string; status: 'DRY_RUN' | 'ACK_ELIGIBLE' | 'HOLD' | 'UNKNOWN';
-  deleteAllowed: boolean; issues: string[];
+  deleteAllowed: boolean; issues: string[]; warnings?: string[];
 };
 /** No delete/send operation: AI-OPS owns cleanup after authenticated, digest-bound acknowledgement. */
 export interface KakaoQueueReadPort<T> {

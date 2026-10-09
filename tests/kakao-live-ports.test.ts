@@ -20,7 +20,7 @@ function fakeDrive() {
   const entries = new Map<string, any>();
   const permissions = new Map<string, any[]>();
   const add = (id: string, name: string, parents: string[], mimeType = FOLDER, appProperties?: unknown) => {
-    entries.set(id, { id, name, parents, mimeType, trashed: false, owners: [{ emailAddress: owner.emailAddress }], appProperties });
+    entries.set(id, { createdTime: '2026-10-09T00:00:00Z', id, name, parents, mimeType, trashed: false, owners: [{ emailAddress: owner.emailAddress }], appProperties });
   };
   add('synthetic-root', 'root', ['synthetic-my-drive']);
   add('synthetic-my-drive', 'My Drive', []);
@@ -47,11 +47,15 @@ function fakeDrive() {
     if (url.pathname === '/drive/v3/files') {
       const q = url.searchParams.get('q')!;
       let files = [...entries.values()];
-      if (q.includes('appProperties')) files = files.filter(f => f.appProperties?.eventId === eventId && f.appProperties?.sha256 === sha256);
+      if (q.includes('appProperties')) {
+        const requestedEvent = /key='eventId' and value='([^']+)'/.exec(q)![1];
+        const requestedHash = /key='sha256' and value='([^']+)'/.exec(q)![1];
+        files = files.filter(f => f.appProperties?.eventId === requestedEvent && f.appProperties?.sha256 === requestedHash);
+      }
       else {
         const parent = /'([^']+)' in parents/.exec(q)![1];
         const name = /name = '([^']+)'/.exec(q)![1];
-        files = files.filter(f => f.parents.includes(parent) && f.name === name);
+        files = files.filter(f => f.parents.includes(parent) && f.name === name && f.mimeType === FOLDER);
       }
       return json({ files, incompleteSearch: false });
     }
@@ -96,11 +100,77 @@ describe('Kakao Drive REST (no network)', () => {
     f.entries.get('synthetic-root').owners = [{ emailAddress: 'other@teamjpk.com' }];
     await expect(f.port.inspectDestination(directory)).rejects.toThrow('DRIVE_PRIVATE_ACCESS_REQUIRED');
   });
-  it('existing duplicate folders are a conflict, never arbitrarily selected', async () => {
+  it('selects oldest folder, then lexical ID, regardless of list order; ignores non-folders', async () => {
     const f = fakeDrive();
-    f.add('duplicate-a', 'FAKE', ['synthetic-root']); f.add('duplicate-b', 'FAKE', ['synthetic-root']);
-    await expect(f.port.upload(request)).rejects.toThrow('DRIVE_ARCHIVE_CONFLICT');
-    expect(f.counts().creates).toBe(0);
+    f.add('duplicate-b', 'FAKE', ['synthetic-root']); f.add('duplicate-a', 'FAKE', ['synthetic-root']);
+    f.add('older', 'FAKE', ['synthetic-root']);
+    f.entries.get('older').createdTime = '2026-10-08T00:00:00Z';
+    f.add('not-folder', 'FAKE', ['synthetic-root'], 'text/plain');
+    await f.port.upload(request);
+    expect(f.entries.get('folder-1').parents).toEqual(['older']);
+    expect(f.port.getWarnings()).toEqual(['DRIVE_DUPLICATE_FOLDER']);
+    f.entries.get('older').createdTime = '2026-10-09T00:00:00Z';
+    // The existing file remains discoverable in the now non-selected folder.
+    const restarted = new KakaoDriveArchive('synthetic-root', async () => 'token', f.transport);
+    expect(await restarted.upload(request)).toEqual({ id: 'file-1' });
+    expect(f.counts()).toEqual({ creates: 2, uploads: 1 });
+    f.entries.delete('file-1');
+    await restarted.upload(request);
+    expect(f.entries.get('folder-3').parents).toEqual(['duplicate-a']);
+  });
+  it.each([false, true])('restarts after lost folder reply, persisted=%s', async persisted => {
+    const f = fakeDrive();
+    let lost = true;
+    const transport: typeof fetch = async (input, init) => {
+      if (lost && init?.method === 'POST') {
+        lost = false;
+        if (persisted) await f.transport(input, init);
+        throw new Error('lost reply');
+      }
+      return f.transport(input, init);
+    };
+    const first = new KakaoDriveArchive('synthetic-root', async () => 'token', transport);
+    await expect(first.upload(request)).rejects.toThrow('DRIVE_RESPONSE_UNKNOWN');
+    if (!persisted) {
+      await expect(first.upload(request)).rejects.toThrow('DRIVE_RESPONSE_UNKNOWN');
+      expect(f.counts().creates).toBe(0);
+    }
+    const restarted = new KakaoDriveArchive('synthetic-root', async () => 'token', transport);
+    await restarted.upload(request);
+    expect(f.counts()).toEqual({ creates: 3, uploads: 1 });
+  });
+  it('two instances concurrently create a folder and converge without deleting or moving it', async () => {
+    const f = fakeDrive();
+    let arrivals = 0;
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const transport: typeof fetch = async (input, init) => {
+      const response = await f.transport(input, init);
+      if (init?.method === 'POST' && String(init.body).includes('"name":"FAKE"')) {
+        if (++arrivals === 2) release();
+        await barrier;
+      }
+      return response;
+    };
+    const second = new KakaoDriveArchive('synthetic-root', async () => 'token', transport);
+    const first = new KakaoDriveArchive('synthetic-root', async () => 'token', transport);
+    // Different events: event claiming belongs to SourceStore, not the Drive folder resolver.
+    const otherEvent = 'b'.repeat(64);
+    await Promise.all([first.upload(request), second.upload({ ...request,
+      directory: directory.replace(eventId, otherEvent), appProperties: { eventId: otherEvent, sha256 } })]);
+    const suppliers = [...f.entries.values()].filter(e => e.name === 'FAKE');
+    expect(suppliers).toHaveLength(2);
+    const months = [...f.entries.values()].filter(e => e.name === '2026-10');
+    expect(months.every(e => e.parents[0] === 'folder-1')).toBe(true);
+    expect(first.getWarnings()).toContain('DRIVE_DUPLICATE_FOLDER');
+    expect(second.getWarnings()).toContain('DRIVE_DUPLICATE_FOLDER');
+    const canonicalMonth = months.map(e => e.id).sort()[0];
+    expect([...f.entries.values()].filter(e => [eventId, otherEvent].includes(e.name))
+      .every(e => e.parents[0] === canonicalMonth)).toBe(true);
+    expect(await first.find(request.appProperties)).toHaveLength(1);
+    const before = f.counts();
+    await second.upload(request);
+    expect(f.counts()).toEqual(before);
   });
   it('does not hide a permission on a later page', async () => {
     const f = fakeDrive();
@@ -131,8 +201,8 @@ describe('Kakao Drive REST (no network)', () => {
   });
 });
 
-function fakeProduct() {
-  let data: Record<string, unknown> = { provider_company_code: 'FAKE', photo_link: '', unchanged: 'keep' };
+function fakeProduct(supplier: Record<string, unknown> = {}) {
+  let data: Record<string, unknown> = { provider_company_code: 'FAKE', photo_link: '', unchanged: 'keep', ...supplier };
   let revision = 1, corruptRead = false, conflict = false, writes = 0;
   const ref = { path: 'products/synthetic-product', get: async () => snapshot() };
   const snapshot = () => ({ id: 'synthetic-product', exists: true, ref, updateTime: new Timestamp(revision, 0),
@@ -147,6 +217,14 @@ function fakeProduct() {
   return { db, plan, conflict: () => { conflict = true; }, corrupt: () => { corruptRead = true; }, writes: () => writes };
 }
 describe('Kakao product read and isolated photo writer', () => {
+  it.each(['provider_company_code', 'partner_code'])('blocks actual RP023 %s even with empty plan holds', async field => {
+    const f = fakeProduct({ [field]: 'RP023' });
+    const writer = new KakaoPhotoWriter(f.db, tmpdir(), 'approved');
+    expect(f.plan.holds).toEqual([]);
+    await expect(writer.dryRun(f.plan)).rejects.toThrow('PHOTO_SUPPLIER_OVERWRITE_HOLD');
+    await expect(writer.apply(f.plan, { planDigest: 'forged' })).rejects.toThrow('PHOTO_SUPPLIER_OVERWRITE_HOLD');
+    expect(f.writes()).toBe(0);
+  });
   it('reads supplier products and a document without writes', async () => {
     const f = fakeProduct(); const reader = new KakaoProductReader(f.db);
     expect(await reader.readSupplier('FAKE')).toHaveLength(1);

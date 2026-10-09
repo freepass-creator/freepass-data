@@ -51,6 +51,14 @@ function setup(store = new MemorySourceStore()) {
 }
 
 describe('Kakao queue, sheet plan and observed source tendencies', () => {
+  it('includes duplicate-folder warnings in the queue result without turning them into holds', async () => {
+    const { ports } = setup();
+    const drive = Object.assign(ports.drive, { getWarnings: () => ['DRIVE_DUPLICATE_FOLDER'] });
+    const result = await processKakaoQueueInput({ bundle: bundle() }, { ...ports, drive },
+      { apply: true, approval: 'approved', now: now() });
+    expect(result.status).toBe('ACK_ELIGIBLE');
+    expect(result.warnings).toEqual(['DRIVE_DUPLICATE_FOLDER']);
+  });
   const sheetInput = () => {
     const spec = JSON.parse(readFileSync('contracts/supplier-input-sheet-spec.v1.json', 'utf8'));
     const headers = spec.inputHeaders as string[];

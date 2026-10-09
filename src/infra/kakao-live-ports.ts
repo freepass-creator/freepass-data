@@ -11,6 +11,9 @@ import { encodeIancarBackupValue } from './iancar-publication-withdrawal-firesto
 import { stableDigest } from '../shared/stable-digest.js';
 import type { KakaoPhotoPlan, KakaoPhotoWriterPort, KakaoProductSnapshot } from '../ports/kakao-archive.js';
 
+// NATIVE-SOURCE-COLLECTOR.md 매시 회차 덮어쓰기 조사: engine fb35bfb6,
+// sheet-autoplus.ts:60-79 / ingest-reborncar-to-firestore.mts:114-116 overwrite photo_link.
+const PHOTO_OVERWRITE_SUPPLIER = 'RP023';
 const PRODUCTS = FIRESTORE_COLLECTIONS.legacyAdminWorkflow.products;
 function productId(id: string) {
   if (!id || /[/\u0000-\u001f\u007f]/.test(id)) throw new Error('KAKAO_PRODUCT_ID_INVALID');
@@ -48,6 +51,8 @@ export class KakaoPhotoWriter implements KakaoPhotoWriterPort {
     this.validate(plan);
     const snapshot = await this.db.collection(PRODUCTS).doc(plan.productId).get();
     const data = snapshot.data();
+    if (data?.provider_company_code === PHOTO_OVERWRITE_SUPPLIER || data?.partner_code === PHOTO_OVERWRITE_SUPPLIER)
+      throw new Error('PHOTO_SUPPLIER_OVERWRITE_HOLD');
     if (!snapshot.exists || !snapshot.updateTime || !data || stableDigest(data) !== plan.expectedDigest
       || (data.photo_link ?? null) !== plan.before || (data.photo_link != null && data.photo_link !== ''))
       throw new Error('PHOTO_CAS_CONFLICT');

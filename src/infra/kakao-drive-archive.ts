@@ -4,10 +4,10 @@ import type { DriveArchiveFile, DriveArchiveRequest, KakaoDriveArchivePort } fro
 const API = 'https://www.googleapis.com/drive/v3';
 const FOLDER = 'application/vnd.google-apps.folder';
 const OWNER = 'pyh@teamjpk.com';
-type Metadata = { id: string; name: string; mimeType: string; parents?: string[]; trashed?: boolean;
+type Metadata = { createdTime?: string; id: string; name: string; mimeType: string; parents?: string[]; trashed?: boolean;
   driveId?: string; owners?: { emailAddress?: string }[]; appProperties?: Record<string, string> };
 type Permission = DriveArchiveFile['permissions'][number];
-const fields = 'id,name,mimeType,parents,trashed,driveId,owners(emailAddress),appProperties';
+const fields = 'createdTime,id,name,mimeType,parents,trashed,driveId,owners(emailAddress),appProperties';
 const quote = (value: string) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
@@ -15,6 +15,8 @@ const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('h
 export class KakaoDriveArchive implements KakaoDriveArchivePort {
   private serial: Promise<unknown> = Promise.resolve();
   private uncertain = new Set<string>();
+  private warnings = new Set<string>();
+  getWarnings(): string[] { return [...this.warnings]; }
   constructor(private readonly rootId: string, private readonly token: () => Promise<string>,
     private readonly transport: typeof fetch = fetch) {
     if (!/^[\w-]+$/.test(rootId)) throw new Error('KAKAO_DRIVE_ROOT_REQUIRED');
@@ -90,9 +92,12 @@ export class KakaoDriveArchive implements KakaoDriveArchivePort {
     return match.slice(1);
   }
   private async child(parent: string, name: string) {
-    const matches = await this.list(`${quote(parent)} in parents and name = ${quote(name)}`);
-    if (matches.length > 1 || matches.some(m => m.mimeType !== FOLDER)) throw new Error('DRIVE_ARCHIVE_CONFLICT');
-    return matches[0];
+    const matches = await this.list(`${quote(parent)} in parents and name = ${quote(name)} and mimeType = ${quote(FOLDER)}`);
+    if (matches.length > 1) this.warnings.add('DRIVE_DUPLICATE_FOLDER');
+    if (matches.some(m => !m.createdTime || !Number.isFinite(Date.parse(m.createdTime))))
+      throw new Error('DRIVE_SEARCH_INCOMPLETE');
+    return matches.sort((a, b) => Date.parse(a.createdTime!) - Date.parse(b.createdTime!)
+      || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
   }
   async inspectDestination(directory: string) {
     const segments = this.segments(directory);
@@ -148,7 +153,8 @@ export class KakaoDriveArchive implements KakaoDriveArchivePort {
         });
         if (!child.id) throw new Error('DRIVE_RESPONSE_UNKNOWN');
         const resolved = await this.child(parent, name);
-        if (resolved?.id !== child.id) throw new Error('DRIVE_ARCHIVE_CONFLICT');
+        if (!resolved) throw new Error('DRIVE_RESPONSE_UNKNOWN');
+        child = resolved;
         this.uncertain.delete(key);
       }
       parent = child.id;
