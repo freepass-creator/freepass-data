@@ -15,6 +15,13 @@ describe('read-only media evidence', () => {
     const r = compareVehicleMediaConsumerEvidence({ productId: 'fixture-product', product, consumerProductId: 'other', consumer: { car_number: '99나9999', image_url: 'https://drive.example/cache', ext_color: '검정' }, consumerSnapshotRef: '', observedAt: 'invalid', requiresGallery: true });
     expect(r.issues).toEqual(expect.arrayContaining(['CONSUMER_VEHICLE_IDENTITY_MISMATCH', 'CONSUMER_SNAPSHOT_EVIDENCE_MISSING', 'REPRESENTATIVE_DIFFERENT_EVIDENCE', 'CONSUMER_COLOR_MISMATCH']));
   });
+  it('identifies an existing link-bound cache without approving its unverified contents', () => {
+    const folder = 'https://drive.example/folder';
+    const r = compareVehicleMediaConsumerEvidence({ productId: 'fixture-product', product: { car_number: product.car_number, ext_color: product.ext_color, photo_link: folder, photo_cache: { src: folder, urls: product.image_urls } }, consumerProductId: 'fixture-product', consumer: product, consumerSnapshotRef: 'fixture:detail/1', observedAt: base.now, requiresGallery: true });
+    expect(r.outputEvidence).toBe('EXISTING_LINK_BOUND_CACHE');
+    expect(r.verdict).toBe('HOLD');
+    expect(r.issues).toContain('REPRESENTATIVE_DIFFERENT_EVIDENCE');
+  });
   it('limits successful HEAD and source matching to the evidence actually checked', async () => {
     const r = await inspectVehicleMediaEvidence(base);
     expect(r.verdict).toBe('HEAD_AND_SOURCE_FIELDS_MATCHED');

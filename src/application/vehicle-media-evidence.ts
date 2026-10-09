@@ -29,6 +29,15 @@ export function compareVehicleMediaConsumerEvidence(input: {
   if (!input.consumerSnapshotRef.trim() || !Number.isFinite(Date.parse(input.observedAt))) issues.push('CONSUMER_SNAPSHOT_EVIDENCE_MISSING');
   const original = resolveReferenceVehiclePhotos(input.product);
   const output = resolveReferenceVehiclePhotos(input.consumer);
+  const cache = input.product.photo_cache;
+  const cacheRecord = cache && typeof cache === 'object' && !Array.isArray(cache)
+    ? cache as RecordValue : null;
+  const cachePhotos = resolveReferenceVehiclePhotos({ image_urls: cacheRecord?.urls });
+  const cacheBoundToLink = typeof input.product.photo_link === 'string' && !!input.product.photo_link.trim()
+    && cacheRecord?.src === input.product.photo_link;
+  const cacheMatchesOutput = original.imageUrls.length === 0 && cacheBoundToLink
+    && cachePhotos.imageUrls.length > 0 && cachePhotos.rejectedCount === 0
+    && JSON.stringify(cachePhotos.imageUrls) === JSON.stringify(output.imageUrls);
   if (original.representativeUrl !== output.representativeUrl) issues.push('REPRESENTATIVE_DIFFERENT_EVIDENCE');
   const color = (value: unknown) => typeof value === 'string' && value.trim() ? value : null;
   if (color(input.product.ext_color) !== color(input.consumer.ext_color)) issues.push('CONSUMER_COLOR_MISMATCH');
@@ -41,6 +50,9 @@ export function compareVehicleMediaConsumerEvidence(input: {
     verdict: issues.length ? 'HOLD' as const : 'SPECIFIED_CONSUMER_FIELDS_MATCHED' as const,
     issues,
     galleryState: galleryExposed ? 'COMPARED' as const : 'NOT_EXPOSED' as const,
+    // Describe existing consumer behavior; cache/link agreement does not certify its contents.
+    outputEvidence: cacheMatchesOutput ? 'EXISTING_LINK_BOUND_CACHE' as const
+      : original.imageUrls.length ? 'DIRECT_URL_COMPARISON' as const : 'NO_DIRECT_URL_EVIDENCE' as const,
     visualVehicleIdentity: 'NOT_CHECKED' as const,
   };
 }
