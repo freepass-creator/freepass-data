@@ -538,3 +538,14 @@ read 배포 run37897561059/Admin run37897564010은 main2044416으로 성공했�
 실제 publisher 근거를 정산 담당 기존 실행 영수증에서 회수했다: ai-ops/state/정산-원본대조-20261006/접수복구-실행영수증.json의 partyNormalization.sheetAfter/sourceDigest와 ruleReceipt. 실행 대화01a11034-a593-7bd1-8062-57f889a30e3f의 2026-10-07T06:24:36.150Z 원본/06:25:48.401Z 요약발행 명령. 원본 요청 접수!A1:BT1000, valueRenderOption 생략(default FORMATTED_VALUE), majorDimension ROWS, SHA256 UTF8 JSON.stringify(values); 추가 padding/trim 없음. 반환range BT539는 요청범위와 구분한다. immutable 실행기 Git revision은 기록에 없어 확인되지 않았으며 새 pin을 만들지 않는다.
 
 2026-10-09T07:18:55.987Z 같은 조건 dry-read: 당시 영수증 values digest는 저장 sourceDigest와 정확일치; 현재 원본 digest는 불일치. 당시539행/현재1000행이며 raw 행렬 비교491행 차이(행 삭제/추가/수식패딩은 별도분류해야 하므로 491개 계약변경으로 확대하지 않는다). 과거 검증자의 UNFORMATTED/BT600 차이뿐인 false alarm이라고 결론내릴 수 없다. 원본, 사람입력, 원장, 요약 변경0. 비공개 dryrun 증거는 TEMP/f04-publisher-binding-dryrun.json. 후속은 동일row/sourceReceiptRow와 실제 source identity로 금액·부가세·신규행·빈패딩을 분류하고 before/after plan을 지휘 판단에 제출하며 apply하지 않는다.
+
+### 2026-10-09 운영 조회 복구 완료 기록
+
+- 승인: Data 지휘 직접 userMessage 01a11f7d-5691-7b80-84f2-f33486a7be72(그럼 다음 전체 작업 한번 가자)를 read_thread로 확인. 서비스 배포/조회만, 운영 금액 APPLY/대량 원장쓰기 권한은 제외.
+- 코드 main e0afae906566e61ace626c438cf416146c9026b8 / PR406. full check1698 PASS/14 emulatorSKIP, exacthead core/canonPASS. 독립 read-only CLI 검토 exit0/답변 중대지적없음(검토자가 실행한 test는 EPERM으로 실패하였으므로 PASS에 포함하지 않음). Claude 조직차단 UNAVAILABLE를 PASS로 세지 않았다.
+- 실제 재배포: read run37898833623 SUCCESS → freepass-data-read-00017-wk6, Admin run37898836852 SUCCESS → freepass-data-admin-00006-jbk. 양쪽 e0afae9 immutable image/READY/traffic100. 기존 runtime identity/IAM bindings 그대로, 기존 Admin write on/secret3 내용 그대로. rollback은 배포전 read00015-649/Admin00004-lwg revision으로 기존 traffic 복귀하며 금액원장을 복원하는 작업과 구분한다.
+- owner production read: CloudRun IAM token+기존 consumer token으로 Kakao 정산9월 v1/v2 월조회 HTTP200/count35/각schemaPASS, 같은 source.documentId 단건 v1/v2 HTTP200/count1/schemaPASS. v2 sourceFreshness UNVERIFIED 유지. 기존 Data 지휘가 월·단건 v1/v2와 rawEvidence존재를 독립 실제 재조회했다.
+- Kakao 기간상품기준 HTTP200/schemaPASS:485 reference products/485offers/3037terms. 월료·보증금state·청구state·지급state·policyContext 누락0, policy sales-commission-2026-10-09. 이것은 원천 reference 조회이며485대를 Canonical 저장/ACTIVE 전환했다고 주장하지 않는다. 미확정fee2223terms: vehicleValue1140, 신차subtype494,Q12basis270,noRule184,unsupportedterm94,Iancarshortbasis41. null/사유를 그대로 제공하며 확정액을 추정하지 않는다.
+- Admin 기존 workflow 원장조회 HTTP200/count35. 양쪽 서비스 무인증403. Admin 권한에 settlement-ledger-read를 새로 추가하지 않았고 운영 쓰기 요청0.
+- 정산 v2 월대사: 취소1제외34IDs와 기존 저장요약 IDs/공급가/VAT/총액 모두MATCH. 청구36582600+3658260=40240860,지급29322051+2932205=32254256. 원본 최신성 또는 상대방 확정/은행수금 검증으로 확대하지 않는다.
+- 원본 dryrun 후속: 같은 publisher binding의 현재 digest 불일치.7수치차이 중3개는 FORMATTED 표시정밀도(UNFORMATTED 재조회로 확인),4개 실제 source금액 검토(row441/431/461/413). 표시영역539→1000 확대461행에는 인식가능차번/날짜0이며 새계약461건으로 해석하지 않는다. plan은 source/humanWritten before를 private TEMP/f04-source-change-classified-plan.json에 보존; 실제 APPLY/재청구0.
