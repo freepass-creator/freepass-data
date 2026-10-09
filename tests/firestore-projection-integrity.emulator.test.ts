@@ -48,6 +48,7 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
       }
       await target.set(event);
       const before = await target.get();
+      expect(await store.claimNext({ ...input, expectedEventDigest: 'unapproved-event' })).toBeNull();
       expect(await store.claimNext({ ...input, expiresAt: now })).toBeNull();
       expect((await target.get()).updateTime).toEqual(before.updateTime);
       expect((await store.claimNext(input))?.eventId).toBe('target');
@@ -84,8 +85,10 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
       const otherBefore = await otherRef.get();
       const before = await store.captureFirstActivationPreimage(event.eventId);
       expect(await processOneOutboxEvent(memory, store, store, { workerId: 'approved', eventId: event.eventId,
-        expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(), requireFreshSources: true }, new Date(head.observedAt))).toBe('DONE');
-      const plan = await store.planFirstActivationRecovery(before);
+        expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(), requireFreshSources: true,
+        expectedEventDigest: stableDigest(before.event), expectedActiveReleaseId: null }, new Date(head.observedAt))).toBe('DONE');
+      await expect(store.planFirstActivationRecovery(before, 'unapproved')).rejects.toThrow('RECOVERY_PREIMAGE_INVALID');
+      const plan = await store.planFirstActivationRecovery(before, before.digest);
       expect(plan.restore.map(item => item.path)).toEqual([
         `${FIRESTORE_COLLECTIONS.projection.active}/erp-public`, eventRef.path,
         `${FIRESTORE_COLLECTIONS.projection.releases}/${plan.releaseId}` ]);
@@ -115,12 +118,16 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
       await expect(restore()).rejects.toThrow('RECOVERY_PLAN_DRIFT');
       expect((await eventRef.get()).updateTime).toEqual(driftedEvent.updateTime);
       expect(await store.getActive('erp-public')).not.toBeNull();
-      // Re-plan the exact newly observed after-image instead of bypassing update-time fences.
-      Object.assign(plan, await store.planFirstActivationRecovery(before));
+      await expect(store.planFirstActivationRecovery(before, before.digest)).rejects.toThrow('RECOVERY_RELEASE_FIELDS_CHANGED');
+      const contaminated = (await releaseRef.get()).data()!;
+      delete contaminated.recoveryDrift;
+      await releaseRef.set(contaminated);
+      Object.assign(plan, await store.planFirstActivationRecovery(before, before.digest));
       await restore();
       expect(await store.getActive('erp-public')).toBeNull();
       expect((await eventRef.get()).data()).toEqual(before.event);
       expect((await releaseRef.get()).get('status')).toBe('READY');
+      expect((await releaseRef.get()).data()).not.toHaveProperty('activatedAt');
       for (const fence of plan.preserve) {
         const doc = await db.doc(fence.path).get();
         expect(stableDigest(doc.data())).toBe(fence.digest);
@@ -129,8 +136,12 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
       }
       expect((await otherRef.get()).updateTime).toEqual(otherBefore.updateTime);
       expect(await processOneOutboxEvent(memory, store, store, { workerId: 'replay', eventId: event.eventId,
-        expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(), requireFreshSources: true }, new Date(head.observedAt))).toBe('HOLD');
-      expect((await eventRef.get()).get('status')).toBe('PROCESSING');
+        expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(), requireFreshSources: true }, new Date(head.observedAt))).toBe('IDLE');
+      const recovered = await eventRef.get();
+      expect(recovered.data()).toEqual(before.event);
+      expect(await store.claimNext({ workerId: 'loop', now: head.observedAt,
+        leaseUntil: new Date(Date.parse(head.observedAt) + 30000).toISOString() })).not.toMatchObject({ eventId: event.eventId });
+      expect((await eventRef.get()).updateTime).toEqual(recovered.updateTime);
       expect(await store.getActive('erp-public')).toBeNull();
     } finally { await deleteApp(app); }
   });

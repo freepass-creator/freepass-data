@@ -442,6 +442,8 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     if (guard?.receipt && this.deliveryReceipts.has(guard.receipt.eventId))
       throw new Error('Projection delivery receipt already exists');
     const previousId = this.active.get(release.projectionId);
+    if (guard?.expectedActiveReleaseId !== undefined && (previousId ?? null) !== guard.expectedActiveReleaseId)
+      throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
     const previous = previousId ? this.releases.get(previousId) : undefined;
     if (previous) previous.status = 'READY';
     release.status = 'ACTIVE';
@@ -519,7 +521,7 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     );
   }
 
-  async claimNext(input: { workerId: string; now: string; leaseUntil: string; eventId?: string; expiresAt?: string }) {
+  async claimNext(input: { workerId: string; now: string; leaseUntil: string; eventId?: string; expiresAt?: string; expectedEventDigest?: string }) {
     if (input.eventId !== undefined && !/^[A-Za-z0-9:_-]{1,200}$/.test(input.eventId)) return null;
     if (input.expiresAt && (!Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= Date.parse(input.now))) return null;
     if (!Number.isFinite(Date.parse(input.leaseUntil)) || Date.parse(input.leaseUntil) <= Date.parse(input.now)) return null;
@@ -529,6 +531,9 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
         (x.status === 'PENDING' || (x.status === 'PROCESSING' && Boolean(x.leaseUntil) && x.leaseUntil! <= input.now)) &&
         (!x.nextAttemptAt || x.nextAttemptAt <= input.now)
       )
+      .filter(x => !input.expectedEventDigest || stableDigest(x) === input.expectedEventDigest)
+      .filter(x => { const receipt = this.deliveryReceipts.get(x.eventId);
+        return !receipt || this.active.get(receipt.projectionId) === receipt.releaseId; })
       .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))[0];
     if (!item) return null;
     item.status = 'PROCESSING';

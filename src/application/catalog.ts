@@ -451,6 +451,7 @@ export async function buildErpPublicProjection(
   if (options.publishGuard && stableDigest(sources) !== stableDigest(options.publishGuard.sources))
     throw new Error('PROJECTION_SOURCE_CHANGED');
   const guard: ProjectionPublishGuard = { now: currentTime, sources,
+    ...(options.publishGuard?.expectedActiveReleaseId !== undefined ? { expectedActiveReleaseId: options.publishGuard.expectedActiveReleaseId } : {}),
     ...(options.publishGuard?.claim ? { claim: options.publishGuard.claim } : {}) };
   const deliveryGuard = (release: ProjectionRelease<ErpPublicProduct>): ProjectionPublishGuard => ({ ...guard,
     ...(options.publishGuard?.delivery ? { receipt: { ...options.publishGuard.delivery,
@@ -752,6 +753,8 @@ export async function buildErpPublicProjection(
   // Recheck before accepting an existing ACTIVE as delivery evidence.
   if (stableDigest(await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources)) !== stableDigest(sources))
     throw new Error('PROJECTION_SOURCE_CHANGED');
+  if (options.publishGuard?.expectedActiveReleaseId !== undefined && (currentActive?.releaseId ?? null) !== options.publishGuard.expectedActiveReleaseId)
+    throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
   if (
     options.activate !== false && currentActive &&
     currentActive.status === 'ACTIVE' &&
@@ -825,7 +828,7 @@ function backoffMs(base: number, attempts: number) {
 }
 export async function processOneOutboxEvent(
   catalog: CatalogStore, outbox: OutboxStore, projections: ProjectionStore,
-  options: {workerId: string; maxAttempts?: number; baseBackoffMs?: number; leaseMs?: number; requireFreshSources?: boolean; eventId?: string; expiresAt?: string}, now = new Date()
+  options: {workerId: string; maxAttempts?: number; baseBackoffMs?: number; leaseMs?: number; requireFreshSources?: boolean; eventId?: string; expiresAt?: string; expectedEventDigest?: string; expectedActiveReleaseId?: string | null}, now = new Date()
 ): Promise<'IDLE'|'DONE'|'RETRY'|'DEAD_LETTER'|'HOLD'> {
   if (options.eventId !== undefined && (!/^[A-Za-z0-9:_-]{1,200}$/.test(options.eventId) || !options.expiresAt)) return 'HOLD';
   const started = performance.now();
@@ -845,11 +848,12 @@ export async function processOneOutboxEvent(
   const claimTime = currentTime();
   const lease = { leaseOwner: options.workerId,
     leaseUntil: new Date(Date.parse(claimTime) + (options.leaseMs ?? 30000)).toISOString() };
-  const event = await outbox.claimNext({ workerId: options.workerId, now: claimTime, leaseUntil: lease.leaseUntil, ...(options.eventId ? { eventId: options.eventId } : {}), ...(options.expiresAt ? { expiresAt: options.expiresAt } : {}) });
+  const event = await outbox.claimNext({ workerId: options.workerId, now: claimTime, leaseUntil: lease.leaseUntil, ...(options.eventId ? { eventId: options.eventId } : {}), ...(options.expiresAt ? { expiresAt: options.expiresAt } : {}), ...(options.expectedEventDigest ? { expectedEventDigest: options.expectedEventDigest } : {}) });
   if (!event) return 'IDLE';
   const attempts = event.attempts + 1;
   try {
     const publishGuard: ProjectionPublishGuard = { now: currentTime,
+      ...(options.expectedActiveReleaseId !== undefined ? { expectedActiveReleaseId: options.expectedActiveReleaseId } : {}),
       sources: await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources),
       claim: { eventId: event.eventId, lease },
       delivery: { eventId: event.eventId, eventType: event.eventType,

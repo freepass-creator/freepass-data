@@ -89,6 +89,17 @@ describe('Projection release integrity verifier', () => {
     } finally { timer.mockRestore(); }
   });
 
+  it('rejects a first-activation scope if a competing ACTIVE is already present', async () => {
+    const { store, head } = await scheduledFixture();
+    const active = await buildErpPublicProjection(store, store, head.observedAt);
+    expect(await processOneOutboxEvent(store, store, store, { workerId: 'single', eventId: 'synthetic-event',
+      expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(), requireFreshSources: true,
+      expectedActiveReleaseId: null }, new Date(head.observedAt))).toBe('HOLD');
+    expect((await store.getActive('erp-public'))?.releaseId).toBe(active.releaseId);
+    expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
+    expect(store.outbox.get('synthetic-event')?.attempts).toBe(0);
+  });
+
   async function repriceFixture(store: MemoryDataStore, now: string) {
     await updateOfferPrice(store, { commandId: 'synthetic-reprice', idempotencyKey: 'synthetic-reprice',
       offerId: 'offer_gv70_demo', expectedRevision: 1, termKey: '36@20000',

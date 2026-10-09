@@ -138,6 +138,7 @@ export interface CatalogStore {
 }
 export type ProjectionPublishGuard = {
   now: () => string;
+  expectedActiveReleaseId?: string | null;
   sources: Array<{ sourceId: string; runId: string; digest: string; expiresAt: number }>;
   claim?: { eventId: string; lease: OutboxLease };
   delivery?: Pick<ProjectionDeliveryReceipt, 'eventId' | 'eventType' | 'targetRevision' | 'processedAt'>;
@@ -178,8 +179,14 @@ export interface SheetDeliveryEvidenceStore {
 }
 
 export type OutboxLease = { leaseOwner: string; leaseUntil: string };
+export type FirstActivationPreimage = {
+  schema: 'first-activation-preimage/v1'; eventId: string; event: OutboxEvent;
+  eventUpdateTime: string; active: null; receipt: null; publicationDocumentsAbsent: true; digest: string;
+};
+
 export interface OutboxStore {
-  claimNext(input: { workerId: string; now: string; leaseUntil: string; eventId?: string; expiresAt?: string }): Promise<OutboxEvent | null>;
+  captureFirstActivationPreimage?(eventId: string): Promise<FirstActivationPreimage>;
+  claimNext(input: { workerId: string; now: string; leaseUntil: string; eventId?: string; expiresAt?: string; expectedEventDigest?: string }): Promise<OutboxEvent | null>;
   markDone(eventId: string, lease: OutboxLease): Promise<void>;
   markRetry(input: { eventId: string; attempts: number; nextAttemptAt: string; error: string; lease: OutboxLease }): Promise<void>;
   moveToDeadLetter(input: { eventId: string; attempts: number; error: string; lease: OutboxLease }): Promise<void>;

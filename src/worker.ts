@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { stableDigest } from './shared/stable-digest.js';
 import { createRuntimeStores } from './bootstrap.js';
 import { buildErpPublicProjection, processOneOutboxEvent } from './application/catalog.js';
 import { MemoryDataStore } from './infra/memory-store.js';
@@ -35,19 +37,35 @@ if (prepare) {
   // The Firebase gRPC channel otherwise keeps a one-shot rehearsal alive.
   process.exit(0);
 } else if (single) {
+  let expectedEventDigest: string | undefined;
+  if (requireFreshSources && !(await stores.projections.getActive('erp-public'))) {
+    const path = process.env.FREEPASS_DATA_FIRST_ACTIVE_BACKUP_PATH;
+    const approvedDigest = process.env.FREEPASS_DATA_FIRST_ACTIVE_BACKUP_DIGEST;
+    if (!stores.outbox.captureFirstActivationPreimage || !path || !approvedDigest) throw new Error('FIRST_ACTIVE_APPROVED_BACKUP_REQUIRED');
+    const backup = JSON.parse(await readFile(path, 'utf8'));
+    const { digest, ...body } = backup;
+    if (digest !== approvedDigest || stableDigest(body) !== digest || backup.eventId !== eventId ||
+        (await stores.outbox.captureFirstActivationPreimage(eventId!)).digest !== approvedDigest)
+      throw new Error('FIRST_ACTIVE_APPROVED_BACKUP_CHANGED');
+    expectedEventDigest = stableDigest(backup.event);
+  }
   const result = await processOneOutboxEvent(stores.catalog, stores.outbox, stores.projections,
-    { workerId, requireFreshSources, eventId: eventId!, expiresAt: expiresAt! });
+    { workerId, requireFreshSources, eventId: eventId!, expiresAt: expiresAt!, ...(expectedEventDigest ? { expectedEventDigest, expectedActiveReleaseId: null } : {}) });
   await new Promise<void>((resolve, reject) => process.stdout.write(JSON.stringify({ mode: 'SINGLE_EVENT', eventId, result }) + '\n',
     error => error ? reject(error) : resolve()));
   process.exit(result === 'DONE' ? 0 : 2);
-} else for (;;) {
-  const result = await processOneOutboxEvent(
-    stores.catalog,
-    stores.outbox,
-    stores.projections,
-    { workerId, requireFreshSources }
-  );
-  if (result === 'IDLE' || result === 'HOLD') {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+} else {
+  for (;;) {
+    const currentActive = requireFreshSources ? await stores.projections.getActive('erp-public') : null;
+    if (requireFreshSources && !currentActive) throw new Error('FIRST_ACTIVE_REQUIRES_APPROVED_SINGLE_EVENT');
+    const result = await processOneOutboxEvent(
+      stores.catalog,
+      stores.outbox,
+      stores.projections,
+      { workerId, requireFreshSources, ...(currentActive ? { expectedActiveReleaseId: currentActive.releaseId } : {}) }
+    );
+    if (result === 'IDLE' || result === 'HOLD') {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
   }
 }

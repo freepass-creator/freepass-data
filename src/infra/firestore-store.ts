@@ -10,7 +10,7 @@ import type {
   Product, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
-  CatalogStore, CatalogTransaction, OutboxStore, OutboxLease, ProjectionStore, ProjectionPublishGuard,
+  CatalogStore, CatalogTransaction, OutboxStore, OutboxLease, ProjectionStore, ProjectionPublishGuard, FirstActivationPreimage,
   SheetDeliveryEvidenceStore
 } from '../ports/catalog-store.js';
 import { stableDigest } from '../shared/stable-digest.js';
@@ -88,11 +88,6 @@ const data = <T>(snap: FirebaseFirestore.DocumentSnapshot) =>
 
 const catalogEntity = <T>(snap: FirebaseFirestore.DocumentSnapshot) =>
   decodeFirestoreIdentityDocument<T>(snap, 'id');
-
-export type FirstActivationPreimage = {
-  schema: 'first-activation-preimage/v1'; eventId: string; event: OutboxEvent;
-  eventUpdateTime: string; active: null; receipt: null; digest: string;
-};
 
 export class FirestoreDataStore implements CatalogStore, ProjectionStore, OutboxStore, SheetDeliveryEvidenceStore {
   constructor(private readonly db: Firestore) {}
@@ -404,18 +399,22 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         tx.get(this.db.collection(C.activeReleases).doc('erp-public')),
         tx.get(this.db.collection(C.projectionDeliveryReceipts).doc(encodeURIComponent(eventId)))
       ]);
+      const existingPublication = await Promise.all([C.releases, C.releaseManifests, C.projectionLineage, C.projectionDeliveryReceipts]
+        .map(collection => tx.get(this.db.collection(collection).where('projectionId', '==', 'erp-public').limit(1))));
+      if (existingPublication.some(snapshot => !snapshot.empty)) throw new Error('RECOVERY_PRIOR_PUBLICATION_EXISTS');
       if (!event.exists || event.get('eventId') !== eventId || event.get('status') !== 'PENDING' || active.exists || receipt.exists)
         throw new Error('RECOVERY_FIRST_ACTIVATION_REQUIRED');
       const backup = { schema: 'first-activation-preimage/v1' as const, eventId,
-        event: event.data() as OutboxEvent, eventUpdateTime: event.updateTime!.toDate().toISOString(), active: null, receipt: null };
+        event: event.data() as OutboxEvent, eventUpdateTime: event.updateTime!.toDate().toISOString(), active: null, receipt: null, publicationDocumentsAbsent: true as const };
       return { ...backup, digest: stableDigest(backup) };
     });
   }
 
   /** Builds exact document preconditions; never writes or deletes operational data. */
-  async planFirstActivationRecovery(backup: FirstActivationPreimage) {
+  async planFirstActivationRecovery(backup: FirstActivationPreimage, approvedBackupDigest: string) {
     const { digest, ...body } = backup;
-    if (backup.schema !== 'first-activation-preimage/v1' || stableDigest(body) !== digest ||
+    if (backup.schema !== 'first-activation-preimage/v1' || stableDigest(body) !== digest || digest !== approvedBackupDigest ||
+        backup.publicationDocumentsAbsent !== true ||
         backup.active !== null || backup.receipt !== null || backup.eventId !== backup.event.eventId || backup.event.status !== 'PENDING')
       throw new Error('RECOVERY_PREIMAGE_INVALID');
     return this.db.runTransaction(async tx => {
@@ -445,12 +444,16 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       if (!manifest.exists) throw new Error('RECOVERY_MANIFEST_MISSING');
       assertProjectionReleaseIntegrity(release.data() as ProjectionRelease<ProjectionProduct>,
         manifest.data() as ProjectionReleaseManifest, lineage.docs.map(doc => doc.data() as ProjectionFieldLineageRecord));
+      const allowedReleaseFields = new Set(['releaseId', 'projectionId', 'schemaVersion', 'canonicalRevision', 'manifestId',
+        'inputDigest', 'dataDigest', 'status', 'generatedAt', 'activatedAt', 'data']);
+      if (Object.keys(release.data()!).some(key => !allowedReleaseFields.has(key))) throw new Error('RECOVERY_RELEASE_FIELDS_CHANGED');
+      const { activatedAt: _activatedAt, ...readyImage } = release.data()!;
       const fence = (doc: typeof event) => ({ path: doc.ref.path, updateTime: doc.updateTime!.toDate().toISOString(),
         updateSeconds: doc.updateTime!.seconds, updateNanos: doc.updateTime!.nanoseconds, digest: stableDigest(doc.data()) });
       const plan = { schema: 'first-activation-recovery/v1' as const, backupDigest: backup.digest, eventId: backup.eventId, releaseId,
         restore: [ { ...fence(active), action: 'DELETE' as const, value: null },
           { ...fence(event), action: 'SET' as const, value: backup.event },
-          { ...fence(release), action: 'SET' as const, value: { ...release.data(), status: 'READY', activatedAt: null } } ],
+          { ...fence(release), action: 'SET' as const, value: { ...readyImage, status: 'READY' } } ],
         preserve: [fence(receipt), fence(manifest), ...lineage.docs.map(fence)],
         newDocuments: [release.ref.path, manifest.ref.path, receipt.ref.path, ...lineage.docs.map(doc => doc.ref.path)] };
       return { ...plan, digest: stableDigest(plan) };
@@ -580,6 +583,8 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       const activeRef = this.db.collection(C.activeReleases).doc(projectionId);
       const activeSnap = await tx.get(activeRef);
       const previousId = activeSnap.exists ? activeSnap.get('releaseId') as string : null;
+      if (guard?.expectedActiveReleaseId !== undefined && previousId !== guard.expectedActiveReleaseId)
+        throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
       if (projectionId === 'erp-public') await this.readPublishGuard(tx, guard);
       if (guard?.receipt) tx.create(this.db.collection(C.projectionDeliveryReceipts)
         .doc(encodeURIComponent(guard.receipt.eventId)), guard.receipt);
@@ -647,7 +652,7 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     );
   }
 
-  async claimNext(input: { workerId: string; now: string; leaseUntil: string; eventId?: string; expiresAt?: string }) {
+  async claimNext(input: { workerId: string; now: string; leaseUntil: string; eventId?: string; expiresAt?: string; expectedEventDigest?: string }) {
     if (input.eventId !== undefined && !/^[A-Za-z0-9:_-]{1,200}$/.test(input.eventId)) return null;
     const started = performance.now();
     const currentTime = () => new Date(Date.parse(input.now) + Math.floor(performance.now() - started)).toISOString();
@@ -667,9 +672,15 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         if (!fresh.exists || !valid()) return null;
         const event = { id: fresh.id, ...fresh.data() } as unknown as OutboxEvent;
         if (input.eventId && event.eventId !== input.eventId) return null;
+        if (input.expectedEventDigest && stableDigest(fresh.data()) !== input.expectedEventDigest) return null;
         const leaseExpired = event.status === 'PROCESSING' && Boolean(event.leaseUntil) && event.leaseUntil! <= input.now;
         const due = !event.nextAttemptAt || event.nextAttemptAt <= input.now;
         if (!due || (event.status !== 'PENDING' && !leaseExpired)) return null;
+        const receipt = await tx.get(this.db.collection(C.projectionDeliveryReceipts).doc(encodeURIComponent(event.eventId)));
+        if (receipt.exists) {
+          const active = await tx.get(this.db.collection(C.activeReleases).doc(receipt.get('projectionId')));
+          if (!active.exists || active.get('releaseId') !== receipt.get('releaseId')) return null;
+        }
         tx.update(candidate.ref, {
           status: 'PROCESSING',
           leaseOwner: input.workerId,
