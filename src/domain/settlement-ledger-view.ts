@@ -15,18 +15,66 @@ export const SETTLEMENT_LEDGER_FILTER_FIELDS = [
 
 export type SettlementLedgerFilterField = typeof SETTLEMENT_LEDGER_FILTER_FIELDS[number];
 
-export type SettlementLedgerReadRequest =
+export type SettlementLedgerReadRequest = { viewVersion?: 1 | 2 } & (
   | { kind: 'doc'; id: string }
   | {
       kind: 'query';
       filters: Array<{ field: SettlementLedgerFilterField; value: string }>;
       limit?: number;
-    };
+    });
+
+export type SettlementMoneyFact = {
+  supply: number | null;
+  vat: number | null;
+  total: number | null;
+  sourceFields: string[];
+};
+
+export type SettlementReconciliation = {
+  recorded: { claim: SettlementMoneyFact; pay: SettlementMoneyFact };
+  written: { claim: SettlementMoneyFact; pay: SettlementMoneyFact };
+  calculated: { claim: SettlementMoneyFact; pay: SettlementMoneyFact };
+  confirmed: { claim: SettlementMoneyFact; pay: SettlementMoneyFact };
+  cash: {
+    claim: { amount: number | null; at: string | null; reportedComplete: boolean | null };
+    pay: { amount: number | null; at: string | null; reportedComplete: boolean | null };
+    verification: 'RECORDED_UNVERIFIED';
+    eventsState: 'READ' | 'UNAVAILABLE' | 'LIMIT_REACHED' | 'IDENTITY_MISSING';
+    eventsDigest: string | null;
+    events: Array<{ id: string; axis: string | null; kind: string | null; amount: number | null; day: string | null; by: string | null; createdAt: string | null }>;
+  };
+  audit: {
+    createdBy: string | null; updatedBy: string | null;
+    createdAt: string | null; updatedAt: string | null; businessDate: string | null;
+    historyState: 'IDENTITY_MISSING' | 'READ' | 'UNAVAILABLE';
+    history: Array<{ id: string; at: string | null; by: string | null; field: string | null; from: SettlementLedgerValue; to: SettlementLedgerValue }>;
+    historyDigest: string | null;
+  };
+  evidence: { sourceDigest: string | null; receiptRow: number | null; syncedAt: string | null };
+};
+
+export type SettlementSnapshotSummary = {
+  scope: 'MONTH' | 'FILTERED';
+  billingMonth: string | null;
+  completeness: 'COMPLETE' | 'LIMIT_REACHED';
+  entryIds: string[];
+  excludedIds: string[];
+  uncertainEligibilityIds: string[];
+  storedSummaryComparison: { state: 'MATCH' | 'MISMATCH' | 'UNAVAILABLE' | 'NOT_COMPARABLE'; sourceDigest: string | null };
+  totals: Record<'recordedClaim' | 'recordedPay' | 'writtenClaim' | 'writtenPay' | 'calculatedClaim' | 'calculatedPay' | 'confirmedClaim' | 'confirmedPay', {
+    knownSubtotal: number;
+    missingCount: number;
+    supply: number | null;
+    vat: { knownSubtotal: number; missingCount: number; amount: number | null };
+    total: { knownSubtotal: number; missingCount: number; amount: number | null };
+  }>;
+};
 
 export type SettlementLedgerValue = string | number | boolean | null;
 
 export type SettlementLedgerRecord = {
   ledgerId: string;
+  reconciliation?: SettlementReconciliation;
   identity: {
     vehicleNumber: string | null;
     receivedAt: string | null;
@@ -84,7 +132,7 @@ export type SettlementLedgerRecord = {
 };
 
 export type SettlementLedgerView = {
-  schema: typeof SETTLEMENT_LEDGER_VIEW_CONTRACT;
+  schema: typeof SETTLEMENT_LEDGER_VIEW_CONTRACT | 'freepass-data.settlement-ledger/v2';
   data: SettlementLedgerRecord[];
   meta: {
     consumerId: string;
@@ -95,6 +143,7 @@ export type SettlementLedgerView = {
     count: number;
     sourceDigest: string;
     dataDigest: string;
+    snapshotSummary?: SettlementSnapshotSummary;
   };
 };
 
@@ -112,6 +161,9 @@ export function assertSettlementLedgerReadRequest(
     throw new Error('INVALID_SETTLEMENT_LEDGER_READ');
   }
   const request = value as Record<string, unknown>;
+  if (request.viewVersion !== undefined && request.viewVersion !== 1 && request.viewVersion !== 2) {
+    throw new Error('INVALID_SETTLEMENT_LEDGER_READ');
+  }
   if (request.kind === 'doc') {
     if (!safeId(request.id)) throw new Error('INVALID_SETTLEMENT_LEDGER_DOCUMENT_ID');
     return;

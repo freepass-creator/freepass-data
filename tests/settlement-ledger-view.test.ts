@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import schema from '../contracts/settlement-ledger-view-v1.schema.json' with { type: 'json' };
 import { createConsumerGateway, parseConsumerBindings, type ConsumerBinding } from '../src/api/consumer-gateway.js';
 import { DataAccessGateway } from '../src/application/data-access-gateway.js';
-import { readSettlementLedgerView } from '../src/application/settlement-ledger-view.js';
+import { readSettlementLedgerView, projectSettlementReconciliation } from '../src/application/settlement-ledger-view.js';
 import { assertSettlementLedgerReadRequest } from '../src/domain/settlement-ledger-view.js';
 import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
@@ -63,6 +63,77 @@ function workflowStore(): AdminWorkflowStore {
 }
 
 describe('settlement ledger data product', () => {
+  it('reads immutable cash and audit records using the existing identity, never treating agent as author', async () => {
+    const store: AdminWorkflowStore = {
+      async read(spec) {
+        const docs = spec.resource === 'settlementRows'
+          ? [{ id: 'row', data: { ...rowData, cancelled: false, settleExclude: false, createdAt: { seconds: 1756684800 }, agent: '영업담당' } }]
+          : spec.resource === 'settlementEvents'
+            ? [{ id: 'events', data: { aud_one: { at: 1756684800000, by: '실제작성자', field: '청구', from: 0, to: 100 }, metadata: { secret: 'excluded' } } }]
+            : [{ id: 'cash', data: { code: 'stl_demo', axis: '공급사', kind: '수금', amount: 100, day: '2026-09-01', by: '실제처리자', createdAt: 1756684800000 } }];
+        if (spec.resource === 'settlementEvents') expect(spec).toMatchObject({ id: '12가3456_2026-09-01' });
+        if (spec.resource === 'settlementCashEvents') expect(spec).toMatchObject({ filters: [{ field: 'code', value: 'stl_demo' }] });
+        return { schema: 'freepass-data.admin-workflow-read/v1', docs, digest: 'c'.repeat(64) };
+      },
+      async commit() { throw new Error('WRITES_FORBIDDEN'); },
+    };
+    const result = await readSettlementLedgerView(store, 'kakao-ops', { kind: 'doc', id: 'row', viewVersion: 2 });
+    const detail = result.data[0]!.reconciliation!;
+    expect(detail.audit).toMatchObject({ createdBy: null, createdAt: '2025-09-01T00:00:00.000Z', historyState: 'READ', history: [{ by: '실제작성자', from: 0, to: 100 }] });
+    expect(detail.audit.history).toHaveLength(1);
+    expect(detail.cash.eventsState).toBe('READ');
+    expect(detail.cash.events[0]).toMatchObject({ amount: 100, by: '실제처리자' });
+    expect(detail.cash.claim.amount).toBeNull();
+    const ajv = new Ajv2020({ strict: false }); addFormats(ajv);
+    expect(ajv.compile(schema)(result)).toBe(true);
+  });
+  it('keeps recorded, written, calculated, confirmed and cash facts separate, preserving genuine zero', () => {
+    const result = projectSettlementReconciliation({
+      sourceReceiptClaim: 2300189, sourceReceiptClaimVat: 230019, sourceReceiptClaimGross: 2530208,
+      claimWritten: 0, collectedAmt: 0, agent: '영업담당', createdAt: '2026-09-01',
+      supplierOk: true, claimStage: '확인', vatIncluded: true,
+    });
+    expect(result.recorded.claim).toMatchObject({ supply: 2300189, vat: 230019, total: 2530208 });
+    expect(result.written.claim).toMatchObject({ supply: 0, vat: null, total: null });
+    expect(result.calculated.claim.supply).toBeNull();
+    expect(result.confirmed.claim.supply).toBeNull();
+    expect(result.cash.claim).toEqual({ amount: 0, at: null, reportedComplete: null });
+    expect(result.cash.verification).toBe('RECORDED_UNVERIFIED');
+    expect(result.audit.createdBy).toBeNull();
+    expect(result.audit.businessDate).toBeNull();
+    expect(result.audit.historyState).toBe('IDENTITY_MISSING');
+  });
+
+  it('returns opt-in V2 totals from exactly the returned snapshot, excludes cancellations, and flags incomplete sums', async () => {
+    const rows = [
+      { id: 'one', data: { ...rowData, cancelled: false, settleExclude: false, sourceReceiptClaim: 2300189, claimWritten: 0 } },
+      { id: 'two', data: { ...rowData, cancelled: false, settleExclude: false, sourceReceiptClaim: 371620, claimWritten: 517380 } },
+      { id: 'cancelled', data: { ...rowData, cancelled: true, sourceReceiptClaim: 99999999 } },
+    ];
+    const store: AdminWorkflowStore = {
+      async read() { return { schema: 'freepass-data.admin-workflow-read/v1', docs: rows, digest: 'b'.repeat(64) }; },
+      async commit() { throw new Error('WRITES_FORBIDDEN'); },
+    };
+    const result = await readSettlementLedgerView(store, 'kakao-ops', {
+      kind: 'query', viewVersion: 2, filters: [{ field: 'billMonth', value: '2026-09' }], limit: 3,
+    });
+    expect(result.schema).toBe('freepass-data.settlement-ledger/v2');
+    expect(result.meta.snapshotSummary).toMatchObject({
+      scope: 'MONTH', completeness: 'LIMIT_REACHED', entryIds: ['one', 'two'], excludedIds: ['cancelled'],
+      totals: {
+        recordedClaim: { knownSubtotal: 2671809, missingCount: 0, supply: null },
+        writtenClaim: { knownSubtotal: 517380, missingCount: 0, supply: null },
+        calculatedClaim: { knownSubtotal: 0, missingCount: 2, supply: null },
+      },
+    });
+    const ajv = new Ajv2020({ strict: false }); addFormats(ajv);
+    expect(ajv.compile(schema)(result)).toBe(true);
+    const legacy = await readSettlementLedgerView(store, 'kakao-ops', { kind: 'doc', id: 'one' });
+    expect(legacy.schema).toBe('freepass-data.settlement-ledger/v1');
+    expect(legacy.data[0]).not.toHaveProperty('reconciliation');
+    expect(legacy.meta).not.toHaveProperty('snapshotSummary');
+    expect(() => assertSettlementLedgerReadRequest({ kind: 'doc', id: 'one', viewVersion: 3 })).toThrow();
+  });
   it('projects FreePass Data settlement facts without guessing missing booleans or money', async () => {
     const store = workflowStore();
     const result = await readSettlementLedgerView(
@@ -158,6 +229,16 @@ describe('settlement ledger data product', () => {
       ['READ', 'STARTED'],
       ['READ', 'SUCCEEDED'],
     ]);
+    const extended = await app.inject({
+      method: 'POST', url: '/v1/consumers/kakao-ops/settlement-ledger/read', headers,
+      payload: { kind: 'doc', id: '12가3456_2026-09-01', viewVersion: 2 },
+    });
+    expect(extended.statusCode).toBe(200);
+    expect(extended.json()).toMatchObject({
+      schema: 'freepass-data.settlement-ledger/v2',
+      meta: { snapshotSummary: { scope: 'FILTERED', uncertainEligibilityIds: ['12가3456_2026-09-01'], totals: { writtenClaim: { knownSubtotal: 1100000, supply: null } } } },
+    });
     await app.close();
   });
 });
+
