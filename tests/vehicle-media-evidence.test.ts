@@ -1,10 +1,38 @@
 import { describe, it, expect } from 'vitest';
-import { inspectVehicleMediaEvidence, compareVehicleMediaConsumerEvidence } from '../src/application/vehicle-media-evidence.js';
+import { inspectVehicleMediaEvidence, compareVehicleMediaConsumerEvidence, planF01UnavailableMediaRows } from '../src/application/vehicle-media-evidence.js';
+import { hashSheetPublicationData, hashSheetPublicationHandoff, type SheetPublicationHandoff } from '../src/domain/sheet-publication-handoff.js';
 
 const product = { car_number: '12가3456', image_urls: ['https://supplier.example/car.jpg'], ext_color: '흰색' };
 const source = { plate: '12가3456', sourceRef: 'fixture:detail/1', observedAt: '2026-10-09T00:00:00Z', expectedFreshnessSeconds: 3600, vehicle: product };
 const base = { productId: 'fixture-product', product, source, now: '2026-10-09T00:01:00Z', probe: async () => ({ status: 200, contentType: 'image/jpeg' }) };
 describe('read-only media evidence', () => {
+  it('holds failed source authentication even when an older payload and photo URL still match', async () => {
+    for (const sourceHttpStatus of [401, 403, 302, NaN]) {
+      const r = await inspectVehicleMediaEvidence({ ...base, sourceHttpStatus });
+      expect(r.verdict).toBe('HOLD');
+      expect(r.issues.some(issue => issue.startsWith('SOURCE_ACCESS_'))).toBe(true);
+    }
+  });
+  it('does not attribute a cache to invalid, multiple or changed source links', () => {
+    for (const photo_link of ['file:///folder', 'https://drive.example/a\nhttps://drive.example/b', 'https://drive.example/changed']) {
+      const r = compareVehicleMediaConsumerEvidence({ productId: 'fixture-product', product: { car_number: product.car_number, photo_link, photo_cache: { src: photo_link === 'https://drive.example/changed' ? 'https://drive.example/old' : photo_link, urls: product.image_urls } }, consumerProductId: 'fixture-product', consumer: product, consumerSnapshotRef: 'fixture:detail/1', observedAt: base.now, requiresGallery: true });
+      expect(r.outputEvidence).not.toBe('EXISTING_LINK_BOUND_CACHE');
+      expect(r.issues).toContain('CACHE_SOURCE_BINDING_UNVERIFIED');
+    }
+  });
+  it('holds a document URL exposed through an existing cache', () => {
+    const folder = 'https://drive.example/folder';
+    const r = compareVehicleMediaConsumerEvidence({ productId: 'fixture-product', product: { car_number: product.car_number, photo_link: folder, photo_cache: { src: folder, urls: product.image_urls }, doc_images: product.image_urls }, consumerProductId: 'fixture-product', consumer: product, consumerSnapshotRef: 'fixture:detail/1', observedAt: base.now, requiresGallery: true });
+    expect(r.issues).toContain('DOCUMENT_IMAGE_IN_CONSUMER_PHOTOS');
+    expect(r.verdict).toBe('HOLD');
+  });
+  it('cannot claim empty-array parity by silently discarding invalid consumer URLs', () => {
+    const r = compareVehicleMediaConsumerEvidence({ productId: 'fixture-product', product: { car_number: product.car_number },
+      consumerProductId: 'fixture-product', consumer: { car_number: product.car_number, image_urls: ['http://supplier.example/rejected.jpg'] },
+      consumerSnapshotRef: 'fixture:detail/1', observedAt: base.now, requiresGallery: true });
+    expect(r.verdict).toBe('HOLD');
+    expect(r.issues).toContain('CONSUMER_PHOTO_URL_REJECTED');
+  });
   it('distinguishes representative-only consumer parity from required full gallery', () => {
     const input = { productId: 'fixture-product', product, consumerProductId: 'fixture-product', consumer: { car_number: product.car_number, image_url: product.image_urls[0], ext_color: product.ext_color }, consumerSnapshotRef: 'fixture:feed/1', observedAt: base.now, requiresGallery: false };
     expect(compareVehicleMediaConsumerEvidence(input).galleryState).toBe('NOT_EXPOSED');
@@ -71,5 +99,75 @@ describe('read-only media evidence', () => {
     expect(r.checks).toHaveLength(2);
     expect(r.checks[1]?.state).toBe('HEAD_IMAGE_AVAILABLE');
     expect(JSON.stringify(r)).not.toContain('secret');
+  });
+});
+
+function publicationFixture() {
+  const snapshot = {
+    version: 1 as const, snapshotId: 'fixture-release', capturedAt: base.now,
+    products: [{ _key: 'fixture-product', ...product, listable: false, vehicle_status: '출고불가', status_kind: '불가' }],
+    policies: [], partners: [],
+    inventory: { registered: 1, unavailable: 1, open: 0, listableDrift: 0, statusKindDrift: 0,
+      sourceIdentityViolations: 0, deletedMarkerViolations: 0, blankPlateViolations: 0,
+      invalidPlateViolations: 0, duplicatePlateViolations: 0, depositRuleViolations: 0, byStatus: { 출고불가: 1 } },
+  };
+  const dataDigest = hashSheetPublicationData(snapshot);
+  const unsigned: Omit<SheetPublicationHandoff, 'handoffHash'> = {
+    contractVersion: 'freepass-sheet-handoff-v1', consumerId: 'google-sheets-f01', workbook: 'F01',
+    generatedAt: base.now, releaseAuthority: 'LEGACY_VERIFIED_BRIDGE',
+    approvedRelease: { projectionId: 'sheet-publication-bridge', releaseId: snapshot.snapshotId, manifestId: 'fixture-manifest', inputDigest: 'fixture-source', dataDigest, observedAt: source.observedAt },
+    manifest: { contractVersion: 'freepass-sheet-manifest-v1', manifestId: 'fixture-manifest', releaseId: snapshot.snapshotId,
+      projectionId: 'sheet-publication-bridge', releaseAuthority: 'LEGACY_VERIFIED_BRIDGE', sourceCaptureDigest: 'fixture-source', sourceReadTime: source.observedAt,
+      productCount: 1, policyCount: 0, partnerCount: 0, dataDigest, generatedAt: base.now }, snapshot,
+  };
+  const handoff = { ...unsigned, handoffHash: hashSheetPublicationHandoff(unsigned) };
+  return { handoff, readback: { snapshotId: snapshot.snapshotId, dataDigest, observedAt: base.now, complete: true,
+    rows: [{ rowNumber: 6, productId: 'fixture-product', plate: product.car_number }] }, now: base.now, maxAgeSeconds: 3600 };
+}
+
+describe('F01 unavailable row publisher review', () => {
+  it('plans next-publication exclusion without source deletion or direct sheet mutation', () => {
+    const r = planF01UnavailableMediaRows(publicationFixture());
+    expect(r.verdict).toBe('PLAN_ONLY');
+    expect(r.exclusions).toHaveLength(1);
+    expect(r.exclusions[0]?.action).toBe('EXCLUDE_FROM_NEXT_PUBLICATION');
+    expect(r.sourceMutation).toBe('NONE');
+    expect(r.directSheetMutation).toBe('NONE');
+  });
+  it('holds absent or mismatched snapshot proof and partial or stale readback', () => {
+    const input = publicationFixture();
+    const { handoff: omitted, ...withoutHandoff } = input;
+    const cases = [withoutHandoff, { ...input, readback: { ...input.readback, dataDigest: null } },
+      { ...input, readback: { ...input.readback, snapshotId: 'other' } },
+      { ...input, readback: { ...input.readback, complete: false } },
+      { ...input, now: '2026-10-10T00:01:00Z' }];
+    for (const value of cases) {
+      expect(planF01UnavailableMediaRows(value).verdict).toBe('HOLD');
+      expect(planF01UnavailableMediaRows(value).exclusions).toEqual([]);
+    }
+  });
+  it('holds ambiguous row identity, wrong vehicle and a status/listable conflict', () => {
+    const input = publicationFixture();
+    const conflict = publicationFixture();
+    conflict.handoff.snapshot.products[0]!.listable = true;
+    const dataDigest = hashSheetPublicationData(conflict.handoff.snapshot);
+    conflict.handoff.approvedRelease.dataDigest = dataDigest;
+    conflict.handoff.manifest.dataDigest = dataDigest;
+    conflict.readback.dataDigest = dataDigest;
+    const { handoffHash: ignored, ...unsigned } = conflict.handoff;
+    conflict.handoff.handoffHash = hashSheetPublicationHandoff(unsigned);
+    for (const value of [
+      { ...input, readback: { ...input.readback, rows: [...input.readback.rows, ...input.readback.rows] } },
+      { ...input, readback: { ...input.readback, rows: [{ ...input.readback.rows[0]!, plate: '99나9999' }] } }, conflict,
+    ]) {
+      expect(planF01UnavailableMediaRows(value).verdict).toBe('HOLD');
+      expect(planF01UnavailableMediaRows(value).exclusions).toEqual([]);
+    }
+    expect(planF01UnavailableMediaRows(conflict).issues).toContain('PUBLICATION_STATUS_UNVERIFIED');
+  });
+  it('fails closed for malformed handoff evidence rather than throwing or suggesting exclusions', () => {
+    const r = planF01UnavailableMediaRows({ ...publicationFixture(), handoff: {} as SheetPublicationHandoff });
+    expect(r.verdict).toBe('HOLD');
+    expect(r.exclusions).toEqual([]);
   });
 });
