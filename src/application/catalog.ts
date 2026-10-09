@@ -822,6 +822,8 @@ export async function processOneOutboxEvent(
     leaseUntil: new Date(now.getTime() + (options.leaseMs ?? 30000)).toISOString()
   });
   if (!event) return 'IDLE';
+  const lease = { leaseOwner: options.workerId,
+    leaseUntil: new Date(now.getTime() + (options.leaseMs ?? 30000)).toISOString() };
   const attempts = event.attempts + 1;
   try {
     if (event.eventType.startsWith('catalog.')) {
@@ -845,24 +847,30 @@ export async function processOneOutboxEvent(
         });
       }
     }
-    await outbox.markDone(event.eventId); return 'DONE';
+    await outbox.markDone(event.eventId, lease); return 'DONE';
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (error instanceof Error && message.startsWith('PROJECTION_SOURCE_')) {
-      // The source can change between the preflight and claim. Release the
-      // claim without spending an event retry or replacing the old ACTIVE.
-      await outbox.markRetry({ eventId: event.eventId, attempts: event.attempts,
-        nextAttemptAt: event.nextAttemptAt ?? now.toISOString(), error: message });
-      return 'HOLD';
+    if (message === 'OUTBOX_LEASE_LOST') return 'HOLD';
+    try {
+      if (error instanceof Error && message.startsWith('PROJECTION_SOURCE_')) {
+        // The source can change between the preflight and claim. Release the
+        // claim without spending an event retry or replacing the old ACTIVE.
+        await outbox.markRetry({ eventId: event.eventId, attempts: event.attempts, lease,
+          nextAttemptAt: event.nextAttemptAt ?? now.toISOString(), error: message });
+        return 'HOLD';
+      }
+      if (attempts >= (options.maxAttempts ?? 8)) {
+        await outbox.moveToDeadLetter({eventId:event.eventId,attempts,error:message,lease}); return 'DEAD_LETTER';
+      }
+      await outbox.markRetry({
+        eventId:event.eventId,attempts,lease,
+        nextAttemptAt:new Date(now.getTime()+backoffMs(options.baseBackoffMs ?? 500,attempts)).toISOString(),
+        error:message
+      });
+      return 'RETRY';
+    } catch (updateError) {
+      if (updateError instanceof Error && updateError.message === 'OUTBOX_LEASE_LOST') return 'HOLD';
+      throw updateError;
     }
-    if (attempts >= (options.maxAttempts ?? 8)) {
-      await outbox.moveToDeadLetter({eventId:event.eventId,attempts,error:message}); return 'DEAD_LETTER';
-    }
-    await outbox.markRetry({
-      eventId:event.eventId,attempts,
-      nextAttemptAt:new Date(now.getTime()+backoffMs(options.baseBackoffMs ?? 500,attempts)).toISOString(),
-      error:message
-    });
-    return 'RETRY';
   }
 }

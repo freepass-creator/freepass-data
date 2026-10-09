@@ -10,7 +10,7 @@ import type {
   Product, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
-  CatalogStore, CatalogTransaction, OutboxStore, ProjectionStore,
+  CatalogStore, CatalogTransaction, OutboxStore, OutboxLease, ProjectionStore,
   SheetDeliveryEvidenceStore
 } from '../ports/catalog-store.js';
 import type {
@@ -575,19 +575,30 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     }
     return null;
   }
-  async markDone(eventId: string) {
-    await this.db.collection(C.outbox).doc(eventId).update({
+  private async updateClaimedOutbox(eventId: string, lease: OutboxLease, update: Record<string, unknown>) {
+    const ref = this.db.collection(C.outbox).doc(eventId);
+    await this.db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) throw new Error('Outbox event not found');
+      const event = snap.data() as OutboxEvent;
+      if (!lease || event.status !== 'PROCESSING' || event.leaseOwner !== lease.leaseOwner ||
+        event.leaseUntil !== lease.leaseUntil) throw new Error('OUTBOX_LEASE_LOST');
+      tx.update(ref, update);
+    });
+  }
+  async markDone(eventId: string, lease: OutboxLease) {
+    await this.updateClaimedOutbox(eventId, lease, {
       status: 'DONE', leaseOwner: null, leaseUntil: null
     });
   }
-  async markRetry(input: { eventId: string; attempts: number; nextAttemptAt: string; error: string }) {
-    await this.db.collection(C.outbox).doc(input.eventId).update({
+  async markRetry(input: { eventId: string; attempts: number; nextAttemptAt: string; error: string; lease: OutboxLease }) {
+    await this.updateClaimedOutbox(input.eventId, input.lease, {
       status: 'PENDING', attempts: input.attempts, nextAttemptAt: input.nextAttemptAt,
       lastError: input.error, leaseOwner: null, leaseUntil: null
     });
   }
-  async moveToDeadLetter(input: { eventId: string; attempts: number; error: string }) {
-    await this.db.collection(C.outbox).doc(input.eventId).update({
+  async moveToDeadLetter(input: { eventId: string; attempts: number; error: string; lease: OutboxLease }) {
+    await this.updateClaimedOutbox(input.eventId, input.lease, {
       status: 'DEAD_LETTER', attempts: input.attempts, lastError: input.error,
       leaseOwner: null, leaseUntil: null
     });

@@ -550,12 +550,12 @@ describe('Catalog V1 vertical slice', () => {
     let failMarkDone=true;
     const flakyOutbox={
       claimNext: store.claimNext.bind(store),
-      markDone: async (eventId:string) => {
+      markDone: async (eventId:string, lease: Parameters<typeof store.markDone>[1]) => {
         if (failMarkDone) {
           failMarkDone=false;
           throw new Error('simulated acknowledgement failure');
         }
-        return store.markDone(eventId);
+        return store.markDone(eventId, lease);
       },
       markRetry: store.markRetry.bind(store),
       moveToDeadLetter: store.moveToDeadLetter.bind(store)

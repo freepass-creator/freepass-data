@@ -6,6 +6,8 @@ import { assertProjectionReleaseIntegrity, verifyProjectionReleaseIntegrity } fr
 import { stableDigest, stableRecordSetDigest } from '../src/shared/stable-digest.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
+import { FirestoreDataStore } from '../src/infra/firestore-store.js';
+import type { Firestore } from 'firebase-admin/firestore';
 
 async function fixture() {
   const store = new MemoryDataStore();
@@ -118,21 +120,23 @@ describe('Projection release integrity verifier', () => {
         throw new Error('SIMULATED_LOST_RESPONSE');
       });
       const options = { workerId: 'synthetic', requireFreshSources: true, baseBackoffMs: 1 };
-      expect(await processOneOutboxEvent(store, store, store, options, new Date(head.observedAt))).toBe('RETRY');
+      expect(await processOneOutboxEvent(store, store, store, options, new Date(head.observedAt)))
+        .toBe(operation === 'markDone' ? 'HOLD' : 'RETRY');
       const afterFailure = await store.getActive('erp-public');
       if (['stage', 'stageEvidence', 'markReady'].includes(operation)) {
         expect(afterFailure?.releaseId).toBe(old.releaseId);
         expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
       }
-      expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PENDING', attempts: 1 });
+      expect(store.outbox.get('synthetic-event')).toMatchObject(operation === 'markDone'
+        ? { status: 'DONE', attempts: 0 } : { status: 'PENDING', attempts: 1 });
       const activate = vi.spyOn(store, 'activate');
       activate.mockClear();
       expect(await processOneOutboxEvent(store, store, store, options,
-        new Date(Date.parse(head.observedAt) + 1000))).toBe('DONE');
+        new Date(Date.parse(head.observedAt) + 1000))).toBe(operation === 'markDone' ? 'IDLE' : 'DONE');
       const final = await store.getActive('erp-public');
       expect(final?.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(735000);
       expect((await store.getDeliveryReceipt('synthetic-event'))?.releaseId).toBe(final?.releaseId);
-      expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'DONE', attempts: 1 });
+      expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'DONE', attempts: operation === 'markDone' ? 0 : 1 });
       if (['activate', 'putDeliveryReceipt', 'markDone'].includes(operation)) {
         expect(final?.releaseId).toBe(afterFailure?.releaseId);
         expect(activate).not.toHaveBeenCalled();
@@ -202,6 +206,65 @@ describe('Projection release integrity verifier', () => {
     expect((await store.getActive('erp-public'))?.releaseId).toBe(old.releaseId);
     expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
     expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PENDING', attempts: 0 });
+  });
+
+  it.each(['markDone', 'markRetry', 'moveToDeadLetter'] as const)(
+    'rejects stale owner %s after the expired claim is reclaimed', async (operation) => {
+      const { store, head } = await scheduledFixture();
+      const firstUntil = new Date(Date.parse(head.observedAt) + 1000).toISOString();
+      await store.claimNext({ workerId: 'old', now: head.observedAt, leaseUntil: firstUntil });
+      await store.claimNext({ workerId: 'new', now: firstUntil,
+        leaseUntil: new Date(Date.parse(firstUntil) + 1000).toISOString() });
+      const before = structuredClone(store.outbox.get('synthetic-event'));
+      const oldLease = { leaseOwner: 'old', leaseUntil: firstUntil };
+      const mutation = operation === 'markDone'
+        ? store.markDone('synthetic-event', oldLease)
+        : store[operation]({ eventId: 'synthetic-event', attempts: 7,
+          nextAttemptAt: firstUntil, error: 'OLD_WORKER', lease: oldLease });
+      await expect(mutation).rejects.toThrow('OUTBOX_LEASE_LOST');
+      expect(store.outbox.get('synthetic-event')).toEqual(before);
+    });
+
+  it.each(['markDone', 'markRetry', 'moveToDeadLetter'] as const)(
+    'checks lease identity transactionally before Firestore %s', async (operation) => {
+      const update = vi.fn();
+      const ref = {};
+      let row = { status: 'PROCESSING', leaseOwner: 'new', leaseUntil: '2026-10-09T00:02:00.000Z' };
+      const get = vi.fn(async () => ({ exists: true, data: () => row }));
+      const db = { collection: () => ({ doc: () => ref }),
+        runTransaction: async (body: any) => body({ get, update }) } as unknown as Firestore;
+      const store = new FirestoreDataStore(db);
+      const mutate = (lease: { leaseOwner: string; leaseUntil: string }) => operation === 'markDone'
+        ? store.markDone('synthetic-event', lease)
+        : store[operation]({ eventId: 'synthetic-event', attempts: 1,
+          nextAttemptAt: '2026-10-09T00:03:00.000Z', error: 'synthetic', lease });
+      await expect(mutate({ leaseOwner: 'old', leaseUntil: '2026-10-09T00:01:00.000Z' }))
+        .rejects.toThrow('OUTBOX_LEASE_LOST');
+      expect(get).toHaveBeenCalledWith(ref);
+      expect(update).not.toHaveBeenCalled();
+      const current = { leaseOwner: row.leaseOwner, leaseUntil: row.leaseUntil };
+      await mutate(current);
+      expect(update).toHaveBeenCalledOnce();
+      update.mockClear();
+      row = { ...row, status: 'DONE' };
+      await expect(mutate(current)).rejects.toThrow('OUTBOX_LEASE_LOST');
+      expect(update).not.toHaveBeenCalled();
+    });
+
+  it('does not release another worker claim when acknowledgement loses ownership', async () => {
+    const { store, head } = await scheduledFixture();
+    const acknowledge = store.markDone.bind(store);
+    vi.spyOn(store, 'markDone').mockImplementationOnce(async (id, lease) => {
+      await store.claimNext({ workerId: 'replacement', now: lease.leaseUntil,
+        leaseUntil: new Date(Date.parse(lease.leaseUntil) + 1000).toISOString() });
+      await acknowledge(id, lease);
+    });
+    const retry = vi.spyOn(store, 'markRetry');
+    expect(await processOneOutboxEvent(store, store, store,
+      { workerId: 'old', requireFreshSources: true, leaseMs: 1000 }, new Date(head.observedAt))).toBe('HOLD');
+    expect(retry).not.toHaveBeenCalled();
+    expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PROCESSING', leaseOwner: 'replacement', attempts: 0 });
+    expect(await store.getDeliveryReceipt('synthetic-event')).not.toBeNull();
   });
 
   it('runs the existing worker preparation entrypoint once without activating a release', () => {

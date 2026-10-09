@@ -3,7 +3,7 @@ import type {
   Product, ProjectionProduct, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
-  CatalogStore, CatalogTransaction, OutboxStore, ProjectionStore,
+  CatalogStore, CatalogTransaction, OutboxStore, OutboxLease, ProjectionStore,
   SheetDeliveryEvidenceStore
 } from '../ports/catalog-store.js';
 import type {
@@ -509,21 +509,25 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     item.leaseUntil = input.leaseUntil;
     return copy(item);
   }
-  async markDone(eventId: string) {
+  private requireOutboxLease(eventId: string, lease: OutboxLease) {
     const item = this.outbox.get(eventId);
     if (!item) throw new Error('Outbox event not found');
+    if (!lease || item.status !== 'PROCESSING' || item.leaseOwner !== lease.leaseOwner ||
+      item.leaseUntil !== lease.leaseUntil) throw new Error('OUTBOX_LEASE_LOST');
+    return item;
+  }
+  async markDone(eventId: string, lease: OutboxLease) {
+    const item = this.requireOutboxLease(eventId, lease);
     item.status = 'DONE'; item.leaseOwner = null; item.leaseUntil = null;
   }
-  async markRetry(input: { eventId: string; attempts: number; nextAttemptAt: string; error: string }) {
-    const item = this.outbox.get(input.eventId);
-    if (!item) throw new Error('Outbox event not found');
+  async markRetry(input: { eventId: string; attempts: number; nextAttemptAt: string; error: string; lease: OutboxLease }) {
+    const item = this.requireOutboxLease(input.eventId, input.lease);
     item.status = 'PENDING'; item.attempts = input.attempts;
     item.nextAttemptAt = input.nextAttemptAt; item.lastError = input.error;
     item.leaseOwner = null; item.leaseUntil = null;
   }
-  async moveToDeadLetter(input: { eventId: string; attempts: number; error: string }) {
-    const item = this.outbox.get(input.eventId);
-    if (!item) throw new Error('Outbox event not found');
+  async moveToDeadLetter(input: { eventId: string; attempts: number; error: string; lease: OutboxLease }) {
+    const item = this.requireOutboxLease(input.eventId, input.lease);
     item.status = 'DEAD_LETTER'; item.attempts = input.attempts; item.lastError = input.error;
     item.leaseOwner = null; item.leaseUntil = null;
   }
