@@ -782,6 +782,12 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - next_start_here: 위 실회차 F01 칸/사진·ERP 대사와 공급사별 원천 receipt를 읽고 각 상태를 별도 기록한다. 기존 heartbeat15는15분/읽기전용/변화시에만 알림을 유지하며 F01만 시트 완료 조건으로 삼는다.
 
 
+### 2026-10-05 [판정필요] 이안카 정책 원천 RAW 보존 job (옛 가지 work/data/i-01-integration 에서 옮김)
+
+- 목적: 이안카 정책 배정 원천 행(차량번호 → RP031 정책코드)을 «RAW 만» 프리패스 데이터 원천 증거(SourceIntakeBatch)로 보존하는 job. 정규화·승급(canonical)은 하지 않는다(RAW_ONLY). 승인 환경변수 `IANCAR_POLICY_SOURCE_INGEST_APPROVED=true` 없이는 실행되지 않는다.
+- 변경: `src/jobs/ingest-iancar-policy-source.ts`(가지의 신규 파일 그대로), `ingest:iancar-policy-source` 스크립트, 경계 검사(`runtime.ingestRawBatch(` 필수) 등록. 가지의 나머지 변경(직접 정책 동기화 삭제)은 #390 한 트랜잭션 동기화로 대체돼 옮기지 않았다.
+- 판단 필요: 이안카 정책 119건 연결은 이미 적용(#390)돼 이 RAW 보존이 아직 필요한지 — 필요 없으면 이 PR 을 닫는다.
+
 ### 2026-10-05 손오공 구독 보증금 0·보험료 별도 점검
 
 - 원인: 상품 price.<기간>.deposit 의 0 은 공급사 API 의 자리표시자이고 규칙은 deposit_note «월 대여료 × 약정연수 (최대 3개월)» 에 있다(원문은 손으로 안 덮음). 카톡 참조 카탈로그는 이미 이 규칙으로 계산했지만 정본 매핑(erp5-product-mapping)은 UNKNOWN_DEPOSIT 이었다. 이제 도메인 `depositFromYearsRuleNote` 로 읽을 때 계산(12개월 1배·24개월 2배·36개월↑ 3배)하고 쓰지 않는다. 날것 price.deposit 을 직접 읽는 소비처는 0 을 보증금 없음으로 읽지 말고 매핑·카탈로그 값을 써야 한다.
