@@ -83,11 +83,11 @@ Firestore `(default)`, `asia-northeast3`를 실조회했다. RTDB는 사용하�
 | ERP.com | `erp-com` 서비스 등록 및 ERP public read 계약 | 기존 ERP5 직접 읽기 유지, 전환 전 |
 | 각 화이트라벨 | `whitelabel-<slug>` 개별 등록·토큰 | 실제 도메인 목록/노출 권한/캐시/배포 검증 전 |
 | F01 | 전용 게시 계약 필요 | 기존 출력 경로 유지 |
-| F86 | 전용 게시 계약 필요 | 기존 출력 경로 유지 |
+| F86 | 공급사 입력 계약; 상품 역발행 금지 | 과거 상품 출력 역할 폐기(2026-10-08 정정); 입력 원본 보존 |
 | Admin | 기존 PR12와 새 Release 증거 게이트 통합 필요 | Policy parity 및 인증/IAM 검증 전 |
 | Kakao Ops | `kakao-ops` 전용 `catalog-reference` 계약 | main `20e83e2`, read runtime revision `freepass-data-read-00013-cvq`, 전용 token 등록 및 운영 readback 완료 |
 
-F01/F86/Admin을 ERP public 계약에 억지로 연결하지 않는다. 원문 옵션·시트 게시 필드와 Admin 내부 정책 정보는 별도 계약이 필요하다.
+F01/Admin을 ERP public 계약에 억지로 연결하지 않는다. F86은 공급사 입력이며 게시 소비처가 아니다. 원문 옵션·시트 게시 필드와 Admin 내부 정책 정보는 별도 계약이 필요하다.
 등록되지 않은 소비처는 응답을 받을 수 없다. 웹에 서비스를 공개하거나 운영 소비처를 전환한 상태가 아니다.
 
 ### Kakao Ops 명시적 REFERENCE_ONLY 계약 (2026-09-28)

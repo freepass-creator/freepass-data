@@ -2,6 +2,8 @@
 
 > **NOT_CANONICAL** — 이미 SUPERSEDED 로 적혀 있다. 기계 검사(canon-guard)가 읽는 표시를 덧붙인다.
 
+> **폐기 / 현행 구현·연동 기준으로 사용 금지** — 2026-10-09 사용자 결정. 원본은 설계 이력으로 보존한다. 대체 정본은 [Architecture v2](ARCHITECTURE-V2-APPROVED.md), 현재 소비처 연결은 [발행 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md)과 [ERP5 runtime](ERP5-CONSUMER-RUNTIME.md)을 따른다. 이 표시는 운영 브리지 종료·데이터 삭제를 뜻하지 않는다.
+
 Status: **SUPERSEDED / DESIGN HISTORY ONLY**  
 Date: 2026-09-20  
 Repository: `freepass-creator/freepass-data`  

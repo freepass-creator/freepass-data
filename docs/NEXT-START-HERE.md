@@ -416,6 +416,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 과거 연결 폐기 표시 / 무보증 수집과 조회 경계
+
+- 목적/대상: 대표의 과거 버전 폐기 표시와 현행 소비처 연결 지시. 기존 Work `work/freepass-data/shared-sheet-dropdowns-before-rent`, baseline `dd54595`; 원격 main `6faca676` 재확인. academy READY `2026-10-09T07:58:02.510Z`. 운영 데이터 삭제/배포/수집 apply 0.
+- 변경: v1 설계에 `폐기 / 현행 구현·연동 기준으로 사용 금지`를 명시하고 기존 연결 지도와 runtime의 F86 상품 출력 문구를 F01 출력/F86 공급사 입력으로 정정했다. 과거 운영 관측과 현재 검증, 필요한 호환 브리지와 폐기 설계를 분리했다. API 담당 파일은 수정하지 않았다.
+- 원천 실측: 아이카 원본 `1LqWVs2o1-wpPqFiYkOjcQldmIXqtBMKYp0A1SKEir5w`, version `7891`, modified `2026-10-08T08:38:32.996Z`. 개별 탭 장기특별이벤트 A1:Y1044/신차선출고 A1:Y1004/중고재렌트 A1:Y993/월렌트 A1:J38만 읽었다(종합 제외). 이벤트의 정확한 무보증 셀 31행. 월렌트 안내문을 모든 차량 무보증 근거로 확장하지 않았다.
+- 저장 판정 실측: ERP5 읽기 전용 transaction `2026-10-09T07:52:36.788243Z`, digest `61fbc7be2ccda4823097f1963d53fa5325686a9a8cb489f3e88bb74f82b6cd18`. 무보증 메모 보유 RP004 145상품의 ZERO169기간/상충 UNKNOWN4기간, RP008 3상품 ZERO6기간. 현재 원본 31행과 저장 전체 모집단은 다르다. API 노출 건수와 이 숫자를 빼서 누락으로 계산하지 않는다. 상충 2상품은 현재 원본 탭에서 미관측이므로 삭제·0원 보정하지 않았다.
+- 별도 Canonical 실조회: RP008/RP016 합계 ZERO12기간 모두 amount0. RP004는 이 Canonical offer 집합에 미연결이며 ERP compatibility 저장 집합에는 존재한다. shared-sheet source head `run_f90562939dd8581a013a9b5b2fdc639746c866af` observed `2026-10-06T00:20:37.345Z`로 최신 원천 반영은 HOLD. 기존 정확한 무보증 셀 변환은 ZERO0/RAW lineage를 보존하며 UNKNOWN/null은 0으로 대체하지 않는다.
+- 검증: 기존 shared-sheet canonical51 + ERP mapping84 =135 PASS, standards15 PASS/전체 규격 상태 PARTIAL, diff check PASS. 읽기 전용 GPT 문서 검토 blocking0; 전체 연결 완료로 오인할 표현은 목표 구조로 명확화했다. 기존 Claude 호출 FAILED/본문 없음은 PASS가 아니며 이번에 반복 호출하지 않았다.
+- 남음/next_start_here: 수집 owner는 같은 상품 ID/기간별 최신 원본→RAW→저장 readback으로 freshness를 증명한다. 조회 owner는 같은 상품/기간의 API 필터·응답을 대사한다. 최신 수집 apply·배포·각 화이트라벨/Admin/F01 연결 실측은 별도 미완료이며 문서 폐기 표시/135테스트로 대체하지 않는다. 과거 브리지 종료는 대체 연결·권한·rollback 검증 후에만 실행한다.
+
 ### 2026-10-09 16:47 KST correction — Claude CLI cause remains unconfirmed
 
 - Supersedes causal/account interpretations in earlier notes, not the observed FAILED receipts. Representative correction: current Claude account `dudguq@gmail.com` is normal; any assumption of the root using a different/jpkpyh account is withdrawn. Do not infer account error or an administrator's actual action from the CLI error string.
