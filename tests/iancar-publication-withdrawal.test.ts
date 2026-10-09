@@ -8,11 +8,22 @@ vi.mock('firebase-admin/firestore', async importOriginal => ({ ...(await importO
     return { get: mocks.get };
   } }), doc: (path: string) => ({ path }), runTransaction: mocks.transaction, getAll: mocks.getAll
 }) }));
-vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: mocks.getApp }));
+vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: mocks.getApp, CENTRAL_FIREBASE_PROJECT_ID: 'freepasserp5' }));
 vi.mock('node:fs/promises', () => ({ mkdir: mocks.mkdir, writeFile: mocks.writeFile, readFile: mocks.readFile }));
 vi.mock('firebase-admin/storage', () => ({ getStorage: () => ({ bucket: () => ({ file: () => ({ save: mocks.save, download: mocks.download }) }) }) }));
 import { withdrawIancarPublication, publishIancarPhotoReferences, publishIancarPhaseOne, restoreIancarPhaseOne, encodeIancarBackupValue } from '../src/infra/iancar-publication-withdrawal-firestore.js';
-import { isPublicIancarPhotoProduct } from '../src/infra/erp5-compat-catalog-reader.js';
+import { isPublicIancarPhotoProduct, FirestoreCatalogCompatibilityReader } from '../src/infra/erp5-compat-catalog-reader.js';
+
+it('compatibility read derives unresolved deposits and performs no transaction or update', async () => {
+  mocks.get.mockReset().mockResolvedValueOnce(snapshot(doc('synthetic', { provider_company_code: 'RP004', product_type: '중고렌트',
+    price: { '12': { rent: 500000, deposit: 0 } } })))
+    .mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(snapshot());
+  const result = await new FirestoreCatalogCompatibilityReader().read('erp-com');
+  expect(result.data.products.synthetic!.price).toMatchObject({ '12': { rent: 500000, deposit: null, depositState: 'UNKNOWN',
+    depositStatusLabel: '미확인' } });
+  expect(result.meta.depositEvidenceVersion).toBe('catalog-compat-deposit/1');
+  expect(mocks.transaction).not.toHaveBeenCalled(); expect(mocks.update).not.toHaveBeenCalled();
+});
 
 const doc = (id: string, extra = {}) => ({ id, ref: { path: `products/${id}` },
   updateTime: { toDate: () => new Date('2026-10-01'), toMillis: () => 1, isEqual: () => true },

@@ -6,7 +6,8 @@ import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
-export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/2';
+import { assessDepositEvidence } from '../domain/deposit-evidence.js';
+export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/3';
 /** AI 상황실 2026-10-04 (대표): every car is stored. The sheet status text is kept as-is; it only decides sale exposure.
  * assetStatus is the reviewed physical-state mapping; an unlisted status is HOLD, never guessed. */
 /** Own-key lookup only: inherited names (constructor, __proto__) are never a registered status. */
@@ -100,10 +101,14 @@ export function normalizeSharedSheet(raw: RawRecord): { record: NormalizedCandid
     const rent = number(rentText, '원');
     if (rent === null) { issues.push('RENT_REVIEW_REQUIRED'); continue; }
     const depositText = text(months <= 12 ? '단기보증' : '장기보증');
-    const deposit = depositText === '무보증' ? 0 : number(depositText, '원');
-    if (deposit === null && !absentPrice(depositText)) issues.push('DEPOSIT_REVIEW_REQUIRED');
+    const parsedDeposit = depositText === '무보증' ? 0 : number(depositText, '원');
+    const evidence = assessDepositEvidence({ supplierId: raw.payload.supplierCode, productType: text('상품구분'),
+      note: depositText === '무보증' ? depositText : undefined,
+      sourceAmount: parsedDeposit ?? depositText });
+    const deposit = evidence.amount;
+    if (evidence.state === 'UNKNOWN') issues.push(`DEPOSIT_REVIEW_REQUIRED:m${months}:${evidence.reason}`);
     priceTerms.push({ termKey: `m${months}`, termMonths: months, monthlyRent: { amount: rent, currency: 'KRW' },
-      depositState: deposit === null ? 'UNKNOWN' : deposit === 0 ? 'ZERO' : 'KNOWN',
+      depositState: evidence.state,
       ...(deposit !== null ? { deposit: { amount: deposit, currency: 'KRW' as const } } : {}) });
   }
   if (!priceTerms.length) issues.push('NO_PRICE_TERMS');

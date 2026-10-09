@@ -8,17 +8,33 @@ const captureFromBatchGet = (id: string, raw: SheetsBatchGet, t: string) => rawC
 const readSharedSheetCapture = async (id: string, ports: { accessToken: () => Promise<string>; now: () => string; fetcher: typeof fetch }) =>
   (async (raw: SheetsBatchGet) => rawCapture(id, raw, await readSheetsMetadata(id, SHEETS_GRID_META_FIELDS, ports) as SheetsGridMeta, ports.now(), raw, raw))(
     await readSheetsBatchGet(id, sharedSheetCaptureRanges(), ports) as SheetsBatchGet);
-import { buildSharedSheetBatch, sharedSheetChannels, sharedSheetHeaders } from '../src/adapters/shared-sheet-source.js';
+import { assertCurrentSharedSheetSource, buildSharedSheetBatch, sharedSheetChannels, sharedSheetHeaders, sharedSheetRegisteredChannels, sharedSheetUnavailableChannels } from '../src/adapters/shared-sheet-source.js';
+import { canAssertSourceAbsence, decideSourceHead } from '../src/domain/source.js';
 import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
 import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
 
 const ID = 'synthetic_spreadsheet_id_0001';
+it('online capture rejects absent and obsolete source addresses without disclosing them', () => {
+  for (const id of [undefined, '', ID, 'old-individual-supplier-sheet']) expect(() => assertCurrentSharedSheetSource(id)).toThrow('SHARED_SHEET_SOURCE_BINDING_MISMATCH');
+});
 const T = '2026-10-04T02:00:00.000Z';
 function batch(extra: Record<string, unknown[][]> = {}) {
   return { spreadsheetId: ID, valueRanges: sharedSheetTabs().map(t => ({ range: `'${t}'!A1:BV${ROWS}`, values: [[...sharedSheetHeaders], ...(extra[t] ?? [])] })) };
 }
 
 describe('shared sheet capture reader', () => {
+  it('captures the locked 12 tabs without deregistering absent suppliers or asserting stock absence', () => {
+    expect(sharedSheetTabs()).toHaveLength(12);
+    expect([...new Set(sharedSheetUnavailableChannels.map(x => x.tab))]).toEqual(['연카', '스위치플랜', '에스에이']);
+    expect(sharedSheetRegisteredChannels.length).toBe(sharedSheetChannels.length + sharedSheetUnavailableChannels.length);
+    const coverage = buildSharedSheetBatch(captureFromBatchGet(ID, batch(), T)).coverage;
+    expect(coverage.mode).toBe('PARTIAL');
+    expect(coverage.completeness).toBe('COMPLETE');
+    expect(decideSourceHead(coverage, T).acceptedAsHead).toBe(true);
+    expect(canAssertSourceAbsence({ status: 'COMPLETED', coverage, headStatus: 'CURRENT' } as Parameters<typeof canAssertSourceAbsence>[0])).toBe(false);
+    const restored = { ...META(), sheets: [...META().sheets!, { properties: { title: '연카', gridProperties: { rowCount: ROWS } } }] };
+    expect(() => rawCapture(ID, batch(), restored, T, batch(), batch())).toThrow('SHARED_SHEET_SCOPE_DRIFT');
+  });
   it('pads short rows to the 74-column contract, keeps blank rows and validates the capture', () => {
     const ch = sharedSheetChannels[0]!;
     const c = captureFromBatchGet(ID, batch({ [ch.tab]: [[ch.companyName, '', '', '', '12가3456'], []] }), T);

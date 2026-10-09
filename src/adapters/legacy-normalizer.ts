@@ -2,6 +2,7 @@ import type { CommercialType, DepositState, Money, PriceTerm } from '../domain/c
 import type { LegacyProductRaw } from './legacy-freepasserp3.js';
 
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
+import { assessDepositEvidence, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
 
 export type LegacyCatalogCandidate = CatalogCandidate;
 
@@ -44,15 +45,8 @@ function parsePriceKey(sourceKey: string) {
   };
 }
 
-function parseDeposit(raw: unknown): { deposit: Money | null; depositState: DepositState } {
-  if (raw === '' || raw == null) return { deposit: null, depositState: 'UNKNOWN' };
-  const parsed = money(raw);
-  if (!parsed) return { deposit: null, depositState: 'UNKNOWN' };
-  if (parsed.amount === 0) return { deposit: parsed, depositState: 'ZERO' };
-  return { deposit: parsed, depositState: 'KNOWN' };
-}
-
-function parsePriceTerms(price: unknown, issues: string[]): PriceTerm[] {
+function parsePriceTerms(data: Record<string, unknown>, issues: string[]): PriceTerm[] {
+  const price = data.price;
   if (!price || typeof price !== 'object' || Array.isArray(price)) return [];
   const out: PriceTerm[] = [];
 
@@ -74,7 +68,14 @@ function parsePriceTerms(price: unknown, issues: string[]): PriceTerm[] {
       continue;
     }
 
-    const deposit = parseDeposit(terms.deposit);
+    const evidence = assessDepositEvidence({ supplierId: data.provider_company_code, productType: data.product_type,
+      note: data.deposit_note, depositFree: data.deposit_free, sourceAmount: terms.deposit,
+      hasPositivePaidDeposit: hasConflictingPaidDeposit(price) });
+    if (evidence.state === 'UNKNOWN') issues.push(`DEPOSIT_REVIEW_REQUIRED:${sourceKey}:${evidence.reason}`);
+    const deposit: { deposit: Money | null; depositState: DepositState } = {
+      depositState: evidence.state,
+      deposit: evidence.amount === null ? null : { amount: evidence.amount, currency: 'KRW' }
+    };
     out.push({
       termKey: `source:${sourceKey}`,
       termMonths: key.termMonths,
@@ -136,7 +137,7 @@ export function normalizeLegacyProduct(raw: LegacyProductRaw): CatalogCandidate 
     ...(driveType ? { driveType } : {}),
     ...(seats !== undefined ? { seats } : {}),
     ...(origin ? { origin } : {}),
-    priceTerms: parsePriceTerms(d.price, issues),
+    priceTerms: parsePriceTerms(d, issues),
     issues
   };
 }

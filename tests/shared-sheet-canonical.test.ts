@@ -59,6 +59,17 @@ function later(c: SharedSheetCapture) {
   return c;
 }
 describe('shared sheet local source to Canonical', () => {
+  it.each([0, '0', '', '미확인', '협의'])('holds short deposit %j without inventing zero; preserves long-term evidence', value => {
+    const n = normalized(capture({ 단기보증: value }));
+    expect(n.record.candidate.priceTerms.filter(t => t.termMonths <= 12).every(t => t.depositState === 'UNKNOWN' && !t.deposit)).toBe(true);
+    expect(n.record.candidate.priceTerms.find(t => t.termMonths === 24)?.deposit?.amount).toBe(202);
+    expect(n.record.status).toBe('REJECTED');
+  });
+  it('does not waive forbidden supplier deposits, including explicit waiver text', () => {
+    const raw = prepareRawSourceBatch(buildSharedSheetBatch(capture({ 단기보증: '무보증' }))).rawRecords[0]!;
+    raw.payload.supplierCode = 'RP012';
+    expect(normalizeSharedSheet(raw).record.candidate.priceTerms[0]!.depositState).toBe('UNKNOWN');
+  });
   it('creates only supplied periods and maps short/long deposits exactly', () => {
     const n = normalized(capture({ '6개월': '-', '36개월': '불가', '48개월': '' }));
     expect(n.record.candidate.priceTerms.map(x => [x.termMonths, x.deposit?.amount])).toEqual([[1, 101], [12, 101], [24, 202]]);

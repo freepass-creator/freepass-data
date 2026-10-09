@@ -173,12 +173,12 @@ function evidence(input: {
   return { run, head, candidate, lineage };
 }
 
-async function initialCanonical(store: MemoryDataStore) {
+async function initialCanonical(store: MemoryDataStore, depositState: 'KNOWN' | 'ZERO' = 'KNOWN') {
   const original = evidence({
     runId: 'run-original',
     candidateId: 'candidate-original',
     fingerprint: 'fp-original',
-    observedAt: '2026-09-21T00:00:00Z'
+    observedAt: '2026-09-21T00:00:00Z', depositState
   });
   await store.seed!({
     sourceRuns: [original.run],
@@ -252,6 +252,29 @@ function applyCommand(
 }
 
 describe('reviewed source change', () => {
+  it.each(['KNOWN', 'ZERO'] as const)('blocks lost %s evidence even when approved; preserves revision, binding, outbox and ACTIVE', async state => {
+    const store = new MemoryDataStore();
+    const { original, receipt: initial } = await initialCanonical(store, state);
+    expect(await processOneOutboxEvent(store, store, store, { workerId: 'worker-deposit-initial' }, new Date('2026-09-21T00:02:00Z'))).toBe('DONE');
+    const active = structuredClone(await store.getActive('erp-public'));
+    const outbox = structuredClone([...store.outbox.entries()]);
+    const changed = evidence({ runId: 'run-deposit-missing', candidateId: 'candidate-deposit-missing',
+      fingerprint: 'fp-deposit-missing', observedAt: '2026-10-07T00:00:00Z', depositState: 'UNKNOWN' });
+    await installChangedHead(store, original, changed);
+    const before = structuredClone(await store.getOffer(initial.offerId));
+    const binding = structuredClone(await store.getSourceBinding(initial.bindingId));
+    const review = await reviewSourceChange(store, initial.bindingId, changed.candidate.candidateId);
+    expect(review.diffs.filter(d => d.fieldPath.includes('deposit')).every(d =>
+      d.classification === 'BLOCKED' && d.reasonCode === 'DEPOSIT_EVIDENCE_LOST_REQUIRES_REVIEW')).toBe(true);
+    expect(review.blockedChangeIds).toHaveLength(2);
+    await expect(applyReviewedSourceChange(store, applyCommand(review, 'deposit-missing'), '2026-10-07T00:01:00Z'))
+      .rejects.toBeInstanceOf(ReviewedSourceChangeBlockedError);
+    expect(await store.getOffer(initial.offerId)).toEqual(before);
+    expect(await store.getSourceBinding(initial.bindingId)).toEqual(binding);
+    expect(await store.listEntityHistory('offer', initial.offerId)).toHaveLength(1);
+    expect(await store.getActive('erp-public')).toEqual(active);
+    expect([...store.outbox.entries()]).toEqual(outbox);
+  });
   it('applies approved rent and odometer changes, advances binding, and republishes', async () => {
     const store = new MemoryDataStore();
     const { original, receipt: initial } = await initialCanonical(store);

@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { specification } from './sheet-presentation.mjs';
 export const inputSpec = JSON.parse(fs.readFileSync(new URL('../contracts/supplier-input-sheet-spec.v1.json', import.meta.url), 'utf8'));
 const hold = message => { throw new Error(`HOLD: ${message}`); };
+const inputDropdown = (spec,h) => spec.dropdownPolicy?.disabled || spec.dropdownPolicy?.freeText?.includes(h) ? null : spec.dropdowns?.[h];
+const inputMasterColumn = (spec,h) => spec.dropdownPolicy?.disabled || spec.dropdownPolicy?.freeText?.includes(h) ? null : spec.vehicleMaster?.columns?.[h];
 // Only suppliers registered for the shared sheet may be bound, with the exact
 // code↔tab pairing. ERP/homepage/API suppliers are never shared-sheet tabs.
 const registered = (suppliers, spec, requireAll) => {
@@ -74,19 +76,24 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
 }
 // One-time supplier input setup: dropdowns only. Runs the full verify gate
 // first, then emits a list setDataValidation for spec.dropdowns columns on
-// supplier tabs. Free-text columns are left as they are (existing rules kept).
+// supplier tabs. Explicit free-text decisions clear old validation when enabled.
 // No values, formats, rows, columns or the formula-driven summary tab are touched.
 export function planSupplierDropdowns(input, spec=inputSpec, now=Date.now()) {
+  if(spec.dropdownPolicy?.lightweight?.enabled)hold('Use planLightweightPresentation for bounded fixed-list presentation');
   const verified=planSupplierInput(input,spec,now);
   const free=new Set(spec.dropdownPolicy?.freeText??[]);
-  const unknown=spec.inputHeaders.filter(h=>[Boolean(spec.dropdowns?.[h]),Boolean(spec.vehicleMaster?.columns?.[h]),free.has(h)].filter(Boolean).length!==1);
+  const unknown=spec.inputHeaders.filter(h=>[Boolean(inputDropdown(spec,h)),Boolean(inputMasterColumn(spec,h)),free.has(h)].filter(Boolean).length!==1);
   if(unknown.length)hold(`Every column needs exactly one dropdown, vehicle-master range or free-text decision: ${unknown.join(', ')}`);
   const requests=[];
   for(const sup of supplierTabs(input.binding.suppliers)){
     const s=input.spreadsheet.sheets.find(x=>x.properties.sheetId===sup.sheetId);
     const rows=s.properties.gridProperties.rowCount;
     spec.inputHeaders.forEach((h,i)=>{
-      const list=spec.dropdowns[h];if(!list)return;
+      const list=inputDropdown(spec,h);
+      if(!list){
+        if(free.has(h)&&spec.dropdownPolicy?.clearsFreeTextRules)requests.push({setDataValidation:{range:{sheetId:sup.sheetId,startRowIndex:1,endRowIndex:rows,startColumnIndex:i,endColumnIndex:i+1},filteredRowsIncluded:true}});
+        return;
+      }
       const range={sheetId:sup.sheetId,startRowIndex:1,endRowIndex:rows,startColumnIndex:i,endColumnIndex:i+1};
       requests.push({setDataValidation:{range,rule:{condition:{type:'ONE_OF_LIST',values:list.map(userEnteredValue=>({userEnteredValue}))},strict:spec.dropdownStrict===true,showCustomUi:true}}});
     });
@@ -96,6 +103,7 @@ export function planSupplierDropdowns(input, spec=inputSpec, now=Date.now()) {
 // Full master lists, not per-row dependent lists. Only the hidden list tab
 // receives values; supplier tabs receive validation rules only.
 export function planVehicleMasterDropdowns(input,spec=inputSpec,now=Date.now()){
+  if(spec.dropdownPolicy?.disabled)hold('Dropdowns disabled by latest user decision');
   planSupplierInput(input,spec,now);
   const rule=spec.vehicleMaster,master=input.master;
   const names=['제조사','모델','세부모델','세부트림'];
@@ -309,6 +317,7 @@ export function planColumnAdd(input,spec=inputSpec,now=Date.now()){
 // right to left, then move the remaining columns into place left to right and
 // rewrite the header row. No cell value is rewritten. Back up before running.
 export function planLayoutChange(input,spec=inputSpec,now=Date.now()){
+  if(spec.changeControl?.destructiveChanges==='FORBIDDEN')hold('Deletion forbidden by current user specification; historical layout migration disabled');
   const rule=spec.layoutChange,from=spec.legacyLayouts?.[rule?.from];
   if(!rule||!from)hold('Spec layoutChange with legacy layout required');
   if(!Array.isArray(rule.remove)||new Set(rule.remove).size!==rule.remove.length)hold('layoutChange remove must be a unique column list');
@@ -594,12 +603,12 @@ function canonCheck(c,h,spec){
     let target=trim;
     if(f.kind==='age')target=trim.replace(h==='기본연령'?/^(만 \d{1,3}세) 이상$/:/^(만 \d{1,3}세) 이하$/,'$1');
     if(f.kind==='duration')target=trim.replace(/^(\d+년) 이상$/,'$1');
-    if(f.kind==='distance')target=trim.replace(/^연 /,'');
+    if(f.kind==='distance')target=f.displayAliases?.[trim]??trim.replace(/^연 /,'');
     if(f.kind==='seats')target=trim.replace(/^(\d+)인승$/,'$1');
     if(['분납','추가운전인원'].includes(h))target=trim.replace(/^(\d+(?:회|인))까지$/,'$1');
     if(h==='개인운전자'&&trim==='계약자 본인')target='본인';
     const accepted=(f.dropdown??[]).includes(target)||f.kind==='age'&&/^만 (?:[1-9]\d?|1[01]\d|120)세$/.test(target)||f.kind==='duration'&&/^[1-9]\d*년$/.test(target)||f.kind==='distance'&&/^(?:[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d{0,2})km$/.test(target)||f.kind==='policyMoney'&&/^(?:\d+(?:\.\d+)?(?:~\d+(?:\.\d+)?)?만원|\d+억원|\d+천(?:\d+백)?만원|\d+억\d+천만원|대여료의 \d+(?:\.\d+)?%)$/.test(target);
-    out=accepted?finish(target):{bad:true,reason:'UNCONFIRMED_VALUE_OR_UNIT'};
+    out=accepted||Object.values(f.displayAliases??{}).includes(target)?finish(target):{bad:true,reason:'UNCONFIRMED_VALUE_OR_UNIT'};
   }
   if(out.bad&&spec.valueFormatsUndecided?.some(x=>x.column===h))return {bad:true,reason:'UNDECIDED_COLUMN'};
   if(out.bad&&c.userEnteredValue?.formulaValue)return {bad:true,reason:'FORMULA_PRESERVED'};
@@ -658,7 +667,7 @@ const canonHeaderColor=(spec,h,path,fallback)=>{
 function canonTabAudit(snapshot,spec){
   const tabs=canonTabs(snapshot,spec),base=tabs[1],differences=[],holds=[];
   const add=(t,item,column,expected,actual)=>{if(canonEqual(expected,actual))return;differences.push({tab:t.title,item,column,expected:canonClone(expected??null),actual:canonClone(actual??null)});};
-  const baseRules=canonRule(base.sheet.conditionalFormats??[],base);
+  const baseRules=spec.performancePolicy?.conditionalFormats===false?[]:canonRule(base.sheet.conditionalFormats??[],base);
   for(const t of tabs){
     const header=[...t.rows.get(0).values()].map(c=>c.userEnteredValue?.stringValue??'');
     if(t.g.columnCount!==spec.inputHeaders.length)holds.push({tab:t.title,reason:'GRID_COLUMN_COUNT_MISMATCH'});
@@ -697,8 +706,8 @@ function canonTabAudit(snapshot,spec){
       }
       if(t.title!==spec.summaryTitle){
         let rule=null;
-        if(spec.dropdowns[h])rule={condition:{type:'ONE_OF_LIST',values:spec.dropdowns[h].map(userEnteredValue=>({userEnteredValue}))},strict:spec.dropdownStrict===true,showCustomUi:true};
-        else if(spec.vehicleMaster.columns[h])rule={condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:spec.dropdownStrict===true,showCustomUi:true};
+        if(inputDropdown(spec,h))rule={condition:{type:'ONE_OF_LIST',values:inputDropdown(spec,h).map(userEnteredValue=>({userEnteredValue}))},strict:spec.dropdownStrict===true,showCustomUi:true};
+        else if(inputMasterColumn(spec,h))rule={condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]},strict:spec.dropdownStrict===true,showCustomUi:true};
         for(const r of t.rows.keys()){if(!r)continue;const actual=canonCell(t,r,i).dataValidation??null;
           const canonicalActual=actual?{...actual,strict:actual.strict??false,showCustomUi:actual.showCustomUi??false}:null;
           add(t,'dropdown',`${h}:${r+1}`,rule,canonicalActual);
@@ -716,6 +725,7 @@ function canonTabAudit(snapshot,spec){
 }
 export function auditTabConsistency(snapshot,spec=inputSpec){return canonTabAudit(snapshot,spec);}
 export function planTabConsistencyFix(snapshot,spec=inputSpec){
+  if(spec.dropdownPolicy?.lightweight?.enabled)hold('Use planLightweightPresentation; generic formatting must not erase lightweight rules');
   const tabs=canonTabs(snapshot,spec),base=tabs[1],holds=[],requests=[];
   const get=(format,path)=>path.split('.').reduce((v,k)=>v?.[k],format)??null;
   const paths=['textFormat.fontFamily','textFormat.fontSize','textFormat.italic','textFormat.bold','horizontalAlignment','numberFormat'];
@@ -738,7 +748,7 @@ export function planTabConsistencyFix(snapshot,spec=inputSpec){
     if(t.g.columnCount!==spec.inputHeaders.length)holds.push({tab:t.title,reason:'GRID_COLUMN_COUNT_MISMATCH'});
     if(t.sheet.properties.hidden)holds.push({tab:t.title,reason:'BOUND_TAB_HIDDEN'});
   }
-  const baseRules=canonRule(base.sheet.conditionalFormats??[],base);
+  const baseRules=spec.performancePolicy?.conditionalFormats===false?[]:canonRule(base.sheet.conditionalFormats??[],base);
   if(JSON.stringify(baseRules).includes('!')||baseRules.some(rule=>rule.ranges.some(r=>r.sheetId!=='SELF')))holds.push({tab:base.title,reason:'CONDITIONAL_EXTERNAL_REFERENCE'});
   // Majority-derived attributes (bold, numberFormat, ...) cover whole columns, so they need every row read.
   for(const c of tabs.map(canonCoverage))if(!c.complete)holds.push({tab:c.tab,reason:'PARTIAL_CAPTURE_MAJORITY_FORMATS'});
@@ -757,9 +767,9 @@ export function planTabConsistencyFix(snapshot,spec=inputSpec){
     requests.push({updateSheetProperties:{properties:{sheetId:t.id,gridProperties:{frozenRowCount:spec.frozenRowCount,frozenColumnCount:spec.frozenColumnCount}},fields:'gridProperties.frozenRowCount,gridProperties.frozenColumnCount'}});
     for(const [startIndex,endIndex,pixelSize] of [[0,1,spec.headerRowHeight],[1,t.g.rowCount,spec.rowHeight]])requests.push({updateDimensionProperties:{range:{sheetId:t.id,dimension:'ROWS',startIndex,endIndex},properties:{pixelSize},fields:'pixelSize'}});
     if(t.title!==spec.summaryTitle)runs(spec.inputHeaders.map(h=>{
-      const condition=spec.dropdowns[h]?{type:'ONE_OF_LIST',values:spec.dropdowns[h].map(userEnteredValue=>({userEnteredValue}))}:spec.vehicleMaster.columns[h]?{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]}:null;
+      const condition=inputDropdown(spec,h)?{type:'ONE_OF_LIST',values:inputDropdown(spec,h).map(userEnteredValue=>({userEnteredValue}))}:inputMasterColumn(spec,h)?{type:'ONE_OF_RANGE',values:[{userEnteredValue:`='${spec.vehicleMaster.tab}'!${spec.vehicleMaster.columns[h]}2:${spec.vehicleMaster.columns[h]}`}]}:null;
       return condition?{condition,strict:spec.dropdownStrict===true,showCustomUi:true}:null;
-    }),(rule,start,end)=>requests.push({setDataValidation:{range:range(start,end),...(rule?{rule}:{})}}));
+    }),(rule,start,end)=>requests.push({setDataValidation:{range:range(start,end),filteredRowsIncluded:true,...(rule?{rule}:{})}}));
     if(!canonEqual(baseRules,canonRule(t.sheet.conditionalFormats??[],t))){
       for(let index=(t.sheet.conditionalFormats??[]).length-1;index>=0;index--)requests.push({deleteConditionalFormatRule:{sheetId:t.id,index}});
       baseRules.forEach((rule,index)=>requests.push({addConditionalFormatRule:{index,rule:{...canonClone(rule),ranges:rule.ranges.map(r=>({...r,sheetId:t.id,...(r.endRowIndex==='END'?{endRowIndex:t.g.rowCount}:{})}))}}}));

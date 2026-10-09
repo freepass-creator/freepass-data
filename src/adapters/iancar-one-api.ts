@@ -1,3 +1,4 @@
+import { IANCAR_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS } from '../domain/deposit-evidence.js';
 import { createHash } from 'node:crypto';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
 
@@ -27,7 +28,7 @@ const IANCAR_STATES = ['AVAILABLE', 'RESERVED', 'RENTED', 'PREPARING', 'UNAVAILA
 export const IANCAR_ONE_API_VERSION = 'iancar-one-api/1';
 export const IANCAR_ONE_API_ORIGIN = 'https://eancarone.com';
 export const IANCAR_ONE_SOURCE_ID = 'supplier:RP031:iancar-one-api';
-export const IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS = 15 * 60;
+export const IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS = IANCAR_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS;
 export const IANCAR_ONE_PAGE_SIZE = 100;
 
 /** Supplier catalogue assets observed on 2026-10-02; not photographs of an individual vehicle.

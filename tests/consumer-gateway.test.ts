@@ -137,6 +137,7 @@ describe('read-only consumer gateway', () => {
             sourceProject: 'freepasserp5' as const,
             observedAt: '2026-09-27T00:00:00.000Z',
             collectionCounts: { products: 1, policy: 1, partner: 0, user: 0 },
+            depositEvidenceVersion: 'catalog-compat-deposit/1' as const,
           },
         };
       },
