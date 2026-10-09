@@ -36,11 +36,13 @@ export function precomputeOfferEconomics(
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
       billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
-      const base = { ruleId: result.ruleId, policyId: policy.policyId,
+      const base: Pick<TermEconomicAmount, 'ruleId' | 'policyId' | 'sourceRefs' | 'priceSourceRefs' | 'vatTreatment' | 'vatAmount' | 'totalAmount' | 'referenceRentBasis'> = { ruleId: result.ruleId, policyId: policy.policyId,
         sourceRefs: [] as string[], priceSourceRefs: [priceRef],
         vatTreatment: result.vatTreatment, vatAmount: result.vatAmount, totalAmount: result.totalAmount };
       if (result.ruleId?.startsWith('BILLIN_SUBSCRIPTION_36_RENT') && basis36.length === 1) {
         base.priceSourceRefs = [...new Set([priceRef, `catalog_offers/${offer.id}/priceTerms/${basis36[0]!.termKey}`])];
+        base.referenceRentBasis = { termKey: basis36[0]!.termKey, termMonths: 36,
+          monthlyRent: structuredClone(basis36[0]!.monthlyRent), multiplier: side === 'BILLING' ? 1 : 0.8 };
       }
       const unknown = (reasonCode: string): TermEconomicAmount => ({ ...base,
         state: 'UNKNOWN', amount: null, calculation: null, vatAmount: null, totalAmount: null, reasonCode });
@@ -374,6 +376,17 @@ export function auditOfferEconomicsTerms(offer: Offer): OfferEconomicsAudit {
     auditEconomicAmount(term.depositCalculation, `${term.termKey}:DEPOSIT`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
     auditEconomicAmount(term.supplierBillingFee, `${term.termKey}:SUPPLIER_BILLING_FEE`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
     auditEconomicAmount(term.channelPayoutFee, `${term.termKey}:CHANNEL_PAYOUT_FEE`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
+    for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
+      const fee = term[side], basis = fee.referenceRentBasis;
+      if (!basis) continue;
+      const reference = prices.get(basis.termKey);
+      if (!reference || reference.termMonths !== 36 || basis.termMonths !== 36 ||
+          reference.monthlyRent.amount !== basis.monthlyRent.amount || reference.monthlyRent.currency !== basis.monthlyRent.currency ||
+          basis.multiplier !== (side === 'supplierBillingFee' ? 1 : 0.8) ||
+          Math.round(basis.monthlyRent.amount * basis.multiplier) !== fee.amount?.amount) {
+        invalidFacts.push(`ECONOMICS_REFERENCE_RENT_MISMATCH:${term.termKey}:${side}`);
+      }
+    }
 
     if (
       (term.depositCalculation.state === 'KNOWN' || term.depositCalculation.state === 'ZERO') &&

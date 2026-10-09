@@ -396,6 +396,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+### 2026-10-09 기간별 금액 엔진 지속 수정·검증 준비
+
+- 목적: 차량/상품의 기간별 월료·보증금·청구·지급 저장과 정책 수정 후 재산출/조회 실행경로를 고정한다.
+- 대상 revision: cca301b → 0a7f0f8 + origin/main b2777b5 merge 기반 PR403.
+- 변경: 재산출 apply fresh readback와 중단 사유; 빌린카 기준36개월 termKey/월료/배율을 referenceRentBasis로 보존, 가격 근거와 독립 감사; Catalog/Admin 계약 확장; READ-RUNTIME 운영 순서와 기존 가격수정 경로 명시.
+- 검증: 전체 check PASS,137 files1666 tests PASS/14 SKIP. Codex CLI 읽기전용 독립검토 exit0+비어있지않은 보고서: FIXED 근거 혼동 지적1건 → basis/독립감사/변조회귀로 해결 재검토. Claude 조직 접근 차단 UNAVAILABLE 유지. 실제 Firestore exclusive writer service:freepass-data 확인;160 Offers 재산출 plan/private before-image 확보, 쓰기0.
+- 남음: PR403 Canon Guard가 PR401/400/399의 contracts/ 정본 작업 점유로 CANONICAL_PATH_CONTESTED. 사용자 오더는 저장/조회 적용까지이나 main 반영 통제와 새 consumer schema 배포 전 운영 쓰기는 안전하지 않아 미실행. 조회 원천과 중앙 저장 상품 범위가 달라 등록 누락도 별도 정합 필요.
+- next_start_here: 정본 점유 통제 경로에서 PR403 통합 → 새 consumer 계약 배포 확인 → 최신 dry-run/backups/digest 재생성 → apply의readbackVerifiedOffers 확인 → Admin 재발행과 인증된 카톡/internalAI/Admin 조회 대사. 실제 대사 전 전체 조회 가능/운영 완료로 보고하지 않는다.
 ### 2026-10-09 빌린카 LC 구독 수수료 대표 확정
 
 - 목적/변경: 빌린카·LC 구독 36개월 월대여료100% 청구/80% 지급 확정. 이전 잠정 및 60개월 구독률 대체. 카톡/내부AI와 canonical precompute가 같은 기준료를 사용한다. 기간마다 현재 월료를 대신 쓰거나 전체36개월 합계를 쓰지 않는다.

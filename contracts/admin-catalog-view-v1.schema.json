@@ -867,6 +867,34 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "referenceRentBasis": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "termKey",
+            "termMonths",
+            "monthlyRent",
+            "multiplier"
+          ],
+          "properties": {
+            "termKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "termMonths": {
+              "const": 36
+            },
+            "monthlyRent": {
+              "$ref": "#/$defs/money"
+            },
+            "multiplier": {
+              "enum": [
+                1,
+                0.8
+              ]
+            }
+          }
         }
       },
       "allOf": [

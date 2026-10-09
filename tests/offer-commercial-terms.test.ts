@@ -259,6 +259,15 @@ describe('F04 explicit canonical evidence', () => {
     expect(row.channelPayoutFee.amount?.amount).toBe(400000);
     expect(row.channelPayoutFee.sourceRefs).toContain('USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80');
     expect(row.channelPayoutFee.priceSourceRefs).toContain('catalog_offers/synthetic/priceTerms/36');
+    expect(row.supplierBillingFee.referenceRentBasis).toEqual({ termKey: '36', termMonths: 36, monthlyRent: { amount: 500000, currency: 'KRW' }, multiplier: 1 });
+    expect(row.channelPayoutFee.referenceRentBasis?.multiplier).toBe(0.8);
+  });
+  it('detects a changed or corrupted reference monthly rent independently of the stored fixed amount', () => {
+    const input = { ...offer(), supplierId: 'RP021' };
+    input.internalEconomicsTerms = precomputeOfferEconomics(input, 'USED_SUBSCRIPTION');
+    expect(auditOfferEconomicsTerms(input).invalidFacts).toHaveLength(0);
+    input.internalEconomicsTerms[0]!.supplierBillingFee.referenceRentBasis!.monthlyRent.amount += 100;
+    expect(auditOfferEconomicsTerms(input).invalidFacts).toContain('ECONOMICS_REFERENCE_RENT_MISMATCH:24@default:supplierBillingFee');
   });
 });
 
