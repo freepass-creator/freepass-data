@@ -93,6 +93,7 @@ export async function runOfferEconomicsRecompute(store: CatalogStore, options: R
   if (!options.apply) return planOfferEconomicsRecompute(store, options.target);
   const plan = assertApplyPlan(options);
   const results: Array<{ offerId: string; status: string; changed: boolean; revision?: number; reason?: string }> = [];
+  let readbackVerifiedOffers = 0;
   for (const entry of plan.entries) {
     try {
       const identity = stableDigest({ policyId: plan.policyId, policyDigest: plan.policyDigest,
@@ -104,6 +105,17 @@ export async function runOfferEconomicsRecompute(store: CatalogStore, options: R
         reason: `Approved economics plan ${options.expectedPlanDigest}`
       });
       results.push({ offerId: entry.offerId, ...result });
+      // A commit acknowledgement alone is not persistence verification.
+      const stored = await store.getOffer(entry.offerId);
+      const product = stored ? await store.getProduct(stored.productId) : null;
+      const model = product ? await store.getVehicleModel(product.vehicleModelId) : null;
+      if (!stored || stored.revision !== result.revision ||
+          stableDigest(stored.priceTerms) !== stableDigest(entry.before.priceTerms) ||
+          stableDigest(stored.internalEconomicsTerms ?? []) !== stableDigest(precomputeOfferEconomics(stored, product?.commercialType, model?.fuel))) {
+        results[results.length - 1] = { ...results[results.length - 1]!, status: 'HOLD', reason: 'PERSISTENCE_READBACK_MISMATCH' };
+        break;
+      }
+      readbackVerifiedOffers++;
     } catch (error) {
       results.push({ offerId: entry.offerId, status: 'HOLD', changed: false,
         reason: error instanceof Error ? error.message : String(error) });
@@ -113,6 +125,7 @@ export async function runOfferEconomicsRecompute(store: CatalogStore, options: R
   }
   return { mode: 'APPLY' as const, status: results.some(row => row.status === 'HOLD') ? 'HOLD' : 'APPLIED',
     changedOffers: results.filter(row => row.changed).length, processedOffers: results.length,
+    readbackVerifiedOffers,
     remainingOffers: plan.entries.length - results.length, planDigest: options.expectedPlanDigest, results };
 }
 
