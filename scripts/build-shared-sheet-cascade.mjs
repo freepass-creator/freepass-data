@@ -1,14 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {inputSpec} from './supplier-input-sheet.mjs';
+import {inputSpec,vehicleMasterCascadeLookup} from './supplier-input-sheet.mjs';
 import vm from 'node:vm';
 
 // Same pure hierarchy logic as the bound script, also usable by Sheets API publishers.
 export function planCascadeValidationRefresh(input,spec=inputSpec,now=Date.now()) {
   const age=now-Date.parse(input.capturedAt);
   if(!Number.isFinite(age)||age< -1000||age>300000)throw new Error('HOLD: fresh read required');
-  const bundle=buildCascadeBundle(input.metadata,spec),config=bundle.config;
+  const bundle=buildCascadeBundle({...input.metadata,vehicleMasterSnapshot:input.master},spec,now),config=bundle.config;
   if(JSON.stringify(input.headers)!==JSON.stringify(config.headers))throw new Error('HOLD: fresh vehicle header read required');
   if(input.lookupSheetId!==config.lookupSheetId)throw new Error('HOLD: lookup binding changed');
   const ctx=vm.createContext({});
@@ -26,10 +26,10 @@ export function planCascadeValidationRefresh(input,spec=inputSpec,now=Date.now()
       requests.push({setDataValidation:{range:{sheetId:row.sheetId,startRowIndex:row.row-1,endRowIndex:row.row,startColumnIndex:column-1,endColumnIndex:column},filteredRowsIncluded:true,rule:{condition:list.length?{type:'ONE_OF_LIST',values:list.map(userEnteredValue=>({userEnteredValue}))}:{type:'CUSTOM_FORMULA',values:[{userEnteredValue:`=LEN(${String.fromCharCode(64+column)}${row.row})=0`}]},strict:false,showCustomUi:list.length>0,inputMessage:'앞 항목에 맞는 차종 목록. 입력값은 보존됩니다.'}}});
     });
   }
-  return {status:'PLANNED',spreadsheetId:config.spreadsheetId,scope:'VEHICLE_VALIDATION_ONLY',requests};
+  return {status:bundle.holds.length?'PLANNED_WITH_HOLD':'PLANNED',snapshotDigest:config.masterSnapshotDigest,holds:bundle.holds,spreadsheetId:config.spreadsheetId,scope:'VEHICLE_VALIDATION_ONLY',requests};
 }
 
-export function buildCascadeBundle(metadata, spec=inputSpec) {
+export function buildCascadeBundle(metadata, spec=inputSpec,now=Date.now()) {
   if(spec.dropdownPolicy?.disabled)throw new Error('HOLD: Dropdowns disabled by latest user decision');
   if(!metadata?.spreadsheetId || !Array.isArray(metadata.sheets))throw new Error('HOLD: fresh workbook metadata required');
   const titles=[...new Set(spec.supplierChannels.sharedInputSheet.map(s=>s.tab))];
@@ -43,9 +43,10 @@ export function buildCascadeBundle(metadata, spec=inputSpec) {
   if(headers.length!==4||!headers.every((h,i)=>spec.inputHeaders[firstColumn-1+i]===h))throw new Error('HOLD: contiguous vehicle headers required');
   const lookup=metadata.sheets.find(s=>s.properties.title===spec.vehicleMaster.cascade.lookupTab);
   if(!lookup)throw new Error('HOLD: published lookup tab missing');
-  const config={version:'shared-sheet-row-cascade/1',spreadsheetId:metadata.spreadsheetId,headers,firstColumn,lookupTab:lookup.properties.title,lookupSheetId:lookup.properties.sheetId,suppliers};
+  const snapshot=vehicleMasterCascadeLookup(metadata.vehicleMasterSnapshot,now);
+  const config={version:'shared-sheet-row-cascade/1',masterSnapshotDigest:snapshot.snapshotDigest,expectedLookupRows:snapshot.lookupRows,spreadsheetId:metadata.spreadsheetId,headers,firstColumn,lookupTab:lookup.properties.title,lookupSheetId:lookup.properties.sheetId,suppliers};
   const source=fs.readFileSync(new URL('./shared-sheet-cascade-runtime.gs',import.meta.url),'utf8');
-  return {config,files:[{name:'appsscript',type:'JSON',source:JSON.stringify({timeZone:'Asia/Seoul',runtimeVersion:'V8',exceptionLogging:'STACKDRIVER',oauthScopes:['https://www.googleapis.com/auth/spreadsheets.currentonly']},null,2)},{name:'Code',type:'SERVER_JS',source:`var FREEPASS_CASCADE_CONFIG = ${JSON.stringify(config)};\n${source}`}],cutover:'HOLD_UNTIL_BOUND_SCRIPT_UI_EDIT_AND_API_REPAIR_VERIFIED'};
+  return {config,lookupRows:snapshot.lookupRows,holds:snapshot.holds,files:[{name:'appsscript',type:'JSON',source:JSON.stringify({timeZone:'Asia/Seoul',runtimeVersion:'V8',exceptionLogging:'STACKDRIVER',oauthScopes:['https://www.googleapis.com/auth/spreadsheets.currentonly']},null,2)},{name:'Code',type:'SERVER_JS',source:`var FREEPASS_CASCADE_CONFIG = ${JSON.stringify(config)};\n${source}`}],cutover:'HOLD_UNTIL_BOUND_SCRIPT_UI_EDIT_AND_API_REPAIR_VERIFIED'};
 }
 
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){

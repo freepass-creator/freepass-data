@@ -8,6 +8,7 @@ import { sharedSheetChannels, sharedSheetHeaders } from '../src/adapters/shared-
 
 // 시트 읽기를 가짜로: 준비한 응답(또는 오류)을 차례로 돌려준다. 시험 자료는 합성값이다.
 const reads: Array<unknown> = [];
+vi.mock('../src/jobs/data-access-runtime.js', () => ({ captureVehicleMasterSnapshotReadOnly: async () => ({ source: 'synthetic-master', complete: true }) }));
 vi.mock('../src/infra/shared-sheet-capture-reader.js', () => ({
   readSheetsMetadata: async () => META(),
   readSheetsBatchGet: async () => { const next = reads.shift(); if (next instanceof Error) throw next; if (!next) throw new Error('NO_MORE_READS'); return next; },

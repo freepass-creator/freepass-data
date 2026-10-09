@@ -8,6 +8,7 @@ import { sharedSheetChannels, sharedSheetHeaders } from '../src/adapters/shared-
 
 // 온라인 경로의 시트 읽기를 가짜로 바꾼다 — 차례대로 준비한 응답을 돌려준다.
 const reads: unknown[] = [];
+vi.mock('../src/jobs/data-access-runtime.js', () => ({ captureVehicleMasterSnapshotReadOnly: async () => ({ source: 'synthetic-master', complete: true }) }));
 vi.mock('../src/infra/shared-sheet-capture-reader.js', () => ({
   readSheetsMetadata: async () => META(),
   readSheetsBatchGet: async () => { if (!reads.length) throw new Error('NO_MORE_READS'); return reads.shift(); },

@@ -3,7 +3,8 @@ import { pathToFileURL } from 'node:url';
 import { captureFromBatchGet, type CaptureDateStats, sharedSheetCaptureRanges, supplierEnteredFromErp5, withSupplements, SHEETS_GRID_META_FIELDS, type SheetsBatchGet, type SheetsGridMeta } from '../adapters/shared-sheet-capture.js';
 import type { SupplierEnteredRecord, SheetCorrection } from '../adapters/shared-sheet-source.js';
 import { readSheetsBatchGet, readSheetsMetadata } from '../infra/shared-sheet-capture-reader.js';
-import { assertCurrentSharedSheetSource, buildSharedSheetBatch } from '../adapters/shared-sheet-source.js';
+import { assertCurrentSharedSheetSource, buildSharedSheetBatch, sharedSheetCaptureDigest } from '../adapters/shared-sheet-source.js';
+import { captureVehicleMasterSnapshotReadOnly } from './data-access-runtime.js';
 import { writePrivateArtifact } from './ingest-shared-sheet-canonical.js';
 
 /** Capture the 15-tab shared input sheet into a private capture v1 file. stdout carries counts only (no plates/fees). */
@@ -50,6 +51,11 @@ export async function main(args = process.argv.slice(2)) {
   const covered = new Set(fromErp5.map(x => `${x.supplierCode}|${x.plate}`));
   const sealed = erp5 || supplementPath ? withSupplements(capture,
     [...fromErp5, ...(supplement.supplierEntered ?? []).filter(x => !covered.has(`${x.supplierCode}|${x.plate}`))], supplement.corrections ?? []) : capture;
+  // Offline captures must never quietly reach live Firestore. They remain master-HOLD until supplied by the existing gateway.
+  if (!local) {
+    sealed.vehicleMasterSnapshot = await captureVehicleMasterSnapshotReadOnly();
+    sealed.digest = sharedSheetCaptureDigest(sealed);
+  }
   const batch = buildSharedSheetBatch(sealed);
   await writePrivateArtifact(out, sealed);
   console.log(JSON.stringify({ schema: sealed.schema, tabs: sealed.tabs.length, records: batch.records.length,

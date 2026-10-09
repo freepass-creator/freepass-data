@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import {createHash} from 'node:crypto';
 import {buildCascadeBundle,planCascadeValidationRefresh} from '../scripts/build-shared-sheet-cascade.mjs';
 import {inputSpec as currentSpec} from '../scripts/supplier-input-sheet.mjs';
 import {mergeCascadeContent,deployCascade} from '../scripts/deploy-shared-sheet-cascade.mjs';
 const inputSpec=structuredClone(currentSpec);inputSpec.dropdownPolicy.disabled=false;
-const lookup=[['M|*','기아','현대'],['D|기아','K3'],['S|기아|K3','K3 BD'],['T|기아|K3|K3 BD','스탠다드']];
+const lookup=[['@snapshot','test-digest'],['M|*','기아','현대'],['D|기아','K3'],['S|기아|K3','K3 BD'],['T|기아|K3|K3 BD','스탠다드']];
 function fixture(values=[['기아','K3','K3 BD','스탠다드']]){
-  const ctx=vm.createContext({FREEPASS_CASCADE_CONFIG:{spreadsheetId:'book',firstColumn:6,headers:['제조사','모델','세부모델','세부트림'],lookupTab:'차종연쇄',lookupSheetId:92,suppliers:[{title:'가',sheetId:81}]},Number,JSON});
+  const ctx=vm.createContext({FREEPASS_CASCADE_CONFIG:{masterSnapshotDigest:'test-digest',expectedLookupRows:lookup,spreadsheetId:'book',firstColumn:6,headers:['제조사','모델','세부모델','세부트림'],lookupTab:'차종연쇄',lookupSheetId:92,suppliers:[{title:'가',sheetId:81}]},Number,JSON});
   vm.runInContext(fs.readFileSync(new URL('../scripts/shared-sheet-cascade-runtime.gs',import.meta.url),'utf8'),ctx);
   let writes=[],released=0;
   ctx.SpreadsheetApp={newDataValidation(){let r={};return {setAllowInvalid(v){r.allowInvalid=v;return this;},requireValueInList(v){r.list=v;return this;},requireFormulaSatisfied(v){r.formula=v;return this;},setHelpText(v){r.help=v;return this;},build(){return r;}};}};
@@ -21,7 +22,13 @@ test('cascade uses the complete parent path and does not offer other-maker desce
   const f=fixture(),index=f.ctx.fpCascadeIndex(lookup);
   assert.equal(JSON.stringify(f.ctx.fpCascadeChoices(['기아','K3','K3 BD'],index)),JSON.stringify([['기아','현대'],['K3'],['K3 BD'],['스탠다드']]));
   assert.equal(JSON.stringify(f.ctx.fpCascadeChoices(['현대','K3','K3 BD'],index)),JSON.stringify([['기아','현대'],[],[],[]]));
-  assert.throws(()=>f.ctx.fpCascadeIndex([...lookup,lookup[1]]),/duplicate/);
+  const duplicate=[...lookup,lookup[1]];f.ctx.FREEPASS_CASCADE_CONFIG.expectedLookupRows=duplicate;
+  assert.throws(()=>f.ctx.fpCascadeIndex(duplicate),/duplicate/);
+});
+test('cascade rejects a changed lookup even with the old snapshot marker; legacy unmarked input holds',()=>{
+  const f=fixture();const changed=structuredClone(lookup);changed[1][1]='다른 제조사';
+  assert.throws(()=>f.ctx.fpCascadeIndex(changed),/differs/);
+  assert.throws(()=>f.ctx.fpCascadeIndex(lookup.slice(1)),/snapshot mismatch/);
 });
 test('row refresh writes validations only, preserves unmatched values and releases lock',()=>{
   const f=fixture([['기아','옛 모델','옛 세부모델','옛 트림']]),before=JSON.stringify(f.values);
@@ -50,16 +57,17 @@ test('concurrent value change aborts validation writes and releases the lock',()
   assert.throws(()=>f.ctx.fpCascadeRefresh(f.book,sheet,2,1),/row changed/);assert.equal(f.released(),1);
 });
 test('missing lookup key after a valid parent does not invent a child or erase values',()=>{
-  const f=fixture(),index=f.ctx.fpCascadeIndex([['M|*','기아'],['D|기아','K3']]);
+  const f=fixture();f.ctx.FREEPASS_CASCADE_CONFIG.expectedLookupRows=[['@snapshot','test-digest'],['M|*','기아'],['D|기아','K3']];const index=f.ctx.fpCascadeIndex(f.ctx.FREEPASS_CASCADE_CONFIG.expectedLookupRows);
   assert.equal(JSON.stringify(f.ctx.fpCascadeChoices(['기아','K3','기존 값'],index)),JSON.stringify([['기아'],['K3'],[],[]]));
 });
 test('bundle exact-binds the existing 15 physical supplier tabs; no external-file scope',()=>{
   const titles=[...new Set(inputSpec.supplierChannels.sharedInputSheet.map(s=>s.tab))];
   const meta={spreadsheetId:'book',sheets:[...titles.map((title,i)=>({properties:{title,sheetId:i+1,gridProperties:{rowCount:1000}}})),{properties:{title:'차종연쇄',sheetId:92}}]};
+  const data={maker:'기아',model:'K3',sub_model:'K3 BD'},body={readAt:new Date().toISOString(),masters:[{id:'m',data}],trims:[{id:'t',data:{...data,master_id:'m',trim:'스탠다드'}}]};meta.vehicleMasterSnapshot={source:'freepasserp5/vehicle_master+vehicle_trim_master',complete:true,...body,digest:createHash('sha256').update(JSON.stringify(body)).digest('hex')};
   const b=buildCascadeBundle(meta,inputSpec);assert.equal(b.config.suppliers.length,15);assert.equal(b.config.firstColumn,6);
   assert.deepEqual(JSON.parse(b.files[0].source).oauthScopes,['https://www.googleapis.com/auth/spreadsheets.currentonly']);
   assert.throws(()=>buildCascadeBundle({...meta,sheets:meta.sheets.slice(1)},inputSpec),/supplier tab missing/);
-  const now=Date.now(),input={capturedAt:new Date(now).toISOString(),metadata:meta,headers:b.config.headers,lookupSheetId:92,lookupRows:lookup,rows:[{tab:titles[0],sheetId:1,row:2,values:['기아','K3','K3 BD','스탠다드']}]};
+  const now=Date.now(),input={master:meta.vehicleMasterSnapshot,capturedAt:new Date(now).toISOString(),metadata:meta,headers:b.config.headers,lookupSheetId:92,lookupRows:b.lookupRows,rows:[{tab:titles[0],sheetId:1,row:2,values:['기아','K3','K3 BD','스탠다드']}]};
   const plan=planCascadeValidationRefresh(input,inputSpec,now);
   assert.equal(plan.requests.length,4);assert.ok(plan.requests.every(r=>Object.keys(r).join()==='setDataValidation'&&r.setDataValidation.filteredRowsIncluded));
   assert.deepEqual(plan.requests[3].setDataValidation.rule.condition.values,[{userEnteredValue:'스탠다드'}]);
