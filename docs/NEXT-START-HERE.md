@@ -469,6 +469,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 카카오 운영 포트 / 상품 사진 CAS
+
+- 목적/정본: `503aee8aff28c52a0d55f39d23cc753d15e328ed`, `work/freepass-data/kakao-live-ports-20261009`, 미커밋 변경. 사용자 제공 main/Issue/PR 사전 확인 사용. Academy READY, 재사용/신규 분리 이유는 [실제 연결](NATIVE-SOURCE-COLLECTOR.md#실제-연결--2026-10-09).
+- 변경: 사용자 ADC 전용 Drive v3 REST + 소유자 1명/전체 부모 ACL + 폴더 검색/생성/중복 거부 + 다운로드 해시 + UNKNOWN 재전송 차단, 기존 FirestoreSourceStore와 target 재사용, 공급사 전체 products 읽기, 승인 후 CLI 내장 factory(기존 module 호환). source CLI의 상품 쓰기 0. 별도 사진 writer는 digest/updateTime CAS·typed 전후 백업·되읽기와 별도 승인 gate.
+- 매시 충돌 조사: ERP4 로컬 workflow pin `e6727ff04fcf98380701fa6360c36f313e0e321f`를 git show로 읽었다. 일반 ingest `:507-544/:622/:912`는 photo_link 미포함 merge, RP023 `ingest-reborncar-to-firestore.mts:231-232/:254`는 빈칸만 채움. 따라서 직접 사진 포트 구현. 단 RP023 동시 빈칸 판단/쓰기 경합과 현행 운영 pin은 실측 전 HOLD. image_urls로 우회하지 않는다. 파일:줄 전체와 대체 Source 증거 재사용안은 위 문서.
+- 검증: `npm.cmd run check` exit1, 선행 검사/build PASS, Vitest1797 PASS/9 FAIL/14 SKIP(카카오53 PASS). 9건은 tsx ENOMEM/jq 권한/read-pilot exit·JSON/로컬 서버 연결 실패; 전체 PASS 아님. 최종 build PASS, 관련 시험 59 PASS(카카오37 + 운영 포트18 + RAW4), git diff --check PASS. 전체 check 이후 최신 supplier reader 사용과 권한 pagination 회귀 2건을 추가 검증했다.
+- 남음: 운영 사용자 ADC/Drive scope·부모 권한·Firestore 실제 read/create/transaction, 한 PC 예약 작업 중복 실행 방지, ERP 비공개 사진 표시, 현재 writer/운영 pin, 사진 적용 시간 창·Windows backup ACL, 독립 검토. 운영 실행·예약 등록·ERP4 수정·커밋·푸시 없음.
+- next_start_here: 호출 세션이 미커밋 diff/시험을 검토하고 정상 환경 전체 check를 재확인 → 위 문서 명령 순서대로 dry-run/읽기 전용 preflight → 별도 승인 원문 보관/동일 digest ACK 확인. UNKNOWN은 보존·대사, photo_link 계획/포트 존재를 상품 표시 완료로 확대하지 않는다.
+
 ### 2026-10-09 카카오 원천 2단계 — 공통 시트 사진 계획·대기열 ACK·관측 성향
 
 - 목적/정본: PR #412의 1단계 `dd529ac19acc0fae73de35e91c8d3704e74d094e`, 같은 `work/freepass-data/kakao-source-intake-20261009` 위 미커밋 확장. 사용자 제공 main/PR/Issue 확인을 사용, Academy READY. 커밋·푸시 없음.

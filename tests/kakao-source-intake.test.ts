@@ -51,6 +51,14 @@ function setup(store = new MemorySourceStore()) {
 }
 
 describe('Kakao queue, sheet plan and observed source tendencies', () => {
+  it('includes duplicate-folder warnings in the queue result without turning them into holds', async () => {
+    const { ports } = setup();
+    const drive = Object.assign(ports.drive, { getWarnings: () => ['DRIVE_DUPLICATE_FOLDER'] });
+    const result = await processKakaoQueueInput({ bundle: bundle() }, { ...ports, drive },
+      { apply: true, approval: 'approved', now: now() });
+    expect(result.status).toBe('ACK_ELIGIBLE');
+    expect(result.warnings).toEqual(['DRIVE_DUPLICATE_FOLDER']);
+  });
   const sheetInput = () => {
     const spec = JSON.parse(readFileSync('contracts/supplier-input-sheet-spec.v1.json', 'utf8'));
     const headers = spec.inputHeaders as string[];
@@ -171,6 +179,15 @@ describe('Kakao queue, sheet plan and observed source tendencies', () => {
 });
 
 describe('Kakao RAW intake and private photo branch', () => {
+  it('uses the live supplier read instead of a supplied product snapshot', async () => {
+    const { ports, drive } = setup();
+    const readSupplier = vi.fn(async () => []);
+    const result = await ingestKakaoBundle(bundle(), { ...ports, productReader: { readSupplier, read: async () => null } },
+      { apply: true, approval: 'approved', now: now() });
+    expect(readSupplier).toHaveBeenCalledWith('FAKE_SUPPLIER');
+    expect(result[0]?.photo?.holds).toContain('PRODUCT_MATCH_UNRESOLVED');
+    expect(drive.uploads).toBeGreaterThan(0);
+  });
   it('claims the next event with a fresh lease after processing takes over five minutes', async () => {
     const { ports, drive, store } = setup(); const input = bundle();
     input.messages.push({ ...structuredClone(input.messages[0]!), messageId: 'fake-message-2' });
@@ -318,7 +335,7 @@ describe('Kakao RAW intake and private photo branch', () => {
     expect((await store.getEvent(id))?.latestRawRef).not.toBe(first.latestRawRef);
     expect((await store.getEvent(id))?.state).toBe('UNKNOWN');
   });
-  it('CLI dry run writes zero; apply needs both flag, environment and injected live ports', async () => {
+  it('CLI dry run writes zero; apply requires approval before composing configured ports', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'kakao-fake-'));
     try {
       const path = join(dir, 'fake.json'); await writeFile(path, JSON.stringify({ bundle: bundle(), products }), 'utf8');
@@ -329,7 +346,7 @@ describe('Kakao RAW intake and private photo branch', () => {
       expect(compiled.status, compiled.stderr).toBe(0);
       expect(JSON.parse(compiled.stdout)).toMatchObject({ mode: 'DRY_RUN', writes: 0 });
       await expect(runKakaoSourceCli([path, '--apply'], {}, ports)).rejects.toThrow('KAKAO_APPLY_NOT_APPROVED');
-      await expect(runKakaoSourceCli([path, '--apply'], { FREEPASS_KAKAO_SOURCE_APPLY: 'approved' })).rejects.toThrow('HOLD_KAKAO_LIVE_PORTS');
+      await expect(runKakaoSourceCli([path, '--apply'], { FREEPASS_KAKAO_SOURCE_APPLY: 'approved' })).rejects.toThrow('KAKAO_DRIVE_ROOT_REQUIRED');
     } finally {
       if (!dir.startsWith(join(tmpdir(), 'kakao-fake-'))) throw new Error('UNSAFE_TEST_CLEANUP');
       await rm(dir, { recursive: true, force: true });

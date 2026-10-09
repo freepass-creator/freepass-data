@@ -11,6 +11,8 @@ export type DriveArchiveFile = {
     domain?: string; emailAddress?: string; allowFileDiscovery?: boolean }>;
 };
 export interface KakaoDriveArchivePort {
+  /** Non-fatal diagnostics accumulated during this port instance. */
+  getWarnings?(): string[];
   /** Check destination and inherited ACLs before transmitting any source bytes. */
   inspectDestination(directory: string): Promise<Pick<DriveArchiveFile, 'permissions' | 'permissionsComplete' | 'ancestorPermissionsChecked'>>;
   find(properties: DriveArchiveRequest['appProperties']): Promise<DriveArchiveFile[]>;
@@ -29,14 +31,18 @@ export type KakaoPhotoPlan = {
   status: 'PLAN_ONLY'; holds: string[];
 };
 export interface KakaoPhotoWriterPort {
-  /** Adapter to the existing reviewed product writer. No direct products set/update. */
+  /** Separately approved, digest/revision-fenced blank-fill writer; never used by source ingestion. */
   dryRun(plan: KakaoPhotoPlan): Promise<{ planDigest: string; ready: boolean }>;
   apply(plan: KakaoPhotoPlan, approval: { planDigest: string }): Promise<{ verified: boolean }>;
+}
+export interface KakaoProductReadPort {
+  readSupplier(supplierCode: string): Promise<KakaoProductSnapshot[]>;
+  read(id: string): Promise<KakaoProductSnapshot | null>;
 }
 
 export type KakaoQueueReceipt = {
   inputDigest: string; status: 'DRY_RUN' | 'ACK_ELIGIBLE' | 'HOLD' | 'UNKNOWN';
-  deleteAllowed: boolean; issues: string[];
+  deleteAllowed: boolean; issues: string[]; warnings?: string[];
 };
 /** No delete/send operation: AI-OPS owns cleanup after authenticated, digest-bound acknowledgement. */
 export interface KakaoQueueReadPort<T> {

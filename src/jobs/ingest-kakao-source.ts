@@ -14,8 +14,8 @@ export async function runKakaoSourceCli(args: string[], env: NodeJS.ProcessEnv,
   if (!args.includes('--apply')) return { mode: 'DRY_RUN', writes: 0,
     results: planKakaoIntake(input.bundle, input.products ?? []) };
   if (env.FREEPASS_KAKAO_SOURCE_APPLY !== 'approved') throw new Error('KAKAO_APPLY_NOT_APPROVED');
-  // Never take executable code from source JSON. Only an operator-configured local module,
-  // after both approval gates, may compose the existing authenticated operational ports.
+  // Never take executable code from source JSON. Both approval gates precede loading
+  // the built-in ports or a backwards-compatible operator-configured local module.
   planKakaoIntake(input.bundle, input.products ?? []);
   if (!ports && env.FREEPASS_KAKAO_PORTS_MODULE) {
     const moduleUrl = pathToFileURL(resolve(env.FREEPASS_KAKAO_PORTS_MODULE)).href;
@@ -23,7 +23,10 @@ export async function runKakaoSourceCli(args: string[], env: NodeJS.ProcessEnv,
     if (typeof module.createKakaoPorts !== 'function') throw new Error('HOLD_KAKAO_PORT_FACTORY_MISSING');
     ports = await module.createKakaoPorts();
   }
-  if (!ports) throw new Error('HOLD_KAKAO_LIVE_PORTS_NOT_CONFIGURED');
+  if (!ports) {
+    const { createKakaoPorts } = await import('../infra/kakao-live-ports.js');
+    ports = await createKakaoPorts(env);
+  }
   return { mode: 'APPLY', receipt: await processKakaoQueueInput(input, ports,
     { apply: true, approval: env.FREEPASS_KAKAO_SOURCE_APPLY, now: new Date().toISOString() }) };
 }

@@ -6,6 +6,86 @@ This does not add a second CatalogStore, publication writer or scheduler.
 
 ## 카카오톡 원천 — 2026-10-09
 
+### 실제 연결 — 2026-10-09
+
+P1 수정 검증(2026-10-09, HEAD `8508e9f` 기반 미커밋): RP023 실제 문서 차단, 중복 폴더 결정적 선택·재시작 수렴·경고 요약 회귀 시험을 추가했다. `npm.cmd run check` 실행: 카카오 live ports 23/23, source intake 38/38 PASS; 전체 Vitest 1,805 PASS / 9 FAIL / 14 SKIP(4개 파일 실패), exit 1. 실패는 iancar-source-capture/read-pilot/runtime-policy의 하위 실행 환경 및 jq, vehicle-finder-route의 localhost ECONNREFUSED를 포함한다. 전체 check PASS 아님. 네트워크 제한으로 연결 재시도 중지(BLOCKED_NETWORK). 원문 로그 `.kakao-p1-check.log`. 커밋·푸시·운영 실행 없음. next_start_here: 호출 세션에서 환경 제한과 실패 9건을 확인하고 전체 check 재검증.
+
+**CODED / OFFLINE TESTED, 운영 실측 HOLD.** 기준 `503aee8aff28c52a0d55f39d23cc753d15e328ed`, `work/freepass-data/kakao-live-ports-20261009`. 사용자 제공 main/Issue #24/겹치는 PR 확인을 사용했다. Academy READY `2026-10-09T13:26:04.539Z`, reuse COMPOSE_OR_EXTEND. **CREATE_NEW_JUSTIFIED**: 기존 SourceStore·사건 선점·카카오 CLI·사진 계획과 이안카 typed backup codec을 재사용한다. 기존 포트에는 Drive REST transport/사용자 ADC 조합/일반 카톡 사진 CAS 구현이 없어 `kakao-drive-archive.ts`, `kakao-live-ports.ts`, 가짜 transport 시험만 추가했다. 새 DB·예약 작업·서비스·공유 권한은 만들지 않았다.
+
+아래 결정이 이 절의 과거 domain reader 허용, Actions 실행 초안, live ports 미구현 안내를 대체한다. 실행자는 **카톡 비공개 대기열이 있는 Windows PC의 예약 작업**, 인증자는 **pyh@teamjpk.com 사용자 ADC**다. 기존 gws 사용자 인증과 gcloud ADC는 별개 토큰 저장소이므로 gws 성공만으로 ADC 접근을 판단하지 않는다. 서비스 계정 키·폴더 공유·공개 링크 없음. 예약 작업은 해당 Windows 사용자로 실행하고 중복 인스턴스를 시작하지 않도록 설정해야 한다. 이번 작업은 예약을 등록/활성화하지 않았다.
+
+환경 변수(실제 값은 비공개 운영 설정에만 둔다):
+
+| 이름 | 의미 |
+|---|---|
+| `FREEPASS_KAKAO_DRIVE_ROOT_ID` | 필수. `원문/카카오톡` 논리 루트에 대응하는 실제 비공개 폴더. 아래에는 `{공급사코드}/{YYYY-MM}/{eventId}`만 생성한다. 실제 ID는 코드·문서·시험·로그에 기록하지 않는다. |
+| `FIREBASE_PROJECT_ID` | 명시적 중앙 target `freepasserp5`. `firebase-target.ts`만 사용한다. |
+| `NODE_ENV` | 운영은 `production`, emulator 금지. |
+| `FREEPASS_KAKAO_SOURCE_APPLY` | `approved`와 CLI `--apply`가 함께 있어야 내장 `createKakaoPorts()` 호출. 기본 dry-run은 인증·네트워크·쓰기 0. |
+| `FREEPASS_KAKAO_PORTS_MODULE` | 선택. 기존 검토된 로컬 모듈의 `createKakaoPorts()`를 우선하는 호환 경로. 입력 JSON으로 지정 금지. |
+| `FREEPASS_KAKAO_PHOTO_APPLY` | 사진 writer 전용 별도 `approved` gate. 원문 보관 승인으로 설정하지 않는다. |
+| `FREEPASS_KAKAO_PHOTO_BACKUP_DIR` | 사진 쓰기 시 필수 절대 경로. 저장소 밖의 사용자 전용 비공개 디렉터리. Windows ACL은 운영에서 확인한다. |
+
+`KakaoDriveArchive`는 Drive v3 REST의 files.get/list/create, permissions.list, alt=media만 사용한다. ADC가 UserRefreshClient인지와 Drive about의 실제 사용자 이메일을 확인한다. 목적지와 루트 위 모든 부모를 읽어 **같은 사용자 소유자 정확히 1명 외 권한이 하나라도 있으면 거부**한다. 조직 내부 reader도 거부하며 공유 드라이브도 허용하지 않는다. 목록·권한 pagination을 끝까지 읽고 incompleteSearch/미확인 권한을 거부한다. inspectDestination은 쓰기 0, upload에서 부모별 검색 후 폴더를 생성하고 다시 검색한다. 같은 포트 인스턴스의 동시 upload는 직렬화한다. 서로 다른 인스턴스의 동시 생성으로 폴더가 중복될 수 있으므로, 같은 부모·같은 이름·폴더 MIME 검색 결과에서 `createdTime`이 가장 이른 폴더(동률이면 ID 사전순)를 항상 선택한다. 생성 성공 뒤에도 재검색하여 같은 규칙으로 수렴한다. 중복 발견 시 결과 요약 `warnings`에 `DRIVE_DUPLICATE_FOLDER`를 남기고 삭제·이동하지 않는다. 폴더 생성 응답 유실은 같은 실행에서 재생성하지 않으며, 재시작 뒤 재검색이 0건일 때만 생성한다. 파일 `find`는 선택 폴더에 한정하지 않고 `appProperties(eventId·sha256)`로 검색한 뒤 실제 루트 아래 경로·바이트·권한을 검증하므로 비선택 중복 폴더의 기존 파일도 재사용한다. 폴더 선택은 파일 동시 업로드의 원자적 잠금이 아니며 동일 사건의 동시 처리는 기존 SourceStore 사건 선점이 담당한다.
+- 알려진 한계(재검토 Codex 지적, Claude 판정 2026-10-09): 폴더 생성 응답이 끊긴 사건은 `UNKNOWN`으로 남고, 재시작해도 선점을 다시 얻지 못해 자동으로 업로드하지 않는다. 설계상 «응답 유실 = 재조회·수동 대사 뒤 재개»이므로 안전 정지(중복 업로드·원문 유실 없음)다. 운영에서 `UNKNOWN` 사건이 쌓이면 상황실 알림 대상이며, 폴더 준비 실패와 파일 전송 불확실을 영속 상태로 나눠 자동 재개하는 것은 후속 과제다.
+
+파일은 eventId·sha256 appProperties로 검색하고 multipart 원본 업로드 후 새 다운로드 바이트 SHA256·경로·속성·권한을 대조한다. POST 자동 재시도 없음. 응답 유실·5xx·본문 유실은 `DRIVE_RESPONSE_UNKNOWN`이며 기존 수집기가 UNKNOWN 영수증을 남긴다. 최초 사건 선점이 재업로드를 차단한다. 같은 프로세스의 불확실한 폴더/파일 POST에도 fence가 남는다. 파일 응답 유실의 재시작은 검색·검증으로 대사하고, 누락을 재업로드 승인으로 해석하지 않는다. 폴더 응답 유실의 재시작은 위 재검색 규칙을 따른다. `find`도 원본 다운로드/검증을 하므로 비용이 들며 성공 목록만 믿지 않는다.
+
+Source는 기존 `FirestoreSourceStore` 그대로다. `KakaoProductReader`는 `products`의 공급사 전체 목록과 지정 문서를 읽고, 수집기는 입력 JSON snapshot 대신 그 최신 목록으로 대조한다. 공급사별 차량 ID 칸은 추정하지 않으므로 내장 reader의 ID-only 매칭은 HOLD, 원문 차량번호 매칭은 가능하다. 공급사 ID 전용 매칭을 켜려면 기존 칸의 검증된 mapping을 가진 reader를 호환 모듈로 주입해야 한다.
+
+**매시 products writer 조사(운영 실호출 아님):** ERP4 로컬 HEAD `fa260f63c10838a667dddad589071f0c73322a70`의 `.github/workflows/erp5-ssot-refresh.yml:13`은 매시 17분, `:138`은 엔진 `e6727ff04fcf98380701fa6360c36f313e0e321f` 고정, `:201`은 ingest-all-suppliers 실행이다. 아래 줄은 반드시 **그 고정 revision의 git show** 기준이며 현재 checkout의 retired stub과 혼동하지 않는다.
+
+| 고정 엔진 파일:줄 | 결과 |
+|---|---|
+| `scripts/ingest-all-suppliers.mts:32-34` | RP023은 reborncar, 나머지는 ingest-supplier로 분기한다. |
+| `scripts/ingest-supplier-to-firestore.mts:507-544`, `:622`, `:773`, `:910-912` | 전체 atom/변동 목록에 photo_link가 없다. 전체·변동 모두 merge=true이므로 기존 photo_link를 덮지 않는다. |
+| `lib/domain/photo-atom.ts:24-34` | 공급사 사진은 image_urls/photo_source_hash/photo_collected_at으로 쓴다. photo_link가 아니다. |
+| `scripts/ingest-reborncar-to-firestore.mts:112`, `:231-232`, `:254` | 공급사 mainImage를 photo_link 후보로 가져오지만 기존 x[k]가 비었을 때만 patch 후 merge한다. 기존 비어 있지 않은 링크는 유지한다. |
+| Data `src/infra/iancar-publication-withdrawal-firestore.ts:19-38`, `:54-66` | RP031 사진 writer는 image_urls/image_url과 원본 보존 칸을 사용한다. 일반 카톡에 전용 공급사 writer를 전용하지 않는다. |
+
+선택: **확인한 고정 코드에는 매시 photo_link 덮어쓰기가 없어** 별도 승인된 빈칸 채우기 `KakaoPhotoWriter`를 구현했다. 상품 전체 digest + Firestore updateTime(초/나노초)을 dry-run digest에 고정, typed before/expectedAfter 백업의 디스크 되읽기 → transaction CAS(maxAttempts=1) → photo_link만 update → 실제 after 백업/전체 문서 대조 순서다. 기존 값·표시 HOLD·승인 미충족은 거부하고 source CLI는 photoWriter를 호출하지 않는다. 응답 유실은 UNKNOWN 대사이며 자동 재실행/롤백하지 않는다. CAS/되읽기가 실패해도 before 백업은 보존한다.
+
+**현재 운영 고정 엔진 재확인(2026-10-09, Codex 읽기 전용 조사, Claude 판정):** 매시 회차 고정 엔진은 `fb35bfb6a0257e973e93403ab4c67a0c90a46619`이다(위 로컬 HEAD 아님). 이 커밋 기준 공급사 경로별 `photo_link`:
+
+| 경로 | 시트 사진으로 덮어쓰기 | 빈 값으로 지우기 | 근거 |
+|---|---|---|---|
+| 일반 시트 공급사(RP023 제외) | 없음 — 열 매핑·적재 행에 사진 없음, `merge:true` | 없음 | `scripts/ingest-supplier-to-firestore.mts:163-174,410,657-660,770,815,975-980` |
+| 홈페이지(RP006) | 없음 — 변동 필드만 update | 없음 | 같은 파일 `:228-238,642,657-660,808-813` |
+| RP012 | 없음 — 사진은 `image_urls`·`tica_link` | 없음 | 같은 파일 `:257-258,327,532-533`, `lib/domain/photo-atom.ts:24-33` |
+| RP023 시트 적재 | **있음(조건부)** — 상태 전용 회차가 아니고 계약 잠금이 없으며 원천 사진 링크가 비어 있지 않으면 기존 값을 덮어씀 | 없음 | `lib/domain/sheet-autoplus.ts:60-79`, `scripts/ingest-reborncar-to-firestore.mts:114-116` |
+
+판정: RP023 외 공급사는 Data가 쓴 `photo_link`가 다음 매시 회차에 남는다. RP023은 원천 시트에 사진 링크가 생기면 덮어써지므로 카톡 사진 쓰기를 보류한다. **RP023 보류는 코드에서 강제**: 실제 상품 문서의 `provider_company_code` 또는 `partner_code`가 RP023이면 계획의 holds가 비어 있어도 dry-run/apply 모두 `PHOTO_SUPPLIER_OVERWRITE_HOLD`로 거부한다. `mirror-to-firestore.mts:56`의 CARRY는 이 오케스트레이터 경로가 아니다. 고정 엔진이 바뀌면 이 표를 다시 확인한다.
+
+이것은 현재 운영 writer 배타성이나 표시 성공 증명이 아니다. RP023의 빈칸 판단은 읽기 후 쓰기까지 CAS가 없어 **동시 실행 중 이미 읽어 둔 빈 값으로 뒤늦게 덮는 경합**이 가능하다. 운영 사진 적용 전 매시 회차와 겹치지 않는 창 및 현행 pin/다른 writer를 확인해야 하며, 보장 불가면 사진 적용 HOLD다. image_urls는 매시 사진 writer의 칸이므로 대체 저장 칸으로 쓰지 않는다. 향후 photo_link 덮어쓰기 엔진으로 바뀌면 직접 writer를 중지하고 기존 `raw_records`(VEHICLE_PHOTO 원문 귀속) + `source_event_receipts.archiveRefs`(검증된 Drive 증거)를 Data reader가 조합해 ERP에 제공하는 안을 우선 검토한다. 전용 이안카 보존 칸 재사용이나 새 photos 컬렉션 생성은 하지 않는다. 비공개 Drive 사진의 ERP 접근은 계속 `ERP_PRIVATE_MEDIA_DISPLAY_UNVERIFIED`다.
+
+**운영 실측 명령 순서 — 네트워크 있는 승인된 PC에서만, 이번에는 실행하지 않음:**
+
+```powershell
+# 대상 작업 트리에서, 기존 pyh@teamjpk.com 사용자 ADC 사용. 토큰 출력/저장 금지.
+$env:NODE_ENV = 'production'
+$env:FIREBASE_PROJECT_ID = 'freepasserp5'
+$env:FREEPASS_KAKAO_DRIVE_ROOT_ID = Read-Host '비공개 Drive 루트 ID'
+$env:FREEPASS_KAKAO_INPUT = Read-Host '비공개 묶음 JSON 절대 경로'
+Remove-Item Env:FREEPASS_KAKAO_SOURCE_APPLY -ErrorAction SilentlyContinue
+Remove-Item Env:FREEPASS_KAKAO_PHOTO_APPLY -ErrorAction SilentlyContinue
+Remove-Item Env:FREEPASS_KAKAO_PORTS_MODULE -ErrorAction SilentlyContinue
+npm.cmd run build
+# 기본 실행: 쓰기 0, 토큰 발급/실조회도 없음
+node dist/src/jobs/ingest-kakao-source.js "$env:FREEPASS_KAKAO_INPUT"
+# ADC/실사용자/권한/공급사 상품 읽기만; 이 단계에서 폴더/Source 생성 없음
+@'
+import {readFile} from "node:fs/promises"; import {createKakaoPorts} from "./dist/src/infra/kakao-live-ports.js"; import {prepareKakaoBundle} from "./dist/src/adapters/kakao-source-intake.js"; const i=JSON.parse(await readFile(process.env.FREEPASS_KAKAO_INPUT,"utf8")); const p=await createKakaoPorts(); for(const m of prepareKakaoBundle(i.bundle)) {if(!m.directory) throw Error("IDENTITY_UNRESOLVED"); await p.drive.inspectDestination(m.directory);} await p.productReader.readSupplier(i.bundle.supplierCode); console.log("READ_ONLY_PREFLIGHT_OK");
+'@ | node --input-type=module
+# 위 성공과 현행 pin/예약 중복 금지/별도 원문 보관 승인을 확인한 뒤에만:
+$env:FREEPASS_KAKAO_SOURCE_APPLY = 'approved'
+node dist/src/jobs/ingest-kakao-source.js "$env:FREEPASS_KAKAO_INPUT" --apply
+Remove-Item Env:FREEPASS_KAKAO_SOURCE_APPLY -ErrorAction SilentlyContinue
+```
+
+ADC 인증/Drive scope/Firestore IAM이 부족하면 그 지점에서 HOLD하며 서비스 계정·공유로 우회하지 않는다. 입력과 모든 출력/receipt는 공개 CI·Git에 남기지 않는다. apply 출력은 `{inputDigest,status,deleteAllowed,issues}`, exit 0 + ACK_ELIGIBLE만 원문 보관 되읽기 성공이며 사진 반영 성공이 아니다. UNKNOWN/HOLD이면 같은 입력 보존, 새 입력으로 업로드 재시도 금지. 네트워크 단절 복구 후 같은 입력으로 대사한다. 사진 적용은 표시/원문 귀속/현행 writer 경합 HOLD를 해소하고 `applyKakaoPhotoPlan(plan, ports.photoWriter, {apply:true,approval:'approved',expectedPlanDigest})`를 별도 검토된 실행자가 호출한다. 이번 오더는 그 운영 apply 명령/자동 작업을 활성화하지 않았다.
+
+검증: 신규 fake-fetch/가짜 Firestore 18 PASS(소유자 외 권한·부모 상속 거부, 폴더 중복/동시 생성 방지, 응답 유실/5xx UNKNOWN 및 POST 재시도 0, 다운로드 해시 불일치, CAS 충돌, before/after 백업, 되읽기 불일치). 최초 기존 CLI 시험 1건은 새 내장 factory 동작에 맞춰 미설정 오류 기대값을 갱신했다. `npm.cmd run check` exit 1: architecture/standards/data-access/sheets/build/smoke/shadow/dashboard 통과, Vitest **1797 PASS / 9 FAIL / 14 SKIP**, 파일 137 PASS/4 FAIL/4 SKIP. 실패는 기존 문서와 같은 tsx os.userInfo ENOMEM, jq Permission denied, read-pilot exit/JSON 4건, 로컬 서버 ECONNREFUSED다. 전체 PASS 아님. 최종 관련 재검증은 NEXT-START-HERE에 기록한다. 실제 Google/Firestore 네트워크·운영 쓰기·ERP4 수정·커밋·푸시 없음. Claude 독립 검토는 호출 세션 후속 몫이며 네트워크 금지로 실행하지 않았다.
+
 ### 범위와 재사용 판정
 
 - 기준: Data `a6ac21c9ea438c3eb1b3d7b2653261782637b632`, 브랜치 `work/freepass-data/kakao-source-intake-20261009`, 설계는 AI-OPS `ea4c0f2a:docs/handoffs/카톡자료-데이터화-설계-20261009.md`. 로컬 코드/가짜 포트 검증이며 운영 보관·상품 반영 완료가 아니다. 커밋·푸시 없음.

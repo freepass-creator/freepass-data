@@ -92,8 +92,10 @@ export function planKakaoIntake(bundle: KakaoBundle, products: KakaoProductSnaps
 export async function ingestKakaoBundle(bundle: KakaoBundle, ports: {
   store: SourceIngestionStore; drive: KakaoDriveArchivePort; organizationDomain: string;
   products: KakaoProductSnapshot[];
+  productReader?: import('../ports/kakao-archive.js').KakaoProductReadPort;
 }, options: { apply: boolean; approval: string | undefined; now: string; clock?: () => number }) {
   if (!options.apply || options.approval !== 'approved') throw new Error('KAKAO_APPLY_NOT_APPROVED');
+  const products = ports.productReader ? await ports.productReader.readSupplier(bundle.supplierCode) : ports.products;
   const clock = options.clock ?? Date.now;
   const prepared = prepareKakaoBundle(bundle);
   const results = [];
@@ -162,7 +164,7 @@ export async function ingestKakaoBundle(bundle: KakaoBundle, ports: {
       if (!receipt || receipt.fingerprint !== item.fingerprint) throw new Error('EVENT_CHANGED_DURING_ARCHIVE');
       await ports.store.finishEvent(item.eventId, { revision: receipt.revision, state: 'ARCHIVED', archiveRefs });
       results.push({ eventId: item.eventId, status: item.issues.length ? 'HOLD' : 'ARCHIVED', issues: item.issues,
-        archiveRefs, photo: planKakaoPhotoLink(item, ports.products, photoIds) });
+        archiveRefs, photo: planKakaoPhotoLink(item, products, photoIds) });
     } catch (error) {
       // Leave the create-only receipt blocking dispatch even if this acknowledgement also fails.
       try {
@@ -230,7 +232,8 @@ export async function processKakaoQueueInput(input: KakaoQueueInput,
   options: { apply: boolean; approval: string | undefined; now: string }): Promise<KakaoQueueReceipt> {
   const inputDigest = stableDigest(input);
   const receipt = (status: KakaoQueueReceipt['status'], issues: string[]): KakaoQueueReceipt =>
-    ({ inputDigest, status, deleteAllowed: status === 'ACK_ELIGIBLE', issues });
+    ({ inputDigest, status, deleteAllowed: status === 'ACK_ELIGIBLE', issues,
+      ...(ports.drive.getWarnings ? { warnings: ports.drive.getWarnings() } : {}) });
   try {
     const prepared = prepareKakaoBundle(input.bundle);
     if (!options.apply) { planKakaoIntake(input.bundle, input.products); return receipt('DRY_RUN', []); }
