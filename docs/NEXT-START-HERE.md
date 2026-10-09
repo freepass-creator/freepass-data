@@ -416,6 +416,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 audit-success → shared-sheet-daily activation safety follow-up
+
+- Purpose: connect approved existing audit completion to current supplier-tab capture, FreePass Data persistence and actual query verification; no summary-tab authority, RTDB, extra schedule or IAM expansion.
+- Baseline: approved prepared patch `0bc7e53`, merged current main `2044416` through `e317a3a` on the same existing Work branch.
+- Changes: create-only private preapply capture/plan/report seal and byte readback; repeat the identical trigger/latest-guard/three-hour/once gate immediately before writes, additionally verify fresh current main SHA. Apply requires recheck `run=true`. Regression forces both gate bodies to remain identical except fresh main check.
+- Verification: `npm run check` exit 0, 1697 passed / 14 emulator skipped; `test:delivery-owner` 17/17. Existing independent reviewer found MAJOR prewrite TOCTOU, fixed and re-reviewed conditional PASS. Bucket public access prevention enforced and uniform bucket access true; existing exact workflow/main/environment WIF condition confirmed, no IAM change.
+- HOLD: actual Claude invocation failed with organization subscription access disabled (exit 1, no answer), not PASS. High-risk operational activation and actual capture → persistence → query proof remain uncompleted; no workflow dispatch, operating data write or activation claimed in this packet.
+- Limits: once rule uses run-created KST date, not actual write-day; injected switch values are job snapshots, emergency stop requires cancellation/identity fencing. No claim of all-consumer cutover.
+- next_start_here: resolve required independent Claude review through the existing approved connection; then verify current main/exact execution identity and writer ownership, merge only this scoped patch, run one existing read-only audit and observe its daily follower, immutable evidence and fresh Data queries. Do not duplicate the separately owned Data/Admin deployment or enable PR394.
+
+
 ### 2026-10-09 선행 감사 완료 → 일일 수집 연결 승인전 patch (MAIN 미반영)
 
 - 대상: main `d911243`까지 기존 PR401 작업 가지에 fast-forward한 후 준비. 새 branch/PR/task/엔진0. 아래 workflow 변경은 작업 가지에만 보존하며 main 자동기동 변경·dispatch·DB/시트/IAM 쓰기0.

@@ -164,9 +164,22 @@ test('failed durable checkpoint prevents its engine effect', async () => {
   assert.equal(r.calls.length, 0);
 });
 
-test('approval-pending audit completion patch binds exact main run and keeps expiry and once-only gates', () => {
+test('prewrite authorization repeats the identical gate and checks current main before any writes', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/shared-sheet-daily.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const first = workflow.split('- name: Daily schedule and manual apply gate')[1].split('- uses: actions/checkout')[0].split('        run: |\n')[1].trim();
+  const second = workflow.split('- name: Revalidate authorization immediately before writes')[1].split('- name: Apply to FreePass Data')[0].split('        run: |\n')[1].trim();
+  const mainCheck = '          current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq \'.sha\')"\n          test "$current_main" = "$GITHUB_SHA" || { echo \'CURRENT_MAIN_CHANGED\'; exit 1; }\n';
+  assert.ok(second.includes(mainCheck));
+  assert.equal(second.replace(mainCheck, ''), first);
+  assert.ok(workflow.includes("steps.recheck.outputs.run == 'true' && env.APPLY == 'true'"));
+  assert.ok(workflow.indexOf('Seal private source and plan') < workflow.indexOf('Revalidate authorization immediately'));
+});
+
+test('approved audit completion patch binds exact main run and keeps expiry and once-only gates', () => {
   const workflow = readFileSync(new URL('../.github/workflows/shared-sheet-daily.yml', import.meta.url), 'utf8');
-  const predicate = workflow.match(/--argjson id "\$TRIGGER_AUDIT_RUN_ID" '\n([\s\S]*?)\n\s*' <<<"\$trigger"/)[1];
+  const match = workflow.match(/--argjson id "\$TRIGGER_AUDIT_RUN_ID" '\r?\n([\s\S]*?)\r?\n\s*' <<<"\$trigger"/);
+  assert.ok(match, 'exact trigger predicate must exist');
+  const predicate = match[1];
   const accepted = {id:42,repository:{full_name:'owner/data'},head_repository:{full_name:'owner/data'},
     path:'.github/workflows/erp5-continuous-audit.yml',head_branch:'main',head_sha:'exact',status:'completed',conclusion:'success'};
   const judge = value => spawnSync('jq', ['-e','--arg','repo','owner/data','--arg','sha','exact','--argjson','id','42',predicate],
@@ -196,4 +209,9 @@ test('approval-pending audit completion patch binds exact main run and keeps exp
   assert.match(workflow,/if \[ "\$DAILY" != 'on' \]/);
   assert.match(workflow,/actions: read/);
   assert.ok(!workflow.includes('actions: write'));
+  assert.ok(workflow.indexOf('Seal private source and plan before Canonical writes') < workflow.indexOf('- name: Apply to FreePass Data'));
+  const seal = workflow.split('- name: Seal private source and plan before Canonical writes')[1].split('- name: Apply to FreePass Data')[0];
+  assert.match(seal,/--if-generation-match=0/);
+  assert.match(seal,/cmp "\$T\/\$f" "\$T\/\$f.preapply-readback"/);
+  assert.match(seal,/set -euo pipefail/);
 });
