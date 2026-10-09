@@ -17,6 +17,20 @@ const numberOrNull = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
 const booleanOrNull = (value: unknown) =>
   typeof value === 'boolean' ? value : null;
+const dateOrNull = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  const day = text.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const parsed = new Date(day + 'T00:00:00Z');
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) return null;
+  if (text === day) return day;
+  if (!/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(text) || Number.isNaN(Date.parse(text))) return null;
+  // Timestamp dates are Korean calendar dates, independent of the host's timezone.
+  // The original timestamp remains in v2 dateSourceValues; businessDate is never inferred.
+  const parts = new Intl.DateTimeFormat('en', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(text));
+  return ['year', 'month', 'day'].map((type) => parts.find((part) => part.type === type)!.value).join('-');
+};
 const timestampOrNull = (value: unknown): string | null => {
   if (typeof value === 'string') {
     const date = new Date(value); return Number.isNaN(date.getTime()) ? null : date.toISOString();
@@ -46,7 +60,7 @@ export function projectSettlementLedgerRecord(
     ledgerId: stringOrNull(data.code) ?? documentId,
     identity: {
       vehicleNumber: stringOrNull(data.plate),
-      receivedAt: stringOrNull(data.receivedAt),
+      receivedAt: dateOrNull(data.receivedAt),
     },
     contract: {
       customerName: stringOrNull(data.customer),
@@ -66,13 +80,13 @@ export function projectSettlementLedgerRecord(
     progress: {
       contractDocumentReceived: booleanOrNull(data.paper),
       delivered: booleanOrNull(data.delivered),
-      deliveredAt: stringOrNull(data.deliveredAt),
+      deliveredAt: dateOrNull(data.deliveredAt),
       cancelled: booleanOrNull(data.cancelled),
       billed: booleanOrNull(data.billed),
       billingMonth: stringOrNull(data.billMonth),
-      billedAt: stringOrNull(data.billedAt),
+      billedAt: dateOrNull(data.billedAt),
       invoiceIssued: booleanOrNull(data.invoiceIssued),
-      invoiceAt: stringOrNull(data.invoiceAt),
+      invoiceAt: dateOrNull(data.invoiceAt),
       collected: booleanOrNull(data.collected),
       collectedAmount: numberOrNull(data.collectedAmt),
       paid: booleanOrNull(data.paid),
@@ -127,6 +141,7 @@ export function projectSettlementReconciliation(data: Record<string, unknown>): 
       createdBy: stringOrNull(data.createdBy), updatedBy: stringOrNull(data.updatedBy),
       createdAt: timestampOrNull(data.createdAt), updatedAt: timestampOrNull(data.updatedAt),
       businessDate: stringOrNull(data.businessDate), historyState: 'IDENTITY_MISSING', history: [], historyDigest: null,
+      dateSourceValues: (['receivedAt', 'deliveredAt', 'billedAt', 'invoiceAt'] as const).map((field) => ({ field, value: rawScalar(data[field]) })),
     },
     evidence: { sourceDigest: stringOrNull(data.sourceReceiptDigest), receiptRow: numberOrNull(data.sourceReceiptRow), syncedAt: timestampOrNull(data.sourceReceiptSyncedAt) },
   };

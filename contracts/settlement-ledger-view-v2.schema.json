@@ -340,7 +340,8 @@
             "businessDate",
             "historyState",
             "history",
-            "historyDigest"
+            "historyDigest",
+            "dateSourceValues"
           ],
           "properties": {
             "createdBy": {
@@ -412,6 +413,35 @@
             },
             "historyDigest": {
               "$ref": "#/$defs/nullableString"
+            },
+            "dateSourceValues": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "field",
+                  "value"
+                ],
+                "properties": {
+                  "field": {
+                    "enum": [
+                      "receivedAt",
+                      "deliveredAt",
+                      "billedAt",
+                      "invoiceAt"
+                    ]
+                  },
+                  "value": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                }
+              }
             }
           }
         },
