@@ -1,10 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { inspectVehicleMediaEvidence } from '../src/application/vehicle-media-evidence.js';
+import { inspectVehicleMediaEvidence, compareVehicleMediaConsumerEvidence } from '../src/application/vehicle-media-evidence.js';
 
 const product = { car_number: '12가3456', image_urls: ['https://supplier.example/car.jpg'], ext_color: '흰색' };
 const source = { plate: '12가3456', sourceRef: 'fixture:detail/1', observedAt: '2026-10-09T00:00:00Z', expectedFreshnessSeconds: 3600, vehicle: product };
 const base = { productId: 'fixture-product', product, source, now: '2026-10-09T00:01:00Z', probe: async () => ({ status: 200, contentType: 'image/jpeg' }) };
 describe('read-only media evidence', () => {
+  it('distinguishes representative-only consumer parity from required full gallery', () => {
+    const input = { productId: 'fixture-product', product, consumerProductId: 'fixture-product', consumer: { car_number: product.car_number, image_url: product.image_urls[0], ext_color: product.ext_color }, consumerSnapshotRef: 'fixture:feed/1', observedAt: base.now, requiresGallery: false };
+    expect(compareVehicleMediaConsumerEvidence(input).galleryState).toBe('NOT_EXPOSED');
+    expect(compareVehicleMediaConsumerEvidence(input).verdict).toBe('SPECIFIED_CONSUMER_FIELDS_MATCHED');
+    expect(compareVehicleMediaConsumerEvidence({ ...input, requiresGallery: true }).issues).toContain('CONSUMER_GALLERY_NOT_EXPOSED');
+  });
+  it('holds wrong consumer keys, missing snapshot, cache-only representative and color changes', () => {
+    const r = compareVehicleMediaConsumerEvidence({ productId: 'fixture-product', product, consumerProductId: 'other', consumer: { car_number: '99나9999', image_url: 'https://drive.example/cache', ext_color: '검정' }, consumerSnapshotRef: '', observedAt: 'invalid', requiresGallery: true });
+    expect(r.issues).toEqual(expect.arrayContaining(['CONSUMER_VEHICLE_IDENTITY_MISMATCH', 'CONSUMER_SNAPSHOT_EVIDENCE_MISSING', 'REPRESENTATIVE_DIFFERENT_EVIDENCE', 'CONSUMER_COLOR_MISMATCH']));
+  });
   it('limits successful HEAD and source matching to the evidence actually checked', async () => {
     const r = await inspectVehicleMediaEvidence(base);
     expect(r.verdict).toBe('HEAD_AND_SOURCE_FIELDS_MATCHED');
