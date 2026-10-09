@@ -396,6 +396,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+### 2026-10-09 14:17 KST 기존 정산 원장·상품 수수료 통합 대조
+
+- 담당범위/기존Work: PR403 work/freepass-data/reference-policy-context-20261009; 61b14bde 기반. main b2777b59819d5fbaa4c650cd637c80b5e000c591 최신 조회. academy READY. 새 원장/엔진/Task/branch0, 원본·사람입력·과거 작성자 정정0.
+- 최신 원장 검증: 중앙 firebase-target → AdminWorkflowStore로 settlementRows billMonth2026-09 및 settlementRules/f04-confirmed-receipt-sync 읽기만 실행. 관측2026-10-09T05:16:58.156Z. 원장35개 중 취소 제외34개와 월요약 entryIds34개 동일, 누락0/추가0. 접수기록 청구36,582,600 대 claimWritten32,647,721 차이3,934,879; 지급29,322,051 양쪽 일치. sourceReceiptRow459/431/461/413의 차이 각각+2,300,189/-145,760/+918,450/+862,000. 계약별 금액 정정 또는 실제 입출금 합격이 아니다.
+- 계약 누락: 현재 main 정산 조회는 claimWritten/payWritten을 claimAmount/payAmount로 반환한다. sourceReceiptClaim/Pay 및 그 VAT/Gross34개 원문은 있으나 기존 조회 계약에 별도 기록액 필드가 없다. computedBillingFee/computedPayoutFee/confirmedClaimAmount/confirmedPayAmount 원문 필드0(다른 이름의 근거까지 없다는 증명은 아님). createdBy/updatedBy/businessDate0; 영업자 필드를 처리자로 추정 금지. collectedAmt/paidAmt34개 있으나 collectedAt/paidAt 유효값0; 금액 필드만으로 실제 입출금 확정 금지. calculationBasis34개 있음.
+- 기존 정산 담당 연결: PR399 head6ede6198275309c9cc1e7da65c6e83dc064a0602는 calculationBasis 원문을 조회 계약에 보존하는 scoped diff다. 기록액/계산액/확정액/실입출금/VAT/처리자/업무일/변경이력의 별도 상태는 이 기존 작업선에서 순서대로 확장할 항목이며 PR403에 새 정산 계약을 만들지 않는다. 기존 sourceReceipt* 기록을 confirmed*로 복사하지 않는다.
+- 통합 순서 근거: PR399 기존 Canon failure는 codex/ actor-owned 가지와 당시 PR397 점유; PR400도 actor-owned 가지 및 PR399/397 점유. PR403 현재 contracts/ 점유는399/400/401. 실제 계약 파일은399 settlement-ledger-view,400 f01-f86-sheet-spec,403 catalog/admin-catalog/kakao이므로 파일단위 직접 충돌과 concern 점유를 구별한다. 예외/검사 우회0. 원장 담당/merge-owner가 기존399·400 작업선 규격과 승계부터 정리→401→403 후속 main 재조회. 다른 담당 가지를 새로 만들거나 원격 head를 임의 이동하지 않는다.
+- 검증명령: gh pr view399/400/403 및 실패로그 조회, git diff origin/main...origin/codex/settlement-human-input-preservation, 기존 AdminWorkflowStore.read 쿼리/문서(운영 쓰기0), 기존 전체check1666PASS/14SKIP 및 scoped CoreCI PASS. 실제 외부 조회/배포/main 반영은 미완료.
+- next_start_here: 본 Data 지휘가 이 항목과 PR403/399 exactdiff를 읽어 기존 merge-owner 통합 순서를 확정. private period-fee-settlement-live-20261009.json 원문은 TEMP 보존, 개인정보 원문은 Git 미포함. 통합 후 최신 정책 계산/저장/조회 대사와 정산 필드별 authority/state/provenance 계약을 각각 검증.
 ### 2026-10-09 기간별 금액 엔진 지속 수정·검증 준비
 
 - 목적: 차량/상품의 기간별 월료·보증금·청구·지급 저장과 정책 수정 후 재산출/조회 실행경로를 고정한다.

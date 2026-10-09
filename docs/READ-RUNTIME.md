@@ -505,3 +505,6 @@ node --import tsx src/jobs/recompute-offer-economics.ts --firestore
 # JSON 보고서의 plan만 비공개 UTF-8 파일로 보존하고 실제 planDigest를 고정한다.
 node --import tsx src/jobs/recompute-offer-economics.ts --firestore --apply --plan <비공개-plan.json> --policy-id sales-commission-2026-10-09 --expected-plan-digest <검토한-planDigest>
 ```
+### 정산 원장과 상품 기준표의 금액 의미
+
+상품 기간별 수수료는 계약 전 기준 계산액이다. 같은 settlement_rows 문서의 접수 기록액(sourceReceiptClaim/Pay), 사람 입력액(claimWritten/payWritten), 계산액, 공급사·채널 확인 확정액, 증빙 있는 실입출금은 서로 다른 사실이다. 2026-10-09 새 조회에서도9월34개 동일ID의 청구 차이3,934,879원/지급차이0원이 재현됐다. sourceReceipt* VAT/Gross가 있다고 모든 계약이 공급사 확정됐다는 뜻은 아니다. 사람이 넣은 금액/근거를 상품 엔진 재계산으로 덮어쓰지 않는다. 계산액/확정액/공급가·VAT·합계/실입출금 증빙/처리자/업무일/변경이력 구분은 기존 PR399 정산 작업선과 연결하며, 현재 누락은 null/상태로 유지하고 영업자나 작성 시각으로 처리자를 발명하지 않는다.
