@@ -6,6 +6,16 @@ const product = { car_number: '12가3456', image_urls: ['https://supplier.exampl
 const source = { plate: '12가3456', sourceRef: 'fixture:detail/1', observedAt: '2026-10-09T00:00:00Z', expectedFreshnessSeconds: 3600, vehicle: product };
 const base = { productId: 'fixture-product', product, source, now: '2026-10-09T00:01:00Z', probe: async () => ({ status: 200, contentType: 'image/jpeg' }) };
 describe('read-only media evidence', () => {
+  it('holds unprobed URLs even when source fields match without making a network request', async () => {
+    const { probe: _probe, ...withoutProbe } = base;
+    const result = await inspectVehicleMediaEvidence(withoutProbe);
+    expect(result.verdict).toBe('HOLD');
+    expect(result.issues).toEqual(['HEAD_NOT_CHECKED']);
+    expect(result.checks).toEqual([{ urlDigest: expect.any(String), state: 'HEAD_NOT_CHECKED', status: null }]);
+    expect(result).toMatchObject({ imageBytes: 'NOT_CHECKED', visualVehicleIdentity: 'NOT_CHECKED', typedColorVerification: 'NOT_CHECKED', consumerReadback: 'NOT_CHECKED' });
+    const { source: _source, ...withoutSource } = withoutProbe;
+    expect((await inspectVehicleMediaEvidence(withoutSource)).issues).toEqual(expect.arrayContaining(['SOURCE_EVIDENCE_MISSING', 'HEAD_NOT_CHECKED']));
+  });
   it('detects original color loss even when the consumer correctly repeats the blank stored color', async () => {
     const stored = { ...product, ext_color: '' };
     const parity = compareVehicleMediaConsumerEvidence({ productId: 'fixture-product', product: stored,
