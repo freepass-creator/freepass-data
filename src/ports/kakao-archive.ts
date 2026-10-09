@@ -29,9 +29,13 @@ export type KakaoPhotoPlan = {
   status: 'PLAN_ONLY'; holds: string[];
 };
 export interface KakaoPhotoWriterPort {
-  /** Adapter to the existing reviewed product writer. No direct products set/update. */
+  /** Separately approved, digest/revision-fenced blank-fill writer; never used by source ingestion. */
   dryRun(plan: KakaoPhotoPlan): Promise<{ planDigest: string; ready: boolean }>;
   apply(plan: KakaoPhotoPlan, approval: { planDigest: string }): Promise<{ verified: boolean }>;
+}
+export interface KakaoProductReadPort {
+  readSupplier(supplierCode: string): Promise<KakaoProductSnapshot[]>;
+  read(id: string): Promise<KakaoProductSnapshot | null>;
 }
 
 export type KakaoQueueReceipt = {
