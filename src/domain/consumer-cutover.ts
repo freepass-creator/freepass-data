@@ -114,7 +114,7 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
     repository: 'freepass-creator/freepass-admin',
     domains: ['catalog'],
     stage: 'OBSERVE',
-    activeReadOwner: 'freepass-admin-development-store',
+    activeReadOwner: 'freepass-admin/legacy-shape-catalog',
     targetReadOwner: 'freepass-data',
     switchKey: 'FREEPASS_DATA_ADMIN_CATALOG_READ_MODE',
     evidence: {
@@ -128,8 +128,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       approvedRelease: null
     },
     holdReasons: [
-      'Admin consumer authentication and production FreePass Data readback are not verified',
-      'Admin intake-critical shadow parity remains incomplete; latest I-01 hardening PR is not merged to Admin main'
+      '2026-10-09T08:42:24.364Z: dedicated freepass-data-admin runtime authenticated freepass-admin-catalog catalog-compat with 200; Canonical catalog returned NO_ACTIVE_RELEASE 503',
+      'Admin main dd065349 has compatibility transport and Canonical switchboard; deployed application read mode and revision-scoped intake/policy parity remain unverified'
     ]
   },
   {
@@ -176,8 +176,8 @@ export const CONSUMER_SWITCH_REGISTRY: ConsumerSwitchRegistration[] = [
       approvedRelease: null
     },
     holdReasons: [
-      'Estimate FreePass Data integration is implemented on the canonical integration line but not merged to Estimate product main',
-      'real ACTIVE estimate-newcar-master readback and cutover proof are not production-verified',
+      '2026-10-09: Estimate main 1925dd4a includes apps/new/api/freepass-data-master.js and the authoritative request consumer; code presence is verified, deployed consumer contract readiness is not',
+      '2026-10-09: dedicated freepass-data-estimate-writer runtime authenticated freepass-estimate estimate-newcar-master and returned NO_ACTIVE_RELEASE 503; ACTIVE readback and cutover remain HOLD',
       'quote calculation and provider ownership must remain in Estimate'
     ]
   },

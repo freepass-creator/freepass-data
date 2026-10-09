@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import catalogSchema from '../contracts/catalog-v1.schema.json' with { type: 'json' };
+import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 import {
   CONSUMER_SWITCH_REGISTRY,
   evaluateConsumerCutover,
@@ -163,14 +166,14 @@ describe('consumer cutover registry', () => {
     ]);
   });
 
-  it('keeps Estimate contractReady false until its canonical integration line is merged to product main', () => {
+  it('records Estimate consumer code in main while deployed contract readiness remains HOLD', () => {
     const estimate = findConsumerSwitch('freepass-estimate-catalog');
     expect(estimate).not.toBeNull();
     expect(estimate?.stage).toBe('LEGACY_DIRECT');
     expect(estimate?.evidence.contractReady).toBe(false);
     expect(estimate?.holdReasons).toEqual([
-      'Estimate FreePass Data integration is implemented on the canonical integration line but not merged to Estimate product main',
-      'real ACTIVE estimate-newcar-master readback and cutover proof are not production-verified',
+      '2026-10-09: Estimate main 1925dd4a includes apps/new/api/freepass-data-master.js and the authoritative request consumer; code presence is verified, deployed consumer contract readiness is not',
+      '2026-10-09: dedicated freepass-data-estimate-writer runtime authenticated freepass-estimate estimate-newcar-master and returned NO_ACTIVE_RELEASE 503; ACTIVE readback and cutover remain HOLD',
       'quote calculation and provider ownership must remain in Estimate'
     ]);
   });
@@ -182,8 +185,8 @@ describe('consumer cutover registry', () => {
     expect(admin?.evidence.legacyReadVerified).toBe(true);
     expect(admin?.stage).toBe('OBSERVE');
     expect(admin?.holdReasons).toEqual([
-      'Admin consumer authentication and production FreePass Data readback are not verified',
-      'Admin intake-critical shadow parity remains incomplete; latest I-01 hardening PR is not merged to Admin main'
+      '2026-10-09T08:42:24.364Z: dedicated freepass-data-admin runtime authenticated freepass-admin-catalog catalog-compat with 200; Canonical catalog returned NO_ACTIVE_RELEASE 503',
+      'Admin main dd065349 has compatibility transport and Canonical switchboard; deployed application read mode and revision-scoped intake/policy parity remain unverified'
     ]);
   });
 
@@ -233,5 +236,31 @@ describe('consumer cutover registry', () => {
     });
     registration.stage = 'ACTIVE' as ConsumerCutoverStage;
     expect(evaluateConsumerCutover(registration, 'LEGACY_DIRECT').allowed).toBe(false);
+  });
+
+  it('preserves term-local missing versus confirmed zero evidence at the compatibility boundary', () => {
+    const source = { provider_company_code: 'RP004', product_type: '중고렌트', deposit_note: '무보증',
+      price: { '12': { rent: 500000, deposit: 0 }, '24': { rent: 400000, deposit: null, depositState: 'ZERO' } } };
+    const before = structuredClone(source);
+    const result = withCompatibilityDepositEvidence(source);
+    expect(result.price).toMatchObject({
+      '12': { deposit: 0, depositState: 'ZERO' },
+      '24': { deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'MISSING_DEPOSIT_AMOUNT' }
+    });
+    expect(source).toEqual(before);
+  });
+
+  it('requires deposit state in the existing consumer price-term contract after a legacy-shape read', () => {
+    const ajv = new Ajv2020({ strict: false });
+    ajv.addSchema(catalogSchema);
+    const validate = ajv.compile({ $ref: `${catalogSchema.$id}#/$defs/priceTerm` });
+    const term = { termKey: '12', termMonths: 12, monthlyRent: { amount: 500000, currency: 'KRW' },
+      deposit: null, depositState: 'UNKNOWN' };
+    expect(validate(term)).toBe(true);
+    const { depositState: _removed, ...withoutState } = term;
+    expect(validate({ ...withoutState, deposit: { amount: 0, currency: 'KRW' } })).toBe(false);
+    expect(validate.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ keyword: 'required', params: { missingProperty: 'depositState' } })
+    ]));
   });
 });
