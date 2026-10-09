@@ -734,6 +734,9 @@ export async function buildErpPublicProjection(
     'erp-public'
   );
   const currentActive = currentEvidence.release;
+  // Canonical/evidence reads can outlast or observe changes after preflight.
+  // Recheck before accepting an existing ACTIVE as delivery evidence.
+  await assertCatalogSourceFreshness(catalog, now, options.requireFreshSources);
   if (
     options.activate !== false && currentActive &&
     currentActive.status === 'ACTIVE' &&
@@ -789,6 +792,9 @@ export async function buildErpPublicProjection(
   // Preparation stages validated evidence only. Use an in-memory ProjectionStore
   // for a read-only production dry-run; preparation alone is not a cutover.
   if (options.activate === false) return { ...release, status: 'READY' };
+  // READY persistence is separate from source ingestion. Keep last-good ACTIVE
+  // if the source became ineligible or stale while persisting this release.
+  await assertCatalogSourceFreshness(catalog, now, options.requireFreshSources);
   await projections.activate(release.releaseId);
   const active = await projections.getActive('erp-public');
   if (!active) throw new Error('Projection activation failed');

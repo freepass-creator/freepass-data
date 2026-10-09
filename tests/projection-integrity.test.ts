@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { buildErpPublicProjection, processOneOutboxEvent } from '../src/application/catalog.js';
+import { buildErpPublicProjection, processOneOutboxEvent, updateOfferPrice } from '../src/application/catalog.js';
 import { readActiveProjectionEvidence } from '../src/application/projection-evidence-reader.js';
 import { assertProjectionReleaseIntegrity, verifyProjectionReleaseIntegrity } from '../src/shared/projection-integrity.js';
 import { stableDigest, stableRecordSetDigest } from '../src/shared/stable-digest.js';
@@ -33,6 +33,14 @@ describe('Projection release integrity verifier', () => {
       commandId: 'synthetic', correlationId: 'synthetic', causationId: 'synthetic',
       occurredAt: head.observedAt, status: 'PENDING', attempts: 0 });
     return { store, head };
+  }
+
+  async function repriceFixture(store: MemoryDataStore, now: string) {
+    await updateOfferPrice(store, { commandId: 'synthetic-reprice', idempotencyKey: 'synthetic-reprice',
+      offerId: 'offer_gv70_demo', expectedRevision: 1, termKey: '36@20000',
+      monthlyRent: { amount: 735000, currency: 'KRW' }, reason: 'crash regression',
+      actor: { id: 'synthetic', kind: 'USER' } }, now);
+    for (const id of store.outbox.keys()) if (id !== 'synthetic-event') store.outbox.delete(id);
   }
 
   it('holds a CURRENT but stale source before claiming and preserves old ACTIVE and retries', async () => {
@@ -97,6 +105,103 @@ describe('Projection release integrity verifier', () => {
     await expect(buildErpPublicProjection(store, store, '2026-10-09T00:00:00.000Z', { activate: false, requireFreshSources: true }))
       .rejects.toThrow('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
     expect((await buildErpPublicProjection(store, store, '2026-10-09T00:00:00.000Z', { activate: false })).status).toBe('READY');
+  });
+
+  it.each(['stage', 'stageEvidence', 'markReady', 'activate', 'putDeliveryReceipt', 'markDone'] as const)(
+    'recovers a lost %s response without duplicate delivery', async (operation) => {
+      const { store, head } = await scheduledFixture();
+      const old = await buildErpPublicProjection(store, store, head.observedAt);
+      await repriceFixture(store, head.observedAt);
+      const original = store[operation].bind(store) as (...args: any[]) => Promise<void>;
+      vi.spyOn(store, operation).mockImplementationOnce(async (...args: any[]) => {
+        await original(...args);
+        throw new Error('SIMULATED_LOST_RESPONSE');
+      });
+      const options = { workerId: 'synthetic', requireFreshSources: true, baseBackoffMs: 1 };
+      expect(await processOneOutboxEvent(store, store, store, options, new Date(head.observedAt))).toBe('RETRY');
+      const afterFailure = await store.getActive('erp-public');
+      if (['stage', 'stageEvidence', 'markReady'].includes(operation)) {
+        expect(afterFailure?.releaseId).toBe(old.releaseId);
+        expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
+      }
+      expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PENDING', attempts: 1 });
+      const activate = vi.spyOn(store, 'activate');
+      activate.mockClear();
+      expect(await processOneOutboxEvent(store, store, store, options,
+        new Date(Date.parse(head.observedAt) + 1000))).toBe('DONE');
+      const final = await store.getActive('erp-public');
+      expect(final?.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(735000);
+      expect((await store.getDeliveryReceipt('synthetic-event'))?.releaseId).toBe(final?.releaseId);
+      expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'DONE', attempts: 1 });
+      if (['activate', 'putDeliveryReceipt', 'markDone'].includes(operation)) {
+        expect(final?.releaseId).toBe(afterFailure?.releaseId);
+        expect(activate).not.toHaveBeenCalled();
+      }
+    });
+
+  it('reclaims a crashed claim only after lease expiry without spending an attempt', async () => {
+    const { store, head } = await scheduledFixture();
+    const now = Date.parse(head.observedAt);
+    await store.claimNext({ workerId: 'crashed', now: head.observedAt,
+      leaseUntil: new Date(now + 1000).toISOString() });
+    expect(await processOneOutboxEvent(store, store, store,
+      { workerId: 'replacement', requireFreshSources: true }, new Date(now + 999))).toBe('IDLE');
+    expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PROCESSING', attempts: 0, leaseOwner: 'crashed' });
+    expect(await processOneOutboxEvent(store, store, store,
+      { workerId: 'replacement', requireFreshSources: true }, new Date(now + 1000))).toBe('DONE');
+    expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'DONE', attempts: 0 });
+  });
+
+  it('preserves last-good ACTIVE when source freshness changes during release persistence', async () => {
+    const { store, head } = await scheduledFixture();
+    const old = await buildErpPublicProjection(store, store, head.observedAt);
+    await repriceFixture(store, head.observedAt);
+    const markReady = store.markReady.bind(store);
+    vi.spyOn(store, 'markReady').mockImplementationOnce(async (id) => {
+      await markReady(id);
+      await store.seed({ sourceHeads: [{ ...head, observedAt: new Date(Date.parse(head.observedAt) - 60_001).toISOString() }] });
+    });
+    expect(await processOneOutboxEvent(store, store, store,
+      { workerId: 'synthetic', requireFreshSources: true }, new Date(head.observedAt))).toBe('HOLD');
+    expect((await store.getActive('erp-public'))?.releaseId).toBe(old.releaseId);
+    expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
+    expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PENDING', attempts: 0 });
+  });
+
+  it('recovers an interrupted worker after ACTIVE commit and before receipt persistence', async () => {
+    const { store, head } = await scheduledFixture();
+    await buildErpPublicProjection(store, store, head.observedAt);
+    await repriceFixture(store, head.observedAt);
+    vi.spyOn(store, 'putDeliveryReceipt').mockRejectedValueOnce(new Error('SIMULATED_CRASH'));
+    vi.spyOn(store, 'markRetry').mockRejectedValueOnce(new Error('PROCESS_TERMINATED'));
+    const options = { workerId: 'synthetic', requireFreshSources: true, leaseMs: 1000 };
+    await expect(processOneOutboxEvent(store, store, store, options, new Date(head.observedAt)))
+      .rejects.toThrow('PROCESS_TERMINATED');
+    const committed = await store.getActive('erp-public');
+    expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PROCESSING', attempts: 0 });
+    expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
+    const activate = vi.spyOn(store, 'activate');
+    expect(await processOneOutboxEvent(store, store, store, options,
+      new Date(Date.parse(head.observedAt) + 1000))).toBe('DONE');
+    expect(activate).not.toHaveBeenCalled();
+    expect((await store.getDeliveryReceipt('synthetic-event'))?.releaseId).toBe(committed?.releaseId);
+    expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'DONE', attempts: 0 });
+  });
+
+  it('does not acknowledge reused ACTIVE after source changes during the evidence read', async () => {
+    const { store, head } = await scheduledFixture();
+    const old = await buildErpPublicProjection(store, store, head.observedAt);
+    const read = store.getActiveEvidenceSnapshot.bind(store);
+    vi.spyOn(store, 'getActiveEvidenceSnapshot').mockImplementationOnce(async (id) => {
+      const evidence = await read(id);
+      await store.seed({ sourceHeads: [{ ...head, observedAt: new Date(Date.parse(head.observedAt) - 60_001).toISOString() }] });
+      return evidence;
+    });
+    expect(await processOneOutboxEvent(store, store, store,
+      { workerId: 'synthetic', requireFreshSources: true }, new Date(head.observedAt))).toBe('HOLD');
+    expect((await store.getActive('erp-public'))?.releaseId).toBe(old.releaseId);
+    expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
+    expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PENDING', attempts: 0 });
   });
 
   it('runs the existing worker preparation entrypoint once without activating a release', () => {
