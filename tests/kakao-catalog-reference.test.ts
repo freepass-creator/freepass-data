@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { precomputeOfferEconomics, readStoredTermFees } from '../src/application/resolve-offer-commercial-terms.js';
 import {
   KAKAO_COMMISSION_POLICY,
@@ -17,6 +18,42 @@ import {
 } from '../src/application/kakao-catalog-reference.js';
 
 describe('shared reference policy context', () => {
+  it('attaches only native pairs from the provided sealed snapshot, preserving source and period identities', () => {
+    const observedAt = new Date().toISOString();
+    const body = { readAt: observedAt, masters: [{ id: 'native-master', data: { maker: '현대', model: '쏘나타', sub_model: '쏘나타 DN8', sub_model_aliases: ['소나타 DN8'] } }],
+      trims: [{ id: 'native-trim', data: { master_id: 'native-master', maker: '현대', model: '쏘나타', sub_model: '쏘나타 DN8', trim: '스마트' } }] };
+    const seal = (value: typeof body) => ({ source: 'freepasserp5/vehicle_master+vehicle_trim_master' as const, complete: true as const, ...value,
+      digest: createHash('sha256').update(JSON.stringify(value)).digest('hex') });
+    const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트', maker: '현대', model: '쏘나타', sub_model: '소나타 DN8', trim_name: '스마트',
+      deposit_note: '무보증', price: { '36_2만': { rent: 500000, deposit: 0 } } };
+    const source = { consumerId: 'kakao-ops', products: { synthetic: product }, observedAt };
+    const original = structuredClone(source);
+    const plain = buildKakaoCatalogReference(source);
+    const master = seal(body);
+    const linked = buildKakaoCatalogReference({ ...source, vehicleMasterSnapshot: master });
+    expect(linked.data[0]!.vehicleMasterReference).toEqual({ state: 'KNOWN', authority: 'FREEPASS_DATA_VEHICLE_MASTER', identityKind: 'FIRESTORE_DOCUMENT_ID',
+      masterId: 'native-master', trimId: 'native-trim', snapshotDigest: master.digest, readAt: observedAt, reasonCode: null });
+    expect(linked.data[0]!.sourceProductId).toBe(plain.data[0]!.sourceProductId);
+    expect(linked.data[0]!.vehicleModelId).toBe(plain.data[0]!.vehicleModelId);
+    expect(linked.data[0]!.offers).toEqual(plain.data[0]!.offers);
+    expect(source).toEqual(original);
+    expect(buildInternalAiReference({ ...source, consumerId: 'internal-ai-test', vehicleMasterSnapshot: master }).data).toEqual(linked.data);
+    const unknownInputs = [
+      { ...source },
+      { ...source, vehicleMasterReadState: 'UNAVAILABLE' as const, vehicleMasterSnapshot: null },
+      { ...source, vehicleMasterReadState: 'UNAVAILABLE' as const, vehicleMasterSnapshot: master },
+      { ...source, vehicleMasterSnapshot: { ...master, digest: 'tampered' } },
+      { ...source, observedAt: new Date(Date.parse(observedAt) + 300001).toISOString(), vehicleMasterSnapshot: master },
+      { ...source, vehicleMasterSnapshot: seal({ ...body, trims: [...body.trims, { ...body.trims[0]!, id: 'ambiguous-trim' }] }) },
+      { ...source, products: { synthetic: { ...product, trim_name: 'unconfirmed' } }, vehicleMasterSnapshot: master },
+    ];
+    for (const input of unknownInputs) {
+      const result = buildKakaoCatalogReference(input);
+      expect(result.data[0]!.vehicleMasterReference).toMatchObject({ state: 'HOLD', masterId: null, trimId: null });
+      expect(result.data[0]!.vehicleMasterReference.reasonCode).toBeTruthy();
+      expect(result.data[0]!.offers).toEqual(plain.data[0]!.offers);
+    }
+  });
   it('preserves approved Iancar zero per mileage term, rejects stale or mismatched published evidence', () => {
     const now = '2026-10-09T00:00:00Z';
     const terms = [

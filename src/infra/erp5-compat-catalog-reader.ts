@@ -189,13 +189,16 @@ export class FirestoreCatalogCompatibilityReader {
   }
 
   private async readReferenceProducts(consumerId: string) {
-    const [products, policies] = await Promise.all([
+    const [products, policies, masterRead] = await Promise.all([
       this.db.collection('products').get(), this.db.collection('policy').get(),
+      readVehicleMasterSnapshot().then(vehicleMasterSnapshot => ({ vehicleMasterSnapshot, vehicleMasterReadState: 'AVAILABLE' as const }))
+        .catch(() => ({ vehicleMasterSnapshot: null, vehicleMasterReadState: 'UNAVAILABLE' as const })),
     ]);
     return {
       consumerId,
       products: asMap(products),
       policies: asMap(policies),
+      ...masterRead,
       observedAt: new Date().toISOString(),
     };
   }

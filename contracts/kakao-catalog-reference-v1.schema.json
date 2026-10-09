@@ -26,13 +26,14 @@
         "sourceCollection": { "const": "products" },
         "sourceCount": { "type": "integer", "minimum": 1 },
         "projectedCount": { "type": "integer", "minimum": 0 },
-        "depositFilter": { "$ref": "#/$defs/depositFilter" },
+    "depositFilter": { "$ref": "#/$defs/depositFilter" },
         "dataDigest": { "$ref": "#/$defs/digest" },
         "warning": { "type": "string", "minLength": 1 }
       }
     }
   },
   "$defs": {
+    "vehicleMasterReference": {"type": "object", "additionalProperties": false, "required": ["state", "authority", "identityKind", "masterId", "trimId", "snapshotDigest", "readAt", "reasonCode"], "properties": {"state": {"enum": ["KNOWN", "HOLD"]}, "authority": {"const": "FREEPASS_DATA_VEHICLE_MASTER"}, "identityKind": {"const": "FIRESTORE_DOCUMENT_ID"}, "masterId": {"type": ["string", "null"], "minLength": 1}, "trimId": {"type": ["string", "null"], "minLength": 1}, "snapshotDigest": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}, "readAt": {"anyOf": [{"type": "null"}, {"type": "string", "format": "date-time"}]}, "reasonCode": {"type": ["string", "null"]}}, "allOf": [{"if": {"properties": {"state": {"const": "KNOWN"}}}, "then": {"properties": {"masterId": {"type": "string"}, "trimId": {"type": "string"}, "snapshotDigest": {"type": "string"}, "readAt": {"type": "string", "format": "date-time"}, "reasonCode": {"type": "null"}}}, "else": {"properties": {"masterId": {"type": "null"}, "trimId": {"type": "null"}, "reasonCode": {"type": "string", "minLength": 1}}}}]},
     "depositFilter": {"type": "object", "additionalProperties": false, "required": ["state", "termMonths", "scope"], "properties": {"state": {"const": "ZERO"}, "termMonths": {"type": ["integer", "null"], "minimum": 1, "maximum": 60}, "scope": {"enum": ["ANY_TERM", "ALL_TERMS"]}}},
     "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "nullableString": { "type": ["string", "null"] },
@@ -123,6 +124,7 @@
         "sourceProductId": { "type": "string", "minLength": 1 },
         "displayName": { "type": "string", "minLength": 1 },
         "commercialType": { "enum": ["NEW_RENT", "USED_RENT", "NEW_SUBSCRIPTION", "USED_SUBSCRIPTION", "OGONG_SUBSCRIPTION", "PICKUP_SUBSCRIPTION", "OPLUS_SUBSCRIPTION", "UNKNOWN"] },
+        "vehicleMasterReference": { "$ref": "#/$defs/vehicleMasterReference" },
         "vehicleModelId": { "type": "string", "minLength": 1 },
         "vehicleAssetId": { "type": "string", "minLength": 1 },
         "vehiclePhotos": {

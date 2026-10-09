@@ -3,6 +3,8 @@ import { parseErp5PriceKey } from '../adapters/erp5-product-mapping.js';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
 import { policyScalar } from './product-pricing-policy.js';
 import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit, readIancarPublishedDeposit } from '../domain/deposit-evidence.js';
+import { verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
+import { chooseVehicleIdentity, indexVehicleMaster, type VehicleMasterReference } from '../domain/vehicle-identity-resolution.js';
 
 type Rec = Record<string, unknown>;
 
@@ -759,6 +761,9 @@ export function buildKakaoCatalogReference(input: {
   policies?: Record<string, Rec>;
   /** Trusted private evidence, keyed by product ID then exact ERP price key. */
   commissionEvidenceByProduct?: Readonly<Record<string, CommissionEvidenceByTerm>>;
+  /** Master/trim share their sealed snapshot. Products/policies are separate reads. */
+  vehicleMasterSnapshot?: VehicleMasterSnapshot | null;
+  vehicleMasterReadState?: 'AVAILABLE' | 'UNAVAILABLE';
 }) {
   if (input.consumerId !== 'kakao-ops') throw new Error('KAKAO_REFERENCE_CONSUMER_NOT_ALLOWED');
   return buildReferenceFacts(input);
@@ -772,9 +777,36 @@ export function buildInternalAiReference(input: KakaoCatalogReferenceSource) {
 }
 
 function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
+  type NativeReference = (VehicleMasterReference & { reasonCode: null }) | {
+    state: 'HOLD'; authority: 'FREEPASS_DATA_VEHICLE_MASTER'; identityKind: 'FIRESTORE_DOCUMENT_ID';
+    masterId: null; trimId: null; snapshotDigest: string | null; readAt: string | null; reasonCode: string;
+  };
+  const hold = (reasonCode: string, snapshot?: VehicleMasterSnapshot): NativeReference => ({ state: 'HOLD',
+    authority: 'FREEPASS_DATA_VEHICLE_MASTER', identityKind: 'FIRESTORE_DOCUMENT_ID', masterId: null, trimId: null,
+    snapshotDigest: snapshot?.digest ?? null, readAt: snapshot?.readAt ?? null, reasonCode });
+  const master = input.vehicleMasterSnapshot;
+  let resolveMaster: (source: Rec) => NativeReference = () => hold(input.vehicleMasterReadState === 'UNAVAILABLE'
+    ? 'VEHICLE_MASTER_READ_UNAVAILABLE' : 'VEHICLE_MASTER_SNAPSHOT_MISSING');
+  if (master && input.vehicleMasterReadState !== 'UNAVAILABLE') {
+    try {
+      const now = Date.parse(input.observedAt);
+      const index = indexVehicleMaster(verifiedMasterRecords(master, now));
+      resolveMaster = source => {
+        const choice = chooseVehicleIdentity(index, { sheet: [text(source.maker), text(source.model), text(source.sub_model), text(source.trim_name)],
+          data: null, raw: '', firstRegistration: '', modelYear: '' });
+        if (choice.pick === 'HOLD') return hold('VEHICLE_MASTER_IDENTITY_NOT_UNIQUE', master);
+        const verified = verifiedVehicleMasterReference(master, choice, now);
+        return verified.state === 'KNOWN' ? { ...verified, reasonCode: null } : hold(verified.reason, master);
+      };
+    } catch {
+      // No credentials/raw exception strings; unavailable identity must not remove economic terms.
+      resolveMaster = () => hold('VEHICLE_MASTER_SNAPSHOT_UNVERIFIED');
+    }
+  }
   const data = Object.entries(input.products)
     .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id], input.policies, input.observedAt))
     .filter((row): row is NonNullable<typeof row> => row !== null)
+    .map(row => ({ ...row, vehicleMasterReference: resolveMaster(input.products[row.sourceProductId]!) }))
     .sort((a, b) => a.productId.localeCompare(b.productId));
   if (!data.length) throw new Error('KAKAO_REFERENCE_EMPTY');
   const dataDigest = hash(JSON.stringify(data));
