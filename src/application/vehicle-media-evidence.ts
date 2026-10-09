@@ -74,7 +74,7 @@ export async function inspectVehicleMediaEvidence(input: {
   source?: VehicleMediaSourceEvidence;
   sourceHttpStatus?: number;
   now: string;
-  probe: (url: string) => Promise<ImageHeadEvidence>;
+  probe?: (url: string) => Promise<ImageHeadEvidence>;
 }) {
   const photos = resolveReferenceVehiclePhotos(input.product);
   const issues: string[] = [];
@@ -116,6 +116,11 @@ export async function inspectVehicleMediaEvidence(input: {
     if (documentUrls.has(url)) {
       issues.push('DOCUMENT_IMAGE_IN_VEHICLE_PHOTOS');
       checks.push({ urlDigest, state: 'DOCUMENT_IMAGE_EXCLUDED', status: null });
+      continue;
+    }
+    if (!input.probe) {
+      issues.push('HEAD_NOT_CHECKED');
+      checks.push({ urlDigest, state: 'HEAD_NOT_CHECKED', status: null });
       continue;
     }
     // Sequential probes are intentional; callers own provider allowlists, deadlines and pacing.
