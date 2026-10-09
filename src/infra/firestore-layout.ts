@@ -13,6 +13,7 @@ export const FIRESTORE_COLLECTIONS = Object.freeze({
     runs: 'source_runs',
     heads: 'source_heads',
     raw: 'raw_records',
+    eventReceipts: 'source_event_receipts',
     candidates: 'normalized_candidates',
     lineage: 'field_lineage'
   }),

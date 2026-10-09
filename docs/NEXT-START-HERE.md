@@ -469,6 +469,25 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-09 카카오 원천 2단계 — 공통 시트 사진 계획·대기열 ACK·관측 성향
+
+- 목적/정본: PR #412의 1단계 `dd529ac19acc0fae73de35e91c8d3704e74d094e`, 같은 `work/freepass-data/kakao-source-intake-20261009` 위 미커밋 확장. 사용자 제공 main/PR/Issue 확인을 사용, Academy READY. 커밋·푸시 없음.
+- 변경: 기존 1단계 adapter/application/domain/port/job/시험과 `NATIVE-SOURCE-COLLECTOR.md` 카카오 하위 절. 신규 파일 없음(COMPOSE_OR_EXTEND). 현행 사진 전용 열은 없고 기존 비고 BV만 빈칸 계획으로 사용; 사람 값/수식/링크 보존. products→시트 계획은 기존 blank-fill 형식 조각이며 exporter/실행기는 미연결이다.
+- 수집: 같은 CLI JSON을 비공개 immutable queue로 수신, 기본 dry-run, 전체 RAW/사건 receipt/원본 첨부·권한 되읽기 뒤 digest-bound ACK만 정리 허용. 삭제/알림 송신 포트 없음. data-owned-refresh는 RETIRED라 복구하지 않고 현재 Data 소유 concurrency/승인 패턴에 따른 비활성 문서 설계만 작성했다.
+- 성향: 기존 Source run manifest/RAW 읽기로 최근 N일 고유 사건의 수·종류·최근 시각 집계, 과반 메모/시트 성향 및 실제 카톡 도착 수 기반 시범 선택. 이름별 규칙·새 DB 없음. 제공 manifest 범위 밖/미검증 자료는 추정하지 않고 HOLD.
+- 검증: 전체 `npm.cmd run check` exit1, build/architecture/boundary/standards 검사·시트105·smoke12·shadow10·dashboard21 PASS, Vitest1777 PASS/9 FAIL/14 SKIP(카카오33 PASS). 기존 os.userInfo ENOMEM/jq 접근 거부/read-pilot exit·JSON/로컬 서버 연결 실패를 기록했고 기대값 변경 없음. 최초 추가 테스트 타입 오류는 수정. 최종 국소 방어 변경 뒤 build PASS, `npm.cmd exec -- vitest run tests/kakao-source-intake.test.ts tests/source-intake-persistence.test.ts` 37 PASS(33+4), `git diff --check` PASS.
+- 남음: 정상 환경 전체 check, Claude 독립 검토 UNAVAILABLE(네트워크 금지), 운영 transport/ACK 정리기·감시·신원·주기 확정, 비공개 사진 시트/ERP 표시 및 source manifest coverage 검증. 운영 쓰기·시트 규격/워크플로 수정·활성화 없음.
+- next_start_here: [카카오 2단계 설계](NATIVE-SOURCE-COLLECTOR.md#2단계--상시-수신비공개-대기열정리-계약)와 미커밋 diff를 검토 → 네트워크 있는 승인 환경에서 원문 보관/되읽기부터 확인. 이번 코드 시험을 매일 수집이나 화면 표시 완료로 보고하지 않는다.
+
+### 2026-10-09 카카오톡 원천 1단계 / 공급사 사진 연결 계획
+
+- 목적: 공급사 1곳·공통 방 1개 카톡 원문/첨부를 기존 Source 경로로 접수하고 products 사진 연결안을 만든다. 정본/규격/운영 순서는 [카카오톡 원천](NATIVE-SOURCE-COLLECTOR.md#카카오톡-원천--2026-10-09)에 통합했다.
+- 대상 revision: `a6ac21c9ea438c3eb1b3d7b2653261782637b632`, `work/freepass-data/kakao-source-intake-20261009`, 이 작업 트리 미커밋 변경. 설계 AI-OPS `ea4c0f2a`; Academy READY, reuse COMPOSE_OR_EXTEND/CREATE_NEW_JUSTIFIED 근거는 위 문서. 다른 checkout 수정/커밋/푸시 없음.
+- 변경: 카톡 어댑터·중앙 사건 receipt(기존 Source 저장 계층의 create/CAS)·주입형 비공개 Drive 포트·RAW/표 lineage·photo_link 계획·기본 쓰기0 CLI와 가짜 테스트. 최초 RAW 불변, 응답 유실 UNKNOWN/재조회, PARTIAL 미관측 삭제0, 충돌/HOLD 유지. 상품 스키마/운영 데이터 변경 없음.
+- 검증: build PASS, 카카오17+기존RAW4 PASS. 전체 `npm.cmd run check` 재실행 exit1: Vitest1761 PASS/9 FAIL/14 SKIP(기존 CLI의 os.userInfo ENOMEM, jq 접근 거부, read-pilot exit/JSON 불일치, 로컬 서버 연결 거부; 기대값 수정 없음). 첫 실행의 새 테스트 반환 타입 오류는 수정했다. 상세 단계 결과는 위 문서.
+- 남음: 실제 Drive transport/기존 product writer adapter 미연결, ERP 비공개 사진 표시/권한·Firestore 실측·독립 검토 HOLD. `photo_link` 존재와 화면 표시 성공은 별개이며 적용 승인 플래그만으로 live ports가 만들어지지 않는다.
+- next_start_here: 위 문서의 운영 절차와 로컬 diff를 Claude가 검토 → 환경 실패 분리 → 네트워크 있는 환경에서 공급사1곳/사진1대 원문 보관·되읽기 → 기존 writer dry-run digest 승인 → products/ERP 화면 되읽기. 공개 링크·RTDB·ERP4 수정·시트 자동 발행 금지는 유지한다.
+
 ### 2026-10-07 수수료 정책 적용범위 분리 — 원본 인계 보존
 
 - 목적: 대표 지시대로 수수료 정책을 별도 절로 두고 공통/공급사별 자체 조건/개별계약/미확정을 구분한다.
