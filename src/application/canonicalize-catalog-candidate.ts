@@ -32,6 +32,7 @@ export type CanonicalizeCatalogCandidateInput = {
   decision: CanonicalizationDecision;
   actor: ActorRef;
   writer?: ExecutionWriterRef;
+  expectedOwnershipDigest?: string;
   reason: string;
 };
 
@@ -67,6 +68,7 @@ function requestDigest(input: CanonicalizeCatalogCandidateInput, writerId: strin
       organizationId: input.actor.organizationId ?? null
     },
     writerId,
+    ...(input.expectedOwnershipDigest ? { expectedOwnershipDigest: input.expectedOwnershipDigest } : {}),
     reason: input.reason
   });
 }
@@ -81,6 +83,11 @@ function assertModelCompatible(model: VehicleModel, candidate: CatalogCandidate)
   if (model.maker !== candidate.maker || model.model !== candidate.model) {
     throw new CanonicalizationConflictError(
       `Resolved VehicleModel ${model.id} does not match candidate maker/model`
+    );
+  }
+  if (!candidate.subModel?.trim() || !model.subModel?.trim() || candidate.subModel !== model.subModel) {
+    throw new CanonicalizationConflictError(
+      `Resolved VehicleModel ${model.id} requires matching known subModel`
     );
   }
   const knownPairs: Array<[string, unknown, unknown]> = [
@@ -154,6 +161,10 @@ function canonicalTarget(
   }
 
   if (entities.asset) {
+    if (normalizedPath === 'vehicleFacts') return {
+      entityType: 'vehicle_asset', entityId: entities.asset.id, revision: entities.asset.revision,
+      fieldPath: 'sourceVehicleFacts', value: entities.asset.sourceVehicleFacts ?? null
+    };
     if (normalizedPath === 'carNumber') {
       return {
         entityType: 'vehicle_asset',
@@ -284,6 +295,7 @@ function assertPriceTermInvariants(candidate: CatalogCandidate) {
 
 function requiredNormalizedPaths(candidate: CatalogCandidate) {
   const required = ['maker', 'model', 'commercialType'];
+  if (candidate.vehicleFacts) required.push('vehicleFacts');
   if (candidate.subModel) required.push('subModel');
   if (candidate.trimName) required.push('trimName');
   if (candidate.fuelType) required.push('fuelType');
@@ -391,6 +403,8 @@ export async function canonicalizeCatalogCandidate(
   const digest = requestDigest(input, writer.id);
 
   return store.transact(async (tx) => {
+    if (input.expectedOwnershipDigest && stableDigest(await tx.getCatalogWriterOwnership()) !== input.expectedOwnershipDigest)
+      throw new CanonicalizationConflictError('Catalog writer ownership changed after planning');
     assertCatalogWriterOwnership(
       await tx.getCatalogWriterOwnership(),
       writer
@@ -459,11 +473,12 @@ export async function canonicalizeCatalogCandidate(
         'Candidate envelope and normalized payload source identity do not match'
       );
     }
-    if (!candidate.maker || !candidate.model || !candidate.commercialType || !candidate.priceTerms.length) {
+    if (!candidate.maker?.trim() || !candidate.model?.trim() || !candidate.commercialType || !candidate.priceTerms.length) {
       throw new CanonicalizationRejectedError(
         'Canonicalization requires maker, model, commercialType and at least one PriceTerm'
       );
     }
+    // 정제 순서: 세부모델이 정해지지 않으면 트림은 확정하지 않고 비운다(상품은 막지 않는다).
     assertPriceTermInvariants(candidate);
     if (!sameIssues(candidate.issues, input.decision.approvedIssues)) {
       throw new CanonicalizationRejectedError(
@@ -532,13 +547,13 @@ export async function canonicalizeCatalogCandidate(
       displayName: [candidate.maker, candidate.model, candidate.subModel, candidate.trimName]
         .filter(Boolean)
         .join(' '),
-      ...(candidate.subModel ? { subModel: candidate.subModel } : {}),
-      ...(candidate.trimName ? { trim: candidate.trimName } : {}),
+      ...(candidate.subModel?.trim() ? { subModel: candidate.subModel } : {}),
+      ...(candidate.subModel?.trim() && candidate.trimName?.trim() ? { trim: candidate.trimName } : {}),
       ...(candidate.fuelType ? { fuel: candidate.fuelType } : {}),
       ...(candidate.driveType ? { drive: candidate.driveType } : {}),
       ...(candidate.seats !== undefined ? { seats: candidate.seats } : {})
     };
-    assertModelCompatible(model, candidate);
+    if (modelExisting) assertModelCompatible(model, candidate);
 
     let asset: VehicleAsset | undefined;
     if (candidate.carNumber) {
@@ -566,6 +581,8 @@ export async function canonicalizeCatalogCandidate(
           vehicleModelId: model.id,
           status: assetResolution.status,
           plateNumber: candidate.carNumber,
+          ...(candidate.vehicleFacts ? { sourceVehicleFacts: structuredClone(candidate.vehicleFacts), sourceFirstObservedAt: candidate.firstObservedAt ?? head.observedAt,
+            ...(candidate.firstRunId ? { sourceFirstRunId: candidate.firstRunId } : {}) } : {}),
           ...(candidate.mileageKm !== undefined ? { odometerKm: candidate.mileageKm } : {})
         };
       } else {
@@ -615,7 +632,7 @@ export async function canonicalizeCatalogCandidate(
       vehicleModelId: model.id,
       ...(asset ? { vehicleAssetId: asset.id } : {}),
       commercialType: candidate.commercialType,
-      status: 'ACTIVE',
+      status: input.decision.productStatus ?? 'ACTIVE',
       displayName: model.displayName
     };
 

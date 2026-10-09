@@ -1,7 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { assertCompatibleBackup, ownershipDecision, privateBucketDecision, PRIVATE_EVIDENCE_BUCKET, runDelivery, STAGES, ENGINE_REVISION } from '../scripts/data-delivery-owner.mjs';
+import { spawnSync } from 'node:child_process';
+import { assertCurrentSharedSheet, RETAINED_ENGINE_SOURCE_CODES, assertCompatibleBackup, ownershipDecision, privateBucketDecision, PRIVATE_EVIDENCE_BUCKET, runDelivery, STAGES, ENGINE_REVISION } from '../scripts/data-delivery-owner.mjs';
+
+test('frozen adapters cannot collect retired individual sheets or the pre-ONE iancar source', () => {
+  const spec = JSON.parse(readFileSync(new URL('../contracts/supplier-input-sheet-spec.v1.json', import.meta.url), 'utf8'));
+  const retired = spec.supplierChannels.sharedInputSheet.map(channel => channel.code);
+  assert.ok(RETAINED_ENGINE_SOURCE_CODES.length > 0);
+  assert.ok(RETAINED_ENGINE_SOURCE_CODES.every(code => !retired.includes(code) && code !== 'RP031'));
+  const args = STAGES.find(stage => stage[0] === 'atom-refresh')[2];
+  assert.deepEqual(args.filter(arg => arg.startsWith('--only=')), [`--only=${RETAINED_ENGINE_SOURCE_CODES.join(',')}`]);
+  assert.equal(spec.supplierManagement.sourceBinding.historicalEvidenceRetention, 'PRESERVE');
+});
+
+test('daily collection rejects missing and obsolete spreadsheet addresses before authentication', () => {
+  for (const id of [undefined, '', 'obsolete-sheet', 'synthetic_spreadsheet_id_0001']) {
+    assert.throws(() => assertCurrentSharedSheet(id), /SHARED_SHEET_SOURCE_BINDING_MISMATCH/);
+  }
+  const workflow = readFileSync(new URL('../.github/workflows/shared-sheet-daily.yml', import.meta.url), 'utf8');
+  assert.ok(workflow.indexOf('assertCurrentSharedSheet(process.env.SHARED_SHEET_ID)') < workflow.indexOf('uses: google-github-actions/auth@v2'));
+});
 
 test('frozen engine cannot replay pre-ONE rules over API-owned inventory', () => {
   assert.doesNotThrow(() => assertCompatibleBackup({ products: [] }));
@@ -128,15 +147,16 @@ test('backup failure blocks all atom mutations and retirement is never automatic
   assert.equal(receipt.status, 'PARTIAL');
   assert.ok(!STAGES.some(([, , args]) => args.includes('--retire')));
 });
-test('shadow engine calls cannot write an ops receipt and legacy history uses a scoped credential', () => {
-  const source = readFileSync(new URL('../scripts/data-delivery-owner.mjs', import.meta.url), 'utf8');
+test('retired bridge has no schedule, credentials, external checkout or data execution', () => {
   const workflow = readFileSync(new URL('../.github/workflows/data-owned-refresh.yml', import.meta.url), 'utf8');
-  const call = source.split('\n').find(line => line.includes("command('npx'") && line.includes('verify-whitelabel-publication.mts') && line.includes('data-delivery-shadow'));
-  assert.ok(call); assert.ok(!call.includes('--write-receipt'));
-  assert.ok(workflow.includes('secrets.FREEPASS_DATA_LEGACY_ACTIONS_READ_TOKEN'));
-  assert.ok(!workflow.includes('GH_TOKEN: ${{ github.token }}'));
-  assert.ok(workflow.includes('npm --prefix engine ci --ignore-scripts'));
-  assert.ok(workflow.indexOf('npm --prefix engine ci --ignore-scripts') < workflow.indexOf('google-github-actions/auth@'));
+  assert.ok(workflow.includes('RETIRED_PRE_ONE_DELIVERY_ENGINE'));
+  for (const forbidden of ['schedule:', 'cron:', 'secrets.', 'id-token:', 'google-github-actions/auth', 'repository: freepass-creator/freepasserp4', '--execute']) assert.ok(!workflow.includes(forbidden), forbidden);
+  for (const mode of ['--execute', '--shadow', '--preflight']) {
+    const result = spawnSync(process.execPath, ['scripts/data-delivery-owner.mjs', mode], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /RETIRED_PRE_ONE_DELIVERY_ENGINE/);
+    assert.ok(!result.stderr.includes('ENGINE_PIN_MISMATCH'));
+  }
 });
 test('failed durable checkpoint prevents its engine effect', async () => {
   const r = runner({ persistReceipt: async () => { throw new Error('evidence transport unavailable'); } });

@@ -1,13 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { assessDepositEvidence, auditDepositEvidence, depositStatusLabel } from '../src/domain/deposit-evidence.js';
+import { assessDepositEvidence, auditDepositEvidence, depositFromYearsRuleNote, depositStatusLabel } from '../src/domain/deposit-evidence.js';
 import { buildKakaoCatalogReferenceProduct, resolveReferenceDeposit } from '../src/application/kakao-catalog-reference.js';
+import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 
 describe('deposit evidence never promotes a placeholder to waiver', () => {
-  it('labels truly missing input separately from unresolved zero/rules', () => {
-    expect(depositStatusLabel('UNKNOWN', null)).toBe('미입력');
-    expect(depositStatusLabel('UNKNOWN', '')).toBe('미입력');
-    expect(depositStatusLabel('UNKNOWN', 0)).toBe('확인중');
-    expect(depositStatusLabel('UNKNOWN', null, '대여료×2')).toBe('확인중');
+  it('compatibility derives per-rate state without changing storage or unrelated fields', () => {
+    const product = { provider_company_code: 'RP004', product_type: '중고렌트', model: 'synthetic',
+      price: { '12': { rent: 500000, deposit: '미확인', depositState: 'ZERO' }, '24': { rent: 400000, deposit: '1,000,000' } } };
+    const before = structuredClone(product);
+    const result = withCompatibilityDepositEvidence(product);
+    expect(result.price).toMatchObject({ '12': { rent: 500000, deposit: null, depositState: 'UNKNOWN', depositStatusLabel: '미확인' },
+      '24': { rent: 400000, deposit: 1000000, depositState: 'KNOWN' } });
+    expect(product).toEqual(before); expect(result.model).toBe('synthetic');
+    const zero = { ...product, deposit_note: '무보증', price: { '12': { rent: 500000, deposit: 0 } } };
+    expect(withCompatibilityDepositEvidence(zero).price).toMatchObject({ '12': { deposit: 0, depositState: 'ZERO' } });
+    expect(withCompatibilityDepositEvidence({ ...zero, provider_company_code: 'RP012' }).price)
+      .toMatchObject({ '12': { deposit: null, depositState: 'UNKNOWN' } });
+    expect(withCompatibilityDepositEvidence({ ...zero, price: { '12': { rent: 500000, deposit: null } } }).price)
+      .toMatchObject({ '12': { deposit: null, depositState: 'UNKNOWN' } });
+  });
+  it.each([undefined, null, ''])('requires an observed amount even when waiver flags exist: %j', sourceAmount => {
+    expect(assessDepositEvidence({ supplierId: 'RP004', productType: '중고렌트', note: '무보증', depositFree: true, sourceAmount }))
+      .toMatchObject({ state: 'UNKNOWN', amount: null, reason: 'MISSING_DEPOSIT_AMOUNT' });
+  });
+  it('labels all unresolved evidence as requiring confirmation', () => {
+    expect(depositStatusLabel('UNKNOWN', null)).toBe('미확인');
+    expect(depositStatusLabel('UNKNOWN', '')).toBe('미확인');
+    expect(depositStatusLabel('UNKNOWN', 0)).toBe('미확인');
+    expect(depositStatusLabel('UNKNOWN', null, '대여료×2')).toBe('미확인');
     expect(depositStatusLabel('ZERO', 0, '무보증')).toBe('무보증');
   });
   it.each(['1,500,000원', '150만', '1500000.5', -500000, true, {}, ' 0 '])('holds malformed nonempty amount %j even with an explicit waiver', sourceAmount => {
@@ -30,10 +50,10 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
   it('does not ignore malformed positive sibling evidence under a product waiver', () => {
     const product = buildKakaoCatalogReferenceProduct('P2', { listable: true, provider_company_code: 'RP004', product_type: '중고렌트', deposit_note: '무보증',
       price: { '12': { rent: 500000, deposit: 0 }, '24': { rent: 400000, deposit: '150만' } } });
-    expect(product!.offers[0]!.priceTerms.every(row => row.depositState === 'UNKNOWN' && row.depositStatusLabel === '확인중')).toBe(true);
+    expect(product!.offers[0]!.priceTerms.every(row => row.depositState === 'UNKNOWN' && row.depositStatusLabel === '미확인')).toBe(true);
     const rentlessSibling = buildKakaoCatalogReferenceProduct('P3', { listable: true, provider_company_code: 'RP004', product_type: '중고렌트', deposit_note: '무보증',
       price: { '12': { rent: 500000, deposit: 0 }, '24': { deposit: 1000000 } } });
-    expect(rentlessSibling!.offers[0]!.priceTerms[0]).toMatchObject({ depositState: 'UNKNOWN', depositStatusLabel: '확인중' });
+    expect(rentlessSibling!.offers[0]!.priceTerms[0]).toMatchObject({ depositState: 'UNKNOWN', depositStatusLabel: '미확인' });
   });
   it.each(['중고렌트', '재렌트', '오공구독', '픽업구독'])('prohibits zero for Sonogong %s, even with a contradictory explicit flag', productType => {
     for (const note of ['', '무보증', '월 대여료 × 약정연수 (최대 3개월)']) {
@@ -69,5 +89,18 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     const before = structuredClone(products);
     expect(auditDepositEvidence(products)).toMatchObject({ productCount: 3, paidTermCount: 3, counts: { KNOWN: 1, ZERO: 1, UNKNOWN: 1 }, writeAuthorized: false });
     expect(products).toEqual(before);
+  });
+
+  it('derives the RP012 subscription deposit from the supplier note rule (1 / 2 / 3 months of rent, capped at 3), never from a zero placeholder', () => {
+    const note = '월 대여료 × 약정연수 (최대 3개월)';
+    expect(depositFromYearsRuleNote(note, 12, 1000000)).toEqual({ amount: 1000000, multiplier: 1 });
+    expect(depositFromYearsRuleNote(note, 24, 994000)).toEqual({ amount: 1988000, multiplier: 2 });
+    for (const months of [36, 48, 60]) expect(depositFromYearsRuleNote(note, months, 800000)).toEqual({ amount: 2400000, multiplier: 3 });
+    expect(depositFromYearsRuleNote(note, 18, 1000000)).toBeNull();
+    expect(depositFromYearsRuleNote(note, 24, 0)).toBeNull();
+    expect(depositFromYearsRuleNote('대여료×2', 24, 1000000)).toBeNull();
+    expect(depositFromYearsRuleNote(undefined, 24, 1000000)).toBeNull();
+    // the placeholder 0 itself stays UNKNOWN in the evidence layer (derivation is a separate, explicit step)
+    expect(assessDepositEvidence({ supplierId: 'RP012', productType: '픽업구독', note, sourceAmount: 0 }).state).toBe('UNKNOWN');
   });
 });

@@ -198,6 +198,7 @@ it('projects stored canonical fees only in Admin and binds them to release evide
   const publicRelease = await buildErpPublicProjection(store, store, now);
   expect(JSON.stringify(publicRelease.data)).not.toContain('supplierBillingFee');
   expect(JSON.stringify(publicRelease.data)).not.toContain('channelPayoutFee');
+  expect(JSON.stringify(publicRelease.data)).not.toContain('priceSourceRefs');
 });
 
 it('never calculates missing, duplicated, invalid or stale stored fees during projection', async () => {
@@ -211,7 +212,8 @@ it('never calculates missing, duplicated, invalid or stale stored fees during pr
       if (mode === 'stale') f.offer.priceTerms[0]!.monthlyRent.amount += 100000;
     });
     const release = await buildAdminCatalogProjection(store, store, now);
-    expect(release.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null });
+    expect(release.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, sourceRefs: [],
+      priceSourceRefs: [expect.stringMatching(/^catalog_offers\/.+\/priceTerms\//)] });
     expect(release.economics!.economicsCoverage).toBe('INCOMPLETE');
     if (mode === 'stale') {
       const health = await readCatalogDataHealth(store, store, now);

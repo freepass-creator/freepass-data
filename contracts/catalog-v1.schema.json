@@ -43,6 +43,8 @@
       "additionalProperties": false,
       "required": ["state", "sourceRefs"],
       "properties": {
+        "priceSourceRefs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "referenceRentBasis": {"type": "object", "additionalProperties": false, "required": ["termKey", "termMonths", "monthlyRent", "multiplier"], "properties": {"termKey": {"type": "string", "minLength": 1}, "termMonths": {"const": 36}, "monthlyRent": {"$ref": "#/$defs/money"}, "multiplier": {"enum": [1, 0.8]}}},
         "vatTreatment": {"enum": ["EXCLUDED", "INCLUDED", "UNKNOWN"]},
         "vatAmount": {"type": ["integer", "null"], "minimum": 0},
         "totalAmount": {"type": ["integer", "null"], "minimum": 0},
@@ -52,8 +54,12 @@
         "ruleId": {"type": ["string", "null"]},
         "policyId": {"type": "string", "minLength": 1},
         "reasonCode": {"type": ["string", "null"]},
-        "sourceRefs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
-      }
+        "sourceRefs": {"type": "array", "minItems": 0, "items": {"type": "string", "minLength": 1}}
+      },
+      "allOf": [
+        {"if": {"properties": {"state": {"enum": ["UNKNOWN", "NOT_APPLICABLE"]}}}, "then": {"properties": {"sourceRefs": {"type": "array", "maxItems": 0}}}},
+        {"if": {"properties": {"state": {"enum": ["KNOWN", "ZERO"]}}}, "then": {"properties": {"sourceRefs": {"type": "array", "minItems": 1}}}}
+      ]
     },
     "offerTermEconomics": {
       "type": "object",
@@ -76,11 +82,32 @@
         "seats": {"type": ["integer", "null"]}, "displayName": {"type": "string"}
       }}]
     },
+    "sourceVehicleFacts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ruleVersion", "fields", "reasons"],
+      "properties": {
+        "ruleVersion": {"type": "string", "minLength": 1},
+        "reasons": {"type": "array", "items": {"type": "string"}},
+        "fields": {"type": "object", "additionalProperties": {
+          "type": "object", "additionalProperties": false,
+          "required": ["value", "state", "evidence", "ruleVersion", "reasons"],
+          "properties": {
+            "value": {"type": ["string", "number", "null"]},
+            "state": {"enum": ["KNOWN", "MISSING", "REVIEW_REQUIRED"]},
+            "evidence": {"type": "string"}, "ruleVersion": {"type": "string", "minLength": 1},
+            "reasons": {"type": "array", "items": {"type": "string"}}
+          }
+        }}
+      }
+    },
     "vehicleAsset": {
       "allOf": [{"$ref": "#/$defs/meta"}, {"type": "object", "required": ["id", "vehicleModelId", "status"], "properties": {
         "id": {"type": "string"}, "vehicleModelId": {"type": "string"},
         "plateNumber": {"type": ["string", "null"]}, "vin": {"type": ["string", "null"]},
         "odometerKm": {"type": ["integer", "null"], "minimum": 0},
+        "sourceVehicleFacts": {"$ref": "#/$defs/sourceVehicleFacts"},
+        "sourceFirstObservedAt": {"type": "string", "format": "date-time"},
+        "sourceFirstRunId": {"type": "string", "minLength": 1},
         "status": {"enum": ["AVAILABLE", "RESERVED", "IN_USE", "RETURNED", "MAINTENANCE", "ACCIDENT", "SOLD", "RETIRED"]}
       }}]
     },

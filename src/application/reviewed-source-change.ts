@@ -36,6 +36,7 @@ import type {
   CatalogTransaction
 } from '../ports/catalog-store.js';
 import { stableDigest, stableValue } from '../shared/stable-digest.js';
+import type { SourceVehicleFacts } from '../domain/source-vehicle-facts.js';
 
 export class ReviewedSourceChangeRejectedError extends Error {
   readonly code = 'REVIEWED_SOURCE_CHANGE_REJECTED';
@@ -74,6 +75,7 @@ type ReviewReader = Pick<
 >;
 
 type SourceChangeOperation =
+  | { kind: 'ASSET_SOURCE_FACTS'; changeId: string; value: SourceVehicleFacts; authorityFieldPath: string }
   | {
       kind: 'OFFER_MONTHLY_RENT';
       changeId: string;
@@ -110,6 +112,7 @@ type SourceChangeOperation =
     };
 
 type SourceChangeOperationDraft =
+  | { kind: 'ASSET_SOURCE_FACTS'; value: SourceVehicleFacts }
   | {
       kind: 'OFFER_MONTHLY_RENT';
       termKey: string;
@@ -137,13 +140,13 @@ type SourceChangeOperationDraft =
 
 type OfferSourceChangeOperation = Exclude<
   SourceChangeOperation,
-  { kind: 'ASSET_ODOMETER' }
+  { kind: 'ASSET_ODOMETER' | 'ASSET_SOURCE_FACTS' }
 >;
 
 function isOfferOperation(
   operation: SourceChangeOperation
 ): operation is OfferSourceChangeOperation {
-  return operation.kind !== 'ASSET_ODOMETER';
+  return operation.kind !== 'ASSET_ODOMETER' && operation.kind !== 'ASSET_SOURCE_FACTS';
 }
 
 type LoadedState = {
@@ -552,6 +555,12 @@ function buildChanges(state: LoadedState) {
     }
   }
 
+  if (candidate.vehicleFacts) {
+    if (!asset) blocked('vehicle_asset', bindingPlaceholder(product.id), 'sourceVehicleFacts', null, candidate.vehicleFacts, 'VEHICLE_ASSET_REQUIRED');
+    else reviewable('vehicle_asset', asset.id, 'sourceVehicleFacts', asset.sourceVehicleFacts ?? null,
+      candidate.vehicleFacts, 'SOURCE_VEHICLE_FACTS_CHANGE', 'sourceVehicleFacts',
+      { kind: 'ASSET_SOURCE_FACTS', value: candidate.vehicleFacts });
+  }
   const currentByTerm = new Map(offer.priceTerms.map((term) => [term.termKey, term]));
   const candidateByTerm = new Map(candidate.priceTerms.map((term) => [term.termKey, term]));
   const currentKeys = [...currentByTerm.keys()].sort();
@@ -613,7 +622,16 @@ function buildChanges(state: LoadedState) {
         value: structuredClone(next.monthlyRent)
       }
     );
-    reviewable(
+    // Missing current evidence cannot authorize erasing a previously evidenced amount.
+    // Block the whole refresh: keep the old revision, never bind it to the new source head.
+    const depositEvidenceLost = Boolean(current.deposit) && next.depositState === 'UNKNOWN';
+    if (depositEvidenceLost) {
+      blocked('offer', offer.id, `priceTerms.${termKey}.depositState`, current.depositState,
+        next.depositState, 'DEPOSIT_EVIDENCE_LOST_REQUIRES_REVIEW');
+      blocked('offer', offer.id, `priceTerms.${termKey}.deposit`, current.deposit ?? null,
+        next.deposit ?? null, 'DEPOSIT_EVIDENCE_LOST_REQUIRES_REVIEW');
+    }
+    if (!depositEvidenceLost) reviewable(
       'offer',
       offer.id,
       `priceTerms.${termKey}.depositState`,
@@ -627,7 +645,7 @@ function buildChanges(state: LoadedState) {
         value: next.depositState
       }
     );
-    reviewable(
+    if (!depositEvidenceLost) reviewable(
       'offer',
       offer.id,
       `priceTerms.${termKey}.deposit`,
@@ -716,6 +734,7 @@ function requestDigest(input: ApplyReviewedSourceChangeInput, writerId: string) 
     approvedIssues: [...(input.approvedIssues ?? [])].sort(),
     actor: input.actor,
     writerId,
+    ...(input.expectedOwnershipDigest ? { expectedOwnershipDigest: input.expectedOwnershipDigest } : {}),
     reason: input.reason
   });
 }
@@ -827,7 +846,8 @@ function nextAssetFromOperations(
     (item): item is Extract<SourceChangeOperation, { kind: 'ASSET_ODOMETER' }> =>
       item.kind === 'ASSET_ODOMETER'
   );
-  if (!odometer) return asset;
+  const facts = operations.find((item): item is Extract<SourceChangeOperation, { kind: 'ASSET_SOURCE_FACTS' }> => item.kind === 'ASSET_SOURCE_FACTS');
+  if (!odometer && !facts) return asset;
   if (!asset) {
     throw new ReviewedSourceChangeRejectedError('VehicleAsset missing for odometer update');
   }
@@ -835,7 +855,8 @@ function nextAssetFromOperations(
   const { sourceRevision: _previousSourceRevision, ...base } = asset;
   return {
     ...base,
-    odometerKm: odometer.value,
+    ...(odometer ? { odometerKm: odometer.value } : {}),
+    ...(facts ? { sourceVehicleFacts: structuredClone(facts.value) } : {}),
     revision: asset.revision + 1,
     validationStatus,
     updatedAt: now,
@@ -906,6 +927,10 @@ function buildRefreshLineage(input: {
   };
 
   for (const operation of input.operations) {
+    if (operation.kind === 'ASSET_SOURCE_FACTS' && input.assetAfter) {
+      append(parentFor('vehicleFacts'), 'vehicle_asset', input.assetAfter.id,
+        input.assetAfter.revision, 'sourceVehicleFacts', input.assetAfter.sourceVehicleFacts);
+    }
     if (operation.kind === 'OFFER_MONTHLY_RENT') {
       const term = input.offerAfter.priceTerms.find((x) => x.termKey === operation.termKey)!;
       append(
@@ -982,6 +1007,8 @@ export async function applyReviewedSourceChange(
   const requestHash = requestDigest(input, writer.id);
 
   return store.transact(async (tx: CatalogTransaction) => {
+    if (input.expectedOwnershipDigest && stableDigest(await tx.getCatalogWriterOwnership()) !== input.expectedOwnershipDigest)
+      throw new ReviewedSourceChangeConflictError('Catalog writer ownership changed after planning');
     assertCatalogWriterOwnership(
       await tx.getCatalogWriterOwnership(),
       writer
@@ -1033,7 +1060,7 @@ export async function applyReviewedSourceChange(
     });
 
     for (const operation of selectedOperations) {
-      const aggregate = operation.kind === 'ASSET_ODOMETER' ? 'vehicle_asset' : 'offer';
+      const aggregate = isOfferOperation(operation) ? 'offer' : 'vehicle_asset';
       const authority = assertFieldAuthority({
         aggregate,
         fieldPath: operation.authorityFieldPath,

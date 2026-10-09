@@ -29,6 +29,8 @@ It does not seed data, publish releases, run workers, or expose Catalog mutation
 
 ## 수수료 연동 기준 — 사용자 결정 2026-09-30
 
+`sourceRefs`는 KNOWN·ZERO 금액의 규칙·실사용 계산 근거만 담고 UNKNOWN·NOT_APPLICABLE이면 비운다. 가격 출처는 수수료·보증금 모두 별도 `priceSourceRefs`에 둔다.
+
 **프리패스 수수료는 지급수수료(`channelPayoutFee`)다.** FreePass가 영업채널에 지급하는 금액이며, 공급사로부터 받는 청구수수료나 내부 마진을 뜻하지 않는다.
 
 | 연동 대상 | 제공할 수수료 | 지급 방향 |
@@ -42,9 +44,61 @@ It does not seed data, publish releases, run workers, or expose Catalog mutation
 
 기존 Kakao `catalog-reference`는 내부 업무용으로 양쪽 수수료와 예상 마진을 포함하는 별도 계약이다. 이 응답과 키를 외부 공급사/영업채널에 전달하지 않는다. 현재 public ERP/화이트라벨 projection에는 내부 수수료를 추가하지 않는다. 외부 연동 완료는 전용 계약·scope 차단 테스트·인증된 운영 readback 이후에만 선언한다.
 
+### 기존 Offer 일괄 재계산 — PR1 (2026-10-04)
+
+`src/jobs/recompute-offer-economics.ts`는 기본 dry-run이다. `listOffers()`와 기존
+`precomputeOfferEconomics`를 조합하며 거래·파일·감사 로그·outbox·Admin projection을 쓰지 않는다.
+공급사별 상품/기간 수, 청구·지급 각각 전후 KNOWN/ZERO/UNKNOWN/NOT_APPLICABLE,
+변경 기간(금액/state/policyId/sourceRefs/reasonCode), UNKNOWN 사유 빈도와 검토용 plan을 JSON으로 출력한다.
+기간은 전후 termKey 합집합이고 저장값 누락은 UNKNOWN/NOT_STORED로 집계한다. 변경 항목 수는
+서로 중복될 수 있으며 `any`는 기간당 한 번이다. `unknownReasons`는 전후·청구/지급을 구분한 전체 빈도순이다.
+plan에는 원본 Offer 전체(before-image), Offer revision, Product/Model을 포함한 입력 digest,
+정책 ID와 정책 내용 digest, 대상 프로젝트가 고정된다. 내부 금액을 포함하므로 비공개로 보관한다.
+
+로컬 메모리 확인(자격증명 불필요):
+
+```powershell
+npm.cmd run build
+node dist/src/jobs/recompute-offer-economics.js --memory
+```
+
+운영 절차는 **dry-run → 승인 → apply → Admin 재발행 → Admin 응답 집계 확인** 순서다.
+이번 PR은 코드·메모리 시험만이며 운영 실행/재발행 승인이 아니다.
+
+1. 별도 승인된 읽기 환경에서 `FIREBASE_PROJECT_ID`를 명시하고 `--firestore`로 dry-run한다.
+   기존 bootstrap → `createFirestoreDataStore` → `firebase-target.ts`만 사용한다.
+   dry-run은 gateway 감사 쓰기도 수행하지 않는다. 기본 앱/ADC에서 대상을 추정하지 않는다.
+2. 전체 JSON의 `plan` 객체를 비공개 파일로 보존하고 `planDigest`와 집계·UNKNOWN을 검토한다.
+   실행 revision, 프로젝트, 공급사/Offer 범위, 정책 `sales-commission-2026-10-04`, 변경 수,
+   before-image 보관, writer 소유권 및 중단/복구 계획을 고정해 운영 apply 승인을 받는다.
+3. 승인 후에만 아래 형식으로 실행한다(이 PR에서는 운영 실행하지 않음).
+
+   ```powershell
+   node dist/src/jobs/recompute-offer-economics.js --firestore --apply --plan <비공개-plan.json> --policy-id sales-commission-2026-10-04 --expected-plan-digest <승인된-planDigest>
+   ```
+
+   파일에는 보고서 전체가 아닌 `plan` 객체를 넣는다. `--apply` 이외 경로는 쓰지 않는다.
+   거래 안에서 writer·멱등키·expectedRevision·Product/Model 입력을 다시 확인하며,
+   변화가 있는 Offer만 revision/history/audit/outbox/receipt를 원자적으로 저장한다.
+   감사 action은 가격 변경과 별개인 `RECOMPUTE_OFFER_ECONOMICS`; 감사의 `before`가 원자적 before-image다.
+   소유권 기록 누락도 HOLD다. 입력 누락은 0으로 보정하지 않는다.
+   같은 plan 재실행은 receipt로 중복 쓰기를 막고, 새 plan의 동일 결과도 쓰지 않는다.
+   첫 충돌/오류에서 HOLD로 중단하고 앞서 완료한 건수와 미처리 건수를 보고한다.
+   전체 배치는 단일 거래가 아니다. revision을 자동 갱신해 재시도하지 않는다.
+4. 다음 PR에서 별도 승인 아래 `buildAdminCatalogProjection`으로 검증된 READY 릴리스를 만들고
+   활성화한다. 이 job은 dry-run/apply 모두 projection 생성·활성화·outbox worker 실행을 하지 않는다.
+   이미 실행 중인 worker가 `catalog.offer.changed`를 소비할 수 있으므로 운영 apply 전 그 영향도 확인한다.
+5. 인증된 Admin 응답에서 공급사·기간별 청구/지급 상태와 금액, UNKNOWN 사유 및 릴리스/정책을
+   원본·apply 결과와 대사한다. 코드 시험은 운영 저장/발행/소비 확인을 대신하지 않는다.
+
+복구는 층별로 구분한다. **코드 revert**는 새 실행을 중단할 뿐 이미 저장한 금액을 되돌리지 않는다.
+Canonical 복구는 비공개 plan 및 원자적 감사 before-image와 현재 revision을 대조한 **보상 거래**로 한다
+(후속 PR/별도 승인; raw overwrite 및 revision 감소 금지). 소비처 복구는 검증된
+**이전 READY 릴리스 재활성화**로 하며 Canonical 복구와 별개다. 셋 모두 대상·영향을 재확인한다.
+
 ### Admin 내부 기간별 경제조건 — 2026-10-03
 
-Canonical `catalog_offers.internalEconomicsTerms`는 신규 canonicalization, 승인된 원천 Offer 변경, 가격 변경의 기존 CatalogStore 거래 안에서 다시 계산한다. `precomputeOfferEconomics`는 `sales-commission-2026-10-03`의 공통 resolver를 재사용한다. 09-28 정책 및 ERP `settlement-fee-table.ts@f862d0097f6e83d79d0b699bc369a83716b1d982`는 이전 근거로 보존하고, 현재 변경 근거는 10-03 대표 결정과 `commission-research.md` ①③④다. 대여료·보증금은 `priceTerms`에서 복사하며 별도 `internalPeriodFees` 저장소는 없다. 수수료는 계약 전체 1건의 VAT 별도 공급가액이고 `calculation`, `sourceRefs`, `ruleId`, `policyId`, `vatTreatment`, `vatAmount`, `totalAmount`를 보존한다. Offer의 기존 `policyId`(상품 정책)와 수수료의 `policyId`(규칙 묶음)는 다르다.
+Canonical `catalog_offers.internalEconomicsTerms`는 신규 canonicalization, 승인된 원천 Offer 변경, 가격 변경의 기존 CatalogStore 거래 안에서 다시 계산한다. `precomputeOfferEconomics`는 `sales-commission-2026-10-04`의 공통 resolver를 재사용한다. 09-28 정책 및 ERP `settlement-fee-table.ts@f862d0097f6e83d79d0b699bc369a83716b1d982`는 이전 근거로 보존하고, 현재 정본은 아래 10-04 F04 제공 사본이며 10-03 정책 객체는 과거 규칙으로 보존한다. 대여료·보증금은 `priceTerms`에서 복사하며 별도 `internalPeriodFees` 저장소는 없다. 수수료는 계약 전체 1건의 VAT 별도 공급가액이고 `calculation`, `sourceRefs`, `ruleId`, `policyId`, `vatTreatment`, `vatAmount`, `totalAmount`를 보존한다. Offer의 기존 `policyId`(상품 정책)와 수수료의 `policyId`(규칙 묶음)는 다르다.
 
 Admin 전용 `data[].offers[].priceTerms[].supplierBillingFee` / `channelPayoutFee`만 양쪽 금액을 제공한다. Admin은 FreePass 내부 계약접수 주체이므로 외부 공급사/영업채널의 상대편 수수료 제외 규칙과 구분한다. 서버의 `freepass-admin-catalog` 전용 등록·키 제한을 유지하고 public ERP·화이트라벨·Kakao 응답에는 이번 필드를 추가하지 않는다. Admin projection은 저장된 값만 읽고 누락·중복·무효·가격/기간 불일치를 UNKNOWN으로 내린다. Admin에서 재계산하지 않는다.
 
@@ -54,16 +108,278 @@ Admin 전용 `data[].offers[].priceTerms[].supplierBillingFee` / `channelPayoutF
 
 - 스타 RP018·스카이 RP033 재렌트: 월료 100% 청구·80% 지급, VAT 포함. 공급사 ID는 유지하고 규칙만 공유한다. 신차는 이 특칙에 포함하지 않는다.
 - 퍼시픽 RP022 신차: `vehicleValue` × 요율. `newProductSubtype`은 `NEW_PREDELIVERY`/`NEW_MATCHING`, `depositTierPercent`는 계약상 5/10이다. 선출고 청구/지급은 5% 등급 3%/2.5%, 10% 등급 4%/3%; 매칭은 3%/3%, 3.3%/3.3%. 모두 VAT 포함. 등급 없으면 `DEPOSIT_TIER_REQUIRED`이며 보증금 금액으로 추정하지 않는다. 재렌트는 표준, VAT 별도다.
-- 산식 결과를 `Math.round`로 원 단위 반올림한다. VAT 포함은 총액÷1.1을 반올림한 공급가액을 `amount`, 차액을 `vatAmount`로 둔다. VAT 별도는 공급가액×10%를 반올림해 VAT를 더한다. 마진은 공급가액끼리 차감한다.
-- 손오공 구독: `q12Basis: { amount, sourceRef }`는 근거로 선택한 12개월 계약 기준 **월** 구독료다. 없으면 `Q12_BASIS_REQUIRED`. `subscriptionForm`은 `BUYOUT`/`RETURN`; 반납형은 12개월만. 청구는 Q12＋기간 가산(12:10만, 24:30만, 36:50만, 48·60:70만), 지급은 Q12다. 기간 보간은 없다.
+- 원 단위 반올림은 F04 접수 실제 관행으로 확정(2026-10-04 AI 상황실, 근거 원장 줄은 비공개 기록): VAT 포함 금액 ÷ 1.1 → 원 단위 반올림이 공급가, VAT = 총액 − 공급가. 산식 금액과 VAT 별도 VAT(공급가÷10)도 원 단위 반올림. 마진은 공급가끼리 차감한다.
+- 손오공 구독: `q12Basis: { amount, sourceRef }`는 근거로 선택한 12개월 계약 기준 **월** 구독료다. 없으면 `Q12_BASIS_REQUIRED`. `subscriptionForm`은 `BUYOUT`/`RETURN`; 반납형은 12개월만. 청구는 Q12＋기간 가산(12:10만, 24:30만, 36:50만, 48:70만; 60: 사용자 명시 HOLD), 지급은 Q12다. 기간 보간은 없다.
 - 아이언 신차 선출고 4%/3%, 일반 표준 신차 3.5%/3%, 오토플러스 일반 구독 100만/80만, 아이카 재렌트 6개월 40만/30만·전기차 100만/80만은 VAT 별도다.
-- 마음카 RP034는 `NOT_APPLICABLE / SUPPLIER_EXCLUDED_BY_DECISION`. 미등록 공급사, 미지원 기간, 표준 매칭 개별율, 아이카 1개월 기준액·연장 조건, 빌린카·엘씨·웰릭스 구독 범위, 스위치 비구독 등은 UNKNOWN과 사유를 유지한다. `individualException: true`는 `INDIVIDUAL_EXCEPTION_EVIDENCE_REQUIRED`; 오토플러스 프로모션 등 개별 거래를 일반 규칙으로 확장하지 않는다.
+- 마음카 RP034는 `NOT_APPLICABLE / SUPPLIER_EXCLUDED_BY_DECISION`. 미등록 공급사, 미지원 기간, 표준 매칭 개별율, 아이카 1개월 기준액·연장 조건, 빌린카·엘씨 60개월 외 구독·웰릭스 구독 범위, 스위치 비구독 등은 UNKNOWN과 사유를 유지한다. `individualException: true`만 있고 아래의 유효한 개별 근거가 없으면 `INDIVIDUAL_EXCEPTION_EVIDENCE_REQUIRED`; 오토플러스 프로모션 등 개별 거래를 일반 규칙으로 확장하지 않는다.
 
 `precomputeOfferEconomics`의 네 번째 인자 `evidenceByTerm[termKey]`로 위 계약 근거를 전달할 수 있다. 기존 자동 저장 호출은 이 계약 근거를 수집하지 않으므로 입력이 필요한 상품은 UNKNOWN을 유지한다. 월료나 다른 기간 가격에서 Q12를 선택하지 않는다. 저장된 기존 정책 값은 읽기 시 자동 재계산하지 않으며, 새 정책 반영에는 승인된 재저장이 필요하다.
 
-ERP 차이: 이번에는 ERP를 수정하지 않았다. ERP의 스타·퍼시픽·손오공 문자열/`auto:false` 규칙과 달리 Data는 필수 근거가 있으면 계산한다. Data는 스카이 ID, 계약 등급, 구독 형태, Q12 출처, VAT 분리와 UNKNOWN 사유를 명시하며 ERP의 상품 기본 재렌트 분류·형태 무시 fallback을 사용하지 않는다. 청구·지급 시점, 분납·개별 확정액은 별도 정산 업무다.
+ERP 차이: 이번에는 ERP를 수정하지 않았다. ERP의 스타·퍼시픽·손오공 문자열/`auto:false` 규칙과 달리 Data는 필수 근거가 있으면 계산한다. Data는 스카이 ID, 계약 등급, 구독 형태, Q12 출처, VAT 분리와 UNKNOWN 사유를 명시하며 ERP의 상품 기본 재렌트 분류·형태 무시 fallback을 사용하지 않는다. 청구·지급 시점과 일반 분납은 별도 정산 업무다. 아래 승인된 개별 고정액만 명시적으로 계산한다.
 
 로컬 구현이며 운영 backfill·발행·배포·cutover는 없다. 저장값이 없는 기존 Offer는 새 승인된 저장까지 UNKNOWN이다. 새 필수 필드가 없는 구형 Admin release는 gateway 계약 검증에서 거절되므로 운영 도입 시 승인된 Canonical 저장 및 Admin release 재생성을 먼저 검증해야 한다.
+
+
+### F04 정본 정렬 — 2026-10-04 (로컬 구현)
+
+- 기준 revision: Data `fd252b2508d4ccda5ecf8de03b587c1f9910cda4`; ERP4 로컬 `origin/main` `cd4a6686f3828d3370cf14dc77c15b8aaacca571`. Git fetch·쓰기, Google/Firestore 접속 없음. 원본 JSON·메모는 저장소에 복사하지 않았다.
+- 정본: 사용자 제공 F04 `수수료표!A1:M191` 2026-10-04 읽음. 구버전 탭/엔진차이/탭수정안보다 최신 JSON을 우선한다. policyId `sales-commission-2026-10-04`; `KAKAO_COMMISSION_POLICY_2026_10_03`에 이전 규칙 보존. `sourceRefs`에 적용 F04 행을 기록한다.
+- 우선순위: 마음카 제외 → 입력 검사 → 개별 계약 근거 → 픽업·전기차 등 특칙 → 일반 규칙. 아이카 전기차는 재렌트 또는 신차 선출고에만 적용; 구독·매칭은 제외한다. ERP4 `feeKindOf`의 견적출고 우선 분류를 따르며 모델명으로 연료를 추측하거나 알 수 없는 상품을 재렌트로 기본 분류하지 않는다.
+- 오토플러스 전기차 구독 150만/130만(161행); 일반 구독 100만/80만. 연료 누락은 `FUEL_REQUIRED_FOR_SUPPLIER_RULE`. 손오공 픽업은 차량가액×4%/3%(190행); 빌린카/엘씨 구독은 60개월에만 대여료×60×2.25%/1.75%(162행).
+- 입력 정규화: `선출고` → 신차/NEW_PREDELIVERY, `견적출고` → 신차/NEW_MATCHING, `장기렌트` → 재렌트. 명시 subtype과 표현이 충돌하면 `CONFLICTING_NEW_PRODUCT_SUBTYPE`.
+- 카탈로그 입력: `buildKakaoCatalogReference`의 `commissionEvidenceByProduct[productId][원본 priceKey]` → `buildKakaoCatalogReferenceProduct`의 세 번째 인자 `evidenceByTerm` → 양쪽 resolver. 차량가액, Q12+출처, 구독 형태, 신차 subtype, 계약 보증금 등급과 개별 근거를 전달한다. `precomputeOfferEconomics`도 동일 근거 타입을 받는다. 이 경로는 신뢰된 비공개 호출자 전용이며 원천 JSON의 임의 필드·월료·보증금으로 근거를 만들지 않는다. 기존 자동 Canonical 저장 호출에는 근거 수집이 없으므로 해당 값 부재는 여전히 UNKNOWN이다. 운영 수집 연결 완료가 아니다.
+- 개별 합의: `individualAgreement = { agreementId, sourceRow(160|163), status, contractRef, matchedContractRef, billing, payout }`. 금액·대상 계약은 공개 저장소에 두지 않고, 신뢰된 비공개 호출자가 비공개 목록(ai-ops 인수인계)의 합의를 이 계약에 묶어 넘긴다. `agreementId` 는 `private:` + 4자 이상, 계약 토큰은 **opaque**(`opaque:` + 16자 이상)로 양쪽이 같아야 한다. 이 순수 함수는 승인 인증 수단이 아니며 서버가 일치·승인을 검증해야 한다. 차량번호·실제 계약 토큰·원장 행을 넣지 않는다(단순 차량번호 SHA256 은 열거 가능 — 비공개 랜덤 ID 또는 비밀키 HMAC 권장).
+- 상태: `APPROVED` = 청구·지급 모두 합의 금액(`INDIVIDUAL_AGREEMENT_{S}`), `PAYOUT_CONFIRMED` = 지급만(청구는 `INDIVIDUAL_BILLING_BASIS_UNCONFIRMED`), `UNCONFIRMED`·금액 null = 미확정. 같은 입력이면 같은 금액. 개별 표시(`individualException`)만 있고 합의 입력이 없으면 일반 규칙을 쓰지 않고 `INDIVIDUAL_EXCEPTION_EVIDENCE_REQUIRED`. (2026-10-05 정리: 예전엔 엔진에 원장 행·합의 금액을 상수로 두었다 — 비공개 입력으로 옮김.)
+- **2026-10-05 AI 상황실 결정(정책 `sales-commission-2026-10-05`)**: 손오공 오공 구독 60개월 청구 가산 = **+600,000**(14행), 지급은 Q12. 원 단위는 **원 미만 반올림**. 근거(실제 청구 줄 대조)는 비공개 ai-ops 인수인계(정산-수수료규칙-20261005)에 있다 — 공개 문서에는 원장 행·개별 금액을 적지 않는다. (옛 판단: 일반 60개월 충돌 UNKNOWN — 폐기.) 이전 정책으로 저장된 기간별 수수료는 그 정책 ID 그대로 남고, 새 정책 값은 명시적 재계산(일괄 재계산 작업·새 적재) 때만 바뀐다.
+- **169~170행 뮤카(2026-10-05 구현, 공급사 RP035 — freepass-data #365 발급)**: freepass-admin DEC-2026-10-04-01 8번대로. 청구(프리패스 몫) `MEWCAR_FREEPASS_SHARE_BILLING` = 차량 기준가 × 1%(전 기간). 지급(영업 GA) `MEWCAR_GA_{PREPAID|INSTALLMENT}_{12|24|36|48}_PAYOUT` = 선납 12개월 100만·24~48개월 120만 / 분납 12개월 80만·24~48개월 100만(★2026-10-05 폐지: 계약일 `contractDate` 가 효력일 2026-10-05 이후인 신규 분납 계약은 계산하지 않고 `MEWCAR_INSTALLMENT_ABOLISHED_CONFIRM_REQUIRED`(확인 필요)로 멈춘다, 계약일을 모르면 `MEWCAR_CONTRACT_DATE_REQUIRED`, 그 전 계약은 옛 정액) + min(추가보증금 × 10%, 40만). 선납/분납(`depositPayment`)·추가보증금(`extraDeposit`, 없으면 0 명시)·기준가를 모르면 계산하지 않음(사유 `MEWCAR_*`). 별도 지급 재원이라 예상 마진은 `NOT_APPLICABLE`(`SEPARATE_FUNDING_NO_MARGIN`). 공급가(VAT 별도) 기준 — VAT·원천세 처리 근거는 지급 단계에서. «분납 완납 전 미지급»은 계약 단계 지급 가능 상태(`payoutEligibility`)로 다룬다.
+- 미확정 공급사 AMR·오토셀렉션·금탑·빌림·퍼스트·SK는 로컬 근거에서 확정 ID를 찾지 못했다. 이름을 임의 표준 ID로 연결하지 않으며 미등록 ID는 `SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE`이다. 웰릭스 발주는 `WELRIX_ORDER_RULE_UNCONFIRMED`, 기타 미확정 구독은 `SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED`, 기간 누락은 `TERM_NOT_IN_F04_COMMISSION_POLICY`.
+- 검증/운영 경계: 로컬 검사만. 저장된 기존 economics 자동 재작성, 배포, 지급 승인 없음. Claude 독립 검토 호출은 `FAILED / CLAUDE_PROCESS_FAILED`(exit 1)이며 검토 완료로 세지 않는다. Claude 오더자가 diff/검사 후 커밋한다.
+
+#### 최종 로컬 검증 기록
+
+- `npm run check`: exit **1**, 전체 PASS 아님. 아키텍처·규격·데이터 접근 경계·빌드 PASS; Node 검사 **109/109 PASS**; Vitest **1305 PASS / 9 FAIL / 14 SKIP**, 119파일(111 PASS/4 FAIL/4 SKIP).
+- 실패9건: iancar-source-capture CLI2, read-pilot CLI4, runtime-policy2, vehicle-finder-route1. `node --import tsx -e ...` 단독 호출도 `uv_os_get_passwd ENOMEM`으로 실패하여 앱 코드 이전 환경 오류를 재현했다. `bash -c 'jq --version'`도 `Permission denied`; Finder는 tsx로 서버가 뜨지 않아 `ECONNREFUSED`. 보안 설정·의존성·다른 기능 코드를 바꾸어 우회하지 않았다.
+- 별도 집중검사: 수수료/Canonical/저장변경/Kakao gateway **5파일128 PASS**. 표준/특칙·입력 불변·미확정 보존·예외 범위/상태·행 참조 검증 포함. 이전 정책 객체 원문 보존 및 191행 대응표의 누락·중복0 확인.
+- 최종 전체 로그: 로컬 임시 경로 `C:/Users/admin/AppData/Local/Temp/commission-f04-check-final.log`. skipped14는 기존 emulator/workflow 조건부 검사이며 PASS로 세지 않는다. 운영 접속·배포·커밋 없음.
+
+#### 표준 공급사 15곳 ↔ standardSupplierIds 19개
+
+근거: Data `contracts/supplier-input-sheet-spec.v1.json:supplierChannels`; ERP4 위 origin/main의 `inventory-source-registry.ts`, `partner-ci.ts`, `partner-code.ts`(렌트존), `scripts/cleanup-partners.mts`(J&J). 운영 거래처 명부의 현재 활성 여부는 조회하지 않았다. 15곳=18개 ID, 나머지 1개는 아이언(별도 특칙)이다. 이름 중복이 있어도 ID를 합치거나 삭제하지 않는다.
+
+| F04 실명 | standardSupplierIds | 탭 행 / 판정 |
+|---|---|---|
+| 웰릭스 | RP013 | 15~21 |
+| 이안카 | RP031 | 22~28; 아이카 RP004와 별개 |
+| 경진카 | RP016 | 29~35 |
+| 경진렌트카 | RP015 | 36~42 |
+| 에이스 | RP019 | 43~49 |
+| 우리캐피탈렌터카 | RP020 | 50~56; 공동 시트 우리캐피탈 |
+| 에코렌터카 | RP032 | 57~63; 공동 시트 에코 |
+| SA | PT-0023 | 64~70; 공동 시트 에스에이 |
+| 센트로 | RP017 | 71~77 |
+| 연카 | RP011 | 78~84 |
+| 빌린카(LC) | RP021, PT-0026 | 85~91; 빌린카·엘씨 |
+| KH | RP010 | 92~98 |
+| J&J | RP030, PT-0012 | 99~105; 구 ID 보존, 현 활성 여부 미조회 |
+| 리더스 | RP008 | 106~112 |
+| 렌트존 | PT-0001, RP007 | 113~119; 복수 ID 보존 |
+| 표준 15곳 외: 아이언 | RP006 | 139~145; 신차 청구4% 특칙 |
+
+#### F04 191행 ↔ 엔진 규칙 대응표
+
+B=BILLING, P=PAYOUT, `{S}`=BILLING 또는 PAYOUT. 표준 재렌트 지급 ruleId는 12개월 `STANDARD_RERENT_12_FIXED`, 나머지 `STANDARD_RERENT_{기간}_RENT_X_TERM`; 청구는 `STANDARD_RERENT_{기간}_BILLING_FIXED/RENT_X_TERM`이다. `STANDARD_RERENT(t)`는 이 양쪽 ID를 뜻한다. UNKNOWN은 실제 `ruleId:null`이므로 괄호에 reasonCode를 적는다. ‘같음’은 산식/범위의 정렬이며 필수 입력 부재·171행 소수점은 UNKNOWN, 지급 시점 완료를 뜻하지 않는다.
+
+| 탭 행 | 엔진 ruleId / 경로 | 같음·다름·UNKNOWN 유지(이유) |
+|---:|---|---|
+| 1 | `—` | 같음: 제목/헤더/빈 행, 계산 대상 아님 |
+| 2 | `—` | 같음: 제목/헤더/빈 행, 계산 대상 아님 |
+| 3 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 4 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 5 | `STANDARD_RERENT(12)` | 같음 |
+| 6 | `STANDARD_RERENT(24)` | 같음 |
+| 7 | `STANDARD_RERENT(36)` | 같음 |
+| 8 | `STANDARD_RERENT(48)` | 같음 |
+| 9 | `STANDARD_RERENT(60)` | 같음 |
+| 10 | `SONOKONG_SUBSCRIPTION_12_{S}` | 같음: Q12 출처·형태 필수; 부재 UNKNOWN |
+| 11 | `SONOKONG_SUBSCRIPTION_24_{S}` | 같음: Q12 출처·형태 필수; 부재 UNKNOWN |
+| 12 | `SONOKONG_SUBSCRIPTION_36_{S}` | 같음: Q12 출처·형태 필수; 부재 UNKNOWN |
+| 13 | `SONOKONG_SUBSCRIPTION_48_{S}` | 같음: Q12 출처·형태 필수; 부재 UNKNOWN |
+| 14 | `SONOKONG_SUBSCRIPTION_60_{S}` | 같음(2026-10-05 결정): 청구 Q12+60만, 지급 Q12; Q12 출처·형태 필수 |
+| 15 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 16 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 17 | `STANDARD_RERENT(12)` | 같음 |
+| 18 | `STANDARD_RERENT(24)` | 같음 |
+| 19 | `STANDARD_RERENT(36)` | 같음 |
+| 20 | `STANDARD_RERENT(48)` | 같음 |
+| 21 | `STANDARD_RERENT(60)` | 같음 |
+| 22 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 23 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 24 | `STANDARD_RERENT(12)` | 같음 |
+| 25 | `STANDARD_RERENT(24)` | 같음 |
+| 26 | `STANDARD_RERENT(36)` | 같음 |
+| 27 | `STANDARD_RERENT(48)` | 같음 |
+| 28 | `STANDARD_RERENT(60)` | 같음 |
+| 29 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 30 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 31 | `STANDARD_RERENT(12)` | 같음 |
+| 32 | `STANDARD_RERENT(24)` | 같음 |
+| 33 | `STANDARD_RERENT(36)` | 같음 |
+| 34 | `STANDARD_RERENT(48)` | 같음 |
+| 35 | `STANDARD_RERENT(60)` | 같음 |
+| 36 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 37 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 38 | `STANDARD_RERENT(12)` | 같음 |
+| 39 | `STANDARD_RERENT(24)` | 같음 |
+| 40 | `STANDARD_RERENT(36)` | 같음 |
+| 41 | `STANDARD_RERENT(48)` | 같음 |
+| 42 | `STANDARD_RERENT(60)` | 같음 |
+| 43 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 44 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 45 | `STANDARD_RERENT(12)` | 같음 |
+| 46 | `STANDARD_RERENT(24)` | 같음 |
+| 47 | `STANDARD_RERENT(36)` | 같음 |
+| 48 | `STANDARD_RERENT(48)` | 같음 |
+| 49 | `STANDARD_RERENT(60)` | 같음 |
+| 50 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 51 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 52 | `STANDARD_RERENT(12)` | 같음 |
+| 53 | `STANDARD_RERENT(24)` | 같음 |
+| 54 | `STANDARD_RERENT(36)` | 같음 |
+| 55 | `STANDARD_RERENT(48)` | 같음 |
+| 56 | `STANDARD_RERENT(60)` | 같음 |
+| 57 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 58 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 59 | `STANDARD_RERENT(12)` | 같음 |
+| 60 | `STANDARD_RERENT(24)` | 같음 |
+| 61 | `STANDARD_RERENT(36)` | 같음 |
+| 62 | `STANDARD_RERENT(48)` | 같음 |
+| 63 | `STANDARD_RERENT(60)` | 같음 |
+| 64 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 65 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 66 | `STANDARD_RERENT(12)` | 같음 |
+| 67 | `STANDARD_RERENT(24)` | 같음 |
+| 68 | `STANDARD_RERENT(36)` | 같음 |
+| 69 | `STANDARD_RERENT(48)` | 같음 |
+| 70 | `STANDARD_RERENT(60)` | 같음 |
+| 71 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 72 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 73 | `STANDARD_RERENT(12)` | 같음 |
+| 74 | `STANDARD_RERENT(24)` | 같음 |
+| 75 | `STANDARD_RERENT(36)` | 같음 |
+| 76 | `STANDARD_RERENT(48)` | 같음 |
+| 77 | `STANDARD_RERENT(60)` | 같음 |
+| 78 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 79 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 80 | `STANDARD_RERENT(12)` | 같음 |
+| 81 | `STANDARD_RERENT(24)` | 같음 |
+| 82 | `STANDARD_RERENT(36)` | 같음 |
+| 83 | `STANDARD_RERENT(48)` | 같음 |
+| 84 | `STANDARD_RERENT(60)` | 같음 |
+| 85 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 86 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 87 | `STANDARD_RERENT(12)` | 같음 |
+| 88 | `STANDARD_RERENT(24)` | 같음 |
+| 89 | `STANDARD_RERENT(36)` | 같음 |
+| 90 | `STANDARD_RERENT(48)` | 같음 |
+| 91 | `STANDARD_RERENT(60)` | 같음 |
+| 92 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 93 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 94 | `STANDARD_RERENT(12)` | 같음 |
+| 95 | `STANDARD_RERENT(24)` | 같음 |
+| 96 | `STANDARD_RERENT(36)` | 같음 |
+| 97 | `STANDARD_RERENT(48)` | 같음 |
+| 98 | `STANDARD_RERENT(60)` | 같음 |
+| 99 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 100 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 101 | `STANDARD_RERENT(12)` | 같음 |
+| 102 | `STANDARD_RERENT(24)` | 같음 |
+| 103 | `STANDARD_RERENT(36)` | 같음 |
+| 104 | `STANDARD_RERENT(48)` | 같음 |
+| 105 | `STANDARD_RERENT(60)` | 같음 |
+| 106 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 107 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 108 | `STANDARD_RERENT(12)` | 같음 |
+| 109 | `STANDARD_RERENT(24)` | 같음 |
+| 110 | `STANDARD_RERENT(36)` | 같음 |
+| 111 | `STANDARD_RERENT(48)` | 같음 |
+| 112 | `STANDARD_RERENT(60)` | 같음 |
+| 113 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 114 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 115 | `STANDARD_RERENT(12)` | 같음 |
+| 116 | `STANDARD_RERENT(24)` | 같음 |
+| 117 | `STANDARD_RERENT(36)` | 같음 |
+| 118 | `STANDARD_RERENT(48)` | 같음 |
+| 119 | `STANDARD_RERENT(60)` | 같음 |
+| 120 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 121 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 122 | `STAR_RERENT_ONE_MONTH_RENT_BILLING / STAR_RERENT_ONE_MONTH_RENT_X_80_PERCENT` | 같음: VAT 포함, 소수점 HOLD |
+| 123 | `AUTOPLUS_SUBSCRIPTION_BILLING_FIXED / AUTOPLUS_SUBSCRIPTION_FIXED` | 같음: 일반 연료만, EV는161행 우선 |
+| 124 | `SWITCH_SUBSCRIPTION_12_{S}_FIXED` | 같음 |
+| 125 | `SWITCH_SUBSCRIPTION_24_{S}_RENT_X_TERM` | 같음 |
+| 126 | `SWITCH_SUBSCRIPTION_36_{S}_RENT_X_TERM` | 같음 |
+| 127 | `SWITCH_SUBSCRIPTION_48_{S}_RENT_X_TERM` | 같음 |
+| 128 | `SWITCH_SUBSCRIPTION_60_{S}_RENT_X_TERM` | 같음 |
+| 129 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 130 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 131 | `null (IANCAR_SHORT_TERM_BASIS_REQUIRED)` | UNKNOWN 유지: 기준액·연장 조건 필요 |
+| 132 | `IANCAR_RERENT_6_MONTH_BILLING_FIXED / IANCAR_RERENT_6_MONTH_FIXED` | 같음 |
+| 133 | `STANDARD_RERENT(12)` | 같음 |
+| 134 | `STANDARD_RERENT(24)` | 같음 |
+| 135 | `STANDARD_RERENT(36)` | 같음 |
+| 136 | `STANDARD_RERENT(48)` | 같음 |
+| 137 | `STANDARD_RERENT(60)` | 같음 |
+| 138 | `IANCAR_EV_BILLING_FIXED / IANCAR_EV_FIXED` | 같음: 구독·매칭 제외 |
+| 139 | `IRON_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 140 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 141 | `STANDARD_RERENT(12)` | 같음 |
+| 142 | `STANDARD_RERENT(24)` | 같음 |
+| 143 | `STANDARD_RERENT(36)` | 같음 |
+| 144 | `STANDARD_RERENT(48)` | 같음 |
+| 145 | `STANDARD_RERENT(60)` | 같음 |
+| 146 | `PACIFIC_NEW_PREDELIVERY_{5/10}_{S}` | 같음: 명시 등급·차량가액 필요 |
+| 147 | `PACIFIC_NEW_MATCHING_{5/10}_{S}` | 같음: 명시 등급·차량가액 필요 |
+| 148 | `STANDARD_RERENT(12)` | 같음 |
+| 149 | `STANDARD_RERENT(24)` | 같음 |
+| 150 | `STANDARD_RERENT(36)` | 같음 |
+| 151 | `STANDARD_RERENT(48)` | 같음 |
+| 152 | `STANDARD_RERENT(60)` | 같음 |
+| 153 | `—` | 같음: 제목/헤더/빈 행, 계산 대상 아님 |
+| 154 | `—` | 같음: 제목/헤더/빈 행, 계산 대상 아님 |
+| 155 | `—` | 같음: 제목/헤더/빈 행, 계산 대상 아님 |
+| 156 | `timingRules.STAR_IANCAR` | 같음: 선언 보존, 시점 실행은 정산 경계 |
+| 157 | `timingRules.OTHERS` | 같음: 선언 보존, 시점 실행은 정산 경계 |
+| 158 | `timingRules.ALL.LUMP_SUM` | 같음: 선언 보존 |
+| 159 | `timingRules.ALL.DEPOSIT_INSTALLMENT` | 같음: 선언 보존 |
+| 160 | `INDIVIDUAL_AGREEMENT_{S}` | 같음: 비공개 합의 입력(APPROVED·계약 일치) 금액 그대로 |
+| 161 | `AUTOPLUS_EV_SUBSCRIPTION_{S}` | 같음:150만/130만 |
+| 162 | `BILLIN_SUBSCRIPTION_60_{S}_RENT_X_TERM` | 같음:60개월만. 다른 기간 구독은 `SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED`(표준 재렌트로 흘리지 않음) |
+| 163 | `INDIVIDUAL_AGREEMENT_PAYOUT / null` | 같음: 비공개 합의 입력(PAYOUT_CONFIRMED) 지급만; 청구UNKNOWN (INDIVIDUAL_BILLING_BASIS_UNCONFIRMED) |
+| 164 | `null (WELRIX_ORDER_RULE_UNCONFIRMED)` | UNKNOWN 유지: 발주 근거 없음 |
+| 165 | `STANDARD_NEW_PREDELIVERY_{S}` | 같음: 차량가액 필요 |
+| 166 | `null (MATCHING_AGREED_RATE_REQUIRED)` | UNKNOWN 유지: 개별 합의율 필요 |
+| 167 | `STAR_RERENT_ONE_MONTH_RENT_BILLING / STAR_RERENT_ONE_MONTH_RENT_X_80_PERCENT` | 같음: VAT 포함, 소수점 HOLD |
+| 168 | `null (SUPPLIER_EXCLUDED_BY_DECISION)` | 같음: NOT_APPLICABLE, 0원 아님 |
+| 169 | `MEWCAR_FREEPASS_SHARE_BILLING` / `MEWCAR_GA_*_PAYOUT` | 같음(2026-10-05): 170행 표로 계산, 마진 없음 |
+| 170 | `MEWCAR_GA_{PREPAID\|INSTALLMENT}_{기간}_PAYOUT` | 같음(2026-10-05): 선납·분납 × 기간 + 추가보증금 가산; 입력 부재 UNKNOWN |
+| 171 | 반올림 규칙(계산 단계) | 확정: F04 접수 관행 VAT 포함 ÷1.1 원 단위 반올림(근거 원장 줄은 비공개 기록) |
+| 172 | `null (DEPOSIT_TIER_REQUIRED)` | UNKNOWN 유지: 5/10 등급 외 |
+| 173 | `null (RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED)` | UNKNOWN 유지: 60은 충돌 코드가 우선 |
+| 174 | `null (SUBSCRIPTION_RULE_SCOPE_UNCONFIRMED)` | UNKNOWN 유지 |
+| 175 | `null (SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE)` | UNKNOWN 유지: 스위치 신차 규칙 없음 |
+| 176 | `null (SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE)` | UNKNOWN 유지: 스위치 재렌트 규칙 없음 |
+| 177 | `null (SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE)` | UNKNOWN 유지: 실명-ID/수수료 근거 미확정 |
+| 178 | `null (SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE)` | UNKNOWN 유지: 실명-ID/수수료 근거 미확정 |
+| 179 | `null (SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE)` | UNKNOWN 유지: 실명-ID/수수료 근거 미확정 |
+| 180 | `null (SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE)` | UNKNOWN 유지: 실명-ID/수수료 근거 미확정 |
+| 181 | `null (SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE)` | UNKNOWN 유지: 실명-ID/수수료 근거 미확정 |
+| 182 | `null (SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE)` | UNKNOWN 유지: 실명-ID/수수료 근거 미확정 |
+| 183 | `null (TERM_NOT_IN_F04_COMMISSION_POLICY)` | UNKNOWN 유지: 미등재 20개월; 기간무관 특칙 제외 |
+| 184 | `null (TERM_NOT_IN_F04_COMMISSION_POLICY)` | UNKNOWN 유지: 미등재 25개월; 기간무관 특칙 제외 |
+| 185 | `null (TERM_NOT_IN_F04_COMMISSION_POLICY)` | UNKNOWN 유지: 미등재 26개월; 기간무관 특칙 제외 |
+| 186 | `null (TERM_NOT_IN_F04_COMMISSION_POLICY)` | UNKNOWN 유지: 미등재 28개월; 기간무관 특칙 제외 |
+| 187 | `null (TERM_NOT_IN_F04_COMMISSION_POLICY)` | UNKNOWN 유지: 미등재 33개월; 기간무관 특칙 제외 |
+| 188 | `null (TERM_NOT_IN_F04_COMMISSION_POLICY)` | UNKNOWN 유지: 미등재 72개월; 기간무관 특칙 제외 |
+| 189 | `null (TERM_NOT_IN_F04_COMMISSION_POLICY)` | UNKNOWN 유지: 미등재 84개월; 기간무관 특칙 제외 |
+| 190 | `SONOKONG_PICKUP_{S}` | 같음: 차량가액4%/3% |
+| 191 | `null (SONOKONG_60_ADDITION_CONFLICT)` | UNKNOWN 유지: 관측 실적을 일반 요율로 쓰지 않음 |
+
+원본 제공 JSON SHA256: `3df6f812c95bfa2ad66dca224d2d9786e169b5a0e1ec06134105226a7302ee22` (내용 복사 없음).
+
+### F04 접수 탭 AE·AJ 투영 — 시험 실행 계획기 (2026-10-05, 쓰기 없음)
+
+AI 상황실 결정(10-05 ㉢): F04 정산원장 «접수» 탭의 AE 판매수수료(공급사 청구)·AJ 출고수수료(영업채널 지급)를 이 엔진의 투영으로 채운다. 요구사항 원문은 비공개 ai-ops 인수인계(정산-수수료규칙-20261005/AE-AJ-투영쓰기-요구사항.md). 지금 단계는 **계획만** 만든다 — `src/application/f04-commission-projection.ts`(순수) · `src/jobs/plan-f04-commission-projection.ts`(로컬 입력 → 비공개 계획 파일, 공개 출력은 개수만).
+
+- 채움: 확정(CALCULATED, 0 은 ZERO)만, 빈칸에만. 미확정은 빈칸 + 엔진 사유(0 금지). 공급가(VAT 별도).
+- 덮지 않음: 값이 있는 AE·AJ 와 다르면, 또는 사람이 적은 청구액(U)·지급액(V)과 다르면 «차이 목록».
+- 건드리지 않음: 취소 · 청구 TRUE · 닫힌 청구월(`--open-from` 보다 앞). 닫힌 줄의 값이 계산과 다르면 `closedDiffs`(사람 확인용).
+- 회차청구 탭에 다음 회차가 있는 계약(차량번호 + 원 접수행)은 AE 를 쓰지 않음(이중 청구). 없으면 계약 전체.
+- 비고 합의·정정 표시는 그 축만 보호: 하허호·F80·출고수수료·지급 말만 있으면 AJ, 청구·판매수수료·공급사 정산서 말만 있으면 AE, 둘 다·모르면 둘 다.
+- VAT 포함 규칙(스타·스카이): 엔진 공급가(VAT 포함 ÷1.1, 원 미만 반올림 — AI 상황실 2026-10-05 결정, 원장 관행은 비공개 기록 참조).
+- 연료는 프리패스 데이터 `products/<차량번호>.fuel_type` 에서(오토플러스 구독·아이카 EV 규칙). 없으면 빈칸. 공급사 이름 → 코드는 `F04_SUPPLIER_CODES`(정본 이름표 + F04 별칭, 스타스카이는 엔진상 스타·스카이 같은 규칙). 모르는 이름(AMR 등)은 빈칸.
+- 열쇠 = 차량번호 + 접수일, 겹치면 판독 실패로 건드리지 않음. AE·AJ 칸 위치(31·36번째)가 바뀌면 멈춤.
+- 실측 숫자(채울 칸·차이·빈칸 사유별)는 운영 집계라 이 공개 문서에 두지 않는다 — 비공개 ai-ops 인수인계에.
+- 빈칸·글자 값은 0 이 아니라 «모름». 청구년·청구월이 둘 다 빈칸이면 열린 줄, 하나만 있거나 숫자로 못 읽으면 건드리지 않음. 개별 합의(비공개 개별 합의 계약 목록, 또는 비고 «개별»)는 일반 금액을 제안하지 않음. 입력은 두 탭을 A1 부터 시트 마지막 행까지 읽은 것만(`--grid-meta`). 개별 합의 계약 목록(차량번호|접수일, 비공개 ai-ops 인수인계)은 필수(`--individual`) — 행이 옮겨져도 계약으로 보호. 회차청구에 같은 차량번호가 있는데 원 접수행이 이 줄이 아니거나 못 읽으면 AE 는 «연결 불명»으로 쓰지 않음. 같은 접수 범위를 FORMULA 로도 읽어(`--from-batchget-formula`) AE·AJ 가 수식 칸이면 빈 글자를 돌려줘도 채우지 않음(두 읽기의 범위·줄·차량번호가 다르면 멈춤). 두 읽기 모두 그 칸이 비었을 때만 채움 후보 — 사이에 사람이 적은 값은 대조(같음·차이)만. 접수일은 일련번호·날짜 글자 모두 YYYY-MM-DD 로 맞춰 개별 합의 열쇠와 비교.
+- 남음(HOLD): 시트 쓰기(백업 → 쓰기 → 되읽기 → 이력) — AI 상황실 10-05 결정: 승인된 계획을 운영자 PC 에서 상황실이 적용(접수 탭 보호 범위의 허용 계정, 보호는 풀지 않음). 계약별 수수료 저장 = 기존 `settlement_rows` 의 계산 칸(상황실 10-05 (A), BUSINESS-DATA-CONNECTION-MAP).
 
 ## Consumer capabilities
 
@@ -170,3 +486,25 @@ The Health reader exposes no `stage`, `activate`, `transact`, `put*`, or other w
 
 This runtime is not a consumer cutover authorization and does not prove Source freshness,
 Source-to-Canonical parity, or a whole-Catalog atomic snapshot.
+
+## 2026-10-09 기간 금액 수정·저장·조회 실행 경로
+
+- 계산 정본: `KAKAO_COMMISSION_POLICY` 및 Commercial Data Catalog 최신 대표 확정. 새 정책은 code/contract 검사를 통과한 revision으로 고정한다. 현재 확정 정책은 `sales-commission-2026-10-09`.
+- 가격·보증금 정정은 기존 `UPDATE_OFFER_PRICE`의 expectedRevision/idempotency 경로를 쓴다. 사람 입력 원본과 과거 계약 정산은 자동 덮어쓰지 않는다.
+- 정책 정정은 아래 dry-run → reviewed plan apply를 쓴다. plan에는 모든 Offer before-image/inputDigest가 포함된다. 저장 변경은 CatalogStore 거래의 revision/audit/history/outbox/receipt로 남는다.
+- apply는 각 상품을 새로 getOffer 해서 가격 불변과 정책 재계산 결과를 대조한다. `readbackVerifiedOffers === processedOffers`이고 status APPLIED여야 저장 검증 성공이다. PERSISTENCE_READBACK_MISMATCH면 부분 커밋 건수를 남기고 HOLD로 중단한다.
+- 빌린카 LC는 referenceRentBasis에36개월 termKey·월료·100%/80% 배율을 보존한다. 별도 감사가 가격행/월료/통화/배율/금액을 다시 검증한다. 기준36개월 가격 수정 후 재계산하면 다른 기간 수수료도 바뀐다.
+- 중앙 정본은 `catalog_offers.priceTerms/internalEconomicsTerms`. 모든 기간의 금액 또는 UNKNOWN/null/사유를 함께 둔다. 차량 번호 유무는 상품 식별자를 대체하지 않는다. 등록되지 않은 원천 상품을 저장했다고 확대하지 않는다.
+- Kakao/internal AI 외부 조회: 기존 인증된 `/v1/consumers/:consumerId/catalog-reference` 및 `/v1/consumers/:consumerId/internal-ai-reference` 경로. Admin 저장값은 검증된 admin-catalog 릴리스 발행 뒤 별도 응답을 대사한다. 모든 소비처는 기존 grant를 유지하며 내부 청구수수료를 공개 화이트라벨에 노출하지 않는다.
+- main 반영 및 consumer schema 배포 전에 새 referenceRentBasis 저장을 운영 실행하지 않는다. 운영 read runtime과 Admin 계약이 새 필드를 받는 것을 확인한 뒤 apply/재발행/조회 대사를 진행한다.
+
+```powershell
+$env:FIREBASE_PROJECT_ID='freepasserp5'
+$env:NODE_ENV='production'
+node --import tsx src/jobs/recompute-offer-economics.ts --firestore
+# JSON 보고서의 plan만 비공개 UTF-8 파일로 보존하고 실제 planDigest를 고정한다.
+node --import tsx src/jobs/recompute-offer-economics.ts --firestore --apply --plan <비공개-plan.json> --policy-id sales-commission-2026-10-09 --expected-plan-digest <검토한-planDigest>
+```
+### 정산 원장과 상품 기준표의 금액 의미
+
+상품 기간별 수수료는 계약 전 기준 계산액이다. 같은 settlement_rows 문서의 접수 기록액(sourceReceiptClaim/Pay), 사람 입력액(claimWritten/payWritten), 계산액, 공급사·채널 확인 확정액, 증빙 있는 실입출금은 서로 다른 사실이다. 2026-10-09 새 조회에서도9월34개 동일ID의 청구 차이3,934,879원/지급차이0원이 재현됐다. sourceReceipt* VAT/Gross가 있다고 모든 계약이 공급사 확정됐다는 뜻은 아니다. 사람이 넣은 금액/근거를 상품 엔진 재계산으로 덮어쓰지 않는다. 계산액/확정액/공급가·VAT·합계/실입출금 증빙/처리자/업무일/변경이력 구분은 기존 PR399 정산 작업선과 연결하며, 현재 누락은 null/상태로 유지하고 영업자나 작성 시각으로 처리자를 발명하지 않는다.

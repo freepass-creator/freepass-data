@@ -2,6 +2,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { planPresentation, specification as spec } from '../scripts/sheet-presentation.mjs';
 const at='2026-09-21T07:28:00Z';
+test('current publication is F01 only; inactive F86 originals and layout remain preserved',()=>{
+  assert.deepEqual(spec.publication.activeWorkbooks,['F01']);
+  assert.deepEqual(spec.publication.inactiveWorkbooks,['F86']);
+  assert.equal(spec.publication.preserveInactiveWorkbook,true);
+  assert.equal(spec.publication.verificationStatus,'PENDING');
+  assert.equal(spec.supplierInputTransition.f01AutomaticPublication,'PRESERVE');
+  assert.equal(spec.supplierInputTransition.f86AutomaticPublication,'STOPPED_PER_REPRESENTATIVE_ORDER_2026_10_08');
+  assert.ok(spec.workbooks.F86.spreadsheetId);
+  assert.ok(spec.workbooks.F86.primarySheetIds.length>0);
+});
 const opts={workbook:'F86',updatedAt:at,now:Date.parse(at)};
 const cell=s=>({userEnteredValue:{stringValue:s}});
 const retroCell=s=>({

@@ -1,5 +1,15 @@
 # freepasserp5 중앙 연결과 소비처 전환 상태
 
+## 2026-10-09 현행 연결 안내 — 아래 날짜별 과거 관측과 구분
+
+- 중앙 저장 대상은 `freepasserp5` Firestore이며 서버 연결은 `src/infra/firebase-target.ts` 한 곳이다. RTDB 경로는 폐기·사용 금지.
+- 공통시트 입력은 `shared-sheet-daily.yml`로 지정 최신 파일의 현재 공급사 탭만 읽는다. 종합·과거 개별 시트 fallback은 금지한다. 원본/이력은 보존한다.
+- ERP.com/등록 화이트라벨의 현행 호환 조회는 소비처별 인증을 사용하는 `/v1/consumers/{consumerId}/catalog-compat`, 사진은 그 아래 `/products/{productId}/photos[/{index}]`다. 공개 차량 자격을 재확인하며 사진 원본주소·공급사 토큰을 브라우저에 전달하지 않는다. 이번 코드의 UNKNOWN 보증금 계약은 null + 미확인이며 기존 배포의 표시 반영은 별도 확인한다.
+- `/catalog`는 검증된 Canonical ACTIVE 전용이다. 호환 조회가 성공해도 Canonical 전체 전환을 선언하거나 `/catalog` 실패를 숨겨 대체하지 않는다. Admin/Estimate/Kakao도 각자 기존 등록 계약을 유지한다.
+- pre-ONE `data-owned-refresh.yml`/`data-delivery-owner.mjs` 실행은 **폐기·사용 금지**다. 현행 ERP writer를 이 오래된 실행기로 옮기지 않는다.
+- 2026-10-09 직접 관측: `freepass-data-read-00015-649` READY, ERP.com 공개 사진 샘플 3개 JPEG 200. 동시에 최근 사진 요청 100건 중 503 8건과 25초 timeout도 관측했다. READY/샘플 성공은 전체 소비처·앨범 안정화 완료가 아니다.
+- 아래의 2026-09 관측, 전환 전 표, 초기 Cloud Run 미활성 기록은 **역사 관측**이며 현재 운영 상태로 사용하지 않는다. 전체 화이트라벨/Admin/Estimate readback 및 원천→소비처 현재성은 미검증 상태를 유지한다.
+
 2026-09-21 사용자 직접 지정: 중앙 저장용 Firebase 프로젝트는 **freepasserp5**.
 Firestore `(default)`, `asia-northeast3`를 실조회했다. RTDB는 사용하지 않는다.
 
@@ -12,6 +22,10 @@ Firestore `(default)`, `asia-northeast3`를 실조회했다. RTDB는 사용하�
 - 기존 개발 API 전체는 memory에서만 실행할 수 있다. Firestore 조회도 인증 없는 개발 경로로 우회할 수 없다. 운영 명령은 서비스 신원과 권한 검증이 완성될 때까지 차단한다.
 
 ## 독립된 소비처 읽기 서버
+
+2026-10-07 보증금 판정 추가 계약: `catalog-compat/v1`의 기존 `products.price[key]`에 `depositState`(KNOWN/ZERO/UNKNOWN), `depositStatusLabel`, `depositEvidenceReason`를 응답에서 파생한다. `meta.depositEvidenceVersion`은 `catalog-compat-deposit/1`. 기존 기간/거리 key와 rent는 보존하고, UNKNOWN의 `deposit`은 null, 문구는 **보증금 확인 필요**다. 소비처는 금액만으로 상태를 추정하지 않는다. 원문 저장값·DB는 변경하지 않는다.
+
+일반 상품은 `assessDepositEvidence`를 재사용한다. 이안카는 기존 승인 발행기가 저장한 `iancar_phase_one` typed 조건과 동일 차량/발행 schema/digest 형식/갱신 시각(기존 15분 신선도)/가격/최저거리 alias를 모두 대조한 경우만 확인된 금액과 0을 전달한다. digest 형식 검사는 비공개 RAW 재해싱이 아니며, 원문 근거를 응답에 새로 추가하지 않는다. 누락·충돌·미등록 발행 경로·오래된 근거는 UNKNOWN이다. 이 코드 변경은 운영 배포·ERP 화면 반영 증거가 아니며, Canonical의 이전 ACTIVE와 새 보류 원천의 현재성 연결은 별도 HOLD다.
 
 `npm run serve:consumers`는 읽기 전용 서버다. worker, 시드, command endpoint, 게시 기능이 없다.
 서버 환경에 `FIREBASE_PROJECT_ID=freepasserp5`, `FREEPASS_DATA_DRIVER=firestore`, 서비스의 ADC/workload identity,

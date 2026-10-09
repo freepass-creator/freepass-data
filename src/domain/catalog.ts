@@ -1,4 +1,5 @@
 import type { CommercialOfferView } from './commercial-product-view.js';
+import type { SourceVehicleFacts } from './source-vehicle-facts.js';
 export type ValidationStatus = 'VALID' | 'WARNING' | 'INVALID';
 export type ActorRef = { id: string; kind: 'USER' | 'SERVICE'; organizationId?: string | null };
 export type Money = { amount: number; currency: 'KRW' };
@@ -16,6 +17,11 @@ export type VehicleAssetStatus =
   | 'AVAILABLE' | 'RESERVED' | 'IN_USE' | 'RETURNED'
   | 'MAINTENANCE' | 'ACCIDENT' | 'SOLD' | 'RETIRED';
 export type VehicleAsset = EntityMeta & {
+  /** Internal evidence, excluded from consumer projections. */
+  sourceVehicleFacts?: SourceVehicleFacts;
+  sourceFirstObservedAt?: string;
+  /** First source run of this asset (its RAW is the first supplier text, never overwritten). */
+  sourceFirstRunId?: string;
   id: string; vehicleModelId: string; status: VehicleAssetStatus;
   plateNumber?: string | null; vin?: string | null; odometerKm?: number | null;
 };
@@ -44,7 +50,10 @@ export type TermEconomicAmount = {
   state: TermAmountState;
   amount?: Money | null;
   calculation?: TermAmountCalculation | null;
+  /** Rules and evidence actually used; empty for unresolved amounts. */
   sourceRefs: string[];
+  priceSourceRefs?: string[];
+  referenceRentBasis?: { termKey: string; termMonths: 36; monthlyRent: Money; multiplier: number };
   ruleId?: string | null;
   policyId?: string;
   reasonCode?: string | null;

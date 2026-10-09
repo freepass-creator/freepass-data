@@ -117,13 +117,5 @@
       ]
     }
   },
-  "baseline": [
-    {
-      "guard": "workflow-ref-pin",
-      "path": ".github/workflows/data-owned-refresh.yml",
-      "max_count": 1,
-      "expires": "2026-10-07",
-      "reason": "Data orchestration runs main. One frozen external ERP4 engine is a temporary compatibility dependency, not a second runtime authority. Runner enforces exact e6727ff0 HEAD and clean tracked files. Owner stays disabled; remove this baseline when the Data-native engine is verified. See docs/DATA-DELIVERY-OWNER-ROLLOUT.md."
-    }
-  ]
+  "baseline": []
 }

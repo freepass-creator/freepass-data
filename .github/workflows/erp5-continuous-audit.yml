@@ -2,6 +2,15 @@ name: ERP5 continuous read-only audit
 
 on:
   workflow_dispatch:
+    inputs:
+      economics_dry_run:
+        description: '기간별 수수료 일괄 재계산 dry-run 만 실행(쓰기 0). 켜면 정시 감사 단계는 건너뜀'
+        type: boolean
+        default: false
+      ownership_dry_run:
+        description: 'Catalog writer 소유권 이전 dry-run 만 실행(쓰기 0). 켜면 정시 감사 단계는 건너뜀'
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -29,11 +38,15 @@ on:
       - 'src/jobs/check-sheet-consumer-health.ts'
       - 'src/jobs/build-data-control-tower.ts'
       - 'src/jobs/data-access-runtime.ts'
+      - 'src/domain/daily-writer-guard.ts'
+      - 'src/jobs/check-daily-writer-guard.ts'
   schedule:
     - cron: '37 * * * *'
 
 concurrency:
-  group: erp5-continuous-read-only-audit
+  # 정시·push·입력 없는 수동 실행의 그룹 값은 이전과 똑같다(erp5-continuous-read-only-audit).
+  # economics_dry_run 수동 실행만 별도 그룹을 써서 정시 감사 대기열을 밀어내지 않는다.
+  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.economics_dry_run) && 'freepass-data-economics-dry-run' || (github.event_name == 'workflow_dispatch' && inputs.ownership_dry_run) && 'freepass-data-ownership-dry-run' || 'erp5-continuous-read-only-audit' }}
   cancel-in-progress: false
 
 permissions:
@@ -42,6 +55,7 @@ permissions:
 
 jobs:
   audit:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.economics_dry_run || inputs.ownership_dry_run)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -764,3 +778,183 @@ jobs:
             estimate-master-readiness.json
           retention-days: 90
           if-no-files-found: error
+
+
+  # 매일 박제 계정(github-data-inventory-writer) «정해진 작업이 아닌 쓰기» 감시 — 대표 승인 10-04 ①안의 감지 점검.
+  # 정시 감사(audit)와 따로 도는 job: 감사 결과·포인터 갱신에 영향을 주지 않고, 읽기 전용 감사 계정으로 새로 인증한다
+  # (로그 읽기 권한은 그 계정에 «매일 박제 쓰기 로그 보기(log view)»로만 준다). 저장소 변수
+  # FREEPASS_DATA_DAILY_WRITER_GUARD=on 일 때만 돈다. 최근 26시간의 그 계정 Firestore 쓰기 감사 로그와 shared-sheet-daily
+  # 실행 목록으로 판정해, 허용 모음 밖·실행 구간 밖 쓰기면 실패(경보), 적용했는데 로그가 없으면 실패(보류).
+  # 공개 로그에는 개수와 정해진 모음 이름만 남긴다.
+  daily-writer-guard:
+    if: ${{ vars.FREEPASS_DATA_DAILY_WRITER_GUARD == 'on' && !(github.event_name == 'workflow_dispatch' && (inputs.economics_dry_run || inputs.ownership_dry_run)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      DAILY_WRITER_ACCOUNT: github-data-inventory-writer@freepasserp5.iam.gserviceaccount.com
+      DAILY_WRITER_LOOKBACK_HOURS: '26'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: '579.0.0'
+      - run: npm ci
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.ERP5_WIF_PROVIDER }}
+          service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+      - name: Judge Firestore writes by the daily snapshot identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "${{ vars.ERP5_READ_SERVICE_ACCOUNT }}" = 'github-data-auditor@freepasserp5.iam.gserviceaccount.com'
+          gcloud logging read             "LOG_ID(\"cloudaudit.googleapis.com/data_access\") AND protoPayload.authenticationInfo.principalEmail=\"$DAILY_WRITER_ACCOUNT\" AND (protoPayload.serviceName=\"firestore.googleapis.com\" OR protoPayload.serviceName=\"datastore.googleapis.com\")"             --project=freepasserp5 --bucket=_Default --location=global --view=daily-writer             --freshness="${DAILY_WRITER_LOOKBACK_HOURS}h" --format=json > "$RUNNER_TEMP/daily-writer-log.json"
+          since="$(date -u -d "-$((DAILY_WRITER_LOOKBACK_HOURS + 2)) hours" +%Y-%m-%dT%H:%M:%SZ)"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/shared-sheet-daily.yml/runs?per_page=100&created=>=$since"             --jq '.workflow_runs[]' | jq -s '.' > "$RUNNER_TEMP/daily-writer-runs.json"
+          # 각 성공 실행의 «모든 attempt(1..run_attempt)» 의 shared-sheet-daily job steps를 붙인다.
+          # attempt 하나라도 못 읽거나 job이 정확히 하나가 아니면 그 실행은 null(알 수 없음 → 가드가 보류로 둔다)
+          jq -c '.[] | select(.status == "completed" and .conclusion == "success") | {id, attempts: (.run_attempt // 1)}' "$RUNNER_TEMP/daily-writer-runs.json" | while read -r row; do
+            rid="$(jq -r '.id' <<<"$row")"
+            total="$(jq -r '.attempts' <<<"$row")"
+            collected='[]'
+            ok=1
+            for attempt in $(seq 1 "$total"); do
+              if one="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$rid/attempts/$attempt/jobs?per_page=100"                 --jq 'if ((.jobs | length) == 1 and .jobs[0].name == "shared-sheet-daily") then (.jobs[0].steps // [] | map({name, conclusion})) else null end')"; then
+                collected="$(jq -c --argjson one "$one" '. + [$one]' <<<"$collected")"
+              else
+                ok=0
+                break
+              fi
+            done
+            if [ "$ok" = 1 ]; then
+              jq -nc --arg rid "$rid" --argjson v "$collected" '{key: $rid, value: $v}'
+            else
+              jq -nc --arg rid "$rid" '{key: $rid, value: null}'
+            fi
+          done | jq -s 'from_entries' > "$RUNNER_TEMP/daily-writer-steps.json"
+          jq --slurpfile m "$RUNNER_TEMP/daily-writer-steps.json" '[.[] | . + {jobAttempts: ($m[0][(.id | tostring)] // null)}]' "$RUNNER_TEMP/daily-writer-runs.json" > "$RUNNER_TEMP/daily-writer-runs-enriched.json"
+          mv "$RUNNER_TEMP/daily-writer-runs-enriched.json" "$RUNNER_TEMP/daily-writer-runs.json"
+          DAILY_WRITER_LOG_JSON="$RUNNER_TEMP/daily-writer-log.json" DAILY_WRITER_RUNS_JSON="$RUNNER_TEMP/daily-writer-runs.json"             npx tsx src/jobs/check-daily-writer-guard.ts
+
+  # 기간별 수수료 일괄 재계산 운영 dry-run(AI 상황실 2026-10-04 승인, 1회). 같은 읽기 전용 감사 신원을 쓴다.
+  # 쓰기 0: --apply 를 넘기지 않고, 결과가 mode=DRY_RUN·writes=0 이 아니면 실패로 끝낸다.
+  # ★apply·Admin 재발행은 이 감사 워크플로에 절대 넣지 않는다(AI 상황실 2026-10-04 조건) — 별도 승인·별도 경로로만.
+  # 공개 저장소: 상품별 before-image 가 든 전체 계획은 비공개 증거 버킷에만 두고, 로그·artifact 에는 집계만 남긴다.
+  economics-dry-run:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.economics_dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NODE_ENV: production
+      FIREBASE_PROJECT_ID: freepasserp5
+      GOOGLE_CLOUD_PROJECT: freepasserp5
+      EVIDENCE_BUCKET: ${{ vars.ERP5_EVIDENCE_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: '579.0.0'
+      - run: npm ci --ignore-scripts --include=dev  # NODE_ENV=production 이면 devDependencies(tsx)를 빼므로 명시
+      - name: Require the read-only Data audit identity and private bucket
+        shell: bash
+        env:
+          ACCOUNT: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          test -n '${{ vars.ERP5_WIF_PROVIDER }}'
+          test "$ACCOUNT" = 'github-data-auditor@freepasserp5.iam.gserviceaccount.com'
+          test -n "$EVIDENCE_BUCKET"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.ERP5_WIF_PROVIDER }}
+          service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+      - name: Recompute dry-run (writes 0, full plan private)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tmp
+          umask 077
+          node --import tsx src/jobs/recompute-offer-economics.ts --firestore > tmp/economics-recompute-full.json
+          node -e "const fs=require('fs');const r=JSON.parse(fs.readFileSync('tmp/economics-recompute-full.json','utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0){console.error('NOT A DRY RUN');process.exit(1)}const {plan,...summary}=r;fs.writeFileSync('tmp/economics-recompute-summary.json',JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2))"
+          uri="gs://$EVIDENCE_BUCKET/economics-recompute/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          gcloud storage cp --no-user-output-enabled tmp/economics-recompute-full.json "$uri/plan.json" --if-generation-match=0
+          gcloud storage cp --no-user-output-enabled "$uri/plan.json" tmp/plan-readback.json
+          cmp tmp/economics-recompute-full.json tmp/plan-readback.json
+          echo "private plan stored and verified (location not printed: public repository)"
+          rm -f tmp/economics-recompute-full.json tmp/plan-readback.json
+      - name: Retain aggregate summary only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: economics-recompute-dry-run-${{ github.run_id }}
+          path: tmp/economics-recompute-summary.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  ownership-dry-run:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.ownership_dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_ENV: production
+      FIREBASE_PROJECT_ID: freepasserp5
+      GOOGLE_CLOUD_PROJECT: freepasserp5
+      EVIDENCE_BUCKET: ${{ vars.ERP5_EVIDENCE_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: '579.0.0'
+      - run: npm ci --ignore-scripts --include=dev  # NODE_ENV=production 이면 devDependencies(tsx)를 빼므로 명시
+      - name: Require the read-only Data audit identity and private bucket
+        shell: bash
+        env:
+          ACCOUNT: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          test -n '${{ vars.ERP5_WIF_PROVIDER }}'
+          test "$ACCOUNT" = 'github-data-auditor@freepasserp5.iam.gserviceaccount.com'
+          test -n "$EVIDENCE_BUCKET"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.ERP5_WIF_PROVIDER }}
+          service_account: ${{ vars.ERP5_READ_SERVICE_ACCOUNT }}
+      - name: Ownership transfer dry-run (writes 0, plan private)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/own"
+          umask 077
+          node --import tsx src/jobs/transfer-catalog-writer-ownership.ts --firestore --approved-by owner \
+            --reason 'Data Canonical cutover: Catalog writer EXCLUSIVE service:freepass-data (AI 상황실 오더 10-04)' \
+            --plan-out "$RUNNER_TEMP/own/plan.json" > "$RUNNER_TEMP/own/report.json"
+          node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0){console.error('NOT A DRY RUN');process.exit(1)}console.log(JSON.stringify(r,null,2))" "$RUNNER_TEMP/own/report.json"
+          uri="gs://$EVIDENCE_BUCKET/ownership-transfer/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          gcloud storage cp --no-user-output-enabled "$RUNNER_TEMP/own/plan.json" "$uri/plan.json" --if-generation-match=0
+          gcloud storage cp --no-user-output-enabled "$uri/plan.json" "$RUNNER_TEMP/own/readback.json"
+          cmp "$RUNNER_TEMP/own/plan.json" "$RUNNER_TEMP/own/readback.json"
+          echo "private plan stored and verified (location not printed: public repository)"

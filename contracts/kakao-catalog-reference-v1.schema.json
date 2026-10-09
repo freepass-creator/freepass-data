@@ -50,13 +50,18 @@
       "required": ["state", "ruleId", "amount", "vatTreatment", "vatAmount", "totalAmount", "reasonCode"],
       "properties": {
         "state": { "enum": ["CALCULATED", "COORDINATION_REQUIRED", "UNKNOWN", "NOT_APPLICABLE"] },
+        "sourceRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80)$" } },
         "ruleId": { "$ref": "#/$defs/nullableString" },
         "amount": { "$ref": "#/$defs/nullableInteger" },
         "vatTreatment": { "enum": ["EXCLUDED", "INCLUDED", "UNKNOWN"] },
         "vatAmount": { "$ref": "#/$defs/nullableInteger" },
         "totalAmount": { "$ref": "#/$defs/nullableInteger" },
         "reasonCode": { "$ref": "#/$defs/nullableString" }
-      }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "CALCULATED" } }, "required": ["state"] }, "then": { "properties": { "sourceRefs": { "type": "array", "minItems": 1 } }, "required": ["sourceRefs"] } },
+        { "if": { "properties": { "state": { "enum": ["UNKNOWN", "NOT_APPLICABLE", "COORDINATION_REQUIRED"] } }, "required": ["state"] }, "then": { "properties": { "sourceRefs": false } } }
+      ]
     },
     "marginResolution": {
       "type": "object",
@@ -81,7 +86,7 @@
         "deposit": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/money" }] },
         "depositAmount": { "$ref": "#/$defs/nullableInteger" },
         "depositState": { "enum": ["KNOWN", "ZERO", "UNKNOWN"] },
-        "depositStatusLabel": { "enum": ["보증금 있음", "무보증", "미입력", "확인중"] },
+        "depositStatusLabel": { "enum": ["보증금 있음", "무보증", "미확인", "보증금 확인 필요"] },
         "depositRule": {
           "anyOf": [
             { "type": "null" },
@@ -165,12 +170,32 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["offerId", "supplierId", "supplierName", "policyId", "priceTerms"],
+            "required": ["offerId", "supplierId", "supplierName", "policyId", "policyContext", "priceTerms"],
             "properties": {
               "offerId": { "type": "string", "minLength": 1 },
               "supplierId": { "type": "string", "minLength": 1 },
               "supplierName": { "$ref": "#/$defs/nullableString" },
               "policyId": { "$ref": "#/$defs/nullableString" },
+              "policyContext": {
+                "type": "object", "additionalProperties": false,
+                "required": ["state", "policyId", "sourceRef", "facts", "reasonCode"],
+                "properties": {
+                  "state": { "enum": ["REFERENCE", "UNKNOWN"] },
+                  "policyId": { "$ref": "#/$defs/nullableString" },
+                  "sourceRef": { "$ref": "#/$defs/nullableString" },
+                  "reasonCode": { "$ref": "#/$defs/nullableString" },
+                  "facts": { "type": "array", "items": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["key", "label", "value", "sourceRef"],
+                    "properties": {
+                      "key": { "type": "string", "minLength": 1 },
+                      "label": { "type": "string", "minLength": 1 },
+                      "sourceRef": { "type": "string", "minLength": 1 },
+                      "value": { "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }, { "type": "array", "items": { "type": "string" } }] }
+                    }
+                  } }
+                }
+              },
               "priceTerms": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/priceTerm" } }
             }
           }
@@ -181,10 +206,11 @@
       "type": "object",
       "required": ["policyId", "sourceRole", "sourceObservedAt", "canonicalSource", "sourceFiles", "standardSupplierIds", "exceptionSupplierIds", "rules", "timingRules", "digest"],
       "properties": {
-        "policyId": { "const": "sales-commission-2026-10-03" },
-        "sourceRole": { "const": "REPOSITORY_SSOT_WITH_GOOGLE_SHEET_COPY" },
-        "sourceObservedAt": { "type": "string", "format": "date-time" },
+        "policyId": { "enum": ["sales-commission-2026-10-03", "sales-commission-2026-10-04", "sales-commission-2026-10-05", "sales-commission-2026-10-09"] },
+        "sourceRole": { "enum": ["REPOSITORY_SSOT_WITH_GOOGLE_SHEET_COPY", "F04_GOOGLE_SHEET_SSOT"] },
+        "sourceObservedAt": { "type": "string", "anyOf": [{ "format": "date-time" }, { "format": "date" }] },
         "canonicalSource": {
+          "oneOf": [{
           "type": "object",
           "additionalProperties": false,
           "required": ["repository", "path", "revision"],
@@ -193,6 +219,16 @@
             "path": { "const": "lib/domain/settlement-fee-table.ts" },
             "revision": { "type": "string", "minLength": 1 }
           }
+          }, {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "range", "observedDate"],
+            "properties": {
+              "code": { "const": "F04" },
+              "range": { "const": "수수료표!A1:M191" },
+              "observedDate": { "type": "string", "format": "date" }
+            }
+          }]
         },
         "sourceFiles": { "type": "array", "minItems": 1, "maxItems": 1 },
         "standardSupplierIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },

@@ -1,3 +1,4 @@
+import catalogSchema from '../contracts/catalog-v1.schema.json' with { type: 'json' };
 import { expect, test } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
@@ -14,6 +15,7 @@ const ajv = new Ajv2020({ allErrors: true, strict: false });
 addFormats(ajv);
 ajv.addSchema(commercialSchema);
 const validate = ajv.compile(schema);
+ajv.addSchema(catalogSchema);
 
 const sample = {
   schema: 'freepass-data.admin-catalog/v1',
@@ -75,8 +77,8 @@ const sample = {
       priceTerms: [{
         termKey: '36_2만',
         termMonths: 36,
-        supplierBillingFee: { state: 'UNKNOWN', amount: null, sourceRefs: ['canonical:missing'] },
-        channelPayoutFee: { state: 'UNKNOWN', amount: null, sourceRefs: ['canonical:missing'] },
+        supplierBillingFee: { state: 'UNKNOWN', amount: null, sourceRefs: [] },
+        channelPayoutFee: { state: 'UNKNOWN', amount: null, sourceRefs: [] },
         monthlyRent: { amount: 920000, currency: 'KRW' },
         deposit: { amount: 0, currency: 'KRW' },
         depositState: 'ZERO',
@@ -84,8 +86,8 @@ const sample = {
       }, {
         termKey: '48_2만',
         termMonths: 48,
-        supplierBillingFee: { state: 'UNKNOWN', amount: null, sourceRefs: ['canonical:missing'] },
-        channelPayoutFee: { state: 'UNKNOWN', amount: null, sourceRefs: ['canonical:missing'] },
+        supplierBillingFee: { state: 'UNKNOWN', amount: null, sourceRefs: [] },
+        channelPayoutFee: { state: 'UNKNOWN', amount: null, sourceRefs: [] },
         monthlyRent: { amount: 850000, currency: 'KRW' },
         depositState: 'UNKNOWN',
         mileageLimitKmPerYear: 20000,
@@ -137,3 +139,18 @@ test('fee contract rejects leaked extra fields and inconsistent zero/unknown amo
     expect(validate(value)).toBe(false);
   }
 });
+
+for (const contract of [schema, catalogSchema]) {
+  const check = ajv.compile({ $ref: `${contract.$id}#/$defs/termEconomicAmount` });
+  test.each(['UNKNOWN', 'NOT_APPLICABLE', 'KNOWN', 'ZERO'])(`${contract.title}: %s source rules`, (state) => {
+    const resolved = state === 'KNOWN' || state === 'ZERO';
+    const amount = { amount: state === 'ZERO' ? 0 : 100, currency: 'KRW' };
+    const value = { state, amount: resolved ? amount : null,
+      calculation: resolved ? { kind: 'FIXED', amount } : null,
+      sourceRefs: resolved ? ['F04:row'] : [], priceSourceRefs: ['catalog_offers/test/priceTerms/24'] };
+    expect(check(value), JSON.stringify(check.errors)).toBe(true);
+    expect(check({ ...value, sourceRefs: resolved ? [] : ['invalid:rule'] })).toBe(false);
+    expect(check({ ...value, priceSourceRefs: [123] })).toBe(false);
+    expect(check({ ...value, unexpected: true })).toBe(false);
+  });
+}

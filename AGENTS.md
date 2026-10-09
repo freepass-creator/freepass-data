@@ -1,5 +1,7 @@
 # freepass-data — AI / Codex Work Entry Rules
 
+> **★★차종·제원(제조사·모델·세부모델·세부트림·연료·배기량·구동)을 채우거나 고치거나 판단하는 모든 AI·로직은 ai-ops `docs/차종-기준-한장.md`(https://github.com/freepass-creator/ai-ops/blob/master/docs/차종-기준-한장.md) 한 장만 따른다 — 대표 2026-10-04 「어떤 AI가 오든 어떤 로직이 오든 흔들리지 않게」. 이 저장소의 SSOT 「차종 4단 구조」 절과 코드는 그 장의 구현이다. 그 장은 대표만 바꾼다. 더 나은 규칙이 보이면 코드·문서를 먼저 바꾸지 말고 AI 상황실에 `결정필요:`.**
+
 ## 0. Mandatory entrypoint
 
 Every Codex/Work/development AI working in this repository must start in this order:
@@ -91,5 +93,18 @@ Do not call a consumer cutover complete from code/test parity alone.
 - 실행기는 presentation-only다. 원천 최신화, 차량 통합/삭제, 금액 수정 권한이나 검증을 대체하지 않는다. HOLD를 우회하지 않는다.
 - 수정 후 새 조회로 `--verify`를 실행하고 실제 시트 화면도 확인한다. Actions/운영 pin 미연결을 자동화 완료로 표현하지 않는다.
 - 온라인 연결·후속 실행은 `docs/F01-F86-ONLINE-HANDOFF.md`에서 엔진/PR/실측 증거를 찾고 GitHub의 현재 pin을 다시 확인한다. 검증 전용 workflow 가지를 운영 main에 병합하지 않는다.
-- 중앙 정본을 F01·F86·ERP.com과 각 화이트라벨·Admin이 가져다 쓰는 구조는 `docs/F01-F86-ERP-PUBLICATION-CONTRACT.md`를 따른다. 소비처를 세 곳으로 고정하거나 Admin/화이트라벨을 누락하지 않는다. 시트 표시 PASS를 전체 소비처 연결 완료로 확대하지 않는다.
+- 중앙 정본을 F01·ERP.com과 각 화이트라벨·Admin이 가져다 쓰는 구조는 `docs/F01-F86-ERP-PUBLICATION-CONTRACT.md`를 따른다. 대표 2026-10-08 최신 지시로 상품 시트 발행은 F01 하나이며 F86은 원본·이력 보존용이다. 소비처를 세 곳으로 고정하거나 Admin/화이트라벨을 누락하지 않는다. 시트 표시 PASS를 전체 소비처 연결 완료로 확대하지 않는다.
 - 원본과 다른 작업의 변경을 보존한다. RTDB는 영구 폐기 상태이며 복원/fallback/배포하지 않는다.
+
+## 공급사 공통 입력 시트 규격 잠금 (대표 2026-10-06)
+
+- 공통 입력 시트를 고치기 전에 `contracts/supplier-input-sheet-spec.v1.json`의 `changeControl`과 현행 `dropdownPolicy.lightweight`, `docs/SUPPLIER-INPUT-SHEET-RUNBOOK.md` 맨 위 현행 규격을 읽는다. 과거 날짜의 드롭다운·서식을 다시 적용하지 않는다.
+- 앞으로 대표가 수정 지시하면 같은 작업에서 정본 현행값·baselineVersion·이유, 실행 코드/필요 검증, 라이브 되읽기와 전후 이력, NEXT-START-HERE의 exact commit/남은 HOLD를 함께 남긴다. 채팅 기억만으로 수정하거나 문서만 변경하고 적용 완료라고 하지 않는다.
+- 현재 없는 공급사 입력 탭은 새 지시 없이 복원하지 않는다. 차종 정본과 입력 UI 후보를 혼동하지 않는다. 운영 자동 감시·pin이 없으면 항상 강제된다고 표현하지 않는다.
+- UI 변경은 `uiOwnership`의 입력/머리글/종합/helper 소유권과 `scripts/shared-sheet-ux.mjs` 표시 필드 허용 검사를 따른다. 머리글 보호는 관리 계정·Google 소유자가 우회할 수 있으며 AI 전체 불변 보장으로 표현하지 않는다. 인도완료·취소·진행중을 출고불가·계약중에서 추정하지 않는다.
+
+## 정산 사람 입력 보존 (2026-10-06 사용자 직접 결정)
+
+정산 작업은 docs/BUSINESS-DATA-CONNECTION-MAP.md의 「2026-10-06 정산 원장과 사람 입력값 보존」을 따른다. 사람 입력 또는 출처 불명의 기존값을 AI가 자동 삭제·덮어쓰기하지 않는다. 직접 지정된 정정만 전후 감사 이력과 함께 적용한다. 접수 BT 산출근거는 사람 입력열이다.
+
+- 2026-10-06 사용자 추가 결정: 접수 한 줄 입력마다 청구 공급가액과 지급 공급가액을 함께 확인한다. 확정금액은 원문 산출근거와 함께 입력하고 어느 한쪽도 누락한 채 정산 완료로 처리하지 않는다. 미확정은 null/보류이며 0원으로 채우지 않는다. 실제0원은 확인된 산출근거가 있어야 한다. 접수 U·V 빈칸 경고는 누락 탐지이며 확정/미확정 판정이나 저장 강제 차단을 대신하지 않는다.

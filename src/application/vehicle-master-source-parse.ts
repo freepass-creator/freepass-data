@@ -31,6 +31,7 @@ function persistedTrim(record: VehicleMasterParsedTrim) {
   return {
     maker: record.maker,
     model: record.model,
+    ...(record.subModel !== undefined ? { subModel: record.subModel } : {}),
     modelYear: record.modelYear,
     powertrainName: record.powertrainName,
     seats: record.seats,

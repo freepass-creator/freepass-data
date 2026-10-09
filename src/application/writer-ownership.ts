@@ -8,6 +8,7 @@ import {
   WriterOwnershipConflictError,
   WriterOwnershipTransferIdempotencyConflictError,
   WriterOwnershipTransferRejectedError,
+  type RollbackCatalogWriterOwnershipInput,
   type TransferCatalogWriterOwnershipInput,
   type WriterOwnershipTransferReceipt
 } from '../domain/writer-ownership.js';
@@ -134,6 +135,91 @@ export async function transferCatalogWriterOwnership(
       previousRevision: current.revision,
       revision: next.revision,
       previousWriterIds,
+      primaryWriterId: next.primaryWriterId,
+      writerId: writer.id,
+      committedAt: now
+    };
+    await tx.putWriterOwnershipTransferReceipt(receipt);
+    return receipt;
+  });
+}
+
+export async function rollbackCatalogWriterOwnership(
+  store: CatalogStore,
+  input: RollbackCatalogWriterOwnershipInput,
+  now = new Date().toISOString()
+): Promise<WriterOwnershipTransferReceipt> {
+  if (!input.reason.trim()) throw new WriterOwnershipTransferRejectedError('reason is required');
+  if (!Number.isFinite(Date.parse(now))) throw new WriterOwnershipTransferRejectedError('transfer time is invalid');
+  const restore = input.restore;
+  if (!restore.allowedWriterIds.includes(restore.primaryWriterId) ||
+      (restore.mode === 'EXCLUSIVE' && restore.allowedWriterIds.length !== 1)) {
+    throw new WriterOwnershipTransferRejectedError('rollback before-image is not a valid ownership');
+  }
+  const writer = resolveExecutionWriter(input.actor, input.writer);
+  assertWriterOwnershipTransferActor(input.actor, writer);
+  const requestDigest = stableDigest({
+    commandType: 'ROLLBACK_CATALOG_WRITER_OWNERSHIP',
+    expectedRevision: input.expectedRevision,
+    restore,
+    actor: input.actor,
+    writer,
+    reason: input.reason
+  });
+
+  return store.transact(async (tx) => {
+    const existing = await tx.getWriterOwnershipTransferReceipt(input.idempotencyKey);
+    if (existing) {
+      if (existing.requestDigest !== requestDigest) {
+        throw new WriterOwnershipTransferIdempotencyConflictError(
+          `Idempotency key ${input.idempotencyKey} was reused with a different ownership rollback request`
+        );
+      }
+      return existing;
+    }
+    const stored = await tx.getCatalogWriterOwnership();
+    const current = effectiveCatalogWriterOwnership(stored);
+    if (current.revision !== input.expectedRevision) {
+      throw new WriterOwnershipConflictError(input.expectedRevision, current.revision);
+    }
+    if (!stored) throw new WriterOwnershipTransferRejectedError('nothing to roll back: ownership was never stored');
+    const next = {
+      scope: 'catalog' as const,
+      revision: current.revision + 1,
+      mode: restore.mode,
+      primaryWriterId: restore.primaryWriterId,
+      allowedWriterIds: [...restore.allowedWriterIds].sort(),
+      previousWriterIds: [...restore.previousWriterIds].sort(),
+      effectiveAt: now,
+      updatedAt: now,
+      updatedBy: structuredClone(input.actor),
+      reason: input.reason
+    };
+    await tx.updateCatalogWriterOwnership(next);
+    await tx.appendAudit({
+      eventId: randomUUID(),
+      commandId: input.commandId,
+      actor: input.actor,
+      writerId: writer.id,
+      entityType: 'writer_ownership',
+      entityId: 'catalog',
+      action: 'CATALOG_WRITER_OWNERSHIP_ROLLED_BACK',
+      before: current,
+      after: next,
+      reason: input.reason,
+      revisionBefore: current.revision,
+      revisionAfter: next.revision,
+      occurredAt: now
+    });
+    const receipt: WriterOwnershipTransferReceipt = {
+      idempotencyKey: input.idempotencyKey,
+      commandId: input.commandId,
+      status: 'ROLLED_BACK',
+      requestDigest,
+      scope: 'catalog',
+      previousRevision: current.revision,
+      revision: next.revision,
+      previousWriterIds: next.previousWriterIds,
       primaryWriterId: next.primaryWriterId,
       writerId: writer.id,
       committedAt: now

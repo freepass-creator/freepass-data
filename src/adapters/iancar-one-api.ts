@@ -1,3 +1,4 @@
+import { IANCAR_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS } from '../domain/deposit-evidence.js';
 import { createHash } from 'node:crypto';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
 
@@ -27,7 +28,7 @@ const IANCAR_STATES = ['AVAILABLE', 'RESERVED', 'RENTED', 'PREPARING', 'UNAVAILA
 export const IANCAR_ONE_API_VERSION = 'iancar-one-api/1';
 export const IANCAR_ONE_API_ORIGIN = 'https://eancarone.com';
 export const IANCAR_ONE_SOURCE_ID = 'supplier:RP031:iancar-one-api';
-export const IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS = 15 * 60;
+export const IANCAR_ONE_EXPECTED_FRESHNESS_SECONDS = IANCAR_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS;
 export const IANCAR_ONE_PAGE_SIZE = 100;
 
 /** Supplier catalogue assets observed on 2026-10-02; not photographs of an individual vehicle.
@@ -212,29 +213,47 @@ export function createIancarOneApiClient(
 
   const requestPhoto = async (vehicleId: string, photoId: string) => {
     if (!clean(vehicleId) || !clean(photoId)) throw new IancarOneApiError('IANCAR_ONE_PHOTO_ID_REQUIRED');
-    const response = await fetcher(apiUrl(
-      normalized.origin,
-      `/v1/vehicles/${encodeURIComponent(vehicleId)}/photos/${encodeURIComponent(photoId)}`
-    ), {
-      method: 'GET',
-      redirect: 'manual',
-      cache: 'no-store',
-      signal: AbortSignal.timeout(normalized.timeoutMs),
-      headers: {
-        'User-Agent': 'FreePassData/1 iancar-one-api',
-        'Authorization': `Bearer ${normalized.apiKey}`
+    // One deadline covers both attempts and the returned response body. Never
+    // retry auth/not-found/rate-limit errors or restart a timed-out request budget.
+    const signal = AbortSignal.timeout(normalized.timeoutMs);
+    const started = Date.now();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let response: Response;
+      try {
+        response = await fetcher(apiUrl(
+          normalized.origin,
+          `/v1/vehicles/${encodeURIComponent(vehicleId)}/photos/${encodeURIComponent(photoId)}`
+        ), {
+          method: 'GET',
+          redirect: 'manual',
+          cache: 'no-store',
+          signal,
+          headers: {
+            'User-Agent': 'FreePassData/1 iancar-one-api',
+            'Authorization': `Bearer ${normalized.apiKey}`
+          }
+        });
+      } catch (error) {
+        if (signal.aborted || (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name)))
+          throw new IancarOneApiError('IANCAR_ONE_PHOTO_TIMEOUT');
+        throw new IancarOneApiError('IANCAR_ONE_PHOTO_TRANSPORT_FAILED');
       }
-    });
-    const requestId = response.headers.get('x-request-id');
-    if (response.status >= 300 && response.status < 400)
-      throw new IancarOneApiError('IANCAR_ONE_API_REDIRECT_REJECTED', response.status, requestId);
-    if (!response.ok) throw new IancarOneApiError(
-      `IANCAR_ONE_API_HTTP_${response.status}`,
-      response.status,
-      requestId,
-      response.status === 429 ? retryAfterSeconds(response) : null
-    );
-    return response;
+      if (attempt === 0 && [502, 503, 504].includes(response.status) && Date.now() - started < 2_000 && !signal.aborted) {
+        await response.body?.cancel();
+        continue;
+      }
+      const requestId = response.headers.get('x-request-id');
+      if (response.status >= 300 && response.status < 400)
+        throw new IancarOneApiError('IANCAR_ONE_API_REDIRECT_REJECTED', response.status, requestId);
+      if (!response.ok) throw new IancarOneApiError(
+        `IANCAR_ONE_API_HTTP_${response.status}`,
+        response.status,
+        requestId,
+        response.status === 429 ? retryAfterSeconds(response) : null
+      );
+      return response;
+    }
+    throw new IancarOneApiError('IANCAR_ONE_PHOTO_TRANSPORT_FAILED');
   };
 
   return {
@@ -895,7 +914,9 @@ export function createIancarPhotoByteCache(now = Date.now) {
     if (pending.size >= 8) throw new Error('IANCAR_PHOTO_BUSY');
     const request = Promise.resolve().then(load).then(value => {
       if (value.bytes.length > 8 * 1024 * 1024) throw new Error('IANCAR_PHOTO_RESPONSE_INVALID');
-      while (entries.size >= 32 || bytes + value.bytes.length > 32 * 1024 * 1024) {
+      // A 51-photo album must not evict its first images merely by entry count.
+      // Keep the existing 32MiB byte cap, 30s TTL and eight-inflight limit.
+      while (entries.size >= 64 || bytes + value.bytes.length > 32 * 1024 * 1024) {
         const oldest = entries.keys().next().value;
         if (oldest === undefined) break;
         bytes -= entries.get(oldest)!.value.bytes.length; entries.delete(oldest);

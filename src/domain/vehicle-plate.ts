@@ -6,6 +6,9 @@
 export const plateIdentityKey = (value: unknown): string =>
   typeof value === 'string' ? value.trim().replace(/\s+/g, '').toUpperCase() : '';
 
+/** A supplier placeholder such as 「신차」·「미정」 carries no digit and must never identify a vehicle. */
+export const isAssignedPlate = (value: unknown): boolean => /\d/.test(plateIdentityKey(value));
+
 /** Strict Korean plate shape (optional region prefix, no inner whitespace). */
 export const isStrictKoreanPlate = (value: unknown): boolean =>
   /^(?:[가-힣]{2})?\d{2,3}[가-힣]\d{4}$/.test(String(value ?? ''));

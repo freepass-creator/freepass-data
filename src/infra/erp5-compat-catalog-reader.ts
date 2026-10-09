@@ -1,7 +1,24 @@
+import { createHash } from 'node:crypto';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
+import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
+import { readIancarPublishedDeposit } from '../domain/deposit-evidence.js';
 
 type Rec = Record<string, unknown>;
+
+/** Reuse the bound Data target and read-only transaction; no alternate transport or writer. */
+export async function readVehicleMasterSnapshot() {
+  const db = getFirestore(getTargetFirebaseApp());
+  return db.runTransaction(async tx => {
+    const masters = await tx.get(db.collection('vehicle_master'));
+    const trims = await tx.get(db.collection('vehicle_trim_master'));
+    const documents = (q: QuerySnapshot) => q.docs.map(d => ({ id: d.id, data: jsonSafe(d.data()) as Rec }));
+    const body = { readAt: masters.readTime.toDate().toISOString(), masters: documents(masters), trims: documents(trims) };
+    if (!masters.readTime.isEqual(trims.readTime)) throw new Error('VEHICLE_MASTER_NON_ATOMIC_READ');
+    return { source: 'freepasserp5/vehicle_master+vehicle_trim_master' as const, complete: true as const, ...body,
+      digest: createHash('sha256').update(JSON.stringify(body)).digest('hex') };
+  }, { readOnly: true });
+}
 
 export type CatalogCompatibilitySnapshot = {
   schema: 'freepass-data.catalog-compat/v1';
@@ -18,6 +35,7 @@ export type CatalogCompatibilitySnapshot = {
     sourceProject: typeof CENTRAL_FIREBASE_PROJECT_ID;
     observedAt: string;
     collectionCounts: Record<string, number>;
+    depositEvidenceVersion: 'catalog-compat-deposit/1';
   };
 };
 
@@ -52,6 +70,24 @@ const allowedConsumer = (consumerId: string) =>
   consumerId === 'erp-com' ||
   consumerId === 'freepass-admin-catalog' ||
   /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId);
+
+/** Response derivation only. UNKNOWN never retains an apparently confirmed numeric amount. */
+export function withCompatibilityDepositEvidence(product: Rec, now = new Date().toISOString()): Rec {
+  const price = product.price;
+  if (!price || typeof price !== 'object' || Array.isArray(price)) return { ...product };
+  const paid = hasConflictingPaidDeposit(price);
+  return { ...product, price: Object.fromEntries(Object.entries(price).map(([key, value]) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [key, value];
+    const row = value as Rec;
+    const evidence = product.provider_company_code === 'RP031' ? readIancarPublishedDeposit(product, key, now)
+      : assessDepositEvidence({ supplierId: product.provider_company_code, productType: product.product_type,
+      note: product.deposit_note, depositFree: product.deposit_free, sourceAmount: row.deposit,
+      hasPositivePaidDeposit: paid });
+    return [key, { ...row, deposit: evidence.amount, depositState: evidence.state,
+      depositStatusLabel: depositStatusLabel(evidence.state, row.deposit, product.deposit_note),
+      depositEvidenceReason: evidence.reason }];
+  })) };
+}
 
 /**
  * Transitional read-only bridge.
@@ -120,11 +156,12 @@ export class FirestoreCatalogCompatibilityReader {
     const collectionCounts = Object.fromEntries(
       resolved.map(([name, snapshot]) => [name, snapshot.size])
     );
+    const observedAt = new Date().toISOString();
 
     return {
       schema: 'freepass-data.catalog-compat/v1',
       data: {
-        products: asMap(products),
+        products: Object.fromEntries(Object.entries(asMap(products)).map(([id, product]) => [id, withCompatibilityDepositEvidence(product, observedAt)])),
         policies: asMap(policies),
         ...(get('partner') ? { partners: asMap(get('partner')!) } : {}),
         ...(get('user') ? { users: asMap(get('user')!) } : {}),
@@ -134,8 +171,9 @@ export class FirestoreCatalogCompatibilityReader {
         consumerId,
         authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE',
         sourceProject: CENTRAL_FIREBASE_PROJECT_ID,
-        observedAt: new Date().toISOString(),
+        observedAt,
         collectionCounts,
+        depositEvidenceVersion: 'catalog-compat-deposit/1',
       },
     };
   }
@@ -151,10 +189,13 @@ export class FirestoreCatalogCompatibilityReader {
   }
 
   private async readReferenceProducts(consumerId: string) {
-    const products = await this.db.collection('products').get();
+    const [products, policies] = await Promise.all([
+      this.db.collection('products').get(), this.db.collection('policy').get(),
+    ]);
     return {
       consumerId,
       products: asMap(products),
+      policies: asMap(policies),
       observedAt: new Date().toISOString(),
     };
   }

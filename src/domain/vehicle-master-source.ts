@@ -30,6 +30,7 @@ export type VehicleMasterParsedBaseItem = {
 export type VehicleMasterParsedTrim = {
   maker: string;
   model: string;
+  subModel?: string | null;
   modelYear: number;
   powertrainName: string;
   seats: number | null;

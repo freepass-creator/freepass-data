@@ -9,6 +9,8 @@ export type CanonicalizationDecision = {
   vehicleAsset?: (IdentityResolution & { status?: VehicleAssetStatus }) | null;
   supplierId: string;
   approvedIssues?: string[];
+  /** Sale exposure of the created Product. Absent = ACTIVE (previous behavior). HOLD keeps the car stored but unpublished. */
+  productStatus?: 'ACTIVE' | 'HOLD';
 };
 
 export type CanonicalSourceBinding = {

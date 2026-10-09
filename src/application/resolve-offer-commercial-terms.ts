@@ -1,5 +1,5 @@
 import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
-import type { CommissionInput } from './kakao-catalog-reference.js';
+import type { CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
 import { KAKAO_COMMISSION_POLICY, resolveSalesCommission, resolveSupplierBillingFee } from './kakao-catalog-reference.js';
 import type {
   DepositResolution,
@@ -20,23 +20,30 @@ export function precomputeOfferEconomics(
   offer: Pick<Offer, 'id' | 'supplierId' | 'priceTerms'>,
   commercialType?: CommercialType,
   fuel?: string | null,
-  evidenceByTerm: Readonly<Record<string, Partial<Pick<CommissionInput, 'vehicleValue' | 'newProductSubtype' | 'depositTierPercent' | 'subscriptionForm' | 'q12Basis' | 'individualException'>>>> = {},
+  evidenceByTerm: CommissionEvidenceByTerm = {},
 ): OfferTermEconomics[] {
   const productType = commercialType ? ({
     NEW_RENT: '신차렌트', USED_RENT: '중고렌트', NEW_SUBSCRIPTION: '신차구독',
     USED_SUBSCRIPTION: '중고구독', OGONG_SUBSCRIPTION: '오공구독', PICKUP_SUBSCRIPTION: '픽업구독',
   } as const)[commercialType] : '';
   const policy = KAKAO_COMMISSION_POLICY;
-  const source = policy.canonicalSource;
-  const policyRef = `${source.repository}@${source.revision}:${source.path}`;
   return offer.priceTerms.map((term) => {
     const priceRef = `catalog_offers/${offer.id}/priceTerms/${term.termKey}`;
+    const basis36 = offer.priceTerms.filter(candidate => candidate.termMonths === 36 &&
+      candidate.mileageLimitKmPerYear === term.mileageLimitKmPerYear && candidate.monthlyRent.currency === 'KRW' &&
+      positiveSafeInteger(candidate.monthlyRent.amount));
     const args = { ...evidenceByTerm[term.termKey], supplierId: offer.supplierId, productType, fuel: fuel ?? '',
-      termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount };
+      termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
+      billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
-      const base = { ruleId: result.ruleId, policyId: policy.policyId,
-        sourceRefs: [policy.currentAuthority, policyRef, priceRef, ...(args.q12Basis?.sourceRef ? [args.q12Basis.sourceRef] : [])],
+      const base: Pick<TermEconomicAmount, 'ruleId' | 'policyId' | 'sourceRefs' | 'priceSourceRefs' | 'vatTreatment' | 'vatAmount' | 'totalAmount' | 'referenceRentBasis'> = { ruleId: result.ruleId, policyId: policy.policyId,
+        sourceRefs: [] as string[], priceSourceRefs: [priceRef],
         vatTreatment: result.vatTreatment, vatAmount: result.vatAmount, totalAmount: result.totalAmount };
+      if (result.ruleId?.startsWith('BILLIN_SUBSCRIPTION_36_RENT') && basis36.length === 1) {
+        base.priceSourceRefs = [...new Set([priceRef, `catalog_offers/${offer.id}/priceTerms/${basis36[0]!.termKey}`])];
+        base.referenceRentBasis = { termKey: basis36[0]!.termKey, termMonths: 36,
+          monthlyRent: structuredClone(basis36[0]!.monthlyRent), multiplier: side === 'BILLING' ? 1 : 0.8 };
+      }
       const unknown = (reasonCode: string): TermEconomicAmount => ({ ...base,
         state: 'UNKNOWN', amount: null, calculation: null, vatAmount: null, totalAmount: null, reasonCode });
       if (!productType) return unknown('PRODUCT_TYPE_REQUIRED');
@@ -65,6 +72,8 @@ export function precomputeOfferEconomics(
         calculation = { kind: 'FIXED', amount: { amount: result.amount, currency: 'KRW' } };
       }
       return { ...base, state: result.amount === 0 ? 'ZERO' : 'KNOWN',
+        sourceRefs: [...(result.sourceRefs ?? []), policy.currentAuthority,
+          ...(result.ruleId?.startsWith('SONOKONG_SUBSCRIPTION_') && args.q12Basis?.sourceRef ? [args.q12Basis.sourceRef] : [])],
         amount: { amount: result.amount, currency: 'KRW' }, calculation, reasonCode: null };
     };
     const deposit = structuredClone(term.deposit ?? null);
@@ -72,7 +81,8 @@ export function precomputeOfferEconomics(
       termKey: term.termKey, termMonths: term.termMonths, monthlyRent: structuredClone(term.monthlyRent),
       depositCalculation: { state: term.depositState, amount: deposit,
         calculation: deposit ? { kind: 'FIXED', amount: structuredClone(deposit) } : null,
-        sourceRefs: [priceRef] },
+        sourceRefs: deposit && (term.depositState === 'KNOWN' || term.depositState === 'ZERO') ? [priceRef] : [],
+        priceSourceRefs: [priceRef] },
       supplierBillingFee: convert(resolveSupplierBillingFee(args), 'BILLING'),
       channelPayoutFee: convert(resolveSalesCommission(args), 'PAYOUT'),
     };
@@ -287,12 +297,13 @@ function auditEconomicAmount(
   const validRefs = Array.isArray(value.sourceRefs) && value.sourceRefs.length > 0 &&
     value.sourceRefs.every((ref) => typeof ref === 'string' && ref.trim().length > 0);
 
-  if (!validRefs) invalidFacts.push(`ECONOMICS_SOURCE_REQUIRED:${label}`);
   if (value.state === 'UNKNOWN' || value.state === 'NOT_APPLICABLE') {
+    if (!Array.isArray(value.sourceRefs) || value.sourceRefs.length !== 0) invalidFacts.push(`ECONOMICS_UNRESOLVED_WITH_SOURCE:${label}`);
     if (hasAmount || hasCalculation) invalidFacts.push(`ECONOMICS_UNRESOLVED_WITH_VALUE:${label}`);
     if (value.state === 'UNKNOWN') decisions.push(`ECONOMICS_VALUE_REQUIRED:${label}`);
     return;
   }
+  if (!validRefs) invalidFacts.push(`ECONOMICS_SOURCE_REQUIRED:${label}`);
   if (!hasAmount || value.amount?.currency !== 'KRW' || !Number.isSafeInteger(amount) || amount! < 0) {
     invalidFacts.push(`INVALID_ECONOMICS_AMOUNT:${label}`);
     return;
@@ -365,6 +376,17 @@ export function auditOfferEconomicsTerms(offer: Offer): OfferEconomicsAudit {
     auditEconomicAmount(term.depositCalculation, `${term.termKey}:DEPOSIT`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
     auditEconomicAmount(term.supplierBillingFee, `${term.termKey}:SUPPLIER_BILLING_FEE`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
     auditEconomicAmount(term.channelPayoutFee, `${term.termKey}:CHANNEL_PAYOUT_FEE`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
+    for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
+      const fee = term[side], basis = fee.referenceRentBasis;
+      if (!basis) continue;
+      const reference = prices.get(basis.termKey);
+      if (!reference || reference.termMonths !== 36 || basis.termMonths !== 36 ||
+          reference.monthlyRent.amount !== basis.monthlyRent.amount || reference.monthlyRent.currency !== basis.monthlyRent.currency ||
+          basis.multiplier !== (side === 'supplierBillingFee' ? 1 : 0.8) ||
+          Math.round(basis.monthlyRent.amount * basis.multiplier) !== fee.amount?.amount) {
+        invalidFacts.push(`ECONOMICS_REFERENCE_RENT_MISMATCH:${term.termKey}:${side}`);
+      }
+    }
 
     if (
       (term.depositCalculation.state === 'KNOWN' || term.depositCalculation.state === 'ZERO') &&
@@ -398,7 +420,7 @@ export function readStoredTermFees(offer: Offer, price: PriceTerm): Pick<AdminPr
     const unknown = (reasonCode: string): TermEconomicAmount => ({
       state: 'UNKNOWN', amount: null, calculation: null, reasonCode,
       ruleId: value?.ruleId ?? null, ...(value?.policyId ? { policyId: value.policyId } : {}),
-      sourceRefs: [`catalog_offers/${offer.id}/internalEconomicsTerms/${price.termKey}/${field}`],
+      sourceRefs: [], priceSourceRefs: [`catalog_offers/${offer.id}/priceTerms/${price.termKey}`],
     });
     if (!value) return unknown(matches.length > 1 ? 'DUPLICATE_ECONOMICS_TERM' : 'ECONOMICS_NOT_PRECOMPUTED');
     if ((row?.monthlyRent && (row.monthlyRent.amount !== price.monthlyRent.amount || row.monthlyRent.currency !== price.monthlyRent.currency)) ||
