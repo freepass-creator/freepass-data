@@ -54,6 +54,26 @@ describe('one active Data master authority', () => {
     expect(() => verifiedVehicleMasterReference(snapshot(), { masterId: 'm1', trimId: 't1' }, Date.now() + 300001)).toThrow();
     expect(() => verifiedVehicleMasterReference({ ...snapshot(), digest: 'tampered' }, { masterId: 'm1', trimId: 't1' })).toThrow();
   });
+  it('holds duplicate alias matches instead of publishing the first trim ID', () => {
+    const master = snapshot();
+    master.trims.push({ id: 't2', data: { ...master.trims[0]!.data, trim: '프리미엄' } });
+    const { readAt, masters, trims } = master;
+    master.digest = createHash('sha256').update(JSON.stringify({ readAt, masters, trims })).digest('hex');
+    const result = chooseVehicleIdentity(indexVehicleMaster(verifiedMasterRecords(master)),
+      input(['현대', '쏘나타', '소나타 DN8', '스마트 초이스']));
+    expect(result).toMatchObject({ pick: 'HOLD', identity: null });
+    expect(result).not.toHaveProperty('trimId');
+  });
+  it('excludes a drifting pair without blocking an independent valid pair or inventing an ID', () => {
+    const master = snapshot();
+    master.trims.push({ id: 'drifting-trim', data: { ...master.trims[0]!.data, sub_model: 'unclassified source name' } });
+    const { readAt, masters, trims } = master;
+    master.digest = createHash('sha256').update(JSON.stringify({ readAt, masters, trims })).digest('hex');
+    expect(verifiedVehicleMasterReference(master, { masterId: 'm1', trimId: 't1' }).state).toBe('KNOWN');
+    expect(verifiedVehicleMasterReference(master, { masterId: 'm1', trimId: 'drifting-trim' }).state).toBe('HOLD');
+    expect(chooseVehicleIdentity(indexVehicleMaster(verifiedMasterRecords(master)),
+      input(['현대', '쏘나타', 'unclassified source name', '스마트'])).pick).toBe('HOLD');
+  });
   it('uses aliases for search and returns current names plus immutable IDs', () => {
     const master = indexVehicleMaster(verifiedMasterRecords(snapshot()));
     expect(chooseVehicleIdentity(master, input(['현대', '쏘나타', '소나타 DN8', '스마트 초이스'])))
