@@ -6,6 +6,16 @@ const product = { car_number: '12가3456', image_urls: ['https://supplier.exampl
 const source = { plate: '12가3456', sourceRef: 'fixture:detail/1', observedAt: '2026-10-09T00:00:00Z', expectedFreshnessSeconds: 3600, vehicle: product };
 const base = { productId: 'fixture-product', product, source, now: '2026-10-09T00:01:00Z', probe: async () => ({ status: 200, contentType: 'image/jpeg' }) };
 describe('read-only media evidence', () => {
+  it('detects original color loss even when the consumer correctly repeats the blank stored color', async () => {
+    const stored = { ...product, ext_color: '' };
+    const parity = compareVehicleMediaConsumerEvidence({ productId: 'fixture-product', product: stored,
+      consumerProductId: 'fixture-product', consumer: stored, consumerSnapshotRef: 'fixture:detail/1', observedAt: base.now, requiresGallery: true });
+    expect(parity.verdict).toBe('SPECIFIED_CONSUMER_FIELDS_MATCHED');
+    const original = await inspectVehicleMediaEvidence({ ...base, product: stored,
+      source: { ...source, vehicle: { ...product, ext_color: '검정' } } });
+    expect(original.verdict).toBe('HOLD');
+    expect(original.issues).toContain('COLOR_SOURCE_MISMATCH');
+  });
   it('holds failed source authentication even when an older payload and photo URL still match', async () => {
     for (const sourceHttpStatus of [401, 403, 302, NaN]) {
       const r = await inspectVehicleMediaEvidence({ ...base, sourceHttpStatus });
