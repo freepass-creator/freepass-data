@@ -415,6 +415,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+### 2026-10-09 차종마스터 담당 — 기존 PR395 / PR397→401 순서 통합
+
+- 목적/기존 Work: `work/freepass-data/data-first-identity-port-20261005`, PR395를 재사용한다. 신규 Task/branch/엔진/원장 없음. PR397은 같은 작업의 승계 PR401이며 main에 반영된 수집 변경을 이 가지에 병합했다.
+- 대상 revision: main `d91124304bd082d0654e0d3bd3f743864d84f6ee` 및 기존 PR395. 원래 checkout 문서2개, fd-guard 미커밋 수정, 옛 data-first dirty5개는 보존했다. 재사용 작업공간 fd-356에서 academy READY 후 수행.
+- 변경: F03/v1 identity 입력과 기본형/생산기간 허용 추정 폐기. master/trim read-only transaction 동일 readTime 캡처 → RAW capture digest → 기존 identity/normalizer → cascade 동일 snapshot. 별칭은 검색만, 출력은 현재 master 이름/불변 ID. 모호/불일치/마스터 없음은 null·REVIEW_REQUIRED이며 원문은 보존한다. APPLY 직전 fresh master가 계획 내용과 다르면 재계획한다. source 최신 주소/12개 실제 탭·UNKNOWN 보증금·F01 단독/F86 중단·정산 사람 입력·기간정책 확장을 최신 main 그대로 유지했다.
+- 검증: 최신 main d911243 합친 전체 npm run check PASS(Vitest1701 PASS/14SKIP), sheet105 PASS/build/dist smoke8 PASS/architecture/data-access/diff check PASS. 원격 exact-head CI를 확인한다. Claude 조직 구독 비활성 FAILED(exit1), 독립 검토 PASS로 세지 않는다.
+- 직접 운영 조회(14:31 KST): 기존 Firebase target/read-only transaction으로 master1871/trim2097 동일 readTime 캡처와 validator eligible1825를 확인했다. digest `f8ab2c0b1266d77c5fd5da96766a044827eb805a08c5ba8310d4ceb9ffd5ce2d`; 사업 데이터 쓰기0. REST 보조 대조 products1776중1673일치/103미일치, catalog160중4미일치, trim부모이름불일치272. 실제 자료를 읽은 것이며 운영 소비처 적용 완료는 아니다.
+- 남음: 운영 master/product 일괄 정정·시트 쓰기·배포·소비처 cutover는 별도이며 실행하지 않는다. 103/272/4와 제조사 표기 drift96은 근거 없이 보정하지 않는다. dropdown disabled 사용자 결정 유지. Docker daemon/실제 Sheets 왕복·Admin/화이트라벨/Sales 전 소비처 배포 readback 미검증.
+- next_start_here: PR395 exact-head CI/최종 diff → 기존 main 통합 경로 → 실제 소비처 배포 revision과 master snapshot digest 재조회. 규칙은 ai-ops 기준 한 장 하나이며 수집/금액 담당의 최신 main을 되돌리지 않는다.
+
 ### 2026-10-09 14:17 KST 기존 정산 원장·상품 수수료 통합 대조
 
 - 담당범위/기존Work: PR403 work/freepass-data/reference-policy-context-20261009; 61b14bde 기반. main b2777b59819d5fbaa4c650cd637c80b5e000c591 최신 조회. academy READY. 새 원장/엔진/Task/branch0, 원본·사람입력·과거 작성자 정정0.

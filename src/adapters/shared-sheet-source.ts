@@ -8,6 +8,7 @@ export type SheetCell = string | number | boolean | null;
 export type SharedSheetCapture = {
   schema: 'shared-sheet-capture/v1'; spreadsheetId: string; layoutVersion: string;
   readTime: string; revision?: string; digest?: string;
+  vehicleMasterSnapshot?: unknown;
   /** values includes the exact header and every row, including blank rows; trailing cells padded by capturer. */
   tabs: Array<{ title: string; readTime: string; complete: true; rowCount: number; values: SheetCell[][] }>;
   /** Layer ② «공급사 입력값»: what the supplier itself entered, before any of our edits (kept apart from our values). */

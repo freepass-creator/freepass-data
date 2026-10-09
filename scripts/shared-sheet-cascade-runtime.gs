@@ -1,9 +1,13 @@
 // Bundled with config generated from supplier-input-sheet-spec.v1.json.
 // Only native validation changes. No vehicle values, source facts or formatting writes.
 function fpCascadeIndex(rows) {
+  rows=rows.map(function(r){var a=r.slice();while(a.length&&a[a.length-1]==='')a.pop();return a;});
+  if (!FREEPASS_CASCADE_CONFIG.masterSnapshotDigest || rows.filter(function(r){return r[0]==='@snapshot'&&r[1]===FREEPASS_CASCADE_CONFIG.masterSnapshotDigest;}).length!==1) throw new Error('HOLD: Data master lookup snapshot mismatch');
+  if(JSON.stringify(rows)!==JSON.stringify(FREEPASS_CASCADE_CONFIG.expectedLookupRows))throw new Error('HOLD: published lookup differs from Data snapshot');
   var index = Object.create(null);
   rows.forEach(function(row) {
     var key = String(row[0] || '');
+    if (key==='@snapshot') return;
     if (!key) return;
     if (Object.prototype.hasOwnProperty.call(index, key)) throw new Error('HOLD: duplicate lookup key');
     index[key] = row.slice(1).filter(function(v) { return v !== '' && v !== null; }).map(String);

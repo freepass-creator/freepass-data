@@ -11,6 +11,34 @@ const healthContract = JSON.parse(await readFile(
 const healthContractVersion = healthContract.properties.contractVersion.const;
 const healthSchemaVersion = healthContract.properties.schemaVersion.const;
 
+test('Docker build supplies the script and contract inputs required by packaging', async () => {
+  const dockerfile = await readFile(new URL('../Dockerfile', import.meta.url), 'utf8');
+  const buildStage = dockerfile.split('FROM node:22-bookworm-slim AS runtime')[0];
+  const beforeBuild = buildStage.split('RUN npm run build')[0];
+  assert.match(beforeBuild, /^COPY scripts\/supplier-input-sheet\.mjs scripts\/sheet-presentation\.mjs \.\/scripts\/$/m);
+  assert.match(beforeBuild, /^COPY contracts \.\/contracts$/m);
+  for (const path of ['scripts/supplier-input-sheet.mjs', 'scripts/sheet-presentation.mjs',
+    'contracts/supplier-input-sheet-spec.v1.json', 'contracts/f01-f86-sheet-spec.v1.json']) {
+    assert.ok((await readFile(new URL('../' + path, import.meta.url))).length, path);
+  }
+  assert.match(dockerfile, /^COPY --from=build \/app\/dist \.\/dist$/m);
+});
+
+test('built shared-sheet canonical job imports without tsx or source scripts', async () => {
+  const result = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e',
+      "await import('./dist/src/jobs/ingest-shared-sheet-canonical.js'); console.log('DIST_IMPORT_OK');"],
+    { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { output += chunk; });
+    child.on('error', reject);
+    child.on('close', code => resolve({ code, output }));
+  });
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /DIST_IMPORT_OK/);
+});
+
 function run(env) {
   return new Promise((resolve, reject) => {
     const child = spawn(
