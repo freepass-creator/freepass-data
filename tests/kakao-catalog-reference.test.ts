@@ -729,3 +729,25 @@ describe('general reference query', () => {
     for(const q of [{limit:'1'},{cursor:'x'},{unknown:'x'},{model:['Model']},{monthlyRentMin:'-1'},{depositMin:'10',depositMax:'1'},{mileageKm:'1000'},{mileagePeriod:'week'},{maker:' '}]) expect(()=>apply(q)).toThrow('REFERENCE_DEPOSIT_FILTER_INVALID');
   });
 });
+
+describe('supplier and plate exact lookup', () => {
+  it('normalizes lookup only, keeps every term and returns ambiguous candidates with HOLD', () => {
+    const name='\uacbd\uc9c4 \ub80c\ud2b8',plate='12\uac003456';
+    const base={listable:true,provider_company_code:'RP013',provider_name:name,car_number:plate,price:{'36':{rent:500000,deposit:1000000},'48':{rent:400000,deposit:null}}};
+    const ref=buildKakaoCatalogReference({consumerId:'kakao-ops',observedAt:new Date().toISOString(),products:{a:base,b:{...base,car_number:'34\ub0985678'}}});
+    const apply=(q:Record<string,unknown>)=>filterReferenceZeroDeposit(ref,q);
+    expect(apply({supplierName:' \uacbd\uc9c4\ub80c\ud2b8 '}).data).toHaveLength(2);
+    const result=apply({plateNumber:' 12 \uac00-3456 '});
+    expect(result.data).toHaveLength(1);expect(result.data[0]!.offers).toEqual(ref.data[0]!.offers);
+    expect(result.data[0]!.vehicle.plateNumber).toBe(plate);
+    expect(apply({supplierName:'unknown'}).data).toEqual([]);
+    expect(apply({plateNumber:'99\ub0989999'}).data).toEqual([]);
+    for(const q of [{plateNumber:'3456'},{plateNumber:'new'},{plateNumber:[plate]},{supplierName:['a']}])expect(()=>apply(q)).toThrow('REFERENCE_DEPOSIT_FILTER_INVALID');
+    const duplicate=buildKakaoCatalogReference({consumerId:'kakao-ops',observedAt:new Date().toISOString(),products:{a:base,b:{...base,provider_company_code:'RP020'}}});
+    const matched=filterReferenceZeroDeposit(duplicate,{plateNumber:plate});expect(matched.data).toHaveLength(2);
+    expect((matched.meta as typeof matched.meta & {queryResolution:unknown}).queryResolution).toMatchObject({state:'HOLD',reasonCode:'PLATE_MULTIPLE_PRODUCTS'});
+    const supplier=filterReferenceZeroDeposit(duplicate,{supplierName:name});expect(supplier.data).toHaveLength(2);
+    expect((supplier.meta as typeof supplier.meta & {queryResolution:unknown}).queryResolution).toMatchObject({state:'HOLD',reasonCode:'SUPPLIER_NAME_MULTIPLE_CODES'});
+    expect(filterReferenceZeroDeposit(duplicate,{supplierName:name,supplierId:'RP013'}).data).toHaveLength(1);
+  });
+});
