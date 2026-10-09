@@ -12,6 +12,39 @@ export type VehicleMediaSourceEvidence = {
 };
 export type ImageHeadEvidence = { status: number; contentType: string | null };
 
+/** Compare a specified consumer snapshot without treating a card feed as a full gallery. */
+export function compareVehicleMediaConsumerEvidence(input: {
+  productId: string;
+  product: RecordValue;
+  consumerProductId: string;
+  consumer: RecordValue;
+  consumerSnapshotRef: string;
+  observedAt: string;
+  requiresGallery: boolean;
+}) {
+  const issues: string[] = [];
+  const key = plateIdentityKey(input.product.car_number);
+  if (!input.productId.trim() || input.productId !== input.consumerProductId
+    || !key || key !== plateIdentityKey(input.consumer.car_number)) issues.push('CONSUMER_VEHICLE_IDENTITY_MISMATCH');
+  if (!input.consumerSnapshotRef.trim() || !Number.isFinite(Date.parse(input.observedAt))) issues.push('CONSUMER_SNAPSHOT_EVIDENCE_MISSING');
+  const original = resolveReferenceVehiclePhotos(input.product);
+  const output = resolveReferenceVehiclePhotos(input.consumer);
+  if (original.representativeUrl !== output.representativeUrl) issues.push('REPRESENTATIVE_DIFFERENT_EVIDENCE');
+  const color = (value: unknown) => typeof value === 'string' && value.trim() ? value : null;
+  if (color(input.product.ext_color) !== color(input.consumer.ext_color)) issues.push('CONSUMER_COLOR_MISMATCH');
+  const galleryExposed = Array.isArray(input.consumer.image_urls);
+  if (input.requiresGallery && !galleryExposed) issues.push('CONSUMER_GALLERY_NOT_EXPOSED');
+  if (galleryExposed && JSON.stringify(original.imageUrls) !== JSON.stringify(output.imageUrls)) issues.push('CONSUMER_GALLERY_MISMATCH');
+  return {
+    productKeyDigest: createHash('sha256').update(input.productId).digest('hex'),
+    observedAt: input.observedAt,
+    verdict: issues.length ? 'HOLD' as const : 'SPECIFIED_CONSUMER_FIELDS_MATCHED' as const,
+    issues,
+    galleryState: galleryExposed ? 'COMPARED' as const : 'NOT_EXPOSED' as const,
+    visualVehicleIdentity: 'NOT_CHECKED' as const,
+  };
+}
+
 /** Read-only diagnostics. HEAD proves declared accessibility, never visual identity or image bytes. */
 export async function inspectVehicleMediaEvidence(input: {
   productId: string;
