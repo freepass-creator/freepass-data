@@ -35,6 +35,29 @@ const withAccess = (
 };
 
 describe('read-only consumer gateway', () => {
+  it('keeps an unknown sibling in internal AI ANY_TERM and excludes it from ALL_TERMS', async () => {
+    const consumerId = 'internal-ai-test';
+    const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트', deposit_note: '무보증',
+      price: { '36': { rent: 500000, deposit: 0 }, '48': { rent: 450000, deposit: null } } };
+    const { app } = withAccess(new MemoryDataStore(), [{ id: consumerId, projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] }], undefined, {
+      read: async () => { throw new Error('unused'); },
+      readInternalAiReferenceSource: async () => ({ consumerId, observedAt: '2026-10-09T00:00:00Z', products: { mixed: product } }),
+    });
+    const endpoint = `/v1/consumers/${consumerId}/internal-ai-reference`;
+    const any = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36', headers });
+    expect(any.statusCode).toBe(200);
+    expect(any.json().schema).toBe('freepass-data.internal-ai-reference/v1');
+    expect(any.json().data[0].offers[0].priceTerms.map((t: { depositState: string }) => t.depositState)).toEqual(['ZERO', 'UNKNOWN']);
+    expect(any.json().data[0].offers[0].priceTerms[1]).toMatchObject({ termKey: 'source:48', depositAmount: null, deposit: null });
+    const all = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&depositScope=ALL_TERMS', headers });
+    expect(all.statusCode).toBe(200);
+    expect(all.json().data).toEqual([]);
+    expect(all.json().meta.depositFilter).toEqual({ state: 'ZERO', termMonths: 36, scope: 'ALL_TERMS' });
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=61', headers })).statusCode).toBe(400);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&termMonths=48', headers })).statusCode).toBe(400);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO', headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+    await app.close();
+  });
   it('filters zero deposit through authenticated reference query, accepts no matches, rejects invalid periods', async () => {
     const base = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트' };
     const { app } = withAccess(new MemoryDataStore(), [{ id: 'kakao-ops', projectionId: 'erp-public', token, capabilities: ['catalog-reference'] }], undefined, {
