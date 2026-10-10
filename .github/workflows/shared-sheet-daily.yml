@@ -21,6 +21,11 @@ on:
     - cron: '40 20 * * *'
     - cron: '40 21 * * *'
 
+# 예약 4회·수동 실행이 동시에 쓰지 못하게 줄 세운다(취소 없음). audit-refresh 가 기다리는 동안에도 그룹을 잡으므로 다른 쓰기는 그 뒤에 선다.
+# 줄이 길어져 대기 중인 실행이 새 대기 실행으로 바뀌어도(GitHub 규칙) 쓰기 job 의 관문이 «오늘 성공·진행 중 쓰기» 를 다시 세므로 하루 한 번이 유지된다.
+# 일부만 쓰고 실패한 회차를 다음 회차가 다시 써도 중복되지 않는 근거: 차량별 쓰기는 영수증 멱등키(src/application/canonicalize-catalog-candidate.ts:412-416,
+# src/application/reviewed-source-change.ts:1016-1020)와 기대 revision(reviewed-source-change.ts:744-759) 으로 한 건씩 확인되고, 이미 쓴 건 영수증이 있어 noChange 로 센다
+# (src/jobs/ingest-shared-sheet-canonical.ts:228-236). 원본이 바뀌었으면 계획이 SHARED_SHEET_PLAN_STALE 로 멈춘다.
 concurrency:
   group: freepass-data-production-delivery
   cancel-in-progress: false
@@ -55,6 +60,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
+          # continue-on-error 라 실패가 묻히지 않게 — 원인을 경고 주석과 작업 요약에 남긴다(판정은 쓰기 job 의 관문이 한다).
+          warn() { echo "::warning title=audit-refresh::$1"; echo "- ⚠️ audit-refresh: $1" >> "$GITHUB_STEP_SUMMARY"; }
           read_guard() {
             audit_ids="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/erp5-continuous-audit.yml/runs?branch=main&per_page=5" --jq '.workflow_runs[].id')" || return 1
             : > "$RUNNER_TEMP/guard-jobs.jsonl"
@@ -64,18 +71,18 @@ jobs:
             done_at="$(jq -s 'sort_by(.completed_at) | last // {}' "$RUNNER_TEMP/guard-jobs.jsonl" | jq -r '.completed_at // empty')"
             age=-1; if test -n "$done_at"; then age=$(( $(date -u +%s) - $(date -u -d "$done_at" +%s) )); fi
           }
-          read_guard || { echo "audit list unreadable — leaving it to the write job gate"; exit 0; }
-          if test -n "$done_at" && [ "$age" -ge 0 ] && [ "$age" -le 10800 ]; then echo "guard is fresh (age=${age}s)"; exit 0; fi
+          read_guard || { warn "감사 실행 목록을 읽지 못함 — 관문이 직접 판정"; exit 0; }
+          if test -n "$done_at" && [ "$age" -ge 0 ] && [ "$age" -le 10800 ]; then echo "guard is fresh (age=${age}s)"; echo "- audit-refresh: 가드 최신(${age}초 전) — 감사 호출 없음" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
           echo "guard is stale (age=${age}s) — dispatching one continuous audit"
           dispatched_at="$(date -u +%s)"
-          gh workflow run erp5-continuous-audit.yml --ref main -R "$GITHUB_REPOSITORY" || { echo "could not dispatch audit — leaving it to the write job gate"; exit 0; }
+          gh workflow run erp5-continuous-audit.yml --ref main -R "$GITHUB_REPOSITORY" || { warn "감사 workflow 를 띄우지 못함 — 관문이 직접 판정"; exit 0; }
           for _ in $(seq 1 40); do
             sleep 30
             read_guard || continue
             # 띄운 시각 «이후» 에 끝난 가드만 인정(다른 감사의 오래된 결과로 끝내지 않는다). 이미 돌고 있는 감사가 있으면 줄 서서 늦어질 수 있다.
-            if test -n "$done_at" && [ "$(date -u -d "$done_at" +%s)" -ge "$dispatched_at" ]; then echo "fresh guard result arrived"; exit 0; fi
+            if test -n "$done_at" && [ "$(date -u -d "$done_at" +%s)" -ge "$dispatched_at" ]; then echo "fresh guard result arrived"; echo "- audit-refresh: 감사를 띄워 새 가드 결과를 받음" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
           done
-          echo "fresh guard result did not arrive in time — leaving it to the write job gate"
+          warn "새 가드 결과가 20분 안에 오지 않음 — 관문이 직접 판정"
 
   shared-sheet-daily:
     needs: audit-refresh
