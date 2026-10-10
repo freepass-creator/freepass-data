@@ -456,7 +456,7 @@ The endpoint reuses the existing product/commission projector with a distinct id
 
 ## Deposit evidence and visible labels — 2026-09-30 user decision
 
-Numeric `0` without waiver evidence is never `ZERO`. RP012 and pickup products cannot be promoted to zero deposit. Explicit waiver with positive/invalid amounts, conflicting notes or missing supplier/product identity remains `UNKNOWN`. Positive ERP amounts for RP012 used rental are preserved; formula-backed subscription placeholders are not written over with invented values. Positive amounts carrying unresolved rule notes are held, not silently replaced by a formula.
+Numeric `0` without waiver evidence is never `ZERO`. As of 2026-10-10, waiver evidence is exact product text `deposit_note === '무보증'`, exact supplier raw warranty text (`원문.전체.장기보증` or `원문.전체.단기보증`), or a recorded supplier reply in `deposit_free_confirmation` with nonempty `source` and ISO `at`. A standalone `deposit_free` true/`예`, placeholder 0, blank, or `0원` text remains `UNKNOWN` with reason `DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE` when no exact waiver text exists. RP012 and pickup products cannot be promoted to zero deposit. Explicit waiver with positive/invalid amounts, conflicting notes or missing supplier/product identity remains `UNKNOWN`. Positive ERP amounts for RP012 used rental are preserved; formula-backed subscription placeholders are not written over with invented values. When a price row has a positive supplier-entered deposit and a computable `deposit_note` rule, the row amount is `KNOWN` with reason `SOURCE_AMOUNT`; if the computed rule amount differs, consumers may receive `depositRuleDifference: { ruleAmount, ruleCode, differs: true }` as review evidence, but the numeric deposit remains the row amount.
 
 Both reference APIs emit `priceTerms[].depositStatusLabel`: no amount/note input => `미입력`; unresolved 0/formula/conflict => `확인중`; proven waiver => `무보증`; resolved positive amount => `보증금 있음` (display the accompanying amount/rule). `UNKNOWN` has null numeric amount, never 0. Labels are display metadata, not monetary strings to write into numeric source fields. Keep known rule wording; don't label unsupported/nonexistent term columns as missing input.
 
@@ -540,6 +540,15 @@ read 배포 run37897561059/Admin run37897564010은 main2044416으로 성공했�
 2026-10-09T07:18:55.987Z 같은 조건 dry-read: 당시 영수증 values digest는 저장 sourceDigest와 정확일치; 현재 원본 digest는 불일치. 당시539행/현재1000행이며 raw 행렬 비교491행 차이(행 삭제/추가/수식패딩은 별도분류해야 하므로 491개 계약변경으로 확대하지 않는다). 과거 검증자의 UNFORMATTED/BT600 차이뿐인 false alarm이라고 결론내릴 수 없다. 원본, 사람입력, 원장, 요약 변경0. 비공개 dryrun 증거는 TEMP/f04-publisher-binding-dryrun.json. 후속은 동일row/sourceReceiptRow와 실제 source identity로 금액·부가세·신규행·빈패딩을 분류하고 before/after plan을 지휘 판단에 제출하며 apply하지 않는다.
 
 ### 2026-10-09 운영 조회 복구 완료 기록
+
+#### 2026-10-09 무보증 검색 후속 (배포 전)
+
+- 재사용 판정 COMPOSE_OR_EXTEND: 기존 reference builder/gateway/schema/tests 및 `readIancarPublishedDeposit`를 확장한다. 원천 parser/수집 저장 파일은 다른 담당 영역으로 변경하지 않는다. Academy development READY.
+- 운영 e0afae9 인증 Kakao reference HTTP200:485상품/3037기간, 보증금 KNOWN2048/UNKNOWN955/ZERO34. 같은 source 관측 `2026-10-09T07:52:17.440Z`로 상품ID·정확한 가격키 대사: 전체 원천 확인ZERO175기간 중 listable=true·대여료>0은34기간, 현재 응답 누락0. 175와34는 차량 대수가 아니다. ‘무보증’ 표시 있으나 양수금액도 있는2상품은 충돌 UNKNOWN이며 자동0원 정정하지 않는다.
+- 기존 API는 검색 query를 적용하지 않았다. 이번 기존 경로 확장안은 `?depositState=ZERO&termMonths=36&depositScope=ANY_TERM` 또는 `ALL_TERMS`. 기간은 선택사항(1~60), 기본ANY_TERM. ANY_TERM은 해당기간 확인ZERO가 하나라도 있는 상품, ALL_TERMS는 모든 제공기간이 확인ZERO인 상품 중 선택기간도 존재하는 상품이다. 응답은 다른 유료/미확정 기간을 숨기지 않고 모든 priceTerms를 유지한다. 유효한 검색 결과0은 HTTP200/data[]; 잘못된 필터는400, 인증·grant는 유지한다.
+- priceTerms.depositEvidence는 source-product 참조/원래 amount·note/판정 사유를 보존한다. 이안카 발행 증거의 주행거리별 키는 기존 producer 검증기로 확인하고 15분 freshness·alias·금액 대사를 재사용한다. 월/연 주행거리는 contractedMileage.period로 분리하며 월거리의 연거리 환산을 만들지 않는다. raw0을 확인ZERO로 바꾸지 않는다. RP012 중고/재렌트 무보증 금지는 기존 deposit-evidence 정본 그대로 유지한다.
+- 고정 source로 보완안 비교:3037→5293기간(주행거리키2256행 보존), 확인무보증31상품/34기간, 전체 무보증31상품; 동일 source로 만든 응답·검색응답 schemaPASS. 추가행의 오래된 발행 근거는 UNKNOWN 유지. 비공개 TEMP/deposit-reference-source-before.json·deposit-reference-live-before.json·deposit-reference-proposed.json으로 정확키 재현한다.
+- 로컬 check1701PASS/14emulatorSKIP. Claude 실제 호출은 조직 접근 제한FAILED이며 필수 독립 검토 미통과를 유지한다. 원천/원장/수수료 저장/APPLY/IAM 변경0. main 통합·운영 배포·새 검색 소비처 사용은 준비안과 검토 결과를 확인한 뒤 이어간다.
 
 - 승인: Data 지휘 직접 userMessage 01a11f7d-5691-7b80-84f2-f33486a7be72(그럼 다음 전체 작업 한번 가자)를 read_thread로 확인. 서비스 배포/조회만, 운영 금액 APPLY/대량 원장쓰기 권한은 제외.
 - 코드 main e0afae906566e61ace626c438cf416146c9026b8 / PR406. full check1698 PASS/14 emulatorSKIP, exacthead core/canonPASS. 독립 read-only CLI 검토 exit0/답변 중대지적없음(검토자가 실행한 test는 EPERM으로 실패하였으므로 PASS에 포함하지 않음). Claude 조직차단 UNAVAILABLE를 PASS로 세지 않았다.

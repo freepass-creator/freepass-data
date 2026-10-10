@@ -366,14 +366,25 @@ app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {
     }, async () => {
       const committed = await updateOfferPrice(stores.catalog, command);
       if (isLocalMemory) {
+        const currentActive = await stores.projections.getActive('erp-public');
         const delivery = await processOneOutboxEvent(
           stores.catalog,
           stores.outbox,
           stores.projections,
-          { workerId: 'worker:local-console' }
+          {
+            workerId: 'worker:local-console',
+            ...(currentActive ? { expectedActiveReleaseId: currentActive.releaseId } : {})
+          }
         );
         if (delivery !== 'DONE') {
           request.log.warn({ delivery }, 'Local projection refresh did not complete');
+        }
+        const refreshed = await stores.projections.getActive('erp-public');
+        // A retry can legitimately reuse the already-delivered ACTIVE release.
+        // Verify the committed offer revision rather than requiring another activation.
+        if (!refreshed?.data.some(product => product.offers.some(offer =>
+          offer.offerId === committed.entityId && offer.offerRevision >= committed.revision))) {
+          throw new Error('LOCAL_PROJECTION_REFRESH_NOT_ACTIVATED');
         }
       }
       return committed;

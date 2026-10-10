@@ -1,3 +1,5 @@
+process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
+import { createHash } from 'node:crypto';
 import { buildAdminCatalogProjection } from '../src/application/admin-catalog.js';
 import { updateOfferPrice } from '../src/application/catalog.js';
 import { describe, expect, it } from 'vitest';
@@ -35,6 +37,86 @@ const withAccess = (
 };
 
 describe('read-only consumer gateway', () => {
+  it('keeps an unknown sibling in internal AI ANY_TERM and excludes it from ALL_TERMS', async () => {
+    const consumerId = 'internal-ai-test';
+    const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트', deposit_note: '무보증',
+      원문: { 전체: { 장기보증: '무보증' } },
+      price: { '36': { rent: 500000, deposit: 0 }, '48': { rent: 450000, deposit: null } } };
+    const { app } = withAccess(new MemoryDataStore(), [{ id: consumerId, projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] }], undefined, {
+      read: async () => { throw new Error('unused'); },
+      readInternalAiReferenceSource: async () => ({ consumerId, observedAt: '2026-10-09T00:00:00Z', products: { mixed: product } }),
+    });
+    const endpoint = `/v1/consumers/${consumerId}/internal-ai-reference`;
+    const any = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36', headers });
+    expect(any.statusCode).toBe(200);
+    expect(any.json().schema).toBe('freepass-data.internal-ai-reference/v1');
+    expect(any.json().data[0].vehicleMediaEvidence).toMatchObject({verdict:'HOLD',consumerReadback:'NOT_CHECKED'});
+    expect(any.json().data[0].offers[0].priceTerms.map((t: { depositState: string }) => t.depositState)).toEqual(['ZERO', 'UNKNOWN']);
+    expect(any.json().data[0].offers[0].priceTerms[1]).toMatchObject({ termKey: 'source:48', depositAmount: null, deposit: null });
+    const all = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&depositScope=ALL_TERMS', headers });
+    expect(all.statusCode).toBe(200);
+    expect(all.json().data).toEqual([]);
+    expect(all.json().meta.depositFilter).toEqual({ state: 'ZERO', termMonths: 36, scope: 'ALL_TERMS' });
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=61', headers })).statusCode).toBe(400);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&termMonths=48', headers })).statusCode).toBe(400);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&depositScope=ALL_TERMS&depositScope=ALL_TERMS', headers })).statusCode).toBe(400);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO', headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+    await app.close();
+  });
+  it('filters zero deposit through authenticated reference query, accepts no matches, rejects invalid periods', async () => {
+    const base = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트' };
+    const sourceWaiver = { 원문: { 전체: { 장기보증: '무보증' } } };
+    const { app } = withAccess(new MemoryDataStore(), [{ id: 'kakao-ops', projectionId: 'erp-public', token, capabilities: ['catalog-reference'] }], undefined, {
+      read: async () => { throw new Error('unused'); },
+      readKakaoReferenceSource: async () => ({ consumerId: 'kakao-ops', observedAt: '2026-10-09T00:00:00Z', products: {
+        free: { ...base, ...sourceWaiver, deposit_note: '무보증', price: { '36': { rent: 500000, deposit: 0 } } },
+        unknown: { ...base, price: { '36': { rent: 500000, deposit: 0 } } },
+      } }),
+    });
+    const endpoint = '/v1/consumers/kakao-ops/catalog-reference';
+    const complete = await app.inject({url:endpoint,headers});
+    expect(complete.statusCode).toBe(200);
+    expect(complete.json().data).toHaveLength(2);
+    for (const q of ['supplierId=RP013&termMonths=36&monthlyRentMin=500000','depositState=UNKNOWN']) {
+      const found=await app.inject({url:endpoint+'?'+q,headers}); expect(found.statusCode).toBe(200); expect(found.json().data.length).toBeGreaterThan(0);
+    }
+    const missing=await app.inject({url:endpoint+'?supplierId=absent',headers}); expect(missing.statusCode).toBe(200); expect(missing.json().data).toEqual([]);
+    for(const q of ['limit=1','cursor=x','model=A&model=B','monthlyRentMin=bad','mileageKm=1000']) expect((await app.inject({url:endpoint+'?'+q,headers})).statusCode).toBe(400);
+
+    const result = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36&depositScope=ALL_TERMS', headers });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().data.map((p: { sourceProductId: string }) => p.sourceProductId)).toEqual(['free']);
+    expect(result.json().meta.depositFilter).toEqual({ state: 'ZERO', termMonths: 36, scope: 'ALL_TERMS' });
+    const none = await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=48', headers });
+    expect(none.statusCode).toBe(200);
+    expect(none.json().data).toEqual([]);
+    expect(none.json().meta.projectedCount).toBe(0);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=0', headers })).statusCode).toBe(400);
+    expect((await app.inject({ url: endpoint + '?depositState=ZERO&termMonths=36' })).statusCode).toBe(401);
+    await app.close();
+  });
+  it('delivers gallery, representative and color with unverified diagnostics and excludes documents', async () => {
+    const image='https://supplier.example/car.jpg', document='https://supplier.example/document.jpg';
+    const product={listable:true,provider_company_code:'RP013',provider_name:'Supplier Name',car_number:'000\uac000000',price:{'36':{rent:500000,deposit:null}},image_urls:[document,image],doc_images:[document],ext_color:'black',photo_link:'https://supplier.example/tcar'};
+    const {app}=withAccess(new MemoryDataStore(),[{id:'kakao-ops',projectionId:'erp-public',token,capabilities:['catalog-reference']}],undefined,{
+      read:async()=>{throw new Error('unused');},readKakaoReferenceSource:async()=>({consumerId:'kakao-ops',observedAt:'2026-10-09T00:00:00Z',products:{withPhotos:product,withoutPhotos:{...product,image_urls:[],ext_color:null}}})});
+    const result=await app.inject({url:'/v1/consumers/kakao-ops/catalog-reference',headers});
+    expect(result.statusCode).toBe(200);
+    const row=result.json().data.find((p:{sourceProductId:string})=>p.sourceProductId==='withPhotos');
+    expect(row.vehiclePhotos).toMatchObject({imageUrls:[image],representativeUrl:image,sourceLinkCount:1,accessVerification:'NOT_CHECKED'});
+    expect(row.vehicle.exteriorColor).toBe('black');
+    expect(row.vehicleMediaEvidence).toMatchObject({verdict:'HOLD',typedColorVerification:'NOT_CHECKED',visualVehicleIdentity:'NOT_CHECKED',consumerReadback:'NOT_CHECKED',imageBytes:'NOT_CHECKED'});
+    expect(row.vehicleMediaEvidence.issues).toContain('SOURCE_EVIDENCE_MISSING');
+    expect(result.json().meta.dataDigest).toBe(createHash('sha256').update(JSON.stringify(result.json().data)).digest('hex'));
+    expect(row.vehicleMediaEvidence.checks).toEqual([expect.objectContaining({state:'DOCUMENT_IMAGE_EXCLUDED',status:null}),expect.objectContaining({state:'HEAD_NOT_CHECKED',status:null})]);
+    expect(result.json().data).toHaveLength(2);
+    const lookup=await app.inject({url:'/v1/consumers/kakao-ops/catalog-reference?'+new URLSearchParams({supplierName:'SupplierName',plateNumber:'000 \uac00-0000'}),headers});
+    expect(lookup.statusCode).toBe(200);expect(lookup.json().data).toHaveLength(2);expect(lookup.json().meta.queryResolution.state).toBe('HOLD');
+    expect((await app.inject({url:'/v1/consumers/kakao-ops/catalog-reference?plateNumber=3456',headers})).statusCode).toBe(400);
+    expect(result.json().data.find((p:{sourceProductId:string})=>p.sourceProductId==='withoutPhotos').vehicle.exteriorColor).toBeNull();
+    expect(product.photo_link).toBe('https://supplier.example/tcar');
+    await app.close();
+  });
   it('authenticates and audits Iancar photos without exposing provider references or credentials', async () => {
     let reads = 0;
     const reader = { read: async () => { throw new Error('unused'); }, readIancarPhoto: async (_consumer: string, product: string, index?: number) => {
@@ -536,5 +618,101 @@ it('serves Admin stored fees and coverage with an isolated grant, and no public 
   expect(publicResponse.statusCode).toBe(200);
   expect(publicResponse.body).not.toContain('supplierBillingFee');
   expect(publicResponse.body).not.toContain('economicsCoverage');
+  await app.close();
+});
+
+it('serves Admin contract fee links in request order with one catalog read pass', async () => {
+  const store = new MemoryDataStore();
+  await seedDemoCatalog(store);
+  const adminBinding: ConsumerBinding = {
+    id: 'freepass-admin-catalog',
+    projectionId: 'admin-catalog',
+    token: token + '-admin',
+    capabilities: ['contract-fee-link-read'],
+  };
+  const calls = { assets: 0, products: 0, offers: 0, writes: 0 };
+  const feeStore = {
+    listVehicleAssets: async () => { calls.assets++; return store.listVehicleAssets(); },
+    listProducts: async () => { calls.products++; return store.listProducts(); },
+    listOffers: async () => { calls.offers++; return store.listOffers(); },
+    transact: async () => { calls.writes++; throw new Error('write must not be called'); },
+  } as any;
+  const { app, logs } = withAccess(store, [binding, adminBinding], feeStore);
+  const endpoint = '/v1/consumers/freepass-admin-catalog/contract-fee-links';
+  const payload = { items: [
+    { key: 'row-2', assetId: 'va_gv70_demo', supplierId: 'supplier_demo', termMonths: 36, monthlyRent: 690000, deposit: 3000000 },
+    { key: 'row-1', plate: '00가0000', supplierId: 'supplier_demo', termMonths: 60, monthlyRent: 690000 },
+  ] };
+
+  const response = await app.inject({
+    method: 'POST',
+    url: endpoint,
+    headers: { authorization: `Bearer ${token}-admin` },
+    payload,
+  });
+
+  expect(response.statusCode).toBe(200);
+  expect(response.json().contract).toBe('contract-fee-links/v1');
+  expect(response.json().results.map((item: { key: string }) => item.key)).toEqual(['row-2', 'row-1']);
+  expect(response.json().results[0]).toMatchObject({ key: 'row-2', status: 'LINKED', offerId: 'offer_gv70_demo' });
+  expect(response.json().results[0].fees.supplierBillingFee.status).toBe('CONFIRMED');
+  expect(response.json().results[1]).toMatchObject({ key: 'row-1', status: 'FAILED', failure: 'NO_TERM' });
+  expect(calls).toEqual({ assets: 1, products: 1, offers: 1, writes: 0 });
+  expect(logs.events.at(-1)).toMatchObject({
+    mode: 'READ',
+    phase: 'SUCCEEDED',
+    operation: 'READ_CONTRACT_FEE_LINKS',
+    result: { count: 2 },
+  });
+  await app.close();
+});
+
+it('rejects invalid contract fee link requests before reading catalog data', async () => {
+  const adminBinding: ConsumerBinding = {
+    id: 'freepass-admin-catalog',
+    projectionId: 'admin-catalog',
+    token: token + '-admin',
+    capabilities: ['contract-fee-link-read'],
+  };
+  let reads = 0;
+  const feeStore = {
+    listVehicleAssets: async () => { reads++; return []; },
+    listProducts: async () => { reads++; return []; },
+    listOffers: async () => { reads++; return []; },
+  } as any;
+  const { app } = withAccess(new MemoryDataStore(), [adminBinding], feeStore);
+  const endpoint = '/v1/consumers/freepass-admin-catalog/contract-fee-links';
+  const auth = { authorization: `Bearer ${token}-admin` };
+  const validItem = { key: 'row', supplierId: 'supplier_demo', termMonths: 36, monthlyRent: 690000 };
+
+  expect((await app.inject({ method: 'POST', url: endpoint, headers: auth, payload: { items: Array.from({ length: 501 }, (_, i) => ({ ...validItem, key: `row-${i}` })) } })).statusCode).toBe(400);
+  expect((await app.inject({ method: 'POST', url: endpoint, headers: auth, payload: { items: [{ ...validItem, key: 'dup' }, { ...validItem, key: 'dup' }] } })).statusCode).toBe(400);
+  expect((await app.inject({ method: 'POST', url: endpoint, headers: auth, payload: { items: [{ ...validItem, termMonths: 0 }] } })).statusCode).toBe(400);
+  expect(reads).toBe(0);
+  await app.close();
+});
+
+it('keeps contract fee links internal to Admin identity and rejects bad auth', async () => {
+  const adminBinding: ConsumerBinding = {
+    id: 'freepass-admin-catalog',
+    projectionId: 'admin-catalog',
+    token: token + '-admin',
+    capabilities: ['contract-fee-link-read'],
+  };
+  let reads = 0;
+  const feeStore = {
+    listVehicleAssets: async () => { reads++; return []; },
+    listProducts: async () => { reads++; return []; },
+    listOffers: async () => { reads++; return []; },
+  } as any;
+  const { app } = withAccess(new MemoryDataStore(), [binding, adminBinding], feeStore);
+  const adminUrl = '/v1/consumers/freepass-admin-catalog/contract-fee-links';
+  const erpUrl = '/v1/consumers/erp-com/contract-fee-links';
+  const payload = { items: [{ key: 'row', supplierId: 'supplier_demo', termMonths: 36, monthlyRent: 690000 }] };
+
+  expect((await app.inject({ method: 'POST', url: adminUrl, payload })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'POST', url: adminUrl, headers: { authorization: 'Bearer wrong' }, payload })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'POST', url: erpUrl, headers, payload })).statusCode).toBe(403);
+  expect(reads).toBe(0);
   await app.close();
 });

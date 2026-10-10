@@ -85,6 +85,48 @@ describe('shared sheet capture reader', () => {
     await expect(readSharedSheetCapture(ID, { accessToken: async () => 'tok', now: () => T,
       fetcher: (async () => new Response('', { status: 403 })) as unknown as typeof fetch })).rejects.toThrow('SHARED_SHEET_HTTP_403');
   });
+
+  it.each([429, 500, 502, 503, 504])('rejects collector HTTP %i instead of returning an empty inventory', async status => {
+    let calls = 0;
+    await expect(readSheetsBatchGet(ID, sharedSheetCaptureRanges(), {
+      accessToken: async () => 'synthetic-token',
+      fetcher: (async () => {
+        calls++;
+        return new Response('private supplier response must not leak', { status });
+      }) as typeof fetch,
+    })).rejects.toMatchObject({ message: `SHARED_SHEET_HTTP_${status}` });
+    expect(calls).toBe(1);
+  });
+
+  it('rejects transport and malformed responses instead of fabricating blank cells', async () => {
+    for (const [fetcher, code] of [
+      [async () => { throw new Error('private transport detail'); }, 'SHARED_SHEET_READ_UNKNOWN'],
+      [async () => new Response('not JSON'), 'SHARED_SHEET_RESPONSE_INVALID'],
+    ] as const) {
+      await expect(readSheetsBatchGet(ID, sharedSheetCaptureRanges(), {
+        accessToken: async () => 'synthetic-token', fetcher: fetcher as typeof fetch,
+      })).rejects.toMatchObject({ message: code });
+    }
+  });
+
+  it('preserves a successful blank rent cell without fabricating a zero-priced period', () => {
+    const ch = sharedSheetChannels[0]!;
+    const row = Array(sharedSheetHeaders.length).fill('');
+    row[0] = ch.companyName; row[4] = '12가3456';
+    row[sharedSheetHeaders.indexOf('단기보증')] = '';
+    row[sharedSheetHeaders.indexOf('12개월')] = '';
+    row[sharedSheetHeaders.indexOf('24개월')] = '100';
+    row[sharedSheetHeaders.indexOf('장기보증')] = '200';
+    const p = prepareRawSourceBatch(buildSharedSheetBatch(captureFromBatchGet(ID, batch({ [ch.tab]: [row] }), T)));
+    const n = normalizeSharedSheet(p.rawRecords[0]!);
+    const values = p.rawRecords[0]!.payload.values;
+    expect(Array.isArray(values)).toBe(true);
+    if (!Array.isArray(values)) throw new Error('TEST_RAW_VALUES_MISSING');
+    expect(values[sharedSheetHeaders.indexOf('12개월')]).toBe('');
+    expect(n.record.candidate.priceTerms.some(t => t.termKey === 'm12')).toBe(false);
+    expect(n.record.candidate.priceTerms.find(t => t.termKey === 'm24')?.depositState).toBe('KNOWN');
+    expect(n.record.candidate.priceTerms.find(t => t.termKey === 'm24')?.deposit?.amount).toBe(200);
+  });
 });
 
 describe('shared sheet capture keeps the year of date cells', () => {

@@ -66,7 +66,9 @@
     "serve:supplier:relay": "tsx src/jobs/serve-supplier-relay.ts",
     "check:supplier-sheet-canon": "node scripts/supplier-input-sheet.mjs --check-canon",
     "plan:sheet-blank-fill": "tsx src/jobs/plan-sheet-blank-fill.ts",
-    "export:sheet-blank-fill-input": "tsx src/jobs/export-sheet-blank-fill-input.ts"
+    "export:sheet-blank-fill-input": "tsx src/jobs/export-sheet-blank-fill-input.ts",
+    "ingest:kakao-source": "tsx src/jobs/ingest-kakao-source.ts",
+    "audit:settlement-id-links": "tsx src/jobs/audit-settlement-id-links.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",
@@ -80,5 +82,9 @@
     "tsx": "^4.0.0",
     "typescript": "^5.0.0",
     "vitest": "^3.0.0"
+  },
+  "overrides": {
+    "tinypool": "2.1.2",
+    "source-map-js": "1.2.2"
   }
 }

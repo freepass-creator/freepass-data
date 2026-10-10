@@ -4,6 +4,7 @@ import { resolveTargetProject } from './firebase-target.js';
 import type { AicaGridBinding, AicaGridObservation, SupplierGridCell } from '../domain/source-intake.js';
 
 export const AICA_GRID_FIELDS = 'spreadsheetId,sheets(properties(sheetId),data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue,formattedValue,hyperlink,userEnteredFormat(textFormat(link(uri))),textFormatRuns(startIndex,format(link(uri)))))))';
+const metadataFields = 'spreadsheetId,sheets(properties(sheetId,title,hidden,gridProperties(rowCount,columnCount)))';
 type GridResponse = { spreadsheetId?: string; sheets?: Array<{ properties?: { sheetId?: number };
   data?: Array<{ startRow?: number; startColumn?: number; rowData?: Array<{ values?: SupplierGridCell[] }> }> }> };
 
@@ -23,6 +24,8 @@ async function dataGoogleAccessToken(): Promise<string> {
 
 export function aicaSheetsGridReader(ports: {
   accessToken?: () => Promise<string>; fetcher?: typeof fetch; now?: () => string;
+  /** Explicit opt-in: proves only the bound whole tab, never all supplier inventory. */
+  verifyBoundTab?: boolean;
 } = {}): (binding: AicaGridBinding) => Promise<AicaGridObservation> {
   return async binding => {
     // Explicit header-first bounded A1 range. A different slice must get its own reviewed binding.
@@ -40,14 +43,35 @@ export function aicaSheetsGridReader(ports: {
     url.searchParams.set('fields', AICA_GRID_FIELDS);
     const token = await (ports.accessToken ?? dataGoogleAccessToken)();
     if (!token || /\s/.test(token)) throw new Error('DATA_GOOGLE_AUTH_UNAVAILABLE');
-    let response: Response;
-    try {
-      response = await (ports.fetcher ?? fetch)(url, { method: 'GET', redirect: 'error',
-        headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
-    } catch { throw new Error('AICA_GRID_READ_UNKNOWN'); }
-    if (!response.ok) throw new Error(`AICA_GRID_HTTP_${response.status}`);
-    let raw: GridResponse;
-    try { raw = await response.json() as GridResponse; } catch { throw new Error('AICA_GRID_RESPONSE_INVALID'); }
+    const observedAt = (ports.now ?? (() => new Date().toISOString()))();
+    const get = async (target: URL): Promise<unknown> => {
+      let response: Response;
+      try {
+        response = await (ports.fetcher ?? fetch)(target, { method: 'GET', redirect: 'error',
+          headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
+      } catch { throw new Error('AICA_GRID_READ_UNKNOWN'); }
+      if (!response.ok) throw new Error(`AICA_GRID_HTTP_${response.status}`);
+      try { return await response.json(); } catch { throw new Error('AICA_GRID_RESPONSE_INVALID'); }
+    };
+    const metadataUrl = new URL(url);
+    metadataUrl.search = '';
+    metadataUrl.searchParams.set('fields', metadataFields);
+    const readBoundMetadata = async () => {
+      const value = await get(metadataUrl) as { spreadsheetId?: string; sheets?: Array<{ properties?: {
+        sheetId?: number; title?: string; hidden?: boolean; gridProperties?: { rowCount?: number; columnCount?: number };
+      } }> };
+      const matches = value?.sheets?.filter(item => item.properties?.sheetId === binding.tabId);
+      const p = matches?.[0]?.properties;
+      const title = (range[1] ?? range[2]!).replace(/''/g, "'");
+      if (value?.spreadsheetId !== binding.sheetId || matches?.length !== 1 || !p || p.title !== title
+        || p.hidden === true || !Number.isSafeInteger(p.gridProperties?.rowCount)
+        || !Number.isSafeInteger(p.gridProperties?.columnCount)
+        || p.gridProperties!.rowCount !== rowLimit || p.gridProperties!.columnCount !== columns)
+        throw new Error('AICA_BOUND_TAB_COVERAGE_UNVERIFIED');
+      return p;
+    };
+    const before = ports.verifyBoundTab ? await readBoundMetadata() : null;
+    const raw = await get(url) as GridResponse;
     const sheet = raw?.sheets?.[0], grid = sheet?.data?.[0];
     if (raw?.spreadsheetId !== binding.sheetId || raw.sheets?.length !== 1 || sheet?.properties?.sheetId !== binding.tabId
       || sheet.data?.length !== 1 || !grid || (grid.startRow ?? 0) !== 0 || (grid.startColumn ?? 0) !== 0
@@ -58,9 +82,17 @@ export function aicaSheetsGridReader(ports: {
     const headers = rows.shift()!;
     if (headers.length <= binding.plateColumn) throw new Error('AICA_GRID_HEADER_MISSING');
     const revision = createHash('sha256').update(JSON.stringify(raw)).digest('hex');
+    if (ports.verifyBoundTab) {
+      // A second read is evidence comparison, not a retry after an ambiguous failure.
+      const repeated = await get(url);
+      const after = await readBoundMetadata();
+      if (JSON.stringify(before) !== JSON.stringify(after)
+        || revision !== createHash('sha256').update(JSON.stringify(repeated)).digest('hex'))
+        throw new Error('AICA_GRID_CHANGED_DURING_CAPTURE');
+    }
     return { ...binding, firstDataRow: 1, headers, rows, revision,
-      observedAt: (ports.now ?? (() => new Date().toISOString()))(),
-      // API read success is not proof of full inventory, supplier freshness or trailing blanks.
-      complete: false, expectedRows: null };
+      observedAt,
+      // Optional proof is bounded-tab coverage only: never supplier modification time or all inventory.
+      complete: ports.verifyBoundTab === true, expectedRows: ports.verifyBoundTab ? rows.length : null };
   };
 }

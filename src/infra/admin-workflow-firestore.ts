@@ -10,6 +10,7 @@ import {
   adminWorkflowSemanticOwners,
   assertAdminWorkflowCommitRequest,
   droppedTopLevelFields,
+  changedSettlementAuditKeys,
   assertAdminWorkflowReadSpec,
   type AdminWorkflowCommitReceipt,
   type AdminWorkflowCommitRequest,
@@ -131,6 +132,21 @@ export function adminWorkflowStore(db: Firestore): AdminWorkflowStore {
         for (const expectation of request.expectations) {
           const current = await readWith(db, expectation.spec, tx);
           if (current.digest !== expectation.digest) throw new AdminWorkflowConflictError();
+        }
+
+        // Track newly appended keys too, so later mutations in this command cannot rewrite them.
+        const auditProjected: Record<string, Record<string, unknown>> = Object.create(null);
+        for (const mutation of request.mutations) {
+          if (mutation.resource !== 'settlementEvents') continue;
+          if (!Object.hasOwn(auditProjected, mutation.id)) {
+            const stored = await tx.get(db.collection(collectionName(mutation.resource)).doc(mutation.id));
+            auditProjected[mutation.id] = stored.exists ? stored.data() as Record<string, unknown> : {};
+          }
+          const prior = auditProjected[mutation.id]!;
+          const next = mutation.op === 'set' && mutation.merge !== true
+            ? mutation.data : { ...prior, ...mutation.data };
+          if (changedSettlementAuditKeys(prior, next).length) throw new AdminWorkflowConflictError();
+          auditProjected[mutation.id] = next;
         }
 
         // All reads must finish before the first write in a Firestore transaction.

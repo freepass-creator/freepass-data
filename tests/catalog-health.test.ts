@@ -1,9 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { buildErpPublicProjection, updateOfferPrice } from '../src/application/catalog.js';
+import { assertCatalogSourceFreshness, buildErpPublicProjection, updateOfferPrice } from '../src/application/catalog.js';
 import { readCatalogDataHealth } from '../src/application/catalog-health.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { stableRecordSetDigest } from '../src/shared/stable-digest.js';
+
+async function approvedActivationGuard(store: MemoryDataStore, now: string) {
+  const event = [...store.outbox.values()].find((item) => item.status === 'PENDING');
+  if (!event) throw new Error('TEST_OUTBOX_EVENT_REQUIRED');
+  const lease = {
+    leaseOwner: 'test-approved-activation',
+    leaseUntil: new Date(Date.parse(now) + 30_000).toISOString()
+  };
+  const claimed = await store.claimNext({ workerId: lease.leaseOwner, now, leaseUntil: lease.leaseUntil, eventId: event.eventId });
+  if (!claimed) throw new Error('TEST_OUTBOX_CLAIM_REQUIRED');
+  return {
+    now: () => now,
+    sources: await assertCatalogSourceFreshness(store, now),
+    claim: { eventId: event.eventId, lease },
+    delivery: {
+      eventId: event.eventId,
+      eventType: event.eventType,
+      targetRevision: event.targetRevision,
+      processedAt: now
+    }
+  };
+}
 
 describe('Catalog Data Health v1', () => {
   it('reports a valid release as HEALTHY when all projection digests match', async () => {
@@ -125,7 +147,8 @@ describe('Catalog Data Health v1', () => {
     const second = await buildErpPublicProjection(
       store,
       store,
-      '2026-09-21T09:31:00.000Z'
+      '2026-09-21T09:31:00.000Z',
+      { publishGuard: await approvedActivationGuard(store, '2026-09-21T09:31:00.000Z') }
     );
 
     let activeReadCount = 0;

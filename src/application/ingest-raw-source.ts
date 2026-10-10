@@ -55,7 +55,8 @@ export async function ingestRawSourceBatch(
   store: SourceIngestionStore,
   input: SourceIntakeBatch,
   now = new Date().toISOString(),
-  normalize?: (raw: RawRecord) => { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[] }
+  normalize?: (raw: RawRecord) => { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[] },
+  evidenceLineage?: (raw: RawRecord) => FieldLineageRecord[]
 ): Promise<SourceRun> {
   if (!Number.isFinite(Date.parse(now))) {
     throw new Error('INVALID_SOURCE_INTAKE_COMPLETED_AT');
@@ -137,6 +138,13 @@ export async function ingestRawSourceBatch(
         raw.firstRunId = prior && Date.parse(prior) <= Date.parse(raw.observedAt) ? firstRun.get(raw.sourceRecordId) ?? null : raw.runId;
       }
       await store.appendRaw(raw);
+      // Evidence extraction can record cell provenance without inventing a CatalogCandidate.
+      for (const item of evidenceLineage?.(structuredClone(raw)) ?? []) {
+        if (item.runId !== raw.runId || item.sourceRecordId !== raw.sourceRecordId
+          || item.sourceFingerprint !== raw.sourceFingerprint) throw new Error('SOURCE_EVIDENCE_LINEAGE_BINDING_MISMATCH');
+        await store.appendLineage(item);
+        lineageCount++;
+      }
       if (normalize) {
         const normalized = normalize(structuredClone(raw));
         await store.appendCandidate(normalized.record);

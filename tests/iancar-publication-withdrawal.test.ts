@@ -244,3 +244,108 @@ it('re-running an illustration reaffirms its state without rewriting images or t
     expect(patch.iancar_one_photo_state).toBe(image === illustration.url ? 'API_EMPTY_MODEL_ILLUSTRATION' : 'API_EMPTY_ORIGINAL_PRESERVED');
   }
 });
+
+// Synthetic fixtures only; no database, emulator, credentials or network.
+function prepareLockIsolation(lock: Record<string, unknown>, count = 5) {
+  const base = syncInput();
+  const products = Array.from({ length: count }, (_, index) => ({ ...base.products[0]!,
+    sourceVehicleId: `fixture-${index}`, car_number: `123\uac00${1000 + index}` }));
+  const input = { ...base, products, privateEvidenceBucket: 'freepasserp5-data-audit-evidence',
+    sourceEvidence: JSON.stringify({ ...JSON.parse(base.sourceEvidence), total: count,
+      records: products.map(p => ({ vehicleId: p.sourceVehicleId, payload: { plate_number: p.car_number } })) }) };
+  const before = snapshot(...products.map((p, index) => doc(`fixture-${index}`, {
+    car_number: p.car_number, iancar_one_vehicle_id: p.sourceVehicleId,
+    price: { preserved: true }, iancar_phase_one: { old: true }, ...(index === 0 ? lock : {}) })));
+  mocks.get.mockReset().mockResolvedValue(before);
+  mocks.transaction.mockImplementation(async cb => cb({ get: async () => before, update: mocks.update, create: vi.fn() }));
+  mocks.getAll.mockImplementation(async (...refs) => refs.map(ref => ({ data: () => ({
+    ...before.docs.find(d => d.ref.path === ref.path)!.data(),
+    ...mocks.update.mock.calls.find(call => call[0].path === ref.path)?.[1] }) })));
+  mocks.readFile.mockImplementation(async () => mocks.writeFile.mock.calls.at(-1)![1]);
+  mocks.download.mockImplementation(async () => [Buffer.from(mocks.save.mock.calls.at(-1)![0])]);
+  return { input, before };
+}
+it.each([
+  [{ locked_by_contract: true }, 'CONTRACT_LOCK'],
+  [{ _deleted: true }, 'DELETION_LOCK'],
+  [{ deletedAt: 'synthetic-deletion-marker' }, 'DELETION_LOCK'],
+  [{ locked_by_contract: true, _deleted: true }, 'CONTRACT_AND_DELETION_LOCK'],
+] as const)('isolates a locked product and preserves its entire preimage: %j', async (lock, reason) => {
+  const { input, before } = prepareLockIsolation(lock);
+  const preserved = structuredClone(before.docs[0]!.data());
+  const plan = await publishIancarPhaseOne(input);
+  expect(plan).toMatchObject({ matched: 4, open: 4, withPhotos: 4, photoCount: 4, skippedCount: 1, skippedRatio: 0.2,
+    skippedByReason: { [reason]: 1 }, warnings: ['IANCAR_PUBLICATION_LOCKED_PRODUCTS_SKIPPED'] });
+  expect(Object.values(plan.skippedByReason).reduce((a, b) => a + b, 0)).toBe(1);
+  const result = await publishIancarPhaseOne({ ...input, apply: true, expectedPlanDigest: plan.planDigest });
+  expect(result).toMatchObject({ status: 'PHASE_ONE_ATOM_READBACK_VERIFIED', writeExecuted: true, skippedCount: 1 });
+  expect(mocks.update).toHaveBeenCalledTimes(4);
+  expect(mocks.update.mock.calls.every(([ref]) => ref.path !== before.docs[0]!.ref.path)).toBe(true);
+  expect(before.docs[0]!.data()).toEqual(preserved);
+  expect(JSON.parse(mocks.writeFile.mock.calls[0]![1]).documents).toHaveLength(4);
+});
+it('fails before backup or writes when skipped share exceeds the single threshold', async () => {
+  const { input } = prepareLockIsolation({ locked_by_contract: true }, 4);
+  await expect(publishIancarPhaseOne({ ...input, apply: true })).rejects.toMatchObject({
+    message: 'IANCAR_PUBLICATION_LOCK_SKIP_RATIO_EXCEEDED', skippedCount: 1, skippedRatio: 0.25, writeExecuted: false });
+  expect(mocks.writeFile).not.toHaveBeenCalled(); expect(mocks.transaction).not.toHaveBeenCalled();
+});
+it.each(['identity', 'plate', 'source', 'duplicate', 'stale'] as const)(
+  'keeps structural %s failures fatal even for locked products', async kind => {
+    const { input, before } = prepareLockIsolation({ locked_by_contract: true });
+    // Disable only the mirror envelope in this adapter test to reach each publication guard directly.
+    input.mirrorInventory = false;
+    const errors = { identity: 'IDENTITY_INVALID', plate: 'PLATE_COLLISION', source: 'SOURCE_ID_COLLISION',
+      duplicate: 'DUPLICATE_OR_OVERSIZED_INPUT', stale: 'SOURCE_STALE_OR_INVALID' };
+    if (kind === 'identity') input.products[0]!.car_number = 'invalid';
+    if (kind === 'plate') mocks.get.mockResolvedValue(snapshot(...before.docs,
+      doc('collision', { car_number: input.products[0]!.car_number })));
+    if (kind === 'source') mocks.get.mockResolvedValue(snapshot(doc('fixture-0', {
+      ...before.docs[0]!.data(), iancar_one_vehicle_id: 'different-source' }), ...before.docs.slice(1)));
+    if (kind === 'duplicate') input.products[1]!.sourceVehicleId = input.products[0]!.sourceVehicleId;
+    if (kind === 'stale') input.sourceSyncedAt = new Date(Date.now() - 900_001).toISOString();
+    await expect(publishIancarPhaseOne({ ...input, apply: true })).rejects.toThrow(errors[kind]);
+    expect(mocks.writeFile).not.toHaveBeenCalled(); expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+it('fences a newly acquired lock between planning and the transaction', async () => {
+  const { input, before } = prepareLockIsolation({ locked_by_contract: true });
+  const plan = await publishIancarPhaseOne(input);
+  const changed = snapshot(...before.docs.map((d, index) => index === 1
+    ? { ...d, updateTime: { ...d.updateTime, isEqual: () => false } } : d));
+  // The original snapshot compares its revision with the current snapshot.
+  before.docs[1]!.updateTime.isEqual = () => false;
+  mocks.transaction.mockImplementation(async cb => cb({ get: async () => changed, update: mocks.update }));
+  await expect(publishIancarPhaseOne({ ...input, apply: true, expectedPlanDigest: plan.planDigest })).rejects.toThrow('REVISION_CHANGED');
+  expect(mocks.update).not.toHaveBeenCalled();
+});
+
+it('collector finishes successfully and reports lock warnings without changing its exit code', async () => {
+  const argv = process.argv; const exitCode = process.exitCode;
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const exit = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('unexpected exit'); });
+  const warnings = ['IANCAR_PUBLICATION_LOCKED_PRODUCTS_SKIPPED'];
+  vi.stubEnv('EANCAR_ONE_SYNC_APPROVED', 'true');
+  vi.doMock('../src/adapters/iancar-one-api.js', () => ({
+    iancarOneApiConfigFromEnv: () => ({ apiKey: 'synthetic-only' }),
+    collectIancarOnePhaseOneFacts: async () => ({ readyForRawIngest: true, issues: [], total: 5 }),
+    buildIancarOneSourceBatch: () => ({ source: { sourceId: 'synthetic' } }),
+    projectIancarOnePhaseOne: () => ({ vehicles: [] }),
+  }));
+  vi.doMock('../src/domain/source-intake.js', () => ({ inspectSupplierSourceBatch: () => ({}) }));
+  vi.doMock('../src/jobs/data-access-runtime.js', () => ({ runIancarPhaseOnePublication: async () => ({
+    status: 'PHASE_ONE_ATOM_READBACK_VERIFIED', skippedCount: 1, skippedByReason: { CONTRACT_LOCK: 1 },
+    skippedRatio: 0.2, maxSkippedRatio: 0.2, warnings,
+  }) }));
+  try {
+    process.argv = ['node', 'synthetic-collector', '--sync', '--apply-sync']; process.exitCode = 0;
+    await import('../src/jobs/collect-iancar-one-api.js');
+    expect(process.exitCode).toBe(0); expect(exit).not.toHaveBeenCalled();
+    expect(JSON.parse(log.mock.calls.at(-1)![0])).toMatchObject({
+      publication: { skippedCount: 1, skippedByReason: { CONTRACT_LOCK: 1 }, warnings } });
+  } finally {
+    process.argv = argv; process.exitCode = exitCode;
+    log.mockRestore(); exit.mockRestore(); vi.unstubAllEnvs();
+    vi.doUnmock('../src/adapters/iancar-one-api.js'); vi.doUnmock('../src/domain/source-intake.js');
+    vi.doUnmock('../src/jobs/data-access-runtime.js');
+  }
+});

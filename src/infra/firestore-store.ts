@@ -10,9 +10,10 @@ import type {
   Product, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
-  CatalogStore, CatalogTransaction, OutboxStore, ProjectionStore,
+  CatalogStore, CatalogTransaction, OutboxStore, OutboxLease, ProjectionStore, ProjectionPublishGuard, FirstActivationPreimage,
   SheetDeliveryEvidenceStore
 } from '../ports/catalog-store.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import type {
   CanonicalSourceBinding,
   CanonicalizationReceipt
@@ -389,6 +390,76 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
   async listOffers() { return this.all<Offer>(C.offers); }
   async listPolicies() { return this.all<Policy>(C.policies); }
 
+  /** Read-only backup. Private persistence/readback and operating approval remain external gates. */
+  async captureFirstActivationPreimage(eventId: string): Promise<FirstActivationPreimage> {
+    if (!/^[A-Za-z0-9:_-]{1,200}$/.test(eventId)) throw new Error('RECOVERY_EVENT_INVALID');
+    return this.db.runTransaction(async tx => {
+      const [event, active, receipt] = await Promise.all([
+        tx.get(this.db.collection(C.outbox).doc(eventId)),
+        tx.get(this.db.collection(C.activeReleases).doc('erp-public')),
+        tx.get(this.db.collection(C.projectionDeliveryReceipts).doc(encodeURIComponent(eventId)))
+      ]);
+      const existingPublication = await Promise.all([C.releases, C.releaseManifests, C.projectionLineage, C.projectionDeliveryReceipts]
+        .map(collection => tx.get(this.db.collection(collection).where('projectionId', '==', 'erp-public').limit(1))));
+      if (existingPublication.some(snapshot => !snapshot.empty)) throw new Error('RECOVERY_PRIOR_PUBLICATION_EXISTS');
+      if (!event.exists || event.get('eventId') !== eventId || event.get('status') !== 'PENDING' || active.exists || receipt.exists)
+        throw new Error('RECOVERY_FIRST_ACTIVATION_REQUIRED');
+      const backup = { schema: 'first-activation-preimage/v1' as const, eventId,
+        event: event.data() as OutboxEvent, eventUpdateTime: event.updateTime!.toDate().toISOString(), active: null, receipt: null, publicationDocumentsAbsent: true as const };
+      return { ...backup, digest: stableDigest(backup) };
+    });
+  }
+
+  /** Builds exact document preconditions; never writes or deletes operational data. */
+  async planFirstActivationRecovery(backup: FirstActivationPreimage, approvedBackupDigest: string) {
+    const { digest, ...body } = backup;
+    if (backup.schema !== 'first-activation-preimage/v1' || stableDigest(body) !== digest || digest !== approvedBackupDigest ||
+        backup.publicationDocumentsAbsent !== true ||
+        backup.active !== null || backup.receipt !== null || backup.eventId !== backup.event.eventId || backup.event.status !== 'PENDING')
+      throw new Error('RECOVERY_PREIMAGE_INVALID');
+    return this.db.runTransaction(async tx => {
+      const eventRef = this.db.collection(C.outbox).doc(backup.eventId);
+      const activeRef = this.db.collection(C.activeReleases).doc('erp-public');
+      const receiptRef = this.db.collection(C.projectionDeliveryReceipts).doc(encodeURIComponent(backup.eventId));
+      const [event, active, receipt] = await Promise.all([tx.get(eventRef), tx.get(activeRef), tx.get(receiptRef)]);
+      const releaseId = receipt.get('releaseId') as string | undefined;
+      if (!releaseId || !/^rel_[A-Za-z0-9_-]+$/.test(releaseId) || active.get('releaseId') !== releaseId ||
+          receipt.get('eventId') !== backup.eventId || receipt.get('eventType') !== backup.event.eventType ||
+          receipt.get('targetRevision') !== backup.event.targetRevision || receipt.get('projectionId') !== 'erp-public' ||
+          event.get('eventId') !== backup.eventId || !['PROCESSING', 'DONE'].includes(event.get('status')))
+        throw new Error('RECOVERY_SCOPE_CHANGED');
+      // The event's business payload must still be the backed-up event.
+      const control = new Set(['status', 'leaseOwner', 'leaseUntil', 'attempts', 'nextAttemptAt', 'lastError']);
+      const business = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(value).filter(([key]) => !control.has(key)));
+      if (stableDigest(business(event.data()!)) !== stableDigest(business(backup.event as unknown as Record<string, unknown>)))
+        throw new Error('RECOVERY_EVENT_CHANGED');
+      const releaseRef = this.db.collection(C.releases).doc(releaseId);
+      const [release, manifest, lineage] = await Promise.all([
+        tx.get(releaseRef), tx.get(this.db.collection(C.releaseManifests).doc(releaseId)),
+        tx.get(this.db.collection(C.projectionLineage).where('releaseId', '==', releaseId))
+      ]);
+      if (!release.exists || release.get('status') !== 'ACTIVE' || release.get('projectionId') !== 'erp-public' ||
+          receipt.get('inputDigest') !== release.get('inputDigest') || receipt.get('dataDigest') !== release.get('dataDigest'))
+        throw new Error('RECOVERY_RELEASE_CHANGED');
+      if (!manifest.exists) throw new Error('RECOVERY_MANIFEST_MISSING');
+      assertProjectionReleaseIntegrity(release.data() as ProjectionRelease<ProjectionProduct>,
+        manifest.data() as ProjectionReleaseManifest, lineage.docs.map(doc => doc.data() as ProjectionFieldLineageRecord));
+      const allowedReleaseFields = new Set(['releaseId', 'projectionId', 'schemaVersion', 'canonicalRevision', 'manifestId',
+        'inputDigest', 'dataDigest', 'status', 'generatedAt', 'activatedAt', 'data']);
+      if (Object.keys(release.data()!).some(key => !allowedReleaseFields.has(key))) throw new Error('RECOVERY_RELEASE_FIELDS_CHANGED');
+      const { activatedAt: _activatedAt, ...readyImage } = release.data()!;
+      const fence = (doc: typeof event) => ({ path: doc.ref.path, updateTime: doc.updateTime!.toDate().toISOString(),
+        updateSeconds: doc.updateTime!.seconds, updateNanos: doc.updateTime!.nanoseconds, digest: stableDigest(doc.data()) });
+      const plan = { schema: 'first-activation-recovery/v1' as const, backupDigest: backup.digest, eventId: backup.eventId, releaseId,
+        restore: [ { ...fence(active), action: 'DELETE' as const, value: null },
+          { ...fence(event), action: 'SET' as const, value: backup.event },
+          { ...fence(release), action: 'SET' as const, value: { ...readyImage, status: 'READY' } } ],
+        preserve: [fence(receipt), fence(manifest), ...lineage.docs.map(fence)],
+        newDocuments: [release.ref.path, manifest.ref.path, receipt.ref.path, ...lineage.docs.map(doc => doc.ref.path)] };
+      return { ...plan, digest: stableDigest(plan) };
+    });
+  }
+
   async stage(release: ProjectionRelease<ProjectionProduct>) {
     await this.db.collection(C.releases).doc(release.releaseId).create(release);
   }
@@ -462,7 +533,27 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       tx.update(releaseRef, { status: 'READY' });
     });
   }
-  async activate(releaseId: string) {
+  private async readPublishGuard(tx: Transaction, guard?: ProjectionPublishGuard) {
+    if (!guard) throw new Error('PROJECTION_SOURCE_GUARD_REQUIRED');
+    if (!guard.sources.length) throw new Error('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
+    for (const witness of guard.sources) {
+      const definition = data<SourceDefinition>(await tx.get(this.db.collection(C.sources).doc(sourceFirestoreDocumentId(witness.sourceId))));
+      const head = data<SourceHead>(await tx.get(this.db.collection(C.sourceHeads).doc(sourceFirestoreDocumentId(witness.sourceId))));
+      const run = data<SourceRun>(await tx.get(this.db.collection(C.sourceRuns).doc(witness.runId)));
+      if (stableDigest([definition, head, run]) !== witness.digest) throw new Error('PROJECTION_SOURCE_CHANGED');
+    }
+    if (guard.claim) {
+      const snap = await tx.get(this.db.collection(C.outbox).doc(guard.claim.eventId));
+      const event = data<OutboxEvent>(snap);
+      if (!event || event.status !== 'PROCESSING' || event.leaseOwner !== guard.claim.lease.leaseOwner ||
+        event.leaseUntil !== guard.claim.lease.leaseUntil) throw new Error('OUTBOX_LEASE_LOST');
+    }
+    const now = Date.parse(guard.now());
+    if (!Number.isFinite(now)) throw new Error('PROJECTION_SOURCE_TIME_INVALID');
+    if (guard.sources.some(witness => now > witness.expiresAt)) throw new Error('PROJECTION_SOURCE_STALE');
+    if (guard.claim && now >= Date.parse(guard.claim.lease.leaseUntil)) throw new Error('OUTBOX_LEASE_LOST');
+  }
+  async activate(releaseId: string, guard?: ProjectionPublishGuard) {
     await this.db.runTransaction(async (tx) => {
       const ref = this.db.collection(C.releases).doc(releaseId);
       const manifestRef = this.db.collection(C.releaseManifests).doc(releaseId);
@@ -492,6 +583,16 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       const activeRef = this.db.collection(C.activeReleases).doc(projectionId);
       const activeSnap = await tx.get(activeRef);
       const previousId = activeSnap.exists ? activeSnap.get('releaseId') as string : null;
+      if (guard?.expectedActiveReleaseId !== undefined && previousId !== guard.expectedActiveReleaseId)
+        throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
+      if (projectionId === 'erp-public' && !previousId &&
+          (guard?.expectedActiveReleaseId !== null || !guard?.claim || !guard.receipt))
+        throw new Error('PROJECTION_FIRST_ACTIVATION_APPROVAL_REQUIRED');
+      if (previousId && previousId !== releaseId && (!guard?.claim || !guard.receipt))
+        throw new Error('PROJECTION_ACTIVATION_APPROVAL_REQUIRED');
+      if (projectionId === 'erp-public') await this.readPublishGuard(tx, guard);
+      if (guard?.receipt) tx.create(this.db.collection(C.projectionDeliveryReceipts)
+        .doc(encodeURIComponent(guard.receipt.eventId)), guard.receipt);
 
       if (previousId && previousId !== releaseId) {
         tx.update(this.db.collection(C.releases).doc(previousId), { status: 'READY' });
@@ -523,10 +624,17 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
         .get()
     );
   }
-  async putDeliveryReceipt(receipt: ProjectionDeliveryReceipt) {
-    await this.db.collection(C.projectionDeliveryReceipts)
-      .doc(encodeURIComponent(receipt.eventId))
-      .create(receipt);
+  async putDeliveryReceipt(receipt: ProjectionDeliveryReceipt, guard?: ProjectionPublishGuard) {
+    if (receipt.projectionId !== 'erp-public') {
+      await this.db.collection(C.projectionDeliveryReceipts).doc(encodeURIComponent(receipt.eventId)).create(receipt);
+      return;
+    }
+    await this.db.runTransaction(async tx => {
+      const active = await tx.get(this.db.collection(C.activeReleases).doc(receipt.projectionId));
+      if (!active.exists || active.get('releaseId') !== receipt.releaseId) throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
+      await this.readPublishGuard(tx, guard);
+      tx.create(this.db.collection(C.projectionDeliveryReceipts).doc(encodeURIComponent(receipt.eventId)), receipt);
+    });
   }
   async getSheetDeliveryEvidence(receiptId: string) {
     return data<StoredSheetDeliveryEvidence>(
@@ -549,8 +657,15 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     );
   }
 
-  async claimNext(input: { workerId: string; now: string; leaseUntil: string }) {
-    const snap = await this.db.collection(C.outbox)
+  async claimNext(input: { workerId: string; now: string; leaseUntil: string; eventId?: string; expiresAt?: string; expectedEventDigest?: string }) {
+    if (input.eventId !== undefined && !/^[A-Za-z0-9:_-]{1,200}$/.test(input.eventId)) return null;
+    const started = performance.now();
+    const currentTime = () => new Date(Date.parse(input.now) + Math.floor(performance.now() - started)).toISOString();
+    const valid = () => Date.parse(input.leaseUntil) > Date.parse(currentTime()) && (!input.expiresAt || (Number.isFinite(Date.parse(input.expiresAt)) && Date.parse(input.expiresAt) > Date.parse(currentTime())));
+    if (!valid()) return null;
+    const snap = input.eventId
+      ? { docs: [await this.db.collection(C.outbox).doc(input.eventId).get()] }
+      : await this.db.collection(C.outbox)
       .where('status', 'in', ['PENDING', 'PROCESSING'])
       .orderBy('occurredAt', 'asc')
       .limit(20)
@@ -559,11 +674,19 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     for (const candidate of snap.docs) {
       const claimed = await this.db.runTransaction(async (tx) => {
         const fresh = await tx.get(candidate.ref);
-        if (!fresh.exists) return null;
+        if (!fresh.exists || !valid()) return null;
         const event = { id: fresh.id, ...fresh.data() } as unknown as OutboxEvent;
+        if (input.eventId && event.eventId !== input.eventId) return null;
+        if (input.expectedEventDigest && stableDigest(fresh.data()) !== input.expectedEventDigest) return null;
         const leaseExpired = event.status === 'PROCESSING' && Boolean(event.leaseUntil) && event.leaseUntil! <= input.now;
         const due = !event.nextAttemptAt || event.nextAttemptAt <= input.now;
         if (!due || (event.status !== 'PENDING' && !leaseExpired)) return null;
+        const receipt = await tx.get(this.db.collection(C.projectionDeliveryReceipts).doc(encodeURIComponent(event.eventId)));
+        if (receipt.exists) {
+          const active = await tx.get(this.db.collection(C.activeReleases).doc(receipt.get('projectionId')));
+          if (!active.exists || active.get('releaseId') !== receipt.get('releaseId')) return null;
+        }
+        if (!valid()) return null;
         tx.update(candidate.ref, {
           status: 'PROCESSING',
           leaseOwner: input.workerId,
@@ -575,19 +698,30 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
     }
     return null;
   }
-  async markDone(eventId: string) {
-    await this.db.collection(C.outbox).doc(eventId).update({
+  private async updateClaimedOutbox(eventId: string, lease: OutboxLease, update: Record<string, unknown>) {
+    const ref = this.db.collection(C.outbox).doc(eventId);
+    await this.db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) throw new Error('Outbox event not found');
+      const event = snap.data() as OutboxEvent;
+      if (!lease || event.status !== 'PROCESSING' || event.leaseOwner !== lease.leaseOwner ||
+        event.leaseUntil !== lease.leaseUntil) throw new Error('OUTBOX_LEASE_LOST');
+      tx.update(ref, update);
+    });
+  }
+  async markDone(eventId: string, lease: OutboxLease) {
+    await this.updateClaimedOutbox(eventId, lease, {
       status: 'DONE', leaseOwner: null, leaseUntil: null
     });
   }
-  async markRetry(input: { eventId: string; attempts: number; nextAttemptAt: string; error: string }) {
-    await this.db.collection(C.outbox).doc(input.eventId).update({
+  async markRetry(input: { eventId: string; attempts: number; nextAttemptAt: string; error: string; lease: OutboxLease }) {
+    await this.updateClaimedOutbox(input.eventId, input.lease, {
       status: 'PENDING', attempts: input.attempts, nextAttemptAt: input.nextAttemptAt,
       lastError: input.error, leaseOwner: null, leaseUntil: null
     });
   }
-  async moveToDeadLetter(input: { eventId: string; attempts: number; error: string }) {
-    await this.db.collection(C.outbox).doc(input.eventId).update({
+  async moveToDeadLetter(input: { eventId: string; attempts: number; error: string; lease: OutboxLease }) {
+    await this.updateClaimedOutbox(input.eventId, input.lease, {
       status: 'DEAD_LETTER', attempts: input.attempts, lastError: input.error,
       leaseOwner: null, leaseUntil: null
     });

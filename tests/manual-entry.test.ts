@@ -199,12 +199,13 @@ describe('manual catalog entry', () => {
     expect(
       (await store.getOffer(canonical.offerId))?.priceTerms[0]?.monthlyRent.amount
     ).toBe(770000);
+    const event = [...store.outbox.values()][0]!;
 
     expect(await processOneOutboxEvent(
       store,
       store,
       store,
-      { workerId: 'worker:manual-entry-test' },
+      { workerId: 'worker:manual-entry-test', eventId: event.eventId, expiresAt: '2026-09-21T01:02:30Z' },
       new Date('2026-09-21T01:02:00Z')
     )).toBe('DONE');
 

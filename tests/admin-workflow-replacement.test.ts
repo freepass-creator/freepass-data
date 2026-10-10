@@ -43,6 +43,13 @@ function fakeFirestore(initial: Record<string, Record<string, unknown>>) {
         create({ path }: { path: string }, data: Record<string, unknown>) { pending.push({ op: 'create', path, data }); },
       };
       const result = await fn(tx);
+      for (const write of pending) {
+        if (write.op === 'create' && docs.has(write.path)) throw new Error('already exists');
+      }
+      for (const write of pending) {
+        docs.set(write.path, write.op === 'update' || write.merge
+          ? { ...docs.get(write.path), ...write.data } : write.data);
+      }
       writes.push(...pending);
       return result;
     },
@@ -58,6 +65,56 @@ const request = (mutations: AdminWorkflowMutation[]): AdminWorkflowCommitRequest
   mutations,
 });
 const dataWrites = (writes: Write[]) => writes.filter((write) => !write.path.startsWith(`${C.receipts}/`));
+
+describe('settlement audit append-only transaction', () => {
+  const stored = { aud_old: { at: 1, by: 'fixture', from: null, to: 0 }, metadata: 'keep' };
+  const event = (data: Record<string, unknown>, op: 'update' | 'set' = 'update', merge?: boolean): AdminWorkflowMutation =>
+    ({ op, resource: 'settlementEvents', id: 'event-1', data, ...(merge === undefined ? {} : { merge }) });
+  const rejected: Array<[string, AdminWorkflowMutation[]]> = [
+    ['changed', [event({ aud_old: { ...stored.aud_old, to: 9 } })]],
+    ['null', [event({ aud_old: null })]],
+    ['deleted', [event({ metadata: 'keep' }, 'set')]],
+    ['nested path', [event({ 'aud_old.to': 9 })]],
+    ['append then change', [event({ aud_new: { to: 1 } }), event({ aud_new: { to: 2 } })]],
+    ['append then delete', [event({ aud_new: { to: 1 } }), event({ ...stored }, 'set')]],
+    ['empty object', [event({ aud_old: {} })]],
+  ];
+  it.each(rejected)('rejects %s without any command write', async (_name, mutations) => {
+    const { db, writes } = fakeFirestore({ [`${C.settlementEvents}/event-1`]: stored });
+    await expect(adminWorkflowStore(db).commit('freepass-admin-catalog', request([
+      { op: 'create', resource: 'contracts', id: 'unrelated', data: { ok: true } }, ...mutations,
+    ]))).rejects.toThrow();
+    expect(writes).toEqual([]);
+  });
+  const allowed: Array<[string, AdminWorkflowMutation[]]> = [
+    ['identical reordered object', [event({ aud_old: { to: 0, from: null, by: 'fixture', at: 1 } })]],
+    ['new key', [event({ aud_new: { at: 2, to: 1 } })]],
+    ['metadata merge', [event({ metadata: 'new' }, 'set', true)]],
+    ['retaining replacement', [event({ ...stored, aud_new: { to: 1 } }, 'set')]],
+    ['identical append twice', [event({ aud_new: { to: 1 } }), event({ aud_new: { to: 1 } })]],
+  ];
+  it.each(allowed)('allows %s', async (_name, mutations) => {
+    const { db, writes } = fakeFirestore({ [`${C.settlementEvents}/event-1`]: stored });
+    await adminWorkflowStore(db).commit('freepass-admin-catalog', request(mutations));
+    expect(dataWrites(writes)).toHaveLength(mutations.length);
+  });
+  it('replays the receipt without adding another audit or write', async () => {
+    const { db, writes } = fakeFirestore({ [`${C.settlementEvents}/event-1`]: stored });
+    const store = adminWorkflowStore(db), input = request([event({ aud_new: { to: 1 } })]);
+    await store.commit('freepass-admin-catalog', input);
+    const count = writes.length;
+    expect((await store.commit('freepass-admin-catalog', input)).idempotent).toBe(true);
+    expect(writes).toHaveLength(count);
+  });
+  it('rejects changed content with the same operation ID without a second write', async () => {
+    const { db, writes } = fakeFirestore({ [`${C.settlementEvents}/event-1`]: stored });
+    const store = adminWorkflowStore(db), input = request([event({ aud_new: { to: 1 } })]);
+    await store.commit('freepass-admin-catalog', input);
+    const count = writes.length;
+    await expect(store.commit('freepass-admin-catalog', { ...input, purpose: 'different' })).rejects.toThrow('IDEMPOTENCY_CONFLICT');
+    expect(writes).toHaveLength(count);
+  });
+});
 
 describe('Admin workflow whole-document replacement keeps stored fields', () => {
   it('lists only top-level fields missing from the replacement', () => {

@@ -2,6 +2,13 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const specification = JSON.parse(fs.readFileSync(new URL('../contracts/f01-f86-sheet-spec.v1.json', import.meta.url), 'utf8'));
+export function resolveSpreadsheetId(binding) {
+  if (!binding) throw new Error('HOLD: Unknown workbook');
+  const name = binding.spreadsheetIdEnv;
+  const id = process.env[name]?.trim();
+  if (!name || !id) throw new Error(`MISSING_SHEET_ID_ENV: ${name}`);
+  return id;
+}
 const fail = message => { throw new Error(`HOLD: ${message}`); };
 const value = c => {
   if (c?.userEnteredValue?.formulaValue && !c.effectiveValue) fail('Formula result unavailable');
@@ -16,7 +23,8 @@ const rgb = h => Object.fromEntries(['red', 'green', 'blue'].map((k, i) => [k, p
 // values/effectiveValues and columnMetadata, for every visible sheet. No credentials.
 export function planPresentation(input, { workbook, updatedAt, now = Date.now() }, spec = specification) {
   const binding = spec.workbooks[workbook];
-  if (!binding || input.spreadsheet?.spreadsheetId !== binding.spreadsheetId) fail('Wrong workbook');
+  const spreadsheetId = resolveSpreadsheetId(binding);
+  if (input.spreadsheet?.spreadsheetId !== spreadsheetId) fail('Wrong workbook');
   if(spec.primaryTabs.length !== 4 || binding.primarySheetIds.length !== 4 || new Set(binding.primarySheetIds).size !== 4) fail('Invalid primary binding');
   const captured = Date.parse(input.capturedAt);
   if (!Number.isFinite(captured) || now - captured > 300000 || captured > now + 1000) fail('Read must be fresh (5 minutes)');
@@ -131,7 +139,7 @@ export function planPresentation(input, { workbook, updatedAt, now = Date.now() 
       add(id,'filterRange',actual,wanted,{setBasicFilter:{filter:{...s.basicFilter,range:wanted}}});
     }
   }
-  return {status:requests.length?'CHANGES_REQUIRED':'PASS',specVersion:spec.version,spreadsheetId:binding.spreadsheetId,updatedAt,counts,changes,requests,scope:'PRESENTATION_ONLY_NOT_SOURCE_PARITY'};
+  return {status:requests.length?'CHANGES_REQUIRED':'PASS',specVersion:spec.version,spreadsheetId,updatedAt,counts,changes,requests,scope:'PRESENTATION_ONLY_NOT_SOURCE_PARITY'};
 }
 
 if(process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(process.argv[1])) {

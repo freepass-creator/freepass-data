@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
-import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
-import { readIancarPublishedDeposit } from '../domain/deposit-evidence.js';
+import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 
 type Rec = Record<string, unknown>;
 
@@ -79,13 +78,17 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
   return { ...product, price: Object.fromEntries(Object.entries(price).map(([key, value]) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return [key, value];
     const row = value as Rec;
+    const parsed = parseErp5CompatibilityPriceKey(key);
     const evidence = product.provider_company_code === 'RP031' ? readIancarPublishedDeposit(product, key, now)
-      : assessDepositEvidence({ supplierId: product.provider_company_code, productType: product.product_type,
-      note: product.deposit_note, depositFree: product.deposit_free, sourceAmount: row.deposit,
-      hasPositivePaidDeposit: paid });
-    return [key, { ...row, deposit: evidence.amount, depositState: evidence.state,
+      : resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
+      termMonths: parsed?.months, monthlyRent: normalizeErp5CompatibilityInteger(row.rent), hasPositivePaidDeposit: paid }));
+    const { depositEvidenceBasis: _staleDepositEvidenceBasis, ...rowWithoutStaleBasis } = row;
+    const depositEvidenceBasis = 'depositEvidenceBasis' in evidence ? evidence.depositEvidenceBasis : undefined;
+    return [key, { ...rowWithoutStaleBasis, deposit: evidence.amount, depositState: evidence.state,
       depositStatusLabel: depositStatusLabel(evidence.state, row.deposit, product.deposit_note),
-      depositEvidenceReason: evidence.reason }];
+      depositEvidenceReason: evidence.reason,
+      ...('depositRuleDifference' in evidence ? { depositRuleDifference: evidence.depositRuleDifference } : {}),
+      ...(evidence.state === 'ZERO' && depositEvidenceBasis ? { depositEvidenceBasis } : {}) }];
   })) };
 }
 
@@ -189,13 +192,16 @@ export class FirestoreCatalogCompatibilityReader {
   }
 
   private async readReferenceProducts(consumerId: string) {
-    const [products, policies] = await Promise.all([
+    const [products, policies, masterRead] = await Promise.all([
       this.db.collection('products').get(), this.db.collection('policy').get(),
+      readVehicleMasterSnapshot().then(vehicleMasterSnapshot => ({ vehicleMasterSnapshot, vehicleMasterReadState: 'AVAILABLE' as const }))
+        .catch(() => ({ vehicleMasterSnapshot: null, vehicleMasterReadState: 'UNAVAILABLE' as const })),
     ]);
     return {
       consumerId,
       products: asMap(products),
       policies: asMap(policies),
+      ...masterRead,
       observedAt: new Date().toISOString(),
     };
   }

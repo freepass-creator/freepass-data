@@ -16,9 +16,20 @@ import type { CatalogStore } from '../ports/catalog-store.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { plateIdentityKey } from '../domain/vehicle-plate.js';
+import { newVehicleUid, type VehicleUidClock, type VehicleUidRandom } from '../domain/vehicle-uid.js';
 
 const actor = { id: 'service:freepass-data', kind: 'SERVICE' } as const;
 const opaque = (prefix: string, ...parts: string[]) => `${prefix}_${stableDigest(parts).slice(0, 24)}`;
+export type VehicleAssetIdIssueStrategy = 'LEGACY_PLATE_HASH' | 'ULID';
+export function issueVehicleAssetId(input: {
+  strategy?: VehicleAssetIdIssueStrategy;
+  plate: string;
+  clock?: VehicleUidClock;
+  random?: VehicleUidRandom;
+}) {
+  if (input.strategy === 'ULID') return newVehicleUid(input.clock, input.random);
+  return opaque('va', 'plate', input.plate);
+}
 const states = () => ({ KNOWN: 0, ZERO: 0, UNKNOWN: 0, NOT_APPLICABLE: 0 });
 const group = () => ({ vehicles: 0, suppliedTerms: 0, economicsTerms: 0, heldVehicles: 0,
   supplierBillingFee: states(), channelPayoutFee: states() });
@@ -125,7 +136,7 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
           vehicleModel: { action: 'CREATE', id: opaque('vm', p.sourceId, c.sourceRecordId) },
           // Asset identity = plate («차량번호 하나 = 정본 한 줄»): a second CREATE for the same plate, from any source or a
           // concurrent run, meets the existing-asset conflict inside the canonicalize transaction instead of a new va_*.
-          vehicleAsset: { action: 'CREATE', id: opaque('va', 'plate', c.carNumber!), status: statusPolicy?.assetStatus ?? 'AVAILABLE' },
+          vehicleAsset: { action: 'CREATE', id: issueVehicleAssetId({ plate: c.carNumber! }), status: statusPolicy?.assetStatus ?? 'AVAILABLE' },
           productStatus, approvedIssues: [] } };
         if (await store.getVehicleModel(entry.create.decision.vehicleModel.id) ||
             await store.getVehicleAsset(entry.create.decision.vehicleAsset!.id) ||

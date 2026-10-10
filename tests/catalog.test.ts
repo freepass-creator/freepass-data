@@ -213,7 +213,8 @@ describe('Catalog V1 vertical slice', () => {
     const second=await buildErpPublicProjection(
       store,
       tamperedActiveProjection as unknown as Parameters<typeof buildErpPublicProjection>[1],
-      '2026-09-20T09:01:00.000Z'
+      '2026-09-20T09:01:00.000Z',
+      { activate: false }
     );
 
     expect(second.releaseId).not.toBe(first.releaseId);
@@ -249,7 +250,8 @@ describe('Catalog V1 vertical slice', () => {
     const second=await buildErpPublicProjection(
       store,
       tamperedManifestProjection,
-      '2026-09-20T09:01:00.000Z'
+      '2026-09-20T09:01:00.000Z',
+      { activate: false }
     );
 
     expect(second.releaseId).not.toBe(first.releaseId);
@@ -280,7 +282,8 @@ describe('Catalog V1 vertical slice', () => {
     const second=await buildErpPublicProjection(
       store,
       legacyManifestProjection,
-      '2026-09-20T09:01:00.000Z'
+      '2026-09-20T09:01:00.000Z',
+      { activate: false }
     );
 
     expect(second.releaseId).not.toBe(first.releaseId);
@@ -358,6 +361,41 @@ describe('Catalog V1 vertical slice', () => {
     )).rejects.toThrow('EVIDENCE_DIGEST_MISMATCH');
 
     expect(await store.getActive('erp-public')).toBeNull();
+  });
+
+  it('prepares paid and zero deposit terms together without pruning Canonical unknown economics', async () => {
+    const store = new MemoryDataStore(); await seedDemoCatalog(store);
+    const offer = (await store.getOffer('offer_gv70_demo'))!;
+    const base = offer.priceTerms[0]!;
+    const economics = offer.internalEconomicsTerms![0]!;
+    const updated = { ...offer, priceTerms: [base,
+      { ...base, termKey: '48@30000', termMonths: 48, mileageLimitKmPerYear: 30000,
+        monthlyRent: { amount: 610000, currency: 'KRW' as const }, depositState: 'ZERO' as const,
+        deposit: { amount: 0, currency: 'KRW' as const } },
+      { ...base, termKey: '12@10000', termMonths: 12, mileageLimitKmPerYear: 10000,
+        monthlyRent: { amount: 800000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const, deposit: null }],
+      internalEconomicsTerms: [economics,
+        { ...economics, termKey: '48@30000', depositCalculation: { ...economics.depositCalculation,
+          state: 'ZERO' as const, amount: { amount: 0, currency: 'KRW' as const },
+          calculation: { kind: 'FIXED' as const, amount: { amount: 0, currency: 'KRW' as const } } } },
+        { ...economics, termKey: '12@10000', depositCalculation: { state: 'UNKNOWN' as const, sourceRefs: ['synthetic:unknown'] } }] };
+    const [history] = await store.listEntityHistory('offer', offer.id);
+    await store.seed({ offers: [updated], revisionHistory: [{ ...history!, snapshot: updated }] });
+    const before = await store.getOffer(offer.id);
+    const release = await buildErpPublicProjection(store, store, '2026-09-20T10:00:00.000Z', { activate: false });
+    const projected = release.data[0]!.offers[0]!;
+    expect(projected.supplierId).toBe(offer.supplierId);
+    expect(projected.priceTerms.map(t => [t.termKey, t.termMonths, t.mileageLimitKmPerYear,
+      t.monthlyRent.amount, t.depositState, t.deposit?.amount])).toEqual([
+      ['36@20000', 36, 20000, 690000, 'KNOWN', 3000000],
+      ['48@30000', 48, 30000, 610000, 'ZERO', 0],
+    ]);
+    expect(release.status).toBe('READY');
+    expect(await store.getActive('erp-public')).toBeNull();
+    expect(await store.getOffer(offer.id)).toEqual(before);
+    expect(before?.priceTerms.find(t => t.termKey === '12@10000'))
+      .toMatchObject({ depositState: 'UNKNOWN', deposit: null, monthlyRent: { amount: 800000 } });
+    expect(before?.internalEconomicsTerms?.find(t => t.termKey === '12@10000')?.depositCalculation.state).toBe('UNKNOWN');
   });
 
   it('excludes UNKNOWN deposit terms from ERP public projection', async () => {
@@ -512,7 +550,7 @@ describe('Catalog V1 vertical slice', () => {
 
     expect(await processOneOutboxEvent(
       store,store,store,
-      {workerId:'worker:out-of-order'},
+      {workerId:'worker:out-of-order',eventId:r3.eventId,expiresAt:'2026-09-20T10:04:30.000Z'},
       new Date('2026-09-20T10:04:00.000Z')
     )).toBe('DONE');
 
@@ -522,7 +560,7 @@ describe('Catalog V1 vertical slice', () => {
 
     expect(await processOneOutboxEvent(
       store,store,store,
-      {workerId:'worker:out-of-order'},
+      {workerId:'worker:out-of-order',eventId:r2.eventId,expiresAt:'2026-09-20T10:05:30.000Z'},
       new Date('2026-09-20T10:05:00.000Z')
     )).toBe('DONE');
 
@@ -550,12 +588,12 @@ describe('Catalog V1 vertical slice', () => {
     let failMarkDone=true;
     const flakyOutbox={
       claimNext: store.claimNext.bind(store),
-      markDone: async (eventId:string) => {
+      markDone: async (eventId:string, lease: Parameters<typeof store.markDone>[1]) => {
         if (failMarkDone) {
           failMarkDone=false;
           throw new Error('simulated acknowledgement failure');
         }
-        return store.markDone(eventId);
+        return store.markDone(eventId, lease);
       },
       markRetry: store.markRetry.bind(store),
       moveToDeadLetter: store.moveToDeadLetter.bind(store)
@@ -565,7 +603,7 @@ describe('Catalog V1 vertical slice', () => {
       store,
       flakyOutbox,
       store,
-      {workerId:'worker:retry'},
+      {workerId:'worker:retry',eventId:[...store.outbox.values()][0]!.eventId,expiresAt:'2026-09-20T10:01:30.000Z'},
       new Date('2026-09-20T10:01:00.000Z')
     )).toBe('RETRY');
 
@@ -577,7 +615,7 @@ describe('Catalog V1 vertical slice', () => {
       store,
       flakyOutbox,
       store,
-      {workerId:'worker:retry'},
+      {workerId:'worker:retry',eventId:event!.eventId,expiresAt:'2026-09-20T10:02:30.000Z'},
       new Date('2026-09-20T10:02:00.000Z')
     )).toBe('DONE');
 
@@ -593,7 +631,8 @@ describe('Catalog V1 vertical slice', () => {
       commandId:'cmd_outbox',idempotencyKey:'idem_outbox_1',offerId:'offer_gv70_demo',expectedRevision:1,termKey:'36@20000',
       monthlyRent:{amount:730000,currency:'KRW'},reason:'outbox projection test',actor:{id:'user:test',kind:'USER'}
     },'2026-09-20T10:00:00.000Z');
-    expect(await processOneOutboxEvent(store,store,store,{workerId:'worker:test'},new Date('2026-09-20T10:00:01.000Z'))).toBe('DONE');
+    const event=[...store.outbox.values()][0]!;
+    expect(await processOneOutboxEvent(store,store,store,{workerId:'worker:test',eventId:event.eventId,expiresAt:'2026-09-20T10:00:31.000Z'},new Date('2026-09-20T10:00:01.000Z'))).toBe('DONE');
     const active=await store.getActive('erp-public');
     expect(active?.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(730000);
     const manifest=await store.getManifest(active!.releaseId);

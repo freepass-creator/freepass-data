@@ -1,3 +1,5 @@
+process.env.FREEPASS_SHEET_F01_ID = 'test-sheet-f01';
+process.env.FREEPASS_SHEET_F86_ID = 'test-sheet-f86';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

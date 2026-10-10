@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { normalizeLegacyProduct } from '../src/adapters/legacy-normalizer.js';
 
 describe('legacy product normalizer', () => {
+  const sourceWaiver = { 원문: { 전체: { 장기보증: '무보증' } } };
   const depositCandidate = (deposit: unknown, extra: Record<string, unknown> = {}) => normalizeLegacyProduct({
     sourceId: 'freepasserp3/firestore/products', sourceRecordId: 'synthetic-deposit',
     observedAt: '2026-10-07T00:00:00Z', fingerprint: 'synthetic',
@@ -14,10 +15,10 @@ describe('legacy product normalizer', () => {
     expect(c.issues.some(x => x.startsWith('DEPOSIT_REVIEW_REQUIRED:'))).toBe(true);
   });
   it('accepts evidenced zero while blocking forbidden and conflicting rules', () => {
-    expect(depositCandidate(0, { deposit_note: '무보증' }).priceTerms[0]).toMatchObject({ depositState: 'ZERO', deposit: { amount: 0 } });
-    for (const extra of [{ provider_company_code: 'RP012', deposit_note: '무보증' },
-      { product_type: '픽업구독', deposit_note: '무보증' }, { deposit_note: '월 대여료×2' },
-      { deposit_note: '무보증', deposit_free: false }]) {
+    expect(depositCandidate(0, { ...sourceWaiver, deposit_note: '무보증' }).priceTerms[0]).toMatchObject({ depositState: 'ZERO', deposit: { amount: 0 } });
+    for (const extra of [{ ...sourceWaiver, provider_company_code: 'RP012', deposit_note: '무보증' },
+      { ...sourceWaiver, product_type: '픽업구독', deposit_note: '무보증' }, { deposit_note: '월 대여료×2' },
+      { ...sourceWaiver, deposit_note: '무보증', deposit_free: false }]) {
       expect(depositCandidate(0, extra).priceTerms[0]!.depositState).toBe('UNKNOWN');
     }
     expect(depositCandidate(null, { deposit_note: '무보증' }).priceTerms[0]!.depositState).toBe('UNKNOWN');

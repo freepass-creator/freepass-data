@@ -8,10 +8,25 @@ import type {
 import { decideSourceHead } from '../domain/source.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
+import { observeSourceEvent, finishSourceEvent, type SourceEventReceipt } from '../domain/source-event.js';
 
 const copy = <T>(value: T): T => structuredClone(value);
 
 export class MemorySourceStore implements SourceIngestionStore {
+  private events = new Map<string, SourceEventReceipt>();
+  async claimEvent(input: Parameters<SourceIngestionStore['claimEvent']>[0]) {
+    const result = observeSourceEvent(this.events.get(input.eventId) ?? null, input);
+    this.events.set(input.eventId, copy(result.receipt));
+    return copy(result);
+  }
+  async getEvent(eventId: string) { return copy(this.events.get(eventId) ?? null); }
+  async finishEvent(eventId: string, input: Parameters<SourceIngestionStore['finishEvent']>[1]) {
+    const previous = this.events.get(eventId);
+    if (!previous) throw new Error('SOURCE_EVENT_NOT_FOUND');
+    const receipt = finishSourceEvent(previous, input);
+    this.events.set(eventId, copy(receipt));
+    return copy(receipt);
+  }
   private sources = new Map<string, SourceDefinition>();
   private runs = new Map<string, SourceRun>();
   private raw = new Map<string, RawRecord>();
@@ -53,6 +68,7 @@ export class MemorySourceStore implements SourceIngestionStore {
         headRunId: currentHead?.runId ?? null
       };
     }
+    if (run.status !== 'RUNNING') throw new Error('SOURCE_RUN_NOT_RUNNING');
 
     const decision = decideSourceHead(
       input.coverage,
@@ -98,6 +114,7 @@ export class MemorySourceStore implements SourceIngestionStore {
   async failRun(input: Parameters<SourceIngestionStore['failRun']>[0]) {
     const run = this.runs.get(input.runId);
     if (!run) throw new Error(`Source run not found: ${input.runId}`);
+    if (run.status !== 'RUNNING') return;
     Object.assign(run, { status: 'FAILED', completedAt: input.completedAt, error: input.error });
   }
 

@@ -1,8 +1,10 @@
+import { plateIdentityKey, isStrictKoreanPlate } from '../domain/vehicle-plate.js';
 import { createHash } from 'node:crypto';
-import { parseErp5PriceKey } from '../adapters/erp5-product-mapping.js';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
 import { policyScalar } from './product-pricing-policy.js';
-import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
+import { verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
+import { chooseVehicleIdentity, indexVehicleMaster, type VehicleMasterReference } from '../domain/vehicle-identity-resolution.js';
 
 type Rec = Record<string, unknown>;
 
@@ -25,7 +27,12 @@ export function resolveReferenceVehiclePhotos(source: Rec) {
       return [url.href];
     } catch { rejectedCount += 1; return []; }
   };
-  const imageUrls = [...new Set([source.image_urls, source.images, source.photos, source.image_url, source.photo].flatMap(readUrls))];
+  const candidates = [...new Set([source.image_urls, source.images, source.photos, source.image_url, source.photo].flatMap(readUrls))];
+  const rejectedBeforeDocuments = rejectedCount;
+  const documentUrls = new Set(readUrls(source.doc_images));
+  rejectedCount = rejectedBeforeDocuments;
+  const imageUrls = candidates.filter(url => !documentUrls.has(url));
+  rejectedCount += candidates.length - imageUrls.length;
   const sourceLinks = [...new Set(readUrls(source.photo_link))];
   return {
     state: imageUrls.length ? 'URLS_PRESENT' as const : sourceLinks.length ? 'LINK_ONLY' as const : rejectedCount ? 'UNUSABLE' as const : 'NOT_PROVIDED' as const,
@@ -59,7 +66,7 @@ export const KAKAO_COMMISSION_POLICY_2026_10_03 = {
     revision: 'f862d0097f6e83d79d0b699bc369a83716b1d982',
   },
   sourceFiles: [
-    { code: 'F04', id: '1BjGBqAjRLEb9ZMKarpQsMF-q_UjdgmEqBAl1uVk8SR4', sheetId: 1982531660, range: '수수료표!A1:J180', modifiedTime: '2026-09-28T00:09:22.575Z' },
+    { code: 'F04', get id() { const id = process.env.FREEPASS_SHEET_F04_ID?.trim(); if (!id) throw new Error('MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID'); return id; }, sheetId: 1982531660, range: '수수료표!A1:J180', modifiedTime: '2026-09-28T00:09:22.575Z' },
   ],
   standardSupplierIds: [
     'RP013', 'RP031', 'RP016', 'RP015', 'RP019', 'RP020', 'RP032', 'PT-0023',
@@ -125,7 +132,7 @@ export const KAKAO_COMMISSION_POLICY_2026_10_04 = {
   sourceRole: 'F04_GOOGLE_SHEET_SSOT',
   canonicalSource: { code: 'F04', range: '수수료표!A1:M191', observedDate: '2026-10-04' },
   sourceObservedAt: '2026-10-04',
-  sourceFiles: [{ code: 'F04', id: '1BjGBqAjRLEb9ZMKarpQsMF-q_UjdgmEqBAl1uVk8SR4', sheetId: 1982531660, range: '수수료표!A1:M191' }],
+  sourceFiles: [{ code: 'F04', get id() { const id = process.env.FREEPASS_SHEET_F04_ID?.trim(); if (!id) throw new Error('MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID'); return id; }, sheetId: 1982531660, range: '수수료표!A1:M191' }],
   evidenceHistory: [...KAKAO_COMMISSION_POLICY_2026_10_03.evidenceHistory,
     { policyId: KAKAO_COMMISSION_POLICY_2026_10_03.policyId, observedAt: '2026-10-03', revision: 'fd252b2508d4ccda5ecf8de03b587c1f9910cda4' }],
   sonokongAdditions: { 12: 100000, 24: 300000, 36: 500000, 48: 700000 },
@@ -228,74 +235,32 @@ const knownProductType = (source: string) => ({
 
 export function resolveReferenceDeposit(input: {
   note: unknown;
-  termMonths: number;
-  monthlyRent: number;
+  termMonths?: unknown;
+  monthlyRent?: unknown;
   sourceAmount: unknown;
   supplierId?: unknown;
   productType?: unknown;
   depositFree?: unknown;
+  depositFreeConfirmation?: unknown;
+  depositSourceWaiverBasis?: unknown;
   hasPositivePaidDeposit?: boolean;
 }) {
-  const note = text(input.note);
-  const evidence = assessDepositEvidence(input);
-  if (['CONFLICTING_ZERO_DEPOSIT_EVIDENCE', 'INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE', 'POSITIVE_AMOUNT_WITH_RULE_REQUIRES_REVIEW', 'INVALID_DEPOSIT_AMOUNT'].includes(evidence.reason)) {
+  const resolved = resolveDepositWithRuleNote(input);
+  if (resolved.state === 'UNKNOWN') {
     return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
   }
-  if (evidence.state === 'KNOWN') {
-    return { depositAmount: evidence.amount, depositState: 'KNOWN' as DepositState,
-      depositRule: { code: 'SOURCE_AMOUNT', multiplier: null, label: '공급사 입력 금액' } };
-  }
-  if (input.supplierId === 'RP012' && ['중고렌트', '재렌트'].includes(String(input.productType))) {
-    return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
-  }
-  const known = (code: string, multiplier: number, label: string) => {
-    const depositAmount = input.monthlyRent * multiplier;
-    if (!Number.isSafeInteger(depositAmount) || depositAmount <= 0) {
-      return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
-    }
-    return {
-      depositAmount,
-      depositState: 'KNOWN' as DepositState,
-      depositRule: { code, multiplier, label },
-    };
-  };
-  if (evidence.state === 'ZERO') {
+  if (resolved.state === 'ZERO') {
     return {
       depositAmount: 0,
       depositState: 'ZERO' as DepositState,
-      depositRule: { code: 'ZERO_DEPOSIT', multiplier: 0, label: '무보증' },
+      depositRule: resolved.rule,
     };
   }
-  if (input.monthlyRent > 0) {
-    if (/^월 대여료 × 약정연수 \(최대 3개월\)$/.test(note)) {
-      if (!Number.isSafeInteger(input.termMonths) || input.termMonths <= 0 || input.termMonths % 12 !== 0) {
-        return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
-      }
-      const multiplier = Math.min(Math.ceil(input.termMonths / 12), 3);
-      return known('RENT_X_CONTRACT_YEARS_MAX3', multiplier, `대여료×${multiplier}`);
-    }
-    if (/^국산:\s*월 대여료×2$/.test(note)) {
-      return known('RENT_X_2', 2, '대여료×2');
-    }
-    if (/^수입:\s*12개월 대여료×3 · 18개월↑ ×6$/.test(note)) {
-      const multiplier = input.termMonths >= 18 ? 6 : 3;
-      return known('IMPORT_12_X3_18_PLUS_X6', multiplier, `대여료×${multiplier}`);
-    }
-  }
-  if (!note) {
-    const sourceAmount = integer(input.sourceAmount);
-    if (sourceAmount !== null && sourceAmount > 0) {
-      return {
-        depositAmount: sourceAmount,
-        depositState: 'KNOWN' as DepositState,
-        depositRule: { code: 'SOURCE_AMOUNT', multiplier: null, label: '공급사 입력 금액' },
-      };
-    }
-  }
   return {
-    depositAmount: null,
-    depositState: 'UNKNOWN' as DepositState,
-    depositRule: null,
+    depositAmount: resolved.amount,
+    depositState: 'KNOWN' as DepositState,
+    depositRule: resolved.rule,
+    ...(resolved.depositRuleDifference ? { depositRuleDifference: resolved.depositRuleDifference } : {}),
   };
 }
 
@@ -621,7 +586,7 @@ export function resolveReferencePolicyContext(source: Rec, policies: Record<stri
     reasonCode: facts.length ? null : 'POLICY_FACTS_MISSING' };
 }
 
-export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}) {
+export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}, observedAt?: string) {
   if (source.listable !== true) return null;
   const supplierId = text(source.provider_company_code);
   if (!supplierId) return null;
@@ -629,26 +594,36 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
   if (!price || typeof price !== 'object' || Array.isArray(price)) return null;
   const priceTerms = Object.entries(price as Rec).flatMap(([sourceKey, raw]) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
-    const parsed = parseErp5PriceKey(sourceKey);
+    const parsed = parseErp5CompatibilityPriceKey(sourceKey);
     const monthlyRent = integer((raw as Rec).rent);
     if (!parsed || monthlyRent === null || monthlyRent <= 0) return [];
     const basis36 = Object.entries(price as Rec).flatMap(([key, value]) => {
-      const candidate = parseErp5PriceKey(key);
-      if (!candidate || candidate.months !== 36 || candidate.settlement !== parsed.settlement || candidate.mileageKm !== parsed.mileageKm || !value || typeof value !== 'object' || Array.isArray(value)) return [];
+      const candidate = parseErp5CompatibilityPriceKey(key);
+      if (!candidate || candidate.months !== 36 || candidate.settlement !== parsed.settlement || (candidate.contractedMileage?.km ?? candidate.mileageKm) !== (parsed.contractedMileage?.km ?? parsed.mileageKm) || (candidate.contractedMileage?.period ?? 'year') !== (parsed.contractedMileage?.period ?? 'year') || !value || typeof value !== 'object' || Array.isArray(value)) return [];
       const amount = integer((value as Rec).rent);
       return amount !== null && amount > 0 ? [amount] : [];
     });
     const billin36MonthlyRent = basis36.length === 1 ? basis36[0] : undefined;
-    const deposit = resolveReferenceDeposit({
-      note: source.deposit_note,
+    const depositInput = depositEvidenceInputFromProduct(source, (raw as Rec).deposit, {
       termMonths: parsed.months,
       monthlyRent,
-      sourceAmount: (raw as Rec).deposit,
-      supplierId,
-      productType: source.product_type,
-      depositFree: source.deposit_free,
       hasPositivePaidDeposit: hasConflictingPaidDeposit(price),
     });
+    const publishedDeposit = supplierId === 'RP031' && source.iancar_phase_one
+      ? readIancarPublishedDeposit(source, sourceKey, observedAt) : null;
+    const deposit = publishedDeposit ? {
+      depositAmount: publishedDeposit.amount,
+      depositState: publishedDeposit.state,
+      depositRule: publishedDeposit.state === 'UNKNOWN' ? null : {
+        code: 'IANCAR_PUBLISHED_CONDITION_EVIDENCE', multiplier: null, label: '공급사 기간·주행거리 조건',
+      },
+    } : resolveReferenceDeposit(depositInput);
+    const depositEvidence = {
+      sourceRef: `source-product:${documentId}#price:${sourceKey}`,
+      sourceAmount: typeof (raw as Rec).deposit === 'number' || typeof (raw as Rec).deposit === 'string' ? (raw as Rec).deposit as number | string : null,
+      sourceNote: text(source.deposit_note) || null,
+      reasonCode: publishedDeposit?.reason ?? deposit.depositRule?.code ?? assessDepositEvidence(depositInput).reason,
+    };
     const channelPayoutFee = resolveSalesCommission({
       ...evidenceByTerm[sourceKey],
       supplierId,
@@ -674,8 +649,11 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       monthlyRent: { amount: monthlyRent, currency: 'KRW' as const },
       deposit: deposit.depositAmount === null ? null : { amount: deposit.depositAmount, currency: 'KRW' as const },
       ...deposit,
+      ...('depositRuleDifference' in deposit && deposit.depositRuleDifference ? { depositRuleDifference: deposit.depositRuleDifference } : {}),
+      depositEvidence,
       depositStatusLabel: depositStatusLabel(deposit.depositState, (raw as Rec).deposit, source.deposit_note),
       mileageLimitKmPerYear: parsed.mileageKm ?? null,
+      ...(parsed.contractedMileage ? { contractedMileage: parsed.contractedMileage } : {}),
       settlement: parsed.settlement,
       // Backward-compatible alias for the existing Kakao consumer.
       salesCommission: channelPayoutFee,
@@ -735,6 +713,9 @@ export function buildKakaoCatalogReference(input: {
   policies?: Record<string, Rec>;
   /** Trusted private evidence, keyed by product ID then exact ERP price key. */
   commissionEvidenceByProduct?: Readonly<Record<string, CommissionEvidenceByTerm>>;
+  /** Master/trim share their sealed snapshot. Products/policies are separate reads. */
+  vehicleMasterSnapshot?: VehicleMasterSnapshot | null;
+  vehicleMasterReadState?: 'AVAILABLE' | 'UNAVAILABLE';
 }) {
   if (input.consumerId !== 'kakao-ops') throw new Error('KAKAO_REFERENCE_CONSUMER_NOT_ALLOWED');
   return buildReferenceFacts(input);
@@ -748,9 +729,36 @@ export function buildInternalAiReference(input: KakaoCatalogReferenceSource) {
 }
 
 function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
+  type NativeReference = (VehicleMasterReference & { reasonCode: null }) | {
+    state: 'HOLD'; authority: 'FREEPASS_DATA_VEHICLE_MASTER'; identityKind: 'FIRESTORE_DOCUMENT_ID';
+    masterId: null; trimId: null; snapshotDigest: string | null; readAt: string | null; reasonCode: string;
+  };
+  const hold = (reasonCode: string, snapshot?: VehicleMasterSnapshot): NativeReference => ({ state: 'HOLD',
+    authority: 'FREEPASS_DATA_VEHICLE_MASTER', identityKind: 'FIRESTORE_DOCUMENT_ID', masterId: null, trimId: null,
+    snapshotDigest: snapshot?.digest ?? null, readAt: snapshot?.readAt ?? null, reasonCode });
+  const master = input.vehicleMasterSnapshot;
+  let resolveMaster: (source: Rec) => NativeReference = () => hold(input.vehicleMasterReadState === 'UNAVAILABLE'
+    ? 'VEHICLE_MASTER_READ_UNAVAILABLE' : 'VEHICLE_MASTER_SNAPSHOT_MISSING');
+  if (master && input.vehicleMasterReadState !== 'UNAVAILABLE') {
+    try {
+      const now = Date.parse(input.observedAt);
+      const index = indexVehicleMaster(verifiedMasterRecords(master, now));
+      resolveMaster = source => {
+        const choice = chooseVehicleIdentity(index, { sheet: [text(source.maker), text(source.model), text(source.sub_model), text(source.trim_name)],
+          data: null, raw: '', firstRegistration: '', modelYear: '' });
+        if (choice.pick === 'HOLD') return hold('VEHICLE_MASTER_IDENTITY_NOT_UNIQUE', master);
+        const verified = verifiedVehicleMasterReference(master, choice, now);
+        return verified.state === 'KNOWN' ? { ...verified, reasonCode: null } : hold(verified.reason, master);
+      };
+    } catch {
+      // No credentials/raw exception strings; unavailable identity must not remove economic terms.
+      resolveMaster = () => hold('VEHICLE_MASTER_SNAPSHOT_UNVERIFIED');
+    }
+  }
   const data = Object.entries(input.products)
-    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id], input.policies))
+    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id], input.policies, input.observedAt))
     .filter((row): row is NonNullable<typeof row> => row !== null)
+    .map(row => ({ ...row, vehicleMasterReference: resolveMaster(input.products[row.sourceProductId]!) }))
     .sort((a, b) => a.productId.localeCompare(b.productId));
   if (!data.length) throw new Error('KAKAO_REFERENCE_EMPTY');
   const dataDigest = hash(JSON.stringify(data));
@@ -777,3 +785,45 @@ function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
 
 export type KakaoCatalogReference = ReturnType<typeof buildKakaoCatalogReference>;
 export type KakaoCatalogReferenceSource = Parameters<typeof buildKakaoCatalogReference>[0];
+
+/** All term conditions match one item; sibling terms remain visible. */
+export function filterReferenceProducts<T extends KakaoCatalogReference | ReturnType<typeof buildInternalAiReference>>(reference: T, query: Record<string, unknown>): T {
+  const fields = ['supplierId','supplierName','plateNumber','maker','model','commercialType','assetStatus'];
+  const numeric = ['termMonths','mileageKm','monthlyRentMin','monthlyRentMax','depositMin','depositMax'];
+  const keys = [...fields,...numeric,'mileagePeriod','depositState','depositScope'];
+  const invalid = () => { throw new Error('REFERENCE_DEPOSIT_FILTER_INVALID'); };
+  if (!Object.keys(query).length) return reference;
+  for (const [key,value] of Object.entries(query)) {
+    if (!keys.includes(key) || typeof value !== 'string' || !value.trim() || (!['supplierName','plateNumber'].includes(key) && value !== value.trim())) invalid();
+    if (numeric.includes(key) && (!/^(0|[1-9]\d*)$/.test(String(value)) || !Number.isSafeInteger(Number(value)))) invalid();
+  }
+  const nameKey = (value: unknown) => typeof value === 'string' ? value.normalize('NFC').replace(/\s+/g,'') : '';
+  // Lookup-only normalization explicitly requested by the user; never changes stored identity.
+  const plateKey = (value: unknown) => plateIdentityKey(typeof value === 'string' ? value.normalize('NFC') : value).replace(/-/g,'');
+  if (query.plateNumber !== undefined && !isStrictKoreanPlate(plateKey(query.plateNumber))) invalid();
+  if (query.termMonths !== undefined && (Number(query.termMonths)<1 || Number(query.termMonths)>60)) invalid();
+  if (query.depositState !== undefined && !['ZERO','KNOWN','UNKNOWN'].includes(String(query.depositState))) invalid();
+  if (query.depositScope !== undefined && (query.depositState !== 'ZERO' || !['ANY_TERM','ALL_TERMS'].includes(String(query.depositScope)))) invalid();
+  if (query.mileagePeriod !== undefined && !['year','month'].includes(String(query.mileagePeriod))) invalid();
+  if ((query.mileageKm === undefined) !== (query.mileagePeriod === undefined)) invalid();
+  for (const prefix of ['monthlyRent','deposit']) if (query[prefix+'Min'] !== undefined && query[prefix+'Max'] !== undefined && Number(query[prefix+'Min'])>Number(query[prefix+'Max'])) invalid();
+  type Term = T['data'][number]['offers'][number]['priceTerms'][number];
+  const zero = (t: Term) => t.depositState === 'ZERO' && t.depositAmount === 0 && t.deposit?.amount === 0;
+  const range = (v: number | null | undefined, k: string) => (query[k+'Min'] === undefined && query[k+'Max'] === undefined) ||
+    (v !== null && v !== undefined && (query[k+'Min'] === undefined || v>=Number(query[k+'Min'])) && (query[k+'Max'] === undefined || v<=Number(query[k+'Max'])));
+  const match = (t: Term) => (query.termMonths === undefined || t.termMonths === Number(query.termMonths)) &&
+    (query.depositState === undefined || (query.depositState === 'ZERO' ? zero(t) : t.depositState === query.depositState)) &&
+    range(t.monthlyRent.amount,'monthlyRent') && range(t.depositAmount,'deposit') &&
+    (query.mileageKm === undefined || (t.contractedMileage ? t.contractedMileage.km === Number(query.mileageKm) && t.contractedMileage.period === query.mileagePeriod : query.mileagePeriod === 'year' && t.mileageLimitKmPerYear === Number(query.mileageKm)));
+  const data = reference.data.filter(p => (query.plateNumber === undefined || plateKey(p.vehicle.plateNumber) === plateKey(query.plateNumber)) && (query.maker === undefined || p.vehicle.maker === query.maker) &&
+    (query.model === undefined || p.vehicle.model === query.model) && (query.commercialType === undefined || p.commercialType === query.commercialType) &&
+    (query.assetStatus === undefined || p.vehicle.assetStatus === query.assetStatus) &&
+    p.offers.some(o => (query.supplierId === undefined || o.supplierId === query.supplierId) && (query.supplierName === undefined || nameKey(o.supplierName) === nameKey(query.supplierName)) && o.priceTerms.some(match)) &&
+    (query.depositScope !== 'ALL_TERMS' || p.offers.flatMap(o => o.priceTerms).every(zero)));
+  const supplierCodes = new Set(data.flatMap(p => p.offers).filter(o => query.supplierName !== undefined && nameKey(o.supplierName) === nameKey(query.supplierName) && (query.supplierId === undefined || o.supplierId === query.supplierId) && o.priceTerms.some(match)).map(o => o.supplierId));
+  const plateCandidates = query.plateNumber === undefined ? [] : data.filter(p => plateKey(p.vehicle.plateNumber) === plateKey(query.plateNumber));
+  const queryResolution = { state: supplierCodes.size > 1 || plateCandidates.length > 1 ? 'HOLD' : data.length ? 'MATCHED' : 'NO_MATCH', reasonCode: supplierCodes.size > 1 ? 'SUPPLIER_NAME_MULTIPLE_CODES' : plateCandidates.length > 1 ? 'PLATE_MULTIPLE_PRODUCTS' : null, matchedProductCount: data.length };
+  return { ...reference,data,meta: { ...reference.meta,projectedCount:data.length,dataDigest:hash(JSON.stringify(data)),queryFilter:{...query},...(query.supplierName !== undefined || query.plateNumber !== undefined ? {queryResolution} : {}),
+    ...(query.depositState === 'ZERO' ? {depositFilter:{state:'ZERO',termMonths:query.termMonths === undefined ? null : Number(query.termMonths),scope:query.depositScope === 'ALL_TERMS' ? 'ALL_TERMS' : 'ANY_TERM'}} : {}) } } as T;
+}
+export const filterReferenceZeroDeposit = filterReferenceProducts;
