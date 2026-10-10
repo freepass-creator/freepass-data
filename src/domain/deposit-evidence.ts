@@ -351,8 +351,6 @@ export function readIancarPublishedDeposit(product: Record<string, unknown>, pri
     || !/^[a-f0-9]{64}$/.test(String(e.sourceDigest)) || !/^[a-f0-9]{64}$/.test(String(e.ratesDigest))
     || !depositInstant(now) || !depositInstant(e.sourceSyncedAt)
     || product._direct_ingest_at !== Date.parse(e.sourceSyncedAt)
-    || Date.parse(now) - Date.parse(e.sourceSyncedAt) > IANCAR_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS * 1000
-    || Date.parse(e.sourceSyncedAt) - Date.parse(now) > 60_000
     || !Array.isArray(e.terms) || !e.terms.length || !depositRecord(e.priceAliases) || !depositRecord(product.price)) return unknown();
   const terms = e.terms;
   for (const t of terms) {
@@ -384,6 +382,14 @@ export function readIancarPublishedDeposit(product: Record<string, unknown>, pri
   if (term.deposit.amount === 0 && (depositText(product.product_type).replace(/\s/g, '') === '픽업구독'
     || [false, '아니오', '아님', '불가'].some(value => product.deposit_free === value)
     || (depositText(product.deposit_note) && !['무보증', '기간·주행거리별 보증금 상이: 상품 요금 조건 확인'].includes(depositText(product.deposit_note))))) return unknown();
+  // Freshness cannot erase a structurally verified positive source amount. This is a
+  // reference fact only: deleted/conflicting/ambiguous conditions above still fail closed.
+  if (Date.parse(e.sourceSyncedAt) - Date.parse(now) > 60_000) return unknown();
+  if (Date.parse(now) - Date.parse(e.sourceSyncedAt) > IANCAR_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS * 1000) {
+    if (term.deposit.amount === 0) return unknown();
+    return { state: 'KNOWN' as const, amount: term.deposit.amount as number, reason: 'SOURCE_AMOUNT',
+      publicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE', publicationDecision: 'HOLD' as const };
+  }
   return { state: term.depositState as 'ZERO' | 'KNOWN', amount: term.deposit.amount as number,
     reason: 'IANCAR_PUBLISHED_CONDITION_EVIDENCE' };
 }

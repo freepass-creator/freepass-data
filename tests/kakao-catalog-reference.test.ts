@@ -2,6 +2,7 @@ process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { precomputeOfferEconomics, readStoredTermFees } from '../src/application/resolve-offer-commercial-terms.js';
+import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 import {
   KAKAO_COMMISSION_POLICY,
   KAKAO_COMMISSION_POLICY_2026_10_03,
@@ -74,10 +75,22 @@ describe('shared reference policy context', () => {
     expect(filterReferenceZeroDeposit(reference, { depositState: 'ZERO', depositScope: 'ALL_TERMS' }).data).toEqual([]);
     expect(buildInternalAiReference({ ...input, consumerId: 'internal-ai-test' }).data).toEqual(reference.data);
     const stale = buildKakaoCatalogReference({ ...input, observedAt: '2026-10-09T00:15:01Z' });
-    expect(stale.data[0]!.offers[0]!.priceTerms.every(t => t.depositState === 'UNKNOWN' && t.depositAmount === null)).toBe(true);
+    expect(stale.data[0]!.offers[0]!.priceTerms.map(t => t.depositState)).toEqual(['UNKNOWN', 'UNKNOWN', 'KNOWN', 'UNKNOWN']);
+    expect(stale.data[0]!.offers[0]!.priceTerms[2]).toMatchObject({ depositAmount: 1000000,
+      depositEvidence: { reasonCode: 'SOURCE_AMOUNT', publicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE', publicationDecision: 'HOLD' } });
+    const staleCompat = withCompatibilityDepositEvidence(product, '2026-10-09T00:15:01Z').price as Record<string, Record<string, unknown>>;
+    expect(staleCompat['24_연30000km']).toMatchObject({ deposit: 1000000, depositState: 'KNOWN',
+      depositEvidenceReason: 'SOURCE_AMOUNT', depositPublicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE', depositPublicationDecision: 'HOLD' });
+    expect(staleCompat['24']).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
+    expect(buildKakaoCatalogReference({ ...input, observedAt: '2026-10-08T23:58:59Z' }).data[0]!.offers[0]!.priceTerms[2]!.depositState).toBe('UNKNOWN');
     expect(filterReferenceZeroDeposit(stale, { depositState: 'ZERO' }).data).toEqual([]);
     const mismatch = structuredClone(product); mismatch.price['24'].deposit = 1;
     expect(buildKakaoCatalogReferenceProduct('synthetic', mismatch, {}, {}, now)!.offers[0]!.priceTerms[0]!.depositState).toBe('UNKNOWN');
+    expect(buildKakaoCatalogReferenceProduct('synthetic', mismatch, {}, {}, '2026-10-09T00:15:01Z')!.offers[0]!.priceTerms[0]!.depositState).toBe('UNKNOWN');
+    const ambiguous = structuredClone(product); ambiguous.iancar_phase_one.priceAliases['24'] = '24:30000:year'; ambiguous.price['24'].deposit = 1000000;
+    expect(buildKakaoCatalogReferenceProduct('synthetic', ambiguous, {}, {}, '2026-10-09T00:15:01Z')!.offers[0]!.priceTerms[0]!.depositState).toBe('UNKNOWN');
+    const deleted = { ...product, _deleted: true };
+    expect(buildKakaoCatalogReferenceProduct('synthetic', deleted, {}, {}, '2026-10-09T00:15:01Z')!.offers[0]!.priceTerms[2]!.depositState).toBe('UNKNOWN');
     expect(resolveReferenceDeposit({ supplierId: 'RP012', productType: '중고렌트', note: '무보증', depositFree: true, sourceAmount: 0, termMonths: 24, monthlyRent: 500000 }).depositState).toBe('UNKNOWN');
   });
   it('searches confirmed zero without treating placeholders or mixed periods as all-free', () => {
@@ -150,6 +163,16 @@ describe('shared reference policy context', () => {
   it('empty or invalid recognized fields are not interpreted as an approved policy', () => {
     expect(resolveReferencePolicyContext(product, { POL1: { annual_mileage: { arbitrary: true } } })).toMatchObject({
       state: 'UNKNOWN', facts: [], reasonCode: 'POLICY_FACTS_MISSING' });
+  });
+  it('preserves native policy name/code and reuses supplier-scoped policy selection without approving name-only facts', () => {
+    const named = { ...policy, policy_name: '공급사 기본 조건' };
+    expect(resolveReferencePolicyContext(product, { native: named, other: { ...named, provider_company_code: 'RP023' } }))
+      .toMatchObject({ state: 'REFERENCE', policyCode: 'POL1', policyName: '공급사 기본 조건', sourceRef: 'policy/native',
+        policyNameSourceRef: 'policy/native/policy_name', policyCodeSourceRef: 'policy/native/policy_code' });
+    expect(resolveReferencePolicyContext(product, { native: { policy_code: 'POL1', policy_name: '조건 확인 중', provider_company_code: 'RP013' } }))
+      .toMatchObject({ state: 'UNKNOWN', policyName: '조건 확인 중', facts: [], reasonCode: 'POLICY_FACTS_MISSING' });
+    expect(resolveReferencePolicyContext(product, { native: named, duplicate: named }))
+      .toMatchObject({ policyName: null, policyCode: null, reasonCode: 'POLICY_LINK_AMBIGUOUS' });
   });
 });
 

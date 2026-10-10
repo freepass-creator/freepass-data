@@ -2,6 +2,14 @@
 
 Status: IMPLEMENTED / VALIDATION REQUIRED BEFORE DEPLOYMENT
 
+## 2026-10-10 금액 사실과 발행 검증 분리 — 배포 전 준비
+
+- 정본: main `050e382`(PR433 포함), 기존 reference builder/보증금 검증기/공유 schema를 확장(`COMPOSE_OR_EXTEND`). 새 엔진·정책 사전·DB/시트 쓰기 없음.
+- 운영 읽기: read `00023-fhl`, image tag `050e382`, 22:05:34 KST 관측 475상품/5,193기간. 22:07:41 원문 재조회와 대사한 월대여료·가격키·주행 단위·청구/지급 수수료 불일치0. 비동시 읽기이며 이 두 시점 밖의 최신성을 보증하지 않는다.
+- 확인된 손실: 원천 정책명이 존재하는 290개 offer에 표시명 누락. RP031의 구조·금액이 일치한 양수 3,008조건은 시간 경과로 금액까지 UNKNOWN 처리됐다. 개선안은 실제 정책명/코드/각 필드 출처와 양수 금액을 보존하고 발행 검증 HOLD를 별도로 둔다. 금액 충돌·alias 모호·삭제/철회·미래 시각·ZERO에는 대체 금액을 적용하지 않는다.
+- 같은 원문·관측 시각으로 개선안 대사: 상품/기간/대여료/수수료/ZERO 변경0, 양수3,008조건 금액+발행HOLD 보존, 정책명290개 전달. 원문 무보증과 양수가 충돌한4조건은 UNKNOWN 유지.
+- next_start_here: 차종마스터 engine_cc 패킷을 순차 통합한 최종 head의 누적 검사·독립 검토 → 기존 통합 owner 경로 PR/main → 별도 배포 승인 후 공급사명·차량번호 실제 조회 readback. 현재 reference는 listable=true 부분집합이며 전체 원천 조회 완료가 아니다. 비판매 원천 조회 범위/권한은 별도 검토한다. 공개 feed 판매 필터는 유지한다.
+
 ## Purpose
 
 Expose the proven ERP public projection and Catalog Data Health through a dedicated
