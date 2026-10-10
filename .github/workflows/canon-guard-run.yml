@@ -1,6 +1,9 @@
 name: Canon Guard (run)
 
-# ai-ops 에서 생성한 파일 — 손으로 고치지 않는다. 복사본이 MANIFEST.json 과 다르면 첫 단계에서 실패한다.
+# ai-ops 에서 생성한 파일 — 손으로 고치지 않는다.
+# 판정기는 PR 가지의 복사본이 아니라 «기준 가지(base)에서 꺼낸 복사본»으로 돌리고, PR 내용은 데이터로만 읽는다.
+# PR 이 판정기 파일(.github/canon-guard/**, .github/workflows/canon-guard*)을 바꾸면 canon-sync 가지만 허용한다.
+# (기준 가지에 판정기가 아직 없는 첫 설치 PR 은 판정기 파일만 바꿀 때에 한해 자기 복사본으로 돈다.)
 on:
   workflow_call:
 
@@ -18,12 +21,39 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Vendored guard matches its manifest
-        run: node .github/canon-guard/verify-manifest.mjs
+      - name: Pick the trusted guard (base branch copy, not the PR's)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          PROTECTED_RE='^\.github/(canon-guard/|workflows/canon-guard)'
+          git fetch --no-tags origin "$BASE_REF"
+          changed="$(git diff --name-only "origin/$BASE_REF"...HEAD || true)"
+          protected="$(printf '%s\n' "$changed" | grep -E "$PROTECTED_RE" || true)"
+          if git cat-file -e "origin/$BASE_REF:.github/canon-guard/MANIFEST.json" 2>/dev/null; then
+            mkdir -p .canon-trusted
+            git archive "origin/$BASE_REF" .github/canon-guard | tar -x -C .canon-trusted
+            echo "TRUSTED=.canon-trusted/.github/canon-guard" >> "$GITHUB_ENV"
+            if [ -n "$protected" ]; then
+              case "$HEAD_REF" in
+                *canon-sync*) echo "guard files changed on a canon-sync branch: allowed" ;;
+                *) echo "::error::canon guard files changed outside a canon-sync branch"; printf '%s\n' "$protected"; exit 1 ;;
+              esac
+            fi
+          else
+            others="$(printf '%s\n' "$changed" | grep -v -E "$PROTECTED_RE" | grep -v '^$' || true)"
+            if [ -n "$others" ]; then
+              echo "::error::bootstrap PR must change only canon guard files"; printf '%s\n' "$others"; exit 1
+            fi
+            echo "TRUSTED=.github/canon-guard" >> "$GITHUB_ENV"
+          fi
+      - name: Trusted guard matches its manifest
+        run: node "$TRUSTED/verify-manifest.mjs"
       - name: Guard proves it still catches known-bad samples
-        run: node .github/canon-guard/scripts/canon-guard.mjs --self-test
+        run: node "$TRUSTED/scripts/canon-guard.mjs" --self-test
       - name: One canonical line per concern
-        run: node .github/canon-guard/scripts/canon-guard.mjs --root .
+        run: node "$TRUSTED/scripts/canon-guard.mjs" --root .
       - name: Branch stays near main and does not contest a canonical path
         if: github.event_name == 'pull_request'
         env:
@@ -31,4 +61,4 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: node .github/canon-guard/scripts/check-branch-discipline.mjs --root . --base "${{ github.base_ref }}"
+        run: node "$TRUSTED/scripts/check-branch-discipline.mjs" --root . --base "${{ github.base_ref }}"
