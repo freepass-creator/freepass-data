@@ -1,6 +1,9 @@
 # FreePass Data — NEXT START HERE
 
-## 2026-10-10 정산 줄 계약→가격행→내부 수수료 읽기 전용 조회
+## 2026-10-10 Admin contract-fee-links HTTP read endpoint
+
+- HTTP update: `POST /v1/consumers/freepass-admin-catalog/contract-fee-links` added with `contract-fee-link-read`, request/response schema, Admin-only auth/capability/audit, max 500 items, duplicate key 400, invalid shape 400, per-item lookup failure.
+- Verification update: `npm.cmd exec vitest -- run tests/consumer-gateway.test.ts tests/contract-fee-link.test.ts` PASS(43), `npm.cmd run build` PASS, `npm.cmd run check:arch` PASS, `npm.cmd run check:standards` PASS(exit 0, profile PARTIAL), `npm.cmd run check:data-access-boundary` PASS.
 
 - 목적: 계약 기록 한 줄에서 차량번호·공급사·개월·월대여료·보증금으로 Catalog의 차량→상품→오퍼→가격행→내부 수수료를 한 번에 좁히는 읽기 전용 경로를 추가했다.
 - 변경: `src/application/contract-fee-link.ts` 순수 함수와 `readContractFeeLink` 어댑터를 추가하고, `toInternalFeeLookup`에 `DUPLICATE_PRICE_TERM_KEY` 및 `TERM_MONTHS_MISMATCH` 보류 판정을 추가했다. 새 저장·새 API·쓰기 호출은 없다.
