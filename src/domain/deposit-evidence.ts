@@ -340,8 +340,12 @@ const depositInstant = (v: unknown): v is string => typeof v === 'string' && /^\
 
 /** Reuses the approved publication's typed provenance; does not re-hash the private RAW envelope. */
 export function readIancarPublishedDeposit(product: Record<string, unknown>, priceKey: string, now = new Date().toISOString(),
-  options: { preserveStalePositiveReference?: boolean } = {}) {
-  const unknown = () => ({ state: 'UNKNOWN' as const, amount: null, reason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' });
+  options: { preserveStalePositiveReference?: boolean } = {}):
+  | { state: 'UNKNOWN'; amount: null; reason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' }
+  | { state: 'KNOWN' | 'ZERO'; amount: number; reason: 'IANCAR_PUBLISHED_CONDITION_EVIDENCE' }
+  | { state: 'KNOWN'; amount: number; reason: 'SOURCE_AMOUNT'; publicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE';
+      publicationDecision: 'HOLD'; depositRuleDifference?: Extract<DepositWithRuleResolution, { state: 'KNOWN' }>['depositRuleDifference'] } {
+  const unknown = () => ({ state: 'UNKNOWN' as const, amount: null, reason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' as const });
   const e = product.iancar_phase_one;
   if (product.provider_company_code !== 'RP031' || product.source !== 'EANCAR_ONE_API'
     || product.source_schema !== 'iancar-one-phase-one-product/1' || !depositRecord(e)
