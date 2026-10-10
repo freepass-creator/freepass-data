@@ -32,7 +32,7 @@ export function assessDepositEvidence(input: {
   if (explicitZero && depositFreeNegativeFlag) {
     return unknown('CONFLICTING_ZERO_DEPOSIT_EVIDENCE');
   }
-  if (noteWaiverBasis && sourceWaiverText && sourceWaiverText !== '무보증') {
+  if ((noteWaiverBasis || confirmationWaiverBasis) && conflictsWithPeriodSourceWaiverText(sourceWaiverText)) {
     return unknown('CONFLICTING_ZERO_DEPOSIT_EVIDENCE');
   }
   if (explicitZero && (!supplierId || !productType || (!missing && !valid))) {
@@ -81,6 +81,11 @@ function depositFreeConfirmationBasis(value: unknown): DepositEvidenceBasis | nu
     && depositInstant(record.at)
     ? { field: 'deposit_free_confirmation', text: '무보증', source: record.source.trim(), at: record.at }
     : null;
+}
+
+function conflictsWithPeriodSourceWaiverText(value: string): boolean {
+  if (!value || value === '무보증') return false;
+  return true;
 }
 
 function readProductPath(product: Record<string, unknown>, path: string): unknown {

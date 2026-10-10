@@ -130,14 +130,23 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
   });
   it('accepts deposit_note when the matching period source cell is absent, but rejects matching-cell conflict and negative flags', () => {
     const identity = { supplierId: 'RP004', productType: '중고렌트', sourceAmount: 0 };
+    const confirmation = { source: '공급사 답변', at: '2026-10-10T12:00:00+09:00', text: '무보증' };
     expect(assessDepositEvidence({ ...identity, note: '무보증' }))
       .toMatchObject({ state: 'ZERO', basis: { field: 'deposit_note', text: '무보증' } });
     expect(assessDepositEvidence({ ...identity, note: '무보증', depositSourceWaiverText: '1,000,000' }))
       .toMatchObject({ state: 'UNKNOWN', reason: 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' });
+    for (const depositSourceWaiverText of ['1,000,000', '1000000', '100만']) {
+      expect(assessDepositEvidence({ ...identity, depositFreeConfirmation: confirmation, depositSourceWaiverText }))
+        .toMatchObject({ state: 'UNKNOWN', reason: 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' });
+    }
+    expect(assessDepositEvidence({ ...identity, depositFreeConfirmation: confirmation }))
+      .toMatchObject({ state: 'ZERO', basis: { field: 'deposit_free_confirmation', text: '무보증' } });
+    expect(assessDepositEvidence({ ...identity, depositFreeConfirmation: confirmation, depositSourceWaiverText: '무보증' }))
+      .toMatchObject({ state: 'ZERO', basis: { field: 'deposit_free_confirmation', text: '무보증' } });
     for (const depositFree of [false, '아니오', '아님', '불가']) {
       expect(assessDepositEvidence({ ...identity, depositFree, depositSourceWaiverBasis: waiverBasis }))
         .toMatchObject({ state: 'UNKNOWN', reason: 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' });
-      expect(assessDepositEvidence({ ...identity, depositFree, depositFreeConfirmation: { source: '공급사 답변', at: '2026-10-10T12:00:00+09:00', text: '무보증' } }))
+      expect(assessDepositEvidence({ ...identity, depositFree, depositFreeConfirmation: confirmation }))
         .toMatchObject({ state: 'UNKNOWN', reason: 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' });
     }
   });
