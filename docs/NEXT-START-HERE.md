@@ -8,6 +8,7 @@
 - 재사용: 기존 `VehicleAsset`/source binding 구조를 확장했다. 기존 plate hash 발급은 160개 호환을 위해 보존하되 번호 없는 신차·번호 변경을 표현하지 못해 새 순수 모듈 생성은 `CREATE_NEW_JUSTIFIED`.
 - next_start_here: 10-13은 실제 products/assets에 `vehicle_uid`·`externalIds`를 붙이는 마이그레이션 계획/digest/readback으로 넘어가며, 10-14 소비처 readback 전에는 옛 hash 발급 삭제 금지.
 
+
 ## 2026-10-10 차량 UID 설계서 추가: `docs/VEHICLE-UID.md`에 기존 asset UID 승격, 신규 ULID, `externalIds[]`, 이전 단계와 HOLD 질문을 문서화했다.
 
 ## 2026-10-10 보증금 ZERO 근거 축소 / deposit_free 확인 기록
