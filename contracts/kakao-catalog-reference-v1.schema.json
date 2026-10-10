@@ -26,15 +26,48 @@
         "sourceCollection": { "const": "products" },
         "sourceCount": { "type": "integer", "minimum": 1 },
         "projectedCount": { "type": "integer", "minimum": 0 },
+        "sourceScope": { "const": "COLLECTED" },
     "depositFilter": { "$ref": "#/$defs/depositFilter" },
-    "queryFilter": {"type":"object","additionalProperties":false,"minProperties":1,"properties":{"supplierId": {"type": "string", "minLength": 1}, "supplierName": {"type": "string", "minLength": 1}, "plateNumber": {"type": "string", "minLength": 1}, "maker": {"type": "string", "minLength": 1}, "model": {"type": "string", "minLength": 1}, "commercialType": {"type": "string", "minLength": 1}, "assetStatus": {"type": "string", "minLength": 1}, "termMonths": {"type": "string", "minLength": 1}, "mileageKm": {"type": "string", "minLength": 1}, "monthlyRentMin": {"type": "string", "minLength": 1}, "monthlyRentMax": {"type": "string", "minLength": 1}, "depositMin": {"type": "string", "minLength": 1}, "depositMax": {"type": "string", "minLength": 1}, "mileagePeriod": {"type": "string", "minLength": 1}, "depositState": {"type": "string", "minLength": 1}, "depositScope": {"type": "string", "minLength": 1}}},
+    "queryFilter": {"type":"object","additionalProperties":false,"minProperties":1,"properties":{"supplierId":{"type":"string","minLength":1},"supplierName":{"type":"string","minLength":1},"plateNumber":{"type":"string","minLength":1},"maker":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"commercialType":{"type":"string","minLength":1},"assetStatus":{"type":"string","minLength":1},"termMonths":{"type":"string","minLength":1},"mileageKm":{"type":"string","minLength":1},"monthlyRentMin":{"type":"string","minLength":1},"monthlyRentMax":{"type":"string","minLength":1},"depositMin":{"type":"string","minLength":1},"depositMax":{"type":"string","minLength":1},"mileagePeriod":{"type":"string","minLength":1},"depositState":{"type":"string","minLength":1},"depositScope":{"type":"string","minLength":1},"sourceScope":{"enum":["LISTABLE","COLLECTED"]}}},
     "queryResolution": {"type": "object", "additionalProperties": false, "required": ["state", "reasonCode", "matchedProductCount"], "properties": {"state": {"enum": ["HOLD", "MATCHED", "NO_MATCH"]}, "reasonCode": {"enum": ["SUPPLIER_NAME_MULTIPLE_CODES", "PLATE_MULTIPLE_PRODUCTS", null]}, "matchedProductCount": {"type": "integer", "minimum": 0}}},
         "dataDigest": { "$ref": "#/$defs/digest" },
         "warning": { "type": "string", "minLength": 1 }
       }
     }
   },
+  "allOf": [{
+    "type": "object",
+    "if": { "type": "object", "properties": { "meta": { "type": "object", "required": ["sourceScope"], "properties": { "sourceScope": { "const": "COLLECTED" } } } } },
+    "then": { "type": "object", "properties": { "data": { "type": "array", "items": { "type": "object", "properties": { "sourceRecord": true }, "required": ["sourceRecord"] } } } },
+    "else": { "type": "object", "properties": { "data": { "type": "array", "items": { "type": "object", "not": { "type": "object", "properties": { "sourceRecord": true }, "required": ["sourceRecord"] } } } } }
+  }],
   "$defs": {
+    "sourceRecord": {
+      "type": "object", "additionalProperties": false,
+      "required": ["scope", "publicationDecision", "listable", "status", "deleted", "supplierId", "supplierName", "sourceRef", "conditionState", "reasonCode", "priceConditions"],
+      "properties": {
+        "scope": { "const": "COLLECTED" }, "publicationDecision": { "const": "HOLD" },
+        "listable": { "type": ["boolean", "null"] }, "status": { "type": ["string", "null"] }, "deleted": { "type": "boolean" },
+        "supplierId": { "type": ["string", "null"] }, "supplierName": { "type": ["string", "null"] }, "sourceRef": { "type": "string", "minLength": 1 },
+        "conditionState": { "enum": ["REFERENCE", "HOLD"] }, "reasonCode": { "type": ["string", "null"] },
+        "priceConditions": { "type": "array", "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["sourceKey", "sourceRef", "termMonths", "monthlyRentSourceValue", "depositSourceValue", "contractedMileage", "monthlyRentAmount", "monthlyRentState", "depositAmount", "depositState", "supplierBillingFee", "channelPayoutFee", "state", "reasonCode"],
+          "properties": {
+            "sourceKey": { "type": "string" }, "sourceRef": { "type": "string", "minLength": 1 },
+            "termMonths": { "type": ["integer", "null"], "minimum": 1 },
+            "monthlyRentSourceValue": { "type": ["number", "string", "null"] }, "depositSourceValue": { "type": ["number", "string", "null"] },
+            "contractedMileage": { "oneOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["km", "period"], "properties": { "km": { "type": "integer", "minimum": 1 }, "period": { "enum": ["month", "year"] } } }] },
+            "monthlyRentAmount": { "type": ["integer", "null"], "minimum": 1 }, "monthlyRentState": { "enum": ["KNOWN", "UNKNOWN"] },
+            "depositAmount": { "$ref": "#/$defs/nullableInteger" }, "depositState": { "enum": ["KNOWN", "ZERO", "UNKNOWN", "NOT_APPLICABLE"] },
+            "supplierBillingFee": { "$ref": "#/$defs/commissionResolution" }, "channelPayoutFee": { "$ref": "#/$defs/commissionResolution" },
+            "state": { "enum": ["REFERENCE", "HOLD"] }, "reasonCode": { "type": ["string", "null"] }
+          },
+          "allOf": [{ "if": { "properties": { "state": { "const": "HOLD" } } }, "then": { "properties": { "reasonCode": { "type": "string", "minLength": 1 } } } }]
+        } }
+      },
+      "allOf": [{ "if": { "properties": { "conditionState": { "const": "HOLD" } } }, "then": { "properties": { "reasonCode": { "type": "string", "minLength": 1 } } } }]
+    },
     "vehicleMasterReference": {"type": "object", "additionalProperties": false, "required": ["state", "authority", "identityKind", "masterId", "trimId", "snapshotDigest", "readAt", "reasonCode"], "properties": {"state": {"enum": ["KNOWN", "HOLD"]}, "authority": {"const": "FREEPASS_DATA_VEHICLE_MASTER"}, "identityKind": {"const": "FIRESTORE_DOCUMENT_ID"}, "masterId": {"type": ["string", "null"], "minLength": 1}, "trimId": {"type": ["string", "null"], "minLength": 1}, "snapshotDigest": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}, "readAt": {"anyOf": [{"type": "null"}, {"type": "string", "format": "date-time"}]}, "reasonCode": {"type": ["string", "null"]}}, "allOf": [{"if": {"properties": {"state": {"const": "KNOWN"}}}, "then": {"properties": {"masterId": {"type": "string"}, "trimId": {"type": "string"}, "snapshotDigest": {"type": "string"}, "readAt": {"type": "string", "format": "date-time"}, "reasonCode": {"type": "null"}}}, "else": {"properties": {"masterId": {"type": "null"}, "trimId": {"type": "null"}, "reasonCode": {"type": "string", "minLength": 1}}}}]},
     "depositFilter": {"type": "object", "additionalProperties": false, "required": ["state", "termMonths", "scope"], "properties": {"state": {"const": "ZERO"}, "termMonths": {"type": ["integer", "null"], "minimum": 1, "maximum": 60}, "scope": {"enum": ["ANY_TERM", "ALL_TERMS"]}}},
     "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
@@ -100,7 +133,7 @@
         "monthlyRent": { "$ref": "#/$defs/money" },
         "deposit": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/money" }] },
         "depositAmount": { "$ref": "#/$defs/nullableInteger" },
-        "depositEvidence": {"type": "object", "additionalProperties": false, "required": ["sourceRef", "sourceAmount", "sourceNote", "reasonCode"], "properties": {"sourceRef": {"type": "string", "minLength": 1}, "sourceAmount": {"type": ["number", "string", "null"]}, "sourceNote": {"type": ["string", "null"]}, "reasonCode": {"type": "string", "minLength": 1}}},
+        "depositEvidence": {"type": "object", "additionalProperties": false, "required": ["sourceRef", "sourceAmount", "sourceNote", "reasonCode"], "dependentRequired": {"publicationEvidenceReason": ["publicationDecision"], "publicationDecision": ["publicationEvidenceReason"]}, "properties": {"sourceRef": {"type": "string", "minLength": 1}, "sourceAmount": {"type": ["number", "string", "null"]}, "sourceNote": {"type": ["string", "null"]}, "reasonCode": {"type": "string", "minLength": 1}, "publicationEvidenceReason": {"const": "IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE"}, "publicationDecision": {"const": "HOLD"}}},
         "depositState": { "enum": ["KNOWN", "ZERO", "UNKNOWN"] },
         "depositStatusLabel": { "enum": ["보증금 있음", "무보증", "미확인", "보증금 확인 필요"] },
         "depositRuleDifference": { "$ref": "#/$defs/depositRuleDifference" },
@@ -166,6 +199,7 @@
       "properties": {
         "productId": { "type": "string", "minLength": 1 },
         "sourceProductId": { "type": "string", "minLength": 1 },
+        "sourceRecord": { "$ref": "#/$defs/sourceRecord" },
         "displayName": { "type": "string", "minLength": 1 },
         "commercialType": { "enum": ["NEW_RENT", "USED_RENT", "NEW_SUBSCRIPTION", "USED_SUBSCRIPTION", "OGONG_SUBSCRIPTION", "PICKUP_SUBSCRIPTION", "OPLUS_SUBSCRIPTION", "UNKNOWN"] },
         "vehicleMasterReference": { "$ref": "#/$defs/vehicleMasterReference" },
@@ -195,13 +229,21 @@
             "subModel": { "$ref": "#/$defs/nullableString" },
             "trim": { "$ref": "#/$defs/nullableString" },
             "fuel": { "$ref": "#/$defs/nullableString" },
+            "engineCc": { "$ref": "#/$defs/nullableInteger" },
+            "engineCcState": { "enum": ["KNOWN", "HOLD"] },
             "drive": { "$ref": "#/$defs/nullableString" },
             "seats": { "$ref": "#/$defs/nullableInteger" },
             "assetStatus": { "enum": ["AVAILABLE", "RESERVED", "MAINTENANCE", null] },
             "plateNumber": { "$ref": "#/$defs/nullableString" },
             "odometerKm": { "$ref": "#/$defs/nullableInteger" },
             "exteriorColor": { "$ref": "#/$defs/nullableString" }
-          }
+          },
+          "dependentRequired": { "engineCc": ["engineCcState"], "engineCcState": ["engineCc"] },
+          "allOf": [{
+            "if": { "required": ["engineCcState"], "properties": { "engineCcState": { "const": "KNOWN" } } },
+            "then": { "properties": { "engineCc": { "type": "integer", "minimum": 0 } } },
+            "else": { "properties": { "engineCc": { "type": "null" } } }
+          }]
         },
         "shadowFacts": {
           "type": "object",
@@ -216,7 +258,7 @@
         },
         "offers": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "maxItems": 1,
           "items": {
             "type": "object",
@@ -233,6 +275,10 @@
                 "properties": {
                   "state": { "enum": ["REFERENCE", "UNKNOWN"] },
                   "policyId": { "$ref": "#/$defs/nullableString" },
+                  "policyCode": { "$ref": "#/$defs/nullableString" },
+                  "policyName": { "$ref": "#/$defs/nullableString" },
+                  "policyCodeSourceRef": { "$ref": "#/$defs/nullableString" },
+                  "policyNameSourceRef": { "$ref": "#/$defs/nullableString" },
                   "sourceRef": { "$ref": "#/$defs/nullableString" },
                   "reasonCode": { "$ref": "#/$defs/nullableString" },
                   "facts": { "type": "array", "items": {
@@ -247,11 +293,12 @@
                   } }
                 }
               },
-              "priceTerms": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/priceTerm" } }
+              "priceTerms": { "type": "array", "minItems": 0, "items": { "$ref": "#/$defs/priceTerm" } }
             }
           }
         }
-      }
+      },
+      "allOf": [{ "if": { "not": { "type": "object", "properties": { "sourceRecord": true }, "required": ["sourceRecord"] } }, "then": { "properties": { "offers": { "type": "array", "minItems": 1, "items": { "type": "object", "properties": { "priceTerms": { "type": "array", "minItems": 1 } } } } } } }]
     },
     "commissionPolicy": {
       "type": "object",

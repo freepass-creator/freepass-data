@@ -665,3 +665,50 @@ Those are *historical* incident counts, never today's expected source totals.
 
 This RP031 patch is a first vertical slice, not a claim that the above production
 gates or all suppliers are complete.
+
+
+## 차량 사진 프록시 확장 — 2026-10-10
+
+출처 전략은 ONE API(`isPublicIancarPhotoProduct` + 기존 주입 reader)와 승인 Drive 연결(`isApprovedVehiclePhotoProduct` + `approvedPhotoReader`) 두 개다. 공통 경로는 I/O 없는 상수시간 해시 인증 → 실패 요청만 IP 실패 버킷 / 성공 요청만 consumer 버킷 → 요청 검증 → HTTP 응답 슬롯 확보 → 상품 읽기 → 출처 적격성·독립 차량사진 확인 관문 → 공통 검증·상품 재조회 → 성공 감사 저장 → HTTP 응답 직전 재검증 → 응답 종료 시 슬롯 반환이다. 원본 읽기·캐시 적중·count 모두 같은 출처 적격성과 확인 기록이 유지되어야 응답한다.
+
+`photo_original_refs`는 1~200개이며 모든 항목의 `{ driveFileId, sha256, mediaType, role, zone, approvedAt, vehicleKey, vehiclePhotoVerifiedBy, vehiclePhotoVerificationMethod, vehiclePhotoVerifiedAt }`를 검증한다. 파일 참조·차량키는 영문/숫자/밑줄/하이픈 1~200자, SHA256은 소문자64 hex, role은 VEHICLE_PHOTO, zone은 차량사진, approvedAt은 실제 존재하는 UTC ISO 시각(초 또는 밀리초, Z)이다. 서류·원문·doc_images나 잘못된 ref 하나라도 있으면 상품 전체를 거부한다. 폴더 이름으로 승인을 추정하지 않는다.
+
+차량키는 공급사 코드(provider_company_code, 없으면 partner_code)와 상품 귀속값을 서버에서 읽어 `sha256(JSON.stringify(['vehicle', supplier, vehicleId]))`로 계산한다. 공급사 차량 ID가 없으면 `sha256(JSON.stringify(['plate', supplier, plate]))`다. 문자열 앞뒤 공백을 제거하고 번호판 평문을 키·로그에 쓰지 않는다. 두 경로 모두64 hex라 기존 형식 제약과 호환된다. 옛 승인 키는 새 계산값으로 재승인되어야 하며 자동 fallback하지 않는다.
+
+| 검증·제한 | 결과 |
+|---|---|
+| 비공개·삭제·철회·상태 부적격, 승인 ref/차량키 불일치 | 404 |
+| 잘못된 productId/index | 400 |
+| 비어 있는 바이트, 8MiB 초과, JPEG/PNG/WebP 이외 종류, 파일 시그니처 불일치 | 503, 캐시 미등록 |
+| 승인 출처의 ref.mediaType 또는 SHA256 불일치 | 503, 캐시 미등록 |
+| 상품 재조회에서 적격성·같은 출처·연결 불일치 | 404 VEHICLE_PHOTO_NOT_FOUND. reader 내부 실패는 캐시 미등록. 감사 저장 후에도 재조회하여 응답 차단. 승인 출처는 refs 전체 연결, ONE은 공급사·차량 귀속 재확인 |
+| reader 미연결 | 503 VEHICLE_PHOTO_READER_UNAVAILABLE |
+| count·바이트 HTTP 슬롯 동시8 초과 | 429 VEHICLE_PHOTO_BUSY + Retry-After: 2. 읽기 전에 확보하고 감사 저장·전송이 끝나는 finish·error·close까지 유지하며 한 번만 반환. reader 내부 작업 슬롯 반환과 별개 |
+| 인증 실패 IP / 인증 성공 consumer 한도 초과 | 429 + Retry-After(다음 토큰 대기 초). 같은 IP의 실패 한도가 소진돼도 정상 토큰은 consumer 한도만 적용 |
+| 미인증/권한 없음 | 제한 이내에서401/403 |
+
+차량사진 확인자(`vehiclePhotoVerifiedBy`)·확인 방법(`vehiclePhotoVerificationMethod`)은 공백 아닌 문자열, 확인 시각(`vehiclePhotoVerifiedAt`)은 실제 존재하는 UTC ISO 시각(초 또는 밀리초, Z)이어야 한다. `photo_original_refs`의 모든 항목에 세 필드가 있어야 하며 하나라도 없으면 ONE과 승인 Drive의 count·원본·캐시 모두 거부한다. 공급사 신뢰·차량 귀속·파일 형식 검사와 독립된 관문이며 자동 이미지 분류를 뜻하지 않는다.
+
+ONE의 차량 귀속 검사는 `iancarOnePhotoIds`, 승인 Drive의 해시 검사는 공통 reader가 담당한다. ONE 확인 방법 값의 형식은 `ONE 차량사진 전용 확인; 범위=<적용 API/사진 집합>; 방법=<사람이 수행한 검증>; 근거=<비공개 근거 위치/버전>`이다. 차량사진만 반환한다는 실제 근거·확인자·시각은 사람이 채운다. 문서나 공급사 이름으로 승인 기록을 생성하지 않으며 근거가 없으면 HOLD다. ONE도 전체 확인 기록의 변경·철회를 응답 전에 재검증한다.
+
+크기·MIME·시그니처 정책과 크기 상수는 `consumer-output-contract.ts`의 `validateVehiclePhotoMedia` 한 곳이다. ONE 어댑터는 헤더/청크 수신/완료 시, 공통 reader와 gateway는 완성 바이트에 같은 함수를 호출한다. 수신 중 상한 초과는 즉시 취소한다. 기존 ONE count·캐시는 유지하고 공급사 오류는 단일 VEHICLE_PHOTO 응답으로 변환한다.
+
+승인 바이트 캐시는 `(productId, driveFileId, sha256, approvedAt, vehicleKey)` JSON 튜플, 총64MiB, TTL30초, LRU다. 캐시 적중도 바이트·해시·반환 직전 상품 재조회를 통과한다. HTTP Cache-Control은 private, no-store, 감사 operation은 `READ_PRODUCT_PHOTO`, resource는 `vehicle-product-photo`다. count 응답 schema·productId·count와 HTTP 상태를 유지한다. reader는 `revalidate(): Promise<boolean>` 클로저를 반환하며 gateway가 `access.read`의 성공 감사 저장 완료 후 HTTP 응답 직전에 호출한다. 상품을 다시 읽어 같은 출처·같은 승인 연결·적격성을 확인하며 count·원본·캐시 모두 적용한다. 거짓이면404이며 기존 `access.deny`로 DENIED 기록을 시도한다. 이 추가 감사 저장이 불가능해도 데이터를 보내지 않고404를 유지한다. 새 감사 구조는 없다.
+
+요청 제한 상수는 `src/api/photo-request-limit.ts` 한 곳이다. 인증 실패 IP 버스트120/초20 보충, 인증 성공 consumer 버스트60/초10 보충. 인증은 상수시간 해시 비교로 먼저 수행하며 I/O가 없다. 실패 요청은 consumer 버킷을, 성공 요청은 IP 실패 버킷을 소모하지 않는다. 버킷별 최대4096키·키 길이200·60초 비활성 정리, 시계 주입 가능. 상한 도달 시 새 키를429로 거부하여 기존 한도가 새 IP로 축출·초기화되지 않는다. 프로세스별 메모리 제한이며 다중 인스턴스 전역 한도를 보장하지 않는다. 재사용 검색에서 문서·원본 동시성 캐시만 발견되어 시간 기반 요청 제한기를 `CREATE_NEW_JUSTIFIED`로 추가했다.
+
+Fastify `request.ip`는 `FREEPASS_DATA_TRUST_PROXY_HOPS` 정수0~3으로만 프록시 신뢰를 켠다(기본0, 잘못된 값은 시작 거부). 0이면 trustProxy=false로 소켓 IP만 사용하고 위조 X-Forwarded-For를 무시한다. 1~3이면 해당 홉 수만 신뢰하는 Fastify trustProxy 함수로 X-Forwarded-For를 오른쪽부터 해석하고 경계 너머 왼쪽 값은 신뢰하지 않는다. hops>0은 외부 클라이언트의 서버 소켓 직접 접근이 차단되고 모든 경로가 지정된 수의 신뢰 프록시를 통과하며 프록시가 전달 헤더를 정리하는 환경에서만 설정한다. 직접 접근이나 더 짧은 경로가 있으면 홉 수만으로 출처를 검증할 수 없으므로 기본0을 유지한다.
+
+지운 것: `readIancarPhoto` 메서드, `isLegacyProduct` 인자·승인 전 조기 반환, gateway `readVehiclePhoto ?? readIancarPhoto` 폴백, 공개 `IANCAR_PHOTO_*` 응답 경로, 밑줄 연결 차량키, 중복된 이전 프록시 설명. 파일·시험 삭제 없음. 기존 이안카 gateway 시험을 단일 메서드로 이전했고 ONE 귀속·미디어 시험은 보존했다.
+
+호환 확인: 로컬 ERP5(전체) 및 ERP4 lib/app에서 옛 오류 코드·메서드 의존을 grep한 결과0건. ERP5 `lib/catalog-client.mjs`는 HTTP 성공 여부·404로 분기한다. 라이브 검증은 네트워크 금지로 미실행이다.
+
+검증(2026-10-10 PR #419 반려 수정): 관련171/171 PASS(gateway68, ONE75, withdrawal23, output-contract5). 확인 세 필드 각각의 누락·공백 거부/정상 허용과 확인 기록 철회, 실제 응답 스트림 완료 전 추가 요청 제한, finish·error·close의 단일 반환, reader·감사 오류 후 슬롯 반환을 확인했다. `npm.cmd run check`는 arch/standards/data-access/sheets106/build PASS 후 read-runtime-smoke 12 PASS / 1 FAIL로 code1 종료했다. 원인은 tsx 시작의 `uv_os_get_passwd ENOMEM`이며 후속 check 단계에는 도달하지 않았다. 별도 전체 Vitest 결과와 남은 보류는 NEXT-START-HERE 날짜 이력에 기록한다. runtime-policy 시험은 수정하지 않았다.
+
+남음: 실제 Drive reader 구현·비공개 사진 읽기 권한·승인 연결 게시·배포는 범위 밖. 추가 네트워크 독립 검토는 UNAVAILABLE. 정상 실행 환경의 전체 check를 완료로 대신하지 않는다. 커밋·푸시·운영 변경 없음.
+
+### 승인 Drive 원본 bytes adapter — CODED/TESTED, 운영 OFF
+
+기존 infra의 `createApprovedDrivePhotoReader`는 승인된 정확 fileId에 대해 metadata와 `alt=media` GET만 수행한다. 원본 download 방식은 [Drive 공식 문서](https://developers.google.com/workspace/drive/api/guides/manage-downloads)를 따른다. `google-auth-library` Compute metadata 인증은 runtime service account와 drive.readonly scope만 사용하며 사용자 ADC/gws를 읽지 않는다. token/fetch fixture 주입을 지원한다. ID 불일치·휴지통·용량·미디어 오류는 download 전 거부하고 스트림을 공통 8MiB 한도 안에서 읽는다. 전체 bytes의 서명과 기존 공통 reader의 SHA256·차량키·승인 철회 검사 후에만 응답한다. SDK/HTTP 오류 원문이나 토큰은 기록·반환하지 않는다.
+
+factory를 운영 runtime에 자동 연결하지 않았다. 기존 선택적 ApprovedPhotoReader 인자로만 연결할 수 있다. 승인 refs/정확 폴더 ID/서비스 계정 Drive 읽기 권한의 운영 검증과 별도 승인이 남았다. 앞 절의 reader 미구현은 이 코드 작업으로 해소하되, 비공개 사진 읽기 권한·승인 연결 게시·배포 HOLD는 유지한다.

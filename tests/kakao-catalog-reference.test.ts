@@ -1,7 +1,10 @@
 process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import { precomputeOfferEconomics, readStoredTermFees } from '../src/application/resolve-offer-commercial-terms.js';
+import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 import {
   KAKAO_COMMISSION_POLICY,
   KAKAO_COMMISSION_POLICY_2026_10_03,
@@ -19,6 +22,39 @@ import {
 } from '../src/application/kakao-catalog-reference.js';
 
 describe('shared reference policy context', () => {
+  it('keeps legacy DTO compatibility while rejecting contradictory displacement states', () => {
+    const schema = JSON.parse(readFileSync(new URL('../contracts/kakao-catalog-reference-v1.schema.json', import.meta.url), 'utf8'));
+    const validate = new Ajv2020({ strict: false }).compile({ $defs: schema.$defs, ...schema.$defs.product.properties.vehicle });
+    const legacy = buildKakaoCatalogReferenceProduct('synthetic', { listable: true, provider_company_code: 'RP013', price: { '36': { rent: 500000 } } })!.vehicle;
+    const { engineCc, engineCcState, ...oldVehicle } = legacy;
+    expect(validate(oldVehicle)).toBe(true);
+    expect(validate({ ...oldVehicle, engineCc: 0, engineCcState: 'KNOWN' })).toBe(true);
+    expect(validate({ ...oldVehicle, engineCc: null, engineCcState: 'HOLD' })).toBe(true);
+    expect(validate({ ...oldVehicle, engineCc: null, engineCcState: 'KNOWN' })).toBe(false);
+    expect(validate({ ...oldVehicle, engineCc: 1998, engineCcState: 'HOLD' })).toBe(false);
+    expect(validate({ ...oldVehicle, engineCc: 1998 })).toBe(false);
+  });
+  it.each([
+    [1998, 1998], ['1998', 1998], ['1,998', 1998], [0, 0], ['0', 0],
+    [undefined, null], [null, null], ['', null], ['unknown', null], ['1998cc', null], [-1, null],
+  ])('preserves source engine_cc %s without inventing displacement or changing source identities', (raw, expected) => {
+    const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트',
+      fuel_type: '가솔린', drive_type: 'AWD', engine_cc: raw, vehicle_uid: 'existing-immutable-uid',
+      price: { '36_2만': { rent: 500000, deposit: 1000000 }, '48_2만': { rent: 450000, deposit: null } } };
+    const source = { consumerId: 'kakao-ops', observedAt: '2026-10-10T00:00:00Z', products: { synthetic: product } };
+    const original = structuredClone(source);
+    const reference = buildKakaoCatalogReference(source);
+    const row = reference.data[0]!;
+    expect(row.vehicle).toMatchObject({ engineCc: expected, engineCcState: expected === null ? 'HOLD' : 'KNOWN', fuel: '가솔린', drive: 'AWD' });
+    expect(row.vehicleMasterReference).toMatchObject({ state: 'HOLD', masterId: null, trimId: null });
+    expect(row.sourceProductId).toBe('synthetic');
+    expect(row.offers[0]!.supplierId).toBe('RP013');
+    expect(row.offers[0]!.priceTerms.map(term => term.termKey)).toEqual(['source:36_2만', 'source:48_2만']);
+    expect(buildInternalAiReference({ ...source, consumerId: 'internal-ai-test' }).data).toEqual(reference.data);
+    expect(source).toEqual(original);
+    const missingSpecs = buildKakaoCatalogReference({ ...source, products: { synthetic: { ...product, fuel_type: '', drive_type: '' } } });
+    expect(missingSpecs.data[0]!.vehicle).toMatchObject({ fuel: null, drive: null });
+  });
   it('attaches only native pairs from the provided sealed snapshot, preserving source and period identities', () => {
     const observedAt = new Date().toISOString();
     const body = { readAt: observedAt, masters: [{ id: 'native-master', data: { maker: '현대', model: '쏘나타', sub_model: '쏘나타 DN8', sub_model_aliases: ['소나타 DN8'] } }],
@@ -74,10 +110,22 @@ describe('shared reference policy context', () => {
     expect(filterReferenceZeroDeposit(reference, { depositState: 'ZERO', depositScope: 'ALL_TERMS' }).data).toEqual([]);
     expect(buildInternalAiReference({ ...input, consumerId: 'internal-ai-test' }).data).toEqual(reference.data);
     const stale = buildKakaoCatalogReference({ ...input, observedAt: '2026-10-09T00:15:01Z' });
-    expect(stale.data[0]!.offers[0]!.priceTerms.every(t => t.depositState === 'UNKNOWN' && t.depositAmount === null)).toBe(true);
+    expect(stale.data[0]!.offers[0]!.priceTerms.map(t => t.depositState)).toEqual(['UNKNOWN', 'UNKNOWN', 'KNOWN', 'UNKNOWN']);
+    expect(stale.data[0]!.offers[0]!.priceTerms[2]).toMatchObject({ depositAmount: 1000000,
+      depositEvidence: { reasonCode: 'SOURCE_AMOUNT', publicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE', publicationDecision: 'HOLD' } });
+    const staleCompat = withCompatibilityDepositEvidence(product, '2026-10-09T00:15:01Z').price as Record<string, Record<string, unknown>>;
+    expect(staleCompat['24_연30000km']).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
+    expect(staleCompat['24_연30000km']).not.toHaveProperty('depositPublicationDecision');
+    expect(staleCompat['24']).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
+    expect(buildKakaoCatalogReference({ ...input, observedAt: '2026-10-08T23:58:59Z' }).data[0]!.offers[0]!.priceTerms[2]!.depositState).toBe('UNKNOWN');
     expect(filterReferenceZeroDeposit(stale, { depositState: 'ZERO' }).data).toEqual([]);
     const mismatch = structuredClone(product); mismatch.price['24'].deposit = 1;
     expect(buildKakaoCatalogReferenceProduct('synthetic', mismatch, {}, {}, now)!.offers[0]!.priceTerms[0]!.depositState).toBe('UNKNOWN');
+    expect(buildKakaoCatalogReferenceProduct('synthetic', mismatch, {}, {}, '2026-10-09T00:15:01Z')!.offers[0]!.priceTerms[0]!.depositState).toBe('UNKNOWN');
+    const ambiguous = structuredClone(product); ambiguous.iancar_phase_one.priceAliases['24'] = '24:30000:year'; ambiguous.price['24'].deposit = 1000000;
+    expect(buildKakaoCatalogReferenceProduct('synthetic', ambiguous, {}, {}, '2026-10-09T00:15:01Z')!.offers[0]!.priceTerms[0]!.depositState).toBe('UNKNOWN');
+    const deleted = { ...product, _deleted: true };
+    expect(buildKakaoCatalogReferenceProduct('synthetic', deleted, {}, {}, '2026-10-09T00:15:01Z')!.offers[0]!.priceTerms[2]!.depositState).toBe('UNKNOWN');
     expect(resolveReferenceDeposit({ supplierId: 'RP012', productType: '중고렌트', note: '무보증', depositFree: true, sourceAmount: 0, termMonths: 24, monthlyRent: 500000 }).depositState).toBe('UNKNOWN');
   });
   it('searches confirmed zero without treating placeholders or mixed periods as all-free', () => {
@@ -150,6 +198,16 @@ describe('shared reference policy context', () => {
   it('empty or invalid recognized fields are not interpreted as an approved policy', () => {
     expect(resolveReferencePolicyContext(product, { POL1: { annual_mileage: { arbitrary: true } } })).toMatchObject({
       state: 'UNKNOWN', facts: [], reasonCode: 'POLICY_FACTS_MISSING' });
+  });
+  it('preserves native policy name/code and reuses supplier-scoped policy selection without approving name-only facts', () => {
+    const named = { ...policy, policy_name: '공급사 기본 조건' };
+    expect(resolveReferencePolicyContext(product, { native: named, other: { ...named, provider_company_code: 'RP023' } }))
+      .toMatchObject({ state: 'REFERENCE', policyCode: 'POL1', policyName: '공급사 기본 조건', sourceRef: 'policy/native',
+        policyNameSourceRef: 'policy/native/policy_name', policyCodeSourceRef: 'policy/native/policy_code' });
+    expect(resolveReferencePolicyContext(product, { native: { policy_code: 'POL1', policy_name: '조건 확인 중', provider_company_code: 'RP013' } }))
+      .toMatchObject({ state: 'UNKNOWN', policyName: '조건 확인 중', facts: [], reasonCode: 'POLICY_FACTS_MISSING' });
+    expect(resolveReferencePolicyContext(product, { native: named, duplicate: named }))
+      .toMatchObject({ policyName: null, policyCode: null, reasonCode: 'POLICY_LINK_AMBIGUOUS' });
   });
 });
 
@@ -798,4 +856,59 @@ it('F04 source identity is lazy, required when recorded, and follows the configu
     if (previous === undefined) delete process.env.FREEPASS_SHEET_F04_ID;
     else process.env.FREEPASS_SHEET_F04_ID = previous;
   }
+});
+
+describe('collected reference scope preserves non-sellable and missing source conditions', () => {
+  const base = { provider_company_code: 'TEMP_A', provider_name: '같은공급사', maker: 'fixture', car_number: '123가4567', status_kind: '불가', engine_cc: 1998 };
+  const input = { consumerId: 'kakao-ops', observedAt: '2026-10-10T00:00:00Z', products: {
+    sold: { ...base, listable: true, price: { '36': { rent: 500000, deposit: null } } },
+    blocked: { ...base, listable: false, customer_name: 'private-customer', password: 'private-secret', price: { '12': { rent: 400000, deposit: 1000000, customer: 'private-customer' }, '36': { rent: null, deposit: null, token: 'private-secret' }, 'bad-key': { rent: 'unknown' } } },
+    missing: { ...base, listable: false, price: null },
+    unknownSupplier: { ...base, provider_company_code: '', listable: null, price: { '24_3만': { rent: null, deposit: 0 } } },
+  } };
+  it('retains every source ID and original row evidence with no fabricated zero or offer', () => {
+    const original = structuredClone(input);
+    expect(buildKakaoCatalogReference(input).data.map(p => p.sourceProductId)).toEqual(['sold']);
+    const r = buildKakaoCatalogReference({ ...input, sourceScope: 'COLLECTED' });
+    expect(r.data).toHaveLength(4); expect(input).toEqual(original);
+    expect(JSON.stringify(r)).not.toContain('private-customer');
+    expect(JSON.stringify(r)).not.toContain('private-secret');
+    const blocked = r.data.find(p => p.sourceProductId === 'blocked')!;
+    expect(blocked.sourceRecord).toMatchObject({ listable: false, status: '불가', conditionState: 'HOLD', reasonCode: 'SOURCE_PRICE_CONDITIONS_PARTIAL', publicationDecision: 'HOLD' });
+    expect(blocked.sourceRecord!.priceConditions).toHaveLength(3);
+    expect(blocked.sourceRecord!.priceConditions.find(t => t.sourceKey === '36')).toMatchObject({ termMonths: 36, monthlyRentSourceValue: null, depositSourceValue: null, state: 'HOLD' });
+    expect(blocked.sourceRecord!.priceConditions.find(t => t.sourceKey === 'bad-key')!.termMonths).toBeNull();
+    const missing = r.data.find(p => p.sourceProductId === 'missing')!;
+    expect(missing.offers[0]!.priceTerms).toEqual([]);
+    expect(missing.sourceRecord).toMatchObject({ reasonCode: 'SOURCE_PRICE_CONDITIONS_MISSING', priceConditions: [] });
+    expect(r.data.find(p => p.sourceProductId === 'unknownSupplier')!.offers).toEqual([]);
+    expect(r.data.find(p => p.sourceProductId === 'unknownSupplier')!.sourceRecord!.priceConditions[0]).toMatchObject({
+      termMonths: 24, contractedMileage: { km: 30000, period: 'year' }, depositSourceValue: 0, depositAmount: null, depositState: 'UNKNOWN',
+      monthlyRentAmount: null, monthlyRentState: 'UNKNOWN', supplierBillingFee: { state: 'UNKNOWN', amount: null }, channelPayoutFee: { state: 'UNKNOWN', amount: null },
+    });
+    expect(blocked.vehicle).toMatchObject({ engineCc: 1998, engineCcState: 'KNOWN' });
+    expect(r.meta).toMatchObject({ sourceScope: 'COLLECTED', authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD' });
+  });
+  it('finds price-less vehicles and ambiguous plates; period-only lookup retains missing rent evidence', () => {
+    const r = buildKakaoCatalogReference({ ...input, sourceScope: 'COLLECTED' });
+    const exact = filterReferenceZeroDeposit(r, { sourceScope: 'COLLECTED', plateNumber: '123가4567', supplierName: '같은공급사' });
+    expect(exact.data).toHaveLength(4);
+    expect(exact.meta).toMatchObject({ queryResolution: { state: 'HOLD', reasonCode: 'PLATE_MULTIPLE_PRODUCTS' } });
+    const period = filterReferenceZeroDeposit(r, { sourceScope: 'COLLECTED', termMonths: '36' });
+    expect(period.data.map(p => p.sourceProductId)).toEqual(['blocked', 'sold']);
+    expect(filterReferenceZeroDeposit(r, { sourceScope: 'COLLECTED', termMonths: '36', monthlyRentMax: '450000' }).data).toEqual([]);
+    expect(filterReferenceZeroDeposit(r, { sourceScope: 'COLLECTED', depositState: 'ZERO' }).data).toEqual([]);
+  });
+  it('requires collected metadata and missing-condition reason without loosening default nonempty offers', () => {
+    const schema = JSON.parse(readFileSync(new URL('../contracts/kakao-catalog-reference-v1.schema.json', import.meta.url), 'utf8'));
+    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(schema);
+    const r = buildKakaoCatalogReference({ ...input, sourceScope: 'COLLECTED' });
+    expect(validate(r), JSON.stringify(validate.errors)).toBe(true);
+    const bad = structuredClone(r); delete bad.meta.sourceScope;
+    expect(validate(bad)).toBe(false);
+    const unknown = structuredClone(r); unknown.data.find(p => p.sourceProductId === 'missing')!.sourceRecord!.reasonCode = null;
+    expect(validate(unknown)).toBe(false);
+    const normal = buildKakaoCatalogReference(input); normal.data[0]!.offers[0]!.priceTerms = [];
+    expect(validate(normal)).toBe(false);
+  });
 });
