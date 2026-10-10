@@ -22,7 +22,7 @@ import {
   resolveExecutionWriter,
   type ExecutionWriterRef
 } from '../domain/writer-ownership.js';
-import type { CatalogStore, OutboxStore, ProjectionStore } from '../ports/catalog-store.js';
+import type { CatalogStore, OutboxStore, ProjectionStore, ProjectionPublishGuard } from '../ports/catalog-store.js';
 import type { CatalogEntityType, EntityRevisionRecord } from '../domain/history.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import type {
@@ -403,9 +403,60 @@ export function buildProjectionEvidenceContext(input: {
   return { canonicalInputs, evidence, requireRevision, addField };
 }
 
+export async function assertCatalogSourceFreshness(
+  catalog: CatalogStore, now: string, requireFreshSources = false
+): Promise<ProjectionPublishGuard['sources']> {
+  const current = Date.parse(now);
+  if (!Number.isFinite(current)) throw new Error('PROJECTION_SOURCE_TIME_INVALID');
+  const lineage = await catalog.listLineageByStage('NORMALIZED_TO_CANONICAL');
+  const sources = [...new Set(lineage.map(item => item.sourceId))];
+  const witnesses: ProjectionPublishGuard['sources'] = [];
+  if (requireFreshSources && !sources.length) throw new Error('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
+  for (const sourceId of sources) {
+    const definition = await catalog.getSourceDefinition(sourceId);
+    const threshold = definition?.expectedFreshnessSeconds;
+    // Unscheduled local/static fixtures retain their existing behavior. The
+    // operational worker requires an explicit policy for every source.
+    if (threshold == null) {
+      if (requireFreshSources) throw new Error('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
+      continue;
+    }
+    if (!definition?.enabled || !Number.isSafeInteger(threshold) || threshold <= 0) {
+      throw new Error('PROJECTION_SOURCE_FRESHNESS_UNKNOWN');
+    }
+    const head = await catalog.getSourceHead(sourceId);
+    const run = head ? await catalog.getSourceRun(head.runId) : null;
+    if (!head || head.sourceId !== sourceId || !run || run.sourceId !== sourceId ||
+        run.status !== 'COMPLETED' || run.headStatus !== 'CURRENT' ||
+        run.coverage.mode !== 'FULL' || run.coverage.completeness !== 'COMPLETE' ||
+        head.coverage.mode !== 'FULL' || head.coverage.completeness !== 'COMPLETE') {
+      throw new Error('PROJECTION_SOURCE_HEAD_UNVERIFIED');
+    }
+    const observed = Date.parse(head.observedAt);
+    if (!Number.isFinite(observed) || observed > current) throw new Error('PROJECTION_SOURCE_TIME_INVALID');
+    if (current - observed > threshold * 1000) throw new Error('PROJECTION_SOURCE_STALE');
+    witnesses.push({ sourceId, runId: head.runId, digest: stableDigest([definition, head, run]),
+      expiresAt: observed + threshold * 1000 });
+  }
+  return witnesses.sort((a, b) => a.sourceId.localeCompare(b.sourceId));
+}
+
 export async function buildErpPublicProjection(
-  catalog: CatalogStore, projections: ProjectionStore, now = new Date().toISOString()
+  catalog: CatalogStore, projections: ProjectionStore, now = new Date().toISOString(),
+  options: { activate?: boolean; requireFreshSources?: boolean; publishGuard?: ProjectionPublishGuard } = {}
 ): Promise<ProjectionRelease<ErpPublicProduct>> {
+  const started = performance.now();
+  const currentTime = options.publishGuard?.now ?? (() => new Date(Date.parse(now) + Math.floor(performance.now() - started)).toISOString());
+  const sources = await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources);
+  if (options.publishGuard && stableDigest(sources) !== stableDigest(options.publishGuard.sources))
+    throw new Error('PROJECTION_SOURCE_CHANGED');
+  const guard: ProjectionPublishGuard = { now: currentTime, sources,
+    ...(options.publishGuard?.expectedActiveReleaseId !== undefined ? { expectedActiveReleaseId: options.publishGuard.expectedActiveReleaseId } : {}),
+    ...(options.publishGuard?.claim ? { claim: options.publishGuard.claim } : {}) };
+  const deliveryGuard = (release: ProjectionRelease<ErpPublicProduct>): ProjectionPublishGuard => ({ ...guard,
+    ...(options.publishGuard?.delivery ? { receipt: { ...options.publishGuard.delivery,
+      projectionId: release.projectionId, releaseId: release.releaseId,
+      inputDigest: release.inputDigest, dataDigest: release.dataDigest } } : {}) });
   const releaseId = `rel_${randomUUID()}`;
   const [models, assets, products, offers, policies, sourceLineage, revisionHistory] = await Promise.all([
     catalog.listVehicleModels(),
@@ -698,8 +749,14 @@ export async function buildErpPublicProjection(
     'erp-public'
   );
   const currentActive = currentEvidence.release;
+  // Canonical/evidence reads can outlast or observe changes after preflight.
+  // Recheck before accepting an existing ACTIVE as delivery evidence.
+  if (stableDigest(await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources)) !== stableDigest(sources))
+    throw new Error('PROJECTION_SOURCE_CHANGED');
+  if (options.publishGuard?.expectedActiveReleaseId !== undefined && (currentActive?.releaseId ?? null) !== options.publishGuard.expectedActiveReleaseId)
+    throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
   if (
-    currentActive &&
+    options.activate !== false && currentActive &&
     currentActive.status === 'ACTIVE' &&
     currentActive.inputDigest === inputDigest &&
     currentActive.dataDigest === dataDigest &&
@@ -711,6 +768,8 @@ export async function buildErpPublicProjection(
       currentEvidence.lineage
     );
     if (integrity.valid) {
+      const existingGuard = deliveryGuard(currentActive);
+      if (existingGuard.receipt) await projections.putDeliveryReceipt(existingGuard.receipt, existingGuard);
       return currentActive;
     }
   }
@@ -750,7 +809,14 @@ export async function buildErpPublicProjection(
     lineage: evidenceContext.evidence
   });
   await projections.markReady(release.releaseId);
-  await projections.activate(release.releaseId);
+  // Preparation stages validated evidence only. Use an in-memory ProjectionStore
+  // for a read-only production dry-run; preparation alone is not a cutover.
+  // READY persistence is separate from source ingestion. Keep last-good ACTIVE
+  // if the source became ineligible or stale while persisting this release.
+  if (stableDigest(await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources)) !== stableDigest(sources))
+    throw new Error('PROJECTION_SOURCE_CHANGED');
+  if (options.activate === false) return { ...release, status: 'READY' };
+  await projections.activate(release.releaseId, deliveryGuard(release));
   const active = await projections.getActive('erp-public');
   if (!active) throw new Error('Projection activation failed');
   return active;
@@ -762,46 +828,90 @@ function backoffMs(base: number, attempts: number) {
 }
 export async function processOneOutboxEvent(
   catalog: CatalogStore, outbox: OutboxStore, projections: ProjectionStore,
-  options: {workerId: string; maxAttempts?: number; baseBackoffMs?: number; leaseMs?: number}, now = new Date()
-): Promise<'IDLE'|'DONE'|'RETRY'|'DEAD_LETTER'> {
-  const event = await outbox.claimNext({
-    workerId: options.workerId, now: now.toISOString(),
-    leaseUntil: new Date(now.getTime() + (options.leaseMs ?? 30000)).toISOString()
-  });
+  options: {workerId: string; maxAttempts?: number; baseBackoffMs?: number; leaseMs?: number; requireFreshSources?: boolean; eventId?: string; expiresAt?: string; expectedEventDigest?: string; expectedActiveReleaseId?: string | null}, now = new Date()
+): Promise<'IDLE'|'DONE'|'RETRY'|'DEAD_LETTER'|'HOLD'> {
+  if (options.eventId !== undefined && (!/^[A-Za-z0-9:_-]{1,200}$/.test(options.eventId) || !options.expiresAt)) return 'HOLD';
+  const started = performance.now();
+  const currentTime = () => {
+    const time = new Date(now.getTime() + Math.floor(performance.now() - started)).toISOString();
+    if (options.expiresAt && (!Number.isFinite(Date.parse(options.expiresAt)) || Date.parse(time) >= Date.parse(options.expiresAt))) throw new Error('PROJECTION_SOURCE_EXECUTION_EXPIRED');
+    return time;
+  };
+  // A source outage is not an event failure: preserve PENDING, attempts and
+  // the old ACTIVE release instead of claiming and exhausting the retry budget.
+  try {
+    await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('PROJECTION_SOURCE_')) return 'HOLD';
+    throw error;
+  }
+  const claimTime = currentTime();
+  const lease = { leaseOwner: options.workerId,
+    leaseUntil: new Date(Date.parse(claimTime) + (options.leaseMs ?? 30000)).toISOString() };
+  const event = await outbox.claimNext({ workerId: options.workerId, now: claimTime, leaseUntil: lease.leaseUntil, ...(options.eventId ? { eventId: options.eventId } : {}), ...(options.expiresAt ? { expiresAt: options.expiresAt } : {}), ...(options.expectedEventDigest ? { expectedEventDigest: options.expectedEventDigest } : {}) });
   if (!event) return 'IDLE';
   const attempts = event.attempts + 1;
   try {
+    const publishGuard: ProjectionPublishGuard = { now: currentTime,
+      ...(options.expectedActiveReleaseId !== undefined ? { expectedActiveReleaseId: options.expectedActiveReleaseId } : {}),
+      sources: await assertCatalogSourceFreshness(catalog, currentTime(), options.requireFreshSources),
+      claim: { eventId: event.eventId, lease },
+      delivery: { eventId: event.eventId, eventType: event.eventType,
+        targetRevision: event.targetRevision, processedAt: currentTime() } };
     if (event.eventType.startsWith('catalog.')) {
       const existingDelivery = await projections.getDeliveryReceipt(event.eventId);
+      if (existingDelivery) {
+        const active = await projections.getActive('erp-public');
+        if (active?.releaseId !== existingDelivery.releaseId || active.inputDigest !== existingDelivery.inputDigest ||
+            active.dataDigest !== existingDelivery.dataDigest || existingDelivery.eventType !== event.eventType ||
+            existingDelivery.targetRevision !== event.targetRevision) return 'HOLD';
+      }
       if (!existingDelivery) {
-        const release = await buildErpPublicProjection(
+        const activeBeforePublish = await projections.getActive('erp-public');
+        const shouldActivate = Boolean(publishGuard.claim && publishGuard.delivery) &&
+          (options.eventId !== undefined || options.expectedActiveReleaseId !== undefined || activeBeforePublish !== null);
+        await buildErpPublicProjection(
           catalog,
           projections,
-          now.toISOString()
+          now.toISOString(),
+          {
+            activate: shouldActivate,
+            requireFreshSources: options.requireFreshSources ?? false,
+            publishGuard: {
+              ...publishGuard,
+              ...(options.expectedActiveReleaseId === undefined && activeBeforePublish
+                ? { expectedActiveReleaseId: activeBeforePublish.releaseId }
+                : {})
+            }
+          }
         );
-        await projections.putDeliveryReceipt({
-          eventId: event.eventId,
-          eventType: event.eventType,
-          projectionId: release.projectionId,
-          releaseId: release.releaseId,
-          inputDigest: release.inputDigest,
-          dataDigest: release.dataDigest,
-          targetRevision: event.targetRevision,
-          processedAt: now.toISOString()
-        });
       }
     }
-    await outbox.markDone(event.eventId); return 'DONE';
+    currentTime();
+    await outbox.markDone(event.eventId, lease); return 'DONE';
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (attempts >= (options.maxAttempts ?? 8)) {
-      await outbox.moveToDeadLetter({eventId:event.eventId,attempts,error:message}); return 'DEAD_LETTER';
+    if (message === 'OUTBOX_LEASE_LOST' || message === 'PROJECTION_SOURCE_EXECUTION_EXPIRED') return 'HOLD';
+    try {
+      if (error instanceof Error && message.startsWith('PROJECTION_SOURCE_')) {
+        // The source can change between the preflight and claim. Release the
+        // claim without spending an event retry or replacing the old ACTIVE.
+        await outbox.markRetry({ eventId: event.eventId, attempts: event.attempts, lease,
+          nextAttemptAt: event.nextAttemptAt ?? now.toISOString(), error: message });
+        return 'HOLD';
+      }
+      if (attempts >= (options.maxAttempts ?? 8)) {
+        await outbox.moveToDeadLetter({eventId:event.eventId,attempts,error:message,lease}); return 'DEAD_LETTER';
+      }
+      await outbox.markRetry({
+        eventId:event.eventId,attempts,lease,
+        nextAttemptAt:new Date(now.getTime()+backoffMs(options.baseBackoffMs ?? 500,attempts)).toISOString(),
+        error:message
+      });
+      return 'RETRY';
+    } catch (updateError) {
+      if (updateError instanceof Error && updateError.message === 'OUTBOX_LEASE_LOST') return 'HOLD';
+      throw updateError;
     }
-    await outbox.markRetry({
-      eventId:event.eventId,attempts,
-      nextAttemptAt:new Date(now.getTime()+backoffMs(options.baseBackoffMs ?? 500,attempts)).toISOString(),
-      error:message
-    });
-    return 'RETRY';
   }
 }

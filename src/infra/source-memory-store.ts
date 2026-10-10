@@ -68,6 +68,7 @@ export class MemorySourceStore implements SourceIngestionStore {
         headRunId: currentHead?.runId ?? null
       };
     }
+    if (run.status !== 'RUNNING') throw new Error('SOURCE_RUN_NOT_RUNNING');
 
     const decision = decideSourceHead(
       input.coverage,
@@ -113,6 +114,7 @@ export class MemorySourceStore implements SourceIngestionStore {
   async failRun(input: Parameters<SourceIngestionStore['failRun']>[0]) {
     const run = this.runs.get(input.runId);
     if (!run) throw new Error(`Source run not found: ${input.runId}`);
+    if (run.status !== 'RUNNING') return;
     Object.assign(run, { status: 'FAILED', completedAt: input.completedAt, error: input.error });
   }
 

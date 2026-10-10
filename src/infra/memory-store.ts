@@ -3,9 +3,10 @@ import type {
   Product, ProjectionProduct, ProjectionRelease, VehicleAsset, VehicleModel
 } from '../domain/catalog.js';
 import type {
-  CatalogStore, CatalogTransaction, OutboxStore, ProjectionStore,
+  CatalogStore, CatalogTransaction, OutboxStore, OutboxLease, ProjectionStore, ProjectionPublishGuard,
   SheetDeliveryEvidenceStore
 } from '../ports/catalog-store.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import type {
   CanonicalSourceBinding,
   CanonicalizationReceipt
@@ -414,7 +415,22 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     assertProjectionReleaseIntegrity(release, manifest, evidence);
     release.status = 'READY';
   }
-  async activate(releaseId: string) {
+  private checkPublishGuard(guard?: ProjectionPublishGuard) {
+    if (!guard) return;
+    const now = Date.parse(guard.now());
+    if (!Number.isFinite(now)) throw new Error('PROJECTION_SOURCE_TIME_INVALID');
+    for (const witness of guard.sources) {
+      if (stableDigest([this.sourceDefinitions.get(witness.sourceId) ?? null,
+        this.sourceHeads.get(witness.sourceId) ?? null, this.sourceRuns.get(witness.runId) ?? null]) !== witness.digest)
+        throw new Error('PROJECTION_SOURCE_CHANGED');
+      if (now > witness.expiresAt) throw new Error('PROJECTION_SOURCE_STALE');
+    }
+    if (guard.claim) {
+      this.requireOutboxLease(guard.claim.eventId, guard.claim.lease);
+      if (now >= Date.parse(guard.claim.lease.leaseUntil)) throw new Error('OUTBOX_LEASE_LOST');
+    }
+  }
+  async activate(releaseId: string, guard?: ProjectionPublishGuard) {
     const release = this.releases.get(releaseId);
     if (!release || release.status !== 'READY') throw new Error('Only READY release can activate');
     const manifest = this.manifests.get(releaseId);
@@ -422,12 +438,20 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     const evidence = [...this.projectionLineage.values()]
       .filter((item) => item.releaseId === releaseId);
     assertProjectionReleaseIntegrity(release, manifest, evidence);
+    this.checkPublishGuard(guard);
+    if (guard?.receipt && this.deliveryReceipts.has(guard.receipt.eventId))
+      throw new Error('Projection delivery receipt already exists');
     const previousId = this.active.get(release.projectionId);
+    if (guard?.expectedActiveReleaseId !== undefined && (previousId ?? null) !== guard.expectedActiveReleaseId)
+      throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
+    if (previousId && previousId !== releaseId && (!guard?.claim || !guard.receipt))
+      throw new Error('PROJECTION_ACTIVATION_APPROVAL_REQUIRED');
     const previous = previousId ? this.releases.get(previousId) : undefined;
     if (previous) previous.status = 'READY';
     release.status = 'ACTIVE';
     release.activatedAt = new Date().toISOString();
     this.active.set(release.projectionId, releaseId);
+    if (guard?.receipt) this.deliveryReceipts.set(guard.receipt.eventId, copy(guard.receipt));
   }
   async getActive<T extends ProjectionProduct = ErpPublicProduct>(
     projectionId: string
@@ -474,7 +498,10 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
   async getDeliveryReceipt(eventId: string) {
     return copy(this.deliveryReceipts.get(eventId) ?? null);
   }
-  async putDeliveryReceipt(receipt: ProjectionDeliveryReceipt) {
+  async putDeliveryReceipt(receipt: ProjectionDeliveryReceipt, guard?: ProjectionPublishGuard) {
+    this.checkPublishGuard(guard);
+    if (guard && this.active.get(receipt.projectionId) !== receipt.releaseId)
+      throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
     if (this.deliveryReceipts.has(receipt.eventId)) {
       throw new Error(`Projection delivery receipt already exists: ${receipt.eventId}`);
     }
@@ -496,12 +523,19 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     );
   }
 
-  async claimNext(input: { workerId: string; now: string; leaseUntil: string }) {
-    const item = [...this.outbox.values()]
-      .filter((x) =>
+  async claimNext(input: { workerId: string; now: string; leaseUntil: string; eventId?: string; expiresAt?: string; expectedEventDigest?: string }) {
+    if (input.eventId !== undefined && !/^[A-Za-z0-9:_-]{1,200}$/.test(input.eventId)) return null;
+    if (input.expiresAt && (!Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= Date.parse(input.now))) return null;
+    if (!Number.isFinite(Date.parse(input.leaseUntil)) || Date.parse(input.leaseUntil) <= Date.parse(input.now)) return null;
+    const candidates = input.eventId ? [this.outbox.get(input.eventId)].filter((x): x is OutboxEvent => Boolean(x)) : [...this.outbox.values()];
+    const item = candidates
+      .filter((x) => (!input.eventId || x.eventId === input.eventId) &&
         (x.status === 'PENDING' || (x.status === 'PROCESSING' && Boolean(x.leaseUntil) && x.leaseUntil! <= input.now)) &&
         (!x.nextAttemptAt || x.nextAttemptAt <= input.now)
       )
+      .filter(x => !input.expectedEventDigest || stableDigest(x) === input.expectedEventDigest)
+      .filter(x => { const receipt = this.deliveryReceipts.get(x.eventId);
+        return !receipt || this.active.get(receipt.projectionId) === receipt.releaseId; })
       .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))[0];
     if (!item) return null;
     item.status = 'PROCESSING';
@@ -509,21 +543,25 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     item.leaseUntil = input.leaseUntil;
     return copy(item);
   }
-  async markDone(eventId: string) {
+  private requireOutboxLease(eventId: string, lease: OutboxLease) {
     const item = this.outbox.get(eventId);
     if (!item) throw new Error('Outbox event not found');
+    if (!lease || item.status !== 'PROCESSING' || item.leaseOwner !== lease.leaseOwner ||
+      item.leaseUntil !== lease.leaseUntil) throw new Error('OUTBOX_LEASE_LOST');
+    return item;
+  }
+  async markDone(eventId: string, lease: OutboxLease) {
+    const item = this.requireOutboxLease(eventId, lease);
     item.status = 'DONE'; item.leaseOwner = null; item.leaseUntil = null;
   }
-  async markRetry(input: { eventId: string; attempts: number; nextAttemptAt: string; error: string }) {
-    const item = this.outbox.get(input.eventId);
-    if (!item) throw new Error('Outbox event not found');
+  async markRetry(input: { eventId: string; attempts: number; nextAttemptAt: string; error: string; lease: OutboxLease }) {
+    const item = this.requireOutboxLease(input.eventId, input.lease);
     item.status = 'PENDING'; item.attempts = input.attempts;
     item.nextAttemptAt = input.nextAttemptAt; item.lastError = input.error;
     item.leaseOwner = null; item.leaseUntil = null;
   }
-  async moveToDeadLetter(input: { eventId: string; attempts: number; error: string }) {
-    const item = this.outbox.get(input.eventId);
-    if (!item) throw new Error('Outbox event not found');
+  async moveToDeadLetter(input: { eventId: string; attempts: number; error: string; lease: OutboxLease }) {
+    const item = this.requireOutboxLease(input.eventId, input.lease);
     item.status = 'DEAD_LETTER'; item.attempts = input.attempts; item.lastError = input.error;
     item.leaseOwner = null; item.leaseUntil = null;
   }

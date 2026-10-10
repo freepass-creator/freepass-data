@@ -4,6 +4,7 @@ import { aicaSourceAdapter, ironSourceAdapter, parseIronRawDetail, IRON_DETAIL_R
   type AicaGridObservation, type SupplierGridCell } from '../src/adapters/supplier-source-capture.js';
 import { collectSupplierSource } from '../src/domain/source-intake.js';
 import { aicaSheetsGridReader, AICA_GRID_FIELDS } from '../src/infra/aica-sheet-reader.js';
+import { captureAica as captureAicaJob } from '../src/jobs/collect-aica.js';
 import { buildSupplierRelayServer, supplierRelayHandler, SUPPLIER_DISPATCH, type SupplierRelayPorts,
   type RelayOutcome } from '../src/api/supplier-relay.js';
 
@@ -109,6 +110,61 @@ describe('RP004 native rich-cell RAW', () => {
     await expect(aicaSheetsGridReader({ fetcher, accessToken: async () => 'fixture-token' })({ ...grid(), range: 'C2:C10' }))
       .rejects.toThrow('AICA_GRID_RANGE_INVALID');
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('proves only an explicitly bound whole tab with stable metadata and repeated rich-grid evidence', async () => {
+    const original = grid();
+    const metadata = { spreadsheetId: original.sheetId, sheets: [{ properties: { sheetId: 1,
+      title: '재고 1', gridProperties: { rowCount: 10, columnCount: 3 } } }] };
+    const raw = { spreadsheetId: original.sheetId, sheets: [{ properties: { sheetId: 1 },
+      data: [{ rowData: [{ values: original.headers }, ...original.rows.map(values => ({ values }))] }] }] };
+    const fetcher = vi.fn(async (url: Parameters<typeof fetch>[0], _init?: RequestInit) => new Response(JSON.stringify(
+      new URL(String(url)).searchParams.has('ranges') ? raw : metadata)));
+    const result = await aicaSheetsGridReader({ verifyBoundTab: true, fetcher,
+      accessToken: async () => 'fixture-token', now: () => now })(original);
+    expect(result).toMatchObject({ complete: true, expectedRows: 1, observedAt: now });
+    expect(result.rows).toEqual(original.rows);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(fetcher.mock.calls.every(([, init]) => init?.method === 'GET' && init.redirect === 'error')).toBe(true);
+  });
+  it.each([
+    { title: 'wrong', gridProperties: { rowCount: 10, columnCount: 3 } },
+    { title: '재고 1', hidden: true, gridProperties: { rowCount: 10, columnCount: 3 } },
+    { title: '재고 1', gridProperties: { rowCount: 11, columnCount: 3 } },
+    { title: '재고 1', gridProperties: { rowCount: 10, columnCount: 4 } },
+  ])('rejects substituted/hidden or truncated whole-tab bindings before reading cells', async properties => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ spreadsheetId: 'fixture-sheet',
+      sheets: [{ properties: { sheetId: 1, ...properties } }] })));
+    await expect(aicaSheetsGridReader({ verifyBoundTab: true, fetcher,
+      accessToken: async () => 'fixture-token' })(grid())).rejects.toThrow('AICA_BOUND_TAB_COVERAGE_UNVERIFIED');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('rejects changing cells rather than saving a mixed capture or retrying', async () => {
+    let call = 0;
+    const original = grid();
+    const fetcher = vi.fn(async (url: Parameters<typeof fetch>[0]) => {
+      call++;
+      return new Response(JSON.stringify(new URL(String(url)).searchParams.has('ranges')
+        ? { spreadsheetId: original.sheetId, sheets: [{ properties: { sheetId: 1 }, data: [{ rowData: [
+          { values: original.headers }, { values: [cell(call === 2 ? '12가3456' : '34나5678')] } ] }] }] }
+        : { spreadsheetId: original.sheetId, sheets: [{ properties: { sheetId: 1, title: '재고 1',
+          gridProperties: { rowCount: 10, columnCount: 3 } } }] }));
+    });
+    await expect(aicaSheetsGridReader({ verifyBoundTab: true, fetcher,
+      accessToken: async () => 'fixture-token' })(original)).rejects.toThrow('AICA_GRID_CHANGED_DURING_CAPTURE');
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+  it('keeps RAW apply blocked for ambiguous attribution even after whole-tab read proof', async () => {
+    const original = grid();
+    original.rows[0]![0] = rich('12가3456', 'https://bit.ly/fixture');
+    const ingestRawBatch = vi.fn(async () => ({ runId: 'must-not-exist' }));
+    await expect(captureAicaJob({ bindings: [original], expectedFreshnessSeconds: 60,
+      applyRaw: true, approved: true, verifyBoundTabs: true },
+    { readGrid: async () => original, ingestRawBatch, now: () => now })).rejects.toThrow('AICA_RAW_SOURCE_HOLD');
+    expect(ingestRawBatch).not.toHaveBeenCalled();
+    const report = await captureAicaJob({ bindings: [original], expectedFreshnessSeconds: 60,
+      applyRaw: false, approved: false }, { readGrid: async () => original, now: () => now });
+    expect(report).toMatchObject({ counts: { records: 1 }, issues: expect.arrayContaining(['AICA_SHORT_LINK']) });
+    expect(Object.keys(report).sort()).toEqual(['counts', 'digest', 'issues']);
   });
   it.each([
     { spreadsheetId: 'wrong', sheets: [] },

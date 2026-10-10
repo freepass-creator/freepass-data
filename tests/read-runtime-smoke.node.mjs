@@ -11,6 +11,46 @@ const healthContract = JSON.parse(await readFile(
 const healthContractVersion = healthContract.properties.contractVersion.const;
 const healthSchemaVersion = healthContract.properties.schemaVersion.const;
 
+test('local price command retries return the same receipt and already-delivered ACTIVE revision', { timeout: 20000 }, async () => {
+  const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/run-memory.mjs', 'api'], {
+    cwd: process.cwd(), env: { ...process.env, PORT: '0', NODE_ENV: 'test' },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let output = '';
+  try {
+    const base = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('memory API startup timeout: ' + output)), 10000);
+      child.on('error', error => { clearTimeout(timer); reject(error); });
+      child.on('exit', code => { clearTimeout(timer); reject(new Error('memory API exited: ' + code + output)); });
+      const collect = chunk => {
+        output += chunk;
+        const match = output.match(/Server listening at (http:\/\/127\.0\.0\.1:\d+)/);
+        if (match) { clearTimeout(timer); resolve(match[1]); }
+      };
+      child.stdout.on('data', collect); child.stderr.on('data', collect);
+    });
+    const command = { commandId: 'cmd_local_retry', idempotencyKey: 'idem_local_retry',
+      expectedRevision: 1, termKey: '36@20000', monthlyRent: { amount: 731000, currency: 'KRW' },
+      reason: 'local retry regression', actor: { id: 'user:test', kind: 'USER' } };
+    const send = () => fetch(base + '/v1/commands/offers/offer_gv70_demo/price', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(command)
+    });
+    const first = await send();
+    assert.equal(first.status, 200, await first.clone().text());
+    const receipt = await first.json();
+    const before = await fetch(base + '/v1/views/erp-public/products').then(r => r.json());
+    const retry = await send();
+    assert.equal(retry.status, 200, await retry.clone().text());
+    assert.deepEqual(await retry.json(), receipt);
+    const after = await fetch(base + '/v1/views/erp-public/products').then(r => r.json());
+    assert.deepEqual(after, before);
+    assert.match(JSON.stringify(after), /731000/);
+  } finally {
+    child.kill();
+    await new Promise(resolve => child.exitCode !== null ? resolve() : child.once('exit', resolve));
+  }
+});
+
 test('Docker build supplies the script and contract inputs required by packaging', async () => {
   const dockerfile = await readFile(new URL('../Dockerfile', import.meta.url), 'utf8');
   const buildStage = dockerfile.split('FROM node:22-bookworm-slim AS runtime')[0];

@@ -361,12 +361,13 @@ describe('reviewed source change', () => {
       item.canonical.fieldPath === 'odometerKm' &&
       item.canonical.value === 18000
     )).toBe(true);
+    const event = [...store.outbox.values()].find((item) => item.status === 'PENDING')!;
 
     expect(await processOneOutboxEvent(
       store,
       store,
       store,
-      { workerId: 'worker:source-change' },
+      { workerId: 'worker:source-change', eventId: event.eventId, expiresAt: '2026-09-21T00:12:30Z' },
       new Date('2026-09-21T00:12:00Z')
     )).toBe('DONE');
 

@@ -2421,3 +2421,14 @@ This file exists so another session can continue without re-discovering or re-cr
 - 변경: 기존 Kakao/internal AI builder가 approved Iancar 월/연거리 키와 freshness 검증기 재사용, sourceamount/note/ref/사유 보존. ZERO·기간·ANY_TERM/ALL_TERMS query 지원, 전체 기간 유지, 빈검색200/잘못된필터400/인증유지. 동일 source 기준 복합키2256행 추가 보존(3037→5293기간); 오래된 근거는 미확정.
 - 검증: fullcheck1701PASS/14skip, 최종 관련116PASS. 지휘 독립116PASS 및 독립 Codex CLI exit0/중대지적0(코드검토, 자체 테스트 실행은 안 함). Claude 조직 접근FAILED는 별도 미통과이며 대신 PASS로 쓰지 않는다.
 - 남음/next_start_here: 단일 PR의 정확head·CI·필수 검토 확인→main 통합 통제→허용된 read runtime 배포 및 query별 실제인증 재조회. 운영은 아직e0afae9, 새 검색 CUTOVER 아님. 원천 최신화·원장금액·경제조건APPLY·IAM 변경0. READ-RUNTIME 무보증 절과 TEMP source/API 정확키 증거를 사용한다.
+
+### 2026-10-10 PR411 코드 통합 / 오래된 정책 draft 원문 보존
+
+- 목적: 대표 직접 승인에 따라 기존 작업을 commit/push로 보존하고 검증된 비활성 운영 코드를 main에 통합한다. 운영 배포·DB 업무 쓰기·ACTIVE·IAM·consumer cutover는 이번 승인 밖이다.
+- 대상 revision: main `17cb9d7e56bc03fa0c2be24d81428a73728d7df0`, PR411 runtime `e566b009fdf23d88b9c4c0fb9b4a2bae29b9d301`, emulator fixture `c9753fc7292e398e2f02fa09cf325cbd70e26f33`. PR414/415는 이미 MERGED이며 중복 병합하지 않는다.
+- 변경: 기본 worker는 PREPARE/memory/persistentWrites0 후 종료. 명시적 실행은 기존 claim/source/lease/expiry 및 activation receipt 가드를 사용한다. --execute의 stage-only DONE 소실 반례와 로컬 콘솔 갱신을 수정했다. 최초 ACTIVE는 저장소에서도 승인된 claim/receipt/expected-null을 요구한다. 기존 emulator 다중 chunk fixture도 그 승인 계약을 지키게 수정했다.
+- 검증: e566 전체 unit 1907 PASS/16 조건부 SKIP(병렬도2), architecture/31 schema/standards15/data-access/sheet/build/read-runtime/shadow/dashboard 통과. c975 다중 chunk 포함 Firestore emulator 6 PASS, 최초 무승인 거절과 delivery receipt 조회 확인. 높은 병렬도에서 runtime 5초 timeout이 발생했으며 저병렬 전체 재실행으로 구분 기록한다. exact final-head CI/독립 검토/merge 결과는 기존 PR411에서 확인한다.
+- 보존: root의 COMMERCIAL 65줄/NEXT 9줄 draft는 원문·기존 index/worktree를 그대로 둔 채 기존 `codex/settlement-human-input-preservation`에 `9ce8e428e4bd8f562673505abd68c9ae82cad5c0` snapshot push. 오래된 정책을 현재 정책으로 main에 합치지 않는다. PR394 판정필요 draft는 별도 보존한다.
+- 남음: 운영 인증/backup/readback/실행 승인 및 source/master 최신성/consumer 전체 연결은 HOLD. Kakao 기존 caller와 운영 read revision은 code merge로 바뀌지 않는다. 공급사·영업자 기존 코드는 임시 외부 식별값으로 보존하며 미래 코드 매핑 전제로 이력을 유지한다.
+- next_start_here: PR411 최종 head/CI/ANSWERED 영수증/merge SHA를 확인하고, 별도로 승인된 운영 절차에서만 deployment·ACTIVE·writer·consumer 전환을 실행한다. 오래된 draft snapshot은 비교 자료이며 최신 SSOT가 아니다.
+- 통합 독립 검토 후속: e566에서 로컬 콘솔 멱등 재시도의 releaseId 불변을 오류로 보던 반례를 수정했다. ACTIVE에 committed offer revision 이상이 있는지 검사한다. 기존 read-runtime smoke에 실제 HTTP 최초 요청/동일 재전송 200·같은 receipt·같은 ACTIVE 응답 회귀를 추가, 13 PASS. 코드와 테스트는 PR411 최종 head에서 확인한다.

@@ -87,6 +87,29 @@ describe('shared sheet local source to Canonical', () => {
     expect(n.record.candidate.priceTerms.map(x => [x.termMonths, x.deposit?.amount])).toEqual([[1, 101], [12, 101], [24, 202]]);
     expect(n.suppliedTerms).toBe(3);
   });
+  it('preserves overlapping master/year/deposit HOLDs by source row and term without borrowing long deposit', () => {
+    const c = capture({ 단기보증: '', 연식: '25MY' });
+    const raw = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords[0]!;
+    const before = structuredClone(raw);
+    const evidence = masterEvidence();
+    evidence.records.push({ ...structuredClone(evidence.records[0]!), trimId: 'another-immutable-trim' });
+    const n = normalizeSharedSheet(raw, evidence);
+    expect(n.record.status).toBe('REJECTED');
+    expect(n.record.candidate.issues).toEqual(expect.arrayContaining([
+      'IDENTITY_NOT_UNIQUE_MASTER', 'YEAR_REGISTRATION_MISMATCH',
+      'DEPOSIT_REVIEW_REQUIRED:m12:MISSING_DEPOSIT_AMOUNT',
+    ]));
+    expect(n.record.sourceRecordId).toBe(raw.sourceRecordId);
+    expect(n.record.candidate.priceTerms.find(t => t.termKey === 'm12')).toMatchObject({ depositState: 'UNKNOWN' });
+    expect(n.record.candidate.priceTerms.find(t => t.termKey === 'm12')).not.toHaveProperty('deposit');
+    expect(n.record.candidate.priceTerms.find(t => t.termKey === 'm24')).toMatchObject({
+      depositState: 'KNOWN', deposit: { amount: 202, currency: 'KRW' },
+    });
+    expect(n.lineage.find(l => l.normalized?.fieldPath === 'priceTerms.m12.depositState')).toMatchObject({
+      sourceRecordId: raw.sourceRecordId, source: { value: '' }, normalized: { value: 'UNKNOWN' },
+    });
+    expect(raw).toEqual(before);
+  });
   it('normalizes model year, month precision, specs and explicit zero', () => {
     const n = normalized(capture({ 단기보증: '무보증', 배터리용량: '77.7kWh', 구동방식: 'FWD' }));
     const f = n.record.candidate.vehicleFacts!.fields;

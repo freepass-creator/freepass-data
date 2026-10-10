@@ -1,9 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import { buildCatalogProductTrace } from '../src/application/catalog-trace.js';
-import { buildErpPublicProjection, updateOfferPrice } from '../src/application/catalog.js';
+import { assertCatalogSourceFreshness, buildErpPublicProjection, updateOfferPrice } from '../src/application/catalog.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { isLocalConsoleDriver } from '../src/api/console-access.js';
+
+async function approvedActivationGuard(store: MemoryDataStore, now: string) {
+  const event = [...store.outbox.values()].find((item) => item.status === 'PENDING');
+  if (!event) throw new Error('TEST_OUTBOX_EVENT_REQUIRED');
+  const lease = {
+    leaseOwner: 'test-approved-activation',
+    leaseUntil: new Date(Date.parse(now) + 30_000).toISOString()
+  };
+  const claimed = await store.claimNext({ workerId: lease.leaseOwner, now, leaseUntil: lease.leaseUntil, eventId: event.eventId });
+  if (!claimed) throw new Error('TEST_OUTBOX_CLAIM_REQUIRED');
+  return {
+    now: () => now,
+    sources: await assertCatalogSourceFreshness(store, now),
+    claim: { eventId: event.eventId, lease },
+    delivery: {
+      eventId: event.eventId,
+      eventType: event.eventType,
+      targetRevision: event.targetRevision,
+      processedAt: now
+    }
+  };
+}
 
 describe('local Catalog trace', () => {
   it('shows the real Source to consumer evidence chain', async () => {
@@ -69,7 +91,9 @@ describe('local Catalog trace', () => {
       reason: 'trace manual revision',
       actor: { id: 'user:test', kind: 'USER' }
     }, '2026-09-20T10:02:00.000Z');
-    await buildErpPublicProjection(store, store, '2026-09-20T10:03:00.000Z');
+    await buildErpPublicProjection(store, store, '2026-09-20T10:03:00.000Z', {
+      publishGuard: await approvedActivationGuard(store, '2026-09-20T10:03:00.000Z')
+    });
 
     const trace = await buildCatalogProductTrace(store, store, 'prod_gv70_demo');
     const projection = trace?.rows.find((row) => row.stage === 'PROJECTION');
