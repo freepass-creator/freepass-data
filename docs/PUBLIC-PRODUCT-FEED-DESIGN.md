@@ -25,7 +25,7 @@
 
 | 상품 허용 칸 | 형 | 출처 products 칸 | 내용 제한 |
 |---|---|---|---|
-| `publicProductKey` | string | 공개용 상품 키 | 1~80자, `^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$`. 내부 UID(`va_...`), Firestore 문서 ID, collection path, RAW/source ID를 쓰지 않는다. |
+| `publicProductKey` | string | 공개용 상품 키 | 1~80자, `^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$`. 내부 UID(`va_...`), Firestore 문서 ID, collection path, RAW/source ID를 쓰지 않는다. ERP4 호환 규칙의 유일한 예외로 추가하는 칸이며 ERP5는 읽지 않아도 된다. |
 | `_key`, `product_code` | string | ERP4 공개 호환 키 | ERP4 공개 feed/quote가 현재 손님에게 내는 값과 호환되는 별칭. 새 구현 내부에서는 `publicProductKey`를 canonical 공개 식별자로 쓰고, `_key`/`product_code`에는 내부 UID를 넣지 않는다. |
 | `car_number` | string|null | 동명 | ERP4 공개 feed/quote가 현재 손님에게 내는 범위만 그대로 호환한다. `ERP4 공개 feed의 필드 이름 목록과 대조` 검증에서 현재 feed에 없는 차량번호 칸 또는 변형 칸은 v1에 넣지 않는다. |
 | `maker`, `model`, `sub_model`, `trim_name`, `trim_extra`, `variant`, `vehicle_class`, `fuel_type`, `engine_type`, `drive_type`, `transmission`, `usage`, `ext_color`, `int_color`, `accident_history`, `cert_car_name`, `location`, `provider_name` | string|null | 동명 | 정제 문자열 0~80자. 제어문자, HTML, URL, 내부 경로, 계정, 토큰, 시트 ID 금지. |
@@ -41,18 +41,18 @@
 
 공개 응답에는 `vin`을 절대 넣지 않는다. 원천에 VIN이 있어도 allowlist, schema, fixture, snapshot 비교 결과 모두에서 금지한다.
 
-정책 허용 칸은 아래 하위 스키마만 쓴다. 모든 문자열은 정제 문자열이며 내부 금지어/금액 패턴 검사를 통과해야 한다.
+정책 허용 칸은 아래 하위 스키마만 쓴다. 공개 응답의 정책 값은 정해진 공개 코드 enum과 number 필드만 허용하며, 비율 문자열은 내보내지 않는다. 비율이 필요한 정책은 문자열이 아니라 정해진 코드로 바꿔 쓴다.
 
 | 정책 칸 | 형 | 내용 제한 |
 |---|---|---|
-| `policy_name`, `policy_type`, `payment_method`, `payment_timing`, `penalty_condition`, `rental_region`, `screening_criteria`, `basic_driver_age`, `driver_age_lowering`, `driver_age_upper_limit`, `license_period`, `personal_driver_scope`, `business_driver_scope`, `maintenance_service`, `credit_grade` | string|null | 0~120자. 공개 고객 안내 문구만 허용. |
+| `policy_name`, `policy_type`, `payment_method`, `payment_timing`, `penalty_condition`, `rental_region`, `screening_criteria`, `basic_driver_age`, `driver_age_lowering`, `driver_age_upper_limit`, `license_period`, `personal_driver_scope`, `business_driver_scope`, `maintenance_service`, `credit_grade` | enum|null | 정해진 공개 코드만 허용. 자유 문자열, 비율 문자열, 내부 문구는 내보내지 않는다. |
 | `insurance_included`, `deposit_installment`, `deposit_card_payment`, `rental_card_payment`, `roadside_assistance` | boolean|null | true/false/null만 허용. |
 | `injury_compensation_limit`, `injury_deductible`, `property_compensation_limit`, `property_deductible`, `self_body_accident`, `self_body_deductible`, `personal_injury_compensation_limit`, `personal_injury_deductible`, `uninsured_compensation_limit`, `uninsured_deductible`, `own_damage_compensation`, `own_damage_min_deductible`, `own_damage_max_deductible`, `annual_roadside_assistance`, `annual_mileage`, `max_annual_mileage`, `mileage_upcharge_per_10000km`, `age_lowering_cost`, `additional_driver_allowance_count`, `additional_driver_cost`, `deposit_return_days`, `buyout_notice_days` | number|null | 0 이상. 금액/일수/횟수처럼 고객에게 공개되는 정책값만 허용. |
-| `uninsured_damage`, `own_damage_repair_ratio`, `own_damage_compensation_rate` | string|null 또는 number|null | 비율은 0~100 number 또는 0~20자 공개 표시 문자열. |
+| `uninsured_damage`, `own_damage_repair_ratio`, `own_damage_compensation_rate` | enum|null 또는 number|null | 비율은 0~100 number만 허용한다. 표시가 필요한 비율 정책은 정해진 공개 코드로 바꿔 쓰며 `%` 포함 문자열은 내보내지 않는다. |
 
 구조적으로 금지할 칸: `fee`, `fee_rate`, `agent_payout_rate`, `commission_*`, `supplierBillingFee`, `channelPayoutFee`, `vehicle_price`, `provider_company_code`, `partner_code`, `partner_memo`, `sales_notes`, `source`, `sheet_meta`, RAW/provenance/audit/IAM 필드, 내부 collection path.
 
-문자열 값 생성 검사는 모든 칸에 공통 적용한다. 값 안에 `수수료`, `청구`, `지급`, `마진`, `commission`, `payout` 또는 숫자 금액 패턴(`\d[\d,]*(원|만원|%|KRW)`)이 있으면 응답 생성은 실패해야 한다. 예외는 `rent`, `deposit`, 고객 공개 보험/정책 보상 한도처럼 스키마가 number로 지정한 칸뿐이며, 문자열로 우회 표기하지 않는다.
+문자열 값 생성 검사는 모든 칸에 공통 적용한다. 값 안에 `수수료`, `청구`, `지급`, `마진`, `commission`, `payout` 또는 숫자 금액 패턴(`\d[\d,]*(원|만원|%|KRW)`)이 있으면 응답 생성은 실패해야 한다. 예외는 `rent`, `deposit`, 고객 공개 보험/정책 보상 한도처럼 스키마가 number로 지정한 칸뿐이며, 정책 비율도 문자열로 우회 표기하지 않는다.
 
 ## 2. quote 응답 계약 v1
 
@@ -130,7 +130,7 @@ ERP4의 `depositFromRule` 사본은 display helper였고, 0 보증금을 보면 
 
 허용 차이: 보증금 개선분만 허용한다. ERP4가 0 또는 규칙 미적용 값이고 Data가 `resolveDepositWithRuleNote` 근거로 양수/UNKNOWN을 낸 경우만 `ALLOWED_DEPOSIT_EVIDENCE_IMPROVEMENT`로 기록한다. rent, count, 상품 존재, 채널 fence, 내부 칸 차이는 허용하지 않는다.
 
-ERP4 공개 feed/quote 호환 검증은 필수다. 현재 ERP4 공개 feed의 필드 이름 목록과 v1 schema를 대조하고, 현재 feed에 없는 칸은 v1에 넣지 않는다. 특히 `vin`은 현재 여부와 관계없이 금지하고, `car_number`는 ERP4가 손님에게 이미 내는 범위만 유지한다.
+ERP4 공개 feed/quote 호환 검증은 필수다. 현재 ERP4 공개 feed의 필드 이름 목록과 v1 schema를 대조하고, 현재 feed에 없는 칸은 v1에 넣지 않는다. 단, `publicProductKey` 하나만 ERP4 호환 규칙의 유일한 예외로 추가하며 ERP5는 이 칸을 읽지 않아도 된다. 특히 `vin`은 현재 여부와 관계없이 금지하고, `car_number`는 ERP4가 손님에게 이미 내는 범위만 유지한다.
 
 ERP5 소비처 호환 검증도 필수다. ERP5가 목록 응답과 상세 응답에서 읽는 필드 이름을 아래 표로 고정하고, v1이 모두 채우는지 같은 차로 ERP4 응답과 비교한다.
 
