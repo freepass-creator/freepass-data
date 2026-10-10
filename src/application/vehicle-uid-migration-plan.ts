@@ -106,6 +106,51 @@ function needsExternalIds(asset: VehicleAsset, observedAt: string) {
   });
 }
 
+function sortExternalIds(ids: VehicleExternalId[]) {
+  return [...ids].sort((a, b) =>
+    `${a.kind}:${a.supplierCode ?? ''}:${a.value}:${a.validFrom}:${a.validTo ?? ''}`
+      .localeCompare(`${b.kind}:${b.supplierCode ?? ''}:${b.value}:${b.validFrom}:${b.validTo ?? ''}`)
+  );
+}
+
+function candidateExternalIds(ids: ReturnType<typeof productIds>, observedAt: string): VehicleExternalId[] {
+  const out: VehicleExternalId[] = [];
+  if (ids.vin) out.push({ kind: 'VIN', value: ids.vin.toUpperCase(), validFrom: observedAt, source: 'vehicle-uid-migration-plan' });
+  if (ids.supplierVehicleId && ids.supplierCode) {
+    out.push({
+      kind: 'SUPPLIER_VEHICLE',
+      supplierCode: ids.supplierCode.toUpperCase(),
+      value: ids.supplierVehicleId,
+      validFrom: observedAt,
+      source: 'vehicle-uid-migration-plan',
+    });
+  }
+  if (ids.plate) out.push({ kind: 'PLATE', value: ids.plate, validFrom: observedAt, source: 'vehicle-uid-migration-plan' });
+  return sortExternalIds(out);
+}
+
+function upsertAssetExternalIdsItem(items: VehicleUidMigrationItem[], assetId: string, externalIds: VehicleExternalId[]) {
+  if (externalIds.length === 0) return;
+  const existing = items.find((item): item is Extract<VehicleUidMigrationItem, { kind: 'ASSET_ADD_EXTERNAL_IDS' }> =>
+    item.kind === 'ASSET_ADD_EXTERNAL_IDS' && item.assetId === assetId
+  );
+  if (existing) {
+    const keyed = new Map<string, VehicleExternalId>();
+    for (const id of [...existing.externalIds, ...externalIds]) {
+      keyed.set(`${id.kind}:${id.supplierCode ?? ''}:${id.value}:${id.validFrom}:${id.validTo ?? ''}`, id);
+    }
+    existing.externalIds = sortExternalIds([...keyed.values()]);
+    existing.public.externalIdKinds = [...new Set(existing.externalIds.map(id => id.kind))].sort();
+    return;
+  }
+  items.push({
+    kind: 'ASSET_ADD_EXTERNAL_IDS',
+    assetId,
+    externalIds: sortExternalIds(externalIds),
+    public: { assetHash: hash(assetId), externalIdKinds: [...new Set(externalIds.map(id => id.kind))].sort() },
+  });
+}
+
 function activePlateCountByUid(assets: VehicleAsset[], planned: VehicleUidMigrationItem[], observedAt: string) {
   const byUid = new Map<string, Set<string>>();
   for (const asset of assets) {
@@ -171,7 +216,7 @@ function plannedAssetFromCreate(vehicleUid: string, ids: ReturnType<typeof produ
     status: 'AVAILABLE',
     ...(ids.plate ? { plateNumber: ids.plate } : {}),
     ...(ids.vin ? { vin: ids.vin.toUpperCase() } : {}),
-    externalIds: externalIds.map(id => ({ ...id, source: 'vehicle-uid-migration-plan' })),
+    externalIds: sortExternalIds(externalIds.map(id => ({ ...id, source: 'vehicle-uid-migration-plan' }))),
   };
 }
 
@@ -206,8 +251,8 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
       items.push({
         kind: 'ASSET_ADD_EXTERNAL_IDS',
         assetId: asset.id,
-        externalIds,
-        public: { assetHash: hash(asset.id), externalIdKinds: externalIds.map(id => id.kind).sort() },
+        externalIds: sortExternalIds(externalIds),
+        public: { assetHash: hash(asset.id), externalIdKinds: [...new Set(externalIds.map(id => id.kind))].sort() },
       });
     }
   }
@@ -256,6 +301,18 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
     }
 
     if (bound?.vehicleAssetId) {
+      const index = workingAssets.findIndex(asset => asset.id === bound.vehicleAssetId);
+      if (index >= 0) {
+        const before = workingAssets[index]!;
+        const after = candidateExternalIds(ids, input.observedAt).reduce((next, id) => addExternalId(next, id, input.observedAt), before);
+        workingAssets[index] = after;
+        if (input.assets.some(asset => asset.id === bound.vehicleAssetId)) {
+          const added = candidateExternalIds(ids, input.observedAt).filter(id =>
+            stableDigest(addExternalId(before, id, input.observedAt).externalIds ?? []) !== stableDigest(before.externalIds ?? [])
+          );
+          upsertAssetExternalIdsItem(items, bound.vehicleAssetId, added);
+        }
+      }
       items.push({
         kind: 'PRODUCT_SET_UID',
         productKey,
@@ -264,6 +321,18 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
         public: { productHash: hash(productKey), vehicleUidHash: hash(bound.vehicleAssetId), reason: 'SOURCE_BINDING' },
       });
     } else if (resolution.action === 'LINK') {
+      const index = workingAssets.findIndex(asset => asset.id === resolution.vehicleUid);
+      if (index >= 0) {
+        const before = workingAssets[index]!;
+        const after = candidateExternalIds(ids, input.observedAt).reduce((next, id) => addExternalId(next, id, input.observedAt), before);
+        workingAssets[index] = after;
+        if (input.assets.some(asset => asset.id === resolution.vehicleUid)) {
+          const added = candidateExternalIds(ids, input.observedAt).filter(id =>
+            stableDigest(addExternalId(before, id, input.observedAt).externalIds ?? []) !== stableDigest(before.externalIds ?? [])
+          );
+          upsertAssetExternalIdsItem(items, resolution.vehicleUid, added);
+        }
+      }
       items.push({
         kind: 'PRODUCT_SET_UID',
         productKey,

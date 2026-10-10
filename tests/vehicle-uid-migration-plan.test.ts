@@ -56,6 +56,12 @@ const plan = (input: {
   random: random(input.rand ?? 0.1),
   observedAt: '2026-10-10T00:00:00.000Z',
 });
+const permutations = <T,>(values: T[]): T[][] => {
+  if (values.length <= 1) return [values];
+  return values.flatMap((value, index) =>
+    permutations([...values.slice(0, index), ...values.slice(index + 1)]).map(rest => [value, ...rest])
+  );
+};
 
 describe('planVehicleUidMigration', () => {
   it('plans external ids without changing existing asset ids', () => {
@@ -174,6 +180,55 @@ describe('planVehicleUidMigration', () => {
     const setItems = result.items.filter(item => item.kind === 'PRODUCT_SET_UID');
     expect(setItems).toHaveLength(2);
     expect(setItems[1]).toEqual(expect.objectContaining({ productKey: 'p2', reason: 'CREATED_IN_PLAN', vehicleUid: setItems[0]!.vehicleUid }));
+  });
+
+  it('accumulates LINKed product identifiers into working assets across all p1 p2 p3 input orders', () => {
+    const entries: Array<[string, VehicleUidMigrationProduct]> = [
+      ['p1', product('TEST-FAKE-A')],
+      ['p2', product('TEST-FAKE-A', { vin: 'TEST-FAKE-VIN-V' })],
+      ['p3', { vin: 'TEST-FAKE-VIN-V', provider_company_code: 'TEST' }],
+    ];
+    for (const order of permutations(entries)) {
+      const result = plan({ products: Object.fromEntries(order), assets: [] });
+      const setItems = result.items.filter(item => item.kind === 'PRODUCT_SET_UID');
+      expect(setItems).toHaveLength(3);
+      expect(new Set(setItems.map(item => item.vehicleUid)).size).toBe(1);
+      expect(result.items.filter(item => item.kind === 'HOLD')).toHaveLength(0);
+    }
+  });
+
+  it('reports planned external id additions when a LINKed product teaches an existing asset a new VIN', () => {
+    const result = plan({
+      products: {
+        p1: product('TEST-FAKE-A', { vin: 'TEST-FAKE-VIN-V' }),
+        p2: { vin: 'TEST-FAKE-VIN-V', provider_company_code: 'TEST' },
+      },
+      assets: [asset('TEST-FAKE-UID-A', 'TEST-FAKE-A')],
+    });
+    const setItems = result.items.filter(item => item.kind === 'PRODUCT_SET_UID');
+    expect(setItems).toHaveLength(2);
+    expect(new Set(setItems.map(item => item.vehicleUid))).toEqual(new Set(['TEST-FAKE-UID-A']));
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: 'ASSET_ADD_EXTERNAL_IDS',
+      assetId: 'TEST-FAKE-UID-A',
+      externalIds: expect.arrayContaining([expect.objectContaining({ kind: 'VIN', value: 'TEST-FAKE-VIN-V', validFrom: '2026-10-10T00:00:00.000Z' })]),
+    }));
+  });
+
+  it('holds a product that would connect two different working assets by plate and VIN', () => {
+    const result = plan({
+      products: {
+        p1: product('TEST-FAKE-A'),
+        p2: { vin: 'TEST-FAKE-VIN-B', provider_company_code: 'TEST' },
+        p3: product('TEST-FAKE-A', { vin: 'TEST-FAKE-VIN-B' }),
+      },
+      assets: [],
+    });
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: 'HOLD',
+      productKey: 'p3',
+      reason: 'IDENTIFIER_POINTS_TO_DIFFERENT_ASSETS',
+    }));
   });
 
   it('creates separate planned UIDs when VIN differs', () => {
