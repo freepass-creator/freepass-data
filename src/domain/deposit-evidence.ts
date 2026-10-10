@@ -6,6 +6,7 @@ export function assessDepositEvidence(input: {
   depositFree?: unknown;
   depositFreeConfirmation?: unknown;
   depositSourceWaiverBasis?: unknown;
+  depositSourceWaiverText?: unknown;
   sourceAmount: unknown;
   hasPositivePaidDeposit?: boolean;
 }) {
@@ -19,14 +20,19 @@ export function assessDepositEvidence(input: {
   const productType = typeof input.productType === 'string' ? input.productType.replace(/\s+/g, '') : '';
   const forbidden = productType === '픽업구독' || supplierId === 'RP012';
   const depositFreeFlag = input.depositFree === true || input.depositFree === '예';
+  const depositFreeNegativeFlag = input.depositFree === false || input.depositFree === '아니오' || input.depositFree === '아님' || input.depositFree === '불가';
   const sourceWaiverBasis = isValidDepositSourceWaiverBasis(input.depositSourceWaiverBasis) ? input.depositSourceWaiverBasis : null;
+  const sourceWaiverText = depositText(input.depositSourceWaiverText);
   const confirmationWaiverBasis = depositFreeConfirmationBasis(input.depositFreeConfirmation);
   const noteWaiverBasis = note === '무보증' ? { field: 'deposit_note' as const, text: '무보증' as const } : null;
   const zeroBasis = sourceWaiverBasis ?? noteWaiverBasis ?? confirmationWaiverBasis;
   const explicitZero = !!zeroBasis;
   const unknown = (reason: string) => ({ state: 'UNKNOWN' as const, amount: null, reason });
   const missing = raw === undefined || raw === null || raw === '';
-  if (note === '무보증' && (input.depositFree === false || input.depositFree === '아니오' || input.depositFree === '아님' || input.depositFree === '불가')) {
+  if (explicitZero && depositFreeNegativeFlag) {
+    return unknown('CONFLICTING_ZERO_DEPOSIT_EVIDENCE');
+  }
+  if (noteWaiverBasis && sourceWaiverText && sourceWaiverText !== '무보증') {
     return unknown('CONFLICTING_ZERO_DEPOSIT_EVIDENCE');
   }
   if (explicitZero && (!supplierId || !productType || (!missing && !valid))) {
@@ -48,12 +54,18 @@ export function assessDepositEvidence(input: {
   if (forbidden) return unknown('ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY');
   if (missing) return unknown('MISSING_DEPOSIT_AMOUNT');
   if (explicitZero) return { state: 'ZERO' as const, amount: 0, reason: 'EXPLICIT_ZERO_DEPOSIT', basis: zeroBasis };
-  return unknown(note ? 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE' : 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE');
+  return unknown('DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE');
 }
 
 export type DepositEvidenceBasis = { field: 'deposit_note' | '원문.전체.장기보증' | '원문.전체.단기보증' | 'deposit_free_confirmation'; text: '무보증'; source?: string; at?: string };
 export const DEPOSIT_SOURCE_WAIVER_FIELDS = ['원문.전체.장기보증', '원문.전체.단기보증'] as const;
 export type DepositFreeConfirmation = { source?: unknown; at?: unknown; text?: unknown };
+
+export function depositSourceWaiverFieldForTermMonths(termMonths: unknown): typeof DEPOSIT_SOURCE_WAIVER_FIELDS[number] | undefined {
+  return Number.isSafeInteger(termMonths) && (termMonths as number) > 0
+    ? (termMonths as number) <= 12 ? DEPOSIT_SOURCE_WAIVER_FIELDS[1] : DEPOSIT_SOURCE_WAIVER_FIELDS[0]
+    : undefined;
+}
 
 function isValidDepositSourceWaiverBasis(value: unknown): value is DepositEvidenceBasis {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -78,11 +90,14 @@ function readProductPath(product: Record<string, unknown>, path: string): unknow
   }, product);
 }
 
-function sourceWaiverBasisFromProduct(product: Record<string, unknown>): DepositEvidenceBasis | undefined {
-  for (const field of DEPOSIT_SOURCE_WAIVER_FIELDS) {
-    if (depositText(readProductPath(product, field)) === '무보증') return { field, text: '무보증' };
-  }
-  return undefined;
+function sourceWaiverTextFromProduct(product: Record<string, unknown>, termMonths: unknown): { field?: typeof DEPOSIT_SOURCE_WAIVER_FIELDS[number]; text: string } {
+  const field = depositSourceWaiverFieldForTermMonths(termMonths);
+  return field ? { field, text: depositText(readProductPath(product, field)) } : { text: '' };
+}
+
+function sourceWaiverBasisFromProduct(product: Record<string, unknown>, termMonths: unknown): DepositEvidenceBasis | undefined {
+  const source = sourceWaiverTextFromProduct(product, termMonths);
+  return source.field && source.text === '무보증' ? { field: source.field, text: '무보증' } : undefined;
 }
 
 export function depositEvidenceInputFromProduct(
@@ -101,7 +116,8 @@ export function depositEvidenceInputFromProduct(
     note: product.deposit_note,
     depositFree: product.deposit_free,
     depositFreeConfirmation: product.deposit_free_confirmation,
-    depositSourceWaiverBasis: sourceWaiverBasisFromProduct(product),
+    depositSourceWaiverBasis: sourceWaiverBasisFromProduct(product, extra.termMonths),
+    depositSourceWaiverText: sourceWaiverTextFromProduct(product, extra.termMonths).text,
     sourceAmount,
     ...extra,
   };
@@ -282,7 +298,8 @@ export function auditDepositEvidence(products: Record<string, Record<string, unk
     const hasPositivePaidDeposit = hasConflictingPaidDeposit(product.price);
     for (const [termKey, value] of paid) {
       const row = value as Record<string, unknown>;
-      const result = assessDepositEvidence(depositEvidenceInputFromProduct(product, row.deposit, { hasPositivePaidDeposit }));
+      const parsed = parseErp5CompatibilityPriceKey(termKey);
+      const result = assessDepositEvidence(depositEvidenceInputFromProduct(product, row.deposit, { termMonths: parsed?.months, hasPositivePaidDeposit }));
       findings.push({ productId, listable: product.listable === true, supplierId: String(product.provider_company_code ?? ''),
         productType: String(product.product_type ?? ''), termKey, state: result.state, reason: result.reason,
         sourceAmount: row.deposit ?? null, proposedAmount: result.amount,

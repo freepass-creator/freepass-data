@@ -69,7 +69,7 @@ function parsePriceTerms(data: Record<string, unknown>, issues: string[]): Price
     }
 
     const evidence = assessDepositEvidence(depositEvidenceInputFromProduct(data, terms.deposit, {
-      hasPositivePaidDeposit: hasConflictingPaidDeposit(price) }));
+      termMonths: key.termMonths, hasPositivePaidDeposit: hasConflictingPaidDeposit(price) }));
     if (evidence.state === 'UNKNOWN') issues.push(`DEPOSIT_REVIEW_REQUIRED:${sourceKey}:${evidence.reason}`);
     const deposit: { deposit: Money | null; depositState: DepositState } = {
       depositState: evidence.state,

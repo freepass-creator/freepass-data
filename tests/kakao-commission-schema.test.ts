@@ -1,10 +1,17 @@
 process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { expect, test } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
+import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
 import schema from '../contracts/kakao-catalog-reference-v1.schema.json' with { type: 'json' };
 import { resolveSalesCommission, resolveSupplierBillingFee } from '../src/application/kakao-catalog-reference.js';
 
 const ajv = new Ajv2020({ allErrors: true, strict: false });
+const addFormats = (
+  typeof addFormatsModule === 'function'
+    ? addFormatsModule
+    : (addFormatsModule as unknown as { default: FormatsPlugin }).default
+) as FormatsPlugin;
+addFormats(ajv);
 ajv.addSchema(schema);
 const validate = ajv.compile({ $ref: `${schema.$id}#/$defs/commissionResolution` });
 const validatePriceTerm = ajv.compile({ $ref: `${schema.$id}#/$defs/priceTerm` });
@@ -43,6 +50,18 @@ test('deposit schema: ZERO requires evidence basis and confirmation basis requir
   expect(validatePriceTerm(confirmed)).toBe(false);
   expect(validatePriceTerm.errors).toEqual(expect.arrayContaining([
     expect.objectContaining({ keyword: 'required', params: { missingProperty: 'source' } })
+  ]));
+
+  confirmedRule.depositEvidenceBasis = { field: 'deposit_free_confirmation', text: '무보증', source: '   ', at: '2026-10-10T12:00:00+09:00' };
+  expect(validatePriceTerm(confirmed)).toBe(false);
+  expect(validatePriceTerm.errors).toEqual(expect.arrayContaining([
+    expect.objectContaining({ keyword: 'pattern', instancePath: expect.stringContaining('/source') })
+  ]));
+
+  confirmedRule.depositEvidenceBasis = { field: 'deposit_free_confirmation', text: '무보증', source: '공급사 확인', at: '어제' };
+  expect(validatePriceTerm(confirmed)).toBe(false);
+  expect(validatePriceTerm.errors).toEqual(expect.arrayContaining([
+    expect.objectContaining({ keyword: 'format', instancePath: expect.stringContaining('/at') })
   ]));
 });
 

@@ -111,7 +111,7 @@
                   "properties": {
                     "field": { "enum": ["deposit_note", "원문.전체.장기보증", "원문.전체.단기보증", "deposit_free_confirmation"] },
                     "text": { "const": "무보증" },
-                    "source": { "type": "string", "minLength": 1 },
+                    "source": { "type": "string", "minLength": 1, "pattern": "\\S" },
                     "at": { "type": "string", "format": "date-time" }
                   },
                   "allOf": [

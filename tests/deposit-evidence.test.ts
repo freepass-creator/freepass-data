@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assessDepositEvidence, auditDepositEvidence, depositFromYearsRuleNote, depositStatusLabel, resolveDepositByRuleNote } from '../src/domain/deposit-evidence.js';
+import { assessDepositEvidence, auditDepositEvidence, depositEvidenceInputFromProduct, depositFromYearsRuleNote, depositStatusLabel, resolveDepositByRuleNote } from '../src/domain/deposit-evidence.js';
 import { buildKakaoCatalogReferenceProduct, resolveReferenceDeposit } from '../src/application/kakao-catalog-reference.js';
 import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 import { mapErp5Product } from '../src/adapters/erp5-product-mapping.js';
@@ -115,6 +115,32 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     expect(assessDepositEvidence({ ...identity, note: '무보증 가능' }))
       .toMatchObject({ state: 'UNKNOWN', reason: 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE' });
   });
+  it('uses only the warranty cell that matches the price term period', () => {
+    const base = { provider_company_code: 'RP004', product_type: '중고렌트' };
+    const longFreeShortPaid = { ...base, deposit_note: '무보증', 원문: { 전체: { 단기보증: '1,000,000', 장기보증: '무보증' } } };
+    const shortFreeLongPaid = { ...base, deposit_note: '무보증', 원문: { 전체: { 단기보증: '무보증', 장기보증: '별도 확인' } } };
+    expect(resolveReferenceDeposit({ ...depositEvidenceInputFromProduct(longFreeShortPaid, 0, { termMonths: 12 }), termMonths: 12, monthlyRent: 500000 }))
+      .toMatchObject({ depositState: 'UNKNOWN', depositAmount: null });
+    expect(resolveReferenceDeposit({ ...depositEvidenceInputFromProduct(longFreeShortPaid, 0, { termMonths: 24 }), termMonths: 24, monthlyRent: 500000 }))
+      .toMatchObject({ depositState: 'ZERO', depositAmount: 0, depositRule: { depositEvidenceBasis: { field: '원문.전체.장기보증' } } });
+    expect(resolveReferenceDeposit({ ...depositEvidenceInputFromProduct(shortFreeLongPaid, 0, { termMonths: 12 }), termMonths: 12, monthlyRent: 500000 }))
+      .toMatchObject({ depositState: 'ZERO', depositAmount: 0, depositRule: { depositEvidenceBasis: { field: '원문.전체.단기보증' } } });
+    expect(resolveReferenceDeposit({ ...depositEvidenceInputFromProduct(shortFreeLongPaid, 0, { termMonths: 24 }), termMonths: 24, monthlyRent: 500000 }))
+      .toMatchObject({ depositState: 'UNKNOWN', depositAmount: null });
+  });
+  it('accepts deposit_note when the matching period source cell is absent, but rejects matching-cell conflict and negative flags', () => {
+    const identity = { supplierId: 'RP004', productType: '중고렌트', sourceAmount: 0 };
+    expect(assessDepositEvidence({ ...identity, note: '무보증' }))
+      .toMatchObject({ state: 'ZERO', basis: { field: 'deposit_note', text: '무보증' } });
+    expect(assessDepositEvidence({ ...identity, note: '무보증', depositSourceWaiverText: '1,000,000' }))
+      .toMatchObject({ state: 'UNKNOWN', reason: 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' });
+    for (const depositFree of [false, '아니오', '아님', '불가']) {
+      expect(assessDepositEvidence({ ...identity, depositFree, depositSourceWaiverBasis: waiverBasis }))
+        .toMatchObject({ state: 'UNKNOWN', reason: 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' });
+      expect(assessDepositEvidence({ ...identity, depositFree, depositFreeConfirmation: { source: '공급사 답변', at: '2026-10-10T12:00:00+09:00', text: '무보증' } }))
+        .toMatchObject({ state: 'UNKNOWN', reason: 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' });
+    }
+  });
   it('does not erase a known positive source amount for a nonzero product', () => {
     expect(assessDepositEvidence({ supplierId: 'RP012', productType: '중고렌트', sourceAmount: '1,500,000' })).toMatchObject({ state: 'KNOWN', amount: 1500000 });
   });
@@ -193,7 +219,8 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
 
     const zero = withCompatibilityDepositEvidence({ provider_company_code: 'RP004', product_type: '중고렌트', ...sourceWaiver, deposit_note: '무보증',
       price: { '12': { rent: 100000, deposit: 0 } } }).price as Record<string, Record<string, unknown>>;
-    expect(zero['12']).toMatchObject({ deposit: 0, depositState: 'ZERO', depositEvidenceReason: 'EXPLICIT_ZERO_DEPOSIT', depositEvidenceBasis: waiverBasis });
+    expect(zero['12']).toMatchObject({ deposit: 0, depositState: 'ZERO', depositEvidenceReason: 'EXPLICIT_ZERO_DEPOSIT',
+      depositEvidenceBasis: { field: 'deposit_note', text: '무보증' } });
     const iancar = withCompatibilityDepositEvidence({ provider_company_code: 'RP031', product_type: '중고렌트', deposit_note: '국산: 월 대여료×2',
       price: { '12': { rent: 100000, deposit: 0 } } }).price as Record<string, Record<string, unknown>>;
     expect(iancar['12']).toMatchObject({ deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' });
