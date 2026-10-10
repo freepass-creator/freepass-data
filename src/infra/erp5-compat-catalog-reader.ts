@@ -87,6 +87,7 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
     return [key, { ...rowWithoutStaleBasis, deposit: evidence.amount, depositState: evidence.state,
       depositStatusLabel: depositStatusLabel(evidence.state, row.deposit, product.deposit_note),
       depositEvidenceReason: evidence.reason,
+      ...('depositRuleDifference' in evidence ? { depositRuleDifference: evidence.depositRuleDifference } : {}),
       ...(evidence.state === 'ZERO' && depositEvidenceBasis ? { depositEvidenceBasis } : {}) }];
   })) };
 }

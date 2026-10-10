@@ -9,6 +9,13 @@
 - next_start_here: 10-13은 실제 products/assets에 `vehicle_uid`·`externalIds`를 붙이는 마이그레이션 계획/digest/readback으로 넘어가며, 10-14 소비처 readback 전에는 옛 hash 발급 삭제 금지.
 
 
+## 2026-10-10 보증금 양수 원문금액 우선: 양수 가격행+계산 규칙 메모는 `SOURCE_AMOUNT` KNOWN으로 판정하고 규칙값 불일치만 `depositRuleDifference`로 노출했다; 검증 `vitest deposit/kakao/mapper/consumer 293 PASS`, `build`, `check:arch`, `check:standards(PARTIAL 유지)`, `check:data-access-boundary` PASS; 남음 운영 배포·live readback 없음.
+
+## 2026-10-10 Admin contract-fee-links HTTP read endpoint
+
+- HTTP update: `POST /v1/consumers/freepass-admin-catalog/contract-fee-links` added with `contract-fee-link-read`, request/response schema, Admin-only auth/capability/audit, max 500 items, duplicate key 400, invalid shape 400, per-item lookup failure.
+- Verification update: `npm.cmd exec vitest -- run tests/consumer-gateway.test.ts tests/contract-fee-link.test.ts` PASS(43), `npm.cmd run build` PASS, `npm.cmd run check:arch` PASS, `npm.cmd run check:standards` PASS(exit 0, profile PARTIAL), `npm.cmd run check:data-access-boundary` PASS.
+
 ## 2026-10-10 차량 UID 설계서 추가: `docs/VEHICLE-UID.md`에 기존 asset UID 승격, 신규 ULID, `externalIds[]`, 이전 단계와 HOLD 질문을 문서화했다.
 
 ## 2026-10-10 보증금 ZERO 근거 축소 / deposit_free 확인 기록

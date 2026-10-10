@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assessDepositEvidence, auditDepositEvidence, depositEvidenceInputFromProduct, depositFromYearsRuleNote, depositStatusLabel, resolveDepositByRuleNote } from '../src/domain/deposit-evidence.js';
+import { assessDepositEvidence, auditDepositEvidence, depositEvidenceInputFromProduct, depositFromYearsRuleNote, depositStatusLabel, resolveDepositByRuleNote, resolveDepositWithRuleNote } from '../src/domain/deposit-evidence.js';
 import { buildKakaoCatalogReferenceProduct, resolveReferenceDeposit } from '../src/application/kakao-catalog-reference.js';
 import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 import { mapErp5Product } from '../src/adapters/erp5-product-mapping.js';
@@ -42,10 +42,16 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     expect(assessDepositEvidence({ supplierId: ' RP012 ', productType: '중고구독', note: '무보증', sourceAmount: 0 }).state).toBe('UNKNOWN');
     expect(assessDepositEvidence({ supplierId: 'RP004', productType: '픽업 구독', note: '무보증', sourceAmount: 0 }).state).toBe('UNKNOWN');
   });
-  it('does not silently override positive amounts with a formula; used rental preserves its ERP amount', () => {
+  it('keeps positive source amounts as KNOWN even with a rule note and only records rule differences', () => {
     const facts = { supplierId: 'RP023', productType: '오플구독', note: '국산: 월 대여료×2', sourceAmount: 3000000, monthlyRent: 500000, termMonths: 24 };
-    expect(resolveReferenceDeposit(facts).depositState).toBe('UNKNOWN');
-    expect(assessDepositEvidence(facts).state).toBe('UNKNOWN');
+    expect(resolveReferenceDeposit(facts)).toMatchObject({
+      depositState: 'KNOWN',
+      depositAmount: 3000000,
+      depositRule: { code: 'SOURCE_AMOUNT' },
+      depositRuleDifference: { ruleAmount: 1000000, ruleCode: 'RENT_X_2', differs: true },
+    });
+    expect(assessDepositEvidence(facts)).toMatchObject({ state: 'KNOWN', amount: 3000000, reason: 'SOURCE_AMOUNT' });
+    expect(resolveDepositWithRuleNote({ ...facts, sourceAmount: 1000000 })).not.toHaveProperty('depositRuleDifference');
     expect(resolveReferenceDeposit({ ...facts, supplierId: 'RP012', productType: '중고렌트' })).toMatchObject({ depositState: 'KNOWN', depositAmount: 3000000 });
     expect(resolveReferenceDeposit({ ...facts, supplierId: 'RP012', productType: '중고렌트', note: '월 대여료 × 약정연수 (최대 3개월)', sourceAmount: 0 }).depositState).toBe('UNKNOWN');
     expect(resolveReferenceDeposit({ ...facts, note: '국산: 월 대여료×2', sourceAmount: '150만' }).depositState).toBe('UNKNOWN');
@@ -214,6 +220,44 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
       [24, 6, 6000000],
       [36, 6, 6000000],
     ]);
+  });
+
+  it('reports rule differences only when positive source amount differs from computable rule notes', () => {
+    const cases = [
+      { note: '국산: 월 대여료×2', termMonths: 24, monthlyRent: 700000, sourceAmount: 1500000, ruleAmount: 1400000, ruleCode: 'RENT_X_2' },
+      { note: '수입: 12개월 대여료×3 · 18개월↑ ×6', termMonths: 18, monthlyRent: 500000, sourceAmount: 2500000, ruleAmount: 3000000, ruleCode: 'IMPORT_12_X3_18_PLUS_X6' },
+      { note: '월 대여료 × 약정연수 (최대 3개월)', termMonths: 36, monthlyRent: 800000, sourceAmount: 2300000, ruleAmount: 2400000, ruleCode: 'RENT_X_CONTRACT_YEARS_MAX3' },
+    ] as const;
+    for (const c of cases) {
+      const input = { supplierId: 'RP012', productType: '오공구독', ...c };
+      expect(resolveReferenceDeposit(input)).toMatchObject({
+        depositState: 'KNOWN',
+        depositAmount: c.sourceAmount,
+        depositRule: { code: 'SOURCE_AMOUNT' },
+        depositRuleDifference: { ruleAmount: c.ruleAmount, ruleCode: c.ruleCode, differs: true },
+      });
+    }
+    expect(resolveReferenceDeposit({ supplierId: 'RP012', productType: '오공구독', note: '국산: 월 대여료×2',
+      termMonths: 24, monthlyRent: 700000, sourceAmount: 1400000 })).not.toHaveProperty('depositRuleDifference');
+  });
+
+  it('keeps compatibility response, guide, and mapper aligned for positive source amount with a rule note', () => {
+    const source = { provider_company_code: 'RP012', product_type: '오공구독', deposit_note: '국산: 월 대여료×2',
+      price: { '24': { rent: 700000, deposit: 1500000 } } };
+    const reference = resolveReferenceDeposit({ supplierId: 'RP012', productType: '오공구독', note: '국산: 월 대여료×2',
+      termMonths: 24, monthlyRent: 700000, sourceAmount: 1500000 });
+    const compat = (withCompatibilityDepositEvidence(source).price as Record<string, Record<string, unknown>>)['24']!;
+    const mapped = mapErp5Product({ projectId: 'freepasserp5', collection: 'products', documentId: 'positive-rule-note',
+      sourceRevision: 'r', observedAt: '2026-10-10T00:00:00.000Z',
+      data: { car_number: '000가0000', maker: '제조사', model: '모델', vehicle_status: '출고가능',
+        status_kind: '가용', listable: true, ...source } });
+    expect(reference).toMatchObject({ depositState: 'KNOWN', depositAmount: 1500000,
+      depositRuleDifference: { ruleAmount: 1400000, ruleCode: 'RENT_X_2', differs: true } });
+    expect(compat).toMatchObject({ depositState: 'KNOWN', deposit: 1500000,
+      depositRuleDifference: { ruleAmount: 1400000, ruleCode: 'RENT_X_2', differs: true } });
+    // Catalog 후보(표준 가격행)에는 진단 필드를 싣지 않는다 — 금액만 같고 규칙 차이는 호환 응답·안내에만 남는다.
+    expect(mapped.candidate.priceTerms[0]).toMatchObject({ depositState: 'KNOWN', deposit: { amount: 1500000, currency: 'KRW' } });
+    expect(mapped.candidate.priceTerms[0]).not.toHaveProperty('depositRuleDifference');
   });
 
   it('keeps the compatibility guide paths unchanged for non-RP012 rules, missing evidence, waivers, and Iancar', () => {

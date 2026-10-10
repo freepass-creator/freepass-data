@@ -22,7 +22,7 @@ export type NormalizedVehicleIds = {
   externalIds: VehicleExternalId[];
 };
 export type VehicleUidResolution =
-  | { action: 'LINK'; vehicleUid: string; asset: VehicleAsset; reason: 'VIN' | 'SUPPLIER_VEHICLE' | 'PLATE' }
+  | { action: 'LINK'; vehicleUid: string; asset: VehicleAsset; reason: VehicleExternalIdKind }
   | { action: 'CREATE'; vehicleUid: string; externalIds: VehicleExternalId[] }
   | { action: 'HOLD'; reason: string }
   | { action: 'UNKNOWN'; reason: 'INSUFFICIENT_IDENTITY' };
@@ -140,15 +140,27 @@ export function isActiveExternalId(id: VehicleExternalId, at = new Date().toISOS
 
 function activeIds(asset: VehicleAsset, at: string): VehicleExternalId[] {
   const ids = (asset.externalIds ?? []).map(normalizeId).filter((x): x is VehicleExternalId => Boolean(x));
+  const activeExternalIds = ids.filter(id => isActiveExternalId(id, at));
   const legacy: VehicleExternalId[] = [];
-  if (asset.vin) legacy.push({ kind: 'VIN', value: normalizeVin(asset.vin)!, validFrom: asset.createdAt, source: 'legacy-field' });
-  if (asset.plateNumber) legacy.push({ kind: 'PLATE', value: normalizePlate(asset.plateNumber)!, validFrom: asset.createdAt, source: 'legacy-field' });
-  return [...ids, ...legacy].filter(id => isActiveExternalId(id, at));
+  const addLegacy = (kind: 'VIN' | 'PLATE', value: string | undefined) => {
+    if (!value) return;
+    const hasExternalKind = ids.some(id => id.kind === kind);
+    const matchesActiveExternalValue = activeExternalIds.some(id => id.kind === kind && id.value === value);
+    if (!hasExternalKind || matchesActiveExternalValue) {
+      legacy.push({ kind, value, validFrom: asset.createdAt, source: 'legacy-field' });
+    }
+  };
+  addLegacy('VIN', normalizeVin(asset.vin));
+  addLegacy('PLATE', normalizePlate(asset.plateNumber));
+  return [...activeExternalIds, ...legacy].filter(id => isActiveExternalId(id, at));
 }
+
+/** 공급사 범위 식별자: 같은 값이어도 공급사가 다르면 다른 식별자다(공급사 차량 ID·시트 행 키는 (공급사, 값) 쌍). */
+const isSupplierScoped = (kind: VehicleExternalIdKind) => kind === 'SUPPLIER_VEHICLE' || kind === 'SHEET_ROW';
 
 function sameId(id: VehicleExternalId, kind: VehicleExternalIdKind, value: string, supplierCode?: string) {
   if (id.kind !== kind || id.value !== value) return false;
-  if (kind !== 'SUPPLIER_VEHICLE') return true;
+  if (!isSupplierScoped(kind)) return true;
   return id.supplierCode === supplierCode;
 }
 
@@ -164,33 +176,69 @@ export function findActiveAssets(
 }
 
 function activeValue(asset: VehicleAsset, kind: VehicleExternalIdKind, at: string, supplierCode?: string) {
-  return activeIds(asset, at).find(id => id.kind === kind && (kind !== 'SUPPLIER_VEHICLE' || id.supplierCode === supplierCode))?.value;
+  return activeIds(asset, at).find(id => id.kind === kind && (!isSupplierScoped(kind) || id.supplierCode === supplierCode))?.value;
 }
 
-function contradicts(asset: VehicleAsset, ids: NormalizedVehicleIds, assets: VehicleAsset[], at: string) {
-  const activeVin = activeValue(asset, 'VIN', at);
-  if (ids.vin && activeVin && activeVin !== ids.vin) return true;
-  const activeSupplier = activeValue(asset, 'SUPPLIER_VEHICLE', at, ids.supplierCode);
-  if (ids.supplierVehicleId && activeSupplier && activeSupplier !== ids.supplierVehicleId) return true;
-  const activePlate = activeValue(asset, 'PLATE', at);
-  if (ids.plate && activePlate && activePlate !== ids.plate) {
-    if (ids.vin === activeVin || (ids.supplierVehicleId === activeSupplier && ids.supplierCode)) {
-      const plateOwners = findActiveAssets(assets, 'PLATE', ids.plate, at).filter(x => x.id !== asset.id);
-      return plateOwners.length > 0;
-    }
-    return true;
+function candidateIdentifierKey(id: VehicleExternalId) {
+  return `${id.kind}:${isSupplierScoped(id.kind) ? id.supplierCode ?? '' : ''}:${id.value}`;
+}
+
+function candidateIdentifiers(ids: NormalizedVehicleIds, now: string): VehicleExternalId[] {
+  const out: VehicleExternalId[] = [];
+  const push = (id: VehicleExternalId) => {
+    const normalized = normalizeId(id);
+    if (!normalized) return;
+    if (normalized.validFrom > now || (normalized.validTo !== null && normalized.validTo !== undefined && normalized.validTo <= now)) return;
+    if (isSupplierScoped(normalized.kind) && !normalized.supplierCode) return;
+    if (!out.some(existing => candidateIdentifierKey(existing) === candidateIdentifierKey(normalized))) out.push(normalized);
+  };
+  if (ids.vin) push({ kind: 'VIN', value: ids.vin, validFrom: now, source: 'vehicle-uid-resolver' });
+  if (ids.supplierVehicleId && ids.supplierCode) {
+    push({ kind: 'SUPPLIER_VEHICLE', supplierCode: ids.supplierCode, value: ids.supplierVehicleId, validFrom: now, source: 'vehicle-uid-resolver' });
+  }
+  if (ids.plate) push({ kind: 'PLATE', value: ids.plate, validFrom: now, source: 'vehicle-uid-resolver' });
+  for (const id of ids.externalIds) push(id);
+  return out;
+}
+
+function hasInternalContradiction(identifiers: VehicleExternalId[]) {
+  const seen = new Map<string, string>();
+  for (const id of identifiers) {
+    // 차 한 대에 하나뿐인 값(VIN·번호)만 후보 내부 모순으로 본다. 공급사 차량 ID·시트 행이 여럿 오는 경우는 자산 매칭 단계가 판정한다.
+    if (id.kind !== 'VIN' && id.kind !== 'PLATE') continue;
+    const ns = id.kind;
+    const prev = seen.get(ns);
+    if (prev !== undefined && prev !== id.value) return true;
+    seen.set(ns, id.value);
   }
   return false;
 }
 
-function createExternalIds(ids: NormalizedVehicleIds, now: string): VehicleExternalId[] {
-  const out: VehicleExternalId[] = [];
-  if (ids.vin) out.push({ kind: 'VIN', value: ids.vin, validFrom: now, source: 'vehicle-uid-resolver' });
-  if (ids.supplierVehicleId && ids.supplierCode) {
-    out.push({ kind: 'SUPPLIER_VEHICLE', supplierCode: ids.supplierCode, value: ids.supplierVehicleId, validFrom: now, source: 'vehicle-uid-resolver' });
+function conflictReason(kind: VehicleExternalIdKind) {
+  return `${kind}_CONFLICT`;
+}
+
+function contradicts(asset: VehicleAsset, identifiers: VehicleExternalId[], assets: VehicleAsset[], at: string) {
+  const active = activeIds(asset, at);
+  for (const id of identifiers) {
+    if (active.some(existing => sameId(existing, id.kind, id.value, id.supplierCode))) continue;
+    const sameNamespace = active.filter(existing =>
+      existing.kind === id.kind &&
+      (!isSupplierScoped(id.kind) || existing.supplierCode === id.supplierCode)
+    );
+    if (sameNamespace.length > 0) {
+      if (id.kind === 'PLATE') {
+        const plateOwners = findActiveAssets(assets, 'PLATE', id.value, at).filter(x => x.id !== asset.id);
+        if (plateOwners.length === 0) continue;
+      }
+      return true;
+    }
   }
-  if (ids.plate) out.push({ kind: 'PLATE', value: ids.plate, validFrom: now, source: 'vehicle-uid-resolver' });
-  return out;
+  return false;
+}
+
+function createExternalIds(identifiers: VehicleExternalId[], now: string): VehicleExternalId[] {
+  return identifiers.map(id => ({ ...id, validFrom: now, validTo: id.validTo ?? null, source: 'vehicle-uid-resolver' }));
 }
 
 export function resolveVehicleUid(
@@ -200,25 +248,28 @@ export function resolveVehicleUid(
 ): VehicleUidResolution {
   const now = options.now ?? new Date().toISOString();
   const ids = normalizeExternalIds(candidate);
-  const vin = findActiveAssets(assets, 'VIN', ids.vin, now);
-  const supplier = findActiveAssets(assets, 'SUPPLIER_VEHICLE', ids.supplierVehicleId, now, ids.supplierCode);
-  const plate = findActiveAssets(assets, 'PLATE', ids.plate, now);
-  if (vin.length > 1) return { action: 'HOLD', reason: 'VIN_CONFLICT' };
-  if (supplier.length > 1) return { action: 'HOLD', reason: 'SUPPLIER_VEHICLE_CONFLICT' };
-  if (plate.length > 1) return { action: 'HOLD', reason: 'PLATE_CONFLICT' };
-  const linked = [...new Map([...vin, ...supplier, ...plate].map(asset => [asset.id, asset])).values()];
+  const identifiers = candidateIdentifiers(ids, now);
+  // 한 후보 안에서 같은 종류(공급사 범위는 공급사별)의 식별자가 서로 다른 값이면 한 차를 두 값으로 말하는 모순 → 새 UID 도, 연결도 하지 않는다.
+  if (hasInternalContradiction(identifiers)) return { action: 'HOLD', reason: 'CANDIDATE_INTERNAL_CONTRADICTION' };
+  const matches = identifiers.map(id => ({
+    id,
+    assets: findActiveAssets(assets, id.kind, id.value, now, id.supplierCode),
+  }));
+  const conflict = matches.find(match => match.assets.length > 1);
+  if (conflict) return { action: 'HOLD', reason: conflictReason(conflict.id.kind) };
+  const linked = [...new Map(matches.flatMap(match => match.assets).map(asset => [asset.id, asset])).values()];
   if (linked.length > 1) return { action: 'HOLD', reason: 'IDENTIFIER_POINTS_TO_DIFFERENT_ASSETS' };
   if (linked.length === 1) {
     const asset = linked[0]!;
-    if (contradicts(asset, ids, assets, now)) return { action: 'HOLD', reason: 'IDENTIFIER_CONTRADICTION' };
-    const reason = vin[0]?.id === asset.id ? 'VIN' : supplier[0]?.id === asset.id ? 'SUPPLIER_VEHICLE' : 'PLATE';
+    if (contradicts(asset, identifiers, assets, now)) return { action: 'HOLD', reason: 'IDENTIFIER_CONTRADICTION' };
+    const reason = matches.find(match => match.assets[0]?.id === asset.id)?.id.kind ?? 'PLATE';
     return { action: 'LINK', vehicleUid: asset.id, asset, reason };
   }
-  if (ids.vin || (ids.supplierCode && ids.supplierVehicleId) || ids.plate) {
+  if (identifiers.length > 0) {
     return {
       action: 'CREATE',
       vehicleUid: newVehicleUid(options.clock, options.random, options.uidOptions),
-      externalIds: createExternalIds(ids, now),
+      externalIds: createExternalIds(identifiers, now),
     };
   }
   return { action: 'UNKNOWN', reason: 'INSUFFICIENT_IDENTITY' };
@@ -230,13 +281,15 @@ export function addExternalId(asset: VehicleAsset, id: VehicleExternalId, now: s
   const externalIds = structuredClone(asset.externalIds ?? []);
   const activeIndex = externalIds.findIndex(existing =>
     existing.kind === normalized.kind &&
-    (normalized.kind !== 'SUPPLIER_VEHICLE' || normalizeSupplierCode(existing.supplierCode) === normalized.supplierCode) &&
+    (!isSupplierScoped(normalized.kind) || normalizeSupplierCode(existing.supplierCode) === normalized.supplierCode) &&
     isActiveExternalId(existing, now)
   );
   if (activeIndex >= 0) {
     const active = normalizeId(externalIds[activeIndex]!)!;
     if (active.value === normalized.value) return { ...structuredClone(asset), externalIds };
-    externalIds[activeIndex] = { ...externalIds[activeIndex]!, validTo: now };
+    // 기존 값의 종료는 «새 값의 시작일»부터다 — 새 값이 미래 날짜면 그날까지 옛 값도 유효해서, 전환일 전에 옛 값으로 찾아도 같은 UID 에 연결된다.
+    const closeAt = normalized.validFrom && normalized.validFrom > now ? normalized.validFrom : now;
+    externalIds[activeIndex] = { ...externalIds[activeIndex]!, validTo: closeAt };
   }
   externalIds.push({ ...normalized, validFrom: normalized.validFrom || now, validTo: normalized.validTo ?? null });
   return { ...structuredClone(asset), externalIds };

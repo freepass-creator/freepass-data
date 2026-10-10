@@ -46,9 +46,6 @@ export function assessDepositEvidence(input: {
   }
   if (!missing && !valid) return unknown('INVALID_DEPOSIT_AMOUNT');
   if (valid && amount > 0) {
-    // RP012 used rentals carry authoritative per-term ERP amounts, not the subscription formula.
-    const sourceAmountAuthoritative = supplierId === 'RP012' && ['중고렌트', '재렌트'].includes(productType);
-    if (note && !sourceAmountAuthoritative) return unknown('POSITIVE_AMOUNT_WITH_RULE_REQUIRES_REVIEW');
     return { state: 'KNOWN' as const, amount, reason: 'SOURCE_AMOUNT' };
   }
   if (forbidden) return unknown('ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY');
@@ -215,7 +212,7 @@ export function resolveDepositByRuleNote(input: {
 }
 
 export type DepositWithRuleResolution =
-  | { state: 'KNOWN'; amount: number; reason: 'SOURCE_AMOUNT' | `SUPPLIER_RULE_NOTE:${DepositRuleCode}`; rule: null | { code: DepositRuleCode | 'SOURCE_AMOUNT'; multiplier: number | null; label: string } }
+  | { state: 'KNOWN'; amount: number; reason: 'SOURCE_AMOUNT' | `SUPPLIER_RULE_NOTE:${DepositRuleCode}`; rule: null | { code: DepositRuleCode | 'SOURCE_AMOUNT'; multiplier: number | null; label: string }; depositRuleDifference?: { ruleAmount: number; ruleCode: DepositRuleCode; differs: true } }
   | { state: 'ZERO'; amount: 0; reason: 'EXPLICIT_ZERO_DEPOSIT'; depositEvidenceBasis: DepositEvidenceBasis; rule: { code: 'ZERO_DEPOSIT'; multiplier: 0; label: string; depositEvidenceBasis: DepositEvidenceBasis } }
   | { state: 'UNKNOWN'; amount: null; reason: string; rule: null };
 
@@ -235,7 +232,14 @@ export function resolveDepositWithRuleNote(input: {
 }): DepositWithRuleResolution {
   const evidence = assessDepositEvidence(input);
   const sourceAmountRule = { code: 'SOURCE_AMOUNT' as const, multiplier: null, label: '공급사 입력 금액' };
-  if (evidence.state === 'KNOWN') return { state: 'KNOWN', amount: evidence.amount, reason: 'SOURCE_AMOUNT', rule: sourceAmountRule };
+  if (evidence.state === 'KNOWN') {
+    const rule = resolveDepositByRuleNote({ note: input.note, termMonths: input.termMonths, monthlyRent: input.monthlyRent });
+    const depositRuleDifference = rule.state === 'KNOWN' && rule.amount !== evidence.amount
+      ? { ruleAmount: rule.amount, ruleCode: rule.code as DepositRuleCode, differs: true as const }
+      : undefined;
+    return { state: 'KNOWN', amount: evidence.amount, reason: 'SOURCE_AMOUNT', rule: sourceAmountRule,
+      ...(depositRuleDifference ? { depositRuleDifference } : {}) };
+  }
   if (evidence.state === 'ZERO') return {
     state: 'ZERO',
     amount: 0,

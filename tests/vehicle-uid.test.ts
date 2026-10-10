@@ -27,6 +27,10 @@ const id = (kind: VehicleExternalId['kind'], value: string, supplierCode?: strin
   validFrom: '2026-10-01T00:00:00.000Z',
   source: 'test',
 });
+const closedId = (kind: VehicleExternalId['kind'], value: string, validTo: string, supplierCode?: string): VehicleExternalId => ({
+  ...id(kind, value, supplierCode),
+  validTo,
+});
 const asset = (assetId: string, externalIds: VehicleExternalId[] = []): VehicleAsset => ({
   ...meta,
   id: assetId,
@@ -130,9 +134,134 @@ describe('vehicle UID resolver', () => {
     expect(linked.action).toBe('LINK');
     if (linked.action === 'LINK') expect(linked.vehicleUid).toBe(created.vehicleUid);
   });
+
+  it('holds a candidate whose own identifiers contradict (vin=A and externalIds VIN=B), instead of creating one UID for two cars', () => {
+    const r = resolveVehicleUid({ vin: 'TESTFAKEVIN0000A', externalIds: [id('VIN', 'TESTFAKEVIN0000B')] }, [], { now });
+    expect(r).toMatchObject({ action: 'HOLD', reason: 'CANDIDATE_INTERNAL_CONTRADICTION' });
+    // 같은 값이면 모순이 아니다(CREATE).
+    const same = resolveVehicleUid({ vin: 'TESTFAKEVIN0000A', externalIds: [id('VIN', 'TESTFAKEVIN0000A')] }, [], { now });
+    expect(same.action).toBe('CREATE');
+  });
+
+  it('treats SHEET_ROW ids as (supplier, row) pairs — same row id of another supplier is a different identifier', () => {
+    const a = asset('va_sheet_a', [id('SHEET_ROW', 'ROW-0007', 'RP001')]);
+    const b = asset('va_sheet_b', [id('SHEET_ROW', 'ROW-0007', 'RP002')]);
+    // 같은 행 ID 라도 공급사가 다르면 다른 자산: RP002 행으로 찾으면 b 에만 LINK
+    const link = resolveVehicleUid({ externalIds: [id('SHEET_ROW', 'ROW-0007', 'RP002')] }, [a, b], { now });
+    expect(link.action).toBe('LINK');
+    if (link.action === 'LINK') expect(link.vehicleUid).toBe('va_sheet_b');
+    // 공급사 없는 행 ID 는 식별자로 쓰지 않는다 → 새 식별자 없음 → UNKNOWN
+    const noSupplier = resolveVehicleUid({ externalIds: [{ kind: 'SHEET_ROW', value: 'ROW-0007', validFrom: now, source: 't' }] }, [a, b], { now });
+    expect(noSupplier.action).toBe('UNKNOWN');
+    // 두 공급사의 행 ID 를 함께 주면 서로 다른 자산을 가리키므로 HOLD
+    const both = resolveVehicleUid({ externalIds: [id('SHEET_ROW', 'ROW-0007', 'RP001'), id('SHEET_ROW', 'ROW-0007', 'RP002')] }, [a, b], { now });
+    expect(both).toMatchObject({ action: 'HOLD', reason: 'IDENTIFIER_POINTS_TO_DIFFERENT_ASSETS' });
+  });
+
+  it('ignores stale legacy plate when external plate history has moved, but keeps legacy-only assets compatible', () => {
+    const changed = {
+      ...asset('va_changed', [
+        closedId('PLATE', 'TEST-FAKE-OLD', '2026-10-11T00:00:00.000Z'),
+        id('PLATE', 'TEST-FAKE-NEW'),
+      ]),
+      plateNumber: 'TEST-FAKE-OLD',
+    };
+    const oldPlate = resolveVehicleUid(
+      { plate: 'TEST-FAKE-OLD' },
+      [changed],
+      { now, clock: () => 1_760_227_200_020, random: randomSeq(Array(16).fill(0.6)) },
+    );
+    expect(oldPlate.action).toBe('CREATE');
+
+    const newPlate = resolveVehicleUid({ plate: 'TEST-FAKE-NEW' }, [changed], { now });
+    expect(newPlate.action).toBe('LINK');
+    if (newPlate.action === 'LINK') expect(newPlate.vehicleUid).toBe('va_changed');
+
+    const legacyOnly = { ...asset('va_legacy'), plateNumber: 'TEST-FAKE-LEGACY' };
+    const legacy = resolveVehicleUid({ plate: 'TEST-FAKE-LEGACY' }, [legacyOnly], { now });
+    expect(legacy.action).toBe('LINK');
+    if (legacy.action === 'LINK') expect(legacy.vehicleUid).toBe('va_legacy');
+  });
+
+  it('holds when candidate externalIds point to different plate and VIN assets', () => {
+    const plateAsset = asset('va_plate_external', [id('PLATE', 'TEST-FAKE-A')]);
+    const vinAsset = asset('va_vin_external', [id('VIN', 'TESTVIN00000000B')]);
+    expect(resolveVehicleUid(
+      { externalIds: [id('PLATE', 'TEST-FAKE-A'), id('VIN', 'TESTVIN00000000B')] },
+      [plateAsset, vinAsset],
+      { now },
+    )).toEqual({ action: 'HOLD', reason: 'IDENTIFIER_POINTS_TO_DIFFERENT_ASSETS' });
+  });
+
+  it('holds when multiple supplier vehicle IDs in candidate externalIds point to different assets', () => {
+    const first = asset('va_supplier_first', [id('SUPPLIER_VEHICLE', 'SUP-FAKE-1', 'TESTSUP')]);
+    const second = asset('va_supplier_second', [id('SUPPLIER_VEHICLE', 'SUP-FAKE-2', 'TESTSUP')]);
+    expect(resolveVehicleUid(
+      { externalIds: [id('SUPPLIER_VEHICLE', 'SUP-FAKE-1', 'TESTSUP'), id('SUPPLIER_VEHICLE', 'SUP-FAKE-2', 'TESTSUP')] },
+      [first, second],
+      { now },
+    )).toEqual({ action: 'HOLD', reason: 'IDENTIFIER_POINTS_TO_DIFFERENT_ASSETS' });
+  });
+
+  it('links when every candidate externalId points to the same asset', () => {
+    const a = asset('va_all_same', [
+      id('PLATE', 'TEST-FAKE-SAME'),
+      id('VIN', 'TESTVIN000000SAME'),
+      id('SUPPLIER_VEHICLE', 'SUP-FAKE-SAME-1', 'TESTSUP'),
+      id('SUPPLIER_VEHICLE', 'SUP-FAKE-SAME-2', 'TESTSUP'),
+    ]);
+    const result = resolveVehicleUid(
+      {
+        externalIds: [
+          id('PLATE', 'TEST-FAKE-SAME'),
+          id('VIN', 'TESTVIN000000SAME'),
+          id('SUPPLIER_VEHICLE', 'SUP-FAKE-SAME-1', 'TESTSUP'),
+          id('SUPPLIER_VEHICLE', 'SUP-FAKE-SAME-2', 'TESTSUP'),
+        ],
+      },
+      [a],
+      { now },
+    );
+    expect(result.action).toBe('LINK');
+    if (result.action === 'LINK') expect(result.vehicleUid).toBe('va_all_same');
+  });
+
+  it('creates with every active candidate externalId copied into the new asset IDs', () => {
+    const created = resolveVehicleUid(
+      { externalIds: [id('PLATE', 'TEST-FAKE-CREATE'), id('VIN', 'TESTVIN000CREATE')] },
+      [],
+      { now, clock: () => 1_760_227_200_030, random: randomSeq(Array(16).fill(0.7)) },
+    );
+    expect(created.action).toBe('CREATE');
+    if (created.action !== 'CREATE') throw new Error('expected create');
+    expect(created.externalIds).toEqual([
+      { kind: 'PLATE', value: 'TEST-FAKE-CREATE', validFrom: now, validTo: null, source: 'vehicle-uid-resolver' },
+      { kind: 'VIN', value: 'TESTVIN000CREATE', validFrom: now, validTo: null, source: 'vehicle-uid-resolver' },
+    ]);
+  });
 });
 
 describe('addExternalId', () => {
+  it('closes the old id at the new id start date (future-dated plate keeps the old plate valid until then)', () => {
+    const before = asset('va_future', [id('PLATE', 'TEST-FAKE-OLD')]);
+    const future = '2026-10-20T00:00:00.000Z';
+    const next = addExternalId(before, { ...id('PLATE', 'TEST-FAKE-NEW'), validFrom: future }, now);
+    expect(next.externalIds!.find(x => x.value === 'TEST-FAKE-OLD')!.validTo).toBe(future);
+    // 전환일 전: 옛 번호로 찾으면 같은 UID 로 LINK, 새 번호는 아직 없음
+    const old = resolveVehicleUid({ plate: 'TEST-FAKE-OLD' }, [next], { now });
+    expect(old.action).toBe('LINK');
+    if (old.action === 'LINK') expect(old.vehicleUid).toBe('va_future');
+    // 전환일 뒤: 새 번호로 LINK, 옛 번호는 더 이상 활성 아님
+    const after = '2026-10-21T00:00:00.000Z';
+    const fresh = resolveVehicleUid({ plate: 'TEST-FAKE-NEW' }, [next], { now: after });
+    expect(fresh.action).toBe('LINK');
+    const oldAfter = resolveVehicleUid({ plate: 'TEST-FAKE-OLD' }, [next], { now: after, clock: () => 1_760_900_000_000, random: () => 0.5 });
+    expect(oldAfter.action).toBe('CREATE');
+    // 지금 시작하는 새 값은 기존대로 now 에 닫음
+    const immediate = addExternalId(before, id('PLATE', 'TEST-FAKE-NOW'), now);
+    expect(immediate.externalIds!.find(x => x.value === 'TEST-FAKE-OLD')!.validTo).toBe(now);
+  });
+
   it('closes the previous active value and appends the new value', () => {
     const original = asset('va_history', [id('PLATE', 'TEST-FAKE-OLD')]);
     const next = addExternalId(original, id('PLATE', 'TEST-FAKE-NEW'), now);
