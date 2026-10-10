@@ -2423,3 +2423,4 @@ This file exists so another session can continue without re-discovering or re-cr
 - 보존: root의 COMMERCIAL 65줄/NEXT 9줄 draft는 원문·기존 index/worktree를 그대로 둔 채 기존 `codex/settlement-human-input-preservation`에 `9ce8e428e4bd8f562673505abd68c9ae82cad5c0` snapshot push. 오래된 정책을 현재 정책으로 main에 합치지 않는다. PR394 판정필요 draft는 별도 보존한다.
 - 남음: 운영 인증/backup/readback/실행 승인 및 source/master 최신성/consumer 전체 연결은 HOLD. Kakao 기존 caller와 운영 read revision은 code merge로 바뀌지 않는다. 공급사·영업자 기존 코드는 임시 외부 식별값으로 보존하며 미래 코드 매핑 전제로 이력을 유지한다.
 - next_start_here: PR411 최종 head/CI/ANSWERED 영수증/merge SHA를 확인하고, 별도로 승인된 운영 절차에서만 deployment·ACTIVE·writer·consumer 전환을 실행한다. 오래된 draft snapshot은 비교 자료이며 최신 SSOT가 아니다.
+- 통합 독립 검토 후속: e566에서 로컬 콘솔 멱등 재시도의 releaseId 불변을 오류로 보던 반례를 수정했다. ACTIVE에 committed offer revision 이상이 있는지 검사한다. 기존 read-runtime smoke에 실제 HTTP 최초 요청/동일 재전송 200·같은 receipt·같은 ACTIVE 응답 회귀를 추가, 13 PASS. 코드와 테스트는 PR411 최종 head에서 확인한다.

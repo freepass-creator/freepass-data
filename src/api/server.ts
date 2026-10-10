@@ -380,7 +380,10 @@ app.post('/v1/commands/offers/:offerId/price', async (request, reply) => {
           request.log.warn({ delivery }, 'Local projection refresh did not complete');
         }
         const refreshed = await stores.projections.getActive('erp-public');
-        if (!currentActive || refreshed?.releaseId === currentActive.releaseId) {
+        // A retry can legitimately reuse the already-delivered ACTIVE release.
+        // Verify the committed offer revision rather than requiring another activation.
+        if (!refreshed?.data.some(product => product.offers.some(offer =>
+          offer.offerId === committed.entityId && offer.offerRevision >= committed.revision))) {
           throw new Error('LOCAL_PROJECTION_REFRESH_NOT_ACTIVATED');
         }
       }
