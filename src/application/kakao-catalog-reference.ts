@@ -836,7 +836,7 @@ export type KakaoCatalogReferenceSource = Parameters<typeof buildKakaoCatalogRef
 
 /** All term conditions match one item; sibling terms remain visible. */
 export function filterReferenceProducts<T extends KakaoCatalogReference | ReturnType<typeof buildInternalAiReference>>(reference: T, query: Record<string, unknown>): T {
-  const fields = ['supplierId','supplierName','plateNumber','maker','model','commercialType','assetStatus'];
+  const fields = ['productId','supplierId','supplierName','plateNumber','maker','model','commercialType','assetStatus'];
   const numeric = ['termMonths','mileageKm','monthlyRentMin','monthlyRentMax','depositMin','depositMax'];
   const keys = [...fields,...numeric,'mileagePeriod','depositState','depositScope','sourceScope'];
   const invalid = () => { throw new Error('REFERENCE_DEPOSIT_FILTER_INVALID'); };
@@ -872,7 +872,16 @@ export function filterReferenceProducts<T extends KakaoCatalogReference | Return
   const sourceMatch = (p: T['data'][number]) => p.sourceRecord?.scope === 'COLLECTED' && sourceOnlyPeriod
     && supplierMatches(p.sourceRecord.supplierId, p.sourceRecord.supplierName)
     && (query.termMonths === undefined || p.sourceRecord.priceConditions.some(t => t.termMonths === Number(query.termMonths)));
-  const data = reference.data.filter(p => (query.plateNumber === undefined || plateKey(p.vehicle.plateNumber) === plateKey(query.plateNumber)) && (query.maker === undefined || p.vehicle.maker === query.maker) &&
+  // Match the complete returned product ID verbatim; never infer it from a plate,
+  // supplier code, source document ID, external ID, or an ID substring.
+  const productCandidates = query.productId === undefined ? [] : reference.data.filter(p => p.productId === query.productId);
+  const productIdentityConflict = productCandidates.length > 0 && !productCandidates.some(p =>
+    (query.plateNumber === undefined || plateKey(p.vehicle.plateNumber) === plateKey(query.plateNumber)) &&
+    ((query.supplierId === undefined && query.supplierName === undefined) ||
+      (p.sourceRecord?.scope === 'COLLECTED' && supplierMatches(p.sourceRecord.supplierId, p.sourceRecord.supplierName)) ||
+      p.offers.some(o => supplierMatches(o.supplierId, o.supplierName))));
+  const data = reference.data.filter(p => (query.productId === undefined || p.productId === query.productId) &&
+    (query.plateNumber === undefined || plateKey(p.vehicle.plateNumber) === plateKey(query.plateNumber)) && (query.maker === undefined || p.vehicle.maker === query.maker) &&
     (query.model === undefined || p.vehicle.model === query.model) && (query.commercialType === undefined || p.commercialType === query.commercialType) &&
     (query.assetStatus === undefined || p.vehicle.assetStatus === query.assetStatus) &&
     (sourceMatch(p) || p.offers.some(o => supplierMatches(o.supplierId, o.supplierName) && o.priceTerms.some(match))) &&
@@ -882,8 +891,10 @@ export function filterReferenceProducts<T extends KakaoCatalogReference | Return
     ...(query.supplierName !== undefined && sourceMatch(p) && p.sourceRecord?.supplierId ? [p.sourceRecord.supplierId] : []),
   ]));
   const plateCandidates = query.plateNumber === undefined ? [] : data.filter(p => plateKey(p.vehicle.plateNumber) === plateKey(query.plateNumber));
-  const queryResolution = { state: supplierCodes.size > 1 || plateCandidates.length > 1 ? 'HOLD' : data.length ? 'MATCHED' : 'NO_MATCH', reasonCode: supplierCodes.size > 1 ? 'SUPPLIER_NAME_MULTIPLE_CODES' : plateCandidates.length > 1 ? 'PLATE_MULTIPLE_PRODUCTS' : null, matchedProductCount: data.length };
-  return { ...reference,data,meta: { ...reference.meta,projectedCount:data.length,dataDigest:hash(JSON.stringify(data)),queryFilter:{...query},...(query.supplierName !== undefined || query.plateNumber !== undefined ? {queryResolution} : {}),
+  const reasonCode = productCandidates.length > 1 ? 'PRODUCT_ID_MULTIPLE_PRODUCTS' : productIdentityConflict ? 'PRODUCT_ID_IDENTITY_CONFLICT'
+    : supplierCodes.size > 1 ? 'SUPPLIER_NAME_MULTIPLE_CODES' : plateCandidates.length > 1 ? 'PLATE_MULTIPLE_PRODUCTS' : null;
+  const queryResolution = { state: reasonCode ? 'HOLD' : data.length ? 'MATCHED' : 'NO_MATCH', reasonCode, matchedProductCount: data.length };
+  return { ...reference,data,meta: { ...reference.meta,projectedCount:data.length,dataDigest:hash(JSON.stringify(data)),queryFilter:{...query},...(query.productId !== undefined || query.supplierName !== undefined || query.plateNumber !== undefined ? {queryResolution} : {}),
     ...(query.depositState === 'ZERO' ? {depositFilter:{state:'ZERO',termMonths:query.termMonths === undefined ? null : Number(query.termMonths),scope:query.depositScope === 'ALL_TERMS' ? 'ALL_TERMS' : 'ANY_TERM'}} : {}) } } as T;
 }
 export const filterReferenceZeroDeposit = filterReferenceProducts;

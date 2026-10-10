@@ -798,6 +798,52 @@ describe('general reference query', () => {
   });
 });
 
+describe('complete reference product ID lookup', () => {
+  const makeReference = () => buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-11T00:00:00Z', products: {
+    a: { listable: true, provider_company_code: 'RP013', provider_name: 'Synthetic Supplier', car_number: '123가4567',
+      price: { '36': { rent: 500000, deposit: 1000000 }, '48': { rent: 400000, deposit: null } } },
+    b: { listable: true, provider_company_code: 'RP012', provider_name: 'Other Supplier', car_number: '123나4567',
+      price: { '36': { rent: 600000, deposit: null } } },
+  } });
+  it('matches the whole returned ID, preserves sibling offers/terms and never changes the input', () => {
+    const ref = makeReference(), target = ref.data[0]!;
+    target.offers.push({ ...structuredClone(target.offers[0]!), offerId: 'sibling-offer', supplierId: 'RP012', supplierName: 'Other Supplier' });
+    const unchanged = structuredClone(ref);
+    const result = filterReferenceZeroDeposit(ref, { productId: target.productId, supplierId: 'RP013', supplierName: 'Synthetic Supplier', plateNumber: '123가4567', termMonths: '36', monthlyRentMin: '500000' });
+    expect(result.data).toEqual([target]);
+    expect(result.meta).toMatchObject({ projectedCount: 1, queryResolution: { state: 'MATCHED', reasonCode: null } });
+    expect(ref).toEqual(unchanged);
+    for (const productId of ['a', 'RP013', '123가4567', 'reference_', 'reference_missing']) {
+      const empty = filterReferenceZeroDeposit(ref, { productId });
+      expect(empty.data).toEqual([]);
+      expect(empty.meta).toMatchObject({ queryResolution: { state: 'NO_MATCH', reasonCode: null } });
+    }
+    for (const productId of ['', ' ', ' reference_a', 'reference_a ', ['reference_a'], 1])
+      expect(() => filterReferenceZeroDeposit(ref, { productId })).toThrow('REFERENCE_DEPOSIT_FILTER_INVALID');
+  });
+  it('keeps duplicate IDs on HOLD even when a supplier filter narrows the result', () => {
+    const ref = makeReference();
+    ref.data[1]!.productId = ref.data[0]!.productId;
+    const result = filterReferenceZeroDeposit(ref, { productId: ref.data[0]!.productId });
+    expect(result.data).toHaveLength(2);
+    expect(result.meta).toMatchObject({ queryResolution: { state: 'HOLD', reasonCode: 'PRODUCT_ID_MULTIPLE_PRODUCTS', matchedProductCount: 2 } });
+    const narrowed = filterReferenceZeroDeposit(ref, { productId: ref.data[0]!.productId, supplierId: 'RP013' });
+    expect(narrowed.data).toHaveLength(1);
+    expect(narrowed.meta).toMatchObject({ queryResolution: { state: 'HOLD', reasonCode: 'PRODUCT_ID_MULTIPLE_PRODUCTS' } });
+  });
+  it('holds conflicting plate/supplier identity without substituting another product; term misses stay NO_MATCH', () => {
+    const ref = makeReference(), productId = ref.data[0]!.productId;
+    for (const query of [{ productId, plateNumber: '123나4567' }, { productId, supplierId: 'RP012' }, { productId, supplierName: 'Other Supplier' }]) {
+      const result = filterReferenceZeroDeposit(ref, query);
+      expect(result.data).toEqual([]);
+      expect(result.meta).toMatchObject({ queryResolution: { state: 'HOLD', reasonCode: 'PRODUCT_ID_IDENTITY_CONFLICT', matchedProductCount: 0 } });
+    }
+    const miss = filterReferenceZeroDeposit(ref, { productId, plateNumber: '123가4567', termMonths: '60' });
+    expect(miss.data).toEqual([]);
+    expect(miss.meta).toMatchObject({ queryResolution: { state: 'NO_MATCH', reasonCode: null } });
+  });
+});
+
 describe('supplier and plate exact lookup', () => {
   it('normalizes lookup only, keeps every term and returns ambiguous candidates with HOLD', () => {
     const name='경진 렌트',plate='000가0000';

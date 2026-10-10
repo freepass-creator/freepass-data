@@ -444,6 +444,8 @@ Operating scope registration, caller adoption and deployment require separate au
 
 `GET /v1/consumers/kakao-ops/catalog-reference`
 
+`?productId=<응답의 완전한 productId>`는 기존 Kakao/internal AI reference 필터의 정확 단건 조회다. 문자열을 trim·부분 매칭하거나 `sourceProductId`·차량번호·공급사/RP 코드·external ID에서 추정하지 않는다. 미존재 ID는 HTTP200 빈 목록/`NO_MATCH`, 중복 ID는 `PRODUCT_ID_MULTIPLE_PRODUCTS` HOLD, 기존 ID와 공급사·차량번호 충돌은 빈 목록/`PRODUCT_ID_IDENTITY_CONFLICT` HOLD다. 기간·금액 필터는 한 조건행에서 함께 평가하며, 일치 상품의 모든 오퍼/형제 조건행은 그대로 반환한다. 기존 인증/capability를 먼저 검사하며 COLLECTED는 별도 기존 grant가 있어야 한다. 이 추가 코드의 운영 반영은 해당 배포 readback 이전까지 HOLD다.
+
 - only the separately registered `kakao-ops` identity may use it;
 - projects current listable ERP5 products in memory without a Firestore write;
 - materializes each period's deposit amount/rule/state, including explicit `ZERO` vs `UNKNOWN`;
