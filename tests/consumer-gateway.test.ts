@@ -44,6 +44,7 @@ describe('read-only consumer gateway', () => {
   it('keeps an unknown sibling in internal AI ANY_TERM and excludes it from ALL_TERMS', async () => {
     const consumerId = 'internal-ai-test';
     const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트', deposit_note: '무보증',
+      원문: { 전체: { 장기보증: '무보증' } },
       price: { '36': { rent: 500000, deposit: 0 }, '48': { rent: 450000, deposit: null } } };
     const { app } = withAccess(new MemoryDataStore(), [{ id: consumerId, projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] }], undefined, {
       read: async () => { throw new Error('unused'); },
@@ -68,10 +69,11 @@ describe('read-only consumer gateway', () => {
   });
   it('filters zero deposit through authenticated reference query, accepts no matches, rejects invalid periods', async () => {
     const base = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트' };
+    const sourceWaiver = { 원문: { 전체: { 장기보증: '무보증' } } };
     const { app } = withAccess(new MemoryDataStore(), [{ id: 'kakao-ops', projectionId: 'erp-public', token, capabilities: ['catalog-reference'] }], undefined, {
       read: async () => { throw new Error('unused'); },
       readKakaoReferenceSource: async () => ({ consumerId: 'kakao-ops', observedAt: '2026-10-09T00:00:00Z', products: {
-        free: { ...base, deposit_note: '무보증', price: { '36': { rent: 500000, deposit: 0 } } },
+        free: { ...base, ...sourceWaiver, deposit_note: '무보증', price: { '36': { rent: 500000, deposit: 0 } } },
         unknown: { ...base, price: { '36': { rent: 500000, deposit: 0 } } },
       } }),
     });
@@ -1000,7 +1002,8 @@ describe('photo request budgets and opaque keys', () => {
     expect(bucket.take('fresh')).toBe(0); expect(bucket.size).toBe(1);
   });
 
-  it.each([undefined, '0'])('limits only failed tokens and ignores spoofed forwarding with hops=%s', async hops => {
+  it.each([[undefined, '0'], ['0', '0'], ['0', '3']])('limits only failed tokens and ignores spoofed forwarding with photo hops=%s public hops=%s', async (hops, publicHops) => {
+    vi.stubEnv('FREEPASS_PUBLIC_TRUST_PROXY_HOPS', publicHops);
     const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
     vi.stubEnv('FREEPASS_DATA_TRUST_PROXY_HOPS', hops);
     const reader = { read: async () => { throw new Error('unused'); }, readVehiclePhoto: async () => ({ count: 0, bytes: null, contentType: 'application/json', revalidate: async () => true }) };
@@ -1033,6 +1036,20 @@ describe('photo request budgets and opaque keys', () => {
     } finally { await app.close(); clock.mockRestore(); vi.unstubAllEnvs(); }
   });
 
+  it.each(['0', '1'])('keeps public proxy trust at %s when photo trust is three hops', async publicHops => {
+    vi.stubEnv('FREEPASS_DATA_TRUST_PROXY_HOPS', '3');
+    vi.stubEnv('FREEPASS_PUBLIC_TRUST_PROXY_HOPS', publicHops);
+    const { app } = withAccess(new MemoryDataStore(), [binding]);
+    try {
+      let response;
+      for (let i = 0; i < 121; i++) {
+        const forwarded = publicHops === '0' ? `198.51.100.${i}` : `198.51.100.${i}, 203.0.113.10`;
+        response = await app.inject({ url: '/v1/public/catalog/feed', remoteAddress: '192.0.2.250', headers: { 'x-forwarded-for': forwarded } });
+      }
+      expect(response!.statusCode).toBe(429);
+    } finally { await app.close(); vi.unstubAllEnvs(); }
+  });
+
   it.each(['-1', '4', '1.5', 'true', '', '01'])('rejects invalid trusted proxy hops %s', value => {
     vi.stubEnv('FREEPASS_DATA_TRUST_PROXY_HOPS', value);
     try { expect(() => withAccess(new MemoryDataStore(), [binding])).toThrow('FREEPASS_DATA_TRUST_PROXY_HOPS_INVALID'); }
@@ -1053,4 +1070,100 @@ describe('photo request budgets and opaque keys', () => {
     expect((await app.inject({ url: url.replace('erp-com', 'whitelabel-test'), headers: { authorization: 'Bearer different-test-token-12345678901234567890' } })).statusCode).toBe(200);
     await app.close(); clock.mockRestore();
   });
+});
+
+it('serves Admin contract fee links in request order with one catalog read pass', async () => {
+  const store = new MemoryDataStore();
+  await seedDemoCatalog(store);
+  const adminBinding: ConsumerBinding = {
+    id: 'freepass-admin-catalog',
+    projectionId: 'admin-catalog',
+    token: token + '-admin',
+    capabilities: ['contract-fee-link-read'],
+  };
+  const calls = { assets: 0, products: 0, offers: 0, writes: 0 };
+  const feeStore = {
+    listVehicleAssets: async () => { calls.assets++; return store.listVehicleAssets(); },
+    listProducts: async () => { calls.products++; return store.listProducts(); },
+    listOffers: async () => { calls.offers++; return store.listOffers(); },
+    transact: async () => { calls.writes++; throw new Error('write must not be called'); },
+  } as any;
+  const { app, logs } = withAccess(store, [binding, adminBinding], feeStore);
+  const endpoint = '/v1/consumers/freepass-admin-catalog/contract-fee-links';
+  const payload = { items: [
+    { key: 'row-2', assetId: 'va_gv70_demo', supplierId: 'supplier_demo', termMonths: 36, monthlyRent: 690000, deposit: 3000000 },
+    { key: 'row-1', plate: '00가0000', supplierId: 'supplier_demo', termMonths: 60, monthlyRent: 690000 },
+  ] };
+
+  const response = await app.inject({
+    method: 'POST',
+    url: endpoint,
+    headers: { authorization: `Bearer ${token}-admin` },
+    payload,
+  });
+
+  expect(response.statusCode).toBe(200);
+  expect(response.json().contract).toBe('contract-fee-links/v1');
+  expect(response.json().results.map((item: { key: string }) => item.key)).toEqual(['row-2', 'row-1']);
+  expect(response.json().results[0]).toMatchObject({ key: 'row-2', status: 'LINKED', offerId: 'offer_gv70_demo' });
+  expect(response.json().results[0].fees.supplierBillingFee.status).toBe('CONFIRMED');
+  expect(response.json().results[1]).toMatchObject({ key: 'row-1', status: 'FAILED', failure: 'NO_TERM' });
+  expect(calls).toEqual({ assets: 1, products: 1, offers: 1, writes: 0 });
+  expect(logs.events.at(-1)).toMatchObject({
+    mode: 'READ',
+    phase: 'SUCCEEDED',
+    operation: 'READ_CONTRACT_FEE_LINKS',
+    result: { count: 2 },
+  });
+  await app.close();
+});
+
+it('rejects invalid contract fee link requests before reading catalog data', async () => {
+  const adminBinding: ConsumerBinding = {
+    id: 'freepass-admin-catalog',
+    projectionId: 'admin-catalog',
+    token: token + '-admin',
+    capabilities: ['contract-fee-link-read'],
+  };
+  let reads = 0;
+  const feeStore = {
+    listVehicleAssets: async () => { reads++; return []; },
+    listProducts: async () => { reads++; return []; },
+    listOffers: async () => { reads++; return []; },
+  } as any;
+  const { app } = withAccess(new MemoryDataStore(), [adminBinding], feeStore);
+  const endpoint = '/v1/consumers/freepass-admin-catalog/contract-fee-links';
+  const auth = { authorization: `Bearer ${token}-admin` };
+  const validItem = { key: 'row', supplierId: 'supplier_demo', termMonths: 36, monthlyRent: 690000 };
+
+  expect((await app.inject({ method: 'POST', url: endpoint, headers: auth, payload: { items: Array.from({ length: 501 }, (_, i) => ({ ...validItem, key: `row-${i}` })) } })).statusCode).toBe(400);
+  expect((await app.inject({ method: 'POST', url: endpoint, headers: auth, payload: { items: [{ ...validItem, key: 'dup' }, { ...validItem, key: 'dup' }] } })).statusCode).toBe(400);
+  expect((await app.inject({ method: 'POST', url: endpoint, headers: auth, payload: { items: [{ ...validItem, termMonths: 0 }] } })).statusCode).toBe(400);
+  expect(reads).toBe(0);
+  await app.close();
+});
+
+it('keeps contract fee links internal to Admin identity and rejects bad auth', async () => {
+  const adminBinding: ConsumerBinding = {
+    id: 'freepass-admin-catalog',
+    projectionId: 'admin-catalog',
+    token: token + '-admin',
+    capabilities: ['contract-fee-link-read'],
+  };
+  let reads = 0;
+  const feeStore = {
+    listVehicleAssets: async () => { reads++; return []; },
+    listProducts: async () => { reads++; return []; },
+    listOffers: async () => { reads++; return []; },
+  } as any;
+  const { app } = withAccess(new MemoryDataStore(), [binding, adminBinding], feeStore);
+  const adminUrl = '/v1/consumers/freepass-admin-catalog/contract-fee-links';
+  const erpUrl = '/v1/consumers/erp-com/contract-fee-links';
+  const payload = { items: [{ key: 'row', supplierId: 'supplier_demo', termMonths: 36, monthlyRent: 690000 }] };
+
+  expect((await app.inject({ method: 'POST', url: adminUrl, payload })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'POST', url: adminUrl, headers: { authorization: 'Bearer wrong' }, payload })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'POST', url: erpUrl, headers, payload })).statusCode).toBe(403);
+  expect(reads).toBe(0);
+  await app.close();
 });

@@ -315,6 +315,21 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.raw.data).toEqual(input.data);
   });
 
+  it('keeps private fee HOLD as an intentional exception to public reader scrubbing', () => {
+    const input = fixture();
+    input.data.price = { '24': { rent: '750000', deposit: 0, fee_memo: 'private review marker' } };
+    const result = mapErp5Product(input);
+    expect(result.candidate.issues).toEqual(expect.arrayContaining([
+      'PRIVATE_PRICE_TERMS_REVIEW_REQUIRED',
+      'UNKNOWN_DEPOSIT',
+    ]));
+    expect(result.candidate.priceTerms[0]).toMatchObject({
+      monthlyRent: { amount: 750000 },
+      deposit: null,
+      depositState: 'UNKNOWN',
+    });
+  });
+
   it('requires the missing Catalog commercial-type contract even with matching source evidence', () => {
     const input = fixture();
     Object.assign(input.data, { provider_company_code: 'RP012', source_bucket: 'SON_NO_KONG', product_type: '오공구독' });
@@ -436,7 +451,8 @@ describe('가격 키 읽기', () => {
       const missing = fixture();
       Object.assign(missing.data, { provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '월 대여료 × 약정연수 (최대 3개월)',
         price: { '24': deposit === undefined ? { rent: 1000000 } : { rent: 1000000, deposit } } });
-      expect(mapErp5Product(missing).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
+      const expected = { deposit: null, depositState: 'UNKNOWN' };
+      expect(mapErp5Product(missing).candidate.priceTerms[0]).toMatchObject(expected);
     }
     // 글자 '0' 도 자리표시자 0 으로 본다
     const stringZero = fixture();
@@ -446,20 +462,36 @@ describe('가격 키 읽기', () => {
     delete (input.data as Record<string, unknown>).deposit_note;
     expect(mapErp5Product(input).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
   });
+
+  it('keeps mapper rule derivation narrowed to the RP012 subscription years rule', () => {
+    const domestic = fixture();
+    Object.assign(domestic.data, {
+      provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '국산: 월 대여료×2',
+      price: { '24': { rent: 1000000, deposit: 0 } },
+    });
+    expect(mapErp5Product(domestic).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
+
+    const years = fixture();
+    Object.assign(years.data, {
+      provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '월 대여료 × 약정연수 (최대 3개월)',
+      price: { '24': { rent: 1000000, deposit: 0 } },
+    });
+    expect(mapErp5Product(years).candidate.priceTerms[0]).toMatchObject({ deposit: { amount: 2000000 }, depositState: 'KNOWN' });
+  });
 });
 
 describe('explicit monthly and yearly price keys', () => {
-  const keys=[...[1,3,5].flatMap(m=>[2000,3000,4000].map(k=>`${m}_\uc6d4${k}km`)),...[12,24,36,48,60].flatMap(m=>[20000,30000,40000].map(k=>`${m}_\uc5f0${k}km`))];
+  const keys=[...[1,3,5].flatMap(m=>[2000,3000,4000].map(k=>`${m}_월${k}km`)),...[12,24,36,48,60].flatMap(m=>[20000,30000,40000].map(k=>`${m}_연${k}km`))];
   it.each(keys)('parses actual key %s without annualizing monthly mileage', key => {
     const parsed=parseErp5PriceKey(key)!;expect(parsed).toBeDefined();expect(parsed.months).toBe(Number(key.split('_')[0]));
-    expect(parsed.contractedMileage!.period).toBe(key.includes('\uc6d4')?'month':'year');
+    expect(parsed.contractedMileage!.period).toBe(key.includes('월')?'month':'year');
     expect(parsed.contractedMileage!.km).toBe(Number(key.split('_')[1]!.slice(1,-2)));
-    expect(parsed.mileageKm).toBe(key.includes('\uc6d4')?undefined:parsed.contractedMileage!.km);
+    expect(parsed.mileageKm).toBe(key.includes('월')?undefined:parsed.contractedMileage!.km);
   });
   it('keeps monthly RAW under HOLD where canonical V1 cannot represent it',()=>{
-    const input=fixture();input.data.price={'1_\uc6d42000km':{rent:500000,deposit:1000000}};
+    const input=fixture();input.data.price={'1_월2000km':{rent:500000,deposit:1000000}};
     const result=mapErp5Product(input);expect(result.status).toBe('HOLD');expect(result.raw.data.price).toEqual(input.data.price);
     expect(result.candidate.priceTerms).toEqual([]);
   });
-  it.each(['72_\uc5f020000km','0_\uc6d42000km','1_\uc6d40km','1_\uc6d4-1km','1_\uc6d42000.5km','12_\uc5f020000','9007199254740992_\uc5f020000km'])('rejects malformed explicit key %s',key=>expect(parseErp5PriceKey(key)).toBeUndefined());
+  it.each(['72_연20000km','0_월2000km','1_월0km','1_월-1km','1_월2000.5km','12_연20000','9007199254740992_연20000km'])('rejects malformed explicit key %s',key=>expect(parseErp5PriceKey(key)).toBeUndefined());
 });

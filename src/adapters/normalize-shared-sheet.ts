@@ -7,7 +7,7 @@ import type { FieldLineageRecord } from '../domain/lineage.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION, type IdentityChoice, type VehicleIdentity, type VehicleMasterRecord } from '../domain/vehicle-identity-resolution.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import { assessDepositEvidence } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWaiverFieldForTermMonths } from '../domain/deposit-evidence.js';
 export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/4';
 export type SharedSheetMasterEvidence = { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
 /** AI 상황실 2026-10-04 (대표): every car is stored. The sheet status text is kept as-is; it only decides sale exposure.
@@ -127,11 +127,16 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     suppliedTerms++;
     const rent = number(rentText, '원');
     if (rent === null) { issues.push('RENT_REVIEW_REQUIRED'); continue; }
-    const depositText = text(months <= 12 ? '단기보증' : '장기보증');
+    const depositHeader = depositSourceWaiverFieldForTermMonths(months) === '원문.전체.단기보증' ? '단기보증' : '장기보증';
+    const depositText = text(depositHeader);
     const parsedDeposit = depositText === '무보증' ? 0 : number(depositText, '원');
-    const evidence = assessDepositEvidence({ supplierId: raw.payload.supplierCode, productType: text('상품구분'),
-      note: depositText === '무보증' ? depositText : undefined,
-      sourceAmount: parsedDeposit ?? depositText });
+    const evidence = assessDepositEvidence(depositEvidenceInputFromProduct({
+      provider_company_code: raw.payload.supplierCode,
+      product_type: text('상품구분'),
+      deposit_note: depositText === '무보증' ? depositText : undefined,
+      // 공통 시트 칸 글자 자체가 공급사 원문이다 — 정확히 '무보증' 일 때만 글자 근거로 인정(판정은 depositEvidenceInputFromProduct 한 곳).
+      원문: { 전체: { [depositHeader]: depositText } },
+    }, parsedDeposit ?? depositText, { termMonths: months }));
     const deposit = evidence.amount;
     if (evidence.state === 'UNKNOWN') issues.push(`DEPOSIT_REVIEW_REQUIRED:m${months}:${evidence.reason}`);
     priceTerms.push({ termKey: `m${months}`, termMonths: months, monthlyRent: { amount: rent, currency: 'KRW' },
@@ -175,7 +180,7 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     if (value !== undefined) add(path, value, header);
   }
   for (const term of priceTerms) {
-    const root = `priceTerms.${term.termKey}`, rentHeader = `${term.termMonths}개월`, depHeader = term.termMonths <= 12 ? '단기보증' : '장기보증';
+    const root = `priceTerms.${term.termKey}`, rentHeader = `${term.termMonths}개월`, depHeader = depositSourceWaiverFieldForTermMonths(term.termMonths) === '원문.전체.단기보증' ? '단기보증' : '장기보증';
     add(`${root}.termMonths`, term.termMonths, rentHeader);
     add(`${root}.monthlyRent.amount`, term.monthlyRent.amount, rentHeader);
     add(`${root}.depositState`, term.depositState, depHeader);

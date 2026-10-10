@@ -82,8 +82,9 @@ describe('shared reference policy context', () => {
   });
   it('searches confirmed zero without treating placeholders or mixed periods as all-free', () => {
     const base = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트' };
+    const sourceWaiver = { 원문: { 전체: { 장기보증: '무보증' } } };
     const reference = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-09T00:00:00Z', products: {
-      free: { ...base, deposit_note: '무보증', price: { '24': { rent: 600000, deposit: 0 }, '36': { rent: 500000, deposit: 0 } } },
+      free: { ...base, ...sourceWaiver, deposit_note: '무보증', price: { '24': { rent: 600000, deposit: 0 }, '36': { rent: 500000, deposit: 0 } } },
       unknown: { ...base, price: { '36': { rent: 500000, deposit: 0 } } },
       conflict: { ...base, deposit_note: '무보증', price: { '36': { rent: 500000, deposit: 100000 } } },
     } });
@@ -240,19 +241,27 @@ describe('Kakao catalog reference deposit facts', () => {
   });
 
   it('uses the import threshold rule without parsing free-form variants', () => {
-    expect(resolveReferenceDeposit({
-      note: '수입: 12개월 대여료×3 · 18개월↑ ×6', termMonths: 12, monthlyRent: 1000000, sourceAmount: 0,
-    }).depositRule?.multiplier).toBe(3);
-    expect(resolveReferenceDeposit({
-      note: '수입: 12개월 대여료×3 · 18개월↑ ×6', termMonths: 18, monthlyRent: 1000000, sourceAmount: 0,
-    }).depositRule?.multiplier).toBe(6);
+    const note = '수입: 12개월 대여료×3 · 18개월↑ ×6';
+    expect([6, 12, 15, 17, 18, 24, 36].map(termMonths => {
+      const result = resolveReferenceDeposit({ note, termMonths, monthlyRent: 1000000, sourceAmount: 0 });
+      return [termMonths, result.depositState, result.depositAmount, result.depositRule?.multiplier ?? null];
+    })).toEqual([
+      [6, 'UNKNOWN', null, null],
+      [12, 'KNOWN', 3000000, 3],
+      [15, 'UNKNOWN', null, null],
+      [17, 'UNKNOWN', null, null],
+      [18, 'KNOWN', 6000000, 6],
+      [24, 'KNOWN', 6000000, 6],
+      [36, 'KNOWN', 6000000, 6],
+    ]);
   });
 
   it('emits ZERO only for the explicit no-deposit rule', () => {
-    expect(resolveReferenceDeposit({ supplierId: 'RP004', productType: '중고렌트', note: '무보증', termMonths: 60, monthlyRent: 800000, sourceAmount: 0 })).toEqual({
+    const basis = { field: '원문.전체.장기보증', text: '무보증' } as const;
+    expect(resolveReferenceDeposit({ supplierId: 'RP004', productType: '중고렌트', note: '무보증', depositSourceWaiverBasis: basis, termMonths: 60, monthlyRent: 800000, sourceAmount: 0 })).toEqual({
       depositAmount: 0,
       depositState: 'ZERO',
-      depositRule: { code: 'ZERO_DEPOSIT', multiplier: 0, label: '무보증' },
+      depositRule: { code: 'ZERO_DEPOSIT', multiplier: 0, label: '무보증', depositEvidenceBasis: basis },
     });
     expect(resolveReferenceDeposit({ note: '', termMonths: 60, monthlyRent: 800000, sourceAmount: 0 }).depositState).toBe('UNKNOWN');
     expect(resolveReferenceDeposit({ note: '새 규칙', termMonths: 60, monthlyRent: 800000, sourceAmount: 0 }).depositState).toBe('UNKNOWN');
@@ -733,16 +742,16 @@ describe('general reference query', () => {
 
 describe('supplier and plate exact lookup', () => {
   it('normalizes lookup only, keeps every term and returns ambiguous candidates with HOLD', () => {
-    const name='\uacbd\uc9c4 \ub80c\ud2b8',plate='000\uac000000';
+    const name='경진 렌트',plate='000가0000';
     const base={listable:true,provider_company_code:'RP013',provider_name:name,car_number:plate,price:{'36':{rent:500000,deposit:1000000},'48':{rent:400000,deposit:null}}};
-    const ref=buildKakaoCatalogReference({consumerId:'kakao-ops',observedAt:new Date().toISOString(),products:{a:base,b:{...base,car_number:'000\ub0980000'}}});
+    const ref=buildKakaoCatalogReference({consumerId:'kakao-ops',observedAt:new Date().toISOString(),products:{a:base,b:{...base,car_number:'000나0000'}}});
     const apply=(q:Record<string,unknown>)=>filterReferenceZeroDeposit(ref,q);
-    expect(apply({supplierName:' \uacbd\uc9c4\ub80c\ud2b8 '}).data).toHaveLength(2);
-    const result=apply({plateNumber:' 000 \uac00-0000 '});
+    expect(apply({supplierName:' 경진렌트 '}).data).toHaveLength(2);
+    const result=apply({plateNumber:' 000 가-0000 '});
     expect(result.data).toHaveLength(1);expect(result.data[0]!.offers).toEqual(ref.data[0]!.offers);
     expect(result.data[0]!.vehicle.plateNumber).toBe(plate);
     expect(apply({supplierName:'unknown'}).data).toEqual([]);
-    expect(apply({plateNumber:'000\ud5580000'}).data).toEqual([]);
+    expect(apply({plateNumber:'000하0000'}).data).toEqual([]);
     for(const q of [{plateNumber:'3456'},{plateNumber:'new'},{plateNumber:[plate]},{supplierName:['a']}])expect(()=>apply(q)).toThrow('REFERENCE_DEPOSIT_FILTER_INVALID');
     const duplicate=buildKakaoCatalogReference({consumerId:'kakao-ops',observedAt:new Date().toISOString(),products:{a:base,b:{...base,provider_company_code:'RP020'}}});
     const matched=filterReferenceZeroDeposit(duplicate,{plateNumber:plate});expect(matched.data).toHaveLength(2);
@@ -762,7 +771,7 @@ describe('supplier and plate exact lookup', () => {
 });
 
 it('keeps all 24 explicit mileage keys independently of supplier codes and phase-one metadata',()=>{
-  const keys=[...[1,3,5].flatMap(m=>[2000,3000,4000].map(k=>`${m}_\uc6d4${k}km`)),...[12,24,36,48,60].flatMap(m=>[20000,30000,40000].map(k=>`${m}_\uc5f0${k}km`))];
+  const keys=[...[1,3,5].flatMap(m=>[2000,3000,4000].map(k=>`${m}_월${k}km`)),...[12,24,36,48,60].flatMap(m=>[20000,30000,40000].map(k=>`${m}_연${k}km`))];
   const price=Object.fromEntries(keys.map(k=>[k,{rent:500000,deposit:1000000}]));
   const product=buildKakaoCatalogReferenceProduct('synthetic',{listable:true,provider_company_code:'FUTURE_IMMUTABLE_ID',price})!;
   const terms=product.offers[0]!.priceTerms;expect(terms).toHaveLength(24);
@@ -771,9 +780,9 @@ it('keeps all 24 explicit mileage keys independently of supplier codes and phase
 });
 
 it('never borrows a Billin36 monthly basis from a different mileage or period',()=>{
-  const make=(key:string)=>buildKakaoCatalogReferenceProduct('synthetic',{listable:true,provider_company_code:'RP021',product_type:'\uad6c\ub3c5',price:{[key]:{rent:400000,deposit:1000000},'24_\uc6d41500km':{rent:500000,deposit:1000000}}})!.offers[0]!.priceTerms.find(t=>t.termMonths===24)!;
-  for(const key of ['36_\uc6d43000km','36_\uc5f01500km'])expect(make(key).supplierBillingFee).toMatchObject({state:'UNKNOWN',reasonCode:'BILLIN_36_MONTH_RENT_REQUIRED'});
-  const same=make('36_\uc6d41500km');expect(same.supplierBillingFee).toMatchObject({state:'CALCULATED',amount:400000});expect(same.channelPayoutFee.amount).toBe(320000);
+  const make=(key:string)=>buildKakaoCatalogReferenceProduct('synthetic',{listable:true,provider_company_code:'RP021',product_type:'구독',price:{[key]:{rent:400000,deposit:1000000},'24_월1500km':{rent:500000,deposit:1000000}}})!.offers[0]!.priceTerms.find(t=>t.termMonths===24)!;
+  for(const key of ['36_월3000km','36_연1500km'])expect(make(key).supplierBillingFee).toMatchObject({state:'UNKNOWN',reasonCode:'BILLIN_36_MONTH_RENT_REQUIRED'});
+  const same=make('36_월1500km');expect(same.supplierBillingFee).toMatchObject({state:'CALCULATED',amount:400000});expect(same.channelPayoutFee.amount).toBe(320000);
 });
 
 it('F04 source identity is lazy, required when recorded, and follows the configured ID', async () => {
