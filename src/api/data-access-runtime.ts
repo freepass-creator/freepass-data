@@ -23,7 +23,7 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
     health: createFirestoreDataHealthReader(),
     compat: createFirestoreCatalogCompatibilityReader(async (vehicleId, plate, index) => {
       const config = iancarOneApiConfigFromEnv();
-      if (!config.apiKey) throw new Error('IANCAR_PHOTO_SECRET_UNAVAILABLE');
+      if (!config.apiKey) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
       const client = createIancarOneApiClient(config);
       const key = JSON.stringify([vehicleId, plate]);
       let cached = photoSets.get(key);
@@ -38,7 +38,7 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
       const ids = await cached.ids;
       if (index === undefined) return { count: ids.length, bytes: null, contentType: 'application/json' };
       const id = ids[index];
-      if (!id) throw new Error('IANCAR_PHOTO_NOT_FOUND');
+      if (!id) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
       return { count: ids.length, ...await photoBytes(vehicleId, id, async () => readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id))) };
     }, approvedPhotoReader),
     workflow: createFirestoreAdminWorkflowStore(),

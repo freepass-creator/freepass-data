@@ -168,9 +168,9 @@ export function vehiclePhotoKey(product: Rec): string | undefined {
   const supplier = text(product.provider_company_code) || text(product.partner_code);
   const vehicleId = text(product.supplier_vehicle_id);
   if (!supplier) return undefined;
-  if (vehicleId) return `${supplier}_${vehicleId}`;
+  if (vehicleId) return createHash('sha256').update(JSON.stringify(['vehicle', supplier, vehicleId])).digest('hex');
   const plate = text(product.car_number);
-  return plate ? createHash('sha256').update(JSON.stringify([supplier, plate])).digest('hex') : undefined;
+  return plate ? createHash('sha256').update(JSON.stringify(['plate', supplier, plate])).digest('hex') : undefined;
 }
 
 export function isApprovedVehiclePhotoProduct(product: Rec | undefined): product is Rec & { photo_original_refs: ApprovedVehiclePhotoRef[] } {
@@ -194,58 +194,99 @@ export function isApprovedVehiclePhotoProduct(product: Rec | undefined): product
   });
 }
 
-/** Each request resolves current product authority before consulting the bounded byte cache. */
+/** Source adapters supply identity and bytes; authorization and validation stay in one pipeline. */
+export type VehiclePhotoSource = {
+  eligible(product: Rec | undefined): boolean;
+  connection(product: Rec): string;
+  read(product: Rec, index?: number): Promise<{ count: number; bytes: Buffer | null; contentType: string }>;
+};
+
 export function createVehiclePhotoReader(
   readProduct: (productId: string) => Promise<Rec | undefined>,
-  legacyReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>,
+  iancarSource?: VehiclePhotoSource,
   approvedPhotoReader?: ApprovedPhotoReader,
-  isLegacyProduct: (product: Rec | undefined) => boolean = () => false,
   now: () => number = Date.now,
 ) {
   const cache = new Map<string, { bytes: Buffer; contentType: string; expiresAt: number }>();
   let totalBytes = 0;
   let active = 0;
   const remove = (key: string) => { const entry = cache.get(key); if (entry) totalBytes -= entry.bytes.length; cache.delete(key); };
+  const approvedSource: VehiclePhotoSource = {
+    eligible: isApprovedVehiclePhotoProduct,
+    connection: product => JSON.stringify(product.photo_original_refs),
+    read: async (product, index) => {
+      if (!approvedPhotoReader) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
+      const refs = product.photo_original_refs as ApprovedVehiclePhotoRef[];
+      if (index === undefined) return { count: refs.length, bytes: null, contentType: 'application/json' };
+      const ref = refs[index];
+      if (!ref) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+      return { count: refs.length, ...await approvedPhotoReader({ ...ref }) };
+    },
+  };
+  const sources = [...(iancarSource ? [iancarSource] : []), approvedSource];
   return async (consumerId: string, productId: string, index?: number) => {
     if (!(consumerId === 'erp-com' || /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId))) throw new Error('VEHICLE_PHOTO_CONSUMER_FORBIDDEN');
     if (!productId || productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(productId)
       || (index !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= 200))) throw new Error('VEHICLE_PHOTO_REQUEST_INVALID');
     const product = await readProduct(productId);
-    if (isLegacyProduct(product)) {
-      if (!legacyReader) throw new Error('IANCAR_PHOTO_READER_UNAVAILABLE');
-      return legacyReader(product!.iancar_one_vehicle_id as string, product!.car_number as string, index);
-    }
-    if (!isApprovedVehiclePhotoProduct(product)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
-    if (!approvedPhotoReader) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
-    const refs = product.photo_original_refs;
-    if (index === undefined) return { count: refs.length, bytes: null, contentType: 'application/json' };
-    if (!refs[index]) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
-    const ref = { ...refs[index] };
-    const cacheKey = JSON.stringify([productId, ref.driveFileId, ref.sha256, ref.approvedAt, ref.vehicleKey]);
-    for (const [key, entry] of cache) if (entry.expiresAt <= now()) remove(key);
-    const cached = cache.get(cacheKey);
-    if (cached) {
-      if (cached.contentType !== ref.mediaType) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
-      cache.delete(cacheKey); cache.set(cacheKey, cached);
-      return { count: refs.length, bytes: Buffer.from(cached.bytes), contentType: cached.contentType };
-    }
+    const source = sources.find(candidate => candidate.eligible(product));
+    if (!source || !product) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+    const connection = source.connection(product);
+    const revalidate = async (): Promise<boolean> => {
+      const current = await readProduct(productId);
+      return !!current && sources.find(candidate => candidate.eligible(current)) === source
+        && source.connection(current) === connection;
+    };
+    const recheck = async () => {
+      if (!await revalidate()) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+    };
+    const read = async () => {
+      try { return await source.read(product, index); }
+      catch (error) {
+        // Adapter diagnostics stay private; the public response vocabulary is source independent.
+        const code = error instanceof Error ? error.message : '';
+        if (code.startsWith('VEHICLE_PHOTO_')) throw error;
+        if (code === 'IANCAR_PHOTO_NOT_FOUND') throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+        if (code === 'IANCAR_PHOTO_BUSY') throw new Error('VEHICLE_PHOTO_BUSY');
+        throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+      }
+    };
+    const validCount = (count: number) => {
+      if (!Number.isSafeInteger(count) || count < 0 || count > 200) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+    };
     if (active >= VEHICLE_PHOTO_MAX_CONCURRENT) throw new Error('VEHICLE_PHOTO_BUSY');
     active++;
     try {
-      const result = await approvedPhotoReader({ ...ref });
-      if (!Buffer.isBuffer(result.bytes) || !result.bytes.length || result.bytes.length > VEHICLE_PHOTO_MAX_BYTES
-        || result.contentType !== ref.mediaType || createHash('sha256').update(result.bytes).digest('hex') !== ref.sha256)
+      if (index === undefined) {
+        const result = await read(); validCount(result.count);
+        await recheck();
+        return { count: result.count, bytes: null, contentType: 'application/json', revalidate };
+      }
+      const selectedRef = source === approvedSource ? (product.photo_original_refs as ApprovedVehiclePhotoRef[])[index] : undefined;
+      const ref = selectedRef ? { ...selectedRef } : undefined;
+      if (source === approvedSource && !ref) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+      const cacheKey = ref ? JSON.stringify([productId, ref.driveFileId, ref.sha256, ref.approvedAt, ref.vehicleKey]) : undefined;
+      for (const [key, entry] of cache) if (entry.expiresAt <= now()) remove(key);
+      const cached = cacheKey ? cache.get(cacheKey) : undefined;
+      const result = cached ? { ...cached, count: (product.photo_original_refs as ApprovedVehiclePhotoRef[]).length } : await read();
+      validCount(result.count);
+      const bytes = result.bytes;
+      const signature = Buffer.isBuffer(bytes) && (
+        (result.contentType === 'image/jpeg' && bytes.subarray(0, 3).equals(Buffer.from([255, 216, 255])))
+        || (result.contentType === 'image/png' && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
+        || (result.contentType === 'image/webp' && bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'));
+      if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > VEHICLE_PHOTO_MAX_BYTES || !signature || index >= result.count
+        || (ref && (result.contentType !== ref.mediaType || createHash('sha256').update(bytes).digest('hex') !== ref.sha256)))
         throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
-      const entry = { bytes: Buffer.from(result.bytes), contentType: result.contentType, expiresAt: now() + VEHICLE_PHOTO_CACHE_TTL_MS };
-      const current = await readProduct(productId);
-      if (!isApprovedVehiclePhotoProduct(current) || !current.photo_original_refs.some(value =>
-        value.driveFileId === ref.driveFileId && value.sha256 === ref.sha256
-        && value.approvedAt === ref.approvedAt && value.vehicleKey === ref.vehicleKey
-        && value.mediaType === ref.mediaType)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
-      remove(cacheKey);
-      while (totalBytes + entry.bytes.length > VEHICLE_PHOTO_CACHE_BYTES) remove(cache.keys().next().value!);
-      cache.set(cacheKey, entry); totalBytes += entry.bytes.length;
-      return { count: current.photo_original_refs.length, bytes: Buffer.from(entry.bytes), contentType: entry.contentType };
+      const output = Buffer.from(bytes);
+      await recheck();
+      if (cacheKey) {
+        const entry = { bytes: output, contentType: result.contentType, expiresAt: cached?.expiresAt ?? now() + VEHICLE_PHOTO_CACHE_TTL_MS };
+        remove(cacheKey);
+        while (totalBytes + entry.bytes.length > VEHICLE_PHOTO_CACHE_BYTES) remove(cache.keys().next().value!);
+        cache.set(cacheKey, entry); totalBytes += entry.bytes.length;
+      }
+      return { count: result.count, bytes: Buffer.from(output), contentType: result.contentType, revalidate };
     } finally { active--; }
   };
 }

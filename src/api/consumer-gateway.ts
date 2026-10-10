@@ -1,3 +1,4 @@
+import { createPhotoRequestBucket, PHOTO_REQUEST_LIMITS } from './photo-request-limit.js';
 import { inspectVehicleMediaEvidence } from '../application/vehicle-media-evidence.js';
 import { summarizeEconomicsCoverage } from '../application/resolve-offer-commercial-terms.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -193,15 +194,18 @@ export function createConsumerGateway(
     read(consumerId: string): Promise<CatalogCompatibilitySnapshot>;
     readKakaoReferenceSource?(consumerId: string): Promise<KakaoCatalogReferenceSource>;
     readInternalAiReferenceSource?(consumerId: string): Promise<KakaoCatalogReferenceSource>;
-    readIancarPhoto?(consumerId: string, productId: string, index?: number): Promise<{ count: number; bytes: Buffer | null; contentType: string }>;
-    readVehiclePhoto?(consumerId: string, productId: string, index?: number): Promise<{ count: number; bytes: Buffer | null; contentType: string }>;
+    readVehiclePhoto?(consumerId: string, productId: string, index?: number): Promise<{ count: number; bytes: Buffer | null; contentType: string; revalidate(): Promise<boolean> }>;
   },
   workflowStore?: AdminWorkflowStore,
   estimateArtifactStore?: EstimateArtifactStore,
 ) {
   // Validate again for callers constructing registrations without the environment parser.
   const registered = new Map(parseConsumerBindings(JSON.stringify(bindings)).map((item) => [item.id, item]));
-  const app = Fastify({ logger: false });
+  const proxyHops = process.env.FREEPASS_DATA_TRUST_PROXY_HOPS ?? '0';
+  if (!/^[0-3]$/.test(proxyHops)) throw new Error('FREEPASS_DATA_TRUST_PROXY_HOPS_INVALID');
+  const trustedHops = Number(proxyHops);
+  // Enabling hops requires an ingress that prevents clients from reaching the socket directly.
+  const app = Fastify({ logger: false, trustProxy: trustedHops > 0 ? (_address, hop) => hop < trustedHops : false });
   const ajv = new Ajv2020({ strict: false });
   addFormats(ajv);
   ajv.addSchema(catalogSchema);
@@ -219,14 +223,22 @@ export function createConsumerGateway(
   const validateKakaoReference = ajv.compile(kakaoCatalogReferenceSchema);
   const validateInternalAiReference = ajv.compile(internalAiReferenceSchema);
   app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
-  const photoHandler = async (request: { params: { consumerId: string; productId: string; index?: string }; headers: { authorization?: string | undefined }; id: string }, reply: import('fastify').FastifyReply) => {
+  const failedAuthPhotoLimit = createPhotoRequestBucket(PHOTO_REQUEST_LIMITS.failedAuth);
+  const consumerPhotoLimit = createPhotoRequestBucket(PHOTO_REQUEST_LIMITS.consumer);
+  const photoHandler = async (request: { params: { consumerId: string; productId: string; index?: string }; headers: { authorization?: string | undefined }; id: string; ip: string }, reply: import('fastify').FastifyReply) => {
     reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
     const binding = registered.get(request.params.consumerId);
     const matches = timingSafeEqual(hash(request.headers.authorization ?? ''), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
     const spec = { context: consumerContext(binding?.id ?? 'unregistered-consumer', 'read bound vehicle photo through FreePass Data', request.id),
-      operation: 'READ_PRODUCT_PHOTO', resource: { kind: 'CATALOG' as const, name: 'iancar-product-photo' } };
+      operation: 'READ_PRODUCT_PHOTO', resource: { kind: 'CATALOG' as const, name: 'vehicle-product-photo' } };
     try {
-      if (!binding || !matches) { await access.deny('READ', spec, 'UNAUTHORIZED'); return reply.code(401).send({ code: 'UNAUTHORIZED' }); }
+      if (!binding || !matches) {
+        const retry = failedAuthPhotoLimit.take(request.ip);
+        if (retry) return reply.header('Retry-After', String(retry)).code(429).send({ code: 'VEHICLE_PHOTO_RATE_LIMITED' });
+        await access.deny('READ', spec, 'UNAUTHORIZED'); return reply.code(401).send({ code: 'UNAUTHORIZED' });
+      }
+      const consumerRetry = consumerPhotoLimit.take(binding.id);
+      if (consumerRetry) return reply.header('Retry-After', String(consumerRetry)).code(429).send({ code: 'VEHICLE_PHOTO_RATE_LIMITED' });
       if (!binding.capabilities.includes('catalog') || !(binding.id === 'erp-com' || binding.id.startsWith('whitelabel-'))) {
         await access.deny('READ', spec, 'FORBIDDEN'); return reply.code(403).send({ code: 'FORBIDDEN' });
       }
@@ -236,25 +248,31 @@ export function createConsumerGateway(
         await access.deny('READ', spec, 'INVALID_REQUEST'); return reply.code(400).send({ code: 'INVALID_REQUEST' });
       }
       spec.resource = { ...spec.resource, ...{ entityId: request.params.productId } };
-      if (!compatReader?.readVehiclePhoto && !compatReader?.readIancarPhoto) {
-        await access.deny('READ', spec, 'IANCAR_PHOTO_READER_UNAVAILABLE');
-        return reply.code(503).send({ code: 'IANCAR_PHOTO_READER_UNAVAILABLE' });
+      if (!compatReader?.readVehiclePhoto) {
+        await access.deny('READ', spec, 'VEHICLE_PHOTO_READER_UNAVAILABLE');
+        return reply.code(503).send({ code: 'VEHICLE_PHOTO_READER_UNAVAILABLE' });
       }
-      const read = (compatReader.readVehiclePhoto ?? compatReader.readIancarPhoto)!.bind(compatReader);
+      const read = compatReader.readVehiclePhoto.bind(compatReader);
       const result = await access.read({ ...spec, requestDigest: stableDigest({ productId: request.params.productId, index: index ?? null }),
         summarize: value => ({ count: value.count }) }, () => read(binding.id, request.params.productId, index));
       if (!Number.isSafeInteger(result.count) || result.count < 0 || result.count > 200)
-        return reply.code(503).send({ code: 'IANCAR_PHOTO_RESPONSE_INVALID' });
+        return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
+      if (index !== undefined && (!Buffer.isBuffer(result.bytes) || !result.bytes.length || result.bytes.length > 8 * 1024 * 1024
+        || !['image/jpeg', 'image/png', 'image/webp'].includes(result.contentType))) return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
+      // access.read has persisted SUCCEEDED; recheck after that await, immediately before sending.
+      if (!await result.revalidate()) {
+        try { await access.deny('READ', spec, 'VEHICLE_PHOTO_NOT_FOUND'); }
+        catch (error) { if (!(error instanceof DataAccessAuditUnavailableError)) throw error; }
+        return reply.code(404).send({ code: 'VEHICLE_PHOTO_NOT_FOUND' });
+      }
       if (index === undefined) return reply.send({ schema: 'freepass-data.product-photos/v1', productId: request.params.productId, count: result.count });
-      if (!Buffer.isBuffer(result.bytes) || !result.bytes.length || result.bytes.length > 8 * 1024 * 1024
-        || !['image/jpeg', 'image/png', 'image/webp'].includes(result.contentType)) return reply.code(503).send({ code: 'IANCAR_PHOTO_RESPONSE_INVALID' });
       return reply.type(result.contentType).send(result.bytes);
     } catch (error) {
       if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
       const code = error instanceof Error ? error.message : '';
-      if (code === 'VEHICLE_PHOTO_BUSY' || code === 'IANCAR_PHOTO_BUSY') return reply.header('Retry-After', '2').code(429).send({ code });
+      if (code === 'VEHICLE_PHOTO_BUSY') return reply.header('Retry-After', '2').code(429).send({ code });
       if (['VEHICLE_PHOTO_NOT_FOUND', 'VEHICLE_PHOTO_READER_UNAVAILABLE', 'VEHICLE_PHOTO_UNAVAILABLE'].includes(code)) return reply.code(code === 'VEHICLE_PHOTO_NOT_FOUND' ? 404 : 503).send({ code });
-      return reply.code(code === 'IANCAR_PHOTO_NOT_FOUND' ? 404 : 503).send({ code: code === 'IANCAR_PHOTO_NOT_FOUND' ? code : 'IANCAR_PHOTO_READ_FAILED' });
+      return reply.code(503).send({ code: 'VEHICLE_PHOTO_READ_FAILED' });
     }
   };
   app.get<{ Params: { consumerId: string; productId: string } }>('/v1/consumers/:consumerId/catalog-compat/products/:productId/photos', photoHandler);

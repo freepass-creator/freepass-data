@@ -485,6 +485,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-10 사진 프록시 독립 재검토 세 결함 수정
+
+- 목적 / 대상 revision: `eb647e233d17d7bf99fda39b1caa97cc13053065`, `work/freepass-data/vehicle-photo-proxy-20261010`의 기존 미커밋 변경에서 재현된 세 결함만 수정. main `7b2e26b` 변화 없음·PR #419 열림은 사용자가 전달한 Claude 확인을 이어받았다. 이번 academy는 지정된 미커밋 변경 때문에 `DIRTY_WORKTREE_REVIEW_REQUIRED`였으며 변경 목록 확인 후 직접 수정 지시로 계속했다. READY로 재표기하지 않는다.
+- 변경: reader 재검증 클로저를 성공 감사 저장 후 응답 직전에 호출(count·원본·캐시), 철회는404와 기존 deny 감사. 인증 실패만 IP 버킷·성공만 consumer 버킷, 환경 변수 hops0~3(기본0)로 프록시 신뢰 경계 설정. count를 공통 슬롯 try/finally로 이동. 기존 출처·키·미디어 검증 보존. 현행 규칙은 `docs/NATIVE-SOURCE-COLLECTOR.md` 사진 프록시 절.
+- 검증: 관련163 PASS(gateway60 / ONE75 / withdrawal23 / output-contract5), `git diff --check` PASS. `npm.cmd run check`는 arch/standards/data-access/sheets106/build PASS 후 smoke12 PASS/1 FAIL(`uv_os_get_passwd ENOMEM`, tsx 시작 환경 오류)로 code1 종료. 이후 check 단계 미실행. runtime-policy·projection-integrity 불안정 시험 수정 없음.
+- 남음 / next_start_here: 실행 환경의 사용자정보 조회 오류 해소 후 전체 check 재실행. 추가 네트워크 독립 검토·운영 검증 미실행. 커밋·푸시 없음. 실제 사진 reader 권한·승인 게시·배포는 범위 밖.
+
 ### 2026-10-10 매일 박제 3일 연속 실패 원인과 고침 (개발 관제 배정)
 
 - 원인 ① 10-08·10-09 새벽: 매시 감사(`erp5-continuous-audit`)가 GitHub 예약 지연으로 4~7시간 간격이라 박제 관문이 요구하는 «3시간 안 가드 결과»가 없어 건너뜀. 고침: 가드가 오래되면 감사 workflow 를 한 번 직접 띄우고 그 «이후»에 끝난 가드를 최대 약 20분 기다림(`actions: write` 는 감사만 띄우는 별도 job `audit-refresh` 하나에만 — 쓰기 job 은 `actions: read` 유지. 이 job 은 `continue-on-error` 라 실패해도 실행 결론을 바꾸지 않아 감시의 «전체 success 만 로그 누락 검사» 전제가 유지된다. 감사 수집기는 `shared-sheet-daily` job 1개 + `audit-refresh` 외 job 이 없을 때만 steps 인정).
@@ -494,18 +501,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ### 2026-10-10 차량 사진 프록시 승인 연결 확장
 
-- 독립 검토 후속 수정(같은 revision, 미커밋): 서버 계산 차량키와 모든 승인 ref 대조, 상품·파일·해시·승인시각·차량키 튜플 캐시, 원본 읽기 후 상품 적격성·동일 ref 재확인. 기존 이안카 분기는 보존했다.
-- 후속 검증: gateway 40/40 PASS. `npm.cmd run check`는 정적 검사·sheets·build PASS 후 smoke 12 PASS/1 FAIL(tsx `uv_os_get_passwd ENOMEM`)로 중단. 뒤 단계 별도 실행 shadow10/dashboard21 PASS, 전체 Vitest1933 PASS/12 FAIL/16 SKIP. 실패 상세는 NATIVE-SOURCE-COLLECTOR의 후속 검증 참조. 사용자 전달 main 기존 runtime-policy 5초 초과 1건은 수정하지 않았으며 이번 실행은 환경 오류로 실패했다.
-- 사전점검: main/겹침 PR은 사용자 전달 Claude 확인을 사용. 이번 academy receipt는 `DIRTY_WORKTREE_REVIEW_REQUIRED` HOLD이며 미커밋 변경 자체를 수정하라는 최신 직접 지시에 따라 기존 diff 확인·보존 후 진행했다(READY로 표기하지 않음).
-- 후속 next_start_here: 정상 실행 환경에서 전체 check 재검증. 커밋·푸시·운영 변경 없음. 이번 로컬 수정에 대한 추가 네트워크 독립 검토는 실행하지 않았다.
-
-- 목적: 승인된 차량–파일–해시 연결 상품까지 기존 사진 읽기 프록시 확장.
-- 대상 revision: d3225d5a2463d48af3d1f44fd50d3cc4be99dc76, work/freepass-data/vehicle-photo-proxy-20261010. 커밋·푸시 없음.
-- 변경: 기존 도메인/reader/runtime/gateway/시험 재사용. refs 전체 검증, 바이트 SHA256·8MiB·mediaType 검증, 64MiB/30초 LRU, 동시8, 매 요청 상품 재조회, 감사 READ_PRODUCT_PHOTO. 상세는 NATIVE-SOURCE-COLLECTOR의 같은 날짜 절.
-- 검증: academy READY, 정적 경계 검사·build 통과. gateway28/28, ONE API75/75, withdrawal18/18 통과. 관련전체175통과/2환경실패. npm.cmd run check는 기존 smoke tsx 시작의 uv_os_get_passwd ENOMEM 환경 오류로 실패. 기대값 변경 없음.
-- 남음: Drive reader 실제 구현, 차량사진 폴더 읽기 권한 별도 승인·적용, 정상 환경 전체 check·독립 검토. 운영 쓰기·배포 없음.
-- next_start_here: 미커밋 diff 검토 후 정상 환경 check 재실행. 실제 Drive 연결과 승인 refs 게시 전 권한·검수 경계를 별도 확인.
-
+- 목적 / 대상 revision: `eb647e2`, `work/freepass-data/vehicle-photo-proxy-20261010`. 독립 검토 지적 P1/P2 세 건을 같은 작업 트리에서 수정. 사용자 전달 main `7b2e26b` 리베이스·PR #419·Issue #24·겹침 확인을 이어받았다. academy READY, 커밋·푸시 없음.
+- 변경: ONE API와 승인 연결을 두 출처 전략으로 묶고 소비자·요청·적격성·동시성·바이트 검증·반환 직전 재조회는 하나로 통합. count와 캐시 적중도 철회를 재확인한다. 승인 출처는 SHA256, ONE은 기존 귀속 검사·캐시 유지. 인증 전 IP/인증 후 consumer 토큰 버킷, 상한·만료 정리, 429/Retry-After 추가. 차량키는 태그 포함 JSON 튜플 SHA256으로 교체.
+- 지운 것: `readIancarPhoto`, `isLegacyProduct` 인자·조기 반환, gateway 폴백과 공급사 전용 응답 코드. 시험 삭제 없음: 기존 gateway 이안카 시험은 `readVehiclePhoto`로 이전하고 ONE 귀속 시험은 보존. 파일 삭제 없음.
+- 재사용: 기존 reader·상품 적격성·ONE 캐시·시험을 확장. 요청 제한 검색 후보에는 시간 기반 인증 전/consumer 제한기가 없어 `photo-request-limit.ts`를 `CREATE_NEW_JUSTIFIED`로 추가했다.
+- 검증: 관련 144/144 PASS(gateway46, ONE75, withdrawal23). 전체 검사 결과는 `NATIVE-SOURCE-COLLECTOR.md` 같은 날짜 사진 절에 기록. 로컬 ERP5/ERP4 소비처 grep에서 옛 응답 코드 의존 없음; HTTP 상태·count 형식 보존.
+- 남음: 실제 Drive reader·운영 권한·승인 연결 게시·배포는 범위 밖. 네트워크 금지로 추가 독립 검토·라이브 검증은 미실행. 전체 check 환경 오류를 PASS로 간주하지 않는다.
+- next_start_here: 이 미커밋 diff와 관련 시험을 검토하고 정상 실행 환경에서 전체 check를 재검증한다. 새 차량키로 승인 연결을 생성해야 하며 옛 키를 자동 승인하거나 fallback하지 않는다.
 
 ### 2026-10-10 공개 파일의 Google Sheet/Drive ID 분리
 
