@@ -49,6 +49,16 @@
         "currency": { "const": "KRW" }
       }
     },
+    "depositRuleDifference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ruleAmount", "ruleCode", "differs"],
+      "properties": {
+        "ruleAmount": { "type": "integer", "minimum": 0 },
+        "ruleCode": { "enum": ["RENT_X_CONTRACT_YEARS_MAX3", "RENT_X_2", "IMPORT_12_X3_18_PLUS_X6"] },
+        "differs": { "const": true }
+      }
+    },
     "commissionResolution": {
       "type": "object",
       "additionalProperties": false,
@@ -93,6 +103,7 @@
         "depositEvidence": {"type": "object", "additionalProperties": false, "required": ["sourceRef", "sourceAmount", "sourceNote", "reasonCode"], "properties": {"sourceRef": {"type": "string", "minLength": 1}, "sourceAmount": {"type": ["number", "string", "null"]}, "sourceNote": {"type": ["string", "null"]}, "reasonCode": {"type": "string", "minLength": 1}}},
         "depositState": { "enum": ["KNOWN", "ZERO", "UNKNOWN"] },
         "depositStatusLabel": { "enum": ["보증금 있음", "무보증", "미확인", "보증금 확인 필요"] },
+        "depositRuleDifference": { "$ref": "#/$defs/depositRuleDifference" },
         "depositRule": {
           "anyOf": [
             { "type": "null" },
