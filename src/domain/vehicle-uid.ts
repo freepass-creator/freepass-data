@@ -155,9 +155,12 @@ function activeIds(asset: VehicleAsset, at: string): VehicleExternalId[] {
   return [...activeExternalIds, ...legacy].filter(id => isActiveExternalId(id, at));
 }
 
+/** 공급사 범위 식별자: 같은 값이어도 공급사가 다르면 다른 식별자다(공급사 차량 ID·시트 행 키는 (공급사, 값) 쌍). */
+const isSupplierScoped = (kind: VehicleExternalIdKind) => kind === 'SUPPLIER_VEHICLE' || kind === 'SHEET_ROW';
+
 function sameId(id: VehicleExternalId, kind: VehicleExternalIdKind, value: string, supplierCode?: string) {
   if (id.kind !== kind || id.value !== value) return false;
-  if (kind !== 'SUPPLIER_VEHICLE') return true;
+  if (!isSupplierScoped(kind)) return true;
   return id.supplierCode === supplierCode;
 }
 
@@ -173,11 +176,11 @@ export function findActiveAssets(
 }
 
 function activeValue(asset: VehicleAsset, kind: VehicleExternalIdKind, at: string, supplierCode?: string) {
-  return activeIds(asset, at).find(id => id.kind === kind && (kind !== 'SUPPLIER_VEHICLE' || id.supplierCode === supplierCode))?.value;
+  return activeIds(asset, at).find(id => id.kind === kind && (!isSupplierScoped(kind) || id.supplierCode === supplierCode))?.value;
 }
 
 function candidateIdentifierKey(id: VehicleExternalId) {
-  return `${id.kind}:${id.kind === 'SUPPLIER_VEHICLE' ? id.supplierCode ?? '' : ''}:${id.value}`;
+  return `${id.kind}:${isSupplierScoped(id.kind) ? id.supplierCode ?? '' : ''}:${id.value}`;
 }
 
 function candidateIdentifiers(ids: NormalizedVehicleIds, now: string): VehicleExternalId[] {
@@ -186,7 +189,7 @@ function candidateIdentifiers(ids: NormalizedVehicleIds, now: string): VehicleEx
     const normalized = normalizeId(id);
     if (!normalized) return;
     if (normalized.validFrom > now || (normalized.validTo !== null && normalized.validTo !== undefined && normalized.validTo <= now)) return;
-    if (normalized.kind === 'SUPPLIER_VEHICLE' && !normalized.supplierCode) return;
+    if (isSupplierScoped(normalized.kind) && !normalized.supplierCode) return;
     if (!out.some(existing => candidateIdentifierKey(existing) === candidateIdentifierKey(normalized))) out.push(normalized);
   };
   if (ids.vin) push({ kind: 'VIN', value: ids.vin, validFrom: now, source: 'vehicle-uid-resolver' });
@@ -208,7 +211,7 @@ function contradicts(asset: VehicleAsset, identifiers: VehicleExternalId[], asse
     if (active.some(existing => sameId(existing, id.kind, id.value, id.supplierCode))) continue;
     const sameNamespace = active.filter(existing =>
       existing.kind === id.kind &&
-      (id.kind !== 'SUPPLIER_VEHICLE' || existing.supplierCode === id.supplierCode)
+      (!isSupplierScoped(id.kind) || existing.supplierCode === id.supplierCode)
     );
     if (sameNamespace.length > 0) {
       if (id.kind === 'PLATE') {
@@ -263,7 +266,7 @@ export function addExternalId(asset: VehicleAsset, id: VehicleExternalId, now: s
   const externalIds = structuredClone(asset.externalIds ?? []);
   const activeIndex = externalIds.findIndex(existing =>
     existing.kind === normalized.kind &&
-    (normalized.kind !== 'SUPPLIER_VEHICLE' || normalizeSupplierCode(existing.supplierCode) === normalized.supplierCode) &&
+    (!isSupplierScoped(normalized.kind) || normalizeSupplierCode(existing.supplierCode) === normalized.supplierCode) &&
     isActiveExternalId(existing, now)
   );
   if (activeIndex >= 0) {

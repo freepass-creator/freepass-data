@@ -135,6 +135,21 @@ describe('vehicle UID resolver', () => {
     if (linked.action === 'LINK') expect(linked.vehicleUid).toBe(created.vehicleUid);
   });
 
+  it('treats SHEET_ROW ids as (supplier, row) pairs — same row id of another supplier is a different identifier', () => {
+    const a = asset('va_sheet_a', [id('SHEET_ROW', 'ROW-0007', 'RP001')]);
+    const b = asset('va_sheet_b', [id('SHEET_ROW', 'ROW-0007', 'RP002')]);
+    // 같은 행 ID 라도 공급사가 다르면 다른 자산: RP002 행으로 찾으면 b 에만 LINK
+    const link = resolveVehicleUid({ externalIds: [id('SHEET_ROW', 'ROW-0007', 'RP002')] }, [a, b], { now });
+    expect(link.action).toBe('LINK');
+    if (link.action === 'LINK') expect(link.vehicleUid).toBe('va_sheet_b');
+    // 공급사 없는 행 ID 는 식별자로 쓰지 않는다 → 새 식별자 없음 → UNKNOWN
+    const noSupplier = resolveVehicleUid({ externalIds: [{ kind: 'SHEET_ROW', value: 'ROW-0007', validFrom: now, source: 't' }] }, [a, b], { now });
+    expect(noSupplier.action).toBe('UNKNOWN');
+    // 두 공급사의 행 ID 를 함께 주면 서로 다른 자산을 가리키므로 HOLD
+    const both = resolveVehicleUid({ externalIds: [id('SHEET_ROW', 'ROW-0007', 'RP001'), id('SHEET_ROW', 'ROW-0007', 'RP002')] }, [a, b], { now });
+    expect(both).toMatchObject({ action: 'HOLD', reason: 'IDENTIFIER_POINTS_TO_DIFFERENT_ASSETS' });
+  });
+
   it('ignores stale legacy plate when external plate history has moved, but keeps legacy-only assets compatible', () => {
     const changed = {
       ...asset('va_changed', [
