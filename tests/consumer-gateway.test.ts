@@ -1272,3 +1272,49 @@ it('keeps contract fee links internal to Admin identity and rejects bad auth', a
   expect(reads).toBe(0);
   await app.close();
 });
+
+describe('authenticated collected source scope', () => {
+  it.each(['kakao-ops', 'internal-ai-fixture'])('requires explicit %s scope grant before source reads and keeps default scope unchanged', async consumerId => {
+    const internal = consumerId.startsWith('internal-ai-');
+    const source = { consumerId, sourceScope: 'COLLECTED' as const, observedAt: '2026-10-10T00:00:00Z', products: {
+      listed: { listable: true, provider_company_code: 'TEMP', provider_name: 'Fixture', car_number: '123가4567', price: { '36': { rent: 500000, deposit: null } } },
+      hidden: { listable: false, provider_company_code: 'TEMP', provider_name: 'Fixture', car_number: '123가4567', price: null },
+    } };
+    const readSource = vi.fn(async () => source);
+    const reader = { read: async () => { throw new Error('unused'); }, readKakaoReferenceSource: readSource, readInternalAiReferenceSource: readSource };
+    const registration: ConsumerBinding = { id: consumerId, projectionId: 'erp-public', token, capabilities: [internal ? 'internal-ai-reference' : 'catalog-reference'] };
+    const endpoint = `/v1/consumers/${consumerId}/${internal ? 'internal-ai-reference' : 'catalog-reference'}`;
+    for (const granted of [false, true]) {
+      const { app, logs } = withAccess(new MemoryDataStore(), [{ ...registration, ...(granted ? { referenceSourceScopes: ['COLLECTED' as const] } : {}) }], undefined, reader);
+      try {
+        readSource.mockClear();
+        const collected = await app.inject({ url: endpoint + '?sourceScope=COLLECTED&plateNumber=123가4567', headers });
+        expect(collected.statusCode).toBe(granted ? 200 : 403);
+        if (!granted) {
+          expect(collected.json()).toEqual({ code: 'REFERENCE_SOURCE_SCOPE_FORBIDDEN' });
+          expect(readSource).not.toHaveBeenCalled();
+          expect(logs.events.at(-1)?.phase).toBe('DENIED');
+        } else {
+          expect(collected.json().data.map((p: { sourceProductId: string }) => p.sourceProductId)).toEqual(['hidden', 'listed']);
+          expect(collected.json().data[0].sourceRecord).toMatchObject({ listable: false, conditionState: 'HOLD', reasonCode: 'SOURCE_PRICE_CONDITIONS_MISSING' });
+          expect(collected.json().meta).toMatchObject({ authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD', queryResolution: { state: 'HOLD' } });
+        }
+        const normal = await app.inject({ url: endpoint, headers });
+        expect(normal.statusCode).toBe(200);
+        expect(normal.json().data.map((p: { sourceProductId: string }) => p.sourceProductId)).toEqual(['listed']);
+        expect(normal.json().data[0]).not.toHaveProperty('sourceRecord');
+        readSource.mockClear();
+        expect((await app.inject({ url: endpoint + '?sourceScope=UNKNOWN', headers })).statusCode).toBe(400);
+        expect((await app.inject({ url: endpoint + '?sourceScope=COLLECTED&sourceScope=LISTABLE', headers })).statusCode).toBe(400);
+        expect((await app.inject({ url: endpoint + '?sourceScope=COLLECTED', headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+        expect(readSource).not.toHaveBeenCalled();
+      } finally { await app.close(); }
+    }
+  });
+  it('does not allow a public registration to request collected grants or unsupported/duplicate scope grants', () => {
+    for (const scopes of [['COLLECTED'], [], ['COLLECTED', 'COLLECTED'], ['LISTABLE'], 'COLLECTED']) {
+      expect(() => parseConsumerBindings(JSON.stringify([{ ...binding, referenceSourceScopes: scopes }]))).toThrow();
+    }
+    expect(parseConsumerBindings(JSON.stringify([{ id: 'kakao-ops', projectionId: 'erp-public', token, capabilities: ['catalog-reference'], referenceSourceScopes: ['COLLECTED'] }]))[0]).toMatchObject({ referenceSourceScopes: ['COLLECTED'] });
+  });
+});

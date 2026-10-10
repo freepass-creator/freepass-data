@@ -89,6 +89,8 @@ export type ConsumerBinding = {
   projectionId: 'erp-public' | 'admin-catalog' | 'estimate-newcar-master';
   token: string;
   capabilities?: ConsumerCapability[];
+  /** Separate explicit grant; existing reference tokens do not gain collected inventory access. */
+  referenceSourceScopes?: ('COLLECTED')[];
 };
 type RegisteredConsumerBinding = Omit<ConsumerBinding, 'capabilities'> & {
   capabilities: ConsumerCapability[];
@@ -164,13 +166,21 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
         (!internalAi && capabilities.includes('internal-ai-reference'))) {
       throw new Error('Internal AI registration may only use its dedicated read capability');
     }
+    const referenceSourceScopes = item.referenceSourceScopes;
+    if (referenceSourceScopes !== undefined && (!Array.isArray(referenceSourceScopes)
+      || referenceSourceScopes.length !== 1 || referenceSourceScopes[0] !== 'COLLECTED'
+      || !(item.id === 'kakao-ops' && capabilities.includes('catalog-reference')
+        || internalAi && capabilities.includes('internal-ai-reference')))) {
+      throw new Error('Collected reference scope requires an explicit reference consumer grant');
+    }
     ids.add(item.id);
     tokens.add(item.token);
     return {
       id: item.id,
       projectionId: expectedProjection,
       token: item.token,
-      capabilities
+      capabilities,
+      ...(referenceSourceScopes === undefined ? {} : { referenceSourceScopes: ['COLLECTED' as const] })
     };
   });
 }
@@ -778,6 +788,14 @@ export function createConsumerGateway(
         }, 'FORBIDDEN');
         return reply.code(403).send({ code: 'FORBIDDEN' });
       }
+      const sourceScope = (request.query as Record<string, unknown>).sourceScope ?? 'LISTABLE';
+      if (typeof sourceScope !== 'string' || !['LISTABLE','COLLECTED'].includes(sourceScope)) {
+        throw new Error('REFERENCE_SOURCE_SCOPE_INVALID');
+      }
+      if (sourceScope === 'COLLECTED' && !binding.referenceSourceScopes?.includes('COLLECTED')) {
+        await access.deny('READ', { context, operation, resource }, 'REFERENCE_SOURCE_SCOPE_FORBIDDEN');
+        return reply.code(403).send({ code: 'REFERENCE_SOURCE_SCOPE_FORBIDDEN' });
+      }
       if (!readSource) {
         await access.deny('READ', {
           context,
@@ -798,7 +816,8 @@ export function createConsumerGateway(
       }, async () => {
         const source = await readSource(binding.id);
         if (source.consumerId !== binding.id) throw new Error('REFERENCE_SOURCE_CONSUMER_MISMATCH');
-        const reference = internalAi ? buildInternalAiReference(source) : buildKakaoCatalogReference(source);
+        const scopedSource = { ...source, sourceScope: sourceScope as 'COLLECTED' | 'LISTABLE' };
+        const reference = internalAi ? buildInternalAiReference(scopedSource) : buildKakaoCatalogReference(scopedSource);
         const filtered = filterReferenceProducts(reference, request.query as Record<string, unknown>);
         const data = await Promise.all(filtered.data.map(async product => ({ ...product,
           vehicleMediaEvidence: await inspectVehicleMediaEvidence({ productId: product.sourceProductId,
@@ -821,7 +840,7 @@ export function createConsumerGateway(
       }
       return result;
     } catch (error) {
-      if (error instanceof Error && error.message === 'REFERENCE_DEPOSIT_FILTER_INVALID') {
+      if (error instanceof Error && ['REFERENCE_DEPOSIT_FILTER_INVALID','REFERENCE_SOURCE_SCOPE_INVALID'].includes(error.message)) {
         return reply.code(400).send({ code: error.message });
       }
       if (error instanceof DataAccessAuditUnavailableError) {

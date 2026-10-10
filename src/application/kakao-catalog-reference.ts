@@ -592,12 +592,14 @@ export function resolveReferencePolicyContext(source: Rec, policies: Record<stri
     reasonCode: facts.length ? null : 'POLICY_FACTS_MISSING' };
 }
 
-export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}, observedAt?: string) {
-  if (source.listable !== true) return null;
+export type ReferenceSourceScope = 'LISTABLE' | 'COLLECTED';
+export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}, observedAt?: string, sourceScope: ReferenceSourceScope = 'LISTABLE') {
+  const collected = sourceScope === 'COLLECTED';
+  if (!collected && source.listable !== true) return null;
   const supplierId = text(source.provider_company_code);
-  if (!supplierId) return null;
-  const price = source.price;
-  if (!price || typeof price !== 'object' || Array.isArray(price)) return null;
+  if (!collected && !supplierId) return null;
+  const price = source.price && typeof source.price === 'object' && !Array.isArray(source.price) ? source.price as Rec : {};
+  if (!collected && !Object.keys(price).length) return null;
   const priceTerms = Object.entries(price as Rec).flatMap(([sourceKey, raw]) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
     const parsed = parseErp5CompatibilityPriceKey(sourceKey);
@@ -675,7 +677,34 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       expectedGrossMargin,
     }];
   }).sort((a, b) => a.termMonths - b.termMonths || a.termKey.localeCompare(b.termKey));
-  if (!priceTerms.length) return null;
+  if (!collected && !priceTerms.length) return null;
+  const sourceRecord = collected ? {
+    scope: 'COLLECTED' as const, publicationDecision: 'HOLD' as const,
+    listable: typeof source.listable === 'boolean' ? source.listable : null,
+    status: text(source.status_kind) || text(source.vehicle_status) || text(source.status) || null,
+    deleted: source._deleted === true || !!source.deletedAt || !!source.publication_withdrawal,
+    supplierId: supplierId || null, supplierName: text(source.provider_name) || null,
+    sourceRef: `source-product:${documentId}`,
+    conditionState: (!supplierId || !priceTerms.length || priceTerms.length !== Object.keys(price).length ? 'HOLD' : 'REFERENCE') as 'HOLD' | 'REFERENCE',
+    reasonCode: !supplierId ? 'SOURCE_SUPPLIER_MISSING' : !Object.keys(price).length ? 'SOURCE_PRICE_CONDITIONS_MISSING'
+      : !priceTerms.length ? 'SOURCE_PRICE_CONDITIONS_UNUSABLE' : priceTerms.length !== Object.keys(price).length ? 'SOURCE_PRICE_CONDITIONS_PARTIAL' : null,
+    priceConditions: Object.entries(price).map(([key, value]) => {
+      const raw = value && typeof value === 'object' && !Array.isArray(value) ? value as Rec : {};
+      const parsed = parseErp5CompatibilityPriceKey(key);
+      const term = priceTerms.find(candidate => candidate.termKey === `source:${key}`);
+      const original = (v: unknown) => typeof v === 'string' || typeof v === 'number' && Number.isFinite(v) ? v as string | number : null;
+      return { sourceKey: key, sourceRef: `source-product:${documentId}#price:${key}`, termMonths: parsed?.months ?? null,
+        monthlyRentSourceValue: original(raw.rent), depositSourceValue: original(raw.deposit),
+        contractedMileage: parsed?.contractedMileage ?? (parsed?.mileageKm ? { km: parsed.mileageKm, period: 'year' as const } : null),
+        monthlyRentAmount: term?.monthlyRent.amount ?? null, monthlyRentState: (term ? 'KNOWN' : 'UNKNOWN') as 'KNOWN' | 'UNKNOWN',
+        depositAmount: term?.depositAmount ?? null, depositState: term?.depositState ?? 'UNKNOWN' as const,
+        supplierBillingFee: term && supplierId ? term.supplierBillingFee : unknownCommission('SOURCE_PRICE_CONDITION_UNUSABLE'),
+        channelPayoutFee: term && supplierId ? term.channelPayoutFee : unknownCommission('SOURCE_PRICE_CONDITION_UNUSABLE'),
+        state: (term && supplierId ? 'REFERENCE' : 'HOLD') as 'REFERENCE' | 'HOLD',
+        reasonCode: !supplierId ? 'SOURCE_SUPPLIER_MISSING' : !parsed ? 'SOURCE_PRICE_KEY_UNRECOGNIZED'
+          : !term ? 'SOURCE_MONTHLY_RENT_MISSING_OR_INVALID' : null };
+    }),
+  } : undefined;
   const maker = text(source.maker);
   const model = text(source.model);
   const trim = text(source.trim_name);
@@ -688,6 +717,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
     commercialType: knownProductType(text(source.product_type)),
     vehicleModelId,
     vehicleAssetId: `reference_va_${documentId}`,
+    ...(sourceRecord ? { sourceRecord } : {}),
     vehiclePhotos: resolveReferenceVehiclePhotos(source),
     vehicle: {
       maker,
@@ -710,19 +740,20 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       depositNote: text(source.deposit_note) || null,
       vehicleStatus: text(source.vehicle_status) || null,
     },
-    offers: [{
+    offers: supplierId ? [{
       offerId: `reference_offer_${documentId}`,
       supplierId,
       supplierName: text(source.provider_name) || null,
       policyId: text(source.policy_code) || null,
       policyContext: resolveReferencePolicyContext(source, policies),
       priceTerms,
-    }],
+    }] : [],
   };
 }
 
 export function buildKakaoCatalogReference(input: {
   consumerId: string;
+  sourceScope?: ReferenceSourceScope;
   products: Record<string, Rec>;
   observedAt: string;
   /** Policy documents captured with the same source read. Only approved fact keys are projected. */
@@ -772,7 +803,7 @@ function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
     }
   }
   const data = Object.entries(input.products)
-    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id], input.policies, input.observedAt))
+    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id], input.policies, input.observedAt, input.sourceScope))
     .filter((row): row is NonNullable<typeof row> => row !== null)
     .map(row => ({ ...row, vehicleMasterReference: resolveMaster(input.products[row.sourceProductId]!) }))
     .sort((a, b) => a.productId.localeCompare(b.productId));
@@ -793,6 +824,7 @@ function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
       sourceCollection: 'products' as const,
       sourceCount: Object.keys(input.products).length,
       projectedCount: data.length,
+      ...(input.sourceScope === 'COLLECTED' ? { sourceScope: 'COLLECTED' as const } : {}),
       dataDigest,
       warning: 'REFERENCE_ONLY: 재고·가격·수수료 확정 전 공급사 확인 필요',
     },
@@ -806,8 +838,10 @@ export type KakaoCatalogReferenceSource = Parameters<typeof buildKakaoCatalogRef
 export function filterReferenceProducts<T extends KakaoCatalogReference | ReturnType<typeof buildInternalAiReference>>(reference: T, query: Record<string, unknown>): T {
   const fields = ['supplierId','supplierName','plateNumber','maker','model','commercialType','assetStatus'];
   const numeric = ['termMonths','mileageKm','monthlyRentMin','monthlyRentMax','depositMin','depositMax'];
-  const keys = [...fields,...numeric,'mileagePeriod','depositState','depositScope'];
+  const keys = [...fields,...numeric,'mileagePeriod','depositState','depositScope','sourceScope'];
   const invalid = () => { throw new Error('REFERENCE_DEPOSIT_FILTER_INVALID'); };
+  if (query.sourceScope !== undefined && !['LISTABLE','COLLECTED'].includes(String(query.sourceScope))) invalid();
+  if (query.sourceScope === 'COLLECTED' && !('sourceScope' in reference.meta && reference.meta.sourceScope === 'COLLECTED')) invalid();
   if (!Object.keys(query).length) return reference;
   for (const [key,value] of Object.entries(query)) {
     if (!keys.includes(key) || typeof value !== 'string' || !value.trim() || (!['supplierName','plateNumber'].includes(key) && value !== value.trim())) invalid();
@@ -831,12 +865,22 @@ export function filterReferenceProducts<T extends KakaoCatalogReference | Return
     (query.depositState === undefined || (query.depositState === 'ZERO' ? zero(t) : t.depositState === query.depositState)) &&
     range(t.monthlyRent.amount,'monthlyRent') && range(t.depositAmount,'deposit') &&
     (query.mileageKm === undefined || (t.contractedMileage ? t.contractedMileage.km === Number(query.mileageKm) && t.contractedMileage.period === query.mileagePeriod : query.mileagePeriod === 'year' && t.mileageLimitKmPerYear === Number(query.mileageKm)));
+  const supplierMatches = (id: string | null, name: string | null) =>
+    (query.supplierId === undefined || id === query.supplierId) && (query.supplierName === undefined || nameKey(name) === nameKey(query.supplierName));
+  const termKeys = [...numeric, 'mileagePeriod', 'depositState', 'depositScope'];
+  const sourceOnlyPeriod = Object.keys(query).every(key => !termKeys.includes(key) || key === 'termMonths');
+  const sourceMatch = (p: T['data'][number]) => p.sourceRecord?.scope === 'COLLECTED' && sourceOnlyPeriod
+    && supplierMatches(p.sourceRecord.supplierId, p.sourceRecord.supplierName)
+    && (query.termMonths === undefined || p.sourceRecord.priceConditions.some(t => t.termMonths === Number(query.termMonths)));
   const data = reference.data.filter(p => (query.plateNumber === undefined || plateKey(p.vehicle.plateNumber) === plateKey(query.plateNumber)) && (query.maker === undefined || p.vehicle.maker === query.maker) &&
     (query.model === undefined || p.vehicle.model === query.model) && (query.commercialType === undefined || p.commercialType === query.commercialType) &&
     (query.assetStatus === undefined || p.vehicle.assetStatus === query.assetStatus) &&
-    p.offers.some(o => (query.supplierId === undefined || o.supplierId === query.supplierId) && (query.supplierName === undefined || nameKey(o.supplierName) === nameKey(query.supplierName)) && o.priceTerms.some(match)) &&
+    (sourceMatch(p) || p.offers.some(o => supplierMatches(o.supplierId, o.supplierName) && o.priceTerms.some(match))) &&
     (query.depositScope !== 'ALL_TERMS' || p.offers.flatMap(o => o.priceTerms).every(zero)));
-  const supplierCodes = new Set(data.flatMap(p => p.offers).filter(o => query.supplierName !== undefined && nameKey(o.supplierName) === nameKey(query.supplierName) && (query.supplierId === undefined || o.supplierId === query.supplierId) && o.priceTerms.some(match)).map(o => o.supplierId));
+  const supplierCodes = new Set(data.flatMap(p => [
+    ...p.offers.filter(o => query.supplierName !== undefined && supplierMatches(o.supplierId, o.supplierName) && o.priceTerms.some(match)).map(o => o.supplierId),
+    ...(query.supplierName !== undefined && sourceMatch(p) && p.sourceRecord?.supplierId ? [p.sourceRecord.supplierId] : []),
+  ]));
   const plateCandidates = query.plateNumber === undefined ? [] : data.filter(p => plateKey(p.vehicle.plateNumber) === plateKey(query.plateNumber));
   const queryResolution = { state: supplierCodes.size > 1 || plateCandidates.length > 1 ? 'HOLD' : data.length ? 'MATCHED' : 'NO_MATCH', reasonCode: supplierCodes.size > 1 ? 'SUPPLIER_NAME_MULTIPLE_CODES' : plateCandidates.length > 1 ? 'PLATE_MULTIPLE_PRODUCTS' : null, matchedProductCount: data.length };
   return { ...reference,data,meta: { ...reference.meta,projectedCount:data.length,dataDigest:hash(JSON.stringify(data)),queryFilter:{...query},...(query.supplierName !== undefined || query.plateNumber !== undefined ? {queryResolution} : {}),
