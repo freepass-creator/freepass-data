@@ -55,9 +55,9 @@ describe('Admin workflow consumer gateway', () => {
     expect(current.completeness).toBe('DOCUMENT_READ');
     expect(current.records[0]).toMatchObject({ recordId: 'contract-id', link: { state: 'RECORDED_UNVERIFIED', targetId: 'intake-id' }, facts: {
       contractStatus: { value: '계약대기' }, signStatus: { value: 'source-sign' }, termMonths: { value: null, state: 'INVALID' },
-      responsibleCode: { value: 'agent' }, createdBy: { value: null, state: 'UNKNOWN', reason: 'SOURCE_NOT_RECORDED' },
+      responsibleCode: { value: 'agent' }, createdBy: { value: null, state: 'UNKNOWN', reason: 'UNAVAILABLE_IN_THIS_SOURCE' },
     } });
-    expect(current.records[0]!.facts).not.toHaveProperty('claimSupply');
+    expect(current.records[0]!.facts.claimSupply).toEqual({ value: null, state: 'UNKNOWN', reason: 'UNAVAILABLE_IN_THIS_SOURCE', sourceField: null });
     expect(projectAdminWorkflowCurrentFacts({ kind: 'doc', resource: 'contracts', id: 'missing' }, { schema: 'freepass-data.admin-workflow-read/v1', digest: 'b'.repeat(64), docs: [] }).records).toEqual([]);
   });
   it('adds optional current facts without changing raw docs, zero, BT or source IDs', async () => {
