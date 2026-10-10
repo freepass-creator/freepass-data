@@ -195,8 +195,21 @@ describe.skipIf(!emulatorEnabled)('Firestore projection integrity emulator', () 
     await db.collection(FIRESTORE_COLLECTIONS.source.definitions).doc(sourceFirestoreDocumentId(sourceId)).set(source);
     await db.collection(FIRESTORE_COLLECTIONS.source.heads).doc(sourceFirestoreDocumentId(sourceId)).set(head);
     await db.collection(FIRESTORE_COLLECTIONS.source.runs).doc(run.runId).set(run);
-    await store.activate(releaseId, { now: () => head.observedAt, sources: [{ sourceId, runId: run.runId,
+    const eventId = 'approved-multi-chunk-event';
+    const lease = { leaseOwner: 'worker:emulator', leaseUntil: new Date(Date.parse(head.observedAt) + 30000).toISOString() };
+    await db.collection(FIRESTORE_COLLECTIONS.evidence.outbox).doc(eventId).set({
+      eventId, eventType: 'catalog.canonicalized', status: 'PROCESSING', ...lease,
+      targetRevision: 1, attempts: 0, occurredAt: head.observedAt
+    });
+    const receipt = { eventId, eventType: 'catalog.canonicalized', projectionId: 'erp-public',
+      releaseId, inputDigest: release.inputDigest, dataDigest: release.dataDigest,
+      targetRevision: 1, processedAt: head.observedAt };
+    await expect(store.activate(releaseId, { now: () => head.observedAt, sources: [] }))
+      .rejects.toThrow('PROJECTION_FIRST_ACTIVATION_APPROVAL_REQUIRED');
+    await store.activate(releaseId, { now: () => head.observedAt, expectedActiveReleaseId: null,
+      claim: { eventId, lease }, receipt, sources: [{ sourceId, runId: run.runId,
       digest: stableDigest([source, head, run]), expiresAt: Date.parse(head.observedAt) + 86400000 }] });
+    expect(await store.getDeliveryReceipt(eventId)).toEqual(receipt);
 
     const snapshot = await store.getActiveEvidenceSnapshot('erp-public');
     expect(snapshot.consistency).toBe('ATOMIC');
