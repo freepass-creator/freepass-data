@@ -39,6 +39,12 @@ export type CatalogCompatibilitySnapshot = {
   };
 };
 
+export type CatalogCompatibilityReadCollection = 'products' | 'policy' | 'partner' | 'user' | 'vehicle_master';
+
+export type CatalogCompatibilityReaderOptions = {
+  readCollections?: readonly CatalogCompatibilityReadCollection[];
+};
+
 const jsonSafe = (value: unknown): unknown => {
   if (value == null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
   if (value instanceof Date) return value.toISOString();
@@ -110,7 +116,14 @@ export function isPublicIancarPhotoProduct(product: Record<string, unknown> | un
 
 export class FirestoreCatalogCompatibilityReader {
   private readonly db = getFirestore(getTargetFirebaseApp());
-  constructor(private readonly photoReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>) {}
+  private readonly readCollections: ReadonlySet<CatalogCompatibilityReadCollection>;
+
+  constructor(
+    private readonly photoReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>,
+    options: CatalogCompatibilityReaderOptions = {},
+  ) {
+    this.readCollections = new Set(options.readCollections ?? ['products', 'policy', 'partner', 'user', 'vehicle_master']);
+  }
 
   /** Product identity is resolved here, never accepted as an arbitrary provider path from a caller. */
   async readIancarPhoto(consumerId: string, productId: string, index?: number) {
@@ -135,15 +148,19 @@ export class FirestoreCatalogCompatibilityReader {
       const wantsErpPresentation = consumerId === 'erp-com' || consumerId.startsWith('whitelabel-');
 
       const requests = [
-        ['products', this.db.collection('products').get()],
-        ['policy', this.db.collection('policy').get()],
-        ...(wantsErpPresentation
+        ...(this.readCollections.has('products') ? [['products', this.db.collection('products').get()] as const] : []),
+        ...(this.readCollections.has('policy') ? [['policy', this.db.collection('policy').get()] as const] : []),
+        ...(wantsErpPresentation && this.readCollections.has('partner')
           ? [
               ['partner', this.db.collection('partner').get()] as const,
+            ]
+          : []),
+        ...(wantsErpPresentation && this.readCollections.has('user')
+          ? [
               ['user', this.db.collection('user').get()] as const,
             ]
           : []),
-        ...(wantsAdminMaster
+        ...(wantsAdminMaster && this.readCollections.has('vehicle_master')
           ? [['vehicle_master', this.db.collection('vehicle_master').get()] as const]
           : []),
       ] as const;
@@ -213,6 +230,9 @@ export class FirestoreCatalogCompatibilityReader {
   }
 }
 
-export function createFirestoreCatalogCompatibilityReader(photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0]) {
-  return new FirestoreCatalogCompatibilityReader(photoReader);
+export function createFirestoreCatalogCompatibilityReader(
+  photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0],
+  options?: CatalogCompatibilityReaderOptions,
+) {
+  return new FirestoreCatalogCompatibilityReader(photoReader, options);
 }

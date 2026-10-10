@@ -139,6 +139,7 @@ describe('API runtime boundary', () => {
     expect(source).toContain("app.get('/health'");
     expect(source).toContain("'/v1/public/catalog/feed'");
     expect(source).toContain("'/v1/public/catalog/quote'");
+    expect(source).toContain("readCollections: ['products', 'policy']");
     expect(source).toContain('app.setNotFoundHandler');
     expect(source).not.toContain('/v1/consumers/:consumerId');
     expect(source).not.toContain('admin-workflow');

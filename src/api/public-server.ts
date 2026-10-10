@@ -51,7 +51,7 @@ addFormats(ajv);
 ajv.addSchema(publicProductFeedSchema);
 const validateFeed = ajv.getSchema('https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json#/$defs/feed')!;
 const validateQuote = ajv.getSchema('https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json#/$defs/quote')!;
-const reader = createFirestoreCatalogCompatibilityReader();
+const reader = createFirestoreCatalogCompatibilityReader(undefined, { readCollections: ['products', 'policy'] });
 
 app.get('/health', async () => ({ service: 'freepass-data-public', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
 

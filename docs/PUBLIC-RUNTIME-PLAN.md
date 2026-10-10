@@ -47,12 +47,10 @@ Status: CODED, not deployed. No IAM, Cloud Run, Secret Manager, or production co
   },
   "firestoreReadScopeByCode": {
     "reader": "src/infra/erp5-compat-catalog-reader.ts",
-    "publicEntrypointUses": "createFirestoreCatalogCompatibilityReader() without photoReader",
+    "publicEntrypointUses": "createFirestoreCatalogCompatibilityReader(undefined, { readCollections: ['products', 'policy'] })",
     "collections": [
       "products",
-      "policy",
-      "partner",
-      "user"
+      "policy"
     ],
     "writeCollections": []
   },
@@ -61,7 +59,7 @@ Status: CODED, not deployed. No IAM, Cloud Run, Secret Manager, or production co
       {
         "member": "serviceAccount:freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com",
         "role": "Firestore read-only role only",
-        "reason": "read products, policy, partner, and user through the compatibility reader for public feed/quote"
+        "reason": "read products and policy through the compatibility reader for public feed/quote"
       }
     ],
     "deployerAdditionalPermissions": [
@@ -100,7 +98,7 @@ Status: CODED, not deployed. No IAM, Cloud Run, Secret Manager, or production co
 ## Notes
 
 - The public service uses `src/api/public-server.ts`, which registers only `/health`, `/v1/public/catalog/feed`, and `/v1/public/catalog/quote`; the not-found handler returns 404 for every other path.
-- Code evidence for Firestore scope is `createFirestoreCatalogCompatibilityReader()` without a photo reader, then `read()` in `src/infra/erp5-compat-catalog-reader.ts`; for ERP/whitelabel presentation it reads `products`, `policy`, `partner`, and `user`. It does not call Iancar photo code because no photo reader or `EANCAR_ONE_API_KEY` is provided.
+- Code evidence for Firestore scope is `createFirestoreCatalogCompatibilityReader(undefined, { readCollections: ['products', 'policy'] })`, then `read()` in `src/infra/erp5-compat-catalog-reader.ts`; the public feed/quote path reads `products` and `policy` only. It does not call Iancar photo code because no photo reader or `EANCAR_ONE_API_KEY` is provided.
 - `FREEPASS_DATA_CONSUMERS_JSON` is intentionally absent from the public service. Consumer gateway, admin, settlement, estimate, and command routes are not registered.
 - `deploy-public-runtime.yml` calls `deploy-read-runtime.yml` with different inputs instead of copying the deployment workflow. `grant_public_invoker` defaults to false.
 - Rollback is IAM removal and service deletion only; no data rollback is expected because the runtime has no write path.
@@ -112,4 +110,4 @@ npm.cmd run build
 node scripts/public-runtime-plan-digest.mjs docs/PUBLIC-RUNTIME-PLAN.md
 ```
 
-Plan digest sha256: `4953e6478c8fef947b002caa8778f791aa589db5c6b500a8a03137f5485d1e1c`
+Plan digest sha256: `7f3d6f44442dd3f313f8afe282d324800c10c9c1663e3099cad1e444dab8a96b`
