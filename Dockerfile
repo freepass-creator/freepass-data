@@ -15,10 +15,12 @@ RUN npm run build
 
 FROM node:22-bookworm-slim AS runtime
 
+ARG FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js
 ENV NODE_ENV=production
 ENV FREEPASS_DATA_DRIVER=firestore
 ENV FIREBASE_PROJECT_ID=freepasserp5
 ENV HOST=0.0.0.0
+ENV FREEPASS_DATA_ENTRYPOINT=$FREEPASS_DATA_ENTRYPOINT
 
 WORKDIR /app
 
@@ -30,4 +32,4 @@ COPY contracts ./contracts
 
 USER node
 
-CMD ["node", "dist/src/api/consumer-server.js"]
+CMD ["sh", "-c", "exec node \"$FREEPASS_DATA_ENTRYPOINT\""]

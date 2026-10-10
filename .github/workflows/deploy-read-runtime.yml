@@ -1,6 +1,38 @@
 name: Deploy FreePass Data read runtime
 
 on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: false
+        type: string
+      runtime_service_account:
+        required: false
+        type: string
+      entrypoint:
+        required: false
+        type: string
+        default: dist/src/api/consumer-server.js
+      allow_unauthenticated:
+        required: false
+        type: boolean
+        default: false
+      grant_public_invoker:
+        required: false
+        type: boolean
+        default: false
+      max_instances:
+        required: false
+        type: number
+        default: 10
+      concurrency:
+        required: false
+        type: number
+        default: 8
+      use_consumer_secrets:
+        required: false
+        type: boolean
+        default: true
   workflow_dispatch:
   push:
     branches: [main]
@@ -23,9 +55,15 @@ jobs:
     env:
       PROJECT_ID: freepasserp5
       REGION: ${{ vars.FREEPASS_DATA_READ_REGION }}
-      SERVICE_NAME: ${{ vars.FREEPASS_DATA_READ_SERVICE_NAME }}
+      SERVICE_NAME: ${{ inputs.service_name || vars.FREEPASS_DATA_READ_SERVICE_NAME }}
       ARTIFACT_REPOSITORY: ${{ vars.FREEPASS_DATA_ARTIFACT_REPOSITORY }}
-      RUNTIME_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_RUNTIME_SERVICE_ACCOUNT }}
+      RUNTIME_SERVICE_ACCOUNT: ${{ inputs.runtime_service_account || vars.FREEPASS_DATA_RUNTIME_SERVICE_ACCOUNT }}
+      RUNTIME_ENTRYPOINT: ${{ inputs.entrypoint || 'dist/src/api/consumer-server.js' }}
+      ALLOW_UNAUTHENTICATED: ${{ inputs.allow_unauthenticated || false }}
+      GRANT_PUBLIC_INVOKER: ${{ inputs.grant_public_invoker || false }}
+      MAX_INSTANCES: ${{ inputs.max_instances || 10 }}
+      RUNTIME_CONCURRENCY: ${{ inputs.concurrency || 8 }}
+      USE_CONSUMER_SECRETS: ${{ inputs.use_consumer_secrets != false }}
       CONSUMERS_SECRET_NAME: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_NAME }}
       CONSUMERS_SECRET_VERSION: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_VERSION }}
       IANCAR_SECRET_NAME: ${{ vars.FREEPASS_DATA_IANCAR_SECRET_NAME }}
@@ -44,10 +82,12 @@ jobs:
           test -n "$SERVICE_NAME"
           test -n "$ARTIFACT_REPOSITORY"
           test -n "$RUNTIME_SERVICE_ACCOUNT"
-          test -n "$CONSUMERS_SECRET_NAME"
-          [[ "$CONSUMERS_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
-          test "$IANCAR_SECRET_NAME" = 'freepass-data-iancar-one-api'
-          [[ "$IANCAR_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
+          if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
+            test -n "$CONSUMERS_SECRET_NAME"
+            [[ "$CONSUMERS_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
+            test "$IANCAR_SECRET_NAME" = 'freepass-data-iancar-one-api'
+            [[ "$IANCAR_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
+          fi
           test "$GITHUB_REF" = 'refs/heads/main'
 
       - name: Authenticate deploy identity
@@ -80,14 +120,17 @@ jobs:
         run: |
           set -euo pipefail
           registry="$REGION-docker.pkg.dev"
-          image="$registry/$PROJECT_ID/$ARTIFACT_REPOSITORY/freepass-data-read:$GITHUB_SHA"
+          # 진입점이 기본(소비자 서버)이 아니면 이미지 이름을 서비스 이름으로 분리한다 — 같은 SHA 태그를 재사용하다 다른 진입점 이미지가 배포되는 사고 방지.
+          image_name="freepass-data-read"
+          if [ "$RUNTIME_ENTRYPOINT" != "dist/src/api/consumer-server.js" ]; then image_name="$SERVICE_NAME"; fi
+          image="$registry/$PROJECT_ID/$ARTIFACT_REPOSITORY/$image_name:$GITHUB_SHA"
           echo "IMAGE=$image" >> "$GITHUB_ENV"
           if gcloud artifacts docker images describe "$image" \
             --project="$PROJECT_ID" --format='value(image_summary.digest)' | grep -q '^sha256:'; then
             echo "Reusing existing immutable image for $GITHUB_SHA"
           else
             gcloud auth configure-docker "$registry" --quiet
-            docker build --pull --tag "$image" .
+            docker build --pull --build-arg "FREEPASS_DATA_ENTRYPOINT=$RUNTIME_ENTRYPOINT" --tag "$image" .
             docker push "$image"
           fi
           digest="$(gcloud artifacts docker images describe "$image" --project="$PROJECT_ID" --format='value(image_summary.digest)')"
@@ -102,12 +145,35 @@ jobs:
         run: |
           set -euo pipefail
           : "${FREEPASS_SHEET_F04_ID:?MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID}"
+          auth_flag='--no-allow-unauthenticated'
+          if [ "$ALLOW_UNAUTHENTICATED" = "true" ]; then auth_flag='--allow-unauthenticated'; fi
+          secret_args=()
+          if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
+            secret_args+=(--set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:$CONSUMERS_SECRET_VERSION,EANCAR_ONE_API_KEY=$IANCAR_SECRET_NAME:$IANCAR_SECRET_VERSION")
+          fi
           gcloud run deploy "$SERVICE_NAME" \
             --project="$PROJECT_ID" --region="$REGION" --platform=managed \
             --image="$IMAGE_REF" --service-account="$RUNTIME_SERVICE_ACCOUNT" \
-            --ingress=all --max-instances=10 --concurrency=8 --no-allow-unauthenticated \
+            --ingress=all --max-instances="$MAX_INSTANCES" --concurrency="$RUNTIME_CONCURRENCY" "$auth_flag" \
             --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5,FREEPASS_SHEET_F04_ID=$FREEPASS_SHEET_F04_ID" \
-            --set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:$CONSUMERS_SECRET_VERSION,EANCAR_ONE_API_KEY=$IANCAR_SECRET_NAME:$IANCAR_SECRET_VERSION" --quiet
+            "${secret_args[@]}" --quiet
+
+      - name: Grant public invoker only when requested
+        if: ${{ inputs.grant_public_invoker == true }}
+        shell: bash
+        env:
+          APPROVED_PLAN_DIGEST: ${{ vars.FREEPASS_DATA_PUBLIC_RUNTIME_APPROVED_DIGEST }}
+        run: |
+          set -euo pipefail
+          test "$GRANT_PUBLIC_INVOKER" = "true"
+          test "$ALLOW_UNAUTHENTICATED" = "true"
+          # 승인 게이트: 개발 총괄이 승인한 계획 digest 를 저장소 변수에 넣어야만 allUsers 를 건다(계획서가 바뀌면 digest 가 달라져 막힌다).
+          plan_digest="$(node scripts/public-runtime-plan-digest.mjs docs/PUBLIC-RUNTIME-PLAN.md)"
+          test -n "$APPROVED_PLAN_DIGEST"
+          test "$plan_digest" = "$APPROVED_PLAN_DIGEST"
+          gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
+            --project="$PROJECT_ID" --region="$REGION" \
+            --member=allUsers --role=roles/run.invoker --quiet
 
       - name: Verify service readiness metadata
         id: readiness
@@ -123,22 +189,30 @@ jobs:
           revision="$(jq -r '.status.latestReadyRevisionName // empty' <<<"$service_json")"
           revision_service_account="$(jq -r '.spec.template.spec.serviceAccountName // empty' <<<"$service_json")"
           deployed_image="$(jq -r '.spec.template.spec.containers[0].image // empty' <<<"$service_json")"
-          secret_version="$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "FREEPASS_DATA_CONSUMERS_JSON") | .valueFrom.secretKeyRef.key' <<<"$service_json")"
+          secret_version="$(jq -r '.spec.template.spec.containers[0].env[]? | select(.name == "FREEPASS_DATA_CONSUMERS_JSON") | .valueFrom.secretKeyRef.key' <<<"$service_json")"
           latest_traffic="$(jq -r --arg revision "$revision" '[.status.traffic[] | select(.revisionName == $revision)] | (length == 1 and .[0].percent == 100)' <<<"$service_json")"
           test -n "$url"
           test "$ready" = "True"
           test -n "$revision"
           test "$revision_service_account" = "$RUNTIME_SERVICE_ACCOUNT"
           test "$deployed_image" = "$IMAGE_REF"
-          test "$secret_version" = "$CONSUMERS_SECRET_VERSION"
-          test "$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "EANCAR_ONE_API_KEY") | .valueFrom.secretKeyRef.name' <<<"$service_json")" = "$IANCAR_SECRET_NAME"
-          test "$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "EANCAR_ONE_API_KEY") | .valueFrom.secretKeyRef.key' <<<"$service_json")" = "$IANCAR_SECRET_VERSION"
-          test "$(jq -r '.spec.template.spec.containerConcurrency' <<<"$service_json")" = '8'
+          if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
+            test "$secret_version" = "$CONSUMERS_SECRET_VERSION"
+            test "$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "EANCAR_ONE_API_KEY") | .valueFrom.secretKeyRef.name' <<<"$service_json")" = "$IANCAR_SECRET_NAME"
+            test "$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "EANCAR_ONE_API_KEY") | .valueFrom.secretKeyRef.key' <<<"$service_json")" = "$IANCAR_SECRET_VERSION"
+          else
+            test -z "$secret_version"
+            test -z "$(jq -r '.spec.template.spec.containers[0].env[]? | select(.name == "EANCAR_ONE_API_KEY") | .valueFrom.secretKeyRef.name' <<<"$service_json")"
+          fi
+          test "$(jq -r '.spec.template.spec.containerConcurrency' <<<"$service_json")" = "$RUNTIME_CONCURRENCY"
           test "$latest_traffic" = "true"
           policy="$(gcloud run services get-iam-policy "$SERVICE_NAME" \
             --project="$PROJECT_ID" --region="$REGION" --format=json)"
-          ! jq -e '[.bindings[]?.members[]?] | any(. == "allUsers" or . == "allAuthenticatedUsers")' \
-            <<<"$policy" >/dev/null
+          if [ "$ALLOW_UNAUTHENTICATED" = "true" ]; then
+            test "$(jq -r '[.bindings[]? | select(.role == "roles/run.invoker") | .members[]?] | sort | join(",")' <<<"$policy")" = "allUsers"
+          else
+            ! jq -e '[.bindings[]?.members[]?] | any(. == "allUsers" or . == "allAuthenticatedUsers")' <<<"$policy" >/dev/null
+          fi
           echo "READ_RUNTIME_DEPLOYED_URL=$url" >> "$GITHUB_ENV"
           echo "READ_RUNTIME_READY=$ready" >> "$GITHUB_ENV"
           echo "READ_RUNTIME_REVISION=$revision" >> "$GITHUB_ENV"
@@ -158,6 +232,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Authenticate readback identity
+        if: ${{ inputs.use_consumer_secrets != false }}
         id: readback-auth
         uses: google-github-actions/auth@v2
         with:
@@ -167,6 +242,7 @@ jobs:
           id_token_audience: ${{ steps.readiness.outputs.url }}
 
       - name: Verify IAM denial and authenticated compatibility readback
+        if: ${{ inputs.use_consumer_secrets != false }}
         env:
           CLOUD_RUN_ID_TOKEN: ${{ steps.readback-auth.outputs.id_token }}
         shell: bash
@@ -204,6 +280,15 @@ jobs:
             (.data.partners | type == "object")
           ' "$response_file" >/dev/null
           echo "READ_RUNTIME_READBACK_OK=true" >> "$GITHUB_ENV"
+
+      - name: Verify public runtime smoke
+        if: ${{ inputs.use_consumer_secrets == false && inputs.grant_public_invoker == true }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$READ_RUNTIME_DEPLOYED_URL/health")" = "200"
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$READ_RUNTIME_DEPLOYED_URL/v1/consumers/erp-com/catalog")" = "404"
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$READ_RUNTIME_DEPLOYED_URL/v1/admin")" = "404"
 
       - name: Record sanitized activation evidence
         if: always()

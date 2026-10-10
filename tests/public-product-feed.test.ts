@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import publicSchema from '../contracts/public-product-feed-v1.schema.json' with { type: 'json' };
 import { createConsumerGateway, type ConsumerBinding } from '../src/api/consumer-gateway.js';
@@ -142,6 +142,26 @@ describe('public product feed v1', () => {
     const response = await app.inject({ url: '/v1/public/catalog/feed' });
     expect(response.statusCode).toBe(503);
     await app.close();
+  });
+
+  it('logs public route failures without message text or values', async () => {
+    const app = appWith(snapshot({}));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await app.inject({ url: '/v1/public/catalog/feed?p=bad-secret&wl=test&token=secret-token&plate=12가3456' });
+      expect(response.statusCode).toBe(400);
+      expect(spy).toHaveBeenCalled();
+      const logged = String(spy.mock.calls.at(-1)?.[0] ?? '');
+      const parsed = JSON.parse(logged);
+      expect(parsed).toMatchObject({ event: 'route_error', route: '/v1/public/catalog/feed', stage: 'public_feed' });
+      expect(logged).not.toContain('bad-secret');
+      expect(logged).not.toContain('secret-token');
+      expect(logged).not.toContain('12가3456');
+      expect(logged).not.toContain('PUBLIC_PROVIDER_INVALID');
+    } finally {
+      spy.mockRestore();
+      await app.close();
+    }
   });
 
   it('rate limits public routes by request.ip and ignores forged forwarded headers', async () => {

@@ -71,6 +71,7 @@ import {
   buildPublicProductQuote,
   publicConsumerIdFromWhitelabel,
 } from './public-product-feed.js';
+import { logRouteError } from '../shared/route-error-log.js';
 
 export type ConsumerCapability =
   | 'catalog'
@@ -392,6 +393,7 @@ export function createConsumerGateway(
       }
       return response;
     } catch (error) {
+      logRouteError('/v1/public/catalog/feed', 'public_feed', error);
       const statusCode = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode?: unknown }).statusCode) : 503;
       if (statusCode === 400) return reply.code(400).send({ error: '잘못된 공개 상품 요청입니다.' });
       if (statusCode === 404) return reply.code(404).send({ error: '현재 안내 가능한 공개 채널이 아닙니다.' });
@@ -413,6 +415,7 @@ export function createConsumerGateway(
       }
       return response;
     } catch (error) {
+      logRouteError('/v1/public/catalog/quote', 'public_quote', error);
       if (error instanceof Error && error.message === 'PUBLIC_QUOTE_CODE_REQUIRED') {
         return reply.code(400).send({ error: '상품 코드가 없습니다.' });
       }
@@ -617,6 +620,7 @@ export function createConsumerGateway(
       });
       return result;
     } catch (error) {
+      logRouteError('/v1/consumers/:consumerId/catalog', 'consumer_catalog', error);
       if (error instanceof ConsumerReadError) {
         return reply.code(error.statusCode).send({ code: error.code, ...(error.details ?? {}) });
       }
@@ -697,6 +701,7 @@ export function createConsumerGateway(
       }
       return result;
     } catch (error) {
+      logRouteError('/v1/consumers/:consumerId/catalog-compat', 'consumer_catalog_compat', error);
       if (error instanceof DataAccessAuditUnavailableError) {
         return reply.code(503).send({ code: error.code });
       }
