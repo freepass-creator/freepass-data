@@ -19,6 +19,7 @@ import settlementLedgerSchemaV2 from '../../contracts/settlement-ledger-view-v2.
 import kakaoCatalogReferenceSchema from '../../contracts/kakao-catalog-reference-v1.schema.json' with { type: 'json' };
 import internalAiReferenceSchema from '../../contracts/internal-ai-reference-v1.schema.json' with { type: 'json' };
 import contractFeeLinksSchema from '../../contracts/contract-fee-links-v1.schema.json' with { type: 'json' };
+import publicProductFeedSchema from '../../contracts/public-product-feed-v1.schema.json' with { type: 'json' };
 import type { ProjectionEvidenceSnapshotStore, ProjectionStore } from '../ports/catalog-store.js';
 import type { AdminCatalogProduct, ErpPublicProduct, ProjectionRelease } from '../domain/catalog.js';
 import {
@@ -65,6 +66,11 @@ import {
   assertSettlementLedgerReadRequest,
   type SettlementLedgerReadRequest,
 } from '../domain/settlement-ledger-view.js';
+import {
+  buildPublicProductFeed,
+  buildPublicProductQuote,
+  publicConsumerIdFromWhitelabel,
+} from './public-product-feed.js';
 
 export type ConsumerCapability =
   | 'catalog'
@@ -183,6 +189,117 @@ class ConsumerReadError extends Error {
   }
 }
 
+type PublicCatalogQuery = { p?: string; wl?: string; code?: string; a?: string };
+
+const PUBLIC_CACHE_MS = 45_000;
+const PUBLIC_TIMEOUT_MS = 5_000;
+const PUBLIC_RATE_LIMIT_WINDOW_MS = 60_000;
+const PUBLIC_RATE_LIMIT_MAX = 120;
+const PUBLIC_RETRY_AFTER_SECONDS = 30;
+const PUBLIC_FEED_MAX_BYTES = 1_000_000;
+const PUBLIC_QUOTE_MAX_BYTES = 512_000;
+const PUBLIC_CACHE_MAX_ENTRIES = 64;
+const PUBLIC_RATE_LIMIT_MAX_ENTRIES = 4096;
+
+const publicCache = new Map<string, { expiresAt: number; value: CatalogCompatibilitySnapshot }>();
+const publicRateLimits = new Map<string, { resetAt: number; count: number }>();
+const publicTrustProxyHops = (): number => {
+  const raw = process.env.FREEPASS_PUBLIC_TRUST_PROXY_HOPS?.trim() ?? '';
+  if (!raw) return 0;
+  if (!/^[0-3]$/.test(raw)) throw new Error('FREEPASS_PUBLIC_TRUST_PROXY_HOPS must be 0, 1, 2 or 3');
+  return Number(raw);
+};
+const publicProviderAllowlist = (): Set<string> => new Set(
+  (process.env.FREEPASS_PUBLIC_PROVIDER_ALLOWLIST ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+);
+
+const singleQueryValue = (value: string | string[] | undefined): string | undefined =>
+  Array.isArray(value) ? undefined : value;
+
+const publicClientIp = (request: { ip?: string }): string => request.ip ?? 'unknown';
+
+const sweepExpired = <T extends { expiresAt?: number; resetAt?: number }>(items: Map<string, T>, now: number): void => {
+  for (const [key, value] of items) {
+    const expiresAt = value.expiresAt ?? value.resetAt;
+    if (expiresAt !== undefined && expiresAt <= now) items.delete(key);
+  }
+};
+
+const trimOldest = <T>(items: Map<string, T>, maxEntries: number): void => {
+  while (items.size > maxEntries) {
+    const oldest = items.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    items.delete(oldest);
+  }
+};
+
+const publicRateLimited = (key: string, now = Date.now()): boolean => {
+  sweepExpired(publicRateLimits, now);
+  const current = publicRateLimits.get(key);
+  if (!current || current.resetAt <= now) {
+    publicRateLimits.set(key, { resetAt: now + PUBLIC_RATE_LIMIT_WINDOW_MS, count: 1 });
+    trimOldest(publicRateLimits, PUBLIC_RATE_LIMIT_MAX_ENTRIES);
+    return false;
+  }
+  current.count += 1;
+  return current.count > PUBLIC_RATE_LIMIT_MAX;
+};
+
+const withPublicTimeout = async <T>(work: Promise<T>): Promise<T> => {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('PUBLIC_CATALOG_TIMEOUT')), PUBLIC_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+};
+
+const responseBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
+
+const normalizePublicQuery = (
+  query: PublicCatalogQuery,
+  registered: Map<string, RegisteredConsumerBinding>
+): { p?: string; wl?: string; code?: string } => {
+  const p = singleQueryValue(query.p);
+  const wl = singleQueryValue(query.wl);
+  const code = singleQueryValue(query.code);
+  if (p !== undefined) {
+    if (!/^[A-Z0-9_]{2,40}$/.test(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_INVALID'), { statusCode: 400 });
+    const allowed = publicProviderAllowlist();
+    if (allowed.size > 0 && !allowed.has(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_NOT_FOUND'), { statusCode: 404 });
+  }
+  if (wl !== undefined) {
+    const consumerId = publicConsumerIdFromWhitelabel(wl);
+    if (!registered.has(consumerId)) throw Object.assign(new Error('PUBLIC_WL_NOT_FOUND'), { statusCode: 404 });
+  }
+  if (code !== undefined && !/^[A-Za-z0-9_-]{1,120}$/.test(code)) {
+    throw Object.assign(new Error('PUBLIC_CODE_INVALID'), { statusCode: 400 });
+  }
+  return {
+    ...(p !== undefined ? { p } : {}),
+    ...(wl !== undefined ? { wl } : {}),
+    ...(code !== undefined ? { code } : {}),
+  };
+};
+
+export const publicRuntimeStatsForTest = () => ({
+  cacheEntries: publicCache.size,
+  rateLimitEntries: publicRateLimits.size,
+});
+
+export const resetPublicRuntimeForTest = () => {
+  publicCache.clear();
+  publicRateLimits.clear();
+};
+
 const consumerContext = (
   consumerId: string,
   purpose: string,
@@ -211,12 +328,18 @@ export function createConsumerGateway(
 ) {
   // Validate again for callers constructing registrations without the environment parser.
   const registered = new Map(parseConsumerBindings(JSON.stringify(bindings)).map((item) => [item.id, item]));
-  const app = Fastify({ logger: false });
+  const trustProxyHops = publicTrustProxyHops();
+  const trustProxy = (trustProxyHops === 0 ? false : trustProxyHops) as unknown as boolean;
+  const app = Fastify({
+    logger: false,
+    trustProxy,
+  });
   const ajv = new Ajv2020({ strict: false });
   addFormats(ajv);
   ajv.addSchema(catalogSchema);
   ajv.addSchema(commercialOfferSchema);
   ajv.addSchema(contractFeeLinksSchema);
+  ajv.addSchema(publicProductFeedSchema);
   const validateErpData = ajv.compile(erpViewSchema);
   const validateAdminResponse = ajv.compile(adminCatalogSchema);
   const validateHealth = ajv.compile(healthSchema);
@@ -229,9 +352,76 @@ export function createConsumerGateway(
   const validateSettlementLedgerV2 = ajv.compile(settlementLedgerSchemaV2);
   const validateKakaoReference = ajv.compile(kakaoCatalogReferenceSchema);
   const validateInternalAiReference = ajv.compile(internalAiReferenceSchema);
+  const validatePublicProductFeed = ajv.getSchema('https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json#/$defs/feed')!;
+  const validatePublicProductQuote = ajv.getSchema('https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json#/$defs/quote')!;
   const validateContractFeeLinksRequest = ajv.getSchema('https://freepass.teamjpk.com/contracts/contract-fee-links-v1.schema.json#/$defs/request')!;
   const validateContractFeeLinksResponse = ajv.getSchema('https://freepass.teamjpk.com/contracts/contract-fee-links-v1.schema.json#/$defs/response')!;
   app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
+  const readPublicSnapshot = async (consumerId: string, cacheKey: string) => {
+    const now = Date.now();
+    sweepExpired(publicCache, now);
+    const cached = publicCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) return cached.value;
+    if (!compatReader) throw new Error('PUBLIC_CATALOG_READER_UNAVAILABLE');
+    const value = await withPublicTimeout(compatReader.read(consumerId));
+    publicCache.set(cacheKey, { expiresAt: now + PUBLIC_CACHE_MS, value });
+    trimOldest(publicCache, PUBLIC_CACHE_MAX_ENTRIES);
+    return value;
+  };
+  const publicRouteAllowed = (
+    request: { routeOptions?: { url?: string | undefined }; url: string; ip?: string },
+    reply: { header(name: string, value: string): unknown; code(statusCode: number): { send(payload: unknown): unknown } }
+  ) => {
+    const route = request.routeOptions?.url ?? request.url.split('?')[0]!;
+    const key = `${publicClientIp(request)}:${route}`;
+    if (!publicRateLimited(key)) return true;
+    reply.header('Retry-After', String(PUBLIC_RETRY_AFTER_SECONDS));
+    reply.code(429).send({ error: '요청이 너무 많습니다.' });
+    return false;
+  };
+  app.get<{ Querystring: PublicCatalogQuery }>('/v1/public/catalog/feed', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!publicRouteAllowed(request, reply)) return;
+    try {
+      const { p, wl } = normalizePublicQuery(request.query, registered);
+      const consumerId = publicConsumerIdFromWhitelabel(wl);
+      const snapshot = await readPublicSnapshot(consumerId, `${consumerId}:${p ?? ''}:${wl ?? ''}`);
+      const response = buildPublicProductFeed(snapshot, { p, wl });
+      if (response.products.length > 5000 || responseBytes(response) > PUBLIC_FEED_MAX_BYTES || !validatePublicProductFeed(response)) {
+        return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
+      }
+      return response;
+    } catch (error) {
+      const statusCode = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode?: unknown }).statusCode) : 503;
+      if (statusCode === 400) return reply.code(400).send({ error: '잘못된 공개 상품 요청입니다.' });
+      if (statusCode === 404) return reply.code(404).send({ error: '현재 안내 가능한 공개 채널이 아닙니다.' });
+      return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
+    }
+  });
+  app.get<{ Querystring: PublicCatalogQuery }>('/v1/public/catalog/quote', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!publicRouteAllowed(request, reply)) return;
+    try {
+      const { p, wl, code } = normalizePublicQuery(request.query, registered);
+      if (!code) return reply.code(400).send({ error: '상품 코드가 없습니다.' });
+      const consumerId = publicConsumerIdFromWhitelabel(wl);
+      const snapshot = await readPublicSnapshot(consumerId, `${consumerId}:${p ?? ''}:${wl ?? ''}`);
+      const response = buildPublicProductQuote(snapshot, code, { p, wl });
+      if (!response) return reply.code(404).send({ error: '현재 안내 가능한 상품이 아닙니다.' });
+      if (responseBytes(response) > PUBLIC_QUOTE_MAX_BYTES || !validatePublicProductQuote(response)) {
+        return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
+      }
+      return response;
+    } catch (error) {
+      if (error instanceof Error && error.message === 'PUBLIC_QUOTE_CODE_REQUIRED') {
+        return reply.code(400).send({ error: '상품 코드가 없습니다.' });
+      }
+      const statusCode = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode?: unknown }).statusCode) : 503;
+      if (statusCode === 400) return reply.code(400).send({ error: '잘못된 공개 상품 요청입니다.' });
+      if (statusCode === 404) return reply.code(404).send({ error: '현재 안내 가능한 공개 채널이 아닙니다.' });
+      return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
+    }
+  });
   const photoHandler = async (request: { params: { consumerId: string; productId: string; index?: string }; headers: { authorization?: string | undefined }; id: string }, reply: import('fastify').FastifyReply) => {
     reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
     const binding = registered.get(request.params.consumerId);
