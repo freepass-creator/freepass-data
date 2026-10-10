@@ -2,6 +2,7 @@ import type { VehicleAsset, VehicleExternalId } from '../domain/catalog.js';
 import type { CanonicalSourceBinding } from '../domain/canonicalization.js';
 import {
   addExternalId,
+  newVehicleUid,
   resolveVehicleUid,
   type VehicleUidClock,
   type VehicleUidRandom,
@@ -35,6 +36,9 @@ export type VehicleUidMigrationSummary = {
   totalProducts: number;
   totalAssets: number;
   totalItems: number;
+  graphComponents: number;
+  holdGraphComponents: number;
+  holdProducts: number;
   byKind: Record<VehicleUidMigrationItem['kind'], number>;
   byReason: Record<string, number>;
   invariants: {
@@ -64,6 +68,7 @@ export type PlanVehicleUidMigrationInput = {
   clock: VehicleUidClock;
   random: VehicleUidRandom;
   observedAt: string;
+  processingOrder?: string[];
 };
 
 const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
@@ -71,6 +76,7 @@ const hash = (value: unknown) => stableDigest(value).slice(0, 12);
 const uidHash = (value: unknown) => `va_${stableDigest(value).slice(0, 26).toUpperCase()}`;
 const hasOwn = (object: Record<string, unknown>, key: string) => Object.hasOwn(object, key);
 const active = (id: VehicleExternalId, at: string) => id.validFrom <= at && (id.validTo === undefined || id.validTo === null || id.validTo > at);
+const supplierScoped = (kind: VehicleExternalId['kind']) => kind === 'SUPPLIER_VEHICLE' || kind === 'SHEET_ROW';
 
 function field(product: VehicleUidMigrationProduct, names: string[]) {
   for (const name of names) {
@@ -127,6 +133,58 @@ function candidateExternalIds(ids: ReturnType<typeof productIds>, observedAt: st
   }
   if (ids.plate) out.push({ kind: 'PLATE', value: ids.plate, validFrom: observedAt, source: 'vehicle-uid-migration-plan' });
   return sortExternalIds(out);
+}
+
+function identifierKey(id: VehicleExternalId) {
+  return `${id.kind}:${supplierScoped(id.kind) ? id.supplierCode ?? '' : ''}:${id.value}`;
+}
+
+function identifierNamespace(id: VehicleExternalId) {
+  return `${id.kind}:${supplierScoped(id.kind) ? id.supplierCode ?? '' : ''}`;
+}
+
+function productCandidate(product: VehicleUidMigrationProduct, observedAt: string) {
+  const ids = productIds(product);
+  return {
+    ids,
+    externalIds: candidateExternalIds(ids, observedAt),
+    candidate: {
+      ...(ids.plate ? { plate: ids.plate } : {}),
+      ...(ids.vin ? { vin: ids.vin } : {}),
+      ...(ids.supplierCode ? { supplierCode: ids.supplierCode } : {}),
+      ...(ids.supplierVehicleId ? { supplierVehicleId: ids.supplierVehicleId } : {}),
+    },
+  };
+}
+
+class UnionFind {
+  private parent = new Map<string, string>();
+  add(x: string) {
+    if (!this.parent.has(x)) this.parent.set(x, x);
+  }
+  find(x: string): string {
+    this.add(x);
+    const p = this.parent.get(x)!;
+    if (p === x) return x;
+    const root = this.find(p);
+    this.parent.set(x, root);
+    return root;
+  }
+  union(a: string, b: string) {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra !== rb) this.parent.set(rb, ra);
+  }
+  groups() {
+    const out = new Map<string, string[]>();
+    for (const key of this.parent.keys()) {
+      const root = this.find(key);
+      const list = out.get(root) ?? [];
+      list.push(key);
+      out.set(root, list);
+    }
+    return [...out.values()];
+  }
 }
 
 function upsertAssetExternalIdsItem(items: VehicleUidMigrationItem[], assetId: string, externalIds: VehicleExternalId[]) {
@@ -257,104 +315,118 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
     }
   }
 
-  const workingAssets = structuredClone(input.assets);
-
-  for (const [productKey, product] of Object.entries(input.products).sort(([a], [b]) => a.localeCompare(b))) {
-    const ids = productIds(product);
-    const reasons: string[] = [];
+  const productEntries = input.processingOrder
+    ? [
+        ...input.processingOrder.filter(key => hasOwn(input.products, key)).map(key => [key, input.products[key]!] as [string, VehicleUidMigrationProduct]),
+        ...Object.entries(input.products).filter(([key]) => !input.processingOrder!.includes(key)),
+      ]
+    : Object.entries(input.products);
+  const productInfo = new Map(productEntries.map(([key, product]) => [key, productCandidate(product, input.observedAt)]));
+  const assetById = new Map(input.assets.map(asset => [asset.id, asset]));
+  const uf = new UnionFind();
+  for (const [key, product] of productEntries) {
     if (hasOwn(product, 'vehicle_uid') && text(product.vehicle_uid)) continue;
-    if (isPrefixProductKey(productKey)) reasons.push('PREFIX_PRODUCT_KEY_REQUIRES_REVIEW');
-    if (isIancarProductKey(productKey)) reasons.push('IANCAR_PRODUCT_KEY_REQUIRES_REVIEW');
-    const samePlate = ids.plate ? plateProducts.get(ids.plate) ?? [] : [];
-    const suppliers = new Set(samePlate.map(x => x.supplier).filter(Boolean));
-    if (samePlate.length > 1 && suppliers.size > 1) reasons.push('PLATE_DUPLICATED_ACROSS_SUPPLIERS');
-
-    const matchedBindings = bindingsForProduct(input.bindings, productKey);
-    const candidate = {
-      ...(ids.plate ? { plate: ids.plate } : {}),
-      ...(ids.vin ? { vin: ids.vin } : {}),
-      ...(ids.supplierCode ? { supplierCode: ids.supplierCode } : {}),
-      ...(ids.supplierVehicleId ? { supplierVehicleId: ids.supplierVehicleId } : {}),
-    };
-    const resolution = resolveVehicleUid(candidate, workingAssets, {
-      now: input.observedAt,
-      clock: input.clock,
-      random: input.random,
-      uidOptions: { monotonic: false },
-    });
-    if (matchedBindings.length > 1) reasons.push('MULTIPLE_BINDINGS');
-    const bound = matchedBindings.length === 1 ? matchedBindings[0] : undefined;
-    const boundAsset = bound?.vehicleAssetId ? workingAssets.find(asset => asset.id === bound.vehicleAssetId) : undefined;
-    if (bound?.vehicleAssetId && !boundAsset) reasons.push('BINDING_TARGET_MISSING');
-    if (boundAsset && assetContradictsProduct(boundAsset, ids, input.observedAt)) reasons.push('BINDING_CONTRADICTS_PRODUCT');
-    if (boundAsset && (resolution.action !== 'LINK' || resolution.asset.id !== boundAsset.id)) reasons.push('BINDING_DISAGREES_WITH_RESOLVER');
-    if (resolution.action === 'HOLD' || resolution.action === 'UNKNOWN') reasons.push(resolution.reason);
-    if (ids.vin && resolution.action === 'LINK' && resolution.asset.vin && resolution.asset.vin.toUpperCase() !== ids.vin.toUpperCase()) {
-      reasons.push('VIN_CONTRADICTION');
+    const productNode = `product:${key}`;
+    uf.add(productNode);
+    const info = productInfo.get(key)!;
+    for (const id of info.externalIds) uf.union(productNode, `id:${identifierKey(id)}`);
+    for (const binding of bindingsForProduct(input.bindings, key)) {
+      if (binding.vehicleAssetId) uf.union(productNode, `asset:${binding.vehicleAssetId}`);
     }
+  }
+  for (const asset of input.assets) {
+    const assetNode = `asset:${asset.id}`;
+    uf.add(assetNode);
+    for (const id of normalizedActiveIds(asset, input.observedAt)) uf.union(assetNode, `id:${identifierKey(id)}`);
+  }
 
-    if (reasons.length) {
-      for (const reason of [...new Set(reasons)].sort()) {
-        items.push({ kind: 'HOLD', productKey, reason, public: { productHash: hash(productKey), reason } });
+  const componentPlans: Array<{ key: string; products: string[]; assetIds: string[]; ids: VehicleExternalId[]; reasons: string[] }> = [];
+  for (const nodes of uf.groups()) {
+    const products = nodes.filter(x => x.startsWith('product:')).map(x => x.slice('product:'.length)).sort();
+    if (!products.length) continue;
+    const assetIds = [...new Set(nodes.filter(x => x.startsWith('asset:')).map(x => x.slice('asset:'.length)))].sort();
+    const ids = products.flatMap(key => productInfo.get(key)?.externalIds ?? []);
+    for (const assetId of assetIds) {
+      const asset = assetById.get(assetId);
+      if (asset) ids.push(...normalizedActiveIds(asset, input.observedAt));
+    }
+    const key = [...new Set(ids.map(identifierKey))].sort()[0] ?? `product:${products[0]}`;
+    const reasons: string[] = [];
+    if (assetIds.length > 1) reasons.push('IDENTIFIER_POINTS_TO_DIFFERENT_ASSETS');
+    const valuesByNamespace = new Map<string, Set<string>>();
+    for (const id of ids) {
+      const set = valuesByNamespace.get(identifierNamespace(id)) ?? new Set<string>();
+      set.add(id.value);
+      valuesByNamespace.set(identifierNamespace(id), set);
+    }
+    for (const [namespace, values] of valuesByNamespace) {
+      if (values.size > 1) reasons.push(`${namespace.split(':')[0]}_CONFLICT`);
+    }
+    for (const productKey of products) {
+      const product = input.products[productKey]!;
+      const info = productInfo.get(productKey)!;
+      if (isPrefixProductKey(productKey)) reasons.push('PREFIX_PRODUCT_KEY_REQUIRES_REVIEW');
+      if (isIancarProductKey(productKey)) reasons.push('IANCAR_PRODUCT_KEY_REQUIRES_REVIEW');
+      const samePlate = info.ids.plate ? plateProducts.get(info.ids.plate) ?? [] : [];
+      const suppliers = new Set(samePlate.map(x => x.supplier).filter(Boolean));
+      if (samePlate.length > 1 && suppliers.size > 1) reasons.push('PLATE_DUPLICATED_ACROSS_SUPPLIERS');
+      const matchedBindings = bindingsForProduct(input.bindings, productKey);
+      if (matchedBindings.length > 1) reasons.push('MULTIPLE_BINDINGS');
+      const bound = matchedBindings.length === 1 ? matchedBindings[0] : undefined;
+      const boundAsset = bound?.vehicleAssetId ? assetById.get(bound.vehicleAssetId) : undefined;
+      if (bound?.vehicleAssetId && !boundAsset) reasons.push('BINDING_TARGET_MISSING');
+      if (boundAsset && assetContradictsProduct(boundAsset, info.ids, input.observedAt)) reasons.push('BINDING_CONTRADICTS_PRODUCT');
+      const resolution = resolveVehicleUid(info.candidate, input.assets, {
+        now: input.observedAt,
+        clock: input.clock,
+        random: input.random,
+        uidOptions: { monotonic: false },
+      });
+      if (boundAsset && (resolution.action !== 'LINK' || resolution.asset.id !== boundAsset.id)) reasons.push('BINDING_DISAGREES_WITH_RESOLVER');
+      if (resolution.action === 'HOLD' || resolution.action === 'UNKNOWN') reasons.push(resolution.reason);
+    }
+    componentPlans.push({ key, products, assetIds, ids: sortExternalIds(ids), reasons: [...new Set(reasons)].sort() });
+  }
+
+  const existingUidSet = new Set(input.assets.map(asset => asset.id));
+  const plannedUidSet = new Set(existingUidSet);
+  const cleanWithoutAsset = componentPlans.filter(component => component.reasons.length === 0 && component.assetIds.length === 0)
+    .sort((a, b) => a.key.localeCompare(b.key));
+  const newUidByComponentKey = new Map<string, string>();
+  for (const component of cleanWithoutAsset) {
+    let uid = newVehicleUid(input.clock, input.random, { monotonic: false });
+    if (plannedUidSet.has(uid)) uid = uidHash({ createdAt, componentKey: component.key, ids: component.ids.map(identifierKey) });
+    plannedUidSet.add(uid);
+    newUidByComponentKey.set(component.key, uid);
+  }
+
+  for (const component of componentPlans.sort((a, b) => a.key.localeCompare(b.key))) {
+    if (component.reasons.length) {
+      for (const productKey of component.products) {
+        for (const reason of ['GRAPH_COMPONENT_CONFLICT', ...component.reasons]) {
+          items.push({ kind: 'HOLD', productKey, reason, public: { productHash: hash(productKey), reason } });
+        }
       }
       continue;
     }
-
-    if (bound?.vehicleAssetId) {
-      const index = workingAssets.findIndex(asset => asset.id === bound.vehicleAssetId);
-      if (index >= 0) {
-        const before = workingAssets[index]!;
-        const after = candidateExternalIds(ids, input.observedAt).reduce((next, id) => addExternalId(next, id, input.observedAt), before);
-        workingAssets[index] = after;
-        if (input.assets.some(asset => asset.id === bound.vehicleAssetId)) {
-          const added = candidateExternalIds(ids, input.observedAt).filter(id =>
-            stableDigest(addExternalId(before, id, input.observedAt).externalIds ?? []) !== stableDigest(before.externalIds ?? [])
-          );
-          upsertAssetExternalIdsItem(items, bound.vehicleAssetId, added);
-        }
+    const uid = component.assetIds[0] ?? newUidByComponentKey.get(component.key)!;
+    const reason = component.assetIds[0] ? (component.products.some(productKey => bindingsForProduct(input.bindings, productKey).some(b => b.vehicleAssetId === uid)) ? 'SOURCE_BINDING' : 'PLATE_UNIQUE_ASSET') : 'PLANNED_NEW_UID';
+    if (component.assetIds[0]) {
+      const asset = assetById.get(uid);
+      if (asset) {
+        const added = component.ids.filter(id =>
+          stableDigest(addExternalId(asset, id, input.observedAt).externalIds ?? []) !== stableDigest(asset.externalIds ?? [])
+        );
+        upsertAssetExternalIdsItem(items, uid, added);
       }
+    }
+    for (const productKey of component.products) {
       items.push({
         kind: 'PRODUCT_SET_UID',
         productKey,
-        vehicleUid: bound.vehicleAssetId,
-        reason: 'SOURCE_BINDING',
-        public: { productHash: hash(productKey), vehicleUidHash: hash(bound.vehicleAssetId), reason: 'SOURCE_BINDING' },
-      });
-    } else if (resolution.action === 'LINK') {
-      const index = workingAssets.findIndex(asset => asset.id === resolution.vehicleUid);
-      if (index >= 0) {
-        const before = workingAssets[index]!;
-        const after = candidateExternalIds(ids, input.observedAt).reduce((next, id) => addExternalId(next, id, input.observedAt), before);
-        workingAssets[index] = after;
-        if (input.assets.some(asset => asset.id === resolution.vehicleUid)) {
-          const added = candidateExternalIds(ids, input.observedAt).filter(id =>
-            stableDigest(addExternalId(before, id, input.observedAt).externalIds ?? []) !== stableDigest(before.externalIds ?? [])
-          );
-          upsertAssetExternalIdsItem(items, resolution.vehicleUid, added);
-        }
-      }
-      items.push({
-        kind: 'PRODUCT_SET_UID',
-        productKey,
-        vehicleUid: resolution.vehicleUid,
-        reason: input.assets.some(asset => asset.id === resolution.vehicleUid) ? 'PLATE_UNIQUE_ASSET' : 'CREATED_IN_PLAN',
-        public: {
-          productHash: hash(productKey),
-          vehicleUidHash: hash(resolution.vehicleUid),
-          reason: input.assets.some(asset => asset.id === resolution.vehicleUid) ? 'PLATE_UNIQUE_ASSET' : 'CREATED_IN_PLAN',
-        },
-      });
-    } else if (resolution.action === 'CREATE') {
-      const vehicleUid = workingAssets.some(asset => asset.id === resolution.vehicleUid)
-        ? uidHash({ createdAt, productKey, candidate, externalIds: resolution.externalIds })
-        : resolution.vehicleUid;
-      workingAssets.push(plannedAssetFromCreate(vehicleUid, ids, resolution.externalIds, createdAt));
-      items.push({
-        kind: 'PRODUCT_SET_UID',
-        productKey,
-        vehicleUid,
-        reason: 'PLANNED_NEW_UID',
-        public: { productHash: hash(productKey), vehicleUidHash: hash(vehicleUid), reason: 'PLANNED_NEW_UID' },
+        vehicleUid: uid,
+        reason,
+        public: { productHash: hash(productKey), vehicleUidHash: hash(uid), reason },
       });
     }
   }
@@ -370,6 +442,9 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
     totalProducts: Object.keys(input.products).length,
     totalAssets: input.assets.length,
     totalItems: items.length,
+    graphComponents: componentPlans.length,
+    holdGraphComponents: componentPlans.filter(component => component.reasons.length > 0).length,
+    holdProducts: new Set(items.filter(item => item.kind === 'HOLD').map(item => item.productKey)).size,
     byKind,
     byReason,
     invariants: {

@@ -48,6 +48,7 @@ const plan = (input: {
   assets?: VehicleAsset[];
   bindings?: CanonicalSourceBinding[];
   rand?: number;
+  processingOrder?: string[];
 }) => planVehicleUidMigration({
   products: input.products,
   assets: input.assets ?? [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001', 'TEST-FAKE-VIN-001')],
@@ -55,6 +56,7 @@ const plan = (input: {
   clock: fixedClock,
   random: random(input.rand ?? 0.1),
   observedAt: '2026-10-10T00:00:00.000Z',
+  ...(input.processingOrder ? { processingOrder: input.processingOrder } : {}),
 });
 const permutations = <T,>(values: T[]): T[][] => {
   if (values.length <= 1) return [values];
@@ -157,7 +159,7 @@ describe('planVehicleUidMigration', () => {
     expect(a.planDigest).not.toBe(c.planDigest);
   });
 
-  it('links later products to UID created earlier in the same plan by VIN and plate', () => {
+  it('assigns one graph UID to same-plate and same-VIN products', () => {
     const result = plan({
       products: {
         p1: product('TEST-FAKE-NEW-001', { vin: 'TEST-FAKE-VIN-NEW-001' }),
@@ -167,10 +169,10 @@ describe('planVehicleUidMigration', () => {
     const setItems = result.items.filter(item => item.kind === 'PRODUCT_SET_UID');
     expect(setItems).toHaveLength(2);
     expect(setItems[0]).toEqual(expect.objectContaining({ productKey: 'p1', reason: 'PLANNED_NEW_UID' }));
-    expect(setItems[1]).toEqual(expect.objectContaining({ productKey: 'p2', reason: 'CREATED_IN_PLAN', vehicleUid: setItems[0]!.vehicleUid }));
+    expect(setItems[1]).toEqual(expect.objectContaining({ productKey: 'p2', reason: 'PLANNED_NEW_UID', vehicleUid: setItems[0]!.vehicleUid }));
   });
 
-  it('links later products to UID created earlier in the same plan by VIN even without plate', () => {
+  it('assigns one graph UID by VIN even without plate', () => {
     const result = plan({
       products: {
         p1: product('TEST-FAKE-NEW-001', { vin: 'TEST-FAKE-VIN-NEW-001' }),
@@ -179,21 +181,25 @@ describe('planVehicleUidMigration', () => {
     });
     const setItems = result.items.filter(item => item.kind === 'PRODUCT_SET_UID');
     expect(setItems).toHaveLength(2);
-    expect(setItems[1]).toEqual(expect.objectContaining({ productKey: 'p2', reason: 'CREATED_IN_PLAN', vehicleUid: setItems[0]!.vehicleUid }));
+    expect(setItems[1]).toEqual(expect.objectContaining({ productKey: 'p2', reason: 'PLANNED_NEW_UID', vehicleUid: setItems[0]!.vehicleUid }));
   });
 
-  it('accumulates LINKed product identifiers into working assets across all p1 p2 p3 input orders', () => {
+  it('puts p1 plate A, p2 VIN V, p3 plate A plus VIN V in one order-independent component for all input orders', () => {
     const entries: Array<[string, VehicleUidMigrationProduct]> = [
       ['p1', product('TEST-FAKE-A')],
-      ['p2', product('TEST-FAKE-A', { vin: 'TEST-FAKE-VIN-V' })],
-      ['p3', { vin: 'TEST-FAKE-VIN-V', provider_company_code: 'TEST' }],
+      ['p2', { vin: 'TEST-FAKE-VIN-V', provider_company_code: 'TEST' }],
+      ['p3', product('TEST-FAKE-A', { vin: 'TEST-FAKE-VIN-V' })],
     ];
+    let firstUid = '';
     for (const order of permutations(entries)) {
-      const result = plan({ products: Object.fromEntries(order), assets: [] });
+      const result = plan({ products: Object.fromEntries(order), assets: [], processingOrder: order.map(([key]) => key) });
       const setItems = result.items.filter(item => item.kind === 'PRODUCT_SET_UID');
       expect(setItems).toHaveLength(3);
       expect(new Set(setItems.map(item => item.vehicleUid)).size).toBe(1);
+      firstUid ||= setItems[0]!.vehicleUid;
+      expect(setItems[0]!.vehicleUid).toBe(firstUid);
       expect(result.items.filter(item => item.kind === 'HOLD')).toHaveLength(0);
+      expect(result.summary.graphComponents).toBe(1);
     }
   });
 
@@ -215,20 +221,36 @@ describe('planVehicleUidMigration', () => {
     }));
   });
 
-  it('holds a product that would connect two different working assets by plate and VIN', () => {
+  it('holds every product in a component that connects two different existing assets by plate and VIN', () => {
     const result = plan({
       products: {
         p1: product('TEST-FAKE-A'),
         p2: { vin: 'TEST-FAKE-VIN-B', provider_company_code: 'TEST' },
         p3: product('TEST-FAKE-A', { vin: 'TEST-FAKE-VIN-B' }),
       },
-      assets: [],
+      assets: [asset('TEST-FAKE-UID-A', 'TEST-FAKE-A'), asset('TEST-FAKE-UID-B', null, 'TEST-FAKE-VIN-B')],
     });
-    expect(result.items).toContainEqual(expect.objectContaining({
-      kind: 'HOLD',
-      productKey: 'p3',
-      reason: 'IDENTIFIER_POINTS_TO_DIFFERENT_ASSETS',
-    }));
+    const holdProducts = new Set(result.items.filter(item => item.kind === 'HOLD').map(item => item.productKey));
+    expect(holdProducts).toEqual(new Set(['p1', 'p2', 'p3']));
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'p1', reason: 'GRAPH_COMPONENT_CONFLICT' }));
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'p2', reason: 'IDENTIFIER_POINTS_TO_DIFFERENT_ASSETS' }));
+    expect(result.summary.holdGraphComponents).toBe(1);
+    expect(result.summary.holdProducts).toBe(3);
+  });
+
+  it('holds every product in a component with two active plate values', () => {
+    const result = plan({
+      products: {
+        p1: product('TEST-FAKE-A'),
+        p2: product('TEST-FAKE-B'),
+        p3: product('TEST-FAKE-A', { external: 'ignored' }),
+      },
+      assets: [asset('TEST-FAKE-UID-A', 'TEST-FAKE-A'), asset('TEST-FAKE-UID-B', 'TEST-FAKE-B')],
+      bindings: [binding('p1', 'TEST-FAKE-UID-A'), binding('p2', 'TEST-FAKE-UID-A'), binding('p3', 'TEST-FAKE-UID-A')],
+    });
+    const holdProducts = new Set(result.items.filter(item => item.kind === 'HOLD').map(item => item.productKey));
+    expect(holdProducts).toEqual(new Set(['p1', 'p2', 'p3']));
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'p1', reason: 'PLATE_CONFLICT' }));
   });
 
   it('creates separate planned UIDs when VIN differs', () => {
@@ -243,6 +265,21 @@ describe('planVehicleUidMigration', () => {
     expect(setItems).toHaveLength(2);
     expect(setItems[0]!.vehicleUid).not.toBe(setItems[1]!.vehicleUid);
     expect(setItems.map(item => item.reason)).toEqual(['PLANNED_NEW_UID', 'PLANNED_NEW_UID']);
+  });
+
+  it('keeps unrelated graph components independent', () => {
+    const result = plan({
+      products: {
+        p1: product('TEST-FAKE-NEW-A', { vin: 'TEST-FAKE-VIN-NEW-A' }),
+        p2: product('TEST-FAKE-NEW-B', { vin: 'TEST-FAKE-VIN-NEW-B' }),
+      },
+      assets: [],
+      rand: 0.1,
+    });
+    const setItems = result.items.filter(item => item.kind === 'PRODUCT_SET_UID');
+    expect(setItems).toHaveLength(2);
+    expect(new Set(setItems.map(item => item.vehicleUid)).size).toBe(2);
+    expect(result.summary.graphComponents).toBe(2);
   });
 
   it('keeps the same digest when product input key order changes', () => {

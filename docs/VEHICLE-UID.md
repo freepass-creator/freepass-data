@@ -168,6 +168,8 @@ ERP5·카톡이 멈추지 않게 읽기 쪽을 먼저 바꾼다. 1단계는 기�
 
 범위: 이 PR은 읽기 전용 계획기와 분석 문서까지만 포함한다. 운영 적용기, Firestore 쓰기, `products`/`catalog_vehicle_assets` 변경 코드는 없다. 공개 문서와 stdout에는 상품 키, 차량번호, VIN, 시트 ID를 싣지 않고 sha256 앞 12자리 해시와 건수만 둔다. 테스트 데이터의 식별자는 `TEST-FAKE-*`만 쓴다.
 
+계획기는 순차 단건 확정이 아니라 식별자 그래프를 먼저 만든다. 상품이 가진 번호·VIN·공급사 범위 차량 ID·시트 행·기존 binding asset과 기존 asset의 활성 식별자를 노드로 두고 같은 상품/asset 안의 식별자를 union-find로 묶은 뒤, 묶음별로 기존 asset 둘 이상 또는 같은 종류 식별자 값 충돌을 판정한다. 충돌 묶음은 선행 상품까지 모두 `GRAPH_COMPONENT_CONFLICT` HOLD로 남기며, 깨끗한 묶음은 기존 asset 하나면 그 UID로 LINK하고 asset이 없으면 묶음 대표 키 정렬순으로 계획 생성 시 UID를 고정한다. 적용은 HOLD 묶음 제외, HOLD 목록은 확인 동선으로 보낸다.
+
 실행:
 
 ```powershell
