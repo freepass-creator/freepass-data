@@ -529,6 +529,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-10 폐기된 AutoPlus 1회성 보정 실행코드 제거
+
+- 목적/기준 revision: `67a372e2bfe2f81f63e962753918697de9891703`에서 이미 2026-09-29 적용·퇴역한 보정기의 혼동 가능한 실행 입구를 제거한다. Academy development READY, 새 자산 없음.
+- 변경: `repair:autoplus-policy` npm 명령, job, Firestore adapter, 퇴역 전용 assert 및 boundary의 해당 job/fieldDelete 예외만 삭제했다. 일반 정책 invariant·제품 범위 검사와 applied run ID는 보존한다. 새 대체 보정기는 없다.
+- 참조/운영: 두 삭제 파일의 호출은 해당 npm/job과 퇴역 테스트뿐이다. `050e382` 운영 read의 consumer-server 진입점은 이를 import하지 않는다. Docker는 새 build에서 src를 컴파일하며 host dist를 복사하지 않는다. 현행 shared-sheet workflow가 import하는 옛 delivery helper와 미병합 PR/원문/dirty worktree는 그대로 둔다.
+- 검증: 정책 invariant·제품 범위 및 npm/job/adapter 입구 부재 8 PASS, 전체 Vitest 2,133 PASS / 외부환경 조건부 16 SKIP, build·architecture·Data Access boundary PASS, standards 33개 schema/15 PASS(기존 PARTIAL 유지), 실제 로컬 read-runtime smoke 13 PASS. 최종 exact commit·CI·Claude 결과는 이 작업 PR의 통합 영수증에 고정한다.
+- 남음: 운영 image `050e382`는 변경하지 않으며 배포·DB·IAM·ACTIVE·외부 저장소 변경 0회. 현재 가격/정책의 RP binding 재발급이나 정정은 별도 작업이다.
+- 복원/next_start_here: 이 폐기 commit의 revert로 코드만 복원할 수 있다. 복원하더라도 1회성 보정의 재실행 권한은 없다. 현재 main과 PR 검증을 확인하고 실제 미사용이 입증된 다음 후보만 이어서 폐기한다.
+
 ### 2026-10-10 PR427 손오공 RAW 크기 안전장치 — 운영 전환 HOLD
 
 - 목적/기준 revision: `4b9cca3172d23da94a90df98bcd8850b0bc44229`에서 첫 차량에 전체 목록 envelope가 집중되는 문제를 기존 PR427 범위에서 해소한다.

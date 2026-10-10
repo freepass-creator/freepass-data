@@ -8,7 +8,6 @@ const allowedRawInfraConsumers = new Set([
   'src/api/data-access-runtime.ts',
   'src/jobs/data-access-runtime.ts',
   'src/jobs/apply-iancar-policy-sync.ts',
-  'src/jobs/apply-autoplus-policy-repair.ts',
   'src/jobs/apply-billincar-policy-repair.ts',
   'src/jobs/apply-vehicle-name-reference-repair.ts'
 ]);
@@ -122,7 +121,6 @@ const requiredGatewayUsage = new Map([
   ['src/jobs/check-consumer-readiness.ts', ['runtime.readiness(']],
   ['src/jobs/check-central-firestore.ts', ['runtime.access.read(']],
   ['src/jobs/apply-iancar-policy-sync.ts', ['runtime.access.write(']],
-  ['src/jobs/apply-autoplus-policy-repair.ts', ['runtime.access.write(']],
   ['src/jobs/apply-billincar-policy-repair.ts', ['runtime.access.write(']],
   ['src/jobs/apply-vehicle-name-reference-repair.ts', ['runtime.access.write(']]
 ]);
@@ -143,8 +141,6 @@ for (const [relativeFile, required] of requiredGatewayUsage) {
 // whole-document replacement must match a reviewed call signature below (receiver and
 // target document for set()); a new call, a changed target, or a stale entry fails. Comments and string contents are ignored.
 const preservationAllowlist = [
-  { kind: 'fieldDelete', file: 'src/infra/autoplus-policy-repair-firestore.ts', call: 'age_lowering_cost: FieldValue.delete(),',
-    reason: 'retired one-time repair (run 2026-09-29T04-44-30-502Z); refuses before any Firebase access' },
   { kind: 'fieldDelete', file: 'src/infra/iancar-publication-withdrawal-firestore.ts',
     call: 'const patch = row.exists ? Object.fromEntries(Object.keys(row.patch).map(key => [key, key in row.data ? row.data[key] : FieldValue.delete()]))',
     reason: 'restore from typed backup; PR1c narrows this' },
