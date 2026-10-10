@@ -315,6 +315,21 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.raw.data).toEqual(input.data);
   });
 
+  it('keeps private fee HOLD as an intentional exception to public reader scrubbing', () => {
+    const input = fixture();
+    input.data.price = { '24': { rent: '750000', deposit: 0, fee_memo: 'private review marker' } };
+    const result = mapErp5Product(input);
+    expect(result.candidate.issues).toEqual(expect.arrayContaining([
+      'PRIVATE_PRICE_TERMS_REVIEW_REQUIRED',
+      'UNKNOWN_DEPOSIT',
+    ]));
+    expect(result.candidate.priceTerms[0]).toMatchObject({
+      monthlyRent: { amount: 750000 },
+      deposit: null,
+      depositState: 'UNKNOWN',
+    });
+  });
+
   it('requires the missing Catalog commercial-type contract even with matching source evidence', () => {
     const input = fixture();
     Object.assign(input.data, { provider_company_code: 'RP012', source_bucket: 'SON_NO_KONG', product_type: '오공구독' });

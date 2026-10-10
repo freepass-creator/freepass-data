@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import catalogSchema from '../contracts/catalog-v1.schema.json' with { type: 'json' };
-import { withCompatibilityDepositEvidence, withoutInternalFeeFields } from '../src/infra/erp5-compat-catalog-reader.js';
+import { buildCompatCatalogProducts, withCompatibilityDepositEvidence, withoutInternalFeeFields } from '../src/infra/erp5-compat-catalog-reader.js';
 import {
   CONSUMER_SWITCH_REGISTRY,
   evaluateConsumerCutover,
@@ -259,10 +260,13 @@ describe('consumer cutover registry', () => {
       supplierBillingFee: 1,
       channelPayoutFee: 2,
       salesCommission: 3,
+      fee: 4,
+      internalEconomicsTermsByCommission: 'private',
       partnerCommissionMemo: 'private',
       fee_memo: 'private',
       price: {
-        '12': { rent: 500000, deposit: 1000000, fee: 100, commission: 200, fee_memo: 'private' },
+        '12': { rent: '500000', deposit: 1000000, fee: 100, commission: 200, fee_memo: 'private',
+          supplierBillingFee: 300, channelPayoutFee: 400, salesCommission: 500, internalEconomicsTerms: 'private' },
       },
     };
     const responseProduct = withoutInternalFeeFields(withCompatibilityDepositEvidence(source));
@@ -272,10 +276,31 @@ describe('consumer cutover registry', () => {
     expect(serialized).not.toContain('supplierBillingFee');
     expect(serialized).not.toContain('channelPayoutFee');
     expect(serialized).not.toContain('salesCommission');
+    expect(serialized).not.toContain('internalEconomicsTermsByCommission');
     expect(serialized).not.toContain('partnerCommissionMemo');
     expect(serialized).not.toContain('fee_memo');
     expect(serialized).not.toContain('"fee"');
+    expect(serialized).not.toContain('"billing"');
+    expect(serialized).not.toContain('"payout"');
+    expect(serialized).not.toContain('"fee"');
     expect(serialized).not.toContain('"commission"');
+  });
+
+  it('builds the actual reader products payload through the scrubbed compatibility function', () => {
+    const products = buildCompatCatalogProducts({
+      P1: { provider_company_code: 'RP004', product_type: '중고렌트',
+        supplierBillingFee: 1, channelPayoutFee: 2, salesCommission: 3, fee: 4, topLevelCommissionName: 'private',
+        price: { '12': { rent: '100000', deposit: 1000000, supplierBillingFee: 5, channelPayoutFee: 6,
+          salesCommission: 7, fee: 8, commission: 9, fee_memo: 'private' } } },
+    }, '2026-10-10T00:00:00.000Z');
+    expect(products.P1!.price).toMatchObject({ '12': { rent: 100000, deposit: 1000000, depositState: 'KNOWN' } });
+    const serialized = JSON.stringify(products);
+    for (const blocked of ['supplierBillingFee', 'channelPayoutFee', 'salesCommission', 'fee_memo',
+      'topLevelCommissionName', '"fee"', '"commission"']) expect(serialized).not.toContain(blocked);
+    for (const kept of ['deposit', 'rent', 'depositState', 'depositStatusLabel', 'depositEvidenceReason']) expect(serialized).toContain(kept);
+
+    const source = readFileSync(new URL('../src/infra/erp5-compat-catalog-reader.ts', import.meta.url), 'utf8');
+    expect(source).toMatch(/products:\s*buildCompatCatalogProducts\(asMap\(products\), observedAt\)/);
   });
 
   it('requires deposit state in the existing consumer price-term contract after a legacy-shape read', () => {

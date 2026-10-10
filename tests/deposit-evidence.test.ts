@@ -184,4 +184,36 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
       expect([term.depositState, term.deposit?.amount ?? null]).toEqual([c.state, c.amount]);
     }
   });
+
+  it('keeps reference, compatibility, and mapper equivalent across product, note, term, deposit, and rent forms', () => {
+    const productTypes = ['픽업구독', '오공구독', '오플구독', '중고렌트', '재렌트', '신차렌트'];
+    const notes = ['월 대여료 × 약정연수 (최대 3개월)', '국산: 월 대여료×2', '수입: 12개월 대여료×3 · 18개월↑ ×6', ''];
+    const terms = [6, 12, 15, 17, 18, 24, 36];
+    const sourceAmounts: unknown[] = [0, '0', undefined, null, '', 500000];
+    const rents: unknown[] = [100000, '100000'];
+    const stateAmount = (state: unknown, amount: unknown) => [state, amount ?? null];
+    for (const productType of productTypes) for (const note of notes) for (const termMonths of terms) {
+      for (const sourceAmount of sourceAmounts) for (const rent of rents) {
+        const priceKey = String(termMonths);
+        const sourceRow = sourceAmount === undefined ? { rent } : { rent, deposit: sourceAmount };
+        const base = { supplierId: 'RP012', productType, note, termMonths, monthlyRent: 100000, sourceAmount };
+        const reference = resolveReferenceDeposit(base);
+        const compat = (withCompatibilityDepositEvidence({ provider_company_code: 'RP012', product_type: productType,
+          deposit_note: note, price: { [priceKey]: sourceRow } }).price as Record<string, Record<string, unknown>>)[priceKey]!;
+        const mapped = mapErp5Product({ projectId: 'freepasserp5', collection: 'products',
+          documentId: `p-${productType}-${note || 'none'}-${termMonths}-${String(sourceAmount)}-${String(rent)}`.replace(/[^\w.-]/g, '_'),
+          sourceRevision: 'r', observedAt: '2026-10-10T00:00:00.000Z',
+          data: { car_number: '000가0000', maker: '제조사', model: '모델', provider_company_code: 'RP012',
+            product_type: productType, vehicle_status: '출고가능', status_kind: '가용', listable: true,
+            deposit_note: note, price: { [priceKey]: sourceRow } } });
+        const term = mapped.candidate.priceTerms[0]!;
+        expect(stateAmount(compat.depositState, compat.deposit), `${productType}/${note}/${termMonths}/${String(sourceAmount)}/${String(rent)}`)
+          .toEqual(stateAmount(reference.depositState, reference.depositAmount));
+        // Private fee/commission fields intentionally make mapper candidates UNKNOWN/HOLD; this table excludes that exception.
+        expect(stateAmount(term.depositState, term.deposit?.amount), `${productType}/${note}/${termMonths}/${String(sourceAmount)}/${String(rent)}`)
+          .toEqual(stateAmount(reference.depositState, reference.depositAmount));
+        expect(compat.rent).toBe(100000);
+      }
+    }
+  });
 });

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
-import { depositStatusLabel, hasConflictingPaidDeposit, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
+import { depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 
 type Rec = Record<string, unknown>;
 
@@ -78,28 +78,37 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
   return { ...product, price: Object.fromEntries(Object.entries(price).map(([key, value]) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return [key, value];
     const row = value as Rec;
+    const parsed = parseErp5CompatibilityPriceKey(key);
     const evidence = product.provider_company_code === 'RP031' ? readIancarPublishedDeposit(product, key, now)
       : resolveDepositWithRuleNote({ supplierId: product.provider_company_code, productType: product.product_type,
       note: product.deposit_note, depositFree: product.deposit_free, sourceAmount: row.deposit,
-      termMonths: Number(String(key).split('_')[0]), monthlyRent: row.rent, hasPositivePaidDeposit: paid });
-    return [key, { ...row, deposit: evidence.amount, depositState: evidence.state,
+      termMonths: parsed?.months, monthlyRent: normalizeErp5CompatibilityInteger(row.rent), hasPositivePaidDeposit: paid });
+    return [key, { ...row, rent: normalizeErp5CompatibilityInteger(row.rent) ?? row.rent,
+      deposit: evidence.amount, depositState: evidence.state,
       depositStatusLabel: depositStatusLabel(evidence.state, row.deposit, product.deposit_note),
       depositEvidenceReason: evidence.reason }];
   })) };
 }
 
 export function withoutInternalFeeFields(product: Rec): Rec {
-  const blockedTop = new Set(['internalEconomicsTerms', 'supplierBillingFee', 'channelPayoutFee', 'salesCommission', 'fee_memo']);
-  const cleanTop = ([key]: [string, unknown]) => !blockedTop.has(key) && !key.toLowerCase().includes('commission');
+  const blockedName = /fee|commission|billing|payout|economics/i;
+  const cleanTop = ([key]: [string, unknown]) => !blockedName.test(key);
   const cleanPriceRow = (row: unknown) => {
     if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
-    return Object.fromEntries(Object.entries(row as Rec).filter(([key]) => !['fee', 'commission', 'fee_memo'].includes(key)));
+    return Object.fromEntries(Object.entries(row as Rec).filter(([key]) => !blockedName.test(key)));
   };
   const next = Object.fromEntries(Object.entries(product).filter(cleanTop)) as Rec;
   if (next.price && typeof next.price === 'object' && !Array.isArray(next.price)) {
     next.price = Object.fromEntries(Object.entries(next.price as Rec).map(([key, row]) => [key, cleanPriceRow(row)]));
   }
   return next;
+}
+
+export function buildCompatCatalogProducts(asMapProducts: Record<string, Rec>, observedAt: string): Record<string, Rec> {
+  return Object.fromEntries(Object.entries(asMapProducts).map(([id, product]) => [
+    id,
+    withoutInternalFeeFields(withCompatibilityDepositEvidence(product, observedAt)),
+  ]));
 }
 
 /**
@@ -175,7 +184,7 @@ export class FirestoreCatalogCompatibilityReader {
     return {
       schema: 'freepass-data.catalog-compat/v1',
       data: {
-        products: Object.fromEntries(Object.entries(asMap(products)).map(([id, product]) => [id, withoutInternalFeeFields(withCompatibilityDepositEvidence(product, observedAt))])),
+        products: buildCompatCatalogProducts(asMap(products), observedAt),
         policies: asMap(policies),
         ...(get('partner') ? { partners: asMap(get('partner')!) } : {}),
         ...(get('user') ? { users: asMap(get('user')!) } : {}),

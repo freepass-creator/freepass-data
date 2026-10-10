@@ -53,6 +53,13 @@ export type Erp5CompatibilityPriceKey = {
   settlement: 'RETURN' | 'BUYOUT';
 };
 
+export function normalizeErp5CompatibilityInteger(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  if (typeof value !== 'string' || !/^(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$/.test(value)) return undefined;
+  const parsed = Number(value.replaceAll(',', ''));
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
 /**
  * 가격 키를 읽는다. `36` · `36_2만` · `36_인수형` · `12_월30000km` 꼴을 지원한다.
  * Domain pure helper so infra/application/adapters can share the same months parsing without layer inversion.
