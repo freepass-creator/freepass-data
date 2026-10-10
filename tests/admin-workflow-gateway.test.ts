@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { projectAdminWorkflowCurrentFacts } from '../src/application/settlement-ledger-view.js';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
 import receiptSchema from '../contracts/admin-workflow-receipt-v2.schema.json' with { type: 'json' };
@@ -46,6 +47,47 @@ function app(store: AdminWorkflowStore) {
 }
 
 describe('Admin workflow consumer gateway', () => {
+  it('keeps contract axes and explicit unverified links without deriving a settlement amount or actor', () => {
+    const data = { source_intake_id: 'intake-id', contract_status: '계약대기', sign_status: 'source-sign', rent_month_snapshot: '48', agent_code: 'agent', updated_at: 0 };
+    const current = projectAdminWorkflowCurrentFacts({ kind: 'doc', resource: 'contracts', id: 'contract-id', view: 'current-facts/v1' }, {
+      schema: 'freepass-data.admin-workflow-read/v1', digest: 'b'.repeat(64), docs: [{ id: 'contract-id', data }],
+    });
+    expect(current.completeness).toBe('DOCUMENT_READ');
+    expect(current.records[0]).toMatchObject({ recordId: 'contract-id', link: { state: 'RECORDED_UNVERIFIED', targetId: 'intake-id' }, facts: {
+      contractStatus: { value: '계약대기' }, signStatus: { value: 'source-sign' }, termMonths: { value: null, state: 'INVALID' },
+      responsibleCode: { value: 'agent' }, createdBy: { value: null, state: 'UNKNOWN', reason: 'SOURCE_NOT_RECORDED' },
+    } });
+    expect(current.records[0]!.facts).not.toHaveProperty('claimSupply');
+    expect(projectAdminWorkflowCurrentFacts({ kind: 'doc', resource: 'contracts', id: 'missing' }, { schema: 'freepass-data.admin-workflow-read/v1', digest: 'b'.repeat(64), docs: [] }).records).toEqual([]);
+  });
+  it('adds optional current facts without changing raw docs, zero, BT or source IDs', async () => {
+    const data = { code: 'original', claimWritten: 0, payWritten: null, calculationBasis: '  basis\n ', updatedAt: 0, claimStage: 'source-stage' };
+    let reads = 0;
+    const store: AdminWorkflowStore = {
+      async read() { reads++; return { schema: 'freepass-data.admin-workflow-read/v1', docs: [{ id: 'same-id', data }], digest: 'a'.repeat(64) }; },
+      async commit() { throw new Error('WRITES_FORBIDDEN'); },
+    };
+    const { app: server } = app(store);
+    const url = '/v1/consumers/freepass-admin-catalog/admin-workflow/read';
+    const payload = { kind: 'query', resource: 'settlementRows', limit: 1, view: 'current-facts/v1' };
+    expect((await server.inject({ method: 'POST', url, payload })).statusCode).toBe(401);
+    expect(reads).toBe(0);
+    const response = await server.inject({ method: 'POST', url, headers, payload });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.docs).toEqual([{ id: 'same-id', data }]);
+    expect(body.digest).toBe('a'.repeat(64));
+    expect(body.currentFacts.completeness).toBe('LIMIT_REACHED');
+    expect(body.currentFacts.records[0]).toMatchObject({ recordId: 'same-id', link: { state: 'UNLINKED', targetId: null }, facts: {
+      claimSupply: { value: 0, state: 'RECORDED' }, paySupply: { value: null, state: 'UNKNOWN' },
+      calculationBasis: { value: data.calculationBasis }, createdBy: { value: null, state: 'UNKNOWN' },
+      claimStage: { value: 'source-stage' }, updatedAt: { value: '1970-01-01T00:00:00.000Z' },
+    } });
+    for (const invalid of [{ ...payload, limit: undefined }, { ...payload, view: 'bad' }, { ...payload, resource: 'products' }]) {
+      expect((await server.inject({ method: 'POST', url, headers, payload: invalid })).statusCode).toBe(400);
+    }
+    await server.close();
+  });
   it('classifies every resource and preserves all semantic owners in a mixed atomic command', () => {
     expect(Object.keys(ADMIN_WORKFLOW_RESOURCE_POLICIES).sort())
       .toEqual(Object.keys(ADMIN_WORKFLOW_RESOURCES).sort());

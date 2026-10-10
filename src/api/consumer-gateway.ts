@@ -58,7 +58,7 @@ import {
   type AdminWorkflowCommitRequest,
   type AdminWorkflowReadSpec,
 } from '../domain/admin-workflow.js';
-import { readSettlementLedgerView } from '../application/settlement-ledger-view.js';
+import { readSettlementLedgerView, projectAdminWorkflowCurrentFacts } from '../application/settlement-ledger-view.js';
 import {
   resolveContractFeeLink,
   type ContractFeeLinkInput,
@@ -1204,7 +1204,9 @@ export function createConsumerGateway(
           requestDigest: stableDigest(request.body),
           summarize: (value) => ({ count: value.docs.length, digest: value.digest })
         }, () => workflowStore.read(request.body));
-        return result;
+        return request.body.view === 'current-facts/v1'
+          ? { ...result, currentFacts: projectAdminWorkflowCurrentFacts(request.body, result) }
+          : result;
       } catch (error) {
         if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
         const code = error instanceof Error ? error.message : 'ADMIN_WORKFLOW_READ_FAILED';

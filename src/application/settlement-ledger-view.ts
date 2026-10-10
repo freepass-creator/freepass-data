@@ -1,4 +1,5 @@
 import type { AdminWorkflowStore } from '../ports/admin-workflow.js';
+import type { AdminWorkflowReadSpec, AdminWorkflowReadResult } from '../domain/admin-workflow.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import {
   SETTLEMENT_LEDGER_VIEW_CONTRACT,
@@ -51,6 +52,62 @@ const rawScalar = (value: unknown): SettlementLedgerValue =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
     ? value
     : null;
+
+/** Optional facts from this read only: no join, workflow decision, write or inferred actor. */
+export function projectAdminWorkflowCurrentFacts(spec: AdminWorkflowReadSpec, result: AdminWorkflowReadResult) {
+  const intake = spec.resource === 'settlementRows';
+  const fields: Record<string, [string, 'string' | 'number' | 'timestamp' | 'boolean']> = intake ? {
+    intakeCode: ['code', 'string'], intakeRequestId: ['intakeRequestId', 'string'],
+    contractId: ['contractId', 'string'], contractNumber: ['contractNo', 'string'],
+    claimStage: ['claimStage', 'string'], payStage: ['payStage', 'string'],
+    delivered: ['delivered', 'boolean'], cancelled: ['cancelled', 'boolean'],
+    billed: ['billed', 'boolean'], invoiceIssued: ['invoiceIssued', 'boolean'],
+    collected: ['collected', 'boolean'], paid: ['paid', 'boolean'],
+    billingHold: ['billHold', 'boolean'], settlementExcluded: ['settleExclude', 'boolean'],
+    billingMonth: ['billMonth', 'string'], receivedAt: ['receivedAt', 'string'],
+    termMonths: ['term', 'number'], claimSupply: ['claimWritten', 'number'], paySupply: ['payWritten', 'number'],
+    claimVat: ['claimVat', 'number'], payVat: ['payVat', 'number'],
+    calculationBasis: ['calculationBasis', 'string'], businessDate: ['businessDate', 'string'],
+    createdAt: ['createdAt', 'timestamp'], updatedAt: ['updatedAt', 'timestamp'],
+    createdBy: ['createdBy', 'string'], updatedBy: ['updatedBy', 'string'], responsibleCode: ['agentCode', 'string'],
+  } : {
+    contractCode: ['contract_code', 'string'], intakeId: ['source_intake_id', 'string'],
+    contractStatus: ['contract_status', 'string'], signStatus: ['sign_status', 'string'],
+    termMonths: ['rent_month_snapshot', 'number'], businessDate: ['contract_date', 'string'],
+    createdAt: ['created_at', 'timestamp'], updatedAt: ['updated_at', 'timestamp'],
+    createdBy: ['created_by', 'string'], updatedBy: ['updated_by', 'string'], responsibleCode: ['agent_code', 'string'],
+  };
+  for (const key of ['_deleted', 'is_test', 'test_only']) fields[key] = [key, 'boolean'];
+  return {
+    schema: 'freepass-data.admin-workflow-current-facts/v1' as const,
+    resource: spec.resource,
+    sourceDigest: result.digest,
+    scope: spec.kind === 'doc' ? 'DOCUMENT' as const : 'QUERY' as const,
+    completeness: spec.kind === 'doc' ? 'DOCUMENT_READ' as const
+      : result.docs.length >= spec.limit! ? 'LIMIT_REACHED' as const : 'QUERY_READ' as const,
+    // These are original axes, not an invented combined business stage.
+    records: result.docs.map(({ id, data }) => {
+      const facts = Object.fromEntries(Object.entries(fields).map(([name, [sourceField, type]]) => {
+        const raw = data[sourceField];
+        const missing = raw === undefined || raw === null || raw === '';
+        const value = missing ? null : type === 'timestamp' ? timestampOrNull(raw)
+          : type === 'number' ? numberOrNull(raw) : type === 'boolean' ? booleanOrNull(raw) : typeof raw === 'string' ? raw : null;
+        return [name, { value, state: missing ? 'UNKNOWN' : value === null ? 'INVALID' : 'RECORDED',
+          reason: missing ? 'SOURCE_NOT_RECORDED' : value === null ? 'INVALID_SOURCE_VALUE' : null, sourceField }];
+      }));
+      const linkField = intake ? 'contractId' : 'source_intake_id';
+      const link = stringOrNull(data[linkField]);
+      return {
+        recordId: id,
+        identityState: 'SOURCE_DOCUMENT_ID' as const,
+        link: { state: link ? 'RECORDED_UNVERIFIED' as const : 'UNLINKED' as const, targetId: link, sourceField: linkField },
+        facts,
+        provenance: { authority: intake ? 'FREEPASS_DATA_SETTLEMENT' : 'FREEPASS_ADMIN_APPLICATION_CONTRACT',
+          collection: intake ? 'settlement_rows' : 'contract', documentId: id },
+      };
+    }),
+  };
+}
 
 export function projectSettlementLedgerRecord(
   documentId: string,
