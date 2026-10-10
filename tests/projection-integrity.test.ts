@@ -472,7 +472,7 @@ describe('Projection release integrity verifier', () => {
     expect(verifyProjectionReleaseIntegrity(ready, manifest!, await store.listProjectionLineage(ready.releaseId)).valid).toBe(true);
   });
 
-  it('keeps the default worker path at READY staging without replacing ACTIVE', async () => {
+  it('activates and receipts a claimed worker event without requiring an explicit event id option', async () => {
     const store = new MemoryDataStore();
     await seedDemoCatalog(store);
     const previous = await buildErpPublicProjection(store, store);
@@ -492,9 +492,40 @@ describe('Projection release integrity verifier', () => {
     expect(await processOneOutboxEvent(store, store, store, { workerId: 'worker:loop' },
       new Date('2026-09-20T10:00:01.000Z'))).toBe('DONE');
 
-    expect(activate).not.toHaveBeenCalled();
-    expect((await store.getActive('erp-public'))?.releaseId).toBe(previous.releaseId);
-    expect(await store.getDeliveryReceipt(event.eventId)).toBeNull();
+    expect(activate).toHaveBeenCalled();
+    const active = await store.getActive('erp-public');
+    expect(active?.releaseId).not.toBe(previous.releaseId);
+    expect(active?.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(731000);
+    expect(await store.getDeliveryReceipt(event.eventId)).toMatchObject({
+      eventId: event.eventId,
+      releaseId: active?.releaseId,
+      targetRevision: 2
+    });
+  });
+
+  it('uses the same guarded activation path for the local console refresh', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const previous = await buildErpPublicProjection(store, store);
+    await updateOfferPrice(store, {
+      commandId: 'cmd_local_console_refresh',
+      idempotencyKey: 'idem_local_console_refresh',
+      offerId: 'offer_gv70_demo',
+      expectedRevision: 1,
+      termKey: '36@20000',
+      monthlyRent: { amount: 733000, currency: 'KRW' },
+      reason: 'local console refresh regression',
+      actor: { id: 'user:test', kind: 'USER' }
+    }, '2026-09-20T10:00:00.000Z');
+
+    expect(await processOneOutboxEvent(store, store, store, {
+      workerId: 'worker:local-console',
+      expectedActiveReleaseId: previous.releaseId
+    }, new Date('2026-09-20T10:00:01.000Z'))).toBe('DONE');
+
+    const active = await store.getActive('erp-public');
+    expect(active?.releaseId).not.toBe(previous.releaseId);
+    expect(active?.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(733000);
   });
 
   it('rejects replacing ACTIVE without an approved outbox transition', async () => {
@@ -516,6 +547,54 @@ describe('Projection release integrity verifier', () => {
     await expect(store.activate(ready.releaseId))
       .rejects.toThrow('PROJECTION_ACTIVATION_APPROVAL_REQUIRED');
     expect((await store.getActive('erp-public'))?.releaseId).toBe(previous.releaseId);
+  });
+
+  it('requires an approved single-event guard for the first Firestore ERP activation', async () => {
+    const data = [{ productId: 'p1', productRevision: 1, vehicleModelId: 'm1',
+      displayName: 'demo', commercialType: 'USED_RENT' as const, vehicle: { maker: 'A', model: 'B' }, offers: [] }];
+    const release = {
+      releaseId: 'rel_first_guard',
+      projectionId: 'erp-public',
+      schemaVersion: '1.0.0',
+      canonicalRevision: 0,
+      manifestId: 'manifest_rel_first_guard',
+      inputDigest: stableDigest([]),
+      dataDigest: stableDigest(data),
+      status: 'READY',
+      generatedAt: '2026-10-09T00:00:00.000Z',
+      data
+    };
+    const manifest = {
+      manifestId: release.manifestId,
+      releaseId: release.releaseId,
+      projectionId: release.projectionId,
+      schemaVersion: release.schemaVersion,
+      generatedAt: release.generatedAt,
+      canonicalInputs: [],
+      productCount: 1,
+      offerCount: 0,
+      fieldEvidenceCount: 0,
+      fieldEvidenceDigest: stableDigest([]),
+      inputDigest: release.inputDigest,
+      dataDigest: release.dataDigest
+    };
+    const get = vi.fn(async (ref: { name: string; query?: boolean }) => {
+      if (ref.query) return { docs: [] };
+      const values: Record<string, unknown> = {
+        projection_releases: release,
+        projection_release_manifests: manifest,
+        projection_active: null
+      };
+      const value = values[ref.name];
+      return { exists: !!value, data: () => value, get: (key: string) => (value as Record<string, unknown>)?.[key] };
+    });
+    const write = vi.fn();
+    const db = { collection: (name: string) => ({ doc: (id: string) => ({ name, id }),
+      where: () => ({ name, query: true }) }), runTransaction: async (body: any) => body({ get, update: write, set: write, create: write }) } as unknown as Firestore;
+
+    await expect(new FirestoreDataStore(db).activate(release.releaseId))
+      .rejects.toThrow('PROJECTION_FIRST_ACTIVATION_APPROVAL_REQUIRED');
+    expect(write).not.toHaveBeenCalled();
   });
 
   it('retains old ACTIVE evidence after a staging failure and retries through a fresh release', async () => {

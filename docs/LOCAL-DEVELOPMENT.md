@@ -36,9 +36,14 @@ It does **not** connect to API commands, claim outbox events, activate releases,
 acknowledge delivery. For an explicit local worker loop, run
 `node --import tsx scripts/run-memory.mjs worker --execute`. For the local Console
 only, the API processes the price command's outbox event after Canonical commit so
-the same in-memory ACTIVE projection refreshes immediately. Firestore/production
-delivery remains worker-owned and must use either `--execute` or
-`--event-id <id> --expires-at <ISO timestamp>`.
+the same in-memory ACTIVE projection refreshes immediately, with an outbox claim,
+delivery receipt, and expected ACTIVE release guard. Firestore/production delivery
+remains worker-owned: `--execute` may rotate an existing ACTIVE release with the
+same guard, while the first ERP public activation requires the approved
+`--event-id <id> --expires-at <ISO timestamp>` path and first-activation backup
+preimage. A claimed event is not marked `DONE` unless publication either has an
+existing matching delivery receipt or completes the guarded activation/receipt
+write.
 
 `preview/index.html` is served by the memory runtime as a local live Console.
 The Home, Data, Flow Trace, and Release screens use live memory API evidence.

@@ -57,7 +57,7 @@ if (prepare) {
   process.exit(result === 'DONE' ? 0 : 2);
 } else if (execute) {
   for (;;) {
-    const currentActive = requireFreshSources ? await stores.projections.getActive('erp-public') : null;
+    const currentActive = await stores.projections.getActive('erp-public');
     if (requireFreshSources && !currentActive) throw new Error('FIRST_ACTIVE_REQUIRES_APPROVED_SINGLE_EVENT');
     const result = await processOneOutboxEvent(
       stores.catalog,

@@ -585,6 +585,9 @@ export class FirestoreDataStore implements CatalogStore, ProjectionStore, Outbox
       const previousId = activeSnap.exists ? activeSnap.get('releaseId') as string : null;
       if (guard?.expectedActiveReleaseId !== undefined && previousId !== guard.expectedActiveReleaseId)
         throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
+      if (projectionId === 'erp-public' && !previousId &&
+          (guard?.expectedActiveReleaseId !== null || !guard?.claim || !guard.receipt))
+        throw new Error('PROJECTION_FIRST_ACTIVATION_APPROVAL_REQUIRED');
       if (previousId && previousId !== releaseId && (!guard?.claim || !guard.receipt))
         throw new Error('PROJECTION_ACTIVATION_APPROVAL_REQUIRED');
       if (projectionId === 'erp-public') await this.readPublishGuard(tx, guard);

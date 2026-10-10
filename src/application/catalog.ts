@@ -867,14 +867,22 @@ export async function processOneOutboxEvent(
             existingDelivery.targetRevision !== event.targetRevision) return 'HOLD';
       }
       if (!existingDelivery) {
+        const activeBeforePublish = await projections.getActive('erp-public');
+        const shouldActivate = Boolean(publishGuard.claim && publishGuard.delivery) &&
+          (options.eventId !== undefined || options.expectedActiveReleaseId !== undefined || activeBeforePublish !== null);
         await buildErpPublicProjection(
           catalog,
           projections,
           now.toISOString(),
           {
-            activate: options.eventId !== undefined,
+            activate: shouldActivate,
             requireFreshSources: options.requireFreshSources ?? false,
-            publishGuard
+            publishGuard: {
+              ...publishGuard,
+              ...(options.expectedActiveReleaseId === undefined && activeBeforePublish
+                ? { expectedActiveReleaseId: activeBeforePublish.releaseId }
+                : {})
+            }
           }
         );
       }
