@@ -5,14 +5,6 @@ export const AUTOPLUS_EXPECTED_ACTIVE_PRODUCT_COUNT = 155;
 /** One-time repair already applied and read back on production (docs/NEXT-START-HERE.md, 2026-09-29). */
 export const AUTOPLUS_POLICY_REPAIR_APPLIED_RUN_ID = '2026-09-29T04-44-30-502Z-42019aec-9cd2-4fa9-85bf-76c6b1542a68';
 
-/**
- * The repair removes `age_lowering_cost` in place and keeps the prior value only in a local backup.
- * It must not run again; a future correction needs a reviewed status/tombstone change instead.
- */
-export function assertAutoplusPolicyRepairRunnable(): void {
-  throw new Error(`AUTOPLUS_POLICY_REPAIR_RETIRED: applied as run ${AUTOPLUS_POLICY_REPAIR_APPLIED_RUN_ID}`);
-}
-
 const text = (value: unknown) => typeof value === 'string' ? value.trim() : '';
 
 export function assertAutoplusPolicyInvariant(facts: Record<string, unknown>) {
