@@ -1,3 +1,4 @@
+import { VEHICLE_PHOTO_CACHE_TTL_MS } from '../domain/consumer-output-contract.js';
 import { DataAccessGateway } from '../application/data-access-gateway.js';
 import { createFirestoreDataAccessLogStore } from '../infra/firestore-data-access-log.js';
 import { createFirestoreAdminWorkflowStore } from '../infra/admin-workflow-firestore.js';
@@ -30,7 +31,7 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
       if (!cached || cached.expiresAt <= Date.now()) {
         if (photoSets.size >= 128) photoSets.delete(photoSets.keys().next().value!);
         const ids = client.getVehicle(vehicleId).then(detail => iancarOnePhotoIds(detail, vehicleId, plate));
-        cached = { expiresAt: Date.now() + 30_000, ids };
+        cached = { expiresAt: Date.now() + VEHICLE_PHOTO_CACHE_TTL_MS, ids };
         photoSets.set(key, cached);
         const entry = cached;
         void ids.catch(() => { if (photoSets.get(key) === entry) photoSets.delete(key); });

@@ -247,10 +247,12 @@ it('re-running an illustration reaffirms its state without rewriting images or t
 
 
 it.each(['withdrawal', 'identity', 'plate', 'supplier'])('single photo pipeline rejects ONE %s changes during reads', async change => {
-  let current: Record<string, unknown> = { provider_company_code: 'RP031', listable: true, status_kind: '가용', iancar_one_vehicle_id: 'synthetic-vehicle', car_number: 'synthetic-plate' };
+  let current: Record<string, unknown> = { provider_company_code: 'RP031', listable: true, status_kind: '가용', iancar_one_vehicle_id: 'synthetic-vehicle', car_number: 'synthetic-plate',
+    photo_original_refs: [{ vehiclePhotoVerifiedBy: 'synthetic-reviewer', vehiclePhotoVerificationMethod: 'synthetic ONE review', vehiclePhotoVerifiedAt: '2026-10-10T00:00:00Z' }] };
   mocks.get.mockReset().mockImplementation(async () => ({ data: () => current }));
   for (const index of [undefined, 0]) {
-    current = { ...current, provider_company_code: 'RP031', listable: true, iancar_one_vehicle_id: 'synthetic-vehicle', car_number: 'synthetic-plate' };
+    current = { ...current, provider_company_code: 'RP031', listable: true, iancar_one_vehicle_id: 'synthetic-vehicle', car_number: 'synthetic-plate',
+    photo_original_refs: [{ vehiclePhotoVerifiedBy: 'synthetic-reviewer', vehiclePhotoVerificationMethod: 'synthetic ONE review', vehiclePhotoVerifiedAt: '2026-10-10T00:00:00Z' }] };
     const reader = new FirestoreCatalogCompatibilityReader(async () => {
       current = { ...current, ...(change === 'withdrawal' ? { listable: false } : change === 'identity' ? { iancar_one_vehicle_id: 'changed' }
         : change === 'supplier' ? { provider_company_code: 'OTHER' } : { car_number: 'changed' }) };
@@ -261,7 +263,8 @@ it.each(['withdrawal', 'identity', 'plate', 'supplier'])('single photo pipeline 
 });
 
 it('ONE source shares byte validation, public errors and concurrency without requiring an approval hash', async () => {
-  const current = { provider_company_code: 'RP031', listable: true, status_kind: '가용', iancar_one_vehicle_id: 'synthetic-vehicle', car_number: 'synthetic-plate' };
+  const current = { provider_company_code: 'RP031', listable: true, status_kind: '가용', iancar_one_vehicle_id: 'synthetic-vehicle', car_number: 'synthetic-plate',
+    photo_original_refs: [{ vehiclePhotoVerifiedBy: 'synthetic-reviewer', vehiclePhotoVerificationMethod: 'synthetic ONE review', vehiclePhotoVerifiedAt: '2026-10-10T00:00:00Z' }] };
   mocks.get.mockReset().mockImplementation(async () => ({ data: () => current }));
   for (const result of [
     { bytes: Buffer.alloc(0), contentType: 'image/jpeg' },

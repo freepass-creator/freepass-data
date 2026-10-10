@@ -1,3 +1,4 @@
+import { validateVehiclePhotoMedia, VEHICLE_PHOTO_MAX_CONCURRENT } from '../domain/consumer-output-contract.js';
 import { createPhotoRequestBucket, PHOTO_REQUEST_LIMITS } from './photo-request-limit.js';
 import { inspectVehicleMediaEvidence } from '../application/vehicle-media-evidence.js';
 import { summarizeEconomicsCoverage } from '../application/resolve-offer-commercial-terms.js';
@@ -225,6 +226,7 @@ export function createConsumerGateway(
   app.get('/health', async () => ({ service: 'freepass-data-consumer-gateway', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
   const failedAuthPhotoLimit = createPhotoRequestBucket(PHOTO_REQUEST_LIMITS.failedAuth);
   const consumerPhotoLimit = createPhotoRequestBucket(PHOTO_REQUEST_LIMITS.consumer);
+  let activePhotoResponses = 0;
   const photoHandler = async (request: { params: { consumerId: string; productId: string; index?: string }; headers: { authorization?: string | undefined }; id: string; ip: string }, reply: import('fastify').FastifyReply) => {
     reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
     const binding = registered.get(request.params.consumerId);
@@ -252,13 +254,24 @@ export function createConsumerGateway(
         await access.deny('READ', spec, 'VEHICLE_PHOTO_READER_UNAVAILABLE');
         return reply.code(503).send({ code: 'VEHICLE_PHOTO_READER_UNAVAILABLE' });
       }
+      if (activePhotoResponses >= VEHICLE_PHOTO_MAX_CONCURRENT) throw new Error('VEHICLE_PHOTO_BUSY');
+      activePhotoResponses++;
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        activePhotoResponses--;
+        reply.raw.off('finish', release).off('close', release).off('error', release);
+      };
+      reply.raw.once('finish', release).once('close', release).once('error', release);
+      if (reply.raw.destroyed) release();
       const read = compatReader.readVehiclePhoto.bind(compatReader);
       const result = await access.read({ ...spec, requestDigest: stableDigest({ productId: request.params.productId, index: index ?? null }),
         summarize: value => ({ count: value.count }) }, () => read(binding.id, request.params.productId, index));
       if (!Number.isSafeInteger(result.count) || result.count < 0 || result.count > 200)
         return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
-      if (index !== undefined && (!Buffer.isBuffer(result.bytes) || !result.bytes.length || result.bytes.length > 8 * 1024 * 1024
-        || !['image/jpeg', 'image/png', 'image/webp'].includes(result.contentType))) return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
+      if (index !== undefined && validateVehiclePhotoMedia(result.contentType, Buffer.isBuffer(result.bytes) ? result.bytes.length : 0, result.bytes))
+        return reply.code(503).send({ code: 'VEHICLE_PHOTO_RESPONSE_INVALID' });
       // access.read has persisted SUCCEEDED; recheck after that await, immediately before sending.
       if (!await result.revalidate()) {
         try { await access.deny('READ', spec, 'VEHICLE_PHOTO_NOT_FOUND'); }

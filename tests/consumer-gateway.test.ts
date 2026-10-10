@@ -1,3 +1,4 @@
+import { PassThrough } from 'node:stream';
 import { createPhotoRequestBucket, PHOTO_REQUEST_LIMITS } from '../src/api/photo-request-limit.js';
 process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { createHash } from 'node:crypto';
@@ -626,8 +627,112 @@ it('serves Admin stored fees and coverage with an isolated grant, and no public 
 describe('approved vehicle photo proxy', () => {
   const bytes = Buffer.from([255, 216, 255, 1, 2, 3]);
   const ref = { driveFileId: 'fake-file', sha256: createHash('sha256').update(bytes).digest('hex'), mediaType: 'image/jpeg' as const,
+    vehiclePhotoVerifiedBy: 'synthetic-reviewer', vehiclePhotoVerificationMethod: 'synthetic visual review', vehiclePhotoVerifiedAt: '2026-10-10T00:00:00Z',
     role: 'VEHICLE_PHOTO' as const, zone: '차량사진' as const, approvedAt: '2026-10-10T00:00:00Z', vehicleKey: vehiclePhotoKey({ provider_company_code: 'TEST', supplier_vehicle_id: 'vehicle-a' })! };
   const product = () => ({ provider_company_code: 'TEST', supplier_vehicle_id: 'vehicle-a', listable: true, status_kind: '가용', photo_original_refs: [{ ...ref }] });
+
+  it.each(['vehiclePhotoVerifiedBy', 'vehiclePhotoVerificationMethod', 'vehiclePhotoVerifiedAt'])('requires independent content verification: %s', async field => {
+    for (const source of ['approved', 'one']) {
+      let current: Record<string, unknown> = product();
+      const sourceReader = vi.fn(async () => ({ count: 1, bytes, contentType: ref.mediaType }));
+      const read = createVehiclePhotoReader(async () => current,
+        source === 'one' ? { eligible: () => true, connection: () => 'synthetic-one', read: sourceReader } : undefined,
+        sourceReader);
+      for (const missing of [undefined, '', '   ']) {
+        current = { ...product(), photo_original_refs: [{ ...ref, [field]: missing }] };
+        expect(isApprovedVehiclePhotoProduct(current)).toBe(false);
+        await expect(read('erp-com', 'synthetic', 0)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+        await expect(read('erp-com', 'synthetic')).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+      }
+      expect(sourceReader).not.toHaveBeenCalled();
+      current = product();
+      expect((await read('erp-com', 'synthetic', 0)).bytes).toEqual(bytes);
+      const response = await read('erp-com', 'synthetic');
+      current = { ...product(), photo_original_refs: [{ ...ref, [field]: undefined }] };
+      expect(await response.revalidate()).toBe(false);
+    }
+  });
+
+  it.each(['finish', 'error', 'close'])('holds response slots through onSend and releases once on %s', async terminal => {
+    const { app } = withAccess(new MemoryDataStore(), [binding], undefined, {
+      read: async () => { throw new Error('unused'); },
+      readVehiclePhoto: async () => ({ count: 1, bytes, contentType: ref.mediaType, revalidate: async () => true }),
+    });
+    let unblock!: () => void;
+    const gate = new Promise<void>(resolve => { unblock = resolve; });
+    let ready!: () => void;
+    const eight = new Promise<void>(resolve => { ready = resolve; });
+    const responses: import('node:http').ServerResponse[] = [];
+    app.addHook('onSend', async (_request, reply, payload) => {
+      if (reply.statusCode === 200 && responses.length < 8) {
+        responses.push(reply.raw);
+        if (responses.length === 8) ready();
+        await gate;
+      }
+      return payload;
+    });
+    const url = compatUrl + '/products/synthetic/photos/0';
+    const pending = Array.from({ length: 8 }, () => app.inject({ url, headers }).then(value => value.statusCode, () => 0));
+    try {
+      await eight;
+      expect((await app.inject({ url, headers })).statusCode).toBe(429);
+      if (terminal !== 'finish') {
+        // Transport terminal events while payload delivery is still paused.
+        responses[0]!.emit(terminal);
+        responses[0]!.emit('close');
+        expect((await app.inject({ url, headers })).statusCode).toBe(200);
+      }
+      unblock();
+      expect(await Promise.all(pending)).toEqual(terminal === 'finish' ? Array(8).fill(200) : [0, ...Array(7).fill(200)]);
+      expect((await app.inject({ url, headers })).statusCode).toBe(200);
+    } finally { unblock(); await Promise.all(pending); await app.close(); }
+  });
+
+  it('holds all slots until response streams complete', async () => {
+    const { app } = withAccess(new MemoryDataStore(), [binding], undefined, {
+      read: async () => { throw new Error('unused'); },
+      readVehiclePhoto: async () => ({ count: 1, bytes, contentType: ref.mediaType, revalidate: async () => true }),
+    });
+    const streams: PassThrough[] = [];
+    let ready!: () => void;
+    const eight = new Promise<void>(resolve => { ready = resolve; });
+    app.addHook('onSend', async (_request, reply, payload) => {
+      if (reply.statusCode !== 200 || streams.length >= 8) return payload;
+      const stream = new PassThrough();
+      streams.push(stream);
+      if (streams.length === 8) ready();
+      return stream;
+    });
+    const url = compatUrl + '/products/synthetic/photos/0';
+    const pending = Array.from({ length: 8 }, () => app.inject({ url, headers }).then(value => value));
+    try {
+      await eight;
+      expect((await app.inject({ url, headers })).statusCode).toBe(429);
+      streams.forEach(stream => stream.end(bytes));
+      for (const response of await Promise.all(pending)) expect(response.rawPayload).toEqual(bytes);
+      expect((await app.inject({ url, headers })).statusCode).toBe(200);
+    } finally { streams.forEach(stream => stream.end()); await Promise.all(pending); await app.close(); }
+  });
+
+  it('releases response slots after reader and audit errors', async () => {
+    let fail = true;
+    const { app, logs } = withAccess(new MemoryDataStore(), [binding], undefined, {
+      read: async () => { throw new Error('unused'); },
+      readVehiclePhoto: async () => {
+        if (fail) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+        return { count: 1, bytes, contentType: ref.mediaType, revalidate: async () => true };
+      },
+    });
+    const url = compatUrl + '/products/synthetic/photos/0';
+    try {
+      for (let i = 0; i < 9; i++) expect((await app.inject({ url, headers })).statusCode).toBe(503);
+      fail = false;
+      const append = vi.spyOn(logs, 'appendDataAccessEvent').mockRejectedValue(new Error('synthetic audit error'));
+      for (let i = 0; i < 9; i++) expect((await app.inject({ url, headers })).statusCode).toBe(503);
+      append.mockRestore();
+      expect((await app.inject({ url, headers })).statusCode).toBe(200);
+    } finally { await app.close(); }
+  });
 
   it('rejects copied approval refs from another vehicle and derives fallback keys privately', async () => {
     const other = { ...product(), supplier_vehicle_id: 'vehicle-b' };
@@ -731,7 +836,7 @@ describe('approved vehicle photo proxy', () => {
     let ready!: () => void;
     const eight = new Promise<void>(resolve => { ready = resolve; });
     let fail = false;
-    const readVehiclePhoto = createVehiclePhotoReader(async () => ({ eligible: true }), {
+    const readVehiclePhoto = createVehiclePhotoReader(async () => ({ ...product(), eligible: true }), {
       eligible: value => value?.eligible === true,
       connection: () => 'synthetic-connection',
       read: async (_product, index) => {

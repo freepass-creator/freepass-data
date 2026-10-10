@@ -154,6 +154,7 @@ export function hasSonokongDepositRuleViolation(input: {
 type Rec = Record<string, unknown>;
 export type ApprovedVehiclePhotoRef = {
   driveFileId: string; sha256: string; mediaType: 'image/jpeg' | 'image/png' | 'image/webp';
+  vehiclePhotoVerifiedBy: string; vehiclePhotoVerificationMethod: string; vehiclePhotoVerifiedAt: string;
   role: 'VEHICLE_PHOTO'; zone: '차량사진'; approvedAt: string; vehicleKey: string;
 };
 export type ApprovedPhotoReader = (ref: ApprovedVehiclePhotoRef) => Promise<{ bytes: Buffer; contentType: string }>;
@@ -161,6 +162,30 @@ export const VEHICLE_PHOTO_MAX_BYTES = 8 * 1024 * 1024;
 export const VEHICLE_PHOTO_CACHE_BYTES = 64 * 1024 * 1024;
 export const VEHICLE_PHOTO_CACHE_TTL_MS = 30_000;
 export const VEHICLE_PHOTO_MAX_CONCURRENT = 8;
+
+/** One media policy for transport preflight, streamed size checks and complete bytes. */
+export function validateVehiclePhotoMedia(contentType: unknown, size: number, bytes?: unknown): 'INVALID' | 'OVERSIZED' | 'SIGNATURE_INVALID' | undefined {
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(String(contentType)) || !Number.isSafeInteger(size) || size < 0) return 'INVALID';
+  if (size > VEHICLE_PHOTO_MAX_BYTES) return 'OVERSIZED';
+  if (arguments.length === 2) return;
+  if (!Buffer.isBuffer(bytes) || bytes.length !== size || !size) return 'SIGNATURE_INVALID';
+  const valid = contentType === 'image/jpeg' ? bytes.subarray(0, 3).equals(Buffer.from([255, 216, 255]))
+    : contentType === 'image/png' ? bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    : bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
+  return valid ? undefined : 'SIGNATURE_INVALID';
+}
+
+/** Content review is independent of supplier trust, vehicle ownership and raster format. */
+export function hasVehiclePhotoVerification(product: Rec | undefined): boolean {
+  const refs = product?.photo_original_refs;
+  return Array.isArray(refs) && refs.length > 0 && refs.length <= 200 && Array.from(refs).every(ref => {
+    if (!ref || typeof ref !== 'object') return false;
+    const at = ref.vehiclePhotoVerifiedAt;
+    return ['vehiclePhotoVerifiedBy', 'vehiclePhotoVerificationMethod'].every(key => typeof ref[key] === 'string' && !!ref[key].trim())
+      && typeof at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(at)
+      && Number.isFinite(Date.parse(at)) && new Date(at).toISOString() === at.replace(/Z$/, at.includes('.') ? 'Z' : '.000Z');
+  });
+}
 
 /** Derived only from product authority, never from an approved reference. */
 export function vehiclePhotoKey(product: Rec): string | undefined {
@@ -174,7 +199,7 @@ export function vehiclePhotoKey(product: Rec): string | undefined {
 }
 
 export function isApprovedVehiclePhotoProduct(product: Rec | undefined): product is Rec & { photo_original_refs: ApprovedVehiclePhotoRef[] } {
-  if (!product || product.listable !== true || product._deleted || product.deletedAt || product.publication_withdrawal
+  if (!hasVehiclePhotoVerification(product) || !product || product.listable !== true || product._deleted || product.deletedAt || product.publication_withdrawal
     || !['가용', '선점'].includes(String(product.status_kind))) return false;
   const vehicleKey = vehiclePhotoKey(product);
   if (!vehicleKey) return false;
@@ -184,7 +209,7 @@ export function isApprovedVehiclePhotoProduct(product: Rec | undefined): product
     const ref = value as Rec;
     return typeof ref.driveFileId === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(ref.driveFileId)
       && typeof ref.sha256 === 'string' && /^[a-f0-9]{64}$/.test(ref.sha256)
-      && ['image/jpeg', 'image/png', 'image/webp'].includes(String(ref.mediaType))
+      && !validateVehiclePhotoMedia(ref.mediaType, 0)
       && ref.role === 'VEHICLE_PHOTO' && ref.zone === '차량사진'
       && typeof ref.vehicleKey === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(ref.vehicleKey)
       && ref.vehicleKey === vehicleKey
@@ -230,12 +255,12 @@ export function createVehiclePhotoReader(
       || (index !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= 200))) throw new Error('VEHICLE_PHOTO_REQUEST_INVALID');
     const product = await readProduct(productId);
     const source = sources.find(candidate => candidate.eligible(product));
-    if (!source || !product) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
-    const connection = source.connection(product);
+    if (!source || !product || !hasVehiclePhotoVerification(product)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+    const connection = JSON.stringify([source.connection(product), product.photo_original_refs]);
     const revalidate = async (): Promise<boolean> => {
       const current = await readProduct(productId);
-      return !!current && sources.find(candidate => candidate.eligible(current)) === source
-        && source.connection(current) === connection;
+      return !!current && hasVehiclePhotoVerification(current) && sources.find(candidate => candidate.eligible(current)) === source
+        && JSON.stringify([source.connection(current), current.photo_original_refs]) === connection;
     };
     const recheck = async () => {
       if (!await revalidate()) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
@@ -271,11 +296,7 @@ export function createVehiclePhotoReader(
       const result = cached ? { ...cached, count: (product.photo_original_refs as ApprovedVehiclePhotoRef[]).length } : await read();
       validCount(result.count);
       const bytes = result.bytes;
-      const signature = Buffer.isBuffer(bytes) && (
-        (result.contentType === 'image/jpeg' && bytes.subarray(0, 3).equals(Buffer.from([255, 216, 255])))
-        || (result.contentType === 'image/png' && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
-        || (result.contentType === 'image/webp' && bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'));
-      if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > VEHICLE_PHOTO_MAX_BYTES || !signature || index >= result.count
+      if (validateVehiclePhotoMedia(result.contentType, Buffer.isBuffer(bytes) ? bytes.length : 0, bytes) || !Buffer.isBuffer(bytes) || index >= result.count
         || (ref && (result.contentType !== ref.mediaType || createHash('sha256').update(bytes).digest('hex') !== ref.sha256)))
         throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
       const output = Buffer.from(bytes);
