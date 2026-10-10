@@ -617,3 +617,9 @@ Fastify `request.ip`는 `FREEPASS_DATA_TRUST_PROXY_HOPS` 정수0~3으로만 프�
 검증(2026-10-10 PR #419 반려 수정): 관련171/171 PASS(gateway68, ONE75, withdrawal23, output-contract5). 확인 세 필드 각각의 누락·공백 거부/정상 허용과 확인 기록 철회, 실제 응답 스트림 완료 전 추가 요청 제한, finish·error·close의 단일 반환, reader·감사 오류 후 슬롯 반환을 확인했다. `npm.cmd run check`는 arch/standards/data-access/sheets106/build PASS 후 read-runtime-smoke 12 PASS / 1 FAIL로 code1 종료했다. 원인은 tsx 시작의 `uv_os_get_passwd ENOMEM`이며 후속 check 단계에는 도달하지 않았다. 별도 전체 Vitest 결과와 남은 보류는 NEXT-START-HERE 날짜 이력에 기록한다. runtime-policy 시험은 수정하지 않았다.
 
 남음: 실제 Drive reader 구현·비공개 사진 읽기 권한·승인 연결 게시·배포는 범위 밖. 추가 네트워크 독립 검토는 UNAVAILABLE. 정상 실행 환경의 전체 check를 완료로 대신하지 않는다. 커밋·푸시·운영 변경 없음.
+
+### 승인 Drive 원본 bytes adapter — CODED/TESTED, 운영 OFF
+
+기존 infra의 `createApprovedDrivePhotoReader`는 승인된 정확 fileId에 대해 metadata와 `alt=media` GET만 수행한다. 원본 download 방식은 [Drive 공식 문서](https://developers.google.com/workspace/drive/api/guides/manage-downloads)를 따른다. `google-auth-library` Compute metadata 인증은 runtime service account와 drive.readonly scope만 사용하며 사용자 ADC/gws를 읽지 않는다. token/fetch fixture 주입을 지원한다. ID 불일치·휴지통·용량·미디어 오류는 download 전 거부하고 스트림을 공통 8MiB 한도 안에서 읽는다. 전체 bytes의 서명과 기존 공통 reader의 SHA256·차량키·승인 철회 검사 후에만 응답한다. SDK/HTTP 오류 원문이나 토큰은 기록·반환하지 않는다.
+
+factory를 운영 runtime에 자동 연결하지 않았다. 기존 선택적 ApprovedPhotoReader 인자로만 연결할 수 있다. 승인 refs/정확 폴더 ID/서비스 계정 Drive 읽기 권한의 운영 검증과 별도 승인이 남았다. 앞 절의 reader 미구현은 이 코드 작업으로 해소하되, 비공개 사진 읽기 권한·승인 연결 게시·배포 HOLD는 유지한다.

@@ -1,12 +1,80 @@
 import { createHash } from 'node:crypto';
+import { Compute } from 'google-auth-library';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
 import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 
-import { createVehiclePhotoReader, type ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
+import { createVehiclePhotoReader, validateVehiclePhotoMedia, type ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
 export { createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../domain/consumer-output-contract.js';
 export type { ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
 type Rec = Record<string, unknown>;
+
+/** Explicit opt-in only. Compute uses the runtime service account, never local user ADC/gws.
+ * No Drive listing, export, sharing, folder discovery, retries or runtime auto-registration.
+ * Vehicle identity, approval, hash and revocation remain in createVehiclePhotoReader.
+ */
+export function createApprovedDrivePhotoReader(options: {
+  token?: () => Promise<string>;
+  fetchImpl?: typeof fetch;
+} = {}): ApprovedPhotoReader {
+  const auth = options.token ? undefined : new Compute({ scopes: ['https://www.googleapis.com/auth/drive.readonly'] });
+  const token = options.token ?? (async () => (await auth!.getAccessToken()).token ?? '');
+  const transport = options.fetchImpl ?? fetch;
+  return async ref => {
+    // Snapshot the exact approved ID before async work; never interpret URLs/shortcuts.
+    const fileId = ref.driveFileId;
+    const mediaType = ref.mediaType;
+    if (!/^[A-Za-z0-9_-]{1,200}$/.test(fileId)) throw new Error('VEHICLE_PHOTO_REQUEST_INVALID');
+    try {
+      const bearer = await token();
+      if (!bearer || /[\r\n]/.test(bearer)) throw new Error();
+      const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`;
+      const request = async (query: string) => {
+        const response = await transport(`${url}?${query}`, { method: 'GET', redirect: 'error', cache: 'no-store',
+          signal: AbortSignal.timeout(20_000), headers: { Authorization: `Bearer ${bearer}` } });
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error(response.status === 404 ? 'VEHICLE_PHOTO_NOT_FOUND' : 'VEHICLE_PHOTO_UNAVAILABLE');
+        }
+        return response;
+      };
+      const metadata = await (await request('fields=id,mimeType,size,trashed&supportsAllDrives=true')).json() as Rec;
+      const size = typeof metadata.size === 'string' && /^\d+$/.test(metadata.size) ? Number(metadata.size) : NaN;
+      if (metadata.id !== fileId || metadata.trashed !== false || metadata.mimeType !== mediaType
+        || validateVehiclePhotoMedia(metadata.mimeType, size)) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+      const response = await request('alt=media&supportsAllDrives=true');
+      const contentType = response.headers.get('content-type')?.split(';')[0]?.trim();
+      const length = response.headers.get('content-length');
+      if (contentType !== mediaType || (length !== null && (!/^\d+$/.test(length) || Number(length) !== size))) {
+        await response.body?.cancel();
+        throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+      const chunks: Buffer[] = [];
+      let received = 0;
+      try {
+        for (;;) {
+          const part = await reader.read();
+          if (part.done) break;
+          received += part.value.byteLength;
+          if (received > size || validateVehiclePhotoMedia(contentType, received)) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+          chunks.push(Buffer.from(part.value));
+        }
+      } catch (error) {
+        await reader.cancel().catch(() => undefined);
+        throw error;
+      } finally { reader.releaseLock(); }
+      const bytes = Buffer.concat(chunks, received);
+      if (received !== size || validateVehiclePhotoMedia(contentType, received, bytes)) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+      return { bytes, contentType: mediaType };
+    } catch (error) {
+      // Never expose SDK/transport response bodies, URLs, credentials or upstream diagnostics.
+      throw new Error(error instanceof Error && error.message === 'VEHICLE_PHOTO_NOT_FOUND'
+        ? 'VEHICLE_PHOTO_NOT_FOUND' : 'VEHICLE_PHOTO_UNAVAILABLE');
+    }
+  };
+}
 
 /** Reuse the bound Data target and read-only transaction; no alternate transport or writer. */
 export async function readVehicleMasterSnapshot() {

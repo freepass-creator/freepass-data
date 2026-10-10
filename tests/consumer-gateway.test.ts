@@ -3,7 +3,7 @@ import { createPhotoRequestBucket, PHOTO_REQUEST_LIMITS } from '../src/api/photo
 process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { createHash } from 'node:crypto';
 import { vehiclePhotoKey } from '../src/domain/consumer-output-contract.js';
-import { createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../src/infra/erp5-compat-catalog-reader.js';
+import { createApprovedDrivePhotoReader, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../src/infra/erp5-compat-catalog-reader.js';
 import { buildAdminCatalogProjection } from '../src/application/admin-catalog.js';
 import { updateOfferPrice } from '../src/application/catalog.js';
 import { describe, expect, it, vi } from 'vitest';
@@ -19,6 +19,83 @@ const token = 'test-service-token-0123456789abcdef';
 const binding = { id: 'erp-com', projectionId: 'erp-public' as const, token };
 const url = '/v1/consumers/erp-com/catalog';
 const headers = { authorization: `Bearer ${token}` };
+
+describe('approved Drive original-byte adapter (offline only)', () => {
+  const bytes = Buffer.from([255, 216, 255, 1]);
+  const product = { listable: true, status_kind: '가용', provider_company_code: 'TEST', supplier_vehicle_id: 'fixture' };
+  const ref = { driveFileId: 'fixture-file', sha256: createHash('sha256').update(bytes).digest('hex'), mediaType: 'image/jpeg' as const,
+    role: 'VEHICLE_PHOTO' as const, zone: '차량사진' as const, approvedAt: '2026-10-10T00:00:00Z', vehicleKey: vehiclePhotoKey(product)!,
+    vehiclePhotoVerifiedBy: 'fixture', vehiclePhotoVerificationMethod: 'fixture', vehiclePhotoVerifiedAt: '2026-10-10T00:00:00Z' };
+  const metadata = (patch: Record<string, unknown> = {}) => Response.json({ id: ref.driveFileId, mimeType: ref.mediaType, size: String(bytes.length), trashed: false, ...patch });
+  const image = (value = bytes, type = ref.mediaType) => new Response(value, { headers: { 'content-type': type } });
+  const adapter = (responses: Response[]) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => responses.shift()!);
+    return { read: createApprovedDrivePhotoReader({ token: async () => 'private-fixture-token', fetchImpl }), fetchImpl };
+  };
+  it('reads only the approved ID via GET and never exposes its token or calls Drive listing', async () => {
+    const { read, fetchImpl } = adapter([metadata(), image()]);
+    expect(await read(ref)).toEqual({ bytes, contentType: ref.mediaType });
+    expect(fetchImpl.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual(['/drive/v3/files/fixture-file', '/drive/v3/files/fixture-file']);
+    for (const [url, init] of fetchImpl.mock.calls) {
+      expect(String(url)).not.toContain('private-fixture-token');
+      expect(init).toMatchObject({ method: 'GET', redirect: 'error', cache: 'no-store' });
+    }
+  });
+  it.each([401, 403, 404])('sanitizes HTTP %s without response-body/token leakage', async status => {
+    const { read } = adapter([new Response('private-fixture-token upstream secret', { status })]);
+    await expect(read(ref)).rejects.toThrow(status === 404 ? 'VEHICLE_PHOTO_NOT_FOUND' : 'VEHICLE_PHOTO_UNAVAILABLE');
+  });
+  it.each([{ id: 'other-file' }, { trashed: true }, { mimeType: 'text/html' }, { size: '8388609' }, { size: '-1' }])('rejects unsafe metadata %j before downloading', async patch => {
+    const { read, fetchImpl } = adapter([metadata(patch)]);
+    await expect(read(ref)).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+  it('rejects path injection before auth/transport', async () => {
+    const { read, fetchImpl } = adapter([]);
+    await expect(read({ ...ref, driveFileId: '../files?alt=media' })).rejects.toThrow('VEHICLE_PHOTO_REQUEST_INVALID');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+  it.each(['size', 'signature', 'media', 'length'])('rejects %s mismatch in downloaded bytes', async mode => {
+    const response = mode === 'media' ? new Response(bytes, { headers: { 'content-type': 'text/html' } })
+      : mode === 'length' ? new Response(bytes, { headers: { 'content-type': ref.mediaType, 'content-length': '99' } })
+      : image(mode === 'size' ? Buffer.concat([bytes, bytes]) : Buffer.from([0, 0, 0, 0]));
+    const { read } = adapter([metadata(), response]);
+    await expect(read(ref)).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+  });
+  it('retains common byte hash and approval revocation checks', async () => {
+    let current = { ...product, photo_original_refs: [ref] };
+    const { read } = adapter([metadata(), image(Buffer.from([255, 216, 255, 2]))]);
+    const common = createVehiclePhotoReader(async () => current, undefined, read);
+    await expect(common('erp-com', 'fixture', 0)).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+    const good = adapter([metadata(), image()]);
+    const pipeline = createVehiclePhotoReader(async () => current, undefined, good.read);
+    expect((await pipeline('erp-com', 'fixture', 0)).bytes).toEqual(bytes);
+    current = { ...current, listable: false };
+    await expect(pipeline('erp-com', 'fixture', 0)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+    expect(good.fetchImpl).toHaveBeenCalledTimes(2);
+  });
+  it('sanitizes credential and network exception diagnostics without logging', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const read = createApprovedDrivePhotoReader({ token: async () => { throw new Error('private-fixture-token'); } });
+      await expect(read(ref)).rejects.toThrow(/^VEHICLE_PHOTO_UNAVAILABLE$/);
+      const network = createApprovedDrivePhotoReader({ token: async () => 'private-fixture-token',
+        fetchImpl: async () => { throw new Error('upstream private-fixture-token'); } });
+      await expect(network(ref)).rejects.toThrow(/^VEHICLE_PHOTO_UNAVAILABLE$/);
+      expect(log).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
+  it('cancels a stream that crosses the common 8MiB bound', async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(new Uint8Array(8 * 1024 * 1024));
+      controller.enqueue(new Uint8Array(1));
+    }, cancel });
+    const { read } = adapter([metadata({ size: '8388608' }), new Response(body, { headers: { 'content-type': ref.mediaType } })]);
+    await expect(read(ref)).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+});
 const healthUrl = '/v1/consumers/erp-com/catalog-health';
 const compatUrl = '/v1/consumers/erp-com/catalog-compat';
 const healthBinding: ConsumerBinding = {

@@ -2542,3 +2542,11 @@ This file exists so another session can continue without re-discovering or re-cr
 - 남음: 운영 인증/backup/readback/실행 승인 및 source/master 최신성/consumer 전체 연결은 HOLD. Kakao 기존 caller와 운영 read revision은 code merge로 바뀌지 않는다. 공급사·영업자 기존 코드는 임시 외부 식별값으로 보존하며 미래 코드 매핑 전제로 이력을 유지한다.
 - next_start_here: PR411 최종 head/CI/ANSWERED 영수증/merge SHA를 확인하고, 별도로 승인된 운영 절차에서만 deployment·ACTIVE·writer·consumer 전환을 실행한다. 오래된 draft snapshot은 비교 자료이며 최신 SSOT가 아니다.
 - 통합 독립 검토 후속: e566에서 로컬 콘솔 멱등 재시도의 releaseId 불변을 오류로 보던 반례를 수정했다. ACTIVE에 committed offer revision 이상이 있는지 검사한다. 기존 read-runtime smoke에 실제 HTTP 최초 요청/동일 재전송 200·같은 receipt·같은 ACTIVE 응답 회귀를 추가, 13 PASS. 코드와 테스트는 PR411 최종 head에서 확인한다.
+
+## 2026-10-10 승인 Drive 사진 원본 byte adapter (운영 OFF)
+
+- 목적/정본: PR419 `2e72929ea32b5bbd160714a10937de2f0030d578`의 기존 ApprovedPhotoReader port를 구현한다. 사진 담당은 최종 head 경계 검증을 맡으며 원래 checkout은 수정하지 않았다.
+- 재사용/변경: COMPOSE_OR_EXTEND, academy READY. 기존 `src/infra/erp5-compat-catalog-reader.ts`에 `createApprovedDrivePhotoReader`를 추가했다. 정확 fileId metadata/alt=media GET만 사용하고 Compute metadata service-account token의 drive.readonly scope를 사용한다. 사용자 ADC/gws, 폴더 탐색, 공유, writer, 신규 엔진 없음. 기존 공통 reader가 차량키/승인/해시/철회/캐시를 계속 판정한다.
+- 검증: build, architecture, standards 33 schemas + 15 tests, data-access-boundary PASS. 전체 Vitest 2081 PASS/16 conditional SKIP; 후속 stream-limit fixture 추가 뒤 gateway 재검증 결과는 PR 기록을 따른다. SDK/transport 오류 원문은 고정 VEHICLE_PHOTO 오류로 정리하며 로깅하지 않는다.
+- 남음: factory는 명시 호출만 가능하며 runtime 기본 주입 OFF. 실제 승인 refs 0건, 운영 폴더 ID와 Drive 읽기 권한 미승인. CODED/TESTED와 실제 원본 연결·DEPLOYMENT/CUTOVER를 구분한다. Drive/DB/Sheet/IAM/배포 실행 없음.
+- next_start_here: PR419의 최종 commit/CI/Claude 결과를 확인하고 사진 담당이 독립 경계 검증한다. 별도 운영 승인 전 runtime 주입·photo_original_refs 입력·Drive 공유를 하지 않는다.
