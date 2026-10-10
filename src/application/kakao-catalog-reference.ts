@@ -2,6 +2,7 @@ import { plateIdentityKey, isStrictKoreanPlate } from '../domain/vehicle-plate.j
 import { createHash } from 'node:crypto';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
 import { policyScalar } from './product-pricing-policy.js';
+import { selectErp5Policy } from '../adapters/erp5-product-mapping.js';
 import { assessDepositEvidence, depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 import { verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { chooseVehicleIdentity, indexVehicleMaster, type VehicleMasterReference } from '../domain/vehicle-identity-resolution.js';
@@ -564,15 +565,17 @@ export function resolveReferencePolicyContext(source: Rec, policies: Record<stri
   const policyId = text(source.policy_code) || null;
   const matches = policyId ? Object.entries(policies).filter(([id, policy]) =>
     id === policyId || text(policy.policy_code) === policyId) : [];
-  const reasonCode = !policyId ? 'POLICY_LINK_MISSING' : matches.length === 0 ? 'POLICY_NOT_FOUND'
-    : matches.length > 1 ? 'POLICY_LINK_AMBIGUOUS' : null;
-  const empty = (reason: string) => ({ state: 'UNKNOWN' as const, policyId, sourceRef: null,
+  const candidates = matches.map(([id, policy]) => ({ id, policy, policyCode: policyId!,
+    ...(text(policy.provider_company_code) ? { companyId: text(policy.provider_company_code) } : {}) }));
+  const link = selectErp5Policy(candidates, policyId ?? '', text(source.provider_company_code) || undefined);
+  const reasonCode = !policyId ? 'POLICY_LINK_MISSING' : link.kind === 'NOT_FOUND' ? 'POLICY_NOT_FOUND'
+    : link.kind === 'AMBIGUOUS' ? 'POLICY_LINK_AMBIGUOUS' : link.kind === 'COMPANY_MISMATCH' ? 'POLICY_SUPPLIER_MISMATCH' : null;
+  const empty = (reason: string) => ({ state: 'UNKNOWN' as const, policyId, policyCode: null, policyName: null,
+    policyCodeSourceRef: null, policyNameSourceRef: null, sourceRef: null,
     facts: [] as Array<{ key: string; label: string; value: NonNullable<ReturnType<typeof policyScalar>>; sourceRef: string }>, reasonCode: reason });
   if (reasonCode) return empty(reasonCode);
-  const [id, policy] = matches[0]!;
-  if (text(policy.provider_company_code) && text(policy.provider_company_code) !== text(source.provider_company_code)) {
-    return empty('POLICY_SUPPLIER_MISMATCH');
-  }
+  if (link.kind !== 'MATCH') return empty('POLICY_NOT_FOUND');
+  const { id, policy } = candidates.find(candidate => candidate === link.policy)!;
   const values = policy.facts && typeof policy.facts === 'object' && !Array.isArray(policy.facts) ? policy.facts as Rec : policy;
   const allowed = new Map(CONDITION_DIMENSION_SPECS.flatMap(spec => spec.sourcePolicyKeys.map(key => [key, spec.label] as const)));
   const sourceRef = `policy/${id}`;
@@ -582,7 +585,10 @@ export function resolveReferencePolicyContext(source: Rec, policies: Record<stri
       : [{ key, label, value, sourceRef: `${sourceRef}/${key}` }];
   });
   // Raw allowed facts only: availability is not policy verification or eligibility approval.
-  return { state: facts.length ? 'REFERENCE' as const : 'UNKNOWN' as const, policyId, sourceRef, facts,
+  return { state: facts.length ? 'REFERENCE' as const : 'UNKNOWN' as const, policyId,
+    policyCode: text(policy.policy_code) || null, policyName: text(policy.policy_name) || null, sourceRef, facts,
+    policyCodeSourceRef: text(policy.policy_code) ? `${sourceRef}/policy_code` : null,
+    policyNameSourceRef: text(policy.policy_name) ? `${sourceRef}/policy_name` : null,
     reasonCode: facts.length ? null : 'POLICY_FACTS_MISSING' };
 }
 
@@ -610,19 +616,26 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       hasPositivePaidDeposit: hasConflictingPaidDeposit(price),
     });
     const publishedDeposit = supplierId === 'RP031' && source.iancar_phase_one
-      ? readIancarPublishedDeposit(source, sourceKey, observedAt) : null;
+      ? readIancarPublishedDeposit(source, sourceKey, observedAt, { preserveStalePositiveReference: true }) : null;
     const deposit = publishedDeposit ? {
       depositAmount: publishedDeposit.amount,
       depositState: publishedDeposit.state,
       depositRule: publishedDeposit.state === 'UNKNOWN' ? null : {
-        code: 'IANCAR_PUBLISHED_CONDITION_EVIDENCE', multiplier: null, label: '공급사 기간·주행거리 조건',
+        code: publishedDeposit.reason, multiplier: null,
+        label: publishedDeposit.reason === 'SOURCE_AMOUNT' ? '공급사 입력 금액' : '공급사 기간·주행거리 조건',
       },
+      ...('depositRuleDifference' in publishedDeposit && publishedDeposit.depositRuleDifference
+        ? { depositRuleDifference: publishedDeposit.depositRuleDifference } : {}),
     } : resolveReferenceDeposit(depositInput);
     const depositEvidence = {
       sourceRef: `source-product:${documentId}#price:${sourceKey}`,
       sourceAmount: typeof (raw as Rec).deposit === 'number' || typeof (raw as Rec).deposit === 'string' ? (raw as Rec).deposit as number | string : null,
       sourceNote: text(source.deposit_note) || null,
       reasonCode: publishedDeposit?.reason ?? deposit.depositRule?.code ?? assessDepositEvidence(depositInput).reason,
+      ...(publishedDeposit && 'publicationEvidenceReason' in publishedDeposit ? {
+        publicationEvidenceReason: publishedDeposit.publicationEvidenceReason,
+        publicationDecision: publishedDeposit.publicationDecision,
+      } : {}),
     };
     const channelPayoutFee = resolveSalesCommission({
       ...evidenceByTerm[sourceKey],
@@ -666,6 +679,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
   const maker = text(source.maker);
   const model = text(source.model);
   const trim = text(source.trim_name);
+  const engineCc = integer(source.engine_cc);
   const vehicleModelId = `reference_vm_${hash(`${maker}|${model}|${trim}|${text(source.fuel_type)}`)}`;
   return {
     productId: `reference_${documentId}`,
@@ -681,6 +695,8 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       subModel: text(source.sub_model) || null,
       trim: trim || null,
       fuel: text(source.fuel_type) || null,
+      engineCc,
+      engineCcState: engineCc === null ? 'HOLD' as const : 'KNOWN' as const,
       drive: text(source.drive_type) || null,
       seats: integer(source.seats),
       assetStatus: assetStatus(source.vehicle_status) ?? assetStatus(source.status) ?? assetStatus(source.status_kind),

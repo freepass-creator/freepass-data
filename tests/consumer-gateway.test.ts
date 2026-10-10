@@ -118,6 +118,34 @@ const withAccess = (
 };
 
 describe('read-only consumer gateway', () => {
+  it('delivers source displacement and explicit missing HOLD through both reference HTTP schemas', async () => {
+    for (const [consumerId, capability, route] of [
+      ['kakao-ops', 'catalog-reference', 'catalog-reference'],
+      ['internal-ai-test', 'internal-ai-reference', 'internal-ai-reference'],
+    ] as const) {
+      const product = { listable: true, provider_company_code: 'RP013', engine_cc: '1,998',
+        fuel_type: '가솔린', drive_type: 'AWD', price: { '36': { rent: 500000, deposit: null } } };
+      const source = { consumerId, observedAt: '2026-10-10T00:00:00Z', products: {
+        knownCc: product, missingCc: { ...product, engine_cc: null, fuel_type: '', drive_type: '' },
+      } };
+      const { app } = withAccess(new MemoryDataStore(), [{ id: consumerId, projectionId: 'erp-public', token, capabilities: [capability] }], undefined, {
+        read: async () => { throw new Error('unused'); },
+        readKakaoReferenceSource: async () => source,
+        readInternalAiReferenceSource: async () => source,
+      });
+      const response = await app.inject({ url: `/v1/consumers/${consumerId}/${route}`, headers });
+      expect(response.statusCode).toBe(200);
+      const rows = response.json().data;
+      expect(rows).toHaveLength(2);
+      expect(rows.find((row: { sourceProductId: string }) => row.sourceProductId === 'knownCc').vehicle)
+        .toMatchObject({ engineCc: 1998, engineCcState: 'KNOWN', fuel: '가솔린', drive: 'AWD' });
+      const missing = rows.find((row: { sourceProductId: string }) => row.sourceProductId === 'missingCc');
+      expect(missing.vehicle).toMatchObject({ engineCc: null, engineCcState: 'HOLD', fuel: null, drive: null });
+      expect(missing.vehicleMasterReference).toMatchObject({ state: 'HOLD', masterId: null, trimId: null });
+      expect(missing.offers[0].priceTerms[0].termKey).toBe('source:36');
+      await app.close();
+    }
+  });
   it('keeps an unknown sibling in internal AI ANY_TERM and excludes it from ALL_TERMS', async () => {
     const consumerId = 'internal-ai-test';
     const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트', deposit_note: '무보증',
