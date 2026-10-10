@@ -134,6 +134,23 @@ describe('contract fee link', () => {
     expect(result.fees?.supplierBillingFee.status).toBe('CONFIRMED');
   });
 
+  it('blocks blank plates and never matches plate-less assets to each other', () => {
+    for (const plate of ['', '   ', undefined]) {
+      expect(resolveContractFeeLink({ ...baseInput(), plate }, baseData({ assets: [asset('asset-1', '')] })))
+        .toMatchObject({ status: 'FAILED', failure: 'NO_PLATE' });
+    }
+    // 번호 없는 자산(신차 미배정)이 있어도 번호로는 연결되지 않는다.
+    expect(resolveContractFeeLink(baseInput(), baseData({ assets: [asset('asset-9', '')] })))
+      .toMatchObject({ status: 'FAILED', failure: 'NO_ASSET' });
+  });
+
+  it('looks up by vehicle UID (assetId) without a plate, e.g. a new car with no plate yet', () => {
+    const result = resolveContractFeeLink({ ...baseInput(), plate: undefined, assetId: 'asset-1' }, baseData({ assets: [asset('asset-1', '')] }));
+    expect(result.assetId).toBe('asset-1');
+    expect(result.failure).not.toBe('NO_PLATE');
+    expect(result.failure).not.toBe('NO_ASSET');
+  });
+
   it.each([
     ['NO_ASSET', baseInput(), baseData({ assets: [] })],
     ['MULTI_ASSET', baseInput(), baseData({ assets: [asset('asset-1'), asset('asset-2')] })],

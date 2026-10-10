@@ -4,7 +4,9 @@ import { toInternalFeeLookup } from '../domain/internal-fee-lookup-contract.js';
 import type { CatalogStore } from '../ports/catalog-store.js';
 
 export type ContractFeeLinkInput = {
-  plate: string;
+  /** 차량 UID(vehicleAssetId). 있으면 이것으로 찾고 차량번호는 쓰지 않는다(차량번호는 찾기용 보조 키). */
+  assetId?: string;
+  plate?: string;
   supplierId: string;
   termMonths: number;
   monthlyRent: number;
@@ -18,6 +20,7 @@ export type ContractFeeLinkData = {
 };
 
 export type ContractFeeLinkFailure =
+  | 'NO_PLATE'
   | 'NO_ASSET'
   | 'MULTI_ASSET'
   | 'NO_PRODUCT'
@@ -74,14 +77,17 @@ const failureResult = (
   detail?: unknown,
   term?: PriceTerm,
   offer?: Offer,
-): ContractFeeLinkResult => ({
+): ContractFeeLinkResult => {
+  const fees = term && offer ? firstFeeForTerm(offer, term) : undefined; // 한 번만 계산
+  return {
   status: 'FAILED',
   failure,
   ...ids,
   ...(detail !== undefined ? { detail } : {}),
   ...(term ? { priceTerm: priceTermResult(term) } : {}),
-  ...(term && offer && firstFeeForTerm(offer, term) ? { fees: firstFeeForTerm(offer, term)! } : {}),
-});
+  ...(fees ? { fees } : {}),
+  };
+};
 
 const conditionMismatches = (input: ContractFeeLinkInput, term: PriceTerm) => {
   const mismatches: Array<'rent' | 'deposit' | 'DEPOSIT_UNKNOWN'> = [];
@@ -105,8 +111,18 @@ export function resolveContractFeeLink(
   input: ContractFeeLinkInput,
   data: ContractFeeLinkData,
 ): ContractFeeLinkResult {
-  const plate = normalizePlate(input.plate);
-  const assets = data.assets.filter((asset) => normalizePlate(asset.plateNumber ?? '') === plate);
+  const assetId = (input.assetId ?? '').trim();
+  const plate = normalizePlate(input.plate ?? '');
+  // 번호가 비어 있으면 «번호 없는 자산» 끼리 '' 로 맞아 잘못 연결되므로 조회 전에 막는다.
+  if (!assetId && !plate) {
+    return failureResult('NO_PLATE', {});
+  }
+  const assets = assetId
+    ? data.assets.filter((asset) => asset.id === assetId)
+    : data.assets.filter((asset) => {
+      const assetPlate = normalizePlate(asset.plateNumber ?? '');
+      return assetPlate !== '' && assetPlate === plate;
+    });
   if (assets.length === 0) {
     return failureResult('NO_ASSET', {});
   }
