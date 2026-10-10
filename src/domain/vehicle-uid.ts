@@ -22,7 +22,7 @@ export type NormalizedVehicleIds = {
   externalIds: VehicleExternalId[];
 };
 export type VehicleUidResolution =
-  | { action: 'LINK'; vehicleUid: string; asset: VehicleAsset; reason: 'VIN' | 'SUPPLIER_VEHICLE' | 'PLATE' }
+  | { action: 'LINK'; vehicleUid: string; asset: VehicleAsset; reason: VehicleExternalIdKind }
   | { action: 'CREATE'; vehicleUid: string; externalIds: VehicleExternalId[] }
   | { action: 'HOLD'; reason: string }
   | { action: 'UNKNOWN'; reason: 'INSUFFICIENT_IDENTITY' };
@@ -140,10 +140,19 @@ export function isActiveExternalId(id: VehicleExternalId, at = new Date().toISOS
 
 function activeIds(asset: VehicleAsset, at: string): VehicleExternalId[] {
   const ids = (asset.externalIds ?? []).map(normalizeId).filter((x): x is VehicleExternalId => Boolean(x));
+  const activeExternalIds = ids.filter(id => isActiveExternalId(id, at));
   const legacy: VehicleExternalId[] = [];
-  if (asset.vin) legacy.push({ kind: 'VIN', value: normalizeVin(asset.vin)!, validFrom: asset.createdAt, source: 'legacy-field' });
-  if (asset.plateNumber) legacy.push({ kind: 'PLATE', value: normalizePlate(asset.plateNumber)!, validFrom: asset.createdAt, source: 'legacy-field' });
-  return [...ids, ...legacy].filter(id => isActiveExternalId(id, at));
+  const addLegacy = (kind: 'VIN' | 'PLATE', value: string | undefined) => {
+    if (!value) return;
+    const hasExternalKind = ids.some(id => id.kind === kind);
+    const matchesActiveExternalValue = activeExternalIds.some(id => id.kind === kind && id.value === value);
+    if (!hasExternalKind || matchesActiveExternalValue) {
+      legacy.push({ kind, value, validFrom: asset.createdAt, source: 'legacy-field' });
+    }
+  };
+  addLegacy('VIN', normalizeVin(asset.vin));
+  addLegacy('PLATE', normalizePlate(asset.plateNumber));
+  return [...activeExternalIds, ...legacy].filter(id => isActiveExternalId(id, at));
 }
 
 function sameId(id: VehicleExternalId, kind: VehicleExternalIdKind, value: string, supplierCode?: string) {
@@ -167,30 +176,53 @@ function activeValue(asset: VehicleAsset, kind: VehicleExternalIdKind, at: strin
   return activeIds(asset, at).find(id => id.kind === kind && (kind !== 'SUPPLIER_VEHICLE' || id.supplierCode === supplierCode))?.value;
 }
 
-function contradicts(asset: VehicleAsset, ids: NormalizedVehicleIds, assets: VehicleAsset[], at: string) {
-  const activeVin = activeValue(asset, 'VIN', at);
-  if (ids.vin && activeVin && activeVin !== ids.vin) return true;
-  const activeSupplier = activeValue(asset, 'SUPPLIER_VEHICLE', at, ids.supplierCode);
-  if (ids.supplierVehicleId && activeSupplier && activeSupplier !== ids.supplierVehicleId) return true;
-  const activePlate = activeValue(asset, 'PLATE', at);
-  if (ids.plate && activePlate && activePlate !== ids.plate) {
-    if (ids.vin === activeVin || (ids.supplierVehicleId === activeSupplier && ids.supplierCode)) {
-      const plateOwners = findActiveAssets(assets, 'PLATE', ids.plate, at).filter(x => x.id !== asset.id);
-      return plateOwners.length > 0;
+function candidateIdentifierKey(id: VehicleExternalId) {
+  return `${id.kind}:${id.kind === 'SUPPLIER_VEHICLE' ? id.supplierCode ?? '' : ''}:${id.value}`;
+}
+
+function candidateIdentifiers(ids: NormalizedVehicleIds, now: string): VehicleExternalId[] {
+  const out: VehicleExternalId[] = [];
+  const push = (id: VehicleExternalId) => {
+    const normalized = normalizeId(id);
+    if (!normalized) return;
+    if (normalized.validFrom > now || (normalized.validTo !== null && normalized.validTo !== undefined && normalized.validTo <= now)) return;
+    if (normalized.kind === 'SUPPLIER_VEHICLE' && !normalized.supplierCode) return;
+    if (!out.some(existing => candidateIdentifierKey(existing) === candidateIdentifierKey(normalized))) out.push(normalized);
+  };
+  if (ids.vin) push({ kind: 'VIN', value: ids.vin, validFrom: now, source: 'vehicle-uid-resolver' });
+  if (ids.supplierVehicleId && ids.supplierCode) {
+    push({ kind: 'SUPPLIER_VEHICLE', supplierCode: ids.supplierCode, value: ids.supplierVehicleId, validFrom: now, source: 'vehicle-uid-resolver' });
+  }
+  if (ids.plate) push({ kind: 'PLATE', value: ids.plate, validFrom: now, source: 'vehicle-uid-resolver' });
+  for (const id of ids.externalIds) push(id);
+  return out;
+}
+
+function conflictReason(kind: VehicleExternalIdKind) {
+  return `${kind}_CONFLICT`;
+}
+
+function contradicts(asset: VehicleAsset, identifiers: VehicleExternalId[], assets: VehicleAsset[], at: string) {
+  const active = activeIds(asset, at);
+  for (const id of identifiers) {
+    if (active.some(existing => sameId(existing, id.kind, id.value, id.supplierCode))) continue;
+    const sameNamespace = active.filter(existing =>
+      existing.kind === id.kind &&
+      (id.kind !== 'SUPPLIER_VEHICLE' || existing.supplierCode === id.supplierCode)
+    );
+    if (sameNamespace.length > 0) {
+      if (id.kind === 'PLATE') {
+        const plateOwners = findActiveAssets(assets, 'PLATE', id.value, at).filter(x => x.id !== asset.id);
+        if (plateOwners.length === 0) continue;
+      }
+      return true;
     }
-    return true;
   }
   return false;
 }
 
-function createExternalIds(ids: NormalizedVehicleIds, now: string): VehicleExternalId[] {
-  const out: VehicleExternalId[] = [];
-  if (ids.vin) out.push({ kind: 'VIN', value: ids.vin, validFrom: now, source: 'vehicle-uid-resolver' });
-  if (ids.supplierVehicleId && ids.supplierCode) {
-    out.push({ kind: 'SUPPLIER_VEHICLE', supplierCode: ids.supplierCode, value: ids.supplierVehicleId, validFrom: now, source: 'vehicle-uid-resolver' });
-  }
-  if (ids.plate) out.push({ kind: 'PLATE', value: ids.plate, validFrom: now, source: 'vehicle-uid-resolver' });
-  return out;
+function createExternalIds(identifiers: VehicleExternalId[], now: string): VehicleExternalId[] {
+  return identifiers.map(id => ({ ...id, validFrom: now, validTo: id.validTo ?? null, source: 'vehicle-uid-resolver' }));
 }
 
 export function resolveVehicleUid(
@@ -200,25 +232,26 @@ export function resolveVehicleUid(
 ): VehicleUidResolution {
   const now = options.now ?? new Date().toISOString();
   const ids = normalizeExternalIds(candidate);
-  const vin = findActiveAssets(assets, 'VIN', ids.vin, now);
-  const supplier = findActiveAssets(assets, 'SUPPLIER_VEHICLE', ids.supplierVehicleId, now, ids.supplierCode);
-  const plate = findActiveAssets(assets, 'PLATE', ids.plate, now);
-  if (vin.length > 1) return { action: 'HOLD', reason: 'VIN_CONFLICT' };
-  if (supplier.length > 1) return { action: 'HOLD', reason: 'SUPPLIER_VEHICLE_CONFLICT' };
-  if (plate.length > 1) return { action: 'HOLD', reason: 'PLATE_CONFLICT' };
-  const linked = [...new Map([...vin, ...supplier, ...plate].map(asset => [asset.id, asset])).values()];
+  const identifiers = candidateIdentifiers(ids, now);
+  const matches = identifiers.map(id => ({
+    id,
+    assets: findActiveAssets(assets, id.kind, id.value, now, id.supplierCode),
+  }));
+  const conflict = matches.find(match => match.assets.length > 1);
+  if (conflict) return { action: 'HOLD', reason: conflictReason(conflict.id.kind) };
+  const linked = [...new Map(matches.flatMap(match => match.assets).map(asset => [asset.id, asset])).values()];
   if (linked.length > 1) return { action: 'HOLD', reason: 'IDENTIFIER_POINTS_TO_DIFFERENT_ASSETS' };
   if (linked.length === 1) {
     const asset = linked[0]!;
-    if (contradicts(asset, ids, assets, now)) return { action: 'HOLD', reason: 'IDENTIFIER_CONTRADICTION' };
-    const reason = vin[0]?.id === asset.id ? 'VIN' : supplier[0]?.id === asset.id ? 'SUPPLIER_VEHICLE' : 'PLATE';
+    if (contradicts(asset, identifiers, assets, now)) return { action: 'HOLD', reason: 'IDENTIFIER_CONTRADICTION' };
+    const reason = matches.find(match => match.assets[0]?.id === asset.id)?.id.kind ?? 'PLATE';
     return { action: 'LINK', vehicleUid: asset.id, asset, reason };
   }
-  if (ids.vin || (ids.supplierCode && ids.supplierVehicleId) || ids.plate) {
+  if (identifiers.length > 0) {
     return {
       action: 'CREATE',
       vehicleUid: newVehicleUid(options.clock, options.random),
-      externalIds: createExternalIds(ids, now),
+      externalIds: createExternalIds(identifiers, now),
     };
   }
   return { action: 'UNKNOWN', reason: 'INSUFFICIENT_IDENTITY' };
