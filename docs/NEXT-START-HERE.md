@@ -2560,3 +2560,12 @@ This file exists so another session can continue without re-discovering or re-cr
 - 검증: build, architecture, standards 33 schemas + 15 tests, data-access-boundary PASS. 전체 Vitest 2081 PASS/16 conditional SKIP; 후속 stream-limit fixture 추가 뒤 gateway 재검증 결과는 PR 기록을 따른다. SDK/transport 오류 원문은 고정 VEHICLE_PHOTO 오류로 정리하며 로깅하지 않는다.
 - 남음: factory는 명시 호출만 가능하며 runtime 기본 주입 OFF. 실제 승인 refs 0건, 운영 폴더 ID와 Drive 읽기 권한 미승인. CODED/TESTED와 실제 원본 연결·DEPLOYMENT/CUTOVER를 구분한다. Drive/DB/Sheet/IAM/배포 실행 없음.
 - next_start_here: PR419의 최종 commit/CI/Claude 결과를 확인하고 사진 담당이 독립 경계 검증한다. 별도 운영 승인 전 runtime 주입·photo_original_refs 입력·Drive 공유를 하지 않는다.
+
+## 2026-10-10 인증된 전체 수집 원천 조회 scope
+
+- 목적/정본: 대표의 수집 정보 있음/없음 구분. PR440 c61c0beb 기준 기존 통합 checkout에서 COMPOSE_OR_EXTEND/academy READY 후 기존 builder/gateway/schema/test를 확장했다. PR419 main30675ec, PR440 main01a7f0b 통합 완료; 후속 sourceScope 작업은 별도다.
+- 변경: 기존 catalog-reference/internal-ai-reference에서 명시 sourceScope=COLLECTED와 등록 referenceSourceScopes grant가 함께 있을 때만 비판매·가격누락 원천을 반환한다. grant 없으면 원천 reader 호출 전에403, invalid scope400. 기본/public LISTABLE 범위는 그대로다. 원천 ID/임시 공급사 code/원문 상태와 판매가능 여부를 분리하며, 빈 조건은 HOLD+누락 reason이고 금액0으로 만들지 않는다.
+- 조건 보존: sourceRecord.priceConditions는 원래 key/출처/기간/약정거리/원문 대여료·보증금 및 typed 상태와 두 fee축을 보존한다. 계산 불가능은 UNKNOWN/null, 원문0과 확정 ZERO는 별도다. 다른 raw 고객/비밀 필드는 내보내지 않는다. 유효 기존 priceTerms/정책명code/engineCc/출처/HOLD는 재사용한다.
+- 검증: 현재 build, 관련214 tests, architecture, standards33 schemas+15 tests, data-access boundary PASS. 최종 cumulative suite/CI/Claude 및 금액 담당의 기존 private fixture 전수 대조는 후속 PR의 exact head에 기록한다.
+- 남음: 운영 sourceScope grant/token 배포, 외부 Kakao/ERP caller, DB/Sheet/IAM/Drive/배포 변경 없음. CODED/TESTED와 실제 운영 전체 원천 조회는 구분한다.
+- next_start_here: 최종 scope head의 권한 pre-read denial/default 불변/빈 조건 schema/HOLD/복수 원천/같은 term 회귀와 private 원천 대조를 확인한 뒤 코드 통합만 진행한다. 현행 RP 코드를 새 정본 identity로 고정하지 않는다.

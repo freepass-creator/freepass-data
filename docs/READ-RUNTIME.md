@@ -434,6 +434,14 @@ Both responses use `Cache-Control: no-store`.
 
 ### Kakao catalog reference
 
+#### Explicit collected-source scope — code only, operating grants OFF
+
+The existing authenticated reference routes accept `sourceScope=COLLECTED` only for their existing reference consumer identity with an explicit `referenceSourceScopes=["COLLECTED"]` registration. Missing grant returns403 before source reads; invalid/duplicate scope returns400. Existing registrations and omitted/`LISTABLE` scope retain the listable projection. This code does not grant a deployed token new access or change the public feed.
+
+Collected results keep every source document separately, including non-listable, deleted/withdrawn and price-less records. `sourceRecord` states the original listable/status/supplier/source reference and condition coverage with `publicationDecision=HOLD`. Empty offers or terms are permitted only in a COLLECTED response with sourceRecord; they are never zero-price or sale eligibility. `priceConditions` retains each original key/period/mileage, allowlisted raw rent/deposit values, typed null/UNKNOWN and the two existing fee axes. Valid priceTerms, policy and vehicle facts reuse the same builder. Period-only lookups can retain a missing-rent row; monetary filters still require a validated matching priceTerm. Exact plate ambiguity keeps all candidates. Arbitrary raw fields/customer/secret payloads are excluded. Supplier codes remain preserved temporary external IDs.
+
+Operating scope registration, caller adoption and deployment require separate authorization and readback. The reference remains REFERENCE_ONLY/HOLD.
+
 `GET /v1/consumers/kakao-ops/catalog-reference`
 
 - only the separately registered `kakao-ops` identity may use it;

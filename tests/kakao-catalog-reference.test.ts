@@ -857,3 +857,58 @@ it('F04 source identity is lazy, required when recorded, and follows the configu
     else process.env.FREEPASS_SHEET_F04_ID = previous;
   }
 });
+
+describe('collected reference scope preserves non-sellable and missing source conditions', () => {
+  const base = { provider_company_code: 'TEMP_A', provider_name: '같은공급사', maker: 'fixture', car_number: '123가4567', status_kind: '불가', engine_cc: 1998 };
+  const input = { consumerId: 'kakao-ops', observedAt: '2026-10-10T00:00:00Z', products: {
+    sold: { ...base, listable: true, price: { '36': { rent: 500000, deposit: null } } },
+    blocked: { ...base, listable: false, customer_name: 'private-customer', password: 'private-secret', price: { '12': { rent: 400000, deposit: 1000000, customer: 'private-customer' }, '36': { rent: null, deposit: null, token: 'private-secret' }, 'bad-key': { rent: 'unknown' } } },
+    missing: { ...base, listable: false, price: null },
+    unknownSupplier: { ...base, provider_company_code: '', listable: null, price: { '24_3만': { rent: null, deposit: 0 } } },
+  } };
+  it('retains every source ID and original row evidence with no fabricated zero or offer', () => {
+    const original = structuredClone(input);
+    expect(buildKakaoCatalogReference(input).data.map(p => p.sourceProductId)).toEqual(['sold']);
+    const r = buildKakaoCatalogReference({ ...input, sourceScope: 'COLLECTED' });
+    expect(r.data).toHaveLength(4); expect(input).toEqual(original);
+    expect(JSON.stringify(r)).not.toContain('private-customer');
+    expect(JSON.stringify(r)).not.toContain('private-secret');
+    const blocked = r.data.find(p => p.sourceProductId === 'blocked')!;
+    expect(blocked.sourceRecord).toMatchObject({ listable: false, status: '불가', conditionState: 'HOLD', reasonCode: 'SOURCE_PRICE_CONDITIONS_PARTIAL', publicationDecision: 'HOLD' });
+    expect(blocked.sourceRecord!.priceConditions).toHaveLength(3);
+    expect(blocked.sourceRecord!.priceConditions.find(t => t.sourceKey === '36')).toMatchObject({ termMonths: 36, monthlyRentSourceValue: null, depositSourceValue: null, state: 'HOLD' });
+    expect(blocked.sourceRecord!.priceConditions.find(t => t.sourceKey === 'bad-key')!.termMonths).toBeNull();
+    const missing = r.data.find(p => p.sourceProductId === 'missing')!;
+    expect(missing.offers[0]!.priceTerms).toEqual([]);
+    expect(missing.sourceRecord).toMatchObject({ reasonCode: 'SOURCE_PRICE_CONDITIONS_MISSING', priceConditions: [] });
+    expect(r.data.find(p => p.sourceProductId === 'unknownSupplier')!.offers).toEqual([]);
+    expect(r.data.find(p => p.sourceProductId === 'unknownSupplier')!.sourceRecord!.priceConditions[0]).toMatchObject({
+      termMonths: 24, contractedMileage: { km: 30000, period: 'year' }, depositSourceValue: 0, depositAmount: null, depositState: 'UNKNOWN',
+      monthlyRentAmount: null, monthlyRentState: 'UNKNOWN', supplierBillingFee: { state: 'UNKNOWN', amount: null }, channelPayoutFee: { state: 'UNKNOWN', amount: null },
+    });
+    expect(blocked.vehicle).toMatchObject({ engineCc: 1998, engineCcState: 'KNOWN' });
+    expect(r.meta).toMatchObject({ sourceScope: 'COLLECTED', authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD' });
+  });
+  it('finds price-less vehicles and ambiguous plates; period-only lookup retains missing rent evidence', () => {
+    const r = buildKakaoCatalogReference({ ...input, sourceScope: 'COLLECTED' });
+    const exact = filterReferenceZeroDeposit(r, { sourceScope: 'COLLECTED', plateNumber: '123가4567', supplierName: '같은공급사' });
+    expect(exact.data).toHaveLength(4);
+    expect(exact.meta).toMatchObject({ queryResolution: { state: 'HOLD', reasonCode: 'PLATE_MULTIPLE_PRODUCTS' } });
+    const period = filterReferenceZeroDeposit(r, { sourceScope: 'COLLECTED', termMonths: '36' });
+    expect(period.data.map(p => p.sourceProductId)).toEqual(['blocked', 'sold']);
+    expect(filterReferenceZeroDeposit(r, { sourceScope: 'COLLECTED', termMonths: '36', monthlyRentMax: '450000' }).data).toEqual([]);
+    expect(filterReferenceZeroDeposit(r, { sourceScope: 'COLLECTED', depositState: 'ZERO' }).data).toEqual([]);
+  });
+  it('requires collected metadata and missing-condition reason without loosening default nonempty offers', () => {
+    const schema = JSON.parse(readFileSync(new URL('../contracts/kakao-catalog-reference-v1.schema.json', import.meta.url), 'utf8'));
+    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(schema);
+    const r = buildKakaoCatalogReference({ ...input, sourceScope: 'COLLECTED' });
+    expect(validate(r), JSON.stringify(validate.errors)).toBe(true);
+    const bad = structuredClone(r); delete bad.meta.sourceScope;
+    expect(validate(bad)).toBe(false);
+    const unknown = structuredClone(r); unknown.data.find(p => p.sourceProductId === 'missing')!.sourceRecord!.reasonCode = null;
+    expect(validate(unknown)).toBe(false);
+    const normal = buildKakaoCatalogReference(input); normal.data[0]!.offers[0]!.priceTerms = [];
+    expect(validate(normal)).toBe(false);
+  });
+});
