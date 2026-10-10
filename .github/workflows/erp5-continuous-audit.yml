@@ -53,6 +53,9 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  FREEPASS_SHEET_F04_ID: ${{ secrets.FREEPASS_SHEET_F04_ID }}
+
 jobs:
   audit:
     if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.economics_dry_run || inputs.ownership_dry_run)) }}

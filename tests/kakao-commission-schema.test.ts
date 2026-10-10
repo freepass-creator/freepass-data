@@ -1,3 +1,4 @@
+process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { expect, test } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import schema from '../contracts/kakao-catalog-reference-v1.schema.json' with { type: 'json' };

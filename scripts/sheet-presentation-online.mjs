@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
-import { planPresentation, specification } from './sheet-presentation.mjs';
+import { planPresentation, specification, resolveSpreadsheetId } from './sheet-presentation.mjs';
 
 const hold = message => { throw new Error(`HOLD: ${message}`); };
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 export const digest = value => createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
 const base = workbook => {
-  const id = specification.workbooks[workbook]?.spreadsheetId;
+  const id = resolveSpreadsheetId(specification.workbooks[workbook]);
   if (!id) hold('Unknown workbook');
   return `https://sheets.googleapis.com/v4/spreadsheets/${id}`;
 };
@@ -25,7 +25,7 @@ export async function collectPresentation(api, workbook) {
   const started = new Date().toISOString();
   const url = base(workbook);
   const before = await api(`${url}?fields=${encodeURIComponent(metadataFields)}`, { method: 'GET' });
-  if (before.spreadsheetId !== specification.workbooks[workbook].spreadsheetId || !Array.isArray(before.sheets)) hold('Incomplete metadata response');
+  if (before.spreadsheetId !== resolveSpreadsheetId(specification.workbooks[workbook]) || !Array.isArray(before.sheets)) hold('Incomplete metadata response');
   const spreadsheet = structuredClone(before), coverage = [];
   for (const sheet of spreadsheet.sheets) {
     const prop = sheet.properties;

@@ -1,3 +1,5 @@
+process.env.FREEPASS_SHEET_F01_ID = 'test-sheet-f01';
+process.env.FREEPASS_SHEET_F86_ID = 'test-sheet-f86';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { collectPresentation, runPresentation } from '../scripts/sheet-presentation-online.mjs';
@@ -5,7 +7,7 @@ import { specification as spec } from '../scripts/sheet-presentation.mjs';
 
 function service(workbook = 'F01') {
   const state = { writes: 0, gets: 0, mutateAt: 0, corruptAfterWrite: false, omitColumns: false };
-  const book = { spreadsheetId: spec.workbooks[workbook].spreadsheetId, sheets: spec.workbooks[workbook].primarySheetIds.map((sheetId, i) => ({
+  const book = { spreadsheetId: process.env[spec.workbooks[workbook].spreadsheetIdEnv], sheets: spec.workbooks[workbook].primarySheetIds.map((sheetId, i) => ({
     properties: { sheetId, index: i, title: spec.primaryTabs[i].label, gridProperties: { rowCount: 3, columnCount: 3 } },
     data: [{ rowData: [{ values: ['차량번호', '차명(원문)', '옵션(원문)'].map(stringValue => ({ userEnteredValue: { stringValue } })) }, { values: [{ userEnteredValue: { stringValue: `TEST${i}` } }] }], columnMetadata: [{ pixelSize: 90 }, { pixelSize: 90 }, { pixelSize: 90 }] }],
   })) };

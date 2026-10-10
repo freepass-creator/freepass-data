@@ -14,3 +14,15 @@ describe('RP021 Billincar policy repair invariant', () => {
     expect(() => assertBillincarProductSet(products)).not.toThrow();
   });
 });
+
+it('missing Billincar source ID stops before Firebase access', async () => {
+  const { applyBillincarPolicyRepair } = await import('../src/infra/billincar-policy-repair-firestore.js');
+  const previous = process.env.FREEPASS_SHEET_BILLINCAR_POLICY_ID;
+  try {
+    delete process.env.FREEPASS_SHEET_BILLINCAR_POLICY_ID;
+    await expect(applyBillincarPolicyRepair()).rejects.toThrow('MISSING_SHEET_ID_ENV: FREEPASS_SHEET_BILLINCAR_POLICY_ID');
+  } finally {
+    if (previous === undefined) delete process.env.FREEPASS_SHEET_BILLINCAR_POLICY_ID;
+    else process.env.FREEPASS_SHEET_BILLINCAR_POLICY_ID = previous;
+  }
+});

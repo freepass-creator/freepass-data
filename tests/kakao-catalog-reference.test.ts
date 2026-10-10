@@ -1,3 +1,4 @@
+process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { precomputeOfferEconomics, readStoredTermFees } from '../src/application/resolve-offer-commercial-terms.js';
@@ -773,4 +774,19 @@ it('never borrows a Billin36 monthly basis from a different mileage or period',(
   const make=(key:string)=>buildKakaoCatalogReferenceProduct('synthetic',{listable:true,provider_company_code:'RP021',product_type:'\uad6c\ub3c5',price:{[key]:{rent:400000,deposit:1000000},'24_\uc6d41500km':{rent:500000,deposit:1000000}}})!.offers[0]!.priceTerms.find(t=>t.termMonths===24)!;
   for(const key of ['36_\uc6d43000km','36_\uc5f01500km'])expect(make(key).supplierBillingFee).toMatchObject({state:'UNKNOWN',reasonCode:'BILLIN_36_MONTH_RENT_REQUIRED'});
   const same=make('36_\uc6d41500km');expect(same.supplierBillingFee).toMatchObject({state:'CALCULATED',amount:400000});expect(same.channelPayoutFee.amount).toBe(320000);
+});
+
+it('F04 source identity is lazy, required when recorded, and follows the configured ID', async () => {
+  const { KAKAO_COMMISSION_POLICY } = await import('../src/application/kakao-catalog-reference.js');
+  const previous = process.env.FREEPASS_SHEET_F04_ID;
+  try {
+    delete process.env.FREEPASS_SHEET_F04_ID;
+    expect(KAKAO_COMMISSION_POLICY.policyId).toBeTruthy();
+    expect(() => JSON.stringify(KAKAO_COMMISSION_POLICY)).toThrow('MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID');
+    process.env.FREEPASS_SHEET_F04_ID = '  test-configured-f04  ';
+    expect(KAKAO_COMMISSION_POLICY.sourceFiles[0].id).toBe('test-configured-f04');
+  } finally {
+    if (previous === undefined) delete process.env.FREEPASS_SHEET_F04_ID;
+    else process.env.FREEPASS_SHEET_F04_ID = previous;
+  }
 });

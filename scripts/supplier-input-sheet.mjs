@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import {createHash} from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { specification } from './sheet-presentation.mjs';
+import { specification, resolveSpreadsheetId } from './sheet-presentation.mjs';
 export const inputSpec = JSON.parse(fs.readFileSync(new URL('../contracts/supplier-input-sheet-spec.v1.json', import.meta.url), 'utf8'));
 const hold = message => { throw new Error(`HOLD: ${message}`); };
 const inputDropdown = (spec,h) => spec.dropdownPolicy?.disabled || spec.dropdownPolicy?.freeText?.includes(h) ? null : spec.dropdowns?.[h];
@@ -39,7 +39,7 @@ export function planSupplierInput(input, spec=inputSpec, now=Date.now()) {
   const age=now-Date.parse(capturedAt);
   if(!Number.isFinite(age)||age< -1000||age>300000)hold('Fresh read required');
   if(!binding?.spreadsheetId||spreadsheet?.spreadsheetId!==binding.spreadsheetId)hold('Exact workbook binding required');
-  if(Object.values(specification.workbooks).some(w=>w.spreadsheetId===binding.spreadsheetId))hold('Production F01/F86 is not an input workbook');
+  if(Object.values(specification.workbooks).some(w=>resolveSpreadsheetId(w)===binding.spreadsheetId))hold('Production F01/F86 is not an input workbook');
   const sheets=spreadsheet.sheets??[], ids=sheets.map(s=>s.properties.sheetId);
   if(new Set(ids).size!==ids.length)hold('Duplicate sheet IDs');
   if(JSON.stringify([...ids].sort((a,b)=>a-b))!==JSON.stringify((input.sheetInventory??[]).map(s=>s.sheetId).sort((a,b)=>a-b)))hold('Complete independent inventory required');
@@ -531,7 +531,7 @@ const canonEqual = (a,b) => canonKey(a)===canonKey(b);
 function canonTabs(snapshot,spec){
   const book=snapshot.spreadsheet??snapshot,all=book?.sheets;
   if(!Array.isArray(all)||!all.length)hold('Canon requires native Sheets GridData');
-  if(book.spreadsheetId&&Object.values(specification.workbooks).some(w=>w.spreadsheetId===book.spreadsheetId))hold('Production F01/F86 is not an input workbook');
+  if(book.spreadsheetId&&Object.values(specification.workbooks).some(w=>resolveSpreadsheetId(w)===book.spreadsheetId))hold('Production F01/F86 is not an input workbook');
   if(new Set(all.map(s=>s.properties?.sheetId)).size!==all.length||new Set(all.map(s=>s.properties?.title)).size!==all.length)hold('Canon duplicate tabs');
   const titles=[spec.summaryTitle,...sharedTitles(spec)];
   const tabs=titles.map(t=>all.find(s=>s.properties?.title===t));
@@ -813,7 +813,7 @@ export function planTabConsistencyFix(snapshot,spec=inputSpec){
 function canonCaptureTabs(spec,metadata){
   const book=metadata.spreadsheet??metadata;
   if(!Array.isArray(book.sheets))hold('Capture metadata sheets required');
-  if(Object.values(specification.workbooks).some(w=>w.spreadsheetId===book.spreadsheetId))hold('Production F01/F86 is not an input workbook');
+  if(Object.values(specification.workbooks).some(w=>resolveSpreadsheetId(w)===book.spreadsheetId))hold('Production F01/F86 is not an input workbook');
   return [spec.summaryTitle,...sharedTitles(spec)].map(title=>{
     const matches=book.sheets.filter(s=>s.properties?.title===title);
     if(matches.length!==1)hold(`Capture metadata tab missing or duplicate: ${title}`);
