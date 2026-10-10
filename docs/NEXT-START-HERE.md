@@ -578,6 +578,12 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 검증: 정책 invariant·제품 범위 및 npm/job/adapter 입구 부재 8 PASS, 전체 Vitest 2,133 PASS / 외부환경 조건부 16 SKIP, build·architecture·Data Access boundary PASS, standards 33개 schema/15 PASS(기존 PARTIAL 유지), 실제 로컬 read-runtime smoke 13 PASS. 최종 exact commit·CI·Claude 결과는 이 작업 PR의 통합 영수증에 고정한다.
 - 남음: 운영 image `050e382`는 변경하지 않으며 배포·DB·IAM·ACTIVE·외부 저장소 변경 0회. 현재 가격/정책의 RP binding 재발급이나 정정은 별도 작업이다.
 - 복원/next_start_here: 이 폐기 commit의 revert로 코드만 복원할 수 있다. 복원하더라도 1회성 보정의 재실행 권한은 없다. 현재 main과 PR 검증을 확인하고 실제 미사용이 입증된 다음 후보만 이어서 폐기한다.
+### 2026-10-11 렌트존 번호 미정 정제 차량번호 분리
+
+- 정본 readback: `freepasserp5` 기존 SourceIngestionStore, source `shared-sheet:fa91e570d9bb9b3b0667451e`, run `run_61934839374a9d0d4f7d9b3164bc8487b587b680`, observedAt `2026-10-10T22:00:12.027Z`, COMPLETED. 렌트존 RAW 8/정제 후보 8 실제 저장 확인. 레이 원문 두 행의 보증금 KNOWN/ZERO와 기간별 대여료는 별도 보존되어 있다. 저장 누락으로 판단하거나 중복 저장하지 않는다.
+- 변경: 기존 normalizer에서 번호 미정 placeholder는 optional `candidate.carNumber`에 넣지 않는다. RAW 값·관측 ID·PLATE_NOT_ASSIGNED·차종 충돌 및 master 미확정 사유는 그대로 보존한다. 정제 출력 변경을 구분하도록 ruleVersion `/4`→`/5`. 새 schema/reader/영구상품ID/행 병합 없음.
+- 검증: shared-sheet capture/canonical 71 PASS, build/diff check PASS. 번호 미정 두 관측의 RAW 보존·ID 분리·REJECTED 유지·정제 carNumber 미설정 회귀. 운영 쓰기0, 배포0.
+- 남음/next_start_here: 조회 담당은 저장된 REJECTED 후보의 확인된 기간별 조건을 원문 근거와 함께 표시하되 차량수/영구 상품 연결로 승격하지 않는다. 기존 저장 후보에는 placeholder가 남아 있으므로 조회 projection에서도 assigned 판정 후 미설정/null로 노출한다. 이 변경의 통합과 독립 검토 결과를 별도 확인한다.
 
 ### 2026-10-10 PR427 손오공 RAW 크기 안전장치 — 운영 전환 HOLD
 

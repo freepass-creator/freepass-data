@@ -8,7 +8,7 @@ import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION, type IdentityChoice, type VehicleIdentity, type VehicleMasterRecord } from '../domain/vehicle-identity-resolution.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWaiverFieldForTermMonths } from '../domain/deposit-evidence.js';
-export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/4';
+export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/5';
 export type SharedSheetMasterEvidence = { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
 /** AI 상황실 2026-10-04 (대표): every car is stored. The sheet status text is kept as-is; it only decides sale exposure.
  * assetStatus is the reviewed physical-state mapping; an unlisted status is HOLD, never guessed. */
@@ -158,7 +158,9 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     firstObservedAt: raw.firstObservedAt ?? raw.observedAt,
     // null = first run unknown (older RAW history): never substitute the current run.
     ...(raw.firstRunId === undefined ? { firstRunId: raw.runId } : raw.firstRunId ? { firstRunId: raw.firstRunId } : {}),
-    carNumber: plate, priceTerms, issues: [...new Set(issues)], vehicleFacts: facts,
+    // Keep supplier placeholders in RAW, never expose them as a normalized vehicle identity.
+    ...(isAssignedPlate(plate) ? { carNumber: plate } : {}),
+    priceTerms, issues: [...new Set(issues)], vehicleFacts: facts,
     ...(typeof supplier === 'string' ? { providerCompanyCode: supplier } : {}), ...(type ? { commercialType: type } : {}) };
   for (const [key, fact] of Object.entries(facts.fields)) {
     const target = ({ maker: 'maker', model: 'model', subModel: 'subModel', trimName: 'trimName', fuel: 'fuelType', drive: 'driveType', seats: 'seats', mileageKm: 'mileageKm' } as Record<string, string>)[key];
