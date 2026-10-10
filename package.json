@@ -58,6 +58,7 @@
     "repair:autoplus-policy": "tsx src/jobs/apply-autoplus-policy-repair.ts",
     "repair:billincar-policy": "tsx src/jobs/apply-billincar-policy-repair.ts",
     "probe:estimate-writer-canary": "tsx src/jobs/probe-estimate-writer-canary.ts",
+    "source:sonogong": "tsx src/jobs/collect-sonogong.ts",
     "source:iancar:direct": "tsx src/jobs/collect-iancar-direct.ts",
     "test:source:iancar:direct": "vitest run tests/iancar-direct-source.test.ts",
     "test:source:iancar:one-api": "vitest run tests/iancar-one-api.test.ts",

@@ -529,6 +529,24 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-10 PR427 손오공 RAW 크기 안전장치 — 운영 전환 HOLD
+
+- 목적/기준 revision: `4b9cca3172d23da94a90df98bcd8850b0bc44229`에서 첫 차량에 전체 목록 envelope가 집중되는 문제를 기존 PR427 범위에서 해소한다.
+- 변경/재사용: 기존 RAW record·`prepareRawSourceBatch`·수집 job을 COMPOSE_OR_EXTEND. 원문 페이지별 분리와 적재 전 개별 문서 크기 차단이며 새 collection/schema/bucket은 없다. 차량 마스터 전용 archive는 공급사 RAW 보존 권한을 대체하지 않아 사용하지 않는다.
+- 검증: 관련 80개 테스트와 build PASS. 합성 900대/9페이지의 합산 원문이 1MiB를 넘는 상황에서 페이지별 재조립 동일성과 초과 상세의 ingest 호출 0회를 확인했다. 이전 62/79개 테스트는 작은 fixture의 내용·승인 검사만 포함하여 합산 크기와 대규모 UTF-8 원문을 놓쳤다.
+- 남음: 실제 공급사 수집·RAW 적재·배포·ACTIVE 전환 0회. 개별 페이지/상세 초과는 HOLD. 현재 RAW runtime은 normalize 미전달이며 rawCount는 페이지 포함 증거 건수다. 미래 정규화 소비자는 LIST_PAGE를 차량으로 처리하면 안 된다. 수정판 독립 검토/CI는 별도 확인한다.
+- next_start_here: 수정판 exact SHA의 Claude 검토와 CI 확인 후 병합 담당자가 판단한다. 구버전 실제 폐기는 소비처 최신 경로 readback과 별도 운영 승인을 확인한 뒤 진행한다.
+
+### 2026-10-10 손오공 ERP 읽기 포트 이식 — 코드/가짜 응답 시험, 운영 HOLD
+
+- 목적 / 대상 revision: `work/freepass-data/sonogong-port-20261010`, 기준 `9e8ecd575edcbdd04b13a9eac6092443025f61b7`. 사용자 지정 작업 트리만 수정. 커밋·push 없음. main/Issue #24/PR 확인은 호출자의 사전 확인을 사용했다.
+- 재사용: academy `READY`, `CREATE_NEW_JUSTIFIED`. 기존 손오공 RAW 어댑터·공통 수집 검사·SourceIngestionStore 적재 경로·보증금 규칙을 확장. ERP4 `origin/main` 읽기 로직의 인증/페이지/상세 계약만 이식하고 파일 토큰 캐시·덤프/차종/옵션 정리는 제외. ERP4는 수정하지 않았다.
+- 변경: `src/adapters/sonogong-erp-reader.ts`, 기존 `supplier-source-capture.ts`, `src/domain/sonogong-deposit-comparison.ts`, `src/jobs/collect-sonogong.ts`, `tests/sonogong-erp-reader.test.ts`, `package.json`, `docs/NATIVE-SOURCE-COLLECTOR.md` 및 이 이력. `source:sonogong` 기본 쓰기 0, 승인 환경변수+`--apply-raw`+RAW_READY에서만 기존 적재. 부분 수집은 PARTIAL/HOLD이며 삭제·발행하지 않는다.
+- 제한: 동시 1, 시작 간격 250ms, 요청 15초 timeout, 3회 백오프 재시도, 페이지 100/버킷·상세 총 1,000, freshness 1시간. 15분 주기 제안이며 예약 생성 없음. 원문 estimates 보존, 비교는 기간별 건수/구간만 출력한다.
+- 검증: npm 오프라인 잠금 설치 후 손오공 20 + 기존 source-intake 17 PASS. architecture/Data Access 경계·standards 15·시트 106·build PASS. `npm.cmd run check`는 runtime smoke 12 PASS/1 FAIL (`uv_os_get_passwd ENOMEM`)로 중단. 독립 `node:os.userInfo()` 같은 오류 재현. 별도 shadow 10 PASS, dashboard 21 PASS, 전체 Vitest 1,954 PASS / 12 FAIL / 16 SKIP. 실패는 기존 tsx/사용자 정보·jq 실행 권한·로컬 서버 연결 경로이며 관련 시험/기대값은 변경하지 않았다. 전체 PASS 아님. 빌드된 CLI의 승인/계정 누락 차단 및 diff 공백 검사 확인.
+- 남음: 계정 등록, 첫 실호출로 DAILY/응답 형태/원천 시각 계약 확인, 운영 RAW 저장·되읽기, 상품 칸 정리/발행 이관, 독립 검토. BLOCKED_NETWORK: 손오공 실호출·운영 되읽기·Claude 독립 검토.
+- next_start_here: [손오공 이식/주입 절차](NATIVE-SOURCE-COLLECTOR.md#손오공-rp012-erp-읽기-이식--코드가짜-응답-시험-운영-hold-2026-10-10). 호출자가 환경 제약 없는 곳에서 전체 check와 검토를 마친 뒤 반영한다. 계정 등록 후 기본 읽기 → 비교 → 별도 승인 RAW → 되읽기 순서. ERP4 중단은 **Data 수집 첫 성공 + 매시 발행 이관 반영 + 2주 관찰** 충족 후 별도 실행.
+
 ### 2026-10-10 PR #419 반려 수정 — 차량사진 확인·응답 슬롯·미디어 검증 통합
 
 - 목적 / 대상 revision: `work/freepass-data/vehicle-photo-proxy-20261010`, HEAD `dac29b00847b0ab77c191ff4d777db6ca09d7b52`의 깨끗한 작업 트리에서 사용자 지정 3건을 수정. academy:start READY. 새 파일 없이 기존 공통 계약·게이트웨이·시험을 확장했다. 커밋·푸시 없음.

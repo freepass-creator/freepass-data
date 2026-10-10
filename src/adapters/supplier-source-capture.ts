@@ -16,7 +16,9 @@ const buckets = ['LOW_SONOKONG_DAILY', 'LOW_SONOKONG', 'LOW_TCAR'] as const;
 export type SonogongBucketObservation = {
   bucket: typeof buckets[number]; observedAt: string; revision: string;
   declaredTotal: number | null; complete: boolean;
-  records: Array<{ list: Record<string, unknown>; detail: Record<string, unknown> | null }>;
+  listResponses?: Record<string, unknown>[];
+  records: Array<{ list: Record<string, unknown>; detail: Record<string, unknown> | null;
+    detailResponse?: Record<string, unknown> }>;
 };
 
 export function sonogongSourceAdapter(input: {
@@ -47,11 +49,25 @@ export function sonogongSourceAdapter(input: {
             || plate(record.detail.carNumber) !== plate(record.list.carNumber)) throw new Error('SONOGONG_DETAIL_IDENTITY_MISMATCH');
           const payload = structuredClone({ bucket: observation.bucket,
             sourceRevision: observation.revision, observedAt: observation.observedAt,
-            list: record.list, detail: record.detail });
+            list: record.list, detail: record.detail,
+            ...(record.detailResponse ? { detailResponse: record.detailResponse } : {}),
+          });
           records.push({ sourceRecordId: `${observation.bucket}:${record.list.id}`,
             sourceFingerprint: fingerprint(payload), payload });
         }
       }
+      // Preserve envelopes in the existing RAW collection, one original page per record.
+      // Vehicle fingerprints must not depend on another bucket's inventory.
+      const vehicleRecordCount = records.length;
+      for (const observation of observations) {
+        for (const [index, response] of (observation.listResponses ?? []).entries()) {
+          const payload = structuredClone({ evidenceKind: 'LIST_PAGE', bucket: observation.bucket,
+            pageIndex: index, observedAt: observation.observedAt, response });
+          records.push({ sourceRecordId: `evidence:list:${observation.bucket}:${index}`,
+            sourceFingerprint: fingerprint(payload), payload });
+        }
+      }
+      if (!vehicleRecordCount) complete = false;
       const checksum = fingerprint(observations);
       const batch: SourceIntakeBatch = {
         laneId: 'PRODUCT_VEHICLE', source: { sourceId: 'supplier:RP012:sonogong-original-api',

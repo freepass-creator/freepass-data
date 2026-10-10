@@ -253,13 +253,12 @@ decisions remain in `decideSourceHead`, not these adapters.
 | 아이카 RP004 | `aicaSourceAdapter` + injected rich-grid reader; `aicaSheetsGridReader` implements bounded Sheets GET using existing Data ADC. | Original cells/links + plate/tab/row evidence; ambiguities HOLD, photoState UNKNOWN. Fixtures only, no live transport invocation. |
 | 아이언 RP006 | `ironSourceAdapter` + injected detail fetcher; retain original HTML, term tuples, deposit text and gallery references. | Nonstandard months/units preserved. Deposit UNKNOWN; designated details PARTIAL; no network implementation. |
 
-Authentication and network transport remain in the provider reader. The newly added
-Sonogong/Welrix adapters are executable RAW transformations with injected read ports,
-**not yet wired to native live transport, CLI or schedules**. Do not claim a live
-supplier refresh from their fixture tests. Implement the authorized original API/Sheets
-readers against these ports and verify real source metadata/schema before rollout;
-unknown freshness thresholds must not be invented. Native Data has no replacement
-writer activated by this change. Current operational publisher and schedules are unchanged.
+Authentication and network transport remain in the provider reader. Sonogong now has
+an offline-tested ERP reader and `source:sonogong` CLI (see the RP012 section below);
+credentials, live verification and schedules remain HOLD. Welrix still has only the
+injected RAW port. Fixture tests do not establish a live supplier refresh. Native Data
+has no replacement writer activated by this change. Current operational publisher and
+schedules are unchanged.
 
 The collector does not parse `10` into money or a rate. Later reviewed normalization
 must record unit (원/만원/%), basis, rental period, contracted mileage, product/return
@@ -307,9 +306,101 @@ engine is incompatible with current ONE-owned inventory. No new store or engine 
 - RP031: private Cloud Run용 Fastify 서비스 **factory만 구현**, import/listen/운영 부작용 없음. OIDC 검증, Secret Manager 기반 App 설치 토큰, GitHub 조회/dispatch, durable receipt는 모두 필수 주입 포트다. 고정 repo/workflow/ref/입력만 사용하고 HTTP body는 `{}`만 허용한다. jobName+UTC scheduleTime SHA256 create-only 영수증과 schedule key 간 원자적 pending admission을 모두 요구한다. BUSY는 skip, 실패·응답 불명확·run ID 없는 응답은 UNKNOWN이며 재전송하지 않는다. ACCEPTED_PENDING도 run 완료가 아니다. 다음 tick은 기존 accepted run ID의 확정 종료를 조회하고 완료 증거+owner CAS 해제 후에만 새로 입장한다. UNKNOWN/RESERVED는 시간 만료나 단순 run 목록 IDLE로 풀지 않으며 별도 대사 전까지 후속 회차를 막는다.
 - 영수증 포트 구현 조건: 기존 비공개 receipt storage를 재사용하고 create-only/CAS 및 owner 검증을 구현해야 한다. 이 작업은 durable backend를 생성/연결하지 않았다. `max-instances=1/concurrency=1`만으로 중복 방지가 된다고 주장하지 않는다. pending 해제는 해당 run의 확정 종료 또는 확정 미전송 증거가 있어야 하며, 모호한 전송은 자동 해제 금지. 기존 workflow precheck→queue 경합은 여전히 rollout HOLD.
 
-### 손오공 RP012 Data runtime 계정 주입 — DESIGNED ONLY
+### 손오공 RP012 ERP 읽기 이식 — 코드/가짜 응답 시험, 운영 HOLD (2026-10-10)
 
-기존 GitHub `SONOGONG_ACCOUNT_JSON`과 **같은 계정 값**을 유지하고 새 계정/키를 만들지 않는다. 값 조회·복사·출력은 이번 작업에서 하지 않았다. 이안카 ONE의 `freepasserp5` Secret Manager `freepass-data-iancar-one-api` 패턴을 재사용해 손오공 전용 secret의 승인된 버전을 runtime에 주입한다(제안 이름 `freepass-data-sonogong-account`, 존재/생성 미확인). ONE secret 자체에 덮어쓰지 않는다. GitHub secret은 readback API가 없으므로 승인된 원 보관자가 비출력 경로로 동일 값을 공급하고 계정 일치 검증을 맡는다. 공개 문서/명령행에 값 또는 그 digest를 남기지 않는다.
+목적은 ERP4의 읽기 책임을 Data의 기존 `sonogongSourceAdapter` 포트로 이관하는 것이다.
+기준 Data revision은 `9e8ecd575edcbdd04b13a9eac6092443025f61b7`. ERP4는 지정된
+`git show origin/main:sonokong/...`만 읽었으며 변경하지 않았다. 기존 ERP4 실행 중단은 아래 조건을 충족한 별도 운영 전환이다.
+
+**재사용 판정:** `reuse:check` 후보 탐색 후 `academy:start --create`에서
+`CREATE_NEW_JUSTIFIED` / `READY` 확인. 기존 RAW 어댑터, `SourceIntakeBatch`,
+`collectSupplierSource`/`inspectSupplierSourceBatch`, 이안카의 기본 읽기/승인 RAW 적재 패턴,
+`createSourceIngestDataAccessRuntime().ingestRawBatch`를 재사용한다. 새 저장소·두 번째 writer는 없다.
+`sonogong-erp-reader.ts`는 기존 포트에 없는 공급사 HTTP 인증/페이지 계약 구현이므로 신규 파일이 필요하다.
+계층 역참조를 피하려고 기존 어댑터와 같은 `src/adapters`에 두었다. 공급사별 CLI,
+순수 보증금 집계 함수 및 가짜 fetch 시험은 각각 독립 실행/무출력 계약을 검증하기 위한 최소 신규 파일이다.
+
+**이식한 것:** ERP4 `sonokong/lib/sonokong.mjs`의 호스트·로그인 JSON 필드(`id`, `password`),
+JWT exp 기반 갱신, 목록 page/pageSize/totalCount 순회, `homepage/view` 상세와 401 재로그인 1회.
+기존 Data 포트의 `LOW_SONOKONG_DAILY`, `LOW_SONOKONG`, `LOW_TCAR` 3개 버킷을 사용한다.
+ERP4 기본 버킷 상수는 2개이므로 DAILY의 실제 응답은 최초 실측 때 별도 확인한다.
+`sonokong/scripts/손오공.mjs`에서 estimates가 **view.data.estimates 안에 포함**됨을 확인했다.
+securityDepositAmount·monthly12/24/36/48/60·estimateType·creditType와 나머지 상세를 그대로 보존하며
+별도 estimates endpoint는 만들지 않는다. 목록/상세 JSON envelope도 RAW에 보존한다
+(목록 envelope는 기존 RAW 저장소에 `evidence:list:<bucket>:<pageIndex>` 단위로 원문 그대로 보존한다. 차량 record와 페이지 증거는 별개이며 RAW 건수는 차량 대수가 아니다. 전 버킷 차량 0건은 페이지 증거가 있어도 HOLD/적재 거부).
+
+손오공 CLI는 기존 `prepareRawSourceBatch` 결과의 개별 문서를 적재 전에 보수적으로 검사한다. 900,000 byte 예산 또는 깊이 제한을 넘으면 `SONOGONG_RAW_DOCUMENT_LIMIT`로 전체 적재를 차단한다. 원문 절단·새 저장소·부분 적재는 없다. 개별 페이지/상세가 초과하면 별도 승인된 보존 경로가 필요한 HOLD이며 수집 완료로 보지 않는다. 현재 RAW runtime은 정규화 함수를 전달하지 않으므로 페이지 증거를 차량 후보로 만들지 않는다. 향후 정규화 연결 시 반드시 페이지 증거를 제외하는 계약이 필요하다.
+
+**이식 제외:** 계정 파일 읽기, 토큰 파일 캐시, 덤프/상세 파일 캐시, 응답 본문을 포함한 오류,
+동시 8개 pool, 원천 count의 버킷 무시 동작, viewAgent/외부 롯데 HTML 접근,
+덤프 정규화·금액 변환/반올림·차종 정제. `tcar-options.mjs`의 옵션 추출과
+`vehicle-refine.mjs`의 모델/연료/제원 정리는 상품 칸의 후속 정리 책임이므로 가져오지 않는다.
+읽기 단계는 ID·차량 식별 일치, 목록 수·페이지, estimates 존재와 관측시각만 검사한다.
+
+**제한 값:** `SONOGONG_READER_POLICY` 한 곳에 HTTPS 허용 origin, 동시 **1**(상한 2 이하),
+요청 시작 간 **250ms**, 요청 timeout **15초**, 페이지당 **100**, 버킷당 최대 **100페이지**,
+reader/capture 전체 상세 **1,000건**, 429/5xx 재시도 **3회**(최초 포함 4회),
+backoff **500/1,000/2,000ms**, 토큰 만료 여유 **60초**·보관 최대 **8시간**,
+신선도 한도 **1시간**, 제안 실행 간격 **15분**을 둔다. redirect는 거부한다.
+토큰은 exp를 확인하고 메모리 single-flight 갱신만 하며 파일·RAW에 쓰지 않는다.
+404/일부 상세 오류·estimates 누락은 PARTIAL/HOLD, 인증 실패·재시도 초과·오래된 응답은 HOLD다.
+모든 목록 페이지 수/중복/totalCount 변화를 검사하고 불완전한 목록을 전체 수집으로 인정하지 않는다.
+
+신선도는 수집 시작 관측 및 제공되는 syncedAt/stale·HTTP Date/Age를 보수적으로 검사하고
+전체 수집 종료 때 기존 공통 freshness 검사를 다시 한다. 차량 자체의 오래된 수정일을
+공급사 전체 stale로 추정하지 않는다. 공급사가 upstream 기준시각을 주지 않으면
+현재 요청 관측 창만 검증된 것이며 원 DB 최신성을 입증하지 않는다. 실제 metadata 의미는 첫 읽기에서 확인한다.
+
+**실행:** `npm.cmd run source:sonogong`은 읽기와 건수 요약만 한다. 버킷별 행 수,
+상세 성공/실패·보증금 원천 건수·관측시각·신선도·PARTIAL/HOLD만 출력한다.
+`--apply-raw`는 `SONOGONG_RAW_INGEST_APPROVED=true`와 RAW_READY가 모두 있어야
+기존 SourceIngestionStore 경로를 호출한다. 승인 확인은 로그인 전이다. PARTIAL/stale는 적재하지 않고
+기존 상품/ACTIVE를 보존한다. RAW 승인으로 Canonical/발행/삭제 권한은 생기지 않는다.
+
+**보증금 비교:** `npm.cmd run source:sonogong -- --compare-deposits`.
+동일 RAW 차량/estimate/기간의 원천 금액과 현재 `deposit-evidence.ts` 및
+`consumer-output-contract.ts` 규칙 결과를 계산한다. 실제 운영 consumer를 조회한 결과는 아니다
+(`liveConsumerReadback=NOT_VERIFIED`). 구독 반납/인수와 중고렌트의 교차표를 나눠
+원천 POSITIVE/ZERO/MISSING × 규칙 POSITIVE/ZERO/UNKNOWN 및 불일치 건수를 반환한다.
+집계 단위는 버킷-차량-estimate-기간이며 버킷 간 같은 차량과 여러 기간을 독립 관측으로 센다.
+구독은 현재 계약의 월납×약정연수(최대 3개월), 중고렌트는 원천 금액 규칙(#420)을 그대로 재사용한다.
+알려진 두 금액이 다를 때만 mismatches, 한쪽이 미확인이면 incomparable이다.
+잘못된 금액은 MISSING으로 집계하되 invalidSourceAmounts도 별도로 세며, 상품 분류/creditType이
+확정되지 않거나 RENT/SUBSCRIBE 유형이 분류와 충돌하면 excludedEstimates다. 이 제외 건수도 반드시 검토한다.
+금액은 0/100만원 미만/100만~500만원 미만/500만원 이상/미확인 구간 건수만 표시한다.
+개별 식별자·차량번호·금액·응답 원문은 출력하지 않는다. 비교는 RAW를 변환하거나 발행하지 않는다.
+
+**호출 주기:** 15분 기본 단일 실행, 겹침 금지; 공급사 제한/실측 부하에 따라 30~60분으로 완화한다.
+최초 구현은 매회 전 상세를 확인한다. 목록 변경만으로 estimates 변경을 보장할 수 없으므로
+«변경분 상세만» 최적화는 공급사 revision/변경 감지 계약 확인 후 별도 적용한다. 예약은 만들지 않았다.
+
+**계정 주입 / 첫 읽기 순서:** 환경변수 `SONOGONG_ACCOUNT_JSON` 문자열 또는
+`accountJson: () => Promise<string>` 단일 주입 함수를 받는다. Secret Manager의 승인된
+버전을 단일 접근자가 주입하는 방식을 추천하며 실제 등록은 대표 손 대기다.
+계정 JSON 모양은 필드 이름만 문서화하고 값·digest는 기록하지 않는다.
+등록 후 (1) 승인 runtime에서 secret/IAM/버전을 확인 (2) 기본 읽기로 버킷·DAILY·상세·estimates·시각 계약 확인
+(3) 비교 옵션으로 분포·UNKNOWN·제외 건수를 검토 (4) 완전/신선한 수집에 한해 별도 승인 후
+`--apply-raw` (5) 기존 ingestion run/head/RAW 되읽기 (6) 상품 칸 정리/발행 이관 및 소비처 되읽기를 진행한다.
+**ERP4 끄는 조건: Data 수집 첫 성공 + 매시 발행 이관 반영 + 2주 관찰**.
+관찰 중 partial/stale/실패는 last-good 유지 및 HOLD로 기록하며 중단/복구 시점을 별도 승인한다.
+
+BLOCKED_NETWORK: 손오공 첫 실호출, 운영 RAW 되읽기, Claude 독립 검토
+
+**오프라인 검증 (2026-10-10):** 잠금 파일 기준 `npm.cmd ci --offline --ignore-scripts --no-audit --no-fund --logs-max=0` 후
+신규 손오공 20개 + 기존 source-intake 17개 PASS. 로그인 재사용/만료/401, 페이지 전수/상한/중복,
+상세 PARTIAL, 429/5xx 상한, 오류 sentinel, 전역 동시성/간격, stale, 승인 차단, 보증금 교차표를 확인했다.
+`npm.cmd run check`는 architecture/Data Access 경계·standards 시험 15개·시트 106개·build PASS 후
+runtime smoke 12 PASS/1 FAIL에서 중단했다. 실패는 Windows `uv_os_get_passwd ENOMEM`이고
+독립 `node:os.userInfo()`에서도 재현됐다. 나머지 단계는 별도 실행: shadow 10 PASS,
+dashboard 21 PASS, 전체 Vitest **1,954 PASS / 12 FAIL / 16 SKIP**.
+12건은 기존 CLI/worker/route 경로의 tsx 사용자 정보 오류, jq 실행 권한 오류 및 로컬 서버 연결 실패다.
+전체 check PASS로 처리하지 않는다. runtime-policy/projection-integrity와 기대값은 수정하지 않았다.
+빌드된 CLI에서 승인 없음/계정 없음이 고정 코드와 종료 2로 차단됨을 확인했다.
+실제 보증금 분포·계정 동작·발행 이관은 시험하지 않았다. 독립 검토는 BLOCKED_NETWORK이며 PASS가 아니다.
+
+### 손오공 RP012 Secret Manager 운영 연결 — DESIGNED ONLY
+
+기존 GitHub `SONOGONG_ACCOUNT_JSON`과 **같은 계정 값**을 유지하고 새 계정/키를 만들지 않는다. 비밀 저장소의 값은 조회하지 않는다. 이안카 ONE의 `freepasserp5` Secret Manager `freepass-data-iancar-one-api` 패턴을 재사용해 손오공 전용 secret의 승인된 버전을 runtime에 주입한다(제안 이름 `freepass-data-sonogong-account`, 존재/생성 미확인). ONE secret 자체에 덮어쓰지 않는다. GitHub secret은 readback API가 없으므로 승인된 원 보관자가 비출력 경로로 동일 값을 공급하고 계정 일치 검증을 맡는다. 공개 문서/명령행에 값 또는 그 digest를 남기지 않는다.
 
 Data RP012 전용 runtime SA **한 개만 accessor**로 지정하고 그 secret 하나에만 `roles/secretmanager.secretAccessor`; 프로젝트 전체 권한 금지. 기존 ERP4 경로는 유지하며 Data native writer를 활성화하지 않는다. 로그인 transport의 단일 accessor가 계정 주입을 받아 8시간 토큰을 프로세스 메모리에만 보관한다. 토큰 만료 전에 single-flight 갱신, 재시작 시 재로그인, 로그/파일/RAW/Firestore/공유 cache 영속화 금지. 만료·갱신 실패는 HOLD/last-good 보존이며 빈 수집이나 0 보증금으로 바꾸지 않는다. 계정 교체·권한·운영 연결은 별도 승인 후 검증한다.
 
@@ -356,7 +447,7 @@ Data RP012 전용 runtime SA **한 개만 accessor**로 지정하고 그 secret 
 | 공급사 | 방식 | 지금 연동 상태 | 마지막 수집 시각 | 빠진 칸 | 문제 | 다음 할 일 |
 |---|---|---|---|---|---|---|
 | RP031 이안카 | ONE API → Data 실행기, ERP4 workflow가 임시 구동 | 위 회차 Data 반영 단계 success; 08:59 stale 실패는 Claude 실측. 15분 cadence HOLD | 위 회차 완료 08:51:39Z; 공급사 syncedAt **08:44:21.289Z** | 내부 청구/지급 수수료; 정책 완전성/기간 경제조건 연결 미검증 | 트리거 누락과 공급사 stale은 별개. UNKNOWN coverage/last-good 보존 | 아래 Scheduler 설계 검토, fresh source 관측과 소비처 대사 |
-| RP012 손오공 | ERP API 비밀번호 로그인/8시간 토큰 → 기존 덤프/ingest | 기존 운영 변동 반영 success; Data native는 RAW port만, live transport 없음 | 위 회차 변동 반영 완료 08:41:30Z; upstream 관측시각 별도 미확인 | term별 약정거리·단위/효력·내부 수수료 연결 | 구독38/픽업141은 위 로그의 source 관측 범위. 옵션 HOLD0은 Claude 실측 | 원본 API reader를 Data port에 연결할 때 버킷/반납·인수형/보증금 원문 보존 |
+| RP012 손오공 | ERP API 비밀번호 로그인/8시간 토큰 → 기존 덤프/ingest | 기존 운영 변동 반영 success; 당시 Data native는 RAW port만; 현재 reader/CLI 가짜 시험 완료, live 검증 HOLD | 위 회차 변동 반영 완료 08:41:30Z; upstream 관측시각 별도 미확인 | term별 약정거리·단위/효력·내부 수수료 연결 | 구독38/픽업141은 위 로그의 source 관측 범위. 옵션 HOLD0은 Claude 실측 | 원본 API reader를 Data port에 연결할 때 버킷/반납·인수형/보증금 원문 보존 |
 | RP006 아이언 | 홈페이지 HTML → 기존 parser → mirror rows → ingest | 기존 변동 반영 success; Data native adapter 없음 | 위 회차 완료 08:41:20Z; 원천 페이지 시각 미확인 | 장기요금 5대; 사진 링크 13/17 미연결(Claude 실측) | 사진 배열 전달 단절 확인. 장기 기간 손실 경로 확인, 해당 5대 원인 확정은 HOLD | 규칙 확인 가능한 환경에서 대상별 상세 1회 이하, 동시2 이하로 원문/파서/원자 대사 |
 | RP023 오토플러스 | reborncar 홈페이지 세션/상세 API | 기존 전용 수집기 success; Data native adapter 없음 | 위 회차 완료 08:44:51Z; 원천 자체 시각 미확인 | term별 확정 보증금·내부 수수료·정책 효력 근거 | 로그의 갱신38과 source 관측37은 다른 범위. 링크37/37은 Claude 실측 | term×연거리 원문과 보증금 정책을 같은 revision으로 대사 |
 | RP004 아이카 | 공급사 자체 원본 Sheet | 기존 변동 반영 success; Data native adapter 없음 | 위 회차 완료 08:41:10Z; 이번 셀 읽기는 수집 실행 아님 | F86 사진 링크42/82 미연결을 재확인; 6대는 원본 링크 존재 | values-only reader가 셀 링크를 누락. 원본 미매칭33대 별도 HOLD | 원본 셀 링크와 차량 귀속을 RAW에 보존하고 현재 원자/F86 대상별 재대사 |
@@ -466,7 +557,7 @@ ERP4는 수정하지 않았다. 아래 과거 최소 diff 제안은 대표 결�
 - 전체 check: Codex 샌드박스에서는 환경 오류(`uv_os_get_passwd`, jq Permission denied, 로컬 서버 ECONNREFUSED)로 Vitest 9 FAIL. 같은 트리를 Claude가 정상 환경에서 `npm run check` 재실행 → **exit0, Vitest 1168 PASS / 14 SKIP**, build PASS. 이 변경은 문서 전용이다.
 - 검토: Codex 쪽 Claude runner 호출은 실패했으나, 오더를 낸 Claude 세션이 이 절의 diff를 직접 읽고 확인했다(문서 전용, 운영 변경0). 설계안 자체의 실행 승인은 별도다.
 - HOLD: 아이언 5대 원문 요금과 13대 사진, 아이카 미매칭33대 및 6대 링크 귀속/소비처 재대사, 두 수수료/정책 계산 입력, native transport, Scheduler admission 경합/실행 증거.
-- 필요한 것: RP031 기존 ONE secret의 승인된 runtime 접근(신규 키 누락으로 단정하지 않음)과 공급사 fresh 응답; RP012 Data runtime용 승인된 계정 주입/토큰 갱신 transport; RP006 공개 규칙/페이지를 읽을 수 있는 연결; RP023 공개 규칙과 허용 세션 reader; RP004 rich-cell reader·원자 readback(원본 connector 접근은 이미 성공). 공급사 수집 중계는 기존 PAT Secret 버전1 접근·전용 IAM 검토가 필요하며 생성 금지 유지.
+- 필요한 것: RP031 기존 ONE secret의 승인된 runtime 접근(신규 키 누락으로 단정하지 않음)과 공급사 fresh 응답; RP012 Data runtime용 승인된 계정 주입과 구현된 reader/토큰 갱신의 첫 실측; RP006 공개 규칙/페이지를 읽을 수 있는 연결; RP023 공개 규칙과 허용 세션 reader; RP004 rich-cell reader·원자 readback(원본 connector 접근은 이미 성공). 공급사 수집 중계는 기존 PAT Secret 버전1 접근·전용 IAM 검토가 필요하며 생성 금지 유지.
 - next_start_here: 이 절의 사진 대사부터 이어서 원본/F86를 같은 창에 재조회하고 6/3/33 분류를 private evidence로 고정한다. 아이언은 robots/규칙 확인 후 지정5대만 원문→parser price→Row→원자 비교. Claude 검토와 정상 환경 전체 check를 거쳐 Data native 이관 또는 bridge 수리 범위를 결정한다. 검토 이후에도 운영 실행 승인은 별도이며 이번 오더는 생성/쓰기 권한을 부여하지 않는다.
 
 ## Non-negotiable topology
