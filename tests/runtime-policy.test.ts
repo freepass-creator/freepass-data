@@ -129,7 +129,40 @@ describe('API runtime boundary', () => {
   it('the production container starts the compiled consumer entrypoint', () => {
     const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8')
       .replace(/\r\n/g, '\n');
-    expect(dockerfile).toContain('CMD ["node", "dist/src/api/consumer-server.js"]');
+    expect(dockerfile).toContain('ARG FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js');
+    expect(dockerfile).toContain('CMD ["sh", "-c", "exec node \\"$FREEPASS_DATA_ENTRYPOINT\\""]');
     expect(dockerfile).not.toContain('CMD ["node", "dist/api/consumer-server.js"]');
+  });
+  it('public runtime entrypoint registers only health and public catalog routes', () => {
+    const source = readFileSync(new URL('../src/api/public-server.ts', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(source).toContain("app.get('/health'");
+    expect(source).toContain("'/v1/public/catalog/feed'");
+    expect(source).toContain("'/v1/public/catalog/quote'");
+    expect(source).toContain("readCollections: ['products', 'policy']");
+    expect(source).toContain('app.setNotFoundHandler');
+    expect(source).not.toContain('/v1/consumers/:consumerId');
+    expect(source).not.toContain('admin-workflow');
+    expect(source).not.toContain('settlement-ledger');
+    expect(source).not.toContain('FREEPASS_DATA_CONSUMERS_JSON');
+    expect(source).not.toContain('iancarOneApiConfigFromEnv');
+  });
+  it('public deployment reuses read-runtime workflow with no consumer or Iancar secrets by default', () => {
+    const publicWorkflow = readFileSync(new URL('../.github/workflows/deploy-public-runtime.yml', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const readWorkflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(readWorkflow).toContain('workflow_call:');
+    expect(readWorkflow).toContain('FREEPASS_DATA_ENTRYPOINT=$RUNTIME_ENTRYPOINT');
+    expect(readWorkflow).toContain('Grant public invoker only when requested');
+    expect(readWorkflow).toContain('inputs.grant_public_invoker == true');
+    expect(readWorkflow).toContain('/v1/consumers/erp-com/catalog")" = "404"');
+    expect(publicWorkflow).toContain('uses: ./.github/workflows/deploy-read-runtime.yml');
+    expect(publicWorkflow).toContain('service_name: freepass-data-public');
+    expect(publicWorkflow).toContain('runtime_service_account: freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com');
+    expect(publicWorkflow).toContain('entrypoint: dist/src/api/public-server.js');
+    expect(publicWorkflow).toContain('use_consumer_secrets: false');
+    expect(publicWorkflow).not.toContain('FREEPASS_DATA_CONSUMERS_JSON');
+    expect(publicWorkflow).not.toContain('EANCAR_ONE_API_KEY');
   });
 });

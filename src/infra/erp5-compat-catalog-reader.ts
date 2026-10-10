@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
 import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
+import { logRouteError } from '../shared/route-error-log.js';
 
 type Rec = Record<string, unknown>;
 
@@ -36,6 +37,12 @@ export type CatalogCompatibilitySnapshot = {
     collectionCounts: Record<string, number>;
     depositEvidenceVersion: 'catalog-compat-deposit/1';
   };
+};
+
+export type CatalogCompatibilityReadCollection = 'products' | 'policy' | 'partner' | 'user' | 'vehicle_master';
+
+export type CatalogCompatibilityReaderOptions = {
+  readCollections?: readonly CatalogCompatibilityReadCollection[];
 };
 
 const jsonSafe = (value: unknown): unknown => {
@@ -109,7 +116,14 @@ export function isPublicIancarPhotoProduct(product: Record<string, unknown> | un
 
 export class FirestoreCatalogCompatibilityReader {
   private readonly db = getFirestore(getTargetFirebaseApp());
-  constructor(private readonly photoReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>) {}
+  private readonly readCollections: ReadonlySet<CatalogCompatibilityReadCollection>;
+
+  constructor(
+    private readonly photoReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>,
+    options: CatalogCompatibilityReaderOptions = {},
+  ) {
+    this.readCollections = new Set(options.readCollections ?? ['products', 'policy', 'partner', 'user', 'vehicle_master']);
+  }
 
   /** Product identity is resolved here, never accepted as an arbitrary provider path from a caller. */
   async readIancarPhoto(consumerId: string, productId: string, index?: number) {
@@ -129,56 +143,65 @@ export class FirestoreCatalogCompatibilityReader {
   async read(consumerId: string): Promise<CatalogCompatibilitySnapshot> {
     if (!allowedConsumer(consumerId)) throw new Error('CATALOG_COMPAT_CONSUMER_NOT_ALLOWED');
 
-    const wantsAdminMaster = consumerId === 'freepass-admin-catalog';
-    const wantsErpPresentation = consumerId === 'erp-com' || consumerId.startsWith('whitelabel-');
+    try {
+      const wantsAdminMaster = consumerId === 'freepass-admin-catalog';
+      const wantsErpPresentation = consumerId === 'erp-com' || consumerId.startsWith('whitelabel-');
 
-    const requests = [
-      ['products', this.db.collection('products').get()],
-      ['policy', this.db.collection('policy').get()],
-      ...(wantsErpPresentation
-        ? [
-            ['partner', this.db.collection('partner').get()] as const,
-            ['user', this.db.collection('user').get()] as const,
-          ]
-        : []),
-      ...(wantsAdminMaster
-        ? [['vehicle_master', this.db.collection('vehicle_master').get()] as const]
-        : []),
-    ] as const;
+      const requests = [
+        ...(this.readCollections.has('products') ? [['products', this.db.collection('products').get()] as const] : []),
+        ...(this.readCollections.has('policy') ? [['policy', this.db.collection('policy').get()] as const] : []),
+        ...(wantsErpPresentation && this.readCollections.has('partner')
+          ? [
+              ['partner', this.db.collection('partner').get()] as const,
+            ]
+          : []),
+        ...(wantsErpPresentation && this.readCollections.has('user')
+          ? [
+              ['user', this.db.collection('user').get()] as const,
+            ]
+          : []),
+        ...(wantsAdminMaster && this.readCollections.has('vehicle_master')
+          ? [['vehicle_master', this.db.collection('vehicle_master').get()] as const]
+          : []),
+      ] as const;
 
-    const resolved = await Promise.all(
-      requests.map(async ([name, query]) => [name, await query] as const)
-    );
-    const byName = new Map<string, QuerySnapshot>(resolved.map(([name, snapshot]) => [name, snapshot]));
-    const get = (name: string) => byName.get(name);
+      const resolved = await Promise.all(
+        requests.map(async ([name, query]) => [name, await query] as const)
+      );
+      const byName = new Map<string, QuerySnapshot>(resolved.map(([name, snapshot]) => [name, snapshot]));
+      const get = (name: string) => byName.get(name);
 
-    const products = get('products');
-    const policies = get('policy');
-    if (!products || !policies) throw new Error('CATALOG_COMPAT_REQUIRED_COLLECTION_MISSING');
+      const products = get('products');
+      const policies = get('policy');
+      if (!products || !policies) throw new Error('CATALOG_COMPAT_REQUIRED_COLLECTION_MISSING');
 
-    const collectionCounts = Object.fromEntries(
-      resolved.map(([name, snapshot]) => [name, snapshot.size])
-    );
-    const observedAt = new Date().toISOString();
+      const collectionCounts = Object.fromEntries(
+        resolved.map(([name, snapshot]) => [name, snapshot.size])
+      );
+      const observedAt = new Date().toISOString();
 
-    return {
-      schema: 'freepass-data.catalog-compat/v1',
-      data: {
-        products: Object.fromEntries(Object.entries(asMap(products)).map(([id, product]) => [id, withCompatibilityDepositEvidence(product, observedAt)])),
-        policies: asMap(policies),
-        ...(get('partner') ? { partners: asMap(get('partner')!) } : {}),
-        ...(get('user') ? { users: asMap(get('user')!) } : {}),
-        ...(get('vehicle_master') ? { vehicleMaster: asMap(get('vehicle_master')!) } : {}),
-      },
-      meta: {
-        consumerId,
-        authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE',
-        sourceProject: CENTRAL_FIREBASE_PROJECT_ID,
-        observedAt,
-        collectionCounts,
-        depositEvidenceVersion: 'catalog-compat-deposit/1',
-      },
-    };
+      return {
+        schema: 'freepass-data.catalog-compat/v1',
+        data: {
+          products: Object.fromEntries(Object.entries(asMap(products)).map(([id, product]) => [id, withCompatibilityDepositEvidence(product, observedAt)])),
+          policies: asMap(policies),
+          ...(get('partner') ? { partners: asMap(get('partner')!) } : {}),
+          ...(get('user') ? { users: asMap(get('user')!) } : {}),
+          ...(get('vehicle_master') ? { vehicleMaster: asMap(get('vehicle_master')!) } : {}),
+        },
+        meta: {
+          consumerId,
+          authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE',
+          sourceProject: CENTRAL_FIREBASE_PROJECT_ID,
+          observedAt,
+          collectionCounts,
+          depositEvidenceVersion: 'catalog-compat-deposit/1',
+        },
+      };
+    } catch (error) {
+      logRouteError('erp5-compat-catalog-reader', 'compat_reader_read', error);
+      throw error;
+    }
   }
 
   async readKakaoReferenceSource(consumerId: string) {
@@ -207,6 +230,9 @@ export class FirestoreCatalogCompatibilityReader {
   }
 }
 
-export function createFirestoreCatalogCompatibilityReader(photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0]) {
-  return new FirestoreCatalogCompatibilityReader(photoReader);
+export function createFirestoreCatalogCompatibilityReader(
+  photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0],
+  options?: CatalogCompatibilityReaderOptions,
+) {
+  return new FirestoreCatalogCompatibilityReader(photoReader, options);
 }

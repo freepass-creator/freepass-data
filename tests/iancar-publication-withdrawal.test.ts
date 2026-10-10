@@ -1,12 +1,15 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), transaction: vi.fn(), update: vi.fn(),
+const mocks = vi.hoisted(() => ({ get: vi.fn(), transaction: vi.fn(), update: vi.fn(), collections: [] as string[],
   mkdir: vi.fn(), writeFile: vi.fn(), readFile: vi.fn(), getApp: vi.fn(), getAll: vi.fn(), save: vi.fn(), download: vi.fn() }));
 vi.mock('firebase-admin/firestore', async importOriginal => ({ ...(await importOriginal<typeof import('firebase-admin/firestore')>()), getFirestore: () => ({
-  collection: (name: string) => ({ get: mocks.get, doc: (id: string) => ({ path: `${name}/${id}` }), where: (field: string, operator: string, value: string) => {
+  collection: (name: string) => {
+    mocks.collections.push(name);
+    return { get: mocks.get, doc: (id: string) => ({ path: `${name}/${id}` }), where: (field: string, operator: string, value: string) => {
     expect([name, field, operator, value]).toEqual(['products', 'provider_company_code', '==', 'RP031']);
     return { get: mocks.get };
-  } }), doc: (path: string) => ({ path }), runTransaction: mocks.transaction, getAll: mocks.getAll
+  } };
+  }, doc: (path: string) => ({ path }), runTransaction: mocks.transaction, getAll: mocks.getAll
 }) }));
 vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: mocks.getApp, CENTRAL_FIREBASE_PROJECT_ID: 'freepasserp5' }));
 vi.mock('node:fs/promises', () => ({ mkdir: mocks.mkdir, writeFile: mocks.writeFile, readFile: mocks.readFile }));
@@ -15,6 +18,7 @@ import { withdrawIancarPublication, publishIancarPhotoReferences, publishIancarP
 import { isPublicIancarPhotoProduct, FirestoreCatalogCompatibilityReader } from '../src/infra/erp5-compat-catalog-reader.js';
 
 it('compatibility read derives unresolved deposits and performs no transaction or update', async () => {
+  mocks.collections.length = 0;
   mocks.get.mockReset().mockResolvedValueOnce(snapshot(doc('synthetic', { provider_company_code: 'RP004', product_type: '중고렌트',
     price: { '12': { rent: 500000, deposit: 0 } } })))
     .mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(snapshot());
@@ -22,7 +26,20 @@ it('compatibility read derives unresolved deposits and performs no transaction o
   expect(result.data.products.synthetic!.price).toMatchObject({ '12': { rent: 500000, deposit: null, depositState: 'UNKNOWN',
     depositStatusLabel: '미확인' } });
   expect(result.meta.depositEvidenceVersion).toBe('catalog-compat-deposit/1');
+  expect(mocks.collections).toEqual(['products', 'policy', 'partner', 'user']);
   expect(mocks.transaction).not.toHaveBeenCalled(); expect(mocks.update).not.toHaveBeenCalled();
+});
+
+it('public compatibility reader option reads no partner or user collections', async () => {
+  mocks.collections.length = 0;
+  mocks.get.mockReset().mockResolvedValueOnce(snapshot(doc('public-product')))
+    .mockResolvedValueOnce(snapshot());
+  const result = await new FirestoreCatalogCompatibilityReader(undefined, { readCollections: ['products', 'policy'] }).read('erp-com');
+  expect(result.meta.collectionCounts).toEqual({ products: 1, policy: 0 });
+  expect(result.data.partners).toBeUndefined();
+  expect(result.data.users).toBeUndefined();
+  expect(mocks.collections).toEqual(['products', 'policy']);
+  expect(mocks.collections.filter(name => name === 'partner' || name === 'user')).toHaveLength(0);
 });
 
 const doc = (id: string, extra = {}) => ({ id, ref: { path: `products/${id}` },
