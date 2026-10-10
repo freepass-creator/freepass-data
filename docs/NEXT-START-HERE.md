@@ -1,5 +1,14 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-07 수수료 정책 적용범위 분리
+
+- 목적: 대표 지시대로 수수료 정책을 별도 절로 두고 공통/공급사별 자체 조건/개별계약/미확정을 구분한다.
+- 대상 revision: `6ede6198275309c9cc1e7da65c6e83dc064a0602`, `codex/settlement-human-input-preservation`. academy:start READY. 기존 Commercial Data Catalog 재사용(신규 정책 사전·파일 없음).
+- 변경: `docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md`의 수수료 정책 절에 C1/C2 공통식, 엔진에 등장하는 공급사별 적용 지도, 출처·승인권자·시행일·개별계약 보존 규칙 추가. 고객·계약 원문·개별 금액 없음.
+- 검증: 기존 `kakao-catalog-reference.ts`의 현재 정책 객체·계산 분기·공급사 코드와 문서 대조, diff check PASS. 금액·엔진·운영 데이터 변경 없음.
+- 남음: Claude 읽기 전용 검토는 조직의 Claude Code 구독 접근 비활성으로 FAILED(exit 1); 독립 검토 PASS 아님. 이 문서는 로컬 엔진 적용범위 정리이며 최신 공급사 승인·운영 배포·자동 최신화 완료 판정이 아니다.
+- next_start_here: 위 수수료 정책 절 → F04/공급사확인사실/Data SETTLEMENT 원천 → 정책별 승인권자·시행일·근거 → 실제 계산기/소비처 revision 순으로 대조. 개별 합의는 공개 문서에 원문을 옮기지 않는다.
+
 ## 2026-10-06 F04 입력 화면 / 수수료 원천 수집 갱신
 
 - 접수는 기존 열 순서·셀값을 보존하고 기본정보/계약/진행/청구·지급 헤더를 구분했다. 취소행 전체 연분홍+가운데줄, 금액 천단위 표시, 산출근거·비고 줄바꿈, 상세/증빙 보조열 숨김, 고정열 해제. 기존 경고조건 보존. 원본 전체 Drive backup 및 native metadata 재조회 PASS. 취소행은 표시하고 정산 대상에서는 기존 규칙대로 제외한다.
