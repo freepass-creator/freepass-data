@@ -216,12 +216,13 @@ describe('safe catalog canonicalization', () => {
 
     expect(store.audits).toHaveLength(1);
     expect(store.outbox.size).toBe(1);
+    const event = [...store.outbox.values()][0]!;
 
     expect(await processOneOutboxEvent(
       store,
       store,
       store,
-      { workerId: 'worker:canonical-test' },
+      { workerId: 'worker:canonical-test', eventId: event.eventId, expiresAt: '2026-09-21T00:02:30Z' },
       new Date('2026-09-21T00:02:00Z')
     )).toBe('DONE');
 

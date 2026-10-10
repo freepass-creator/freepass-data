@@ -213,7 +213,8 @@ describe('Catalog V1 vertical slice', () => {
     const second=await buildErpPublicProjection(
       store,
       tamperedActiveProjection as unknown as Parameters<typeof buildErpPublicProjection>[1],
-      '2026-09-20T09:01:00.000Z'
+      '2026-09-20T09:01:00.000Z',
+      { activate: false }
     );
 
     expect(second.releaseId).not.toBe(first.releaseId);
@@ -249,7 +250,8 @@ describe('Catalog V1 vertical slice', () => {
     const second=await buildErpPublicProjection(
       store,
       tamperedManifestProjection,
-      '2026-09-20T09:01:00.000Z'
+      '2026-09-20T09:01:00.000Z',
+      { activate: false }
     );
 
     expect(second.releaseId).not.toBe(first.releaseId);
@@ -280,7 +282,8 @@ describe('Catalog V1 vertical slice', () => {
     const second=await buildErpPublicProjection(
       store,
       legacyManifestProjection,
-      '2026-09-20T09:01:00.000Z'
+      '2026-09-20T09:01:00.000Z',
+      { activate: false }
     );
 
     expect(second.releaseId).not.toBe(first.releaseId);
@@ -547,7 +550,7 @@ describe('Catalog V1 vertical slice', () => {
 
     expect(await processOneOutboxEvent(
       store,store,store,
-      {workerId:'worker:out-of-order'},
+      {workerId:'worker:out-of-order',eventId:r3.eventId,expiresAt:'2026-09-20T10:04:30.000Z'},
       new Date('2026-09-20T10:04:00.000Z')
     )).toBe('DONE');
 
@@ -557,7 +560,7 @@ describe('Catalog V1 vertical slice', () => {
 
     expect(await processOneOutboxEvent(
       store,store,store,
-      {workerId:'worker:out-of-order'},
+      {workerId:'worker:out-of-order',eventId:r2.eventId,expiresAt:'2026-09-20T10:05:30.000Z'},
       new Date('2026-09-20T10:05:00.000Z')
     )).toBe('DONE');
 
@@ -600,7 +603,7 @@ describe('Catalog V1 vertical slice', () => {
       store,
       flakyOutbox,
       store,
-      {workerId:'worker:retry'},
+      {workerId:'worker:retry',eventId:[...store.outbox.values()][0]!.eventId,expiresAt:'2026-09-20T10:01:30.000Z'},
       new Date('2026-09-20T10:01:00.000Z')
     )).toBe('RETRY');
 
@@ -612,7 +615,7 @@ describe('Catalog V1 vertical slice', () => {
       store,
       flakyOutbox,
       store,
-      {workerId:'worker:retry'},
+      {workerId:'worker:retry',eventId:event!.eventId,expiresAt:'2026-09-20T10:02:30.000Z'},
       new Date('2026-09-20T10:02:00.000Z')
     )).toBe('DONE');
 
@@ -628,7 +631,8 @@ describe('Catalog V1 vertical slice', () => {
       commandId:'cmd_outbox',idempotencyKey:'idem_outbox_1',offerId:'offer_gv70_demo',expectedRevision:1,termKey:'36@20000',
       monthlyRent:{amount:730000,currency:'KRW'},reason:'outbox projection test',actor:{id:'user:test',kind:'USER'}
     },'2026-09-20T10:00:00.000Z');
-    expect(await processOneOutboxEvent(store,store,store,{workerId:'worker:test'},new Date('2026-09-20T10:00:01.000Z'))).toBe('DONE');
+    const event=[...store.outbox.values()][0]!;
+    expect(await processOneOutboxEvent(store,store,store,{workerId:'worker:test',eventId:event.eventId,expiresAt:'2026-09-20T10:00:31.000Z'},new Date('2026-09-20T10:00:01.000Z'))).toBe('DONE');
     const active=await store.getActive('erp-public');
     expect(active?.data[0]?.offers[0]?.priceTerms[0]?.monthlyRent.amount).toBe(730000);
     const manifest=await store.getManifest(active!.releaseId);

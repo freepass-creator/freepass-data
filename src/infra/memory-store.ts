@@ -444,6 +444,8 @@ export class MemoryDataStore implements CatalogStore, ProjectionStore, OutboxSto
     const previousId = this.active.get(release.projectionId);
     if (guard?.expectedActiveReleaseId !== undefined && (previousId ?? null) !== guard.expectedActiveReleaseId)
       throw new Error('PROJECTION_SOURCE_ACTIVE_CHANGED');
+    if (previousId && previousId !== releaseId && (!guard?.claim || !guard.receipt))
+      throw new Error('PROJECTION_ACTIVATION_APPROVAL_REQUIRED');
     const previous = previousId ? this.releases.get(previousId) : undefined;
     if (previous) previous.status = 'READY';
     release.status = 'ACTIVE';

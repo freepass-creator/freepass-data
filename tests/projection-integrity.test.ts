@@ -207,7 +207,9 @@ describe('Projection release integrity verifier', () => {
         await original(...args);
         throw new Error('SIMULATED_LOST_RESPONSE');
       });
-      const options = { workerId: 'synthetic', requireFreshSources: true, baseBackoffMs: 1 };
+      const options = { workerId: 'synthetic', eventId: 'synthetic-event',
+        expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(),
+        requireFreshSources: true, baseBackoffMs: 1 };
       expect(await processOneOutboxEvent(store, store, store, options, new Date(head.observedAt)))
         .toBe(operation === 'markDone' ? 'HOLD' : 'RETRY');
       const afterFailure = await store.getActive('erp-public');
@@ -254,7 +256,9 @@ describe('Projection release integrity verifier', () => {
       await store.seed({ sourceHeads: [{ ...head, observedAt: new Date(Date.parse(head.observedAt) - 60_001).toISOString() }] });
     });
     expect(await processOneOutboxEvent(store, store, store,
-      { workerId: 'synthetic', requireFreshSources: true }, new Date(head.observedAt))).toBe('HOLD');
+      { workerId: 'synthetic', eventId: 'synthetic-event',
+        expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(),
+        requireFreshSources: true }, new Date(head.observedAt))).toBe('HOLD');
     expect((await store.getActive('erp-public'))?.releaseId).toBe(old.releaseId);
     expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
     expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PENDING', attempts: 0 });
@@ -273,11 +277,13 @@ describe('Projection release integrity verifier', () => {
     });
     try {
       expect(await processOneOutboxEvent(store, store, store,
-        { workerId: 'synthetic', requireFreshSources: true }, new Date(head.observedAt))).toBe('HOLD');
+        { workerId: 'synthetic', eventId: 'synthetic-event',
+          expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(),
+          requireFreshSources: true }, new Date(head.observedAt))).toBe('HOLD');
       expect(await store.getSourceHead(head.sourceId)).toEqual(head);
       expect((await store.getActive('erp-public'))?.releaseId).toBe(old.releaseId);
       expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
-      expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PENDING', attempts: 0 });
+      expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PROCESSING', attempts: 0 });
     } finally { clock.mockRestore(); }
   });
 
@@ -291,7 +297,9 @@ describe('Projection release integrity verifier', () => {
       throw new Error('SIMULATED_CRASH');
     });
     vi.spyOn(store, 'markRetry').mockRejectedValueOnce(new Error('PROCESS_TERMINATED'));
-    const options = { workerId: 'synthetic', requireFreshSources: true, leaseMs: 1000 };
+    const options = { workerId: 'synthetic', eventId: 'synthetic-event',
+      expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(),
+      requireFreshSources: true, leaseMs: 1000 };
     await expect(processOneOutboxEvent(store, store, store, options, new Date(head.observedAt)))
       .rejects.toThrow('PROCESS_TERMINATED');
     const committed = await store.getActive('erp-public');
@@ -315,7 +323,9 @@ describe('Projection release integrity verifier', () => {
       return evidence;
     });
     expect(await processOneOutboxEvent(store, store, store,
-      { workerId: 'synthetic', requireFreshSources: true }, new Date(head.observedAt))).toBe('HOLD');
+      { workerId: 'synthetic', eventId: 'synthetic-event',
+        expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(),
+        requireFreshSources: true }, new Date(head.observedAt))).toBe('HOLD');
     expect((await store.getActive('erp-public'))?.releaseId).toBe(old.releaseId);
     expect(await store.getDeliveryReceipt('synthetic-event')).toBeNull();
     expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PENDING', attempts: 0 });
@@ -374,7 +384,9 @@ describe('Projection release integrity verifier', () => {
     });
     const retry = vi.spyOn(store, 'markRetry');
     expect(await processOneOutboxEvent(store, store, store,
-      { workerId: 'old', requireFreshSources: true, leaseMs: 1000 }, new Date(head.observedAt))).toBe('HOLD');
+      { workerId: 'old', eventId: 'synthetic-event',
+        expiresAt: new Date(Date.parse(head.observedAt) + 30000).toISOString(),
+        requireFreshSources: true, leaseMs: 1000 }, new Date(head.observedAt))).toBe('HOLD');
     expect(retry).not.toHaveBeenCalled();
     expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PROCESSING', leaseOwner: 'replacement', attempts: 0 });
     expect(await store.getDeliveryReceipt('synthetic-event')).not.toBeNull();
@@ -453,6 +465,52 @@ describe('Projection release integrity verifier', () => {
     expect((await store.getActive('erp-public'))?.releaseId).toBe(previous.releaseId);
     const manifest = await store.getManifest(ready.releaseId);
     expect(verifyProjectionReleaseIntegrity(ready, manifest!, await store.listProjectionLineage(ready.releaseId)).valid).toBe(true);
+  });
+
+  it('keeps the default worker path at READY staging without replacing ACTIVE', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const previous = await buildErpPublicProjection(store, store);
+    await updateOfferPrice(store, {
+      commandId: 'cmd_stage_only_worker',
+      idempotencyKey: 'idem_stage_only_worker',
+      offerId: 'offer_gv70_demo',
+      expectedRevision: 1,
+      termKey: '36@20000',
+      monthlyRent: { amount: 731000, currency: 'KRW' },
+      reason: 'stage-only worker regression',
+      actor: { id: 'user:test', kind: 'USER' }
+    }, '2026-09-20T10:00:00.000Z');
+    const event = [...store.outbox.values()][0]!;
+    const activate = vi.spyOn(store, 'activate');
+
+    expect(await processOneOutboxEvent(store, store, store, { workerId: 'worker:loop' },
+      new Date('2026-09-20T10:00:01.000Z'))).toBe('DONE');
+
+    expect(activate).not.toHaveBeenCalled();
+    expect((await store.getActive('erp-public'))?.releaseId).toBe(previous.releaseId);
+    expect(await store.getDeliveryReceipt(event.eventId)).toBeNull();
+  });
+
+  it('rejects replacing ACTIVE without an approved outbox transition', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    const previous = await buildErpPublicProjection(store, store);
+    await updateOfferPrice(store, {
+      commandId: 'cmd_unapproved_activate',
+      idempotencyKey: 'idem_unapproved_activate',
+      offerId: 'offer_gv70_demo',
+      expectedRevision: 1,
+      termKey: '36@20000',
+      monthlyRent: { amount: 732000, currency: 'KRW' },
+      reason: 'unapproved activation regression',
+      actor: { id: 'user:test', kind: 'USER' }
+    }, '2026-09-20T10:00:00.000Z');
+    const ready = await buildErpPublicProjection(store, store, '2026-09-20T10:00:01.000Z', { activate: false });
+
+    await expect(store.activate(ready.releaseId))
+      .rejects.toThrow('PROJECTION_ACTIVATION_APPROVAL_REQUIRED');
+    expect((await store.getActive('erp-public'))?.releaseId).toBe(previous.releaseId);
   });
 
   it('retains old ACTIVE evidence after a staging failure and retries through a fresh release', async () => {

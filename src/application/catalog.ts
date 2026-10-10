@@ -871,7 +871,11 @@ export async function processOneOutboxEvent(
           catalog,
           projections,
           now.toISOString(),
-          { requireFreshSources: options.requireFreshSources ?? false, publishGuard }
+          {
+            activate: options.eventId !== undefined,
+            requireFreshSources: options.requireFreshSources ?? false,
+            publishGuard
+          }
         );
       }
     }
