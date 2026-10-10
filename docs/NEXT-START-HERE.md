@@ -1,5 +1,7 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 차량 UID 설계서 추가: `docs/VEHICLE-UID.md`에 기존 asset UID 승격, 신규 ULID, `externalIds[]`, 이전 단계와 HOLD 질문을 문서화했다.
+
 ## 2026-10-10 보증금 ZERO 근거 축소 / deposit_free 확인 기록
 
 - 목적: 대표 확정 규칙에 맞춰 보증금 상태를 `KNOWN / ZERO / UNKNOWN / NOT_APPLICABLE` 하나로 두고, ZERO는 공급사 원문 `deposit_note === '무보증'` 또는 `deposit_free_confirmation.source`와 ISO `at`이 있는 확인 답변으로만 좁혔다.
