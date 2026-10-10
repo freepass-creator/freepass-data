@@ -1,5 +1,10 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 Admin contract-fee-links HTTP read endpoint
+
+- HTTP update: `POST /v1/consumers/freepass-admin-catalog/contract-fee-links` added with `contract-fee-link-read`, request/response schema, Admin-only auth/capability/audit, max 500 items, duplicate key 400, invalid shape 400, per-item lookup failure.
+- Verification update: `npm.cmd exec vitest -- run tests/consumer-gateway.test.ts tests/contract-fee-link.test.ts` PASS(43), `npm.cmd run build` PASS, `npm.cmd run check:arch` PASS, `npm.cmd run check:standards` PASS(exit 0, profile PARTIAL), `npm.cmd run check:data-access-boundary` PASS.
+
 ## 2026-10-10 차량 UID 설계서 추가: `docs/VEHICLE-UID.md`에 기존 asset UID 승격, 신규 ULID, `externalIds[]`, 이전 단계와 HOLD 질문을 문서화했다.
 
 ## 2026-10-10 보증금 ZERO 근거 축소 / deposit_free 확인 기록
