@@ -529,6 +529,21 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-10 PR #419 반려 수정 — 차량사진 확인·응답 슬롯·미디어 검증 통합
+
+- 목적 / 대상 revision: `work/freepass-data/vehicle-photo-proxy-20261010`, HEAD `dac29b00847b0ab77c191ff4d777db6ca09d7b52`의 깨끗한 작업 트리에서 사용자 지정 3건을 수정. academy:start READY. 새 파일 없이 기존 공통 계약·게이트웨이·시험을 확장했다. 커밋·푸시 없음.
+- 변경: `photo_original_refs`의 차량사진 확인자/방법/시각을 필수로 하고 ONE·Drive 모두 count/원본/캐시 읽기 전에 독립 검사, 응답 직전 기록 재확인. ONE 전용 사진 근거는 현행 사진 문서에 확인 방법 값 형식만 정의하고 실제 근거는 사람이 작성한다. 게이트웨이 동시8 슬롯은 성공 감사와 실제 응답 전송까지 유지하고 finish/error/close에서 한 번만 해제한다. 미디어 크기·MIME·시그니처는 `consumer-output-contract.ts::validateVehiclePhotoMedia`로 통합하고 어댑터·reader·gateway가 호출한다. 사진 크기·동시성·TTL 상수의 중복도 제거했다.
+- 바꾼 파일: `src/domain/consumer-output-contract.ts`, `src/api/consumer-gateway.ts`, `src/api/data-access-runtime.ts`, `src/adapters/iancar-one-api.ts`, `tests/consumer-gateway.test.ts`, `tests/iancar-publication-withdrawal.test.ts`, `docs/NATIVE-SOURCE-COLLECTOR.md`, 이 인계 파일. 승인 시험값은 합성 확인자·방법·시각이며 실제 차량번호·Drive ID·비밀 추가 없음.
+- 검증: 관련171 PASS(gateway68 / ONE75 / withdrawal23 / output-contract5). 필드별 누락·공백 거부와 정상 허용, 확인 기록 철회, 실제 스트림 완료 전 요청 제한, finish/error/close 중복 반환 방지, reader·감사 오류 후 슬롯 재사용 확인. `npm.cmd run check` code1: arch/standards/data-access/sheets106/build PASS, read-runtime-smoke 12 PASS/1 FAIL(`uv_os_get_passwd ENOMEM`, tsx 시작 오류); 뒤의 shadow/dashboard/전체 Vitest 단계는 도달하지 않음. 별도 `npm.cmd test`는 1967 PASS/12 FAIL/16 SKIP(137 PASS/5 FAIL/4 SKIP 파일). 실패 파일: iancar-source-capture, projection-integrity, read-pilot, runtime-policy, vehicle-finder-route; ENOMEM, jq 실행 거부, CLI 종료코드·로컬 연결 실패가 남는다. runtime-policy는 수정하지 않았다. 전체 통과로 처리하지 않는다.
+- 남음: `BLOCKED_NETWORK` — 원격 main·Issue #24·PR #419 최신 조회와 Claude 독립 검토 미실행(UNAVAILABLE). 사람의 실제 사진 확인 근거 입력·기존 승인 기록 보완, Drive reader/권한·승인 게시·배포·라이브 검증은 HOLD. 현재 확인 기록이 없는 ONE 상품도 fail-closed로 사진을 내주지 않는 의도된 변경이다.
+- next_start_here: 이 미커밋 diff를 검토하고 정상 실행 환경에서 전체 check 재실행. 실제 근거를 사람이 채우기 전 운영 사진 제공을 완료라고 하지 않는다. 관련 시험 명령: `npm.cmd exec vitest -- run tests/consumer-gateway.test.ts tests/iancar-one-api.test.ts tests/consumer-output-contract.test.ts tests/iancar-publication-withdrawal.test.ts`.
+
+### 2026-10-10 사진 프록시 독립 재검토 세 결함 수정
+
+- 목적 / 대상 revision: `eb647e233d17d7bf99fda39b1caa97cc13053065`, `work/freepass-data/vehicle-photo-proxy-20261010`의 기존 미커밋 변경에서 재현된 세 결함만 수정. main `7b2e26b` 변화 없음·PR #419 열림은 사용자가 전달한 Claude 확인을 이어받았다. 이번 academy는 지정된 미커밋 변경 때문에 `DIRTY_WORKTREE_REVIEW_REQUIRED`였으며 변경 목록 확인 후 직접 수정 지시로 계속했다. READY로 재표기하지 않는다.
+- 변경: reader 재검증 클로저를 성공 감사 저장 후 응답 직전에 호출(count·원본·캐시), 철회는404와 기존 deny 감사. 인증 실패만 IP 버킷·성공만 consumer 버킷, 환경 변수 hops0~3(기본0)로 프록시 신뢰 경계 설정. count를 공통 슬롯 try/finally로 이동. 기존 출처·키·미디어 검증 보존. 현행 규칙은 `docs/NATIVE-SOURCE-COLLECTOR.md` 사진 프록시 절.
+- 검증: 관련163 PASS(gateway60 / ONE75 / withdrawal23 / output-contract5), `git diff --check` PASS. `npm.cmd run check`는 arch/standards/data-access/sheets106/build PASS 후 smoke12 PASS/1 FAIL(`uv_os_get_passwd ENOMEM`, tsx 시작 환경 오류)로 code1 종료. 이후 check 단계 미실행. runtime-policy·projection-integrity 불안정 시험 수정 없음.
+- 남음 / next_start_here: 실행 환경의 사용자정보 조회 오류 해소 후 전체 check 재실행. 추가 네트워크 독립 검토·운영 검증 미실행. 커밋·푸시 없음. 실제 사진 reader 권한·승인 게시·배포는 범위 밖.
 ### 2026-10-10 이안카 동기화 잠금 상품 단위 격리
 
 - 목적: 잠금 한 건 때문에 정상 상품 전체의 증거 갱신이 중단되는 문제 해소.
@@ -563,6 +578,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 원인 ② 10-10 07:53 KST(run 38001646890): 13건 쓰고 되읽기 불일치 11. 읽기 전용 재현 결과 11건 모두 «기간별 수수료(internalEconomicsTerms)가 옛 정책 `sales-commission-2026-10-04` 로 저장된 채» — 10-09 정책으로 갈아탄 뒤 가격이 안 바뀐 제안은 재계산이 안 돼 되읽기(현재 정책 기대값)와 달랐다. 차량 사실·상태·가격 칸은 전부 일치. 전체 160개 중 158개가 정책 id 가 옛 값이고 일부(RP021 등)는 금액·상태도 바뀐다 → `src/jobs/recompute-offer-economics.ts`(계획→검토→digest 승인 적용)로 일괄 재계산이 필요하며 이는 운영 쓰기라 별도 승인 대상.
 - 원인 ③ «오늘 이미 썼음»: 쓰기 단계가 실패·취소여도 «쓴 것»으로 세어 뒤 회차가 건너뜀. 고침: 실패·취소·시간 초과는 세지 않아 재시도 허용(영수증 멱등키·기대 revision·계획 재생성으로 안전, 실패는 붉은 실행으로 그대로 보임).
 - 남음: 수수료 일괄 재계산 적용(시험 실행 계획 → 바뀌는 항목 요약 → 다른 모델 검토 → 승인 digest → 적용 → 되읽기).
+
+### 2026-10-10 차량 사진 프록시 승인 연결 확장
+
+- 목적 / 대상 revision: `eb647e2`, `work/freepass-data/vehicle-photo-proxy-20261010`. 독립 검토 지적 P1/P2 세 건을 같은 작업 트리에서 수정. 사용자 전달 main `7b2e26b` 리베이스·PR #419·Issue #24·겹침 확인을 이어받았다. academy READY, 커밋·푸시 없음.
+- 변경: ONE API와 승인 연결을 두 출처 전략으로 묶고 소비자·요청·적격성·동시성·바이트 검증·반환 직전 재조회는 하나로 통합. count와 캐시 적중도 철회를 재확인한다. 승인 출처는 SHA256, ONE은 기존 귀속 검사·캐시 유지. 인증 전 IP/인증 후 consumer 토큰 버킷, 상한·만료 정리, 429/Retry-After 추가. 차량키는 태그 포함 JSON 튜플 SHA256으로 교체.
+- 지운 것: `readIancarPhoto`, `isLegacyProduct` 인자·조기 반환, gateway 폴백과 공급사 전용 응답 코드. 시험 삭제 없음: 기존 gateway 이안카 시험은 `readVehiclePhoto`로 이전하고 ONE 귀속 시험은 보존. 파일 삭제 없음.
+- 재사용: 기존 reader·상품 적격성·ONE 캐시·시험을 확장. 요청 제한 검색 후보에는 시간 기반 인증 전/consumer 제한기가 없어 `photo-request-limit.ts`를 `CREATE_NEW_JUSTIFIED`로 추가했다.
+- 검증: 관련 144/144 PASS(gateway46, ONE75, withdrawal23). 전체 검사 결과는 `NATIVE-SOURCE-COLLECTOR.md` 같은 날짜 사진 절에 기록. 로컬 ERP5/ERP4 소비처 grep에서 옛 응답 코드 의존 없음; HTTP 상태·count 형식 보존.
+- 남음: 실제 Drive reader·운영 권한·승인 연결 게시·배포는 범위 밖. 네트워크 금지로 추가 독립 검토·라이브 검증은 미실행. 전체 check 환경 오류를 PASS로 간주하지 않는다.
+- next_start_here: 이 미커밋 diff와 관련 시험을 검토하고 정상 실행 환경에서 전체 check를 재검증한다. 새 차량키로 승인 연결을 생성해야 하며 옛 키를 자동 승인하거나 fallback하지 않는다.
 
 ### 2026-10-10 공개 파일의 Google Sheet/Drive ID 분리
 
@@ -2527,3 +2552,11 @@ This file exists so another session can continue without re-discovering or re-cr
 - 남음: 운영 인증/backup/readback/실행 승인 및 source/master 최신성/consumer 전체 연결은 HOLD. Kakao 기존 caller와 운영 read revision은 code merge로 바뀌지 않는다. 공급사·영업자 기존 코드는 임시 외부 식별값으로 보존하며 미래 코드 매핑 전제로 이력을 유지한다.
 - next_start_here: PR411 최종 head/CI/ANSWERED 영수증/merge SHA를 확인하고, 별도로 승인된 운영 절차에서만 deployment·ACTIVE·writer·consumer 전환을 실행한다. 오래된 draft snapshot은 비교 자료이며 최신 SSOT가 아니다.
 - 통합 독립 검토 후속: e566에서 로컬 콘솔 멱등 재시도의 releaseId 불변을 오류로 보던 반례를 수정했다. ACTIVE에 committed offer revision 이상이 있는지 검사한다. 기존 read-runtime smoke에 실제 HTTP 최초 요청/동일 재전송 200·같은 receipt·같은 ACTIVE 응답 회귀를 추가, 13 PASS. 코드와 테스트는 PR411 최종 head에서 확인한다.
+
+## 2026-10-10 승인 Drive 사진 원본 byte adapter (운영 OFF)
+
+- 목적/정본: PR419 `2e72929ea32b5bbd160714a10937de2f0030d578`의 기존 ApprovedPhotoReader port를 구현한다. 사진 담당은 최종 head 경계 검증을 맡으며 원래 checkout은 수정하지 않았다.
+- 재사용/변경: COMPOSE_OR_EXTEND, academy READY. 기존 `src/infra/erp5-compat-catalog-reader.ts`에 `createApprovedDrivePhotoReader`를 추가했다. 정확 fileId metadata/alt=media GET만 사용하고 Compute metadata service-account token의 drive.readonly scope를 사용한다. 사용자 ADC/gws, 폴더 탐색, 공유, writer, 신규 엔진 없음. 기존 공통 reader가 차량키/승인/해시/철회/캐시를 계속 판정한다.
+- 검증: build, architecture, standards 33 schemas + 15 tests, data-access-boundary PASS. 전체 Vitest 2081 PASS/16 conditional SKIP; 후속 stream-limit fixture 추가 뒤 gateway 재검증 결과는 PR 기록을 따른다. SDK/transport 오류 원문은 고정 VEHICLE_PHOTO 오류로 정리하며 로깅하지 않는다.
+- 남음: factory는 명시 호출만 가능하며 runtime 기본 주입 OFF. 실제 승인 refs 0건, 운영 폴더 ID와 Drive 읽기 권한 미승인. CODED/TESTED와 실제 원본 연결·DEPLOYMENT/CUTOVER를 구분한다. Drive/DB/Sheet/IAM/배포 실행 없음.
+- next_start_here: PR419의 최종 commit/CI/Claude 결과를 확인하고 사진 담당이 독립 경계 검증한다. 별도 운영 승인 전 runtime 주입·photo_original_refs 입력·Drive 공유를 하지 않는다.
