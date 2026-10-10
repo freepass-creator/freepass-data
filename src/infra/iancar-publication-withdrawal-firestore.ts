@@ -181,6 +181,8 @@ export function decodeIancarBackupValue(value: any, reference: (path: string) =>
   throw new Error('IANCAR_BACKUP_UNKNOWN_TYPE');
 }
 
+export const IANCAR_PUBLICATION_MAX_LOCK_SKIP_RATIO = 0.20;
+
 /** RP031-only compatibility publication. Canonical Catalog writer ownership is not cut over here. */
 export async function publishIancarPhaseOne(input: {
   products: PhaseOneProduct[]; sourceDigest: string; sourceSyncedAt: string;
@@ -221,7 +223,9 @@ export async function publishIancarPhaseOne(input: {
   const all = await db.collection('products').get();
   const plates = (value: unknown) => String(value ?? '').replace(/\s/g, '');
   const originals = new Map(all.docs.map(doc => [doc.id, doc]));
-  const planned = products.map(product => {
+  const skipped: { id: string; reason: string; revision: number }[] = [];
+  const skippedByReason = { CONTRACT_LOCK: 0, DELETION_LOCK: 0, CONTRACT_AND_DELETION_LOCK: 0 };
+  const candidates = products.map(product => {
     const plate = plates(product.car_number);
     if (!/^\d{2,3}[가-힣]\d{4}$/.test(plate) || !product.sourceVehicleId) throw new Error('IANCAR_PUBLICATION_IDENTITY_INVALID');
     const matches = all.docs.filter(doc => plates(doc.data().car_number) === plate);
@@ -231,12 +235,17 @@ export async function publishIancarPhaseOne(input: {
     const old = prior?.data() ?? {};
     if (all.docs.some(doc => doc.data().iancar_one_vehicle_id === product.sourceVehicleId && doc.id !== prior?.id))
       throw new Error('IANCAR_PUBLICATION_SOURCE_ID_COLLISION');
-    if (old.locked_by_contract || old._deleted || old.deletedAt)
-      throw new Error('IANCAR_PUBLICATION_CONTRACT_OR_DELETION_LOCK');
     if (old.iancar_one_vehicle_id && old.iancar_one_vehicle_id !== product.sourceVehicleId)
       throw new Error('IANCAR_PUBLICATION_SOURCE_ID_COLLISION');
     const id = prior?.id ?? `iancar_${stableDigest(['RP031', product.sourceVehicleId]).slice(0, 24)}`;
     if (!prior && originals.has(id)) throw new Error('IANCAR_PUBLICATION_ID_COLLISION');
+    if (old.locked_by_contract || old._deleted || old.deletedAt) {
+      const reason = old.locked_by_contract
+        ? (old._deleted || old.deletedAt ? 'CONTRACT_AND_DELETION_LOCK' : 'CONTRACT_LOCK') : 'DELETION_LOCK';
+      skippedByReason[reason]++;
+      skipped.push({ id, reason, revision: prior!.updateTime.toMillis() });
+      return null;
+    }
     const fields: Record<string, unknown> = {
       provider_company_code: 'RP031', partner_code: 'RP031', provider_name: '이안카',
       car_number: plate, product_code: old.product_code ?? id,
@@ -263,6 +272,14 @@ export async function publishIancarPhaseOne(input: {
       productId: id, vehicleId: product.sourceVehicleId, plate }), { iancar_one_photo_ids: product.photo.photoIds });
     return { id, prior, fields };
   });
+  const skippedCount = skipped.length;
+  const skippedRatio = skippedCount / products.length;
+  if (skippedRatio > IANCAR_PUBLICATION_MAX_LOCK_SKIP_RATIO)
+    throw Object.assign(new Error('IANCAR_PUBLICATION_LOCK_SKIP_RATIO_EXCEEDED'), {
+      skippedCount, skippedByReason, sourceCount: products.length, skippedRatio,
+      maxSkippedRatio: IANCAR_PUBLICATION_MAX_LOCK_SKIP_RATIO, writeExecuted: false,
+    });
+  const planned = candidates.filter(row => row !== null);
   if (input.mirrorInventory) {
     const observedIds = new Set(products.map(p => p.sourceVehicleId));
     const observedPlates = new Set(products.map(p => plates(p.car_number)));
@@ -273,14 +290,17 @@ export async function publishIancarPhaseOne(input: {
     }
   }
   if (planned.length > 450) throw new Error('IANCAR_PUBLICATION_OVERSIZED_PLAN');
-  const planDigest = stableDigest({ sourceDigest: input.sourceDigest,
+  const planDigest = stableDigest({ sourceDigest: input.sourceDigest, skipped,
     records: planned.map(row => ({ id: row.id, updateTime: row.prior?.updateTime.toMillis() ?? null, fields: row.fields })) });
+  const appliedProducts = products.filter((_, index) => candidates[index] !== null);
   const summary = { provider: 'RP031', sourceCount: products.length,
+    skippedCount, skippedByReason, skippedRatio, maxSkippedRatio: IANCAR_PUBLICATION_MAX_LOCK_SKIP_RATIO,
+    warnings: skippedCount ? ['IANCAR_PUBLICATION_LOCKED_PRODUCTS_SKIPPED'] : [],
     matched: planned.filter(row => row.prior && row.fields.iancar_phase_one).length, created: planned.filter(row => !row.prior).length,
     absenceHeld: planned.filter(row => row.fields.publication_withdrawal).length,
-    withPhotos: products.filter(row => row.photo && row.photo.count > 0).length,
-    photoCount: products.reduce((count, row) => count + (row.photo?.count ?? 0), 0),
-    open: products.filter(row => row.listable).length, deletes: 0, contractChanges: 0, policyDocumentChanges: 0,
+    withPhotos: appliedProducts.filter(row => row.photo && row.photo.count > 0).length,
+    photoCount: appliedProducts.reduce((count, row) => count + (row.photo?.count ?? 0), 0),
+    open: appliedProducts.filter(row => row.listable).length, deletes: 0, contractChanges: 0, policyDocumentChanges: 0,
     policyReferencesDeferred: planned.filter(row => row.prior?.data().policy_code).length,
     policyDeferredTotal: planned.length,
     unobservedHistoricalPreserved: all.docs.filter(doc => doc.data().provider_company_code === 'RP031' && !planned.some(row => row.id === doc.id)).length,
