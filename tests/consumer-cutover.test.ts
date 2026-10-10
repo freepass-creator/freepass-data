@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import catalogSchema from '../contracts/catalog-v1.schema.json' with { type: 'json' };
-import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
+import { withCompatibilityDepositEvidence, withoutInternalFeeFields } from '../src/infra/erp5-compat-catalog-reader.js';
 import {
   CONSUMER_SWITCH_REGISTRY,
   evaluateConsumerCutover,
@@ -249,6 +249,33 @@ describe('consumer cutover registry', () => {
       '24': { deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'MISSING_DEPOSIT_AMOUNT' }
     });
     expect(source).toEqual(before);
+  });
+
+  it('removes internal fee fields on the reader response path while keeping rent and deposit fields', () => {
+    const source = {
+      provider_company_code: 'RP004',
+      product_type: '중고렌트',
+      internalEconomicsTerms: [{ termKey: '12' }],
+      supplierBillingFee: 1,
+      channelPayoutFee: 2,
+      salesCommission: 3,
+      partnerCommissionMemo: 'private',
+      fee_memo: 'private',
+      price: {
+        '12': { rent: 500000, deposit: 1000000, fee: 100, commission: 200, fee_memo: 'private' },
+      },
+    };
+    const responseProduct = withoutInternalFeeFields(withCompatibilityDepositEvidence(source));
+    expect(responseProduct.price).toMatchObject({ '12': { rent: 500000, deposit: 1000000, depositState: 'KNOWN' } });
+    const serialized = JSON.stringify(responseProduct);
+    expect(serialized).not.toContain('internalEconomicsTerms');
+    expect(serialized).not.toContain('supplierBillingFee');
+    expect(serialized).not.toContain('channelPayoutFee');
+    expect(serialized).not.toContain('salesCommission');
+    expect(serialized).not.toContain('partnerCommissionMemo');
+    expect(serialized).not.toContain('fee_memo');
+    expect(serialized).not.toContain('"fee"');
+    expect(serialized).not.toContain('"commission"');
   });
 
   it('requires deposit state in the existing consumer price-term contract after a legacy-shape read', () => {

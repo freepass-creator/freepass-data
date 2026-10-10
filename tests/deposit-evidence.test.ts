@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { assessDepositEvidence, auditDepositEvidence, depositFromYearsRuleNote, depositStatusLabel, resolveDepositByRuleNote } from '../src/domain/deposit-evidence.js';
 import { buildKakaoCatalogReferenceProduct, resolveReferenceDeposit } from '../src/application/kakao-catalog-reference.js';
 import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
+import { mapErp5Product } from '../src/adapters/erp5-product-mapping.js';
 
 describe('deposit evidence never promotes a placeholder to waiver', () => {
   it('compatibility derives per-rate state without changing storage or unrelated fields', () => {
@@ -124,6 +125,22 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     expect(row).toMatchObject({ deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY' });
   });
 
+  it('keeps uncovered import terms UNKNOWN instead of applying the 12-month multiplier broadly', () => {
+    const note = '수입: 12개월 대여료×3 · 18개월↑ ×6';
+    expect([6, 12, 15, 17, 18, 24, 36].map(termMonths => {
+      const rule = resolveDepositByRuleNote({ note, termMonths, monthlyRent: 1000000 });
+      return rule.state === 'KNOWN' ? [termMonths, rule.multiplier, rule.amount] : [termMonths, rule.state, rule.reason];
+    })).toEqual([
+      [6, 'UNKNOWN', 'TERM_NOT_COVERED_BY_RULE'],
+      [12, 3, 3000000],
+      [15, 'UNKNOWN', 'TERM_NOT_COVERED_BY_RULE'],
+      [17, 'UNKNOWN', 'TERM_NOT_COVERED_BY_RULE'],
+      [18, 6, 6000000],
+      [24, 6, 6000000],
+      [36, 6, 6000000],
+    ]);
+  });
+
   it('keeps the compatibility guide paths unchanged for non-RP012 rules, missing evidence, waivers, and Iancar', () => {
     const rent = 123456;
     const compat = (withCompatibilityDepositEvidence({ provider_company_code: 'RP023', product_type: '오플구독', deposit_note: '국산: 월 대여료×2',
@@ -140,5 +157,31 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     const iancar = withCompatibilityDepositEvidence({ provider_company_code: 'RP031', product_type: '중고렌트', deposit_note: '국산: 월 대여료×2',
       price: { '12': { rent: 100000, deposit: 0 } } }).price as Record<string, Record<string, unknown>>;
     expect(iancar['12']).toMatchObject({ deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' });
+  });
+
+  it('keeps reference, mapper, and compatibility deposit rule results equivalent for the same inputs', () => {
+    const cases = [
+      { productType: '픽업구독', note: '월 대여료 × 약정연수 (최대 3개월)', termMonths: 12, sourceAmount: 0, state: 'KNOWN', amount: 100000 },
+      { productType: '오공구독', note: '국산: 월 대여료×2', termMonths: 24, sourceAmount: '0', state: 'KNOWN', amount: 200000 },
+      { productType: '오공구독', note: '수입: 12개월 대여료×3 · 18개월↑ ×6', termMonths: 15, sourceAmount: 0, state: 'UNKNOWN', amount: null },
+      { productType: '중고렌트', note: '국산: 월 대여료×2', termMonths: 24, sourceAmount: 0, state: 'UNKNOWN', amount: null },
+      { productType: '픽업구독', note: '무보증', termMonths: 12, sourceAmount: 0, state: 'UNKNOWN', amount: null },
+      { productType: '픽업구독', note: '', termMonths: 12, sourceAmount: 500000, state: 'KNOWN', amount: 500000 },
+    ] as const;
+    for (const c of cases) {
+      const reference = resolveReferenceDeposit({ supplierId: 'RP012', productType: c.productType, note: c.note,
+        termMonths: c.termMonths, monthlyRent: 100000, sourceAmount: c.sourceAmount });
+      const compat = (withCompatibilityDepositEvidence({ provider_company_code: 'RP012', product_type: c.productType, deposit_note: c.note,
+        price: { [String(c.termMonths)]: { rent: 100000, deposit: c.sourceAmount } } }).price as Record<string, Record<string, unknown>>)[String(c.termMonths)]!;
+      const mapped = mapErp5Product({ projectId: 'freepasserp5', collection: 'products', documentId: `p-${c.termMonths}-${c.productType}`,
+        sourceRevision: 'r', observedAt: '2026-10-10T00:00:00.000Z',
+        data: { car_number: '000가0000', maker: '제조사', model: '모델', provider_company_code: 'RP012',
+          product_type: c.productType, vehicle_status: '출고가능', status_kind: '가용', listable: true,
+          deposit_note: c.note, price: { [String(c.termMonths)]: { rent: 100000, deposit: c.sourceAmount } } } });
+      const term = mapped.candidate.priceTerms[0]!;
+      expect([reference.depositState, reference.depositAmount]).toEqual([c.state, c.amount]);
+      expect([compat.depositState, compat.deposit]).toEqual([c.state, c.amount]);
+      expect([term.depositState, term.deposit?.amount ?? null]).toEqual([c.state, c.amount]);
+    }
   });
 });

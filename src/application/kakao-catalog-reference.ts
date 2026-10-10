@@ -2,7 +2,7 @@ import { plateIdentityKey, isStrictKoreanPlate } from '../domain/vehicle-plate.j
 import { createHash } from 'node:crypto';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
 import { policyScalar } from './product-pricing-policy.js';
-import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositByRuleNote } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 import { verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { chooseVehicleIdentity, indexVehicleMaster, type VehicleMasterReference } from '../domain/vehicle-identity-resolution.js';
 
@@ -243,49 +243,21 @@ export function resolveReferenceDeposit(input: {
   depositFree?: unknown;
   hasPositivePaidDeposit?: boolean;
 }) {
-  const note = text(input.note);
-  const evidence = assessDepositEvidence(input);
-  if (['CONFLICTING_ZERO_DEPOSIT_EVIDENCE', 'INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE', 'POSITIVE_AMOUNT_WITH_RULE_REQUIRES_REVIEW', 'INVALID_DEPOSIT_AMOUNT'].includes(evidence.reason)) {
+  const resolved = resolveDepositWithRuleNote(input);
+  if (resolved.state === 'UNKNOWN') {
     return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
   }
-  if (evidence.state === 'KNOWN') {
-    return { depositAmount: evidence.amount, depositState: 'KNOWN' as DepositState,
-      depositRule: { code: 'SOURCE_AMOUNT', multiplier: null, label: '공급사 입력 금액' } };
-  }
-  if (input.supplierId === 'RP012' && ['중고렌트', '재렌트'].includes(String(input.productType))) {
-    return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
-  }
-  if (evidence.state === 'ZERO') {
+  if (resolved.state === 'ZERO') {
     return {
       depositAmount: 0,
       depositState: 'ZERO' as DepositState,
-      depositRule: { code: 'ZERO_DEPOSIT', multiplier: 0, label: '무보증' },
+      depositRule: resolved.rule,
     };
   }
-  if (input.monthlyRent > 0) {
-    const rule = resolveDepositByRuleNote({ note, termMonths: input.termMonths, monthlyRent: input.monthlyRent });
-    if (rule.state === 'KNOWN') {
-      return {
-        depositAmount: rule.amount,
-        depositState: 'KNOWN' as DepositState,
-        depositRule: { code: rule.code, multiplier: rule.multiplier, label: rule.label },
-      };
-    }
-  }
-  if (!note) {
-    const sourceAmount = integer(input.sourceAmount);
-    if (sourceAmount !== null && sourceAmount > 0) {
-      return {
-        depositAmount: sourceAmount,
-        depositState: 'KNOWN' as DepositState,
-        depositRule: { code: 'SOURCE_AMOUNT', multiplier: null, label: '공급사 입력 금액' },
-      };
-    }
-  }
   return {
-    depositAmount: null,
-    depositState: 'UNKNOWN' as DepositState,
-    depositRule: null,
+    depositAmount: resolved.amount,
+    depositState: 'KNOWN' as DepositState,
+    depositRule: resolved.rule,
   };
 }
 

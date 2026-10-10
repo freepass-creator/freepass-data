@@ -58,11 +58,11 @@ export type Erp5CompatibilityPriceKey = {
  * Domain pure helper so infra/application/adapters can share the same months parsing without layer inversion.
  */
 export function parseErp5CompatibilityPriceKey(key: string): Erp5CompatibilityPriceKey | undefined {
-  const explicit = /^([1-9]\d*)_(\uc6d4|\uc5f0)([1-9]\d*)km$/.exec(key);
+  const explicit = /^([1-9]\d*)_(월|연)([1-9]\d*)km$/.exec(key);
   if (explicit) {
     const months = Number(explicit[1]), km = Number(explicit[3]);
     if (!Number.isSafeInteger(months) || months > 60 || !Number.isSafeInteger(km)) return undefined;
-    const period = explicit[2] === '\uc6d4' ? 'month' as const : 'year' as const;
+    const period = explicit[2] === '월' ? 'month' as const : 'year' as const;
     return { months, settlement: 'RETURN', contractedMileage: { km, period }, ...(period === 'year' ? { mileageKm: km } : {}) };
   }
   const buyout = /^([1-9]\d*)_인수형$/.exec(key);
@@ -78,7 +78,7 @@ export function parseErp5CompatibilityPriceKey(key: string): Erp5CompatibilityPr
 
 export type DepositRuleResolution =
   | { state: 'KNOWN'; amount: number; code: string; multiplier: number; label: string }
-  | { state: 'UNKNOWN'; reason: 'NO_RULE' | 'MISSING' | 'CONFLICT' };
+  | { state: 'UNKNOWN'; reason: 'NO_RULE' | 'MISSING' | 'CONFLICT' | 'TERM_NOT_COVERED_BY_RULE' };
 
 export type DepositRuleCode =
   | 'RENT_X_CONTRACT_YEARS_MAX3'
@@ -95,12 +95,9 @@ export function resolveDepositByRuleNote(input: {
   note: unknown;
   termMonths: unknown;
   monthlyRent: unknown;
-  allowedRules?: readonly DepositRuleCode[];
 }): DepositRuleResolution {
   const note = typeof input.note === 'string' ? input.note.trim() : '';
-  const allowed = input.allowedRules ? new Set(input.allowedRules) : null;
   const known = (code: string, multiplier: number, label = `대여료×${multiplier}`): DepositRuleResolution => {
-    if (allowed && !allowed.has(code as DepositRuleCode)) return { state: 'UNKNOWN', reason: 'NO_RULE' };
     if (!Number.isSafeInteger(input.monthlyRent) || (input.monthlyRent as number) <= 0) return { state: 'UNKNOWN', reason: 'MISSING' };
     const amount = (input.monthlyRent as number) * multiplier;
     return Number.isSafeInteger(amount) && amount > 0
@@ -116,9 +113,52 @@ export function resolveDepositByRuleNote(input: {
   if (/^국산:\s*월 대여료×2$/.test(note)) return known('RENT_X_2', 2);
   if (/^수입:\s*12개월 대여료×3 · 18개월↑ ×6$/.test(note)) {
     if (!Number.isSafeInteger(input.termMonths) || (input.termMonths as number) <= 0) return { state: 'UNKNOWN', reason: 'MISSING' };
-    return known('IMPORT_12_X3_18_PLUS_X6', (input.termMonths as number) >= 18 ? 6 : 3);
+    if (input.termMonths === 12) return known('IMPORT_12_X3_18_PLUS_X6', 3);
+    if ((input.termMonths as number) >= 18) return known('IMPORT_12_X3_18_PLUS_X6', 6);
+    return { state: 'UNKNOWN', reason: 'TERM_NOT_COVERED_BY_RULE' };
   }
   return { state: 'UNKNOWN', reason: 'NO_RULE' };
+}
+
+export type DepositWithRuleResolution =
+  | { state: 'KNOWN'; amount: number; reason: 'SOURCE_AMOUNT' | `SUPPLIER_RULE_NOTE:${DepositRuleCode}`; rule: null | { code: DepositRuleCode | 'SOURCE_AMOUNT'; multiplier: number | null; label: string } }
+  | { state: 'ZERO'; amount: 0; reason: 'EXPLICIT_ZERO_DEPOSIT'; rule: { code: 'ZERO_DEPOSIT'; multiplier: 0; label: string } }
+  | { state: 'UNKNOWN'; amount: null; reason: string; rule: null };
+
+export function resolveDepositWithRuleNote(input: {
+  supplierId?: unknown;
+  productType?: unknown;
+  note?: unknown;
+  termMonths?: unknown;
+  monthlyRent?: unknown;
+  sourceAmount: unknown;
+  depositFree?: unknown;
+  hasPositivePaidDeposit?: boolean;
+}): DepositWithRuleResolution {
+  const evidence = assessDepositEvidence(input);
+  const sourceAmountRule = { code: 'SOURCE_AMOUNT' as const, multiplier: null, label: '공급사 입력 금액' };
+  if (evidence.state === 'KNOWN') return { state: 'KNOWN', amount: evidence.amount, reason: 'SOURCE_AMOUNT', rule: sourceAmountRule };
+  if (evidence.state === 'ZERO') return { state: 'ZERO', amount: 0, reason: 'EXPLICIT_ZERO_DEPOSIT', rule: { code: 'ZERO_DEPOSIT', multiplier: 0, label: '무보증' } };
+
+  const supplierId = normalizeDepositSupplierId(input.supplierId);
+  const productType = normalizeDepositProductType(input.productType);
+  const missing = input.sourceAmount === undefined || input.sourceAmount === null || input.sourceAmount === '';
+  const ruleCandidateDeposit = input.sourceAmount === 0 || input.sourceAmount === '0' || missing;
+  const rp012UsedRent = supplierId === 'RP012' && ['중고렌트', '재렌트'].includes(productType);
+  const ruleAllowedReason = ['ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY', 'DEPOSIT_RULE_REQUIRES_RESOLUTION', 'MISSING_DEPOSIT_AMOUNT'].includes(evidence.reason);
+  if (supplierId !== 'RP031' && !rp012UsedRent && ruleCandidateDeposit && ruleAllowedReason) {
+    const rule = resolveDepositByRuleNote({ note: input.note, termMonths: input.termMonths, monthlyRent: input.monthlyRent });
+    if (rule.state === 'KNOWN') {
+      return {
+        state: 'KNOWN',
+        amount: rule.amount,
+        reason: `SUPPLIER_RULE_NOTE:${rule.code as DepositRuleCode}` as const,
+        rule: { code: rule.code as DepositRuleCode, multiplier: rule.multiplier, label: rule.label },
+      };
+    }
+    if (rule.reason !== 'NO_RULE') return { state: 'UNKNOWN', amount: null, reason: rule.reason, rule: null };
+  }
+  return { state: 'UNKNOWN', amount: null, reason: evidence.reason, rule: null };
 }
 
 export function depositFromYearsRuleNote(note: unknown, termMonths: unknown, monthlyRent: unknown): { amount: number; multiplier: number } | null {

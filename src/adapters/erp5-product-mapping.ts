@@ -1,7 +1,7 @@
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import { assessDepositEvidence, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, resolveDepositByRuleNote, type Erp5CompatibilityPriceKey } from '../domain/deposit-evidence.js';
+import { hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, resolveDepositWithRuleNote, type Erp5CompatibilityPriceKey } from '../domain/deposit-evidence.js';
 import { resolveErp5InventoryStatus } from '../domain/erp5-inventory-status.js';
 import { isStrictKoreanPlate } from '../domain/vehicle-plate.js';
 
@@ -243,19 +243,12 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     }
     const privateTerms = ['fee', 'commission', 'fee_memo'].filter(k => has(terms, k) && present(terms[k]));
     if (privateTerms.length) issue('PRIVATE_PRICE_TERMS_REVIEW_REQUIRED');
-    const depositEvidence = assessDepositEvidence({ supplierId: d.provider_company_code, productType: d.product_type,
-      note: d.deposit_note, depositFree: d.deposit_free, sourceAmount: terms.deposit,
+    const depositEvidence = resolveDepositWithRuleNote({ supplierId: d.provider_company_code, productType: d.product_type,
+      note: d.deposit_note, depositFree: d.deposit_free, sourceAmount: terms.deposit, termMonths: months, monthlyRent: amount,
       hasPositivePaidDeposit: hasConflictingPaidDeposit(d.price) });
-    // RP012 구독의 입력 보증금 0 은 자리표시자다 — 공급사 자기 규칙 메모(월 대여료 × 약정연수, 최대 3개월)로 읽을 때 계산한다(쓰지 않음).
-    // 원문 보증금이 «정확히 0»(숫자 0 또는 글자 '0')일 때만 — 칸 없음·null·빈 문자열·잘못된 값은 자리표시자가 아니라 누락이므로 UNKNOWN 유지.
-    const placeholderZero = terms.deposit === 0 || terms.deposit === '0';
-    const ruleDerived = placeholderZero && depositEvidence.state === 'UNKNOWN' && ['ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY', 'DEPOSIT_RULE_REQUIRES_RESOLUTION'].includes(depositEvidence.reason)
-      && String(d.provider_company_code ?? '').trim() === 'RP012' && /구독/.test(String(d.product_type ?? ''))
-      ? resolveDepositByRuleNote({ note: d.deposit_note, termMonths: months, monthlyRent: amount,
-        allowedRules: ['RENT_X_CONTRACT_YEARS_MAX3'] }) : null;
-    const depositAmount = complex.length || privateTerms.length || (depositEvidence.state === 'UNKNOWN' && !ruleDerived)
-      ? undefined : ruleDerived?.state === 'KNOWN' ? ruleDerived.amount : depositEvidence.amount ?? undefined;
-    if (depositEvidence.state === 'UNKNOWN' && ruleDerived?.state !== 'KNOWN') issue(depositEvidence.reason);
+    const depositAmount = complex.length || privateTerms.length || depositEvidence.state === 'UNKNOWN'
+      ? undefined : depositEvidence.amount;
+    if (depositEvidence.state === 'UNKNOWN') issue(depositEvidence.reason);
     if (depositAmount === undefined) issue('UNKNOWN_DEPOSIT');
     // 기본값으로 떨어진 주행거리는 원천이 말한 값이 아니다. 지우지 말고 검토 표시를 남긴다.
     if (mileage.source === 'DEFAULT') issue('MILEAGE_FROM_COMPANY_DEFAULT');

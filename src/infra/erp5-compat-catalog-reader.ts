@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
-import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit, normalizeDepositProductType, normalizeDepositSupplierId, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositByRuleNote } from '../domain/deposit-evidence.js';
+import { depositStatusLabel, hasConflictingPaidDeposit, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 
 type Rec = Record<string, unknown>;
 
@@ -78,28 +78,28 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
   return { ...product, price: Object.fromEntries(Object.entries(price).map(([key, value]) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return [key, value];
     const row = value as Rec;
-    const baseEvidence = product.provider_company_code === 'RP031' ? readIancarPublishedDeposit(product, key, now)
-      : assessDepositEvidence({ supplierId: product.provider_company_code, productType: product.product_type,
+    const evidence = product.provider_company_code === 'RP031' ? readIancarPublishedDeposit(product, key, now)
+      : resolveDepositWithRuleNote({ supplierId: product.provider_company_code, productType: product.product_type,
       note: product.deposit_note, depositFree: product.deposit_free, sourceAmount: row.deposit,
-      hasPositivePaidDeposit: paid });
-    const parsedKey = parseErp5CompatibilityPriceKey(key);
-    const monthlyRent = typeof row.rent === 'number' && Number.isSafeInteger(row.rent) && row.rent > 0 ? row.rent : null;
-    const missingDeposit = row.deposit === undefined || row.deposit === null || row.deposit === '';
-    const ruleCandidateDeposit = row.deposit === 0 || row.deposit === '0' || missingDeposit;
-    const supplierId = normalizeDepositSupplierId(product.provider_company_code);
-    const productType = normalizeDepositProductType(product.product_type);
-    const rp012UsedRentNormalized = supplierId === 'RP012' && ['\uc911\uace0\ub80c\ud2b8', '\uc7ac\ub80c\ud2b8'].includes(productType);
-    const canUseRule = supplierId !== 'RP031' && !rp012UsedRentNormalized && ruleCandidateDeposit && baseEvidence.state === 'UNKNOWN'
-      && ['ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY', 'DEPOSIT_RULE_REQUIRES_RESOLUTION', 'MISSING_DEPOSIT_AMOUNT'].includes(baseEvidence.reason);
-    const rule = canUseRule && parsedKey && monthlyRent !== null
-      ? resolveDepositByRuleNote({ note: product.deposit_note, termMonths: parsedKey.months, monthlyRent }) : null;
-    const evidence = rule?.state === 'KNOWN'
-      ? { state: 'KNOWN' as const, amount: rule.amount, reason: `SUPPLIER_RULE_NOTE:${rule.code}` }
-      : baseEvidence;
+      termMonths: Number(String(key).split('_')[0]), monthlyRent: row.rent, hasPositivePaidDeposit: paid });
     return [key, { ...row, deposit: evidence.amount, depositState: evidence.state,
       depositStatusLabel: depositStatusLabel(evidence.state, row.deposit, product.deposit_note),
       depositEvidenceReason: evidence.reason }];
   })) };
+}
+
+export function withoutInternalFeeFields(product: Rec): Rec {
+  const blockedTop = new Set(['internalEconomicsTerms', 'supplierBillingFee', 'channelPayoutFee', 'salesCommission', 'fee_memo']);
+  const cleanTop = ([key]: [string, unknown]) => !blockedTop.has(key) && !key.toLowerCase().includes('commission');
+  const cleanPriceRow = (row: unknown) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
+    return Object.fromEntries(Object.entries(row as Rec).filter(([key]) => !['fee', 'commission', 'fee_memo'].includes(key)));
+  };
+  const next = Object.fromEntries(Object.entries(product).filter(cleanTop)) as Rec;
+  if (next.price && typeof next.price === 'object' && !Array.isArray(next.price)) {
+    next.price = Object.fromEntries(Object.entries(next.price as Rec).map(([key, row]) => [key, cleanPriceRow(row)]));
+  }
+  return next;
 }
 
 /**
@@ -112,9 +112,10 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
 export function isPublicIancarPhotoProduct(product: Record<string, unknown> | undefined): boolean {
   return !!product && product.provider_company_code === 'RP031' && product.listable === true
     && !product._deleted && !product.deletedAt && !product.publication_withdrawal
-    && ['\uac00\ub2a5', '\uc120\uc810'].includes(String(product.status_kind))
+    && ['가용', '선점'].includes(String(product.status_kind))
     && typeof product.iancar_one_vehicle_id === 'string' && !!product.iancar_one_vehicle_id.trim()
-    && typeof product.car_number === 'string' && !!product.car_number.trim();
+    && typeof product.car_number === 'string' && !!product.car_number.trim()
+    && /^[0-9]{2,3}[가-힣][0-9]{4}$/.test(String(product.car_number).replace(/\s/g, ''));
 }
 
 export class FirestoreCatalogCompatibilityReader {
@@ -125,7 +126,7 @@ export class FirestoreCatalogCompatibilityReader {
   async readIancarPhoto(consumerId: string, productId: string, index?: number) {
     if (!(consumerId === 'erp-com' || /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId)))
       throw new Error('IANCAR_PHOTO_CONSUMER_FORBIDDEN');
-    if (!productId || productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(productId)
+    if (!productId || productId.length > 200 || /[\/\x00-\x1F\x7F]/.test(productId)
       || (index !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= 200)))
       throw new Error('IANCAR_PHOTO_REQUEST_INVALID');
     const doc = await this.db.collection('products').doc(productId).get();
@@ -174,7 +175,7 @@ export class FirestoreCatalogCompatibilityReader {
     return {
       schema: 'freepass-data.catalog-compat/v1',
       data: {
-        products: Object.fromEntries(Object.entries(asMap(products)).map(([id, product]) => [id, withCompatibilityDepositEvidence(product, observedAt)])),
+        products: Object.fromEntries(Object.entries(asMap(products)).map(([id, product]) => [id, withoutInternalFeeFields(withCompatibilityDepositEvidence(product, observedAt))])),
         policies: asMap(policies),
         ...(get('partner') ? { partners: asMap(get('partner')!) } : {}),
         ...(get('user') ? { users: asMap(get('user')!) } : {}),
