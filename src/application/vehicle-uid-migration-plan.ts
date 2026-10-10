@@ -21,7 +21,7 @@ export type VehicleUidMigrationItem =
       kind: 'PRODUCT_SET_UID';
       productKey: string;
       vehicleUid: string;
-      reason: 'SOURCE_BINDING' | 'PLATE_UNIQUE_ASSET' | 'PLANNED_NEW_UID';
+      reason: 'SOURCE_BINDING' | 'PLATE_UNIQUE_ASSET' | 'PLANNED_NEW_UID' | 'CREATED_IN_PLAN';
       public: { productHash: string; vehicleUidHash: string; reason: string };
     }
   | {
@@ -68,6 +68,7 @@ export type PlanVehicleUidMigrationInput = {
 
 const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
 const hash = (value: unknown) => stableDigest(value).slice(0, 12);
+const uidHash = (value: unknown) => `va_${stableDigest(value).slice(0, 26).toUpperCase()}`;
 const hasOwn = (object: Record<string, unknown>, key: string) => Object.hasOwn(object, key);
 const active = (id: VehicleExternalId, at: string) => id.validFrom <= at && (id.validTo === undefined || id.validTo === null || id.validTo > at);
 
@@ -126,8 +127,52 @@ function activePlateCountByUid(assets: VehicleAsset[], planned: VehicleUidMigrat
   return [...byUid.values()].every(plates => plates.size <= 1);
 }
 
-function bindingForProduct(bindings: CanonicalSourceBinding[], productKey: string) {
-  return bindings.find(binding => binding.sourceRecordId === productKey || binding.productId === productKey);
+function bindingsForProduct(bindings: CanonicalSourceBinding[], productKey: string) {
+  return bindings.filter(binding => binding.sourceRecordId === productKey || binding.productId === productKey);
+}
+
+function normalizedActiveIds(asset: VehicleAsset, observedAt: string): VehicleExternalId[] {
+  return [...(asset.externalIds ?? []), ...externalIdsForAsset(asset)]
+    .map(id => ({
+      ...id,
+      value: id.kind === 'VIN' ? id.value.trim().toUpperCase() : id.value.trim(),
+      ...(id.supplierCode ? { supplierCode: id.supplierCode.trim().toUpperCase() } : {}),
+    }))
+    .filter(id => id.value && active(id, observedAt));
+}
+
+function assetContradictsProduct(asset: VehicleAsset, ids: ReturnType<typeof productIds>, observedAt: string) {
+  const activeIds = normalizedActiveIds(asset, observedAt);
+  const hasDifferent = (kind: VehicleExternalId['kind'], value: string | undefined, supplierCode?: string) => {
+    if (!value) return false;
+    const normalizedValue = kind === 'VIN' ? value.toUpperCase() : value;
+    const normalizedSupplier = supplierCode?.toUpperCase();
+    const sameNamespace = activeIds.filter(id => id.kind === kind && (kind !== 'SUPPLIER_VEHICLE' || id.supplierCode === normalizedSupplier));
+    return sameNamespace.length > 0 && sameNamespace.every(id => id.value !== normalizedValue);
+  };
+  return hasDifferent('VIN', ids.vin) ||
+    hasDifferent('PLATE', ids.plate) ||
+    hasDifferent('SUPPLIER_VEHICLE', ids.supplierVehicleId, ids.supplierCode);
+}
+
+function plannedAssetFromCreate(vehicleUid: string, ids: ReturnType<typeof productIds>, externalIds: VehicleExternalId[], createdAt: string): VehicleAsset {
+  const actor = { id: 'vehicle-uid-migration-plan', kind: 'SERVICE' as const };
+  return {
+    schemaVersion: '1',
+    revision: 1,
+    validationStatus: 'VALID',
+    createdAt,
+    updatedAt: createdAt,
+    createdBy: actor,
+    updatedBy: actor,
+    lineageId: `planned:${vehicleUid}`,
+    id: vehicleUid,
+    vehicleModelId: `planned:${vehicleUid}`,
+    status: 'AVAILABLE',
+    ...(ids.plate ? { plateNumber: ids.plate } : {}),
+    ...(ids.vin ? { vin: ids.vin.toUpperCase() } : {}),
+    externalIds: externalIds.map(id => ({ ...id, source: 'vehicle-uid-migration-plan' })),
+  };
 }
 
 function isPrefixProductKey(key: string) {
@@ -167,6 +212,8 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
     }
   }
 
+  const workingAssets = structuredClone(input.assets);
+
   for (const [productKey, product] of Object.entries(input.products).sort(([a], [b]) => a.localeCompare(b))) {
     const ids = productIds(product);
     const reasons: string[] = [];
@@ -177,24 +224,29 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
     const suppliers = new Set(samePlate.map(x => x.supplier).filter(Boolean));
     if (samePlate.length > 1 && suppliers.size > 1) reasons.push('PLATE_DUPLICATED_ACROSS_SUPPLIERS');
 
-    const bound = bindingForProduct(input.bindings, productKey);
+    const matchedBindings = bindingsForProduct(input.bindings, productKey);
     const candidate = {
       ...(ids.plate ? { plate: ids.plate } : {}),
       ...(ids.vin ? { vin: ids.vin } : {}),
       ...(ids.supplierCode ? { supplierCode: ids.supplierCode } : {}),
       ...(ids.supplierVehicleId ? { supplierVehicleId: ids.supplierVehicleId } : {}),
     };
-    const resolution = resolveVehicleUid(candidate, input.assets, {
+    const resolution = resolveVehicleUid(candidate, workingAssets, {
       now: input.observedAt,
       clock: input.clock,
       random: input.random,
       uidOptions: { monotonic: false },
     });
+    if (matchedBindings.length > 1) reasons.push('MULTIPLE_BINDINGS');
+    const bound = matchedBindings.length === 1 ? matchedBindings[0] : undefined;
+    const boundAsset = bound?.vehicleAssetId ? workingAssets.find(asset => asset.id === bound.vehicleAssetId) : undefined;
+    if (bound?.vehicleAssetId && !boundAsset) reasons.push('BINDING_TARGET_MISSING');
+    if (boundAsset && assetContradictsProduct(boundAsset, ids, input.observedAt)) reasons.push('BINDING_CONTRADICTS_PRODUCT');
+    if (boundAsset && (resolution.action !== 'LINK' || resolution.asset.id !== boundAsset.id)) reasons.push('BINDING_DISAGREES_WITH_RESOLVER');
     if (resolution.action === 'HOLD' || resolution.action === 'UNKNOWN') reasons.push(resolution.reason);
     if (ids.vin && resolution.action === 'LINK' && resolution.asset.vin && resolution.asset.vin.toUpperCase() !== ids.vin.toUpperCase()) {
       reasons.push('VIN_CONTRADICTION');
     }
-    if (samePlate.length > 1) reasons.push('SAME_PLATE_MULTIPLE_PRODUCTS_REQUIRES_REVIEW');
 
     if (reasons.length) {
       for (const reason of [...new Set(reasons)].sort()) {
@@ -216,16 +268,24 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
         kind: 'PRODUCT_SET_UID',
         productKey,
         vehicleUid: resolution.vehicleUid,
-        reason: 'PLATE_UNIQUE_ASSET',
-        public: { productHash: hash(productKey), vehicleUidHash: hash(resolution.vehicleUid), reason: 'PLATE_UNIQUE_ASSET' },
+        reason: input.assets.some(asset => asset.id === resolution.vehicleUid) ? 'PLATE_UNIQUE_ASSET' : 'CREATED_IN_PLAN',
+        public: {
+          productHash: hash(productKey),
+          vehicleUidHash: hash(resolution.vehicleUid),
+          reason: input.assets.some(asset => asset.id === resolution.vehicleUid) ? 'PLATE_UNIQUE_ASSET' : 'CREATED_IN_PLAN',
+        },
       });
     } else if (resolution.action === 'CREATE') {
+      const vehicleUid = workingAssets.some(asset => asset.id === resolution.vehicleUid)
+        ? uidHash({ createdAt, productKey, candidate, externalIds: resolution.externalIds })
+        : resolution.vehicleUid;
+      workingAssets.push(plannedAssetFromCreate(vehicleUid, ids, resolution.externalIds, createdAt));
       items.push({
         kind: 'PRODUCT_SET_UID',
         productKey,
-        vehicleUid: resolution.vehicleUid,
+        vehicleUid,
         reason: 'PLANNED_NEW_UID',
-        public: { productHash: hash(productKey), vehicleUidHash: hash(resolution.vehicleUid), reason: 'PLANNED_NEW_UID' },
+        public: { productHash: hash(productKey), vehicleUidHash: hash(vehicleUid), reason: 'PLANNED_NEW_UID' },
       });
     }
   }

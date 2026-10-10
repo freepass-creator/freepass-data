@@ -69,8 +69,8 @@ describe('planVehicleUidMigration', () => {
 
   it('uses source binding before plate matching', () => {
     const result = plan({
-      products: { p1: product('TEST-FAKE-009') },
-      assets: [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001'), asset('TEST-FAKE-UID-002', 'TEST-FAKE-009')],
+      products: { p1: product('TEST-FAKE-001') },
+      assets: [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001')],
       bindings: [binding('p1', 'TEST-FAKE-UID-001')],
     });
     expect(result.items).toContainEqual(expect.objectContaining({
@@ -78,6 +78,58 @@ describe('planVehicleUidMigration', () => {
       productKey: 'p1',
       vehicleUid: 'TEST-FAKE-UID-001',
       reason: 'SOURCE_BINDING',
+    }));
+  });
+
+  it('holds product with multiple source bindings', () => {
+    const result = plan({
+      products: { p1: product('TEST-FAKE-001') },
+      assets: [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001'), asset('TEST-FAKE-UID-002', 'TEST-FAKE-002')],
+      bindings: [binding('p1', 'TEST-FAKE-UID-001'), { ...binding('p1', 'TEST-FAKE-UID-002'), bindingId: 'bind_p1_second' }],
+    });
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: 'HOLD',
+      productKey: 'p1',
+      reason: 'MULTIPLE_BINDINGS',
+    }));
+  });
+
+  it('holds source binding when target asset is missing', () => {
+    const result = plan({
+      products: { p1: product('TEST-FAKE-001') },
+      assets: [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001')],
+      bindings: [binding('p1', 'TEST-FAKE-UID-MISSING')],
+    });
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: 'HOLD',
+      productKey: 'p1',
+      reason: 'BINDING_TARGET_MISSING',
+    }));
+  });
+
+  it('holds source binding when binding target contradicts product VIN', () => {
+    const result = plan({
+      products: { p1: product('TEST-FAKE-001', { vin: 'TEST-FAKE-VIN-999' }) },
+      assets: [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001', 'TEST-FAKE-VIN-001')],
+      bindings: [binding('p1', 'TEST-FAKE-UID-001')],
+    });
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: 'HOLD',
+      productKey: 'p1',
+      reason: 'BINDING_CONTRADICTS_PRODUCT',
+    }));
+  });
+
+  it('holds source binding when resolver links a different asset', () => {
+    const result = plan({
+      products: { p1: product('TEST-FAKE-002') },
+      assets: [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001'), asset('TEST-FAKE-UID-002', 'TEST-FAKE-002')],
+      bindings: [binding('p1', 'TEST-FAKE-UID-001')],
+    });
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: 'HOLD',
+      productKey: 'p1',
+      reason: 'BINDING_DISAGREES_WITH_RESOLVER',
     }));
   });
 
@@ -97,6 +149,63 @@ describe('planVehicleUidMigration', () => {
     expect(a.items).toContainEqual(expect.objectContaining({ kind: 'PRODUCT_SET_UID', reason: 'PLANNED_NEW_UID' }));
     expect(a.planDigest).toBe(b.planDigest);
     expect(a.planDigest).not.toBe(c.planDigest);
+  });
+
+  it('links later products to UID created earlier in the same plan by VIN and plate', () => {
+    const result = plan({
+      products: {
+        p1: product('TEST-FAKE-NEW-001', { vin: 'TEST-FAKE-VIN-NEW-001' }),
+        p2: product('TEST-FAKE-NEW-001', { vin: 'TEST-FAKE-VIN-NEW-001' }),
+      },
+    });
+    const setItems = result.items.filter(item => item.kind === 'PRODUCT_SET_UID');
+    expect(setItems).toHaveLength(2);
+    expect(setItems[0]).toEqual(expect.objectContaining({ productKey: 'p1', reason: 'PLANNED_NEW_UID' }));
+    expect(setItems[1]).toEqual(expect.objectContaining({ productKey: 'p2', reason: 'CREATED_IN_PLAN', vehicleUid: setItems[0]!.vehicleUid }));
+  });
+
+  it('links later products to UID created earlier in the same plan by VIN even without plate', () => {
+    const result = plan({
+      products: {
+        p1: product('TEST-FAKE-NEW-001', { vin: 'TEST-FAKE-VIN-NEW-001' }),
+        p2: { vin: 'TEST-FAKE-VIN-NEW-001', provider_company_code: 'TEST' },
+      },
+    });
+    const setItems = result.items.filter(item => item.kind === 'PRODUCT_SET_UID');
+    expect(setItems).toHaveLength(2);
+    expect(setItems[1]).toEqual(expect.objectContaining({ productKey: 'p2', reason: 'CREATED_IN_PLAN', vehicleUid: setItems[0]!.vehicleUid }));
+  });
+
+  it('creates separate planned UIDs when VIN differs', () => {
+    const result = plan({
+      products: {
+        p1: product('TEST-FAKE-NEW-001', { vin: 'TEST-FAKE-VIN-NEW-001' }),
+        p2: product('TEST-FAKE-NEW-002', { vin: 'TEST-FAKE-VIN-NEW-002' }),
+      },
+      rand: 0.1,
+    });
+    const setItems = result.items.filter(item => item.kind === 'PRODUCT_SET_UID');
+    expect(setItems).toHaveLength(2);
+    expect(setItems[0]!.vehicleUid).not.toBe(setItems[1]!.vehicleUid);
+    expect(setItems.map(item => item.reason)).toEqual(['PLANNED_NEW_UID', 'PLANNED_NEW_UID']);
+  });
+
+  it('keeps the same digest when product input key order changes', () => {
+    const forward = plan({
+      products: {
+        p1: product('TEST-FAKE-NEW-001', { vin: 'TEST-FAKE-VIN-NEW-001' }),
+        p2: product('TEST-FAKE-NEW-001', { vin: 'TEST-FAKE-VIN-NEW-001' }),
+      },
+      rand: 0.1,
+    });
+    const reversed = plan({
+      products: {
+        p2: product('TEST-FAKE-NEW-001', { vin: 'TEST-FAKE-VIN-NEW-001' }),
+        p1: product('TEST-FAKE-NEW-001', { vin: 'TEST-FAKE-VIN-NEW-001' }),
+      },
+      rand: 0.1,
+    });
+    expect(forward.planDigest).toBe(reversed.planDigest);
   });
 
   it('holds prefix keys, iancar keys, duplicate cross-supplier plates, and VIN contradictions', () => {
