@@ -201,6 +201,19 @@ function candidateIdentifiers(ids: NormalizedVehicleIds, now: string): VehicleEx
   return out;
 }
 
+function hasInternalContradiction(identifiers: VehicleExternalId[]) {
+  const seen = new Map<string, string>();
+  for (const id of identifiers) {
+    // 차 한 대에 하나뿐인 값(VIN·번호)만 후보 내부 모순으로 본다. 공급사 차량 ID·시트 행이 여럿 오는 경우는 자산 매칭 단계가 판정한다.
+    if (id.kind !== 'VIN' && id.kind !== 'PLATE') continue;
+    const ns = id.kind;
+    const prev = seen.get(ns);
+    if (prev !== undefined && prev !== id.value) return true;
+    seen.set(ns, id.value);
+  }
+  return false;
+}
+
 function conflictReason(kind: VehicleExternalIdKind) {
   return `${kind}_CONFLICT`;
 }
@@ -236,6 +249,8 @@ export function resolveVehicleUid(
   const now = options.now ?? new Date().toISOString();
   const ids = normalizeExternalIds(candidate);
   const identifiers = candidateIdentifiers(ids, now);
+  // 한 후보 안에서 같은 종류(공급사 범위는 공급사별)의 식별자가 서로 다른 값이면 한 차를 두 값으로 말하는 모순 → 새 UID 도, 연결도 하지 않는다.
+  if (hasInternalContradiction(identifiers)) return { action: 'HOLD', reason: 'CANDIDATE_INTERNAL_CONTRADICTION' };
   const matches = identifiers.map(id => ({
     id,
     assets: findActiveAssets(assets, id.kind, id.value, now, id.supplierCode),

@@ -135,6 +135,14 @@ describe('vehicle UID resolver', () => {
     if (linked.action === 'LINK') expect(linked.vehicleUid).toBe(created.vehicleUid);
   });
 
+  it('holds a candidate whose own identifiers contradict (vin=A and externalIds VIN=B), instead of creating one UID for two cars', () => {
+    const r = resolveVehicleUid({ vin: 'TESTFAKEVIN0000A', externalIds: [id('VIN', 'TESTFAKEVIN0000B')] }, [], { now });
+    expect(r).toMatchObject({ action: 'HOLD', reason: 'CANDIDATE_INTERNAL_CONTRADICTION' });
+    // 같은 값이면 모순이 아니다(CREATE).
+    const same = resolveVehicleUid({ vin: 'TESTFAKEVIN0000A', externalIds: [id('VIN', 'TESTFAKEVIN0000A')] }, [], { now });
+    expect(same.action).toBe('CREATE');
+  });
+
   it('treats SHEET_ROW ids as (supplier, row) pairs — same row id of another supplier is a different identifier', () => {
     const a = asset('va_sheet_a', [id('SHEET_ROW', 'ROW-0007', 'RP001')]);
     const b = asset('va_sheet_b', [id('SHEET_ROW', 'ROW-0007', 'RP002')]);
