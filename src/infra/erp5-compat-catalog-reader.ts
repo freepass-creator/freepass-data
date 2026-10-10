@@ -1,9 +1,80 @@
 import { createHash } from 'node:crypto';
+import { Compute } from 'google-auth-library';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
 import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 
+import { createVehiclePhotoReader, validateVehiclePhotoMedia, type ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
+export { createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../domain/consumer-output-contract.js';
+export type { ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
 type Rec = Record<string, unknown>;
+
+/** Explicit opt-in only. Compute uses the runtime service account, never local user ADC/gws.
+ * No Drive listing, export, sharing, folder discovery, retries or runtime auto-registration.
+ * Vehicle identity, approval, hash and revocation remain in createVehiclePhotoReader.
+ */
+export function createApprovedDrivePhotoReader(options: {
+  token?: () => Promise<string>;
+  fetchImpl?: typeof fetch;
+} = {}): ApprovedPhotoReader {
+  const auth = options.token ? undefined : new Compute({ scopes: ['https://www.googleapis.com/auth/drive.readonly'] });
+  const token = options.token ?? (async () => (await auth!.getAccessToken()).token ?? '');
+  const transport = options.fetchImpl ?? fetch;
+  return async ref => {
+    // Snapshot the exact approved ID before async work; never interpret URLs/shortcuts.
+    const fileId = ref.driveFileId;
+    const mediaType = ref.mediaType;
+    if (!/^[A-Za-z0-9_-]{1,200}$/.test(fileId)) throw new Error('VEHICLE_PHOTO_REQUEST_INVALID');
+    try {
+      const bearer = await token();
+      if (!bearer || /[\r\n]/.test(bearer)) throw new Error();
+      const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`;
+      const request = async (query: string) => {
+        const response = await transport(`${url}?${query}`, { method: 'GET', redirect: 'error', cache: 'no-store',
+          signal: AbortSignal.timeout(20_000), headers: { Authorization: `Bearer ${bearer}` } });
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error(response.status === 404 ? 'VEHICLE_PHOTO_NOT_FOUND' : 'VEHICLE_PHOTO_UNAVAILABLE');
+        }
+        return response;
+      };
+      const metadata = await (await request('fields=id,mimeType,size,trashed&supportsAllDrives=true')).json() as Rec;
+      const size = typeof metadata.size === 'string' && /^\d+$/.test(metadata.size) ? Number(metadata.size) : NaN;
+      if (metadata.id !== fileId || metadata.trashed !== false || metadata.mimeType !== mediaType
+        || validateVehiclePhotoMedia(metadata.mimeType, size)) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+      const response = await request('alt=media&supportsAllDrives=true');
+      const contentType = response.headers.get('content-type')?.split(';')[0]?.trim();
+      const length = response.headers.get('content-length');
+      if (contentType !== mediaType || (length !== null && (!/^\d+$/.test(length) || Number(length) !== size))) {
+        await response.body?.cancel();
+        throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+      const chunks: Buffer[] = [];
+      let received = 0;
+      try {
+        for (;;) {
+          const part = await reader.read();
+          if (part.done) break;
+          received += part.value.byteLength;
+          if (received > size || validateVehiclePhotoMedia(contentType, received)) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+          chunks.push(Buffer.from(part.value));
+        }
+      } catch (error) {
+        await reader.cancel().catch(() => undefined);
+        throw error;
+      } finally { reader.releaseLock(); }
+      const bytes = Buffer.concat(chunks, received);
+      if (received !== size || validateVehiclePhotoMedia(contentType, received, bytes)) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+      return { bytes, contentType: mediaType };
+    } catch (error) {
+      // Never expose SDK/transport response bodies, URLs, credentials or upstream diagnostics.
+      throw new Error(error instanceof Error && error.message === 'VEHICLE_PHOTO_NOT_FOUND'
+        ? 'VEHICLE_PHOTO_NOT_FOUND' : 'VEHICLE_PHOTO_UNAVAILABLE');
+    }
+  };
+}
 
 /** Reuse the bound Data target and read-only transaction; no alternate transport or writer. */
 export async function readVehicleMasterSnapshot() {
@@ -109,22 +180,19 @@ export function isPublicIancarPhotoProduct(product: Record<string, unknown> | un
 
 export class FirestoreCatalogCompatibilityReader {
   private readonly db = getFirestore(getTargetFirebaseApp());
-  constructor(private readonly photoReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>) {}
-
-  /** Product identity is resolved here, never accepted as an arbitrary provider path from a caller. */
-  async readIancarPhoto(consumerId: string, productId: string, index?: number) {
-    if (!(consumerId === 'erp-com' || /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId)))
-      throw new Error('IANCAR_PHOTO_CONSUMER_FORBIDDEN');
-    if (!productId || productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(productId)
-      || (index !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= 200)))
-      throw new Error('IANCAR_PHOTO_REQUEST_INVALID');
-    const doc = await this.db.collection('products').doc(productId).get();
-    const product = doc.data();
-    if (!isPublicIancarPhotoProduct(product))
-      throw new Error('IANCAR_PHOTO_NOT_FOUND');
-    if (!this.photoReader) throw new Error('IANCAR_PHOTO_READER_UNAVAILABLE');
-    return this.photoReader(product!.iancar_one_vehicle_id, product!.car_number, index);
+  constructor(photoReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>,
+    approvedPhotoReader?: ApprovedPhotoReader) {
+    this.readVehiclePhoto = createVehiclePhotoReader(async productId => (await this.db.collection('products').doc(productId).get()).data(), {
+      eligible: isPublicIancarPhotoProduct,
+      connection: product => createHash('sha256').update(JSON.stringify([product.provider_company_code, product.iancar_one_vehicle_id, product.car_number])).digest('hex'),
+      read: async (product, index) => {
+        if (!photoReader) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
+        // ONE has no approved hash: iancarOnePhotoIds verifies supplier vehicle ID and plate ownership.
+        return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index);
+      },
+    }, approvedPhotoReader);
   }
+  readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
 
   async read(consumerId: string): Promise<CatalogCompatibilitySnapshot> {
     if (!allowedConsumer(consumerId)) throw new Error('CATALOG_COMPAT_CONSUMER_NOT_ALLOWED');
@@ -207,6 +275,6 @@ export class FirestoreCatalogCompatibilityReader {
   }
 }
 
-export function createFirestoreCatalogCompatibilityReader(photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0]) {
-  return new FirestoreCatalogCompatibilityReader(photoReader);
+export function createFirestoreCatalogCompatibilityReader(photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0], approvedPhotoReader?: ApprovedPhotoReader) {
+  return new FirestoreCatalogCompatibilityReader(photoReader, approvedPhotoReader);
 }

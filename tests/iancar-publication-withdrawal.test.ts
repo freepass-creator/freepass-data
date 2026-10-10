@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ get: vi.fn(), transaction: vi.fn(), update: vi.fn(),
   mkdir: vi.fn(), writeFile: vi.fn(), readFile: vi.fn(), getApp: vi.fn(), getAll: vi.fn(), save: vi.fn(), download: vi.fn() }));
 vi.mock('firebase-admin/firestore', async importOriginal => ({ ...(await importOriginal<typeof import('firebase-admin/firestore')>()), getFirestore: () => ({
-  collection: (name: string) => ({ get: mocks.get, doc: (id: string) => ({ path: `${name}/${id}` }), where: (field: string, operator: string, value: string) => {
+  collection: (name: string) => ({ get: mocks.get, doc: (id: string) => ({ path: `${name}/${id}`, get: mocks.get }), where: (field: string, operator: string, value: string) => {
     expect([name, field, operator, value]).toEqual(['products', 'provider_company_code', '==', 'RP031']);
     return { get: mocks.get };
   } }), doc: (path: string) => ({ path }), runTransaction: mocks.transaction, getAll: mocks.getAll
@@ -242,6 +242,52 @@ it('re-running an illustration reaffirms its state without rewriting images or t
     const patch = mocks.update.mock.calls[0]![1];
     expect(patch).not.toHaveProperty('image_url'); expect(patch).not.toHaveProperty('image_urls');
     expect(patch.iancar_one_photo_state).toBe(image === illustration.url ? 'API_EMPTY_MODEL_ILLUSTRATION' : 'API_EMPTY_ORIGINAL_PRESERVED');
+  }
+});
+
+
+it.each(['withdrawal', 'identity', 'plate', 'supplier'])('single photo pipeline rejects ONE %s changes during reads', async change => {
+  let current: Record<string, unknown> = { provider_company_code: 'RP031', listable: true, status_kind: '가용', iancar_one_vehicle_id: 'synthetic-vehicle', car_number: 'synthetic-plate',
+    photo_original_refs: [{ vehiclePhotoVerifiedBy: 'synthetic-reviewer', vehiclePhotoVerificationMethod: 'synthetic ONE review', vehiclePhotoVerifiedAt: '2026-10-10T00:00:00Z' }] };
+  mocks.get.mockReset().mockImplementation(async () => ({ data: () => current }));
+  for (const index of [undefined, 0]) {
+    current = { ...current, provider_company_code: 'RP031', listable: true, iancar_one_vehicle_id: 'synthetic-vehicle', car_number: 'synthetic-plate',
+    photo_original_refs: [{ vehiclePhotoVerifiedBy: 'synthetic-reviewer', vehiclePhotoVerificationMethod: 'synthetic ONE review', vehiclePhotoVerifiedAt: '2026-10-10T00:00:00Z' }] };
+    const reader = new FirestoreCatalogCompatibilityReader(async () => {
+      current = { ...current, ...(change === 'withdrawal' ? { listable: false } : change === 'identity' ? { iancar_one_vehicle_id: 'changed' }
+        : change === 'supplier' ? { provider_company_code: 'OTHER' } : { car_number: 'changed' }) };
+      return { count: 1, bytes: index === undefined ? null : Buffer.from([255, 216, 255]), contentType: 'image/jpeg' };
+    });
+    await expect(reader.readVehiclePhoto('erp-com', 'synthetic-product', index)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+  }
+});
+
+it('ONE source shares byte validation, public errors and concurrency without requiring an approval hash', async () => {
+  const current = { provider_company_code: 'RP031', listable: true, status_kind: '가용', iancar_one_vehicle_id: 'synthetic-vehicle', car_number: 'synthetic-plate',
+    photo_original_refs: [{ vehiclePhotoVerifiedBy: 'synthetic-reviewer', vehiclePhotoVerificationMethod: 'synthetic ONE review', vehiclePhotoVerifiedAt: '2026-10-10T00:00:00Z' }] };
+  mocks.get.mockReset().mockImplementation(async () => ({ data: () => current }));
+  for (const result of [
+    { bytes: Buffer.alloc(0), contentType: 'image/jpeg' },
+    { bytes: Buffer.alloc(8 * 1024 * 1024 + 1), contentType: 'image/jpeg' },
+    { bytes: Buffer.from('invalid'), contentType: 'image/jpeg' },
+    { bytes: Buffer.from([255, 216, 255]), contentType: 'text/html' },
+  ]) {
+    const reader = new FirestoreCatalogCompatibilityReader(async () => ({ count: 1, ...result }));
+    await expect(reader.readVehiclePhoto('erp-com', 'synthetic-product', 0)).rejects.toThrow('VEHICLE_PHOTO_UNAVAILABLE');
+  }
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  let ready!: () => void; const started = new Promise<void>(resolve => { ready = resolve; }); let calls = 0;
+  const reader = new FirestoreCatalogCompatibilityReader(async () => {
+    if (++calls === 8) ready(); await gate;
+    return { count: 1, bytes: Buffer.from([255, 216, 255]), contentType: 'image/jpeg' };
+  });
+  const pending = Array.from({ length: 8 }, () => reader.readVehiclePhoto('erp-com', 'synthetic-product', 0));
+  await started;
+  await expect(reader.readVehiclePhoto('erp-com', 'synthetic-product', 0)).rejects.toThrow('VEHICLE_PHOTO_BUSY');
+  release(); expect((await Promise.all(pending)).every(result => result.bytes?.length === 3)).toBe(true);
+  for (const suffix of ['NOT_FOUND', 'BUSY', 'IDENTITY_MISMATCH']) {
+    const failing = new FirestoreCatalogCompatibilityReader(async () => { throw new Error('IANCAR_PHOTO_' + suffix); });
+    await expect(failing.readVehiclePhoto('erp-com', 'synthetic-product', 0)).rejects.toThrow('VEHICLE_PHOTO_' + (suffix === 'IDENTITY_MISMATCH' ? 'UNAVAILABLE' : suffix));
   }
 });
 
