@@ -1,7 +1,7 @@
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import { assessDepositEvidence, depositFromYearsRuleNote, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, resolveDepositByRuleNote, type Erp5CompatibilityPriceKey } from '../domain/deposit-evidence.js';
 import { resolveErp5InventoryStatus } from '../domain/erp5-inventory-status.js';
 import { isStrictKoreanPlate } from '../domain/vehicle-plate.js';
 
@@ -80,23 +80,8 @@ export function resolveErp5Mileage(
  * 인수형은 그것을 운영하는 회사의 «별도 상품»이므로 기간 축과 섞지 않고 따로 표시한다.
  */
 export function parseErp5PriceKey(key: string):
-  { months: number; mileageKm?: number; contractedMileage?: { km: number; period: 'month' | 'year' }; settlement: 'RETURN' | 'BUYOUT' } | undefined {
-  const explicit = /^([1-9]\d*)_(\uc6d4|\uc5f0)([1-9]\d*)km$/.exec(key);
-  if (explicit) {
-    const months = Number(explicit[1]), km = Number(explicit[3]);
-    if (!Number.isSafeInteger(months) || months > 60 || !Number.isSafeInteger(km)) return undefined;
-    const period = explicit[2] === '\uc6d4' ? 'month' as const : 'year' as const;
-    return { months, settlement: 'RETURN', contractedMileage: { km, period }, ...(period === 'year' ? { mileageKm: km } : {}) };
-  }
-  const buyout = /^([1-9]\d*)_인수형$/.exec(key);
-  if (buyout) return { months: Number(buyout[1]), settlement: 'BUYOUT' };
-  const parsed = /^([1-9]\d*)(?:_([1-9]\d*)만)?$/.exec(key);
-  if (!parsed) return undefined;
-  const months = Number(parsed[1]);
-  if (!Number.isSafeInteger(months) || months <= 0) return undefined;
-  if (!parsed[2]) return { months, settlement: 'RETURN' };
-  const km = Number(parsed[2]) * 10000;
-  return Number.isSafeInteger(km) ? { months, mileageKm: km, settlement: 'RETURN' } : undefined;
+  Erp5CompatibilityPriceKey | undefined {
+  return parseErp5CompatibilityPriceKey(key);
 }
 export const ERP5_PRODUCT_SOURCE = 'freepasserp5/firestore/products';
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -266,10 +251,11 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     const placeholderZero = terms.deposit === 0 || terms.deposit === '0';
     const ruleDerived = placeholderZero && depositEvidence.state === 'UNKNOWN' && ['ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY', 'DEPOSIT_RULE_REQUIRES_RESOLUTION'].includes(depositEvidence.reason)
       && String(d.provider_company_code ?? '').trim() === 'RP012' && /구독/.test(String(d.product_type ?? ''))
-      ? depositFromYearsRuleNote(d.deposit_note, months, amount) : null;
+      ? resolveDepositByRuleNote({ note: d.deposit_note, termMonths: months, monthlyRent: amount,
+        allowedRules: ['RENT_X_CONTRACT_YEARS_MAX3'] }) : null;
     const depositAmount = complex.length || privateTerms.length || (depositEvidence.state === 'UNKNOWN' && !ruleDerived)
-      ? undefined : ruleDerived ? ruleDerived.amount : depositEvidence.amount ?? undefined;
-    if (depositEvidence.state === 'UNKNOWN' && !ruleDerived) issue(depositEvidence.reason);
+      ? undefined : ruleDerived?.state === 'KNOWN' ? ruleDerived.amount : depositEvidence.amount ?? undefined;
+    if (depositEvidence.state === 'UNKNOWN' && ruleDerived?.state !== 'KNOWN') issue(depositEvidence.reason);
     if (depositAmount === undefined) issue('UNKNOWN_DEPOSIT');
     // 기본값으로 떨어진 주행거리는 원천이 말한 값이 아니다. 지우지 말고 검토 표시를 남긴다.
     if (mileage.source === 'DEFAULT') issue('MILEAGE_FROM_COMPANY_DEFAULT');

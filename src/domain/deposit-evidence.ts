@@ -46,13 +46,86 @@ export function assessDepositEvidence(input: {
  * The stored placeholder deposit (0) is not a waiver; the amount is derived from the supplier's own rule note at read time —
  * nothing is written back (source stays untouched). Returns null unless the note is exactly that rule and the term is whole years.
  */
+export type Erp5CompatibilityPriceKey = {
+  months: number;
+  mileageKm?: number;
+  contractedMileage?: { km: number; period: 'month' | 'year' };
+  settlement: 'RETURN' | 'BUYOUT';
+};
+
+/**
+ * 가격 키를 읽는다. `36` · `36_2만` · `36_인수형` · `12_월30000km` 꼴을 지원한다.
+ * Domain pure helper so infra/application/adapters can share the same months parsing without layer inversion.
+ */
+export function parseErp5CompatibilityPriceKey(key: string): Erp5CompatibilityPriceKey | undefined {
+  const explicit = /^([1-9]\d*)_(\uc6d4|\uc5f0)([1-9]\d*)km$/.exec(key);
+  if (explicit) {
+    const months = Number(explicit[1]), km = Number(explicit[3]);
+    if (!Number.isSafeInteger(months) || months > 60 || !Number.isSafeInteger(km)) return undefined;
+    const period = explicit[2] === '\uc6d4' ? 'month' as const : 'year' as const;
+    return { months, settlement: 'RETURN', contractedMileage: { km, period }, ...(period === 'year' ? { mileageKm: km } : {}) };
+  }
+  const buyout = /^([1-9]\d*)_인수형$/.exec(key);
+  if (buyout) return { months: Number(buyout[1]), settlement: 'BUYOUT' };
+  const parsed = /^([1-9]\d*)(?:_([1-9]\d*)만)?$/.exec(key);
+  if (!parsed) return undefined;
+  const months = Number(parsed[1]);
+  if (!Number.isSafeInteger(months) || months <= 0) return undefined;
+  if (!parsed[2]) return { months, settlement: 'RETURN' };
+  const km = Number(parsed[2]) * 10000;
+  return Number.isSafeInteger(km) ? { months, mileageKm: km, settlement: 'RETURN' } : undefined;
+}
+
+export type DepositRuleResolution =
+  | { state: 'KNOWN'; amount: number; code: string; multiplier: number; label: string }
+  | { state: 'UNKNOWN'; reason: 'NO_RULE' | 'MISSING' | 'CONFLICT' };
+
+export type DepositRuleCode =
+  | 'RENT_X_CONTRACT_YEARS_MAX3'
+  | 'RENT_X_2'
+  | 'IMPORT_12_X3_18_PLUS_X6';
+
+export const normalizeDepositSupplierId = (value: unknown) =>
+  typeof value === 'string' ? value.trim() : '';
+
+export const normalizeDepositProductType = (value: unknown) =>
+  typeof value === 'string' ? value.replace(/\s+/g, '') : '';
+
+export function resolveDepositByRuleNote(input: {
+  note: unknown;
+  termMonths: unknown;
+  monthlyRent: unknown;
+  allowedRules?: readonly DepositRuleCode[];
+}): DepositRuleResolution {
+  const note = typeof input.note === 'string' ? input.note.trim() : '';
+  const allowed = input.allowedRules ? new Set(input.allowedRules) : null;
+  const known = (code: string, multiplier: number, label = `대여료×${multiplier}`): DepositRuleResolution => {
+    if (allowed && !allowed.has(code as DepositRuleCode)) return { state: 'UNKNOWN', reason: 'NO_RULE' };
+    if (!Number.isSafeInteger(input.monthlyRent) || (input.monthlyRent as number) <= 0) return { state: 'UNKNOWN', reason: 'MISSING' };
+    const amount = (input.monthlyRent as number) * multiplier;
+    return Number.isSafeInteger(amount) && amount > 0
+      ? { state: 'KNOWN', amount, code, multiplier, label }
+      : { state: 'UNKNOWN', reason: 'CONFLICT' };
+  };
+  if (/^월 대여료 × 약정연수 \(최대 3개월\)$/.test(note)) {
+    if (!Number.isSafeInteger(input.termMonths) || (input.termMonths as number) <= 0 || (input.termMonths as number) % 12 !== 0) {
+      return { state: 'UNKNOWN', reason: 'MISSING' };
+    }
+    return known('RENT_X_CONTRACT_YEARS_MAX3', Math.min((input.termMonths as number) / 12, 3));
+  }
+  if (/^국산:\s*월 대여료×2$/.test(note)) return known('RENT_X_2', 2);
+  if (/^수입:\s*12개월 대여료×3 · 18개월↑ ×6$/.test(note)) {
+    if (!Number.isSafeInteger(input.termMonths) || (input.termMonths as number) <= 0) return { state: 'UNKNOWN', reason: 'MISSING' };
+    return known('IMPORT_12_X3_18_PLUS_X6', (input.termMonths as number) >= 18 ? 6 : 3);
+  }
+  return { state: 'UNKNOWN', reason: 'NO_RULE' };
+}
+
 export function depositFromYearsRuleNote(note: unknown, termMonths: unknown, monthlyRent: unknown): { amount: number; multiplier: number } | null {
-  if (typeof note !== 'string' || !/^월 대여료 × 약정연수 \(최대 3개월\)$/.test(note.trim())) return null;
-  if (!Number.isSafeInteger(termMonths) || (termMonths as number) <= 0 || (termMonths as number) % 12 !== 0) return null;
-  if (!Number.isSafeInteger(monthlyRent) || (monthlyRent as number) <= 0) return null;
-  const multiplier = Math.min((termMonths as number) / 12, 3);
-  const amount = (monthlyRent as number) * multiplier;
-  return Number.isSafeInteger(amount) ? { amount, multiplier } : null;
+  const resolved = resolveDepositByRuleNote({ note, termMonths, monthlyRent });
+  return resolved.state === 'KNOWN' && resolved.code === 'RENT_X_CONTRACT_YEARS_MAX3'
+    ? { amount: resolved.amount, multiplier: resolved.multiplier }
+    : null;
 }
 
 export function hasConflictingPaidDeposit(price: unknown) {

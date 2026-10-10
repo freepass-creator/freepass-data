@@ -1,5 +1,12 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 ERP5 compat 보증금 규칙 단일화
+
+- 원인: `assessDepositEvidence`가 손오공 RP012 구독 원문 `price.*.deposit=0`을 자리표시자로 보고 UNKNOWN 처리하는 것은 맞지만, `deposit_note` 규칙(월 대여료 × 약정연수 최대 3개월 등)을 호환 응답에서 다시 계산하는 단계가 없었다.
+- 변경: 보증금 규칙 해석과 ERP5 가격키 months 파싱을 `src/domain/deposit-evidence.ts` 순수 함수로 단일화하고, 카카오 참조·ERP5 매핑·ERP5/erp-com 호환 응답이 같은 함수를 쓰게 했다. 이안카와 무보증 ZERO, 양수 금액+규칙 충돌 UNKNOWN 경로는 유지한다.
+- 검증: 손오공 픽업구독/오공구독 12/24/36/48/60개월, 규칙 없음/중고렌트 UNKNOWN, 카카오 참조 동치, 양수+규칙 충돌, ZERO, 이안카 불변 회귀를 추가했다. 전체 명령 검증은 이번 작업 종료 보고의 `검증` 항목을 기준으로 이어간다.
+- next_start_here: 커밋·push 없이 현재 worktree diff와 검증 명령 결과를 확인한다.
+
 ## 2026-10-10 worker 테스트 훅 memory 전용화 / HOLD 재시도 지연
 
 - 목적: Claude 검토 지적대로 `FREEPASS_DATA_WORKER_TEST_REPRICE` 시험 훅이 Firestore driver에서 실제 projection/price write를 실행하지 못하게 막고, HOLD 이벤트가 즉시 재클레임되지 않게 한다.

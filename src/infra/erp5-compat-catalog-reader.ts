@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
-import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
-import { readIancarPublishedDeposit } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit, normalizeDepositProductType, normalizeDepositSupplierId, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositByRuleNote } from '../domain/deposit-evidence.js';
 
 type Rec = Record<string, unknown>;
 
@@ -79,10 +78,24 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
   return { ...product, price: Object.fromEntries(Object.entries(price).map(([key, value]) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return [key, value];
     const row = value as Rec;
-    const evidence = product.provider_company_code === 'RP031' ? readIancarPublishedDeposit(product, key, now)
+    const baseEvidence = product.provider_company_code === 'RP031' ? readIancarPublishedDeposit(product, key, now)
       : assessDepositEvidence({ supplierId: product.provider_company_code, productType: product.product_type,
       note: product.deposit_note, depositFree: product.deposit_free, sourceAmount: row.deposit,
       hasPositivePaidDeposit: paid });
+    const parsedKey = parseErp5CompatibilityPriceKey(key);
+    const monthlyRent = typeof row.rent === 'number' && Number.isSafeInteger(row.rent) && row.rent > 0 ? row.rent : null;
+    const missingDeposit = row.deposit === undefined || row.deposit === null || row.deposit === '';
+    const ruleCandidateDeposit = row.deposit === 0 || row.deposit === '0' || missingDeposit;
+    const supplierId = normalizeDepositSupplierId(product.provider_company_code);
+    const productType = normalizeDepositProductType(product.product_type);
+    const rp012UsedRentNormalized = supplierId === 'RP012' && ['\uc911\uace0\ub80c\ud2b8', '\uc7ac\ub80c\ud2b8'].includes(productType);
+    const canUseRule = supplierId !== 'RP031' && !rp012UsedRentNormalized && ruleCandidateDeposit && baseEvidence.state === 'UNKNOWN'
+      && ['ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY', 'DEPOSIT_RULE_REQUIRES_RESOLUTION', 'MISSING_DEPOSIT_AMOUNT'].includes(baseEvidence.reason);
+    const rule = canUseRule && parsedKey && monthlyRent !== null
+      ? resolveDepositByRuleNote({ note: product.deposit_note, termMonths: parsedKey.months, monthlyRent }) : null;
+    const evidence = rule?.state === 'KNOWN'
+      ? { state: 'KNOWN' as const, amount: rule.amount, reason: `SUPPLIER_RULE_NOTE:${rule.code}` }
+      : baseEvidence;
     return [key, { ...row, deposit: evidence.amount, depositState: evidence.state,
       depositStatusLabel: depositStatusLabel(evidence.state, row.deposit, product.deposit_note),
       depositEvidenceReason: evidence.reason }];
@@ -99,7 +112,7 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
 export function isPublicIancarPhotoProduct(product: Record<string, unknown> | undefined): boolean {
   return !!product && product.provider_company_code === 'RP031' && product.listable === true
     && !product._deleted && !product.deletedAt && !product.publication_withdrawal
-    && ['가용', '선점'].includes(String(product.status_kind))
+    && ['\uac00\ub2a5', '\uc120\uc810'].includes(String(product.status_kind))
     && typeof product.iancar_one_vehicle_id === 'string' && !!product.iancar_one_vehicle_id.trim()
     && typeof product.car_number === 'string' && !!product.car_number.trim();
 }
@@ -207,3 +220,4 @@ export class FirestoreCatalogCompatibilityReader {
 export function createFirestoreCatalogCompatibilityReader(photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0]) {
   return new FirestoreCatalogCompatibilityReader(photoReader);
 }
+

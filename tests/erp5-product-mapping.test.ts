@@ -446,6 +446,22 @@ describe('가격 키 읽기', () => {
     delete (input.data as Record<string, unknown>).deposit_note;
     expect(mapErp5Product(input).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
   });
+
+  it('keeps mapper rule derivation limited to the RP012 subscription years rule', () => {
+    const domestic = fixture();
+    Object.assign(domestic.data, {
+      provider_company_code: 'RP012', product_type: '\ud53d\uc5c5\uad6c\ub3c5', deposit_note: '\uad6d\uc0b0: \uc6d4 \ub300\uc5ec\ub8cc\u00d72',
+      price: { '24': { rent: 1000000, deposit: 0 } },
+    });
+    expect(mapErp5Product(domestic).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
+
+    const years = fixture();
+    Object.assign(years.data, {
+      provider_company_code: 'RP012', product_type: '\ud53d\uc5c5\uad6c\ub3c5', deposit_note: '\uc6d4 \ub300\uc5ec\ub8cc \u00d7 \uc57d\uc815\uc5f0\uc218 (\ucd5c\ub300 3\uac1c\uc6d4)',
+      price: { '24': { rent: 1000000, deposit: 0 } },
+    });
+    expect(mapErp5Product(years).candidate.priceTerms[0]).toMatchObject({ deposit: { amount: 2000000 }, depositState: 'KNOWN' });
+  });
 });
 
 describe('explicit monthly and yearly price keys', () => {

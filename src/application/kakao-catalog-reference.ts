@@ -1,9 +1,8 @@
 import { plateIdentityKey, isStrictKoreanPlate } from '../domain/vehicle-plate.js';
 import { createHash } from 'node:crypto';
-import { parseErp5PriceKey } from '../adapters/erp5-product-mapping.js';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
 import { policyScalar } from './product-pricing-policy.js';
-import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit, readIancarPublishedDeposit } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositByRuleNote } from '../domain/deposit-evidence.js';
 import { verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { chooseVehicleIdentity, indexVehicleMaster, type VehicleMasterReference } from '../domain/vehicle-identity-resolution.js';
 
@@ -256,17 +255,6 @@ export function resolveReferenceDeposit(input: {
   if (input.supplierId === 'RP012' && ['중고렌트', '재렌트'].includes(String(input.productType))) {
     return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
   }
-  const known = (code: string, multiplier: number, label: string) => {
-    const depositAmount = input.monthlyRent * multiplier;
-    if (!Number.isSafeInteger(depositAmount) || depositAmount <= 0) {
-      return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
-    }
-    return {
-      depositAmount,
-      depositState: 'KNOWN' as DepositState,
-      depositRule: { code, multiplier, label },
-    };
-  };
   if (evidence.state === 'ZERO') {
     return {
       depositAmount: 0,
@@ -275,19 +263,13 @@ export function resolveReferenceDeposit(input: {
     };
   }
   if (input.monthlyRent > 0) {
-    if (/^월 대여료 × 약정연수 \(최대 3개월\)$/.test(note)) {
-      if (!Number.isSafeInteger(input.termMonths) || input.termMonths <= 0 || input.termMonths % 12 !== 0) {
-        return { depositAmount: null, depositState: 'UNKNOWN' as DepositState, depositRule: null };
-      }
-      const multiplier = Math.min(Math.ceil(input.termMonths / 12), 3);
-      return known('RENT_X_CONTRACT_YEARS_MAX3', multiplier, `대여료×${multiplier}`);
-    }
-    if (/^국산:\s*월 대여료×2$/.test(note)) {
-      return known('RENT_X_2', 2, '대여료×2');
-    }
-    if (/^수입:\s*12개월 대여료×3 · 18개월↑ ×6$/.test(note)) {
-      const multiplier = input.termMonths >= 18 ? 6 : 3;
-      return known('IMPORT_12_X3_18_PLUS_X6', multiplier, `대여료×${multiplier}`);
+    const rule = resolveDepositByRuleNote({ note, termMonths: input.termMonths, monthlyRent: input.monthlyRent });
+    if (rule.state === 'KNOWN') {
+      return {
+        depositAmount: rule.amount,
+        depositState: 'KNOWN' as DepositState,
+        depositRule: { code: rule.code, multiplier: rule.multiplier, label: rule.label },
+      };
     }
   }
   if (!note) {
@@ -637,11 +619,11 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
   if (!price || typeof price !== 'object' || Array.isArray(price)) return null;
   const priceTerms = Object.entries(price as Rec).flatMap(([sourceKey, raw]) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
-    const parsed = parseErp5PriceKey(sourceKey);
+    const parsed = parseErp5CompatibilityPriceKey(sourceKey);
     const monthlyRent = integer((raw as Rec).rent);
     if (!parsed || monthlyRent === null || monthlyRent <= 0) return [];
     const basis36 = Object.entries(price as Rec).flatMap(([key, value]) => {
-      const candidate = parseErp5PriceKey(key);
+      const candidate = parseErp5CompatibilityPriceKey(key);
       if (!candidate || candidate.months !== 36 || candidate.settlement !== parsed.settlement || (candidate.contractedMileage?.km ?? candidate.mileageKm) !== (parsed.contractedMileage?.km ?? parsed.mileageKm) || (candidate.contractedMileage?.period ?? 'year') !== (parsed.contractedMileage?.period ?? 'year') || !value || typeof value !== 'object' || Array.isArray(value)) return [];
       const amount = integer((value as Rec).rent);
       return amount !== null && amount > 0 ? [amount] : [];

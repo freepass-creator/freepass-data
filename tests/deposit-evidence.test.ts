@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assessDepositEvidence, auditDepositEvidence, depositFromYearsRuleNote, depositStatusLabel } from '../src/domain/deposit-evidence.js';
+import { assessDepositEvidence, auditDepositEvidence, depositFromYearsRuleNote, depositStatusLabel, resolveDepositByRuleNote } from '../src/domain/deposit-evidence.js';
 import { buildKakaoCatalogReferenceProduct, resolveReferenceDeposit } from '../src/application/kakao-catalog-reference.js';
 import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 
@@ -102,5 +102,43 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     expect(depositFromYearsRuleNote(undefined, 24, 1000000)).toBeNull();
     // the placeholder 0 itself stays UNKNOWN in the evidence layer (derivation is a separate, explicit step)
     expect(assessDepositEvidence({ supplierId: 'RP012', productType: '픽업구독', note, sourceAmount: 0 }).state).toBe('UNKNOWN');
+  });
+
+  it.each(['픽업구독', '오공구독'])('compatibility derives RP012 %s deposits from the shared supplier years rule note', productType => {
+    const product = { provider_company_code: 'RP012', product_type: productType, deposit_note: '월 대여료 × 약정연수 (최대 3개월)',
+      price: Object.fromEntries([12, 24, 36, 48, 60].map(months => [String(months), { rent: 100000, deposit: 0 }])) };
+    const result = withCompatibilityDepositEvidence(product).price as Record<string, Record<string, unknown>>;
+    expect([12, 24, 36, 48, 60].map(months => [months, result[String(months)]!.deposit, result[String(months)]!.depositState, result[String(months)]!.depositEvidenceReason]))
+      .toEqual([
+        [12, 100000, 'KNOWN', 'SUPPLIER_RULE_NOTE:RENT_X_CONTRACT_YEARS_MAX3'],
+        [24, 200000, 'KNOWN', 'SUPPLIER_RULE_NOTE:RENT_X_CONTRACT_YEARS_MAX3'],
+        [36, 300000, 'KNOWN', 'SUPPLIER_RULE_NOTE:RENT_X_CONTRACT_YEARS_MAX3'],
+        [48, 300000, 'KNOWN', 'SUPPLIER_RULE_NOTE:RENT_X_CONTRACT_YEARS_MAX3'],
+        [60, 300000, 'KNOWN', 'SUPPLIER_RULE_NOTE:RENT_X_CONTRACT_YEARS_MAX3'],
+      ]);
+  });
+
+  it.each(['중고렌트 ', ' 중고렌트', '재렌트'])('keeps RP012 used-rent whitespace variants out of rule derivation: %s', productType => {
+    const row = (withCompatibilityDepositEvidence({ provider_company_code: ' RP012 ', product_type: productType, deposit_note: '국산: 월 대여료×2',
+      price: { '24': { rent: 800000, deposit: 0 } } }).price as Record<string, Record<string, unknown>>)['24']!;
+    expect(row).toMatchObject({ deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY' });
+  });
+
+  it('keeps the compatibility guide paths unchanged for non-RP012 rules, missing evidence, waivers, and Iancar', () => {
+    const rent = 123456;
+    const compat = (withCompatibilityDepositEvidence({ provider_company_code: 'RP023', product_type: '오플구독', deposit_note: '국산: 월 대여료×2',
+      price: { '24': { rent, deposit: 0 } } }).price as Record<string, Record<string, unknown>>)['24']!;
+    const reference = resolveReferenceDeposit({ supplierId: 'RP023', productType: '오플구독', note: '국산: 월 대여료×2', termMonths: 24, monthlyRent: rent, sourceAmount: 0 });
+    const rule = resolveDepositByRuleNote({ note: '국산: 월 대여료×2', termMonths: 24, monthlyRent: rent });
+    expect(rule).toMatchObject({ state: 'KNOWN', multiplier: 2 });
+    expect(compat).toMatchObject({ deposit: reference.depositAmount, depositState: reference.depositState });
+    expect(compat.depositEvidenceReason).toBe(`SUPPLIER_RULE_NOTE:${reference.depositRule!.code}`);
+
+    const zero = withCompatibilityDepositEvidence({ provider_company_code: 'RP004', product_type: '중고렌트', deposit_note: '무보증',
+      price: { '12': { rent: 100000, deposit: 0 } } }).price as Record<string, Record<string, unknown>>;
+    expect(zero['12']).toMatchObject({ deposit: 0, depositState: 'ZERO', depositEvidenceReason: 'EXPLICIT_ZERO_DEPOSIT' });
+    const iancar = withCompatibilityDepositEvidence({ provider_company_code: 'RP031', product_type: '중고렌트', deposit_note: '국산: 월 대여료×2',
+      price: { '12': { rent: 100000, deposit: 0 } } }).price as Record<string, Record<string, unknown>>;
+    expect(iancar['12']).toMatchObject({ deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' });
   });
 });
