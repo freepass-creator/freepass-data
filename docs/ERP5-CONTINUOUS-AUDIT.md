@@ -1,17 +1,19 @@
 # ERP5 상시 읽기 전용 감사
 
-이 workflow는 `freepasserp5` Firestore의 `products`와 `policy`를 2시간마다 FULL 캡처하고,
+이 workflow는 `freepasserp5` Firestore의 `products`와 `policy`를 매시 37분 예약으로 FULL 캡처하고,
 직전 성공 캡처와 비교해 신규·변경·동일·미관측 및 재고 상태 전환을 기록한다.
+예약 설정은 실행 간격 보장이 아니다. 현재 전달 한계와 상품 최신화 이관 설계는 [신선도 설계](#freshness-design-20261010)를 따른다.
 
 각 성공 관측은 `source-inventory.json` 원천 신분증을 만든다. 여기에는 프로젝트/DB/컬렉션,
 동일 transaction readTime과 digest, 컬렉션별 전체 문서 수, 상품 필드 경로 수, 매핑 분류 수,
 직전 관측 대비 추가·변경·동일·미관측 수와 재고 상태 전환 수가 들어간다. 원문 값과 문서 ID는
 요약에 넣지 않는다. Actions 실행 요약에서도 같은 count card를 즉시 확인할 수 있다.
 
-이 workflow는 운영 writer가 아니다. 실제 원천 최신화와 Firestore/F01/F86 쓰기의 단일 책임자는
-`freepass-creator/freepasserp4`의 `.github/workflows/erp5-ssot-refresh.yml`이다. 해당 writer는
-24개 공급사 원천 재수집 → ERP5 Atom 갱신 → 정책 참조 정합화 → 고정 snapshot → F01/F86 발행·감사를
-한 concurrency 경계에서 수행한다. FreePass Data가 같은 컬렉션을 별도로 갱신해 이중 writer가 되지 않는다.
+이 workflow는 운영 writer가 아니다. 이관 전 상품 최신화·발행 경로는 ERP4의
+`.github/workflows/erp5-ssot-refresh.yml`이며, Data 공통 시트 하루 박제와는 책임이 다르다.
+현행 상품 시트 발행 대상은 F01 하나이고 F86은 원본·이력 보존용이다.
+대표 2026-10-10 결정에 따라 원천별로 Data 자체 workflow·서비스 계정으로 이관한다.
+이관 중에도 같은 원천·필드에 ERP4와 Data writer를 동시에 활성화하지 않는다.
 
 2026-09-22 FreePass Data PR #36에서 이 read-only workflow를 default branch에 등록했고, PR #37에서
 summary stdout을 JSON-only로 고쳤다. 첫 성공 run `35689380147`은 FULL same-transaction 캡처와 private
@@ -49,7 +51,7 @@ Canonical write, 시트 갱신, 소비처 전환, RTDB 접근은 workflow에 없
 - `ERP5_POINTER_SERVICE_ACCOUNT`
 - `ERP5_EVIDENCE_BUCKET`
 
-셋 중 하나라도 없으면 네트워크 읽기 전에 실패한다. 현재 WIF provider는
+넷 중 하나라도 없으면 네트워크 읽기 전에 실패한다. 현재 WIF provider는
 `freepass-creator/freepass-data`의 `main`과 이 workflow 경로로 제한돼 있고, 서비스계정은
 `roles/datastore.viewer`와 지정 버킷의 객체 생성·조회만 사용한다. 별도 포인터 서비스계정은 IAM 조건으로
 `latest.json` 하나에만 objectUser가 적용된다. 버킷은 uniform access, public access prevention,
@@ -88,6 +90,108 @@ candidate 수, 검토 대기/HOLD 수와 기계 판정 사유를 항상 함께 �
 policy 81건, mapped-for-review 0건, mapping HOLD 1,659건, `NO_CHANGE`였고 공개 판정은 `HOLD`,
 ACTIVE release 허가는 `false`였다. 실행별 불변 업로드, byte readback, 포인터 CAS와 최종 readback도
 통과했다. 이 수동 실행은 native `schedule` 전달 증거가 아니며 schedule 실행은 아직 별도 HOLD다.
+
+<a id="freshness-design-20261010"></a>
+
+## 신선도 설계 — 2026-10-10
+
+**DESIGNED ONLY.** 목적은 공급사 원천 → FreePass Data → ERP5 공개 읽기 통로·F01까지 상품 칸을 기본 15분마다 최신화하는 것이다. 원천 제약이 입증된 경우만 사유를 남겨 60분으로 조정한다. 하루 박제는 별도 이력 보존이다. 이번 변경은 문서 두 곳뿐이며 코드·workflow·예약·권한·운영 데이터를 바꾸지 않는다. 판매 대수·사진 확보율 개선은 범위 밖이다.
+
+기준 revision은 `9e8ecd5`, 작업 가지는 `work/freepass-data/freshness-design-20261010`이다. origin/main·새 가지·Issue #24 열림은 호출자가 제공한 Claude 사전 확인을 사용했다. Academy document READY를 확인했고 신규 자산은 없다. 재사용 판정은 **COMPOSE_OR_EXTEND**: [Source 계약](../src/domain/source.ts), [SourceIngestionStore](../src/ports/source-store.ts), [원천 수집기](NATIVE-SOURCE-COLLECTOR.md), [기존 중계](../src/api/supplier-relay.ts), [중계 배포 절차](deploy/supplier-collect-relay-배포절차.md), [Data Health](DATA-HEALTH.md)를 조합한다. Data Health의 `SOURCE_FRESHNESS=NOT_EVALUATED`는 구현 전까지 그대로다. `data-owned-refresh.yml`은 현재 **RETIRED 안내**이므로 성공한 갱신 경로로 재사용하거나 옛 ERP4 엔진을 다시 켜지 않는다.
+
+### 근거와 시간의 구분
+
+아래 운영 수치는 **Claude가 2026-10-10 읽기로 측정하여 전달한 사실**이며 이번 오프라인 작업에서 재조회하지 않았다.
+
+- Data 감사 매시 37분 예약: 최근 79회/422시간, 간격 중앙값 324분·p90 445분·최대 606분. ERP4 매시 17분 예약: 최근 100회/361시간, 중앙값 211분·p90 401분·최대 533분. 기대 간격은 각각 60분이다. 같은 GitHub 예약 위의 감시도 10-10 03:42 회차가 뜨지 않아 수동 복구했다(전달된 시각의 시간대는 미확인).
+- 이는 해당 표본 구간의 결과이며 전체 기간의 전달률·향후 SLA를 추정하지 않는다. GitHub 예약 단독으로 15분 또는 60분을 충족했다는 근거가 없다.
+- 비공개 OIDC Cloud Run 중계와 `/verify` 대상으로 만든 Cloud Scheduler job이 배포되어 있으나 job은 **PAUSED**다. 코드 허용 목록의 `iancar-15m` 활성은 운영 예약 활성과 다르며 `hourly-all`은 HOLD다. 현재 둘의 대상은 ERP4다.
+- ERP4 한 회차 03:46:31→03:58:40Z의 전체 시간은 729초(12분 09초). 이안카 관측→Data 반영 391초, 현재 원자 계산 145초, 손오공 재수집 51초, npm ci 42초, F01 게시 9초가 측정됐다. 별도 전달된 «나머지 약 6분»은 단계 합과 맞지 않는다. 전체에서 앞의 네 시간을 빼면 100초이므로 단계 중첩/집계 범위는 추가 확인하며 약 6분을 더해 총량을 부풀리지 않는다.
+
+시간은 세 가지로 분리한다. `lastAttemptAt`은 시도, `lastCallSucceededAt`은 실제 호출·응답 검증 성공, `lastSuccessAt`은 COMPLETE+CURRENT 원천 반영 성공이다. 원천 자료 시각 `sourceObservedAt`(공급사 `syncedAt`/`synced_at`)은 별도로 보존한다. HTTP 200·중계 2xx·Actions success·캐시 재조회는 자료 갱신 성공을 뜻하지 않는다. 이안카는 공급사 갱신이 20~60분이어서 15분마다 불러도 같은 자료일 수 있다. 기존 15분 자료 신선도 기준과 stale HOLD는 완화하지 않는다.
+
+### 원천별 주기·관측·경보
+
+하루 횟수는 24시간 연속 운용 시 **주 트리거 목표 슬롯**이며 성공 횟수나 이중 트리거 전체 호출 수가 아니다. 현재 입증된 60분 예외는 없으므로 임의로 낮추지 않는다. 도입 전 원천은 `NOT_ENABLED/HOLD`로 보이고 경보 도입일을 확정한다. 활성 후 성공 없음은 즉시 UNKNOWN 경보, 유효한 마지막 성공이 있으면 `현재−마지막 성공 > 주기×2`에 경보한다.
+
+| 원천 | 기본 주기 | 이유(60분 예외 사유) | 한 번 실행 시간 | 하루 횟수 | 마지막 성공을 남길 곳 | 경보 기준(주기×2) | 현재 상태 |
+|---|---|---|---|---:|---|---|---|
+| 이안카 API | 15분 | 공급사 20~60분 갱신과 호출 주기를 분리; 60분 완화 근거 없음 | **측정 391초**, ERP4 내 관측→Data 반영; Data 독립 회차 미측정 | 96 | 기존 source head가 가리키는 run의 completedAt | 30분 초과; upstream stale 별도 HOLD | ERP4 회차에서 수집, Data 이관 전 |
+| 손오공 ERP | 15분 | 60분 예외 미확인 | **측정 51초**, 재수집 단계만; Data 전체 미측정 | 96 | 동일, 상품 버킷별 범위 보존 | 30분 초과 | ERP4 운영, Data 이식·인증 transport 진행 중 |
+| 공통 시트 공급사 탭 | 15분 | 사람 입력 변화 관측; 하루 박제로 대체 불가 | 미측정(추정치 없음) | 96 | 동일, 탭/권위 범위별 head | 30분 초과 | 하루 박제만 있음; 15분 경로 미구현 |
+| 카톡 자료 | 15분 점검 + 도착 시 처리 | 도착 없는 날과 수집기 중단 구분; 60분 예외 없음 | 미측정(추정치 없음) | 96 점검 + 사건 수 | 원문 사건은 기존 source run/head·사건 영수증; 무사건 점검은 기존 실행 증거 | 수집 점검 성공 30분 초과 또는 미처리 사건 30분 초과; 공급사 침묵은 갱신 성공으로 위장하지 않음 | ai-ops 비공개 묶음→Data 코드 있음, Windows 상시 실행 미연결 |
+| 사진 | 15분 변경 점검 | 변경 감지 후 필요한 사진만; 60분 예외 없음 | 미측정(추정치 없음) | 96 점검, 전송은 변경 건수 | 원천 run/head + 기존 사진 증거·반영 readback | 활성 후 점검 30분 초과/수신 뒤 반영 지연 30분 초과 | 수집 대기·표시 검증 HOLD; 사진 자체 나이로 경보하지 않음 |
+| ERP5 공개 읽기 통로·F01 투영 | 15분, 원천 성공 후 필요한 단계 | 원천→소비처 종단 목표; F86 제외 | **측정 F01 게시 9초만**, 공개 읽기·검증 합 미측정 | 96 검증 슬롯; 변경 발행 ≤96 | 기존 release/manifest·delivery receipt·sheet delivery evidence의 검증된 시각 | 각 전달/readback 성공 30분 초과; 원천 stale도 별도 표시 | ERP4 발행 경유; Data 자체 발행 이관·소비처 증명 남음 |
+| 하루 박제(공통 시트 이력) | 24시간 | 이력 보존 전용, 15분 경로와 분리 | 미측정(추정치 없음) | 1 적용 목표 + 실패 재시도 예약 3 | 기존 해당 범위 run 및 실제 apply/readback 증거 | 48시간 초과; 30분 상품 경보와 별도 | shared-sheet-daily와 daily-writer-guard 유지 |
+| 정산(F04→Data) | 정산 세션과 맞출 항목 | 정산 세션과 맞출 항목 | 정산 세션과 맞출 항목 | — | 정산 세션과 맞출 항목 | 정산 세션과 맞출 항목 | 본 설계에서 주기·writer·금액 처리 결정 안 함 |
+
+원천 반영과 투영 확인은 각각 성공을 남긴다. upstream 반영 성공만으로 ERP5/F01 성공 시각을 전진시키지 않는다. 원천에 변화가 없더라도 실제 재관측·coverage 검증이 성공하면 관측 성공을 기록할 수 있으나, 이전 RAW를 다시 읽은 시각을 원천 `syncedAt`으로 바꾸지 않는다. 사건 원천의 «자료 마지막 성공 없음»은 null/UNKNOWN으로 유지하고, 무사건 점검 정상과 나눠 보여준다.
+
+### 마지막 성공 저장 방식 — 기존 head/run 조회 선택
+
+**선택 A: 새 저장 없이 기존 `source_heads`→`source_runs`에서 계산한다.** 실제 타입은 `SourceRun.status='COMPLETED'`, `coverage.completeness='COMPLETE'`, `headStatus='CURRENT'`다(`status='COMPLETE'`라는 값은 없다). 해당 원천·범위의 head가 가리키는 run과 원천 귀속·checkpoint가 일치하고 유효한 `completedAt`이 있을 때만 이를 `lastSuccessAt`으로 읽는다. run 목록의 CURRENT만 검색하지 않는다. 과거에 head였던 run이 CURRENT를 유지할 수 있기 때문이다. 조회 앞뒤 head가 달라지면 재조회 또는 HOLD하고 일관된 관측처럼 표시하지 않는다. `decideSourceHead`의 승격 의미는 복제·변경하지 않는다. FULL 재고 관측 요구와 요금의 UNKNOWN coverage를 섞어 전체 공급사 성공으로 승격하지 않는다.
+
+최신 실패·실행 중은 마지막 정상 head를 지우지 않는다. `lastAttemptAt`은 해당 범위 최신 run의 `startedAt`, 마지막 오류는 FAILED run의 `error`에서 허용된 오류 코드만 읽는다. 원문 오류를 공개하지 않는다. 현재 SourceIngestionStore에는 최신 시도 목록 조회가 없어 M1에서 기존 store의 **읽기 포트만 확장**하는 후보로 둔다. 실행 전 인증 실패처럼 run이 없는 시도는 기존 중계/실행 영수증과 함께 UNKNOWN으로 보고, 없는 시각을 now로 채우지 않는다. 호출 성공만 있고 head가 승격되지 않은 회차도 기존 실행 증거에서 별도로 읽는다. `expectedFreshnessSeconds`는 기존 자료 신선도 의미를 유지하며 호출 주기 칸으로 덮어쓰지 않는다.
+
+비교 B는 기존 `sources` 문서 안에 `sourceId / lastSuccessAt / lastAttemptAt / lastErrorCode / intervalMinutes` 최소 요약을 두는 안이다. 조회는 싸지만 head/run과 이중 갱신·실패 시 불일치가 생기고 현재 타입 확장과 writer가 필요하므로 **채택하지 않는다**. 새 컬렉션·신선도 전용 저장소는 만들지 않는다. 호출 주기는 이 절의 정책을 후속 구현에서 기존 원천 설정으로 연결하며 자료 maxAge와 별개로 둔다. 성능 때문에 요약이 필요해도 원본 head/run에서 재생성하는 read model로만 재검토한다.
+
+`shared-sheet-daily`의 하루 한 번 관문은 apply 단계의 성공/진행 중을 확인하여 중복 입장을 막는 장치다. **진행 중은 성공이 아니며**, 실패·취소·시간 초과·오늘 이미 씀·스위치 꺼짐·단계 skipped는 마지막 성공을 갱신하지 않는다. 현재 코드의 실패 제외와 재시도 멱등성은 재사용하되, apply 이후 readback 실패까지 포함한 실제 완료를 마지막 성공 판정에 요구한다. `daily-writer-guard`의 확인된 skip은 «쓰기 로그 누락 검사 제외»일 뿐 신선도 PASS가 아니다. 이 가드는 허용 모음·계정·실행 창을 감시하므로 15분 경로를 하루 박제 계정으로 우회하지 않는다. M4에서 15분 writer의 별도 권한/감사 범위를 검토하고 하루 이력 경보는 24시간 정책(48시간 초과)으로 독립 유지한다.
+
+### 이중 트리거와 독립 감시
+
+목표 경로는 ① **Cloud Scheduler → 기존 비공개 OIDC 중계 → 코드 고정 허용 목록의 Data workflow_dispatch**, ② **같은 Data workflow의 GitHub 예약(보조)**이다. Data가 자기 workflow·서비스 계정 예약을 소유한다. Cloud Scheduler는 GitHub cron과 독립된 분 단위 트리거지만 실제 Actions 큐·공급사 지연까지 없애는 SLA는 아니다. 두 경로가 같은 원천별 주기를 요청하고, 쓰기 범위가 겹치면 같은 writer 그룹을 사용한다. 읽기 수집 분할과 공용 발행 직렬화를 구분한다.
+
+공통 입장 순서는 같은 `concurrency`(`cancel-in-progress:false`) → writer 그룹의 durable pending/CAS 확인 → 잠금 안에서 마지막 성공 재조회 → 성공 경과가 **주기/2 미만이면 SKIPPED_RECENT** → 실제 실행이다(15분의 절반은 7분 30초, 60분은 30분). 이 성공은 해당 회차의 필수 단계 전체가 성공한 증거여야 한다. Source 성공 뒤 F01이 실패했다면 Source 중복 수집은 줄여도 F01 복구를 건너뛰지 않는다. SKIPPED_RECENT/BUSY는 성공 시각을 바꾸지 않는다. 시각 없음·미래 시각·조회 실패는 성공으로 간주하지 않고 HOLD/UNKNOWN 경보를 남긴다.
+
+**현행 구현과 차이:** 중계는 원자적 그룹 pending, create-only 회차별 status, run 조회를 이미 갖췄지만 GitHub 직접 cron은 그 pending에 참여하지 않는다. 중계 dispatch 전 선점의 owner를 실제 Data run에 넘기고, 직접 cron도 같은 선점을 거치도록 후속 구현해야 한다. 자신의 pending 때문에 자신을 막는 교착을 피하고, 종료 증거와 정확한 owner에만 해제를 허용한다. UNKNOWN/응답 유실/실패 pending은 시간 만료로 지우거나 무작정 재dispatch하지 않는다. GitHub concurrency는 저장소 간 공통 잠금이 아니므로 ERP4/Data 이관 중에는 원천별 legacy writer를 중지·drain한 뒤 Data를 켠다. 두 저장소에 같은 그룹 문자열만 붙여 해결했다고 하지 않는다.
+
+허용 목록에 Data 대상의 고정 repo/workflow/ref/inputs 항목을 추가하고, ERP4 전용 GitHub 토큰의 허용 저장소에 Data를 포함하는 최소 범위 조정이 필요하다. 요청 본문으로 임의 대상을 받지 않는다. 폐기된 data-owned-refresh는 실행기로 되살리지 않고 기존 native collector·검증·발행 capability를 조합한다. 현재 `/verify`·PAUSED를 `/schedule`로 바꾸고 resume하는 것은 별도 운영 단계다. 반 주기 gate와 공통 pending은 **설계이며 미구현**이다.
+
+감시 실행은 다음 기존 경로를 재사용하는 후보로 고정한다. 새 알림 시스템은 만들지 않는다.
+
+- **Cloud 쪽:** 별도 5분 감시 Scheduler job → 기존 중계 Cloud Run의 읽기 전용 감시 처리 확장 → Data의 head/run 읽기 도구와 기존 중계 status를 대조한다. Actions에 감시 workflow를 dispatch만 하는 구조는 채택하지 않는다. 읽기 전용 감시 신원은 writer와 분리하고 기존 중계에 Firestore 쓰기 권한은 주지 않는다. 결과는 기존 비공개 중계 status 경로의 회차별 create-only 요약 확장 후보로 남긴다. 상품 성공 경보 30분 초과는 다음 점검까지 최대 약 5분의 탐지 지연이 있으며 전달 지연은 별도 측정한다. 감시 자체의 최신 점검이 10분 넘게 없으면 ai-ops가 UNKNOWN으로 올린다.
+- **지휘통제실 전달:** ai-ops `scripts/감사신선도점검.mjs`의 OK/STALE/UNKNOWN, stale 캐시 재확인 패턴 → `카톡-목록지켜보기.ps1`의 비동기 점검·2분 timeout·중복 억제·복구 한 줄 → `카톡-시작.ps1`의 `state/카톡-알림.log` 기록 → `scripts/세션/알림지켜보기.ps1`의 기존 Claude Monitor 스트림을 재사용한다. 현재 구현은 감사 Actions 성공만 보고 기본 한계 360분, 시작 스크립트 점검 간격 30분이다. 원천별 30분 경보로 이미 연결된 것이 아니다. 후속 ai-ops 작업에서 Cloud 감시 요약/신선도 읽기 결과도 확인하고 5분 점검 후보로 조정한다. B3Q 지휘통제실 수신 및 개발 관제 담당에게 기존 오더 경로로 전달·접수되는지 M1에서 시험한다. 현재 세션 구독·전달 성공은 미확인이다.
+- **개발 관제 표시:** [audit-dashboard-snapshot workflow](../.github/workflows/audit-dashboard-snapshot.yml)의 비민감 요약 → 기존 `dashboard/data/audit-latest.json` → 감사 대시보드 소비 경로를 확장하는 후보다. 현재는 감사 성공 후에만 스냅샷이 갱신되므로 장애 때 마지막 정상 화면이 남는다. 관제 reader가 `checkedAt` 정체를 독립 판정하고 원천별 마지막 성공/경과/주기/오류/UNKNOWN을 표시해야 한다. GitHub 장애 중에는 ai-ops 로그·Monitor 경로가 먼저 경보하고 스냅샷 게시 실패도 UNKNOWN으로 알린다. 공개 스냅샷에는 원문·차량번호·실제 문서/시트/드라이브 식별자를 넣지 않는다.
+
+Cloud 감시 결과를 ai-ops가 읽을 인증·요약 계약과 개발 관제 구독은 아직 연결되지 않았다. 재사용 후보를 운영 완료로 세지 않는다. Cloud와 PC 모두 멈추면 이 설계도 알릴 수 없으므로 감시 heartbeat 부재를 관제에서 드러내고 마지막 정상 표시를 유지한 채 건강하다고 보고하지 않는다.
+
+### 비용과 실행 시간
+
+계산은 `목표 횟수 N=1440/주기(분)`, `하루 실행 시간=실행당 초×실제 실행 횟수/3600`이다. 반 주기 gate는 근접 중복만 억제하므로 96회는 상한이 아니다. 양쪽 예약이 시간차로 통과하면 각 96회, 합계 최대 192회 후보가 되고 실패 재시도·수동 실행은 별도다. skip job·인증·checkout·감시 비용도 빠뜨리지 않는다.
+
+- 이안카: 391×96=37,536초=**10.43시간/일**(한 번 측정의 단순 환산, 독립 job 준비 시간 제외). 양쪽 모두 통과하면 20.85시간/일 + 준비/재시도.
+- 손오공: 51×96=4,896초=**1.36시간/일**, 수집 단계만. 공통 시트·카톡·사진은 각각 `T_sheet×96`, `T_kakao_check×96 + 사건별 처리시간 합`, `T_photo_check×96 + 변경 사진 처리시간 합`; 모두 T 미측정이다.
+- ERP5·F01: `T_projection_verify×96`; F01 게시 부분만 9×96=864초=**0.24시간/일**. 변경 없는 회차는 발행을 생략하되 실제 원천 관측/소비처 확인 증거를 재사용해 성공 의미를 유지한다. 하루 박제는 `T_daily×1 + 실패 재시도 시간 합`, 정산은 정산 세션과 맞춘다.
+- 전체를 매번 실행하면 729×96=69,984초=**19.44시간/일**. npm ci 42×96=4,032초=1.12시간/일은 729초에 이미 포함돼 중복 가산하지 않는다. 391초는 900초 안에 들어가지만 729초는 여유가 171초뿐이라 지연·재시도·보조 트리거가 겹치면 대기/슬롯 누락이 생긴다. 원천별 가벼운 회차로 분리하고 digest 변경 후 필요한 정규화·투영만 실행한다. 주기보다 긴 회차는 다음 writer를 겹쳐 켜지 않고 지연 경보·원인 측정·분할로 처리한다.
+- Actions 사용량은 `Σ(job 실제 실행 분 × 일 횟수)`로 계산한다. 로컬 yml의 `ubuntu-latest`와 공개 저장소라는 오더 정보는 **표준 GitHub-hosted runner 무료 적용 후보** 근거일 뿐이다. 계정·runner 종류·스토리지/아티팩트 비용은 [공식 Actions 과금 문서](https://docs.github.com/en/billing/managing-billing-for-your-products/managing-billing-for-github-actions/about-billing-for-github-actions)로 **확인 필요**. 무료라고 확정하지 않는다.
+- Cloud Scheduler 작업 수는 `15분 원천/투영 job 수 n15 + 60분 job 수 n60 + 감시 1 + 별도 하루 이력 job 수 n24`다. M2 최소안은 이안카 1+감시 1=2개(기존 PAUSED job 전환 포함, 중복 생성 아님). 호출 수는 `96×n15 + 24×n60 + 288 + n24 + 재시도/수동 호출`, 최소안 **384회/일**이다. 카톡 Windows 작업은 Cloud job으로 세지 않는다. 전체 job 수는 원천 분할 계획 후 확정한다.
+- Cloud Run 중계 요청 수도 위 Cloud 호출 수를 기준으로 산정한다. dispatch 중계가 수집 391초 내내 실행된다고 가정하지 않는다. `요청 수×실측 중계 처리시간`, CPU/메모리 설정·최소 인스턴스·로그/GCS·Firestore 읽기량을 따로 계산한다. [Scheduler 가격표](https://cloud.google.com/scheduler/pricing), [Cloud Run 가격표](https://cloud.google.com/run/pricing)의 단가·무료 구간은 **공식 가격표로 확인 필요**이며 금액은 미기입이다. 가격표 링크는 확인할 위치이지 이번에 읽어 검증한 근거가 아니다.
+
+### ERP5·카톡 내부 «기준 시각» 계약
+
+Data 응답의 제안 메타데이터는 `freshness.asOf`(응답에 실제 사용한 원천 관측 중 가장 오래된 시각), `freshness.lastSuccessAt`, `freshness.sourceObservedAt`, `freshness.checkedAt`, `freshness.intervalMinutes`, `freshness.state`(FRESH/STALE/UNKNOWN), `freshness.reasonCode`다. 여러 원천은 비민감 논리 원천별로 구분한다. 하나라도 필수 원천 시각이 없으면 asOf는 null/UNKNOWN이며 응답 생성 시각으로 채우지 않는다. 저장/전달 형식은 ISO 8601 UTC `YYYY-MM-DDTHH:mm:ss.sssZ`, 표시 줄은 **기준 시각: YYYY-MM-DD HH:mm:ss KST (UTC: …Z) · 상태**다. null은 «기준 시각: 확인 불가»로 표시한다. 전체 응답의 asOf와 개별 상품 근거 시각을 혼동하지 않는다.
+
+이는 기존 API에 이미 있는 필드라는 주장이 아니라 후속 versioned 응답 계약 확장안이다. Data 담당이 원천 근거·release/lineage와 연결하고 schema 호환 검사를 맡는다. ERP5 담당은 **화면 줄**, ai-ops 담당은 `scripts/데이터/프리패스안내.mjs`의 **카톡 조회 내부 표시 줄**을 맡는다. DB 읽기 readTime은 자료 기준 시각이 아니다. 화면 줄 작업은 급한 원천 수집·경보 작업 줄(M1~M4)과 나눠 진행하며 카톡 고객 자동 발송 승인을 뜻하지 않는다.
+
+### 단계 계획과 종료 조건
+
+| 단계 | 종착 조건 | 확인 방법 | 예상 날짜 |
+|---|---|---|---|
+| M1 마지막 성공 읽기·경보 기준 | head/run read model, 30분/48시간 분리, Cloud·ai-ops·관제 연결 명세 확정; 읽기 전용 조회 | COMPLETE+CURRENT/실패/부분/동일 관측/미래/조회 실패/skip 반례; 쓰기 0; 감시 요약·로그·관제 수신 통제 시험은 별도 운영 승인 후 | 계획 수령 후 기입 |
+| M2 이안카 15분 Data 이관 | 기존 중계 허용 목록·Data workflow·서비스 계정·이중 트리거·공통 pending 연결; 해당 ERP4 writer 제외·drain | 두 트리거 동시 도착, 응답 유실, 장시간/취소, UNKNOWN pending, half-period skip 시험; 실제 source→Data→ERP5/F01 되읽기와 연속 간격 측정 | 계획 수령 후 기입 |
+| M3 손오공 | 기존 bucket별 native 수집·계정 주입·정규화 경로 이관, 해당 legacy writer fencing | 버킷별 원문/보증금/반납·인수형 보존, 마지막 성공과 upstream 시각, 공개 응답/F01 대사; 실패 시 last-good 유지 | 계획 수령 후 기입 |
+| M4 공통 시트 15분 | 하루 이력과 분리된 변경 관측→Data→투영, 입력 원본 보존, writer 감사 범위 분리 | 변경/무변경/읽기 실패/부분 apply/재시도/오늘 이미 씀 시험; 15분 관측과 하루 이력 각각 되읽기 | 계획 수령 후 기입 |
+| M5 ERP4 매시 발행 종료 | 전체 대상 이관 반영일 + 2주 관찰 후 ERP4 매시·watchdog·수동 잔여 발행 입구 중지; 임시 수리 freepasserp4#560 격리를 **같은 PR에서 제거** | 2주 동안 원천별 실제 간격·경보 전달·복구·소비처 readback·동시 writer 없음 확인; 남은 원천/사진/카톡 HOLD 해소 또는 명시적 범위 결정; 끈 뒤 Data 지속 관측 | 이관 반영일 미정 + 14일, 계획 수령 후 기입 |
+
+M2~M4의 원천별 legacy fencing은 M5까지 미루지 않는다. M5는 남은 ERP4 오케스트레이터 전체 종료다. 카톡 Windows 상시 실행·사진 수집/표시는 ai-ops·사진 담당의 병행 작업으로 연결하며 완료 날짜를 임의로 약속하지 않는다. 관찰 중 미해결 주기 초과/경보 누락이 있으면 M5를 통과시키지 않고 보정 후 관찰 범위를 다시 정한다. 롤백도 Data writer 정지·drain과 증거 보존 후 승인된 단일 writer 복구만 가능하며 이중 실행·RTDB 복구는 금지다.
+
+### 남음·대표 손·검증 범위
+
+대표 손이 필요한 것은 기존 GitHub 토큰의 Data 저장소 Actions 쓰기 최소 범위 승인, 필요한 서비스 계정/WIF·감시 읽기 권한 변경 승인, 검증 후 Scheduler 활성 및 원천별 writer 전환·M5 ERP4 종료 실행 승인이다. 이 문서는 해당 운영 승인을 대신하지 않는다. 손오공 기존 계정의 승인된 주입과 카톡 기존 사용자 인증은 담당자가 확인하며 값을 새 공개 문서에 적지 않는다.
+
+모르는 칸은 독립 Data 회차 실행시간/p90, 원천별 60분 예외 필요 여부, 완성된 Cloud job 수·단가·과금 적용, 실제 경보 구독/도달, 카톡·사진 무사건 점검 증거 연결, 공급사별 upstream 시각 제공 여부, 각 예상 날짜다. 승인된 환경의 측정으로 채운다. 네트워크 없이 가격·배포 상태·독립 Claude 검토는 재검증하지 않았으며 검토 PASS로 세지 않는다.
+
+문서 검증은 기존 타입/워크플로 대조, 비용 산식, 상대 링크·앵커, UTF-8, 변경 범위·민감값 추가 여부를 확인한다. 코드 테스트·live readback·배포 검증을 실행한 것으로 보고하지 않는다. `next_start_here`: M1 읽기 계약과 두 트리거의 공통 입장/owner 인계 반례를 검토한 뒤 별도 구현 오더로 넘어간다.
 
 <a id="vehicle-verification-20261004"></a>
 
