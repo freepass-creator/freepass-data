@@ -544,6 +544,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 변경: reader 재검증 클로저를 성공 감사 저장 후 응답 직전에 호출(count·원본·캐시), 철회는404와 기존 deny 감사. 인증 실패만 IP 버킷·성공만 consumer 버킷, 환경 변수 hops0~3(기본0)로 프록시 신뢰 경계 설정. count를 공통 슬롯 try/finally로 이동. 기존 출처·키·미디어 검증 보존. 현행 규칙은 `docs/NATIVE-SOURCE-COLLECTOR.md` 사진 프록시 절.
 - 검증: 관련163 PASS(gateway60 / ONE75 / withdrawal23 / output-contract5), `git diff --check` PASS. `npm.cmd run check`는 arch/standards/data-access/sheets106/build PASS 후 smoke12 PASS/1 FAIL(`uv_os_get_passwd ENOMEM`, tsx 시작 환경 오류)로 code1 종료. 이후 check 단계 미실행. runtime-policy·projection-integrity 불안정 시험 수정 없음.
 - 남음 / next_start_here: 실행 환경의 사용자정보 조회 오류 해소 후 전체 check 재실행. 추가 네트워크 독립 검토·운영 검증 미실행. 커밋·푸시 없음. 실제 사진 reader 권한·승인 게시·배포는 범위 밖.
+### 2026-10-10 이안카 동기화 잠금 상품 단위 격리
+
+- 목적: 잠금 한 건 때문에 정상 상품 전체의 증거 갱신이 중단되는 문제 해소.
+- 대상 revision: 작업 시작 시 로컬 HEAD와 origin/main 일치. 사용자 지시로 커밋·푸시 없음. 원격 최신 revision/Issue/PR 조회는 BLOCKED_NETWORK.
+- 변경: 기존 publication에서 신원·충돌 검증 후 잠금 상품만 쓰기에서 제외. 제외 건수·상호 배타 사유별 건수·경고를 반환하고 collector에 전달. 원천 관측 수 대비 20% 초과는 전체 실패, 정확히 20%는 성공. 제외 상품의 상태·가격·증거·잠금과 기존 미관측 보존 동작 유지.
+- 검증: 기존 Firestore 함수 모킹 시험을 확장(실제 DB·memory adapter·에뮬레이터 미사용). 기존 시험 기대값 변경 없음. 신규 격리·삭제 표시·임계·구조 오류·revision 경합·collector 종료/경고 시험 추가. `npm.cmd run build` PASS. `npm.cmd exec --offline vitest -- run tests/iancar-publication-withdrawal.test.ts tests/iancar-one-api.test.ts tests/iancar-availability-resolution.test.ts` PASS(3파일·120시험). 추가 실행한 기존 `iancar-source-capture` 시험은 10통과·2실패: 자식 tsx의 Windows 사용자정보 조회 `uv_os_get_passwd` ENOMEM으로 기대한 인증 게이트에 도달하지 못함(환경 보류, 기대값 수정 없음).
+- 남음: 운영 적용·배포·소비처 되읽기 미실행. 외부 독립 검토는 네트워크 제한으로 UNAVAILABLE이며 PASS로 세지 않음.
+- next_start_here: 이 작업 트리 diff와 `docs/IANCAR-ONE-API.md` 격리 절 확인 후 독립 검토·운영 반영을 별도 환경에서 이어간다.
+
+
 ### 2026-10-10 공개 상품 응답 설계
 
 - `docs/PUBLIC-PRODUCT-FEED-DESIGN.md` 한 장 작성. ERP4 공개 feed/quote 응답 계약, FreePass Data 공개 라우트 위치, allowlist 스키마, `resolveDepositWithRuleNote` 재사용, 비교 증명 계획, 요청 제한·캐시, 2026-10-14 ERP4 응답 종료 제안을 남김. 코드 변경 없음.
