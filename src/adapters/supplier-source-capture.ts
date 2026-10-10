@@ -51,13 +51,23 @@ export function sonogongSourceAdapter(input: {
             sourceRevision: observation.revision, observedAt: observation.observedAt,
             list: record.list, detail: record.detail,
             ...(record.detailResponse ? { detailResponse: record.detailResponse } : {}),
-            // Preserve every original list envelope once, including empty buckets.
-            ...(records.length === 0 && observations.some(o => o.listResponses)
-              ? { bucketListResponses: observations.map(o => ({ bucket: o.bucket, responses: o.listResponses ?? [] })) } : {}) });
+          });
           records.push({ sourceRecordId: `${observation.bucket}:${record.list.id}`,
             sourceFingerprint: fingerprint(payload), payload });
         }
       }
+      // Preserve envelopes in the existing RAW collection, one original page per record.
+      // Vehicle fingerprints must not depend on another bucket's inventory.
+      const vehicleRecordCount = records.length;
+      for (const observation of observations) {
+        for (const [index, response] of (observation.listResponses ?? []).entries()) {
+          const payload = structuredClone({ evidenceKind: 'LIST_PAGE', bucket: observation.bucket,
+            pageIndex: index, observedAt: observation.observedAt, response });
+          records.push({ sourceRecordId: `evidence:list:${observation.bucket}:${index}`,
+            sourceFingerprint: fingerprint(payload), payload });
+        }
+      }
+      if (!vehicleRecordCount) complete = false;
       const checksum = fingerprint(observations);
       const batch: SourceIntakeBatch = {
         laneId: 'PRODUCT_VEHICLE', source: { sourceId: 'supplier:RP012:sonogong-original-api',

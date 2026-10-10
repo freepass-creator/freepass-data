@@ -529,6 +529,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-10 PR427 손오공 RAW 크기 안전장치 — 운영 전환 HOLD
+
+- 목적/기준 revision: `4b9cca3172d23da94a90df98bcd8850b0bc44229`에서 첫 차량에 전체 목록 envelope가 집중되는 문제를 기존 PR427 범위에서 해소한다.
+- 변경/재사용: 기존 RAW record·`prepareRawSourceBatch`·수집 job을 COMPOSE_OR_EXTEND. 원문 페이지별 분리와 적재 전 개별 문서 크기 차단이며 새 collection/schema/bucket은 없다. 차량 마스터 전용 archive는 공급사 RAW 보존 권한을 대체하지 않아 사용하지 않는다.
+- 검증: 관련 80개 테스트와 build PASS. 합성 900대/9페이지의 합산 원문이 1MiB를 넘는 상황에서 페이지별 재조립 동일성과 초과 상세의 ingest 호출 0회를 확인했다. 이전 62/79개 테스트는 작은 fixture의 내용·승인 검사만 포함하여 합산 크기와 대규모 UTF-8 원문을 놓쳤다.
+- 남음: 실제 공급사 수집·RAW 적재·배포·ACTIVE 전환 0회. 개별 페이지/상세 초과는 HOLD. 현재 RAW runtime은 normalize 미전달이며 rawCount는 페이지 포함 증거 건수다. 미래 정규화 소비자는 LIST_PAGE를 차량으로 처리하면 안 된다. 수정판 독립 검토/CI는 별도 확인한다.
+- next_start_here: 수정판 exact SHA의 Claude 검토와 CI 확인 후 병합 담당자가 판단한다. 구버전 실제 폐기는 소비처 최신 경로 readback과 별도 운영 승인을 확인한 뒤 진행한다.
+
 ### 2026-10-10 손오공 ERP 읽기 포트 이식 — 코드/가짜 응답 시험, 운영 HOLD
 
 - 목적 / 대상 revision: `work/freepass-data/sonogong-port-20261010`, 기준 `9e8ecd575edcbdd04b13a9eac6092443025f61b7`. 사용자 지정 작업 트리만 수정. 커밋·push 없음. main/Issue #24/PR 확인은 호출자의 사전 확인을 사용했다.

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createSonogongErpReader, SONOGONG_READER_POLICY as policy } from '../src/adapters/sonogong-erp-reader.js';
 import { sonogongSourceAdapter } from '../src/adapters/supplier-source-capture.js';
 import { collectSupplierSource } from '../src/domain/source-intake.js';
-import { runSonogongCollection } from '../src/jobs/collect-sonogong.js';
+import { runSonogongCollection, assertSonogongRawFits } from '../src/jobs/collect-sonogong.js';
 import { compareSonogongDeposits } from '../src/domain/sonogong-deposit-comparison.js';
 
 // All values below are fabricated; no operational fixture or account is used.
@@ -181,10 +181,10 @@ describe('Sonogong ERP reader: offline transport contract', () => {
     const f = fixture(u => u.pathname.endsWith('/list') && u.searchParams.get('carSource') === 'LOW_TCAR'
       ? json({ data: { data: [], attrs: { totalCount: 0, currentPage: 1 } } }) : undefined);
     const batch = await sonogongSourceAdapter({ expectedFreshnessSeconds: policy.freshnessSeconds, readBucket: f.reader.readBucket }).read();
-    const envelopes = batch.records[0]!.payload.bucketListResponses as Array<{ bucket: string; responses: unknown[] }>;
+    const envelopes = batch.records.filter(r => r.payload.evidenceKind === 'LIST_PAGE');
     expect(envelopes).toHaveLength(3);
-    expect(envelopes[2]?.responses).toEqual([{ data: { data: [], attrs: { totalCount: 0, currentPage: 1 } } }]);
-    expect(batch.records[1]!.payload.bucketListResponses).toBeUndefined();
+    expect(envelopes[2]?.payload.response).toEqual({ data: { data: [], attrs: { totalCount: 0, currentPage: 1 } } });
+    expect(batch.records[0]!.payload.bucketListResponses).toBeUndefined();
   });
   it('uses existing injected ingestion once only when explicitly approved and complete', async () => {
     const f = fixture(), ingest = vi.fn(async () => undefined);
@@ -210,6 +210,39 @@ describe('Sonogong ERP reader: offline transport contract', () => {
 });
 
 describe('Sonogong deposit cross table', () => {
+  it('preserves large envelopes page-by-page and rejects an oversized individual record before ingestion', async () => {
+    const originals: Record<string, unknown[]> = {};
+    const adapter = sonogongSourceAdapter({ expectedFreshnessSeconds: 3600, readBucket: async bucket => {
+      const lists = Array.from({ length: 300 }, (_, i) => ({ id: String(i), carNumber: `SYNTHETIC-${i}`, padding: '가'.repeat(600) }));
+      const pages = [0, 100, 200].map(offset => ({ data: { data: lists.slice(offset, offset + 100), attrs: { totalCount: 300 } } }));
+      originals[bucket] = pages;
+      return { bucket, revision: 'fixture-revision', observedAt: '2026-10-10T00:00:00Z', declaredTotal: 300, complete: true,
+        listResponses: pages, records: lists.map(list => ({ list, detail: { ...list, estimates: [] } })) };
+    } });
+    const batch = await adapter.read();
+    expect(Buffer.byteLength(JSON.stringify(originals))).toBeGreaterThan(1_048_576);
+    expect(() => assertSonogongRawFits(batch)).not.toThrow();
+    expect(batch.records.filter(r => r.payload.list)).toHaveLength(900);
+    expect(batch.records.filter(r => r.payload.evidenceKind === 'LIST_PAGE')).toHaveLength(9);
+    for (const [bucket, pages] of Object.entries(originals)) {
+      const recovered = batch.records.filter(r => r.payload.evidenceKind === 'LIST_PAGE' && r.payload.bucket === bucket)
+        .sort((a, b) => Number(a.payload.pageIndex) - Number(b.payload.pageIndex)).map(r => r.payload.response);
+      expect(recovered).toEqual(pages);
+      expect(JSON.stringify(recovered)).toBe(JSON.stringify(pages));
+    }
+    const inputBytes = JSON.stringify(batch);
+    const oversized = structuredClone(batch);
+    oversized.records[0]!.payload.padding = '가'.repeat(400_000);
+    const ingest = vi.fn();
+    expect(() => assertSonogongRawFits(oversized)).toThrow('SONOGONG_RAW_DOCUMENT_LIMIT');
+    await expect(runSonogongCollection({ args: ['--apply-raw'], env: { SONOGONG_RAW_INGEST_APPROVED: 'true' },
+      reader: { readBucket: async bucket => ({ bucket, revision: 'fixture', observedAt: '2026-10-10T00:00:00Z',
+        declaredTotal: 1, complete: true, records: [{ list: { id: 'fixture', carNumber: 'SYNTHETIC' },
+          detail: { id: 'fixture', carNumber: 'SYNTHETIC', padding: '가'.repeat(400_000) } }] }) },
+      now: () => Date.parse('2026-10-10T00:00:00Z'), ingest })).rejects.toThrow('SONOGONG_RAW_DOCUMENT_LIMIT');
+    expect(ingest).not.toHaveBeenCalled();
+    expect(JSON.stringify(batch)).toBe(inputBytes);
+  });
   it('compares source vs current rules per term, separating rent/subscriptions without individual values', async () => {
     const f = fixture(u => {
       if (u.pathname.includes('/view/')) return json({ data: { ...detail(), estimates: [
@@ -229,7 +262,7 @@ describe('Sonogong deposit cross table', () => {
     expect(report.excludedEstimates).toBe(3);
     expect(JSON.stringify(report)).not.toContain('800000');
     // Fabricated rent-shaped identity, never an operational plate.
-    for (const r of batch.records) {
+    for (const r of batch.records.filter(r => r.payload.list)) {
       (r.payload.list as Record<string, unknown>).carNumber = 'SYNTHETIC-허' + '0000';
       (r.payload.detail as Record<string, unknown>).estimates = [
         estimate({ estimateType: 'RENT_RETURN', securityDepositAmount: 200_000 }),

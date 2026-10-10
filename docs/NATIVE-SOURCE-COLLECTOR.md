@@ -327,7 +327,9 @@ ERP4 기본 버킷 상수는 2개이므로 DAILY의 실제 응답은 최초 실�
 `sonokong/scripts/손오공.mjs`에서 estimates가 **view.data.estimates 안에 포함**됨을 확인했다.
 securityDepositAmount·monthly12/24/36/48/60·estimateType·creditType와 나머지 상세를 그대로 보존하며
 별도 estimates endpoint는 만들지 않는다. 목록/상세 JSON envelope도 RAW에 보존한다
-(전체 버킷 목록 envelope는 첫 RAW record에 한 번 보존; 전 버킷 0건은 HOLD/적재 거부).
+(목록 envelope는 기존 RAW 저장소에 `evidence:list:<bucket>:<pageIndex>` 단위로 원문 그대로 보존한다. 차량 record와 페이지 증거는 별개이며 RAW 건수는 차량 대수가 아니다. 전 버킷 차량 0건은 페이지 증거가 있어도 HOLD/적재 거부).
+
+손오공 CLI는 기존 `prepareRawSourceBatch` 결과의 개별 문서를 적재 전에 보수적으로 검사한다. 900,000 byte 예산 또는 깊이 제한을 넘으면 `SONOGONG_RAW_DOCUMENT_LIMIT`로 전체 적재를 차단한다. 원문 절단·새 저장소·부분 적재는 없다. 개별 페이지/상세가 초과하면 별도 승인된 보존 경로가 필요한 HOLD이며 수집 완료로 보지 않는다. 현재 RAW runtime은 정규화 함수를 전달하지 않으므로 페이지 증거를 차량 후보로 만들지 않는다. 향후 정규화 연결 시 반드시 페이지 증거를 제외하는 계약이 필요하다.
 
 **이식 제외:** 계정 파일 읽기, 토큰 파일 캐시, 덤프/상세 파일 캐시, 응답 본문을 포함한 오류,
 동시 8개 pool, 원천 count의 버킷 무시 동작, viewAgent/외부 롯데 HTML 접근,

@@ -3,6 +3,26 @@ import { createSonogongErpReader, SONOGONG_READER_POLICY, SonogongReaderError } 
 import { sonogongSourceAdapter, type SonogongBucketObservation } from '../adapters/supplier-source-capture.js';
 import { collectSupplierSource, type SourceIntakeBatch } from '../domain/source-intake.js';
 import { compareSonogongDeposits } from '../domain/sonogong-deposit-comparison.js';
+import { prepareRawSourceBatch } from '../application/ingest-raw-source.js';
+
+/** Conservative JSON Firestore storage bound, not JSON byte size alone.
+ * Map/array overhead and scalar allowance deliberately overestimate storage.
+ * Reserve document-name/metadata space; reject deep/unsupported values without truncation.
+ */
+export function assertSonogongRawFits(batch: SourceIntakeBatch) {
+  const size = (value: unknown, depth = 0): number => {
+    if (depth > 18) throw new Error('SONOGONG_RAW_DOCUMENT_LIMIT');
+    if (value === null || typeof value === 'boolean' || typeof value === 'number') return 8;
+    if (typeof value === 'string') return Buffer.byteLength(value, 'utf8') + 1;
+    if (Array.isArray(value)) return 32 + value.reduce((n, v) => n + size(v, depth + 1), 0);
+    if (value && typeof value === 'object') return 32 + Object.entries(value)
+      .reduce((n, [k, v]) => n + Buffer.byteLength(k, 'utf8') + 1 + size(v, depth + 1), 0);
+    throw new Error('SONOGONG_RAW_DOCUMENT_LIMIT');
+  };
+  for (const record of prepareRawSourceBatch(batch).rawRecords) {
+    if (8192 + size(record) > 900_000) throw new Error('SONOGONG_RAW_DOCUMENT_LIMIT');
+  }
+}
 
 /** Injectable transport/store for offline tests. Default mode never constructs a store. */
 export async function runSonogongCollection(input: {
@@ -34,6 +54,7 @@ export async function runSonogongCollection(input: {
     } });
   // inspect at END of collection (not invocation) to catch a capture that aged out.
   const batch = await adapter.read();
+  assertSonogongRawFits(batch);
   const collected = await collectSupplierSource({ ...adapter, read: async () => batch }, new Date(now()).toISOString());
   const report = { collector: 'freepass-data/sonogong', status: collected.evidence.status,
     coverage: batch.coverage.mode, buckets, observedAt: batch.observedAt,
@@ -60,7 +81,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(JSON.stringify(report));
     if (report.status === 'HOLD') process.exitCode = 2;
   } catch (error) {
-    const allowed = ['SONOGONG_UNKNOWN_OPTION', 'SONOGONG_RAW_APPROVAL_REQUIRED', 'SONOGONG_SOURCE_NOT_READY'];
+    const allowed = ['SONOGONG_UNKNOWN_OPTION', 'SONOGONG_RAW_APPROVAL_REQUIRED', 'SONOGONG_SOURCE_NOT_READY', 'SONOGONG_RAW_DOCUMENT_LIMIT'];
     const code = error instanceof SonogongReaderError ? error.code
       : error instanceof Error && allowed.includes(error.message) ? error.message : 'SONOGONG_COLLECTION_FAILED';
     console.log(JSON.stringify({ status: 'HOLD', code }));
