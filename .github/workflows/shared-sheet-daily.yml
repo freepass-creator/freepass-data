@@ -28,8 +28,8 @@ concurrency:
 permissions:
   contents: read
   id-token: write
-  # 예약 실행 전 최근 매시 감사의 daily-writer-guard 결과를 읽는다
-  actions: read
+  # 예약 실행 전 최근 매시 감사의 daily-writer-guard 결과를 읽는다. 감사가 오래됐으면(GitHub 예약이 몇 시간 밀림) 감사 workflow 를 한 번 직접 띄워 기다린다(dispatch 에 write 필요).
+  actions: write
 
 env:
   FREEPASS_SHEET_F01_ID: ${{ secrets.FREEPASS_SHEET_F01_ID }}
@@ -67,7 +67,8 @@ jobs:
             if [ "$DAILY" != 'on' ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "daily schedule switch is off — skipped"; exit 0; fi
             # 하루 한 번: 날짜는 «실행 생성 시각의 KST 날짜» 하나로 센다. 이 실행과 같은 날(KST) 생성된 apply 실행 중 «쓰기 단계
             # (Apply to FreePass Data)에 들어간 것»이 있으면 다시 쓰지 않는다.
-            # - 쓰기 단계는 성공·실패·취소·진행 중 모두 센다(쓰고 나서 보류·되읽기 실패로 끝날 수 있다 — 그날은 상황실이 본다).
+            # - 쓰기 단계는 성공·진행 중만 센다. 실패·취소·시간 초과는 «오늘 박제 완료»가 아니다(10-10 되읽기 불일치로 실패했는데 뒤 회차가 «이미 썼음»으로 건너뛰어 성공처럼 보였다).
+            #   재시도가 안전한 근거: 각 차량 쓰기는 영수증 멱등키 + 기대 revision 으로 한 건씩 확인되고(이미 쓴 건 noChange), 계획은 매번 새로 세워 바뀌었으면 SHARED_SHEET_PLAN_STALE 로 멈춘다.
             # - 캡처·계획·관문에서 멈춘 실행(쓰기 단계 skipped·미시작)은 세지 않는다 — 읽기 실패로 하루를 놓치지 않게.
             # - 같은 실행의 이전 시도도 센다(filter=all). 지금 시도의 쓰기 단계는 아직 시작 전이라 세지 않는다.
             # - 그 날 생성 범위를 페이지 끝까지 읽는다. 조회가 실패하면 «이력 없음»으로 보지 않고 멈춘다.
@@ -81,21 +82,38 @@ jobs:
             ids="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/shared-sheet-daily.yml/runs?branch=main&created=$since..$until&per_page=100" --jq '.workflow_runs[] | select(.display_title | endswith(" apply")) | .id')"               || { echo "DAILY_ONCE_CHECK_FAILED: run list"; exit 1; }
             applied=0
             for id in $ids; do
-              ok="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?filter=all&per_page=100" --jq '[.jobs[].steps[] | select(((.name | startswith("Apply to FreePass Data")) or (.name | startswith("Capture, plan and (apply)"))) and .conclusion != "skipped" and .started_at != null)] | length' | awk '{s+=$1} END {print s+0}')"                 || { echo "DAILY_ONCE_CHECK_FAILED: jobs of $id"; exit 1; }
+              ok="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?filter=all&per_page=100" --jq '[.jobs[].steps[] | select(((.name | startswith("Apply to FreePass Data")) or (.name | startswith("Capture, plan and (apply)"))) and .conclusion != "skipped" and .conclusion != "failure" and .conclusion != "cancelled" and .conclusion != "timed_out" and .started_at != null)] | length' | awk '{s+=$1} END {print s+0}')"                 || { echo "DAILY_ONCE_CHECK_FAILED: jobs of $id"; exit 1; }
               applied=$(( applied + ok ))
             done
             if [ "$applied" -gt 0 ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "already wrote on $day (KST) — retry schedule skipped"; exit 0; fi
             # 최근 매시 감사 실행(진행 중 포함 5개)의 daily-writer-guard job 중 «가장 늦게 끝난 것»이 기준 —
             # 진행 중인 실행에서 이미 실패한 감시가 있으면 그것이 이긴다.
-            : > "$RUNNER_TEMP/guard-jobs.jsonl"
-            for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/erp5-continuous-audit.yml/runs?branch=main&per_page=5" --jq '.workflow_runs[].id'); do
-              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100"                 --jq '.jobs[] | select(.name == "daily-writer-guard" and .status == "completed") | {conclusion, completed_at}' >> "$RUNNER_TEMP/guard-jobs.jsonl"
-            done
-            latest="$(jq -s 'sort_by(.completed_at) | last // {}' "$RUNNER_TEMP/guard-jobs.jsonl")"
-            guard="$(jq -r '.conclusion // "missing"' <<<"$latest")"
-            done_at="$(jq -r '.completed_at // empty' <<<"$latest")"
+            read_guard() {
+              : > "$RUNNER_TEMP/guard-jobs.jsonl"
+              audit_ids="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/erp5-continuous-audit.yml/runs?branch=main&per_page=5" --jq '.workflow_runs[].id')" || { echo "DAILY_WRITER_GUARD_NOT_OK: audit list unreadable — scheduled snapshot not run"; exit 1; }
+              for id in $audit_ids; do
+                gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100"                 --jq '.jobs[] | select(.name == "daily-writer-guard" and .status == "completed") | {conclusion, completed_at}' >> "$RUNNER_TEMP/guard-jobs.jsonl"
+              done
+              latest="$(jq -s 'sort_by(.completed_at) | last // {}' "$RUNNER_TEMP/guard-jobs.jsonl")"
+              guard="$(jq -r '.conclusion // "missing"' <<<"$latest")"
+              done_at="$(jq -r '.completed_at // empty' <<<"$latest")"
+              age=-1; if test -n "$done_at"; then age=$(( $(date -u +%s) - $(date -u -d "$done_at" +%s) )); fi
+            }
+            read_guard
+            # 감사가 3시간 넘게 안 돌았으면(GitHub 예약이 4~7시간 밀리는 일이 잦다 — 10-08·10-09 새벽 박제가 이것으로 통째 건너뜀)
+            # 감사 workflow 를 한 번 직접 띄우고 최대 약 20분(30초 간격 40회) 기다린다. 새 감사가 «실패»로 끝나면 그 결과가 이겨서 그대로 멈춘다.
+            if test -z "$done_at" || [ "$age" -lt 0 ] || [ "$age" -gt 10800 ]; then
+              echo "guard is stale (age=${age}s) — dispatching a fresh continuous audit"
+              dispatched_at="$(date -u +%s)"
+              gh workflow run erp5-continuous-audit.yml --ref main -R "$GITHUB_REPOSITORY" || { echo "DAILY_WRITER_GUARD_NOT_OK: could not dispatch audit — scheduled snapshot not run"; exit 1; }
+              for _ in $(seq 1 40); do
+                sleep 30
+                read_guard
+                # 띄운 시각 «이후»에 끝난 가드만 인정(다른 감사의 오래된 결과로 끝내지 않는다). 감사가 이미 돌고 있으면 줄 서서 늦어질 수 있어 넉넉히 기다린다.
+                if test -n "$done_at" && [ "$(date -u -d "$done_at" +%s)" -ge "$dispatched_at" ]; then break; fi
+              done
+            fi
             test -n "$done_at" || { echo "DAILY_WRITER_GUARD_NOT_OK: no completed guard job — scheduled snapshot not run"; exit 1; }
-            age=$(( $(date -u +%s) - $(date -u -d "$done_at" +%s) ))
             if [ "$guard" != 'success' ] || [ "$age" -lt 0 ] || [ "$age" -gt 10800 ]; then
               echo "DAILY_WRITER_GUARD_NOT_OK: latest guard=$guard age=${age}s — scheduled snapshot not run"; exit 1
             fi
