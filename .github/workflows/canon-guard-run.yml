@@ -1,0 +1,84 @@
+name: Canon Guard (run)
+
+# ai-ops 에서 생성한 파일 — 손으로 고치지 않는다.
+# 신뢰 원칙: 판정기·검증기·등록부(registry)는 전부 «기준 가지(base)에서 꺼낸 것»을 쓴다. PR 의 내용은 별도 폴더(.canon-pr)에 풀어 두고 «읽기만» 한다 — PR 쪽 스크립트는 절대 실행하지 않는다.
+# 판정기 파일·이 워크플로·등록부를 PR 이 바꾸려면 «같은 저장소 소유자가 올린 canon-sync 가지»여야 한다.
+# (기준 가지에 판정기가 아직 없는 첫 설치 PR 은 판정기 파일만 바뀔 때에 한해 자기 복사본으로 돈다.)
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  canon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch the PR as data (never executed)
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "pull/$PR_NUMBER/head:refs/canon/pr-head"
+          echo "PR_SHA=$(git rev-parse refs/canon/pr-head)" >> "$GITHUB_ENV"
+          mkdir -p .canon-pr
+          git archive refs/canon/pr-head | tar -x -C .canon-pr
+      - name: Pick the trusted guard (base branch copy, not the PR's)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          THIS_REPO: ${{ github.repository }}
+          THIS_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          GUARD_RE='^\.github/(canon-guard/|workflows/canon-guard)'
+          PROTECTED_RE='^(\.github/(canon-guard/|workflows/canon-guard)|registry/canonical-development-lines\.json$)'
+          changed="$(git diff --name-only "$BASE_SHA...refs/canon/pr-head" || true)"
+          protected="$(printf '%s\n' "$changed" | grep -E "$PROTECTED_RE" || true)"
+          if [ -f .github/canon-guard/MANIFEST.json ]; then
+            echo "TRUSTED=.github/canon-guard" >> "$GITHUB_ENV"
+            if [ -n "$protected" ]; then
+              if [ "$HEAD_REPO" = "$THIS_REPO" ] && [ "$PR_AUTHOR" = "$THIS_OWNER" ] && printf '%s' "$HEAD_REF" | grep -q 'canon-sync'; then
+                echo "guard files changed by the owner on a canon-sync branch: allowed"
+                echo "USE_PR_REGISTRY=1" >> "$GITHUB_ENV"
+              else
+                echo "::error::canon guard, its workflows or the registry changed outside an owner canon-sync branch"; printf '%s\n' "$protected"; exit 1
+              fi
+            fi
+          else
+            others="$(printf '%s\n' "$changed" | grep -v -E "$GUARD_RE" | grep -v '^$' || true)"
+            if [ -n "$others" ]; then
+              echo "::error::bootstrap PR must change only canon guard files"; printf '%s\n' "$others"; exit 1
+            fi
+            echo "TRUSTED=.canon-pr/.github/canon-guard" >> "$GITHUB_ENV"
+            echo "USE_PR_REGISTRY=1" >> "$GITHUB_ENV"
+          fi
+      - name: Trusted guard matches its manifest
+        run: node "$TRUSTED/verify-manifest.mjs"
+      - name: Guard proves it still catches known-bad samples
+        run: node "$TRUSTED/scripts/canon-guard.mjs" --self-test
+      - name: One canonical line per concern (PR files read as data, base registry)
+        run: |
+          set -euo pipefail
+          if [ "${USE_PR_REGISTRY:-}" != "1" ]; then
+            mkdir -p .canon-pr/registry
+            cp registry/canonical-development-lines.json .canon-pr/registry/canonical-development-lines.json
+          fi
+          node "$TRUSTED/scripts/canon-guard.mjs" --root .canon-pr
+      - name: Branch stays near main and does not contest a canonical path
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: PR_HEAD_SHA="$PR_SHA" node "$TRUSTED/scripts/check-branch-discipline.mjs" --root . --base "$BASE_REF"
