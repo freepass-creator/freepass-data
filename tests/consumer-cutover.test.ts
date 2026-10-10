@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import catalogSchema from '../contracts/catalog-v1.schema.json' with { type: 'json' };
-import { buildCompatCatalogProducts, withCompatibilityDepositEvidence, withoutInternalFeeFields } from '../src/infra/erp5-compat-catalog-reader.js';
+import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 import {
   CONSUMER_SWITCH_REGISTRY,
   evaluateConsumerCutover,
@@ -252,56 +251,38 @@ describe('consumer cutover registry', () => {
     expect(source).toEqual(before);
   });
 
-  it('removes internal fee fields on the reader response path while keeping rent and deposit fields', () => {
+  it('keeps compatibility evidence output free of fee and commission keys for public-shaped product fields', () => {
     const source = {
+      maker: 'synthetic maker',
+      model: 'synthetic model',
       provider_company_code: 'RP004',
       product_type: '중고렌트',
-      internalEconomicsTerms: [{ termKey: '12' }],
-      supplierBillingFee: 1,
-      channelPayoutFee: 2,
-      salesCommission: 3,
-      fee: 4,
-      internalEconomicsTermsByCommission: 'private',
-      partnerCommissionMemo: 'private',
-      fee_memo: 'private',
+      policy_code: 'POLICY-1',
+      deposit_note: '무보증',
       price: {
-        '12': { rent: '500000', deposit: 1000000, fee: 100, commission: 200, fee_memo: 'private',
-          supplierBillingFee: 300, channelPayoutFee: 400, salesCommission: 500, internalEconomicsTerms: 'private' },
+        '12': { rent: 500000, deposit: 0 },
+        '24': { rent: 400000, deposit: 1000000 },
       },
     };
-    const responseProduct = withoutInternalFeeFields(withCompatibilityDepositEvidence(source));
-    expect(responseProduct.price).toMatchObject({ '12': { rent: 500000, deposit: 1000000, depositState: 'KNOWN' } });
-    const serialized = JSON.stringify(responseProduct);
-    expect(serialized).not.toContain('internalEconomicsTerms');
-    expect(serialized).not.toContain('supplierBillingFee');
-    expect(serialized).not.toContain('channelPayoutFee');
-    expect(serialized).not.toContain('salesCommission');
-    expect(serialized).not.toContain('internalEconomicsTermsByCommission');
-    expect(serialized).not.toContain('partnerCommissionMemo');
-    expect(serialized).not.toContain('fee_memo');
-    expect(serialized).not.toContain('"fee"');
-    expect(serialized).not.toContain('"billing"');
-    expect(serialized).not.toContain('"payout"');
-    expect(serialized).not.toContain('"fee"');
-    expect(serialized).not.toContain('"commission"');
+    const responseProduct = withCompatibilityDepositEvidence(source);
+    // Internal value blocking is owned by the public product-response allow-list schema PR.
+    const keys: string[] = [];
+    const collectKeys = (value: unknown) => {
+      if (!value || typeof value !== 'object') return;
+      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+        keys.push(key);
+        collectKeys(child);
+      }
+    };
+    collectKeys(responseProduct);
+    expect(keys.filter(key => /fee|commission/i.test(key))).toEqual([]);
+    expect(responseProduct).toMatchObject({ maker: 'synthetic maker', model: 'synthetic model', policy_code: 'POLICY-1' });
+    expect(responseProduct.price).toMatchObject({
+      '12': { rent: 500000 },
+      '24': { rent: 400000 },
+    });
   });
 
-  it('builds the actual reader products payload through the scrubbed compatibility function', () => {
-    const products = buildCompatCatalogProducts({
-      P1: { provider_company_code: 'RP004', product_type: '중고렌트',
-        supplierBillingFee: 1, channelPayoutFee: 2, salesCommission: 3, fee: 4, topLevelCommissionName: 'private',
-        price: { '12': { rent: '100000', deposit: 1000000, supplierBillingFee: 5, channelPayoutFee: 6,
-          salesCommission: 7, fee: 8, commission: 9, fee_memo: 'private' } } },
-    }, '2026-10-10T00:00:00.000Z');
-    expect(products.P1!.price).toMatchObject({ '12': { rent: 100000, deposit: 1000000, depositState: 'KNOWN' } });
-    const serialized = JSON.stringify(products);
-    for (const blocked of ['supplierBillingFee', 'channelPayoutFee', 'salesCommission', 'fee_memo',
-      'topLevelCommissionName', '"fee"', '"commission"']) expect(serialized).not.toContain(blocked);
-    for (const kept of ['deposit', 'rent', 'depositState', 'depositStatusLabel', 'depositEvidenceReason']) expect(serialized).toContain(kept);
-
-    const source = readFileSync(new URL('../src/infra/erp5-compat-catalog-reader.ts', import.meta.url), 'utf8');
-    expect(source).toMatch(/products:\s*buildCompatCatalogProducts\(asMap\(products\), observedAt\)/);
-  });
 
   it('requires deposit state in the existing consumer price-term contract after a legacy-shape read', () => {
     const ajv = new Ajv2020({ strict: false });

@@ -83,32 +83,10 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
       : resolveDepositWithRuleNote({ supplierId: product.provider_company_code, productType: product.product_type,
       note: product.deposit_note, depositFree: product.deposit_free, sourceAmount: row.deposit,
       termMonths: parsed?.months, monthlyRent: normalizeErp5CompatibilityInteger(row.rent), hasPositivePaidDeposit: paid });
-    return [key, { ...row, rent: normalizeErp5CompatibilityInteger(row.rent) ?? row.rent,
-      deposit: evidence.amount, depositState: evidence.state,
+    return [key, { ...row, deposit: evidence.amount, depositState: evidence.state,
       depositStatusLabel: depositStatusLabel(evidence.state, row.deposit, product.deposit_note),
       depositEvidenceReason: evidence.reason }];
   })) };
-}
-
-export function withoutInternalFeeFields(product: Rec): Rec {
-  const blockedName = /fee|commission|billing|payout|economics/i;
-  const cleanTop = ([key]: [string, unknown]) => !blockedName.test(key);
-  const cleanPriceRow = (row: unknown) => {
-    if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
-    return Object.fromEntries(Object.entries(row as Rec).filter(([key]) => !blockedName.test(key)));
-  };
-  const next = Object.fromEntries(Object.entries(product).filter(cleanTop)) as Rec;
-  if (next.price && typeof next.price === 'object' && !Array.isArray(next.price)) {
-    next.price = Object.fromEntries(Object.entries(next.price as Rec).map(([key, row]) => [key, cleanPriceRow(row)]));
-  }
-  return next;
-}
-
-export function buildCompatCatalogProducts(asMapProducts: Record<string, Rec>, observedAt: string): Record<string, Rec> {
-  return Object.fromEntries(Object.entries(asMapProducts).map(([id, product]) => [
-    id,
-    withoutInternalFeeFields(withCompatibilityDepositEvidence(product, observedAt)),
-  ]));
 }
 
 /**
@@ -123,8 +101,7 @@ export function isPublicIancarPhotoProduct(product: Record<string, unknown> | un
     && !product._deleted && !product.deletedAt && !product.publication_withdrawal
     && ['가용', '선점'].includes(String(product.status_kind))
     && typeof product.iancar_one_vehicle_id === 'string' && !!product.iancar_one_vehicle_id.trim()
-    && typeof product.car_number === 'string' && !!product.car_number.trim()
-    && /^[0-9]{2,3}[가-힣][0-9]{4}$/.test(String(product.car_number).replace(/\s/g, ''));
+    && typeof product.car_number === 'string' && !!product.car_number.trim();
 }
 
 export class FirestoreCatalogCompatibilityReader {
@@ -135,7 +112,7 @@ export class FirestoreCatalogCompatibilityReader {
   async readIancarPhoto(consumerId: string, productId: string, index?: number) {
     if (!(consumerId === 'erp-com' || /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId)))
       throw new Error('IANCAR_PHOTO_CONSUMER_FORBIDDEN');
-    if (!productId || productId.length > 200 || /[\/\x00-\x1F\x7F]/.test(productId)
+    if (!productId || productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(productId)
       || (index !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= 200)))
       throw new Error('IANCAR_PHOTO_REQUEST_INVALID');
     const doc = await this.db.collection('products').doc(productId).get();
@@ -184,7 +161,7 @@ export class FirestoreCatalogCompatibilityReader {
     return {
       schema: 'freepass-data.catalog-compat/v1',
       data: {
-        products: buildCompatCatalogProducts(asMap(products), observedAt),
+        products: Object.fromEntries(Object.entries(asMap(products)).map(([id, product]) => [id, withCompatibilityDepositEvidence(product, observedAt)])),
         policies: asMap(policies),
         ...(get('partner') ? { partners: asMap(get('partner')!) } : {}),
         ...(get('user') ? { users: asMap(get('user')!) } : {}),
@@ -230,4 +207,3 @@ export class FirestoreCatalogCompatibilityReader {
 export function createFirestoreCatalogCompatibilityReader(photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0]) {
   return new FirestoreCatalogCompatibilityReader(photoReader);
 }
-

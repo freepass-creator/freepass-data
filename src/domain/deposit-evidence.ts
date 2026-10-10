@@ -141,6 +141,8 @@ export function resolveDepositWithRuleNote(input: {
   sourceAmount: unknown;
   depositFree?: unknown;
   hasPositivePaidDeposit?: boolean;
+  /** 규칙을 거는 범위. 기본 ANY(호환 응답·안내). 표준화 매핑은 기존 정책 그대로 «RP012 구독의 원문 정확히 0 + 연수 규칙»만(근거가 약한 확대 금지). */
+  ruleScope?: 'ANY' | 'RP012_SUBSCRIPTION_EXACT_ZERO_YEARS_RULE';
 }): DepositWithRuleResolution {
   const evidence = assessDepositEvidence(input);
   const sourceAmountRule = { code: 'SOURCE_AMOUNT' as const, multiplier: null, label: '공급사 입력 금액' };
@@ -153,8 +155,11 @@ export function resolveDepositWithRuleNote(input: {
   const ruleCandidateDeposit = input.sourceAmount === 0 || input.sourceAmount === '0' || missing;
   const rp012UsedRent = supplierId === 'RP012' && ['중고렌트', '재렌트'].includes(productType);
   const ruleAllowedReason = ['ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY', 'DEPOSIT_RULE_REQUIRES_RESOLUTION', 'MISSING_DEPOSIT_AMOUNT'].includes(evidence.reason);
-  if (supplierId !== 'RP031' && !rp012UsedRent && ruleCandidateDeposit && ruleAllowedReason) {
-    const rule = resolveDepositByRuleNote({ note: input.note, termMonths: input.termMonths, monthlyRent: input.monthlyRent });
+  const narrow = input.ruleScope === 'RP012_SUBSCRIPTION_EXACT_ZERO_YEARS_RULE';
+  const scopeOk = !narrow || (supplierId === 'RP012' && /구독/.test(productType) && (input.sourceAmount === 0 || input.sourceAmount === '0'));
+  if (supplierId !== 'RP031' && !rp012UsedRent && ruleCandidateDeposit && ruleAllowedReason && scopeOk) {
+    const found = resolveDepositByRuleNote({ note: input.note, termMonths: input.termMonths, monthlyRent: input.monthlyRent });
+    const rule: DepositRuleResolution = narrow && found.state === 'KNOWN' && found.code !== 'RENT_X_CONTRACT_YEARS_MAX3' ? { state: 'UNKNOWN', reason: 'NO_RULE' } : found;
     if (rule.state === 'KNOWN') {
       return {
         state: 'KNOWN',

@@ -451,9 +451,7 @@ describe('가격 키 읽기', () => {
       const missing = fixture();
       Object.assign(missing.data, { provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '월 대여료 × 약정연수 (최대 3개월)',
         price: { '24': deposit === undefined ? { rent: 1000000 } : { rent: 1000000, deposit } } });
-      const expected = deposit === ' ' || deposit === 'x'
-        ? { deposit: null, depositState: 'UNKNOWN' }
-        : { deposit: { amount: 2000000 }, depositState: 'KNOWN' };
+      const expected = { deposit: null, depositState: 'UNKNOWN' };
       expect(mapErp5Product(missing).candidate.priceTerms[0]).toMatchObject(expected);
     }
     // 글자 '0' 도 자리표시자 0 으로 본다
@@ -465,13 +463,13 @@ describe('가격 키 읽기', () => {
     expect(mapErp5Product(input).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
   });
 
-  it('uses the same supplier rule derivation as the reference and compatibility paths', () => {
+  it('keeps mapper rule derivation narrowed to the RP012 subscription years rule', () => {
     const domestic = fixture();
     Object.assign(domestic.data, {
       provider_company_code: 'RP012', product_type: '픽업구독', deposit_note: '국산: 월 대여료×2',
       price: { '24': { rent: 1000000, deposit: 0 } },
     });
-    expect(mapErp5Product(domestic).candidate.priceTerms[0]).toMatchObject({ deposit: { amount: 2000000 }, depositState: 'KNOWN' });
+    expect(mapErp5Product(domestic).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
 
     const years = fixture();
     Object.assign(years.data, {

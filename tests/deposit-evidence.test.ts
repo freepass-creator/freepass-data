@@ -159,7 +159,7 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     expect(iancar['12']).toMatchObject({ deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' });
   });
 
-  it('keeps reference, mapper, and compatibility deposit rule results equivalent for the same inputs', () => {
+  it('keeps guide and compatibility equivalent, while mapper only shares the narrow RP012 subscription years-rule scope', () => {
     const cases = [
       { productType: '픽업구독', note: '월 대여료 × 약정연수 (최대 3개월)', termMonths: 12, sourceAmount: 0, state: 'KNOWN', amount: 100000 },
       { productType: '오공구독', note: '국산: 월 대여료×2', termMonths: 24, sourceAmount: '0', state: 'KNOWN', amount: 200000 },
@@ -181,11 +181,12 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
       const term = mapped.candidate.priceTerms[0]!;
       expect([reference.depositState, reference.depositAmount]).toEqual([c.state, c.amount]);
       expect([compat.depositState, compat.deposit]).toEqual([c.state, c.amount]);
-      expect([term.depositState, term.deposit?.amount ?? null]).toEqual([c.state, c.amount]);
+      const mapperExpected = c.note.includes('2') && c.sourceAmount === '0' ? ['UNKNOWN', null] : [c.state, c.amount];
+      expect([term.depositState, term.deposit?.amount ?? null]).toEqual(mapperExpected);
     }
   });
 
-  it('keeps reference, compatibility, and mapper equivalent across product, note, term, deposit, and rent forms', () => {
+  it('keeps reference and compatibility equivalent across all forms, with mapper UNKNOWN outside its intentional narrow scope', () => {
     const productTypes = ['픽업구독', '오공구독', '오플구독', '중고렌트', '재렌트', '신차렌트'];
     const notes = ['월 대여료 × 약정연수 (최대 3개월)', '국산: 월 대여료×2', '수입: 12개월 대여료×3 · 18개월↑ ×6', ''];
     const terms = [6, 12, 15, 17, 18, 24, 36];
@@ -209,10 +210,14 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
         const term = mapped.candidate.priceTerms[0]!;
         expect(stateAmount(compat.depositState, compat.deposit), `${productType}/${note}/${termMonths}/${String(sourceAmount)}/${String(rent)}`)
           .toEqual(stateAmount(reference.depositState, reference.depositAmount));
-        // Private fee/commission fields intentionally make mapper candidates UNKNOWN/HOLD; this table excludes that exception.
+        const mapperInScope = !/렌트|신차/.test(productType) && note === notes[0] && (sourceAmount === 0 || sourceAmount === '0');
+        const mapperExpected = mapperInScope || sourceAmount === 500000
+          ? stateAmount(reference.depositState, reference.depositAmount)
+          : ['UNKNOWN', null];
+        // Mapper intentionally remains UNKNOWN outside RP012 subscription exact-zero years-rule scope.
         expect(stateAmount(term.depositState, term.deposit?.amount), `${productType}/${note}/${termMonths}/${String(sourceAmount)}/${String(rent)}`)
-          .toEqual(stateAmount(reference.depositState, reference.depositAmount));
-        expect(compat.rent).toBe(100000);
+          .toEqual(mapperExpected);
+        expect(compat.rent).toBe(rent);
       }
     }
   });

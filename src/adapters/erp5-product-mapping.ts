@@ -241,12 +241,11 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     if (Object.keys(terms).some(k => !['rent', 'deposit', 'fee', 'commission', 'fee_memo'].includes(k))) {
       issue('UNMAPPED_PRICE_FIELDS');
     }
-    // Mapper HOLD is intentionally stricter than the public compatibility response:
-    // private fee/commission presence means Catalog candidate review, while the reader strips it.
     const privateTerms = ['fee', 'commission', 'fee_memo'].filter(k => has(terms, k) && present(terms[k]));
     if (privateTerms.length) issue('PRIVATE_PRICE_TERMS_REVIEW_REQUIRED');
     const depositEvidence = resolveDepositWithRuleNote({ supplierId: d.provider_company_code, productType: d.product_type,
       note: d.deposit_note, depositFree: d.deposit_free, sourceAmount: terms.deposit, termMonths: months, monthlyRent: amount,
+      ruleScope: 'RP012_SUBSCRIPTION_EXACT_ZERO_YEARS_RULE',
       hasPositivePaidDeposit: hasConflictingPaidDeposit(d.price) });
     const depositAmount = complex.length || privateTerms.length || depositEvidence.state === 'UNKNOWN'
       ? undefined : depositEvidence.amount;
