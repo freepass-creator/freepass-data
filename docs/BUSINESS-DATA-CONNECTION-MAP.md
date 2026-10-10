@@ -7,7 +7,7 @@
 - 각 record는 원문 document ID와 provenance를 보존한다. 사실은 `value/state/reason/sourceField`로 반환한다. 원천 미입력은 UNKNOWN/null, 형식 불일치는 INVALID/null, 기록된 0은 RECORDED/0이다. 계약에서 정산금액·BT·작성자 의미를 확인하지 못한 필드는 UNKNOWN/null/UNAVAILABLE_IN_THIS_SOURCE이며 원문 docs를 지우지 않는다.
 - 계약·서명·청구·지급·진행 상태는 원천 각 축을 그대로 반환한다. 연결은 접수의 contractId 또는 계약의 source_intake_id만 사용하며 RECORDED_UNVERIFIED/UNLINKED로 구분한다. 이름·차량번호로 자동 연결하지 않는다. 삭제·테스트 필드는 원천 사실로 제공하며 기존 Admin 제외 의미를 새로 정의하지 않는다.
 - 기준 코드 main `c45ba9829ea1b61bcd25ff4280acf4e014f261c6`. 읽기 전용 원천 관측: 접수494/계약원문121, 기존 Admin 삭제·테스트 제외 계약74. 메모리 변환에서 각각494/121 document ID 전부 보존. 이는 source↔contract 연결 완료나 운영 배포 증거가 아니다.
-- 검증: 정산·admin workflow38/consumer gateway95, build/architecture/data-access-boundary PASS. 남음: 최종 독립 검토·CI, 통합 owner의 main 반영, 승인된 배포 후 단건/전건 readback. 원문 금액/BT 충돌과 locale digest 호환성은 별도 HOLD이며 수정하지 않는다. next_start_here: PR445 exact head를 확인하고 위 opt-in 요청을 같은 지원 범위에서 검증한다.
+- 검증: 정산·admin workflow39/consumer gateway95, build/architecture/data-access-boundary PASS. 남음: 최종 독립 검토·CI, 통합 owner의 main 반영, 승인된 배포 후 단건/전건 readback. 원문 금액/BT 충돌과 locale digest 호환성은 별도 HOLD이며 수정하지 않는다. next_start_here: PR445 exact head를 확인하고 위 opt-in 요청을 같은 지원 범위에서 검증한다.
 
 ## 2026-09-30 사용자 관리 범위 확정과 읽기 전용 운영 감사
 

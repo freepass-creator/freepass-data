@@ -55,14 +55,18 @@ const rawScalar = (value: unknown): SettlementLedgerValue =>
 
 /** Optional facts from this read only: no join, workflow decision, write or inferred actor. */
 export function projectAdminWorkflowCurrentFacts(spec: AdminWorkflowReadSpec, result: AdminWorkflowReadResult) {
+  if (!['settlementRows', 'contracts'].includes(spec.resource)) throw new Error('INVALID_ADMIN_WORKFLOW_VIEW');
+  if (spec.kind === 'query' && spec.limit === undefined) throw new Error('INVALID_ADMIN_WORKFLOW_VIEW_LIMIT_REQUIRED');
   const factualNumber = (raw: unknown) => {
-    if (typeof raw !== 'string') return numberOrNull(raw);
+    if (typeof raw !== 'string') {
+      return typeof raw === 'number' && Number.isInteger(raw) && !Number.isSafeInteger(raw) ? null : numberOrNull(raw);
+    }
     if (!/^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(raw)) return null;
     const parsed = Number(raw.replaceAll(',', ''));
     return Number.isInteger(parsed) && !Number.isSafeInteger(parsed) ? null : numberOrNull(parsed);
   };
-  const factualTimestamp = (raw: unknown) => typeof raw === 'string' && !/(?:Z|[+-]\d{2}:\d{2})$/.test(raw)
-    ? null : timestampOrNull(raw);
+  const factualTimestamp = (raw: unknown) => typeof raw === 'number'
+    || typeof raw === 'string' && !/(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? null : timestampOrNull(raw);
   const intake = spec.resource === 'settlementRows';
   const fields: Record<string, [string | null, 'string' | 'number' | 'timestamp' | 'boolean']> = intake ? {
     intakeCode: ['code', 'string'], intakeRequestId: ['intakeRequestId', 'string'],
@@ -114,16 +118,20 @@ export function projectAdminWorkflowCurrentFacts(spec: AdminWorkflowReadSpec, re
           : type === 'number' ? factualNumber(raw) : type === 'boolean' ? booleanOrNull(raw) : typeof raw === 'string' ? raw : null;
         return [name, { value, state: missing ? 'UNKNOWN' : value === null ? 'INVALID' : 'RECORDED',
           reason: sourceField === null ? 'UNAVAILABLE_IN_THIS_SOURCE' : missing ? 'SOURCE_NOT_RECORDED' : value === null
-            ? type === 'timestamp' && typeof raw === 'string' && !/(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? 'SOURCE_TIMEZONE_MISSING' : 'SOURCE_TYPE_NOT_SUPPORTED'
+            ? type === 'timestamp' && typeof raw === 'number' ? 'SOURCE_TIMESTAMP_UNIT_UNVERIFIED'
+              : type === 'timestamp' && typeof raw === 'string' && !/(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? 'SOURCE_TIMEZONE_MISSING' : 'SOURCE_TYPE_NOT_SUPPORTED'
             : null, sourceField, sourceValue: rawScalar(raw) }];
       }));
       const linkField = intake ? 'contractId' : 'source_intake_id';
       const link = typeof data[linkField] === 'string' && data[linkField].trim() ? data[linkField] : null;
+      const linkRecorded = data[linkField] !== undefined && data[linkField] !== null && data[linkField] !== '';
       return {
         recordId: id,
         identityState: 'SOURCE_DOCUMENT_ID' as const,
         link: { state: link ? 'RECORDED_UNVERIFIED' as const : 'UNLINKED' as const, targetId: link, sourceField: linkField,
-          basis: 'EXPLICIT_DOCUMENT_ID_ONLY' as const, reason: link ? 'TARGET_NOT_VERIFIED' : 'EXPLICIT_LINK_NOT_RECORDED',
+          basis: 'EXPLICIT_DOCUMENT_ID_ONLY' as const, reason: link ? 'TARGET_NOT_VERIFIED'
+            : linkRecorded ? 'EXPLICIT_LINK_TYPE_NOT_SUPPORTED' : 'EXPLICIT_LINK_NOT_RECORDED',
+          sourceValue: rawScalar(data[linkField]),
           otherRecordedIdentifier: rawScalar(data[intake ? 'contractNo' : 'contract_code']) },
         facts,
         provenance: { authority: intake ? 'FREEPASS_DATA_SETTLEMENT' : 'FREEPASS_ADMIN_APPLICATION_CONTRACT',

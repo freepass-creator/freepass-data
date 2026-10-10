@@ -93,12 +93,25 @@ describe('Admin workflow consumer gateway', () => {
       claimSupply: { value: 0, state: 'RECORDED' }, paySupply: { value: null, state: 'UNKNOWN' },
       recordedClaimSupply: { value: 123, state: 'RECORDED' }, confirmedClaimSupply: { value: null, state: 'UNKNOWN' },
       calculationBasis: { value: data.calculationBasis }, createdBy: { value: null, state: 'UNKNOWN' },
-      claimStage: { value: 'source-stage' }, updatedAt: { value: '1970-01-01T00:00:00.000Z' },
+      claimStage: { value: 'source-stage' }, updatedAt: { value: null, reason: 'SOURCE_TIMESTAMP_UNIT_UNVERIFIED', sourceValue: 0 },
     } });
     for (const invalid of [{ ...payload, limit: undefined }, { ...payload, view: 'bad' }, { ...payload, resource: 'products' }]) {
       expect((await server.inject({ method: 'POST', url, headers, payload: invalid })).statusCode).toBe(400);
     }
     await server.close();
+  });
+  it('does not guess timestamp units or recover unsafe amounts, and distinguishes unsupported link values', () => {
+    for (const value of [1790000000, 0]) {
+      const row = projectAdminWorkflowCurrentFacts({ kind: 'doc', resource: 'settlementRows', id: 'id' }, {
+        schema: 'freepass-data.admin-workflow-read/v1', digest: 'd'.repeat(64), docs: [{ id: 'id', data: { updatedAt: value, contractId: 12, claimWritten: Number.MAX_SAFE_INTEGER + 1 } }],
+      }).records[0]!;
+      expect(row.facts.updatedAt).toMatchObject({ value: null, reason: 'SOURCE_TIMESTAMP_UNIT_UNVERIFIED', sourceValue: value });
+      expect(row.facts.claimSupply).toMatchObject({ value: null, reason: 'SOURCE_TYPE_NOT_SUPPORTED' });
+      expect(row.link).toMatchObject({ state: 'UNLINKED', reason: 'EXPLICIT_LINK_TYPE_NOT_SUPPORTED', sourceValue: 12 });
+    }
+    expect(() => projectAdminWorkflowCurrentFacts({ kind: 'doc', resource: 'products', id: 'id' }, {
+      schema: 'freepass-data.admin-workflow-read/v1', digest: 'd'.repeat(64), docs: [],
+    })).toThrow('INVALID_ADMIN_WORKFLOW_VIEW');
   });
   it('classifies every resource and preserves all semantic owners in a mixed atomic command', () => {
     expect(Object.keys(ADMIN_WORKFLOW_RESOURCE_POLICIES).sort())
