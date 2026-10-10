@@ -55,14 +55,21 @@ async function gh(path, token) {
   return res.json();
 }
 
-async function prFiles(repo, number, token) {
-  const files = [];
-  for (let page = 1; page <= 10; page += 1) {
-    const batch = await gh(`/repos/${repo}/pulls/${number}/files?per_page=100&page=${page}`, token);
-    files.push(...batch.map(f => f.filename));
+/** 목록 API 를 끝(마지막 쪽이 한 쪽보다 적을 때)까지 읽는다 — 쪽수 상한을 두지 않는다. 무한 반복 방지는 GitHub 가 돌려주는 쪽이 비는 것으로 충분하다. */
+export async function ghAll(path, token, fetchPage = gh) {
+  const items = [];
+  const sep = path.includes('?') ? '&' : '?';
+  for (let page = 1; ; page += 1) {
+    const batch = await fetchPage(`${path}${sep}per_page=100&page=${page}`, token);
+    if (!Array.isArray(batch)) throw new Error(`GitHub API non-list response ${path}`);
+    items.push(...batch);
     if (batch.length < 100) break;
   }
-  return files;
+  return items;
+}
+
+async function prFiles(repo, number, token) {
+  return (await ghAll(`/repos/${repo}/pulls/${number}/files`, token)).map(f => f.filename);
 }
 
 async function main() {
@@ -95,7 +102,7 @@ async function main() {
   if (policy.single_open_pr_per_canonical_path && touched.length) {
     if (!token || !repo) console.log(`SKIPPED: open-PR overlap check (no GITHUB_TOKEN/GITHUB_REPOSITORY) — this PR touches canonical ${touched.join(', ')}`);
     else {
-      const open = await gh(`/repos/${repo}/pulls?state=open&per_page=100`, token);
+      const open = await ghAll(`/repos/${repo}/pulls?state=open`, token);
       const me = open.find(pr => pr.number === self);
       for (const pr of open) {
         if (pr.number === self) continue;
