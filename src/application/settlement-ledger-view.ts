@@ -55,6 +55,14 @@ const rawScalar = (value: unknown): SettlementLedgerValue =>
 
 /** Optional facts from this read only: no join, workflow decision, write or inferred actor. */
 export function projectAdminWorkflowCurrentFacts(spec: AdminWorkflowReadSpec, result: AdminWorkflowReadResult) {
+  const factualNumber = (raw: unknown) => {
+    if (typeof raw !== 'string') return numberOrNull(raw);
+    if (!/^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(raw)) return null;
+    const parsed = Number(raw.replaceAll(',', ''));
+    return Number.isInteger(parsed) && !Number.isSafeInteger(parsed) ? null : numberOrNull(parsed);
+  };
+  const factualTimestamp = (raw: unknown) => typeof raw === 'string' && !/(?:Z|[+-]\d{2}:\d{2})$/.test(raw)
+    ? null : timestampOrNull(raw);
   const intake = spec.resource === 'settlementRows';
   const fields: Record<string, [string | null, 'string' | 'number' | 'timestamp' | 'boolean']> = intake ? {
     intakeCode: ['code', 'string'], intakeRequestId: ['intakeRequestId', 'string'],
@@ -86,6 +94,7 @@ export function projectAdminWorkflowCurrentFacts(spec: AdminWorkflowReadSpec, re
     schema: 'freepass-data.admin-workflow-current-facts/v1' as const,
     resource: spec.resource,
     sourceDigest: result.digest,
+    coverage: 'RETURNED_DOCUMENTS_ONLY' as const,
     scope: spec.kind === 'doc' ? 'DOCUMENT' as const : 'QUERY' as const,
     completeness: spec.kind === 'doc' ? 'DOCUMENT_READ' as const
       : result.docs.length >= spec.limit! ? 'LIMIT_REACHED' as const : 'QUERY_READ' as const,
@@ -94,17 +103,21 @@ export function projectAdminWorkflowCurrentFacts(spec: AdminWorkflowReadSpec, re
       const facts = Object.fromEntries(Object.entries(fields).map(([name, [sourceField, type]]) => {
         const raw = sourceField === null ? undefined : data[sourceField];
         const missing = raw === undefined || raw === null || raw === '';
-        const value = missing ? null : type === 'timestamp' ? timestampOrNull(raw)
-          : type === 'number' ? numberOrNull(raw) : type === 'boolean' ? booleanOrNull(raw) : typeof raw === 'string' ? raw : null;
+        const value = missing ? null : type === 'timestamp' ? factualTimestamp(raw)
+          : type === 'number' ? factualNumber(raw) : type === 'boolean' ? booleanOrNull(raw) : typeof raw === 'string' ? raw : null;
         return [name, { value, state: missing ? 'UNKNOWN' : value === null ? 'INVALID' : 'RECORDED',
-          reason: sourceField === null ? 'UNAVAILABLE_IN_THIS_SOURCE' : missing ? 'SOURCE_NOT_RECORDED' : value === null ? 'INVALID_SOURCE_VALUE' : null, sourceField }];
+          reason: sourceField === null ? 'UNAVAILABLE_IN_THIS_SOURCE' : missing ? 'SOURCE_NOT_RECORDED' : value === null
+            ? type === 'timestamp' && typeof raw === 'string' && !/(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? 'SOURCE_TIMEZONE_MISSING' : 'SOURCE_TYPE_NOT_SUPPORTED'
+            : null, sourceField, sourceValue: rawScalar(raw) }];
       }));
       const linkField = intake ? 'contractId' : 'source_intake_id';
-      const link = stringOrNull(data[linkField]);
+      const link = typeof data[linkField] === 'string' && data[linkField].trim() ? data[linkField] : null;
       return {
         recordId: id,
         identityState: 'SOURCE_DOCUMENT_ID' as const,
-        link: { state: link ? 'RECORDED_UNVERIFIED' as const : 'UNLINKED' as const, targetId: link, sourceField: linkField },
+        link: { state: link ? 'RECORDED_UNVERIFIED' as const : 'UNLINKED' as const, targetId: link, sourceField: linkField,
+          basis: 'EXPLICIT_DOCUMENT_ID_ONLY' as const, reason: link ? 'TARGET_NOT_VERIFIED' : 'EXPLICIT_LINK_NOT_RECORDED',
+          otherRecordedIdentifier: rawScalar(data[intake ? 'contractNo' : 'contract_code']) },
         facts,
         provenance: { authority: intake ? 'FREEPASS_DATA_SETTLEMENT' : 'FREEPASS_ADMIN_APPLICATION_CONTRACT',
           collection: intake ? 'settlement_rows' : 'contract', documentId: id },

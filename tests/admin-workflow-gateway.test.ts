@@ -54,11 +54,22 @@ describe('Admin workflow consumer gateway', () => {
     });
     expect(current.completeness).toBe('DOCUMENT_READ');
     expect(current.records[0]).toMatchObject({ recordId: 'contract-id', link: { state: 'RECORDED_UNVERIFIED', targetId: 'intake-id' }, facts: {
-      contractStatus: { value: '계약대기' }, signStatus: { value: 'source-sign' }, termMonths: { value: null, state: 'INVALID' },
+      contractStatus: { value: '계약대기' }, signStatus: { value: 'source-sign' }, termMonths: { value: 48, state: 'RECORDED', sourceValue: '48' },
       responsibleCode: { value: 'agent' }, createdBy: { value: null, state: 'UNKNOWN', reason: 'UNAVAILABLE_IN_THIS_SOURCE' },
     } });
-    expect(current.records[0]!.facts.claimSupply).toEqual({ value: null, state: 'UNKNOWN', reason: 'UNAVAILABLE_IN_THIS_SOURCE', sourceField: null });
+    expect(current.records[0]!.facts.claimSupply).toMatchObject({ value: null, state: 'UNKNOWN', reason: 'UNAVAILABLE_IN_THIS_SOURCE', sourceField: null });
     expect(projectAdminWorkflowCurrentFacts({ kind: 'doc', resource: 'contracts', id: 'missing' }, { schema: 'freepass-data.admin-workflow-read/v1', digest: 'b'.repeat(64), docs: [] }).records).toEqual([]);
+  });
+  it('does not infer timezone, links from another identifier, or malformed numeric values', () => {
+    const result = { schema: 'freepass-data.admin-workflow-read/v1' as const, digest: 'c'.repeat(64), docs: [{ id: 'raw-id', data: {
+      createdAt: '2026-10-11 09:00:00', updatedAt: '2026-10-11T09:00:00+09:00', claimWritten: '1,200,000', payWritten: '1,20', contractNo: 'number-only',
+    } }] };
+    const p = projectAdminWorkflowCurrentFacts({ kind: 'doc', resource: 'settlementRows', id: 'raw-id' }, result).records[0]!;
+    expect(p.facts.createdAt).toMatchObject({ value: null, reason: 'SOURCE_TIMEZONE_MISSING' });
+    expect(p.facts.updatedAt!.value).toBe('2026-10-11T00:00:00.000Z');
+    expect(p.facts.claimSupply).toMatchObject({ value: 1200000, sourceValue: '1,200,000' });
+    expect(p.facts.paySupply).toMatchObject({ value: null, reason: 'SOURCE_TYPE_NOT_SUPPORTED', sourceValue: '1,20' });
+    expect(p.link).toMatchObject({ state: 'UNLINKED', basis: 'EXPLICIT_DOCUMENT_ID_ONLY', otherRecordedIdentifier: 'number-only' });
   });
   it('adds optional current facts without changing raw docs, zero, BT or source IDs', async () => {
     const data = { code: 'original', claimWritten: 0, payWritten: null, calculationBasis: '  basis\n ', updatedAt: 0, claimStage: 'source-stage' };
