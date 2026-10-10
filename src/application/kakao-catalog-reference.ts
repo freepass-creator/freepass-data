@@ -2,7 +2,7 @@ import { plateIdentityKey, isStrictKoreanPlate } from '../domain/vehicle-plate.j
 import { createHash } from 'node:crypto';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
 import { policyScalar } from './product-pricing-policy.js';
-import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 import { verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { chooseVehicleIdentity, indexVehicleMaster, type VehicleMasterReference } from '../domain/vehicle-identity-resolution.js';
 
@@ -235,12 +235,14 @@ const knownProductType = (source: string) => ({
 
 export function resolveReferenceDeposit(input: {
   note: unknown;
-  termMonths: number;
-  monthlyRent: number;
+  termMonths?: unknown;
+  monthlyRent?: unknown;
   sourceAmount: unknown;
   supplierId?: unknown;
   productType?: unknown;
   depositFree?: unknown;
+  depositFreeConfirmation?: unknown;
+  depositSourceWaiverBasis?: unknown;
   hasPositivePaidDeposit?: boolean;
 }) {
   const resolved = resolveDepositWithRuleNote(input);
@@ -258,6 +260,7 @@ export function resolveReferenceDeposit(input: {
     depositAmount: resolved.amount,
     depositState: 'KNOWN' as DepositState,
     depositRule: resolved.rule,
+    ...(resolved.depositRuleDifference ? { depositRuleDifference: resolved.depositRuleDifference } : {}),
   };
 }
 
@@ -601,16 +604,11 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       return amount !== null && amount > 0 ? [amount] : [];
     });
     const billin36MonthlyRent = basis36.length === 1 ? basis36[0] : undefined;
-    const depositInput = {
-      note: source.deposit_note,
+    const depositInput = depositEvidenceInputFromProduct(source, (raw as Rec).deposit, {
       termMonths: parsed.months,
       monthlyRent,
-      sourceAmount: (raw as Rec).deposit,
-      supplierId,
-      productType: source.product_type,
-      depositFree: source.deposit_free,
       hasPositivePaidDeposit: hasConflictingPaidDeposit(price),
-    };
+    });
     const publishedDeposit = supplierId === 'RP031' && source.iancar_phase_one
       ? readIancarPublishedDeposit(source, sourceKey, observedAt) : null;
     const deposit = publishedDeposit ? {
@@ -651,6 +649,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       monthlyRent: { amount: monthlyRent, currency: 'KRW' as const },
       deposit: deposit.depositAmount === null ? null : { amount: deposit.depositAmount, currency: 'KRW' as const },
       ...deposit,
+      ...('depositRuleDifference' in deposit && deposit.depositRuleDifference ? { depositRuleDifference: deposit.depositRuleDifference } : {}),
       depositEvidence,
       depositStatusLabel: depositStatusLabel(deposit.depositState, (raw as Rec).deposit, source.deposit_note),
       mileageLimitKmPerYear: parsed.mileageKm ?? null,

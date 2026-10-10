@@ -82,8 +82,9 @@ describe('shared reference policy context', () => {
   });
   it('searches confirmed zero without treating placeholders or mixed periods as all-free', () => {
     const base = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트' };
+    const sourceWaiver = { 원문: { 전체: { 장기보증: '무보증' } } };
     const reference = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-09T00:00:00Z', products: {
-      free: { ...base, deposit_note: '무보증', price: { '24': { rent: 600000, deposit: 0 }, '36': { rent: 500000, deposit: 0 } } },
+      free: { ...base, ...sourceWaiver, deposit_note: '무보증', price: { '24': { rent: 600000, deposit: 0 }, '36': { rent: 500000, deposit: 0 } } },
       unknown: { ...base, price: { '36': { rent: 500000, deposit: 0 } } },
       conflict: { ...base, deposit_note: '무보증', price: { '36': { rent: 500000, deposit: 100000 } } },
     } });
@@ -256,10 +257,11 @@ describe('Kakao catalog reference deposit facts', () => {
   });
 
   it('emits ZERO only for the explicit no-deposit rule', () => {
-    expect(resolveReferenceDeposit({ supplierId: 'RP004', productType: '중고렌트', note: '무보증', termMonths: 60, monthlyRent: 800000, sourceAmount: 0 })).toEqual({
+    const basis = { field: '원문.전체.장기보증', text: '무보증' } as const;
+    expect(resolveReferenceDeposit({ supplierId: 'RP004', productType: '중고렌트', note: '무보증', depositSourceWaiverBasis: basis, termMonths: 60, monthlyRent: 800000, sourceAmount: 0 })).toEqual({
       depositAmount: 0,
       depositState: 'ZERO',
-      depositRule: { code: 'ZERO_DEPOSIT', multiplier: 0, label: '무보증' },
+      depositRule: { code: 'ZERO_DEPOSIT', multiplier: 0, label: '무보증', depositEvidenceBasis: basis },
     });
     expect(resolveReferenceDeposit({ note: '', termMonths: 60, monthlyRent: 800000, sourceAmount: 0 }).depositState).toBe('UNKNOWN');
     expect(resolveReferenceDeposit({ note: '새 규칙', termMonths: 60, monthlyRent: 800000, sourceAmount: 0 }).depositState).toBe('UNKNOWN');

@@ -97,8 +97,7 @@ Canonical ACTIVE release가 비어 있는 동안 Kakao가 운영 의미를 임�
 이 응답으로 조용히 대체하지 않는다.
 
 - 기간별 `depositAmount`, `depositState`, `depositRule`을 FreePass Data에서 결정한다.
-- `ZERO`는 원문 비고가 `무보증`일 때만 사용한다. 규칙이 있는데 원천 숫자가 0인 값은 규칙으로
-  계산하고, 비고가 없으면서 원천 숫자가 0인 값은 `UNKNOWN`이다.
+- `ZERO`는 원문 비고가 `무보증`이거나 `deposit_free_confirmation.source`와 ISO `at`이 있는 공급사 확인 답변이 있을 때만 사용한다. `deposit_free` true/`예` 단독, 규칙이 있는데 원천 숫자가 0인 값, 비고가 없으면서 원천 숫자가 0인 값은 `UNKNOWN`이다. 규칙 금액은 별도 규칙으로 계산한다.
 - ERP5 `products.ext_color`는 `vehicle.exteriorColor`로 전달한다.
 - ERP4 `lib/domain/settlement-fee-table.ts`를 코드 정본으로, F04 정산원장 `수수료표!A:J`를
   게시 사본으로 고정했다. 2026-09-28 실조회 150개 규칙 중 자동산출 122행·사람판단 28행을
