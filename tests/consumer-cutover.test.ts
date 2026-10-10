@@ -251,6 +251,39 @@ describe('consumer cutover registry', () => {
     expect(source).toEqual(before);
   });
 
+  it('keeps compatibility evidence output free of fee and commission keys for public-shaped product fields', () => {
+    const source = {
+      maker: 'synthetic maker',
+      model: 'synthetic model',
+      provider_company_code: 'RP004',
+      product_type: '중고렌트',
+      policy_code: 'POLICY-1',
+      deposit_note: '무보증',
+      price: {
+        '12': { rent: 500000, deposit: 0 },
+        '24': { rent: 400000, deposit: 1000000 },
+      },
+    };
+    const responseProduct = withCompatibilityDepositEvidence(source);
+    // Internal value blocking is owned by the public product-response allow-list schema PR.
+    const keys: string[] = [];
+    const collectKeys = (value: unknown) => {
+      if (!value || typeof value !== 'object') return;
+      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+        keys.push(key);
+        collectKeys(child);
+      }
+    };
+    collectKeys(responseProduct);
+    expect(keys.filter(key => /fee|commission/i.test(key))).toEqual([]);
+    expect(responseProduct).toMatchObject({ maker: 'synthetic maker', model: 'synthetic model', policy_code: 'POLICY-1' });
+    expect(responseProduct.price).toMatchObject({
+      '12': { rent: 500000 },
+      '24': { rent: 400000 },
+    });
+  });
+
+
   it('requires deposit state in the existing consumer price-term contract after a legacy-shape read', () => {
     const ajv = new Ajv2020({ strict: false });
     ajv.addSchema(catalogSchema);

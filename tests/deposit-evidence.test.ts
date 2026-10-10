@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { assessDepositEvidence, auditDepositEvidence, depositFromYearsRuleNote, depositStatusLabel } from '../src/domain/deposit-evidence.js';
+import { assessDepositEvidence, auditDepositEvidence, depositFromYearsRuleNote, depositStatusLabel, resolveDepositByRuleNote } from '../src/domain/deposit-evidence.js';
 import { buildKakaoCatalogReferenceProduct, resolveReferenceDeposit } from '../src/application/kakao-catalog-reference.js';
 import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
+import { mapErp5Product } from '../src/adapters/erp5-product-mapping.js';
 
 describe('deposit evidence never promotes a placeholder to waiver', () => {
   it('compatibility derives per-rate state without changing storage or unrelated fields', () => {
@@ -102,5 +103,122 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     expect(depositFromYearsRuleNote(undefined, 24, 1000000)).toBeNull();
     // the placeholder 0 itself stays UNKNOWN in the evidence layer (derivation is a separate, explicit step)
     expect(assessDepositEvidence({ supplierId: 'RP012', productType: '픽업구독', note, sourceAmount: 0 }).state).toBe('UNKNOWN');
+  });
+
+  it.each(['픽업구독', '오공구독'])('compatibility derives RP012 %s deposits from the shared supplier years rule note', productType => {
+    const product = { provider_company_code: 'RP012', product_type: productType, deposit_note: '월 대여료 × 약정연수 (최대 3개월)',
+      price: Object.fromEntries([12, 24, 36, 48, 60].map(months => [String(months), { rent: 100000, deposit: 0 }])) };
+    const result = withCompatibilityDepositEvidence(product).price as Record<string, Record<string, unknown>>;
+    expect([12, 24, 36, 48, 60].map(months => [months, result[String(months)]!.deposit, result[String(months)]!.depositState, result[String(months)]!.depositEvidenceReason]))
+      .toEqual([
+        [12, 100000, 'KNOWN', 'SUPPLIER_RULE_NOTE:RENT_X_CONTRACT_YEARS_MAX3'],
+        [24, 200000, 'KNOWN', 'SUPPLIER_RULE_NOTE:RENT_X_CONTRACT_YEARS_MAX3'],
+        [36, 300000, 'KNOWN', 'SUPPLIER_RULE_NOTE:RENT_X_CONTRACT_YEARS_MAX3'],
+        [48, 300000, 'KNOWN', 'SUPPLIER_RULE_NOTE:RENT_X_CONTRACT_YEARS_MAX3'],
+        [60, 300000, 'KNOWN', 'SUPPLIER_RULE_NOTE:RENT_X_CONTRACT_YEARS_MAX3'],
+      ]);
+  });
+
+  it.each(['중고렌트 ', ' 중고렌트', '재렌트'])('keeps RP012 used-rent whitespace variants out of rule derivation: %s', productType => {
+    const row = (withCompatibilityDepositEvidence({ provider_company_code: ' RP012 ', product_type: productType, deposit_note: '국산: 월 대여료×2',
+      price: { '24': { rent: 800000, deposit: 0 } } }).price as Record<string, Record<string, unknown>>)['24']!;
+    expect(row).toMatchObject({ deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY' });
+  });
+
+  it('keeps uncovered import terms UNKNOWN instead of applying the 12-month multiplier broadly', () => {
+    const note = '수입: 12개월 대여료×3 · 18개월↑ ×6';
+    expect([6, 12, 15, 17, 18, 24, 36].map(termMonths => {
+      const rule = resolveDepositByRuleNote({ note, termMonths, monthlyRent: 1000000 });
+      return rule.state === 'KNOWN' ? [termMonths, rule.multiplier, rule.amount] : [termMonths, rule.state, rule.reason];
+    })).toEqual([
+      [6, 'UNKNOWN', 'TERM_NOT_COVERED_BY_RULE'],
+      [12, 3, 3000000],
+      [15, 'UNKNOWN', 'TERM_NOT_COVERED_BY_RULE'],
+      [17, 'UNKNOWN', 'TERM_NOT_COVERED_BY_RULE'],
+      [18, 6, 6000000],
+      [24, 6, 6000000],
+      [36, 6, 6000000],
+    ]);
+  });
+
+  it('keeps the compatibility guide paths unchanged for non-RP012 rules, missing evidence, waivers, and Iancar', () => {
+    const rent = 123456;
+    const compat = (withCompatibilityDepositEvidence({ provider_company_code: 'RP023', product_type: '오플구독', deposit_note: '국산: 월 대여료×2',
+      price: { '24': { rent, deposit: 0 } } }).price as Record<string, Record<string, unknown>>)['24']!;
+    const reference = resolveReferenceDeposit({ supplierId: 'RP023', productType: '오플구독', note: '국산: 월 대여료×2', termMonths: 24, monthlyRent: rent, sourceAmount: 0 });
+    const rule = resolveDepositByRuleNote({ note: '국산: 월 대여료×2', termMonths: 24, monthlyRent: rent });
+    expect(rule).toMatchObject({ state: 'KNOWN', multiplier: 2 });
+    expect(compat).toMatchObject({ deposit: reference.depositAmount, depositState: reference.depositState });
+    expect(compat.depositEvidenceReason).toBe(`SUPPLIER_RULE_NOTE:${reference.depositRule!.code}`);
+
+    const zero = withCompatibilityDepositEvidence({ provider_company_code: 'RP004', product_type: '중고렌트', deposit_note: '무보증',
+      price: { '12': { rent: 100000, deposit: 0 } } }).price as Record<string, Record<string, unknown>>;
+    expect(zero['12']).toMatchObject({ deposit: 0, depositState: 'ZERO', depositEvidenceReason: 'EXPLICIT_ZERO_DEPOSIT' });
+    const iancar = withCompatibilityDepositEvidence({ provider_company_code: 'RP031', product_type: '중고렌트', deposit_note: '국산: 월 대여료×2',
+      price: { '12': { rent: 100000, deposit: 0 } } }).price as Record<string, Record<string, unknown>>;
+    expect(iancar['12']).toMatchObject({ deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' });
+  });
+
+  it('keeps guide and compatibility equivalent, while mapper only shares the narrow RP012 subscription years-rule scope', () => {
+    const cases = [
+      { productType: '픽업구독', note: '월 대여료 × 약정연수 (최대 3개월)', termMonths: 12, sourceAmount: 0, state: 'KNOWN', amount: 100000 },
+      { productType: '오공구독', note: '국산: 월 대여료×2', termMonths: 24, sourceAmount: '0', state: 'KNOWN', amount: 200000 },
+      { productType: '오공구독', note: '수입: 12개월 대여료×3 · 18개월↑ ×6', termMonths: 15, sourceAmount: 0, state: 'UNKNOWN', amount: null },
+      { productType: '중고렌트', note: '국산: 월 대여료×2', termMonths: 24, sourceAmount: 0, state: 'UNKNOWN', amount: null },
+      { productType: '픽업구독', note: '무보증', termMonths: 12, sourceAmount: 0, state: 'UNKNOWN', amount: null },
+      { productType: '픽업구독', note: '', termMonths: 12, sourceAmount: 500000, state: 'KNOWN', amount: 500000 },
+    ] as const;
+    for (const c of cases) {
+      const reference = resolveReferenceDeposit({ supplierId: 'RP012', productType: c.productType, note: c.note,
+        termMonths: c.termMonths, monthlyRent: 100000, sourceAmount: c.sourceAmount });
+      const compat = (withCompatibilityDepositEvidence({ provider_company_code: 'RP012', product_type: c.productType, deposit_note: c.note,
+        price: { [String(c.termMonths)]: { rent: 100000, deposit: c.sourceAmount } } }).price as Record<string, Record<string, unknown>>)[String(c.termMonths)]!;
+      const mapped = mapErp5Product({ projectId: 'freepasserp5', collection: 'products', documentId: `p-${c.termMonths}-${c.productType}`,
+        sourceRevision: 'r', observedAt: '2026-10-10T00:00:00.000Z',
+        data: { car_number: '000가0000', maker: '제조사', model: '모델', provider_company_code: 'RP012',
+          product_type: c.productType, vehicle_status: '출고가능', status_kind: '가용', listable: true,
+          deposit_note: c.note, price: { [String(c.termMonths)]: { rent: 100000, deposit: c.sourceAmount } } } });
+      const term = mapped.candidate.priceTerms[0]!;
+      expect([reference.depositState, reference.depositAmount]).toEqual([c.state, c.amount]);
+      expect([compat.depositState, compat.deposit]).toEqual([c.state, c.amount]);
+      const mapperExpected = c.note.includes('2') && c.sourceAmount === '0' ? ['UNKNOWN', null] : [c.state, c.amount];
+      expect([term.depositState, term.deposit?.amount ?? null]).toEqual(mapperExpected);
+    }
+  });
+
+  it('keeps reference and compatibility equivalent across all forms, with mapper UNKNOWN outside its intentional narrow scope', () => {
+    const productTypes = ['픽업구독', '오공구독', '오플구독', '중고렌트', '재렌트', '신차렌트'];
+    const notes = ['월 대여료 × 약정연수 (최대 3개월)', '국산: 월 대여료×2', '수입: 12개월 대여료×3 · 18개월↑ ×6', ''];
+    const terms = [6, 12, 15, 17, 18, 24, 36];
+    const sourceAmounts: unknown[] = [0, '0', undefined, null, '', 500000];
+    const rents: unknown[] = [100000, '100000'];
+    const stateAmount = (state: unknown, amount: unknown) => [state, amount ?? null];
+    for (const productType of productTypes) for (const note of notes) for (const termMonths of terms) {
+      for (const sourceAmount of sourceAmounts) for (const rent of rents) {
+        const priceKey = String(termMonths);
+        const sourceRow = sourceAmount === undefined ? { rent } : { rent, deposit: sourceAmount };
+        const base = { supplierId: 'RP012', productType, note, termMonths, monthlyRent: 100000, sourceAmount };
+        const reference = resolveReferenceDeposit(base);
+        const compat = (withCompatibilityDepositEvidence({ provider_company_code: 'RP012', product_type: productType,
+          deposit_note: note, price: { [priceKey]: sourceRow } }).price as Record<string, Record<string, unknown>>)[priceKey]!;
+        const mapped = mapErp5Product({ projectId: 'freepasserp5', collection: 'products',
+          documentId: `p-${productType}-${note || 'none'}-${termMonths}-${String(sourceAmount)}-${String(rent)}`.replace(/[^\w.-]/g, '_'),
+          sourceRevision: 'r', observedAt: '2026-10-10T00:00:00.000Z',
+          data: { car_number: '000가0000', maker: '제조사', model: '모델', provider_company_code: 'RP012',
+            product_type: productType, vehicle_status: '출고가능', status_kind: '가용', listable: true,
+            deposit_note: note, price: { [priceKey]: sourceRow } } });
+        const term = mapped.candidate.priceTerms[0]!;
+        expect(stateAmount(compat.depositState, compat.deposit), `${productType}/${note}/${termMonths}/${String(sourceAmount)}/${String(rent)}`)
+          .toEqual(stateAmount(reference.depositState, reference.depositAmount));
+        const mapperInScope = !/렌트|신차/.test(productType) && note === notes[0] && (sourceAmount === 0 || sourceAmount === '0');
+        const mapperExpected = mapperInScope || sourceAmount === 500000
+          ? stateAmount(reference.depositState, reference.depositAmount)
+          : ['UNKNOWN', null];
+        // Mapper intentionally remains UNKNOWN outside RP012 subscription exact-zero years-rule scope.
+        expect(stateAmount(term.depositState, term.deposit?.amount), `${productType}/${note}/${termMonths}/${String(sourceAmount)}/${String(rent)}`)
+          .toEqual(mapperExpected);
+        expect(compat.rent).toBe(rent);
+      }
+    }
   });
 });

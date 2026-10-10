@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
-import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
-import { readIancarPublishedDeposit } from '../domain/deposit-evidence.js';
+import { depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 
 type Rec = Record<string, unknown>;
 
@@ -79,10 +78,11 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
   return { ...product, price: Object.fromEntries(Object.entries(price).map(([key, value]) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return [key, value];
     const row = value as Rec;
+    const parsed = parseErp5CompatibilityPriceKey(key);
     const evidence = product.provider_company_code === 'RP031' ? readIancarPublishedDeposit(product, key, now)
-      : assessDepositEvidence({ supplierId: product.provider_company_code, productType: product.product_type,
+      : resolveDepositWithRuleNote({ supplierId: product.provider_company_code, productType: product.product_type,
       note: product.deposit_note, depositFree: product.deposit_free, sourceAmount: row.deposit,
-      hasPositivePaidDeposit: paid });
+      termMonths: parsed?.months, monthlyRent: normalizeErp5CompatibilityInteger(row.rent), hasPositivePaidDeposit: paid });
     return [key, { ...row, deposit: evidence.amount, depositState: evidence.state,
       depositStatusLabel: depositStatusLabel(evidence.state, row.deposit, product.deposit_note),
       depositEvidenceReason: evidence.reason }];

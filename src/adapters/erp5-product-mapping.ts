@@ -1,7 +1,7 @@
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import { assessDepositEvidence, depositFromYearsRuleNote, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
+import { hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, resolveDepositWithRuleNote, type Erp5CompatibilityPriceKey } from '../domain/deposit-evidence.js';
 import { resolveErp5InventoryStatus } from '../domain/erp5-inventory-status.js';
 import { isStrictKoreanPlate } from '../domain/vehicle-plate.js';
 
@@ -80,23 +80,8 @@ export function resolveErp5Mileage(
  * 인수형은 그것을 운영하는 회사의 «별도 상품»이므로 기간 축과 섞지 않고 따로 표시한다.
  */
 export function parseErp5PriceKey(key: string):
-  { months: number; mileageKm?: number; contractedMileage?: { km: number; period: 'month' | 'year' }; settlement: 'RETURN' | 'BUYOUT' } | undefined {
-  const explicit = /^([1-9]\d*)_(\uc6d4|\uc5f0)([1-9]\d*)km$/.exec(key);
-  if (explicit) {
-    const months = Number(explicit[1]), km = Number(explicit[3]);
-    if (!Number.isSafeInteger(months) || months > 60 || !Number.isSafeInteger(km)) return undefined;
-    const period = explicit[2] === '\uc6d4' ? 'month' as const : 'year' as const;
-    return { months, settlement: 'RETURN', contractedMileage: { km, period }, ...(period === 'year' ? { mileageKm: km } : {}) };
-  }
-  const buyout = /^([1-9]\d*)_인수형$/.exec(key);
-  if (buyout) return { months: Number(buyout[1]), settlement: 'BUYOUT' };
-  const parsed = /^([1-9]\d*)(?:_([1-9]\d*)만)?$/.exec(key);
-  if (!parsed) return undefined;
-  const months = Number(parsed[1]);
-  if (!Number.isSafeInteger(months) || months <= 0) return undefined;
-  if (!parsed[2]) return { months, settlement: 'RETURN' };
-  const km = Number(parsed[2]) * 10000;
-  return Number.isSafeInteger(km) ? { months, mileageKm: km, settlement: 'RETURN' } : undefined;
+  Erp5CompatibilityPriceKey | undefined {
+  return parseErp5CompatibilityPriceKey(key);
 }
 export const ERP5_PRODUCT_SOURCE = 'freepasserp5/firestore/products';
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -258,18 +243,13 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     }
     const privateTerms = ['fee', 'commission', 'fee_memo'].filter(k => has(terms, k) && present(terms[k]));
     if (privateTerms.length) issue('PRIVATE_PRICE_TERMS_REVIEW_REQUIRED');
-    const depositEvidence = assessDepositEvidence({ supplierId: d.provider_company_code, productType: d.product_type,
-      note: d.deposit_note, depositFree: d.deposit_free, sourceAmount: terms.deposit,
+    const depositEvidence = resolveDepositWithRuleNote({ supplierId: d.provider_company_code, productType: d.product_type,
+      note: d.deposit_note, depositFree: d.deposit_free, sourceAmount: terms.deposit, termMonths: months, monthlyRent: amount,
+      ruleScope: 'RP012_SUBSCRIPTION_EXACT_ZERO_YEARS_RULE',
       hasPositivePaidDeposit: hasConflictingPaidDeposit(d.price) });
-    // RP012 구독의 입력 보증금 0 은 자리표시자다 — 공급사 자기 규칙 메모(월 대여료 × 약정연수, 최대 3개월)로 읽을 때 계산한다(쓰지 않음).
-    // 원문 보증금이 «정확히 0»(숫자 0 또는 글자 '0')일 때만 — 칸 없음·null·빈 문자열·잘못된 값은 자리표시자가 아니라 누락이므로 UNKNOWN 유지.
-    const placeholderZero = terms.deposit === 0 || terms.deposit === '0';
-    const ruleDerived = placeholderZero && depositEvidence.state === 'UNKNOWN' && ['ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY', 'DEPOSIT_RULE_REQUIRES_RESOLUTION'].includes(depositEvidence.reason)
-      && String(d.provider_company_code ?? '').trim() === 'RP012' && /구독/.test(String(d.product_type ?? ''))
-      ? depositFromYearsRuleNote(d.deposit_note, months, amount) : null;
-    const depositAmount = complex.length || privateTerms.length || (depositEvidence.state === 'UNKNOWN' && !ruleDerived)
-      ? undefined : ruleDerived ? ruleDerived.amount : depositEvidence.amount ?? undefined;
-    if (depositEvidence.state === 'UNKNOWN' && !ruleDerived) issue(depositEvidence.reason);
+    const depositAmount = complex.length || privateTerms.length || depositEvidence.state === 'UNKNOWN'
+      ? undefined : depositEvidence.amount;
+    if (depositEvidence.state === 'UNKNOWN') issue(depositEvidence.reason);
     if (depositAmount === undefined) issue('UNKNOWN_DEPOSIT');
     // 기본값으로 떨어진 주행거리는 원천이 말한 값이 아니다. 지우지 말고 검토 표시를 남긴다.
     if (mileage.source === 'DEFAULT') issue('MILEAGE_FROM_COMPANY_DEFAULT');
