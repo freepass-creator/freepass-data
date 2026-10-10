@@ -1273,6 +1273,52 @@ it('keeps contract fee links internal to Admin identity and rejects bad auth', a
   await app.close();
 });
 
+describe('authenticated exact reference product ID', () => {
+  it.each([false, true])('uses the existing route and schema (internal=%s) without widening grants', async internal => {
+    const consumerId = internal ? 'internal-ai-query-test' : 'kakao-ops';
+    const endpoint = `/v1/consumers/${consumerId}/${internal ? 'internal-ai-reference' : 'catalog-reference'}`;
+    const source = { consumerId, observedAt: '2026-10-11T00:00:00Z', products: {
+      a: { listable: true, provider_company_code: 'RP013', provider_name: 'Synthetic Supplier', car_number: '123가4567', price: { '36': { rent: 500000, deposit: 1000000 }, '48': { rent: 400000, deposit: null } } },
+      hidden: { listable: false, provider_company_code: 'RP013', provider_name: 'Synthetic Supplier', car_number: '123나4567', price: {} },
+    } };
+    const readSource = vi.fn(async () => source);
+    const reader = { read: async () => { throw new Error('unused'); }, readKakaoReferenceSource: readSource, readInternalAiReferenceSource: readSource };
+    const registration: ConsumerBinding = { id: consumerId, projectionId: 'erp-public', token, capabilities: [internal ? 'internal-ai-reference' : 'catalog-reference'] };
+    const { app } = withAccess(new MemoryDataStore(), [registration], undefined, reader);
+    try {
+      expect((await app.inject({ url: endpoint + '?productId=reference_a', headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+      expect(readSource).not.toHaveBeenCalled();
+      const all = (await app.inject({ url: endpoint, headers })).json();
+      const exact = await app.inject({ url: endpoint + '?' + new URLSearchParams({ productId: 'reference_a', supplierId: 'RP013', supplierName: 'Synthetic Supplier', plateNumber: '123가4567', termMonths: '36' }), headers });
+      expect(exact.statusCode).toBe(200);
+      expect(exact.json().data).toEqual(all.data);
+      expect(exact.json().data[0].offers[0].priceTerms).toHaveLength(2);
+      expect(exact.json().meta).toMatchObject({ authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD', queryResolution: { state: 'MATCHED', matchedProductCount: 1 } });
+      for (const id of ['reference_missing', 'a', 'RP013', '123가4567']) {
+        const empty = await app.inject({ url: endpoint + '?' + new URLSearchParams({ productId: id }), headers });
+        expect(empty.statusCode).toBe(200); expect(empty.json().data).toEqual([]);
+        expect(empty.json().meta.queryResolution.state).toBe('NO_MATCH');
+      }
+      const conflict = await app.inject({ url: endpoint + '?productId=reference_a&plateNumber=123나4567', headers });
+      expect(conflict.statusCode).toBe(200);
+      expect(conflict.json().meta.queryResolution).toMatchObject({ state: 'HOLD', reasonCode: 'PRODUCT_ID_IDENTITY_CONFLICT' });
+      for (const q of ['productId=', 'productId=%20reference_a', 'productId=reference_a&productId=reference_hidden'])
+        expect((await app.inject({ url: endpoint + '?' + q, headers })).statusCode).toBe(400);
+      readSource.mockClear();
+      expect((await app.inject({ url: endpoint + '?sourceScope=COLLECTED&productId=reference_hidden', headers })).statusCode).toBe(403);
+      expect(readSource).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+    const { app: granted } = withAccess(new MemoryDataStore(), [{ ...registration, referenceSourceScopes: ['COLLECTED'] }], undefined, reader);
+    try {
+      const hidden = await granted.inject({ url: endpoint + '?sourceScope=COLLECTED&productId=reference_hidden', headers });
+      expect(hidden.statusCode).toBe(200);
+      expect(hidden.json().data).toHaveLength(1);
+      expect(hidden.json().data[0].sourceRecord).toMatchObject({ listable: false, conditionState: 'HOLD' });
+      expect(hidden.json().data[0].offers[0].priceTerms).toEqual([]);
+    } finally { await granted.close(); }
+  });
+});
+
 describe('authenticated collected source scope', () => {
   it.each(['kakao-ops', 'internal-ai-fixture'])('requires explicit %s scope grant before source reads and keeps default scope unchanged', async consumerId => {
     const internal = consumerId.startsWith('internal-ai-');

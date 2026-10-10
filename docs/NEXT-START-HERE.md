@@ -529,6 +529,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 reference productId 정확 단건 조회 — 코드 통합 / 운영 별도
+
+- 목적/기준 revision: `c45ba9829ea1b61bcd25ff4280acf4e014f261c6`. 기존 catalog-reference/internal-ai-reference 필터·typed 계약·queryResolution·회귀만 확장한다. Academy development READY / reuse COMPOSE_OR_EXTEND, 새 reader/모듈/정본 없음. 접수 PR445의 admin gateway 수정은 건드리지 않는다.
+- 변경: 응답의 완전한 `productId` 문자열만 정확 일치한다. 원천 ID·차량번호·공급사/RP 코드·external ID를 대체 키로 추정하지 않는다. 미존재는 빈 목록/NO_MATCH, 중복은 다른 조건으로 좁혀도 HOLD, 공급사·차량번호 identity 충돌은 빈 목록/HOLD. 기간조건 미일치는 NO_MATCH이며 모든 형제 오퍼/기간행과 원문 상태는 보존한다. 기존 인증과 COLLECTED grant 차단 유지.
+- 현재 운영 분모(2026-10-11 07:12~07:13 KST 읽기): 원천 products 문서 1,776 / LISTABLE 응답 475 / 정상 상태 필터 제외 1,301, ID별 누락·불필요 포함 0, 원천 가격맵 없음 52 / 가격행 15,054 / 응답 조건 5,193. 전체 응답 로컬 대조에서 차량번호 유일 매칭 475이며 개별 HTTP475회 검증은 아니다. COLLECTED는 배포됐으나 grant=false·HTTP403, 기존 운영 productId query HTTP400. 전체 REFERENCE_ONLY/HOLD이며 공급사 전체 재고 분모나 실제 원천 freshness 증거가 아니다.
+- 검증: 관련 219 PASS, 전체 maxWorkers=2 Vitest 2,138 PASS / 조건부 16 SKIP, build·architecture·Data Access boundary PASS, standards 33개 schema/15 PASS(기존 PARTIAL), 로컬 read-runtime smoke 13 PASS. 정확 일치·외부코드/부분 ID 비추정·입력 불변·중복/충돌 HOLD·기간 미일치·형제행 보존, 두 HTTP 경로의 계약·인증 전 reader 차단·unknown 빈 응답·COLLECTED 미grant403/명시 grant의 missing 조건 HOLD 회귀를 포함한다. 현재 읽기 전용 응답을 새 로컬 필터에 넣어 LISTABLE475/475·로컬 COLLECTED1776/1776 ID 정확 매칭 및 전체 row/형제행 손실0·invalid ID0을 확인했다. 전체 projector는 운영 응답의 기존 F04 정본 연결을 메모리에서 재사용했으며 로컬 환경 누락을 운영 장애로 세지 않는다. 이는 새 HTTP 운영 배포/전건 실조회 증거가 아니다. 최종 exact head·Claude·CI는 이 작업 PR 통합 영수증에 고정한다.
+- 남음/next_start_here: 코드 main 통합 이후 별도 승인 배포와 productId HTTP 전건 검증이 필요하다. COLLECTED 권한 확대, 실제 Kakao 소비자 연결, 사진 실측/reader 연결, RAW apply, Canonical/ACTIVE와 접수/계약 상태 연결은 별도 작업이다. DB·IAM·Secret·배포·외부 저장소 변경 없음. 현재 운영 `c2ccd609` / `00024-w6g`와 코드 main을 혼동하지 않는다.
+
 ### 2026-10-11 private read 배포 — 기존 권한 유지 / 별도 cutover 없음
 
 - 목적/승인: 사용자 `ㄱㄱ`로 최신 private read 서비스 배포만 승인했다. Academy operations/document READY. 코드 정본 `c2ccd609915449f1d6c6854bf7639011f03e1717`, 기존 운영 `050e382` / `freepass-data-read-00023-fhl`을 복원 기준으로 보존한다. 원래 dirty 문서는 수정하지 않고 별도 인계 worktree에서 기록한다.
