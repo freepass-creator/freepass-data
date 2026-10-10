@@ -5,6 +5,8 @@
 - HTTP update: `POST /v1/consumers/freepass-admin-catalog/contract-fee-links` added with `contract-fee-link-read`, request/response schema, Admin-only auth/capability/audit, max 500 items, duplicate key 400, invalid shape 400, per-item lookup failure.
 - Verification update: `npm.cmd exec vitest -- run tests/consumer-gateway.test.ts tests/contract-fee-link.test.ts` PASS(43), `npm.cmd run build` PASS, `npm.cmd run check:arch` PASS, `npm.cmd run check:standards` PASS(exit 0, profile PARTIAL), `npm.cmd run check:data-access-boundary` PASS.
 
+## 2026-10-10 차량 UID 설계서 추가: `docs/VEHICLE-UID.md`에 기존 asset UID 승격, 신규 ULID, `externalIds[]`, 이전 단계와 HOLD 질문을 문서화했다.
+
 ## 2026-10-10 보증금 ZERO 근거 축소 / deposit_free 확인 기록
 
 - 목적: 대표 확정 규칙에 맞춰 보증금 상태를 `KNOWN / ZERO / UNKNOWN / NOT_APPLICABLE` 하나로 두고, ZERO는 공급사 원문 `deposit_note === '무보증'` 또는 `deposit_free_confirmation.source`와 ISO `at`이 있는 확인 답변으로만 좁혔다.
