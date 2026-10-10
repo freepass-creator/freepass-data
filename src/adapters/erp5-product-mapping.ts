@@ -1,7 +1,7 @@
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { CommercialType } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import { hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, resolveDepositWithRuleNote, type Erp5CompatibilityPriceKey } from '../domain/deposit-evidence.js';
+import { depositEvidenceInputFromProduct, hasConflictingPaidDeposit, parseErp5CompatibilityPriceKey, resolveDepositWithRuleNote, type Erp5CompatibilityPriceKey } from '../domain/deposit-evidence.js';
 import { resolveErp5InventoryStatus } from '../domain/erp5-inventory-status.js';
 import { isStrictKoreanPlate } from '../domain/vehicle-plate.js';
 
@@ -243,10 +243,9 @@ export function mapErp5Product(input: unknown, context: Erp5MappingContext = {})
     }
     const privateTerms = ['fee', 'commission', 'fee_memo'].filter(k => has(terms, k) && present(terms[k]));
     if (privateTerms.length) issue('PRIVATE_PRICE_TERMS_REVIEW_REQUIRED');
-    const depositEvidence = resolveDepositWithRuleNote({ supplierId: d.provider_company_code, productType: d.product_type,
-      note: d.deposit_note, depositFree: d.deposit_free, sourceAmount: terms.deposit, termMonths: months, monthlyRent: amount,
+    const depositEvidence = resolveDepositWithRuleNote(depositEvidenceInputFromProduct(d, terms.deposit, { termMonths: months, monthlyRent: amount,
       ruleScope: 'RP012_SUBSCRIPTION_EXACT_ZERO_YEARS_RULE',
-      hasPositivePaidDeposit: hasConflictingPaidDeposit(d.price) });
+      hasPositivePaidDeposit: hasConflictingPaidDeposit(d.price) }));
     const depositAmount = complex.length || privateTerms.length || depositEvidence.state === 'UNKNOWN'
       ? undefined : depositEvidence.amount;
     if (depositEvidence.state === 'UNKNOWN') issue(depositEvidence.reason);

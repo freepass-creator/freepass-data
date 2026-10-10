@@ -103,7 +103,18 @@
               "properties": {
                 "code": { "enum": ["RENT_X_CONTRACT_YEARS_MAX3", "RENT_X_2", "IMPORT_12_X3_18_PLUS_X6", "ZERO_DEPOSIT", "SOURCE_AMOUNT", "IANCAR_PUBLISHED_CONDITION_EVIDENCE"] },
                 "multiplier": { "type": ["integer", "null"], "minimum": 0 },
-                "label": { "type": "string", "minLength": 1 }
+                "label": { "type": "string", "minLength": 1 },
+                "depositEvidenceBasis": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["field", "text"],
+                  "properties": {
+                    "field": { "enum": ["원문.전체.장기보증", "원문.전체.단기보증", "deposit_free_confirmation"] },
+                    "text": { "const": "무보증" },
+                    "source": { "type": "string", "minLength": 1 },
+                    "at": { "type": "string", "format": "date-time" }
+                  }
+                }
               }
             }
           ]

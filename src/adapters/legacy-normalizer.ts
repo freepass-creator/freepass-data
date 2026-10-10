@@ -2,7 +2,7 @@ import type { CommercialType, DepositState, Money, PriceTerm } from '../domain/c
 import type { LegacyProductRaw } from './legacy-freepasserp3.js';
 
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
-import { assessDepositEvidence, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
+import { assessDepositEvidence, depositEvidenceInputFromProduct, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
 
 export type LegacyCatalogCandidate = CatalogCandidate;
 
@@ -68,9 +68,8 @@ function parsePriceTerms(data: Record<string, unknown>, issues: string[]): Price
       continue;
     }
 
-    const evidence = assessDepositEvidence({ supplierId: data.provider_company_code, productType: data.product_type,
-      note: data.deposit_note, depositFree: data.deposit_free, sourceAmount: terms.deposit,
-      hasPositivePaidDeposit: hasConflictingPaidDeposit(price) });
+    const evidence = assessDepositEvidence(depositEvidenceInputFromProduct(data, terms.deposit, {
+      hasPositivePaidDeposit: hasConflictingPaidDeposit(price) }));
     if (evidence.state === 'UNKNOWN') issues.push(`DEPOSIT_REVIEW_REQUIRED:${sourceKey}:${evidence.reason}`);
     const deposit: { deposit: Money | null; depositState: DepositState } = {
       depositState: evidence.state,

@@ -241,6 +241,7 @@ describe('consumer cutover registry', () => {
 
   it('preserves term-local missing versus confirmed zero evidence at the compatibility boundary', () => {
     const source = { provider_company_code: 'RP004', product_type: '중고렌트', deposit_note: '무보증',
+      원문: { 전체: { 장기보증: '무보증' } },
       price: { '12': { rent: 500000, deposit: 0 }, '24': { rent: 400000, deposit: null, depositState: 'ZERO' } } };
     const before = structuredClone(source);
     const result = withCompatibilityDepositEvidence(source);

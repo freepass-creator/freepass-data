@@ -1,5 +1,13 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 보증금 ZERO 근거 축소 / deposit_free 확인 기록
+
+- 목적: 대표 확정 규칙에 맞춰 보증금 상태를 `KNOWN / ZERO / UNKNOWN / NOT_APPLICABLE` 하나로 두고, ZERO는 공급사 원문 `deposit_note === '무보증'` 또는 `deposit_free_confirmation.source`와 ISO `at`이 있는 확인 답변으로만 좁혔다.
+- 변경: `assessDepositEvidence` 입력에 `depositFreeConfirmation`을 추가하고, `deposit_free` true/`예` 단독은 `DEPOSIT_FREE_FLAG_UNVERIFIED` UNKNOWN으로 처리한다. 카카오 참조, ERP5 매핑, ERP5 compat reader, legacy/shared normalizer, 보증금 감사는 `depositEvidenceInputFromProduct` 공통 어댑터로 `product.deposit_free_confirmation`을 전달한다.
+- 검증: 관련 vitest에서 원문 `무보증` ZERO, flag 단독 UNKNOWN, 유효 확인 기록 ZERO, source 공백/at 형식 오류 UNKNOWN, `0원`·빈칸·자리표시자 0 UNKNOWN, compat/안내/매핑 경로 동치 케이스를 추가했다.
+- 남음: 커밋·push 없음. 운영 배포/소비처 live readback 없음.
+- next_start_here: `npm.cmd run build`, `npm.cmd run check:arch`, `npm.cmd run check:standards`, `npm.cmd run check:data-access-boundary`, 관련 vitest 결과를 기준으로 이어간다.
+
 ## 2026-10-10 ERP5 compat 보증금 규칙 단일화
 
 - 원인: `assessDepositEvidence`가 손오공 RP012 구독 원문 `price.*.deposit=0`을 자리표시자로 보고 UNKNOWN 처리하는 것은 맞지만, `deposit_note` 규칙(월 대여료 × 약정연수 최대 3개월 등)을 호환 응답에서 다시 계산하는 단계가 없었다.
