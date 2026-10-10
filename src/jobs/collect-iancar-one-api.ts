@@ -189,6 +189,8 @@ if (requested.has('--sync')) {
     report.publication = { status: result.status, sourceDigest: capture.sourceDigest,
       sourceSyncedAt: capture.syncedAt, open: result.open, created: result.created, absenceHeld: result.absenceHeld,
       withPhotos: result.withPhotos, photoCount: result.photoCount,
+      skippedCount: result.skippedCount, skippedByReason: result.skippedByReason,
+      skippedRatio: result.skippedRatio, maxSkippedRatio: result.maxSkippedRatio, warnings: result.warnings,
       runId: 'runId' in result ? result.runId : null,
       privateBackupObject: 'privateBackupObject' in result ? result.privateBackupObject : null };
   }
