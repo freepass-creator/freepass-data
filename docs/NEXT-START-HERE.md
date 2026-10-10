@@ -1,5 +1,7 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 보증금 양수 원문금액 우선: 양수 가격행+계산 규칙 메모는 `SOURCE_AMOUNT` KNOWN으로 판정하고 규칙값 불일치만 `depositRuleDifference`로 노출했다; 검증 `vitest deposit/kakao/mapper/consumer 293 PASS`, `build`, `check:arch`, `check:standards(PARTIAL 유지)`, `check:data-access-boundary` PASS; 남음 운영 배포·live readback 없음.
+
 ## 2026-10-10 Admin contract-fee-links HTTP read endpoint
 
 - HTTP update: `POST /v1/consumers/freepass-admin-catalog/contract-fee-links` added with `contract-fee-link-read`, request/response schema, Admin-only auth/capability/audit, max 500 items, duplicate key 400, invalid shape 400, per-item lookup failure.
