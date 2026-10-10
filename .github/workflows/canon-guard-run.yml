@@ -3,7 +3,7 @@ name: Canon Guard (run)
 # ai-ops 에서 생성한 파일 — 손으로 고치지 않는다.
 # 신뢰 원칙: 판정기·검증기·등록부(registry)는 전부 «기준 가지(base)에서 꺼낸 것»을 쓴다. PR 의 내용은 별도 폴더(.canon-pr)에 풀어 두고 «읽기만» 한다 — PR 쪽 스크립트는 절대 실행하지 않는다.
 # 판정기 파일·이 워크플로·등록부를 PR 이 바꾸려면 «같은 저장소 소유자가 올린 canon-sync 가지»여야 한다.
-# (기준 가지에 판정기가 아직 없는 첫 설치 PR 은 판정기 파일만 바뀔 때에 한해 자기 복사본으로 돈다.)
+# (기준 가지에 판정기가 아직 없는 첫 설치 PR 은 판정기 파일만 바뀌고, PR 쪽 MANIFEST 의 sha256 과 실제 파일이 맞는지만 본다.)
 on:
   workflow_call:
 
@@ -47,6 +47,7 @@ jobs:
           protected="$(printf '%s\n' "$changed" | grep -E "$PROTECTED_RE" || true)"
           if [ -f .github/canon-guard/MANIFEST.json ]; then
             echo "TRUSTED=.github/canon-guard" >> "$GITHUB_ENV"
+            echo "BASE_HAS_GUARD=1" >> "$GITHUB_ENV"
             if [ -n "$protected" ]; then
               if [ "$HEAD_REPO" = "$THIS_REPO" ] && [ "$PR_AUTHOR" = "$THIS_OWNER" ] && printf '%s' "$HEAD_REF" | grep -q 'canon-sync'; then
                 echo "guard files changed by the owner on a canon-sync branch: allowed"
@@ -60,14 +61,49 @@ jobs:
             if [ -n "$others" ]; then
               echo "::error::bootstrap PR must change only canon guard files"; printf '%s\n' "$others"; exit 1
             fi
-            echo "TRUSTED=.canon-pr/.github/canon-guard" >> "$GITHUB_ENV"
+            echo "BOOTSTRAP_GUARD=.canon-pr/.github/canon-guard" >> "$GITHUB_ENV"
             echo "USE_PR_REGISTRY=1" >> "$GITHUB_ENV"
           fi
+      - name: Bootstrap guard files match the PR manifest
+        if: env.BASE_HAS_GUARD != '1'
+        run: |
+          set -euo pipefail
+          manifest="$BOOTSTRAP_GUARD/MANIFEST.json"
+          if [ ! -f "$manifest" ]; then
+            echo "::error::bootstrap PR is missing .github/canon-guard/MANIFEST.json"; exit 1
+          fi
+          awk '
+            /"files"[[:space:]]*:/ { in_files=1; next }
+            in_files && /^[[:space:]]*}/ { exit }
+            in_files {
+              line=$0
+              gsub(/^[[:space:]]*"/, "", line)
+              sub(/"[[:space:]]*:[[:space:]]*"/, " ", line)
+              sub(/"[[:space:]]*,?[[:space:]]*$/, "", line)
+              if (line ~ /^[^ ]+ [0-9a-f]{64}$/) print line
+            }
+          ' "$manifest" > .canon-bootstrap-manifest
+          if [ ! -s .canon-bootstrap-manifest ]; then
+            echo "::error::bootstrap manifest has no files"; exit 1
+          fi
+          while read -r path expected; do
+            file="$BOOTSTRAP_GUARD/$path"
+            if [ ! -f "$file" ]; then
+              echo "::error::bootstrap manifest file missing: $path"; exit 1
+            fi
+            got="$(sha256sum "$file" | awk '{print $1}')"
+            if [ "$got" != "$expected" ]; then
+              echo "::error::bootstrap manifest hash mismatch: $path"; exit 1
+            fi
+          done < .canon-bootstrap-manifest
       - name: Trusted guard matches its manifest
+        if: env.BASE_HAS_GUARD == '1'
         run: node "$TRUSTED/verify-manifest.mjs"
       - name: Guard proves it still catches known-bad samples
+        if: env.BASE_HAS_GUARD == '1'
         run: node "$TRUSTED/scripts/canon-guard.mjs" --self-test
       - name: One canonical line per concern (PR files read as data, base registry)
+        if: env.BASE_HAS_GUARD == '1'
         run: |
           set -euo pipefail
           if [ "${USE_PR_REGISTRY:-}" != "1" ]; then
@@ -76,6 +112,7 @@ jobs:
           fi
           node "$TRUSTED/scripts/canon-guard.mjs" --root .canon-pr
       - name: Branch stays near main and does not contest a canonical path
+        if: env.BASE_HAS_GUARD == '1'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
