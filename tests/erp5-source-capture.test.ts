@@ -12,6 +12,7 @@ function doc(collection = 'products', id = 'synthetic') {
       provider_company_code: { stringValue: 'SYNTHETIC' }, product_type: { stringValue: '중고렌트' },
       vehicle_status: { stringValue: '출고가능' }, status_kind: { stringValue: '가용' }, listable: { booleanValue: true },
       deposit_note: { stringValue: '무보증' },
+      원문: { mapValue: { fields: { 전체: { mapValue: { fields: { 장기보증: { stringValue: '무보증' } } } } } } },
       price: { mapValue: { fields: { '24_3만': { mapValue: { fields: { rent: { integerValue: '750000' }, deposit: { integerValue: '0' } } } } } } }
     } : {}
   };
