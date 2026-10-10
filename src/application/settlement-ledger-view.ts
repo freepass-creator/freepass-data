@@ -89,6 +89,13 @@ export function projectAdminWorkflowCurrentFacts(spec: AdminWorkflowReadSpec, re
     claimSupply: [null, 'number'], paySupply: [null, 'number'], claimVat: [null, 'number'], payVat: [null, 'number'],
     calculationBasis: [null, 'string'],
   };
+  const moneyAxes = {
+    recordedClaimSupply: 'sourceReceiptClaim', recordedPaySupply: 'sourceReceiptPay',
+    recordedClaimVat: 'sourceReceiptClaimVat', recordedPayVat: 'sourceReceiptPayVat',
+    calculatedClaimSupply: 'computedBillingFee', calculatedPaySupply: 'computedPayoutFee',
+    confirmedClaimSupply: 'confirmedClaimAmount', confirmedPaySupply: 'confirmedPayAmount',
+  };
+  for (const [key, sourceField] of Object.entries(moneyAxes)) fields[key] = [intake ? sourceField : null, 'number'];
   for (const key of ['_deleted', 'is_test', 'test_only']) fields[key] = [key, 'boolean'];
   return {
     schema: 'freepass-data.admin-workflow-current-facts/v1' as const,

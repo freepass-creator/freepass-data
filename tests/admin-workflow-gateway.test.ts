@@ -48,7 +48,7 @@ function app(store: AdminWorkflowStore) {
 
 describe('Admin workflow consumer gateway', () => {
   it('keeps contract axes and explicit unverified links without deriving a settlement amount or actor', () => {
-    const data = { source_intake_id: 'intake-id', contract_status: '계약대기', sign_status: 'source-sign', rent_month_snapshot: '48', agent_code: 'agent', updated_at: 0 };
+    const data = { source_intake_id: 'intake-id', contract_status: '계약대기', sign_status: 'source-sign', rent_month_snapshot: '48', agent_code: 'agent', updated_at: 0, created_by: 'unverified-actor-field' };
     const current = projectAdminWorkflowCurrentFacts({ kind: 'doc', resource: 'contracts', id: 'contract-id', view: 'current-facts/v1' }, {
       schema: 'freepass-data.admin-workflow-read/v1', digest: 'b'.repeat(64), docs: [{ id: 'contract-id', data }],
     });
@@ -72,7 +72,7 @@ describe('Admin workflow consumer gateway', () => {
     expect(p.link).toMatchObject({ state: 'UNLINKED', basis: 'EXPLICIT_DOCUMENT_ID_ONLY', otherRecordedIdentifier: 'number-only' });
   });
   it('adds optional current facts without changing raw docs, zero, BT or source IDs', async () => {
-    const data = { code: 'original', claimWritten: 0, payWritten: null, calculationBasis: '  basis\n ', updatedAt: 0, claimStage: 'source-stage' };
+    const data = { code: 'original', claimWritten: 0, payWritten: null, sourceReceiptClaim: 123, calculationBasis: '  basis\n ', updatedAt: 0, claimStage: 'source-stage' };
     let reads = 0;
     const store: AdminWorkflowStore = {
       async read() { reads++; return { schema: 'freepass-data.admin-workflow-read/v1', docs: [{ id: 'same-id', data }], digest: 'a'.repeat(64) }; },
@@ -91,6 +91,7 @@ describe('Admin workflow consumer gateway', () => {
     expect(body.currentFacts.completeness).toBe('LIMIT_REACHED');
     expect(body.currentFacts.records[0]).toMatchObject({ recordId: 'same-id', link: { state: 'UNLINKED', targetId: null }, facts: {
       claimSupply: { value: 0, state: 'RECORDED' }, paySupply: { value: null, state: 'UNKNOWN' },
+      recordedClaimSupply: { value: 123, state: 'RECORDED' }, confirmedClaimSupply: { value: null, state: 'UNKNOWN' },
       calculationBasis: { value: data.calculationBasis }, createdBy: { value: null, state: 'UNKNOWN' },
       claimStage: { value: 'source-stage' }, updatedAt: { value: '1970-01-01T00:00:00.000Z' },
     } });
