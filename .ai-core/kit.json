@@ -1,0 +1,150 @@
+{
+  "schema": "ai-core-starter-kit/v1",
+  "digest_rule": "sha256(utf8, CRLF→LF)",
+  "core_revision": "f9eaeee55299a99d7445ae72d1d786e5bb37afee",
+  "generated_at": "2026-10-10T03:37:04.338Z",
+  "task": "AI Core starter kit redistribution",
+  "track": "development",
+  "target": {
+    "project_id": "freepass-data",
+    "repository": "freepass-creator/freepass-data",
+    "branch": "kit-redeploy/freepass-data",
+    "revision": "cc70619313e5e7538ff3822a8c373b7a1feed643",
+    "registry_revision": "e49dfb9afa6d8203ed3bf388525179f122aed007",
+    "root": "C:\\Users\\admin\\AppData\\Local\\Temp\\ai-core-kit-freepass-data",
+    "display_name": "ai-core-kit-freepass-data"
+  },
+  "files": [
+    {
+      "path": "standards/AI_WORKING_STANDARD.md",
+      "sha256": "8d1f109767c38db336ad3b2ee50b65439dbceb57122cc1575ebc2948588ebb44",
+      "source": "docs/AI_WORKING_STANDARD.md"
+    },
+    {
+      "path": "standards/AI_ACADEMY_CURRICULUM.md",
+      "sha256": "fec2b99ec070799db3593b599078c26e36b290a3e9c53917783a14d4b78ebde5",
+      "source": "docs/AI_ACADEMY_CURRICULUM.md"
+    },
+    {
+      "path": "standards/DEVELOPMENT_CONTINUITY_STANDARD.md",
+      "sha256": "ca85d3e9369982580f7c74ca9d563d5d5f0df0594684c6a70b808dc1f6f80e1b",
+      "source": "docs/DEVELOPMENT_CONTINUITY_STANDARD.md"
+    },
+    {
+      "path": "standards/DEVELOPMENT_RUNTIME.md",
+      "sha256": "8030f571e45b4be8fcb725cca5cda93bcdeefda30b1f9987a5648f7665630f68",
+      "source": "docs/DEVELOPMENT_RUNTIME.md"
+    },
+    {
+      "path": "standards/shared-services/SHARED_RELEASE_GATE.md",
+      "sha256": "783badc5170ccf5defefe4c02ed35641bf0139993780dbd9c28ed7f7b2f19ebb",
+      "source": "docs/shared-services/SHARED_RELEASE_GATE.md"
+    },
+    {
+      "path": "advisory.mjs",
+      "sha256": "3d924223ad540e97112be0d1940a84755975e17983e0a067187648ec73d82e0d",
+      "source": "generated:advisory/v1"
+    },
+    {
+      "path": "session-bootstrap.mjs",
+      "sha256": "110c92e55d37266957918fdbe2e3066a898e37bbe930c7c45d533b98d306a475",
+      "source": "generated:session-bootstrap/v2"
+    }
+  ],
+  "compat_version": 3,
+  "blocking_inputs": [
+    "docs/AI_WORKING_STANDARD.md",
+    "docs/AI_ACADEMY_CURRICULUM.md",
+    "docs/DEVELOPMENT_CONTINUITY_STANDARD.md",
+    "docs/DEVELOPMENT_RUNTIME.md",
+    "docs/shared-services/SHARED_RELEASE_GATE.md",
+    "registry/operating-knowledge.json",
+    "registry/academy-kit-compat.json"
+  ],
+  "advisory_inputs": [
+    "registry/development-continuity-policy.json",
+    "src/academy/starter-kit.mjs",
+    "src/academy/start-gate.mjs",
+    "scripts/academy-start.mjs",
+    "src/governance/branch-flow.mjs"
+  ],
+  "freshness_inputs": [
+    "docs/AI_WORKING_STANDARD.md",
+    "docs/AI_ACADEMY_CURRICULUM.md",
+    "docs/DEVELOPMENT_CONTINUITY_STANDARD.md",
+    "docs/DEVELOPMENT_RUNTIME.md",
+    "docs/shared-services/SHARED_RELEASE_GATE.md",
+    "registry/operating-knowledge.json",
+    "registry/academy-kit-compat.json",
+    "registry/development-continuity-policy.json",
+    "src/academy/starter-kit.mjs",
+    "src/academy/start-gate.mjs",
+    "scripts/academy-start.mjs",
+    "src/governance/branch-flow.mjs"
+  ],
+  "branch_flow_policy": {
+    "flow_enforcement": {
+      "why": [
+        "★대표 2026-09-29: 「브랜치 이런 거 메인에 다 병합되게 «한 방향»으로 잘 가게 해줘야 돼」",
+        "이 파일의 숫자는 2026-09-26 부터 있었지만 «목표»였을 뿐 아무도 강제하지 않았다.",
+        "그 사이 원격 브랜치가 126개가 됐다 — COMPLEX 프로필의 hard_max 는 3 이다.",
+        "check-branch-discipline 은 «PR 의 head» 만 본다. 이미 서 있는 가지는 아무도 안 봤고, 그래서 쌓였다.",
+        "그래서 전수 검사를 따로 둔다: scripts/check-branch-flow.mjs"
+      ],
+      "rule": "가지는 «main 으로 흐르는 중»이거나 «아직 어린» 것만 정당하다. 둘 다 아니면 흐르지 않는 가지다.",
+      "flowing_when": {
+        "open_pr_to_base": true,
+        "younger_than_hours": 72
+      },
+      "exempt_refs": [
+        "main"
+      ],
+      "exempt_prefixes": [
+        "work/ai-core/archive-",
+        "work/freepass-data/archive-"
+      ],
+      "exempt_why": "아카이브는 «작업선»이 아니라 닫힌 가지들의 도달 가능성을 붙잡는 못이다. 지우면 보존이 깨진다.",
+      "expiring_exceptions": [],
+      "expiring_exceptions_why": [
+        "★Codex 반례(2026-09-29): 「동시 생성 경합·긴급 작업 차단이 반례다. 원자적 검사와 «만료형» 예외만 허용하라」",
+        "만료 없는 예외는 영구 구멍이 된다 — 이 저장소가 이미 그렇게 126개가 됐다.",
+        "예외에는 반드시 expires 가 있어야 하고, 지나면 스스로 사라진다.",
+        "2026-09-29: 하나 있던 예외(codex/knowledge-refresh-20260929)는 PR #337 이 폐기되면서 «까닭이 사라져» 만료를 기다리지 않고 지웠다. 예외는 근거가 없어지면 그 자리에서 없앤다 — 만료일까지 두면 그동안은 구멍이다."
+      ],
+      "max_violations_allowed": 0,
+      "ratchet": [
+        "★이 숫자는 «올릴 수 없다». 내려가기만 한다 — 그것이 「한 방향」이다.",
+        "2026-09-29 정리: 원격 가지 126 → 9, 위반 16 → 0. 기준선도 16 → 0 으로 같이 내렸다.",
+        "내리지 않으면 느슨해진 채로 굳는다. 가지를 닫을 때마다 이 수를 함께 내린다.",
+        "이제 0 이므로 «흐르지 않는 가지가 하나라도 생기면» 검사가 곧바로 빨개진다.",
+        "긴급하게 예외가 필요하면 expiring_exceptions 에 expires 와 함께 적는다 — 만료 없는 예외는 받지 않는다."
+      ]
+    },
+    "branch_naming": {
+      "forbidden_actor_prefixes": [
+        "gpt/",
+        "claude/",
+        "codex/",
+        "cursor/",
+        "gemini/",
+        "work/gpt/",
+        "work/claude/",
+        "work/codex/",
+        "work/cursor/",
+        "work/gemini/"
+      ]
+    }
+  },
+  "catalog_inputs": [
+    "registry/projects.json",
+    "registry/capabilities.json",
+    "registry/work-map.json"
+  ],
+  "verification_source": "registry/projects.json",
+  "verification": {
+    "install": "npm ci",
+    "test": "npm test",
+    "build": "npm run build"
+  },
+  "reuse_policy": "New assets require a recorded reuse decision before creation."
+}
