@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
-import { depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
+import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 
 type Rec = Record<string, unknown>;
 
@@ -80,12 +80,15 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
     const row = value as Rec;
     const parsed = parseErp5CompatibilityPriceKey(key);
     const evidence = product.provider_company_code === 'RP031' ? readIancarPublishedDeposit(product, key, now)
-      : resolveDepositWithRuleNote({ supplierId: product.provider_company_code, productType: product.product_type,
-      note: product.deposit_note, depositFree: product.deposit_free, sourceAmount: row.deposit,
-      termMonths: parsed?.months, monthlyRent: normalizeErp5CompatibilityInteger(row.rent), hasPositivePaidDeposit: paid });
-    return [key, { ...row, deposit: evidence.amount, depositState: evidence.state,
+      : resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
+      termMonths: parsed?.months, monthlyRent: normalizeErp5CompatibilityInteger(row.rent), hasPositivePaidDeposit: paid }));
+    const { depositEvidenceBasis: _staleDepositEvidenceBasis, ...rowWithoutStaleBasis } = row;
+    const depositEvidenceBasis = 'depositEvidenceBasis' in evidence ? evidence.depositEvidenceBasis : undefined;
+    return [key, { ...rowWithoutStaleBasis, deposit: evidence.amount, depositState: evidence.state,
       depositStatusLabel: depositStatusLabel(evidence.state, row.deposit, product.deposit_note),
-      depositEvidenceReason: evidence.reason }];
+      depositEvidenceReason: evidence.reason,
+      ...('depositRuleDifference' in evidence ? { depositRuleDifference: evidence.depositRuleDifference } : {}),
+      ...(evidence.state === 'ZERO' && depositEvidenceBasis ? { depositEvidenceBasis } : {}) }];
   })) };
 }
 
