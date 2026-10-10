@@ -315,6 +315,28 @@ describe('shared sheet local source to Canonical', () => {
       reconciliation: { stage: 'CANONICAL_READBACK', suppliedTerms: 6, storedTerms: 6, equal: true } });
     expect(await s.store.listOffers()).toHaveLength(2);
   });
+  it('a later run that re-plans from fresh capture after a partial commit writes only the missing vehicle (no duplicates)', async () => {
+    // 매일 박제는 부분 실패 뒤 «새 캡처 → 새 계획 → 적용» 으로 다시 돈다(이전 계획을 재사용하지 않는다) — #418 의 재시도 안전 근거.
+    const s = await stores(); const c = capture(); c.tabs[0]!.values.push(row('웰릭스', { 차량번호: 'TEST-FAKE-002' })); c.tabs[0]!.rowCount++;
+    const original = s.store.transact.bind(s.store); let calls = 0;
+    const spy = vi.spyOn(s.store, 'transact').mockImplementation(async fn => {
+      if (++calls === 2) throw new Error('SYNTHETIC_TRANSIENT');
+      return original(fn);
+    });
+    const first = await apply(s, c); expect(first.result.report).toMatchObject({ status: 'HOLD', committed: 1 });
+    spy.mockRestore();
+    const offersAfterFirst = (await s.store.listOffers()).map(o => o.id).sort();
+    expect(offersAfterFirst).toHaveLength(1);
+    const second = await apply(s, c); // fresh plan from the same capture
+    expect(second.result.report).toMatchObject({ status: 'APPLIED', committed: 1, noChange: 1 });
+    const offersAfterSecond = (await s.store.listOffers()).map(o => o.id).sort();
+    expect(offersAfterSecond).toHaveLength(2);
+    expect(offersAfterSecond).toContain(offersAfterFirst[0]); // 이미 쓴 제안은 그대로(새 id·새 revision 없음)
+    expect(new Set(offersAfterSecond).size).toBe(offersAfterSecond.length);
+    const third = await apply(s, c); // 한 번 더: 아무것도 새로 쓰지 않는다
+    expect(third.result.report).toMatchObject({ status: 'APPLIED', committed: 0, noChange: 2 });
+    expect(await s.store.listOffers()).toHaveLength(2);
+  });
   it('HOLDs explicit identity review labels without inferring a downstream trim', () => {
     const c = normalized(capture({ 세부모델: '확인 필요' })).record.candidate;
     expect(c.issues).toContain('VEHICLE_IDENTITY_REVIEW_REQUIRED'); expect(c.trimName).toBeUndefined();
