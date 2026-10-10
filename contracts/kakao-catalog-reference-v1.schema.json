@@ -109,11 +109,17 @@
                   "additionalProperties": false,
                   "required": ["field", "text"],
                   "properties": {
-                    "field": { "enum": ["원문.전체.장기보증", "원문.전체.단기보증", "deposit_free_confirmation"] },
+                    "field": { "enum": ["deposit_note", "원문.전체.장기보증", "원문.전체.단기보증", "deposit_free_confirmation"] },
                     "text": { "const": "무보증" },
                     "source": { "type": "string", "minLength": 1 },
                     "at": { "type": "string", "format": "date-time" }
-                  }
+                  },
+                  "allOf": [
+                    {
+                      "if": { "properties": { "field": { "const": "deposit_free_confirmation" } }, "required": ["field"] },
+                      "then": { "properties": { "source": true, "at": true }, "required": ["source", "at"] }
+                    }
+                  ]
                 }
               }
             }
@@ -126,7 +132,21 @@
         "supplierBillingFee": { "$ref": "#/$defs/commissionResolution" },
         "channelPayoutFee": { "$ref": "#/$defs/commissionResolution" },
         "expectedGrossMargin": { "$ref": "#/$defs/marginResolution" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "depositState": { "const": "ZERO" } }, "required": ["depositState"] },
+          "then": {
+            "properties": {
+              "depositRule": {
+                "type": "object",
+                "properties": { "depositEvidenceBasis": true },
+                "required": ["depositEvidenceBasis"]
+              }
+            }
+          }
+        }
+      ]
     },
     "product": {
       "type": "object",

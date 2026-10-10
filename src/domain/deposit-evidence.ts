@@ -21,7 +21,8 @@ export function assessDepositEvidence(input: {
   const depositFreeFlag = input.depositFree === true || input.depositFree === '예';
   const sourceWaiverBasis = isValidDepositSourceWaiverBasis(input.depositSourceWaiverBasis) ? input.depositSourceWaiverBasis : null;
   const confirmationWaiverBasis = depositFreeConfirmationBasis(input.depositFreeConfirmation);
-  const zeroBasis = note === '무보증' && sourceWaiverBasis ? sourceWaiverBasis : confirmationWaiverBasis;
+  const noteWaiverBasis = note === '무보증' ? { field: 'deposit_note' as const, text: '무보증' as const } : null;
+  const zeroBasis = sourceWaiverBasis ?? noteWaiverBasis ?? confirmationWaiverBasis;
   const explicitZero = !!zeroBasis;
   const unknown = (reason: string) => ({ state: 'UNKNOWN' as const, amount: null, reason });
   const missing = raw === undefined || raw === null || raw === '';
@@ -50,7 +51,7 @@ export function assessDepositEvidence(input: {
   return unknown(note ? 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE' : 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE');
 }
 
-export type DepositEvidenceBasis = { field: '원문.전체.장기보증' | '원문.전체.단기보증' | 'deposit_free_confirmation'; text: '무보증'; source?: string; at?: string };
+export type DepositEvidenceBasis = { field: 'deposit_note' | '원문.전체.장기보증' | '원문.전체.단기보증' | 'deposit_free_confirmation'; text: '무보증'; source?: string; at?: string };
 export const DEPOSIT_SOURCE_WAIVER_FIELDS = ['원문.전체.장기보증', '원문.전체.단기보증'] as const;
 export type DepositFreeConfirmation = { source?: unknown; at?: unknown; text?: unknown };
 

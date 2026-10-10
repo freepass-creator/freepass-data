@@ -25,7 +25,7 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
   });
   it.each([undefined, null, ''])('requires an observed amount even when waiver flags exist: %j', sourceAmount => {
     expect(assessDepositEvidence({ supplierId: 'RP004', productType: '중고렌트', note: '무보증', depositFree: true, sourceAmount }))
-      .toMatchObject({ state: 'UNKNOWN', amount: null, reason: 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE' });
+      .toMatchObject({ state: 'UNKNOWN', amount: null, reason: 'MISSING_DEPOSIT_AMOUNT' });
   });
   it('labels all unresolved evidence as requiring confirmation', () => {
     expect(depositStatusLabel('UNKNOWN', null)).toBe('미확인');
@@ -83,9 +83,9 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     expect(assessDepositEvidence({ ...identity, note: '무보증', depositSourceWaiverBasis: waiverBasis }))
       .toMatchObject({ state: 'ZERO', amount: 0, reason: 'EXPLICIT_ZERO_DEPOSIT', basis: waiverBasis });
     expect(assessDepositEvidence({ ...identity, note: '무보증' }))
-      .toMatchObject({ state: 'UNKNOWN', amount: null, reason: 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE' });
+      .toMatchObject({ state: 'ZERO', amount: 0, reason: 'EXPLICIT_ZERO_DEPOSIT', basis: { field: 'deposit_note', text: '무보증' } });
     expect(assessDepositEvidence({ ...identity, note: '무보증', depositSourceWaiverBasis: { field: '원문.전체.장기보증', text: '무보증 가능' } }))
-      .toMatchObject({ state: 'UNKNOWN', amount: null, reason: 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE' });
+      .toMatchObject({ state: 'ZERO', amount: 0, reason: 'EXPLICIT_ZERO_DEPOSIT', basis: { field: 'deposit_note', text: '무보증' } });
     expect(assessDepositEvidence({ ...identity, depositFree: true }))
       .toMatchObject({ state: 'UNKNOWN', amount: null, reason: 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE' });
     expect(assessDepositEvidence({ ...identity, depositFree: '예' }))
@@ -104,6 +104,15 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     expect(assessDepositEvidence({ ...identity, sourceAmount: '' }))
       .toMatchObject({ state: 'UNKNOWN', reason: 'MISSING_DEPOSIT_AMOUNT' });
     expect(assessDepositEvidence({ ...identity, sourceAmount: 0 }))
+      .toMatchObject({ state: 'UNKNOWN', reason: 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE' });
+  });
+  it('accepts exact product waiver from either deposit_note or raw warranty text, but not partial text', () => {
+    const identity = { supplierId: 'RP004', productType: '중고렌트', sourceAmount: 0 };
+    expect(assessDepositEvidence({ ...identity, note: '무보증' }))
+      .toMatchObject({ state: 'ZERO', basis: { field: 'deposit_note', text: '무보증' } });
+    expect(assessDepositEvidence({ ...identity, depositSourceWaiverBasis: { field: '원문.전체.장기보증', text: '무보증' } }))
+      .toMatchObject({ state: 'ZERO', basis: { field: '원문.전체.장기보증', text: '무보증' } });
+    expect(assessDepositEvidence({ ...identity, note: '무보증 가능' }))
       .toMatchObject({ state: 'UNKNOWN', reason: 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE' });
   });
   it('does not erase a known positive source amount for a nonzero product', () => {

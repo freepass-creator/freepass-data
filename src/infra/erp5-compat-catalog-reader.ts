@@ -82,8 +82,9 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
     const evidence = product.provider_company_code === 'RP031' ? readIancarPublishedDeposit(product, key, now)
       : resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
       termMonths: parsed?.months, monthlyRent: normalizeErp5CompatibilityInteger(row.rent), hasPositivePaidDeposit: paid }));
+    const { depositEvidenceBasis: _staleDepositEvidenceBasis, ...rowWithoutStaleBasis } = row;
     const depositEvidenceBasis = 'depositEvidenceBasis' in evidence ? evidence.depositEvidenceBasis : undefined;
-    return [key, { ...row, deposit: evidence.amount, depositState: evidence.state,
+    return [key, { ...rowWithoutStaleBasis, deposit: evidence.amount, depositState: evidence.state,
       depositStatusLabel: depositStatusLabel(evidence.state, row.deposit, product.deposit_note),
       depositEvidenceReason: evidence.reason,
       ...(evidence.state === 'ZERO' && depositEvidenceBasis ? { depositEvidenceBasis } : {}) }];

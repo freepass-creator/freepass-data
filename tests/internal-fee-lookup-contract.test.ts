@@ -95,6 +95,40 @@ describe('internal fee lookup contract', () => {
     expect(lookup.orphanTermKeys).toEqual(['m48']);
   });
 
+  it('marks every duplicated price row termKey as unresolved', () => {
+    const lookup = toInternalFeeLookup('offer-fake', [
+      { termKey: 'm24-return', termMonths: 24 },
+      { termKey: 'm24-return', termMonths: 24 },
+      { termKey: 'm36', termMonths: 36 },
+    ], [
+      economicsTerm('m24-return', 24),
+      economicsTerm('m36', 36),
+    ]);
+
+    expect(lookup.terms[0]!.supplierBillingFee.reasonCode).toBe('DUPLICATE_PRICE_TERM_KEY');
+    expect(lookup.terms[1]!.supplierBillingFee.reasonCode).toBe('DUPLICATE_PRICE_TERM_KEY');
+    expect(lookup.terms[0]!.channelPayoutFee.reasonCode).toBe('DUPLICATE_PRICE_TERM_KEY');
+    expect(lookup.terms[1]!.channelPayoutFee.reasonCode).toBe('DUPLICATE_PRICE_TERM_KEY');
+    expect(lookup.terms[2]!.supplierBillingFee.status).toBe('CONFIRMED');
+  });
+
+  it('marks a price row unresolved when stored economics termMonths conflicts with the price term', () => {
+    const lookup = toInternalFeeLookup('offer-fake', [
+      { termKey: 'm24', termMonths: 24 },
+      { termKey: 'm36', termMonths: 36 },
+    ], [
+      economicsTerm('m24', 36),
+      economicsTerm('m36', 36),
+    ]);
+
+    expect(lookup.terms[0]!.supplierBillingFee).toMatchObject({
+      status: 'UNCONFIRMED',
+      reasonCode: 'TERM_MONTHS_MISMATCH',
+    });
+    expect(lookup.terms[0]!.channelPayoutFee.reasonCode).toBe('TERM_MONTHS_MISMATCH');
+    expect(lookup.terms[1]!.supplierBillingFee.status).toBe('CONFIRMED');
+  });
+
   it('returns no rows but still reports orphan economics when no price rows exist', () => {
     const lookup = toInternalFeeLookup('offer-fake', [], [
       economicsTerm('m24', 24),
