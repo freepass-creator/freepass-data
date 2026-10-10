@@ -28,8 +28,8 @@ concurrency:
 permissions:
   contents: read
   id-token: write
-  # 예약 실행 전 최근 매시 감사의 daily-writer-guard 결과를 읽는다. 감사가 오래됐으면(GitHub 예약이 몇 시간 밀림) 감사 workflow 를 한 번 직접 띄워 기다린다(dispatch 에 write 필요).
-  actions: write
+  # 예약 실행 전 최근 매시 감사의 daily-writer-guard 결과를 읽는다
+  actions: read
 
 env:
   FREEPASS_SHEET_F01_ID: ${{ secrets.FREEPASS_SHEET_F01_ID }}
@@ -37,7 +37,50 @@ env:
   FREEPASS_SHEET_F04_ID: ${{ secrets.FREEPASS_SHEET_F04_ID }}
 
 jobs:
+  # 최소 권한: 감사 workflow 를 띄우는 일(actions: write)만 이 job 이 한다. 쓰기 job(비밀·환경 변수·id-token)에는 write 가 없다.
+  # GitHub 예약이 매시 감사를 4~7시간 밀어 «3시간 안 가드» 가 없으면 박제가 통째 건너뛰었다(10-08·10-09 새벽) — 오래됐을 때만 한 번 띄우고,
+  # 띄운 시각 «이후» 에 끝난 가드를 최대 약 20분 기다린다. 판정은 아래 쓰기 job 의 관문이 그대로 한다(여기서는 실패해도 멈추지 않고 관문이 막는다).
+  audit-refresh:
+    if: github.event_name == 'schedule'
+    # 실패·시간 초과여도 실행 전체 결론을 바꾸지 않는다 — 감시(erp5-continuous-audit)는 «전체 success» 인 실행만 로그 누락 검사 대상으로 삼기 때문.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch a fresh continuous audit when the guard result is stale
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          read_guard() {
+            audit_ids="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/erp5-continuous-audit.yml/runs?branch=main&per_page=5" --jq '.workflow_runs[].id')" || return 1
+            : > "$RUNNER_TEMP/guard-jobs.jsonl"
+            for id in $audit_ids; do
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100" --jq '.jobs[] | select(.name == "daily-writer-guard" and .status == "completed") | {conclusion, completed_at}' >> "$RUNNER_TEMP/guard-jobs.jsonl" || return 1
+            done
+            done_at="$(jq -s 'sort_by(.completed_at) | last // {}' "$RUNNER_TEMP/guard-jobs.jsonl" | jq -r '.completed_at // empty')"
+            age=-1; if test -n "$done_at"; then age=$(( $(date -u +%s) - $(date -u -d "$done_at" +%s) )); fi
+          }
+          read_guard || { echo "audit list unreadable — leaving it to the write job gate"; exit 0; }
+          if test -n "$done_at" && [ "$age" -ge 0 ] && [ "$age" -le 10800 ]; then echo "guard is fresh (age=${age}s)"; exit 0; fi
+          echo "guard is stale (age=${age}s) — dispatching one continuous audit"
+          dispatched_at="$(date -u +%s)"
+          gh workflow run erp5-continuous-audit.yml --ref main -R "$GITHUB_REPOSITORY" || { echo "could not dispatch audit — leaving it to the write job gate"; exit 0; }
+          for _ in $(seq 1 40); do
+            sleep 30
+            read_guard || continue
+            # 띄운 시각 «이후» 에 끝난 가드만 인정(다른 감사의 오래된 결과로 끝내지 않는다). 이미 돌고 있는 감사가 있으면 줄 서서 늦어질 수 있다.
+            if test -n "$done_at" && [ "$(date -u -d "$done_at" +%s)" -ge "$dispatched_at" ]; then echo "fresh guard result arrived"; exit 0; fi
+          done
+          echo "fresh guard result did not arrive in time — leaving it to the write job gate"
+
   shared-sheet-daily:
+    needs: audit-refresh
+    # 예약이 아닌 실행에서는 audit-refresh 가 건너뛰어지고, 실패해도 관문(첫 단계)이 가드를 직접 판정한다.
+    if: ${{ !cancelled() }}
     environment: data-production-delivery
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -100,19 +143,6 @@ jobs:
               age=-1; if test -n "$done_at"; then age=$(( $(date -u +%s) - $(date -u -d "$done_at" +%s) )); fi
             }
             read_guard
-            # 감사가 3시간 넘게 안 돌았으면(GitHub 예약이 4~7시간 밀리는 일이 잦다 — 10-08·10-09 새벽 박제가 이것으로 통째 건너뜀)
-            # 감사 workflow 를 한 번 직접 띄우고 최대 약 20분(30초 간격 40회) 기다린다. 새 감사가 «실패»로 끝나면 그 결과가 이겨서 그대로 멈춘다.
-            if test -z "$done_at" || [ "$age" -lt 0 ] || [ "$age" -gt 10800 ]; then
-              echo "guard is stale (age=${age}s) — dispatching a fresh continuous audit"
-              dispatched_at="$(date -u +%s)"
-              gh workflow run erp5-continuous-audit.yml --ref main -R "$GITHUB_REPOSITORY" || { echo "DAILY_WRITER_GUARD_NOT_OK: could not dispatch audit — scheduled snapshot not run"; exit 1; }
-              for _ in $(seq 1 40); do
-                sleep 30
-                read_guard
-                # 띄운 시각 «이후»에 끝난 가드만 인정(다른 감사의 오래된 결과로 끝내지 않는다). 감사가 이미 돌고 있으면 줄 서서 늦어질 수 있어 넉넉히 기다린다.
-                if test -n "$done_at" && [ "$(date -u -d "$done_at" +%s)" -ge "$dispatched_at" ]; then break; fi
-              done
-            fi
             test -n "$done_at" || { echo "DAILY_WRITER_GUARD_NOT_OK: no completed guard job — scheduled snapshot not run"; exit 1; }
             if [ "$guard" != 'success' ] || [ "$age" -lt 0 ] || [ "$age" -gt 10800 ]; then
               echo "DAILY_WRITER_GUARD_NOT_OK: latest guard=$guard age=${age}s — scheduled snapshot not run"; exit 1

@@ -827,14 +827,14 @@ jobs:
           since="$(date -u -d "-$((DAILY_WRITER_LOOKBACK_HOURS + 2)) hours" +%Y-%m-%dT%H:%M:%SZ)"
           gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/shared-sheet-daily.yml/runs?per_page=100&created=>=$since"             --jq '.workflow_runs[]' | jq -s '.' > "$RUNNER_TEMP/daily-writer-runs.json"
           # 각 성공 실행의 «모든 attempt(1..run_attempt)» 의 shared-sheet-daily job steps를 붙인다.
-          # attempt 하나라도 못 읽거나 job이 정확히 하나가 아니면 그 실행은 null(알 수 없음 → 가드가 보류로 둔다)
+          # attempt 하나라도 못 읽거나 shared-sheet-daily job 이 정확히 하나가 아니거나(감사 호출 전용 audit-refresh 외의 job 이 끼어도) null(알 수 없음 → 가드가 보류로 둔다)
           jq -c '.[] | select(.status == "completed" and .conclusion == "success") | {id, attempts: (.run_attempt // 1)}' "$RUNNER_TEMP/daily-writer-runs.json" | while read -r row; do
             rid="$(jq -r '.id' <<<"$row")"
             total="$(jq -r '.attempts' <<<"$row")"
             collected='[]'
             ok=1
             for attempt in $(seq 1 "$total"); do
-              if one="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$rid/attempts/$attempt/jobs?per_page=100"                 --jq 'if ((.jobs | length) == 1 and .jobs[0].name == "shared-sheet-daily") then (.jobs[0].steps // [] | map({name, conclusion})) else null end')"; then
+              if one="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$rid/attempts/$attempt/jobs?per_page=100"                 --jq '([.jobs[] | select(.name == "shared-sheet-daily")]) as $m | if (($m | length) == 1 and ([.jobs[] | select(.name != "shared-sheet-daily" and .name != "audit-refresh")] | length) == 0) then ($m[0].steps // [] | map({name, conclusion})) else null end')"; then
                 collected="$(jq -c --argjson one "$one" '. + [$one]' <<<"$collected")"
               else
                 ok=0
