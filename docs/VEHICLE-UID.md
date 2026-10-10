@@ -150,6 +150,10 @@ ERP5·카톡이 멈추지 않게 읽기 쪽을 먼저 바꾼다. 1단계는 기�
 - 사진 프록시의 `(공급사, 차번 해시)` 신규 생성 fallback.
 - 번호 전용 조회 job/API. 단, 이력 조회용 plate filter는 UID resolver 뒤 보조 기능으로만 유지한다.
 
+## 구현 상태(10-12)
+
+`src/domain/catalog.ts`에 `VehicleExternalId`/`VehicleExternalIdKind`와 `VehicleAsset.externalIds?: VehicleExternalId[]`를 옵션 필드로 추가했고, `src/domain/vehicle-uid.ts`에 순수 UID 발급(`va_` + ULID), 기존 24hex hash ID 구분, externalId 정규화, 활성 식별자 판정, resolver, `addExternalId` 이력 갱신 함수를 넣었다. `src/jobs/ingest-shared-sheet-canonical.ts`의 옛 `opaque('va','plate', carNumber)` 발급은 삭제하지 않고 `issueVehicleAssetId` 기본 전략(`LEGACY_PLATE_HASH`) 뒤에 두었으며, ULID 전략은 10-13~10-14 소비처 readback 전까지 기본 호출 경로가 아니다. `tests/vehicle-uid.test.ts`가 ULID 형식/정렬/단조 증가/결정적 주입, 충돌 처리표, 번호 없는 신차 생성 후 번호 추가, 입력 불변과 이력 갱신을 검증한다.
+
 ## 재사용 판정
 
 쓴 것: 기존 `VehicleAsset`, `Product.vehicleAssetId`, source binding, lineage/audit/revision 구조를 그대로 확장한다.  
