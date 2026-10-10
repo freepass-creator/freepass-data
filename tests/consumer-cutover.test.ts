@@ -241,6 +241,7 @@ describe('consumer cutover registry', () => {
 
   it('preserves term-local missing versus confirmed zero evidence at the compatibility boundary', () => {
     const source = { provider_company_code: 'RP004', product_type: '중고렌트', deposit_note: '무보증',
+      원문: { 전체: { 장기보증: '무보증' } },
       price: { '12': { rent: 500000, deposit: 0 }, '24': { rent: 400000, deposit: null, depositState: 'ZERO' } } };
     const before = structuredClone(source);
     const result = withCompatibilityDepositEvidence(source);
@@ -249,6 +250,16 @@ describe('consumer cutover registry', () => {
       '24': { deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'MISSING_DEPOSIT_AMOUNT' }
     });
     expect(source).toEqual(before);
+  });
+
+  it('removes stale deposit evidence basis when compatibility re-evaluation is UNKNOWN', () => {
+    const source = { provider_company_code: 'RP004', product_type: '중고렌트',
+      price: { '12': { rent: 500000, deposit: 0, depositEvidenceBasis: { field: 'deposit_note', text: '무보증' } } } };
+    const result = withCompatibilityDepositEvidence(source);
+    expect(result.price).toMatchObject({
+      '12': { deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE' }
+    });
+    expect((result.price as Record<string, Record<string, unknown>>)['12']).not.toHaveProperty('depositEvidenceBasis');
   });
 
   it('keeps compatibility evidence output free of fee and commission keys for public-shaped product fields', () => {

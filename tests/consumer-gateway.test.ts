@@ -40,6 +40,7 @@ describe('read-only consumer gateway', () => {
   it('keeps an unknown sibling in internal AI ANY_TERM and excludes it from ALL_TERMS', async () => {
     const consumerId = 'internal-ai-test';
     const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트', deposit_note: '무보증',
+      원문: { 전체: { 장기보증: '무보증' } },
       price: { '36': { rent: 500000, deposit: 0 }, '48': { rent: 450000, deposit: null } } };
     const { app } = withAccess(new MemoryDataStore(), [{ id: consumerId, projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] }], undefined, {
       read: async () => { throw new Error('unused'); },
@@ -64,10 +65,11 @@ describe('read-only consumer gateway', () => {
   });
   it('filters zero deposit through authenticated reference query, accepts no matches, rejects invalid periods', async () => {
     const base = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트' };
+    const sourceWaiver = { 원문: { 전체: { 장기보증: '무보증' } } };
     const { app } = withAccess(new MemoryDataStore(), [{ id: 'kakao-ops', projectionId: 'erp-public', token, capabilities: ['catalog-reference'] }], undefined, {
       read: async () => { throw new Error('unused'); },
       readKakaoReferenceSource: async () => ({ consumerId: 'kakao-ops', observedAt: '2026-10-09T00:00:00Z', products: {
-        free: { ...base, deposit_note: '무보증', price: { '36': { rent: 500000, deposit: 0 } } },
+        free: { ...base, ...sourceWaiver, deposit_note: '무보증', price: { '36': { rent: 500000, deposit: 0 } } },
         unknown: { ...base, price: { '36': { rent: 500000, deposit: 0 } } },
       } }),
     });
