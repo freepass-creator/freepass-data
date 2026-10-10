@@ -885,6 +885,11 @@ export async function processOneOutboxEvent(
             }
           }
         );
+        if (!shouldActivate) {
+          await outbox.markRetry({ eventId: event.eventId, attempts: event.attempts, lease,
+            nextAttemptAt: event.nextAttemptAt ?? now.toISOString(), error: 'PROJECTION_ACTIVATION_REQUIRES_APPROVED_EVENT_OR_ACTIVE_RELEASE' });
+          return 'HOLD';
+        }
       }
     }
     currentTime();

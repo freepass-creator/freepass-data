@@ -179,7 +179,8 @@ describe('Projection release integrity verifier', () => {
     const { store, head } = await scheduledFixture();
     const boundary = new Date(Date.parse(head.observedAt) + 60_000);
     await expect(assertCatalogSourceFreshness(store, boundary.toISOString(), true)).resolves.toHaveLength(1);
-    expect(await processOneOutboxEvent(store, store, store, { workerId: 'synthetic', requireFreshSources: true },
+    expect(await processOneOutboxEvent(store, store, store, { workerId: 'synthetic', requireFreshSources: true,
+      eventId: 'synthetic-event', expiresAt: new Date(boundary.getTime() + 30000).toISOString() },
       new Date(boundary.getTime() - 1000))).toBe('DONE');
     await store.seed({ sourceHeads: [{ ...head, observedAt: new Date(boundary.getTime() + 1).toISOString() }] });
     await expect(assertCatalogSourceFreshness(store, boundary.toISOString(), true))
@@ -242,7 +243,8 @@ describe('Projection release integrity verifier', () => {
       { workerId: 'replacement', requireFreshSources: true }, new Date(now + 999))).toBe('IDLE');
     expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PROCESSING', attempts: 0, leaseOwner: 'crashed' });
     expect(await processOneOutboxEvent(store, store, store,
-      { workerId: 'replacement', requireFreshSources: true }, new Date(now + 1000))).toBe('DONE');
+      { workerId: 'replacement', requireFreshSources: true, eventId: 'synthetic-event',
+        expiresAt: new Date(now + 30000).toISOString() }, new Date(now + 1000))).toBe('DONE');
     expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'DONE', attempts: 0 });
   });
 
@@ -456,6 +458,55 @@ describe('Projection release integrity verifier', () => {
       expect(JSON.parse(output)).toMatchObject({ mode: 'PREPARE', status: 'READY',
         persistentWrites: 0, projectionStore: 'memory' });
     }
+  }, 15000);
+
+  it('holds an unapproved first activation without marking the event done', async () => {
+    const store = new MemoryDataStore();
+    await seedDemoCatalog(store);
+    await updateOfferPrice(store, {
+      commandId: 'cmd_unapproved_first_active',
+      idempotencyKey: 'idem_unapproved_first_active',
+      offerId: 'offer_gv70_demo',
+      expectedRevision: 1,
+      termKey: '36@20000',
+      monthlyRent: { amount: 734000, currency: 'KRW' },
+      reason: 'unapproved first activation regression',
+      actor: { id: 'user:test', kind: 'USER' }
+    }, '2026-09-20T10:00:00.000Z');
+    const event = [...store.outbox.values()][0]!;
+
+    expect(await processOneOutboxEvent(store, store, store, { workerId: 'worker:first-active' },
+      new Date('2026-09-20T10:00:01.000Z'))).toBe('HOLD');
+
+    expect(store.outbox.get(event.eventId)).toMatchObject({
+      status: 'PENDING',
+      attempts: 0,
+      leaseOwner: null,
+      leaseUntil: null,
+      lastError: 'PROJECTION_ACTIVATION_REQUIRES_APPROVED_EVENT_OR_ACTIVE_RELEASE'
+    });
+    expect(await store.getActive('erp-public')).toBeNull();
+    expect(await store.getDeliveryReceipt(event.eventId)).toBeNull();
+  });
+
+  it('runs the memory worker execute loop and refreshes the ACTIVE release', () => {
+    const output = execFileSync(process.execPath, ['--import', 'tsx', 'scripts/run-memory.mjs', 'worker', '--execute'], {
+      encoding: 'utf8', timeout: 8000,
+      env: {
+        ...process.env,
+        FREEPASS_DATA_DRIVER: 'memory',
+        FREEPASS_DATA_WORKER_TEST_REPRICE: '1',
+        FREEPASS_DATA_WORKER_MAX_EVENTS: '1',
+        NODE_ENV: 'test'
+      }
+    });
+
+    expect(JSON.parse(output)).toMatchObject({
+      mode: 'EXECUTE',
+      result: 'DONE',
+      processedEvents: 1,
+      monthlyRent: 734000
+    });
   }, 15000);
 
   it('prepares a validated release without activating or replacing the old good release', async () => {
