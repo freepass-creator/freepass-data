@@ -1,5 +1,9 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 공개 상품 응답 설계
+
+- `docs/PUBLIC-PRODUCT-FEED-DESIGN.md` 작성: ERP4 `/api/catalog/feed`·`/api/catalog/quote`를 FreePass Data 공개 route로 대체하는 v1 계약, allowlist, 보증금 재사용, 증명 계획, 10-14 ERP4 응답 종료 제안. 코드 변경·커밋·push 없음.
+
 ## 2026-10-10 ERP5 compat 보증금 규칙 단일화
 
 - 원인: `assessDepositEvidence`가 손오공 RP012 구독 원문 `price.*.deposit=0`을 자리표시자로 보고 UNKNOWN 처리하는 것은 맞지만, `deposit_note` 규칙(월 대여료 × 약정연수 최대 3개월 등)을 호환 응답에서 다시 계산하는 단계가 없었다.
@@ -491,6 +495,10 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+### 2026-10-10 공개 상품 응답 설계
+
+- `docs/PUBLIC-PRODUCT-FEED-DESIGN.md` 한 장 작성. ERP4 공개 feed/quote 응답 계약, FreePass Data 공개 라우트 위치, allowlist 스키마, `resolveDepositWithRuleNote` 재사용, 비교 증명 계획, 요청 제한·캐시, 2026-10-14 ERP4 응답 종료 제안을 남김. 코드 변경 없음.
 
 ### 2026-10-10 매일 박제 3일 연속 실패 원인과 고침 (개발 관제 배정)
 
