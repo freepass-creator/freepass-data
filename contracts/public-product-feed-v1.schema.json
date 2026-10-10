@@ -1,0 +1,349 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json",
+  "$defs": {
+    "shortText": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 80
+    },
+    "longText": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 300
+    },
+    "publicKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$"
+    },
+    "url": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 500,
+      "pattern": "^https://"
+    },
+    "nonNegativeNumber": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "priceTerm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rent",
+        "deposit",
+        "depositState"
+      ],
+      "properties": {
+        "rent": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "deposit": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "depositState": {
+          "enum": [
+            "AMOUNT",
+            "VERIFIED_NO_DEPOSIT",
+            "UNKNOWN",
+            "NOT_APPLICABLE"
+          ]
+        }
+      }
+    },
+    "policy": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "policy_name",
+        "policy_type",
+        "payment_method",
+        "payment_timing",
+        "penalty_condition",
+        "rental_region",
+        "screening_criteria",
+        "basic_driver_age",
+        "driver_age_lowering",
+        "driver_age_upper_limit",
+        "license_period",
+        "personal_driver_scope",
+        "business_driver_scope",
+        "maintenance_service",
+        "credit_grade",
+        "uninsured_damage",
+        "own_damage_repair_ratio",
+        "own_damage_compensation_rate",
+        "insurance_included",
+        "deposit_installment",
+        "deposit_card_payment",
+        "rental_card_payment",
+        "roadside_assistance",
+        "injury_compensation_limit",
+        "injury_deductible",
+        "property_compensation_limit",
+        "property_deductible",
+        "self_body_accident",
+        "self_body_deductible",
+        "personal_injury_compensation_limit",
+        "personal_injury_deductible",
+        "uninsured_compensation_limit",
+        "uninsured_deductible",
+        "own_damage_compensation",
+        "own_damage_min_deductible",
+        "own_damage_max_deductible",
+        "annual_roadside_assistance",
+        "annual_mileage",
+        "max_annual_mileage",
+        "mileage_upcharge_per_10000km",
+        "age_lowering_cost",
+        "additional_driver_allowance_count",
+        "additional_driver_cost",
+        "deposit_return_days",
+        "buyout_notice_days"
+      ],
+      "properties": {
+        "policy_name": { "$ref": "#/$defs/shortText" },
+        "policy_type": { "$ref": "#/$defs/shortText" },
+        "payment_method": { "$ref": "#/$defs/shortText" },
+        "payment_timing": { "$ref": "#/$defs/shortText" },
+        "penalty_condition": { "$ref": "#/$defs/shortText" },
+        "rental_region": { "$ref": "#/$defs/shortText" },
+        "screening_criteria": { "$ref": "#/$defs/shortText" },
+        "basic_driver_age": { "$ref": "#/$defs/shortText" },
+        "driver_age_lowering": { "$ref": "#/$defs/shortText" },
+        "driver_age_upper_limit": { "$ref": "#/$defs/shortText" },
+        "license_period": { "$ref": "#/$defs/shortText" },
+        "personal_driver_scope": { "$ref": "#/$defs/shortText" },
+        "business_driver_scope": { "$ref": "#/$defs/shortText" },
+        "maintenance_service": { "$ref": "#/$defs/shortText" },
+        "credit_grade": { "$ref": "#/$defs/shortText" },
+        "uninsured_damage": { "$ref": "#/$defs/shortText" },
+        "own_damage_repair_ratio": { "$ref": "#/$defs/shortText" },
+        "own_damage_compensation_rate": { "$ref": "#/$defs/shortText" },
+        "insurance_included": { "type": [ "boolean", "null" ] },
+        "deposit_installment": { "type": [ "boolean", "null" ] },
+        "deposit_card_payment": { "type": [ "boolean", "null" ] },
+        "rental_card_payment": { "type": [ "boolean", "null" ] },
+        "roadside_assistance": { "type": [ "boolean", "null" ] },
+        "injury_compensation_limit": { "$ref": "#/$defs/nonNegativeNumber" },
+        "injury_deductible": { "$ref": "#/$defs/nonNegativeNumber" },
+        "property_compensation_limit": { "$ref": "#/$defs/nonNegativeNumber" },
+        "property_deductible": { "$ref": "#/$defs/nonNegativeNumber" },
+        "self_body_accident": { "$ref": "#/$defs/nonNegativeNumber" },
+        "self_body_deductible": { "$ref": "#/$defs/nonNegativeNumber" },
+        "personal_injury_compensation_limit": { "$ref": "#/$defs/nonNegativeNumber" },
+        "personal_injury_deductible": { "$ref": "#/$defs/nonNegativeNumber" },
+        "uninsured_compensation_limit": { "$ref": "#/$defs/nonNegativeNumber" },
+        "uninsured_deductible": { "$ref": "#/$defs/nonNegativeNumber" },
+        "own_damage_compensation": { "$ref": "#/$defs/nonNegativeNumber" },
+        "own_damage_min_deductible": { "$ref": "#/$defs/nonNegativeNumber" },
+        "own_damage_max_deductible": { "$ref": "#/$defs/nonNegativeNumber" },
+        "annual_roadside_assistance": { "$ref": "#/$defs/nonNegativeNumber" },
+        "annual_mileage": { "$ref": "#/$defs/nonNegativeNumber" },
+        "max_annual_mileage": { "$ref": "#/$defs/nonNegativeNumber" },
+        "mileage_upcharge_per_10000km": { "$ref": "#/$defs/nonNegativeNumber" },
+        "age_lowering_cost": { "$ref": "#/$defs/nonNegativeNumber" },
+        "additional_driver_allowance_count": { "$ref": "#/$defs/nonNegativeNumber" },
+        "additional_driver_cost": { "$ref": "#/$defs/nonNegativeNumber" },
+        "deposit_return_days": { "$ref": "#/$defs/nonNegativeNumber" },
+        "buyout_notice_days": { "$ref": "#/$defs/nonNegativeNumber" }
+      }
+    },
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "publicProductKey",
+        "_key",
+        "product_code",
+        "car_number",
+        "maker",
+        "model",
+        "sub_model",
+        "trim_name",
+        "trim_extra",
+        "variant",
+        "vehicle_class",
+        "fuel_type",
+        "engine_type",
+        "drive_type",
+        "transmission",
+        "usage",
+        "ext_color",
+        "int_color",
+        "accident_history",
+        "cert_car_name",
+        "location",
+        "provider_name",
+        "year",
+        "engine_cc",
+        "seats",
+        "mileage",
+        "battery_capacity",
+        "annual_mileage",
+        "first_registration_date",
+        "note",
+        "options",
+        "deposit_note",
+        "product_type",
+        "vehicle_status",
+        "insurance_included",
+        "price",
+        "image_url",
+        "image_urls",
+        "photo_link",
+        "_policy"
+      ],
+      "properties": {
+        "publicProductKey": { "$ref": "#/$defs/publicKey" },
+        "_key": { "$ref": "#/$defs/publicKey" },
+        "product_code": { "$ref": "#/$defs/publicKey" },
+        "car_number": { "$ref": "#/$defs/shortText" },
+        "maker": { "$ref": "#/$defs/shortText" },
+        "model": { "$ref": "#/$defs/shortText" },
+        "sub_model": { "$ref": "#/$defs/shortText" },
+        "trim_name": { "$ref": "#/$defs/shortText" },
+        "trim_extra": { "$ref": "#/$defs/shortText" },
+        "variant": { "$ref": "#/$defs/shortText" },
+        "vehicle_class": { "$ref": "#/$defs/shortText" },
+        "fuel_type": { "$ref": "#/$defs/shortText" },
+        "engine_type": { "$ref": "#/$defs/shortText" },
+        "drive_type": { "$ref": "#/$defs/shortText" },
+        "transmission": { "$ref": "#/$defs/shortText" },
+        "usage": { "$ref": "#/$defs/shortText" },
+        "ext_color": { "$ref": "#/$defs/shortText" },
+        "int_color": { "$ref": "#/$defs/shortText" },
+        "accident_history": { "$ref": "#/$defs/shortText" },
+        "cert_car_name": { "$ref": "#/$defs/shortText" },
+        "location": { "$ref": "#/$defs/shortText" },
+        "provider_name": { "$ref": "#/$defs/shortText" },
+        "year": { "$ref": "#/$defs/nonNegativeNumber" },
+        "engine_cc": { "$ref": "#/$defs/nonNegativeNumber" },
+        "seats": { "$ref": "#/$defs/nonNegativeNumber" },
+        "mileage": { "$ref": "#/$defs/nonNegativeNumber" },
+        "battery_capacity": { "$ref": "#/$defs/nonNegativeNumber" },
+        "annual_mileage": { "$ref": "#/$defs/nonNegativeNumber" },
+        "first_registration_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}(-\\d{2})?$"
+        },
+        "note": { "$ref": "#/$defs/longText" },
+        "options": { "$ref": "#/$defs/longText" },
+        "deposit_note": { "$ref": "#/$defs/longText" },
+        "product_type": {
+          "enum": [
+            "NEW_SUBSCRIPTION",
+            "USED_SUBSCRIPTION",
+            "RENTAL",
+            "LEASE",
+            "UNKNOWN_PUBLIC_TYPE",
+            null
+          ]
+        },
+        "vehicle_status": {
+          "enum": [
+            "AVAILABLE",
+            "CONSULT_REQUIRED",
+            "CONTRACTING",
+            "UNAVAILABLE",
+            "UNKNOWN",
+            null
+          ]
+        },
+        "insurance_included": { "type": [ "boolean", "null" ] },
+        "price": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^[0-9]{1,3}(_[A-Za-z0-9가-힣.-]{1,20})?$": {
+            "$ref": "#/$defs/priceTerm"
+            }
+          },
+          "propertyNames": {
+            "pattern": "^[0-9]{1,3}(_[A-Za-z0-9가-힣.-]{1,20})?$"
+          }
+        },
+        "image_url": { "$ref": "#/$defs/url" },
+        "image_urls": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 500,
+            "pattern": "^https://"
+          }
+        },
+        "photo_link": { "$ref": "#/$defs/url" },
+        "_policy": { "$ref": "#/$defs/policy" }
+      }
+    },
+    "feed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "count",
+        "products",
+        "brand"
+      ],
+      "properties": {
+        "contractVersion": {
+          "const": "1.0"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "products": {
+          "type": "array",
+          "maxItems": 5000,
+          "items": {
+            "$ref": "#/$defs/product"
+          }
+        },
+        "brand": {
+          "type": "string",
+          "maxLength": 80
+        }
+      }
+    },
+    "quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "product"
+      ],
+      "properties": {
+        "product": {
+          "$ref": "#/$defs/product"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/feed"
+    },
+    {
+      "$ref": "#/$defs/quote"
+    }
+  ]
+}
