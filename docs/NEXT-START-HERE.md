@@ -529,6 +529,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-10 폐기된 pre-ONE 배달기의 미호출 실행부 제거
+
+- 목적/기준 revision: `7ef04a90ab2ee2d54f18b8b9c5d30cae5d20d000`에서 폐기된 배달기의 혼동 가능한 dead 실행부를 제거한다. Academy development READY, 새 자산 없음.
+- 변경/참조: `scripts/data-delivery-owner.mjs`의 정의만 있고 호출/export가 없는 `historicalMain()` 및 그 함수만 쓰던 `command()`와 child-process/파일쓰기 전용 import를 삭제했다. `shared-sheet-daily.yml`이 실제 import하는 `assertCurrentSharedSheet`, 테스트용 exports, CLI `RETIRED` fail-closed는 변경하지 않는다. 기존 이력·dashboard 갱신·원문·dirty·미병합 작업 보존.
+- 검증: delivery 회귀 15 PASS(현행 시트 binding·기존 exports·3종 CLI 차단·dead 외부 명령/파일쓰기 경로 부재), 전체 Vitest 2,133 PASS / 외부환경 조건부 16 SKIP, build·architecture·Data Access boundary PASS, standards 33개 schema/15 PASS(기존 PARTIAL), diff check PASS. 최종 exact commit·CI·Claude 결과는 이 작업 PR의 통합 영수증에 고정한다.
+- 남음: `source:iancar:direct`는 원 ERP inventory/parity/RAW, `source:iancar:one`은 ONE 요금/조건/사진/sync/restore로 권한이 달라 유지한다. 운영 `050e382`의 dead 함수도 미호출이며 운영 image·workflow·IAM·DB·ACTIVE 변경 0회.
+- 복원/next_start_here: 폐기 commit revert로 코드 복원 가능하나 폐기 배달기 재실행 권한은 없다. 현재 main과 PR 검증을 확인하고 다음 후보도 실제 책임·참조와 운영 의존부터 대조한다.
+
 ### 2026-10-10 폐기된 AutoPlus 1회성 보정 실행코드 제거
 
 - 목적/기준 revision: `67a372e2bfe2f81f63e962753918697de9891703`에서 이미 2026-09-29 적용·퇴역한 보정기의 혼동 가능한 실행 입구를 제거한다. Academy development READY, 새 자산 없음.
