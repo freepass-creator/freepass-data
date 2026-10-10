@@ -47,6 +47,14 @@ function app(store: AdminWorkflowStore) {
 }
 
 describe('Admin workflow consumer gateway', () => {
+  it('preserves the timestamp object atom and explicitly locates unsupported objects in raw docs', () => {
+    const timestamp = { _seconds: 1790000000, _nanoseconds: 123000000 };
+    const facts = projectAdminWorkflowCurrentFacts({ kind: 'doc', resource: 'settlementRows', id: 'same-id' }, {
+      schema: 'freepass-data.admin-workflow-read/v1', digest: 'a'.repeat(64), docs: [{ id: 'same-id', data: { createdAt: timestamp, claimWritten: { unsupported: true } } }],
+    }).records[0]!.facts;
+    expect(facts.createdAt).toMatchObject({ state: 'RECORDED', sourceField: 'createdAt', sourceValue: timestamp, sourceValueLocation: 'INLINE' });
+    expect(facts.claimSupply).toMatchObject({ value: null, state: 'INVALID', sourceValue: null, sourceValueLocation: 'RAW_DOCS' });
+  });
   it('keeps contract axes and explicit unverified links without deriving a settlement amount or actor', () => {
     const data = { source_intake_id: 'intake-id', contract_status: '계약대기', sign_status: 'source-sign', rent_month_snapshot: '48', agent_code: 'agent', updated_at: 0, created_by: 'unverified-actor-field' };
     const current = projectAdminWorkflowCurrentFacts({ kind: 'doc', resource: 'contracts', id: 'contract-id', view: 'current-facts/v1' }, {

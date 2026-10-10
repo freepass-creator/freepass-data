@@ -67,6 +67,13 @@ export function projectAdminWorkflowCurrentFacts(spec: AdminWorkflowReadSpec, re
   };
   const factualTimestamp = (raw: unknown) => typeof raw === 'number'
     || typeof raw === 'string' && !/(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? null : timestampOrNull(raw);
+  const sourceValueOf = (raw: unknown) => {
+    if (!raw || typeof raw !== 'object') return rawScalar(raw);
+    // Preserve only the timestamp's numeric source representation, never arbitrary object internals.
+    const entries = Object.entries(raw);
+    return entries.length && entries.every(([key, value]) => ['seconds', 'nanoseconds', '_seconds', '_nanoseconds'].includes(key)
+      && typeof value === 'number' && Number.isFinite(value)) ? Object.fromEntries(entries) : null;
+  };
   const intake = spec.resource === 'settlementRows';
   const fields: Record<string, [string | null, 'string' | 'number' | 'timestamp' | 'boolean']> = intake ? {
     intakeCode: ['code', 'string'], intakeRequestId: ['intakeRequestId', 'string'],
@@ -116,11 +123,13 @@ export function projectAdminWorkflowCurrentFacts(spec: AdminWorkflowReadSpec, re
         const missing = raw === undefined || raw === null || raw === '';
         const value = missing ? null : type === 'timestamp' ? factualTimestamp(raw)
           : type === 'number' ? factualNumber(raw) : type === 'boolean' ? booleanOrNull(raw) : typeof raw === 'string' ? raw : null;
+        const sourceValue = sourceValueOf(raw);
         return [name, { value, state: missing ? 'UNKNOWN' : value === null ? 'INVALID' : 'RECORDED',
           reason: sourceField === null ? 'UNAVAILABLE_IN_THIS_SOURCE' : missing ? 'SOURCE_NOT_RECORDED' : value === null
             ? type === 'timestamp' && typeof raw === 'number' ? 'SOURCE_TIMESTAMP_UNIT_UNVERIFIED'
               : type === 'timestamp' && typeof raw === 'string' && !/(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? 'SOURCE_TIMEZONE_MISSING' : 'SOURCE_TYPE_NOT_SUPPORTED'
-            : null, sourceField, sourceValue: rawScalar(raw) }];
+            : null, sourceField, sourceValue,
+          sourceValueLocation: raw !== null && typeof raw === 'object' && sourceValue === null ? 'RAW_DOCS' : 'INLINE' }];
       }));
       const linkField = intake ? 'contractId' : 'source_intake_id';
       const link = typeof data[linkField] === 'string' && data[linkField].trim() ? data[linkField] : null;
