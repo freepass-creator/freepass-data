@@ -94,7 +94,7 @@ describe('read-only consumer gateway', () => {
   });
   it('delivers gallery, representative and color with unverified diagnostics and excludes documents', async () => {
     const image='https://supplier.example/car.jpg', document='https://supplier.example/document.jpg';
-    const product={listable:true,provider_company_code:'RP013',price:{'36':{rent:500000,deposit:null}},image_urls:[document,image],doc_images:[document],ext_color:'black',photo_link:'https://supplier.example/tcar'};
+    const product={listable:true,provider_company_code:'RP013',provider_name:'Supplier Name',car_number:'000\uac000000',price:{'36':{rent:500000,deposit:null}},image_urls:[document,image],doc_images:[document],ext_color:'black',photo_link:'https://supplier.example/tcar'};
     const {app}=withAccess(new MemoryDataStore(),[{id:'kakao-ops',projectionId:'erp-public',token,capabilities:['catalog-reference']}],undefined,{
       read:async()=>{throw new Error('unused');},readKakaoReferenceSource:async()=>({consumerId:'kakao-ops',observedAt:'2026-10-09T00:00:00Z',products:{withPhotos:product,withoutPhotos:{...product,image_urls:[],ext_color:null}}})});
     const result=await app.inject({url:'/v1/consumers/kakao-ops/catalog-reference',headers});
@@ -107,6 +107,9 @@ describe('read-only consumer gateway', () => {
     expect(result.json().meta.dataDigest).toBe(createHash('sha256').update(JSON.stringify(result.json().data)).digest('hex'));
     expect(row.vehicleMediaEvidence.checks).toEqual([expect.objectContaining({state:'DOCUMENT_IMAGE_EXCLUDED',status:null}),expect.objectContaining({state:'HEAD_NOT_CHECKED',status:null})]);
     expect(result.json().data).toHaveLength(2);
+    const lookup=await app.inject({url:'/v1/consumers/kakao-ops/catalog-reference?'+new URLSearchParams({supplierName:'SupplierName',plateNumber:'000 \uac00-0000'}),headers});
+    expect(lookup.statusCode).toBe(200);expect(lookup.json().data).toHaveLength(2);expect(lookup.json().meta.queryResolution.state).toBe('HOLD');
+    expect((await app.inject({url:'/v1/consumers/kakao-ops/catalog-reference?plateNumber=3456',headers})).statusCode).toBe(400);
     expect(result.json().data.find((p:{sourceProductId:string})=>p.sourceProductId==='withoutPhotos').vehicle.exteriorColor).toBeNull();
     expect(product.photo_link).toBe('https://supplier.example/tcar');
     await app.close();

@@ -6,7 +6,7 @@ function fixture(): Erp5ProductInput {
     projectId: 'freepasserp5', collection: 'products', documentId: 'synthetic-document',
     sourceRevision: 'synthetic-revision', observedAt: '2026-09-21T10:00:00.000Z',
     data: {
-      car_number: '12가3456', maker: '합성제조사', model: '합성모델', product_code: 'synthetic-product',
+      car_number: '000가0000', maker: '합성제조사', model: '합성모델', product_code: 'synthetic-product',
       provider_company_code: 'TEST_SUPPLIER', product_type: '중고렌트', vehicle_status: '출고가능',
       status_kind: '가용', listable: true,
       price: { '24_3만': { rent: '750,000', deposit: '3,000,000' } }
@@ -127,9 +127,9 @@ describe('ERP5 product mapping preparation', () => {
   });
 
   it.each([
-    ['SON_NO_KONG', '12하3456', '중고렌트', 'USED_RENT'],
-    ['SON_NO_KONG', '12가3456', '오공구독', 'OGONG_SUBSCRIPTION'],
-    ['TCAR_EXTERNAL', '12가3456', '픽업구독', 'PICKUP_SUBSCRIPTION']
+    ['SON_NO_KONG', '000하0000', '중고렌트', 'USED_RENT'],
+    ['SON_NO_KONG', '000가0000', '오공구독', 'OGONG_SUBSCRIPTION'],
+    ['TCAR_EXTERNAL', '000가0000', '픽업구독', 'PICKUP_SUBSCRIPTION']
   ])('keeps RP012 supplier and %s product axes separate', (bucket, plate, type, expected) => {
     const input = fixture();
     Object.assign(input.data, { provider_company_code: 'RP012', source_bucket: bucket, car_number: plate, product_type: type });
@@ -178,7 +178,7 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.candidate.providerCompanyCode).toBe(supplier);
   });
 
-  it.each(['UNKNOWN', '12가', '12가3456 extra', ''])('holds invalid plate %j without rewriting it', plate => {
+  it.each(['UNKNOWN', '000가', '000가0000 extra', ''])('holds invalid plate %j without rewriting it', plate => {
     const input = fixture();
     input.data.car_number = plate;
     const result = mapErp5Product(input);
@@ -446,4 +446,20 @@ describe('가격 키 읽기', () => {
     delete (input.data as Record<string, unknown>).deposit_note;
     expect(mapErp5Product(input).candidate.priceTerms[0]).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
   });
+});
+
+describe('explicit monthly and yearly price keys', () => {
+  const keys=[...[1,3,5].flatMap(m=>[2000,3000,4000].map(k=>`${m}_\uc6d4${k}km`)),...[12,24,36,48,60].flatMap(m=>[20000,30000,40000].map(k=>`${m}_\uc5f0${k}km`))];
+  it.each(keys)('parses actual key %s without annualizing monthly mileage', key => {
+    const parsed=parseErp5PriceKey(key)!;expect(parsed).toBeDefined();expect(parsed.months).toBe(Number(key.split('_')[0]));
+    expect(parsed.contractedMileage!.period).toBe(key.includes('\uc6d4')?'month':'year');
+    expect(parsed.contractedMileage!.km).toBe(Number(key.split('_')[1]!.slice(1,-2)));
+    expect(parsed.mileageKm).toBe(key.includes('\uc6d4')?undefined:parsed.contractedMileage!.km);
+  });
+  it('keeps monthly RAW under HOLD where canonical V1 cannot represent it',()=>{
+    const input=fixture();input.data.price={'1_\uc6d42000km':{rent:500000,deposit:1000000}};
+    const result=mapErp5Product(input);expect(result.status).toBe('HOLD');expect(result.raw.data.price).toEqual(input.data.price);
+    expect(result.candidate.priceTerms).toEqual([]);
+  });
+  it.each(['72_\uc5f020000km','0_\uc6d42000km','1_\uc6d40km','1_\uc6d4-1km','1_\uc6d42000.5km','12_\uc5f020000','9007199254740992_\uc5f020000km'])('rejects malformed explicit key %s',key=>expect(parseErp5PriceKey(key)).toBeUndefined());
 });
