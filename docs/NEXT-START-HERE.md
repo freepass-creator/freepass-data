@@ -526,6 +526,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-10 상품 칸 신선도 설계 — 문서만
+
+- 목적/대상 revision: `9e8ecd5`, `work/freepass-data/freshness-design-20261010`. Claude가 제공한 main/Issue #24 사전 확인을 사용했고 Academy document READY 확인. 신규 파일·커밋·푸시 없음.
+- 변경: [신선도 설계 — 2026-10-10](ERP5-CONTINUOUS-AUDIT.md#freshness-design-20261010)에 원천별 15분 기본 주기, 마지막 성공·upstream 시각 분리, 2배 경보, Cloud Scheduler+GitHub 이중 트리거, 기존 감시/관제 재사용, 비용식·기준 시각·M1~M5를 통합. 감사 주기와 F01 단독 발행 설명도 현행으로 정정.
+- 선택: 새 신선도 저장소 없이 source head가 가리키는 COMPLETED+COMPLETE+CURRENT run의 completedAt을 읽는다. 하루 이력은 24시간/48시간 경보로 분리. 중계 pending과 GitHub 직접 cron의 공통 잠금은 미구현 과제로 명시.
+- 검증: 로컬 계약·구현 대조, 산식·링크·UTF-8·diff/민감값 검사. 운영 측정은 오더의 Claude 읽기 결과이며 live/가격/독립 검토 재확인 없음. 코드·workflow·운영 변경 없음.
+- 남음: 토큰 저장소 범위·IAM/예약 활성·writer 전환 승인, 실행시간·비용·실제 경보 수신·계획 날짜. Data Health SOURCE_FRESHNESS는 아직 NOT_EVALUATED이며 설계를 운영 완료로 세지 않는다.
+- next_start_here: 위 절의 M1 읽기 계약과 공통 입장 반례부터 별도 구현 계획. M5는 전체 이관 + 2주 관찰 뒤 ERP4 발행 종료와 #560 임시 격리 제거를 같은 PR로 처리.
 ### 2026-10-10 정산 줄 계약→가격행→내부 수수료 읽기 전용 조회
 
 - 목적: 계약 기록 한 줄에서 차량번호·공급사·개월·월대여료·보증금으로 Catalog의 차량→상품→오퍼→가격행→내부 수수료를 한 번에 좁히는 읽기 전용 경로를 추가했다.
