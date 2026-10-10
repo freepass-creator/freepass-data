@@ -67,7 +67,8 @@
     "check:supplier-sheet-canon": "node scripts/supplier-input-sheet.mjs --check-canon",
     "plan:sheet-blank-fill": "tsx src/jobs/plan-sheet-blank-fill.ts",
     "export:sheet-blank-fill-input": "tsx src/jobs/export-sheet-blank-fill-input.ts",
-    "ingest:kakao-source": "tsx src/jobs/ingest-kakao-source.ts"
+    "ingest:kakao-source": "tsx src/jobs/ingest-kakao-source.ts",
+    "audit:settlement-id-links": "tsx src/jobs/audit-settlement-id-links.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",

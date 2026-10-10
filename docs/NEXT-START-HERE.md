@@ -1,5 +1,13 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 정산 안정 ID 연결 읽기 전용 감사 P0-2
+
+- 목적: `settlement_rows`의 `contractNo`/`contractId`/`contractCode`/`intakeRequestId`/`sourceProductId`를 기존 `contract`/`products`와 읽기 전용으로 대조하는 감사 경로를 추가한다. 차량번호 후보는 확정이 아니며 번호를 만들어 채우지 않는다.
+- 변경: `src/application/settlement-id-link-audit.ts`, `src/infra/settlement-id-link-firestore-reader.ts`, `src/jobs/audit-settlement-id-links.ts`, `tests/settlement-id-link-audit.test.ts`, `docs/SETTLEMENT-COMPLETION-P0.md`, `audit:settlement-id-links`.
+- 검증: 가상 번호 데이터 테스트를 추가했다. 현재 checkout에는 `node_modules`가 없어 `npm.cmd run build`는 `tsc` 없음, `npm.cmd run check:standards`는 `ajv` 없음 환경 오류로 중단된다. 네트워크 금지라 설치하지 않았다.
+- next_start_here: 실제 감사 실행은 `SETTLEMENT_ID_LINK_AUDIT_OUT`을 체크아웃 밖 비공개 절대경로로 지정한 뒤 수행한다. stdout에는 개수/digest만 남기고, 행별 보고서에는 차량번호·고객명을 넣지 않는다.
+
+
 ## 2026-10-06 F04 입력 화면 / 수수료 원천 수집 갱신
 
 - 접수는 기존 열 순서·셀값을 보존하고 기본정보/계약/진행/청구·지급 헤더를 구분했다. 취소행 전체 연분홍+가운데줄, 금액 천단위 표시, 산출근거·비고 줄바꿈, 상세/증빙 보조열 숨김, 고정열 해제. 기존 경고조건 보존. 원본 전체 Drive backup 및 native metadata 재조회 PASS. 취소행은 표시하고 정산 대상에서는 기존 규칙대로 제외한다.
