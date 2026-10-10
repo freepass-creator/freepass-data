@@ -2,7 +2,7 @@
   "schema": "canon-guard-bundle/v1",
   "설명": "ai-ops(비공개)의 scripts/동기화/canon-배포.mjs 가 만든 파일 묶음. 손으로 고치지 않는다 — 고치려면 ai-core 판정기를 고치고 다시 배포한다.",
   "source_repo": "ai-core",
-  "source_commit": "8538dfa083ea39cb0c30ff6d193e7e7209939179",
+  "source_commit": "5e592936dfe93ca058924fbd315ed5cd084fc0fb",
   "files": {
     "scripts/canon-guard.mjs": "8fde44efd762d7765b49801305513aa454ba05e82149d265dd73bdfa718514c4",
     "scripts/check-branch-discipline.mjs": "ab31be4e0300ecb213df0932c25a0d7e5ead83244c5e948fe3fb4d9ce1bea3e6",

@@ -163,6 +163,7 @@ ERP5·카톡이 멈추지 않게 읽기 쪽을 먼저 바꾼다. 1단계는 기�
 
 쓴 것: 기존 `VehicleAsset`, `Product.vehicleAssetId`, source binding, lineage/audit/revision 구조를 그대로 확장한다.  
 못 쓴 것: 현재 `va_` + plate hash 발급은 번호 없는 신차와 번호 변경을 표현하지 못해 신규 발급에는 재사용하지 않는다.
+
 ## 10-13 이전 계획기
 
 범위: 이 PR은 읽기 전용 계획기와 분석 문서까지만 포함한다. 운영 적용기, Firestore 쓰기, `products`/`catalog_vehicle_assets` 변경 코드는 없다. 공개 문서와 stdout에는 상품 키, 차량번호, VIN, 시트 ID를 싣지 않고 sha256 앞 12자리 해시와 건수만 둔다. 테스트 데이터의 식별자는 `TEST-FAKE-*`만 쓴다.
