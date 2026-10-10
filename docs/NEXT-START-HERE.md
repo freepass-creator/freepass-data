@@ -529,6 +529,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 private read 배포 — 기존 권한 유지 / 별도 cutover 없음
+
+- 목적/승인: 사용자 `ㄱㄱ`로 최신 private read 서비스 배포만 승인했다. Academy operations/document READY. 코드 정본 `c2ccd609915449f1d6c6854bf7639011f03e1717`, 기존 운영 `050e382` / `freepass-data-read-00023-fhl`을 복원 기준으로 보존한다. 원래 dirty 문서는 수정하지 않고 별도 인계 worktree에서 기록한다.
+- 배포 영수증: [run 38089799739](https://github.com/freepass-creator/freepass-data/actions/runs/38089799739) SUCCESS, exact `c2ccd609`, `freepass-data-read-00024-w6g`, image `sha256:1357532c824e1bce7d977b87ee337dd1cf928723148ddfb6736cd524177e001c`, Ready=True / traffic 100%. 기존 runtime SA·env·consumer Secret version 3·Iancar Secret version 1 유지, IAM binding 멤버 확대 0 / allUsers 0.
+- 검증: 총괄의 exact revision build·로컬 read-runtime 13 PASS, 전체 기본 병렬 테스트 timeout 1건 발생 후 해당 8개 단독 PASS 및 maxWorkers=2 전체 2,133 PASS / 조건부 16 SKIP. Claude 공식 session 48852는 본문+ANSWERED+exit0, 차단 없음. 배포 workflow의 미인증 403 / ERP compat 인증 200 PASS. 배포 전 Kakao reference 200·475개 / REFERENCE_ONLY·HOLD, COLLECTED grant=false. 배포 후 공급사·차량번호·ZERO/UNKNOWN·COLLECTED 차단 실조회는 총괄 session 88822의 최종 결과를 이어서 확인한다.
+- 남음: 이 배포는 실제 Kakao 소비자 코드 수정, Drive 사진 reader 자동 연결, 공급사 RAW apply, Canonical/ACTIVE 발행, COLLECTED grant 또는 내부 AI 계정 등록을 완료하지 않는다. DB·IAM 확대·공개 설정·외부 저장소 변경은 승인 범위 밖이며 수행하지 않았다.
+- next_start_here: 현재 운영 revision/image와 위 run을 먼저 확인하고 session 88822의 비식별 post-readback을 연결한다. 코드 인계 문서가 main에 병합되어도 운영 image는 `c2ccd609` 그대로다. rollback은 기존 ready revision으로의 traffic 복귀이며 필요 시 별도 운영 판단으로 실행한다.
+
 ### 2026-10-10 폐기된 pre-ONE 배달기의 미호출 실행부 제거
 
 - 목적/기준 revision: `7ef04a90ab2ee2d54f18b8b9c5d30cae5d20d000`에서 폐기된 배달기의 혼동 가능한 dead 실행부를 제거한다. Academy development READY, 새 자산 없음.
