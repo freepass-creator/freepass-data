@@ -163,3 +163,58 @@ ERP5·카톡이 멈추지 않게 읽기 쪽을 먼저 바꾼다. 1단계는 기�
 
 쓴 것: 기존 `VehicleAsset`, `Product.vehicleAssetId`, source binding, lineage/audit/revision 구조를 그대로 확장한다.  
 못 쓴 것: 현재 `va_` + plate hash 발급은 번호 없는 신차와 번호 변경을 표현하지 못해 신규 발급에는 재사용하지 않는다.
+
+## 10-13 이전 계획기
+
+범위: 이 PR은 읽기 전용 계획기와 분석 문서까지만 포함한다. 운영 적용기, Firestore 쓰기, `products`/`catalog_vehicle_assets` 변경 코드는 없다. 공개 문서와 stdout에는 상품 키, 차량번호, VIN, 시트 ID를 싣지 않고 sha256 앞 12자리 해시와 건수만 둔다. 테스트 데이터의 식별자는 `TEST-FAKE-*`만 쓴다.
+
+계획기는 순차 단건 확정이 아니라 식별자 그래프를 먼저 만든다. 상품이 가진 번호·VIN·공급사 범위 차량 ID·시트 행·기존 binding asset과 기존 asset의 활성 식별자를 노드로 두고 같은 상품/asset 안의 식별자를 union-find로 묶은 뒤, 묶음별로 기존 asset 둘 이상 또는 같은 종류 식별자 값 충돌을 판정한다. 충돌 묶음은 선행 상품까지 모두 `GRAPH_COMPONENT_CONFLICT` HOLD로 남기며, 깨끗한 묶음은 기존 asset 하나면 그 UID로 LINK하고 asset이 없으면 묶음 대표 키 정렬순으로 계획 생성 시 UID를 고정한다. 적용은 HOLD 묶음 제외, HOLD 목록은 확인 동선으로 보낸다.
+
+실행:
+
+```powershell
+$env:VEHICLE_UID_PLAN_OUT="C:\temp\freepass-private\vehicle-uid-plan.json"
+npm.cmd run plan:vehicle-uid-migration
+```
+
+`VEHICLE_UID_PLAN_OUT`은 저장소 밖 절대경로여야 하며, 기존 `writePrivateArtifact`가 같은 경로 덮어쓰기와 checkout 내부 저장을 거부한다. stdout은 `writes: 0`, products/assets 건수, 종류별 건수, 이유별 건수, `planDigest`, 공개 보고 digest만 출력한다. 전체 계획 파일에는 원본 `productKey`가 포함되므로 비공개 증거로 취급한다.
+
+계획 항목:
+
+| kind | 의미 | 적용 전제 |
+| --- | --- | --- |
+| `ASSET_ADD_EXTERNAL_IDS` | 기존 `catalog_vehicle_assets` id는 그대로 두고 `PLATE`, `VIN` externalIds를 추가할 계획. `validFrom`은 asset `createdAt`. | 별도 적용 PR에서 digest 승인과 readback 필요. |
+| `PRODUCT_SET_UID` | legacy `products` 문서에 `vehicle_uid`를 붙일 계획. binding asset, 단일 plate match, 계획에 고정된 신규 ULID 중 하나. | 적용기는 이번 PR에 없음. 신규 UID는 계획 생성 때 박아 digest를 고정한다. |
+| `HOLD` | 접두 키 문서, 이안카 자체 키 문서, 번호 중복, VIN 모순, resolver HOLD/UNKNOWN 등 사람 확인 대상. | 새 UID를 만들지 않는다. |
+
+계획 불변식:
+
+| 항목 | 판정 |
+| --- | --- |
+| 기존 asset 160 id 불변 | 계획은 기존 asset id를 변경하지 않고 `externalIds` 추가만 표현한다. |
+| products 수 불변 | `PRODUCT_SET_UID`는 필드 추가 계획만 만들며 문서 생성/삭제가 없다. |
+| 한 UID에 활성 PLATE 하나 | planner summary의 `oneActivePlatePerUid`가 false면 적용 금지. |
+
+`products` 쓰기 경로의 `vehicle_uid` 보존 분석:
+
+| 경로 | 쓰기 방식 | `vehicle_uid` 보존 판정 |
+| --- | --- | --- |
+| `src/infra/autoplus-policy-repair-firestore.ts:66`, `:86` | `transaction.update(snapshot.ref, {...})` 필드 단위 정정 | 보존. 지정 필드만 갱신한다. |
+| `src/infra/billincar-policy-repair-firestore.ts:65` | `transaction.update(snapshot.ref, {...})` 필드 단위 policy link | 보존. 지정 필드만 갱신한다. |
+| `src/infra/iancar-policy-sync-firestore.ts:111` | `transaction.update(snap.ref, {...})` 필드 단위 policy link | 보존. 지정 필드만 갱신한다. |
+| `src/infra/iancar-publication-withdrawal-firestore.ts:128` | `tx.update(ref, p.patch)` photo/status patch | 보존. patch가 `vehicle_uid`를 포함하지 않는 한 기존 필드는 유지된다. 적용 전 patch allowlist에 `vehicle_uid` 금지 확인 권장. |
+| `src/infra/iancar-publication-withdrawal-firestore.ts:321` | 기존 문서는 `tx.update(ref, row.fields)`, 신규 문서는 `tx.create(ref, row.fields)` | 기존 문서 보존. 신규 문서는 `vehicle_uid`가 없을 수 있으므로 UID 적용 뒤 같은 writer를 다시 쓰려면 생성 경로에 UID resolver 연결 필요. |
+| `src/infra/iancar-publication-withdrawal-firestore.ts:377` | `tx.update(ref, patch)` restore patch | 보존. 지정 필드만 갱신한다. |
+| `src/infra/iancar-publication-withdrawal-firestore.ts:432` | `transaction.update(doc.ref, {...})` withdrawal status patch | 보존. 지정 필드만 갱신한다. |
+| `src/infra/vehicle-name-reference-repair-firestore.ts:860` | `transaction.update(ref, update)` products name/source repair | 보존. update 객체는 이름/원문 정정 계열 필드 단위다. 적용 전 `vehicle_uid`가 update에 포함되지 않는 회귀 확인 필요. |
+| `src/infra/erp5-compat-catalog-reader.ts:120`, `:135`, `:195` | 읽기 전용 | 보존. 쓰기 없음. |
+| `src/adapters/legacy-freepasserp3.ts:40` | 읽기 전용 source adapter | 보존. 쓰기 없음. |
+| `.github/workflows/shared-sheet-daily.yml:238-239` | source supplement merge 실행 | 직접 products 쓰기 아님. 하위 job이 products writer를 호출하는 경우 별도 적용 전 재확인. |
+| `.github/workflows/erp5-continuous-audit.yml:401`, `:610`, `:635`, `:650` | audit/read/report | 보존. 쓰기 없음. |
+| `.github/workflows/deploy-read-runtime.yml:202` | read-runtime response shape check | 보존. 쓰기 없음. |
+
+적용 전에 고칠 것:
+
+- `src/infra/iancar-publication-withdrawal-firestore.ts:321`의 신규 create 경로는 `vehicle_uid`를 모르는 legacy `products` 생성이 가능하므로, UID 적용 전 또는 같은 적용 PR에서 UID resolver/plan digest 연동이 필요하다.
+- `src/infra/iancar-publication-withdrawal-firestore.ts:128` 및 `src/infra/vehicle-name-reference-repair-firestore.ts:860`은 현재 필드 단위라 보존되지만, `vehicle_uid`를 patch/update에 넣지 않는 회귀 테스트를 적용 PR에 추가한다.
+- source ingest/data-owned refresh가 legacy `products`를 직접 덮어쓰는 새 경로가 생기면 `set`/replace 금지 또는 `merge/update` 보존 검사를 먼저 추가한다.

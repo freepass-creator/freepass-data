@@ -244,7 +244,7 @@ function createExternalIds(identifiers: VehicleExternalId[], now: string): Vehic
 export function resolveVehicleUid(
   candidate: VehicleUidCandidate,
   assets: VehicleAsset[],
-  options: { now?: string; clock?: VehicleUidClock; random?: VehicleUidRandom } = {},
+  options: { now?: string; clock?: VehicleUidClock; random?: VehicleUidRandom; uidOptions?: VehicleUidOptions } = {},
 ): VehicleUidResolution {
   const now = options.now ?? new Date().toISOString();
   const ids = normalizeExternalIds(candidate);
@@ -268,7 +268,7 @@ export function resolveVehicleUid(
   if (identifiers.length > 0) {
     return {
       action: 'CREATE',
-      vehicleUid: newVehicleUid(options.clock, options.random),
+      vehicleUid: newVehicleUid(options.clock, options.random, options.uidOptions),
       externalIds: createExternalIds(identifiers, now),
     };
   }
@@ -287,7 +287,9 @@ export function addExternalId(asset: VehicleAsset, id: VehicleExternalId, now: s
   if (activeIndex >= 0) {
     const active = normalizeId(externalIds[activeIndex]!)!;
     if (active.value === normalized.value) return { ...structuredClone(asset), externalIds };
-    externalIds[activeIndex] = { ...externalIds[activeIndex]!, validTo: now };
+    // 기존 값의 종료는 «새 값의 시작일»부터다 — 새 값이 미래 날짜면 그날까지 옛 값도 유효해서, 전환일 전에 옛 값으로 찾아도 같은 UID 에 연결된다.
+    const closeAt = normalized.validFrom && normalized.validFrom > now ? normalized.validFrom : now;
+    externalIds[activeIndex] = { ...externalIds[activeIndex]!, validTo: closeAt };
   }
   externalIds.push({ ...normalized, validFrom: normalized.validFrom || now, validTo: normalized.validTo ?? null });
   return { ...structuredClone(asset), externalIds };
