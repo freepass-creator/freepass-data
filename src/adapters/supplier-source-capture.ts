@@ -16,7 +16,9 @@ const buckets = ['LOW_SONOKONG_DAILY', 'LOW_SONOKONG', 'LOW_TCAR'] as const;
 export type SonogongBucketObservation = {
   bucket: typeof buckets[number]; observedAt: string; revision: string;
   declaredTotal: number | null; complete: boolean;
-  records: Array<{ list: Record<string, unknown>; detail: Record<string, unknown> | null }>;
+  listResponses?: Record<string, unknown>[];
+  records: Array<{ list: Record<string, unknown>; detail: Record<string, unknown> | null;
+    detailResponse?: Record<string, unknown> }>;
 };
 
 export function sonogongSourceAdapter(input: {
@@ -47,7 +49,11 @@ export function sonogongSourceAdapter(input: {
             || plate(record.detail.carNumber) !== plate(record.list.carNumber)) throw new Error('SONOGONG_DETAIL_IDENTITY_MISMATCH');
           const payload = structuredClone({ bucket: observation.bucket,
             sourceRevision: observation.revision, observedAt: observation.observedAt,
-            list: record.list, detail: record.detail });
+            list: record.list, detail: record.detail,
+            ...(record.detailResponse ? { detailResponse: record.detailResponse } : {}),
+            // Preserve every original list envelope once, including empty buckets.
+            ...(records.length === 0 && observations.some(o => o.listResponses)
+              ? { bucketListResponses: observations.map(o => ({ bucket: o.bucket, responses: o.listResponses ?? [] })) } : {}) });
           records.push({ sourceRecordId: `${observation.bucket}:${record.list.id}`,
             sourceFingerprint: fingerprint(payload), payload });
         }

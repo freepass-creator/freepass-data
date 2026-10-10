@@ -492,6 +492,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-10 손오공 ERP 읽기 포트 이식 — 코드/가짜 응답 시험, 운영 HOLD
+
+- 목적 / 대상 revision: `work/freepass-data/sonogong-port-20261010`, 기준 `9e8ecd575edcbdd04b13a9eac6092443025f61b7`. 사용자 지정 작업 트리만 수정. 커밋·push 없음. main/Issue #24/PR 확인은 호출자의 사전 확인을 사용했다.
+- 재사용: academy `READY`, `CREATE_NEW_JUSTIFIED`. 기존 손오공 RAW 어댑터·공통 수집 검사·SourceIngestionStore 적재 경로·보증금 규칙을 확장. ERP4 `origin/main` 읽기 로직의 인증/페이지/상세 계약만 이식하고 파일 토큰 캐시·덤프/차종/옵션 정리는 제외. ERP4는 수정하지 않았다.
+- 변경: `src/adapters/sonogong-erp-reader.ts`, 기존 `supplier-source-capture.ts`, `src/domain/sonogong-deposit-comparison.ts`, `src/jobs/collect-sonogong.ts`, `tests/sonogong-erp-reader.test.ts`, `package.json`, `docs/NATIVE-SOURCE-COLLECTOR.md` 및 이 이력. `source:sonogong` 기본 쓰기 0, 승인 환경변수+`--apply-raw`+RAW_READY에서만 기존 적재. 부분 수집은 PARTIAL/HOLD이며 삭제·발행하지 않는다.
+- 제한: 동시 1, 시작 간격 250ms, 요청 15초 timeout, 3회 백오프 재시도, 페이지 100/버킷·상세 총 1,000, freshness 1시간. 15분 주기 제안이며 예약 생성 없음. 원문 estimates 보존, 비교는 기간별 건수/구간만 출력한다.
+- 검증: npm 오프라인 잠금 설치 후 손오공 20 + 기존 source-intake 17 PASS. architecture/Data Access 경계·standards 15·시트 106·build PASS. `npm.cmd run check`는 runtime smoke 12 PASS/1 FAIL (`uv_os_get_passwd ENOMEM`)로 중단. 독립 `node:os.userInfo()` 같은 오류 재현. 별도 shadow 10 PASS, dashboard 21 PASS, 전체 Vitest 1,954 PASS / 12 FAIL / 16 SKIP. 실패는 기존 tsx/사용자 정보·jq 실행 권한·로컬 서버 연결 경로이며 관련 시험/기대값은 변경하지 않았다. 전체 PASS 아님. 빌드된 CLI의 승인/계정 누락 차단 및 diff 공백 검사 확인.
+- 남음: 계정 등록, 첫 실호출로 DAILY/응답 형태/원천 시각 계약 확인, 운영 RAW 저장·되읽기, 상품 칸 정리/발행 이관, 독립 검토. BLOCKED_NETWORK: 손오공 실호출·운영 되읽기·Claude 독립 검토.
+- next_start_here: [손오공 이식/주입 절차](NATIVE-SOURCE-COLLECTOR.md#손오공-rp012-erp-읽기-이식--코드가짜-응답-시험-운영-hold-2026-10-10). 호출자가 환경 제약 없는 곳에서 전체 check와 검토를 마친 뒤 반영한다. 계정 등록 후 기본 읽기 → 비교 → 별도 승인 RAW → 되읽기 순서. ERP4 중단은 **Data 수집 첫 성공 + 매시 발행 이관 반영 + 2주 관찰** 충족 후 별도 실행.
+
 ### 2026-10-10 매일 박제 3일 연속 실패 원인과 고침 (개발 관제 배정)
 
 - 원인 ① 10-08·10-09 새벽: 매시 감사(`erp5-continuous-audit`)가 GitHub 예약 지연으로 4~7시간 간격이라 박제 관문이 요구하는 «3시간 안 가드 결과»가 없어 건너뜀. 고침: 가드가 오래되면 감사 workflow 를 한 번 직접 띄우고 그 «이후»에 끝난 가드를 최대 약 20분 기다림(`actions: write` 는 감사만 띄우는 별도 job `audit-refresh` 하나에만 — 쓰기 job 은 `actions: read` 유지. 이 job 은 `continue-on-error` 라 실패해도 실행 결론을 바꾸지 않아 감시의 «전체 success 만 로그 누락 검사» 전제가 유지된다. 감사 수집기는 `shared-sheet-daily` job 1개 + `audit-refresh` 외 job 이 없을 때만 steps 인정).
