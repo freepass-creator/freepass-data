@@ -62,7 +62,7 @@ describe('shared reference policy context', () => {
       { key: '48:1000:month', compatibilityPriceKey: '48_월1000km', termMonths: 48, contractedMileage: { km: 1000, period: 'month' }, monthlyRent: { amount: 700000, currency: 'KRW' }, deposit: { amount: 0, currency: 'KRW' }, depositState: 'ZERO', vatIncluded: true },
     ];
     const product = { listable: true, provider_company_code: 'RP031', product_type: '중고렌트', source: 'EANCAR_ONE_API', source_schema: 'iancar-one-phase-one-product/1',
-      iancar_one_vehicle_id: 'synthetic', car_number: '123가4567', _direct_ingest_at: Date.parse(now), deposit_note: '기간·주행거리별 보증금 상이: 상품 요금 조건 확인',
+      iancar_one_vehicle_id: 'synthetic', car_number: '000가0000', _direct_ingest_at: Date.parse(now), deposit_note: '기간·주행거리별 보증금 상이: 상품 요금 조건 확인',
       price: { '24': { rent: 500000, deposit: 0 }, '24_연20000km': { rent: 500000, deposit: 0 }, '24_연30000km': { rent: 600000, deposit: 1000000 }, '48_월1000km': { rent: 700000, deposit: 0 } },
       iancar_phase_one: { stage: 'PHASE_ONE', publicationPlane: 'ERP5_COMPATIBILITY_BRIDGE', sourceVehicleId: 'synthetic', sourceSyncedAt: now, sourceDigest: 'a'.repeat(64), ratesDigest: 'b'.repeat(64), terms, priceAliases: { '24': '24:20000:year' } } };
     const input = { consumerId: 'kakao-ops', observedAt: now, products: { synthetic: product } };
@@ -393,7 +393,7 @@ describe('Kakao typed REFERENCE_ONLY projection', () => {
   const product = {
     listable: true,
     maker: '기아', model: '쏘렌토', trim_name: '시그니처', product_type: '중고렌트',
-    provider_company_code: 'RP013', provider_name: '웰릭스모빌리티', car_number: '12가3456',
+    provider_company_code: 'RP013', provider_name: '웰릭스모빌리티', car_number: '000가0000',
     fuel_type: '디젤', ext_color: '스노우 화이트 펄', vehicle_status: '출고가능',
     deposit_note: '국산: 월 대여료×2', year: 2026, mileage: 12000,
     price: { '36_3만': { rent: 800000, deposit: 0 } },
@@ -732,16 +732,16 @@ describe('general reference query', () => {
 
 describe('supplier and plate exact lookup', () => {
   it('normalizes lookup only, keeps every term and returns ambiguous candidates with HOLD', () => {
-    const name='\uacbd\uc9c4 \ub80c\ud2b8',plate='12\uac003456';
+    const name='\uacbd\uc9c4 \ub80c\ud2b8',plate='000\uac000000';
     const base={listable:true,provider_company_code:'RP013',provider_name:name,car_number:plate,price:{'36':{rent:500000,deposit:1000000},'48':{rent:400000,deposit:null}}};
-    const ref=buildKakaoCatalogReference({consumerId:'kakao-ops',observedAt:new Date().toISOString(),products:{a:base,b:{...base,car_number:'34\ub0985678'}}});
+    const ref=buildKakaoCatalogReference({consumerId:'kakao-ops',observedAt:new Date().toISOString(),products:{a:base,b:{...base,car_number:'000\ub0980000'}}});
     const apply=(q:Record<string,unknown>)=>filterReferenceZeroDeposit(ref,q);
     expect(apply({supplierName:' \uacbd\uc9c4\ub80c\ud2b8 '}).data).toHaveLength(2);
-    const result=apply({plateNumber:' 12 \uac00-3456 '});
+    const result=apply({plateNumber:' 000 \uac00-0000 '});
     expect(result.data).toHaveLength(1);expect(result.data[0]!.offers).toEqual(ref.data[0]!.offers);
     expect(result.data[0]!.vehicle.plateNumber).toBe(plate);
     expect(apply({supplierName:'unknown'}).data).toEqual([]);
-    expect(apply({plateNumber:'99\ub0989999'}).data).toEqual([]);
+    expect(apply({plateNumber:'000\ud5580000'}).data).toEqual([]);
     for(const q of [{plateNumber:'3456'},{plateNumber:'new'},{plateNumber:[plate]},{supplierName:['a']}])expect(()=>apply(q)).toThrow('REFERENCE_DEPOSIT_FILTER_INVALID');
     const duplicate=buildKakaoCatalogReference({consumerId:'kakao-ops',observedAt:new Date().toISOString(),products:{a:base,b:{...base,provider_company_code:'RP020'}}});
     const matched=filterReferenceZeroDeposit(duplicate,{plateNumber:plate});expect(matched.data).toHaveLength(2);

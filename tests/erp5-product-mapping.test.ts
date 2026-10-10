@@ -6,7 +6,7 @@ function fixture(): Erp5ProductInput {
     projectId: 'freepasserp5', collection: 'products', documentId: 'synthetic-document',
     sourceRevision: 'synthetic-revision', observedAt: '2026-09-21T10:00:00.000Z',
     data: {
-      car_number: '12가3456', maker: '합성제조사', model: '합성모델', product_code: 'synthetic-product',
+      car_number: '000가0000', maker: '합성제조사', model: '합성모델', product_code: 'synthetic-product',
       provider_company_code: 'TEST_SUPPLIER', product_type: '중고렌트', vehicle_status: '출고가능',
       status_kind: '가용', listable: true,
       price: { '24_3만': { rent: '750,000', deposit: '3,000,000' } }
@@ -127,9 +127,9 @@ describe('ERP5 product mapping preparation', () => {
   });
 
   it.each([
-    ['SON_NO_KONG', '12하3456', '중고렌트', 'USED_RENT'],
-    ['SON_NO_KONG', '12가3456', '오공구독', 'OGONG_SUBSCRIPTION'],
-    ['TCAR_EXTERNAL', '12가3456', '픽업구독', 'PICKUP_SUBSCRIPTION']
+    ['SON_NO_KONG', '000하0000', '중고렌트', 'USED_RENT'],
+    ['SON_NO_KONG', '000가0000', '오공구독', 'OGONG_SUBSCRIPTION'],
+    ['TCAR_EXTERNAL', '000가0000', '픽업구독', 'PICKUP_SUBSCRIPTION']
   ])('keeps RP012 supplier and %s product axes separate', (bucket, plate, type, expected) => {
     const input = fixture();
     Object.assign(input.data, { provider_company_code: 'RP012', source_bucket: bucket, car_number: plate, product_type: type });
@@ -178,7 +178,7 @@ describe('ERP5 product mapping preparation', () => {
     expect(result.candidate.providerCompanyCode).toBe(supplier);
   });
 
-  it.each(['UNKNOWN', '12가', '12가3456 extra', ''])('holds invalid plate %j without rewriting it', plate => {
+  it.each(['UNKNOWN', '000가', '000가0000 extra', ''])('holds invalid plate %j without rewriting it', plate => {
     const input = fixture();
     input.data.car_number = plate;
     const result = mapErp5Product(input);
