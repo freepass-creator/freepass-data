@@ -57,27 +57,33 @@ type VehicleAsset = EntityMeta & {
 resolveVehicleUid(candidate):
   ids = normalizeExternalIds(candidate)
 
-  vinMatches = findActiveAssets(kind='VIN', value=ids.vin)
-  if one(vinMatches): return LINK(vinMatches[0], reason='VIN')
-  if many(vinMatches): return HOLD('VIN_CONFLICT')
+  # 1) 식별자마다 활성 자산 후보를 모은다(여러 개면 그 식별자 자체가 충돌).
+  vin       = findActiveAssets(kind='VIN', value=ids.vin)                       # ids.vin 이 있을 때만
+  supplier  = findActiveAssets(kind='SUPPLIER_VEHICLE', supplierCode=ids.supplierCode, value=ids.supplierVehicleId)
+  plate     = findActiveAssets(kind='PLATE', value=ids.plate)
+  for each in [vin, supplier, plate]: if many(each): return HOLD('<KIND>_CONFLICT')
 
-  supplierMatches = findActiveAssets(
-    kind='SUPPLIER_VEHICLE',
-    supplierCode=ids.supplierCode,
-    value=ids.supplierVehicleId
-  )
-  if one(supplierMatches): return LINK(supplierMatches[0], reason='SUPPLIER_VEHICLE')
-  if many(supplierMatches): return HOLD('SUPPLIER_VEHICLE_CONFLICT')
+  # 2) 어느 식별자든 가리키는 자산이 서로 다르면 HOLD (한 식별자만 맞아도 다른 식별자의 모순을 검사한다).
+  linked = distinct(one(vin), one(supplier), one(plate))                         # 한 건씩 맞은 것만 모음
+  if size(linked) > 1: return HOLD('IDENTIFIER_POINTS_TO_DIFFERENT_ASSETS')
 
-  plateMatches = findActiveAssets(kind='PLATE', value=ids.plate)
-  if one(plateMatches) and noContradiction(plateMatches[0], ids):
-    return LINK(plateMatches[0], reason='PLATE')
-  if many(plateMatches): return HOLD('PLATE_DUPLICATE')
+  # 3) 후보가 하나면 강한 모순부터 검사하고, 하나라도 있으면 새 UID 를 만들지 않고 HOLD.
+  if size(linked) == 1:
+    asset = linked[0]
+    if contradicts(asset, ids):                                                  # 아래 모순 정의
+      return HOLD('IDENTIFIER_CONTRADICTION')                                    # CREATE 로 내려가지 않는다
+    return LINK(asset, reason = first_matched(VIN, SUPPLIER_VEHICLE, PLATE))     # VIN → 공급사 코드 → 차량번호 순
 
+  # 4) 아무 식별자도 기존 자산과 맞지 않을 때만 신규 UID.
   if hasStableIdentity(ids.vin or ids.supplierVehicleId or ids.plate):
     return CREATE(newUlidVehicleUid(), ids)
-
   return UNKNOWN('INSUFFICIENT_IDENTITY')
+
+contradicts(asset, ids):                                                         # 모순 = 같은 종류의 활성 값이 서로 다름
+  - ids.vin 이 있고 asset 의 활성 VIN 이 있는데 값이 다르다
+  - ids.supplierVehicleId 가 있고 asset 에 같은 공급사의 활성 SUPPLIER_VEHICLE 이 있는데 값이 다르다
+  - ids.plate 가 asset 의 활성 PLATE 와 다르다 → 단, VIN 또는 공급사 ID 가 일치한 경우의 «번호 변경»은 모순이 아니다
+    (그 번호를 이미 다른 활성 자산이 쓰고 있으면 2)에서 HOLD)
 ```
 
 ## 충돌 처리표
@@ -85,7 +91,7 @@ resolveVehicleUid(candidate):
 | 상황 | 처리 | 이유 |
 | --- | --- | --- |
 | VIN 같고 번호 다름 | 같은 UID 후보. 새 번호는 `PLATE` 추가, 이전 번호는 필요 시 `validTo`로 닫음. 단, 동시 활성 번호가 복수면 HOLD. | 번호 변경 가능성을 VIN보다 낮게 본다. |
-| 번호 같고 VIN 다름 | HOLD, 새 UID 만들지 않음. | 같은 번호의 재사용/오입력 가능성이 있어 사람 판정 필요. |
+| 번호 같고 VIN 다름 (번호 1건 일치 + VIN 불일치 포함) | HOLD(IDENTIFIER_CONTRADICTION), 새 UID 만들지 않음 — CREATE 로 내려가지 않는다. | 같은 번호의 재사용/오입력 가능성이 있어 사람 판정 필요. |
 | 공급사 코드만 같음 | 같은 `supplierCode + value`면 링크, 공급사 코드만 같고 값이 없으면 UNKNOWN. | 공급사 자체 ID 없는 공급사명만으로는 실물 식별 불가. |
 | 번호 두 공급사에 중복 | VIN 또는 공급사 자체 ID가 같으면 링크 후보, 다르면 HOLD. | 번호 중복은 실제 운영에서 접두 키나 공급사 중복으로 발생할 수 있다. |
 
@@ -120,13 +126,15 @@ resolveVehicleUid(candidate):
 | 날짜 | 단계 | 완료 증거 |
 | --- | --- | --- |
 | 2026-10-11 | 설계 확정 | 이 문서 승인, 열린 질문 해소 또는 HOLD 표시 |
-| 2026-10-12 | 발급 함수·판정 코드 | 신규부터 UID 발급, 옛 hash 발급 삭제, resolver 단위 테스트 PASS |
+| 2026-10-12 | 발급 함수·판정 코드 | 새 UID 발급 «추가» + resolver 단위 테스트 PASS (옛 hash 발급은 아직 지우지 않는다) |
 | 2026-10-13 | 이전 계획 -> 시험 -> digest -> 적용 -> 되읽기 | products 1776·assets 160에 `vehicle_uid`·`externalIds` 부여, 전후 대수 대조, digest 기록, 실패 시 되돌림 절차 검증 |
-| 2026-10-14 | 소비처 전환·옛 번호 키 길 삭제 | 읽기 쪽 UID 수용 확인, 쓰기 전환 확인, 번호 키 전용 읽기 삭제 PR과 회귀 테스트 PASS |
+| 2026-10-14 | 소비처 전환·되읽기 뒤 옛 길 삭제 | 읽기 쪽 UID 수용 확인, 쓰기 전환 확인, 소비처(ERP5·카톡·사진 프록시) readback 통과 «뒤에» 옛 hash 발급 코드와 번호 키 전용 읽기 삭제 PR, 회귀 테스트 PASS |
 
 ## 호환 순서
 
 ERP5·카톡이 멈추지 않게 읽기 쪽을 먼저 바꾼다. 1단계는 기존 번호 키 읽기에 `vehicle_uid`를 추가 수용한다. 2단계는 쓰기·발행 경로가 `vehicle_uid`와 externalIds를 함께 쓴다. 3단계는 products 키를 유지한 채 소비처 readback을 끝낸다. 4단계에서만 번호 키 전용 읽기와 옛 hash 발급 경로를 삭제한다.
+
+**무중단 순서는 이 하나다(단계표와 같음): ① 새 UID 발급 «추가»(10-12, 옛 hash 발급 유지) → ② 이전 적용·소비처 전환·되읽기(10-13~14) → ③ 소비처 readback 통과 «뒤에» 옛 hash 발급과 번호 키 전용 읽기 삭제(10-14).** 어느 단계에서도 옛 길을 먼저 지우지 않는다.
 
 ## 열린 질문
 
