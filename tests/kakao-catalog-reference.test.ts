@@ -1,6 +1,8 @@
 process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import { precomputeOfferEconomics, readStoredTermFees } from '../src/application/resolve-offer-commercial-terms.js';
 import {
   KAKAO_COMMISSION_POLICY,
@@ -19,6 +21,39 @@ import {
 } from '../src/application/kakao-catalog-reference.js';
 
 describe('shared reference policy context', () => {
+  it('keeps legacy DTO compatibility while rejecting contradictory displacement states', () => {
+    const schema = JSON.parse(readFileSync(new URL('../contracts/kakao-catalog-reference-v1.schema.json', import.meta.url), 'utf8'));
+    const validate = new Ajv2020({ strict: false }).compile({ $defs: schema.$defs, ...schema.$defs.product.properties.vehicle });
+    const legacy = buildKakaoCatalogReferenceProduct('synthetic', { listable: true, provider_company_code: 'RP013', price: { '36': { rent: 500000 } } })!.vehicle;
+    const { engineCc, engineCcState, ...oldVehicle } = legacy;
+    expect(validate(oldVehicle)).toBe(true);
+    expect(validate({ ...oldVehicle, engineCc: 0, engineCcState: 'KNOWN' })).toBe(true);
+    expect(validate({ ...oldVehicle, engineCc: null, engineCcState: 'HOLD' })).toBe(true);
+    expect(validate({ ...oldVehicle, engineCc: null, engineCcState: 'KNOWN' })).toBe(false);
+    expect(validate({ ...oldVehicle, engineCc: 1998, engineCcState: 'HOLD' })).toBe(false);
+    expect(validate({ ...oldVehicle, engineCc: 1998 })).toBe(false);
+  });
+  it.each([
+    [1998, 1998], ['1998', 1998], ['1,998', 1998], [0, 0], ['0', 0],
+    [undefined, null], [null, null], ['', null], ['unknown', null], ['1998cc', null], [-1, null],
+  ])('preserves source engine_cc %s without inventing displacement or changing source identities', (raw, expected) => {
+    const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트',
+      fuel_type: '가솔린', drive_type: 'AWD', engine_cc: raw, vehicle_uid: 'existing-immutable-uid',
+      price: { '36_2만': { rent: 500000, deposit: 1000000 }, '48_2만': { rent: 450000, deposit: null } } };
+    const source = { consumerId: 'kakao-ops', observedAt: '2026-10-10T00:00:00Z', products: { synthetic: product } };
+    const original = structuredClone(source);
+    const reference = buildKakaoCatalogReference(source);
+    const row = reference.data[0]!;
+    expect(row.vehicle).toMatchObject({ engineCc: expected, engineCcState: expected === null ? 'HOLD' : 'KNOWN', fuel: '가솔린', drive: 'AWD' });
+    expect(row.vehicleMasterReference).toMatchObject({ state: 'HOLD', masterId: null, trimId: null });
+    expect(row.sourceProductId).toBe('synthetic');
+    expect(row.offers[0]!.supplierId).toBe('RP013');
+    expect(row.offers[0]!.priceTerms.map(term => term.termKey)).toEqual(['source:36_2만', 'source:48_2만']);
+    expect(buildInternalAiReference({ ...source, consumerId: 'internal-ai-test' }).data).toEqual(reference.data);
+    expect(source).toEqual(original);
+    const missingSpecs = buildKakaoCatalogReference({ ...source, products: { synthetic: { ...product, fuel_type: '', drive_type: '' } } });
+    expect(missingSpecs.data[0]!.vehicle).toMatchObject({ fuel: null, drive: null });
+  });
   it('attaches only native pairs from the provided sealed snapshot, preserving source and period identities', () => {
     const observedAt = new Date().toISOString();
     const body = { readAt: observedAt, masters: [{ id: 'native-master', data: { maker: '현대', model: '쏘나타', sub_model: '쏘나타 DN8', sub_model_aliases: ['소나타 DN8'] } }],
