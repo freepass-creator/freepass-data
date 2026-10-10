@@ -1,9 +1,12 @@
 name: Canon Guard
 
-# 정본 지킴이 — AI Core 규격(registry/canonical-development-lines.json)을 PR 마다 잰다.
-# 판정은 AI Core 한 곳(freepass-creator/ai-core scripts/canon-guard.mjs)이고, 여기서는 버전을 고정해 부른다.
+# 정본 지킴이 — 공개 저장소 안에서 스스로 도는 판정(ai-ops 가 생성·동기화, .github/canon-guard/MANIFEST.json 참고).
+# 필수 검사 이름이 «canon / canon» 이라, 같은 저장소의 재사용 워크플로를 불러 같은 이름이 나오게 한다.
+# pull_request_target 은 «기준 가지(main)의 워크플로 파일»로 돈다 — PR 이 이 파일이나 재사용 워크플로를 바꿔도 그 PR 의 검사는 바뀐 파일이 아니라 기준 가지 것으로 돈다.
 on:
+  # 전환 기간 한정(지울 날: 판정기를 pull_request_target 로 올린 다음 PR — 같은 날): 이 저장소에 아직 기준 가지 워크플로가 없어서 필수 검사를 낼 길이 PR 쪽 워크플로뿐이다.
   pull_request:
+  pull_request_target:
 
 permissions:
   contents: read
@@ -11,6 +14,4 @@ permissions:
 
 jobs:
   canon:
-    uses: freepass-creator/ai-core/.github/workflows/canon-guard.yml@76f513ab0b61e30150887fc535a52f442e0eeb7b
-    with:
-      ai_core_ref: 76f513ab0b61e30150887fc535a52f442e0eeb7b
+    uses: ./.github/workflows/canon-guard-run.yml
