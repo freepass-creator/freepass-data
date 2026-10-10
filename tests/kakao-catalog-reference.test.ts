@@ -79,8 +79,8 @@ describe('shared reference policy context', () => {
     expect(stale.data[0]!.offers[0]!.priceTerms[2]).toMatchObject({ depositAmount: 1000000,
       depositEvidence: { reasonCode: 'SOURCE_AMOUNT', publicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE', publicationDecision: 'HOLD' } });
     const staleCompat = withCompatibilityDepositEvidence(product, '2026-10-09T00:15:01Z').price as Record<string, Record<string, unknown>>;
-    expect(staleCompat['24_연30000km']).toMatchObject({ deposit: 1000000, depositState: 'KNOWN',
-      depositEvidenceReason: 'SOURCE_AMOUNT', depositPublicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE', depositPublicationDecision: 'HOLD' });
+    expect(staleCompat['24_연30000km']).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
+    expect(staleCompat['24_연30000km']).not.toHaveProperty('depositPublicationDecision');
     expect(staleCompat['24']).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
     expect(buildKakaoCatalogReference({ ...input, observedAt: '2026-10-08T23:58:59Z' }).data[0]!.offers[0]!.priceTerms[2]!.depositState).toBe('UNKNOWN');
     expect(filterReferenceZeroDeposit(stale, { depositState: 'ZERO' }).data).toEqual([]);

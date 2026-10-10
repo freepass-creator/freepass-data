@@ -339,7 +339,8 @@ const depositText = (v: unknown) => typeof v === 'string' ? v.trim() : '';
 const depositInstant = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(v) && Number.isFinite(Date.parse(v));
 
 /** Reuses the approved publication's typed provenance; does not re-hash the private RAW envelope. */
-export function readIancarPublishedDeposit(product: Record<string, unknown>, priceKey: string, now = new Date().toISOString()) {
+export function readIancarPublishedDeposit(product: Record<string, unknown>, priceKey: string, now = new Date().toISOString(),
+  options: { preserveStalePositiveReference?: boolean } = {}) {
   const unknown = () => ({ state: 'UNKNOWN' as const, amount: null, reason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' });
   const e = product.iancar_phase_one;
   if (product.provider_company_code !== 'RP031' || product.source !== 'EANCAR_ONE_API'
@@ -386,8 +387,15 @@ export function readIancarPublishedDeposit(product: Record<string, unknown>, pri
   // reference fact only: deleted/conflicting/ambiguous conditions above still fail closed.
   if (Date.parse(e.sourceSyncedAt) - Date.parse(now) > 60_000) return unknown();
   if (Date.parse(now) - Date.parse(e.sourceSyncedAt) > IANCAR_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS * 1000) {
-    if (term.deposit.amount === 0) return unknown();
-    return { state: 'KNOWN' as const, amount: term.deposit.amount as number, reason: 'SOURCE_AMOUNT',
+    // Public/compat callers keep their previous fail-closed result. Only authenticated
+    // REFERENCE_ONLY/HOLD output can opt in to retaining a stale source amount.
+    if (!options.preserveStalePositiveReference || term.deposit.amount === 0) return unknown();
+    const source = resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
+      termMonths: term.termMonths, monthlyRent: row.rent, hasPositivePaidDeposit: hasConflictingPaidDeposit(product.price),
+    }));
+    if (source.state !== 'KNOWN') return unknown();
+    return { state: 'KNOWN' as const, amount: source.amount, reason: 'SOURCE_AMOUNT',
+      ...(source.depositRuleDifference ? { depositRuleDifference: source.depositRuleDifference } : {}),
       publicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE', publicationDecision: 'HOLD' as const };
   }
   return { state: term.depositState as 'ZERO' | 'KNOWN', amount: term.deposit.amount as number,

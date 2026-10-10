@@ -616,13 +616,16 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       hasPositivePaidDeposit: hasConflictingPaidDeposit(price),
     });
     const publishedDeposit = supplierId === 'RP031' && source.iancar_phase_one
-      ? readIancarPublishedDeposit(source, sourceKey, observedAt) : null;
+      ? readIancarPublishedDeposit(source, sourceKey, observedAt, { preserveStalePositiveReference: true }) : null;
     const deposit = publishedDeposit ? {
       depositAmount: publishedDeposit.amount,
       depositState: publishedDeposit.state,
       depositRule: publishedDeposit.state === 'UNKNOWN' ? null : {
-        code: publishedDeposit.reason, multiplier: null, label: '공급사 기간·주행거리 조건',
+        code: publishedDeposit.reason, multiplier: null,
+        label: publishedDeposit.reason === 'SOURCE_AMOUNT' ? '공급사 입력 금액' : '공급사 기간·주행거리 조건',
       },
+      ...('depositRuleDifference' in publishedDeposit && publishedDeposit.depositRuleDifference
+        ? { depositRuleDifference: publishedDeposit.depositRuleDifference } : {}),
     } : resolveReferenceDeposit(depositInput);
     const depositEvidence = {
       sourceRef: `source-product:${documentId}#price:${sourceKey}`,
