@@ -196,7 +196,7 @@ function createExternalIds(ids: NormalizedVehicleIds, now: string): VehicleExter
 export function resolveVehicleUid(
   candidate: VehicleUidCandidate,
   assets: VehicleAsset[],
-  options: { now?: string; clock?: VehicleUidClock; random?: VehicleUidRandom } = {},
+  options: { now?: string; clock?: VehicleUidClock; random?: VehicleUidRandom; uidOptions?: VehicleUidOptions } = {},
 ): VehicleUidResolution {
   const now = options.now ?? new Date().toISOString();
   const ids = normalizeExternalIds(candidate);
@@ -217,7 +217,7 @@ export function resolveVehicleUid(
   if (ids.vin || (ids.supplierCode && ids.supplierVehicleId) || ids.plate) {
     return {
       action: 'CREATE',
-      vehicleUid: newVehicleUid(options.clock, options.random),
+      vehicleUid: newVehicleUid(options.clock, options.random, options.uidOptions),
       externalIds: createExternalIds(ids, now),
     };
   }
