@@ -10,7 +10,7 @@ export function analyzeErp5Deposits(capture: Erp5SourceCapture) {
     const productId = String(document.name).split('/').at(-1)!;
     const fields = document.fields as Record<string, unknown> | undefined;
     const product: Record<string, unknown> = {};
-    for (const key of ['provider_company_code', 'product_type', 'listable', 'deposit_note', 'deposit_free', 'price']) {
+    for (const key of ['provider_company_code', 'product_type', 'listable', 'deposit_note', 'deposit_free', 'deposit_free_confirmation', '원문', 'price']) {
       if (!fields || !Object.hasOwn(fields, key)) continue;
       try { product[key] = decodeErp5Value(fields[key]); }
       catch { decodeFailures.push({ productId, field: key }); }

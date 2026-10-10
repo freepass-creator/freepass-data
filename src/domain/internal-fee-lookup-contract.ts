@@ -86,6 +86,15 @@ export function toInternalFeeLookup(
   priceTerms: readonly InternalFeeLookupPriceTerm[],
   terms: readonly OfferTermEconomics[] | undefined,
 ): InternalFeeLookup {
+  const priceTermKeyCounts = new Map<string, number>();
+  for (const term of priceTerms) {
+    priceTermKeyCounts.set(term.termKey, (priceTermKeyCounts.get(term.termKey) ?? 0) + 1);
+  }
+  const duplicatePriceTermKeys = new Set(
+    [...priceTermKeyCounts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([termKey]) => termKey)
+  );
   const priceTermKeys = new Set(priceTerms.map((term) => term.termKey));
   const economicsByTermKey = new Map<string, OfferTermEconomics>();
   const duplicateTermKeys = new Set<string>();
@@ -109,12 +118,18 @@ export function toInternalFeeLookup(
     contract: INTERNAL_FEE_LOOKUP_CONTRACT_VERSION,
     offerId,
     terms: priceTerms.map((priceTerm) => {
+      if (duplicatePriceTermKeys.has(priceTerm.termKey)) {
+        return unresolvedTerm(priceTerm, 'DUPLICATE_PRICE_TERM_KEY');
+      }
       if (duplicateTermKeys.has(priceTerm.termKey)) {
         return unresolvedTerm(priceTerm, 'DUPLICATE_TERM_KEY');
       }
       const term = economicsByTermKey.get(priceTerm.termKey);
       if (!term) {
         return unresolvedTerm(priceTerm, 'NO_EVIDENCE');
+      }
+      if (term.termMonths !== undefined && term.termMonths !== priceTerm.termMonths) {
+        return unresolvedTerm(priceTerm, 'TERM_MONTHS_MISMATCH');
       }
       return {
         termKey: priceTerm.termKey,
