@@ -21,4 +21,4 @@
 
 ## 완료 경계
 
-P0 감사는 읽기 전용이다. Firestore `get/list/getAll` 계열만 허용하고 `set/update/delete/add`는 사용하지 않는다. stdout에는 개수와 digest만 출력하고, 행별 보고서는 `SETTLEMENT_ID_LINK_AUDIT_OUT`의 비공개 폴더에만 저장한다.
+P0 감사는 읽기 전용이다. Firestore `get/list/getAll` 계열만 허용하고 `set/update/delete/add`는 사용하지 않는다. stdout에는 개수와 digest만 출력하고, 행별 보고서는 `SETTLEMENT_ID_LINK_AUDIT_OUT`(저장소 밖 절대경로만 허용, 기존 파일 덮어쓰기 거부 `wx`, 권한 0600)의 비공개 파일에만 저장한다. 운영 데이터 쓰기는 0이고 쓰는 것은 이 비공개 보고서 파일 하나뿐이다.

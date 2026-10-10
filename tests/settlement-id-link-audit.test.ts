@@ -7,26 +7,26 @@ import {
 const base = (): SettlementIdLinkAuditInput => ({
   observedAt: '2026-10-10T00:00:00.000Z',
   settlementRows: [
-    { id: 'row-explicit', plate: '11가1111', sourceTab: '정산', sourceRow: 2, contractId: 'contract-1', sourceProductId: 'product-1' },
-    { id: 'row-plate-only', plate: '22가2222' },
-    { id: 'row-orphan', plate: '33가3333' },
-    { id: 'row-ambiguous', plate: '44가4444' },
-    { id: 'row-excluded', plate: '55가5555' },
-    { id: 'row-zero-empty', plate: '66가6666', contractNo: 0, contractId: '', contractCode: null, intakeRequestId: undefined, sourceProductId: '0' },
+    { id: 'row-explicit', plate: 'PLATE-FAKE-A', sourceTab: '정산', sourceRow: 2, contractId: 'contract-1', sourceProductId: 'product-1' },
+    { id: 'row-plate-only', plate: 'PLATE-FAKE-B' },
+    { id: 'row-orphan', plate: 'PLATE-FAKE-C' },
+    { id: 'row-ambiguous', plate: 'PLATE-FAKE-D' },
+    { id: 'row-excluded', plate: 'PLATE-FAKE-E' },
+    { id: 'row-zero-empty', plate: 'PLATE-FAKE-F', contractNo: 0, contractId: '', contractCode: null, intakeRequestId: undefined, sourceProductId: '0' },
   ],
   contracts: [
-    { id: 'contract-1', car_number_snapshot: '11가1111', contract_code: 'C-1', product_code: 'P-1' },
-    { id: 'contract-2', car_number_snapshot: '22가2222', contract_code: 'C-2', product_code: 'P-2' },
-    { id: 'contract-4a', car_number_snapshot: '44가4444', contract_code: 'C-4A', product_code: 'P-4A' },
-    { id: 'contract-4b', car_number_snapshot: '44가4444', contract_code: 'C-4B', product_code: 'P-4B' },
-    { id: 'contract-test', car_number_snapshot: '55가5555', contract_code: 'C-T', product_code: 'P-T', test: true },
-    { id: 'contract-deleted', car_number_snapshot: '55가5555', contract_code: 'C-D', product_code: 'P-D', _deleted: true },
-    { id: 'contract-draft', car_number_snapshot: '55가5555', contract_code: 'C-R', product_code: 'P-R', is_draft: true },
+    { id: 'contract-1', car_number_snapshot: 'PLATE-FAKE-A', contract_code: 'C-1', product_code: 'P-1' },
+    { id: 'contract-2', car_number_snapshot: 'PLATE-FAKE-B', contract_code: 'C-2', product_code: 'P-2' },
+    { id: 'contract-4a', car_number_snapshot: 'PLATE-FAKE-D', contract_code: 'C-4A', product_code: 'P-4A' },
+    { id: 'contract-4b', car_number_snapshot: 'PLATE-FAKE-D', contract_code: 'C-4B', product_code: 'P-4B' },
+    { id: 'contract-test', car_number_snapshot: 'PLATE-FAKE-E', contract_code: 'C-T', product_code: 'P-T', test: true },
+    { id: 'contract-deleted', car_number_snapshot: 'PLATE-FAKE-E', contract_code: 'C-D', product_code: 'P-D', _deleted: true },
+    { id: 'contract-draft', car_number_snapshot: 'PLATE-FAKE-E', contract_code: 'C-R', product_code: 'P-R', is_draft: true },
   ],
   products: [
-    { id: 'product-1', car_number: '11가1111', product_code: 'P-1' },
-    { id: 'product-2', car_number: '22가2222', product_code: 'P-2' },
-    { id: 'product-4', car_number: '44가4444', product_code: 'P-4' },
+    { id: 'product-1', car_number: 'PLATE-FAKE-A', product_code: 'P-1' },
+    { id: 'product-2', car_number: 'PLATE-FAKE-B', product_code: 'P-2' },
+    { id: 'product-4', car_number: 'PLATE-FAKE-D', product_code: 'P-4' },
   ],
 });
 
@@ -37,7 +37,7 @@ describe('settlement id link audit', () => {
       classification: 'LINKED_EXPLICIT',
       explicitMatches: { contractIds: ['contract-1'], productIds: ['product-1'] },
     });
-    expect(JSON.stringify(result.rows)).not.toContain('11가1111');
+    expect(JSON.stringify(result.rows)).not.toContain('PLATE-FAKE-A');
   });
 
   it('keeps plate-only matches as candidates only', () => {
@@ -126,16 +126,16 @@ describe('settlement id link audit', () => {
     const input = base();
     input.settlementRows = [{
       id: 'row-private-fields',
-      plate: '11가1111',
+      plate: 'PLATE-FAKE-A',
       sourceTab: '정산',
       sourceRow: 7,
-      customerName: '홍길동',
+      customerName: 'CUSTOMER-FAKE',
     } as SettlementIdLinkAuditInput['settlementRows'][number] & { customerName: string }];
     const result = auditSettlementIdLinks(input);
     expect(result.rows[0]!.source).toEqual({ tab: '정산', row: 7 });
     const json = JSON.stringify(result);
-    expect(json).not.toContain('11가1111');
-    expect(json).not.toContain('홍길동');
+    expect(json).not.toContain('PLATE-FAKE-A');
+    expect(json).not.toContain('CUSTOMER-FAKE');
   });
 
   it('does not mutate input', () => {
@@ -147,7 +147,7 @@ describe('settlement id link audit', () => {
 
   it('returns linked explicit when exactly one explicit id matches', () => {
     const input = base();
-    input.settlementRows = [{ id: 'row-explicit-contract-only', plate: '11가1111', contractCode: 'C-1' }];
+    input.settlementRows = [{ id: 'row-explicit-contract-only', plate: 'PLATE-FAKE-A', contractCode: 'C-1' }];
     const result = auditSettlementIdLinks(input);
     expect(result.rows[0]!.classification).toBe('LINKED_EXPLICIT');
   });
@@ -155,7 +155,7 @@ describe('settlement id link audit', () => {
   it('returns a plate candidate when exactly one plate candidate exists', () => {
     const input = base();
     input.products = [];
-    input.settlementRows = [{ id: 'row-plate-contract-only', plate: '22가2222' }];
+    input.settlementRows = [{ id: 'row-plate-contract-only', plate: 'PLATE-FAKE-B' }];
     const result = auditSettlementIdLinks(input);
     expect(result.rows[0]!.classification).toBe('LINK_CANDIDATE_BY_PLATE');
   });
