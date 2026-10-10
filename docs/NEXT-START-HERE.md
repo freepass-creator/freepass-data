@@ -1,5 +1,7 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 차량 UID 설계서 추가: `docs/VEHICLE-UID.md`에 기존 asset UID 승격, 신규 ULID, `externalIds[]`, 이전 단계와 HOLD 질문을 문서화했다.
+
 ## 2026-10-10 정산 줄 계약→가격행→내부 수수료 읽기 전용 조회
 
 - 목적: 계약 기록 한 줄에서 차량번호·공급사·개월·월대여료·보증금으로 Catalog의 차량→상품→오퍼→가격행→내부 수수료를 한 번에 좁히는 읽기 전용 경로를 추가했다.
