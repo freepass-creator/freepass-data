@@ -29,11 +29,16 @@ No Firebase credentials are needed. Set `PORT` to select another local port.
 
 Stop with Ctrl+C. Restarting resets demo data.
 
-The API and `npm run worker:memory` each own a separate memory store. Running
-both does **not** connect the worker to API commands. For the local Console only,
-the API processes the price command's outbox event after Canonical commit so the
-same in-memory ACTIVE projection refreshes immediately. Firestore/production
-delivery remains worker-owned.
+The API and worker entrypoint each own a separate memory store. Running
+`npm run worker:memory` now performs one preparation pass only: it builds a
+validated READY release in disposable memory and exits with `persistentWrites: 0`.
+It does **not** connect to API commands, claim outbox events, activate releases, or
+acknowledge delivery. For an explicit local worker loop, run
+`node --import tsx scripts/run-memory.mjs worker --execute`. For the local Console
+only, the API processes the price command's outbox event after Canonical commit so
+the same in-memory ACTIVE projection refreshes immediately. Firestore/production
+delivery remains worker-owned and must use either `--execute` or
+`--event-id <id> --expires-at <ISO timestamp>`.
 
 `preview/index.html` is served by the memory runtime as a local live Console.
 The Home, Data, Flow Trace, and Release screens use live memory API evidence.

@@ -6,14 +6,15 @@ import { MemoryDataStore } from './infra/memory-store.js';
 
 const viaMemoryWrapper = /(?:^|[\\/])run-memory\.mjs$/.test(process.argv[1] ?? '');
 const args = process.argv.slice(viaMemoryWrapper ? 3 : 2);
-const prepare = args.length === 1 && args[0] === '--prepare';
+const prepare = args.length === 0 || (args.length === 1 && args[0] === '--prepare');
+const execute = args.length === 1 && args[0] === '--execute';
 const single = args.length === 4 && args[0] === '--event-id' && args[2] === '--expires-at';
 const eventId = single ? args[1] : undefined;
 const expiresAt = single ? args[3] : undefined;
-if ((!prepare && !single && args.length !== 0) ||
+if ((!prepare && !execute && !single) ||
     (single && (!eventId || !/^[A-Za-z0-9:_-]{1,200}$/.test(eventId) || !expiresAt ||
       !Number.isFinite(Date.parse(expiresAt))))) {
-  throw new Error('Use --prepare or --event-id <id> --expires-at <ISO timestamp>');
+  throw new Error('Use --prepare, --execute, or --event-id <id> --expires-at <ISO timestamp>');
 }
 if (single && Date.parse(expiresAt!) <= Date.now()) throw new Error('Execution approval expired');
 
@@ -54,7 +55,7 @@ if (prepare) {
   await new Promise<void>((resolve, reject) => process.stdout.write(JSON.stringify({ mode: 'SINGLE_EVENT', eventId, result }) + '\n',
     error => error ? reject(error) : resolve()));
   process.exit(result === 'DONE' ? 0 : 2);
-} else {
+} else if (execute) {
   for (;;) {
     const currentActive = requireFreshSources ? await stores.projections.getActive('erp-public') : null;
     if (requireFreshSources && !currentActive) throw new Error('FIRST_ACTIVE_REQUIRES_APPROVED_SINGLE_EVENT');

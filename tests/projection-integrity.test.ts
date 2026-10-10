@@ -442,8 +442,13 @@ describe('Projection release integrity verifier', () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it('runs the existing worker preparation entrypoint once without activating a release', () => {
-    for (const args of [ ['src/worker.ts', '--prepare'], ['scripts/run-memory.mjs', 'worker', '--prepare'] ]) {
+  it('runs the default and explicit worker preparation entrypoints once without activating a release', () => {
+    for (const args of [
+      ['src/worker.ts'],
+      ['src/worker.ts', '--prepare'],
+      ['scripts/run-memory.mjs', 'worker'],
+      ['scripts/run-memory.mjs', 'worker', '--prepare']
+    ]) {
       const output = execFileSync(process.execPath, ['--import', 'tsx', ...args], {
         encoding: 'utf8', timeout: 8000,
         env: { ...process.env, FREEPASS_DATA_DRIVER: 'memory', NODE_ENV: 'test' }
@@ -451,7 +456,7 @@ describe('Projection release integrity verifier', () => {
       expect(JSON.parse(output)).toMatchObject({ mode: 'PREPARE', status: 'READY',
         persistentWrites: 0, projectionStore: 'memory' });
     }
-  });
+  }, 15000);
 
   it('prepares a validated release without activating or replacing the old good release', async () => {
     const store = new MemoryDataStore();
