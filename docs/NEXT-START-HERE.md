@@ -1,5 +1,13 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 정산 줄 계약→가격행→내부 수수료 읽기 전용 조회
+
+- 목적: 계약 기록 한 줄에서 차량번호·공급사·개월·월대여료·보증금으로 Catalog의 차량→상품→오퍼→가격행→내부 수수료를 한 번에 좁히는 읽기 전용 경로를 추가했다.
+- 변경: `src/application/contract-fee-link.ts` 순수 함수와 `readContractFeeLink` 어댑터를 추가하고, `toInternalFeeLookup`에 `DUPLICATE_PRICE_TERM_KEY` 및 `TERM_MONTHS_MISMATCH` 보류 판정을 추가했다. 새 저장·새 API·쓰기 호출은 없다.
+- 검증: `npm.cmd exec vitest -- run tests/internal-fee-lookup-contract.test.ts tests/contract-fee-link.test.ts` PASS(26). `npm.cmd run build` PASS. 남은 전체 check 계열은 이 작업 종료 보고의 검증 목록을 따른다.
+- 재사용: 기존 `toInternalFeeLookup`, `CatalogStore.listVehicleAssets/listProducts/listOffers`, `Offer.priceTerms/internalEconomicsTerms`를 재사용했다. 기존 후보 `catalog-trace.ts`는 추적 화면용이라 정산 줄 조건 매칭을 대체하지 못해 새 파일 생성으로 정당화했다.
+- next_start_here: 후속 PR에서 접수 줄에 `offerRevision`·`termKey`를 저장하고, 과거 `offerRevision`은 `catalog_entity_revisions`에서 복원해 당시 가격행을 읽는 스냅샷 조회를 붙인다.
+
 ## 2026-10-10 ERP5 compat 보증금 규칙 단일화
 
 - 원인: `assessDepositEvidence`가 손오공 RP012 구독 원문 `price.*.deposit=0`을 자리표시자로 보고 UNKNOWN 처리하는 것은 맞지만, `deposit_note` 규칙(월 대여료 × 약정연수 최대 3개월 등)을 호환 응답에서 다시 계산하는 단계가 없었다.
@@ -491,6 +499,13 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+### 2026-10-10 정산 줄 계약→가격행→내부 수수료 읽기 전용 조회
+
+- 목적: 계약 기록 한 줄에서 차량번호·공급사·개월·월대여료·보증금으로 Catalog의 차량→상품→오퍼→가격행→내부 수수료를 한 번에 좁히는 읽기 전용 경로를 추가했다.
+- 변경: `src/application/contract-fee-link.ts` 순수 함수와 `readContractFeeLink` 어댑터를 추가하고, `toInternalFeeLookup`에 `DUPLICATE_PRICE_TERM_KEY` 및 `TERM_MONTHS_MISMATCH` 보류 판정을 추가했다. 새 저장·새 API·쓰기 호출은 없다.
+- 검증: `npm.cmd exec vitest -- run tests/internal-fee-lookup-contract.test.ts tests/contract-fee-link.test.ts` PASS(26). `npm.cmd run build` PASS.
+- next_start_here: 접수 줄에 `offerRevision`·`termKey`를 저장하고, 과거 `offerRevision`은 `catalog_entity_revisions`에서 복원해 당시 가격행을 읽는 후속 PR로 이어간다.
 
 ### 2026-10-10 매일 박제 3일 연속 실패 원인과 고침 (개발 관제 배정)
 
