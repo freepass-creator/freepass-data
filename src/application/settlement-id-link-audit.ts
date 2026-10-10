@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { stableDigest } from '../shared/stable-digest.js';
 import type {
   SettlementIdLinkAuditSource,
@@ -50,6 +51,10 @@ export type SettlementIdLinkAuditReport = {
   }>;
   digest: string;
 };
+
+/** 보고서에는 원본 문서 ID(차량번호 기반일 수 있음) 대신 이 해시만 나간다. 원본↔해시 대응표는 보고서에 넣지 않는다. */
+export const hashAuditId = (id: string): string => createHash('sha256').update(id, 'utf8').digest('hex').slice(0, 12);
+const hashAll = (ids: string[]) => ids.map(hashAuditId);
 
 const idFields = ['contractNo', 'contractId', 'contractCode', 'intakeRequestId', 'sourceProductId'] as const;
 
@@ -178,12 +183,12 @@ export function auditSettlementIdLinks(input: SettlementIdLinkAuditInput): Settl
     classifications[classification]++;
 
     return {
-      rowId: row.id,
+      rowId: hashAuditId(row.id),
       source: { tab: text(row.sourceTab), row: typeof row.sourceRow === 'number' ? row.sourceRow : text(row.sourceRow) },
       classification,
-      explicitMatches: { contractIds: explicitContracts, productIds: explicitProducts },
-      plateCandidates: { contractIds: plateContracts, productIds: plateProducts },
-      excludedContractIds: excluded,
+      explicitMatches: { contractIds: hashAll(explicitContracts), productIds: hashAll(explicitProducts) },
+      plateCandidates: { contractIds: hashAll(plateContracts), productIds: hashAll(plateProducts) },
+      excludedContractIds: { test: hashAll(excluded.test), deleted: hashAll(excluded.deleted), draft: hashAll(excluded.draft) },
       idValuePresence: rowPresence,
     };
   });

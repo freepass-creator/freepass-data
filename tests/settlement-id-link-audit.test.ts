@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   auditSettlementIdLinks,
-  type SettlementIdLinkAuditInput,
-} from '../src/application/settlement-id-link-audit.js';
+  type SettlementIdLinkAuditInput, hashAuditId } from '../src/application/settlement-id-link-audit.js';
 
 const base = (): SettlementIdLinkAuditInput => ({
   observedAt: '2026-10-10T00:00:00.000Z',
@@ -33,48 +32,48 @@ const base = (): SettlementIdLinkAuditInput => ({
 describe('settlement id link audit', () => {
   it('classifies explicit links without exposing plate values', () => {
     const result = auditSettlementIdLinks(base());
-    expect(result.rows.find((row) => row.rowId === 'row-explicit')).toMatchObject({
+    expect(result.rows.find((row) => row.rowId === hashAuditId('row-explicit'))).toMatchObject({
       classification: 'LINKED_EXPLICIT',
-      explicitMatches: { contractIds: ['contract-1'], productIds: ['product-1'] },
+      explicitMatches: { contractIds: ['contract-1'].map(hashAuditId), productIds: ['product-1'].map(hashAuditId) },
     });
     expect(JSON.stringify(result.rows)).not.toContain('PLATE-FAKE-A');
   });
 
   it('keeps plate-only matches as candidates only', () => {
     const result = auditSettlementIdLinks(base());
-    expect(result.rows.find((row) => row.rowId === 'row-plate-only')).toMatchObject({
+    expect(result.rows.find((row) => row.rowId === hashAuditId('row-plate-only'))).toMatchObject({
       classification: 'LINK_CANDIDATE_BY_PLATE',
-      plateCandidates: { contractIds: ['contract-2'], productIds: ['product-2'] },
+      plateCandidates: { contractIds: ['contract-2'].map(hashAuditId), productIds: ['product-2'].map(hashAuditId) },
     });
   });
 
   it('reports orphan rows', () => {
     const result = auditSettlementIdLinks(base());
-    expect(result.rows.find((row) => row.rowId === 'row-orphan')!.classification).toBe('ORPHAN');
+    expect(result.rows.find((row) => row.rowId === hashAuditId('row-orphan'))!.classification).toBe('ORPHAN');
   });
 
   it('reports multiple candidates as ambiguous', () => {
     const result = auditSettlementIdLinks(base());
-    expect(result.rows.find((row) => row.rowId === 'row-ambiguous')!.classification).toBe('AMBIGUOUS');
+    expect(result.rows.find((row) => row.rowId === hashAuditId('row-ambiguous'))!.classification).toBe('AMBIGUOUS');
     expect(result.summary.productsByPlate.many).toBe(0);
     expect(result.summary.contractsByPlate.validMany).toBe(1);
   });
 
   it('separates test, deleted, and draft contracts from valid candidates', () => {
     const result = auditSettlementIdLinks(base());
-    const row = result.rows.find((item) => item.rowId === 'row-excluded')!;
+    const row = result.rows.find((item) => item.rowId === hashAuditId('row-excluded'))!;
     expect(row.classification).toBe('ORPHAN');
     expect(row.excludedContractIds).toEqual({
-      test: ['contract-test'],
-      deleted: ['contract-deleted'],
-      draft: ['contract-draft'],
+      test: ['contract-test'].map(hashAuditId),
+      deleted: ['contract-deleted'].map(hashAuditId),
+      draft: ['contract-draft'].map(hashAuditId),
     });
     expect(result.summary.contractsByPlate).toMatchObject({ excludedTest: 1, excludedDeleted: 1, excludedDraft: 1 });
   });
 
   it('separates zero, empty string, missing, and value presence', () => {
     const result = auditSettlementIdLinks(base());
-    const row = result.rows.find((item) => item.rowId === 'row-zero-empty')!;
+    const row = result.rows.find((item) => item.rowId === hashAuditId('row-zero-empty'))!;
     expect(row.idValuePresence).toMatchObject({
       contractNo: 'ZERO',
       contractId: 'EMPTY_STRING',
@@ -118,7 +117,7 @@ describe('settlement id link audit', () => {
     const result = auditSettlementIdLinks(input);
     expect(result.rows[0]).toMatchObject({
       classification: 'AMBIGUOUS',
-      explicitMatches: { contractIds: ['contract-1'], productIds: ['product-2'] },
+      explicitMatches: { contractIds: ['contract-1'].map(hashAuditId), productIds: ['product-2'].map(hashAuditId) },
     });
   });
 
@@ -158,5 +157,16 @@ describe('settlement id link audit', () => {
     input.settlementRows = [{ id: 'row-plate-contract-only', plate: 'PLATE-FAKE-B' }];
     const result = auditSettlementIdLinks(input);
     expect(result.rows[0]!.classification).toBe('LINK_CANDIDATE_BY_PLATE');
+  });
+
+  it('hashes document ids so plate-shaped ids never reach the report', () => {
+    const input = base();
+    input.settlementRows = [{ id: 'PLATE-FAKE-A-ledger', plate: 'PLATE-FAKE-A', sourceTab: '정산' }];
+    input.products = [{ id: 'PLATE-FAKE-A', car_number: 'PLATE-FAKE-A', product_code: 'P-1' }];
+    input.contracts = [{ id: 'PLATE-FAKE-A-contract', car_number_snapshot: 'PLATE-FAKE-A', contract_code: 'C-1', product_code: 'P-1' }];
+    const json = JSON.stringify(auditSettlementIdLinks(input).rows);
+    expect(json).not.toContain('PLATE-FAKE-A');
+    expect(json).toContain(hashAuditId('PLATE-FAKE-A-ledger'));
+    expect(hashAuditId('x')).toMatch(/^[0-9a-f]{12}$/);
   });
 });
