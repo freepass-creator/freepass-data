@@ -1,5 +1,8 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 공개 상품 응답 설계
+
+- `docs/PUBLIC-PRODUCT-FEED-DESIGN.md` 작성: ERP4 `/api/catalog/feed`·`/api/catalog/quote`를 FreePass Data 공개 route로 대체하는 v1 계약, allowlist, 보증금 재사용, 증명 계획, 10-14 ERP4 응답 종료 제안. 코드 변경·커밋·push 없음.
 ## 2026-10-10 Vehicle UID 10-12 발급 함수/Resolver 단위 테스트
 
 - 목적: `docs/VEHICLE-UID.md`의 판정 알고리즘·충돌 처리표·이전 단계표·호환 순서를 코드로 내리되, 운영 쓰기와 소비처 cutover 없이 10-12 범위(새 UID 발급 함수 + resolver 단위 테스트)만 처리한다.
@@ -526,6 +529,9 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-10 공개 상품 응답 설계
+
+- `docs/PUBLIC-PRODUCT-FEED-DESIGN.md` 한 장 작성. ERP4 공개 feed/quote 응답 계약, FreePass Data 공개 라우트 위치, allowlist 스키마, `resolveDepositWithRuleNote` 재사용, 비교 증명 계획, 요청 제한·캐시, 2026-10-14 ERP4 응답 종료 제안을 남김. 코드 변경 없음.
 ### 2026-10-10 상품 칸 신선도 설계 — 문서만
 
 - 목적/대상 revision: `9e8ecd5`, `work/freepass-data/freshness-design-20261010`. Claude가 제공한 main/Issue #24 사전 확인을 사용했고 Academy document READY 확인. 신규 파일·커밋·푸시 없음.
