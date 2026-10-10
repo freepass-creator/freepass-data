@@ -16,6 +16,15 @@ export type VehicleModel = EntityMeta & {
 export type VehicleAssetStatus =
   | 'AVAILABLE' | 'RESERVED' | 'IN_USE' | 'RETURNED'
   | 'MAINTENANCE' | 'ACCIDENT' | 'SOLD' | 'RETIRED';
+export type VehicleExternalIdKind = 'PLATE' | 'VIN' | 'SUPPLIER_VEHICLE' | 'SHEET_ROW';
+export type VehicleExternalId = {
+  kind: VehicleExternalIdKind;
+  supplierCode?: string;
+  value: string;
+  validFrom: string;
+  validTo?: string | null;
+  source: string;
+};
 export type VehicleAsset = EntityMeta & {
   /** Internal evidence, excluded from consumer projections. */
   sourceVehicleFacts?: SourceVehicleFacts;
@@ -24,6 +33,7 @@ export type VehicleAsset = EntityMeta & {
   sourceFirstRunId?: string;
   id: string; vehicleModelId: string; status: VehicleAssetStatus;
   plateNumber?: string | null; vin?: string | null; odometerKm?: number | null;
+  externalIds?: VehicleExternalId[];
 };
 export type CommercialType =
   | 'NEW_RENT' | 'USED_RENT' | 'NEW_SUBSCRIPTION' | 'USED_SUBSCRIPTION'

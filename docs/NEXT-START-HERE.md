@@ -1,5 +1,14 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 Vehicle UID 10-12 발급 함수/Resolver 단위 테스트
+
+- 목적: `docs/VEHICLE-UID.md`의 판정 알고리즘·충돌 처리표·이전 단계표·호환 순서를 코드로 내리되, 운영 쓰기와 소비처 cutover 없이 10-12 범위(새 UID 발급 함수 + resolver 단위 테스트)만 처리한다.
+- 변경: `VehicleAsset.externalIds?: VehicleExternalId[]` 옵션 필드와 `src/domain/vehicle-uid.ts` 순수 모듈을 추가했다. 옛 shared-sheet 신규 asset 발급은 `issueVehicleAssetId` 기본 전략 `LEGACY_PLATE_HASH` 뒤에 보존했고, ULID 전략은 아직 기본 경로가 아니다.
+- 검증: `tests/vehicle-uid.test.ts`는 ULID 형식/정렬/단조 증가/결정적 주입, VIN/공급사/번호 resolver 충돌표, `addExternalId` 이력, 입력 불변, 기존 24hex hash ID 구분을 확인한다. 전체 검증 결과는 이 작업 종료 보고를 따른다.
+- 재사용: 기존 `VehicleAsset`/source binding 구조를 확장했다. 기존 plate hash 발급은 160개 호환을 위해 보존하되 번호 없는 신차·번호 변경을 표현하지 못해 새 순수 모듈 생성은 `CREATE_NEW_JUSTIFIED`.
+- next_start_here: 10-13은 실제 products/assets에 `vehicle_uid`·`externalIds`를 붙이는 마이그레이션 계획/digest/readback으로 넘어가며, 10-14 소비처 readback 전에는 옛 hash 발급 삭제 금지.
+
+
 ## 2026-10-10 보증금 양수 원문금액 우선: 양수 가격행+계산 규칙 메모는 `SOURCE_AMOUNT` KNOWN으로 판정하고 규칙값 불일치만 `depositRuleDifference`로 노출했다; 검증 `vitest deposit/kakao/mapper/consumer 293 PASS`, `build`, `check:arch`, `check:standards(PARTIAL 유지)`, `check:data-access-boundary` PASS; 남음 운영 배포·live readback 없음.
 
 ## 2026-10-10 Admin contract-fee-links HTTP read endpoint
