@@ -67,7 +67,7 @@ export const KAKAO_COMMISSION_POLICY_2026_10_03 = {
     revision: 'f862d0097f6e83d79d0b699bc369a83716b1d982',
   },
   sourceFiles: [
-    { code: 'F04', id: '1BjGBqAjRLEb9ZMKarpQsMF-q_UjdgmEqBAl1uVk8SR4', sheetId: 1982531660, range: '수수료표!A1:J180', modifiedTime: '2026-09-28T00:09:22.575Z' },
+    { code: 'F04', get id() { const id = process.env.FREEPASS_SHEET_F04_ID?.trim(); if (!id) throw new Error('MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID'); return id; }, sheetId: 1982531660, range: '수수료표!A1:J180', modifiedTime: '2026-09-28T00:09:22.575Z' },
   ],
   standardSupplierIds: [
     'RP013', 'RP031', 'RP016', 'RP015', 'RP019', 'RP020', 'RP032', 'PT-0023',
@@ -133,7 +133,7 @@ export const KAKAO_COMMISSION_POLICY_2026_10_04 = {
   sourceRole: 'F04_GOOGLE_SHEET_SSOT',
   canonicalSource: { code: 'F04', range: '수수료표!A1:M191', observedDate: '2026-10-04' },
   sourceObservedAt: '2026-10-04',
-  sourceFiles: [{ code: 'F04', id: '1BjGBqAjRLEb9ZMKarpQsMF-q_UjdgmEqBAl1uVk8SR4', sheetId: 1982531660, range: '수수료표!A1:M191' }],
+  sourceFiles: [{ code: 'F04', get id() { const id = process.env.FREEPASS_SHEET_F04_ID?.trim(); if (!id) throw new Error('MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID'); return id; }, sheetId: 1982531660, range: '수수료표!A1:M191' }],
   evidenceHistory: [...KAKAO_COMMISSION_POLICY_2026_10_03.evidenceHistory,
     { policyId: KAKAO_COMMISSION_POLICY_2026_10_03.policyId, observedAt: '2026-10-03', revision: 'fd252b2508d4ccda5ecf8de03b587c1f9910cda4' }],
   sonokongAdditions: { 12: 100000, 24: 300000, 36: 500000, 48: 700000 },

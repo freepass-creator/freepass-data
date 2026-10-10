@@ -237,7 +237,7 @@
 - 원본 보존: supplier neutral WEBP7개를 HTTP200/실제WEBP1536×1024로 확인하고 관측SHA256 checkpoint를 기록했다. URL/색상/이미지를 재생성·변환·재호스팅하지 않는다. 현재51대에는6개 asset이 쓰이고 MINI는 기존Drive 연결이 우선한다. SHA checkpoint는 관측 증거이지 매 렌더의 무결성 강제 검증이 아니다.
 - 검증/운영 화면: Data 전체 check exit0(1,147 PASS/14 SKIP, architecture/access/sheets25/build/smoke/shadow), ERP typecheck/catalog102+illustration contract/fonts/build PASS. Claude scoped Data session22458와 ERP session23400은 본문/exit0/ANSWERED/GO이며 no-overwrite·exact identity·rerun·thumbnail/mobile 구분 반례를 반영했다. timeout/command-length 실패는 PASS로 세지 않는다. ERP CI36961373357 SUCCESS, Vercel production 배포 및 `/api/version` sha `f24ab81` 확인. 공개 feed109대에서 supplier illustration51/actual-photo proxy50 확인. 실제 `10하8263` 상세/확대/375px 모바일에 원본 WEBP와 연출 안내문 표시, `10하8128` 실제50장 갤러리/대표사진1920px 및 연출표시0 확인.
 - 시트 실행: PREPARE `36961710523` SUCCESS, snapshot `20261002040132994-477dd48d50b8`의 illustration51대/actual-photo50대·2,249장 보존 확인. 같은 ready_run_id를 지정한 ALL apply `36962834677` SUCCESS. F01/F86 발행, RP031 evidence, 공개catalog, F86↔atom 신선도, 전체 칸 및 전체 탭 사진 링크 감사 모두 SUCCESS. 별도writer/수동append 없음.
-- 새 native readback: F01 `1Y1Mx1EcEpAuNer0y50Dq4eK92CpVjThO_suZLmo2vVs`/668539469와 F86 `1hQtshpWKL4L0zSR3H3UQ36atICtHv9Ka7dQh7d7K5Vg`/2029374993의 `10.02 13:01 상품리스트 315대` C2:C316, F86/1942643715 `이안카 109대` D2:D110을 실제 연결로 재조회. 각 뷰의 exact plate/expected canonical photo URL 대사109/109, illustration51/51, actual50/50, preserved8/8, mismatch0(전체327개 차량 식별·링크 상태 일치). 기존 보존8대 중2대에는 기존Drive link가 있고6대는 사진 연결이 없다. 이 기존 상태를 공급사 사진없음으로 확정하지 않는다. API 빈사진52대 중의Drive1대와 전체 보존8대 중Drive2대를 혼동하지 않는다. 실제 F01 C70/F86 이안카D44에 `10하8263` 파란 링크 확인, 게시된 `/q/abkpegyd3a` 도착 화면의 원본 illustration와 안내문 확인. 기존 tabs/원천 숨김 사진/T카 링크 보존.
+- 새 native readback: F01 `F01 시트(ID는 비공개 ai-ops 문서)`/668539469와 F86 `F86 시트(ID는 비공개 ai-ops 문서)`/2029374993의 `10.02 13:01 상품리스트 315대` C2:C316, F86/1942643715 `이안카 109대` D2:D110을 실제 연결로 재조회. 각 뷰의 exact plate/expected canonical photo URL 대사109/109, illustration51/51, actual50/50, preserved8/8, mismatch0(전체327개 차량 식별·링크 상태 일치). 기존 보존8대 중2대에는 기존Drive link가 있고6대는 사진 연결이 없다. 이 기존 상태를 공급사 사진없음으로 확정하지 않는다. API 빈사진52대 중의Drive1대와 전체 보존8대 중Drive2대를 혼동하지 않는다. 실제 F01 C70/F86 이안카D44에 `10하8263` 파란 링크 확인, 게시된 `/q/abkpegyd3a` 도착 화면의 원본 illustration와 안내문 확인. 기존 tabs/원천 숨김 사진/T카 링크 보존.
 - 남음/next_start_here: 이번 실사진·연출 이미지의 Data→ERP 기본/이안카 white-label→F01/F86 연결은 위 시점에서 검증됐다. 다음 갱신은 기존 collector의 fresh `--photos`→dry-run/CAS/private backup→동일plan apply→기존 publisher exact READY→새 readback을 따른다. 정책2차와15분 공식 API writer/schedule은 별도다. 공개109대가 최신 source116대와 같다는 뜻이 아니며 재고 최신화는 이번 photo-only 범위 밖이다.7개 이전404는 재확인 전까지 미확인으로 보존한다. 기존Drive 실제 폴더 내용, Admin 및 모든 화이트라벨 개별 UI, Catalog V1 전체 cutover는 미검증이다. 실제사진 후속 수집 시 image_kind는 VEHICLE_PHOTO로 바뀌지만 과거 illustration metadata가 남을 수 있으며 공개 UI는 현재 image URL로 분류한다.
 
 ## 2026-10-02 이안카 사진 운영 배포 준비 — 아래 로컬 기록을 대체
@@ -267,7 +267,7 @@
 - 변경: exact plate/source-ID 귀속·충돌/계약락·신선도·동시성 검사, 새 immutable ID 생성/기존 ID 보존, typed immutable backup 및 범위 한정 복구, structured 24개 요금과 시트 기준 별칭 8개, 정책 DEFERRED. 원천 미관측 역사210문서는 닫힌 상태로 보존한다. 삭제/계약 생성/정책 문서 변경0. 원천을 과거 Sheet로 대체하지 않는다.
 - 실제 Data apply: run `b6a8ac1e-a86a-49c8-a53a-9037a760303a`, `PHASE_ONE_ATOM_READBACK_VERIFIED`, RP031327문서 중 source117/공개109(출고가능108·계약중1)/미공개8/역사210. 최초 적용에서 새26문서 생성 후 정책 빈 키 결합 오류를 발견해 typed backup으로 기존 값을 복구하고 신규 ID는 삭제 없이 닫았다. ERP 기존 `findGuestPolicy` 재사용/DEFERRED 방어 배포 후 최신117대를 다시 적용했다. private backup/receipt는 `.codex/private/freepass-data-iancar-withdrawals`에 보존, Git에는 원문·키·비공개 정책을 넣지 않는다.
 - 시트 실제 적용: READY `36835722304`의 고정 스냅샷을 apply=true/target=ALL로 재사용한 운영 run `36837674105` SUCCESS. F01/F86 게시·전체 칸 대조·사진 링크 감사 모두 SUCCESS(건너뛴 준비 실행을 완료로 세지 않음). 기존 선두4탭은 상품317/손오공41/픽업151/오플41이며 F86 기존 supplier projection에 이안카109가 반영됐다. 별도 이안카 원천 요금표나 새 spreadsheet는 만들지 않았다.
-- 새 native readback: F01 `1Y1Mx1EcEpAuNer0y50Dq4eK92CpVjThO_suZLmo2vVs`/668539469 및 F86 `1hQtshpWKL4L0zSR3H3UQ36atICtHv9Ka7dQh7d7K5Vg`/2029374993, `10.01 17:30 상품리스트 317대` A1:BQ318. 각각 이안카109, missing/status/기준요금/24개 전체 기간·거리·보증금/정책 표시 mismatch 모두0. F01 금액은 formatted string, F86 numeric이므로 타입 일치 대신 원천 금액으로 대사했다. 단기 월2,000km/장기 연20,000km 유지, 6개월 요금은 원천에 없어 빈 값, 카드·해지위약 조건은 확인중. 실제 두 Sheets 화면도 확인했다.
+- 새 native readback: F01 `F01 시트(ID는 비공개 ai-ops 문서)`/668539469 및 F86 `F86 시트(ID는 비공개 ai-ops 문서)`/2029374993, `10.01 17:30 상품리스트 317대` A1:BQ318. 각각 이안카109, missing/status/기준요금/24개 전체 기간·거리·보증금/정책 표시 mismatch 모두0. F01 금액은 formatted string, F86 numeric이므로 타입 일치 대신 원천 금액으로 대사했다. 단기 월2,000km/장기 연20,000km 유지, 6개월 요금은 원천에 없어 빈 값, 카드·해지위약 조건은 확인중. 실제 두 Sheets 화면도 확인했다.
 - 검증: Data 전체 check PASS(1,134 PASS/14 SKIP/build/architecture/data-access/sheets), engine check:sync/typecheck PASS, ERP contract102+phase-one 회귀/typecheck PASS. Claude scoped reviews ANSWERED는 빈 정책 키 결합·옛 override 누출·가드 정규화/잉여키·기준가격 역전 반례를 찾아 수정했다. timeout은 PASS로 세지 않았다. 월거리를 연거리로 바꾸라는 제안은 원천 단위 보존에 반해 채택하지 않았다.
 - 남음: 정책 2차, 사진 전량 새 수집, 공식 API→상품15분 자동 writer/runtime secret binding, Catalog V1 ACTIVE release/cutover, Admin 및 모든 화이트라벨별 실제 검증은 별도다. 기존 hourly Sheet publisher 연결이 API15분 갱신 완료를 뜻하지 않는다. 전체 플랫폼 완료로 확대하지 않는다.
 - 후속 ERP 배포 readback: `/api/version` sha `a00547c` 실제 확인. RP031 공개 feed109대/차량당24개 조건(합계2,616), source와 missing/status/rent/deposit mismatch0, policy 첨부0. 실제 `/q/p5tphe9zrr?wl=eancar` 요금24개 및 정책 확인 필요 표시 확인. 상세 사진14장은 기존 사진 보존 증거이며 이번 회차 전 차량 새 사진 수집 완료가 아니다.
@@ -485,6 +485,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-10 공개 파일의 Google Sheet/Drive ID 분리
+
+- 목적 / 대상 revision: `a324b65` 기반 작업 트리. 현재 공개 파일의 ID만 제거하며 Git 이력은 변경하지 않는다. 커밋·push·브랜치 변경·운영 실행 없음.
+- 변경: 문서 ID는 이름표로, F01/F86 계약은 `spreadsheetIdEnv`로 전환. 실행 시 `FREEPASS_SHEET_F01_ID`, `FREEPASS_SHEET_F86_ID`, `FREEPASS_SHEET_F04_ID`, `FREEPASS_SHEET_BILLINCAR_POLICY_ID`를 사용한다. 값이 필요한 경로에서 누락·공백이면 `MISSING_SHEET_ID_ENV: <이름>`으로 중단한다. 시트가 필요 없는 import·카탈로그 조회는 설정 없이 가능하다. 공급사 입력의 운영 시트 차단 검사에는 F01/F86 두 설정이 필요하다.
+- 보존: 원래 값 23개는 호출자가 지정한 저장소 밖 `fpd-sheet-ids.json`에 이름→값으로 저장. 공개 파일 35곳 교체. Git SHA·UUID는 보존했다. 현재 공개 파일 전체에 대한 ID 재유입 검사와 누락 환경변수 시험을 기존 시험에 추가했다.
+- 검증: 시트 시험 106 PASS, 관련 Vitest 206 PASS, build PASS, 현재 공개 파일의 ID 후보 및 보관 원래 값 재검색 각각 0건, `git diff --check` PASS. `npm.cmd run check`는 runtime smoke에서 Windows `uv_os_get_passwd ENOMEM`으로 중단. `npm.cmd test`는 1,914 PASS / 12 FAIL / 16 SKIP이며 실패는 tsx 사용자 정보 조회 및 로컬 jq 실행 권한 경로에 있다. 독립 `node:os.userInfo()`에서도 같은 오류 재현. 네트워크 호출 없이 의존성은 npm 오프라인 캐시로 설치했다.
+- 남음 / next_start_here: 호출자가 GitHub secrets와 직접 실행 환경을 설정하고, Windows 실행 제약이 없는 환경에서 전체 check/test 및 독립 검토 후 커밋한다. 배포·운영 데이터·시트 접근은 검증하지 않았다.
+
 ### 2026-10-09 카카오 운영 포트 / 상품 사진 CAS
 
 - 목적/정본: `503aee8aff28c52a0d55f39d23cc753d15e328ed`, `work/freepass-data/kakao-live-ports-20261009`, 미커밋 변경. 사용자 제공 main/Issue/PR 사전 확인 사용. Academy READY, 재사용/신규 분리 이유는 [실제 연결](NATIVE-SOURCE-COLLECTOR.md#실제-연결--2026-10-09).
@@ -606,7 +614,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ### 2026-10-09 회사별 수수료 정책 원문 대조
 
 - 목적: 대표가 지적한 순서대로 회사별 정책부터 확인하여 기간 금액에 적용한다. 미확정 175기간을 정책 부재로 일괄 판단하지 않는다.
-- 원문: F04 `1BjGBqAjRLEb9ZMKarpQsMF-q_UjdgmEqBAl1uVk8SR4`, `수수료표!A1:M191`, gws 새 조회 성공. private 원문 `%TEMP%/freepass-fee-source-20261009.json`. 조회 시점과 코드 기준은 아래 저장 재조회 작업의 main revision을 따른다. 시트 쓰기 0.
+- 원문: F04 `F04 시트(ID는 비공개 ai-ops 문서)`, `수수료표!A1:M191`, gws 새 조회 성공. private 원문 `%TEMP%/freepass-fee-source-20261009.json`. 조회 시점과 코드 기준은 아래 저장 재조회 작업의 main revision을 따른다. 시트 쓰기 0.
 - 비교: 기본 150행(3~152행)의 22회사 표기에 대해 기존 F04 공급사 코드와 READ-RUNTIME 별칭 지도를 재사용. 숫자로 독립 계산할 수 있는 123행의 청구/지급 공급가액을 현재 resolver와 대조하여 차이 0. 다른 27행은 매칭출고 협의·손오공 Q12 기준료·아이카 1개월·퍼시픽 보증금 등급 같은 추가 근거가 필요하며 수치 PASS로 계산하지 않는다. 일반/특약 우선순위는 별도로 보존한다.
 - 확인된 특칙: 오토플러스 일반/EV 정액, 스타·스카이 월료100%/80%(VAT 포함), 손오공 Q12+기간 가산, 아이언 선출고4%/3%, 빌린카·엘씨 60개월 구독, 스위치 구독 기간식, 아이카 EV/6개월/1개월, 퍼시픽 출고형태·보증금 등급, 뮤카 별도 지급 재원. 대표 결정과 실제 원문을 합의 요율의 대용으로 추정하지 않는다.
 - 미확정 분해(기존 운영 저장 175기간): 신차 subtype 79 = 우리캐피탈51/J&J11/렌트존8/경진카6/SA2/경진렌트카1. 구독 범위64 = 빌린카45/웰릭스19. 미등재 기간30 = 빌린카21/J&J8/KH1. 퍼시픽 보증금 등급2. 이는 실제 정책·입력 연결에 필요한 후속이며 단순 저장 필드 누락이 아니다.
@@ -1223,7 +1231,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 결정(AI 상황실 = 대표 오더, 10-04): ① 들어온 모든 차를 Canonical 에 넣는다. 시트 «차량상태»는 원문 그대로(`sourceVehicleFacts.supplierStatus`) 보존하고 노출만 가른다 — 출고가능·즉시출고 = Product ACTIVE(노출), 출고협의·계약중·상품화중·출고불가 = Product HOLD(비노출). 목록 밖 상태·이후 상태 변경은 HOLD(`SHARED_SHEET_STATUS_POLICY`, `STATUS_CHANGE_REQUIRES_REVIEW`). 자산 상태 매핑 중 출고불가 → RESERVED 는 임시값이다. ② 한 줄이 틀려도 나머지는 박제 — 74칸 형식이 깨진 줄·같은 공급사+차량번호 중복은 그 줄만 위치 키로 RAW 보존 후 HOLD. 숫자 없는 차량번호(「신차」 등)는 식별자가 아니다. ③ 정리값은 «FreePass Data 에 이미 있는 값 → F03 별칭으로 F03 이름» 이 먼저, 원문 재해석은 Data 에 값이 없거나 원문과 모순일 때만.
 - 변경: `capture:shared-sheet`(Sheets values.batchGet + 격자 행 수로 15탭 전체 범위일 때만 complete), 위 ①② 규칙, `CanonicalizationDecision.productStatus`. 계획 사전검사·소유권 이전 job 은 #313.
 - 실측(로컬, 실제 시트 캡처 → 빈 Catalog 기준 계획, 쓰기 0): 레코드 206(차 203 + 차량번호 빈 줄 3), CREATE 157 / HOLD 49(연식↔최초등록 불일치 26, 차종 식별 불완전 12 등). 제공 기간 712 = 계산 712. CREATE 중 수수료 확정 기간이 있는 차 120, 모든 기간 확정 86. 계획·캡처는 비공개 경로에만 있다.
-- 시트 작업(빠른 길, 백업 → 쓰기 → 되읽기, 모든 회차 되읽기 불일치 0). 백업 Drive 사본: `1MOZOlbofJiZoLucn3p6PWJW33q8tCPuqgNe_N7YpGuc`(원문 판정·지지오토 전), `16iZFQOWCL8hdDrTsMQAFMK9tyUJRATr-jXz_wcGzqi4`(제원 정정 전), `1K9eVE5TM_EDEMv5icdjo0UmmBgcwhG8iKCWKQG663cI`(Data 대조 전). 바꾼 칸: 원문 판정·지지오토 36, 제원·연식 27+10, F03 신규 행 반영 14+13+6, Data 대조·F03 개명 6. 차명 원문을 지지오토로 정정한 줄은 비고에 «지지오토 정정 10-04 / 공급사 원문: …». 결과: 시트 203대 중 F03 4칸 일치 190 이상, 세부트림 빈칸 9 → 8(남은 것은 원문·Data·F03 어느 쪽으로도 하나로 안 정해지는 차 — 확인 필요).
+- 시트 작업(빠른 길, 백업 → 쓰기 → 되읽기, 모든 회차 되읽기 불일치 0). 백업 Drive 사본: `NEXT-START-HERE 백업 18(ID는 비공개 ai-ops 문서)`(원문 판정·지지오토 전), `NEXT-START-HERE 백업 19(ID는 비공개 ai-ops 문서)`(제원 정정 전), `NEXT-START-HERE 백업 20(ID는 비공개 ai-ops 문서)`(Data 대조 전). 바꾼 칸: 원문 판정·지지오토 36, 제원·연식 27+10, F03 신규 행 반영 14+13+6, Data 대조·F03 개명 6. 차명 원문을 지지오토로 정정한 줄은 비고에 «지지오토 정정 10-04 / 공급사 원문: …». 결과: 시트 203대 중 F03 4칸 일치 190 이상, 세부트림 빈칸 9 → 8(남은 것은 원문·Data·F03 어느 쪽으로도 하나로 안 정해지는 차 — 확인 필요).
 - Data(ERP5 products) ↔ 시트 대조(104줄): 이름 규칙 차이만 23, 세부모델 같고 Data 트림이 F03 이름 아님·빈칸 29, 시트가 원문과 맞음 33, Data 가 원문과 맞아 시트를 고침 3, 확인 필요 10, Data 없음 6. Data 쪽은 하이브리드·E-TECH 누락, 「더 뉴」 세대 누락, 제조사 오류 등 원문과 어긋나는 값이 있어 그대로 채택하지 않는다.
 - 남음: Data 우선 단계(Data 값 → F03 → 원문과 모순 없을 때만 채택)를 적재 계획에 넣기. ERP4 수동 단계(쓰기 신원으로 캡처·dry-run·apply) — 시트 공유 대상은 `github-inventory-writer@freepasserp5`, 공유는 대표 답 대기. 확인 동선 등록 스크립트 장애(AI-OPS 수리 중). 상태 변경(노출 전환)을 검토 명령으로 반영하는 경로.
 - next_start_here: #313·#315 머지 → `ownership_dry_run` 실행(숫자) → Codex → ERP4 수동 단계 PR → 203대 운영 dry-run → apply → `query-canonical-by-plate` 3대 되읽기.
@@ -1240,7 +1248,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ### 2026-10-04 F03 세부트림 규칙 B(파워트레인 뗀 등급 이름) — 규칙 파일 · 급한 분 적용
 
 - (당시 기록 — 현행 규칙은 위 「차종 4단 구조」) 목적: 대표 확정 「세부트림 = 엔카 끝 이름에서 배기량·연료·구동을 뗀 등급 이름, 없으면 기본형」. 떼는 낱말을 세션마다 다르게 고르지 않도록 `src/domain/vehicle-trim-name.ts` 하나로 고정(시험 `tests/vehicle-trim-name.test.ts`). (당시 판단: 엔진 이름은 남기고 연료 표시는 뗀다 — 2026-10-04 대표 최종 «파워트레인 통째로 버림»으로 철회.) 새로 판단이 갈리는 낱말은 `TRIM_UNDECIDED_TOKENS`에 두고 그 행 이름 변경을 보류한다.
-- 변경(시트): 공통 시트 203대 세부모델 먼저 — F03 11행 이름 변경, 21행 확인 필요 표시, 별칭 11줄. 백업 `1tzNG4bbVmq6M2hErrZ4V8aGtP3YS9B2Cf31XNToDQMs`, 되읽기 기대값과 다른 행 0. 문서: ERP-COM SSOT 운영 규칙(엔카와 다른 점 5., 세부트림 줄), 런북 ⑤, 공통 시트 규격 `basicTrimRule`.
+- 변경(시트): 공통 시트 203대 세부모델 먼저 — F03 11행 이름 변경, 21행 확인 필요 표시, 별칭 11줄. 백업 `ERP-COM-GOOGLE-SHEETS-SSOT 백업 09(ID는 비공개 ai-ops 문서)`, 되읽기 기대값과 다른 행 0. 문서: ERP-COM SSOT 운영 규칙(엔카와 다른 점 5., 세부트림 줄), 런북 ⑤, 공통 시트 규격 `basicTrimRule`.
 - 남음: F03 나머지(규칙 적용 이름 변경 약 50행·연료·엔진만 다른 행 「통합→」 약 25행)와 엑센트 신형(엔카 이름 미확인) — 같은 절차(Codex 검토 → 백업·재조회·RAW·되읽기). 판단 갈리는 낱말 7개 결정. 카니발 KA4 등 엔카가 인승으로 가르는 등급의 F03 행 정리.
 - next_start_here: `trim-final-plan` 생성기(규칙 파일 결과 + 엔카 증거 우선 + 통합 대표 행 + 판단 낱말 보류)로 나머지 계획 → Codex 검토 → 적용.
 
@@ -1254,8 +1262,8 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ### 2026-10-04 F03 차종마스터 대표 최종 규칙 적용 · 세부트림 «끝 단» 대조
 
-- 목적/대상: AI 상황실 오더(대표 최종 10-04 — 엔카와 다른 점은 기아 개발코드·괄호 없음·기본형·제조사 짧게). F03 `1oMB9eoNnQFxUyRK4CSxYh_hKrtCf7s_79xLs-GYwXCE`, 문서 기준 main `609e82a`.
-- 변경(시트): 백업 `1S7cHo_YlKGa7I32UDrLdoDDiEx6AZDqqpIR8twi6tms` 후 597행·1,307칸(제조사 371 → 쉐보레·르노·KGM, 세부모델=모델 338 → 기본형, 볼트(Volt) → 볼트 Volt), 별칭 26줄 수정·69줄 추가. 변경(문서): `ERP-COM-GOOGLE-SHEETS-SSOT.md` 운영 규칙에 «엔카와 다른 점 — 이것뿐», «세부트림 = 엔카 맨 끝 단», 3차 반영 기록·후속 HOLD, 검증 기록에 세부트림 대조.
+- 목적/대상: AI 상황실 오더(대표 최종 10-04 — 엔카와 다른 점은 기아 개발코드·괄호 없음·기본형·제조사 짧게). F03 `F03 차종마스터 시트(ID는 비공개 ai-ops 문서)`, 문서 기준 main `609e82a`.
+- 변경(시트): 백업 `ERP-COM-GOOGLE-SHEETS-SSOT 백업 08(ID는 비공개 ai-ops 문서)` 후 597행·1,307칸(제조사 371 → 쉐보레·르노·KGM, 세부모델=모델 338 → 기본형, 볼트(Volt) → 볼트 Volt), 별칭 26줄 수정·69줄 추가. 변경(문서): `ERP-COM-GOOGLE-SHEETS-SSOT.md` 운영 규칙에 «엔카와 다른 점 — 이것뿐», «세부트림 = 엔카 맨 끝 단», 3차 반영 기록·후속 HOLD, 검증 기록에 세부트림 대조.
 - 검증: Codex `gpt-6-astra` 계획 검토 NO-GO(셀토스 별칭 키 하나) → 수정 → GO. 쓰기 직전 전체 재조회 = 검토 스냅샷, 되읽기 기대값과 다른 행 0, 불변 ID 그대로, 원자ID 1,678·중복 0. 남은 위반: 기아 `셀토스 2세대` 4행. 세부트림 끝 단 글자 일치 65/87(74.7%, Codex 독립 판정), 불일치 22는 안 고침.
 - 남음(HOLD): 세부트림 「기본형」 해석(글자대로면 맞는 트림 29행+후보 13행이 기본형으로 뭉침 — AI 상황실 결정 대기), 세부트림 불일치 22행 정정, ERP4 발행기 이름 기반 ID(돌리지 않음), 공동 시트 차종목록·채운 값 재계획, 별칭 E열 `vmt_` 15줄, ERP4 운영 매뉴얼·projection·makerForMatch 최종본 PR, 셀토스 2세대 개발코드.
 - next_start_here: AI 상황실의 「기본형」 결정을 받아 세부트림 반영 계획 → Codex 검토 → 같은 절차(백업·재조회·RAW·되읽기)로 적용.
@@ -1651,7 +1659,7 @@ Date: 2026-09-28
 
 ## 2026-09-29 RP021 빌린카 정책 원본 정합·연결 보정
 
-- 정본: `[F67 사용중] 빌린카 프리패스 재고` (`1036j-xoQtu-nzWOcfky8MmtSRrvPhRls16E7n49iFVA`),
+- 정본: `[F67 사용중] 빌린카 프리패스 재고` (`BILLINCAR_POLICY 시트(ID는 비공개 ai-ops 문서)`),
   `운영정책` sheetId `654905320`, `A1:BS5`.
 - 원본의 `pol_freepassstd` 1건과 `POL-0035`, `RP021_S01`, `RP021_S02`는 서로 다른 4개 정책이다.
   S01과 S02는 추가주행료·연령하향료가 달라 합치지 않는다.
@@ -2280,7 +2288,7 @@ This file exists so another session can continue without re-discovering or re-cr
 # 2026-09-28 Iancar policy/source recovery
 
 - (당시 기준 — 2026-10-04 폐기: 이안카 정본은 이안카 시스템이며 이 시트는 출처가 아니다) Source SSOT: `이안카_프리패스` tabs `이안카`, `이안카 재렌트`; 119 unique plates.
-- F54 backup: Drive file `1LwgzNLWI9hENYeJ5q7TTQ5wkyyFDVpowUJO0fTFpiNk`.
+- F54 backup: Drive file `NEXT-START-HERE 백업 21(ID는 비공개 ai-ops 문서)`.
 - F54 policy split: `RP031_S01..S04` = 5/10/15/25만원; matched inventory counts 62/35/18/4.
 - Firestore apply run: `2026-09-27T16-37-05-835Z-766258c0-376b-4225-9691-f87303bb953e`; local private rollback evidence retained.
 - Publication preparation/apply: GitHub Actions runs `36333911144` / `36333983363`.

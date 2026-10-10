@@ -350,7 +350,7 @@ Data RP012 전용 runtime SA **한 개만 accessor**로 지정하고 그 secret 
 - 작업 정본: `work/freepass-data/supplier-direct-integration-20261003`, Data `e4dcee5446e70f7342f1bcdc25b170d8aca077d0`. GitHub connector로 main이 같은 revision임을 확인했고 open PR 검색 결과는 0건이었다. Issue #24의 데이터 플랫폼 경계를 유지한다.
 - 읽은 운영 코드: ERP4 engine `fe3eccc0173cb581e71a5a963bb7f28d3715b14f`의 Git 객체만. ERP4 main workflow는 `094155bd8e03a4269654a45b2eac6237a7796ad1` 관측, engine pin `fe3eccc`, Data RP031 실행기 pin `4917f2a79c0ab41d83dee745c8645bf810934f98`. ERP4 checkout 수정 없음.
 - [회차 37110200131](https://github.com/freepass-creator/freepasserp4/actions/runs/37110200131)의 job `111166453368` 로그/단계 성공을 직접 재조회했다. 아래 시각은 **이 회차의 단계 완료 시각**이며 공급사 자체 갱신시각이나 현재 최신 성공 회차를 뜻하지 않는다. 오늘 cron 횟수·08:59 실패는 사용자에게 전달된 Claude 실측으로, 이번 전체 run 목록 재감사는 하지 않았다.
-- 2026-10-03 원본/시트 connector 읽기: RP004 원본 `1LqWVs2o1-wpPqFiYkOjcQldmIXqtBMKYp0A1SKEir5w`, F86 `1hQtshpWKL4L0zSR3H3UQ36atICtHv9Ka7dQh7d7K5Vg`. 원본 fetch 응답 modified_time `2026-10-02T08:27:25.994Z`; 셀 재조회는 비원자 읽기이므로 그 시각으로 전체 셀 버전 일치를 보증하지 않는다. 광역 export의 텍스트에는 링크 메타데이터가 없어 사진 판정에 사용하지 않았다.
+- 2026-10-03 원본/시트 connector 읽기: RP004 원본 `RP004 원본 시트(ID는 비공개 ai-ops 문서)`, F86 `F86 시트(ID는 비공개 ai-ops 문서)`. 원본 fetch 응답 modified_time `2026-10-02T08:27:25.994Z`; 셀 재조회는 비원자 읽기이므로 그 시각으로 전체 셀 버전 일치를 보증하지 않는다. 광역 export의 텍스트에는 링크 메타데이터가 없어 사진 판정에 사용하지 않았다.
 - 웹 도구의 두 공급사 robots.txt 접근 실패, Chrome 아이언 robots.txt `ERR_BLOCKED_BY_CLIENT`. 규칙을 확인하지 못해 홈페이지 차량 상세 요청은 **0회**. 로그인·키 입력·원본 이미지 다운로드·단축 URL 전개 없음. 공개 접근 실패를 공급사 원천 공백으로 간주하지 않는다.
 
 | 공급사 | 방식 | 지금 연동 상태 | 마지막 수집 시각 | 빠진 칸 | 문제 | 다음 할 일 |

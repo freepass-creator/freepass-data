@@ -1,3 +1,5 @@
+process.env.FREEPASS_SHEET_F01_ID = 'test-sheet-f01';
+process.env.FREEPASS_SHEET_F86_ID = 'test-sheet-f86';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { planPresentation, specification as spec } from '../scripts/sheet-presentation.mjs';
@@ -9,7 +11,7 @@ test('current publication is F01 only; inactive F86 originals and layout remain 
   assert.equal(spec.publication.verificationStatus,'PENDING');
   assert.equal(spec.supplierInputTransition.f01AutomaticPublication,'PRESERVE');
   assert.equal(spec.supplierInputTransition.f86AutomaticPublication,'STOPPED_PER_REPRESENTATIVE_ORDER_2026_10_08');
-  assert.ok(spec.workbooks.F86.spreadsheetId);
+  assert.ok(process.env[spec.workbooks.F86.spreadsheetIdEnv]);
   assert.ok(spec.workbooks.F86.primarySheetIds.length>0);
 });
 const opts={workbook:'F86',updatedAt:at,now:Date.parse(at)};
@@ -34,7 +36,7 @@ test('FreePass Data owns one semantic color palette for every Google Sheets cons
 function fixture(){
   const sheets=spec.workbooks.F86.primarySheetIds.map((id,i)=>({properties:{sheetId:id,title:`legacy-${i}`,index:i,gridProperties:{rowCount:10,columnCount:7,frozenRowCount:1}},data:[{rowData:[{values:['차량번호','차명(원문)','옵션(원문)','단기보증','장기보증','12개월','24개월'].map(cell)},{values:[`TEST-${i}`,'raw-name','raw-options','100','100','100','100'].map(cell)}],columnMetadata:[{pixelSize:80},{pixelSize:80},{pixelSize:80},{pixelSize:80},{pixelSize:80,hiddenByUser:true},{pixelSize:80},{pixelSize:80,hiddenByUser:true}]}]}));
   for(const s of sheets)while(s.data[0].rowData.length<10)s.data[0].rowData.push({values:[]});
-  return {capturedAt:at,sheetInventory:sheets.map(s=>s.properties),coverage:sheets.map(s=>({sheetId:s.properties.sheetId,endRowIndex:10,endColumnIndex:7})),spreadsheet:{spreadsheetId:spec.workbooks.F86.spreadsheetId,sheets}};
+  return {capturedAt:at,sheetInventory:sheets.map(s=>s.properties),coverage:sheets.map(s=>({sheetId:s.properties.sheetId,endRowIndex:10,endColumnIndex:7})),spreadsheet:{spreadsheetId:process.env[spec.workbooks.F86.spreadsheetIdEnv],sheets}};
 }
 test('all primary tabs, Seoul timestamp, widths and durable F86 font; no deletions',()=>{
   const result=planPresentation(fixture(),opts);
@@ -118,21 +120,21 @@ test('independent inventory detects an omitted supplier tab',()=>{
  const x=fixture();x.sheetInventory.push({sheetId:999,title:'supplier 1대',index:4});assert.throws(()=>planPresentation(x,opts),/inventory mismatch/);
 });
 test('F01 preserves short-term visibility and uses its own stable IDs',()=>{
- const x=fixture();x.spreadsheet.spreadsheetId=spec.workbooks.F01.spreadsheetId;
+ const x=fixture();x.spreadsheet.spreadsheetId=process.env[spec.workbooks.F01.spreadsheetIdEnv];
  x.spreadsheet.sheets.forEach((s,i)=>{s.properties.sheetId=spec.workbooks.F01.primarySheetIds[i];x.coverage[i].sheetId=s.properties.sheetId;});
  const r=planPresentation(x,{...opts,workbook:'F01'});
  assert.equal(r.counts.length,4);assert.equal(r.requests.filter(r=>r.updateDimensionProperties?.fields==='hiddenByUser').length,0);
  assert.equal(r.requests.filter(r=>r.repeatCell).length,0);
 });
 test('F01 ignores the explicitly retired hidden legacy catalog tab',()=>{
- const x=fixture();x.spreadsheet.spreadsheetId=spec.workbooks.F01.spreadsheetId;
+ const x=fixture();x.spreadsheet.spreadsheetId=process.env[spec.workbooks.F01.spreadsheetIdEnv];
  x.spreadsheet.sheets.forEach((s,i)=>{s.properties.sheetId=spec.workbooks.F01.primarySheetIds[i];x.coverage[i].sheetId=s.properties.sheetId;});
  const retired=structuredClone(x.spreadsheet.sheets[0]);retired.properties={...retired.properties,sheetId:spec.workbooks.F01.retiredSheetIds[0],index:9,title:'상품리스트 09.21 18:13 · 385대',hidden:true};
  x.spreadsheet.sheets.push(retired);x.sheetInventory.push(retired.properties);x.coverage.push({sheetId:retired.properties.sheetId,endRowIndex:10,endColumnIndex:7});
  assert.equal(planPresentation(x,{...opts,workbook:'F01'}).counts.length,4);
 });
 test('F01 duplicate or stale extra visible catalog tab fails closed',()=>{
- const x=fixture();x.spreadsheet.spreadsheetId=spec.workbooks.F01.spreadsheetId;
+ const x=fixture();x.spreadsheet.spreadsheetId=process.env[spec.workbooks.F01.spreadsheetIdEnv];
  x.spreadsheet.sheets.forEach((s,i)=>{s.properties.sheetId=spec.workbooks.F01.primarySheetIds[i];x.coverage[i].sheetId=s.properties.sheetId;});
  const duplicate=structuredClone(x.spreadsheet.sheets[0]);duplicate.properties={...duplicate.properties,sheetId:999,index:4,title:'상품리스트 09.21 18:13 · 385대'};
  x.spreadsheet.sheets.push(duplicate);x.sheetInventory.push(duplicate.properties);x.coverage.push({sheetId:999,endRowIndex:10,endColumnIndex:4});
@@ -145,4 +147,16 @@ test('supplier views may repeat primary keys, preserve gaps and use common gray'
  const r=planPresentation(x,opts);const p=r.requests.find(r=>r.updateSheetProperties?.properties.sheetId===999).updateSheetProperties;
  assert.equal(p.properties.title,'공급사 1대');assert.equal(p.properties.index,undefined);
  assert.ok(p.properties.tabColorStyle);assert.equal(r.counts[4].count,1);
+});
+
+test('missing and blank workbook env fail before presentation; other workbook is independent', () => {
+  const input = fixture();
+  const name = spec.workbooks.F86.spreadsheetIdEnv;
+  const previous = process.env[name];
+  try {
+    delete process.env[name];
+    assert.throws(() => planPresentation(input, opts), /MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F86_ID/);
+    process.env[name] = '   ';
+    assert.throws(() => planPresentation(input, opts), /MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F86_ID/);
+  } finally { process.env[name] = previous; }
 });

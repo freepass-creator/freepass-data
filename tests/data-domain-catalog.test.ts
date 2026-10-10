@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { readFileSync, existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   DATA_ASSETS,
@@ -73,4 +75,17 @@ describe('data domain catalog', () => {
     expect(result.classified).toBe(1);
     expect(result.unclassified).toBe(1);
   });
+});
+
+// Scan current publishable files, not Git history or ignored private evidence.
+it('public files contain no Google Sheet or Drive IDs', () => {
+  const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+  const violations: string[] = [];
+  for (const file of new Set(files)) {
+    if (!existsSync(file)) continue;
+    const text = readFileSync(file, 'utf8');
+    const candidates = text.match(/(?<![A-Za-z0-9_-])1[A-Za-z0-9_-]{39,47}(?![A-Za-z0-9_-])/g) ?? [];
+    if (candidates.some(value => !/^[a-fA-F0-9]{40}$/.test(value))) violations.push(file);
+  }
+  expect(violations).toEqual([]);
 });

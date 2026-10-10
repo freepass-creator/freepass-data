@@ -96,14 +96,17 @@ jobs:
           echo "IMAGE_REF=$image@$digest" >> "$GITHUB_ENV"
 
       - name: Deploy private read-only service
+        env:
+          FREEPASS_SHEET_F04_ID: ${{ secrets.FREEPASS_SHEET_F04_ID }}
         shell: bash
         run: |
           set -euo pipefail
+          : "${FREEPASS_SHEET_F04_ID:?MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID}"
           gcloud run deploy "$SERVICE_NAME" \
             --project="$PROJECT_ID" --region="$REGION" --platform=managed \
             --image="$IMAGE_REF" --service-account="$RUNTIME_SERVICE_ACCOUNT" \
             --ingress=all --max-instances=10 --concurrency=8 --no-allow-unauthenticated \
-            --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5" \
+            --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5,FREEPASS_SHEET_F04_ID=$FREEPASS_SHEET_F04_ID" \
             --set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:$CONSUMERS_SECRET_VERSION,EANCAR_ONE_API_KEY=$IANCAR_SECRET_NAME:$IANCAR_SECRET_VERSION" --quiet
 
       - name: Verify service readiness metadata

@@ -1,3 +1,4 @@
+process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { createHash } from 'node:crypto';
 import { verifiedMasterRecords, type VehicleMasterSnapshot } from '../src/adapters/vehicle-identity-inputs.js';
 import { describe, expect, it, vi } from 'vitest';

@@ -1,3 +1,4 @@
+process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';

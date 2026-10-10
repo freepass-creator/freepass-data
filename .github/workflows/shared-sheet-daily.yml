@@ -31,6 +31,11 @@ permissions:
   # 예약 실행 전 최근 매시 감사의 daily-writer-guard 결과를 읽는다
   actions: read
 
+env:
+  FREEPASS_SHEET_F01_ID: ${{ secrets.FREEPASS_SHEET_F01_ID }}
+  FREEPASS_SHEET_F86_ID: ${{ secrets.FREEPASS_SHEET_F86_ID }}
+  FREEPASS_SHEET_F04_ID: ${{ secrets.FREEPASS_SHEET_F04_ID }}
+
 jobs:
   shared-sheet-daily:
     environment: data-production-delivery

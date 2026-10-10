@@ -170,7 +170,7 @@ export const DATA_ASSETS: readonly DataAssetDefinition[] = [
     assetId: 'sheet-f01', domainId: 'publication', displayName: 'Google Sheets F01',
     aliases: ['F01', '표준시트', '판매시트'], kind: 'GOOGLE_SHEET', system: 'google-workspace:pyh@teamjpk.com',
     locator: 'contract:f01-f86-sheet-spec.v1.json#workbooks/F01', ownership: 'CONSUMER_OUTPUT', authority: 'OUTPUT',
-    keyDescription: 'stable spreadsheetId + sheetId + vehicle key', sensitivity: 'CONFIDENTIAL', availability: 'PARTIAL',
+    keyDescription: 'FREEPASS_SHEET_F01_ID (runtime env) + sheetId + vehicle key', sensitivity: 'CONFIDENTIAL', availability: 'PARTIAL',
     freshnessPolicy: '발행 snapshot/release와 적용 후 새 readback', contractRef: 'contracts/f01-f86-sheet-spec.v1.json',
     consumers: ['sales-operations'], notes: ['표시 적용과 운영 publisher 연결은 별개']
   },
@@ -178,7 +178,7 @@ export const DATA_ASSETS: readonly DataAssetDefinition[] = [
     assetId: 'sheet-f86', domainId: 'publication', displayName: 'Google Sheets F86',
     aliases: ['F86', '레트로시트', '공급사시트'], kind: 'GOOGLE_SHEET', system: 'google-workspace:pyh@teamjpk.com',
     locator: 'contract:f01-f86-sheet-spec.v1.json#workbooks/F86', ownership: 'CONSUMER_OUTPUT', authority: 'OUTPUT',
-    keyDescription: 'stable spreadsheetId + sheetId + vehicle key', sensitivity: 'CONFIDENTIAL', availability: 'PARTIAL',
+    keyDescription: 'FREEPASS_SHEET_F86_ID (runtime env) + sheetId + vehicle key', sensitivity: 'CONFIDENTIAL', availability: 'PARTIAL',
     freshnessPolicy: '발행 snapshot/release와 적용 후 새 readback', contractRef: 'contracts/f01-f86-sheet-spec.v1.json',
     consumers: ['channel-operations'], notes: ['공급사 탭은 기본 재고 합계에 중복 가산하지 않음']
   },
