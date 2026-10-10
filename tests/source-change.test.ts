@@ -255,7 +255,10 @@ describe('reviewed source change', () => {
   it.each(['KNOWN', 'ZERO'] as const)('blocks lost %s evidence even when approved; preserves revision, binding, outbox and ACTIVE', async state => {
     const store = new MemoryDataStore();
     const { original, receipt: initial } = await initialCanonical(store, state);
-    expect(await processOneOutboxEvent(store, store, store, { workerId: 'worker-deposit-initial' }, new Date('2026-09-21T00:02:00Z'))).toBe('DONE');
+    const event = [...store.outbox.values()].find((item) => item.status === 'PENDING')!;
+    expect(await processOneOutboxEvent(store, store, store,
+      { workerId: 'worker-deposit-initial', eventId: event.eventId, expiresAt: '2026-09-21T00:02:30Z' },
+      new Date('2026-09-21T00:02:00Z'))).toBe('DONE');
     const active = structuredClone(await store.getActive('erp-public'));
     const outbox = structuredClone([...store.outbox.entries()]);
     const changed = evidence({ runId: 'run-deposit-missing', candidateId: 'candidate-deposit-missing',

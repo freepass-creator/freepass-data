@@ -1,5 +1,13 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 worker 테스트 훅 memory 전용화 / HOLD 재시도 지연
+
+- 목적: Claude 검토 지적대로 `FREEPASS_DATA_WORKER_TEST_REPRICE` 시험 훅이 Firestore driver에서 실제 projection/price write를 실행하지 못하게 막고, HOLD 이벤트가 즉시 재클레임되지 않게 한다.
+- 변경: `src/worker.ts`는 테스트 reprice 훅을 `FREEPASS_DATA_DRIVER=memory`에서만 허용하며, 그 외 driver는 store 생성 전 `FREEPASS_DATA_WORKER_TEST_REPRICE_REQUIRES_MEMORY_DRIVER`로 중단한다. `processOneOutboxEvent`의 first activation/source HOLD retry는 `nextAttemptAt`을 현재+30초로 둔다.
+- 검증: `npm.cmd run build` PASS. `npm.cmd exec vitest -- run tests/projection-integrity.test.ts` PASS(54). `npm.cmd exec vitest -- run tests/catalog.test.ts tests/projection-integrity.test.ts` PASS(78).
+- 남음: 운영 쓰기·push 없음. Firestore/운영 실행 없음.
+- next_start_here: 동일 브랜치에서 이 amend commit의 diff와 위 세 검증 명령을 기준으로 이어간다.
+
 ## 2026-10-10 정산 안정 ID 연결 읽기 전용 감사 P0-2
 
 - 목적: `settlement_rows`의 `contractNo`/`contractId`/`contractCode`/`intakeRequestId`/`sourceProductId`를 기존 `contract`/`products`와 읽기 전용으로 대조하는 감사 경로를 추가한다. 차량번호 후보는 확정이 아니며 번호를 만들어 채우지 않는다.

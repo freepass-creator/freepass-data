@@ -826,6 +826,10 @@ function backoffMs(base: number, attempts: number) {
   const capped = Math.min(attempts, 8);
   return base * 2 ** capped + Math.floor(base * 0.2 * Math.random());
 }
+const HOLD_RETRY_DELAY_MS = 30_000;
+function holdNextAttemptAt(now: Date) {
+  return new Date(now.getTime() + HOLD_RETRY_DELAY_MS).toISOString();
+}
 export async function processOneOutboxEvent(
   catalog: CatalogStore, outbox: OutboxStore, projections: ProjectionStore,
   options: {workerId: string; maxAttempts?: number; baseBackoffMs?: number; leaseMs?: number; requireFreshSources?: boolean; eventId?: string; expiresAt?: string; expectedEventDigest?: string; expectedActiveReleaseId?: string | null}, now = new Date()
@@ -885,6 +889,11 @@ export async function processOneOutboxEvent(
             }
           }
         );
+        if (!shouldActivate) {
+          await outbox.markRetry({ eventId: event.eventId, attempts: event.attempts, lease,
+            nextAttemptAt: event.nextAttemptAt ?? holdNextAttemptAt(now), error: 'PROJECTION_ACTIVATION_REQUIRES_APPROVED_EVENT_OR_ACTIVE_RELEASE' });
+          return 'HOLD';
+        }
       }
     }
     currentTime();
@@ -897,7 +906,7 @@ export async function processOneOutboxEvent(
         // The source can change between the preflight and claim. Release the
         // claim without spending an event retry or replacing the old ACTIVE.
         await outbox.markRetry({ eventId: event.eventId, attempts: event.attempts, lease,
-          nextAttemptAt: event.nextAttemptAt ?? now.toISOString(), error: message });
+          nextAttemptAt: event.nextAttemptAt ?? holdNextAttemptAt(now), error: message });
         return 'HOLD';
       }
       if (attempts >= (options.maxAttempts ?? 8)) {
