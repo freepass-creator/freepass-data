@@ -4,6 +4,9 @@ import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-ta
 import { assessDepositEvidence, depositStatusLabel, hasConflictingPaidDeposit } from '../domain/deposit-evidence.js';
 import { readIancarPublishedDeposit } from '../domain/deposit-evidence.js';
 
+import { createVehiclePhotoReader, type ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
+export { createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../domain/consumer-output-contract.js';
+export type { ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
 type Rec = Record<string, unknown>;
 
 /** Reuse the bound Data target and read-only transaction; no alternate transport or writer. */
@@ -106,7 +109,11 @@ export function isPublicIancarPhotoProduct(product: Record<string, unknown> | un
 
 export class FirestoreCatalogCompatibilityReader {
   private readonly db = getFirestore(getTargetFirebaseApp());
-  constructor(private readonly photoReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>) {}
+  constructor(private readonly photoReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>,
+    approvedPhotoReader?: ApprovedPhotoReader) {
+    this.readVehiclePhoto = createVehiclePhotoReader(async productId => (await this.db.collection('products').doc(productId).get()).data(), photoReader, approvedPhotoReader, isPublicIancarPhotoProduct);
+  }
+  readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
 
   /** Product identity is resolved here, never accepted as an arbitrary provider path from a caller. */
   async readIancarPhoto(consumerId: string, productId: string, index?: number) {
@@ -204,6 +211,6 @@ export class FirestoreCatalogCompatibilityReader {
   }
 }
 
-export function createFirestoreCatalogCompatibilityReader(photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0]) {
-  return new FirestoreCatalogCompatibilityReader(photoReader);
+export function createFirestoreCatalogCompatibilityReader(photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0], approvedPhotoReader?: ApprovedPhotoReader) {
+  return new FirestoreCatalogCompatibilityReader(photoReader, approvedPhotoReader);
 }

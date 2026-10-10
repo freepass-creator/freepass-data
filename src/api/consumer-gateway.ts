@@ -194,6 +194,7 @@ export function createConsumerGateway(
     readKakaoReferenceSource?(consumerId: string): Promise<KakaoCatalogReferenceSource>;
     readInternalAiReferenceSource?(consumerId: string): Promise<KakaoCatalogReferenceSource>;
     readIancarPhoto?(consumerId: string, productId: string, index?: number): Promise<{ count: number; bytes: Buffer | null; contentType: string }>;
+    readVehiclePhoto?(consumerId: string, productId: string, index?: number): Promise<{ count: number; bytes: Buffer | null; contentType: string }>;
   },
   workflowStore?: AdminWorkflowStore,
   estimateArtifactStore?: EstimateArtifactStore,
@@ -222,8 +223,8 @@ export function createConsumerGateway(
     reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
     const binding = registered.get(request.params.consumerId);
     const matches = timingSafeEqual(hash(request.headers.authorization ?? ''), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
-    const spec = { context: consumerContext(binding?.id ?? 'unregistered-consumer', 'read bound Iancar vehicle photo through FreePass Data', request.id),
-      operation: 'READ_IANCAR_PRODUCT_PHOTO', resource: { kind: 'CATALOG' as const, name: 'iancar-product-photo' } };
+    const spec = { context: consumerContext(binding?.id ?? 'unregistered-consumer', 'read bound vehicle photo through FreePass Data', request.id),
+      operation: 'READ_PRODUCT_PHOTO', resource: { kind: 'CATALOG' as const, name: 'iancar-product-photo' } };
     try {
       if (!binding || !matches) { await access.deny('READ', spec, 'UNAUTHORIZED'); return reply.code(401).send({ code: 'UNAUTHORIZED' }); }
       if (!binding.capabilities.includes('catalog') || !(binding.id === 'erp-com' || binding.id.startsWith('whitelabel-'))) {
@@ -235,11 +236,11 @@ export function createConsumerGateway(
         await access.deny('READ', spec, 'INVALID_REQUEST'); return reply.code(400).send({ code: 'INVALID_REQUEST' });
       }
       spec.resource = { ...spec.resource, ...{ entityId: request.params.productId } };
-      if (!compatReader?.readIancarPhoto) {
+      if (!compatReader?.readVehiclePhoto && !compatReader?.readIancarPhoto) {
         await access.deny('READ', spec, 'IANCAR_PHOTO_READER_UNAVAILABLE');
         return reply.code(503).send({ code: 'IANCAR_PHOTO_READER_UNAVAILABLE' });
       }
-      const read = compatReader.readIancarPhoto.bind(compatReader);
+      const read = (compatReader.readVehiclePhoto ?? compatReader.readIancarPhoto)!.bind(compatReader);
       const result = await access.read({ ...spec, requestDigest: stableDigest({ productId: request.params.productId, index: index ?? null }),
         summarize: value => ({ count: value.count }) }, () => read(binding.id, request.params.productId, index));
       if (!Number.isSafeInteger(result.count) || result.count < 0 || result.count > 200)
@@ -251,7 +252,8 @@ export function createConsumerGateway(
     } catch (error) {
       if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
       const code = error instanceof Error ? error.message : '';
-      if (code === 'IANCAR_PHOTO_BUSY') return reply.header('Retry-After', '2').code(429).send({ code });
+      if (code === 'VEHICLE_PHOTO_BUSY' || code === 'IANCAR_PHOTO_BUSY') return reply.header('Retry-After', '2').code(429).send({ code });
+      if (['VEHICLE_PHOTO_NOT_FOUND', 'VEHICLE_PHOTO_READER_UNAVAILABLE', 'VEHICLE_PHOTO_UNAVAILABLE'].includes(code)) return reply.code(code === 'VEHICLE_PHOTO_NOT_FOUND' ? 404 : 503).send({ code });
       return reply.code(code === 'IANCAR_PHOTO_NOT_FOUND' ? 404 : 503).send({ code: code === 'IANCAR_PHOTO_NOT_FOUND' ? code : 'IANCAR_PHOTO_READ_FAILED' });
     }
   };

@@ -576,3 +576,33 @@ Those are *historical* incident counts, never today's expected source totals.
 
 This RP031 patch is a first vertical slice, not a claim that the above production
 gates or all suppliers are complete.
+
+
+## 차량 사진 프록시 확장 — 2026-10-10
+
+설계 근거: ai-ops `docs/handoffs/차량사진-한장설계-20261010.md` 3·4·8절. 기존 공급사 전용 조건은 그대로 유지하며 승인 연결 상품까지 읽기 경로를 확장한다.
+
+`photo_original_refs`는 1~200개 배열이다. 모든 항목은 `{ driveFileId, sha256, mediaType, role, zone, approvedAt, vehicleKey }` 형식이어야 한다. driveFileId·vehicleKey는 영문/숫자/밑줄/하이픈 1~200자, sha256은 소문자64 hex, mediaType은 image/jpeg|image/png|image/webp, role은 VEHICLE_PHOTO, zone은 차량사진, approvedAt은 실제 존재하는 UTC ISO 시각(초 또는 밀리초, Z)이다. 상류에서 승인한 연결만 사용하며 폴더 이름으로 승인을 추정하지 않는다.
+
+| 거부 조건 | 결과 |
+|---|---|
+| listable true 아님, 삭제·철회 표식, status_kind 가용/선점 아님 | 상품 전체404 |
+| refs 개수·항목 형식 위반, 서류 role, 원문/doc_images zone | 하나라도 위반하면 상품 전체404 |
+| 서버 계산 차량키 없음 또는 어느 ref.vehicleKey라도 불일치 | 상품 전체404. 상품의 provider_company_code(없으면 partner_code) + supplier_vehicle_id를 밑줄로 연결하며, 차량 ID가 없으면 JSON 배열 [공급사 코드, car_number]의 UTF-8 SHA-256 hex를 사용한다. 문자열은 앞뒤 공백을 제거하고 번호판 평문을 키·로그에 남기지 않는다. |
+| 캐시의 (productId, driveFileId, sha256, approvedAt, vehicleKey) 튜플 불일치 | 캐시 재사용 금지. 해당 원본 reader 호출·바이트 해시 검증을 다시 수행하며 상품 간 공유하지 않는다. |
+| 원본 읽기 후 상품 재조회에서 적격성 또는 동일 승인 ref 불일치 | 404, 캐시 미등록. driveFileId·sha256·approvedAt·vehicleKey 및 mediaType을 캐시 등록·반환 직전에 재확인한다. |
+| 잘못된 productId/index | 400; 파일 참조는 상품 문서에서만 해석 |
+| 바이트 해시 불일치, 8MiB 초과, 빈 바이트, mediaType 불일치 | 503 UNAVAILABLE, 캐시 미등록 |
+| approvedPhotoReader 미연결 | 503 VEHICLE_PHOTO_READER_UNAVAILABLE |
+| 동시 원본 읽기8개 초과 | 429 + Retry-After: 2 |
+| 미인증/권한 없음 | 기존401/403 유지 |
+
+승인 경로 캐시는 (productId, driveFileId, sha256, approvedAt, vehicleKey) JSON 튜플 키, 총64MiB, TTL 상한30초, LRU다. 검증 성공 바이트만 보관한다. 매 요청 상품을 먼저 다시 읽고, 원본 읽기가 끝난 뒤 캐시 등록·반환 직전에도 상품의 적격성과 동일 승인 ref를 다시 확인한다. ref 제거·철회는 새 요청뿐 아니라 진행 중인 원본 읽기에도 적용한다. count는 승인 refs 수. HTTP Cache-Control은 private, no-store. 감사 operation은 READ_PRODUCT_PHOTO이며 기존 resource 이름·entityId·count는 호환 유지한다.
+
+운영 구성 HOLD: 실행 계정 `freepass-data-read-runtime`에 비공개 차량사진 폴더의 **읽기 전용 권한**이 필요하다. 권한 확대이므로 별도 승인·적용 대상이다. 실제 Drive approvedPhotoReader 구현은 이번 범위 밖이며 포트와 가짜 시험만 구현했다. 운영 쓰기·권한 변경·배포 없음.
+
+썸네일은 후속, ERP 목록 부하는 캐시·요청 제한으로 먼저 방어.
+
+독립 검토 세 결함 수정 검증(2026-10-10): gateway 40/40 PASS(추가 회귀 12개: 차량 귀속, 캐시 튜플 5경우, 읽기 중 철회·승인 변경 6경우). `npm.cmd run check` exit 1: arch/standards/data-access/sheets/build 통과, smoke 12 PASS/1 FAIL(`uv_os_get_passwd ENOMEM`). 중단 이후 단계는 별도 실행: shadow 10/10, dashboard 21/21 PASS, `npm.cmd test` 1933 PASS/12 FAIL/16 SKIP(파일137 PASS/5 FAIL/4 SKIP). 실패: iancar-source-capture 2, projection-integrity 3, read-pilot 4, runtime-policy 2, vehicle-finder-route 1; tsx 사용자정보 ENOMEM, jq Permission denied, CLI exit/JSON, 로컬 서버 ECONNREFUSED. 전체 PASS 아님. 사용자 제공 사전 검토의 `tests/runtime-policy.test.ts` 5초 초과 1건은 main에도 있는 기존 문제로 기록하며 수정하지 않았다. 이번 실행에서는 그 timeout 대신 위 환경 오류가 관측됐다. 이안카 분기·기존 실패 시험·시간제한 변경 없음. 실제 차량번호·Drive ID 추가 없음, 커밋·푸시 없음.
+
+검증: npm.cmd run check는 정적 검사·sheets·build 통과 후 기존 smoke의 tsx 시작에서 uv_os_get_passwd ENOMEM 환경 오류(12통과/1실패). 기대값 변경 없음. 관련 전체 시험175통과/2환경실패(기존 source-capture subprocess의 같은 오류). gateway28개(신규7개), ONE API75개, withdrawal18개 통과. 전체 check PASS 아님.

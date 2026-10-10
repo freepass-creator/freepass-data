@@ -1,5 +1,7 @@
 process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { createHash } from 'node:crypto';
+import { vehiclePhotoKey } from '../src/domain/consumer-output-contract.js';
+import { createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../src/infra/erp5-compat-catalog-reader.js';
 import { buildAdminCatalogProjection } from '../src/application/admin-catalog.js';
 import { updateOfferPrice } from '../src/application/catalog.js';
 import { describe, expect, it } from 'vitest';
@@ -137,7 +139,7 @@ describe('read-only consumer gateway', () => {
     expect(binary.headers['content-type']).toBe('image/jpeg');
     expect(binary.headers['cache-control']).toBe('private, no-store');
     expect(binary.headers['x-content-type-options']).toBe('nosniff');
-    expect(logs.events.at(-1)).toMatchObject({ operation: 'READ_IANCAR_PRODUCT_PHOTO', phase: 'SUCCEEDED' });
+    expect(logs.events.at(-1)).toMatchObject({ operation: 'READ_PRODUCT_PHOTO', phase: 'SUCCEEDED' });
     for (const index of ['-1', '200', '1e1', '01', 'NaN']) expect((await app.inject({ url: photoUrl + '/' + index, headers })).statusCode).toBe(400);
     expect(reads).toBe(2);
     expect((await app.inject({ url: compatUrl + '/products/gone/photos/0', headers })).statusCode).toBe(404);
@@ -617,4 +619,167 @@ it('serves Admin stored fees and coverage with an isolated grant, and no public 
   expect(publicResponse.body).not.toContain('supplierBillingFee');
   expect(publicResponse.body).not.toContain('economicsCoverage');
   await app.close();
+});
+
+
+describe('approved vehicle photo proxy', () => {
+  const bytes = Buffer.from('synthetic-photo-bytes');
+  const ref = { driveFileId: 'fake-file', sha256: createHash('sha256').update(bytes).digest('hex'), mediaType: 'image/jpeg' as const,
+    role: 'VEHICLE_PHOTO' as const, zone: '차량사진' as const, approvedAt: '2026-10-10T00:00:00Z', vehicleKey: 'TEST_vehicle-a' };
+  const product = () => ({ provider_company_code: 'TEST', supplier_vehicle_id: 'vehicle-a', listable: true, status_kind: '가용', photo_original_refs: [{ ...ref }] });
+
+  it('rejects copied approval refs from another vehicle and derives fallback keys privately', async () => {
+    const other = { ...product(), supplier_vehicle_id: 'vehicle-b' };
+    expect(isApprovedVehiclePhotoProduct(other)).toBe(false);
+    const read = createVehiclePhotoReader(async () => other, undefined, async () => { throw new Error('must not read'); });
+    await expect(read('erp-com', 'fake-product', 0)).rejects.toThrow('NOT_FOUND');
+    const fallback = { ...product(), supplier_vehicle_id: '', car_number: 'synthetic-plate-token' };
+    const key = createHash('sha256').update(JSON.stringify(['TEST', fallback.car_number])).digest('hex');
+    expect(vehiclePhotoKey(fallback)).toBe(key);
+    expect(key).not.toContain(fallback.car_number);
+    expect(isApprovedVehiclePhotoProduct({ ...fallback, photo_original_refs: [{ ...ref, vehicleKey: key }] })).toBe(true);
+    expect(isApprovedVehiclePhotoProduct({ ...fallback, provider_company_code: 'OTHER', photo_original_refs: [{ ...ref, vehicleKey: key }] })).toBe(false);
+    expect(isApprovedVehiclePhotoProduct({ ...fallback, car_number: '' })).toBe(false);
+    expect(vehiclePhotoKey({ ...product(), car_number: 'synthetic-plate-token' })).toBe(ref.vehicleKey);
+  });
+
+  it.each(['product', 'file', 'both', 'approval', 'vehicle'])('isolates byte cache by %s and verifies its own reader bytes', async change => {
+    let current = product(); let calls = 0;
+    const read = createVehiclePhotoReader(async () => current, undefined, async () => {
+      calls++; return { bytes: calls === 1 ? bytes : Buffer.from('different-source-bytes'), contentType: ref.mediaType };
+    });
+    await read('erp-com', 'fake-product', 0);
+    if (change === 'file' || change === 'both') current.photo_original_refs[0]!.driveFileId = 'fake-other-file';
+    if (change === 'approval') current.photo_original_refs[0]!.approvedAt = '2026-10-10T01:00:00Z';
+    if (change === 'vehicle') {
+      current.supplier_vehicle_id = 'vehicle-b'; current.photo_original_refs[0]!.vehicleKey = 'TEST_vehicle-b';
+    }
+    const id = change === 'product' || change === 'both' ? 'fake-other-product' : 'fake-product';
+    await expect(read('erp-com', id, 0)).rejects.toThrow('UNAVAILABLE');
+    await expect(read('erp-com', id, 0)).rejects.toThrow('UNAVAILABLE');
+    expect(calls).toBe(3);
+  });
+
+  it.each(['refs', 'listable', 'file', 'sha256', 'approvedAt', 'vehicleKey'])('returns 404 without caching when %s changes during source read', async change => {
+    let current: Record<string, unknown> = product(); let calls = 0;
+    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+    let started!: () => void; const ready = new Promise<void>(resolve => { started = resolve; });
+    const readVehiclePhoto = createVehiclePhotoReader(async () => current, undefined, async () => {
+      calls++; started(); await gate; return { bytes, contentType: ref.mediaType };
+    });
+    const { app } = withAccess(new MemoryDataStore(), [binding], undefined, { read: async () => { throw new Error('unused'); }, readVehiclePhoto });
+    try {
+      const pending = app.inject({ url: compatUrl + '/products/fake-product/photos/0', headers }).then(value => value);
+      await ready;
+      if (change === 'refs') current = { ...product(), photo_original_refs: [] };
+      else if (change === 'listable') current = { ...product(), listable: false };
+      else {
+        const patch = change === 'file' ? { driveFileId: 'fake-other-file' }
+          : change === 'sha256' ? { sha256: 'a'.repeat(64) }
+          : change === 'approvedAt' ? { approvedAt: '2026-10-10T01:00:00Z' }
+          : { vehicleKey: 'TEST_vehicle-b' };
+        current = { ...product(), ...(change === 'vehicleKey' ? { supplier_vehicle_id: 'vehicle-b' } : {}), photo_original_refs: [{ ...ref, ...patch }] };
+      }
+      release();
+      expect((await pending).statusCode).toBe(404);
+      current = product();
+      expect((await readVehiclePhoto('erp-com', 'fake-product', 0)).bytes).toEqual(bytes);
+      expect(calls).toBe(2);
+    } finally { release(); await app.close(); }
+  });
+
+  it('rejects the entire product when any reference or eligibility field is invalid', () => {
+    expect(isApprovedVehiclePhotoProduct(product())).toBe(true);
+    for (const patch of [{ role: 'DOCUMENT' }, { role: 'doc_images' }, { zone: '원문' }, { zone: 'doc_images' },
+      { sha256: ref.sha256.toUpperCase() }, { sha256: 'bad' }, { driveFileId: 'https://example.invalid/file' },
+      { driveFileId: '../doc_images' }, { vehicleKey: '' }, { approvedAt: '2026-02-30T00:00:00Z' }, { mediaType: 'text/html' }]) {
+      expect(isApprovedVehiclePhotoProduct({ ...product(), photo_original_refs: [ref, { ...ref, ...patch }] })).toBe(false);
+    }
+    for (const patch of [{ listable: false }, { _deleted: true }, { deletedAt: 'fake' }, { publication_withdrawal: {} },
+      { status_kind: 'unavailable' }, { photo_original_refs: [] }, { photo_original_refs: Array(201).fill(ref) }]) {
+      expect(isApprovedVehiclePhotoProduct({ ...product(), ...patch })).toBe(false);
+    }
+  });
+
+  it('serves approved bytes/count and rechecks revocation before cache on every request', async () => {
+    let current: Record<string, unknown> = product(); let calls = 0; let reads = 0;
+    const read = createVehiclePhotoReader(async () => { reads++; return current; }, undefined, async () => { calls++; return { bytes, contentType: ref.mediaType }; });
+    expect((await read('erp-com', 'fake-product')).count).toBe(1);
+    expect((await read('erp-com', 'fake-product', 0)).bytes).toEqual(bytes);
+    await read('erp-com', 'fake-product', 0); expect(calls).toBe(1);
+    current = { ...product(), photo_original_refs: [] };
+    await expect(read('erp-com', 'fake-product', 0)).rejects.toThrow('NOT_FOUND');
+    current = { ...product(), listable: false };
+    await expect(read('erp-com', 'fake-product', 0)).rejects.toThrow('NOT_FOUND');
+    expect(reads).toBe(6); expect(calls).toBe(1);
+  });
+
+  it('never caches invalid hashes, oversized bytes or mismatched media', async () => {
+    for (const result of [{ bytes: Buffer.from('wrong'), contentType: ref.mediaType },
+      { bytes, contentType: 'image/png' }, { bytes: Buffer.alloc(8 * 1024 * 1024 + 1), contentType: ref.mediaType }]) {
+      let calls = 0;
+      const read = createVehiclePhotoReader(async () => product(), undefined, async () => { calls++; return result; });
+      await expect(read('erp-com', 'fake-product', 0)).rejects.toThrow('UNAVAILABLE');
+      await expect(read('erp-com', 'fake-product', 0)).rejects.toThrow('UNAVAILABLE');
+      expect(calls).toBe(2);
+    }
+  });
+
+  it('expires cache and does not let callers mutate cached bytes', async () => {
+    let now = 0; let calls = 0;
+    const read = createVehiclePhotoReader(async () => product(), undefined, async () => { calls++; return { bytes, contentType: ref.mediaType }; }, undefined, () => now);
+    (await read('erp-com', 'fake-product', 0)).bytes!.fill(0);
+    expect((await read('erp-com', 'fake-product', 0)).bytes).toEqual(bytes);
+    now = VEHICLE_PHOTO_CACHE_TTL_MS;
+    await read('erp-com', 'fake-product', 0); expect(calls).toBe(2);
+  });
+
+  it('retains authentication, audit and rejects the ninth concurrent read with Retry-After', async () => {
+    let started = 0;
+    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+    let ready!: () => void; const eight = new Promise<void>(resolve => { ready = resolve; });
+    const readVehiclePhoto = createVehiclePhotoReader(async () => product(), undefined, async () => {
+      if (++started === 8) ready(); await gate; return { bytes, contentType: ref.mediaType };
+    });
+    const reader = { read: async () => { throw new Error('unused'); }, readVehiclePhoto };
+    const { app, logs } = withAccess(new MemoryDataStore(), [binding], undefined, reader);
+    const photoUrl = compatUrl + '/products/fake-product/photos/0';
+    expect((await app.inject({ url: photoUrl })).statusCode).toBe(401);
+    const requests = Array.from({ length: 8 }, () => app.inject({ url: photoUrl, headers }).then(r => r));
+    await eight;
+    const ninth = await app.inject({ url: photoUrl, headers });
+    expect(ninth.statusCode).toBe(429); expect(ninth.headers['retry-after']).toBe('2');
+    release();
+    for (const result of await Promise.all(requests)) { expect(result.statusCode).toBe(200); expect(result.rawPayload).toEqual(bytes); }
+    expect(logs.events.at(-1)).toMatchObject({ operation: 'READ_PRODUCT_PHOTO', phase: 'SUCCEEDED', resource: { name: 'iancar-product-photo', entityId: 'fake-product' } });
+    const count = await app.inject({ url: compatUrl + '/products/fake-product/photos', headers });
+    expect(count.json().count).toBe(1); expect(count.body).not.toContain('fake-file');
+    await app.close();
+    const forbidden = withAccess(new MemoryDataStore(), [{ id: 'internal-ai-test', projectionId: 'erp-public', token, capabilities: ['internal-ai-reference'] }], undefined, reader);
+    expect((await forbidden.app.inject({ url: '/v1/consumers/internal-ai-test/catalog-compat/products/fake-product/photos/0', headers })).statusCode).toBe(403);
+    await forbidden.app.close();
+  });
+
+  it('evicts least recently used bytes at the 64 MiB cap', async () => {
+    const buffers = Array.from({ length: 9 }, (_, i) => Buffer.alloc(8 * 1024 * 1024, i));
+    const refs = buffers.map((value, i) => ({ ...ref, driveFileId: `fake-file-${i}`, sha256: createHash('sha256').update(value).digest('hex') }));
+    let calls = 0;
+    const read = createVehiclePhotoReader(async () => ({ ...product(), photo_original_refs: refs }), undefined, async value => {
+      calls++; return { bytes: buffers[refs.findIndex(item => item.sha256 === value.sha256)]!, contentType: ref.mediaType };
+    });
+    for (let i = 0; i < 8; i++) await read('erp-com', 'fake-product', i);
+    await read('erp-com', 'fake-product', 0);
+    await read('erp-com', 'fake-product', 8);
+    expect(calls).toBe(9);
+    await read('erp-com', 'fake-product', 0); expect(calls).toBe(9);
+    await read('erp-com', 'fake-product', 1); expect(calls).toBe(10);
+  });
+
+  it('returns 503 when the approved byte port is disconnected', async () => {
+    const readVehiclePhoto = createVehiclePhotoReader(async () => product());
+    const { app } = withAccess(new MemoryDataStore(), [binding], undefined, { read: async () => { throw new Error('unused'); }, readVehiclePhoto });
+    const result = await app.inject({ url: compatUrl + '/products/fake-product/photos/0', headers });
+    expect(result.statusCode).toBe(503); expect(result.json().code).toBe('VEHICLE_PHOTO_READER_UNAVAILABLE');
+    await app.close();
+  });
 });

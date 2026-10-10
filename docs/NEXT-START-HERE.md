@@ -492,6 +492,21 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 원인 ③ «오늘 이미 썼음»: 쓰기 단계가 실패·취소여도 «쓴 것»으로 세어 뒤 회차가 건너뜀. 고침: 실패·취소·시간 초과는 세지 않아 재시도 허용(영수증 멱등키·기대 revision·계획 재생성으로 안전, 실패는 붉은 실행으로 그대로 보임).
 - 남음: 수수료 일괄 재계산 적용(시험 실행 계획 → 바뀌는 항목 요약 → 다른 모델 검토 → 승인 digest → 적용 → 되읽기).
 
+### 2026-10-10 차량 사진 프록시 승인 연결 확장
+
+- 독립 검토 후속 수정(같은 revision, 미커밋): 서버 계산 차량키와 모든 승인 ref 대조, 상품·파일·해시·승인시각·차량키 튜플 캐시, 원본 읽기 후 상품 적격성·동일 ref 재확인. 기존 이안카 분기는 보존했다.
+- 후속 검증: gateway 40/40 PASS. `npm.cmd run check`는 정적 검사·sheets·build PASS 후 smoke 12 PASS/1 FAIL(tsx `uv_os_get_passwd ENOMEM`)로 중단. 뒤 단계 별도 실행 shadow10/dashboard21 PASS, 전체 Vitest1933 PASS/12 FAIL/16 SKIP. 실패 상세는 NATIVE-SOURCE-COLLECTOR의 후속 검증 참조. 사용자 전달 main 기존 runtime-policy 5초 초과 1건은 수정하지 않았으며 이번 실행은 환경 오류로 실패했다.
+- 사전점검: main/겹침 PR은 사용자 전달 Claude 확인을 사용. 이번 academy receipt는 `DIRTY_WORKTREE_REVIEW_REQUIRED` HOLD이며 미커밋 변경 자체를 수정하라는 최신 직접 지시에 따라 기존 diff 확인·보존 후 진행했다(READY로 표기하지 않음).
+- 후속 next_start_here: 정상 실행 환경에서 전체 check 재검증. 커밋·푸시·운영 변경 없음. 이번 로컬 수정에 대한 추가 네트워크 독립 검토는 실행하지 않았다.
+
+- 목적: 승인된 차량–파일–해시 연결 상품까지 기존 사진 읽기 프록시 확장.
+- 대상 revision: d3225d5a2463d48af3d1f44fd50d3cc4be99dc76, work/freepass-data/vehicle-photo-proxy-20261010. 커밋·푸시 없음.
+- 변경: 기존 도메인/reader/runtime/gateway/시험 재사용. refs 전체 검증, 바이트 SHA256·8MiB·mediaType 검증, 64MiB/30초 LRU, 동시8, 매 요청 상품 재조회, 감사 READ_PRODUCT_PHOTO. 상세는 NATIVE-SOURCE-COLLECTOR의 같은 날짜 절.
+- 검증: academy READY, 정적 경계 검사·build 통과. gateway28/28, ONE API75/75, withdrawal18/18 통과. 관련전체175통과/2환경실패. npm.cmd run check는 기존 smoke tsx 시작의 uv_os_get_passwd ENOMEM 환경 오류로 실패. 기대값 변경 없음.
+- 남음: Drive reader 실제 구현, 차량사진 폴더 읽기 권한 별도 승인·적용, 정상 환경 전체 check·독립 검토. 운영 쓰기·배포 없음.
+- next_start_here: 미커밋 diff 검토 후 정상 환경 check 재실행. 실제 Drive 연결과 승인 refs 게시 전 권한·검수 경계를 별도 확인.
+
+
 ### 2026-10-10 공개 파일의 Google Sheet/Drive ID 분리
 
 - 목적 / 대상 revision: `a324b65` 기반 작업 트리. 현재 공개 파일의 ID만 제거하며 Git 이력은 변경하지 않는다. 커밋·push·브랜치 변경·운영 실행 없음.
