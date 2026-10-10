@@ -5,8 +5,8 @@ import type { CatalogStore } from '../ports/catalog-store.js';
 
 export type ContractFeeLinkInput = {
   /** 차량 UID(vehicleAssetId). 있으면 이것으로 찾고 차량번호는 쓰지 않는다(차량번호는 찾기용 보조 키). */
-  assetId?: string;
-  plate?: string;
+  assetId?: string | undefined;
+  plate?: string | undefined;
   supplierId: string;
   termMonths: number;
   monthlyRent: number;
@@ -46,7 +46,7 @@ export type ContractFeeLinkResult = {
   status: ContractFeeLinkStatus;
   failure?: ContractFeeLinkFailure;
   detail?: unknown;
-  assetId?: string;
+  assetId?: string | undefined;
   productId?: string;
   offerId?: string;
   offerRevision?: number;
