@@ -23,22 +23,36 @@
 | `wl` | 화이트라벨 채널. host 또는 쿼리에서 채널을 결정하고, 채널이 팔 수 없는 상품은 목록/상세에서 제외한다. |
 | `a` | feed 주석상 영업 사용자 코드이나 공개 응답에는 개인정보를 싣지 않는다. quote에서 링크 보존용으로만 받는다. |
 
-| 상품 허용 칸 | 형 | 출처 products 칸 | 비고 |
+| 상품 허용 칸 | 형 | 출처 products 칸 | 내용 제한 |
 |---|---|---|---|
-| `_key`, `product_code` | string | 문서 ID, `_key`, `product_code` | 공개 식별자. 내부 collection path는 노출하지 않는다. |
-| `car_number`, `vin` | unknown | 동명 | 차량 식별. VIN은 기존 계약에 있으나 공개 최소화 관점에서 열린 질문이다. |
-| `maker`, `model`, `sub_model`, `trim_name`, `trim_extra`, `variant` | unknown | 동명 | 차량명 표시용. |
-| `vehicle_class`, `year`, `first_registration_date`, `fuel_type`, `engine_type`, `engine_cc`, `drive_type`, `seats`, `transmission`, `usage`, `battery_capacity` | unknown/number | 동명 | 제원 표시용. |
-| `ext_color`, `int_color`, `mileage`, `accident_history`, `cert_car_name`, `location`, `note`, `options` | unknown | 동명 | 고객 표시 정보. |
-| `product_type`, `vehicle_status` | unknown | 동명 | 목록 필터/상태 표시. |
-| `insurance_included`, `annual_mileage`, `deposit_note`, `provider_name` | unknown | 동명 | 고객 안내 조건. 공급사 코드는 제외하고 표시명만 허용. |
-| `price` | object | `price` | key는 `12`, `24_2만` 같은 기간/조건 키. 값은 `{ rent:number, deposit:number }`만 허용. `fee`는 제거. |
-| `image_url`, `image_urls`, `photo_link` | string/array | `image_urls`, `images`, `photos`, `photo_cache`, `photo_link` | feed 목록은 ERP4처럼 `slimForList`로 `image_urls`를 뺄 수 있다. quote는 상세 갤러리용으로 유지한다. |
-| `_policy` | object | `policy` 문서 | 정책 allowlist만 허용. |
+| `publicProductKey` | string | 공개용 상품 키 | 1~80자, `^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$`. 내부 UID(`va_...`), Firestore 문서 ID, collection path, RAW/source ID를 쓰지 않는다. |
+| `_key`, `product_code` | string | ERP4 공개 호환 키 | ERP4 공개 feed/quote가 현재 손님에게 내는 값과 호환되는 별칭. 새 구현 내부에서는 `publicProductKey`를 canonical 공개 식별자로 쓰고, `_key`/`product_code`에는 내부 UID를 넣지 않는다. |
+| `car_number` | string|null | 동명 | ERP4 공개 feed/quote가 현재 손님에게 내는 범위만 그대로 호환한다. `ERP4 공개 feed의 필드 이름 목록과 대조` 검증에서 현재 feed에 없는 차량번호 칸 또는 변형 칸은 v1에 넣지 않는다. |
+| `maker`, `model`, `sub_model`, `trim_name`, `trim_extra`, `variant`, `vehicle_class`, `fuel_type`, `engine_type`, `drive_type`, `transmission`, `usage`, `ext_color`, `int_color`, `accident_history`, `cert_car_name`, `location`, `provider_name` | string|null | 동명 | 정제 문자열 0~80자. 제어문자, HTML, URL, 내부 경로, 계정, 토큰, 시트 ID 금지. |
+| `year`, `engine_cc`, `seats`, `mileage`, `battery_capacity`, `annual_mileage` | number|null | 동명 | 정수 또는 소수 1자리까지의 수치. 음수 금지. 미확인은 `null`. |
+| `first_registration_date` | string|null | 동명 | `YYYY-MM` 또는 `YYYY-MM-DD`. 미확인은 `null`. |
+| `note`, `options`, `deposit_note` | string|null | 동명 | 고객 안내용 정제 문자열 0~300자. 줄바꿈은 공백으로 접고, 내부 금지어/금액 패턴 검사 통과분만 허용. |
+| `product_type` | enum|null | 동명 | `NEW_SUBSCRIPTION`, `USED_SUBSCRIPTION`, `RENTAL`, `LEASE`, `UNKNOWN_PUBLIC_TYPE` 중 하나. 원천 값이 다르면 공개 매핑표에 없으면 `UNKNOWN_PUBLIC_TYPE`. |
+| `vehicle_status` | enum|null | 동명 | `AVAILABLE`, `CONSULT_REQUIRED`, `CONTRACTING`, `UNAVAILABLE`, `UNKNOWN` 중 하나. 내부 진행 상태를 그대로 복사하지 않는다. |
+| `insurance_included` | boolean|null | 동명 | true/false/null만 허용. |
+| `price` | object | `price` | key는 `^[0-9]{1,3}(_[A-Za-z0-9가-힣.-]{1,20})?$`. 값은 `{ rent:number|null, deposit:number|null, depositState:enum }`만 허용. `fee`와 내부 수수료 칸은 제거. |
+| `image_url`, `image_urls`, `photo_link` | string|null 또는 string[] | `image_urls`, `images`, `photos`, `photo_cache`, `photo_link` | `https://` URL만 허용, 단일 URL 500자 이하, 배열 최대 20개. feed 목록은 ERP4처럼 `slimForList`로 `image_urls`를 뺄 수 있다. |
+| `_policy` | object|null | `policy` 문서 | 아래 정책 허용 칸과 하위 타입만 허용. `additionalProperties:false`. |
 
-정책 허용 칸: `policy_name`, `policy_type`, `insurance_included`, `injury_compensation_limit`, `injury_deductible`, `property_compensation_limit`, `property_deductible`, `self_body_accident`, `self_body_deductible`, `personal_injury_compensation_limit`, `personal_injury_deductible`, `uninsured_damage`, `uninsured_compensation_limit`, `uninsured_deductible`, `own_damage_compensation`, `own_damage_repair_ratio`, `own_damage_compensation_rate`, `own_damage_min_deductible`, `own_damage_max_deductible`, `annual_roadside_assistance`, `roadside_assistance`, `annual_mileage`, `max_annual_mileage`, `mileage_upcharge_per_10000km`, `deposit_installment`, `deposit_card_payment`, `rental_card_payment`, `payment_method`, `payment_timing`, `penalty_condition`, `rental_region`, `delivery_fee`, `screening_criteria`, `basic_driver_age`, `driver_age_lowering`, `age_lowering_cost`, `driver_age_upper_limit`, `license_period`, `personal_driver_scope`, `business_driver_scope`, `additional_driver_allowance_count`, `additional_driver_cost`, `maintenance_service`, `deposit_return_days`, `buyout_notice_days`, `credit_grade`.
+공개 응답에는 `vin`을 절대 넣지 않는다. 원천에 VIN이 있어도 allowlist, schema, fixture, snapshot 비교 결과 모두에서 금지한다.
+
+정책 허용 칸은 아래 하위 스키마만 쓴다. 모든 문자열은 정제 문자열이며 내부 금지어/금액 패턴 검사를 통과해야 한다.
+
+| 정책 칸 | 형 | 내용 제한 |
+|---|---|---|
+| `policy_name`, `policy_type`, `payment_method`, `payment_timing`, `penalty_condition`, `rental_region`, `screening_criteria`, `basic_driver_age`, `driver_age_lowering`, `driver_age_upper_limit`, `license_period`, `personal_driver_scope`, `business_driver_scope`, `maintenance_service`, `credit_grade` | string|null | 0~120자. 공개 고객 안내 문구만 허용. |
+| `insurance_included`, `deposit_installment`, `deposit_card_payment`, `rental_card_payment`, `roadside_assistance` | boolean|null | true/false/null만 허용. |
+| `injury_compensation_limit`, `injury_deductible`, `property_compensation_limit`, `property_deductible`, `self_body_accident`, `self_body_deductible`, `personal_injury_compensation_limit`, `personal_injury_deductible`, `uninsured_compensation_limit`, `uninsured_deductible`, `own_damage_compensation`, `own_damage_min_deductible`, `own_damage_max_deductible`, `annual_roadside_assistance`, `annual_mileage`, `max_annual_mileage`, `mileage_upcharge_per_10000km`, `age_lowering_cost`, `additional_driver_allowance_count`, `additional_driver_cost`, `deposit_return_days`, `buyout_notice_days` | number|null | 0 이상. 금액/일수/횟수처럼 고객에게 공개되는 정책값만 허용. |
+| `uninsured_damage`, `own_damage_repair_ratio`, `own_damage_compensation_rate` | string|null 또는 number|null | 비율은 0~100 number 또는 0~20자 공개 표시 문자열. |
 
 구조적으로 금지할 칸: `fee`, `fee_rate`, `agent_payout_rate`, `commission_*`, `supplierBillingFee`, `channelPayoutFee`, `vehicle_price`, `provider_company_code`, `partner_code`, `partner_memo`, `sales_notes`, `source`, `sheet_meta`, RAW/provenance/audit/IAM 필드, 내부 collection path.
+
+문자열 값 생성 검사는 모든 칸에 공통 적용한다. 값 안에 `수수료`, `청구`, `지급`, `마진`, `commission`, `payout` 또는 숫자 금액 패턴(`\d[\d,]*(원|만원|%|KRW)`)이 있으면 응답 생성은 실패해야 한다. 예외는 `rent`, `deposit`, 고객 공개 보험/정책 보상 한도처럼 스키마가 number로 지정한 칸뿐이며, 문자열로 우회 표기하지 않는다.
 
 ## 2. quote 응답 계약 v1
 
@@ -79,7 +93,7 @@
 | `contracts/public-product-feed-v1.schema.json` | allowlist 응답 스키마. `additionalProperties:false`로 내부 칸 통과를 구조적으로 차단 |
 | `tests/public-product-feed.test.ts` | allowlist, p/wl fence, quote resolve, 내부 칸 차단, 보증금 증거 비교 |
 
-허용 목록 방식: 입력 product/policy를 그대로 spread하지 않는다. `PUBLIC_PRODUCT_FIELDS`, `PUBLIC_POLICY_FIELDS`, `publicPrice`처럼 이름 있는 allowlist 배열만 순회해 새 객체를 만든다. 스키마도 allowlist 칸만 열고 `additionalProperties:false`를 둔다. 수수료/내부 칸은 타입 검사가 아니라 출력 생성 경로와 스키마 양쪽에서 불가능해야 한다.
+허용 목록 방식: 입력 product/policy를 그대로 spread하지 않는다. `PUBLIC_PRODUCT_FIELDS`, `PUBLIC_POLICY_FIELDS`, `publicPrice`처럼 이름 있는 allowlist 배열만 순회해 새 객체를 만든다. 스키마도 allowlist 칸만 열고 모든 object에 `additionalProperties:false`를 둔다. `unknown` 형은 쓰지 않는다. 수수료/내부 칸은 타입 검사가 아니라 출력 생성 경로와 스키마 양쪽에서 불가능해야 한다.
 
 ## 4. 보증금 처리
 
@@ -89,14 +103,15 @@ ERP4의 `depositFromRule` 사본은 display helper였고, 0 보증금을 보면 
 
 | 상황 | ERP4 display helper | Data 공개 응답 |
 |---|---|---|
-| source deposit 양수, 충돌 없음 | 양수 유지 | `KNOWN/SOURCE_AMOUNT`, 같은 금액 |
-| 명시 무보증 근거 있음 | 0 | `ZERO/EXPLICIT_ZERO_DEPOSIT`, 0 |
-| source deposit 0 + 공급사 규칙 note + 기간/월렌트 확인 | 규칙 계산값 | `KNOWN/SUPPLIER_RULE_NOTE:*`, 같은 계산값 |
-| source deposit 0 + 규칙/근거 없음 | 0처럼 보일 수 있음 | `UNKNOWN`, 공개 금액은 null 또는 quote 표시에서 미확인으로 처리 |
-| 양수와 규칙 note 충돌 | 양수 또는 규칙값으로 보일 위험 | `UNKNOWN/POSITIVE_AMOUNT_WITH_RULE_REQUIRES_REVIEW` |
-| RP031 Iancar | ERP4 로컬 helper 범위 밖 | `readIancarPublishedDeposit` 검증 통과 시 `KNOWN/ZERO`, 아니면 `UNKNOWN` |
+| source deposit 양수, 충돌 없음 | 양수 유지 | `deposit:number`, `depositState:"AMOUNT"` |
+| 명시 무보증 근거 있음 | 0 | `deposit:0`, `depositState:"VERIFIED_NO_DEPOSIT"` |
+| source deposit 0 + 공급사 규칙 note + 기간/월렌트 확인 | 규칙 계산값 | `deposit:number`, `depositState:"AMOUNT"` |
+| source deposit 0 + 규칙/근거 없음 | 0처럼 보일 수 있음 | `deposit:null`, `depositState:"UNKNOWN"` |
+| 양수와 규칙 note 충돌 | 양수 또는 규칙값으로 보일 위험 | `deposit:null`, `depositState:"UNKNOWN"` |
+| 해당 상품/기간에 보증금 개념이 없음 | 빈 값 또는 0처럼 보일 수 있음 | `deposit:null`, `depositState:"NOT_APPLICABLE"` |
+| RP031 Iancar | ERP4 로컬 helper 범위 밖 | `readIancarPublishedDeposit` 검증 통과 시 `AMOUNT` 또는 `VERIFIED_NO_DEPOSIT`, 아니면 `UNKNOWN` |
 
-공개 v1에서 `depositState`, `depositStatusLabel`, `depositEvidenceReason`을 함께 노출할지, ERP4 호환을 위해 `price.*.deposit`만 노출하고 미확인은 `null`로 둘지는 결정 필요다. 단, 미확인을 0으로 내보내면 안 된다.
+공개 v1의 `price.*.deposit`은 `number|null`이다. `depositState`는 항상 함께 싣고 값은 `AMOUNT`, `VERIFIED_NO_DEPOSIT`, `UNKNOWN`, `NOT_APPLICABLE` 네 가지뿐이다. 이 값은 운영 중인 ERP4 #562 형식과 맞춘다. 미확인을 0으로 내보내면 안 된다.
 
 ## 5. 증명 계획
 
@@ -111,9 +126,27 @@ ERP4의 `depositFromRule` 사본은 display helper였고, 0 보증금을 보면 
 | `--sample` | 같은 차 N대. 기본 30, 공급사/기간/보증금 상태가 섞이게 선택 |
 | `--out` | 비공개 evidence JSON 경로 |
 
-검사: feed HTTP status, 최상위 키, `contractVersion`, `count`, `brand`, `product_code` 기준 교집합과 누락/추가, 각 상품의 공개 key 집합, 내부 금지 칸, `price` term key/rent/deposit, quote의 200/404 동작을 비교한다.
+검사: feed HTTP status, 최상위 키, `contractVersion`, `count`, `brand`, `product_code` 기준 교집합과 누락/추가, 각 상품의 공개 key 집합, 내부 금지 칸, `price` term key/rent/deposit/depositState, quote의 200/404 동작을 비교한다.
 
 허용 차이: 보증금 개선분만 허용한다. ERP4가 0 또는 규칙 미적용 값이고 Data가 `resolveDepositWithRuleNote` 근거로 양수/UNKNOWN을 낸 경우만 `ALLOWED_DEPOSIT_EVIDENCE_IMPROVEMENT`로 기록한다. rent, count, 상품 존재, 채널 fence, 내부 칸 차이는 허용하지 않는다.
+
+ERP4 공개 feed/quote 호환 검증은 필수다. 현재 ERP4 공개 feed의 필드 이름 목록과 v1 schema를 대조하고, 현재 feed에 없는 칸은 v1에 넣지 않는다. 특히 `vin`은 현재 여부와 관계없이 금지하고, `car_number`는 ERP4가 손님에게 이미 내는 범위만 유지한다.
+
+ERP5 소비처 호환 검증도 필수다. ERP5가 목록 응답과 상세 응답에서 읽는 필드 이름을 아래 표로 고정하고, v1이 모두 채우는지 같은 차로 ERP4 응답과 비교한다.
+
+| ERP5 사용처 | 필드 이름 | v1 의무 |
+|---|---|---|
+| 목록 카드/검색 | `product_code`, `publicProductKey`, `maker`, `model`, `sub_model`, `trim_name`, `year`, `fuel_type`, `mileage`, `vehicle_status`, `price`, `image_url`, `provider_name` | 모두 제공. 값 미확인은 타입에 맞는 `null`만 허용. |
+| 상세 안내 | 목록 필드 + `trim_extra`, `variant`, `car_number`, `first_registration_date`, `engine_type`, `engine_cc`, `drive_type`, `seats`, `transmission`, `usage`, `ext_color`, `int_color`, `accident_history`, `cert_car_name`, `location`, `note`, `options`, `insurance_included`, `annual_mileage`, `deposit_note`, `_policy`, `image_urls`, `photo_link` | ERP4 공개 feed/quote에 존재하는 이름만 v1에 포함하고 같은 차 비교에서 누락 0이어야 한다. |
+| 보증금 표시 | `price.*.deposit`, `price.*.depositState` | `depositState` 항상 존재. `deposit:null`이면 `UNKNOWN` 또는 `NOT_APPLICABLE`만 허용. |
+
+추가 시험 항목:
+
+1. `unknown` schema가 하나도 남지 않는지 schema lint로 확인한다.
+2. 모든 object가 `additionalProperties:false`인지 확인한다.
+3. `note`, `options`, `deposit_note`, 정책 문자열 값에 `수수료`, `청구`, `지급`, `마진`, `commission`, `payout`, 금액 패턴이 들어가면 응답 생성이 실패하는 fixture를 둔다.
+4. `vin`, 내부 UID(`va_...`), Firestore path, 시트 ID, 계정, 토큰, RAW/provenance 필드가 입력에 있어도 출력에는 없고, schema snapshot에서도 금지되는지 확인한다.
+5. 같은 차 N대를 ERP4 공개 feed/quote와 Data v1로 비교해 ERP5 목록/상세 필드 누락 0, rent/count/channel fence 차이 0을 증명한다.
 
 ## 6. 요청 제한과 캐시
 
@@ -134,8 +167,8 @@ ERP4의 `depositFromRule` 사본은 display helper였고, 0 보증금을 보면 
 | 날짜 | 단계 | 완료 증거 |
 |---|---|---|
 | 2026-10-10 | 설계 | 이 문서와 `NEXT-START-HERE` 한 줄 |
-| 2026-10-11~12 | 구현 PR | 공개 route, allowlist schema, 보증금 재사용 테스트, 내부 칸 차단 테스트 |
-| 2026-10-12 | 증명 | ERP4 vs Data feed/quote 읽기 전용 비교 evidence, 허용 차이는 보증금 개선분만 |
+| 2026-10-11~12 | 구현 PR | 공개 route, allowlist schema, 보증금 재사용 테스트, 내부 칸 차단 테스트, 민감 문자열/금액 패턴 차단 테스트 |
+| 2026-10-12 | 증명 | ERP4 vs Data feed/quote 읽기 전용 비교 evidence, ERP5 목록/상세 필드 대조, 허용 차이는 보증금 개선분만 |
 | 2026-10-13 | ERP5 주소 전환 | ERP5/ERP.com이 새 Data 공개 주소를 읽는 배포 revision과 실응답 readback |
 | 2026-10-14 | ERP4 데이터 응답 끄기 제안 | ERP4 `/api/catalog/feed`와 `/quote`가 Data proxy 또는 410/redirect 정책으로 정리된 readback |
 
@@ -155,7 +188,5 @@ ERP4의 `depositFromRule` 사본은 display helper였고, 0 보증금을 보면 
 
 ## 9. 열린 질문
 
-1. 공개 price에서 미확인 보증금을 `null`로 내보낼지, 기존 ERP4 shape 유지를 위해 `deposit` 숫자를 유지하되 `depositState`를 추가할지 결정 필요.
-2. 공개 응답에 `vin`을 계속 포함할지 결정 필요. ERP4 계약에는 포함되어 있으나 공개 최소화 관점에서는 제거 후보다.
-3. 안정화 뒤 CDN 캐시를 켤지, 계속 `no-store`로 둘지 결정 필요.
-4. ERP4 종료일 2026-10-14에 route를 삭제할지, 짧은 기간 Data proxy로 남길지 결정 필요.
+1. 안정화 뒤 CDN 캐시를 켤지, 계속 `no-store`로 둘지 결정 필요.
+2. ERP4 종료일 2026-10-14에 route를 삭제할지, 짧은 기간 Data proxy로 남길지 결정 필요.
