@@ -679,6 +679,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
   const maker = text(source.maker);
   const model = text(source.model);
   const trim = text(source.trim_name);
+  const engineCc = integer(source.engine_cc);
   const vehicleModelId = `reference_vm_${hash(`${maker}|${model}|${trim}|${text(source.fuel_type)}`)}`;
   return {
     productId: `reference_${documentId}`,
@@ -694,6 +695,8 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       subModel: text(source.sub_model) || null,
       trim: trim || null,
       fuel: text(source.fuel_type) || null,
+      engineCc,
+      engineCcState: engineCc === null ? 'HOLD' as const : 'KNOWN' as const,
       drive: text(source.drive_type) || null,
       seats: integer(source.seats),
       assetStatus: assetStatus(source.vehicle_status) ?? assetStatus(source.status) ?? assetStatus(source.status_kind),

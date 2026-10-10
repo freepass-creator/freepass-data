@@ -195,13 +195,21 @@
             "subModel": { "$ref": "#/$defs/nullableString" },
             "trim": { "$ref": "#/$defs/nullableString" },
             "fuel": { "$ref": "#/$defs/nullableString" },
+            "engineCc": { "$ref": "#/$defs/nullableInteger" },
+            "engineCcState": { "enum": ["KNOWN", "HOLD"] },
             "drive": { "$ref": "#/$defs/nullableString" },
             "seats": { "$ref": "#/$defs/nullableInteger" },
             "assetStatus": { "enum": ["AVAILABLE", "RESERVED", "MAINTENANCE", null] },
             "plateNumber": { "$ref": "#/$defs/nullableString" },
             "odometerKm": { "$ref": "#/$defs/nullableInteger" },
             "exteriorColor": { "$ref": "#/$defs/nullableString" }
-          }
+          },
+          "dependentRequired": { "engineCc": ["engineCcState"], "engineCcState": ["engineCc"] },
+          "allOf": [{
+            "if": { "required": ["engineCcState"], "properties": { "engineCcState": { "const": "KNOWN" } } },
+            "then": { "properties": { "engineCc": { "type": "integer", "minimum": 0 } } },
+            "else": { "properties": { "engineCc": { "type": "null" } } }
+          }]
         },
         "shadowFacts": {
           "type": "object",
