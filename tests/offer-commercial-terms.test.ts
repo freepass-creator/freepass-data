@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Offer, Policy } from '../src/domain/catalog.js';
-import { precomputeOfferEconomics, auditOfferEconomicsTerms, resolveOfferCommercialTerms, summarizeCommercialTerms } from '../src/application/resolve-offer-commercial-terms.js';
+import { precomputeOfferEconomics, auditOfferEconomicsTerms, resolveOfferCommercialTerms, summarizeCommercialTerms, joinStoredProductEconomics } from '../src/application/resolve-offer-commercial-terms.js';
 
 const meta = {
   schemaVersion: '1', revision: 1, validationStatus: 'VALID' as const,
@@ -37,6 +37,41 @@ function offer(): Offer {
 }
 
 describe('offer commercial terms resolution', () => {
+  it('joins exact stored product periods without computing missing fees or crossing product IDs', () => {
+    const input=offer(),before=structuredClone(input);
+    const rows=joinStoredProductEconomics(input.productId,[input],[]).rows;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.supplierBillingFee).toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'STORED_ECONOMICS_NOT_FOUND'});
+    expect(joinStoredProductEconomics('other',[input],[]).rows).toEqual([]);
+    expect(input).toEqual(before);
+  });
+  it('distinguishes stored ZERO, NOT_APPLICABLE and missing values and refuses duplicate period keys', () => {
+    const input=offer();input.supplierId='RP013';input.internalEconomicsTerms=precomputeOfferEconomics(input,'USED_RENT');
+    const term=input.internalEconomicsTerms[0]!;
+    term.supplierBillingFee={state:'ZERO',amount:{amount:0,currency:'KRW'},calculation:null,sourceRefs:['confirmed-zero']};
+    term.channelPayoutFee={state:'NOT_APPLICABLE',amount:null,calculation:null,sourceRefs:[]};
+    const rows=joinStoredProductEconomics(input.productId,[input],[]).rows;
+    expect(rows[0]!.supplierBillingFee.state).toBe('ZERO');expect(rows[0]!.channelPayoutFee.state).toBe('NOT_APPLICABLE');
+    input.priceTerms.push(structuredClone(input.priceTerms[0]!));
+    expect(joinStoredProductEconomics(input.productId,[input],[]).rows[0]!.reasonCode).toBe('DUPLICATE_STORED_JOIN_KEY');
+    expect(joinStoredProductEconomics(input.productId,[input],[]).rows[0]!.monthlyRent)
+      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'DUPLICATE_STORED_JOIN_KEY'});
+  });
+  it('fences ledger revision and price and fails closed on divergent stored fee amounts', () => {
+    const input=offer();input.supplierId='RP013';input.internalEconomicsTerms=precomputeOfferEconomics(input,'USED_RENT');
+    const price=input.priceTerms[0]!,term=input.internalEconomicsTerms[0]!;
+    const row:any={productId:input.productId,offerId:input.id,offerRevision:input.revision,supplierId:input.supplierId,termKey:price.termKey,
+      termMonths:price.termMonths,monthlyRent:{...price.monthlyRent,state:'KNOWN'},deposit:{state:price.depositState,amount:price.deposit,sourceRefs:term.depositCalculation.sourceRefs},
+      applyState:'READY',supplierBillingFee:{...term.supplierBillingFee,state:'CALCULATED'},channelPayoutFee:{...term.channelPayoutFee,state:'CALCULATED'}};
+    expect(joinStoredProductEconomics(input.productId,[input],[row]).rows[0]!.joinState).toBe('MATCHED');
+    const old={...row,offerRevision:0};
+    expect(joinStoredProductEconomics(input.productId,[input],[old]).rows[0]!.reasonCode).toBe('LEDGER_PRICE_OR_REVISION_MISMATCH');
+    const conflict={...row,supplierBillingFee:{...row.supplierBillingFee,amount:{amount:1,currency:'KRW'}}};
+    expect(joinStoredProductEconomics(input.productId,[input],[conflict]).rows[0]!.supplierBillingFee)
+      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'STORED_FEE_SOURCES_CONFLICT'});
+    const orphan={...row,termKey:'not-a-price-row'};
+    expect(joinStoredProductEconomics(input.productId,[input],[orphan]).orphanLedgerRows).toBe(1);
+  });
   it('requires one internal economics row for every price term without guessing missing fees', () => {
     const result = auditOfferEconomicsTerms(offer());
     expect(result.status).toBe('NEEDS_DECISION');
