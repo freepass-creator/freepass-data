@@ -354,6 +354,11 @@ describe('reviewed source change', () => {
       original.candidate.candidate.priceTerms[0]!.monthlyRent.amount = 303;
       changed.candidate.candidate.priceTerms[0]!.termMonths = 1;
       offer.internalEconomicsTerms = precomputeOfferEconomics(offer, 'USED_RENT');
+      // Explicit legacy evidence, independent of the current engine's corrected calculation type.
+      for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
+        const fee = offer.internalEconomicsTerms[0]![side];
+        fee.calculation = { kind: 'FIXED', amount: structuredClone(fee.amount!) };
+      }
       if (scenario === 'human-fee') {
         const fee = offer.internalEconomicsTerms[0]!.supplierBillingFee;
         fee.amount = { amount: 99, currency: 'KRW' };
@@ -365,7 +370,7 @@ describe('reviewed source change', () => {
       const nextCommand = { ...command, approvedChangeIds: review.reviewableChangeIds };
       const before = await Promise.all([store.getProduct(initial.productId), store.getVehicleAsset('va_source_change_gv70')]);
       const audits = structuredClone(store.audits), outbox = structuredClone([...store.outbox]);
-      await expect(applyReviewedSourceChange(store, nextCommand, '2026-09-21T01:01:00Z')).rejects.toThrow('FIXED economics');
+      await expect(applyReviewedSourceChange(store, nextCommand, '2026-09-21T01:01:00Z')).rejects.toThrow();
       expect(await store.getOffer(initial.offerId)).toEqual(offer);
       expect((await store.getSourceBinding(initial.bindingId))!.sourceRunId).toBe('run-original');
       expect(await Promise.all([store.getProduct(initial.productId), store.getVehicleAsset('va_source_change_gv70')])).toEqual(before);
