@@ -20,9 +20,9 @@
 ## 저장 사실과 결측
 
 - 기존 상품의 가격·제원·옵션·색상·연식·주행거리·최초등록일·상태를 허용 필드로 보존한다. 빈 값/미연결은 null/UNKNOWN와 이유를 표시한다. 0과 미확정을 구분한다.
-- 공급사 이름은 partner 레코드 기준이다. 이름이나 정책 연결이 복수/미확인인 경우 선택하지 않는다. 검색 빈 결과는 NOT_OBSERVED이며 존재하지 않는다는 증거가 아니다.
+- 공급사 이름은 partner 레코드 기준이며 검색은 기존 sharedSheetRegisteredChannels의 명시 이름/코드도 재사용한다. 법인명과 등록명을 fuzzy 추정하지 않고, 여러 supplierId가 같은 검색명에 대응하면 HOLD다. 이름이나 정책 연결이 복수/미확인인 경우 선택하지 않는다. 검색 빈 결과는 NOT_OBSERVED이며 존재하지 않는다는 증거가 아니다.
 - 조회 중 요율 계산 없음. 저장 ledger 이력과 현재 확정 수수료를 구분한다. 활성 ledger 기준 미검증/미저장은 UNKNOWN, source-only preview fee도 UNKNOWN이다. canonical 저장 economics는 기존 순수 mapper로 반환한다.
-- photo_original_refs의 기존 검토표식/수와 기존 readVehiclePhoto 호출용 상품·index 참조를 반환한다. 원본 주소·공급사 키·승인 ref ID를 노출하지 않는다. 사진 링크 계열은 STORED_UNVERIFIED/UNKNOWN를 구분하며 기존 사진 투영을 통해 접근한다. 저장51은 bytes/대표사진/공개화면 검증 완료가 아니다.
+- photo_original_refs의 기존 검토표식/수와 상품·index 검토 metadata 참조를 반환한다. 원본 주소·공급사 키·승인 ref ID를 노출하지 않는다. 사진 링크 계열은 STORED_UNVERIFIED/UNKNOWN를 구분하며 기존 사진 투영을 통해 접근한다. 내부 소비처의 serving grant는 미승인으로 명시하며 readerMethod는 null이다. 기존 resolveReferenceVehiclePhotos의 허용 imageUrls/representativeUrl은 accessVerification NOT_CHECKED와 함께 재사용한다. 저장51은 bytes/대표사진/공개화면 검증 완료가 아니다.
 
 ## 2026-10-11 구현 검증과 인계
 
@@ -32,3 +32,6 @@
 - 저장 사진51 상품을 정확 상품 검색으로 재조회해 count51/serving references51 일치. source GET/DB쓰기0. 공개화면 미실행.
 - 공급사별 분모 legacy21/canonical13/source14그룹과 비공개 증거: `C:/Users/admin/.codex/private/freepass-data-direct-read-20261011/consumer-readback-complete.json`, `stored-products-readback-complete.json`. 개인정보/차번/시트ID 공개0.
 - next_start_here: PR465 정확 head → 금액 담당의 저장값 exact join → 기존 소비처 호출 연결 → 동일 상품 실제 출력. ledger 미저장/원천과 canonical freshness/운영 IAM·배포·화면은 남음. main 반영은 지휘 책임 방이 통제한다.
+
+- 후속 통합: 저장 economics helper 50be05ce/db509e2a와 exact historical no-write guard 9cf139bc 결합. f1be248e 전체2391 PASS/18skip, 관련285 PASS. 이후 공급사 등록명 검색 보완 관련286 PASS; 최신 main의 photo 성능 변경은 별도 책임자가 통합한 코드를 보존했으며 이 조회 작업의 배포 완료로 세지 않는다.
+- Claude ANSWERED/exit0에서 반환 수/canonical callback 상태/photo-serving 권한 3반례를 찾아 수정·회귀시험했다. 두 재검토 timeout은 PASS가 아니다. latest exact head를 지휘·품질 역할에서 독립 검증한다.
