@@ -1266,6 +1266,7 @@ it('serves Admin-only contract fee ledger approximation when the optional ledger
       computedAt: '2026-10-09T00:00:00.000Z',
       valueBasis: 'CURRENT_AT_SNAPSHOT',
       valueAsOf: '2026-10-09',
+      evidenceScope: 'OBSERVED_AT_SNAPSHOT',
       engineRevision: 'test',
       sourceDigest: 'digest',
       documentKey: 'doc',
@@ -1306,6 +1307,7 @@ it('serves Admin-only contract fee ledger approximation when the optional ledger
   const row = response.json().results[0];
   expect(row.ledgerFee).toMatchObject({
     status: 'CONFIRMED',
+    evidenceScope: 'OBSERVED_AT_SNAPSHOT',
     supplierBillingFee: { state: 'CALCULATED_APPROX' },
     vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE' },
   });

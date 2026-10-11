@@ -54,6 +54,7 @@ describe('period fee ledger planner', () => {
     expect(plan.rows[0]).toMatchObject({
       valueBasis: 'CURRENT_AT_SNAPSHOT',
       valueAsOf: '2026-10-12',
+      evidenceScope: 'BASELINE_NOT_CONTRACT_EVIDENCE',
       vehicleUid: 'TEST-FAKE-ASSET-001',
       applyState: 'READY',
       holdReasonCode: null,
@@ -278,6 +279,9 @@ describe('period fee ledger planner', () => {
 
     expect(second.history.map(row => row.kind).sort()).toEqual(['DEPOSIT', 'RENT', 'STATUS']);
     expect(second.history.some(row => row.fieldPath === 'vehicle_status' && row.before === '출고불가' && row.after === '출고가능')).toBe(true);
+    expect(first.rows.every(row => row.evidenceScope === 'BASELINE_NOT_CONTRACT_EVIDENCE')).toBe(true);
+    expect(second.rows.every(row => row.evidenceScope === 'OBSERVED_AT_SNAPSHOT')).toBe(true);
+    expect(first.planDigest).not.toBe(second.planDigest);
   });
 
   it('is deterministic and does not mutate inputs', () => {
@@ -328,7 +332,7 @@ describe('period fee ledger planner', () => {
 
     expect(plan.observedAt).toBe(observedAt);
     expect(plan.snapshotId).toBe(snapshotId);
-    expect(plan.rows[0]).toMatchObject({ computedAt: observedAt, valueAsOf: '2026-10-12' });
+    expect(plan.rows[0]).toMatchObject({ computedAt: observedAt, valueAsOf: '2026-10-12', evidenceScope: 'BASELINE_NOT_CONTRACT_EVIDENCE' });
     delete process.env.PERIOD_FEE_LEDGER_OBSERVED_AT;
     delete process.env.PERIOD_FEE_LEDGER_SNAPSHOT_ID;
   });
@@ -350,6 +354,6 @@ describe('period fee ledger planner', () => {
       deposit: 1000000,
     });
 
-    expect(result).toMatchObject({ status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE', detail: { candidateCount: 0 } });
+    expect(result).toMatchObject({ status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE', detail: { candidateCount: 0, baselineExcludedCount: 1 } });
   });
 });

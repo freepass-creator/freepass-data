@@ -18,6 +18,7 @@ import {
   type ContractFeeLinkData,
   type ContractFeeLinkInput,
 } from '../src/application/contract-fee-link.js';
+import { normalizePeriodFeeLedgerRow } from '../src/infra/period-fee-ledger-firestore-readback.js';
 import type { PeriodFeeLedgerRow } from '../src/application/period-fee-ledger-plan.js';
 import type { CatalogStore } from '../src/ports/catalog-store.js';
 
@@ -125,6 +126,7 @@ const ledgerRow = (override: Partial<PeriodFeeLedgerRow> = {}): PeriodFeeLedgerR
   computedAt: '2026-10-09T00:00:00.000Z',
   valueBasis: 'CURRENT_AT_SNAPSHOT',
   valueAsOf: '2026-10-09',
+  evidenceScope: 'OBSERVED_AT_SNAPSHOT',
   engineRevision: 'test',
   sourceDigest: 'digest',
   documentKey: 'doc',
@@ -297,6 +299,7 @@ describe('contract fee link', () => {
       status: 'CONFIRMED',
       snapshotId: 'period-fee-2026-10-09',
       valueAsOf: '2026-10-09',
+      evidenceScope: 'OBSERVED_AT_SNAPSHOT',
       supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 90000, currency: 'KRW' }, reasonCode: 'VEHICLE_VALUE_APPROX' },
       vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE' },
     });
@@ -313,6 +316,7 @@ describe('contract fee link', () => {
 
     expect(result.ledgerFee).toMatchObject({
       status: 'CONFIRMED',
+      evidenceScope: 'OBSERVED_AT_SNAPSHOT',
       supplierBillingFee: { state: 'CALCULATED', amount: { amount: 100000, currency: 'KRW' }, reasonCode: null },
       channelPayoutFee: { state: 'CALCULATED', amount: { amount: 50000, currency: 'KRW' }, reasonCode: null },
       vehicleValueEvidence: { grade: 'CONFIRMED', source: 'SUPPLIER_RAW' },
@@ -388,6 +392,75 @@ describe('contract fee link', () => {
     });
 
     expect(result).toMatchObject({ status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE' });
+  });
+
+  it('never selects baseline or legacy unknown-scope ledger rows as contract-time evidence', () => {
+    const baseline = ledgerRow({
+      snapshotId: 'period-fee-2026-10-12',
+      valueAsOf: '2026-10-12',
+      computedAt: '2026-10-12T00:00:00.000Z',
+      evidenceScope: 'BASELINE_NOT_CONTRACT_EVIDENCE',
+    });
+    const legacyUnknown = { ...ledgerRow({
+      snapshotId: 'period-fee-2026-10-08',
+      valueAsOf: '2026-10-08',
+      computedAt: '2026-10-08T00:00:00.000Z',
+    }) };
+    delete (legacyUnknown as Partial<PeriodFeeLedgerRow>).evidenceScope;
+
+    for (const contractDate of ['2026-09-20', '2026-10-13']) {
+      const result = pickLedgerRowForContract({
+        rows: [baseline, legacyUnknown as PeriodFeeLedgerRow],
+        contractDate,
+        termMonths: 24,
+        monthlyRent: 700000,
+        deposit: 0,
+      });
+      expect(result).toMatchObject({
+        status: 'HOLD',
+        reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE',
+        detail: { candidateCount: 0, baselineExcludedCount: 2 },
+      });
+    }
+  });
+
+  it('normalizes legacy reader rows without evidenceScope to UNKNOWN_SCOPE and excludes them from contract evidence', () => {
+    const legacy = { ...ledgerRow() } as Partial<PeriodFeeLedgerRow>;
+    delete legacy.evidenceScope;
+    const readRow = normalizePeriodFeeLedgerRow(legacy as Record<string, unknown>);
+
+    expect(readRow.evidenceScope).toBe('UNKNOWN_SCOPE');
+    expect(pickLedgerRowForContract({
+      rows: [readRow],
+      contractDate: '2026-10-10',
+      termMonths: 24,
+      monthlyRent: 700000,
+      deposit: 0,
+    })).toMatchObject({
+      status: 'HOLD',
+      reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE',
+      detail: { candidateCount: 0, baselineExcludedCount: 1 },
+    });
+  });
+
+  it('returns HOLD ledgerFee with baselineExcludedCount instead of exposing baseline as pre-contract value', () => {
+    const result = resolveContractFeeLink(
+      { ...baseInput(), contractDate: '2026-09-20' },
+      { ...baseData(), ledgerRows: [ledgerRow({
+        snapshotId: 'period-fee-2026-10-12',
+        valueAsOf: '2026-10-12',
+        computedAt: '2026-10-12T00:00:00.000Z',
+        evidenceScope: 'BASELINE_NOT_CONTRACT_EVIDENCE',
+      })] },
+    );
+
+    expect(result.ledgerFee).toMatchObject({
+      status: 'HOLD',
+      reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE',
+      baselineExcludedCount: 1,
+    });
+    expect(result.ledgerFee).not.toHaveProperty('snapshotId');
+    expect(validateContractFeeLinksResponse({ contract: 'contract-fee-links/v1', results: [{ key: 'row', ...result }] })).toBe(true);
   });
 
   it('confirms the latest pre-contract snapshot when rent and deposit match', () => {
