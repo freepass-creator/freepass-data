@@ -114,3 +114,9 @@ it.each(['set', 'bytes', 'final-set'])('source %s change refuses publication and
   expect(JSON.stringify([...output.mock.calls, ...errors.mock.calls])).not.toContain('synthetic-credential-never-output');
   expect(JSON.stringify(errors.mock.calls)).not.toContain('synthetic-photo');
 });
+it.each([true, false])('publication failure preserves commit uncertainty (known committed: %s)', async committed => {
+  const error = Object.assign(new Error('IANCAR_PHOTO_COMMITTED_READBACK_FAILED'), committed ? { writeExecuted: true } : {});
+  state.publish.mockRejectedValue(error);
+  await run([...options, '--apply']);
+  expect(JSON.parse(errors.mock.calls[0]![0] as string).writeExecuted).toBe(committed ? true : 'UNKNOWN');
+});

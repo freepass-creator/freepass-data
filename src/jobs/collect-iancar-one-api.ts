@@ -15,6 +15,8 @@ import { orderedJsonDigest } from '../shared/stable-digest.js';
 
 // Exact reviewed input is separate from full collection and never bootstraps a new identity.
 if (process.argv.slice(2).some(arg => arg.startsWith('--reviewed-plan='))) {
+  let applyRequested = false;
+  let publicationAttempted = false;
   try {
     const args = process.argv.slice(2);
     if (new Set(args).size !== args.length || args.some(arg => !arg.startsWith('--reviewed-plan=')
@@ -24,6 +26,7 @@ if (process.argv.slice(2).some(arg => arg.startsWith('--reviewed-plan='))) {
     const path = args.find(arg => arg.startsWith('--reviewed-plan='))!.slice('--reviewed-plan='.length);
     const expectedPlanDigest = args.find(arg => arg.startsWith('--expected-digest='))!.slice('--expected-digest='.length);
     const apply = args.includes('--apply');
+    applyRequested = apply;
     const discoverPlan = expectedPlanDigest === 'PLAN' && !apply;
     if (!path || (!discoverPlan && !/^[a-f0-9]{64}$/.test(expectedPlanDigest))) throw new Error('IANCAR_REVIEW_OPTIONS_INVALID');
     if (apply && process.env.IANCAR_PHOTO_REVIEW_APPROVED !== 'true') throw new Error('IANCAR_PHOTO_APPROVAL_REQUIRED');
@@ -74,6 +77,7 @@ if (process.argv.slice(2).some(arg => arg.startsWith('--reviewed-plan='))) {
       row.observedAt = new Date().toISOString();
     }
     const { runIancarPhotoPublication } = await import('./data-access-runtime.js');
+    publicationAttempted = true;
     const result = await runIancarPhotoPublication({ records: [row], verificationOnly: true, apply,
       ...(discoverPlan ? {} : { expectedPlanDigest }) });
     console.log(JSON.stringify({ status: result.status, count: result.count, planDigest: result.planDigest,
@@ -82,7 +86,9 @@ if (process.argv.slice(2).some(arg => arg.startsWith('--reviewed-plan='))) {
   } catch (error) {
     const candidate = error instanceof Error ? error.message : '';
     const code = /^IANCAR_[A-Z_]+$/.test(candidate) ? candidate : 'IANCAR_REVIEW_FAILED';
-    console.error(JSON.stringify({ code }));
+    const committed = !!error && typeof error === 'object' && 'writeExecuted' in error && error.writeExecuted === true;
+    console.error(JSON.stringify({ code, writeExecuted: committed ? true
+      : (applyRequested && publicationAttempted ? 'UNKNOWN' : false) }));
     process.exitCode = 1;
   }
   process.exit(process.exitCode ?? 0);
