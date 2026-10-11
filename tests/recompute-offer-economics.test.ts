@@ -56,6 +56,15 @@ describe('offer economics recompute', () => {
     expect(precomputeOfferEconomics(offer,'USED_RENT')[0]!.supplierBillingFee.calculation)
       .toEqual({kind:'RATE',base:'MONTHLY_RENT_X_TERM',rate:0.05});
     expect(fee.calculation.kind).toBe('FIXED');
+    expect(typeof KAKAO_COMMISSION_POLICY.oneMonthBasic.sourceRef).toBe('string');
+    await store.seed({offers:[JSON.parse(JSON.stringify(offer))]});
+    const roundtrip=(await store.getOffer(offer.id))!;
+    expect(roundtrip).not.toBe(offer);
+    await updateOfferPrice(store,{commandId:'legacy-with-evidence',idempotencyKey:'legacy-with-evidence',offerId:offer.id,expectedRevision:roundtrip.revision,
+      termKey:'m1',monthlyRent:{amount:777,currency:'KRW'},reason:'original policy evidence verified',actor});
+    expect((await store.getOffer(offer.id))!.internalEconomicsTerms![0]!.supplierBillingFee)
+      .toMatchObject({amount:{amount:39},calculation:{kind:'RATE',rate:0.05}});
+    expect(roundtrip.internalEconomicsTerms![0]!.supplierBillingFee.calculation!.kind).toBe('FIXED');
   });
   it('does not change an apply plan scope through API options', async () => {
     const store=await fixture(), options=await prepare(store), tx=vi.spyOn(store,'transact');
