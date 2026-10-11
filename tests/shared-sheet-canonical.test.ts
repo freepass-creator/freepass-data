@@ -11,7 +11,7 @@ import { planSharedSheetCanonical, runSharedSheetCanonical, preflightSharedSheet
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { queryCanonicalByPlate } from '../src/jobs/query-canonical-by-plate.js';
+import { queryCanonicalByPlate, queryFirestoreByPlate, main as queryMain } from '../src/jobs/query-canonical-by-plate.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
@@ -262,6 +262,27 @@ describe('shared sheet local source to Canonical', () => {
     const result = await queryCanonicalByPlate(s.store, ' test-fake-001 ');
     expect(result.matchedAssets).toBe(1); expect(result.results[0]!.terms).toHaveLength(3);
     expect(result.results[0]!.vehicle.facts!.fields.modelYear!.value).toBe(2026); expect(tx).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ authority: 'STORED_CANONICAL', schema: 'freepass-data.internal-canonical-query/v1' });
+    expect(result.results[0]).toHaveProperty('offerId');
+  });
+  it('direct query refuses stale stored economics without recalculating or writing', async () => {
+    const s = await stores(); await apply(s);
+    const offer = (await s.store.listOffers())[0]!;
+    offer.internalEconomicsTerms![0]!.monthlyRent = { amount: 999999, currency: 'KRW' };
+    await s.store.seed({ offers: [offer] });
+    const tx = vi.spyOn(s.store, 'transact');
+    const result = await queryCanonicalByPlate(s.store, 'TEST-FAKE-001');
+    expect(result.results[0]!.terms[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null,
+      vatAmount: null, totalAmount: null, reasonCode: 'STORED_ECONOMICS_PRICE_MISMATCH' });
+    expect(result.results[0]!.terms[0]!.channelPayoutFee.amount).toBeNull();
+    expect(tx).not.toHaveBeenCalled();
+  });
+  it('rejects unsafe direct CLI configuration and empty identity before Firebase access', async () => {
+    await expect(queryFirestoreByPlate('')).rejects.toThrow('PLATE_REQUIRED');
+    await expect(queryMain(['--direct', '--memory', '--plate-file', 'synthetic', '--stdout']))
+      .rejects.toThrow('DIRECT_FIRESTORE_REQUIRED');
+    await expect(queryMain(['--direct', '--firestore', '--plate-file', 'synthetic', '--stdout', '--local-output', 'synthetic']))
+      .rejects.toThrow('EXACTLY_ONE_OUTPUT_REQUIRED');
   });
   it('keeps first observation from a previously held RAW row', async () => {
     const s = await stores(); await apply(s, capture({ 세부트림: '' }));

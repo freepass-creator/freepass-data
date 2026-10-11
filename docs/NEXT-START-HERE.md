@@ -1,5 +1,16 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-11 Firestore 직접 내부 조회 — 구현과 운영 연결 구분
+
+- 목적/대상 revision: 대표 직접 요청 「Data가 Firestore에 쓰고 각 서비스가 직접 읽기」. 기준 main `1e1ea6894def6bebd3abe4d231471f3153ffdfea`, 작업선 `work/freepass-data/firestore-direct-read-20261011`.
+- 재사용/변경: 기존 `query-canonical-by-plate.ts`, `withSharedSheetCatalogAccess(false)`, 중앙 Firebase target/store를 확장. 새 DB·컬렉션·Firebase app·계산 엔진 없음. 직접 진입점 `queryFirestoreByPlate(plate)`는 Cloud Run을 거치지 않고 실행 프로세스의 승인된 ADC로 Firestore를 읽는다. 접근 로그는 메모리 전용이며 durable audit/업무 쓰기 0. 내부 서버 전용이며 브라우저·익명 공개 계약이 아니다.
+- 출력: product/offer/asset ID와 revision·상태, 기존 차량 사실·기간별 가격·보증금·저장된 청구/지급 수수료. 수수료 중복 또는 기간/대여료 근거 불일치는 UNKNOWN/null. 읽으면서 재계산하거나 legacy 데이터로 fallback하지 않는다.
+- CLI: `npm run query:canonical-by-plate -- --direct --firestore --plate-file <private-input> --stdout`. `FIREBASE_PROJECT_ID=freepasserp5`와 소비처 자신의 승인된 읽기 신원이 필요하다. 결과는 내부 민감정보이며 공개 로그/Git에 저장하지 않는다.
+- 검증: build/architecture/data-access-boundary PASS, 전체 Vitest 2150 PASS / 16 SKIP(추가 CLI 회귀검사는 후속 실행 결과 참조). 실제 중앙 direct 조회는 정상 응답했으나 앞서 reference 조회에서 확인한 차량의 canonical asset/offer/term 일치 건수는 0이었다. 따라서 연결 완료/전체 상품 조회 완료가 아니다.
+- 추가 검증: CLI 가드 포함 관련 55 PASS. 기존 Cloud Run 설정의 F04 연결값을 출력/복사 저장 없이 프로세스 환경에 적용하여 economics dry-run 재실행 성공: 저장 Offer 160, 변경 예정 158, writes 0. 양쪽 수수료 각각 미확정 사유: 신차 subtype 79, 기간 정책 30, 보증금 tier 2. 적용하지 않았다.
+- 남음: 정제 데이터 canonical 저장 coverage와 identity 대조, 기존 ingest/canonicalization 및 `recompute-offer-economics.ts`의 reviewed plan/revision/audit/readback 적용, 소비처별 직접 reader 연결·최소 IAM·배포. 일반 inventory 진단은 DATA_ACCESS_AUDIT_UNAVAILABLE로 중단. 이를 성공으로 세지 않는다. 실제 DB/시트 쓰기·IAM 변경·배포 없음.
+- next_start_here: 기존 ingest shared-sheet canonical / recompute offer economics의 private plan과 저장 원천을 고정한 뒤 coverage를 대조한다. 운영 reference 데이터가 존재한다는 이유로 canonical 저장을 완료로 간주하지 않는다.
+
 ## 2026-10-10 공개 상품 응답 설계
 
 - `docs/PUBLIC-PRODUCT-FEED-DESIGN.md` 작성: ERP4 `/api/catalog/feed`·`/api/catalog/quote`를 FreePass Data 공개 route로 대체하는 v1 계약, allowlist, 보증금 재사용, 증명 계획, 10-14 ERP4 응답 종료 제안. 코드 변경·커밋·push 없음.
