@@ -8,6 +8,8 @@ import {
 import { planVehicleUidMigration, type VehicleUidMigrationProduct } from '../src/application/vehicle-uid-migration-plan.js';
 import type { VehicleAsset } from '../src/domain/catalog.js';
 import type { VehicleUidMigrationWriteStore } from '../src/ports/vehicle-uid-migration-store.js';
+// @ts-ignore local boundary script is plain ESM.
+import { checkDataAccessBoundary } from '../scripts/check-data-access-boundary.mjs';
 
 const actor = { id: 'test', kind: 'SERVICE' as const };
 const meta = {
@@ -45,15 +47,29 @@ function plan(products: Record<string, VehicleUidMigrationProduct>, assets = [as
 
 class FakeStore implements VehicleUidMigrationWriteStore {
   writes = 0;
+  assetVersions = new Map<string, string>();
+  productVersions = new Map<string, string>();
+  failAfterWrites = Number.POSITIVE_INFINITY;
   constructor(
     readonly assets: Map<string, VehicleAsset>,
     readonly products: Map<string, Record<string, unknown>>,
-  ) {}
+  ) {
+    for (const key of assets.keys()) this.assetVersions.set(key, 'v1');
+    for (const key of products.keys()) this.productVersions.set(key, 'v1');
+  }
   async getAsset(assetId: string) {
     return this.assets.get(assetId) ? structuredClone(this.assets.get(assetId)!) : null;
   }
   async getProduct(productKey: string) {
     return this.products.get(productKey) ? structuredClone(this.products.get(productKey)!) : null;
+  }
+  async getAssetSnapshot(assetId: string) {
+    const data = await this.getAsset(assetId);
+    return data ? { data, updateTime: this.assetVersions.get(assetId)! } : null;
+  }
+  async getProductSnapshot(productKey: string) {
+    const data = await this.getProduct(productKey);
+    return data ? { data, updateTime: this.productVersions.get(productKey)! } : null;
   }
   async updateAssetExternalIds(assetId: string, externalIds: VehicleAsset['externalIds']) {
     this.writes++;
@@ -78,6 +94,49 @@ class FakeStore implements VehicleUidMigrationWriteStore {
     const current = { ...this.products.get(productKey)! };
     delete current.vehicle_uid;
     this.products.set(productKey, current);
+  }
+  async commitMutations(mutations: Parameters<NonNullable<VehicleUidMigrationWriteStore['commitMutations']>>[0]) {
+    let applied = 0;
+    const skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' }> = [];
+    for (const mutation of mutations) {
+      if (applied >= this.failAfterWrites) throw new Error('TEST_FAKE_MID_BATCH_FAILURE');
+      if (mutation.kind === 'ASSET_EXTERNAL_IDS') {
+        if (mutation.updateTime && this.assetVersions.get(mutation.assetId) !== mutation.updateTime) {
+          skipped.push({ target: `asset:${mutation.assetId}`, reason: 'CONCURRENT_CHANGE' });
+          continue;
+        }
+        if (mutation.expectedAfter !== undefined && JSON.stringify(this.assets.get(mutation.assetId)?.externalIds ?? null) !== JSON.stringify(mutation.expectedAfter ?? null)) {
+          skipped.push({ target: `asset:${mutation.assetId}`, reason: 'ROLLBACK_SKIPPED_CHANGED' });
+          continue;
+        }
+        await this.restoreAssetExternalIds(mutation.assetId, mutation.externalIds);
+        this.assetVersions.set(mutation.assetId, `v${this.writes + 1}`);
+      } else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
+        if (mutation.updateTime && this.productVersions.get(mutation.productKey) !== mutation.updateTime) {
+          skipped.push({ target: `product:${mutation.productKey}`, reason: 'CONCURRENT_CHANGE' });
+          continue;
+        }
+        if (mutation.expectedAfter !== undefined && this.products.get(mutation.productKey)?.vehicle_uid !== mutation.expectedAfter) {
+          skipped.push({ target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' });
+          continue;
+        }
+        await this.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
+        this.productVersions.set(mutation.productKey, `v${this.writes + 1}`);
+      } else {
+        if (mutation.updateTime && this.productVersions.get(mutation.productKey) !== mutation.updateTime) {
+          skipped.push({ target: `product:${mutation.productKey}`, reason: 'CONCURRENT_CHANGE' });
+          continue;
+        }
+        if (mutation.expectedAfter !== undefined && this.products.get(mutation.productKey)?.vehicle_uid !== mutation.expectedAfter) {
+          skipped.push({ target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' });
+          continue;
+        }
+        await this.deleteProductVehicleUid(mutation.productKey);
+        this.productVersions.set(mutation.productKey, `v${this.writes + 1}`);
+      }
+      applied++;
+    }
+    return { applied, skipped };
   }
 }
 
@@ -117,6 +176,49 @@ describe('applyVehicleUidMigration', () => {
     expect(store.products.get('RP023_TEST-FAKE-002')!.vehicle_uid).toBeUndefined();
   });
 
+  it('stores backup before writes and refuses to write when backup persistence fails', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001') });
+    const store = fakeStore(p);
+    await expect(applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' }, async () => {
+      throw new Error('TEST_FAKE_BACKUP_WRITE_FAILED');
+    })).rejects.toThrow('TEST_FAKE_BACKUP_WRITE_FAILED');
+    expect(store.writes).toBe(0);
+  });
+
+  it('keeps the backup available when a later write fails', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001') });
+    const store = fakeStore(p);
+    store.failAfterWrites = 1;
+    let backupWritten = false;
+    await expect(applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' }, async (backup) => {
+      backupWritten = Boolean(backup.backupDigest);
+    })).rejects.toThrow('TEST_FAKE_MID_BATCH_FAILURE');
+    expect(backupWritten).toBe(true);
+  });
+
+  it('skips stale product identifiers before writing that product', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001') });
+    const store = fakeStore(p);
+    store.products.set('p1', product('TEST-FAKE-CHANGED'));
+    const result = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    expect(result.skippedReasons?.STALE_IDENTIFIER).toBe(1);
+    expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
+  });
+
+  it('skips concurrent changes instead of overwriting them', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001') });
+    const store = fakeStore(p);
+    const result = await applyVehicleUidMigration(
+      store,
+      p,
+      p.planDigest,
+      { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' },
+      async () => { store.productVersions.set('p1', 'v2'); },
+    );
+    expect(result.skippedReasons?.CONCURRENT_CHANGE).toBeGreaterThan(0);
+    expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
+  });
+
   it('stops when a product has a conflicting vehicle_uid precondition', async () => {
     const p = plan({ p1: product('TEST-FAKE-001') });
     const store = fakeStore(p);
@@ -136,6 +238,25 @@ describe('applyVehicleUidMigration', () => {
     expect(store.assets.get('TEST-FAKE-UID-001')!.externalIds).toBeUndefined();
   });
 
+  it('does not rollback over a post-apply product change', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001') });
+    const store = fakeStore(p);
+    const applied = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    store.products.set('p1', { ...store.products.get('p1')!, vehicle_uid: 'TEST-FAKE-NORMAL-CHANGE' });
+    const rolledBack = await rollbackVehicleUidMigration(store, applied.backup!, p.planDigest, { approvedDigest: p.planDigest, writeFlag: 'ROLLBACK' });
+    expect(rolledBack.skippedReasons?.ROLLBACK_SKIPPED_CHANGED).toBe(1);
+    expect(store.products.get('p1')!.vehicle_uid).toBe('TEST-FAKE-NORMAL-CHANGE');
+  });
+
+  it('rejects rollback when backup digest changed', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001') });
+    const store = fakeStore(p);
+    const applied = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    const tampered = { ...applied.backup!, products: [] };
+    await expect(rollbackVehicleUidMigration(store, tampered, p.planDigest, { approvedDigest: p.planDigest, writeFlag: 'ROLLBACK' }))
+      .rejects.toThrow('VEHICLE_UID_BACKUP_DIGEST_MISMATCH');
+  });
+
   it('fails readback when persisted asset externalIds do not match the plan', async () => {
     const p = plan({ p1: product('TEST-FAKE-001') });
     const store = fakeStore(p);
@@ -152,5 +273,14 @@ describe('applyVehicleUidMigration', () => {
     const badPlan = { ...p, summary: { ...p.summary, invariants: { ...p.summary.invariants, oneActivePlatePerUid: false } } };
     badPlan.planDigest = computeVehicleUidPlanDigest(badPlan);
     await expect(dryRunVehicleUidMigration(badPlan, badPlan.planDigest)).rejects.toThrow('VEHICLE_UID_ONE_ACTIVE_PLATE_INVARIANT_FALSE');
+  });
+
+  it('keeps FieldValue.delete exceptions limited to reviewed rollback writer calls', () => {
+    const fake = `${process.cwd()}/src/infra/TEST-FAKE-field-delete.ts`;
+    const violations = checkDataAccessBoundary(process.cwd(), [{
+      file: fake,
+      text: "import { FieldValue } from 'firebase-admin/firestore';\nexport const patch = { vehicle_uid: FieldValue.delete() };\n",
+    }]);
+    expect(violations.some((item: { file: string; import: string }) => item.file.endsWith('TEST-FAKE-field-delete.ts') && item.import.includes('FieldValue.delete()'))).toBe(true);
   });
 });

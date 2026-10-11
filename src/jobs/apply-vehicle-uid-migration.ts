@@ -95,9 +95,8 @@ export async function main(argv = process.argv.slice(2)) {
     applyVehicleUidMigration(runtime.store, plan, expectedDigest, {
       ...approval,
       now: new Date().toISOString(),
-    })
+    }, async (backup) => writePrivateArtifact(backupOut, backup))
   );
-  if (result.backup) await writePrivateArtifact(backupOut, result.backup);
   console.log(JSON.stringify({ ...result, backup: result.backup ? { backupDigest: result.backup.backupDigest } : undefined }, null, 2));
 }
 

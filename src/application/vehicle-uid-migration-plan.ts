@@ -23,6 +23,7 @@ export type VehicleUidMigrationItem =
       productKey: string;
       vehicleUid: string;
       reason: 'SOURCE_BINDING' | 'PLATE_UNIQUE_ASSET' | 'PLANNED_NEW_UID' | 'CREATED_IN_PLAN';
+      identifiers: VehicleUidMigrationIdentifierSummary;
       public: { productHash: string; vehicleUidHash: string; reason: string };
     }
   | {
@@ -59,6 +60,12 @@ export type VehicleUidMigrationPlan = {
   items: VehicleUidMigrationItem[];
   summary: VehicleUidMigrationSummary;
   planDigest: string;
+};
+
+export type VehicleUidMigrationIdentifierSummary = {
+  plateHashes: string[];
+  vinHashes: string[];
+  supplierVehicleIdHashes: string[];
 };
 
 export type PlanVehicleUidMigrationInput = {
@@ -127,6 +134,17 @@ function productIds(product: VehicleUidMigrationProduct) {
     ...(supplierVehicleIds.length > 1 ? ['SUPPLIER_VEHICLE:SAME_KIND_FIELDS_DISAGREE'] : []),
   ];
   return { plate, plates, vin, vins, supplierCode, supplierVehicleId, supplierVehicleIds, sameKindFieldDisagreements };
+}
+
+export function summarizeVehicleUidMigrationIdentifiers(product: VehicleUidMigrationProduct): VehicleUidMigrationIdentifierSummary {
+  const ids = productIds(product);
+  return {
+    plateHashes: ids.plates.map(value => hash({ kind: 'PLATE', value })).sort(),
+    vinHashes: ids.vins.map(value => hash({ kind: 'VIN', value })).sort(),
+    supplierVehicleIdHashes: ids.supplierVehicleIds
+      .map(value => hash({ kind: 'SUPPLIER_VEHICLE', supplierCode: ids.supplierCode?.toUpperCase() ?? '', value }))
+      .sort(),
+  };
 }
 
 function externalIdsForAsset(asset: VehicleAsset): VehicleExternalId[] {
@@ -477,6 +495,7 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
         productKey,
         vehicleUid: uid,
         reason,
+        identifiers: summarizeVehicleUidMigrationIdentifiers(product),
         public: { productHash: hash(productKey), vehicleUidHash: hash(uid), reason },
       });
     }

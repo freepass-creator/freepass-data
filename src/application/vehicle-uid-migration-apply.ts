@@ -2,14 +2,14 @@ import type { VehicleAsset, VehicleExternalId } from '../domain/catalog.js';
 import { addExternalId } from '../domain/vehicle-uid.js';
 import type { VehicleUidMigrationStoreMutation, VehicleUidMigrationWriteStore } from '../ports/vehicle-uid-migration-store.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import type { VehicleUidMigrationItem, VehicleUidMigrationPlan } from './vehicle-uid-migration-plan.js';
+import { summarizeVehicleUidMigrationIdentifiers, type VehicleUidMigrationItem, type VehicleUidMigrationPlan } from './vehicle-uid-migration-plan.js';
 
 export type VehicleUidMigrationBackup = {
   schema: 'vehicle-uid-migration-backup/v1';
   planDigest: string;
   createdAt: string;
-  assets: Array<{ assetId: string; externalIds?: VehicleExternalId[] }>;
-  products: Array<{ productKey: string; hadVehicleUid: boolean; vehicleUid?: unknown }>;
+  assets: Array<{ assetId: string; externalIds?: VehicleExternalId[]; updateTime?: string; appliedExternalIds?: VehicleExternalId[] }>;
+  products: Array<{ productKey: string; hadVehicleUid: boolean; vehicleUid?: unknown; updateTime?: string; appliedVehicleUid?: string }>;
   backupDigest: string;
 };
 
@@ -21,10 +21,16 @@ export type VehicleUidMigrationApplyResult = {
   productUpdates: number;
   digest: string;
   backup?: VehicleUidMigrationBackup;
+  skippedReasons?: Record<string, number>;
 };
 
 const bodyForDigest = (plan: VehicleUidMigrationPlan) => {
   const { planDigest: _planDigest, ...body } = plan;
+  return body;
+};
+
+const backupBodyForDigest = (backup: VehicleUidMigrationBackup) => {
+  const { backupDigest: _backupDigest, ...body } = backup;
   return body;
 };
 
@@ -52,8 +58,11 @@ function externalIdsAfter(asset: VehicleAsset, ids: VehicleExternalId[], observe
 }
 
 async function commitMutations(store: VehicleUidMigrationWriteStore, mutations: VehicleUidMigrationStoreMutation[]) {
-  if (mutations.length === 0) return;
-  if (store.commitMutations) return store.commitMutations(mutations);
+  if (mutations.length === 0) return { applied: 0, skipped: [] };
+  if (store.commitMutations) {
+    const result = await store.commitMutations(mutations);
+    return result ?? { applied: mutations.length, skipped: [] };
+  }
   for (const mutation of mutations) {
     if (mutation.kind === 'ASSET_EXTERNAL_IDS') {
       await store.restoreAssetExternalIds(mutation.assetId, mutation.externalIds);
@@ -63,7 +72,15 @@ async function commitMutations(store: VehicleUidMigrationWriteStore, mutations: 
       await store.deleteProductVehicleUid(mutation.productKey);
     }
   }
+  return { applied: mutations.length, skipped: [] };
 }
+
+const bump = (record: Record<string, number>, reason: string) => {
+  record[reason] = (record[reason] ?? 0) + 1;
+};
+
+const withUpdateTime = (updateTime?: string) => updateTime ? { updateTime } : {};
+const withExpectedAfter = <T>(expectedAfter: T | undefined) => expectedAfter !== undefined ? { expectedAfter } : {};
 
 export async function dryRunVehicleUidMigration(plan: VehicleUidMigrationPlan, expectedDigest: string): Promise<VehicleUidMigrationApplyResult> {
   const digest = assertVehicleUidPlanDigest(plan, expectedDigest);
@@ -83,6 +100,7 @@ export async function applyVehicleUidMigration(
   plan: VehicleUidMigrationPlan,
   expectedDigest: string,
   options: { approvedDigest?: string; writeFlag?: string; now: string },
+  persistBackup: (backup: VehicleUidMigrationBackup) => Promise<void> = async () => {},
 ): Promise<VehicleUidMigrationApplyResult> {
   const digest = assertVehicleUidPlanDigest(plan, expectedDigest);
   if (options.approvedDigest !== digest || options.writeFlag !== 'APPLY') throw new Error('VEHICLE_UID_APPLY_NOT_APPROVED');
@@ -99,24 +117,39 @@ export async function applyVehicleUidMigration(
   let assetUpdates = 0;
   let productUpdates = 0;
   const mutations: VehicleUidMigrationStoreMutation[] = [];
+  const skippedReasons: Record<string, number> = {};
+  const skippedTargets = new Set<string>();
 
   for (const item of items) {
     if (item.kind === 'ASSET_ADD_EXTERNAL_IDS') {
-      const asset = await store.getAsset(item.assetId);
+      const snapshot = store.getAssetSnapshot ? await store.getAssetSnapshot(item.assetId) : null;
+      const asset = snapshot?.data ?? await store.getAsset(item.assetId);
       if (!asset) throw new Error('VEHICLE_UID_ASSET_MISSING');
       const next = externalIdsAfter(asset, item.externalIds, plan.observedAt);
       if (stableDigest(next) === stableDigest(asset.externalIds ?? [])) {
         skipped++;
         continue;
       }
-      backup.assets.push({ assetId: item.assetId, ...(asset.externalIds !== undefined ? { externalIds: structuredClone(asset.externalIds) } : {}) });
-      mutations.push({ kind: 'ASSET_EXTERNAL_IDS', assetId: item.assetId, externalIds: next });
+      backup.assets.push({
+        assetId: item.assetId,
+        ...(asset.externalIds !== undefined ? { externalIds: structuredClone(asset.externalIds) } : {}),
+        ...(snapshot?.updateTime ? { updateTime: snapshot.updateTime } : {}),
+        appliedExternalIds: structuredClone(next),
+      });
+      mutations.push({ kind: 'ASSET_EXTERNAL_IDS', assetId: item.assetId, externalIds: next, ...withUpdateTime(snapshot?.updateTime) });
       writes++;
       assetUpdates++;
     }
     if (item.kind === 'PRODUCT_SET_UID') {
-      const product = await store.getProduct(item.productKey);
+      const snapshot = store.getProductSnapshot ? await store.getProductSnapshot(item.productKey) : null;
+      const product = snapshot?.data ?? await store.getProduct(item.productKey);
       if (!product) throw new Error('VEHICLE_UID_PRODUCT_MISSING');
+      if (stableDigest(summarizeVehicleUidMigrationIdentifiers(product)) !== stableDigest(item.identifiers)) {
+        skipped++;
+        bump(skippedReasons, 'STALE_IDENTIFIER');
+        skippedTargets.add(`product:${item.productKey}`);
+        continue;
+      }
       const current = product.vehicle_uid;
       if (current === item.vehicleUid) {
         skipped++;
@@ -127,26 +160,34 @@ export async function applyVehicleUidMigration(
         productKey: item.productKey,
         hadVehicleUid: Object.hasOwn(product, 'vehicle_uid'),
         ...(Object.hasOwn(product, 'vehicle_uid') ? { vehicleUid: current } : {}),
+        ...(snapshot?.updateTime ? { updateTime: snapshot.updateTime } : {}),
+        appliedVehicleUid: item.vehicleUid,
       });
-      mutations.push({ kind: 'PRODUCT_VEHICLE_UID', productKey: item.productKey, vehicleUid: item.vehicleUid });
+      mutations.push({ kind: 'PRODUCT_VEHICLE_UID', productKey: item.productKey, vehicleUid: item.vehicleUid, ...withUpdateTime(snapshot?.updateTime) });
       writes++;
       productUpdates++;
     }
   }
 
-  await commitMutations(store, mutations);
-  await verifyVehicleUidMigration(store, plan);
   const fullBackup = { ...backup, backupDigest: stableDigest(backup) };
-  return { status: 'APPLIED', writes, skipped, assetUpdates, productUpdates, digest, backup: fullBackup };
+  await persistBackup(fullBackup);
+  if (writes > 0 && mutations.length === 0) throw new Error('VEHICLE_UID_BACKUP_WITHOUT_MUTATIONS');
+  const commit = await commitMutations(store, mutations);
+  for (const item of commit.skipped) bump(skippedReasons, item.reason);
+  await verifyVehicleUidMigration(store, plan, new Set([...skippedTargets, ...commit.skipped.map(item => item.target)]));
+  const appliedWrites = commit.applied;
+  return { status: 'APPLIED', writes: appliedWrites, skipped: skipped + commit.skipped.length, assetUpdates, productUpdates, digest, backup: fullBackup, skippedReasons };
 }
 
-export async function verifyVehicleUidMigration(store: VehicleUidMigrationWriteStore, plan: VehicleUidMigrationPlan) {
+export async function verifyVehicleUidMigration(store: VehicleUidMigrationWriteStore, plan: VehicleUidMigrationPlan, skippedTargets = new Set<string>()) {
   for (const item of mutationItems(plan)) {
     if (item.kind === 'PRODUCT_SET_UID') {
+      if (skippedTargets.has(`product:${item.productKey}`)) continue;
       const product = await store.getProduct(item.productKey);
       if (product?.vehicle_uid !== item.vehicleUid) throw new Error('VEHICLE_UID_READBACK_PRODUCT_MISMATCH');
     }
     if (item.kind === 'ASSET_ADD_EXTERNAL_IDS') {
+      if (skippedTargets.has(`asset:${item.assetId}`)) continue;
       const asset = await store.getAsset(item.assetId);
       if (!asset) throw new Error('VEHICLE_UID_READBACK_ASSET_MISSING');
       const expected = externalIdsAfter(asset, item.externalIds, plan.observedAt);
@@ -164,16 +205,23 @@ export async function rollbackVehicleUidMigration(
   if (backup.planDigest !== expectedDigest || options.approvedDigest !== expectedDigest || options.writeFlag !== 'ROLLBACK') {
     throw new Error('VEHICLE_UID_ROLLBACK_NOT_APPROVED');
   }
+  if (stableDigest(backupBodyForDigest(backup)) !== backup.backupDigest) {
+    throw new Error('VEHICLE_UID_BACKUP_DIGEST_MISMATCH');
+  }
   let writes = 0;
   const mutations: VehicleUidMigrationStoreMutation[] = [];
+  const skippedReasons: Record<string, number> = {};
   for (const item of backup.products) {
-    mutations.push({ kind: 'PRODUCT_DELETE_VEHICLE_UID', productKey: item.productKey });
+    mutations.push(item.hadVehicleUid
+      ? { kind: 'PRODUCT_VEHICLE_UID', productKey: item.productKey, vehicleUid: String(item.vehicleUid), ...withExpectedAfter(item.appliedVehicleUid) }
+      : { kind: 'PRODUCT_DELETE_VEHICLE_UID', productKey: item.productKey, ...withExpectedAfter(item.appliedVehicleUid) });
     writes++;
   }
   for (const item of backup.assets) {
-    mutations.push({ kind: 'ASSET_EXTERNAL_IDS', assetId: item.assetId, externalIds: item.externalIds });
+    mutations.push({ kind: 'ASSET_EXTERNAL_IDS', assetId: item.assetId, externalIds: item.externalIds, ...withExpectedAfter(item.appliedExternalIds) });
     writes++;
   }
-  await commitMutations(store, mutations);
-  return { status: 'ROLLED_BACK', writes, skipped: 0, assetUpdates: backup.assets.length, productUpdates: backup.products.length, digest: expectedDigest };
+  const commit = await commitMutations(store, mutations);
+  for (const item of commit.skipped) bump(skippedReasons, item.reason);
+  return { status: 'ROLLED_BACK', writes: commit.applied, skipped: commit.skipped.length, assetUpdates: backup.assets.length, productUpdates: backup.products.length, digest: expectedDigest, skippedReasons };
 }

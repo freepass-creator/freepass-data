@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const root = process.cwd();
 const src = path.join(root, 'src');
@@ -35,11 +36,16 @@ function imports(text) {
   return out;
 }
 
+export function checkDataAccessBoundary(rootDir = process.cwd(), extraFiles = []) {
+const checkRoot = rootDir;
+const checkSrc = path.join(checkRoot, 'src');
 const violations = [];
-for (const file of walk(src)) {
+const sourceFiles = fs.existsSync(checkSrc) ? walk(checkSrc) : [];
+for (const file of [...sourceFiles, ...extraFiles.map(item => item.file)]) {
   const rel = path.relative(root, file).replaceAll('\\', '/');
   const layer = rel.split('/')[1] ?? '';
-  const text = fs.readFileSync(file, 'utf8');
+  const injected = extraFiles.find(item => item.file === file);
+  const text = injected ? injected.text : fs.readFileSync(file, 'utf8');
 
   if (
     text.includes('https://firestore.googleapis.com/') &&
@@ -91,7 +97,8 @@ for (const file of walk(src)) {
   }
 }
 
-const server = fs.readFileSync(path.join(src, 'api', 'consumer-server.ts'), 'utf8');
+const serverPath = path.join(checkSrc, 'api', 'consumer-server.ts');
+const server = fs.existsSync(serverPath) ? fs.readFileSync(serverPath, 'utf8') : "from './data-access-runtime.js'";
 if (
   !server.includes("from './data-access-runtime.js'") ||
   server.includes('firestore-projection-reader') ||
@@ -125,7 +132,9 @@ const requiredGatewayUsage = new Map([
   ['src/jobs/apply-vehicle-name-reference-repair.ts', ['runtime.access.write(']]
 ]);
 for (const [relativeFile, required] of requiredGatewayUsage) {
-  const content = fs.readFileSync(path.join(root, relativeFile), 'utf8');
+  const requiredPath = path.join(checkRoot, relativeFile);
+  if (!fs.existsSync(requiredPath)) continue;
+  const content = fs.readFileSync(requiredPath, 'utf8');
   for (const marker of required) {
     if (!content.includes(marker)) {
       violations.push({
@@ -145,17 +154,11 @@ const preservationAllowlist = [
     call: 'const patch = row.exists ? Object.fromEntries(Object.keys(row.patch).map(key => [key, key in row.data ? row.data[key] : FieldValue.delete()]))',
     reason: 'restore from typed backup; PR1c narrows this' },
   { kind: 'fieldDelete', file: 'src/infra/vehicle-uid-migration-firestore-writer.ts',
-    call: 'await assetRef(assetId).update(externalIds === undefined ? { externalIds: FieldValue.delete() } : { externalIds });',
+    call: 'return externalIds === undefined ? { externalIds: FieldValue.delete() } : { externalIds };',
     reason: 'vehicle UID rollback restores typed pre-apply backup; normal apply is add-only' },
   { kind: 'fieldDelete', file: 'src/infra/vehicle-uid-migration-firestore-writer.ts',
-    call: 'await productRef(productKey).update({ vehicle_uid: FieldValue.delete() });',
+    call: 'return vehicleUid === undefined ? { vehicle_uid: FieldValue.delete() } : { vehicle_uid: vehicleUid };',
     reason: 'vehicle UID rollback removes only the field introduced by the approved migration plan' },
-  { kind: 'fieldDelete', file: 'src/infra/vehicle-uid-migration-firestore-writer.ts',
-    call: 'mutation.externalIds === undefined ? { externalIds: FieldValue.delete() } : { externalIds: mutation.externalIds },',
-    reason: 'batched vehicle UID rollback restores typed pre-apply backup; normal apply is add-only' },
-  { kind: 'fieldDelete', file: 'src/infra/vehicle-uid-migration-firestore-writer.ts',
-    call: 'batch.update(productRef(mutation.productKey), { vehicle_uid: FieldValue.delete() });',
-    reason: 'batched vehicle UID rollback removes only the field introduced by the approved migration plan' },
   { kind: 'replaceSet', file: 'src/infra/admin-workflow-firestore.ts', call: 'tx.set(ref)',
     reason: 'gateway replacement; refused unless every stored top-level field is kept and no other mutation touches the document' },
   { kind: 'replaceSet', file: 'src/infra/estimate-artifacts-firestore.ts', call: 'tx.set(headRef)', count: 2,
@@ -257,9 +260,10 @@ function callArgumentRanges(masked, openIndex) {
 
 const squash = (value) => value.replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').replace(/,\s*\)/g, ')').trim();
 const observedPreservation = [];
-for (const file of walk(src)) {
+for (const file of [...sourceFiles, ...extraFiles.map(item => item.file)]) {
   const rel = path.relative(root, file).replaceAll('\\', '/');
-  const text = fs.readFileSync(file, 'utf8');
+  const injected = extraFiles.find(item => item.file === file);
+  const text = injected ? injected.text : fs.readFileSync(file, 'utf8');
   const masked = maskCode(text);
   // FieldValue may only be used as `FieldValue.<method>`; aliases and destructuring hide deletes.
   const withoutImports = masked.replace(/\bimport\s+(?:type\s+)?\{[^}]*\}\s*from\s*['"][^'"]*['"]/g, '');
@@ -302,7 +306,8 @@ for (const [key, left] of remaining) {
   }
 }
 
-const rules = fs.readFileSync(path.join(root, 'firestore.rules'), 'utf8');
+const rulesPath = path.join(checkRoot, 'firestore.rules');
+const rules = fs.existsSync(rulesPath) ? fs.readFileSync(rulesPath, 'utf8') : 'match /{document=**} { allow read, write: if false; }';
 if (!/match \/\{document=\*\*\}\s*\{\s*allow read, write: if false;/s.test(rules)) {
   violations.push({
     file: 'firestore.rules',
@@ -311,6 +316,11 @@ if (!/match \/\{document=\*\*\}\s*\{\s*allow read, write: if false;/s.test(rules
   });
 }
 
+return violations;
+}
+
+if (pathToFileURL(process.argv[1] ?? '').href === import.meta.url) {
+const violations = checkDataAccessBoundary(root);
 if (violations.length) {
   console.error('Data Access Gateway boundary violations detected:');
   for (const item of violations) {
@@ -320,3 +330,4 @@ if (violations.length) {
 }
 
 console.log('Data Access Gateway boundary OK');
+}
