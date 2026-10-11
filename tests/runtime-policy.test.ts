@@ -165,4 +165,51 @@ describe('API runtime boundary', () => {
     expect(publicWorkflow).not.toContain('FREEPASS_DATA_CONSUMERS_JSON');
     expect(publicWorkflow).not.toContain('EANCAR_ONE_API_KEY');
   });
+  it('rejects an unapproved public target before reaching deployment', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const section = workflow.split('      - name: Validate public approval before deployment effects')[1]?.split('      - name: Authenticate deploy identity')[0];
+    const block = section?.split('        run: |\n')[1];
+    if (!block) throw new Error('Public approval preflight missing');
+    const script = block.split('\n').map(line => line.slice(10)).join('\n');
+    const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+    const valid = { ALLOW_UNAUTHENTICATED: 'true', GRANT_PUBLIC_INVOKER: 'true', PROJECT_ID: 'freepasserp5',
+      REGION: 'asia-northeast3', SERVICE_NAME: 'freepass-data-public',
+      RUNTIME_SERVICE_ACCOUNT: 'freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com',
+      RUNTIME_ENTRYPOINT: 'dist/src/api/public-server.js', USE_CONSUMER_SECRETS: 'false',
+      MAX_INSTANCES: '4', RUNTIME_CONCURRENCY: '16', APPROVED_PLAN_DIGEST: 'approved-plan', GITHUB_ENV: '/dev/null' };
+    const cases = [
+      [{}, true], [{ APPROVED_PLAN_DIGEST: '' }, false], [{ APPROVED_PLAN_DIGEST: 'old-plan' }, false],
+      [{ ALLOW_UNAUTHENTICATED: 'true', GRANT_PUBLIC_INVOKER: 'false' }, false],
+      [{ ALLOW_UNAUTHENTICATED: 'false', GRANT_PUBLIC_INVOKER: 'true' }, false],
+      [{ PROJECT_ID: 'other' }, false], [{ REGION: 'us-central1' }, false],
+      [{ SERVICE_NAME: 'freepass-data-read' }, false], [{ RUNTIME_SERVICE_ACCOUNT: 'private-runtime' }, false],
+      [{ RUNTIME_ENTRYPOINT: 'dist/src/api/consumer-server.js' }, false], [{ USE_CONSUMER_SECRETS: 'true' }, false],
+      [{ MAX_INSTANCES: '10' }, false], [{ RUNTIME_CONCURRENCY: '80' }, false],
+      [{ ALLOW_UNAUTHENTICATED: 'false', GRANT_PUBLIC_INVOKER: 'false', APPROVED_PLAN_DIGEST: '' }, false],
+      [{ ALLOW_UNAUTHENTICATED: 'false', GRANT_PUBLIC_INVOKER: 'false' }, true],
+      [{ ALLOW_UNAUTHENTICATED: 'false', GRANT_PUBLIC_INVOKER: 'false', APPROVED_PLAN_DIGEST: '', SERVICE_NAME: 'freepass-data-read', RUNTIME_ENTRYPOINT: 'dist/src/api/consumer-server.js', RUNTIME_SERVICE_ACCOUNT: 'private-runtime', USE_CONSUMER_SECRETS: 'true' }, true],
+    ] as const;
+    for (const [overrides, allowed] of cases) {
+      const result = spawnSync(bash, ['-s'], { input: 'node() { printf "%s\\n" "approved-plan"; }\n' + script + '\necho DEPLOYMENT_REACHED\n',
+        encoding: 'utf8', env: { ...process.env, ...valid, ...overrides } });
+      expect(result.status === 0, JSON.stringify(overrides) + result.stderr).toBe(allowed);
+      expect(result.stdout.includes('DEPLOYMENT_REACHED')).toBe(allowed);
+    }
+  });
+  it('deploys privately and grants anonymous invoker only after approved preflight', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const gate = workflow.indexOf('- name: Validate public approval before deployment effects');
+    expect(gate).toBeGreaterThan(0);
+    for (const step of ['Authenticate deploy identity', 'Build immutable container', 'Deploy private read-only service']) {
+      expect(workflow.indexOf('- name: ' + step)).toBeGreaterThan(gate);
+    }
+    const deployment = workflow.split('- name: Deploy private read-only service')[1]!.split('- name: Grant public invoker only when requested')[0]!;
+    expect(deployment).toContain('--no-allow-unauthenticated');
+    expect(deployment).not.toContain('--allow-unauthenticated');
+    const grant = workflow.split('- name: Grant public invoker only when requested')[1]!.split('- name: Verify service readiness metadata')[0]!;
+    expect(grant.indexOf('test "${PUBLIC_RUNTIME_APPROVAL_VALIDATED:-false}" = "true"')).toBeGreaterThan(0);
+    expect(grant.indexOf('test "$plan_digest" = "$APPROVED_PLAN_DIGEST"')).toBeLessThan(grant.indexOf('gcloud run services add-iam-policy-binding'));
+    expect(grant).toContain('--member=allUsers --role=roles/run.invoker');
+  });
+
 });

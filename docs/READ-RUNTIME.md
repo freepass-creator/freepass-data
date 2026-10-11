@@ -2,6 +2,15 @@
 
 Status: IMPLEMENTED / VALIDATION REQUIRED BEFORE DEPLOYMENT
 
+## 2026-10-10 금액 사실과 발행 검증 분리 — 배포 전 준비
+
+- 정본: main `050e382`(PR433 포함), 기존 reference builder/보증금 검증기/공유 schema를 확장(`COMPOSE_OR_EXTEND`). 새 엔진·정책 사전·DB/시트 쓰기 없음.
+- 운영 읽기: read `00023-fhl`, image tag `050e382`, 22:05:34 KST 관측 475상품/5,193기간. 22:07:41 원문 재조회와 대사한 월대여료·가격키·주행 단위·청구/지급 수수료 불일치0. 비동시 읽기이며 이 두 시점 밖의 최신성을 보증하지 않는다.
+- 확인된 손실: 원천 정책명이 존재하는 290개 offer에 표시명 누락. RP031의 구조·금액이 일치한 양수 3,008조건은 시간 경과로 금액까지 UNKNOWN 처리됐다. 개선안은 실제 정책명/코드/각 필드 출처와 양수 금액을 보존하고 발행 검증 HOLD를 별도로 둔다. 금액 충돌·alias 모호·삭제/철회·미래 시각·ZERO에는 대체 금액을 적용하지 않는다.
+- 같은 원문·관측 시각으로 개선안 대사: 상품/기간/대여료/수수료/ZERO 변경0, 양수3,008조건 금액+발행HOLD 보존, 정책명290개 전달. 원문 무보증과 양수가 충돌한4조건은 UNKNOWN 유지.
+- 독립 검토 반례 반영: 공개 feed가 compat의 신규 HOLD 필드를 버릴 수 있으므로, 시간 경과 양수 보존은 인증 reference builder의 명시 opt-in에만 적용한다. 공개/compat 기본 호출은 기존 UNKNOWN 결과를 유지한다. 보존 금액도 기존 규칙 비교기를 재사용하여 차이를 누락하지 않는다.
+- next_start_here: 차종마스터 engine_cc 패킷을 순차 통합한 최종 head의 누적 검사·독립 검토 → 기존 통합 owner 경로 PR/main → 별도 배포 승인 후 공급사명·차량번호 실제 조회 readback. 현재 reference는 listable=true 부분집합이며 전체 원천 조회 완료가 아니다. 비판매 원천 조회 범위/권한은 별도 검토한다. 공개 feed 판매 필터는 유지한다.
+
 ## Purpose
 
 Expose the proven ERP public projection and Catalog Data Health through a dedicated
@@ -425,7 +434,29 @@ Both responses use `Cache-Control: no-store`.
 
 ### Kakao catalog reference
 
+#### 공통시트 원천행 상품 / 원자값 / ERP 입력 계약
+
+공급사 탭의 비어 있지 않은 한 행은 상품 한 건이다. 같은 내용의 두 행은 상품 두 건이며 실물 차량 두 대 확정과는 다르다. 기존 `COLLECTED` grant 이후 SourceIngestionStore의 sealed shared-input source current head를 읽고 RAW/candidate를 연결한다. `REJECTED` 기록·출고협의·출고불가·번호 미정도 상품 존재와 known 조건을 보존한다. CURRENT head 전후 stableDigest·run 귀속·raw/candidate 개수·관측 연결을 확인하고 읽기 실패/변동은 오류로 닫는다. head 없음은 명시 HOLD이며 stale/partial을 완전한 최신 fleet 분모로 해석하지 않는다.
+
+기존 reference `data`는 `representationKind=LEGACY_PRODUCT`와 `CURRENT_SOURCE_ROW_PRODUCT`의 엄격 union이다. 후자는 `identityKind=CURRENT_SOURCE_ROW`, 현재 source/tab/row 위치 포인터 `productId`, immutable `observationId`, 미확정 `vehicleAssetId=null`, 원문/정제·원자 `facts`·출처·정제 사유·가격조건을 가진다. 위치 포인터는 삽입·이동에 따라 바뀔 수 있고 영구 상품 UID가 아니다. 관측 ID는 `sourceObservationId`로 exact 조회하며 productId 대체 키로 추정하지 않는다. 같은 공급사·차번의 legacy/current row를 임의 병합하지 않고 representation별 수를 분리한다. `matchedProductCount`는 반환 representation 수, `matchedObservationCount`는 current source rows, `matchedLegacyProductCount`는 legacy rows다. 이 세 수를 실물 대수로 쓰지 않는다.
+
+HTTP 상품 카드는 `data` 한 곳에서만 출력한다. `sourceObservations`는 state/reason/sourceSnapshot 요약만 반환하여 행을 두 번 출력하지 않는다. sourceSnapshot은 rawRowCount/normalizedCandidateCount/currentProductRowCount/returnedProductRowCount·관측 시각·capture 범위·관측 탭/RAW 미관측 등록탭을 포함한다. 미관측 등록탭을 빈 탭이나 원천 삭제로 추정하지 않는다. 응답 digest 및 Data Access 감사 digest는 원천행과 원자값을 포함한다. productId/관측ID 중복은 HOLD, source-only 매칭도 MATCHED이며 NO_MATCH로 숨기지 않는다. 동일 조건행에서 필터를 판정하고 일치 행의 모든 조건을 남긴다.
+
+원자 `facts`는 rawValue/normalizedValue/state/reasons/sourceRef(runId/rawRecordId/row/field)를 분리한다. `KNOWN/ZERO/UNKNOWN/HOLD`는 정제값 상태이며 원문 있음만으로 정제 확정하지 않는다. 모든 74입력 열은 출처에 대응하고 기간별 보증금 원자는 별도로 보존한다. `차명 원문/옵션 원문/예외사항/차고지/접수서류/비고` 자유문장6열은 값 null+RAW_FREE_TEXT_WITHHELD이며 나머지 미정제 사업 칸은 원문값+정제 null/UNKNOWN/RAW_FIELD_NOT_NORMALIZED다. 원문 payload/고객·서류·토큰·원문 오류는 반환하지 않는다. maker/model 원문 fallback은 검색·표시 전용이며 정제 HOLD는 유지한다. sourceStatus와 canonical review/판매목록 판정은 각각 구분한다.
+
+ERP의 실제 입력은 `/v1/consumers/erp-com/catalog-compat`의 `data.products` Record map이다. 기존 catalog capability와 명시 `referenceSourceScopes=["COLLECTED"]`가 있는 erp-com만 `?sourceScope=COLLECTED`를 요청할 수 있다. 미grant403은 RAW/products 읽기 전 차단하며 기본 요청과 화이트라벨은 기존 동작이다. allowlist `referenceObservationToCompatibilityProduct`가 현재 행 키/product_code/_key/id, nullable car_number/vehicle_uid, 표시용 차종·known 제원, 원문 차량상태, 기간별 rent/deposit/state 및 `_source_row_product` typed facts를 전달한다. 원문 spreading·임시차번 발급·판매상태 치환은 없다. 기존 legacy 입력과 current row 분모는 meta.legacyProductCount/sourceRowCoverage로 분리하며 합산 차량 수로 해석하지 않는다. ERP는 원천행 DTO의 typed HOLD/UNKNOWN을 확인해야 하며 일반 priceList의 숫자0 기본값을 확인된 ZERO로 승격하지 않는다. 기존 public feed·LISTABLE·ACTIVE·화이트라벨 권한을 확대하는 계약이 아니다.
+
+#### Explicit collected-source scope — code only, operating grants OFF
+
+The existing authenticated reference routes accept `sourceScope=COLLECTED` only for their existing reference consumer identity with an explicit `referenceSourceScopes=["COLLECTED"]` registration. Missing grant returns403 before source reads; invalid/duplicate scope returns400. Existing registrations and omitted/`LISTABLE` scope retain the listable projection. This code does not grant a deployed token new access or change the public feed.
+
+Collected results keep every source document separately, including non-listable, deleted/withdrawn and price-less records. `sourceRecord` states the original listable/status/supplier/source reference and condition coverage with `publicationDecision=HOLD`. Empty offers or terms are permitted only in a COLLECTED response with sourceRecord; they are never zero-price or sale eligibility. `priceConditions` retains each original key/period/mileage, allowlisted raw rent/deposit values, typed null/UNKNOWN and the two existing fee axes. Valid priceTerms, policy and vehicle facts reuse the same builder. Period-only lookups can retain a missing-rent row; monetary filters still require a validated matching priceTerm. Exact plate ambiguity keeps all candidates. Arbitrary raw fields/customer/secret payloads are excluded. Supplier codes remain preserved temporary external IDs.
+
+Operating scope registration, caller adoption and deployment require separate authorization and readback. The reference remains REFERENCE_ONLY/HOLD.
+
 `GET /v1/consumers/kakao-ops/catalog-reference`
+
+`?productId=<응답의 완전한 productId>`는 기존 Kakao/internal AI reference 필터의 정확 단건 조회다. 문자열을 trim·부분 매칭하거나 `sourceProductId`·차량번호·공급사/RP 코드·external ID에서 추정하지 않는다. 미존재 ID는 HTTP200 빈 목록/`NO_MATCH`, 중복 ID는 `PRODUCT_ID_MULTIPLE_PRODUCTS` HOLD, 기존 ID와 공급사·차량번호 충돌은 빈 목록/`PRODUCT_ID_IDENTITY_CONFLICT` HOLD다. 기간·금액 필터는 한 조건행에서 함께 평가하며, 일치 상품의 모든 오퍼/형제 조건행은 그대로 반환한다. 기존 인증/capability를 먼저 검사하며 COLLECTED는 별도 기존 grant가 있어야 한다. 이 추가 코드의 운영 반영은 해당 배포 readback 이전까지 HOLD다.
 
 - only the separately registered `kakao-ops` identity may use it;
 - projects current listable ERP5 products in memory without a Firestore write;

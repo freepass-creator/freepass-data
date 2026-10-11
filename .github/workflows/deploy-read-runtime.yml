@@ -90,6 +90,29 @@ jobs:
           fi
           test "$GITHUB_REF" = 'refs/heads/main'
 
+      - name: Validate public approval before deployment effects
+        shell: bash
+        env:
+          APPROVED_PLAN_DIGEST: ${{ vars.FREEPASS_DATA_PUBLIC_RUNTIME_APPROVED_DIGEST }}
+        run: |
+          set -euo pipefail
+          # No authentication, image publication or Cloud Run mutation precedes this gate.
+          test "$ALLOW_UNAUTHENTICATED" = "$GRANT_PUBLIC_INVOKER"
+          if [ "$GRANT_PUBLIC_INVOKER" = "true" ] || [ "$SERVICE_NAME" = "freepass-data-public" ] || [ "$RUNTIME_ENTRYPOINT" = "dist/src/api/public-server.js" ] || [ "$RUNTIME_SERVICE_ACCOUNT" = "freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com" ]; then
+            test "$PROJECT_ID" = 'freepasserp5'
+            test "$REGION" = 'asia-northeast3'
+            test "$SERVICE_NAME" = 'freepass-data-public'
+            test "$RUNTIME_SERVICE_ACCOUNT" = 'freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com'
+            test "$RUNTIME_ENTRYPOINT" = 'dist/src/api/public-server.js'
+            test "$USE_CONSUMER_SECRETS" = "false"
+            test "$MAX_INSTANCES" = "4"
+            test "$RUNTIME_CONCURRENCY" = "16"
+            plan_digest="$(node scripts/public-runtime-plan-digest.mjs docs/PUBLIC-RUNTIME-PLAN.md)"
+            test -n "$APPROVED_PLAN_DIGEST"
+            test "$plan_digest" = "$APPROVED_PLAN_DIGEST"
+            echo 'PUBLIC_RUNTIME_APPROVAL_VALIDATED=true' >> "$GITHUB_ENV"
+          fi
+
       - name: Authenticate deploy identity
         uses: google-github-actions/auth@v2
         with:
@@ -144,19 +167,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          : "${FREEPASS_SHEET_F04_ID:?MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID}"
-          auth_flag='--no-allow-unauthenticated'
-          if [ "$ALLOW_UNAUTHENTICATED" = "true" ]; then auth_flag='--allow-unauthenticated'; fi
+          runtime_env="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5"
           secret_args=()
+          public_runtime_args=()
           if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
+            : "${FREEPASS_SHEET_F04_ID:?MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID}"
+            runtime_env="$runtime_env,FREEPASS_SHEET_F04_ID=$FREEPASS_SHEET_F04_ID"
             secret_args+=(--set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:$CONSUMERS_SECRET_VERSION,EANCAR_ONE_API_KEY=$IANCAR_SECRET_NAME:$IANCAR_SECRET_VERSION")
+          else
+            public_runtime_args+=(--timeout=30s --cpu=1 --memory=512Mi)
           fi
           gcloud run deploy "$SERVICE_NAME" \
             --project="$PROJECT_ID" --region="$REGION" --platform=managed \
             --image="$IMAGE_REF" --service-account="$RUNTIME_SERVICE_ACCOUNT" \
-            --ingress=all --max-instances="$MAX_INSTANCES" --concurrency="$RUNTIME_CONCURRENCY" "$auth_flag" \
-            --set-env-vars="NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5,FREEPASS_SHEET_F04_ID=$FREEPASS_SHEET_F04_ID" \
-            "${secret_args[@]}" --quiet
+            --ingress=all --max-instances="$MAX_INSTANCES" --concurrency="$RUNTIME_CONCURRENCY" --no-allow-unauthenticated \
+            --set-env-vars="$runtime_env" \
+            "${secret_args[@]}" "${public_runtime_args[@]}" --quiet
 
       - name: Grant public invoker only when requested
         if: ${{ inputs.grant_public_invoker == true }}
@@ -165,6 +191,7 @@ jobs:
           APPROVED_PLAN_DIGEST: ${{ vars.FREEPASS_DATA_PUBLIC_RUNTIME_APPROVED_DIGEST }}
         run: |
           set -euo pipefail
+          test "${PUBLIC_RUNTIME_APPROVAL_VALIDATED:-false}" = "true"
           test "$GRANT_PUBLIC_INVOKER" = "true"
           test "$ALLOW_UNAUTHENTICATED" = "true"
           # 승인 게이트: 개발 총괄이 승인한 계획 digest 를 저장소 변수에 넣어야만 allUsers 를 건다(계획서가 바뀌면 digest 가 달라져 막힌다).

@@ -148,6 +148,8 @@ test('backup failure blocks all atom mutations and retirement is never automatic
   assert.ok(!STAGES.some(([, , args]) => args.includes('--retire')));
 });
 test('retired bridge has no schedule, credentials, external checkout or data execution', () => {
+  const source = readFileSync(new URL('../scripts/data-delivery-owner.mjs', import.meta.url), 'utf8');
+  for (const forbidden of ['historicalMain', 'spawnSync', 'writeFileSync', 'mkdirSync', 'FREEPASS_DATA_ENGINE_ROOT', 'FREEPASS_DATA_RECEIPT_PATH']) assert.ok(!source.includes(forbidden), forbidden);
   const workflow = readFileSync(new URL('../.github/workflows/data-owned-refresh.yml', import.meta.url), 'utf8');
   assert.ok(workflow.includes('RETIRED_PRE_ONE_DELIVERY_ENGINE'));
   for (const forbidden of ['schedule:', 'cron:', 'secrets.', 'id-token:', 'google-github-actions/auth', 'repository: freepass-creator/freepasserp4', '--execute']) assert.ok(!workflow.includes(forbidden), forbidden);

@@ -1,7 +1,6 @@
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // RETIRED historical adapter. Its CLI cannot execute; exports retain regression evidence.
@@ -138,93 +137,6 @@ export async function runDelivery({ execute, assertOwnership, readSnapshot, seal
   return receipt;
 }
 
-function command(command, args, cwd, env = process.env) {
-  const result = spawnSync(command, args, { cwd, env, encoding: 'utf8', shell: false, timeout: 20 * 60_000, maxBuffer: 64 * 1024 * 1024 });
-  if (result.error || result.status !== 0) {
-    const error = new Error('ADAPTER_COMMAND_FAILED');
-    error.code = result.error?.code === 'ETIMEDOUT' ? 'PROCESS_TIMEOUT' : result.error ? 'PROCESS_SPAWN_FAILED' : 'ADAPTER_EXIT_NONZERO';
-    error.executionExitCode = result.status;
-    throw error;
-  }
-  return result.stdout;
-}
-
-// Audit-only historical implementation; deliberately not connected to the entrypoint.
-async function historicalMain() {
-  const engineRoot = resolve(process.env.FREEPASS_DATA_ENGINE_ROOT || '');
-  if (!process.env.FREEPASS_DATA_ENGINE_ROOT || command('git', ['rev-parse', 'HEAD'], engineRoot).trim() !== ENGINE_REVISION) throw new Error('ENGINE_PIN_MISMATCH');
-  command('git', ['diff', '--exit-code', 'HEAD'], engineRoot);
-  const lockfileDigest = createHash('sha256').update(readFileSync(join(engineRoot, 'package-lock.json'))).digest('hex');
-  const output = resolve(process.env.FREEPASS_DATA_RECEIPT_PATH || 'tmp/data-delivery-receipt.json');
-  mkdirSync(resolve(output, '..'), { recursive: true });
-  const assertPrivateBucket = () => {
-    if (process.env.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET !== PRIVATE_EVIDENCE_BUCKET) throw new Error('PRIVATE_BUCKET_TARGET_MISMATCH');
-    const metadata = JSON.parse(command('gcloud', ['storage', 'buckets', 'describe', `gs://${PRIVATE_EVIDENCE_BUCKET}`, '--format=json'], engineRoot));
-    if (!privateBucketDecision(metadata)) throw new Error('PRIVATE_BUCKET_NOT_ENFORCED');
-  };
-  assertPrivateBucket();
-  const assertOwnership = async () => {
-    const workflow = JSON.parse(command('gh', ['api', `repos/${LEGACY_REPOSITORY}/actions/workflows/${LEGACY_WORKFLOW}`], engineRoot));
-    const runs = JSON.parse(command('gh', ['api', '--paginate', '--slurp', `repos/${LEGACY_REPOSITORY}/actions/workflows/${LEGACY_WORKFLOW}/runs?per_page=100`], engineRoot));
-    const oldWriterPolicy = JSON.parse(command('gcloud', ['iam', 'service-accounts', 'get-iam-policy', 'github-inventory-writer@freepasserp5.iam.gserviceaccount.com', '--project=freepasserp5', '--format=json'], engineRoot));
-    const oldWriterKeys = JSON.parse(command('gcloud', ['iam', 'service-accounts', 'keys', 'list', '--iam-account=github-inventory-writer@freepasserp5.iam.gserviceaccount.com', '--managed-by=user', '--project=freepasserp5', '--format=json'], engineRoot));
-    const decision = ownershipDecision({ env: process.env, workflow, runs: { workflow_runs: runs.flatMap(page => page.workflow_runs) }, oldWriterPolicy, oldWriterKeys });
-    if (decision.status !== 'READY') throw new Error(`HOLD:${decision.blockers.join(',')}`);
-  };
-  if (process.argv.includes('--shadow')) {
-    if (process.env.GITHUB_REPOSITORY !== 'freepass-creator/freepass-data' || process.env.GITHUB_REF !== 'refs/heads/main' || process.env.GOOGLE_CLOUD_PROJECT !== 'freepasserp5') throw new Error('SHADOW_TARGET_MISMATCH');
-    command('npx', ['tsx', 'scripts/capture-sales-publish-snapshot.mts', '--erp5', '--out=tmp/data-delivery-shadow.json'], engineRoot, { ...process.env, ERP5_FIREBASE_USE_ADC: 'true' });
-    // --write-receipt mutates ops/public_catalog_publication in the frozen engine.
-    // It is intentionally omitted on the genuinely read-only shadow path.
-    command('npx', ['tsx', 'scripts/verify-whitelabel-publication.mts', '--snapshot=tmp/data-delivery-shadow.json'], engineRoot, { ...process.env, ERP5_FIREBASE_USE_ADC: 'true' });
-    const bytes = readFileSync(join(engineRoot, 'tmp/data-delivery-shadow.json'));
-    const shadow = { version: 'freepass-data-refresh-attempt/1', status: 'SHADOW_ENGINE_PARITY_VERIFIED', engineRevision: ENGINE_REVISION, lockfileDigest, writeExecuted: false, canonicalCutoverVerified: false, allConsumerReadbackVerified: false, snapshotSha256: createHash('sha256').update(bytes).digest('hex') };
-    writeFileSync(output, `${JSON.stringify(shadow, null, 2)}\n`);
-    console.log(JSON.stringify(shadow));
-    return;
-  }
-  // Preflight is read-only; no supplier credentials are materialized.
-  await assertOwnership();
-  if (process.argv.includes('--preflight')) { console.log(JSON.stringify({ status: 'READY', engineRevision: ENGINE_REVISION, writeExecuted: false })); return; }
-  if (!process.argv.includes('--execute')) throw new Error('EXPLICIT_EXECUTE_REQUIRED');
-  const { CONSUMER_SWITCH_REGISTRY } = await import('../src/domain/consumer-cutover.ts');
-  let checkpoint = 0;
-  const receipt = await runDelivery({
-    execution: { runId: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT, revision: process.env.GITHUB_SHA, lockfileDigest },
-    consumers: CONSUMER_SWITCH_REGISTRY, assertOwnership,
-    execute: async (exe, args) => {
-      command(exe, args, engineRoot, { ...process.env, ERP5_FIREBASE_USE_ADC: 'true',
-        // Frozen adapter's historical name gate. Independent Data owner+IAM fence
-        // above is mandatory; this is NOT claimed as the new security boundary.
-        GITHUB_WORKFLOW: 'ERP5 SSOT 원천 최신화(매시간)' });
-    },
-    readSnapshot: async () => readFileSync(join(engineRoot, 'tmp/data-delivery-snapshot.json')),
-    sealBackup: async () => {
-      assertPrivateBucket();
-      const bucket = process.env.FREEPASS_DATA_REFRESH_EVIDENCE_BUCKET;
-      if (!bucket) throw new Error('PRIVATE_BACKUP_BUCKET_REQUIRED');
-      const backup = join(engineRoot, 'tmp/data-delivery-before.json');
-      assertCompatibleBackup(JSON.parse(readFileSync(backup, 'utf8')));
-      const uri = `gs://${bucket}/delivery/${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}/before.json`;
-      command('gcloud', ['storage', 'cp', backup, uri, '--if-generation-match=0'], engineRoot);
-      const readback = join(engineRoot, 'tmp/data-delivery-before-readback.json');
-      command('gcloud', ['storage', 'cp', uri, readback], engineRoot);
-      const digest = createHash('sha256').update(readFileSync(backup)).digest('hex');
-      if (digest !== createHash('sha256').update(readFileSync(readback)).digest('hex')) throw new Error('BACKUP_READBACK_FAILED');
-      return { uri, sha256: digest, verified: true };
-    },
-    persistReceipt: async value => {
-      writeFileSync(output, `${JSON.stringify(value, null, 2)}\n`);
-      const uri = `gs://${PRIVATE_EVIDENCE_BUCKET}/delivery/${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}/checkpoints/${String(++checkpoint).padStart(3, '0')}.json`;
-      command('gcloud', ['storage', 'cp', output, uri, '--if-generation-match=0'], engineRoot);
-      const readback = `${output}.readback`;
-      command('gcloud', ['storage', 'cp', uri, readback], engineRoot);
-      if (!readFileSync(output).equals(readFileSync(readback))) throw new Error('ATTEMPT_CHECKPOINT_READBACK_FAILED');
-    }
-  });
-  console.log(JSON.stringify(receipt));
-  if (receipt.status !== 'SUCCEEDED') process.exitCode = 2;
-}
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   // Fail before credentials, engine checkout, backup or any external command.

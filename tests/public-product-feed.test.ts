@@ -5,7 +5,7 @@ import { createConsumerGateway, type ConsumerBinding } from '../src/api/consumer
 import { DataAccessGateway } from '../src/application/data-access-gateway.js';
 import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
 import { publicRuntimeStatsForTest, resetPublicRuntimeForTest } from '../src/api/consumer-gateway.js';
-import { buildPublicProductFeed } from '../src/api/public-product-feed.js';
+import { buildPublicProductFeed, buildPublicProductQuote, publicProductShareToken } from '../src/api/public-product-feed.js';
 import type { CatalogCompatibilitySnapshot } from '../src/infra/erp5-compat-catalog-reader.js';
 
 const token = 'test-service-token-0123456789abcdef';
@@ -54,7 +54,7 @@ const product = (extra: Record<string, unknown> = {}) => ({
   policy_id: 'POLICY_PUBLIC',
   image_urls: ['https://example.test/public-car.jpg'],
   price: {
-    '36': { rent: 500000, deposit: 1000000, depositState: 'AMOUNT' },
+    '36': { rent: 500000, deposit: 1000000, depositState: 'KNOWN' },
   },
   supplierBillingFee: 1,
   channelPayoutFee: 1,
@@ -75,6 +75,60 @@ const appWith = (snap: CatalogCompatibilitySnapshot) => {
 };
 
 describe('public product feed v1', () => {
+  it('keeps legacy input aliases compatible with live deposit enums and display brand', () => {
+    const feed = buildPublicProductFeed(snapshot({ P1: product({ provider_company_code: 'PT-0001', provider_name: '공급사', price: {
+      '24': { rent: 1, deposit: 10, depositState: 'AMOUNT' },
+      '36': { rent: 1, deposit: null, depositState: 'VERIFIED_NO_DEPOSIT' },
+      '48': { rent: 1, deposit: 0, depositState: 'UNKNOWN' },
+      '60': { rent: 1, deposit: 0, depositState: 'NOT_APPLICABLE' },
+    } }) }), { p: 'PT-0001' });
+    expect(feed.brand).toBe('공급사');
+    expect(feed.products[0]?.price).toEqual({
+      '24': { rent: 1, deposit: 10, depositState: 'KNOWN' },
+      '36': { rent: 1, deposit: 0, depositState: 'ZERO' },
+      '48': { rent: 1, deposit: null, depositState: 'UNKNOWN' },
+      '60': { rent: 1, deposit: null, depositState: 'NOT_APPLICABLE' },
+    });
+  });
+
+  it('preserves Korean vehicle-number identity and rejects ambiguous share tokens', () => {
+    const code = '183어2364';
+    const snap = snapshot({ a: product({ product_code: code, _key: 'veh_183어2364', publicProductKey: code }), b: product({ product_code: code, _key: 'other', publicProductKey: 'other' }) });
+    expect(buildPublicProductQuote(snap, code, {})?.product.publicProductKey).toBe(code);
+    expect(buildPublicProductQuote(snap, publicProductShareToken(code), {})).toBeNull();
+    const ajv = new Ajv2020({ strict: false });
+    ajv.addSchema(publicSchema);
+    expect(ajv.getSchema('https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json#/$defs/quote')!(buildPublicProductQuote(snap, code, {}))).toBe(true);
+    expect(() => buildPublicProductQuote(snap, 'https://example.test', {})).toThrow();
+    expect(() => buildPublicProductQuote(snap, '183어2364\u0000', {})).toThrow();
+  });
+
+  it('rejects ambiguous exact aliases independently of product order', () => {
+    const a = product({ publicProductKey: 'a', _key: 'a', product_code: 'shared' });
+    const b = product({ publicProductKey: 'b', _key: 'b', product_code: 'shared' });
+    for (const entries of [{ a, b }, { b, a }]) {
+      expect(buildPublicProductQuote(snapshot(entries), 'shared', {})).toBeNull();
+      expect(buildPublicProductQuote(snapshot(entries), 'a', {})?.product.publicProductKey).toBe('a');
+    }
+    const duplicate = snapshot({ a, b: { ...b, publicProductKey: 'a' } });
+    expect(buildPublicProductQuote(duplicate, 'a', {})).toBeNull();
+  });
+
+  it('preserves complete galleries and rejects oversized galleries', () => {
+    const images = Array.from({ length: 50 }, (_, i) => `https://example.test/${i}.jpg`);
+    const quote = buildPublicProductQuote(snapshot({ P1: product({ image_urls: images }) }), 'P1', {});
+    expect(quote?.product.image_urls).toHaveLength(50);
+    expect(() => buildPublicProductQuote(snapshot({ P1: product({ image_urls: Array.from({ length: 201 }, (_, i) => `https://example.test/${i}.jpg`) }) }), 'P1', {})).toThrow('PUBLIC_IMAGES_LIMIT');
+  });
+
+  it('resolves whole hyphenated keys before tokens and legacy share suffixes', () => {
+    const snap = snapshot({ a: product({ product_code: 'PD-260506-020', _key: 'veh_PD-260506-020', publicProductKey: 'PD-260506-020' }), b: product({ product_code: 'PD', _key: 'PD', publicProductKey: 'PD' }) });
+    for (const code of ['PD-260506-020', publicProductShareToken('PD-260506-020'), 'PD-260506-020-share']) {
+      expect(buildPublicProductQuote(snap, code, {})?.product.product_code).toBe('PD-260506-020');
+    }
+    expect(buildPublicProductQuote(snap, '260506-020', {})).toBeNull();
+  });
+
   it('builds products from the allowlist and excludes internal fields and vin', () => {
     const feed = buildPublicProductFeed(snapshot({ P1: product() }), { p: 'RP_TEST', wl: 'test' });
     expect(feed.count).toBe(1);
@@ -82,7 +136,7 @@ describe('public product feed v1', () => {
       publicProductKey: 'P1',
       product_code: 'P1',
       maker: '테스트제조사',
-      price: { '36': { rent: 500000, deposit: 1000000, depositState: 'AMOUNT' } },
+      price: { '36': { rent: 500000, deposit: 1000000, depositState: 'KNOWN' } },
     });
     expect(JSON.stringify(feed)).not.toContain('supplierBillingFee');
     expect(JSON.stringify(feed)).not.toContain('channelPayoutFee');
@@ -130,10 +184,10 @@ describe('public product feed v1', () => {
 
   it('preserves compatibility deposit state without recalculating deposit', () => {
     const feed = buildPublicProductFeed(snapshot({
-      P1: product({ price: { '36': { rent: 500000, deposit: 0, depositState: 'VERIFIED_NO_DEPOSIT' } } }),
+      P1: product({ price: { '36': { rent: 500000, deposit: 0, depositState: 'ZERO' } } }),
       P2: product({ _key: 'P2', product_code: 'P2', publicProductKey: 'P2', price: { '36': { rent: 500000, deposit: 0, depositState: 'UNKNOWN' } } }),
     }), {});
-    expect(feed.products[0]!.price['36']).toEqual({ rent: 500000, deposit: 0, depositState: 'VERIFIED_NO_DEPOSIT' });
+    expect(feed.products[0]!.price['36']).toEqual({ rent: 500000, deposit: 0, depositState: 'ZERO' });
     expect(feed.products[1]!.price['36']).toEqual({ rent: 500000, deposit: null, depositState: 'UNKNOWN' });
   });
 

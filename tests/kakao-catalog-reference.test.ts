@@ -1,7 +1,78 @@
 process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
+import { MemorySourceStore } from '../src/infra/source-memory-store.js';
+import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
+import sheetSpec from '../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+import { projectReferenceObservation, readCurrentReferenceObservations, filterReferenceProducts } from '../src/application/kakao-catalog-reference.js';
+import type { RawRecord } from '../src/domain/source.js';
+import { readFileSync } from 'node:fs';
+
+describe('current source observations in existing private reference', () => {
+  const sourceId = sheetSpec.supplierManagement.sourceBinding.sourceId;
+  const at = '2026-10-11T00:00:00Z';
+  const fixture = (id: string, deposit: string): RawRecord => {
+    const values = sheetSpec.inputHeaders.map(() => '');
+    const set = (key: string, value: string) => { values[sheetSpec.inputHeaders.indexOf(key)] = value; };
+    for (const [key, value] of Object.entries({ 회사명: '렌트존', 차량번호: '신차', 차량상태: '출고협의', 상품구분: '신차렌트',
+      제조사: '기아', 모델: '레이', 장기보증: deposit, '48개월': '300000', '60개월': '280000', '옵션 원문': 'PRIVATE_PHONE_AND_CUSTOMER' })) set(key, value);
+    return { rawRecordId: id, sourceId, sourceRecordId: id, sourceFingerprint: id, runId: 'fixture-run', observedAt: at,
+      payload: { values, supplierCode: 'RP_FIXTURE', customerName: 'PRIVATE_CUSTOMER', token: 'PRIVATE_TOKEN' } };
+  };
+  it('keeps two rejected observations with separate original/normalized conditions, nullable identity and no PII payload', async () => {
+    const store = new MemorySourceStore();
+    await store.beginRun({ runId: 'fixture-run', sourceId, status: 'RUNNING', startedAt: at,
+      coverage: { mode: 'PARTIAL', completeness: 'COMPLETE' }, headStatus: 'PENDING', rawCount: 0, candidateCount: 0, warningCount: 0 });
+    for (const raw of [fixture('one', '500000'), fixture('two', '무보증')]) {
+      await store.appendRaw(raw); await store.appendCandidate(normalizeSharedSheet(raw).record);
+    }
+    await store.completeRun({ runId: 'fixture-run', completedAt: at, observedAt: at, checkpoint: { sourceId, observedAt: at },
+      coverage: { mode: 'PARTIAL', completeness: 'COMPLETE' }, rawCount: 2, candidateCount: 2, lineageCount: 0, warningCount: 2 });
+    const sourceObservations = await readCurrentReferenceObservations(store);
+    expect(sourceObservations.observations).toHaveLength(2);
+    const [paid, zero] = sourceObservations.observations;
+    expect(paid).toMatchObject({ vehicleAssetId: null, identityKind: 'CURRENT_SOURCE_ROW', representationKind: 'CURRENT_SOURCE_ROW_PRODUCT', publicationDecision: 'HOLD',
+      source: { candidateStatus: 'REJECTED' }, original: { plateNumber: '신차', status: '출고협의' }, normalized: { plateNumber: null } });
+    expect(paid!.normalizationIssues).toContain('PLATE_NOT_ASSIGNED');
+    expect(paid!.normalized.priceConditions[0]).toMatchObject({ depositAmount: 500000, depositState: 'KNOWN' });
+    expect(zero!.normalized.priceConditions[0]).toMatchObject({ depositAmount: 0, depositState: 'ZERO' });
+    expect(zero!.observationId).not.toBe(paid!.observationId);
+    expect(JSON.stringify(sourceObservations)).not.toMatch(/PRIVATE_|customerName|token/);
+    expect(new Set(paid!.facts.map(f => f.sourceRef.field))).toEqual(new Set(sheetSpec.inputHeaders));
+    const reference = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: at, sourceScope: 'COLLECTED', products: {}, sourceObservations });
+    const matched = filterReferenceProducts(reference, { sourceScope: 'COLLECTED', supplierName: '렌트존', model: '레이', termMonths: '48' });
+    expect(matched.data).toEqual(sourceObservations.observations);
+    expect(matched.sourceObservations!.observations).toEqual(sourceObservations.observations);
+    expect(filterReferenceProducts(reference, { sourceScope: 'COLLECTED', depositState: 'ZERO' }).sourceObservations!.observations).toEqual([zero]);
+    expect(filterReferenceProducts(reference, { sourceScope: 'COLLECTED', sourceObservationId: paid!.observationId }).sourceObservations!.observations).toEqual([paid]);
+    expect(filterReferenceProducts(reference, { sourceScope: 'COLLECTED', productId: paid!.observationId }).sourceObservations!.observations).toEqual([]);
+    expect(filterReferenceProducts(reference, { sourceScope: 'COLLECTED', productId: paid!.productId }).data).toEqual([paid]);
+    const defaultSource = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: at, products: { x: { listable: true, provider_company_code: 'RP_FIXTURE', price: { '48': { rent: 300000 } } } }, sourceObservations });
+    expect(defaultSource.sourceObservations).toBeUndefined();
+  });
+  it('fails closed on counts, foreign candidates and head drift without hiding partial source reads', async () => {
+    const raw = fixture('one', '무보증'), candidate = normalizeSharedSheet(raw).record;
+    const head = { sourceId, runId: raw.runId, observedAt: at, acceptedAt: at, checkpoint: { sourceId, observedAt: at }, coverage: { mode: 'PARTIAL' as const, completeness: 'COMPLETE' as const } };
+    const port = { getSourceHead: async () => head, getRun: async () => ({ ...head, status: 'COMPLETED', headStatus: 'CURRENT', rawCount: 2, candidateCount: 1 }),
+      listRaw: async () => [raw], listCandidates: async () => [candidate] } as unknown as Parameters<typeof readCurrentReferenceObservations>[0];
+    await expect(readCurrentReferenceObservations(port)).rejects.toThrow('REFERENCE_SOURCE_READ_INCOMPLETE');
+    expect(() => projectReferenceObservation(raw, { ...candidate, runId: 'foreign' })).toThrow('REFERENCE_SOURCE_CANDIDATE_MISMATCH');
+    expect(await readCurrentReferenceObservations({ getSourceHead: async () => null } as unknown as typeof port)).toMatchObject({ state: 'HOLD', reasonCode: 'SOURCE_HEAD_MISSING', observations: [] });
+    const complete = { ...port, getRun: async () => ({ ...head, startedAt: at, warningCount: 1, status: 'COMPLETED' as const, headStatus: 'CURRENT' as const, rawCount: 1, candidateCount: 1 }) };
+    let reads = 0;
+    await expect(readCurrentReferenceObservations({ ...complete, getSourceHead: async () => reads++ ? { ...head, runId: 'new-run' } : head })).rejects.toThrow('REFERENCE_SOURCE_HEAD_DRIFT');
+    const current = await readCurrentReferenceObservations({ ...complete, getSourceHead: async () => ({ ...head, sourceId }) });
+    expect(current.observations).toHaveLength(1);
+    const row = projectReferenceObservation(raw, candidate);
+    const duplicate = buildKakaoCatalogReference({ consumerId: 'kakao-ops', sourceScope: 'COLLECTED', observedAt: at, products: {},
+      sourceObservations: { state: 'HOLD' as const, reasonCode: 'FIXTURE', sourceSnapshot: current.sourceSnapshot!, observations: [row,row] } });
+    expect(filterReferenceProducts(duplicate, { sourceScope: 'COLLECTED', sourceObservationId: row.observationId }).meta).toMatchObject({
+      queryResolution: { state: 'HOLD', reasonCode: 'SOURCE_OBSERVATION_MULTIPLE_RECORDS', matchedProductCount: 2 } });
+  });
+});
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import { precomputeOfferEconomics, readStoredTermFees } from '../src/application/resolve-offer-commercial-terms.js';
+import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 import {
   KAKAO_COMMISSION_POLICY,
   KAKAO_COMMISSION_POLICY_2026_10_03,
@@ -19,6 +90,39 @@ import {
 } from '../src/application/kakao-catalog-reference.js';
 
 describe('shared reference policy context', () => {
+  it('keeps legacy DTO compatibility while rejecting contradictory displacement states', () => {
+    const schema = JSON.parse(readFileSync(new URL('../contracts/kakao-catalog-reference-v1.schema.json', import.meta.url), 'utf8'));
+    const validate = new Ajv2020({ strict: false }).compile({ $defs: schema.$defs, ...schema.$defs.product.properties.vehicle });
+    const legacy = buildKakaoCatalogReferenceProduct('synthetic', { listable: true, provider_company_code: 'RP013', price: { '36': { rent: 500000 } } })!.vehicle;
+    const { engineCc, engineCcState, ...oldVehicle } = legacy;
+    expect(validate(oldVehicle)).toBe(true);
+    expect(validate({ ...oldVehicle, engineCc: 0, engineCcState: 'KNOWN' })).toBe(true);
+    expect(validate({ ...oldVehicle, engineCc: null, engineCcState: 'HOLD' })).toBe(true);
+    expect(validate({ ...oldVehicle, engineCc: null, engineCcState: 'KNOWN' })).toBe(false);
+    expect(validate({ ...oldVehicle, engineCc: 1998, engineCcState: 'HOLD' })).toBe(false);
+    expect(validate({ ...oldVehicle, engineCc: 1998 })).toBe(false);
+  });
+  it.each([
+    [1998, 1998], ['1998', 1998], ['1,998', 1998], [0, 0], ['0', 0],
+    [undefined, null], [null, null], ['', null], ['unknown', null], ['1998cc', null], [-1, null],
+  ])('preserves source engine_cc %s without inventing displacement or changing source identities', (raw, expected) => {
+    const product = { listable: true, provider_company_code: 'RP013', product_type: '중고렌트',
+      fuel_type: '가솔린', drive_type: 'AWD', engine_cc: raw, vehicle_uid: 'existing-immutable-uid',
+      price: { '36_2만': { rent: 500000, deposit: 1000000 }, '48_2만': { rent: 450000, deposit: null } } };
+    const source = { consumerId: 'kakao-ops', observedAt: '2026-10-10T00:00:00Z', products: { synthetic: product } };
+    const original = structuredClone(source);
+    const reference = buildKakaoCatalogReference(source);
+    const row = reference.data[0]!;
+    expect(row.vehicle).toMatchObject({ engineCc: expected, engineCcState: expected === null ? 'HOLD' : 'KNOWN', fuel: '가솔린', drive: 'AWD' });
+    expect(row.vehicleMasterReference).toMatchObject({ state: 'HOLD', masterId: null, trimId: null });
+    expect(row.sourceProductId).toBe('synthetic');
+    expect(row.offers[0]!.supplierId).toBe('RP013');
+    expect(row.offers[0]!.priceTerms.map(term => term.termKey)).toEqual(['source:36_2만', 'source:48_2만']);
+    expect(buildInternalAiReference({ ...source, consumerId: 'internal-ai-test' }).data).toEqual(reference.data);
+    expect(source).toEqual(original);
+    const missingSpecs = buildKakaoCatalogReference({ ...source, products: { synthetic: { ...product, fuel_type: '', drive_type: '' } } });
+    expect(missingSpecs.data[0]!.vehicle).toMatchObject({ fuel: null, drive: null });
+  });
   it('attaches only native pairs from the provided sealed snapshot, preserving source and period identities', () => {
     const observedAt = new Date().toISOString();
     const body = { readAt: observedAt, masters: [{ id: 'native-master', data: { maker: '현대', model: '쏘나타', sub_model: '쏘나타 DN8', sub_model_aliases: ['소나타 DN8'] } }],
@@ -74,10 +178,22 @@ describe('shared reference policy context', () => {
     expect(filterReferenceZeroDeposit(reference, { depositState: 'ZERO', depositScope: 'ALL_TERMS' }).data).toEqual([]);
     expect(buildInternalAiReference({ ...input, consumerId: 'internal-ai-test' }).data).toEqual(reference.data);
     const stale = buildKakaoCatalogReference({ ...input, observedAt: '2026-10-09T00:15:01Z' });
-    expect(stale.data[0]!.offers[0]!.priceTerms.every(t => t.depositState === 'UNKNOWN' && t.depositAmount === null)).toBe(true);
+    expect(stale.data[0]!.offers[0]!.priceTerms.map(t => t.depositState)).toEqual(['UNKNOWN', 'UNKNOWN', 'KNOWN', 'UNKNOWN']);
+    expect(stale.data[0]!.offers[0]!.priceTerms[2]).toMatchObject({ depositAmount: 1000000,
+      depositEvidence: { reasonCode: 'SOURCE_AMOUNT', publicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE', publicationDecision: 'HOLD' } });
+    const staleCompat = withCompatibilityDepositEvidence(product, '2026-10-09T00:15:01Z').price as Record<string, Record<string, unknown>>;
+    expect(staleCompat['24_연30000km']).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
+    expect(staleCompat['24_연30000km']).not.toHaveProperty('depositPublicationDecision');
+    expect(staleCompat['24']).toMatchObject({ deposit: null, depositState: 'UNKNOWN' });
+    expect(buildKakaoCatalogReference({ ...input, observedAt: '2026-10-08T23:58:59Z' }).data[0]!.offers[0]!.priceTerms[2]!.depositState).toBe('UNKNOWN');
     expect(filterReferenceZeroDeposit(stale, { depositState: 'ZERO' }).data).toEqual([]);
     const mismatch = structuredClone(product); mismatch.price['24'].deposit = 1;
     expect(buildKakaoCatalogReferenceProduct('synthetic', mismatch, {}, {}, now)!.offers[0]!.priceTerms[0]!.depositState).toBe('UNKNOWN');
+    expect(buildKakaoCatalogReferenceProduct('synthetic', mismatch, {}, {}, '2026-10-09T00:15:01Z')!.offers[0]!.priceTerms[0]!.depositState).toBe('UNKNOWN');
+    const ambiguous = structuredClone(product); ambiguous.iancar_phase_one.priceAliases['24'] = '24:30000:year'; ambiguous.price['24'].deposit = 1000000;
+    expect(buildKakaoCatalogReferenceProduct('synthetic', ambiguous, {}, {}, '2026-10-09T00:15:01Z')!.offers[0]!.priceTerms[0]!.depositState).toBe('UNKNOWN');
+    const deleted = { ...product, _deleted: true };
+    expect(buildKakaoCatalogReferenceProduct('synthetic', deleted, {}, {}, '2026-10-09T00:15:01Z')!.offers[0]!.priceTerms[2]!.depositState).toBe('UNKNOWN');
     expect(resolveReferenceDeposit({ supplierId: 'RP012', productType: '중고렌트', note: '무보증', depositFree: true, sourceAmount: 0, termMonths: 24, monthlyRent: 500000 }).depositState).toBe('UNKNOWN');
   });
   it('searches confirmed zero without treating placeholders or mixed periods as all-free', () => {
@@ -150,6 +266,16 @@ describe('shared reference policy context', () => {
   it('empty or invalid recognized fields are not interpreted as an approved policy', () => {
     expect(resolveReferencePolicyContext(product, { POL1: { annual_mileage: { arbitrary: true } } })).toMatchObject({
       state: 'UNKNOWN', facts: [], reasonCode: 'POLICY_FACTS_MISSING' });
+  });
+  it('preserves native policy name/code and reuses supplier-scoped policy selection without approving name-only facts', () => {
+    const named = { ...policy, policy_name: '공급사 기본 조건' };
+    expect(resolveReferencePolicyContext(product, { native: named, other: { ...named, provider_company_code: 'RP023' } }))
+      .toMatchObject({ state: 'REFERENCE', policyCode: 'POL1', policyName: '공급사 기본 조건', sourceRef: 'policy/native',
+        policyNameSourceRef: 'policy/native/policy_name', policyCodeSourceRef: 'policy/native/policy_code' });
+    expect(resolveReferencePolicyContext(product, { native: { policy_code: 'POL1', policy_name: '조건 확인 중', provider_company_code: 'RP013' } }))
+      .toMatchObject({ state: 'UNKNOWN', policyName: '조건 확인 중', facts: [], reasonCode: 'POLICY_FACTS_MISSING' });
+    expect(resolveReferencePolicyContext(product, { native: named, duplicate: named }))
+      .toMatchObject({ policyName: null, policyCode: null, reasonCode: 'POLICY_LINK_AMBIGUOUS' });
   });
 });
 
@@ -740,6 +866,52 @@ describe('general reference query', () => {
   });
 });
 
+describe('complete reference product ID lookup', () => {
+  const makeReference = () => buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-11T00:00:00Z', products: {
+    a: { listable: true, provider_company_code: 'RP013', provider_name: 'Synthetic Supplier', car_number: '123가4567',
+      price: { '36': { rent: 500000, deposit: 1000000 }, '48': { rent: 400000, deposit: null } } },
+    b: { listable: true, provider_company_code: 'RP012', provider_name: 'Other Supplier', car_number: '123나4567',
+      price: { '36': { rent: 600000, deposit: null } } },
+  } });
+  it('matches the whole returned ID, preserves sibling offers/terms and never changes the input', () => {
+    const ref = makeReference(), target = ref.data[0]!;
+    target.offers.push({ ...structuredClone(target.offers[0]!), offerId: 'sibling-offer', supplierId: 'RP012', supplierName: 'Other Supplier' });
+    const unchanged = structuredClone(ref);
+    const result = filterReferenceZeroDeposit(ref, { productId: target.productId, supplierId: 'RP013', supplierName: 'Synthetic Supplier', plateNumber: '123가4567', termMonths: '36', monthlyRentMin: '500000' });
+    expect(result.data).toEqual([target]);
+    expect(result.meta).toMatchObject({ projectedCount: 1, queryResolution: { state: 'MATCHED', reasonCode: null } });
+    expect(ref).toEqual(unchanged);
+    for (const productId of ['a', 'RP013', '123가4567', 'reference_', 'reference_missing']) {
+      const empty = filterReferenceZeroDeposit(ref, { productId });
+      expect(empty.data).toEqual([]);
+      expect(empty.meta).toMatchObject({ queryResolution: { state: 'NO_MATCH', reasonCode: null } });
+    }
+    for (const productId of ['', ' ', ' reference_a', 'reference_a ', ['reference_a'], 1])
+      expect(() => filterReferenceZeroDeposit(ref, { productId })).toThrow('REFERENCE_DEPOSIT_FILTER_INVALID');
+  });
+  it('keeps duplicate IDs on HOLD even when a supplier filter narrows the result', () => {
+    const ref = makeReference();
+    ref.data[1]!.productId = ref.data[0]!.productId;
+    const result = filterReferenceZeroDeposit(ref, { productId: ref.data[0]!.productId });
+    expect(result.data).toHaveLength(2);
+    expect(result.meta).toMatchObject({ queryResolution: { state: 'HOLD', reasonCode: 'PRODUCT_ID_MULTIPLE_PRODUCTS', matchedProductCount: 2 } });
+    const narrowed = filterReferenceZeroDeposit(ref, { productId: ref.data[0]!.productId, supplierId: 'RP013' });
+    expect(narrowed.data).toHaveLength(1);
+    expect(narrowed.meta).toMatchObject({ queryResolution: { state: 'HOLD', reasonCode: 'PRODUCT_ID_MULTIPLE_PRODUCTS' } });
+  });
+  it('holds conflicting plate/supplier identity without substituting another product; term misses stay NO_MATCH', () => {
+    const ref = makeReference(), productId = ref.data[0]!.productId;
+    for (const query of [{ productId, plateNumber: '123나4567' }, { productId, supplierId: 'RP012' }, { productId, supplierName: 'Other Supplier' }]) {
+      const result = filterReferenceZeroDeposit(ref, query);
+      expect(result.data).toEqual([]);
+      expect(result.meta).toMatchObject({ queryResolution: { state: 'HOLD', reasonCode: 'PRODUCT_ID_IDENTITY_CONFLICT', matchedProductCount: 0 } });
+    }
+    const miss = filterReferenceZeroDeposit(ref, { productId, plateNumber: '123가4567', termMonths: '60' });
+    expect(miss.data).toEqual([]);
+    expect(miss.meta).toMatchObject({ queryResolution: { state: 'NO_MATCH', reasonCode: null } });
+  });
+});
+
 describe('supplier and plate exact lookup', () => {
   it('normalizes lookup only, keeps every term and returns ambiguous candidates with HOLD', () => {
     const name='경진 렌트',plate='000가0000';
@@ -798,4 +970,59 @@ it('F04 source identity is lazy, required when recorded, and follows the configu
     if (previous === undefined) delete process.env.FREEPASS_SHEET_F04_ID;
     else process.env.FREEPASS_SHEET_F04_ID = previous;
   }
+});
+
+describe('collected reference scope preserves non-sellable and missing source conditions', () => {
+  const base = { provider_company_code: 'TEMP_A', provider_name: '같은공급사', maker: 'fixture', car_number: '123가4567', status_kind: '불가', engine_cc: 1998 };
+  const input = { consumerId: 'kakao-ops', observedAt: '2026-10-10T00:00:00Z', products: {
+    sold: { ...base, listable: true, price: { '36': { rent: 500000, deposit: null } } },
+    blocked: { ...base, listable: false, customer_name: 'private-customer', password: 'private-secret', price: { '12': { rent: 400000, deposit: 1000000, customer: 'private-customer' }, '36': { rent: null, deposit: null, token: 'private-secret' }, 'bad-key': { rent: 'unknown' } } },
+    missing: { ...base, listable: false, price: null },
+    unknownSupplier: { ...base, provider_company_code: '', listable: null, price: { '24_3만': { rent: null, deposit: 0 } } },
+  } };
+  it('retains every source ID and original row evidence with no fabricated zero or offer', () => {
+    const original = structuredClone(input);
+    expect(buildKakaoCatalogReference(input).data.map(p => p.sourceProductId)).toEqual(['sold']);
+    const r = buildKakaoCatalogReference({ ...input, sourceScope: 'COLLECTED' });
+    expect(r.data).toHaveLength(4); expect(input).toEqual(original);
+    expect(JSON.stringify(r)).not.toContain('private-customer');
+    expect(JSON.stringify(r)).not.toContain('private-secret');
+    const blocked = r.data.find(p => p.sourceProductId === 'blocked')!;
+    expect(blocked.sourceRecord).toMatchObject({ listable: false, status: '불가', conditionState: 'HOLD', reasonCode: 'SOURCE_PRICE_CONDITIONS_PARTIAL', publicationDecision: 'HOLD' });
+    expect(blocked.sourceRecord!.priceConditions).toHaveLength(3);
+    expect(blocked.sourceRecord!.priceConditions.find(t => t.sourceKey === '36')).toMatchObject({ termMonths: 36, monthlyRentSourceValue: null, depositSourceValue: null, state: 'HOLD' });
+    expect(blocked.sourceRecord!.priceConditions.find(t => t.sourceKey === 'bad-key')!.termMonths).toBeNull();
+    const missing = r.data.find(p => p.sourceProductId === 'missing')!;
+    expect(missing.offers[0]!.priceTerms).toEqual([]);
+    expect(missing.sourceRecord).toMatchObject({ reasonCode: 'SOURCE_PRICE_CONDITIONS_MISSING', priceConditions: [] });
+    expect(r.data.find(p => p.sourceProductId === 'unknownSupplier')!.offers).toEqual([]);
+    expect(r.data.find(p => p.sourceProductId === 'unknownSupplier')!.sourceRecord!.priceConditions[0]).toMatchObject({
+      termMonths: 24, contractedMileage: { km: 30000, period: 'year' }, depositSourceValue: 0, depositAmount: null, depositState: 'UNKNOWN',
+      monthlyRentAmount: null, monthlyRentState: 'UNKNOWN', supplierBillingFee: { state: 'UNKNOWN', amount: null }, channelPayoutFee: { state: 'UNKNOWN', amount: null },
+    });
+    expect(blocked.vehicle).toMatchObject({ engineCc: 1998, engineCcState: 'KNOWN' });
+    expect(r.meta).toMatchObject({ sourceScope: 'COLLECTED', authority: 'REFERENCE_ONLY', publicationDecision: 'HOLD' });
+  });
+  it('finds price-less vehicles and ambiguous plates; period-only lookup retains missing rent evidence', () => {
+    const r = buildKakaoCatalogReference({ ...input, sourceScope: 'COLLECTED' });
+    const exact = filterReferenceZeroDeposit(r, { sourceScope: 'COLLECTED', plateNumber: '123가4567', supplierName: '같은공급사' });
+    expect(exact.data).toHaveLength(4);
+    expect(exact.meta).toMatchObject({ queryResolution: { state: 'HOLD', reasonCode: 'PLATE_MULTIPLE_PRODUCTS' } });
+    const period = filterReferenceZeroDeposit(r, { sourceScope: 'COLLECTED', termMonths: '36' });
+    expect(period.data.map(p => p.sourceProductId)).toEqual(['blocked', 'sold']);
+    expect(filterReferenceZeroDeposit(r, { sourceScope: 'COLLECTED', termMonths: '36', monthlyRentMax: '450000' }).data).toEqual([]);
+    expect(filterReferenceZeroDeposit(r, { sourceScope: 'COLLECTED', depositState: 'ZERO' }).data).toEqual([]);
+  });
+  it('requires collected metadata and missing-condition reason without loosening default nonempty offers', () => {
+    const schema = JSON.parse(readFileSync(new URL('../contracts/kakao-catalog-reference-v1.schema.json', import.meta.url), 'utf8'));
+    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(schema);
+    const r = buildKakaoCatalogReference({ ...input, sourceScope: 'COLLECTED' });
+    expect(validate(r), JSON.stringify(validate.errors)).toBe(true);
+    const bad = structuredClone(r); delete bad.meta.sourceScope;
+    expect(validate(bad)).toBe(false);
+    const unknown = structuredClone(r); unknown.data.find(p => p.sourceProductId === 'missing')!.sourceRecord!.reasonCode = null;
+    expect(validate(unknown)).toBe(false);
+    const normal = buildKakaoCatalogReference(input); normal.data[0]!.offers[0]!.priceTerms = [];
+    expect(validate(normal)).toBe(false);
+  });
 });

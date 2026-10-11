@@ -38,9 +38,11 @@ const normalize = (query: PublicCatalogQuery) => {
   const p = single(query.p);
   const wl = single(query.wl);
   const code = single(query.code);
-  if (p !== undefined && !/^[A-Z0-9_]{2,40}$/.test(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_INVALID'), { statusCode: 400 });
+  if (p !== undefined && !/^[A-Z0-9_-]{2,40}$/.test(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_INVALID'), { statusCode: 400 });
   if (wl !== undefined && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(wl)) throw Object.assign(new Error('PUBLIC_WL_INVALID'), { statusCode: 400 });
-  if (code !== undefined && !/^[A-Za-z0-9_-]{1,120}$/.test(code)) throw Object.assign(new Error('PUBLIC_CODE_INVALID'), { statusCode: 400 });
+  if (code !== undefined && !/^[A-Za-z0-9가-힣_-]{1,120}$/.test(code)) throw Object.assign(new Error('PUBLIC_CODE_INVALID'), { statusCode: 400 });
+  // Standalone runtime has no approved channel registry: do not infer authority from product tags.
+  if (wl) throw Object.assign(new Error('PUBLIC_CHANNEL_REGISTRY_REQUIRED'), { statusCode: 404 });
   return { p, wl, code };
 };
 
@@ -51,7 +53,7 @@ addFormats(ajv);
 ajv.addSchema(publicProductFeedSchema);
 const validateFeed = ajv.getSchema('https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json#/$defs/feed')!;
 const validateQuote = ajv.getSchema('https://freepass.teamjpk.com/contracts/public-product-feed-v1.schema.json#/$defs/quote')!;
-const reader = createFirestoreCatalogCompatibilityReader(undefined, { readCollections: ['products', 'policy'] });
+const reader = createFirestoreCatalogCompatibilityReader(undefined, undefined, { readCollections: ['products', 'policy'] });
 
 app.get('/health', async () => ({ service: 'freepass-data-public', status: 'SERVING', readiness: 'NOT_ASSERTED' }));
 
@@ -61,6 +63,8 @@ const readSnapshot = async (consumerId: string, key: string) => {
   if (cached && cached.expiresAt > now) return cached.value;
   try {
     const value = await withTimeout(reader.read(consumerId));
+    for (const [cacheKey, entry] of cache) if (entry.expiresAt <= now) cache.delete(cacheKey);
+    if (cache.size >= 100 && !cache.has(key)) cache.delete(cache.keys().next().value!);
     cache.set(key, { expiresAt: now + CACHE_MS, value });
     return value;
   } catch (error) {
@@ -82,6 +86,7 @@ app.get<{ Querystring: PublicCatalogQuery }>('/v1/public/catalog/feed', async (r
   } catch (error) {
     logRouteError('/v1/public/catalog/feed', 'public_feed', error);
     const statusCode = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode?: unknown }).statusCode) : 503;
+    if (statusCode === 404) return reply.code(404).send({ error: '현재 안내 가능한 상품이 아닙니다.' });
     if (statusCode === 400) return reply.code(400).send({ error: '잘못된 공개 상품 요청입니다.' });
     return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
   }
@@ -100,6 +105,7 @@ app.get<{ Querystring: PublicCatalogQuery }>('/v1/public/catalog/quote', async (
   } catch (error) {
     logRouteError('/v1/public/catalog/quote', 'public_quote', error);
     const statusCode = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode?: unknown }).statusCode) : 503;
+    if (statusCode === 404) return reply.code(404).send({ error: '현재 안내 가능한 상품이 아닙니다.' });
     if (statusCode === 400) return reply.code(400).send({ error: '잘못된 공개 상품 요청입니다.' });
     return reply.code(503).send({ error: '상품 안내를 불러오지 못했습니다.' });
   }

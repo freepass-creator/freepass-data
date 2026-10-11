@@ -47,7 +47,7 @@ Status: CODED, not deployed. No IAM, Cloud Run, Secret Manager, or production co
   },
   "firestoreReadScopeByCode": {
     "reader": "src/infra/erp5-compat-catalog-reader.ts",
-    "publicEntrypointUses": "createFirestoreCatalogCompatibilityReader(undefined, { readCollections: ['products', 'policy'] })",
+    "publicEntrypointUses": "createFirestoreCatalogCompatibilityReader(undefined, undefined, { readCollections: ['products', 'policy'] })",
     "collections": [
       "products",
       "policy"
@@ -76,7 +76,7 @@ Status: CODED, not deployed. No IAM, Cloud Run, Secret Manager, or production co
         "member": "allUsers",
         "role": "roles/run.invoker",
         "resource": "Cloud Run service freepass-data-public",
-        "gate": "workflow input grant_public_invoker=true after environment protection"
+        "gate": "plan digest and exact target preflight before authentication/build/deploy; private deploy then explicit grant_public_invoker=true"
       }
     ],
     "noChange": [
@@ -91,16 +91,40 @@ Status: CODED, not deployed. No IAM, Cloud Run, Secret Manager, or production co
     "Delete Cloud Run service freepass-data-public",
     "Remove Firestore read-only role from serviceAccount:freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com if no longer used",
     "Keep freepass-data-read unchanged"
-  ]
+  ],
+  "scopeBoundaries": {
+    "A_publicRuntime": {
+      "purpose": "public feed/quote DTO only, not a consumer cutover",
+      "contract": "contracts/public-product-feed-v1.schema.json",
+      "privateCollectionsNotRead": [
+        "partner",
+        "user",
+        "vehicle_master"
+      ],
+      "secrets": [],
+      "sourceScopeExpansion": false,
+      "mediaBytesAndManifest": "HOLD: no supplier credentials or public photo proxy approved",
+      "whitelabelCutover": "HOLD: current approved channel registry and equivalent fence must be verified"
+    },
+    "B_sourceAggregateRead": {
+      "includedInThisDeployment": false,
+      "purpose": "separate existing-authority count-only observation",
+      "browserCollectedPayload": false,
+      "sourceHoldResolution": false,
+      "canonicalCutover": false,
+      "approval": "separate exact caller/sourceScope and sanitized counts/observation evidence; does not authorize source inventory publication"
+    }
+  }
 }
 ```
 
 ## Notes
 
 - The public service uses `src/api/public-server.ts`, which registers only `/health`, `/v1/public/catalog/feed`, and `/v1/public/catalog/quote`; the not-found handler returns 404 for every other path.
-- Code evidence for Firestore scope is `createFirestoreCatalogCompatibilityReader(undefined, { readCollections: ['products', 'policy'] })`, then `read()` in `src/infra/erp5-compat-catalog-reader.ts`; the public feed/quote path reads `products` and `policy` only. It does not call Iancar photo code because no photo reader or `EANCAR_ONE_API_KEY` is provided.
+- Code evidence for Firestore scope is `createFirestoreCatalogCompatibilityReader(undefined, undefined, { readCollections: ['products', 'policy'] })`, then `read()` in `src/infra/erp5-compat-catalog-reader.ts`; the public feed/quote path reads `products` and `policy` only. It does not call Iancar photo code because no photo reader or `EANCAR_ONE_API_KEY` is provided.
 - `FREEPASS_DATA_CONSUMERS_JSON` is intentionally absent from the public service. Consumer gateway, admin, settlement, estimate, and command routes are not registered.
 - `deploy-public-runtime.yml` calls `deploy-read-runtime.yml` with different inputs instead of copying the deployment workflow. `grant_public_invoker` defaults to false.
+- Public approval preflight binds project, region, service, runtime service account, entrypoint and secret-free mode before any deploy authentication, image publication or Cloud Run change. Every deployment uses `--no-allow-unauthenticated`; only the separately guarded IAM step can grant allUsers. The public service does not receive the F04 sheet environment or consumer/Iancar secrets.
 - Rollback is IAM removal and service deletion only; no data rollback is expected because the runtime has no write path.
 
 Digest command:
@@ -110,4 +134,16 @@ npm.cmd run build
 node scripts/public-runtime-plan-digest.mjs docs/PUBLIC-RUNTIME-PLAN.md
 ```
 
-Plan digest sha256: `7f3d6f44442dd3f313f8afe282d324800c10c9c1663e3099cad1e444dab8a96b`
+Plan digest sha256: `ab7bd174b15ddfb8426614d3db447e0164f6d894dea212f13ab15456e676092f`
+
+## Reviewable scope and remaining evidence
+
+A is the public-only runtime candidate and its narrowly scoped service-account/deployer/invoker changes. It reuses the existing feed/quote allowlist schema. Public deploy arguments pin 4 instances, concurrency 16, timeout 30 seconds, CPU 1 and 512Mi. Approval for A does not approve B or any consumer/whitelabel switch. No new source writer, COLLECTED browser payload, source inventory publication, Canonical activation, consumer registration or supplier secret is included.
+
+B is a separate count-only observation request using existing authorized source/consumer scopes. Its caller, identifiers, observed time, total/public/HOLD/excluded definitions and evidence access must be settled before execution. Missing evidence is HOLD, not zero. This plan neither resolves RAW/candidate HOLDs nor enables a collected-reference grant.
+
+Before any operational execution, pin the final candidate commit, image digest, current approved plan digest and exact service account; confirm the public field allowlist, current channel fence and URL contract with API/ERP owners. Current main integration and local tests do not prove deployment, source freshness, completeness or Data-to-ERP runtime traversal. The public server has no supplier-backed photo byte/manifest route and whitelabel equivalence is not assumed from historical cutover records.
+
+After separately authorized deployment, verify service revision/image/traffic/secret absence/private-route 404s, anonymous feed and quote schema/privacy, deposit states and nullable evidence, supplier filters, image URL preservation and each approved channel fence. Compare the same observed snapshot with ERP5; retain lack of freshness/coverage evidence explicitly. HTTP200/health alone is insufficient. Rollback is revoking public invoker and retiring this isolated service; the existing private read service and source data remain owned by their existing runtimes.
+
+Public replacement readiness remains HOLD: the existing privacy text filter rejects some numeric/currency/percent display strings, type/status enum conversion and policy-field coverage differ from ERP output, and no full observed public-DTO fixture/deepEqual proves the 475-product/4438-price-row snapshot. Standalone request rate limits, the current approved whitelabel registry and photo byte/manifest delivery also remain unverified. Local compatibility tests do not authorize an ERP origin switch.
