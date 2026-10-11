@@ -291,10 +291,47 @@ describe('F04 explicit canonical evidence', () => {
     expect(precomputeOfferEconomics(unsupported, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 128000 }, approximate: true });
     expect({ offer, evidence }).toEqual(before);
   });
+  it('truncates Sonokong fractional-won commission and VAT while preserving other suppliers rounding', () => {
+    const pickup = precomputeOfferEconomics({
+      id: 'synthetic', supplierId: 'RP012',
+      priceTerms: [{ termKey: '60', termMonths: 60, monthlyRent: { amount: 100001, currency: 'KRW' }, depositState: 'UNKNOWN' }],
+    }, 'PICKUP_SUBSCRIPTION')[0]!;
+    expect(pickup.supplierBillingFee).toMatchObject({
+      state: 'KNOWN',
+      amount: { amount: 65001 },
+      vatAmount: 6500,
+      totalAmount: 71501,
+      ruleId: 'SONOKONG_PICKUP_60_BILLING_RENT_X_TERM',
+    });
+    expect(pickup.channelPayoutFee).toMatchObject({ amount: { amount: 120001 }, vatAmount: 12000 });
+
+    const rerentTerms = [24, 36, 48, 60].map(termMonths => ({
+      termKey: `m${termMonths}`, termMonths, monthlyRent: { amount: 100001, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const,
+    }));
+    const rerent = precomputeOfferEconomics({ id: 'synthetic', supplierId: 'RP012', priceTerms: rerentTerms }, 'USED_RENT');
+    expect(rerent.map(row => row.supplierBillingFee.amount?.amount)).toEqual([14001, 35001, 56001, 35001]);
+    expect(rerent.map(row => row.channelPayoutFee.amount?.amount)).toEqual([96000, 108001, 120001, 105001]);
+
+    const fixedQ12 = precomputeOfferEconomics({
+      id: 'synthetic', supplierId: 'RP012',
+      priceTerms: [{ termKey: '12', termMonths: 12, monthlyRent: { amount: 800000, currency: 'KRW' }, depositState: 'UNKNOWN' }],
+    }, 'OGONG_SUBSCRIPTION')[0]!;
+    expect(fixedQ12.supplierBillingFee).toMatchObject({ amount: { amount: 700000 }, vatAmount: 70000 });
+    expect(fixedQ12.channelPayoutFee).toMatchObject({ amount: { amount: 800000 }, vatAmount: 80000 });
+
+    const other = precomputeOfferEconomics({
+      id: 'synthetic', supplierId: 'RP013',
+      priceTerms: [{ termKey: 'm60', termMonths: 60, monthlyRent: { amount: 100001, currency: 'KRW' }, depositState: 'UNKNOWN' }],
+    }, 'USED_RENT')[0]!;
+    expect(other.channelPayoutFee.amount?.amount).toBe(105001);
+  });
   it('stores pickup fee calculations that recompute to the saved amount', () => {
     const calc = (fee: NonNullable<ReturnType<typeof precomputeOfferEconomics>[number]['supplierBillingFee']>, monthlyRent: number, termMonths: number) => {
       if (fee.calculation?.kind === 'RATE' && fee.calculation.base === 'MONTHLY_RENT_X_TERM') {
-        return Math.round(monthlyRent * termMonths * fee.calculation.rate) + (fee.calculation.adjustmentAmount?.amount ?? 0);
+        const base = fee.ruleId?.startsWith('SONOKONG_')
+          ? Math.trunc(monthlyRent * termMonths * fee.calculation.rate)
+          : Math.round(monthlyRent * termMonths * fee.calculation.rate);
+        return base + (fee.calculation.adjustmentAmount?.amount ?? 0);
       }
       if (fee.calculation?.kind === 'FIXED') return fee.calculation.amount.amount;
       throw new Error('unsupported calculation');
@@ -329,6 +366,16 @@ describe('F04 explicit canonical evidence', () => {
         expect(calc(fee, row.monthlyRent!.amount, row.termMonths!)).toBe(fee.amount!.amount);
       }
     }
+  });
+  it('rejects rounded stored Sonokong rate fees in the audit path', () => {
+    const input = {
+      ...offer(), supplierId: 'RP012',
+      priceTerms: [{ termKey: '60', termMonths: 60, monthlyRent: { amount: 100001, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }],
+    };
+    input.internalEconomicsTerms = precomputeOfferEconomics(input, 'PICKUP_SUBSCRIPTION');
+    expect(auditOfferEconomicsTerms(input).invalidFacts).not.toContain('ECONOMICS_CALCULATION_MISMATCH:60:SUPPLIER_BILLING_FEE');
+    input.internalEconomicsTerms[0]!.supplierBillingFee.amount!.amount = Math.round(100001 * 60 * 275 / 10000) - 100000;
+    expect(auditOfferEconomicsTerms(input).invalidFacts).toContain('ECONOMICS_CALCULATION_MISMATCH:60:SUPPLIER_BILLING_FEE');
   });
   it('uses the same-product 36-month basis for Billin and records its exact price provenance', () => {
     const offer = { id: 'synthetic', supplierId: 'RP021', priceTerms: [{ termKey: '60', termMonths: 60, monthlyRent: { amount: 200000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }] };

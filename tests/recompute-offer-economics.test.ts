@@ -200,6 +200,27 @@ describe('offer economics recompute', () => {
     expect(refreshOfferEconomicsForChangedInputs(offer,ambiguous,false,'OGONG_SUBSCRIPTION')[1]!.supplierBillingFee)
       .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'OGONG_12M_BASE_MISSING'});
   });
+  it('recomputes reference-required unknown fees when a matching basis row is added', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'24_인수형',termMonths:24,monthlyRent:{amount:700000,currency:'KRW' as const}},
+    ]};
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'OGONG_SUBSCRIPTION');
+    expect(offer.internalEconomicsTerms[0]!.supplierBillingFee)
+      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'OGONG_12M_BASE_MISSING'});
+    const unchanged=structuredClone(offer);
+    expect(refreshOfferEconomicsForChangedInputs(offer,unchanged,false,'OGONG_SUBSCRIPTION')[0]!.supplierBillingFee)
+      .toEqual(offer.internalEconomicsTerms[0]!.supplierBillingFee);
+    const added={...offer,priceTerms:[
+      {...original.priceTerms[0]!,termKey:'12_인수형',termMonths:12,monthlyRent:{amount:800000,currency:'KRW' as const}},
+      ...offer.priceTerms,
+    ]};
+    const refreshed=refreshOfferEconomicsForChangedInputs(offer,added,false,'OGONG_SUBSCRIPTION');
+    expect(refreshed.find(term=>term.termKey==='24_인수형')!.supplierBillingFee)
+      .toMatchObject({state:'KNOWN',amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12}});
+    expect(refreshed.find(term=>term.termKey==='24_인수형')!.channelPayoutFee)
+      .toMatchObject({state:'KNOWN',amount:{amount:800000},referenceRentBasis:{termKey:'12_인수형',termMonths:12}});
+  });
   it('scopes plans to changed offer/product IDs and rejects missing offers without writes', async () => {
     const store = await fixture(), original = (await store.listOffers())[0]!;
     await store.seed({ offers: [{ ...original, id: 'outside-scope', productId: 'outside-product' }] });

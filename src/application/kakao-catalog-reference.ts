@@ -590,16 +590,24 @@ export function resolveReferenceDeposit(input: {
   };
 }
 
+export const truncWon = (amount: number): number => Math.trunc(amount);
+
+type RoundingMode = 'ROUND' | 'TRUNC';
+
+const roundWon = (amount: number, rounding: RoundingMode): number =>
+  rounding === 'TRUNC' ? truncWon(amount) : Math.round(amount);
+
 const calculatedCommission = (
   ruleId: string,
   amount: number,
   vatTreatment: VatTreatment,
+  rounding: RoundingMode = 'ROUND',
 ): CommissionResolution => {
-  if (Number.isFinite(amount)) amount = Math.round(amount); // 원 단위 반올림(F04 접수 관행, 아래 VAT 근거와 같음)
+  if (Number.isFinite(amount)) amount = roundWon(amount, rounding); // 원 단위 반올림(F04 접수 관행, 아래 VAT 근거와 같음)
   if (!Number.isSafeInteger(amount) || amount < 0) return unknownCommission('COMMISSION_AMOUNT_OUT_OF_RANGE');
   // F04 접수 관행(2026-10-04 확정): VAT 포함 금액 ÷ 1.1 → 원 단위 반올림. 근거(원장 줄)는 비공개 기록.
-  const supply = vatTreatment === 'INCLUDED' ? Math.round(amount / 1.1) : amount;
-  const vatAmount = vatTreatment === 'INCLUDED' ? amount - supply : Math.round(supply / 10);
+  const supply = vatTreatment === 'INCLUDED' ? roundWon(amount / 1.1, rounding) : amount;
+  const vatAmount = vatTreatment === 'INCLUDED' ? amount - supply : roundWon(supply / 10, rounding);
   const totalAmount = supply + vatAmount;
   if (!Number.isSafeInteger(totalAmount)) return unknownCommission('COMMISSION_AMOUNT_OUT_OF_RANGE');
   return { state: 'CALCULATED', ruleId, amount: supply, vatTreatment, vatAmount, totalAmount, reasonCode: null };
@@ -610,8 +618,9 @@ const approximateCommission = (
   amount: number,
   vatTreatment: VatTreatment,
   note: string,
+  rounding: RoundingMode = 'ROUND',
 ): CommissionResolution => {
-  const resolved = calculatedCommission(ruleId, amount, vatTreatment);
+  const resolved = calculatedCommission(ruleId, amount, vatTreatment, rounding);
   return resolved.state === 'CALCULATED'
     ? { ...resolved, state: 'CALCULATED_APPROX', approximate: true, note }
     : resolved;
@@ -633,6 +642,7 @@ const resolveTermLadder = (
   monthlyRent: number,
   side: 'BILLING' | 'PAYOUT',
   prefix = 'STANDARD_RERENT',
+  rounding: RoundingMode = 'ROUND',
 ): CommissionResolution => {
   const fixed = side === 'BILLING' ? 600000 : 500000;
   const ruleId = (term: number, suffix: 'FIXED' | 'RENT_X_TERM') => {
@@ -643,9 +653,9 @@ const resolveTermLadder = (
   };
   if (prefix === 'STANDARD_RERENT' && termMonths === KAKAO_COMMISSION_POLICY.oneMonthBasic.termMonths) {
     return calculatedCommission(`STANDARD_RERENT_1_${side}_RENT_5_PERCENT`,
-      monthlyRent * KAKAO_COMMISSION_POLICY.oneMonthBasic.monthlyRentBasisPoints / 10000, 'EXCLUDED');
+      monthlyRent * KAKAO_COMMISSION_POLICY.oneMonthBasic.monthlyRentBasisPoints / 10000, 'EXCLUDED', rounding);
   }
-  if (termMonths === 12) return calculatedCommission(ruleId(12, 'FIXED'), fixed, 'EXCLUDED');
+  if (termMonths === 12) return calculatedCommission(ruleId(12, 'FIXED'), fixed, 'EXCLUDED', rounding);
   const rates = side === 'BILLING'
     ? new Map([[24, 475], [36, 375], [48, 325], [60, 225]])
     : new Map([[24, 400], [36, 300], [48, 250], [60, 175]]);
@@ -655,6 +665,7 @@ const resolveTermLadder = (
     ruleId(termMonths, 'RENT_X_TERM'),
     monthlyRent * termMonths * basisPoints / 10000,
     'EXCLUDED',
+    rounding,
   );
 };
 
@@ -771,6 +782,7 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   const productType = inferredSubtype ? '신차렌트' : rawProduct === '장기렌트' ? '재렌트' : rawProduct;
   const billing = side === 'BILLING';
   const fixed = (id: string, amount: number, vat: VatTreatment = 'EXCLUDED') => calculatedCommission(id, amount, vat);
+  const sonokongFixed = (id: string, amount: number, vat: VatTreatment = 'EXCLUDED') => calculatedCommission(id, amount, vat, 'TRUNC');
   const agreement = input.individualAgreement;
   const hasAgreement = agreement !== undefined;
   if (!hasAgreement && input.individualExceptionEvidence !== undefined) {
@@ -795,16 +807,16 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   if (supplierId === 'RP013' && /발주/.test(productType)) return unknownCommission('WELRIX_ORDER_RULE_UNCONFIRMED');
   if (supplierId === 'RP012' && /^픽업\s*구독(?:\(롯데T카\))?$/.test(productType)) {
     if ([12, 24, 36, 48].includes(termMonths)) {
-      const base = resolveTermLadder(termMonths, monthlyRent, side);
+      const base = resolveTermLadder(termMonths, monthlyRent, side, 'STANDARD_RERENT', 'TRUNC');
       if (base.state !== 'CALCULATED' || base.amount === null) return base;
       return billing
-        ? approximateCommission(`SONOKONG_PICKUP_${termMonths}_BILLING_RERENT_LADDER`, base.amount - 100000, 'EXCLUDED', 'SONOKONG_PICKUP_TERM_PROXY_RERENT')
-        : approximateCommission(`SONOKONG_PICKUP_${termMonths}_PAYOUT_RERENT_LADDER`, base.amount, 'EXCLUDED', 'SONOKONG_PICKUP_TERM_PROXY_RERENT');
+        ? approximateCommission(`SONOKONG_PICKUP_${termMonths}_BILLING_RERENT_LADDER`, base.amount - 100000, 'EXCLUDED', 'SONOKONG_PICKUP_TERM_PROXY_RERENT', 'TRUNC')
+        : approximateCommission(`SONOKONG_PICKUP_${termMonths}_PAYOUT_RERENT_LADDER`, base.amount, 'EXCLUDED', 'SONOKONG_PICKUP_TERM_PROXY_RERENT', 'TRUNC');
     }
     if (termMonths !== 60) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
     return billing
-      ? approximateCommission('SONOKONG_PICKUP_60_BILLING_RENT_X_TERM', monthlyRent * termMonths * 275 / 10000 - 100000, 'EXCLUDED', 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191')
-      : approximateCommission('SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM', monthlyRent * termMonths * 200 / 10000, 'EXCLUDED', 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191');
+      ? approximateCommission('SONOKONG_PICKUP_60_BILLING_RENT_X_TERM', monthlyRent * termMonths * 275 / 10000 - 100000, 'EXCLUDED', 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191', 'TRUNC')
+      : approximateCommission('SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM', monthlyRent * termMonths * 200 / 10000, 'EXCLUDED', 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191', 'TRUNC');
   }
   if (['RP021', 'PT-0026'].includes(supplierId) && subscription) {
     const basis = input.billin36MonthlyRent ?? (termMonths === 36 ? monthlyRent : undefined);
@@ -820,13 +832,13 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     if (amount === null) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
     if (billing && amount < 0) return unknownCommission('NEGATIVE_BILLING_CONFIRM_REQUIRED');
     if (termMonths === 12) return billing
-      ? fixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, amount)
-      : fixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, amount);
+      ? sonokongFixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, amount)
+      : sonokongFixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, amount);
     if (input.subscriptionForm === 'RETURN') return unknownCommission('RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED');
     if (input.subscriptionForm !== 'BUYOUT' && input.subscriptionForm !== 'RETURN') return unknownCommission('SUBSCRIPTION_FORM_REQUIRED');
     return billing
-      ? fixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, amount)
-      : fixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, amount);
+      ? sonokongFixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, amount)
+      : sonokongFixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, amount);
   }
   if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.star.includes(supplierId as 'RP018') && rerent) {
     return fixed(billing ? 'STAR_RERENT_ONE_MONTH_RENT_BILLING' : 'STAR_RERENT_ONE_MONTH_RENT_X_80_PERCENT', monthlyRent * (billing ? 1 : 0.8), 'INCLUDED');
@@ -847,9 +859,9 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     return resolveTermLadder(termMonths, monthlyRent, side);
   }
   if (supplierId === 'RP012' && rerent) {
-    const base = resolveTermLadder(termMonths, monthlyRent, side);
+    const base = resolveTermLadder(termMonths, monthlyRent, side, 'STANDARD_RERENT', 'TRUNC');
     if (!billing || base.state !== 'CALCULATED' || base.amount === null) return base;
-    return approximateCommission(`SONOKONG_RERENT_${termMonths}_BILLING_INSURANCE_DEDUCT`, base.amount - 100000, 'EXCLUDED', 'SONOKONG_INSURANCE_DEDUCT_100K');
+    return approximateCommission(`SONOKONG_RERENT_${termMonths}_BILLING_INSURANCE_DEDUCT`, base.amount - 100000, 'EXCLUDED', 'SONOKONG_INSURANCE_DEDUCT_100K', 'TRUNC');
   }
   if (rerent) return resolveTermLadder(termMonths, monthlyRent, side);
   if (/^신차/.test(productType) && !subscription) {
