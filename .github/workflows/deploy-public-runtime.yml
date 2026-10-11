@@ -1,0 +1,29 @@
+name: Deploy FreePass Data public runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      grant_public_invoker:
+        description: Grant allUsers invoker after environment protection
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-read-runtime.yml
+    with:
+      service_name: freepass-data-public
+      runtime_service_account: freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com
+      entrypoint: dist/src/api/public-server.js
+      allow_unauthenticated: ${{ inputs.grant_public_invoker }}
+      grant_public_invoker: ${{ inputs.grant_public_invoker }}
+      max_instances: 4
+      concurrency: 16
+      use_consumer_secrets: false
+    secrets: inherit
