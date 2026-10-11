@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Compute } from 'google-auth-library';
-import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
+import { getFirestore, type QuerySnapshot, type Firestore } from 'firebase-admin/firestore';
 import { createFirestoreSourceStore } from './source-firestore-store.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
@@ -190,10 +190,11 @@ export type CatalogCompatibilityProductSnapshot = Omit<CatalogCompatibilitySnaps
     readScope: 'SINGLE_PRODUCT';
     selectedProductId: string;
     readAt: string;
+    readTimeExact: { seconds: number; nanoseconds: number };
     documentVersions: {
-      product: { id: string; updateTime: string };
-      policies: Array<{ id: string; updateTime: string }>;
-      partners: Array<{ id: string; updateTime: string }>;
+      product: { id: string; updateTime: string; updateTimeExact: { seconds: number; nanoseconds: number } };
+      policies: Array<{ id: string; updateTime: string; updateTimeExact: { seconds: number; nanoseconds: number } }>;
+      partners: Array<{ id: string; updateTime: string; updateTimeExact: { seconds: number; nanoseconds: number } }>;
     };
     linkedFacts: {
       policy: { state: 'KNOWN' | 'UNKNOWN'; reasonCode: string | null };
@@ -208,6 +209,108 @@ export class CatalogCompatibilityProductReadError extends Error {
     super(code);
     this.name = 'CatalogCompatibilityProductReadError';
   }
+}
+
+export const SINGLE_PRODUCT_FACT_FIELDS = Object.freeze([
+  '_key', 'product_code', 'provider_company_code', 'partner_code', 'policy_id', 'policy_code',
+  '_deleted', 'deletedAt', 'status', 'vehicle_status', 'status_kind', 'listable', 'publication_withdrawal',
+  'car_number', 'vehicle_uid', 'maker', 'model', 'sub_model', 'trim_name', 'trim_extra', 'variant',
+  'fuel_type', 'engine_type', 'engine_cc', 'drive_type', 'transmission', 'vehicle_class', 'product_type',
+  'year', 'seats', 'mileage', 'annual_mileage', 'ext_color', 'int_color', 'first_registration_date',
+  'price', 'iancar_phase_one',
+] as const);
+
+export const SINGLE_POLICY_FACT_FIELDS = ['_key', 'policy_code', 'companyId', 'provider_company_code',
+  'policy_name', 'policy_type', 'payment_method', 'payment_timing', 'basic_driver_age',
+  'driver_age_lowering', 'driver_age_upper_limit', 'license_period', 'personal_driver_scope',
+  'business_driver_scope', 'insurance_included', 'deposit_installment', 'deposit_card_payment',
+  'rental_card_payment', 'maintenance_service', 'credit_grade'] as const;
+export const SINGLE_PARTNER_FACT_FIELDS = ['_key', 'partner_code', 'company_code', 'provider_company_code',
+  'partner_name', 'company_name', 'name', 'brand_name'] as const;
+
+const selectionUnavailable = (): never => { throw new CatalogCompatibilityProductReadError('PRODUCT_SELECTION_UNAVAILABLE', 503); };
+const selectedDocId = (value: unknown): string | undefined => {
+  if (value == null || value === '') return undefined;
+  if (typeof value !== 'string' || value.length > 200 || value.trim() !== value || /[\/\u0000-\u001f\u007f]/.test(value)) return selectionUnavailable();
+  return value;
+};
+const boundedScalar = (value: unknown): unknown => {
+  if (value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return value;
+  if (typeof value === 'string' && value.length <= 300 && !/[\u0000-\u001f\u007f]|https?:\/\/|AIza|ya29\./i.test(value)) return value;
+  return selectionUnavailable();
+};
+const pickSelectedFacts = (record: Rec, fields: readonly string[]): Rec => Object.fromEntries(fields
+  .filter(field => Object.hasOwn(record, field))
+  .map(field => [field, boundedScalar(record[field])]));
+
+/** Uses the existing target and transaction; no collection scan, alias inference or publication decision. */
+export async function readSingleProductCompatibility(db: Firestore, consumerId: string, productId: string,
+  readCollections: ReadonlySet<CatalogCompatibilityReadCollection>): Promise<CatalogCompatibilityProductSnapshot> {
+  if (!(consumerId === 'erp-com' || /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId))) return selectionUnavailable();
+  if (!productId || productId.length > 200 || productId.trim() !== productId || /[\/\u0000-\u001f\u007f]/.test(productId)) throw new CatalogCompatibilityProductReadError('INVALID_PRODUCT_SELECTION', 400);
+  if (!readCollections.has('products')) return selectionUnavailable();
+  const layout = FIRESTORE_COLLECTIONS.legacyAdminWorkflow;
+  return db.runTransaction(async tx => {
+    const product = await tx.get(db.collection(layout.products).doc(productId));
+    if (!product.exists) throw new CatalogCompatibilityProductReadError('PRODUCT_NOT_FOUND', 404);
+    const raw = product.data()!;
+    const readAt = product.readTime?.toDate().toISOString();
+    const version = product.updateTime?.toDate().toISOString();
+    if (product.id !== productId || !readAt || !version) return selectionUnavailable();
+    const policyId = selectedDocId(raw.policy_id ?? raw.policy_code);
+    const partnerId = selectedDocId(raw.provider_company_code ?? raw.partner_code);
+    const linked = async (kind: 'policy' | 'partner', id: string | undefined, collection: string, fields: readonly string[]) => {
+      if (!id) return { rows: {}, versions: [], evidence: { state: 'UNKNOWN' as const, reasonCode: `${kind.toUpperCase()}_REFERENCE_NOT_OBSERVED` } };
+      if (!readCollections.has(kind)) return selectionUnavailable();
+      const doc = await tx.get(db.collection(collection).doc(id));
+      if (!doc.readTime || !doc.readTime.isEqual(product.readTime)) return selectionUnavailable();
+      if (!doc.exists) return { rows: {}, versions: [], evidence: { state: 'UNKNOWN' as const, reasonCode: `${kind.toUpperCase()}_NOT_OBSERVED` } };
+      const updateTime = doc.updateTime?.toDate().toISOString();
+      if (!updateTime || doc.id !== id) return selectionUnavailable();
+      return { rows: { [id]: { ...pickSelectedFacts(doc.data()!, fields), _key: id } },
+        versions: [{ id, updateTime, updateTimeExact: { seconds: doc.updateTime!.seconds, nanoseconds: doc.updateTime!.nanoseconds } }], evidence: { state: 'KNOWN' as const, reasonCode: null } };
+    };
+    const policy = await linked('policy', policyId, layout.policies, SINGLE_POLICY_FACT_FIELDS);
+    const partner = await linked('partner', partnerId, layout.partners, SINGLE_PARTNER_FACT_FIELDS);
+    const selected = pickSelectedFacts(raw, SINGLE_PRODUCT_FACT_FIELDS.filter(f => f !== 'price' && f !== 'iancar_phase_one' && f !== '_key'));
+    if (Object.hasOwn(raw, 'price')) {
+      if (raw.price === null) selected.price = null;
+      else {
+        if (!raw.price || typeof raw.price !== 'object' || Array.isArray(raw.price) || Object.keys(raw.price).length > 200) return selectionUnavailable();
+        selected.price = Object.fromEntries(Object.entries(raw.price as Rec).map(([key, row]) => {
+          if (!/^[a-zA-Z0-9_-]{1,80}$/.test(key) || !row || typeof row !== 'object' || Array.isArray(row)) return selectionUnavailable();
+          return [key, pickSelectedFacts(row as Rec, ['rent', 'deposit', 'depositState', 'deposit_state'])];
+        }));
+      }
+    }
+    if (Object.hasOwn(raw, 'iancar_phase_one')) {
+      const phase = raw.iancar_phase_one;
+      if (phase === null) selected.iancar_phase_one = null;
+      else {
+        if (!phase || typeof phase !== 'object' || Array.isArray(phase)) return selectionUnavailable();
+        const p = phase as Rec;
+        const result = pickSelectedFacts(p, ['policyStage']);
+        if (Object.hasOwn(p, 'priceAliases')) {
+          if (!p.priceAliases || typeof p.priceAliases !== 'object' || Array.isArray(p.priceAliases) || Object.keys(p.priceAliases).length > 200) return selectionUnavailable();
+          result.priceAliases = Object.fromEntries(Object.entries(p.priceAliases as Rec).map(([key, value]) => {
+            if (!/^[a-zA-Z0-9_-]{1,80}$/.test(key)) return selectionUnavailable();
+            return [key, boundedScalar(value)];
+          }));
+        }
+        selected.iancar_phase_one = result;
+      }
+    }
+    const snapshot: CatalogCompatibilityProductSnapshot = {
+      schema: 'freepass-data.catalog-compat/v1', data: { products: { [productId]: { ...selected, _key: productId } }, policies: policy.rows, partners: partner.rows },
+      meta: { consumerId, authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE', sourceProject: CENTRAL_FIREBASE_PROJECT_ID,
+        observedAt: readAt, readAt, readTimeExact: { seconds: product.readTime.seconds, nanoseconds: product.readTime.nanoseconds }, collectionCounts: { products: 1, policies: policy.versions.length, partners: partner.versions.length },
+        depositEvidenceVersion: 'catalog-compat-deposit/1', selection: 'SINGLE_PRODUCT', readScope: 'SINGLE_PRODUCT', selectedProductId: productId,
+        documentVersions: { product: { id: productId, updateTime: version, updateTimeExact: { seconds: product.updateTime!.seconds, nanoseconds: product.updateTime!.nanoseconds } }, policies: policy.versions, partners: partner.versions },
+        linkedFacts: { policy: policy.evidence, partner: partner.evidence } },
+    };
+    if (Buffer.byteLength(JSON.stringify(snapshot)) > 1024 * 1024) return selectionUnavailable();
+    return snapshot;
+  }, { readOnly: true });
 }
 
 export type CatalogCompatibilityReaderOptions = {
@@ -294,6 +397,10 @@ export class FirestoreCatalogCompatibilityReader {
     }, approvedPhotoReader);
   }
   readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
+
+  readProductCompat(consumerId: string, productId: string): Promise<CatalogCompatibilityProductSnapshot> {
+    return readSingleProductCompatibility(this.db, consumerId, productId, this.readCollections);
+  }
 
   /** Shared internal consumer entrypoint. Current-source rows stay separate from saved products. */
   async readStoredProducts(consumerId: string, search: Record<string, string> = {}, photoProjection?: (product: Rec) => unknown,
