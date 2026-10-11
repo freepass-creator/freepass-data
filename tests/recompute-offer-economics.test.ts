@@ -2,7 +2,7 @@ process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
-import { offerEconomicsInputDigest, recomputeOfferEconomics, updateOfferPrice } from '../src/application/catalog.js';
+import { assertOfferFeeSubsetEvidence, offerEconomicsInputDigest, recomputeOfferEconomics, updateOfferPrice } from '../src/application/catalog.js';
 import { KAKAO_COMMISSION_POLICY } from '../src/application/kakao-catalog-reference.js';
 import { selectOfferFeeEconomics, precomputeOfferEconomics, refreshOfferEconomicsForChangedInputs } from '../src/application/resolve-offer-commercial-terms.js';
 import { planOfferEconomicsRecompute, runOfferEconomicsRecompute } from '../src/jobs/recompute-offer-economics.js';
@@ -51,6 +51,12 @@ describe('offer economics recompute', () => {
       expect(await store.getOffer(offer.id)).toEqual(offer);expect(store.audits).toHaveLength(0);
     }
     await store.seed({sourceRuns:[currentRun]});
+    await store.seed({sourceRuns:[{...currentRun,checkpoint:null}],sourceHeads:[{
+      sourceId:binding.sourceId,runId:binding.sourceRunId,observedAt:now,acceptedAt:now,coverage,checkpoint:null as never}]});
+    await expect(assertOfferFeeSubsetEvidence(store,offer,{...evidence,checkpointDigest:stableDigest(null)},now))
+      .rejects.toThrow('FEE_SUBSET_SOURCE_NOT_CURRENT');
+    await store.seed({sourceRuns:[currentRun],sourceHeads:[{
+      sourceId:binding.sourceId,runId:binding.sourceRunId,observedAt:now,acceptedAt:now,coverage,checkpoint}]});
     await store.seed({sourceHeads:[{sourceId:binding.sourceId,runId:'different-run',observedAt:now,acceptedAt:now,coverage,checkpoint}]});
     const blocked=await runOfferEconomicsRecompute(store,options);
     expect(blocked.status).toBe('HOLD');expect(await store.getOffer(offer.id)).toEqual(offer);expect(store.audits).toHaveLength(0);

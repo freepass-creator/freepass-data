@@ -192,7 +192,8 @@ export async function assertOfferFeeSubsetEvidence(reader: Pick<CatalogStore,'ge
   if (!binding || binding.offerId!==offer.id || binding.productId!==offer.productId || binding.sourceSupplierCode!==offer.supplierId ||
       binding.sourceRunId!==evidence.runId || stableDigest(binding)!==evidence.bindingDigest) throw new InvalidCommandError('FEE_SUBSET_BINDING_DRIFT');
   const [head,run,source]=await Promise.all([reader.getSourceHead(binding.sourceId),reader.getSourceRun(evidence.runId),reader.getSourceDefinition(binding.sourceId)]);
-  if (!head || head.runId!==evidence.runId || !run || run.sourceId!==binding.sourceId || run.status!=='COMPLETED' || run.headStatus!=='CURRENT' ||
+  if (!head || head.sourceId!==binding.sourceId || head.runId!==evidence.runId || !run || run.sourceId!==binding.sourceId || run.status!=='COMPLETED' || run.headStatus!=='CURRENT' ||
+      !run.checkpoint || !head.checkpoint || head.checkpoint.sourceId!==binding.sourceId ||
       head.coverage.completeness!=='COMPLETE' || stableDigest(run.coverage)!==stableDigest(head.coverage) ||
       stableDigest(run.checkpoint ?? null)!==stableDigest(head.checkpoint) ||
       stableDigest(head.checkpoint)!==evidence.checkpointDigest) throw new InvalidCommandError('FEE_SUBSET_SOURCE_NOT_CURRENT');
