@@ -194,8 +194,36 @@ describe('vehicle UID Firestore writer transaction ordering', () => {
       async () => { db.docs.delete(assetPath('TEST-FAKE-UID-001')); },
     );
 
-    expect(result.skippedReasons?.STALE_ASSET).toBe(1);
+    expect(result.skippedReasons?.UID_ASSET_NOT_FOUND).toBe(1);
     expect(db.docs.get(productPath('p1'))?.vehicle_uid).toBeUndefined();
+  });
+
+  it('writes PRODUCT_ONLY registry and no asset document when the planned UID has no asset', async () => {
+    const p = plan({ p1: product('TEST-FAKE-NEW-001') }, []);
+    const db = new FakeFirestore();
+    db.docs.set(productPath('p1'), product('TEST-FAKE-NEW-001'));
+
+    const applied = await applyVehicleUidMigration(fakeWriter(db), p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    const planned = p.items.find((item): item is Extract<typeof item, { kind: 'PRODUCT_SET_UID' }> => item.kind === 'PRODUCT_SET_UID' && item.productKey === 'p1');
+
+    expect(applied.assetUpdates).toBe(0);
+    expect(db.docs.get(productPath('p1'))?.vehicle_uid).toBe(planned?.vehicleUid);
+    expect(db.docs.get(productPath('p1'))?.vehicle_uid_registry).toBe('PRODUCT_ONLY');
+    expect(db.docs.has(assetPath(planned!.vehicleUid))).toBe(false);
+  });
+
+  it('skips PRODUCT_ONLY when an asset document exists with the planned UID', async () => {
+    const p = plan({ p1: product('TEST-FAKE-NEW-001') }, []);
+    const planned = p.items.find((item): item is Extract<typeof item, { kind: 'PRODUCT_SET_UID' }> => item.kind === 'PRODUCT_SET_UID' && item.productKey === 'p1')!;
+    const db = new FakeFirestore();
+    db.docs.set(productPath('p1'), product('TEST-FAKE-NEW-001'));
+    db.docs.set(assetPath(planned.vehicleUid), asset(planned.vehicleUid, 'TEST-FAKE-OTHER'));
+
+    const result = await applyVehicleUidMigration(fakeWriter(db), p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+
+    expect(result.skippedReasons?.UID_ASSET_ALREADY_EXISTS).toBe(1);
+    expect(db.docs.get(productPath('p1'))?.vehicle_uid).toBeUndefined();
+    expect(db.docs.get(productPath('p1'))?.vehicle_uid_registry).toBeUndefined();
   });
 
   it('revalidates an unlinked asset external-id addition inside the transaction and skips stale identifier changes', async () => {

@@ -219,6 +219,10 @@ npm.cmd run plan:vehicle-uid-migration
 - `src/infra/iancar-publication-withdrawal-firestore.ts:128` 및 `src/infra/vehicle-name-reference-repair-firestore.ts:860`은 현재 필드 단위라 보존되지만, `vehicle_uid`를 patch/update에 넣지 않는 회귀 테스트를 적용 PR에 추가한다.
 - source ingest/data-owned refresh가 legacy `products`를 직접 덮어쓰는 새 경로가 생기면 `set`/replace 금지 또는 `merge/update` 보존 검사를 먼저 추가한다.
 
+### PLANNED_NEW_UID 자산 문서 결정
+
+새 UID(`PLANNED_NEW_UID`)는 이번 이전에서 자산 문서를 만들지 않는다. 자산 stub은 `vehicleModelId`가 없어 정본 소비처를 깨뜨릴 수 있으므로 계획 항목은 `assetState`를 반드시 명시한다. 기존 자산 연결은 `LINKED_EXISTING`이며 `assetIdentifierDigest`를 가져야 하고, 새 UID 상품 연결은 `PRODUCT_ONLY`이며 적용기는 `products.vehicle_uid`와 `products.vehicle_uid_registry='PRODUCT_ONLY'`만 쓴다. `PRODUCT_ONLY` UID와 같은 자산 문서가 이미 있으면 충돌(`UID_ASSET_ALREADY_EXISTS`)로 건너뛰고, `LINKED_EXISTING` 자산이 없으면 `UID_ASSET_NOT_FOUND`로 컴포넌트 전체를 쓰지 않는다.
+
 ## 10-13 적용 절차
 
 적용기는 계획 파일을 저장소 밖 절대경로에서만 읽고, 기본값은 시험 실행이다. 시험 실행은 Firestore 쓰기 0으로 계획 digest, 적용 대상 건수, HOLD 제외 여부만 출력한다.
