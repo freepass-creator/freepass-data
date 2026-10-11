@@ -7,6 +7,7 @@ import { buildPublicProductFeed, buildPublicProductQuote, publicConsumerIdFromWh
 import { logRouteError } from '../shared/route-error-log.js';
 import { createFirestoreCatalogCompatibilityReader } from '../infra/erp5-compat-catalog-reader.js';
 import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
+import { assertPublicAllowlistsConfigured, publicProviderAllowlist, publicWhitelabelAllowlist } from './public-allowlist.js';
 
 type PublicCatalogQuery = { p?: string; wl?: string; code?: string; a?: string };
 
@@ -31,9 +32,6 @@ const rateLimits = new Map<string, { resetAt: number; count: number }>();
 
 const single = (value: string | string[] | undefined): string | undefined => Array.isArray(value) ? undefined : value;
 const bytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
-const envSet = (name: string): Set<string> => new Set((process.env[name] ?? '').split(',').map((value) => value.trim()).filter(Boolean));
-const providerAllowlist = (): Set<string> => envSet('FREEPASS_PUBLIC_PROVIDER_ALLOWLIST');
-const whitelabelAllowlist = (): Set<string> => envSet('FREEPASS_PUBLIC_WHITELABEL_ALLOWLIST');
 const trustProxyHops = (): number => {
   const raw = process.env.FREEPASS_PUBLIC_TRUST_PROXY_HOPS?.trim() ?? '';
   if (!raw) return 0;
@@ -84,19 +82,20 @@ const normalize = (query: PublicCatalogQuery) => {
   const code = single(query.code);
   if (p !== undefined) {
     if (!/^(?:RP|PT-)\d+$/.test(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_INVALID'), { statusCode: 400 });
-    const allowed = providerAllowlist();
-    if (allowed.size > 0 && !allowed.has(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_NOT_ALLOWED'), { statusCode: 400 });
+    const allowed = publicProviderAllowlist();
+    if (!allowed.has(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_NOT_ALLOWED'), { statusCode: 400 });
   }
   if (wl !== undefined) {
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(wl)) throw Object.assign(new Error('PUBLIC_WL_INVALID'), { statusCode: 400 });
-    const allowed = whitelabelAllowlist();
-    if (allowed.size === 0 || !allowed.has(wl)) throw Object.assign(new Error('PUBLIC_WL_NOT_ALLOWED'), { statusCode: 400 });
+    const allowed = publicWhitelabelAllowlist();
+    if (!allowed.has(wl)) throw Object.assign(new Error('PUBLIC_WL_NOT_ALLOWED'), { statusCode: 400 });
   }
   if (code !== undefined && !/^[A-Za-z0-9가-힣_-]{1,120}$/.test(code)) throw Object.assign(new Error('PUBLIC_CODE_INVALID'), { statusCode: 400 });
   return { p, wl, code };
 };
 
 assertConsumerRuntime();
+assertPublicAllowlistsConfigured();
 const publicProxyHops = trustProxyHops();
 const app = Fastify({ logger: false, trustProxy: publicProxyHops > 0 ? (_address, hop) => hop < publicProxyHops : false });
 const ajv = new Ajv2020({ strict: false });

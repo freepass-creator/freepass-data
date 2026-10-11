@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import publicSchema from '../contracts/public-product-feed-v1.schema.json' with { type: 'json' };
 import { createConsumerGateway, type ConsumerBinding } from '../src/api/consumer-gateway.js';
@@ -11,7 +11,7 @@ import type { CatalogCompatibilitySnapshot } from '../src/infra/erp5-compat-cata
 const token = 'test-service-token-0123456789abcdef';
 const bindings: ConsumerBinding[] = [
   { id: 'erp-com', projectionId: 'erp-public', token },
-  { id: 'whitelabel-test', projectionId: 'erp-public', token: token + '-wl' },
+  { id: 'whitelabel-uniplan', projectionId: 'erp-public', token: token + '-wl' },
 ];
 
 const snapshot = (products: Record<string, Record<string, unknown>>): CatalogCompatibilitySnapshot => ({
@@ -43,9 +43,9 @@ const product = (extra: Record<string, unknown> = {}) => ({
   product_code: 'P1',
   publicProductKey: 'P1',
   listable: true,
-  provider_company_code: 'RP_TEST',
-  partner_code: 'RP_TEST',
-  whitelabels: ['test'],
+  provider_company_code: 'RP013',
+  partner_code: 'RP013',
+  whitelabels: ['uniplan'],
   maker: '테스트제조사',
   model: '테스트모델',
   trim_name: '테스트트림',
@@ -75,6 +75,14 @@ const appWith = (snap: CatalogCompatibilitySnapshot) => {
 };
 
 describe('public product feed v1', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    delete process.env.FREEPASS_PUBLIC_PROVIDER_ALLOWLIST;
+    delete process.env.FREEPASS_PUBLIC_WHITELABEL_ALLOWLIST;
+    delete process.env.FREEPASS_PUBLIC_TRUST_PROXY_HOPS;
+    resetPublicRuntimeForTest();
+  });
+
   it('keeps legacy input aliases compatible with live deposit enums and display brand', () => {
     const feed = buildPublicProductFeed(snapshot({ P1: product({ provider_company_code: 'PT-0001', provider_name: '공급사', price: {
       '24': { rent: 1, deposit: 10, depositState: 'AMOUNT' },
@@ -130,7 +138,7 @@ describe('public product feed v1', () => {
   });
 
   it('builds products from the allowlist and excludes internal fields and vin', () => {
-    const feed = buildPublicProductFeed(snapshot({ P1: product() }), { p: 'RP_TEST', wl: 'test' });
+    const feed = buildPublicProductFeed(snapshot({ P1: product() }), { p: 'RP013', wl: 'uniplan' });
     expect(feed.count).toBe(1);
     expect(feed.products[0]).toMatchObject({
       publicProductKey: 'P1',
@@ -150,7 +158,7 @@ describe('public product feed v1', () => {
       price: { '36': { rent: 500000, deposit: 1000000, depositState: 'KNOWN',
         supplierBillingFee: internal, channelPayoutFee: internal, expectedGrossMargin: { amount: 1234 },
         priceSourceRefs: [{ rawRecordId: 'PRIVATE_RAW' }] } },
-    }) }), { p: 'RP_TEST', wl: 'test' });
+    }) }), { p: 'RP013', wl: 'uniplan' });
     expect(feed.count).toBe(1);
     expect(Object.keys(feed.products[0]!.price['36']!)).toEqual(['rent','deposit','depositState']);
     expect(JSON.stringify(feed)).not.toMatch(/supplierBillingFee|channelPayoutFee|expectedGrossMargin|priceSourceRefs|PRIVATE_/);
@@ -161,16 +169,16 @@ describe('public product feed v1', () => {
       P1: product(),
       P2: product({ _key: 'P2', product_code: 'P2', publicProductKey: 'P2', provider_company_code: 'OTHER', partner_code: 'OTHER' }),
       P3: product({ _key: 'P3', product_code: 'P3', publicProductKey: 'P3', whitelabels: ['other'] }),
-    }), { p: 'RP_TEST', wl: 'test' });
+    }), { p: 'RP013', wl: 'uniplan' });
     expect(feed.products.map((item) => item.product_code)).toEqual(['P1']);
   });
 
   it('resolves public quote code and rejects caller-selected internal consumer identity', async () => {
     const app = appWith(snapshot({ P1: product() }));
-    const ok = await app.inject({ url: '/v1/public/catalog/quote?code=P1&wl=test&consumerId=freepass-admin-catalog&collection=products' });
+    const ok = await app.inject({ url: '/v1/public/catalog/quote?code=P1&wl=uniplan&consumerId=freepass-admin-catalog&collection=products' });
     expect(ok.statusCode).toBe(200);
     expect(ok.json().product.product_code).toBe('P1');
-    const missing = await app.inject({ url: '/v1/public/catalog/quote?code=NOPE&wl=test' });
+    const missing = await app.inject({ url: '/v1/public/catalog/quote?code=NOPE&wl=uniplan' });
     expect(missing.statusCode).toBe(404);
     await app.close();
   });
@@ -215,7 +223,7 @@ describe('public product feed v1', () => {
     const app = appWith(snapshot({}));
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const response = await app.inject({ url: '/v1/public/catalog/feed?p=bad-secret&wl=test&token=secret-token&plate=12가3456' });
+      const response = await app.inject({ url: '/v1/public/catalog/feed?p=bad-secret&wl=uniplan&token=secret-token&plate=12가3456' });
       expect(response.statusCode).toBe(400);
       expect(spy).toHaveBeenCalled();
       const logged = String(spy.mock.calls.at(-1)?.[0] ?? '');
@@ -278,6 +286,64 @@ describe('public product feed v1', () => {
     }
     expect(publicRuntimeStatsForTest().cacheEntries).toBeLessThanOrEqual(64);
     expect(publicRuntimeStatsForTest().rateLimitEntries).toBeLessThanOrEqual(4096);
+    await app.close();
+  });
+
+  it('starts with code constants when public allowlist env is absent', async () => {
+    const app = appWith(snapshot({ P1: product() }));
+    const response = await app.inject({ url: '/v1/public/catalog/feed?p=RP013&wl=uniplan' });
+    expect(response.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('fails startup for empty or contradictory public allowlist env', () => {
+    vi.stubEnv('FREEPASS_PUBLIC_PROVIDER_ALLOWLIST', '');
+    expect(() => appWith(snapshot({}))).toThrow('FREEPASS_PUBLIC_PROVIDER_ALLOWLIST_EMPTY');
+    vi.stubEnv('FREEPASS_PUBLIC_PROVIDER_ALLOWLIST', 'RP999');
+    expect(() => appWith(snapshot({}))).toThrow('FREEPASS_PUBLIC_PROVIDER_ALLOWLIST_OUTSIDE_CODE_CONSTANT');
+    vi.stubEnv('FREEPASS_PUBLIC_PROVIDER_ALLOWLIST', 'RP013');
+    vi.stubEnv('FREEPASS_PUBLIC_WHITELABEL_ALLOWLIST', '');
+    expect(() => appWith(snapshot({}))).toThrow('FREEPASS_PUBLIC_WHITELABEL_ALLOWLIST_EMPTY');
+    vi.stubEnv('FREEPASS_PUBLIC_WHITELABEL_ALLOWLIST', 'unknown');
+    expect(() => appWith(snapshot({}))).toThrow('FREEPASS_PUBLIC_WHITELABEL_ALLOWLIST_OUTSIDE_CODE_CONSTANT');
+  });
+
+  it('rejects unknown provider before reader, cache or in-flight key creation', async () => {
+    let reads = 0;
+    const access = new DataAccessGateway(new MemoryDataAccessLogStore());
+    const app = createConsumerGateway(
+      { getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] },
+      bindings,
+      access,
+      undefined,
+      { read: async () => { reads++; return snapshot({ P1: product() }); } },
+    );
+    const response = await app.inject({ url: '/v1/public/catalog/feed?p=RP999&wl=uniplan' });
+    expect(response.statusCode).toBe(400);
+    expect(reads).toBe(0);
+    expect(publicRuntimeStatsForTest().cacheEntries).toBe(0);
+    expect(publicRuntimeStatsForTest().inFlightEntries).toBe(0);
+    await app.close();
+  });
+
+  it('coalesces concurrent reads for the same allowed provider', async () => {
+    let reads = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const access = new DataAccessGateway(new MemoryDataAccessLogStore());
+    const app = createConsumerGateway(
+      { getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] },
+      bindings,
+      access,
+      undefined,
+      { read: async () => { reads++; await gate; return snapshot({ P1: product() }); } },
+    );
+    const first = app.inject({ url: '/v1/public/catalog/feed?p=RP013&wl=uniplan' });
+    const second = app.inject({ url: '/v1/public/catalog/feed?p=RP013&wl=uniplan' });
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    expect(reads).toBe(1);
     await app.close();
   });
 

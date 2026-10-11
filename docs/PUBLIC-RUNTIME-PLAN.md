@@ -26,7 +26,8 @@ Status: CODED, not deployed. No IAM, Cloud Run, Secret Manager, or production co
       "FIREBASE_PROJECT_ID": "freepasserp5",
       "HOST": "0.0.0.0",
       "FREEPASS_DATA_ENTRYPOINT": "dist/src/api/public-server.js",
-      "FREEPASS_PUBLIC_PROVIDER_ALLOWLIST": "optional comma-separated provider codes",
+      "FREEPASS_PUBLIC_PROVIDER_ALLOWLIST": "optional subset of the code constant; unset uses the code constant and deployment workflow does not need this variable",
+      "FREEPASS_PUBLIC_WHITELABEL_ALLOWLIST": "optional subset of the whitelabel constant; unset uses the code constant and deployment workflow does not need this variable",
       "FREEPASS_PUBLIC_TRUST_PROXY_HOPS": "optional 0..3"
     },
     "secrets": []
@@ -134,7 +135,7 @@ npm.cmd run build
 node scripts/public-runtime-plan-digest.mjs docs/PUBLIC-RUNTIME-PLAN.md --service freepass-data-public --service-account freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com --entrypoint dist/src/api/public-server.js --use-consumer-secrets false --max-instances 4 --runtime-concurrency 16
 ```
 
-Plan digest sha256: `9b867764c02847a861dcfeb12200ffc0aa7920cd0dc3c4b35b99fa84e52f1303`
+Plan digest sha256: `3e0f0a8a3d9f8b7edc4f1781598781af2eba6dfaff9cd41c9a744e70c3a9bdbe`
 
 ## Reviewable scope and remaining evidence
 
