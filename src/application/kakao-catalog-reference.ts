@@ -671,6 +671,26 @@ export type CommissionInput = {
 };
 
 /** YYYY-MM-DD 가 «달력에 실제로 있는 날»인지(Date.parse 는 2026-02-30 을 03-02 로 보정하므로 연·월·일을 되확인한다). */
+type SonokongQ12BasisCandidate = {
+  termMonths: number;
+  settlement?: 'BUYOUT' | 'RETURN' | undefined;
+  mileageKm?: number | null | undefined;
+  mileagePeriod?: 'month' | 'year' | undefined;
+  currency: string;
+  amount: number;
+  sourceRef: string;
+};
+
+export function selectSonokongQ12Basis(target: SonokongQ12BasisCandidate, candidates: readonly SonokongQ12BasisCandidate[]): CommissionInput['q12Basis'] | undefined {
+  const matching = candidates.filter(candidate => candidate.termMonths === 12 &&
+    candidate.settlement === target.settlement &&
+    candidate.mileageKm === target.mileageKm &&
+    (candidate.mileagePeriod ?? 'year') === (target.mileagePeriod ?? 'year') &&
+    candidate.currency === target.currency &&
+    Number.isSafeInteger(candidate.amount) && candidate.amount > 0);
+  return matching.length === 1 ? { amount: matching[0]!.amount, sourceRef: matching[0]!.sourceRef } : undefined;
+}
+
 function isCalendarDate(value: unknown): boolean {
   const m = typeof value === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(value) : null;
   if (!m) return false;
@@ -929,16 +949,29 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
     const q12Candidates = Object.entries(price as Rec).flatMap(([key, value]) => {
       const candidate = parseErp5CompatibilityPriceKey(key);
       if (!candidate || candidate.months !== 12 || !value || typeof value !== 'object' || Array.isArray(value)) return [];
-      if ((candidate.contractedMileage?.km ?? candidate.mileageKm) !== (parsed.contractedMileage?.km ?? parsed.mileageKm)) return [];
-      if ((candidate.contractedMileage?.period ?? 'year') !== (parsed.contractedMileage?.period ?? 'year')) return [];
-      if (candidate.settlement !== parsed.settlement && candidate.settlement !== 'RETURN') return [];
       const amount = integer((value as Rec).rent);
-      return amount !== null && amount > 0 ? [{ amount, sourceRef: 'PRODUCT_12_MONTH_RENT', key }] : [];
+      return amount !== null && amount > 0 ? [{
+        termMonths: candidate.months,
+        settlement: candidate.settlement,
+        mileageKm: candidate.contractedMileage?.km ?? candidate.mileageKm,
+        mileagePeriod: candidate.contractedMileage?.period ?? 'year',
+        currency: 'KRW',
+        amount,
+        sourceRef: 'PRODUCT_12_MONTH_RENT',
+      }] : [];
     });
-    const automaticQ12 = q12Candidates.length === 1 ? { amount: q12Candidates[0]!.amount, sourceRef: q12Candidates[0]!.sourceRef } : undefined;
+    const automaticQ12 = selectSonokongQ12Basis({
+      termMonths: parsed.months,
+      settlement: parsed.settlement,
+      mileageKm: parsed.contractedMileage?.km ?? parsed.mileageKm,
+      mileagePeriod: parsed.contractedMileage?.period ?? 'year',
+      currency: 'KRW',
+      amount: monthlyRent,
+      sourceRef: `source-product:${documentId}#price:${sourceKey}`,
+    }, q12Candidates);
     const subscriptionForm = parsed.months === 12 ? undefined : parsed.settlement;
     const automaticCommissionEvidence = {
-      ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && automaticQ12 ? { q12Basis: automaticQ12 } : {}),
+      ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && automaticQ12 && !evidenceByTerm[sourceKey]?.q12Basis ? { q12Basis: automaticQ12 } : {}),
       ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && subscriptionForm ? { subscriptionForm } : {}),
     } satisfies Partial<Pick<CommissionInput, 'q12Basis' | 'subscriptionForm'>>;
     const depositInput = depositEvidenceInputFromProduct(source, (raw as Rec).deposit, {

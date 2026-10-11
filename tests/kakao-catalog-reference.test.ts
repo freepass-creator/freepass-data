@@ -916,12 +916,17 @@ describe('F04 2026-10-04 alignment regression', () => {
     const sonokong = { ...product, provider_company_code: 'RP012', product_type: '오공구독' };
     expect(buildKakaoCatalogReferenceProduct('s', sonokong, { '24_2만': { q12Basis: { amount: 800000, sourceRef: 'private:verified-q12' }, subscriptionForm: 'BUYOUT' } })!.offers[0]!.priceTerms[0]!.supplierBillingFee.amount).toBe(1100000);
     expect(buildKakaoCatalogReferenceProduct('s', sonokong)!.offers[0]!.priceTerms[0]!.supplierBillingFee.reasonCode).toBe('Q12_BASIS_REQUIRED');
-    const sonokongWithQ12 = { ...sonokong, price: { '12': { rent: 800000 }, '24_인수형': { rent: 700000 } } };
+    const sonokongWithReturnQ12Only = { ...sonokong, price: { '12': { rent: 800000 }, '24_인수형': { rent: 700000 } } };
+    expect(buildKakaoCatalogReferenceProduct('s-q12-return-only', sonokongWithReturnQ12Only)!.offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee)
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'Q12_BASIS_REQUIRED' });
+    const sonokongWithQ12 = { ...sonokong, price: { '12_인수형': { rent: 800000 }, '24_인수형': { rent: 700000 } } };
     expect(buildKakaoCatalogReferenceProduct('s-q12', sonokongWithQ12)!.offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee).toMatchObject({
       state: 'CALCULATED',
       amount: 1100000,
       ruleId: 'SONOKONG_SUBSCRIPTION_24_BILLING',
     });
+    expect(buildKakaoCatalogReferenceProduct('s-explicit-q12', sonokongWithQ12, { '24_인수형': { q12Basis: { amount: 900000, sourceRef: 'private:verified-q12' }, subscriptionForm: 'BUYOUT' } })!
+      .offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee.amount).toBe(1200000);
     const returnForm = { ...sonokong, price: { '12': { rent: 800000 }, '24': { rent: 700000 } } };
     expect(buildKakaoCatalogReferenceProduct('s-return', returnForm)!.offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee.reasonCode).toBe('RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED');
     expect(product).toEqual(sourceBefore);

@@ -303,6 +303,27 @@ describe('F04 explicit canonical evidence', () => {
     expect(row.supplierBillingFee.referenceRentBasis).toEqual({ termKey: '36', termMonths: 36, monthlyRent: { amount: 500000, currency: 'KRW' }, multiplier: 1 });
     expect(row.channelPayoutFee.referenceRentBasis?.multiplier).toBe(0.8);
   });
+  it('requires a unique same-settlement Sonokong Q12 basis and keeps caller evidence first', () => {
+    const input = { ...offer(), supplierId: 'RP012' };
+    input.priceTerms = [
+      { termKey: '12', termMonths: 12, monthlyRent: { amount: 800000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+      { termKey: '24_?몄닔??', termMonths: 24, monthlyRent: { amount: 700000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+    ];
+    const targetKey = input.priceTerms[1]!.termKey;
+    expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, { [targetKey]: { subscriptionForm: 'BUYOUT' } })[1]!.supplierBillingFee)
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'Q12_BASIS_REQUIRED' });
+    input.priceTerms[0]!.termKey = '12_?몄닔??';
+    const q12Key = input.priceTerms[0]!.termKey;
+    expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, { [q12Key]: { subscriptionForm: 'BUYOUT' }, [targetKey]: { subscriptionForm: 'BUYOUT' } })[1]!.supplierBillingFee.amount?.amount)
+      .toBe(1100000);
+    input.priceTerms.unshift({ termKey: '12_?몄닔??_duplicate', termMonths: 12, monthlyRent: { amount: 810000, currency: 'KRW' }, depositState: 'UNKNOWN' });
+    const duplicateQ12Key = input.priceTerms[0]!.termKey;
+    expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, { [duplicateQ12Key]: { subscriptionForm: 'BUYOUT' }, [q12Key]: { subscriptionForm: 'BUYOUT' }, [targetKey]: { subscriptionForm: 'BUYOUT' } })[2]!.supplierBillingFee)
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'Q12_BASIS_REQUIRED' });
+    expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {
+      [targetKey]: { subscriptionForm: 'BUYOUT', q12Basis: { amount: 900000, sourceRef: 'verified:q12' } },
+    })[2]!.supplierBillingFee.amount?.amount).toBe(1200000);
+  });
   it('detects a changed or corrupted reference monthly rent independently of the stored fixed amount', () => {
     const input = { ...offer(), supplierId: 'RP021' };
     input.internalEconomicsTerms = precomputeOfferEconomics(input, 'USED_SUBSCRIPTION');
