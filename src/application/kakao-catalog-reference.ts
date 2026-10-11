@@ -30,6 +30,8 @@ export function referenceObservationToCompatibilityProduct(row: ReturnType<typeo
     product_type: o.commercialType, vehicle_status: o.status, listable: false,
     price: Object.fromEntries(n.priceConditions.map(t => [String(t.termMonths), {
       rent: t.monthlyRentAmount, deposit: t.depositAmount, depositState: t.depositState, monthlyRentState: t.monthlyRentState,
+      supplierBillingFee: t.supplierBillingFee, channelPayoutFee: t.channelPayoutFee,
+      expectedGrossMargin: t.expectedGrossMargin, priceSourceRefs: t.priceSourceRefs,
     }])),
     _representation_kind: 'CURRENT_SOURCE_ROW_PRODUCT' as const,
     _publication_decision: 'HOLD' as const, _source_row_product: row };
@@ -82,6 +84,14 @@ export function projectReferenceObservation(raw: RawRecord, record?: NormalizedC
   const string = (v: unknown) => typeof v === 'string' && v.length > 0 && v.length <= 256 ? v : null;
   const candidate = record?.candidate;
   const amount = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null;
+  const sourceRef = (field: string) => ({ runId: raw.runId, rawRecordId: raw.rawRecordId,
+    row: Number.isSafeInteger(raw.payload.row) && Number(raw.payload.row) > 0 ? Number(raw.payload.row) : null, field });
+  const supplierId = string(candidate?.providerCompanyCode);
+  const productType = string(original('상품구분')) ?? '';
+  const verifiedProductType = knownProductType(productType) !== 'UNKNOWN'
+    && candidate?.commercialType === knownProductType(productType);
+  const fuelFact = candidate?.vehicleFacts?.fields.fuel;
+  const fuel = fuelFact?.state === 'KNOWN' ? string(fuelFact.value) : null;
   const observation = {
     observationId: `source_observation_${hash(JSON.stringify([raw.runId, raw.rawRecordId, raw.sourceFingerprint]))}`,
     identityKind: 'CURRENT_SOURCE_ROW' as const,
@@ -114,13 +124,27 @@ export function projectReferenceObservation(raw: RawRecord, record?: NormalizedC
         const rent = amount(t.monthlyRent?.amount), deposit = amount(t.deposit?.amount);
         const state = t.depositState === 'ZERO' && deposit === 0 ? 'ZERO' as const
           : t.depositState === 'KNOWN' && deposit !== null && deposit > 0 ? 'KNOWN' as const : 'UNKNOWN' as const;
+        // Never infer a price variant from another row, a plate, or a supplier name.
+        const bases36 = (candidate?.priceTerms ?? []).filter(basis => basis.termMonths === 36
+          && basis.mileageLimitKmPerYear === t.mileageLimitKmPerYear);
+        const billinBasisUsed = ['RP021', 'PT-0026'].includes(supplierId ?? '') && verifiedProductType && /구독/.test(productType);
+        const reason = !supplierId ? 'SOURCE_SUPPLIER_MISSING' : !verifiedProductType ? 'SOURCE_PRODUCT_TYPE_UNVERIFIED'
+          : rent === null || rent <= 0 ? 'SOURCE_PRICE_CONDITION_UNUSABLE'
+          : billinBasisUsed && bases36.length > 1 ? 'BILLIN_36_MONTH_RENT_AMBIGUOUS' : null;
+        const input: CommissionInput = { supplierId: supplierId ?? '', productType, termMonths: t.termMonths,
+          monthlyRent: rent ?? 0, ...(fuel ? { fuel } : {}),
+          billin36MonthlyRent: bases36.length === 1 ? amount(bases36[0]!.monthlyRent.amount) ?? undefined : undefined };
+        const supplierBillingFee = reason ? unknownCommission(reason) : resolveSupplierBillingFee(input);
+        const channelPayoutFee = reason ? unknownCommission(reason) : resolveSalesCommission(input);
+        // Supplier identity comes from capture metadata, not the visible company-name cell.
+        const priceSourceRefs = [sourceRef('payload.supplierCode'), sourceRef('상품구분'), sourceRef(`${t.termMonths}개월`),
+          ...(fuel ? [sourceRef('연료')] : []), ...(billinBasisUsed && bases36.length === 1 ? [sourceRef('36개월')] : [])];
         return { termMonths: t.termMonths, monthlyRentAmount: rent, monthlyRentState: rent === null ? 'UNKNOWN' as const : 'KNOWN' as const,
           depositAmount: state === 'UNKNOWN' ? null : deposit, depositState: state,
-          mileageKm: t.mileageLimitKmPerYear ?? null, mileagePeriod: t.mileageLimitKmPerYear == null ? null : 'year' as const };
+          mileageKm: t.mileageLimitKmPerYear ?? null, mileagePeriod: t.mileageLimitKmPerYear == null ? null : 'year' as const,
+          supplierBillingFee, channelPayoutFee, expectedGrossMargin: resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee), priceSourceRefs };
       }) },
   };
-  const sourceRef = (field: string) => ({ runId: raw.runId, rawRecordId: raw.rawRecordId,
-    row: Number.isSafeInteger(raw.payload.row) && Number(raw.payload.row) > 0 ? Number(raw.payload.row) : null, field });
   const reasons = (codes: string[]) => codes.filter(code => /^[A-Z][A-Z0-9_:.-]{0,199}$/.test(code));
   const facts = Object.entries({ maker: '제조사', model: '모델', subModel: '세부모델', trimName: '세부트림',
     fuel: '연료', displacementCc: '배기량', drive: '구동방식', seats: '인승', mileageKm: '주행거리',
