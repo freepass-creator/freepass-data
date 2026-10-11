@@ -17,23 +17,34 @@ const positiveSafeInteger = (value: unknown): value is number =>
 export function refreshOfferEconomicsForChangedInputs(
   previous: Offer, next: Offer, commercialType?: CommercialType, fuel?: string | null,
   vehiclePriceChange?: { before: Money | null; after: Money | null; sourceRef: string },
+  policyContextChanged = false,
 ) {
   const candidate = precomputeOfferEconomics(next, commercialType, fuel);
   const old = new Map((previous.internalEconomicsTerms ?? []).map(term => [term.termKey, term]));
   const oldPrices = new Map(previous.priceTerms.map(term => [term.termKey, term]));
   const changedPriceKeys = new Set(next.priceTerms.filter(term => stableDigest(oldPrices.get(term.termKey) ?? null) !== stableDigest(term)).map(term => term.termKey));
   for (const key of oldPrices.keys()) if (!next.priceTerms.some(term => term.termKey === key)) changedPriceKeys.add(key);
+  const reference36Changed = stableDigest(previous.priceTerms.filter(term => term.termMonths === 36)) !==
+    stableDigest(next.priceTerms.filter(term => term.termMonths === 36));
   const priceChanged = !!vehiclePriceChange && stableDigest(vehiclePriceChange.before) !== stableDigest(vehiclePriceChange.after);
   return candidate.map(term => {
     for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
       const fee = old.get(term.termKey)?.[side];
       if (!fee) continue;
       if (fee.calculation?.kind !== 'RATE' || fee.calculation.base !== 'VEHICLE_PRICE') {
-        const referenceChanged = fee.referenceRentBasis && changedPriceKeys.has(fee.referenceRentBasis.termKey);
-        if (!changedPriceKeys.has(term.termKey) && !referenceChanged) term[side] = structuredClone(fee);
+        const referenceChanged = (fee.referenceRentBasis && changedPriceKeys.has(fee.referenceRentBasis.termKey)) ||
+          (fee.ruleId?.startsWith('BILLIN_SUBSCRIPTION_36_RENT') && reference36Changed);
+        if (!policyContextChanged && !changedPriceKeys.has(term.termKey) && !referenceChanged) term[side] = structuredClone(fee);
         continue;
       }
       term[side] = structuredClone(fee);
+      const oldPrice = oldPrices.get(term.termKey), newPrice = next.priceTerms.find(price => price.termKey === term.termKey)!;
+      if (policyContextChanged || oldPrice?.termMonths !== newPrice.termMonths ||
+          oldPrice?.mileageLimitKmPerYear !== newPrice.mileageLimitKmPerYear) {
+        term[side] = { ...structuredClone(fee), state: 'UNKNOWN', amount: null, calculation: null,
+          sourceRefs: [], vatAmount: null, totalAmount: null, reasonCode: 'VEHICLE_PRICE_POLICY_CONTEXT_REVIEW_REQUIRED' };
+        continue;
+      }
       if (!priceChanged) continue;
       const fact = vehiclePriceChange!;
       const valid = fact.after?.currency === 'KRW' && positiveSafeInteger(fact.after.amount) &&

@@ -42,6 +42,9 @@ describe('offer economics recompute', () => {
     const removed={...next,priceTerms:next.priceTerms.filter(term=>term.termMonths!==36)};
     expect(refreshOfferEconomicsForChangedInputs(offer,removed,'USED_SUBSCRIPTION')[0]!.supplierBillingFee)
       .toMatchObject({state:'UNKNOWN',amount:null});
+    const ambiguous={...next,priceTerms:[...next.priceTerms,{...next.priceTerms[0]!,termKey:'m36-extra'}]};
+    expect(refreshOfferEconomicsForChangedInputs(offer,ambiguous,'USED_SUBSCRIPTION').find(term=>term.termKey==='m60')!.supplierBillingFee)
+      .toMatchObject({state:'UNKNOWN',amount:null});
   });
   it('scopes plans to changed offer/product IDs and rejects missing offers without writes', async () => {
     const store = await fixture(), original = (await store.listOffers())[0]!;
@@ -77,6 +80,10 @@ describe('offer economics recompute', () => {
     const missing = refreshOfferEconomicsForChangedInputs(saved,saved,'USED_RENT',undefined,
       {before:{amount:30000000,currency:'KRW'},after:null,sourceRef:''});
     expect(missing[0]!.channelPayoutFee).toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'VEHICLE_PRICE_EVIDENCE_REQUIRED'});
+    const changedPeriod=structuredClone(saved);changedPeriod.priceTerms[0]!.termMonths=48;
+    expect(refreshOfferEconomicsForChangedInputs(saved,changedPeriod,'USED_RENT')[0]!.channelPayoutFee)
+      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'VEHICLE_PRICE_POLICY_CONTEXT_REVIEW_REQUIRED'});
+    expect(refreshOfferEconomicsForChangedInputs(saved,saved,'NEW_RENT',undefined,undefined,true)[0]!.channelPayoutFee.state).toBe('UNKNOWN');
     expect(offer.internalEconomicsTerms[0]!.channelPayoutFee.amount!.amount).toBe(300000);
     const plan=await planOfferEconomicsRecompute(store,'memory-test',{offerIds:[offer.id]});
     expect(plan.changedOffers).toBe(0);
