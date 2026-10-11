@@ -153,4 +153,22 @@ for (const contract of [schema, catalogSchema]) {
     expect(check({ ...value, priceSourceRefs: [123] })).toBe(false);
     expect(check({ ...value, unexpected: true })).toBe(false);
   });
+  if (contract === catalogSchema) {
+    test(`${contract.title}: approximate term economic amount is schema-valid`, () => {
+      expect(check({
+        state: 'KNOWN',
+        amount: { amount: 1550000, currency: 'KRW' },
+        calculation: {
+          kind: 'RATE',
+          base: 'MONTHLY_RENT_X_TERM',
+          rate: 0.0275,
+          adjustmentAmount: { amount: -100000, currency: 'KRW' },
+        },
+        sourceRefs: ['F04:row'],
+        priceSourceRefs: ['catalog_offers/test/priceTerms/60'],
+        approximate: true,
+        note: 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191',
+      }), JSON.stringify(check.errors)).toBe(true);
+    });
+  }
 }

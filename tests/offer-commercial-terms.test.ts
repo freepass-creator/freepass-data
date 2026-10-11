@@ -291,6 +291,45 @@ describe('F04 explicit canonical evidence', () => {
     expect(precomputeOfferEconomics(unsupported, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 128000 }, approximate: true });
     expect({ offer, evidence }).toEqual(before);
   });
+  it('stores pickup fee calculations that recompute to the saved amount', () => {
+    const calc = (fee: NonNullable<ReturnType<typeof precomputeOfferEconomics>[number]['supplierBillingFee']>, monthlyRent: number, termMonths: number) => {
+      if (fee.calculation?.kind === 'RATE' && fee.calculation.base === 'MONTHLY_RENT_X_TERM') {
+        return Math.round(monthlyRent * termMonths * fee.calculation.rate) + (fee.calculation.adjustmentAmount?.amount ?? 0);
+      }
+      if (fee.calculation?.kind === 'FIXED') return fee.calculation.amount.amount;
+      throw new Error('unsupported calculation');
+    };
+    const rows = precomputeOfferEconomics({
+      id: 'synthetic', supplierId: 'RP012',
+      priceTerms: [
+        { termKey: '24', termMonths: 24, monthlyRent: { amount: 400000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+        { termKey: '60', termMonths: 60, monthlyRent: { amount: 1000000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+      ],
+    }, 'PICKUP_SUBSCRIPTION');
+    const byTerm = new Map(rows.map(row => [row.termMonths, row]));
+    expect(byTerm.get(60)!.supplierBillingFee).toMatchObject({
+      amount: { amount: 1550000 },
+      calculation: { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.0275, adjustmentAmount: { amount: -100000, currency: 'KRW' } },
+      ruleId: 'SONOKONG_PICKUP_60_BILLING_RENT_X_TERM',
+    });
+    expect(byTerm.get(60)!.channelPayoutFee).toMatchObject({
+      amount: { amount: 1200000 },
+      calculation: { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.02 },
+      ruleId: 'SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM',
+    });
+    expect(byTerm.get(24)!.supplierBillingFee.calculation).toMatchObject({
+      kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.0475,
+      adjustmentAmount: { amount: -100000, currency: 'KRW' },
+    });
+    expect(byTerm.get(24)!.channelPayoutFee.calculation).toMatchObject({
+      kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: 0.04,
+    });
+    for (const row of rows) {
+      for (const fee of [row.supplierBillingFee, row.channelPayoutFee]) {
+        expect(calc(fee, row.monthlyRent!.amount, row.termMonths!)).toBe(fee.amount!.amount);
+      }
+    }
+  });
   it('uses the same-product 36-month basis for Billin and records its exact price provenance', () => {
     const offer = { id: 'synthetic', supplierId: 'RP021', priceTerms: [{ termKey: '60', termMonths: 60, monthlyRent: { amount: 200000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }] };
     expect(precomputeOfferEconomics(offer, 'USED_SUBSCRIPTION')[0]!.supplierBillingFee.reasonCode).toBe('BILLIN_36_MONTH_RENT_REQUIRED');

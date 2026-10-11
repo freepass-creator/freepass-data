@@ -271,15 +271,22 @@ export function precomputeOfferEconomics(
           if (!verified) throw new Error('LEGACY_RENT_FEE_BASIS_REVIEW_REQUIRED');
         }
         calculation = { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: monthlyRule.rateBasisPoints / 10000 };
-      } else if (result.ruleId?.endsWith('_RENT_X_TERM')) {
+      } else if (result.ruleId?.endsWith('_RENT_X_TERM') || result.note === 'SONOKONG_PICKUP_TERM_PROXY_RERENT') {
         // Read rates from the same policy table, including the Switch ladder alias.
         const billing = policy.rules.find((rule) => rule.id === 'STANDARD_RERENT_BILLING_LADDER')!;
         const payout = policy.rules.find((rule) => 'termMonths' in rule && rule.termMonths === term.termMonths &&
           rule.id.startsWith('STANDARD_RERENT_') && 'rateBasisPoints' in rule);
+        const sonokongPickup60Rate = result.ruleId === `SONOKONG_PICKUP_60_${side}_RENT_X_TERM`
+          ? side === 'BILLING' ? 275 : 200
+          : null;
         const row = side === 'BILLING' ? billing.termRules.find((rule) => rule.termMonths === term.termMonths) : payout;
-        const rate = row && 'rateBasisPoints' in row ? row.rateBasisPoints : null;
+        const rate = sonokongPickup60Rate ?? (row && 'rateBasisPoints' in row ? row.rateBasisPoints : null);
         if (rate == null) return unknown('CALCULATION_RULE_REQUIRED');
-        calculation = { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: rate / 10000 };
+        const adjustmentAmount = side === 'BILLING' && result.amount === Math.round(args.monthlyRent * term.termMonths * rate / 10000) - 100000
+          ? { amount: -100000, currency: 'KRW' as const }
+          : undefined;
+        calculation = { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: rate / 10000,
+          ...(adjustmentAmount ? { adjustmentAmount } : {}) };
       } else {
         calculation = { kind: 'FIXED', amount: { amount: result.amount, currency: 'KRW' } };
       }
@@ -544,11 +551,13 @@ function auditEconomicAmount(
     }
     expected = Math.round(monthlyRent * calculation.multiplier);
   } else if (calculation.base === 'MONTHLY_RENT_X_TERM') {
-    if (!Number.isFinite(calculation.rate) || calculation.rate < 0) {
+    if (!Number.isFinite(calculation.rate) || calculation.rate < 0 ||
+        (calculation.adjustmentAmount !== undefined && (calculation.adjustmentAmount.currency !== 'KRW' ||
+          !Number.isSafeInteger(calculation.adjustmentAmount.amount)))) {
       invalidFacts.push(`INVALID_ECONOMICS_CALCULATION:${label}`);
       return;
     }
-    expected = Math.round(monthlyRent * termMonths * calculation.rate);
+    expected = Math.round(monthlyRent * termMonths * calculation.rate) + (calculation.adjustmentAmount?.amount ?? 0);
   } else if (!Number.isFinite(calculation.rate) || calculation.rate < 0) {
     invalidFacts.push(`INVALID_ECONOMICS_CALCULATION:${label}`);
     return;
