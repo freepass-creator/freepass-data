@@ -38,6 +38,12 @@ const assetWithCurrentExternalIds = (id: string, plateNumber: string): VehicleAs
 const product = (plate: string, extra: VehicleUidMigrationProduct = {}) => ({ car_number: plate, provider_company_code: 'TEST', ...extra });
 const fixedClock = () => new Date('2026-10-10T00:00:00.000Z');
 const random = () => 0.1;
+const normalizeExternalIdsForCompare = (externalIds: unknown) =>
+  Array.isArray(externalIds)
+    ? [...externalIds].sort((left, right) => stableDigest(left).localeCompare(stableDigest(right)))
+    : externalIds ?? null;
+const sameExternalIds = (left: unknown, right: unknown) =>
+  stableDigest(normalizeExternalIdsForCompare(left)) === stableDigest(normalizeExternalIdsForCompare(right));
 
 function plan(products: Record<string, VehicleUidMigrationProduct>, assets = [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001', 'TEST-FAKE-VIN-001')]) {
   return planVehicleUidMigration({
@@ -118,7 +124,7 @@ class FakeStore implements VehicleUidMigrationWriteStore {
           skipped.push({ target: `asset:${mutation.assetId}`, reason: 'CONCURRENT_CHANGE' });
           break;
         }
-        if (mutation.expectedAfter !== undefined && JSON.stringify(this.assets.get(mutation.assetId)?.externalIds ?? null) !== JSON.stringify(mutation.expectedAfter ?? null)) {
+        if (mutation.expectedAfter !== undefined && !sameExternalIds(this.assets.get(mutation.assetId)?.externalIds ?? null, mutation.expectedAfter ?? null)) {
           skipped.push({ target: `asset:${mutation.assetId}`, reason: 'ROLLBACK_SKIPPED_CHANGED' });
           break;
         }

@@ -1,6 +1,7 @@
 import { FieldValue, getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type { VehicleAsset, VehicleExternalId } from '../domain/catalog.js';
 import type { VehicleUidMigrationProductDoc, VehicleUidMigrationStoreMutation, VehicleUidMigrationUpdateTime, VehicleUidMigrationWriteStore } from '../ports/vehicle-uid-migration-store.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import { summarizeVehicleUidMigrationAssetIdentifiers } from '../shared/vehicle-uid-migration-identifiers.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
@@ -21,7 +22,12 @@ function rollbackProductVehicleUidPatch(vehicleUid: string | null | undefined) {
   return vehicleUid === undefined ? { vehicle_uid: FieldValue.delete() } : { vehicle_uid: vehicleUid };
 }
 
-const same = (left: unknown, right: unknown) => JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+const normalizeExternalIdsForCompare = (externalIds: unknown) =>
+  Array.isArray(externalIds)
+    ? [...externalIds].sort((left, right) => stableDigest(left).localeCompare(stableDigest(right)))
+    : externalIds ?? null;
+const sameExternalIds = (left: unknown, right: unknown) =>
+  stableDigest(normalizeExternalIdsForCompare(left)) === stableDigest(normalizeExternalIdsForCompare(right));
 const updateTimeValue = (snap: { updateTime?: VehicleUidMigrationUpdateTime | undefined }) =>
   snap.updateTime ? { seconds: snap.updateTime.seconds, nanoseconds: snap.updateTime.nanoseconds } : undefined;
 const sameUpdateTime = (left: VehicleUidMigrationUpdateTime | undefined, right: VehicleUidMigrationUpdateTime | undefined) =>
@@ -62,7 +68,7 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
       if (mutation.updateTime && !sameUpdateTime(updateTimeValue(snap), mutation.updateTime)) {
         return { target: `asset:${mutation.assetId}`, reason: 'CONCURRENT_CHANGE' as const };
       }
-      if (mutation.expectedAfter !== undefined && !same(snap.get('externalIds'), mutation.expectedAfter)) {
+      if (mutation.expectedAfter !== undefined && !sameExternalIds(snap.get('externalIds'), mutation.expectedAfter)) {
         return { target: `asset:${mutation.assetId}`, reason: 'ROLLBACK_SKIPPED_CHANGED' as const };
       }
       return validateAssetDigest(mutation, validationSnap);

@@ -128,6 +128,49 @@ describe('vehicle UID Firestore writer transaction ordering', () => {
     expect(db.docs.get(assetPath('TEST-FAKE-UID-001'))?.externalIds).toBeUndefined();
   });
 
+  it('rolls back when applied asset externalIds only differ by object key order and array order', async () => {
+    const p = plan(
+      { p1: product('TEST-FAKE-001', { vin: 'TEST-FAKE-VIN-NEW' }) },
+      [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001')],
+    );
+    const db = new FakeFirestore();
+    db.docs.set(assetPath('TEST-FAKE-UID-001'), asset('TEST-FAKE-UID-001', 'TEST-FAKE-001'));
+    db.docs.set(productPath('p1'), product('TEST-FAKE-001', { vin: 'TEST-FAKE-VIN-NEW' }));
+
+    const applied = await applyVehicleUidMigration(fakeWriter(db), p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    const appliedExternalIds = db.docs.get(assetPath('TEST-FAKE-UID-001'))!.externalIds as Array<Record<string, unknown>>;
+    db.docs.set(assetPath('TEST-FAKE-UID-001'), {
+      ...db.docs.get(assetPath('TEST-FAKE-UID-001'))!,
+      externalIds: [...appliedExternalIds].reverse().map((id) => Object.fromEntries(Object.entries(id).reverse())),
+    });
+
+    const rolledBack = await rollbackVehicleUidMigration(fakeWriter(db), applied.backup!, p.planDigest, { approvedDigest: p.planDigest, writeFlag: 'ROLLBACK' });
+    expect(rolledBack.status).toBe('ROLLED_BACK');
+    expect(rolledBack.skippedReasons?.ROLLBACK_SKIPPED_CHANGED).toBeUndefined();
+    expect(db.docs.get(assetPath('TEST-FAKE-UID-001'))?.externalIds).toBeUndefined();
+  });
+
+  it('skips rollback when applied asset externalIds values changed after apply', async () => {
+    const p = plan(
+      { p1: product('TEST-FAKE-001', { vin: 'TEST-FAKE-VIN-NEW' }) },
+      [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001')],
+    );
+    const db = new FakeFirestore();
+    db.docs.set(assetPath('TEST-FAKE-UID-001'), asset('TEST-FAKE-UID-001', 'TEST-FAKE-001'));
+    db.docs.set(productPath('p1'), product('TEST-FAKE-001', { vin: 'TEST-FAKE-VIN-NEW' }));
+
+    const applied = await applyVehicleUidMigration(fakeWriter(db), p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    const appliedExternalIds = db.docs.get(assetPath('TEST-FAKE-UID-001'))!.externalIds as Array<Record<string, unknown>>;
+    db.docs.set(assetPath('TEST-FAKE-UID-001'), {
+      ...db.docs.get(assetPath('TEST-FAKE-UID-001'))!,
+      externalIds: appliedExternalIds.map((id) => id.kind === 'VIN' ? { ...id, value: 'TEST-FAKE-VIN-CHANGED' } : id),
+    });
+
+    const rolledBack = await rollbackVehicleUidMigration(fakeWriter(db), applied.backup!, p.planDigest, { approvedDigest: p.planDigest, writeFlag: 'ROLLBACK' });
+    expect(rolledBack.skippedReasons?.ROLLBACK_SKIPPED_CHANGED).toBe(1);
+    expect(db.docs.get(assetPath('TEST-FAKE-UID-001'))?.externalIds).toEqual(expect.arrayContaining([expect.objectContaining({ value: 'TEST-FAKE-VIN-CHANGED' })]));
+  });
+
   it('revalidates a product-only linked asset inside the transaction and skips stale asset deletion', async () => {
     const p = plan({ p1: product('TEST-FAKE-001') }, [assetWithCurrentExternalIds('TEST-FAKE-UID-001', 'TEST-FAKE-001')]);
     const db = new FakeFirestore();

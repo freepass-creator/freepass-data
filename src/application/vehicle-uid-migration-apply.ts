@@ -86,7 +86,12 @@ const bump = (record: Record<string, number>, reason: string) => {
 const withTypedUpdateTime = (updateTime?: VehicleUidMigrationUpdateTime) => updateTime ? { updateTime } : {};
 const withExpectedAfter = <T>(expectedAfter: T | undefined) => expectedAfter !== undefined ? { expectedAfter } : {};
 const productVehicleUidBackupValue = (value: unknown): string | null => typeof value === 'string' ? value : null;
-const sameDigest = (left: unknown, right: unknown) => stableDigest(left) === stableDigest(right);
+const normalizeExternalIdsForCompare = (externalIds: unknown) =>
+  Array.isArray(externalIds)
+    ? [...externalIds].sort((left, right) => stableDigest(left).localeCompare(stableDigest(right)))
+    : externalIds ?? null;
+const sameExternalIds = (left: unknown, right: unknown) =>
+  stableDigest(normalizeExternalIdsForCompare(left)) === stableDigest(normalizeExternalIdsForCompare(right));
 
 export async function dryRunVehicleUidMigration(plan: VehicleUidMigrationPlan, expectedDigest: string): Promise<VehicleUidMigrationApplyResult> {
   const digest = assertVehicleUidPlanDigest(plan, expectedDigest);
@@ -142,7 +147,7 @@ export async function applyVehicleUidMigration(
         const asset = snapshot?.data ?? await store.getAsset(item.assetId);
         if (!asset) throw new Error('VEHICLE_UID_ASSET_MISSING');
         const next = externalIdsAfter(asset, item.externalIds, plan.observedAt);
-        if (stableDigest(next) === stableDigest(asset.externalIds ?? [])) {
+        if (sameExternalIds(next, asset.externalIds ?? [])) {
           skipped++;
           continue;
         }
@@ -249,7 +254,7 @@ export async function verifyVehicleUidMigration(store: VehicleUidMigrationWriteS
       const asset = await store.getAsset(item.assetId);
       if (!asset) throw new Error('VEHICLE_UID_READBACK_ASSET_MISSING');
       const expected = externalIdsAfter(asset, item.externalIds, plan.observedAt);
-      if (stableDigest(asset.externalIds ?? []) !== stableDigest(expected)) throw new Error('VEHICLE_UID_READBACK_ASSET_MISMATCH');
+      if (!sameExternalIds(asset.externalIds ?? [], expected)) throw new Error('VEHICLE_UID_READBACK_ASSET_MISMATCH');
     }
   }
 }
@@ -293,7 +298,7 @@ export async function rollbackVehicleUidMigration(
   }
   for (const item of backup.assets) {
     const current = await store.getAsset(item.assetId);
-    if (item.appliedExternalIds !== undefined && sameDigest(current?.externalIds ?? null, item.externalIds ?? null)) {
+    if (item.appliedExternalIds !== undefined && sameExternalIds(current?.externalIds ?? null, item.externalIds ?? null)) {
       bump(skippedReasons, 'NOT_APPLIED');
       skipped++;
       continue;
