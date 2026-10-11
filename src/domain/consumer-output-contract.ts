@@ -331,6 +331,18 @@ export function createVehiclePhotoReader(
   now: () => number = Date.now,
 ) {
   const cache = new Map<string, { bytes: Buffer; contentType: string; expiresAt: number }>();
+  type ReviewedImage = { result: VehiclePhotoRead; expiresAt: number; productId: string; connection: string };
+  const pendingReviewed = new Map<string, Promise<ReviewedImage>>();
+  const reviewedCache = new Map<string, ReviewedImage>();
+  let reviewedBytes = 0;
+  const removeReviewed = (key: string) => {
+    const entry = reviewedCache.get(key);
+    if (entry) reviewedBytes -= entry.result.bytes?.length ?? 0;
+    reviewedCache.delete(key);
+  };
+  const invalidateReviewed = (productId: string) => {
+    for (const [key, entry] of reviewedCache) if (entry.productId === productId) removeReviewed(key);
+  };
   let totalBytes = 0;
   let active = 0;
   const remove = (key: string) => { const entry = cache.get(key); if (entry) totalBytes -= entry.bytes.length; cache.delete(key); };
@@ -351,18 +363,19 @@ export function createVehiclePhotoReader(
     if (!(consumerId === 'erp-com' || consumerId === 'erp5-public-media' || /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId))) throw new Error('VEHICLE_PHOTO_CONSUMER_FORBIDDEN');
     if (!productId || productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(productId)
       || (index !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= 200))) throw new Error('VEHICLE_PHOTO_REQUEST_INVALID');
-    const product = await readProduct(productId);
+    let product: Rec | undefined;
+    try { product = await readProduct(productId); } catch (error) { invalidateReviewed(productId); throw error; }
     const mediaOnly = consumerId === 'erp5-public-media';
     // The machine media consumer never falls through to approved Drive or other suppliers.
-    if (mediaOnly && !isPublicIancarPhotoProduct(product)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+    if (mediaOnly && !isPublicIancarPhotoProduct(product)) { invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
     const consumerSources = mediaOnly ? sources.filter(candidate => candidate === iancarSource) : sources;
     const source = consumerSources.find(candidate => candidate.eligible(product));
-    if (!source || !product || !hasVehiclePhotoVerification(product)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+    if (!source || !product || !hasVehiclePhotoVerification(product)) { invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
     const refs = product.photo_original_refs as Rec[];
     if (source === iancarSource && refs.some(ref => ref.reviewBasis !== undefined && ref.reviewBasis !== 'CONTENT_ORDINAL/1'))
-      throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+      { invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
     if (source === iancarSource && refs.some(ref => ref.reviewBasis === 'CONTENT_ORDINAL/1')
-      && refs.some(ref => ref.sourceKind !== 'IANCAR_ONE')) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+      && refs.some(ref => ref.sourceKind !== 'IANCAR_ONE')) { invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
     const boundOneReview = source === iancarSource && refs.some(ref => ref.sourceKind === 'IANCAR_ONE');
     const contentBasis = boundOneReview && refs.some(ref => ref.reviewBasis === 'CONTENT_ORDINAL/1');
     const reviewedSetMatches = (result: VehiclePhotoRead, checkBytes = index !== undefined): boolean => {
@@ -390,15 +403,42 @@ export function createVehiclePhotoReader(
         && createHash('sha256').update(result.bytes).digest('hex') === ref.photoSha256;
     };
     const connection = JSON.stringify([source.connection(product), product.photo_original_refs]);
+    for (const [key, entry] of reviewedCache) if (entry.productId === productId && entry.connection !== connection) removeReviewed(key);
+    const reviewedKey = contentBasis && index !== undefined ? JSON.stringify([consumerId, productId, connection, index]) : undefined;
+    let verifiedImage: ReviewedImage | undefined;
+    let reusedVerifiedImage = false;
     const revalidate = async (checkSource = true): Promise<boolean> => {
-      const current = await readProduct(productId);
+      let current: Rec | undefined;
+      try { current = await readProduct(productId); } catch { invalidateReviewed(productId); return false; }
       const unchanged = !!current && (!mediaOnly || isPublicIancarPhotoProduct(current)) && hasVehiclePhotoVerification(current) && consumerSources.find(candidate => candidate.eligible(current)) === source
         && JSON.stringify([source.connection(current), current.photo_original_refs]) === connection;
-      if (!unchanged) return false;
+      if (!unchanged) { invalidateReviewed(productId); return false; }
+      if (reusedVerifiedImage && verifiedImage && verifiedImage.expiresAt <= now()) { invalidateReviewed(productId); return false; }
       if (!boundOneReview || !checkSource) return true;
       // The response is a frozen copy whose bytes already matched the reviewed hash.
       // Recheck current membership, not a second image that will never be transmitted.
-      try { return reviewedSetMatches(await source.read(current!, undefined, true), false); } catch { return false; }
+      try {
+        if (!reviewedSetMatches(await source.read(current!, undefined, true), false)) {
+          invalidateReviewed(productId);
+          return false;
+        }
+        if (reusedVerifiedImage && verifiedImage && verifiedImage.expiresAt <= now()) { invalidateReviewed(productId); return false; }
+        // Publish only after this caller's success audit and final fresh membership
+        // check. Expiry stays tied to the original byte validation, never the hit.
+        if (reviewedKey && verifiedImage && verifiedImage.expiresAt > now()) {
+          const size = verifiedImage.result.bytes?.length ?? 0;
+          removeReviewed(reviewedKey);
+          if (size <= 32 * 1024 * 1024) {
+            while (reviewedCache.size >= 64 || reviewedBytes + size > 32 * 1024 * 1024)
+              removeReviewed(reviewedCache.keys().next().value!);
+            reviewedCache.set(reviewedKey, verifiedImage); reviewedBytes += size;
+          }
+        }
+        return true;
+      } catch {
+        invalidateReviewed(productId);
+        return false;
+      }
     };
     const recheck = async () => {
       // Preserve the DB approval/withdrawal check here. The public callback also refreshes
@@ -420,6 +460,29 @@ export function createVehiclePhotoReader(
         throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
       }
     };
+    // Only exact content approval proof shares bytes; identity-only adapter caches
+    // remain bypassed. Every caller retains independent DB/audit/final-source gates.
+    const readReviewed = async () => {
+      if (!reviewedKey) return read();
+      for (const [key, entry] of reviewedCache) if (entry.expiresAt <= now()) removeReviewed(key);
+      let entry = reviewedCache.get(reviewedKey);
+      reusedVerifiedImage = !!entry;
+      if (!entry) {
+        let request = pendingReviewed.get(reviewedKey);
+        if (!request) {
+          if (pendingReviewed.size >= VEHICLE_PHOTO_MAX_CONCURRENT) throw new Error('VEHICLE_PHOTO_BUSY');
+          request = Promise.resolve().then(read).then(result => ({ result: { ...result,
+            bytes: Buffer.isBuffer(result.bytes) ? Buffer.from(result.bytes) : result.bytes,
+          }, productId, connection, expiresAt: now() + VEHICLE_PHOTO_CACHE_TTL_MS }))
+            .finally(() => { pendingReviewed.delete(reviewedKey); });
+          pendingReviewed.set(reviewedKey, request);
+        }
+        entry = await request;
+      }
+      if (!reviewedSetMatches(entry.result)) { removeReviewed(reviewedKey); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+      verifiedImage = entry;
+      return { ...entry.result, bytes: Buffer.isBuffer(entry.result.bytes) ? Buffer.from(entry.result.bytes) : entry.result.bytes };
+    };
     const validCount = (count: number) => {
       if (!Number.isSafeInteger(count) || count < 0 || count > 200) throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
     };
@@ -437,7 +500,7 @@ export function createVehiclePhotoReader(
       const cacheKey = ref ? JSON.stringify([productId, ref.driveFileId, ref.sha256, ref.approvedAt, ref.vehicleKey]) : undefined;
       for (const [key, entry] of cache) if (entry.expiresAt <= now()) remove(key);
       const cached = cacheKey ? cache.get(cacheKey) : undefined;
-      const result = cached ? { ...cached, count: (product.photo_original_refs as ApprovedVehiclePhotoRef[]).length } : await read();
+      const result = cached ? { ...cached, count: (product.photo_original_refs as ApprovedVehiclePhotoRef[]).length } : await readReviewed();
       validCount(result.count);
       const bytes = result.bytes;
       if (validateVehiclePhotoMedia(result.contentType, Buffer.isBuffer(bytes) ? bytes.length : 0, bytes) || !Buffer.isBuffer(bytes) || index >= result.count
