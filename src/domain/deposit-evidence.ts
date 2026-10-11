@@ -339,8 +339,13 @@ const depositText = (v: unknown) => typeof v === 'string' ? v.trim() : '';
 const depositInstant = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(v) && Number.isFinite(Date.parse(v));
 
 /** Reuses the approved publication's typed provenance; does not re-hash the private RAW envelope. */
-export function readIancarPublishedDeposit(product: Record<string, unknown>, priceKey: string, now = new Date().toISOString()) {
-  const unknown = () => ({ state: 'UNKNOWN' as const, amount: null, reason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' });
+export function readIancarPublishedDeposit(product: Record<string, unknown>, priceKey: string, now = new Date().toISOString(),
+  options: { preserveStalePositiveReference?: boolean } = {}):
+  | { state: 'UNKNOWN'; amount: null; reason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' }
+  | { state: 'KNOWN' | 'ZERO'; amount: number; reason: 'IANCAR_PUBLISHED_CONDITION_EVIDENCE' }
+  | { state: 'KNOWN'; amount: number; reason: 'SOURCE_AMOUNT'; publicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE';
+      publicationDecision: 'HOLD'; depositRuleDifference?: Extract<DepositWithRuleResolution, { state: 'KNOWN' }>['depositRuleDifference'] } {
+  const unknown = () => ({ state: 'UNKNOWN' as const, amount: null, reason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_UNVERIFIED' as const });
   const e = product.iancar_phase_one;
   if (product.provider_company_code !== 'RP031' || product.source !== 'EANCAR_ONE_API'
     || product.source_schema !== 'iancar-one-phase-one-product/1' || !depositRecord(e)
@@ -351,8 +356,6 @@ export function readIancarPublishedDeposit(product: Record<string, unknown>, pri
     || !/^[a-f0-9]{64}$/.test(String(e.sourceDigest)) || !/^[a-f0-9]{64}$/.test(String(e.ratesDigest))
     || !depositInstant(now) || !depositInstant(e.sourceSyncedAt)
     || product._direct_ingest_at !== Date.parse(e.sourceSyncedAt)
-    || Date.parse(now) - Date.parse(e.sourceSyncedAt) > IANCAR_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS * 1000
-    || Date.parse(e.sourceSyncedAt) - Date.parse(now) > 60_000
     || !Array.isArray(e.terms) || !e.terms.length || !depositRecord(e.priceAliases) || !depositRecord(product.price)) return unknown();
   const terms = e.terms;
   for (const t of terms) {
@@ -384,6 +387,21 @@ export function readIancarPublishedDeposit(product: Record<string, unknown>, pri
   if (term.deposit.amount === 0 && (depositText(product.product_type).replace(/\s/g, '') === '픽업구독'
     || [false, '아니오', '아님', '불가'].some(value => product.deposit_free === value)
     || (depositText(product.deposit_note) && !['무보증', '기간·주행거리별 보증금 상이: 상품 요금 조건 확인'].includes(depositText(product.deposit_note))))) return unknown();
+  // Freshness cannot erase a structurally verified positive source amount. This is a
+  // reference fact only: deleted/conflicting/ambiguous conditions above still fail closed.
+  if (Date.parse(e.sourceSyncedAt) - Date.parse(now) > 60_000) return unknown();
+  if (Date.parse(now) - Date.parse(e.sourceSyncedAt) > IANCAR_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS * 1000) {
+    // Public/compat callers keep their previous fail-closed result. Only authenticated
+    // REFERENCE_ONLY/HOLD output can opt in to retaining a stale source amount.
+    if (!options.preserveStalePositiveReference || term.deposit.amount === 0) return unknown();
+    const source = resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
+      termMonths: term.termMonths, monthlyRent: row.rent, hasPositivePaidDeposit: hasConflictingPaidDeposit(product.price),
+    }));
+    if (source.state !== 'KNOWN') return unknown();
+    return { state: 'KNOWN' as const, amount: source.amount, reason: 'SOURCE_AMOUNT',
+      ...(source.depositRuleDifference ? { depositRuleDifference: source.depositRuleDifference } : {}),
+      publicationEvidenceReason: 'IANCAR_PUBLISHED_DEPOSIT_EVIDENCE_STALE', publicationDecision: 'HOLD' as const };
+  }
   return { state: term.depositState as 'ZERO' | 'KNOWN', amount: term.deposit.amount as number,
     reason: 'IANCAR_PUBLISHED_CONDITION_EVIDENCE' };
 }

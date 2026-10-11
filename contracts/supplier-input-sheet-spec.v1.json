@@ -10,6 +10,7 @@
     "scope": "supplierChannels.sharedInputSheet에 등록된 공급사; 직접 API/홈페이지 연동 공급사의 경로는 유지",
     "inputAuthority": "공통 시트의 현재 공급사 입력 탭",
     "sourceBinding": {
+      "sourceId": "shared-sheet:fa91e570d9bb9b3b0667451e",
       "spreadsheetIdSha256": "552c86134d05f6c287ea072ef93006c1610f4aac5d5bdfe4082cebdb25f71696",
       "decision": "대표 2026-10-09: 최신 공통시트 각 공급사 탭으로 고정, 과거 개별 시트 입력 연결 폐기",
       "legacyInputEnabled": false,

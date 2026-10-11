@@ -174,6 +174,15 @@ EANCAR_ONE_RAW_INGEST_APPROVED=true npm run source:iancar:one -- --apply-raw
 
 RAW 적재는 Canonical 발행이나 ERP.com 전환을 의미하지 않는다.
 
+### 동기화 잠금 상품 격리 — 2026-10-10
+
+`--sync --apply-sync`는 계약 잠금 또는 삭제 표시가 있는 관측 상품만 반영 대상에서 제외한다. 제외 상품에는 쓰기를 하지 않으며 기존 상태·가격·사진·증거·잠금을 그대로 보존한다. 신원 불일치, 번호판/소스 식별자 충돌, 중복, 신선도 오류는 여전히 전체 실패다. 동시 변경 감지와 백업·되읽기 검증도 유지한다.
+
+- 영수증/collector `publication`: `skippedCount`, `skippedByReason`, `skippedRatio`, `maxSkippedRatio`, `warnings`. 사유는 `CONTRACT_LOCK`, `DELETION_LOCK`, `CONTRACT_AND_DELETION_LOCK` 중 하나이며 중복 집계하지 않는다. 새 공개 필드는 건수·코드만 포함한다.
+- 분모는 이번 원천의 전체 관측 상품 수다. `IANCAR_PUBLICATION_MAX_LOCK_SKIP_RATIO` 한 상수에서 0.20을 정의한다. 정확히 20%까지 경고와 성공 종료(0), 초과하면 `IANCAR_PUBLICATION_LOCK_SKIP_RATIO_EXCEEDED`로 백업·쓰기 전에 전체 실패한다.
+- `matched`/`created`와 `open`/사진 건수는 제외 후 반영 대상 기준이다. `sourceCount`는 제외 전 원천 수다. 잠금 상품의 오래된 증거가 갱신됐다고 보고하지 않는다.
+- 원천 미관측 이력의 기존 잠금 보존 규칙은 유지하며 위 비율의 분모·분자에 넣지 않는다. 계획 digest에 제외 집합과 revision을 묶고 거래 시 전체 revision을 다시 검사한다.
+
 ## 운영 개통 순서
 
 1. 사용자 승인된 provider key를 사용한다. 2026-10-01 기존 키 사용 결정과 Secret version 1 등록을 확인했다.

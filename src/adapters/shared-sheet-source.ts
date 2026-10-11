@@ -38,7 +38,8 @@ export function assertCurrentSharedSheetSource(id: string | undefined) {
   const binding = spec.supplierManagement.sourceBinding;
   if (!id || binding.legacyInputEnabled !== false || binding.fallbackAllowed !== false || binding.summaryIsSource !== false ||
       !/^[a-f0-9]{64}$/.test(binding.spreadsheetIdSha256) ||
-      createHash('sha256').update(id).digest('hex') !== binding.spreadsheetIdSha256) throw new Error('SHARED_SHEET_SOURCE_BINDING_MISMATCH');
+      createHash('sha256').update(id).digest('hex') !== binding.spreadsheetIdSha256 ||
+      `shared-sheet:${stableDigest(id).slice(0, 24)}` !== binding.sourceId) throw new Error('SHARED_SHEET_SOURCE_BINDING_MISMATCH');
 }
 export const sharedSheetHeaders: readonly string[] = spec.inputHeaders;
 /** Registration is retained even when an input tab is absent. Absence is never a sold-out signal. */
