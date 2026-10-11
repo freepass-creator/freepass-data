@@ -9,7 +9,7 @@
 | RP006 아이언 | 23 | ERP4 홈페이지 수집 매시 | 이번 PR 의 `collect-iron` 이 읽기 전용 경로를 마련. 적재는 5절 막힘 해소 후 |
 | 우리캐피탈 RP020 | 13 | 공통 입력 시트 자기 탭 | 이미 새 경로(공통 시트 capture) |
 | KH RP010 | 11 | 공통 입력 시트 | 이미 새 경로 |
-| 에스에이 PT-0023 | 10 | 공통 입력 시트 | 이미 새 경로 (HEALTH-PLAN A절: 범위 밖 탭 «에스에이» 철회 승인 없음 — 탭 연결 판정 필요) |
+| 에스에이 PT-0023 | 10 | 공통 입력 시트 | 경로상 새 경로이나 HEALTH-PLAN A절에서 «에스에이» 탭이 범위 밖(철회 승인 없음) — 편입 아님, 탭 연결 판정 필요 |
 | 스타 RP018 | 8 | 공통 입력 시트(스타+스카이 한 탭) | 이미 새 경로 |
 | 웰릭스 RP013 | 5 | 공통 입력 시트 | 이미 새 경로(기존 `welrixSourceAdapter`는 전환 전 대조용) |
 | 에코 RP032 | 5 | 공통 입력 시트 | 이미 새 경로 |
@@ -22,16 +22,16 @@
 ## 2. 이번 PR 의 구현: `src/jobs/collect-iron.ts`
 - `npm run source:iron:capture` — `IRON_TARGETS_JSON`(id·url·plate 배열)에서만 대상을 받는다(코드에 박지 않음). 기본은 읽기 전용: 건수·digest·사유만 출력하고 차량번호는 출력하지 않는다.
 - 재사용: `ironSourceAdapter`, `ironDetailReader`(승인 `IRON_FETCH_APPROVED=true` 없으면 robots 요청도 안 함, 동시 2·차량당 1회·redirect 금지), `collectSupplierSource`, 기존 `ingestRawBatch`. 새 reader·새 장부 없음.
-- 적재(`--apply-raw`)는 `IRON_RAW_INGEST_APPROVED=true` 와 증거 상태 `RAW_READY` 둘 다 필요. 시험 6건(`tests/supplier-iron-capture.test.ts`).
+- 적재(`--apply-raw`)는 `IRON_RAW_INGEST_APPROVED=true` 와 증거 상태 `RAW_READY` 둘 다 필요. 시험 6건(`tests/supplier-iron-capture.test.ts`)은 승인·상태 게이트 논리를 주입 포트로 검증한 것이며, 실제 아이언 데이터로 `RAW_READY` 에 닿는지는 3절 때문에 현재 닿지 못한다(즉 `--apply-raw` 는 3절 해소 전까지 실운영에서 거부됨). 읽기 전용 실행도 `SOURCE_FRESHNESS_UNKNOWN`·범위 불완전 사유가 항상 남아 종료 코드 2 를 낸다 — 실패가 아니라 «PARTIAL 표시».
 
 ## 3. 알려진 막힘: 아이언은 지금 구조로 RAW_READY 에 못 닿는다
-아이언 어댑터의 coverage 가 항상 `PARTIAL/UNKNOWN`(승인된 상세만)이라 공통 `inspectSupplierSourceBatch` 가 `HOLD_SOURCE_REVIEW` 로 본다 — 의도된 fail-closed 이며 이번 PR 이 완화하지 않는다. 적재하려면 둘 중 하나가 필요하다: ① 목록 전체를 승인된 범위로 읽어 FULL 증명(약관·robots 판정 선행) ② «PARTIAL 도 RAW 보존은 허용» 이라는 정책 결정(원문 보존 100% 목표와 맞물림). 대표 판단 1건.
+아이언 어댑터의 coverage 가 항상 `PARTIAL/UNKNOWN`(승인된 상세만)이라 공통 `inspectSupplierSourceBatch` 가 `HOLD`(`RAW_READY` 아님)로 본다 — 의도된 fail-closed 이며 이번 PR 이 완화하지 않는다. 적재하려면 둘 중 하나가 필요하다: ① 목록 전체를 승인된 범위로 읽어 FULL 증명(약관·robots 판정 선행) ② «PARTIAL 도 RAW 보존은 허용» 이라는 정책 결정(원문 보존 100% 목표와 맞물림). 대표 판단 1건.
 
 ## 4. RP023 오토플러스 설계(구현 보류)
 현재 ERP4 `ingest-reborncar-to-firestore` 가 웹사이트+시트(오플구독)를 읽고, 원천 사진 링크가 있으면 기존 값을 덮어쓴다. 새 경로 편입은 ① 시트 부분은 공통 시트 경로로 두고 ② 웹사이트 부분은 native 수집기 설계부터. 사이트 접근 방식(공개 페이지/로그인), 약관·robots 를 모르는 상태에서 수집기를 지어내지 않는다 — 6절 질문 1~2 답 후 착수.
 
 ## 5. 30분 보고용 지표(이 담당 범위, 읽은 근거 기준)
-편입 대수: 소규모 12곳 약 63대는 경로상 편입, 아이언 23·RP023 32 는 미편입(0). 준수율: 공통 시트 계열 ≈4%(#490 실측). 보류 비율: 88.6%(#490, 공통 시트 12탭).
+편입 대수: 소규모 12곳 약 63대는 «경로상 편입 대상»(에스에이 10대는 탭 연결 판정 전이라 제외하면 약 53대, 실제 편입 확정치는 source_runs 대조 전까지 미확정), 아이언 23·RP023 32 는 미편입(0). 준수율: 공통 시트 계열 ≈4%(#490 실측). 보류 비율: 88.6%(#490, 공통 시트 12탭).
 
 ## 6. 공급사 확인 동선 등록용 질문 목록 (등록.ps1 한 줄씩, 공급사별 묶음)
 | 번호 | 공급사 | 질문 | 이유 |

@@ -1,6 +1,7 @@
 import { pathToFileURL } from 'node:url';
 import { ironSourceAdapter, type IronDetailFetcher, type IronDetailTarget } from '../adapters/supplier-source-capture.js';
 import { ironDetailReader } from '../infra/iron-detail-reader.js';
+import { plateIdentityKey } from '../domain/vehicle-plate.js';
 import {
   collectSupplierSource,
   type SourceIntakeBatch,
@@ -38,6 +39,12 @@ export function parseIronTargetsJson(value: string | undefined): IronDetailTarge
   }
   if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some(item => !validTarget(item)))
     throw new Error('IRON_TARGETS_INVALID');
+  const ids = new Set<string>(), plates = new Set<string>();
+  for (const target of parsed) {
+    const key = plateIdentityKey(target.plate);
+    if (!key || ids.has(target.id) || plates.has(key)) throw new Error('IRON_TARGETS_INVALID');
+    ids.add(target.id); plates.add(key);
+  }
   return parsed.map(target => ({ id: target.id, url: target.url, plate: target.plate }));
 }
 
@@ -45,6 +52,7 @@ export async function captureIron(input: {
   targets: readonly IronDetailTarget[];
   applyRaw: boolean;
   approved: boolean;
+  env?: NodeJS.ProcessEnv;
 }, ports: {
   fetchDetail?: IronDetailFetcher;
   ingestRawBatch?: (batch: SourceIntakeBatch) => Promise<unknown>;
@@ -55,7 +63,7 @@ export async function captureIron(input: {
     sourceId: 'supplier:RP006:iron-original-html',
     targets: input.targets,
     expectedFreshnessSeconds: null,
-    fetchDetail: ports.fetchDetail ?? ironDetailReader(),
+    fetchDetail: ports.fetchDetail ?? ironDetailReader(input.env ? { env: input.env } : {}),
   });
   const { batch, evidence } = await (ports.collect ?? collectSupplierSource)(adapter);
   if (input.applyRaw) {
@@ -75,6 +83,7 @@ export async function ironCaptureCommand(args: string[], env: NodeJS.ProcessEnv 
     targets: parseIronTargetsJson(env.IRON_TARGETS_JSON),
     applyRaw: args.includes('--apply-raw'),
     approved: env.IRON_RAW_INGEST_APPROVED === 'true',
+    env,
   });
 }
 
