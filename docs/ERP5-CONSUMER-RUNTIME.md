@@ -9,6 +9,13 @@
 - pre-ONE `data-owned-refresh.yml`/`data-delivery-owner.mjs` 실행은 **폐기·사용 금지**다. 현행 ERP writer를 이 오래된 실행기로 옮기지 않는다.
 - 2026-10-09 직접 관측: `freepass-data-read-00015-649` READY, ERP.com 공개 사진 샘플 3개 JPEG 200. 동시에 최근 사진 요청 100건 중 503 8건과 25초 timeout도 관측했다. READY/샘플 성공은 전체 소비처·앨범 안정화 완료가 아니다.
 - 아래의 2026-09 관측, 전환 전 표, 초기 Cloud Run 미활성 기록은 **역사 관측**이며 현재 운영 상태로 사용하지 않는다. 전체 화이트라벨/Admin/Estimate readback 및 원천→소비처 현재성은 미검증 상태를 유지한다.
+## 2026-10-11 ERP5 사진 전용 machine consumer 준비
+
+- 서버 등록 후보는 정확한 `erp5-public-media` / `projectionId: erp-public` / 별도 service token / 명시 `capabilities: ["photos"]`다. 등록의 projection 값은 기존 구조 호환용이며 catalog 권한을 주지 않는다. 기존 ERP.com/화이트라벨 ID·토큰·catalog 권한은 유지한다. UI 채널·브랜드 또는 앱 자격 중첩 등록이 아니다.
+- 허용 경로는 `/v1/consumers/erp5-public-media/catalog-compat/products/{exactProductDocumentId}/photos`와 `/{index}` 두 개다. 기존 anonymous public feed/quote는 같은 공개 정책을 유지하며, 이 token에 catalog/compat/master/reference/fees/health/업무 쓰기 권한을 주지 않는다. 다른 소비자 경로에서는 인증되지 않는다.
+- RP031 `listable=true`, 공개 상태 가용/선점, ONE vehicle ID/차량번호와 차량사진 검증 근거를 확인한 기존 ONE source만 사용한다. 승인 Drive 사진·다른 공급사로 fallback하지 않는다. source 연결/공개 자격과 철회를 읽기 후 및 성공 감사 후 전송 직전에 재확인한다. 공급사 ID·토큰·원본 주소는 응답에 노출하지 않으며 no-store/nosniff·감사 실패 중단·형식/크기·속도 제한을 보존한다. 기존 business consumer에 별도 channel-provider fence가 생겼다고 주장하지 않는다.
+- CODED/로컬 TESTED 준비이며 운영 등록·token 발급/Secret version·runtime pin·IAM·배포·ERP5 환경 연결·실제 RP031 사진 readback은 별도 승인/HOLD다. 공개 runtime PR437 및 Firestore direct read PR451의 배포를 대신하지 않는다.
+
 ## 공통 시트 → ERP 연결 준비 — 2026-10-06
 
 공통 시트의 입력값·서식·드롭다운·행 수를 변경하지 않고 기존 RAW/후보 → 검토된 Canonical → ACTIVE release → 인증 API를 사용한다. PR #397의 12탭/15코드 범위를 전제로 한다. absent 3탭은 HOLD이며 기존 재고 삭제/판매완료 근거가 아니다. 차량·기간 대사는 기존 `pilot:check`의 원천/기존 소비처/Data 3자 비교를 사용한다([읽기 대사](CONSUMER-READ-PILOT.md)); 단순 HTTP 200이나 대수 일치를 cutover로 인정하지 않는다.
