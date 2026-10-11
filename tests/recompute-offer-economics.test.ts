@@ -156,6 +156,33 @@ describe('offer economics recompute', () => {
     expect(refreshOfferEconomicsForChangedInputs(offer,ambiguous,false,'USED_SUBSCRIPTION').find(term=>term.termKey==='m60')!.supplierBillingFee)
       .toMatchObject({state:'UNKNOWN',amount:null});
   });
+  it('refreshes Sonokong subscription fees when the referenced 12-month Q12 rent changes', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'12_인수형',termMonths:12,monthlyRent:{amount:800000,currency:'KRW' as const}},
+      {...original.priceTerms[0]!,termKey:'24_인수형',termMonths:24,monthlyRent:{amount:700000,currency:'KRW' as const}},
+    ]};
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'OGONG_SUBSCRIPTION');
+    expect(offer.internalEconomicsTerms[1]!.supplierBillingFee).toMatchObject({
+      amount:{amount:1100000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:800000,currency:'KRW'},multiplier:1}
+    });
+    expect(offer.internalEconomicsTerms[1]!.channelPayoutFee).toMatchObject({
+      amount:{amount:800000},referenceRentBasis:{termKey:'12_인수형',termMonths:12}
+    });
+    const unchanged=structuredClone(offer);
+    unchanged.priceTerms[1]!.monthlyRent.amount=750000;
+    expect(refreshOfferEconomicsForChangedInputs(offer,unchanged,false,'OGONG_SUBSCRIPTION')[1]!.supplierBillingFee)
+      .toEqual(offer.internalEconomicsTerms[1]!.supplierBillingFee);
+    const changed=structuredClone(offer);
+    changed.priceTerms[0]!.monthlyRent.amount=900000;
+    const refreshed=refreshOfferEconomicsForChangedInputs(offer,changed,false,'OGONG_SUBSCRIPTION');
+    expect(refreshed[1]!.supplierBillingFee).toMatchObject({
+      amount:{amount:1200000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
+    });
+    expect(refreshed[1]!.channelPayoutFee).toMatchObject({
+      amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
+    });
+  });
   it('scopes plans to changed offer/product IDs and rejects missing offers without writes', async () => {
     const store = await fixture(), original = (await store.listOffers())[0]!;
     await store.seed({ offers: [{ ...original, id: 'outside-scope', productId: 'outside-product' }] });
