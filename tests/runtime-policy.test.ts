@@ -72,7 +72,7 @@ describe('API runtime boundary', () => {
     expect(workflow).toContain('id_token_audience: ${{ steps.readiness.outputs.url }}');
     expect(workflow).toContain('--header "X-Serverless-Authorization: Bearer $cloud_run_token"');
     expect(workflow).not.toContain('--header="X-Serverless-Authorization: Bearer $cloud_run_token"');
-    expect(workflow).toContain('Reusing existing immutable image for $GITHUB_SHA');
+    expect(workflow).toContain('Reusing existing immutable image for $EXPECTED_SOURCE_SHA');
     expect(workflow).toContain('/v1/consumers/erp-com/catalog-compat');
     expect(workflow).toContain('.schema == "freepass-data.catalog-compat/v1"');
     expect(workflow).toContain('.data.products | type == "object"');
@@ -173,7 +173,7 @@ describe('API runtime boundary', () => {
   });
   it('rejects an unapproved public target before reaching deployment', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-    const section = workflow.split('      - name: Validate public approval before deployment effects')[1]?.split('      - name: Authenticate deploy identity')[0];
+    const section = workflow.split('      - name: Validate public approval before deployment effects')[1]?.split('      - name: Checkout resolved runtime source')[0];
     const block = section?.split('        run: |\n')[1];
     if (!block) throw new Error('Public approval preflight missing');
     const script = block.split('\n').map(line => line.slice(10)).join('\n');
