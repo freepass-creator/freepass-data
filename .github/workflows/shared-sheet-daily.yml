@@ -57,7 +57,8 @@ jobs:
       contents: read
     steps:
       # 가드 읽는 스크립트 한 줄만 받는다(sparse). 관문(쓰기 job)도 같은 스크립트를 쓴다.
-      - uses: actions/checkout@v4
+      - name: Fetch gate scripts (sparse)
+        uses: actions/checkout@v4
         with:
           path: gate-src
           sparse-checkout: scripts/ci
@@ -120,7 +121,8 @@ jobs:
       #  - 수동 apply: environment data-production-delivery 에 사람 승인(필수 검토자)이 없으므로(10-04 확인)
       #    FREEPASS_DATA_DAILY_MANUAL_APPLY == 'on' 일 때만. 통제된 첫 적용 때만 켜고 끝나면 지운다.
       #  - 수동 dry-run: 쓰기 0 이라 항상.
-      - uses: actions/checkout@v4
+      - name: Fetch gate scripts (sparse)
+        uses: actions/checkout@v4
         with:
           path: gate-src
           sparse-checkout: scripts/ci
