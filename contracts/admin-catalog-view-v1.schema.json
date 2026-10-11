@@ -883,7 +883,10 @@
               "minLength": 1
             },
             "termMonths": {
-              "const": 36
+              "enum": [
+                12,
+                36
+              ]
             },
             "monthlyRent": {
               "$ref": "#/$defs/money"

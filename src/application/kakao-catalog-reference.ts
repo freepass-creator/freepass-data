@@ -693,7 +693,7 @@ export function resolveSubscriptionFormForTerm(
 
 export function selectSonokongQ12Basis(target: SonokongQ12BasisCandidate, candidates: readonly SonokongQ12BasisCandidate[]): CommissionInput['q12Basis'] | undefined {
   if (target.termMonths === 12 && Number.isSafeInteger(target.amount) && target.amount > 0) {
-    return { amount: target.amount, sourceRef: 'PRODUCT_12_MONTH_RENT' };
+    return { amount: target.amount, sourceRef: target.sourceRef };
   }
   const matching = candidates.filter(candidate => candidate.termMonths === 12 &&
     candidate.settlement === target.settlement &&
@@ -976,7 +976,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
         mileagePeriod: candidate.contractedMileage?.period ?? 'year',
         currency: 'KRW',
         amount,
-        sourceRef: 'PRODUCT_12_MONTH_RENT',
+        sourceRef: key,
       }] : [];
     });
     const resolvedSubscriptionForm = resolveSubscriptionFormForTerm(

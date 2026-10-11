@@ -99,16 +99,13 @@ export function refreshOfferEconomicsForChangedInputs(
   const oldPrices = new Map(previous.priceTerms.map(term => [term.termKey, term]));
   const changedPriceKeys = new Set(next.priceTerms.filter(term => stableDigest(oldPrices.get(term.termKey) ?? null) !== stableDigest(term)).map(term => term.termKey));
   for (const key of oldPrices.keys()) if (!next.priceTerms.some(term => term.termKey === key)) changedPriceKeys.add(key);
-  const reference36Changed = stableDigest(previous.priceTerms.filter(term => term.termMonths === 36)) !==
-    stableDigest(next.priceTerms.filter(term => term.termMonths === 36));
   const priceChanged = !!vehiclePriceChange && stableDigest(vehiclePriceChange.before) !== stableDigest(vehiclePriceChange.after);
   return candidate.map(term => {
     for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
       const fee = old.get(term.termKey)?.[side];
       if (!fee) continue;
       if (fee.calculation?.kind !== 'RATE' || fee.calculation.base !== 'VEHICLE_PRICE') {
-        const referenceChanged = (fee.referenceRentBasis && changedPriceKeys.has(fee.referenceRentBasis.termKey)) ||
-          (fee.ruleId?.startsWith('BILLIN_SUBSCRIPTION_36_RENT') && reference36Changed);
+        const referenceChanged = !!fee.referenceRentBasis && changedPriceKeys.has(fee.referenceRentBasis.termKey);
         if (!policyContextChanged && !changedPriceKeys.has(term.termKey) && !referenceChanged) term[side] = structuredClone(fee);
         continue;
       }
@@ -187,7 +184,7 @@ export function precomputeOfferEconomics(
           mileagePeriod: 'year' as const,
           currency: candidate.monthlyRent.currency,
           amount: candidate.monthlyRent.amount,
-          sourceRef: 'PRODUCT_12_MONTH_RENT',
+          sourceRef: `catalog_offers/${offer.id}/priceTerms/${candidate.termKey}`,
         }];
       }))
       : undefined;
@@ -213,6 +210,14 @@ export function precomputeOfferEconomics(
         base.priceSourceRefs = [...new Set([priceRef, `catalog_offers/${offer.id}/priceTerms/${basis36[0]!.termKey}`])];
         base.referenceRentBasis = { termKey: basis36[0]!.termKey, termMonths: 36,
           monthlyRent: structuredClone(basis36[0]!.monthlyRent), multiplier: side === 'BILLING' ? 1 : 0.8 };
+      }
+      const q12BasisTerm = args.q12Basis?.sourceRef
+        ? offer.priceTerms.find(candidate => args.q12Basis?.sourceRef === `catalog_offers/${offer.id}/priceTerms/${candidate.termKey}`)
+        : undefined;
+      if (result.ruleId?.startsWith('SONOKONG_SUBSCRIPTION_') && q12BasisTerm?.termMonths === 12) {
+        base.priceSourceRefs = [...new Set([priceRef, `catalog_offers/${offer.id}/priceTerms/${q12BasisTerm.termKey}`])];
+        base.referenceRentBasis = { termKey: q12BasisTerm.termKey, termMonths: 12,
+          monthlyRent: structuredClone(q12BasisTerm.monthlyRent), multiplier: 1 };
       }
       const unknown = (reasonCode: string): TermEconomicAmount => ({ ...base,
         state: 'UNKNOWN', amount: null, calculation: null, vatAmount: null, totalAmount: null, reasonCode });
@@ -567,10 +572,13 @@ export function auditOfferEconomicsTerms(offer: Offer): OfferEconomicsAudit {
       const fee = term[side], basis = fee.referenceRentBasis;
       if (!basis) continue;
       const reference = prices.get(basis.termKey);
-      if (!reference || reference.termMonths !== 36 || basis.termMonths !== 36 ||
+      if (!reference || reference.termMonths !== basis.termMonths ||
           reference.monthlyRent.amount !== basis.monthlyRent.amount || reference.monthlyRent.currency !== basis.monthlyRent.currency ||
-          basis.multiplier !== (side === 'supplierBillingFee' ? 1 : 0.8) ||
-          Math.round(basis.monthlyRent.amount * basis.multiplier) !== fee.amount?.amount) {
+          (basis.termMonths === 36 && (basis.multiplier !== (side === 'supplierBillingFee' ? 1 : 0.8) ||
+            Math.round(basis.monthlyRent.amount * basis.multiplier) !== fee.amount?.amount)) ||
+          (basis.termMonths === 12 && (basis.multiplier !== 1 || (side === 'channelPayoutFee' &&
+            basis.monthlyRent.amount !== fee.amount?.amount) || (side === 'supplierBillingFee' &&
+            (fee.amount?.amount ?? -1) < basis.monthlyRent.amount)))) {
         invalidFacts.push(`ECONOMICS_REFERENCE_RENT_MISMATCH:${term.termKey}:${side}`);
       }
     }
