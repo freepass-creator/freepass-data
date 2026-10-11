@@ -34,6 +34,7 @@ export type VehicleUidMigrationItem =
       productKey: string;
       vehicleUid: string;
       reason: 'SOURCE_BINDING' | 'PLATE_UNIQUE_ASSET' | 'PLANNED_NEW_UID' | 'CREATED_IN_PLAN';
+      assetState: 'LINKED_EXISTING' | 'PRODUCT_ONLY';
       identifiers: VehicleUidMigrationIdentifierSummary;
       assetIdentifierDigest?: string;
       public: { componentHash: string; productHash: string; vehicleUidHash: string; reason: string };
@@ -454,6 +455,7 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
         productKey,
         vehicleUid: uid,
         reason,
+        assetState: existingAsset ? 'LINKED_EXISTING' : 'PRODUCT_ONLY',
         identifiers: summarizeVehicleUidMigrationIdentifiers(product),
         ...(existingAsset ? { assetIdentifierDigest: summarizeVehicleUidMigrationAssetIdentifiers(existingAsset, input.observedAt) } : {}),
         public: { componentHash: hash(componentId), productHash: hash(productKey), vehicleUidHash: hash(uid), reason },

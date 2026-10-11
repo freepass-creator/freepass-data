@@ -123,7 +123,7 @@ class FakeStore implements VehicleUidMigrationWriteStore {
   }
   async commitMutations(mutations: Parameters<NonNullable<VehicleUidMigrationWriteStore['commitMutations']>>[0]) {
     this.committedMutations.push(structuredClone(mutations));
-    const skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' | 'NOT_APPLIED' | 'STALE_ASSET' | 'STALE_IDENTIFIER' }> = [];
+    const skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' | 'NOT_APPLIED' | 'STALE_ASSET' | 'STALE_IDENTIFIER' | 'UID_ASSET_NOT_FOUND' | 'UID_ASSET_ALREADY_EXISTS' }> = [];
     const sameUpdateTime = (left: VehicleUidMigrationUpdateTime | undefined, right: VehicleUidMigrationUpdateTime | undefined) =>
       left?.seconds === right?.seconds && left?.nanoseconds === right?.nanoseconds;
     const nextVersion = () => ({ seconds: 1, nanoseconds: this.writes + 1 });
@@ -145,10 +145,18 @@ class FakeStore implements VehicleUidMigrationWriteStore {
           break;
         }
       } else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
+        if (mutation.assetState === 'PRODUCT_ONLY' && this.assets.has(mutation.vehicleUid ?? '')) {
+          skipped.push({ target: `product:${mutation.productKey}`, reason: 'UID_ASSET_ALREADY_EXISTS' });
+          break;
+        }
+        if (mutation.assetState === 'LINKED_EXISTING' && !mutation.assetIdentifierDigest) {
+          skipped.push({ target: `product:${mutation.productKey}`, reason: 'UID_ASSET_NOT_FOUND' });
+          break;
+        }
         if (mutation.assetIdentifierDigest) {
           const currentAsset = this.assets.get(mutation.vehicleUid ?? '');
           if (!currentAsset || !mutation.observedAt || summarizeVehicleUidMigrationAssetIdentifiers(currentAsset, mutation.observedAt) !== mutation.assetIdentifierDigest) {
-            skipped.push({ target: `product:${mutation.productKey}`, reason: 'STALE_ASSET' });
+            skipped.push({ target: `product:${mutation.productKey}`, reason: currentAsset ? 'STALE_ASSET' : 'UID_ASSET_NOT_FOUND' });
             break;
           }
         }
@@ -157,6 +165,10 @@ class FakeStore implements VehicleUidMigrationWriteStore {
           break;
         }
         if (mutation.expectedAfter !== undefined && this.products.get(mutation.productKey)?.vehicle_uid !== mutation.expectedAfter) {
+          skipped.push({ target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' });
+          break;
+        }
+        if (mutation.expectedRegistryAfter !== undefined && this.products.get(mutation.productKey)?.vehicle_uid_registry !== mutation.expectedRegistryAfter) {
           skipped.push({ target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' });
           break;
         }
@@ -186,6 +198,10 @@ class FakeStore implements VehicleUidMigrationWriteStore {
           skipped.push({ target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' });
           break;
         }
+        if (mutation.expectedRegistryAfter !== undefined && this.products.get(mutation.productKey)?.vehicle_uid_registry !== mutation.expectedRegistryAfter) {
+          skipped.push({ target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' });
+          break;
+        }
       }
     }
     if (skipped.length) return { applied: 0, skipped };
@@ -197,11 +213,20 @@ class FakeStore implements VehicleUidMigrationWriteStore {
         this.assetVersions.set(mutation.assetId, nextVersion());
       } else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
         await this.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
+        if (mutation.vehicleUidRegistry) {
+          this.products.set(mutation.productKey, { ...this.products.get(mutation.productKey)!, vehicle_uid_registry: mutation.vehicleUidRegistry });
+        }
         this.productVersions.set(mutation.productKey, nextVersion());
       } else if (mutation.kind === 'PRODUCT_VERIFY_IDENTIFIERS') {
         continue;
       } else {
         await this.deleteProductVehicleUid(mutation.productKey);
+        const current = { ...this.products.get(mutation.productKey)! };
+        if (mutation.expectedRegistryAfter !== undefined) {
+          if (mutation.hadVehicleUidRegistry) current.vehicle_uid_registry = mutation.registryValue;
+          else delete current.vehicle_uid_registry;
+          this.products.set(mutation.productKey, current);
+        }
         this.productVersions.set(mutation.productKey, nextVersion());
       }
       applied++;
@@ -232,6 +257,7 @@ class ReadBeforeWriteFakeStore extends FakeStore {
       if (mutation.kind === 'ASSET_EXTERNAL_IDS') await this.restoreAssetExternalIds(mutation.assetId, mutation.externalIds);
       else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
         await this.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
+        if (mutation.vehicleUidRegistry) this.products.set(mutation.productKey, { ...this.products.get(mutation.productKey)!, vehicle_uid_registry: mutation.vehicleUidRegistry });
       } else if (mutation.kind === 'PRODUCT_VERIFY_IDENTIFIERS') {
         continue;
       } else {
@@ -333,7 +359,7 @@ describe('applyVehicleUidMigration', () => {
     expect(store.assets.get('TEST-FAKE-UID-001')!.externalIds).toBeUndefined();
   });
 
-  it('skips PRODUCT_SET_UID as STALE_ASSET when the planned existing asset was deleted before apply', async () => {
+  it('skips PRODUCT_SET_UID as UID_ASSET_NOT_FOUND when the planned existing asset was deleted before apply', async () => {
     const p = plan({ p1: product('TEST-FAKE-001') }, [assetWithCurrentExternalIds('TEST-FAKE-UID-001', 'TEST-FAKE-001')]);
     const store = new FakeStore(
       new Map([['TEST-FAKE-UID-001', assetWithCurrentExternalIds('TEST-FAKE-UID-001', 'TEST-FAKE-001')]]),
@@ -341,8 +367,48 @@ describe('applyVehicleUidMigration', () => {
     );
     store.assets.delete('TEST-FAKE-UID-001');
     const result = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
-    expect(result.skippedReasons?.STALE_ASSET).toBe(1);
+    expect(result.skippedReasons?.UID_ASSET_NOT_FOUND).toBe(1);
     expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
+  });
+
+  it('writes PRODUCT_ONLY vehicle_uid_registry without asset writes', async () => {
+    const p = plan({ p1: product('TEST-FAKE-NEW-001') }, []);
+    expect(p.items).toContainEqual(expect.objectContaining({ kind: 'PRODUCT_SET_UID', productKey: 'p1', reason: 'PLANNED_NEW_UID', assetState: 'PRODUCT_ONLY' }));
+    const store = new FakeStore(new Map(), new Map([['p1', product('TEST-FAKE-NEW-001')]]));
+    const result = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    expect(result.assetUpdates).toBe(0);
+    expect(store.products.get('p1')!.vehicle_uid).toBeTruthy();
+    expect(store.products.get('p1')!.vehicle_uid_registry).toBe('PRODUCT_ONLY');
+    expect(store.assets.size).toBe(0);
+  });
+
+  it('skips PRODUCT_ONLY when an asset already exists with the planned UID', async () => {
+    const p = plan({ p1: product('TEST-FAKE-NEW-001') }, []);
+    const planned = p.items.find((item): item is Extract<typeof item, { kind: 'PRODUCT_SET_UID' }> => item.kind === 'PRODUCT_SET_UID' && item.productKey === 'p1');
+    expect(planned).toEqual(expect.objectContaining({ assetState: 'PRODUCT_ONLY' }));
+    const store = new FakeStore(
+      new Map([[planned!.vehicleUid, asset(planned!.vehicleUid, 'TEST-FAKE-OTHER')]]),
+      new Map([['p1', product('TEST-FAKE-NEW-001')]]),
+    );
+    const result = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    expect(result.skippedReasons?.UID_ASSET_ALREADY_EXISTS).toBe(1);
+    expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
+    expect(store.products.get('p1')!.vehicle_uid_registry).toBeUndefined();
+  });
+
+  it('rejects PRODUCT_SET_UID plans without assetState or linked digest', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001') }, [assetWithCurrentExternalIds('TEST-FAKE-UID-001', 'TEST-FAKE-001')]);
+    const withoutState = structuredClone(p);
+    delete (withoutState.items.find(item => item.kind === 'PRODUCT_SET_UID') as Record<string, unknown>).assetState;
+    withoutState.planDigest = computeVehicleUidPlanDigest(withoutState);
+    await expect(dryRunVehicleUidMigration(withoutState, withoutState.planDigest)).rejects.toThrow('PLAN_INVALID');
+
+    const withoutDigest = structuredClone(p);
+    const badItem = withoutDigest.items.find(item => item.kind === 'PRODUCT_SET_UID') as Record<string, unknown>;
+    badItem.assetState = 'LINKED_EXISTING';
+    delete badItem.assetIdentifierDigest;
+    withoutDigest.planDigest = computeVehicleUidPlanDigest(withoutDigest);
+    await expect(dryRunVehicleUidMigration(withoutDigest, withoutDigest.planDigest)).rejects.toThrow('PLAN_INVALID');
   });
 
   it('skips PRODUCT_SET_UID as STALE_ASSET when the planned existing asset identifiers changed before apply', async () => {
@@ -467,6 +533,16 @@ describe('applyVehicleUidMigration', () => {
     expect(Object.hasOwn(store.products.get('p1')!, 'vehicle_uid')).toBe(false);
     expect(store.products.get('p2')!.vehicle_uid).toBeNull();
     expect(store.products.get('p3')!.vehicle_uid).toBe('TEST-FAKE-ORIGINAL');
+  });
+
+  it('rolls back PRODUCT_ONLY vehicle_uid and vehicle_uid_registry fields', async () => {
+    const p = plan({ p1: product('TEST-FAKE-NEW-001') }, []);
+    const store = new FakeStore(new Map(), new Map([['p1', product('TEST-FAKE-NEW-001')]]));
+    const applied = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    expect(store.products.get('p1')!.vehicle_uid_registry).toBe('PRODUCT_ONLY');
+    await rollbackVehicleUidMigration(store, applied.backup!, p.planDigest, { approvedDigest: p.planDigest, writeFlag: 'ROLLBACK' });
+    expect(Object.hasOwn(store.products.get('p1')!, 'vehicle_uid')).toBe(false);
+    expect(Object.hasOwn(store.products.get('p1')!, 'vehicle_uid_registry')).toBe(false);
   });
 
   it('reports NOT_APPLIED when the original vehicle_uid was explicit null and remains null', async () => {
