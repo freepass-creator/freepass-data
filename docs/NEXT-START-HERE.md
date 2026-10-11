@@ -254,7 +254,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 | 런타임·사진 성능 | 초기service30 검증 후10-12 단일deploy38151193658의service31/source08fd DEPLOYMENT VERIFIED,세 상품 대표사진 delivery PASS | speedup NOT PROVEN;actual cachehit/phase·certified cold/warm UNKNOWN,전체 성능 미완 /20 실행,01 기록,ERP5 품질·운영경로 담당 |
 
 - 완료 기준: 최신 직접 원천의 실제 수집→같은ID/term 정제·정본/승인master와UNKNOWN 보존→정식 출력·현재 등록 소비처 각각 대사→일정·권한·복구·신선도 운영 증거를 연결한다. 전체 재고·사진 범위는 총모수·검사·미검사·실패·UNKNOWN을 명시해야 한다. 정책 의미는 기존 [상품·정책 사전](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary), 소비처 범위는 [공개 전달 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md)을 따르며 새 사전·보고 원장을 만들지 않는다.
-- next_start_here: 기존 source 운영 회차와 coverage 자료를 담당자가 취합하고21이 독립 대조한다. 성능은 아래 선택 소스 배포 검사 PR의 Linux CI/검토→00 운영 조건 확정→20 단일 배포→품질방의 공급사·무사진·단일/다수사진 표본 실측 순서다. 갱신된 실제 증거의 범위만 상태를 올린다.
+- next_start_here: 기존 source 운영 회차와 coverage 자료를 담당자가 취합하고21이 독립 대조한다. 성능의 단일 배포와 세 대표 사진 QA는 위 신규 인계에 기록돼 있다. 다음은 기존 운영 trace/config 대조 및 미검증 표본 HOLD에 대한 지휘의 새 배정이며 이 문구로 배포를 반복하지 않는다. 갱신된 실제 증거의 범위만 상태를 올린다.
 ### 2026-10-12 선택 소스 배포 전 현재 운영 상태 검사
 
 - 목적/소유: 00 배정으로20이 workflow/관련 테스트를 작성하고01이 공용 NEXT와 단일 PR로 통합한다. baseline main `05443076f1d4d46433934fbcd4dee7fde9697ee7`, 20 commit `57652c037b68f609be88e85620e3a834b09cc2fe`를01의 `8e5805c`로 인수했다. 원본 작업공간 역할 지도와 기존 사진 source08fd/등록은 변경하지 않았다.
