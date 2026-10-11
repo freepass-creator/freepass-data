@@ -95,6 +95,25 @@
         "differs": { "const": true }
       }
     },
+    "derivedSourceFeeEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority", "currency", "policyId", "policyDigest", "policyContractDigest", "inputDigest", "observedAt", "lineageRecordId", "priceSourceRefs"],
+      "properties": {
+        "authority": { "const": "APPROVED_ENGINE_DERIVED_NOT_SETTLEMENT" },
+        "currency": { "const": "KRW" },
+        "policyId": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "policyDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "policyContractDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "inputDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "lineageRecordId": { "type": "string", "pattern": "^source_fee_[a-f0-9]{64}$" },
+        "priceSourceRefs": {
+          "type": "array", "minItems": 1,
+          "items": { "$ref": "#/$defs/sourceRowProduct/properties/facts/items/properties/sourceRef" }
+        }
+      }
+    },
     "commissionResolution": {
       "type": "object",
       "additionalProperties": false,
@@ -108,11 +127,14 @@
         "vatAmount": { "$ref": "#/$defs/nullableInteger" },
         "totalAmount": { "$ref": "#/$defs/nullableInteger" },
         "reasonCode": { "$ref": "#/$defs/nullableString" },
+        "derivedEvidence": { "$ref": "#/$defs/derivedSourceFeeEvidence" },
         "vehicleValueEvidence": {"type":"object","additionalProperties":false,"required":["grade","source"],"properties":{"grade":{"enum":["CONFIRMED","APPROX"]},"source":{"enum":["SUPPLIER_RAW","CONSUMER_PRICE","NEW_CAR_TRIM"]}}}
       },
       "allOf": [
         { "if": { "properties": { "state": { "enum": ["CALCULATED", "CALCULATED_APPROX"] } }, "required": ["state"] }, "then": { "properties": { "sourceRefs": { "type": "array", "minItems": 1 } }, "required": ["sourceRefs"] } },
-        { "if": { "properties": { "state": { "enum": ["UNKNOWN", "NOT_APPLICABLE", "COORDINATION_REQUIRED"] } }, "required": ["state"] }, "then": { "properties": { "sourceRefs": false, "vehicleValueEvidence": false } } }
+        { "if": { "properties": { "state": { "enum": ["UNKNOWN", "NOT_APPLICABLE", "COORDINATION_REQUIRED"] } }, "required": ["state"] }, "then": { "properties": { "sourceRefs": false, "vehicleValueEvidence": false } } },
+        { "if": { "required": ["derivedEvidence"], "properties": { "derivedEvidence": true, "state": { "enum": ["UNKNOWN", "NOT_APPLICABLE", "COORDINATION_REQUIRED"] } } }, "then": { "properties": { "amount": { "type": "null" }, "vatAmount": { "type": "null" }, "totalAmount": { "type": "null" } } } },
+        { "if": { "required": ["derivedEvidence"], "properties": { "derivedEvidence": true, "state": { "const": "CALCULATED" } } }, "then": { "properties": { "amount": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }, "vatAmount": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }, "totalAmount": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }, "vatTreatment": { "enum": ["EXCLUDED", "INCLUDED"] } } } }
       ]
     },
     "marginResolution": {

@@ -7,6 +7,7 @@ import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWa
 import { verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { chooseVehicleIdentity, indexVehicleMaster, type VehicleMasterReference } from '../domain/vehicle-identity-resolution.js';
 import sheetSpec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+import type { FieldLineageRecord } from '../domain/lineage.js';
 import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
 import { isAssignedPlate } from '../domain/vehicle-plate.js';
@@ -21,7 +22,7 @@ export const referenceResponseDigest = (data: unknown, sourceObservations?: unkn
 export async function readStoredConsumerProducts<T extends { products: { supplierId?: string | null }[] }, C>(reader: {
   readStoredProducts(consumerId: string, search: Record<string, string>, photoProjection?: (product: Rec) => unknown,
     registeredNames?: (supplierId: string) => readonly string[]): Promise<T>;
-  sourceStore: Pick<SourceIngestionStore, 'getSourceHead' | 'getRun' | 'listRaw' | 'listCandidates'>;
+  sourceStore: Pick<SourceIngestionStore, 'getSourceHead' | 'getRun' | 'listRaw' | 'listCandidates'> & Partial<Pick<SourceIngestionStore, 'listLineage'>>;
   readCanonicalProducts?: (search: Record<string, string>, ledgerRows: readonly unknown[]) => Promise<C>;
 }, consumerId: string, search: Record<string, string> = {}, sourceGrant?: {
   /** Trusted server configuration after its own authorization; never accept this from a client body. */
@@ -98,14 +99,14 @@ export function referenceObservationToCompatibilityProduct(row: ReturnType<typeo
 }
 
 /** Existing source owner and sealed input binding; never scan arbitrary RAW collections. */
-export async function readCurrentReferenceObservations(store: Pick<SourceIngestionStore, 'getSourceHead' | 'getRun' | 'listRaw' | 'listCandidates'>, options?: { storedFeesOnly: boolean }) {
+export async function readCurrentReferenceObservations(store: Pick<SourceIngestionStore, 'getSourceHead' | 'getRun' | 'listRaw' | 'listCandidates'> & Partial<Pick<SourceIngestionStore, 'listLineage'>>, options?: { storedFeesOnly: boolean }) {
   const sourceId = sheetSpec.supplierManagement.sourceBinding.sourceId;
   const head = await store.getSourceHead(sourceId);
   if (!head) return { state: 'HOLD' as const, reasonCode: 'SOURCE_HEAD_MISSING', observations: [], sourceSnapshot: null };
   const run = await store.getRun(head.runId);
   if (!run || run.sourceId !== sourceId || run.status !== 'COMPLETED' || run.headStatus !== 'CURRENT'
     || run.observedAt !== head.observedAt) throw new Error('REFERENCE_SOURCE_RUN_UNVERIFIED');
-  const [raw, candidates] = await Promise.all([store.listRaw(run.runId), store.listCandidates(run.runId)]);
+  const [raw, candidates, feeLineage] = await Promise.all([store.listRaw(run.runId), store.listCandidates(run.runId), options?.storedFeesOnly && store.listLineage ? store.listLineage(run.runId) : Promise.resolve([])]);
   if (raw.length !== run.rawCount || candidates.length !== run.candidateCount
     || new Set(raw.map(r => r.rawRecordId)).size !== raw.length
     || [...raw, ...candidates].some(r => r.runId !== run.runId || r.sourceId !== sourceId)
@@ -114,7 +115,7 @@ export async function readCurrentReferenceObservations(store: Pick<SourceIngesti
   }
   const observations = raw.map(r => {
     const matches = candidates.filter(c => c.sourceRecordId === r.sourceRecordId && c.sourceFingerprint === r.sourceFingerprint);
-    return projectReferenceObservation(r, matches.length === 1 ? matches[0] : undefined, options);
+    return projectReferenceObservation(r, matches.length === 1 ? matches[0] : undefined, options ? {...options, feeLineage} : undefined);
   });
   if (new Set(observations.map(o => o.productId)).size !== observations.length) throw new Error('REFERENCE_SOURCE_ROW_ID_AMBIGUOUS');
   const after = await store.getSourceHead(sourceId);
@@ -132,7 +133,74 @@ export async function readCurrentReferenceObservations(store: Pick<SourceIngesti
 }
 
 /** Immutable observations are not permanent products or counted physical vehicles. No free text/PII payload is returned. */
-export function projectReferenceObservation(raw: RawRecord, record?: NormalizedCandidateRecord, options?: { storedFeesOnly: boolean }) {
+export function sourceFeePolicyContractDigest() {
+  const {sourceFiles,...rules}=KAKAO_COMMISSION_POLICY;
+  return stableDigest(rules);
+}
+const SOURCE_FEE_TRANSFORM = 'APPROVED_ENGINE_SOURCE_FEE';
+const sourceFeeInputDigest = (raw: RawRecord, record: NormalizedCandidateRecord, termKey: string) => {
+  const c=record.candidate, term=c.priceTerms.find(t=>t.termKey===termKey);
+  const billin=['RP021','PT-0026'].includes(c.providerCompanyCode??'') && /SUBSCRIPTION/.test(c.commercialType??'');
+  return stableDigest({fingerprint:raw.sourceFingerprint,supplier:c.providerCompanyCode??null,
+    productType:c.commercialType??null,term:term ? {termKey:term.termKey,termMonths:term.termMonths,monthlyRent:term.monthlyRent,mileageLimitKmPerYear:term.mileageLimitKmPerYear??null} : null,
+    ...(billin ? {basis36:c.priceTerms.filter(t=>t.termMonths===36 && t.mileageLimitKmPerYear===term?.mileageLimitKmPerYear)} : {}),
+    ...(['RP004','RP023'].includes(c.providerCompanyCode??'') ? {fuel:c.vehicleFacts?.fields.fuel??null} : {})});
+};
+
+/** Producer composition only. Persists derived facts without promoting candidate identity. */
+export function sourceFeeLineage(raw: RawRecord, record: NormalizedCandidateRecord): FieldLineageRecord[] {
+  const observation = projectReferenceObservation(raw, record);
+  return record.candidate.priceTerms.flatMap(price => {
+    const matches=observation.normalized.priceConditions.filter(t=>t.termMonths===price.termMonths &&
+      t.monthlyRentAmount===price.monthlyRent.amount && t.mileageKm===(price.mileageLimitKmPerYear??null));
+    if(matches.length!==1) return [];
+    const term=matches[0]!,termKey=price.termKey;
+    const value = { authority: 'APPROVED_ENGINE_DERIVED_NOT_SETTLEMENT', currency: 'KRW', policyId: KAKAO_COMMISSION_POLICY.policyId, policyDigest: stableDigest(KAKAO_COMMISSION_POLICY), policyContractDigest: sourceFeePolicyContractDigest(),
+      inputDigest: sourceFeeInputDigest(raw, record, termKey), observedAt: raw.observedAt, termKey,
+      supplierBillingFee: term.supplierBillingFee, channelPayoutFee: term.channelPayoutFee, priceSourceRefs: term.priceSourceRefs };
+    const id = `source_fee_${stableDigest({runId:raw.runId,candidateId:record.candidateId,termKey,value})}`;
+    return [{lineageRecordId:id,lineageId:id,stage:'RAW_TO_NORMALIZED' as const,runId:raw.runId,sourceId:raw.sourceId,
+      sourceRecordId:raw.sourceRecordId,sourceFingerprint:raw.sourceFingerprint,observedAt:raw.observedAt,
+      source:{fieldPath:'priceTerms',value:{priceSourceRefs:term.priceSourceRefs}},
+      normalized:{candidateId:record.candidateId,fieldPath:`derivedFees.${termKey}`,value},
+      transformId:SOURCE_FEE_TRANSFORM,transformVersion:KAKAO_COMMISSION_POLICY.policyId}];
+  });
+}
+function readSourceFeeLineage(raw: RawRecord, record: NormalizedCandidateRecord, termKey: string, lineage: readonly FieldLineageRecord[]) {
+  const matches=lineage.filter(l=>l.transformId===SOURCE_FEE_TRANSFORM && l.runId===raw.runId && l.sourceId===raw.sourceId &&
+    l.sourceRecordId===raw.sourceRecordId && l.sourceFingerprint===raw.sourceFingerprint && l.normalized?.candidateId===record.candidateId &&
+    l.normalized.fieldPath===`derivedFees.${termKey}`);
+  if(matches.length!==1) return null;
+  const l=matches[0]!, v=l.normalized!.value as Record<string, unknown>;
+  if(!v || v.authority!=='APPROVED_ENGINE_DERIVED_NOT_SETTLEMENT' || v.currency!=='KRW' || v.policyId!==KAKAO_COMMISSION_POLICY.policyId || typeof v.policyDigest!=='string' || !/^[a-f0-9]{64}$/.test(v.policyDigest) || v.policyContractDigest!==sourceFeePolicyContractDigest() ||
+    v.inputDigest!==sourceFeeInputDigest(raw,record,termKey) || v.observedAt!==raw.observedAt || v.termKey!==termKey || l.stage!=='RAW_TO_NORMALIZED' ||
+    l.transformVersion!==KAKAO_COMMISSION_POLICY.policyId || l.observedAt!==raw.observedAt || l.canonical ||
+    !Array.isArray(v.priceSourceRefs) || !v.priceSourceRefs.length || v.priceSourceRefs.some(ref=>!ref || ref.runId!==raw.runId || ref.rawRecordId!==raw.rawRecordId || typeof ref.field!=='string' || !['payload.supplierCode',...sheetSpec.inputHeaders].includes(ref.field) || (ref.row!==null && (!Number.isSafeInteger(ref.row)||ref.row<=0))) ||
+    l.lineageId!==l.lineageRecordId ||
+    l.lineageRecordId!==`source_fee_${stableDigest({runId:raw.runId,candidateId:record.candidateId,termKey,value:v})}`) return null;
+  const valid=(fee:unknown): fee is CommissionResolution => {
+    if(!fee || typeof fee!=='object' || Array.isArray(fee)) return false;
+    const f=fee as CommissionResolution;
+    if(!['EXCLUDED','INCLUDED','UNKNOWN'].includes(f.vatTreatment) ||
+      (f.ruleId!==null && (typeof f.ruleId!=='string'||!/^[A-Z][A-Z0-9_:.-]{0,199}$/.test(f.ruleId))) ||
+      (f.reasonCode!==null && (typeof f.reasonCode!=='string'||!/^[A-Z][A-Z0-9_:.-]{0,199}$/.test(f.reasonCode))) ||
+      (f.sourceRefs!==undefined && (!Array.isArray(f.sourceRefs)||f.sourceRefs.some(r=>typeof r!=='string'||!(/^(?:USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*)$/.test(r)))))) return false;
+    return f.state==='CALCULATED' ? f.vatTreatment!=='UNKNOWN' && !!f.sourceRefs?.length && Number.isSafeInteger(f.amount) && f.amount!>=0 && !!f.ruleId &&
+      Number.isSafeInteger(f.vatAmount) && f.vatAmount!>=0 && Number.isSafeInteger(f.totalAmount) &&
+      f.totalAmount===f.amount!+f.vatAmount! :
+      ['UNKNOWN','COORDINATION_REQUIRED','NOT_APPLICABLE'].includes(f.state) && f.amount===null && f.vatAmount===null && f.totalAmount===null;
+  };
+  if(!valid(v.supplierBillingFee)||!valid(v.channelPayoutFee))return null;
+  const refs=(v.priceSourceRefs as {runId:string;rawRecordId:string;field:string;row:number|null}[]).map(ref=>({runId:ref.runId,rawRecordId:ref.rawRecordId,field:ref.field,row:ref.row}));
+  const evidence={authority:v.authority,currency:v.currency,policyId:v.policyId,policyDigest:v.policyDigest,policyContractDigest:v.policyContractDigest,
+    inputDigest:v.inputDigest,observedAt:v.observedAt,lineageRecordId:l.lineageRecordId,priceSourceRefs:refs};
+  const fee=(f:CommissionResolution)=>({state:f.state,ruleId:f.ruleId,amount:f.amount,vatTreatment:f.vatTreatment,
+    vatAmount:f.vatAmount,totalAmount:f.totalAmount,reasonCode:f.reasonCode,
+    ...(f.state==='CALCULATED' && f.sourceRefs?{sourceRefs:[...f.sourceRefs]}:{}),derivedEvidence:evidence});
+  return {supplierBillingFee:fee(v.supplierBillingFee),channelPayoutFee:fee(v.channelPayoutFee)};
+}
+
+export function projectReferenceObservation(raw: RawRecord, record?: NormalizedCandidateRecord, options?: { storedFeesOnly: boolean; feeLineage?: readonly FieldLineageRecord[] }) {
   if (record && (record.runId !== raw.runId || record.sourceId !== raw.sourceId
     || record.sourceRecordId !== raw.sourceRecordId || record.sourceFingerprint !== raw.sourceFingerprint)) {
     throw new Error('REFERENCE_SOURCE_CANDIDATE_MISMATCH');
@@ -195,8 +263,9 @@ export function projectReferenceObservation(raw: RawRecord, record?: NormalizedC
           monthlyRent: rent ?? 0, ...(fuel ? { fuel } : {}),
           billin36MonthlyRent: bases36.length === 1 ? amount(bases36[0]!.monthlyRent.amount) ?? undefined : undefined };
         const storedReason = options?.storedFeesOnly ? 'SOURCE_ROW_STORED_FEE_NOT_LINKED' : reason;
-        const supplierBillingFee = storedReason ? unknownCommission(storedReason) : resolveSupplierBillingFee(input);
-        const channelPayoutFee = storedReason ? unknownCommission(storedReason) : resolveSalesCommission(input);
+        const stored = options?.storedFeesOnly && record ? readSourceFeeLineage(raw, record, t.termKey, options.feeLineage ?? []) : null;
+        const supplierBillingFee = stored?.supplierBillingFee ?? (storedReason ? unknownCommission(storedReason) : resolveSupplierBillingFee(input));
+        const channelPayoutFee = stored?.channelPayoutFee ?? (storedReason ? unknownCommission(storedReason) : resolveSalesCommission(input));
         // Supplier identity comes from capture metadata, not the visible company-name cell.
         const priceSourceRefs = [sourceRef('payload.supplierCode'), sourceRef('상품구분'), sourceRef(`${t.termMonths}개월`),
           ...(fuel ? [sourceRef('연료')] : []), ...(billinBasisUsed && bases36.length === 1 ? [sourceRef('36개월')] : [])];

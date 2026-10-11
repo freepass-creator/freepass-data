@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
 import sheetSpec from '../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
-import { projectReferenceObservation, readCurrentReferenceObservations, filterReferenceProducts, referenceObservationToCompatibilityProduct } from '../src/application/kakao-catalog-reference.js';
+import { sourceFeeLineage, projectReferenceObservation, readCurrentReferenceObservations, filterReferenceProducts, referenceObservationToCompatibilityProduct } from '../src/application/kakao-catalog-reference.js';
 import type { RawRecord } from '../src/domain/source.js';
 import { readFileSync } from 'node:fs';
 import { selectStoredProducts, FirestoreCatalogCompatibilityReader } from '../src/infra/erp5-compat-catalog-reader.js';
@@ -118,6 +118,73 @@ describe('current source observations in existing private reference', () => {
     return { rawRecordId: id, sourceId, sourceRecordId: id, sourceFingerprint: id, runId: 'fixture-run', observedAt: at,
       payload: { values, supplierCode: 'RP_FIXTURE', customerName: 'PRIVATE_CUSTOMER', token: 'PRIVATE_TOKEN' } };
   };
+  it('stores derived fees for rejected identity and reads only unique immutable lineage', () => {
+    const raw=fixture('derived-row',''), values=[...raw.payload.values as string[]];
+    values[sheetSpec.inputHeaders.indexOf('상품구분')]='중고렌트';
+    values[sheetSpec.inputHeaders.indexOf('1개월')]='300000';
+    const input={...raw,payload:{...raw.payload,values,supplierCode:'RP030'}}, record=normalizeSharedSheet(input).record;
+    const before=structuredClone({input,record}), lineage=sourceFeeLineage(input,record);
+    const read=(ls= lineage, r=record)=>projectReferenceObservation(input,r,{storedFeesOnly:true,feeLineage:ls});
+    const term=read().normalized.priceConditions.find(t=>t.termMonths===1)!;
+    expect(term.supplierBillingFee).toMatchObject({state:'CALCULATED',amount:15000,derivedEvidence:{authority:'APPROVED_ENGINE_DERIVED_NOT_SETTLEMENT',observedAt:input.observedAt}});
+    expect(term.channelPayoutFee).toMatchObject({state:'CALCULATED',amount:15000});
+    expect(read().publicationDecision).toBe('HOLD');expect(read().vehicleAssetId).toBeNull();
+    expect(term.depositState).toBe('UNKNOWN');expect({input,record}).toEqual(before);
+    const env=process.env.FREEPASS_SHEET_F04_ID;
+    try {delete process.env.FREEPASS_SHEET_F04_ID;
+      expect(read().normalized.priceConditions.find(t=>t.termMonths===1)!.supplierBillingFee.amount).toBe(15000);
+    } finally {process.env.FREEPASS_SHEET_F04_ID=env;}
+    const unrelated=structuredClone(record);
+    unrelated.candidate.priceTerms.find(t=>t.termMonths===1)!.depositState='UNKNOWN';
+    unrelated.candidate.priceTerms.find(t=>t.termMonths===1)!.deposit=null;
+    expect(read(lineage,unrelated).normalized.priceConditions.find(t=>t.termMonths===1)!.supplierBillingFee.amount).toBe(15000);
+    const policy=KAKAO_COMMISSION_POLICY.oneMonthBasic as unknown as {monthlyRentBasisPoints:number}, rate=policy.monthlyRentBasisPoints;
+    try {policy.monthlyRentBasisPoints=501;
+      expect(read().normalized.priceConditions.find(t=>t.termMonths===1)!.supplierBillingFee.state).toBe('UNKNOWN');
+    } finally {policy.monthlyRentBasisPoints=rate;}
+    expect(read([]).normalized.priceConditions.find(t=>t.termMonths===1)!.supplierBillingFee.state).toBe('UNKNOWN');
+    expect(read([...lineage,...lineage]).normalized.priceConditions.find(t=>t.termMonths===1)!.supplierBillingFee.state).toBe('UNKNOWN');
+    const tampered=structuredClone(lineage);(tampered[0]!.normalized!.value as Record<string,unknown>).policyContractDigest='bad';
+    expect(read(tampered).normalized.priceConditions[0]!.supplierBillingFee.state).toBe('UNKNOWN');
+    const changed=structuredClone(record);changed.candidate.priceTerms.find(t=>t.termMonths===1)!.monthlyRent.amount=400000;
+    expect(read(lineage,changed).normalized.priceConditions.find(t=>t.termMonths===1)!.supplierBillingFee.state).toBe('UNKNOWN');
+  });
+  it('reads persisted derived lineage through the source store and preserves Billin exception', async () => {
+    const store=new MemorySourceStore(),raw=fixture('stored-billin','무보증'),values=[...raw.payload.values as string[]];
+    values[sheetSpec.inputHeaders.indexOf('상품구분')]='중고구독';
+    values[sheetSpec.inputHeaders.indexOf('1개월')]='300000';
+    values[sheetSpec.inputHeaders.indexOf('36개월')]='600000';
+    const input={...raw,payload:{...raw.payload,values,supplierCode:'RP021'}},record=normalizeSharedSheet(input).record;
+    await store.beginRun({runId:input.runId,sourceId,status:'RUNNING',startedAt:at,coverage:{mode:'FULL',completeness:'COMPLETE'},headStatus:'PENDING',rawCount:0,candidateCount:0,warningCount:0});
+    await store.appendRaw(input);await store.appendCandidate(record);
+    const lineage=sourceFeeLineage(input,record);for(const l of lineage)await store.appendLineage(l);
+    await store.completeRun({runId:input.runId,completedAt:at,observedAt:at,checkpoint:{sourceId,observedAt:at},coverage:{mode:'FULL',completeness:'COMPLETE'},rawCount:1,candidateCount:1,lineageCount:lineage.length,warningCount:1});
+    const saved=await readCurrentReferenceObservations(store,{storedFeesOnly:true});
+    const term=saved.observations[0]!.normalized.priceConditions.find(t=>t.termMonths===1)!;
+    expect(term.supplierBillingFee).toMatchObject({state:'CALCULATED',amount:600000});
+    expect(term.channelPayoutFee).toMatchObject({state:'CALCULATED',amount:480000});
+    expect(saved.observations[0]!.publicationDecision).toBe('HOLD');
+    const schema=JSON.parse(readFileSync(new URL('../contracts/kakao-catalog-reference-v1.schema.json',import.meta.url),'utf8'));
+    const validate=new Ajv2020({strict:false,validateFormats:false}).compile({$defs:schema.$defs,...schema.$defs.sourceRowProduct});
+    expect(validate(saved.observations[0]),JSON.stringify(validate.errors)).toBe(true);
+    for(const patch of [{token:'PRIVATE_TOKEN'},{rawPayload:{customer:'PRIVATE_CUSTOMER'}},{policyDigest:'not-a-digest'},
+      {policyContractDigest:'bad'},{inputDigest:'bad'},{authority:'SUPPLIER_RAW'},{currency:'USD'}]) {
+      const malformed=structuredClone(saved.observations[0])!;
+      const fee=malformed.normalized.priceConditions[0]!.supplierBillingFee as unknown as {derivedEvidence:Record<string,unknown>};
+      Object.assign(fee.derivedEvidence,patch);
+      expect(validate(malformed),JSON.stringify(patch)).toBe(false);
+    }
+    const unknown=structuredClone(saved.observations[0])!;
+    const fee=unknown.normalized.priceConditions[0]!.supplierBillingFee;
+    Object.assign(fee,{state:'UNKNOWN',amount:null,vatAmount:null,totalAmount:null,ruleId:null,reasonCode:'SOURCE_FEE_UNCONFIRMED'});
+    delete fee.sourceRefs;
+    expect(validate(unknown),JSON.stringify(validate.errors)).toBe(true);
+    fee.amount=0;
+    expect(validate(unknown)).toBe(false);
+
+    expect((await store.listCandidates(input.runId))[0]!.status).toBe(record.status);
+    expect(await store.listRaw(input.runId)).toEqual([input]);
+  });
   it('stored-only source projection never replaces missing stored fees with engine calculations', () => {
     const raw = fixture('stored-only-row', '무보증');
     const input = { ...raw, payload: { ...raw.payload, supplierCode: 'RP013' } };

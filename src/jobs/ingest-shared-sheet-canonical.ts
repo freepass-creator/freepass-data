@@ -1,3 +1,4 @@
+import { sourceFeeLineage } from '../application/kakao-catalog-reference.js';
 import { readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -94,7 +95,11 @@ function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityI
   if (capture.vehicleMasterSnapshot && identityInputs &&
       stableDigest(capture.vehicleMasterSnapshot) !== stableDigest(identityInputs.master)) throw new Error('VEHICLE_MASTER_SNAPSHOT_MISMATCH');
   const master = snapshot ? { records: verifiedMasterRecords(snapshot), readAt: snapshot.readAt, snapshotDigest: snapshot.digest } : undefined;
-  const normalize = sharedSheetNormalizer(identityResolver(identityInputs), master, { includeSupplierColors });
+  const normalizeBase = sharedSheetNormalizer(identityResolver(identityInputs), master, { includeSupplierColors });
+  const normalize: typeof normalizeBase = raw => {
+    const normalized = normalizeBase(raw);
+    return {...normalized,lineage:[...normalized.lineage,...sourceFeeLineage(raw,normalized.record)]};
+  };
   const normalized = p.rawRecords.map(r => normalize(r));
   const checkpoint = { sourceId: p.sourceId, observedAt: batch.observedAt, sourceRevision: batch.sourceRevision!, checksum: p.sourceChecksum };
   const run: SourceRun = { runId: p.runId, sourceId: p.sourceId, status: 'COMPLETED', startedAt: batch.observedAt,
