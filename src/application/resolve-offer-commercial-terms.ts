@@ -52,9 +52,11 @@ export function joinStoredProductEconomics(productId: string, offers: readonly O
     if (!reason && saved && stored && (stableDigest(comparable(billing))!==stableDigest(comparable(ledgerFee(stored.supplierBillingFee))) ||
       stableDigest(comparable(payout))!==stableDigest(comparable(ledgerFee(stored.channelPayoutFee))))) reason='STORED_FEE_SOURCES_CONFLICT';
     const rentValid=price.monthlyRent.currency==='KRW' && positiveSafeInteger(price.monthlyRent.amount);
+    const verifiedZeroRent=price.monthlyRent.currency==='KRW' && price.monthlyRent.amount===0 &&
+      stored?.monthlyRent.state==='KNOWN' && stored.monthlyRent.amount===0 && stored.priceSourceRefs.some(ref=>typeof ref==='string' && !!ref.trim());
     return {productId,offerId:offer.id,offerRevision:offer.revision,supplierId:offer.supplierId,
       termKey:price.termKey,termMonths:price.termMonths,joinState:reason?'HOLD':saved&&stored?'MATCHED':saved?'OFFER_ONLY':stored?'LEDGER_ONLY':'HOLD',reasonCode:reason ?? (saved||stored?null:'STORED_ECONOMICS_NOT_FOUND'),
-      monthlyRent:{state:rentValid&&!reason?'KNOWN':'UNKNOWN',amount:rentValid&&!reason?structuredClone(price.monthlyRent):null,reasonCode:reason ?? (rentValid?null:'RENT_EVIDENCE_REQUIRED')},
+      monthlyRent:{state:!reason&&verifiedZeroRent?'ZERO':rentValid&&!reason?'KNOWN':'UNKNOWN',amount:(rentValid||verifiedZeroRent)&&!reason?structuredClone(price.monthlyRent):null,reasonCode:reason ?? (rentValid||verifiedZeroRent?null:'RENT_EVIDENCE_REQUIRED')},
       deposit:reason?unknown(reason):normalize({state:price.depositState,amount:price.deposit ?? null,calculation:null,
         sourceRefs:stored?.deposit.sourceRefs ?? saved?.depositCalculation.sourceRefs ?? [],reasonCode:stored?.deposit.reasonCode ?? 'DEPOSIT_EVIDENCE_REQUIRED'}),
       supplierBillingFee:reason?unknown(reason):billing,channelPayoutFee:reason?unknown(reason):payout};

@@ -71,6 +71,10 @@ describe('offer commercial terms resolution', () => {
       .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'STORED_FEE_SOURCES_CONFLICT'});
     const orphan={...row,termKey:'not-a-price-row'};
     expect(joinStoredProductEconomics(input.productId,[input],[orphan]).orphanLedgerRows).toBe(1);
+    const zero=structuredClone(input);zero.priceTerms=[{...price,monthlyRent:{amount:0,currency:'KRW'}}];zero.internalEconomicsTerms=[];
+    expect(joinStoredProductEconomics(zero.productId,[zero],[]).rows[0]!.monthlyRent.state).toBe('UNKNOWN');
+    const zeroRow={...row,monthlyRent:{amount:0,currency:'KRW',state:'KNOWN'},priceSourceRefs:['verified-rent-zero']};
+    expect(joinStoredProductEconomics(zero.productId,[zero],[zeroRow]).rows[0]!.monthlyRent).toMatchObject({state:'ZERO',amount:{amount:0}});
   });
   it('requires one internal economics row for every price term without guessing missing fees', () => {
     const result = auditOfferEconomicsTerms(offer());
