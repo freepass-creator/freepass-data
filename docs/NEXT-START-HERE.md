@@ -210,10 +210,9 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ### 2026-10-11 read runtime 기존 환경 보존 — 코드 준비 / 운영 미적용
 
 - 원천 관측: root 본인 GCP Console 21:04 KST에서 기존00026/source1067 healthy·traffic100, plain3+F04 key 및 consumer4/Iancar1 secret2, 8080/concurrency8/max10/volume0를 확인했다. 01 직접 운영 조회가 아니다.
-- 변경: 기존 deploy workflow의 전체 plain 환경 교체를 기존 runtime_env의 NODE_ENV/DRIVER/FIREBASE_PROJECT_ID 및 명시 F04 값 update로 바꾼다. exact c2의 repository F04 secret 주입·필수 guard·append는 보존한다. root가 앞 controlled3만 지시를 버전 오인으로 정정했으며 기존 명시 F04 갱신 계약을 유지한다. 실제 F04 값은 읽거나 복사하지 않았다. secret refs/IAM/region/service/source target/기타설정은 이번 수정 범위 밖이다.
-- 검증: 배포 script mock에서 추가 환경 보존·production/firestore/freepasserp5 갱신, public 승인 및 private gate 관련3 PASS/11 미선택; build/architecture/access PASS. 필수 exact CI/독립 검토는 PR 영수증으로 결속한다. 실제 dispatch/등록/배포0.
-- next_start_here: 최종 workflow SHA 검증 후 기존 단일 실행 owner만 정상 배포한다. before/after keyset·value/valueFrom 타입·F04 존재 및 기존 명시 주입값의 적용을 안전 메타로 검증하고 원문/digest를 기록하지 않는다. 계획 밖 기존 환경은 보존 여부를 확인한다. actual image/Ready/SA/privateIAM/traffic·secret4/1 보존은 별도 확인한다. 사람 사진 확인과 business 등록은 strict reader serving 확인 이후다.
-
+- 변경: 기존 전체 plain 환경 교체 대신 update를 사용한다. exact c2의 F04 repository env·필수 guard·append는 보존하며, 기존 private service F04가 nonempty이고 repository 주입값과 같은지 동일 bash step 메모리에서 배포 전에 확인한다. 초기 controlled3만/F04 제거 판단은 root의 오래된 코드 관측 정정 후 철회했다. 기존 추가 환경·F04·secret refs를 배포 전후 같은 step 메모리에서 비교하고 controlled3 production/firestore/freepasserp5를 확인한다. 계획한 secret2와 실제 참조도 배포 전 일치해야 하며 누락·불일치·extra secret는 차단한다. 원문/해시/환경 JSON을 로그·파일·GITHUB_ENV에 저장하지 않고 성공 boolean만 남긴다. public 신규서비스에는 private 기존 F04 검사를 적용하지 않는다. IAM/region/service/target 변경0.
+- 검증: 기존 public/private gate 관련2 PASS, 새 jq 기반 환경보존·F04 누락/빈값/주입불일치·secret 불일치/추가·배포 후 환경변경/driver 오류 행동시험은 로컬 Windows jq 미설치로 미실행이며 Linux 필수 CI에서 확인한다. build/architecture/access PASS. 실제 dispatch/등록/배포0, CI와 독립 검토는 최종 exact head에 결속한다.
+- next_start_here: 최종 workflow SHA 검증 후 기존 단일 실행 owner만 정상 배포한다. before/after 환경·binding·secret 보존 검증과 actual image/Ready/SA/privateIAM/traffic 확인을 별도로 결속한다. 불일치면 후속 등록/cutover를 중단하고 승인된 복구 절차로 인계하며 자동 rollback은 하지 않는다. 사람 사진 확인과 business 등록은 strict reader serving 확인 이후다.
 
 ### 2026-10-11 ONE 고정 사진집합 사람 확인 등록 지원 — CODED / TESTED, 운영 미적용
 

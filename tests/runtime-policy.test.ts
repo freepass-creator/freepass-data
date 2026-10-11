@@ -225,34 +225,52 @@ describe('API runtime boundary', () => {
       expect(result.stdout.trim()).not.toBe(approved.stdout.trim());
     }
   });
-  it('deployment updates controlled environment values while preserving existing service settings', () => {
+  it.skipIf(process.platform === 'win32')('deployment preserves bindings and rejects missing or changed private environment', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
     const section = workflow.split('      - name: Deploy private read-only service')[1]!.split('      - name: Grant public invoker only when requested')[0]!;
     const script = section.split('        run: |\n')[1]!.split('\n').map(line => line.slice(10)).join('\n');
+    expect(section).toContain('secrets.FREEPASS_SHEET_F04_ID');
     expect(section).toContain('MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID');
     const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+    const env = [
+      { name: 'NODE_ENV', value: 'production' }, { name: 'FREEPASS_DATA_DRIVER', value: 'firestore' },
+      { name: 'FIREBASE_PROJECT_ID', value: 'freepasserp5' }, { name: 'FREEPASS_SHEET_F04_ID', value: 'synthetic-f04' },
+      { name: 'EXISTING_EXTRA', value: 'synthetic-extra' },
+      { name: 'FREEPASS_DATA_CONSUMERS_JSON', valueFrom: { secretKeyRef: { name: 'synthetic-consumers', key: '4' } } },
+      { name: 'EANCAR_ONE_API_KEY', valueFrom: { secretKeyRef: { name: 'synthetic-one', key: '1' } } },
+    ];
+    const snapshot = (values: unknown[]) => JSON.stringify({ spec: { template: { spec: { containers: [{ env: values }] } } } });
     const mock = `gcloud() {
-      local preserved=existing-f04 driver=missing target=missing node_env=missing
-      for arg in "$@"; do
-        case "$arg" in
-          --set-env-vars=*) preserved=DELETED ;;
-          --update-env-vars=*)
-            case "$arg" in *NODE_ENV=production*) node_env=production ;; esac
-            case "$arg" in *FREEPASS_DATA_DRIVER=firestore*) driver=firestore ;; esac
-            case "$arg" in *FIREBASE_PROJECT_ID=freepasserp5*) target=freepasserp5 ;; esac ;;
-        esac
-      done
-      printf '%s/%s/%s/%s' "$preserved" "$node_env" "$driver" "$target"
+      if [ "$2" = deploy ]; then
+        case "$*" in *--update-env-vars=NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5*) ;; *) return 1 ;; esac
+        echo DEPLOY_REACHED
+        deployed=true
+      elif [ "\${deployed:-false}" = true ]; then printf '%s' "$MOCK_AFTER";
+      else printf '%s' "$MOCK_BEFORE"; fi
     }\n`;
+    for (const [before, after, allowed, deployed] of [
+      [env, env, true, true],
+      [env.filter(value => value.name !== 'FREEPASS_SHEET_F04_ID'), env, false, false],
+      [env.map(value => value.name === 'FREEPASS_SHEET_F04_ID' ? { ...value, value: '' } : value), env, false, false],
+      [env.map(value => value.name === 'FREEPASS_SHEET_F04_ID' ? { ...value, value: 'different-binding' } : value), env, false, false],
+      [env.map(value => value.name === 'EANCAR_ONE_API_KEY' ? { ...value, valueFrom: { secretKeyRef: { name: 'synthetic-one', key: '2' } } } : value), env, false, false],
+      [[...env, { name: 'UNPLANNED_SECRET', valueFrom: { secretKeyRef: { name: 'extra', key: '1' } } }], env, false, false],
+      [env, env.filter(value => value.name !== 'EXISTING_EXTRA'), false, true],
+      [env, env.map(value => value.name === 'FREEPASS_SHEET_F04_ID' ? { ...value, value: 'changed' } : value), false, true],
+      [env, env.map(value => value.name === 'FREEPASS_DATA_DRIVER' ? { ...value, value: 'memory' } : value), false, true],
+    ] as const) {
     const result = spawnSync(bash, ['-s'], { input: mock + script, encoding: 'utf8', env: {
-      ...process.env, USE_CONSUMER_SECRETS: 'true', FREEPASS_SHEET_F04_ID: 'synthetic-f04',
+      ...process.env, USE_CONSUMER_SECRETS: 'true', FREEPASS_SHEET_F04_ID: 'synthetic-f04', MOCK_BEFORE: snapshot([...before]), MOCK_AFTER: snapshot([...after]), GITHUB_ENV: '/dev/null',
       CONSUMERS_SECRET_NAME: 'synthetic-consumers', CONSUMERS_SECRET_VERSION: '4',
       IANCAR_SECRET_NAME: 'synthetic-one', IANCAR_SECRET_VERSION: '1', SERVICE_NAME: 'synthetic-service',
       PROJECT_ID: 'freepasserp5', REGION: 'asia-northeast3', IMAGE_REF: 'synthetic-image',
       RUNTIME_SERVICE_ACCOUNT: 'synthetic-account', MAX_INSTANCES: '10', RUNTIME_CONCURRENCY: '8',
     } });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe('existing-f04/production/firestore/freepasserp5');
+    expect(result.status === 0, result.stderr).toBe(allowed);
+    expect(result.stdout.includes('DEPLOY_REACHED')).toBe(deployed);
+    expect(result.stdout).not.toContain('synthetic-f04');
+    expect(result.stdout).not.toContain('synthetic-extra');
+    }
   });
   it('deploys privately and grants anonymous invoker only after approved preflight', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');

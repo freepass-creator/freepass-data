@@ -179,6 +179,15 @@ jobs:
           if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
             : "${FREEPASS_SHEET_F04_ID:?MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID}"
             runtime_env="$runtime_env,FREEPASS_SHEET_F04_ID=$FREEPASS_SHEET_F04_ID"
+            # Existing private service only: keep binding values in this step's memory.
+            before="$(gcloud run services describe "$SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format=json)"
+            jq -e '.spec.template.spec.containers[0].env | any(.name == "FREEPASS_SHEET_F04_ID" and (.value | type == "string" and length > 0))' <<<"$before" >/dev/null
+            existing_f04="$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "FREEPASS_SHEET_F04_ID") | .value' <<<"$before")"
+            test "$existing_f04" = "$FREEPASS_SHEET_F04_ID"
+            expected_secrets="$(jq -cn --arg consumers "$CONSUMERS_SECRET_NAME" --arg cv "$CONSUMERS_SECRET_VERSION" --arg one "$IANCAR_SECRET_NAME" --arg ov "$IANCAR_SECRET_VERSION" '[{name:"FREEPASS_DATA_CONSUMERS_JSON",valueFrom:{secretKeyRef:{name:$consumers,key:$cv}}},{name:"EANCAR_ONE_API_KEY",valueFrom:{secretKeyRef:{name:$one,key:$ov}}}] | sort_by(.name)')"
+            existing_secrets="$(jq -c '[.spec.template.spec.containers[0].env[]? | select(.valueFrom != null) | {name,valueFrom}] | sort_by(.name)' <<<"$before")"
+            test "$existing_secrets" = "$expected_secrets"
+            preserved_before="$(jq -c '[.spec.template.spec.containers[0].env[]? | select(.name != "NODE_ENV" and .name != "FREEPASS_DATA_DRIVER" and .name != "FIREBASE_PROJECT_ID") | {name,value,valueFrom}] | sort_by(.name)' <<<"$before")"
             secret_args+=(--set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:$CONSUMERS_SECRET_VERSION,EANCAR_ONE_API_KEY=$IANCAR_SECRET_NAME:$IANCAR_SECRET_VERSION")
           else
             public_runtime_args+=(--timeout=30s --cpu=1 --memory=512Mi)
@@ -189,6 +198,14 @@ jobs:
             --ingress=all --max-instances="$MAX_INSTANCES" --concurrency="$RUNTIME_CONCURRENCY" --no-allow-unauthenticated \
             --update-env-vars="$runtime_env" \
             "${secret_args[@]}" "${public_runtime_args[@]}" --quiet
+          if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
+            after="$(gcloud run services describe "$SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format=json)"
+            preserved_after="$(jq -c '[.spec.template.spec.containers[0].env[]? | select(.name != "NODE_ENV" and .name != "FREEPASS_DATA_DRIVER" and .name != "FIREBASE_PROJECT_ID") | {name,value,valueFrom}] | sort_by(.name)' <<<"$after")"
+            test "$preserved_before" = "$preserved_after"
+            jq -e '[.spec.template.spec.containers[0].env[]? | select(.name == "NODE_ENV" or .name == "FREEPASS_DATA_DRIVER" or .name == "FIREBASE_PROJECT_ID") | {name,value}] | sort_by(.name) == ([{name:"NODE_ENV",value:"production"},{name:"FREEPASS_DATA_DRIVER",value:"firestore"},{name:"FIREBASE_PROJECT_ID",value:"freepasserp5"}] | sort_by(.name))' <<<"$after" >/dev/null
+            echo 'READ_RUNTIME_ENV_PRESERVED=true' >> "$GITHUB_ENV"
+            unset before after preserved_before preserved_after existing_secrets expected_secrets existing_f04
+          fi
 
       - name: Grant public invoker only when requested
         if: ${{ inputs.grant_public_invoker == true }}
