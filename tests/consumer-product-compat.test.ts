@@ -96,6 +96,17 @@ describe('bounded single-product compatibility facts', () => {
     const response = await app.inject({ url: url(), headers });
     expect(response.statusCode).toBe(200); expect(response.json()).toEqual(value); await app.close();
   });
+  it.each(['readTimeExact', 'productVersion', 'updateTimeExact', 'documentVersions', 'linkedFacts', 'policyFact'])('rejects extra metadata in %s before a success audit', async target => {
+    const { app, readProductCompat, logs } = setup(); const value = snapshot();
+    const objects: Record<string, object> = { readTimeExact: value.meta.readTimeExact, productVersion: value.meta.documentVersions.product,
+      updateTimeExact: value.meta.documentVersions.product.updateTimeExact, documentVersions: value.meta.documentVersions,
+      linkedFacts: value.meta.linkedFacts, policyFact: value.meta.linkedFacts.policy };
+    Object.assign(objects[target]!, { privateDebug: 'synthetic-secret' });
+    readProductCompat.mockResolvedValueOnce(value);
+    const response = await app.inject({ url: url(), headers });
+    expect(response.statusCode).toBe(503); expect(response.body).not.toContain('synthetic-secret');
+    expect(logs.events.some(event => event.phase === 'SUCCEEDED')).toBe(false); await app.close();
+  });
   it.each(['PRODUCT_NOT_FOUND', 'PRODUCT_SELECTION_UNAVAILABLE', 'INVALID_PRODUCT_SELECTION', 'private upstream token'])('maps %s safely', async code => {
     const { app, readProductCompat } = setup(); readProductCompat.mockRejectedValueOnce(new Error(code));
     const response = await app.inject({ url: url(), headers });

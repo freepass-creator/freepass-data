@@ -884,7 +884,10 @@ export function createConsumerGateway(
         const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
         const stamp = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T.*Z$/.test(v) && Number.isFinite(Date.parse(v));
         const invalid = () => { throw new Error('PRODUCT_SELECTION_RESPONSE_INVALID'); };
+        const exactKeys = (v: unknown, keys: readonly string[]): v is Record<string, unknown> => object(v)
+          && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
         const exactStamp = (pair: unknown, iso: unknown): pair is { seconds: number; nanoseconds: number } => object(pair)
+          && exactKeys(pair, ['seconds', 'nanoseconds'])
           && Number.isSafeInteger(pair.seconds) && Number.isInteger(pair.nanoseconds) && (pair.nanoseconds as number) >= 0 && (pair.nanoseconds as number) < 1e9
           && stamp(iso) && Date.parse(iso) === (pair.seconds as number) * 1000 + Math.floor((pair.nanoseconds as number) / 1e6);
         const scalar = (v: unknown) => v === null || typeof v === 'boolean' || typeof v === 'number' && Number.isFinite(v)
@@ -905,8 +908,9 @@ export function createConsumerGateway(
           || !object(meta.documentVersions) || !object(meta.documentVersions.product)
           || meta.documentVersions.product.id !== productId || !stamp(meta.documentVersions.product.updateTime)
           || Date.parse(meta.documentVersions.product.updateTime) > Date.parse(meta.readAt)) invalid();
-        if (!exactStamp(meta.readTimeExact, meta.readAt) || Object.keys(meta.collectionCounts).some(k => !['products', 'policies', 'partners'].includes(k))) invalid();
-        const versionOK = (v: { updateTime: string; updateTimeExact: { seconds: number; nanoseconds: number } }) => exactStamp(v.updateTimeExact, v.updateTime)
+        if (!exactStamp(meta.readTimeExact, meta.readAt) || !exactKeys(meta.collectionCounts, ['products', 'policies', 'partners'])
+          || !exactKeys(meta.documentVersions, ['product', 'policies', 'partners'])) invalid();
+        const versionOK = (v: { updateTime: string; updateTimeExact: { seconds: number; nanoseconds: number } }) => exactKeys(v, ['id', 'updateTime', 'updateTimeExact']) && exactStamp(v.updateTimeExact, v.updateTime)
           && (v.updateTimeExact.seconds < meta.readTimeExact.seconds || v.updateTimeExact.seconds === meta.readTimeExact.seconds && v.updateTimeExact.nanoseconds <= meta.readTimeExact.nanoseconds);
         if (!versionOK(meta.documentVersions.product)) invalid();
         const product = data.products[productId]!;
@@ -926,11 +930,11 @@ export function createConsumerGateway(
             || versions.some(v => !object(v) || typeof v.id !== 'string' || !Object.hasOwn(rows, v.id) || !object(rows[v.id])
               || !stamp(v.updateTime) || !versionOK(v) || !fields(rows[v.id], name === 'policies' ? SINGLE_POLICY_FACT_FIELDS : SINGLE_PARTNER_FACT_FIELDS))) invalid();
         }
-        if (!object(meta.linkedFacts)) invalid();
+        if (!exactKeys(meta.linkedFacts, ['policy', 'partner'])) invalid();
         for (const name of ['policy', 'partner'] as const) {
           const fact = meta.linkedFacts[name];
           const count = Object.keys(data[name === 'policy' ? 'policies' : 'partners']!).length;
-          if (!object(fact) || !(fact.state === 'KNOWN' && fact.reasonCode === null && count === 1
+          if (!exactKeys(fact, ['state', 'reasonCode']) || !(fact.state === 'KNOWN' && fact.reasonCode === null && count === 1
             || fact.state === 'UNKNOWN' && typeof fact.reasonCode === 'string' && [name === 'policy' ? 'POLICY_NOT_OBSERVED' : 'PARTNER_NOT_OBSERVED', name === 'policy' ? 'POLICY_REFERENCE_NOT_OBSERVED' : 'PARTNER_REFERENCE_NOT_OBSERVED'].includes(fact.reasonCode) && count === 0)) invalid();
         }
         if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 1024 * 1024) invalid();
