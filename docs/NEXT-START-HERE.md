@@ -1,5 +1,17 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-11 15분 수집·정제·변경분 갱신 실행
+
+- 목적/정본: 대표 최신 직접 오더에 따라 Data는 원천 수집·정제·Firestore 상태/대여료 및 확정 기준별 수수료 최신화를 책임지고, 플랫폼이 직접 조회/출력한다. 기준 main `24fd7d15d31c12597c591f40cd54d4594ed3fea4`, academy data READY. 기존 수집/저장/수수료/품질 방에 겹치지 않는 실행 범위를 병렬 배정했다.
+- 변경: 기존 `shared-sheet-daily.yml` 파일·WIF·writer 신원·환경 이름·감사 계약을 유지하며 15분 cron으로 변경하고 날짜당 1회 skip만 제거한다. 기존 concurrency, 최신 감사 가드, revision/멱등성, 비공개 증거 및 저장 readback은 보존한다. 신규 예약/신원/키/RTDB/중계 서버 없음.
+- 실제 운영 효과: environment의 기존 `FREEPASS_DATA_SHARED_SHEET_DAILY=on`을 확인했으므로 main 반영은 예약 apply 빈도 변경이다. 최근 run `38098514945`는 전체 SUCCESS지만 capture/apply 단계 SKIPPED였다. 이를 수집 완료로 세지 않는다. GitHub 예약은 지연될 수 있어 15분 cron을 실제 15분 신선도 보장으로 표현하지 않는다.
+- 검증: daily-writer 18 PASS, 기존 delivery-owner 15 PASS, canonical/runtime 포함 91 PASS/1 조건부 SKIP, build/diff-check PASS. 독립 검토 및 최종 CI는 실행 영수증으로 확인한다. 당시 운영 적용/새 회차 readback은 미완료.
+- 남음: 상태/대여료 변경분 writer·영향받은 offer 수수료 재계산 연결 및 supplier-specific 기존 실행 경로 정합성은 해당 담당이 진행한다. 차량가격 기준 수수료는 확인된 차량가격 fact 없이는 추정하지 않는다. 사람 입력 보존·unknown/null 및 원천 실패의 마지막 정상값 보존은 유지한다.
+- 22:03 연결 검증: `--operational-refresh`를 기존 scheduler plan에 연결하고 이전 VALID candidate/900초 freshness를 plan digest에 고정했다. apply는 계획만 사용한다. fresh unchanged/사람 대여료 보존/오래된 원천 차단/계획 변조 차단 4개 회귀 PASS, build PASS. 상태+대여료 통합 시험은 1개월 5% 근거가 FIXED로 저장되어 수수료가 갱신되지 않는 오류로 FAIL이다. 금액 담당은 기존 엔진의 계산 근거, 저장 담당은 commit 전 불일치 차단을 병렬 보완 중이다. 이 실패를 해소하기 전 PR467 draft/15분 활성화 HOLD, 운영 DB 쓰기 0. next_start_here: 해당 두 기존 담당의 immutable commit만 같은 작업선에 인수하고 통합 시험/독립 검토/CI를 다시 실행한다.
+- 22:09 후속: 금액 `187c4ab`/왕복 회귀 `a5523e5`, 저장 commit전 FIXED 불일치 차단 `523bdc2`/legacy fixture `3295fb3`를 같은 PR467 작업선에 인수했다. 실제 job 상태·월료303→777/청구·지급15→39, 기존 차량가격 RATE 수수료 불변까지 66 PASS/build PASS. 이전 후보는 run별로 한번만 읽는다. 차량가격 fee readback은 쓰기 전 snapshot의 fee 전체(금액/계산/VAT/출처)를 정확 기대값으로 사용하며 기존 거래 receipt의 run/offer/revision/command 및 전후 economics 감사를 확인한다; 나머지는 기존 재계산 대사를 유지한다. 이전 최종 묶음 b399b8d2 전체2332 PASS/18외부환경SKIP. job 광역검토63051 TIMEOUT은 PASS가 아니며 좁힌32330은 ANSWERED/exit0: 결선 확인, bounded 보류 사유 구분 제안 반영; 타입/상태writer가 범위밖이라는 미확인은 build/통합 회귀로 보완했다. 금액·저장 독립검토 ANSWERED는 담당 원문으로 수령. 마지막 oracle 변경의 품질 독립 실행/최종 CI/main 및 실제 예약 회차 readback은 아직 남음.
+- 22:14 재감사: f38d2efd 전체2341 PASS/18조건부 SKIP 및 exact-head Core/Canon SUCCESS·품질142 PASS 이후, UNKNOWN/NOT_APPLICABLE 정상 보존에도 재계산 oracle가 KNOWN을 기대하는 false HOLD를 품질 역할과 확인했다. 기존 receipt·전후 감사·전체값 대사 조건 안에서만 두 미확정 상태의 이전값을 정확 보존하며, 미확정을 KNOWN으로 주입하면 HOLD되는 actual-job 4회귀를 추가했다. 관련146 PASS; 임의금액/0원 채우기 없음. 최종 새 head의 build/전체/CI/품질 대조 후에만 main 통합하며 운영 쓰기0 상태를 유지한다.
+- next_start_here: 독립 검토/최종 CI 및 정확 head로 기존 main 통합 → 새 schedule 회차의 실제 capture/apply/changed/noop/HOLD/readback 확인. 코드 롤백 기준은 위 main의 해당 workflow이며 데이터 복구는 회차 private plan/receipt와 기존 writer 경로로 별도 판정한다. `supplier-relay-iancar-15m` PAUSED를 임의 resume하지 않고 legacy writer와 canonical writer를 구분한다.
+
 ## 2026-10-11 수집·정제 책임 실행 — 색상 규칙의 기존 저장 lifecycle 연결
 
 - 목적/대상: 대표 「너의 역할을 다해라」, 수집·정제·저장 범위만. 기존 PR451/f7ff3bc 작업선, academy data READY. 조회/공개 서버 추가 변경 없음.
