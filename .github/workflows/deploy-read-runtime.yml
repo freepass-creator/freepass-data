@@ -3,6 +3,9 @@ name: Deploy FreePass Data read runtime
 on:
   workflow_call:
     inputs:
+      runtime_source_sha:
+        required: false
+        type: string
       service_name:
         required: false
         type: string
@@ -35,6 +38,10 @@ on:
         default: true
   workflow_dispatch:
     inputs:
+      runtime_source_sha:
+        description: Exact main ancestor for runtime source; empty uses workflow main
+        type: string
+        required: false
       verify_only:
         type: boolean
         default: false
@@ -85,6 +92,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
 
       - name: Fail closed until bootstrap is complete
         shell: bash
@@ -103,6 +113,25 @@ jobs:
             [[ "$IANCAR_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]]
           fi
           test "$GITHUB_REF" = 'refs/heads/main'
+
+      - name: Resolve trusted runtime source
+        id: runtime-source
+        shell: bash
+        env:
+          REQUESTED_RUNTIME_SOURCE_SHA: ${{ inputs.runtime_source_sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          source_sha="${REQUESTED_RUNTIME_SOURCE_SHA:-$GITHUB_SHA}"
+          [[ "$source_sha" =~ ^[a-f0-9]{40}$ ]]
+          resolved="$(git rev-parse --verify "$source_sha^{commit}")"
+          test "$resolved" = "$source_sha"
+          git merge-base --is-ancestor "$resolved" "$GITHUB_SHA"
+          echo "sha=$resolved" >> "$GITHUB_OUTPUT"
+          echo "EXPECTED_SOURCE_SHA=$resolved" >> "$GITHUB_ENV"
+          echo "WORKFLOW_SOURCE_SHA=$GITHUB_SHA" >> "$GITHUB_ENV"
 
       - name: Validate public approval before deployment effects
         shell: bash
@@ -132,6 +161,12 @@ jobs:
             test "$plan_digest" = "$APPROVED_PLAN_DIGEST"
             echo 'PUBLIC_RUNTIME_APPROVAL_VALIDATED=true' >> "$GITHUB_ENV"
           fi
+
+      - name: Checkout resolved runtime source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.runtime-source.outputs.sha }}
+          persist-credentials: false
 
       - name: Authenticate deploy identity
         uses: google-github-actions/auth@v2
@@ -166,18 +201,22 @@ jobs:
           # 진입점이 기본(소비자 서버)이 아니면 이미지 이름을 서비스 이름으로 분리한다 — 같은 SHA 태그를 재사용하다 다른 진입점 이미지가 배포되는 사고 방지.
           image_name="freepass-data-read"
           if [ "$RUNTIME_ENTRYPOINT" != "dist/src/api/consumer-server.js" ]; then image_name="$SERVICE_NAME"; fi
-          image="$registry/$PROJECT_ID/$ARTIFACT_REPOSITORY/$image_name:$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          image="$registry/$PROJECT_ID/$ARTIFACT_REPOSITORY/$image_name:$EXPECTED_SOURCE_SHA"
           echo "IMAGE=$image" >> "$GITHUB_ENV"
           if gcloud artifacts docker images describe "$image" \
             --project="$PROJECT_ID" --format='value(image_summary.digest)' | grep -q '^sha256:'; then
-            echo "Reusing existing immutable image for $GITHUB_SHA"
+            echo "Reusing existing immutable image for $EXPECTED_SOURCE_SHA"
           else
             gcloud auth configure-docker "$registry" --quiet
-            docker build --pull --build-arg "FREEPASS_DATA_ENTRYPOINT=$RUNTIME_ENTRYPOINT" --tag "$image" .
+            docker build --pull --build-arg "FREEPASS_DATA_ENTRYPOINT=$RUNTIME_ENTRYPOINT" --build-arg "FREEPASS_DATA_SOURCE_SHA=$EXPECTED_SOURCE_SHA" --label "org.opencontainers.image.revision=$EXPECTED_SOURCE_SHA" --tag "$image" .
             docker push "$image"
           fi
           digest="$(gcloud artifacts docker images describe "$image" --project="$PROJECT_ID" --format='value(image_summary.digest)')"
           [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          gcloud auth configure-docker "$registry" --quiet
+          docker pull "$image@$digest"
+          test "$(docker image inspect "$image@$digest" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$EXPECTED_SOURCE_SHA"
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
           echo "IMAGE_REF=$image@$digest" >> "$GITHUB_ENV"
 
@@ -267,6 +306,7 @@ jobs:
           test -n "$revision"
           test "$revision_service_account" = "$RUNTIME_SERVICE_ACCOUNT"
           test "$deployed_image" = "$IMAGE_REF"
+          test "${IMAGE##*:}" = "$EXPECTED_SOURCE_SHA"
           if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
             test "$secret_version" = "$CONSUMERS_SECRET_VERSION"
             test "$(jq -r '.spec.template.spec.timeoutSeconds' <<<"$service_json")" = "300"
@@ -299,6 +339,8 @@ jobs:
             echo "Image: $IMAGE"
             echo "Image digest: $IMAGE_DIGEST"
             echo "Revision: $revision"
+            echo "Runtime source: $EXPECTED_SOURCE_SHA"
+            echo "Workflow source: $WORKFLOW_SOURCE_SHA"
             echo
             echo 'Next: hand this URL to FreePassERP I-01, configure Vercel OIDC caller IAM, then switch ERP.com to OBSERVE.'
           } >> "$GITHUB_STEP_SUMMARY"
@@ -406,6 +448,8 @@ jobs:
             echo '### ERP.com FreePass Data read runtime activation'
             echo
             echo "- commit: \`$GITHUB_SHA\`"
+            echo "- runtime source: \`${EXPECTED_SOURCE_SHA:-UNRESOLVED}\`"
+            echo "- workflow source: \`$GITHUB_SHA\`"
             echo "- workflow status: **$JOB_STATUS**"
             echo "- deploy WIF provider configured: **$HAS_DEPLOY_WIF_PROVIDER**"
             echo "- deploy service account configured: **$HAS_DEPLOY_SERVICE_ACCOUNT**"
