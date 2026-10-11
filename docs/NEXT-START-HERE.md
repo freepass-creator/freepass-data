@@ -8,6 +8,7 @@
 - dry-run: 기존 RAW 175건을 메모리에서 색상만 재판정. 외부색상 KNOWN170/MISSING5, 내부색상 KNOWN167/MISSING8, RAW digest 불변, writes0. 전체 candidate의 master 승인 또는 canonical 승격 결과가 아니다.
 - 검증: 관련 86 PASS, 전체 2154 PASS /16 SKIP, build/boundary/diff-check PASS. Claude 독립 diff 검토 결과는 후속 기록 참조. 운영 원문·후보·canonical 쓰기 및 시트 변경 없음.
 - next_start_here: 기존 SourceIngestionStore 수집 lifecycle에서 ruleVersion6을 채택하고 최신 원천 및 sealed master를 고정해 기존 ingest plan으로 준비한다. 과거 후보 덮어쓰기/오류 줄 삭제/일괄 마스터 추정 금지. 이 색상 dry-run을 운영 반영 완료로 세지 않는다.
+- Claude 검토 본문/exit0/ANSWERED의 두 지적을 반영: 색상 placeholder는 field-level REVIEW_REQUIRED만 기록하며 candidate 전체 issues에 추가하지 않음. 기존 default normalizer/5와 candidate ID/lineage는 유지하고 `{includeSupplierColors:true}`를 명시한 경우에만 normalizer/6 후보 생성. 운영 기본 활성화는 아직 안 됐으며, 동일 fingerprint fact 재적재 plan을 검토하기 전 daily 기본값을 바꾸지 않는다. 수정 후 관련58 PASS/build PASS.
 
 ## 2026-10-11 Firestore 직접 내부 조회 — 구현과 운영 연결 구분
 

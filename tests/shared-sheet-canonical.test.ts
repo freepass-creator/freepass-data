@@ -122,7 +122,7 @@ describe('shared sheet local source to Canonical', () => {
     const c = capture({ 외부색상: '  펄 화이트  ', 내부색상: '블랙/브라운' });
     const raw = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords[0]!;
     const before = structuredClone(raw);
-    const n = normalizeSharedSheet(raw, masterEvidence());
+    const n = normalizeSharedSheet(raw, masterEvidence(), { includeSupplierColors: true });
     expect(n.record.candidate.vehicleFacts!.fields.exteriorColor).toMatchObject({ value: '펄 화이트', state: 'KNOWN', evidence: '펄 화이트' });
     expect(n.record.candidate.vehicleFacts!.fields.interiorColor).toMatchObject({ value: '블랙/브라운', state: 'KNOWN' });
     expect(n.lineage.find(l => l.normalized?.fieldPath === 'vehicleFacts.fields.exteriorColor')).toMatchObject({
@@ -130,10 +130,16 @@ describe('shared sheet local source to Canonical', () => {
     expect(raw).toEqual(before);
   });
   it('does not borrow exterior color for empty interior color or guess a review placeholder', () => {
-    const n = normalized(capture({ 외부색상: '확인 필요', 내부색상: '' }));
+    const c = capture({ 외부색상: '확인 필요', 내부색상: '' });
+    const raw = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords[0]!;
+    const n = normalizeSharedSheet(raw, masterEvidence(), { includeSupplierColors: true });
     expect(n.record.candidate.vehicleFacts!.fields.exteriorColor).toMatchObject({ value: null, state: 'REVIEW_REQUIRED' });
     expect(n.record.candidate.vehicleFacts!.fields.interiorColor).toMatchObject({ value: null, state: 'MISSING' });
-    expect(n.record.candidate.issues).toContain('INVALID_EXTERIORCOLOR');
+    expect(n.record.candidate.issues).not.toContain('INVALID_EXTERIORCOLOR');
+    expect(n.record.status).toBe('VALID');
+    const old = normalizeSharedSheet(raw, masterEvidence());
+    expect(old.record.candidate.vehicleFacts!.ruleVersion).toBe('shared-sheet-normalizer/5');
+    expect(old.record.candidate.vehicleFacts!.fields).not.toHaveProperty('exteriorColor');
   });
   // 소수 칸 표시 형식 «0.###"kWh"»는 정수를 «22.kWh»로 보인다(2026-10-04 서식 통일) — 같은 값. 점 두 개·글자는 여전히 거부.
   it.each([['22.kWh', 22], ['54.kWh', 54], ['77.4kWh', 77.4], ['84kWh', 84]])('battery %s → %s', (shown, value) =>
