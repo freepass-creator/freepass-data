@@ -239,9 +239,12 @@ export async function runIancarPhaseOnePublication(input: {
 export async function runIancarPhotoPublication(input: Parameters<typeof publishIancarPhotoReferences>[0]) {
   const runtime = createJobDataAccessRuntime();
   const spec = { context: { actor: { id: 'service:freepass-data-iancar-photos', kind: 'SERVICE' as const },
-    clientId: 'job:collect-iancar-one-api', purpose: 'user-directed photo-only publication preserving prices and inventory' },
+    clientId: 'job:collect-iancar-one-api', purpose: input.verificationOnly
+      ? 'explicit human-reviewed fixed ONE album registration; no price/inventory/image-reference changes'
+      : 'user-directed photo-only publication preserving prices and inventory' },
     resource: { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031/photos' },
-    operation: input.apply ? 'WRITE_IANCAR_PHOTO_REFERENCES' : 'READ_IANCAR_PHOTO_PLAN',
+    operation: input.verificationOnly ? (input.apply ? 'WRITE_IANCAR_PHOTO_VERIFICATION' : 'READ_IANCAR_PHOTO_VERIFICATION_PLAN')
+      : (input.apply ? 'WRITE_IANCAR_PHOTO_REFERENCES' : 'READ_IANCAR_PHOTO_PLAN'),
     summarize: (value: Awaited<ReturnType<typeof publishIancarPhotoReferences>>) => ({ count: value.count, digest: value.planDigest }) };
   return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => publishIancarPhotoReferences(input))
     : runtime.access.read(spec, () => publishIancarPhotoReferences(input));

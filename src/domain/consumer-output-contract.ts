@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { CommercialType } from './catalog.js';
+import { orderedJsonDigest } from '../shared/stable-digest.js';
 
 export const F86_OUTPUT_CONTRACT = {
   contractId: 'f86-hahuhho-v1',
@@ -228,10 +229,14 @@ export function isPublicIancarPhotoProduct(product: Record<string, unknown> | un
 }
 
 /** Source adapters supply identity and bytes; authorization and validation stay in one pipeline. */
+export type VehiclePhotoRead = {
+  count: number; bytes: Buffer | null; contentType: string;
+  photoIds?: string[]; upstreamPhotoIds?: string[];
+};
 export type VehiclePhotoSource = {
   eligible(product: Rec | undefined): boolean;
   connection(product: Rec): string;
-  read(product: Rec, index?: number): Promise<{ count: number; bytes: Buffer | null; contentType: string }>;
+  read(product: Rec, index?: number, fresh?: boolean): Promise<VehiclePhotoRead>;
 };
 
 export function createVehiclePhotoReader(
@@ -268,17 +273,45 @@ export function createVehiclePhotoReader(
     const consumerSources = mediaOnly ? sources.filter(candidate => candidate === iancarSource) : sources;
     const source = consumerSources.find(candidate => candidate.eligible(product));
     if (!source || !product || !hasVehiclePhotoVerification(product)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+    const refs = product.photo_original_refs as Rec[];
+    const boundOneReview = source === iancarSource && refs.some(ref => ref.sourceKind === 'IANCAR_ONE');
+    const reviewedSetMatches = (result: VehiclePhotoRead, checkBytes = index !== undefined): boolean => {
+      if (!boundOneReview) return true;
+      const ids = result.photoIds, upstream = result.upstreamPhotoIds;
+      if (!ids || !upstream || ids.length !== refs.length || result.count !== refs.length
+        || upstream.length !== ids.length || new Set(ids).size !== ids.length || new Set(upstream).size !== upstream.length) return false;
+      const binding = orderedJsonDigest(['RP031', productId, product.iancar_one_vehicle_id, String(product.car_number).replace(/\s/g, '')]);
+      const set = orderedJsonDigest(['ONE_PHOTO_SET/1', binding, upstream, ids]);
+      const unchanged = refs.every((ref, i) => ref.sourceKind === 'IANCAR_ONE' && ref.sourceApiVersion === 'iancar-one-api/1'
+        && ref.sourceBindingDigest === binding && ref.photoSetDigest === set
+        && ref.sourcePhotoIdDigest === orderedJsonDigest(ids[i]) && ref.servingIndex === i
+        && ref.sourceOrdinal === upstream.indexOf(ids[i]!) && upstream.includes(ids[i]!)
+        && typeof ref.photoSha256 === 'string' && /^[a-f0-9]{64}$/.test(ref.photoSha256));
+      if (!unchanged || !checkBytes || index === undefined) return unchanged;
+      const ref = refs[index];
+      return !!ref && Buffer.isBuffer(result.bytes) && result.contentType === ref.mediaType
+        && createHash('sha256').update(result.bytes).digest('hex') === ref.photoSha256;
+    };
     const connection = JSON.stringify([source.connection(product), product.photo_original_refs]);
-    const revalidate = async (): Promise<boolean> => {
+    const revalidate = async (checkBytes = true): Promise<boolean> => {
       const current = await readProduct(productId);
-      return !!current && (!mediaOnly || isPublicIancarPhotoProduct(current)) && hasVehiclePhotoVerification(current) && consumerSources.find(candidate => candidate.eligible(current)) === source
+      const unchanged = !!current && (!mediaOnly || isPublicIancarPhotoProduct(current)) && hasVehiclePhotoVerification(current) && consumerSources.find(candidate => candidate.eligible(current)) === source
         && JSON.stringify([source.connection(current), current.photo_original_refs]) === connection;
+      if (!unchanged) return false;
+      if (!boundOneReview) return true;
+      try { return reviewedSetMatches(await source.read(current!, checkBytes ? index : undefined, true), checkBytes); } catch { return false; }
     };
     const recheck = async () => {
-      if (!await revalidate()) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+      // The frozen response bytes were checked on read; this pass rechecks source membership.
+      // The public revalidate callback performs the final byte check after the success audit.
+      if (!await revalidate(false)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
     };
     const read = async () => {
-      try { return await source.read(product, index); }
+      try {
+        const result = await source.read(product, index, boundOneReview);
+        if (!reviewedSetMatches(result)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+        return result;
+      }
       catch (error) {
         // Adapter diagnostics stay private; the public response vocabulary is source independent.
         const code = error instanceof Error ? error.message : '';

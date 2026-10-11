@@ -22,10 +22,22 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
     access,
     projection: createFirestoreProjectionReader(),
     health: createFirestoreDataHealthReader(),
-    compat: createFirestoreCatalogCompatibilityReader(async (vehicleId, plate, index) => {
+    compat: createFirestoreCatalogCompatibilityReader(async (vehicleId, plate, index, fresh) => {
       const config = iancarOneApiConfigFromEnv();
       if (!config.apiKey) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
       const client = createIancarOneApiClient(config);
+      if (fresh) {
+        const detail = await client.getVehicle(vehicleId);
+        const photoIds = iancarOnePhotoIds(detail, vehicleId, plate);
+        const raw = (detail as any)?.data ?? detail;
+        const upstreamPhotoIds = raw.photos.map((photo: any) => String(photo.photo_id)) as string[];
+        const metadata = { count: photoIds.length, photoIds, upstreamPhotoIds };
+        if (index === undefined) return { ...metadata, bytes: null, contentType: 'application/json' };
+        const id = photoIds[index];
+        if (!id) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+        // A reviewed album must not serve cached bytes after the same source ID changes content.
+        return { ...metadata, ...await readIancarOnePhotoBytes(await client.getPhoto(vehicleId, id)) };
+      }
       const key = JSON.stringify([vehicleId, plate]);
       let cached = photoSets.get(key);
       if (!cached || cached.expiresAt <= Date.now()) {
