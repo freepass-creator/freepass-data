@@ -19,7 +19,7 @@ Status: IMPLEMENTED / VALIDATION REQUIRED BEFORE DEPLOYMENT
 - 검증: 관련257개 검사 PASS 이후 연료 회귀를 추가했다. 최종 전체 `npm test -- --maxWorkers=2` **2,147PASS/16조건부SKIP**, build/architecture/data-access boundary/diff check PASS. 첫 전체 실행의 runtime-policy 5초 timeout1건은 보존하며 부하를 줄인 재실행에서 해당 검사와 전체가 통과했다. standards33 schema/15검사 PASS이나 기존 profile은 PARTIAL이다. 공개 nested price를 강제로 listable로 놓아도 수수료·마진·가격 출처를 출력하지 않는 회귀가 통과했다.
 - 정산/공개 경계: 기존 `contract-fee-link`19검사는 저장된 경제조건 조회·불일치 보류를 유지한다. 외부 계약 정산을 참조 계산으로 덮지 않는다. ERP 실제 guest sanitizer의 null 보증금→0 변환 위험은 별도 소비처 후속 HOLD이며 이번 Data PR에서 고치거나 실제 cutover를 승인하지 않았다.
 - 독립 검토: 처음 설계 상의는300초 REVIEW_TIMEOUT으로 통과가 아니다. 총괄의 exact 구현 검토는 실제 Claude ANSWERED/exit0이며 공급사 코드 출처가 회사명 셀이 아니라 RAW `payload.supplierCode`라는 반례를 지적했다. 해당 참조를 정정하고 회사명과 공급사 코드가 다른 회귀로 검증한다. UNKNOWN/0·원문 상품구분·KNOWN 연료·유일36 기준·공개 allowlist·쓰기 금지에 대해 같은 좁은 범위의 추가 블로커는 없었다. 합의를 계약 확정이나 배포 증거로 확대하지 않는다.
-- 最終 정정 검증: 공급사 출처 정정 후 build와 관련239검사 PASS, 같은 seed20차번/73기간의 RAW/엔진/세 gateway 응답 재대조0차이. 총괄도 정상화기의 실제 RAW mapping과 같은239검사/diff check를 독립 확인해 유일 블로커 해소를 판정했다. 담당의 추가 좁은 Claude 호출도300초 REVIEW_TIMEOUT이므로 이를 ANSWERED로 세지 않는다.
+- 최종 정정 검증: 공급사 출처 정정 후 build와 관련239검사 PASS, 같은 seed20차번/73기간의 RAW/엔진/세 gateway 응답 재대조0차이. 총괄도 정상화기의 실제 RAW mapping과 같은239검사/diff check를 독립 확인해 유일 블로커 해소를 판정했다. 담당의 추가 좁은 Claude 호출도300초 REVIEW_TIMEOUT이므로 이를 ANSWERED로 세지 않는다.
 - next_start_here: 이 PR의 exact diff/독립 검토/CI → 별도 승인 시 원천 COLLECTED grant·고정 이미지 배포 → 카카오/내부 AI/ERP 실제 readback. UNKNOWN133은 공급사/계약의 확정 근거를 확보한 뒤 기존 엔진 입력으로만 해소한다. PR까지만 진행하며 운영 반영 완료로 표현하지 않는다.
 
 ## 2026-10-10 금액 사실과 발행 검증 분리 — 배포 전 준비

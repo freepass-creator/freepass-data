@@ -536,6 +536,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 원천 가격행 기간별 청구·지급 연결 — PR만
+
+- 목적: 차량번호로 조회하는 기존 원천 상품행에도 월대여료·보증금·청구(공급사→FreePass)·지급(FreePass→영업채널)을 함께 제공한다. 기존 legacy `offers.priceTerms`의 수수료 누락을 전제로 하지 않는다.
+- 대상 revision: base main `f5e931889749ec869ae4b996725cc22aa8bf5784`(PR447), 코드/검증 `a97e0d55a9feb382de593dc79217884a7e87a8e1`, 단일 후속 branch `work/freepass-data/period-billing-payout-read-20261011`. 기존 금액 checkout 재사용, academy development READY. 원래 루트의 dirty 문서2개는 보존했다.
+- 변경: 기존 source-row projector/수수료 엔진/ERP adapter/공유 reference schema를 확장했다. 입력 미확정은 UNKNOWN/null이며 rent0을 수수료 계산에 사용하지 않는다. 가격·공급사 RAW 메타데이터 출처와 원천 identity/publication HOLD를 보존한다. 새 요율·엔진·정산 저장·사람 입력 덮어쓰기 없음.
+- 검증: 최신 RAW/후보175행·678조건, 양쪽 각각 CALCULATED545/UNKNOWN133. UNKNOWN 사유1/93/35/4와 상세는 [기존 런타임 기록](READ-RUNTIME.md#실측--구현-검증--2026-10-11)을 따른다. seed20261011 표본20차번/73기간의 RAW 재정상화→기존 엔진→카카오/내부 AI/ERP 로컬 인증 gateway 응답 대조0차이. 원천 head 재조회 동일, 공개 Git 원문·차번·시트ID·토큰 추가0.
+- 검증: 전체2,147PASS/16조건부SKIP(`--maxWorkers=2`), build/arch/data-access/diff check PASS, standards33schema/15검사 PASS·profile PARTIAL 유지. 첫 전체 runtime5초 timeout1건은 재실행 통과. 최종 공급사 참조 정정 후 관련239PASS, 총괄 독립239PASS/RAW mapping 확인. Claude 실제 ANSWERED/exit0 검토의 유일 공급사 출처 블로커를 정정했다. 담당의 설계/추가 검토 TIMEOUT2회는 통과로 세지 않는다.
+- 남음: 신규 운영 배포·COLLECTED grant·실제 소비처 readback·계약 수수료 확정은 미실행이다. CALCULATED는 확정금액이 아니다. ERP guest의 null 보증금→0 변환은 후속 cutover HOLD이며 이번 Data 변경 범위 밖이다. 이번 승인은 PR까지만, 머지/배포 금지.
+- next_start_here: 같은 PR exact head/CI → 별도 사용자 승인 후 고정 이미지·grant·각 소비처 실제 readback. UNKNOWN133은 실제 공급사/계약 근거를 확보해 기존 엔진 입력으로 해소한다. private 표본과 실행 집계는 Temp에만 보존한다.
+
 ### 2026-10-11 공통시트 전체 상품행 / 원자값 조회와 ERP 입력 대응
 
 - 목적/정본: main `4b0690ed634dc188d168033a66b87b67338847e9` 위 단일 work. 기존 sourceStore current head/RAW/candidate가 정본이며 products-only 조회로 번호 미정이 빠지는 문제를 연결한다. Academy READY, reuse `COMPOSE_OR_EXTEND`; 새 reader/컬렉션/서비스/정책문서 없이 기존 gateway·projector·strict schema·테스트 확장.
