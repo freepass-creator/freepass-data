@@ -349,6 +349,16 @@ describe('contract fee link', () => {
     expect(mixed.ledgerFee?.snapshotId).toBe('period-fee-2026-10-09');
   });
 
+  it('holds when only a date-only valueAsOf exists and contractAt is given (no time evidence)', () => {
+    const input = { ...baseInput(), contractDate: '2026-10-10', contractAt: '2026-10-10T12:00:00+09:00' };
+    const noTime = ledgerRow({ valueAsOf: '2026-10-10', computedAt: 'invalid' });
+    expect(resolveContractFeeLink(input, { ...baseData(), ledgerRows: [noTime] }).ledgerFee).toMatchObject({ status: 'HOLD' });
+    const later = ledgerRow({ valueAsOf: '2026-10-10', computedAt: '2026-10-10T15:00:00+09:00' });
+    expect(resolveContractFeeLink(input, { ...baseData(), ledgerRows: [later] }).ledgerFee).toMatchObject({ status: 'HOLD' });
+    const earlier = ledgerRow({ valueAsOf: '2026-10-10', computedAt: '2026-10-10T09:00:00+09:00' });
+    expect(resolveContractFeeLink(input, { ...baseData(), ledgerRows: [earlier] }).ledgerFee?.status).toBe('CONFIRMED');
+  });
+
   it('omits ledgerFee when ledger rows are absent or contractDate is absent', () => {
     expect(resolveContractFeeLink({ ...baseInput(), contractDate: '2026-10-10' }, baseData()).ledgerFee).toBeUndefined();
     expect(resolveContractFeeLink(baseInput(), { ...baseData(), ledgerRows: [ledgerRow()] }).ledgerFee).toBeUndefined();

@@ -164,9 +164,8 @@ const dateOnly = (value: string | undefined) =>
 
 const ledgerObservationMs = (row: PeriodFeeLedgerRow) => {
   const computedAtMs = parseTime(row.computedAt);
-  const valueAsOfMs = dateOnly(row.valueAsOf) && Number.isFinite(computedAtMs)
-    ? NaN
-    : parseTime(row.valueAsOf);
+  // 날짜만 있는 valueAsOf 는 시각 근거가 아니다(UTC 자정으로 해석되어 계약 후 관측을 계약 전으로 오판). 시각 비교에는 쓰지 않는다.
+  const valueAsOfMs = dateOnly(row.valueAsOf) ? NaN : parseTime(row.valueAsOf);
   const observed = [computedAtMs, valueAsOfMs].filter(Number.isFinite);
   return observed.length > 0 ? Math.max(...observed) : NaN;
 };
