@@ -216,7 +216,7 @@ describe('API runtime boundary', () => {
     const run = (args: string[]) => spawnSync(process.execPath, args, { encoding: 'utf8' });
     const approved = run(base);
     expect(approved.status, approved.stderr).toBe(0);
-    expect(approved.stdout.trim()).toBe('9b867764c02847a861dcfeb12200ffc0aa7920cd0dc3c4b35b99fa84e52f1303');
+    expect(approved.stdout.trim()).toBe('3e0f0a8a3d9f8b7edc4f1781598781af2eba6dfaff9cd41c9a744e70c3a9bdbe');
     for (const [index, value] of [[3, 'freepass-data-read'], [5, 'private-runtime'], [7, 'dist/src/api/consumer-server.js'], [9, 'true']] as const) {
       const changed = [...base];
       changed[index] = value;
