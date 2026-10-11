@@ -219,6 +219,14 @@ export function isApprovedVehiclePhotoProduct(product: Rec | undefined): product
   });
 }
 
+export function isPublicIancarPhotoProduct(product: Record<string, unknown> | undefined): boolean {
+  return !!product && product.provider_company_code === 'RP031' && product.listable === true
+    && !product._deleted && !product.deletedAt && !product.publication_withdrawal
+    && ['가용', '선점'].includes(String(product.status_kind))
+    && typeof product.iancar_one_vehicle_id === 'string' && !!product.iancar_one_vehicle_id.trim()
+    && typeof product.car_number === 'string' && !!product.car_number.trim();
+}
+
 /** Source adapters supply identity and bytes; authorization and validation stay in one pipeline. */
 export type VehiclePhotoSource = {
   eligible(product: Rec | undefined): boolean;
@@ -250,16 +258,20 @@ export function createVehiclePhotoReader(
   };
   const sources = [...(iancarSource ? [iancarSource] : []), approvedSource];
   return async (consumerId: string, productId: string, index?: number) => {
-    if (!(consumerId === 'erp-com' || /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId))) throw new Error('VEHICLE_PHOTO_CONSUMER_FORBIDDEN');
+    if (!(consumerId === 'erp-com' || consumerId === 'erp5-public-media' || /^whitelabel-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId))) throw new Error('VEHICLE_PHOTO_CONSUMER_FORBIDDEN');
     if (!productId || productId.length > 200 || /[\/\u0000-\u001f\u007f]/.test(productId)
       || (index !== undefined && (!Number.isSafeInteger(index) || index < 0 || index >= 200))) throw new Error('VEHICLE_PHOTO_REQUEST_INVALID');
     const product = await readProduct(productId);
-    const source = sources.find(candidate => candidate.eligible(product));
+    const mediaOnly = consumerId === 'erp5-public-media';
+    // The machine media consumer never falls through to approved Drive or other suppliers.
+    if (mediaOnly && !isPublicIancarPhotoProduct(product)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+    const consumerSources = mediaOnly ? sources.filter(candidate => candidate === iancarSource) : sources;
+    const source = consumerSources.find(candidate => candidate.eligible(product));
     if (!source || !product || !hasVehiclePhotoVerification(product)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
     const connection = JSON.stringify([source.connection(product), product.photo_original_refs]);
     const revalidate = async (): Promise<boolean> => {
       const current = await readProduct(productId);
-      return !!current && hasVehiclePhotoVerification(current) && sources.find(candidate => candidate.eligible(current)) === source
+      return !!current && (!mediaOnly || isPublicIancarPhotoProduct(current)) && hasVehiclePhotoVerification(current) && consumerSources.find(candidate => candidate.eligible(current)) === source
         && JSON.stringify([source.connection(current), current.photo_original_refs]) === connection;
     };
     const recheck = async () => {
