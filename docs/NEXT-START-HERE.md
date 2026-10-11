@@ -250,7 +250,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 | 공개 출력·소비처 | ERP5 공통 경로와 기존11범위 가격 DTO 대사, 한 상품 사진·main 표본 연결 | F01·각 화이트라벨·Admin·Sales·Estimate·Kakao·내부AI 전체 전환·출력 UNKNOWN /12–17·각 제품 |
 | 전체 재고·사진 | 승인 한 상품51장 저장 되읽기 및 한정 앨범 표본 | 전체 모수 UNKNOWN, 등록·검증 차량1, 미검사·전재고 실패·UNKNOWN 분류 미산출. 당시 DTO475/ONE94 및09-21의1659를 중앙 현재 전체 모수로 사용하지 않음 /10·14·21·원천 담당 |
 | 수수료·계약·정산 사실 | 계산·불일치 차단·UNKNOWN 보존 회귀와source1a32 운영 설정 | 모든 offer 최신 저장·계약/원장 동일ID 대사·운영 backfill·미확정 해소 UNKNOWN/HOLD /08·09·07·원천 담당 |
-| 런타임·사진 성능 | 23:48:09 KST verify38148614746의service30/source1a32 설정·403/compat200 확인 | source08fd는CODED/TESTED이며 배포0, cold/warm 실제 속도·fresh 상세12.34초 대기 해결 미완 /20 검사·실행,01 통합,품질 단독 실측 |
+| 런타임·사진 성능 | 초기service30 검증 후10-12 단일deploy38151193658의service31/source08fd DEPLOYMENT VERIFIED,세 상품 대표사진 delivery PASS | speedup NOT PROVEN;actual cachehit/phase·certified cold/warm UNKNOWN,전체 성능 미완 /20 실행,01 기록,ERP5 품질·운영경로 담당 |
 
 - 완료 기준: 최신 직접 원천의 실제 수집→같은ID/term 정제·정본/승인master와UNKNOWN 보존→정식 출력·현재 등록 소비처 각각 대사→일정·권한·복구·신선도 운영 증거를 연결한다. 전체 재고·사진 범위는 총모수·검사·미검사·실패·UNKNOWN을 명시해야 한다. 정책 의미는 기존 [상품·정책 사전](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary), 소비처 범위는 [공개 전달 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md)을 따르며 새 사전·보고 원장을 만들지 않는다.
 - next_start_here: 기존 source 운영 회차와 coverage 자료를 담당자가 취합하고21이 독립 대조한다. 성능은 아래 선택 소스 배포 검사 PR의 Linux CI/검토→00 운영 조건 확정→20 단일 배포→품질방의 공급사·무사진·단일/다수사진 표본 실측 순서다. 갱신된 실제 증거의 범위만 상태를 올린다.
