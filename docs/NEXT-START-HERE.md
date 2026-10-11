@@ -8,6 +8,7 @@
 - 검증: 관련60 PASS/build/boundary/diff-check PASS. 기존 전체2156 PASS/16 SKIP 이후 immutable 회차 guard 회귀를 추가했으며 최종 전체 결과/독립 검토는 실행 기록 참조. 합성 저장 시험에서 원문 색상→후보 facts 연결 확인, 실제 운영 DB writes0.
 - next_start_here: 기존 수집 담당은 최신 capture를 확보해 같은 CLI로 비공개 계획 작성; 단일 writer/원문·master·revision·백업·HOLD를 검증한 뒤 기존 apply/readback 진행. 운영 색상 저장 또는 전체 상품 연결 완료로 세지 않는다. 정책 정제·저장은 기존 담당이 계속, 새 저장 경로 없음.
 - 최종 결정론적 검증: 전체2157 PASS/16 조건부 SKIP, 관련60 PASS 및 차량 정본 색상 저장 APPLIED 회귀 확인, build/arch/boundary/diff-check PASS. 첫 독립 검토 REVIEW_TIMEOUT(300초), 파일 한 개 전달 일관성 질문으로 좁혀 재시도 중. 검토 미완료는 PASS가 아니며 운영 적용은 아직 하지 않는다.
+- 좁은 독립 재검토는 본문/exit0/ANSWERED로 전달 일관성을 확인. `getCandidate` guard의 `!`를 제거하라는 제안은 채택하지 않았다: 조회 ID는 v6 ruleVersion을 포함하는 새 candidateId이며 completed v5 run에는 그 ID가 없다. 반대로 바꾸면 v6 replay를 막고 v5 재작성 보호를 해제한다. 기존 v5 apply 후 같은 capture v6 plan이 쓰기 전에 거부되고 신규 capture 계획은 통과하는 회귀로 원본·실행 근거를 우선해 판정했다. 문자열 v6 상수 중복은 경미 잔여. 운영 적용/최신 원천 저장은 미완료.
 
 ## 2026-10-11 기존 조회 주소의 직접 읽기 전환 신호
 
