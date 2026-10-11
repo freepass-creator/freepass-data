@@ -212,7 +212,7 @@ export class CatalogCompatibilityProductReadError extends Error {
 }
 
 export const SINGLE_PRODUCT_FACT_FIELDS = Object.freeze([
-  '_key', 'product_code', 'provider_company_code', 'partner_code', 'policy_id', 'policy_code',
+  '_key', 'product_code', 'provider_company_code', 'partner_code', 'provider_name', 'partner_name', 'deposit_note', 'policy_id', 'policy_code',
   '_deleted', 'deletedAt', 'status', 'vehicle_status', 'status_kind', 'listable', 'publication_withdrawal',
   'car_number', 'vehicle_uid', 'maker', 'model', 'sub_model', 'trim_name', 'trim_extra', 'variant',
   'fuel_type', 'engine_type', 'engine_cc', 'drive_type', 'transmission', 'vehicle_class', 'product_type',
@@ -232,6 +232,9 @@ export const SINGLE_PARTNER_FACT_FIELDS = ['_key', 'partner_code', 'company_code
 export const isSingleProductPriceKey = (key: string): boolean => key.length > 0 && key.length <= 80
   && !['__proto__', 'constructor', 'prototype'].includes(key)
   && !/[\u0000-\u001f\u007f]|https?:\/\/|<[^>]*>|AIza|ya29\./i.test(key);
+
+export const SINGLE_PRODUCT_PRICE_FIELDS = ['rent', 'deposit', 'depositState', 'deposit_state',
+  'depositStatusLabel', 'depositEvidenceReason', 'depositEvidenceBasis', 'depositRuleDifference'] as const;
 
 const selectionUnavailable = (): never => { throw new CatalogCompatibilityProductReadError('PRODUCT_SELECTION_UNAVAILABLE', 503); };
 const selectedDocId = (value: unknown): string | undefined => {
@@ -262,8 +265,15 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
     const readAt = product.readTime?.toDate().toISOString();
     const version = product.updateTime?.toDate().toISOString();
     if (product.id !== productId || !readAt || !version) return selectionUnavailable();
-    const policyId = selectedDocId(raw.policy_id ?? raw.policy_code);
-    const partnerId = selectedDocId(raw.provider_company_code ?? raw.partner_code);
+    if (raw._key != null && raw._key !== '' && raw._key !== productId) return selectionUnavailable();
+    const policyCode = selectedDocId(raw.policy_code);
+    const explicitPolicyId = selectedDocId(raw.policy_id);
+    if (policyCode && explicitPolicyId && policyCode !== explicitPolicyId) return selectionUnavailable();
+    const policyId = policyCode ?? explicitPolicyId;
+    const providerCode = selectedDocId(raw.provider_company_code);
+    const partnerCode = selectedDocId(raw.partner_code);
+    if (providerCode && partnerCode && providerCode !== partnerCode) return selectionUnavailable();
+    const partnerId = providerCode ?? partnerCode;
     const linked = async (kind: 'policy' | 'partner', id: string | undefined, collection: string, fields: readonly string[]) => {
       if (!id) return { rows: {}, versions: [], evidence: { state: 'UNKNOWN' as const, reasonCode: `${kind.toUpperCase()}_REFERENCE_NOT_OBSERVED` } };
       if (!readCollections.has(kind)) return selectionUnavailable();
@@ -272,19 +282,31 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
       if (!doc.exists) return { rows: {}, versions: [], evidence: { state: 'UNKNOWN' as const, reasonCode: `${kind.toUpperCase()}_NOT_OBSERVED` } };
       const updateTime = doc.updateTime?.toDate().toISOString();
       if (!updateTime || doc.id !== id) return selectionUnavailable();
+      const facts = doc.data()!;
+      const codes = kind === 'policy' ? ['policy_code'] : ['partner_code', 'company_code', 'provider_company_code'];
+      if (codes.some(code => facts[code] != null && facts[code] !== '' && facts[code] !== id)) return selectionUnavailable();
       return { rows: { [id]: { ...pickSelectedFacts(doc.data()!, fields), _key: id } },
         versions: [{ id, updateTime, updateTimeExact: { seconds: doc.updateTime!.seconds, nanoseconds: doc.updateTime!.nanoseconds } }], evidence: { state: 'KNOWN' as const, reasonCode: null } };
     };
     const policy = await linked('policy', policyId, layout.policies, SINGLE_POLICY_FACT_FIELDS);
     const partner = await linked('partner', partnerId, layout.partners, SINGLE_PARTNER_FACT_FIELDS);
-    const selected = pickSelectedFacts(raw, SINGLE_PRODUCT_FACT_FIELDS.filter(f => f !== 'price' && f !== 'iancar_phase_one' && f !== '_key'));
-    if (Object.hasOwn(raw, 'price')) {
-      if (raw.price === null) selected.price = null;
+    const compatible = withCompatibilityDepositEvidence(raw, readAt);
+    const selected = pickSelectedFacts(compatible, SINGLE_PRODUCT_FACT_FIELDS.filter(f => f !== 'price' && f !== 'iancar_phase_one' && f !== '_key'));
+    if (Object.hasOwn(compatible, 'price')) {
+      if (compatible.price === null) selected.price = null;
       else {
-        if (!raw.price || typeof raw.price !== 'object' || Array.isArray(raw.price) || Object.keys(raw.price).length > 200) return selectionUnavailable();
-        selected.price = Object.fromEntries(Object.entries(raw.price as Rec).map(([key, row]) => {
+        if (!compatible.price || typeof compatible.price !== 'object' || Array.isArray(compatible.price) || Object.keys(compatible.price).length > 200) return selectionUnavailable();
+        selected.price = Object.fromEntries(Object.entries(compatible.price as Rec).map(([key, row]) => {
           if (!isSingleProductPriceKey(key) || !row || typeof row !== 'object' || Array.isArray(row)) return selectionUnavailable();
-          return [key, pickSelectedFacts(row as Rec, ['rent', 'deposit', 'depositState', 'deposit_state'])];
+          const value = row as Rec;
+          const result = pickSelectedFacts(value, SINGLE_PRODUCT_PRICE_FIELDS.filter(field => field !== 'depositEvidenceBasis' && field !== 'depositRuleDifference'));
+          for (const [field, allowed] of [ ['depositEvidenceBasis', ['field', 'text', 'source', 'at']],
+            ['depositRuleDifference', ['ruleAmount', 'ruleCode', 'differs']] ] as const) {
+            if (!Object.hasOwn(value, field)) continue;
+            if (!value[field] || typeof value[field] !== 'object' || Array.isArray(value[field])) return selectionUnavailable();
+            result[field] = pickSelectedFacts(value[field] as Rec, allowed);
+          }
+          return [key, result];
         }));
       }
     }
@@ -299,7 +321,8 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
           if (!p.priceAliases || typeof p.priceAliases !== 'object' || Array.isArray(p.priceAliases) || Object.keys(p.priceAliases).length > 200) return selectionUnavailable();
           result.priceAliases = Object.fromEntries(Object.entries(p.priceAliases as Rec).map(([key, value]) => {
             if (!isSingleProductPriceKey(key)) return selectionUnavailable();
-            return [key, boundedScalar(value)];
+            if (typeof value !== 'string' || !isSingleProductPriceKey(value)) return selectionUnavailable();
+            return [key, value];
           }));
         }
         selected.iancar_phase_one = result;

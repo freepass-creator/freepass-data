@@ -38,7 +38,7 @@ import { stableDigest } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from '../application/projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 import type { CatalogCompatibilitySnapshot, CatalogCompatibilityProductSnapshot } from '../infra/erp5-compat-catalog-reader.js';
-import { SINGLE_PRODUCT_FACT_FIELDS, SINGLE_POLICY_FACT_FIELDS, SINGLE_PARTNER_FACT_FIELDS, isSingleProductPriceKey } from '../infra/erp5-compat-catalog-reader.js';
+import { SINGLE_PRODUCT_FACT_FIELDS, SINGLE_POLICY_FACT_FIELDS, SINGLE_PARTNER_FACT_FIELDS, SINGLE_PRODUCT_PRICE_FIELDS, isSingleProductPriceKey } from '../infra/erp5-compat-catalog-reader.js';
 import {
   buildKakaoCatalogReference,
   buildInternalAiReference,
@@ -912,12 +912,12 @@ export function createConsumerGateway(
         const product = data.products[productId]!;
         if (!fields(Object.fromEntries(Object.entries(product).filter(([k]) => k !== 'price' && k !== 'iancar_phase_one')), SINGLE_PRODUCT_FACT_FIELDS)) invalid();
         if (Object.hasOwn(product, 'price') && product.price !== null && (!object(product.price) || Object.keys(product.price).length > 200
-          || Object.entries(product.price).some(([k, row]) => !/^[a-zA-Z0-9_-]{1,80}$/.test(k) || !fields(row, ['rent', 'deposit', 'depositState', 'deposit_state'])))) invalid();
+          || Object.entries(product.price).some(([k, row]) => !isSingleProductPriceKey(k) || !fields(row, ['rent', 'deposit', 'depositState', 'deposit_state'])))) invalid();
         if (Object.hasOwn(product, 'iancar_phase_one') && product.iancar_phase_one !== null) {
           const phase = product.iancar_phase_one;
           if (!object(phase) || !fields(Object.fromEntries(Object.entries(phase).filter(([k]) => k !== 'priceAliases')), ['policyStage'])
             || Object.hasOwn(phase, 'priceAliases') && (!object(phase.priceAliases) || Object.keys(phase.priceAliases).length > 200
-              || Object.entries(phase.priceAliases).some(([k, v]) => !/^[a-zA-Z0-9_-]{1,80}$/.test(k) || !scalar(v)))) invalid();
+              || Object.entries(phase.priceAliases).some(([k, v]) => !isSingleProductPriceKey(k) || !scalar(v)))) invalid();
         }
         for (const name of ['policies', 'partners'] as const) {
           const versions = meta.documentVersions[name], rows = data[name]!;

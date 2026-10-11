@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Firestore } from 'firebase-admin/firestore';
-import { readSingleProductCompatibility } from '../src/infra/erp5-compat-catalog-reader.js';
+import { readSingleProductCompatibility, withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 
 const time = '2026-10-12T00:00:00.000Z';
 const stamp = (value = time) => ({ toDate: () => new Date(value), seconds: Math.floor(Date.parse(value) / 1000), nanoseconds: 123,
@@ -44,7 +44,7 @@ describe('bounded compatibility product facts', () => {
     expect(result.meta.documentVersions.product).toMatchObject({ id: 'machine-id', updateTime: time, updateTimeExact: { nanoseconds: 123 } });
     expect(result.data.products['machine-id']).toMatchObject({ _key: 'machine-id', product_code: 'display-code' });
     expect(result.data.products['machine-id']!.vehicle_status).toBe(' 출고 불가 ');
-    expect(result.data.products['machine-id']!.price).toEqual({ '12_0': { rent: 100000, deposit: null, depositState: 'UNKNOWN' } });
+    expect(result.data.products['machine-id']!.price).toMatchObject({ '12_0': { rent: 100000, deposit: null, depositState: 'UNKNOWN' } });
     expect(JSON.stringify(result)).not.toMatch(/credentials|internal_fee|commission|source_url|rawSource/);
     expect(result.data).not.toHaveProperty('users');
   });
@@ -85,6 +85,24 @@ describe('bounded compatibility product facts', () => {
     const keys = ['36_2만', '12_인수형', '12_월30000km', '36/20000'];
     const f = fixture({ price: Object.fromEntries(keys.map(key => [key, { rent: '500000', deposit: null }])) });
     const result = await readSingleProductCompatibility(f.db, 'erp-com', 'machine-id', scope);
-    expect(result.data.products['machine-id']!.price).toEqual(Object.fromEntries(keys.map(key => [key, { rent: '500000', deposit: null }])));
+    expect(result.data.products['machine-id']!.price).toEqual(withCompatibilityDepositEvidence(f.records['products/machine-id']!, time).price);
+  });
+  it.each([
+    { price: { '36': { rent: 500000, deposit: 1000000 } } },
+    { price: { '36': { rent: 500000, deposit: 0 } }, deposit_note: '무보증' },
+    { price: { '36': { rent: 500000, deposit: 0 } } },
+    { price: { '36': { rent: 500000, deposit: null } } },
+    { price: { '36': { rent: 500000, deposit: 0 }, '48': { rent: 450000, deposit: 1000000 } }, deposit_note: '무보증' },
+  ])('matches the full-reader deposit normalization for %j', async input => {
+    const f = fixture({ ...input, provider_company_code: 'RP013' });
+    const result = await readSingleProductCompatibility(f.db, 'erp-com', 'machine-id', scope);
+    expect(result.data.products['machine-id']!.price).toEqual(withCompatibilityDepositEvidence(f.records['products/machine-id']!, time).price);
+  });
+  it.each([
+    { _key: 'another-visible-key' }, { policy_id: 'other-policy' }, { partner_code: 'RP099' },
+    { iancar_phase_one: { policyStage: 'DEFERRED', priceAliases: { '36': null } } },
+  ])('holds conflicting identity references or malformed aliases: %j', async change => {
+    const f = fixture({ ...fixture().records['products/machine-id'], ...change });
+    await expect(readSingleProductCompatibility(f.db, 'erp-com', 'machine-id', scope)).rejects.toMatchObject({ statusCode: 503 });
   });
 });

@@ -88,6 +88,14 @@ describe('bounded single-product compatibility facts', () => {
     readProductCompat.mockResolvedValueOnce(value);
     expect((await app.inject({ url: url(), headers })).json()).toEqual(value); await app.close();
   });
+  it('preserves raw Korean and slash price keys without interpreting terms', async () => {
+    const { app, readProductCompat } = setup(); const value = snapshot();
+    value.data.products[id]!.price = { '36/20000': { rent: 500000, deposit: null }, '12_인수형': { rent: 510000 }, '12_월30000km': { rent: 520000 } };
+    value.data.products[id]!.iancar_phase_one = { policyStage: 'HOLD', priceAliases: { '12_인수형': '36/20000' } };
+    readProductCompat.mockResolvedValueOnce(value);
+    const response = await app.inject({ url: url(), headers });
+    expect(response.statusCode).toBe(200); expect(response.json()).toEqual(value); await app.close();
+  });
   it.each(['PRODUCT_NOT_FOUND', 'PRODUCT_SELECTION_UNAVAILABLE', 'INVALID_PRODUCT_SELECTION', 'private upstream token'])('maps %s safely', async code => {
     const { app, readProductCompat } = setup(); readProductCompat.mockRejectedValueOnce(new Error(code));
     const response = await app.inject({ url: url(), headers });
