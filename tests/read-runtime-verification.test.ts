@@ -4,6 +4,29 @@ import { spawnSync } from 'node:child_process';
 
 const script = readFileSync(new URL('../scripts/verify-read-runtime.sh', import.meta.url), 'utf8');
 describe('existing private runtime verification', () => {
+  it('uses explicit serialized boolean mode and makes private readback mandatory', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8');
+    expect(workflow).toContain("USE_CONSUMER_SECRETS: ${{ toJSON(inputs.use_consumer_secrets) != 'false' }}");
+    expect(workflow).not.toContain('inputs.use_consumer_secrets != false');
+    expect(workflow).toContain("if: ${{ env.USE_CONSUMER_SECRETS == 'true' }}");
+    const modes = [
+      ['workflow_dispatch', undefined, true], ['push', undefined, true], ['workflow_dispatch', '', true],
+      ['workflow_dispatch', null, true], ['workflow_call', true, true], ['workflow_call', false, false],
+      ['caller workflow_dispatch', false, false], ['caller push', false, false], ['workflow_call', 'false', true],
+    ] as const;
+    for (const [event, input, privateMode] of modes) {
+      expect(JSON.stringify(input) !== 'false', event).toBe(privateMode);
+    }
+    // Typed false remains explicit; absent inputs must not enter the false branch through loose coercion.
+    expect(JSON.stringify(false)).toBe('false');
+    expect(JSON.stringify('')).not.toBe('false');
+    const deployment = workflow.split('      - name: Deploy private read-only service')[1]!.split('      - name: Grant public invoker only when requested')[0]!;
+    expect(deployment).toContain('public_runtime_args+=(--timeout=300s)');
+    expect(deployment).toContain('public_runtime_args+=(--timeout=30s --cpu=1 --memory=512Mi)');
+    const readiness = workflow.split('      - name: Verify service readiness metadata')[1]!.split('      - name: Authenticate readback identity')[0]!;
+    expect(readiness).toContain('timeoutSeconds');
+    expect(readiness).toContain('= "300"');
+  });
   it('isolates verification from all deployment effects', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8');
     expect(workflow).toContain('if: ${{ inputs.verify_only != true }}');
@@ -16,6 +39,14 @@ describe('existing private runtime verification', () => {
     expect(verify).toContain('DIRECT_FIRESTORE_REQUIRED');
     expect(verify).toContain('LEGACY_READ_PENDING_RETIREMENT');
     expect(verify).toContain('catalog-compat/v1');
+    const summary = verify.split('      - name: Record verification summary')[1]!;
+    expect(summary).toContain('test "${READ_RUNTIME_UNAUTHENTICATED_STATUS:-UNVERIFIED}" = "403"');
+    expect(summary).toContain('test "${READ_RUNTIME_AUTHENTICATED_STATUS:-UNVERIFIED}" = "200"');
+    expect(verify).not.toContain('inputs.use_consumer_secrets');
+    for (const step of ['Authenticate readback identity', 'Verify IAM denial and authenticated compatibility readback']) {
+      const section = verify.split('      - name: ' + step)[1]!.split('      - name:')[0]!;
+      expect(section).not.toContain('        if:');
+    }
   });
   it('never logs arbitrary response codes from a failed verification readback', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -28,6 +59,19 @@ describe('existing private runtime verification', () => {
     expect(result.stdout).toContain('HTTP 503 / UNRECOGNIZED');
     expect(result.stdout + result.stderr).not.toContain('synthetic-secret-body-code');
     expect(verify).not.toContain('response_code');
+  });
+  it('refuses a successful summary without both actual readbacks and contract evidence', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const summary = workflow.split('      - name: Record verification summary')[1]!.split('        run: |\n')[1]!
+      .split('\n').map(line => line.slice(10)).join('\n');
+    const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+    const base = { VERIFY_JOB_STATUS: 'success', READ_RUNTIME_UNAUTHENTICATED_STATUS: '403', READ_RUNTIME_AUTHENTICATED_STATUS: '200',
+      READ_RUNTIME_READBACK_OK: 'true', READ_RUNTIME_MIGRATION_SIGNAL_OK: 'true', GITHUB_STEP_SUMMARY: '/dev/null' };
+    for (const [overrides, pass] of [[{}, true], [{ READ_RUNTIME_AUTHENTICATED_STATUS: 'UNVERIFIED' }, false],
+      [{ READ_RUNTIME_READBACK_OK: 'false' }, false], [{ READ_RUNTIME_MIGRATION_SIGNAL_OK: 'false' }, false]] as const) {
+      const result = spawnSync(bash, ['-s'], { input: summary, encoding: 'utf8', env: { ...process.env, ...base, ...overrides } });
+      expect(result.status === 0, result.stderr).toBe(pass);
+    }
   });
   it.skipIf(process.platform === 'win32')('accepts pinned image representations and rejects every mismatched authority', () => {
     const sha = 'a'.repeat(40), digest = 'sha256:' + 'b'.repeat(64), revision = 'freepass-data-read-00027-9kd';
