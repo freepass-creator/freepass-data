@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readConsistentPeriodFeeLedgerRows } from '../src/infra/period-fee-ledger-firestore-readback.js';
+import { normalizePeriodFeeLedgerRow, readConsistentPeriodFeeLedgerRows } from '../src/infra/period-fee-ledger-firestore-readback.js';
 import { listActivePeriodFeeLedgerRows } from '../src/infra/period-fee-ledger-firestore-reader.js';
 import { pickLedgerRowForContract, resolveContractFeeLink } from '../src/application/contract-fee-link.js';
+import { stableDigest } from '../src/shared/stable-digest.js';
 import type { Firestore } from 'firebase-admin/firestore';
 import type { PeriodFeeLedgerRow, PeriodFeeSnapshotRun } from '../src/domain/period-fee-ledger.js';
 import type { ActorRef, EntityMeta, Offer, PriceTerm, Product, VehicleAsset } from '../src/domain/catalog.js';
@@ -31,17 +32,42 @@ class FakeQuerySnap {
 }
 
 class FakeCollection {
-  constructor(private readonly docs: Map<string, Rec>, private readonly filters: Array<[string, unknown]> = []) {}
+  constructor(
+    private readonly docs: Map<string, Rec>,
+    private readonly filters: Array<[string, unknown]> = [],
+    private readonly range: { startAt?: string; endBefore?: string; startAfter?: string; limit?: number } = {},
+  ) {}
   doc(id: string) {
     return { get: async () => new FakeDocSnap(id, this.docs.get(id)) };
   }
   where(field: string, op: string, value: unknown) {
     if (op !== '==') throw new Error(`TEST-FAKE_UNSUPPORTED_WHERE_${op}`);
-    return new FakeCollection(this.docs, [...this.filters, [field, value]]);
+    return new FakeCollection(this.docs, [...this.filters, [field, value]], this.range);
+  }
+  orderBy(field: string) {
+    if (field !== '__name__') throw new Error(`TEST-FAKE_UNSUPPORTED_ORDER_BY_${field}`);
+    return this;
+  }
+  startAt(value: string) {
+    return new FakeCollection(this.docs, this.filters, { ...this.range, startAt: value });
+  }
+  endBefore(value: string) {
+    return new FakeCollection(this.docs, this.filters, { ...this.range, endBefore: value });
+  }
+  startAfter(cursor: FakeDocSnap) {
+    return new FakeCollection(this.docs, this.filters, { ...this.range, startAfter: cursor.id });
+  }
+  limit(value: number) {
+    return new FakeCollection(this.docs, this.filters, { ...this.range, limit: value });
   }
   async get() {
     const docs = [...this.docs.entries()]
       .filter(([, data]) => this.filters.every(([field, value]) => data[field] === value))
+      .filter(([id]) => this.range.startAt === undefined || id >= this.range.startAt)
+      .filter(([id]) => this.range.endBefore === undefined || id < this.range.endBefore)
+      .filter(([id]) => this.range.startAfter === undefined || id > this.range.startAfter)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(0, this.range.limit)
       .map(([id, data]) => new FakeDocSnap(id, data));
     return new FakeQuerySnap(docs);
   }
@@ -139,33 +165,48 @@ const row = (override: Partial<PeriodFeeLedgerRow> = {}): PeriodFeeLedgerRow => 
   ...override,
 });
 
-const run = (rowKeys: string[], override: Partial<PeriodFeeSnapshotRun> = {}): PeriodFeeSnapshotRun => ({
-  schemaVersion: 'period-fee-snapshot-run/v1',
-  runId: 'run-1',
-  snapshotId: 'period-fee-2026-10-09',
-  planDigest: 'TEST-FAKE-plan',
-  status: 'ACTIVE',
-  active: true,
-  previousActiveRunId: null,
-  rowKeys,
-  rowDigests: Object.fromEntries(rowKeys.map(key => [key, 'TEST-FAKE-digest'])),
-  plannedCreateKeys: rowKeys,
-  createdDocumentKeys: rowKeys,
-  preparedAt: '2026-10-09T00:00:00.000Z',
-  activatedAt: '2026-10-09T00:00:00.000Z',
-  rowCount: rowKeys.length,
-  readyRowCount: rowKeys.length,
-  holdNoUidCount: 0,
-  historyRowCount: 0,
-  readbackSampleCount: rowKeys.length,
-  readbackDigest: 'TEST-FAKE-readback',
-  ...override,
-});
+const rowStorageKey = (runId: string, documentKey: string) => `${runId}__${documentKey}`;
 
-const dbWithRows = (rows: Record<string, Rec>, snapshotRun = run(Object.keys(rows))) => new FakeFirestore({
-  period_fee_snapshot_runs: { [snapshotRun.runId]: snapshotRun as unknown as Rec },
-  period_fee_ledger: rows,
-});
+const run = (rows: Record<string, Rec>, override: Partial<PeriodFeeSnapshotRun> = {}): PeriodFeeSnapshotRun => {
+  const runId = override.runId ?? 'run-1';
+  const rowKeys = Object.keys(rows).sort((left, right) => left.localeCompare(right));
+  const rowTargets = rowKeys.map(documentKey => {
+    const { digest: _digest, ...data } = rows[documentKey]!;
+    return [documentKey, stableDigest(normalizePeriodFeeLedgerRow(data))] as const;
+  });
+  return {
+    schemaVersion: 'period-fee-snapshot-run/v1',
+    runId,
+    snapshotId: 'period-fee-2026-10-09',
+    planDigest: 'TEST-FAKE-plan',
+    status: 'ACTIVE',
+    active: true,
+    previousActiveRunId: null,
+    preparedAt: '2026-10-09T00:00:00.000Z',
+    activatedAt: '2026-10-09T00:00:00.000Z',
+    rowCount: rowKeys.length,
+    rowKeysDigest: stableDigest(rowKeys),
+    rowContentDigest: stableDigest(rowTargets),
+    readyRowCount: rowKeys.length,
+    holdNoUidCount: 0,
+    historyRowCount: 0,
+    historyKeysDigest: stableDigest([]),
+    historyContentDigest: stableDigest([]),
+    readbackSampleCount: rowKeys.length,
+    readbackDigest: 'TEST-FAKE-readback',
+    ...override,
+  };
+};
+
+const dbWithRows = (logicalRows: Record<string, Rec>, snapshotRun?: PeriodFeeSnapshotRun) => {
+  const runId = snapshotRun?.runId ?? 'run-1';
+  const rows = Object.fromEntries(Object.entries(logicalRows).map(([key, value]) => [rowStorageKey(runId, key), value]));
+  const runDoc = snapshotRun ?? run(rows);
+  return new FakeFirestore({
+    period_fee_snapshot_runs: { [runDoc.runId]: runDoc as unknown as Rec },
+    period_fee_ledger: rows,
+  });
+};
 
 const asFirestore = (db: FakeFirestore) => db as unknown as Firestore;
 
