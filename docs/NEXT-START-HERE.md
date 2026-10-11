@@ -221,6 +221,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 상품 중심 저장 정본 조회 확장
+
+- 목적/대상 revision: main 1a32a313 기반, 기존 query-canonical-by-plate job 재사용. 새 API/저장소/운영 쓰기 없음.
+- 변경: private search-file로 상품 ID·등록 공급사명/ID·차명·차번을 검색한다. 차번 없는 상품과 offer 미연결 상품도 전체/상품 검색에서 보존한다. 저장 객체와 기간별 청구·지급을 그대로 읽고 누락은 UNKNOWN/null. 현재 탭 없는 공급사도 기존 등록부로 검색하며 공급사 미연결 수와 검색명 등록 여부를 구분한다.
+- 검증: build 및 관련 81 tests PASS. Claude ANSWERED/exit0 독립 검토의 등록부·미연결 진단·빈 가격조건 상태 지적 반영.
+- 실제 읽기: canonical 160 products/160 offers/568 terms, asset 미연결0, policy 미연결160, media contract 미연결160. 전체 products/원천행 수가 아니다. 사진 UNKNOWN은 운영 products 사진 없음이라는 뜻이 아니다.
+- 남음/next_start_here: PR465 기존 읽기 계약 작업선과 결합. products/policy 및 SourceIngestionStore CURRENT_SOURCE_ROW 기존 경로를 보존하고 소비처에서 상품 사실·사진·저장 경제조건을 대사한다. operator job을 전체 소비처 계약으로 승격하거나 canonical/legacy/source 행을 실물 대수로 합산하지 않는다. 운영 DB/배포/권한 변경0.
+
 ### 2026-10-11 역할 지도 정착 / private read runtime 최종 운영 인계
 
 - 목적/소유: 대표 요청의00~22 역할방 지도와 실제 runtime 복원·검증 결과를 기존NEXT에 함께 정착한다. 원본branch codex/shared-sheet-dropdowns-before-rent/HEAD41a492 dirty 역할 지도는 보존했고01 격리공간의 추가hunk만 latestmain895cf49b6d908a77f29e8799e228da2ae7c7ca99에 통합했다. 최신main 수수료PR453 변경도 보존했으며 그 코드를 이번 배포 완료라고 하지 않는다. 이번packet은 docs만이고새배포trigger/원천IO/사진사업쓰기0이다.

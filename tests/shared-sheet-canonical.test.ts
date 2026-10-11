@@ -11,7 +11,7 @@ import { planSharedSheetCanonical, runSharedSheetCanonical, preflightSharedSheet
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { queryCanonicalByPlate, queryFirestoreByPlate, main as queryMain } from '../src/jobs/query-canonical-by-plate.js';
+import { queryCanonicalByPlate, queryCanonicalProducts, queryFirestoreByPlate, main as queryMain } from '../src/jobs/query-canonical-by-plate.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
@@ -72,6 +72,51 @@ function later(c: SharedSheetCapture) {
   return c;
 }
 describe('shared sheet local source to Canonical', () => {
+  it('searches products by supplier and name without requiring a vehicle number and preserves every stored fact', async () => {
+    const s = await stores(); await apply(s);
+    const product = (await s.store.listProducts())[0]!;
+    const offer = (await s.store.listOffers())[0]!;
+    const newProduct = { ...product, id: 'test:new-product', vehicleAssetId: null, commercialType: 'NEW_RENT' as const };
+    const newOffer = { ...offer, id: 'test:new-offer', productId: newProduct.id };
+    await s.store.seed({ products: [newProduct], offers: [newOffer] });
+    const before = stableDigest({ products: await s.store.listProducts(), offers: await s.store.listOffers() });
+    const result = await queryCanonicalProducts(s.store, { supplierName: '웰릭스', vehicleName: '시험모델' });
+    expect(result.matchedProducts).toBe(2);
+    const row = result.results.find(x => x.productId === newProduct.id)!;
+    expect(row.vehicleAsset).toBeNull();
+    expect(row.product).toEqual(newProduct);
+    expect(row.offer).toEqual(newOffer);
+    expect(row.terms).toHaveLength(3);
+    expect(row.photos).toMatchObject({ state: 'UNKNOWN', count: null, references: null });
+    expect(row.unknownFields).toContain('photos');
+    expect((await queryCanonicalProducts(s.store, { productId: newProduct.id })).matchedProducts).toBe(1);
+    expect((await queryCanonicalProducts(s.store, { supplierName: '없는공급사' })).matchedProducts).toBe(0);
+    expect((await queryCanonicalProducts(s.store, { plate: 'TEST-FAKE-001', supplierName: '웰릭스' })).matchedProducts).toBe(1);
+    expect(stableDigest({ products: await s.store.listProducts(), offers: await s.store.listOffers() })).toBe(before);
+  });
+  it('keeps a stored product visible when offer and vehicle links are unconfirmed', async () => {
+    const s = await stores(); await apply(s);
+    const product = (await s.store.listProducts())[0]!;
+    await s.store.seed({ products: [{ ...product, id: 'test:unconfirmed', vehicleModelId: 'test:missing', vehicleAssetId: null }] });
+    const result = await queryCanonicalProducts(s.store, { productId: 'test:unconfirmed' });
+    expect(result.matchedProducts).toBe(1);
+    expect(result.results[0]).toMatchObject({ offer: null, vehicleModel: null, policy: null, terms: [] });
+    expect(result.results[0]!.priceTermsState).toBe('UNKNOWN');
+    const filtered = await queryCanonicalProducts(s.store, { supplierName: '없는공급사' });
+    expect(filtered.supplierTermResolved).toBe(false);
+    expect(filtered.unresolvedSupplierProducts).toBe(1);
+    expect(result.results[0]!.unknownFields).toEqual(expect.arrayContaining(['vehicleModel', 'offer', 'photos', 'priceTerms']));
+    await expect(queryCanonicalProducts(s.store, { vehicleName: ' ' })).rejects.toThrow('INVALID_PRODUCT_SEARCH');
+    await expect(queryCanonicalProducts(s.store, { unrecognized: 'test' } as never)).rejects.toThrow('INVALID_PRODUCT_SEARCH');
+  });
+  it('resolves registered suppliers even when their active sheet tab is absent', async () => {
+    const s = await stores(); await apply(s);
+    const offer = (await s.store.listOffers())[0]!;
+    await s.store.seed({ offers: [{ ...offer, supplierId: 'RP011' }] });
+    const result = await queryCanonicalProducts(s.store, { supplierName: '연카' });
+    expect(result.supplierTermResolved).toBe(true);
+    expect(result.matchedProducts).toBe(1);
+  });
   it.each([
     { state: 'UNKNOWN' as const, tampered: false }, { state: 'NOT_APPLICABLE' as const, tampered: false },
     { state: 'UNKNOWN' as const, tampered: true }, { state: 'NOT_APPLICABLE' as const, tampered: true },
