@@ -52,6 +52,11 @@ describe('shared sheet capture reader', () => {
     const issues = p.rawRecords.map(r => normalizeSharedSheet(r)).map(x => x.record.candidate.issues);
     expect(issues).toHaveLength(2);
     expect(issues.every(i => i.includes('PLATE_NOT_ASSIGNED'))).toBe(true);
+    const normalized = p.rawRecords.map(r => normalizeSharedSheet(r));
+    expect(normalized.every(x => x.record.candidate.carNumber === undefined)).toBe(true);
+    expect(normalized.every(x => x.record.status === 'REJECTED')).toBe(true);
+    expect(p.rawRecords.every(r => (r.payload.values as unknown[])[4] === '신차')).toBe(true);
+    expect(new Set(p.rawRecords.map(r => r.sourceRecordId)).size).toBe(2);
   });
 
   it('fails closed on a missing tab, a wrong spreadsheet or an over-wide row', () => {
