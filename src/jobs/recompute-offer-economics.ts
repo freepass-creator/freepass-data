@@ -17,13 +17,13 @@ const supplierCounts = () => ({ offers: 0, terms: 0, supplierBillingFee: counts(
   changedTerms: { any: 0, amount: 0, state: 0, policyId: 0, evidence: 0, reasonCode: 0 } });
 
 export type EconomicsRecomputePlan = {
-  schema: 'offer-economics-recompute/v1'; policyId: string; policyDigest: string; target: string;
-  entries: Array<{ offerId: string; expectedRevision: number; inputDigest: string; before: Offer }>;
+  schema: 'offer-economics-recompute/v2'; policyId: string; policyDigest: string; target: string;
+  entries: Array<{ offerId: string; expectedRevision: number; inputDigest: string; expectedEconomicsDigest: string; before: Offer }>;
 };
 
 /** Pure reads: no transaction, gateway audit, projection, receipt or file writes. */
 export async function planOfferEconomicsRecompute(store: CatalogStore, target: string) {
-  const plan: EconomicsRecomputePlan = { schema: 'offer-economics-recompute/v1', target,
+  const plan: EconomicsRecomputePlan = { schema: 'offer-economics-recompute/v2', target,
     policyId: KAKAO_COMMISSION_POLICY.policyId, policyDigest: stableDigest(KAKAO_COMMISSION_POLICY), entries: [] };
   const suppliers: Record<string, ReturnType<typeof supplierCounts>> = {};
   const unknown = new Map<string, number>();
@@ -34,7 +34,7 @@ export async function planOfferEconomicsRecompute(store: CatalogStore, target: s
     const after = precomputeOfferEconomics(offer, product?.commercialType, model?.fuel);
     const before = offer.internalEconomicsTerms ?? [];
     plan.entries.push({ offerId: offer.id, expectedRevision: offer.revision,
-      inputDigest: offerEconomicsInputDigest(offer, product, model), before: structuredClone(offer) });
+      inputDigest: offerEconomicsInputDigest(offer, product, model), expectedEconomicsDigest: stableDigest(after), before: structuredClone(offer) });
     const group = suppliers[offer.supplierId] ??= supplierCounts();
     group.offers++;
     const oldTerms = new Map(before.map(term => [term.termKey, term]));
@@ -73,17 +73,17 @@ export async function planOfferEconomicsRecompute(store: CatalogStore, target: s
 
 type RecomputeOptions = {
   target: string; apply?: boolean; plan?: EconomicsRecomputePlan; expectedPlanDigest?: string;
-  policyId?: string; actor?: ActorRef; writer?: ExecutionWriterRef;
+  policyId?: string; actor?: ActorRef; approvalRef?: string; writer?: ExecutionWriterRef;
 };
 
 function assertApplyPlan(options: RecomputeOptions): EconomicsRecomputePlan {
   const plan = options.plan;
-  if (!plan || plan.schema !== 'offer-economics-recompute/v1' || plan.target !== options.target ||
+  if (!plan || plan.schema !== 'offer-economics-recompute/v2' || plan.target !== options.target ||
       options.policyId !== KAKAO_COMMISSION_POLICY.policyId || plan.policyId !== options.policyId ||
-      plan.policyDigest !== stableDigest(KAKAO_COMMISSION_POLICY) || !options.actor ||
+      plan.policyDigest !== stableDigest(KAKAO_COMMISSION_POLICY) || !options.actor || typeof options.approvalRef !== 'string' || !options.approvalRef.trim() || options.approvalRef.length > 512 || /[\r\n]/.test(options.approvalRef) ||
       options.expectedPlanDigest !== stableDigest(plan) || !Array.isArray(plan.entries) ||
       new Set(plan.entries.map(entry => entry.offerId)).size !== plan.entries.length ||
-      plan.entries.some(entry => entry.before?.id !== entry.offerId || entry.before.revision !== entry.expectedRevision)) {
+      plan.entries.some(entry => entry.before?.id !== entry.offerId || entry.before.revision !== entry.expectedRevision || !/^[a-f0-9]{64}$/.test(entry.expectedEconomicsDigest))) {
     throw new Error('HOLD: apply requires the reviewed plan digest, target, policy and actor');
   }
   return plan;
@@ -93,16 +93,16 @@ export async function runOfferEconomicsRecompute(store: CatalogStore, options: R
   if (!options.apply) return planOfferEconomicsRecompute(store, options.target);
   const plan = assertApplyPlan(options);
   const results: Array<{ offerId: string; status: string; changed: boolean; revision?: number; reason?: string }> = [];
-  let readbackVerifiedOffers = 0;
+  let readbackVerifiedOffers = 0, readbackVerifiedChangedOffers = 0;
   for (const entry of plan.entries) {
     try {
       const identity = stableDigest({ policyId: plan.policyId, policyDigest: plan.policyDigest,
-        offerId: entry.offerId, inputDigest: entry.inputDigest });
+        offerId: entry.offerId, inputDigest: entry.inputDigest, expectedEconomicsDigest: entry.expectedEconomicsDigest, approvalRef: options.approvalRef });
       const result = await recomputeOfferEconomics(store, {
         commandId: `recompute:${identity}`, idempotencyKey: `recompute:${identity}`,
         offerId: entry.offerId, expectedRevision: entry.expectedRevision, inputDigest: entry.inputDigest,
-        policyId: plan.policyId, actor: options.actor!, ...(options.writer ? { writer: options.writer } : {}),
-        reason: `Approved economics plan ${options.expectedPlanDigest}`
+        policyId: plan.policyId, expectedEconomicsDigest: entry.expectedEconomicsDigest, approvalRef: options.approvalRef!, actor: options.actor!, ...(options.writer ? { writer: options.writer } : {}),
+        reason: `Reviewed economics plan ${options.expectedPlanDigest}`
       });
       results.push({ offerId: entry.offerId, ...result });
       // A commit acknowledgement alone is not persistence verification.
@@ -111,11 +111,12 @@ export async function runOfferEconomicsRecompute(store: CatalogStore, options: R
       const model = product ? await store.getVehicleModel(product.vehicleModelId) : null;
       if (!stored || stored.revision !== result.revision ||
           stableDigest(stored.priceTerms) !== stableDigest(entry.before.priceTerms) ||
-          stableDigest(stored.internalEconomicsTerms ?? []) !== stableDigest(precomputeOfferEconomics(stored, product?.commercialType, model?.fuel))) {
+          stableDigest(stored.internalEconomicsTerms ?? []) !== entry.expectedEconomicsDigest) {
         results[results.length - 1] = { ...results[results.length - 1]!, status: 'HOLD', reason: 'PERSISTENCE_READBACK_MISMATCH' };
         break;
       }
       readbackVerifiedOffers++;
+      if (result.changed) readbackVerifiedChangedOffers++;
     } catch (error) {
       results.push({ offerId: entry.offerId, status: 'HOLD', changed: false,
         reason: error instanceof Error ? error.message : String(error) });
@@ -125,17 +126,17 @@ export async function runOfferEconomicsRecompute(store: CatalogStore, options: R
   }
   return { mode: 'APPLY' as const, status: results.some(row => row.status === 'HOLD') ? 'HOLD' : 'APPLIED',
     changedOffers: results.filter(row => row.changed).length, processedOffers: results.length,
-    readbackVerifiedOffers,
+    readbackVerifiedOffers, readbackVerifiedChangedOffers,
     remainingOffers: plan.entries.length - results.length, planDigest: options.expectedPlanDigest, results };
 }
 
 export async function main(args = process.argv.slice(2)) {
-  const allowed = new Set(['--memory', '--firestore', '--apply', '--plan', '--policy-id', '--expected-plan-digest']);
+  const allowed = new Set(['--memory', '--firestore', '--apply', '--plan', '--policy-id', '--expected-plan-digest', '--approval-ref']);
   const values = new Map<string, string>();
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (!allowed.has(arg) || values.has(arg)) throw new Error(`Unknown/duplicate argument: ${arg}`);
-    if (['--plan', '--policy-id', '--expected-plan-digest'].includes(arg)) {
+    if (['--plan', '--policy-id', '--expected-plan-digest', '--approval-ref'].includes(arg)) {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error(`Missing value: ${arg}`);
       values.set(arg, value);
@@ -143,8 +144,8 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (values.has('--memory') === values.has('--firestore')) throw new Error('Select exactly one: --memory or --firestore');
   const apply = values.has('--apply');
-  if (apply && (!values.has('--plan') || !values.has('--policy-id') || !values.has('--expected-plan-digest'))) {
-    throw new Error('HOLD: --apply needs --plan, --policy-id and --expected-plan-digest');
+  if (apply && (!values.has('--plan') || !values.has('--policy-id') || !values.has('--expected-plan-digest') || !values.has('--approval-ref'))) {
+    throw new Error('HOLD: --apply needs --plan, --policy-id, --expected-plan-digest and --approval-ref');
   }
   const target = values.has('--memory') ? 'memory-demo' : resolveTargetProject();
   const planFile = values.get('--plan');
@@ -152,6 +153,7 @@ export async function main(args = process.argv.slice(2)) {
   const options: RecomputeOptions = { target, apply,
     ...(plan ? { plan } : {}), ...(values.has('--policy-id') ? { policyId: values.get('--policy-id')! } : {}),
     ...(values.has('--expected-plan-digest') ? { expectedPlanDigest: values.get('--expected-plan-digest')! } : {}),
+    ...(values.has('--approval-ref') ? { approvalRef: values.get('--approval-ref')! } : {}),
     actor: { id: 'service:freepass-data', kind: 'SERVICE' } };
   // Validate the complete apply contract before credentials or Firebase initialization.
   if (apply) assertApplyPlan(options);

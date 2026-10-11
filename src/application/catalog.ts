@@ -178,7 +178,7 @@ export function offerEconomicsInputDigest(offer: Offer, product: Product | null,
 
 export type RecomputeOfferEconomicsInput = {
   commandId: string; idempotencyKey: string; offerId: string; expectedRevision: number;
-  policyId: string; inputDigest: string; reason: string; actor: ActorRef;
+  policyId: string; inputDigest: string; expectedEconomicsDigest: string; approvalRef: string; reason: string; actor: ActorRef;
   writer?: ExecutionWriterRef;
 };
 
@@ -187,6 +187,7 @@ export async function recomputeOfferEconomics(
 ) {
   if (input.policyId !== KAKAO_COMMISSION_POLICY.policyId || !input.reason.trim() ||
       !input.commandId.trim() || !input.idempotencyKey.trim() || !/^[a-f0-9]{64}$/.test(input.inputDigest) ||
+      !/^[a-f0-9]{64}$/.test(input.expectedEconomicsDigest) || typeof input.approvalRef !== 'string' || !input.approvalRef.trim() || input.approvalRef.length > 512 || /[\r\n]/.test(input.approvalRef) ||
       !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
     throw new InvalidCommandError('Pinned policy, input digest, revision and command identity are required');
   }
@@ -213,6 +214,9 @@ export async function recomputeOfferEconomics(
       throw new InvalidCommandError('INPUT_DRIFT: regenerate and approve the dry-run plan');
     }
     const economics = precomputeOfferEconomics(current, product?.commercialType, model?.fuel);
+    if (stableDigest(economics) !== input.expectedEconomicsDigest) {
+      throw new InvalidCommandError('REVIEWED_ECONOMICS_DRIFT: regenerate and review the dry-run plan');
+    }
     if (stableDigest(current.internalEconomicsTerms ?? []) === stableDigest(economics)) {
       return { status: 'NO_CHANGE' as const, changed: false, revision: current.revision };
     }
@@ -221,12 +225,12 @@ export async function recomputeOfferEconomics(
     await tx.putOffer(next);
     await tx.appendRevision({ revisionRecordId: revisionRecordId(input.commandId, 'offer', current.id, next.revision),
       entityType: 'offer', entityId: current.id, revision: next.revision, previousRevision: current.revision,
-      snapshot: next, actor: input.actor, reason: input.reason, origin: 'MANUAL_COMMAND',
+      snapshot: next, actor: input.actor, reason: `${input.reason}; approval ${input.approvalRef}`, origin: 'MANUAL_COMMAND',
       commandId: input.commandId, occurredAt: now });
     // Atomic before-image: retained even if the caller loses its response.
     await tx.appendAudit({ eventId: randomUUID(), commandId: input.commandId, actor: input.actor,
       entityType: 'offer', entityId: current.id, action: 'RECOMPUTE_OFFER_ECONOMICS',
-      before: current, after: next, reason: input.reason, writerId: writer.id, authorityRuleId: authority.ruleId,
+      before: current, after: next, reason: `${input.reason}; approval ${input.approvalRef}`, writerId: writer.id, authorityRuleId: authority.ruleId,
       revisionBefore: current.revision, revisionAfter: next.revision, occurredAt: now });
     await tx.appendOutbox({ eventId: randomUUID(), eventType: 'catalog.offer.changed', entityType: 'offer',
       entityId: current.id, sourceRevision: current.revision, targetRevision: next.revision,

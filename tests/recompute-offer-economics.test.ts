@@ -21,10 +21,39 @@ async function fixture() {
 async function prepare(store: MemoryDataStore) {
   const report = await planOfferEconomicsRecompute(store, 'memory-test');
   return { target: 'memory-test', apply: true, plan: report.plan, expectedPlanDigest: report.planDigest,
-    policyId: report.plan.policyId, actor };
+    policyId: report.plan.policyId, actor, approvalRef: 'test:reviewed-plan' };
 }
 
 describe('offer economics recompute', () => {
+  it('rejects old or incomplete reviewed plans before a transaction', async () => {
+    const store = await fixture(), original = await prepare(store), tx = vi.spyOn(store,'transact');
+    for (const kind of ['v1','missing-result'] as const) {
+      const options = structuredClone(original);
+      if (kind === 'v1') (options.plan as any).schema = 'offer-economics-recompute/v1';
+      else delete (options.plan.entries[0] as any).expectedEconomicsDigest;
+      options.expectedPlanDigest = stableDigest(options.plan);
+      await expect(runOfferEconomicsRecompute(store,options)).rejects.toThrow('HOLD');
+    }
+    expect(tx).not.toHaveBeenCalled(); expect(store.audits).toHaveLength(0);
+  });
+  it('rejects reviewed-result drift inside the transaction with zero mutations', async () => {
+    const store = await fixture(), options = await prepare(store);
+    // A changed calculator can preserve policy/input hashes; the approved result must still match.
+    options.plan.entries[0]!.expectedEconomicsDigest = 'a'.repeat(64);
+    options.expectedPlanDigest = stableDigest(options.plan);
+    const before = await store.listOffers();
+    const report = await runOfferEconomicsRecompute(store, options);
+    expect(report).toMatchObject({status:'HOLD',changedOffers:0,readbackVerifiedOffers:0,
+      results:[expect.objectContaining({reason:expect.stringContaining('REVIEWED_ECONOMICS_DRIFT')})]});
+    expect(await store.listOffers()).toEqual(before);
+    expect(store.audits).toHaveLength(0); expect(store.outbox.size).toBe(0);
+  });
+  it('keeps the approval reference with service execution in audit and history', async () => {
+    const store = await fixture(), options = await prepare(store);
+    expect(await runOfferEconomicsRecompute(store,options)).toMatchObject({status:'APPLIED',readbackVerifiedChangedOffers:1});
+    expect(store.audits[0]!.reason).toContain(options.approvalRef);
+    expect((await store.listRevisionHistory()).find(x => x.entityType === 'offer' && x.revision === 2)!.reason).toContain(options.approvalRef);
+  });
   it('stops with HOLD if the committed economics cannot be verified by a fresh read', async () => {
     const store = await fixture(), options = await prepare(store);
     const getOffer = store.getOffer.bind(store);
@@ -33,7 +62,7 @@ describe('offer economics recompute', () => {
       return offer && offer.revision > 1 ? { ...offer, internalEconomicsTerms: [] } : offer;
     });
     const report = await runOfferEconomicsRecompute(store, options);
-    expect(report).toMatchObject({ status: 'HOLD', changedOffers: 1, readbackVerifiedOffers: 0 });
+    expect(report).toMatchObject({ status: 'HOLD', changedOffers: 1, readbackVerifiedOffers: 0, readbackVerifiedChangedOffers: 0 });
     if (report.mode !== 'APPLY') throw new Error('Expected apply');
     expect(report.results[0]!.reason).toBe('PERSISTENCE_READBACK_MISMATCH');
     expect(store.audits).toHaveLength(1);
@@ -138,7 +167,7 @@ describe('offer economics recompute', () => {
 
   it('rejects wrong policy, modified plan, target or missing apply pins', async () => {
     const store = await fixture(), options = await prepare(store);
-    for (const changed of [{ policyId: 'old' }, { expectedPlanDigest: 'bad' }, { target: 'other-project' }]) {
+    for (const changed of [{ policyId: 'old' }, { expectedPlanDigest: 'bad' }, { target: 'other-project' }, { approvalRef: '' }]) {
       await expect(runOfferEconomicsRecompute(store, { ...options, ...changed })).rejects.toThrow('HOLD');
     }
     await expect(runOfferEconomicsRecompute(store, { target: 'memory-test', apply: true })).rejects.toThrow('HOLD');
@@ -174,7 +203,9 @@ describe('offer economics recompute', () => {
     const store = await fixture(), offer = (await store.listOffers())[0]!;
     const product = (await store.getProduct(offer.productId))!, model = (await store.getVehicleModel(product.vehicleModelId))!;
     const input = { commandId: 'command', idempotencyKey: 'idempotency', offerId: offer.id, expectedRevision: 1,
-      policyId: KAKAO_COMMISSION_POLICY.policyId, inputDigest: offerEconomicsInputDigest(offer, product, model), actor, reason: 'test' };
+      policyId: KAKAO_COMMISSION_POLICY.policyId, inputDigest: offerEconomicsInputDigest(offer, product, model),
+      expectedEconomicsDigest: stableDigest(precomputeOfferEconomics(offer, product.commercialType, model.fuel)),
+      approvalRef: 'test:reviewed-plan', actor, reason: 'test' };
     await recomputeOfferEconomics(store, input);
     await expect(recomputeOfferEconomics(store, { ...input, reason: 'different' })).rejects.toThrow('different request payload');
     expect(store.audits).toHaveLength(1);
