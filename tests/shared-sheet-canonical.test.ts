@@ -273,16 +273,27 @@ describe('shared sheet local source to Canonical', () => {
     const tx = vi.spyOn(s.store, 'transact');
     const result = await queryCanonicalByPlate(s.store, 'TEST-FAKE-001');
     expect(result.results[0]!.terms[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null,
-      vatAmount: null, totalAmount: null, reasonCode: 'STORED_ECONOMICS_PRICE_MISMATCH' });
+      vatAmount: null, totalAmount: null, reasonCode: 'MONTHLY_RENT_MISMATCH', status: 'UNCONFIRMED' });
     expect(result.results[0]!.terms[0]!.channelPayoutFee.amount).toBeNull();
     expect(tx).not.toHaveBeenCalled();
   });
   it('rejects unsafe direct CLI configuration and empty identity before Firebase access', async () => {
     await expect(queryFirestoreByPlate('')).rejects.toThrow('PLATE_REQUIRED');
-    await expect(queryMain(['--direct', '--memory', '--plate-file', 'synthetic', '--stdout']))
+    await expect(queryMain(['--direct', '--memory', '--plate-file', 'synthetic', '--local-output', 'synthetic']))
       .rejects.toThrow('DIRECT_FIRESTORE_REQUIRED');
-    await expect(queryMain(['--direct', '--firestore', '--plate-file', 'synthetic', '--stdout', '--local-output', 'synthetic']))
-      .rejects.toThrow('EXACTLY_ONE_OUTPUT_REQUIRED');
+    await expect(queryMain(['--direct', '--firestore', '--plate-file', 'synthetic']))
+      .rejects.toThrow('LOCAL_INPUT_OUTPUT_REQUIRED');
+  });
+  it('preserves older stored fee terms with optional price basis absent', async () => {
+    const s = await stores(); await apply(s);
+    const offer = (await s.store.listOffers())[0]!;
+    delete offer.internalEconomicsTerms![0]!.termMonths;
+    delete offer.internalEconomicsTerms![0]!.monthlyRent;
+    await s.store.seed({ offers: [offer] });
+    const result = await queryCanonicalByPlate(s.store, 'TEST-FAKE-001');
+    expect(result.results[0]!.feeContract).toBe('internal-fee-lookup/v1');
+    expect(result.results[0]!.terms[0]!.supplierBillingFee.reasonCode).not.toBe('MONTHLY_RENT_MISMATCH');
+    expect(result.results[0]!.terms[0]!.supplierBillingFee.reasonCode).not.toBe('TERM_MONTHS_MISMATCH');
   });
   it('keeps first observation from a previously held RAW row', async () => {
     const s = await stores(); await apply(s, capture({ 세부트림: '' }));

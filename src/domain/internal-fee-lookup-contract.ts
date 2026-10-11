@@ -41,7 +41,7 @@ export type InternalFeeLookup = {
   orphanTermKeys: string[];
 };
 
-export type InternalFeeLookupPriceTerm = Pick<PriceTerm, 'termKey' | 'termMonths'>;
+export type InternalFeeLookupPriceTerm = Pick<PriceTerm, 'termKey' | 'termMonths'> & Partial<Pick<PriceTerm, 'monthlyRent'>>;
 
 const toAmount = (fee: TermEconomicAmount): InternalFeeAmount => {
   const confirmed = fee.state === 'KNOWN' || fee.state === 'ZERO' || fee.state === 'NOT_APPLICABLE';
@@ -130,6 +130,10 @@ export function toInternalFeeLookup(
       }
       if (term.termMonths !== undefined && term.termMonths !== priceTerm.termMonths) {
         return unresolvedTerm(priceTerm, 'TERM_MONTHS_MISMATCH');
+      }
+      if (term.monthlyRent && priceTerm.monthlyRent &&
+          (term.monthlyRent.amount !== priceTerm.monthlyRent.amount || term.monthlyRent.currency !== priceTerm.monthlyRent.currency)) {
+        return unresolvedTerm(priceTerm, 'MONTHLY_RENT_MISMATCH');
       }
       return {
         termKey: priceTerm.termKey,
