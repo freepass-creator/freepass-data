@@ -314,7 +314,9 @@ describe('period fee ledger apply', () => {
 
     const result = await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: false });
 
-    expect(result).toMatchObject({ status: 'DRY_RUN', writesEnabled: false, counts: { ledgerCreated: 0, activeMarked: 0 } });
+    expect(result).toMatchObject({ status: 'DRY_RUN', writesEnabled: false, counts: { ledgerCreated: 0, activeMarked: 0, historyCreated: 0 } });
+    // 시험 실행도 적용 시 만들 baseline 이력 건수를 보여야 한다(적용 결과와 불일치 방지).
+    expect(result.counts.plannedHistoryRows).toBeGreaterThan(0);
     expect(store.ledger.size).toBe(0);
     expect(store.history.size).toBe(0);
     expect(store.runs.size).toBe(0);

@@ -29,6 +29,7 @@ export type PeriodFeeLedgerApplyResult = {
     plannedRows: number;
     readyRows: number;
     holdNoUidRows: number;
+    plannedHistoryRows: number;
     ledgerCreated: number;
     ledgerSkippedSameDigest: number;
     historyCreated: number;
@@ -251,6 +252,7 @@ export async function applyPeriodFeeLedgerPlan(
     plannedRows: plan.rows.length,
     readyRows: readyRows.length,
     holdNoUidRows: holdNoUidRows.length,
+    plannedHistoryRows: historyRows.length,
     ledgerCreated: 0,
     ledgerSkippedSameDigest: 0,
     historyCreated: 0,
