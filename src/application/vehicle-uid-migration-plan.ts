@@ -99,15 +99,17 @@ function productIds(product: VehicleUidMigrationProduct) {
   const vinFields = ['vin', 'VIN', 'vehicle_vin', 'vehicle_id_number', '차대번호'];
   const plateValues = fields(product, plateFields);
   const vinValues = fields(product, vinFields);
+  const plates = uniqueValues(plateValues);
+  const vins = uniqueValues(vinValues, value => value.toUpperCase());
   const plate = field(product, plateFields);
   const vin = field(product, vinFields);
   const supplierCode = field(product, ['provider_company_code', 'supplierCode', 'supplier_code']);
   const supplierVehicleId = field(product, ['iancar_one_vehicle_id', 'sourceVehicleId', 'supplier_vehicle_id', 'vehicleId']);
   const sameKindFieldDisagreements = [
-    ...(uniqueValues(plateValues).length > 1 ? ['PLATE:SAME_KIND_FIELDS_DISAGREE'] : []),
-    ...(uniqueValues(vinValues, value => value.toUpperCase()).length > 1 ? ['VIN:SAME_KIND_FIELDS_DISAGREE'] : []),
+    ...(plates.length > 1 ? ['PLATE:SAME_KIND_FIELDS_DISAGREE'] : []),
+    ...(vins.length > 1 ? ['VIN:SAME_KIND_FIELDS_DISAGREE'] : []),
   ];
-  return { plate, vin, supplierCode, supplierVehicleId, sameKindFieldDisagreements };
+  return { plate, plates, vin, vins, supplierCode, supplierVehicleId, sameKindFieldDisagreements };
 }
 
 function externalIdsForAsset(asset: VehicleAsset): VehicleExternalId[] {
@@ -137,7 +139,9 @@ function sortExternalIds(ids: VehicleExternalId[]) {
 
 function candidateExternalIds(ids: ReturnType<typeof productIds>, observedAt: string): VehicleExternalId[] {
   const out: VehicleExternalId[] = [];
-  if (ids.vin) out.push({ kind: 'VIN', value: ids.vin.toUpperCase(), validFrom: observedAt, source: 'vehicle-uid-migration-plan' });
+  for (const vin of ids.vins) {
+    out.push({ kind: 'VIN', value: vin.toUpperCase(), validFrom: observedAt, source: 'vehicle-uid-migration-plan' });
+  }
   if (ids.supplierVehicleId && ids.supplierCode) {
     out.push({
       kind: 'SUPPLIER_VEHICLE',
@@ -147,7 +151,9 @@ function candidateExternalIds(ids: ReturnType<typeof productIds>, observedAt: st
       source: 'vehicle-uid-migration-plan',
     });
   }
-  if (ids.plate) out.push({ kind: 'PLATE', value: ids.plate, validFrom: observedAt, source: 'vehicle-uid-migration-plan' });
+  for (const plate of ids.plates) {
+    out.push({ kind: 'PLATE', value: plate, validFrom: observedAt, source: 'vehicle-uid-migration-plan' });
+  }
   return sortExternalIds(out);
 }
 
@@ -313,10 +319,11 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
   const plateProducts = new Map<string, Array<{ key: string; supplier?: string }>>();
   for (const [key, product] of Object.entries(input.products)) {
     const ids = productIds(product);
-    if (!ids.plate) continue;
-    const list = plateProducts.get(ids.plate) ?? [];
-    list.push({ key, ...(ids.supplierCode ? { supplier: ids.supplierCode } : {}) });
-    plateProducts.set(ids.plate, list);
+    for (const plate of ids.plates) {
+      const list = plateProducts.get(plate) ?? [];
+      list.push({ key, ...(ids.supplierCode ? { supplier: ids.supplierCode } : {}) });
+      plateProducts.set(plate, list);
+    }
   }
 
   for (const asset of [...input.assets].sort((a, b) => a.id.localeCompare(b.id))) {
@@ -387,7 +394,7 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
       }
       if (isPrefixProductKey(productKey)) reasons.push('PREFIX_PRODUCT_KEY_REQUIRES_REVIEW');
       if (isIancarProductKey(productKey)) reasons.push('IANCAR_PRODUCT_KEY_REQUIRES_REVIEW');
-      const samePlate = info.ids.plate ? plateProducts.get(info.ids.plate) ?? [] : [];
+      const samePlate = info.ids.plates.flatMap(plate => plateProducts.get(plate) ?? []);
       const suppliers = new Set(samePlate.map(x => x.supplier).filter(Boolean));
       if (samePlate.length > 1 && suppliers.size > 1) reasons.push('PLATE_DUPLICATED_ACROSS_SUPPLIERS');
       const matchedBindings = bindingsForProduct(input.bindings, productKey);
@@ -395,6 +402,8 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
       const bound = matchedBindings.length === 1 ? matchedBindings[0] : undefined;
       const boundAsset = bound?.vehicleAssetId ? assetById.get(bound.vehicleAssetId) : undefined;
       if (bound?.vehicleAssetId && !boundAsset) reasons.push('BINDING_TARGET_MISSING');
+      const existingVehicleUid = text(product.vehicle_uid);
+      if (existingVehicleUid && !assetById.has(existingVehicleUid)) reasons.push('UID_ASSET_MISSING');
       if (boundAsset && assetContradictsProduct(boundAsset, info.ids, input.observedAt)) reasons.push('BINDING_CONTRADICTS_PRODUCT');
       const resolution = resolveVehicleUid(info.candidate, input.assets, {
         now: input.observedAt,
@@ -422,9 +431,10 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
 
   for (const component of componentPlans.sort((a, b) => a.key.localeCompare(b.key))) {
     if (component.reasons.length) {
+      const holdsExistingProducts = component.reasons.includes('UID_ASSET_MISSING');
       for (const productKey of component.products) {
         const product = input.products[productKey]!;
-        if (text(product.vehicle_uid)) continue;
+        if (text(product.vehicle_uid) && !holdsExistingProducts) continue;
         for (const reason of ['GRAPH_COMPONENT_CONFLICT', ...component.reasons]) {
           items.push({ kind: 'HOLD', productKey, reason, public: { productHash: hash(productKey), reason } });
         }

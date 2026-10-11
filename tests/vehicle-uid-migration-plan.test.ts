@@ -280,6 +280,42 @@ describe('planVehicleUidMigration', () => {
     expect(result.items.filter(item => item.kind === 'PRODUCT_SET_UID')).toHaveLength(0);
   });
 
+  it('connects every same-kind alias value into one HOLD component', () => {
+    const result = plan({
+      products: {
+        alias: {
+          plateNumber: 'TEST-FAKE-ALIAS-A',
+          car_number: 'TEST-FAKE-ALIAS-B',
+          provider_company_code: 'TEST',
+        },
+        productB: product('TEST-FAKE-ALIAS-B'),
+      },
+      assets: [asset('TEST-FAKE-UID-B', 'TEST-FAKE-ALIAS-B')],
+    });
+    const holdProducts = new Set(result.items.filter(item => item.kind === 'HOLD').map(item => item.productKey));
+    expect(holdProducts).toEqual(new Set(['alias', 'productB']));
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'alias', reason: 'SAME_KIND_FIELDS_DISAGREE' }));
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'productB', reason: 'SAME_KIND_FIELDS_DISAGREE' }));
+    expect(result.items.filter(item => item.kind === 'PRODUCT_SET_UID')).toHaveLength(0);
+    expect(result.items.filter(item => item.kind === 'ASSET_ADD_EXTERNAL_IDS')).toHaveLength(0);
+    expect(result.summary.holdGraphComponents).toBe(1);
+  });
+
+  it('does not propagate a product vehicle_uid when its referenced asset is missing', () => {
+    const result = plan({
+      products: {
+        migratedMissing: product('TEST-FAKE-MISSING-PLATE', { vehicle_uid: 'TEST-FAKE-UID-MISSING' }),
+        unmigrated: product('TEST-FAKE-MISSING-PLATE'),
+      },
+      assets: [],
+    });
+    const holdProducts = new Set(result.items.filter(item => item.kind === 'HOLD').map(item => item.productKey));
+    expect(holdProducts).toEqual(new Set(['migratedMissing', 'unmigrated']));
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'migratedMissing', reason: 'UID_ASSET_MISSING' }));
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'unmigrated', reason: 'UID_ASSET_MISSING' }));
+    expect(result.items.filter(item => item.kind === 'PRODUCT_SET_UID')).toHaveLength(0);
+  });
+
   it('removes every planned mutation for a graph component that becomes HOLD', () => {
     const result = plan({
       products: {
