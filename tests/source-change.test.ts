@@ -10,6 +10,7 @@ import {
 import { canonicalizeCatalogCandidate } from '../src/application/canonicalize-catalog-candidate.js';
 import { processOneOutboxEvent, updateOfferPrice } from '../src/application/catalog.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
+import { precomputeOfferEconomics } from '../src/application/resolve-offer-commercial-terms.js';
 import type { FieldLineageRecord } from '../src/domain/lineage.js';
 import type {
   NormalizedCandidateRecord,
@@ -33,6 +34,7 @@ function evidence(input: {
   supplierCode?: string;
   termMonths?: number;
   issues?: string[];
+  supplierStatus?: string;
 }) {
   const rent = input.rent ?? 750000;
   const mileageKm = input.mileageKm ?? 12000;
@@ -117,6 +119,12 @@ function evidence(input: {
       issues
     }
   };
+  if (input.supplierStatus !== undefined) {
+    candidate.candidate.vehicleFacts = { ruleVersion: 'shared-sheet-normalizer/5', reasons: [], fields: {
+      supplierStatus: { value: input.supplierStatus, state: 'KNOWN', evidence: input.supplierStatus,
+        ruleVersion: 'shared-sheet-normalizer/5', reasons: [] }
+    } };
+  }
 
   const lineageSpec: Array<[string, string, unknown, unknown]> = [
     ['maker', 'maker', '제네시스', '제네시스'],
@@ -148,6 +156,10 @@ function evidence(input: {
     ]);
   }
   run.lineageCount = lineageSpec.length;
+  if (candidate.candidate.vehicleFacts) {
+    lineageSpec.push(['차량상태', 'vehicleFacts', input.supplierStatus, candidate.candidate.vehicleFacts]);
+    run.lineageCount = lineageSpec.length;
+  }
 
   const lineage: FieldLineageRecord[] = lineageSpec.map(
     ([sourceFieldPath, normalizedFieldPath, sourceValue, normalizedValue], index) => ({
@@ -252,6 +264,137 @@ function applyCommand(
 }
 
 describe('reviewed source change', () => {
+  async function operationalSetup(status = '출고불가', rent = 810000) {
+    const store = new MemoryDataStore();
+    const { original, receipt: initial } = await initialCanonical(store);
+    const facts = evidence({ runId: 'unused', candidateId: 'unused', fingerprint: 'unused',
+      observedAt: original.run.observedAt!, supplierStatus: '출고가능' }).candidate.candidate.vehicleFacts!;
+    original.candidate.candidate.vehicleFacts = facts;
+    const asset = (await store.getVehicleAsset('va_source_change_gv70'))!;
+    asset.sourceVehicleFacts = facts;
+    await store.seed!({ candidates: [original.candidate], vehicleAssets: [asset] });
+    const changed = evidence({ runId: 'run-operational', candidateId: 'candidate-operational',
+      fingerprint: 'fp-operational', observedAt: '2026-09-21T01:00:00Z', supplierStatus: status, rent });
+    await installChangedHead(store, original, changed);
+    const fence = { previousCandidateId: original.candidate.candidateId, maxObservationAgeSeconds: 900 };
+    const review = await reviewSourceChange(store, initial.bindingId, changed.candidate.candidateId, fence);
+    const command = { ...applyCommand(review, 'idem-operational'), operationalRefresh: fence,
+      actor: { id: 'service:freepass-data', kind: 'SERVICE' as const } };
+    return { store, original, initial, changed, command, review };
+  }
+
+  it('commits status and rent together with before/after audit and exact source lineage; retries once', async () => {
+    const { store, initial, command, review } = await operationalSetup();
+    expect(review.diffs.filter(diff => diff.fieldPath === 'status')).toHaveLength(2);
+    const result = await applyReviewedSourceChange(store, command, '2026-09-21T01:01:00Z');
+    expect((await store.getProduct(initial.productId))!.status).toBe('HOLD');
+    expect((await store.getVehicleAsset('va_source_change_gv70'))!.status).toBe('RESERVED');
+    expect((await store.getOffer(initial.offerId))!.priceTerms[0]!.monthlyRent.amount).toBe(810000);
+    expect(result.productRevision).toBe(2);
+    const audit = store.audits.find(item => item.commandId === command.commandId && item.entityType === 'product')!;
+    expect(audit.before).toMatchObject({ status: 'ACTIVE', revision: 1 });
+    expect(audit.after).toMatchObject({ status: 'HOLD', revision: 2 });
+    const lineage = await store.listLineageByStage('NORMALIZED_TO_CANONICAL');
+    expect(lineage.filter(item => item.runId === 'run-operational' && item.canonical?.fieldPath === 'status')).toHaveLength(2);
+    const auditCount = store.audits.length, outboxCount = store.outbox.size;
+    expect(await applyReviewedSourceChange(store, command, '2026-09-21T01:02:00Z')).toEqual(result);
+    expect(store.audits).toHaveLength(auditCount);
+    expect(store.outbox.size).toBe(outboxCount);
+  });
+
+  it('advances observation on no change without touching product/offer/asset revisions or outbox', async () => {
+    const { store, initial, command } = await operationalSetup('출고가능', 750000);
+    const outboxCount = store.outbox.size;
+    expect((await applyReviewedSourceChange(store, command, '2026-09-21T01:01:00Z')).status).toBe('NO_CHANGE');
+    expect((await store.getProduct(initial.productId))!.revision).toBe(1);
+    expect((await store.getOffer(initial.offerId))!.revision).toBe(1);
+    expect((await store.getVehicleAsset('va_source_change_gv70'))!.revision).toBe(1);
+    expect(store.outbox.size).toBe(outboxCount);
+    expect((await store.getSourceBinding(initial.bindingId))!.sourceRunId).toBe('run-operational');
+  });
+
+  it('uses existing confirmed rent rule but preserves vehicle-price fee, unknown state and deposit', async () => {
+    const { store, initial, command } = await operationalSetup();
+    const offer = (await store.getOffer(initial.offerId))!;
+    offer.supplierId = 'RP013';
+    offer.internalEconomicsTerms = precomputeOfferEconomics(offer, 'USED_RENT');
+    const previous = offer.internalEconomicsTerms[0]!;
+    previous.channelPayoutFee = { state: 'KNOWN', amount: { currency: 'KRW', amount: 300000 },
+      calculation: { kind: 'RATE', base: 'VEHICLE_PRICE', rate: 0.01 }, ruleId: 'test:confirmed-vehicle-rule',
+      policyId: 'test:confirmed-policy', sourceRefs: ['test:confirmed-source'] };
+    await store.seed!({ offers: [offer] });
+    await applyReviewedSourceChange(store, command, '2026-09-21T01:01:00Z');
+    const next = (await store.getOffer(initial.offerId))!.internalEconomicsTerms![0]!;
+    expect(next.supplierBillingFee.amount!.amount).toBeGreaterThan(previous.supplierBillingFee.amount!.amount);
+    expect(next.channelPayoutFee).toEqual(previous.channelPayoutFee);
+    expect(next.depositCalculation).toEqual(previous.depositCalculation);
+  });
+
+  it('preserves an unresolved fee rather than creating a new rate during rent refresh', async () => {
+    const { store, initial, command } = await operationalSetup();
+    const offer = (await store.getOffer(initial.offerId))!;
+    offer.supplierId = 'RP013';
+    offer.internalEconomicsTerms = precomputeOfferEconomics(offer, 'USED_RENT');
+    const unknown = { state: 'UNKNOWN' as const, amount: null, calculation: null,
+      reasonCode: 'HUMAN_CONFIRMATION_PENDING', sourceRefs: [] };
+    offer.internalEconomicsTerms[0]!.supplierBillingFee = unknown;
+    await store.seed!({ offers: [offer] });
+    await applyReviewedSourceChange(store, command, '2026-09-21T01:01:00Z');
+    expect((await store.getOffer(initial.offerId))!.internalEconomicsTerms![0]!.supplierBillingFee).toEqual(unknown);
+  });
+
+  it('does not absorb a human rent into source ownership when the next source happens to equal it', async () => {
+    const { store, initial, changed, command } = await operationalSetup('출고가능', 777777);
+    const offer = (await store.getOffer(initial.offerId))!;
+    offer.priceTerms[0]!.monthlyRent.amount = 777777;
+    await store.seed!({ offers: [offer] });
+    const review = await reviewSourceChange(store, initial.bindingId, changed.candidate.candidateId, command.operationalRefresh);
+    const nextCommand = { ...command, approvedChangeIds: review.reviewableChangeIds };
+    await expect(applyReviewedSourceChange(store, nextCommand, '2026-09-21T01:01:00Z')).rejects.toThrow('human input');
+    expect((await store.getSourceBinding(initial.bindingId))!.sourceRunId).toBe('run-original');
+  });
+
+  it.each(['human-rent', 'human-status', 'wrong-previous', 'stale', 'failed', 'incomplete', 'bad-lineage', 'unknown-status', 'outside-field'])(
+    'preserves every Canonical value, binding and audit on %s', async failure => {
+      const { store, initial, changed, command } = await operationalSetup();
+      if (failure === 'human-rent') {
+        const offer = (await store.getOffer(initial.offerId))!;
+        offer.priceTerms[0]!.monthlyRent.amount = 777777;
+        await store.seed!({ offers: [offer] });
+      }
+      if (failure === 'human-status') {
+        const asset = (await store.getVehicleAsset('va_source_change_gv70'))!;
+        asset.status = 'IN_USE';
+        await store.seed!({ vehicleAssets: [asset] });
+      }
+      if (failure === 'wrong-previous') command.operationalRefresh.previousCandidateId = changed.candidate.candidateId;
+      if (failure === 'stale') command.operationalRefresh.maxObservationAgeSeconds = 1;
+      if (failure === 'failed') { changed.run.status = 'FAILED'; await store.seed!({ sourceRuns: [changed.run] }); }
+      if (failure === 'incomplete') { changed.run.coverage.completeness = 'INCOMPLETE'; await store.seed!({ sourceRuns: [changed.run] }); }
+      if (failure === 'bad-lineage') {
+        changed.lineage.find(item => item.normalized?.fieldPath === 'vehicleFacts')!.sourceFingerprint = 'wrong';
+        await store.seed!({ lineage: changed.lineage });
+      }
+      if (failure === 'unknown-status') {
+        changed.candidate.candidate.vehicleFacts!.fields.supplierStatus!.state = 'MISSING';
+        changed.candidate.candidate.vehicleFacts!.fields.supplierStatus!.value = null;
+        await store.seed!({ candidates: [changed.candidate] });
+      }
+      if (failure === 'outside-field') {
+        changed.candidate.candidate.mileageKm = 13000;
+        await store.seed!({ candidates: [changed.candidate] });
+      }
+      const before = await Promise.all([store.getOffer(initial.offerId), store.getProduct(initial.productId),
+        store.getVehicleAsset('va_source_change_gv70'), store.getSourceBinding(initial.bindingId)]);
+      const audits = structuredClone(store.audits), outbox = structuredClone([...store.outbox]);
+      await expect(applyReviewedSourceChange(store, command, '2026-09-21T01:01:00Z')).rejects.toThrow();
+      expect(await Promise.all([store.getOffer(initial.offerId), store.getProduct(initial.productId),
+        store.getVehicleAsset('va_source_change_gv70'), store.getSourceBinding(initial.bindingId)])).toEqual(before);
+      expect(store.audits).toEqual(audits);
+      expect([...store.outbox]).toEqual(outbox);
+    }
+  );
+
   it.each(['KNOWN', 'ZERO'] as const)('blocks lost %s evidence even when approved; preserves revision, binding, outbox and ACTIVE', async state => {
     const store = new MemoryDataStore();
     const { original, receipt: initial } = await initialCanonical(store, state);

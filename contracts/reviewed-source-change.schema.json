@@ -19,6 +19,14 @@
     "reason"
   ],
   "properties": {
+    "operationalRefresh": {
+      "type": "object", "additionalProperties": false,
+      "required": ["previousCandidateId", "maxObservationAgeSeconds"],
+      "properties": {
+        "previousCandidateId": {"type": "string", "minLength": 1},
+        "maxObservationAgeSeconds": {"type": "integer", "minimum": 1}
+      }
+    },
     "commandId": {"type": "string", "minLength": 1},
     "idempotencyKey": {"type": "string", "minLength": 8},
     "bindingId": {"type": "string", "minLength": 1},
