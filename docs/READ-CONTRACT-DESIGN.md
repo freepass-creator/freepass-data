@@ -8,6 +8,8 @@
 - 기존 `FirestoreCatalogCompatibilityReader.readStoredProducts` → 기존 application `readStoredConsumerProducts` → 기존 `query-canonical-by-plate` job을 재사용한다. 새 reader/API/요율/계약 파일/저장소 없음.
 - 실행: 기존 job에 `--firestore --direct --stored-products --search-file <private-json> --local-output <private-file>`. 검색키 productId/supplierId/supplierName/vehicleName/plate, `{}`는 저장 상품 전체다.
 - trusted server-only 구현이다. 호출 서버 자신의 승인된 읽기 credential과 중앙 `getTargetFirebaseApp`을 사용한다. consumerId 문자열 검사는 실제 IAM/인증 승인이 아니며 credential을 복사·발급하지 않는다. 공개/ERP consumerId는 이 내부 진입점에서 거부한다.
+- 원천행은 호출 서버가 기존 권한을 검증한 뒤 전달하는 `sourceGrant`가 없으면 읽지 않고 HOLD한다. COLLECTED + supplierIds로 범위를 제한하며 빈 배열은 읽기0, null은 명시적인 전체 원천 범위다. 사용자 HTTP 본문을 grant로 넘기지 않는다. 내부 운영자 CLI만 자신의 Firestore 권한으로 전체 원천을 요청하며 소비처 토큰/IAM 승인을 대체하지 않는다.
+- 공급사 검색은 기존 등록부/F04의 명시적 별칭과 법인 표식만 정규화한다. 부분 이름으로 ID를 추정하지 않으며 복수 공급사 연결은 HOLD다. 사진 접근은 NOT_CHECKED, ledger 관측 시각·digest와 canonical/원천 시점은 각각 보존한다.
 - 상품의 원문 자유문장 전체, 고객·계약·정산사건·사용자 모음, 파트너 연락처를 반환하지 않는다. 내부 수수료를 공개 서비스에 내보내지 않는다. 원본/사람 입력/가격 변경과 쓰기는 없다.
 
 ## 서로 다른 저장·관측 영역

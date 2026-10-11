@@ -23,7 +23,9 @@ export function selectStoredProducts(products: Record<string, Rec>, policies: Re
     if (!allowed.includes(key) || typeof value !== 'string' || !value.trim()) throw new Error('INVALID_PRODUCT_SEARCH');
   if (search.plate && !isAssignedPlate(search.plate)) throw new Error('PLATE_NOT_ASSIGNED');
   const text = (v: unknown) => typeof v === 'string' ? v.trim() : '';
-  const nameKey = (v: unknown) => text(v).normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  // Remove legal designators only, not business words or arbitrary substrings.
+  const nameKey = (v: unknown) => text(v).normalize('NFKC').replace(/\s+/g, '').toLowerCase()
+    .replace(/^(?:\(주\)|주식회사)/, '').replace(/(?:\(주\)|주식회사)$/, '');
   return Object.entries(products).flatMap(([productId, product]) => {
     const supplierId = text(product.provider_company_code) || null;
     // Existing partner records are name authority; do not promote a display-code fallback.

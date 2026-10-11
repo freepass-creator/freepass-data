@@ -141,7 +141,8 @@ export async function main(args = process.argv.slice(2)) {
     const { readStoredConsumerProducts } = await import('../application/kakao-catalog-reference.js');
     const reader = createFirestoreCatalogCompatibilityReader();
     const result = await readStoredConsumerProducts({ readStoredProducts: reader.readStoredProducts.bind(reader),
-      sourceStore: reader.sourceStore, readCanonicalProducts: (s, rows) => queryFirestoreProducts(s, rows as PeriodFeeLedgerRow[]) }, 'internal-ai-ops', search);
+      sourceStore: reader.sourceStore, readCanonicalProducts: (s, rows) => queryFirestoreProducts(s, rows as PeriodFeeLedgerRow[]) },
+      'internal-ai-ops', search, { sourceScope: 'COLLECTED', supplierIds: null });
     await writePrivateArtifact(a.get('--local-output')!, result);
     console.log(JSON.stringify({ status: 'LOCAL_RESULT_WRITTEN', products: result.products.length, sourceRows: result.sourceRows.length,
       snapshotConsistency: result.meta.snapshotConsistency }));

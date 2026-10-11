@@ -53,6 +53,28 @@ describe('stored consumer product selection', () => {
     const reader = Object.create(FirestoreCatalogCompatibilityReader.prototype) as FirestoreCatalogCompatibilityReader;
     await expect(reader.readStoredProducts('erp-com')).rejects.toThrow('STORED_INTERNAL_CONSUMER_NOT_ALLOWED');
   });
+  it('matches legal designators without arbitrary partial business-name matching', () => {
+    for (const [legal, query] of [['(주)이안카', '이안카'], ['오토플러스 주식회사', '오토플러스'], ['(주)아이언렌트카', '아이언렌트카']]) {
+      expect(selectStoredProducts(products, {}, { 'TEST-SUPPLIER': { partner_name: legal } }, { supplierName: query! })).toHaveLength(1);
+      expect(selectStoredProducts(products, {}, { 'TEST-SUPPLIER': { partner_name: legal } }, { supplierName: '아이' })).toHaveLength(0);
+    }
+  });
+  it('validates composition inputs and blocks ungranted source reads even with an unvalidated reader port', async () => {
+    let reads = 0, sources = 0;
+    const reader = { readStoredProducts: async () => { reads++; return { products: [] }; },
+      sourceStore: { getSourceHead: async () => { sources++; throw new Error('SOURCE_READ_FORBIDDEN'); },
+        getRun: async () => null, listRaw: async () => [], listCandidates: async () => [] } };
+    await expect(readStoredConsumerProducts(reader, 'internal-ai-test', { plate: '신차' })).rejects.toThrow('PLATE_NOT_ASSIGNED');
+    await expect(readStoredConsumerProducts(reader, 'internal-ai-test', { plate: '' })).rejects.toThrow('INVALID_PRODUCT_SEARCH');
+    expect(reads).toBe(0);
+    const ungranted = await readStoredConsumerProducts(reader, 'internal-ai-test');
+    const empty = await readStoredConsumerProducts(reader, 'internal-ai-test', {}, { sourceScope: 'COLLECTED', supplierIds: [] });
+    expect(sources).toBe(0);
+    expect(ungranted.sourceEvidence.reasonCode).toBe('SOURCE_READ_GRANT_REQUIRED');
+    expect(empty.sourceEvidence.reasonCode).toBe('SOURCE_READ_SCOPE_EMPTY');
+    expect(ungranted.ledgerSnapshot).toMatchObject({ observedAt: null, currentHeadVerified: false });
+    expect(ungranted.photoAccessVerification).toBe('NOT_CHECKED');
+  });
   it('does not advertise reviewed metadata as an authorized photo serving route', () => {
     const rows = selectStoredProducts({ reviewed: { photo_original_refs: [{ vehiclePhotoVerifiedAt: '2026-10-11T00:00:00Z',
       vehiclePhotoVerifiedBy: 'TEST-REVIEW', vehiclePhotoVerificationMethod: 'TEST-METHOD', servingIndex: 0, representative: true }] } }, {}, {});
@@ -67,7 +89,10 @@ describe('stored consumer product selection', () => {
     const result = await readStoredConsumerProducts({ readStoredProducts: async () => ({ products: rows }), sourceStore }, 'internal-ai-test');
     expect(result.products).toHaveLength(2);
     expect(result.sourceRows).toEqual([]);
-    expect(result.sourceEvidence).toMatchObject({ state: 'HOLD', reasonCode: 'SOURCE_HEAD_MISSING' });
+    expect(result.sourceEvidence).toMatchObject({ state: 'HOLD', reasonCode: 'SOURCE_READ_GRANT_REQUIRED' });
+    const authorized = await readStoredConsumerProducts({ readStoredProducts: async () => ({ products: rows }), sourceStore },
+      'internal-ai-test', {}, { sourceScope: 'COLLECTED', supplierIds: null });
+    expect(authorized.sourceEvidence.reasonCode).toBe('SOURCE_HEAD_MISSING');
     expect(result.canonicalEvidence.reasonCode).toBe('CANONICAL_READER_NOT_CONNECTED');
     const empty = await readStoredConsumerProducts({ readStoredProducts: async () => ({ products: [] }), sourceStore,
       readCanonicalProducts: async () => null }, 'internal-ai-test');
@@ -204,9 +229,15 @@ describe('current source observations in existing private reference', () => {
     expect(current.observations).toHaveLength(1);
     const filtered = await readStoredConsumerProducts({ sourceStore: complete,
       readStoredProducts: async () => ({ products: [] }), readCanonicalProducts: async () => ({ results: [] }) },
-      'internal-ai-test', { productId: 'TEST-NOT-OBSERVED' });
+      'internal-ai-test', { productId: 'TEST-NOT-OBSERVED' }, { sourceScope: 'COLLECTED', supplierIds: null });
     expect(filtered.sourceRows).toHaveLength(0);
     expect(filtered.sourceEvidence.snapshot).toMatchObject({ currentProductRowCount: 1, returnedProductRowCount: 0 });
+    const restricted = await readStoredConsumerProducts({ readStoredProducts: async () => ({ products: [] }), sourceStore: complete },
+      'internal-ai-test', {}, { sourceScope: 'COLLECTED', supplierIds: ['OTHER_SUPPLIER'] });
+    expect(restricted.sourceRows).toHaveLength(0);
+    const permitted = await readStoredConsumerProducts({ readStoredProducts: async () => ({ products: [] }), sourceStore: complete },
+      'internal-ai-test', {}, { sourceScope: 'COLLECTED', supplierIds: ['RP_FIXTURE'] });
+    expect(permitted.sourceRows).toHaveLength(1);
     const row = projectReferenceObservation(raw, candidate);
     const duplicate = buildKakaoCatalogReference({ consumerId: 'kakao-ops', sourceScope: 'COLLECTED', observedAt: at, products: {},
       sourceObservations: { state: 'HOLD' as const, reasonCode: 'FIXTURE', sourceSnapshot: current.sourceSnapshot!, observations: [row,row] } });
