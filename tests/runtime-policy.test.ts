@@ -243,6 +243,7 @@ describe('API runtime boundary', () => {
     const mock = `gcloud() {
       if [ "$2" = deploy ]; then
         case "$*" in *--update-env-vars=NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5*) ;; *) return 1 ;; esac
+        case "$*" in *--timeout=300s*) ;; *) return 1 ;; esac
         echo DEPLOY_REACHED
         deployed=true
       elif [ "\${deployed:-false}" = true ]; then printf '%s' "$MOCK_AFTER";

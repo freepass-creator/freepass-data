@@ -5,6 +5,82 @@ import { plateIdentityKey } from '../domain/vehicle-plate.js';
 import { parseLocalArgs, writePrivateArtifact } from './ingest-shared-sheet-canonical.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { toInternalFeeLookup } from '../domain/internal-fee-lookup-contract.js';
+import { sharedSheetRegisteredChannels } from '../adapters/shared-sheet-source.js';
+
+export type ProductSearch = { productId?: string; supplierId?: string; supplierName?: string; vehicleName?: string; plate?: string };
+const searchText = (value: string) => value.normalize('NFKC').replace(/\s+/g, '').toLocaleLowerCase('ko');
+
+/** Internal stored-fact reader, not a new API or persistence path. Missing joins remain visible.
+ * Supplier names use the existing registered supplier mapping; no fuzzy identity inference.
+ */
+export async function queryCanonicalProducts(store: CatalogStore, search: ProductSearch = {}) {
+  const allowed = ['productId', 'supplierId', 'supplierName', 'vehicleName', 'plate'];
+  for (const [key, value] of Object.entries(search))
+    if (!allowed.includes(key) || typeof value !== 'string' || !value.trim()) throw new Error('INVALID_PRODUCT_SEARCH');
+  const identity = search.plate === undefined ? null : plateIdentityKey(search.plate);
+  if (search.plate !== undefined && !identity) throw new Error('PLATE_REQUIRED');
+  const [products, offers, assets, models, policies] = await Promise.all([
+    store.listProducts(), store.listOffers(), store.listVehicleAssets(), store.listVehicleModels(), store.listPolicies(),
+  ]);
+  const results = [];
+  const unresolvedSupplierProducts = new Set<string>();
+  const supplierTermResolved = search.supplierName === undefined ? null
+    : sharedSheetRegisteredChannels.some(x => searchText(x.companyName) === searchText(search.supplierName!));
+  for (const product of products) {
+    if (search.productId && product.id !== search.productId.trim()) continue;
+    const asset = assets.find(x => x.id === product.vehicleAssetId) ?? null;
+    const model = models.find(x => x.id === product.vehicleModelId) ?? null;
+    if (identity && (!asset || plateIdentityKey(asset.plateNumber) !== identity)) continue;
+    if (search.vehicleName && !searchText([product.displayName, model?.maker, model?.model, model?.subModel, model?.trim].filter(Boolean).join(' '))
+      .includes(searchText(search.vehicleName))) continue;
+    const linked = offers.filter(x => x.productId === product.id);
+    if (!linked.length || linked.some(x => !x.supplierId)) unresolvedSupplierProducts.add(product.id);
+    for (const offer of linked.length ? linked : [null]) {
+      const supplierName = sharedSheetRegisteredChannels.find(x => x.code === offer?.supplierId)?.companyName ?? null;
+      if (search.supplierId && offer?.supplierId !== search.supplierId.trim()) continue;
+      if (search.supplierName && (supplierName === null || searchText(supplierName) !== searchText(search.supplierName))) continue;
+      const policy = policies.find(x => x.id === offer?.policyId) ?? null;
+      const fees = offer ? toInternalFeeLookup(offer.id, offer.priceTerms, offer.internalEconomicsTerms) : null;
+      const unknownFields = ['photos']; // Catalog currently has no registered media fact. Never report zero.
+      if (!model) unknownFields.push('vehicleModel');
+      if (!asset) unknownFields.push('vehicleAsset');
+      if (!offer) unknownFields.push('offer', 'supplier', 'priceTerms');
+      if (!supplierName) unknownFields.push('supplierName');
+      if (!policy) unknownFields.push('policy');
+      for (const key of ['maker', 'model', 'subModel', 'trim', 'fuel', 'drive', 'seats'] as const)
+        if (model?.[key] == null || model[key] === '') unknownFields.push(`vehicle.${key}`);
+      for (const [key, fact] of Object.entries(asset?.sourceVehicleFacts?.fields ?? {}))
+        if (fact.state !== 'KNOWN') unknownFields.push(`vehicle.facts.${key}`);
+      const terms = (offer?.priceTerms ?? []).map((term, index) => {
+        const fee = fees!.terms[index]!;
+        if (term.depositState === 'UNKNOWN') unknownFields.push(`terms.${term.termKey}.deposit`);
+        for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const)
+          if (fee[side].state === 'UNKNOWN') unknownFields.push(`terms.${term.termKey}.${side}`);
+        return { ...structuredClone(term), supplierBillingFee: fee.supplierBillingFee, channelPayoutFee: fee.channelPayoutFee };
+      });
+      results.push({ productId: product.id, offerId: offer?.id ?? null, assetId: asset?.id ?? null,
+        supplierId: offer?.supplierId ?? null, supplierName, displayName: product.displayName,
+        commercialType: product.commercialType, productStatus: product.status,
+        product: structuredClone(product), offer: offer ? structuredClone(offer) : null,
+        vehicleModel: model ? structuredClone(model) : null, vehicleAsset: asset ? structuredClone(asset) : null,
+        policy: policy ? structuredClone(policy) : null, terms,
+        priceTermsState: terms.length ? 'KNOWN' as const : 'UNKNOWN' as const,
+        photos: { state: 'UNKNOWN' as const, count: null, references: null, reasonCode: 'CATALOG_MEDIA_NOT_CONNECTED' },
+        unknownFields: [...new Set(unknownFields)].sort(),
+        feeContract: fees?.contract ?? null, orphanFeeTermKeys: fees?.orphanTermKeys ?? [],
+      });
+    }
+  }
+  return { schema: 'freepass-data.internal-product-query/v1', authority: 'STORED_CANONICAL',
+    observedAt: new Date().toISOString(), matchedProducts: new Set(results.map(x => x.productId)).size,
+    supplierTermResolved, unresolvedSupplierProducts: unresolvedSupplierProducts.size, results };
+}
+
+export async function queryFirestoreProducts(search: ProductSearch = {}) {
+  const { withSharedSheetCatalogAccess } = await import('./data-access-runtime.js');
+  return withSharedSheetCatalogAccess(false, stableDigest(['internal-direct-product-query']),
+    store => queryCanonicalProducts(store, search));
+}
 
 /** Internal server-only contract. Read saved facts; never recompute or publish them. */
 export async function queryCanonicalByPlate(store: CatalogStore, plate: string) {
@@ -48,9 +124,26 @@ export async function queryFirestoreByPlate(plate: string) {
     store => queryCanonicalByPlate(store, plate));
 }
 export async function main(args = process.argv.slice(2)) {
-  const a = parseLocalArgs(args, ['--memory', '--firestore', '--direct'], ['--plate-file', '--local-output']);
-  if (!a.has('--plate-file') || !a.has('--local-output')) throw new Error('LOCAL_INPUT_OUTPUT_REQUIRED');
+  const a = parseLocalArgs(args, ['--memory', '--firestore', '--direct'], ['--plate-file', '--search-file', '--local-output']);
+  if (a.has('--plate-file') === a.has('--search-file') || !a.has('--local-output')) throw new Error('LOCAL_INPUT_OUTPUT_REQUIRED');
   if (a.has('--direct') && (!a.has('--firestore') || a.has('--memory'))) throw new Error('DIRECT_FIRESTORE_REQUIRED');
+  if (a.has('--search-file')) {
+    const search = JSON.parse(await readFile(a.get('--search-file')!, 'utf8')) as ProductSearch;
+    if (!search || typeof search !== 'object' || Array.isArray(search)) throw new Error('INVALID_PRODUCT_SEARCH');
+    // Validate user input before any Firebase access.
+    for (const [key, value] of Object.entries(search))
+      if (!['productId', 'supplierId', 'supplierName', 'vehicleName', 'plate'].includes(key) || typeof value !== 'string' || !value.trim())
+        throw new Error('INVALID_PRODUCT_SEARCH');
+    if (search.plate !== undefined && !plateIdentityKey(search.plate)) throw new Error('PLATE_REQUIRED');
+    let result: Awaited<ReturnType<typeof queryCanonicalProducts>>;
+    if (a.has('--memory')) {
+      const { MemoryDataStore } = await import('../infra/memory-store.js');
+      result = await queryCanonicalProducts(new MemoryDataStore(), search);
+    } else result = await queryFirestoreProducts(search);
+    await writePrivateArtifact(a.get('--local-output')!, result);
+    console.log(JSON.stringify({ status: 'LOCAL_RESULT_WRITTEN', matchedProducts: result.matchedProducts }));
+    return;
+  }
   const plate = (await readFile(a.get('--plate-file')!, 'utf8')).trim();
   let result: Awaited<ReturnType<typeof queryCanonicalByPlate>>;
   if (a.has('--direct')) {

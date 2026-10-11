@@ -27,6 +27,7 @@ export async function main() {
     rows: plan.summary.rows,
     historyRows: plan.summary.historyRows,
     uidMissing: plan.summary.uid.missing,
+    approxCount: plan.summary.approxCount,
     settlementRowsAccessCount: plan.summary.settlementRowsAccessCount,
     planDigest: plan.planDigest,
     publicReportDigest: stableDigest(plan.summary.publicReport),

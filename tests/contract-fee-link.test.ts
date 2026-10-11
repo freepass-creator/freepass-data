@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import addFormatsModule, { type FormatsPlugin } from 'ajv-formats';
+import contractFeeLinksSchema from '../contracts/contract-fee-links-v1.schema.json' with { type: 'json' };
 import type {
   ActorRef,
   EntityMeta,
@@ -151,6 +154,12 @@ const ledgerRow = (override: Partial<PeriodFeeLedgerRow> = {}): PeriodFeeLedgerR
   ...override,
 });
 
+const contractFeeLinksAjv = new Ajv2020({ strict: false });
+const addFormats = (addFormatsModule as unknown as { default?: FormatsPlugin }).default ?? addFormatsModule as unknown as FormatsPlugin;
+addFormats(contractFeeLinksAjv);
+contractFeeLinksAjv.addSchema(contractFeeLinksSchema);
+const validateContractFeeLinksResponse = contractFeeLinksAjv.getSchema('https://freepass.teamjpk.com/contracts/contract-fee-links-v1.schema.json#/$defs/response')!;
+
 describe('contract fee link', () => {
   it('links a contract row to the matching price term and confirmed internal fees', () => {
     const result = resolveContractFeeLink(baseInput(), baseData());
@@ -272,6 +281,77 @@ describe('contract fee link', () => {
 
     expect(result.status).toBe('FEE_UNCONFIRMED');
     expect(result.detail).toEqual({ reasonCodes: ['NO_RULE'] });
+  });
+
+  it('adds ledgerFee for an approximate ledger row without exposing vehicle value amounts', () => {
+    const result = resolveContractFeeLink(
+      { ...baseInput(), contractDate: '2026-10-10' },
+      { ...baseData(), ledgerRows: [ledgerRow({
+        valueAsOf: '2026-10-09',
+        supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 90000, currency: 'KRW' }, vatTreatment: 'EXCLUDED', vatAmount: 9000, totalAmount: 99000, reasonCode: 'VEHICLE_VALUE_APPROX', ruleId: 'rule', policyId: 'policy', sourceRefs: [] },
+        vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE', amount: 12345678, differenceAmount: 1000 },
+      })] },
+    );
+
+    expect(result.ledgerFee).toMatchObject({
+      status: 'CONFIRMED',
+      snapshotId: 'period-fee-2026-10-09',
+      valueAsOf: '2026-10-09',
+      supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 90000, currency: 'KRW' }, reasonCode: 'VEHICLE_VALUE_APPROX' },
+      vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE' },
+    });
+    expect(result.ledgerFee?.vehicleValueEvidence).not.toHaveProperty('amount');
+    expect(result.ledgerFee?.vehicleValueEvidence).not.toHaveProperty('differenceAmount');
+    expect(validateContractFeeLinksResponse({ contract: 'contract-fee-links/v1', results: [{ key: 'row', ...result }] })).toBe(true);
+  });
+
+  it('adds confirmed ledgerFee for a confirmed ledger row', () => {
+    const result = resolveContractFeeLink(
+      { ...baseInput(), contractDate: '2026-10-10' },
+      { ...baseData(), ledgerRows: [ledgerRow({ vehicleValueEvidence: { grade: 'CONFIRMED', source: 'SUPPLIER_RAW', amount: 20000000 } })] },
+    );
+
+    expect(result.ledgerFee).toMatchObject({
+      status: 'CONFIRMED',
+      supplierBillingFee: { state: 'CALCULATED', amount: { amount: 100000, currency: 'KRW' }, reasonCode: null },
+      channelPayoutFee: { state: 'CALCULATED', amount: { amount: 50000, currency: 'KRW' }, reasonCode: null },
+      vehicleValueEvidence: { grade: 'CONFIRMED', source: 'SUPPLIER_RAW' },
+    });
+  });
+
+  it('adds HOLD ledgerFee for a held ledger row without promoting unknown values', () => {
+    const result = resolveContractFeeLink(
+      { ...baseInput(), contractDate: '2026-10-10' },
+      { ...baseData(), ledgerRows: [ledgerRow({
+        applyState: 'HOLD',
+        holdReasonCode: 'MISSING_VEHICLE_VALUE',
+        supplierBillingFee: { state: 'UNKNOWN', amount: null, vatTreatment: null, vatAmount: null, totalAmount: null, reasonCode: 'MISSING_VEHICLE_VALUE', ruleId: null, policyId: null, sourceRefs: [] },
+        channelPayoutFee: { state: 'UNKNOWN', amount: null, vatTreatment: null, vatAmount: null, totalAmount: null, reasonCode: 'MISSING_VEHICLE_VALUE', ruleId: null, policyId: null, sourceRefs: [] },
+      })] },
+    );
+
+    expect(result.ledgerFee).toMatchObject({
+      status: 'HOLD',
+      reasonCode: 'MISSING_VEHICLE_VALUE',
+      supplierBillingFee: { state: 'UNKNOWN', amount: null, reasonCode: 'MISSING_VEHICLE_VALUE' },
+      channelPayoutFee: { state: 'UNKNOWN', amount: null, reasonCode: 'MISSING_VEHICLE_VALUE' },
+    });
+  });
+
+  it('never picks a ledger row of another vehicle or supplier even when rent and deposit match', () => {
+    const input = { ...baseInput(), contractDate: '2026-10-10' };
+    for (const other of [{ assetId: 'asset-2', vehicleUid: 'asset-2' }, { supplierId: 'RP002' }]) {
+      const result = resolveContractFeeLink(input, { ...baseData(), ledgerRows: [ledgerRow(other)] });
+      expect(result.ledgerFee).toMatchObject({ status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE' });
+    }
+    const mixed = resolveContractFeeLink(input, { ...baseData(), ledgerRows: [ledgerRow({ assetId: 'asset-2', vehicleUid: 'asset-2', snapshotId: 'period-fee-2026-10-09b' }), ledgerRow()] });
+    expect(mixed.ledgerFee?.status).toBe('CONFIRMED');
+    expect(mixed.ledgerFee?.snapshotId).toBe('period-fee-2026-10-09');
+  });
+
+  it('omits ledgerFee when ledger rows are absent or contractDate is absent', () => {
+    expect(resolveContractFeeLink({ ...baseInput(), contractDate: '2026-10-10' }, baseData()).ledgerFee).toBeUndefined();
+    expect(resolveContractFeeLink(baseInput(), { ...baseData(), ledgerRows: [ledgerRow()] }).ledgerFee).toBeUndefined();
   });
 
   it('read adapter only calls the three catalog list methods', async () => {

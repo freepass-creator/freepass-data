@@ -34,6 +34,19 @@ on:
         type: boolean
         default: true
   workflow_dispatch:
+    inputs:
+      verify_only:
+        type: boolean
+        default: false
+      expected_source_sha:
+        type: string
+        required: false
+      expected_image_digest:
+        type: string
+        required: false
+      expected_revision:
+        type: string
+        required: false
   push:
     branches: [main]
     paths:
@@ -50,6 +63,7 @@ permissions:
 
 jobs:
   deploy:
+    if: ${{ inputs.verify_only != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -63,7 +77,7 @@ jobs:
       GRANT_PUBLIC_INVOKER: ${{ inputs.grant_public_invoker || false }}
       MAX_INSTANCES: ${{ inputs.max_instances || 10 }}
       RUNTIME_CONCURRENCY: ${{ inputs.concurrency || 8 }}
-      USE_CONSUMER_SECRETS: ${{ inputs.use_consumer_secrets != false }}
+      USE_CONSUMER_SECRETS: ${{ toJSON(inputs.use_consumer_secrets) != 'false' }}
       CONSUMERS_SECRET_NAME: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_NAME }}
       CONSUMERS_SECRET_VERSION: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_VERSION }}
       IANCAR_SECRET_NAME: ${{ vars.FREEPASS_DATA_IANCAR_SECRET_NAME }}
@@ -179,6 +193,7 @@ jobs:
           if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
             : "${FREEPASS_SHEET_F04_ID:?MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID}"
             runtime_env="$runtime_env,FREEPASS_SHEET_F04_ID=$FREEPASS_SHEET_F04_ID"
+            public_runtime_args+=(--timeout=300s)
             # Existing private service only: keep binding values in this step's memory.
             before="$(gcloud run services describe "$SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format=json)"
             jq -e '.spec.template.spec.containers[0].env | any(.name == "FREEPASS_SHEET_F04_ID" and (.value | type == "string" and length > 0))' <<<"$before" >/dev/null
@@ -254,6 +269,7 @@ jobs:
           test "$deployed_image" = "$IMAGE_REF"
           if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
             test "$secret_version" = "$CONSUMERS_SECRET_VERSION"
+            test "$(jq -r '.spec.template.spec.timeoutSeconds' <<<"$service_json")" = "300"
             test "$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "EANCAR_ONE_API_KEY") | .valueFrom.secretKeyRef.name' <<<"$service_json")" = "$IANCAR_SECRET_NAME"
             test "$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "EANCAR_ONE_API_KEY") | .valueFrom.secretKeyRef.key' <<<"$service_json")" = "$IANCAR_SECRET_VERSION"
           else
@@ -288,7 +304,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Authenticate readback identity
-        if: ${{ inputs.use_consumer_secrets != false }}
+        if: ${{ env.USE_CONSUMER_SECRETS == 'true' }}
         id: readback-auth
         uses: google-github-actions/auth@v2
         with:
@@ -298,7 +314,7 @@ jobs:
           id_token_audience: ${{ steps.readiness.outputs.url }}
 
       - name: Verify IAM denial and authenticated compatibility readback
-        if: ${{ inputs.use_consumer_secrets != false }}
+        if: ${{ env.USE_CONSUMER_SECRETS == 'true' }}
         env:
           CLOUD_RUN_ID_TOKEN: ${{ steps.readback-auth.outputs.id_token }}
         shell: bash
@@ -349,7 +365,7 @@ jobs:
           echo "READ_RUNTIME_READBACK_OK=true" >> "$GITHUB_ENV"
 
       - name: Verify public runtime smoke
-        if: ${{ inputs.use_consumer_secrets == false && inputs.grant_public_invoker == true }}
+        if: ${{ env.USE_CONSUMER_SECRETS == 'false' && inputs.grant_public_invoker == true }}
         shell: bash
         run: |
           set -euo pipefail
@@ -418,3 +434,123 @@ jobs:
             echo 'No consumer token or credential value is recorded.'
           } > /tmp/read-runtime-evidence.md
           gh issue comment 209 --repo "$GITHUB_REPOSITORY" --body-file /tmp/read-runtime-evidence.md || true
+
+  verify:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_only == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_ID: freepasserp5
+      REGION: asia-northeast3
+      SERVICE_NAME: freepass-data-read
+      EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+      EXPECTED_IMAGE_DIGEST: ${{ inputs.expected_image_digest }}
+      EXPECTED_REVISION: ${{ inputs.expected_revision }}
+      RUNTIME_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_RUNTIME_SERVICE_ACCOUNT }}
+      CONSUMERS_SECRET_NAME: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_NAME }}
+      CONSUMERS_SECRET_VERSION: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_VERSION }}
+      IANCAR_SECRET_NAME: ${{ vars.FREEPASS_DATA_IANCAR_SECRET_NAME }}
+      IANCAR_SECRET_VERSION: ${{ vars.FREEPASS_DATA_IANCAR_SECRET_VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate verification scope before authentication
+        shell: bash
+        env:
+          VERIFY_PREFLIGHT_ONLY: 'true'
+        run: bash scripts/verify-read-runtime.sh
+      - name: Authenticate existing verification identity
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.FREEPASS_DATA_DEPLOY_WIF_PROVIDER }}
+          service_account: ${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: '579.0.0'
+      - name: Verify existing service metadata without deployment
+        id: readiness
+        shell: bash
+        run: bash scripts/verify-read-runtime.sh
+      - name: Authenticate readback identity
+        id: readback-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.FREEPASS_DATA_DEPLOY_WIF_PROVIDER }}
+          service_account: ${{ vars.FREEPASS_DATA_DEPLOY_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.readiness.outputs.url }}
+
+      - name: Verify IAM denial and authenticated compatibility readback
+        env:
+          CLOUD_RUN_ID_TOKEN: ${{ steps.readback-auth.outputs.id_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unauthenticated_status="$(curl --silent --show-error --output /dev/null \
+            --write-out '%{http_code}' \
+            "$READ_RUNTIME_DEPLOYED_URL/health")"
+          test "$unauthenticated_status" = "403"
+          echo "READ_RUNTIME_UNAUTHENTICATED_STATUS=$unauthenticated_status" >> "$GITHUB_ENV"
+
+          cloud_run_token="$CLOUD_RUN_ID_TOKEN"
+          consumer_token="$(gcloud secrets versions access "$CONSUMERS_SECRET_VERSION" \
+            --project="$PROJECT_ID" \
+            --secret="$CONSUMERS_SECRET_NAME" \
+            | jq -er '.[] | select(.id == "erp-com") | .token')"
+          echo "::add-mask::$consumer_token"
+          response_file="$(mktemp)"
+          headers_file="$(mktemp)"
+          trap 'rm -f "$response_file" "$headers_file"' EXIT
+          authenticated_status="$(curl --silent --show-error --output "$response_file" \
+            --dump-header "$headers_file" \
+            --write-out '%{http_code}' \
+            --header "X-Serverless-Authorization: Bearer $cloud_run_token" \
+            --header "Authorization: Bearer $consumer_token" \
+            "$READ_RUNTIME_DEPLOYED_URL/v1/consumers/erp-com/catalog-compat")"
+          echo "READ_RUNTIME_AUTHENTICATED_STATUS=$authenticated_status" >> "$GITHUB_ENV"
+          if [ "$authenticated_status" != "200" ]; then
+            echo "::error::Authenticated compatibility readback failed: HTTP $authenticated_status / UNRECOGNIZED"
+            exit 1
+          fi
+          if ! tr -d '\r' < "$headers_file" | grep -Eiq '^x-freepass-read-mode: DIRECT_FIRESTORE_REQUIRED$'; then
+            echo '::error::Direct Firestore read mode header missing or invalid'
+            exit 1
+          fi
+          if ! tr -d '\r' < "$headers_file" | grep -Eiq '^x-freepass-migration-status: LEGACY_READ_PENDING_RETIREMENT$'; then
+            echo '::error::Legacy migration status header missing or invalid'
+            exit 1
+          fi
+          echo "READ_RUNTIME_MIGRATION_SIGNAL_OK=true" >> "$GITHUB_ENV"
+          jq -e '
+            .schema == "freepass-data.catalog-compat/v1" and
+            (.data.products | type == "object") and
+            (.data.policies | type == "object") and
+            (.data.partners | type == "object")
+          ' "$response_file" >/dev/null
+          echo "READ_RUNTIME_READBACK_OK=true" >> "$GITHUB_ENV"
+
+      - name: Record verification summary
+        if: always()
+        env:
+          VERIFY_JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$VERIFY_JOB_STATUS" = "success" ]; then
+            test "${READ_RUNTIME_UNAUTHENTICATED_STATUS:-UNVERIFIED}" = "403"
+            test "${READ_RUNTIME_AUTHENTICATED_STATUS:-UNVERIFIED}" = "200"
+            test "${READ_RUNTIME_READBACK_OK:-false}" = "true"
+            test "${READ_RUNTIME_MIGRATION_SIGNAL_OK:-false}" = "true"
+          fi
+          {
+            echo '## Existing read runtime verification'
+            echo "Verification job: $VERIFY_JOB_STATUS"
+            echo "IAM denial: ${READ_RUNTIME_UNAUTHENTICATED_STATUS:-UNVERIFIED}"
+            echo "Compatibility response: ${READ_RUNTIME_AUTHENTICATED_STATUS:-UNVERIFIED}"
+            echo "Compatibility contract verified: ${READ_RUNTIME_READBACK_OK:-false}"
+            echo "Migration headers verified: ${READ_RUNTIME_MIGRATION_SIGNAL_OK:-false}"
+            echo 'This run performed no deployment or IAM mutation.'
+          } >> "$GITHUB_STEP_SUMMARY"

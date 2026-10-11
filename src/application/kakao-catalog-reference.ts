@@ -323,8 +323,15 @@ export const KAKAO_COMMISSION_POLICY_2026_10_04 = {
  */
 export const KAKAO_COMMISSION_POLICY = {
   ...KAKAO_COMMISSION_POLICY_2026_10_04,
-  policyId: 'sales-commission-2026-10-09',
-  decisionDate: '2026-10-09',
+  policyId: 'sales-commission-2026-10-11',
+  decisionDate: '2026-10-11',
+  rules: [...KAKAO_COMMISSION_POLICY_2026_10_04.rules,
+    { id: 'STANDARD_RERENT_1_BILLING_RENT_5_PERCENT', supplierGroup: 'STANDARD', product: 'RERENT', termMonths: 1, basis: 'MONTHLY_RENT', rateBasisPoints: 500, vatTreatment: 'EXCLUDED', coordinationRequired: false },
+    { id: 'STANDARD_RERENT_1_PAYOUT_RENT_5_PERCENT', supplierGroup: 'STANDARD', product: 'RERENT', termMonths: 1, basis: 'MONTHLY_RENT', rateBasisPoints: 500, vatTreatment: 'EXCLUDED', coordinationRequired: false },
+  ],
+  oneMonthBasic: { termMonths: 1, monthlyRentBasisPoints: 500, payoutPercentOfBilling: 100, vatTreatment: 'EXCLUDED',
+    authority: 'USER_DIRECT_DECISION_2026_10_11', sourceRef: 'USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT',
+    scope: 'EXISTING_BASIC_TERM_LADDER', supplierAndIndividualExceptionsTakePrecedence: true },
   supplierPolicyAssignments: {
     decisionDate: '2026-10-09',
     authority: 'USER_DIRECT_DECISION',
@@ -339,9 +346,10 @@ export const KAKAO_COMMISSION_POLICY = {
       authority: 'USER_DIRECT_DECISION_2026_10_09', appliesTo: 'SUBSCRIPTION',
       historicalSettlementRewrite: false },
   },
-  currentAuthority: 'F04 수수료표 A1:M191(2026-10-04 사본) + AI 상황실 2026-10-05 결정(손오공 60개월 +60만, 원 미만 반올림) + 2026-10-09 대표 기본회사 지정 및 빌린카 LC 36개월 월대여료100/80 확정',
+  currentAuthority: 'F04 수수료표 A1:M191(2026-10-04 사본) + AI 상황실 2026-10-05 결정(손오공 60개월 +60만, 원 미만 반올림) + 2026-10-09 대표 기본회사 지정 및 빌린카 LC 36개월 월대여료100/80 확정 + 2026-10-11 대표 1개월 월료5% 청구전액지급 VAT별도',
   evidenceHistory: [...KAKAO_COMMISSION_POLICY_2026_10_04.evidenceHistory,
-    { policyId: KAKAO_COMMISSION_POLICY_2026_10_04.policyId, observedAt: '2026-10-04', revision: '35de6d9fa96ad07fba2fb2d68a4cb1c9113b61a5' }],
+    { policyId: KAKAO_COMMISSION_POLICY_2026_10_04.policyId, observedAt: '2026-10-04', revision: '35de6d9fa96ad07fba2fb2d68a4cb1c9113b61a5' },
+    { policyId: 'sales-commission-2026-10-09', observedAt: '2026-10-09', revision: '1e1ea6894def6bebd3abe4d231471f3153ffdfea' }],
   sonokongAdditions: { ...KAKAO_COMMISSION_POLICY_2026_10_04.sonokongAdditions, 60: 600000 },
   sonokong60Evidence: { sourceRows: [14], evidence: 'private:ai-ops/정산-수수료규칙-20261005', decidedBy: 'AI 상황실 2026-10-05' },
   roundingRule: { rule: 'ROUND_HALF_UP_TO_WON', sourceRows: [171], evidence: 'private:ai-ops/정산-수수료규칙-20261005', decidedBy: 'AI 상황실 2026-10-05' },
@@ -473,6 +481,10 @@ const resolveTermLadder = (
     }
     return `${prefix}_${term}_${side}_${suffix}`;
   };
+  if (prefix === 'STANDARD_RERENT' && termMonths === KAKAO_COMMISSION_POLICY.oneMonthBasic.termMonths) {
+    return calculatedCommission(`STANDARD_RERENT_1_${side}_RENT_5_PERCENT`,
+      monthlyRent * KAKAO_COMMISSION_POLICY.oneMonthBasic.monthlyRentBasisPoints / 10000, 'EXCLUDED');
+  }
   if (termMonths === 12) return calculatedCommission(ruleId(12, 'FIXED'), fixed, 'EXCLUDED');
   const rates = side === 'BILLING'
     ? new Map([[24, 475], [36, 375], [48, 325], [60, 225]])
@@ -671,6 +683,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   if (result.reasonCode === 'DEPOSIT_TIER_REQUIRED') rows.push(172);
   // 근거 행은 계산된 결과에만 단다. UNKNOWN·NOT_APPLICABLE·협의는 reasonCode만 — 미등록 공급사가 「근거 있는 규칙」처럼 보이지 않게.
   if (result.state !== 'CALCULATED') return result;
+  if (id.startsWith('STANDARD_RERENT_1_')) return { ...result, sourceRefs: [KAKAO_COMMISSION_POLICY.oneMonthBasic.sourceRef] };
   if (id.startsWith('BILLIN_SUBSCRIPTION_36_RENT')) return { ...result, sourceRefs: ['USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80'] };
   return { ...result, sourceRefs: [...new Set(rows)].map(f04Ref) };
 }

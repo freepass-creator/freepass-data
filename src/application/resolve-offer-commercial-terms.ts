@@ -1,4 +1,5 @@
-import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
+import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Money, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import type { CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
 import { KAKAO_COMMISSION_POLICY, resolveSalesCommission, resolveSupplierBillingFee } from './kakao-catalog-reference.js';
 import type {
@@ -12,12 +13,66 @@ import type {
 const positiveSafeInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
+/** Existing approved vehicle-price rates need an explicit source fact; rent is not that fact. */
+export function refreshOfferEconomicsForChangedInputs(
+  previous: Offer, next: Offer, policyContextChanged: boolean, commercialType?: CommercialType, fuel?: string | null,
+  vehiclePriceChange?: { before: Money | null; after: Money | null; sourceRef: string },
+) {
+  if (typeof policyContextChanged !== 'boolean') throw new Error('POLICY_CONTEXT_CHANGE_DECISION_REQUIRED');
+  const candidate = precomputeOfferEconomics(next, commercialType, fuel);
+  const old = new Map((previous.internalEconomicsTerms ?? []).map(term => [term.termKey, term]));
+  const oldPrices = new Map(previous.priceTerms.map(term => [term.termKey, term]));
+  const changedPriceKeys = new Set(next.priceTerms.filter(term => stableDigest(oldPrices.get(term.termKey) ?? null) !== stableDigest(term)).map(term => term.termKey));
+  for (const key of oldPrices.keys()) if (!next.priceTerms.some(term => term.termKey === key)) changedPriceKeys.add(key);
+  const reference36Changed = stableDigest(previous.priceTerms.filter(term => term.termMonths === 36)) !==
+    stableDigest(next.priceTerms.filter(term => term.termMonths === 36));
+  const priceChanged = !!vehiclePriceChange && stableDigest(vehiclePriceChange.before) !== stableDigest(vehiclePriceChange.after);
+  return candidate.map(term => {
+    for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
+      const fee = old.get(term.termKey)?.[side];
+      if (!fee) continue;
+      if (fee.calculation?.kind !== 'RATE' || fee.calculation.base !== 'VEHICLE_PRICE') {
+        const referenceChanged = (fee.referenceRentBasis && changedPriceKeys.has(fee.referenceRentBasis.termKey)) ||
+          (fee.ruleId?.startsWith('BILLIN_SUBSCRIPTION_36_RENT') && reference36Changed);
+        if (!policyContextChanged && !changedPriceKeys.has(term.termKey) && !referenceChanged) term[side] = structuredClone(fee);
+        continue;
+      }
+      term[side] = structuredClone(fee);
+      const oldPrice = oldPrices.get(term.termKey), newPrice = next.priceTerms.find(price => price.termKey === term.termKey)!;
+      if (policyContextChanged || oldPrice?.termMonths !== newPrice.termMonths ||
+          oldPrice?.mileageLimitKmPerYear !== newPrice.mileageLimitKmPerYear) {
+        term[side] = { ...structuredClone(fee), state: 'UNKNOWN', amount: null, calculation: null,
+          sourceRefs: [], vatAmount: null, totalAmount: null, reasonCode: 'VEHICLE_PRICE_POLICY_CONTEXT_REVIEW_REQUIRED' };
+        continue;
+      }
+      if (!priceChanged) continue;
+      const fact = vehiclePriceChange!;
+      const valid = fact.after?.currency === 'KRW' && positiveSafeInteger(fact.after.amount) &&
+        !!fact.sourceRef.trim() && !!fee.ruleId && !!fee.policyId && fee.sourceRefs.some(ref => ref.trim()) &&
+        (fee.state === 'KNOWN' || fee.state === 'ZERO') && Number.isFinite(fee.calculation.rate) && fee.calculation.rate >= 0;
+      const amount = valid ? Math.round(fact.after!.amount * fee.calculation.rate) : null;
+      if (amount === null || !Number.isSafeInteger(amount) || amount < 0) {
+        term[side] = { ...structuredClone(fee), state: 'UNKNOWN', amount: null, calculation: null,
+          sourceRefs: [], vatAmount: null, totalAmount: null, reasonCode: 'VEHICLE_PRICE_EVIDENCE_REQUIRED' };
+        continue;
+      }
+      const vat = fee.vatTreatment === 'EXCLUDED' ? Math.round(amount * 0.1) :
+        fee.vatTreatment === 'INCLUDED' ? Math.round(amount / 11) : null;
+      term[side] = { ...structuredClone(fee), state: amount === 0 ? 'ZERO' : 'KNOWN',
+        amount: { amount, currency: 'KRW' }, priceSourceRefs: [fact.sourceRef], vatAmount: vat,
+        totalAmount: vat === null ? null : fee.vatTreatment === 'EXCLUDED' ? amount + vat : amount,
+        reasonCode: null };
+    }
+    return term;
+  });
+}
+
 /** Canonical save adapter for the existing pinned commission policy. No I/O or input mutation.
  * Fees are per whole contract, supply amounts excluding VAT; missing rules are not exemptions.
  * Reuses the period-fees prototype's fail-closed mapping without its compatibility storage path.
  */
 export function precomputeOfferEconomics(
-  offer: Pick<Offer, 'id' | 'supplierId' | 'priceTerms'>,
+  offer: Pick<Offer, 'id' | 'supplierId' | 'priceTerms'> & Pick<Partial<Offer>, 'internalEconomicsTerms'>,
   commercialType?: CommercialType,
   fuel?: string | null,
   evidenceByTerm: CommissionEvidenceByTerm = {},
@@ -36,6 +91,10 @@ export function precomputeOfferEconomics(
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
       billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
+      const saved = offer.internalEconomicsTerms?.find(candidate => candidate.termKey === term.termKey)?.[
+        side === 'BILLING' ? 'supplierBillingFee' : 'channelPayoutFee'];
+      // This adapter has no canonical vehicle-price fact. Never replace that approved basis with rent.
+      if (saved?.calculation?.kind === 'RATE' && saved.calculation.base === 'VEHICLE_PRICE') return structuredClone(saved);
       const base: Pick<TermEconomicAmount, 'ruleId' | 'policyId' | 'sourceRefs' | 'priceSourceRefs' | 'vatTreatment' | 'vatAmount' | 'totalAmount' | 'referenceRentBasis'> = { ruleId: result.ruleId, policyId: policy.policyId,
         sourceRefs: [] as string[], priceSourceRefs: [priceRef],
         vatTreatment: result.vatTreatment, vatAmount: result.vatAmount, totalAmount: result.totalAmount };
@@ -59,7 +118,24 @@ export function precomputeOfferEconomics(
       if (result.state !== 'CALCULATED' || result.amount === null) return unknown(result.reasonCode ?? 'NO_MATCHING_RULE');
 
       let calculation: TermEconomicAmount['calculation'];
-      if (result.ruleId?.endsWith('_RENT_X_TERM')) {
+      const monthlyRule = policy.rules.find(rule => rule.id === result.ruleId && 'basis' in rule && rule.basis === 'MONTHLY_RENT');
+      if (term.termMonths === 1 && result.ruleId?.startsWith('STANDARD_RERENT_1_') && monthlyRule &&
+          'rateBasisPoints' in monthlyRule && typeof monthlyRule.rateBasisPoints === 'number') {
+        // Existing supported RATE base equals monthly rent for a one-month contract.
+        // Legacy FIXED rows need the original confirmed policy evidence, not just a familiar rule ID.
+        if (saved?.calculation?.kind === 'FIXED') {
+          const storedTerm = offer.internalEconomicsTerms?.find(candidate => candidate.termKey === term.termKey);
+          const oldRent = storedTerm?.monthlyRent;
+          const verified = saved.ruleId === result.ruleId && saved.policyId === policy.policyId &&
+            saved.sourceRefs.includes(policy.oneMonthBasic.sourceRef) &&
+            (saved.state === 'KNOWN' || saved.state === 'ZERO') && oldRent?.currency === 'KRW' &&
+            positiveSafeInteger(oldRent.amount) && saved.amount?.currency === 'KRW' &&
+            saved.amount.amount === Math.round(oldRent.amount * monthlyRule.rateBasisPoints / 10000) &&
+            saved.calculation.amount.currency === 'KRW' && saved.calculation.amount.amount === saved.amount.amount;
+          if (!verified) throw new Error('LEGACY_RENT_FEE_BASIS_REVIEW_REQUIRED');
+        }
+        calculation = { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: monthlyRule.rateBasisPoints / 10000 };
+      } else if (result.ruleId?.endsWith('_RENT_X_TERM')) {
         // Read rates from the same policy table, including the Switch ladder alias.
         const billing = policy.rules.find((rule) => rule.id === 'STANDARD_RERENT_BILLING_LADDER')!;
         const payout = policy.rules.find((rule) => 'termMonths' in rule && rule.termMonths === term.termMonths &&

@@ -1,4 +1,7 @@
 import { readIancarPublishedDeposit } from '../src/domain/deposit-evidence.js';
+import { ingestRawSourceBatch } from '../src/application/ingest-raw-source.js';
+import { MemorySourceStore } from '../src/infra/source-memory-store.js';
+import { canAssertSourceAbsence } from '../src/domain/source.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildIancarOneSourceBatch,
@@ -640,6 +643,33 @@ describe('EANCAR ONE official partner API', () => {
       '2026-10-01T00:01:00.000Z');
     expect(capture.readyForRawIngest).toBe(false);
     expect(capture.issues).toContain(issue);
+  });
+
+  it('preserves the accepted head and RAW facts for a 40-minute-old source even when stale=false', async () => {
+    const store = new MemorySourceStore();
+    const supplied = vehicle('v1', { deposit: null, inventory_status: 'AVAILABLE', available: true });
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(page({
+      page: 1, total: 1, data: [supplied], syncedAt: '2026-10-01T00:00:00.000Z'
+    })), { status: 200 }));
+    const goodCapture = await collectIancarOneVehicleList(config, fetcher as typeof fetch,
+      '2026-10-01T00:01:00.000Z');
+    const good = await ingestRawSourceBatch(store, buildIancarOneSourceBatch(goodCapture),
+      '2026-10-01T00:01:00.000Z');
+    const originalHead = await store.getSourceHead(good.sourceId);
+    expect(originalHead).toMatchObject({ runId: good.runId });
+    const oldCapture = await collectIancarOneVehicleList(config, fetcher as typeof fetch,
+      '2026-10-01T00:40:00.000Z');
+    expect(oldCapture).toMatchObject({ syncedAt: goodCapture.syncedAt, stale: false,
+      total: 1, readyForRawIngest: false, issues: ['IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED'] });
+    const batch = buildIancarOneSourceBatch(oldCapture);
+    expect(batch.coverage).toMatchObject({ mode: 'PARTIAL', completeness: 'INCOMPLETE' });
+    expect(batch.coverage.note).toContain('IANCAR_ONE_SOURCE_FRESHNESS_EXCEEDED');
+    const held = await ingestRawSourceBatch(store, batch, '2026-10-01T00:40:00.000Z');
+    expect(held.headStatus).toBe('INELIGIBLE');
+    expect(canAssertSourceAbsence(held)).toBe(false);
+    expect(await store.getSourceHead(good.sourceId)).toEqual(originalHead);
+    expect((await store.listRaw(held.runId))[0]?.payload.source).toEqual(supplied);
+    expect((await store.getRun(good.runId))?.headStatus).toBe('CURRENT');
   });
 
   it('HOLDs pagination total drift even when observed rows match the first page', async () => {

@@ -67,6 +67,7 @@ import {
   type ContractFeeLinkInput,
   type ContractFeeLinkResult,
 } from '../application/contract-fee-link.js';
+import type { PeriodFeeLedgerRow } from '../application/period-fee-ledger-plan.js';
 import {
   assertSettlementLedgerReadRequest,
   type SettlementLedgerReadRequest,
@@ -75,6 +76,7 @@ import {
   buildPublicProductFeed,
   buildPublicProductQuote,
   publicConsumerIdFromWhitelabel,
+  type PublicProduct,
 } from './public-product-feed.js';
 import { logRouteError } from '../shared/route-error-log.js';
 import { assertPublicAllowlistsConfigured, publicProviderAllowlist, publicSingleQueryValue, publicWhitelabelAllowlist } from './public-allowlist.js';
@@ -105,6 +107,9 @@ type CatalogDataHealthStore =
   Parameters<typeof readCatalogDataHealth>[0] &
   Parameters<typeof readCatalogDataHealth>[1];
 type ContractFeeLinkStore = Pick<CatalogDataHealthStore, 'listVehicleAssets' | 'listProducts' | 'listOffers'>;
+type ContractFeeLinkLedgerRowsPort = {
+  listContractFeeLedgerRows(): Promise<readonly PeriodFeeLedgerRow[]>;
+};
 
 /** Server-owned registrations; a request can never select a collection or projection. */
 export function parseConsumerBindings(raw: string | undefined): RegisteredConsumerBinding[] {
@@ -117,7 +122,7 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     if (!entry || typeof entry !== 'object') throw new Error('Invalid consumer registration');
     const item = entry as Record<string, unknown>;
     // F01/F86/Admin need their own complete contracts; never silently map them to ERP.
-    if (typeof item.id !== 'string' || !/^(erp-com|erp5-public-media|kakao-ops|freepass-estimate|freepass-admin-catalog|(?:whitelabel|internal-ai)-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
+    if (typeof item.id !== 'string' || !/^(erp-com|erp5-public-media|erp5-public-catalog|kakao-ops|freepass-estimate|freepass-admin-catalog|(?:whitelabel|internal-ai)-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
       throw new Error('Consumer contract is not implemented for this registration');
     }
     const expectedProjection = item.id === 'freepass-estimate'
@@ -131,7 +136,7 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     }
     if (ids.has(item.id) || tokens.has(item.token)) throw new Error('Duplicate consumer ID or shared service token');
     const internalAi = item.id.startsWith('internal-ai-');
-    if (item.id === 'erp5-public-media' && item.capabilities === undefined) throw new Error('ERP5 media capability must be explicit');
+    if ((item.id === 'erp5-public-media' || item.id === 'erp5-public-catalog') && item.capabilities === undefined) throw new Error('ERP5 public consumer capability must be explicit');
     if (internalAi && item.capabilities === undefined) throw new Error('Internal AI capability must be explicit');
     const capabilities: ConsumerCapability[] = item.capabilities === undefined
       ? (item.id === 'freepass-estimate' ? ['estimate-newcar-master', 'estimate-artifacts'] : ['catalog'])
@@ -154,6 +159,9 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     if ((item.id === 'erp5-public-media' && (capabilities.length !== 1 || capabilities[0] !== 'photos'))
       || (item.id !== 'erp5-public-media' && capabilities.includes('photos')))
       throw new Error('ERP5 media registration requires its exclusive photos capability');
+    if (item.id === 'erp5-public-catalog' && (capabilities.length !== 1 || capabilities[0] !== 'catalog')) {
+      throw new Error('ERP5 public catalog registration requires its exclusive catalog capability');
+    }
     if (item.id === 'freepass-estimate') {
       if (capabilities.some((value) => !['estimate-newcar-master', 'estimate-artifacts'].includes(value))) {
         throw new Error('FreePass Estimate registration may only use Estimate capabilities');
@@ -213,6 +221,7 @@ class ConsumerReadError extends Error {
 }
 
 type PublicCatalogQuery = { p?: string; wl?: string; code?: string; a?: string };
+type PublicCatalogCompatProduct = PublicProduct & Record<string, unknown>;
 
 const PUBLIC_CACHE_MS = 45_000;
 const PUBLIC_TIMEOUT_MS = 5_000;
@@ -332,6 +341,39 @@ const consumerContext = (
   requestId
 });
 
+const publicCatalogCompatSnapshot = (
+  snapshot: CatalogCompatibilitySnapshot,
+  consumerId: 'erp5-public-catalog'
+): CatalogCompatibilitySnapshot => {
+  const feed = buildPublicProductFeed(snapshot, {});
+  const products = Object.fromEntries(feed.products.map((product) => [
+    product.publicProductKey,
+    product as PublicCatalogCompatProduct,
+  ]));
+  const policies = Object.fromEntries(feed.products
+    .filter((product) => product._policy)
+    .map((product) => [`${product.publicProductKey}:policy`, product._policy!]));
+  return {
+    ...snapshot,
+    data: {
+      products,
+      policies,
+      partners: {},
+      users: {},
+    },
+    meta: {
+      ...snapshot.meta,
+      consumerId,
+      collectionCounts: {
+        products: Object.keys(products).length,
+        policy: Object.keys(policies).length,
+        partners: 0,
+        users: 0,
+      },
+    },
+  };
+};
+
 export function createConsumerGateway(
   store: Pick<ProjectionStore, 'getActive' | 'getManifest' | 'listProjectionLineage'> &
     Partial<ProjectionEvidenceSnapshotStore>,
@@ -347,6 +389,7 @@ export function createConsumerGateway(
   },
   workflowStore?: AdminWorkflowStore,
   estimateArtifactStore?: EstimateArtifactStore,
+  contractFeeLedgerRowsPort?: ContractFeeLinkLedgerRowsPort,
 ) {
   // Validate again for callers constructing registrations without the environment parser.
   assertPublicAllowlistsConfigured();
@@ -771,7 +814,8 @@ export function createConsumerGateway(
           })
         })
       }, async () => {
-        const snapshot = await compatReader.read(binding.id);
+        const snapshot = await compatReader.read(binding.id === 'erp5-public-catalog' ? 'whitelabel-uniplan' : binding.id);
+        if (binding.id === 'erp5-public-catalog') return publicCatalogCompatSnapshot(snapshot, 'erp5-public-catalog');
         if (sourceScope !== 'COLLECTED') return snapshot;
         if (!compatReader.sourceStore) throw new Error('REFERENCE_SOURCE_STORE_UNAVAILABLE');
         const evidence = await readCurrentReferenceObservations(compatReader.sourceStore);
@@ -1210,11 +1254,14 @@ export function createConsumerGateway(
             feeStore.listProducts(),
             feeStore.listOffers(),
           ]);
+          const ledgerRows = contractFeeLedgerRowsPort
+            ? await contractFeeLedgerRowsPort.listContractFeeLedgerRows()
+            : undefined;
           return {
             contract: 'contract-fee-links/v1' as const,
             results: request.body.items.map(({ key, ...input }) => ({
               key,
-              ...resolveContractFeeLink(input, { assets, products, offers }),
+              ...resolveContractFeeLink(input, { assets, products, offers, ...(ledgerRows ? { ledgerRows } : {}) }),
             })),
           };
         });
