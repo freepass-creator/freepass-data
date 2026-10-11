@@ -6,6 +6,15 @@ on:
       runtime_source_sha:
         required: false
         type: string
+      expected_baseline_revision:
+        required: false
+        type: string
+      expected_baseline_source_sha:
+        required: false
+        type: string
+      expected_baseline_image_digest:
+        required: false
+        type: string
       service_name:
         required: false
         type: string
@@ -40,6 +49,15 @@ on:
     inputs:
       runtime_source_sha:
         description: Exact main ancestor for runtime source; empty uses workflow main
+        type: string
+        required: false
+      expected_baseline_revision:
+        type: string
+        required: false
+      expected_baseline_source_sha:
+        type: string
+        required: false
+      expected_baseline_image_digest:
         type: string
         required: false
       verify_only:
@@ -93,6 +111,10 @@ jobs:
       CONSUMERS_SECRET_VERSION: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_VERSION }}
       IANCAR_SECRET_NAME: ${{ vars.FREEPASS_DATA_IANCAR_SECRET_NAME }}
       IANCAR_SECRET_VERSION: ${{ vars.FREEPASS_DATA_IANCAR_SECRET_VERSION }}
+      REQUESTED_RUNTIME_SOURCE_SHA: ${{ inputs.runtime_source_sha }}
+      EXPECTED_BASELINE_REVISION: ${{ inputs.expected_baseline_revision }}
+      EXPECTED_BASELINE_SOURCE_SHA: ${{ inputs.expected_baseline_source_sha }}
+      EXPECTED_BASELINE_IMAGE_DIGEST: ${{ inputs.expected_baseline_image_digest }}
 
     steps:
       - uses: actions/checkout@v4
@@ -133,6 +155,15 @@ jobs:
           resolved="$(git rev-parse --verify "$source_sha^{commit}")"
           test "$resolved" = "$source_sha"
           git merge-base --is-ancestor "$resolved" "$GITHUB_SHA"
+          if [ -n "${REQUESTED_RUNTIME_SOURCE_SHA:-}" ]; then
+            [[ "${EXPECTED_BASELINE_REVISION:-}" =~ ^freepass-data-read-[0-9]{5}-[a-z0-9]+$ ]]
+            [[ "${EXPECTED_BASELINE_SOURCE_SHA:-}" =~ ^[a-f0-9]{40}$ ]]
+            [[ "${EXPECTED_BASELINE_IMAGE_DIGEST:-}" =~ ^sha256:[a-f0-9]{64}$ ]]
+            test "$USE_CONSUMER_SECRETS" = 'true'
+            test "$ALLOW_UNAUTHENTICATED" = 'false'
+            test "$GRANT_PUBLIC_INVOKER" = 'false'
+            test "$RUNTIME_ENTRYPOINT" = 'dist/src/api/consumer-server.js'
+          fi
           echo "sha=$resolved" >> "$GITHUB_OUTPUT"
           echo "EXPECTED_SOURCE_SHA=$resolved" >> "$GITHUB_ENV"
           echo "WORKFLOW_SOURCE_SHA=$GITHUB_SHA" >> "$GITHUB_ENV"
@@ -239,6 +270,28 @@ jobs:
             public_runtime_args+=(--timeout=300s)
             # Existing private service only: keep binding values in this step's memory.
             before="$(gcloud run services describe "$SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format=json)"
+            if [ -n "${REQUESTED_RUNTIME_SOURCE_SHA:-}" ]; then
+              test "$PROJECT_ID/$REGION/$SERVICE_NAME" = 'freepasserp5/asia-northeast3/freepass-data-read'
+              test "$RUNTIME_SERVICE_ACCOUNT" = 'freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com'
+              test "$MAX_INSTANCES/$RUNTIME_CONCURRENCY" = '10/8'
+              test "$CONSUMERS_SECRET_NAME/$CONSUMERS_SECRET_VERSION/$IANCAR_SECRET_NAME/$IANCAR_SECRET_VERSION" = 'freepass-data-consumers/5/freepass-data-iancar-one-api/1'
+              jq -e --arg revision "$EXPECTED_BASELINE_REVISION" --arg source "$EXPECTED_BASELINE_SOURCE_SHA" --arg digest "$EXPECTED_BASELINE_IMAGE_DIGEST" --arg account "$RUNTIME_SERVICE_ACCOUNT" '
+                .status.latestReadyRevisionName == $revision and .status.latestCreatedRevisionName == $revision and
+                (.status.conditions | any(.type == "Ready" and .status == "True")) and
+                (.status.traffic | length == 1 and .[0].revisionName == $revision and .[0].percent == 100) and
+                .status.url == "https://freepass-data-read-njl7veujva-du.a.run.app" and
+                .spec.template.spec.serviceAccountName == $account and
+                .spec.template.spec.timeoutSeconds == 300 and .spec.template.spec.containerConcurrency == 8 and
+                .spec.template.metadata.annotations["autoscaling.knative.dev/maxScale"] == "10" and
+                (.spec.template.spec.volumes | type == "array" and length == 0) and
+                (.spec.template.spec.containers | length == 1) and
+                ([.spec.template.spec.containers[0].env[]? | select(.name == "NODE_ENV" or .name == "FREEPASS_DATA_DRIVER" or .name == "FIREBASE_PROJECT_ID") | {name,value}] | sort_by(.name) == ([{name:"NODE_ENV",value:"production"},{name:"FREEPASS_DATA_DRIVER",value:"firestore"},{name:"FIREBASE_PROJECT_ID",value:"freepasserp5"}] | sort_by(.name))) and
+                .spec.template.spec.containers[0].resources.limits.memory == "512Mi" and
+                (.spec.template.spec.containers[0].ports | length == 1 and .[0].containerPort == 8080) and
+                .spec.template.spec.containers[0].image == ("asia-northeast3-docker.pkg.dev/freepasserp5/freepass-data/freepass-data-read:" + $source + "@" + $digest)
+              ' <<<"$before" >/dev/null
+              echo 'READ_RUNTIME_BASELINE_VERIFIED=true' >> "$GITHUB_ENV"
+            fi
             jq -e '.spec.template.spec.containers[0].env | any(.name == "FREEPASS_SHEET_F04_ID" and (.value | type == "string" and length > 0))' <<<"$before" >/dev/null
             existing_f04="$(jq -r '.spec.template.spec.containers[0].env[] | select(.name == "FREEPASS_SHEET_F04_ID") | .value' <<<"$before")"
             test "$existing_f04" = "$FREEPASS_SHEET_F04_ID"

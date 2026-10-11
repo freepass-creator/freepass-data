@@ -41,6 +41,10 @@ describe('trusted read runtime source selection', () => {
         const result = spawnSync(bash, ['-s'], { cwd: dir, input: script, encoding: 'utf8', env: {
           ...process.env, REQUESTED_RUNTIME_SOURCE_SHA: requested, GITHUB_REF: ref, GITHUB_SHA: head,
           GITHUB_OUTPUT: output, GITHUB_ENV: join(dir, 'env'),
+          EXPECTED_BASELINE_REVISION: 'freepass-data-read-00030-bfq', EXPECTED_BASELINE_SOURCE_SHA: ancestor,
+          EXPECTED_BASELINE_IMAGE_DIGEST: 'sha256:' + 'b'.repeat(64), USE_CONSUMER_SECRETS: 'true',
+          ALLOW_UNAUTHENTICATED: 'false', GRANT_PUBLIC_INVOKER: 'false',
+          RUNTIME_ENTRYPOINT: 'dist/src/api/consumer-server.js',
         } });
         expect(result.status === 0, `${requested}: ${result.stderr}`).toBe(pass);
         if (pass) expect(readFileSync(output, 'utf8')).toContain(`sha=${requested || main}`);
