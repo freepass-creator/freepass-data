@@ -2693,4 +2693,4 @@ This file exists so another session can continue without re-discovering or re-cr
 - 검증: 현재 build, 관련214 tests, architecture, standards33 schemas+15 tests, data-access boundary PASS. 최종 cumulative suite/CI/Claude 및 금액 담당의 기존 private fixture 전수 대조는 후속 PR의 exact head에 기록한다.
 - 남음: 운영 sourceScope grant/token 배포, 외부 Kakao/ERP caller, DB/Sheet/IAM/Drive/배포 변경 없음. CODED/TESTED와 실제 운영 전체 원천 조회는 구분한다.
 - next_start_here: 최종 scope head의 권한 pre-read denial/default 불변/빈 조건 schema/HOLD/복수 원천/같은 term 회귀와 private 원천 대조를 확인한 뒤 코드 통합만 진행한다. 현행 RP 코드를 새 정본 identity로 고정하지 않는다.
-- 2026-10-11 기간별 청구·지급 장부 설계: `docs/PERIOD-FEE-LEDGER-DESIGN.md` 작성(코드·운영쓰기·배포 없음); 재사용 판정은 기존 `internalEconomicsTerms`·#448 가격행 투영 재사용 + 차량별 일 박제 장부 `CREATE_NEW_JUSTIFIED`; next_start_here: 설계 승인 후 계획기 PR부터 시작.
+- 2026-10-11 기간별 청구·지급 장부 설계: `docs/PERIOD-FEE-LEDGER-DESIGN.md` 작성(코드·운영쓰기·배포 없음); 재사용 판정은 기존 `internalEconomicsTerms`·#448 가격행 투영 재사용 + 차량별 일 박제 장부 `CREATE_NEW_JUSTIFIED`; next_start_here: 10-12 읽기 전용 계획기(`plan:period-fee-ledger`, 쓰기0, UID 없음 HOLD_NO_UID, public/settlement 차단 테스트) 구현 검증 후 apply PR은 별도 승인 전까지 만들지 않는다.

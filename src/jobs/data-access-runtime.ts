@@ -49,6 +49,8 @@ import type {
 } from '../domain/consumer-cutover.js';
 import { createFirestoreDataStore } from '../infra/firestore-store.js';
 import { readVehicleUidMigrationInputs } from '../infra/vehicle-uid-migration-firestore-reader.js';
+import { readPeriodFeeLedgerPlanInputs } from '../infra/period-fee-ledger-firestore-reader.js';
+import { MemoryDataAccessLogStore } from '../infra/memory-data-access-log.js';
 import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
 import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
 import { createHttpVehicleMasterSourceFetcher } from '../infra/vehicle-master-source-fetcher.js';
@@ -170,6 +172,31 @@ export function createVehicleUidMigrationPlanRuntime() {
         }),
       }),
     }, readVehicleUidMigrationInputs),
+  };
+}
+
+export function createPeriodFeeLedgerPlanRuntime() {
+  const access = new DataAccessGateway(new MemoryDataAccessLogStore());
+  return {
+    readInputs: () => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-period-fee', kind: 'SERVICE' },
+        clientId: 'job:plan-period-fee-ledger',
+        purpose: 'read products and policies to prepare a zero-write period fee ledger plan',
+      },
+      operation: 'READ_PERIOD_FEE_LEDGER_PLAN_INPUTS',
+      resource: { kind: 'SOURCE', name: 'products+policy' },
+      summarize: (value) => ({
+        products: Object.keys(value.products).length,
+        policies: Object.keys(value.policies).length,
+        settlementRowsAccessCount: 0,
+        digest: stableDigest({
+          productKeys: Object.keys(value.products).sort(),
+          policyKeys: Object.keys(value.policies).sort(),
+          observedAt: value.observedAt,
+        }),
+      }),
+    }, readPeriodFeeLedgerPlanInputs),
   };
 }
 

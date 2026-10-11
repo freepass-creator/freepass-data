@@ -58,6 +58,11 @@ export const FIRESTORE_COLLECTIONS = Object.freeze({
     esignIssueLocks: 'esign_issue_lock',
     receipts: 'data_admin_workflow_receipts'
   }),
+  periodFees: Object.freeze({
+    ledger: 'period_fee_ledger',
+    snapshotRuns: 'period_fee_snapshot_runs',
+    productChangeHistory: 'product_change_history'
+  }),
   projection: Object.freeze({
     releases: 'projection_releases',
     manifests: 'projection_release_manifests',

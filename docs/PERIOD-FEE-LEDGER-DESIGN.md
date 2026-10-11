@@ -386,3 +386,7 @@ PR·시험·일정 반영:
 - 계획기 PR 테스트에는 “첫 snapshot은 변경 이력 0건, 기준선만 기록”, “직전 snapshot 대비 상태 차이 목록 생성”, “가격 기간 키별 월 대여료·보증금 상태 차이 생성”, “공개 응답 차단”을 넣는다.
 - 쓰기기 PR 테스트에는 “append-only”, “덮어쓰기·삭제 불가”, “같은 snapshot 재실행 멱등”, “동일 productKey+snapshotId+fieldPathHash 중복 차단”, “공개 차단”을 넣는다.
 - PR 분할은 계획기 PR에 상태·가격 이력 차이 목록을 포함하고, 박제 쓰기기 PR에 `period_fee_ledger`와 `product_change_history` 추가 전용 쓰기를 함께 다룬다.
+
+## 10-12 계획기 구현 상태
+
+10-12 계획기 구현은 읽기 전용이다. `src/application/period-fee-ledger-plan.ts`가 `products`/`policy` 입력을 받아 기존 `buildKakaoCatalogReferenceProduct` 투영의 기간별 `supplierBillingFee`·`channelPayoutFee`와 `withCompatibilityDepositEvidence` 계열 보증금 상태를 재사용해 `period_fee_ledger` 계획 행과 `product_change_history` 차이 목록을 만든다. 실행은 `PERIOD_FEE_LEDGER_PLAN_OUT=<저장소 밖 절대경로> npm.cmd run plan:period-fee-ledger`이며 stdout은 개수·digest만 출력하고 원본 상품 키는 비공개 계획 파일에만 남긴다. 현재 한계는 운영 쓰기/apply, active snapshot 포인터, 이전 snapshot 운영 readback 연결, 20대 지휘통제실 판정 묶음이 아직 없다는 점이다. UID 없는 행은 `HOLD_NO_UID`로 계획에만 포함하고 apply 대상에서 제외한다.
