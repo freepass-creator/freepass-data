@@ -135,6 +135,16 @@ describe('offer economics recompute', () => {
       .toMatchObject({amount:{amount:39},calculation:{kind:'RATE',rate:0.05}});
     expect(roundtrip.internalEconomicsTerms![0]!.supplierBillingFee.calculation!.kind).toBe('FIXED');
   });
+  it('refreshes legacy Billin fees without referenceRentBasis when the 36-month reference rent changes', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP021',priceTerms:[36,60].map(months=>({...original.priceTerms[0]!,termKey:`m${months}`,termMonths:months,monthlyRent:{amount:800000,currency:'KRW' as const}}))};
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'USED_SUBSCRIPTION');
+    for (const term of offer.internalEconomicsTerms) for (const side of ['supplierBillingFee','channelPayoutFee'] as const) delete (term[side] as { referenceRentBasis?: unknown }).referenceRentBasis;
+    const next=structuredClone(offer);next.priceTerms[0]!.monthlyRent.amount=900000;
+    const refreshed=refreshOfferEconomicsForChangedInputs(offer,next,false,'USED_SUBSCRIPTION');
+    expect(refreshed.map(term=>term.supplierBillingFee.amount!.amount)).toEqual([900000,900000]);
+  });
+
   it('does not change an apply plan scope through API options', async () => {
     const store=await fixture(), options=await prepare(store), tx=vi.spyOn(store,'transact');
     await expect(runOfferEconomicsRecompute(store,{...options,offerIds:[]})).rejects.toThrow('reviewed plan');

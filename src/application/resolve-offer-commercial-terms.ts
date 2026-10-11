@@ -100,6 +100,9 @@ export function refreshOfferEconomicsForChangedInputs(
   const newPrices = new Map(next.priceTerms.map(term => [term.termKey, term]));
   const changedPriceKeys = new Set(next.priceTerms.filter(term => stableDigest(oldPrices.get(term.termKey) ?? null) !== stableDigest(term)).map(term => term.termKey));
   for (const key of oldPrices.keys()) if (!next.priceTerms.some(term => term.termKey === key)) changedPriceKeys.add(key);
+  // 기준 행 메타데이터(referenceRentBasis)가 없는 옛 빌린 36개월 기준 수수료도 재계산한다(약화 금지).
+  const reference36Changed = stableDigest(previous.priceTerms.filter(term => term.termMonths === 36)) !==
+    stableDigest(next.priceTerms.filter(term => term.termMonths === 36));
   const priceChanged = !!vehiclePriceChange && stableDigest(vehiclePriceChange.before) !== stableDigest(vehiclePriceChange.after);
   const referenceCandidateChange = (current: PriceTerm, fee: TermEconomicAmount): { changed: boolean; exact: boolean } => {
     const basis = fee.referenceRentBasis;
@@ -116,9 +119,10 @@ export function refreshOfferEconomicsForChangedInputs(
       if (fee.calculation?.kind !== 'RATE' || fee.calculation.base !== 'VEHICLE_PRICE') {
         const newPrice = newPrices.get(term.termKey)!;
         const referenceChange = referenceCandidateChange(newPrice, fee);
-        const referenceChanged = referenceChange.changed;
+        const legacyBillinChanged = !fee.referenceRentBasis && !!fee.ruleId?.startsWith('BILLIN_SUBSCRIPTION_36_RENT') && reference36Changed;
+        const referenceChanged = referenceChange.changed || legacyBillinChanged;
         if (!policyContextChanged && !changedPriceKeys.has(term.termKey) && !referenceChanged) term[side] = structuredClone(fee);
-        else if (referenceChanged && !referenceChange.exact && term[side].state === 'KNOWN') term[side] = {
+        else if (referenceChange.changed && !referenceChange.exact && term[side].state === 'KNOWN') term[side] = {
           ...term[side], state: 'UNKNOWN', amount: null, calculation: null, sourceRefs: [],
           vatAmount: null, totalAmount: null,
           reasonCode: fee.referenceRentBasis?.termMonths === 12 ? 'Q12_BASIS_REQUIRED' : 'BILLIN_36_MONTH_RENT_REQUIRED',
