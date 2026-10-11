@@ -1,7 +1,65 @@
 process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
+import { MemorySourceStore } from '../src/infra/source-memory-store.js';
+import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
+import sheetSpec from '../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+import { projectReferenceObservation, readCurrentReferenceObservations, filterReferenceProducts } from '../src/application/kakao-catalog-reference.js';
+import type { RawRecord } from '../src/domain/source.js';
 import { readFileSync } from 'node:fs';
+
+describe('current source observations in existing private reference', () => {
+  const sourceId = sheetSpec.supplierManagement.sourceBinding.sourceId;
+  const at = '2026-10-11T00:00:00Z';
+  const fixture = (id: string, deposit: string): RawRecord => {
+    const values = sheetSpec.inputHeaders.map(() => '');
+    const set = (key: string, value: string) => { values[sheetSpec.inputHeaders.indexOf(key)] = value; };
+    for (const [key, value] of Object.entries({ 회사명: '렌트존', 차량번호: '신차', 차량상태: '출고협의', 상품구분: '신차렌트',
+      제조사: '기아', 모델: '레이', 장기보증: deposit, '48개월': '300000', '60개월': '280000', '옵션 원문': 'PRIVATE_PHONE_AND_CUSTOMER' })) set(key, value);
+    return { rawRecordId: id, sourceId, sourceRecordId: id, sourceFingerprint: id, runId: 'fixture-run', observedAt: at,
+      payload: { values, supplierCode: 'RP_FIXTURE', customerName: 'PRIVATE_CUSTOMER', token: 'PRIVATE_TOKEN' } };
+  };
+  it('keeps two rejected observations with separate original/normalized conditions, nullable identity and no PII payload', async () => {
+    const store = new MemorySourceStore();
+    await store.beginRun({ runId: 'fixture-run', sourceId, status: 'RUNNING', startedAt: at,
+      coverage: { mode: 'PARTIAL', completeness: 'COMPLETE' }, headStatus: 'PENDING', rawCount: 0, candidateCount: 0, warningCount: 0 });
+    for (const raw of [fixture('one', '500000'), fixture('two', '무보증')]) {
+      await store.appendRaw(raw); await store.appendCandidate(normalizeSharedSheet(raw).record);
+    }
+    await store.completeRun({ runId: 'fixture-run', completedAt: at, observedAt: at, checkpoint: { sourceId, observedAt: at },
+      coverage: { mode: 'PARTIAL', completeness: 'COMPLETE' }, rawCount: 2, candidateCount: 2, lineageCount: 0, warningCount: 2 });
+    const sourceObservations = await readCurrentReferenceObservations(store);
+    expect(sourceObservations.observations).toHaveLength(2);
+    const [paid, zero] = sourceObservations.observations;
+    expect(paid).toMatchObject({ vehicleAssetId: null, identityKind: 'CURRENT_SOURCE_ROW', representationKind: 'CURRENT_SOURCE_ROW_PRODUCT', publicationDecision: 'HOLD',
+      source: { candidateStatus: 'REJECTED' }, original: { plateNumber: '신차', status: '출고협의' }, normalized: { plateNumber: null } });
+    expect(paid!.normalizationIssues).toContain('PLATE_NOT_ASSIGNED');
+    expect(paid!.normalized.priceConditions[0]).toMatchObject({ depositAmount: 500000, depositState: 'KNOWN' });
+    expect(zero!.normalized.priceConditions[0]).toMatchObject({ depositAmount: 0, depositState: 'ZERO' });
+    expect(zero!.observationId).not.toBe(paid!.observationId);
+    expect(JSON.stringify(sourceObservations)).not.toMatch(/PRIVATE_|customerName|token/);
+    expect(new Set(paid!.facts.map(f => f.sourceRef.field))).toEqual(new Set(sheetSpec.inputHeaders));
+    const reference = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: at, sourceScope: 'COLLECTED', products: {}, sourceObservations });
+    const matched = filterReferenceProducts(reference, { sourceScope: 'COLLECTED', supplierName: '렌트존', model: '레이', termMonths: '48' });
+    expect(matched.data).toEqual(sourceObservations.observations);
+    expect(matched.sourceObservations!.observations).toEqual(sourceObservations.observations);
+    expect(filterReferenceProducts(reference, { sourceScope: 'COLLECTED', depositState: 'ZERO' }).sourceObservations!.observations).toEqual([zero]);
+    expect(filterReferenceProducts(reference, { sourceScope: 'COLLECTED', sourceObservationId: paid!.observationId }).sourceObservations!.observations).toEqual([paid]);
+    expect(filterReferenceProducts(reference, { sourceScope: 'COLLECTED', productId: paid!.observationId }).sourceObservations!.observations).toEqual([]);
+    expect(filterReferenceProducts(reference, { sourceScope: 'COLLECTED', productId: paid!.productId }).data).toEqual([paid]);
+    const defaultSource = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: at, products: { x: { listable: true, provider_company_code: 'RP_FIXTURE', price: { '48': { rent: 300000 } } } }, sourceObservations });
+    expect(defaultSource.sourceObservations).toBeUndefined();
+  });
+  it('fails closed on counts, foreign candidates and head drift without hiding partial source reads', async () => {
+    const raw = fixture('one', '무보증'), candidate = normalizeSharedSheet(raw).record;
+    const head = { sourceId, runId: raw.runId, observedAt: at, acceptedAt: at, checkpoint: { sourceId, observedAt: at }, coverage: { mode: 'PARTIAL' as const, completeness: 'COMPLETE' as const } };
+    const port = { getSourceHead: async () => head, getRun: async () => ({ ...head, status: 'COMPLETED', headStatus: 'CURRENT', rawCount: 2, candidateCount: 1 }),
+      listRaw: async () => [raw], listCandidates: async () => [candidate] } as unknown as Parameters<typeof readCurrentReferenceObservations>[0];
+    await expect(readCurrentReferenceObservations(port)).rejects.toThrow('REFERENCE_SOURCE_READ_INCOMPLETE');
+    expect(() => projectReferenceObservation(raw, { ...candidate, runId: 'foreign' })).toThrow('REFERENCE_SOURCE_CANDIDATE_MISMATCH');
+    expect(await readCurrentReferenceObservations({ getSourceHead: async () => null } as unknown as typeof port)).toMatchObject({ state: 'HOLD', reasonCode: 'SOURCE_HEAD_MISSING', observations: [] });
+  });
+});
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { precomputeOfferEconomics, readStoredTermFees } from '../src/application/resolve-offer-commercial-terms.js';
 import { withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';

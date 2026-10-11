@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Compute } from 'google-auth-library';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
+import { createFirestoreSourceStore } from './source-firestore-store.js';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
 import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 
@@ -180,6 +181,7 @@ export function isPublicIancarPhotoProduct(product: Record<string, unknown> | un
 
 export class FirestoreCatalogCompatibilityReader {
   private readonly db = getFirestore(getTargetFirebaseApp());
+  readonly sourceStore = createFirestoreSourceStore();
   constructor(photoReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>,
     approvedPhotoReader?: ApprovedPhotoReader) {
     this.readVehiclePhoto = createVehiclePhotoReader(async productId => (await this.db.collection('products').doc(productId).get()).data(), {
@@ -249,17 +251,17 @@ export class FirestoreCatalogCompatibilityReader {
     };
   }
 
-  async readKakaoReferenceSource(consumerId: string) {
+  async readKakaoReferenceSource(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }) {
     if (consumerId !== 'kakao-ops') throw new Error('KAKAO_REFERENCE_CONSUMER_NOT_ALLOWED');
-    return this.readReferenceProducts(consumerId);
+    return this.readReferenceProducts(consumerId, options);
   }
 
-  async readInternalAiReferenceSource(consumerId: string) {
+  async readInternalAiReferenceSource(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }) {
     if (!/^internal-ai-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId)) throw new Error('INTERNAL_AI_CONSUMER_NOT_ALLOWED');
-    return this.readReferenceProducts(consumerId);
+    return this.readReferenceProducts(consumerId, options);
   }
 
-  private async readReferenceProducts(consumerId: string) {
+  private async readReferenceProducts(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }) {
     const [products, policies, masterRead] = await Promise.all([
       this.db.collection('products').get(), this.db.collection('policy').get(),
       readVehicleMasterSnapshot().then(vehicleMasterSnapshot => ({ vehicleMasterSnapshot, vehicleMasterReadState: 'AVAILABLE' as const }))
