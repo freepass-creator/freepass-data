@@ -536,6 +536,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 단일 제공자 연결 규격 고정 — PR448 후속
+
+- 사용자 결정: 연결 규격을 정하고 Data가 제공한 값을 소비처가 읽는다. 목적은 그림자 서버에 두 번째 수수료 계산을 추가하는 것이 아니다.
+- 대상 revision: PR448 `83118e75ac2223e34b2a2f759c4475a25abd5f5e`의 기존 금액 개발선/checkout을 이어서 사용했다. Academy document READY; 루트 dirty 문서와 다른 작업은 보존한다.
+- 변경/정본: [기간별 상품 경제조건 연결 규격](READ-RUNTIME.md#period-economics-connection)에 기존 endpoint·schema·소비처별 권한·같은 기간 행 필드·출처·UNKNOWN/null·실패 처리를 한 곳에 고정했다. 새 계약 JSON·API·엔진·운영 데이터는 만들지 않았다.
+- 검증/남음: 기존 gateway/reference/compat 코드와 schema 및 ai-ops 기존 reader의 `erp-public` 검증을 대조하고 diff 검사 PASS. Claude 실제 ANSWERED/exit0는 기존 경로·권한·금액 필드·쓰기/노출 금지에 동의했고, 서버 내부 observations 배열과 HTTP sourceSnapshot의 혼동을 지적하여 정정했다. 로컬 그림자 공개 가격표와 정식 내부 reference는 다른 계약이다. PR만 유지하며 운영 배포·scope 등록·소비처 변경·실제 readback은 미실행이다.
+- next_start_here: 위 연결 규격을 기존 조회·소비처 담당이 적용한다. Data 배포/권한 게이트와 소비처 endpoint 변경을 따로 확인한 뒤 원천20개 대사 및 권한 거부를 확인한다. 정산 조회를 상품 가격표로 대체하지 않는다.
+
 ### 2026-10-11 원천 가격행 기간별 청구·지급 연결 — PR만
 
 - 목적: 차량번호로 조회하는 기존 원천 상품행에도 월대여료·보증금·청구(공급사→FreePass)·지급(FreePass→영업채널)을 함께 제공한다. 기존 legacy `offers.priceTerms`의 수수료 누락을 전제로 하지 않는다.

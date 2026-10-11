@@ -2,6 +2,26 @@
 
 Status: IMPLEMENTED / VALIDATION REQUIRED BEFORE DEPLOYMENT
 
+<a id="period-economics-connection"></a>
+
+## 기간별 상품 경제조건 연결 규격 — 2026-10-11 사용자 결정
+
+**한 제공자(FreePass Data) → 등록 소비처별 인증 조회 → 받은 기간별 값을 그대로 사용한다.** 별도 그림자 가격표나 소비처 수수료 엔진을 정본으로 만들지 않는다. GitHub는 이 규격·코드의 저장소이며 실상품 금액은 인증된 Data API로 읽는다. 이 절은 기존 endpoint/schema의 연결 안내이며 새 API·저장소·요율을 만들지 않는다.
+
+| 소비처 / 용도 | 기존 읽기 경로 | 실행 계약 / 경계 |
+|---|---|---|
+| 카톡 내부 상품·기간별 청구/지급 조회 | `GET /v1/consumers/kakao-ops/catalog-reference` | `contracts/kakao-catalog-reference-v1.schema.json`; 공개 `catalog`로 내부 금액을 대신 읽지 않음 |
+| 등록된 내부 AI 업무 조회 | `GET /v1/consumers/{internal-ai-consumerId}/internal-ai-reference` | `contracts/internal-ai-reference-v1.schema.json`; 기존 전용 identity/capability 필요 |
+| ERP 기존 입력 모양을 유지하는 호환 adapter | `GET /v1/consumers/erp-com/catalog-compat` | 기존 compatibility 계약과 adapter만 사용; 내부 금액을 공개 ERP/화이트라벨에 전달하지 않음 |
+
+- 접속 base URL·전용 Bearer token·필요한 서비스 인증은 기존 운영 설정에서 주입한다. 토큰을 URL·Git·화면에 넣지 않는다. `sourceScope=COLLECTED`는 현재 수집 상품행까지 요청하는 옵션이며 모든 위 경로에서 등록된 해당 scope가 있어야 한다. 등록이나 배포를 이 문서가 승인하지 않는다. 기본 `LISTABLE`을 전체 수집 조회라고 부르지 않는다.
+- 차량번호는 reference의 `plateNumber` 필터로 조회하고 공급사·상품은 기존 `supplierId`/`supplierName`/`productId` 필터를 사용한다. ERP compatibility 경로가 같은 필터를 받는다고 가정하지 않는다. 응답 schema/consumerId/authority/digest·관측 시각·scope를 확인하고, 같은 번호의 복수 상품은 기존 `queryResolution`의 HOLD를 보존한다. 차량번호 없는 행은 상품 ID로 조회하며 상품 없음으로 처리하지 않는다.
+- 기존 상품은 `data[].offers[].priceTerms[]`, `CURRENT_SOURCE_ROW_PRODUCT`는 `data[].normalized.priceConditions[]`에서 **동일 기간 행의** 월료·보증금·`supplierBillingFee`·`channelPayoutFee`를 읽는다. 전자는 `termKey`, 후자는 해당 상품/관측 ID와 기간 조건으로 귀속을 유지한다. 기간·거리·반납/인수 조건을 임의 합치거나 다른 행의 값을 가져오지 않는다. 상품행은 응답 `data` 한 곳에서 출력하며 `sourceObservations.sourceSnapshot`은 원천의 범위·관측·분모 근거다. 서버 내부 배열인 `sourceObservations.observations`를 HTTP 응답 필드라고 가정하지 않는다. ERP adapter는 동일 결과를 `data.products[productId].price[기간]`에 전달한다.
+- 월료는 기존 상품의 `monthlyRent.amount`, 원천 행의 `monthlyRentAmount`; 보증금은 각 계약의 `depositAmount`/`deposit.amount`와 상태를 함께 읽는다. 수수료 `amount`는 공급가액, `totalAmount`는 기존 엔진이 반환한 VAT 포함액이다. `CALCULATED`는 기준표 계산 가능이지 계약·청구·지급 확정이 아니다. UNKNOWN/null·NOT_APPLICABLE·사유·규칙/가격 출처와 행의 publication HOLD를 그대로 보존하며 빈 값을 0으로 채우지 않는다. 표시 형식 변환 외 소비처 재계산·추정은 하지 않는다.
+- 실패·403·schema 불일치·범위/관측 불명은 조회 실패/HOLD로 반환한다. 내부 수수료가 없는 공개 `catalog`, 임의 Firestore 읽기, 로컬 그림자 캐시로 조용히 대체하지 않는다. 로컬 그림자 서버가 모든 `/v1/consumers/*`를 같은 가격표로 반환하는 동작은 이 규격을 충족하지 않는다. 특히 `settlement-ledger/read`는 실제 정산 사실의 별도 계약이며 상품 가격표를 정산 결과로 재사용하지 않는다.
+- 소비처 연결 출발점(ai-ops 읽기 감사 `ea3961d`): 기존 `packages/core/freepass-data-consumer.mjs`의 공개 projection 전용 validator를 무조건 느슨하게 풀지 말고 내부 reference 계약을 별도로 검증하는 읽기 경로로 확장한다. `scripts/프리패스데이터-구조조회.mjs`와 `scripts/상품조회.ps1`의 호출·base URL·전용 인증·캐시 경계를 함께 맞춘다. `scripts/정산/대조-핵심.mjs`의 별도 공개 catalog 읽기도 용도에 맞춰 분리한다. 해당 제품 담당이 기존 파일을 수정하며 Data 안에 소비처 구현을 복제하지 않는다. 주소만 바꾸거나 `projectionId=erp-public` 검사만 없애는 것은 연결 완료가 아니다.
+- 반영 순서: PR448 검토 → 승인된 코드 반영/고정 revision 배포와 필요한 소비처 scope → 소비처가 위 endpoint·schema를 읽도록 기존 연결 수정 → 차량번호20개 실제 응답/원천/엔진 대사 및 권한 거부 확인. 이번 문서 변경은 규격 고정과 Git 게시이며 머지·배포·grant·그림자 서버 전환은 미실행이다. 실제 소비처 readback 전에는 연결 완료라고 하지 않는다.
+
 ## 2026-10-11 원천 상품행 기간별 청구·지급 연결 — 설계 / PR 범위
 
 - 목적/정본: main `f5e931889749ec869ae4b996725cc22aa8bf5784`(PR447), 실제 `CURRENT_SOURCE_ROW_PRODUCT`의 `normalized.priceConditions`와 ERP 내부 `catalog-compat`의 같은 기간 가격행에 청구(`supplierBillingFee`, 공급사→FreePass)·지급(`channelPayoutFee`, FreePass→영업채널)을 함께 제공한다. 기존 legacy `offers.priceTerms`에는 두 필드가 이미 있으므로 누락으로 간주하지 않는다.
