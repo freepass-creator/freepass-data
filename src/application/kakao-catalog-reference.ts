@@ -911,6 +911,13 @@ export function resolveReferencePolicyContext(source: Rec, policies: Record<stri
  */
 export function explicitNewProductSubtypeFromSource(source: Rec): 'NEW_PREDELIVERY' | 'NEW_MATCHING' | undefined {
   if (text(source.product_type) !== '신차렌트') return undefined;
+  const stated = statedNewProductSubtype(source);
+  // 대표 2026-10-12: 아이언(RP006)·우리캐피탈렌더카(RP020)는 시트의 신차렌트를 차량가액 기준 선출고 규칙(F04 139·50행)으로 읽는다.
+  // 원문에 견적출고가 명시되면 그것이 우선(위 stated).
+  return stated ?? (['RP006', 'RP020'].includes(text(source.provider_company_code)) ? 'NEW_PREDELIVERY' : undefined);
+}
+
+function statedNewProductSubtype(source: Rec): 'NEW_PREDELIVERY' | 'NEW_MATCHING' | undefined {
   const raw = source['원문'];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const all = (raw as Rec)['전체'];

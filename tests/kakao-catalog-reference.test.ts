@@ -9,6 +9,7 @@ import type { RawRecord } from '../src/domain/source.js';
 import { readFileSync } from 'node:fs';
 import { selectStoredProducts, FirestoreCatalogCompatibilityReader } from '../src/infra/erp5-compat-catalog-reader.js';
 import { readStoredConsumerProducts } from '../src/application/kakao-catalog-reference.js';
+import { evidenceByTermForProduct } from '../src/application/vehicle-value-evidence.js';
 
 describe('stored consumer product selection', () => {
   const products = {
@@ -1356,5 +1357,31 @@ describe('이안카형 원문 「구분」 신차 세부조건', () => {
   it('신차렌트가 아니거나 원문이 없으면 읽지 않는다', () => {
     expect(explicitNewProductSubtypeFromSource({ product_type: '중고렌트', 원문: { 전체: { 구분: '신차(선출고)' } } })).toBeUndefined();
     expect(explicitNewProductSubtypeFromSource({ product_type: '신차렌트' })).toBeUndefined();
+  });
+});
+
+describe('아이언·우리캐피탈 신차렌트 선출고 기준 (대표 10-12)', () => {
+  const fees = (supplier: string) => {
+    const product = { listable: true, provider_company_code: supplier, product_type: '신차렌트', price: { '36': { rent: 600000 } },
+      원문: { 전체: { 차량가격: '40,000,000' } } };
+    const { evidenceByTerm } = evidenceByTermForProduct(product, undefined);
+    return buildKakaoCatalogReferenceProduct('synthetic', product, evidenceByTerm)!.offers[0]!.priceTerms[0]!;
+  };
+  it('아이언은 차량가액 4% 청구·3% 지급(F04 139행)', () => {
+    const t = fees('RP006');
+    expect(t.supplierBillingFee).toMatchObject({ state: 'CALCULATED', amount: 1600000, ruleId: 'IRON_NEW_PREDELIVERY_BILLING' });
+    expect(t.channelPayoutFee).toMatchObject({ state: 'CALCULATED', amount: 1200000 });
+  });
+  it('우리캐피탈은 3.5% 청구·3.0% 지급(F04 50행)', () => {
+    const t = fees('RP020');
+    expect(t.supplierBillingFee).toMatchObject({ state: 'CALCULATED', amount: 1400000, sourceRefs: ['F04:수수료표!A50:M50'] });
+    expect(t.channelPayoutFee).toMatchObject({ state: 'CALCULATED', amount: 1200000 });
+  });
+  it('원문에 견적출고가 명시되면 선출고로 덮지 않는다', () => {
+    expect(explicitNewProductSubtypeFromSource({ product_type: '신차렌트', provider_company_code: 'RP020',
+      원문: { 전체: { 구분: '신차(견적출고)' } } })).toBe('NEW_MATCHING');
+  });
+  it('다른 공급사는 구분 명시가 없으면 읽지 않는다', () => {
+    expect(explicitNewProductSubtypeFromSource({ product_type: '신차렌트', provider_company_code: 'RP031' })).toBeUndefined();
   });
 });
