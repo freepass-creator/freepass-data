@@ -155,10 +155,18 @@ const ledgerRowMismatches = (input: Pick<ContractLedgerPickInput, 'monthlyRent' 
 
 const hasTimeComponent = (value: string) => /^\d{4}-\d{2}-\d{2}T/.test(value);
 
+const parseTime = (value: string | undefined) => {
+  if (!value) return NaN;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : NaN;
+};
+
 const observedBeforeContract = (row: PeriodFeeLedgerRow, input: Pick<ContractLedgerPickInput, 'contractDate' | 'contractAt'>) => {
   if (input.contractAt) {
     const rowTime = hasTimeComponent(row.valueAsOf) ? row.valueAsOf : row.computedAt;
-    return rowTime <= input.contractAt;
+    const rowMs = parseTime(rowTime);
+    const contractMs = parseTime(input.contractAt);
+    return Number.isFinite(rowMs) && Number.isFinite(contractMs) && rowMs < contractMs;
   }
   return row.valueAsOf < input.contractDate;
 };
