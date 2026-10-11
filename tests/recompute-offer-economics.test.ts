@@ -155,6 +155,9 @@ describe('offer economics recompute', () => {
     const ambiguous={...next,priceTerms:[...next.priceTerms,{...next.priceTerms[0]!,termKey:'m36-extra'}]};
     expect(refreshOfferEconomicsForChangedInputs(offer,ambiguous,false,'USED_SUBSCRIPTION').find(term=>term.termKey==='m60')!.supplierBillingFee)
       .toMatchObject({state:'UNKNOWN',amount:null});
+    const addedReference={...offer,priceTerms:[...offer.priceTerms,{...offer.priceTerms[0]!,termKey:'m36-extra',monthlyRent:{amount:900000,currency:'KRW' as const}}]};
+    expect(refreshOfferEconomicsForChangedInputs(offer,addedReference,false,'USED_SUBSCRIPTION').find(term=>term.termKey==='m60')!.supplierBillingFee)
+      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'BILLIN_36_MONTH_RENT_REQUIRED'});
   });
   it('refreshes Sonokong subscription fees when the referenced 12-month Q12 rent changes', async () => {
     const store=await fixture(), original=(await store.listOffers())[0]!;
@@ -182,6 +185,10 @@ describe('offer economics recompute', () => {
     expect(refreshed[1]!.channelPayoutFee).toMatchObject({
       amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
     });
+    const ambiguous=structuredClone(offer);
+    ambiguous.priceTerms.push({...ambiguous.priceTerms[0]!,termKey:`${ambiguous.priceTerms[0]!.termKey}-extra`,monthlyRent:{amount:900000,currency:'KRW'}});
+    expect(refreshOfferEconomicsForChangedInputs(offer,ambiguous,false,'OGONG_SUBSCRIPTION')[1]!.supplierBillingFee)
+      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'Q12_BASIS_REQUIRED'});
   });
   it('scopes plans to changed offer/product IDs and rejects missing offers without writes', async () => {
     const store = await fixture(), original = (await store.listOffers())[0]!;

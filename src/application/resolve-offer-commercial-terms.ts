@@ -97,16 +97,32 @@ export function refreshOfferEconomicsForChangedInputs(
   const candidate = precomputeOfferEconomics(next, commercialType, fuel);
   const old = new Map((previous.internalEconomicsTerms ?? []).map(term => [term.termKey, term]));
   const oldPrices = new Map(previous.priceTerms.map(term => [term.termKey, term]));
+  const newPrices = new Map(next.priceTerms.map(term => [term.termKey, term]));
   const changedPriceKeys = new Set(next.priceTerms.filter(term => stableDigest(oldPrices.get(term.termKey) ?? null) !== stableDigest(term)).map(term => term.termKey));
   for (const key of oldPrices.keys()) if (!next.priceTerms.some(term => term.termKey === key)) changedPriceKeys.add(key);
   const priceChanged = !!vehiclePriceChange && stableDigest(vehiclePriceChange.before) !== stableDigest(vehiclePriceChange.after);
+  const referenceCandidateChange = (current: PriceTerm, fee: TermEconomicAmount): { changed: boolean; exact: boolean } => {
+    const basis = fee.referenceRentBasis;
+    if (!basis) return { changed: false, exact: false };
+    const matches = (candidate: PriceTerm | undefined) => !!candidate && candidate.termMonths === basis.termMonths
+      && candidate.mileageLimitKmPerYear === current.mileageLimitKmPerYear;
+    const changed = [...changedPriceKeys].filter(key => matches(newPrices.get(key)) || matches(oldPrices.get(key)));
+    return { changed: changed.length > 0, exact: changed.some(key => key === basis.termKey) };
+  };
   return candidate.map(term => {
     for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
       const fee = old.get(term.termKey)?.[side];
       if (!fee) continue;
       if (fee.calculation?.kind !== 'RATE' || fee.calculation.base !== 'VEHICLE_PRICE') {
-        const referenceChanged = !!fee.referenceRentBasis && changedPriceKeys.has(fee.referenceRentBasis.termKey);
+        const newPrice = newPrices.get(term.termKey)!;
+        const referenceChange = referenceCandidateChange(newPrice, fee);
+        const referenceChanged = referenceChange.changed;
         if (!policyContextChanged && !changedPriceKeys.has(term.termKey) && !referenceChanged) term[side] = structuredClone(fee);
+        else if (referenceChanged && !referenceChange.exact && term[side].state === 'KNOWN') term[side] = {
+          ...term[side], state: 'UNKNOWN', amount: null, calculation: null, sourceRefs: [],
+          vatAmount: null, totalAmount: null,
+          reasonCode: fee.referenceRentBasis?.termMonths === 12 ? 'Q12_BASIS_REQUIRED' : 'BILLIN_36_MONTH_RENT_REQUIRED',
+        };
         continue;
       }
       term[side] = structuredClone(fee);
