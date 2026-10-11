@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import publicSchema from '../contracts/public-product-feed-v1.schema.json' with { type: 'json' };
-import { createConsumerGateway, type ConsumerBinding } from '../src/api/consumer-gateway.js';
+import { createConsumerGateway, parseConsumerBindings, type ConsumerBinding } from '../src/api/consumer-gateway.js';
 import { DataAccessGateway } from '../src/application/data-access-gateway.js';
 import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
 import { publicRuntimeStatsForTest, resetPublicRuntimeForTest } from '../src/api/consumer-gateway.js';
@@ -12,6 +12,7 @@ const token = 'test-service-token-0123456789abcdef';
 const bindings: ConsumerBinding[] = [
   { id: 'erp-com', projectionId: 'erp-public', token },
   { id: 'whitelabel-uniplan', projectionId: 'erp-public', token: token + '-wl' },
+  { id: 'erp5-public-catalog', projectionId: 'erp-public', token: token + '-erp5-catalog', capabilities: ['catalog'] },
 ];
 
 const snapshot = (products: Record<string, Record<string, unknown>>): CatalogCompatibilitySnapshot => ({
@@ -149,6 +150,94 @@ describe('public product feed v1', () => {
     expect(JSON.stringify(feed)).not.toContain('supplierBillingFee');
     expect(JSON.stringify(feed)).not.toContain('channelPayoutFee');
     expect(JSON.stringify(feed)).not.toContain('"vin"');
+  });
+
+  it('registers erp5-public-catalog only with explicit catalog capability', () => {
+    expect(parseConsumerBindings(JSON.stringify([
+      { id: 'erp5-public-catalog', projectionId: 'erp-public', token: token + '-erp5-catalog', capabilities: ['catalog'] },
+    ]))).toMatchObject([{ id: 'erp5-public-catalog', capabilities: ['catalog'] }]);
+    expect(() => parseConsumerBindings(JSON.stringify([
+      { id: 'erp5-public-catalog', projectionId: 'erp-public', token: token + '-implicit' },
+    ]))).toThrow('ERP5 public consumer capability must be explicit');
+    expect(() => parseConsumerBindings(JSON.stringify([
+      { id: 'erp5-public-catalog', projectionId: 'erp-public', token: token + '-fees', capabilities: ['catalog', 'contract-fee-link-read'] },
+    ]))).toThrow('ERP5 public catalog registration requires its exclusive catalog capability');
+    expect(() => parseConsumerBindings(JSON.stringify([
+      { id: 'erp5-public-catalog', projectionId: 'erp-public', token: token + '-photos', capabilities: ['photos'] },
+    ]))).toThrow('ERP5 media registration requires its exclusive photos capability');
+  });
+
+  it('serves erp5-public-catalog through the whitelabel public exposure filter without fees, margin, vin or raw fields', async () => {
+    let readConsumerId = '';
+    const access = new DataAccessGateway(new MemoryDataAccessLogStore());
+    const app = createConsumerGateway(
+      { getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] },
+      bindings,
+      access,
+      undefined,
+      { read: async (consumerId) => { readConsumerId = consumerId; return snapshot({ P1: product({
+        _source_row_product: { raw: 'PRIVATE_RAW', supplierBillingFee: 1 },
+        price: { '36': { rent: 500000, deposit: 1000000, depositState: 'KNOWN',
+          supplierBillingFee: 1, channelPayoutFee: 1, expectedGrossMargin: { amount: 1234 } } },
+      }) }); } },
+    );
+    const response = await app.inject({
+      url: '/v1/consumers/erp5-public-catalog/catalog-compat',
+      headers: { authorization: `Bearer ${token}-erp5-catalog` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(readConsumerId).toBe('whitelabel-uniplan');
+    const body = response.json();
+    expect(body.meta.consumerId).toBe('erp5-public-catalog');
+    expect(body.data.products.P1.price['36']).toEqual({ rent: 500000, deposit: 1000000, depositState: 'KNOWN' });
+    expect(JSON.stringify(body)).not.toMatch(/supplierBillingFee|channelPayoutFee|expectedGrossMargin|margin|vin|_source_row_product|PRIVATE_RAW/);
+    await app.close();
+  });
+
+  it('rejects cross-consumer tokens and non-catalog erp5-public-catalog routes without logging token plaintext', async () => {
+    const app = appWith(snapshot({ P1: product() }));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const erp5Token = `${token}-erp5-catalog`;
+    try {
+      const wrongToken = await app.inject({
+        url: '/v1/consumers/erp5-public-catalog/catalog-compat',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(wrongToken.statusCode).toBe(401);
+      expect(wrongToken.body).not.toContain(token);
+
+      const wrongConsumer = await app.inject({
+        url: '/v1/consumers/erp-com/catalog-compat',
+        headers: { authorization: `Bearer ${erp5Token}` },
+      });
+      expect(wrongConsumer.statusCode).toBe(401);
+      expect(wrongConsumer.body).not.toContain(erp5Token);
+
+      const photos = await app.inject({
+        url: '/v1/consumers/erp5-public-catalog/catalog-compat/products/P1/photos',
+        headers: { authorization: `Bearer ${erp5Token}` },
+      });
+      expect(photos.statusCode).toBe(403);
+      expect(photos.body).not.toContain(erp5Token);
+
+      const health = await app.inject({
+        url: '/v1/consumers/erp5-public-catalog/catalog-health',
+        headers: { authorization: `Bearer ${erp5Token}` },
+      });
+      expect(health.statusCode).toBe(403);
+      expect(health.body).not.toContain(erp5Token);
+
+      await app.inject({
+        url: '/v1/consumers/erp5-public-catalog/catalog-compat',
+        headers: { authorization: `Bearer ${erp5Token}` },
+      });
+      const logged = spy.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logged).not.toContain(erp5Token);
+      expect(logged).not.toContain(token);
+    } finally {
+      spy.mockRestore();
+      await app.close();
+    }
   });
 
   it('strips source-row fee, margin and provenance from nested prices even if a downstream caller marks it listable', () => {
