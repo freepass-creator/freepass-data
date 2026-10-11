@@ -5,10 +5,11 @@ import type { SourceVehicleFacts } from '../domain/source-vehicle-facts.js';
 import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
-import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION, type IdentityChoice, type VehicleIdentity, type VehicleMasterRecord } from '../domain/vehicle-identity-resolution.js';
+import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION, type IdentityChoice, type VehicleIdentity, type VehicleMasterRecord, type VehicleIdentitySpecs } from '../domain/vehicle-identity-resolution.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWaiverFieldForTermMonths } from '../domain/deposit-evidence.js';
-export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/5';
+export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/7';
+export const SHARED_SHEET_COLOR_RULE_VERSION = 'shared-sheet-normalizer/8';
 export type SharedSheetNormalizationOptions = { includeSupplierColors?: boolean };
 export type SharedSheetMasterEvidence = { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
 /** AI 상황실 2026-10-04 (대표): every car is stored. The sheet status text is kept as-is; it only decides sale exposure.
@@ -52,13 +53,13 @@ function registration(s: string, raw: unknown): string | null {
 /** Does not infer missing F03 cells from names or borrow another supplier's data. */
 export type SharedSheetNormalized = { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[]; suppliedTerms: number };
 /** Vehicle identity policy for one row: sheet 4 cells, source text and dates in → DATA/SHEET/HOLD decision out. */
-export type SharedSheetIdentityResolver = (row: { sheet: VehicleIdentity; plate: string; raw: string; firstRegistration: string; modelYear: string }) => IdentityChoice;
+export type SharedSheetIdentityResolver = (row: { sheet: VehicleIdentity; plate: string; raw: string; firstRegistration: string; modelYear: string; specs?: VehicleIdentitySpecs }) => IdentityChoice;
 export const normalizeSharedSheet = (raw: RawRecord, master?: SharedSheetMasterEvidence, options?: SharedSheetNormalizationOptions): SharedSheetNormalized => normalizeSharedSheetWith(raw, undefined, master, options);
 /** Names must resolve to the sealed active Data master. Missing or conflicting evidence remains HOLD. */
 export const sharedSheetNormalizer = (identity?: SharedSheetIdentityResolver, master?: SharedSheetMasterEvidence, options?: SharedSheetNormalizationOptions) => (raw: RawRecord): SharedSheetNormalized => normalizeSharedSheetWith(raw, identity, master, options);
 function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentityResolver, master?: SharedSheetMasterEvidence, options?: SharedSheetNormalizationOptions): SharedSheetNormalized {
-  // Opt-in until the existing reviewed source-facts migration is prepared; daily v5 stays unchanged.
-  const ruleVersion = options?.includeSupplierColors ? 'shared-sheet-normalizer/6' : SHARED_SHEET_RULE_VERSION;
+  // Color facts remain opt-in; both variants use the same identity evidence contract.
+  const ruleVersion = options?.includeSupplierColors ? SHARED_SHEET_COLOR_RULE_VERSION : SHARED_SHEET_RULE_VERSION;
   const values = raw.payload.values as unknown[];
   const at = (header: string) => values[spec.inputHeaders.indexOf(header)];
   const text = (header: string) => String(at(header) ?? '').trim();
@@ -72,13 +73,31 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     issues.push(...reasons);
     return value;
   };
+  const y = field('modelYear', '연식', year);
+  const reg = field('firstRegistration', '최초등록일', s => registration(s, at('최초등록일')));
+  if (typeof y === 'number' && typeof reg === 'string' && Number(reg.slice(0, 4)) !== y) issues.push('YEAR_REGISTRATION_MISMATCH');
+  const fuelAliases: Record<string, string> = { HEV: '하이브리드', PHEV: '플러그인하이브리드', EV: '전기', 휘발유: '가솔린', 경유: '디젤' };
+  field('fuel', '연료', s => spec.dropdowns['연료'].includes(s) ? s : fuelAliases[s.toUpperCase()] ?? null);
+  field('displacementCc', '배기량', s => number(s, 'cc'));
+  field('seats', '인승', s => { const n = number(s, '인승'); return n !== null && n > 0 && n <= 100 ? n : null; });
+  field('drive', '구동방식', s => ['2WD', 'AWD', '4WD'].includes(s.toUpperCase()) ? s.toUpperCase() :
+    ['FWD', 'RWD'].includes(s.toUpperCase()) ? '2WD' : ['4MATIC', '콰트로'].includes(s) ? 'AWD' : null);
+  const identitySpecs: VehicleIdentitySpecs = {};
+  for (const key of ['fuel', 'displacementCc', 'seats', 'drive', 'modelYear'] as const) {
+    const fact = facts.fields[key];
+    if (fact?.state !== 'MISSING' && fact) Object.assign(identitySpecs, { [key]: fact.value });
+  }
   const sheetIdentity = spec.vehicleMaster.refineOrder.map(h => text(h)) as unknown as VehicleIdentity;
   const row = { sheet: sheetIdentity, plate: plateIdentityKey(at('차량번호')), raw: text('차명 원문'),
-    firstRegistration: text('최초등록일'), modelYear: text('연식') };
-  const choice: IdentityChoice = typeof raw.payload.quarantine === 'string'
+    firstRegistration: typeof reg === 'string' ? reg : '', modelYear: text('연식'), specs: identitySpecs };
+  let choice: IdentityChoice = typeof raw.payload.quarantine === 'string'
     ? { pick: 'HOLD', identity: null, dataIdentity: null, notes: ['SOURCE_QUARANTINED'] }
     : identity ? identity(row) : master ? chooseVehicleIdentity(indexVehicleMaster(master.records), { ...row, data: null })
     : { pick: 'HOLD', identity: null, dataIdentity: null, notes: ['VEHICLE_MASTER_SNAPSHOT_REQUIRED'] };
+  // Validate callback-selected IDs against supplied facts too; never override its HOLD.
+  if (identity && master && choice.pick !== 'HOLD') {
+    choice = chooseVehicleIdentity(indexVehicleMaster(master.records), { ...row, data: choice.dataIdentity });
+  }
   if (choice) {
     // The sheet cells stay as evidence; the decision and the Data value are recorded beside them.
     facts.fields.vehicleIdentitySource = { value: choice.pick === 'HOLD' ? null : 'FREEPASS_DATA',
@@ -101,15 +120,6 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     else field(key, h, s => missing ? null : s);
     if (!v) issues.push('VEHICLE_IDENTITY_INCOMPLETE');
   }
-  const y = field('modelYear', '연식', year);
-  const reg = field('firstRegistration', '최초등록일', s => registration(s, at('최초등록일')));
-  if (typeof y === 'number' && typeof reg === 'string' && Number(reg.slice(0, 4)) !== y) issues.push('YEAR_REGISTRATION_MISMATCH');
-  const fuelAliases: Record<string, string> = { HEV: '하이브리드', PHEV: '플러그인하이브리드', EV: '전기', 휘발유: '가솔린', 경유: '디젤' };
-  field('fuel', '연료', s => spec.dropdowns['연료'].includes(s) ? s : fuelAliases[s.toUpperCase()] ?? null);
-  field('displacementCc', '배기량', s => number(s, 'cc'));
-  field('seats', '인승', s => { const n = number(s, '인승'); return n !== null && n > 0 && n <= 100 ? n : null; });
-  field('drive', '구동방식', s => ['2WD', 'AWD', '4WD'].includes(s.toUpperCase()) ? s.toUpperCase() :
-    ['FWD', 'RWD'].includes(s.toUpperCase()) ? '2WD' : ['4MATIC', '콰트로'].includes(s) ? 'AWD' : null);
   field('batteryKwh', '배터리용량', s => number(s, 'kWh', true));
   field('mileageKm', '주행거리', s => number(s, 'km'));
   // Supplier-entered color text is a fact, not an inferred paint code or master alias.

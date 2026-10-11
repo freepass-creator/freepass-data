@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { chooseVehicleIdentity, indexVehicleMaster, type VehicleIdentity } from '../src/domain/vehicle-identity-resolution.js';
+import { chooseVehicleIdentity, indexVehicleMaster, type VehicleIdentity, type VehicleIdentitySpecs } from '../src/domain/vehicle-identity-resolution.js';
 import { assertVehicleIdentityInputs, buildVehicleIdentityInputs, verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../src/adapters/vehicle-identity-inputs.js';
 import type { Erp5SourceCapture } from '../src/adapters/erp5-source-capture.js';
+import { identityResolver } from '../src/jobs/ingest-shared-sheet-canonical.js';
+import { stableDigest } from '../src/shared/stable-digest.js';
 const names = ['현대', '쏘나타', '쏘나타 DN8', '스마트'] as const;
 function snapshot(extra: Record<string, unknown> = {}): VehicleMasterSnapshot {
   const body = { readAt: new Date().toISOString(),
@@ -20,6 +22,61 @@ function capture(): Erp5SourceCapture {
 const input = (sheet: VehicleIdentity, data: VehicleIdentity | null = null) =>
   ({ sheet, data, raw: '쏘나타 DN8 스마트', firstRegistration: '', modelYear: '' });
 describe('one active Data master authority', () => {
+  it('forwards parsed specs through the existing ingestion resolver for ambiguous names', () => {
+    const master = snapshot({ fuel: 'LPG', engine_cc: 1999, drivetrain: 'FWD', seats: 5,
+      model_year_start: '2024', model_year_end: '2025' });
+    master.trims.push({ id: 't2', data: { ...master.trims[0]!.data, engine_cc: 2000 } });
+    const { readAt, masters, trims } = master;
+    master.digest = createHash('sha256').update(JSON.stringify({ readAt, masters, trims })).digest('hex');
+    const resolve = identityResolver({ schema: 'vehicle-identity-inputs/v2', master,
+      data: [], dataReadTime: readAt, dataDigest: stableDigest([]) })!;
+    const row = { ...input(names), plate: 'TEST-FAKE-001' };
+    expect(resolve(row).pick).toBe('HOLD');
+    expect(resolve({ ...row, specs: { displacementCc: 1999, modelYear: 2025 } }))
+      .toMatchObject({ pick: 'SHEET', masterId: 'm1', trimId: 't1' });
+  });
+  it('uses exact supplied specs and model year to select an immutable pair, never the first same-name ID', () => {
+    const records = ['t-old', 't-new'].map((trimId, i) => ({ masterId: 'm1', trimId, names, aliases: names.map(n => [n]),
+      specs: { fuel: 'LPG', displacementCc: 1999, drive: '2WD', seats: 5 },
+      modelYearStart: i ? 2026 : 2024, modelYearEnd: i ? 2100 : 2025 }));
+    const master = indexVehicleMaster(records);
+    expect(chooseVehicleIdentity(master, input(names)).pick).toBe('HOLD');
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { fuel: 'LPG', displacementCc: 1999,
+      drive: '2WD', seats: 5, modelYear: 2025 } })).toMatchObject({ pick: 'SHEET', masterId: 'm1', trimId: 't-old' });
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: 2000, modelYear: 2025 } }).pick).toBe('HOLD');
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: 1999 } }).pick).toBe('HOLD');
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { modelYear: null } }).pick).toBe('HOLD');
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: null } }))
+      .toMatchObject({ pick: 'HOLD', notes: ['SOURCE_SPEC_REVIEW_REQUIRED'] });
+    expect(chooseVehicleIdentity(master, { ...input(names), firstRegistration: '2024-12',
+      specs: { modelYear: 2025 } })).toMatchObject({ pick: 'HOLD', notes: ['YEAR_REGISTRATION_MISMATCH'] });
+  });
+  it('holds a previously unique name when supplied fuel or displacement contradicts the master', () => {
+    const master = indexVehicleMaster([{ masterId: 'm1', trimId: 't1', names, aliases: names.map(n => [n]),
+      specs: { fuel: '가솔린', displacementCc: 1999 } }]);
+    expect(chooseVehicleIdentity(master, input(names)).pick).toBe('SHEET');
+    for (const specs of [{ fuel: '하이브리드', displacementCc: 3000 }, { displacementCc: 2000 }, { seats: 5 }]) {
+      expect(chooseVehicleIdentity(master, { ...input(names), specs }).pick).toBe('HOLD');
+    }
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { seats: 5 } }))
+      .toMatchObject({ pick: 'HOLD', notes: ['MASTER_SPEC_EVIDENCE_REQUIRED'] });
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: undefined } as unknown as VehicleIdentitySpecs }))
+      .toMatchObject({ pick: 'HOLD', notes: ['SOURCE_SPEC_REVIEW_REQUIRED'] });
+    expect(chooseVehicleIdentity(master, { ...input(names), raw: 'HEV' }))
+      .toMatchObject({ pick: 'HOLD', notes: ['HYBRID_SOURCE_CONFLICT'] });
+  });
+  it('does not mistake TECH source text for the existing hybrid ECH token', () => {
+    const hybrid = [names[0], names[1], '쏘나타 하이브리드 DN8', names[3]] as const;
+    const master = indexVehicleMaster([names, hybrid].map((identity, i) => ({ masterId: 'm1', trimId: `t${i}`,
+      names: identity, aliases: identity.map(n => [n]) })));
+    expect(chooseVehicleIdentity(master, { ...input(names), raw: 'TECH PACK' }).pick).toBe('SHEET');
+    expect(chooseVehicleIdentity(master, { ...input(names), raw: 'ECH' }).pick).toBe('HOLD');
+  });
+  it('loads specs only from the sealed native trim and keeps its IDs', () => {
+    expect(verifiedMasterRecords(snapshot({ fuel: '디젤', engine_cc: 2151, drivetrain: 'FWD', seats: 9,
+      model_year_start: '2020', model_year_end: '현재' }))[0]).toMatchObject({ masterId: 'm1', trimId: 't1',
+      specs: { fuel: '디젤', displacementCc: 2151, drive: '2WD', seats: 9 }, modelYearStart: 2020, modelYearEnd: 2100 });
+  });
   it('publishes native ID provenance tied to the exact verified snapshot', () => {
     const master = snapshot();
     expect(verifiedVehicleMasterReference(master, { masterId: 'm1', trimId: 't1' })).toEqual({
