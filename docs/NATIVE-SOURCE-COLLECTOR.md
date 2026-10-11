@@ -329,7 +329,27 @@ securityDepositAmount·monthly12/24/36/48/60·estimateType·creditType와 나머
 별도 estimates endpoint는 만들지 않는다. 목록/상세 JSON envelope도 RAW에 보존한다
 (목록 envelope는 기존 RAW 저장소에 `evidence:list:<bucket>:<pageIndex>` 단위로 원문 그대로 보존한다. 차량 record와 페이지 증거는 별개이며 RAW 건수는 차량 대수가 아니다. 전 버킷 차량 0건은 페이지 증거가 있어도 HOLD/적재 거부).
 
-손오공 CLI는 기존 `prepareRawSourceBatch` 결과의 개별 문서를 적재 전에 보수적으로 검사한다. 900,000 byte 예산 또는 깊이 제한을 넘으면 `SONOGONG_RAW_DOCUMENT_LIMIT`로 전체 적재를 차단한다. 원문 절단·새 저장소·부분 적재는 없다. 개별 페이지/상세가 초과하면 별도 승인된 보존 경로가 필요한 HOLD이며 수집 완료로 보지 않는다. 현재 RAW runtime은 정규화 함수를 전달하지 않으므로 페이지 증거를 차량 후보로 만들지 않는다. 향후 정규화 연결 시 반드시 페이지 증거를 제외하는 계약이 필요하다.
+손오공 CLI는 기존 `prepareRawSourceBatch` 결과의 개별 문서를 적재 전에 보수적으로 검사한다. 900,000 byte 예산 또는 깊이 제한을 넘으면 `SONOGONG_RAW_DOCUMENT_LIMIT`로 전체 적재를 차단한다. 원문 절단·새 저장소·부분 적재는 없다. 개별 페이지/상세가 초과하면 별도 승인된 보존 경로가 필요한 HOLD이며 수집 완료로 보지 않는다. 2026-10-12부터 `--apply-raw` 승인 경로는 `sonogongNormalizer`를 전달해 차량 RAW를 후보로 연결한다. `evidence:list:` / `LIST_PAGE` 페이지 증거는 RAW와 lineage 보존 대상일 뿐 후보를 만들지 않는다.
+
+### 손오공 RAW→후보 정규화 연결(2026-10-12)
+
+`src/adapters/normalize-sonogong.ts`의 `sonogongNormalizer(master?)`는 손오공 API payload 전용 adapter다. 공통 시트 normalizer와 같은 `RawRecord -> { record: NormalizedCandidateRecord, lineage }` 계약, `candidate_${stableDigest([raw.rawRecordId, ruleVersion]).slice(0,40)}` ID 규칙, 이슈가 있으면 `REJECTED` 보류 규칙을 따른다. `ruleVersion`은 `sonogong-normalizer/1`이다. 입력 원문은 바꾸지 않는다.
+
+| 원문 경로 | 후보/근거 |
+| --- | --- |
+| `list.carNumber` | `carNumber`, `plateIdentityKey`, `isAssignedPlate` |
+| `list.carName`, `groupName4/2/1`, 연료/배기량/연식/최초등록 | 차종 원문 증거. 확정명은 `chooseVehicleIdentity`와 읽기 전용 Vehicle Master snapshot으로만 결정 |
+| `list.carFuel`, `engineDisplacement`, `mileage`, `detail.firstRegistrationDate`, `detail.saleAmt` | `vehicleFacts.fields` 근거. 숫자 문자열은 기존 정수 parser 규칙으로만 해석 |
+| `list.webVisibility`, `contractAvailable`, `hasActiveContract` | supplierStatus 원문 근거. 원문 그대로 KNOWN 으로 보존하며 노출 판정은 별도 정책(보류 사유 아님) |
+| `detail.estimates[]` LOW / 12~60개월 | `priceTerms.m12...`; 보증금은 `assessDepositEvidence`로 `KNOWN/ZERO/UNKNOWN` 구분 |
+| `bucket` + plate | `classifySonokongRecord` 재사용. `LOW_TCAR`는 픽업, 나머지는 손오공 상품 축으로 분리 |
+| `detail.images[]`, `carDescription`, `options` | 후보에는 URL 다운로드 없이 사진 URL 존재/개수와 RAW 참조 근거만 보존 |
+
+주요 이슈 코드는 `VEHICLE_IDENTITY_DATA_CONFLICT`, `VEHICLE_MASTER_SNAPSHOT_REQUIRED`, `PLATE_MISSING`, `PLATE_NOT_ASSIGNED`, `NO_PRICE_TERMS`, `DEPOSIT_REVIEW_REQUIRED:*`, `UNKNOWN_BUCKET`, `MONTHLY_RENT_INVALID:m*`이다. `CommercialType`에 오공·픽업 구독이 이미 있어 `CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED`는 이 경로에서 쓰지 않는다(전 구독 차량 보류 방지). 발행 단계의 상품 유형 수용 여부는 소비처에서 별도 확인한다. 보증금 `0`은 명시 면제 근거 없이는 `UNKNOWN`이다. `FEE_BASIS_PENDING`은 수수료/12개월 기준을 여기서 만들지 않는다는 연결 보류 코드다.
+
+수수료·12개월 기준은 `vehicleFacts.fields.feeBasis`(MISSING)로만 표시하고 보류 사유로 삼지 않는다(수수료 미확정 세션 산출과 연결).
+
+남은 HOLD: 운영 실호출과 RAW 되읽기, 계정/Secret Manager 운영 주입, 15분 예약 연결, 수수료 기준 확정은 별도 승인·검증 전까지 완료로 보지 않는다. 공급사 원문은 고치지 않는다.
 
 **이식 제외:** 계정 파일 읽기, 토큰 파일 캐시, 덤프/상세 파일 캐시, 응답 본문을 포함한 오류,
 동시 8개 pool, 원천 count의 버킷 무시 동작, viewAgent/외부 롯데 HTML 접근,

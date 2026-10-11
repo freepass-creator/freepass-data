@@ -1,0 +1,112 @@
+import { describe, expect, it } from 'vitest';
+import { ingestRawSourceBatch, prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
+import { sonogongNormalizer } from '../src/adapters/normalize-sonogong.js';
+import { MemorySourceStore } from '../src/infra/source-memory-store.js';
+import type { SourceIntakeBatch } from '../src/domain/source-intake.js';
+import type { RawRecord } from '../src/domain/source.js';
+import type { VehicleMasterRecord } from '../src/domain/vehicle-identity-resolution.js';
+
+const observedAt = '2026-10-12T00:00:00.000Z';
+const identity = ['FAKE_MAKER', 'FAKE_MODEL', 'FAKE_SUBMODEL', ''] as const;
+const master = (extra: Partial<VehicleMasterRecord> = {}) => ({
+  records: [{ masterId: 'fake-master', trimId: 'fake-trim', names: identity,
+    aliases: identity.map(value => [value]), specs: { fuel: 'GASOLINE', displacementCc: 1999 },
+    modelYearStart: 2024, modelYearEnd: 2026, ...extra }],
+  readAt: observedAt, snapshotDigest: 'fake-master-digest',
+});
+const estimate = (extra: Record<string, unknown> = {}) => ({
+  estimateType: 'SUBSCRIBE_RETURN', creditType: 'LOW', monthly12: '410000',
+  monthly24: 420000, securityDepositAmount: 1000000, ...extra,
+});
+const payload = (id: string, plate = '900가0000', bucket = 'LOW_SONOKONG') => ({
+  bucket,
+  list: { id, carNumber: plate, carName: 'FAKE_MODEL TEXT', groupName4: identity[0],
+    groupName2: identity[1], groupName1: identity[2], carFuel: 'GASOLINE',
+    engineDisplacement: '2,000', mileage: '12,345', carManufactureDate: '2025',
+    webVisibility: true, contractAvailable: true, hasActiveContract: false },
+  detail: { id, carNumber: plate, firstRegistrationDate: '2025-01-02', saleAmt: '12,345,000',
+    estimates: [estimate()], images: [{ sortOrder: 2, imageUrl: 'https://example.invalid/fake-2.jpg' },
+      { sortOrder: 1, imageUrl: 'https://example.invalid/fake-1.jpg' }],
+    carDescription: 'synthetic description', options: ['synthetic option'] },
+  detailResponse: { success: true },
+});
+const batch = (records: SourceIntakeBatch['records']): SourceIntakeBatch => ({
+  laneId: 'PRODUCT_VEHICLE',
+  source: { sourceId: 'supplier:RP012:sonogong-original-api', kind: 'API', displayName: 'synthetic sonogong' },
+  observedAt, sourceRevision: 'sonogong-raw/1:fixture', checksum: 'a'.repeat(64),
+  coverage: { mode: 'FULL', completeness: 'COMPLETE' },
+  records,
+});
+const normalizeOne = (input: Record<string, unknown>) => {
+  const raw = prepareRawSourceBatch(batch([{ sourceRecordId: `${input.bucket}:fake-id`, payload: input }])).rawRecords[0] as RawRecord;
+  return sonogongNormalizer(master())(raw);
+};
+
+describe('Sonogong RAW to candidate normalizer', () => {
+  it('normalizes fabricated subscription return terms, money strings, vehicle facts and lineage without mutating RAW', () => {
+    const original = payload('fake-id');
+    const before = structuredClone(original);
+    const normalized = normalizeOne(original)!;
+    expect(normalized.record.status).toBe('VALID');
+    expect(normalized.record.candidate).toMatchObject({
+      providerCompanyCode: 'RP012',
+      carNumber: '900가0000',
+      maker: identity[0],
+      model: identity[1],
+      subModel: identity[2],
+      commercialType: 'OGONG_SUBSCRIPTION',
+    });
+    expect(normalized.record.candidate.priceTerms.map(term => [term.termKey, term.monthlyRent.amount, term.deposit?.amount]))
+      .toEqual([['m12', 410000, 1000000], ['m24', 420000, 1000000]]);
+    expect(normalized.record.candidate.vehicleFacts?.fields.vehiclePrice).toMatchObject({ value: 12345000, state: 'KNOWN' });
+    expect(normalized.record.candidate.vehicleFacts?.fields.photoUrlPresence?.value).toBe(JSON.stringify({ count: 2, hasUrls: true }));
+    expect(normalized.record.candidate.issues).not.toContain('CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED');
+    // 수수료 기준·공급사 상태 노출 정책은 보류 사유가 아니다(전 차량 100% 보류 방지).
+    expect(normalized.record.candidate.issues).not.toContain('FEE_BASIS_PENDING');
+    expect(normalized.record.candidate.issues).not.toContain('SUPPLIER_STATUS_POLICY_UNRESOLVED');
+    expect(normalized.record.candidate.vehicleFacts?.fields.feeBasis).toMatchObject({ value: null, state: 'MISSING' });
+    expect(original).toEqual(before);
+    expect(JSON.stringify(normalized.record)).not.toContain('example.invalid/fake-1.jpg');
+  });
+
+  it('keeps used-rent bucket and fake ha/heo/ho style plate as a separate candidate', () => {
+    const normalized = normalizeOne({ ...payload('rent-id', '900허0000', 'LOW_SONOKONG_DAILY'),
+      detail: { ...payload('rent-id', '900허0000').detail, estimates: [estimate({ estimateType: 'RENT_RETURN' })] } })!;
+    expect(normalized.record.candidate.providerCompanyCode).toBe('RP012');
+    expect(normalized.record.candidate.sourceRecordId).toBe('LOW_SONOKONG_DAILY:fake-id');
+  });
+
+  it('marks zero deposit without waiver evidence UNKNOWN and rejects the candidate', () => {
+    const normalized = normalizeOne({ ...payload('zero-id'),
+      detail: { ...payload('zero-id').detail, estimates: [estimate({ securityDepositAmount: '0' })] } })!;
+    expect(normalized.record.status).toBe('REJECTED');
+    expect(normalized.record.candidate.priceTerms[0]?.depositState).toBe('UNKNOWN');
+    expect(normalized.record.candidate.issues.join('|')).toContain('DEPOSIT_ZERO_WITHOUT_TEXT_EVIDENCE');
+  });
+
+  it('holds vehicle identity conflicts through the Data master resolver', () => {
+    const raw = prepareRawSourceBatch(batch([{ sourceRecordId: 'LOW_SONOKONG:conflict',
+      payload: { ...payload('conflict'), list: { ...payload('conflict').list, groupName2: 'OTHER_MODEL' } } }])).rawRecords[0]!;
+    const normalized = sonogongNormalizer(master())(raw)!;
+    expect(normalized.record.status).toBe('REJECTED');
+    expect(normalized.record.candidate.issues).toContain('VEHICLE_IDENTITY_DATA_CONFLICT');
+  });
+
+  it('skips list-page evidence records during ingestion while retaining raw count', async () => {
+    const store = new MemorySourceStore();
+    const sourceBatch = batch([
+      { sourceRecordId: 'LOW_SONOKONG:vehicle-one', payload: payload('vehicle-one') },
+      { sourceRecordId: 'evidence:list:LOW_SONOKONG:0', payload: { evidenceKind: 'LIST_PAGE', bucket: 'LOW_SONOKONG', response: { data: [] } } },
+    ]);
+    const run = await ingestRawSourceBatch(store, sourceBatch, observedAt, sonogongNormalizer(master()));
+    expect(run.rawCount).toBe(2);
+    expect(run.candidateCount).toBe(1);
+  });
+
+  it('keeps the same fabricated car in two buckets as separate candidate IDs', () => {
+    const first = normalizeOne(payload('same-id', '900가0000', 'LOW_SONOKONG'))!;
+    const second = normalizeOne(payload('same-id', '900가0000', 'LOW_TCAR'))!;
+    expect(first.record.sourceRecordId).not.toBe(second.record.sourceRecordId);
+    expect(first.record.candidateId).not.toBe(second.record.candidateId);
+  });
+});
