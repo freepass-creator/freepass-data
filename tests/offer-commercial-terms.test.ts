@@ -292,6 +292,21 @@ describe('F04 explicit canonical evidence', () => {
     expect({ offer, evidence }).toEqual(before);
   });
   it('truncates Sonokong fractional-won commission and VAT while preserving other suppliers rounding', () => {
+    for (const monthlyRent of [100010, 100999]) {
+      const oneMonth = precomputeOfferEconomics({
+        id: 'synthetic', supplierId: 'RP012',
+        priceTerms: [{ termKey: `m1-${monthlyRent}`, termMonths: 1, monthlyRent: { amount: monthlyRent, currency: 'KRW' }, depositState: 'UNKNOWN' }],
+      }, 'USED_RENT')[0]!;
+      expect(oneMonth.supplierBillingFee).toMatchObject({
+        amount: { amount: Math.trunc(monthlyRent * 0.05) },
+        vatAmount: Math.trunc(Math.trunc(monthlyRent * 0.05) / 10),
+      });
+      expect(oneMonth.channelPayoutFee).toMatchObject({
+        amount: { amount: Math.trunc(monthlyRent * 0.05) },
+        vatAmount: Math.trunc(Math.trunc(monthlyRent * 0.05) / 10),
+      });
+    }
+
     const pickup = precomputeOfferEconomics({
       id: 'synthetic', supplierId: 'RP012',
       priceTerms: [{ termKey: '60', termMonths: 60, monthlyRent: { amount: 100001, currency: 'KRW' }, depositState: 'UNKNOWN' }],

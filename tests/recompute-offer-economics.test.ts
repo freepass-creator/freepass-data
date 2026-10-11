@@ -196,9 +196,29 @@ describe('offer economics recompute', () => {
       amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
     });
     const ambiguous=structuredClone(offer);
-    ambiguous.priceTerms.push({...ambiguous.priceTerms[0]!,termKey:`${ambiguous.priceTerms[0]!.termKey}-extra`,monthlyRent:{amount:900000,currency:'KRW'}});
+    ambiguous.priceTerms.push({...ambiguous.priceTerms[0]!,monthlyRent:{amount:900000,currency:'KRW'}});
     expect(refreshOfferEconomicsForChangedInputs(offer,ambiguous,false,'OGONG_SUBSCRIPTION')[1]!.supplierBillingFee)
       .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'OGONG_12M_BASE_MISSING'});
+  });
+  it('preserves Sonokong buyout fees when an unrelated return Q12 row changes', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP012',priceTerms:[
+      {...original.priceTerms[0]!,termKey:'12_인수형',termMonths:12,monthlyRent:{amount:800000,currency:'KRW' as const}},
+      {...original.priceTerms[0]!,termKey:'24_인수형',termMonths:24,monthlyRent:{amount:700000,currency:'KRW' as const}},
+    ]};
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'OGONG_SUBSCRIPTION');
+    expect(offer.internalEconomicsTerms[1]!.supplierBillingFee).toMatchObject({
+      state:'KNOWN',amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12}
+    });
+    const next={...structuredClone(offer),priceTerms:[
+      ...structuredClone(offer.priceTerms),
+      {...original.priceTerms[0]!,termKey:'12',termMonths:12,monthlyRent:{amount:900000,currency:'KRW' as const}},
+    ]};
+    const refreshed=refreshOfferEconomicsForChangedInputs(offer,next,false,'OGONG_SUBSCRIPTION');
+    expect(refreshed.find(term=>term.termKey==='24_인수형')!.supplierBillingFee)
+      .toEqual(offer.internalEconomicsTerms[1]!.supplierBillingFee);
+    expect(refreshed.find(term=>term.termKey==='24_인수형')!.channelPayoutFee)
+      .toEqual(offer.internalEconomicsTerms[1]!.channelPayoutFee);
   });
   it('stores Sonokong pickup and rerent 12-month fixed fees without losing approximate notes', async () => {
     const store=await fixture(), original=(await store.listOffers())[0]!;

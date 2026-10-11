@@ -214,6 +214,22 @@
         }
       }
     },
+    "signedMoney": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "properties": {
+        "amount": {
+          "type": "integer"
+        },
+        "currency": {
+          "const": "KRW"
+        }
+      }
+    },
     "policyValue": {
       "oneOf": [
         {
@@ -774,6 +790,9 @@
             "rate": {
               "type": "number",
               "minimum": 0
+            },
+            "adjustmentAmount": {
+              "$ref": "#/$defs/signedMoney"
             }
           }
         }
@@ -898,6 +917,15 @@
               ]
             }
           }
+        },
+        "approximate": {
+          "type": "boolean"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "allOf": [
