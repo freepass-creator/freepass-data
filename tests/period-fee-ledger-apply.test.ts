@@ -93,6 +93,12 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
 
   async setSnapshotRun(runId: string, run: PeriodFeeSnapshotRun): Promise<void> {
     this.setSnapshotRunCalls += 1;
+    const existing = this.runs.get(runId);
+    if (run.status === 'PREPARED'
+      && existing
+      && (existing.status !== 'PREPARED' || existing.planDigest !== run.planDigest)) {
+      throw new Error('PERIOD_FEE_RUN_STATE_CONFLICT');
+    }
     this.runs.set(runId, structuredClone(run));
   }
 
@@ -227,6 +233,19 @@ describe('period fee ledger apply', () => {
       .rejects.toThrow('LOCK_HELD');
     await expect(rollbackPeriodFeeLedgerSnapshot(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
       .rejects.toThrow('LOCK_HELD');
+    expect(store.ledger.size).toBe(0);
+  });
+
+  it('uses a per-execution apply lock owner so the same plan cannot re-enter an active lease', async () => {
+    const plan = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await store.acquireSnapshotWriteLock(`apply:${runIdFor(plan)}`, observedAt, '2026-10-12T00:15:00.000Z');
+
+    await expect(applyPeriodFeeLedgerPlan(store, plan, {
+      expectedDigest: plan.planDigest,
+      writeApproved: true,
+      now: () => new Date(observedAt),
+    })).rejects.toThrow('LOCK_HELD');
     expect(store.ledger.size).toBe(0);
   });
 
@@ -769,6 +788,49 @@ describe('period fee ledger apply', () => {
 
     expect(store.runs.get(runIdFor(second))).toMatchObject({ previousActiveRunId: runIdFor(first), active: true });
     expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'SUPERSEDED', active: false });
+  });
+
+  it('does not let a stale PREPARED write overwrite a run that already became ACTIVE', async () => {
+    const plan = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+    const active = store.runs.get(runIdFor(plan))!;
+
+    await expect(store.setSnapshotRun(runIdFor(plan), {
+      ...active,
+      status: 'PREPARED',
+      active: false,
+      activatedAt: null,
+    })).rejects.toThrow('PERIOD_FEE_RUN_STATE_CONFLICT');
+    expect(store.runs.get(runIdFor(plan))).toMatchObject({ status: 'ACTIVE', active: true });
+  });
+
+  it('restores the previous ACTIVE when rollback starts from PREPARED with activation history', async () => {
+    const first = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, first, { expectedDigest: first.planDigest, writeApproved: true });
+    const second = makePlan({
+      p1: product(),
+      p2: product({ vehicle_uid: 'TEST-FAKE-ASSET-002', car_number: 'TEST-FAKE-PLATE-0002' }),
+    });
+    await applyPeriodFeeLedgerPlan(store, second, { expectedDigest: second.planDigest, writeApproved: true });
+    const secondRun = store.runs.get(runIdFor(second))!;
+    store.runs.set(runIdFor(second), {
+      ...secondRun,
+      status: 'PREPARED',
+      active: false,
+      activatedAt: observedAt,
+      previousActiveRunId: runIdFor(first),
+    });
+
+    const result = await rollbackPeriodFeeLedgerSnapshot(store, second, {
+      expectedDigest: second.planDigest,
+      writeApproved: true,
+    });
+
+    expect(result).toMatchObject({ status: 'ROLLED_BACK', deletedRows: 2 });
+    expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'ACTIVE', active: true });
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ROLLED_BACK', active: false });
   });
 
   it('fails ACTIVE ledger reads when rows disappear or ACTIVE changes during the read', async () => {

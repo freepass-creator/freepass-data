@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { PeriodFeeLedgerPlan } from './period-fee-ledger-plan.js';
 import type {
@@ -224,13 +225,14 @@ export async function applyPeriodFeeLedgerPlan(
   }
 
   const runId = snapshotRunId(plan.snapshotId, plan.planDigest);
-  return withSnapshotWriteLock(store, `apply:${runId}`, options.now, async () => {
+  const lockOwnerId = `apply:${runId}:${randomUUID()}`;
+  return withSnapshotWriteLock(store, lockOwnerId, options.now, async () => {
   const preparedAt = nowIso(options.now);
   const existingRun = await store.getSnapshotRun(runId);
   if (existingRun && existingRun.planDigest !== plan.planDigest) {
     throw new Error('PERIOD_FEE_RUN_DIGEST_CONFLICT');
   }
-  if (existingRun && ['SUPERSEDED', 'ROLLED_BACK', 'INACTIVE'].includes(existingRun.status)) {
+  if (existingRun && ['SUPERSEDED', 'ROLLING_BACK', 'ROLLED_BACK', 'INACTIVE', 'FAILED'].includes(existingRun.status)) {
     throw new Error('RUN_NOT_REAPPLICABLE');
   }
   if (existingRun?.status === 'ACTIVE' && existingRun.active) {
@@ -298,7 +300,7 @@ export async function applyPeriodFeeLedgerPlan(
     }
     const documentKey = storageDocumentKey(runId, row.documentKey);
     await store.createLedgerDocument(documentKey, row, digest);
-    await renewSnapshotWriteLock(store, `apply:${runId}`, options.now);
+    await renewSnapshotWriteLock(store, lockOwnerId, options.now);
     createdDocumentKeys.push(documentKey);
     await store.setSnapshotRun(runId, {
       ...(await store.getSnapshotRun(runId))!,
@@ -309,12 +311,12 @@ export async function applyPeriodFeeLedgerPlan(
 
   for (const row of historyRows) {
     await store.createProductChangeHistoryDocument(runHistoryDocumentKey(runId, row), row, documentDigest(row));
-    await renewSnapshotWriteLock(store, `apply:${runId}`, options.now);
+    await renewSnapshotWriteLock(store, lockOwnerId, options.now);
     counts.historyCreated += 1;
   }
 
   const readback = assertReadback(plan, await store.readLedgerRows(plan.snapshotId, runId), options.sampleSize ?? 50);
-  await renewSnapshotWriteLock(store, `apply:${runId}`, options.now);
+  await renewSnapshotWriteLock(store, lockOwnerId, options.now);
   await store.activateSnapshotRun(runId, {
     schemaVersion: 'period-fee-snapshot-run/v1',
     runId,
@@ -351,16 +353,21 @@ export async function rollbackPeriodFeeLedgerSnapshot(
     return { status: 'DRY_RUN', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: false, inactiveRuns: 0, deletedRows: 0, keptSharedByActiveRows: 0 };
   }
   const runId = snapshotRunId(plan.snapshotId, plan.planDigest);
-  return withSnapshotWriteLock(store, `rollback:${runId}`, undefined, async () => {
+  const lockOwnerId = `rollback:${runId}:${randomUUID()}`;
+  return withSnapshotWriteLock(store, lockOwnerId, undefined, async () => {
   const run = await store.getSnapshotRun(runId);
   if (!run || run.planDigest !== plan.planDigest) throw new Error('PERIOD_FEE_ROLLBACK_RUN_DIGEST_MISMATCH');
-  if (['SUPERSEDED', 'ROLLED_BACK', 'INACTIVE'].includes(run.status)) throw new Error('RUN_NOT_REAPPLICABLE');
+  if (['SUPERSEDED', 'ROLLED_BACK', 'INACTIVE', 'FAILED'].includes(run.status)) throw new Error('RUN_NOT_REAPPLICABLE');
+  const wasActive = Boolean(run.activatedAt);
+  const canRestoreFromPrepared = run.status === 'PREPARED'
+    && wasActive
+    && Boolean(run.previousActiveRunId);
   const ownedKeys = unique([...(run.rowKeys ?? []), ...(run.createdDocumentKeys ?? []), ...(run.plannedCreateKeys ?? [])])
     .filter(key => key.startsWith(`${runId}__`));
   const targets = await ownedLedgerTargets(store, plan, ownedKeys);
   const deleteTargets = targets;
   const keptSharedByActiveRows = 0;
-  const restore = run.status === 'ACTIVE'
+  const restore = run.status === 'ACTIVE' || canRestoreFromPrepared
     ? run.previousActiveRunId
       ? await store.getSnapshotRun(run.previousActiveRunId)
       : await store.getLatestSupersededSnapshotRun(plan.snapshotId, runId)
@@ -368,8 +375,8 @@ export async function rollbackPeriodFeeLedgerSnapshot(
   if (restore?.status === 'SUPERSEDED') await assertRestorableRunRows(store, restore);
   await store.setSnapshotRun(runId, { ...run, status: 'ROLLING_BACK', active: false });
   const deletedRows = await store.deleteLedgerRowsByDigest(deleteTargets);
-  await renewSnapshotWriteLock(store, `rollback:${runId}`, undefined);
-  if (run.status === 'ACTIVE' || run.status === 'ROLLING_BACK') {
+  await renewSnapshotWriteLock(store, lockOwnerId, undefined);
+  if (run.status === 'ACTIVE' || run.status === 'ROLLING_BACK' || canRestoreFromPrepared) {
     const currentActive = await store.getActiveSnapshotRun(plan.snapshotId);
     if (run.status === 'ROLLING_BACK' && currentActive && currentActive.runId !== runId) {
       await store.setSnapshotRun(runId, { ...(await store.getSnapshotRun(runId) ?? run), status: 'FAILED', active: false });

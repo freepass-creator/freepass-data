@@ -2,6 +2,7 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
+import { readConsistentPeriodFeeLedgerRows } from './period-fee-ledger-firestore-readback.js';
 import type {
   ExistingPeriodFeeDocument,
   PeriodFeeLedgerApplyStore,
@@ -126,7 +127,17 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
   }
 
   async setSnapshotRun(runId: string, run: PeriodFeeSnapshotRun): Promise<void> {
-    await this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(runId).set(run, { merge: true });
+    await this.db.runTransaction(async tx => {
+      const ref = this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(runId);
+      const snap = await tx.get(ref);
+      const existing = snap.data() as PeriodFeeSnapshotRun | undefined;
+      if (run.status === 'PREPARED') {
+        if (snap.exists && (!existing || existing.status !== 'PREPARED' || existing.planDigest !== run.planDigest)) {
+          throw new Error('PERIOD_FEE_RUN_STATE_CONFLICT');
+        }
+      }
+      tx.set(ref, run, { merge: true });
+    });
   }
 
   async activateSnapshotRun(runId: string, run: PeriodFeeSnapshotRun): Promise<void> {
@@ -163,22 +174,7 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
   }
 
   async readLedgerRows(snapshotId: string, runId: string): Promise<PeriodFeeLedgerRow[]> {
-    const run = await this.getSnapshotRun(runId);
-    if (!run || run.snapshotId !== snapshotId) throw new Error('PERIOD_FEE_READBACK_RUN_NOT_FOUND');
-    const snap = await this.collection(FIRESTORE_COLLECTIONS.periodFees.ledger).where('snapshotId', '==', snapshotId).get();
-    const allowed = new Set(run.rowKeys);
-    const rows = snap.docs.map(doc => {
-      const { digest: _digest, ...data } = doc.data() as Rec;
-      return { id: doc.id, row: data as PeriodFeeLedgerRow };
-    })
-      .filter(item => allowed.has(item.id))
-      .map(item => item.row);
-    const reread = await this.getSnapshotRun(runId);
-    if (run.active && (!reread || !reread.active || reread.status !== 'ACTIVE' || reread.runId !== runId)) {
-      throw new Error('LEDGER_READ_INCONSISTENT');
-    }
-    if (rows.length !== allowed.size) throw new Error('LEDGER_READ_INCONSISTENT');
-    return rows;
+    return (await readConsistentPeriodFeeLedgerRows(this.db, snapshotId, runId)).rows;
   }
 
   async markSnapshotRunInactive(runId: string): Promise<void> {
