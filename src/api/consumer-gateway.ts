@@ -884,9 +884,17 @@ export function createConsumerGateway(
         const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
         const stamp = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T.*Z$/.test(v) && Number.isFinite(Date.parse(v));
         const invalid = () => { throw new Error('PRODUCT_SELECTION_RESPONSE_INVALID'); };
+        const exactStamp = (pair: unknown, iso: unknown): pair is { seconds: number; nanoseconds: number } => object(pair)
+          && Number.isSafeInteger(pair.seconds) && Number.isInteger(pair.nanoseconds) && (pair.nanoseconds as number) >= 0 && (pair.nanoseconds as number) < 1e9
+          && stamp(iso) && Date.parse(iso) === (pair.seconds as number) * 1000 + Math.floor((pair.nanoseconds as number) / 1e6);
+        const scalar = (v: unknown) => v === null || typeof v === 'boolean' || typeof v === 'number' && Number.isFinite(v)
+          || typeof v === 'string' && v.length <= 300 && !/[\u0000-\u001f\u007f]|https?:\/\/|AIza|ya29\./i.test(v);
+        const fields = (row: unknown, allowed: readonly string[]) => object(row) && Object.keys(row).every(k => allowed.includes(k) && scalar(row[k]));
         if (!object(value) || value.schema !== 'freepass-data.catalog-compat/v1' || !object(value.data) || !object(value.meta)) invalid();
         const { data, meta } = value;
-        if (Object.keys(data).some(k => !['products', 'policies', 'partners'].includes(k))
+        if (Object.keys(value).some(k => !['schema', 'data', 'meta'].includes(k))
+          || Object.keys(meta).some(k => !['consumerId', 'authority', 'sourceProject', 'observedAt', 'collectionCounts', 'depositEvidenceVersion', 'selection', 'readScope', 'selectedProductId', 'readAt', 'readTimeExact', 'documentVersions', 'linkedFacts'].includes(k))
+          || Object.keys(data).some(k => !['products', 'policies', 'partners'].includes(k))
           || !object(data.products) || !object(data.policies) || !object(data.partners)
           || Object.keys(data.products).length !== 1 || !Object.hasOwn(data.products, productId)
           || !object(data.products[productId]) || data.products[productId]!._key !== productId
@@ -897,12 +905,26 @@ export function createConsumerGateway(
           || !object(meta.documentVersions) || !object(meta.documentVersions.product)
           || meta.documentVersions.product.id !== productId || !stamp(meta.documentVersions.product.updateTime)
           || Date.parse(meta.documentVersions.product.updateTime) > Date.parse(meta.readAt)) invalid();
+        if (!exactStamp(meta.readTimeExact, meta.readAt) || Object.keys(meta.collectionCounts).some(k => !['products', 'policies', 'partners'].includes(k))) invalid();
+        const versionOK = (v: { updateTime: string; updateTimeExact: { seconds: number; nanoseconds: number } }) => exactStamp(v.updateTimeExact, v.updateTime)
+          && (v.updateTimeExact.seconds < meta.readTimeExact.seconds || v.updateTimeExact.seconds === meta.readTimeExact.seconds && v.updateTimeExact.nanoseconds <= meta.readTimeExact.nanoseconds);
+        if (!versionOK(meta.documentVersions.product)) invalid();
+        const product = data.products[productId]!;
+        if (!fields(Object.fromEntries(Object.entries(product).filter(([k]) => k !== 'price' && k !== 'iancar_phase_one')), SINGLE_PRODUCT_FACT_FIELDS)) invalid();
+        if (Object.hasOwn(product, 'price') && product.price !== null && (!object(product.price) || Object.keys(product.price).length > 200
+          || Object.entries(product.price).some(([k, row]) => !/^[a-zA-Z0-9_-]{1,80}$/.test(k) || !fields(row, ['rent', 'deposit', 'depositState', 'deposit_state'])))) invalid();
+        if (Object.hasOwn(product, 'iancar_phase_one') && product.iancar_phase_one !== null) {
+          const phase = product.iancar_phase_one;
+          if (!object(phase) || !fields(Object.fromEntries(Object.entries(phase).filter(([k]) => k !== 'priceAliases')), ['policyStage'])
+            || Object.hasOwn(phase, 'priceAliases') && (!object(phase.priceAliases) || Object.keys(phase.priceAliases).length > 200
+              || Object.entries(phase.priceAliases).some(([k, v]) => !/^[a-zA-Z0-9_-]{1,80}$/.test(k) || !scalar(v)))) invalid();
+        }
         for (const name of ['policies', 'partners'] as const) {
           const versions = meta.documentVersions[name], rows = data[name]!;
           if (!Array.isArray(versions) || versions.length !== Object.keys(rows).length || meta.collectionCounts[name] !== versions.length
             || new Set(versions.map(v => v?.id)).size !== versions.length
             || versions.some(v => !object(v) || typeof v.id !== 'string' || !Object.hasOwn(rows, v.id) || !object(rows[v.id])
-              || !stamp(v.updateTime) || Date.parse(v.updateTime) > Date.parse(meta.readAt))) invalid();
+              || !stamp(v.updateTime) || !versionOK(v) || !fields(rows[v.id], name === 'policies' ? SINGLE_POLICY_FACT_FIELDS : SINGLE_PARTNER_FACT_FIELDS))) invalid();
         }
         if (!object(meta.linkedFacts)) invalid();
         for (const name of ['policy', 'partner'] as const) {
