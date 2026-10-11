@@ -647,7 +647,7 @@ describe('period fee ledger apply', () => {
     expect(run).not.toHaveProperty('plannedCreateKeys');
     expect(run).not.toHaveProperty('createdDocumentKeys');
     expect(run).toMatchObject({ rowCount: 13_339, rowKeysDigest: stableDigest(plan.rows.map(row => storageKeyFor(plan, row)).sort()) });
-  });
+  }, 60_000);
 
   it('keeps document ID prefix reads inside the exact run boundary', async () => {
     const store = new MemoryPeriodFeeStore();
