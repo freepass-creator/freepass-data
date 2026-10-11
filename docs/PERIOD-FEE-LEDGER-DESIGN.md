@@ -316,3 +316,73 @@ freepass-data 자기 workflow로 한다. `data-owned-refresh.yml`는 퇴역 공�
 2. 장부 조회가 기본적으로 “최신 active snapshot”만 읽을지, 날짜 지정 조회를 1차부터 열지 결정 필요.
 3. 차량 UID 마이그레이션 전 가격 있는 `products` 전체 1,724문서 중 UID 없는 행은 전부 HOLD할지, 임시 source observation id로 계획만 만들지 결정 필요.
 4. Admin 기존 `contract-fee-links`에 장부 snapshotId를 붙일지, 별도 `period-fee-ledger/read` route로 분리할지 결정 필요.
+
+## 상태·가격 변경 이력
+
+대표 2026-10-11 지휘통제실 판정: “상태값 변경 이력은 다 있어야겠지, 어떤 값이었는데 어떻게 바뀌었나.” 현재 실측 기준 `products` 1,776문서는 상태값 현재값만 있고, 이전 값과 바뀐 시각 이력이 없다. 새 Catalog 160 제안 밖의 상품 문서 필드 변경은 `audit_events`·`catalog_entity_revisions`에도 남지 않으며, `raw_records`는 원천 행 관측이 4~9회뿐이라 일별 상태·가격 변경 이력을 복원하기에 부족하다.
+
+재사용 판정:
+
+- `audit_events`: `src/domain/catalog.ts`의 `AuditEvent`는 `commandId`, `entityType`, `entityId`, `before`, `after`, `revisionBefore`, `revisionAfter`, `occurredAt`를 갖는 명령 감사다. `src/application/catalog.ts`는 Offer 가격 명령과 Canonical 생성 같은 정본 명령에서만 `appendAudit`를 호출한다. 운영 `products` 문서의 일일 snapshot 필드 차이를 자동 기록하는 장부가 아니므로 이 용도에는 맞지 않는다.
+- `catalog_entity_revisions`: `src/infra/firestore-layout.ts`의 `catalog.revisions = 'catalog_entity_revisions'`이고, `src/domain/history.ts`의 revision snapshot은 Canonical entity revision 단위다. 새 Catalog 160 제안 밖의 legacy `products` 현재값 변동을 일별로 비교·append하는 구조가 아니며, 기간 가격행 단위 보증금 상태까지 남기는 이력 저장소도 아니다.
+- `field_lineage`: `src/domain/lineage.ts`의 `FieldLineageRecord`는 `RAW_TO_NORMALIZED`와 `NORMALIZED_TO_CANONICAL` 단계에서 원천 필드가 정리값·정본값으로 간 경로를 보존한다. 값 A가 직전 snapshot의 A에서 B로 바뀐 “상품 문서 필드 변경 이력”이 아니라 원천·정규화·정본 provenance다.
+- `raw_records`: 원천 관측 증거로 재사용하되, 관측 횟수가 제한되어 과거 전체 변경 이력을 복원할 수 없다. 과거 상태는 별도 표시 `APPROXIMATE`가 붙은 근사 분석으로만 다룬다.
+
+판정: `CREATE_NEW_JUSTIFIED`. 기존 audit/revision/lineage는 근거·정본·명령 이력으로 재사용하지만, 상품 문서 필드별 상태·가격 변경 이력에는 별도 append-only 컬렉션 하나가 필요하다. 후보 이름은 `product_change_history`다.
+
+문서 키:
+
+```text
+productKey__snapshotId__fieldPathHash
+```
+
+규칙:
+
+- `productKey`는 차량 UID를 우선한다. 없으면 상품 고유키를 보조로 쓰되, 차량 UID 누락 사유를 HOLD 또는 별도 reason으로 남긴다.
+- 같은 snapshot을 같은 날 다시 실행해도 같은 `productKey + snapshotId + fieldPathHash`에 도달해야 하며 중복 문서를 만들지 않는다.
+- 문서는 추가만 한다. 덮어쓰기·삭제·정정 업데이트를 하지 않는다. 잘못 쓴 이력은 별도 correction 이력으로 추가한다.
+- `period_fee_ledger`와 별개 문서다. 장부 행에 상태·가격 변경 배열을 끼워 넣지 않는다.
+
+필드:
+
+```ts
+type ProductChangeHistoryRow = {
+  schemaVersion: 'product-change-history/v1';
+  productKey: string;
+  fieldPath: 'vehicle_status' | 'status' | 'status_kind' | 'listable' | 'priceTerms.monthlyRent' | 'priceTerms.deposit';
+  before: unknown;
+  after: unknown;
+  changedAtKst: string;
+  snapshotId: string;
+  sourceObservationRef: string | null;
+  kind: 'STATUS' | 'RENT' | 'DEPOSIT';
+};
+```
+
+상태 이력 규칙:
+
+- 일 박제 때 `vehicle_status`, `status`, `status_kind`, `listable` 등 상품 상태값을 직전 snapshot과 비교한다.
+- 다르면 `productKey`, 이전 상태, 이후 상태, 바뀐 시각(KST), 근거(`sourceObservationRef` 또는 `snapshotId`)를 append-only로 남긴다.
+- 첫 snapshot은 비교 대상이 없으므로 변경 이력 0건이다. 대신 기준선 snapshot으로만 기록한다.
+
+가격 이력 규칙:
+
+- 월 대여료와 보증금은 기간 키 단위로 비교한다.
+- 월 대여료는 이전 값·이후 값을 남긴다.
+- 보증금은 금액뿐 아니라 `KNOWN`·`ZERO`·`UNKNOWN`·`NOT_APPLICABLE` 같은 보증금 상태까지 같이 비교해 남긴다.
+- 기간 키가 새로 생기거나 사라진 경우도 fieldPath와 kind를 유지하고 before/after에 `null` 또는 상태값을 명시한다.
+
+공개 차단:
+
+- `product_change_history`는 내부 이력 컬렉션이며 공개 응답과 분리한다.
+- public reader 허용 목록에 넣지 않는다.
+- public response/body/schema 문자열 검사에 `product_change_history`, `vehicle_status`, `status_kind`, `sourceObservationRef`가 0건인지 추가한다.
+- 실제 차량번호·시트 ID·토큰·고객 식별자는 이 컬렉션과 테스트 fixture에 넣지 않는다.
+
+PR·시험·일정 반영:
+
+- 10-12 계획기 묶음에 상태·가격 변경 이력 계획을 포함한다. 산출물은 직전 snapshot 대비 차이 목록이며 쓰기 0이다.
+- 10-13 박제 쓰기기 PR 이후에만 실제 쓰기 경로를 붙인다.
+- 계획기 PR 테스트에는 “첫 snapshot은 변경 이력 0건, 기준선만 기록”, “직전 snapshot 대비 상태 차이 목록 생성”, “가격 기간 키별 월 대여료·보증금 상태 차이 생성”, “공개 응답 차단”을 넣는다.
+- 쓰기기 PR 테스트에는 “append-only”, “덮어쓰기·삭제 불가”, “같은 snapshot 재실행 멱등”, “동일 productKey+snapshotId+fieldPathHash 중복 차단”, “공개 차단”을 넣는다.
+- PR 분할은 계획기 PR에 상태·가격 이력 차이 목록을 포함하고, 박제 쓰기기 PR에 `period_fee_ledger`와 `product_change_history` 추가 전용 쓰기를 함께 다룬다.
