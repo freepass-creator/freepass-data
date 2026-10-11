@@ -905,6 +905,20 @@ export function resolveReferencePolicyContext(source: Rec, policies: Record<stri
     reasonCode: facts.length ? null : 'POLICY_FACTS_MISSING' };
 }
 
+/**
+ * 공급사 원문 「구분」 칸이 «신차(선출고)» 처럼 출고 방식을 괄호로 직접 적은 경우만 신차 세부조건으로 읽는다(예: 이안카 시트).
+ * 「신차」「즉시출고」 같은 말은 선출고/견적출고를 가리지 못하므로 읽지 않는다 — 추정 금지, 없으면 NEW_PRODUCT_SUBTYPE_REQUIRED 유지.
+ */
+export function explicitNewProductSubtypeFromSource(source: Rec): 'NEW_PREDELIVERY' | 'NEW_MATCHING' | undefined {
+  if (text(source.product_type) !== '신차렌트') return undefined;
+  const raw = source['원문'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const all = (raw as Rec)['전체'];
+  const holder = all && typeof all === 'object' && !Array.isArray(all) ? all as Rec : raw as Rec;
+  const m = /^신차\s*\(\s*(선출고|견적출고)\s*\)$/.exec(text(holder['구분']));
+  return m ? (m[1] === '선출고' ? 'NEW_PREDELIVERY' : 'NEW_MATCHING') : undefined;
+}
+
 export type ReferenceSourceScope = 'LISTABLE' | 'COLLECTED';
 export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}, observedAt?: string, sourceScope: ReferenceSourceScope = 'LISTABLE', rawVehicleValueEvidence: VehicleValueEvidence | null = null) {
   const collected = sourceScope === 'COLLECTED';
@@ -958,7 +972,9 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       ...(fee.state === 'CALCULATED' && vehicleValueEvidence?.grade === 'APPROX' ? { state: 'CALCULATED_APPROX' as const } : {}),
       ...(fee.state === 'CALCULATED' && vehicleValueEvidence ? { vehicleValueEvidence } : {}),
     });
+    const explicitSubtype = explicitNewProductSubtypeFromSource(source);
     const channelPayoutFee = withVehicleValueEvidence(resolveSalesCommission({
+      ...(explicitSubtype ? { newProductSubtype: explicitSubtype } : {}),
       ...evidenceByTerm[sourceKey],
       supplierId,
       productType: text(source.product_type),
@@ -968,6 +984,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       billin36MonthlyRent,
     }));
     const supplierBillingFee = withVehicleValueEvidence(resolveSupplierBillingFee({
+      ...(explicitSubtype ? { newProductSubtype: explicitSubtype } : {}),
       ...evidenceByTerm[sourceKey],
       supplierId,
       productType: text(source.product_type),

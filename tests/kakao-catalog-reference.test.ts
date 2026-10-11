@@ -324,6 +324,7 @@ import {
   filterReferenceZeroDeposit,
   resolveReferencePolicyContext,
   buildKakaoCatalogReferenceProduct,
+  explicitNewProductSubtypeFromSource,
   resolveReferenceDeposit,
   resolveExpectedGrossMargin,
   resolveSalesCommission,
@@ -1334,3 +1335,26 @@ describe('2026-10-11 one-month basic fee', () => {
   offer.internalEconomicsTerms=[row];
   expect(readStoredTermFees(offer,offer.priceTerms[0]).supplierBillingFee).toEqual(row.supplierBillingFee);
  });
+
+describe('이안카형 원문 「구분」 신차 세부조건', () => {
+  const base = { listable: true, provider_company_code: 'RP031', product_type: '신차렌트', price: { '36': { rent: 600000 } } };
+  const fee = (extra: Record<string, unknown>, evidence = {}) => buildKakaoCatalogReferenceProduct('synthetic',
+    { ...base, ...extra }, { '36': evidence })!.offers[0]!.priceTerms[0]!.supplierBillingFee;
+
+  it('«신차(선출고)» 는 선출고로 읽어 차량가액이 있으면 계산한다', () => {
+    expect(fee({ 원문: { 전체: { 구분: '신차(선출고)' } } }, { vehicleValue: 40000000 })).toMatchObject({ state: 'CALCULATED', amount: 1400000 });
+  });
+  it('차량가액이 없으면 사유가 차량가액 필요로 좁혀진다', () => {
+    expect(fee({ 원문: { 전체: { 구분: '신차(선출고)' } } }).reasonCode).toBe('VEHICLE_VALUE_REQUIRED');
+  });
+  it('«신차(견적출고)» 는 매칭이라 합의 요율 필요로 멈춘다', () => {
+    expect(fee({ 원문: { 전체: { 구분: '신차(견적출고)' } } }, { vehicleValue: 40000000 }).reasonCode).toBe('MATCHING_AGREED_RATE_REQUIRED');
+  });
+  it.each(['신차', '즉시출고', '신차(기타)', ''])('«%s» 처럼 가르지 못하는 말은 추정하지 않는다', (구분) => {
+    expect(fee({ 원문: { 전체: { 구분 } } }, { vehicleValue: 40000000 }).reasonCode).toBe('NEW_PRODUCT_SUBTYPE_REQUIRED');
+  });
+  it('신차렌트가 아니거나 원문이 없으면 읽지 않는다', () => {
+    expect(explicitNewProductSubtypeFromSource({ product_type: '중고렌트', 원문: { 전체: { 구분: '신차(선출고)' } } })).toBeUndefined();
+    expect(explicitNewProductSubtypeFromSource({ product_type: '신차렌트' })).toBeUndefined();
+  });
+});
