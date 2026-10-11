@@ -536,6 +536,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 1개월 기본 수수료 5% 청구전액지급
+
+- 목적/정본: 대표 직접 확정 월 대여료5%, VAT별도, 청구 전액 지급. 기준 main 1e1ea6894def6bebd3abe4d231471f3153ffdfea, 기존 kakao-catalog-reference 수수료 엔진을 확장한다.
+- 변경: 정책 sales-commission-2026-10-11. 기존 기본 기간표의1개월 청구/지급 각각5% 공급가액, VAT10%. 직접 결정 sourceRef와 기존 schema allowlist를 함께 반영했다. 개별 합의 및 공급사 특칙 우선, 아이카1개월 협의·스위치 구독·신차·미등록 공급사는 추정 확장하지 않는다.
+- 검증: build PASS, architecture/data-access boundary PASS, 전체2152 PASS/에뮬레이터16 SKIP. 합성 월료80만원 양쪽공급가4만원/VAT4천원/합계4.4만원; precompute→stored read와 원본 비변경, 특칙/UNKNOWN 회귀를 확인했다.
+- 남음: 운영 DB writes0, 재산출·저장·배포·소비처 전환 미실행. 정책 버전 갱신은 기존 저장값을 자동 재작성하지 않는다.
+- next_start_here: 이 변경 PR의 고정 head와 CI/독립 검토를 확인한 뒤, 기존 recompute 엔진의 비공개 before-image/digest 계획으로 운영 적용 차이를 검토한다. 직접조회 PR451과 겹치는 엔진 변경은 없다.
+
+
 ### 2026-10-11 단일 제공자 연결 규격 고정 — PR448 후속
 
 - 사용자 결정: 연결 규격을 정하고 Data가 제공한 값을 소비처가 읽는다. 목적은 그림자 서버에 두 번째 수수료 계산을 추가하는 것이 아니다.

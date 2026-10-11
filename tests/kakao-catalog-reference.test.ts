@@ -286,7 +286,7 @@ describe('shared reference policy context', () => {
       const input = { supplierId, productType: '구독', termMonths: 36, monthlyRent: 800000 };
       expect(resolveSupplierBillingFee(input).amount).toBe(1080000);
       expect(resolveSalesCommission(input).amount).toBe(864000);
-      expect(resolveSupplierBillingFee({ ...input, termMonths: 1 }).state).toBe('UNKNOWN');
+      expect(resolveSupplierBillingFee({ ...input, termMonths: 1 })).toMatchObject({ amount: 40000, vatAmount: 4000, totalAmount: 44000 });
     }
     expect(KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.policyKind).toBe('BASIC');
     expect(KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.billinProposal.state).toBe('CONFIRMED');
@@ -348,7 +348,7 @@ describe('2026-10-04 confirmed commission policy', () => {
     expect(resolveSupplierBillingFee({ ...input, productType: '신차렌트', newProductSubtype: 'NEW_PREDELIVERY', vehicleValue: 40000000 })).toMatchObject({ amount: 1400000, vatTreatment: 'EXCLUDED' });
     const offer = { id: 'test', supplierId, priceTerms: [{ termKey: '24', termMonths: 24, monthlyRent: { amount: 1100000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }] };
     const row = precomputeOfferEconomics(offer, 'USED_RENT')[0]!;
-    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 1000000 }, vatTreatment: 'INCLUDED', vatAmount: 100000, totalAmount: 1100000, policyId: 'sales-commission-2026-10-09' });
+    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 1000000 }, vatTreatment: 'INCLUDED', vatAmount: 100000, totalAmount: 1100000, policyId: 'sales-commission-2026-10-11' });
     expect(offer.supplierId).toBe(supplierId);
   });
   it.each([
@@ -682,7 +682,7 @@ describe('F04 2026-10-04 alignment regression', () => {
     expect(KAKAO_COMMISSION_POLICY_2026_10_04.policyId).toBe('sales-commission-2026-10-04');
     expect(KAKAO_COMMISSION_POLICY_2026_10_04.sonokongAdditions).not.toHaveProperty('60');
     // 2026-10-05 AI 상황실 결정: 손오공 60개월 +60만(F04 14행, 근거는 비공개 인수인계), 원 미만 반올림.
-    expect(KAKAO_COMMISSION_POLICY.policyId).toBe('sales-commission-2026-10-09');
+    expect(KAKAO_COMMISSION_POLICY.policyId).toBe('sales-commission-2026-10-11');
     expect(KAKAO_COMMISSION_POLICY.sonokongAdditions[60]).toBe(600000);
     expect(KAKAO_COMMISSION_POLICY.sonokong60Evidence).toEqual({ sourceRows: [14], evidence: 'private:ai-ops/정산-수수료규칙-20261005', decidedBy: 'AI 상황실 2026-10-05' });
     expect(KAKAO_COMMISSION_POLICY.sourceRole).toBe('F04_GOOGLE_SHEET_SSOT');
@@ -800,7 +800,7 @@ describe('F04 2026-10-04 alignment regression', () => {
 });
 
 describe('F04 source references and term scope (2026-10-04 review)', () => {
-  const F04_REF = /^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80)$/;
+  const F04_REF = /^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT)$/;
   it('every Kakao commission sourceRef matches the reference schema pattern (no catalog/private refs leak in)', () => {
     const suppliers = ['RP004', 'RP006', 'RP008', 'RP010', 'RP012', 'RP013', 'RP014', 'RP018', 'RP021', 'RP022', 'RP023', 'RP031', 'RP033', 'RP034', 'PT-0026', 'XX-9999'];
     const products = ['신차렌트', '중고렌트', '재렌트', '장기렌트', '선출고', '견적출고', '중고구독', '신차구독', '오공구독', '픽업구독', '신차발주'];
@@ -897,7 +897,7 @@ describe('정책을 올려도 이미 저장된 기간별 수수료는 조용히 
     expect(read.supplierBillingFee).toMatchObject({ state: 'KNOWN', policyId: 'sales-commission-2026-10-04', amount: { amount: 1140000 } });
     expect(read.channelPayoutFee).toMatchObject({ state: 'KNOWN', policyId: 'sales-commission-2026-10-04', amount: { amount: 960000 } });
     // 새 정책 값은 명시적 재계산 때만.
-    expect(precomputeOfferEconomics(offer, 'USED_RENT')[0]!.supplierBillingFee.policyId).toBe('sales-commission-2026-10-09');
+    expect(precomputeOfferEconomics(offer, 'USED_RENT')[0]!.supplierBillingFee.policyId).toBe('sales-commission-2026-10-11');
     expect(offer.internalEconomicsTerms[0].supplierBillingFee.policyId).toBe('sales-commission-2026-10-04');
   });
 });
@@ -1082,3 +1082,31 @@ describe('collected reference scope preserves non-sellable and missing source co
     expect(validate(normal)).toBe(false);
   });
 });
+
+
+describe('2026-10-11 one-month basic fee', () => {
+ const base = { supplierId: 'RP013', productType: '중고렌트', termMonths: 1, monthlyRent: 800000 };
+ it('bills five percent and pays all with VAT separately for basic suppliers', () => {
+  for (const supplierId of KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds) for (const productType of ['중고렌트','중고구독']) {
+   const input = { ...base, supplierId, productType }, billing = resolveSupplierBillingFee(input), payout = resolveSalesCommission(input);
+   for (const fee of [billing,payout]) expect(fee).toMatchObject({ state: 'CALCULATED', amount: 40000, vatTreatment: 'EXCLUDED', vatAmount: 4000, totalAmount: 44000, sourceRefs: ['USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT'] });
+   expect(resolveExpectedGrossMargin(billing,payout)).toMatchObject({ amount: 0 });
+  }
+ });
+ it('preserves exception precedence and unconfirmed scope', () => {
+  expect(resolveSalesCommission({ ...base, individualException: true })).toMatchObject({ state: 'UNKNOWN', amount: null });
+  expect(resolveSalesCommission({ ...base, supplierId: 'RP004', fuel: '가솔린' })).toMatchObject({ state: 'UNKNOWN', reasonCode: 'IANCAR_SHORT_TERM_BASIS_REQUIRED' });
+  expect(resolveSalesCommission({ ...base, supplierId: 'RP018' })).toMatchObject({ amount: 581818, totalAmount: 640000, vatTreatment: 'INCLUDED' });
+  for (const over of [{supplierId:'UNKNOWN'},{productType:'신차렌트'},{supplierId:'RP014',productType:'중고구독'},{termMonths:6}]) expect(resolveSalesCommission({...base,...over})).toMatchObject({state:'UNKNOWN',amount:null});
+  expect(resolveSalesCommission({...base,termMonths:12})).toMatchObject({amount:500000});
+ });
+});
+
+ it('precomputes one-month Money with provenance and leaves source prices intact', () => {
+  const offer: any = { id: 'synthetic-one-month', supplierId: 'RP013', priceTerms: [{termKey:'m1',termMonths:1,monthlyRent:{amount:800000,currency:'KRW'},depositState:'UNKNOWN'}] };
+  const before = structuredClone(offer), row = precomputeOfferEconomics(offer,'USED_RENT')[0]!;
+  for (const field of ['supplierBillingFee','channelPayoutFee'] as const) expect(row[field]).toMatchObject({state:'KNOWN',amount:{amount:40000,currency:'KRW'},vatTreatment:'EXCLUDED',vatAmount:4000,totalAmount:44000,policyId:'sales-commission-2026-10-11'});
+  expect(offer).toEqual(before);
+  offer.internalEconomicsTerms=[row];
+  expect(readStoredTermFees(offer,offer.priceTerms[0]).supplierBillingFee).toEqual(row.supplierBillingFee);
+ });
