@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Offer, Product, VehicleAsset, VehicleModel } from '../domain/catalog.js';
 import { resolveErp5InventoryStatus } from '../domain/erp5-inventory-status.js';
 import { toInternalFeeLookup } from '../domain/internal-fee-lookup-contract.js';
+import { buildKakaoCatalogReferenceProduct } from './kakao-catalog-reference.js';
 import { auditVehicleNameReferenceParity, type LegacyVehicleMasterNameRow, type LegacyVehicleProductNameRow, type VehicleNameReferenceRow } from './vehicle-master-reference-parity.js';
 
 export type TrustScorecardMetric = {
@@ -28,9 +29,21 @@ export type TrustScorecardCanonicalInput = {
   products: Product[];
   offers: Offer[];
 };
+export type TrustScorecardProjectedFee = {
+  state: string;
+  amount?: unknown;
+  reasonCode?: string | null;
+};
+export type TrustScorecardProjectedPriceTerm = {
+  termKey: string;
+  supplierBillingFee: TrustScorecardProjectedFee;
+  channelPayoutFee: TrustScorecardProjectedFee;
+};
 export type TrustScorecardInput = {
   readAt: string;
   legacyProducts: Record<string, TrustScorecardLegacyProduct>;
+  engineFeeProjectionByProduct?: Record<string, TrustScorecardProjectedPriceTerm[]>;
+  legacyPolicies?: Record<string, Record<string, unknown>>;
   legacyVehicleMasterRows: LegacyVehicleMasterNameRow[];
   vehicleReferenceRows: VehicleNameReferenceRow[];
   canonical: TrustScorecardCanonicalInput;
@@ -159,6 +172,29 @@ function matchingCurrentOfferTerm(offers: Offer[], row: ReturnType<typeof priceR
   return matches.length === 1 ? matches[0] : null;
 }
 
+function projectedTermConfirmed(term: TrustScorecardProjectedPriceTerm | undefined): boolean {
+  if (!term) return false;
+  const confirmed = (fee: TrustScorecardProjectedFee) =>
+    (fee.state === 'CALCULATED' || fee.state === 'KNOWN') &&
+    fee.amount != null &&
+    !fee.reasonCode;
+  return confirmed(term.supplierBillingFee) && confirmed(term.channelPayoutFee);
+}
+
+function engineFeeProjectionByProduct(input: TrustScorecardInput): Record<string, TrustScorecardProjectedPriceTerm[]> {
+  if (input.engineFeeProjectionByProduct) return input.engineFeeProjectionByProduct;
+  const policies = input.legacyPolicies ?? {};
+  return Object.fromEntries(Object.entries(input.legacyProducts).map(([id, product]) => {
+    const projected = buildKakaoCatalogReferenceProduct(id, product, {}, policies, input.readAt);
+    const terms = projected?.offers[0]?.priceTerms.map((term) => ({
+      termKey: term.termKey.replace(/^source:/, ''),
+      supplierBillingFee: term.supplierBillingFee,
+      channelPayoutFee: term.channelPayoutFee,
+    })) ?? [];
+    return [productId(id, product), terms];
+  }));
+}
+
 export function buildTrustScorecard(
   input: TrustScorecardInput,
   helpers: {
@@ -197,8 +233,9 @@ export function buildTrustScorecard(
   const assetsById = new Map(input.canonical.vehicleAssets.map((asset) => [asset.id, asset]));
   const offerByProductId = new Map<string, Offer[]>();
   for (const offer of input.canonical.offers) offerByProductId.set(offer.productId, [...(offerByProductId.get(offer.productId) ?? []), offer]);
-  let economicsNumerator = 0, economicsDenominator = 0, rentConfirmed = 0;
+  let economicsNumerator = 0, economicsDenominator = 0, rentConfirmed = 0, catalogOfferNumerator = 0;
   const economicsPass = new Map<string, boolean>();
+  const projectedFeeTermsByProduct = engineFeeProjectionByProduct(input);
   const canonicalLegacyId = (product: Product) => product.id;
   for (const [id, legacy] of legacyListable) {
     const rows = priceRows(legacy);
@@ -209,13 +246,17 @@ export function buildTrustScorecard(
     }
     const canonicalProduct = productById.get(productId(id, legacy));
     const offers = canonicalProduct?.status === 'ACTIVE' ? offerByProductId.get(canonicalLegacyId(canonicalProduct)) ?? [] : [];
+    const projectedTerms = new Map((projectedFeeTermsByProduct[productId(id, legacy)] ?? []).map((term) => [term.termKey, term]));
     for (const row of rows) {
-      const match = matchingCurrentOfferTerm(offers, row, input.readAt);
-      const term = match ? toInternalFeeLookup(match.offer.id, [match.term], match.offer.internalEconomicsTerms).terms[0] : null;
-      if (term?.supplierBillingFee.status === 'CONFIRMED' && term.channelPayoutFee.status === 'CONFIRMED') {
+      if (projectedTermConfirmed(projectedTerms.get(row.termKey))) {
         economicsNumerator += 1;
       } else {
         all = false;
+      }
+      const match = matchingCurrentOfferTerm(offers, row, input.readAt);
+      const term = match ? toInternalFeeLookup(match.offer.id, [match.term], match.offer.internalEconomicsTerms).terms[0] : null;
+      if (term?.supplierBillingFee.status === 'CONFIRMED' && term.channelPayoutFee.status === 'CONFIRMED') {
+        catalogOfferNumerator += 1;
       }
     }
     economicsPass.set(productId(id, legacy), all);
@@ -250,7 +291,7 @@ export function buildTrustScorecard(
   const metrics = [
     metric('vehicle-name-spec-confirmed', '차종·제원 정리율', [...vehicleNamePass.values()].filter(Boolean).length, legacyListable.length, input.readAt, 'DIRECT', 'vehicle_master/vehicle_trim_master 이름 대조 재사용'),
     metric('deposit-confirmed', '보증금 확정율', depositNumerator, depositDenominator, input.readAt, 'DIRECT', 'withCompatibilityDepositEvidence 재사용'),
-    metric('period-rent-fee-confirmed', '기간별 대여료·수수료 확정율', economicsNumerator, economicsDenominator, input.readAt, 'DIRECT', `toInternalFeeLookup 재사용; 대여료 확정 단독 ${rentConfirmed}/${economicsDenominator}`),
+    metric('period-rent-fee-confirmed', '기간별 대여료·수수료 확정율', economicsNumerator, economicsDenominator, input.readAt, 'DIRECT', `engineProjection supplierBillingFee+channelPayoutFee confirmed; rentRows ${rentConfirmed}/${economicsDenominator}; catalogOfferConfirmed ${catalogOfferNumerator}/${economicsDenominator}`),
     metric('photo-present', '사진 보유율', [...photoPass.values()].filter(Boolean).length, legacyListable.length, input.readAt, 'PROXY', 'ERP5 화면 실제 노출은 오프라인 검증 불가'),
     metric('source-freshness', '신선도', freshnessRows.filter((row) => row.pass).length, freshnessRows.length, input.readAt, 'DIRECT', 'sources expectedFreshnessSeconds 대비 source_heads observedAt/acceptedAt 2배 이내'),
     metric('status-consistency', '상태 정확도', statusPassCount, legacyListable.length, input.readAt, 'PROXY', '원천 대조는 박제 도구 확장 필요'),

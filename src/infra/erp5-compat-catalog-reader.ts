@@ -275,6 +275,7 @@ export class FirestoreCatalogCompatibilityReader {
     const [
       compat,
       masterSnapshot,
+      legacyPolicies,
       vehicleModels,
       vehicleAssets,
       catalogProducts,
@@ -284,6 +285,7 @@ export class FirestoreCatalogCompatibilityReader {
     ] = await Promise.all([
       this.read('freepass-admin-catalog'),
       readVehicleMasterSnapshot(),
+      this.db.collection('policy').get(),
       this.db.collection(C.catalog.vehicleModels).get(),
       this.db.collection(C.catalog.vehicleAssets).get(),
       this.db.collection(C.catalog.products).get(),
@@ -306,6 +308,7 @@ export class FirestoreCatalogCompatibilityReader {
     return {
       readAt: compat.meta.observedAt,
       legacyProducts: compat.data.products,
+      legacyPolicies: asMap(legacyPolicies),
       legacyVehicleMasterRows: Object.entries(compat.data.vehicleMaster ?? {}).map(([id, row]) => ({
         id,
         maker: String(row.maker ?? ''),

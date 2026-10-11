@@ -20,6 +20,11 @@ const fee = (state: TermEconomicAmount['state'], amount = 0): TermEconomicAmount
   sourceRefs: state === 'UNKNOWN' ? [] : ['TEST-FAKE-SOURCE'],
   reasonCode: state === 'UNKNOWN' ? 'TEST_UNKNOWN' : null,
 });
+const projectedFees = (supplierState: string, payoutState: string = supplierState, reasonCode: string | null = null) => [{
+  termKey: '36',
+  supplierBillingFee: { state: supplierState, amount: supplierState === 'UNKNOWN' ? null : 100000, reasonCode },
+  channelPayoutFee: { state: payoutState, amount: payoutState === 'UNKNOWN' ? null : 80000, reasonCode },
+}];
 const model = (id: string): VehicleModel => ({ ...meta(id), id, maker: '현대', model: '아반떼', displayName: '아반떼', subModel: 'CN7', trim: '프리미엄', fuel: '가솔린' });
 const asset = (id: string): VehicleAsset => ({ ...meta(id), id, vehicleModelId: 'm1', status: 'AVAILABLE', plateNumber: `TEST-FAKE-${id}` });
 const product = (id: string, assetId: string): Product => ({ ...meta(id), id, vehicleModelId: 'm1', vehicleAssetId: assetId, commercialType: 'USED_RENT', status: 'ACTIVE', displayName: id });
@@ -68,6 +73,11 @@ function input(): TrustScorecardInput {
         _key: 'TEST-FAKE-OLD', listable: false, maker: '현대', model: '아반떼', sub_model: 'CN7',
         price: { '36': { rent: 500000, deposit: 1000000, depositState: 'KNOWN' } },
       },
+    },
+    engineFeeProjectionByProduct: {
+      'TEST-FAKE-PASS': projectedFees('CALCULATED'),
+      'TEST-FAKE-DEPOSIT': projectedFees('KNOWN'),
+      'TEST-FAKE-NAME': projectedFees('UNKNOWN', 'CALCULATED', 'TEST_UNKNOWN'),
     },
     legacyVehicleMasterRows: [{ id: 'TEST-FAKE-MASTER', maker: '현대', model: '아반떼', subModel: 'CN7' }],
     vehicleReferenceRows: [{ maker: '현대', model: '아반떼', subModel: 'CN7' }],
@@ -140,6 +150,7 @@ describe('buildTrustScorecard', () => {
       { ...offer('old-inactive', 'TEST-FAKE-PASS', true), status: 'EXPIRED', validUntil: '2026-10-09T23:59:59.000Z' },
       offer('current-unconfirmed', 'TEST-FAKE-PASS', false),
     ];
+    fixture.engineFeeProjectionByProduct = { 'TEST-FAKE-PASS': projectedFees('UNKNOWN', 'CALCULATED', 'TEST_UNKNOWN') };
 
     const economics = buildTrustScorecard(fixture, helpers).report.metrics.find((m) => m.id === 'period-rent-fee-confirmed')!;
     expect(economics.numerator).toBe(0);
@@ -156,6 +167,7 @@ describe('buildTrustScorecard', () => {
     };
     fixture.canonical.products = [product('TEST-FAKE-PASS', 'a1')];
     fixture.canonical.offers = [offer('current-confirmed', 'TEST-FAKE-PASS', true)];
+    fixture.engineFeeProjectionByProduct = {};
 
     const economics = buildTrustScorecard(fixture, helpers).report.metrics.find((m) => m.id === 'period-rent-fee-confirmed')!;
     expect(economics.numerator).toBe(0);
@@ -173,9 +185,41 @@ describe('buildTrustScorecard', () => {
       validFrom: '2026-10-09T00:00:00.000Z',
       validUntil: '2026-10-11T00:00:00.000Z',
     }];
+    fixture.engineFeeProjectionByProduct = { 'TEST-FAKE-PASS': projectedFees('CALCULATED') };
 
     const economics = buildTrustScorecard(fixture, helpers).report.metrics.find((m) => m.id === 'period-rent-fee-confirmed')!;
     expect(economics.numerator).toBe(1);
     expect(economics.denominator).toBe(1);
+  });
+
+  it('requires every sellable price row to have both engine-projected fees before the vehicle passes economics', () => {
+    const fixture = input();
+    fixture.legacyProducts = {
+      'TEST-FAKE-PASS': {
+        ...fixture.legacyProducts['TEST-FAKE-PASS']!,
+        price: {
+          '24': { rent: 450000, deposit: 1000000, depositState: 'KNOWN' },
+          '36': { rent: 500000, deposit: 1000000, depositState: 'KNOWN' },
+        },
+      },
+    };
+    fixture.engineFeeProjectionByProduct = {
+      'TEST-FAKE-PASS': [
+        ...projectedFees('CALCULATED'),
+        {
+          termKey: '24',
+          supplierBillingFee: { state: 'CALCULATED', amount: 100000, reasonCode: null },
+          channelPayoutFee: { state: 'UNKNOWN', amount: null, reasonCode: 'TEST_UNKNOWN' },
+        },
+      ],
+    };
+
+    const { report } = buildTrustScorecard(fixture, helpers);
+    const economics = report.metrics.find((m) => m.id === 'period-rent-fee-confirmed')!;
+    expect(economics.numerator).toBe(1);
+    expect(economics.denominator).toBe(2);
+    expect(report.vehiclePasses).toHaveLength(1);
+    expect(report.vehiclePasses[0]!.economics).toBe(false);
+    expect(JSON.stringify(report)).not.toMatch(/TEST-FAKE-PASS/);
   });
 });
