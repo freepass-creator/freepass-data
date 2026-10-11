@@ -7,7 +7,7 @@ describe('existing private runtime verification', () => {
   it('keeps explicit expected pins separate from declared pins and out of deployment', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
     const input = workflow.split('  workflow_dispatch:\n')[1]!.split('  push:')[0]!
-      .split('      expected_consumers_secret_version:\n')[1]!.split('\n      ')[0]!;
+      .split('      expected_consumers_secret_version:\n')[1]!.split(/\n {6}\S/)[0]!;
     expect(input).toContain('type: string');
     expect(input).toContain('required: false');
     const verify = workflow.split('\n  verify:')[1]!;
