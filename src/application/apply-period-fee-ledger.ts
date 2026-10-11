@@ -37,13 +37,18 @@ export type PeriodFeeLedgerApplyResult = {
 };
 
 export type PeriodFeeLedgerRollbackResult = {
-  status: 'DRY_RUN' | 'ROLLED_BACK';
+  status: 'DRY_RUN' | 'ROLLED_BACK' | 'ROLLBACK_PARTIAL_UNEXPECTED';
   snapshotId: string;
   planDigest: string;
   writesEnabled: boolean;
   inactiveRuns: number;
   deletedRows: number;
   keptSharedByActiveRows: number;
+  unexpectedRows?: {
+    count: number;
+    planMissing: string[];
+    digestMismatch: string[];
+  };
 };
 
 const planDigestBase = (plan: PeriodFeeLedgerPlan) => ({
@@ -129,6 +134,36 @@ async function ownedLedgerTargets(
 ) {
   return (await store.listLedgerDocumentsByRunIdPrefix(runId, 500))
     .map(row => ({ documentKey: row.documentKey, digest: row.digest }));
+}
+
+function expectedRollbackLedgerTargets(plan: PeriodFeeLedgerPlan, runId: string) {
+  return readyLedgerTargets(plan, runId);
+}
+
+function compareRollbackLedgerTargets(
+  actual: readonly { documentKey: string; digest: string }[],
+  expected: readonly { documentKey: string; digest: string }[],
+) {
+  const expectedByKey = new Map(expected.map(target => [target.documentKey, target.digest]));
+  const actualByKey = new Map(actual.map(target => [target.documentKey, target.digest]));
+  const deleteTargets: Array<{ documentKey: string; digest: string }> = [];
+  const planMissing: string[] = [];
+  const digestMismatch: string[] = [];
+  for (const target of actual) {
+    const expectedDigest = expectedByKey.get(target.documentKey);
+    if (!expectedDigest) planMissing.push(target.documentKey);
+    else if (expectedDigest !== target.digest) digestMismatch.push(target.documentKey);
+    else deleteTargets.push(target);
+  }
+  return {
+    deleteTargets,
+    unexpectedRows: {
+      count: planMissing.length + digestMismatch.length,
+      planMissing: sorted(planMissing),
+      digestMismatch: sorted(digestMismatch),
+    },
+    missingExpectedRows: expected.filter(target => !actualByKey.has(target.documentKey)).map(target => target.documentKey),
+  };
 }
 
 async function assertRestorableRunRows(
@@ -244,7 +279,7 @@ export async function applyPeriodFeeLedgerPlan(
   if (existingRun && existingRun.planDigest !== plan.planDigest) {
     throw new Error('PERIOD_FEE_RUN_DIGEST_CONFLICT');
   }
-  if (existingRun && ['SUPERSEDED', 'ROLLING_BACK', 'ROLLED_BACK', 'INACTIVE', 'FAILED'].includes(existingRun.status)) {
+  if (existingRun && ['SUPERSEDED', 'ROLLING_BACK', 'ROLLED_BACK', 'ROLLBACK_PARTIAL_UNEXPECTED', 'INACTIVE', 'FAILED'].includes(existingRun.status)) {
     throw new Error('RUN_NOT_REAPPLICABLE');
   }
   if (existingRun?.status === 'ACTIVE' && existingRun.active) {
@@ -370,13 +405,14 @@ export async function rollbackPeriodFeeLedgerSnapshot(
   return withSnapshotWriteLock(store, lockOwnerId, undefined, async () => {
   const run = await store.getSnapshotRun(runId);
   if (!run || run.planDigest !== plan.planDigest) throw new Error('PERIOD_FEE_ROLLBACK_RUN_DIGEST_MISMATCH');
-  if (['SUPERSEDED', 'ROLLED_BACK', 'INACTIVE', 'FAILED'].includes(run.status)) throw new Error('RUN_NOT_REAPPLICABLE');
+  if (['SUPERSEDED', 'ROLLED_BACK', 'ROLLBACK_PARTIAL_UNEXPECTED', 'INACTIVE', 'FAILED'].includes(run.status)) throw new Error('RUN_NOT_REAPPLICABLE');
   const wasActive = Boolean(run.activatedAt);
   const canRestoreFromPrepared = run.status === 'PREPARED'
     && wasActive
     && Boolean(run.previousActiveRunId);
   const targets = await ownedLedgerTargets(store, runId);
-  const deleteTargets = targets;
+  const expectedTargets = expectedRollbackLedgerTargets(plan, runId);
+  const { deleteTargets, unexpectedRows } = compareRollbackLedgerTargets(targets, expectedTargets);
   const keptSharedByActiveRows = 0;
   const restore = run.status === 'ACTIVE' || canRestoreFromPrepared
     ? run.previousActiveRunId
@@ -387,6 +423,22 @@ export async function rollbackPeriodFeeLedgerSnapshot(
   await store.setSnapshotRun(runId, { ...run, status: 'ROLLING_BACK', active: false }, writeGuard(lockOwnerId, undefined));
   const deletedRows = await store.deleteLedgerRowsByDigest(deleteTargets, writeGuard(lockOwnerId, undefined));
   await renewSnapshotWriteLock(store, lockOwnerId, undefined);
+  if (unexpectedRows.count > 0) {
+    const latest = await store.getSnapshotRun(runId);
+    await store.setSnapshotRun(runId, { ...(latest ?? run), status: 'ROLLBACK_PARTIAL_UNEXPECTED', active: false }, writeGuard(lockOwnerId, undefined));
+    throw Object.assign(new Error('ROLLBACK_PARTIAL_UNEXPECTED'), {
+      result: {
+        status: 'ROLLBACK_PARTIAL_UNEXPECTED' as const,
+        snapshotId: plan.snapshotId,
+        planDigest: plan.planDigest,
+        writesEnabled: true,
+        inactiveRuns: 0,
+        deletedRows,
+        keptSharedByActiveRows,
+        unexpectedRows,
+      },
+    });
+  }
   if (run.status === 'ACTIVE' || run.status === 'ROLLING_BACK' || canRestoreFromPrepared) {
     const currentActive = await store.getActiveSnapshotRun(plan.snapshotId);
     if (run.status === 'ROLLING_BACK' && currentActive && currentActive.runId !== runId) {

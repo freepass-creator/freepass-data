@@ -195,6 +195,8 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
         }
       } else if (guard && run.status === 'ROLLING_BACK') {
         if (!snap.exists || !['ACTIVE', 'PREPARED', 'ROLLING_BACK'].includes(existing?.status ?? '')) throw new Error('RUN_STATE_CHANGED');
+      } else if (guard && run.status === 'ROLLBACK_PARTIAL_UNEXPECTED') {
+        if (!snap.exists || existing?.status !== 'ROLLING_BACK') throw new Error('RUN_STATE_CHANGED');
       } else if (guard && run.status === 'FAILED') {
         if (!snap.exists || existing?.status !== 'ROLLING_BACK') throw new Error('RUN_STATE_CHANGED');
       } else if (guard && run.status === 'ROLLED_BACK') {

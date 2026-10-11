@@ -107,7 +107,7 @@ export type PeriodFeeSnapshotRun = {
   runId: string;
   snapshotId: string;
   planDigest: string;
-  status: 'PREPARED' | 'ACTIVE' | 'SUPERSEDED' | 'ROLLING_BACK' | 'ROLLED_BACK' | 'INACTIVE' | 'FAILED';
+  status: 'PREPARED' | 'ACTIVE' | 'SUPERSEDED' | 'ROLLING_BACK' | 'ROLLED_BACK' | 'ROLLBACK_PARTIAL_UNEXPECTED' | 'INACTIVE' | 'FAILED';
   active: boolean;
   previousActiveRunId: string | null;
   preparedAt: string;

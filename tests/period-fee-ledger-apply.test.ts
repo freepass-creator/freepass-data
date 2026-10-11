@@ -156,6 +156,7 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
     if (guard && run.status === 'ROLLING_BACK' && (!existing || !['ACTIVE', 'PREPARED', 'ROLLING_BACK'].includes(existing.status))) {
       throw new Error('RUN_STATE_CHANGED');
     }
+    if (guard && run.status === 'ROLLBACK_PARTIAL_UNEXPECTED' && (!existing || existing.status !== 'ROLLING_BACK')) throw new Error('RUN_STATE_CHANGED');
     if (guard && run.status === 'FAILED' && (!existing || existing.status !== 'ROLLING_BACK')) throw new Error('RUN_STATE_CHANGED');
     if (guard && run.status === 'ROLLED_BACK' && (!existing || existing.status !== 'INACTIVE')) throw new Error('RUN_STATE_CHANGED');
     this.assertDocumentSize(run);
@@ -693,6 +694,53 @@ describe('period fee ledger apply', () => {
     expect(result).toMatchObject({ status: 'ROLLED_BACK', inactiveRuns: 1, deletedRows: 1 });
     expect(store.runs.get(runIdFor(plan))).toMatchObject({ status: 'ROLLED_BACK', active: false });
     expect(store.ledger.size).toBe(0);
+  });
+
+  it('does not delete a planned prefix row whose digest changed and leaves rollback PARTIAL', async () => {
+    const plan = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+    const key = storageKeyFor(plan, plan.rows[0]!);
+    const changed = {
+      ...plan.rows[0]!,
+      monthlyRent: { ...plan.rows[0]!.monthlyRent, amount: plan.rows[0]!.monthlyRent.amount + 1 },
+    };
+    store.ledger.set(key, { digest: stableDigest(changed), data: changed as unknown as Record<string, unknown> });
+
+    await expect(rollbackPeriodFeeLedgerSnapshot(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
+      .rejects.toMatchObject({
+        message: 'ROLLBACK_PARTIAL_UNEXPECTED',
+        result: { status: 'ROLLBACK_PARTIAL_UNEXPECTED', deletedRows: 0, unexpectedRows: { count: 1, digestMismatch: [key] } },
+      });
+
+    expect(store.ledger.has(key)).toBe(true);
+    expect(store.runs.get(runIdFor(plan))).toMatchObject({ status: 'ROLLBACK_PARTIAL_UNEXPECTED', active: false });
+  });
+
+  it('does not delete an unplanned prefix row and leaves rollback PARTIAL without restoring the previous run', async () => {
+    const first = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, first, { expectedDigest: first.planDigest, writeApproved: true });
+    const second = makePlan({
+      p1: product(),
+      p2: product({ vehicle_uid: 'TEST-FAKE-ASSET-002', car_number: 'TEST-FAKE-PLATE-0002' }),
+    });
+    await applyPeriodFeeLedgerPlan(store, second, { expectedDigest: second.planDigest, writeApproved: true });
+    const unexpectedKey = `${runIdFor(second)}__TEST-FAKE-UNPLANNED`;
+    store.ledger.set(unexpectedKey, { digest: 'u', data: second.rows[0]! as unknown as Record<string, unknown> });
+
+    await expect(rollbackPeriodFeeLedgerSnapshot(store, second, { expectedDigest: second.planDigest, writeApproved: true }))
+      .rejects.toMatchObject({
+        message: 'ROLLBACK_PARTIAL_UNEXPECTED',
+        result: { status: 'ROLLBACK_PARTIAL_UNEXPECTED', deletedRows: 2, unexpectedRows: { count: 1, planMissing: [unexpectedKey] } },
+      });
+
+    expect(store.ledger.has(unexpectedKey)).toBe(true);
+    expect(store.ledger.has(storageKeyFor(second, second.rows[0]!))).toBe(false);
+    expect(store.ledger.has(storageKeyFor(second, second.rows[1]!))).toBe(false);
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ROLLBACK_PARTIAL_UNEXPECTED', active: false });
+    expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'SUPERSEDED', active: false });
+    expect(await store.getActiveSnapshotRun(first.snapshotId)).toBeNull();
   });
 
   it('persists row count and key digest before row creation so interrupted apply can be rolled back', async () => {
