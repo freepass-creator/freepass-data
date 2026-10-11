@@ -44,6 +44,41 @@ export type SharedSheetPlan = {
   includeSupplierColors?: true;
   operationalRefresh?: true;
 };
+/** The existing private evidence prefix is selected by an immutable successful dry-run, never by a URL supplied by a caller. */
+export function assertReviewedSharedSheetRun(input: {
+  runId: string; attempt: string; generation: string; digest: string; sourcePin: string;
+  executionPin: string; run: { id: number; run_attempt: number; head_sha: string; head_branch: string;
+    event: string; status: string; conclusion: string; path: string; display_title: string };
+}) {
+  const r = input.run;
+  if (![input.runId, input.attempt, input.generation].every(x => /^[1-9]\d*$/.test(x)) ||
+      !/^[a-f0-9]{64}$/.test(input.digest) || !/^[a-f0-9]{40}$/.test(input.sourcePin) ||
+      input.sourcePin !== input.executionPin || String(r.id) !== input.runId || String(r.run_attempt) !== input.attempt ||
+      r.head_sha !== input.sourcePin || r.head_branch !== 'main' || r.event !== 'workflow_dispatch' ||
+      r.status !== 'completed' || r.conclusion !== 'success' || r.path !== '.github/workflows/shared-sheet-daily.yml' ||
+      r.display_title !== 'shared-sheet-daily dry-run') throw new Error('REVIEWED_SHARED_SHEET_RUN_NOT_PINNED');
+}
+export function assertReviewedPlanGeneration(expected: string, before: string, after: string) {
+  if (!/^[1-9]\d*$/.test(expected) || expected !== before || expected !== after)
+    throw new Error('REVIEWED_PLAN_GENERATION_CHANGED');
+}
+/** Capture observation times/digests are not supplier facts. Correction times and supplier provenance identities remain significant. */
+export function assertLiveSharedSheetMatches(plan: SharedSheetPlan, live: SharedSheetCapture, now = Date.now()) {
+  buildSharedSheetBatch(plan.capture); buildSharedSheetBatch(live);
+  if (Date.parse(live.readTime) <= Date.parse(plan.capture.readTime)) throw new Error('LIVE_SHARED_SHEET_RECAPTURE_REQUIRED');
+  if ([live.readTime, ...live.tabs.map(t => t.readTime)].some(at => Date.parse(at) > now || now - Date.parse(at) > 120_000))
+    throw new Error('LIVE_SHARED_SHEET_CAPTURE_STALE');
+  const semantic = (c: SharedSheetCapture) => ({ schema: c.schema, spreadsheetId: c.spreadsheetId, layoutVersion: c.layoutVersion, revision: c.revision ?? null,
+    tabs: c.tabs.map(({ readTime: _, ...tab }) => tab),
+    supplierEntered: (c.supplierEntered ?? []).map(r => r.source === 'ERP5_PRODUCTS_SOURCE_TEXT'
+      ? (({ observedAt: _, ...fact }) => fact)(r) : r), corrections: c.corrections ?? [],
+    master: c.vehicleMasterSnapshot ? (({ readAt: _, digest: __, ...body }) => body)(c.vehicleMasterSnapshot as VehicleMasterSnapshot) : null });
+  if (stableDigest(semantic(plan.capture)) !== stableDigest(semantic(live)))
+    throw new Error('LIVE_SHARED_SHEET_CHANGED_REPLAN_REQUIRED');
+  const master = live.vehicleMasterSnapshot as VehicleMasterSnapshot | undefined;
+  if (!master) throw new Error('CURRENT_VEHICLE_MASTER_REQUIRED_BEFORE_APPLY');
+  verifiedMasterRecords(master, now);
+}
 export function identityResolver(inputs: VehicleIdentityInputs | undefined): SharedSheetIdentityResolver | undefined {
   if (!inputs) return undefined;
   assertVehicleIdentityInputs(inputs);
@@ -236,11 +271,28 @@ export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest:
   if (prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors).runId !== plan.runId) throw new Error('SHARED_SHEET_PLAN_CAPTURE_MISMATCH');
 }
 /** Read-only apply guard. The CLI runs it before opening the audited write, so a rejected apply writes nothing (not even an audit event). */
-export async function preflightSharedSheetApply(store: CatalogStore, plan: SharedSheetPlan | undefined, digest: string | undefined, target: string): Promise<void> {
+export async function preflightSharedSheetApply(store: CatalogStore, plan: SharedSheetPlan | undefined, digest: string | undefined, target: string): Promise<Set<string>> {
   assertSharedSheetPlan(plan, digest, target);
   const ownership = await store.getCatalogWriterOwnership();
   if (!ownership || ownership.mode !== 'EXCLUSIVE' || ownership.primaryWriterId !== actor.id || stableDigest(ownership) !== plan.ownershipDigest)
     throw new Error('SHARED_SHEET_EXCLUSIVE_WRITER_REQUIRED');
+  const p = prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors);
+  const head = await store.getSourceHead(p.sourceId);
+  if (head?.runId !== p.runId && stableDigest(head) !== plan.previousHeadDigest) throw new Error('SHARED_SHEET_HEAD_CHANGED');
+  if (head?.runId === p.runId && (head.sourceId !== p.sourceId || head.observedAt !== p.head.observedAt ||
+      stableDigest(head.checkpoint) !== stableDigest(p.head.checkpoint) || stableDigest(head.coverage) !== stableDigest(p.head.coverage)))
+    throw new Error('SHARED_SHEET_REPLAY_HEAD_EVIDENCE_CHANGED');
+  const fresh = await planSharedSheetCanonical(store, plan.capture, plan.target, plan.identityInputs, plan.includeSupplierColors, plan.operationalRefresh);
+  if (fresh.plan.entries.length !== plan.entries.length) throw new Error('SHARED_SHEET_PLAN_ENTRIES_CHANGED');
+  const replay = new Set<string>();
+  for (let i = 0; i < plan.entries.length; i++) {
+    const entry = plan.entries[i]!;
+    const receipt = entry.create ? await store.getCanonicalizationReceipt(entry.create.idempotencyKey)
+      : entry.change ? await store.getReviewedSourceChangeReceipt(entry.change.idempotencyKey) : null;
+    if (receipt) replay.add(entry.recordId);
+    else if (stableDigest(entry) !== stableDigest(fresh.plan.entries[i])) throw new Error('SHARED_SHEET_PLAN_STALE');
+  }
+  return replay;
 }
 export async function runSharedSheetCanonical(store: CatalogStore, source: SourceIngestionStore, options: {
   target: string; capture?: SharedSheetCapture; apply?: boolean; plan?: SharedSheetPlan; expectedPlanDigest?: string;
@@ -261,23 +313,8 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
     if (!planned || stableDigest({ masters: current.masters, trims: current.trims }) !==
         stableDigest({ masters: planned.masters, trims: planned.trims })) throw new Error('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED');
   }
-  await preflightSharedSheetApply(store, plan, options.expectedPlanDigest, options.target);
+  const replay = await preflightSharedSheetApply(store, plan, options.expectedPlanDigest, options.target);
   const p = prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors);
-  const head = await store.getSourceHead(p.sourceId);
-  if (head?.runId !== p.runId && stableDigest(head) !== plan.previousHeadDigest) throw new Error('SHARED_SHEET_HEAD_CHANGED');
-  // Reconstruct the automatic decision, including all expected revisions, before any write.
-  const fresh = await planSharedSheetCanonical(store, plan.capture, plan.target, plan.identityInputs, plan.includeSupplierColors, plan.operationalRefresh);
-  if (fresh.plan.entries.length !== plan.entries.length) throw new Error('SHARED_SHEET_PLAN_ENTRIES_CHANGED');
-  const replay = new Set<string>();
-  for (let i = 0; i < plan.entries.length; i++) {
-    const entry = plan.entries[i]!;
-    const receipt = entry.create ? await store.getCanonicalizationReceipt(entry.create.idempotencyKey)
-      : entry.change ? await store.getReviewedSourceChangeReceipt(entry.change.idempotencyKey) : null;
-    if (receipt) {
-      // The command itself rechecks its requestDigest before returning its receipt.
-      replay.add(entry.recordId);
-    } else if (stableDigest(entry) !== stableDigest(fresh.plan.entries[i])) throw new Error('SHARED_SHEET_PLAN_STALE');
-  }
   // Immutable pre-write economics oracle for confirmed vehicle-price fees. A rent capture
   // is not a vehicle-price fact and must not recalculate or invent that basis.
   const beforeOffers = plan.operationalRefresh ? new Map((await store.listOffers()).map(x => [x.id, structuredClone(x)])) : null;
@@ -365,9 +402,11 @@ export function parseLocalArgs(args: string[], flags: string[], values: string[]
   return parsed;
 }
 export async function main(args = process.argv.slice(2)) {
-  const a = parseLocalArgs(args, ['--memory', '--firestore', '--apply', '--include-supplier-colors', '--operational-refresh'], ['--capture', '--plan', '--plan-out', '--expected-plan-digest', '--identity-inputs']);
+  const a = parseLocalArgs(args, ['--memory', '--firestore', '--apply', '--include-supplier-colors', '--operational-refresh'], ['--capture', '--plan', '--plan-out', '--expected-plan-digest', '--identity-inputs', '--live-capture']);
   const apply = a.has('--apply');
   if (apply && (!a.has('--plan') || !a.has('--expected-plan-digest'))) throw new Error('APPLY_REQUIRES_PLAN_AND_DIGEST');
+  if (apply && a.has('--firestore') && !a.has('--live-capture')) throw new Error('APPLY_REQUIRES_LIVE_SOURCE_RECAPTURE');
+  if (!apply && a.has('--live-capture')) throw new Error('LIVE_CAPTURE_REQUIRES_APPLY');
   if (apply && (a.has('--capture') || a.has('--plan-out'))) throw new Error('APPLY_USES_REVIEWED_PLAN_ONLY');
   if (!apply && (a.has('--plan') || a.has('--expected-plan-digest'))) throw new Error('PLAN_FLAGS_REQUIRE_APPLY');
   if (!apply && !a.has('--capture')) throw new Error('CAPTURE_REQUIRED');
@@ -380,6 +419,8 @@ export async function main(args = process.argv.slice(2)) {
   const capture = a.has('--capture') ? JSON.parse(await readFile(a.get('--capture')!, 'utf8')) as SharedSheetCapture : undefined;
   if (apply) assertSharedSheetPlan(plan, a.get('--expected-plan-digest'), target);
   else buildSharedSheetBatch(capture);
+  // Before opening even the audited write runtime. Never replace the approved capture or its observation time.
+  if (apply && a.has('--live-capture')) assertLiveSharedSheetMatches(plan!, JSON.parse(await readFile(a.get('--live-capture')!, 'utf8')));
   const options = { target, apply, ...(capture ? { capture } : {}), ...(plan ? { plan } : {}), ...(identityInputs ? { identityInputs } : {}),
     ...(a.has('--include-supplier-colors') ? { includeSupplierColors: true } : {}),
     ...(a.has('--operational-refresh') ? { operationalRefresh: true } : {}),
@@ -393,10 +434,17 @@ export async function main(args = process.argv.slice(2)) {
   } else {
     const { withSharedSheetCatalogAccess, captureVehicleMasterSnapshotReadOnly } = await import('./data-access-runtime.js');
     const currentVehicleMasterSnapshot = apply ? await captureVehicleMasterSnapshotReadOnly() : undefined;
+    if (apply) {
+      if (!currentVehicleMasterSnapshot) throw new Error('CURRENT_VEHICLE_MASTER_REQUIRED_BEFORE_APPLY');
+      verifiedMasterRecords(currentVehicleMasterSnapshot);
+      const planned = plan!.capture.vehicleMasterSnapshot as VehicleMasterSnapshot | undefined ?? plan!.identityInputs?.master;
+      if (!planned || stableDigest({ masters: currentVehicleMasterSnapshot.masters, trims: currentVehicleMasterSnapshot.trims }) !==
+          stableDigest({ masters: planned.masters, trims: planned.trims })) throw new Error('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED');
+    }
     result = await withSharedSheetCatalogAccess(apply, stableDigest(plan ?? capture),
       (store, source) => runSharedSheetCanonical(store, source, { ...options,
         ...(apply ? { currentVehicleMasterSnapshot: currentVehicleMasterSnapshot! } : {}) }),
-      apply ? store => preflightSharedSheetApply(store, plan, options.expectedPlanDigest, target) : undefined);
+      apply ? async store => { await preflightSharedSheetApply(store, plan, options.expectedPlanDigest, target); } : undefined);
   }
   if ('plan' in result && a.has('--plan-out')) await writePrivateArtifact(a.get('--plan-out')!, result.plan);
   console.log(JSON.stringify(result.report, null, 2));
