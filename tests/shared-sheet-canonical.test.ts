@@ -13,7 +13,25 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { queryCanonicalByPlate, queryCanonicalProducts, queryFirestoreByPlate, main as queryMain } from '../src/jobs/query-canonical-by-plate.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
-import { stableDigest } from '../src/shared/stable-digest.js';
+import { stableDigest, stableRecordSetDigest, stableValue } from '../src/shared/stable-digest.js';
+
+it('preserves producer digests when Windows and CI default collations differ', () => {
+  const compare = String.prototype.localeCompare;
+  const value = { z: 0, 가: { a: 1, 나: 2 }, a: 3 };
+  const records = [{ lineageRecordId: '가', value }, { lineageRecordId: 'z', value }];
+  let defaultLocale = 'en-US';
+  const mock = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(function (this: string, other, locales, options) {
+    return compare.call(this, other, locales ?? defaultLocale, options);
+  });
+  try {
+    const expected = { value: stableDigest(value), records: stableRecordSetDigest(records) };
+    defaultLocale = 'ko-KR';
+    expect(compare.call('가', 'z', 'en-US')).not.toBe(compare.call('가', 'z', 'ko-KR'));
+    expect(stableDigest(value)).toBe(expected.value);
+    expect(stableRecordSetDigest(records)).toBe(expected.records);
+    expect(Object.keys(stableValue(value) as object)).toEqual(['a', 'z', '가']);
+  } finally { mock.mockRestore(); }
+});
 
 function masterSnapshot(): VehicleMasterSnapshot {
   const names = { maker: '시험제조사', model: '시험모델', sub_model: '시험세부모델' };
