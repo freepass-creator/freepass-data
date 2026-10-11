@@ -370,7 +370,7 @@ export function createConsumerGateway(
     reply.header('X-Freepass-Read-Mode', 'DIRECT_FIRESTORE_REQUIRED');
     reply.header('X-Freepass-Migration-Status', 'LEGACY_READ_PENDING_RETIREMENT');
     reply.header('X-Freepass-Migration-Instruction', 'Read stored canonical data directly from Firestore in your platform server using an authorized read identity; do not recalculate or use legacy fallback.');
-    reply.header('Link', '<https://github.com/freepass-creator/freepass-data/blob/394870a003f32d8b23b7fc206ce03a87e3b6ec5a/docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md>; rel="deprecation"');
+    reply.header('Link', '<https://github.com/freepass-creator/freepass-data/blob/main/docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#firestore-direct-read-migration>; rel="deprecation"');
   });
   const ajv = new Ajv2020({ strict: false });
   addFormats(ajv);

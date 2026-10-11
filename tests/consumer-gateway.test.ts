@@ -155,7 +155,7 @@ describe('read-only consumer gateway', () => {
       expect(response.statusCode).toBe(200);
       const rows = response.json().data;
       expect(response.headers['x-freepass-read-mode']).toBe('DIRECT_FIRESTORE_REQUIRED');
-      expect(response.headers.link).toContain('/394870a003f32d8b23b7fc206ce03a87e3b6ec5a/');
+      expect(response.headers.link).toContain('/blob/main/docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#firestore-direct-read-migration');
       expect(rows).toHaveLength(2);
       expect(rows.find((row: { sourceProductId: string }) => row.sourceProductId === 'knownCc').vehicle)
         .toMatchObject({ engineCc: 1998, engineCcState: 'KNOWN', fuel: '가솔린', drive: 'AWD' });
