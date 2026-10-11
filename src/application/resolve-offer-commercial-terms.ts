@@ -2,6 +2,7 @@ import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Money, Offer, O
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
 import { KAKAO_COMMISSION_POLICY, resolveSalesCommission, resolveSupplierBillingFee } from './kakao-catalog-reference.js';
+import type { PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
 import type {
   DepositResolution,
   MileageResolution,
@@ -12,6 +13,54 @@ import type {
 
 const positiveSafeInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+
+/** Stored facts only. IDs, revision and complete price condition must match; never infer aliases. */
+export function joinStoredProductEconomics(productId: string, offers: readonly Offer[], ledger: readonly PeriodFeeLedgerRow[]) {
+  const unknown = (reasonCode: string): TermEconomicAmount => ({state:'UNKNOWN',amount:null,calculation:null,
+    sourceRefs:[],vatAmount:null,totalAmount:null,reasonCode});
+  const normalize = (fee: TermEconomicAmount): TermEconomicAmount => {
+    if (fee.state === 'UNKNOWN') return unknown(fee.reasonCode || 'STORED_FEE_UNKNOWN');
+    if (fee.state === 'NOT_APPLICABLE') return fee.amount == null ? structuredClone(fee) : unknown('INVALID_STORED_FEE_STATE');
+    const valid = fee.amount?.currency === 'KRW' && Number.isSafeInteger(fee.amount.amount) &&
+      (fee.state === 'ZERO' ? fee.amount.amount === 0 : fee.state === 'KNOWN' && fee.amount.amount > 0) && fee.sourceRefs.length > 0 && fee.sourceRefs.every(ref=>typeof ref==='string' && !!ref.trim());
+    return valid ? structuredClone(fee) : unknown('STORED_FEE_EVIDENCE_REQUIRED');
+  };
+  const ledgerFee = (fee: PeriodFeeLedgerRow['supplierBillingFee']): TermEconomicAmount => normalize({
+    ...structuredClone(fee), state:fee.state === 'CALCULATED' ? (fee.amount?.amount === 0 ? 'ZERO':'KNOWN') :
+      fee.state === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE':'UNKNOWN',
+    calculation:null, reasonCode:fee.state === 'CALCULATED_APPROX' ? 'APPROX_FEE_NOT_CONFIRMED':fee.reasonCode,
+    vatTreatment:fee.vatTreatment ?? 'UNKNOWN',policyId:fee.policyId ?? ''});
+  const comparable = (fee: TermEconomicAmount) => ({state:fee.state,amount:fee.amount ?? null,
+    vatTreatment:fee.vatTreatment ?? 'UNKNOWN',vatAmount:fee.vatAmount ?? null,totalAmount:fee.totalAmount ?? null,
+    policyId:fee.policyId?.trim() || null,ruleId:fee.ruleId ?? null});
+  const selected = offers.filter(offer=>offer.productId===productId);
+  const rows = selected.flatMap(offer=>offer.priceTerms.map(price=>{
+    const economics=offer.internalEconomicsTerms?.filter(term=>term.termKey===price.termKey) ?? [];
+    const matches=ledger.filter(row=>row.productId===productId && row.offerId===offer.id && row.termKey===price.termKey);
+    let reason:string|null=null;
+    if (selected.filter(candidate=>candidate.id===offer.id).length!==1 || offer.priceTerms.filter(term=>term.termKey===price.termKey).length!==1 || economics.length>1 || matches.length>1)
+      reason='DUPLICATE_STORED_JOIN_KEY';
+    const saved=economics[0], stored=matches[0];
+    if (!reason && saved && (saved.termMonths!==price.termMonths || !saved.monthlyRent || stableDigest(saved.monthlyRent)!==stableDigest(price.monthlyRent) ||
+      saved.depositCalculation.state!==price.depositState || stableDigest(saved.depositCalculation.amount ?? null)!==stableDigest(price.deposit ?? null))) reason='OFFER_ECONOMICS_PRICE_MISMATCH';
+    if (!reason && stored && (stored.offerRevision!==offer.revision || stored.supplierId!==offer.supplierId || stored.termMonths!==price.termMonths ||
+      stableDigest(stored.monthlyRent.state==='KNOWN'?{amount:stored.monthlyRent.amount,currency:stored.monthlyRent.currency}:null)!==stableDigest(price.monthlyRent) ||
+      stored.deposit.state!==price.depositState || stableDigest(stored.deposit.amount)!==stableDigest(price.deposit ?? null))) reason='LEDGER_PRICE_OR_REVISION_MISMATCH';
+    if (!reason && stored && stored.applyState!=='READY') reason=stored.holdReasonCode || 'LEDGER_NOT_READY';
+    const billing=saved?normalize(saved.supplierBillingFee):stored?ledgerFee(stored.supplierBillingFee):unknown('STORED_ECONOMICS_NOT_FOUND');
+    const payout=saved?normalize(saved.channelPayoutFee):stored?ledgerFee(stored.channelPayoutFee):unknown('STORED_ECONOMICS_NOT_FOUND');
+    if (!reason && saved && stored && (stableDigest(comparable(billing))!==stableDigest(comparable(ledgerFee(stored.supplierBillingFee))) ||
+      stableDigest(comparable(payout))!==stableDigest(comparable(ledgerFee(stored.channelPayoutFee))))) reason='STORED_FEE_SOURCES_CONFLICT';
+    const rentValid=price.monthlyRent.currency==='KRW' && positiveSafeInteger(price.monthlyRent.amount);
+    return {productId,offerId:offer.id,offerRevision:offer.revision,supplierId:offer.supplierId,
+      termKey:price.termKey,termMonths:price.termMonths,joinState:reason?'HOLD':saved&&stored?'MATCHED':saved?'OFFER_ONLY':stored?'LEDGER_ONLY':'HOLD',reasonCode:reason ?? (saved||stored?null:'STORED_ECONOMICS_NOT_FOUND'),
+      monthlyRent:{state:rentValid&&!reason?'KNOWN':'UNKNOWN',amount:rentValid&&!reason?structuredClone(price.monthlyRent):null,reasonCode:reason ?? (rentValid?null:'RENT_EVIDENCE_REQUIRED')},
+      deposit:reason?unknown(reason):normalize({state:price.depositState,amount:price.deposit ?? null,calculation:null,
+        sourceRefs:stored?.deposit.sourceRefs ?? saved?.depositCalculation.sourceRefs ?? [],reasonCode:stored?.deposit.reasonCode ?? 'DEPOSIT_EVIDENCE_REQUIRED'}),
+      supplierBillingFee:reason?unknown(reason):billing,channelPayoutFee:reason?unknown(reason):payout};
+  }));
+  return {productId,rows,orphanLedgerRows:ledger.filter(row=>row.productId===productId && !rows.some(join=>join.offerId===row.offerId && join.termKey===row.termKey)).length};
+}
 
 /** Existing approved vehicle-price rates need an explicit source fact; rent is not that fact. */
 export function refreshOfferEconomicsForChangedInputs(
