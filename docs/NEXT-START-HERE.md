@@ -207,6 +207,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 기존 read runtime 검증 전용 경로 — 코드 준비 / 운영 검증 미실행
+
+- 목적: run38138787782/source24fd7의 deploy step 성공 후 readiness 실패와 별개로 새00027-9kd의 실제 상태·인증 readback을 전체 재배포 없이 검증한다. root Console 21:24 healthy/traffic100 및 digest b443 관측은 root 증거이며 실패 assertion 원인은 아직 확정하지 않는다. 기존 timeout30 명시는 public 분기에만 있어 private timeout 변화 원인을 단정하지 않는다.
+- 변경: 기존 workflow dispatch verify_only와 expected source SHA/digest/revision 입력, 별도 verify job을 추가했다. verify에서는 deploy job 전체를 건너뛰며 main/fixed private target/SA/pins를 인증 전 검사한다. 실서비스와 revision Ready/latest/traffic100/SA/concurrency/환경 binding/secret2/이미지 경로+digest, Artifact Registry expected-source tag digest, private IAM 및 canonical URL을 대조하고 기존 403/compat200/header/schema readback을 재사용한다. 태그 유무 표현차이는 같은 경로·digest일 때만 허용한다. 기존 배포 image 문자열 assertion은 변경하지 않았다.
+- 검증: job 격리 정적1 PASS, build/architecture/access PASS. Linux 행동시험의 tag 표현/권한/버전/이미지/traffic/Ready/입력 오류 사례는 Windows jq 미설치로 로컬 미실행, 필수 exact CI에서 확인한다. 실제 verify dispatch/재배포/원천 조회/사진 business 등록0. readback은 기존 immutable audit append를 사용할 수 있어 모든 DB 쓰기0이라고 표시하지 않는다.
+- next_start_here: 12/21 최종 exact 검토와 CI 후 정상 통합, 00 단일 owner가 expected source24fd7/digest b443/revision00027-9kd로 verify_only를 실행한다. 성공 summary는 기존 서비스 검증이며 배포 성공을 새로 발명하지 않는다. 사진 사람 확인·등록·ERP5 cutover는 별도 후속이다.
+
+
+
 ### 2026-10-11 read runtime 기존 환경 보존 — 코드 준비 / 운영 미적용
 
 - 원천 관측: root 본인 GCP Console 21:04 KST에서 기존00026/source1067 healthy·traffic100, plain3+F04 key 및 consumer4/Iancar1 secret2, 8080/concurrency8/max10/volume0를 확인했다. 01 직접 운영 조회가 아니다.
