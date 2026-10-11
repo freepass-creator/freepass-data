@@ -16,7 +16,7 @@ type Rec = Record<string, unknown>;
 
 /** Internal stored facts only: no fee engine, source fetch, public projection or identity inference. */
 export function selectStoredProducts(products: Record<string, Rec>, policies: Record<string, Rec>,
-  partners: Record<string, Rec>, search: Record<string, string> = {}) {
+  partners: Record<string, Rec>, search: Record<string, string> = {}, photoProjection?: (product: Rec) => unknown) {
   const allowed = ['productId', 'supplierId', 'supplierName', 'vehicleName', 'plate'];
   for (const [key, value] of Object.entries(search))
     if (!allowed.includes(key) || typeof value !== 'string' || !value.trim()) throw new Error('INVALID_PRODUCT_SEARCH');
@@ -58,9 +58,10 @@ export function selectStoredProducts(products: Record<string, Rec>, policies: Re
       policy: linkedPolicies.length === 1 ? { id: linkedPolicies[0]![0], data: linkedPolicies[0]![1] } : null,
       policyEvidence: { state: linkedPolicies.length === 1 ? 'KNOWN' : 'UNKNOWN', reasonCode: linkedPolicies.length === 1 ? null : 'POLICY_NOT_UNIQUE_OR_MISSING' },
       photos: { state: hasVehiclePhotoVerification(product) ? 'STORED_REVIEWED_REFS' : 'UNKNOWN',
+        existingProjection: photoProjection ? photoProjection(product) : null,
         count: hasVehiclePhotoVerification(product) ? (product.photo_original_refs as unknown[]).length : null,
         references: hasVehiclePhotoVerification(product) ? (product.photo_original_refs as Rec[]).map((ref, index) => ({
-          productId, index, readerMethod: 'readVehiclePhoto',
+          productId, index, referenceKind: 'STORED_REVIEW_METADATA', readerMethod: null,
           servingIndex: Number.isInteger(ref.servingIndex) ? ref.servingIndex : null,
           representative: typeof ref.representative === 'boolean' ? ref.representative : null,
           mediaType: typeof ref.mediaType === 'string' ? ref.mediaType : null,
@@ -69,7 +70,8 @@ export function selectStoredProducts(products: Record<string, Rec>, policies: Re
           state: product[k] == null || product[k] === '' || (Array.isArray(product[k]) && !product[k].length) ? 'UNKNOWN' : 'STORED_UNVERIFIED',
           reasonCode: 'USE_EXISTING_PHOTO_PROJECTION_FOR_ACCESS',
         }])),
-        reasonCode: hasVehiclePhotoVerification(product) ? null : 'PHOTO_REVIEW_REFS_UNVERIFIED', bytesVerified: false },
+        reasonCode: hasVehiclePhotoVerification(product) ? null : 'PHOTO_REVIEW_REFS_UNVERIFIED', bytesVerified: false,
+        servingState: 'NOT_AUTHORIZED_FOR_THIS_INTERNAL_READER', servingReasonCode: 'PHOTO_SERVING_CONSUMER_GRANT_REQUIRED' },
     }];
   });
 }
@@ -262,7 +264,7 @@ export class FirestoreCatalogCompatibilityReader {
   readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
 
   /** Shared internal consumer entrypoint. Current-source rows stay separate from saved products. */
-  async readStoredProducts(consumerId: string, search: Record<string, string> = {}) {
+  async readStoredProducts(consumerId: string, search: Record<string, string> = {}, photoProjection?: (product: Rec) => unknown) {
     if (!['kakao-ops', 'freepass-admin-catalog'].includes(consumerId) && !/^internal-ai-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId))
       throw new Error('STORED_INTERNAL_CONSUMER_NOT_ALLOWED');
     selectStoredProducts({}, {}, {}, search); // Validate before network reads.
@@ -275,7 +277,7 @@ export class FirestoreCatalogCompatibilityReader {
         tx.get(this.db.collection(C.periodFees.ledger)),
         tx.get(this.db.collection(C.catalog.offers)),
       ]);
-      const rows = selectStoredProducts(asMap(products), asMap(policies), asMap(partners), search);
+      const rows = selectStoredProducts(asMap(products), asMap(policies), asMap(partners), search, photoProjection);
       return { rows: rows.map(row => ({ ...row,
         // Only exact saved product IDs may connect economics; never join by plate/name/code pattern.
         storedOffers: offers.docs.filter(d => d.get('productId') === row.productId).map(d => jsonSafe(d.data())),
@@ -285,10 +287,12 @@ export class FirestoreCatalogCompatibilityReader {
         storedLedgerRows: ledger.docs.filter(d => d.get('productId') === row.productId).map(d => jsonSafe(d.data())),
         currentFeeEvidence: { state: 'UNKNOWN', reasonCode: ledger.size ? 'PERIOD_FEE_ACTIVE_HEAD_UNVERIFIED' : 'PERIOD_FEE_LEDGER_NOT_OBSERVED' },
       })), readAt: products.readTime.toDate().toISOString(),
+        ledgerRows: ledger.docs.map(d => jsonSafe(d.data())),
         counts: { products: products.size, policies: policies.size, partners: partners.size, ledgerRows: ledger.size, offers: offers.size } };
     }, { readOnly: true });
     return { authority: 'STORED_FACTS' as const, publicationDecision: 'HOLD' as const, consumerId,
       products: saved.rows,
+      ledgerRows: saved.ledgerRows,
       diagnostics: { queryOutcome: saved.rows.length ? 'MATCHES' : 'NOT_OBSERVED',
         emptyDoesNotProveAbsence: true, representation: 'LEGACY_PRODUCT',
         unresolvedSupplierNames: saved.rows.filter(row => row.supplierName === null).length,

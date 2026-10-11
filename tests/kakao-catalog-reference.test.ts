@@ -46,6 +46,13 @@ describe('stored consumer product selection', () => {
     const reader = Object.create(FirestoreCatalogCompatibilityReader.prototype) as FirestoreCatalogCompatibilityReader;
     await expect(reader.readStoredProducts('erp-com')).rejects.toThrow('STORED_INTERNAL_CONSUMER_NOT_ALLOWED');
   });
+  it('does not advertise reviewed metadata as an authorized photo serving route', () => {
+    const rows = selectStoredProducts({ reviewed: { photo_original_refs: [{ vehiclePhotoVerifiedAt: '2026-10-11T00:00:00Z',
+      vehiclePhotoVerifiedBy: 'TEST-REVIEW', vehiclePhotoVerificationMethod: 'TEST-METHOD', servingIndex: 0, representative: true }] } }, {}, {});
+    expect(rows[0]!.photos.count).toBe(1);
+    expect(rows[0]!.photos.servingState).toBe('NOT_AUTHORIZED_FOR_THIS_INTERNAL_READER');
+    expect(rows[0]!.photos.references?.[0]).toMatchObject({ readerMethod: null, referenceKind: 'STORED_REVIEW_METADATA' });
+  });
   it('keeps missing source-head evidence separate from saved products', async () => {
     const rows = selectStoredProducts(products, {}, partners);
     const sourceStore = { getSourceHead: async () => null, getRun: async () => null,
@@ -54,6 +61,12 @@ describe('stored consumer product selection', () => {
     expect(result.products).toHaveLength(2);
     expect(result.sourceRows).toEqual([]);
     expect(result.sourceEvidence).toMatchObject({ state: 'HOLD', reasonCode: 'SOURCE_HEAD_MISSING' });
+    expect(result.canonicalEvidence.reasonCode).toBe('CANONICAL_READER_NOT_CONNECTED');
+    const empty = await readStoredConsumerProducts({ readStoredProducts: async () => ({ products: [] }), sourceStore,
+      readCanonicalProducts: async () => null }, 'internal-ai-test');
+    expect(empty.canonicalEvidence).toMatchObject({ state: 'READ_COMPLETED', reasonCode: null, emptyDoesNotProveAbsence: true });
+    expect(empty.sourceFreshness.state).toBe('UNVERIFIED');
+    expect(empty.settlementConfirmation).toBe('NOT_ASSESSED');
   });
 });
 
@@ -177,6 +190,11 @@ describe('current source observations in existing private reference', () => {
     await expect(readCurrentReferenceObservations({ ...complete, getSourceHead: async () => reads++ ? { ...head, runId: 'new-run' } : head })).rejects.toThrow('REFERENCE_SOURCE_HEAD_DRIFT');
     const current = await readCurrentReferenceObservations({ ...complete, getSourceHead: async () => ({ ...head, sourceId }) });
     expect(current.observations).toHaveLength(1);
+    const filtered = await readStoredConsumerProducts({ sourceStore: complete,
+      readStoredProducts: async () => ({ products: [] }), readCanonicalProducts: async () => ({ results: [] }) },
+      'internal-ai-test', { productId: 'TEST-NOT-OBSERVED' });
+    expect(filtered.sourceRows).toHaveLength(0);
+    expect(filtered.sourceEvidence.snapshot).toMatchObject({ currentProductRowCount: 1, returnedProductRowCount: 0 });
     const row = projectReferenceObservation(raw, candidate);
     const duplicate = buildKakaoCatalogReference({ consumerId: 'kakao-ops', sourceScope: 'COLLECTED', observedAt: at, products: {},
       sourceObservations: { state: 'HOLD' as const, reasonCode: 'FIXTURE', sourceSnapshot: current.sourceSnapshot!, observations: [row,row] } });

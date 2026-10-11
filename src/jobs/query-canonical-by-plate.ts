@@ -6,6 +6,8 @@ import { parseLocalArgs, writePrivateArtifact } from './ingest-shared-sheet-cano
 import { stableDigest } from '../shared/stable-digest.js';
 import { toInternalFeeLookup } from '../domain/internal-fee-lookup-contract.js';
 import { sharedSheetRegisteredChannels } from '../adapters/shared-sheet-source.js';
+import { joinStoredProductEconomics } from '../application/resolve-offer-commercial-terms.js';
+import type { PeriodFeeLedgerRow } from '../application/period-fee-ledger-plan.js';
 
 export type ProductSearch = { productId?: string; supplierId?: string; supplierName?: string; vehicleName?: string; plate?: string };
 const searchText = (value: string) => value.normalize('NFKC').replace(/\s+/g, '').toLocaleLowerCase('ko');
@@ -13,7 +15,7 @@ const searchText = (value: string) => value.normalize('NFKC').replace(/\s+/g, ''
 /** Internal stored-fact reader, not a new API or persistence path. Missing joins remain visible.
  * Supplier names use the existing registered supplier mapping; no fuzzy identity inference.
  */
-export async function queryCanonicalProducts(store: CatalogStore, search: ProductSearch = {}) {
+export async function queryCanonicalProducts(store: CatalogStore, search: ProductSearch = {}, ledgerRows: readonly PeriodFeeLedgerRow[] = []) {
   const allowed = ['productId', 'supplierId', 'supplierName', 'vehicleName', 'plate'];
   for (const [key, value] of Object.entries(search))
     if (!allowed.includes(key) || typeof value !== 'string' || !value.trim()) throw new Error('INVALID_PRODUCT_SEARCH');
@@ -65,6 +67,7 @@ export async function queryCanonicalProducts(store: CatalogStore, search: Produc
         product: structuredClone(product), offer: offer ? structuredClone(offer) : null,
         vehicleModel: model ? structuredClone(model) : null, vehicleAsset: asset ? structuredClone(asset) : null,
         policy: policy ? structuredClone(policy) : null, terms,
+        storedEconomics: joinStoredProductEconomics(product.id, offer ? [offer] : [], ledgerRows),
         priceTermsState: terms.length ? 'KNOWN' as const : 'UNKNOWN' as const,
         photos: { state: 'UNKNOWN' as const, count: null, references: null, reasonCode: 'CATALOG_MEDIA_NOT_CONNECTED' },
         unknownFields: [...new Set(unknownFields)].sort(),
@@ -77,10 +80,10 @@ export async function queryCanonicalProducts(store: CatalogStore, search: Produc
     supplierTermResolved, unresolvedSupplierProducts: unresolvedSupplierProducts.size, results };
 }
 
-export async function queryFirestoreProducts(search: ProductSearch = {}) {
+export async function queryFirestoreProducts(search: ProductSearch = {}, ledgerRows: readonly PeriodFeeLedgerRow[] = []) {
   const { withSharedSheetCatalogAccess } = await import('./data-access-runtime.js');
   return withSharedSheetCatalogAccess(false, stableDigest(['internal-direct-product-query']),
-    store => queryCanonicalProducts(store, search));
+    store => queryCanonicalProducts(store, search, ledgerRows));
 }
 
 /** Internal server-only contract. Read saved facts; never recompute or publish them. */
@@ -138,7 +141,7 @@ export async function main(args = process.argv.slice(2)) {
     const { readStoredConsumerProducts } = await import('../application/kakao-catalog-reference.js');
     const reader = createFirestoreCatalogCompatibilityReader();
     const result = await readStoredConsumerProducts({ readStoredProducts: reader.readStoredProducts.bind(reader),
-      sourceStore: reader.sourceStore, readCanonicalProducts: queryFirestoreProducts }, 'internal-ai-ops', search);
+      sourceStore: reader.sourceStore, readCanonicalProducts: (s, rows) => queryFirestoreProducts(s, rows as PeriodFeeLedgerRow[]) }, 'internal-ai-ops', search);
     await writePrivateArtifact(a.get('--local-output')!, result);
     console.log(JSON.stringify({ status: 'LOCAL_RESULT_WRITTEN', products: result.products.length, sourceRows: result.sourceRows.length,
       snapshotConsistency: result.meta.snapshotConsistency }));

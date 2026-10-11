@@ -16,12 +16,13 @@ export const referenceResponseDigest = (data: unknown, sourceObservations?: unkn
 
 /** Existing consumer application composes stored facts and sealed source evidence without a relay API. */
 export async function readStoredConsumerProducts<T, C>(reader: {
-  readStoredProducts(consumerId: string, search: Record<string, string>): Promise<T>;
+  readStoredProducts(consumerId: string, search: Record<string, string>, photoProjection?: (product: Rec) => unknown): Promise<T>;
   sourceStore: Pick<SourceIngestionStore, 'getSourceHead' | 'getRun' | 'listRaw' | 'listCandidates'>;
-  readCanonicalProducts?: (search: Record<string, string>) => Promise<C>;
+  readCanonicalProducts?: (search: Record<string, string>, ledgerRows: readonly unknown[]) => Promise<C>;
 }, consumerId: string, search: Record<string, string> = {}) {
-  const saved = await reader.readStoredProducts(consumerId, search);
-  const canonicalProducts = reader.readCanonicalProducts ? await reader.readCanonicalProducts(search) : null;
+  const saved = await reader.readStoredProducts(consumerId, search, resolveReferenceVehiclePhotos);
+  const ledgerRows = (saved as { ledgerRows?: readonly unknown[] }).ledgerRows ?? [];
+  const canonicalProducts = reader.readCanonicalProducts ? await reader.readCanonicalProducts(search, ledgerRows) : null;
   const source = await readCurrentReferenceObservations(reader.sourceStore, { storedFeesOnly: true });
   const key = (v: unknown) => typeof v === 'string' ? v.normalize('NFKC').replace(/\s+/g, '').toLowerCase() : '';
   const sourceRows = source.observations.filter(row => (!search.productId || row.productId === search.productId.trim())
@@ -29,10 +30,14 @@ export async function readStoredConsumerProducts<T, C>(reader: {
     && (!search.supplierName || key(row.original.supplierName) === key(search.supplierName))
     && (!search.plate || plateIdentityKey(row.normalized.plateNumber) === plateIdentityKey(search.plate))
     && (!search.vehicleName || key([row.normalized.maker, row.normalized.model, row.normalized.subModel, row.normalized.trim].filter(Boolean).join(' ')).includes(key(search.vehicleName))));
-  return { ...saved, canonicalProducts, canonicalEvidence: { state: canonicalProducts ? 'STORED_CANONICAL' : 'UNKNOWN',
-    reasonCode: canonicalProducts ? null : 'CANONICAL_READER_NOT_CONNECTED', snapshotConsistency: 'SEPARATE_CANONICAL_READ' },
+  return { ...saved, canonicalProducts, canonicalEvidence: { state: reader.readCanonicalProducts ? 'READ_COMPLETED' : 'UNKNOWN',
+    reasonCode: reader.readCanonicalProducts ? null : 'CANONICAL_READER_NOT_CONNECTED', snapshotConsistency: 'SEPARATE_CANONICAL_READ',
+    authority: 'STORED_CANONICAL', emptyDoesNotProveAbsence: true },
+    sourceFreshness: { state: 'UNVERIFIED', reasonCode: 'CURRENT_SOURCE_HEAD_NOT_PROOF_OF_CANONICAL_FRESHNESS' },
+    settlementConfirmation: 'NOT_ASSESSED',
     sourceRows, sourceEvidence: { state: source.state, reasonCode: source.reasonCode,
-    snapshot: source.sourceSnapshot, snapshotConsistency: 'SEPARATELY_SEALED_NOT_PRODUCT_TRANSACTION' } };
+    snapshot: source.sourceSnapshot ? { ...source.sourceSnapshot, returnedProductRowCount: sourceRows.length } : null,
+    snapshotConsistency: 'SEPARATELY_SEALED_NOT_PRODUCT_TRANSACTION' } };
 }
 
 /** Opt-in authenticated ERP input adapter. A source row is a product, not a publicly sellable asset. */
