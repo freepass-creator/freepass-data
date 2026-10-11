@@ -8,6 +8,7 @@ export type ContractFeeLinkInput = {
   /** 차량 UID(vehicleAssetId). 있으면 이것으로 찾고 차량번호는 쓰지 않는다(차량번호는 찾기용 보조 키). */
   assetId?: string | undefined;
   plate?: string | undefined;
+  contractDate?: string | undefined;
   supplierId: string;
   termMonths: number;
   monthlyRent: number;
@@ -18,6 +19,7 @@ export type ContractFeeLinkData = {
   assets: VehicleAsset[];
   products: Product[];
   offers: Offer[];
+  ledgerRows?: readonly PeriodFeeLedgerRow[];
 };
 
 export type ContractFeeLinkFailure =
@@ -43,6 +45,24 @@ export type ContractFeeLinkPriceTerm = {
   depositState: PriceTerm['depositState'];
 };
 
+export type ContractFeeLinkLedgerFee = {
+  status: 'CONFIRMED' | 'HOLD';
+  snapshotId?: string;
+  valueAsOf?: string;
+  supplierBillingFee: {
+    state: PeriodFeeLedgerRow['supplierBillingFee']['state'];
+    amount: PeriodFeeLedgerRow['supplierBillingFee']['amount'];
+    reasonCode: string | null;
+  };
+  channelPayoutFee: {
+    state: PeriodFeeLedgerRow['channelPayoutFee']['state'];
+    amount: PeriodFeeLedgerRow['channelPayoutFee']['amount'];
+    reasonCode: string | null;
+  };
+  vehicleValueEvidence: Pick<NonNullable<PeriodFeeLedgerRow['vehicleValueEvidence']>, 'grade' | 'source'> | null;
+  reasonCode?: 'CONTRACT_TIME_VALUE_UNAVAILABLE' | string;
+};
+
 export type ContractFeeLinkResult = {
   status: ContractFeeLinkStatus;
   failure?: ContractFeeLinkFailure;
@@ -53,6 +73,7 @@ export type ContractFeeLinkResult = {
   offerRevision?: number;
   priceTerm?: ContractFeeLinkPriceTerm;
   fees?: InternalFeeLookupTerm;
+  ledgerFee?: ContractFeeLinkLedgerFee;
 };
 
 export type ContractLedgerPickInput = {
@@ -152,6 +173,53 @@ export function pickLedgerRowForContract(input: ContractLedgerPickInput): Contra
   return { status: 'CONFIRMED', row: latest };
 }
 
+const ledgerFeeFromRow = (row: PeriodFeeLedgerRow): ContractFeeLinkLedgerFee => ({
+  status: row.applyState === 'HOLD' ? 'HOLD' : 'CONFIRMED',
+  snapshotId: row.snapshotId,
+  valueAsOf: row.valueAsOf,
+  supplierBillingFee: {
+    state: row.supplierBillingFee.state,
+    amount: row.supplierBillingFee.amount,
+    reasonCode: row.supplierBillingFee.reasonCode,
+  },
+  channelPayoutFee: {
+    state: row.channelPayoutFee.state,
+    amount: row.channelPayoutFee.amount,
+    reasonCode: row.channelPayoutFee.reasonCode,
+  },
+  vehicleValueEvidence: row.vehicleValueEvidence
+    ? { grade: row.vehicleValueEvidence.grade, source: row.vehicleValueEvidence.source }
+    : null,
+  ...(row.applyState === 'HOLD' ? { reasonCode: row.holdReasonCode ?? 'CONTRACT_TIME_VALUE_UNAVAILABLE' } : {}),
+});
+
+const ledgerFeeForContract = (
+  input: ContractFeeLinkInput,
+  data: ContractFeeLinkData,
+  term: PriceTerm,
+): ContractFeeLinkLedgerFee | undefined => {
+  if (!data.ledgerRows || !input.contractDate) return undefined;
+  const deposit = input.deposit ?? moneyAmount(term.deposit);
+  if (deposit === null) return undefined;
+  const picked = pickLedgerRowForContract({
+    rows: data.ledgerRows,
+    contractDate: input.contractDate,
+    termMonths: input.termMonths,
+    monthlyRent: input.monthlyRent,
+    deposit,
+  });
+  if (picked.status === 'HOLD') {
+    return {
+      status: 'HOLD',
+      supplierBillingFee: { state: 'UNKNOWN', amount: null, reasonCode: picked.reasonCode },
+      channelPayoutFee: { state: 'UNKNOWN', amount: null, reasonCode: picked.reasonCode },
+      vehicleValueEvidence: null,
+      reasonCode: picked.reasonCode,
+    };
+  }
+  return ledgerFeeFromRow(picked.row);
+};
+
 export function resolveContractFeeLink(
   input: ContractFeeLinkInput,
   data: ContractFeeLinkData,
@@ -221,6 +289,7 @@ export function resolveContractFeeLink(
 
   const term = matchingTerms[0]!;
   const fees = firstFeeForTerm(offer, term)!;
+  const ledgerFee = ledgerFeeForContract(input, data, term);
   const reasonCodes = [
     fees.supplierBillingFee,
     fees.channelPayoutFee,
@@ -234,6 +303,7 @@ export function resolveContractFeeLink(
       ...offerIds,
       priceTerm: priceTermResult(term),
       fees,
+      ...(ledgerFee ? { ledgerFee } : {}),
     };
   }
   return {
@@ -241,6 +311,7 @@ export function resolveContractFeeLink(
     ...offerIds,
     priceTerm: priceTermResult(term),
     fees,
+    ...(ledgerFee ? { ledgerFee } : {}),
   };
 }
 
