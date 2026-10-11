@@ -849,6 +849,80 @@ export function createConsumerGateway(
       return reply.code(503).send({ code: 'CATALOG_COMPAT_READ_FAILED' });
     }
   });
+  app.get<{ Params: { consumerId: string; productId: string } }>('/v1/consumers/:consumerId/catalog-compat/products/:productId', async (request, reply) => {
+    reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
+    reply.header('X-Freepass-Read-Mode', 'DIRECT_FIRESTORE_REQUIRED');
+    reply.header('X-Freepass-Migration-Status', 'LEGACY_READ_PENDING_RETIREMENT');
+    reply.header('X-Freepass-Migration-Instruction', 'Read stored canonical data directly from Firestore in your platform server using an authorized read identity; do not recalculate or use legacy fallback.');
+    reply.header('Link', '<https://github.com/freepass-creator/freepass-data/blob/main/docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#firestore-direct-read-migration>; rel="deprecation"');
+    const binding = registered.get(request.params.consumerId);
+    const matches = timingSafeEqual(hash(request.headers.authorization ?? ''), hash(binding ? `Bearer ${binding.token}` : 'unregistered-consumer'));
+    const spec = { context: consumerContext(binding?.id ?? 'unregistered-consumer', 'read one legacy-compatible product fact', request.id),
+      operation: 'READ_CONSUMER_CATALOG_COMPAT', resource: { kind: 'CATALOG' as const, name: 'erp5-catalog-compat-product' } };
+    try {
+      if (!binding || !matches) {
+        await access.deny('READ', spec, 'UNAUTHORIZED');
+        return reply.code(401).send({ code: 'UNAUTHORIZED' });
+      }
+      if (!binding.capabilities.includes('catalog') || !(binding.id === 'erp-com' || binding.id.startsWith('whitelabel-'))) {
+        await access.deny('READ', spec, 'FORBIDDEN');
+        return reply.code(403).send({ code: 'FORBIDDEN' });
+      }
+      const productId = request.params.productId;
+      if (!productId || productId.trim() !== productId || productId.length > 200 || /[\/\\\u0000-\u001f\u007f]/.test(productId) || Object.keys(request.query as object).length) {
+        await access.deny('READ', spec, 'INVALID_PRODUCT_SELECTION');
+        return reply.code(400).send({ code: 'INVALID_PRODUCT_SELECTION' });
+      }
+      if (!compatReader?.readProductCompat) {
+        await access.deny('READ', spec, 'PRODUCT_SELECTION_UNAVAILABLE');
+        return reply.code(503).send({ code: 'PRODUCT_SELECTION_UNAVAILABLE' });
+      }
+      const result = await access.read({ ...spec, resource: { ...spec.resource, entityId: productId },
+        requestDigest: stableDigest({ productId }), summarize: value => ({ count: 1, digest: stableDigest(value) }),
+      }, async () => {
+        const value = await compatReader.readProductCompat!(binding.id, productId);
+        const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+        const stamp = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T.*Z$/.test(v) && Number.isFinite(Date.parse(v));
+        const invalid = () => { throw new Error('PRODUCT_SELECTION_RESPONSE_INVALID'); };
+        if (!object(value) || value.schema !== 'freepass-data.catalog-compat/v1' || !object(value.data) || !object(value.meta)) invalid();
+        const { data, meta } = value;
+        if (Object.keys(data).some(k => !['products', 'policies', 'partners'].includes(k))
+          || !object(data.products) || !object(data.policies) || !object(data.partners)
+          || Object.keys(data.products).length !== 1 || !Object.hasOwn(data.products, productId)
+          || !object(data.products[productId]) || data.products[productId]!._key !== productId
+          || meta.consumerId !== binding.id || meta.authority !== 'FREEPASS_DATA_COMPATIBILITY_BRIDGE' || meta.sourceProject !== 'freepasserp5'
+          || meta.depositEvidenceVersion !== 'catalog-compat-deposit/1' || meta.selection !== 'SINGLE_PRODUCT' || meta.readScope !== 'SINGLE_PRODUCT'
+          || meta.selectedProductId !== productId || !stamp(meta.readAt) || meta.observedAt !== meta.readAt
+          || !object(meta.collectionCounts) || meta.collectionCounts.products !== 1
+          || !object(meta.documentVersions) || !object(meta.documentVersions.product)
+          || meta.documentVersions.product.id !== productId || !stamp(meta.documentVersions.product.updateTime)
+          || Date.parse(meta.documentVersions.product.updateTime) > Date.parse(meta.readAt)) invalid();
+        for (const name of ['policies', 'partners'] as const) {
+          const versions = meta.documentVersions[name], rows = data[name]!;
+          if (!Array.isArray(versions) || versions.length !== Object.keys(rows).length || meta.collectionCounts[name] !== versions.length
+            || new Set(versions.map(v => v?.id)).size !== versions.length
+            || versions.some(v => !object(v) || typeof v.id !== 'string' || !Object.hasOwn(rows, v.id) || !object(rows[v.id])
+              || !stamp(v.updateTime) || Date.parse(v.updateTime) > Date.parse(meta.readAt))) invalid();
+        }
+        if (!object(meta.linkedFacts)) invalid();
+        for (const name of ['policy', 'partner'] as const) {
+          const fact = meta.linkedFacts[name];
+          const count = Object.keys(data[name === 'policy' ? 'policies' : 'partners']!).length;
+          if (!object(fact) || !(fact.state === 'KNOWN' && fact.reasonCode === null && count === 1
+            || fact.state === 'UNKNOWN' && typeof fact.reasonCode === 'string' && [name === 'policy' ? 'POLICY_NOT_OBSERVED' : 'PARTNER_NOT_OBSERVED', name === 'policy' ? 'POLICY_REFERENCE_NOT_OBSERVED' : 'PARTNER_REFERENCE_NOT_OBSERVED'].includes(fact.reasonCode) && count === 0)) invalid();
+        }
+        if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 1024 * 1024) invalid();
+        return value;
+      });
+      return reply.send(result);
+    } catch (error) {
+      if (error instanceof DataAccessAuditUnavailableError) return reply.code(503).send({ code: error.code });
+      const code = error instanceof Error ? error.message : '';
+      if (code === 'PRODUCT_NOT_FOUND') return reply.code(404).send({ code });
+      if (code === 'INVALID_PRODUCT_SELECTION') return reply.code(400).send({ code });
+      return reply.code(503).send({ code: 'PRODUCT_SELECTION_UNAVAILABLE' });
+    }
+  });
   for (const internalAi of [false, true]) {
   app.get<{ Params: { consumerId: string } }>(`/v1/consumers/:consumerId/${internalAi ? 'internal-ai-reference' : 'catalog-reference'}`, async (request, reply) => {
     const operation = internalAi ? 'READ_INTERNAL_AI_REFERENCE' : 'READ_KAKAO_CATALOG_REFERENCE';
