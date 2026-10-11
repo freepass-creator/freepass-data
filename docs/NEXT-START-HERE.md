@@ -542,6 +542,8 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 변경: 정책 sales-commission-2026-10-11. 기존 기본 기간표의1개월 청구/지급 각각5% 공급가액, VAT10%. 직접 결정 sourceRef와 기존 schema allowlist를 함께 반영했다. 개별 합의 및 공급사 특칙 우선, 아이카1개월 협의·스위치 구독·신차·미등록 공급사는 추정 확장하지 않는다.
 - 검증: build PASS, architecture/data-access boundary PASS, 전체2152 PASS/에뮬레이터16 SKIP. 합성 월료80만원 양쪽공급가4만원/VAT4천원/합계4.4만원; precompute→stored read와 원본 비변경, 특칙/UNKNOWN 회귀를 확인했다.
 - 남음: 운영 DB writes0, 재산출·저장·배포·소비처 전환 미실행. 정책 버전 갱신은 기존 저장값을 자동 재작성하지 않는다.
+- 개발 증거: 구현 c0aca8dc538303e26f92c170c2cfda8406825d50, PR #453. core CI PASS. canon은 기존 PR #437의 contracts/ 선점으로 HOLD이며 우회·타작업 변경하지 않았다.
+- 독립 검토: 첫 Claude REVIEW_TIMEOUT, 축소 재검토 ANSWERED/exit0. 개별·공급사 예외 우선 보존에 동의. 검토자의 기본회사 구독 제외 제안은 미채택: 원 지시는 재렌트 한정이 없고 2026-10-09 정본은 해당 회사 구독에도 동일 기본 기간표를 적용한다고 확정했다. 기존 기본표 적용범위만 유지하고 별도 구독 특칙에는 확장하지 않았다.
 - next_start_here: 이 변경 PR의 고정 head와 CI/독립 검토를 확인한 뒤, 기존 recompute 엔진의 비공개 before-image/digest 계획으로 운영 적용 차이를 검토한다. 직접조회 PR451과 겹치는 엔진 변경은 없다.
 
 
