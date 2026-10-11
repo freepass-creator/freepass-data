@@ -168,6 +168,8 @@ jobs:
           echo "IMAGE_REF=$image@$digest" >> "$GITHUB_ENV"
 
       - name: Deploy private read-only service
+        env:
+          FREEPASS_SHEET_F04_ID: ${{ secrets.FREEPASS_SHEET_F04_ID }}
         shell: bash
         run: |
           set -euo pipefail
@@ -175,6 +177,8 @@ jobs:
           secret_args=()
           public_runtime_args=()
           if [ "$USE_CONSUMER_SECRETS" = "true" ]; then
+            : "${FREEPASS_SHEET_F04_ID:?MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID}"
+            runtime_env="$runtime_env,FREEPASS_SHEET_F04_ID=$FREEPASS_SHEET_F04_ID"
             secret_args+=(--set-secrets="FREEPASS_DATA_CONSUMERS_JSON=$CONSUMERS_SECRET_NAME:$CONSUMERS_SECRET_VERSION,EANCAR_ONE_API_KEY=$IANCAR_SECRET_NAME:$IANCAR_SECRET_VERSION")
           else
             public_runtime_args+=(--timeout=30s --cpu=1 --memory=512Mi)
