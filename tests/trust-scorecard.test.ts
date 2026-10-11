@@ -129,4 +129,53 @@ describe('buildTrustScorecard', () => {
     expect(printed).not.toMatch(/TEST-FAKE-PASS|TEST-FAKE-DEPOSIT|TEST-FAKE-NAME/);
     expect(report.vehiclePasses.every((row) => /^[a-f0-9]{16}$/.test(row.hash))).toBe(true);
   });
+
+  it('does not confirm fees from inactive or expired historical offers when the current offer is unconfirmed', () => {
+    const fixture = input();
+    fixture.legacyProducts = {
+      'TEST-FAKE-PASS': fixture.legacyProducts['TEST-FAKE-PASS']!,
+    };
+    fixture.canonical.products = [product('TEST-FAKE-PASS', 'a1')];
+    fixture.canonical.offers = [
+      { ...offer('old-inactive', 'TEST-FAKE-PASS', true), status: 'EXPIRED', validUntil: '2026-10-09T23:59:59.000Z' },
+      offer('current-unconfirmed', 'TEST-FAKE-PASS', false),
+    ];
+
+    const economics = buildTrustScorecard(fixture, helpers).report.metrics.find((m) => m.id === 'period-rent-fee-confirmed')!;
+    expect(economics.numerator).toBe(0);
+    expect(economics.denominator).toBe(1);
+  });
+
+  it('does not confirm current offer fees when the current product price row monthly rent differs', () => {
+    const fixture = input();
+    fixture.legacyProducts = {
+      'TEST-FAKE-PASS': {
+        ...fixture.legacyProducts['TEST-FAKE-PASS']!,
+        price: { '36': { rent: 510000, deposit: 1000000, depositState: 'KNOWN' } },
+      },
+    };
+    fixture.canonical.products = [product('TEST-FAKE-PASS', 'a1')];
+    fixture.canonical.offers = [offer('current-confirmed', 'TEST-FAKE-PASS', true)];
+
+    const economics = buildTrustScorecard(fixture, helpers).report.metrics.find((m) => m.id === 'period-rent-fee-confirmed')!;
+    expect(economics.numerator).toBe(0);
+    expect(economics.denominator).toBe(1);
+  });
+
+  it('confirms fees only from one active effective offer matching the current product price row', () => {
+    const fixture = input();
+    fixture.legacyProducts = {
+      'TEST-FAKE-PASS': fixture.legacyProducts['TEST-FAKE-PASS']!,
+    };
+    fixture.canonical.products = [product('TEST-FAKE-PASS', 'a1')];
+    fixture.canonical.offers = [{
+      ...offer('current-confirmed', 'TEST-FAKE-PASS', true),
+      validFrom: '2026-10-09T00:00:00.000Z',
+      validUntil: '2026-10-11T00:00:00.000Z',
+    }];
+
+    const economics = buildTrustScorecard(fixture, helpers).report.metrics.find((m) => m.id === 'period-rent-fee-confirmed')!;
+    expect(economics.numerator).toBe(1);
+    expect(economics.denominator).toBe(1);
+  });
 });

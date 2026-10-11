@@ -84,11 +84,22 @@ const isDeleted = (product: TrustScorecardLegacyProduct) => product._deleted ===
 const isListableProduct = (product: TrustScorecardLegacyProduct) => product.listable === true && !isDeleted(product);
 const isHttp = (value: unknown) => typeof value === 'string' && /^https?:\/\//i.test(value.trim());
 
+function termMonthsFrom(termKey: string, row: Record<string, unknown>): number | null {
+  const explicit = row.termMonths ?? row.months ?? row.periodMonths ?? row.term_months;
+  if (typeof explicit === 'number' && Number.isSafeInteger(explicit) && explicit > 0) return explicit;
+  if (typeof explicit === 'string') {
+    const parsed = Number.parseInt(explicit.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+  }
+  const parsed = Number.parseInt(termKey, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function priceRows(product: TrustScorecardLegacyProduct) {
   if (!product.price || typeof product.price !== 'object' || Array.isArray(product.price)) return [];
   return Object.entries(product.price as Record<string, Record<string, unknown>>)
     .filter(([, row]) => row && typeof row === 'object' && !Array.isArray(row) && positive(row.rent))
-    .map(([termKey, row]) => ({ termKey, row }));
+    .map(([termKey, row]) => ({ termKey, termMonths: termMonthsFrom(termKey, row), monthlyRent: row.rent as number, row }));
 }
 
 const vehicleHash = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 16);
@@ -116,6 +127,36 @@ function statusConsistent(product: TrustScorecardLegacyProduct): boolean {
   if (product.listable !== undefined && product.listable !== resolved.listable) return false;
   const status = text(product.status);
   return !status || status === resolved.status || status === resolved.statusKind;
+}
+
+function isOfferEffectiveAt(offer: Offer, readAt: string): boolean {
+  const readTime = Date.parse(readAt);
+  if (offer.status !== 'ACTIVE' || !Number.isFinite(readTime)) return false;
+  if (offer.validFrom) {
+    const validFrom = Date.parse(offer.validFrom);
+    if (!Number.isFinite(validFrom) || validFrom > readTime) return false;
+  }
+  if (offer.validUntil) {
+    const validUntil = Date.parse(offer.validUntil);
+    if (!Number.isFinite(validUntil) || validUntil < readTime) return false;
+  }
+  return true;
+}
+
+function matchingCurrentOfferTerm(offers: Offer[], row: ReturnType<typeof priceRows>[number], readAt: string) {
+  const matches = offers
+    .filter((offer) => isOfferEffectiveAt(offer, readAt))
+    .map((offer) => ({
+      offer,
+      term: offer.priceTerms.find((term) =>
+        term.termKey === row.termKey &&
+        (row.termMonths == null || term.termMonths === row.termMonths) &&
+        term.monthlyRent.amount === row.monthlyRent &&
+        term.monthlyRent.currency === 'KRW'
+      ),
+    }))
+    .filter((match): match is { offer: Offer; term: NonNullable<typeof match.term> } => !!match.term);
+  return matches.length === 1 ? matches[0] : null;
 }
 
 export function buildTrustScorecard(
@@ -167,16 +208,15 @@ export function buildTrustScorecard(
       if (positive(row.row.rent)) rentConfirmed += 1;
     }
     const canonicalProduct = productById.get(productId(id, legacy));
-    const offers = canonicalProduct ? offerByProductId.get(canonicalLegacyId(canonicalProduct)) ?? [] : [];
-    const confirmedTermKeys = new Set<string>();
-    for (const offer of offers) {
-      for (const term of toInternalFeeLookup(offer.id, offer.priceTerms, offer.internalEconomicsTerms).terms) {
-        if (term.supplierBillingFee.status === 'CONFIRMED' && term.channelPayoutFee.status === 'CONFIRMED') confirmedTermKeys.add(term.termKey);
-      }
-    }
+    const offers = canonicalProduct?.status === 'ACTIVE' ? offerByProductId.get(canonicalLegacyId(canonicalProduct)) ?? [] : [];
     for (const row of rows) {
-      if (confirmedTermKeys.has(row.termKey)) economicsNumerator += 1;
-      else all = false;
+      const match = matchingCurrentOfferTerm(offers, row, input.readAt);
+      const term = match ? toInternalFeeLookup(match.offer.id, [match.term], match.offer.internalEconomicsTerms).terms[0] : null;
+      if (term?.supplierBillingFee.status === 'CONFIRMED' && term.channelPayoutFee.status === 'CONFIRMED') {
+        economicsNumerator += 1;
+      } else {
+        all = false;
+      }
     }
     economicsPass.set(productId(id, legacy), all);
   }
