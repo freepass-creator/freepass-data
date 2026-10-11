@@ -320,7 +320,8 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
         !auditOfferEconomicsTerms(offer).invalidFacts.length) {
       for (const term of expected) for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
         const previous = before.internalEconomicsTerms?.find(x => x.termKey === term.termKey)?.[side];
-        if (previous?.calculation?.kind === 'RATE' && previous.calculation.base === 'VEHICLE_PRICE')
+        if (previous?.state === 'UNKNOWN' || previous?.state === 'NOT_APPLICABLE' ||
+            (previous?.calculation?.kind === 'RATE' && previous.calculation.base === 'VEHICLE_PRICE'))
           term[side] = structuredClone(previous);
       }
     }

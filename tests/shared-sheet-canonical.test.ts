@@ -72,6 +72,38 @@ function later(c: SharedSheetCapture) {
   return c;
 }
 describe('shared sheet local source to Canonical', () => {
+  it.each([
+    { state: 'UNKNOWN' as const, tampered: false }, { state: 'NOT_APPLICABLE' as const, tampered: false },
+    { state: 'UNKNOWN' as const, tampered: true }, { state: 'NOT_APPLICABLE' as const, tampered: true },
+  ])('preserves unresolved $state and rejects readback mutation: $tampered', async ({ state, tampered }) => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const offer = (await s.store.listOffers())[0]!;
+      const fee = { state, amount: null, calculation: null, ruleId: null,
+        sourceRefs: [], reasonCode: 'test:original-unresolved' };
+      offer.internalEconomicsTerms![0]!.channelPayoutFee = structuredClone(fee);
+      await s.store.seed({ offers: [offer] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      if (tampered) {
+        const readOffer = s.store.getOffer.bind(s.store);
+        const readReceipt = s.store.getReviewedSourceChangeReceipt.bind(s.store);
+        vi.spyOn(s.store, 'getOffer').mockImplementation(async id => {
+          const current = await readOffer(id);
+          if (current && await readReceipt(p.plan.entries[0]!.change!.idempotencyKey))
+            current.internalEconomicsTerms![0]!.channelPayoutFee = { state: 'KNOWN',
+              amount: { amount: 123, currency: 'KRW' }, calculation: { kind: 'FIXED', amount: { amount: 123, currency: 'KRW' } },
+              ruleId: 'test:injected-rule', policyId: 'test:injected-policy', sourceRefs: ['test:injected-source'] };
+          return current;
+        });
+      }
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: tampered ? 'HOLD' : 'APPLIED',
+        reconciliation: { readbackMismatches: tampered ? 1 : 0 } });
+      expect((await s.store.listOffers())[0]!.internalEconomicsTerms![0]!.channelPayoutFee).toEqual(fee);
+    } finally { vi.useRealTimers(); }
+  });
   it.each(['unchanged', 'amount', 'rate', 'base', 'vat', 'total', 'source', 'policy', 'rule'])(
     'verifies the exact vehicle-price fee snapshot after rent refresh: %s', async scenario => {
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
