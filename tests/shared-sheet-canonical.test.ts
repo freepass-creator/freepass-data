@@ -118,6 +118,23 @@ describe('shared sheet local source to Canonical', () => {
     expect(f.displacementCc!.value).toBe(1234); expect(f.batteryKwh!.value).toBe(77.7); expect(f.drive!.value).toBe('2WD');
     expect(n.record.candidate.priceTerms[0]!.depositState).toBe('ZERO');
   });
+  it('keeps both supplier colors as distinct source facts with cell lineage and immutable RAW', () => {
+    const c = capture({ 외부색상: '  펄 화이트  ', 내부색상: '블랙/브라운' });
+    const raw = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords[0]!;
+    const before = structuredClone(raw);
+    const n = normalizeSharedSheet(raw, masterEvidence());
+    expect(n.record.candidate.vehicleFacts!.fields.exteriorColor).toMatchObject({ value: '펄 화이트', state: 'KNOWN', evidence: '펄 화이트' });
+    expect(n.record.candidate.vehicleFacts!.fields.interiorColor).toMatchObject({ value: '블랙/브라운', state: 'KNOWN' });
+    expect(n.lineage.find(l => l.normalized?.fieldPath === 'vehicleFacts.fields.exteriorColor')).toMatchObject({
+      source: { value: '  펄 화이트  ' }, normalized: { value: { value: '펄 화이트', state: 'KNOWN' } } });
+    expect(raw).toEqual(before);
+  });
+  it('does not borrow exterior color for empty interior color or guess a review placeholder', () => {
+    const n = normalized(capture({ 외부색상: '확인 필요', 내부색상: '' }));
+    expect(n.record.candidate.vehicleFacts!.fields.exteriorColor).toMatchObject({ value: null, state: 'REVIEW_REQUIRED' });
+    expect(n.record.candidate.vehicleFacts!.fields.interiorColor).toMatchObject({ value: null, state: 'MISSING' });
+    expect(n.record.candidate.issues).toContain('INVALID_EXTERIORCOLOR');
+  });
   // 소수 칸 표시 형식 «0.###"kWh"»는 정수를 «22.kWh»로 보인다(2026-10-04 서식 통일) — 같은 값. 점 두 개·글자는 여전히 거부.
   it.each([['22.kWh', 22], ['54.kWh', 54], ['77.4kWh', 77.4], ['84kWh', 84]])('battery %s → %s', (shown, value) =>
     expect(normalized(capture({ 배터리용량: shown })).record.candidate.vehicleFacts!.fields.batteryKwh!.value).toBe(value));

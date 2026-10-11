@@ -1,5 +1,14 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-11 수집·정제 집중 — 원문 대조 및 색상 누락 보완
+
+- 목적: 대표 「수집 정제만 잘해둬봐」「ㄱㄱ」. IAM 설치와 소비처 배포는 이번 범위 밖. 기존 PR #451 작업선에서 원문 정제 adapter만 확장, 새 수집기/컬렉션/저장 경로 없음. academy data READY, 기준 `f5f8d3a`.
+- 원천 고정: 중앙 SourceIngestionStore 현재 head의 관측시각 2026-10-11 07:00:12 KST. RAW 175 = 후보 175, sourceRecordId 중복 0, 후보↔RAW fingerprint 연결 불일치 0. 원천 신선도를 오늘 현재까지 갱신했다고 표현하지 않는다. 차량 정본 중복판정 126, 연식·등록연도 불일치 23 등 기존 HOLD는 추정으로 해소하지 않았다(분류 중복 가능).
+- 발견/변경: 원문 외부색상 170 / 내부색상 167 칸이 populated지만 후보의 exteriorColor/interiorColor KNOWN은 각각 0. `normalize-shared-sheet.ts`에서 두 supplier 원문 텍스트를 독립 source fact로 보존하고 각 셀 lineage 추가. 색상 코드·별칭·차종 추정 없음. 빈칸 MISSING, 확인 placeholder REVIEW_REQUIRED. ruleVersion 5→6으로 이전 immutable candidate와 구분.
+- dry-run: 기존 RAW 175건을 메모리에서 색상만 재판정. 외부색상 KNOWN170/MISSING5, 내부색상 KNOWN167/MISSING8, RAW digest 불변, writes0. 전체 candidate의 master 승인 또는 canonical 승격 결과가 아니다.
+- 검증: 관련 86 PASS, 전체 2154 PASS /16 SKIP, build/boundary/diff-check PASS. Claude 독립 diff 검토 결과는 후속 기록 참조. 운영 원문·후보·canonical 쓰기 및 시트 변경 없음.
+- next_start_here: 기존 SourceIngestionStore 수집 lifecycle에서 ruleVersion6을 채택하고 최신 원천 및 sealed master를 고정해 기존 ingest plan으로 준비한다. 과거 후보 덮어쓰기/오류 줄 삭제/일괄 마스터 추정 금지. 이 색상 dry-run을 운영 반영 완료로 세지 않는다.
+
 ## 2026-10-11 Firestore 직접 내부 조회 — 구현과 운영 연결 구분
 
 - 목적/대상 revision: 대표 직접 요청 「Data가 Firestore에 쓰고 각 서비스가 직접 읽기」. 기준 main `1e1ea6894def6bebd3abe4d231471f3153ffdfea`, 작업선 `work/freepass-data/firestore-direct-read-20261011`.

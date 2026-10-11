@@ -8,7 +8,7 @@ import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
 import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION, type IdentityChoice, type VehicleIdentity, type VehicleMasterRecord } from '../domain/vehicle-identity-resolution.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWaiverFieldForTermMonths } from '../domain/deposit-evidence.js';
-export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/5';
+export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/6';
 export type SharedSheetMasterEvidence = { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
 /** AI 상황실 2026-10-04 (대표): every car is stored. The sheet status text is kept as-is; it only decides sale exposure.
  * assetStatus is the reviewed physical-state mapping; an unlisted status is HOLD, never guessed. */
@@ -109,6 +109,11 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     ['FWD', 'RWD'].includes(s.toUpperCase()) ? '2WD' : ['4MATIC', '콰트로'].includes(s) ? 'AWD' : null);
   field('batteryKwh', '배터리용량', s => number(s, 'kWh', true));
   field('mileageKm', '주행거리', s => number(s, 'km'));
+  // Supplier-entered color text is a fact, not an inferred paint code or master alias.
+  // Keep missing/review placeholders unresolved and preserve the original cell in RAW.
+  for (const [key, header] of [['exteriorColor', '외부색상'], ['interiorColor', '내부색상']] as const) {
+    field(key, header, s => /^(?:-|모름|미정|미확인|확인\s*필요|협의)$/.test(s) ? null : s);
+  }
   // No transmission column: accept only an explicitly labelled supplier phrase, never infer from trim.
   facts.fields.transmission = { value: null, state: 'MISSING', evidence: '', ruleVersion: SHARED_SHEET_RULE_VERSION, reasons: [] };
   const transmissionMatches = [...text('옵션 원문').matchAll(/변속기\s*[:=]\s*(자동|수동|AT|MT|CVT|DCT)(?=$|[\s,;/])/gi)];
@@ -187,6 +192,9 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     add(`${root}.monthlyRent.amount`, term.monthlyRent.amount, rentHeader);
     add(`${root}.depositState`, term.depositState, depHeader);
     if (term.deposit) add(`${root}.deposit.amount`, term.deposit.amount, depHeader);
+  }
+  for (const [key, header] of [['exteriorColor', '외부색상'], ['interiorColor', '내부색상']] as const) {
+    add(`vehicleFacts.fields.${key}`, facts.fields[key], header);
   }
   return { record, lineage, suppliedTerms };
 }
