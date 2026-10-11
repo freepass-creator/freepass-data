@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { DAILY_WRITER_ALLOWED_COLLECTIONS, evaluateDailyWriterGuard } from '../src/domain/daily-writer-guard.js';
 import { FIRESTORE_COLLECTIONS } from '../src/infra/firestore-layout.js';
@@ -10,6 +11,23 @@ const commit = (at: string, names: string[], who = account) => ({ timestamp: at,
   request: { writes: names.map((name) => ({ update: { name } })) } } });
 const run = { head_branch: 'main', event: 'schedule', status: 'completed', conclusion: 'success',
   run_started_at: '2026-10-05T18:40:00Z', updated_at: '2026-10-05T18:55:00Z' };
+const sparseGateSkippedJobSteps = [
+  { name: 'Set up job', conclusion: 'success' },
+  { name: 'Fetch gate scripts (sparse)', conclusion: 'success' },
+  { name: 'Daily schedule and manual apply gate', conclusion: 'success' },
+  { name: 'Run actions/checkout@v4', conclusion: 'skipped' },
+  { name: 'Run actions/setup-node@v4', conclusion: 'skipped' },
+  { name: 'Run npm ci --ignore-scripts', conclusion: 'skipped' },
+  { name: 'Require the Data delivery identity, sheet and private evidence bucket', conclusion: 'skipped' },
+  { name: 'Run google-github-actions/auth@v2', conclusion: 'skipped' },
+  { name: 'Run google-github-actions/setup-gcloud@v2', conclusion: 'skipped' },
+  { name: 'Capture and plan (no writes) — counts only in the public log', conclusion: 'skipped' },
+  { name: 'Apply to FreePass Data (writes) — counts only in the public log', conclusion: 'skipped' },
+  { name: 'Preserve private capture, plan and reports (location not printed)', conclusion: 'skipped' },
+  { name: 'Remove temporary files', conclusion: 'skipped' },
+  { name: 'Post Fetch gate scripts (sparse)', conclusion: 'success' },
+  { name: 'Complete job', conclusion: 'success' },
+];
 const skippedJobSteps = [
   { name: 'Set up job', conclusion: 'success' },
   { name: 'Daily schedule and manual apply gate', conclusion: 'success' },
@@ -47,6 +65,19 @@ const judge = (entries: unknown[], runs: unknown[] = [run]) =>
   evaluateDailyWriterGuard({ entries: entries as never, runs: runs as never, account, now, lookbackHours: 26 });
 
 describe('daily writer guard', () => {
+  it('keeps shared-sheet-daily step names unique inside the guarded job', () => {
+    const source = readFileSync('.github/workflows/shared-sheet-daily.yml', 'utf8');
+    const job = source.slice(source.indexOf('  shared-sheet-daily:'), source.indexOf('  # 기간별 수수료 일괄', source.indexOf('  shared-sheet-daily:')));
+    const stepBlocks = job.split(/\n      - /).slice(1);
+    const names = stepBlocks.map((block) => {
+      const explicit = block.match(/^name: (.+)$/m)?.[1];
+      const uses = block.match(/^uses: (.+)$/m)?.[1];
+      const run = block.match(/^run: (.+)$/m)?.[1];
+      return explicit ?? (uses ? `Run ${uses}` : run ? `Run ${run}` : 'Run');
+    });
+    expect(names.filter((name) => name === 'Fetch gate scripts (sparse)')).toHaveLength(1);
+    expect(new Set(names).size).toBe(names.length);
+  });
   it('allowed collections are real Canonical/source/evidence collections, never legacy products', () => {
     const real = new Set(Object.values(FIRESTORE_COLLECTIONS).flatMap((g) => Object.values(g as Record<string, string>)));
     for (const c of DAILY_WRITER_ALLOWED_COLLECTIONS) expect(real.has(c)).toBe(true);
@@ -104,6 +135,17 @@ describe('daily writer guard', () => {
   });
   it('does not count only when shared-sheet-daily steps prove the gate ran and write steps were skipped', () => {
     expect(judge([], [{ ...run, jobAttempts: [skippedJobSteps] }])).toMatchObject({ status: 'OK', silentApplies: 0 });
+    expect(judge([], [{ ...run, jobAttempts: [sparseGateSkippedJobSteps] }])).toMatchObject({ status: 'OK', silentApplies: 0 });
+  });
+  it('holds for sparse gate skip runs when the sparse checkout failed or capture/apply did not skip', () => {
+    const sparseCheckoutFailed = sparseGateSkippedJobSteps.map((s) => s.name === 'Fetch gate scripts (sparse)' ? { ...s, conclusion: 'failure' } : s);
+    const captureRan = sparseGateSkippedJobSteps.map((s) => s.name === 'Capture and plan (no writes) — counts only in the public log'
+      ? { ...s, conclusion: 'success' } : s);
+    const applyRan = sparseGateSkippedJobSteps.map((s) => s.name === 'Apply to FreePass Data (writes) — counts only in the public log'
+      ? { ...s, conclusion: 'success' } : s);
+    expect(judge([], [{ ...run, jobAttempts: [sparseCheckoutFailed] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [captureRan] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    expect(judge([], [{ ...run, jobAttempts: [applyRan] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
   });
   it('holds for the actual older write run because non-allowlisted steps succeeded', () => {
     expect(judge([], [{ ...run, jobAttempts: [oldWritingJobSteps] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
@@ -137,6 +179,8 @@ describe('daily writer guard', () => {
   it('any repeated step name holds, not only the three required steps', () => {
     const dup = [...skippedJobSteps, { name: 'Run actions/checkout@v4', conclusion: 'skipped' }];
     expect(judge([], [{ ...run, jobAttempts: [dup] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
+    const dupSparse = [...sparseGateSkippedJobSteps, { name: 'Fetch gate scripts (sparse)', conclusion: 'success' }];
+    expect(judge([], [{ ...run, jobAttempts: [dupSparse] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
     const dupSetup = [...skippedJobSteps, { name: 'Set up job', conclusion: 'success' }];
     expect(judge([], [{ ...run, jobAttempts: [dupSetup] }])).toMatchObject({ status: 'HOLD', silentApplies: 1 });
   });
