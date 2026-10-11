@@ -37,7 +37,7 @@ import { DataAccessAuditUnavailableError } from '../domain/data-access.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from '../application/projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
-import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
+import type { CatalogCompatibilitySnapshot, CatalogCompatibilityProductSnapshot } from '../infra/erp5-compat-catalog-reader.js';
 import {
   buildKakaoCatalogReference,
   buildInternalAiReference,
@@ -383,6 +383,7 @@ export function createConsumerGateway(
   compatReader?: {
     sourceStore?: Parameters<typeof readCurrentReferenceObservations>[0];
     read(consumerId: string): Promise<CatalogCompatibilitySnapshot>;
+    readProductCompat?(consumerId: string, productId: string): Promise<CatalogCompatibilityProductSnapshot>;
     readKakaoReferenceSource?(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }): Promise<KakaoCatalogReferenceSource>;
     readInternalAiReferenceSource?(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }): Promise<KakaoCatalogReferenceSource>;
     readVehiclePhoto?(consumerId: string, productId: string, index?: number): Promise<{ count: number; bytes: Buffer | null; contentType: string; revalidate(): Promise<boolean> }>;

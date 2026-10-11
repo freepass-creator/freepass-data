@@ -182,6 +182,34 @@ export type CatalogCompatibilitySnapshot = {
 
 export type CatalogCompatibilityReadCollection = 'products' | 'policy' | 'partner' | 'user' | 'vehicle_master';
 
+/** A bounded fact selection, not a complete catalog or a publication decision. */
+export type CatalogCompatibilityProductSnapshot = Omit<CatalogCompatibilitySnapshot, 'data' | 'meta'> & {
+  data: Pick<CatalogCompatibilitySnapshot['data'], 'products' | 'policies' | 'partners'>;
+  meta: CatalogCompatibilitySnapshot['meta'] & {
+    selection: 'SINGLE_PRODUCT';
+    readScope: 'SINGLE_PRODUCT';
+    selectedProductId: string;
+    readAt: string;
+    documentVersions: {
+      product: { id: string; updateTime: string };
+      policies: Array<{ id: string; updateTime: string }>;
+      partners: Array<{ id: string; updateTime: string }>;
+    };
+    linkedFacts: {
+      policy: { state: 'KNOWN' | 'UNKNOWN'; reasonCode: string | null };
+      partner: { state: 'KNOWN' | 'UNKNOWN'; reasonCode: string | null };
+    };
+  };
+};
+
+export class CatalogCompatibilityProductReadError extends Error {
+  constructor(readonly code: 'PRODUCT_NOT_FOUND' | 'PRODUCT_SELECTION_UNAVAILABLE' | 'INVALID_PRODUCT_SELECTION',
+    readonly statusCode: 400 | 404 | 503) {
+    super(code);
+    this.name = 'CatalogCompatibilityProductReadError';
+  }
+}
+
 export type CatalogCompatibilityReaderOptions = {
   readCollections?: readonly CatalogCompatibilityReadCollection[];
 };
