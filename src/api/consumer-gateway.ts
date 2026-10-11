@@ -354,6 +354,19 @@ export function createConsumerGateway(
   const trustedHops = Math.max(photoProxyHops, publicProxyHops);
   // Enabling hops requires an ingress that prevents clients from reaching the socket directly.
   const app = Fastify({ logger: false, trustProxy: trustedHops > 0 ? (_address, hop) => hop < trustedHops : false });
+  // Migration signal only: preserve auth, status and payload until each consumer's direct read is verified.
+  app.addHook('onRequest', async (request, reply) => {
+    if (request.method !== 'GET' || ![
+      '/v1/consumers/:consumerId/catalog',
+      '/v1/consumers/:consumerId/catalog-compat',
+      '/v1/consumers/:consumerId/catalog-reference',
+      '/v1/consumers/:consumerId/internal-ai-reference',
+    ].includes(request.routeOptions.url ?? '')) return;
+    reply.header('X-Freepass-Read-Mode', 'DIRECT_FIRESTORE_REQUIRED');
+    reply.header('X-Freepass-Migration-Status', 'LEGACY_READ_PENDING_RETIREMENT');
+    reply.header('X-Freepass-Migration-Instruction', 'Read stored canonical data directly from Firestore in your platform server using an authorized read identity; do not recalculate or use legacy fallback.');
+    reply.header('Link', '<https://github.com/freepass-creator/freepass-data/blob/work/freepass-data/firestore-direct-read-20261011/docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md>; rel="deprecation"');
+  });
   const ajv = new Ajv2020({ strict: false });
   addFormats(ajv);
   ajv.addSchema(catalogSchema);

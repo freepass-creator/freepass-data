@@ -1,5 +1,10 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-11 기존 조회 주소의 직접 읽기 전환 신호
+
+- 대표 「여기로 접근하면 직접읽으라는 사인을 줘」: 기존 상품 GET catalog/catalog-compat/catalog-reference/internal-ai-reference 응답에 `X-Freepass-Read-Mode: DIRECT_FIRESTORE_REQUIRED`, `X-Freepass-Migration-Status: LEGACY_READ_PENDING_RETIREMENT`, 서버의 승인된 신원으로 직접 읽으라는 instruction과 전환 기준 Link를 추가했다. 인증 실패에도 신호는 표시하지만 인증·상태·본문은 변경하지 않는다. 사진·계약·정산 route에는 적용하지 않는다.
+- 검증: gateway 101 PASS, build 및 diff-check 결과는 해당 커밋 실행 기록 참조. 운영 배포 전이므로 현재 온라인 응답에 신호가 나온다고 표현하지 않는다. 기존 route 종료/리다이렉트나 권한 변경 없음.
+
 ## 2026-10-11 플랫폼 직접 조회 전환 및 기존 상품 중계 폐기 결정
 
 - 목적/대상 revision: 대표 「수집 정제만」「각각 파이어스토어 조회」「기존거 다 폐기」. 기준 `025eb8b`, 기존 PR #451 작업선 유지. academy data READY.
