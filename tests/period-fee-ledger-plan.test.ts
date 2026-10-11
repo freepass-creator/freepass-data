@@ -85,10 +85,10 @@ describe('period fee ledger planner', () => {
 
     expect(plan.rows[0]).toMatchObject({
       vehicleValueEvidence: null,
-      supplierBillingFee: { state: 'CALCULATED', amount: { amount: 1650000, currency: 'KRW' }, ruleId: 'SONOKONG_PICKUP_60_BILLING_RENT_X_TERM' },
+      supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 1550000, currency: 'KRW' }, ruleId: 'SONOKONG_PICKUP_60_BILLING_RENT_X_TERM' },
       channelPayoutFee: { state: 'CALCULATED', amount: { amount: 1200000, currency: 'KRW' }, ruleId: 'SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM' },
     });
-    expect(plan.summary.approxCount).toEqual({ supplierBillingFee: 0, channelPayoutFee: 0 });
+    expect(plan.summary.approxCount).toEqual({ supplierBillingFee: 1, channelPayoutFee: 0 });
   });
 
   it('does not use approximate vehicle value evidence for Sonokong pickup fees', () => {
@@ -99,11 +99,11 @@ describe('period fee ledger planner', () => {
     }, { clock });
     expect(consumer.rows[0]).toMatchObject({
       vehicleValueEvidence: null,
-      supplierBillingFee: { state: 'CALCULATED', amount: { amount: 1650000, currency: 'KRW' } },
+      supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 1550000, currency: 'KRW' } },
       channelPayoutFee: { state: 'CALCULATED', amount: { amount: 1200000, currency: 'KRW' } },
     });
-    expect(consumer.summary.approxCount).toEqual({ supplierBillingFee: 0, channelPayoutFee: 0 });
-    expect(consumer.summary.feeStates.supplierBillingFee).toMatchObject({ CALCULATED: 1, CALCULATED_APPROX: 0 });
+    expect(consumer.summary.approxCount).toEqual({ supplierBillingFee: 1, channelPayoutFee: 0 });
+    expect(consumer.summary.feeStates.supplierBillingFee).toMatchObject({ CALCULATED: 0, CALCULATED_APPROX: 1 });
 
     const trim = planPeriodFeeLedger({
       products: { trimMatch: sonokongPickup({ trimKey: 'trim-1' }) },
@@ -113,7 +113,7 @@ describe('period fee ledger planner', () => {
     }, { clock });
     expect(trim.rows[0]).toMatchObject({
       vehicleValueEvidence: null,
-      supplierBillingFee: { state: 'CALCULATED', amount: { amount: 1650000, currency: 'KRW' } },
+      supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 1550000, currency: 'KRW' } },
     });
   });
 
@@ -131,9 +131,9 @@ describe('period fee ledger planner', () => {
 
     expect(plan.rows).toHaveLength(2);
     expect(plan.rows.every(row => row.vehicleValueEvidence === null)).toBe(true);
-    expect(plan.rows.every(row => row.supplierBillingFee.state === 'UNKNOWN' && row.supplierBillingFee.amount === null)).toBe(true);
-    expect(plan.rows.every(row => row.channelPayoutFee.reasonCode === 'PICKUP_TERM_RATE_NOT_IN_TABLE')).toBe(true);
-    expect(plan.summary.reasonCounts.PICKUP_TERM_RATE_NOT_IN_TABLE).toBe(4);
+    expect(plan.rows.every(row => row.supplierBillingFee.state === 'CALCULATED_APPROX' && row.supplierBillingFee.amount?.amount === 1040000)).toBe(true);
+    expect(plan.rows.every(row => row.channelPayoutFee.state === 'CALCULATED' && row.channelPayoutFee.amount?.amount === 960000)).toBe(true);
+    expect(plan.summary.approxCount).toEqual({ supplierBillingFee: 2, channelPayoutFee: 0 });
   });
 
   it('does not change other suppliers by passing vehicle value evidence', () => {

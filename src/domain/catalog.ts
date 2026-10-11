@@ -67,6 +67,8 @@ export type TermEconomicAmount = {
   ruleId?: string | null;
   policyId?: string;
   reasonCode?: string | null;
+  approximate?: boolean;
+  note?: string | null;
 };
 export type OfferTermEconomics = {
   termKey: string;

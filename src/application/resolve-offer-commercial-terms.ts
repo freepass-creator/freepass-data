@@ -125,7 +125,7 @@ export function refreshOfferEconomicsForChangedInputs(
         else if (referenceChange.changed && !referenceChange.exact && term[side].state === 'KNOWN') term[side] = {
           ...term[side], state: 'UNKNOWN', amount: null, calculation: null, sourceRefs: [],
           vatAmount: null, totalAmount: null,
-          reasonCode: fee.referenceRentBasis?.termMonths === 12 ? 'Q12_BASIS_REQUIRED' : 'BILLIN_36_MONTH_RENT_REQUIRED',
+          reasonCode: fee.referenceRentBasis?.termMonths === 12 ? 'OGONG_12M_BASE_MISSING' : 'BILLIN_36_MONTH_RENT_REQUIRED',
         };
         continue;
       }
@@ -251,7 +251,7 @@ export function precomputeOfferEconomics(
       }
       if (result.state === 'NOT_APPLICABLE') return { ...base, state: 'NOT_APPLICABLE', amount: null, calculation: null, reasonCode: result.reasonCode };
       if (result.state === 'COORDINATION_REQUIRED') return unknown('COORDINATION_REQUIRED');
-      if (result.state !== 'CALCULATED' || result.amount === null) return unknown(result.reasonCode ?? 'NO_MATCHING_RULE');
+      if ((result.state !== 'CALCULATED' && result.state !== 'CALCULATED_APPROX') || result.amount === null) return unknown(result.reasonCode ?? 'NO_MATCHING_RULE');
 
       let calculation: TermEconomicAmount['calculation'];
       const monthlyRule = policy.rules.find(rule => rule.id === result.ruleId && 'basis' in rule && rule.basis === 'MONTHLY_RENT');
@@ -286,7 +286,9 @@ export function precomputeOfferEconomics(
       return { ...base, state: result.amount === 0 ? 'ZERO' : 'KNOWN',
         sourceRefs: [...(result.sourceRefs ?? []), policy.currentAuthority,
           ...(result.ruleId?.startsWith('SONOKONG_SUBSCRIPTION_') && args.q12Basis?.sourceRef ? [args.q12Basis.sourceRef] : [])],
-        amount: { amount: result.amount, currency: 'KRW' }, calculation, reasonCode: null };
+        amount: { amount: result.amount, currency: 'KRW' }, calculation,
+        reasonCode: result.state === 'CALCULATED_APPROX' ? (result.note ?? 'APPROXIMATE_COMMISSION_RULE') : null,
+        ...(result.state === 'CALCULATED_APPROX' ? { approximate: true, note: result.note ?? null } : {}) };
     };
     const deposit = structuredClone(term.deposit ?? null);
     return {

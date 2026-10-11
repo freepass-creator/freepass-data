@@ -253,8 +253,8 @@ describe('canonical per-term economics precompute', () => {
   it.each([['RP012', 'USED_SUBSCRIPTION'], ['RP022', 'NEW_RENT']] as const)(
     'keeps missing evidence unknown for %s %s', (supplierId, kind) => {
       const row = precomputeOfferEconomics({ ...offer(), supplierId }, kind)[0]!;
-      expect(row.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: supplierId === 'RP012' ? 'Q12_BASIS_REQUIRED' : 'DEPOSIT_TIER_REQUIRED' });
-      expect(row.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: supplierId === 'RP012' ? 'Q12_BASIS_REQUIRED' : 'DEPOSIT_TIER_REQUIRED' });
+      expect(row.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: supplierId === 'RP012' ? 'OGONG_12M_BASE_MISSING' : 'DEPOSIT_TIER_REQUIRED' });
+      expect(row.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: supplierId === 'RP012' ? 'OGONG_12M_BASE_MISSING' : 'DEPOSIT_TIER_REQUIRED' });
     });
   it('keeps zero, missing product rules and unsupported periods distinct', () => {
     const input = offer(); input.supplierId = 'RP013'; input.priceTerms[0]!.monthlyRent.amount = 0;
@@ -283,12 +283,12 @@ describe('F04 explicit canonical evidence', () => {
     const evidence = { '60': { vehicleValue: 30000000 } };
     const before = structuredClone({ offer, evidence });
     const row = precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION', '가솔린', evidence)[0]!;
-    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 330000 }, policyId: 'sales-commission-2026-10-11' });
+    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 230000 }, policyId: 'sales-commission-2026-10-11', approximate: true });
     expect(row.channelPayoutFee.amount?.amount).toBe(240000);
     expect(row.supplierBillingFee.sourceRefs).toContain('F04:수수료표!A191:M191');
-    expect(precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee.amount?.amount).toBe(330000);
+    expect(precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee.amount?.amount).toBe(230000);
     const unsupported = { ...offer, priceTerms: [{ ...offer.priceTerms[0]!, termMonths: 24 }] };
-    expect(precomputeOfferEconomics(unsupported, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee.reasonCode).toBe('PICKUP_TERM_RATE_NOT_IN_TABLE');
+    expect(precomputeOfferEconomics(unsupported, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 128000 }, approximate: true });
     expect({ offer, evidence }).toEqual(before);
   });
   it('uses the same-product 36-month basis for Billin and records its exact price provenance', () => {
@@ -311,18 +311,18 @@ describe('F04 explicit canonical evidence', () => {
     ];
     const targetKey = input.priceTerms[1]!.termKey;
     expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, { [targetKey]: { subscriptionForm: 'BUYOUT' } })[1]!.supplierBillingFee)
-      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'Q12_BASIS_REQUIRED' });
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
     input.priceTerms[0]!.termKey = '12_?몄닔??';
     const q12Key = input.priceTerms[0]!.termKey;
     expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, { [q12Key]: { subscriptionForm: 'BUYOUT' }, [targetKey]: { subscriptionForm: 'BUYOUT' } })[1]!.supplierBillingFee.amount?.amount)
-      .toBe(1100000);
+      .toBe(900000);
     input.priceTerms.unshift({ termKey: '12_?몄닔??_duplicate', termMonths: 12, monthlyRent: { amount: 810000, currency: 'KRW' }, depositState: 'UNKNOWN' });
     const duplicateQ12Key = input.priceTerms[0]!.termKey;
     expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, { [duplicateQ12Key]: { subscriptionForm: 'BUYOUT' }, [q12Key]: { subscriptionForm: 'BUYOUT' }, [targetKey]: { subscriptionForm: 'BUYOUT' } })[2]!.supplierBillingFee)
-      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'Q12_BASIS_REQUIRED' });
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
     expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {
       [targetKey]: { subscriptionForm: 'BUYOUT', q12Basis: { amount: 900000, sourceRef: 'verified:q12' } },
-    })[2]!.supplierBillingFee.amount?.amount).toBe(1200000);
+    })[2]!.supplierBillingFee.amount?.amount).toBe(1000000);
   });
   it('passes price-key Sonokong settlement into Q12 selection and calculation', () => {
     const input = { ...offer(), supplierId: 'RP012' };
@@ -333,7 +333,7 @@ describe('F04 explicit canonical evidence', () => {
       { termKey: '24', termMonths: 24, monthlyRent: { amount: 700000, currency: 'KRW' }, depositState: 'UNKNOWN' },
     ];
     expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {}, ['24_인수형'])[0]!.supplierBillingFee)
-      .toMatchObject({ state: 'KNOWN', amount: { amount: 1200000 } });
+      .toMatchObject({ state: 'KNOWN', amount: { amount: 1000000 } });
     expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {}, ['24'])[0]!.supplierBillingFee)
       .toMatchObject({ state: 'UNKNOWN', reasonCode: 'RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED' });
     expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, { '24_인수형': { subscriptionForm: 'RETURN' } }, ['24_인수형'])[0]!.supplierBillingFee)

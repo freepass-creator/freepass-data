@@ -177,7 +177,7 @@ describe('offer economics recompute', () => {
     ]};
     offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'OGONG_SUBSCRIPTION');
     expect(offer.internalEconomicsTerms[1]!.supplierBillingFee).toMatchObject({
-      amount:{amount:1100000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:800000,currency:'KRW'},multiplier:1}
+      amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:800000,currency:'KRW'},multiplier:1}
     });
     expect(offer.internalEconomicsTerms[1]!.channelPayoutFee).toMatchObject({
       amount:{amount:800000},referenceRentBasis:{termKey:'12_인수형',termMonths:12}
@@ -190,7 +190,7 @@ describe('offer economics recompute', () => {
     changed.priceTerms[0]!.monthlyRent.amount=900000;
     const refreshed=refreshOfferEconomicsForChangedInputs(offer,changed,false,'OGONG_SUBSCRIPTION');
     expect(refreshed[1]!.supplierBillingFee).toMatchObject({
-      amount:{amount:1200000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
+      amount:{amount:1000000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
     });
     expect(refreshed[1]!.channelPayoutFee).toMatchObject({
       amount:{amount:900000},referenceRentBasis:{termKey:'12_인수형',termMonths:12,monthlyRent:{amount:900000,currency:'KRW'}}
@@ -198,7 +198,7 @@ describe('offer economics recompute', () => {
     const ambiguous=structuredClone(offer);
     ambiguous.priceTerms.push({...ambiguous.priceTerms[0]!,termKey:`${ambiguous.priceTerms[0]!.termKey}-extra`,monthlyRent:{amount:900000,currency:'KRW'}});
     expect(refreshOfferEconomicsForChangedInputs(offer,ambiguous,false,'OGONG_SUBSCRIPTION')[1]!.supplierBillingFee)
-      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'Q12_BASIS_REQUIRED'});
+      .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'OGONG_12M_BASE_MISSING'});
   });
   it('scopes plans to changed offer/product IDs and rejects missing offers without writes', async () => {
     const store = await fixture(), original = (await store.listOffers())[0]!;

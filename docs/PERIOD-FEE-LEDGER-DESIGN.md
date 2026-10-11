@@ -433,22 +433,25 @@ rollback도 같은 접두 범위로 현재 남아 있는 이 run 소유 문서�
 
 ## 손오공 상품 유형별 기간별 매핑표
 
-2026-10-12 대표 결정으로 손오공 `RP012`의 픽업 구독과 오공 구독은 차량가액 기준 수수료를 쓰지 않고 F04 `수수료표`의 기간별 규칙만 쓴다. UNKNOWN은 0이 아니며, 수수료 ledger도 같은 상태와 reasonCode를 보존한다.
+2026-10-12 대표 확정으로 손오공 `RP012`의 픽업 구독과 오공 구독은 차량가액 기준 수수료를 쓰지 않고 F04 `수수료표`의 기간별 규칙만 쓴다. UNKNOWN은 0이 아니며, 수수료 ledger도 같은 상태와 reasonCode를 보존한다. 오공구독 기준 대여료는 같은 상품 12개월 월 대여료로 확정했고, 청구는 `CALCULATED`와 `OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12`를 쓴다. 자기 기간 월 대여료 기준 경로와 별도 `OGONG_FEE_BASE` 상수는 없다.
 
-| 유형 | 기간 | 청구 규칙 ID | 지급 규칙 ID | 근거 행 | 미확정 사유 |
-| --- | --- | --- | --- | --- | --- |
-| 재렌트/중고렌트 | 12 | `STANDARD_RERENT_12_FIXED` | `STANDARD_RERENT_12_FIXED` | 5 | 없음 |
-| 재렌트/중고렌트 | 24 | `STANDARD_RERENT_24_RENT_X_TERM` | `STANDARD_RERENT_24_RENT_X_TERM` | 6 | 없음 |
-| 재렌트/중고렌트 | 36 | `STANDARD_RERENT_36_RENT_X_TERM` | `STANDARD_RERENT_36_RENT_X_TERM` | 7 | 없음 |
-| 재렌트/중고렌트 | 48 | `STANDARD_RERENT_48_RENT_X_TERM` | `STANDARD_RERENT_48_RENT_X_TERM` | 8 | 없음 |
-| 재렌트/중고렌트 | 60 | `STANDARD_RERENT_60_RENT_X_TERM` | `STANDARD_RERENT_60_RENT_X_TERM` | 9 | 없음 |
-| 오공구독 | 12 | `SONOKONG_SUBSCRIPTION_12_BILLING` | `SONOKONG_SUBSCRIPTION_12_PAYOUT` | 10 | 같은 상품·같은 조건의 12개월 월 대여료가 없으면 `Q12_BASIS_REQUIRED` |
-| 오공구독 인수형 | 24 | `SONOKONG_SUBSCRIPTION_24_BILLING` | `SONOKONG_SUBSCRIPTION_24_PAYOUT` | 11 | 12개월 기준 없으면 `Q12_BASIS_REQUIRED`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
-| 오공구독 인수형 | 36 | `SONOKONG_SUBSCRIPTION_36_BILLING` | `SONOKONG_SUBSCRIPTION_36_PAYOUT` | 12 | 12개월 기준 없으면 `Q12_BASIS_REQUIRED`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
-| 오공구독 인수형 | 48 | `SONOKONG_SUBSCRIPTION_48_BILLING` | `SONOKONG_SUBSCRIPTION_48_PAYOUT` | 13 | 12개월 기준 없으면 `Q12_BASIS_REQUIRED`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
-| 오공구독 인수형 | 60 | `SONOKONG_SUBSCRIPTION_60_BILLING` | `SONOKONG_SUBSCRIPTION_60_PAYOUT` | 14 | 12개월 기준 없으면 `Q12_BASIS_REQUIRED`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
-| 오공구독 반납형 | 24·36·48·60 | 없음 | 없음 | 173 | `RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED` |
-| 픽업구독 | 60 | `SONOKONG_PICKUP_60_BILLING_RENT_X_TERM` | `SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM` | 191 | 없음 |
-| 픽업구독 | 12·24·36·48 | 없음 | 없음 | 없음 | `PICKUP_TERM_RATE_NOT_IN_TABLE` |
+| 유형 | 기간 | 청구 규칙 | 지급 규칙 | 근거 행 | 근사 여부 | 메모 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 재렌트/중고렌트 | 12 | `600,000 - 100,000` | `500,000` | 5 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 재렌트/중고렌트 | 24 | `월대여료 × 4.75% × 기간 - 100,000` | `월대여료 × 4.00% × 기간` | 6 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 재렌트/중고렌트 | 36 | `월대여료 × 3.75% × 기간 - 100,000` | `월대여료 × 3.00% × 기간` | 7 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 재렌트/중고렌트 | 48 | `월대여료 × 3.25% × 기간 - 100,000` | `월대여료 × 2.50% × 기간` | 8 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 재렌트/중고렌트 | 60 | `월대여료 × 2.25% × 기간 - 100,000` | `월대여료 × 1.75% × 기간` | 9 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 오공구독 | 12 | `12개월 월대여료 - 100,000` | `Q12` | 10 | 없음 | sourceRefs `OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12`; Q12 없으면 `OGONG_12M_BASE_MISSING` |
+| 오공구독 인수형 | 24 | `12개월 월대여료 - 100,000 + 200,000` | `Q12` | 11 | 없음 | Q12 없으면 `OGONG_12M_BASE_MISSING`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 인수형 | 36 | `12개월 월대여료 - 100,000 + 400,000` | `Q12` | 12 | 없음 | Q12 없으면 `OGONG_12M_BASE_MISSING`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 인수형 | 48 | `12개월 월대여료 - 100,000 + 600,000` | `Q12` | 13 | 없음 | Q12 없으면 `OGONG_12M_BASE_MISSING`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 인수형 | 60 | `12개월 월대여료 - 100,000 + 600,000` | `Q12` | 14 | 없음 | Q12 없으면 `OGONG_12M_BASE_MISSING`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 반납형 | 24·36·48·60 | 없음 | 없음 | 173 | 미확정 | `RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED`; 인수/반납 구분 자체가 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 픽업구독 | 12 | `600,000 - 100,000` | `500,000` | 5 | 청구만 근사 | 재렌트 12개월 규칙 재사용, sourceRefs `SONOKONG_PICKUP_TERM_PROXY_RERENT`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+| 픽업구독 | 24 | `월대여료 × 4.75% × 기간 - 100,000` | `월대여료 × 4.00% × 기간` | 6 | 청구만 근사 | 재렌트 24개월 규칙 재사용, sourceRefs `SONOKONG_PICKUP_TERM_PROXY_RERENT`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+| 픽업구독 | 36 | `월대여료 × 3.75% × 기간 - 100,000` | `월대여료 × 3.00% × 기간` | 7 | 청구만 근사 | 재렌트 36개월 규칙 재사용, sourceRefs `SONOKONG_PICKUP_TERM_PROXY_RERENT`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+| 픽업구독 | 48 | `월대여료 × 3.25% × 기간 - 100,000` | `월대여료 × 2.50% × 기간` | 8 | 청구만 근사 | 재렌트 48개월 규칙 재사용, sourceRefs `SONOKONG_PICKUP_TERM_PROXY_RERENT`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+| 픽업구독 | 60 | `월대여료 × 2.75% × 기간 - 100,000` | `월대여료 × 2.00% × 기간` | 191 | 청구만 근사 | 잠정 행 191, sourceRefs `SONOKONG_PICKUP_60_PROVISIONAL_ROW191`, `SONOKONG_INSURANCE_DEDUCT_100K` |
 
-오공구독의 `q12Basis`는 reference builder가 같은 상품의 같은 정산방식·약정주행 조건에서 12개월 가격행 월 대여료를 찾아 `PRODUCT_12_MONTH_RENT`로 자동 주입한다. 12개월 행 자체는 인수·반납형 공통 기준으로 계산하며, 24~60개월은 원문 가격키나 필드에서 인수형이 확인될 때만 BUYOUT으로 계산한다.
+오공구독의 `q12Basis`는 reference builder가 같은 상품의 같은 정산방식·약정주행 조건에서 12개월 가격행 월 대여료를 찾아 `PRODUCT_12_MONTH_RENT`로 자동 주입한다. 12개월 행 자체는 인수·반납형 공통 기준으로 계산하며, 24~60개월은 원문 가격키나 필드에서 인수형이 확인될 때만 BUYOUT으로 계산한다. 오공구독 최종 청구가 음수이면 0으로 보정하지 않고 `NEGATIVE_BILLING_CONFIRM_REQUIRED`로 둔다.

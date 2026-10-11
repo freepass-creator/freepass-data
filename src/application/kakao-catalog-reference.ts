@@ -184,8 +184,8 @@ function readSourceFeeLineage(raw: RawRecord, record: NormalizedCandidateRecord,
     if(!['EXCLUDED','INCLUDED','UNKNOWN'].includes(f.vatTreatment) ||
       (f.ruleId!==null && (typeof f.ruleId!=='string'||!/^[A-Z][A-Z0-9_:.-]{0,199}$/.test(f.ruleId))) ||
       (f.reasonCode!==null && (typeof f.reasonCode!=='string'||!/^[A-Z][A-Z0-9_:.-]{0,199}$/.test(f.reasonCode))) ||
-      (f.sourceRefs!==undefined && (!Array.isArray(f.sourceRefs)||f.sourceRefs.some(r=>typeof r!=='string'||!(/^(?:USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*)$/.test(r)))))) return false;
-    return f.state==='CALCULATED' ? f.vatTreatment!=='UNKNOWN' && !!f.sourceRefs?.length && Number.isSafeInteger(f.amount) && f.amount!>=0 && !!f.ruleId &&
+      (f.sourceRefs!==undefined && (!Array.isArray(f.sourceRefs)||f.sourceRefs.some(r=>typeof r!=='string'||!(/^(?:USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT|OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12|SONOKONG_INSURANCE_DEDUCT_100K|SONOKONG_PICKUP_TERM_PROXY_RERENT|SONOKONG_PICKUP_60_PROVISIONAL_ROW191|F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*)$/.test(r)))))) return false;
+    return (f.state==='CALCULATED' || f.state==='CALCULATED_APPROX') ? f.vatTreatment!=='UNKNOWN' && !!f.sourceRefs?.length && Number.isSafeInteger(f.amount) && f.amount!>=0 && !!f.ruleId &&
       Number.isSafeInteger(f.vatAmount) && f.vatAmount!>=0 && Number.isSafeInteger(f.totalAmount) &&
       f.totalAmount===f.amount!+f.vatAmount! :
       ['UNKNOWN','COORDINATION_REQUIRED','NOT_APPLICABLE'].includes(f.state) && f.amount===null && f.vatAmount===null && f.totalAmount===null;
@@ -196,7 +196,8 @@ function readSourceFeeLineage(raw: RawRecord, record: NormalizedCandidateRecord,
     inputDigest:v.inputDigest,observedAt:v.observedAt,lineageRecordId:l.lineageRecordId,priceSourceRefs:refs};
   const fee=(f:CommissionResolution)=>({state:f.state,ruleId:f.ruleId,amount:f.amount,vatTreatment:f.vatTreatment,
     vatAmount:f.vatAmount,totalAmount:f.totalAmount,reasonCode:f.reasonCode,
-    ...(f.state==='CALCULATED' && f.sourceRefs?{sourceRefs:[...f.sourceRefs]}:{}),derivedEvidence:evidence});
+    ...((f.state==='CALCULATED' || f.state==='CALCULATED_APPROX') && f.sourceRefs?{sourceRefs:[...f.sourceRefs]}:{}),
+    derivedEvidence:evidence});
   return {supplierBillingFee:fee(v.supplierBillingFee),channelPayoutFee:fee(v.channelPayoutFee)};
 }
 
@@ -480,7 +481,7 @@ export const KAKAO_COMMISSION_POLICY = {
   evidenceHistory: [...KAKAO_COMMISSION_POLICY_2026_10_04.evidenceHistory,
     { policyId: KAKAO_COMMISSION_POLICY_2026_10_04.policyId, observedAt: '2026-10-04', revision: '35de6d9fa96ad07fba2fb2d68a4cb1c9113b61a5' },
     { policyId: 'sales-commission-2026-10-09', observedAt: '2026-10-09', revision: '1e1ea6894def6bebd3abe4d231471f3153ffdfea' }],
-  sonokongAdditions: { ...KAKAO_COMMISSION_POLICY_2026_10_04.sonokongAdditions, 60: 600000 },
+  sonokongAdditions: { 12: -100000, 24: 100000, 36: 300000, 48: 500000, 60: 500000 },
   sonokong60Evidence: { sourceRows: [14], evidence: 'private:ai-ops/정산-수수료규칙-20261005', decidedBy: 'AI 상황실 2026-10-05' },
   roundingRule: { rule: 'ROUND_HALF_UP_TO_WON', sourceRows: [171], evidence: 'private:ai-ops/정산-수수료규칙-20261005', decidedBy: 'AI 상황실 2026-10-05' },
   /** 뮤카(RP035, 2026-10-05 발급) 구독 — freepass-admin DEC-2026-10-04-01 8번 = F04 수수료표 169·170행. 일반·픽업 공통.
@@ -515,8 +516,24 @@ type CommissionResolution = {
   vatAmount: number | null;
   totalAmount: number | null;
   reasonCode: string | null;
+  approximate?: boolean;
+  note?: string | null;
   vehicleValueEvidence?: { grade: 'CONFIRMED' | 'APPROX'; source: 'SUPPLIER_RAW' | 'CONSUMER_PRICE' | 'NEW_CAR_TRIM' };
 };
+
+const ogongTermAddon = (termMonths: number): number | null => {
+  if (termMonths === 12) return 0;
+  if (termMonths === 24) return 200000;
+  if (termMonths === 36) return 400000;
+  if (termMonths === 48 || termMonths === 60) return 600000;
+  return null;
+};
+
+function computeOgongBillingAmount(input: { rent12: number; termMonths: number }): number | null {
+  const addon = ogongTermAddon(input.termMonths);
+  if (addon === null || !Number.isSafeInteger(input.rent12)) return null;
+  return input.rent12 - 100000 + addon;
+}
 
 type MarginResolution = {
   state: MarginState;
@@ -586,6 +603,18 @@ const calculatedCommission = (
   const totalAmount = supply + vatAmount;
   if (!Number.isSafeInteger(totalAmount)) return unknownCommission('COMMISSION_AMOUNT_OUT_OF_RANGE');
   return { state: 'CALCULATED', ruleId, amount: supply, vatTreatment, vatAmount, totalAmount, reasonCode: null };
+};
+
+const approximateCommission = (
+  ruleId: string,
+  amount: number,
+  vatTreatment: VatTreatment,
+  note: string,
+): CommissionResolution => {
+  const resolved = calculatedCommission(ruleId, amount, vatTreatment);
+  return resolved.state === 'CALCULATED'
+    ? { ...resolved, state: 'CALCULATED_APPROX', approximate: true, note }
+    : resolved;
 };
 
 const unknownCommission = (reasonCode: string): CommissionResolution => ({
@@ -765,8 +794,17 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   const subscription = /구독/.test(productType);
   if (supplierId === 'RP013' && /발주/.test(productType)) return unknownCommission('WELRIX_ORDER_RULE_UNCONFIRMED');
   if (supplierId === 'RP012' && /^픽업\s*구독(?:\(롯데T카\))?$/.test(productType)) {
-    if (termMonths !== 60) return unknownCommission('PICKUP_TERM_RATE_NOT_IN_TABLE');
-    return fixed(`SONOKONG_PICKUP_60_${side}_RENT_X_TERM`, monthlyRent * termMonths * (billing ? 275 : 200) / 10000);
+    if ([12, 24, 36, 48].includes(termMonths)) {
+      const base = resolveTermLadder(termMonths, monthlyRent, side);
+      if (base.state !== 'CALCULATED' || base.amount === null) return base;
+      return billing
+        ? approximateCommission(`SONOKONG_PICKUP_${termMonths}_BILLING_RERENT_LADDER`, base.amount - 100000, 'EXCLUDED', 'SONOKONG_PICKUP_TERM_PROXY_RERENT')
+        : { ...base, ruleId: `SONOKONG_PICKUP_${termMonths}_PAYOUT_RERENT_LADDER` };
+    }
+    if (termMonths !== 60) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
+    return billing
+      ? approximateCommission('SONOKONG_PICKUP_60_BILLING_RENT_X_TERM', monthlyRent * termMonths * 275 / 10000 - 100000, 'EXCLUDED', 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191')
+      : fixed('SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM', monthlyRent * termMonths * 200 / 10000);
   }
   if (['RP021', 'PT-0026'].includes(supplierId) && subscription) {
     const basis = input.billin36MonthlyRent ?? (termMonths === 36 ? monthlyRent : undefined);
@@ -775,14 +813,20 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
     return fixed(`BILLIN_SUBSCRIPTION_36_RENT_${side}`, basis! * (billing ? 1 : 0.8));
   }
   if (supplierId === 'RP012' && subscription) {
-    const addition = KAKAO_COMMISSION_POLICY.sonokongAdditions[termMonths as 12];
-    if (addition === undefined) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
+    if (ogongTermAddon(termMonths) === null) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
     if (input.subscriptionFormConflict) return unknownCommission('SUBSCRIPTION_FORM_CONFLICT');
-    if (!input.q12Basis || !Number.isSafeInteger(input.q12Basis.amount) || input.q12Basis.amount <= 0 || !text(input.q12Basis.sourceRef)) return unknownCommission('Q12_BASIS_REQUIRED');
-    if (termMonths === 12) return fixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, input.q12Basis.amount + (billing ? addition : 0));
+    if (!input.q12Basis || !Number.isSafeInteger(input.q12Basis.amount) || input.q12Basis.amount <= 0 || !text(input.q12Basis.sourceRef)) return unknownCommission('OGONG_12M_BASE_MISSING');
+    const amount = billing ? computeOgongBillingAmount({ rent12: input.q12Basis.amount, termMonths }) : input.q12Basis.amount;
+    if (amount === null) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
+    if (billing && amount < 0) return unknownCommission('NEGATIVE_BILLING_CONFIRM_REQUIRED');
+    if (termMonths === 12) return billing
+      ? fixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, amount)
+      : fixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, amount);
     if (input.subscriptionForm === 'RETURN') return unknownCommission('RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED');
     if (input.subscriptionForm !== 'BUYOUT' && input.subscriptionForm !== 'RETURN') return unknownCommission('SUBSCRIPTION_FORM_REQUIRED');
-    return fixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, input.q12Basis.amount + (billing ? addition : 0));
+    return billing
+      ? fixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, amount)
+      : fixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, amount);
   }
   if (KAKAO_COMMISSION_POLICY.exceptionSupplierIds.star.includes(supplierId as 'RP018') && rerent) {
     return fixed(billing ? 'STAR_RERENT_ONE_MONTH_RENT_BILLING' : 'STAR_RERENT_ONE_MONTH_RENT_X_80_PERCENT', monthlyRent * (billing ? 1 : 0.8), 'INCLUDED');
@@ -801,6 +845,11 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   if (!standardLadderSupplier(supplierId)) return unknownCommission('SUPPLIER_RULE_NOT_IN_F04_CANONICAL_TABLE');
   if (subscription && KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds.some(id => id === supplierId)) {
     return resolveTermLadder(termMonths, monthlyRent, side);
+  }
+  if (supplierId === 'RP012' && rerent) {
+    const base = resolveTermLadder(termMonths, monthlyRent, side);
+    if (!billing || base.state !== 'CALCULATED' || base.amount === null) return base;
+    return approximateCommission(`SONOKONG_RERENT_${termMonths}_BILLING_INSURANCE_DEDUCT`, base.amount - 100000, 'EXCLUDED', 'SONOKONG_INSURANCE_DEDUCT_100K');
   }
   if (rerent) return resolveTermLadder(termMonths, monthlyRent, side);
   if (/^신차/.test(productType) && !subscription) {
@@ -827,7 +876,7 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   if (input.individualException || input.individualAgreement || input.individualExceptionEvidence !== undefined) rows = input.individualAgreement ? [input.individualAgreement.sourceRow] : [160, 163];
   else if (input.supplierId === 'RP034') rows = [168];
   else if (input.supplierId === KAKAO_COMMISSION_POLICY.mewcar.supplierId) rows = [...KAKAO_COMMISSION_POLICY.mewcar.sourceRows];
-  else if (input.supplierId === 'RP012' && /^픽업\s*구독/.test(product)) rows = input.termMonths === 60 ? [191] : [];
+  else if (input.supplierId === 'RP012' && /^픽업\s*구독/.test(product)) rows = input.termMonths === 60 ? [191] : input.termMonths === 12 ? [5] : input.termMonths === 24 ? [6] : input.termMonths === 36 ? [7] : input.termMonths === 48 ? [8] : [];
   else if (input.supplierId === 'RP012' && /구독/.test(product)) rows = [({12:10,24:11,36:12,48:13,60:14} as Record<number, number>)[input.termMonths] ?? 183, 173, 191];
   else if (input.supplierId === 'RP023' && /구독/.test(product)) rows = /전기/.test(input.fuel ?? '') ? [161] : [123, 161];
   else if (['RP021', 'PT-0026'].includes(input.supplierId) && /구독/.test(product)) rows = [162];
@@ -848,10 +897,16 @@ function resolveCommission(input: CommissionInput, side: 'BILLING' | 'PAYOUT'): 
   if (result.reasonCode === 'WON_ROUNDING_POLICY_UNCONFIRMED') rows.push(171);
   if (result.reasonCode === 'DEPOSIT_TIER_REQUIRED') rows.push(172);
   // 근거 행은 계산된 결과에만 단다. UNKNOWN·NOT_APPLICABLE·협의는 reasonCode만 — 미등록 공급사가 「근거 있는 규칙」처럼 보이지 않게.
-  if (result.state !== 'CALCULATED') return result;
+  if (result.state !== 'CALCULATED' && result.state !== 'CALCULATED_APPROX') return result;
   if (id.startsWith('STANDARD_RERENT_1_')) return { ...result, sourceRefs: [KAKAO_COMMISSION_POLICY.oneMonthBasic.sourceRef] };
   if (id.startsWith('BILLIN_SUBSCRIPTION_36_RENT')) return { ...result, sourceRefs: ['USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80'] };
-  return { ...result, sourceRefs: [...new Set(rows)].map(f04Ref) };
+  const notes = [
+    ...(id.startsWith('SONOKONG_SUBSCRIPTION_') && side === 'BILLING' ? ['OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12'] : []),
+    ...(result.note ? [result.note] : []),
+    ...(result.note === 'SONOKONG_PICKUP_TERM_PROXY_RERENT' ? ['SONOKONG_INSURANCE_DEDUCT_100K'] : []),
+    ...(result.note === 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191' ? ['SONOKONG_INSURANCE_DEDUCT_100K'] : []),
+  ];
+  return { ...result, sourceRefs: [...new Set([...new Set(rows)].map(f04Ref).concat(notes))] };
 }
 
 export function resolveSalesCommission(input: CommissionInput): CommissionResolution {
@@ -1026,11 +1081,15 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       } : {}),
     };
     const vehicleValueEvidence = publicVehicleValueEvidence(evidenceByTerm[sourceKey]?.vehicleValue ? rawVehicleValueEvidence : null);
-    const withVehicleValueEvidence = (fee: CommissionResolution) => ({
-      ...fee,
-      ...(fee.state === 'CALCULATED' && vehicleValueEvidence?.grade === 'APPROX' ? { state: 'CALCULATED_APPROX' as const } : {}),
-      ...(fee.state === 'CALCULATED' && vehicleValueEvidence ? { vehicleValueEvidence } : {}),
-    });
+    const withVehicleValueEvidence = (fee: CommissionResolution) => {
+      const { approximate: _approximate, note, ...publicFee } = fee;
+      return {
+        ...publicFee,
+        ...(fee.state === 'CALCULATED_APPROX' && note && !fee.reasonCode ? { reasonCode: note } : {}),
+        ...(fee.state === 'CALCULATED' && vehicleValueEvidence?.grade === 'APPROX' ? { state: 'CALCULATED_APPROX' as const } : {}),
+        ...(fee.state === 'CALCULATED' && vehicleValueEvidence ? { vehicleValueEvidence } : {}),
+      };
+    };
     const channelPayoutFee = withVehicleValueEvidence(resolveSalesCommission({
       ...automaticCommissionEvidence,
       ...evidenceByTerm[sourceKey],
