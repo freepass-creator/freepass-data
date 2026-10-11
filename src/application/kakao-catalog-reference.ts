@@ -11,6 +11,7 @@ import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
 import { isAssignedPlate } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { evidenceByTermForProduct, publicVehicleValueEvidence, type NewCarTrimEvidenceInput, type VehicleValueEvidence } from './vehicle-value-evidence.js';
 
 export const referenceResponseDigest = (data: unknown, sourceObservations?: unknown) => hash(JSON.stringify(sourceObservations ? { data, sourceObservations } : data));
 
@@ -216,7 +217,7 @@ export function resolveReferenceVehiclePhotos(source: Rec) {
 }
 type DepositState = 'KNOWN' | 'ZERO' | 'UNKNOWN';
 type VatTreatment = 'EXCLUDED' | 'INCLUDED' | 'UNKNOWN';
-type CommissionState = 'CALCULATED' | 'COORDINATION_REQUIRED' | 'UNKNOWN' | 'NOT_APPLICABLE';
+type CommissionState = 'CALCULATED' | 'CALCULATED_APPROX' | 'COORDINATION_REQUIRED' | 'UNKNOWN' | 'NOT_APPLICABLE';
 type MarginState = 'CALCULATED' | 'UNKNOWN' | 'NOT_APPLICABLE';
 
 export const KAKAO_CATALOG_REFERENCE_SCHEMA = 'freepass-data.kakao-catalog-reference/v1' as const;
@@ -385,6 +386,7 @@ type CommissionResolution = {
   vatAmount: number | null;
   totalAmount: number | null;
   reasonCode: string | null;
+  vehicleValueEvidence?: { grade: 'CONFIRMED' | 'APPROX'; source: 'SUPPLIER_RAW' | 'CONSUMER_PRICE' | 'NEW_CAR_TRIM' };
 };
 
 type MarginResolution = {
@@ -775,7 +777,7 @@ export function resolveReferencePolicyContext(source: Rec, policies: Record<stri
 }
 
 export type ReferenceSourceScope = 'LISTABLE' | 'COLLECTED';
-export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}, observedAt?: string, sourceScope: ReferenceSourceScope = 'LISTABLE') {
+export function buildKakaoCatalogReferenceProduct(documentId: string, source: Rec, evidenceByTerm: CommissionEvidenceByTerm = {}, policies: Record<string, Rec> = {}, observedAt?: string, sourceScope: ReferenceSourceScope = 'LISTABLE', rawVehicleValueEvidence: VehicleValueEvidence | null = null) {
   const collected = sourceScope === 'COLLECTED';
   if (!collected && source.listable !== true) return null;
   const supplierId = text(source.provider_company_code);
@@ -821,7 +823,13 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
         publicationDecision: publishedDeposit.publicationDecision,
       } : {}),
     };
-    const channelPayoutFee = resolveSalesCommission({
+    const vehicleValueEvidence = publicVehicleValueEvidence(evidenceByTerm[sourceKey]?.vehicleValue ? rawVehicleValueEvidence : null);
+    const withVehicleValueEvidence = (fee: CommissionResolution) => ({
+      ...fee,
+      ...(fee.state === 'CALCULATED' && vehicleValueEvidence?.grade === 'APPROX' ? { state: 'CALCULATED_APPROX' as const } : {}),
+      ...(fee.state === 'CALCULATED' && vehicleValueEvidence ? { vehicleValueEvidence } : {}),
+    });
+    const channelPayoutFee = withVehicleValueEvidence(resolveSalesCommission({
       ...evidenceByTerm[sourceKey],
       supplierId,
       productType: text(source.product_type),
@@ -829,8 +837,8 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       termMonths: parsed.months,
       monthlyRent,
       billin36MonthlyRent,
-    });
-    const supplierBillingFee = resolveSupplierBillingFee({
+    }));
+    const supplierBillingFee = withVehicleValueEvidence(resolveSupplierBillingFee({
       ...evidenceByTerm[sourceKey],
       supplierId,
       productType: text(source.product_type),
@@ -838,7 +846,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       termMonths: parsed.months,
       monthlyRent,
       billin36MonthlyRent,
-    });
+    }));
     const expectedGrossMargin = resolveExpectedGrossMargin(supplierBillingFee, channelPayoutFee);
     return [{
       termKey: `source:${sourceKey}`,
@@ -946,6 +954,8 @@ export type KakaoCatalogReferenceSource = {
   /** Master/trim share their sealed snapshot. Products/policies are separate reads. */
   vehicleMasterSnapshot?: VehicleMasterSnapshot | null;
   vehicleMasterReadState?: 'AVAILABLE' | 'UNAVAILABLE';
+  /** Optional sealed new-car trim facts when the caller already read them; never opened here. */
+  newCarTrim?: NewCarTrimEvidenceInput;
 };
 type LegacyReference = Omit<ReturnType<typeof buildReferenceFacts>, 'data'> & {
   data: Extract<ReturnType<typeof buildReferenceFacts>['data'][number], { offers: unknown }>[];
@@ -993,8 +1003,14 @@ function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
       resolveMaster = () => hold('VEHICLE_MASTER_SNAPSHOT_UNVERIFIED');
     }
   }
+  let hasLiveUnsavedFee = false;
   const legacyData = Object.entries(input.products)
-    .map(([id, source]) => buildKakaoCatalogReferenceProduct(id, source, input.commissionEvidenceByProduct?.[id], input.policies, input.observedAt, input.sourceScope))
+    .map(([id, source]) => {
+      const automaticEvidence = input.consumerId === 'kakao-ops' ? evidenceByTermForProduct(source, input.newCarTrim) : null;
+      const mergedEvidenceByTerm = { ...(automaticEvidence?.evidenceByTerm ?? {}), ...(input.commissionEvidenceByProduct?.[id] ?? {}) };
+      if (automaticEvidence?.vehicleValueEvidence) hasLiveUnsavedFee = true;
+      return buildKakaoCatalogReferenceProduct(id, source, mergedEvidenceByTerm, input.policies, input.observedAt, input.sourceScope, automaticEvidence?.vehicleValueEvidence ?? null);
+    })
     .filter((row): row is NonNullable<typeof row> => row !== null)
     .map(row => ({ ...row, representationKind: 'LEGACY_PRODUCT' as const, vehicleMasterReference: resolveMaster(input.products[row.sourceProductId]!) }))
     .sort((a, b) => a.productId.localeCompare(b.productId));
@@ -1006,6 +1022,7 @@ function buildReferenceFacts(input: KakaoCatalogReferenceSource) {
   return {
     schema: KAKAO_CATALOG_REFERENCE_SCHEMA,
     data,
+    ...(input.consumerId === 'kakao-ops' && hasLiveUnsavedFee ? { feeComputation: { mode: 'LIVE_ENGINE_UNSAVED' as const, note: '계산값·저장 전' as const } } : {}),
     ...(sourceObservations ? { sourceObservations } : {}),
     commissionPolicy: { ...KAKAO_COMMISSION_POLICY, digest: policyDigest },
     meta: {

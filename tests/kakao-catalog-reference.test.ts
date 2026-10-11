@@ -731,6 +731,44 @@ describe('F04 2026-10-04 alignment regression', () => {
     expect(product).toEqual(sourceBefore);
     expect(evidence).toEqual({ vehicleValue: 44000000, depositTierPercent: 5, newProductSubtype: 'NEW_PREDELIVERY' });
   });
+  it('6b: Kakao reference reuses Sonokong vehicle value evidence without publishing evidence amounts', () => {
+    const schema = JSON.parse(readFileSync(new URL('../contracts/kakao-catalog-reference-v1.schema.json', import.meta.url), 'utf8'));
+    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(schema);
+    const baseProduct = { listable: true, provider_company_code: 'RP012', provider_name: '손오공', product_type: '픽업 구독', price: { '36': { rent: 800000, deposit: 1000000 } } };
+
+    const confirmed = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-11T00:00:00Z',
+      products: { confirmed: { ...baseProduct, 원문: { 차량가격: '31,240,000' }, consumer_price: 31000000 } } });
+    expect(validate(confirmed), JSON.stringify(validate.errors)).toBe(true);
+    expect(confirmed.feeComputation).toEqual({ mode: 'LIVE_ENGINE_UNSAVED', note: '계산값·저장 전' });
+    expect(confirmed.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toMatchObject({
+      state: 'CALCULATED',
+      amount: 1249600,
+      vehicleValueEvidence: { grade: 'CONFIRMED', source: 'SUPPLIER_RAW' },
+    });
+    expect(JSON.stringify(confirmed.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee.vehicleValueEvidence)).not.toMatch(/amount|differenceAmount|31240000|240000/);
+
+    const approximate = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-11T00:00:00Z',
+      products: { approximate: { ...baseProduct, consumer_price: 30000000 } } });
+    expect(validate(approximate), JSON.stringify(validate.errors)).toBe(true);
+    expect(approximate.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toMatchObject({
+      state: 'CALCULATED_APPROX',
+      vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE' },
+    });
+    expect(approximate.data[0]!.offers[0]!.priceTerms[0]!.expectedGrossMargin).toMatchObject({ state: 'UNKNOWN' });
+
+    const missing = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-11T00:00:00Z',
+      products: { missing: baseProduct } });
+    expect(validate(missing), JSON.stringify(validate.errors)).toBe(true);
+    expect(missing).not.toHaveProperty('feeComputation');
+    expect(missing.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'VEHICLE_VALUE_REQUIRED' });
+    expect(missing.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).not.toHaveProperty('vehicleValueEvidence');
+
+    const otherSupplier = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-11T00:00:00Z',
+      products: { other: { ...baseProduct, provider_company_code: 'RP013', provider_name: 'TEST-FAKE-SUPPLIER', consumer_price: 30000000 } } });
+    expect(otherSupplier).not.toHaveProperty('feeComputation');
+    expect(otherSupplier.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toMatchObject({ state: 'CALCULATED', amount: 1080000 });
+    expect(otherSupplier.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).not.toHaveProperty('vehicleValueEvidence');
+  });
   it('7: an approved private individual agreement pays exactly its amounts (same input → same amount), with row 160 provenance', () => {
     const input = { ...base, supplierId: 'RP012', individualException: true, individualAgreement: agreement };
     const before = structuredClone(input);
