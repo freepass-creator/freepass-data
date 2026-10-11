@@ -1,5 +1,7 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 신뢰도 점검표 읽기 전용 산출: `src/application/trust-scorecard.ts`·`src/jobs/audit-trust-scorecard.ts`·`docs/TRUST-SCORECARD.md` 추가, 기존 parity/deposit/fee/photo/status/source head 재사용, 검증은 종료 보고 기준, next_start_here: 운영 실행은 네트워크 가능 환경에서 `TRUST_SCORECARD_OUT_DIR` 저장소 밖 절대경로로 수동 실행.
+
 ## 2026-10-10 공개 상품 응답 설계
 
 - `docs/PUBLIC-PRODUCT-FEED-DESIGN.md` 작성: ERP4 `/api/catalog/feed`·`/api/catalog/quote`를 FreePass Data 공개 route로 대체하는 v1 계약, allowlist, 보증금 재사용, 증명 계획, 10-14 ERP4 응답 종료 제안. 코드 변경·커밋·push 없음.
