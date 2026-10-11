@@ -105,4 +105,9 @@ describe('bounded compatibility product facts', () => {
     const f = fixture({ ...fixture().records['products/machine-id'], ...change });
     await expect(readSingleProductCompatibility(f.db, 'erp-com', 'machine-id', scope)).rejects.toMatchObject({ statusCode: 503 });
   });
+  it.each(['policy/P1', 'partner/RP031'])('holds related document code conflicts: %s', async path => {
+    const f = fixture();
+    f.records[path] = path.startsWith('policy') ? { policy_code: 'other-code' } : { partner_code: 'RP099' };
+    await expect(readSingleProductCompatibility(f.db, 'erp-com', 'machine-id', scope)).rejects.toMatchObject({ statusCode: 503 });
+  });
 });
