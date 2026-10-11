@@ -57,13 +57,65 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
     }
   }
 
-  async getSnapshotRun(snapshotId: string): Promise<PeriodFeeSnapshotRun | null> {
-    const snap = await this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(snapshotId).get();
+  async getSnapshotRun(runId: string): Promise<PeriodFeeSnapshotRun | null> {
+    const snap = await this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(runId).get();
     return snap.exists ? snap.data() as PeriodFeeSnapshotRun : null;
   }
 
-  async setSnapshotRun(snapshotId: string, run: PeriodFeeSnapshotRun): Promise<void> {
-    await this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(snapshotId).set(run, { merge: true });
+  async getActiveSnapshotRun(snapshotId: string): Promise<PeriodFeeSnapshotRun | null> {
+    const snap = await this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns)
+      .where('snapshotId', '==', snapshotId)
+      .where('active', '==', true)
+      .limit(2)
+      .get();
+    if (snap.docs.length > 1) throw new Error('PERIOD_FEE_ACTIVE_RUN_NOT_UNIQUE');
+    return snap.docs[0]?.data() as PeriodFeeSnapshotRun | undefined ?? null;
+  }
+
+  async getLatestSupersededSnapshotRun(snapshotId: string, excludeRunId: string): Promise<PeriodFeeSnapshotRun | null> {
+    const snap = await this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns)
+      .where('snapshotId', '==', snapshotId)
+      .where('status', '==', 'SUPERSEDED')
+      .get();
+    return snap.docs
+      .map(doc => doc.data() as PeriodFeeSnapshotRun)
+      .filter(run => run.runId !== excludeRunId)
+      .sort((a, b) => Date.parse(b.activatedAt ?? '') - Date.parse(a.activatedAt ?? ''))[0] ?? null;
+  }
+
+  async setSnapshotRun(runId: string, run: PeriodFeeSnapshotRun): Promise<void> {
+    await this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(runId).set(run, { merge: true });
+  }
+
+  async activateSnapshotRun(runId: string, run: PeriodFeeSnapshotRun, previousActiveRunId: string | null): Promise<void> {
+    await this.db.runTransaction(async tx => {
+      const runs = this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns);
+      const active = await tx.get(runs.where('snapshotId', '==', run.snapshotId).where('active', '==', true));
+      tx.set(runs.doc(runId), run, { merge: true });
+      for (const doc of active.docs) {
+        if (doc.id !== runId) tx.set(doc.ref, { status: 'SUPERSEDED', active: false }, { merge: true });
+      }
+      if (previousActiveRunId && previousActiveRunId !== runId && !active.docs.some(doc => doc.id === previousActiveRunId)) {
+        tx.set(runs.doc(previousActiveRunId), { status: 'SUPERSEDED', active: false }, { merge: true });
+      }
+    });
+  }
+
+  async restoreSnapshotRunActive(runId: string, expectedPlanDigest: string): Promise<void> {
+    await this.db.runTransaction(async tx => {
+      const runs = this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns);
+      const targetRef = runs.doc(runId);
+      const target = await tx.get(targetRef);
+      const data = target.data() as PeriodFeeSnapshotRun | undefined;
+      if (!target.exists || data?.planDigest !== expectedPlanDigest || data.status !== 'SUPERSEDED') {
+        throw new Error('PERIOD_FEE_RESTORE_RUN_DIGEST_MISMATCH');
+      }
+      const active = await tx.get(runs.where('snapshotId', '==', data.snapshotId).where('active', '==', true));
+      for (const doc of active.docs) {
+        if (doc.id !== runId) tx.set(doc.ref, { status: 'SUPERSEDED', active: false }, { merge: true });
+      }
+      tx.set(targetRef, { status: 'ACTIVE', active: true }, { merge: true });
+    });
   }
 
   async readLedgerRows(snapshotId: string): Promise<PeriodFeeLedgerRow[]> {
@@ -74,13 +126,16 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
     });
   }
 
-  async markSnapshotRunInactive(snapshotId: string): Promise<void> {
-    const existing = await this.getSnapshotRun(snapshotId);
-    await this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(snapshotId).set({
+  async markSnapshotRunInactive(runId: string): Promise<void> {
+    const existing = await this.getSnapshotRun(runId);
+    await this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(runId).set({
       ...(existing ?? {
         schemaVersion: 'period-fee-snapshot-run/v1',
-        snapshotId,
+        runId,
+        snapshotId: runId,
         planDigest: '',
+        previousActiveRunId: null,
+        createdDocumentKeys: [],
         preparedAt: new Date().toISOString(),
         rowCount: 0,
         readyRowCount: 0,
@@ -95,11 +150,15 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
     }, { merge: true });
   }
 
-  async deleteLedgerRows(snapshotId: string): Promise<number> {
-    const snap = await this.collection(FIRESTORE_COLLECTIONS.periodFees.ledger).where('snapshotId', '==', snapshotId).get();
+  async deleteLedgerRowsByDigest(documentDigests: Array<{ documentKey: string; digest: string }>): Promise<number> {
     let deleted = 0;
-    for (const doc of snap.docs) {
-      await doc.ref.delete();
+    for (const target of documentDigests) {
+      const ref = this.collection(FIRESTORE_COLLECTIONS.periodFees.ledger).doc(target.documentKey);
+      const snap = await ref.get();
+      if (!snap.exists) continue;
+      const data = snap.data() as Rec;
+      if (data.digest !== target.digest) continue;
+      await ref.delete();
       deleted += 1;
     }
     return deleted;

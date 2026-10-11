@@ -66,6 +66,16 @@ const nowIso = (now: (() => Date) | undefined) => {
 
 const documentDigest = (value: unknown) => stableDigest(value);
 
+const snapshotRunId = (snapshotId: string, planDigest: string) =>
+  `${snapshotId}__${planDigest.slice(0, 24)}`;
+
+const readyLedgerTargets = (plan: PeriodFeeLedgerPlan, keys?: readonly string[]) => {
+  const allowed = keys ? new Set(keys) : null;
+  return plan.rows
+    .filter(row => row.applyState === 'READY' && row.vehicleUid && (!allowed || allowed.has(row.documentKey)))
+    .map(row => ({ documentKey: row.documentKey, digest: documentDigest(row) }));
+};
+
 const historyDocumentKey = (row: ProductChangeHistoryRow | ProductChangeHistoryBaselineRow) =>
   [row.productKey, row.snapshotId, row.fieldPath, stableDigest(row).slice(0, 24)]
     .map(part => String(part).replace(/[\/#?[\]*]/g, '_').slice(0, 180))
@@ -130,12 +140,26 @@ export async function applyPeriodFeeLedgerPlan(
   }
 
   const preparedAt = nowIso(options.now);
-  await store.setSnapshotRun(plan.snapshotId, {
+  const runId = snapshotRunId(plan.snapshotId, plan.planDigest);
+  const existingRun = await store.getSnapshotRun(runId);
+  const previousActive = await store.getActiveSnapshotRun(plan.snapshotId);
+  if (previousActive && previousActive.planDigest !== plan.planDigest) {
+    for (const row of readyRows) {
+      const existing = await store.getLedgerDocument(row.documentKey);
+      if (existing && existing.digest !== documentDigest(row)) {
+        throw new Error('PERIOD_FEE_LEDGER_DOCUMENT_DIGEST_CONFLICT');
+      }
+    }
+  }
+  await store.setSnapshotRun(runId, {
     schemaVersion: 'period-fee-snapshot-run/v1',
+    runId,
     snapshotId: plan.snapshotId,
     planDigest: plan.planDigest,
     status: 'PREPARED',
     active: false,
+    previousActiveRunId: previousActive?.runId ?? null,
+    createdDocumentKeys: existingRun?.createdDocumentKeys ?? [],
     preparedAt,
     activatedAt: null,
     rowCount: plan.rows.length,
@@ -146,6 +170,7 @@ export async function applyPeriodFeeLedgerPlan(
     readbackDigest: null,
   });
 
+  const createdDocumentKeys: string[] = [];
   for (const row of readyRows) {
     const digest = documentDigest(row);
     const existing = await store.getLedgerDocument(row.documentKey);
@@ -155,6 +180,7 @@ export async function applyPeriodFeeLedgerPlan(
       continue;
     }
     await store.createLedgerDocument(row.documentKey, row, digest);
+    createdDocumentKeys.push(row.documentKey);
     counts.ledgerCreated += 1;
   }
 
@@ -164,12 +190,15 @@ export async function applyPeriodFeeLedgerPlan(
   }
 
   const readback = assertReadback(plan, await store.readLedgerRows(plan.snapshotId), options.sampleSize ?? 50);
-  await store.setSnapshotRun(plan.snapshotId, {
+  await store.activateSnapshotRun(runId, {
     schemaVersion: 'period-fee-snapshot-run/v1',
+    runId,
     snapshotId: plan.snapshotId,
     planDigest: plan.planDigest,
     status: 'ACTIVE',
     active: true,
+    previousActiveRunId: previousActive?.runId ?? null,
+    createdDocumentKeys: [...new Set([...(existingRun?.createdDocumentKeys ?? []), ...createdDocumentKeys])],
     preparedAt,
     activatedAt: nowIso(options.now),
     rowCount: plan.rows.length,
@@ -178,7 +207,7 @@ export async function applyPeriodFeeLedgerPlan(
     historyRowCount: historyRows.length,
     readbackSampleCount: readback.sampleCount,
     readbackDigest: readback.digest,
-  });
+  }, previousActive?.runId ?? null);
   counts.activeMarked = 1;
   return { status: 'APPLIED', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: true, counts };
 }
@@ -192,7 +221,30 @@ export async function rollbackPeriodFeeLedgerSnapshot(
   if (!options.writeApproved) {
     return { status: 'DRY_RUN', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: false, inactiveRuns: 0, deletedRows: 0 };
   }
-  await store.markSnapshotRunInactive(plan.snapshotId);
-  const deletedRows = await store.deleteLedgerRows(plan.snapshotId);
+  const runId = snapshotRunId(plan.snapshotId, plan.planDigest);
+  const run = await store.getSnapshotRun(runId);
+  if (!run || run.planDigest !== plan.planDigest) throw new Error('PERIOD_FEE_ROLLBACK_RUN_DIGEST_MISMATCH');
+  if (run.status === 'SUPERSEDED') throw new Error('ROLLBACK_SUPERSEDED_RUN');
+  const activeBefore = await store.getActiveSnapshotRun(plan.snapshotId);
+  const targets = readyLedgerTargets(plan, run.createdDocumentKeys);
+  if (activeBefore && activeBefore.runId !== runId) {
+    for (const target of targets) {
+      if (activeBefore.createdDocumentKeys.includes(target.documentKey)) throw new Error('PERIOD_FEE_ROLLBACK_ACTIVE_DOCUMENT_REFERENCE');
+    }
+  }
+  await store.markSnapshotRunInactive(runId);
+  const deletedRows = await store.deleteLedgerRowsByDigest(targets);
+  if (run.status === 'ACTIVE') {
+    const restore = run.previousActiveRunId
+      ? await store.getSnapshotRun(run.previousActiveRunId)
+      : await store.getLatestSupersededSnapshotRun(plan.snapshotId, runId);
+    if (restore?.status === 'SUPERSEDED') {
+      await store.restoreSnapshotRunActive(restore.runId, restore.planDigest);
+      const restored = await store.getActiveSnapshotRun(plan.snapshotId);
+      if (!restored || restored.runId !== restore.runId || restored.planDigest !== restore.planDigest) {
+        throw new Error('PERIOD_FEE_ROLLBACK_RESTORE_READBACK_FAILED');
+      }
+    }
+  }
   return { status: 'ROLLED_BACK', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: true, inactiveRuns: 1, deletedRows };
 }

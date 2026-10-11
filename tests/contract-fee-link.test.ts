@@ -450,6 +450,52 @@ describe('contract fee link', () => {
     expect(result).toMatchObject({ status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE' });
   });
 
+  it.each([
+    '2026-10-10T08:00:00+09:00',
+    '2026-10-10T15:00:00+09:00',
+    '2026-10-10T23:59:59+09:00',
+  ])('holds same KST calendar-day observation %s when contract has only a date', (valueAsOf) => {
+    const result = pickLedgerRowForContract({
+      rows: [ledgerRow({ valueAsOf, computedAt: valueAsOf, snapshotId: 'period-fee-2026-10-10-same-day' })],
+      contractDate: '2026-10-10',
+      termMonths: 24,
+      monthlyRent: 700000,
+      deposit: 0,
+    });
+
+    expect(result).toMatchObject({ status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE' });
+  });
+
+  it('confirms the previous KST calendar-day observation when contract has only a date', () => {
+    const result = pickLedgerRowForContract({
+      rows: [ledgerRow({
+        valueAsOf: '2026-10-09T23:59:00+09:00',
+        computedAt: '2026-10-09T23:59:00+09:00',
+        snapshotId: 'period-fee-2026-10-09-before-date',
+      })],
+      contractDate: '2026-10-10',
+      termMonths: 24,
+      monthlyRent: 700000,
+      deposit: 0,
+    });
+
+    expect(result.status).toBe('CONFIRMED');
+    expect(result.status === 'CONFIRMED' ? result.row.snapshotId : '').toBe('period-fee-2026-10-09-before-date');
+  });
+
+  it('confirms date-only previous-day observations when contract has only a date', () => {
+    const result = pickLedgerRowForContract({
+      rows: [ledgerRow({ valueAsOf: '2026-10-09', snapshotId: 'period-fee-2026-10-09-date-only' })],
+      contractDate: '2026-10-10',
+      termMonths: 24,
+      monthlyRent: 700000,
+      deposit: 0,
+    });
+
+    expect(result.status).toBe('CONFIRMED');
+    expect(result.status === 'CONFIRMED' ? result.row.snapshotId : '').toBe('period-fee-2026-10-09-date-only');
+  });
+
   it('holds ledger observations at exactly the contract instant', () => {
     const result = pickLedgerRowForContract({
       rows: [ledgerRow({
@@ -483,6 +529,31 @@ describe('contract fee link', () => {
 
     expect(result.status).toBe('CONFIRMED');
     expect(result.status === 'CONFIRMED' ? result.row.snapshotId : '').toBe('period-fee-2026-10-10-before-offset');
+  });
+
+  it('sorts mixed Z and +09:00 observation times by parsed milliseconds and picks the actual latest', () => {
+    const olderByInstant = ledgerRow({
+      valueAsOf: '2026-10-10T09:30:00+09:00',
+      computedAt: '2026-10-10T09:30:00+09:00',
+      snapshotId: 'period-fee-2026-10-10-older-kst',
+    });
+    const latestByInstant = ledgerRow({
+      valueAsOf: '2026-10-10T00:45:00Z',
+      computedAt: '2026-10-10T00:45:00Z',
+      snapshotId: 'period-fee-2026-10-10-latest-z',
+    });
+
+    const result = pickLedgerRowForContract({
+      rows: [olderByInstant, latestByInstant],
+      contractDate: '2026-10-10',
+      contractAt: '2026-10-10T10:00:00+09:00',
+      termMonths: 24,
+      monthlyRent: 700000,
+      deposit: 0,
+    });
+
+    expect(result.status).toBe('CONFIRMED');
+    expect(result.status === 'CONFIRMED' ? result.row.snapshotId : '').toBe('period-fee-2026-10-10-latest-z');
   });
 
   it('holds contract ledger selection when the contract timestamp is invalid', () => {

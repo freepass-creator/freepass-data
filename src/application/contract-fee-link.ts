@@ -1,7 +1,7 @@
 import type { Offer, PriceTerm, Product, VehicleAsset } from '../domain/catalog.js';
 import type { InternalFeeLookupTerm } from '../domain/internal-fee-lookup-contract.js';
 import { toInternalFeeLookup } from '../domain/internal-fee-lookup-contract.js';
-import type { PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
+import { kstDate, type PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
 import type { CatalogStore } from '../ports/catalog-store.js';
 
 export type ContractFeeLinkInput = {
@@ -153,22 +153,42 @@ const ledgerRowMismatches = (input: Pick<ContractLedgerPickInput, 'monthlyRent' 
   return mismatches;
 };
 
-const hasTimeComponent = (value: string) => /^\d{4}-\d{2}-\d{2}T/.test(value);
-
 const parseTime = (value: string | undefined) => {
   if (!value) return NaN;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : NaN;
 };
 
+const dateOnly = (value: string | undefined) =>
+  typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+
+const ledgerObservationMs = (row: PeriodFeeLedgerRow) => {
+  const valueAsOfMs = parseTime(row.valueAsOf);
+  if (Number.isFinite(valueAsOfMs)) return valueAsOfMs;
+  return parseTime(row.computedAt);
+};
+
+const contractInstantMs = (input: Pick<ContractLedgerPickInput, 'contractDate' | 'contractAt'>) =>
+  parseTime(input.contractAt ?? input.contractDate);
+
+const ledgerObservationKstDate = (row: PeriodFeeLedgerRow) => {
+  const valueAsOfDate = dateOnly(row.valueAsOf);
+  if (valueAsOfDate) return valueAsOfDate;
+  const valueAsOfMs = parseTime(row.valueAsOf);
+  if (Number.isFinite(valueAsOfMs)) return kstDate(row.valueAsOf);
+  const computedAtMs = parseTime(row.computedAt);
+  return Number.isFinite(computedAtMs) ? kstDate(row.computedAt) : null;
+};
+
 const observedBeforeContract = (row: PeriodFeeLedgerRow, input: Pick<ContractLedgerPickInput, 'contractDate' | 'contractAt'>) => {
-  if (input.contractAt) {
-    const rowTime = hasTimeComponent(row.valueAsOf) ? row.valueAsOf : row.computedAt;
-    const rowMs = parseTime(rowTime);
-    const contractMs = parseTime(input.contractAt);
-    return Number.isFinite(rowMs) && Number.isFinite(contractMs) && rowMs < contractMs;
+  if (!input.contractAt) {
+    const contractDate = dateOnly(input.contractDate);
+    const observationDate = ledgerObservationKstDate(row);
+    return Boolean(contractDate && observationDate && observationDate < contractDate);
   }
-  return row.valueAsOf < input.contractDate;
+  const rowMs = ledgerObservationMs(row);
+  const contractMs = contractInstantMs(input);
+  return Number.isFinite(rowMs) && Number.isFinite(contractMs) && rowMs < contractMs;
 };
 
 export function pickLedgerRowForContract(input: ContractLedgerPickInput): ContractLedgerPickResult {
@@ -177,7 +197,7 @@ export function pickLedgerRowForContract(input: ContractLedgerPickInput): Contra
       row.valueBasis === 'CURRENT_AT_SNAPSHOT'
       && observedBeforeContract(row, input)
       && row.termMonths === input.termMonths)
-    .sort((a, b) => b.valueAsOf.localeCompare(a.valueAsOf) || b.snapshotId.localeCompare(a.snapshotId));
+    .sort((a, b) => ledgerObservationMs(b) - ledgerObservationMs(a) || b.snapshotId.localeCompare(a.snapshotId));
   const latest = candidates[0];
   if (!latest) {
     return { status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE', detail: { candidateCount: 0 } };

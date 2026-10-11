@@ -102,10 +102,13 @@ export type ProductChangeHistoryBaselineRow = {
 
 export type PeriodFeeSnapshotRun = {
   schemaVersion: 'period-fee-snapshot-run/v1';
+  runId: string;
   snapshotId: string;
   planDigest: string;
-  status: 'PREPARED' | 'ACTIVE' | 'INACTIVE' | 'ROLLED_BACK' | 'FAILED';
+  status: 'PREPARED' | 'ACTIVE' | 'SUPERSEDED' | 'INACTIVE' | 'ROLLED_BACK' | 'FAILED';
   active: boolean;
+  previousActiveRunId: string | null;
+  createdDocumentKeys: string[];
   preparedAt: string;
   activatedAt: string | null;
   rowCount: number;

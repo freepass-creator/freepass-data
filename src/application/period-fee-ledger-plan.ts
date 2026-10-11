@@ -94,7 +94,7 @@ const snapshotDate = (snapshotId: string) => {
   if (!match) throw new Error('PERIOD_FEE_SNAPSHOT_ID_INVALID');
   return match[1]!;
 };
-const kstDate = (iso: string) => {
+export const kstDate = (iso: string) => {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) throw new Error('PERIOD_FEE_OBSERVED_AT_INVALID');
   const parts = new Intl.DateTimeFormat('en-CA', {
