@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
   applyVehicleUidMigration as applyVehicleUidMigrationRaw,
@@ -50,9 +53,11 @@ const applyVehicleUidMigration = (
   store: VehicleUidMigrationWriteStore,
   migrationPlan: ReturnType<typeof planVehicleUidMigration>,
   expectedDigest: string,
-  options: { approvedDigest?: string; writeFlag?: string; now: string },
+  options: Parameters<typeof applyVehicleUidMigrationRaw>[3],
   backupWriter: (backup: VehicleUidMigrationBackup) => Promise<void> = persistBackup,
 ) => applyVehicleUidMigrationRaw(store, migrationPlan, expectedDigest, options, backupWriter);
+const actualWriteCount = (mutations: Parameters<NonNullable<VehicleUidMigrationWriteStore['commitMutations']>>[0]) =>
+  mutations.filter(mutation => mutation.kind !== 'PRODUCT_VERIFY_IDENTIFIERS').length;
 
 function plan(products: Record<string, VehicleUidMigrationProduct>, assets = [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001', 'TEST-FAKE-VIN-001')]) {
   return planVehicleUidMigration({
@@ -70,6 +75,7 @@ class FakeStore implements VehicleUidMigrationWriteStore {
   assetVersions = new Map<string, VehicleUidMigrationUpdateTime>();
   productVersions = new Map<string, VehicleUidMigrationUpdateTime>();
   failAfterWrites = Number.POSITIVE_INFINITY;
+  committedMutations: Parameters<NonNullable<VehicleUidMigrationWriteStore['commitMutations']>>[0][] = [];
   constructor(
     readonly assets: Map<string, VehicleAsset>,
     readonly products: Map<string, Record<string, unknown>>,
@@ -116,6 +122,7 @@ class FakeStore implements VehicleUidMigrationWriteStore {
     this.products.set(productKey, current);
   }
   async commitMutations(mutations: Parameters<NonNullable<VehicleUidMigrationWriteStore['commitMutations']>>[0]) {
+    this.committedMutations.push(structuredClone(mutations));
     const skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' | 'NOT_APPLIED' | 'STALE_ASSET' | 'STALE_IDENTIFIER' }> = [];
     const sameUpdateTime = (left: VehicleUidMigrationUpdateTime | undefined, right: VehicleUidMigrationUpdateTime | undefined) =>
       left?.seconds === right?.seconds && left?.nanoseconds === right?.nanoseconds;
@@ -192,7 +199,7 @@ class FakeStore implements VehicleUidMigrationWriteStore {
         await this.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
         this.productVersions.set(mutation.productKey, nextVersion());
       } else if (mutation.kind === 'PRODUCT_VERIFY_IDENTIFIERS') {
-        this.productVersions.set(mutation.productKey, nextVersion());
+        continue;
       } else {
         await this.deleteProductVehicleUid(mutation.productKey);
         this.productVersions.set(mutation.productKey, nextVersion());
@@ -231,7 +238,7 @@ class ReadBeforeWriteFakeStore extends FakeStore {
         await this.deleteProductVehicleUid(mutation.productKey);
       }
     }
-    return { applied: mutations.length, skipped: [] };
+    return { applied: actualWriteCount(mutations), skipped: [] };
   }
 }
 
@@ -348,6 +355,47 @@ describe('applyVehicleUidMigration', () => {
     const result = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
     expect(result.skippedReasons?.STALE_ASSET).toBe(1);
     expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
+  });
+
+  it('turns an already-linked planned PRODUCT_SET_UID into a verify-only mutation', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001') }, [assetWithCurrentExternalIds('TEST-FAKE-UID-001', 'TEST-FAKE-001')]);
+    expect(p.items).toContainEqual(expect.objectContaining({ kind: 'PRODUCT_SET_UID', productKey: 'p1', vehicleUid: 'TEST-FAKE-UID-001' }));
+    const store = new FakeStore(
+      new Map([['TEST-FAKE-UID-001', assetWithCurrentExternalIds('TEST-FAKE-UID-001', 'TEST-FAKE-001')]]),
+      new Map([['p1', product('TEST-FAKE-001', { vehicle_uid: 'TEST-FAKE-UID-001' })]]),
+    );
+
+    const result = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+
+    expect(result.writes).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(store.committedMutations.flat()).toContainEqual(expect.objectContaining({
+      kind: 'PRODUCT_VERIFY_IDENTIFIERS',
+      productKey: 'p1',
+      vehicleUid: 'TEST-FAKE-UID-001',
+    }));
+  });
+
+  it('rejects a second apply while the single-runner lock is held', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001') });
+    const store = fakeStore(p);
+    const lockDir = await mkdtemp(join(tmpdir(), 'TEST-FAKE-vehicle-uid-lock-'));
+    await writeFile(join(lockDir, 'vehicle-uid-migration.lock'), JSON.stringify({
+      owner: 'TEST-FAKE-FIRST',
+      action: 'apply',
+      createdAt: p.createdAt,
+    }), 'utf8');
+    try {
+      await expect(applyVehicleUidMigration(store, p, p.planDigest, {
+        now: p.createdAt,
+        approvedDigest: p.planDigest,
+        writeFlag: 'APPLY',
+        lock: { directory: lockDir, owner: 'TEST-FAKE-SECOND', now: p.createdAt },
+      })).rejects.toThrow('LOCK_HELD');
+      expect(store.writes).toBe(0);
+    } finally {
+      await rm(lockDir, { recursive: true, force: true });
+    }
   });
 
   it('skips concurrent changes instead of overwriting them', async () => {

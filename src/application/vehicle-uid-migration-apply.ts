@@ -1,3 +1,5 @@
+import { open, readFile, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { VehicleAsset, VehicleExternalId } from '../domain/catalog.js';
 import { addExternalId } from '../domain/vehicle-uid.js';
 import type { VehicleUidMigrationStoreMutation, VehicleUidMigrationUpdateTime, VehicleUidMigrationWriteStore } from '../ports/vehicle-uid-migration-store.js';
@@ -26,6 +28,12 @@ export type VehicleUidMigrationApplyResult = {
   digest: string;
   backup?: VehicleUidMigrationBackup;
   skippedReasons?: Record<string, number>;
+};
+
+export type VehicleUidMigrationLockOptions = {
+  directory: string;
+  owner: string;
+  now: string;
 };
 
 const bodyForDigest = (plan: VehicleUidMigrationPlan) => {
@@ -61,22 +69,60 @@ function externalIdsAfter(asset: VehicleAsset, ids: VehicleExternalId[], observe
   return next.externalIds ?? [];
 }
 
+const actualWriteCount = (mutations: VehicleUidMigrationStoreMutation[]) =>
+  mutations.filter(mutation => mutation.kind !== 'PRODUCT_VERIFY_IDENTIFIERS').length;
+
+async function acquireVehicleUidMigrationLock(options: VehicleUidMigrationLockOptions | undefined, action: 'apply' | 'rollback') {
+  if (!options) return async () => {};
+  const lockPath = join(options.directory, 'vehicle-uid-migration.lock');
+  const owner = { owner: options.owner, action, createdAt: options.now };
+  const create = async () => {
+    const handle = await open(lockPath, 'wx');
+    try {
+      await handle.writeFile(`${JSON.stringify(owner)}\n`, 'utf8');
+    } finally {
+      await handle.close();
+    }
+  };
+  try {
+    await create();
+  } catch (error) {
+    if (!(error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST')) throw error;
+    try {
+      const existing = JSON.parse(await readFile(lockPath, 'utf8')) as { createdAt?: string };
+      const ageMs = Date.parse(options.now) - Date.parse(existing.createdAt ?? '');
+      if (!Number.isFinite(ageMs) || ageMs <= 15 * 60 * 1000) throw new Error('LOCK_HELD');
+      await unlink(lockPath);
+      await create();
+    } catch (inner) {
+      if (inner instanceof Error && inner.message === 'LOCK_HELD') throw inner;
+      throw new Error('LOCK_HELD');
+    }
+  }
+  let released = false;
+  return async () => {
+    if (released) return;
+    released = true;
+    await unlink(lockPath).catch(() => {});
+  };
+}
+
 async function commitMutations(store: VehicleUidMigrationWriteStore, mutations: VehicleUidMigrationStoreMutation[]) {
   if (mutations.length === 0) return { applied: 0, skipped: [] };
   if (store.commitMutations) {
     const result = await store.commitMutations(mutations);
-    return result ?? { applied: mutations.length, skipped: [] };
+    return result ?? { applied: actualWriteCount(mutations), skipped: [] };
   }
   for (const mutation of mutations) {
     if (mutation.kind === 'ASSET_EXTERNAL_IDS') {
       await store.restoreAssetExternalIds(mutation.assetId, mutation.externalIds);
     } else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
       await store.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
-    } else {
+    } else if (mutation.kind === 'PRODUCT_DELETE_VEHICLE_UID') {
       await store.deleteProductVehicleUid(mutation.productKey);
     }
   }
-  return { applied: mutations.length, skipped: [] };
+  return { applied: actualWriteCount(mutations), skipped: [] };
 }
 
 const bump = (record: Record<string, number>, reason: string) => {
@@ -113,9 +159,11 @@ export async function applyVehicleUidMigration(
   store: VehicleUidMigrationWriteStore,
   plan: VehicleUidMigrationPlan,
   expectedDigest: string,
-  options: { approvedDigest?: string; writeFlag?: string; now: string },
+  options: { approvedDigest?: string; writeFlag?: string; now: string; lock?: VehicleUidMigrationLockOptions },
   persistBackup: (backup: VehicleUidMigrationBackup) => Promise<void>,
 ): Promise<VehicleUidMigrationApplyResult> {
+  const releaseLock = await acquireVehicleUidMigrationLock(options.lock, 'apply');
+  try {
   const digest = assertVehicleUidPlanDigest(plan, expectedDigest);
   if (options.approvedDigest !== digest || options.writeFlag !== 'APPLY') throw new Error('VEHICLE_UID_APPLY_NOT_APPROVED');
   if (!persistBackup) throw new Error('BACKUP_REQUIRED');
@@ -200,7 +248,14 @@ export async function applyVehicleUidMigration(
           continue;
         }
         if (current === item.vehicleUid) {
-          skipped++;
+          componentMutations.push({
+            kind: 'PRODUCT_VERIFY_IDENTIFIERS',
+            productKey: item.productKey,
+            vehicleUid: item.vehicleUid,
+            ...withTypedUpdateTime(snapshot?.updateTime),
+            identifierDigest: stableDigest(item.identifiers),
+            ...(item.assetIdentifierDigest ? { assetIdentifierDigest: item.assetIdentifierDigest, observedAt: plan.observedAt } : {}),
+          });
           continue;
         }
         if (current !== undefined && current !== null && current !== '') throw new Error('VEHICLE_UID_PRODUCT_PRECONDITION_FAILED');
@@ -261,6 +316,9 @@ export async function applyVehicleUidMigration(
   }
   await verifyVehicleUidMigration(store, plan, skippedTargets);
   return { status: 'APPLIED', writes: appliedWrites, skipped: skipped + commitSkipped, assetUpdates, productUpdates, digest, backup: fullBackup, skippedReasons };
+  } finally {
+    await releaseLock();
+  }
 }
 
 export async function verifyVehicleUidMigration(store: VehicleUidMigrationWriteStore, plan: VehicleUidMigrationPlan, skippedTargets = new Set<string>()) {
@@ -285,8 +343,10 @@ export async function rollbackVehicleUidMigration(
   store: VehicleUidMigrationWriteStore,
   backup: VehicleUidMigrationBackup,
   expectedDigest: string,
-  options: { approvedDigest?: string; writeFlag?: string },
+  options: { approvedDigest?: string; writeFlag?: string; lock?: VehicleUidMigrationLockOptions },
 ): Promise<VehicleUidMigrationApplyResult> {
+  const releaseLock = await acquireVehicleUidMigrationLock(options.lock, 'rollback');
+  try {
   if (backup.planDigest !== expectedDigest || options.approvedDigest !== expectedDigest || options.writeFlag !== 'ROLLBACK') {
     throw new Error('VEHICLE_UID_ROLLBACK_NOT_APPROVED');
   }
@@ -338,4 +398,7 @@ export async function rollbackVehicleUidMigration(
     for (const item of commit.skipped) bump(skippedReasons, item.reason);
   }
   return { status: 'ROLLED_BACK', writes: applied, skipped, assetUpdates, productUpdates, digest: expectedDigest, skippedReasons };
+  } finally {
+    await releaseLock();
+  }
 }

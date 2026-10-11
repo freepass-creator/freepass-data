@@ -32,6 +32,8 @@ const updateTimeValue = (snap: { updateTime?: VehicleUidMigrationUpdateTime | un
   snap.updateTime ? { seconds: snap.updateTime.seconds, nanoseconds: snap.updateTime.nanoseconds } : undefined;
 const sameUpdateTime = (left: VehicleUidMigrationUpdateTime | undefined, right: VehicleUidMigrationUpdateTime | undefined) =>
   left?.seconds === right?.seconds && left?.nanoseconds === right?.nanoseconds;
+const actualWriteCount = (mutations: VehicleUidMigrationStoreMutation[]) =>
+  mutations.filter(mutation => mutation.kind !== 'PRODUCT_VERIFY_IDENTIFIERS').length;
 
 export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFirestore(getTargetFirebaseApp())): VehicleUidMigrationWriteStore {
   const assetRef = (assetId: string) => db.collection(FIRESTORE_COLLECTIONS.catalog.vehicleAssets).doc(assetId);
@@ -173,7 +175,7 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
         return [];
       });
       if (componentSkipped.length) skipped.push(...componentSkipped);
-      else applied += mutations.length;
+      else applied += actualWriteCount(mutations);
       return { applied, skipped };
     },
   };

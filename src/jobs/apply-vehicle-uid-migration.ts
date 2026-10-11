@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import {
   applyVehicleUidMigration,
   dryRunVehicleUidMigration,
@@ -74,7 +74,10 @@ export async function main(argv = process.argv.slice(2)) {
     const { createVehicleUidMigrationApplyRuntime } = await import('./data-access-runtime.js');
     const runtime = createVehicleUidMigrationApplyRuntime();
     const result = await runtime.write(expectedDigest, () =>
-      rollbackVehicleUidMigration(runtime.store, backup, expectedDigest, approval)
+      rollbackVehicleUidMigration(runtime.store, backup, expectedDigest, {
+        ...approval,
+        lock: { directory: dirname(resolve(rollbackPath)), owner: 'apply-vehicle-uid-migration', now: new Date().toISOString() },
+      })
     );
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -95,6 +98,7 @@ export async function main(argv = process.argv.slice(2)) {
     applyVehicleUidMigration(runtime.store, plan, expectedDigest, {
       ...approval,
       now: new Date().toISOString(),
+      lock: { directory: dirname(resolve(backupOut)), owner: 'apply-vehicle-uid-migration', now: new Date().toISOString() },
     }, async (backup) => writePrivateArtifact(backupOut, backup))
   );
   console.log(JSON.stringify({ ...result, backup: result.backup ? { backupDigest: result.backup.backupDigest } : undefined }, null, 2));

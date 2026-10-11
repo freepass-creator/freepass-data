@@ -241,4 +241,27 @@ describe('vehicle UID Firestore writer transaction ordering', () => {
     expect(db.docs.get(productPath('needsUid'))?.vehicle_uid).toBeUndefined();
     expect(db.docs.get(assetPath('TEST-FAKE-UID-001'))?.externalIds).toBeUndefined();
   });
+
+  it('does not include verify-only mutations in the applied write count', async () => {
+    const p = plan(
+      {
+        alreadyLinked: product('TEST-FAKE-001', {
+          vin: 'TEST-FAKE-VIN-NEW',
+          vehicle_uid: 'TEST-FAKE-UID-001',
+        }),
+      },
+      [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001')],
+    );
+    const db = new FakeFirestore();
+    db.docs.set(assetPath('TEST-FAKE-UID-001'), asset('TEST-FAKE-UID-001', 'TEST-FAKE-001'));
+    db.docs.set(productPath('alreadyLinked'), product('TEST-FAKE-001', {
+      vin: 'TEST-FAKE-VIN-NEW',
+      vehicle_uid: 'TEST-FAKE-UID-001',
+    }));
+
+    const result = await applyVehicleUidMigration(fakeWriter(db), p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+
+    expect(result.writes).toBe(1);
+    expect(db.docs.get(assetPath('TEST-FAKE-UID-001'))?.externalIds).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'VIN', value: 'TEST-FAKE-VIN-NEW' })]));
+  });
 });
