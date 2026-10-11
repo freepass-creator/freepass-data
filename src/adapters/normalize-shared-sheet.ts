@@ -9,6 +9,7 @@ import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSIO
 import { stableDigest } from '../shared/stable-digest.js';
 import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWaiverFieldForTermMonths } from '../domain/deposit-evidence.js';
 export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/7';
+export const SHARED_SHEET_COLOR_RULE_VERSION = 'shared-sheet-normalizer/8';
 export type SharedSheetNormalizationOptions = { includeSupplierColors?: boolean };
 export type SharedSheetMasterEvidence = { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
 /** AI 상황실 2026-10-04 (대표): every car is stored. The sheet status text is kept as-is; it only decides sale exposure.
@@ -58,7 +59,7 @@ export const normalizeSharedSheet = (raw: RawRecord, master?: SharedSheetMasterE
 export const sharedSheetNormalizer = (identity?: SharedSheetIdentityResolver, master?: SharedSheetMasterEvidence, options?: SharedSheetNormalizationOptions) => (raw: RawRecord): SharedSheetNormalized => normalizeSharedSheetWith(raw, identity, master, options);
 function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentityResolver, master?: SharedSheetMasterEvidence, options?: SharedSheetNormalizationOptions): SharedSheetNormalized {
   // Color facts remain opt-in; both variants use the same identity evidence contract.
-  const ruleVersion = options?.includeSupplierColors ? 'shared-sheet-normalizer/8' : SHARED_SHEET_RULE_VERSION;
+  const ruleVersion = options?.includeSupplierColors ? SHARED_SHEET_COLOR_RULE_VERSION : SHARED_SHEET_RULE_VERSION;
   const values = raw.payload.values as unknown[];
   const at = (header: string) => values[spec.inputHeaders.indexOf(header)];
   const text = (header: string) => String(at(header) ?? '').trim();
@@ -88,7 +89,7 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
   }
   const sheetIdentity = spec.vehicleMaster.refineOrder.map(h => text(h)) as unknown as VehicleIdentity;
   const row = { sheet: sheetIdentity, plate: plateIdentityKey(at('차량번호')), raw: text('차명 원문'),
-    firstRegistration: text('최초등록일'), modelYear: text('연식'), specs: identitySpecs };
+    firstRegistration: typeof reg === 'string' ? reg : '', modelYear: text('연식'), specs: identitySpecs };
   let choice: IdentityChoice = typeof raw.payload.quarantine === 'string'
     ? { pick: 'HOLD', identity: null, dataIdentity: null, notes: ['SOURCE_QUARANTINED'] }
     : identity ? identity(row) : master ? chooseVehicleIdentity(indexVehicleMaster(master.records), { ...row, data: null })

@@ -42,22 +42,34 @@ export function chooseVehicleIdentity(master: VehicleMasterIndex, input: {
   const data = input.data ? master.match(input.data, input.specs) : null;
   const sheet = master.match(input.sheet, input.specs);
   const dataIdentity = data?.names ?? null;
-  const hold = (...notes: string[]): IdentityChoice => ({ pick: 'HOLD', identity: null, dataIdentity, notes });
+  // The normalizer supplies the already parsed registration date; do not infer MY from it.
+  const yearMismatch = typeof input.specs?.modelYear === 'number' && /^20\d{2}-/.test(input.firstRegistration) &&
+    Number(input.firstRegistration.slice(0, 4)) !== input.specs.modelYear;
+  const hold = (...notes: string[]): IdentityChoice => ({ pick: 'HOLD', identity: null, dataIdentity,
+    notes: [...notes, ...(yearMismatch ? ['YEAR_REGISTRATION_MISMATCH'] : [])] });
+  if (input.specs && Object.values(input.specs).some(value => value === null)) return hold('SOURCE_SPEC_REVIEW_REQUIRED');
+  const nonMatchReason = (identity: VehicleIdentity, fallback: string) => {
+    const named = input.specs && master.match(identity);
+    if (!named) return fallback;
+    const unavailable = Object.keys(input.specs!).some(key => key === 'modelYear'
+      ? named.modelYearStart == null || named.modelYearEnd == null
+      : named.specs?.[key as keyof VehicleIdentitySpecs] == null);
+    return unavailable ? 'MASTER_SPEC_EVIDENCE_REQUIRED' : 'SOURCE_SPEC_MASTER_CONFLICT';
+  };
   // Missing aliases or contradictory names remain unresolved, never a guessed basic trim.
-  if (input.data && !data) return hold(input.specs && master.match(input.data)
-    ? 'SOURCE_SPEC_MASTER_CONFLICT' : 'DATA_NOT_UNIQUE_MASTER');
+  if (input.data && !data) return hold(nonMatchReason(input.data, 'DATA_NOT_UNIQUE_MASTER'));
   if (data && sheet && data.trimId !== sheet.trimId) return hold('DATA_SHEET_MASTER_CONFLICT');
   if (data && !sheet && input.sheet.some((value, i) => value.trim() &&
       ![data.names[i], ...(data.aliases[i] ?? [])].includes(i === 0 ? canonicalVehicleMakerName(value.trim()) : value.trim()))) {
     return hold('DATA_SHEET_MASTER_CONFLICT');
   }
   const selected = data ?? sheet;
-  if (!selected) return hold(input.specs && master.match(input.sheet)
-    ? 'SOURCE_SPEC_MASTER_CONFLICT' : 'IDENTITY_NOT_UNIQUE_MASTER');
+  if (!selected) return hold(nonMatchReason(input.sheet, 'IDENTITY_NOT_UNIQUE_MASTER'));
+  if (yearMismatch) return hold();
   // Explicit powertrain tokens in supplier evidence cannot silently select the opposite known sibling.
   const name = selected.names.slice(1).join(' ');
   const siblings = master.records.filter(r => r.names[0] === selected.names[0] && r.names[1] === selected.names[1]);
-  for (const [tag, rx] of [['HYBRID', /하이브리드|HEV|E-?TECH|ECH/i], ['ELECTRIC', /전기|(^|[^A-Z])EV([^A-Z]|$)/i]] as const) {
+  for (const [tag, rx] of [['HYBRID', /하이브리드|HEV|E-?TECH|(^|[^A-Z])ECH([^A-Z]|$)/i], ['ELECTRIC', /전기|(^|[^A-Z])EV([^A-Z]|$)/i]] as const) {
     if (rx.test(input.raw) && !rx.test(name) && siblings.some(r => rx.test(r.names.slice(1).join(' ')))) {
       return hold(tag + '_SOURCE_CONFLICT');
     }
