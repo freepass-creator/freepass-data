@@ -16,6 +16,11 @@ describe('existing private runtime verification', () => {
     expect(verify).toContain('DIRECT_FIRESTORE_REQUIRED');
     expect(verify).toContain('LEGACY_READ_PENDING_RETIREMENT');
     expect(verify).toContain('catalog-compat/v1');
+    expect(verify).not.toContain('inputs.use_consumer_secrets');
+    for (const step of ['Authenticate readback identity', 'Verify IAM denial and authenticated compatibility readback']) {
+      const section = verify.split('      - name: ' + step)[1]!.split('      - name:')[0]!;
+      expect(section).not.toContain('        if:');
+    }
   });
   it('never logs arbitrary response codes from a failed verification readback', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');

@@ -473,7 +473,6 @@ jobs:
         shell: bash
         run: bash scripts/verify-read-runtime.sh
       - name: Authenticate readback identity
-        if: ${{ inputs.use_consumer_secrets != false }}
         id: readback-auth
         uses: google-github-actions/auth@v2
         with:
@@ -483,7 +482,6 @@ jobs:
           id_token_audience: ${{ steps.readiness.outputs.url }}
 
       - name: Verify IAM denial and authenticated compatibility readback
-        if: ${{ inputs.use_consumer_secrets != false }}
         env:
           CLOUD_RUN_ID_TOKEN: ${{ steps.readback-auth.outputs.id_token }}
         shell: bash
