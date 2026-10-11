@@ -301,6 +301,42 @@ describe('planVehicleUidMigration', () => {
     expect(result.summary.holdGraphComponents).toBe(1);
   });
 
+  it('puts every supplier vehicle id alias into the graph and holds same supplier conflicts', () => {
+    const result = plan({
+      products: {
+        alias: {
+          provider_company_code: 'TEST',
+          iancar_one_vehicle_id: 'TEST-FAKE-SUPPLIER-A',
+          sourceVehicleId: 'TEST-FAKE-SUPPLIER-B',
+        },
+        linked: {
+          provider_company_code: 'TEST',
+          supplier_vehicle_id: 'TEST-FAKE-SUPPLIER-B',
+        },
+      },
+      assets: [],
+    });
+    const holdProducts = new Set(result.items.filter(item => item.kind === 'HOLD').map(item => item.productKey));
+    expect(holdProducts).toEqual(new Set(['alias', 'linked']));
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'alias', reason: 'GRAPH_COMPONENT_CONFLICT' }));
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'alias', reason: 'SUPPLIER_VEHICLE_CONFLICT' }));
+    expect(result.items.filter(item => item.kind === 'PRODUCT_SET_UID')).toHaveLength(0);
+  });
+
+  it('keeps supplier vehicle ids scoped by supplier code', () => {
+    const result = plan({
+      products: {
+        a: { provider_company_code: 'SUPPLIER-A', sourceVehicleId: 'TEST-FAKE-SAME' },
+        b: { provider_company_code: 'SUPPLIER-B', sourceVehicleId: 'TEST-FAKE-SAME' },
+      },
+      assets: [],
+      rand: 0.1,
+    });
+    const setItems = result.items.filter(item => item.kind === 'PRODUCT_SET_UID');
+    expect(setItems).toHaveLength(2);
+    expect(new Set(setItems.map(item => item.vehicleUid)).size).toBe(2);
+  });
+
   it('does not propagate a product vehicle_uid when its referenced asset is missing', () => {
     const result = plan({
       products: {

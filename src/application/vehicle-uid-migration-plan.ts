@@ -97,19 +97,36 @@ function uniqueValues(values: string[], normalize: (value: string) => string = v
 function productIds(product: VehicleUidMigrationProduct) {
   const plateFields = ['plateNumber', 'plate_number', 'car_number', 'vehicle_number', '차량번호'];
   const vinFields = ['vin', 'VIN', 'vehicle_vin', 'vehicle_id_number', '차대번호'];
+  const supplierVehicleFields = [
+    'iancar_one_vehicle_id',
+    'sourceVehicleId',
+    'supplier_vehicle_id',
+    'supplierVehicleId',
+    'vehicleId',
+    'vehicle_id',
+    'source_vehicle_id',
+    'sourceRecordId',
+    'source_record_id',
+    'raw_id',
+    'rawId',
+    'id',
+  ];
   const plateValues = fields(product, plateFields);
   const vinValues = fields(product, vinFields);
+  const supplierVehicleValues = fields(product, supplierVehicleFields);
   const plates = uniqueValues(plateValues);
   const vins = uniqueValues(vinValues, value => value.toUpperCase());
+  const supplierVehicleIds = uniqueValues(supplierVehicleValues);
   const plate = field(product, plateFields);
   const vin = field(product, vinFields);
-  const supplierCode = field(product, ['provider_company_code', 'supplierCode', 'supplier_code']);
-  const supplierVehicleId = field(product, ['iancar_one_vehicle_id', 'sourceVehicleId', 'supplier_vehicle_id', 'vehicleId']);
+  const supplierCode = field(product, ['provider_company_code', 'supplierCode', 'supplier_code', 'supplierId', 'supplier_id', 'sourceSupplierId']);
+  const supplierVehicleId = supplierVehicleIds[0];
   const sameKindFieldDisagreements = [
     ...(plates.length > 1 ? ['PLATE:SAME_KIND_FIELDS_DISAGREE'] : []),
     ...(vins.length > 1 ? ['VIN:SAME_KIND_FIELDS_DISAGREE'] : []),
+    ...(supplierVehicleIds.length > 1 ? ['SUPPLIER_VEHICLE:SAME_KIND_FIELDS_DISAGREE'] : []),
   ];
-  return { plate, plates, vin, vins, supplierCode, supplierVehicleId, sameKindFieldDisagreements };
+  return { plate, plates, vin, vins, supplierCode, supplierVehicleId, supplierVehicleIds, sameKindFieldDisagreements };
 }
 
 function externalIdsForAsset(asset: VehicleAsset): VehicleExternalId[] {
@@ -142,11 +159,11 @@ function candidateExternalIds(ids: ReturnType<typeof productIds>, observedAt: st
   for (const vin of ids.vins) {
     out.push({ kind: 'VIN', value: vin.toUpperCase(), validFrom: observedAt, source: 'vehicle-uid-migration-plan' });
   }
-  if (ids.supplierVehicleId && ids.supplierCode) {
+  if (ids.supplierCode) for (const supplierVehicleId of ids.supplierVehicleIds) {
     out.push({
       kind: 'SUPPLIER_VEHICLE',
       supplierCode: ids.supplierCode.toUpperCase(),
-      value: ids.supplierVehicleId,
+      value: supplierVehicleId,
       validFrom: observedAt,
       source: 'vehicle-uid-migration-plan',
     });

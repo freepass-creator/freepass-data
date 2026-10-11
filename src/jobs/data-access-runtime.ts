@@ -49,6 +49,7 @@ import type {
 } from '../domain/consumer-cutover.js';
 import { createFirestoreDataStore } from '../infra/firestore-store.js';
 import { readVehicleUidMigrationInputs } from '../infra/vehicle-uid-migration-firestore-reader.js';
+import { createVehicleUidMigrationFirestoreWriter } from '../infra/vehicle-uid-migration-firestore-writer.js';
 import { readPeriodFeeLedgerPlanInputs } from '../infra/period-fee-ledger-firestore-reader.js';
 import { MemoryDataAccessLogStore } from '../infra/memory-data-access-log.js';
 import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
@@ -172,6 +173,24 @@ export function createVehicleUidMigrationPlanRuntime() {
         }),
       }),
     }, readVehicleUidMigrationInputs),
+  };
+}
+
+export function createVehicleUidMigrationApplyRuntime() {
+  const { access } = createJobDataAccessRuntime();
+  return {
+    store: createVehicleUidMigrationFirestoreWriter(),
+    write: <T>(requestDigest: string, run: () => Promise<T>) => access.write({
+      context: {
+        actor: { id: 'service:freepass-data-vehicle-uid', kind: 'SERVICE' },
+        clientId: 'job:apply-vehicle-uid-migration',
+        purpose: 'apply or rollback a digest-approved vehicle UID migration plan',
+      },
+      operation: 'WRITE_VEHICLE_UID_MIGRATION',
+      resource: { kind: 'CATALOG', name: 'vehicle-uid-migration' },
+      requestDigest,
+      summarize: (value) => ({ digest: stableDigest(value) }),
+    }, run),
   };
 }
 
