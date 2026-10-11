@@ -445,7 +445,7 @@ describe('F04 explicit canonical evidence', () => {
       .toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
     expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {
       [targetKey]: { subscriptionForm: 'BUYOUT', q12Basis: { amount: 900000, sourceRef: 'verified:q12' } },
-    })[2]!.supplierBillingFee.amount?.amount).toBe(1000000);
+    })[2]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
   });
   it('passes price-key Sonokong settlement into Q12 selection and calculation', () => {
     const input = { ...offer(), supplierId: 'RP012' };
@@ -461,6 +461,59 @@ describe('F04 explicit canonical evidence', () => {
       .toMatchObject({ state: 'UNKNOWN', reasonCode: 'RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED' });
     expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, { '24_인수형': { subscriptionForm: 'RETURN' } }, ['24_인수형'])[0]!.supplierBillingFee)
       .toMatchObject({ state: 'UNKNOWN', reasonCode: 'SUBSCRIPTION_FORM_CONFLICT' });
+  });
+  it('accepts explicit Sonokong Q12 only when one real 12-month row matches settlement, mileage, currency, and amount', () => {
+    const input = { ...offer(), supplierId: 'RP012' };
+    input.priceTerms = [
+      { termKey: '24_인수형', termMonths: 24, mileageLimitKmPerYear: 20000, monthlyRent: { amount: 700000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+    ];
+    expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {
+      '24_인수형': { subscriptionForm: 'BUYOUT', q12Basis: { amount: 800000, sourceRef: 'legacy' } },
+    })[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
+
+    input.priceTerms.unshift({ termKey: '12_인수형', termMonths: 12, mileageLimitKmPerYear: 20000, monthlyRent: { amount: 700000, currency: 'KRW' }, depositState: 'UNKNOWN' });
+    expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {
+      '12_인수형': { subscriptionForm: 'BUYOUT' },
+      '24_인수형': { subscriptionForm: 'BUYOUT', q12Basis: { amount: 800000, sourceRef: 'legacy' } },
+    })[1]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'Q12_BASIS_CONFLICT' });
+
+    input.priceTerms[0]!.monthlyRent.amount = 800000;
+    expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {
+      '12_인수형': { subscriptionForm: 'BUYOUT' },
+      '24_인수형': { subscriptionForm: 'BUYOUT', q12Basis: { amount: 800000, sourceRef: 'legacy' } },
+    })[1]!.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 900000 } });
+
+    input.priceTerms.unshift({ termKey: '12_인수형_duplicate', termMonths: 12, mileageLimitKmPerYear: 20000, monthlyRent: { amount: 800000, currency: 'KRW' }, depositState: 'UNKNOWN' });
+    expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {
+      '12_인수형_duplicate': { subscriptionForm: 'BUYOUT' },
+      '12_인수형': { subscriptionForm: 'BUYOUT' },
+      '24_인수형': { subscriptionForm: 'BUYOUT', q12Basis: { amount: 800000, sourceRef: 'legacy' } },
+    })[2]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
+  });
+  it('keeps Billin 36-month basis selection independent from settlement form while Sonokong remains settlement-scoped', () => {
+    for (const supplierId of ['RP021', 'PT-0026']) {
+      const input = { ...offer(), supplierId };
+      input.priceTerms = [
+        { termKey: '36_return', termMonths: 36, mileageLimitKmPerYear: 20000, monthlyRent: { amount: 800000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+        { termKey: '60_buyout', termMonths: 60, mileageLimitKmPerYear: 20000, monthlyRent: { amount: 1000000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+      ];
+      const row = precomputeOfferEconomics(input, 'USED_SUBSCRIPTION', undefined, {
+        '36_return': { subscriptionForm: 'RETURN' },
+        '60_buyout': { subscriptionForm: 'BUYOUT' },
+      })[1]!;
+      expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 800000 } });
+      expect(row.channelPayoutFee).toMatchObject({ state: 'KNOWN', amount: { amount: 640000 } });
+    }
+
+    const sonokong = { ...offer(), supplierId: 'RP012' };
+    sonokong.priceTerms = [
+      { termKey: '12_return', termMonths: 12, mileageLimitKmPerYear: 20000, monthlyRent: { amount: 800000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+      { termKey: '24_buyout', termMonths: 24, mileageLimitKmPerYear: 20000, monthlyRent: { amount: 700000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+    ];
+    expect(precomputeOfferEconomics(sonokong, 'OGONG_SUBSCRIPTION', undefined, {
+      '12_return': { subscriptionForm: 'RETURN' },
+      '24_buyout': { subscriptionForm: 'BUYOUT' },
+    })[1]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
   });
   it('detects a changed or corrupted reference monthly rent independently of the stored fixed amount', () => {
     const input = { ...offer(), supplierId: 'RP021' };

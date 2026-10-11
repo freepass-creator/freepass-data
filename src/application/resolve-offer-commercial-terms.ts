@@ -15,6 +15,20 @@ import type {
 const positiveSafeInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
+const matchesRentReferenceCandidate = (
+  target: Parameters<typeof matchesReferenceRentBasisCandidate>[0],
+  candidate: Parameters<typeof matchesReferenceRentBasisCandidate>[1],
+  termMonths: 12 | 36,
+  requireSettlement: boolean,
+): boolean => {
+  if (!matchesReferenceRentBasisCandidate(
+    requireSettlement ? target : { ...target, settlement: candidate.settlement },
+    candidate,
+    termMonths,
+  )) return false;
+  return !requireSettlement || candidate.settlement === target.settlement;
+};
+
 /** Reuses the pinned engine; changes only two fee fields on existing, price-aligned rows. */
 export function selectOfferFeeEconomics(offer: Offer, commercialType?: CommercialType, fuel?: string | null, termKeys?: readonly string[]) {
   if (termKeys === undefined) return precomputeOfferEconomics(offer, commercialType, fuel);
@@ -121,10 +135,10 @@ export function refreshOfferEconomicsForChangedInputs(
       sourceRef: `priceTerms/${term.termKey}`,
     };
   };
-  const referenceCandidateDigest = (terms: readonly PriceTerm[], current: PriceTerm, basisTermMonths: 12 | 36) => {
+  const referenceCandidateDigest = (terms: readonly PriceTerm[], current: PriceTerm, basisTermMonths: 12 | 36, requireSettlement: boolean) => {
     const target = referenceCandidate(current);
     return stableDigest(terms
-      .filter(term => matchesReferenceRentBasisCandidate(target, referenceCandidate(term), basisTermMonths))
+      .filter(term => matchesRentReferenceCandidate(target, referenceCandidate(term), basisTermMonths, requireSettlement))
       .map(term => ({
         termKey: term.termKey,
         termMonths: term.termMonths,
@@ -135,16 +149,17 @@ export function refreshOfferEconomicsForChangedInputs(
   };
   const referenceCandidateChange = (current: PriceTerm, fee: TermEconomicAmount): { changed: boolean; exact: boolean } => {
     const basis = fee.referenceRentBasis;
+    const requireSettlement = basis?.termMonths === 12 || fee.reasonCode === 'OGONG_12M_BASE_MISSING' || fee.reasonCode === 'Q12_BASIS_REQUIRED';
     if (!basis) {
       const neededTerm = referenceNeededTerm(fee);
       return neededTerm === null ? { changed: false, exact: false } : {
-        changed: referenceCandidateDigest(previous.priceTerms, current, neededTerm) !== referenceCandidateDigest(next.priceTerms, current, neededTerm),
+        changed: referenceCandidateDigest(previous.priceTerms, current, neededTerm, requireSettlement) !== referenceCandidateDigest(next.priceTerms, current, neededTerm, requireSettlement),
         exact: false,
       };
     }
     const target = referenceCandidate(current);
     const matches = (candidate: PriceTerm | undefined) => !!candidate &&
-      matchesReferenceRentBasisCandidate(target, referenceCandidate(candidate), basis.termMonths);
+      matchesRentReferenceCandidate(target, referenceCandidate(candidate), basis.termMonths, requireSettlement);
     const changed = [...changedPriceKeys].filter(key => matches(newPrices.get(key)) || matches(oldPrices.get(key)));
     return { changed: changed.length > 0, exact: changed.some(key => key === basis.termKey) };
   };
@@ -241,11 +256,34 @@ export function precomputeOfferEconomics(
       amount: term.monthlyRent.amount,
       sourceRef: priceRef,
     };
+    const isSonokongOgongSubscription = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION';
     const basis36 = offer.priceTerms.filter(candidate => {
       const reference = referenceCandidateFor(candidate);
-      return reference !== null && matchesReferenceRentBasisCandidate(targetReferenceCandidate, reference, 36);
+      return reference !== null && matchesRentReferenceCandidate(targetReferenceCandidate, reference, 36, isSonokongOgongSubscription);
     });
-    const q12Basis = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION' && !explicitEvidence?.q12Basis && !resolvedTargetSettlement.conflict
+    const q12BasisCandidates = isSonokongOgongSubscription && !resolvedTargetSettlement.conflict
+      ? offer.priceTerms.flatMap(candidate => {
+        const reference = referenceCandidateFor(candidate);
+        return reference !== null &&
+          reference.termMonths === 12 &&
+          reference.settlement === targetReferenceCandidate.settlement &&
+          reference.mileageKm === targetReferenceCandidate.mileageKm &&
+          (reference.mileagePeriod ?? 'year') === (targetReferenceCandidate.mileagePeriod ?? 'year') &&
+          reference.currency === targetReferenceCandidate.currency &&
+          Number.isSafeInteger(reference.amount) && reference.amount > 0
+          ? [reference]
+          : [];
+      })
+      : [];
+    const explicitQ12 = explicitEvidence?.q12Basis;
+    const explicitQ12Result = isSonokongOgongSubscription && explicitQ12 && !resolvedTargetSettlement.conflict
+      ? q12BasisCandidates.length !== 1
+        ? { reasonCode: 'OGONG_12M_BASE_MISSING' as const }
+        : q12BasisCandidates[0]!.amount !== explicitQ12.amount
+          ? { reasonCode: 'Q12_BASIS_CONFLICT' as const }
+          : { q12Basis: { amount: explicitQ12.amount, sourceRef: q12BasisCandidates[0]!.sourceRef } }
+      : {};
+    const q12Basis = isSonokongOgongSubscription && !explicitEvidence?.q12Basis && !resolvedTargetSettlement.conflict
       ? selectSonokongQ12Basis(targetReferenceCandidate, offer.priceTerms.flatMap(candidate => {
         const reference = referenceCandidateFor(candidate);
         return reference === null ? [] : [reference];
@@ -254,13 +292,16 @@ export function precomputeOfferEconomics(
     const automaticSonokongEvidence = q12Basis
       ? { q12Basis }
       : {};
-    const args = { ...explicitEvidence,
+    const { q12Basis: _ignoredInvalidQ12Basis, ...explicitEvidenceWithoutQ12 } = explicitEvidence ?? {};
+    const effectiveExplicitEvidence = 'reasonCode' in explicitQ12Result ? explicitEvidenceWithoutQ12 : explicitEvidence;
+    const args = { ...effectiveExplicitEvidence,
       ...(targetSettlement ? { subscriptionForm: targetSettlement } : {}),
       ...(resolvedTargetSettlement.conflict ? { subscriptionFormConflict: true as const } : {}),
       supplierId: offer.supplierId, productType, fuel: fuel ?? '',
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
       billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined,
-      ...automaticSonokongEvidence };
+      ...automaticSonokongEvidence,
+      ...('q12Basis' in explicitQ12Result ? { q12Basis: explicitQ12Result.q12Basis } : {}) };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
       const saved = offer.internalEconomicsTerms?.find(candidate => candidate.termKey === term.termKey)?.[
         side === 'BILLING' ? 'supplierBillingFee' : 'channelPayoutFee'];
@@ -284,6 +325,9 @@ export function precomputeOfferEconomics(
       }
       const unknown = (reasonCode: string): TermEconomicAmount => ({ ...base,
         state: 'UNKNOWN', amount: null, calculation: null, vatAmount: null, totalAmount: null, reasonCode });
+      if ('reasonCode' in explicitQ12Result && isSonokongOgongSubscription) {
+        return unknown(explicitQ12Result.reasonCode);
+      }
       if (!productType) return unknown('PRODUCT_TYPE_REQUIRED');
       if (policy.exceptionSupplierIds.iancar.includes(offer.supplierId as 'RP004') && !fuel?.trim()) {
         return unknown('FUEL_REQUIRED_FOR_SUPPLIER_RULE');
