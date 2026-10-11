@@ -15,7 +15,7 @@ export type VehicleUidMigrationBackup = {
   planDigest: string;
   createdAt: string;
   assets: Array<{ componentId?: string; assetId: string; externalIds?: VehicleExternalId[]; updateTime?: VehicleUidMigrationUpdateTime; appliedExternalIds?: VehicleExternalId[] }>;
-  products: Array<{ componentId?: string; productKey: string; hadVehicleUid: boolean; vehicleUid?: string | null; vehicleUidPresence?: 'absent' | 'present:null' | 'present:string'; updateTime?: VehicleUidMigrationUpdateTime; appliedVehicleUid?: string }>;
+  products: Array<{ componentId?: string; productKey: string; hadVehicleUid: boolean; vehicleUid?: string | null; vehicleUidPresence?: 'absent' | 'present:null' | 'present:string'; hadVehicleUidRegistry?: boolean; vehicleUidRegistry?: unknown; updateTime?: VehicleUidMigrationUpdateTime; appliedVehicleUid?: string; appliedVehicleUidRegistry?: 'PRODUCT_ONLY' }>;
   backupDigest: string;
 };
 
@@ -60,7 +60,14 @@ export function assertVehicleUidPlanDigest(plan: VehicleUidMigrationPlan, expect
 
 function mutationItems(plan: VehicleUidMigrationPlan) {
   if (!plan.summary.invariants.oneActivePlatePerUid) throw new Error('VEHICLE_UID_ONE_ACTIVE_PLATE_INVARIANT_FALSE');
-  return plan.items.filter((item): item is Exclude<VehicleUidMigrationItem, { kind: 'HOLD' }> => item.kind !== 'HOLD');
+  const items = plan.items.filter((item): item is Exclude<VehicleUidMigrationItem, { kind: 'HOLD' }> => item.kind !== 'HOLD');
+  for (const item of items) {
+    if (item.kind === 'PRODUCT_SET_UID') {
+      if (!item.assetState) throw new Error('PLAN_INVALID');
+      if (item.assetState === 'LINKED_EXISTING' && !item.assetIdentifierDigest) throw new Error('PLAN_INVALID');
+    }
+  }
+  return items;
 }
 
 function externalIdsAfter(asset: VehicleAsset, ids: VehicleExternalId[], observedAt: string) {
@@ -264,15 +271,20 @@ export async function applyVehicleUidMigration(
           productKey: item.productKey,
           hadVehicleUid: Object.hasOwn(product, 'vehicle_uid'),
           vehicleUidPresence: productVehicleUidPresence(product),
+          hadVehicleUidRegistry: Object.hasOwn(product, 'vehicle_uid_registry'),
+          ...(Object.hasOwn(product, 'vehicle_uid_registry') ? { vehicleUidRegistry: product.vehicle_uid_registry } : {}),
           ...(Object.hasOwn(product, 'vehicle_uid') ? { vehicleUid: productVehicleUidBackupValue(current) } : {}),
           ...(snapshot?.updateTime ? { updateTime: snapshot.updateTime } : {}),
           appliedVehicleUid: item.vehicleUid,
+          ...(item.assetState === 'PRODUCT_ONLY' ? { appliedVehicleUidRegistry: 'PRODUCT_ONLY' as const } : {}),
         });
         componentMutations.push({
           kind: 'PRODUCT_VEHICLE_UID',
           productKey: item.productKey,
           vehicleUid: item.vehicleUid,
           ...withTypedUpdateTime(snapshot?.updateTime),
+          assetState: item.assetState,
+          ...(item.assetState === 'PRODUCT_ONLY' ? { vehicleUidRegistry: 'PRODUCT_ONLY' as const } : {}),
           ...(item.assetIdentifierDigest ? { assetIdentifierDigest: item.assetIdentifierDigest, observedAt: plan.observedAt } : {}),
         });
         componentWrites++;
@@ -364,6 +376,27 @@ export async function rollbackVehicleUidMigration(
     list.push(mutation);
     mutationsByComponent.set(componentId, list);
   };
+  const rollbackProductMutation = (item: VehicleUidMigrationBackup['products'][number]): VehicleUidMigrationStoreMutation => {
+    if (item.hadVehicleUid) {
+      return {
+        kind: 'PRODUCT_VEHICLE_UID',
+        productKey: item.productKey,
+        vehicleUid: item.vehicleUid ?? null,
+        ...withExpectedAfter(item.appliedVehicleUid),
+        ...(item.appliedVehicleUidRegistry !== undefined ? { expectedRegistryAfter: item.appliedVehicleUidRegistry } : {}),
+        ...(item.hadVehicleUidRegistry !== undefined ? { hadVehicleUidRegistry: item.hadVehicleUidRegistry } : {}),
+        registryValue: item.vehicleUidRegistry,
+      };
+    }
+    return {
+      kind: 'PRODUCT_DELETE_VEHICLE_UID',
+      productKey: item.productKey,
+      ...withExpectedAfter(item.appliedVehicleUid),
+      ...(item.appliedVehicleUidRegistry !== undefined ? { expectedRegistryAfter: item.appliedVehicleUidRegistry } : {}),
+      ...(item.hadVehicleUidRegistry !== undefined ? { hadVehicleUidRegistry: item.hadVehicleUidRegistry } : {}),
+      registryValue: item.vehicleUidRegistry,
+    };
+  };
   for (const item of backup.products) {
     const current = await store.getProduct(item.productKey);
     const presence = item.vehicleUidPresence ?? (item.hadVehicleUid ? item.vehicleUid === null ? 'present:null' : 'present:string' : 'absent');
@@ -373,9 +406,7 @@ export async function rollbackVehicleUidMigration(
       skipped++;
       continue;
     }
-    addMutation(item.componentId ?? `product:${item.productKey}`, item.hadVehicleUid
-      ? { kind: 'PRODUCT_VEHICLE_UID', productKey: item.productKey, vehicleUid: item.vehicleUid ?? null, ...withExpectedAfter(item.appliedVehicleUid) }
-      : { kind: 'PRODUCT_DELETE_VEHICLE_UID', productKey: item.productKey, ...withExpectedAfter(item.appliedVehicleUid) });
+    addMutation(item.componentId ?? `product:${item.productKey}`, rollbackProductMutation(item));
     writes++;
     productUpdates++;
   }

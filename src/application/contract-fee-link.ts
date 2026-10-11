@@ -1,7 +1,7 @@
 import type { Offer, PriceTerm, Product, VehicleAsset } from '../domain/catalog.js';
 import type { InternalFeeLookupTerm } from '../domain/internal-fee-lookup-contract.js';
 import { toInternalFeeLookup } from '../domain/internal-fee-lookup-contract.js';
-import type { PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
+import { kstDate, type PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
 import type { CatalogStore } from '../ports/catalog-store.js';
 
 export type ContractFeeLinkInput = {
@@ -9,6 +9,7 @@ export type ContractFeeLinkInput = {
   assetId?: string | undefined;
   plate?: string | undefined;
   contractDate?: string | undefined;
+  contractAt?: string | undefined;
   supplierId: string;
   termMonths: number;
   monthlyRent: number;
@@ -79,6 +80,7 @@ export type ContractFeeLinkResult = {
 export type ContractLedgerPickInput = {
   rows: readonly PeriodFeeLedgerRow[];
   contractDate: string;
+  contractAt?: string | undefined;
   termMonths: number;
   monthlyRent: number;
   deposit: number;
@@ -151,13 +153,51 @@ const ledgerRowMismatches = (input: Pick<ContractLedgerPickInput, 'monthlyRent' 
   return mismatches;
 };
 
+const parseTime = (value: string | undefined) => {
+  if (!value) return NaN;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : NaN;
+};
+
+const dateOnly = (value: string | undefined) =>
+  typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+
+const ledgerObservationMs = (row: PeriodFeeLedgerRow) => {
+  const computedAtMs = parseTime(row.computedAt);
+  // 날짜만 있는 valueAsOf 는 시각 근거가 아니다(UTC 자정으로 해석되어 계약 후 관측을 계약 전으로 오판). 시각 비교에는 쓰지 않는다.
+  const valueAsOfMs = dateOnly(row.valueAsOf) ? NaN : parseTime(row.valueAsOf);
+  const observed = [computedAtMs, valueAsOfMs].filter(Number.isFinite);
+  return observed.length > 0 ? Math.max(...observed) : NaN;
+};
+
+const contractInstantMs = (input: Pick<ContractLedgerPickInput, 'contractDate' | 'contractAt'>) =>
+  parseTime(input.contractAt ?? input.contractDate);
+
+const ledgerObservationKstDate = (row: PeriodFeeLedgerRow) => {
+  const observationMs = ledgerObservationMs(row);
+  if (Number.isFinite(observationMs)) return kstDate(new Date(observationMs).toISOString());
+  const valueAsOfDate = dateOnly(row.valueAsOf);
+  return valueAsOfDate ?? null;
+};
+
+const observedBeforeContract = (row: PeriodFeeLedgerRow, input: Pick<ContractLedgerPickInput, 'contractDate' | 'contractAt'>) => {
+  if (!input.contractAt) {
+    const contractDate = dateOnly(input.contractDate);
+    const observationDate = ledgerObservationKstDate(row);
+    return Boolean(contractDate && observationDate && observationDate < contractDate);
+  }
+  const rowMs = ledgerObservationMs(row);
+  const contractMs = contractInstantMs(input);
+  return Number.isFinite(rowMs) && Number.isFinite(contractMs) && rowMs < contractMs;
+};
+
 export function pickLedgerRowForContract(input: ContractLedgerPickInput): ContractLedgerPickResult {
   const candidates = input.rows
     .filter((row) =>
       row.valueBasis === 'CURRENT_AT_SNAPSHOT'
-      && row.valueAsOf <= input.contractDate
+      && observedBeforeContract(row, input)
       && row.termMonths === input.termMonths)
-    .sort((a, b) => b.valueAsOf.localeCompare(a.valueAsOf) || b.snapshotId.localeCompare(a.snapshotId));
+    .sort((a, b) => ledgerObservationMs(b) - ledgerObservationMs(a) || b.snapshotId.localeCompare(a.snapshotId));
   const latest = candidates[0];
   if (!latest) {
     return { status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE', detail: { candidateCount: 0 } };
@@ -207,6 +247,7 @@ const ledgerFeeForContract = (
     rows: data.ledgerRows.filter((row) => row.assetId === match.assetId
       && row.supplierId === match.supplierId),
     contractDate: input.contractDate,
+    contractAt: input.contractAt,
     termMonths: input.termMonths,
     monthlyRent: input.monthlyRent,
     deposit,

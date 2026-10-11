@@ -25,6 +25,13 @@ export function stableDigest(value: unknown) {
     .digest('hex');
 }
 
+export function compactFirestoreDocumentIdPart(value: string) {
+  const safe = value.replace(/[\/#?[\]*]/g, '_');
+  if (safe.length <= 180) return safe;
+  const hash = createHash('sha256').update(value).digest('hex');
+  return `${safe.slice(0, 100)}__sha256_${hash}`;
+}
+
 export function stableRecordSetDigest<T extends { lineageRecordId: string }>(
   values: readonly T[]
 ) {

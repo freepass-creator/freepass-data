@@ -1,6 +1,8 @@
 import { getFirestore } from 'firebase-admin/firestore';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
+import { readConsistentPeriodFeeLedgerRows } from './period-fee-ledger-firestore-readback.js';
+import type { PeriodFeeLedgerRow, PeriodFeeSnapshotRun } from '../domain/period-fee-ledger.js';
 
 type Rec = Record<string, unknown>;
 
@@ -42,4 +44,19 @@ export async function readPeriodFeeLedgerPlanInputs() {
     },
     observedAt: new Date().toISOString(),
   };
+}
+
+export async function listActivePeriodFeeLedgerRows(): Promise<PeriodFeeLedgerRow[]> {
+  const db = getFirestore(getTargetFirebaseApp());
+  const activeRuns = await db.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns)
+    .where('active', '==', true)
+    .where('status', '==', 'ACTIVE')
+    .get();
+  const rows: PeriodFeeLedgerRow[] = [];
+  for (const runDoc of activeRuns.docs) {
+    const run = runDoc.data() as PeriodFeeSnapshotRun;
+    const readback = await readConsistentPeriodFeeLedgerRows(db, run.snapshotId, run.runId, { requireActive: true });
+    rows.push(...readback.rows);
+  }
+  return rows;
 }
