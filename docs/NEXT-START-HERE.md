@@ -202,6 +202,8 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 현재 전체 작업의 증거 범위와 남은 확인은 [2026-10-12 전체 완료 감사](#2026-10-12-전체-완료-감사)를 먼저 읽는다. 아래09-30 항목은 유지하는 역사적 점검 목록이며 현재 오류 건수로 해석하지 않는다.
 
+현재 단건 fact 운영 검증은 [revision32 실행 영수증](#single-product-runtime-readback)을 읽는다. revision32 배포와 기존 fullcompat 성공은 확인됐지만 단건 helper 실패 phase/개별 HTTP/요청 수는 UNKNOWN이며 소비처 전환은 HOLD이다.
+
 ### 미해결 항목 — 2026-09-30 상품·정책 감사 기준
 
 아래는 해결 완료를 재확인할 때까지 유지하는 점검 목록이다. 특정 상품의 현재 오류 건수나 전체 데이터 상태를 보증하지 않는다.
@@ -228,6 +230,19 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+<a id="single-product-runtime-readback"></a>
+
+### 2026-10-12 단건 fact 최종 통합 / revision32 배포 / 실 단건 검증 실패
+
+- 현재 판정: 새 fact 코드는 CODED/TESTED, runtime source8af의 revision32 배포는 DEPLOYMENT VERIFIED이다. 기존 fullcompat 읽기 성공과 별개로 새 단건 helper가 실패하여 단건 실응답·소비처 CUTOVER VERIFIED는 HOLD이다. 현재 운영은 revision31이 아니라 `freepass-data-read-00032-sdr`이다. 실패 뒤 추가 dispatch·rollback·상품/사진 조회·IAM/secret/사업DB 변경0이다.
+- fact 최종 코드: [PR492](https://github.com/freepass-creator/freepass-data/pull/492)의 검토 head `48f00f43b31126d6bd248fec86fcce49b84baf84`를 source8af ancestor로 결속한 최종 head `0a10538ae1872aa2588501d6caae2449f15b4869`는 tree 변경0이었다. merge `cf1415fa3d14f08b5a09426aef28a8c83c1c6825`, 05:51:19 KST. 최종 Linux Core38173779266/job114571725249 및 Canon38173776976/job114571718471 SUCCESS. 운영 후보 `8af86d3b84020a402e21ec3c34a8498bd3066148`는 실제 이전 runtime `08fd27afd3764210027e0001562923d59d4a4fea` 위 gateway/adapter/전용test 4파일만 포함한다. 새 handler/reader block·전용test의 Git 내용 동일성과 main ancestor를 확인했다. source 로컬 API182+사진/CLI127=309 PASS, build/arch/access PASS이며 source8af 자체 별도 Linux CI 실행으로 표현하지 않는다.
+- trusted 검증 helper: [PR497](https://github.com/freepass-creator/freepass-data/pull/497) 검토 head `8745cb90b962907bcbb7f51c26c062a6ab1ac5c0`, merge `6333123565152cb6d6c4f0da7b98102d92ebaf7c`, 06:04:04 KST. 기존 deploy workflow/helper/test 3파일만 변경했다. trusted GITHUB_SHA의 helper를 선택 runtime checkout 전에 임시 보존하고 실행 SHA를 결속한다. source8af exact 조건에서만 이미 받은 fullcompat·동일 Cloud Run ID token·한 번 읽은 소비처 JSON을 재사용한다. 고정 상품 자체 부재/_key 불일치/명시참조 및 기존 관련문서 code 상충은 GET0; 관련 참조·문서 부재는 UNKNOWN 허용이다. 선택 성공 후 단건200/동일ID 소비처 무인증401/사진전용403 각1, 최대3 GET·retry0·사진GET0, streaming1MiB·전체30초/native abort·정리·안전 boolean 출력만 허용한다. positive fields/schema/exactID/nanos/version/linked ref·UNKNOWN/deposit amount-state/private+no-store/nosniff/migration4headers를 검사한다.
+- helper 검증: 로컬 helper33+기존 API182=215 PASS, build/arch/access/diff-check PASS. 12·21·00·20 exact8745 검토 blocker0; 21은 helper33 독립 실행 PASS/skip0·외부HTTP0이며 기존 API182 재실행과 구분한다. 같은 head Linux Core38174695028/job114574495139 SUCCESS(06:03:38 KST), Canon38174695244/job114574496868 SUCCESS(06:02:29 KST). 병합 tree는 검토 head와 diff0, source8af main ancestor exit0이었다.
+- 실제 단일 실행(20 제공,01 GitHub job/step 결과 대조): [run38175251751](https://github.com/freepass-creator/freepass-data/actions/runs/38175251751), deployjob114576178270 FAILURE, 완료06:12:16 KST. trusted workflow `4e40a404eab83db07f2f8099294cb0e092e2c651`, 선택 runtime source `8af86d3b84020a402e21ec3c34a8498bd3066148`, 새 revision `freepass-data-read-00032-sdr`, image `sha256:c1dd390cf5c5d1abb12e1bc3bb0d7d6914f9fd646435997b77b6b3035df77055`. resolve/ancestor/checkout/build/OCI 결속, private deploy와 readiness metadata step은 실제 SUCCESS이다. workflow main의 다른 금액·원장 코드까지 운영 이미지로 배포했다고 하지 않는다.
+- 보존 증거 범위(20 영수증): baseline31/source08fd/image882c 및 resource/env guard는 deploy step assertion이다. privateIAM/traffic100/기존SA·URI/pins5+ONE1/timeout300/concurrency8은 post readiness 실제 assertion이다. max10/512Mi/8080/volumes/F04/비관리 환경은 baseline 및 배포 보존 assertion과 별도로 기록하며 새 post 실측 PASS로 확대하지 않는다. verifyjob114576179695는 SKIP/steps0, publicIAM/publicsmoke SKIP이다.
+- 읽기 결과와 미확정(20 영수증): IAM 무인증403 및 기존 fullcompat200/schema/migrationheaders는 PASS. 같은 step의 helper `SINGLE_PRODUCT_READBACK_OK=false`로 전체 readback step은 FAILURE이다. 안전 boolean만 출력했으므로 실패 phase·고정 상품 선택 성공 여부·단건200/401/403 개별 상태·실제 GET 수는 UNKNOWN이다. 3회 모두 실행됐거나 첫 단계에서 멈췄다고 추정하지 않는다. [활성화 영수증](https://github.com/freepass-creator/freepass-data/issues/209#issuecomment-6113807516), 06:12:12 KST. 신규 단건 runtime PASS·속도개선·소비처 cutover로 세지 않는다.
+- next_start_here: 00이 실패 phase를 안전하게 구분할 후속 진단 범위를 정하고 단일 실행 owner20에 인계한다. 기존 boolean 실패만으로 원인·권한 부족·데이터 부재를 확정하지 않는다. 새 요청/재배포/rollback은 이번 실패 영수증 기록과 별개 승인 사항이다. 01은 본 패킷으로 코드·CI·독립검토·실배포 성공 부분·검증 실패 및 HOLD를 결속하며 원본 checkout dirty185줄을 계속 보존한다.
 
 ### 2026-10-12 단건 compatibility fact 구현 / 운영 후보 분리
 
