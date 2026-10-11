@@ -21,7 +21,7 @@ const estimate = (extra: Record<string, unknown> = {}) => ({
 const payload = (id: string, plate = '900가0000', bucket = 'LOW_SONOKONG') => ({
   bucket,
   list: { id, carNumber: plate, carName: 'FAKE_MODEL TEXT', groupName4: identity[0],
-    groupName2: identity[1], groupName1: identity[2], carFuel: 'GASOLINE',
+    groupName2: identity[1], groupName1: identity[2], carFuel: '가솔린',
     engineDisplacement: '2,000', mileage: '12,345', carManufactureDate: '2025',
     webVisibility: true, contractAvailable: true, hasActiveContract: false },
   detail: { id, carNumber: plate, firstRegistrationDate: '2025-01-02', saleAmt: '12,345,000',
@@ -119,5 +119,19 @@ describe('Sonogong RAW to candidate normalizer', () => {
     expect(fields.vehiclePrice).toMatchObject({ value: null, state: 'MISSING' });
     expect(normalized.record.candidate.issues).not.toContain('INVALID_DISPLACEMENT_CC');
     expect(normalized.record.candidate.issues).not.toContain('INVALID_VEHICLE_PRICE');
+  });
+
+  it('unifies fuel spelling but never guesses hybrid kind from an ambiguous combined label', () => {
+    const fuel = (carFuel: string) => {
+      const base = payload('fuel-id');
+      return normalizeOne({ ...base, list: { ...base.list, carFuel } })!.record.candidate;
+    };
+    expect(fuel('휘발유').vehicleFacts?.fields.fuel).toMatchObject({ value: '가솔린', state: 'KNOWN' });
+    expect(fuel('경유').vehicleFacts?.fields.fuel).toMatchObject({ value: '디젤', state: 'KNOWN' });
+    expect(fuel('HEV').vehicleFacts?.fields.fuel).toMatchObject({ value: '하이브리드', state: 'KNOWN' });
+    expect(fuel('lpg').vehicleFacts?.fields.fuel).toMatchObject({ value: 'LPG', state: 'KNOWN' });
+    const ambiguous = fuel('가솔린+전기');
+    expect(ambiguous.vehicleFacts?.fields.fuel).toMatchObject({ value: null, state: 'REVIEW_REQUIRED' });
+    expect(ambiguous.issues).toContain('FUEL_UNRESOLVED');
   });
 });

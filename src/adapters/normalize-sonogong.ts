@@ -1,3 +1,4 @@
+import spec from '../../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
 import type { CatalogCandidate } from '../domain/catalog-candidate.js';
 import type { CommercialType, PriceTerm } from '../domain/catalog.js';
 import type { SourceVehicleFacts } from '../domain/source-vehicle-facts.js';
@@ -33,6 +34,14 @@ const text = (value: unknown) => typeof value === 'string' ? value.trim() : valu
 const compact = (value: unknown) => text(value).replace(/\s+/g, '');
 const int = (value: unknown) => normalizeErp5CompatibilityInteger(value);
 /** 전기차 배기량 0·차량가격 0 은 «값 없음» 표시다 — 알려진 값도, 보류 사유도 아니다(내부 정합 대조에서 확인). */
+/** 공통 시트와 같은 연료 허용 목록·별칭. «가솔린+전기» 는 하이브리드/플러그인을 뜻으로 가를 수 없어 추정하지 않는다(보류). */
+const fuelAliases: Record<string, string> = { HEV: '하이브리드', PHEV: '플러그인하이브리드', EV: '전기', 휘발유: '가솔린', 경유: '디젤' };
+const fuelName = (value: unknown): string | null => {
+  const t = text(value);
+  if (!t) return null;
+  if ((spec.dropdowns['연료'] as string[]).includes(t)) return t;
+  return fuelAliases[t.toUpperCase()] ?? (t === 'lpg' ? 'LPG' : null);
+};
 const zeroAsAbsent = (value: unknown) => value === 0 || value === '0' ? undefined : value;
 
 export const sonogongNormalizer = (master?: SonogongMasterEvidence) => (raw: RawRecord): SonogongNormalized | null => {
@@ -73,7 +82,7 @@ export const sonogongNormalizer = (master?: SonogongMasterEvidence) => (raw: Raw
     const iso = `${m[1]}-${m[2]}-${m[3]}`;
     return Number.isFinite(Date.parse(iso)) ? iso : null;
   }, 'INVALID_FIRST_REGISTRATION');
-  parseFact('fuel', list.carFuel, value => text(value) || null, 'INVALID_FUEL');
+  parseFact('fuel', list.carFuel, fuelName, 'FUEL_UNRESOLVED');
   parseFact('displacementCc', zeroAsAbsent(list.engineDisplacement), int, 'INVALID_DISPLACEMENT_CC');
   parseFact('mileageKm', list.mileage, int, 'INVALID_MILEAGE_KM');
   parseFact('vehiclePrice', zeroAsAbsent(detail.saleAmt), int, 'INVALID_VEHICLE_PRICE');
