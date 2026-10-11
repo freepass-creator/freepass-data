@@ -10,7 +10,7 @@ const observedAt = '2026-10-12T00:00:00.000Z';
 const identity = ['FAKE_MAKER', 'FAKE_MODEL', 'FAKE_SUBMODEL', ''] as const;
 const master = (extra: Partial<VehicleMasterRecord> = {}) => ({
   records: [{ masterId: 'fake-master', trimId: 'fake-trim', names: identity,
-    aliases: identity.map(value => [value]), specs: { fuel: 'GASOLINE', displacementCc: 1999 },
+    aliases: identity.map(value => [value]), specs: { fuel: '가솔린', displacementCc: 1999 },
     modelYearStart: 2024, modelYearEnd: 2026, ...extra }],
   readAt: observedAt, snapshotDigest: 'fake-master-digest',
 });
