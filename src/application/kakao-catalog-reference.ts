@@ -642,6 +642,7 @@ export type CommissionInput = {
   /** Explicit contractual tier, never inferred from a deposit amount. */
   depositTierPercent?: 5 | 10;
   subscriptionForm?: 'BUYOUT' | 'RETURN';
+  subscriptionFormConflict?: boolean;
   q12Basis?: { amount: number; sourceRef: string };
   /** 뮤카: 보증금 선납/분납(접수 납입 방식). 추정하지 않는다. */
   depositPayment?: 'PREPAID' | 'INSTALLMENT';
@@ -680,6 +681,15 @@ type SonokongQ12BasisCandidate = {
   amount: number;
   sourceRef: string;
 };
+
+export function resolveSubscriptionFormForTerm(
+  explicit: 'BUYOUT' | 'RETURN' | undefined,
+  priceKeySettlement: 'BUYOUT' | 'RETURN' | undefined,
+): { subscriptionForm?: 'BUYOUT' | 'RETURN'; conflict?: true } {
+  if (explicit && priceKeySettlement && explicit !== priceKeySettlement) return { conflict: true };
+  const subscriptionForm = explicit ?? priceKeySettlement;
+  return subscriptionForm ? { subscriptionForm } : {};
+}
 
 export function selectSonokongQ12Basis(target: SonokongQ12BasisCandidate, candidates: readonly SonokongQ12BasisCandidate[]): CommissionInput['q12Basis'] | undefined {
   const matching = candidates.filter(candidate => candidate.termMonths === 12 &&
@@ -764,6 +774,7 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   if (supplierId === 'RP012' && subscription) {
     const addition = KAKAO_COMMISSION_POLICY.sonokongAdditions[termMonths as 12];
     if (addition === undefined) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
+    if (input.subscriptionFormConflict) return unknownCommission('SUBSCRIPTION_FORM_CONFLICT');
     if (!input.q12Basis || !Number.isSafeInteger(input.q12Basis.amount) || input.q12Basis.amount <= 0 || !text(input.q12Basis.sourceRef)) return unknownCommission('Q12_BASIS_REQUIRED');
     if (termMonths === 12) return fixed(`SONOKONG_SUBSCRIPTION_${termMonths}_${side}`, input.q12Basis.amount + (billing ? addition : 0));
     if (input.subscriptionForm === 'RETURN') return unknownCommission('RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED');
@@ -960,20 +971,25 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
         sourceRef: 'PRODUCT_12_MONTH_RENT',
       }] : [];
     });
-    const automaticQ12 = selectSonokongQ12Basis({
+    const resolvedSubscriptionForm = resolveSubscriptionFormForTerm(
+      evidenceByTerm[sourceKey]?.subscriptionForm,
+      parsed.months === 12 ? undefined : parsed.settlement,
+    );
+    const automaticQ12 = resolvedSubscriptionForm.conflict ? undefined : selectSonokongQ12Basis({
       termMonths: parsed.months,
-      settlement: parsed.settlement,
+      settlement: resolvedSubscriptionForm.subscriptionForm,
       mileageKm: parsed.contractedMileage?.km ?? parsed.mileageKm,
       mileagePeriod: parsed.contractedMileage?.period ?? 'year',
       currency: 'KRW',
       amount: monthlyRent,
       sourceRef: `source-product:${documentId}#price:${sourceKey}`,
     }, q12Candidates);
-    const subscriptionForm = parsed.months === 12 ? undefined : parsed.settlement;
+    const subscriptionForm = resolvedSubscriptionForm.subscriptionForm;
     const automaticCommissionEvidence = {
       ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && automaticQ12 && !evidenceByTerm[sourceKey]?.q12Basis ? { q12Basis: automaticQ12 } : {}),
       ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && subscriptionForm ? { subscriptionForm } : {}),
-    } satisfies Partial<Pick<CommissionInput, 'q12Basis' | 'subscriptionForm'>>;
+      ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && resolvedSubscriptionForm.conflict ? { subscriptionFormConflict: true as const } : {}),
+    } satisfies Partial<Pick<CommissionInput, 'q12Basis' | 'subscriptionForm' | 'subscriptionFormConflict'>>;
     const depositInput = depositEvidenceInputFromProduct(source, (raw as Rec).deposit, {
       termMonths: parsed.months,
       monthlyRent,
