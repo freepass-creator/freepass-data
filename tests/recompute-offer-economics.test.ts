@@ -36,14 +36,14 @@ describe('offer economics recompute', () => {
     const offer={...original,supplierId:'RP021',priceTerms:[36,60].map(months=>({...original.priceTerms[0]!,termKey:`m${months}`,termMonths:months,monthlyRent:{amount:800000,currency:'KRW' as const}}))};
     offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'USED_SUBSCRIPTION');
     const next=structuredClone(offer);next.priceTerms[0]!.monthlyRent.amount=900000;
-    const refreshed=refreshOfferEconomicsForChangedInputs(offer,next,'USED_SUBSCRIPTION');
+    const refreshed=refreshOfferEconomicsForChangedInputs(offer,next,false,'USED_SUBSCRIPTION');
     expect(refreshed.map(term=>term.supplierBillingFee.amount!.amount)).toEqual([900000,900000]);
     expect(refreshed.map(term=>term.channelPayoutFee.amount!.amount)).toEqual([720000,720000]);
     const removed={...next,priceTerms:next.priceTerms.filter(term=>term.termMonths!==36)};
-    expect(refreshOfferEconomicsForChangedInputs(offer,removed,'USED_SUBSCRIPTION')[0]!.supplierBillingFee)
+    expect(refreshOfferEconomicsForChangedInputs(offer,removed,false,'USED_SUBSCRIPTION')[0]!.supplierBillingFee)
       .toMatchObject({state:'UNKNOWN',amount:null});
     const ambiguous={...next,priceTerms:[...next.priceTerms,{...next.priceTerms[0]!,termKey:'m36-extra'}]};
-    expect(refreshOfferEconomicsForChangedInputs(offer,ambiguous,'USED_SUBSCRIPTION').find(term=>term.termKey==='m60')!.supplierBillingFee)
+    expect(refreshOfferEconomicsForChangedInputs(offer,ambiguous,false,'USED_SUBSCRIPTION').find(term=>term.termKey==='m60')!.supplierBillingFee)
       .toMatchObject({state:'UNKNOWN',amount:null});
   });
   it('scopes plans to changed offer/product IDs and rejects missing offers without writes', async () => {
@@ -72,18 +72,20 @@ describe('offer economics recompute', () => {
     expect(saved.internalEconomicsTerms![0]!.channelPayoutFee).toEqual(offer.internalEconomicsTerms[0]!.channelPayoutFee);
     expect(saved.internalEconomicsTerms![0]!.supplierBillingFee.amount!.amount).not.toBe(offer.internalEconomicsTerms[0]!.supplierBillingFee.amount!.amount);
     expect(saved.internalEconomicsTerms![1]).toEqual(offer.internalEconomicsTerms[1]);
-    expect(refreshOfferEconomicsForChangedInputs(offer,offer,'USED_RENT')).toEqual(offer.internalEconomicsTerms);
-    const repriced = refreshOfferEconomicsForChangedInputs(saved,saved,'USED_RENT',undefined,
+    expect(refreshOfferEconomicsForChangedInputs(offer,offer,false,'USED_RENT')).toEqual(offer.internalEconomicsTerms);
+    expect(() => refreshOfferEconomicsForChangedInputs(offer,offer,undefined as any,'USED_RENT'))
+      .toThrow('POLICY_CONTEXT_CHANGE_DECISION_REQUIRED');
+    const repriced = refreshOfferEconomicsForChangedInputs(saved,saved,false,'USED_RENT',undefined,
       {before:{amount:30000000,currency:'KRW'},after:{amount:40000000,currency:'KRW'},sourceRef:'test:new-price-fact'});
     expect(repriced[0]!.channelPayoutFee).toMatchObject({amount:{amount:400000},vatAmount:40000,totalAmount:440000});
     expect(repriced[0]!.supplierBillingFee).toEqual(saved.internalEconomicsTerms![0]!.supplierBillingFee);
-    const missing = refreshOfferEconomicsForChangedInputs(saved,saved,'USED_RENT',undefined,
+    const missing = refreshOfferEconomicsForChangedInputs(saved,saved,false,'USED_RENT',undefined,
       {before:{amount:30000000,currency:'KRW'},after:null,sourceRef:''});
     expect(missing[0]!.channelPayoutFee).toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'VEHICLE_PRICE_EVIDENCE_REQUIRED'});
     const changedPeriod=structuredClone(saved);changedPeriod.priceTerms[0]!.termMonths=48;
-    expect(refreshOfferEconomicsForChangedInputs(saved,changedPeriod,'USED_RENT')[0]!.channelPayoutFee)
+    expect(refreshOfferEconomicsForChangedInputs(saved,changedPeriod,false,'USED_RENT')[0]!.channelPayoutFee)
       .toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'VEHICLE_PRICE_POLICY_CONTEXT_REVIEW_REQUIRED'});
-    expect(refreshOfferEconomicsForChangedInputs(saved,saved,'NEW_RENT',undefined,undefined,true)[0]!.channelPayoutFee.state).toBe('UNKNOWN');
+    expect(refreshOfferEconomicsForChangedInputs(saved,saved,true,'NEW_RENT')[0]!.channelPayoutFee.state).toBe('UNKNOWN');
     expect(offer.internalEconomicsTerms[0]!.channelPayoutFee.amount!.amount).toBe(300000);
     const plan=await planOfferEconomicsRecompute(store,'memory-test',{offerIds:[offer.id]});
     expect(plan.changedOffers).toBe(0);

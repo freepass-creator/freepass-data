@@ -126,7 +126,7 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
     };
     const product = await tx.getProduct(next.productId);
     const model = product ? await tx.getVehicleModel(product.vehicleModelId) : null;
-    next.internalEconomicsTerms = refreshOfferEconomicsForChangedInputs(current, next, product?.commercialType, model?.fuel);
+    next.internalEconomicsTerms = refreshOfferEconomicsForChangedInputs(current, next, false, product?.commercialType, model?.fuel);
     const receipt = {
       idempotencyKey: input.idempotencyKey, commandId: input.commandId,
       status: 'CANONICAL_COMMITTED' as const, entityType: 'offer', entityId: current.id,

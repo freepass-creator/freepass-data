@@ -15,10 +15,10 @@ const positiveSafeInteger = (value: unknown): value is number =>
 
 /** Existing approved vehicle-price rates need an explicit source fact; rent is not that fact. */
 export function refreshOfferEconomicsForChangedInputs(
-  previous: Offer, next: Offer, commercialType?: CommercialType, fuel?: string | null,
+  previous: Offer, next: Offer, policyContextChanged: boolean, commercialType?: CommercialType, fuel?: string | null,
   vehiclePriceChange?: { before: Money | null; after: Money | null; sourceRef: string },
-  policyContextChanged = false,
 ) {
+  if (typeof policyContextChanged !== 'boolean') throw new Error('POLICY_CONTEXT_CHANGE_DECISION_REQUIRED');
   const candidate = precomputeOfferEconomics(next, commercialType, fuel);
   const old = new Map((previous.internalEconomicsTerms ?? []).map(term => [term.termKey, term]));
   const oldPrices = new Map(previous.priceTerms.map(term => [term.termKey, term]));
