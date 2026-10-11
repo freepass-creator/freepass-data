@@ -43,6 +43,14 @@ describe('offer economics recompute', () => {
     const report=await planOfferEconomicsRecompute(store,'memory-test',{feeSubsetsByOffer:{[offer.id]:{termKeys:['m1'],evidence}}});
     expect(report.subsetEvidenceVerified).toBe(true);
     const options={target:'memory-test',apply:true,plan:report.plan,expectedPlanDigest:report.planDigest,policyId:report.plan.policyId,actor,approvalRef:'subset-review'};
+    const currentRun=(await store.getSourceRun(binding.sourceRunId))!;
+    for (const changedRun of [{...currentRun,coverage:{...coverage,completeness:'INCOMPLETE' as const}},
+      {...currentRun,checkpoint:{...checkpoint,checksum:'different-checksum'}}]) {
+      await store.seed({sourceRuns:[changedRun]});
+      expect((await runOfferEconomicsRecompute(store,options)).status).toBe('HOLD');
+      expect(await store.getOffer(offer.id)).toEqual(offer);expect(store.audits).toHaveLength(0);
+    }
+    await store.seed({sourceRuns:[currentRun]});
     await store.seed({sourceHeads:[{sourceId:binding.sourceId,runId:'different-run',observedAt:now,acceptedAt:now,coverage,checkpoint}]});
     const blocked=await runOfferEconomicsRecompute(store,options);
     expect(blocked.status).toBe('HOLD');expect(await store.getOffer(offer.id)).toEqual(offer);expect(store.audits).toHaveLength(0);

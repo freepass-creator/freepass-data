@@ -193,7 +193,9 @@ export async function assertOfferFeeSubsetEvidence(reader: Pick<CatalogStore,'ge
       binding.sourceRunId!==evidence.runId || stableDigest(binding)!==evidence.bindingDigest) throw new InvalidCommandError('FEE_SUBSET_BINDING_DRIFT');
   const [head,run,source]=await Promise.all([reader.getSourceHead(binding.sourceId),reader.getSourceRun(evidence.runId),reader.getSourceDefinition(binding.sourceId)]);
   if (!head || head.runId!==evidence.runId || !run || run.sourceId!==binding.sourceId || run.status!=='COMPLETED' || run.headStatus!=='CURRENT' ||
-      head.coverage.completeness!=='COMPLETE' || stableDigest(head.checkpoint)!==evidence.checkpointDigest) throw new InvalidCommandError('FEE_SUBSET_SOURCE_NOT_CURRENT');
+      head.coverage.completeness!=='COMPLETE' || stableDigest(run.coverage)!==stableDigest(head.coverage) ||
+      stableDigest(run.checkpoint ?? null)!==stableDigest(head.checkpoint) ||
+      stableDigest(head.checkpoint)!==evidence.checkpointDigest) throw new InvalidCommandError('FEE_SUBSET_SOURCE_NOT_CURRENT');
   const maxAge=source?.expectedFreshnessSeconds;
   if (!source?.enabled || !maxAge || maxAge<=0 || !Number.isFinite(maxAge)) throw new InvalidCommandError('FEE_SUBSET_FRESHNESS_POLICY_REQUIRED');
   const age=Date.parse(now)-Date.parse(head.observedAt);
