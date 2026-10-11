@@ -77,7 +77,7 @@ import {
   publicConsumerIdFromWhitelabel,
 } from './public-product-feed.js';
 import { logRouteError } from '../shared/route-error-log.js';
-import { assertPublicAllowlistsConfigured, publicProviderAllowlist, publicWhitelabelAllowlist } from './public-allowlist.js';
+import { assertPublicAllowlistsConfigured, publicProviderAllowlist, publicSingleQueryValue, publicWhitelabelAllowlist } from './public-allowlist.js';
 
 export type ConsumerCapability =
   | 'catalog'
@@ -233,9 +233,6 @@ const publicTrustProxyHops = (): number => {
   if (!/^[0-3]$/.test(raw)) throw new Error('FREEPASS_PUBLIC_TRUST_PROXY_HOPS must be 0, 1, 2 or 3');
   return Number(raw);
 };
-const singleQueryValue = (value: string | string[] | undefined): string | undefined =>
-  Array.isArray(value) ? undefined : value;
-
 // Fastify exposes the chain from the socket outward; each route keeps its own trust budget.
 const clientIpAtHops = (request: { ip?: string; ips?: string[] | undefined }, hops: number): string =>
   request.ips?.[Math.min(hops, request.ips.length - 1)] ?? request.ip ?? 'unknown';
@@ -287,9 +284,9 @@ const normalizePublicQuery = (
   query: PublicCatalogQuery,
   registered: Map<string, RegisteredConsumerBinding>
 ): { p?: string; wl?: string; code?: string } => {
-  const p = singleQueryValue(query.p);
-  const wl = singleQueryValue(query.wl);
-  const code = singleQueryValue(query.code);
+  const p = publicSingleQueryValue(query.p);
+  const wl = publicSingleQueryValue(query.wl);
+  const code = publicSingleQueryValue(query.code);
   if (p !== undefined) {
     if (!/^(?:RP|PT-)\d+$/.test(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_INVALID'), { statusCode: 400 });
     const allowed = publicProviderAllowlist();

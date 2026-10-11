@@ -7,7 +7,7 @@ import { buildPublicProductFeed, buildPublicProductQuote, publicConsumerIdFromWh
 import { logRouteError } from '../shared/route-error-log.js';
 import { createFirestoreCatalogCompatibilityReader } from '../infra/erp5-compat-catalog-reader.js';
 import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-reader.js';
-import { assertPublicAllowlistsConfigured, publicProviderAllowlist, publicWhitelabelAllowlist } from './public-allowlist.js';
+import { assertPublicAllowlistsConfigured, publicProviderAllowlist, publicSingleQueryValue, publicWhitelabelAllowlist } from './public-allowlist.js';
 
 type PublicCatalogQuery = { p?: string; wl?: string; code?: string; a?: string };
 
@@ -30,7 +30,6 @@ const inFlight = new Map<string, Promise<CatalogCompatibilitySnapshot>>();
 const timeoutCooldown = new Map<string, { resetAt: number }>();
 const rateLimits = new Map<string, { resetAt: number; count: number }>();
 
-const single = (value: string | string[] | undefined): string | undefined => Array.isArray(value) ? undefined : value;
 const bytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
 const trustProxyHops = (): number => {
   const raw = process.env.FREEPASS_PUBLIC_TRUST_PROXY_HOPS?.trim() ?? '';
@@ -77,9 +76,9 @@ const withTimeout = async <T>(work: Promise<T>, timeoutMs = TIMEOUT_MS): Promise
 };
 
 const normalize = (query: PublicCatalogQuery) => {
-  const p = single(query.p);
-  const wl = single(query.wl);
-  const code = single(query.code);
+  const p = publicSingleQueryValue(query.p);
+  const wl = publicSingleQueryValue(query.wl);
+  const code = publicSingleQueryValue(query.code);
   if (p !== undefined) {
     if (!/^(?:RP|PT-)\d+$/.test(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_INVALID'), { statusCode: 400 });
     const allowed = publicProviderAllowlist();

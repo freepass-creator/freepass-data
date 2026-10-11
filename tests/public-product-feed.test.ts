@@ -326,6 +326,47 @@ describe('public product feed v1', () => {
     await app.close();
   });
 
+  it.each([
+    ['/v1/public/catalog/feed?p=RP999&p=RP998&wl=uniplan', 'duplicate provider'],
+    ['/v1/public/catalog/feed?p=RP013&wl=uniplan&wl=eancar', 'duplicate whitelabel'],
+    ['/v1/public/catalog/feed?p=&wl=uniplan', 'empty provider'],
+    ['/v1/public/catalog/feed?p=RP013&wl=', 'empty whitelabel'],
+  ])('rejects %s before reader, cache or in-flight key creation', async (url) => {
+    let reads = 0;
+    const access = new DataAccessGateway(new MemoryDataAccessLogStore());
+    const app = createConsumerGateway(
+      { getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] },
+      bindings,
+      access,
+      undefined,
+      { read: async () => { reads++; return snapshot({ P1: product() }); } },
+    );
+    const response = await app.inject({ url });
+    expect(response.statusCode).toBe(400);
+    expect(reads).toBe(0);
+    expect(publicRuntimeStatsForTest().cacheEntries).toBe(0);
+    expect(publicRuntimeStatsForTest().inFlightEntries).toBe(0);
+    await app.close();
+  });
+
+  it('rejects array query values before reader, cache or in-flight key creation', async () => {
+    let reads = 0;
+    const access = new DataAccessGateway(new MemoryDataAccessLogStore());
+    const app = createConsumerGateway(
+      { getActive: async () => null, getManifest: async () => null, listProjectionLineage: async () => [] },
+      bindings,
+      access,
+      undefined,
+      { read: async () => { reads++; return snapshot({ P1: product() }); } },
+    );
+    const response = await app.inject({ url: '/v1/public/catalog/feed', query: { p: ['RP999', 'RP998'], wl: 'uniplan' } });
+    expect(response.statusCode).toBe(400);
+    expect(reads).toBe(0);
+    expect(publicRuntimeStatsForTest().cacheEntries).toBe(0);
+    expect(publicRuntimeStatsForTest().inFlightEntries).toBe(0);
+    await app.close();
+  });
+
   it('coalesces concurrent reads for the same allowed provider', async () => {
     let reads = 0;
     let release!: () => void;

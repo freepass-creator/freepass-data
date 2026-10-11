@@ -9,6 +9,12 @@ const rawSupplierChannels = spec.supplierChannels as {
 const providerPattern = /^(?:RP|PT-)\d+$/;
 const whitelistSlugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+export const publicSingleQueryValue = (value: string | string[] | undefined, code = 'PUBLIC_QUERY_INVALID'): string | undefined => {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value) || value === '') throw Object.assign(new Error(code), { statusCode: 400 });
+  return value;
+};
+
 const codesFrom = (items: Array<{ code?: unknown }> | undefined): string[] =>
   (items ?? []).map((item) => item.code).filter((code): code is string =>
     typeof code === 'string' && providerPattern.test(code));
