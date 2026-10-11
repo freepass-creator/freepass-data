@@ -37,10 +37,10 @@ if (process.argv.slice(2).some(arg => arg.startsWith('--reviewed-plan='))) {
       || !Array.isArray(plan.records) || plan.records.length !== 1) throw new Error('IANCAR_REVIEW_INPUT_INVALID');
     const row = plan.records[0];
     const rowKeys = ['productId', 'vehicleId', 'plate', 'count', 'observedAt', 'review'];
-    const reviewKeys = ['upstreamPhotoIds', 'servingPhotoIds', 'refs'];
+    const reviewKeys = ['upstreamPhotoIds', 'servingPhotoIds', 'refs', 'basis', 'sourceRepresentatives'];
     const refKeys = ['sourceKind', 'sourceApiVersion', 'sourceBindingDigest', 'photoSetDigest', 'sourcePhotoIdDigest',
       'sourceOrdinal', 'servingIndex', 'mediaType', 'photoSha256', 'sourceObservedAt',
-      'vehiclePhotoVerifiedBy', 'vehiclePhotoVerificationMethod', 'vehiclePhotoVerifiedAt'];
+      'vehiclePhotoVerifiedBy', 'vehiclePhotoVerificationMethod', 'vehiclePhotoVerifiedAt', 'reviewBasis', 'representative'];
     if (!row || Object.keys(row).some(key => !rowKeys.includes(key))
       || !['productId', 'vehicleId', 'plate', 'observedAt'].every(key => typeof row[key] === 'string' && row[key].trim())
       || /[\/\u0000-\u001f\u007f]/.test(row.productId) || !row.review
@@ -62,8 +62,12 @@ if (process.argv.slice(2).some(arg => arg.startsWith('--reviewed-plan='))) {
       const inspect = (detail: unknown) => {
         const ids = iancarOnePhotoIds(detail, row.vehicleId, row.plate);
         const raw = (detail as any)?.data ?? detail;
-        const upstream = raw.photos.map((photo: any) => String(photo.photo_id));
-        if (orderedJsonDigest(ids) !== orderedJsonDigest(row.review.servingPhotoIds)
+        const upstream = raw.photos.map((photo: any) => String(photo.photo_id).trim());
+        if (row.review.basis === 'CONTENT_ORDINAL/1') {
+          const representatives = raw.photos.map((photo: any) => photo.representative);
+          if (ids.length !== row.count || orderedJsonDigest(representatives) !== orderedJsonDigest(row.review.sourceRepresentatives)
+            || ids.some((id, i) => upstream.indexOf(id) !== row.review.refs[i].sourceOrdinal)) throw new Error('IANCAR_REVIEW_SOURCE_CHANGED');
+        } else if (orderedJsonDigest(ids) !== orderedJsonDigest(row.review.servingPhotoIds)
           || orderedJsonDigest(upstream) !== orderedJsonDigest(row.review.upstreamPhotoIds)) throw new Error('IANCAR_REVIEW_SOURCE_CHANGED');
         return ids;
       };

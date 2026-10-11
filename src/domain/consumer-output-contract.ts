@@ -232,17 +232,26 @@ export type IancarPhotoReviewBinding = { productId: string; vehicleId: string; p
 
 /** Human-supplied review of one fixed ONE album; never synthesized by collection. */
 export type IancarOnePhotoReview = {
+  basis?: 'CONTENT_ORDINAL/1';
+  sourceRepresentatives?: boolean[];
   upstreamPhotoIds: string[];
   servingPhotoIds: string[];
   refs: Array<{
     sourceKind: 'IANCAR_ONE'; sourceApiVersion: 'iancar-one-api/1';
     sourceBindingDigest: string; photoSetDigest: string; sourcePhotoIdDigest: string;
     sourceOrdinal: number; servingIndex: number;
+    reviewBasis?: 'CONTENT_ORDINAL/1'; representative?: boolean;
     mediaType: 'image/jpeg' | 'image/png' | 'image/webp'; photoSha256: string;
     sourceObservedAt: string;
     vehiclePhotoVerifiedBy: string; vehiclePhotoVerificationMethod: string; vehiclePhotoVerifiedAt: string;
   }>;
 };
+
+/** Content authority excludes rotating upstream access handles. */
+export function iancarReviewedContentSetDigest(binding: string, refs: readonly Record<string, unknown>[]): string {
+  return orderedJsonDigest(['ONE_REVIEWED_CONTENT_SET/1', binding, refs.map(ref =>
+    [ref.sourceOrdinal, ref.servingIndex, ref.representative, ref.mediaType, ref.photoSha256])]);
+}
 
 /** Pure opt-in plan. Existing photo publication does not infer or populate approval. */
 export function planIancarPhotoReviewPatch(original: Record<string, unknown>, row: IancarPhotoReviewBinding,
@@ -263,30 +272,45 @@ export function planIancarPhotoReviewPatch(original: Record<string, unknown>, ro
   if (!review || !validIds(review.upstreamPhotoIds) || !validIds(review.servingPhotoIds)
     || review.servingPhotoIds.some(id => !review.upstreamPhotoIds.includes(id))
     || !hasVehiclePhotoVerification({ photo_original_refs: review.refs }) || review.refs.length !== row.count) fail();
+  const contentBasis = review.basis === 'CONTENT_ORDINAL/1';
+  if (review.basis !== undefined && !contentBasis) fail();
+  if (contentBasis && (!Array.isArray(review.sourceRepresentatives) || review.sourceRepresentatives.length !== row.count
+    || review.sourceRepresentatives.some(value => typeof value !== 'boolean')
+    || review.sourceRepresentatives.filter(Boolean).length > 1)) fail();
   const binding = orderedJsonDigest(['RP031', row.productId, row.vehicleId, row.plate.replace(/\s/g, '')]);
-  const set = orderedJsonDigest(['ONE_PHOTO_SET/1', binding, review.upstreamPhotoIds, review.servingPhotoIds]);
+  const set = contentBasis ? iancarReviewedContentSetDigest(binding, review.refs)
+    : orderedJsonDigest(['ONE_PHOTO_SET/1', binding, review.upstreamPhotoIds, review.servingPhotoIds]);
   const allowed = new Set(['sourceKind', 'sourceApiVersion', 'sourceBindingDigest', 'photoSetDigest',
     'sourcePhotoIdDigest', 'sourceOrdinal', 'servingIndex', 'mediaType', 'photoSha256', 'sourceObservedAt',
-    'vehiclePhotoVerifiedBy', 'vehiclePhotoVerificationMethod', 'vehiclePhotoVerifiedAt']);
+    'vehiclePhotoVerifiedBy', 'vehiclePhotoVerificationMethod', 'vehiclePhotoVerifiedAt', 'reviewBasis', 'representative']);
   review.refs.forEach((ref, index) => {
     if (Object.keys(ref).some(key => !allowed.has(key)) || ref.sourceKind !== 'IANCAR_ONE'
       || ref.sourceApiVersion !== 'iancar-one-api/1' || ref.sourceBindingDigest !== binding
       || ref.photoSetDigest !== set || ref.sourcePhotoIdDigest !== orderedJsonDigest(review.servingPhotoIds[index])
       || ref.servingIndex !== index || ref.sourceOrdinal !== review.upstreamPhotoIds.indexOf(review.servingPhotoIds[index]!)
+      || (contentBasis ? (ref.reviewBasis !== 'CONTENT_ORDINAL/1'
+        || ref.representative !== review.sourceRepresentatives![ref.sourceOrdinal])
+        : (ref.reviewBasis !== undefined || ref.representative !== undefined))
       || !['image/jpeg', 'image/png', 'image/webp'].includes(ref.mediaType) || !/^[a-f0-9]{64}$/.test(ref.photoSha256)
       || !instant(ref.sourceObservedAt) || ref.sourceObservedAt !== review.refs[0]!.sourceObservedAt
       || Date.parse(ref.sourceObservedAt) > Date.parse(row.observedAt) || !instant(ref.vehiclePhotoVerifiedAt)
       || Date.parse(ref.vehiclePhotoVerifiedAt) < Date.parse(ref.sourceObservedAt) || Date.parse(ref.vehiclePhotoVerifiedAt) > now
       || !/^ONE 차량사진 전용 확인; 범위=\S[\s\S]*; 방법=\S[\s\S]*; 근거=\S[\s\S]*$/.test(ref.vehiclePhotoVerificationMethod)) fail();
   });
+  if (contentBasis) {
+    const expected = review.upstreamPhotoIds.map((id, ordinal) => ({ id, representative: review.sourceRepresentatives![ordinal] }))
+      .sort((a, b) => Number(b.representative) - Number(a.representative)).map(photo => photo.id);
+    if (orderedJsonDigest(expected) !== orderedJsonDigest(review.servingPhotoIds)) fail();
+  }
   return { provider_company_code: 'RP031', photo_original_refs: review.refs.map(ref => ({ ...ref })),
-    iancar_one_photo_ids: [...review.servingPhotoIds] };
+    ...(!contentBasis ? { iancar_one_photo_ids: [...review.servingPhotoIds] } : {}) };
 }
 
 /** Source adapters supply identity and bytes; authorization and validation stay in one pipeline. */
 export type VehiclePhotoRead = {
   count: number; bytes: Buffer | null; contentType: string;
   photoIds?: string[]; upstreamPhotoIds?: string[];
+  upstreamRepresentatives?: boolean[]; servingSourceOrdinals?: number[];
 };
 export type VehiclePhotoSource = {
   eligible(product: Rec | undefined): boolean;
@@ -329,18 +353,30 @@ export function createVehiclePhotoReader(
     const source = consumerSources.find(candidate => candidate.eligible(product));
     if (!source || !product || !hasVehiclePhotoVerification(product)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
     const refs = product.photo_original_refs as Rec[];
+    if (source === iancarSource && refs.some(ref => ref.reviewBasis !== undefined && ref.reviewBasis !== 'CONTENT_ORDINAL/1'))
+      throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+    if (source === iancarSource && refs.some(ref => ref.reviewBasis === 'CONTENT_ORDINAL/1')
+      && refs.some(ref => ref.sourceKind !== 'IANCAR_ONE')) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
     const boundOneReview = source === iancarSource && refs.some(ref => ref.sourceKind === 'IANCAR_ONE');
+    const contentBasis = boundOneReview && refs.some(ref => ref.reviewBasis === 'CONTENT_ORDINAL/1');
     const reviewedSetMatches = (result: VehiclePhotoRead, checkBytes = index !== undefined): boolean => {
       if (!boundOneReview) return true;
       const ids = result.photoIds, upstream = result.upstreamPhotoIds;
       if (!ids || !upstream || ids.length !== refs.length || result.count !== refs.length
         || upstream.length !== ids.length || new Set(ids).size !== ids.length || new Set(upstream).size !== upstream.length) return false;
       const binding = orderedJsonDigest(['RP031', productId, product.iancar_one_vehicle_id, String(product.car_number).replace(/\s/g, '')]);
-      const set = orderedJsonDigest(['ONE_PHOTO_SET/1', binding, upstream, ids]);
+      const set = contentBasis ? iancarReviewedContentSetDigest(binding, refs)
+        : orderedJsonDigest(['ONE_PHOTO_SET/1', binding, upstream, ids]);
+      const representatives = result.upstreamRepresentatives, ordinals = result.servingSourceOrdinals;
+      if (contentBasis && (!representatives || !ordinals || representatives.length !== refs.length || ordinals.length !== refs.length
+        || representatives.some(value => typeof value !== 'boolean') || representatives.filter(Boolean).length > 1
+        || new Set(ordinals).size !== refs.length)) return false;
       const unchanged = refs.every((ref, i) => ref.sourceKind === 'IANCAR_ONE' && ref.sourceApiVersion === 'iancar-one-api/1'
         && ref.sourceBindingDigest === binding && ref.photoSetDigest === set
-        && ref.sourcePhotoIdDigest === orderedJsonDigest(ids[i]) && ref.servingIndex === i
-        && ref.sourceOrdinal === upstream.indexOf(ids[i]!) && upstream.includes(ids[i]!)
+        && (contentBasis ? (ref.reviewBasis === 'CONTENT_ORDINAL/1' && typeof ref.representative === 'boolean'
+          && ref.sourceOrdinal === ordinals![i] && ref.representative === representatives![ordinals![i]!]
+          && ordinals![i] === upstream.indexOf(ids[i]!)) : ref.sourcePhotoIdDigest === orderedJsonDigest(ids[i]))
+        && ref.servingIndex === i && ref.sourceOrdinal === upstream.indexOf(ids[i]!) && upstream.includes(ids[i]!)
         && typeof ref.photoSha256 === 'string' && /^[a-f0-9]{64}$/.test(ref.photoSha256));
       if (!unchanged || !checkBytes || index === undefined) return unchanged;
       const ref = refs[index];
