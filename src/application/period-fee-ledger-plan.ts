@@ -137,8 +137,10 @@ export type PlanPeriodFeeLedgerInput = {
   policies?: Record<string, Rec>;
   referenceInputs?: Rec;
   previousSnapshot?: PeriodFeePreviousSnapshot | null;
-  observedAt: string;
-  snapshotId: string;
+};
+
+export type PlanPeriodFeeLedgerOptions = {
+  clock?: () => Date;
 };
 
 const ENGINE_REVISION = `kakao-reference:${KAKAO_COMMISSION_POLICY.policyId}`;
@@ -176,6 +178,13 @@ const kstDate = (iso: string) => {
   if (!year || !month || !day) throw new Error('PERIOD_FEE_OBSERVED_AT_INVALID');
   return `${year}-${month}-${day}`;
 };
+const nowFromClock = (clock: (() => Date) | undefined) => {
+  const now = clock ? clock() : new Date();
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new Error('PERIOD_FEE_CLOCK_INVALID');
+  return now.toISOString();
+};
+
+export const periodFeeSnapshotIdFromObservedAt = (observedAt: string) => `period-fee-${kstDate(observedAt)}`;
 
 function sourcePriceKey(termKey: string): string {
   return termKey.startsWith('source:') ? termKey.slice('source:'.length) : termKey;
@@ -312,9 +321,11 @@ function buildHistory(input: {
   return history.sort((a, b) => `${a.productKey}:${a.fieldPath}:${a.sourceObservationRef ?? ''}`.localeCompare(`${b.productKey}:${b.fieldPath}:${b.sourceObservationRef ?? ''}`));
 }
 
-export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput): PeriodFeeLedgerPlan {
-  const date = snapshotDate(input.snapshotId);
-  const valueAsOf = kstDate(input.observedAt);
+export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput, options: PlanPeriodFeeLedgerOptions = {}): PeriodFeeLedgerPlan {
+  const observedAt = nowFromClock(options.clock);
+  const snapshotId = periodFeeSnapshotIdFromObservedAt(observedAt);
+  const date = snapshotDate(snapshotId);
+  const valueAsOf = kstDate(observedAt);
   const rows: PeriodFeeLedgerRow[] = [];
   const baselines: ProductChangeBaseline[] = [];
   const reasonCounts: Record<string, number> = {};
@@ -328,7 +339,7 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput): PeriodFeeL
 
   for (const [docKey, rawProduct] of Object.entries(input.products).sort(([a], [b]) => a.localeCompare(b))) {
     const product = { ...rawProduct, listable: true };
-    const projected = buildKakaoCatalogReferenceProduct(docKey, product, {}, input.policies ?? {}, input.observedAt, 'COLLECTED');
+    const projected = buildKakaoCatalogReferenceProduct(docKey, product, {}, input.policies ?? {}, observedAt, 'COLLECTED');
     const priceTerms = projected?.offers.flatMap(offer => offer.priceTerms.map(term => ({ offer, term }))) ?? [];
     if (!priceTerms.length) continue;
 
@@ -351,8 +362,8 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput): PeriodFeeL
         reasonCounts[reason] = (reasonCounts[reason] ?? 0) + 1;
       }
       const documentKey = vehicleUid
-        ? [input.snapshotId, vehicleUid, supplierId, productId, offerId, term.termKey].map(pathSafe).join('__')
-        : [input.snapshotId, productKey, supplierId, productId, offerId, term.termKey].map(pathSafe).join('__');
+        ? [snapshotId, vehicleUid, supplierId, productId, offerId, term.termKey].map(pathSafe).join('__')
+        : [snapshotId, productKey, supplierId, productId, offerId, term.termKey].map(pathSafe).join('__');
       const depositState = String(term.depositState);
       const normalizedDepositState: DepositState = (depositState === 'KNOWN' || depositState === 'ZERO' || depositState === 'NOT_APPLICABLE') ? depositState : 'UNKNOWN';
       const depositAmount = term.deposit ? { amount: term.deposit.amount, currency: 'KRW' as const } : null;
@@ -367,9 +378,9 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput): PeriodFeeL
       if (depositWithEvidence.reasonCode) reasonCounts[depositWithEvidence.reasonCode] = (reasonCounts[depositWithEvidence.reasonCode] ?? 0) + 1;
       rows.push({
         schemaVersion: 'period-fee-ledger/v1',
-        snapshotId: input.snapshotId,
+        snapshotId,
         snapshotDateKst: date,
-        computedAt: input.observedAt,
+        computedAt: observedAt,
         valueBasis: 'CURRENT_AT_SNAPSHOT',
         valueAsOf,
         engineRevision: ENGINE_REVISION,
@@ -417,8 +428,8 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput): PeriodFeeL
       .sort((a, b) => a.productKey.localeCompare(b.productKey))
       .map(({ productKey, ...state }) => [productKey, state])),
   };
-  const history = buildHistory({ previousSnapshot: input.previousSnapshot ?? null, baselines, rows, snapshotId: input.snapshotId, changedAtKst: date });
-  const digestBase = { snapshotId: input.snapshotId, rows, history, baselines: outputBaselines };
+  const history = buildHistory({ previousSnapshot: input.previousSnapshot ?? null, baselines, rows, snapshotId, changedAtKst: date });
+  const digestBase = { snapshotId, rows, history, baselines: outputBaselines };
   const planDigest = stableDigest(digestBase);
   const summary = {
     totalProducts: Object.keys(input.products).length,
@@ -431,8 +442,8 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput): PeriodFeeL
     depositEvidenceKinds,
     reasonCounts: Object.fromEntries(Object.entries(reasonCounts).sort(([a], [b]) => a.localeCompare(b))),
     settlementRowsAccessCount: 0 as const,
-    inputDigest: stableDigest({ products: input.products, policies: input.policies ?? {}, referenceInputs: input.referenceInputs ?? null, previousSnapshot: input.previousSnapshot ?? null, observedAt: input.observedAt, snapshotId: input.snapshotId }),
-    publicReport: { snapshotId: input.snapshotId, rows: rows.length, historyRows: history.length, uidMissing, planDigest },
+    inputDigest: stableDigest({ products: input.products, policies: input.policies ?? {}, referenceInputs: input.referenceInputs ?? null, previousSnapshot: input.previousSnapshot ?? null, observedAt, snapshotId }),
+    publicReport: { snapshotId, rows: rows.length, historyRows: history.length, uidMissing, planDigest },
   };
-  return { schema: 'freepass-data.period-fee-ledger-plan/v1', snapshotId: input.snapshotId, observedAt: input.observedAt, rows, history, baselines: outputBaselines, summary, planDigest };
+  return { schema: 'freepass-data.period-fee-ledger-plan/v1', snapshotId, observedAt, rows, history, baselines: outputBaselines, summary, planDigest };
 }

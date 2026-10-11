@@ -1,22 +1,22 @@
 import { pathToFileURL } from 'node:url';
-import { planPeriodFeeLedger } from '../application/period-fee-ledger-plan.js';
+import { planPeriodFeeLedger, type PlanPeriodFeeLedgerInput } from '../application/period-fee-ledger-plan.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { writePrivateArtifact } from './ingest-shared-sheet-canonical.js';
+
+type PeriodFeeLedgerRuntimeInput = PlanPeriodFeeLedgerInput & { observedAt: string };
+
+export function buildPeriodFeeLedgerJobPlan(input: PeriodFeeLedgerRuntimeInput) {
+  const readAt = new Date(input.observedAt);
+  if (Number.isNaN(readAt.getTime()) || readAt.toISOString() !== input.observedAt) throw new Error('PERIOD_FEE_LEDGER_READ_TIME_INVALID');
+  return planPeriodFeeLedger(input, { clock: () => new Date(readAt.getTime()) });
+}
 
 export async function main() {
   const out = process.env.PERIOD_FEE_LEDGER_PLAN_OUT?.trim();
   if (!out) throw new Error('PERIOD_FEE_LEDGER_PLAN_OUT_REQUIRED');
-  const observedAt = process.env.PERIOD_FEE_LEDGER_OBSERVED_AT?.trim();
-  const snapshotId = process.env.PERIOD_FEE_LEDGER_SNAPSHOT_ID?.trim()
-    ?? `period-fee-${new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date())}`;
   const { createPeriodFeeLedgerPlanRuntime } = await import('./data-access-runtime.js');
   const input = await createPeriodFeeLedgerPlanRuntime().readInputs();
-  const plan = planPeriodFeeLedger({
-    ...input,
-    observedAt: observedAt ?? input.observedAt,
-    snapshotId,
-    previousSnapshot: null,
-  });
+  const plan = buildPeriodFeeLedgerJobPlan({ ...input, previousSnapshot: null });
   await writePrivateArtifact(out, plan);
   console.log(JSON.stringify({
     status: 'PLANNED',

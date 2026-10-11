@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeLedgerDepositEvidence, planPeriodFeeLedger } from '../src/application/period-fee-ledger-plan.js';
+import { pickLedgerRowForContract } from '../src/application/contract-fee-link.js';
+import { buildPeriodFeeLedgerJobPlan } from '../src/jobs/plan-period-fee-ledger.js';
 import publicProductFeedSchema from '../contracts/public-product-feed-v1.schema.json' with { type: 'json' };
 import { FIRESTORE_COLLECTIONS } from '../src/infra/firestore-layout.js';
 
 const observedAt = '2026-10-12T00:00:00.000Z';
 const snapshotId = 'period-fee-2026-10-12';
+const clock = () => new Date(observedAt);
 
 const product = (overrides: Record<string, unknown> = {}) => ({
   provider_company_code: 'RP013',
@@ -33,9 +36,7 @@ describe('period fee ledger planner', () => {
       },
       policies: {},
       referenceInputs: {},
-      observedAt,
-      snapshotId,
-    });
+    }, { clock });
 
     expect(plan.summary.totalProducts).toBe(2);
     expect(plan.summary.productsWithPriceRows).toBe(1);
@@ -57,9 +58,7 @@ describe('period fee ledger planner', () => {
       products: { unknown: product({ provider_company_code: 'XX-9999' }) },
       policies: {},
       referenceInputs: {},
-      observedAt,
-      snapshotId,
-    });
+    }, { clock });
 
     expect(plan.rows[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null });
     expect(plan.rows[0]!.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null });
@@ -71,9 +70,7 @@ describe('period fee ledger planner', () => {
       products: { sourceAmount: product({ price: { '36': { rent: 800000, deposit: 1000000 } } }) },
       policies: {},
       referenceInputs: {},
-      observedAt,
-      snapshotId,
-    });
+    }, { clock });
 
     expect(plan.rows[0]!.deposit).toMatchObject({
       state: 'KNOWN',
@@ -98,9 +95,7 @@ describe('period fee ledger planner', () => {
       }) },
       policies: {},
       referenceInputs: {},
-      observedAt,
-      snapshotId,
-    });
+    }, { clock });
 
     expect(plan.rows[0]!.deposit).toMatchObject({
       state: 'KNOWN',
@@ -141,9 +136,7 @@ describe('period fee ledger planner', () => {
       }) },
       policies: {},
       referenceInputs: {},
-      observedAt,
-      snapshotId,
-    });
+    }, { clock });
 
     expect(plan.rows[0]!.deposit).toMatchObject({
       state: 'ZERO',
@@ -164,9 +157,7 @@ describe('period fee ledger planner', () => {
       products: { noUid: product({ vehicle_uid: undefined, assetId: undefined }) },
       policies: {},
       referenceInputs: {},
-      observedAt,
-      snapshotId,
-    });
+    }, { clock });
 
     expect(plan.summary.uid.missing).toBe(1);
     expect(plan.rows[0]).toMatchObject({ applyState: 'HOLD', holdReasonCode: 'HOLD_NO_UID', vehicleUid: null });
@@ -177,9 +168,7 @@ describe('period fee ledger planner', () => {
       products: { p1: product() },
       policies: {},
       referenceInputs: {},
-      observedAt,
-      snapshotId,
-    });
+    }, { clock });
     expect(first.history).toHaveLength(0);
     expect(first.baselines.productStates['TEST-FAKE-ASSET-001']).toMatchObject({ vehicle_status: '출고불가' });
 
@@ -187,13 +176,11 @@ describe('period fee ledger planner', () => {
       products: { p1: product({ vehicle_status: '출고가능', price: { '36': { rent: 850000, deposit: 2000000 } } }) },
       policies: {},
       referenceInputs: {},
-      observedAt,
-      snapshotId,
       previousSnapshot: {
         rows: first.rows,
         productStates: first.baselines.productStates,
       },
-    });
+    }, { clock });
 
     expect(second.history.map(row => row.kind).sort()).toEqual(['DEPOSIT', 'RENT', 'STATUS']);
     expect(second.history.some(row => row.fieldPath === 'vehicle_status' && row.before === '출고불가' && row.after === '출고가능')).toBe(true);
@@ -202,8 +189,8 @@ describe('period fee ledger planner', () => {
   it('is deterministic and does not mutate inputs', () => {
     const products = { p1: product() };
     const before = structuredClone(products);
-    const one = planPeriodFeeLedger({ products, policies: {}, referenceInputs: {}, observedAt, snapshotId });
-    const two = planPeriodFeeLedger({ products, policies: {}, referenceInputs: {}, observedAt, snapshotId });
+    const one = planPeriodFeeLedger({ products, policies: {}, referenceInputs: {} }, { clock });
+    const two = planPeriodFeeLedger({ products, policies: {}, referenceInputs: {} }, { clock });
 
     expect(one.planDigest).toBe(two.planDigest);
     expect(products).toEqual(before);
@@ -221,7 +208,7 @@ describe('period fee ledger planner', () => {
   });
 
   it('keeps public report and stdout-shaped summary free of plate values', () => {
-    const plan = planPeriodFeeLedger({ products: { p1: product() }, policies: {}, referenceInputs: {}, observedAt, snapshotId });
+    const plan = planPeriodFeeLedger({ products: { p1: product() }, policies: {}, referenceInputs: {} }, { clock });
     const stdoutShape = {
       status: 'PLANNED',
       writes: 0,
@@ -231,5 +218,44 @@ describe('period fee ledger planner', () => {
     };
     expect(JSON.stringify([plan.summary.publicReport, stdoutShape])).not.toContain('TEST-FAKE-PLATE-0001');
     expect(plan.summary.settlementRowsAccessCount).toBe(0);
+  });
+
+  it('job planning ignores backdated environment timestamps and uses runtime read time', () => {
+    process.env.PERIOD_FEE_LEDGER_OBSERVED_AT = '2020-01-01T00:00:00.000Z';
+    process.env.PERIOD_FEE_LEDGER_SNAPSHOT_ID = 'period-fee-2020-01-01';
+
+    const plan = buildPeriodFeeLedgerJobPlan({
+      products: { p1: product() },
+      policies: {},
+      referenceInputs: {},
+      previousSnapshot: null,
+      observedAt,
+    });
+
+    expect(plan.observedAt).toBe(observedAt);
+    expect(plan.snapshotId).toBe(snapshotId);
+    expect(plan.rows[0]).toMatchObject({ computedAt: observedAt, valueAsOf: '2026-10-12' });
+    delete process.env.PERIOD_FEE_LEDGER_OBSERVED_AT;
+    delete process.env.PERIOD_FEE_LEDGER_SNAPSHOT_ID;
+  });
+
+  it('holds a backdated contract match when no pre-contract snapshot exists', () => {
+    const plan = buildPeriodFeeLedgerJobPlan({
+      products: { p1: product() },
+      policies: {},
+      referenceInputs: {},
+      previousSnapshot: null,
+      observedAt,
+    });
+
+    const result = pickLedgerRowForContract({
+      rows: plan.rows,
+      contractDate: '2020-01-01',
+      termMonths: 36,
+      monthlyRent: 800000,
+      deposit: 1000000,
+    });
+
+    expect(result).toMatchObject({ status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE', detail: { candidateCount: 0 } });
   });
 });
