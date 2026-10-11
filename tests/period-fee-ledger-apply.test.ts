@@ -6,7 +6,7 @@ import {
 import { planPeriodFeeLedger, type PeriodFeeLedgerPlan, type PeriodFeeLedgerRow, type ProductChangeHistoryRow } from '../src/application/period-fee-ledger-plan.js';
 import type { ProductChangeHistoryBaselineRow, PeriodFeeSnapshotRun } from '../src/domain/period-fee-ledger.js';
 import { periodFeeRunDocumentKey } from '../src/infra/firestore-layout.js';
-import type { ExistingPeriodFeeDocument, PeriodFeeLedgerApplyStore } from '../src/ports/period-fee-ledger-store.js';
+import type { ExistingPeriodFeeDocument, PeriodFeeLedgerApplyStore, PeriodFeeSnapshotWriteGuard } from '../src/ports/period-fee-ledger-store.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
 type Stored = { digest: string; data: Record<string, unknown> };
@@ -37,6 +37,13 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
   createLedgerCalls = 0;
   createHistoryCalls = 0;
   activateCalls = 0;
+  hijackLockBeforeNextActivation = false;
+
+  private assertSnapshotWriteGuard(guard: PeriodFeeSnapshotWriteGuard): void {
+    if (!this.lock || this.lock.ownerId !== guard.lockOwnerId || this.lock.leaseExpiresAt <= guard.checkedAt) {
+      throw new Error('LOCK_LOST');
+    }
+  }
 
   async acquireSnapshotWriteLock(ownerId: string, acquiredAt: string, leaseExpiresAt: string) {
     if (this.lock && this.lock.ownerId !== ownerId && this.lock.leaseExpiresAt > acquiredAt) throw new Error('LOCK_HELD');
@@ -48,8 +55,8 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
     };
   }
 
-  async renewSnapshotWriteLock(ownerId: string, leaseExpiresAt: string): Promise<void> {
-    if (this.lock?.ownerId !== ownerId) throw new Error('LOCK_HELD');
+  async renewSnapshotWriteLock(ownerId: string, leaseExpiresAt: string, checkedAt = observedAt): Promise<void> {
+    if (!this.lock || this.lock.ownerId !== ownerId || this.lock.leaseExpiresAt <= checkedAt) throw new Error('LOCK_LOST');
     this.lock = { ...this.lock, leaseExpiresAt };
   }
 
@@ -91,7 +98,8 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
       .sort((a, b) => Date.parse(b.activatedAt ?? '') - Date.parse(a.activatedAt ?? ''))[0] ?? null;
   }
 
-  async setSnapshotRun(runId: string, run: PeriodFeeSnapshotRun): Promise<void> {
+  async setSnapshotRun(runId: string, run: PeriodFeeSnapshotRun, guard?: PeriodFeeSnapshotWriteGuard): Promise<void> {
+    if (guard) this.assertSnapshotWriteGuard(guard);
     this.setSnapshotRunCalls += 1;
     const existing = this.runs.get(runId);
     if (run.status === 'PREPARED'
@@ -99,11 +107,26 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
       && (existing.status !== 'PREPARED' || existing.planDigest !== run.planDigest)) {
       throw new Error('PERIOD_FEE_RUN_STATE_CONFLICT');
     }
+    if (guard && existing && existing.planDigest !== run.planDigest) throw new Error('RUN_STATE_CHANGED');
+    if (guard && run.status === 'ROLLING_BACK' && (!existing || !['ACTIVE', 'PREPARED', 'ROLLING_BACK'].includes(existing.status))) {
+      throw new Error('RUN_STATE_CHANGED');
+    }
+    if (guard && run.status === 'FAILED' && (!existing || existing.status !== 'ROLLING_BACK')) throw new Error('RUN_STATE_CHANGED');
+    if (guard && run.status === 'ROLLED_BACK' && (!existing || existing.status !== 'INACTIVE')) throw new Error('RUN_STATE_CHANGED');
     this.runs.set(runId, structuredClone(run));
   }
 
-  async activateSnapshotRun(runId: string, run: PeriodFeeSnapshotRun): Promise<void> {
+  async activateSnapshotRun(runId: string, run: PeriodFeeSnapshotRun, guard: PeriodFeeSnapshotWriteGuard): Promise<void> {
+    if (this.hijackLockBeforeNextActivation) {
+      this.hijackLockBeforeNextActivation = false;
+      this.lock = { ownerId: 'TEST-FAKE-OTHER-OWNER', acquiredAt: observedAt, leaseExpiresAt: '2026-10-12T00:30:00.000Z' };
+      const prepared = this.runs.get(runId);
+      if (prepared) this.runs.set(runId, { ...prepared, status: 'ROLLED_BACK', active: false, activatedAt: null });
+    }
+    this.assertSnapshotWriteGuard(guard);
     this.activateCalls += 1;
+    const target = this.runs.get(runId);
+    if (!target || target.status !== 'PREPARED' || target.planDigest !== run.planDigest) throw new Error('RUN_STATE_CHANGED');
     const actualPreviousActiveRunId = [...this.runs.entries()]
       .find(([id, existing]) => id !== runId && existing.snapshotId === run.snapshotId && existing.active)?.[0] ?? null;
     this.runs.set(runId, { ...structuredClone(run), previousActiveRunId: actualPreviousActiveRunId });
@@ -113,7 +136,8 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
     }
   }
 
-  async restoreSnapshotRunActive(runId: string, expectedPlanDigest: string, expectedCurrentActiveRunId: string | null): Promise<void> {
+  async restoreSnapshotRunActive(runId: string, expectedPlanDigest: string, expectedCurrentActiveRunId: string | null, guard: PeriodFeeSnapshotWriteGuard): Promise<void> {
+    this.assertSnapshotWriteGuard(guard);
     if (this.failRestore) throw new Error('TEST_RESTORE_INTERRUPTED');
     const run = this.runs.get(runId);
     if (!run || run.planDigest !== expectedPlanDigest || run.status !== 'SUPERSEDED') {
@@ -155,7 +179,8 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
     return result;
   }
 
-  async markSnapshotRunInactive(runId: string): Promise<void> {
+  async markSnapshotRunInactive(runId: string, guard: PeriodFeeSnapshotWriteGuard): Promise<void> {
+    this.assertSnapshotWriteGuard(guard);
     const existing = this.runs.get(runId);
     this.runs.set(runId, { ...(existing ?? {
       schemaVersion: 'period-fee-snapshot-run/v1',
@@ -177,7 +202,8 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
     }), status: 'INACTIVE', active: false, activatedAt: null });
   }
 
-  async deleteLedgerRowsByDigest(documentDigests: Array<{ documentKey: string; digest: string }>): Promise<number> {
+  async deleteLedgerRowsByDigest(documentDigests: Array<{ documentKey: string; digest: string }>, guard: PeriodFeeSnapshotWriteGuard): Promise<number> {
+    this.assertSnapshotWriteGuard(guard);
     let count = 0;
     for (const target of documentDigests) {
       const stored = this.ledger.get(target.documentKey);
@@ -262,6 +288,57 @@ describe('period fee ledger apply', () => {
 
     expect(result).toMatchObject({ status: 'APPLIED', counts: { activeMarked: 1 } });
     expect(store.lock).toBeNull();
+  });
+
+  it('keeps existing ACTIVE when a resumed apply lost its expired lock and another owner rolled back its PREPARED run', async () => {
+    const first = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, first, { expectedDigest: first.planDigest, writeApproved: true });
+    const second = makePlan({ p1: product({ price: { '36': { rent: 810000, deposit: 1000000 } } }) });
+    store.hijackLockBeforeNextActivation = true;
+    store.activateCalls = 0;
+
+    await expect(applyPeriodFeeLedgerPlan(store, second, {
+      expectedDigest: second.planDigest,
+      writeApproved: true,
+      now: () => new Date(observedAt),
+    })).rejects.toThrow('LOCK_LOST');
+
+    expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'ACTIVE', active: true });
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ROLLED_BACK', active: false });
+    expect(store.activateCalls).toBe(0);
+  });
+
+  it('rejects every run-state transition when the write lock owner differs or the lease expired', async () => {
+    const plan = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+    const runId = runIdFor(plan);
+    const active = store.runs.get(runId)!;
+    const wrongOwner = { lockOwnerId: 'TEST-FAKE-WRONG-OWNER', checkedAt: observedAt };
+    await store.acquireSnapshotWriteLock('TEST-FAKE-RIGHT-OWNER', observedAt, '2026-10-12T00:15:00.000Z');
+
+    await expect(store.setSnapshotRun(runId, { ...active, status: 'ROLLING_BACK', active: false }, wrongOwner))
+      .rejects.toThrow('LOCK_LOST');
+    await expect(store.activateSnapshotRun(runId, { ...active, status: 'ACTIVE', active: true }, wrongOwner))
+      .rejects.toThrow('LOCK_LOST');
+    await expect(store.restoreSnapshotRunActive(runId, active.planDigest, runId, wrongOwner))
+      .rejects.toThrow('LOCK_LOST');
+    await expect(store.markSnapshotRunInactive(runId, wrongOwner))
+      .rejects.toThrow('LOCK_LOST');
+    await expect(store.deleteLedgerRowsByDigest([{ documentKey: storageKeyFor(plan, plan.rows[0]!), digest: stableDigest(plan.rows[0]) }], wrongOwner))
+      .rejects.toThrow('LOCK_LOST');
+    await expect(store.renewSnapshotWriteLock('TEST-FAKE-WRONG-OWNER', '2026-10-12T00:30:00.000Z', observedAt))
+      .rejects.toThrow('LOCK_LOST');
+
+    const expired = { lockOwnerId: 'TEST-FAKE-RIGHT-OWNER', checkedAt: '2026-10-12T00:16:00.000Z' };
+    await expect(store.setSnapshotRun(runId, { ...active, status: 'ROLLING_BACK', active: false }, expired))
+      .rejects.toThrow('LOCK_LOST');
+    await expect(store.renewSnapshotWriteLock('TEST-FAKE-RIGHT-OWNER', '2026-10-12T00:30:00.000Z', expired.checkedAt))
+      .rejects.toThrow('LOCK_LOST');
+
+    expect(store.runs.get(runId)).toMatchObject({ status: 'ACTIVE', active: true });
+    expect(store.ledger.has(storageKeyFor(plan, plan.rows[0]!))).toBe(true);
   });
 
   it('does not write HOLD_NO_UID rows but reports them', async () => {
@@ -784,7 +861,12 @@ describe('period fee ledger apply', () => {
       readbackDigest: null,
     };
 
-    await store.activateSnapshotRun(runIdFor(second), staleRun);
+    store.runs.set(runIdFor(second), { ...staleRun, status: 'PREPARED', active: false, activatedAt: null });
+    await store.acquireSnapshotWriteLock('TEST-FAKE-ACTIVATOR', observedAt, '2026-10-12T00:15:00.000Z');
+    await store.activateSnapshotRun(runIdFor(second), staleRun, {
+      lockOwnerId: 'TEST-FAKE-ACTIVATOR',
+      checkedAt: observedAt,
+    });
 
     expect(store.runs.get(runIdFor(second))).toMatchObject({ previousActiveRunId: runIdFor(first), active: true });
     expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'SUPERSEDED', active: false });

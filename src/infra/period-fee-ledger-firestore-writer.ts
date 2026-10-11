@@ -1,4 +1,4 @@
-import type { Firestore } from 'firebase-admin/firestore';
+import type { Firestore, Transaction } from 'firebase-admin/firestore';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
@@ -6,6 +6,7 @@ import { readConsistentPeriodFeeLedgerRows } from './period-fee-ledger-firestore
 import type {
   ExistingPeriodFeeDocument,
   PeriodFeeLedgerApplyStore,
+  PeriodFeeSnapshotWriteGuard,
 } from '../ports/period-fee-ledger-store.js';
 import type {
   PeriodFeeSnapshotRun,
@@ -37,6 +38,18 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
     return this.db.collection(name);
   }
 
+  private async assertSnapshotWriteLock(
+    tx: Transaction,
+    guard: PeriodFeeSnapshotWriteGuard,
+  ) {
+    const ref = this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(WRITE_LOCK_DOCUMENT_ID);
+    const snap = await tx.get(ref);
+    const existing = snap.data() as PeriodFeeSnapshotWriteLock | undefined;
+    if (!snap.exists || existing?.ownerId !== guard.lockOwnerId || existing.leaseExpiresAt <= guard.checkedAt) {
+      throw new Error('LOCK_LOST');
+    }
+  }
+
   async acquireSnapshotWriteLock(ownerId: string, acquiredAt: string, leaseExpiresAt: string): Promise<PeriodFeeSnapshotWriteLock> {
     return this.db.runTransaction(async tx => {
       const ref = this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(WRITE_LOCK_DOCUMENT_ID);
@@ -57,12 +70,12 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
     });
   }
 
-  async renewSnapshotWriteLock(ownerId: string, leaseExpiresAt: string): Promise<void> {
+  async renewSnapshotWriteLock(ownerId: string, leaseExpiresAt: string, checkedAt = new Date().toISOString()): Promise<void> {
     await this.db.runTransaction(async tx => {
       const ref = this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(WRITE_LOCK_DOCUMENT_ID);
       const snap = await tx.get(ref);
       const existing = snap.data() as PeriodFeeSnapshotWriteLock | undefined;
-      if (!snap.exists || existing?.ownerId !== ownerId) throw new Error('LOCK_HELD');
+      if (!snap.exists || existing?.ownerId !== ownerId || existing.leaseExpiresAt <= checkedAt) throw new Error('LOCK_LOST');
       tx.set(ref, { leaseExpiresAt }, { merge: true });
     });
   }
@@ -126,34 +139,50 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
       .sort((a, b) => Date.parse(b.activatedAt ?? '') - Date.parse(a.activatedAt ?? ''))[0] ?? null;
   }
 
-  async setSnapshotRun(runId: string, run: PeriodFeeSnapshotRun): Promise<void> {
+  async setSnapshotRun(runId: string, run: PeriodFeeSnapshotRun, guard?: PeriodFeeSnapshotWriteGuard): Promise<void> {
     await this.db.runTransaction(async tx => {
+      if (guard) await this.assertSnapshotWriteLock(tx, guard);
       const ref = this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(runId);
       const snap = await tx.get(ref);
       const existing = snap.data() as PeriodFeeSnapshotRun | undefined;
+      if (guard && snap.exists && existing?.planDigest !== run.planDigest) throw new Error('RUN_STATE_CHANGED');
       if (run.status === 'PREPARED') {
         if (snap.exists && (!existing || existing.status !== 'PREPARED' || existing.planDigest !== run.planDigest)) {
           throw new Error('PERIOD_FEE_RUN_STATE_CONFLICT');
         }
+      } else if (guard && run.status === 'ROLLING_BACK') {
+        if (!snap.exists || !['ACTIVE', 'PREPARED', 'ROLLING_BACK'].includes(existing?.status ?? '')) throw new Error('RUN_STATE_CHANGED');
+      } else if (guard && run.status === 'FAILED') {
+        if (!snap.exists || existing?.status !== 'ROLLING_BACK') throw new Error('RUN_STATE_CHANGED');
+      } else if (guard && run.status === 'ROLLED_BACK') {
+        if (!snap.exists || existing?.status !== 'INACTIVE') throw new Error('RUN_STATE_CHANGED');
       }
       tx.set(ref, run, { merge: true });
     });
   }
 
-  async activateSnapshotRun(runId: string, run: PeriodFeeSnapshotRun): Promise<void> {
+  async activateSnapshotRun(runId: string, run: PeriodFeeSnapshotRun, guard: PeriodFeeSnapshotWriteGuard): Promise<void> {
     await this.db.runTransaction(async tx => {
+      await this.assertSnapshotWriteLock(tx, guard);
       const runs = this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns);
+      const targetRef = runs.doc(runId);
+      const target = await tx.get(targetRef);
+      const existing = target.data() as PeriodFeeSnapshotRun | undefined;
+      if (!target.exists || existing?.status !== 'PREPARED' || existing.planDigest !== run.planDigest) {
+        throw new Error('RUN_STATE_CHANGED');
+      }
       const active = await tx.get(runs.where('snapshotId', '==', run.snapshotId).where('active', '==', true));
       const actualPreviousActiveRunId = active.docs.find(doc => doc.id !== runId)?.id ?? null;
-      tx.set(runs.doc(runId), { ...run, previousActiveRunId: actualPreviousActiveRunId }, { merge: true });
+      tx.set(targetRef, { ...run, previousActiveRunId: actualPreviousActiveRunId }, { merge: true });
       for (const doc of active.docs) {
         if (doc.id !== runId) tx.set(doc.ref, { status: 'SUPERSEDED', active: false }, { merge: true });
       }
     });
   }
 
-  async restoreSnapshotRunActive(runId: string, expectedPlanDigest: string, expectedCurrentActiveRunId: string | null): Promise<void> {
+  async restoreSnapshotRunActive(runId: string, expectedPlanDigest: string, expectedCurrentActiveRunId: string | null, guard: PeriodFeeSnapshotWriteGuard): Promise<void> {
     await this.db.runTransaction(async tx => {
+      await this.assertSnapshotWriteLock(tx, guard);
       const runs = this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns);
       const targetRef = runs.doc(runId);
       const target = await tx.get(targetRef);
@@ -177,9 +206,13 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
     return (await readConsistentPeriodFeeLedgerRows(this.db, snapshotId, runId)).rows;
   }
 
-  async markSnapshotRunInactive(runId: string): Promise<void> {
-    const existing = await this.getSnapshotRun(runId);
-    await this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(runId).set({
+  async markSnapshotRunInactive(runId: string, guard: PeriodFeeSnapshotWriteGuard): Promise<void> {
+    await this.db.runTransaction(async tx => {
+      await this.assertSnapshotWriteLock(tx, guard);
+      const ref = this.collection(FIRESTORE_COLLECTIONS.periodFees.snapshotRuns).doc(runId);
+      const snap = await tx.get(ref);
+      const existing = snap.data() as PeriodFeeSnapshotRun | undefined;
+      tx.set(ref, {
       ...(existing ?? {
         schemaVersion: 'period-fee-snapshot-run/v1',
         runId,
@@ -201,19 +234,24 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
       status: 'INACTIVE',
       active: false,
       activatedAt: null,
-    }, { merge: true });
+      }, { merge: true });
+    });
   }
 
-  async deleteLedgerRowsByDigest(documentDigests: Array<{ documentKey: string; digest: string }>): Promise<number> {
+  async deleteLedgerRowsByDigest(documentDigests: Array<{ documentKey: string; digest: string }>, guard: PeriodFeeSnapshotWriteGuard): Promise<number> {
     let deleted = 0;
     for (const target of documentDigests) {
       const ref = this.collection(FIRESTORE_COLLECTIONS.periodFees.ledger).doc(target.documentKey);
-      const snap = await ref.get();
-      if (!snap.exists) continue;
-      const data = snap.data() as Rec;
-      if (data.digest !== target.digest) continue;
-      await ref.delete();
-      deleted += 1;
+      const didDelete = await this.db.runTransaction(async tx => {
+        await this.assertSnapshotWriteLock(tx, guard);
+        const snap = await tx.get(ref);
+        if (!snap.exists) return false;
+        const data = snap.data() as Rec;
+        if (data.digest !== target.digest) return false;
+        tx.delete(ref);
+        return true;
+      });
+      if (didDelete) deleted += 1;
     }
     return deleted;
   }
