@@ -221,6 +221,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 상품 중심 저장 정본 조회 확장
+
+- 목적/대상 revision: main 1a32a313 기반, 기존 query-canonical-by-plate job 재사용. 새 API/저장소/운영 쓰기 없음.
+- 변경: private search-file로 상품 ID·등록 공급사명/ID·차명·차번을 검색한다. 차번 없는 상품과 offer 미연결 상품도 전체/상품 검색에서 보존한다. 저장 객체와 기간별 청구·지급을 그대로 읽고 누락은 UNKNOWN/null. 현재 탭 없는 공급사도 기존 등록부로 검색하며 공급사 미연결 수와 검색명 등록 여부를 구분한다.
+- 검증: build 및 관련 81 tests PASS. Claude ANSWERED/exit0 독립 검토의 등록부·미연결 진단·빈 가격조건 상태 지적 반영.
+- 실제 읽기: canonical 160 products/160 offers/568 terms, asset 미연결0, policy 미연결160, media contract 미연결160. 전체 products/원천행 수가 아니다. 사진 UNKNOWN은 운영 products 사진 없음이라는 뜻이 아니다.
+- 남음/next_start_here: PR465 기존 읽기 계약 작업선과 결합. products/policy 및 SourceIngestionStore CURRENT_SOURCE_ROW 기존 경로를 보존하고 소비처에서 상품 사실·사진·저장 경제조건을 대사한다. operator job을 전체 소비처 계약으로 승격하거나 canonical/legacy/source 행을 실물 대수로 합산하지 않는다. 운영 DB/배포/권한 변경0.
+
 ### 2026-10-11 승인 사진 51장 등록 / ERP5 최종 전환 인계
 
 - 목적/범위: RP031의 승인 상품 1건(10하8099), 실제 검토본 사진 51장만 등록한다. 코드 통합은01, 실행 승인과 단일 writer 지정은00, 기존 B3Q ce96는 source/등록, ERP5 실제 화면·main alias 전환은root가 소유한다. 원본 shared checkout의 역할 지도185줄 dirty는 보존한다.
@@ -3032,3 +3040,13 @@ This file exists so another session can continue without re-discovering or re-cr
 - 남음: 운영 sourceScope grant/token 배포, 외부 Kakao/ERP caller, DB/Sheet/IAM/Drive/배포 변경 없음. CODED/TESTED와 실제 운영 전체 원천 조회는 구분한다.
 - next_start_here: 최종 scope head의 권한 pre-read denial/default 불변/빈 조건 schema/HOLD/복수 원천/같은 term 회귀와 private 원천 대조를 확인한 뒤 코드 통합만 진행한다. 현행 RP 코드를 새 정본 identity로 고정하지 않는다.
 - 2026-10-11 기간별 청구·지급 장부 설계: `docs/PERIOD-FEE-LEDGER-DESIGN.md` 작성(코드·운영쓰기·배포 없음); 재사용 판정은 기존 `internalEconomicsTerms`·#448 가격행 투영 재사용 + 차량별 일 박제 장부 `CREATE_NEW_JUSTIFIED`; next_start_here: 10-12 읽기 전용 계획기(`plan:period-fee-ledger`, 쓰기0, UID 없음 HOLD_NO_UID, public/settlement 차단 테스트) 구현 검증 후 apply PR은 별도 승인 전까지 만들지 않는다.
+
+## 2026-10-11 PR465 상품 전체 직접 읽기 구현 후보
+
+- 목적: 상품 전체를 온라인 Firestore에서 직접 읽는 기존 내부 소비처 진입점 확장. 대상 revision: merge base c968bbd2(operator 1dac5cf 결합), 기존 PR465 branch. 원본 저장소 dirty와 다른 역할 변경 보존.
+- 변경: 기존 compatibility reader/application/job/test 확장. legacy/canonical/current-source 각 representation을 구분하고 검색·결측·저장 사진 참조·기간조건을 연결. 새 API/reader/계약/요율/DB쓰기/IAM/운영 배포 없음.
+- 직접 조회 검토 revision: 813cacc1938dc4f589c0f9650525134ecc846374. 후속 main PR475/476 a109af00는 8587bae43fa3f3241ad6df49519393c81656ed78에서 import3개를 모두 보존해 통합했고 direct composition 함수 본문은 동일하다. 새 main 통합 head의 전체 시험/CI는 PR465 최종 영수증을 확인한다. 기존 등록 별칭/법인명 검색, 저장 경제조건 helper, options 사실, source grant 미지정/빈 범위의 source 읽기0, 별도 ledger 시점/digest를 보존한다. grant는 신뢰 서버의 기존 인가 결과 전달이며 Firebase 권한 발급이 아니다.
+- 검증: 품질 역할이 정확 813cacc1에서 전체2415 PASS/18 conditional SKIP/실패0, build/arch/data boundary PASS와 전후 SHA·clean 일치를 확인했다. Core CI38147074116/Canon38147072688 SUCCESS. Claude 좁힌 최종 함수 검토34952 ANSWERED/exit0: 중앙 검증·source 범위·ledger provenance 중대 반례 없음. 앞선55087 timeout은 PASS 아님. 공백 입력 비대칭 참고 의견은 실제 compatibility selector의 trim 검증으로 반박했다.
+- 실제 온라인 읽기: legacy1776/canonical160/568 canonical기간/source175를 서로 다른 표현 분모로 유지한다. 공급사명 검색에서 렌트존 legacy8/canonical4/source8, 손오공736/0/0, 이안카350/0/0, 아이언 및 아이언렌트카66/0/0, 오토플러스155/0/0, 웰릭스27/17/23 반환을 확인했다. 이는 저장 문서 수이지 실물 대수·판매가능 수가 아니다. 원천 RAW175/후보175/REJECTED138 및 제한6열 원문 누출0, 사진 승인 참조51의 저장 조회와 접근 NOT_CHECKED를 구분한다.
+- 남음: ledger0, legacy↔canonical exactID offer연결0, 청구·지급 각각 KNOWN393/UNKNOWN175, 1개월35기간 양쪽 UNKNOWN. 수수료 재계산을 읽기 경로에서 하지 않는다. 1개월26건 fee-only private 증거는 실행불가/READY0이며 나머지9 공급사 특칙·정책 저장·현재 sourceRun 연결·비대상170기간 변경 위험을 별도 해결한다. CURRENT source 관측은 2026-10-10T22:00:12.027Z로 현재 시점 freshness가 아니다. 15분 스케줄 실제 capture/apply 및 각 플랫폼 운영 출력/cutover는 미검증; sourceFreshness UNVERIFIED, settlementConfirmation NOT_ASSESSED. DB/IAM/배포/스케줄 변경0.
+- next_start_here: docs/READ-CONTRACT-DESIGN.md → 기존 readStoredConsumerProducts/--stored-products; 승인된 플랫폼 자체 Firestore credential로 같은 검색 계약을 연결하고 실제 화면·사진 readback을 확인한다. 운영 writer는 main guard 반영 뒤 native audit/실제 capture·apply·readback을 별도 확인하며 기존 미확인값을 0으로 채우지 않는다.
