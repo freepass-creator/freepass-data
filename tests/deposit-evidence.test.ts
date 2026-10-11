@@ -127,7 +127,7 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     const longFreeShortPaid = { ...base, deposit_note: '무보증', 원문: { 전체: { 단기보증: '1,000,000', 장기보증: '무보증' } } };
     const shortFreeLongPaid = { ...base, deposit_note: '무보증', 원문: { 전체: { 단기보증: '무보증', 장기보증: '별도 확인' } } };
     expect(resolveReferenceDeposit({ ...depositEvidenceInputFromProduct(longFreeShortPaid, 0, { termMonths: 12 }), termMonths: 12, monthlyRent: 500000 }))
-      .toMatchObject({ depositState: 'KNOWN', depositAmount: 1000000, depositRule: { code: 'SOURCE_RAW_AMOUNT' } });
+      .toMatchObject({ depositState: 'UNKNOWN', depositAmount: null, depositRule: null });
     expect(resolveReferenceDeposit({ ...depositEvidenceInputFromProduct(longFreeShortPaid, 0, { termMonths: 24 }), termMonths: 24, monthlyRent: 500000 }))
       .toMatchObject({ depositState: 'ZERO', depositAmount: 0, depositRule: { depositEvidenceBasis: { field: '원문.전체.장기보증' } } });
     expect(resolveReferenceDeposit({ ...depositEvidenceInputFromProduct(shortFreeLongPaid, 0, { termMonths: 12 }), termMonths: 12, monthlyRent: 500000 }))
@@ -152,6 +152,29 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(longRaw, 0, {
       termMonths: 48, monthlyRent: 500000,
     }))).toMatchObject({ state: 'KNOWN', amount: 500000, reason: 'SOURCE_RAW_AMOUNT' });
+  });
+  it('promotes raw warranty amount only when no waiver evidence exists anywhere', () => {
+    const confirmation = { source: '공급사 확인', at: '2026-10-10T12:00:00+09:00', text: '무보증' };
+    const base = { provider_company_code: 'RP004', product_type: '중고렌트',
+      원문: { 전체: { 단기보증: '1,000,000' } } };
+    for (const patch of [{ deposit_free_confirmation: confirmation }, { deposit_note: '무보증' }, { deposit_free: true }]) {
+      expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct({ ...base, ...patch }, 0, {
+        termMonths: 12, monthlyRent: 500000,
+      }))).toMatchObject({ state: 'UNKNOWN', amount: null });
+    }
+  });
+  it('accepts exact won-unit raw warranty amounts but keeps manwon shorthand UNKNOWN', () => {
+    const product = (raw: string) => ({ provider_company_code: 'RP004', product_type: '중고렌트',
+      원문: { 전체: { 단기보증: raw } } });
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product('1,000,000원'), 0, {
+      termMonths: 12, monthlyRent: 500000,
+    }))).toMatchObject({ state: 'KNOWN', amount: 1000000, reason: 'SOURCE_RAW_AMOUNT' });
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product('1,000,000 원'), 0, {
+      termMonths: 12, monthlyRent: 500000,
+    }))).toMatchObject({ state: 'KNOWN', amount: 1000000, reason: 'SOURCE_RAW_AMOUNT' });
+    expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product('100만원'), 0, {
+      termMonths: 12, monthlyRent: 500000,
+    }))).toMatchObject({ state: 'UNKNOWN', amount: null });
   });
   it('keeps existing positive, raw waiver, and missing raw warranty behavior unchanged', () => {
     const paid = { provider_company_code: 'RP004', product_type: '중고렌트',

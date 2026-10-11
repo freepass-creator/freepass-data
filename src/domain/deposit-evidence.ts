@@ -111,16 +111,21 @@ export function parseDepositSourceRawAmount(value: unknown): number | undefined 
   if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0 ? value : undefined;
   if (typeof value !== 'string') return undefined;
   const raw = value.trim();
-  if (/^(?:[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$/.test(raw)) {
-    const parsed = Number(raw.replaceAll(',', ''));
-    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
-  }
-  const manwon = /^([1-9]\d*)\s*만원$/.exec(raw);
-  if (manwon) {
-    const parsed = Number(manwon[1]) * 10000;
+  const exactWon = /^((?:[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+))(?:\s*원)?$/.exec(raw);
+  if (exactWon) {
+    const parsed = Number(exactWon[1]!.replaceAll(',', ''));
     return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
   }
   return undefined;
+}
+
+function hasAnyDepositWaiverOrConflictEvidence(input: Parameters<typeof resolveDepositWithRuleNote>[0]): boolean {
+  const zeroEvidence = assessDepositEvidence({ ...input, sourceAmount: 0 });
+  if (zeroEvidence.state === 'ZERO') return true;
+  if (zeroEvidence.reason === 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' || zeroEvidence.reason === 'INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE') return true;
+  return input.depositFree === true || input.depositFree === '예'
+    || input.depositFree === false || input.depositFree === '아니오' || input.depositFree === '아님' || input.depositFree === '불가'
+    || input.depositFreeConfirmation !== undefined;
 }
 
 export function depositEvidenceInputFromProduct(
@@ -259,8 +264,7 @@ export function resolveDepositWithRuleNote(input: {
   const sourceRawAmount = parseDepositSourceRawAmount(input.depositSourceRawAmount);
   const sourceRawCandidate = (input.sourceAmount === 0 || input.sourceAmount === '0' || input.sourceAmount === undefined || input.sourceAmount === null || input.sourceAmount === '')
     && sourceRawAmount !== undefined
-    && !input.depositSourceWaiverBasis
-    && input.depositSourceWaiverText !== '무보증';
+    && !hasAnyDepositWaiverOrConflictEvidence(input);
   if (sourceRawCandidate && evidence.state === 'UNKNOWN') {
     return { state: 'KNOWN', amount: sourceRawAmount, reason: 'SOURCE_RAW_AMOUNT',
       rule: { code: 'SOURCE_RAW_AMOUNT', multiplier: null, label: '원문 보증금' },
