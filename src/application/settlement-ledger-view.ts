@@ -1,4 +1,5 @@
 import type { AdminWorkflowStore } from '../ports/admin-workflow.js';
+import type { AdminWorkflowReadSpec, AdminWorkflowReadResult } from '../domain/admin-workflow.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import {
   SETTLEMENT_LEDGER_VIEW_CONTRACT,
@@ -51,6 +52,103 @@ const rawScalar = (value: unknown): SettlementLedgerValue =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
     ? value
     : null;
+
+/** Optional facts from this read only: no join, workflow decision, write or inferred actor. */
+export function projectAdminWorkflowCurrentFacts(spec: AdminWorkflowReadSpec, result: AdminWorkflowReadResult) {
+  if (!['settlementRows', 'contracts'].includes(spec.resource)) throw new Error('INVALID_ADMIN_WORKFLOW_VIEW');
+  if (spec.kind === 'query' && spec.limit === undefined) throw new Error('INVALID_ADMIN_WORKFLOW_VIEW_LIMIT_REQUIRED');
+  const factualNumber = (raw: unknown) => {
+    if (typeof raw !== 'string') {
+      return typeof raw === 'number' && Number.isInteger(raw) && !Number.isSafeInteger(raw) ? null : numberOrNull(raw);
+    }
+    if (!/^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(raw)) return null;
+    const parsed = Number(raw.replaceAll(',', ''));
+    return Number.isInteger(parsed) && !Number.isSafeInteger(parsed) ? null : numberOrNull(parsed);
+  };
+  const factualTimestamp = (raw: unknown) => typeof raw === 'number'
+    || typeof raw === 'string' && !/(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? null : timestampOrNull(raw);
+  const sourceValueOf = (raw: unknown) => {
+    if (!raw || typeof raw !== 'object') return rawScalar(raw);
+    // Preserve only the timestamp's numeric source representation, never arbitrary object internals.
+    const entries = Object.entries(raw);
+    return entries.length && entries.every(([key, value]) => ['seconds', 'nanoseconds', '_seconds', '_nanoseconds'].includes(key)
+      && typeof value === 'number' && Number.isFinite(value)) ? Object.fromEntries(entries) : null;
+  };
+  const intake = spec.resource === 'settlementRows';
+  const fields: Record<string, [string | null, 'string' | 'number' | 'timestamp' | 'boolean']> = intake ? {
+    intakeCode: ['code', 'string'], intakeRequestId: ['intakeRequestId', 'string'],
+    contractId: ['contractId', 'string'], contractNumber: ['contractNo', 'string'],
+    claimStage: ['claimStage', 'string'], payStage: ['payStage', 'string'],
+    delivered: ['delivered', 'boolean'], cancelled: ['cancelled', 'boolean'],
+    billed: ['billed', 'boolean'], invoiceIssued: ['invoiceIssued', 'boolean'],
+    collected: ['collected', 'boolean'], paid: ['paid', 'boolean'],
+    billingHold: ['billHold', 'boolean'], settlementExcluded: ['settleExclude', 'boolean'],
+    billingMonth: ['billMonth', 'string'], receivedAt: ['receivedAt', 'string'],
+    termMonths: ['term', 'number'], claimSupply: ['claimWritten', 'number'], paySupply: ['payWritten', 'number'],
+    claimVat: ['claimVat', 'number'], payVat: ['payVat', 'number'],
+    calculationBasis: ['calculationBasis', 'string'], businessDate: ['businessDate', 'string'],
+    createdAt: ['createdAt', 'timestamp'], updatedAt: ['updatedAt', 'timestamp'],
+    createdBy: ['createdBy', 'string'], updatedBy: ['updatedBy', 'string'], responsibleCode: ['agentCode', 'string'],
+  } : {
+    contractCode: ['contract_code', 'string'], intakeId: ['source_intake_id', 'string'],
+    contractStatus: ['contract_status', 'string'], signStatus: ['sign_status', 'string'],
+    termMonths: ['rent_month_snapshot', 'number'], businessDate: ['contract_date', 'string'],
+    createdAt: ['created_at', 'timestamp'], updatedAt: ['updated_at', 'timestamp'],
+    // Actor field meaning is not verified for this contract source; raw docs remain available.
+    createdBy: [null, 'string'], updatedBy: [null, 'string'], responsibleCode: ['agent_code', 'string'],
+    // A contract source is not a settlement row. Do not join by names or copy rent into fees.
+    claimSupply: [null, 'number'], paySupply: [null, 'number'], claimVat: [null, 'number'], payVat: [null, 'number'],
+    calculationBasis: [null, 'string'],
+  };
+  const moneyAxes = {
+    recordedClaimSupply: 'sourceReceiptClaim', recordedPaySupply: 'sourceReceiptPay',
+    recordedClaimVat: 'sourceReceiptClaimVat', recordedPayVat: 'sourceReceiptPayVat',
+    calculatedClaimSupply: 'computedBillingFee', calculatedPaySupply: 'computedPayoutFee',
+    confirmedClaimSupply: 'confirmedClaimAmount', confirmedPaySupply: 'confirmedPayAmount',
+  };
+  for (const [key, sourceField] of Object.entries(moneyAxes)) fields[key] = [intake ? sourceField : null, 'number'];
+  for (const key of ['_deleted', 'is_test', 'test_only']) fields[key] = [key, 'boolean'];
+  return {
+    schema: 'freepass-data.admin-workflow-current-facts/v1' as const,
+    resource: spec.resource,
+    sourceDigest: result.digest,
+    coverage: 'RETURNED_DOCUMENTS_ONLY' as const,
+    scope: spec.kind === 'doc' ? 'DOCUMENT' as const : 'QUERY' as const,
+    completeness: spec.kind === 'doc' ? 'DOCUMENT_READ' as const
+      : result.docs.length >= spec.limit! ? 'LIMIT_REACHED' as const : 'QUERY_READ' as const,
+    // These are original axes, not an invented combined business stage.
+    records: result.docs.map(({ id, data }) => {
+      const facts = Object.fromEntries(Object.entries(fields).map(([name, [sourceField, type]]) => {
+        const raw = sourceField === null ? undefined : data[sourceField];
+        const missing = raw === undefined || raw === null || raw === '';
+        const value = missing ? null : type === 'timestamp' ? factualTimestamp(raw)
+          : type === 'number' ? factualNumber(raw) : type === 'boolean' ? booleanOrNull(raw) : typeof raw === 'string' ? raw : null;
+        const sourceValue = sourceValueOf(raw);
+        return [name, { value, state: missing ? 'UNKNOWN' : value === null ? 'INVALID' : 'RECORDED',
+          reason: sourceField === null ? 'UNAVAILABLE_IN_THIS_SOURCE' : missing ? 'SOURCE_NOT_RECORDED' : value === null
+            ? type === 'timestamp' && typeof raw === 'number' ? 'SOURCE_TIMESTAMP_UNIT_UNVERIFIED'
+              : type === 'timestamp' && typeof raw === 'string' && !/(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? 'SOURCE_TIMEZONE_MISSING' : 'SOURCE_TYPE_NOT_SUPPORTED'
+            : null, sourceField, sourceValue,
+          sourceValueLocation: raw !== null && typeof raw === 'object' && sourceValue === null ? 'RAW_DOCS' : 'INLINE' }];
+      }));
+      const linkField = intake ? 'contractId' : 'source_intake_id';
+      const link = typeof data[linkField] === 'string' && data[linkField].trim() ? data[linkField] : null;
+      const linkRecorded = data[linkField] !== undefined && data[linkField] !== null && data[linkField] !== '';
+      return {
+        recordId: id,
+        identityState: 'SOURCE_DOCUMENT_ID' as const,
+        link: { state: link ? 'RECORDED_UNVERIFIED' as const : 'UNLINKED' as const, targetId: link, sourceField: linkField,
+          basis: 'EXPLICIT_DOCUMENT_ID_ONLY' as const, reason: link ? 'TARGET_NOT_VERIFIED'
+            : linkRecorded ? 'EXPLICIT_LINK_TYPE_NOT_SUPPORTED' : 'EXPLICIT_LINK_NOT_RECORDED',
+          sourceValue: rawScalar(data[linkField]),
+          otherRecordedIdentifier: rawScalar(data[intake ? 'contractNo' : 'contract_code']) },
+        facts,
+        provenance: { authority: intake ? 'FREEPASS_DATA_SETTLEMENT' : 'FREEPASS_ADMIN_APPLICATION_CONTRACT',
+          collection: intake ? 'settlement_rows' : 'contract', documentId: id },
+      };
+    }),
+  };
+}
 
 export function projectSettlementLedgerRecord(
   documentId: string,

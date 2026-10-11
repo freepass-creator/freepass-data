@@ -1,5 +1,14 @@
 # 상품에서 계약·수수료 정산까지 연결 지도
 
+## 2026-10-11 접수·계약 현재 사실 opt-in 조회
+
+- 기존 `POST /v1/consumers/:consumerId/admin-workflow/read`와 `admin-workflow` 권한을 재사용한다. `view: "current-facts/v1"`은 `settlementRows`/`contracts`만 지원한다. 기본 응답과 원문 `docs`/digest는 그대로이며 opt-in에 `currentFacts`가 추가된다. 새 writer/원장/ID/업무 단계는 없다.
+- 단건은 `{kind:"doc",resource:"contracts",id:"기존 문서 ID",view:"current-facts/v1"}`. 전건 후보는 `{kind:"query",resource:"settlementRows",limit:5000,view:"current-facts/v1"}`이며 기존 equality filters도 그대로 쓴다. Query는 explicit limit(1~5000)이 필요하다. `QUERY_READ`는 해당 쿼리의 반환 범위이며 전체 업무 정합성 완료가 아니다. 반환 건수가 limit 이상이면 `LIMIT_REACHED`; 없는 단건은 records가 빈 배열이다.
+- 각 record는 원문 document ID와 provenance를 보존한다. 사실은 `value/state/reason/sourceField`로 반환한다. 원천 미입력은 UNKNOWN/null, 형식 불일치는 INVALID/null, 기록된 0은 RECORDED/0이다. 계약에서 정산금액·BT·작성자 의미를 확인하지 못한 필드는 UNKNOWN/null/UNAVAILABLE_IN_THIS_SOURCE이며 원문 docs를 지우지 않는다.
+- 계약·서명·청구·지급·진행 상태는 원천 각 축을 그대로 반환한다. 연결은 접수의 contractId 또는 계약의 source_intake_id만 사용하며 RECORDED_UNVERIFIED/UNLINKED로 구분한다. 이름·차량번호로 자동 연결하지 않는다. 삭제·테스트 필드는 원천 사실로 제공하며 기존 Admin 제외 의미를 새로 정의하지 않는다.
+- 기준 코드 main `c45ba9829ea1b61bcd25ff4280acf4e014f261c6`. 읽기 전용 원천 관측: 접수494/계약원문121, 기존 Admin 삭제·테스트 제외 계약74. 메모리 변환에서 각각494/121 document ID 전부 보존. 이는 source↔contract 연결 완료나 운영 배포 증거가 아니다.
+- 검증: 정산·admin workflow40/consumer gateway95, build/architecture/data-access-boundary PASS. 남음: 최종 독립 검토·CI, 통합 owner의 main 반영, 승인된 배포 후 단건/전건 readback. 원문 금액/BT 충돌과 locale digest 호환성은 별도 HOLD이며 수정하지 않는다. next_start_here: PR445 exact head를 확인하고 위 opt-in 요청을 같은 지원 범위에서 검증한다.
+
 ## 2026-09-30 사용자 관리 범위 확정과 읽기 전용 운영 감사
 
 - 목적: 상품·재고뿐 아니라 계약 접수·계약·정산 데이터의 구조, 오류, 갱신, 소비처 전달을 Codex와 Claude가 증거로 검토한다.
