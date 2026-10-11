@@ -55,9 +55,9 @@
     "audit:vehicle-name-parity": "tsx src/jobs/audit-vehicle-name-reference-parity.ts",
     "repair:vehicle-name-parity": "tsx src/jobs/apply-vehicle-name-reference-repair.ts",
     "repair:policy-correction": "tsx src/jobs/apply-policy-correction.ts",
-    "repair:autoplus-policy": "tsx src/jobs/apply-autoplus-policy-repair.ts",
     "repair:billincar-policy": "tsx src/jobs/apply-billincar-policy-repair.ts",
     "probe:estimate-writer-canary": "tsx src/jobs/probe-estimate-writer-canary.ts",
+    "source:sonogong": "tsx src/jobs/collect-sonogong.ts",
     "source:iancar:direct": "tsx src/jobs/collect-iancar-direct.ts",
     "test:source:iancar:direct": "vitest run tests/iancar-direct-source.test.ts",
     "test:source:iancar:one-api": "vitest run tests/iancar-one-api.test.ts",
@@ -68,7 +68,10 @@
     "plan:sheet-blank-fill": "tsx src/jobs/plan-sheet-blank-fill.ts",
     "export:sheet-blank-fill-input": "tsx src/jobs/export-sheet-blank-fill-input.ts",
     "ingest:kakao-source": "tsx src/jobs/ingest-kakao-source.ts",
-    "audit:settlement-id-links": "tsx src/jobs/audit-settlement-id-links.ts"
+    "audit:settlement-id-links": "tsx src/jobs/audit-settlement-id-links.ts",
+    "audit:trust-scorecard": "tsx src/jobs/audit-trust-scorecard.ts",
+    "plan:vehicle-uid-migration": "tsx src/jobs/plan-vehicle-uid-migration.ts",
+    "plan:period-fee-ledger": "tsx src/jobs/plan-period-fee-ledger.ts"
   },
   "dependencies": {
     "ajv": "^8.0.0",

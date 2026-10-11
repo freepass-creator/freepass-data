@@ -56,7 +56,15 @@ export type ApplyReviewedSourceChangeInput = {
   actor: ActorRef;
   writer?: ExecutionWriterRef;
   expectedOwnershipDigest?: string;
+  /** Opt-in source-owned refresh; the exact previous observation is rechecked in the transaction. */
+  operationalRefresh?: OperationalSourceRefresh;
   reason: string;
+};
+
+export type OperationalSourceRefresh = {
+  previousCandidateId: string;
+  /** Explicit caller/source freshness budget; no implicit stale-source fallback. */
+  maxObservationAgeSeconds: number;
 };
 
 export type ReviewedSourceChangeReceipt = {
@@ -71,6 +79,7 @@ export type ReviewedSourceChangeReceipt = {
   appliedChangeIds: string[];
   offerId: string;
   offerRevision: number;
+  productRevision?: number;
   vehicleAssetId?: string | null;
   vehicleAssetRevision?: number | null;
   committedAt: string;

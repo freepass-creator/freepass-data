@@ -211,6 +211,24 @@ export const CATALOG_FIELD_AUTHORITY: readonly FieldAuthorityRule[] = [
     effectiveTime: 'IMMEDIATE', sourceRefresh: 'PRESERVE_CANONICAL_AND_REVIEW'
   },
   {
+    ruleId: 'catalog.product.source-status.v1',
+    domain: 'catalog', aggregate: 'product', fieldPath: 'status',
+    semanticOwner: 'catalog-vehicle',
+    allowedCommands: ['APPLY_REVIEWED_SOURCE_CHANGE'],
+    allowedWriters: [{ kind: 'SERVICE', ids: ['service:freepass-data'] }],
+    approval: 'REQUIRED', conflict: 'EXPECTED_REVISION', override: 'DISALLOWED',
+    effectiveTime: 'IMMEDIATE', sourceRefresh: 'PRESERVE_CANONICAL_AND_REVIEW'
+  },
+  {
+    ruleId: 'catalog.vehicle-asset.source-status.v1',
+    domain: 'catalog', aggregate: 'vehicle_asset', fieldPath: 'status',
+    semanticOwner: 'catalog-vehicle',
+    allowedCommands: ['APPLY_REVIEWED_SOURCE_CHANGE'],
+    allowedWriters: [{ kind: 'SERVICE', ids: ['service:freepass-data'] }],
+    approval: 'REQUIRED', conflict: 'EXPECTED_REVISION', override: 'DISALLOWED',
+    effectiveTime: 'IMMEDIATE', sourceRefresh: 'PRESERVE_CANONICAL_AND_REVIEW'
+  },
+  {
     ruleId: 'catalog.vehicle-asset.source-facts.v1',
     domain: 'catalog',
     aggregate: 'vehicle_asset',

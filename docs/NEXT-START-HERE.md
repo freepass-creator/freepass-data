@@ -1,5 +1,520 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-11 15분 수집·정제·변경분 갱신 실행
+
+- 목적/정본: 대표 최신 직접 오더에 따라 Data는 원천 수집·정제·Firestore 상태/대여료 및 확정 기준별 수수료 최신화를 책임지고, 플랫폼이 직접 조회/출력한다. 기준 main `24fd7d15d31c12597c591f40cd54d4594ed3fea4`, academy data READY. 기존 수집/저장/수수료/품질 방에 겹치지 않는 실행 범위를 병렬 배정했다.
+- 변경: 기존 `shared-sheet-daily.yml` 파일·WIF·writer 신원·환경 이름·감사 계약을 유지하며 15분 cron으로 변경하고 날짜당 1회 skip만 제거한다. 기존 concurrency, 최신 감사 가드, revision/멱등성, 비공개 증거 및 저장 readback은 보존한다. 신규 예약/신원/키/RTDB/중계 서버 없음.
+- 실제 운영 효과: environment의 기존 `FREEPASS_DATA_SHARED_SHEET_DAILY=on`을 확인했으므로 main 반영은 예약 apply 빈도 변경이다. 최근 run `38098514945`는 전체 SUCCESS지만 capture/apply 단계 SKIPPED였다. 이를 수집 완료로 세지 않는다. GitHub 예약은 지연될 수 있어 15분 cron을 실제 15분 신선도 보장으로 표현하지 않는다.
+- 검증: daily-writer 18 PASS, 기존 delivery-owner 15 PASS, canonical/runtime 포함 91 PASS/1 조건부 SKIP, build/diff-check PASS. 독립 검토 및 최종 CI는 실행 영수증으로 확인한다. 당시 운영 적용/새 회차 readback은 미완료.
+- 남음: 상태/대여료 변경분 writer·영향받은 offer 수수료 재계산 연결 및 supplier-specific 기존 실행 경로 정합성은 해당 담당이 진행한다. 차량가격 기준 수수료는 확인된 차량가격 fact 없이는 추정하지 않는다. 사람 입력 보존·unknown/null 및 원천 실패의 마지막 정상값 보존은 유지한다.
+- 22:03 연결 검증: `--operational-refresh`를 기존 scheduler plan에 연결하고 이전 VALID candidate/900초 freshness를 plan digest에 고정했다. apply는 계획만 사용한다. fresh unchanged/사람 대여료 보존/오래된 원천 차단/계획 변조 차단 4개 회귀 PASS, build PASS. 상태+대여료 통합 시험은 1개월 5% 근거가 FIXED로 저장되어 수수료가 갱신되지 않는 오류로 FAIL이다. 금액 담당은 기존 엔진의 계산 근거, 저장 담당은 commit 전 불일치 차단을 병렬 보완 중이다. 이 실패를 해소하기 전 PR467 draft/15분 활성화 HOLD, 운영 DB 쓰기 0. next_start_here: 해당 두 기존 담당의 immutable commit만 같은 작업선에 인수하고 통합 시험/독립 검토/CI를 다시 실행한다.
+- 22:09 후속: 금액 `187c4ab`/왕복 회귀 `a5523e5`, 저장 commit전 FIXED 불일치 차단 `523bdc2`/legacy fixture `3295fb3`를 같은 PR467 작업선에 인수했다. 실제 job 상태·월료303→777/청구·지급15→39, 기존 차량가격 RATE 수수료 불변까지 66 PASS/build PASS. 이전 후보는 run별로 한번만 읽는다. 차량가격 fee readback은 쓰기 전 snapshot의 fee 전체(금액/계산/VAT/출처)를 정확 기대값으로 사용하며 기존 거래 receipt의 run/offer/revision/command 및 전후 economics 감사를 확인한다; 나머지는 기존 재계산 대사를 유지한다. 이전 최종 묶음 b399b8d2 전체2332 PASS/18외부환경SKIP. job 광역검토63051 TIMEOUT은 PASS가 아니며 좁힌32330은 ANSWERED/exit0: 결선 확인, bounded 보류 사유 구분 제안 반영; 타입/상태writer가 범위밖이라는 미확인은 build/통합 회귀로 보완했다. 금액·저장 독립검토 ANSWERED는 담당 원문으로 수령. 마지막 oracle 변경의 품질 독립 실행/최종 CI/main 및 실제 예약 회차 readback은 아직 남음.
+- 22:14 재감사: f38d2efd 전체2341 PASS/18조건부 SKIP 및 exact-head Core/Canon SUCCESS·품질142 PASS 이후, UNKNOWN/NOT_APPLICABLE 정상 보존에도 재계산 oracle가 KNOWN을 기대하는 false HOLD를 품질 역할과 확인했다. 기존 receipt·전후 감사·전체값 대사 조건 안에서만 두 미확정 상태의 이전값을 정확 보존하며, 미확정을 KNOWN으로 주입하면 HOLD되는 actual-job 4회귀를 추가했다. 관련146 PASS; 임의금액/0원 채우기 없음. 최종 새 head의 build/전체/CI/품질 대조 후에만 main 통합하며 운영 쓰기0 상태를 유지한다.
+- next_start_here: 독립 검토/최종 CI 및 정확 head로 기존 main 통합 → 새 schedule 회차의 실제 capture/apply/changed/noop/HOLD/readback 확인. 코드 롤백 기준은 위 main의 해당 workflow이며 데이터 복구는 회차 private plan/receipt와 기존 writer 경로로 별도 판정한다. `supplier-relay-iancar-15m` PAUSED를 임의 resume하지 않고 legacy writer와 canonical writer를 구분한다.
+
+## 2026-10-11 수집·정제 책임 실행 — 색상 규칙의 기존 저장 lifecycle 연결
+
+- 목적/대상: 대표 「너의 역할을 다해라」, 수집·정제·저장 범위만. 기존 PR451/f7ff3bc 작업선, academy data READY. 조회/공개 서버 추가 변경 없음.
+- 변경: 기존 `ingest-shared-sheet-canonical.ts`의 계획·적용 경로에 색상 opt-in 연결. 계획 CLI `--include-supplier-colors`로만 v6 선택, 계획의 flag/ruleVersion/commandId와 digest 고정. apply는 검토된 plan만 사용하며 flag 재지정 거부. 기본 v5는 보존한다.
+- 원문 보존: 기존 completed v5 source 회차에 v6 후보를 끼워 넣지 않는다. 같은 회차의 v6 후보가 없으면 `SUPPLIER_COLOR_REFINEMENT_REQUIRES_NEW_SOURCE_RUN`. 신규 capture/master 증거 및 기존 source-change 검토로 진행하며 unresolved master와 공급사 상태를 추정하지 않는다.
+- 검증: 관련60 PASS/build/boundary/diff-check PASS. 기존 전체2156 PASS/16 SKIP 이후 immutable 회차 guard 회귀를 추가했으며 최종 전체 결과/독립 검토는 실행 기록 참조. 합성 저장 시험에서 원문 색상→후보 facts 연결 확인, 실제 운영 DB writes0.
+- next_start_here: 기존 수집 담당은 최신 capture를 확보해 같은 CLI로 비공개 계획 작성; 단일 writer/원문·master·revision·백업·HOLD를 검증한 뒤 기존 apply/readback 진행. 운영 색상 저장 또는 전체 상품 연결 완료로 세지 않는다. 정책 정제·저장은 기존 담당이 계속, 새 저장 경로 없음.
+- 최종 결정론적 검증: 전체2157 PASS/16 조건부 SKIP, 관련60 PASS 및 차량 정본 색상 저장 APPLIED 회귀 확인, build/arch/boundary/diff-check PASS. 첫 독립 검토 REVIEW_TIMEOUT(300초), 파일 한 개 전달 일관성 질문으로 좁혀 재시도 중. 검토 미완료는 PASS가 아니며 운영 적용은 아직 하지 않는다.
+- 좁은 독립 재검토는 본문/exit0/ANSWERED로 전달 일관성을 확인. `getCandidate` guard의 `!`를 제거하라는 제안은 채택하지 않았다: 조회 ID는 v6 ruleVersion을 포함하는 새 candidateId이며 completed v5 run에는 그 ID가 없다. 반대로 바꾸면 v6 replay를 막고 v5 재작성 보호를 해제한다. 기존 v5 apply 후 같은 capture v6 plan이 쓰기 전에 거부되고 신규 capture 계획은 통과하는 회귀로 원본·실행 근거를 우선해 판정했다. 문자열 v6 상수 중복은 경미 잔여. 운영 적용/최신 원천 저장은 미완료.
+
+## 2026-10-11 기존 조회 주소의 직접 읽기 전환 신호
+
+- 대표 「여기로 접근하면 직접읽으라는 사인을 줘」: 기존 상품 GET catalog/catalog-compat/catalog-reference/internal-ai-reference 응답에 `X-Freepass-Read-Mode: DIRECT_FIRESTORE_REQUIRED`, `X-Freepass-Migration-Status: LEGACY_READ_PENDING_RETIREMENT`, 서버의 승인된 신원으로 직접 읽으라는 instruction과 전환 기준 Link를 추가했다. 인증 실패에도 신호는 표시하지만 인증·상태·본문은 변경하지 않는다. 사진·계약·정산 route에는 적용하지 않는다.
+- 검증: gateway 101 PASS, build 및 diff-check 결과는 해당 커밋 실행 기록 참조. 운영 배포 전이므로 현재 온라인 응답에 신호가 나온다고 표현하지 않는다. 기존 route 종료/리다이렉트나 권한 변경 없음.
+
+## 2026-10-11 플랫폼 직접 조회 전환 및 기존 상품 중계 폐기 결정
+
+- 목적/대상 revision: 대표 「수집 정제만」「각각 파이어스토어 조회」「기존거 다 폐기」. 기준 `025eb8b`, 기존 PR #451 작업선 유지. academy data READY.
+- 변경: 기존 Commercial Data Catalog에 Data=수집·정제·저장 / 플랫폼=직접 읽기·조회·출력 경계를 반영했다. 옛 상품 조회 API·중계·중복 reader·legacy fallback은 폐기 대상으로 확정하고 신규 연결은 추가하지 않는다. RAW·사람 입력·계약/정산 write는 삭제하지 않는다.
+- 실행: 기존 조회·소비처 담당 방에 직접 reader 구현/정본 대조/실제 출력 검증/옛 호출 제거를 전달했다. 새로운 방·수집기·저장 경로 없음.
+- 검증/남음: 문서 경계 변경이며 운영 코드 삭제, DB 쓰기, IAM 확대, 소비처 배포는 아직 없다. 중앙 gateway에는 상품뿐 아니라 계약·정산 기능이 공존하므로 서버 전체 제거 금지. PR #451 canonical coverage 및 전수 스캔은 미완료이며 직접 reader를 그대로 고빈도 운영 활성화하지 않는다.
+- next_start_here: 조회 담당의 소비처별 실제 호출점과 직접 read 결과를 회수하고 같은 정본/revision을 대조한다. 검증된 소비처의 옛 호출/fallback을 제거하고 마지막 의존 소비처 전환 후 중앙 상품 route/중계 코드를 삭제한다. 전환율은 실제 소비처별 증거로만 보고한다.
+
+## 2026-10-11 수집·정제 집중 — 원문 대조 및 색상 누락 보완
+
+- 목적: 대표 「수집 정제만 잘해둬봐」「ㄱㄱ」. IAM 설치와 소비처 배포는 이번 범위 밖. 기존 PR #451 작업선에서 원문 정제 adapter만 확장, 새 수집기/컬렉션/저장 경로 없음. academy data READY, 기준 `f5f8d3a`.
+- 원천 고정: 중앙 SourceIngestionStore 현재 head의 관측시각 2026-10-11 07:00:12 KST. RAW 175 = 후보 175, sourceRecordId 중복 0, 후보↔RAW fingerprint 연결 불일치 0. 원천 신선도를 오늘 현재까지 갱신했다고 표현하지 않는다. 차량 정본 중복판정 126, 연식·등록연도 불일치 23 등 기존 HOLD는 추정으로 해소하지 않았다(분류 중복 가능).
+- 발견/변경: 원문 외부색상 170 / 내부색상 167 칸이 populated지만 후보의 exteriorColor/interiorColor KNOWN은 각각 0. `normalize-shared-sheet.ts`에서 두 supplier 원문 텍스트를 독립 source fact로 보존하고 각 셀 lineage 추가. 색상 코드·별칭·차종 추정 없음. 빈칸 MISSING, 확인 placeholder REVIEW_REQUIRED. ruleVersion 5→6으로 이전 immutable candidate와 구분.
+- dry-run: 기존 RAW 175건을 메모리에서 색상만 재판정. 외부색상 KNOWN170/MISSING5, 내부색상 KNOWN167/MISSING8, RAW digest 불변, writes0. 전체 candidate의 master 승인 또는 canonical 승격 결과가 아니다.
+- 검증: 관련 86 PASS, 전체 2154 PASS /16 SKIP, build/boundary/diff-check PASS. Claude 독립 diff 검토 결과는 후속 기록 참조. 운영 원문·후보·canonical 쓰기 및 시트 변경 없음.
+- next_start_here: 기존 SourceIngestionStore 수집 lifecycle에서 ruleVersion6을 채택하고 최신 원천 및 sealed master를 고정해 기존 ingest plan으로 준비한다. 과거 후보 덮어쓰기/오류 줄 삭제/일괄 마스터 추정 금지. 이 색상 dry-run을 운영 반영 완료로 세지 않는다.
+- Claude 검토 본문/exit0/ANSWERED의 두 지적을 반영: 색상 placeholder는 field-level REVIEW_REQUIRED만 기록하며 candidate 전체 issues에 추가하지 않음. 기존 default normalizer/5와 candidate ID/lineage는 유지하고 `{includeSupplierColors:true}`를 명시한 경우에만 normalizer/6 후보 생성. 운영 기본 활성화는 아직 안 됐으며, 동일 fingerprint fact 재적재 plan을 검토하기 전 daily 기본값을 바꾸지 않는다. 수정 후 관련58 PASS/build PASS.
+
+## 2026-10-11 Firestore 직접 내부 조회 — 구현과 운영 연결 구분
+
+- 목적/대상 revision: 대표 직접 요청 「Data가 Firestore에 쓰고 각 서비스가 직접 읽기」. 기준 main `1e1ea6894def6bebd3abe4d231471f3153ffdfea`, 작업선 `work/freepass-data/firestore-direct-read-20261011`.
+- 재사용/변경: 기존 `query-canonical-by-plate.ts`, `withSharedSheetCatalogAccess(false)`, 중앙 Firebase target/store를 확장. 새 DB·컬렉션·Firebase app·계산 엔진 없음. 직접 진입점 `queryFirestoreByPlate(plate)`는 Cloud Run을 거치지 않고 실행 프로세스의 승인된 ADC로 Firestore를 읽는다. 접근 로그는 메모리 전용이며 durable audit/업무 쓰기 0. 내부 서버 전용이며 브라우저·익명 공개 계약이 아니다.
+- 출력: product/offer/asset ID와 revision·상태, 기존 차량 사실·기간별 가격·보증금·저장된 청구/지급 수수료. 수수료 중복 또는 기간/대여료 근거 불일치는 UNKNOWN/null. 읽으면서 재계산하거나 legacy 데이터로 fallback하지 않는다.
+- CLI: `npm run query:canonical-by-plate -- --direct --firestore --plate-file <private-input> --local-output <private-output>`. `FIREBASE_PROJECT_ID=freepasserp5`와 소비처 자신의 승인된 읽기 신원이 필요하다. 결과는 기존 private artifact 가드로 저장소 밖에만 기록한다. 프로그램 내부 호출은 반환 객체로 받으며 전체 payload stdout 경로는 없다.
+- 검증: build/architecture/data-access-boundary PASS, 전체 Vitest 2150 PASS / 16 SKIP(추가 CLI 회귀검사는 후속 실행 결과 참조). 실제 중앙 direct 조회는 정상 응답했으나 앞서 reference 조회에서 확인한 차량의 canonical asset/offer/term 일치 건수는 0이었다. 따라서 연결 완료/전체 상품 조회 완료가 아니다.
+- 추가 검증: CLI 가드 포함 관련 55 PASS. 기존 Cloud Run 설정의 F04 연결값을 출력/복사 저장 없이 프로세스 환경에 적용하여 economics dry-run 재실행 성공: 저장 Offer 160, 변경 예정 158, writes 0. 양쪽 수수료 각각 미확정 사유: 신차 subtype 79, 기간 정책 30, 보증금 tier 2. 적용하지 않았다.
+- 남음: 정제 데이터 canonical 저장 coverage와 identity 대조, 기존 ingest/canonicalization 및 `recompute-offer-economics.ts`의 reviewed plan/revision/audit/readback 적용, 소비처별 직접 reader 연결·최소 IAM·배포. 일반 inventory 진단은 DATA_ACCESS_AUDIT_UNAVAILABLE로 중단. 이를 성공으로 세지 않는다. 실제 DB/시트 쓰기·IAM 변경·배포 없음.
+- next_start_here: 기존 ingest shared-sheet canonical / recompute offer economics의 private plan과 저장 원천을 고정한 뒤 coverage를 대조한다. 운영 reference 데이터가 존재한다는 이유로 canonical 저장을 완료로 간주하지 않는다.
+- 독립 검토: 첫 광역 호출 REVIEW_TIMEOUT, 좁은 파일 검토는 본문/exit0/ANSWERED. 기존 fee 계약과 중복된 판정 및 전체 stdout 민감정보 노출 지적을 모두 반영했다. `toInternalFeeLookup`에 대여료 근거가 양쪽 모두 있을 때만 mismatch 검사를 추가하고 출력도 해당 계약으로 통일했다. 선택 가격근거 없는 이전 저장 문서는 보존한다. 전체 stdout 제거, 기존 private output 보호 유지. 전수 스캔 성능 지적은 미해결이며 서비스 고빈도 경로의 활성화 전 indexed read가 필요하다. 저장 sample direct read asset1/offer1/term3 성공, fee UNKNOWN3; 계산해 채우지 않음.
+- 최종 코드 `ccf1cf8` / PR #451(DRAFT). 최종 전체 검사 2152 PASS / 16 SKIP, build/architecture/boundary/diff-check PASS. 수정 후 좁은 Claude 재검토도 본문/exit0/ANSWERED: 두 지적 수정 확인, 해당 범위 남은 치명 문제 없음, 전수 스캔 성능은 잔여. 운영 완료 판정은 아니다. 정본 저장 담당과 AI-OPS 지휘에 같은 PR/coverage/남음을 전달했다.
+<a id="data-start"></a>
+
+### 공통시트 상품행 조회 기준 — 2026-10-11 사용자 직접 결정
+
+- 각 공급사 탭의 비어 있지 않은 입력행은 상품 한 건이다. 내용·차종·차량번호가 같아도 별도 행이면 별도 상품이며, 번호 미정은 상품이 없다는 뜻이 아니다. 상품행 수와 실물 자산 대수는 분리한다.
+- 기존 SourceIngestionStore의 현재 head RAW/candidate → 기존 private reference/ERP catalog-compat 경로를 재사용한다. `REJECTED` 또는 신원 HOLD는 정제된 가격조건·원자값까지 숨길 이유가 아니다. 상태·정제 불확실성·판매목록 판정은 각각 보존한다.
+- `CURRENT_SOURCE_ROW_PRODUCT`의 `productId`는 현재 원천의 탭·행 위치 포인터이며 영구 상품 UID가 아니다. `observationId`는 run/RAW/fingerprint에 귀속된 불변 관측 ID, `vehicleAssetId=null`은 실물 자산 연결 미확정이다. 기존 `LEGACY_PRODUCT`와 합산해 실물 대수 또는 최신 원천 상품 수를 주장하지 않는다.
+- 조회/출력은 [READ-RUNTIME](READ-RUNTIME.md)의 공통시트 원천행 계약을 따른다. 응답 `data` 한 곳만 상품 카드로 출력하며, sourceSnapshot은 원천행 분모·반환 수·관측 시각·원천 범위용이다. 원문 자유문장·서류 가능 열은 비공개 사유로 대응하고 값은 반환하지 않는다.
+
+## 2026-10-01 이안카 수정 API 재반영 요청 — NOT PUBLISHED / HOLD
+
+- 최신 사용자 결정(예약): `RESERVED`는 공통 표시 **계약중** / 호환 status_kind **선점**, available=false. 원천 RESERVED를 보존하며 실제 계약 생성/계약락 설정은 하지 않는다. 기준 revision `f4a3cac`; 기존 ONE adapter/test/API 계약만 확장했다. `projectIancarOneReservation`은 표시 helper이며 아직 발행 writer에 연결되지 않았다. 전량 수집·정책 변환·ERP/F01/F86 readback HOLD는 그대로이며 next_start_here는 아래 publication 준비 경로다.
+- 예약 규칙 검증: 전용28 PASS/build PASS/diff 검사 통과. 독립 Claude ANSWERED/exit0는 원문 보존·available=false·계약 사실 미생성에 동의했고 행 stale 의존을 지적했다. capture.readyForRawIngest와 envelope stale로 수정하고 실제 list parser 및 provider stale=false인데 시간 만료된 응답 차단 회귀를 추가했다. 수정 후 Claude 재검토는 미실행이며 테스트를 실반영으로 확대하지 않는다.
+
+- 목적: 사용자 최신 지시는 수정된 ONE API를 ERP와 F01/F86 두 시트에 반영. 재노출 지시는 받았지만 원천 전량·요금 변환·소비처 대사 완료로 확대하지 않는다.
+- 대상: main `553791243e5464d577a6cd7016f6d416c0d9b12d`; 이번 준비 변경은 기존 adapter/job/test 확장이다. Academy 처음 revision mismatch HOLD는 기존 registry-refresh 원격 관측으로 해소했고 READY receipt를 확인했다. 신규 adapter/writer/scheduler는 만들지 않았다.
+- 확인: API 110대 차량번호 유효/중복0, 기존 RP031 301문서의 고유 차번호301 중 exact match89·신규21. 관측 상태 AVAILABLE102/RESERVED1/UNAVAILABLE5/PREPARING2. list/details/availability의 `synced_at`과 `stale`를 각각 보존한다. 존재하지 않는 차량의 rates는404였으며 요청 경로 귀속만으로 provider-echo와 같은 등급을 선언하지 않는다.
+- 준비 코드: `collectIancarOneFullFacts`는 차량번호·ID·상태·요금 기간/거리/통화/VAT/보증금/조건버전·중복 조합과 시작/끝 inventory를 검사한다. 고정3 worker이며 503/429를 성공으로 숨기지 않는다. `--full-facts`, `--save-private`는 읽기/비공개 증거 보존용이고 상품·시트를 쓰지 않는다. 관측 시각은 RAW에 보존하되 provider fingerprint에서 제외한다.
+- 원천 실패: 첫 전량 수집은 `IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT`로 종료. 후속110대 상세/availability 대조 중 원천이 `02:14:28.979Z`→`02:29:35.599Z`로 갱신됐고, stale 응답이 AVAILABLE을 UNAVAILABLE로 내렸다. 이 mixed-window 결과를 공급사의 영구 재고 오류로 확정하지 않는다. 새 시각 전량 재시도는25대 진행 후 HTTP503으로 실패(requestId `7cc85252-38f9-48e3-95e0-a32a28132623`). 이후 좁은 표본 상세/availability/rates는 정상으로 회복됐지만110대 전량 성공의 증거가 아니다.
+- 검토: 최초 로컬 Core는 본문/exit0이 있으나 ANSWERED receipt 없는 구버전 실행기여서 정식 게이트 통과로 세지 않는다. deploy Core 좁은 검토는300초 REVIEW_TIMEOUT. 함수 범위 재검토는 본문/exit0/ANSWERED를 받았고 captured_at 체크섬 churn과 full-facts 재고 권한 혼합을 지적했다. 요청시간 fingerprint 제외 회귀와 rates/조건/사진 권한만 선언하는 별도 `:full-facts` sourceId를 반영했다. rates coverage는 UNKNOWN이며 재고 FULL+COMPLETE head를 대체하지 않는다.
+- 최종 좁은 재검토: 수정3항목에 대해 본문/exit0/ANSWERED, 준비 코드만 PASS·ERP/시트 NOT_DONE을 확인했다. 전용23검사 PASS, 최종 전체 check 1097PASS/14SKIP·build PASS. SKIP과 테스트를 운영 반영 증거로 세지 않는다. 새 Firestore 재조회는301건/listable0/출고불가301, ERP `?p=RP031` HTTP200/count0이었다.
+- 남음: 전체 source window 성공, rates scope/완전성 근거, 월/연 약정거리 손실 없는 consumer mapping, 기간별로 다른 보증금 출력, 정책 조건별 provenance, API 전용 reviewed compatibility applier와 새21대 stable identity, 기존 RP031 ingest exclusion 유지한 snapshot guard 개정, ERP·각 채널·Admin·F01/F86 실제 readback. 현재 products/정책/시트/운영 workflow 쓰기0, 삭제0. 기존 재고 비노출 유지.
+- next_start_here: 기존 `src/adapters/iancar-one-api.ts`/`src/jobs/collect-iancar-one-api.ts`의 full-facts read를 새 fresh window에서 재검증. source와 rate table capture가 성공하기 전 withdrawal guard를 제거하거나 옛 Sheet 재고를 복원하지 않는다. API key는 Secret Manager에서 프로세스 메모리로만 읽는다. 재수집 성공 후에만 verified raw evidence를 바탕으로 publication 계획을 독립 검토한다.
+
+## 2026-10-01 사용자 지시 — 이안카 API 검증 전 임시 노출 중단
+
+- 목적: RP031 이안카만 ERP/Admin 판매 노출과 F01/F86 출력에서 중단. 원본·계약·다른 공급사는 삭제하거나 초기화하지 않는다.
+- 대상 revision: Data main `291cfb0` 위 최소 변경. ERP4 bridge main `a5011619ad3ecf5e02df5f6916fca384d5dd5fc8`는 RP031 ingest 제외와 과거 스냅샷 재발행 차단을 반영했다.
+- 실행기: `src/jobs/withdraw-iancar-publication.ts`. 기본 DRY RUN. 정확한 Firebase target, 301건/노출223건/계약락0, 비공개 원본 백업+재읽기, updateTime 원자 거래, 전체301건 비노출 readback을 요구한다. 변경은 노출 관련 6필드만, 삭제0/금액변경0.
+- 검증: 독립 Claude 검토 ANSWERED(전체 최초 요청은 TIMEOUT이며 합격 아님). build/전체 check 통과, 회귀 8건 통과. 프로젝트 target 명시 검사 보강. 적용 후 실패는 자동 재실행/복원이 아니라 현재 상태 재조회한다.
+- 운영 적용: 실행 중 회차 `36797976786` 취소·종료 확인 뒤 one-shot `a8676cf1-9f32-48b7-a8b4-6ffa0a85b625` 적용. 원본301 백업,223 노출 중단,삭제0/계약변경0. 새 조회301/301 출고불가·listable0. 비공개 백업은 사용자 `.codex/private/freepass-data-iancar-withdrawals/`에 있으며 원문은 Git에 없다.
+- 소비처 관측: ERP 공개 `?p=RP031`와 eancar 채널 HTTP200/count0. 등록11채널 plain/uniplan/freepassmobility/haheoho/eancar/chashoong/krautoplan/withautoplan/ksautoplan/carping/siauto 각각 HTTP200/이안카0(일시503은 실패로 기록하고 직렬 재조회). Chrome 인증된 Admin 이안카 검색은0대·조건에 맞는 차 없음, 기존 접수472건 보존.
+- 최종 검증 revision: Data `b552696032ea05de8f0febd3c2ec52df3005d453` 전체 check 1090PASS/14SKIP. ERP4 workflow `a5011619ad3ecf5e02df5f6916fca384d5dd5fc8`, engine pin `e6727ff04fcf98380701fa6360c36f313e0e321f` 유지.
+- 시트 적용 완료: 준비 `36798258460` SUCCESS → 해당 ready_run_id로 apply=true/ALL `36799142438` SUCCESS. 원자↔F01↔F86 대조·사진 링크 감사 통과. 커넥터 새 조회에서 두 상품리스트 `10.01 10:01 상품리스트 211대`, 공급사 `BQ2:BQ232`/`BQ2:BQ242` 실제211행·이안카0. F86 이안카223대 projection 탭 제거, 나머지18탭 유지. 원본301과 복구 백업 유지; 원천 데이터 삭제 아님.
+- 실제 화면 확인: 인증된 Chrome F01/F86 표시·탭·헤더·표준/레트로 유지, Admin 이안카 검색0대. 긴급 snapshot-only 추가 경로는 검토 중 준비 회차가 완료되어 반영하지 않았으며 현 main 변경으로 계산하지 않는다.
+- 현재 단계: 이번 RP031 임시 노출 중단은 원자·ERP/11채널·Admin·F01/F86 readback 완료. API 연동 완료 또는 새 API 재고 공개 완료라는 뜻은 아니다. 준비 과정의 통상 원천 갱신은 아이카83→84,픽업157→156을 반영했으며 다른 공급사 전체 셀 불변을 주장하지 않는다.
+- next_start_here: RP031 노출/기존 Sheet 수집 제외와 과거 스냅샷 차단 유지. 재노출은 API 차량 식별·요금 범위·신선도 검증 및 별도 사용자 지시 이후만. 먼저 current main/workflow pin과 현재301건 비노출을 재조회한다.
+- 미완 API full-facts 변경 3파일은 `C:\dev\worktrees\freepass-data-commission-audience-20260930`에 보존, 현재 main에 반영하지 않았다. 공급사 원문이나 비밀키는 Git에 저장하지 않는다.
+
+## 데이터 업무 시작점 — 사람·AI 공통 안내
+
+현행 상품 시트 소비처는 대표 2026-10-08 지시로 **F01 하나**다. [시트 현행 규격](F01-F86-SHEET-SPEC.md#현행-발행-대상--대표-2026-10-08)과 기계 정본 `publication.activeWorkbooks`, 아래 2026-10-08 실회차 이력을 먼저 확인한다. 과거 F86 발행/교차대사를 이번 완료 조건으로 재적용하지 않는다. ERP·화이트라벨·Admin의 별도 연결·정합성 증거는 계속 필요하다.
+
+**프리패스 데이터를 이해하거나 이어서 작업할 때는 이 절부터 읽는다.** 이곳은 문서와 증거를 찾는 고정 안내이며, 아래 날짜별 기록은 당시 관측·변경 이력이다. 최신 사용자 지시와 현재 원천/코드가 과거 기록보다 우선한다.
+
+처음에는 다음 세 가지만 확인한다.
+
+1. **값의 뜻:** [상품·정책 의미 사전](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary)에서 단위·기준액·주기·자격·예외를 읽는다. 같은 10도 10원/10만원/10%일 수 있으므로 숫자만 해석하지 않는다.
+2. **업무와 정본:** 아래 질문별 안내에서 담당 문서를 고른다. 코드·계약은 GitHub, 현재 업무값은 지정된 운영 원천, 화면 전달 여부는 해당 소비처의 실제 응답이 근거다.
+3. **현재 확인 범위:** 아래 미해결 항목과 해당 업무의 최신 handoff를 읽고 revision·관측 시각·검증 범위를 확인한다. 문서가 있다는 것과 데이터가 정확하다는 것은 별개다.
+
+AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업무 지식을 복제한 새 안내·사전·원장을 만들기 전에 아래 기존 정본을 확장할 수 있는지 확인한다.
+
+<a id="data-reading-map"></a>
+
+### 무엇을 알고 싶은가 → 어디를 보면 되는가
+
+| 질문 | 먼저 볼 정본/안내 | 확인할 증거와 경계 |
+|---|---|---|
+| FreePass Data 전체 업무는 누가 배정하고 담당은 어디서 확인하는가? | 아래 「현행 단일 담당 책임맵 — 2026-10-09」 | 지휘가 파일 owner·통합 순서를 확정. 기존 Work/PR를 RESUME하고 공유파일·운영 writer를 중복 생성하지 않음 |
+| 기간별 선계산과 Admin 수수료 coverage는 어디서 읽는가? | [Admin 내부 기간별 경제조건](READ-RUNTIME.md#admin-내부-기간별-경제조건--2026-10-03) | Canonical 저장 시 계산, Admin 읽기만; 운영 backfill/재발행 미실행 |
+| 프리패스 수수료와 공급사/영업채널 연동은 어떻게 다른가? | [수수료 연동 기준](READ-RUNTIME.md#수수료-연동-기준--사용자-결정-2026-09-30) | 기본은 지급수수료. 상대별 helper PREPARED, 외부 API와 scope 연결은 미구현 |
+| 상품·정책의 숫자와 문구가 무슨 뜻인가? | [Commercial Data Catalog](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary) | 72항목 의미. 공급사별 실제 값·예외·효력일은 원천으로 대조 |
+| 접수·계약·인도·수수료 정산은 어떻게 연결되는가? | [업무 데이터 연결 지도](BUSINESS-DATA-CONNECTION-MAP.md) | ID/버전/스냅샷 관계와 업무 소유권. 실제 계약 확정·수금·지급을 별도로 확인 |
+| 어떤 데이터가 있고 어떤 경로로 접근하는가? | [데이터 도메인 카탈로그](DATA-DOMAIN-CATALOG.md), [접근 Gateway](DATA-ACCESS-GATEWAY.md) | 제공 상태·권한·계약과 조회 영수증. 내부 collection 경로를 공개 계약으로 사용하지 않음 |
+| F01/F86·ERP·화이트라벨·Admin에 잘 전달되는가? | [소비처별 사용 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md), [소비처 런타임](ERP5-CONSUMER-RUNTIME.md) | 소비처별 release/snapshot·필드·실제 readback. 한 곳 성공을 전체 성공으로 확대하지 않음 |
+| 공통 입력 UI와 수정 소유권은 어디에 고정됐는가? | [공급사 RUNBOOK](SUPPLIER-INPUT-SHEET-RUNBOOK.md) | supplier-input-sheet-spec.v1.json uiOwnership; 입력·머리글·종합·helper 소유권, 관리자 우회/자동 감시 HOLD |
+| 시트 모양·열·숨김 규칙은 무엇인가? | [시트 규격](F01-F86-SHEET-SPEC.md), [실행 runbook](F01-F86-SHEET-RUNBOOK.md) | 기계 정본 `contracts/f01-f86-sheet-spec.v1.json`. 표시 검사는 원천 최신화 검사가 아님 |
+| 공급사 수집 공통 규격과 공급사별 차이는 어디서 보는가? | [FreePass Data 원본 직접 수집기](NATIVE-SOURCE-COLLECTOR.md#common-supplier-adapter-contract--2026-10-02), [직접 연동 5곳 점검](NATIVE-SOURCE-COLLECTOR.md#supplier-direct-status) | 공통 RAW 계약과 공급사별 요금/사진/계산 입력·Scheduler 설계. 10-03 관측은 당시 증거이며 native transport·운영 전환 완료가 아님 |
+| 원본을 어떻게 읽고 오류·갱신을 확인하는가? | [ERP5 캡처](ERP5-SOURCE-CAPTURE.md), [Source run 안전 규칙](SOURCE-RUN-SAFETY.md) | readTime·digest·전체 범위·갱신 run·accepted head. schedule/종료 성공만으로 최신성 판정 금지 |
+| 어디까지 구현·운영되었고 무엇부터 이어가는가? | [Implementation Status](IMPLEMENTATION-STATUS.md), 이 문서의 업무별 날짜 기록 | CODED/TESTED/PERSISTENCE/DEPLOYMENT/CUTOVER를 구분. 현재 main·진행 PR과 대조 |
+| 프로젝트 책임과 설계 기준은 무엇인가? | [승인 Architecture v2](ARCHITECTURE-V2-APPROVED.md), [Issue #24](https://github.com/freepass-creator/freepass-data/issues/24) | 설계 기준과 최신 도메인 소유권 결정 구분. 과거 charter를 후속 승인보다 우선하지 않음 |
+
+### 현행 단일 담당 책임맵 — 2026-10-09
+
+대표 최신 오더의 안전한 구현·검증까지 EXECUTE한다. 아래 담당은 새 writer나 운영 권한을 만들지 않는다. 중첩 파일은 지휘가 단일 owner를 확정하며, 구현자가 자기 PR 병합·운영 배포를 하지 않는다. 다른 제품 저장소는 수정하지 않고 기존 담당에게 근거와 최소 처방을 전달한다.
+
+| 담당 채팅 | 책임 / 경계 |
+|---|---|
+| 지휘 | 작업 배정·파일 owner·통합 순서·main/배포 조정. 운영 실행의 실제 승인·안전 게이트는 별도 확인 |
+| 수집·연동 | 공급사 직접 원천·transport/parser·RAW 캡처와 accepted source head. 종합 탭은 원천 근거 제외 |
+| 차종마스터 | 대표 승인 차종 기준과 master ID/제원 매칭. 규칙 임의 변경 금지 |
+| 금액·수수료·정책 | 기간별 대여료·보증금·청구/지급 수수료 계산 및 기존 조회 수정 Work. PR408 구현 owner 유지 |
+| 정본·저장 | RAW→Canonical 식별자·기간·provenance·저장 불변식. 기존 ingestion/store 경로 재사용 |
+| 조회·소비처 | API 계약·Projection/Release와 등록 소비처별 실제 readback. PR408 구현과 겹치는 파일은 지휘 조정 전 수정하지 않음 |
+| 사진·색상 | 차량별 원천 사진 전체·색상 provenance와 실제 이미지 접근 검증. URL 존재와 이미지 성공 구분 |
+| 정산원장 | 접수/계약/정산 동일 ID 대사·사람 금액·산출근거·감사 이력 보존. 미확정을 0원으로 만들지 않음 |
+| 품질·검증 | 독립 읽기 전용 최종 게이트 및 이 문서 stable guide 단일 편집 owner. 다른 담당은 이 파일 동시 편집 없이 지휘에 기존 결과 제출 |
+
+### 통합 검증 목록 — 코드·운영·소비처를 분리
+
+문제별 기존 기록에 `발견 원천 / 영향 대상 / 단일 수정 owner / 정본·파일 / 현재값·기대값 / 재현 / 최소 처방 / 회귀 / 운영 readback / 완료 여부`를 남긴다. 별도 보고 원장을 만들지 않는다. 각 구간은 same ID·정확한 term key(기간/주행거리/반납·인수)·sourceRun·digest·revision·observedAt으로 대사한다.
+
+| 구간 / 우선 문제 | 완료 증거 / 안전한 다음 처방 |
+|---|---|
+| 원천→RAW→accepted head | 공급사 직접 탭 또는 ERP의 최신 범위·관측 시각·run/digest가 일치. stale/partial이면 수집 담당이 기존 캡처·승격 경로를 수정·재검증하며 과거 성공 run으로 최신성을 대신하지 않음 |
+| RAW→Canonical→Projection | 같은 ID/term의 누락·중복·단위·null/0·원문 보존 대사. 숫자 0만으로 무보증 확정 금지; 명시 근거와 ZERO 상태 확인. alias 가격행과 고유 조건·상품·차량 대수를 구분 |
+| 무보증 검색 / PR408 | 정확 head 테스트·schema·CI와 별도로 배포 image/revision 고정 후 실제 인증 조회. ANY_TERM/ALL_TERMS·일부 기간 유료/UNKNOWN·0 falsey·빈 결과·잘못된 필터·권한 오류 재현. Kakao/internal 성공을 ERP/화이트라벨 전체 완료로 확대하면 FAIL |
+| 손오공 사진·색상 | 공급사·상품 유형·차량 ID로 모집단 고정, 모든 사진과 원문 색상 대사. 이미지별 HTTP/content-type/실제 접근 확인; 대표 1장 성공은 전체 성공이 아님 |
+| 정산 사람 입력 | 동일 계약 ID의 금액·산출근거·취소·중복·UTC/KST 날짜·원문 format·감사 이력 재조회. 지정 정정 밖의 사람 입력 삭제/덮어쓰기 금지. 원본 freshness와 API schema 성공 분리 |
+| Projection→Release→실제 API | manifest/ACTIVE pointer·source digest·배포 immutable image가 연결되고 실제 응답 revision/내용 일치. mock/schema/CI는 운영 증거가 아님 |
+| 등록 전체 소비처 | 현재 registry 기준 ERP·화이트라벨 각 채널·Admin·Sales·Estimate·Kakao·내부 AI 및 현행 F01을 개별 대사. 미연결/미검증은 UNVERIFIED/HOLD로 남기고 owner에 최소 처방 반환; F86 재발행을 완료 조건에 넣지 않음 |
+
+각 판정은 `PASS / FAIL / UNVERIFIED / HOLD`와 심각도·실제 소비처·재현 절차를 포함한다. Claude CLI FAILED는 별도 미통과이며 Codex 검증을 Claude 통과로 표기하지 않는다. 변화 없는 재호출·계정 변경·앱 우회 금지. 정해진 범위에서 중대 오류 0·필수 검증 미통과 0일 때만 전체 완료이며, 안전한 코드 수정·dry-run·백업/롤백 준비는 계속하고 실제 고위험 실행 blocker만 분리한다.
+
+문서 반영 기준: 원격 main `6faca67627a7df884587eb4294a5aa12d58a4fbe`, 기존 PR408 head `7858692e923b4e1603235860d40f5e6caa54943b`, academy document READY `2026-10-09T08:22:58.734Z`. 기존 안내 확장(REUSE_EXACT), 운영값·원장·시트·배포 변경 없음. next_start_here: 각 담당 exact revision 결과 → 같은 source 증거 독립 대사 → 지휘의 통합/배포 게이트 → 등록 소비처별 readback.
+
+#### 통합 대사 checkpoint — 2026-10-09 17:58 KST
+
+아래는 통합 준비 목록이며 main/운영 완료 선언이 아니다. 기준 main `6faca67627a7df884587eb4294a5aa12d58a4fbe`; 재개할 때 head와 CI를 다시 확인한다. 같은 stable guide를 확장하며 새 manifest 파일·원장을 만들지 않는다.
+
+| 단일 owner / 고정 revision | 소유 파일 범위 / 현재 검증 | 통합 선행조건·운영 남음 |
+|---|---|---|
+| 수집 `772a2fa`(이전 `cdae2d2`) | 기존 supplier reader/job/전용 테스트; 최신 revision의 독립 검증 미완 | 최신 캡처 171 sourceRecord ID와 master snapshot을 맞춤. 변경13/보류158 및 분류100/5/18 대100/23의 기준 차이는 동일 ID 대사 전 오류/성공으로 확정하지 않음 |
+| 마스터 `6bf6070babd95e866378e80e2506ebc57c5dc773` | vehicle-identity-inputs/resolution·전용 테스트; 독립13 PASS | snapshot digest·master/trim ID pair·alias 모호성 검증 후 source 변경13과 대사. reference/gateway 직접 수정 금지 |
+| 금액 PR408 `c3006d2b431fce1a2b30088cef51f6e292f2ed97` | reference builder/gateway·두 schema·전용 테스트; core/canon SUCCESS | stable guide 커밋57fb2dc 포함. 최신 head 재검증→지휘 통합→운영 인증 필터 readback. 배포 전 검색 성공 주장 금지 |
+| 정본 PR411 `d5db6f3c16a1fbd030c5ed96a3f791960ad69183` | catalog/source stores/worker·전용 테스트; 독립25 PASS, core/canon SUCCESS | CURRENT이지만 오래된 source의 발행 반례와 freshness guard는 후속 검증 미완. 준비 Release 성공을 ACTIVE 승격으로 계산하지 않음 |
+| 사진 PR410 `010dbfbc317fdd0bd5a3827c8e2ff7073beb14eb` | vehicle-media-evidence helper·전용 테스트; 독립12 PASS, 원격/로컬 SHA 일치, core/canon SUCCESS | URL 헤더 성공과 실이미지/차량 동일성 분리. 원문 사진4·색상2 누락 복구 근거 확보 전 전체 완료 금지 |
+| 소비처 PR409 `ba243906ccbb5e2c5a6f068700f94c1ef6d267e0` | consumer-cutover·전용 테스트; core/canon SUCCESS, 이 head 독립 재검증 미완 | registry가 호환200을 Canonical 전환으로 올리지 않음. ERP 공개 계약 owner의 null/state 보존과 Kakao query owner의 같은 기간 조건 결합 후 소비처 재조회 |
+| 정산 owner / 보호 수정 SHA 미확정 | admin-workflow 감사 guard·전용 테스트(지휘 지정); 다른 담당 gateway 침범 금지 | 합성 기존 aud_* update는 기대REJECT/실제ACCEPT 재현. 수정 후 변경/삭제 거부·같은 값 재시도·새 이력 허용·거절시 전체 거래 무쓰기 검증 |
+| 품질 / stable guide57fb2dc 후속 | 이 문서만 단독 편집; 원본 root65+9 및 isolated39 추가줄 보존 | root9줄은10-07 수수료 scope handoff,65줄은당시 정책 설명. 최신 정책과 독립 대조 전 삭제/커밋 강제 금지. isolated39줄은 출처별 diff 확인 후 owner가 보존 커밋·최신main 통합하여 academy 재확인 |
+
+독립 운영 반례: `2026-10-09T08:42:46.867Z` 호환 snapshot과 공개 plain feed의 같은 상품·기간에서 UNKNOWN/null→0·상태누락3890건(차량 대수 아님), 관측 종료08:42:51.440Z. Kakao 기존 query의 합성12개월100만원/36개월40만원에12개월·50만원이하 조건은 기대0/실제1. aud_* 합성 저장소 변조 허용은 운영 쓰기0이며 원장 실변조 증거가 아니다.
+
+권장 통합 순서: 단일 owner diff·source/snapshot 대사→source/master/store/사진/registry 및 정산 guard targeted 검증→PR408 계약 연결 검증→지휘의 누적 main 후보에서 전체 check 한 번→허가된 배포/ACTIVE 게이트→등록 소비처 개별 readback. CI·targeted 합계를 전체 완료로 쓰지 않는다. freshness·원문 접근·운영 승인 부족은 정확한 blocker와 기존 owner의 다음 처방을 함께 유지한다.
+
+### 원천과 비공개 증거를 찾는 방법
+
+공개 저장소에는 사전·계약·검증 코드·비식별 결과만 둔다. 공급사 원문 위치와 세부 조건, 차량/고객/계좌 식별자는 권한 있는 증거에서 확인한다. 이 안내 자체가 접근권한을 부여하지 않는다.
+
+- **현재 운영값:** 위 해당 도메인의 원천 registry/계약에서 위치를 확인하고 승인된 연결로 다시 읽는다. 파일·탭·범위·관측 시각 또는 source revision을 고정한다. 과거 캡처를 오늘의 정답으로 사용하지 않는다.
+- **이 PC의 상품·정책 감사 이력:** 권한 있는 작업자만 사용자 홈의 `.codex/private/freepass-data-source-captures/<run>/`에서 `summary.json`의 `readTime`/`sourceDigest`를 먼저 확인한다. 같은 run의 `capture.json`, `policy-diagnostic-summary.json`과 추가 대사 자료를 함께 사용한다. 보고서가 보존된 run에는 `commercial-policy-audit-full.md`가 있다. 모든 run에 모든 파일이 있다고 가정하지 않는다.
+- **다른 PC/권한 없는 AI:** 위 로컬 자료가 없으면 현재 업무 담당자에게 해당 감사의 관측 시각과 범위를 제시하고 승인된 증거 전달 경로를 확인한다. 공유 저장소 동기화가 완료됐다고 가정하거나 원문을 공개 Git에 복사하지 않는다. 접근 불가는 `HOLD_EVIDENCE_ACCESS`로 기록하고 공개 계약·코드 검토는 계속할 수 있다.
+- **판정 순서:** 원본·승인 효력 → 같은 버전의 재현 가능한 대사 → 실행 로그·소비처 readback → AI 설명. 자료가 충돌하면 승인·효력·범위를 확인하기 전 임의로 하나를 선택하지 않는다.
+
+<a id="data-open-items"></a>
+
+현재 전체 작업의 증거 범위와 남은 확인은 [2026-10-12 전체 완료 감사](#2026-10-12-전체-완료-감사)를 먼저 읽는다. 아래09-30 항목은 유지하는 역사적 점검 목록이며 현재 오류 건수로 해석하지 않는다.
+
+### 미해결 항목 — 2026-09-30 상품·정책 감사 기준
+
+아래는 해결 완료를 재확인할 때까지 유지하는 점검 목록이다. 특정 상품의 현재 오류 건수나 전체 데이터 상태를 보증하지 않는다.
+
+| 이어서 확인할 항목 | 출발 문서 | 완료라고 말하려면 |
+|---|---|---|
+| 공급사 원문의 자격·요금·보험 조건 충돌 | [상품·정책 사전](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary) | 적용 상품/계약자·효력일·승인 원문을 고정하고 충돌 해소 근거 확보 |
+| 정책 연결·활성 여부·문자열 단위 해석 | [ERP5 캡처](ERP5-SOURCE-CAPTURE.md) | UID/코드/공급사 namespace와 효력 확인, 0/누락/미해석 구분, 같은 캡처 전후 검증 |
+| 연령별 조건 누락·소비처 기본값 보충 | [소비처 사용 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md) | 공개 가능한 필드 계약·출처를 확인하고 실제 응답/견적 경로를 재조회 |
+| 신규 재고·정책 본문 갱신 | [Source run 안전 규칙](SOURCE-RUN-SAFETY.md) | 실제 실행 모드·원천 전체 범위·신규 행·정책 내용과 accepted head 대사 |
+| 접수·계약·정산까지의 업무 연결 | [업무 연결 지도](BUSINESS-DATA-CONNECTION-MAP.md) | 계약 시점 스냅샷·실제 입출금·승인/취소/환수 증거를 해당 권한으로 별도 검증 |
+| F01/F86·웹·화이트라벨·Admin 전체 전달 | [소비처 런타임](ERP5-CONSUMER-RUNTIME.md) | 등록된 각 소비처의 버전·필드·권한·실제 출력 readback 확보 |
+
+### 다음 사람·AI에게 남길 기록
+
+현재 작업방 역할·인계 경계·ID는 아래 [2026-10-11 작업방 세분화](#2026-10-11-작업방-세분화--프리패스-데이터-23방)를 따른다. 00이 담당1명/변경범위를 지정하고 공용 파일은01을 통해 통합한다. read runtime의 source551581/revision00028은 [당시 운영 인계](#2026-10-11-역할-지도-정착--private-read-runtime-최종-운영-인계) 이력이다. 후속 verify-only38148614746에서 source1a32/revision00030·consumer5+ONE1·traffic100·필수403/200을 실제 확인했다. 최신 운영 전제·검증 범위는 아래 [승인 사진 등록 인계](#2026-10-11-승인-사진-51장-등록--erp5-최종-전환-인계)를 따른다. 승인 상품 사진51장의 실제 등록은 [승인 사진 등록 인계](#2026-10-11-승인-사진-51장-등록--erp5-최종-전환-인계)의 writer pin/되읽기 영수증을 따르며 ERP5 cutover와 구분한다.
+
+작업이 끝나면 기존 업무 문서를 갱신하고 아래 날짜 이력에 `목적 / 대상 revision·원천 관측 시각 / 변경 / 실행한 검증 / 남은 HOLD / next_start_here`를 남긴다. `next_start_here`는 읽을 문서·절과 다음 검증을 지정한다. 임시 로컬 위치만 남기거나 “테스트 통과”를 업무 전체 완료로 쓰지 않는다. 정본 문서가 이동하면 이 표와 README/AGENTS 링크도 함께 갱신한다.
+
+### 이 안내의 유지 범위
+
+2026-09-30 사용자 요청에 따라 기존 README·AGENTS·이 문서·상품정책 사전을 연결했다. 기준 revision은 `002cb95`, 이전 의미 사전/진단 병합은 [PR #256](https://github.com/freepass-creator/freepass-data/pull/256)이다. 이번 정리는 탐색·인계 개선이며 운영값·업무 권한·정책·스케줄 변경은 없다. 아래 날짜 이력은 삭제하거나 현재 상태로 재해석하지 않는다.
+
+---
+
+## 날짜별 작업 이력
+
+### 2026-10-12 전체 완료 감사
+
+- 목적/기준: 00의 기존 증거 취합 및01 읽기 대조 기준 main05443076와10-11 운영 영수증으로 전체 완료 여부를 판정했다. 신규 DB/원천 API/사진 조회·등록0. 역할방23개 생성 완료와 데이터 플랫폼 전체 작업 완료는 구분한다. 현재 전체 완료는 아니다. 아래 UNKNOWN은 증거 미확보이며0건 또는 실패 판정이 아니다.
+
+| 구간 | 확인된 범위 | 남은 확인 / 담당 |
+|---|---|---|
+| 원천 수집·15분 최신화 | 코드·회귀와10-11 07:00:12 KST RAW175 원문 집합 관측 | 최신 일정 회차의 capture/apply/changed/noop/HOLD/readback 및 신선도 UNKNOWN / 원천 담당·02·07 |
+| 정제·차종·UID | 당시 RAW175=후보175, 지문 불일치0 및 색상 후보 dry-run | 전체 운영 색상 저장·중복/연식 HOLD 해소·현재 정제 coverage UNKNOWN /04·05·06·07 |
+| Canonical·master | direct reader PR451 병합·코드·테스트 | 현재 전체 저장·승격 및 ACTIVE 상태 UNKNOWN;09-21 empty를 현재 상태로 단정하지 않음 /07 |
+| Projection·Release | manifest·승격 계약 구현 | 현재 ACTIVE manifest와 등록 소비처 동일 revision 영수증 UNKNOWN /11 |
+| 공개 출력·소비처 | ERP5 공통 경로와 기존11범위 가격 DTO 대사, 한 상품 사진·main 표본 연결 | F01·각 화이트라벨·Admin·Sales·Estimate·Kakao·내부AI 전체 전환·출력 UNKNOWN /12–17·각 제품 |
+| 전체 재고·사진 | 승인 한 상품51장 저장 되읽기 및 한정 앨범 표본 | 전체 모수 UNKNOWN, 등록·검증 차량1, 미검사·전재고 실패·UNKNOWN 분류 미산출. 당시 DTO475/ONE94 및09-21의1659를 중앙 현재 전체 모수로 사용하지 않음 /10·14·21·원천 담당 |
+| 수수료·계약·정산 사실 | 계산·불일치 차단·UNKNOWN 보존 회귀와source1a32 운영 설정 | 모든 offer 최신 저장·계약/원장 동일ID 대사·운영 backfill·미확정 해소 UNKNOWN/HOLD /08·09·07·원천 담당 |
+| 런타임·사진 성능 | 23:48:09 KST verify38148614746의service30/source1a32 설정·403/compat200 확인 | source08fd는CODED/TESTED이며 배포0, cold/warm 실제 속도·fresh 상세12.34초 대기 해결 미완 /20 검사·실행,01 통합,품질 단독 실측 |
+
+- 완료 기준: 최신 직접 원천의 실제 수집→같은ID/term 정제·정본/승인master와UNKNOWN 보존→정식 출력·현재 등록 소비처 각각 대사→일정·권한·복구·신선도 운영 증거를 연결한다. 전체 재고·사진 범위는 총모수·검사·미검사·실패·UNKNOWN을 명시해야 한다. 정책 의미는 기존 [상품·정책 사전](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary), 소비처 범위는 [공개 전달 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md)을 따르며 새 사전·보고 원장을 만들지 않는다.
+- next_start_here: 기존 source 운영 회차와 coverage 자료를 담당자가 취합하고21이 독립 대조한다. 성능은 아래 선택 소스 배포 검사 PR의 Linux CI/검토→00 운영 조건 확정→20 단일 배포→품질방의 공급사·무사진·단일/다수사진 표본 실측 순서다. 갱신된 실제 증거의 범위만 상태를 올린다.
+### 2026-10-12 선택 소스 배포 전 현재 운영 상태 검사
+
+- 목적/소유: 00 배정으로20이 workflow/관련 테스트를 작성하고01이 공용 NEXT와 단일 PR로 통합한다. baseline main `05443076f1d4d46433934fbcd4dee7fde9697ee7`, 20 commit `57652c037b68f609be88e85620e3a834b09cc2fe`를01의 `8e5805c`로 인수했다. 원본 작업공간 역할 지도와 기존 사진 source08fd/등록은 변경하지 않았다.
+- 변경: runtime_source_sha를 지정한 경우 expected_baseline_revision/source_sha/image_digest 세 입력의 정확한 형식과 private flags/consumer entrypoint를 인증 전에 검사한다. trusted workflow가 build 후 기존 service beforeJSON에서 Ready/latestCreated/latestReady/traffic100/URI/SA/timeout300/concurrency8/maxScale10/memory512Mi/port8080/공식 JSON 생략 규칙에 따른 volumes·모든 volumeMounts 없음/단일 container/관리 환경/정확한 baseline image tag+digest/pins5+ONE1/F04를 검사하고 기존 전체 비관리 환경 보존 검사를 유지한다. 선택하지 않는 기존 main 경로는 유지한다. selected source08fd의 오래된 verifier를 새 검사로 사용하지 않는다.
+- 검증: 01 통합본에서 2026-10-12 00:03 KST 관련26개 중24 PASS/기존 Windows 제외2, build/diff-check PASS. 새2개 테스트는 실제 workflow 블록을 실행해 누락·잘못된 입력/변경 revision·traffic·자원·이미지·환경·핀에서 배포 호출0과 유효 synthetic baseline의 배포 호출을 검사했다. Linux Core CI의26 PASS/skip0 및12·21 exact-head 검토는 아직 미확인이다.
+- HOLD/경계: 초기12bf의 volumes 누락 실패 조건은 후속 공식 스키마 검토로 보완했다. 전체 gcloud --format=json 원응답에서 필수 spec/template/spec object·containers array1·각 container object와 나머지 자원·원천·핀을 확인한 경우에만 volumes 및 모든 volumeMounts가 각각 absent 또는 명시적 빈 배열이면 known-none으로 해석한다. null·잘못된 형식·비어 있지 않은 배열·필수 구조 누락은 실패한다. 부분 projection/fieldmask 응답에 이 해석을 적용하거나 //[]로 대체하지 않는다. beforeJSON에는 IAM 정책이 없으므로 새로운 사전 IAM 확인 PASS가 아니다. 기존 verify38148614746의 private IAM 영수증과 선택 private flags/기존 사후 IAM 검증을 구분한다. 실제 추가 배포 dispatch0/사진 원천 GET0/사업 재등록0이다. 이 검사는 조회 시점의 상태 일치 검사이며 조회 이후 동시 외부 변경을 막는 원자적 잠금이 아니다.
+- 공식 생략 규칙 보완: 20 commit `e9a2c647b6ef42d7e6246ae2492f49fb2e16da88`를01의 `0b2b45d`로 인수했다(workflow/기존 baseline test 두 파일). 근거는 [Cloud Run v1 RevisionSpec](https://docs.cloud.google.com/run/docs/reference/rest/v1/RevisionSpec)과 [ProtoJSON presence/default](https://protobuf.dev/programming-guides/json/#presence-and-default-values)이다. absent/[] 혼합을 포함한 허용과 null/type/nonempty/상위 구조·container·memory 누락 반례를 추가했다. 반례 shell 실행이 기존5초를 넘긴 테스트 시간 제한 실패를15초 상한으로 보완했으며 운영 timeout 변경0이다. 01 통합본00:13 KST 관련24 PASS/기존 Windows 제외2/build/diff-check PASS, 새 Linux CI와 exact-head 검토는 별도 대기다. 초기12bf의 Core38149847929/Canon38149846753 SUCCESS·관련26 PASS/skip0은 이전 코드의 역사 근거로 유지한다.
+- next_start_here: 단일 PR의 Linux CI와 독립 검토 후00이 현재 baseline source1a32/revision30/digest5e68 및 필수 자원 확인 범위·동시 운영 변경 금지 조건을 확정하고20 단일 실행으로 이어간다. source08fd의 실제 배포·cold/warm 실측은 여전히 미완이다. 전체 재고 모수·사진 검사대수·미검사·실패·UNKNOWN을 별도 범위표로 남기며 한 상품51장/ERP5 한정 CUTOVER를 전체 완료로 확대하지 않는다.
+
+
+### 2026-10-11 상품 중심 저장 정본 조회 확장
+
+- 목적/대상 revision: main 1a32a313 기반, 기존 query-canonical-by-plate job 재사용. 새 API/저장소/운영 쓰기 없음.
+- 변경: private search-file로 상품 ID·등록 공급사명/ID·차명·차번을 검색한다. 차번 없는 상품과 offer 미연결 상품도 전체/상품 검색에서 보존한다. 저장 객체와 기간별 청구·지급을 그대로 읽고 누락은 UNKNOWN/null. 현재 탭 없는 공급사도 기존 등록부로 검색하며 공급사 미연결 수와 검색명 등록 여부를 구분한다.
+- 검증: build 및 관련 81 tests PASS. Claude ANSWERED/exit0 독립 검토의 등록부·미연결 진단·빈 가격조건 상태 지적 반영.
+- 실제 읽기: canonical 160 products/160 offers/568 terms, asset 미연결0, policy 미연결160, media contract 미연결160. 전체 products/원천행 수가 아니다. 사진 UNKNOWN은 운영 products 사진 없음이라는 뜻이 아니다.
+- 남음/next_start_here: PR465 기존 읽기 계약 작업선과 결합. products/policy 및 SourceIngestionStore CURRENT_SOURCE_ROW 기존 경로를 보존하고 소비처에서 상품 사실·사진·저장 경제조건을 대사한다. operator job을 전체 소비처 계약으로 승격하거나 canonical/legacy/source 행을 실물 대수로 합산하지 않는다. 운영 DB/배포/권한 변경0.
+
+### 2026-10-11 승인 사진 51장 등록 / ERP5 최종 전환 인계
+
+- 목적/범위: RP031의 승인 상품 1건(10하8099), 실제 검토본 사진 51장만 등록한다. 코드 통합은01, 실행 승인과 단일 writer 지정은00, 기존 B3Q ce96는 source/등록, ERP5 실제 화면·main alias 전환은root가 소유한다. 원본 shared checkout의 역할 지도185줄 dirty는 보존한다.
+- 사람 승인: ERP5 root가 실제 검토 화면을 제시한 뒤 사용자 메시지 `01a12b11-19ac...`(2026-10-11T13:05:15.253Z)의 사진 확인과 `01a12b15-3f02...`의 “51장 모두 확인했어. 이 검토본으로 등록해.”를00이 직접 확인했다. 실제 사용자 승인 메시지·관측 시각으로 검수 필드를 전사했으며 추가 사람 확인이나 시각을 추정/조작하지 않았다.
+- 코드/검증: [PR473](https://github.com/freepass-creator/freepass-data/pull/473), reviewed head `3931663b59c877ec73113eb9df97e65a0d13c422`, merge base `9aa9d8669214ab9cbc90a533260025226f618bef`, merge/writer pin `1a32a313341fd0695cb05b0fd88c164c060741bd`. 12/21 exact-head 독립 blocker0, Core38143729315/job114482653039 및 Canon38143729260/job114482653798 SUCCESS. 등록83+CLI23=106 PASS, gateway110 PASS, build/architecture/access PASS. 이 writer 보완은 runtime reader 재배포를 요구하지 않으며 Data 서비스는 아래 source551581/revision00028과 구분한다.
+- 입력 결속: 당시 capture ID 배열 미보존은 CAPTURED_ID_ARRAY_NOT_RETAINED로 유지한다. 현재 ID를 과거 ID로 재구성하지 않았다. 원본 검토본/승인 영수증을 보존하고 SHA→photoSha256 명칭 매핑 및 동일 ordinal/대표/MIME/binding/당시 sourcePhotoIdDigest로 별도 typed plan을 만든다. 계약 photoSetDigest는 공식 iancarReviewedContentSetDigest로 유도하며 기존 preview.contentDigest와 다르다. preview helper의 원래 계산식은 별도 evidence의 정의 미확인 제약으로 남긴다. 이를 계약 digest와 같다고 주장하지 않으며, 공식 writer 함수·동일 승인 tuple·당시 capture digest 보존과 실제51장 raw/DB 되읽기로 확인한 PERSISTENCE VERIFIED를 등록 HOLD로 되돌리지 않는다.
+- PERSISTENCE VERIFIED: ce96 실행 turn `01a12b33-f56c-78f2-8391-620ebb86336b`, final `msg_08db4b941808d961016acb938aa2708191b075aacd64c793e0`을01이 직접 읽었다. 2026-10-11T13:47:16.359Z(22:47:16 KST) PHOTO_ATOM_READBACK_VERIFIED/refs51, PLAN1/APPLY1, ONE metadata3/raw bytes51. 적용 중51장 raw SHA/MIME 일치 후 provider_company_code+photo_original_refs만 CAS 적용했다. fresh DB patchEqual=true, 기존 비대상 필드 보존=true, 신규 비대상 키0; 가격·재고·기존 iancar_one_photo_ids 보존. PLAN digest `7d768c9670addad2aeb07e68b3b64def0a0b042486f1c69807dfcc2231e9e38b`.
+- 백업/복구: 기존 private typed backup photos-27079426-6fa9-4ec1-99ae-c2c8105c6bf7.json, schema iancar-photo-typed-backup/1/docs1, SHA256 `ee5146f11eb13beda8c141d1c9cc04a6a4d1e335295acc36f7bc3fc825ae7078`, Windows ACL unexpectedAllow0. 원문·credential·원천 ID는 공개하지 않는다. 복구는 같은 owner가 backup digest/현재 patch/상품 동일성 확인 및 별도 restore 승인하에서 수행하며 자동 복구0이다.
+- 소비처 실제 검증(00이 root 영수증 인수): 후보65jtr의 strict detail 2026-10-11T13:49:11.076Z HTTP200/firestore/사진51/binding 정상. 13:49:29–13:51:05Z 전체11범위 DTO·가격행 diff0. 13:49:29–13:55:31Z 전체51 proxy bytes 모두200/JPEG/magic 정상, retry0/concurrency2/최대27.85초. 이는 후보 API·사진 응답 증거이며 모바일 상세는 완료 시 사진0(목록 대표 정상/요금24) 문제를 root가 확인해 ERP5 수정 중이다. 모바일 앨범·60초·운영 alias CUTOVER VERIFIED는 아직 아니다. 후보 ERP5 commit0301819/65jtr와 실제 Data source551581/revision00028을 구분하며 새로운 Data API/원천 수집/등록 재실행0이다.
+- 후속 성능 보완 CODED/TESTED: 후보 실측 first24.176초/p50 12.923/p95 20.992/max27.852초를 바탕으로00이 승인한 최소 개선이다. CONTENT_ORDINAL/1의 exact consumer/product/connection/전체 refs proof/index만 검증 완료 frozen bytes를 원본 검증 시각부터 최대30초 재사용하고 같은 key의 진행 중 원본 조회를 공유한다. 32MiB/64entries/8pending, hit 만료 연장0, 오류·부분 결과 캐시0, 완료 캐시는 각 요청 audit 후 최종 DB/fresh 원천 membership 성공 이후에만 게시한다. 현재 권한/public/status/승인/binding 검사는 매 요청 유지하고 proof·철회·membership·만료/조회 실패는 제거·차단한다. warm hit는 raw GET0이지만 audit 후 fresh metadata 최소1회를 유지하며 현재 원본 재해시 성공으로 표현하지 않는다. 원본 miss SHA/MIME/magic 대조와 manifest 기존 경로는 보존한다. 등록/reader104+CLI23+gateway111 총238 PASS, build/architecture/access PASS; 아직 독립 검토·필수 CI·배포·cold/warm 실측 미완이다. 운영 source551581와 통합 main 사이 다른 미배포 변경은20이 분류하며, 무관 정책을 성능 변경으로 묶어 배포하지 않는다.
+- 배포 소스 격리(서비스28 기준 당시 검토 이력): 서비스28의 baseline `551581dfe08fdb5532b26c015790d2861660ed52` 이후 main에는 수수료·public catalog·원장 등 별도 변경이 있어 이번 사진 성능 배포와 묶지 않기로00이 결정했다. 최소 runtime source `d276f8db570e1b2f501b010b006ab54b55993b68`(codex/photo-runtime-isolated-20261011)는 baseline의 직접 자식이며 Domain createVehiclePhotoReader 성능 hunk와 해당 테스트 두 파일만 바뀐다. writer optional capture 배열/CLI·수수료·catalog parser·jobs/스케줄·schema/package/lock/Dockerfile/workflow 변경0. source reader 함수는 PR474의 현재 main 구현과 정확히 동일, source build/architecture/access/diff-check PASS 및 reader92+CLI21+gateway110 총223 PASS(23:18 KST). integration mergeparent `66ef68f224f6f96c40d149125448078d183d70ec`는 eccefe6 main과 d276 source를 부모로 보존하며 연결 전후 main tree 동일/전체 diff0을 확인했다. 20의 workflow patch4846e184를01이6a327aa로 인수했다. trusted main full-history checkout에서 runtime_source_sha의40자리 소문자hex/exact commit/main ancestor를 인증 전에 검사하고 빈 값은 기존main을 사용한다. build/tag/OCI revision label/digest/readiness에는 선택 source를 일관 사용하며 workflow SHA와 분리 기록한다. 기존 main-only guard/private300/F04 사전·사후/typedfalse/secret pins/IAM/verify-only 경계는 유지한다. 새로운 source 선택3tests PASS·기존 verification4 PASS/1 Windows 제외를01이 확인했다. 기존 policy는20의12 PASS/2 제외이며 watchdog jq 부재 최초 실패를 숨기지 않고 Linux 필수 CI에서 전체 확인한다. 최종 통합PR의main merge 후 d276이 remote main ancestor인지 다시 확인해야 한다. branch 임의 배포/사업 재등록/새 IAM·credential0, 아직 이 source의 운영 배포·실측·CUTOVER는 미완이다.
+- 운영 전제 변경/검증 핀 보완: 20의 추가 배포 사전 확인에서 latest 성공 run38145250518/job114487122800의 source `1a32a313341fd0695cb05b0fd88c164c060741bd`/revision freepass-data-read-00030-bfq/digest sha256:5e68caae244b2215919db5dc341a1eb5034f71965a86e8ec6deb0623d946eabb/readiness·readback·환경 보존 PASS 영수증과 현재 repository consumer pin5/ONE1을 확인했다. 이는 그 배포 영수증이며 fresh live Describe 완료는 아니다. 이전28/551/4 전제의 추가 배포는 실행하지 않았고 당시 격리 source d276으로 이미 운영된 정책을 되돌리지 않는다. 현재1a32가 live로 확인되면 사진 성능만의 후보는 reviewed `08fd27afd3764210027e0001562923d59d4a4fea`(1a32 대비 Domain reader/test/NEXT3파일만/main ancestor)이다. eccefe6에는 별도 원장5파일도 포함돼 사진 전용 후보로 쓰지 않는다. source1a32→08fd의 기존 PR474 exact CI/238 테스트·12/21/10 검토 근거를 재사용하며 새 source branch/사업 등록0이다.
+- 검증 실패/수리 범위: verify-only38147655784/job114494286972는 stale consumer4 고정으로 preauth CONSUMER_PIN FAIL, 인증/live metadata/403·200 readback 전부 SKIPPED, deployjob114494287813 skipped/steps0이었다. 01/20은 서비스 pin 변경 대신 verifier를 고친다. trusted workflow의 verify-only 선택입력 expected_consumers_secret_version(빈 값은 trusted repo pin)을 EXPECTED_CONSUMERS_SECRET_VERSION으로 전달하되 실제 선언 CONSUMERS_SECRET_VERSION은 repo 값 그대로 유지한다. expected/declared 양쪽 positive integer·fixed name·정확한 일치와 실제 service/revision secret refs 일치를 모두 검사하며 ONE1/target/SA/IAM/URI/source/image 경계는 유지한다. 누락·0·별칭·선행0·불일치는 인증 전에 실패하고 버전 원문/토큰 로그0이다. 수정은 workflow/script/관련 verification test/NEXT만이며 새 운영 핀·IAM·배포 권한이 아니다. Linux 전체 검증/독립 exact-head 검토 후00이 지정한 verify-only1회로 current metadata를 확인하고 별도 새 deploy GO에서만 source08fd를 사용한다. 현재 actual deployment/성능 실측/CUTOVER 완료 주장은 없다.
+- ERP5 연결 CUTOVER VERIFIED(root 실제 영수증): 제품 source `f77628b36e9ee4bf372bcf8965c5c81b61884efb`, PR70 merge `be60c077e3aec91d9cd83afec3798399036395e0`(2026-10-11T14:34:16Z). 동일 검토 후보 b22dth9v6/deployment dpl_ay8uZ2hyWmPXGJr3iyNQ8XqaKTTW READY/icn1을 promote했고 ProductionConfig CATALOG_READ_MODE=firestore UI 저장·되읽기를 확인했다. 14:36:54Z main be60/md1y1hpx8/deployment dpl_54RpyM1G5j3i62bL6C162Lx67TVu READY/icn1은 f776과 제품 tree diff0이었다. 공개 상세 14:36:08.904Z HTTP200/firestore/cache/사진51·요금24/정확한 RP031 상품·eancar photo URL scope/icn1, HTTP6531ms. root production-result.json의14:39:16.778Z 실제 Chrome QA는 카드→상세→앨범 끝51/51(index50 원본 decode 확인)→닫은 뒤 선택 유지까지 PRODUCTION_NARROW_BROWSER_PASS였다. counter51을51장 전부 브라우저 decode 입증으로 확대하지 않는다.
+- ERP5 최종 문서 main 확인: PR71 merge `6291b5ad1ab8e6636bfc5eb9b38915bb7057bc90`(14:43:00Z)은 be60과 제품 diff0/docs7 변경이었다. 14:43:30.592Z alias6291/jz762hxu9/deployment dpl_44YQUxmKoZcN6XQH6w2e2V5SH7cQ READY/icn1. root의 기존 final-main-api.json 단일 공개 GET은 HTTP200/firestore/live/사진51·요금24/정확한 binding·photo URL scope/icn1, sourcefetchedAt2026-10-11T14:44:18.478Z/HTTP12340ms였다(이를 GET 완료 관측 시각으로 바꾸지 않는다). private 영수증은 root 작업공간 .local/parallel-photo-20261011/data/{production-api,final-main-api}.json, quality/production-result.json 및 production-config-saved.jpg에 보존한다. 후보의 같은 sourcefetchedAt을 재사용한60초 확인10047→78ms/만료 연장0은 ERP5 상세 캐시 증거이며 Data 사진 cold/warm 실측 완료가 아니다. bounded 회귀64 PASS/기존 약관·privacy404 두 건 PR35 HOLD를 분리한다.
+- 현재 Data live 검증 DEPLOYMENT VERIFIED(설정 조회 범위): verifier 보완 PR479 merge `05443076f1d4d46433934fbcd4dee7fde9697ee7` 이후 verify-only38148614746/job114497134190/workflow05443076, 2026-10-11 23:48:09 KST SUCCESS. deployjob114497135038 skipped/steps0. 20이 실제 service+revision freepass-data-read-00030-bfq/source1a32a313/digest5e68caae244b2215919db5dc341a1eb5034f71965a86e8ec6deb0623d946eabb/consumer5+ONE1/traffic100/privateIAM/canonical URI/기존SA/concurrency8/관리env·원천 이미지 tag→digest binding을 검사했고 mandatory 비인증403·인증 compat200/schema/migration headers/readback을 실제 통과했다. 이번 script는 timeout/max-instances/memory/port/F04 plain env/volumes를 검사하지 않았으므로 해당 항목을 새 PASS로 확대하지 않는다. 기존38145250518 배포의 private300·환경 보존 영수증은 별도 과거 증거로 유지한다. 이번 run은 배포·사업 재등록·ONE 사진 source GET0이며, 00의 새 단일 성능 deploy GO 이전까지 serving은1a32/30으로 구분한다.
+- CUTOVER 상태/next_start_here: 승인 상품 사진51장의 PERSISTENCE VERIFIED와 위 ERP5 연결 범위 CUTOVER VERIFIED는 확보했다. Data 성능 source08fd의 실제 배포·cold/warm 속도 및 fresh 상세12.34초 원천 대기 해결은 별도 미완이다. PR479 reviewed b384/merge0544307, Core38148218445/job114495949868 및 Canon38148218577/job114495951174 SUCCESS, 최종 Linux policy14+verification7+source-selection3 총24 PASS/skip0을01이 실제 로그로 확인했다. 현재 metadata/핀/source/revision/image/403·200 확인은 위20의 단일 verify-only로 완료했고, 별도00 성능 deploy GO와 배포 후 cold/warm 실측을 이어간다. 전화·클립보드 기기 동작, 51장 전체 브라우저 decode, 모든 상품·전체94대·화이트라벨/Admin 전체 완료는 미검증이며 중복 source 수집/등록·새 IAM/credential/RTDB0이다.
+### 2026-10-11 역할 지도 정착 / private read runtime 최종 운영 인계
+
+- 목적/소유: 대표 요청의00~22 역할방 지도와 실제 runtime 복원·검증 결과를 기존NEXT에 함께 정착한다. 원본branch codex/shared-sheet-dropdowns-before-rent/HEAD41a492 dirty 역할 지도는 보존했고01 격리공간의 추가hunk만 latestmain895cf49b6d908a77f29e8799e228da2ae7c7ca99에 통합했다. 최신main 수수료PR453 변경도 보존했으며 그 코드를 이번 배포 완료라고 하지 않는다. 이번packet은 docs만이고새배포trigger/원천IO/사진사업쓰기0이다.
+- 현재 운영: run38140560573/job114473391833, source551581dfe08fdb5532b26c015790d2861660ed52, revision freepass-data-read-00028-kzb, digest sha256:3afae6985b666b40da32544ff8caded7adcbd54f356ce5dfe2b016781b7db97c, 2026-10-11 21:48:22 KST SUCCESS/traffic100. 00 단일정상WIF 실행·20 독립GitHub 영수증이며01 직접Cloud조회/배포가 아니다. actualmode=true·환경보존true·ReadyTrue·privateIAM·기존SA·concurrency8·consumer4/Iancar1·정확이미지/단일traffic100 검사와 private timeoutSeconds300 검사가 통과했다. 이번에는 F04repository==live 및관리외환경/secret refs 전후·controlled3 검사도 실제private분기에서 실행됐다. F04 원문/해시를 복사하거나 기록하지 않았다.
+- 실제 인증: 같은 정상배포에서비인증403/기존 erp-com compat200/계약스키마/두migrationheader/readbacktrue가 실제통과했다. 앞verify38140443977/job114473056958/workflow551581은 service source24fd7/revision00027/digestb443의 metadata+mandatoryauth403/200/contract/header를 통과했고deploy0steps skipped였다. 이는 photo consumer의 실제앨범·등록·cutover 증거가 아니다.
+- 실패/정정: 최초38138787782/source24fd7은00027을배포했으나missingboolean 느슨비교로actualmode=false/publictimeout30분기 및readinesssecret-empty 검사에서실패했다. deploystep성공을privateF04사전/사후PASS로해석한주장은철회한다. 후속38139978484/workflow06338은metadataPASS지만auth2skipped로인증완료가아니었다. PR468의typedfalse만public/누락private·resolvedmode·mandatoryverifyauth·성공summaryguard·private300으로수리했다. root실제이미지tag@digest는예상과같아태그제거가설을배제했고기존deployimageassert변경0이다.
+- 코드/시험: PR463 mergec2b31 CONTENT_ORDINAL/1, PR464 merge24fd7 환경보존, PR466 merge06338 verify-only, PR468 merge551581 기본모드/필수읽기/300복원. PR468 finalc0e4e4c에서12/21 독립blocker0, Core38140309706/Canon38140310032 exactheadSUCCESS, Linuxruntime-policy14/verification5 PASS(unit153suitesPASS/3skip). source24fd7→배포551581 src/contracts/package/lock/Dockerfile diff0을01이확인했다. 코드main·workflowSHA·실서비스source를구분한다.
+- 이 인계 당시 사진/소비처 미완(최신 사진 등록·최종 전환 상태는 위 신규절 참조): 20:22 RP031단건조회에서 photo_original_refs ABSENT/CONTENT_VERIFICATION 실패를 확인했다. 이후 기존B3Q 대상되읽기 target-readback-ab6ea558도 refsABSENT를 확인했다(그 관측 당시 실제등록0); 추가 관측시각은 추정하지 않는다. 동일원본owner의실51장 hash/MIME/ordinal대표구도전체 bounded 일치영수증은확보했지만사람확인값은생성하지않았다. 실제private실51검토화면·사람최종확인·정식단일B3Qwriter PLAN/exactdigest/CAS/typedbackup/readback·전체앨범/채널/60초·ERP5cutover는별도미완이다. 00인계 ERP5candidate0301819와 mainalias의ERP4연결은 Data28성공과구분하고root가현재실상태를확정한다. B3Q 특정 작업의 canceled 응답과 실제 UI 전달 미확인은 PC 전체 offline으로 단정하지 않는다. 해당 작업 연결·실source/UI실행권과privatebackup접근은지정owner가확인하며다른방중복수집/등록0이다.
+- 복구/next_start_here: 이전00027/source24fd7/digestb443는actualauthverify38140443977을가진rollback후보이지만timeout30이력포함. 이전00026/source1067/digest1792는historical last-good이며현재serving으로표시하지않는다. 자동rollback/새IAM·키·로그인/RTDB0. 00은아래23역할지도에서담당1명/공유hunkowner를지정하고10·기존B3Q원본/등록owner·20·root가실사진관문을이어간다. 01은실제등록/ERP5전환exactreceipt를같은NEXT에갱신한다. DESIGNED/CODED/STATIC CHECKED/TESTED/PERSISTENCE/DEPLOYMENT/CUTOVER 증거를분리한다.
+
+### 2026-10-11 작업방 세분화 — 프리패스 데이터 23방
+
+- 대표 직접 요청: 현재 세션·폴더에서 FreePass Data 전체 업무를 상세하게 나누고 역할이 겹치지 않게 작업방을 만든다. 2026-10-07의 4방 통합은 당시 이력으로 보존하며, 이번 현행 역할 배정은 아래 23방이다.
+- 앱 사이드바 `프리패스 데이터` section `c9d7130a-5108-48a0-96bf-031efe8f3127`에 00~22 순서로 배치했다. 현재 방을 00 지휘로 사용하고 22방을 현재 폴더의 same-directory fork로 만들었다. 실제 23방 모두 `C:/dev/freepass-data` cwd를 확인했다. 이 폴더는 조회한 앱 saved project 목록에 없어 다른 저장소로 연결하지 않고 현재 폴더를 그대로 이어받았다.
+- 처음 편입했던 기존 공통 시트 `01a10ef3-e5bf-7660-bf5e-773c20c77465` / ERP 연동 `01a10f56-3680-7b91-8337-a1e907fc391a`는 실제 cwd가 각 10-07/10-09 Documents/Codex/new-chat이었다. 요청한 폴더를 정확히 연결하기 위해 새 03/14방을 같은 폴더 fork로 교체하고 기존 두 방은 원래 이름/Tasks 위치로 돌렸다. 기존 이력·라이브 실행권·ERP 읽기 모니터/예약은 보존하며 이번 구성으로 이전하지 않았다.
+- 관측 기준: local HEAD `41a49213879027129f527bf31251c39300d56cab`, branch `codex/shared-sheet-dropdowns-before-rent`; fetched remote main `4b0690ed634dc188d168033a66b87b67338847e9`. Issue #24와 open PR #445/#437/#434/#394를 조회했다. 로컬 문서보다 최신 main 문서가 우선인 항목은 `git show origin/main:<path>`로 확인하고 다음 실행 전에 main/PR head를 다시 조회한다.
+- 모든 담당방에 담당 업무·인계 경계·시작 문서·향후 완료 기준·공통 경계의 역할 설정 메시지를 전달했다. 개설은 기능 구현/운영 실행 요청이 아니다. 최초 메시지는 도구·구현·점검 재실행 없이 역할만 확인하고 다음 구체적 업무 지시를 기다리도록 했다. 기존 ERP 읽기 모니터의 범위/예약을 새로 생성하거나 변경하지 않았다.
+- 공용 폴더에서 Git index/branch·공용 파일의 동시 수정은 금지한다. 00 지휘가 작업별 담당 1명과 파일/hunk를 배정하고, 01이 NEXT·package/lock·공유 route/schema·통합 Git 변경을 단일 통합한다. 각 번호의 경로는 향후 책임 경계이며 지금 파일 수정권/운영 실행권이 일괄 부여된 것은 아니다. 기존 다른 PC/채팅의 진행 목적과 writer를 확인한 뒤 후속 범위를 인수한다.
+- 최신 main/대표 2026-10-08 지시: 상품 시트 발행은 F01 하나, F86은 원본·이력 보존. 공통 입력 UI는 03, F01 출력은 13, 읽기 화면/변경 조사는 22. 기존 제품/정책/차종 정본을 복제하지 않는다. 차종 판단은 ai-ops `docs/차종-기준-한장.md`만 따른다.
+- 의존 순서: 02/03 원문 → 04 후보(05 차종·06 UID·08 정책 근거 참조) → 07 Canonical → 11 Release → 12 API/13 F01/14~17 소비처. 09는 수수료·정산 연결 사실, 10은 사진 제공, 18은 운영 Console, 19는 인증/중앙 경계, 20은 운영 계획/승인된 실행, 21은 독립 검증, 22는 시트 조사다. 00/01은 배정/통합이며 도메인 의미를 새로 정하지 않는다.
+- 완료 보고는 목적 / 대상 exact revision·원천 관측시각 / 변경 / 검증 / 남은 HOLD / next_start_here. DESIGNED·CODED·STATIC CHECKED·TESTED·PERSISTENCE VERIFIED·DEPLOYMENT VERIFIED·CUTOVER VERIFIED를 분리한다.
+
+| 번호·채팅 | ID | 단독 책임 |
+|---|---|---|
+| 00 지휘·조정 | `01a11f7e-40c7-71c1-8fd8-1cae426fc0ae` | 전체 요청을 실행 가능한 작업 묶음으로 나누고 담당 1명, 변경 파일, 의존성, 완료 조건, HOLD를 배정한다. 각 방 결과를 취합하며 업무 순서와 인계를 관리한다. |
+| 01 PR 통합·공용 문서 | `01a12842-a4aa-72a1-8238-6533f1ff94c0` | 최신 main/열린 PR/충돌/필수 CI/branch guard를 확인하고 검토·통합 순서를 관리한다. package.json/lock/공유 route 등록/공유 schema의 여러 방 변경을 단일 담당으로 통합하고 NEXT 인계를 기록한다. |
+| 02 공급사 수집·RAW | `01a12844-b7de-7540-af20-4717d6746416` | 이안카·아이카·아이언·손오공·웰릭스 등 직접/원본 연동의 transport, pagination, 원천 coverage·digest·관측시각, immutable RAW/source run lifecycle, 정책/사진 원문 수집을 맡는다. |
+| 03 공통 입력 시트 | `01a12847-8813-70f0-91a0-a7002013b347` | 공급사 공통 입력 시트의 현행 machine spec, lightweight dropdown, 머리글·메모·필터·보호·열·행 표시, helper/종합/UI 소유권과 입력 원문 보존을 맡는다. 기존 담당의 증거를 확인해 업무를 인수할 준비를 한다. |
+| 04 정규화·검수 후보 | `01a12844-cf04-78f0-bcbf-69259964d82f` | ERP5/공통시트/legacy RAW를 Catalog 후보로 바꾸는 필드 매핑·형식/단위 해석·source binding·검수 사유·candidate 생성과 빈칸 채우기 dry-run 입력을 맡는다. |
+| 05 차종 마스터·제원 | `01a12844-de1b-7d32-a18c-e67bafcaac92` | 제조사→모델→세부모델→세부트림, 연료·배기량·구동·옵션 등 VehicleModel/reference의 규칙 적용·명칭/별칭·coverage·parity·검수·승격 계획을 맡는다. |
+| 06 차량 UID·동일성 | `01a12844-ebc4-7810-9939-7be04def61fc` | VehicleAsset 불변 UID, VIN/공급사 외부 ID/차량번호 이력, CREATE/LINK 충돌·유효기간, 기존 ID 호환, UID 이전 계획과 보존 검사를 맡는다. |
+| 07 Canonical·쓰기 권위 | `01a12845-1914-7c83-a179-dcd374d827f8` | 검토된 후보의 CREATE/LINK/승격, source refresh, expectedRevision, idempotency, field authority/writer ownership, 원자적 transaction·revision·audit·lineage·outbox 생성과 데이터 손실 방지를 맡는다. |
+| 08 상품·요금·보증금·정책 | `01a12845-23b2-78d2-969a-a18a38d0f5c2` | Product/Offer/PriceTerm/Policy 상업적 사실, 공급사 정책 연결, 기간·거리·보험·연령·보증금 KNOWN/ZERO/UNKNOWN/NOT_APPLICABLE, 조건별 경제 근거 해석을 맡는다. 기존 policy dictionary를 사용한다. |
+| 09 수수료·정산 연결 사실 | `01a12845-2fad-7b12-98a5-deac2a482508` | F04 수수료표 원천과 공급사/기간/조건별 내부 수수료 사실, 계약 줄→상품/offer/term/revision 연결, 정산 안정 ID 감사와 읽기 projection을 맡는다. |
+| 10 사진·미디어 제공 | `01a12845-3ee5-7461-bd0f-e7845a4ee9bc` | 이미지 manifest·인증 transport·proxy·절대 URL·사진 순서/빈 응답 보존·typed backup/복구의 Data 제공 계약과 실제 bytes 검증을 맡는다. |
+| 11 Projection·Release·Outbox | `01a12845-5001-7b93-a4fa-d4243e755ac5` | canonical input revision/digest 기반 projection, BUILDING→VALIDATING→READY→ACTIVE, 마지막 정상 ACTIVE 보존, durable outbox lease/retry/dead-letter/idempotent delivery를 맡는다. |
+| 12 공개·공통 데이터 API | `01a12845-5bc2-78e2-bc9b-173a457b66d1` | Data Serving HTTP 요청/응답·allowlist·page/filter/error/compat 공통 계약, public catalog feed/quote의 최소 공개 surface와 공통 consumer gateway 동작을 맡는다. |
+| 13 F01 상품 발행 | `01a12845-6d94-79a0-bbe4-fba666c647b6` | 중앙 승인 snapshot→F01 단일 상품 발행, supplier별 상품·상태·가격/조건·보증금·사진 링크, 표시 정본·publisher pin/ready-run/delivery receipt/전체 readback을 맡는다. |
+| 14 ERP·화이트라벨 연동 | `01a12847-9cc4-74e3-b082-bb0c07377cb7` | ERP.com 및 등록된 각 화이트라벨의 Data 계약 수신·조건별 rate/deposit/policy/photos parity·version/release receipt·실제 응답과 UI readback을 맡는다. 기존 읽기 모니터의 결과를 활용하고 중복 예약을 만들지 않는다. |
+| 15 Admin 데이터 계약 | `01a12845-a8c2-73e1-b0c9-3b62a8a5cbbd` | Admin catalog projection 및 source facts opt-in, nullable provenance/current-facts, contract-fee-links, field 권한/receipt와 Admin runtime 데이터 경계를 맡는다. |
+| 16 Sales·파트너 데이터 계약 | `01a12845-b53a-7313-b9b8-e5ba265d87b6` | Sales 및 파트너/채널의 승인된 상품·정책·내부/공개 데이터 제공 계약, data-domain discovery·capability/field scope·소비처 readiness/receipt를 맡는다. |
+| 17 Estimate 기준 데이터 | `01a12845-c30e-7881-94cc-bde23e72d115` | 신차/중고차 master projection·가격 입력 사실/버전·Estimate readiness·기존 immutable quote/share artifact 저장의 Data adapter 및 receipt 계약을 맡는다. |
+| 18 Control Plane·Console | `01a12845-d116-7783-9f76-86bb498a6b68` | Data Explorer/entity detail/review queue/vehicle finder/revision ledger/health/control tower 등 운영 도구의 데이터 추적·명령 검수 UI와 사용성/접근성을 맡는다. |
+| 19 인증·권한·Firestore 경계 | `01a12845-e52e-7bc0-8f6e-2e21a5bddb1d` | service/user auth·capability/field authorization·Data access audit, 중앙 Firebase target/layout·내부 경로 차단·read/write runtime 경계와 IAM 계획을 맡는다. |
+| 20 런타임·배포·복구 | `01a12845-f65d-70e2-873f-0824f3b1464a` | private/public/admin/estimate runtime의 이미지 SHA·환경 binding·배포 계획/증거, 기존 schedules/pin/수집 실행 운영 연결, 백업/복원·장애 rollback·last-good 복구 계획을 맡는다. |
+| 21 품질·회귀·독립 검증 | `01a12846-040d-7571-b45b-50141aed1357` | release/source/consumer health·coverage/freshness/lineage parity·standards/arch/access 회귀·결함 반례와 필수 CI 연결 누락을 독립 검증한다. 전체 검증 계획의 담당이다. |
+| 22 시트 화면·변경 추적 | `01a12846-1684-7971-a27b-2294532bc030` | 공통 입력/F01/F86 보존 원본의 실제 화면·필터/보호/수식/링크·행 수 변화를 읽기 전용으로 조사하고 변경 주체/시간/실행 로그·동시편집 증거를 추적한다. |
+
+#### 인계 경계·시작점·완료 조건
+
+**00 지휘·조정**
+
+- 인계 경계: 소스 수정·Git 통합은 01, 라이브 시트는 03/13, 운영 실행은 20의 별도 승인 범위로 넘긴다.
+- 시작점: docs/NEXT-START-HERE.md, docs/DATA-DOMAIN-CATALOG.md, docs/BUSINESS-DATA-CONNECTION-MAP.md
+- 향후 완료 조건: 목표별 담당·경계·선행 작업·증거 상태가 빠짐없이 지정되어야 한다.
+
+**01 PR 통합·공용 문서**
+
+- 인계 경계: 기능 의미와 개별 모듈 구현은 각 담당. merge/push/branch 변경은 구체적 업무 배정 후 기존 규칙으로 실행한다.
+- 시작점: docs/NEXT-START-HERE.md, docs/REPO-STRUCTURE.md, .github/workflows/core-ci.yml, .github/workflows/canon-guard.yml
+- 향후 완료 조건: 정확한 head·base·검사 결과·겹치는 파일·통합 순서를 제시한다. 현재 열린 PR445/437/434/394를 시작 단서로 삼되 실행 전 재조회한다.
+
+**02 공급사 수집·RAW**
+
+- 인계 경계: 수집 후 의미 변환은 04, 차종 판정은 05, canonical 쓰기는 07, 사진 제공은 10. 기존 source 경로와 SourceIngestionStore를 재사용한다.
+- 시작점: docs/NATIVE-SOURCE-COLLECTOR.md, docs/IANCAR-ONE-API.md, docs/ERP5-SOURCE-CAPTURE.md, docs/SOURCE-RUN-SAFETY.md; src/adapters/*source-capture.ts, src/ports/source-store.ts, src/infra/source-firestore-store.ts
+- 향후 완료 조건: 누락·실패·빈 원문·삭제를 구분하고 accepted head와 RAW 원문 되읽기 증거를 제시한다. PR394 필요성은 대표 결정 HOLD로 유지한다.
+
+**03 공통 입력 시트**
+
+- 인계 경계: 상품 F01 발행은 13. 원천→Data 수집/canonical은 04/07, 차종 기준은 05, 행 감소 원인 조사·독립 화면 검증은 22. 22의 결과만으로 라이브를 수정하지 않는다. 기존 라이브/단일쓰기 담당 01a10ef3-e5bf-7660-bf5e-773c20c77465의 실행권은 이번 방 개설로 이전되지 않는다. 실제 수정 전 00에서 담당 인수를 명시한다.
+- 시작점: contracts/supplier-input-sheet-spec.v1.json의 changeControl/dropdownPolicy.lightweight/uiOwnership; docs/SUPPLIER-INPUT-SHEET-RUNBOOK.md 현행 절; scripts/shared-sheet-ux.mjs, scripts/shared-sheet-lightweight.mjs
+- 향후 완료 조건: 전체 탭 fresh readback·값/수식 보존·표시 검증과 전후 이력을 남긴다. 없는 공급사 탭을 임의 복원하지 않는다.
+
+**04 정규화·검수 후보**
+
+- 인계 경계: 원문 수집은 02/03, 차량 이름/UID 기준은 05/06, 금액·보증금 판정은 08 함수를 재사용한다. canonical 승격/refresh transaction은 07.
+- 시작점: docs/ERP5-PRODUCT-MAPPING.md, docs/ERP5-MAPPING-DECISIONS.md, docs/LEGACY-NORMALIZATION-RULES.md, docs/SHEET-BLANK-FILL.md; src/adapters/erp5-product-mapping.ts, normalize-shared-sheet.ts, legacy-normalizer.ts
+- 향후 완료 조건: 0/누락/미해석·출고불가/계약중/취소를 추정하지 않고 후보 사유·원천·반례 테스트를 제시한다. 후보 PASS를 운영 정본 반영이라고 하지 않는다.
+
+**05 차종 마스터·제원**
+
+- 인계 경계: 차량 개체 UID/번호 변경은 06. 입력 UI 선택지는 03. 공급사 실제 차량 상품 승격은 07. ai-ops 차종 기준은 대표만 변경한다.
+- 시작점: ai-ops docs/차종-기준-한장.md가 유일한 판정 권위; docs/VEHICLE-SUBMODEL-NAMES-V1.md, docs/VEHICLE-MASTER-REFERENCE-IMPORT.md, docs/VEHICLE-MASTER-NEW-USED-BOUNDARY.md; src/application/vehicle-master-*.ts, src/domain/vehicle-master*.ts
+- 향후 완료 조건: 차종 기준·원천 증거·변경 계획·digest·되읽기를 분리한다. blocked vehicle-reference import를 우회하지 않고 더 나은 규칙은 결정필요로 올린다.
+
+**06 차량 UID·동일성**
+
+- 인계 경계: 차종 계층은 05, asset/canonical transaction은 07. 판정 모듈과 migration plan을 넘기고 다른 supplier writer를 새로 만들지 않는다.
+- 시작점: 최신 main docs/VEHICLE-UID.md, src/domain/vehicle-uid.ts, src/domain/vehicle-plate.ts 및 PR434
+- 향후 완료 조건: 번호 변경·미입력·중복·VIN 충돌·미래 효력 날짜의 반례와 migration digest를 확인한다. 옛 hash를 consumer readback 없이 제거하지 않는다.
+
+**07 Canonical·쓰기 권위**
+
+- 인계 경계: 후보 생성은 04, UID 판단은 06, 상업조건 함수는 08, projection/outbox 소비는 11, Firebase target/layout 및 인증은 19. 기존 CatalogStore를 재사용한다.
+- 시작점: docs/CANONICALIZATION.md, docs/FIELD-AUTHORITY.md, docs/FIELD-LINEAGE.md, docs/REVIEWED-SOURCE-CHANGE.md, docs/WRITER-OWNERSHIP-TRANSFER.md; src/application/canonicalize-catalog-candidate.ts, reviewed-source-change.ts, catalog.ts, src/infra/firestore-store.ts
+- 향후 완료 조건: 충돌/재실행/근거 소실/오래된 source 시점에 fail-closed이며 revision·audit·lineage·receipt 정합을 검증한다. 코드 시험과 실제 writer cutover를 구분한다.
+
+**08 상품·요금·보증금·정책**
+
+- 인계 경계: 수수료/계약연결은 09, source mapping은 04, canonical mutation은 07. Estimate 엔진의 계산/발행 계약을 흡수하지 않는다. 보증금 adapter에는 공통 domain 판정만 넘긴다.
+- 시작점: docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary, docs/OFFER-COMMERCIAL-TERMS-POLICY.md, docs/POLICY-CORRECTION.md; src/domain/deposit-evidence.ts, src/application/resolve-offer-commercial-terms.ts, product-condition*.ts
+- 향후 완료 조건: 조건별 근거·원문 양수/무보증 확인·단위·모호한 정책 선택을 시험한다. 테스트된 금액과 공급사 확인/운영 readback을 구분하고 미해결 의미는 HOLD로 남긴다.
+
+**09 수수료·정산 연결 사실**
+
+- 인계 경계: 접수/계약 workflow와 사람 확정금액·정산 원장의 의미는 기존 Admin 소유다. Admin endpoint 통합은 15/12, shared gateway 변경은 01. 신규 정산 원장·자동 금액 확정은 만들지 않는다.
+- 시작점: 최신 main docs/SETTLEMENT-COMPLETION-P0.md, docs/BUSINESS-DATA-CONNECTION-MAP.md; src/application/f04-commission-projection.ts, contract-fee-link.ts, settlement-id-link-audit.ts, settlement-ledger-view.ts
+- 향후 완료 조건: 기록액/계산액/확정액을 구분하고 과거 offerRevision·단일 term 연결·모호성 HOLD·취소 원문 보존을 검증한다.
+
+**10 사진·미디어 제공**
+
+- 인계 경계: 공급사 사진 수집 RAW는 02, 상품 신원은 06, 사진 canonical write는 07, ERP gallery UI는 14, sheet link 발행은 13. 기존 B3Q 사진 발행 담당 결과를 인수 확인한 뒤 맡으며 그 담당에게 무단 실행 요청하지 않는다.
+- 시작점: docs/IANCAR-SOURCE-CAPTURE.md, docs/ERP5-CONSUMER-RUNTIME.md와 NEXT 사진 운영 증거; 해당 photo transport/manifest의 기존 코드 위치는 시작 때 확인한다.
+- 향후 완료 조건: 404/빈목록/삭제를 구분하고 URL뿐 아니라 대표 image bytes와 실제 gallery readback을 각각 기록한다. 다른 번호가 보이는 사진은 공급사 확인 HOLD로 보존한다.
+
+**11 Projection·Release·Outbox**
+
+- 인계 경계: canonical 쓰기는 07, 소비처별 schema 내용은 13~17, HTTP 제공은 12, runtime 배포는 20. src/worker.ts와 공통 projection/release 생성 구현 담당이다.
+- 시작점: docs/PROJECTION-RELEASE-EVIDENCE.md, docs/DELIVERY-IDEMPOTENCY.md, docs/RUNTIME-BOUNDARIES.md; src/worker.ts, src/shared/projection-integrity.ts, projection evidence 모듈
+- 향후 완료 조건: 부분 실패/중복/역순 event/HOLD 재시도/동일 digest 재사용을 검증하고 source→release의 exact receipt를 남긴다. ACTIVE 보존과 최신 원천 현재성을 분리한다.
+
+**12 공개·공통 데이터 API**
+
+- 인계 경계: 인증/권한 정책은 19, 조건 해석은 08, 소비처별 계약은 14~17, 공유 server/gateway 파일의 최종 편집은 01이 단일 통합한다. quote route가 Estimate 계산 엔진 소유를 바꾸지 않는다.
+- 시작점: 최신 main docs/PUBLIC-PRODUCT-FEED-DESIGN.md, docs/PUBLIC-RUNTIME-PLAN.md, docs/DATA-ACCESS-GATEWAY.md; src/api/consumer-server.ts, consumer-gateway.ts와 PR437
+- 향후 완료 조건: field allowlist·불필요한 내부/개인정보 노출·오류 응답·기간/거리/보증금 tuple을 시험한다. HTTP200을 상품 정합성/전환 완료로 판단하지 않는다.
+
+**13 F01 상품 발행**
+
+- 인계 경계: 공통 입력 시트는 03. F86은 대표2026-10-08 최신 지시에 따라 상품 발행/알림 완료조건에서 제외하고 원본·이력 보존한다. ERP UI는 14, release 생성은 11.
+- 시작점: docs/F01-F86-SHEET-SPEC.md, docs/F01-F86-SHEET-RUNBOOK.md, docs/F01-F86-ONLINE-HANDOFF.md, docs/F01-F86-ERP-PUBLICATION-CONTRACT.md의 최신 F01 지시; scripts/sheet-presentation*.mjs, src/application/sheet-publication-bridge.ts
+- 향후 완료 조건: 승인된 exact snapshot과 F01 전체 fresh readback·실제 화면을 대사한다. 표시 PASS와 모든 consumer cutover를 구분하고 운영 pin 미연결을 자동화 완료라고 하지 않는다.
+
+**14 ERP·화이트라벨 연동**
+
+- 인계 경계: Data 공통 API 구현은 12, domain 의미는 08, F01은 13, ERP 제품의 업무/페이지 구현은 ERP 전담으로 인계한다. 모니터 중복/신규 스케줄은 만들지 않는다. 기존 읽기 모니터는 01a10f56-3680-7b91-8337-a1e907fc391a에 그대로 남으며 이 새 방에는 예약이 없다.
+- 시작점: docs/ERP5-CONSUMER-RUNTIME.md, docs/CONSUMER-READ-PILOT.md, docs/CONSUMER-SWITCHBOARD.md, docs/CONSUMER-OUTPUT-OWNERSHIP.md
+- 향후 완료 조건: 소비처 각각의 정확한 버전·조건/권한·실제 응답/화면·receipt를 검증한다. 기존 이안카/손오공 monitor를 중복 실행하지 않고 skipped를 성공으로 세지 않는다.
+
+**15 Admin 데이터 계약**
+
+- 인계 경계: Admin workflow 의미/수정은 Admin 프로젝트 소유. 수수료 매칭은 09, 공통 gateway 등록·shared 파일은 01/12, runtime 배포는 20.
+- 시작점: docs/ADMIN-CATALOG-CONSUMER-CONTRACT.md, docs/ADMIN-RUNTIME-ACTIVATION.md, docs/BUSINESS-DATA-CONNECTION-MAP.md; src/application/admin-catalog.ts, contracts/admin-catalog-view-v1.schema.json와 PR445
+- 향후 완료 조건: 기본 docs/digest 호환·opt-in limit·필드 sourceValue·UNKNOWN/INVALID·명시적 ID 연결·조직별 권한을 검증한다. 원문 전체 개수와 실제 연결 완료를 구분한다.
+
+**16 Sales·파트너 데이터 계약**
+
+- 인계 경계: 고객/통화/영업 상태 workflow의 의미/이관은 Sales 소유다. ERP whitelist consumer는 14, Admin은 15, Estimate는 17, 공통 API/auth는 12/19.
+- 시작점: docs/DATA-DOMAIN-CATALOG.md, docs/FIREBASE-CONTROL-PLANE.md, docs/FIREBASE-ACCESS-MIGRATION-MAP.md, docs/CONSUMER-SWITCHBOARD.md
+- 향후 완료 조건: 데이터별 현행 source/authority/writer/consumer를 명시하고 미구현 범위를 HOLD로 공개한다. partner별 실제 필드/권한 receipt 없이는 전체 연결 완료를 주장하지 않는다.
+
+**17 Estimate 기준 데이터**
+
+- 인계 경계: Estimate 계산/견적 발행 엔진과 workflow는 Estimate 소유다. 차종 정본은 05, 요금/상업조건은 08, dedicated runtime 운영은 20, auth는 19.
+- 시작점: docs/ESTIMATE-NEWCAR-MASTER-CONTRACT.md, docs/ESTIMATE-WRITER-RUNTIME.md, docs/VEHICLE-MASTER-NEW-USED-BOUNDARY.md; src/application/estimate-master*.ts, src/ports/estimate-artifacts.ts, src/infra/estimate-artifacts-firestore.ts
+- 향후 완료 조건: 원천/digest/version/구조 검증·기존 quote/share immutability/동시성·canary 증거를 구분한다. synthetic canary를 실제 견적 전환 완료로 확대하지 않는다.
+
+**18 Control Plane·Console**
+
+- 인계 경계: 도구 화면이 canonical authority/domain 정책을 새로 정의하지 않는다. trace/command 핵심 로직은 07, serving/API는 12, health 판정은 21. 공개 제품 UI는 각 제품 소유다.
+- 시작점: docs/CONSOLE-UX.md, docs/ui/U-01-*-UI-CONTRACT.md; console 관련 기존 UI 경로와 scripts/tests/*actual-route.browser.py
+- 향후 완료 조건: 실제 route에서 RAW→candidate→canonical→release provenance·HOLD·권한·명령 충돌 표시를 검증하고 Console 실패 시 ACTIVE reads 유지 여부를 11과 확인한다.
+
+**19 인증·권한·Firestore 경계**
+
+- 인계 경계: Catalog field authority/writer 의미는 07, 실제 IAM/production binding 실행은 별도 승인 후 20, workflow CI/공용 등록은 01/21. 중앙 초기화 경로를 추가하지 않는다.
+- 시작점: docs/IDENTITY-AND-ACCESS.md, docs/DATA-ACCESS-GATEWAY.md, docs/READ-RUNTIME.md; src/infra/firebase-target.ts, firestore-layout.ts, src/application/data-access-gateway.ts, contracts/firebase-access-authority.v1.json
+- 향후 완료 조건: unauth/다른 조직/다른 field/잘못된 target/fail-closed 반례와 audit append 경계를 검증한다. 비밀값을 코드·채팅·공개로그에 기록하지 않는다.
+
+**20 런타임·배포·복구**
+
+- 인계 경계: 기능코드는 담당방, workflow 공용 CI는 01/21, auth/IAM 설계는 19. 배포/IAM/writer cutover/스케줄/DB·시트쓰기 승인 여부를 실행 단위로 확인한다. 이번 개설은 실행 승인이 아니다.
+- 시작점: docs/READ-RUNTIME-DEPLOYMENT.md, docs/READ-RUNTIME-ACTIVATION.md, docs/DATA-DELIVERY-OWNER-ROLLOUT.md, docs/ADMIN-RUNTIME-ACTIVATION.md, docs/ESTIMATE-WRITER-RUNTIME.md와 PR437
+- 향후 완료 조건: exact code/image/run/runtime/readback·복구 시간·backup/restore receipts를 제시한다. workflow success/skipped/실제 쓰기/되읽기를 각각 구분한다.
+
+**21 품질·회귀·독립 검증**
+
+- 인계 경계: 기능 수정은 각 소유방에 결함과 재현근거로 인계한다. 테스트 대상과 같은 구현 의미를 재정의하지 않는다. 공용 CI 수정은 01과 단일 통합, 운영감시 신규예약은 20 승인 범위다.
+- 시작점: docs/DATA-HEALTH.md, docs/ERP5-CONTINUOUS-AUDIT.md, docs/CONSUMER-SWITCHBOARD.md; src/application/catalog-health.ts, consumer-health.ts, consumer-readiness.ts, scripts/check-*.mjs, tests/
+- 향후 완료 조건: PASS/FAIL/HOLD/UNAVAILABLE·검사 범위·exact head·원천 관측시각·skip을 명시한다. implementation/test/persistence/deployment/cutover를 나눠 보고한다.
+
+**22 시트 화면·변경 추적**
+
+- 인계 경계: 공통 입력 수정은 03, F01 publisher 수정은 13, source/canonical 복구는 02/07, 권한변경은 19/20 별도 승인. 직접 복원·삭제·정렬·필터값 쓰기를 하지 않는다.
+- 시작점: docs/SUPPLIER-INPUT-SHEET-RUNBOOK.md, docs/F01-F86-SHEET-RUNBOOK.md, docs/NEXT-START-HERE.md의 행 감소·실제 공급사 계정 검증 HOLD
+- 향후 완료 조건: 전후 snapshot·본문/수식/표시 범위·감사 로그의 확인/미확인을 구분하고 원인 미확정은 HOLD로 둔다. 관리 계정 화면을 공급사 권한 검증으로 세지 않는다.
+
+- 검증: 앱 fork/title/message/move/reorder 성공 영수증 및 section 전체 23개 ID·순서·제목 및 각 방 cwd/역할 확인 응답 되조회; 문서 `git diff --check`. 이번 변경은 역할 배정과 기존 NEXT 기록뿐이며 코드 테스트 대상 변경 없음.
+- 남은 HOLD: 기존 PR/배포/원천·소비처 현재성/UID 이전/미확정 정책 의미/실제 계정 화면·행감소 writer 증거는 기존 상태 그대로다. 신규 모니터/예약/상시 자동 배정은 설정하지 않았다. 기존 B3Q 사진·발행 및 광범위 기능 담당과 실행권 인수는 각 실제 업무 시작 전에 확인한다. 개설 당시 기록은 미커밋이었으며 이번 공용 packet에서 최신 main에 통합한다. 기능별 운영 완료를 뜻하지 않는다.
+- next_start_here: 대표는 00 지휘 또는 해당 번호방에 구체적 목표를 지시한다. 00은 기존 실행 담당·latest main/PR·HOLD를 확인해 담당 1명, 수정 범위와 완료 증거를 배정하고, 01이 공유 변경을 단일 통합한다. 이 절은 작업방 역할 지도이며 업무/정책 정본을 대체하지 않는다.
+
+
+
+### 2026-10-11 기존 read runtime 검증 전용 경로 — 코드 준비 / 운영 검증 미실행
+
+- 목적: run38138787782/source24fd7의 deploy step 성공 후 readiness 실패와 별개로 새00027-9kd의 실제 상태·인증 readback을 전체 재배포 없이 검증한다. root Console 21:24 healthy/traffic100 및 digest b443 관측은 root 증거이며 실패 assertion 원인은 아직 확정하지 않는다. 기존 timeout30 명시는 public 분기에만 있어 private timeout 변화 원인을 단정하지 않는다.
+- 변경: 기존 workflow dispatch verify_only와 expected source SHA/digest/revision 입력, 별도 verify job을 추가했다. verify에서는 deploy job 전체를 건너뛰며 main/fixed private target/SA/pins를 인증 전 검사한다. 실서비스와 revision Ready/latest/traffic100/SA/concurrency/환경 binding/secret2/이미지 경로+digest, Artifact Registry expected-source tag digest, private IAM 및 canonical URL을 대조하고 기존 403/compat200/header/schema readback을 재사용한다. 태그 유무 표현차이는 같은 경로·digest일 때만 허용한다. 기존 배포 image 문자열 assertion은 변경하지 않았다.
+- 검증: job 격리 정적1 PASS, build/architecture/access PASS. Linux 행동시험의 tag 표현/권한/버전/이미지/traffic/Ready/입력 오류 사례는 Windows jq 미설치로 로컬 미실행, 필수 exact CI에서 확인한다. 실제 verify dispatch/재배포/원천 조회/사진 business 등록0. readback은 기존 immutable audit append를 사용할 수 있어 모든 DB 쓰기0이라고 표시하지 않는다.
+- 실 실행 후 보완: verify run38139978484/workflow06338은 metadata 단계 성공·deploy 전체 skip이지만 인증/readback2단계가 잔존 use_consumer_secrets 조건으로 skipped됐다. 따라서 그 run의 성공을 403/compat200/header/schema 완료로 확대하지 않는다. 고정 private verify의 두 단계만 해당 조건을 제거해 필수 실행하며 기존 deploy 조건은 보존한다. 정적 회귀에서 단계 조건 부재를 확인했고 local2 PASS/1 Linux metadata 미실행이다. 다음 exact CI·검토 후 00 단일 verify 재실행으로 실제 readback 증거를 확보한다.
+- 동일 원인 수정: 실제deploy38138787782의 resolved USE=false 안전 로그와 root timeout30 관측을 대조했다. missing input의 느슨한 비교로 private 환경 사전/사후검사도 실행되지 않았으므로 앞 deploy step 성공을 그 내부검사 PASS로 해석한 주장은 철회한다. toJSON(input)이 정확 boolean false일 때만 공개 모드로 분기하고 미정의/null/빈 입력은 private 기본값을 유지한다. 모든 후속 auth/smoke 조건은 단일 resolved mode를 사용한다. private timeout300 명시 및 readiness300 검사를 준비하고 public 명시 false의30초는 보존한다. verify의 인증2단계는 필수이며 성공 summary는403/200/contract/header 실제 완료값을 요구한다. related local6 PASS/13 미선택, build/architecture/access PASS; 실제 timeout 복원 배포는 미실행이고 00/root의 구체 후속 rollout 범위로 분리한다.
+- next_start_here: 12/21 최종 exact 검토와 CI 후 정상 통합, 00 단일 owner가 expected source24fd7/digest b443/revision00027-9kd로 verify_only를 실행한다. 성공 summary는 기존 서비스 검증이며 배포 성공을 새로 발명하지 않는다. 사진 사람 확인·등록·ERP5 cutover는 별도 후속이다.
+
+
+
+### 2026-10-11 read runtime 기존 환경 보존 — 코드 준비 / 운영 미적용
+
+- 원천 관측: root 본인 GCP Console 21:04 KST에서 기존00026/source1067 healthy·traffic100, plain3+F04 key 및 consumer4/Iancar1 secret2, 8080/concurrency8/max10/volume0를 확인했다. 01 직접 운영 조회가 아니다.
+- 변경: 기존 전체 plain 환경 교체 대신 update를 사용한다. exact c2의 F04 repository env·필수 guard·append는 보존하며, 기존 private service F04가 nonempty이고 repository 주입값과 같은지 동일 bash step 메모리에서 배포 전에 확인한다. 초기 controlled3만/F04 제거 판단은 root의 오래된 코드 관측 정정 후 철회했다. 기존 추가 환경·F04·secret refs를 배포 전후 같은 step 메모리에서 비교하고 controlled3 production/firestore/freepasserp5를 확인한다. 계획한 secret2와 실제 참조도 배포 전 일치해야 하며 누락·불일치·extra secret는 차단한다. 원문/해시/환경 JSON을 로그·파일·GITHUB_ENV에 저장하지 않고 성공 boolean만 남긴다. public 신규서비스에는 private 기존 F04 검사를 적용하지 않는다. IAM/region/service/target 변경0.
+- 검증: 기존 public/private gate 관련2 PASS, 새 jq 기반 환경보존·F04 누락/빈값/주입불일치·secret 불일치/추가·배포 후 환경변경/driver 오류 행동시험은 로컬 Windows jq 미설치로 미실행이며 Linux 필수 CI에서 확인한다. build/architecture/access PASS. 실제 dispatch/등록/배포0, CI와 독립 검토는 최종 exact head에 결속한다.
+- next_start_here: 최종 workflow SHA 검증 후 기존 단일 실행 owner만 정상 배포한다. before/after 환경·binding·secret 보존 검증과 actual image/Ready/SA/privateIAM/traffic 확인을 별도로 결속한다. 불일치면 후속 등록/cutover를 중단하고 승인된 복구 절차로 인계하며 자동 rollback은 하지 않는다. 사람 사진 확인과 business 등록은 strict reader serving 확인 이후다.
+
+### 2026-10-11 ONE 고정 사진집합 사람 확인 등록 지원 — CODED / TESTED, 운영 미적용
+
+- 목적/소유: 00가 01에게 기존 photo-only compatibility bridge와 reader 관련 최소 hunk를 단독 배정했다. 기준 main `c1e2a15bff1e650347d3b7d1d42cb9e185140272`; 이 기록을 포함하는 구현 commit이 exact 준비 revision이다. 기존 `publishIancarPhotoReferences`/`runIancarPhotoPublication`은 존재하지만 사람 확인 입력을 지원하지 않았다는 점을 보완한다. 새 Canonical Product 필드·Firebase app·setter/store·source persistence 경로는 만들지 않았다.
+- 변경: 순수 검수 patch planner와 명시 `verificationOnly` 입력으로 기존 `photo_original_refs` 및 `iancar_one_photo_ids`만 등록 계획에 포함한다(provider RP031 보존). 실제 사람 확인자/현행 방법/UTC 시각·ONE API version·exact 차량 binding·전체 source/serving 사진 순서·사진ID digest·실제 원본 SHA256/MIME를 결속한다. 기존 digest/updateTime CAS/typed 원본 백업/atomic patch/되읽기/동일 patch 복구 틀을 재사용하고 absent/null/빈 배열을 구분한다. 수집기 기본 호출은 확인 기록을 생성하지 않는다. 원래 preview 관측·사람 확인 시각과 적용 직전 신선한 동일 집합 관측은 분리하며 실제 확인 시각을 수정해 freshness를 연장하지 않는다.
+- reader 범위/검증: 새 `sourceKind=IANCAR_ONE` 기록에만 binding·전체 집합/순서·원본 hash/MIME 대조를 추가했다. 기존 Drive/일반 소비자/인증·공통 확인 gate는 보존한다. 최초 원본 검사 → reader 내부 fresh 집합 재확인 → 성공 감사 후 전송 직전 fresh 집합·원본 hash 재확인이다. synthetic source call 순서는 index `[0, undefined, 0]`: 이미지 한 건당 detail3/bytes2, manifest는 detail3이며 실 latency는 아직 미관측이다. 전체집합 승인만 지원하고 부분 승인·0장 가짜 기록은 허용하지 않는다.
+- 실제 실패 조건: 00가 전달한 2026-10-11 20:22 KST B3Q 기존 중앙 SDK/ADC 단일 owner의 상품1건/fieldmask9 조회 영수증에서 문서 존재·RP031·listable·상태·ONE binding은 통과했고 `photo_original_refs`는 ABSENT, `CONTENT_VERIFICATION`은 실패했다. 이는 제한된 UI 미표시 추정과 다른 실제 필드 조회 근거이며 Data01 직접 조회가 아니다. 해당 단건의 검수 기록 누락이 확정됐지만 ONE 사진0장이라는 뜻은 아니다. root 중복 predicate 조회는 중단됐고 동일 owner가 원본 preview 준비를 이어간다.
+- 준비 증거/남음: 관련 테스트56 PASS, build/architecture/data-access boundary PASS, standards exit0/PARTIAL. 기존 consumer gateway110 PASS; 전체 로컬 회귀는 당시2246 PASS/16 SKIP/2 FAIL(local bash jq 미설치 및 기존 entrypoint5초 timeout), entrypoint 단건20초 예산 재검사는 PASS였다. CI의 최종 exact-head 결과는 PR 영수증으로 결속한다. 다른 상품의 원천 predicate/ONE 원본 preview·사람 확인·선택된 등록 plan/정상 writer 실행권한·Windows/private backup 권한·persistence·실앨범/latency·ERP5 cutover는 아직 미검증이다. 이번 준비의 source GET/등록/생산 쓰기/배포0이며 실제 확인값은 synthetic 테스트 외 생성하지 않았다.
+- 후속 단일 실행/성능 준비: 준비 PR461은 head `e610d3020c467506f3ddbe30624b76d39d6732b3`에서 Core38135428045/Canon38135428218 SUCCESS 및12·21 독립 blocker0 후 merge `9a53cbd3365583a8a5c8caf2f0207b3796797310`(20:26:33 KST). 이어 기존 collector의 config/전체수집 이전에 `--reviewed-plan=<privatefile> --expected-digest=PLAN` 단일 상품 dry-run discovery와 `--expected-digest=<실제64hex> --apply`를 추가했다. 적용은 별도 `IANCAR_PHOTO_REVIEW_APPROVED=true`, exact plan/CAS를 요구하며 실행 이후 오류가 나면 실제 commit=true 또는 UNKNOWN을 보존해 미적용으로 오인한 재실행을 막는다. 승인 환경표시는 실제 사람 검수나 writer 권한의 증명이 아니라 실행 fence다. 이 경로는 기존 sync/photos/raw/restore 옵션과 혼용·중복·unknown 필드·복수 상품·미확인 사람 기록은 거부한다. 오래된 자료의 dry-run 및 모든 apply는 동일 ONE 집합/순서/모든 실제 raw SHA·MIME를 재확인하고 성공한 뒤에만 fresh row 관측 시각을 갱신한다. 원래 사람의 sourceObservedAt/VerifiedAt는 보존하며 날짜만 재포장하지 않는다. 첫 사람 확인이 승인한 동일 상품/필드 적용 범위 안에서 discovery→같은 digest apply를 수행하며 추가 사람 승인을 반복하지 않는다. dry-run도 immutable Data Access audit append를 사용하므로 business source 쓰기0과 audit create는 구분한다.
+- 후속 성능 범위: 새 ONE image의 실제 raw bytes는 최초1회 받아 승인 hash/MIME 대조 후 frozen 복사본만 내보낸다. 내부 recheck는 DB/검수/철회·연결 검사, 감사 후 최종 revalidate는 DB와 fresh ordered source 집합을 검사한다. 같은 ID의 새 bytes를 뒤늦게 조회해 응답을 교체하지 않는다. source 호출은 image detail2/bytes1, manifest detail2/bytes0으로 줄였다(위 PR461의 detail3/bytes2는 당시 구현 이력). 기존 Drive·일반 소비자 동작과 실패 시 차단은 보존한다. 관련 CLI18/등록·reader56 테스트 PASS 및 build/architecture/access 검사 PASS; 실제51장 원본 preview는 같은 B3Q owner가 준비 중이라는00 인계이며 실 latency·manifest12초/상세25초 budget·전체 앨범·채널/60초는 root 후속이다. 실제 등록/배포0, 실행 writer 권한·private backup 보호 및 실제 사람 확인은 남음.
+- ID 재발급 실측 후 content 기준 보완: PR462 final head `69d204b5b0f8dd372fb638864fd0ce2039b7a38b`, Core38136145994/Canon38136144939 SUCCESS·12/21 blocker0 후 merge `5d34ff0b5a9b7e0917eb06fb7dc6da5b26a9699c`(20:38:13 KST). 동일 B3Q 원본 owner의 20:39:53 KST 재조회에서 차량/count51은 같고 이전 ID 겹침0, 대표 사진 raw SHA는 같았다. 모든 사진 내용 동일이나 비대표 순서 안정성까지 증명하지 않는다. 00 배정 후 새 명시 `CONTENT_ORDINAL/1` 검수만 차량 binding·source/serving ordinal·실제 representative·MIME·원본 SHA로 집합을 결속하고 재발급 ID는 조회 handle 및 capture 근거로만 보존한다. 이 기준의 patch는 provider와 photo_original_refs 2필드이며 기존 iancar_one_photo_ids는 보존한다. 기존 ID 기준/3필드 기록은 분리 지원하고 unknown/mixed 기준은 차단한다. manifest는 현재 count/대표/순서만 확인하며 전체 원본 내용 검증 성공으로 확대하지 않는다. 각 image는 현재 handle의 raw hash/MIME가 승인값과 일치할 때 frozen bytes를 전달하고, apply는 전체 raw를 재확인한 뒤 기존 writer를 사용한다. 관련 등록71/CLI21/gateway110 총202 PASS, build/architecture/access PASS(20:50–20:51 KST); 이 보완의 운영 등록/배포0. 실제51장 재검증·사람 확인은 동일 source owner와 root가 이어간다.
+- 승인 사진 등록 writer 보완: 기존4개 실제capture JSON에 당시opaqueID 배열이저장되지않아CAPTURED_ID_ARRAY_NOT_RETAINED가확정됐다는10/root/00 영수증을접수했다. 콘텐츠권위는captured ID preimage가아닌승인SHA/MIME·ordinal·대표·차량binding이며digest는당시provenance로보존한다. CONTENT_ORDINAL/1만두arrays 모두absent를허용하고 한쪽만없음/legacy IDbasis 누락은거부한다. arrays가있으면기존preimage대조유지,없으면원래64hex digest·완전ordinal permutation/대표우선순서·사람확인·내용집합digest를검사하며현재ID를과거배열로위조하지않는다. 기존2필드patch/CAS/typedbackup/되읽기·apply전체raw검증을유지한다. 등록83/CLI23 합106 PASS+gateway110 PASS, build/architecture/access PASS. runtime reader조건/배포변경0,실제source조회·사업등록0. 12/21 exact검토·CI 후새writerpin을기존ce96 단일owner에인계하고00 GO에서만적용한다. 대기중필드조회시각/B3Qtask표현정밀화2hunk는실제등록receipt와함께갱신한다.
+- next_start_here: 12 단건 predicate와 10 단일 ONE 원본 preview를 기존 정상 owner 환경에서 확보한다. 실제 검수 범위와 등록/복구 plan을 완성해 사람의 최종 확인을 받은 뒤 지정 단일 writer만 적용·새 되읽기를 수행하고 root가 실앨범·채널·60초 및 cutover 증거를 결속한다. [Issue24 기존 최종 인계](https://github.com/freepass-creator/freepass-data/issues/24#issuecomment-6107735471)는 과거 packet 상태이며 이번 준비를 실제 운영 완료로 소급하지 않는다.
+
+
+### 2026-10-11 PR437 main 통합 / 공개 부분 호환과 사전 승인 gate
+
+- 대상: 기존 PR437 head `f1d4f892d5418fd679b6276117496676fb8fdb7f` + 확인한 main `f5e931889749ec869ae4b996725cc22aa8bf5784`; 격리 작업공간 `C:/Users/dudgu/.codex/worktrees/pr437-integration/freepass-data`. 최종 merge commit은 이 기록을 포함하는 Git commit으로 식별한다. 공유 checkout의 다른 작업 NEXT 변경은 보존했다.
+- 변경: main 승인 사진 reader 두 번째 인자와 sourceScope/current-source 계약 보존, public readCollections 세 번째 인자, 한글 공개 ID·복수 alias/token fail-closed·보증금 KNOWN/ZERO/UNKNOWN/NOT_APPLICABLE·사진 배열 보존. public 서비스/entrypoint/SA 식별 또는 익명 grant 요청은 인증/이미지/배포 전 정확 target와 plan digest 검증, 배포는 private 후 별도 승인 grant. 기존 private consumer 기본 경로 보존.
+- 검증: 최종 전체 Vitest 147 suites / 2154 PASS / 16 skipped; arch/access/sheets/build/read smoke/shadow/delivery-owner/dashboard PASS. standards 실행 exit0이나 의미 상태 PARTIAL 유지. 21 읽기 독립 검토에서 gate·alias 보완 확인, 운영 완료 판정 없음. plan JSON digest `ab7bd174b15ddfb8426614d3db447e0164f6d894dea212f13ab15456e676092f`.
+- 원격 CI 후속: head `275529ce0fa057be58b3ed3193340f2f88d77286` Canon PASS/Core FAIL(기존 lease expiry 시험의 만료1ms 전+실제 경과시간 경계). 해당 시험만 performance clock 고정/restore로 결정적으로 만들었으며 projection-integrity54 PASS. 운영 코드/승인 gate 변경0; 후속 exact head CI를 다시 확인한다.
+- HOLD: 공개 text 숫자/원/% 필터, type/status 변환, policy coverage 및 실제 전체 DTO 동등성; rate limit/current whitelabel registry/photo bytes; 원천 최신성/전건성/Data-to-ERP 운영 인과; 원래 task owner 미확인(원격 다중 writer 감시). 기존 head CI는 새 후보 CI가 아니다. A 공개 runtime 후보와 B 별도 count-only 관측을 분리하며 COLLECTED 공개/HOLD 해제/canonical cutover 포함0.
+- 00 별도 안전 관측 B(12:50 KST): read 전후 head 동일 `run_61934839374a9d0d4f7d9b3164bc8487b587b680`, source `shared-sheet:fa91e570d9bb9b3b0667451e`, observed `2026-10-10T22:00:12.027Z`, RAW/candidate175/175, digest `76a64c4160c8f0b2735436db194df4e4db30fb618545824bdf1ea8e38f416fd6`. PT-0001 captured 상품행8/normalized supplier PT8/HOLD8/listable false/SOURCE_IDENTITY_NOT_CANONICAL, 공개·비공개 구분 UNKNOWN8. 판매상태 출고협의4/출고불가4는 별도 predicate 축이며 실물수·공급사 전건수·public 수가 아니다. RP007 관측0, namespace 대응 미확정. freshness350분/TTL30초 초과 HOLD, coverage PARTIAL 및 미관측 연카·스위치·플랜에스에이.
+- 00 별도 기존 bridge 관측 A: Cloud Run compat200 `03:41:52.878915Z`/`03:43:17.905518Z`, revision `00024-w6g`; 중앙 erp-com READ_CONSUMER_CATALOG_COMPAT SUCCEEDED `03:41:56.461Z` req-24/`03:43:21.584Z` req-2c, 각각1776/metaDigest 존재. 기존 인증 bridge 운영은 확인했지만 correlation 부재로 특정 public GET 인과/mode/ACTIVE는 HOLD. 새 공개 runtime 배포 증거가 아니다.
+- next_start_here: 최종 commit/PR437 새 head와 CI 영수증을 GitHub에서 다시 확인한다. 운영 ready HOLD; IAM/배포/consumer 등록/DB·시트 쓰기/원천 실행/main merge0. 원격 head가 기존 f1d4에서 달라지면 push 중단·취합하고 force push하지 않는다.
+
+## 2026-10-10 신뢰도 점검표 읽기 전용 산출: `src/application/trust-scorecard.ts`·`src/jobs/audit-trust-scorecard.ts`·`docs/TRUST-SCORECARD.md` 추가, 기존 parity/deposit/fee/photo/status/source head 재사용, 검증은 종료 보고 기준, next_start_here: 운영 실행은 네트워크 가능 환경에서 `TRUST_SCORECARD_OUT_DIR` 저장소 밖 절대경로로 수동 실행.
+
+
 ## 2026-10-10 공개 상품 응답 설계
 
 - `docs/PUBLIC-PRODUCT-FEED-DESIGN.md` 작성: ERP4 `/api/catalog/feed`·`/api/catalog/quote`를 FreePass Data 공개 route로 대체하는 v1 계약, allowlist, 보증금 재사용, 증명 계획, 10-14 ERP4 응답 종료 제안. 코드 변경·커밋·push 없음.
@@ -374,161 +889,161 @@
 - HOLD: 운영 pin/시트 변경 직전 승인과 새 F01/F86 readback, AI Ops master 채택 및 실제 세션 채택, reference API 배포/adoption. 최종 Claude 검토 대기. 전체 시험 baseline 실패를 이번 사진 변경의 PASS로 숨기지 않는다.
 - next_start_here: engine `53b8c18e2c9143ace2c26f0349fc959d61a28b19`, 운영 pin 후보 `6b86d655`/ERP PR546 (`work/freepass/sonogong-photo-pin-20260930`), AI Ops `24538b3`/PR43을 이어서 검토한다. PR545는 기존 branch 규격 오류로 닫고 동일 수정 PR546으로 대체했다. 승인 질문은 F01/F86 손오공 차량번호 링크→기존 ERP 전체 갤러리와 자동 갱신 유지에 한정한다. 현재 운영 writer pin은 `e6727ff04fcf98380701fa6360c36f313e0e321f`다. 순수 코드/계약 테스트 PASS를 live 완료로 확대하지 않는다.
 
-<a id="data-start"></a>
 
-## 2026-10-01 이안카 수정 API 재반영 요청 — NOT PUBLISHED / HOLD
+### 2026-10-11 18:42 수수료 90기간 해결안 / 검토결과 고정 v2
 
-- 최신 사용자 결정(예약): `RESERVED`는 공통 표시 **계약중** / 호환 status_kind **선점**, available=false. 원천 RESERVED를 보존하며 실제 계약 생성/계약락 설정은 하지 않는다. 기준 revision `f4a3cac`; 기존 ONE adapter/test/API 계약만 확장했다. `projectIancarOneReservation`은 표시 helper이며 아직 발행 writer에 연결되지 않았다. 전량 수집·정책 변환·ERP/F01/F86 readback HOLD는 그대로이며 next_start_here는 아래 publication 준비 경로다.
-- 예약 규칙 검증: 전용28 PASS/build PASS/diff 검사 통과. 독립 Claude ANSWERED/exit0는 원문 보존·available=false·계약 사실 미생성에 동의했고 행 stale 의존을 지적했다. capture.readyForRawIngest와 envelope stale로 수정하고 실제 list parser 및 provider stale=false인데 시간 만료된 응답 차단 회귀를 추가했다. 수정 후 Claude 재검토는 미실행이며 테스트를 실반영으로 확대하지 않는다.
+- 목적/정본: 대표 전체 상품 연결→main 통합→저장 재조회 오더. 기존 PR453 작업선만 재사용, main b7e519b를24f6dc9에 합침(양쪽 인계 보존). 구현 f353fad6a2326d256d29dc5df0fab0fe5273ea8e.
+- 실제 DRY_RUN: 18:42:07 KST 기존 CatalogStore160상품568기간, 양쪽 KNOWN393→483/UNKNOWN175→85. 해결90=기본회사 구독64+대표확정1개월26. 금액변경99 중 기존확정9는 빌린카60개월 옛기간식→대표확정36개월 월료100/80. 운영 writes0.
+- 근거 필요85: 신차 출고형태79, 기본6개월 미지원4, 보증금tier2. 해당36상품의 binding→원래RAW36/36 매칭; 최신head다름36, 최신RAW33매칭/3미매칭, 명시subtype/tier0. canonical정책문서0이므로 정책저장 담당의 ID/revision 인계와 조율하며 추정하지 않는다.
+- 안전 보완: Claude ANSWERED/exit0의 계산코드 변경 미고정 지적을 반영. 기존 재산출 plan을 v2로 올리고 각 entry.expectedEconomicsDigest를 트랜잭션 안에서 재계산값과 대조해 쓰기 전 HOLD한다. oldv1/누락digest 거부. approvalRef 필수, 실행자는 서비스로 유지하며 검토·승인 근거를 감사·리비전 reason에 보존. changedOffers는 실제commit 수이며 readbackVerifiedChangedOffers를 별도로 반환한다.
+- 새 비공개 plan: TEMP/period-economics-20261011-v2-candidate.json, policyDigest5be799d0cfe3e90533b9d2a2d72ac83c956977fdb1677a2f01c69e8a54c0ad34, planDigest5631ec012b90bc92101815e4a4aa8ab8d4e305e0462f8b4dc70228468dc6a534. 이전v1/bc9f5dd 계획 적용금지; before-image 보존. 코드 f353fad, 결과digest160/160 포함.
+- 검증: build/architecture/data-access PASS, main병합후 관련227PASS; 보완후 전체2164PASS/16조건부SKIP+마지막계획거부추가검사 포함 recompute19PASS. 독립 재검토 ANSWERED/exit0: 결과digest/승인ref/변경분readback분리 충족, 치명결함없음. 죽은 product/model 되읽기 제거 및 READ-RUNTIME v2/approval-ref 정본 갱신을 반영했고, 지적된 v1 거부검사는 이미 recompute19에 명시적으로 존재함을 확인했다.
+- 남음/next_start_here: 통합 담당에게 PR437 contracts/단일선 수용을 요청했으며 PR453 임의종료·가드우회·동시main병합0. 최종독립검토→같은PR453 exacthead 인계→통합mainSHA 확정→정책담당 동시writer 없음과 최신revision/inputDigest/planDigest 확인→기존 writer apply 및 전160행readback. main반영/저장/온라인소비처검증은 아직 미실행.
 
-- 목적: 사용자 최신 지시는 수정된 ONE API를 ERP와 F01/F86 두 시트에 반영. 재노출 지시는 받았지만 원천 전량·요금 변환·소비처 대사 완료로 확대하지 않는다.
-- 대상: main `553791243e5464d577a6cd7016f6d416c0d9b12d`; 이번 준비 변경은 기존 adapter/job/test 확장이다. Academy 처음 revision mismatch HOLD는 기존 registry-refresh 원격 관측으로 해소했고 READY receipt를 확인했다. 신규 adapter/writer/scheduler는 만들지 않았다.
-- 확인: API 110대 차량번호 유효/중복0, 기존 RP031 301문서의 고유 차번호301 중 exact match89·신규21. 관측 상태 AVAILABLE102/RESERVED1/UNAVAILABLE5/PREPARING2. list/details/availability의 `synced_at`과 `stale`를 각각 보존한다. 존재하지 않는 차량의 rates는404였으며 요청 경로 귀속만으로 provider-echo와 같은 등급을 선언하지 않는다.
-- 준비 코드: `collectIancarOneFullFacts`는 차량번호·ID·상태·요금 기간/거리/통화/VAT/보증금/조건버전·중복 조합과 시작/끝 inventory를 검사한다. 고정3 worker이며 503/429를 성공으로 숨기지 않는다. `--full-facts`, `--save-private`는 읽기/비공개 증거 보존용이고 상품·시트를 쓰지 않는다. 관측 시각은 RAW에 보존하되 provider fingerprint에서 제외한다.
-- 원천 실패: 첫 전량 수집은 `IANCAR_ONE_DETAIL_AVAILABILITY_DRIFT`로 종료. 후속110대 상세/availability 대조 중 원천이 `02:14:28.979Z`→`02:29:35.599Z`로 갱신됐고, stale 응답이 AVAILABLE을 UNAVAILABLE로 내렸다. 이 mixed-window 결과를 공급사의 영구 재고 오류로 확정하지 않는다. 새 시각 전량 재시도는25대 진행 후 HTTP503으로 실패(requestId `7cc85252-38f9-48e3-95e0-a32a28132623`). 이후 좁은 표본 상세/availability/rates는 정상으로 회복됐지만110대 전량 성공의 증거가 아니다.
-- 검토: 최초 로컬 Core는 본문/exit0이 있으나 ANSWERED receipt 없는 구버전 실행기여서 정식 게이트 통과로 세지 않는다. deploy Core 좁은 검토는300초 REVIEW_TIMEOUT. 함수 범위 재검토는 본문/exit0/ANSWERED를 받았고 captured_at 체크섬 churn과 full-facts 재고 권한 혼합을 지적했다. 요청시간 fingerprint 제외 회귀와 rates/조건/사진 권한만 선언하는 별도 `:full-facts` sourceId를 반영했다. rates coverage는 UNKNOWN이며 재고 FULL+COMPLETE head를 대체하지 않는다.
-- 최종 좁은 재검토: 수정3항목에 대해 본문/exit0/ANSWERED, 준비 코드만 PASS·ERP/시트 NOT_DONE을 확인했다. 전용23검사 PASS, 최종 전체 check 1097PASS/14SKIP·build PASS. SKIP과 테스트를 운영 반영 증거로 세지 않는다. 새 Firestore 재조회는301건/listable0/출고불가301, ERP `?p=RP031` HTTP200/count0이었다.
-- 남음: 전체 source window 성공, rates scope/완전성 근거, 월/연 약정거리 손실 없는 consumer mapping, 기간별로 다른 보증금 출력, 정책 조건별 provenance, API 전용 reviewed compatibility applier와 새21대 stable identity, 기존 RP031 ingest exclusion 유지한 snapshot guard 개정, ERP·각 채널·Admin·F01/F86 실제 readback. 현재 products/정책/시트/운영 workflow 쓰기0, 삭제0. 기존 재고 비노출 유지.
-- next_start_here: 기존 `src/adapters/iancar-one-api.ts`/`src/jobs/collect-iancar-one-api.ts`의 full-facts read를 새 fresh window에서 재검증. source와 rate table capture가 성공하기 전 withdrawal guard를 제거하거나 옛 Sheet 재고를 복원하지 않는다. API key는 Secret Manager에서 프로세스 메모리로만 읽는다. 재수집 성공 후에만 verified raw evidence를 바탕으로 publication 계획을 독립 검토한다.
 
-## 2026-10-01 사용자 지시 — 이안카 API 검증 전 임시 노출 중단
+### 2026-10-11 1개월 기본 수수료 5% 청구전액지급
 
-- 목적: RP031 이안카만 ERP/Admin 판매 노출과 F01/F86 출력에서 중단. 원본·계약·다른 공급사는 삭제하거나 초기화하지 않는다.
-- 대상 revision: Data main `291cfb0` 위 최소 변경. ERP4 bridge main `a5011619ad3ecf5e02df5f6916fca384d5dd5fc8`는 RP031 ingest 제외와 과거 스냅샷 재발행 차단을 반영했다.
-- 실행기: `src/jobs/withdraw-iancar-publication.ts`. 기본 DRY RUN. 정확한 Firebase target, 301건/노출223건/계약락0, 비공개 원본 백업+재읽기, updateTime 원자 거래, 전체301건 비노출 readback을 요구한다. 변경은 노출 관련 6필드만, 삭제0/금액변경0.
-- 검증: 독립 Claude 검토 ANSWERED(전체 최초 요청은 TIMEOUT이며 합격 아님). build/전체 check 통과, 회귀 8건 통과. 프로젝트 target 명시 검사 보강. 적용 후 실패는 자동 재실행/복원이 아니라 현재 상태 재조회한다.
-- 운영 적용: 실행 중 회차 `36797976786` 취소·종료 확인 뒤 one-shot `a8676cf1-9f32-48b7-a8b4-6ffa0a85b625` 적용. 원본301 백업,223 노출 중단,삭제0/계약변경0. 새 조회301/301 출고불가·listable0. 비공개 백업은 사용자 `.codex/private/freepass-data-iancar-withdrawals/`에 있으며 원문은 Git에 없다.
-- 소비처 관측: ERP 공개 `?p=RP031`와 eancar 채널 HTTP200/count0. 등록11채널 plain/uniplan/freepassmobility/haheoho/eancar/chashoong/krautoplan/withautoplan/ksautoplan/carping/siauto 각각 HTTP200/이안카0(일시503은 실패로 기록하고 직렬 재조회). Chrome 인증된 Admin 이안카 검색은0대·조건에 맞는 차 없음, 기존 접수472건 보존.
-- 최종 검증 revision: Data `b552696032ea05de8f0febd3c2ec52df3005d453` 전체 check 1090PASS/14SKIP. ERP4 workflow `a5011619ad3ecf5e02df5f6916fca384d5dd5fc8`, engine pin `e6727ff04fcf98380701fa6360c36f313e0e321f` 유지.
-- 시트 적용 완료: 준비 `36798258460` SUCCESS → 해당 ready_run_id로 apply=true/ALL `36799142438` SUCCESS. 원자↔F01↔F86 대조·사진 링크 감사 통과. 커넥터 새 조회에서 두 상품리스트 `10.01 10:01 상품리스트 211대`, 공급사 `BQ2:BQ232`/`BQ2:BQ242` 실제211행·이안카0. F86 이안카223대 projection 탭 제거, 나머지18탭 유지. 원본301과 복구 백업 유지; 원천 데이터 삭제 아님.
-- 실제 화면 확인: 인증된 Chrome F01/F86 표시·탭·헤더·표준/레트로 유지, Admin 이안카 검색0대. 긴급 snapshot-only 추가 경로는 검토 중 준비 회차가 완료되어 반영하지 않았으며 현 main 변경으로 계산하지 않는다.
-- 현재 단계: 이번 RP031 임시 노출 중단은 원자·ERP/11채널·Admin·F01/F86 readback 완료. API 연동 완료 또는 새 API 재고 공개 완료라는 뜻은 아니다. 준비 과정의 통상 원천 갱신은 아이카83→84,픽업157→156을 반영했으며 다른 공급사 전체 셀 불변을 주장하지 않는다.
-- next_start_here: RP031 노출/기존 Sheet 수집 제외와 과거 스냅샷 차단 유지. 재노출은 API 차량 식별·요금 범위·신선도 검증 및 별도 사용자 지시 이후만. 먼저 current main/workflow pin과 현재301건 비노출을 재조회한다.
-- 미완 API full-facts 변경 3파일은 `C:\dev\worktrees\freepass-data-commission-audience-20260930`에 보존, 현재 main에 반영하지 않았다. 공급사 원문이나 비밀키는 Git에 저장하지 않는다.
+- 목적/정본: 대표 직접 확정 월 대여료5%, VAT별도, 청구 전액 지급. 기준 main 1e1ea6894def6bebd3abe4d231471f3153ffdfea, 기존 kakao-catalog-reference 수수료 엔진을 확장한다.
+- 변경: 정책 sales-commission-2026-10-11. 기존 기본 기간표의1개월 청구/지급 각각5% 공급가액, VAT10%. 직접 결정 sourceRef와 기존 schema allowlist를 함께 반영했다. 개별 합의 및 공급사 특칙 우선, 아이카1개월 협의·스위치 구독·신차·미등록 공급사는 추정 확장하지 않는다.
+- 검증: build PASS, architecture/data-access boundary PASS, 전체2152 PASS/에뮬레이터16 SKIP. 합성 월료80만원 양쪽공급가4만원/VAT4천원/합계4.4만원; precompute→stored read와 원본 비변경, 특칙/UNKNOWN 회귀를 확인했다.
+- 남음: 운영 DB writes0, 재산출·저장·배포·소비처 전환 미실행. 정책 버전 갱신은 기존 저장값을 자동 재작성하지 않는다.
+- 개발 증거: 구현 c0aca8dc538303e26f92c170c2cfda8406825d50, PR #453. core CI PASS. canon은 기존 PR #437의 contracts/ 선점으로 HOLD이며 우회·타작업 변경하지 않았다.
+- 독립 검토: 첫 Claude REVIEW_TIMEOUT, 축소 재검토 ANSWERED/exit0. 개별·공급사 예외 우선 보존에 동의. 검토자의 기본회사 구독 제외 제안은 미채택: 원 지시는 재렌트 한정이 없고 2026-10-09 정본은 해당 회사 구독에도 동일 기본 기간표를 적용한다고 확정했다. 기존 기본표 적용범위만 유지하고 별도 구독 특칙에는 확장하지 않았다.
+- next_start_here: 이 변경 PR의 고정 head와 CI/독립 검토를 확인한 뒤, 기존 recompute 엔진의 비공개 before-image/digest 계획으로 운영 적용 차이를 검토한다. 직접조회 PR451과 겹치는 엔진 변경은 없다.
 
-## 데이터 업무 시작점 — 사람·AI 공통 안내
 
-현행 상품 시트 소비처는 대표 2026-10-08 지시로 **F01 하나**다. [시트 현행 규격](F01-F86-SHEET-SPEC.md#현행-발행-대상--대표-2026-10-08)과 기계 정본 `publication.activeWorkbooks`, 아래 2026-10-08 실회차 이력을 먼저 확인한다. 과거 F86 발행/교차대사를 이번 완료 조건으로 재적용하지 않는다. ERP·화이트라벨·Admin의 별도 연결·정합성 증거는 계속 필요하다.
+### 2026-10-11 ERP5 사진 전용 등록 / 비공개 Data 읽기 서비스 배포 영수증
 
-**프리패스 데이터를 이해하거나 이어서 작업할 때는 이 절부터 읽는다.** 이곳은 문서와 증거를 찾는 고정 안내이며, 아래 날짜별 기록은 당시 관측·변경 이력이다. 최신 사용자 지시와 현재 원천/코드가 과거 기록보다 우선한다.
+- 대상/실행 구분: PR454 구현 head `72330ad8db6e35f994c20b2a15717b406315c0d2` → merge `8432146313fb156e4d4b44e2ce124c15878fcf37` → PR455 문서 merge이자 실제 배포 source `b5d738c12f5d0d4da302c5a3a8d425ea4f1ba7d1`. 이전 이력의 미실행0은 당시 상태이며 이번 실제 영수증과 구분한다. 원천·시트·업무 DB 쓰기0, Data01 IAM 변경0.
+- root 정상 Chrome 등록 영수증: `freepass-data-consumers` 신규 numeric version4 저장/1·2·3·4 enabled/기존 버전 비활성화 미선택. version3의 기존12 entries 원문 prefix 동일 보존 + `erp5-public-media`/`erp-public`/단독 `photos` entry1개, 총13. 전체 병합 정본 parser 검증 PASS, 신규48byte 난수/기존token 중복없음. ERP5 Production sensitive `ERP5_DATA_PHOTO_TOKEN` 저장 성공 alert/마스킹 metadata를 root가 확인했고 preview/dev 변경0. 원문값은 Data01가 받지 않았으며 root browser receipt를 Data01 자체 관측으로 확대하지 않는다.
+- root 보고 보안 사건 메타: 기존 value 창 닫기 직후 stale DOM 응답에 이전 원문값이 포함됐다. 이후 원문 출력 차단/새token 출력0, 임의 기존 credential 회전·삭제0. 따라서 전체 과정 비밀 출력0이라고 주장하지 않는다. 이 기록에는 값·hash·header·원문 배열이 없다.
+- Data01 실행: 직전 remote main `b5d738c`/동시 deploy없음/기존 repo pin3·Iancar1·서비스/SA 재확인 후 repository VARIABLE `FREEPASS_DATA_CONSUMERS_SECRET_VERSION`을4로 저장·get4 확인. main 정상 [deploy run38127687816](https://github.com/freepass-creator/freepass-data/actions/runs/38127687816), job114435382175, workflow_dispatch 18:14:58 KST, SUCCESS. [Issue209 비밀 없는 활성화 영수증](https://github.com/freepass-creator/freepass-data/issues/209#issuecomment-6107499101) 18:16:35 KST.
+- 실제 배포 검증: image `asia-northeast3-docker.pkg.dev/freepasserp5/freepass-data/freepass-data-read:b5d738c12f5d0d4da302c5a3a8d425ea4f1ba7d1@sha256:0fb92cee22bf8aa5c8e793cdffc8f58ba3fccf1ceb022db18b33539e64215494`, 당시 serving revision `freepass-data-read-00025-6lx`, Ready True, canonical URL `https://freepass-data-read-njl7veujva-du.a.run.app`. 정상 workflow readiness 단계가 새 revision100% traffic과 service template의 image·runtime SA `freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com`·consumer secret version4·Iancar `freepass-data-iancar-one-api`1·concurrency8·비공개 IAM을 되읽어 assert PASS. consumer resource NAME은 해당 readiness가 assert하지 않으며 serving revision 자체 describe도 수행하지 않았다. 이 두 항목은 당시 독립 확인 HOLD이며 template 검증과 구분한다. 인증 없는 요청403, 기존 erp-com 인증 compatibility200 및 schema 검증 PASS. 증거는 GitHub Actions 실제 metadata 조회/assert와 활성화 영수증이며 Data01 직접 Chrome Run 재조회가 아니다.
+- 후속 운영 상태: [run38127904472](https://github.com/freepass-creator/freepass-data/actions/runs/38127904472)는 source `1067fae21fa19d8e3f284884e182a20445bc894e`, workflow_dispatch 18:18:32 KST, actor/triggering_actor `freepass-creator`, 18:20:17 KST SUCCESS. Data01 실행이 아니다. 00 후속 확인 영수증에 따라 B3Q Data 지휘 채팅 `01a0e3f6...`가 해당 방의 사용자 “적용해” 지시로 실행한 것으로 확인됐다. GitHub 계정명만으로 실행 채팅을 식별한 것이 아니다. root의 18:20 KST 실제 Run 화면 영수증은 `freepass-data-read-00026-h5s` latest traffic100%, 이전00025 traffic0%, digest `sha256:1792d175e7b6fbad785f91ca6a2c69c4d6a45810eab7e34b02f742f318a0dc88`, 실제 revision consumer `freepass-data-consumers:4`/Iancar1/runtime SA `freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com`/concurrency8/8080/entrypoint/volumes0/CloudSQL0 확인이다. 이전 NAME·revision 자체 refs 확인의 빈틈은 이 후속 root 관측으로 해소됐으며 과거00025의 검증 범위를 소급 확대하지 않는다. 이 실제 관측은 root 출처이며 Data01 직접 화면 확인이 아니다. 00025 성공을 현재 serving 상태로 표현하지 않는다. 배포 workflow의 push 조건은 main의 `.github/read-runtime-deploy.trigger` 변경뿐이며 NEXT 단독 변경은 자동 배포 조건에 해당하지 않는다.
+- 복구 기준/남은 HOLD: root의 등록 직전 fresh receipt `00024-w6g`/traffic100/consumer3·Iancar1/image `sha256:1357532c824e1bce7d977b87ee337dd1cf928723148ddfb6736cd524177e001c`는 직전 복구 기준이다. rollback 실행0, 기존secret·SA·IAM삭제0. Data 비공개 읽기 서비스 배포 검증은 완료했지만 새 소비자 실제 STS/manifest/사진index0..23/MIME·bytes·전체앨범/ERP5 생산 후보·cutover는 root의 별도 후속이며 검증 완료 전 HOLD. 롯데 표본 183어2364의24장은 이안카 사진 전용 소비자 성공 증거가 아니며 `/eancar/api/vehicles/183어2364` 404는 공급사 경계 차단으로 구분한다. 현재 ERP5 이미지 URL의 ERP4 의존 해소를 이 배포로 선언하지 않는다. 20의 독립 검토는 이 영수증 정합성 검토이지 자체 live 재관측이 아니다.
+- 실제 사진 요청 HOLD: root의 고정 Cloud Run 로그 09:19:20–09:22:00Z 관측에서 신규 소비자의 10하8099/10하8161 manifest GET은 각각09:19:36.192Z/09:21:35.082Z HTTP404였다. manifest 성공0이며 롯데/Drive fallback 사진 수는 성공 증거가 아니다. 정적 코드상 photos route와 consumer-server 연결은 존재하고 products.doc(productId)를 exact 문서ID로 읽는다. 차량번호와 문서ID 일치, 안전 응답 code, 공개 RP031/사진 검증 조건 중 실제 실패 원인은 미확정이며 원천 재조회 없이 기존 증거로 구분한다.
+- 병렬 후속 검토 통합(10 미디어·12 API·20 런타임·21 독립 권위): 네 지정 비공개 작업 artifact의 JSON 형식 확인 및 기존 코드·문서 검토를 취합했다. 통합 기준 main `9383bfb59169dc4d1cc36a2dd61f474b407d1d71`, 기존 문서 merge `b7e519bcfd6561df2216b8ae307a98c02139a569`, 실제 운영 source `1067fae21fa19d8e3f284884e182a20445bc894e`를 분리한다. [기존 사진 확인 규칙](NATIVE-SOURCE-COLLECTOR.md)은 b7에서도 존재하며 해당 문서 최신 변경은 `67a372e2bfe2f81f63e962753918697de9891703`; ONE 차량 ID·번호 검증과 사람의 사진 내용 확인은 독립이다. reader가 확인자·방법 문자열 및 UTC 시각을 검사한다는 사실은 확인자 자격·비공개 근거 실재를 입증하지 않는다. 새 테스트·live GET·사진 열람·등록·원천 쓰기·배포0인 정적 검토이며 persistence/사진 cutover 증거가 아니다.
+- 진단 정정/범위: root의 기존 exact doc `10하8099` 단건 관측에서 존재/RP031/listable/가용·선점/ONE ID·번호 존재/withdrawal absence가 확인됐으므로 초기 공개 조건 누락 가설은 철회한다. `10하8161`은 기존 관측의 문서 존재 외 조건 미확정이다. `photo_original_refs`의 제한된 화면 미표시는 UNKNOWN이며 ABSENT나 verification 실패 확정이 아니다. 두404의 안전 응답 code 미확보로 route/domain/ONE 응답/철회 재검사 중 실제 실패 단계는 미확정이다. manifest 성공0건을 사진0장으로 바꾸지 않는다. 현재 code fix 필요 미확정; 기존 승인 근거의 공식 shape와 mapper 불일치가 입증된 경우에만 00가 최소 hunk owner를 지정한다.
+- 실행 가능한 최소 후속/HOLD: 00가 기존 비공개 사람 사진 확인 근거 보유자와 실제 확인자를 연결하고 적용 ONE API·정확 사진집합/버전·실제 검수 방법·근거 위치/버전·확인자·UTC 시각을 확인한다 → 10 미디어와 21 권위 검토가 근거/차량 연결 범위를 확인한다 → 기존 정식 writer의 exact revision·지원 schema/대상 필드·동시변경 guard·typed 백업·복구 계획을 확인한다 → 필요한 데이터 변경에 대한 별도 승인 후 지정 단일 writer만 적용·새 되읽기를 남긴다 → root 단독으로 신규 manifest와 전체 승인 범위 index/MIME/bytes/반대 권한/변경·철회 동작을 검증한다. 검색한 src/scripts/contracts/.github에는 확인 기록 등록 writer를 찾지 못했고 외부 절차 존재는 미확정이다. 일반 가격 정정기·범용 Firestore 쓰기·과거 photo publisher를 현행 등록 경로로 추정하지 않는다. 근거 또는 writer 미확정이면 해당 단계 HOLD; marker·가짜 Drive ref/hash 발명·게이트 완화·Drive fallback·새 source GET0. runtime rollback 후보00024/consumer3는 현재 ERP5 새token과 후속 변경 영향 검토 및 별도 승인이 필요하며 실행0이다.
+- next_start_here: root가 정상 server 인증 경로에서 신규 소비자 manifest·bytes 및 권한 반례를 확인하고 ERP5 실제 소비 검증을 이어간다. 새source 조회·범위 확대·누락값 추정·추가등록 없이 source SHA→run→digest→revision/pin→개별 소비처 readback을 결속한다. 공유 checkout NEXT 역할지도 dirty와 다른 PR 원본은 계속 보존한다.
 
-처음에는 다음 세 가지만 확인한다.
 
-1. **값의 뜻:** [상품·정책 의미 사전](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary)에서 단위·기준액·주기·자격·예외를 읽는다. 같은 10도 10원/10만원/10%일 수 있으므로 숫자만 해석하지 않는다.
-2. **업무와 정본:** 아래 질문별 안내에서 담당 문서를 고른다. 코드·계약은 GitHub, 현재 업무값은 지정된 운영 원천, 화면 전달 여부는 해당 소비처의 실제 응답이 근거다.
-3. **현재 확인 범위:** 아래 미해결 항목과 해당 업무의 최신 handoff를 읽고 revision·관측 시각·검증 범위를 확인한다. 문서가 있다는 것과 데이터가 정확하다는 것은 별개다.
+### 2026-10-11 ERP5 RP031 사진 전용 consumer 준비
 
-AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업무 지식을 복제한 새 안내·사전·원장을 만들기 전에 아래 기존 정본을 확장할 수 있는지 확인한다.
+- 목적/대상: ERP5의 ERP4 사진 인증 의존을 별도 Data server credential로 준비한다. main `1e1ea6894def6bebd3abe4d231471f3153ffdfea`, isolated branch `work/freepass-data/erp5-media-reader-20261011`; 이 기록을 포함하는 commit이 exact 구현 revision이다. PR437/451/453 및 공유 checkout NEXT 원본은 변경하지 않았다.
+- 확정 계약: 새 machine ID `erp5-public-media`, 구조상 `erp-public`, 명시 단독 `photos`와 기존 모든 소비자와 다른 service token. UI channel 등록·legacytoken 복사·appCredentials 확장은 없다. 사진 count/index 두 route만 기존 proxy로 제공한다. 다른 consumer 경로401, 자신의 catalog/compat/master/reference/fees/health/업무경로403이며 읽기 전 차단한다. 익명 public feed/quote 정책은 그대로다.
+- 자원 경계: 기존 RP031 공개 ONE product predicate를 domain으로 옮기고 기존 export를 유지했다. dedicated reader는 RP031 공개 자격/검증/ONE 차량 연결을 확인하고 기존 Iancar source만 선택한다. 승인 Drive·다른 공급사 fallback0; count/index의 source 연결/철회 recheck와 성공 감사 후 전송 직전 revalidate를 유지한다. 기존consumer의 승인 Drive 사진/채널ID형식 계약은 보존되며, 부재한 channel-provider fence가 새로 보장됐다고 주장하지 않는다.
+- 검증: 관련3 suites149 PASS, 전체147 suites2158 PASS/16 skipped; arch/access/build PASS, standards exit0/PARTIAL. 12 계약·19 인증 읽기 검토 초기 hunk PASS; 성공감사 중 철회/count·bytes404, 성공감사 저장실패503/no bytes 추가 회귀 포함. 전체 회귀 및 원격 CI의 exact-head 결과는 해당 PR 영수증을 따른다.
+- HOLD/next_start_here: 별도 운영 owner가 token 발급·Secret version/pin·runtime 배포·ERP5 server env·RP031 실제 count/image readback을 승인·실행해야 한다. code TESTED를 DEPLOYMENT/CUTOVER VERIFIED로 확대하지 않는다. IAM/Firebase target/DB·시트·source writes/등록/스케줄/운영배포0. 재시작은 `docs/ERP5-CONSUMER-RUNTIME.md`의 사진 전용 준비 절과 최종 PR commit/CI를 확인한다.
 
-<a id="data-reading-map"></a>
 
-### 무엇을 알고 싶은가 → 어디를 보면 되는가
+- Git 통합 완료: [PR454](https://github.com/freepass-creator/freepass-data/pull/454) 검토 head `72330ad8db6e35f994c20b2a15717b406315c0d2`를 보존하여 main `8432146313fb156e4d4b44e2ce124c15878fcf37`로 병합했다(2026-10-11 17:49:52 KST). 01 GitHub 재조회와 fetch로 확인했으며 merge 자체로 Data 배포는 실행되지 않았다. 검토 head Core [38123504724](https://github.com/freepass-creator/freepass-data/actions/runs/38123504724), Canon [38123504871](https://github.com/freepass-creator/freepass-data/actions/runs/38123504871) SUCCESS. 관련149/전체2158 PASS·16 SKIP은 01 로컬 실행, 12·19·14는 독립 계약/인증/transport 검토로 구분한다.
+- 실행 직전 기존 Run 관측은 **root의 17:53 KST Console receipt**이며 Data01 자체 live 조회가 아니다: `freepass-data-read`, project `freepasserp5`/number `110304297079`, region `asia-northeast3`, resourceVersion `AAZdg50nCQA`, generation24, latestReady/latestCreated `freepass-data-read-00024-w6g`, traffic 해당 revision100%/latestRevision=true/다른 traffic·tag0. image `asia-northeast3-docker.pkg.dev/freepasserp5/freepass-data/freepass-data-read:c2ccd609915449f1d6c6854bf7639011f03e1717@sha256:1357532c824e1bce7d977b87ee337dd1cf928723148ddfb6736cd524177e001c`; runtime SA `freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com`; env refs `FREEPASS_DATA_CONSUMERS_JSON → freepass-data-consumers/key3`, `EANCAR_ONE_API_KEY → freepass-data-iancar-one-api/key1`; Ready/ConfigRoutes True, canonical status URL `https://freepass-data-read-njl7veujva-du.a.run.app`. 기존 private 인증/IAM checked/public unchecked/custom audience none을 root가 보고했다. 서비스별 ports/args/creationTimestamp/volume 메타의 추가 확인은 미완료이며 미래 rollout 시점의 현재성은 다시 고정해야 한다.
+- IAM 설치·되읽기 완료는 root receipt로만 인계한다. root의 읽기 SA·3개 permission custom role·default DB 조건 binding·WIF·서비스 한정 invoker 작업과 Data01의 Git 통합을 혼동하지 않는다. Data01 IAM 실행0이며 비밀값 조회·재생성·다른 runner 인증 복사0.
+- 현재 운영 상태: 신규 photos token/Secret version/운영 pin/ERP5 민감 env 저장/Data 신규 배포/실 STS·manifest·bytes 검증/cutover 모두0. ERP5 전용 transport는 count 계약 준비만 확인됐고 실제 생성 이미지 URL/bytes는 ERP4 `/api/img` 의존을 유지한다. index 준비 코드·CI PASS를 ERP4 매체 의존 해소나 실24장 검증으로 확대하지 않는다.
+- UI 실행 제약: Chrome4/영협/tab1287946718 inventory는01 확인했으나 `getTab`은 root 활성 browser session 소유로 인수를 거절했다. root는 정상 markHandoff 호출 후 release API 부재/active turn 종료 전 claim 불가를 보고했고 실제 Secret 등록 폼 준비를 맡았다. Data01 browser 재시도·우회0. 도구 반환 `Computer/Browser Use Confirmation Policy`의 Hand-Off Required 원문은 “Changing a password or other authentication credential: Ask the user to take over before any new credential is entered, and have them complete the entry, confirmation, and submission steps themselves.”이며 새 security-sensitive 접근 생성은 “Confirmation Required at Action time”, 사전 승인에도 필요하다고 명시한다. 이는 기존 대표 지시 부족 판정이 아니라 tool 경계다. 실제 새 credential 입력/확인/제출은 사용자 단계로 준비·인계하며 지금 실행 완료로 선기록하지 않는다.
+- 후속 단일 실행: root의 정상 UI 사용자 단계 및 브라우저 인계 후만 Data01가 승인된 metadata/pin/private rollout을 수행한다. 전체 기존 consumer 배열·token을 출력 없는 메모리 비교로 보존하고 exact media entry1개만 추가, 정상 새 numeric Secret version과 실 runtime 참조를 고정한다. ERP5 production `ERP5_DATA_PHOTO_TOKEN` sensitive env 한 항목의 정상 입력 경로만 별도 합의됐으며 root가 이후 env/deploy 검증을 소유한다. rollback은 실행 직전 확정한 기존 전체 traffic/revision/tag와 변경한 exact 기존 pin 복귀이며 기존 secret/SA/IAM 삭제0. 현재 문서 기록은 운영 실행이 아니다. 공유 checkout NEXT 역할지도 dirty와 PR437/451/453 원본은 보존했다.
 
-| 질문 | 먼저 볼 정본/안내 | 확인할 증거와 경계 |
-|---|---|---|
-| FreePass Data 전체 업무는 누가 배정하고 담당은 어디서 확인하는가? | 아래 「현행 단일 담당 책임맵 — 2026-10-09」 | 지휘가 파일 owner·통합 순서를 확정. 기존 Work/PR를 RESUME하고 공유파일·운영 writer를 중복 생성하지 않음 |
-| 기간별 선계산과 Admin 수수료 coverage는 어디서 읽는가? | [Admin 내부 기간별 경제조건](READ-RUNTIME.md#admin-내부-기간별-경제조건--2026-10-03) | Canonical 저장 시 계산, Admin 읽기만; 운영 backfill/재발행 미실행 |
-| 프리패스 수수료와 공급사/영업채널 연동은 어떻게 다른가? | [수수료 연동 기준](READ-RUNTIME.md#수수료-연동-기준--사용자-결정-2026-09-30) | 기본은 지급수수료. 상대별 helper PREPARED, 외부 API와 scope 연결은 미구현 |
-| 상품·정책의 숫자와 문구가 무슨 뜻인가? | [Commercial Data Catalog](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary) | 72항목 의미. 공급사별 실제 값·예외·효력일은 원천으로 대조 |
-| 접수·계약·인도·수수료 정산은 어떻게 연결되는가? | [업무 데이터 연결 지도](BUSINESS-DATA-CONNECTION-MAP.md) | ID/버전/스냅샷 관계와 업무 소유권. 실제 계약 확정·수금·지급을 별도로 확인 |
-| 어떤 데이터가 있고 어떤 경로로 접근하는가? | [데이터 도메인 카탈로그](DATA-DOMAIN-CATALOG.md), [접근 Gateway](DATA-ACCESS-GATEWAY.md) | 제공 상태·권한·계약과 조회 영수증. 내부 collection 경로를 공개 계약으로 사용하지 않음 |
-| F01/F86·ERP·화이트라벨·Admin에 잘 전달되는가? | [소비처별 사용 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md), [소비처 런타임](ERP5-CONSUMER-RUNTIME.md) | 소비처별 release/snapshot·필드·실제 readback. 한 곳 성공을 전체 성공으로 확대하지 않음 |
-| 공통 입력 UI와 수정 소유권은 어디에 고정됐는가? | [공급사 RUNBOOK](SUPPLIER-INPUT-SHEET-RUNBOOK.md) | supplier-input-sheet-spec.v1.json uiOwnership; 입력·머리글·종합·helper 소유권, 관리자 우회/자동 감시 HOLD |
-| 시트 모양·열·숨김 규칙은 무엇인가? | [시트 규격](F01-F86-SHEET-SPEC.md), [실행 runbook](F01-F86-SHEET-RUNBOOK.md) | 기계 정본 `contracts/f01-f86-sheet-spec.v1.json`. 표시 검사는 원천 최신화 검사가 아님 |
-| 공급사 수집 공통 규격과 공급사별 차이는 어디서 보는가? | [FreePass Data 원본 직접 수집기](NATIVE-SOURCE-COLLECTOR.md#common-supplier-adapter-contract--2026-10-02), [직접 연동 5곳 점검](NATIVE-SOURCE-COLLECTOR.md#supplier-direct-status) | 공통 RAW 계약과 공급사별 요금/사진/계산 입력·Scheduler 설계. 10-03 관측은 당시 증거이며 native transport·운영 전환 완료가 아님 |
-| 원본을 어떻게 읽고 오류·갱신을 확인하는가? | [ERP5 캡처](ERP5-SOURCE-CAPTURE.md), [Source run 안전 규칙](SOURCE-RUN-SAFETY.md) | readTime·digest·전체 범위·갱신 run·accepted head. schedule/종료 성공만으로 최신성 판정 금지 |
-| 어디까지 구현·운영되었고 무엇부터 이어가는가? | [Implementation Status](IMPLEMENTATION-STATUS.md), 이 문서의 업무별 날짜 기록 | CODED/TESTED/PERSISTENCE/DEPLOYMENT/CUTOVER를 구분. 현재 main·진행 PR과 대조 |
-| 프로젝트 책임과 설계 기준은 무엇인가? | [승인 Architecture v2](ARCHITECTURE-V2-APPROVED.md), [Issue #24](https://github.com/freepass-creator/freepass-data/issues/24) | 설계 기준과 최신 도메인 소유권 결정 구분. 과거 charter를 후속 승인보다 우선하지 않음 |
+### 2026-10-11 단일 제공자 연결 규격 고정 — PR448 후속
 
-### 현행 단일 담당 책임맵 — 2026-10-09
+- 사용자 결정: 연결 규격을 정하고 Data가 제공한 값을 소비처가 읽는다. 목적은 그림자 서버에 두 번째 수수료 계산을 추가하는 것이 아니다.
+- 대상 revision: PR448 `83118e75ac2223e34b2a2f759c4475a25abd5f5e`의 기존 금액 개발선/checkout을 이어서 사용했다. Academy document READY; 루트 dirty 문서와 다른 작업은 보존한다.
+- 변경/정본: [기간별 상품 경제조건 연결 규격](READ-RUNTIME.md#period-economics-connection)에 기존 endpoint·schema·소비처별 권한·같은 기간 행 필드·출처·UNKNOWN/null·실패 처리를 한 곳에 고정했다. 새 계약 JSON·API·엔진·운영 데이터는 만들지 않았다.
+- 검증/남음: 기존 gateway/reference/compat 코드와 schema 및 ai-ops 기존 reader의 `erp-public` 검증을 대조하고 diff 검사 PASS. Claude 실제 ANSWERED/exit0는 기존 경로·권한·금액 필드·쓰기/노출 금지에 동의했고, 서버 내부 observations 배열과 HTTP sourceSnapshot의 혼동을 지적하여 정정했다. 로컬 그림자 공개 가격표와 정식 내부 reference는 다른 계약이다. PR만 유지하며 운영 배포·scope 등록·소비처 변경·실제 readback은 미실행이다.
+- next_start_here: 위 연결 규격을 기존 조회·소비처 담당이 적용한다. Data 배포/권한 게이트와 소비처 endpoint 변경을 따로 확인한 뒤 원천20개 대사 및 권한 거부를 확인한다. 정산 조회를 상품 가격표로 대체하지 않는다.
 
-대표 최신 오더의 안전한 구현·검증까지 EXECUTE한다. 아래 담당은 새 writer나 운영 권한을 만들지 않는다. 중첩 파일은 지휘가 단일 owner를 확정하며, 구현자가 자기 PR 병합·운영 배포를 하지 않는다. 다른 제품 저장소는 수정하지 않고 기존 담당에게 근거와 최소 처방을 전달한다.
+### 2026-10-11 원천 가격행 기간별 청구·지급 연결 — PR만
 
-| 담당 채팅 | 책임 / 경계 |
-|---|---|
-| 지휘 | 작업 배정·파일 owner·통합 순서·main/배포 조정. 운영 실행의 실제 승인·안전 게이트는 별도 확인 |
-| 수집·연동 | 공급사 직접 원천·transport/parser·RAW 캡처와 accepted source head. 종합 탭은 원천 근거 제외 |
-| 차종마스터 | 대표 승인 차종 기준과 master ID/제원 매칭. 규칙 임의 변경 금지 |
-| 금액·수수료·정책 | 기간별 대여료·보증금·청구/지급 수수료 계산 및 기존 조회 수정 Work. PR408 구현 owner 유지 |
-| 정본·저장 | RAW→Canonical 식별자·기간·provenance·저장 불변식. 기존 ingestion/store 경로 재사용 |
-| 조회·소비처 | API 계약·Projection/Release와 등록 소비처별 실제 readback. PR408 구현과 겹치는 파일은 지휘 조정 전 수정하지 않음 |
-| 사진·색상 | 차량별 원천 사진 전체·색상 provenance와 실제 이미지 접근 검증. URL 존재와 이미지 성공 구분 |
-| 정산원장 | 접수/계약/정산 동일 ID 대사·사람 금액·산출근거·감사 이력 보존. 미확정을 0원으로 만들지 않음 |
-| 품질·검증 | 독립 읽기 전용 최종 게이트 및 이 문서 stable guide 단일 편집 owner. 다른 담당은 이 파일 동시 편집 없이 지휘에 기존 결과 제출 |
+- 목적: 차량번호로 조회하는 기존 원천 상품행에도 월대여료·보증금·청구(공급사→FreePass)·지급(FreePass→영업채널)을 함께 제공한다. 기존 legacy `offers.priceTerms`의 수수료 누락을 전제로 하지 않는다.
+- 대상 revision: base main `f5e931889749ec869ae4b996725cc22aa8bf5784`(PR447), 코드/검증 `a97e0d55a9feb382de593dc79217884a7e87a8e1`, 단일 후속 branch `work/freepass-data/period-billing-payout-read-20261011`. 기존 금액 checkout 재사용, academy development READY. 원래 루트의 dirty 문서2개는 보존했다.
+- 변경: 기존 source-row projector/수수료 엔진/ERP adapter/공유 reference schema를 확장했다. 입력 미확정은 UNKNOWN/null이며 rent0을 수수료 계산에 사용하지 않는다. 가격·공급사 RAW 메타데이터 출처와 원천 identity/publication HOLD를 보존한다. 새 요율·엔진·정산 저장·사람 입력 덮어쓰기 없음.
+- 검증: 최신 RAW/후보175행·678조건, 양쪽 각각 CALCULATED545/UNKNOWN133. UNKNOWN 사유1/93/35/4와 상세는 [기존 런타임 기록](READ-RUNTIME.md#실측--구현-검증--2026-10-11)을 따른다. seed20261011 표본20차번/73기간의 RAW 재정상화→기존 엔진→카카오/내부 AI/ERP 로컬 인증 gateway 응답 대조0차이. 원천 head 재조회 동일, 공개 Git 원문·차번·시트ID·토큰 추가0.
+- 검증: 전체2,147PASS/16조건부SKIP(`--maxWorkers=2`), build/arch/data-access/diff check PASS, standards33schema/15검사 PASS·profile PARTIAL 유지. 첫 전체 runtime5초 timeout1건은 재실행 통과. 최종 공급사 참조 정정 후 관련239PASS, 총괄 독립239PASS/RAW mapping 확인. Claude 실제 ANSWERED/exit0 검토의 유일 공급사 출처 블로커를 정정했다. 담당의 설계/추가 검토 TIMEOUT2회는 통과로 세지 않는다.
+- 남음: 신규 운영 배포·COLLECTED grant·실제 소비처 readback·계약 수수료 확정은 미실행이다. CALCULATED는 확정금액이 아니다. ERP guest의 null 보증금→0 변환은 후속 cutover HOLD이며 이번 Data 변경 범위 밖이다. 이번 승인은 PR까지만, 머지/배포 금지.
+- next_start_here: 같은 PR exact head/CI → 별도 사용자 승인 후 고정 이미지·grant·각 소비처 실제 readback. UNKNOWN133은 실제 공급사/계약 근거를 확보해 기존 엔진 입력으로 해소한다. private 표본과 실행 집계는 Temp에만 보존한다.
 
-### 통합 검증 목록 — 코드·운영·소비처를 분리
+### 2026-10-11 공통시트 전체 상품행 / 원자값 조회와 ERP 입력 대응
 
-문제별 기존 기록에 `발견 원천 / 영향 대상 / 단일 수정 owner / 정본·파일 / 현재값·기대값 / 재현 / 최소 처방 / 회귀 / 운영 readback / 완료 여부`를 남긴다. 별도 보고 원장을 만들지 않는다. 각 구간은 same ID·정확한 term key(기간/주행거리/반납·인수)·sourceRun·digest·revision·observedAt으로 대사한다.
+- 목적/정본: main `4b0690ed634dc188d168033a66b87b67338847e9` 위 단일 work. 기존 sourceStore current head/RAW/candidate가 정본이며 products-only 조회로 번호 미정이 빠지는 문제를 연결한다. Academy READY, reuse `COMPOSE_OR_EXTEND`; 새 reader/컬렉션/서비스/정책문서 없이 기존 gateway·projector·strict schema·테스트 확장.
+- 변경: 원천행 상품은 `data` 일반 결과에 포함한다. `sourceObservationId` exact lookup과 현재 행 `productId` lookup, supplier/model/기간/금액/보증금 필터가 같은 조건행을 검사하고 모든 형제 조건을 보존한다. 원문 모델명 fallback은 조회/표시 전용이며 정제 maker/model HOLD를 풀지 않는다. 응답·감사 digest에 원천행/원자값/coverage를 포함한다. photo 처리는 legacy product만 실행한다.
+- ERP 출력: 명시 grant의 `erp-com/catalog-compat?sourceScope=COLLECTED`는 기존 `data.products` Record map에 allowlist adapter로 원천행 상품을 전달한다. 기본 요청·화이트라벨·미grant는 원천 RAW를 읽지 않는다. `_source_row_product`는 typed 원자/출처/정제 상태용이고 원문 payload 전체가 아니다. 원문 `출고협의/출고불가`를 그대로 보내며 Data의 정제 신원 HOLD를 공급사 판매상태로 치환하지 않는다. default/public/feed 노출·ACTIVE는 변경하지 않는다.
+- 실제 스냅샷 읽기/로컬 변환: observed `2026-10-10T22:00:12.027Z`, RAW175/candidate175/상품행175, exact 관측175/175·현재 행175/175·전체 행손실0·compat175/175·조건손실0. 렌트존8상품/레이2상품/ZERO1상품. 74입력 열 출처 coverage/행당79원자(기간별 보증금 별도)이며 자유문장6열은 값 비공개+사유. RAW에 없는 등록탭은 빈 탭/누락 확정이 아니라 미관측 상태로 남긴다. 신규 RAW/정제 저장0.
+- 실제 ERP pinned `b5462911390020b11345e779f85edecba31318d9` 29개 모듈을 읽기 전용 메모리 로더로 실행: 175행 compat 입력, 렌트존8행/레이2행, 기존 판매목록 predicate는 렌트존4/레이2다(출고불가4행은 기존 규칙으로 제외). 레이48/60개월 대여료500000/460000, 보증금500000 또는 명시ZERO0 그대로 확인. 이는 오프라인 실제 함수 검증이며 운영 GET/브라우저 cutover 증거가 아니다.
+- 남음/next_start_here: exact PR/Claude/CI/main 영수증 확인 후 운영 owner가 기존 read 서비스 배포와 kakao-ops/erp-com의 필요한 COLLECTED 등록만 별도 승인한다. ERP 실제 소비자가 인증된 내부 전건 경로에서만 sourceScope를 요청하고 typed source-row/UNKNOWN·HOLD를 처리해야 한다. 일반 ERP priceList는 unknown deposit/fee를 0 기본값으로 만들 수 있으므로 원천 typed 상태를 확정금액으로 오해하지 않는다. 최신 시트 전수 대사, 미관측 탭 판정, LIVE 전건175·렌트존8·레이2 GET과 실제 UI는 미실행. DB/IAM/Secret/운영 배포/외부 ERP 파일 수정0.
 
-| 구간 / 우선 문제 | 완료 증거 / 안전한 다음 처방 |
-|---|---|
-| 원천→RAW→accepted head | 공급사 직접 탭 또는 ERP의 최신 범위·관측 시각·run/digest가 일치. stale/partial이면 수집 담당이 기존 캡처·승격 경로를 수정·재검증하며 과거 성공 run으로 최신성을 대신하지 않음 |
-| RAW→Canonical→Projection | 같은 ID/term의 누락·중복·단위·null/0·원문 보존 대사. 숫자 0만으로 무보증 확정 금지; 명시 근거와 ZERO 상태 확인. alias 가격행과 고유 조건·상품·차량 대수를 구분 |
-| 무보증 검색 / PR408 | 정확 head 테스트·schema·CI와 별도로 배포 image/revision 고정 후 실제 인증 조회. ANY_TERM/ALL_TERMS·일부 기간 유료/UNKNOWN·0 falsey·빈 결과·잘못된 필터·권한 오류 재현. Kakao/internal 성공을 ERP/화이트라벨 전체 완료로 확대하면 FAIL |
-| 손오공 사진·색상 | 공급사·상품 유형·차량 ID로 모집단 고정, 모든 사진과 원문 색상 대사. 이미지별 HTTP/content-type/실제 접근 확인; 대표 1장 성공은 전체 성공이 아님 |
-| 정산 사람 입력 | 동일 계약 ID의 금액·산출근거·취소·중복·UTC/KST 날짜·원문 format·감사 이력 재조회. 지정 정정 밖의 사람 입력 삭제/덮어쓰기 금지. 원본 freshness와 API schema 성공 분리 |
-| Projection→Release→실제 API | manifest/ACTIVE pointer·source digest·배포 immutable image가 연결되고 실제 응답 revision/내용 일치. mock/schema/CI는 운영 증거가 아님 |
-| 등록 전체 소비처 | 현재 registry 기준 ERP·화이트라벨 각 채널·Admin·Sales·Estimate·Kakao·내부 AI 및 현행 F01을 개별 대사. 미연결/미검증은 UNVERIFIED/HOLD로 남기고 owner에 최소 처방 반환; F86 재발행을 완료 조건에 넣지 않음 |
+### 2026-10-11 reference productId 정확 단건 조회 — 코드 통합 / 운영 별도
 
-각 판정은 `PASS / FAIL / UNVERIFIED / HOLD`와 심각도·실제 소비처·재현 절차를 포함한다. Claude CLI FAILED는 별도 미통과이며 Codex 검증을 Claude 통과로 표기하지 않는다. 변화 없는 재호출·계정 변경·앱 우회 금지. 정해진 범위에서 중대 오류 0·필수 검증 미통과 0일 때만 전체 완료이며, 안전한 코드 수정·dry-run·백업/롤백 준비는 계속하고 실제 고위험 실행 blocker만 분리한다.
+- 목적/기준 revision: `c45ba9829ea1b61bcd25ff4280acf4e014f261c6`. 기존 catalog-reference/internal-ai-reference 필터·typed 계약·queryResolution·회귀만 확장한다. Academy development READY / reuse COMPOSE_OR_EXTEND, 새 reader/모듈/정본 없음. 접수 PR445의 admin gateway 수정은 건드리지 않는다.
+- 변경: 응답의 완전한 `productId` 문자열만 정확 일치한다. 원천 ID·차량번호·공급사/RP 코드·external ID를 대체 키로 추정하지 않는다. 미존재는 빈 목록/NO_MATCH, 중복은 다른 조건으로 좁혀도 HOLD, 공급사·차량번호 identity 충돌은 빈 목록/HOLD. 기간조건 미일치는 NO_MATCH이며 모든 형제 오퍼/기간행과 원문 상태는 보존한다. 기존 인증과 COLLECTED grant 차단 유지.
+- 현재 운영 분모(2026-10-11 07:12~07:13 KST 읽기): 원천 products 문서 1,776 / LISTABLE 응답 475 / 정상 상태 필터 제외 1,301, ID별 누락·불필요 포함 0, 원천 가격맵 없음 52 / 가격행 15,054 / 응답 조건 5,193. 전체 응답 로컬 대조에서 차량번호 유일 매칭 475이며 개별 HTTP475회 검증은 아니다. COLLECTED는 배포됐으나 grant=false·HTTP403, 기존 운영 productId query HTTP400. 전체 REFERENCE_ONLY/HOLD이며 공급사 전체 재고 분모나 실제 원천 freshness 증거가 아니다.
+- 검증: 관련 219 PASS, 전체 maxWorkers=2 Vitest 2,138 PASS / 조건부 16 SKIP, build·architecture·Data Access boundary PASS, standards 33개 schema/15 PASS(기존 PARTIAL), 로컬 read-runtime smoke 13 PASS. 정확 일치·외부코드/부분 ID 비추정·입력 불변·중복/충돌 HOLD·기간 미일치·형제행 보존, 두 HTTP 경로의 계약·인증 전 reader 차단·unknown 빈 응답·COLLECTED 미grant403/명시 grant의 missing 조건 HOLD 회귀를 포함한다. 현재 읽기 전용 응답을 새 로컬 필터에 넣어 LISTABLE475/475·로컬 COLLECTED1776/1776 ID 정확 매칭 및 전체 row/형제행 손실0·invalid ID0을 확인했다. 전체 projector는 운영 응답의 기존 F04 정본 연결을 메모리에서 재사용했으며 로컬 환경 누락을 운영 장애로 세지 않는다. 이는 새 HTTP 운영 배포/전건 실조회 증거가 아니다. 최종 exact head·Claude·CI는 이 작업 PR 통합 영수증에 고정한다.
+- 남음/next_start_here: 코드 main 통합 이후 별도 승인 배포와 productId HTTP 전건 검증이 필요하다. COLLECTED 권한 확대, 실제 Kakao 소비자 연결, 사진 실측/reader 연결, RAW apply, Canonical/ACTIVE와 접수/계약 상태 연결은 별도 작업이다. DB·IAM·Secret·배포·외부 저장소 변경 없음. 현재 운영 `c2ccd609` / `00024-w6g`와 코드 main을 혼동하지 않는다.
 
-문서 반영 기준: 원격 main `6faca67627a7df884587eb4294a5aa12d58a4fbe`, 기존 PR408 head `7858692e923b4e1603235860d40f5e6caa54943b`, academy document READY `2026-10-09T08:22:58.734Z`. 기존 안내 확장(REUSE_EXACT), 운영값·원장·시트·배포 변경 없음. next_start_here: 각 담당 exact revision 결과 → 같은 source 증거 독립 대사 → 지휘의 통합/배포 게이트 → 등록 소비처별 readback.
+### 2026-10-11 private read 배포 — 기존 권한 유지 / 별도 cutover 없음
 
-#### 통합 대사 checkpoint — 2026-10-09 17:58 KST
+- 목적/승인: 사용자 `ㄱㄱ`로 최신 private read 서비스 배포만 승인했다. Academy operations/document READY. 코드 정본 `c2ccd609915449f1d6c6854bf7639011f03e1717`, 기존 운영 `050e382` / `freepass-data-read-00023-fhl`을 복원 기준으로 보존한다. 원래 dirty 문서는 수정하지 않고 별도 인계 worktree에서 기록한다.
+- 배포 영수증: [run 38089799739](https://github.com/freepass-creator/freepass-data/actions/runs/38089799739) SUCCESS, exact `c2ccd609`, `freepass-data-read-00024-w6g`, image `sha256:1357532c824e1bce7d977b87ee337dd1cf928723148ddfb6736cd524177e001c`, Ready=True / traffic 100%. 기존 runtime SA·env·consumer Secret version 3·Iancar Secret version 1 유지, IAM binding 멤버 확대 0 / allUsers 0.
+- 검증: 총괄의 exact revision build·로컬 read-runtime 13 PASS, 전체 기본 병렬 테스트 timeout 1건 발생 후 해당 8개 단독 PASS 및 maxWorkers=2 전체 2,133 PASS / 조건부 16 SKIP. Claude 공식 session 48852는 본문+ANSWERED+exit0, 차단 없음. 배포 workflow의 미인증 403 / ERP compat 인증 200 PASS. 배포 전 Kakao reference 200·475개 / REFERENCE_ONLY·HOLD, COLLECTED grant=false.
+- 배포 후 실조회: 총괄 session 88822 exit0, HTTP200·475개 / REFERENCE_ONLY·HOLD. 손오공 140·이안카 94·오토플러스 32개, 각각 대표 차량번호 HTTP200·matches1·기간조건 10/32/4개·색상 존재. 각 공급사 응답과 해당 차량번호 응답의 전체 offers/terms JSON 동일. 손오공/이안카 사진 상태 URLS_PRESENT 24/51개, 오토플러스 LINK_ONLY·사진 URL 0개. ZERO 조회 HTTP200·31개/invalidZeroTerms0, UNKNOWN HTTP200·18개, 미승인 COLLECTED403·불완전 차량번호400. 이는 응답 조회와 표기 검증이며 전체 원천 freshness·사진 속 실제 차량 identity·Kakao 소비자 연결 검증은 아니다.
+- 남음: 이 배포는 실제 Kakao 소비자 코드 수정, Drive 사진 reader 자동 연결, 공급사 RAW apply, Canonical/ACTIVE 발행, COLLECTED grant 또는 내부 AI 계정 등록을 완료하지 않는다. DB·IAM 확대·공개 설정·외부 저장소 변경은 승인 범위 밖이며 수행하지 않았다.
+- next_start_here: 현재 운영 revision/image와 위 run 및 session 88822의 비식별 post-readback을 먼저 확인한다. 코드 인계 문서가 main에 병합되어도 운영 image는 `c2ccd609` 그대로다. rollback은 기존 ready revision으로의 traffic 복귀이며 필요 시 별도 운영 판단으로 실행한다.
 
-아래는 통합 준비 목록이며 main/운영 완료 선언이 아니다. 기준 main `6faca67627a7df884587eb4294a5aa12d58a4fbe`; 재개할 때 head와 CI를 다시 확인한다. 같은 stable guide를 확장하며 새 manifest 파일·원장을 만들지 않는다.
+### 2026-10-10 폐기된 pre-ONE 배달기의 미호출 실행부 제거
 
-| 단일 owner / 고정 revision | 소유 파일 범위 / 현재 검증 | 통합 선행조건·운영 남음 |
-|---|---|---|
-| 수집 `772a2fa`(이전 `cdae2d2`) | 기존 supplier reader/job/전용 테스트; 최신 revision의 독립 검증 미완 | 최신 캡처 171 sourceRecord ID와 master snapshot을 맞춤. 변경13/보류158 및 분류100/5/18 대100/23의 기준 차이는 동일 ID 대사 전 오류/성공으로 확정하지 않음 |
-| 마스터 `6bf6070babd95e866378e80e2506ebc57c5dc773` | vehicle-identity-inputs/resolution·전용 테스트; 독립13 PASS | snapshot digest·master/trim ID pair·alias 모호성 검증 후 source 변경13과 대사. reference/gateway 직접 수정 금지 |
-| 금액 PR408 `c3006d2b431fce1a2b30088cef51f6e292f2ed97` | reference builder/gateway·두 schema·전용 테스트; core/canon SUCCESS | stable guide 커밋57fb2dc 포함. 최신 head 재검증→지휘 통합→운영 인증 필터 readback. 배포 전 검색 성공 주장 금지 |
-| 정본 PR411 `d5db6f3c16a1fbd030c5ed96a3f791960ad69183` | catalog/source stores/worker·전용 테스트; 독립25 PASS, core/canon SUCCESS | CURRENT이지만 오래된 source의 발행 반례와 freshness guard는 후속 검증 미완. 준비 Release 성공을 ACTIVE 승격으로 계산하지 않음 |
-| 사진 PR410 `010dbfbc317fdd0bd5a3827c8e2ff7073beb14eb` | vehicle-media-evidence helper·전용 테스트; 독립12 PASS, 원격/로컬 SHA 일치, core/canon SUCCESS | URL 헤더 성공과 실이미지/차량 동일성 분리. 원문 사진4·색상2 누락 복구 근거 확보 전 전체 완료 금지 |
-| 소비처 PR409 `ba243906ccbb5e2c5a6f068700f94c1ef6d267e0` | consumer-cutover·전용 테스트; core/canon SUCCESS, 이 head 독립 재검증 미완 | registry가 호환200을 Canonical 전환으로 올리지 않음. ERP 공개 계약 owner의 null/state 보존과 Kakao query owner의 같은 기간 조건 결합 후 소비처 재조회 |
-| 정산 owner / 보호 수정 SHA 미확정 | admin-workflow 감사 guard·전용 테스트(지휘 지정); 다른 담당 gateway 침범 금지 | 합성 기존 aud_* update는 기대REJECT/실제ACCEPT 재현. 수정 후 변경/삭제 거부·같은 값 재시도·새 이력 허용·거절시 전체 거래 무쓰기 검증 |
-| 품질 / stable guide57fb2dc 후속 | 이 문서만 단독 편집; 원본 root65+9 및 isolated39 추가줄 보존 | root9줄은10-07 수수료 scope handoff,65줄은당시 정책 설명. 최신 정책과 독립 대조 전 삭제/커밋 강제 금지. isolated39줄은 출처별 diff 확인 후 owner가 보존 커밋·최신main 통합하여 academy 재확인 |
+- 목적/기준 revision: `7ef04a90ab2ee2d54f18b8b9c5d30cae5d20d000`에서 폐기된 배달기의 혼동 가능한 dead 실행부를 제거한다. Academy development READY, 새 자산 없음.
+- 변경/참조: `scripts/data-delivery-owner.mjs`의 정의만 있고 호출/export가 없는 `historicalMain()` 및 그 함수만 쓰던 `command()`와 child-process/파일쓰기 전용 import를 삭제했다. `shared-sheet-daily.yml`이 실제 import하는 `assertCurrentSharedSheet`, 테스트용 exports, CLI `RETIRED` fail-closed는 변경하지 않는다. 기존 이력·dashboard 갱신·원문·dirty·미병합 작업 보존.
+- 검증: delivery 회귀 15 PASS(현행 시트 binding·기존 exports·3종 CLI 차단·dead 외부 명령/파일쓰기 경로 부재), 전체 Vitest 2,133 PASS / 외부환경 조건부 16 SKIP, build·architecture·Data Access boundary PASS, standards 33개 schema/15 PASS(기존 PARTIAL), diff check PASS. 최종 exact commit·CI·Claude 결과는 이 작업 PR의 통합 영수증에 고정한다.
+- 남음: `source:iancar:direct`는 원 ERP inventory/parity/RAW, `source:iancar:one`은 ONE 요금/조건/사진/sync/restore로 권한이 달라 유지한다. 운영 `050e382`의 dead 함수도 미호출이며 운영 image·workflow·IAM·DB·ACTIVE 변경 0회.
+- 복원/next_start_here: 폐기 commit revert로 코드 복원 가능하나 폐기 배달기 재실행 권한은 없다. 현재 main과 PR 검증을 확인하고 다음 후보도 실제 책임·참조와 운영 의존부터 대조한다.
 
-독립 운영 반례: `2026-10-09T08:42:46.867Z` 호환 snapshot과 공개 plain feed의 같은 상품·기간에서 UNKNOWN/null→0·상태누락3890건(차량 대수 아님), 관측 종료08:42:51.440Z. Kakao 기존 query의 합성12개월100만원/36개월40만원에12개월·50만원이하 조건은 기대0/실제1. aud_* 합성 저장소 변조 허용은 운영 쓰기0이며 원장 실변조 증거가 아니다.
+### 2026-10-10 폐기된 AutoPlus 1회성 보정 실행코드 제거
 
-권장 통합 순서: 단일 owner diff·source/snapshot 대사→source/master/store/사진/registry 및 정산 guard targeted 검증→PR408 계약 연결 검증→지휘의 누적 main 후보에서 전체 check 한 번→허가된 배포/ACTIVE 게이트→등록 소비처 개별 readback. CI·targeted 합계를 전체 완료로 쓰지 않는다. freshness·원문 접근·운영 승인 부족은 정확한 blocker와 기존 owner의 다음 처방을 함께 유지한다.
+- 목적/기준 revision: `67a372e2bfe2f81f63e962753918697de9891703`에서 이미 2026-09-29 적용·퇴역한 보정기의 혼동 가능한 실행 입구를 제거한다. Academy development READY, 새 자산 없음.
+- 변경: `repair:autoplus-policy` npm 명령, job, Firestore adapter, 퇴역 전용 assert 및 boundary의 해당 job/fieldDelete 예외만 삭제했다. 일반 정책 invariant·제품 범위 검사와 applied run ID는 보존한다. 새 대체 보정기는 없다.
+- 참조/운영: 두 삭제 파일의 호출은 해당 npm/job과 퇴역 테스트뿐이다. `050e382` 운영 read의 consumer-server 진입점은 이를 import하지 않는다. Docker는 새 build에서 src를 컴파일하며 host dist를 복사하지 않는다. 현행 shared-sheet workflow가 import하는 옛 delivery helper와 미병합 PR/원문/dirty worktree는 그대로 둔다.
+- 검증: 정책 invariant·제품 범위 및 npm/job/adapter 입구 부재 8 PASS, 전체 Vitest 2,133 PASS / 외부환경 조건부 16 SKIP, build·architecture·Data Access boundary PASS, standards 33개 schema/15 PASS(기존 PARTIAL 유지), 실제 로컬 read-runtime smoke 13 PASS. 최종 exact commit·CI·Claude 결과는 이 작업 PR의 통합 영수증에 고정한다.
+- 남음: 운영 image `050e382`는 변경하지 않으며 배포·DB·IAM·ACTIVE·외부 저장소 변경 0회. 현재 가격/정책의 RP binding 재발급이나 정정은 별도 작업이다.
+- 복원/next_start_here: 이 폐기 commit의 revert로 코드만 복원할 수 있다. 복원하더라도 1회성 보정의 재실행 권한은 없다. 현재 main과 PR 검증을 확인하고 실제 미사용이 입증된 다음 후보만 이어서 폐기한다.
+### 2026-10-11 렌트존 번호 미정 정제 차량번호 분리
 
-### 원천과 비공개 증거를 찾는 방법
+- 정본 readback: `freepasserp5` 기존 SourceIngestionStore, source `shared-sheet:fa91e570d9bb9b3b0667451e`, run `run_61934839374a9d0d4f7d9b3164bc8487b587b680`, observedAt `2026-10-10T22:00:12.027Z`, COMPLETED. 렌트존 RAW 8/정제 후보 8 실제 저장 확인. 레이 원문 두 행의 보증금 KNOWN/ZERO와 기간별 대여료는 별도 보존되어 있다. 저장 누락으로 판단하거나 중복 저장하지 않는다.
+- 변경: 기존 normalizer에서 번호 미정 placeholder는 optional `candidate.carNumber`에 넣지 않는다. RAW 값·관측 ID·PLATE_NOT_ASSIGNED·차종 충돌 및 master 미확정 사유는 그대로 보존한다. 정제 출력 변경을 구분하도록 ruleVersion `/4`→`/5`. 새 schema/reader/영구상품ID/행 병합 없음.
+- 검증: shared-sheet capture/canonical 71 PASS, build/diff check PASS. 번호 미정 두 관측의 RAW 보존·ID 분리·REJECTED 유지·정제 carNumber 미설정 회귀. 운영 쓰기0, 배포0.
+- 남음/next_start_here: 조회 담당은 저장된 REJECTED 후보의 확인된 기간별 조건을 원문 근거와 함께 표시하되 차량수/영구 상품 연결로 승격하지 않는다. 기존 저장 후보에는 placeholder가 남아 있으므로 조회 projection에서도 assigned 판정 후 미설정/null로 노출한다. 이 변경의 통합과 독립 검토 결과를 별도 확인한다.
 
-공개 저장소에는 사전·계약·검증 코드·비식별 결과만 둔다. 공급사 원문 위치와 세부 조건, 차량/고객/계좌 식별자는 권한 있는 증거에서 확인한다. 이 안내 자체가 접근권한을 부여하지 않는다.
+### 2026-10-10 PR427 손오공 RAW 크기 안전장치 — 운영 전환 HOLD
 
-- **현재 운영값:** 위 해당 도메인의 원천 registry/계약에서 위치를 확인하고 승인된 연결로 다시 읽는다. 파일·탭·범위·관측 시각 또는 source revision을 고정한다. 과거 캡처를 오늘의 정답으로 사용하지 않는다.
-- **이 PC의 상품·정책 감사 이력:** 권한 있는 작업자만 사용자 홈의 `.codex/private/freepass-data-source-captures/<run>/`에서 `summary.json`의 `readTime`/`sourceDigest`를 먼저 확인한다. 같은 run의 `capture.json`, `policy-diagnostic-summary.json`과 추가 대사 자료를 함께 사용한다. 보고서가 보존된 run에는 `commercial-policy-audit-full.md`가 있다. 모든 run에 모든 파일이 있다고 가정하지 않는다.
-- **다른 PC/권한 없는 AI:** 위 로컬 자료가 없으면 현재 업무 담당자에게 해당 감사의 관측 시각과 범위를 제시하고 승인된 증거 전달 경로를 확인한다. 공유 저장소 동기화가 완료됐다고 가정하거나 원문을 공개 Git에 복사하지 않는다. 접근 불가는 `HOLD_EVIDENCE_ACCESS`로 기록하고 공개 계약·코드 검토는 계속할 수 있다.
-- **판정 순서:** 원본·승인 효력 → 같은 버전의 재현 가능한 대사 → 실행 로그·소비처 readback → AI 설명. 자료가 충돌하면 승인·효력·범위를 확인하기 전 임의로 하나를 선택하지 않는다.
+- 목적/기준 revision: `4b9cca3172d23da94a90df98bcd8850b0bc44229`에서 첫 차량에 전체 목록 envelope가 집중되는 문제를 기존 PR427 범위에서 해소한다.
+- 변경/재사용: 기존 RAW record·`prepareRawSourceBatch`·수집 job을 COMPOSE_OR_EXTEND. 원문 페이지별 분리와 적재 전 개별 문서 크기 차단이며 새 collection/schema/bucket은 없다. 차량 마스터 전용 archive는 공급사 RAW 보존 권한을 대체하지 않아 사용하지 않는다.
+- 검증: 관련 80개 테스트와 build PASS. 합성 900대/9페이지의 합산 원문이 1MiB를 넘는 상황에서 페이지별 재조립 동일성과 초과 상세의 ingest 호출 0회를 확인했다. 이전 62/79개 테스트는 작은 fixture의 내용·승인 검사만 포함하여 합산 크기와 대규모 UTF-8 원문을 놓쳤다.
+- 남음: 실제 공급사 수집·RAW 적재·배포·ACTIVE 전환 0회. 개별 페이지/상세 초과는 HOLD. 현재 RAW runtime은 normalize 미전달이며 rawCount는 페이지 포함 증거 건수다. 미래 정규화 소비자는 LIST_PAGE를 차량으로 처리하면 안 된다. 수정판 독립 검토/CI는 별도 확인한다.
+- next_start_here: 수정판 exact SHA의 Claude 검토와 CI 확인 후 병합 담당자가 판단한다. 구버전 실제 폐기는 소비처 최신 경로 readback과 별도 운영 승인을 확인한 뒤 진행한다.
 
-<a id="data-open-items"></a>
+### 2026-10-10 손오공 ERP 읽기 포트 이식 — 코드/가짜 응답 시험, 운영 HOLD
 
-### 미해결 항목 — 2026-09-30 상품·정책 감사 기준
+- 목적 / 대상 revision: `work/freepass-data/sonogong-port-20261010`, 기준 `9e8ecd575edcbdd04b13a9eac6092443025f61b7`. 사용자 지정 작업 트리만 수정. 커밋·push 없음. main/Issue #24/PR 확인은 호출자의 사전 확인을 사용했다.
+- 재사용: academy `READY`, `CREATE_NEW_JUSTIFIED`. 기존 손오공 RAW 어댑터·공통 수집 검사·SourceIngestionStore 적재 경로·보증금 규칙을 확장. ERP4 `origin/main` 읽기 로직의 인증/페이지/상세 계약만 이식하고 파일 토큰 캐시·덤프/차종/옵션 정리는 제외. ERP4는 수정하지 않았다.
+- 변경: `src/adapters/sonogong-erp-reader.ts`, 기존 `supplier-source-capture.ts`, `src/domain/sonogong-deposit-comparison.ts`, `src/jobs/collect-sonogong.ts`, `tests/sonogong-erp-reader.test.ts`, `package.json`, `docs/NATIVE-SOURCE-COLLECTOR.md` 및 이 이력. `source:sonogong` 기본 쓰기 0, 승인 환경변수+`--apply-raw`+RAW_READY에서만 기존 적재. 부분 수집은 PARTIAL/HOLD이며 삭제·발행하지 않는다.
+- 제한: 동시 1, 시작 간격 250ms, 요청 15초 timeout, 3회 백오프 재시도, 페이지 100/버킷·상세 총 1,000, freshness 1시간. 15분 주기 제안이며 예약 생성 없음. 원문 estimates 보존, 비교는 기간별 건수/구간만 출력한다.
+- 검증: npm 오프라인 잠금 설치 후 손오공 20 + 기존 source-intake 17 PASS. architecture/Data Access 경계·standards 15·시트 106·build PASS. `npm.cmd run check`는 runtime smoke 12 PASS/1 FAIL (`uv_os_get_passwd ENOMEM`)로 중단. 독립 `node:os.userInfo()` 같은 오류 재현. 별도 shadow 10 PASS, dashboard 21 PASS, 전체 Vitest 1,954 PASS / 12 FAIL / 16 SKIP. 실패는 기존 tsx/사용자 정보·jq 실행 권한·로컬 서버 연결 경로이며 관련 시험/기대값은 변경하지 않았다. 전체 PASS 아님. 빌드된 CLI의 승인/계정 누락 차단 및 diff 공백 검사 확인.
+- 남음: 계정 등록, 첫 실호출로 DAILY/응답 형태/원천 시각 계약 확인, 운영 RAW 저장·되읽기, 상품 칸 정리/발행 이관, 독립 검토. BLOCKED_NETWORK: 손오공 실호출·운영 되읽기·Claude 독립 검토.
+- next_start_here: [손오공 이식/주입 절차](NATIVE-SOURCE-COLLECTOR.md#손오공-rp012-erp-읽기-이식--코드가짜-응답-시험-운영-hold-2026-10-10). 호출자가 환경 제약 없는 곳에서 전체 check와 검토를 마친 뒤 반영한다. 계정 등록 후 기본 읽기 → 비교 → 별도 승인 RAW → 되읽기 순서. ERP4 중단은 **Data 수집 첫 성공 + 매시 발행 이관 반영 + 2주 관찰** 충족 후 별도 실행.
 
-아래는 해결 완료를 재확인할 때까지 유지하는 점검 목록이다. 특정 상품의 현재 오류 건수나 전체 데이터 상태를 보증하지 않는다.
+### 2026-10-10 PR #419 반려 수정 — 차량사진 확인·응답 슬롯·미디어 검증 통합
 
-| 이어서 확인할 항목 | 출발 문서 | 완료라고 말하려면 |
-|---|---|---|
-| 공급사 원문의 자격·요금·보험 조건 충돌 | [상품·정책 사전](COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#policy-dictionary) | 적용 상품/계약자·효력일·승인 원문을 고정하고 충돌 해소 근거 확보 |
-| 정책 연결·활성 여부·문자열 단위 해석 | [ERP5 캡처](ERP5-SOURCE-CAPTURE.md) | UID/코드/공급사 namespace와 효력 확인, 0/누락/미해석 구분, 같은 캡처 전후 검증 |
-| 연령별 조건 누락·소비처 기본값 보충 | [소비처 사용 계약](F01-F86-ERP-PUBLICATION-CONTRACT.md) | 공개 가능한 필드 계약·출처를 확인하고 실제 응답/견적 경로를 재조회 |
-| 신규 재고·정책 본문 갱신 | [Source run 안전 규칙](SOURCE-RUN-SAFETY.md) | 실제 실행 모드·원천 전체 범위·신규 행·정책 내용과 accepted head 대사 |
-| 접수·계약·정산까지의 업무 연결 | [업무 연결 지도](BUSINESS-DATA-CONNECTION-MAP.md) | 계약 시점 스냅샷·실제 입출금·승인/취소/환수 증거를 해당 권한으로 별도 검증 |
-| F01/F86·웹·화이트라벨·Admin 전체 전달 | [소비처 런타임](ERP5-CONSUMER-RUNTIME.md) | 등록된 각 소비처의 버전·필드·권한·실제 출력 readback 확보 |
+- 목적 / 대상 revision: `work/freepass-data/vehicle-photo-proxy-20261010`, HEAD `dac29b00847b0ab77c191ff4d777db6ca09d7b52`의 깨끗한 작업 트리에서 사용자 지정 3건을 수정. academy:start READY. 새 파일 없이 기존 공통 계약·게이트웨이·시험을 확장했다. 커밋·푸시 없음.
+- 변경: `photo_original_refs`의 차량사진 확인자/방법/시각을 필수로 하고 ONE·Drive 모두 count/원본/캐시 읽기 전에 독립 검사, 응답 직전 기록 재확인. ONE 전용 사진 근거는 현행 사진 문서에 확인 방법 값 형식만 정의하고 실제 근거는 사람이 작성한다. 게이트웨이 동시8 슬롯은 성공 감사와 실제 응답 전송까지 유지하고 finish/error/close에서 한 번만 해제한다. 미디어 크기·MIME·시그니처는 `consumer-output-contract.ts::validateVehiclePhotoMedia`로 통합하고 어댑터·reader·gateway가 호출한다. 사진 크기·동시성·TTL 상수의 중복도 제거했다.
+- 바꾼 파일: `src/domain/consumer-output-contract.ts`, `src/api/consumer-gateway.ts`, `src/api/data-access-runtime.ts`, `src/adapters/iancar-one-api.ts`, `tests/consumer-gateway.test.ts`, `tests/iancar-publication-withdrawal.test.ts`, `docs/NATIVE-SOURCE-COLLECTOR.md`, 이 인계 파일. 승인 시험값은 합성 확인자·방법·시각이며 실제 차량번호·Drive ID·비밀 추가 없음.
+- 검증: 관련171 PASS(gateway68 / ONE75 / withdrawal23 / output-contract5). 필드별 누락·공백 거부와 정상 허용, 확인 기록 철회, 실제 스트림 완료 전 요청 제한, finish/error/close 중복 반환 방지, reader·감사 오류 후 슬롯 재사용 확인. `npm.cmd run check` code1: arch/standards/data-access/sheets106/build PASS, read-runtime-smoke 12 PASS/1 FAIL(`uv_os_get_passwd ENOMEM`, tsx 시작 오류); 뒤의 shadow/dashboard/전체 Vitest 단계는 도달하지 않음. 별도 `npm.cmd test`는 1967 PASS/12 FAIL/16 SKIP(137 PASS/5 FAIL/4 SKIP 파일). 실패 파일: iancar-source-capture, projection-integrity, read-pilot, runtime-policy, vehicle-finder-route; ENOMEM, jq 실행 거부, CLI 종료코드·로컬 연결 실패가 남는다. runtime-policy는 수정하지 않았다. 전체 통과로 처리하지 않는다.
+- 남음: `BLOCKED_NETWORK` — 원격 main·Issue #24·PR #419 최신 조회와 Claude 독립 검토 미실행(UNAVAILABLE). 사람의 실제 사진 확인 근거 입력·기존 승인 기록 보완, Drive reader/권한·승인 게시·배포·라이브 검증은 HOLD. 현재 확인 기록이 없는 ONE 상품도 fail-closed로 사진을 내주지 않는 의도된 변경이다.
+- next_start_here: 이 미커밋 diff를 검토하고 정상 실행 환경에서 전체 check 재실행. 실제 근거를 사람이 채우기 전 운영 사진 제공을 완료라고 하지 않는다. 관련 시험 명령: `npm.cmd exec vitest -- run tests/consumer-gateway.test.ts tests/iancar-one-api.test.ts tests/consumer-output-contract.test.ts tests/iancar-publication-withdrawal.test.ts`.
 
-### 다음 사람·AI에게 남길 기록
+### 2026-10-10 사진 프록시 독립 재검토 세 결함 수정
 
-작업이 끝나면 기존 업무 문서를 갱신하고 아래 날짜 이력에 `목적 / 대상 revision·원천 관측 시각 / 변경 / 실행한 검증 / 남은 HOLD / next_start_here`를 남긴다. `next_start_here`는 읽을 문서·절과 다음 검증을 지정한다. 임시 로컬 위치만 남기거나 “테스트 통과”를 업무 전체 완료로 쓰지 않는다. 정본 문서가 이동하면 이 표와 README/AGENTS 링크도 함께 갱신한다.
-
-### 이 안내의 유지 범위
-
-2026-09-30 사용자 요청에 따라 기존 README·AGENTS·이 문서·상품정책 사전을 연결했다. 기준 revision은 `002cb95`, 이전 의미 사전/진단 병합은 [PR #256](https://github.com/freepass-creator/freepass-data/pull/256)이다. 이번 정리는 탐색·인계 개선이며 운영값·업무 권한·정책·스케줄 변경은 없다. 아래 날짜 이력은 삭제하거나 현재 상태로 재해석하지 않는다.
-
----
-
-## 날짜별 작업 이력
-
+- 목적 / 대상 revision: `eb647e233d17d7bf99fda39b1caa97cc13053065`, `work/freepass-data/vehicle-photo-proxy-20261010`의 기존 미커밋 변경에서 재현된 세 결함만 수정. main `7b2e26b` 변화 없음·PR #419 열림은 사용자가 전달한 Claude 확인을 이어받았다. 이번 academy는 지정된 미커밋 변경 때문에 `DIRTY_WORKTREE_REVIEW_REQUIRED`였으며 변경 목록 확인 후 직접 수정 지시로 계속했다. READY로 재표기하지 않는다.
+- 변경: reader 재검증 클로저를 성공 감사 저장 후 응답 직전에 호출(count·원본·캐시), 철회는404와 기존 deny 감사. 인증 실패만 IP 버킷·성공만 consumer 버킷, 환경 변수 hops0~3(기본0)로 프록시 신뢰 경계 설정. count를 공통 슬롯 try/finally로 이동. 기존 출처·키·미디어 검증 보존. 현행 규칙은 `docs/NATIVE-SOURCE-COLLECTOR.md` 사진 프록시 절.
+- 검증: 관련163 PASS(gateway60 / ONE75 / withdrawal23 / output-contract5), `git diff --check` PASS. `npm.cmd run check`는 arch/standards/data-access/sheets106/build PASS 후 smoke12 PASS/1 FAIL(`uv_os_get_passwd ENOMEM`, tsx 시작 환경 오류)로 code1 종료. 이후 check 단계 미실행. runtime-policy·projection-integrity 불안정 시험 수정 없음.
+- 남음 / next_start_here: 실행 환경의 사용자정보 조회 오류 해소 후 전체 check 재실행. 추가 네트워크 독립 검토·운영 검증 미실행. 커밋·푸시 없음. 실제 사진 reader 권한·승인 게시·배포는 범위 밖.
 ### 2026-10-10 이안카 동기화 잠금 상품 단위 격리
 
 - 목적: 잠금 한 건 때문에 정상 상품 전체의 증거 갱신이 중단되는 문제 해소.
@@ -563,6 +1078,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 원인 ② 10-10 07:53 KST(run 38001646890): 13건 쓰고 되읽기 불일치 11. 읽기 전용 재현 결과 11건 모두 «기간별 수수료(internalEconomicsTerms)가 옛 정책 `sales-commission-2026-10-04` 로 저장된 채» — 10-09 정책으로 갈아탄 뒤 가격이 안 바뀐 제안은 재계산이 안 돼 되읽기(현재 정책 기대값)와 달랐다. 차량 사실·상태·가격 칸은 전부 일치. 전체 160개 중 158개가 정책 id 가 옛 값이고 일부(RP021 등)는 금액·상태도 바뀐다 → `src/jobs/recompute-offer-economics.ts`(계획→검토→digest 승인 적용)로 일괄 재계산이 필요하며 이는 운영 쓰기라 별도 승인 대상.
 - 원인 ③ «오늘 이미 썼음»: 쓰기 단계가 실패·취소여도 «쓴 것»으로 세어 뒤 회차가 건너뜀. 고침: 실패·취소·시간 초과는 세지 않아 재시도 허용(영수증 멱등키·기대 revision·계획 재생성으로 안전, 실패는 붉은 실행으로 그대로 보임).
 - 남음: 수수료 일괄 재계산 적용(시험 실행 계획 → 바뀌는 항목 요약 → 다른 모델 검토 → 승인 digest → 적용 → 되읽기).
+
+### 2026-10-10 차량 사진 프록시 승인 연결 확장
+
+- 목적 / 대상 revision: `eb647e2`, `work/freepass-data/vehicle-photo-proxy-20261010`. 독립 검토 지적 P1/P2 세 건을 같은 작업 트리에서 수정. 사용자 전달 main `7b2e26b` 리베이스·PR #419·Issue #24·겹침 확인을 이어받았다. academy READY, 커밋·푸시 없음.
+- 변경: ONE API와 승인 연결을 두 출처 전략으로 묶고 소비자·요청·적격성·동시성·바이트 검증·반환 직전 재조회는 하나로 통합. count와 캐시 적중도 철회를 재확인한다. 승인 출처는 SHA256, ONE은 기존 귀속 검사·캐시 유지. 인증 전 IP/인증 후 consumer 토큰 버킷, 상한·만료 정리, 429/Retry-After 추가. 차량키는 태그 포함 JSON 튜플 SHA256으로 교체.
+- 지운 것: `readIancarPhoto`, `isLegacyProduct` 인자·조기 반환, gateway 폴백과 공급사 전용 응답 코드. 시험 삭제 없음: 기존 gateway 이안카 시험은 `readVehiclePhoto`로 이전하고 ONE 귀속 시험은 보존. 파일 삭제 없음.
+- 재사용: 기존 reader·상품 적격성·ONE 캐시·시험을 확장. 요청 제한 검색 후보에는 시간 기반 인증 전/consumer 제한기가 없어 `photo-request-limit.ts`를 `CREATE_NEW_JUSTIFIED`로 추가했다.
+- 검증: 관련 144/144 PASS(gateway46, ONE75, withdrawal23). 전체 검사 결과는 `NATIVE-SOURCE-COLLECTOR.md` 같은 날짜 사진 절에 기록. 로컬 ERP5/ERP4 소비처 grep에서 옛 응답 코드 의존 없음; HTTP 상태·count 형식 보존.
+- 남음: 실제 Drive reader·운영 권한·승인 연결 게시·배포는 범위 밖. 네트워크 금지로 추가 독립 검토·라이브 검증은 미실행. 전체 check 환경 오류를 PASS로 간주하지 않는다.
+- next_start_here: 이 미커밋 diff와 관련 시험을 검토하고 정상 실행 환경에서 전체 check를 재검증한다. 새 차량키로 승인 연결을 생성해야 하며 옛 키를 자동 승인하거나 fallback하지 않는다.
 
 ### 2026-10-10 공개 파일의 Google Sheet/Drive ID 분리
 
@@ -2527,3 +3052,38 @@ This file exists so another session can continue without re-discovering or re-cr
 - 남음: 운영 인증/backup/readback/실행 승인 및 source/master 최신성/consumer 전체 연결은 HOLD. Kakao 기존 caller와 운영 read revision은 code merge로 바뀌지 않는다. 공급사·영업자 기존 코드는 임시 외부 식별값으로 보존하며 미래 코드 매핑 전제로 이력을 유지한다.
 - next_start_here: PR411 최종 head/CI/ANSWERED 영수증/merge SHA를 확인하고, 별도로 승인된 운영 절차에서만 deployment·ACTIVE·writer·consumer 전환을 실행한다. 오래된 draft snapshot은 비교 자료이며 최신 SSOT가 아니다.
 - 통합 독립 검토 후속: e566에서 로컬 콘솔 멱등 재시도의 releaseId 불변을 오류로 보던 반례를 수정했다. ACTIVE에 committed offer revision 이상이 있는지 검사한다. 기존 read-runtime smoke에 실제 HTTP 최초 요청/동일 재전송 200·같은 receipt·같은 ACTIVE 응답 회귀를 추가, 13 PASS. 코드와 테스트는 PR411 최종 head에서 확인한다.
+- 2026-10-10 public runtime/logging: structured route_error value-free logging, freepass-data-public public-only entrypoint/reused workflow/plan digest 4953e6478c8fef947b002caa8778f791aa589db5c6b500a8a03137f5485d1e1c CODED; verified build/check:arch/check:standards/check:data-access-boundary/YAML/public+consumer gateway vitest PASS; no deploy/IAM/commit/push; next_start_here: before protected grant_public_invoker=true, recheck IAM diff and public 404 smoke.
+
+## 2026-10-10 Vehicle UID 10-13 read-only planner: added zero-write plan/digest job, tests, and products-writer preservation audit; no apply code, commit/push/deploy none.
+
+
+## 2026-10-10 승인 Drive 사진 원본 byte adapter (운영 OFF)
+
+- 목적/정본: PR419 `2e72929ea32b5bbd160714a10937de2f0030d578`의 기존 ApprovedPhotoReader port를 구현한다. 사진 담당은 최종 head 경계 검증을 맡으며 원래 checkout은 수정하지 않았다.
+- 재사용/변경: COMPOSE_OR_EXTEND, academy READY. 기존 `src/infra/erp5-compat-catalog-reader.ts`에 `createApprovedDrivePhotoReader`를 추가했다. 정확 fileId metadata/alt=media GET만 사용하고 Compute metadata service-account token의 drive.readonly scope를 사용한다. 사용자 ADC/gws, 폴더 탐색, 공유, writer, 신규 엔진 없음. 기존 공통 reader가 차량키/승인/해시/철회/캐시를 계속 판정한다.
+- 검증: build, architecture, standards 33 schemas + 15 tests, data-access-boundary PASS. 전체 Vitest 2081 PASS/16 conditional SKIP; 후속 stream-limit fixture 추가 뒤 gateway 재검증 결과는 PR 기록을 따른다. SDK/transport 오류 원문은 고정 VEHICLE_PHOTO 오류로 정리하며 로깅하지 않는다.
+- 남음: factory는 명시 호출만 가능하며 runtime 기본 주입 OFF. 실제 승인 refs 0건, 운영 폴더 ID와 Drive 읽기 권한 미승인. CODED/TESTED와 실제 원본 연결·DEPLOYMENT/CUTOVER를 구분한다. Drive/DB/Sheet/IAM/배포 실행 없음.
+- next_start_here: PR419의 최종 commit/CI/Claude 결과를 확인하고 사진 담당이 독립 경계 검증한다. 별도 운영 승인 전 runtime 주입·photo_original_refs 입력·Drive 공유를 하지 않는다.
+
+## 2026-10-10 인증된 전체 수집 원천 조회 scope
+
+- 목적/정본: 대표의 수집 정보 있음/없음 구분. PR440 c61c0beb 기준 기존 통합 checkout에서 COMPOSE_OR_EXTEND/academy READY 후 기존 builder/gateway/schema/test를 확장했다. PR419 main30675ec, PR440 main01a7f0b 통합 완료; 후속 sourceScope 작업은 별도다.
+- 변경: 기존 catalog-reference/internal-ai-reference에서 명시 sourceScope=COLLECTED와 등록 referenceSourceScopes grant가 함께 있을 때만 비판매·가격누락 원천을 반환한다. grant 없으면 원천 reader 호출 전에403, invalid scope400. 기본/public LISTABLE 범위는 그대로다. 원천 ID/임시 공급사 code/원문 상태와 판매가능 여부를 분리하며, 빈 조건은 HOLD+누락 reason이고 금액0으로 만들지 않는다.
+- 조건 보존: sourceRecord.priceConditions는 원래 key/출처/기간/약정거리/원문 대여료·보증금 및 typed 상태와 두 fee축을 보존한다. 계산 불가능은 UNKNOWN/null, 원문0과 확정 ZERO는 별도다. 다른 raw 고객/비밀 필드는 내보내지 않는다. 유효 기존 priceTerms/정책명code/engineCc/출처/HOLD는 재사용한다.
+- 검증: 현재 build, 관련214 tests, architecture, standards33 schemas+15 tests, data-access boundary PASS. 최종 cumulative suite/CI/Claude 및 금액 담당의 기존 private fixture 전수 대조는 후속 PR의 exact head에 기록한다.
+- 남음: 운영 sourceScope grant/token 배포, 외부 Kakao/ERP caller, DB/Sheet/IAM/Drive/배포 변경 없음. CODED/TESTED와 실제 운영 전체 원천 조회는 구분한다.
+- next_start_here: 최종 scope head의 권한 pre-read denial/default 불변/빈 조건 schema/HOLD/복수 원천/같은 term 회귀와 private 원천 대조를 확인한 뒤 코드 통합만 진행한다. 현행 RP 코드를 새 정본 identity로 고정하지 않는다.
+- 2026-10-11 기간별 청구·지급 장부 설계: `docs/PERIOD-FEE-LEDGER-DESIGN.md` 작성(코드·운영쓰기·배포 없음); 재사용 판정은 기존 `internalEconomicsTerms`·#448 가격행 투영 재사용 + 차량별 일 박제 장부 `CREATE_NEW_JUSTIFIED`; next_start_here: 10-12 읽기 전용 계획기(`plan:period-fee-ledger`, 쓰기0, UID 없음 HOLD_NO_UID, public/settlement 차단 테스트) 구현 검증 후 apply PR은 별도 승인 전까지 만들지 않는다.
+
+## 2026-10-11 PR465 상품 전체 직접 읽기 구현 후보
+
+- 후속 실제 실행(23:41~23:54 KST): PR465 main fbc00404에서 직접 CLI1776상품/175원천 재조회, native audit38147750358 및 writer guard SUCCESS. 이어 기존 shared-sheet-daily dry-run38148201370(main68c96649)에서 23:42:17 KST 원천12탭/175상품행·678기간 대사, CHANGE19/HOLD156/writerReady=true, capture/plan SUCCESS·applySKIP·DB쓰기0. private plan 고정 generation과19건 변경 전 binding/model/asset/product/offer 백업·재읽기, revision 불일치0/head·ownership 일치 확인. 자동 롤백 실행기는 없으며 승인 plan 적용 전 live 원천 동일성 재검증이 필요하다. 기존validator의 저장소 drift 검사가 공급사 live 원문 drift까지 보장한다는 설명은 철회한다.
+- 후속 기간 선택 수정: 기존 금액 작업선 PR480, code15939346에서 기존 planner/transaction이 같은 fee-only selector를 사용하도록4기존파일 확장. 승인 Git/USER 정책 재사용, 새 DB policy 필수 gate/엔진/ledger writer 없음; 9예외 제외·125비선택기간 보존. 관련28/build PASS, exact15939346 전체2422 PASS/18 conditional SKIP. 실제26건은 CURRENT source binding 불일치로 READY0/쓰기0. main05443076 동시 read-runtime 변경은822a1db4에서 모두 보존해 결합했고 최종 PR480 exacthead CI/독립 검증 뒤에만 통합한다. next_start_here: 수집 담당의 고정계획+live원문 대조 경로 → 현재 binding 갱신 readback → 동일selector로 재계획/정확 운영 승인 → 저장 후 직접 조회. AI-OPS 기존 PR146 wrapper 실제조회 후보 결과도 별도 통합/재읽기하며 요청했다는 사실을 완료로 세지 않는다.
+
+- 목적: 상품 전체를 온라인 Firestore에서 직접 읽는 기존 내부 소비처 진입점 확장. 대상 revision: merge base c968bbd2(operator 1dac5cf 결합), 기존 PR465 branch. 원본 저장소 dirty와 다른 역할 변경 보존.
+- 변경: 기존 compatibility reader/application/job/test 확장. legacy/canonical/current-source 각 representation을 구분하고 검색·결측·저장 사진 참조·기간조건을 연결. 새 API/reader/계약/요율/DB쓰기/IAM/운영 배포 없음.
+- 직접 조회 검토 revision: 813cacc1938dc4f589c0f9650525134ecc846374. 후속 main PR475/476 a109af00는 8587bae43fa3f3241ad6df49519393c81656ed78에서 import3개를 모두 보존해 통합했고 direct composition 함수 본문은 동일하다. 새 main 통합 head의 전체 시험/CI는 PR465 최종 영수증을 확인한다. 기존 등록 별칭/법인명 검색, 저장 경제조건 helper, options 사실, source grant 미지정/빈 범위의 source 읽기0, 별도 ledger 시점/digest를 보존한다. grant는 신뢰 서버의 기존 인가 결과 전달이며 Firebase 권한 발급이 아니다.
+- 검증: 품질 역할이 정확 813cacc1에서 전체2415 PASS/18 conditional SKIP/실패0, build/arch/data boundary PASS와 전후 SHA·clean 일치를 확인했다. Core CI38147074116/Canon38147072688 SUCCESS. Claude 좁힌 최종 함수 검토34952 ANSWERED/exit0: 중앙 검증·source 범위·ledger provenance 중대 반례 없음. 앞선55087 timeout은 PASS 아님. 공백 입력 비대칭 참고 의견은 실제 compatibility selector의 trim 검증으로 반박했다.
+- 실제 온라인 읽기: legacy1776/canonical160/568 canonical기간/source175를 서로 다른 표현 분모로 유지한다. 공급사명 검색에서 렌트존 legacy8/canonical4/source8, 손오공736/0/0, 이안카350/0/0, 아이언 및 아이언렌트카66/0/0, 오토플러스155/0/0, 웰릭스27/17/23 반환을 확인했다. 이는 저장 문서 수이지 실물 대수·판매가능 수가 아니다. 원천 RAW175/후보175/REJECTED138 및 제한6열 원문 누출0, 사진 승인 참조51의 저장 조회와 접근 NOT_CHECKED를 구분한다.
+- 남음: ledger0, legacy↔canonical exactID offer연결0, 청구·지급 각각 KNOWN393/UNKNOWN175, 1개월35기간 양쪽 UNKNOWN. 수수료 재계산을 읽기 경로에서 하지 않는다. 1개월26건 fee-only private 증거는 실행불가/READY0이며 나머지9 공급사 특칙·정책 저장·현재 sourceRun 연결·비대상170기간 변경 위험을 별도 해결한다. CURRENT source 관측은 2026-10-10T22:00:12.027Z로 현재 시점 freshness가 아니다. 15분 스케줄 실제 capture/apply 및 각 플랫폼 운영 출력/cutover는 미검증; sourceFreshness UNVERIFIED, settlementConfirmation NOT_ASSESSED. DB/IAM/배포/스케줄 변경0.
+- next_start_here: docs/READ-CONTRACT-DESIGN.md → 기존 readStoredConsumerProducts/--stored-products; 승인된 플랫폼 자체 Firestore credential로 같은 검색 계약을 연결하고 실제 화면·사진 readback을 확인한다. 운영 writer는 main guard 반영 뒤 native audit/실제 capture·apply·readback을 별도 확인하며 기존 미확인값을 0으로 채우지 않는다.

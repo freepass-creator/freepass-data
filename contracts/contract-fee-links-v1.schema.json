@@ -42,6 +42,11 @@
                 "maxLength": 40,
                 "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
               },
+              "contractDate": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
               "supplierId": {
                 "type": "string",
                 "minLength": 1,
@@ -168,6 +173,102 @@
         }
       }
     },
+    "ledgerFeeAmount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "amount",
+        "reasonCode"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "CALCULATED",
+            "CALCULATED_APPROX",
+            "UNKNOWN",
+            "NOT_APPLICABLE"
+          ]
+        },
+        "amount": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasonCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ledgerFee": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "supplierBillingFee",
+        "channelPayoutFee",
+        "vehicleValueEvidence"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "CONFIRMED",
+            "HOLD"
+          ]
+        },
+        "snapshotId": {
+          "type": "string"
+        },
+        "valueAsOf": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "supplierBillingFee": {
+          "$ref": "#/$defs/ledgerFeeAmount"
+        },
+        "channelPayoutFee": {
+          "$ref": "#/$defs/ledgerFeeAmount"
+        },
+        "vehicleValueEvidence": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "grade",
+                "source"
+              ],
+              "properties": {
+                "grade": {
+                  "enum": [
+                    "CONFIRMED",
+                    "APPROX"
+                  ]
+                },
+                "source": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasonCode": {
+          "type": "string"
+        }
+      }
+    },
     "response": {
       "type": "object",
       "additionalProperties": false,
@@ -239,6 +340,9 @@
                     "$ref": "#/$defs/feeAmount"
                   }
                 }
+              },
+              "ledgerFee": {
+                "$ref": "#/$defs/ledgerFee"
               }
             }
           }

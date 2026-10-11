@@ -7,6 +7,8 @@ import { getStorage } from 'firebase-admin/storage';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { isPublicIancarPhotoProduct } from './erp5-compat-catalog-reader.js';
+import { planIancarPhotoReviewPatch, type IancarOnePhotoReview } from '../domain/consumer-output-contract.js';
+export { planIancarPhotoReviewPatch, type IancarOnePhotoReview } from '../domain/consumer-output-contract.js';
 
 export type IancarPhotoObservation = { productId: string; vehicleId: string; plate: string; count: number; observedAt: string; illustration?: { url: string; sourceName: string; kind: "MODEL_ILLUSTRATION"; sourcePage: string; mappingVersion: string; observedSha256?: string } };
 
@@ -76,8 +78,9 @@ export function iancarPhotoPatch(original: Record<string, any>, row: IancarPhoto
 /** Photo-only publication: immutable backup, exact identity, revision fence, no inventory/price edits. */
 export async function publishIancarPhotoReferences(input: {
   records: { productId: string; vehicleId: string; plate: string; count: number; observedAt: string;
+    review?: IancarOnePhotoReview;
     illustration?: { url: string; sourceName: string; kind: 'MODEL_ILLUSTRATION'; sourcePage: string; mappingVersion: string; observedSha256?: string } }[];
-  apply: boolean; expectedPlanDigest?: string;
+  apply: boolean; expectedPlanDigest?: string; verificationOnly?: boolean;
 }) {
   const app = getTargetFirebaseApp();
   if (app.options.projectId !== 'freepasserp5') throw new Error('IANCAR_PHOTO_WRONG_PROJECT');
@@ -102,7 +105,10 @@ export async function publishIancarPhotoReferences(input: {
       || String(original!.car_number).replace(/\s/g, '') !== row.plate.replace(/\s/g, '')
       || !Number.isSafeInteger(row.count) || row.count < 0 || row.count > 200)
       throw new Error('IANCAR_PHOTO_IDENTITY_OR_COUNT_INVALID');
-    const patch = iancarPhotoPatch(original!, row);
+    if (row.review && !input.verificationOnly) throw new Error('IANCAR_PHOTO_REVIEW_MODE_REQUIRED');
+    if (input.verificationOnly && !row.review) throw new Error('IANCAR_PHOTO_REVIEW_REQUIRED');
+    const patch = input.verificationOnly ? planIancarPhotoReviewPatch(original!, row, row.review!)
+      : iancarPhotoPatch(original!, row);
     return { row, original: original!, patch, snapshot: before[index]! };
   });
   const planDigest = stableDigest(planned.map(p => ({ id: p.row.productId, revision: p.snapshot.updateTime!.toMillis(), patch: p.patch })));
@@ -132,6 +138,9 @@ export async function publishIancarPhotoReferences(input: {
     const p = planned[i]!; const actual = after[i]!.data()!;
     if (Object.entries(p.patch).some(([key, value]) => stableDigest(actual[key]) !== stableDigest(value)))
       throw Object.assign(new Error('IANCAR_PHOTO_COMMITTED_READBACK_FAILED'), { runId, backupPath, writeExecuted: true });
+    if (input.verificationOnly && Object.entries(p.original).some(([key, value]) => !(key in p.patch)
+      && stableDigest(actual[key]) !== stableDigest(value)))
+      throw Object.assign(new Error('IANCAR_PHOTO_UNEXPECTED_FIELD_CHANGE'), { runId, backupPath, writeExecuted: true });
   }
   return { ...summary, status: 'PHOTO_ATOM_READBACK_VERIFIED', writeExecuted: true, runId, backupPath };
 }
@@ -376,7 +385,7 @@ export async function restoreIancarPhaseOne(input: { backupPath: string; apply: 
   }
   const refs = backup.documents.map((row: any) => {
     if (!/^products\/[^/]+$/.test(row.path) || row.patch.provider_company_code !== 'RP031') throw new Error('IANCAR_RESTORE_SCOPE_INVALID');
-    if (photoOnly && (!row.exists || Object.keys(row.patch).some(key => !['provider_company_code', 'iancar_one_photo_count', 'iancar_one_photos_observed_at', 'iancar_one_photo_state', 'image_urls', 'image_url', 'image_kind', 'iancar_model_illustration', 'iancar_photo_source_original'].includes(key)))) throw new Error('IANCAR_RESTORE_SCOPE_INVALID');
+    if (photoOnly && (!row.exists || Object.keys(row.patch).some(key => !['provider_company_code', 'iancar_one_photo_count', 'iancar_one_photos_observed_at', 'iancar_one_photo_state', 'image_urls', 'image_url', 'image_kind', 'iancar_model_illustration', 'iancar_photo_source_original', 'photo_original_refs', 'iancar_one_photo_ids'].includes(key)))) throw new Error('IANCAR_RESTORE_SCOPE_INVALID');
     return db.doc(row.path);
   });
   await db.runTransaction(async tx => {

@@ -89,7 +89,7 @@ const publicName = (collection: string) =>
 const GATE_STEP = 'Daily schedule and manual apply gate';
 const CAPTURE_STEP = 'Capture and plan (no writes) — counts only in the public log';
 const APPLY_STEP = 'Apply to FreePass Data (writes) — counts only in the public log';
-const SUCCESS_ALLOWED_STEPS = new Set(['Set up job', GATE_STEP, 'Complete job']);
+const SUCCESS_ALLOWED_STEPS = new Set(['Set up job', 'Fetch gate scripts (sparse)', GATE_STEP, 'Post Fetch gate scripts (sparse)', 'Complete job']);
 
 type JobSteps = { name?: string; conclusion?: string | null }[] | null | undefined;
 
@@ -113,6 +113,17 @@ export function writeStepsSkippedConfirmed(steps: JobSteps): boolean {
     if (typeof name !== 'string' || name.trim() === '' || typeof conclusion !== 'string') return false;
     named.push({ name, conclusion });
   }
+  // Historical Actions auto-names repeat checkout. Accept only the exact observed
+  // no-write shape; never broadly allow duplicate names or successful writer steps.
+  const legacySkippedNames = ['Set up job', 'Run actions/checkout@v4', GATE_STEP,
+    'Run actions/checkout@v4', 'Run actions/setup-node@v4', 'Run npm ci --ignore-scripts',
+    'Require the Data delivery identity, sheet and private evidence bucket',
+    'Run google-github-actions/auth@v2', 'Run google-github-actions/setup-gcloud@v2',
+    CAPTURE_STEP, APPLY_STEP, 'Preserve private capture, plan and reports (location not printed)',
+    'Remove temporary files', 'Post Run actions/checkout@v4', 'Complete job'];
+  if (named.length === legacySkippedNames.length && named.every((step, index) =>
+    step.name === legacySkippedNames[index] && step.conclusion ===
+      ([0, 1, 2, 13, 14].includes(index) ? 'success' : 'skipped'))) return true;
   if (new Set(named.map((s) => s.name)).size !== named.length) return false;
   const conclusionOf = (name: string) => named.find((s) => s.name === name)?.conclusion;
   if (conclusionOf(GATE_STEP) !== 'success') return false;

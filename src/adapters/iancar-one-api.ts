@@ -1,3 +1,4 @@
+import { validateVehiclePhotoMedia, VEHICLE_PHOTO_MAX_CONCURRENT, VEHICLE_PHOTO_CACHE_TTL_MS } from '../domain/consumer-output-contract.js';
 import { IANCAR_PUBLISHED_DEPOSIT_FRESHNESS_SECONDS } from '../domain/deposit-evidence.js';
 import { createHash } from 'node:crypto';
 import type { SourceIntakeBatch } from '../domain/source-intake.js';
@@ -781,10 +782,8 @@ export function iancarOnePhotoIds(detail: unknown, vehicleId: string, plate: str
 
 /** Bounded raster-only response. Do not relay upstream headers, URLs, SVG or error bodies. */
 export async function readIancarOnePhotoBytes(response: Response) {
-  const maxBytes = 8 * 1024 * 1024;
   const contentType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
-  if (!response.ok || !response.body || !['image/jpeg', 'image/png', 'image/webp'].includes(contentType ?? '')
-    || Number(response.headers.get('content-length') ?? 0) > maxBytes) {
+  if (!response.ok || !response.body || validateVehiclePhotoMedia(contentType, Number(response.headers.get('content-length') ?? 0))) {
     await response.body?.cancel();
     throw new IancarOneApiError('IANCAR_PHOTO_MEDIA_INVALID');
   }
@@ -795,16 +794,13 @@ export async function readIancarOnePhotoBytes(response: Response) {
       const part = await reader.read();
       if (part.done) break;
       size += part.value.byteLength;
-      if (size > maxBytes) throw new IancarOneApiError('IANCAR_PHOTO_MEDIA_OVERSIZED');
+      if (validateVehiclePhotoMedia(contentType, size)) throw new IancarOneApiError('IANCAR_PHOTO_MEDIA_OVERSIZED');
       chunks.push(part.value);
     }
   } catch (error) { await reader.cancel().catch(() => {}); throw error; }
   finally { reader.releaseLock(); }
   const bytes = Buffer.concat(chunks);
-  const valid = contentType === 'image/jpeg' ? bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
-    : contentType === 'image/png' ? bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-    : bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP';
-  if (!valid) throw new IancarOneApiError('IANCAR_PHOTO_MEDIA_SIGNATURE_INVALID');
+  if (validateVehiclePhotoMedia(contentType, bytes.length, bytes)) throw new IancarOneApiError('IANCAR_PHOTO_MEDIA_SIGNATURE_INVALID');
   return { bytes, contentType: contentType! };
 }
 
@@ -911,9 +907,9 @@ export function createIancarPhotoByteCache(now = Date.now) {
     if (hit) return hit.value;
     const inflight = pending.get(key);
     if (inflight) return inflight;
-    if (pending.size >= 8) throw new Error('IANCAR_PHOTO_BUSY');
+    if (pending.size >= VEHICLE_PHOTO_MAX_CONCURRENT) throw new Error('IANCAR_PHOTO_BUSY');
     const request = Promise.resolve().then(load).then(value => {
-      if (value.bytes.length > 8 * 1024 * 1024) throw new Error('IANCAR_PHOTO_RESPONSE_INVALID');
+      if (validateVehiclePhotoMedia(value.contentType, value.bytes.length)) throw new Error('IANCAR_PHOTO_RESPONSE_INVALID');
       // A 51-photo album must not evict its first images merely by entry count.
       // Keep the existing 32MiB byte cap, 30s TTL and eight-inflight limit.
       while (entries.size >= 64 || bytes + value.bytes.length > 32 * 1024 * 1024) {
@@ -921,7 +917,7 @@ export function createIancarPhotoByteCache(now = Date.now) {
         if (oldest === undefined) break;
         bytes -= entries.get(oldest)!.value.bytes.length; entries.delete(oldest);
       }
-      entries.set(key, { value, expires: now() + 30_000 }); bytes += value.bytes.length;
+      entries.set(key, { value, expires: now() + VEHICLE_PHOTO_CACHE_TTL_MS }); bytes += value.bytes.length;
       return value;
     }).finally(() => { pending.delete(key); });
     pending.set(key, request);

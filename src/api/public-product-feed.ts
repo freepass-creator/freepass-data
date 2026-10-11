@@ -2,7 +2,7 @@ import type { CatalogCompatibilitySnapshot } from '../infra/erp5-compat-catalog-
 
 type Rec = Record<string, unknown>;
 
-export type PublicDepositState = 'AMOUNT' | 'VERIFIED_NO_DEPOSIT' | 'UNKNOWN' | 'NOT_APPLICABLE';
+export type PublicDepositState = 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
 
 export type PublicProductFeedQuery = {
   p?: string | undefined;
@@ -98,7 +98,7 @@ const PUBLIC_POLICY_NUMBER_FIELDS = [
 const BLOCKED_TEXT = /(수수료|청구|지급|마진|commission|payout|\d[\d,]*(원|만원|%|KRW)|%)/i;
 const BLOCKED_PUBLIC_VALUE = /(?:^|[^A-HJ-NPR-Z0-9])[A-HJ-NPR-Z0-9]{17}(?=$|[^A-HJ-NPR-Z0-9])|va_[A-Za-z0-9]{8,}/i;
 const CONTROL_OR_PRIVATE = /[\u0000-\u001f\u007f]|<[^>]*>|https?:\/\/|(?:^|\/)(?:products|policy|partner|user)\/|@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|AIza[0-9A-Za-z_-]|ya29\./i;
-const PUBLIC_KEY = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
+const PUBLIC_KEY = /^[A-Za-z0-9가-힣][A-Za-z0-9가-힣_-]{0,79}$/;
 const PRICE_KEY = /^[0-9]{1,3}(_[A-Za-z0-9가-힣.-]{1,20})?$/;
 const DATE = /^\d{4}-\d{2}(?:-\d{2})?$/;
 
@@ -159,8 +159,8 @@ const normalizeVehicleStatus = (value: unknown): PublicProduct['vehicle_status']
 };
 
 const normalizeDepositState = (value: unknown): PublicDepositState => {
-  if (value === 'AMOUNT' || value === 'KNOWN') return 'AMOUNT';
-  if (value === 'VERIFIED_NO_DEPOSIT' || value === 'ZERO') return 'VERIFIED_NO_DEPOSIT';
+  if (value === 'AMOUNT' || value === 'KNOWN') return 'KNOWN';
+  if (value === 'VERIFIED_NO_DEPOSIT' || value === 'ZERO') return 'ZERO';
   if (value === 'NOT_APPLICABLE') return 'NOT_APPLICABLE';
   return 'UNKNOWN';
 };
@@ -181,7 +181,7 @@ const cleanImages = (product: Rec): string[] => {
     if (!/^https:\/\/[^\s]{1,492}$/.test(text)) continue;
     if (BLOCKED_PUBLIC_VALUE.test(text)) throw new Error('PUBLIC_URL_FORBIDDEN');
     if (!urls.includes(text)) urls.push(text);
-    if (urls.length >= 20) break;
+    if (urls.length > 200) throw new Error('PUBLIC_IMAGES_LIMIT');
   }
   return urls;
 };
@@ -197,7 +197,7 @@ const publicPrice = (product: Rec): PublicProduct['price'] => {
     const deposit = cleanNumber(row.deposit, `price.${key}.deposit`);
     result[key] = {
       rent,
-      deposit: depositState === 'UNKNOWN' || depositState === 'NOT_APPLICABLE' ? null : deposit,
+      deposit: depositState === 'ZERO' ? 0 : depositState === 'KNOWN' ? deposit : null,
       depositState,
     };
   }
@@ -328,15 +328,42 @@ export const publicConsumerIdFromWhitelabel = (wl: unknown): string => {
 
 export const buildPublicProductFeed = (snapshot: CatalogCompatibilitySnapshot, query: PublicProductFeedQuery): PublicProductFeed => {
   const products = productsFromSnapshot(snapshot, query, true);
-  const brand = cleanText(query.p, 80, 'brand') ?? '';
+  const names = [...new Set(products.map((item) => item.provider_name).filter((name): name is string => !!name))];
+  const brand = query.p && names.length === 1 ? names[0]! : '';
   return { contractVersion: '1.0', count: products.length, products, brand };
+};
+
+// ERP4 product-share compatibility: whole key, FNV-1a token, then final-hyphen fallback.
+export const publicProductShareToken = (raw: string): string => {
+  const value = raw.trim();
+  if (!value) return '';
+  const alphabet = '23456789abcdefghjkmnpqrstuvwxyz';
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(value)) hash = ((hash ^ BigInt(byte)) * 0x100000001b3n) & 0xffffffffffffffffn;
+  let token = '';
+  for (let i = 0; i < 10; i++) {
+    token = alphabet[Number(hash % BigInt(alphabet.length))]! + token;
+    hash /= BigInt(alphabet.length);
+  }
+  return token;
 };
 
 export const buildPublicProductQuote = (snapshot: CatalogCompatibilitySnapshot, code: unknown, query: PublicProductFeedQuery): PublicProductQuote | null => {
   const target = cleanText(code, 120, 'code');
   if (!target) throw new Error('PUBLIC_QUOTE_CODE_REQUIRED');
-  const product = productsFromSnapshot(snapshot, query, false).find((item) =>
-    item.publicProductKey === target || item.product_code === target || item._key === target || target.startsWith(`${item.product_code}-`)
-  );
+  const products = productsFromSnapshot(snapshot, query, false);
+  const find = (segment: string): PublicProduct | null | undefined => {
+    const candidates = segment.startsWith('veh_') ? [segment] : [segment, `veh_${segment}`];
+    const publicKeys = products.filter((item) => item.publicProductKey === segment);
+    if (publicKeys.length) return publicKeys.length === 1 ? publicKeys[0] : null;
+    const aliases = products.filter((item) => candidates.includes(item.publicProductKey) || candidates.includes(item.product_code) || candidates.includes(item._key));
+    if (aliases.length) return aliases.length === 1 ? aliases[0] : null;
+    if (!/^[2-9a-z]{10}$/.test(segment)) return undefined;
+    const matches = products.filter((item) => publicProductShareToken(item.product_code || item._key) === segment || publicProductShareToken(item._key) === segment);
+    return matches.length > 1 ? null : matches[0];
+  };
+  const split = target.lastIndexOf('-');
+  const whole = find(target);
+  const product = whole === undefined && split > 0 && split < target.length - 1 ? find(target.slice(0, split)) : whole;
   return product ? { product } : null;
 };

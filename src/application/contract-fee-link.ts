@@ -1,12 +1,14 @@
 import type { Offer, PriceTerm, Product, VehicleAsset } from '../domain/catalog.js';
 import type { InternalFeeLookupTerm } from '../domain/internal-fee-lookup-contract.js';
 import { toInternalFeeLookup } from '../domain/internal-fee-lookup-contract.js';
+import type { PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
 import type { CatalogStore } from '../ports/catalog-store.js';
 
 export type ContractFeeLinkInput = {
   /** 차량 UID(vehicleAssetId). 있으면 이것으로 찾고 차량번호는 쓰지 않는다(차량번호는 찾기용 보조 키). */
   assetId?: string | undefined;
   plate?: string | undefined;
+  contractDate?: string | undefined;
   supplierId: string;
   termMonths: number;
   monthlyRent: number;
@@ -17,6 +19,7 @@ export type ContractFeeLinkData = {
   assets: VehicleAsset[];
   products: Product[];
   offers: Offer[];
+  ledgerRows?: readonly PeriodFeeLedgerRow[];
 };
 
 export type ContractFeeLinkFailure =
@@ -42,6 +45,24 @@ export type ContractFeeLinkPriceTerm = {
   depositState: PriceTerm['depositState'];
 };
 
+export type ContractFeeLinkLedgerFee = {
+  status: 'CONFIRMED' | 'HOLD';
+  snapshotId?: string;
+  valueAsOf?: string;
+  supplierBillingFee: {
+    state: PeriodFeeLedgerRow['supplierBillingFee']['state'];
+    amount: PeriodFeeLedgerRow['supplierBillingFee']['amount'];
+    reasonCode: string | null;
+  };
+  channelPayoutFee: {
+    state: PeriodFeeLedgerRow['channelPayoutFee']['state'];
+    amount: PeriodFeeLedgerRow['channelPayoutFee']['amount'];
+    reasonCode: string | null;
+  };
+  vehicleValueEvidence: Pick<NonNullable<PeriodFeeLedgerRow['vehicleValueEvidence']>, 'grade' | 'source'> | null;
+  reasonCode?: 'CONTRACT_TIME_VALUE_UNAVAILABLE' | string;
+};
+
 export type ContractFeeLinkResult = {
   status: ContractFeeLinkStatus;
   failure?: ContractFeeLinkFailure;
@@ -52,7 +73,20 @@ export type ContractFeeLinkResult = {
   offerRevision?: number;
   priceTerm?: ContractFeeLinkPriceTerm;
   fees?: InternalFeeLookupTerm;
+  ledgerFee?: ContractFeeLinkLedgerFee;
 };
+
+export type ContractLedgerPickInput = {
+  rows: readonly PeriodFeeLedgerRow[];
+  contractDate: string;
+  termMonths: number;
+  monthlyRent: number;
+  deposit: number;
+};
+
+export type ContractLedgerPickResult =
+  | { status: 'CONFIRMED'; row: PeriodFeeLedgerRow }
+  | { status: 'HOLD'; reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE'; detail: { candidateCount: number; latestValueAsOf?: string; mismatch?: Array<'rent' | 'deposit'> } };
 
 const normalizePlate = (plate: string) => plate.replace(/\s+/g, '');
 
@@ -106,6 +140,88 @@ const conditionMismatches = (input: ContractFeeLinkInput, term: PriceTerm) => {
 
 const conditionMatches = (input: ContractFeeLinkInput, term: PriceTerm) =>
   conditionMismatches(input, term).length === 0;
+
+const ledgerMoneyAmount = (money: { amount: number; currency: 'KRW' } | null | undefined) =>
+  money?.currency === 'KRW' ? money.amount : null;
+
+const ledgerRowMismatches = (input: Pick<ContractLedgerPickInput, 'monthlyRent' | 'deposit'>, row: PeriodFeeLedgerRow) => {
+  const mismatches: Array<'rent' | 'deposit'> = [];
+  if (ledgerMoneyAmount(row.monthlyRent) !== input.monthlyRent) mismatches.push('rent');
+  if (ledgerMoneyAmount(row.deposit.amount) !== input.deposit) mismatches.push('deposit');
+  return mismatches;
+};
+
+export function pickLedgerRowForContract(input: ContractLedgerPickInput): ContractLedgerPickResult {
+  const candidates = input.rows
+    .filter((row) =>
+      row.valueBasis === 'CURRENT_AT_SNAPSHOT'
+      && row.valueAsOf <= input.contractDate
+      && row.termMonths === input.termMonths)
+    .sort((a, b) => b.valueAsOf.localeCompare(a.valueAsOf) || b.snapshotId.localeCompare(a.snapshotId));
+  const latest = candidates[0];
+  if (!latest) {
+    return { status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE', detail: { candidateCount: 0 } };
+  }
+  const mismatch = ledgerRowMismatches(input, latest);
+  if (mismatch.length > 0) {
+    return {
+      status: 'HOLD',
+      reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE',
+      detail: { candidateCount: candidates.length, latestValueAsOf: latest.valueAsOf, mismatch },
+    };
+  }
+  return { status: 'CONFIRMED', row: latest };
+}
+
+const ledgerFeeFromRow = (row: PeriodFeeLedgerRow): ContractFeeLinkLedgerFee => ({
+  status: row.applyState === 'HOLD' ? 'HOLD' : 'CONFIRMED',
+  snapshotId: row.snapshotId,
+  valueAsOf: row.valueAsOf,
+  supplierBillingFee: {
+    state: row.supplierBillingFee.state,
+    amount: row.supplierBillingFee.amount,
+    reasonCode: row.supplierBillingFee.reasonCode,
+  },
+  channelPayoutFee: {
+    state: row.channelPayoutFee.state,
+    amount: row.channelPayoutFee.amount,
+    reasonCode: row.channelPayoutFee.reasonCode,
+  },
+  vehicleValueEvidence: row.vehicleValueEvidence
+    ? { grade: row.vehicleValueEvidence.grade, source: row.vehicleValueEvidence.source }
+    : null,
+  ...(row.applyState === 'HOLD' ? { reasonCode: row.holdReasonCode ?? 'CONTRACT_TIME_VALUE_UNAVAILABLE' } : {}),
+});
+
+const ledgerFeeForContract = (
+  input: ContractFeeLinkInput,
+  data: ContractFeeLinkData,
+  term: PriceTerm,
+  match: { assetId: string; supplierId: string },
+): ContractFeeLinkLedgerFee | undefined => {
+  if (!data.ledgerRows || !input.contractDate) return undefined;
+  const deposit = input.deposit ?? moneyAmount(term.deposit);
+  if (deposit === null) return undefined;
+  const picked = pickLedgerRowForContract({
+    // 같은 개월·금액의 다른 차량 행이 섞이지 않도록 이미 매칭된 차량·공급사·기간 키로 먼저 좁힌다. 후보가 없으면 HOLD.
+    rows: data.ledgerRows.filter((row) => row.assetId === match.assetId
+      && row.supplierId === match.supplierId),
+    contractDate: input.contractDate,
+    termMonths: input.termMonths,
+    monthlyRent: input.monthlyRent,
+    deposit,
+  });
+  if (picked.status === 'HOLD') {
+    return {
+      status: 'HOLD',
+      supplierBillingFee: { state: 'UNKNOWN', amount: null, reasonCode: picked.reasonCode },
+      channelPayoutFee: { state: 'UNKNOWN', amount: null, reasonCode: picked.reasonCode },
+      vehicleValueEvidence: null,
+      reasonCode: picked.reasonCode,
+    };
+  }
+  return ledgerFeeFromRow(picked.row);
+};
 
 export function resolveContractFeeLink(
   input: ContractFeeLinkInput,
@@ -176,6 +292,7 @@ export function resolveContractFeeLink(
 
   const term = matchingTerms[0]!;
   const fees = firstFeeForTerm(offer, term)!;
+  const ledgerFee = ledgerFeeForContract(input, data, term, { assetId: asset.id, supplierId: offer.supplierId });
   const reasonCodes = [
     fees.supplierBillingFee,
     fees.channelPayoutFee,
@@ -189,6 +306,7 @@ export function resolveContractFeeLink(
       ...offerIds,
       priceTerm: priceTermResult(term),
       fees,
+      ...(ledgerFee ? { ledgerFee } : {}),
     };
   }
   return {
@@ -196,6 +314,7 @@ export function resolveContractFeeLink(
     ...offerIds,
     priceTerm: priceTermResult(term),
     fees,
+    ...(ledgerFee ? { ledgerFee } : {}),
   };
 }
 

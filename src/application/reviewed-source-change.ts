@@ -1,4 +1,4 @@
-import { precomputeOfferEconomics } from './resolve-offer-commercial-terms.js';
+import { auditOfferEconomicsTerms, refreshOfferEconomicsForChangedInputs } from './resolve-offer-commercial-terms.js';
 import { randomUUID } from 'node:crypto';
 import {
   assertCommandWriter,
@@ -37,6 +37,8 @@ import type {
 } from '../ports/catalog-store.js';
 import { stableDigest, stableValue } from '../shared/stable-digest.js';
 import type { SourceVehicleFacts } from '../domain/source-vehicle-facts.js';
+import { sharedSheetStatusPolicy } from '../adapters/normalize-shared-sheet.js';
+import type { OperationalSourceRefresh } from '../domain/source-change.js';
 
 export class ReviewedSourceChangeRejectedError extends Error {
   readonly code = 'REVIEWED_SOURCE_CHANGE_REJECTED';
@@ -75,6 +77,8 @@ type ReviewReader = Pick<
 >;
 
 type SourceChangeOperation =
+  | { kind: 'PRODUCT_STATUS'; changeId: string; value: Product['status']; authorityFieldPath: string }
+  | { kind: 'ASSET_STATUS'; changeId: string; value: VehicleAsset['status']; authorityFieldPath: string }
   | { kind: 'ASSET_SOURCE_FACTS'; changeId: string; value: SourceVehicleFacts; authorityFieldPath: string }
   | {
       kind: 'OFFER_MONTHLY_RENT';
@@ -112,6 +116,8 @@ type SourceChangeOperation =
     };
 
 type SourceChangeOperationDraft =
+  | { kind: 'PRODUCT_STATUS'; value: Product['status'] }
+  | { kind: 'ASSET_STATUS'; value: VehicleAsset['status'] }
   | { kind: 'ASSET_SOURCE_FACTS'; value: SourceVehicleFacts }
   | {
       kind: 'OFFER_MONTHLY_RENT';
@@ -140,13 +146,13 @@ type SourceChangeOperationDraft =
 
 type OfferSourceChangeOperation = Exclude<
   SourceChangeOperation,
-  { kind: 'ASSET_ODOMETER' | 'ASSET_SOURCE_FACTS' }
+  { kind: 'ASSET_ODOMETER' | 'ASSET_SOURCE_FACTS' | 'ASSET_STATUS' | 'PRODUCT_STATUS' }
 >;
 
 function isOfferOperation(
   operation: SourceChangeOperation
 ): operation is OfferSourceChangeOperation {
-  return operation.kind !== 'ASSET_ODOMETER' && operation.kind !== 'ASSET_SOURCE_FACTS';
+  return operation.kind.startsWith('OFFER_');
 }
 
 type LoadedState = {
@@ -368,7 +374,7 @@ function changeId(input: {
   ]).slice(0, 32);
 }
 
-function buildChanges(state: LoadedState) {
+function buildChanges(state: LoadedState, operationalRefresh?: OperationalSourceRefresh) {
   const { candidateRecord, model, asset, product, offer } = state;
   const candidate = candidateRecord.candidate;
   const diffs: SourceChangeDiff[] = [];
@@ -397,7 +403,7 @@ function buildChanges(state: LoadedState) {
   };
 
   const reviewable = (
-    entityType: 'offer' | 'vehicle_asset',
+    entityType: 'offer' | 'vehicle_asset' | 'product',
     entityId: string,
     fieldPath: string,
     before: unknown,
@@ -407,7 +413,7 @@ function buildChanges(state: LoadedState) {
     operation: SourceChangeOperationDraft
   ) => {
     if (sameValue(before, after)) return;
-    const aggregate = entityType === 'offer' ? 'offer' : 'vehicle_asset';
+    const aggregate = entityType;
     const rule = resolveFieldAuthority(aggregate, authorityFieldPath);
     const refreshAllowed = Boolean(rule) && rule!.sourceRefresh !== 'SOURCE_REFRESH_BLOCKED';
     const id = changeId({ entityType, entityId, fieldPath, before, after });
@@ -434,6 +440,19 @@ function buildChanges(state: LoadedState) {
       } as SourceChangeOperation);
     }
   };
+
+  if (operationalRefresh) {
+    const status = candidate.vehicleFacts?.fields.supplierStatus;
+    const mapping = status?.state === 'KNOWN' ? sharedSheetStatusPolicy(status.value) : null;
+    if (!mapping || !asset) {
+      throw new ReviewedSourceChangeRejectedError('Known registered supplier status and VehicleAsset required for operational refresh');
+    }
+    reviewable('product', product.id, 'status', product.status,
+      mapping.exposure === 'VISIBLE' ? 'ACTIVE' : 'HOLD', 'SOURCE_EXPOSURE_CHANGE', 'status',
+      { kind: 'PRODUCT_STATUS', value: mapping.exposure === 'VISIBLE' ? 'ACTIVE' : 'HOLD' });
+    reviewable('vehicle_asset', asset.id, 'status', asset.status, mapping.assetStatus,
+      'SOURCE_ASSET_STATUS_CHANGE', 'status', { kind: 'ASSET_STATUS', value: mapping.assetStatus });
+  }
 
   const blockedIfProvided = (
     entityType: SourceChangeDiff['entityType'],
@@ -712,10 +731,11 @@ function toReview(state: LoadedState, diffs: SourceChangeDiff[]): SourceChangeRe
 export async function reviewSourceChange(
   store: CatalogStore,
   bindingId: string,
-  candidateId: string
+  candidateId: string,
+  operationalRefresh?: OperationalSourceRefresh
 ): Promise<SourceChangeReview> {
   const state = await loadState(store, bindingId, candidateId);
-  const { diffs } = buildChanges(state);
+  const { diffs } = buildChanges(state, operationalRefresh);
   return toReview(state, diffs);
 }
 
@@ -735,6 +755,7 @@ function requestDigest(input: ApplyReviewedSourceChangeInput, writerId: string) 
     actor: input.actor,
     writerId,
     ...(input.expectedOwnershipDigest ? { expectedOwnershipDigest: input.expectedOwnershipDigest } : {}),
+    ...(input.operationalRefresh ? { operationalRefresh: input.operationalRefresh } : {}),
     reason: input.reason
   });
 }
@@ -783,6 +804,87 @@ function exactSet(actual: string[], expected: string[]) {
   const a = [...new Set(actual)].sort();
   const b = [...new Set(expected)].sort();
   return a.length === b.length && a.every((item, index) => item === b[index]);
+}
+
+async function assertOperationalRefresh(
+  tx: CatalogTransaction, state: LoadedState, input: ApplyReviewedSourceChangeInput,
+  operations: SourceChangeOperation[], now: string
+) {
+  const fence = input.operationalRefresh!;
+  if (input.actor.kind !== 'SERVICE' || input.actor.id !== 'service:freepass-data') {
+    throw new ReviewedSourceChangeRejectedError('Operational refresh requires the existing FreePass Data service');
+  }
+  const age = Date.parse(now) - Date.parse(state.head.observedAt);
+  if (!Number.isSafeInteger(fence.maxObservationAgeSeconds) || fence.maxObservationAgeSeconds <= 0 ||
+      !Number.isFinite(age) || age < 0 || age > fence.maxObservationAgeSeconds * 1000 ||
+      state.run.observedAt !== state.head.observedAt || state.run.coverage.completeness !== 'COMPLETE' ||
+      state.candidateRecord.status !== 'VALID' || state.candidateRecord.candidate.issues.length) {
+    throw new ReviewedSourceChangeRejectedError('Operational source evidence is stale, incomplete or unconfirmed');
+  }
+  const previous = await tx.getCandidate(fence.previousCandidateId);
+  if (!previous || previous.sourceId !== state.binding.sourceId ||
+      previous.sourceRecordId !== state.binding.sourceRecordId ||
+      previous.runId !== state.binding.sourceRunId ||
+      previous.sourceFingerprint !== state.binding.sourceFingerprint || previous.status !== 'VALID' || previous.candidate.issues.length ||
+      previous.candidate.sourceRecordId !== previous.sourceRecordId ||
+      previous.candidate.sourceFingerprint !== previous.sourceFingerprint) {
+    throw new ReviewedSourceChangeConflictError('Previous candidate does not match the current source binding');
+  }
+  const old = previous.candidate;
+  const oldStatus = old.vehicleFacts?.fields.supplierStatus;
+  const oldMapping = oldStatus?.state === 'KNOWN' ? sharedSheetStatusPolicy(oldStatus.value) : null;
+  if (!oldMapping || !state.asset ||
+      state.product.status !== (oldMapping.exposure === 'VISIBLE' ? 'ACTIVE' : 'HOLD') ||
+      state.asset.status !== oldMapping.assetStatus ||
+      !sameValue(oldStatus, state.asset.sourceVehicleFacts?.fields.supplierStatus)) {
+    throw new ReviewedSourceChangeConflictError('Existing status is unknown or diverges from the last source observation; preserve Canonical');
+  }
+  // Check even when the new source equals a human value: advancing its binding would erase that divergence.
+  for (const current of state.offer.priceTerms) {
+    const previousTerm = old.priceTerms?.find(term => term.termKey === current.termKey);
+    if (!previousTerm || !sameValue(previousTerm.monthlyRent, current.monthlyRent)) {
+      throw new ReviewedSourceChangeConflictError('Existing rent diverges from the last source observation; preserve human input');
+    }
+  }
+  for (const operation of operations) {
+    if (operation.kind === 'OFFER_MONTHLY_RENT') {
+      const previousTerm = old.priceTerms?.find((term) => term.termKey === operation.termKey);
+      const currentTerm = state.offer.priceTerms.find((term) => term.termKey === operation.termKey);
+      if (!previousTerm || !currentTerm || !sameValue(previousTerm.monthlyRent, currentTerm.monthlyRent)) {
+        throw new ReviewedSourceChangeConflictError('Existing rent diverges from the last source observation; preserve human input');
+      }
+    } else if (operation.kind === 'ASSET_SOURCE_FACTS') {
+      // This mode owns supplier status only. Other facts remain under their existing reviewed commands.
+      const withoutStatus = (facts: SourceVehicleFacts | undefined) => {
+        if (!facts) return null;
+        const copy = structuredClone(facts);
+        delete copy.fields.supplierStatus;
+        return copy;
+      };
+      if (!sameValue(oldStatus, state.asset.sourceVehicleFacts?.fields.supplierStatus) ||
+          !sameValue(withoutStatus(operation.value), withoutStatus(state.asset.sourceVehicleFacts))) {
+        throw new ReviewedSourceChangeConflictError('Source facts contain human divergence or changes outside supplier status');
+      }
+    } else if (operation.kind !== 'PRODUCT_STATUS' && operation.kind !== 'ASSET_STATUS') {
+      throw new ReviewedSourceChangeRejectedError('Operational refresh is limited to known supplier status and existing period rent');
+    }
+  }
+  const parents = await tx.listLineageForCandidate(state.candidateRecord.candidateId);
+  for (const operation of operations) {
+    const path = operation.kind === 'OFFER_MONTHLY_RENT'
+      ? `priceTerms.${operation.termKey}.monthlyRent.amount` : 'vehicleFacts';
+    const expected = operation.kind === 'OFFER_MONTHLY_RENT'
+      ? operation.value.amount : state.candidateRecord.candidate.vehicleFacts;
+    const matches = parents.filter((parent) => parent.stage === 'RAW_TO_NORMALIZED' && parent.normalized?.fieldPath === path);
+    if (matches.length !== 1 || matches[0]!.runId !== state.run.runId ||
+        matches[0]!.sourceId !== state.binding.sourceId || matches[0]!.sourceRecordId !== state.binding.sourceRecordId ||
+        matches[0]!.sourceFingerprint !== state.candidateRecord.sourceFingerprint ||
+        matches[0]!.observedAt !== state.head.observedAt ||
+        matches[0]!.normalized?.candidateId !== state.candidateRecord.candidateId ||
+        !sameValue(matches[0]!.normalized?.value, expected)) {
+      throw new ReviewedSourceChangeRejectedError('Operational refresh lineage does not match the accepted source observation');
+    }
+  }
 }
 
 function nextOfferFromOperations(
@@ -847,7 +949,8 @@ function nextAssetFromOperations(
       item.kind === 'ASSET_ODOMETER'
   );
   const facts = operations.find((item): item is Extract<SourceChangeOperation, { kind: 'ASSET_SOURCE_FACTS' }> => item.kind === 'ASSET_SOURCE_FACTS');
-  if (!odometer && !facts) return asset;
+  const status = operations.find((item): item is Extract<SourceChangeOperation, { kind: 'ASSET_STATUS' }> => item.kind === 'ASSET_STATUS');
+  if (!odometer && !facts && !status) return asset;
   if (!asset) {
     throw new ReviewedSourceChangeRejectedError('VehicleAsset missing for odometer update');
   }
@@ -857,6 +960,7 @@ function nextAssetFromOperations(
     ...base,
     ...(odometer ? { odometerKm: odometer.value } : {}),
     ...(facts ? { sourceVehicleFacts: structuredClone(facts.value) } : {}),
+    ...(status ? { status: status.value } : {}),
     revision: asset.revision + 1,
     validationStatus,
     updatedAt: now,
@@ -872,6 +976,7 @@ function buildRefreshLineage(input: {
   offerAfter: Offer;
   assetBefore: VehicleAsset | null;
   assetAfter: VehicleAsset | null;
+  productAfter: Product;
 }) {
   const records: FieldLineageRecord[] = [];
 
@@ -927,6 +1032,14 @@ function buildRefreshLineage(input: {
   };
 
   for (const operation of input.operations) {
+    if (operation.kind === 'PRODUCT_STATUS') {
+      append(parentFor('vehicleFacts'), 'product', input.productAfter.id,
+        input.productAfter.revision, 'status', input.productAfter.status);
+    }
+    if (operation.kind === 'ASSET_STATUS' && input.assetAfter) {
+      append(parentFor('vehicleFacts'), 'vehicle_asset', input.assetAfter.id,
+        input.assetAfter.revision, 'status', input.assetAfter.status);
+    }
     if (operation.kind === 'ASSET_SOURCE_FACTS' && input.assetAfter) {
       append(parentFor('vehicleFacts'), 'vehicle_asset', input.assetAfter.id,
         input.assetAfter.revision, 'sourceVehicleFacts', input.assetAfter.sourceVehicleFacts);
@@ -1037,7 +1150,7 @@ export async function applyReviewedSourceChange(
       );
     }
 
-    const { diffs, operations } = buildChanges(state);
+    const { diffs, operations } = buildChanges(state, input.operationalRefresh);
     const review = toReview(state, diffs);
     const blocked = review.diffs.filter((item) => item.classification === 'BLOCKED');
     if (blocked.length) {
@@ -1059,8 +1172,13 @@ export async function applyReviewedSourceChange(
       return operation;
     });
 
+    if (input.operationalRefresh) {
+      await assertOperationalRefresh(tx, state, input, selectedOperations, now);
+    }
+
     for (const operation of selectedOperations) {
-      const aggregate = isOfferOperation(operation) ? 'offer' : 'vehicle_asset';
+      const aggregate = operation.kind === 'PRODUCT_STATUS' ? 'product'
+        : isOfferOperation(operation) ? 'offer' : 'vehicle_asset';
       const authority = assertFieldAuthority({
         aggregate,
         fieldPath: operation.authorityFieldPath,
@@ -1096,8 +1214,55 @@ export async function applyReviewedSourceChange(
 
     const offerChanged = nextOffer !== state.offer;
     const assetChanged = nextAsset !== state.asset;
+    const productStatus = selectedOperations.find((item) => item.kind === 'PRODUCT_STATUS');
+    const nextProduct: Product = productStatus ? { ...state.product, status: productStatus.value,
+      revision: state.product.revision + 1, validationStatus, updatedAt: now, updatedBy: input.actor,
+      ...(revisionValue ? { sourceRevision: revisionValue } : {}) } : state.product;
+    const productChanged = nextProduct !== state.product;
     if (offerChanged) {
-      nextOffer.internalEconomicsTerms = precomputeOfferEconomics(nextOffer, state.product.commercialType, state.model.fuel);
+      nextOffer.internalEconomicsTerms = refreshOfferEconomicsForChangedInputs(
+        state.offer, nextOffer, false, state.product.commercialType, state.model.fuel);
+      if (input.operationalRefresh) {
+        if (auditOfferEconomicsTerms(state.offer).invalidFacts.length) {
+          throw new ReviewedSourceChangeRejectedError('Existing economics are inconsistent; preserve the previous Canonical snapshot');
+        }
+        // The existing engine computes amounts. This writer only admits an already confirmed, unchanged rule.
+        nextOffer.internalEconomicsTerms = (state.offer.internalEconomicsTerms ?? []).map(previous => {
+          const proposed = nextOffer.internalEconomicsTerms!.find(term => term.termKey === previous.termKey);
+          const currentPrice = nextOffer.priceTerms.find(term => term.termKey === previous.termKey)!;
+          const next = { ...structuredClone(previous), monthlyRent: structuredClone(currentPrice.monthlyRent) };
+          for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
+            const fee = previous[side], calculation = fee.calculation;
+            const basisKey = fee.referenceRentBasis?.termKey ?? previous.termKey;
+            const basisChanged = !sameValue(state.offer.priceTerms.find(term => term.termKey === basisKey)?.monthlyRent,
+              nextOffer.priceTerms.find(term => term.termKey === basisKey)?.monthlyRent);
+            const value = proposed?.[side];
+            // An old FIXED snapshot may hide a rent dependency. Never commit stale amounts or
+            // reinterpret its rule from its name; changed calculation evidence needs separate review.
+            if (basisChanged && calculation?.kind === 'FIXED' && !fee.referenceRentBasis &&
+                (fee.state === 'KNOWN' || fee.state === 'ZERO') &&
+                (!sameValue(fee.amount, value?.amount) || !sameValue(calculation, value?.calculation) ||
+                 fee.ruleId !== value?.ruleId || fee.policyId !== value?.policyId ||
+                 !sameValue(fee.sourceRefs, value?.sourceRefs))) {
+              throw new ReviewedSourceChangeRejectedError('Existing FIXED economics differ from changed-rent evidence; explicit review required before commit');
+            }
+            const dependent = !!fee.referenceRentBasis || calculation?.kind === 'MULTIPLY' ||
+              (calculation?.kind === 'RATE' && calculation.base === 'MONTHLY_RENT_X_TERM');
+            if (!basisChanged || !dependent || (fee.state !== 'KNOWN' && fee.state !== 'ZERO')) continue;
+            const sameCalculation = fee.referenceRentBasis
+              ? value?.referenceRentBasis?.termKey === fee.referenceRentBasis.termKey &&
+                value.referenceRentBasis.multiplier === fee.referenceRentBasis.multiplier
+              : sameValue(value?.calculation, calculation);
+            if (!fee.ruleId || !fee.policyId || !fee.sourceRefs.some(ref => ref.trim()) || !value ||
+                (value.state !== 'KNOWN' && value.state !== 'ZERO') || !sameCalculation ||
+                value.ruleId !== fee.ruleId || value.policyId !== fee.policyId) {
+              throw new ReviewedSourceChangeRejectedError('Changed rent has no identical confirmed economics rule; preserve Canonical');
+            }
+            next[side] = structuredClone(value);
+          }
+          return next;
+        });
+      }
     }
 
     const parents = await tx.listLineageForCandidate(state.candidateRecord.candidateId);
@@ -1107,8 +1272,24 @@ export async function applyReviewedSourceChange(
       offerBefore: state.offer,
       offerAfter: nextOffer,
       assetBefore: state.asset,
-      assetAfter: nextAsset
+      assetAfter: nextAsset,
+      productAfter: nextProduct
     });
+
+    if (productChanged) {
+      await tx.updateProduct(nextProduct);
+      await tx.appendRevision({
+        revisionRecordId: 'rev_' + stableDigest([input.commandId, 'product', nextProduct.id, nextProduct.revision]).slice(0, 32),
+        entityType: 'product', entityId: nextProduct.id, revision: nextProduct.revision,
+        previousRevision: state.product.revision, snapshot: nextProduct, actor: input.actor,
+        reason: input.reason, origin: 'SOURCE_REFRESH', commandId: input.commandId, occurredAt: now,
+        sourceBindingId: state.binding.bindingId, sourceRunId: state.run.runId
+      });
+      await tx.appendAudit({ eventId: randomUUID(), commandId: input.commandId, actor: input.actor,
+        entityType: 'product', entityId: nextProduct.id, action: 'REVIEWED_SOURCE_CHANGE_APPLIED',
+        before: state.product, after: nextProduct, reason: input.reason, writerId: writer.id,
+        revisionBefore: state.product.revision, revisionAfter: nextProduct.revision, occurredAt: now });
+    }
 
     if (offerChanged) {
       await tx.putOffer(nextOffer);
@@ -1233,7 +1414,7 @@ export async function applyReviewedSourceChange(
       });
     }
 
-    if (offerChanged || assetChanged) {
+    if (offerChanged || assetChanged || productChanged) {
       await tx.appendOutbox({
         eventId: randomUUID(),
         eventType: 'catalog.source-change.applied',
@@ -1253,7 +1434,7 @@ export async function applyReviewedSourceChange(
     const receipt: ReviewedSourceChangeReceipt = {
       idempotencyKey: input.idempotencyKey,
       commandId: input.commandId,
-      status: offerChanged || assetChanged ? 'CANONICAL_COMMITTED' : 'NO_CHANGE',
+      status: offerChanged || assetChanged || productChanged ? 'CANONICAL_COMMITTED' : 'NO_CHANGE',
       requestDigest: requestHash,
       bindingId: nextBinding.bindingId,
       bindingRevision: nextBinding.revision,
@@ -1263,6 +1444,7 @@ export async function applyReviewedSourceChange(
       appliedChangeIds: [...review.reviewableChangeIds],
       offerId: nextOffer.id,
       offerRevision: nextOffer.revision,
+      productRevision: nextProduct.revision,
       ...(nextAsset
         ? {
             vehicleAssetId: nextAsset.id,
