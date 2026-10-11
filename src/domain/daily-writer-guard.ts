@@ -89,7 +89,7 @@ const publicName = (collection: string) =>
 const GATE_STEP = 'Daily schedule and manual apply gate';
 const CAPTURE_STEP = 'Capture and plan (no writes) — counts only in the public log';
 const APPLY_STEP = 'Apply to FreePass Data (writes) — counts only in the public log';
-const SUCCESS_ALLOWED_STEPS = new Set(['Set up job', GATE_STEP, 'Complete job']);
+const SUCCESS_ALLOWED_STEPS = new Set(['Set up job', 'Fetch gate scripts (sparse)', GATE_STEP, 'Post Fetch gate scripts (sparse)', 'Complete job']);
 
 type JobSteps = { name?: string; conclusion?: string | null }[] | null | undefined;
 
