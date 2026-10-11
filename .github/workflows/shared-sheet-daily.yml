@@ -217,7 +217,7 @@ jobs:
           # 합치기·UTC 변환·중복/충돌 판정(박제와 같은 차량번호 정규화)은 src/jobs/merge-shared-sheet-supplement.ts — 오류는 고정 코드만.
           node --import tsx src/jobs/merge-shared-sheet-supplement.ts "$T/supplement.json" "${parts[@]}"
           node --import tsx src/jobs/capture-shared-sheet.ts --spreadsheet "$SHARED_SHEET_ID" --erp5-capture "$ERP5_CAPTURE" --supplement "$T/supplement.json" --out "$T/capture.json"
-          node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --capture "$T/capture.json" --plan-out "$T/plan.json" > "$T/report.json"
+          node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --operational-refresh --capture "$T/capture.json" --plan-out "$T/plan.json" > "$T/report.json"
           node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0)process.exit(1);const {suppliers,...s}=r;console.log(JSON.stringify(s,null,2))" "$T/report.json"
       # 쓰기는 별도 단계. 감사는 이 단계의 실제 실행 여부를 판정하며 캡처/계획 성공을 쓰기 성공으로 세지 않는다.
       - name: Apply to FreePass Data (writes) — counts only in the public log

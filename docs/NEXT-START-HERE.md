@@ -7,6 +7,7 @@
 - 실제 운영 효과: environment의 기존 `FREEPASS_DATA_SHARED_SHEET_DAILY=on`을 확인했으므로 main 반영은 예약 apply 빈도 변경이다. 최근 run `38098514945`는 전체 SUCCESS지만 capture/apply 단계 SKIPPED였다. 이를 수집 완료로 세지 않는다. GitHub 예약은 지연될 수 있어 15분 cron을 실제 15분 신선도 보장으로 표현하지 않는다.
 - 검증: daily-writer 18 PASS, 기존 delivery-owner 15 PASS, canonical/runtime 포함 91 PASS/1 조건부 SKIP, build/diff-check PASS. 독립 검토 및 최종 CI는 실행 영수증으로 확인한다. 당시 운영 적용/새 회차 readback은 미완료.
 - 남음: 상태/대여료 변경분 writer·영향받은 offer 수수료 재계산 연결 및 supplier-specific 기존 실행 경로 정합성은 해당 담당이 진행한다. 차량가격 기준 수수료는 확인된 차량가격 fact 없이는 추정하지 않는다. 사람 입력 보존·unknown/null 및 원천 실패의 마지막 정상값 보존은 유지한다.
+- 22:03 연결 검증: `--operational-refresh`를 기존 scheduler plan에 연결하고 이전 VALID candidate/900초 freshness를 plan digest에 고정했다. apply는 계획만 사용한다. fresh unchanged/사람 대여료 보존/오래된 원천 차단/계획 변조 차단 4개 회귀 PASS, build PASS. 상태+대여료 통합 시험은 1개월 5% 근거가 FIXED로 저장되어 수수료가 갱신되지 않는 오류로 FAIL이다. 금액 담당은 기존 엔진의 계산 근거, 저장 담당은 commit 전 불일치 차단을 병렬 보완 중이다. 이 실패를 해소하기 전 PR467 draft/15분 활성화 HOLD, 운영 DB 쓰기 0. next_start_here: 해당 두 기존 담당의 immutable commit만 같은 작업선에 인수하고 통합 시험/독립 검토/CI를 다시 실행한다.
 - next_start_here: 독립 검토/최종 CI 및 정확 head로 기존 main 통합 → 새 schedule 회차의 실제 capture/apply/changed/noop/HOLD/readback 확인. 코드 롤백 기준은 위 main의 해당 workflow이며 데이터 복구는 회차 private plan/receipt와 기존 writer 경로로 별도 판정한다. `supplier-relay-iancar-15m` PAUSED를 임의 resume하지 않고 legacy writer와 canonical writer를 구분한다.
 
 ## 2026-10-11 수집·정제 책임 실행 — 색상 규칙의 기존 저장 lifecycle 연결
