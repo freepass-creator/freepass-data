@@ -25,15 +25,19 @@ export async function readPeriodFeeLedgerPlanInputs() {
     db.collection(FIRESTORE_COLLECTIONS.legacyAdminWorkflow.products).get(),
     db.collection(FIRESTORE_COLLECTIONS.legacyAdminWorkflow.policies).get(),
   ]);
+  const newCarTrimSnap = await db.collection('new_car_trim').get();
   return {
     products: Object.fromEntries(productsSnap.docs.map(doc => [doc.id, { ...(jsonSafe(doc.data()) as Rec), _key: doc.id }])),
     policies: Object.fromEntries(policiesSnap.docs.map(doc => [doc.id, { ...(jsonSafe(doc.data()) as Rec), _key: doc.id }])),
+    newCarTrim: Object.fromEntries(newCarTrimSnap.docs.map(doc => [doc.id, { ...(jsonSafe(doc.data()) as Rec), _key: doc.id }])),
     referenceInputs: {
       sourceProject: 'freepasserp5',
       productsCollection: FIRESTORE_COLLECTIONS.legacyAdminWorkflow.products,
       policiesCollection: FIRESTORE_COLLECTIONS.legacyAdminWorkflow.policies,
+      newCarTrimCollection: 'new_car_trim',
       productCount: productsSnap.size,
       policyCount: policiesSnap.size,
+      newCarTrimCount: newCarTrimSnap.size,
       settlementRowsAccessCount: 0,
     },
     observedAt: new Date().toISOString(),
