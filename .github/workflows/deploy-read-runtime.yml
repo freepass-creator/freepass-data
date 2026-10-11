@@ -513,7 +513,7 @@ jobs:
           echo "READ_RUNTIME_AUTHENTICATED_STATUS=$authenticated_status" >> "$GITHUB_ENV"
           if [ "$authenticated_status" != "200" ]; then
             response_code="$(jq -r '.code // "NON_JSON_RESPONSE"' "$response_file" 2>/dev/null || echo NON_JSON_RESPONSE)"
-            echo "::error::Authenticated compatibility readback failed: HTTP $authenticated_status / $response_code"
+            echo "::error::Authenticated compatibility readback failed: HTTP $authenticated_status / UNRECOGNIZED"
             exit 1
           fi
           if ! tr -d '\r' < "$headers_file" | grep -Eiq '^x-freepass-read-mode: DIRECT_FIRESTORE_REQUIRED$'; then

@@ -17,6 +17,18 @@ describe('existing private runtime verification', () => {
     expect(verify).toContain('LEGACY_READ_PENDING_RETIREMENT');
     expect(verify).toContain('catalog-compat/v1');
   });
+  it('never logs arbitrary response codes from a failed verification readback', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const verify = workflow.split('\n  verify:')[1]!;
+    const failure = verify.split('          if [ "$authenticated_status" != "200" ]; then')[1]!.split('          fi')[0]!;
+    const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+    const result = spawnSync(bash, ['-s'], { input: 'authenticated_status=503\njq() { echo synthetic-secret-body-code; }\n' + failure,
+      encoding: 'utf8' });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('HTTP 503 / UNRECOGNIZED');
+    expect(result.stdout + result.stderr).not.toContain('synthetic-secret-body-code');
+    expect(verify).not.toContain('response_code');
+  });
   it.skipIf(process.platform === 'win32')('accepts pinned image representations and rejects every mismatched authority', () => {
     const sha = 'a'.repeat(40), digest = 'sha256:' + 'b'.repeat(64), revision = 'freepass-data-read-00027-9kd';
     const path = 'asia-northeast3-docker.pkg.dev/freepasserp5/freepass-data/freepass-data-read';
