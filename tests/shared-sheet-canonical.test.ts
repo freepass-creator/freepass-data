@@ -7,7 +7,7 @@ import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { buildSharedSheetBatch, sharedSheetChannels, sharedSheetHeaders, sharedSheetCaptureDigest, type SharedSheetCapture, type SheetCell } from '../src/adapters/shared-sheet-source.js';
 import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
 import { prepareRawSourceBatch } from '../src/application/ingest-raw-source.js';
-import { planSharedSheetCanonical, runSharedSheetCanonical, preflightSharedSheetApply, writePrivateArtifact } from '../src/jobs/ingest-shared-sheet-canonical.js';
+import { planSharedSheetCanonical, runSharedSheetCanonical, preflightSharedSheetApply, writePrivateArtifact, assertSharedSheetPlan, assertReviewedSharedSheetRun, assertReviewedPlanGeneration, assertLiveSharedSheetMatches, main as ingestMain } from '../src/jobs/ingest-shared-sheet-canonical.js';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -669,4 +669,101 @@ it('does not fill names when an offline capture has no master evidence', async (
   const c = capture(); delete c.vehicleMasterSnapshot;
   const p = await planSharedSheetCanonical(new MemoryDataStore(), c, 'synthetic-target');
   expect(p.plan.entries.every(x => x.action === 'HOLD' && x.reasons.includes('VEHICLE_MASTER_SNAPSHOT_REQUIRED'))).toBe(true);
+});
+
+describe('reviewed shared-sheet selection and live upstream fences', () => {
+  const pin = 'a'.repeat(40);
+  const selected = () => ({ runId: '123', attempt: '1', generation: '456', digest: 'b'.repeat(64), sourcePin: pin, executionPin: pin,
+    run: { id: 123, run_attempt: 1, head_sha: pin, head_branch: 'main', event: 'workflow_dispatch', status: 'completed',
+      conclusion: 'success', path: '.github/workflows/shared-sheet-daily.yml', display_title: 'shared-sheet-daily dry-run' } });
+  it('accepts only the exact completed main dry-run and exact generation', () => {
+    expect(() => assertReviewedSharedSheetRun(selected())).not.toThrow();
+    expect(() => assertReviewedPlanGeneration('456', '456', '456')).not.toThrow();
+    for (const args of [['456', '457', '456'], ['456', '456', '457'], ['../456', '456', '456']])
+      expect(() => assertReviewedPlanGeneration(args[0]!, args[1]!, args[2]!)).toThrow('REVIEWED_PLAN_GENERATION_CHANGED');
+  });
+  it.each(['runId', 'attempt', 'generation', 'digest', 'sourcePin', 'executionPin'] as const)('rejects changed or malformed %s', key => {
+    const input = selected(); input[key] = key === 'executionPin' ? 'c'.repeat(40) : '../bad';
+    expect(() => assertReviewedSharedSheetRun(input)).toThrow('REVIEWED_SHARED_SHEET_RUN_NOT_PINNED');
+  });
+  it.each(['id', 'run_attempt', 'head_sha', 'head_branch', 'event', 'status', 'conclusion', 'path', 'display_title'] as const)
+    ('rejects a source run with changed %s', key => {
+      const input = selected(); Object.assign(input.run, { [key]: typeof input.run[key] === 'number' ? 2 : 'changed' });
+      expect(() => assertReviewedSharedSheetRun(input)).toThrow('REVIEWED_SHARED_SHEET_RUN_NOT_PINNED');
+    });
+  const liveNow = (c: SharedSheetCapture) => {
+    const live = structuredClone(c); delete live.digest;
+    live.readTime = new Date().toISOString(); for (const tab of live.tabs) tab.readTime = live.readTime;
+    live.vehicleMasterSnapshot = masterSnapshot(); live.digest = sharedSheetCaptureDigest(live); return live;
+  };
+  it('allows observation-only changes but never rewrites the reviewed capture or master timestamp', async () => {
+    const s = await stores(), c = capture();
+    c.supplierEntered = [{ supplierCode: 'RP013', plate: 'TEST-FAKE-001', source: 'ERP5_PRODUCTS_SOURCE_TEXT', sourceRef: 'test-source', observedAt: time, values: { rent: 303 } }];
+    const { plan } = await planSharedSheetCanonical(s.store, c, 'synthetic-target'), before = stableDigest(plan);
+    const live = liveNow(c); live.supplierEntered![0]!.observedAt = live.readTime; live.digest = sharedSheetCaptureDigest(live);
+    expect(() => assertLiveSharedSheetMatches(plan, live)).not.toThrow(); expect(stableDigest(plan)).toBe(before);
+  });
+  it.each(['row', 'ERP', 'supplement', 'master', 'coverage'] as const)('refuses live %s drift before any store call', async kind => {
+    const s = await stores(), c = capture(), { plan } = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
+    const live = liveNow(c), spy = vi.spyOn(s.store, 'getCatalogWriterOwnership');
+    if (kind === 'row') live.tabs[0]!.values[0]![0] = 'changed';
+    if (kind === 'ERP') live.supplierEntered = [{ supplierCode: 'RP013', plate: 'TEST-FAKE-001', source: 'ERP5_PRODUCTS_SOURCE_TEXT', sourceRef: 'changed', observedAt: live.readTime, values: { rent: 0 } }];
+    if (kind === 'supplement') live.corrections = [{ supplierCode: 'RP013', plate: 'TEST-FAKE-001', at: live.readTime, column: '1개월', before: 303, after: 0, source: 'test' }];
+    if (kind === 'master') (live.vehicleMasterSnapshot as VehicleMasterSnapshot).trims[0]!.data.trim = 'changed';
+    if (kind === 'coverage') live.tabs.pop();
+    live.digest = sharedSheetCaptureDigest(live);
+    expect(() => assertLiveSharedSheetMatches(plan, live)).toThrow(); expect(spy).not.toHaveBeenCalled();
+  });
+  it('refuses stale/future recapture and digest tampering', async () => {
+    const s = await stores(), c = capture(), { plan } = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
+    const live = liveNow(c);
+    expect(() => assertLiveSharedSheetMatches(plan, live, Date.parse(live.readTime) + 120001)).toThrow('LIVE_SHARED_SHEET_CAPTURE_STALE');
+    expect(() => assertLiveSharedSheetMatches(plan, live, Date.parse(live.readTime) - 1)).toThrow('LIVE_SHARED_SHEET_CAPTURE_STALE');
+    live.digest = '0'.repeat(64); expect(() => assertLiveSharedSheetMatches(plan, live)).toThrow('INVALID_SHARED_SHEET_CAPTURE');
+  });
+  it('rejects reusing the approved capture as live evidence and retains an explicit source revision fence', async () => {
+    const s = await stores(), c = liveNow(capture()), { plan } = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
+    expect(() => assertLiveSharedSheetMatches(plan, structuredClone(c))).toThrow('LIVE_SHARED_SHEET_RECAPTURE_REQUIRED');
+    const live = structuredClone(c); delete live.digest;
+    live.readTime = new Date(Date.parse(c.readTime) + 1).toISOString(); for (const t of live.tabs) t.readTime = live.readTime;
+    live.revision = 'different-source-revision'; live.digest = sharedSheetCaptureDigest(live);
+    expect(() => assertLiveSharedSheetMatches(plan, live, Date.parse(live.readTime))).toThrow('LIVE_SHARED_SHEET_CHANGED_REPLAN_REQUIRED');
+  });
+  it('requires live evidence even on a replay; refusal happens before plan file read or any write runtime', async () => {
+    await expect(ingestMain(['--firestore', '--apply', '--plan', 'missing-plan.json', '--expected-plan-digest', 'b'.repeat(64)]))
+      .rejects.toThrow('APPLY_REQUIRES_LIVE_SOURCE_RECAPTURE');
+  });
+  it('does not renew an expired sealed master merely because current master content is unchanged', async () => {
+    const s = await stores(), c = capture(), { plan } = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
+    const master = plan.capture.vehicleMasterSnapshot as VehicleMasterSnapshot;
+    const oldTime = master.readAt, digest = stableDigest(plan);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse(oldTime) + 300001);
+      expect(() => assertSharedSheetPlan(plan, digest, plan.target)).toThrow('Active Data vehicle master snapshot required');
+      expect(master.readAt).toBe(oldTime); expect(stableDigest(plan)).toBe(digest);
+    } finally { vi.useRealTimers(); }
+  });
+  it('rechecks stored head and all revisions in the read-only preflight before opening audited writes', async () => {
+    const s = await stores(); await apply(s);
+    const c = later(capture({ '1개월': 777 })), p = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
+    const write = vi.spyOn(s.store, 'transact');
+    const current = (await s.store.listOffers())[0]!;
+    await s.store.seed({ offers: [{ ...current, revision: current.revision + 1 }] });
+    await expect(preflightSharedSheetApply(s.store, p.plan, p.report.planDigest, 'synthetic-target')).rejects.toThrow('SHARED_SHEET_PLAN_STALE');
+    await s.store.seed({ offers: [current] });
+    const head = (await s.store.getSourceHead(prepareRawSourceBatch(buildSharedSheetBatch(c)).sourceId))!;
+    await s.store.seed({ sourceHeads: [{ ...head, runId: 'different-approved-run' }] });
+    await expect(preflightSharedSheetApply(s.store, p.plan, p.report.planDigest, 'synthetic-target')).rejects.toThrow('SHARED_SHEET_HEAD_CHANGED');
+    expect(write).not.toHaveBeenCalled();
+  });
+  it('a same-run replay must preserve the exact checkpoint, not merely the run ID', async () => {
+    const s = await stores(), p = await apply(s), sourceId = prepareRawSourceBatch(buildSharedSheetBatch(p.plan.capture)).sourceId;
+    const head = (await s.store.getSourceHead(sourceId))!;
+    await s.store.seed({ sourceHeads: [{ ...head, checkpoint: { ...head.checkpoint, checksum: 'changed' } }] });
+    const write = vi.spyOn(s.store, 'transact');
+    await expect(preflightSharedSheetApply(s.store, p.plan, p.report.planDigest, 'synthetic-target'))
+      .rejects.toThrow('SHARED_SHEET_REPLAY_HEAD_EVIDENCE_CHANGED');
+    expect(write).not.toHaveBeenCalled();
+  });
 });
