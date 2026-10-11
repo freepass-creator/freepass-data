@@ -246,3 +246,17 @@ $env:VEHICLE_UID_APPLY_APPROVED_DIGEST="<planDigest>"
 $env:VEHICLE_UID_ROLLBACK_WRITE="ROLLBACK"
 npm.cmd run apply:vehicle-uid-migration -- --rollback "C:\temp\freepass-private\vehicle-uid-backup.json" --expected-digest "<planDigest>"
 ```
+
+## 소비처 영향: `vehicle_uid_registry='PRODUCT_ONLY'` (2026-10-12 확인)
+
+새 UID 는 자산 문서 없이 legacy `products` 문서에만 붙는다. 자산을 순회하는 소비처는 모두 canonical `Product.vehicleAssetId`(별도 canonical 상품 엔터티)로 자산을 풀며 legacy `products.vehicle_uid` 필드를 읽지 않는다:
+
+| 소비처 | 확인 위치 | 영향 |
+| --- | --- | --- |
+| admin-catalog | `src/application/admin-catalog.ts:153,183-184` | `product.vehicleAssetId` 로만 자산 조회, `vehicle_uid` 미사용. |
+| catalog-health | `src/application/catalog-health.ts:280,413-419` | `product.vehicleAssetId` 가 가리키는 자산 누락만 오류로 보고, `vehicle_uid` 미사용. |
+| catalog projection | `src/application/catalog.ts:490,520-521,570-578,744` | `vehicleAssetId` 만 사용. |
+| ERP5 호환 읽기 | `src/infra/erp5-compat-catalog-reader.ts:47` | `vehicle_uid` 는 통과(읽기 전용 필드 목록)일 뿐 자산으로 풀지 않는다. |
+| 카톡 reference | `src/application/kakao-catalog-reference.ts:84` | `vehicle_uid: null` 로 내려보냄(UID 를 자산으로 풀지 않는다). |
+
+따라서 PRODUCT_ONLY UID 가 자산 부재 오류를 만들지 않는다. 앞으로 `vehicle_uid` 를 자산으로 푸는 소비처를 만들 때는 `vehicle_uid_registry='PRODUCT_ONLY'` 이면 자산 없음이 정상임을 먼저 확인해야 한다(박제 장부는 `vehicle_uid` 를 키로만 쓰고 자산을 읽지 않는다).
