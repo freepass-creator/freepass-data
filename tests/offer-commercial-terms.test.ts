@@ -278,15 +278,17 @@ describe('canonical per-term economics precompute', () => {
 
 
 describe('F04 explicit canonical evidence', () => {
-  it('passes pickup vehicle evidence and persists row provenance without mutating evidence', () => {
+  it('uses pickup 60-month rent x term rule and ignores vehicle-value evidence', () => {
     const offer = { id: 'synthetic', supplierId: 'RP012', priceTerms: [{ termKey: '60', termMonths: 60, monthlyRent: { amount: 200000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }] };
     const evidence = { '60': { vehicleValue: 30000000 } };
     const before = structuredClone({ offer, evidence });
     const row = precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION', '가솔린', evidence)[0]!;
-    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 1200000 }, policyId: 'sales-commission-2026-10-11' });
-    expect(row.channelPayoutFee.amount?.amount).toBe(900000);
-    expect(row.supplierBillingFee.sourceRefs).toContain('F04:수수료표!A190:M190');
-    expect(precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee.reasonCode).toBe('VEHICLE_VALUE_REQUIRED');
+    expect(row.supplierBillingFee).toMatchObject({ state: 'KNOWN', amount: { amount: 330000 }, policyId: 'sales-commission-2026-10-11' });
+    expect(row.channelPayoutFee.amount?.amount).toBe(240000);
+    expect(row.supplierBillingFee.sourceRefs).toContain('F04:수수료표!A191:M191');
+    expect(precomputeOfferEconomics(offer, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee.amount?.amount).toBe(330000);
+    const unsupported = { ...offer, priceTerms: [{ ...offer.priceTerms[0]!, termMonths: 24 }] };
+    expect(precomputeOfferEconomics(unsupported, 'PICKUP_SUBSCRIPTION')[0]!.supplierBillingFee.reasonCode).toBe('PICKUP_TERM_RATE_NOT_IN_TABLE');
     expect({ offer, evidence }).toEqual(before);
   });
   it('uses the same-product 36-month basis for Billin and records its exact price provenance', () => {

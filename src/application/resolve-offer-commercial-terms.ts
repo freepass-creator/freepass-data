@@ -162,9 +162,18 @@ export function precomputeOfferEconomics(
     const basis36 = offer.priceTerms.filter(candidate => candidate.termMonths === 36 &&
       candidate.mileageLimitKmPerYear === term.mileageLimitKmPerYear && candidate.monthlyRent.currency === 'KRW' &&
       positiveSafeInteger(candidate.monthlyRent.amount));
+    const q12Basis = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION'
+      ? offer.priceTerms.filter(candidate => candidate.termMonths === 12 &&
+        candidate.mileageLimitKmPerYear === term.mileageLimitKmPerYear && candidate.monthlyRent.currency === 'KRW' &&
+        positiveSafeInteger(candidate.monthlyRent.amount))
+      : [];
+    const automaticSonokongEvidence = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION' && q12Basis.length === 1
+      ? { q12Basis: { amount: q12Basis[0]!.monthlyRent.amount, sourceRef: 'PRODUCT_12_MONTH_RENT' } }
+      : {};
     const args = { ...evidenceByTerm[term.termKey], supplierId: offer.supplierId, productType, fuel: fuel ?? '',
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
-      billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined };
+      billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined,
+      ...automaticSonokongEvidence };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
       const saved = offer.internalEconomicsTerms?.find(candidate => candidate.termKey === term.termKey)?.[
         side === 'BILLING' ? 'supplierBillingFee' : 'channelPayoutFee'];
