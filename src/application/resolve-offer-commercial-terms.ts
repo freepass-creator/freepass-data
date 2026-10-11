@@ -118,7 +118,24 @@ export function precomputeOfferEconomics(
       if (result.state !== 'CALCULATED' || result.amount === null) return unknown(result.reasonCode ?? 'NO_MATCHING_RULE');
 
       let calculation: TermEconomicAmount['calculation'];
-      if (result.ruleId?.endsWith('_RENT_X_TERM')) {
+      const monthlyRule = policy.rules.find(rule => rule.id === result.ruleId && 'basis' in rule && rule.basis === 'MONTHLY_RENT');
+      if (term.termMonths === 1 && result.ruleId?.startsWith('STANDARD_RERENT_1_') && monthlyRule &&
+          'rateBasisPoints' in monthlyRule && typeof monthlyRule.rateBasisPoints === 'number') {
+        // Existing supported RATE base equals monthly rent for a one-month contract.
+        // Legacy FIXED rows need the original confirmed policy evidence, not just a familiar rule ID.
+        if (saved?.calculation?.kind === 'FIXED') {
+          const storedTerm = offer.internalEconomicsTerms?.find(candidate => candidate.termKey === term.termKey);
+          const oldRent = storedTerm?.monthlyRent;
+          const verified = saved.ruleId === result.ruleId && saved.policyId === policy.policyId &&
+            saved.sourceRefs.includes(policy.oneMonthBasic.sourceRef) &&
+            (saved.state === 'KNOWN' || saved.state === 'ZERO') && oldRent?.currency === 'KRW' &&
+            positiveSafeInteger(oldRent.amount) && saved.amount?.currency === 'KRW' &&
+            saved.amount.amount === Math.round(oldRent.amount * monthlyRule.rateBasisPoints / 10000) &&
+            saved.calculation.amount.currency === 'KRW' && saved.calculation.amount.amount === saved.amount.amount;
+          if (!verified) throw new Error('LEGACY_RENT_FEE_BASIS_REVIEW_REQUIRED');
+        }
+        calculation = { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: monthlyRule.rateBasisPoints / 10000 };
+      } else if (result.ruleId?.endsWith('_RENT_X_TERM')) {
         // Read rates from the same policy table, including the Switch ladder alias.
         const billing = policy.rules.find((rule) => rule.id === 'STANDARD_RERENT_BILLING_LADDER')!;
         const payout = policy.rules.find((rule) => 'termMonths' in rule && rule.termMonths === term.termMonths &&

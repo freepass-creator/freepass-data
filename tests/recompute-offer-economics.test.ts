@@ -25,6 +25,38 @@ async function prepare(store: MemoryDataStore) {
 }
 
 describe('offer economics recompute', () => {
+  it('stores the confirmed one-month rent basis and recalculates 303 to 777 as 15 to 39 on both sides', async () => {
+    const store=await fixture(),offer=(await store.listOffers())[0]!,product=(await store.getProduct(offer.productId))!;
+    await store.seed({products:[{...product,commercialType:'USED_RENT'}]});
+    offer.priceTerms=[{...offer.priceTerms[0]!,termKey:'m1',termMonths:1,monthlyRent:{amount:303,currency:'KRW'}}];
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'USED_RENT');
+    for(const side of ['supplierBillingFee','channelPayoutFee'] as const) {
+      expect(offer.internalEconomicsTerms[0]![side]).toMatchObject({amount:{amount:15},calculation:{kind:'RATE',base:'MONTHLY_RENT_X_TERM',rate:0.05}});
+    }
+    await store.seed({offers:[offer]});
+    await updateOfferPrice(store,{commandId:'one-month-rent',idempotencyKey:'one-month-rent',offerId:offer.id,expectedRevision:offer.revision,
+      termKey:'m1',monthlyRent:{amount:777,currency:'KRW'},reason:'confirmed rent change',actor});
+    const saved=(await store.getOffer(offer.id))!;
+    for(const side of ['supplierBillingFee','channelPayoutFee'] as const) expect(saved.internalEconomicsTerms![0]![side])
+      .toMatchObject({amount:{amount:39},vatAmount:4,totalAmount:43,calculation:{kind:'RATE',base:'MONTHLY_RENT_X_TERM',rate:0.05}});
+    expect(refreshOfferEconomicsForChangedInputs(saved,saved,false,'USED_RENT')).toEqual(saved.internalEconomicsTerms);
+  });
+  it('refuses legacy FIXED rent fees without original evidence and preserves the whole transaction', async () => {
+    const store=await fixture(),offer=(await store.listOffers())[0]!,product=(await store.getProduct(offer.productId))!;
+    await store.seed({products:[{...product,commercialType:'USED_RENT'}]});
+    offer.priceTerms=[{...offer.priceTerms[0]!,termKey:'m1',termMonths:1,monthlyRent:{amount:303,currency:'KRW'}}];
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'USED_RENT');
+    const fee=offer.internalEconomicsTerms[0]!.supplierBillingFee;
+    fee.calculation={kind:'FIXED',amount:{amount:15,currency:'KRW'}};fee.sourceRefs=[];
+    await store.seed({offers:[offer]});
+    await expect(updateOfferPrice(store,{commandId:'legacy-unreviewed',idempotencyKey:'legacy-unreviewed',offerId:offer.id,expectedRevision:offer.revision,
+      termKey:'m1',monthlyRent:{amount:777,currency:'KRW'},reason:'source change',actor})).rejects.toThrow('LEGACY_RENT_FEE_BASIS_REVIEW_REQUIRED');
+    expect(await store.getOffer(offer.id)).toEqual(offer);expect(store.audits).toHaveLength(0);expect(store.outbox.size).toBe(0);
+    fee.sourceRefs=[KAKAO_COMMISSION_POLICY.oneMonthBasic.sourceRef];
+    expect(precomputeOfferEconomics(offer,'USED_RENT')[0]!.supplierBillingFee.calculation)
+      .toEqual({kind:'RATE',base:'MONTHLY_RENT_X_TERM',rate:0.05});
+    expect(fee.calculation.kind).toBe('FIXED');
+  });
   it('does not change an apply plan scope through API options', async () => {
     const store=await fixture(), options=await prepare(store), tx=vi.spyOn(store,'transact');
     await expect(runOfferEconomicsRecompute(store,{...options,offerIds:[]})).rejects.toThrow('reviewed plan');
