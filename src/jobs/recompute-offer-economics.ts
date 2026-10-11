@@ -2,8 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { createRuntimeStores } from '../bootstrap.js';
 import { resolveTargetProject } from '../infra/firebase-target.js';
-import { offerEconomicsInputDigest, recomputeOfferEconomics } from '../application/catalog.js';
-import { precomputeOfferEconomics } from '../application/resolve-offer-commercial-terms.js';
+import { offerEconomicsInputDigest, recomputeOfferEconomics, assertOfferFeeSubsetEvidence, type OfferFeeSubsetEvidence } from '../application/catalog.js';
+import { selectOfferFeeEconomics } from '../application/resolve-offer-commercial-terms.js';
 import { KAKAO_COMMISSION_POLICY } from '../application/kakao-catalog-reference.js';
 import type { ActorRef, Offer } from '../domain/catalog.js';
 import type { ExecutionWriterRef } from '../domain/writer-ownership.js';
@@ -18,18 +18,22 @@ const supplierCounts = () => ({ offers: 0, terms: 0, supplierBillingFee: counts(
 
 export type EconomicsRecomputePlan = {
   schema: 'offer-economics-recompute/v2'; policyId: string; policyDigest: string; target: string;
-  entries: Array<{ offerId: string; expectedRevision: number; inputDigest: string; expectedEconomicsDigest: string; before: Offer }>;
+  entries: Array<{ offerId: string; expectedRevision: number; inputDigest: string; expectedEconomicsDigest: string; before: Offer;
+    feeSubset?: {termKeys:string[]; evidence?:OfferFeeSubsetEvidence} }>;
 };
 
 /** Pure reads: no transaction, gateway audit, projection, receipt or file writes. */
-export type EconomicsRecomputeScope = { offerIds?: readonly string[]; productIds?: readonly string[] };
+export type EconomicsRecomputeScope = { offerIds?: readonly string[]; productIds?: readonly string[];
+  feeSubsetsByOffer?: Readonly<Record<string,{termKeys:string[];evidence?:OfferFeeSubsetEvidence}>> };
 export async function planOfferEconomicsRecompute(store: CatalogStore, target: string, scope: EconomicsRecomputeScope = {}) {
   const plan: EconomicsRecomputePlan = { schema: 'offer-economics-recompute/v2', target,
     policyId: KAKAO_COMMISSION_POLICY.policyId, policyDigest: stableDigest(KAKAO_COMMISSION_POLICY), entries: [] };
   const suppliers: Record<string, ReturnType<typeof supplierCounts>> = {};
   const unknown = new Map<string, number>();
   let changedOffers = 0;
-  const offers = scope.offerIds ? await Promise.all([...new Set(scope.offerIds)].map(async id => {
+  const applyBlockers:Array<{offerId:string;reason:string}>=[];
+  const selectedIds=scope.offerIds ?? (scope.feeSubsetsByOffer ? Object.keys(scope.feeSubsetsByOffer):undefined);
+  const offers = selectedIds ? await Promise.all([...new Set(selectedIds)].map(async id => {
     const offer = await store.getOffer(id);
     if (!offer) throw new Error('HOLD: scoped offer not found');
     return offer;
@@ -37,10 +41,15 @@ export async function planOfferEconomicsRecompute(store: CatalogStore, target: s
   for (const offer of offers.filter(offer => !scope.productIds || scope.productIds.includes(offer.productId)).sort((a, b) => a.id.localeCompare(b.id))) {
     const product = await store.getProduct(offer.productId);
     const model = product ? await store.getVehicleModel(product.vehicleModelId) : null;
-    const after = precomputeOfferEconomics(offer, product?.commercialType, model?.fuel);
+    const subset=scope.feeSubsetsByOffer?.[offer.id];
+    if (scope.feeSubsetsByOffer && !subset) throw new Error('FEE_SUBSET_OFFER_SCOPE_MISMATCH');
+    const after = selectOfferFeeEconomics(offer, product?.commercialType, model?.fuel,subset?.termKeys);
+    if (subset) try { await assertOfferFeeSubsetEvidence(store,offer,subset.evidence); }
+      catch(error) { applyBlockers.push({offerId:offer.id,reason:error instanceof Error?error.message:'FEE_SUBSET_EVIDENCE_INVALID'}); }
     const before = offer.internalEconomicsTerms ?? [];
     plan.entries.push({ offerId: offer.id, expectedRevision: offer.revision,
-      inputDigest: offerEconomicsInputDigest(offer, product, model), expectedEconomicsDigest: stableDigest(after), before: structuredClone(offer) });
+      inputDigest: offerEconomicsInputDigest(offer, product, model), expectedEconomicsDigest: stableDigest(after), before: structuredClone(offer),
+      ...(subset?{feeSubset:structuredClone(subset)}:{}) });
     const group = suppliers[offer.supplierId] ??= supplierCounts();
     group.offers++;
     const oldTerms = new Map(before.map(term => [term.termKey, term]));
@@ -72,7 +81,7 @@ export async function planOfferEconomicsRecompute(store: CatalogStore, target: s
     if (stableDigest(before) !== stableDigest(after)) changedOffers++;
   }
   return { mode: 'DRY_RUN' as const, status: 'PLANNED' as const, writes: 0, offers: plan.entries.length,
-    changedOffers, suppliers, unknownReasons: [...unknown].map(([reason, count]) => ({ reason, count }))
+    changedOffers, subsetEvidenceVerified:!!scope.feeSubsetsByOffer && applyBlockers.length===0,applyBlockers, suppliers, unknownReasons: [...unknown].map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)),
     planDigest: stableDigest(plan), plan };
 }
@@ -81,16 +90,18 @@ type RecomputeOptions = {
   target: string; apply?: boolean; plan?: EconomicsRecomputePlan; expectedPlanDigest?: string;
   policyId?: string; actor?: ActorRef; approvalRef?: string; writer?: ExecutionWriterRef;
   offerIds?: readonly string[]; productIds?: readonly string[];
+  feeSubsetsByOffer?:NonNullable<EconomicsRecomputeScope['feeSubsetsByOffer']>;
 };
 
 function assertApplyPlan(options: RecomputeOptions): EconomicsRecomputePlan {
   const plan = options.plan;
-  if (options.offerIds !== undefined || options.productIds !== undefined || !plan || plan.schema !== 'offer-economics-recompute/v2' || plan.target !== options.target ||
+  if (options.offerIds !== undefined || options.productIds !== undefined || options.feeSubsetsByOffer!==undefined || !plan || plan.schema !== 'offer-economics-recompute/v2' || plan.target !== options.target ||
       options.policyId !== KAKAO_COMMISSION_POLICY.policyId || plan.policyId !== options.policyId ||
       plan.policyDigest !== stableDigest(KAKAO_COMMISSION_POLICY) || !options.actor || typeof options.approvalRef !== 'string' || !options.approvalRef.trim() || options.approvalRef.length > 512 || /[\r\n]/.test(options.approvalRef) ||
       options.expectedPlanDigest !== stableDigest(plan) || !Array.isArray(plan.entries) ||
       new Set(plan.entries.map(entry => entry.offerId)).size !== plan.entries.length ||
-      plan.entries.some(entry => entry.before?.id !== entry.offerId || entry.before.revision !== entry.expectedRevision || !/^[a-f0-9]{64}$/.test(entry.expectedEconomicsDigest))) {
+      plan.entries.some(entry => entry.before?.id !== entry.offerId || entry.before.revision !== entry.expectedRevision || !/^[a-f0-9]{64}$/.test(entry.expectedEconomicsDigest) ||
+        (entry.feeSubset && (!entry.feeSubset.evidence || !Array.isArray(entry.feeSubset.termKeys) || !entry.feeSubset.termKeys.length || new Set(entry.feeSubset.termKeys).size!==entry.feeSubset.termKeys.length)))) {
     throw new Error('HOLD: apply requires the reviewed plan digest, target, policy and actor');
   }
   return plan;
@@ -104,11 +115,13 @@ export async function runOfferEconomicsRecompute(store: CatalogStore, options: R
   for (const entry of plan.entries) {
     try {
       const identity = stableDigest({ policyId: plan.policyId, policyDigest: plan.policyDigest,
-        offerId: entry.offerId, inputDigest: entry.inputDigest, expectedEconomicsDigest: entry.expectedEconomicsDigest, approvalRef: options.approvalRef });
+        offerId: entry.offerId, inputDigest: entry.inputDigest, expectedEconomicsDigest: entry.expectedEconomicsDigest, approvalRef: options.approvalRef,
+        ...(entry.feeSubset?{feeSubset:entry.feeSubset}:{}) });
       const result = await recomputeOfferEconomics(store, {
         commandId: `recompute:${identity}`, idempotencyKey: `recompute:${identity}`,
         offerId: entry.offerId, expectedRevision: entry.expectedRevision, inputDigest: entry.inputDigest,
         policyId: plan.policyId, expectedEconomicsDigest: entry.expectedEconomicsDigest, approvalRef: options.approvalRef!, actor: options.actor!, ...(options.writer ? { writer: options.writer } : {}),
+        ...(entry.feeSubset?{feeSubset:entry.feeSubset}:{}),
         reason: `Reviewed economics plan ${options.expectedPlanDigest}`
       });
       results.push({ offerId: entry.offerId, ...result });
@@ -136,12 +149,12 @@ export async function runOfferEconomicsRecompute(store: CatalogStore, options: R
 }
 
 export async function main(args = process.argv.slice(2)) {
-  const allowed = new Set(['--memory', '--firestore', '--apply', '--plan', '--policy-id', '--expected-plan-digest', '--approval-ref', '--offer-ids', '--product-ids']);
+  const allowed = new Set(['--memory', '--firestore', '--apply', '--plan', '--policy-id', '--expected-plan-digest', '--approval-ref', '--offer-ids', '--product-ids', '--fee-subsets']);
   const values = new Map<string, string>();
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (!allowed.has(arg) || values.has(arg)) throw new Error(`Unknown/duplicate argument: ${arg}`);
-    if (['--plan', '--policy-id', '--expected-plan-digest', '--approval-ref', '--offer-ids', '--product-ids'].includes(arg)) {
+    if (['--plan', '--policy-id', '--expected-plan-digest', '--approval-ref', '--offer-ids', '--product-ids', '--fee-subsets'].includes(arg)) {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error(`Missing value: ${arg}`);
       values.set(arg, value);
@@ -149,14 +162,16 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (values.has('--memory') === values.has('--firestore')) throw new Error('Select exactly one: --memory or --firestore');
   const apply = values.has('--apply');
-  if (apply && (values.has('--offer-ids') || values.has('--product-ids'))) throw new Error('HOLD: apply scope comes only from the reviewed plan');
+  if (apply && (values.has('--offer-ids') || values.has('--product-ids') || values.has('--fee-subsets'))) throw new Error('HOLD: apply scope comes only from the reviewed plan');
   if (apply && (!values.has('--plan') || !values.has('--policy-id') || !values.has('--expected-plan-digest') || !values.has('--approval-ref'))) {
     throw new Error('HOLD: --apply needs --plan, --policy-id, --expected-plan-digest and --approval-ref');
   }
   const target = values.has('--memory') ? 'memory-demo' : resolveTargetProject();
   const planFile = values.get('--plan');
   const plan = planFile ? JSON.parse(await readFile(planFile, 'utf8')) as EconomicsRecomputePlan : undefined;
+  const subsets = values.has('--fee-subsets') ? JSON.parse(await readFile(values.get('--fee-subsets')!, 'utf8')) as NonNullable<EconomicsRecomputeScope['feeSubsetsByOffer']> : undefined;
   const options: RecomputeOptions = { target, apply,
+    ...(subsets ? {feeSubsetsByOffer: subsets} : {}),
     ...(values.has('--offer-ids') ? { offerIds: values.get('--offer-ids')!.split(',').map(id => id.trim()).filter(Boolean) } : {}),
     ...(values.has('--product-ids') ? { productIds: values.get('--product-ids')!.split(',').map(id => id.trim()).filter(Boolean) } : {}),
     ...(plan ? { plan } : {}), ...(values.has('--policy-id') ? { policyId: values.get('--policy-id')! } : {}),
