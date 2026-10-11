@@ -1243,6 +1243,77 @@ it('serves Admin contract fee links in request order with one catalog read pass'
   await app.close();
 });
 
+it('serves Admin-only contract fee ledger approximation when the optional ledger port is injected', async () => {
+  const store = new MemoryDataStore();
+  await seedDemoCatalog(store);
+  const adminBinding: ConsumerBinding = {
+    id: 'freepass-admin-catalog',
+    projectionId: 'admin-catalog',
+    token: token + '-admin',
+    capabilities: ['contract-fee-link-read'],
+  };
+  const logs = new MemoryDataAccessLogStore();
+  const feeStore = {
+    listVehicleAssets: async () => store.listVehicleAssets(),
+    listProducts: async () => store.listProducts(),
+    listOffers: async () => store.listOffers(),
+  } as any;
+  const ledgerPort: Parameters<typeof createConsumerGateway>[7] = {
+    listContractFeeLedgerRows: async () => [{
+      schemaVersion: 'period-fee-ledger/v1',
+      snapshotId: 'period-fee-2026-10-09',
+      snapshotDateKst: '2026-10-09',
+      computedAt: '2026-10-09T00:00:00.000Z',
+      valueBasis: 'CURRENT_AT_SNAPSHOT',
+      valueAsOf: '2026-10-09',
+      engineRevision: 'test',
+      sourceDigest: 'digest',
+      documentKey: 'doc',
+      applyState: 'READY',
+      holdReasonCode: null,
+      vehicleUid: 'va_gv70_demo',
+      assetId: 'va_gv70_demo',
+      plateLookupKey: null,
+      plateLast4ForReport: null,
+      supplierId: 'supplier_demo',
+      productId: 'product_gv70_demo',
+      offerId: 'offer_gv70_demo',
+      offerRevision: 1,
+      productUpdateTime: null,
+      termKey: 'm36_demo',
+      termMonths: 36,
+      monthlyRent: { amount: 690000, currency: 'KRW', state: 'KNOWN', reasonCode: null },
+      deposit: { state: 'KNOWN', amount: { amount: 3000000, currency: 'KRW' }, reasonCode: null, sourceRefs: [], depositEvidence: { kind: 'SOURCE_AMOUNT', ruleCode: null, noteField: null, noteText: null, sourcePriceKey: 'm36_demo', calculationBasis: null, policyCode: null } },
+      vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE', amount: 12345678, differenceAmount: 1000 },
+      supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 90000, currency: 'KRW' }, vatTreatment: 'EXCLUDED', vatAmount: 9000, totalAmount: 99000, reasonCode: 'VEHICLE_VALUE_APPROX', ruleId: 'rule', policyId: 'policy', sourceRefs: [] },
+      channelPayoutFee: { state: 'CALCULATED', amount: { amount: 40000, currency: 'KRW' }, vatTreatment: 'EXCLUDED', vatAmount: 4000, totalAmount: 44000, reasonCode: null, ruleId: 'rule', policyId: 'policy', sourceRefs: [] },
+      ruleIds: ['rule'],
+      policyIds: ['policy'],
+      priceSourceRefs: [],
+      inputRefs: { productPath: 'products/p', offerPath: 'products/p/offers/o', priceTermRef: 'terms/m36', internalEconomicsRef: null },
+    }],
+  };
+  const app = createConsumerGateway(store, [binding, adminBinding], new DataAccessGateway(logs), feeStore, undefined, undefined, undefined, ledgerPort);
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/v1/consumers/freepass-admin-catalog/contract-fee-links',
+    headers: { authorization: `Bearer ${token}-admin` },
+    payload: { items: [{ key: 'row', assetId: 'va_gv70_demo', contractDate: '2026-10-10', supplierId: 'supplier_demo', termMonths: 36, monthlyRent: 690000, deposit: 3000000 }] },
+  });
+
+  expect(response.statusCode).toBe(200);
+  const row = response.json().results[0];
+  expect(row.ledgerFee).toMatchObject({
+    status: 'CONFIRMED',
+    supplierBillingFee: { state: 'CALCULATED_APPROX' },
+    vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE' },
+  });
+  expect(row.ledgerFee.vehicleValueEvidence).not.toHaveProperty('amount');
+  expect(row.ledgerFee).not.toHaveProperty('differenceAmount');
+  await app.close();
+});
+
 it('rejects invalid contract fee link requests before reading catalog data', async () => {
   const adminBinding: ConsumerBinding = {
     id: 'freepass-admin-catalog',

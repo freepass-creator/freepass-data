@@ -67,6 +67,7 @@ import {
   type ContractFeeLinkInput,
   type ContractFeeLinkResult,
 } from '../application/contract-fee-link.js';
+import type { PeriodFeeLedgerRow } from '../application/period-fee-ledger-plan.js';
 import {
   assertSettlementLedgerReadRequest,
   type SettlementLedgerReadRequest,
@@ -106,6 +107,9 @@ type CatalogDataHealthStore =
   Parameters<typeof readCatalogDataHealth>[0] &
   Parameters<typeof readCatalogDataHealth>[1];
 type ContractFeeLinkStore = Pick<CatalogDataHealthStore, 'listVehicleAssets' | 'listProducts' | 'listOffers'>;
+type ContractFeeLinkLedgerRowsPort = {
+  listContractFeeLedgerRows(): Promise<readonly PeriodFeeLedgerRow[]>;
+};
 
 /** Server-owned registrations; a request can never select a collection or projection. */
 export function parseConsumerBindings(raw: string | undefined): RegisteredConsumerBinding[] {
@@ -385,6 +389,7 @@ export function createConsumerGateway(
   },
   workflowStore?: AdminWorkflowStore,
   estimateArtifactStore?: EstimateArtifactStore,
+  contractFeeLedgerRowsPort?: ContractFeeLinkLedgerRowsPort,
 ) {
   // Validate again for callers constructing registrations without the environment parser.
   assertPublicAllowlistsConfigured();
@@ -1249,11 +1254,14 @@ export function createConsumerGateway(
             feeStore.listProducts(),
             feeStore.listOffers(),
           ]);
+          const ledgerRows = contractFeeLedgerRowsPort
+            ? await contractFeeLedgerRowsPort.listContractFeeLedgerRows()
+            : undefined;
           return {
             contract: 'contract-fee-links/v1' as const,
             results: request.body.items.map(({ key, ...input }) => ({
               key,
-              ...resolveContractFeeLink(input, { assets, products, offers }),
+              ...resolveContractFeeLink(input, { assets, products, offers, ...(ledgerRows ? { ledgerRows } : {}) }),
             })),
           };
         });
