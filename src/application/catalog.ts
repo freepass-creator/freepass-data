@@ -1,4 +1,4 @@
-import { precomputeOfferEconomics, refreshOfferEconomicsForChangedInputs } from './resolve-offer-commercial-terms.js';
+import { precomputeOfferEconomics, refreshOfferEconomicsForChangedInputs, selectOfferFeeEconomics } from './resolve-offer-commercial-terms.js';
 import { KAKAO_COMMISSION_POLICY } from './kakao-catalog-reference.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { orderedJsonDigest, stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
@@ -180,7 +180,29 @@ export type RecomputeOfferEconomicsInput = {
   commandId: string; idempotencyKey: string; offerId: string; expectedRevision: number;
   policyId: string; inputDigest: string; expectedEconomicsDigest: string; approvalRef: string; reason: string; actor: ActorRef;
   writer?: ExecutionWriterRef;
+  feeSubset?: { termKeys: string[]; evidence?: OfferFeeSubsetEvidence };
 };
+
+export type OfferFeeSubsetEvidence = { bindingId: string; bindingDigest: string; runId: string; checkpointDigest: string; policyDigest: string };
+/** The same source/policy fence is used by readonly planning and the canonical transaction. */
+export async function assertOfferFeeSubsetEvidence(reader: Pick<CatalogStore,'getSourceBinding'|'getSourceHead'|'getSourceRun'|'getSourceDefinition'>,
+  offer: Offer, evidence: OfferFeeSubsetEvidence | undefined, now = new Date().toISOString()) {
+  if (!evidence) throw new InvalidCommandError('FEE_SUBSET_SOURCE_POLICY_EVIDENCE_REQUIRED');
+  const binding=await reader.getSourceBinding(evidence.bindingId);
+  if (!binding || binding.offerId!==offer.id || binding.productId!==offer.productId || binding.sourceSupplierCode!==offer.supplierId ||
+      binding.sourceRunId!==evidence.runId || stableDigest(binding)!==evidence.bindingDigest) throw new InvalidCommandError('FEE_SUBSET_BINDING_DRIFT');
+  const [head,run,source]=await Promise.all([reader.getSourceHead(binding.sourceId),reader.getSourceRun(evidence.runId),reader.getSourceDefinition(binding.sourceId)]);
+  if (!head || head.sourceId!==binding.sourceId || head.runId!==evidence.runId || !run || run.sourceId!==binding.sourceId || run.status!=='COMPLETED' || run.headStatus!=='CURRENT' ||
+      !run.checkpoint || !head.checkpoint || head.checkpoint.sourceId!==binding.sourceId ||
+      head.coverage.completeness!=='COMPLETE' || stableDigest(run.coverage)!==stableDigest(head.coverage) ||
+      stableDigest(run.checkpoint ?? null)!==stableDigest(head.checkpoint) ||
+      stableDigest(head.checkpoint)!==evidence.checkpointDigest) throw new InvalidCommandError('FEE_SUBSET_SOURCE_NOT_CURRENT');
+  const maxAge=source?.expectedFreshnessSeconds;
+  if (!source?.enabled || !maxAge || maxAge<=0 || !Number.isFinite(maxAge)) throw new InvalidCommandError('FEE_SUBSET_FRESHNESS_POLICY_REQUIRED');
+  const age=Date.parse(now)-Date.parse(head.observedAt);
+  if (!Number.isFinite(age) || age<0 || age>maxAge*1000) throw new InvalidCommandError('FEE_SUBSET_SOURCE_STALE');
+  if (stableDigest(KAKAO_COMMISSION_POLICY)!==evidence.policyDigest) throw new InvalidCommandError('FEE_SUBSET_POLICY_EVIDENCE_REQUIRED');
+}
 
 export async function recomputeOfferEconomics(
   store: CatalogStore, input: RecomputeOfferEconomicsInput, now = new Date().toISOString()
@@ -213,7 +235,8 @@ export async function recomputeOfferEconomics(
     if (offerEconomicsInputDigest(current, product, model) !== input.inputDigest) {
       throw new InvalidCommandError('INPUT_DRIFT: regenerate and approve the dry-run plan');
     }
-    const economics = precomputeOfferEconomics(current, product?.commercialType, model?.fuel);
+    if (input.feeSubset) await assertOfferFeeSubsetEvidence(tx,current,input.feeSubset.evidence,now);
+    const economics = selectOfferFeeEconomics(current, product?.commercialType, model?.fuel,input.feeSubset?.termKeys);
     if (stableDigest(economics) !== input.expectedEconomicsDigest) {
       throw new InvalidCommandError('REVIEWED_ECONOMICS_DRIFT: regenerate and review the dry-run plan');
     }

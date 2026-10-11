@@ -2,9 +2,9 @@ process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
-import { offerEconomicsInputDigest, recomputeOfferEconomics, updateOfferPrice } from '../src/application/catalog.js';
+import { assertOfferFeeSubsetEvidence, offerEconomicsInputDigest, recomputeOfferEconomics, updateOfferPrice } from '../src/application/catalog.js';
 import { KAKAO_COMMISSION_POLICY } from '../src/application/kakao-catalog-reference.js';
-import { precomputeOfferEconomics, refreshOfferEconomicsForChangedInputs } from '../src/application/resolve-offer-commercial-terms.js';
+import { selectOfferFeeEconomics, precomputeOfferEconomics, refreshOfferEconomicsForChangedInputs } from '../src/application/resolve-offer-commercial-terms.js';
 import { planOfferEconomicsRecompute, runOfferEconomicsRecompute } from '../src/jobs/recompute-offer-economics.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 import { LEGACY_CATALOG_WRITER_OWNERSHIP } from '../src/domain/writer-ownership.js';
@@ -25,6 +25,75 @@ async function prepare(store: MemoryDataStore) {
 }
 
 describe('offer economics recompute', () => {
+  it('applies a reviewed subset with current evidence and blocks source drift atomically', async () => {
+    const store=await fixture(),offer=(await store.listOffers())[0]!, now=new Date().toISOString();
+    const product=(await store.getProduct(offer.productId))!;
+    await store.seed({products:[{...product,commercialType:'USED_RENT'}]});
+    offer.priceTerms=[{...offer.priceTerms[0]!,termKey:'m1',termMonths:1},{...offer.priceTerms[0]!,termKey:'m24',termMonths:24}];
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'USED_RENT');
+    offer.internalEconomicsTerms[0]!.supplierBillingFee={...offer.internalEconomicsTerms[0]!.supplierBillingFee,state:'UNKNOWN',amount:null};
+    const binding={...offer,bindingId:'subset-binding',sourceId:'subset-source',sourceRecordId:'record',sourceFingerprint:'fingerprint',sourceRunId:'subset-run',sourceObservedAt:now,sourceSupplierCode:offer.supplierId,vehicleModelId:product.vehicleModelId,productId:offer.productId,offerId:offer.id};
+    const coverage={mode:'FULL' as const,completeness:'COMPLETE' as const}, checkpoint={sourceId:binding.sourceId,observedAt:now,checksum:'checksum'};
+    const policy={...offer,id:KAKAO_COMMISSION_POLICY.policyId,kind:'OTHER' as const,version:'test',effectiveFrom:now,facts:structuredClone(KAKAO_COMMISSION_POLICY)};
+    await store.seed({offers:[offer],policies:[policy],sourceBindings:[binding],
+      sourceDefinitions:[{sourceId:binding.sourceId,kind:'MANUAL',displayName:'test',authorityScope:[],enabled:true,health:'HEALTHY',expectedFreshnessSeconds:600}],
+      sourceHeads:[{sourceId:binding.sourceId,runId:binding.sourceRunId,observedAt:now,acceptedAt:now,coverage,checkpoint}],
+      sourceRuns:[{sourceId:binding.sourceId,runId:binding.sourceRunId,status:'COMPLETED',startedAt:now,observedAt:now,coverage,checkpoint,headStatus:'CURRENT',rawCount:1,candidateCount:1,warningCount:0}]});
+    const evidence={bindingId:binding.bindingId,bindingDigest:stableDigest(binding),runId:binding.sourceRunId,checkpointDigest:stableDigest(checkpoint),policyDigest:stableDigest(KAKAO_COMMISSION_POLICY)};
+    const report=await planOfferEconomicsRecompute(store,'memory-test',{feeSubsetsByOffer:{[offer.id]:{termKeys:['m1'],evidence}}});
+    expect(report.subsetEvidenceVerified).toBe(true);
+    const options={target:'memory-test',apply:true,plan:report.plan,expectedPlanDigest:report.planDigest,policyId:report.plan.policyId,actor,approvalRef:'subset-review'};
+    const currentRun=(await store.getSourceRun(binding.sourceRunId))!;
+    for (const changedRun of [{...currentRun,coverage:{...coverage,completeness:'INCOMPLETE' as const}},
+      {...currentRun,checkpoint:{...checkpoint,checksum:'different-checksum'}}]) {
+      await store.seed({sourceRuns:[changedRun]});
+      expect((await runOfferEconomicsRecompute(store,options)).status).toBe('HOLD');
+      expect(await store.getOffer(offer.id)).toEqual(offer);expect(store.audits).toHaveLength(0);
+    }
+    await store.seed({sourceRuns:[currentRun]});
+    await store.seed({sourceRuns:[{...currentRun,checkpoint:null}],sourceHeads:[{
+      sourceId:binding.sourceId,runId:binding.sourceRunId,observedAt:now,acceptedAt:now,coverage,checkpoint:null as never}]});
+    await expect(assertOfferFeeSubsetEvidence(store,offer,{...evidence,checkpointDigest:stableDigest(null)},now))
+      .rejects.toThrow('FEE_SUBSET_SOURCE_NOT_CURRENT');
+    await store.seed({sourceRuns:[currentRun],sourceHeads:[{
+      sourceId:binding.sourceId,runId:binding.sourceRunId,observedAt:now,acceptedAt:now,coverage,checkpoint}]});
+    await store.seed({sourceHeads:[{sourceId:binding.sourceId,runId:'different-run',observedAt:now,acceptedAt:now,coverage,checkpoint}]});
+    const blocked=await runOfferEconomicsRecompute(store,options);
+    expect(blocked.status).toBe('HOLD');expect(await store.getOffer(offer.id)).toEqual(offer);expect(store.audits).toHaveLength(0);
+    await store.seed({sourceHeads:[{sourceId:binding.sourceId,runId:binding.sourceRunId,observedAt:now,acceptedAt:now,coverage,checkpoint}]});
+    const result=await runOfferEconomicsRecompute(store,options);
+    expect(result.status).toBe('APPLIED');
+    const saved=(await store.getOffer(offer.id))!;
+    expect(saved.internalEconomicsTerms![1]).toEqual(offer.internalEconomicsTerms[1]);
+    expect(saved.priceTerms).toEqual(offer.priceTerms);
+    expect(saved.internalEconomicsTerms![0]!.supplierBillingFee.state).toBe('KNOWN');
+  });
+  it('subset preserves unselected rows and selected non-fee fields', async () => {
+    const store=await fixture(),offer=(await store.listOffers())[0]!;
+    offer.priceTerms=[{...offer.priceTerms[0]!,termKey:'m1',termMonths:1},{...offer.priceTerms[0]!,termKey:'m24',termMonths:24}];
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'USED_RENT');
+    const before=structuredClone(offer), after=selectOfferFeeEconomics(offer,'USED_RENT',null,['m1']);
+    expect(after[1]).toEqual(before.internalEconomicsTerms![1]);
+    const {supplierBillingFee:a,channelPayoutFee:b,...rest}=after[0]!;
+    const {supplierBillingFee:c,channelPayoutFee:d,...old}=before.internalEconomicsTerms![0]!;
+    expect(rest).toEqual(old); expect(offer).toEqual(before);
+    expect(a).toEqual(c);expect(b).toEqual(d);
+    expect(()=>selectOfferFeeEconomics(offer,'USED_RENT',null,['m1','m1'])).toThrow('KEYS_REQUIRED');
+    expect(()=>selectOfferFeeEconomics(offer,'USED_RENT',null,['missing'])).toThrow('STORED_ROW_REQUIRED');
+    offer.internalEconomicsTerms[0]!.termMonths=2;
+    expect(()=>selectOfferFeeEconomics(offer,'USED_RENT',null,['m1'])).toThrow('PRICE_EVIDENCE_DRIFT');
+  });
+  it('subset without source evidence remains blocked and never writes', async () => {
+    const store=await fixture(),offer=(await store.listOffers())[0]!;
+    offer.priceTerms=[{...offer.priceTerms[0]!,termKey:'m1',termMonths:1}];
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'USED_RENT');
+    await store.seed({offers:[offer]});
+    const report=await planOfferEconomicsRecompute(store,'memory-test',{feeSubsetsByOffer:{[offer.id]:{termKeys:['m1']}}});
+    expect(report.subsetEvidenceVerified).toBe(false);
+    expect(report.applyBlockers).toEqual([{offerId:offer.id,reason:'FEE_SUBSET_SOURCE_POLICY_EVIDENCE_REQUIRED'}]);
+    await expect(runOfferEconomicsRecompute(store,{target:'memory-test',apply:true,plan:report.plan,expectedPlanDigest:report.planDigest,policyId:report.plan.policyId,actor,approvalRef:'review'})).rejects.toThrow('HOLD');
+    expect(await store.getOffer(offer.id)).toEqual(offer);expect(store.audits).toHaveLength(0);
+  });
   it('stores the confirmed one-month rent basis and recalculates 303 to 777 as 15 to 39 on both sides', async () => {
     const store=await fixture(),offer=(await store.listOffers())[0]!,product=(await store.getProduct(offer.productId))!;
     await store.seed({products:[{...product,commercialType:'USED_RENT'}]});

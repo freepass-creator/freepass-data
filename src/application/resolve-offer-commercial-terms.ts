@@ -14,6 +14,29 @@ import type {
 const positiveSafeInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
+/** Reuses the pinned engine; changes only two fee fields on existing, price-aligned rows. */
+export function selectOfferFeeEconomics(offer: Offer, commercialType?: CommercialType, fuel?: string | null, termKeys?: readonly string[]) {
+  if (termKeys === undefined) return precomputeOfferEconomics(offer, commercialType, fuel);
+  if (!Array.isArray(termKeys) || !termKeys.length || new Set(termKeys).size!==termKeys.length || termKeys.some(key=>typeof key!=='string'||!key.trim()))
+    throw new Error('FEE_SUBSET_KEYS_REQUIRED');
+  const old=offer.internalEconomicsTerms ?? [];
+  for (const key of termKeys) {
+    const prices=offer.priceTerms.filter(term=>term.termKey===key), stored=old.filter(term=>term.termKey===key);
+    if (prices.length!==1 || stored.length!==1) throw new Error('FEE_SUBSET_STORED_ROW_REQUIRED');
+    if (stored[0]!.termMonths!==prices[0]!.termMonths || stableDigest(stored[0]!.monthlyRent ?? null)!==stableDigest(prices[0]!.monthlyRent) ||
+        stored[0]!.depositCalculation.state!==prices[0]!.depositState || stableDigest(stored[0]!.depositCalculation.amount ?? null)!==stableDigest(prices[0]!.deposit ?? null))
+      throw new Error('FEE_SUBSET_PRICE_EVIDENCE_DRIFT');
+  }
+  // Unselected rows are not recalculated, including legacy fee overrides.
+  const selectedOffer={...offer,priceTerms:offer.priceTerms,internalEconomicsTerms:old.filter(term=>termKeys.includes(term.termKey))};
+  const computed=precomputeOfferEconomics(selectedOffer,commercialType,fuel,{},termKeys);
+  return old.map(term=>{
+    if (!termKeys.includes(term.termKey)) return structuredClone(term);
+    const next=computed.find(candidate=>candidate.termKey===term.termKey)!;
+    return {...structuredClone(term),supplierBillingFee:next.supplierBillingFee,channelPayoutFee:next.channelPayoutFee};
+  });
+}
+
 /** Stored facts only. IDs, revision and complete price condition must match; never infer aliases. */
 export function joinStoredProductEconomics(productId: string, offers: readonly Offer[], ledger: readonly PeriodFeeLedgerRow[]) {
   const unknown = (reasonCode: string): TermEconomicAmount => ({state:'UNKNOWN',amount:null,calculation:null,
@@ -127,13 +150,14 @@ export function precomputeOfferEconomics(
   commercialType?: CommercialType,
   fuel?: string | null,
   evidenceByTerm: CommissionEvidenceByTerm = {},
+  termKeys?: readonly string[],
 ): OfferTermEconomics[] {
   const productType = commercialType ? ({
     NEW_RENT: '신차렌트', USED_RENT: '중고렌트', NEW_SUBSCRIPTION: '신차구독',
     USED_SUBSCRIPTION: '중고구독', OGONG_SUBSCRIPTION: '오공구독', PICKUP_SUBSCRIPTION: '픽업구독',
   } as const)[commercialType] : '';
   const policy = KAKAO_COMMISSION_POLICY;
-  return offer.priceTerms.map((term) => {
+  return offer.priceTerms.filter(term=>termKeys===undefined || termKeys.includes(term.termKey)).map((term) => {
     const priceRef = `catalog_offers/${offer.id}/priceTerms/${term.termKey}`;
     const basis36 = offer.priceTerms.filter(candidate => candidate.termMonths === 36 &&
       candidate.mileageLimitKmPerYear === term.mileageLimitKmPerYear && candidate.monthlyRent.currency === 'KRW' &&
