@@ -696,7 +696,7 @@ jobs:
             test "${READ_RUNTIME_AUTHENTICATED_STATUS:-UNVERIFIED}" = "200"
             test "${READ_RUNTIME_READBACK_OK:-false}" = "true"
             test "${READ_RUNTIME_MIGRATION_SIGNAL_OK:-false}" = "true"
-            if [ "$EXPECTED_SOURCE_SHA" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ]; then
+            if [ "${EXPECTED_SOURCE_SHA:-}" = '8af86d3b84020a402e21ec3c34a8498bd3066148' ]; then
               test "${SINGLE_PRODUCT_READBACK_OK:-false}" = "true"
             fi
           fi
