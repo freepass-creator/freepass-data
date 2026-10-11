@@ -1,7 +1,7 @@
 import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Money, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
-import { KAKAO_COMMISSION_POLICY, matchesReferenceRentBasisCandidate, resolveSalesCommission, resolveSupplierBillingFee, resolveSubscriptionFormForTerm, selectSonokongQ12Basis, truncWon } from './kakao-catalog-reference.js';
+import { KAKAO_COMMISSION_POLICY, matchesReferenceRentBasisCandidate, resolveSalesCommission, resolveSupplierBillingFee, resolveSubscriptionFormForTerm, selectSonokongQ12Basis, truncWon, validateSonokongQ12Basis } from './kakao-catalog-reference.js';
 import { parseErp5CompatibilityPriceKey } from '../domain/deposit-evidence.js';
 import type { PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
 import type {
@@ -232,11 +232,12 @@ export function precomputeOfferEconomics(
     const parsedTargetKey = parseErp5CompatibilityPriceKey(term.termKey);
     const resolvedTargetSettlement = resolveSubscriptionFormForTerm(explicitEvidence?.subscriptionForm, parsedTargetKey?.settlement);
     const targetSettlement = resolvedTargetSettlement.subscriptionForm;
+    const isSonokongOgongSubscription = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION';
     const referenceCandidateFor = (candidate: PriceTerm) => {
       const parsedCandidateKey = parseErp5CompatibilityPriceKey(candidate.termKey);
       const candidateEvidence = evidenceByTerm[candidate.termKey];
       const resolvedCandidateSettlement = resolveSubscriptionFormForTerm(candidateEvidence?.subscriptionForm, parsedCandidateKey?.settlement);
-      if (resolvedCandidateSettlement.conflict) return null;
+      if (isSonokongOgongSubscription && resolvedCandidateSettlement.conflict) return null;
       return {
         termMonths: candidate.termMonths,
         settlement: resolvedCandidateSettlement.subscriptionForm,
@@ -256,7 +257,6 @@ export function precomputeOfferEconomics(
       amount: term.monthlyRent.amount,
       sourceRef: priceRef,
     };
-    const isSonokongOgongSubscription = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION';
     const basis36 = offer.priceTerms.filter(candidate => {
       const reference = referenceCandidateFor(candidate);
       return reference !== null && matchesRentReferenceCandidate(targetReferenceCandidate, reference, 36, isSonokongOgongSubscription);
@@ -277,11 +277,7 @@ export function precomputeOfferEconomics(
       : [];
     const explicitQ12 = explicitEvidence?.q12Basis;
     const explicitQ12Result = isSonokongOgongSubscription && explicitQ12 && !resolvedTargetSettlement.conflict
-      ? q12BasisCandidates.length !== 1
-        ? { reasonCode: 'OGONG_12M_BASE_MISSING' as const }
-        : q12BasisCandidates[0]!.amount !== explicitQ12.amount
-          ? { reasonCode: 'Q12_BASIS_CONFLICT' as const }
-          : { q12Basis: { amount: explicitQ12.amount, sourceRef: q12BasisCandidates[0]!.sourceRef } }
+      ? validateSonokongQ12Basis(explicitQ12, targetReferenceCandidate, q12BasisCandidates)
       : {};
     const q12Basis = isSonokongOgongSubscription && !explicitEvidence?.q12Basis && !resolvedTargetSettlement.conflict
       ? selectSonokongQ12Basis(targetReferenceCandidate, offer.priceTerms.flatMap(candidate => {
@@ -301,7 +297,7 @@ export function precomputeOfferEconomics(
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
       billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined,
       ...automaticSonokongEvidence,
-      ...('q12Basis' in explicitQ12Result ? { q12Basis: explicitQ12Result.q12Basis } : {}) };
+      ...(explicitQ12Result.q12Basis ? { q12Basis: explicitQ12Result.q12Basis } : {}) };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
       const saved = offer.internalEconomicsTerms?.find(candidate => candidate.termKey === term.termKey)?.[
         side === 'BILLING' ? 'supplierBillingFee' : 'channelPayoutFee'];

@@ -256,6 +256,22 @@ describe('canonical per-term economics precompute', () => {
       expect(row.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: supplierId === 'RP012' ? 'OGONG_12M_BASE_MISSING' : 'DEPOSIT_TIER_REQUIRED' });
       expect(row.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: supplierId === 'RP012' ? 'OGONG_12M_BASE_MISSING' : 'DEPOSIT_TIER_REQUIRED' });
     });
+  it('keeps Billin 36-month basis when the price key settlement and explicit form disagree', () => {
+    const input = offer();
+    input.supplierId = 'RP021';
+    input.priceTerms = [
+      { ...input.priceTerms[0]!, termKey: '36_반납형', termMonths: 36, monthlyRent: { amount: 500000, currency: 'KRW' } },
+      { ...input.priceTerms[0]!, termKey: '60_인수형', termMonths: 60, monthlyRent: { amount: 900000, currency: 'KRW' } },
+    ];
+    const result = precomputeOfferEconomics(input, 'USED_SUBSCRIPTION', null, {
+      '36_반납형': { subscriptionForm: 'BUYOUT' },
+      '60_인수형': { subscriptionForm: 'BUYOUT' },
+    });
+    expect(result.find(term => term.termKey === '60_인수형')!.supplierBillingFee)
+      .toMatchObject({ state: 'KNOWN', amount: { amount: 500000 } });
+    expect(result.find(term => term.termKey === '60_인수형')!.channelPayoutFee)
+      .toMatchObject({ state: 'KNOWN', amount: { amount: 400000 } });
+  });
   it('keeps zero, missing product rules and unsupported periods distinct', () => {
     const input = offer(); input.supplierId = 'RP013'; input.priceTerms[0]!.monthlyRent.amount = 0;
     const zeroFee = precomputeOfferEconomics(input, 'USED_RENT')[0]!.supplierBillingFee;

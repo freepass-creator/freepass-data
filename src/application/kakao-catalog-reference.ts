@@ -751,6 +751,23 @@ export function selectSonokongQ12Basis(target: SonokongQ12BasisCandidate, candid
   return matching.length === 1 ? { amount: matching[0]!.amount, sourceRef: matching[0]!.sourceRef } : undefined;
 }
 
+export function validateSonokongQ12Basis(
+  explicitQ12: CommissionInput['q12Basis'] | undefined,
+  target: SonokongQ12BasisCandidate,
+  candidates: readonly SonokongQ12BasisCandidate[],
+): { q12Basis?: CommissionInput['q12Basis']; reasonCode?: 'OGONG_12M_BASE_MISSING' | 'Q12_BASIS_CONFLICT' } {
+  if (!explicitQ12) return {};
+  const strictMatching = candidates.filter(candidate => matchesReferenceRentBasisCandidate(target, candidate, 12));
+  const matching = strictMatching.length > 0 ? strictMatching : candidates.filter(candidate =>
+    candidate.termMonths === 12 &&
+    candidate.currency === target.currency &&
+    Number.isSafeInteger(candidate.amount) &&
+    candidate.amount > 0);
+  if (matching.length !== 1) return { reasonCode: 'OGONG_12M_BASE_MISSING' };
+  if (matching[0]!.amount !== explicitQ12.amount) return { reasonCode: 'Q12_BASIS_CONFLICT' };
+  return { q12Basis: { amount: explicitQ12.amount, sourceRef: matching[0]!.sourceRef } };
+}
+
 function isCalendarDate(value: unknown): boolean {
   const m = typeof value === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(value) : null;
   if (!m) return false;
@@ -1066,12 +1083,26 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       amount: monthlyRent,
       sourceRef: `source-product:${documentId}#price:${sourceKey}`,
     }, q12Candidates);
+    const explicitQ12Result = supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && !resolvedSubscriptionForm.conflict
+      ? validateSonokongQ12Basis(evidenceByTerm[sourceKey]?.q12Basis, {
+        termMonths: parsed.months,
+        settlement: resolvedSubscriptionForm.subscriptionForm,
+        mileageKm: parsed.contractedMileage?.km ?? parsed.mileageKm,
+        mileagePeriod: parsed.contractedMileage?.period ?? 'year',
+        currency: 'KRW',
+        amount: monthlyRent,
+        sourceRef: `source-product:${documentId}#price:${sourceKey}`,
+      }, q12Candidates)
+      : {};
     const subscriptionForm = resolvedSubscriptionForm.subscriptionForm;
     const automaticCommissionEvidence = {
       ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && automaticQ12 && !evidenceByTerm[sourceKey]?.q12Basis ? { q12Basis: automaticQ12 } : {}),
+      ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && explicitQ12Result.q12Basis ? { q12Basis: explicitQ12Result.q12Basis } : {}),
       ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && subscriptionForm ? { subscriptionForm } : {}),
       ...(supplierId === 'RP012' && text(source.product_type)?.replace(/\s+/g, '').includes('오공구독') && resolvedSubscriptionForm.conflict ? { subscriptionFormConflict: true as const } : {}),
     } satisfies Partial<Pick<CommissionInput, 'q12Basis' | 'subscriptionForm' | 'subscriptionFormConflict'>>;
+    const { q12Basis: _ignoredInvalidQ12Basis, ...evidenceWithoutQ12 } = evidenceByTerm[sourceKey] ?? {};
+    const effectiveEvidence = explicitQ12Result.reasonCode ? evidenceWithoutQ12 : evidenceByTerm[sourceKey];
     const depositInput = depositEvidenceInputFromProduct(source, (raw as Rec).deposit, {
       termMonths: parsed.months,
       monthlyRent,
@@ -1110,8 +1141,8 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       };
     };
     const channelPayoutFee = withVehicleValueEvidence(resolveSalesCommission({
+      ...effectiveEvidence,
       ...automaticCommissionEvidence,
-      ...evidenceByTerm[sourceKey],
       supplierId,
       productType: text(source.product_type),
       fuel: text(source.fuel_type),
@@ -1120,8 +1151,8 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
       billin36MonthlyRent,
     }));
     const supplierBillingFee = withVehicleValueEvidence(resolveSupplierBillingFee({
+      ...effectiveEvidence,
       ...automaticCommissionEvidence,
-      ...evidenceByTerm[sourceKey],
       supplierId,
       productType: text(source.product_type),
       fuel: text(source.fuel_type),

@@ -974,8 +974,19 @@ describe('F04 2026-10-04 alignment regression', () => {
       amount: 900000,
       ruleId: 'SONOKONG_SUBSCRIPTION_24_BILLING',
     });
-    expect(buildKakaoCatalogReferenceProduct('s-explicit-q12', sonokongWithQ12, { '24_인수형': { q12Basis: { amount: 900000, sourceRef: 'private:verified-q12' }, subscriptionForm: 'BUYOUT' } })!
-      .offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee.amount).toBe(1000000);
+    const sonokongWithQ12Keys = Object.keys(sonokongWithQ12.price);
+    const sonokongQ12Key = sonokongWithQ12Keys.find(key => key.startsWith('12'))!;
+    const sonokongQ24Key = sonokongWithQ12Keys.find(key => key.startsWith('24'))!;
+    expect(buildKakaoCatalogReferenceProduct('s-explicit-q12', sonokongWithQ12, { [sonokongQ24Key]: { q12Basis: { amount: 900000, sourceRef: 'private:verified-q12' } } })!
+      .offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN' });
+    expect(buildKakaoCatalogReferenceProduct('s-explicit-q12-ok', sonokongWithQ12, { [sonokongQ24Key]: { q12Basis: { amount: 800000, sourceRef: 'private:verified-q12' } } })!
+      .offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee.amount).toBe(900000);
+    const sonokongWithoutQ12 = { ...sonokong, price: { [sonokongQ24Key]: { rent: 700000 } } };
+    expect(buildKakaoCatalogReferenceProduct('s-explicit-q12-missing', sonokongWithoutQ12, { [sonokongQ24Key]: { q12Basis: { amount: 800000, sourceRef: 'private:verified-q12' }, subscriptionForm: 'BUYOUT' } })!
+      .offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'OGONG_12M_BASE_MISSING' });
+    const sonokongDuplicateQ12 = { ...sonokong, price: { [sonokongQ12Key]: { rent: 800000 }, [`${sonokongQ12Key} `]: { rent: 800000 }, [sonokongQ24Key]: { rent: 700000 } } };
+    expect(buildKakaoCatalogReferenceProduct('s-explicit-q12-duplicate', sonokongDuplicateQ12, { [sonokongQ24Key]: { q12Basis: { amount: 800000, sourceRef: 'private:verified-q12' } } })!
+      .offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee).toMatchObject({ state: 'CALCULATED' });
     const sonokongWithConflictingSettlement = { ...sonokong, price: { '12': { rent: 800000 }, '12_인수형': { rent: 900000 }, '24_인수형': { rent: 700000 } } };
     expect(buildKakaoCatalogReferenceProduct('s-conflict', sonokongWithConflictingSettlement, { '24_인수형': { subscriptionForm: 'RETURN' } })!
       .offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee)
