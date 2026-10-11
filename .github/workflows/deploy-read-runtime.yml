@@ -185,8 +185,10 @@ jobs:
             | jq -er '.[] | select(.id == "erp-com") | .token')"
           echo "::add-mask::$consumer_token"
           response_file="$(mktemp)"
-          trap 'rm -f "$response_file"' EXIT
+          headers_file="$(mktemp)"
+          trap 'rm -f "$response_file" "$headers_file"' EXIT
           authenticated_status="$(curl --silent --show-error --output "$response_file" \
+            --dump-header "$headers_file" \
             --write-out '%{http_code}' \
             --header "X-Serverless-Authorization: Bearer $cloud_run_token" \
             --header "Authorization: Bearer $consumer_token" \
@@ -197,6 +199,15 @@ jobs:
             echo "::error::Authenticated compatibility readback failed: HTTP $authenticated_status / $response_code"
             exit 1
           fi
+          if ! tr -d '\r' < "$headers_file" | grep -Eiq '^x-freepass-read-mode: DIRECT_FIRESTORE_REQUIRED$'; then
+            echo '::error::Direct Firestore read mode header missing or invalid'
+            exit 1
+          fi
+          if ! tr -d '\r' < "$headers_file" | grep -Eiq '^x-freepass-migration-status: LEGACY_READ_PENDING_RETIREMENT$'; then
+            echo '::error::Legacy migration status header missing or invalid'
+            exit 1
+          fi
+          echo "READ_RUNTIME_MIGRATION_SIGNAL_OK=true" >> "$GITHUB_ENV"
           jq -e '
             .schema == "freepass-data.catalog-compat/v1" and
             (.data.products | type == "object") and
@@ -252,6 +263,7 @@ jobs:
             echo "- unauthenticated request status: **${READ_RUNTIME_UNAUTHENTICATED_STATUS:-unknown}**"
             echo "- authenticated compatibility readback status: **${READ_RUNTIME_AUTHENTICATED_STATUS:-unknown}**"
             echo "- authenticated compatibility readback passed: **${READ_RUNTIME_READBACK_OK:-false}**"
+            echo "- direct Firestore migration headers verified: **${READ_RUNTIME_MIGRATION_SIGNAL_OK:-false}**"
             if [ -n "${READ_RUNTIME_REVISION:-}" ]; then
               echo "- Cloud Run revision: \`${READ_RUNTIME_REVISION}\`"
             fi

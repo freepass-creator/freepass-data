@@ -6,7 +6,7 @@ import sheetSpec from '../contracts/supplier-input-sheet-spec.v1.json' with { ty
 import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
 import type { RawRecord } from '../src/domain/source.js';
 import { vehiclePhotoKey } from '../src/domain/consumer-output-contract.js';
-import { createApprovedDrivePhotoReader, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../src/infra/erp5-compat-catalog-reader.js';
+import { isPublicIancarPhotoProduct, createApprovedDrivePhotoReader, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../src/infra/erp5-compat-catalog-reader.js';
 import { buildAdminCatalogProjection } from '../src/application/admin-catalog.js';
 import { updateOfferPrice } from '../src/application/catalog.js';
 import { describe, expect, it, vi } from 'vitest';
@@ -22,6 +22,21 @@ const token = 'test-service-token-0123456789abcdef';
 const binding = { id: 'erp-com', projectionId: 'erp-public' as const, token };
 const url = '/v1/consumers/erp-com/catalog';
 const headers = { authorization: `Bearer ${token}` };
+
+describe('direct Firestore migration signal', () => {
+  it('signals only legacy product read routes without bypassing authentication', async () => {
+    const { app } = withAccess(new MemoryDataStore(), [binding]);
+    for (const route of ['catalog', 'catalog-compat', 'catalog-reference', 'internal-ai-reference']) {
+      const response = await app.inject({ url: `/v1/consumers/erp-com/${route}` });
+      expect(response.headers['x-freepass-read-mode']).toBe('DIRECT_FIRESTORE_REQUIRED');
+      expect(response.headers['x-freepass-migration-status']).toBe('LEGACY_READ_PENDING_RETIREMENT');
+      expect(response.statusCode).not.toBe(200);
+    }
+    const unrelated = await app.inject({ url: '/missing' });
+    expect(unrelated.headers['x-freepass-read-mode']).toBeUndefined();
+    await app.close();
+  });
+});
 
 describe('approved Drive original-byte adapter (offline only)', () => {
   const bytes = Buffer.from([255, 216, 255, 1]);
@@ -139,6 +154,8 @@ describe('read-only consumer gateway', () => {
       const response = await app.inject({ url: `/v1/consumers/${consumerId}/${route}`, headers });
       expect(response.statusCode).toBe(200);
       const rows = response.json().data;
+      expect(response.headers['x-freepass-read-mode']).toBe('DIRECT_FIRESTORE_REQUIRED');
+      expect(response.headers.link).toContain('/blob/main/docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#firestore-direct-read-migration');
       expect(rows).toHaveLength(2);
       expect(rows.find((row: { sourceProductId: string }) => row.sourceProductId === 'knownCc').vehicle)
         .toMatchObject({ engineCc: 1998, engineCcState: 'KNOWN', fuel: '가솔린', drive: 'AWD' });
@@ -1454,5 +1471,112 @@ describe('authenticated collected source scope', () => {
     }
     expect(parseConsumerBindings(JSON.stringify([{ id: 'kakao-ops', projectionId: 'erp-public', token, capabilities: ['catalog-reference'], referenceSourceScopes: ['COLLECTED'] }]))[0]).toMatchObject({ referenceSourceScopes: ['COLLECTED'] });
     expect(parseConsumerBindings(JSON.stringify([{ ...binding, capabilities: ['catalog'], referenceSourceScopes: ['COLLECTED'] }]))[0]).toMatchObject({ referenceSourceScopes: ['COLLECTED'] });
+  });
+});
+
+
+describe('ERP5 dedicated RP031 media consumer', () => {
+  const mediaToken = 'synthetic-erp5-media-token-0123456789abcdef';
+  const media: ConsumerBinding = { id: 'erp5-public-media', projectionId: 'erp-public', token: mediaToken, capabilities: ['photos'] };
+  const mediaHeaders = { authorization: `Bearer ${mediaToken}` };
+  const prefix = '/v1/consumers/erp5-public-media';
+  const photoUrl = prefix + '/catalog-compat/products/synthetic/photos';
+  const bytes = Buffer.from([255, 216, 255, 1]);
+  const product = () => ({ provider_company_code: 'RP031', listable: true, status_kind: '가용',
+    iancar_one_vehicle_id: 'synthetic-one-id', car_number: 'synthetic-plate',
+    photo_original_refs: [{ vehiclePhotoVerifiedBy: 'synthetic-reviewer', vehiclePhotoVerificationMethod: 'offline-test',
+      vehiclePhotoVerifiedAt: '2026-10-11T00:00:00.000Z' }] });
+  it('requires exact dedicated capability and distinct tokens without expanding legacy registrations', () => {
+    expect(parseConsumerBindings(JSON.stringify([binding, media]))[1]).toMatchObject(media);
+    expect(parseConsumerBindings(JSON.stringify([binding]))[0]?.capabilities).toEqual(['catalog']);
+    for (const patch of [{ capabilities: undefined }, { capabilities: [] }, { capabilities: ['catalog'] },
+      { capabilities: ['photos', 'catalog'] }, { capabilities: ['photos', 'photos'] }, { token },
+      { projectionId: 'admin-catalog' }, { id: 'erp5-public-media-other' }, { token: 'short' }])
+      expect(() => parseConsumerBindings(JSON.stringify([binding, { ...media, ...patch }]))).toThrow();
+    for (const id of ['erp-com', 'whitelabel-synthetic', 'kakao-ops', 'internal-ai-synthetic'])
+      expect(() => parseConsumerBindings(JSON.stringify([{ ...media, id }]))).toThrow();
+  });
+  it('authorizes only count/index routes and audits the dedicated caller with no token disclosure', async () => {
+    const read = vi.fn(async (_consumer: string, _id: string, index?: number) => ({ count: 2,
+      bytes: index === undefined ? null : bytes, contentType: index === undefined ? 'application/json' : 'image/jpeg', revalidate: async () => true }));
+    const catalogRead = vi.fn(async () => { throw new Error('must not read catalog'); });
+    const store = new MemoryDataStore(); const active = vi.spyOn(store, 'getActive');
+    const { app, logs } = withAccess(store, [binding, media], undefined, { read: catalogRead, readVehiclePhoto: read });
+    for (const suffix of ['', '/0']) {
+      const response = await app.inject({ url: photoUrl + suffix, headers: mediaHeaders });
+      expect(response.statusCode).toBe(200); expect(response.headers['cache-control']).toBe('private, no-store');
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+    }
+    expect(read.mock.calls[0]?.[0]).toBe('erp5-public-media');
+    expect(logs.events.at(-1)).toMatchObject({ phase: 'SUCCEEDED', operation: 'READ_PRODUCT_PHOTO',
+      actor: { id: 'consumer:erp5-public-media' }, clientId: 'erp5-public-media' });
+    for (const suffix of ['/catalog', '/catalog-compat', '/catalog-health', '/estimate-newcar-master',
+      '/catalog-reference', '/internal-ai-reference', '/issued-quotes/synthetic', '/share-envelopes/synthetic'])
+      expect((await app.inject({ url: prefix + suffix, headers: mediaHeaders })).statusCode, suffix).toBe(403);
+    for (const suffix of ['/settlement-ledger/read', '/contract-fee-links', '/admin-workflow/read', '/admin-workflow/commit'])
+      expect((await app.inject({ method: 'POST', url: prefix + suffix, headers: mediaHeaders, payload: {} })).statusCode, suffix).toBe(403);
+    expect(catalogRead).not.toHaveBeenCalled(); expect(active).not.toHaveBeenCalled(); expect(read).toHaveBeenCalledTimes(2);
+    expect((await app.inject({ url: compatUrl + '/products/synthetic/photos/0', headers: mediaHeaders })).statusCode).toBe(401);
+    expect((await app.inject({ url: photoUrl, headers })).statusCode).toBe(401);
+    for (const index of ['200', '-1', '01']) expect((await app.inject({ url: photoUrl + '/' + index, headers: mediaHeaders })).statusCode).toBe(400);
+    expect(JSON.stringify(logs.events)).not.toContain(mediaToken);
+    await app.close();
+  });
+  it.each([undefined, 0])('limits RP031 source and revalidation before %s delivery without Drive fallback', async index => {
+    let current: Record<string, unknown> = product();
+    const sourceRead = vi.fn(async () => ({ count: 1, bytes: index === undefined ? null : bytes, contentType: 'image/jpeg' }));
+    const drive = vi.fn(async () => ({ bytes, contentType: 'image/jpeg' }));
+    const reader = createVehiclePhotoReader(async () => current, { eligible: isPublicIancarPhotoProduct,
+      connection: p => JSON.stringify([p.provider_company_code, p.iancar_one_vehicle_id, p.car_number]), read: sourceRead }, drive);
+    for (const patch of [{ provider_company_code: 'RP013' }, { listable: false }, { publication_withdrawal: {} },
+      { status_kind: '출고불가' }, { iancar_one_vehicle_id: '' }, { car_number: '' }, { photo_original_refs: [] }]) {
+      current = { ...product(), ...patch };
+      await expect(reader(media.id, 'synthetic', index)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+    }
+    expect(sourceRead).not.toHaveBeenCalled(); expect(drive).not.toHaveBeenCalled();
+    current = product(); const result = await reader(media.id, 'synthetic', index);
+    for (const patch of [{ publication_withdrawal: {} }, { provider_company_code: 'RP013' },
+      { iancar_one_vehicle_id: 'changed' }, { car_number: 'changed' }, { listable: false }]) {
+      current = { ...product(), ...patch }; expect(await result.revalidate()).toBe(false);
+    }
+    expect(sourceRead).toHaveBeenCalledTimes(1); expect(drive).not.toHaveBeenCalled();
+  });
+  it.each(['count', 'bytes'] as const)('rejects dedicated %s delivery revoked during success audit', async mode => {
+    let current: Record<string, unknown> = product();
+    const reader = createVehiclePhotoReader(async () => current, { eligible: isPublicIancarPhotoProduct,
+      connection: p => JSON.stringify([p.iancar_one_vehicle_id, p.car_number]),
+      read: async (_p, index) => ({ count: 1, bytes: index === undefined ? null : bytes, contentType: 'image/jpeg' }) });
+    const { app, logs } = withAccess(new MemoryDataStore(), [media], undefined, {
+      read: async () => { throw new Error('unused'); }, readVehiclePhoto: reader });
+    const append = logs.appendDataAccessEvent.bind(logs);
+    vi.spyOn(logs, 'appendDataAccessEvent').mockImplementation(async event => {
+      await append(event); if (event.phase === 'SUCCEEDED') current = { ...current, publication_withdrawal: {} };
+    });
+    const response = await app.inject({ url: photoUrl + (mode === 'count' ? '' : '/0'), headers: mediaHeaders });
+    expect(response.statusCode).toBe(404); expect(response.rawPayload).not.toEqual(bytes);
+    expect(logs.events.at(-1)).toMatchObject({ phase: 'DENIED', reasonCode: 'VEHICLE_PHOTO_NOT_FOUND',
+      actor: { id: 'consumer:erp5-public-media' } }); await app.close();
+  });
+  it.each(['count', 'bytes'] as const)('withholds dedicated %s response if success audit cannot persist', async mode => {
+    const read = vi.fn(async (_consumer: string, _id: string, index?: number) => ({ count: 1,
+      bytes: index === undefined ? null : bytes, contentType: 'image/jpeg', revalidate: vi.fn(async () => true) }));
+    const { app, logs } = withAccess(new MemoryDataStore(), [media], undefined, {
+      read: async () => { throw new Error('unused'); }, readVehiclePhoto: read });
+    const append = logs.appendDataAccessEvent.bind(logs);
+    vi.spyOn(logs, 'appendDataAccessEvent').mockImplementation(async event => {
+      if (event.phase === 'SUCCEEDED') throw new Error('offline success-audit failure');
+      await append(event);
+    });
+    const response = await app.inject({ url: photoUrl + (mode === 'count' ? '' : '/0'), headers: mediaHeaders });
+    expect(response.statusCode).toBe(503); expect(response.rawPayload).not.toEqual(bytes);
+    expect(read).toHaveBeenCalledTimes(1); expect(logs.events.some(event => event.phase === 'SUCCEEDED')).toBe(false);
+    await app.close();
+  });
+  it('fails closed before supplier reads when audit persistence is unavailable', async () => {
+    const read = vi.fn(async () => { throw new Error('must not call supplier'); });
+    const { app, logs } = withAccess(new MemoryDataStore(), [media], undefined, { read: async () => { throw new Error('unused'); }, readVehiclePhoto: read });
+    vi.spyOn(logs, 'appendDataAccessEvent').mockRejectedValue(new Error('offline audit failure'));
+    expect((await app.inject({ url: photoUrl + '/0', headers: mediaHeaders })).statusCode).toBe(503);
+    expect(read).not.toHaveBeenCalled(); await app.close();
   });
 });
