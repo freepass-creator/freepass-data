@@ -245,15 +245,19 @@ describe('Projection release integrity verifier', () => {
   it('reclaims a crashed claim only after lease expiry without spending an attempt', async () => {
     const { store, head } = await scheduledFixture();
     const now = Date.parse(head.observedAt);
-    await store.claimNext({ workerId: 'crashed', now: head.observedAt,
-      leaseUntil: new Date(now + 1000).toISOString() });
-    expect(await processOneOutboxEvent(store, store, store,
-      { workerId: 'replacement', requireFreshSources: true }, new Date(now + 999))).toBe('IDLE');
-    expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PROCESSING', attempts: 0, leaseOwner: 'crashed' });
-    expect(await processOneOutboxEvent(store, store, store,
-      { workerId: 'replacement', requireFreshSources: true, eventId: 'synthetic-event',
-        expiresAt: new Date(now + 30000).toISOString() }, new Date(now + 1000))).toBe('DONE');
-    expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'DONE', attempts: 0 });
+    // Keep the 1ms lease boundary independent of CI scheduling elapsed time.
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(0);
+    try {
+      await store.claimNext({ workerId: 'crashed', now: head.observedAt,
+        leaseUntil: new Date(now + 1000).toISOString() });
+      expect(await processOneOutboxEvent(store, store, store,
+        { workerId: 'replacement', requireFreshSources: true }, new Date(now + 999))).toBe('IDLE');
+      expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'PROCESSING', attempts: 0, leaseOwner: 'crashed' });
+      expect(await processOneOutboxEvent(store, store, store,
+        { workerId: 'replacement', requireFreshSources: true, eventId: 'synthetic-event',
+          expiresAt: new Date(now + 30000).toISOString() }, new Date(now + 1000))).toBe('DONE');
+      expect(store.outbox.get('synthetic-event')).toMatchObject({ status: 'DONE', attempts: 0 });
+    } finally { clock.mockRestore(); }
   });
 
   it('preserves last-good ACTIVE when source freshness changes during release persistence', async () => {

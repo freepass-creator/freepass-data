@@ -2,8 +2,10 @@ import { createHash } from 'node:crypto';
 import { Compute } from 'google-auth-library';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { createFirestoreSourceStore } from './source-firestore-store.js';
+import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
 import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
+import { logRouteError } from '../shared/route-error-log.js';
 
 import { isPublicIancarPhotoProduct, createVehiclePhotoReader, validateVehiclePhotoMedia, type ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
 export { isPublicIancarPhotoProduct, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../domain/consumer-output-contract.js';
@@ -110,6 +112,12 @@ export type CatalogCompatibilitySnapshot = {
   };
 };
 
+export type CatalogCompatibilityReadCollection = 'products' | 'policy' | 'partner' | 'user' | 'vehicle_master';
+
+export type CatalogCompatibilityReaderOptions = {
+  readCollections?: readonly CatalogCompatibilityReadCollection[];
+};
+
 const jsonSafe = (value: unknown): unknown => {
   if (value == null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
   if (value instanceof Date) return value.toISOString();
@@ -175,15 +183,17 @@ export function withCompatibilityDepositEvidence(product: Rec, now = new Date().
 export class FirestoreCatalogCompatibilityReader {
   private readonly db = getFirestore(getTargetFirebaseApp());
   readonly sourceStore = createFirestoreSourceStore();
-  constructor(photoReader?: (vehicleId: string, plate: string, index?: number) => Promise<{ count: number; bytes: Buffer | null; contentType: string }>,
-    approvedPhotoReader?: ApprovedPhotoReader) {
+  private readonly readCollections: ReadonlySet<CatalogCompatibilityReadCollection>;
+  constructor(photoReader?: (vehicleId: string, plate: string, index?: number, fresh?: boolean) => Promise<import('../domain/consumer-output-contract.js').VehiclePhotoRead>,
+    approvedPhotoReader?: ApprovedPhotoReader, options: CatalogCompatibilityReaderOptions = {}) {
+    this.readCollections = new Set(options.readCollections ?? ['products', 'policy', 'partner', 'user', 'vehicle_master']);
     this.readVehiclePhoto = createVehiclePhotoReader(async productId => (await this.db.collection('products').doc(productId).get()).data(), {
       eligible: isPublicIancarPhotoProduct,
       connection: product => createHash('sha256').update(JSON.stringify([product.provider_company_code, product.iancar_one_vehicle_id, product.car_number])).digest('hex'),
-      read: async (product, index) => {
+      read: async (product, index, fresh) => {
         if (!photoReader) throw new Error('VEHICLE_PHOTO_READER_UNAVAILABLE');
-        // ONE has no approved hash: iancarOnePhotoIds verifies supplier vehicle ID and plate ownership.
-        return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index);
+        // Identity and source bytes are supplied here; reviewed ONE binding/hash checks stay in Domain.
+        return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index, fresh);
       },
     }, approvedPhotoReader);
   }
@@ -192,56 +202,65 @@ export class FirestoreCatalogCompatibilityReader {
   async read(consumerId: string): Promise<CatalogCompatibilitySnapshot> {
     if (!allowedConsumer(consumerId)) throw new Error('CATALOG_COMPAT_CONSUMER_NOT_ALLOWED');
 
-    const wantsAdminMaster = consumerId === 'freepass-admin-catalog';
-    const wantsErpPresentation = consumerId === 'erp-com' || consumerId.startsWith('whitelabel-');
+    try {
+      const wantsAdminMaster = consumerId === 'freepass-admin-catalog';
+      const wantsErpPresentation = consumerId === 'erp-com' || consumerId.startsWith('whitelabel-');
 
-    const requests = [
-      ['products', this.db.collection('products').get()],
-      ['policy', this.db.collection('policy').get()],
-      ...(wantsErpPresentation
-        ? [
-            ['partner', this.db.collection('partner').get()] as const,
-            ['user', this.db.collection('user').get()] as const,
-          ]
-        : []),
-      ...(wantsAdminMaster
-        ? [['vehicle_master', this.db.collection('vehicle_master').get()] as const]
-        : []),
-    ] as const;
+      const requests = [
+        ...(this.readCollections.has('products') ? [['products', this.db.collection('products').get()] as const] : []),
+        ...(this.readCollections.has('policy') ? [['policy', this.db.collection('policy').get()] as const] : []),
+        ...(wantsErpPresentation && this.readCollections.has('partner')
+          ? [
+              ['partner', this.db.collection('partner').get()] as const,
+            ]
+          : []),
+        ...(wantsErpPresentation && this.readCollections.has('user')
+          ? [
+              ['user', this.db.collection('user').get()] as const,
+            ]
+          : []),
+        ...(wantsAdminMaster && this.readCollections.has('vehicle_master')
+          ? [['vehicle_master', this.db.collection('vehicle_master').get()] as const]
+          : []),
+      ] as const;
 
-    const resolved = await Promise.all(
-      requests.map(async ([name, query]) => [name, await query] as const)
-    );
-    const byName = new Map<string, QuerySnapshot>(resolved.map(([name, snapshot]) => [name, snapshot]));
-    const get = (name: string) => byName.get(name);
+      const resolved = await Promise.all(
+        requests.map(async ([name, query]) => [name, await query] as const)
+      );
+      const byName = new Map<string, QuerySnapshot>(resolved.map(([name, snapshot]) => [name, snapshot]));
+      const get = (name: string) => byName.get(name);
 
-    const products = get('products');
-    const policies = get('policy');
-    if (!products || !policies) throw new Error('CATALOG_COMPAT_REQUIRED_COLLECTION_MISSING');
+      const products = get('products');
+      const policies = get('policy');
+      if (!products || !policies) throw new Error('CATALOG_COMPAT_REQUIRED_COLLECTION_MISSING');
 
-    const collectionCounts = Object.fromEntries(
-      resolved.map(([name, snapshot]) => [name, snapshot.size])
-    );
-    const observedAt = new Date().toISOString();
+      const collectionCounts = Object.fromEntries(
+        resolved.map(([name, snapshot]) => [name, snapshot.size])
+      );
+      const observedAt = new Date().toISOString();
 
-    return {
-      schema: 'freepass-data.catalog-compat/v1',
-      data: {
-        products: Object.fromEntries(Object.entries(asMap(products)).map(([id, product]) => [id, withCompatibilityDepositEvidence(product, observedAt)])),
-        policies: asMap(policies),
-        ...(get('partner') ? { partners: asMap(get('partner')!) } : {}),
-        ...(get('user') ? { users: asMap(get('user')!) } : {}),
-        ...(get('vehicle_master') ? { vehicleMaster: asMap(get('vehicle_master')!) } : {}),
-      },
-      meta: {
-        consumerId,
-        authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE',
-        sourceProject: CENTRAL_FIREBASE_PROJECT_ID,
-        observedAt,
-        collectionCounts,
-        depositEvidenceVersion: 'catalog-compat-deposit/1',
-      },
-    };
+      return {
+        schema: 'freepass-data.catalog-compat/v1',
+        data: {
+          products: Object.fromEntries(Object.entries(asMap(products)).map(([id, product]) => [id, withCompatibilityDepositEvidence(product, observedAt)])),
+          policies: asMap(policies),
+          ...(get('partner') ? { partners: asMap(get('partner')!) } : {}),
+          ...(get('user') ? { users: asMap(get('user')!) } : {}),
+          ...(get('vehicle_master') ? { vehicleMaster: asMap(get('vehicle_master')!) } : {}),
+        },
+        meta: {
+          consumerId,
+          authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE',
+          sourceProject: CENTRAL_FIREBASE_PROJECT_ID,
+          observedAt,
+          collectionCounts,
+          depositEvidenceVersion: 'catalog-compat-deposit/1',
+        },
+      };
+    } catch (error) {
+      logRouteError('erp5-compat-catalog-reader', 'compat_reader_read', error);
+      throw error;
+    }
   }
 
   async readKakaoReferenceSource(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }) {
@@ -268,8 +287,73 @@ export class FirestoreCatalogCompatibilityReader {
       observedAt: new Date().toISOString(),
     };
   }
+
+  async readTrustScorecardInput() {
+    const C = FIRESTORE_COLLECTIONS;
+    const [
+      compat,
+      masterSnapshot,
+      legacyPolicies,
+      vehicleModels,
+      vehicleAssets,
+      catalogProducts,
+      catalogOffers,
+      sourceDefinitions,
+      sourceHeads,
+    ] = await Promise.all([
+      this.read('freepass-admin-catalog'),
+      readVehicleMasterSnapshot(),
+      this.db.collection('policy').get(),
+      this.db.collection(C.catalog.vehicleModels).get(),
+      this.db.collection(C.catalog.vehicleAssets).get(),
+      this.db.collection(C.catalog.products).get(),
+      this.db.collection(C.catalog.offers).get(),
+      this.db.collection(C.source.definitions).get(),
+      this.db.collection(C.source.heads).get(),
+    ]);
+    const sourceHeadById = new Map(sourceHeads.docs.map((doc) => [doc.id, jsonSafe(doc.data()) as Rec]));
+    const sourceFreshness = sourceDefinitions.docs.map((doc) => {
+      const definition = jsonSafe(doc.data()) as Rec;
+      const head = sourceHeadById.get(doc.id);
+      const expected = definition.expectedFreshnessSeconds;
+      return {
+        sourceId: String(definition.sourceId ?? doc.id),
+        expectedFreshnessSeconds: Number.isSafeInteger(expected) ? expected as number : null,
+        observedAt: typeof head?.observedAt === 'string' ? head.observedAt : null,
+        acceptedAt: typeof head?.acceptedAt === 'string' ? head.acceptedAt : null,
+      };
+    });
+    return {
+      readAt: compat.meta.observedAt,
+      legacyProducts: compat.data.products,
+      legacyPolicies: asMap(legacyPolicies),
+      legacyVehicleMasterRows: Object.entries(compat.data.vehicleMaster ?? {}).map(([id, row]) => ({
+        id,
+        maker: String(row.maker ?? ''),
+        model: String(row.model ?? ''),
+        subModel: String(row.sub_model ?? row.subModel ?? ''),
+        generationCode: typeof row.generationCode === 'string' ? row.generationCode : null,
+        yearStart: typeof row.yearStart === 'string' ? row.yearStart : null,
+        yearEnd: typeof row.yearEnd === 'string' ? row.yearEnd : null,
+      })),
+      vehicleReferenceRows: masterSnapshot.trims.map((row) => ({
+        maker: String(row.data.maker ?? ''),
+        model: String(row.data.model ?? ''),
+        subModel: String(row.data.sub_model ?? row.data.subModel ?? ''),
+        yearStart: typeof row.data.yearStart === 'string' ? row.data.yearStart : null,
+        yearEnd: typeof row.data.yearEnd === 'string' ? row.data.yearEnd : null,
+      })),
+      canonical: {
+        vehicleModels: vehicleModels.docs.map((doc) => jsonSafe(doc.data())),
+        vehicleAssets: vehicleAssets.docs.map((doc) => jsonSafe(doc.data())),
+        products: catalogProducts.docs.map((doc) => jsonSafe(doc.data())),
+        offers: catalogOffers.docs.map((doc) => jsonSafe(doc.data())),
+      },
+      sourceFreshness,
+    };
+  }
 }
 
-export function createFirestoreCatalogCompatibilityReader(photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0], approvedPhotoReader?: ApprovedPhotoReader) {
-  return new FirestoreCatalogCompatibilityReader(photoReader, approvedPhotoReader);
+export function createFirestoreCatalogCompatibilityReader(photoReader?: ConstructorParameters<typeof FirestoreCatalogCompatibilityReader>[0], approvedPhotoReader?: ApprovedPhotoReader, options?: CatalogCompatibilityReaderOptions) {
+  return new FirestoreCatalogCompatibilityReader(photoReader, approvedPhotoReader, options);
 }

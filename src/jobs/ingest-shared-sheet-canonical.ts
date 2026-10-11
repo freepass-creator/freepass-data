@@ -41,6 +41,7 @@ export type SharedSheetPlan = {
   previousHeadDigest: string; runId: string; entries: Entry[];
   /** Optional per-plate Data evidence; every chosen name still requires the same sealed active master. */
   identityInputs?: VehicleIdentityInputs; identityRuleVersion?: string;
+  includeSupplierColors?: true;
 };
 export function identityResolver(inputs: VehicleIdentityInputs | undefined): SharedSheetIdentityResolver | undefined {
   if (!inputs) return undefined;
@@ -50,14 +51,14 @@ export function identityResolver(inputs: VehicleIdentityInputs | undefined): Sha
   return row => chooseVehicleIdentity(master, { sheet: row.sheet, data: data.get(row.plate) ?? null, raw: row.raw,
     firstRegistration: row.firstRegistration, modelYear: row.modelYear });
 }
-function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs) {
+function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs, includeSupplierColors = false) {
   const batch = buildSharedSheetBatch(capture);
   const p = prepareRawSourceBatch(batch);
   const snapshot = capture.vehicleMasterSnapshot as VehicleMasterSnapshot | undefined ?? identityInputs?.master;
   if (capture.vehicleMasterSnapshot && identityInputs &&
       stableDigest(capture.vehicleMasterSnapshot) !== stableDigest(identityInputs.master)) throw new Error('VEHICLE_MASTER_SNAPSHOT_MISMATCH');
   const master = snapshot ? { records: verifiedMasterRecords(snapshot), readAt: snapshot.readAt, snapshotDigest: snapshot.digest } : undefined;
-  const normalize = sharedSheetNormalizer(identityResolver(identityInputs), master);
+  const normalize = sharedSheetNormalizer(identityResolver(identityInputs), master, { includeSupplierColors });
   const normalized = p.rawRecords.map(r => normalize(r));
   const checkpoint = { sourceId: p.sourceId, observedAt: batch.observedAt, sourceRevision: batch.sourceRevision!, checksum: p.sourceChecksum };
   const run: SourceRun = { runId: p.runId, sourceId: p.sourceId, status: 'COMPLETED', startedAt: batch.observedAt,
@@ -81,15 +82,22 @@ function overlay(store: CatalogStore, p: ReturnType<typeof prepared>): CatalogSt
   } });
 }
 export async function planSharedSheetCanonical(store: CatalogStore, capture: SharedSheetCapture, target: string,
-  identityInputs?: VehicleIdentityInputs) {
-  const p = prepared(capture, identityInputs);
+  identityInputs?: VehicleIdentityInputs, includeSupplierColors = false) {
+  const p = prepared(capture, identityInputs, includeSupplierColors);
   const currentHead = await store.getSourceHead(p.sourceId);
+  // A completed source run is immutable. New normalization must use a newly captured run.
+  if (includeSupplierColors && currentHead?.runId === p.runId) {
+    for (const item of p.normalized) {
+      if (!await store.getCandidate(item.record.candidateId)) throw new Error('SUPPLIER_COLOR_REFINEMENT_REQUIRES_NEW_SOURCE_RUN');
+    }
+  }
   const ownership = await store.getCatalogWriterOwnership();
   const sourceEligible = currentHead?.runId === p.runId || decideSourceHead(p.batch.coverage, p.batch.observedAt, currentHead?.observedAt).acceptedAsHead;
   const plan: SharedSheetPlan = { schema: 'shared-sheet-canonical-plan/v1', target, capture: structuredClone(capture),
-    ruleVersion: SHARED_SHEET_RULE_VERSION, specDigest: SHARED_SHEET_SPEC_DIGEST,
+    ruleVersion: includeSupplierColors ? 'shared-sheet-normalizer/6' : SHARED_SHEET_RULE_VERSION, specDigest: SHARED_SHEET_SPEC_DIGEST,
     policyDigest: stableDigest(KAKAO_COMMISSION_POLICY), ownershipDigest: stableDigest(ownership),
     previousHeadDigest: stableDigest(currentHead), runId: p.runId, entries: [],
+    ...(includeSupplierColors ? { includeSupplierColors: true as const } : {}),
     ...(identityInputs ? { identityInputs: structuredClone(identityInputs), identityRuleVersion: VEHICLE_IDENTITY_RULE_VERSION } : {}) };
   const suppliers: Record<string, ReturnType<typeof group>> = Object.fromEntries(sharedSheetRegisteredChannels.map(x => [x.code, group()]));
   const holdReasons: Record<string, number> = {};
@@ -119,7 +127,7 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
     const entry: Entry = { recordId: c.sourceRecordId, action: 'HOLD', reasons };
     const bindingId = opaque('bind', p.sourceId, c.sourceRecordId);
     const binding = await store.getSourceBinding(bindingId);
-    const commandId = `shared:${stableDigest([p.runId, c.sourceRecordId, SHARED_SHEET_RULE_VERSION, plan.policyDigest])}`;
+    const commandId = `shared:${stableDigest([p.runId, c.sourceRecordId, plan.ruleVersion, plan.policyDigest])}`;
     const base = { commandId, idempotencyKey: commandId, candidateId: item.record.candidateId,
       expectedHeadRunId: p.runId, expectedOwnershipDigest: plan.ownershipDigest,
       actor, reason: `shared-sheet-auto-review/1:${p.sourceChecksum}` };
@@ -194,7 +202,8 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
 
 export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest: string | undefined, target: string): asserts plan is SharedSheetPlan {
   if (!plan || !digest || plan.schema !== 'shared-sheet-canonical-plan/v1' || plan.target !== target ||
-      plan.ruleVersion !== SHARED_SHEET_RULE_VERSION || plan.specDigest !== SHARED_SHEET_SPEC_DIGEST ||
+      (plan.includeSupplierColors !== undefined && plan.includeSupplierColors !== true) ||
+      plan.ruleVersion !== (plan.includeSupplierColors ? 'shared-sheet-normalizer/6' : SHARED_SHEET_RULE_VERSION) || plan.specDigest !== SHARED_SHEET_SPEC_DIGEST ||
       plan.policyDigest !== stableDigest(KAKAO_COMMISSION_POLICY) || digest !== stableDigest(plan) || !Array.isArray(plan.entries)) {
     throw new Error('SHARED_SHEET_PLAN_REQUIRED_OR_CHANGED');
   }
@@ -202,7 +211,7 @@ export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest:
     assertVehicleIdentityInputs(plan.identityInputs);
     if (plan.identityRuleVersion !== VEHICLE_IDENTITY_RULE_VERSION) throw new Error('SHARED_SHEET_PLAN_REQUIRED_OR_CHANGED');
   }
-  if (prepared(plan.capture, plan.identityInputs).runId !== plan.runId) throw new Error('SHARED_SHEET_PLAN_CAPTURE_MISMATCH');
+  if (prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors).runId !== plan.runId) throw new Error('SHARED_SHEET_PLAN_CAPTURE_MISMATCH');
 }
 /** Read-only apply guard. The CLI runs it before opening the audited write, so a rejected apply writes nothing (not even an audit event). */
 export async function preflightSharedSheetApply(store: CatalogStore, plan: SharedSheetPlan | undefined, digest: string | undefined, target: string): Promise<void> {
@@ -213,11 +222,11 @@ export async function preflightSharedSheetApply(store: CatalogStore, plan: Share
 }
 export async function runSharedSheetCanonical(store: CatalogStore, source: SourceIngestionStore, options: {
   target: string; capture?: SharedSheetCapture; apply?: boolean; plan?: SharedSheetPlan; expectedPlanDigest?: string;
-  identityInputs?: VehicleIdentityInputs; currentVehicleMasterSnapshot?: VehicleMasterSnapshot;
+  identityInputs?: VehicleIdentityInputs; currentVehicleMasterSnapshot?: VehicleMasterSnapshot; includeSupplierColors?: boolean;
 }) {
   if (!options.apply) {
     if (!options.capture) throw new Error('SHARED_SHEET_CAPTURE_REQUIRED');
-    return planSharedSheetCanonical(store, options.capture, options.target, options.identityInputs);
+    return planSharedSheetCanonical(store, options.capture, options.target, options.identityInputs, options.includeSupplierColors);
   }
   const plan = options.plan;
   assertSharedSheetPlan(plan, options.expectedPlanDigest, options.target);
@@ -230,11 +239,11 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
         stableDigest({ masters: planned.masters, trims: planned.trims })) throw new Error('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED');
   }
   await preflightSharedSheetApply(store, plan, options.expectedPlanDigest, options.target);
-  const p = prepared(plan.capture, plan.identityInputs);
+  const p = prepared(plan.capture, plan.identityInputs, plan.includeSupplierColors);
   const head = await store.getSourceHead(p.sourceId);
   if (head?.runId !== p.runId && stableDigest(head) !== plan.previousHeadDigest) throw new Error('SHARED_SHEET_HEAD_CHANGED');
   // Reconstruct the automatic decision, including all expected revisions, before any write.
-  const fresh = await planSharedSheetCanonical(store, plan.capture, plan.target, plan.identityInputs);
+  const fresh = await planSharedSheetCanonical(store, plan.capture, plan.target, plan.identityInputs, plan.includeSupplierColors);
   if (fresh.plan.entries.length !== plan.entries.length) throw new Error('SHARED_SHEET_PLAN_ENTRIES_CHANGED');
   const replay = new Set<string>();
   for (let i = 0; i < plan.entries.length; i++) {
@@ -314,13 +323,13 @@ export function parseLocalArgs(args: string[], flags: string[], values: string[]
   return parsed;
 }
 export async function main(args = process.argv.slice(2)) {
-  const a = parseLocalArgs(args, ['--memory', '--firestore', '--apply'], ['--capture', '--plan', '--plan-out', '--expected-plan-digest', '--identity-inputs']);
+  const a = parseLocalArgs(args, ['--memory', '--firestore', '--apply', '--include-supplier-colors'], ['--capture', '--plan', '--plan-out', '--expected-plan-digest', '--identity-inputs']);
   const apply = a.has('--apply');
   if (apply && (!a.has('--plan') || !a.has('--expected-plan-digest'))) throw new Error('APPLY_REQUIRES_PLAN_AND_DIGEST');
   if (apply && (a.has('--capture') || a.has('--plan-out'))) throw new Error('APPLY_USES_REVIEWED_PLAN_ONLY');
   if (!apply && (a.has('--plan') || a.has('--expected-plan-digest'))) throw new Error('PLAN_FLAGS_REQUIRE_APPLY');
   if (!apply && !a.has('--capture')) throw new Error('CAPTURE_REQUIRED');
-  if (apply && a.has('--identity-inputs')) throw new Error('APPLY_USES_REVIEWED_PLAN_ONLY');
+  if (apply && (a.has('--identity-inputs') || a.has('--include-supplier-colors'))) throw new Error('APPLY_USES_REVIEWED_PLAN_ONLY');
   const identityInputs = a.has('--identity-inputs') ? JSON.parse(await readFile(a.get('--identity-inputs')!, 'utf8')) as VehicleIdentityInputs : undefined;
   if (identityInputs) assertVehicleIdentityInputs(identityInputs);
   const { resolveTargetProject } = await import('../infra/firebase-target.js');
@@ -330,6 +339,7 @@ export async function main(args = process.argv.slice(2)) {
   if (apply) assertSharedSheetPlan(plan, a.get('--expected-plan-digest'), target);
   else buildSharedSheetBatch(capture);
   const options = { target, apply, ...(capture ? { capture } : {}), ...(plan ? { plan } : {}), ...(identityInputs ? { identityInputs } : {}),
+    ...(a.has('--include-supplier-colors') ? { includeSupplierColors: true } : {}),
     ...(a.has('--expected-plan-digest') ? { expectedPlanDigest: a.get('--expected-plan-digest')! } : {}) };
   let result: Awaited<ReturnType<typeof runSharedSheetCanonical>>;
   if (a.has('--memory')) {

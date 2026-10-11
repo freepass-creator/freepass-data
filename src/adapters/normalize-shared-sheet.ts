@@ -9,6 +9,7 @@ import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSIO
 import { stableDigest } from '../shared/stable-digest.js';
 import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWaiverFieldForTermMonths } from '../domain/deposit-evidence.js';
 export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/5';
+export type SharedSheetNormalizationOptions = { includeSupplierColors?: boolean };
 export type SharedSheetMasterEvidence = { records: VehicleMasterRecord[]; snapshotDigest: string; readAt: string };
 /** AI 상황실 2026-10-04 (대표): every car is stored. The sheet status text is kept as-is; it only decides sale exposure.
  * assetStatus is the reviewed physical-state mapping; an unlisted status is HOLD, never guessed. */
@@ -52,20 +53,22 @@ function registration(s: string, raw: unknown): string | null {
 export type SharedSheetNormalized = { record: NormalizedCandidateRecord; lineage: FieldLineageRecord[]; suppliedTerms: number };
 /** Vehicle identity policy for one row: sheet 4 cells, source text and dates in → DATA/SHEET/HOLD decision out. */
 export type SharedSheetIdentityResolver = (row: { sheet: VehicleIdentity; plate: string; raw: string; firstRegistration: string; modelYear: string }) => IdentityChoice;
-export const normalizeSharedSheet = (raw: RawRecord, master?: SharedSheetMasterEvidence): SharedSheetNormalized => normalizeSharedSheetWith(raw, undefined, master);
+export const normalizeSharedSheet = (raw: RawRecord, master?: SharedSheetMasterEvidence, options?: SharedSheetNormalizationOptions): SharedSheetNormalized => normalizeSharedSheetWith(raw, undefined, master, options);
 /** Names must resolve to the sealed active Data master. Missing or conflicting evidence remains HOLD. */
-export const sharedSheetNormalizer = (identity?: SharedSheetIdentityResolver, master?: SharedSheetMasterEvidence) => (raw: RawRecord): SharedSheetNormalized => normalizeSharedSheetWith(raw, identity, master);
-function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentityResolver, master?: SharedSheetMasterEvidence): SharedSheetNormalized {
+export const sharedSheetNormalizer = (identity?: SharedSheetIdentityResolver, master?: SharedSheetMasterEvidence, options?: SharedSheetNormalizationOptions) => (raw: RawRecord): SharedSheetNormalized => normalizeSharedSheetWith(raw, identity, master, options);
+function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentityResolver, master?: SharedSheetMasterEvidence, options?: SharedSheetNormalizationOptions): SharedSheetNormalized {
+  // Opt-in until the existing reviewed source-facts migration is prepared; daily v5 stays unchanged.
+  const ruleVersion = options?.includeSupplierColors ? 'shared-sheet-normalizer/6' : SHARED_SHEET_RULE_VERSION;
   const values = raw.payload.values as unknown[];
   const at = (header: string) => values[spec.inputHeaders.indexOf(header)];
   const text = (header: string) => String(at(header) ?? '').trim();
   const issues: string[] = [];
-  const facts: SourceVehicleFacts = { ruleVersion: SHARED_SHEET_RULE_VERSION, fields: {}, reasons: [] };
+  const facts: SourceVehicleFacts = { ruleVersion, fields: {}, reasons: [] };
   const field = (key: string, header: string, parse: (s: string) => string | number | null) => {
     const evidence = text(header), value = evidence ? parse(evidence) : null;
     const reasons = evidence && value === null ? [`INVALID_${key.toUpperCase()}`] : [];
     facts.fields[key] = { value, state: !evidence ? 'MISSING' : reasons.length ? 'REVIEW_REQUIRED' : 'KNOWN',
-      evidence, ruleVersion: SHARED_SHEET_RULE_VERSION, reasons };
+      evidence, ruleVersion, reasons };
     issues.push(...reasons);
     return value;
   };
@@ -94,7 +97,7 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     if (choice.pick === 'HOLD') {
       facts.fields[key] = { value: null, state: 'REVIEW_REQUIRED', evidence: text(h), ruleVersion: VEHICLE_IDENTITY_RULE_VERSION, reasons: choice.notes };
     } else if (choice.identity) facts.fields[key] = { value: missing ? null : v, state: missing ? 'MISSING' : 'KNOWN',
-      evidence: text(h), ruleVersion: SHARED_SHEET_RULE_VERSION, reasons: [] };
+      evidence: text(h), ruleVersion, reasons: [] };
     else field(key, h, s => missing ? null : s);
     if (!v) issues.push('VEHICLE_IDENTITY_INCOMPLETE');
   }
@@ -109,14 +112,23 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     ['FWD', 'RWD'].includes(s.toUpperCase()) ? '2WD' : ['4MATIC', '콰트로'].includes(s) ? 'AWD' : null);
   field('batteryKwh', '배터리용량', s => number(s, 'kWh', true));
   field('mileageKm', '주행거리', s => number(s, 'km'));
+  // Supplier-entered color text is a fact, not an inferred paint code or master alias.
+  // Keep missing/review placeholders unresolved and preserve the original cell in RAW.
+  if (options?.includeSupplierColors) for (const [key, header] of [['exteriorColor', '외부색상'], ['interiorColor', '내부색상']] as const) {
+    const evidence = text(header);
+    const unresolved = /^(?:-|모름|미정|미확인|확인\s*필요|협의)$/.test(evidence);
+    facts.fields[key] = { value: !evidence || unresolved ? null : evidence,
+      state: !evidence ? 'MISSING' : unresolved ? 'REVIEW_REQUIRED' : 'KNOWN',
+      evidence, ruleVersion, reasons: unresolved ? ['COLOR_UNCONFIRMED'] : [] };
+  }
   // No transmission column: accept only an explicitly labelled supplier phrase, never infer from trim.
-  facts.fields.transmission = { value: null, state: 'MISSING', evidence: '', ruleVersion: SHARED_SHEET_RULE_VERSION, reasons: [] };
+  facts.fields.transmission = { value: null, state: 'MISSING', evidence: '', ruleVersion, reasons: [] };
   const transmissionMatches = [...text('옵션 원문').matchAll(/변속기\s*[:=]\s*(자동|수동|AT|MT|CVT|DCT)(?=$|[\s,;/])/gi)];
   if (transmissionMatches.length) {
     const options = [...new Set(transmissionMatches.map(m => m[1]!.toUpperCase()))];
     facts.fields.transmission = { value: options.length === 1 ? options[0]! : null,
       state: options.length === 1 ? 'KNOWN' : 'REVIEW_REQUIRED', evidence: transmissionMatches.map(m => m[0]).join('; '),
-      ruleVersion: SHARED_SHEET_RULE_VERSION, reasons: options.length === 1 ? [] : ['TRANSMISSION_AMBIGUOUS'] };
+      ruleVersion, reasons: options.length === 1 ? [] : ['TRANSMISSION_AMBIGUOUS'] };
     issues.push(...facts.fields.transmission.reasons);
   }
   const priceTerms: PriceTerm[] = [];
@@ -167,7 +179,7 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     if (target && fact.value !== null) Object.assign(candidate, { [target]: fact.value });
   }
   facts.reasons = candidate.issues;
-  const candidateId = `candidate_${stableDigest([raw.rawRecordId, SHARED_SHEET_RULE_VERSION]).slice(0, 40)}`;
+  const candidateId = `candidate_${stableDigest([raw.rawRecordId, ruleVersion]).slice(0, 40)}`;
   const record: NormalizedCandidateRecord = { candidateId, runId: raw.runId, sourceId: raw.sourceId,
     sourceRecordId: raw.sourceRecordId, sourceFingerprint: raw.sourceFingerprint,
     status: issues.length ? 'REJECTED' : 'VALID', candidate };
@@ -176,7 +188,7 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     lineageRecordId: `lin_${stableDigest([candidateId, path])}`, lineageId: candidateId, stage: 'RAW_TO_NORMALIZED',
     runId: raw.runId, sourceId: raw.sourceId, sourceRecordId: raw.sourceRecordId, sourceFingerprint: raw.sourceFingerprint,
     observedAt: raw.observedAt, source: { fieldPath: header === '*' ? 'values' : `values.${spec.inputHeaders.indexOf(header)}`, value: header === '*' ? structuredClone(values) : at(header) ?? null },
-    normalized: { candidateId, fieldPath: path, value }, transformId: 'shared-sheet', transformVersion: SHARED_SHEET_RULE_VERSION });
+    normalized: { candidateId, fieldPath: path, value }, transformId: 'shared-sheet', transformVersion: ruleVersion });
   for (const [path, header] of Object.entries({ maker: '제조사', model: '모델', subModel: '세부모델', trimName: '세부트림', fuelType: '연료', driveType: '구동방식', seats: '인승', mileageKm: '주행거리', carNumber: '차량번호', providerCompanyCode: '회사명', commercialType: '상품구분', vehicleFacts: '*' })) {
     const value = candidate[path as keyof CatalogCandidate];
     if (value !== undefined) add(path, value, header);
@@ -187,6 +199,9 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
     add(`${root}.monthlyRent.amount`, term.monthlyRent.amount, rentHeader);
     add(`${root}.depositState`, term.depositState, depHeader);
     if (term.deposit) add(`${root}.deposit.amount`, term.deposit.amount, depHeader);
+  }
+  if (options?.includeSupplierColors) for (const [key, header] of [['exteriorColor', '외부색상'], ['interiorColor', '내부색상']] as const) {
+    add(`vehicleFacts.fields.${key}`, facts.fields[key], header);
   }
   return { record, lineage, suppliedTerms };
 }

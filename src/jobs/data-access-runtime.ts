@@ -48,6 +48,9 @@ import type {
   ConsumerSwitchRegistration
 } from '../domain/consumer-cutover.js';
 import { createFirestoreDataStore } from '../infra/firestore-store.js';
+import { readVehicleUidMigrationInputs } from '../infra/vehicle-uid-migration-firestore-reader.js';
+import { readPeriodFeeLedgerPlanInputs } from '../infra/period-fee-ledger-firestore-reader.js';
+import { MemoryDataAccessLogStore } from '../infra/memory-data-access-log.js';
 import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
 import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
 import { createHttpVehicleMasterSourceFetcher } from '../infra/vehicle-master-source-fetcher.js';
@@ -149,6 +152,54 @@ export function createJobDataAccessRuntime() {
   };
 }
 
+export function createVehicleUidMigrationPlanRuntime() {
+  const { access } = createJobDataAccessRuntime();
+  return {
+    readInputs: () => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-vehicle-uid', kind: 'SERVICE' },
+        clientId: 'job:plan-vehicle-uid-migration',
+        purpose: 'read products, catalog vehicle assets, and source bindings to prepare a zero-write UID migration plan',
+      },
+      operation: 'READ_VEHICLE_UID_MIGRATION_INPUTS',
+      resource: { kind: 'CATALOG', name: 'vehicle-uid-migration' },
+      summarize: (value) => ({
+        count: Object.keys(value.products).length + value.assets.length + value.bindings.length,
+        digest: stableDigest({
+          productKeys: Object.keys(value.products).sort(),
+          assetIds: value.assets.map(asset => asset.id).sort(),
+          bindingIds: value.bindings.map(binding => binding.bindingId).sort(),
+        }),
+      }),
+    }, readVehicleUidMigrationInputs),
+  };
+}
+
+export function createPeriodFeeLedgerPlanRuntime() {
+  const access = new DataAccessGateway(new MemoryDataAccessLogStore());
+  return {
+    readInputs: () => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-period-fee', kind: 'SERVICE' },
+        clientId: 'job:plan-period-fee-ledger',
+        purpose: 'read products and policies to prepare a zero-write period fee ledger plan',
+      },
+      operation: 'READ_PERIOD_FEE_LEDGER_PLAN_INPUTS',
+      resource: { kind: 'SOURCE', name: 'products+policy' },
+      summarize: (value) => ({
+        products: Object.keys(value.products).length,
+        policies: Object.keys(value.policies).length,
+        settlementRowsAccessCount: 0,
+        digest: stableDigest({
+          productKeys: Object.keys(value.products).sort(),
+          policyKeys: Object.keys(value.policies).sort(),
+          observedAt: value.observedAt,
+        }),
+      }),
+    }, readPeriodFeeLedgerPlanInputs),
+  };
+}
+
 export async function runIancarPublicationWithdrawal(input: {
   apply: boolean; expectedCount: number; expectedOpen: number;
 }) {
@@ -188,9 +239,12 @@ export async function runIancarPhaseOnePublication(input: {
 export async function runIancarPhotoPublication(input: Parameters<typeof publishIancarPhotoReferences>[0]) {
   const runtime = createJobDataAccessRuntime();
   const spec = { context: { actor: { id: 'service:freepass-data-iancar-photos', kind: 'SERVICE' as const },
-    clientId: 'job:collect-iancar-one-api', purpose: 'user-directed photo-only publication preserving prices and inventory' },
+    clientId: 'job:collect-iancar-one-api', purpose: input.verificationOnly
+      ? 'explicit human-reviewed fixed ONE album registration; no price/inventory/image-reference changes'
+      : 'user-directed photo-only publication preserving prices and inventory' },
     resource: { kind: 'SOURCE' as const, name: 'freepasserp5/products/RP031/photos' },
-    operation: input.apply ? 'WRITE_IANCAR_PHOTO_REFERENCES' : 'READ_IANCAR_PHOTO_PLAN',
+    operation: input.verificationOnly ? (input.apply ? 'WRITE_IANCAR_PHOTO_VERIFICATION' : 'READ_IANCAR_PHOTO_VERIFICATION_PLAN')
+      : (input.apply ? 'WRITE_IANCAR_PHOTO_REFERENCES' : 'READ_IANCAR_PHOTO_PLAN'),
     summarize: (value: Awaited<ReturnType<typeof publishIancarPhotoReferences>>) => ({ count: value.count, digest: value.planDigest }) };
   return input.apply ? runtime.access.write({ ...spec, requestDigest: stableDigest(input) }, () => publishIancarPhotoReferences(input))
     : runtime.access.read(spec, () => publishIancarPhotoReferences(input));
