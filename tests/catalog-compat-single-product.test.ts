@@ -81,4 +81,10 @@ describe('bounded compatibility product facts', () => {
     const f = fixture(); f.nanos['policy/P1'] = 124;
     await expect(readSingleProductCompatibility(f.db, 'erp-com', 'machine-id', scope)).rejects.toMatchObject({ statusCode: 503 });
   });
+  it('preserves Korean variants, mileage and slash keys without redefining price semantics', async () => {
+    const keys = ['36_2만', '12_인수형', '12_월30000km', '36/20000'];
+    const f = fixture({ price: Object.fromEntries(keys.map(key => [key, { rent: '500000', deposit: null }])) });
+    const result = await readSingleProductCompatibility(f.db, 'erp-com', 'machine-id', scope);
+    expect(result.data.products['machine-id']!.price).toEqual(Object.fromEntries(keys.map(key => [key, { rent: '500000', deposit: null }])));
+  });
 });

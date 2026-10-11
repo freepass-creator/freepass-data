@@ -38,7 +38,7 @@ import { stableDigest } from '../shared/stable-digest.js';
 import { readActiveProjectionEvidence } from '../application/projection-evidence-reader.js';
 import { verifyProjectionReleaseIntegrity } from '../shared/projection-integrity.js';
 import type { CatalogCompatibilitySnapshot, CatalogCompatibilityProductSnapshot } from '../infra/erp5-compat-catalog-reader.js';
-import { SINGLE_PRODUCT_FACT_FIELDS, SINGLE_POLICY_FACT_FIELDS, SINGLE_PARTNER_FACT_FIELDS } from '../infra/erp5-compat-catalog-reader.js';
+import { SINGLE_PRODUCT_FACT_FIELDS, SINGLE_POLICY_FACT_FIELDS, SINGLE_PARTNER_FACT_FIELDS, isSingleProductPriceKey } from '../infra/erp5-compat-catalog-reader.js';
 import {
   buildKakaoCatalogReference,
   buildInternalAiReference,

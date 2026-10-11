@@ -226,7 +226,12 @@ export const SINGLE_POLICY_FACT_FIELDS = ['_key', 'policy_code', 'companyId', 'p
   'business_driver_scope', 'insurance_included', 'deposit_installment', 'deposit_card_payment',
   'rental_card_payment', 'maintenance_service', 'credit_grade'] as const;
 export const SINGLE_PARTNER_FACT_FIELDS = ['_key', 'partner_code', 'company_code', 'provider_company_code',
-  'partner_name', 'company_name', 'name', 'brand_name'] as const;
+  'partner_name', 'company_name', 'name', 'brand_name', 'alias'] as const;
+
+/** Transport safety only. Price-key meaning and eligibility remain in the caller's existing parser. */
+export const isSingleProductPriceKey = (key: string): boolean => key.length > 0 && key.length <= 80
+  && !['__proto__', 'constructor', 'prototype'].includes(key)
+  && !/[\u0000-\u001f\u007f]|https?:\/\/|<[^>]*>|AIza|ya29\./i.test(key);
 
 const selectionUnavailable = (): never => { throw new CatalogCompatibilityProductReadError('PRODUCT_SELECTION_UNAVAILABLE', 503); };
 const selectedDocId = (value: unknown): string | undefined => {
@@ -278,7 +283,7 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
       else {
         if (!raw.price || typeof raw.price !== 'object' || Array.isArray(raw.price) || Object.keys(raw.price).length > 200) return selectionUnavailable();
         selected.price = Object.fromEntries(Object.entries(raw.price as Rec).map(([key, row]) => {
-          if (!/^[a-zA-Z0-9_-]{1,80}$/.test(key) || !row || typeof row !== 'object' || Array.isArray(row)) return selectionUnavailable();
+          if (!isSingleProductPriceKey(key) || !row || typeof row !== 'object' || Array.isArray(row)) return selectionUnavailable();
           return [key, pickSelectedFacts(row as Rec, ['rent', 'deposit', 'depositState', 'deposit_state'])];
         }));
       }
@@ -293,7 +298,7 @@ export async function readSingleProductCompatibility(db: Firestore, consumerId: 
         if (Object.hasOwn(p, 'priceAliases')) {
           if (!p.priceAliases || typeof p.priceAliases !== 'object' || Array.isArray(p.priceAliases) || Object.keys(p.priceAliases).length > 200) return selectionUnavailable();
           result.priceAliases = Object.fromEntries(Object.entries(p.priceAliases as Rec).map(([key, value]) => {
-            if (!/^[a-zA-Z0-9_-]{1,80}$/.test(key)) return selectionUnavailable();
+            if (!isSingleProductPriceKey(key)) return selectionUnavailable();
             return [key, boundedScalar(value)];
           }));
         }
