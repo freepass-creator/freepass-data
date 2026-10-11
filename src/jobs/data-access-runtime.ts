@@ -48,6 +48,7 @@ import type {
   ConsumerSwitchRegistration
 } from '../domain/consumer-cutover.js';
 import { createFirestoreDataStore } from '../infra/firestore-store.js';
+import { readVehicleUidMigrationInputs } from '../infra/vehicle-uid-migration-firestore-reader.js';
 import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
 import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
 import { createHttpVehicleMasterSourceFetcher } from '../infra/vehicle-master-source-fetcher.js';
@@ -146,6 +147,29 @@ export function createIancarErpInspectionDataAccessRuntime(input: {
 export function createJobDataAccessRuntime() {
   return {
     access: new DataAccessGateway(createFirestoreDataAccessLogStore())
+  };
+}
+
+export function createVehicleUidMigrationPlanRuntime() {
+  const { access } = createJobDataAccessRuntime();
+  return {
+    readInputs: () => access.read({
+      context: {
+        actor: { id: 'service:freepass-data-vehicle-uid', kind: 'SERVICE' },
+        clientId: 'job:plan-vehicle-uid-migration',
+        purpose: 'read products, catalog vehicle assets, and source bindings to prepare a zero-write UID migration plan',
+      },
+      operation: 'READ_VEHICLE_UID_MIGRATION_INPUTS',
+      resource: { kind: 'CATALOG', name: 'vehicle-uid-migration' },
+      summarize: (value) => ({
+        count: Object.keys(value.products).length + value.assets.length + value.bindings.length,
+        digest: stableDigest({
+          productKeys: Object.keys(value.products).sort(),
+          assetIds: value.assets.map(asset => asset.id).sort(),
+          bindingIds: value.bindings.map(binding => binding.bindingId).sort(),
+        }),
+      }),
+    }, readVehicleUidMigrationInputs),
   };
 }
 

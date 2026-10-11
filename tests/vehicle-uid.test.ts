@@ -242,6 +242,26 @@ describe('vehicle UID resolver', () => {
 });
 
 describe('addExternalId', () => {
+  it('closes the old id at the new id start date (future-dated plate keeps the old plate valid until then)', () => {
+    const before = asset('va_future', [id('PLATE', 'TEST-FAKE-OLD')]);
+    const future = '2026-10-20T00:00:00.000Z';
+    const next = addExternalId(before, { ...id('PLATE', 'TEST-FAKE-NEW'), validFrom: future }, now);
+    expect(next.externalIds!.find(x => x.value === 'TEST-FAKE-OLD')!.validTo).toBe(future);
+    // 전환일 전: 옛 번호로 찾으면 같은 UID 로 LINK, 새 번호는 아직 없음
+    const old = resolveVehicleUid({ plate: 'TEST-FAKE-OLD' }, [next], { now });
+    expect(old.action).toBe('LINK');
+    if (old.action === 'LINK') expect(old.vehicleUid).toBe('va_future');
+    // 전환일 뒤: 새 번호로 LINK, 옛 번호는 더 이상 활성 아님
+    const after = '2026-10-21T00:00:00.000Z';
+    const fresh = resolveVehicleUid({ plate: 'TEST-FAKE-NEW' }, [next], { now: after });
+    expect(fresh.action).toBe('LINK');
+    const oldAfter = resolveVehicleUid({ plate: 'TEST-FAKE-OLD' }, [next], { now: after, clock: () => 1_760_900_000_000, random: () => 0.5 });
+    expect(oldAfter.action).toBe('CREATE');
+    // 지금 시작하는 새 값은 기존대로 now 에 닫음
+    const immediate = addExternalId(before, id('PLATE', 'TEST-FAKE-NOW'), now);
+    expect(immediate.externalIds!.find(x => x.value === 'TEST-FAKE-OLD')!.validTo).toBe(now);
+  });
+
   it('closes the previous active value and appends the new value', () => {
     const original = asset('va_history', [id('PLATE', 'TEST-FAKE-OLD')]);
     const next = addExternalId(original, id('PLATE', 'TEST-FAKE-NEW'), now);
