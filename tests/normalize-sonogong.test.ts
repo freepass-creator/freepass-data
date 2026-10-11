@@ -109,4 +109,15 @@ describe('Sonogong RAW to candidate normalizer', () => {
     expect(first.record.sourceRecordId).not.toBe(second.record.sourceRecordId);
     expect(first.record.candidateId).not.toBe(second.record.candidateId);
   });
+
+  it('treats electric-car displacement 0 and vehicle price 0 as absent, not as known values or hold reasons', () => {
+    const base = payload('ev-id');
+    const normalized = normalizeOne({ ...base, list: { ...base.list, engineDisplacement: 0 },
+      detail: { ...base.detail, saleAmt: 0 } })!;
+    const fields = normalized.record.candidate.vehicleFacts!.fields;
+    expect(fields.displacementCc).toMatchObject({ value: null, state: 'MISSING' });
+    expect(fields.vehiclePrice).toMatchObject({ value: null, state: 'MISSING' });
+    expect(normalized.record.candidate.issues).not.toContain('INVALID_DISPLACEMENT_CC');
+    expect(normalized.record.candidate.issues).not.toContain('INVALID_VEHICLE_PRICE');
+  });
 });

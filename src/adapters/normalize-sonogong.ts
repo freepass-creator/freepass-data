@@ -32,6 +32,8 @@ const object = (value: unknown): value is Record<string, unknown> => !!value && 
 const text = (value: unknown) => typeof value === 'string' ? value.trim() : value == null ? '' : String(value).trim();
 const compact = (value: unknown) => text(value).replace(/\s+/g, '');
 const int = (value: unknown) => normalizeErp5CompatibilityInteger(value);
+/** 전기차 배기량 0·차량가격 0 은 «값 없음» 표시다 — 알려진 값도, 보류 사유도 아니다(내부 정합 대조에서 확인). */
+const zeroAsAbsent = (value: unknown) => value === 0 || value === '0' ? undefined : value;
 
 export const sonogongNormalizer = (master?: SonogongMasterEvidence) => (raw: RawRecord): SonogongNormalized | null => {
   if (raw.sourceRecordId.startsWith('evidence:list:') || raw.payload.evidenceKind === 'LIST_PAGE') return null;
@@ -72,9 +74,9 @@ export const sonogongNormalizer = (master?: SonogongMasterEvidence) => (raw: Raw
     return Number.isFinite(Date.parse(iso)) ? iso : null;
   }, 'INVALID_FIRST_REGISTRATION');
   parseFact('fuel', list.carFuel, value => text(value) || null, 'INVALID_FUEL');
-  parseFact('displacementCc', list.engineDisplacement, int, 'INVALID_DISPLACEMENT_CC');
+  parseFact('displacementCc', zeroAsAbsent(list.engineDisplacement), int, 'INVALID_DISPLACEMENT_CC');
   parseFact('mileageKm', list.mileage, int, 'INVALID_MILEAGE_KM');
-  parseFact('vehiclePrice', detail.saleAmt, int, 'INVALID_VEHICLE_PRICE');
+  parseFact('vehiclePrice', zeroAsAbsent(detail.saleAmt), int, 'INVALID_VEHICLE_PRICE');
   fact('supplierStatus', {
     webVisibility: list.webVisibility ?? null,
     contractAvailable: list.contractAvailable ?? null,
