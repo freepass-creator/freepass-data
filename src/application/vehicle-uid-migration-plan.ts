@@ -8,6 +8,8 @@ import {
   type VehicleUidRandom,
 } from '../domain/vehicle-uid.js';
 import { stableDigest } from '../shared/stable-digest.js';
+export { summarizeVehicleUidMigrationAssetIdentifiers } from '../shared/vehicle-uid-migration-identifiers.js';
+import { normalizedVehicleUidMigrationAssetIdentifiers, summarizeVehicleUidMigrationAssetIdentifiers } from '../shared/vehicle-uid-migration-identifiers.js';
 
 export type VehicleUidMigrationProduct = Record<string, unknown>;
 
@@ -17,6 +19,7 @@ export type VehicleUidMigrationItem =
       componentId: string;
       assetId: string;
       externalIds: VehicleExternalId[];
+      assetIdentifierDigest: string;
       public: { componentHash: string; assetHash: string; externalIdKinds: string[] };
     }
   | {
@@ -252,8 +255,9 @@ function componentIdFor(key: string) {
   return `component_${hash(key)}`;
 }
 
-function upsertAssetExternalIdsItem(items: VehicleUidMigrationItem[], componentId: string, assetId: string, externalIds: VehicleExternalId[]) {
+function upsertAssetExternalIdsItem(items: VehicleUidMigrationItem[], componentId: string, asset: VehicleAsset, externalIds: VehicleExternalId[], observedAt: string) {
   if (externalIds.length === 0) return;
+  const assetId = asset.id;
   const existing = items.find((item): item is Extract<VehicleUidMigrationItem, { kind: 'ASSET_ADD_EXTERNAL_IDS' }> =>
     item.kind === 'ASSET_ADD_EXTERNAL_IDS' && item.componentId === componentId && item.assetId === assetId
   );
@@ -271,6 +275,7 @@ function upsertAssetExternalIdsItem(items: VehicleUidMigrationItem[], componentI
     componentId,
     assetId,
     externalIds: sortExternalIds(externalIds),
+    assetIdentifierDigest: summarizeVehicleUidMigrationAssetIdentifiers(asset, observedAt),
     public: { componentHash: hash(componentId), assetHash: hash(assetId), externalIdKinds: [...new Set(externalIds.map(id => id.kind))].sort() },
   });
 }
@@ -300,19 +305,7 @@ function bindingsForProduct(bindings: CanonicalSourceBinding[], productKey: stri
   return bindings.filter(binding => binding.sourceRecordId === productKey || binding.productId === productKey);
 }
 
-function normalizedActiveIds(asset: VehicleAsset, observedAt: string): VehicleExternalId[] {
-  return [...(asset.externalIds ?? []), ...externalIdsForAsset(asset)]
-    .map(id => ({
-      ...id,
-      value: id.kind === 'VIN' ? id.value.trim().toUpperCase() : id.value.trim(),
-      ...(id.supplierCode ? { supplierCode: id.supplierCode.trim().toUpperCase() } : {}),
-    }))
-    .filter(id => id.value && active(id, observedAt));
-}
-
-export function summarizeVehicleUidMigrationAssetIdentifiers(asset: VehicleAsset, observedAt: string) {
-  return stableDigest(normalizedActiveIds(asset, observedAt));
-}
+const normalizedActiveIds = normalizedVehicleUidMigrationAssetIdentifiers;
 
 function assetContradictsProduct(asset: VehicleAsset, ids: ReturnType<typeof productIds>, observedAt: string) {
   const activeIds = normalizedActiveIds(asset, observedAt);
@@ -487,7 +480,7 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
         const added = component.ids.filter(id =>
           stableDigest(addExternalId(asset, id, input.observedAt).externalIds ?? []) !== stableDigest(asset.externalIds ?? [])
         );
-        upsertAssetExternalIdsItem(items, componentId, uid, added);
+        upsertAssetExternalIdsItem(items, componentId, asset, added, input.observedAt);
       }
     }
     for (const productKey of component.products) {
@@ -517,6 +510,7 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
         componentId,
         assetId: asset.id,
         externalIds: sortExternalIds(externalIds),
+        assetIdentifierDigest: summarizeVehicleUidMigrationAssetIdentifiers(asset, input.observedAt),
         public: { componentHash: hash(componentId), assetHash: hash(asset.id), externalIdKinds: [...new Set(externalIds.map(id => id.kind))].sort() },
       });
     }

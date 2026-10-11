@@ -5,7 +5,7 @@ import {
   dryRunVehicleUidMigration,
   rollbackVehicleUidMigration,
 } from '../src/application/vehicle-uid-migration-apply.js';
-import { planVehicleUidMigration, type VehicleUidMigrationProduct } from '../src/application/vehicle-uid-migration-plan.js';
+import { planVehicleUidMigration, summarizeVehicleUidMigrationAssetIdentifiers, type VehicleUidMigrationProduct } from '../src/application/vehicle-uid-migration-plan.js';
 import type { VehicleAsset } from '../src/domain/catalog.js';
 import type { VehicleUidMigrationUpdateTime, VehicleUidMigrationWriteStore } from '../src/ports/vehicle-uid-migration-store.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
@@ -83,7 +83,7 @@ class FakeStore implements VehicleUidMigrationWriteStore {
     else delete current.externalIds;
     this.assets.set(assetId, current);
   }
-  async setProductVehicleUid(productKey: string, vehicleUid: string) {
+  async setProductVehicleUid(productKey: string, vehicleUid: string | null) {
     this.writes++;
     this.products.set(productKey, { ...this.products.get(productKey)!, vehicle_uid: vehicleUid });
   }
@@ -101,12 +101,19 @@ class FakeStore implements VehicleUidMigrationWriteStore {
     this.products.set(productKey, current);
   }
   async commitMutations(mutations: Parameters<NonNullable<VehicleUidMigrationWriteStore['commitMutations']>>[0]) {
-    const skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' | 'NOT_APPLIED' }> = [];
+    const skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' | 'NOT_APPLIED' | 'STALE_ASSET' }> = [];
     const sameUpdateTime = (left: VehicleUidMigrationUpdateTime | undefined, right: VehicleUidMigrationUpdateTime | undefined) =>
       left?.seconds === right?.seconds && left?.nanoseconds === right?.nanoseconds;
     const nextVersion = () => ({ seconds: 1, nanoseconds: this.writes + 1 });
     for (const mutation of mutations) {
       if (mutation.kind === 'ASSET_EXTERNAL_IDS') {
+        if (mutation.assetIdentifierDigest) {
+          const currentAsset = this.assets.get(mutation.assetId);
+          if (!currentAsset || !mutation.observedAt || summarizeVehicleUidMigrationAssetIdentifiers(currentAsset, mutation.observedAt) !== mutation.assetIdentifierDigest) {
+            skipped.push({ target: `asset:${mutation.assetId}`, reason: 'STALE_ASSET' });
+            break;
+          }
+        }
         if (mutation.updateTime && !sameUpdateTime(this.assetVersions.get(mutation.assetId), mutation.updateTime)) {
           skipped.push({ target: `asset:${mutation.assetId}`, reason: 'CONCURRENT_CHANGE' });
           break;
@@ -116,6 +123,13 @@ class FakeStore implements VehicleUidMigrationWriteStore {
           break;
         }
       } else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
+        if (mutation.assetIdentifierDigest) {
+          const currentAsset = this.assets.get(mutation.vehicleUid ?? '');
+          if (!currentAsset || !mutation.observedAt || summarizeVehicleUidMigrationAssetIdentifiers(currentAsset, mutation.observedAt) !== mutation.assetIdentifierDigest) {
+            skipped.push({ target: `product:${mutation.productKey}`, reason: 'STALE_ASSET' });
+            break;
+          }
+        }
         if (mutation.updateTime && !sameUpdateTime(this.productVersions.get(mutation.productKey), mutation.updateTime)) {
           skipped.push({ target: `product:${mutation.productKey}`, reason: 'CONCURRENT_CHANGE' });
           break;
@@ -143,8 +157,7 @@ class FakeStore implements VehicleUidMigrationWriteStore {
         await this.restoreAssetExternalIds(mutation.assetId, mutation.externalIds);
         this.assetVersions.set(mutation.assetId, nextVersion());
       } else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
-        if (mutation.vehicleUid === null) await this.deleteProductVehicleUid(mutation.productKey);
-        else await this.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
+        await this.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
         this.productVersions.set(mutation.productKey, nextVersion());
       } else {
         await this.deleteProductVehicleUid(mutation.productKey);
@@ -177,8 +190,7 @@ class ReadBeforeWriteFakeStore extends FakeStore {
       write();
       if (mutation.kind === 'ASSET_EXTERNAL_IDS') await this.restoreAssetExternalIds(mutation.assetId, mutation.externalIds);
       else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
-        if (mutation.vehicleUid === null) await this.deleteProductVehicleUid(mutation.productKey);
-        else await this.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
+        await this.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
       } else {
         await this.deleteProductVehicleUid(mutation.productKey);
       }
@@ -354,7 +366,7 @@ describe('applyVehicleUidMigration', () => {
     store.products.set('p3', { ...product('TEST-FAKE-003'), vehicle_uid: 'TEST-FAKE-APPLIED' });
     await rollbackVehicleUidMigration(store, stringBackup, p.planDigest, { approvedDigest: p.planDigest, writeFlag: 'ROLLBACK' });
     expect(Object.hasOwn(store.products.get('p1')!, 'vehicle_uid')).toBe(false);
-    expect(Object.hasOwn(store.products.get('p2')!, 'vehicle_uid')).toBe(false);
+    expect(store.products.get('p2')!.vehicle_uid).toBeNull();
     expect(store.products.get('p3')!.vehicle_uid).toBe('TEST-FAKE-ORIGINAL');
   });
 

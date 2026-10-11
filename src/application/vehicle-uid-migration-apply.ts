@@ -3,7 +3,6 @@ import { addExternalId } from '../domain/vehicle-uid.js';
 import type { VehicleUidMigrationStoreMutation, VehicleUidMigrationUpdateTime, VehicleUidMigrationWriteStore } from '../ports/vehicle-uid-migration-store.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import {
-  summarizeVehicleUidMigrationAssetIdentifiers,
   summarizeVehicleUidMigrationIdentifiers,
   type VehicleUidMigrationItem,
   type VehicleUidMigrationPlan,
@@ -72,8 +71,7 @@ async function commitMutations(store: VehicleUidMigrationWriteStore, mutations: 
     if (mutation.kind === 'ASSET_EXTERNAL_IDS') {
       await store.restoreAssetExternalIds(mutation.assetId, mutation.externalIds);
     } else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
-      if (mutation.vehicleUid === null) await store.deleteProductVehicleUid(mutation.productKey);
-      else await store.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
+      await store.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
     } else {
       await store.deleteProductVehicleUid(mutation.productKey);
     }
@@ -155,20 +153,18 @@ export async function applyVehicleUidMigration(
           ...(snapshot?.updateTime ? { updateTime: snapshot.updateTime } : {}),
           appliedExternalIds: structuredClone(next),
         });
-        componentMutations.push({ kind: 'ASSET_EXTERNAL_IDS', assetId: item.assetId, externalIds: next, ...withTypedUpdateTime(snapshot?.updateTime) });
+        componentMutations.push({
+          kind: 'ASSET_EXTERNAL_IDS',
+          assetId: item.assetId,
+          externalIds: next,
+          ...withTypedUpdateTime(snapshot?.updateTime),
+          assetIdentifierDigest: item.assetIdentifierDigest,
+          observedAt: plan.observedAt,
+        });
         componentWrites++;
         componentAssetUpdates++;
       }
       if (item.kind === 'PRODUCT_SET_UID') {
-        if (item.assetIdentifierDigest) {
-          const assetSnapshot = store.getAssetSnapshot ? await store.getAssetSnapshot(item.vehicleUid) : null;
-          const asset = assetSnapshot?.data ?? await store.getAsset(item.vehicleUid);
-          if (!asset || summarizeVehicleUidMigrationAssetIdentifiers(asset, plan.observedAt) !== item.assetIdentifierDigest) {
-            componentSkipReasons.set(componentId, 'STALE_ASSET');
-            bump(skippedReasons, 'STALE_ASSET');
-            break;
-          }
-        }
         const snapshot = store.getProductSnapshot ? await store.getProductSnapshot(item.productKey) : null;
         const product = snapshot?.data ?? await store.getProduct(item.productKey);
         if (!product) throw new Error('VEHICLE_UID_PRODUCT_MISSING');
@@ -191,7 +187,13 @@ export async function applyVehicleUidMigration(
           ...(snapshot?.updateTime ? { updateTime: snapshot.updateTime } : {}),
           appliedVehicleUid: item.vehicleUid,
         });
-        componentMutations.push({ kind: 'PRODUCT_VEHICLE_UID', productKey: item.productKey, vehicleUid: item.vehicleUid, ...withTypedUpdateTime(snapshot?.updateTime) });
+        componentMutations.push({
+          kind: 'PRODUCT_VEHICLE_UID',
+          productKey: item.productKey,
+          vehicleUid: item.vehicleUid,
+          ...withTypedUpdateTime(snapshot?.updateTime),
+          ...(item.assetIdentifierDigest ? { assetIdentifierDigest: item.assetIdentifierDigest, observedAt: plan.observedAt } : {}),
+        });
         componentWrites++;
         componentProductUpdates++;
       }

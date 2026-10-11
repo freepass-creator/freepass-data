@@ -71,8 +71,10 @@ describe('planVehicleUidMigration', () => {
     expect(result.items).toContainEqual(expect.objectContaining({
       kind: 'ASSET_ADD_EXTERNAL_IDS',
       assetId: 'TEST-FAKE-UID-001',
+      assetIdentifierDigest: expect.any(String),
     }));
     expect(result.summary.invariants.existingAssetIdsUnchanged).toBe(true);
+    expect(JSON.stringify(result.summary.publicReport)).not.toContain('assetIdentifierDigest');
   });
 
   it('uses source binding before plate matching', () => {

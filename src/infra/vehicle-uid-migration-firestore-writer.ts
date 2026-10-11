@@ -1,15 +1,24 @@
 import { FieldValue, getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import type { VehicleAsset, VehicleExternalId } from '../domain/catalog.js';
 import type { VehicleUidMigrationProductDoc, VehicleUidMigrationStoreMutation, VehicleUidMigrationUpdateTime, VehicleUidMigrationWriteStore } from '../ports/vehicle-uid-migration-store.js';
+import { summarizeVehicleUidMigrationAssetIdentifiers } from '../shared/vehicle-uid-migration-identifiers.js';
 import { getTargetFirebaseApp } from './firebase-target.js';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
+
+type TxSnapshot = {
+  exists: boolean;
+  id: string;
+  data(): unknown;
+  get(field: string): unknown;
+  updateTime?: VehicleUidMigrationUpdateTime;
+};
 
 function rollbackAssetExternalIdsPatch(externalIds: VehicleExternalId[] | undefined) {
   return externalIds === undefined ? { externalIds: FieldValue.delete() } : { externalIds };
 }
 
 function rollbackProductVehicleUidPatch(vehicleUid: string | null | undefined) {
-  return vehicleUid === undefined || vehicleUid === null ? { vehicle_uid: FieldValue.delete() } : { vehicle_uid: vehicleUid };
+  return vehicleUid === undefined ? { vehicle_uid: FieldValue.delete() } : { vehicle_uid: vehicleUid };
 }
 
 const same = (left: unknown, right: unknown) => JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
@@ -21,10 +30,34 @@ const sameUpdateTime = (left: VehicleUidMigrationUpdateTime | undefined, right: 
 export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFirestore(getTargetFirebaseApp())): VehicleUidMigrationWriteStore {
   const assetRef = (assetId: string) => db.collection(FIRESTORE_COLLECTIONS.catalog.vehicleAssets).doc(assetId);
   const productRef = (productKey: string) => db.collection(FIRESTORE_COLLECTIONS.legacyAdminWorkflow.products).doc(productKey);
-  const applyMutation = async (tx: Transaction, mutation: VehicleUidMigrationStoreMutation, write = true) => {
+  const mutationKey = (mutation: VehicleUidMigrationStoreMutation) =>
+    mutation.kind === 'ASSET_EXTERNAL_IDS' ? `asset:${mutation.assetId}` : `product:${mutation.productKey}`;
+  const validationAssetKey = (mutation: VehicleUidMigrationStoreMutation) => {
+    if (mutation.kind === 'PRODUCT_DELETE_VEHICLE_UID') return undefined;
+    if (!mutation.assetIdentifierDigest) return undefined;
+    return `asset:${mutation.kind === 'ASSET_EXTERNAL_IDS' ? mutation.assetId : mutation.vehicleUid}`;
+  };
+  const mutationRef = (mutation: VehicleUidMigrationStoreMutation) =>
+    mutation.kind === 'ASSET_EXTERNAL_IDS' ? assetRef(mutation.assetId) : productRef(mutation.productKey);
+  const validateAssetDigest = (
+    mutation: Extract<VehicleUidMigrationStoreMutation, { kind: 'ASSET_EXTERNAL_IDS' | 'PRODUCT_VEHICLE_UID' }>,
+    snap: TxSnapshot | undefined,
+  ) => {
+    if (!mutation.assetIdentifierDigest) return null;
+    const target = mutation.kind === 'ASSET_EXTERNAL_IDS' ? `asset:${mutation.assetId}` : `product:${mutation.productKey}`;
+    if (!snap?.exists || !mutation.observedAt) return { target, reason: 'STALE_ASSET' as const };
+    const asset = { id: snap.id, ...(snap.data() as Record<string, unknown>) } as VehicleAsset;
+    if (summarizeVehicleUidMigrationAssetIdentifiers(asset, mutation.observedAt) !== mutation.assetIdentifierDigest) {
+      return { target, reason: 'STALE_ASSET' as const };
+    }
+    return null;
+  };
+  const validateMutation = (
+    mutation: VehicleUidMigrationStoreMutation,
+    snap: TxSnapshot,
+    validationSnap?: TxSnapshot,
+  ) => {
     if (mutation.kind === 'ASSET_EXTERNAL_IDS') {
-      const ref = assetRef(mutation.assetId);
-      const snap = await tx.get(ref);
       if (!snap.exists) return { target: `asset:${mutation.assetId}`, reason: 'CONCURRENT_CHANGE' as const };
       if (mutation.updateTime && !sameUpdateTime(updateTimeValue(snap), mutation.updateTime)) {
         return { target: `asset:${mutation.assetId}`, reason: 'CONCURRENT_CHANGE' as const };
@@ -32,12 +65,8 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
       if (mutation.expectedAfter !== undefined && !same(snap.get('externalIds'), mutation.expectedAfter)) {
         return { target: `asset:${mutation.assetId}`, reason: 'ROLLBACK_SKIPPED_CHANGED' as const };
       }
-      const patch = mutation.expectedAfter === undefined ? { externalIds: mutation.externalIds } : rollbackAssetExternalIdsPatch(mutation.externalIds);
-      if (write) tx.update(ref, patch);
-      return null;
+      return validateAssetDigest(mutation, validationSnap);
     } else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
-      const ref = productRef(mutation.productKey);
-      const snap = await tx.get(ref);
       if (!snap.exists) return { target: `product:${mutation.productKey}`, reason: 'CONCURRENT_CHANGE' as const };
       if (mutation.updateTime && !sameUpdateTime(updateTimeValue(snap), mutation.updateTime)) {
         return { target: `product:${mutation.productKey}`, reason: 'CONCURRENT_CHANGE' as const };
@@ -45,11 +74,8 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
       if (mutation.expectedAfter !== undefined && snap.get('vehicle_uid') !== mutation.expectedAfter) {
         return { target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' as const };
       }
-      if (write) tx.update(ref, mutation.expectedAfter === undefined && mutation.vehicleUid !== null ? { vehicle_uid: mutation.vehicleUid } : rollbackProductVehicleUidPatch(mutation.vehicleUid));
-      return null;
+      return validateAssetDigest(mutation, validationSnap);
     } else {
-      const ref = productRef(mutation.productKey);
-      const snap = await tx.get(ref);
       if (!snap.exists) return { target: `product:${mutation.productKey}`, reason: 'CONCURRENT_CHANGE' as const };
       if (mutation.updateTime && !sameUpdateTime(updateTimeValue(snap), mutation.updateTime)) {
         return { target: `product:${mutation.productKey}`, reason: 'CONCURRENT_CHANGE' as const };
@@ -57,9 +83,17 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
       if (mutation.expectedAfter !== undefined && snap.get('vehicle_uid') !== mutation.expectedAfter) {
         return { target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' as const };
       }
-      if (write) tx.update(ref, rollbackProductVehicleUidPatch(undefined));
       return null;
     }
+  };
+  const mutationPatch = (mutation: VehicleUidMigrationStoreMutation) => {
+    if (mutation.kind === 'ASSET_EXTERNAL_IDS') {
+      return mutation.expectedAfter === undefined ? { externalIds: mutation.externalIds } : rollbackAssetExternalIdsPatch(mutation.externalIds);
+    }
+    if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
+      return mutation.expectedAfter === undefined && mutation.vehicleUid !== null ? { vehicle_uid: mutation.vehicleUid } : rollbackProductVehicleUidPatch(mutation.vehicleUid);
+    }
+    return rollbackProductVehicleUidPatch(undefined);
   };
   return {
     async getAsset(assetId) {
@@ -94,13 +128,26 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
     },
     async commitMutations(mutations: VehicleUidMigrationStoreMutation[]) {
       let applied = 0;
-      const skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' | 'NOT_APPLIED' }> = [];
+      const skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' | 'NOT_APPLIED' | 'STALE_ASSET' }> = [];
       const componentSkipped = await db.runTransaction(async (tx) => {
+        const refs: Array<{ key: string; ref: ReturnType<typeof assetRef> | ReturnType<typeof productRef> }> = [];
+        const addRef = (key: string, ref: ReturnType<typeof assetRef> | ReturnType<typeof productRef>) => {
+          if (!refs.some(item => item.key === key)) refs.push({ key, ref });
+        };
         for (const mutation of mutations) {
-          const skip = await applyMutation(tx, mutation, false);
+          addRef(mutationKey(mutation), mutationRef(mutation));
+          const assetKey = validationAssetKey(mutation);
+          if (assetKey) addRef(assetKey, assetRef(assetKey.slice('asset:'.length)));
+        }
+        const snaps: Array<{ key: string; snap: TxSnapshot }> = [];
+        for (const { key, ref } of refs) snaps.push({ key, snap: await tx.get(ref) as TxSnapshot });
+        const snapByKey = (key: string) => snaps.find(item => item.key === key)?.snap;
+        for (const mutation of mutations) {
+          const assetKey = validationAssetKey(mutation);
+          const skip = validateMutation(mutation, snapByKey(mutationKey(mutation))!, assetKey ? snapByKey(assetKey) : undefined);
           if (skip) return [skip];
         }
-        for (const mutation of mutations) await applyMutation(tx, mutation, true);
+        for (const mutation of mutations) tx.update(mutationRef(mutation), mutationPatch(mutation));
         return [];
       });
       if (componentSkipped.length) skipped.push(...componentSkipped);
