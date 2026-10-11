@@ -1,10 +1,16 @@
-import { buildKakaoCatalogReferenceProduct, KAKAO_COMMISSION_POLICY } from './kakao-catalog-reference.js';
+import { buildKakaoCatalogReferenceProduct, KAKAO_COMMISSION_POLICY, type CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
 type Rec = Record<string, unknown>;
 
-type LedgerFeeState = 'CALCULATED' | 'UNKNOWN' | 'NOT_APPLICABLE';
+type LedgerFeeState = 'CALCULATED' | 'CALCULATED_APPROX' | 'UNKNOWN' | 'NOT_APPLICABLE';
 type DepositState = 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
+type VehicleValueEvidence = {
+  grade: 'CONFIRMED' | 'APPROX';
+  source: 'SUPPLIER_RAW' | 'CONSUMER_PRICE' | 'NEW_CAR_TRIM';
+  amount: number;
+  differenceAmount?: number;
+};
 
 type LedgerFeeAmount = {
   state: LedgerFeeState;
@@ -61,6 +67,7 @@ export type PeriodFeeLedgerRow = {
     sourceRefs: string[];
     depositEvidence: LedgerDepositEvidence;
   };
+  vehicleValueEvidence?: VehicleValueEvidence | null;
   supplierBillingFee: LedgerFeeAmount;
   channelPayoutFee: LedgerFeeAmount;
   ruleIds: string[];
@@ -103,6 +110,7 @@ export type PeriodFeeLedgerPlan = {
     uid: { present: number; missing: number };
     apply: { ready: number; hold: number };
     feeStates: Record<'supplierBillingFee' | 'channelPayoutFee', Record<LedgerFeeState, number>>;
+    approxCount: Record<'supplierBillingFee' | 'channelPayoutFee', number>;
     depositEvidenceKinds: Record<DepositEvidenceKind, number>;
     reasonCounts: Record<string, number>;
     settlementRowsAccessCount: 0;
@@ -135,6 +143,7 @@ type ProductChangeBaseline = {
 export type PlanPeriodFeeLedgerInput = {
   products: Record<string, Rec>;
   policies?: Record<string, Rec>;
+  newCarTrim?: Record<string, Rec> | Rec[];
   referenceInputs?: Rec;
   previousSnapshot?: PeriodFeePreviousSnapshot | null;
 };
@@ -190,6 +199,69 @@ function sourcePriceKey(termKey: string): string {
   return termKey.startsWith('source:') ? termKey.slice('source:'.length) : termKey;
 }
 
+function positiveIntegerAmount(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0 ? value : null;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!/^(?:[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$/.test(trimmed)) return null;
+  const normalized = trimmed.replace(/,/g, '');
+  const amount = Number(normalized);
+  return Number.isSafeInteger(amount) && amount > 0 ? amount : null;
+}
+
+function rawVehicleValue(product: Rec): number | null {
+  const raw = product['원문'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  return positiveIntegerAmount((raw as Rec)['차량가격']);
+}
+
+function consumerVehicleValue(product: Rec): number | null {
+  return positiveIntegerAmount(product.consumer_price);
+}
+
+function trimKeyOf(record: Rec): string | null {
+  return text(record.trimKey) ?? text(record.trim_key) ?? text(record.new_car_trim_key);
+}
+
+function newCarTrimVehicleValue(product: Rec, newCarTrim: PlanPeriodFeeLedgerInput['newCarTrim']): number | null {
+  if (!newCarTrim) return null;
+  const key = trimKeyOf(product);
+  if (!key) return null;
+  const records = Array.isArray(newCarTrim) ? newCarTrim : Object.values(newCarTrim);
+  const matches = records.filter((record): record is Rec => !!record && typeof record === 'object' && !Array.isArray(record) && trimKeyOf(record as Rec) === key);
+  if (matches.length !== 1) return null;
+  return positiveIntegerAmount(matches[0]!.consumer_price) ?? positiveIntegerAmount(matches[0]!.vehicleValue) ?? positiveIntegerAmount(matches[0]!['차량가격']);
+}
+
+function resolveVehicleValueEvidence(product: Rec, newCarTrim: PlanPeriodFeeLedgerInput['newCarTrim']): VehicleValueEvidence | null {
+  if (text(product.provider_company_code) !== 'RP012') return null;
+  const raw = rawVehicleValue(product);
+  const consumer = consumerVehicleValue(product);
+  if (raw !== null) {
+    return {
+      grade: 'CONFIRMED',
+      source: 'SUPPLIER_RAW',
+      amount: raw,
+      ...(consumer !== null && consumer !== raw ? { differenceAmount: Math.abs(raw - consumer) } : {}),
+    };
+  }
+  if (consumer !== null) return { grade: 'APPROX', source: 'CONSUMER_PRICE', amount: consumer };
+  const trim = newCarTrimVehicleValue(product, newCarTrim);
+  return trim !== null ? { grade: 'APPROX', source: 'NEW_CAR_TRIM', amount: trim } : null;
+}
+
+function evidenceByTermForProduct(product: Rec, newCarTrim: PlanPeriodFeeLedgerInput['newCarTrim']): {
+  evidenceByTerm: CommissionEvidenceByTerm;
+  vehicleValueEvidence: VehicleValueEvidence | null;
+} {
+  const vehicleValueEvidence = resolveVehicleValueEvidence(product, newCarTrim);
+  if (!vehicleValueEvidence) return { evidenceByTerm: {}, vehicleValueEvidence: null };
+  const price = product.price && typeof product.price === 'object' && !Array.isArray(product.price) ? product.price as Rec : {};
+  const evidenceByTerm = Object.fromEntries(Object.keys(price).map(key => [key, { vehicleValue: vehicleValueEvidence.amount }])) as CommissionEvidenceByTerm;
+  return { evidenceByTerm, vehicleValueEvidence };
+}
+
 export function normalizeLedgerDepositEvidence(input: {
   state: DepositState;
   amount: { amount: number; currency: 'KRW' } | null;
@@ -241,12 +313,13 @@ export function normalizeLedgerDepositEvidence(input: {
     calculationBasis: null } };
 }
 
-function normalizeFee(value: Rec | undefined): LedgerFeeAmount {
-  const state = value?.state === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : value?.state === 'CALCULATED' ? 'CALCULATED' : 'UNKNOWN';
+function normalizeFee(value: Rec | undefined, vehicleValueEvidence: VehicleValueEvidence | null): LedgerFeeAmount {
+  const calculatedState = vehicleValueEvidence?.grade === 'APPROX' ? 'CALCULATED_APPROX' : 'CALCULATED';
+  const state = value?.state === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : value?.state === 'CALCULATED' ? calculatedState : 'UNKNOWN';
   const rawAmount = value?.amount;
   const rawVatAmount = value?.vatAmount;
   const rawTotalAmount = value?.totalAmount;
-  const amount = state === 'CALCULATED' && Number.isSafeInteger(rawAmount)
+  const amount = (state === 'CALCULATED' || state === 'CALCULATED_APPROX') && Number.isSafeInteger(rawAmount)
     ? { amount: rawAmount as number, currency: 'KRW' as const }
     : null;
   return {
@@ -330,8 +403,8 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput, options: Pl
   const baselines: ProductChangeBaseline[] = [];
   const reasonCounts: Record<string, number> = {};
   const feeStates = {
-    supplierBillingFee: { CALCULATED: 0, UNKNOWN: 0, NOT_APPLICABLE: 0 },
-    channelPayoutFee: { CALCULATED: 0, UNKNOWN: 0, NOT_APPLICABLE: 0 },
+    supplierBillingFee: { CALCULATED: 0, CALCULATED_APPROX: 0, UNKNOWN: 0, NOT_APPLICABLE: 0 },
+    channelPayoutFee: { CALCULATED: 0, CALCULATED_APPROX: 0, UNKNOWN: 0, NOT_APPLICABLE: 0 },
   };
   const depositEvidenceKinds: Record<DepositEvidenceKind, number> = { SOURCE_AMOUNT: 0, SUPPLIER_RULE_NOTE: 0, VERIFIED_ZERO_TEXT: 0, UNKNOWN: 0 };
   let uidPresent = 0;
@@ -339,7 +412,8 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput, options: Pl
 
   for (const [docKey, rawProduct] of Object.entries(input.products).sort(([a], [b]) => a.localeCompare(b))) {
     const product = { ...rawProduct, listable: true };
-    const projected = buildKakaoCatalogReferenceProduct(docKey, product, {}, input.policies ?? {}, observedAt, 'COLLECTED');
+    const { evidenceByTerm, vehicleValueEvidence } = evidenceByTermForProduct(product, input.newCarTrim);
+    const projected = buildKakaoCatalogReferenceProduct(docKey, product, evidenceByTerm, input.policies ?? {}, observedAt, 'COLLECTED');
     const priceTerms = projected?.offers.flatMap(offer => offer.priceTerms.map(term => ({ offer, term }))) ?? [];
     if (!priceTerms.length) continue;
 
@@ -354,8 +428,8 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput, options: Pl
     const productPath = `products/${docKey}`;
 
     for (const { term } of priceTerms) {
-      const billing = normalizeFee(term.supplierBillingFee as Rec | undefined);
-      const payout = normalizeFee(term.channelPayoutFee as Rec | undefined);
+      const billing = normalizeFee(term.supplierBillingFee as Rec | undefined, vehicleValueEvidence);
+      const payout = normalizeFee(term.channelPayoutFee as Rec | undefined, vehicleValueEvidence);
       feeStates.supplierBillingFee[billing.state] += 1;
       feeStates.channelPayoutFee[payout.state] += 1;
       for (const reason of [billing.reasonCode, payout.reasonCode, !vehicleUid ? 'HOLD_NO_UID' : null].filter((v): v is string => !!v)) {
@@ -407,6 +481,7 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput, options: Pl
           sourceRefs: [`source-product:${docKey}#${term.termKey}`],
           depositEvidence: depositWithEvidence.evidence,
         },
+        vehicleValueEvidence,
         supplierBillingFee: billing,
         channelPayoutFee: payout,
         ruleIds: [...new Set([billing.ruleId, payout.ruleId].filter((v): v is string => !!v))].sort(),
@@ -439,10 +514,14 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput, options: Pl
     uid: { present: uidPresent, missing: uidMissing },
     apply: { ready: rows.filter(row => row.applyState === 'READY').length, hold: rows.filter(row => row.applyState === 'HOLD').length },
     feeStates,
+    approxCount: {
+      supplierBillingFee: feeStates.supplierBillingFee.CALCULATED_APPROX,
+      channelPayoutFee: feeStates.channelPayoutFee.CALCULATED_APPROX,
+    },
     depositEvidenceKinds,
     reasonCounts: Object.fromEntries(Object.entries(reasonCounts).sort(([a], [b]) => a.localeCompare(b))),
     settlementRowsAccessCount: 0 as const,
-    inputDigest: stableDigest({ products: input.products, policies: input.policies ?? {}, referenceInputs: input.referenceInputs ?? null, previousSnapshot: input.previousSnapshot ?? null, observedAt, snapshotId }),
+    inputDigest: stableDigest({ products: input.products, policies: input.policies ?? {}, newCarTrim: input.newCarTrim ?? null, referenceInputs: input.referenceInputs ?? null, previousSnapshot: input.previousSnapshot ?? null, observedAt, snapshotId }),
     publicReport: { snapshotId, rows: rows.length, historyRows: history.length, uidMissing, planDigest },
   };
   return { schema: 'freepass-data.period-fee-ledger-plan/v1', snapshotId, observedAt, rows, history, baselines: outputBaselines, summary, planDigest };

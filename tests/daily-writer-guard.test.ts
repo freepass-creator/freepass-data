@@ -4,6 +4,18 @@ import { DAILY_WRITER_ALLOWED_COLLECTIONS, evaluateDailyWriterGuard } from '../s
 import { FIRESTORE_COLLECTIONS } from '../src/infra/firestore-layout.js';
 
 const account = 'github-data-inventory-writer@freepasserp5.iam.gserviceaccount.com';
+it('requests quarter-hour refresh without a once-per-day skip and preserves writer safety gates', () => {
+  const workflow = readFileSync('.github/workflows/shared-sheet-daily.yml', 'utf8');
+  expect(workflow).toContain("cron: '*/15 * * * *'");
+  expect(workflow).not.toContain('DAILY_ONCE_CHECK_FAILED');
+  expect(workflow).not.toContain('already wrote on $day');
+  expect(workflow).toContain('group: freepass-data-production-delivery');
+  expect(workflow).toContain('cancel-in-progress: false');
+  expect(workflow).toContain('DAILY_WRITER_GUARD_NOT_OK');
+  expect(workflow).toContain('assertCurrentSharedSheet(process.env.SHARED_SHEET_ID)');
+  expect(workflow).toContain('FREEPASS_DATA_DAILY_SERVICE_ACCOUNT');
+  expect(workflow).toContain('readbackMismatches');
+});
 const db = 'projects/freepasserp5/databases/(default)/documents';
 const doc = (c: string) => `${db}/${c}/x1`;
 const commit = (at: string, names: string[], who = account) => ({ timestamp: at, protoPayload: {

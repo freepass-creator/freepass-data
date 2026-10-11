@@ -72,6 +72,145 @@ function later(c: SharedSheetCapture) {
   return c;
 }
 describe('shared sheet local source to Canonical', () => {
+  it.each([
+    { state: 'UNKNOWN' as const, tampered: false }, { state: 'NOT_APPLICABLE' as const, tampered: false },
+    { state: 'UNKNOWN' as const, tampered: true }, { state: 'NOT_APPLICABLE' as const, tampered: true },
+  ])('preserves unresolved $state and rejects readback mutation: $tampered', async ({ state, tampered }) => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const offer = (await s.store.listOffers())[0]!;
+      const fee = { state, amount: null, calculation: null, ruleId: null,
+        sourceRefs: [], reasonCode: 'test:original-unresolved' };
+      offer.internalEconomicsTerms![0]!.channelPayoutFee = structuredClone(fee);
+      await s.store.seed({ offers: [offer] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      if (tampered) {
+        const readOffer = s.store.getOffer.bind(s.store);
+        const readReceipt = s.store.getReviewedSourceChangeReceipt.bind(s.store);
+        vi.spyOn(s.store, 'getOffer').mockImplementation(async id => {
+          const current = await readOffer(id);
+          if (current && await readReceipt(p.plan.entries[0]!.change!.idempotencyKey))
+            current.internalEconomicsTerms![0]!.channelPayoutFee = { state: 'KNOWN',
+              amount: { amount: 123, currency: 'KRW' }, calculation: { kind: 'FIXED', amount: { amount: 123, currency: 'KRW' } },
+              ruleId: 'test:injected-rule', policyId: 'test:injected-policy', sourceRefs: ['test:injected-source'] };
+          return current;
+        });
+      }
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: tampered ? 'HOLD' : 'APPLIED',
+        reconciliation: { readbackMismatches: tampered ? 1 : 0 } });
+      expect((await s.store.listOffers())[0]!.internalEconomicsTerms![0]!.channelPayoutFee).toEqual(fee);
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(['unchanged', 'amount', 'rate', 'base', 'vat', 'total', 'source', 'policy', 'rule'])(
+    'verifies the exact vehicle-price fee snapshot after rent refresh: %s', async scenario => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const offer = (await s.store.listOffers())[0]!;
+      const fee = { state: 'KNOWN' as const, amount: { currency: 'KRW' as const, amount: 300000 },
+        calculation: { kind: 'RATE' as const, base: 'VEHICLE_PRICE' as const, rate: 0.01 },
+        ruleId: 'test:confirmed-vehicle-rule', policyId: 'test:confirmed-policy', sourceRefs: ['test:confirmed-source'] };
+      offer.internalEconomicsTerms![0]!.channelPayoutFee = structuredClone(fee);
+      await s.store.seed({ offers: [offer] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      if (scenario !== 'unchanged') {
+        const readOffer = s.store.getOffer.bind(s.store);
+        const readReceipt = s.store.getReviewedSourceChangeReceipt.bind(s.store);
+        vi.spyOn(s.store, 'getOffer').mockImplementation(async id => {
+          const current = await readOffer(id);
+          if (current && await readReceipt(p.plan.entries[0]!.change!.idempotencyKey)) {
+            const changed = current.internalEconomicsTerms![0]!.channelPayoutFee;
+            if (scenario === 'amount') changed.amount!.amount++;
+            if (scenario === 'rate' && changed.calculation?.kind === 'RATE') changed.calculation.rate = 0.02;
+            if (scenario === 'base' && changed.calculation?.kind === 'RATE') changed.calculation.base = 'MONTHLY_RENT_X_TERM';
+            if (scenario === 'vat') changed.vatAmount = 123;
+            if (scenario === 'total') changed.totalAmount = 123;
+            if (scenario === 'source') changed.sourceRefs = ['test:changed-source'];
+            if (scenario === 'policy') changed.policyId = 'test:changed-policy';
+            if (scenario === 'rule') changed.ruleId = 'test:changed-rule';
+          }
+          return current;
+        });
+      }
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: scenario === 'unchanged' ? 'APPLIED' : 'HOLD',
+        reconciliation: { readbackMismatches: scenario === 'unchanged' ? 0 : 1 } });
+      expect((await s.store.listOffers())[0]!.internalEconomicsTerms![0]!.channelPayoutFee).toEqual(fee);
+    } finally { vi.useRealTimers(); }
+  });
+  it('records a fresh unchanged observation without changing product or offer revisions', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const before = stableDigest({ products: await s.store.listProducts(), offers: await s.store.listOffers() });
+      const p = await planSharedSheetCanonical(s.store, later(capture()), 'synthetic-target', undefined, false, true);
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: 'APPLIED', committed: 0, noChange: 1 });
+      expect(stableDigest({ products: await s.store.listProducts(), offers: await s.store.listOffers() })).toBe(before);
+    } finally { vi.useRealTimers(); }
+  });
+  it('pins the operational refresh decision and rejects fence tampering before RAW intake', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const p = await planSharedSheetCanonical(s.store, later(capture()), 'synthetic-target', undefined, false, true);
+      const tampered = structuredClone(p.plan);
+      tampered.entries[0]!.change!.operationalRefresh!.maxObservationAgeSeconds = 1800;
+      await expect(runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: tampered, expectedPlanDigest: p.report.planDigest })).rejects.toThrow();
+      expect(await s.source.getRun(p.plan.runId)).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+  it('routes scheduled status and rent refresh through the pinned operational writer', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const c = later(capture({ 차량상태: '출고불가', '1개월': 777 }));
+      const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, false, true);
+      expect(p.plan.operationalRefresh).toBe(true);
+      expect(p.plan.entries[0]!.action).toBe('CHANGE');
+      expect(p.plan.entries[0]!.change!.operationalRefresh).toMatchObject({ maxObservationAgeSeconds: 900 });
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: 'APPLIED' });
+      expect((await s.store.listProducts())[0]!.status).toBe('HOLD');
+      expect((await s.store.listOffers())[0]!.priceTerms.find(x => x.termMonths === 1)!.monthlyRent.amount).toBe(777);
+      expect((await s.store.listOffers())[0]!.internalEconomicsTerms!.find(x => x.termMonths === 1)!.supplierBillingFee.amount!.amount).toBe(39);
+    } finally { vi.useRealTimers(); }
+  });
+  it('rejects an operational observation older than fifteen minutes without changing Canonical', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const before = stableDigest(await s.store.listOffers());
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      vi.setSystemTime(new Date('2026-10-04T00:30:01.000Z'));
+      await expect(runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest })).rejects.toThrow('HOLD');
+      expect(stableDigest(await s.store.listOffers())).toBe(before);
+    } finally { vi.useRealTimers(); }
+  });
+  it('preserves human rent through the actual scheduled plan and apply path', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const offer = (await s.store.listOffers())[0]!;
+      const edited = structuredClone(offer);
+      edited.priceTerms[0]!.monthlyRent.amount = 999;
+      await s.store.seed({ offers: [edited] });
+      const c = later(capture({ '1개월': 777 }));
+      const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, false, true);
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: 'HOLD', reason: 'CANONICAL_COMMAND_REJECTED' });
+      expect((await s.store.getOffer(offer.id))!.priceTerms[0]!.monthlyRent.amount).toBe(999);
+    } finally { vi.useRealTimers(); }
+  });
   it('pins color refinement in the reviewed plan and persists its candidate facts through existing intake', async () => {
     const s = await stores(), c = capture({ 외부색상: '흰색', 내부색상: '검정' });
     const normal = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
