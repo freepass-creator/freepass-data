@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { MemorySourceStore } from '../src/infra/source-memory-store.js';
 import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
 import sheetSpec from '../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
-import { projectReferenceObservation, readCurrentReferenceObservations, filterReferenceProducts } from '../src/application/kakao-catalog-reference.js';
+import { projectReferenceObservation, readCurrentReferenceObservations, filterReferenceProducts, referenceObservationToCompatibilityProduct } from '../src/application/kakao-catalog-reference.js';
 import type { RawRecord } from '../src/domain/source.js';
 import { readFileSync } from 'node:fs';
 
@@ -19,6 +19,62 @@ describe('current source observations in existing private reference', () => {
     return { rawRecordId: id, sourceId, sourceRecordId: id, sourceFingerprint: id, runId: 'fixture-run', observedAt: at,
       payload: { values, supplierCode: 'RP_FIXTURE', customerName: 'PRIVATE_CUSTOMER', token: 'PRIVATE_TOKEN' } };
   };
+  it('connects rejected identity rows to both fees without promoting sale or contract status', () => {
+    const raw = fixture('fee-row', '무보증');
+    const values = [...raw.payload.values as string[]];
+    values[sheetSpec.inputHeaders.indexOf('상품구분')] = '중고렌트';
+    values[sheetSpec.inputHeaders.indexOf('48개월')] = '500000';
+    const input = { ...raw, payload: { ...raw.payload, values, supplierCode: 'RP013' } };
+    const row = projectReferenceObservation(input, normalizeSharedSheet(input).record);
+    expect(row.source.candidateStatus).toBe('REJECTED');
+    expect(row.publicationDecision).toBe('HOLD');
+    expect(row.vehicleAssetId).toBeNull();
+    const term = row.normalized.priceConditions.find(t => t.termMonths === 48)!;
+    expect(term.supplierBillingFee).toMatchObject({ state: 'CALCULATED', amount: 780000 });
+    expect(term.channelPayoutFee).toMatchObject({ state: 'CALCULATED', amount: 600000 });
+    expect(term.supplierBillingFee.sourceRefs).toBeDefined();
+    expect(term.priceSourceRefs).toContainEqual(expect.objectContaining({ field: '48개월', rawRecordId: raw.rawRecordId }));
+    expect(term.priceSourceRefs).toContainEqual(expect.objectContaining({ field: 'payload.supplierCode', rawRecordId: raw.rawRecordId }));
+    expect(term.priceSourceRefs.some(ref => ref.field === '회사명')).toBe(false);
+    expect(referenceObservationToCompatibilityProduct(row).price['48']).toMatchObject({
+      supplierBillingFee: term.supplierBillingFee, channelPayoutFee: term.channelPayoutFee, depositState: 'ZERO' });
+  });
+  it('uses only a same-row unique 36-month basis and keeps missing or conflicting inputs unknown', () => {
+    const raw = fixture('basis-row', '무보증');
+    const values = [...raw.payload.values as string[]];
+    values[sheetSpec.inputHeaders.indexOf('상품구분')] = '중고구독';
+    values[sheetSpec.inputHeaders.indexOf('36개월')] = '600000';
+    const input = { ...raw, payload: { ...raw.payload, values, supplierCode: 'RP021' } };
+    const record = normalizeSharedSheet(input).record;
+    const row = projectReferenceObservation(input, record);
+    expect(row.normalized.priceConditions.every(t => t.supplierBillingFee.amount === 600000 && t.channelPayoutFee.amount === 480000)).toBe(true);
+    expect(row.normalized.priceConditions[0]!.priceSourceRefs).toContainEqual(expect.objectContaining({ field: '36개월' }));
+    const duplicate = { ...record, candidate: { ...record.candidate, priceTerms: [...record.candidate.priceTerms, record.candidate.priceTerms.find(t => t.termMonths === 36)!] } };
+    expect(projectReferenceObservation(input, duplicate).normalized.priceConditions[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'BILLIN_36_MONTH_RENT_AMBIGUOUS' });
+    const noBasis = { ...record, candidate: { ...record.candidate, priceTerms: record.candidate.priceTerms.filter(t => t.termMonths !== 36) } };
+    expect(projectReferenceObservation(input, noBasis).normalized.priceConditions[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'BILLIN_36_MONTH_RENT_REQUIRED' });
+    const mismatch = { ...record, candidate: { ...record.candidate, commercialType: 'NEW_RENT' as const } };
+    expect(projectReferenceObservation(input, mismatch).normalized.priceConditions[0]!.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'SOURCE_PRODUCT_TYPE_UNVERIFIED' });
+    const { providerCompanyCode: _supplier, ...candidateWithoutSupplier } = record.candidate;
+    const noSupplier = { ...record, candidate: candidateWithoutSupplier };
+    expect(projectReferenceObservation(input, noSupplier).normalized.priceConditions[0]!.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'SOURCE_SUPPLIER_MISSING' });
+    const zeroRent = { ...record, candidate: { ...record.candidate, priceTerms: record.candidate.priceTerms.map(t => ({ ...t, monthlyRent: { ...t.monthlyRent, amount: 0 } })) } };
+    expect(projectReferenceObservation(input, zeroRent).normalized.priceConditions.every(t => t.monthlyRentState === 'KNOWN'
+      && t.monthlyRentAmount === 0 && t.supplierBillingFee.state === 'UNKNOWN' && t.supplierBillingFee.amount === null && t.channelPayoutFee.amount === null)).toBe(true);
+  });
+  it('requires verified fuel for a supplier rule and never derives it from free text', () => {
+    const raw = fixture('fuel-row', '무보증');
+    const values = [...raw.payload.values as string[]];
+    values[sheetSpec.inputHeaders.indexOf('상품구분')] = '중고구독';
+    const input = { ...raw, payload: { ...raw.payload, values, supplierCode: 'RP023' } };
+    const record = normalizeSharedSheet(input).record;
+    expect(projectReferenceObservation(input, record).normalized.priceConditions[0]!.supplierBillingFee).toMatchObject({
+      state: 'UNKNOWN', amount: null, reasonCode: 'FUEL_REQUIRED_FOR_SUPPLIER_RULE' });
+    values[sheetSpec.inputHeaders.indexOf('연료')] = '전기';
+    const electric = projectReferenceObservation(input, normalizeSharedSheet(input).record);
+    expect(electric.normalized.priceConditions[0]!.supplierBillingFee).toMatchObject({ state: 'CALCULATED', amount: 1500000 });
+    expect(electric.normalized.priceConditions[0]!.channelPayoutFee).toMatchObject({ state: 'CALCULATED', amount: 1300000 });
+  });
   it('keeps two rejected observations with separate original/normalized conditions, nullable identity and no PII payload', async () => {
     const store = new MemorySourceStore();
     await store.beginRun({ runId: 'fixture-run', sourceId, status: 'RUNNING', startedAt: at,

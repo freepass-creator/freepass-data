@@ -143,6 +143,19 @@ describe('public product feed v1', () => {
     expect(JSON.stringify(feed)).not.toContain('"vin"');
   });
 
+  it('strips source-row fee, margin and provenance from nested prices even if a downstream caller marks it listable', () => {
+    const internal = { state: 'CALCULATED', amount: 123456, totalAmount: 135802, sourceRefs: ['PRIVATE_RULE'] };
+    const feed = buildPublicProductFeed(snapshot({ P1: product({
+      _source_row_product: { supplierBillingFee: internal, channelPayoutFee: internal },
+      price: { '36': { rent: 500000, deposit: 1000000, depositState: 'KNOWN',
+        supplierBillingFee: internal, channelPayoutFee: internal, expectedGrossMargin: { amount: 1234 },
+        priceSourceRefs: [{ rawRecordId: 'PRIVATE_RAW' }] } },
+    }) }), { p: 'RP_TEST', wl: 'test' });
+    expect(feed.count).toBe(1);
+    expect(Object.keys(feed.products[0]!.price['36']!)).toEqual(['rent','deposit','depositState']);
+    expect(JSON.stringify(feed)).not.toMatch(/supplierBillingFee|channelPayoutFee|expectedGrossMargin|priceSourceRefs|PRIVATE_/);
+  });
+
   it('keeps provider and whitelabel fences server-side', () => {
     const feed = buildPublicProductFeed(snapshot({
       P1: product(),
