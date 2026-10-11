@@ -67,6 +67,7 @@ const nowIso = (now: (() => Date) | undefined) => {
 
 const documentDigest = (value: unknown) => stableDigest(value);
 const documentIdPart = (value: string) => value.replace(/[\/#?[\]*]/g, '_').slice(0, 180);
+const WRITE_LOCK_LEASE_MS = 15 * 60 * 1000;
 
 const snapshotRunId = (snapshotId: string, planDigest: string) =>
   [snapshotId, planDigest.slice(0, 24)].map(documentIdPart).join('__');
@@ -86,6 +87,33 @@ const unique = (values: readonly string[]) => [...new Set(values)];
 
 const runRowKeys = (run: { rowKeys?: string[]; createdDocumentKeys: string[]; plannedCreateKeys: string[] }) =>
   unique(run.rowKeys ?? [...run.createdDocumentKeys, ...run.plannedCreateKeys]);
+
+const lockLeaseExpiresAt = (now: (() => Date) | undefined) => {
+  const acquiredAt = nowIso(now);
+  return {
+    acquiredAt,
+    leaseExpiresAt: new Date(Date.parse(acquiredAt) + WRITE_LOCK_LEASE_MS).toISOString(),
+  };
+};
+
+async function withSnapshotWriteLock<T>(
+  store: PeriodFeeLedgerApplyStore,
+  ownerId: string,
+  now: (() => Date) | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const lease = lockLeaseExpiresAt(now);
+  await store.acquireSnapshotWriteLock(ownerId, lease.acquiredAt, lease.leaseExpiresAt);
+  try {
+    return await fn();
+  } finally {
+    await store.releaseSnapshotWriteLock(ownerId);
+  }
+}
+
+async function renewSnapshotWriteLock(store: PeriodFeeLedgerApplyStore, ownerId: string, now: (() => Date) | undefined) {
+  await store.renewSnapshotWriteLock(ownerId, lockLeaseExpiresAt(now).leaseExpiresAt);
+}
 
 const runRowDigests = (
   run: { rowDigests?: Record<string, string> },
@@ -195,8 +223,9 @@ export async function applyPeriodFeeLedgerPlan(
     return { status: 'DRY_RUN', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: false, counts };
   }
 
-  const preparedAt = nowIso(options.now);
   const runId = snapshotRunId(plan.snapshotId, plan.planDigest);
+  return withSnapshotWriteLock(store, `apply:${runId}`, options.now, async () => {
+  const preparedAt = nowIso(options.now);
   const existingRun = await store.getSnapshotRun(runId);
   if (existingRun && existingRun.planDigest !== plan.planDigest) {
     throw new Error('PERIOD_FEE_RUN_DIGEST_CONFLICT');
@@ -269,6 +298,7 @@ export async function applyPeriodFeeLedgerPlan(
     }
     const documentKey = storageDocumentKey(runId, row.documentKey);
     await store.createLedgerDocument(documentKey, row, digest);
+    await renewSnapshotWriteLock(store, `apply:${runId}`, options.now);
     createdDocumentKeys.push(documentKey);
     await store.setSnapshotRun(runId, {
       ...(await store.getSnapshotRun(runId))!,
@@ -279,10 +309,12 @@ export async function applyPeriodFeeLedgerPlan(
 
   for (const row of historyRows) {
     await store.createProductChangeHistoryDocument(runHistoryDocumentKey(runId, row), row, documentDigest(row));
+    await renewSnapshotWriteLock(store, `apply:${runId}`, options.now);
     counts.historyCreated += 1;
   }
 
   const readback = assertReadback(plan, await store.readLedgerRows(plan.snapshotId, runId), options.sampleSize ?? 50);
+  await renewSnapshotWriteLock(store, `apply:${runId}`, options.now);
   await store.activateSnapshotRun(runId, {
     schemaVersion: 'period-fee-snapshot-run/v1',
     runId,
@@ -303,9 +335,10 @@ export async function applyPeriodFeeLedgerPlan(
     historyRowCount: historyRows.length,
     readbackSampleCount: readback.sampleCount,
     readbackDigest: readback.digest,
-  }, previousActive?.runId ?? null);
+  });
   counts.activeMarked = 1;
   return { status: 'APPLIED', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: true, counts };
+  });
 }
 
 export async function rollbackPeriodFeeLedgerSnapshot(
@@ -318,6 +351,7 @@ export async function rollbackPeriodFeeLedgerSnapshot(
     return { status: 'DRY_RUN', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: false, inactiveRuns: 0, deletedRows: 0, keptSharedByActiveRows: 0 };
   }
   const runId = snapshotRunId(plan.snapshotId, plan.planDigest);
+  return withSnapshotWriteLock(store, `rollback:${runId}`, undefined, async () => {
   const run = await store.getSnapshotRun(runId);
   if (!run || run.planDigest !== plan.planDigest) throw new Error('PERIOD_FEE_ROLLBACK_RUN_DIGEST_MISMATCH');
   if (['SUPERSEDED', 'ROLLED_BACK', 'INACTIVE'].includes(run.status)) throw new Error('RUN_NOT_REAPPLICABLE');
@@ -334,13 +368,19 @@ export async function rollbackPeriodFeeLedgerSnapshot(
   if (restore?.status === 'SUPERSEDED') await assertRestorableRunRows(store, restore);
   await store.setSnapshotRun(runId, { ...run, status: 'ROLLING_BACK', active: false });
   const deletedRows = await store.deleteLedgerRowsByDigest(deleteTargets);
+  await renewSnapshotWriteLock(store, `rollback:${runId}`, undefined);
   if (run.status === 'ACTIVE' || run.status === 'ROLLING_BACK') {
+    const currentActive = await store.getActiveSnapshotRun(plan.snapshotId);
+    if (run.status === 'ROLLING_BACK' && currentActive && currentActive.runId !== runId) {
+      await store.setSnapshotRun(runId, { ...(await store.getSnapshotRun(runId) ?? run), status: 'FAILED', active: false });
+      throw new Error('ROLLBACK_SUPERSEDED_BY_NEWER_ACTIVE');
+    }
     const rollbackRestore = run.previousActiveRunId
       ? await store.getSnapshotRun(run.previousActiveRunId)
       : await store.getLatestSupersededSnapshotRun(plan.snapshotId, runId);
     if (rollbackRestore?.status === 'SUPERSEDED') {
       await assertRestorableRunRows(store, rollbackRestore);
-      await store.restoreSnapshotRunActive(rollbackRestore.runId, rollbackRestore.planDigest);
+      await store.restoreSnapshotRunActive(rollbackRestore.runId, rollbackRestore.planDigest, currentActive?.runId ?? null);
       const restored = await store.getActiveSnapshotRun(plan.snapshotId);
       if (!restored || restored.runId !== rollbackRestore.runId || restored.planDigest !== rollbackRestore.planDigest) {
         throw new Error('PERIOD_FEE_ROLLBACK_RESTORE_READBACK_FAILED');
@@ -351,4 +391,5 @@ export async function rollbackPeriodFeeLedgerSnapshot(
   await store.markSnapshotRunInactive(runId);
   await store.setSnapshotRun(runId, { ...(latest ?? run), status: 'ROLLED_BACK', active: false, activatedAt: null });
   return { status: 'ROLLED_BACK', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: true, inactiveRuns: 1, deletedRows, keptSharedByActiveRows };
+  });
 }

@@ -122,6 +122,14 @@ export type PeriodFeeSnapshotRun = {
   readbackDigest: string | null;
 };
 
+export type PeriodFeeSnapshotWriteLock = {
+  schemaVersion: 'period-fee-snapshot-write-lock/v1';
+  lockId: '_apply_lock';
+  ownerId: string;
+  acquiredAt: string;
+  leaseExpiresAt: string;
+};
+
 export type PeriodFeeLedgerFeeState = LedgerFeeState;
 export type PeriodFeeDepositState = DepositState;
 export type PeriodFeeDepositEvidenceKind = DepositEvidenceKind;
