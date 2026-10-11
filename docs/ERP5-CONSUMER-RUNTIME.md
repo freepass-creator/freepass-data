@@ -200,3 +200,12 @@ ERP5 순수 변환은 별도 `codex/erp5-product-mapping-20260921` 작업이 담
 - Claude Code: 주간 한도로 UNAVAILABLE. Gemini CLI: 계정 서비스 403으로 UNAVAILABLE. 둘을 PASS로 계산하지 않는다.
 - 미해결 코드 검토 이견은 없으며, 운영 이전 필수 교차검증과 실제 소비처 대사는 미완료다.
 - 별도 ERP5 변환 커밋 `9895b518675e75b9371bdf169e7f11ffb5d88198`을 인계받았으며 이번 런타임 변경에 자동 병합하거나 운영 게시하지 않았다.
+
+## 2026-10-11 ERP5 공개 소비자 등록 후보 (운영 등록·배포 HOLD)
+
+- `erp5-public-media`: `projectionId=erp-public`, 별도 service token, `capabilities=["photos"]`. 허용 경로는 `/v1/consumers/erp5-public-media/catalog-compat/products/{exactProductDocumentId}/photos`와 `/{index}`뿐이다.
+- `erp5-public-catalog`: `projectionId=erp-public`, 별도 service token, `capabilities=["catalog"]`. `/v1/consumers/erp5-public-catalog/catalog-compat`만 ERP5가 읽고, 응답은 공개 응답 허용 목록 투영(`buildPublicProductFeed`)으로 만들어 수수료·마진·VIN·내부 경제 칸·원문 전체는 서버에서 나가지 않는다. photos/fees/master/reference/health/업무 쓰기 권한은 없다. 기존 `erp-com` 토큰은 재사용하지 않는다.
+- 토큰은 무작위 새 값을 Secret Manager에만 저장하고 런타임 환경변수로 주입한다. 명령·로그·문서·PR·채팅·시험에 실제 값을 적지 않는다. ERP5 쪽 전달은 비밀 저장소에서 Vercel 민감 환경변수로 직접 옮긴다.
+- 회전: 새 Secret Manager 버전 추가 → 서비스 재배포 → ERP5 환경변수 교체 확인 → 이전 버전 비활성.
+- 폐기: 소비자 항목을 `FREEPASS_DATA_CONSUMERS_JSON`에서 제거 + 서비스 재배포 + 비밀 버전 파기.
+- ERP5 production 호출 신원은 이미 있는 Vercel OIDC → WIF `erp5-production` → 서비스 계정 `erp5-firestore-reader`(freepass-data-read `run.invoker`)다. 새 IAM 불필요, preview 환경은 바인딩 없음. `/catalog`는 ACTIVE 릴리스가 없어 `NO_ACTIVE_RELEASE`로 닫혀 있으므로 ERP5는 `catalog-compat`를 읽는다.
