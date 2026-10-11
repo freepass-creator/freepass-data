@@ -23,6 +23,21 @@ const binding = { id: 'erp-com', projectionId: 'erp-public' as const, token };
 const url = '/v1/consumers/erp-com/catalog';
 const headers = { authorization: `Bearer ${token}` };
 
+describe('direct Firestore migration signal', () => {
+  it('signals only legacy product read routes without bypassing authentication', async () => {
+    const { app } = withAccess(new MemoryDataStore(), [binding]);
+    for (const route of ['catalog', 'catalog-compat', 'catalog-reference', 'internal-ai-reference']) {
+      const response = await app.inject({ url: `/v1/consumers/erp-com/${route}` });
+      expect(response.headers['x-freepass-read-mode']).toBe('DIRECT_FIRESTORE_REQUIRED');
+      expect(response.headers['x-freepass-migration-status']).toBe('LEGACY_READ_PENDING_RETIREMENT');
+      expect(response.statusCode).not.toBe(200);
+    }
+    const unrelated = await app.inject({ url: '/missing' });
+    expect(unrelated.headers['x-freepass-read-mode']).toBeUndefined();
+    await app.close();
+  });
+});
+
 describe('approved Drive original-byte adapter (offline only)', () => {
   const bytes = Buffer.from([255, 216, 255, 1]);
   const product = { listable: true, status_kind: '가용', provider_company_code: 'TEST', supplier_vehicle_id: 'fixture' };
