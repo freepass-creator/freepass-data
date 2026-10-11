@@ -72,7 +72,8 @@ function later(c: SharedSheetCapture) {
   return c;
 }
 describe('shared sheet local source to Canonical', () => {
-  it('reads back rent changes against the unchanged confirmed vehicle-price fee snapshot', async () => {
+  it.each(['unchanged', 'amount', 'rate', 'base', 'vat', 'total', 'source', 'policy', 'rule'])(
+    'verifies the exact vehicle-price fee snapshot after rent refresh: %s', async scenario => {
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
     try {
       const s = await stores(); await apply(s);
@@ -83,9 +84,29 @@ describe('shared sheet local source to Canonical', () => {
       offer.internalEconomicsTerms![0]!.channelPayoutFee = structuredClone(fee);
       await s.store.seed({ offers: [offer] });
       const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      if (scenario !== 'unchanged') {
+        const readOffer = s.store.getOffer.bind(s.store);
+        const readReceipt = s.store.getReviewedSourceChangeReceipt.bind(s.store);
+        vi.spyOn(s.store, 'getOffer').mockImplementation(async id => {
+          const current = await readOffer(id);
+          if (current && await readReceipt(p.plan.entries[0]!.change!.idempotencyKey)) {
+            const changed = current.internalEconomicsTerms![0]!.channelPayoutFee;
+            if (scenario === 'amount') changed.amount!.amount++;
+            if (scenario === 'rate' && changed.calculation?.kind === 'RATE') changed.calculation.rate = 0.02;
+            if (scenario === 'base' && changed.calculation?.kind === 'RATE') changed.calculation.base = 'MONTHLY_RENT_X_TERM';
+            if (scenario === 'vat') changed.vatAmount = 123;
+            if (scenario === 'total') changed.totalAmount = 123;
+            if (scenario === 'source') changed.sourceRefs = ['test:changed-source'];
+            if (scenario === 'policy') changed.policyId = 'test:changed-policy';
+            if (scenario === 'rule') changed.ruleId = 'test:changed-rule';
+          }
+          return current;
+        });
+      }
       const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
         plan: p.plan, expectedPlanDigest: p.report.planDigest });
-      expect(result.report).toMatchObject({ status: 'APPLIED', reconciliation: { readbackMismatches: 0 } });
+      expect(result.report).toMatchObject({ status: scenario === 'unchanged' ? 'APPLIED' : 'HOLD',
+        reconciliation: { readbackMismatches: scenario === 'unchanged' ? 0 : 1 } });
       expect((await s.store.listOffers())[0]!.internalEconomicsTerms![0]!.channelPayoutFee).toEqual(fee);
     } finally { vi.useRealTimers(); }
   });
