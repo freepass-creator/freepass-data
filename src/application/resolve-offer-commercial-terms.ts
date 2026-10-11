@@ -1,7 +1,7 @@
 import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Money, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
-import { KAKAO_COMMISSION_POLICY, resolveSalesCommission, resolveSupplierBillingFee, selectSonokongQ12Basis } from './kakao-catalog-reference.js';
+import { KAKAO_COMMISSION_POLICY, resolveSalesCommission, resolveSupplierBillingFee, resolveSubscriptionFormForTerm, selectSonokongQ12Basis } from './kakao-catalog-reference.js';
 import { parseErp5CompatibilityPriceKey } from '../domain/deposit-evidence.js';
 import type { PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
 import type {
@@ -165,8 +165,9 @@ export function precomputeOfferEconomics(
       positiveSafeInteger(candidate.monthlyRent.amount));
     const explicitEvidence = evidenceByTerm[term.termKey];
     const parsedTargetKey = parseErp5CompatibilityPriceKey(term.termKey);
-    const targetSettlement = explicitEvidence?.subscriptionForm ?? parsedTargetKey?.settlement;
-    const q12Basis = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION' && !explicitEvidence?.q12Basis
+    const resolvedTargetSettlement = resolveSubscriptionFormForTerm(explicitEvidence?.subscriptionForm, parsedTargetKey?.settlement);
+    const targetSettlement = resolvedTargetSettlement.subscriptionForm;
+    const q12Basis = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION' && !explicitEvidence?.q12Basis && !resolvedTargetSettlement.conflict
       ? selectSonokongQ12Basis({
         termMonths: term.termMonths,
         settlement: targetSettlement,
@@ -178,9 +179,10 @@ export function precomputeOfferEconomics(
       }, offer.priceTerms.flatMap(candidate => {
         const parsedCandidateKey = parseErp5CompatibilityPriceKey(candidate.termKey);
         const candidateEvidence = evidenceByTerm[candidate.termKey];
-        return [{
+        const resolvedCandidateSettlement = resolveSubscriptionFormForTerm(candidateEvidence?.subscriptionForm, parsedCandidateKey?.settlement);
+        return resolvedCandidateSettlement.conflict ? [] : [{
           termMonths: candidate.termMonths,
-          settlement: candidateEvidence?.subscriptionForm ?? parsedCandidateKey?.settlement,
+          settlement: resolvedCandidateSettlement.subscriptionForm,
           mileageKm: candidate.mileageLimitKmPerYear ?? undefined,
           mileagePeriod: 'year' as const,
           currency: candidate.monthlyRent.currency,
@@ -192,7 +194,10 @@ export function precomputeOfferEconomics(
     const automaticSonokongEvidence = q12Basis
       ? { q12Basis }
       : {};
-    const args = { ...explicitEvidence, supplierId: offer.supplierId, productType, fuel: fuel ?? '',
+    const args = { ...explicitEvidence,
+      ...(targetSettlement ? { subscriptionForm: targetSettlement } : {}),
+      ...(resolvedTargetSettlement.conflict ? { subscriptionFormConflict: true as const } : {}),
+      supplierId: offer.supplierId, productType, fuel: fuel ?? '',
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
       billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined,
       ...automaticSonokongEvidence };

@@ -324,6 +324,21 @@ describe('F04 explicit canonical evidence', () => {
       [targetKey]: { subscriptionForm: 'BUYOUT', q12Basis: { amount: 900000, sourceRef: 'verified:q12' } },
     })[2]!.supplierBillingFee.amount?.amount).toBe(1200000);
   });
+  it('passes price-key Sonokong settlement into Q12 selection and calculation', () => {
+    const input = { ...offer(), supplierId: 'RP012' };
+    input.priceTerms = [
+      { termKey: '12_인수형', termMonths: 12, monthlyRent: { amount: 900000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+      { termKey: '24_인수형', termMonths: 24, monthlyRent: { amount: 700000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+      { termKey: '12', termMonths: 12, monthlyRent: { amount: 800000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+      { termKey: '24', termMonths: 24, monthlyRent: { amount: 700000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+    ];
+    expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {}, ['24_인수형'])[0]!.supplierBillingFee)
+      .toMatchObject({ state: 'KNOWN', amount: { amount: 1200000 } });
+    expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {}, ['24'])[0]!.supplierBillingFee)
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED' });
+    expect(precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, { '24_인수형': { subscriptionForm: 'RETURN' } }, ['24_인수형'])[0]!.supplierBillingFee)
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'SUBSCRIPTION_FORM_CONFLICT' });
+  });
   it('detects a changed or corrupted reference monthly rent independently of the stored fixed amount', () => {
     const input = { ...offer(), supplierId: 'RP021' };
     input.internalEconomicsTerms = precomputeOfferEconomics(input, 'USED_SUBSCRIPTION');
