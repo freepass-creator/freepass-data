@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { Firestore } from 'firebase-admin/firestore';
+import { Timestamp, type Firestore } from 'firebase-admin/firestore';
 import { readSingleProductCompatibility, withCompatibilityDepositEvidence } from '../src/infra/erp5-compat-catalog-reader.js';
 
 const time = '2026-10-12T00:00:00.000Z';
-const stamp = (value = time) => ({ toDate: () => new Date(value), seconds: Math.floor(Date.parse(value) / 1000), nanoseconds: 123,
-  isEqual(other: { seconds: number; nanoseconds: number }) { return this.seconds === other.seconds && this.nanoseconds === other.nanoseconds; } });
+const stamp = (value = time, nanos = 123) => new Timestamp(Math.floor(Date.parse(value) / 1000), nanos);
 const scope = new Set<'products' | 'policy' | 'partner'>(['products', 'policy', 'partner']);
 function fixture(product: Record<string, unknown> | undefined = {
   product_code: 'display-code', provider_company_code: 'RP031', policy_code: 'P1',
@@ -21,6 +20,8 @@ function fixture(product: Record<string, unknown> | undefined = {
   const reads: string[] = [];
   const timestamps: Record<string, string> = {};
   const nanos: Record<string, number> = {};
+  const updateNanos: Record<string, number> = {};
+  const updateTimes: Record<string, string> = {};
   const db = {
     collection: (collection: string) => ({ doc: (id: string) => ({ path: `${collection}/${id}`, id }) }),
     runTransaction: async (fn: (tx: unknown) => Promise<unknown>, options: unknown) => {
@@ -28,14 +29,38 @@ function fixture(product: Record<string, unknown> | undefined = {
       return fn({ get: async (ref: { path: string; id: string }) => {
         reads.push(ref.path);
         return { id: ref.id, exists: records[ref.path] !== undefined, data: () => records[ref.path],
-          readTime: { ...stamp(timestamps[ref.path] ?? time), nanoseconds: nanos[ref.path] ?? 123 }, updateTime: stamp() };
+          readTime: stamp(timestamps[ref.path] ?? time, nanos[ref.path] ?? 123),
+          updateTime: stamp(updateTimes[ref.path] ?? time, updateNanos[ref.path] ?? 123) };
       } });
     },
   } as unknown as Firestore;
-  return { db, records, reads, timestamps, nanos };
+  return { db, records, reads, timestamps, nanos, updateNanos, updateTimes };
 }
 
 describe('bounded compatibility product facts', () => {
+  it.each([499999, 500000, 999999999])('uses the exact timestamp floor for read and all versions at %i nanos', async nanos => {
+    const f = fixture();
+    for (const path of Object.keys(f.records)) { f.nanos[path] = nanos; f.updateNanos[path] = nanos; }
+    const result = await readSingleProductCompatibility(f.db, 'erp-com', 'machine-id', scope);
+    const actual = stamp(time, nanos), expected = new Date(actual.seconds * 1000 + Math.floor(nanos / 1e6)).toISOString();
+    expect(result.meta.readAt).toBe(expected); expect(result.meta.observedAt).toBe(expected);
+    expect(result.meta.readTimeExact).toEqual({ seconds: actual.seconds, nanoseconds: nanos });
+    for (const version of [result.meta.documentVersions.product, ...result.meta.documentVersions.policies, ...result.meta.documentVersions.partners]) {
+      expect(version.updateTime).toBe(expected); expect(version.updateTimeExact).toEqual({ seconds: actual.seconds, nanoseconds: nanos });
+    }
+    if (nanos >= 500000) expect(actual.toDate().toISOString()).not.toBe(expected);
+    if (nanos === 999999999) expect(actual.toDate().getUTCSeconds()).toBe(1);
+  });
+  it('preserves earlier exact versions without rounding them past the read snapshot', async () => {
+    const f = fixture();
+    for (const path of Object.keys(f.records)) { f.nanos[path] = 999999999; f.updateNanos[path] = 500000; }
+    f.updateTimes['policy/P1'] = '2026-10-11T23:59:59.000Z';
+    const result = await readSingleProductCompatibility(f.db, 'erp-com', 'machine-id', scope);
+    expect(result.meta.readAt).toBe('2026-10-12T00:00:00.999Z');
+    expect(result.meta.documentVersions.product.updateTime).toBe(time);
+    expect(result.meta.documentVersions.policies[0]!.updateTime).toBe('2026-10-11T23:59:59.000Z');
+    expect(result.meta.documentVersions.product.updateTimeExact.nanoseconds).toBeLessThan(result.meta.readTimeExact.nanoseconds);
+  });
   it('reads only exact documents and preserves ERP gate inputs without private fields', async () => {
     const f = fixture();
     const result = await readSingleProductCompatibility(f.db, 'erp-com', 'machine-id', scope);
