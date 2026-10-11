@@ -15,11 +15,12 @@ export type VehicleUidMigrationDocumentSnapshot<T> = {
 export type VehicleUidMigrationStoreMutation =
   | { kind: 'ASSET_EXTERNAL_IDS'; assetId: string; externalIds: VehicleExternalId[] | undefined; updateTime?: VehicleUidMigrationUpdateTime; expectedAfter?: VehicleExternalId[] | undefined; assetIdentifierDigest?: string; observedAt?: string }
   | { kind: 'PRODUCT_VEHICLE_UID'; productKey: string; vehicleUid: string | null; updateTime?: VehicleUidMigrationUpdateTime; expectedAfter?: string; assetIdentifierDigest?: string; observedAt?: string }
+  | { kind: 'PRODUCT_VERIFY_IDENTIFIERS'; productKey: string; vehicleUid: string; updateTime?: VehicleUidMigrationUpdateTime; identifierDigest: string; assetIdentifierDigest?: string; observedAt?: string }
   | { kind: 'PRODUCT_DELETE_VEHICLE_UID'; productKey: string; updateTime?: VehicleUidMigrationUpdateTime; expectedAfter?: unknown };
 
 export type VehicleUidMigrationCommitResult = {
   applied: number;
-  skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' | 'NOT_APPLIED' | 'STALE_ASSET' }>;
+  skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' | 'NOT_APPLIED' | 'STALE_ASSET' | 'STALE_IDENTIFIER' }>;
 };
 
 export type VehicleUidMigrationWriteStore = {

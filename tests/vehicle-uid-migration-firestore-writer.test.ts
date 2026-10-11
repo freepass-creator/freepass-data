@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyVehicleUidMigration, rollbackVehicleUidMigration } from '../src/application/vehicle-uid-migration-apply.js';
+import { applyVehicleUidMigration as applyVehicleUidMigrationRaw, rollbackVehicleUidMigration, type VehicleUidMigrationBackup } from '../src/application/vehicle-uid-migration-apply.js';
 import { planVehicleUidMigration, type VehicleUidMigrationProduct } from '../src/application/vehicle-uid-migration-plan.js';
 import type { VehicleAsset } from '../src/domain/catalog.js';
 import { createVehicleUidMigrationFirestoreWriter } from '../src/infra/vehicle-uid-migration-firestore-writer.js';
@@ -31,6 +31,7 @@ const assetWithCurrentExternalIds = (id: string, plateNumber: string): VehicleAs
 const product = (plate: string, extra: VehicleUidMigrationProduct = {}) => ({ car_number: plate, provider_company_code: 'TEST', ...extra });
 const fixedClock = () => new Date('2026-10-10T00:00:00.000Z');
 const random = () => 0.1;
+const persistBackup = async (_backup: VehicleUidMigrationBackup) => {};
 
 function plan(products: Record<string, VehicleUidMigrationProduct>, assets: VehicleAsset[]) {
   return planVehicleUidMigration({
@@ -98,6 +99,14 @@ class FakeFirestore {
 function fakeWriter(db: FakeFirestore) {
   return createVehicleUidMigrationFirestoreWriter(db as never);
 }
+
+const applyVehicleUidMigration = (
+  store: ReturnType<typeof fakeWriter>,
+  migrationPlan: ReturnType<typeof planVehicleUidMigration>,
+  expectedDigest: string,
+  options: { approvedDigest?: string; writeFlag?: string; now: string },
+  backupWriter: (backup: VehicleUidMigrationBackup) => Promise<void> = persistBackup,
+) => applyVehicleUidMigrationRaw(store, migrationPlan, expectedDigest, options, backupWriter);
 
 function assetPath(id: string) {
   return `${FIRESTORE_COLLECTIONS.catalog.vehicleAssets}/${id}`;
@@ -203,6 +212,33 @@ describe('vehicle UID Firestore writer transaction ordering', () => {
     );
 
     expect(result.skippedReasons?.STALE_ASSET).toBe(1);
+    expect(db.docs.get(assetPath('TEST-FAKE-UID-001'))?.externalIds).toBeUndefined();
+  });
+
+  it('verify-only reads a product whose UID already matches and skips the component when its VIN changed', async () => {
+    const p = plan(
+      {
+        alreadyLinked: product('TEST-FAKE-001', {
+          vin: 'TEST-FAKE-VIN-OLD',
+          vehicle_uid: 'TEST-FAKE-UID-001',
+        }),
+        needsUid: product('TEST-FAKE-001', { vin: 'TEST-FAKE-VIN-OLD' }),
+      },
+      [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001')],
+    );
+    expect(p.items.some(item => item.kind === 'PRODUCT_VERIFY_UID' && item.productKey === 'alreadyLinked')).toBe(true);
+    const db = new FakeFirestore();
+    db.docs.set(assetPath('TEST-FAKE-UID-001'), asset('TEST-FAKE-UID-001', 'TEST-FAKE-001'));
+    db.docs.set(productPath('alreadyLinked'), product('TEST-FAKE-001', {
+      vin: 'TEST-FAKE-VIN-CHANGED',
+      vehicle_uid: 'TEST-FAKE-UID-001',
+    }));
+    db.docs.set(productPath('needsUid'), product('TEST-FAKE-001', { vin: 'TEST-FAKE-VIN-OLD' }));
+
+    const result = await applyVehicleUidMigration(fakeWriter(db), p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+
+    expect(result.skippedReasons?.STALE_IDENTIFIER).toBe(1);
+    expect(db.docs.get(productPath('needsUid'))?.vehicle_uid).toBeUndefined();
     expect(db.docs.get(assetPath('TEST-FAKE-UID-001'))?.externalIds).toBeUndefined();
   });
 });

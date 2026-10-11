@@ -13,7 +13,7 @@ export type VehicleUidMigrationBackup = {
   planDigest: string;
   createdAt: string;
   assets: Array<{ componentId?: string; assetId: string; externalIds?: VehicleExternalId[]; updateTime?: VehicleUidMigrationUpdateTime; appliedExternalIds?: VehicleExternalId[] }>;
-  products: Array<{ componentId?: string; productKey: string; hadVehicleUid: boolean; vehicleUid?: string | null; updateTime?: VehicleUidMigrationUpdateTime; appliedVehicleUid?: string }>;
+  products: Array<{ componentId?: string; productKey: string; hadVehicleUid: boolean; vehicleUid?: string | null; vehicleUidPresence?: 'absent' | 'present:null' | 'present:string'; updateTime?: VehicleUidMigrationUpdateTime; appliedVehicleUid?: string }>;
   backupDigest: string;
 };
 
@@ -86,6 +86,9 @@ const bump = (record: Record<string, number>, reason: string) => {
 const withTypedUpdateTime = (updateTime?: VehicleUidMigrationUpdateTime) => updateTime ? { updateTime } : {};
 const withExpectedAfter = <T>(expectedAfter: T | undefined) => expectedAfter !== undefined ? { expectedAfter } : {};
 const productVehicleUidBackupValue = (value: unknown): string | null => typeof value === 'string' ? value : null;
+const productVehicleUidPresence = (product: Record<string, unknown>) =>
+  !Object.hasOwn(product, 'vehicle_uid') ? 'absent' as const : product.vehicle_uid === null ? 'present:null' as const : 'present:string' as const;
+const productIdentifierDigest = (product: Record<string, unknown>) => stableDigest(summarizeVehicleUidMigrationIdentifiers(product));
 const normalizeExternalIdsForCompare = (externalIds: unknown) =>
   Array.isArray(externalIds)
     ? [...externalIds].sort((left, right) => stableDigest(left).localeCompare(stableDigest(right)))
@@ -111,10 +114,11 @@ export async function applyVehicleUidMigration(
   plan: VehicleUidMigrationPlan,
   expectedDigest: string,
   options: { approvedDigest?: string; writeFlag?: string; now: string },
-  persistBackup: (backup: VehicleUidMigrationBackup) => Promise<void> = async () => {},
+  persistBackup: (backup: VehicleUidMigrationBackup) => Promise<void>,
 ): Promise<VehicleUidMigrationApplyResult> {
   const digest = assertVehicleUidPlanDigest(plan, expectedDigest);
   if (options.approvedDigest !== digest || options.writeFlag !== 'APPLY') throw new Error('VEHICLE_UID_APPLY_NOT_APPROVED');
+  if (!persistBackup) throw new Error('BACKUP_REQUIRED');
   const items = mutationItems(plan);
   const backup: Omit<VehicleUidMigrationBackup, 'backupDigest'> = {
     schema: 'vehicle-uid-migration-backup/v1',
@@ -169,16 +173,32 @@ export async function applyVehicleUidMigration(
         componentWrites++;
         componentAssetUpdates++;
       }
-      if (item.kind === 'PRODUCT_SET_UID') {
+      if (item.kind === 'PRODUCT_SET_UID' || item.kind === 'PRODUCT_VERIFY_UID') {
         const snapshot = store.getProductSnapshot ? await store.getProductSnapshot(item.productKey) : null;
         const product = snapshot?.data ?? await store.getProduct(item.productKey);
         if (!product) throw new Error('VEHICLE_UID_PRODUCT_MISSING');
-        if (stableDigest(summarizeVehicleUidMigrationIdentifiers(product)) !== stableDigest(item.identifiers)) {
+        if (productIdentifierDigest(product) !== stableDigest(item.identifiers)) {
           componentSkipReasons.set(componentId, 'STALE_IDENTIFIER');
           bump(skippedReasons, 'STALE_IDENTIFIER');
           break;
         }
         const current = product.vehicle_uid;
+        if (item.kind === 'PRODUCT_VERIFY_UID') {
+          if (current !== item.vehicleUid) {
+            componentSkipReasons.set(componentId, 'STALE_IDENTIFIER');
+            bump(skippedReasons, 'STALE_IDENTIFIER');
+            break;
+          }
+          componentMutations.push({
+            kind: 'PRODUCT_VERIFY_IDENTIFIERS',
+            productKey: item.productKey,
+            vehicleUid: item.vehicleUid,
+            ...withTypedUpdateTime(snapshot?.updateTime),
+            identifierDigest: stableDigest(item.identifiers),
+            ...(item.assetIdentifierDigest ? { assetIdentifierDigest: item.assetIdentifierDigest, observedAt: plan.observedAt } : {}),
+          });
+          continue;
+        }
         if (current === item.vehicleUid) {
           skipped++;
           continue;
@@ -188,6 +208,7 @@ export async function applyVehicleUidMigration(
           componentId,
           productKey: item.productKey,
           hadVehicleUid: Object.hasOwn(product, 'vehicle_uid'),
+          vehicleUidPresence: productVehicleUidPresence(product),
           ...(Object.hasOwn(product, 'vehicle_uid') ? { vehicleUid: productVehicleUidBackupValue(current) } : {}),
           ...(snapshot?.updateTime ? { updateTime: snapshot.updateTime } : {}),
           appliedVehicleUid: item.vehicleUid,
@@ -208,7 +229,7 @@ export async function applyVehicleUidMigration(
       skipped += componentItems.length;
       for (const skippedItem of componentItems) {
         if (skippedItem.kind === 'ASSET_ADD_EXTERNAL_IDS') skippedTargets.add(`asset:${skippedItem.assetId}`);
-        if (skippedItem.kind === 'PRODUCT_SET_UID') skippedTargets.add(`product:${skippedItem.productKey}`);
+        if (skippedItem.kind === 'PRODUCT_SET_UID' || skippedItem.kind === 'PRODUCT_VERIFY_UID') skippedTargets.add(`product:${skippedItem.productKey}`);
       }
       continue;
     }
@@ -234,7 +255,7 @@ export async function applyVehicleUidMigration(
       bump(skippedReasons, item.reason);
       for (const skippedItem of items.filter(planItem => planItem.componentId === componentId)) {
         if (skippedItem.kind === 'ASSET_ADD_EXTERNAL_IDS') skippedTargets.add(`asset:${skippedItem.assetId}`);
-        if (skippedItem.kind === 'PRODUCT_SET_UID') skippedTargets.add(`product:${skippedItem.productKey}`);
+        if (skippedItem.kind === 'PRODUCT_SET_UID' || skippedItem.kind === 'PRODUCT_VERIFY_UID') skippedTargets.add(`product:${skippedItem.productKey}`);
       }
     }
   }
@@ -244,10 +265,11 @@ export async function applyVehicleUidMigration(
 
 export async function verifyVehicleUidMigration(store: VehicleUidMigrationWriteStore, plan: VehicleUidMigrationPlan, skippedTargets = new Set<string>()) {
   for (const item of mutationItems(plan)) {
-    if (item.kind === 'PRODUCT_SET_UID') {
+    if (item.kind === 'PRODUCT_SET_UID' || item.kind === 'PRODUCT_VERIFY_UID') {
       if (skippedTargets.has(`product:${item.productKey}`)) continue;
       const product = await store.getProduct(item.productKey);
       if (product?.vehicle_uid !== item.vehicleUid) throw new Error('VEHICLE_UID_READBACK_PRODUCT_MISMATCH');
+      if (productIdentifierDigest(product) !== stableDigest(item.identifiers)) throw new Error('VEHICLE_UID_READBACK_PRODUCT_IDENTIFIER_MISMATCH');
     }
     if (item.kind === 'ASSET_ADD_EXTERNAL_IDS') {
       if (skippedTargets.has(`asset:${item.assetId}`)) continue;
@@ -284,7 +306,8 @@ export async function rollbackVehicleUidMigration(
   };
   for (const item of backup.products) {
     const current = await store.getProduct(item.productKey);
-    const beforeValue = item.hadVehicleUid ? item.vehicleUid ?? undefined : undefined;
+    const presence = item.vehicleUidPresence ?? (item.hadVehicleUid ? item.vehicleUid === null ? 'present:null' : 'present:string' : 'absent');
+    const beforeValue = presence === 'absent' ? undefined : presence === 'present:null' ? null : item.vehicleUid;
     if (item.appliedVehicleUid !== undefined && current?.vehicle_uid === beforeValue) {
       bump(skippedReasons, 'NOT_APPLIED');
       skipped++;

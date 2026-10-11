@@ -8,8 +8,14 @@ import {
   type VehicleUidRandom,
 } from '../domain/vehicle-uid.js';
 import { stableDigest } from '../shared/stable-digest.js';
-export { summarizeVehicleUidMigrationAssetIdentifiers } from '../shared/vehicle-uid-migration-identifiers.js';
-import { normalizedVehicleUidMigrationAssetIdentifiers, summarizeVehicleUidMigrationAssetIdentifiers } from '../shared/vehicle-uid-migration-identifiers.js';
+export { summarizeVehicleUidMigrationAssetIdentifiers, summarizeVehicleUidMigrationIdentifiers } from '../shared/vehicle-uid-migration-identifiers.js';
+import {
+  normalizedVehicleUidMigrationAssetIdentifiers,
+  summarizeVehicleUidMigrationAssetIdentifiers,
+  summarizeVehicleUidMigrationIdentifiers,
+  vehicleUidMigrationProductIds,
+  type VehicleUidMigrationIdentifierSummary,
+} from '../shared/vehicle-uid-migration-identifiers.js';
 
 export type VehicleUidMigrationProduct = Record<string, unknown>;
 
@@ -28,6 +34,15 @@ export type VehicleUidMigrationItem =
       productKey: string;
       vehicleUid: string;
       reason: 'SOURCE_BINDING' | 'PLATE_UNIQUE_ASSET' | 'PLANNED_NEW_UID' | 'CREATED_IN_PLAN';
+      identifiers: VehicleUidMigrationIdentifierSummary;
+      assetIdentifierDigest?: string;
+      public: { componentHash: string; productHash: string; vehicleUidHash: string; reason: string };
+    }
+  | {
+      kind: 'PRODUCT_VERIFY_UID';
+      componentId: string;
+      productKey: string;
+      vehicleUid: string;
       identifiers: VehicleUidMigrationIdentifierSummary;
       assetIdentifierDigest?: string;
       public: { componentHash: string; productHash: string; vehicleUidHash: string; reason: string };
@@ -69,12 +84,6 @@ export type VehicleUidMigrationPlan = {
   planDigest: string;
 };
 
-export type VehicleUidMigrationIdentifierSummary = {
-  plateHashes: string[];
-  vinHashes: string[];
-  supplierVehicleIdHashes: string[];
-};
-
 export type PlanVehicleUidMigrationInput = {
   products: Record<string, VehicleUidMigrationProduct>;
   assets: VehicleAsset[];
@@ -92,67 +101,7 @@ const hasOwn = (object: Record<string, unknown>, key: string) => Object.hasOwn(o
 const active = (id: VehicleExternalId, at: string) => id.validFrom <= at && (id.validTo === undefined || id.validTo === null || id.validTo > at);
 const supplierScoped = (kind: VehicleExternalId['kind']) => kind === 'SUPPLIER_VEHICLE' || kind === 'SHEET_ROW';
 
-function field(product: VehicleUidMigrationProduct, names: string[]) {
-  for (const name of names) {
-    const value = text(product[name]);
-    if (value) return value;
-  }
-  return undefined;
-}
-
-function fields(product: VehicleUidMigrationProduct, names: string[]) {
-  return names.map(name => text(product[name])).filter(Boolean);
-}
-
-function uniqueValues(values: string[], normalize: (value: string) => string = value => value) {
-  return [...new Set(values.map(normalize))];
-}
-
-function productIds(product: VehicleUidMigrationProduct) {
-  const plateFields = ['plateNumber', 'plate_number', 'car_number', 'vehicle_number', '차량번호'];
-  const vinFields = ['vin', 'VIN', 'vehicle_vin', 'vehicle_id_number', '차대번호'];
-  const supplierVehicleFields = [
-    'iancar_one_vehicle_id',
-    'sourceVehicleId',
-    'supplier_vehicle_id',
-    'supplierVehicleId',
-    'vehicleId',
-    'vehicle_id',
-    'source_vehicle_id',
-    'sourceRecordId',
-    'source_record_id',
-    'raw_id',
-    'rawId',
-    'id',
-  ];
-  const plateValues = fields(product, plateFields);
-  const vinValues = fields(product, vinFields);
-  const supplierVehicleValues = fields(product, supplierVehicleFields);
-  const plates = uniqueValues(plateValues);
-  const vins = uniqueValues(vinValues, value => value.toUpperCase());
-  const supplierVehicleIds = uniqueValues(supplierVehicleValues);
-  const plate = field(product, plateFields);
-  const vin = field(product, vinFields);
-  const supplierCode = field(product, ['provider_company_code', 'supplierCode', 'supplier_code', 'supplierId', 'supplier_id', 'sourceSupplierId']);
-  const supplierVehicleId = supplierVehicleIds[0];
-  const sameKindFieldDisagreements = [
-    ...(plates.length > 1 ? ['PLATE:SAME_KIND_FIELDS_DISAGREE'] : []),
-    ...(vins.length > 1 ? ['VIN:SAME_KIND_FIELDS_DISAGREE'] : []),
-    ...(supplierVehicleIds.length > 1 ? ['SUPPLIER_VEHICLE:SAME_KIND_FIELDS_DISAGREE'] : []),
-  ];
-  return { plate, plates, vin, vins, supplierCode, supplierVehicleId, supplierVehicleIds, sameKindFieldDisagreements };
-}
-
-export function summarizeVehicleUidMigrationIdentifiers(product: VehicleUidMigrationProduct): VehicleUidMigrationIdentifierSummary {
-  const ids = productIds(product);
-  return {
-    plateHashes: ids.plates.map(value => hash({ kind: 'PLATE', value })).sort(),
-    vinHashes: ids.vins.map(value => hash({ kind: 'VIN', value })).sort(),
-    supplierVehicleIdHashes: ids.supplierVehicleIds
-      .map(value => hash({ kind: 'SUPPLIER_VEHICLE', supplierCode: ids.supplierCode?.toUpperCase() ?? '', value }))
-      .sort(),
-  };
-}
+const productIds = vehicleUidMigrationProductIds;
 
 function externalIdsForAsset(asset: VehicleAsset): VehicleExternalId[] {
   const out: VehicleExternalId[] = [];
@@ -485,7 +434,20 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
     }
     for (const productKey of component.products) {
       const product = input.products[productKey]!;
-      if (text(product.vehicle_uid)) continue;
+      if (text(product.vehicle_uid)) {
+        if (text(product.vehicle_uid) === uid) {
+          items.push({
+            kind: 'PRODUCT_VERIFY_UID',
+            componentId,
+            productKey,
+            vehicleUid: uid,
+            identifiers: summarizeVehicleUidMigrationIdentifiers(product),
+            ...(existingAsset ? { assetIdentifierDigest: summarizeVehicleUidMigrationAssetIdentifiers(existingAsset, input.observedAt) } : {}),
+            public: { componentHash: hash(componentId), productHash: hash(productKey), vehicleUidHash: hash(uid), reason: 'VERIFY_EXISTING_UID' },
+          });
+        }
+        continue;
+      }
       items.push({
         kind: 'PRODUCT_SET_UID',
         componentId,
@@ -524,11 +486,11 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
     }
   }
 
-  const byKind = { ASSET_ADD_EXTERNAL_IDS: 0, PRODUCT_SET_UID: 0, HOLD: 0 };
+  const byKind = { ASSET_ADD_EXTERNAL_IDS: 0, PRODUCT_SET_UID: 0, PRODUCT_VERIFY_UID: 0, HOLD: 0 };
   const byReason: Record<string, number> = {};
   for (const item of items) {
     byKind[item.kind]++;
-    const reason = item.kind === 'HOLD' ? item.reason : item.kind === 'PRODUCT_SET_UID' ? item.reason : 'ASSET_EXTERNAL_IDS';
+    const reason = item.kind === 'HOLD' ? item.reason : item.kind === 'PRODUCT_SET_UID' ? item.reason : item.kind === 'PRODUCT_VERIFY_UID' ? 'VERIFY_EXISTING_UID' : 'ASSET_EXTERNAL_IDS';
     byReason[reason] = (byReason[reason] ?? 0) + 1;
   }
   const summary: VehicleUidMigrationSummary = {
