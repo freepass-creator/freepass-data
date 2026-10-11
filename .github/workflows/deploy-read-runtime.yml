@@ -51,6 +51,10 @@ on:
       expected_image_digest:
         type: string
         required: false
+      expected_consumers_secret_version:
+        description: Expected consumer secret pin for verify-only; empty uses trusted repository pin
+        type: string
+        required: false
       expected_revision:
         type: string
         required: false
@@ -496,6 +500,7 @@ jobs:
       RUNTIME_SERVICE_ACCOUNT: ${{ vars.FREEPASS_DATA_RUNTIME_SERVICE_ACCOUNT }}
       CONSUMERS_SECRET_NAME: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_NAME }}
       CONSUMERS_SECRET_VERSION: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_VERSION }}
+      EXPECTED_CONSUMERS_SECRET_VERSION: ${{ inputs.expected_consumers_secret_version || vars.FREEPASS_DATA_CONSUMERS_SECRET_VERSION }}
       IANCAR_SECRET_NAME: ${{ vars.FREEPASS_DATA_IANCAR_SECRET_NAME }}
       IANCAR_SECRET_VERSION: ${{ vars.FREEPASS_DATA_IANCAR_SECRET_VERSION }}
     steps:
