@@ -162,6 +162,16 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 ONE 고정 사진집합 사람 확인 등록 지원 — CODED / TESTED, 운영 미적용
+
+- 목적/소유: 00가 01에게 기존 photo-only compatibility bridge와 reader 관련 최소 hunk를 단독 배정했다. 기준 main `c1e2a15bff1e650347d3b7d1d42cb9e185140272`; 이 기록을 포함하는 구현 commit이 exact 준비 revision이다. 기존 `publishIancarPhotoReferences`/`runIancarPhotoPublication`은 존재하지만 사람 확인 입력을 지원하지 않았다는 점을 보완한다. 새 Canonical Product 필드·Firebase app·setter/store·source persistence 경로는 만들지 않았다.
+- 변경: 순수 검수 patch planner와 명시 `verificationOnly` 입력으로 기존 `photo_original_refs` 및 `iancar_one_photo_ids`만 등록 계획에 포함한다(provider RP031 보존). 실제 사람 확인자/현행 방법/UTC 시각·ONE API version·exact 차량 binding·전체 source/serving 사진 순서·사진ID digest·실제 원본 SHA256/MIME를 결속한다. 기존 digest/updateTime CAS/typed 원본 백업/atomic patch/되읽기/동일 patch 복구 틀을 재사용하고 absent/null/빈 배열을 구분한다. 수집기 기본 호출은 확인 기록을 생성하지 않는다. 원래 preview 관측·사람 확인 시각과 적용 직전 신선한 동일 집합 관측은 분리하며 실제 확인 시각을 수정해 freshness를 연장하지 않는다.
+- reader 범위/검증: 새 `sourceKind=IANCAR_ONE` 기록에만 binding·전체 집합/순서·원본 hash/MIME 대조를 추가했다. 기존 Drive/일반 소비자/인증·공통 확인 gate는 보존한다. 최초 원본 검사 → reader 내부 fresh 집합 재확인 → 성공 감사 후 전송 직전 fresh 집합·원본 hash 재확인이다. synthetic source call 순서는 index `[0, undefined, 0]`: 이미지 한 건당 detail3/bytes2, manifest는 detail3이며 실 latency는 아직 미관측이다. 전체집합 승인만 지원하고 부분 승인·0장 가짜 기록은 허용하지 않는다.
+- 실제 실패 조건: 00가 전달한 2026-10-11 20:22 KST B3Q 기존 중앙 SDK/ADC 단일 owner의 상품1건/fieldmask9 조회 영수증에서 문서 존재·RP031·listable·상태·ONE binding은 통과했고 `photo_original_refs`는 ABSENT, `CONTENT_VERIFICATION`은 실패했다. 이는 제한된 UI 미표시 추정과 다른 실제 필드 조회 근거이며 Data01 직접 조회가 아니다. 해당 단건의 검수 기록 누락이 확정됐지만 ONE 사진0장이라는 뜻은 아니다. root 중복 predicate 조회는 중단됐고 동일 owner가 원본 preview 준비를 이어간다.
+- 준비 증거/남음: 관련 테스트56 PASS, build/architecture/data-access boundary PASS, standards exit0/PARTIAL. 기존 consumer gateway110 PASS; 전체 로컬 회귀는 당시2246 PASS/16 SKIP/2 FAIL(local bash jq 미설치 및 기존 entrypoint5초 timeout), entrypoint 단건20초 예산 재검사는 PASS였다. CI의 최종 exact-head 결과는 PR 영수증으로 결속한다. 다른 상품의 원천 predicate/ONE 원본 preview·사람 확인·선택된 등록 plan/정상 writer 실행권한·Windows/private backup 권한·persistence·실앨범/latency·ERP5 cutover는 아직 미검증이다. 이번 준비의 source GET/등록/생산 쓰기/배포0이며 실제 확인값은 synthetic 테스트 외 생성하지 않았다.
+- next_start_here: 12 단건 predicate와 10 단일 ONE 원본 preview를 기존 정상 owner 환경에서 확보한다. 실제 검수 범위와 등록/복구 plan을 완성해 사람의 최종 확인을 받은 뒤 지정 단일 writer만 적용·새 되읽기를 수행하고 root가 실앨범·채널·60초 및 cutover 증거를 결속한다. [Issue24 기존 최종 인계](https://github.com/freepass-creator/freepass-data/issues/24#issuecomment-6107735471)는 과거 packet 상태이며 이번 준비를 실제 운영 완료로 소급하지 않는다.
+
+
 ### 2026-10-11 PR437 main 통합 / 공개 부분 호환과 사전 승인 gate
 
 - 대상: 기존 PR437 head `f1d4f892d5418fd679b6276117496676fb8fdb7f` + 확인한 main `f5e931889749ec869ae4b996725cc22aa8bf5784`; 격리 작업공간 `C:/Users/dudgu/.codex/worktrees/pr437-integration/freepass-data`. 최종 merge commit은 이 기록을 포함하는 Git commit으로 식별한다. 공유 checkout의 다른 작업 NEXT 변경은 보존했다.

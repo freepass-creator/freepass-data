@@ -14,7 +14,148 @@ vi.mock('firebase-admin/firestore', async importOriginal => ({ ...(await importO
 vi.mock('../src/infra/firebase-target.js', () => ({ getTargetFirebaseApp: mocks.getApp, CENTRAL_FIREBASE_PROJECT_ID: 'freepasserp5' }));
 vi.mock('node:fs/promises', () => ({ mkdir: mocks.mkdir, writeFile: mocks.writeFile, readFile: mocks.readFile }));
 vi.mock('firebase-admin/storage', () => ({ getStorage: () => ({ bucket: () => ({ file: () => ({ save: mocks.save, download: mocks.download }) }) }) }));
-import { withdrawIancarPublication, publishIancarPhotoReferences, publishIancarPhaseOne, restoreIancarPhaseOne, encodeIancarBackupValue } from '../src/infra/iancar-publication-withdrawal-firestore.js';
+import { withdrawIancarPublication, publishIancarPhotoReferences, publishIancarPhaseOne, restoreIancarPhaseOne, encodeIancarBackupValue, planIancarPhotoReviewPatch, type IancarOnePhotoReview } from '../src/infra/iancar-publication-withdrawal-firestore.js';
+import { orderedJsonDigest } from '../src/shared/stable-digest.js';
+import { createHash } from 'node:crypto';
+import { createVehiclePhotoReader } from '../src/domain/consumer-output-contract.js';
+
+function reviewedAlbum() {
+  const observedAt = new Date(Date.now() - 1000).toISOString();
+  const original = { provider_company_code: 'RP031', listable: true, status_kind: '가용',
+    iancar_one_vehicle_id: 'synthetic-one', car_number: 'synthetic-plate', image_url: 'preserved', price: 123 };
+  const row = { productId: 'synthetic-product', vehicleId: 'synthetic-one', plate: 'synthetic-plate', count: 2, observedAt };
+  const binding = orderedJsonDigest(['RP031', row.productId, row.vehicleId, row.plate]);
+  const upstreamPhotoIds = ['synthetic-a', 'synthetic-b'];
+  const servingPhotoIds = [...upstreamPhotoIds].reverse();
+  const set = orderedJsonDigest(['ONE_PHOTO_SET/1', binding, upstreamPhotoIds, servingPhotoIds]);
+  const review: IancarOnePhotoReview = { upstreamPhotoIds, servingPhotoIds, refs: servingPhotoIds.map((id, index) => ({
+    sourceKind: 'IANCAR_ONE', sourceApiVersion: 'iancar-one-api/1', sourceBindingDigest: binding,
+    photoSetDigest: set, sourcePhotoIdDigest: orderedJsonDigest(id), sourceOrdinal: upstreamPhotoIds.indexOf(id), servingIndex: index,
+    mediaType: 'image/jpeg', photoSha256: 'a'.repeat(64), sourceObservedAt: observedAt,
+    vehiclePhotoVerifiedBy: 'synthetic-reviewer', vehiclePhotoVerificationMethod: 'ONE 차량사진 전용 확인; 범위=synthetic album; 방법=synthetic manual fixture; 근거=synthetic private fixture',
+    vehiclePhotoVerifiedAt: observedAt,
+  })) };
+  return { original, row, review };
+}
+
+it('review plan binds the exact ordered album and changes approval fields only', () => {
+  const { original, row, review } = reviewedAlbum();
+  const patch = planIancarPhotoReviewPatch(original, row, review);
+  expect(Object.keys(patch).sort()).toEqual(['iancar_one_photo_ids', 'photo_original_refs', 'provider_company_code']);
+  expect(patch.iancar_one_photo_ids).toEqual(review.servingPhotoIds);
+  expect(original.image_url).toBe('preserved');
+  (patch.photo_original_refs as IancarOnePhotoReview['refs'])[0]!.vehiclePhotoVerifiedBy = 'changed';
+  expect(review.refs[0]!.vehiclePhotoVerifiedBy).toBe('synthetic-reviewer');
+});
+
+it.each(['unreviewed', 'binding', 'set', 'order', 'photo', 'bytes', 'time', 'method', 'drive-field'])('review plan rejects %s without fabricating approval', condition => {
+  const { original, row, review } = reviewedAlbum();
+  const ref = review.refs[0]!;
+  if (condition === 'unreviewed') ref.vehiclePhotoVerifiedBy = '';
+  if (condition === 'binding') ref.sourceBindingDigest = 'b'.repeat(64);
+  if (condition === 'set') review.upstreamPhotoIds.reverse();
+  if (condition === 'order') ref.servingIndex = 1;
+  if (condition === 'photo') review.servingPhotoIds[0] = 'unreviewed-id';
+  if (condition === 'bytes') ref.photoSha256 = '';
+  if (condition === 'time') ref.vehiclePhotoVerifiedAt = '2026-02-30T00:00:00Z';
+  if (condition === 'method') ref.vehiclePhotoVerificationMethod = 'supplier trusted';
+  if (condition === 'drive-field') Object.assign(ref, { driveFileId: 'fabricated' });
+  expect(() => planIancarPhotoReviewPatch(original, row, review)).toThrow('IANCAR_PHOTO_REVIEW_INVALID');
+});
+
+it('verification-only publication remains dry-run until exact digest and preserves existing photo/business fields', async () => {
+  const { original, row, review } = reviewedAlbum();
+  const snapshot = { ref: { path: 'products/synthetic-product' }, updateTime: { toMillis: () => 1, isEqual: () => true }, data: () => original };
+  mocks.getAll.mockResolvedValue([snapshot]);
+  const input = { records: [{ ...row, review }], verificationOnly: true, apply: false };
+  const plan = await publishIancarPhotoReferences(input);
+  expect(mocks.update).not.toHaveBeenCalled();
+  await expect(publishIancarPhotoReferences({ ...input, apply: true, expectedPlanDigest: 'wrong' })).rejects.toThrow('PLAN_CHANGED');
+  expect(mocks.writeFile).not.toHaveBeenCalled();
+  const patch = planIancarPhotoReviewPatch(original, row, review);
+  mocks.getAll.mockReset().mockResolvedValueOnce([snapshot]).mockResolvedValueOnce([{ ...snapshot, data: () => ({ ...original, ...patch }) }]);
+  mocks.transaction.mockImplementation(async callback => callback({ getAll: async () => [snapshot], update: mocks.update }));
+  await expect(publishIancarPhotoReferences({ ...input, apply: true, expectedPlanDigest: plan.planDigest })).resolves.toMatchObject({ writeExecuted: true });
+  expect(Object.keys(mocks.update.mock.calls[0]![1]).sort()).toEqual(['iancar_one_photo_ids', 'photo_original_refs', 'provider_company_code']);
+  expect(JSON.parse(mocks.writeFile.mock.calls[0]![1]).documents[0].exists).toBe(true);
+});
+
+it.each(['absent', 'null', 'empty'])('review rollback restores %s approval representation and preserves unrelated changes', async state => {
+  const { original, row, review } = reviewedAlbum();
+  const before: Record<string, unknown> = { ...original };
+  if (state !== 'absent') before.photo_original_refs = state === 'null' ? null : [];
+  const patch = planIancarPhotoReviewPatch(before, row, review);
+  const backup = { schema: 'iancar-photo-typed-backup/1', projectId: 'freepasserp5', sourceDigest: 'synthetic-digest',
+    documents: [{ path: 'products/synthetic-product', exists: true, data: encodeIancarBackupValue(before), patch: encodeIancarBackupValue(patch) }] };
+  mocks.readFile.mockResolvedValue(JSON.stringify(backup));
+  const current = { ...before, ...patch, price: 456 };
+  mocks.transaction.mockImplementation(async callback => callback({
+    getAll: async () => [{ data: () => current }], update: mocks.update,
+  }));
+  mocks.getAll.mockResolvedValue([{ data: () => ({ ...before, price: 456 }) }]);
+  await expect(restoreIancarPhaseOne({ backupPath: 'synthetic-private-backup', apply: true, expectedSourceDigest: 'synthetic-digest' }))
+    .resolves.toMatchObject({ status: 'PHOTO_RESTORE_READBACK_VERIFIED' });
+  const restoredPatch = mocks.update.mock.calls[0]![1];
+  expect(restoredPatch).not.toHaveProperty('price');
+  if (state === 'absent') expect(restoredPatch.photo_original_refs).toBeDefined(); // explicit deletion sentinel
+  else expect(restoredPatch.photo_original_refs).toEqual(state === 'null' ? null : []);
+});
+
+it('review rollback refuses a later owner change to approval', async () => {
+  const { original, row, review } = reviewedAlbum();
+  const patch = planIancarPhotoReviewPatch(original, row, review);
+  const backup = { schema: 'iancar-photo-typed-backup/1', projectId: 'freepasserp5', sourceDigest: 'synthetic-digest',
+    documents: [{ path: 'products/synthetic-product', exists: true, data: encodeIancarBackupValue(original), patch: encodeIancarBackupValue(patch) }] };
+  mocks.readFile.mockResolvedValue(JSON.stringify(backup));
+  mocks.transaction.mockImplementation(async callback => callback({ getAll: async () => [{ data: () => ({
+    ...original, ...patch, photo_original_refs: [],
+  }) }], update: mocks.update }));
+  await expect(restoreIancarPhaseOne({ backupPath: 'synthetic-private-backup', apply: true, expectedSourceDigest: 'synthetic-digest' }))
+    .rejects.toThrow('REVISION_CHANGED');
+  expect(mocks.update).not.toHaveBeenCalled();
+});
+
+it('bound ONE reviews verify raw bytes and the ordered set again before transmission', async () => {
+  const { original, row, review } = reviewedAlbum();
+  const bytes = Buffer.from([255, 216, 255, 1]);
+  review.refs.forEach(ref => { ref.photoSha256 = createHash('sha256').update(bytes).digest('hex'); });
+  const product: Record<string, unknown> = { ...original, ...planIancarPhotoReviewPatch(original, row, review) };
+  const source = { eligible: () => true, connection: () => 'synthetic-source', read: vi.fn(async (_product, index, fresh) => {
+    expect(fresh).toBe(true);
+    return { count: 2, photoIds: review.servingPhotoIds, upstreamPhotoIds: review.upstreamPhotoIds,
+      bytes: index === undefined ? null : bytes, contentType: index === undefined ? 'application/json' : 'image/jpeg' };
+  }) };
+  const reader = createVehiclePhotoReader(async () => product, source);
+  const result = await reader('erp5-public-media', row.productId, 0);
+  expect(result.bytes).toEqual(bytes);
+  expect(await result.revalidate()).toBe(true);
+  expect(source.read.mock.calls.map(call => call[1])).toEqual([0, undefined, 0]);
+  source.read.mockResolvedValueOnce({ count: 2, photoIds: [...review.servingPhotoIds].reverse(),
+    upstreamPhotoIds: review.upstreamPhotoIds, bytes: null, contentType: 'application/json' });
+  expect(await result.revalidate()).toBe(false);
+});
+
+it('fresh application observation does not rewrite the actual human review time', () => {
+  const { original, row, review } = reviewedAlbum();
+  const earlier = new Date(Date.now() - 1_200_000).toISOString();
+  review.refs.forEach(ref => { ref.sourceObservedAt = earlier; ref.vehiclePhotoVerifiedAt = earlier; });
+  expect(planIancarPhotoReviewPatch(original, row, review).photo_original_refs).toEqual(review.refs);
+  expect(review.refs[0]!.vehiclePhotoVerifiedAt).toBe(earlier);
+  expect(() => planIancarPhotoReviewPatch(original, { ...row, observedAt: earlier }, review)).toThrow('REVIEW_INVALID');
+});
+
+it.each(['same-id-new-bytes', 'changed-order', 'missing-binding'])('bound ONE review rejects %s', async condition => {
+  const { original, row, review } = reviewedAlbum();
+  const bytes = Buffer.from([255, 216, 255, 1]);
+  review.refs.forEach(ref => { ref.photoSha256 = createHash('sha256').update(bytes).digest('hex'); });
+  const product: Record<string, unknown> = { ...original, ...planIancarPhotoReviewPatch(original, row, review) };
+  const metadata = { count: 2, photoIds: review.servingPhotoIds, upstreamPhotoIds: review.upstreamPhotoIds };
+  if (condition === 'changed-order') metadata.photoIds = [...metadata.photoIds].reverse();
+  if (condition === 'missing-binding') (product.photo_original_refs as IancarOnePhotoReview['refs'])[0]!.sourceBindingDigest = '';
+  const reader = createVehiclePhotoReader(async () => product, { eligible: () => true, connection: () => 'synthetic-source',
+    read: async () => ({ ...metadata, bytes: condition === 'same-id-new-bytes' ? Buffer.from([255, 216, 255, 2]) : bytes, contentType: 'image/jpeg' }) });
+  await expect(reader('erp5-public-media', row.productId, 0)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+});
 import { isPublicIancarPhotoProduct, FirestoreCatalogCompatibilityReader } from '../src/infra/erp5-compat-catalog-reader.js';
 
 it('compatibility read derives unresolved deposits and performs no transaction or update', async () => {
