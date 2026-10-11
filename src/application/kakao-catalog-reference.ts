@@ -14,6 +14,27 @@ import { stableDigest } from '../shared/stable-digest.js';
 
 export const referenceResponseDigest = (data: unknown, sourceObservations?: unknown) => hash(JSON.stringify(sourceObservations ? { data, sourceObservations } : data));
 
+/** Existing consumer application composes stored facts and sealed source evidence without a relay API. */
+export async function readStoredConsumerProducts<T, C>(reader: {
+  readStoredProducts(consumerId: string, search: Record<string, string>): Promise<T>;
+  sourceStore: Pick<SourceIngestionStore, 'getSourceHead' | 'getRun' | 'listRaw' | 'listCandidates'>;
+  readCanonicalProducts?: (search: Record<string, string>) => Promise<C>;
+}, consumerId: string, search: Record<string, string> = {}) {
+  const saved = await reader.readStoredProducts(consumerId, search);
+  const canonicalProducts = reader.readCanonicalProducts ? await reader.readCanonicalProducts(search) : null;
+  const source = await readCurrentReferenceObservations(reader.sourceStore, { storedFeesOnly: true });
+  const key = (v: unknown) => typeof v === 'string' ? v.normalize('NFKC').replace(/\s+/g, '').toLowerCase() : '';
+  const sourceRows = source.observations.filter(row => (!search.productId || row.productId === search.productId.trim())
+    && (!search.supplierId || row.normalized.supplierId === search.supplierId.trim())
+    && (!search.supplierName || key(row.original.supplierName) === key(search.supplierName))
+    && (!search.plate || plateIdentityKey(row.normalized.plateNumber) === plateIdentityKey(search.plate))
+    && (!search.vehicleName || key([row.normalized.maker, row.normalized.model, row.normalized.subModel, row.normalized.trim].filter(Boolean).join(' ')).includes(key(search.vehicleName))));
+  return { ...saved, canonicalProducts, canonicalEvidence: { state: canonicalProducts ? 'STORED_CANONICAL' : 'UNKNOWN',
+    reasonCode: canonicalProducts ? null : 'CANONICAL_READER_NOT_CONNECTED', snapshotConsistency: 'SEPARATE_CANONICAL_READ' },
+    sourceRows, sourceEvidence: { state: source.state, reasonCode: source.reasonCode,
+    snapshot: source.sourceSnapshot, snapshotConsistency: 'SEPARATELY_SEALED_NOT_PRODUCT_TRANSACTION' } };
+}
+
 /** Opt-in authenticated ERP input adapter. A source row is a product, not a publicly sellable asset. */
 export function referenceObservationToCompatibilityProduct(row: ReturnType<typeof projectReferenceObservation>) {
   const n = row.normalized, o = row.original;
@@ -38,7 +59,7 @@ export function referenceObservationToCompatibilityProduct(row: ReturnType<typeo
 }
 
 /** Existing source owner and sealed input binding; never scan arbitrary RAW collections. */
-export async function readCurrentReferenceObservations(store: Pick<SourceIngestionStore, 'getSourceHead' | 'getRun' | 'listRaw' | 'listCandidates'>) {
+export async function readCurrentReferenceObservations(store: Pick<SourceIngestionStore, 'getSourceHead' | 'getRun' | 'listRaw' | 'listCandidates'>, options?: { storedFeesOnly: boolean }) {
   const sourceId = sheetSpec.supplierManagement.sourceBinding.sourceId;
   const head = await store.getSourceHead(sourceId);
   if (!head) return { state: 'HOLD' as const, reasonCode: 'SOURCE_HEAD_MISSING', observations: [], sourceSnapshot: null };
@@ -54,7 +75,7 @@ export async function readCurrentReferenceObservations(store: Pick<SourceIngesti
   }
   const observations = raw.map(r => {
     const matches = candidates.filter(c => c.sourceRecordId === r.sourceRecordId && c.sourceFingerprint === r.sourceFingerprint);
-    return projectReferenceObservation(r, matches.length === 1 ? matches[0] : undefined);
+    return projectReferenceObservation(r, matches.length === 1 ? matches[0] : undefined, options);
   });
   if (new Set(observations.map(o => o.productId)).size !== observations.length) throw new Error('REFERENCE_SOURCE_ROW_ID_AMBIGUOUS');
   const after = await store.getSourceHead(sourceId);
@@ -72,7 +93,7 @@ export async function readCurrentReferenceObservations(store: Pick<SourceIngesti
 }
 
 /** Immutable observations are not permanent products or counted physical vehicles. No free text/PII payload is returned. */
-export function projectReferenceObservation(raw: RawRecord, record?: NormalizedCandidateRecord) {
+export function projectReferenceObservation(raw: RawRecord, record?: NormalizedCandidateRecord, options?: { storedFeesOnly: boolean }) {
   if (record && (record.runId !== raw.runId || record.sourceId !== raw.sourceId
     || record.sourceRecordId !== raw.sourceRecordId || record.sourceFingerprint !== raw.sourceFingerprint)) {
     throw new Error('REFERENCE_SOURCE_CANDIDATE_MISMATCH');
@@ -134,8 +155,9 @@ export function projectReferenceObservation(raw: RawRecord, record?: NormalizedC
         const input: CommissionInput = { supplierId: supplierId ?? '', productType, termMonths: t.termMonths,
           monthlyRent: rent ?? 0, ...(fuel ? { fuel } : {}),
           billin36MonthlyRent: bases36.length === 1 ? amount(bases36[0]!.monthlyRent.amount) ?? undefined : undefined };
-        const supplierBillingFee = reason ? unknownCommission(reason) : resolveSupplierBillingFee(input);
-        const channelPayoutFee = reason ? unknownCommission(reason) : resolveSalesCommission(input);
+        const storedReason = options?.storedFeesOnly ? 'SOURCE_ROW_STORED_FEE_NOT_LINKED' : reason;
+        const supplierBillingFee = storedReason ? unknownCommission(storedReason) : resolveSupplierBillingFee(input);
+        const channelPayoutFee = storedReason ? unknownCommission(storedReason) : resolveSalesCommission(input);
         // Supplier identity comes from capture metadata, not the visible company-name cell.
         const priceSourceRefs = [sourceRef('payload.supplierCode'), sourceRef('상품구분'), sourceRef(`${t.termMonths}개월`),
           ...(fuel ? [sourceRef('연료')] : []), ...(billinBasisUsed && bases36.length === 1 ? [sourceRef('36개월')] : [])];

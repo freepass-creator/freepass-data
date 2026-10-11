@@ -6,11 +6,73 @@ import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
 import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 import { logRouteError } from '../shared/route-error-log.js';
+import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
+import { hasVehiclePhotoVerification } from '../domain/consumer-output-contract.js';
 
 import { isPublicIancarPhotoProduct, createVehiclePhotoReader, validateVehiclePhotoMedia, type ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
 export { isPublicIancarPhotoProduct, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../domain/consumer-output-contract.js';
 export type { ApprovedPhotoReader } from '../domain/consumer-output-contract.js';
 type Rec = Record<string, unknown>;
+
+/** Internal stored facts only: no fee engine, source fetch, public projection or identity inference. */
+export function selectStoredProducts(products: Record<string, Rec>, policies: Record<string, Rec>,
+  partners: Record<string, Rec>, search: Record<string, string> = {}) {
+  const allowed = ['productId', 'supplierId', 'supplierName', 'vehicleName', 'plate'];
+  for (const [key, value] of Object.entries(search))
+    if (!allowed.includes(key) || typeof value !== 'string' || !value.trim()) throw new Error('INVALID_PRODUCT_SEARCH');
+  if (search.plate && !isAssignedPlate(search.plate)) throw new Error('PLATE_NOT_ASSIGNED');
+  const text = (v: unknown) => typeof v === 'string' ? v.trim() : '';
+  const nameKey = (v: unknown) => text(v).normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  return Object.entries(products).flatMap(([productId, product]) => {
+    const supplierId = text(product.provider_company_code) || null;
+    // Existing partner records are name authority; do not promote a display-code fallback.
+    const suppliers = Object.entries(partners).filter(([id, p]) => supplierId &&
+      [id, p.partner_code, p.company_code, p.provider_company_code, p.id].includes(supplierId));
+    const supplierName = suppliers.length === 1 ? text(suppliers[0]![1].partner_name) || text(suppliers[0]![1].company_name) || text(suppliers[0]![1].name) || null : null;
+    if (search.productId && search.productId.trim() !== productId) return [];
+    if (search.supplierId && search.supplierId.trim() !== supplierId) return [];
+    if (search.supplierName && (!supplierName || nameKey(search.supplierName) !== nameKey(supplierName))) return [];
+    if (search.plate && plateIdentityKey(search.plate) !== plateIdentityKey(product.car_number)) return [];
+    if (search.vehicleName && !nameKey([product.maker, product.model, product.sub_model, product.trim_name].filter(Boolean).join(' ')).includes(nameKey(search.vehicleName))) return [];
+    const policyCode = text(product.policy_code);
+    const sameCode = Object.entries(policies).filter(([id, p]) => policyCode && (id === policyCode || p.policy_code === policyCode));
+    const company = (p: Rec) => text(p.companyId) || text(p.provider_company_code);
+    const exactPolicies = supplierId ? sameCode.filter(([, p]) => company(p) === supplierId) : [];
+    const linkedPolicies = exactPolicies.length ? exactPolicies : sameCode.filter(([, p]) => !company(p));
+    const fields = ['maker', 'model', 'sub_model', 'trim_name', 'fuel_type', 'engine_cc', 'drive_type', 'seats',
+      'car_number', 'vehicle_uid', 'vehicle_status', 'status', 'listable', 'product_type', 'price', 'deposit_note',
+      'options', 'ext_color', 'int_color', 'year', 'mileage', 'first_registration_date', 'annual_mileage',
+      'vehicle_class', 'engine_type', 'transmission', 'usage', 'accident_history', 'battery_capacity'];
+    return [{ productId, representationKind: 'LEGACY_PRODUCT' as const, supplierId, supplierName,
+      supplierNameEvidence: { state: supplierName ? 'KNOWN' : 'UNKNOWN', reasonCode: supplierName ? null : 'PARTNER_NAME_NOT_UNIQUE_OR_MISSING' },
+      facts: Object.fromEntries(fields.map(k => [k, product[k] ?? null])),
+      factStates: Object.fromEntries(fields.map(k => [k, { state: product[k] == null || product[k] === ''
+        || (Array.isArray(product[k]) && product[k].length === 0) ? 'UNKNOWN' : 'STORED',
+        reasonCode: product[k] == null || product[k] === '' || (Array.isArray(product[k]) && product[k].length === 0)
+          ? 'STORED_FIELD_NOT_OBSERVED' : null }])),
+      plateEvidence: { state: isAssignedPlate(product.car_number) ? 'KNOWN' : 'UNKNOWN',
+        reasonCode: isAssignedPlate(product.car_number) ? null : 'ASSIGNED_PLATE_NOT_OBSERVED' },
+      priceEvidence: { state: product.price && typeof product.price === 'object' && !Array.isArray(product.price)
+        && Object.keys(product.price).length ? 'STORED' : 'UNKNOWN', reasonCode: product.price && typeof product.price === 'object'
+        && !Array.isArray(product.price) && Object.keys(product.price).length ? null : 'STORED_PRICE_TERMS_NOT_OBSERVED' },
+      policy: linkedPolicies.length === 1 ? { id: linkedPolicies[0]![0], data: linkedPolicies[0]![1] } : null,
+      policyEvidence: { state: linkedPolicies.length === 1 ? 'KNOWN' : 'UNKNOWN', reasonCode: linkedPolicies.length === 1 ? null : 'POLICY_NOT_UNIQUE_OR_MISSING' },
+      photos: { state: hasVehiclePhotoVerification(product) ? 'STORED_REVIEWED_REFS' : 'UNKNOWN',
+        count: hasVehiclePhotoVerification(product) ? (product.photo_original_refs as unknown[]).length : null,
+        references: hasVehiclePhotoVerification(product) ? (product.photo_original_refs as Rec[]).map((ref, index) => ({
+          productId, index, readerMethod: 'readVehiclePhoto',
+          servingIndex: Number.isInteger(ref.servingIndex) ? ref.servingIndex : null,
+          representative: typeof ref.representative === 'boolean' ? ref.representative : null,
+          mediaType: typeof ref.mediaType === 'string' ? ref.mediaType : null,
+        })) : null,
+        suppliedFields: Object.fromEntries(['photo_link', 'tica_link', 'image_urls', 'image_url'].map(k => [k, {
+          state: product[k] == null || product[k] === '' || (Array.isArray(product[k]) && !product[k].length) ? 'UNKNOWN' : 'STORED_UNVERIFIED',
+          reasonCode: 'USE_EXISTING_PHOTO_PROJECTION_FOR_ACCESS',
+        }])),
+        reasonCode: hasVehiclePhotoVerification(product) ? null : 'PHOTO_REVIEW_REFS_UNVERIFIED', bytesVerified: false },
+    }];
+  });
+}
 
 /** Explicit opt-in only. Compute uses the runtime service account, never local user ADC/gws.
  * No Drive listing, export, sharing, folder discovery, retries or runtime auto-registration.
@@ -198,6 +260,42 @@ export class FirestoreCatalogCompatibilityReader {
     }, approvedPhotoReader);
   }
   readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
+
+  /** Shared internal consumer entrypoint. Current-source rows stay separate from saved products. */
+  async readStoredProducts(consumerId: string, search: Record<string, string> = {}) {
+    if (!['kakao-ops', 'freepass-admin-catalog'].includes(consumerId) && !/^internal-ai-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId))
+      throw new Error('STORED_INTERNAL_CONSUMER_NOT_ALLOWED');
+    selectStoredProducts({}, {}, {}, search); // Validate before network reads.
+    const C = FIRESTORE_COLLECTIONS;
+    const saved = await this.db.runTransaction(async tx => {
+      const [products, policies, partners, ledger, offers] = await Promise.all([
+        tx.get(this.db.collection(C.legacyAdminWorkflow.products)),
+        tx.get(this.db.collection(C.legacyAdminWorkflow.policies)),
+        tx.get(this.db.collection(C.legacyAdminWorkflow.partners)),
+        tx.get(this.db.collection(C.periodFees.ledger)),
+        tx.get(this.db.collection(C.catalog.offers)),
+      ]);
+      const rows = selectStoredProducts(asMap(products), asMap(policies), asMap(partners), search);
+      return { rows: rows.map(row => ({ ...row,
+        // Only exact saved product IDs may connect economics; never join by plate/name/code pattern.
+        storedOffers: offers.docs.filter(d => d.get('productId') === row.productId).map(d => jsonSafe(d.data())),
+        offerEvidence: { state: offers.docs.some(d => d.get('productId') === row.productId) ? 'STORED' : 'UNKNOWN',
+          reasonCode: offers.docs.some(d => d.get('productId') === row.productId) ? null : 'CATALOG_OFFER_EXACT_PRODUCT_LINK_NOT_OBSERVED' },
+        // No deployed ACTIVE-head contract has been verified. Preserve historical stored rows without selecting today's fees.
+        storedLedgerRows: ledger.docs.filter(d => d.get('productId') === row.productId).map(d => jsonSafe(d.data())),
+        currentFeeEvidence: { state: 'UNKNOWN', reasonCode: ledger.size ? 'PERIOD_FEE_ACTIVE_HEAD_UNVERIFIED' : 'PERIOD_FEE_LEDGER_NOT_OBSERVED' },
+      })), readAt: products.readTime.toDate().toISOString(),
+        counts: { products: products.size, policies: policies.size, partners: partners.size, ledgerRows: ledger.size, offers: offers.size } };
+    }, { readOnly: true });
+    return { authority: 'STORED_FACTS' as const, publicationDecision: 'HOLD' as const, consumerId,
+      products: saved.rows,
+      diagnostics: { queryOutcome: saved.rows.length ? 'MATCHES' : 'NOT_OBSERVED',
+        emptyDoesNotProveAbsence: true, representation: 'LEGACY_PRODUCT',
+        unresolvedSupplierNames: saved.rows.filter(row => row.supplierName === null).length,
+        currentLedgerVerified: false },
+      meta: { readAt: saved.readAt, counts: saved.counts, snapshotConsistency: 'PRODUCT_POLICY_PARTNER_LEDGER_TRANSACTION' },
+    };
+  }
 
   async read(consumerId: string): Promise<CatalogCompatibilitySnapshot> {
     if (!allowedConsumer(consumerId)) throw new Error('CATALOG_COMPAT_CONSUMER_NOT_ALLOWED');

@@ -1,34 +1,34 @@
-# 읽기 계약 한 벌 — «읽는 규칙은 하나, 가져다 쓰는 건 각자» (설계 한 장, 2026-10-11)
+# 상품 중심 Firestore 직접 읽기 — 기존 구현 확장
 
-상태: DESIGNED (코드 없음). 오더: 지휘통제실 대표 10-11. API 중계(중앙 상품 조회)는 쓰지 않는다 — 각 소비처가 프리패스 데이터(Firestore)를 직접 읽되, **읽는 규칙·허용 목록·해석은 이 저장소의 계약 모듈 하나**를 가져다 쓴다. 소비처 reader 를 각자 새로 만들지 않는다.
+상태: CODED / TESTED / INTERNAL_DIRECT_READ_VERIFIED. 운영 배포·각 소비처 화면 전환은 미검증이다.
+목적: 상품 전체 정보를 온라인에서 직접 읽고, 공급사/차명/차량번호를 검색조건으로 사용한다. 사용자 최신 지시가 이전 설계의 신규 계약·reader 제안보다 우선한다.
 
-## 1. 계약(무엇을 어떻게 읽나) — `contracts/firestore-read-contract.v1.json` + `src/domain/firestore-read-contract.ts`
-- **읽기 허용 컬렉션(코드 상수, 이 밖은 모듈이 거부)**: `products`(차 원문·정리값·가격), `period_fee_ledger`(기간별 청구·지급 박제, 최신 활성 스냅샷만), `product_change_history`(상태·가격 변경 이력), `policy`, `catalog_offers`(내부 경제 항목, 수수료 권한 소비처만). 금지(어떤 소비처도 읽지 않음): `settlement_rows`, 고객·계약·사용자·파트너 개인 모음.
-- **필드 이름·단위**: 금액은 원(정수, 공급가 부가세 제외 여부는 `basis` 필드), 기간 키는 `parseErp5CompatibilityPriceKey` 하나로 해석(`12`·`12_2만`·`source:N` 등 → `{months, mileage, settlement}`), 날짜는 KST ISO. 이름은 기존 계약(`INTERNAL-FEE-LOOKUP-CONTRACT.md`·`ADMIN-CATALOG-CONSUMER-CONTRACT.md`)을 그대로 쓰고 새 이름을 만들지 않는다.
-- **미확정·상태값 해석**: 모든 값은 `{state, amount|value, reasonCode}`. 상태 = KNOWN / ZERO(검증된 무보증만) / UNKNOWN(+사유) / NOT_APPLICABLE / CALCULATED_APPROX(근사, 따로 집계). **숫자 0 과 null 을 UNKNOWN 으로 읽는 규칙은 `resolveDepositWithRuleNote`·`pickLedgerRowForContract` 하나**. 소비처가 자체 해석 금지.
-- **노출 범위**: 수수료(`supplierBillingFee`·`channelPayoutFee`·`period_fee_ledger` 수수료 칸)는 카톡·어드민 신원만. ERP5·ERP4·화이트라벨·공개 서비스는 차·가격·보증금까지(수수료·마진·VIN·원문 전체 제외). 소비처별 허용 필드는 계약 JSON 의 `consumers.<id>.fields` 한 곳.
+## 실행 진입점과 권한
 
-## 2. 가져다 쓰는 읽기 모듈 — 새 reader 만들지 않음
-- 기존 자산 재사용: `erp5-compat-catalog-reader.ts`(products·policy 투영, `readCollections` 옵션), `period-fee-ledger-firestore-reader.ts`, `contract-fee-link.ts`, `public-product-feed.ts`, 차번호 조회 `query-canonical-by-plate`(주의: 지금은 CatalogStore 기반 운영자 로컬 조회라 소비처가 쓰는 Firestore 직접 조회는 아니다 — «차량번호 하나를 읽는 진입점»을 모듈에 하나 추가해 둘 다 같은 투영을 쓰게 한다).
-- 모듈 형태: `src/consumer-read/index.ts` 한 곳이 `createConsumerReader({consumerId, firestore})` 를 내보낸다. 안에서 ① 소비처 신원의 허용 컬렉션 검사 ② 위 기존 reader 호출 ③ 계약 필드만 걸러 반환. 소비처(카톡·어드민·ERP5·AI-OPS 도구)는 이것만 호출하고 Firestore 를 직접 `collection()` 하지 않는다(`check-data-access-boundary` 에 소비처 쪽 검사 추가 제안).
-- 배포 방식: npm 패키지/서브모듈 대신 «계약 JSON + 얇은 모듈을 소비처 저장소가 버전 고정(커밋 SHA)으로 vendoring». 언어 다른 소비처(시트·AI-OPS 스크립트)는 계약 JSON 과 적합성 시험만 따른다.
+- 기존 `FirestoreCatalogCompatibilityReader.readStoredProducts` → 기존 application `readStoredConsumerProducts` → 기존 `query-canonical-by-plate` job을 재사용한다. 새 reader/API/요율/계약 파일/저장소 없음.
+- 실행: 기존 job에 `--firestore --direct --stored-products --search-file <private-json> --local-output <private-file>`. 검색키 productId/supplierId/supplierName/vehicleName/plate, `{}`는 저장 상품 전체다.
+- trusted server-only 구현이다. 호출 서버 자신의 승인된 읽기 credential과 중앙 `getTargetFirebaseApp`을 사용한다. consumerId 문자열 검사는 실제 IAM/인증 승인이 아니며 credential을 복사·발급하지 않는다. 공개/ERP consumerId는 이 내부 진입점에서 거부한다.
+- 상품의 원문 자유문장 전체, 고객·계약·정산사건·사용자 모음, 파트너 연락처를 반환하지 않는다. 내부 수수료를 공개 서비스에 내보내지 않는다. 원본/사람 입력/가격 변경과 쓰기는 없다.
 
-## 3. 적합성 시험 묶음(같은 차 N대 → 같은 값)
-- `tests/read-contract-conformance.test.ts` + 운영 확인 도구 `npm run audit:read-conformance`(읽기 전용): 같은 차량번호 N대(무작위 50 + 고정 20 판정 묶음)를 **각 소비처 reader 경로로** 읽어 `{차 수, 기간 행 수, 월대여료, 보증금 상태, 수수료 상태}` 가 계약 모듈 결과와 일치하는지 비교. 불일치는 소비처 이름·차·칸 단위로 보고. 소비처가 허용 밖 컬렉션을 읽으면 실패(시험은 관측된 읽기 컬렉션 목록을 단언).
-- 합격 기준: 불일치 0, 노출 금지 필드 0, 허용 밖 컬렉션 읽기 0. 결과는 점검표(`TRUST-SCORECARD`)의 «소비처 일치» 열로 노출.
+## 서로 다른 저장·관측 영역
 
-## 4. 소비처별 읽기 신원·최소 권한
-| 소비처 | 신원 | 허용 컬렉션 | 수수료 |
-|---|---|---|---|
-| 카톡(작업 세션) | 전용 서비스 계정/ADC | products·period_fee_ledger·product_change_history·policy·catalog_offers | O |
-| 어드민 | 기존 `freepass-data-admin-runtime` | 위 + 계약 수수료 링크 | O |
-| ERP5 | 전용 읽기 계정 | products·policy | X |
-| AI-OPS(도구 공방) | 사람/세션 ADC(읽기) | products·period_fee_ledger·product_change_history | 조회만(로그) |
-| 공개/ERP4·화이트라벨 | 공개 서비스 계정 | products·policy 투영 | X |
-- **한계(사실)**: Firestore IAM 은 컬렉션 단위가 없다(데이터베이스 단위까지). `roles/datastore.viewer` 는 프로젝트 전체를 읽을 수 있으므로 «허용 목록 코드(모듈이 허용 밖 컬렉션 호출을 거부) + 읽기 감사 경보»가 계약의 일부다. 소비처가 모듈을 우회해 직접 읽는 것은 IAM 으로 못 막는다 → 적합성 시험(관측 읽기 컬렉션)과 `data_access_events`·감사 로그로 사후 탐지. 인터넷에 직접 닿는 신원(공개 서비스)은 별도 읽기 전용 데이터베이스로 좁히는 안이 `IAM-명령-공개상품서비스-20261011.md` 에 있다.
-- 쓰기는 이 계약 밖: 박제(period_fee_ledger)는 프리패스 데이터의 자기 워크플로 서비스 계정만 쓰고, 소비처는 읽기 전용 역할만 받는다.
+- `products` 전체와 `policy`, 이름 권위 `partner`, 저장 `period_fee_ledger`, `catalog_offers`를 같은 read-only 트랜잭션으로 읽는다. 상품 ID로만 저장 offer/ledger를 연결한다. 기존 코드 형식이나 차번/이름으로 ID를 추정하지 않는다.
+- `canonicalProducts`는 기존 `queryFirestoreProducts` callback으로 별도 조회한다. 저장 model/asset/product/offer/policy, 기간별 저장 economics와 UNKNOWN 진단을 보존한다. canonical과 legacy를 추정 병합하지 않는다.
+- `sourceRows`는 기존 source store와 `readCurrentReferenceObservations`로 현재 봉인 원천행 전체를 읽는다. REJECTED도 숨기지 않는다. CURRENT는 canonical 최신화 증거가 아니며 원천행 ID는 영구 상품 ID가 아니다.
+- 세 영역은 각각의 authority와 관측 시각을 보존한다. source는 별도로 봉인하며 canonical도 별도 읽기다. 하나의 원자적 snapshot이나 실물 차량 합산으로 표시하지 않는다.
 
-## 5. 순서·산출물
-1) 계약 JSON + 허용 목록 상수 + 소비처별 노출표 → 2) `createConsumerReader`(기존 reader 조합, 새 reader 없음) → 3) 적합성 시험 + audit 도구 → 4) 소비처 붙이기(AI-OPS 쪽은 도구 공방) → 5) 점검표 열 추가. 각 단계 PR 분리, 서비스 계정 생성·IAM 은 대표 승인 항목(실행 금지).
-## 열린 질문(결정필요 아님, 기본안으로 진행)
-- vendoring 방식(커밋 SHA 고정) 기본. 소비처가 시트 스크립트뿐이면 계약 JSON 만 따른다.
+## 저장 사실과 결측
+
+- 기존 상품의 가격·제원·옵션·색상·연식·주행거리·최초등록일·상태를 허용 필드로 보존한다. 빈 값/미연결은 null/UNKNOWN와 이유를 표시한다. 0과 미확정을 구분한다.
+- 공급사 이름은 partner 레코드 기준이다. 이름이나 정책 연결이 복수/미확인인 경우 선택하지 않는다. 검색 빈 결과는 NOT_OBSERVED이며 존재하지 않는다는 증거가 아니다.
+- 조회 중 요율 계산 없음. 저장 ledger 이력과 현재 확정 수수료를 구분한다. 활성 ledger 기준 미검증/미저장은 UNKNOWN, source-only preview fee도 UNKNOWN이다. canonical 저장 economics는 기존 순수 mapper로 반환한다.
+- photo_original_refs의 기존 검토표식/수와 기존 readVehiclePhoto 호출용 상품·index 참조를 반환한다. 원본 주소·공급사 키·승인 ref ID를 노출하지 않는다. 사진 링크 계열은 STORED_UNVERIFIED/UNKNOWN를 구분하며 기존 사진 투영을 통해 접근한다. 저장51은 bytes/대표사진/공개화면 검증 완료가 아니다.
+
+## 2026-10-11 구현 검증과 인계
+
+- 기존 branch에 operator 조회 commit `1dac5cf` 결합(merge base `c968bbd2`). Academy READY; 기존 파일 확장만 수행.
+- 관련234시험/build/architecture/data-access-boundary PASS. standards15시험 PASS이나 기존 capability 상태는 PARTIAL이다. Claude 첫 검토 REVIEW_TIMEOUT; 좁힌 후속 검토 진행 중이며 PASS로 계산하지 않는다.
+- 23:05 KST 직접 온라인 조회: legacy products1776/policy82/partner64/catalog offers160/ledger0, canonical160상품568기간, source175행. 정확 legacy productId로 연결된 catalog offers0; 가격 미관측52, 공급사명 미확인7. 영역 차이를 누락대수로 계산하지 않는다.
+- 저장 사진51 상품을 정확 상품 검색으로 재조회해 count51/serving references51 일치. source GET/DB쓰기0. 공개화면 미실행.
+- 공급사별 분모 legacy21/canonical13/source14그룹과 비공개 증거: `C:/Users/admin/.codex/private/freepass-data-direct-read-20261011/consumer-readback-complete.json`, `stored-products-readback-complete.json`. 개인정보/차번/시트ID 공개0.
+- next_start_here: PR465 정확 head → 금액 담당의 저장값 exact join → 기존 소비처 호출 연결 → 동일 상품 실제 출력. ledger 미저장/원천과 canonical freshness/운영 IAM·배포·화면은 남음. main 반영은 지휘 책임 방이 통제한다.

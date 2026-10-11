@@ -3028,3 +3028,11 @@ This file exists so another session can continue without re-discovering or re-cr
 - 남음: 운영 sourceScope grant/token 배포, 외부 Kakao/ERP caller, DB/Sheet/IAM/Drive/배포 변경 없음. CODED/TESTED와 실제 운영 전체 원천 조회는 구분한다.
 - next_start_here: 최종 scope head의 권한 pre-read denial/default 불변/빈 조건 schema/HOLD/복수 원천/같은 term 회귀와 private 원천 대조를 확인한 뒤 코드 통합만 진행한다. 현행 RP 코드를 새 정본 identity로 고정하지 않는다.
 - 2026-10-11 기간별 청구·지급 장부 설계: `docs/PERIOD-FEE-LEDGER-DESIGN.md` 작성(코드·운영쓰기·배포 없음); 재사용 판정은 기존 `internalEconomicsTerms`·#448 가격행 투영 재사용 + 차량별 일 박제 장부 `CREATE_NEW_JUSTIFIED`; next_start_here: 10-12 읽기 전용 계획기(`plan:period-fee-ledger`, 쓰기0, UID 없음 HOLD_NO_UID, public/settlement 차단 테스트) 구현 검증 후 apply PR은 별도 승인 전까지 만들지 않는다.
+
+## 2026-10-11 PR465 상품 전체 직접 읽기 구현 후보
+
+- 목적: 상품 전체를 온라인 Firestore에서 직접 읽는 기존 내부 소비처 진입점 확장. 대상 revision: merge base c968bbd2(operator 1dac5cf 결합), 기존 PR465 branch. 원본 저장소 dirty와 다른 역할 변경 보존.
+- 변경: 기존 compatibility reader/application/job/test 확장. legacy/canonical/current-source 각 representation을 구분하고 검색·결측·저장 사진 참조·기간조건을 연결. 새 API/reader/계약/요율/DB쓰기/IAM/운영 배포 없음.
+- 검증: 관련234시험, build/arch/data boundary PASS. 실조회1776 legacy/160 canonical/568 canonical기간/175 source, photo51 exactproduct 재조회 PASS. 공급사별 분모/정본 반환 비공개 증거는 READ-CONTRACT-DESIGN 참조.
+- 남음: 저장 ledger0, legacy와 canonical exactID offer연결0, 각 소비처 실제 출력 미검증. Claude timeout은 PASS 아님. 저장값 경제조건 helper 담당 결과를 통합한 뒤 동일 head로 재검증.
+- next_start_here: docs/READ-CONTRACT-DESIGN.md → 기존 readStoredConsumerProducts/--stored-products → 지휘 exact head 통합과 consumer readback.

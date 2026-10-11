@@ -42,6 +42,7 @@ export async function queryCanonicalProducts(store: CatalogStore, search: Produc
       const policy = policies.find(x => x.id === offer?.policyId) ?? null;
       const fees = offer ? toInternalFeeLookup(offer.id, offer.priceTerms, offer.internalEconomicsTerms) : null;
       const unknownFields = ['photos']; // Catalog currently has no registered media fact. Never report zero.
+      if (asset?.sourceVehicleFacts?.fields.options?.state !== 'KNOWN') unknownFields.push('options');
       if (!model) unknownFields.push('vehicleModel');
       if (!asset) unknownFields.push('vehicleAsset');
       if (!offer) unknownFields.push('offer', 'supplier', 'priceTerms');
@@ -124,9 +125,25 @@ export async function queryFirestoreByPlate(plate: string) {
     store => queryCanonicalByPlate(store, plate));
 }
 export async function main(args = process.argv.slice(2)) {
-  const a = parseLocalArgs(args, ['--memory', '--firestore', '--direct'], ['--plate-file', '--search-file', '--local-output']);
+  const a = parseLocalArgs(args, ['--memory', '--firestore', '--direct', '--stored-products'], ['--plate-file', '--search-file', '--local-output']);
   if (a.has('--plate-file') === a.has('--search-file') || !a.has('--local-output')) throw new Error('LOCAL_INPUT_OUTPUT_REQUIRED');
   if (a.has('--direct') && (!a.has('--firestore') || a.has('--memory'))) throw new Error('DIRECT_FIRESTORE_REQUIRED');
+  if (a.has('--stored-products')) {
+    if (!a.has('--firestore') || !a.has('--direct') || a.has('--memory')) throw new Error('DIRECT_FIRESTORE_REQUIRED');
+    const search = a.has('--search-file') ? JSON.parse(await readFile(a.get('--search-file')!, 'utf8'))
+      : { plate: (await readFile(a.get('--plate-file')!, 'utf8')).trim() };
+    if (!search || typeof search !== 'object' || Array.isArray(search)) throw new Error('INVALID_PRODUCT_SEARCH');
+    const { selectStoredProducts, createFirestoreCatalogCompatibilityReader } = await import('../infra/erp5-compat-catalog-reader.js');
+    selectStoredProducts({}, {}, {}, search);
+    const { readStoredConsumerProducts } = await import('../application/kakao-catalog-reference.js');
+    const reader = createFirestoreCatalogCompatibilityReader();
+    const result = await readStoredConsumerProducts({ readStoredProducts: reader.readStoredProducts.bind(reader),
+      sourceStore: reader.sourceStore, readCanonicalProducts: queryFirestoreProducts }, 'internal-ai-ops', search);
+    await writePrivateArtifact(a.get('--local-output')!, result);
+    console.log(JSON.stringify({ status: 'LOCAL_RESULT_WRITTEN', products: result.products.length, sourceRows: result.sourceRows.length,
+      snapshotConsistency: result.meta.snapshotConsistency }));
+    return;
+  }
   if (a.has('--search-file')) {
     const search = JSON.parse(await readFile(a.get('--search-file')!, 'utf8')) as ProductSearch;
     if (!search || typeof search !== 'object' || Array.isArray(search)) throw new Error('INVALID_PRODUCT_SEARCH');

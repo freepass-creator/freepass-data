@@ -7,6 +7,55 @@ import sheetSpec from '../contracts/supplier-input-sheet-spec.v1.json' with { ty
 import { projectReferenceObservation, readCurrentReferenceObservations, filterReferenceProducts, referenceObservationToCompatibilityProduct } from '../src/application/kakao-catalog-reference.js';
 import type { RawRecord } from '../src/domain/source.js';
 import { readFileSync } from 'node:fs';
+import { selectStoredProducts, FirestoreCatalogCompatibilityReader } from '../src/infra/erp5-compat-catalog-reader.js';
+import { readStoredConsumerProducts } from '../src/application/kakao-catalog-reference.js';
+
+describe('stored consumer product selection', () => {
+  const products = {
+    'TEST-PRODUCT-1': { provider_company_code: 'TEST-SUPPLIER', maker: '기아', model: '레이', price: { '12_2만': { rent: 0, deposit: null } }, policy_code: 'TEST-POLICY', customer: 'DO_NOT_RETURN' },
+    'TEST-PRODUCT-2': { car_number: 'TEST-FAKE-PLATE-0001', price: null, photo_original_refs: [] },
+  };
+  const partners = { 'TEST-SUPPLIER': { name: '시험공급사', phone: 'DO_NOT_RETURN' } };
+  it('preserves unnumbered products and stored zero/null without calculating fees or leaking customer/partner data', () => {
+    const rows = selectStoredProducts(products, {}, partners);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.facts.price).toEqual(products['TEST-PRODUCT-1'].price);
+    expect(rows[0]!.facts.car_number).toBeNull();
+    expect(rows[0]!.supplierName).toBe('시험공급사');
+    expect(rows[0]!.policyEvidence.state).toBe('UNKNOWN');
+    expect(rows[1]!.photos).toMatchObject({ state: 'UNKNOWN', count: null, bytesVerified: false });
+    expect(JSON.stringify(rows)).not.toContain('DO_NOT_RETURN');
+  });
+  it('uses filters only and preserves punctuation in plate identity', () => {
+    expect(selectStoredProducts(products, {}, partners, { vehicleName: '기아 레이' })).toHaveLength(1);
+    expect(selectStoredProducts(products, {}, partners, { supplierName: '시험 공급사' })).toHaveLength(1);
+    expect(selectStoredProducts(products, {}, partners, { plate: 'TESTFAKEPLATE0001' })).toHaveLength(0);
+    expect(selectStoredProducts(products, {}, partners, { plate: 'TEST-FAKE-PLATE-0001' })).toHaveLength(1);
+    expect(() => selectStoredProducts(products, {}, partners, { plate: '신차' })).toThrow('PLATE_NOT_ASSIGNED');
+    expect(() => selectStoredProducts(products, {}, partners, { arbitrary: 'x' })).toThrow('INVALID_PRODUCT_SEARCH');
+    expect(selectStoredProducts(products, {}, {}, { supplierName: '시험공급사' })).toHaveLength(0);
+  });
+  it('does not silently choose ambiguous policies or partner names', () => {
+    const policies = { a: { policy_code: 'TEST-POLICY' }, b: { policy_code: 'TEST-POLICY' } };
+    expect(selectStoredProducts(products, policies, partners)[0]!.policy).toBeNull();
+    expect(selectStoredProducts(products, {}, { ...partners, duplicate: { partner_code: 'TEST-SUPPLIER', name: '다른이름' } })[0]!.supplierName).toBeNull();
+    expect(selectStoredProducts(products, { other: { policy_code: 'TEST-POLICY', companyId: 'OTHER' } }, partners)[0]!.policy).toBeNull();
+    expect(selectStoredProducts(products, { default: { policy_code: 'TEST-POLICY' }, mine: { policy_code: 'TEST-POLICY', companyId: 'TEST-SUPPLIER' } }, partners)[0]!.policy?.id).toBe('mine');
+  });
+  it('rejects public consumers before database access', async () => {
+    const reader = Object.create(FirestoreCatalogCompatibilityReader.prototype) as FirestoreCatalogCompatibilityReader;
+    await expect(reader.readStoredProducts('erp-com')).rejects.toThrow('STORED_INTERNAL_CONSUMER_NOT_ALLOWED');
+  });
+  it('keeps missing source-head evidence separate from saved products', async () => {
+    const rows = selectStoredProducts(products, {}, partners);
+    const sourceStore = { getSourceHead: async () => null, getRun: async () => null,
+      listRaw: async () => [], listCandidates: async () => [] };
+    const result = await readStoredConsumerProducts({ readStoredProducts: async () => ({ products: rows }), sourceStore }, 'internal-ai-test');
+    expect(result.products).toHaveLength(2);
+    expect(result.sourceRows).toEqual([]);
+    expect(result.sourceEvidence).toMatchObject({ state: 'HOLD', reasonCode: 'SOURCE_HEAD_MISSING' });
+  });
+});
 
 describe('current source observations in existing private reference', () => {
   const sourceId = sheetSpec.supplierManagement.sourceBinding.sourceId;
@@ -19,6 +68,15 @@ describe('current source observations in existing private reference', () => {
     return { rawRecordId: id, sourceId, sourceRecordId: id, sourceFingerprint: id, runId: 'fixture-run', observedAt: at,
       payload: { values, supplierCode: 'RP_FIXTURE', customerName: 'PRIVATE_CUSTOMER', token: 'PRIVATE_TOKEN' } };
   };
+  it('stored-only source projection never replaces missing stored fees with engine calculations', () => {
+    const raw = fixture('stored-only-row', '무보증');
+    const input = { ...raw, payload: { ...raw.payload, supplierCode: 'RP013' } };
+    const row = projectReferenceObservation(input, normalizeSharedSheet(input).record, { storedFeesOnly: true });
+    for (const term of row.normalized.priceConditions) {
+      expect(term.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'SOURCE_ROW_STORED_FEE_NOT_LINKED' });
+      expect(term.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null });
+    }
+  });
   it('connects rejected identity rows to both fees without promoting sale or contract status', () => {
     const raw = fixture('fee-row', '무보증');
     const values = [...raw.payload.values as string[]];
