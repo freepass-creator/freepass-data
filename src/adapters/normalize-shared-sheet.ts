@@ -5,7 +5,7 @@ import type { SourceVehicleFacts } from '../domain/source-vehicle-facts.js';
 import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
 import type { FieldLineageRecord } from '../domain/lineage.js';
 import { plateIdentityKey, isAssignedPlate } from '../domain/vehicle-plate.js';
-import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION, type IdentityChoice, type VehicleIdentity, type VehicleMasterRecord, type VehicleIdentitySpecs } from '../domain/vehicle-identity-resolution.js';
+import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION, yearRegistrationMismatch, type IdentityChoice, type VehicleIdentity, type VehicleMasterRecord, type VehicleIdentitySpecs } from '../domain/vehicle-identity-resolution.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import { assessDepositEvidence, depositEvidenceInputFromProduct, depositSourceWaiverFieldForTermMonths } from '../domain/deposit-evidence.js';
 export const SHARED_SHEET_RULE_VERSION = 'shared-sheet-normalizer/7';
@@ -75,7 +75,7 @@ function normalizeSharedSheetWith(raw: RawRecord, identity?: SharedSheetIdentity
   };
   const y = field('modelYear', '연식', year);
   const reg = field('firstRegistration', '최초등록일', s => registration(s, at('최초등록일')));
-  if (typeof y === 'number' && typeof reg === 'string' && Number(reg.slice(0, 4)) !== y) issues.push('YEAR_REGISTRATION_MISMATCH');
+  if (typeof y === 'number' && typeof reg === 'string' && yearRegistrationMismatch(y, reg)) issues.push('YEAR_REGISTRATION_MISMATCH');
   const fuelAliases: Record<string, string> = { HEV: '하이브리드', PHEV: '플러그인하이브리드', EV: '전기', 휘발유: '가솔린', 경유: '디젤' };
   field('fuel', '연료', s => spec.dropdowns['연료'].includes(s) ? s : fuelAliases[s.toUpperCase()] ?? null);
   field('displacementCc', '배기량', s => number(s, 'cc'));

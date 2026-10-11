@@ -6,12 +6,13 @@ import {
 import { planPeriodFeeLedger, type PeriodFeeLedgerPlan, type PeriodFeeLedgerRow, type ProductChangeHistoryRow } from '../src/application/period-fee-ledger-plan.js';
 import type { ProductChangeHistoryBaselineRow, PeriodFeeSnapshotRun } from '../src/domain/period-fee-ledger.js';
 import { periodFeeRunDocumentKey } from '../src/infra/firestore-layout.js';
-import type { ExistingPeriodFeeDocument, PeriodFeeLedgerApplyStore, PeriodFeeSnapshotWriteGuard } from '../src/ports/period-fee-ledger-store.js';
+import type { ExistingPeriodFeeDocument, ExistingPeriodFeeDocumentWithKey, PeriodFeeLedgerApplyStore, PeriodFeeSnapshotWriteGuard } from '../src/ports/period-fee-ledger-store.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
 type Stored = { digest: string; data: Record<string, unknown> };
 
 const observedAt = '2026-10-12T00:00:00.000Z';
+const FIRESTORE_DOCUMENT_LIMIT_BYTES = 1_048_576;
 const product = (overrides: Record<string, unknown> = {}) => ({
   provider_company_code: 'RP013',
   provider_name: 'TEST-FAKE-SUPPLIER',
@@ -38,6 +39,12 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
   createHistoryCalls = 0;
   activateCalls = 0;
   hijackLockBeforeNextActivation = false;
+
+  private assertDocumentSize(value: unknown): void {
+    if (Buffer.byteLength(JSON.stringify(value), 'utf8') > FIRESTORE_DOCUMENT_LIMIT_BYTES) {
+      throw new Error('FIRESTORE_DOCUMENT_TOO_LARGE');
+    }
+  }
 
   private assertSnapshotWriteGuard(guard: PeriodFeeSnapshotWriteGuard): void {
     if (!this.lock || this.lock.ownerId !== guard.lockOwnerId || this.lock.leaseExpiresAt <= guard.checkedAt) {
@@ -69,11 +76,26 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
   }
 
   async createLedgerDocument(documentKey: string, row: PeriodFeeLedgerRow, digest: string): Promise<void> {
-    this.ledger.set(documentKey, { digest, data: structuredClone(row) as unknown as Record<string, unknown> });
+    const stored = { digest, data: structuredClone(row) as unknown as Record<string, unknown> };
+    this.assertDocumentSize({ ...row, digest });
+    this.ledger.set(documentKey, stored);
     this.createLedgerCalls += 1;
     if (this.failAfterLedgerCreates !== null && this.createLedgerCalls >= this.failAfterLedgerCreates) {
       throw new Error('TEST_LEDGER_CREATE_INTERRUPTED');
     }
+  }
+
+  async listLedgerDocumentsByRunIdPrefix(runId: string, pageSize = 500): Promise<ExistingPeriodFeeDocumentWithKey[]> {
+    const lower = `${runId}__`;
+    const upper = `${runId}__\uf8ff`;
+    const all = [...this.ledger.entries()]
+      .filter(([documentKey]) => documentKey >= lower && documentKey < upper)
+      .sort(([a], [b]) => a.localeCompare(b));
+    const pages: ExistingPeriodFeeDocumentWithKey[] = [];
+    for (let index = 0; index < all.length; index += pageSize) {
+      pages.push(...all.slice(index, index + pageSize).map(([documentKey, stored]) => ({ documentKey, ...stored })));
+    }
+    return pages;
   }
 
   async getProductChangeHistoryDocument(documentKey: string): Promise<ExistingPeriodFeeDocument | null> {
@@ -88,7 +110,21 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
       return;
     }
     this.createHistoryCalls += 1;
+    this.assertDocumentSize({ ...row, digest });
     this.history.set(documentKey, { digest, data: structuredClone(row) as unknown as Record<string, unknown> });
+  }
+
+  async listProductChangeHistoryDocumentsByRunIdPrefix(runId: string, pageSize = 500): Promise<ExistingPeriodFeeDocumentWithKey[]> {
+    const lower = `${runId}__`;
+    const upper = `${runId}__\uf8ff`;
+    const all = [...this.history.entries()]
+      .filter(([documentKey]) => documentKey >= lower && documentKey < upper)
+      .sort(([a], [b]) => a.localeCompare(b));
+    const pages: ExistingPeriodFeeDocumentWithKey[] = [];
+    for (let index = 0; index < all.length; index += pageSize) {
+      pages.push(...all.slice(index, index + pageSize).map(([documentKey, stored]) => ({ documentKey, ...stored })));
+    }
+    return pages;
   }
 
   async getSnapshotRun(runId: string): Promise<PeriodFeeSnapshotRun | null> {
@@ -120,8 +156,10 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
     if (guard && run.status === 'ROLLING_BACK' && (!existing || !['ACTIVE', 'PREPARED', 'ROLLING_BACK'].includes(existing.status))) {
       throw new Error('RUN_STATE_CHANGED');
     }
+    if (guard && run.status === 'ROLLBACK_PARTIAL_UNEXPECTED' && (!existing || existing.status !== 'ROLLING_BACK')) throw new Error('RUN_STATE_CHANGED');
     if (guard && run.status === 'FAILED' && (!existing || existing.status !== 'ROLLING_BACK')) throw new Error('RUN_STATE_CHANGED');
     if (guard && run.status === 'ROLLED_BACK' && (!existing || existing.status !== 'INACTIVE')) throw new Error('RUN_STATE_CHANGED');
+    this.assertDocumentSize(run);
     this.runs.set(runId, structuredClone(run));
   }
 
@@ -165,11 +203,12 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
 
   async readLedgerRows(snapshotId: string, runId: string): Promise<PeriodFeeLedgerRow[]> {
     const run = this.runs.get(runId);
-    const allowed = new Set(run?.rowKeys ?? []);
-    const rows = [...this.ledger.entries()]
-      .map(([key, item]) => ({ key, row: item.data as unknown as PeriodFeeLedgerRow }))
-      .filter(item => item.row.snapshotId === snapshotId);
-    const filtered = rows.filter(item => allowed.has(item.key)).map(item => item.row);
+    if (!run) throw new Error('PERIOD_FEE_READBACK_RUN_NOT_FOUND');
+    if (!run.rowContentDigest || !run.historyContentDigest) throw new Error('LEDGER_READ_INCONSISTENT');
+    const rowDocs = await this.listLedgerDocumentsByRunIdPrefix(runId, 500);
+    const filtered = rowDocs
+      .filter(item => (item.data as unknown as PeriodFeeLedgerRow).snapshotId === snapshotId)
+      .map(item => item.data as unknown as PeriodFeeLedgerRow);
     const result = this.corruptReadback
       ? filtered.map((row, index) => index === 0
       ? { ...row, monthlyRent: { ...row.monthlyRent, amount: row.monthlyRent.amount + 1 } }
@@ -184,7 +223,10 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
     }
     const reread = this.runs.get(runId);
     if (run?.active && (!reread || !reread.active || reread.status !== 'ACTIVE')) throw new Error('LEDGER_READ_INCONSISTENT');
-    if (result.length !== allowed.size) throw new Error('LEDGER_READ_INCONSISTENT');
+    const keys = rowDocs.map(item => item.documentKey).sort((a, b) => a.localeCompare(b));
+    const actualContentDigest = digestKeyPairs(rowDocs.map(item => ({ documentKey: item.documentKey, digest: item.digest })));
+    if (result.length !== run.rowCount || stableDigest(keys) !== run.rowKeysDigest) throw new Error('LEDGER_READ_INCONSISTENT');
+    if (actualContentDigest !== run.rowContentDigest) throw new Error('LEDGER_READ_INCONSISTENT');
     return result;
   }
 
@@ -197,15 +239,15 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
       snapshotId: runId,
       planDigest: '',
       previousActiveRunId: null,
-      rowKeys: [],
-      rowDigests: {},
-      plannedCreateKeys: [],
-      createdDocumentKeys: [],
       preparedAt: observedAt,
       rowCount: 0,
+      rowKeysDigest: stableDigest([]),
+      rowContentDigest: stableDigest([]),
       readyRowCount: 0,
       holdNoUidCount: 0,
       historyRowCount: 0,
+      historyKeysDigest: stableDigest([]),
+      historyContentDigest: stableDigest([]),
       readbackSampleCount: 0,
       readbackDigest: null,
     }), status: 'INACTIVE', active: false, activatedAt: null });
@@ -238,6 +280,8 @@ const runIdFor = (plan: PeriodFeeLedgerPlan) => `${plan.snapshotId}__${plan.plan
 const storageKeyFor = (plan: PeriodFeeLedgerPlan, row: PeriodFeeLedgerRow) => periodFeeRunDocumentKey(runIdFor(plan), row.documentKey);
 const historyStorageKeyFor = (plan: PeriodFeeLedgerPlan, row: ProductChangeHistoryRow | ProductChangeHistoryBaselineRow) =>
   periodFeeRunDocumentKey(runIdFor(plan), [row.productKey, row.snapshotId, row.fieldPath, stableDigest(row).slice(0, 24)].join('__'));
+const digestKeyPairs = (pairs: Array<{ documentKey: string; digest: string }>) =>
+  stableDigest(pairs.map(pair => [pair.documentKey, pair.digest] as const).sort(([a], [b]) => a.localeCompare(b)));
 
 const withPlanDigest = (plan: PeriodFeeLedgerPlan): PeriodFeeLedgerPlan => ({
   ...plan,
@@ -249,6 +293,20 @@ const withPlanDigest = (plan: PeriodFeeLedgerPlan): PeriodFeeLedgerPlan => ({
   }),
 });
 
+const planWithReadyRows = (count: number, keyLength = 24): PeriodFeeLedgerPlan => {
+  const base = makePlan();
+  const row = base.rows[0]!;
+  const rows = Array.from({ length: count }, (_, index) => ({
+    ...structuredClone(row),
+    documentKey: `TEST-FAKE-${String(index).padStart(5, '0')}-${'K'.repeat(Math.max(0, keyLength - 16))}`,
+    vehicleUid: `TEST-FAKE-ASSET-${String(index).padStart(5, '0')}`,
+    assetId: `TEST-FAKE-ASSET-${String(index).padStart(5, '0')}`,
+    plateLookupKey: `TEST-FAKE-PLATE-${String(index).padStart(5, '0')}`,
+    plateLast4ForReport: String(index).padStart(4, '0').slice(-4),
+  }));
+  return withPlanDigest({ ...base, rows, history: [], baselines: { productStates: {} } });
+};
+
 describe('period fee ledger apply', () => {
   it('dry-runs with zero writes when approval env is absent at the application boundary', async () => {
     const plan = makePlan();
@@ -256,7 +314,9 @@ describe('period fee ledger apply', () => {
 
     const result = await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: false });
 
-    expect(result).toMatchObject({ status: 'DRY_RUN', writesEnabled: false, counts: { ledgerCreated: 0, activeMarked: 0 } });
+    expect(result).toMatchObject({ status: 'DRY_RUN', writesEnabled: false, counts: { ledgerCreated: 0, activeMarked: 0, historyCreated: 0 } });
+    // 시험 실행도 적용 시 만들 baseline 이력 건수를 보여야 한다(적용 결과와 불일치 방지).
+    expect(result.counts.plannedHistoryRows).toBeGreaterThan(0);
     expect(store.ledger.size).toBe(0);
     expect(store.history.size).toBe(0);
     expect(store.runs.size).toBe(0);
@@ -418,7 +478,10 @@ describe('period fee ledger apply', () => {
       activateCalls: store.activateCalls,
     }).toEqual(callsBefore);
     expect(store.runs.get(runIdFor(plan))).toEqual(runBefore);
-    expect(store.runs.get(runIdFor(plan))?.createdDocumentKeys).toEqual([storageKeyFor(plan, plan.rows[0]!)]);
+    expect(store.runs.get(runIdFor(plan))).toMatchObject({
+      rowCount: 1,
+      rowKeysDigest: stableDigest([storageKeyFor(plan, plan.rows[0]!)]),
+    });
 
     const row = plan.rows[0]!;
     store.ledger.set(storageKeyFor(plan, row), { digest: stableDigest({ stale: true }), data: row as unknown as Record<string, unknown> });
@@ -504,14 +567,14 @@ describe('period fee ledger apply', () => {
     }];
     const plan = withPlanDigest({ ...base, history });
     const store = new MemoryPeriodFeeStore();
-    const original = store.getProductChangeHistoryDocument.bind(store);
-    store.getProductChangeHistoryDocument = async (key) => {
-      if (store.createHistoryCalls > 0 && key === historyStorageKeyFor(plan, history[0]!)) return null;
-      return original(key);
+    const original = store.listProductChangeHistoryDocumentsByRunIdPrefix.bind(store);
+    store.listProductChangeHistoryDocumentsByRunIdPrefix = async (runId, pageSize) => {
+      const rows = await original(runId, pageSize);
+      return store.createHistoryCalls > 0 ? rows.filter(row => row.documentKey !== historyStorageKeyFor(plan, history[0]!)) : rows;
     };
 
     await expect(applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
-      .rejects.toThrow('PERIOD_FEE_HISTORY_READBACK_FAILED');
+      .rejects.toThrow('LEDGER_READ_INCONSISTENT');
     expect(store.runs.get(runIdFor(plan))).toMatchObject({ status: 'PREPARED', active: false });
   });
 
@@ -574,6 +637,55 @@ describe('period fee ledger apply', () => {
     expect(store.ledger.has(storageKeyFor(second, second.rows[0]!))).toBe(true);
   });
 
+  it('keeps the run document below the Firestore size limit for 13,339 owned rows with long keys', async () => {
+    const plan = planWithReadyRows(13_339, 190);
+    const store = new MemoryPeriodFeeStore();
+
+    await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true, sampleSize: 3 });
+
+    const run = store.runs.get(runIdFor(plan))!;
+    expect(Buffer.byteLength(JSON.stringify(run), 'utf8')).toBeLessThan(FIRESTORE_DOCUMENT_LIMIT_BYTES);
+    expect(run).not.toHaveProperty('rowKeys');
+    expect(run).not.toHaveProperty('plannedCreateKeys');
+    expect(run).not.toHaveProperty('createdDocumentKeys');
+    expect(run).toMatchObject({ rowCount: 13_339, rowKeysDigest: stableDigest(plan.rows.map(row => storageKeyFor(plan, row)).sort()) });
+  }, 60_000);
+
+  it('keeps document ID prefix reads inside the exact run boundary', async () => {
+    const store = new MemoryPeriodFeeStore();
+    const row = makePlan().rows[0]!;
+    store.ledger.set('runA__001', { digest: 'a', data: row as unknown as Record<string, unknown> });
+    store.ledger.set('runA2__001', { digest: 'b', data: row as unknown as Record<string, unknown> });
+
+    expect((await store.listLedgerDocumentsByRunIdPrefix('runA')).map(item => item.documentKey)).toEqual(['runA__001']);
+  });
+
+  it('fails readback when prefix row count or key digest disagrees with the run manifest', async () => {
+    const plan = planWithReadyRows(2);
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+    const run = store.runs.get(runIdFor(plan))!;
+
+    store.runs.set(runIdFor(plan), { ...run, rowCount: 3 });
+    await expect(store.readLedgerRows(plan.snapshotId, runIdFor(plan))).rejects.toThrow('LEDGER_READ_INCONSISTENT');
+
+    store.runs.set(runIdFor(plan), { ...run, rowKeysDigest: stableDigest(['TEST-FAKE-WRONG']) });
+    await expect(store.readLedgerRows(plan.snapshotId, runIdFor(plan))).rejects.toThrow('LEDGER_READ_INCONSISTENT');
+  });
+
+  it('rolls back only rows owned by the run ID prefix', async () => {
+    const plan = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+    const row = plan.rows[0]!;
+    store.ledger.set(`${runIdFor(plan)}2__foreign`, { digest: stableDigest(row), data: row as unknown as Record<string, unknown> });
+
+    const result = await rollbackPeriodFeeLedgerSnapshot(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+
+    expect(result.deletedRows).toBe(1);
+    expect(store.ledger.has(`${runIdFor(plan)}2__foreign`)).toBe(true);
+  });
+
   it('rolls back by deleting only documents the run actually created', async () => {
     const plan = makePlan();
     const store = new MemoryPeriodFeeStore();
@@ -586,7 +698,54 @@ describe('period fee ledger apply', () => {
     expect(store.ledger.size).toBe(0);
   });
 
-  it('persists planned create keys before row creation so interrupted apply can be rolled back', async () => {
+  it('does not delete a planned prefix row whose digest changed and leaves rollback PARTIAL', async () => {
+    const plan = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+    const key = storageKeyFor(plan, plan.rows[0]!);
+    const changed = {
+      ...plan.rows[0]!,
+      monthlyRent: { ...plan.rows[0]!.monthlyRent, amount: plan.rows[0]!.monthlyRent.amount + 1 },
+    };
+    store.ledger.set(key, { digest: stableDigest(changed), data: changed as unknown as Record<string, unknown> });
+
+    await expect(rollbackPeriodFeeLedgerSnapshot(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
+      .rejects.toMatchObject({
+        message: 'ROLLBACK_PARTIAL_UNEXPECTED',
+        result: { status: 'ROLLBACK_PARTIAL_UNEXPECTED', deletedRows: 0, unexpectedRows: { count: 1, digestMismatch: [key] } },
+      });
+
+    expect(store.ledger.has(key)).toBe(true);
+    expect(store.runs.get(runIdFor(plan))).toMatchObject({ status: 'ROLLBACK_PARTIAL_UNEXPECTED', active: false });
+  });
+
+  it('does not delete an unplanned prefix row and leaves rollback PARTIAL without restoring the previous run', async () => {
+    const first = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, first, { expectedDigest: first.planDigest, writeApproved: true });
+    const second = makePlan({
+      p1: product(),
+      p2: product({ vehicle_uid: 'TEST-FAKE-ASSET-002', car_number: 'TEST-FAKE-PLATE-0002' }),
+    });
+    await applyPeriodFeeLedgerPlan(store, second, { expectedDigest: second.planDigest, writeApproved: true });
+    const unexpectedKey = `${runIdFor(second)}__TEST-FAKE-UNPLANNED`;
+    store.ledger.set(unexpectedKey, { digest: 'u', data: second.rows[0]! as unknown as Record<string, unknown> });
+
+    await expect(rollbackPeriodFeeLedgerSnapshot(store, second, { expectedDigest: second.planDigest, writeApproved: true }))
+      .rejects.toMatchObject({
+        message: 'ROLLBACK_PARTIAL_UNEXPECTED',
+        result: { status: 'ROLLBACK_PARTIAL_UNEXPECTED', deletedRows: 2, unexpectedRows: { count: 1, planMissing: [unexpectedKey] } },
+      });
+
+    expect(store.ledger.has(unexpectedKey)).toBe(true);
+    expect(store.ledger.has(storageKeyFor(second, second.rows[0]!))).toBe(false);
+    expect(store.ledger.has(storageKeyFor(second, second.rows[1]!))).toBe(false);
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ROLLBACK_PARTIAL_UNEXPECTED', active: false });
+    expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'SUPERSEDED', active: false });
+    expect(await store.getActiveSnapshotRun(first.snapshotId)).toBeNull();
+  });
+
+  it('persists row count and key digest before row creation so interrupted apply can be rolled back', async () => {
     const plan = makePlan({ p1: product(), p2: product({ vehicle_uid: 'TEST-FAKE-ASSET-002', car_number: 'TEST-FAKE-PLATE-0002' }) });
     const store = new MemoryPeriodFeeStore();
     store.failAfterLedgerCreates = 1;
@@ -596,8 +755,10 @@ describe('period fee ledger apply', () => {
 
     const run = store.runs.get(runIdFor(plan))!;
     expect(run).toMatchObject({ status: 'PREPARED', active: false });
-    expect(run.plannedCreateKeys.sort()).toEqual(plan.rows.map(row => storageKeyFor(plan, row)).sort());
-    expect(run.createdDocumentKeys).toEqual([]);
+    expect(run).toMatchObject({
+      rowCount: 2,
+      rowKeysDigest: stableDigest(plan.rows.map(row => storageKeyFor(plan, row)).sort()),
+    });
 
     store.failAfterLedgerCreates = null;
     const result = await rollbackPeriodFeeLedgerSnapshot(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
@@ -619,12 +780,14 @@ describe('period fee ledger apply', () => {
 
     expect(result.counts).toMatchObject({ ledgerCreated: 1, ledgerSkippedSameDigest: 1, activeMarked: 1 });
     const run = store.runs.get(runIdFor(plan))!;
-    expect(run.plannedCreateKeys.sort()).toEqual(plan.rows.map(row => storageKeyFor(plan, row)).sort());
-    expect(run.createdDocumentKeys).toEqual([storageKeyFor(plan, plan.rows[1]!)]);
+    expect(run).toMatchObject({
+      rowCount: 2,
+      rowKeysDigest: stableDigest(plan.rows.map(row => storageKeyFor(plan, row)).sort()),
+    });
     expect(store.ledger.size).toBe(2);
   });
 
-  it('does not delete another run owned document that is outside this run ownership keys', async () => {
+  it('does not delete another run owned document that is outside this run ID prefix', async () => {
     const plan = makePlan({ p1: product(), p2: product({ vehicle_uid: 'TEST-FAKE-ASSET-002', car_number: 'TEST-FAKE-PLATE-0002' }) });
     const store = new MemoryPeriodFeeStore();
     store.failAfterLedgerCreates = 1;
@@ -633,8 +796,6 @@ describe('period fee ledger apply', () => {
     store.failAfterLedgerCreates = null;
     const foreignRow = plan.rows[1]!;
     store.ledger.set(foreignRow.documentKey, { digest: stableDigest(foreignRow), data: foreignRow as unknown as Record<string, unknown> });
-    const run = store.runs.get(runIdFor(plan))!;
-    store.runs.set(runIdFor(plan), { ...run, plannedCreateKeys: [plan.rows[0]!.documentKey] });
 
     const result = await rollbackPeriodFeeLedgerSnapshot(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
 
@@ -675,10 +836,10 @@ describe('period fee ledger apply', () => {
 
     expect(store.ledger.size).toBe(2);
     expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'SUPERSEDED', active: false });
-    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ACTIVE', active: true, createdDocumentKeys: [storageKeyFor(second, second.rows[0]!)] });
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ACTIVE', active: true });
   });
 
-  it('keeps PREPARED rollback rows that another ACTIVE run references by rowKeys', async () => {
+  it('keeps PREPARED rollback rows isolated from another ACTIVE run prefix', async () => {
     const first = makePlan();
     const store = new MemoryPeriodFeeStore();
     store.failAfterLedgerCreates = 1;
@@ -718,8 +879,8 @@ describe('period fee ledger apply', () => {
     expect(store.runs.get(runIdFor(second))).toMatchObject({
       status: 'ACTIVE',
       active: true,
-      createdDocumentKeys: [storageKeyFor(second, second.rows[0]!)],
-      rowKeys: [storageKeyFor(second, second.rows[0]!)],
+      rowCount: 1,
+      rowKeysDigest: stableDigest([storageKeyFor(second, second.rows[0]!)]),
     });
   });
 
@@ -769,7 +930,7 @@ describe('period fee ledger apply', () => {
     store.ledger.delete(storageKeyFor(first, first.rows[0]!));
 
     await expect(rollbackPeriodFeeLedgerSnapshot(store, second, { expectedDigest: second.planDigest, writeApproved: true }))
-      .rejects.toThrow('PERIOD_FEE_RESTORE_LEDGER_READBACK_FAILED');
+      .rejects.toThrow('LEDGER_READ_INCONSISTENT');
 
     expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ACTIVE', active: true });
     expect(await store.getActiveSnapshotRun(first.snapshotId)).toMatchObject({ runId: runIdFor(second) });
@@ -982,16 +1143,16 @@ describe('period fee ledger apply', () => {
       status: 'ACTIVE',
       active: true,
       previousActiveRunId: 'TEST-FAKE-STALE-RUN',
-      rowKeys: [],
-      rowDigests: {},
-      plannedCreateKeys: [],
-      createdDocumentKeys: [],
       preparedAt: observedAt,
       activatedAt: observedAt,
       rowCount: 0,
+      rowKeysDigest: stableDigest([]),
+      rowContentDigest: stableDigest([]),
       readyRowCount: 0,
       holdNoUidCount: 0,
       historyRowCount: 0,
+      historyKeysDigest: stableDigest([]),
+      historyContentDigest: stableDigest([]),
       readbackSampleCount: 0,
       readbackDigest: null,
     };
@@ -1069,6 +1230,65 @@ describe('period fee ledger apply', () => {
       active: true,
     };
     await expect(freshStore.readLedgerRows(plan.snapshotId, runIdFor(plan))).rejects.toThrow('LEDGER_READ_INCONSISTENT');
+  });
+
+  it('rejects restoring a previous run when only the row content changed under the same document ID', async () => {
+    const first = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, first, { expectedDigest: first.planDigest, writeApproved: true });
+    const second = makePlan({ p1: product({ price: { '36': { rent: 820000, deposit: 1000000 } } }) });
+    await applyPeriodFeeLedgerPlan(store, second, { expectedDigest: second.planDigest, writeApproved: true });
+    const key = storageKeyFor(first, first.rows[0]!);
+    const changed = {
+      ...first.rows[0]!,
+      monthlyRent: { ...first.rows[0]!.monthlyRent, amount: first.rows[0]!.monthlyRent.amount + 1 },
+    };
+    store.ledger.set(key, { digest: stableDigest(changed), data: changed as unknown as Record<string, unknown> });
+
+    await expect(rollbackPeriodFeeLedgerSnapshot(store, second, { expectedDigest: second.planDigest, writeApproved: true }))
+      .rejects.toThrow('LEDGER_READ_INCONSISTENT');
+
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ACTIVE', active: true });
+    expect(await store.getActiveSnapshotRun(first.snapshotId)).toMatchObject({ runId: runIdFor(second) });
+  });
+
+  it('fails ACTIVE reapply when only product_change_history content changed under the same document ID', async () => {
+    const history: ProductChangeHistoryRow[] = [{
+      schemaVersion: 'product-change-history/v1',
+      productKey: 'p1',
+      kind: 'STATUS',
+      fieldPath: 'status',
+      before: 'TEST-FAKE-BEFORE',
+      after: 'TEST-FAKE-AFTER',
+      changedAtKst: '2026-10-12',
+      snapshotId: makePlan().snapshotId,
+      sourceObservationRef: null,
+    }];
+    const base = { ...makePlan(), history };
+    const plan = withPlanDigest(base);
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+    const key = historyStorageKeyFor(plan, history[0]!);
+    const changed = { ...history[0]!, after: 'TEST-FAKE-CHANGED-AFTER' };
+    store.history.set(key, { digest: stableDigest(changed), data: changed as unknown as Record<string, unknown> });
+
+    await expect(applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
+      .rejects.toThrow('LEDGER_READ_INCONSISTENT');
+  });
+
+  it('fail-closes old run documents that do not have content digests', async () => {
+    const plan = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+    const run = store.runs.get(runIdFor(plan))!;
+    const oldRun = { ...run } as Partial<PeriodFeeSnapshotRun>;
+    delete oldRun.rowContentDigest;
+    delete oldRun.historyContentDigest;
+    store.runs.set(runIdFor(plan), oldRun as PeriodFeeSnapshotRun);
+
+    await expect(store.readLedgerRows(plan.snapshotId, runIdFor(plan))).rejects.toThrow('LEDGER_READ_INCONSISTENT');
+    await expect(applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
+      .rejects.toThrow('LEDGER_READ_INCONSISTENT');
   });
 
   it('refuses rollback when the stored run digest does not match and deletes zero rows', async () => {
