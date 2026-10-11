@@ -932,6 +932,18 @@ describe('F04 2026-10-04 alignment regression', () => {
     expect(buildKakaoCatalogReferenceProduct('s-conflict', sonokongWithConflictingSettlement, { '24_인수형': { subscriptionForm: 'RETURN' } })!
       .offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee)
       .toMatchObject({ state: 'UNKNOWN', reasonCode: 'SUBSCRIPTION_FORM_CONFLICT' });
+    const conflicting12 = { ...sonokong, price: { '12_인수형': { rent: 900000 } } };
+    expect(buildKakaoCatalogReferenceProduct('s-conflict-12', conflicting12, { '12_인수형': { subscriptionForm: 'RETURN' } })!
+      .offers[0]!.priceTerms.find(t => t.termKey === 'source:12_인수형')!.supplierBillingFee)
+      .toMatchObject({ state: 'UNKNOWN', reasonCode: 'SUBSCRIPTION_FORM_CONFLICT' });
+    const ownQ12 = { ...sonokong, price: { '12': { rent: 800000 } } };
+    const ownQ12Term = buildKakaoCatalogReferenceProduct('s-own-q12', ownQ12)!.offers[0]!.priceTerms[0]!;
+    expect(ownQ12Term.supplierBillingFee).toMatchObject({ state: 'CALCULATED', amount: 900000, ruleId: 'SONOKONG_SUBSCRIPTION_12_BILLING' });
+    expect(ownQ12Term.channelPayoutFee).toMatchObject({ state: 'CALCULATED', amount: 800000, ruleId: 'SONOKONG_SUBSCRIPTION_12_PAYOUT' });
+    const mixed12 = { ...sonokong, price: { '12': { rent: 800000 }, '12_인수형': { rent: 900000 } } };
+    const return12Term = buildKakaoCatalogReferenceProduct('s-return-12-self', mixed12)!.offers[0]!.priceTerms.find(t => t.termKey === 'source:12')!;
+    expect(return12Term.supplierBillingFee.amount).toBe(900000);
+    expect(return12Term.channelPayoutFee.amount).toBe(800000);
     const returnForm = { ...sonokong, price: { '12': { rent: 800000 }, '24': { rent: 700000 } } };
     expect(buildKakaoCatalogReferenceProduct('s-return', returnForm)!.offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee.reasonCode).toBe('RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED');
     expect(product).toEqual(sourceBefore);

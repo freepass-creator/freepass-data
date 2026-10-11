@@ -692,6 +692,9 @@ export function resolveSubscriptionFormForTerm(
 }
 
 export function selectSonokongQ12Basis(target: SonokongQ12BasisCandidate, candidates: readonly SonokongQ12BasisCandidate[]): CommissionInput['q12Basis'] | undefined {
+  if (target.termMonths === 12 && Number.isSafeInteger(target.amount) && target.amount > 0) {
+    return { amount: target.amount, sourceRef: 'PRODUCT_12_MONTH_RENT' };
+  }
   const matching = candidates.filter(candidate => candidate.termMonths === 12 &&
     candidate.settlement === target.settlement &&
     candidate.mileageKm === target.mileageKm &&
@@ -960,10 +963,15 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
     const q12Candidates = Object.entries(price as Rec).flatMap(([key, value]) => {
       const candidate = parseErp5CompatibilityPriceKey(key);
       if (!candidate || candidate.months !== 12 || !value || typeof value !== 'object' || Array.isArray(value)) return [];
+      const resolvedCandidateSubscriptionForm = resolveSubscriptionFormForTerm(
+        evidenceByTerm[key]?.subscriptionForm,
+        candidate.settlement,
+      );
+      if (resolvedCandidateSubscriptionForm.conflict) return [];
       const amount = integer((value as Rec).rent);
       return amount !== null && amount > 0 ? [{
         termMonths: candidate.months,
-        settlement: candidate.settlement,
+        settlement: resolvedCandidateSubscriptionForm.subscriptionForm,
         mileageKm: candidate.contractedMileage?.km ?? candidate.mileageKm,
         mileagePeriod: candidate.contractedMileage?.period ?? 'year',
         currency: 'KRW',
@@ -973,7 +981,7 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
     });
     const resolvedSubscriptionForm = resolveSubscriptionFormForTerm(
       evidenceByTerm[sourceKey]?.subscriptionForm,
-      parsed.months === 12 ? undefined : parsed.settlement,
+      parsed.settlement,
     );
     const automaticQ12 = resolvedSubscriptionForm.conflict ? undefined : selectSonokongQ12Basis({
       termMonths: parsed.months,
