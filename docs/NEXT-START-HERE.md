@@ -627,6 +627,28 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - next_start_here: engine `53b8c18e2c9143ace2c26f0349fc959d61a28b19`, 운영 pin 후보 `6b86d655`/ERP PR546 (`work/freepass/sonogong-photo-pin-20260930`), AI Ops `24538b3`/PR43을 이어서 검토한다. PR545는 기존 branch 규격 오류로 닫고 동일 수정 PR546으로 대체했다. 승인 질문은 F01/F86 손오공 차량번호 링크→기존 ERP 전체 갤러리와 자동 갱신 유지에 한정한다. 현재 운영 writer pin은 `e6727ff04fcf98380701fa6360c36f313e0e321f`다. 순수 코드/계약 테스트 PASS를 live 완료로 확대하지 않는다.
 
 
+### 2026-10-11 18:42 수수료 90기간 해결안 / 검토결과 고정 v2
+
+- 목적/정본: 대표 전체 상품 연결→main 통합→저장 재조회 오더. 기존 PR453 작업선만 재사용, main b7e519b를24f6dc9에 합침(양쪽 인계 보존). 구현 f353fad6a2326d256d29dc5df0fab0fe5273ea8e.
+- 실제 DRY_RUN: 18:42:07 KST 기존 CatalogStore160상품568기간, 양쪽 KNOWN393→483/UNKNOWN175→85. 해결90=기본회사 구독64+대표확정1개월26. 금액변경99 중 기존확정9는 빌린카60개월 옛기간식→대표확정36개월 월료100/80. 운영 writes0.
+- 근거 필요85: 신차 출고형태79, 기본6개월 미지원4, 보증금tier2. 해당36상품의 binding→원래RAW36/36 매칭; 최신head다름36, 최신RAW33매칭/3미매칭, 명시subtype/tier0. canonical정책문서0이므로 정책저장 담당의 ID/revision 인계와 조율하며 추정하지 않는다.
+- 안전 보완: Claude ANSWERED/exit0의 계산코드 변경 미고정 지적을 반영. 기존 재산출 plan을 v2로 올리고 각 entry.expectedEconomicsDigest를 트랜잭션 안에서 재계산값과 대조해 쓰기 전 HOLD한다. oldv1/누락digest 거부. approvalRef 필수, 실행자는 서비스로 유지하며 검토·승인 근거를 감사·리비전 reason에 보존. changedOffers는 실제commit 수이며 readbackVerifiedChangedOffers를 별도로 반환한다.
+- 새 비공개 plan: TEMP/period-economics-20261011-v2-candidate.json, policyDigest5be799d0cfe3e90533b9d2a2d72ac83c956977fdb1677a2f01c69e8a54c0ad34, planDigest5631ec012b90bc92101815e4a4aa8ab8d4e305e0462f8b4dc70228468dc6a534. 이전v1/bc9f5dd 계획 적용금지; before-image 보존. 코드 f353fad, 결과digest160/160 포함.
+- 검증: build/architecture/data-access PASS, main병합후 관련227PASS; 보완후 전체2164PASS/16조건부SKIP+마지막계획거부추가검사 포함 recompute19PASS. 독립 재검토 ANSWERED/exit0: 결과digest/승인ref/변경분readback분리 충족, 치명결함없음. 죽은 product/model 되읽기 제거 및 READ-RUNTIME v2/approval-ref 정본 갱신을 반영했고, 지적된 v1 거부검사는 이미 recompute19에 명시적으로 존재함을 확인했다.
+- 남음/next_start_here: 통합 담당에게 PR437 contracts/단일선 수용을 요청했으며 PR453 임의종료·가드우회·동시main병합0. 최종독립검토→같은PR453 exacthead 인계→통합mainSHA 확정→정책담당 동시writer 없음과 최신revision/inputDigest/planDigest 확인→기존 writer apply 및 전160행readback. main반영/저장/온라인소비처검증은 아직 미실행.
+
+
+### 2026-10-11 1개월 기본 수수료 5% 청구전액지급
+
+- 목적/정본: 대표 직접 확정 월 대여료5%, VAT별도, 청구 전액 지급. 기준 main 1e1ea6894def6bebd3abe4d231471f3153ffdfea, 기존 kakao-catalog-reference 수수료 엔진을 확장한다.
+- 변경: 정책 sales-commission-2026-10-11. 기존 기본 기간표의1개월 청구/지급 각각5% 공급가액, VAT10%. 직접 결정 sourceRef와 기존 schema allowlist를 함께 반영했다. 개별 합의 및 공급사 특칙 우선, 아이카1개월 협의·스위치 구독·신차·미등록 공급사는 추정 확장하지 않는다.
+- 검증: build PASS, architecture/data-access boundary PASS, 전체2152 PASS/에뮬레이터16 SKIP. 합성 월료80만원 양쪽공급가4만원/VAT4천원/합계4.4만원; precompute→stored read와 원본 비변경, 특칙/UNKNOWN 회귀를 확인했다.
+- 남음: 운영 DB writes0, 재산출·저장·배포·소비처 전환 미실행. 정책 버전 갱신은 기존 저장값을 자동 재작성하지 않는다.
+- 개발 증거: 구현 c0aca8dc538303e26f92c170c2cfda8406825d50, PR #453. core CI PASS. canon은 기존 PR #437의 contracts/ 선점으로 HOLD이며 우회·타작업 변경하지 않았다.
+- 독립 검토: 첫 Claude REVIEW_TIMEOUT, 축소 재검토 ANSWERED/exit0. 개별·공급사 예외 우선 보존에 동의. 검토자의 기본회사 구독 제외 제안은 미채택: 원 지시는 재렌트 한정이 없고 2026-10-09 정본은 해당 회사 구독에도 동일 기본 기간표를 적용한다고 확정했다. 기존 기본표 적용범위만 유지하고 별도 구독 특칙에는 확장하지 않았다.
+- next_start_here: 이 변경 PR의 고정 head와 CI/독립 검토를 확인한 뒤, 기존 recompute 엔진의 비공개 before-image/digest 계획으로 운영 적용 차이를 검토한다. 직접조회 PR451과 겹치는 엔진 변경은 없다.
+
+
 ### 2026-10-11 ERP5 사진 전용 등록 / 비공개 Data 읽기 서비스 배포 영수증
 
 - 대상/실행 구분: PR454 구현 head `72330ad8db6e35f994c20b2a15717b406315c0d2` → merge `8432146313fb156e4d4b44e2ce124c15878fcf37` → PR455 문서 merge이자 실제 배포 source `b5d738c12f5d0d4da302c5a3a8d425ea4f1ba7d1`. 이전 이력의 미실행0은 당시 상태이며 이번 실제 영수증과 구분한다. 원천·시트·업무 DB 쓰기0, Data01 IAM 변경0.
