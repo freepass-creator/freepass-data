@@ -79,6 +79,7 @@ import {
 
 export type ConsumerCapability =
   | 'catalog'
+  | 'photos'
   | 'catalog-reference'
   | 'internal-ai-reference'
   | 'catalog-health'
@@ -114,7 +115,7 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     if (!entry || typeof entry !== 'object') throw new Error('Invalid consumer registration');
     const item = entry as Record<string, unknown>;
     // F01/F86/Admin need their own complete contracts; never silently map them to ERP.
-    if (typeof item.id !== 'string' || !/^(erp-com|kakao-ops|freepass-estimate|freepass-admin-catalog|(?:whitelabel|internal-ai)-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
+    if (typeof item.id !== 'string' || !/^(erp-com|erp5-public-media|kakao-ops|freepass-estimate|freepass-admin-catalog|(?:whitelabel|internal-ai)-[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(item.id)) {
       throw new Error('Consumer contract is not implemented for this registration');
     }
     const expectedProjection = item.id === 'freepass-estimate'
@@ -128,6 +129,7 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     }
     if (ids.has(item.id) || tokens.has(item.token)) throw new Error('Duplicate consumer ID or shared service token');
     const internalAi = item.id.startsWith('internal-ai-');
+    if (item.id === 'erp5-public-media' && item.capabilities === undefined) throw new Error('ERP5 media capability must be explicit');
     if (internalAi && item.capabilities === undefined) throw new Error('Internal AI capability must be explicit');
     const capabilities: ConsumerCapability[] = item.capabilities === undefined
       ? (item.id === 'freepass-estimate' ? ['estimate-newcar-master', 'estimate-artifacts'] : ['catalog'])
@@ -135,7 +137,7 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
           if (!Array.isArray(item.capabilities) || item.capabilities.length === 0) {
             throw new Error('Consumer capabilities must be a non-empty array');
           }
-          const allowed = new Set<ConsumerCapability>(['catalog', 'catalog-reference', 'internal-ai-reference', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'settlement-ledger-read', 'admin-workflow', 'contract-fee-link-read']);
+          const allowed = new Set<ConsumerCapability>(['photos', 'catalog', 'catalog-reference', 'internal-ai-reference', 'catalog-health', 'estimate-newcar-master', 'estimate-artifacts', 'settlement-ledger-read', 'admin-workflow', 'contract-fee-link-read']);
           const values = item.capabilities.map((value) => {
             if (typeof value !== 'string' || !allowed.has(value as ConsumerCapability)) {
               throw new Error('Unsupported consumer capability');
@@ -147,6 +149,9 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
           }
           return values;
         })();
+    if ((item.id === 'erp5-public-media' && (capabilities.length !== 1 || capabilities[0] !== 'photos'))
+      || (item.id !== 'erp5-public-media' && capabilities.includes('photos')))
+      throw new Error('ERP5 media registration requires its exclusive photos capability');
     if (item.id === 'freepass-estimate') {
       if (capabilities.some((value) => !['estimate-newcar-master', 'estimate-artifacts'].includes(value))) {
         throw new Error('FreePass Estimate registration may only use Estimate capabilities');
@@ -459,7 +464,8 @@ export function createConsumerGateway(
       }
       const consumerRetry = consumerPhotoLimit.take(binding.id);
       if (consumerRetry) return reply.header('Retry-After', String(consumerRetry)).code(429).send({ code: 'VEHICLE_PHOTO_RATE_LIMITED' });
-      if (!binding.capabilities.includes('catalog') || !(binding.id === 'erp-com' || binding.id.startsWith('whitelabel-'))) {
+      if (!((binding.id === 'erp5-public-media' && binding.capabilities.includes('photos'))
+        || (binding.capabilities.includes('catalog') && (binding.id === 'erp-com' || binding.id.startsWith('whitelabel-'))))) {
         await access.deny('READ', spec, 'FORBIDDEN'); return reply.code(403).send({ code: 'FORBIDDEN' });
       }
       const index = request.params.index === undefined ? undefined : Number(request.params.index);

@@ -536,6 +536,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 ERP5 RP031 사진 전용 consumer 준비
+
+- 목적/대상: ERP5의 ERP4 사진 인증 의존을 별도 Data server credential로 준비한다. main `1e1ea6894def6bebd3abe4d231471f3153ffdfea`, isolated branch `work/freepass-data/erp5-media-reader-20261011`; 이 기록을 포함하는 commit이 exact 구현 revision이다. PR437/451/453 및 공유 checkout NEXT 원본은 변경하지 않았다.
+- 확정 계약: 새 machine ID `erp5-public-media`, 구조상 `erp-public`, 명시 단독 `photos`와 기존 모든 소비자와 다른 service token. UI channel 등록·legacytoken 복사·appCredentials 확장은 없다. 사진 count/index 두 route만 기존 proxy로 제공한다. 다른 consumer 경로401, 자신의 catalog/compat/master/reference/fees/health/업무경로403이며 읽기 전 차단한다. 익명 public feed/quote 정책은 그대로다.
+- 자원 경계: 기존 RP031 공개 ONE product predicate를 domain으로 옮기고 기존 export를 유지했다. dedicated reader는 RP031 공개 자격/검증/ONE 차량 연결을 확인하고 기존 Iancar source만 선택한다. 승인 Drive·다른 공급사 fallback0; count/index의 source 연결/철회 recheck와 성공 감사 후 전송 직전 revalidate를 유지한다. 기존consumer의 승인 Drive 사진/채널ID형식 계약은 보존되며, 부재한 channel-provider fence가 새로 보장됐다고 주장하지 않는다.
+- 검증: 관련3 suites149 PASS, 전체147 suites2158 PASS/16 skipped; arch/access/build PASS, standards exit0/PARTIAL. 12 계약·19 인증 읽기 검토 초기 hunk PASS; 성공감사 중 철회/count·bytes404, 성공감사 저장실패503/no bytes 추가 회귀 포함. 전체 회귀 및 원격 CI의 exact-head 결과는 해당 PR 영수증을 따른다.
+- HOLD/next_start_here: 별도 운영 owner가 token 발급·Secret version/pin·runtime 배포·ERP5 server env·RP031 실제 count/image readback을 승인·실행해야 한다. code TESTED를 DEPLOYMENT/CUTOVER VERIFIED로 확대하지 않는다. IAM/Firebase target/DB·시트·source writes/등록/스케줄/운영배포0. 재시작은 `docs/ERP5-CONSUMER-RUNTIME.md`의 사진 전용 준비 절과 최종 PR commit/CI를 확인한다.
+
+
 ### 2026-10-11 단일 제공자 연결 규격 고정 — PR448 후속
 
 - 사용자 결정: 연결 규격을 정하고 Data가 제공한 값을 소비처가 읽는다. 목적은 그림자 서버에 두 번째 수수료 계산을 추가하는 것이 아니다.
