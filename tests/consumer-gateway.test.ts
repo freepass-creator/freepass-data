@@ -1355,6 +1355,8 @@ describe('authenticated collected source scope', () => {
       expect(rows.every(row => row.car_number === null && row.vehicle_uid === null && row.vehicle_status === '출고협의' && row.listable === false)).toBe(true);
       expect(rows.map(row => row.price['48'].depositState)).toEqual(['KNOWN','ZERO']);
       expect(rows.map(row => Object.keys(row.price))).toEqual([['48','60'],['48','60']]);
+      expect(rows.every(row => row.price['48'].supplierBillingFee.state === 'UNKNOWN'
+        && row.price['48'].supplierBillingFee.amount === null && row.price['48'].channelPayoutFee.amount === null)).toBe(true);
       expect(result.body).not.toContain('PRIVATE_CUSTOMER');
       expect(rows[0]!._source_row_product.facts.some((f: { fieldKey: string }) => f.fieldKey === 'deposit:m48')).toBe(true);
       expect(rows[0]!.product_code).not.toBe(rows[1]!.product_code);
@@ -1392,6 +1394,10 @@ describe('authenticated collected source scope', () => {
       expect(body.data).toEqual([observation]);
       expect(observation.facts).toContainEqual(expect.objectContaining({ fieldKey: 'deposit:m48', rawValue: '무보증', normalizedValue: 0, state: 'ZERO' }));
       expect(observation.normalized.priceConditions).toHaveLength(2);
+      expect(observation.normalized.priceConditions.every((term: Record<string, any>) =>
+        term.supplierBillingFee.state === 'UNKNOWN' && term.supplierBillingFee.amount === null
+        && term.channelPayoutFee.state === 'UNKNOWN' && term.channelPayoutFee.amount === null
+        && term.priceSourceRefs.some((ref: { field: string }) => ref.field === `${term.termMonths}개월`))).toBe(true);
       expect(response.body).not.toMatch(/PRIVATE_PII|PRIVATE_TOKEN/);
       expect(observation.facts).toContainEqual(expect.objectContaining({ fieldKey: 'sourceColumn:옵션 원문', rawValue: null, reasons: ['RAW_FREE_TEXT_WITHHELD'] }));
       const exact = await app.inject({ url: endpoint + '?sourceScope=COLLECTED&sourceObservationId=' + observation.observationId, headers });
