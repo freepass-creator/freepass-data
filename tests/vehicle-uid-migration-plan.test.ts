@@ -216,9 +216,12 @@ describe('planVehicleUidMigration', () => {
     expect(new Set(setItems.map(item => item.vehicleUid))).toEqual(new Set(['TEST-FAKE-UID-A']));
     expect(result.items).toContainEqual(expect.objectContaining({
       kind: 'ASSET_ADD_EXTERNAL_IDS',
+      componentId: setItems[0]!.componentId,
       assetId: 'TEST-FAKE-UID-A',
       externalIds: expect.arrayContaining([expect.objectContaining({ kind: 'VIN', value: 'TEST-FAKE-VIN-V', validFrom: '2026-10-10T00:00:00.000Z' })]),
     }));
+    expect(JSON.stringify(result.summary.publicReport)).not.toContain('TEST-FAKE-UID-A');
+    expect(JSON.stringify(result.summary.publicReport)).toContain('componentHash');
   });
 
   it('holds every product in a component that connects two different existing assets by plate and VIN', () => {

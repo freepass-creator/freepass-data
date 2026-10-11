@@ -14,23 +14,27 @@ export type VehicleUidMigrationProduct = Record<string, unknown>;
 export type VehicleUidMigrationItem =
   | {
       kind: 'ASSET_ADD_EXTERNAL_IDS';
+      componentId: string;
       assetId: string;
       externalIds: VehicleExternalId[];
-      public: { assetHash: string; externalIdKinds: string[] };
+      public: { componentHash: string; assetHash: string; externalIdKinds: string[] };
     }
   | {
       kind: 'PRODUCT_SET_UID';
+      componentId: string;
       productKey: string;
       vehicleUid: string;
       reason: 'SOURCE_BINDING' | 'PLATE_UNIQUE_ASSET' | 'PLANNED_NEW_UID' | 'CREATED_IN_PLAN';
       identifiers: VehicleUidMigrationIdentifierSummary;
-      public: { productHash: string; vehicleUidHash: string; reason: string };
+      assetIdentifierDigest?: string;
+      public: { componentHash: string; productHash: string; vehicleUidHash: string; reason: string };
     }
   | {
       kind: 'HOLD';
+      componentId: string;
       productKey: string;
       reason: string;
-      public: { productHash: string; reason: string };
+      public: { componentHash: string; productHash: string; reason: string };
     };
 
 export type VehicleUidMigrationSummary = {
@@ -244,10 +248,14 @@ class UnionFind {
   }
 }
 
-function upsertAssetExternalIdsItem(items: VehicleUidMigrationItem[], assetId: string, externalIds: VehicleExternalId[]) {
+function componentIdFor(key: string) {
+  return `component_${hash(key)}`;
+}
+
+function upsertAssetExternalIdsItem(items: VehicleUidMigrationItem[], componentId: string, assetId: string, externalIds: VehicleExternalId[]) {
   if (externalIds.length === 0) return;
   const existing = items.find((item): item is Extract<VehicleUidMigrationItem, { kind: 'ASSET_ADD_EXTERNAL_IDS' }> =>
-    item.kind === 'ASSET_ADD_EXTERNAL_IDS' && item.assetId === assetId
+    item.kind === 'ASSET_ADD_EXTERNAL_IDS' && item.componentId === componentId && item.assetId === assetId
   );
   if (existing) {
     const keyed = new Map<string, VehicleExternalId>();
@@ -260,9 +268,10 @@ function upsertAssetExternalIdsItem(items: VehicleUidMigrationItem[], assetId: s
   }
   items.push({
     kind: 'ASSET_ADD_EXTERNAL_IDS',
+    componentId,
     assetId,
     externalIds: sortExternalIds(externalIds),
-    public: { assetHash: hash(assetId), externalIdKinds: [...new Set(externalIds.map(id => id.kind))].sort() },
+    public: { componentHash: hash(componentId), assetHash: hash(assetId), externalIdKinds: [...new Set(externalIds.map(id => id.kind))].sort() },
   });
 }
 
@@ -299,6 +308,10 @@ function normalizedActiveIds(asset: VehicleAsset, observedAt: string): VehicleEx
       ...(id.supplierCode ? { supplierCode: id.supplierCode.trim().toUpperCase() } : {}),
     }))
     .filter(id => id.value && active(id, observedAt));
+}
+
+export function summarizeVehicleUidMigrationAssetIdentifiers(asset: VehicleAsset, observedAt: string) {
+  return stableDigest(normalizedActiveIds(asset, observedAt));
 }
 
 function assetContradictsProduct(asset: VehicleAsset, ids: ReturnType<typeof productIds>, observedAt: string) {
@@ -358,18 +371,6 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
       const list = plateProducts.get(plate) ?? [];
       list.push({ key, ...(ids.supplierCode ? { supplier: ids.supplierCode } : {}) });
       plateProducts.set(plate, list);
-    }
-  }
-
-  for (const asset of [...input.assets].sort((a, b) => a.id.localeCompare(b.id))) {
-    const externalIds = needsExternalIds(asset, input.observedAt);
-    if (externalIds.length) {
-      items.push({
-        kind: 'ASSET_ADD_EXTERNAL_IDS',
-        assetId: asset.id,
-        externalIds: sortExternalIds(externalIds),
-        public: { assetHash: hash(asset.id), externalIdKinds: [...new Set(externalIds.map(id => id.kind))].sort() },
-      });
     }
   }
 
@@ -465,26 +466,28 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
   }
 
   for (const component of componentPlans.sort((a, b) => a.key.localeCompare(b.key))) {
+    const componentId = componentIdFor(component.key);
     if (component.reasons.length) {
       const holdsExistingProducts = component.reasons.includes('UID_ASSET_MISSING');
       for (const productKey of component.products) {
         const product = input.products[productKey]!;
         if (text(product.vehicle_uid) && !holdsExistingProducts) continue;
         for (const reason of ['GRAPH_COMPONENT_CONFLICT', ...component.reasons]) {
-          items.push({ kind: 'HOLD', productKey, reason, public: { productHash: hash(productKey), reason } });
+          items.push({ kind: 'HOLD', componentId, productKey, reason, public: { componentHash: hash(componentId), productHash: hash(productKey), reason } });
         }
       }
       continue;
     }
     const uid = component.assetIds[0] ?? newUidByComponentKey.get(component.key)!;
+    const existingAsset = component.assetIds[0] ? assetById.get(uid) : undefined;
     const reason = component.assetIds[0] ? (component.products.some(productKey => bindingsForProduct(input.bindings, productKey).some(b => b.vehicleAssetId === uid)) ? 'SOURCE_BINDING' : 'PLATE_UNIQUE_ASSET') : 'PLANNED_NEW_UID';
     if (component.assetIds[0]) {
-      const asset = assetById.get(uid);
+      const asset = existingAsset;
       if (asset) {
         const added = component.ids.filter(id =>
           stableDigest(addExternalId(asset, id, input.observedAt).externalIds ?? []) !== stableDigest(asset.externalIds ?? [])
         );
-        upsertAssetExternalIdsItem(items, uid, added);
+        upsertAssetExternalIdsItem(items, componentId, uid, added);
       }
     }
     for (const productKey of component.products) {
@@ -492,11 +495,29 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
       if (text(product.vehicle_uid)) continue;
       items.push({
         kind: 'PRODUCT_SET_UID',
+        componentId,
         productKey,
         vehicleUid: uid,
         reason,
         identifiers: summarizeVehicleUidMigrationIdentifiers(product),
-        public: { productHash: hash(productKey), vehicleUidHash: hash(uid), reason },
+        ...(existingAsset ? { assetIdentifierDigest: summarizeVehicleUidMigrationAssetIdentifiers(existingAsset, input.observedAt) } : {}),
+        public: { componentHash: hash(componentId), productHash: hash(productKey), vehicleUidHash: hash(uid), reason },
+      });
+    }
+  }
+
+  const componentAssetIds = new Set(componentPlans.flatMap(component => component.assetIds));
+  for (const asset of [...input.assets].sort((a, b) => a.id.localeCompare(b.id))) {
+    if (componentAssetIds.has(asset.id)) continue;
+    const externalIds = needsExternalIds(asset, input.observedAt);
+    if (externalIds.length) {
+      const componentId = componentIdFor(`asset:${asset.id}`);
+      items.push({
+        kind: 'ASSET_ADD_EXTERNAL_IDS',
+        componentId,
+        assetId: asset.id,
+        externalIds: sortExternalIds(externalIds),
+        public: { componentHash: hash(componentId), assetHash: hash(asset.id), externalIdKinds: [...new Set(externalIds.map(id => id.kind))].sort() },
       });
     }
   }

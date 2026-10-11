@@ -1,15 +1,20 @@
 import type { VehicleAsset, VehicleExternalId } from '../domain/catalog.js';
 import { addExternalId } from '../domain/vehicle-uid.js';
-import type { VehicleUidMigrationStoreMutation, VehicleUidMigrationWriteStore } from '../ports/vehicle-uid-migration-store.js';
+import type { VehicleUidMigrationStoreMutation, VehicleUidMigrationUpdateTime, VehicleUidMigrationWriteStore } from '../ports/vehicle-uid-migration-store.js';
 import { stableDigest } from '../shared/stable-digest.js';
-import { summarizeVehicleUidMigrationIdentifiers, type VehicleUidMigrationItem, type VehicleUidMigrationPlan } from './vehicle-uid-migration-plan.js';
+import {
+  summarizeVehicleUidMigrationAssetIdentifiers,
+  summarizeVehicleUidMigrationIdentifiers,
+  type VehicleUidMigrationItem,
+  type VehicleUidMigrationPlan,
+} from './vehicle-uid-migration-plan.js';
 
 export type VehicleUidMigrationBackup = {
   schema: 'vehicle-uid-migration-backup/v1';
   planDigest: string;
   createdAt: string;
-  assets: Array<{ assetId: string; externalIds?: VehicleExternalId[]; updateTime?: string; appliedExternalIds?: VehicleExternalId[] }>;
-  products: Array<{ productKey: string; hadVehicleUid: boolean; vehicleUid?: unknown; updateTime?: string; appliedVehicleUid?: string }>;
+  assets: Array<{ componentId?: string; assetId: string; externalIds?: VehicleExternalId[]; updateTime?: VehicleUidMigrationUpdateTime; appliedExternalIds?: VehicleExternalId[] }>;
+  products: Array<{ componentId?: string; productKey: string; hadVehicleUid: boolean; vehicleUid?: string | null; updateTime?: VehicleUidMigrationUpdateTime; appliedVehicleUid?: string }>;
   backupDigest: string;
 };
 
@@ -67,7 +72,8 @@ async function commitMutations(store: VehicleUidMigrationWriteStore, mutations: 
     if (mutation.kind === 'ASSET_EXTERNAL_IDS') {
       await store.restoreAssetExternalIds(mutation.assetId, mutation.externalIds);
     } else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
-      await store.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
+      if (mutation.vehicleUid === null) await store.deleteProductVehicleUid(mutation.productKey);
+      else await store.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
     } else {
       await store.deleteProductVehicleUid(mutation.productKey);
     }
@@ -79,8 +85,10 @@ const bump = (record: Record<string, number>, reason: string) => {
   record[reason] = (record[reason] ?? 0) + 1;
 };
 
-const withUpdateTime = (updateTime?: string) => updateTime ? { updateTime } : {};
+const withTypedUpdateTime = (updateTime?: VehicleUidMigrationUpdateTime) => updateTime ? { updateTime } : {};
 const withExpectedAfter = <T>(expectedAfter: T | undefined) => expectedAfter !== undefined ? { expectedAfter } : {};
+const productVehicleUidBackupValue = (value: unknown): string | null => typeof value === 'string' ? value : null;
+const sameDigest = (left: unknown, right: unknown) => stableDigest(left) === stableDigest(right);
 
 export async function dryRunVehicleUidMigration(plan: VehicleUidMigrationPlan, expectedDigest: string): Promise<VehicleUidMigrationApplyResult> {
   const digest = assertVehicleUidPlanDigest(plan, expectedDigest);
@@ -117,66 +125,114 @@ export async function applyVehicleUidMigration(
   let assetUpdates = 0;
   let productUpdates = 0;
   const mutations: VehicleUidMigrationStoreMutation[] = [];
+  const mutationsByComponent = new Map<string, VehicleUidMigrationStoreMutation[]>();
   const skippedReasons: Record<string, number> = {};
   const skippedTargets = new Set<string>();
+  const componentSkipReasons = new Map<string, string>();
 
-  for (const item of items) {
-    if (item.kind === 'ASSET_ADD_EXTERNAL_IDS') {
-      const snapshot = store.getAssetSnapshot ? await store.getAssetSnapshot(item.assetId) : null;
-      const asset = snapshot?.data ?? await store.getAsset(item.assetId);
-      if (!asset) throw new Error('VEHICLE_UID_ASSET_MISSING');
-      const next = externalIdsAfter(asset, item.externalIds, plan.observedAt);
-      if (stableDigest(next) === stableDigest(asset.externalIds ?? [])) {
-        skipped++;
-        continue;
+  for (const componentId of [...new Set(items.map(item => item.componentId))].sort()) {
+    const componentItems = items.filter(item => item.componentId === componentId);
+    const componentMutations: VehicleUidMigrationStoreMutation[] = [];
+    const componentBackupAssets: typeof backup.assets = [];
+    const componentBackupProducts: typeof backup.products = [];
+    let componentWrites = 0;
+    let componentAssetUpdates = 0;
+    let componentProductUpdates = 0;
+    for (const item of componentItems) {
+      if (item.kind === 'ASSET_ADD_EXTERNAL_IDS') {
+        const snapshot = store.getAssetSnapshot ? await store.getAssetSnapshot(item.assetId) : null;
+        const asset = snapshot?.data ?? await store.getAsset(item.assetId);
+        if (!asset) throw new Error('VEHICLE_UID_ASSET_MISSING');
+        const next = externalIdsAfter(asset, item.externalIds, plan.observedAt);
+        if (stableDigest(next) === stableDigest(asset.externalIds ?? [])) {
+          skipped++;
+          continue;
+        }
+        componentBackupAssets.push({
+          componentId,
+          assetId: item.assetId,
+          ...(asset.externalIds !== undefined ? { externalIds: structuredClone(asset.externalIds) } : {}),
+          ...(snapshot?.updateTime ? { updateTime: snapshot.updateTime } : {}),
+          appliedExternalIds: structuredClone(next),
+        });
+        componentMutations.push({ kind: 'ASSET_EXTERNAL_IDS', assetId: item.assetId, externalIds: next, ...withTypedUpdateTime(snapshot?.updateTime) });
+        componentWrites++;
+        componentAssetUpdates++;
       }
-      backup.assets.push({
-        assetId: item.assetId,
-        ...(asset.externalIds !== undefined ? { externalIds: structuredClone(asset.externalIds) } : {}),
-        ...(snapshot?.updateTime ? { updateTime: snapshot.updateTime } : {}),
-        appliedExternalIds: structuredClone(next),
-      });
-      mutations.push({ kind: 'ASSET_EXTERNAL_IDS', assetId: item.assetId, externalIds: next, ...withUpdateTime(snapshot?.updateTime) });
-      writes++;
-      assetUpdates++;
+      if (item.kind === 'PRODUCT_SET_UID') {
+        if (item.assetIdentifierDigest) {
+          const assetSnapshot = store.getAssetSnapshot ? await store.getAssetSnapshot(item.vehicleUid) : null;
+          const asset = assetSnapshot?.data ?? await store.getAsset(item.vehicleUid);
+          if (!asset || summarizeVehicleUidMigrationAssetIdentifiers(asset, plan.observedAt) !== item.assetIdentifierDigest) {
+            componentSkipReasons.set(componentId, 'STALE_ASSET');
+            bump(skippedReasons, 'STALE_ASSET');
+            break;
+          }
+        }
+        const snapshot = store.getProductSnapshot ? await store.getProductSnapshot(item.productKey) : null;
+        const product = snapshot?.data ?? await store.getProduct(item.productKey);
+        if (!product) throw new Error('VEHICLE_UID_PRODUCT_MISSING');
+        if (stableDigest(summarizeVehicleUidMigrationIdentifiers(product)) !== stableDigest(item.identifiers)) {
+          componentSkipReasons.set(componentId, 'STALE_IDENTIFIER');
+          bump(skippedReasons, 'STALE_IDENTIFIER');
+          break;
+        }
+        const current = product.vehicle_uid;
+        if (current === item.vehicleUid) {
+          skipped++;
+          continue;
+        }
+        if (current !== undefined && current !== null && current !== '') throw new Error('VEHICLE_UID_PRODUCT_PRECONDITION_FAILED');
+        componentBackupProducts.push({
+          componentId,
+          productKey: item.productKey,
+          hadVehicleUid: Object.hasOwn(product, 'vehicle_uid'),
+          ...(Object.hasOwn(product, 'vehicle_uid') ? { vehicleUid: productVehicleUidBackupValue(current) } : {}),
+          ...(snapshot?.updateTime ? { updateTime: snapshot.updateTime } : {}),
+          appliedVehicleUid: item.vehicleUid,
+        });
+        componentMutations.push({ kind: 'PRODUCT_VEHICLE_UID', productKey: item.productKey, vehicleUid: item.vehicleUid, ...withTypedUpdateTime(snapshot?.updateTime) });
+        componentWrites++;
+        componentProductUpdates++;
+      }
     }
-    if (item.kind === 'PRODUCT_SET_UID') {
-      const snapshot = store.getProductSnapshot ? await store.getProductSnapshot(item.productKey) : null;
-      const product = snapshot?.data ?? await store.getProduct(item.productKey);
-      if (!product) throw new Error('VEHICLE_UID_PRODUCT_MISSING');
-      if (stableDigest(summarizeVehicleUidMigrationIdentifiers(product)) !== stableDigest(item.identifiers)) {
-        skipped++;
-        bump(skippedReasons, 'STALE_IDENTIFIER');
-        skippedTargets.add(`product:${item.productKey}`);
-        continue;
+    const componentSkipReason = componentSkipReasons.get(componentId);
+    if (componentSkipReason) {
+      skipped += componentItems.length;
+      for (const skippedItem of componentItems) {
+        if (skippedItem.kind === 'ASSET_ADD_EXTERNAL_IDS') skippedTargets.add(`asset:${skippedItem.assetId}`);
+        if (skippedItem.kind === 'PRODUCT_SET_UID') skippedTargets.add(`product:${skippedItem.productKey}`);
       }
-      const current = product.vehicle_uid;
-      if (current === item.vehicleUid) {
-        skipped++;
-        continue;
-      }
-      if (current !== undefined && current !== null && current !== '') throw new Error('VEHICLE_UID_PRODUCT_PRECONDITION_FAILED');
-      backup.products.push({
-        productKey: item.productKey,
-        hadVehicleUid: Object.hasOwn(product, 'vehicle_uid'),
-        ...(Object.hasOwn(product, 'vehicle_uid') ? { vehicleUid: current } : {}),
-        ...(snapshot?.updateTime ? { updateTime: snapshot.updateTime } : {}),
-        appliedVehicleUid: item.vehicleUid,
-      });
-      mutations.push({ kind: 'PRODUCT_VEHICLE_UID', productKey: item.productKey, vehicleUid: item.vehicleUid, ...withUpdateTime(snapshot?.updateTime) });
-      writes++;
-      productUpdates++;
+      continue;
     }
+    backup.assets.push(...componentBackupAssets);
+    backup.products.push(...componentBackupProducts);
+    mutations.push(...componentMutations);
+    mutationsByComponent.set(componentId, componentMutations);
+    writes += componentWrites;
+    assetUpdates += componentAssetUpdates;
+    productUpdates += componentProductUpdates;
   }
 
   const fullBackup = { ...backup, backupDigest: stableDigest(backup) };
   await persistBackup(fullBackup);
   if (writes > 0 && mutations.length === 0) throw new Error('VEHICLE_UID_BACKUP_WITHOUT_MUTATIONS');
-  const commit = await commitMutations(store, mutations);
-  for (const item of commit.skipped) bump(skippedReasons, item.reason);
-  await verifyVehicleUidMigration(store, plan, new Set([...skippedTargets, ...commit.skipped.map(item => item.target)]));
-  const appliedWrites = commit.applied;
-  return { status: 'APPLIED', writes: appliedWrites, skipped: skipped + commit.skipped.length, assetUpdates, productUpdates, digest, backup: fullBackup, skippedReasons };
+  let appliedWrites = 0;
+  let commitSkipped = 0;
+  for (const [componentId, componentMutations] of mutationsByComponent) {
+    const commit = await commitMutations(store, componentMutations);
+    appliedWrites += commit.applied;
+    commitSkipped += commit.skipped.length ? componentMutations.length : 0;
+    for (const item of commit.skipped) {
+      bump(skippedReasons, item.reason);
+      for (const skippedItem of items.filter(planItem => planItem.componentId === componentId)) {
+        if (skippedItem.kind === 'ASSET_ADD_EXTERNAL_IDS') skippedTargets.add(`asset:${skippedItem.assetId}`);
+        if (skippedItem.kind === 'PRODUCT_SET_UID') skippedTargets.add(`product:${skippedItem.productKey}`);
+      }
+    }
+  }
+  await verifyVehicleUidMigration(store, plan, skippedTargets);
+  return { status: 'APPLIED', writes: appliedWrites, skipped: skipped + commitSkipped, assetUpdates, productUpdates, digest, backup: fullBackup, skippedReasons };
 }
 
 export async function verifyVehicleUidMigration(store: VehicleUidMigrationWriteStore, plan: VehicleUidMigrationPlan, skippedTargets = new Set<string>()) {
@@ -209,19 +265,47 @@ export async function rollbackVehicleUidMigration(
     throw new Error('VEHICLE_UID_BACKUP_DIGEST_MISMATCH');
   }
   let writes = 0;
-  const mutations: VehicleUidMigrationStoreMutation[] = [];
+  let skipped = 0;
+  let assetUpdates = 0;
+  let productUpdates = 0;
+  const mutationsByComponent = new Map<string, VehicleUidMigrationStoreMutation[]>();
   const skippedReasons: Record<string, number> = {};
+  const addMutation = (componentId: string, mutation: VehicleUidMigrationStoreMutation) => {
+    const list = mutationsByComponent.get(componentId) ?? [];
+    list.push(mutation);
+    mutationsByComponent.set(componentId, list);
+  };
   for (const item of backup.products) {
-    mutations.push(item.hadVehicleUid
-      ? { kind: 'PRODUCT_VEHICLE_UID', productKey: item.productKey, vehicleUid: String(item.vehicleUid), ...withExpectedAfter(item.appliedVehicleUid) }
+    const current = await store.getProduct(item.productKey);
+    const beforeValue = item.hadVehicleUid ? item.vehicleUid ?? undefined : undefined;
+    if (item.appliedVehicleUid !== undefined && current?.vehicle_uid === beforeValue) {
+      bump(skippedReasons, 'NOT_APPLIED');
+      skipped++;
+      continue;
+    }
+    addMutation(item.componentId ?? `product:${item.productKey}`, item.hadVehicleUid
+      ? { kind: 'PRODUCT_VEHICLE_UID', productKey: item.productKey, vehicleUid: item.vehicleUid ?? null, ...withExpectedAfter(item.appliedVehicleUid) }
       : { kind: 'PRODUCT_DELETE_VEHICLE_UID', productKey: item.productKey, ...withExpectedAfter(item.appliedVehicleUid) });
     writes++;
+    productUpdates++;
   }
   for (const item of backup.assets) {
-    mutations.push({ kind: 'ASSET_EXTERNAL_IDS', assetId: item.assetId, externalIds: item.externalIds, ...withExpectedAfter(item.appliedExternalIds) });
+    const current = await store.getAsset(item.assetId);
+    if (item.appliedExternalIds !== undefined && sameDigest(current?.externalIds ?? null, item.externalIds ?? null)) {
+      bump(skippedReasons, 'NOT_APPLIED');
+      skipped++;
+      continue;
+    }
+    addMutation(item.componentId ?? `asset:${item.assetId}`, { kind: 'ASSET_EXTERNAL_IDS', assetId: item.assetId, externalIds: item.externalIds, ...withExpectedAfter(item.appliedExternalIds) });
     writes++;
+    assetUpdates++;
   }
-  const commit = await commitMutations(store, mutations);
-  for (const item of commit.skipped) bump(skippedReasons, item.reason);
-  return { status: 'ROLLED_BACK', writes: commit.applied, skipped: commit.skipped.length, assetUpdates: backup.assets.length, productUpdates: backup.products.length, digest: expectedDigest, skippedReasons };
+  let applied = 0;
+  for (const mutations of mutationsByComponent.values()) {
+    const commit = await commitMutations(store, mutations);
+    applied += commit.applied;
+    if (commit.skipped.length) skipped += mutations.length;
+    for (const item of commit.skipped) bump(skippedReasons, item.reason);
+  }
+  return { status: 'ROLLED_BACK', writes: applied, skipped, assetUpdates, productUpdates, digest: expectedDigest, skippedReasons };
 }

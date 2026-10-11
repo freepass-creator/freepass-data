@@ -7,7 +7,8 @@ import {
 } from '../src/application/vehicle-uid-migration-apply.js';
 import { planVehicleUidMigration, type VehicleUidMigrationProduct } from '../src/application/vehicle-uid-migration-plan.js';
 import type { VehicleAsset } from '../src/domain/catalog.js';
-import type { VehicleUidMigrationWriteStore } from '../src/ports/vehicle-uid-migration-store.js';
+import type { VehicleUidMigrationUpdateTime, VehicleUidMigrationWriteStore } from '../src/ports/vehicle-uid-migration-store.js';
+import { stableDigest } from '../src/shared/stable-digest.js';
 // @ts-ignore local boundary script is plain ESM.
 import { checkDataAccessBoundary } from '../scripts/check-data-access-boundary.mjs';
 
@@ -30,6 +31,10 @@ const asset = (id: string, plateNumber?: string | null, vin?: string | null): Ve
   ...(plateNumber !== undefined ? { plateNumber } : {}),
   ...(vin !== undefined ? { vin } : {}),
 });
+const assetWithCurrentExternalIds = (id: string, plateNumber: string): VehicleAsset => ({
+  ...asset(id, plateNumber),
+  externalIds: [{ kind: 'PLATE', value: plateNumber, validFrom: meta.createdAt, source: 'vehicle-uid-migration-plan' }],
+});
 const product = (plate: string, extra: VehicleUidMigrationProduct = {}) => ({ car_number: plate, provider_company_code: 'TEST', ...extra });
 const fixedClock = () => new Date('2026-10-10T00:00:00.000Z');
 const random = () => 0.1;
@@ -47,15 +52,15 @@ function plan(products: Record<string, VehicleUidMigrationProduct>, assets = [as
 
 class FakeStore implements VehicleUidMigrationWriteStore {
   writes = 0;
-  assetVersions = new Map<string, string>();
-  productVersions = new Map<string, string>();
+  assetVersions = new Map<string, VehicleUidMigrationUpdateTime>();
+  productVersions = new Map<string, VehicleUidMigrationUpdateTime>();
   failAfterWrites = Number.POSITIVE_INFINITY;
   constructor(
     readonly assets: Map<string, VehicleAsset>,
     readonly products: Map<string, Record<string, unknown>>,
   ) {
-    for (const key of assets.keys()) this.assetVersions.set(key, 'v1');
-    for (const key of products.keys()) this.productVersions.set(key, 'v1');
+    for (const key of assets.keys()) this.assetVersions.set(key, { seconds: 1, nanoseconds: 0 });
+    for (const key of products.keys()) this.productVersions.set(key, { seconds: 1, nanoseconds: 0 });
   }
   async getAsset(assetId: string) {
     return this.assets.get(assetId) ? structuredClone(this.assets.get(assetId)!) : null;
@@ -96,47 +101,89 @@ class FakeStore implements VehicleUidMigrationWriteStore {
     this.products.set(productKey, current);
   }
   async commitMutations(mutations: Parameters<NonNullable<VehicleUidMigrationWriteStore['commitMutations']>>[0]) {
-    let applied = 0;
-    const skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' }> = [];
+    const skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' | 'NOT_APPLIED' }> = [];
+    const sameUpdateTime = (left: VehicleUidMigrationUpdateTime | undefined, right: VehicleUidMigrationUpdateTime | undefined) =>
+      left?.seconds === right?.seconds && left?.nanoseconds === right?.nanoseconds;
+    const nextVersion = () => ({ seconds: 1, nanoseconds: this.writes + 1 });
     for (const mutation of mutations) {
-      if (applied >= this.failAfterWrites) throw new Error('TEST_FAKE_MID_BATCH_FAILURE');
       if (mutation.kind === 'ASSET_EXTERNAL_IDS') {
-        if (mutation.updateTime && this.assetVersions.get(mutation.assetId) !== mutation.updateTime) {
+        if (mutation.updateTime && !sameUpdateTime(this.assetVersions.get(mutation.assetId), mutation.updateTime)) {
           skipped.push({ target: `asset:${mutation.assetId}`, reason: 'CONCURRENT_CHANGE' });
-          continue;
+          break;
         }
         if (mutation.expectedAfter !== undefined && JSON.stringify(this.assets.get(mutation.assetId)?.externalIds ?? null) !== JSON.stringify(mutation.expectedAfter ?? null)) {
           skipped.push({ target: `asset:${mutation.assetId}`, reason: 'ROLLBACK_SKIPPED_CHANGED' });
-          continue;
+          break;
         }
-        await this.restoreAssetExternalIds(mutation.assetId, mutation.externalIds);
-        this.assetVersions.set(mutation.assetId, `v${this.writes + 1}`);
       } else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
-        if (mutation.updateTime && this.productVersions.get(mutation.productKey) !== mutation.updateTime) {
+        if (mutation.updateTime && !sameUpdateTime(this.productVersions.get(mutation.productKey), mutation.updateTime)) {
           skipped.push({ target: `product:${mutation.productKey}`, reason: 'CONCURRENT_CHANGE' });
-          continue;
+          break;
         }
         if (mutation.expectedAfter !== undefined && this.products.get(mutation.productKey)?.vehicle_uid !== mutation.expectedAfter) {
           skipped.push({ target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' });
-          continue;
+          break;
         }
-        await this.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
-        this.productVersions.set(mutation.productKey, `v${this.writes + 1}`);
       } else {
-        if (mutation.updateTime && this.productVersions.get(mutation.productKey) !== mutation.updateTime) {
+        if (mutation.updateTime && !sameUpdateTime(this.productVersions.get(mutation.productKey), mutation.updateTime)) {
           skipped.push({ target: `product:${mutation.productKey}`, reason: 'CONCURRENT_CHANGE' });
-          continue;
+          break;
         }
         if (mutation.expectedAfter !== undefined && this.products.get(mutation.productKey)?.vehicle_uid !== mutation.expectedAfter) {
           skipped.push({ target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' });
-          continue;
+          break;
         }
+      }
+    }
+    if (skipped.length) return { applied: 0, skipped };
+    let applied = 0;
+    for (const mutation of mutations) {
+      if (applied >= this.failAfterWrites) throw new Error('TEST_FAKE_MID_BATCH_FAILURE');
+      if (mutation.kind === 'ASSET_EXTERNAL_IDS') {
+        await this.restoreAssetExternalIds(mutation.assetId, mutation.externalIds);
+        this.assetVersions.set(mutation.assetId, nextVersion());
+      } else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
+        if (mutation.vehicleUid === null) await this.deleteProductVehicleUid(mutation.productKey);
+        else await this.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
+        this.productVersions.set(mutation.productKey, nextVersion());
+      } else {
         await this.deleteProductVehicleUid(mutation.productKey);
-        this.productVersions.set(mutation.productKey, `v${this.writes + 1}`);
+        this.productVersions.set(mutation.productKey, nextVersion());
       }
       applied++;
     }
     return { applied, skipped };
+  }
+}
+
+class ReadBeforeWriteFakeStore extends FakeStore {
+  async commitMutations(mutations: Parameters<NonNullable<VehicleUidMigrationWriteStore['commitMutations']>>[0]) {
+    let wrote = false;
+    const read = () => {
+      if (wrote) throw new Error('TEST_FAKE_READ_AFTER_WRITE');
+    };
+    const write = () => {
+      wrote = true;
+    };
+    for (const mutation of mutations) {
+      read();
+      if (mutation.kind === 'ASSET_EXTERNAL_IDS') {
+        if (!this.assets.has(mutation.assetId)) return { applied: 0, skipped: [{ target: `asset:${mutation.assetId}`, reason: 'CONCURRENT_CHANGE' as const }] };
+      } else if (!this.products.has(mutation.productKey)) {
+        return { applied: 0, skipped: [{ target: `product:${mutation.productKey}`, reason: 'CONCURRENT_CHANGE' as const }] };
+      }
+    }
+    for (const mutation of mutations) {
+      write();
+      if (mutation.kind === 'ASSET_EXTERNAL_IDS') await this.restoreAssetExternalIds(mutation.assetId, mutation.externalIds);
+      else if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
+        if (mutation.vehicleUid === null) await this.deleteProductVehicleUid(mutation.productKey);
+        else await this.setProductVehicleUid(mutation.productKey, mutation.vehicleUid);
+      } else {
+        await this.deleteProductVehicleUid(mutation.productKey);
+      }
+    }
+    return { applied: mutations.length, skipped: [] };
   }
 }
 
@@ -205,6 +252,43 @@ describe('applyVehicleUidMigration', () => {
     expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
   });
 
+  it('skips the whole component when stale identifiers would otherwise leave asset externalIds behind', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001', { vin: 'TEST-FAKE-VIN-NEW' }) }, [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001')]);
+    const store = new FakeStore(
+      new Map([['TEST-FAKE-UID-001', asset('TEST-FAKE-UID-001', 'TEST-FAKE-001')]]),
+      new Map([['p1', product('TEST-FAKE-001', { vin: 'TEST-FAKE-VIN-NEW' })]]),
+    );
+    store.products.set('p1', product('TEST-FAKE-001', { vin: 'TEST-FAKE-VIN-CHANGED' }));
+    const result = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    expect(result.skippedReasons?.STALE_IDENTIFIER).toBe(1);
+    expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
+    expect(store.assets.get('TEST-FAKE-UID-001')!.externalIds).toBeUndefined();
+  });
+
+  it('skips PRODUCT_SET_UID as STALE_ASSET when the planned existing asset was deleted before apply', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001') }, [assetWithCurrentExternalIds('TEST-FAKE-UID-001', 'TEST-FAKE-001')]);
+    const store = new FakeStore(
+      new Map([['TEST-FAKE-UID-001', assetWithCurrentExternalIds('TEST-FAKE-UID-001', 'TEST-FAKE-001')]]),
+      new Map([['p1', product('TEST-FAKE-001')]]),
+    );
+    store.assets.delete('TEST-FAKE-UID-001');
+    const result = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    expect(result.skippedReasons?.STALE_ASSET).toBe(1);
+    expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
+  });
+
+  it('skips PRODUCT_SET_UID as STALE_ASSET when the planned existing asset identifiers changed before apply', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001') }, [assetWithCurrentExternalIds('TEST-FAKE-UID-001', 'TEST-FAKE-001')]);
+    const store = new FakeStore(
+      new Map([['TEST-FAKE-UID-001', assetWithCurrentExternalIds('TEST-FAKE-UID-001', 'TEST-FAKE-001')]]),
+      new Map([['p1', product('TEST-FAKE-001')]]),
+    );
+    store.assets.set('TEST-FAKE-UID-001', assetWithCurrentExternalIds('TEST-FAKE-UID-001', 'TEST-FAKE-CHANGED'));
+    const result = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    expect(result.skippedReasons?.STALE_ASSET).toBe(1);
+    expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
+  });
+
   it('skips concurrent changes instead of overwriting them', async () => {
     const p = plan({ p1: product('TEST-FAKE-001') });
     const store = fakeStore(p);
@@ -213,10 +297,28 @@ describe('applyVehicleUidMigration', () => {
       p,
       p.planDigest,
       { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' },
-      async () => { store.productVersions.set('p1', 'v2'); },
+      async () => { store.productVersions.set('p1', { seconds: 1, nanoseconds: 1 }); },
     );
     expect(result.skippedReasons?.CONCURRENT_CHANGE).toBeGreaterThan(0);
     expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
+  });
+
+  it('treats an updateTime nanosecond-only change as CONCURRENT_CHANGE and skips the component', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001', { vin: 'TEST-FAKE-VIN-NEW' }) }, [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001')]);
+    const store = new FakeStore(
+      new Map([['TEST-FAKE-UID-001', asset('TEST-FAKE-UID-001', 'TEST-FAKE-001')]]),
+      new Map([['p1', product('TEST-FAKE-001', { vin: 'TEST-FAKE-VIN-NEW' })]]),
+    );
+    const result = await applyVehicleUidMigration(
+      store,
+      p,
+      p.planDigest,
+      { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' },
+      async () => { store.productVersions.set('p1', { seconds: 1, nanoseconds: 500 }); },
+    );
+    expect(result.skippedReasons?.CONCURRENT_CHANGE).toBe(1);
+    expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
+    expect(store.assets.get('TEST-FAKE-UID-001')!.externalIds).toBeUndefined();
   });
 
   it('stops when a product has a conflicting vehicle_uid precondition', async () => {
@@ -236,6 +338,56 @@ describe('applyVehicleUidMigration', () => {
     expect(rolledBack.status).toBe('ROLLED_BACK');
     expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
     expect(store.assets.get('TEST-FAKE-UID-001')!.externalIds).toBeUndefined();
+  });
+
+  it('rolls back missing vehicle_uid fields by deleting the field and preserves original string values', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001'), p2: product('TEST-FAKE-002') }, [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001'), asset('TEST-FAKE-UID-002', 'TEST-FAKE-002')]);
+    const store = new FakeStore(
+      new Map([['TEST-FAKE-UID-001', asset('TEST-FAKE-UID-001', 'TEST-FAKE-001')], ['TEST-FAKE-UID-002', asset('TEST-FAKE-UID-002', 'TEST-FAKE-002')]]),
+      new Map<string, Record<string, unknown>>([['p1', product('TEST-FAKE-001')], ['p2', { ...product('TEST-FAKE-002'), vehicle_uid: null }]]),
+    );
+    const applied = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    const stringBackup = structuredClone(applied.backup!);
+    stringBackup.products.push({ productKey: 'p3', hadVehicleUid: true, vehicleUid: 'TEST-FAKE-ORIGINAL', appliedVehicleUid: 'TEST-FAKE-APPLIED' });
+    const { backupDigest: _backupDigest, ...backupBody } = stringBackup;
+    stringBackup.backupDigest = stableDigest(backupBody);
+    store.products.set('p3', { ...product('TEST-FAKE-003'), vehicle_uid: 'TEST-FAKE-APPLIED' });
+    await rollbackVehicleUidMigration(store, stringBackup, p.planDigest, { approvedDigest: p.planDigest, writeFlag: 'ROLLBACK' });
+    expect(Object.hasOwn(store.products.get('p1')!, 'vehicle_uid')).toBe(false);
+    expect(Object.hasOwn(store.products.get('p2')!, 'vehicle_uid')).toBe(false);
+    expect(store.products.get('p3')!.vehicle_uid).toBe('TEST-FAKE-ORIGINAL');
+  });
+
+  it('keeps rollback transactions read-before-write with an adapter that throws on read after write', async () => {
+    const p = plan({ p1: product('TEST-FAKE-001') });
+    const store = new ReadBeforeWriteFakeStore(
+      new Map([['TEST-FAKE-UID-001', asset('TEST-FAKE-UID-001', 'TEST-FAKE-001', 'TEST-FAKE-VIN-001')]]),
+      new Map([['p1', product('TEST-FAKE-001')]]),
+    );
+    const applied = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    await expect(rollbackVehicleUidMigration(store, applied.backup!, p.planDigest, { approvedDigest: p.planDigest, writeFlag: 'ROLLBACK' }))
+      .resolves.toEqual(expect.objectContaining({ status: 'ROLLED_BACK' }));
+  });
+
+  it('rolls back applied components and reports NOT_APPLIED for backup entries whose current value is still before-state', async () => {
+    const p = plan(
+      { p1: product('TEST-FAKE-001'), p2: product('TEST-FAKE-002') },
+      [asset('TEST-FAKE-UID-001', 'TEST-FAKE-001'), asset('TEST-FAKE-UID-002', 'TEST-FAKE-002')],
+    );
+    const store = new FakeStore(
+      new Map([['TEST-FAKE-UID-001', asset('TEST-FAKE-UID-001', 'TEST-FAKE-001')], ['TEST-FAKE-UID-002', asset('TEST-FAKE-UID-002', 'TEST-FAKE-002')]]),
+      new Map<string, Record<string, unknown>>([['p1', product('TEST-FAKE-001')], ['p2', product('TEST-FAKE-002')]]),
+    );
+    const applied = await applyVehicleUidMigration(store, p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    store.products.set('p2', product('TEST-FAKE-002'));
+    store.assets.set('TEST-FAKE-UID-002', asset('TEST-FAKE-UID-002', 'TEST-FAKE-002'));
+    const rolledBack = await rollbackVehicleUidMigration(store, applied.backup!, p.planDigest, { approvedDigest: p.planDigest, writeFlag: 'ROLLBACK' });
+    expect(store.products.get('p1')!.vehicle_uid).toBeUndefined();
+    expect(store.assets.get('TEST-FAKE-UID-001')!.externalIds).toBeUndefined();
+    expect(store.products.get('p2')!.vehicle_uid).toBeUndefined();
+    expect(store.assets.get('TEST-FAKE-UID-002')!.externalIds).toBeUndefined();
+    expect(rolledBack.skippedReasons?.NOT_APPLIED).toBe(2);
+    expect(rolledBack.skippedReasons?.ROLLBACK_SKIPPED_CHANGED).toBeUndefined();
   });
 
   it('does not rollback over a post-apply product change', async () => {
