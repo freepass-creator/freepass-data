@@ -144,8 +144,7 @@ export const sonogongNormalizer = (master?: SonogongMasterEvidence) => (raw: Raw
     }
   }
   if (!priceTerms.length) issues.push('NO_PRICE_TERMS');
-  // 수수료·12개월 기준은 수수료 미확정 세션 소관 — 보류 사유가 아니라 «미확정» 표시로만 남긴다.
-  fact('feeBasis', null, null, 'MISSING');
+  // 차량가액(vehiclePrice)은 선택 사실 칸일 뿐 수수료 계산에 연결하지 않는다(손오공 수수료는 기간별 — 대표 10-12).
   facts.reasons = [...new Set(issues)];
 
   const candidate: CatalogCandidate = { sourceRecordId: raw.sourceRecordId, sourceFingerprint: raw.sourceFingerprint,

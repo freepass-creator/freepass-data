@@ -347,7 +347,7 @@ securityDepositAmount·monthly12/24/36/48/60·estimateType·creditType와 나머
 
 주요 이슈 코드는 `VEHICLE_IDENTITY_DATA_CONFLICT`, `VEHICLE_MASTER_SNAPSHOT_REQUIRED`, `PLATE_MISSING`, `PLATE_NOT_ASSIGNED`, `NO_PRICE_TERMS`, `DEPOSIT_REVIEW_REQUIRED:*`, `UNKNOWN_BUCKET`, `MONTHLY_RENT_INVALID:m*`이다. `CommercialType`에 오공·픽업 구독이 이미 있어 `CATALOG_COMMERCIAL_TYPE_EXTENSION_REQUIRED`는 이 경로에서 쓰지 않는다(전 구독 차량 보류 방지). 발행 단계의 상품 유형 수용 여부는 소비처에서 별도 확인한다. 보증금 `0`은 명시 면제 근거 없이는 `UNKNOWN`이다. `FEE_BASIS_PENDING`은 수수료/12개월 기준을 여기서 만들지 않는다는 연결 보류 코드다.
 
-수수료·12개월 기준은 `vehicleFacts.fields.feeBasis`(MISSING)로만 표시하고 보류 사유로 삼지 않는다(수수료 미확정 세션 산출과 연결).
+차량가액(`vehiclePrice`)은 선택 사실 칸이며 수수료 계산에 연결하지 않는다(손오공 수수료는 기간별, 대표 2026-10-12 — 계산은 급한 작업 세션 소관). 수수료·12개월 기준은 보류 사유가 아니다.
 
 남은 HOLD: 운영 실호출과 RAW 되읽기, 계정/Secret Manager 운영 주입, 15분 예약 연결, 수수료 기준 확정은 별도 승인·검증 전까지 완료로 보지 않는다. 공급사 원문은 고치지 않는다.
 

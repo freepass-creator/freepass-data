@@ -64,7 +64,7 @@ describe('Sonogong RAW to candidate normalizer', () => {
     // 수수료 기준·공급사 상태 노출 정책은 보류 사유가 아니다(전 차량 100% 보류 방지).
     expect(normalized.record.candidate.issues).not.toContain('FEE_BASIS_PENDING');
     expect(normalized.record.candidate.issues).not.toContain('SUPPLIER_STATUS_POLICY_UNRESOLVED');
-    expect(normalized.record.candidate.vehicleFacts?.fields.feeBasis).toMatchObject({ value: null, state: 'MISSING' });
+    expect(normalized.record.candidate.vehicleFacts?.fields.feeBasis).toBeUndefined();
     expect(original).toEqual(before);
     expect(JSON.stringify(normalized.record)).not.toContain('example.invalid/fake-1.jpg');
   });
