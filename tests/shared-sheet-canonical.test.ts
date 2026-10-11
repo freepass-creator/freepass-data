@@ -15,6 +15,15 @@ import { queryCanonicalByPlate, queryCanonicalProducts, queryFirestoreByPlate, m
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 import { stableDigest, stableRecordSetDigest, stableValue } from '../src/shared/stable-digest.js';
 
+it('checks the actual Linux Actions producer collation before accepting preserved digests', () => {
+  if (process.platform !== 'linux' || process.env.GITHUB_ACTIONS !== 'true') return;
+  expect(new Intl.Collator().resolvedOptions().locale).toBe('en-US');
+  const keys = ['a', 'A', 'z', 'Z', '가', '나', 'é', 'e\u0301', 'Rec-2', 'rec-1'];
+  for (const a of keys) for (const b of keys) {
+    expect(a.localeCompare(b, 'en-US')).toBe(a.localeCompare(b));
+  }
+});
+
 it('preserves producer digests when Windows and CI default collations differ', () => {
   const compare = String.prototype.localeCompare;
   const value = { z: 0, 가: { a: 1, 나: 2 }, a: 3 };
