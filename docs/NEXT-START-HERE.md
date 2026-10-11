@@ -543,7 +543,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 근거 필요85: 신차 출고형태79, 기본6개월 미지원4, 보증금tier2. 해당36상품의 binding→원래RAW36/36 매칭; 최신head다름36, 최신RAW33매칭/3미매칭, 명시subtype/tier0. canonical정책문서0이므로 정책저장 담당의 ID/revision 인계와 조율하며 추정하지 않는다.
 - 안전 보완: Claude ANSWERED/exit0의 계산코드 변경 미고정 지적을 반영. 기존 재산출 plan을 v2로 올리고 각 entry.expectedEconomicsDigest를 트랜잭션 안에서 재계산값과 대조해 쓰기 전 HOLD한다. oldv1/누락digest 거부. approvalRef 필수, 실행자는 서비스로 유지하며 검토·승인 근거를 감사·리비전 reason에 보존. changedOffers는 실제commit 수이며 readbackVerifiedChangedOffers를 별도로 반환한다.
 - 새 비공개 plan: TEMP/period-economics-20261011-v2-candidate.json, policyDigest5be799d0cfe3e90533b9d2a2d72ac83c956977fdb1677a2f01c69e8a54c0ad34, planDigest5631ec012b90bc92101815e4a4aa8ab8d4e305e0462f8b4dc70228468dc6a534. 이전v1/bc9f5dd 계획 적용금지; before-image 보존. 코드 f353fad, 결과digest160/160 포함.
-- 검증: build/architecture/data-access PASS, main병합후 관련227PASS; 보완후 전체2164PASS/16조건부SKIP+마지막계획거부추가검사 포함 recompute19PASS. 독립 재검토 진행 중, 미응답을 PASS로 세지 않는다.
+- 검증: build/architecture/data-access PASS, main병합후 관련227PASS; 보완후 전체2164PASS/16조건부SKIP+마지막계획거부추가검사 포함 recompute19PASS. 독립 재검토 ANSWERED/exit0: 결과digest/승인ref/변경분readback분리 충족, 치명결함없음. 죽은 product/model 되읽기 제거 및 READ-RUNTIME v2/approval-ref 정본 갱신을 반영했고, 지적된 v1 거부검사는 이미 recompute19에 명시적으로 존재함을 확인했다.
 - 남음/next_start_here: 통합 담당에게 PR437 contracts/단일선 수용을 요청했으며 PR453 임의종료·가드우회·동시main병합0. 최종독립검토→같은PR453 exacthead 인계→통합mainSHA 확정→정책담당 동시writer 없음과 최신revision/inputDigest/planDigest 확인→기존 writer apply 및 전160행readback. main반영/저장/온라인소비처검증은 아직 미실행.
 
 

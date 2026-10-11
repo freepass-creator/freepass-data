@@ -560,10 +560,10 @@ Source-to-Canonical parity, or a whole-Catalog atomic snapshot.
 
 ## 2026-10-09 기간 금액 수정·저장·조회 실행 경로
 
-- 계산 정본: `KAKAO_COMMISSION_POLICY` 및 Commercial Data Catalog 최신 대표 확정. 새 정책은 code/contract 검사를 통과한 revision으로 고정한다. 현재 확정 정책은 `sales-commission-2026-10-09`.
+- 계산 정본: `KAKAO_COMMISSION_POLICY` 및 Commercial Data Catalog 최신 대표 확정. 새 정책은 code/contract 검사를 통과한 revision으로 고정한다. 현재 개발 정책은 `sales-commission-2026-10-11`이며 운영 저장 적용은 별도 검증 상태다.
 - 가격·보증금 정정은 기존 `UPDATE_OFFER_PRICE`의 expectedRevision/idempotency 경로를 쓴다. 사람 입력 원본과 과거 계약 정산은 자동 덮어쓰지 않는다.
-- 정책 정정은 아래 dry-run → reviewed plan apply를 쓴다. plan에는 모든 Offer before-image/inputDigest가 포함된다. 저장 변경은 CatalogStore 거래의 revision/audit/history/outbox/receipt로 남는다.
-- apply는 각 상품을 새로 getOffer 해서 가격 불변과 정책 재계산 결과를 대조한다. `readbackVerifiedOffers === processedOffers`이고 status APPLIED여야 저장 검증 성공이다. PERSISTENCE_READBACK_MISMATCH면 부분 커밋 건수를 남기고 HOLD로 중단한다.
+- 정책 정정은 아래 dry-run → reviewed plan apply를 쓴다. v2 plan에는 모든 Offer before-image/inputDigest/expectedEconomicsDigest가 포함된다. v1 또는 검토 결과 digest가 없는 계획은 거부한다. 적용 시 거래 안의 계산 결과가 검토 digest와 다르면 쓰기 전에 REVIEWED_ECONOMICS_DRIFT로 중단한다. 저장 변경은 CatalogStore 거래의 revision/audit/history/outbox/receipt로 남는다.
+- apply는 검토·승인 근거 참조 `--approval-ref`를 필수로 받고 실행 SERVICE 신원과 별도로 감사·리비전 reason에 보존한다. 각 상품을 새로 getOffer 해서 가격 불변과 검토된 expectedEconomicsDigest를 대조한다(현재 계산기로 다시 검증하지 않는다). `readbackVerifiedOffers === processedOffers`, `readbackVerifiedChangedOffers === changedOffers`이고 status APPLIED여야 저장 검증 성공이다. changedOffers는 실제 커밋 수이며 검증 완료 수가 아니다. PERSISTENCE_READBACK_MISMATCH면 부분 커밋 건수를 남기고 HOLD로 중단한다.
 - 빌린카 LC는 referenceRentBasis에36개월 termKey·월료·100%/80% 배율을 보존한다. 별도 감사가 가격행/월료/통화/배율/금액을 다시 검증한다. 기준36개월 가격 수정 후 재계산하면 다른 기간 수수료도 바뀐다.
 - 중앙 정본은 `catalog_offers.priceTerms/internalEconomicsTerms`. 모든 기간의 금액 또는 UNKNOWN/null/사유를 함께 둔다. 차량 번호 유무는 상품 식별자를 대체하지 않는다. 등록되지 않은 원천 상품을 저장했다고 확대하지 않는다.
 - Kakao/internal AI 외부 조회: 기존 인증된 `/v1/consumers/:consumerId/catalog-reference` 및 `/v1/consumers/:consumerId/internal-ai-reference` 경로. Admin 저장값은 검증된 admin-catalog 릴리스 발행 뒤 별도 응답을 대사한다. 모든 소비처는 기존 grant를 유지하며 내부 청구수수료를 공개 화이트라벨에 노출하지 않는다.
@@ -574,7 +574,7 @@ $env:FIREBASE_PROJECT_ID='freepasserp5'
 $env:NODE_ENV='production'
 node --import tsx src/jobs/recompute-offer-economics.ts --firestore
 # JSON 보고서의 plan만 비공개 UTF-8 파일로 보존하고 실제 planDigest를 고정한다.
-node --import tsx src/jobs/recompute-offer-economics.ts --firestore --apply --plan <비공개-plan.json> --policy-id sales-commission-2026-10-09 --expected-plan-digest <검토한-planDigest>
+node --import tsx src/jobs/recompute-offer-economics.ts --firestore --apply --plan <비공개-plan.json> --policy-id sales-commission-2026-10-11 --expected-plan-digest <검토한-v2-planDigest> --approval-ref <실제-검토승인-근거참조>
 ```
 ### 정산 원장과 상품 기준표의 금액 의미
 

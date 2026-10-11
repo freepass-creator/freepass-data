@@ -107,8 +107,6 @@ export async function runOfferEconomicsRecompute(store: CatalogStore, options: R
       results.push({ offerId: entry.offerId, ...result });
       // A commit acknowledgement alone is not persistence verification.
       const stored = await store.getOffer(entry.offerId);
-      const product = stored ? await store.getProduct(stored.productId) : null;
-      const model = product ? await store.getVehicleModel(product.vehicleModelId) : null;
       if (!stored || stored.revision !== result.revision ||
           stableDigest(stored.priceTerms) !== stableDigest(entry.before.priceTerms) ||
           stableDigest(stored.internalEconomicsTerms ?? []) !== entry.expectedEconomicsDigest) {
