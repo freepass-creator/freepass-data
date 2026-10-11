@@ -7,9 +7,86 @@ import {
   iancarOneApiConfigFromEnv,
   projectIancarOnePhaseOne,
   summarizeJsonShape
-  , iancarOnePhotoIds, IancarOneApiError, iancarOneModelIllustration
+  , iancarOnePhotoIds, IancarOneApiError, iancarOneModelIllustration, readIancarOnePhotoBytes
 } from '../adapters/iancar-one-api.js';
 import { inspectSupplierSourceBatch } from '../domain/source-intake.js';
+import { createHash } from 'node:crypto';
+import { orderedJsonDigest } from '../shared/stable-digest.js';
+
+// Exact reviewed input is separate from full collection and never bootstraps a new identity.
+if (process.argv.slice(2).some(arg => arg.startsWith('--reviewed-plan='))) {
+  try {
+    const args = process.argv.slice(2);
+    if (new Set(args).size !== args.length || args.some(arg => !arg.startsWith('--reviewed-plan=')
+      && !arg.startsWith('--expected-digest=') && arg !== '--apply')
+      || args.filter(arg => arg.startsWith('--reviewed-plan=')).length !== 1
+      || args.filter(arg => arg.startsWith('--expected-digest=')).length !== 1) throw new Error('IANCAR_REVIEW_OPTIONS_INVALID');
+    const path = args.find(arg => arg.startsWith('--reviewed-plan='))!.slice('--reviewed-plan='.length);
+    const expectedPlanDigest = args.find(arg => arg.startsWith('--expected-digest='))!.slice('--expected-digest='.length);
+    const apply = args.includes('--apply');
+    const discoverPlan = expectedPlanDigest === 'PLAN' && !apply;
+    if (!path || (!discoverPlan && !/^[a-f0-9]{64}$/.test(expectedPlanDigest))) throw new Error('IANCAR_REVIEW_OPTIONS_INVALID');
+    if (apply && process.env.IANCAR_PHOTO_REVIEW_APPROVED !== 'true') throw new Error('IANCAR_PHOTO_APPROVAL_REQUIRED');
+    const { readFile, stat } = await import('node:fs/promises');
+    if ((await stat(path)).size > 2 * 1024 * 1024) throw new Error('IANCAR_REVIEW_INPUT_INVALID');
+    const plan = JSON.parse(await readFile(path, 'utf8'));
+    if (!plan || typeof plan !== 'object' || Object.keys(plan).some(key => key !== 'records')
+      || !Array.isArray(plan.records) || plan.records.length !== 1) throw new Error('IANCAR_REVIEW_INPUT_INVALID');
+    const row = plan.records[0];
+    const rowKeys = ['productId', 'vehicleId', 'plate', 'count', 'observedAt', 'review'];
+    const reviewKeys = ['upstreamPhotoIds', 'servingPhotoIds', 'refs'];
+    const refKeys = ['sourceKind', 'sourceApiVersion', 'sourceBindingDigest', 'photoSetDigest', 'sourcePhotoIdDigest',
+      'sourceOrdinal', 'servingIndex', 'mediaType', 'photoSha256', 'sourceObservedAt',
+      'vehiclePhotoVerifiedBy', 'vehiclePhotoVerificationMethod', 'vehiclePhotoVerifiedAt'];
+    if (!row || Object.keys(row).some(key => !rowKeys.includes(key))
+      || !['productId', 'vehicleId', 'plate', 'observedAt'].every(key => typeof row[key] === 'string' && row[key].trim())
+      || /[\/\u0000-\u001f\u007f]/.test(row.productId) || !row.review
+      || Object.keys(row.review).some(key => !reviewKeys.includes(key))
+      || !Array.isArray(row.review.refs) || !row.review.refs.length
+      || row.review.refs.some((ref: any) => !ref || Object.keys(ref).some(key => !refKeys.includes(key)))) throw new Error('IANCAR_REVIEW_INPUT_INVALID');
+    // The same pure writer validator is used before source I/O, preserving the actual human timestamps.
+    const { planIancarPhotoReviewPatch } = await import('../domain/consumer-output-contract.js');
+    const identity = { provider_company_code: 'RP031', listable: true, status_kind: '가용',
+      iancar_one_vehicle_id: row.vehicleId, car_number: row.plate };
+    // An apply may refresh an old capture only after the entire original album is checked below.
+    const sourceRecheckRequired = apply || Date.now() - Date.parse(row.observedAt) > 900_000;
+    const candidate = sourceRecheckRequired ? { ...row, observedAt: new Date().toISOString() } : row;
+    planIancarPhotoReviewPatch(identity, candidate, row.review);
+    if (sourceRecheckRequired) {
+      const config = iancarOneApiConfigFromEnv();
+      if (!config.apiKey) throw new Error('IANCAR_ONE_API_KEY_REQUIRED');
+      const client = createIancarOneApiClient(config);
+      const inspect = (detail: unknown) => {
+        const ids = iancarOnePhotoIds(detail, row.vehicleId, row.plate);
+        const raw = (detail as any)?.data ?? detail;
+        const upstream = raw.photos.map((photo: any) => String(photo.photo_id));
+        if (orderedJsonDigest(ids) !== orderedJsonDigest(row.review.servingPhotoIds)
+          || orderedJsonDigest(upstream) !== orderedJsonDigest(row.review.upstreamPhotoIds)) throw new Error('IANCAR_REVIEW_SOURCE_CHANGED');
+        return ids;
+      };
+      const ids = inspect(await client.getVehicle(row.vehicleId));
+      for (let i = 0; i < ids.length; i++) {
+        const photo = await readIancarOnePhotoBytes(await client.getPhoto(row.vehicleId, ids[i]!));
+        if (photo.contentType !== row.review.refs[i].mediaType
+          || createHash('sha256').update(photo.bytes).digest('hex') !== row.review.refs[i].photoSha256) throw new Error('IANCAR_REVIEW_SOURCE_CHANGED');
+      }
+      inspect(await client.getVehicle(row.vehicleId));
+      row.observedAt = new Date().toISOString();
+    }
+    const { runIancarPhotoPublication } = await import('./data-access-runtime.js');
+    const result = await runIancarPhotoPublication({ records: [row], verificationOnly: true, apply,
+      ...(discoverPlan ? {} : { expectedPlanDigest }) });
+    console.log(JSON.stringify({ status: result.status, count: result.count, planDigest: result.planDigest,
+      writeExecuted: result.writeExecuted, ...('backupPath' in result ? { backupPath: result.backupPath } : {}) }));
+    if (!apply && !discoverPlan && result.planDigest !== expectedPlanDigest) throw new Error('IANCAR_PHOTO_PLAN_CHANGED');
+  } catch (error) {
+    const candidate = error instanceof Error ? error.message : '';
+    const code = /^IANCAR_[A-Z_]+$/.test(candidate) ? candidate : 'IANCAR_REVIEW_FAILED';
+    console.error(JSON.stringify({ code }));
+    process.exitCode = 1;
+  }
+  process.exit(process.exitCode ?? 0);
+}
 
 const requested = new Set(process.argv.slice(2));
 if ([...requested].some(arg => arg.startsWith('--restore-photos='))) {
