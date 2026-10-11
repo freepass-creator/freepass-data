@@ -206,7 +206,7 @@ describe('shared sheet local source to Canonical', () => {
     expect(JSON.stringify(result.report)).not.toContain('TEST-FAKE');
   });
   it('commits economics for every term; unresolved fee is null, not zero', async () => {
-    const s = await stores(); const p = await apply(s);
+    const s = await stores(); const p = await apply(s, capture({ '6개월': 600 }));
     expect(p.result.report).toMatchObject({ status: 'APPLIED', committed: 1 });
     const offer = (await s.store.listOffers())[0]!;
     expect(offer.internalEconomicsTerms).toHaveLength(offer.priceTerms.length);
