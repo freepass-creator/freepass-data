@@ -39,6 +39,9 @@ describe('offer economics recompute', () => {
     const refreshed=refreshOfferEconomicsForChangedInputs(offer,next,'USED_SUBSCRIPTION');
     expect(refreshed.map(term=>term.supplierBillingFee.amount!.amount)).toEqual([900000,900000]);
     expect(refreshed.map(term=>term.channelPayoutFee.amount!.amount)).toEqual([720000,720000]);
+    const removed={...next,priceTerms:next.priceTerms.filter(term=>term.termMonths!==36)};
+    expect(refreshOfferEconomicsForChangedInputs(offer,removed,'USED_SUBSCRIPTION')[0]!.supplierBillingFee)
+      .toMatchObject({state:'UNKNOWN',amount:null});
   });
   it('scopes plans to changed offer/product IDs and rejects missing offers without writes', async () => {
     const store = await fixture(), original = (await store.listOffers())[0]!;

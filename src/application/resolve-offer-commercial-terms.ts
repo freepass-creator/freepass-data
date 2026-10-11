@@ -22,6 +22,7 @@ export function refreshOfferEconomicsForChangedInputs(
   const old = new Map((previous.internalEconomicsTerms ?? []).map(term => [term.termKey, term]));
   const oldPrices = new Map(previous.priceTerms.map(term => [term.termKey, term]));
   const changedPriceKeys = new Set(next.priceTerms.filter(term => stableDigest(oldPrices.get(term.termKey) ?? null) !== stableDigest(term)).map(term => term.termKey));
+  for (const key of oldPrices.keys()) if (!next.priceTerms.some(term => term.termKey === key)) changedPriceKeys.add(key);
   const priceChanged = !!vehiclePriceChange && stableDigest(vehiclePriceChange.before) !== stableDigest(vehiclePriceChange.after);
   return candidate.map(term => {
     for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
