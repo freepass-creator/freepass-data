@@ -3,7 +3,8 @@ import { createConsumerGateway, type ConsumerBinding } from '../src/api/consumer
 import { DataAccessGateway } from '../src/application/data-access-gateway.js';
 import { MemoryDataAccessLogStore } from '../src/infra/memory-data-access-log.js';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
-import type { CatalogCompatibilityProductSnapshot } from '../src/infra/erp5-compat-catalog-reader.js';
+import { readSingleProductCompatibility, type CatalogCompatibilityProductSnapshot } from '../src/infra/erp5-compat-catalog-reader.js';
+import { Timestamp, type Firestore } from 'firebase-admin/firestore';
 
 const token = 'test-single-product-token-0123456789abcdef';
 const headers = { authorization: `Bearer ${token}` };
@@ -29,6 +30,55 @@ function setup(binding: ConsumerBinding = { id: 'erp-com', projectionId: 'erp-pu
   return { app, read, readProductCompat, logs };
 }
 describe('bounded single-product compatibility facts', () => {
+  function nativeReader(readTime: Timestamp, updateTime: Timestamp, linkedReadTime = readTime) {
+    const reads: string[] = [];
+    const records: Record<string, Record<string, unknown>> = {
+      [`products/${id}`]: { provider_company_code: 'RP031', policy_code: 'P1', price: { '36': { rent: 500000, deposit: null } } },
+      'policy/P1': { policy_code: 'P1' }, 'partner/RP031': { partner_code: 'RP031' },
+    };
+    const db = { collection: (collection: string) => ({ doc: (docId: string) => ({ path: `${collection}/${docId}`, id: docId }) }),
+      runTransaction: async (fn: (tx: unknown) => Promise<unknown>, options: unknown) => {
+        expect(options).toEqual({ readOnly: true });
+        return fn({ get: async (ref: { path: string; id: string }) => {
+          reads.push(ref.path);
+          return { id: ref.id, exists: true, data: () => records[ref.path],
+            readTime: ref.path.startsWith('products/') ? readTime : linkedReadTime, updateTime };
+        } });
+      } } as unknown as Firestore;
+    return { read: () => readSingleProductCompatibility(db, 'erp-com', id, new Set(['products', 'policy', 'partner'])), reads };
+  }
+  it.each([500000, 999999999])('serves real SDK Timestamp nanos %i through adapter and gateway', async nanoseconds => {
+    const seconds = Date.parse('2026-10-12T00:00:00Z') / 1000;
+    const readTime = new Timestamp(seconds, nanoseconds), updateTime = new Timestamp(seconds, nanoseconds - 1);
+    const floorMs = seconds * 1000 + Math.floor(nanoseconds / 1e6);
+    expect(readTime.toDate().getTime()).toBe(seconds * 1000 + Math.round(nanoseconds / 1e6));
+    expect(readTime.toDate().getTime()).not.toBe(floorMs);
+    const native = nativeReader(readTime, updateTime); const { app, readProductCompat, logs } = setup();
+    readProductCompat.mockImplementation(native.read);
+    const response = await app.inject({ url: url(), headers });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().meta.readAt).toBe(new Date(floorMs).toISOString());
+    expect(response.json().meta.readTimeExact).toEqual({ seconds, nanoseconds });
+    expect(response.json().meta.documentVersions.product.updateTimeExact).toEqual({ seconds, nanoseconds: nanoseconds - 1 });
+    expect(native.reads).toEqual([`products/${id}`, 'policy/P1', 'partner/RP031']);
+    expect(logs.events.filter(event => event.phase === 'SUCCEEDED')).toHaveLength(1); await app.close();
+  });
+  it('preserves ordering across a native Timestamp second boundary', async () => {
+    const seconds = Date.parse('2026-10-12T00:00:00Z') / 1000;
+    const native = nativeReader(new Timestamp(seconds + 1, 500000), new Timestamp(seconds, 999999999));
+    const { app, readProductCompat, logs } = setup(); readProductCompat.mockImplementation(native.read);
+    const response = await app.inject({ url: url(), headers });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().meta.documentVersions.product.updateTime).toBe(new Date(seconds * 1000 + 999).toISOString());
+    expect(logs.events.filter(event => event.phase === 'SUCCEEDED')).toHaveLength(1); await app.close();
+  });
+  it('rejects real SDK linked read-time disagreement within the same millisecond', async () => {
+    const seconds = Date.parse('2026-10-12T00:00:00Z') / 1000;
+    const native = nativeReader(new Timestamp(seconds, 500000), new Timestamp(seconds, 499999), new Timestamp(seconds, 500001));
+    const { app, readProductCompat, logs } = setup(); readProductCompat.mockImplementation(native.read);
+    expect((await app.inject({ url: url(), headers })).statusCode).toBe(503);
+    expect(logs.events.some(event => event.phase === 'SUCCEEDED')).toBe(false); await app.close();
+  });
   it('returns the exact fact without recalculation or a list read and signals migration', async () => {
     const { app, read, readProductCompat } = setup();
     const response = await app.inject({ url: url(), headers });
