@@ -343,6 +343,37 @@ describe('reviewed source change', () => {
     expect((await store.getOffer(initial.offerId))!.internalEconomicsTerms![0]!.supplierBillingFee).toEqual(unknown);
   });
 
+  it.each(['confirmed', 'human-fee', 'different-policy'])(
+    'handles registered one-month rent-dependent FIXED snapshots: %s', async scenario => {
+      const { store, original, initial, changed, command } = await operationalSetup('출고불가', 777);
+      const offer = (await store.getOffer(initial.offerId))!;
+      offer.supplierId = 'RP013';
+      offer.priceTerms[0]!.termMonths = 1;
+      offer.priceTerms[0]!.monthlyRent.amount = 303;
+      original.candidate.candidate.priceTerms[0]!.termMonths = 1;
+      original.candidate.candidate.priceTerms[0]!.monthlyRent.amount = 303;
+      changed.candidate.candidate.priceTerms[0]!.termMonths = 1;
+      offer.internalEconomicsTerms = precomputeOfferEconomics(offer, 'USED_RENT');
+      if (scenario === 'human-fee') {
+        const fee = offer.internalEconomicsTerms[0]!.supplierBillingFee;
+        fee.amount = { amount: 99, currency: 'KRW' };
+        fee.calculation = { kind: 'FIXED', amount: { amount: 99, currency: 'KRW' } };
+      }
+      if (scenario === 'different-policy') offer.internalEconomicsTerms[0]!.supplierBillingFee.policyId = 'different:confirmed-policy';
+      await store.seed!({ offers: [offer], candidates: [original.candidate, changed.candidate] });
+      const review = await reviewSourceChange(store, initial.bindingId, changed.candidate.candidateId, command.operationalRefresh);
+      const nextCommand = { ...command, approvedChangeIds: review.reviewableChangeIds };
+      const before = await Promise.all([store.getProduct(initial.productId), store.getVehicleAsset('va_source_change_gv70')]);
+      const audits = structuredClone(store.audits), outbox = structuredClone([...store.outbox]);
+      await expect(applyReviewedSourceChange(store, nextCommand, '2026-09-21T01:01:00Z')).rejects.toThrow('FIXED economics');
+      expect(await store.getOffer(initial.offerId)).toEqual(offer);
+      expect((await store.getSourceBinding(initial.bindingId))!.sourceRunId).toBe('run-original');
+      expect(await Promise.all([store.getProduct(initial.productId), store.getVehicleAsset('va_source_change_gv70')])).toEqual(before);
+      expect(store.audits).toEqual(audits);
+      expect([...store.outbox]).toEqual(outbox);
+    }
+  );
+
   it('does not absorb a human rent into source ownership when the next source happens to equal it', async () => {
     const { store, initial, changed, command } = await operationalSetup('출고가능', 777777);
     const offer = (await store.getOffer(initial.offerId))!;

@@ -1236,10 +1236,19 @@ export async function applyReviewedSourceChange(
             const basisKey = fee.referenceRentBasis?.termKey ?? previous.termKey;
             const basisChanged = !sameValue(state.offer.priceTerms.find(term => term.termKey === basisKey)?.monthlyRent,
               nextOffer.priceTerms.find(term => term.termKey === basisKey)?.monthlyRent);
+            const value = proposed?.[side];
+            // An old FIXED snapshot may hide a rent dependency. Never commit stale amounts or
+            // reinterpret its rule from its name; changed calculation evidence needs separate review.
+            if (basisChanged && calculation?.kind === 'FIXED' && !fee.referenceRentBasis &&
+                (fee.state === 'KNOWN' || fee.state === 'ZERO') &&
+                (!sameValue(fee.amount, value?.amount) || !sameValue(calculation, value?.calculation) ||
+                 fee.ruleId !== value?.ruleId || fee.policyId !== value?.policyId ||
+                 !sameValue(fee.sourceRefs, value?.sourceRefs))) {
+              throw new ReviewedSourceChangeRejectedError('Existing FIXED economics differ from changed-rent evidence; explicit review required before commit');
+            }
             const dependent = !!fee.referenceRentBasis || calculation?.kind === 'MULTIPLY' ||
               (calculation?.kind === 'RATE' && calculation.base === 'MONTHLY_RENT_X_TERM');
             if (!basisChanged || !dependent || (fee.state !== 'KNOWN' && fee.state !== 'ZERO')) continue;
-            const value = proposed?.[side];
             const sameCalculation = fee.referenceRentBasis
               ? value?.referenceRentBasis?.termKey === fee.referenceRentBasis.termKey &&
                 value.referenceRentBasis.multiplier === fee.referenceRentBasis.multiplier
