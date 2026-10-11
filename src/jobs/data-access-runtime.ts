@@ -50,6 +50,7 @@ import type {
 import { createFirestoreDataStore } from '../infra/firestore-store.js';
 import { readVehicleUidMigrationInputs } from '../infra/vehicle-uid-migration-firestore-reader.js';
 import { readPeriodFeeLedgerPlanInputs } from '../infra/period-fee-ledger-firestore-reader.js';
+import { PeriodFeeLedgerFirestoreWriter } from '../infra/period-fee-ledger-firestore-writer.js';
 import { MemoryDataAccessLogStore } from '../infra/memory-data-access-log.js';
 import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
 import { createFirebaseVehicleMasterSourceArchive } from '../infra/vehicle-master-source-archive.js';
@@ -197,6 +198,14 @@ export function createPeriodFeeLedgerPlanRuntime() {
         }),
       }),
     }, readPeriodFeeLedgerPlanInputs),
+  };
+}
+
+export function createPeriodFeeLedgerApplyRuntime() {
+  const runtime = createJobDataAccessRuntime();
+  return {
+    store: new PeriodFeeLedgerFirestoreWriter(),
+    access: runtime.access,
   };
 }
 

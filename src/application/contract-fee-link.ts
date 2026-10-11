@@ -9,6 +9,7 @@ export type ContractFeeLinkInput = {
   assetId?: string | undefined;
   plate?: string | undefined;
   contractDate?: string | undefined;
+  contractAt?: string | undefined;
   supplierId: string;
   termMonths: number;
   monthlyRent: number;
@@ -79,6 +80,7 @@ export type ContractFeeLinkResult = {
 export type ContractLedgerPickInput = {
   rows: readonly PeriodFeeLedgerRow[];
   contractDate: string;
+  contractAt?: string | undefined;
   termMonths: number;
   monthlyRent: number;
   deposit: number;
@@ -151,11 +153,21 @@ const ledgerRowMismatches = (input: Pick<ContractLedgerPickInput, 'monthlyRent' 
   return mismatches;
 };
 
+const hasTimeComponent = (value: string) => /^\d{4}-\d{2}-\d{2}T/.test(value);
+
+const observedBeforeContract = (row: PeriodFeeLedgerRow, input: Pick<ContractLedgerPickInput, 'contractDate' | 'contractAt'>) => {
+  if (input.contractAt) {
+    const rowTime = hasTimeComponent(row.valueAsOf) ? row.valueAsOf : row.computedAt;
+    return rowTime <= input.contractAt;
+  }
+  return row.valueAsOf < input.contractDate;
+};
+
 export function pickLedgerRowForContract(input: ContractLedgerPickInput): ContractLedgerPickResult {
   const candidates = input.rows
     .filter((row) =>
       row.valueBasis === 'CURRENT_AT_SNAPSHOT'
-      && row.valueAsOf <= input.contractDate
+      && observedBeforeContract(row, input)
       && row.termMonths === input.termMonths)
     .sort((a, b) => b.valueAsOf.localeCompare(a.valueAsOf) || b.snapshotId.localeCompare(a.snapshotId));
   const latest = candidates[0];
@@ -207,6 +219,7 @@ const ledgerFeeForContract = (
     rows: data.ledgerRows.filter((row) => row.assetId === match.assetId
       && row.supplierId === match.supplierId),
     contractDate: input.contractDate,
+    contractAt: input.contractAt,
     termMonths: input.termMonths,
     monthlyRent: input.monthlyRent,
     deposit,
