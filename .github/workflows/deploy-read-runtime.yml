@@ -107,7 +107,13 @@ jobs:
             test "$USE_CONSUMER_SECRETS" = "false"
             test "$MAX_INSTANCES" = "4"
             test "$RUNTIME_CONCURRENCY" = "16"
-            plan_digest="$(node scripts/public-runtime-plan-digest.mjs docs/PUBLIC-RUNTIME-PLAN.md)"
+            plan_digest="$(node scripts/public-runtime-plan-digest.mjs docs/PUBLIC-RUNTIME-PLAN.md \
+              --service "$SERVICE_NAME" \
+              --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+              --entrypoint "$RUNTIME_ENTRYPOINT" \
+              --use-consumer-secrets "$USE_CONSUMER_SECRETS" \
+              --max-instances "$MAX_INSTANCES" \
+              --runtime-concurrency "$RUNTIME_CONCURRENCY")"
             test -n "$APPROVED_PLAN_DIGEST"
             test "$plan_digest" = "$APPROVED_PLAN_DIGEST"
             echo 'PUBLIC_RUNTIME_APPROVAL_VALIDATED=true' >> "$GITHUB_ENV"
@@ -195,7 +201,13 @@ jobs:
           test "$GRANT_PUBLIC_INVOKER" = "true"
           test "$ALLOW_UNAUTHENTICATED" = "true"
           # 승인 게이트: 개발 총괄이 승인한 계획 digest 를 저장소 변수에 넣어야만 allUsers 를 건다(계획서가 바뀌면 digest 가 달라져 막힌다).
-          plan_digest="$(node scripts/public-runtime-plan-digest.mjs docs/PUBLIC-RUNTIME-PLAN.md)"
+          plan_digest="$(node scripts/public-runtime-plan-digest.mjs docs/PUBLIC-RUNTIME-PLAN.md \
+            --service "$SERVICE_NAME" \
+            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --entrypoint "$RUNTIME_ENTRYPOINT" \
+            --use-consumer-secrets "$USE_CONSUMER_SECRETS" \
+            --max-instances "$MAX_INSTANCES" \
+            --runtime-concurrency "$RUNTIME_CONCURRENCY")"
           test -n "$APPROVED_PLAN_DIGEST"
           test "$plan_digest" = "$APPROVED_PLAN_DIGEST"
           gcloud run services add-iam-policy-binding "$SERVICE_NAME" \

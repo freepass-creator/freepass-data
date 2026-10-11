@@ -131,10 +131,10 @@ Digest command:
 
 ```powershell
 npm.cmd run build
-node scripts/public-runtime-plan-digest.mjs docs/PUBLIC-RUNTIME-PLAN.md
+node scripts/public-runtime-plan-digest.mjs docs/PUBLIC-RUNTIME-PLAN.md --service freepass-data-public --service-account freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com --entrypoint dist/src/api/public-server.js --use-consumer-secrets false --max-instances 4 --runtime-concurrency 16
 ```
 
-Plan digest sha256: `ab7bd174b15ddfb8426614d3db447e0164f6d894dea212f13ab15456e676092f`
+Plan digest sha256: `9b867764c02847a861dcfeb12200ffc0aa7920cd0dc3c4b35b99fa84e52f1303`
 
 ## Reviewable scope and remaining evidence
 

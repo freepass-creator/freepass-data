@@ -154,6 +154,12 @@ describe('API runtime boundary', () => {
       .replace(/\r\n/g, '\n');
     expect(readWorkflow).toContain('workflow_call:');
     expect(readWorkflow).toContain('FREEPASS_DATA_ENTRYPOINT=$RUNTIME_ENTRYPOINT');
+    expect(readWorkflow).toContain('--service "$SERVICE_NAME"');
+    expect(readWorkflow).toContain('--service-account "$RUNTIME_SERVICE_ACCOUNT"');
+    expect(readWorkflow).toContain('--entrypoint "$RUNTIME_ENTRYPOINT"');
+    expect(readWorkflow).toContain('--use-consumer-secrets "$USE_CONSUMER_SECRETS"');
+    expect(readWorkflow).toContain('--max-instances "$MAX_INSTANCES"');
+    expect(readWorkflow).toContain('--runtime-concurrency "$RUNTIME_CONCURRENCY"');
     expect(readWorkflow).toContain('Grant public invoker only when requested');
     expect(readWorkflow).toContain('inputs.grant_public_invoker == true');
     expect(readWorkflow).toContain('/v1/consumers/erp-com/catalog")" = "404"');
@@ -194,6 +200,29 @@ describe('API runtime boundary', () => {
         encoding: 'utf8', env: { ...process.env, ...valid, ...overrides } });
       expect(result.status === 0, JSON.stringify(overrides) + result.stderr).toBe(allowed);
       expect(result.stdout.includes('DEPLOYMENT_REACHED')).toBe(allowed);
+    }
+  });
+  it('public plan digest includes actual deployment arguments', () => {
+    const base = [
+      'scripts/public-runtime-plan-digest.mjs',
+      'docs/PUBLIC-RUNTIME-PLAN.md',
+      '--service', 'freepass-data-public',
+      '--service-account', 'freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com',
+      '--entrypoint', 'dist/src/api/public-server.js',
+      '--use-consumer-secrets', 'false',
+      '--max-instances', '4',
+      '--runtime-concurrency', '16',
+    ];
+    const run = (args: string[]) => spawnSync(process.execPath, args, { encoding: 'utf8' });
+    const approved = run(base);
+    expect(approved.status, approved.stderr).toBe(0);
+    expect(approved.stdout.trim()).toBe('9b867764c02847a861dcfeb12200ffc0aa7920cd0dc3c4b35b99fa84e52f1303');
+    for (const [index, value] of [[3, 'freepass-data-read'], [5, 'private-runtime'], [7, 'dist/src/api/consumer-server.js'], [9, 'true']] as const) {
+      const changed = [...base];
+      changed[index] = value;
+      const result = run(changed);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).not.toBe(approved.stdout.trim());
     }
   });
   it('deploys privately and grants anonymous invoker only after approved preflight', () => {
