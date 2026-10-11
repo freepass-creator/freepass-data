@@ -9,11 +9,13 @@ import type {
   VehicleAsset,
 } from '../src/domain/catalog.js';
 import {
+  pickLedgerRowForContract,
   readContractFeeLink,
   resolveContractFeeLink,
   type ContractFeeLinkData,
   type ContractFeeLinkInput,
 } from '../src/application/contract-fee-link.js';
+import type { PeriodFeeLedgerRow } from '../src/application/period-fee-ledger-plan.js';
 import type { CatalogStore } from '../src/ports/catalog-store.js';
 
 const actor: ActorRef = { id: 'test', kind: 'SERVICE' };
@@ -110,6 +112,40 @@ const baseData = (override: Partial<ContractFeeLinkData> = {}): ContractFeeLinkD
   assets: [asset()],
   products: [product()],
   offers: [offer()],
+  ...override,
+});
+
+const ledgerRow = (override: Partial<PeriodFeeLedgerRow> = {}): PeriodFeeLedgerRow => ({
+  schemaVersion: 'period-fee-ledger/v1',
+  snapshotId: 'period-fee-2026-10-09',
+  snapshotDateKst: '2026-10-09',
+  computedAt: '2026-10-09T00:00:00.000Z',
+  valueBasis: 'CURRENT_AT_SNAPSHOT',
+  valueAsOf: '2026-10-09',
+  engineRevision: 'test',
+  sourceDigest: 'digest',
+  documentKey: 'doc',
+  applyState: 'READY',
+  holdReasonCode: null,
+  vehicleUid: 'asset-1',
+  assetId: 'asset-1',
+  plateLookupKey: null,
+  plateLast4ForReport: null,
+  supplierId: 'RP001',
+  productId: 'product-1',
+  offerId: 'offer-1',
+  offerRevision: 1,
+  productUpdateTime: '2026-10-09T00:00:00.000Z',
+  termKey: 'm24',
+  termMonths: 24,
+  monthlyRent: { amount: 700000, currency: 'KRW', state: 'KNOWN', reasonCode: null },
+  deposit: { state: 'ZERO', amount: { amount: 0, currency: 'KRW' }, reasonCode: null, sourceRefs: [] },
+  supplierBillingFee: { state: 'CALCULATED', amount: { amount: 100000, currency: 'KRW' }, vatTreatment: 'EXCLUDED', vatAmount: 10000, totalAmount: 110000, reasonCode: null, ruleId: 'rule', policyId: 'policy', sourceRefs: [] },
+  channelPayoutFee: { state: 'CALCULATED', amount: { amount: 50000, currency: 'KRW' }, vatTreatment: 'EXCLUDED', vatAmount: 5000, totalAmount: 55000, reasonCode: null, ruleId: 'rule', policyId: 'policy', sourceRefs: [] },
+  ruleIds: ['rule'],
+  policyIds: ['policy'],
+  priceSourceRefs: [],
+  inputRefs: { productPath: 'products/p1', offerPath: 'products/p1/offers/o1', priceTermRef: 'products/p1/price/m24', internalEconomicsRef: null },
   ...override,
 });
 
@@ -248,5 +284,49 @@ describe('contract fee link', () => {
 
     expect(result.status).toBe('LINKED');
     expect(calls.sort()).toEqual(['assets', 'offers', 'products']);
+  });
+
+  it('holds contract ledger selection when only post-contract current snapshots exist', () => {
+    const result = pickLedgerRowForContract({
+      rows: [ledgerRow({ valueAsOf: '2026-10-11', snapshotId: 'period-fee-2026-10-11' })],
+      contractDate: '2026-10-10',
+      termMonths: 24,
+      monthlyRent: 700000,
+      deposit: 0,
+    });
+
+    expect(result).toMatchObject({ status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE' });
+  });
+
+  it('confirms the latest pre-contract snapshot when rent and deposit match', () => {
+    const older = ledgerRow({ valueAsOf: '2026-10-08', snapshotId: 'period-fee-2026-10-08', monthlyRent: { amount: 680000, currency: 'KRW', state: 'KNOWN', reasonCode: null } });
+    const latest = ledgerRow({ valueAsOf: '2026-10-10', snapshotId: 'period-fee-2026-10-10' });
+
+    const result = pickLedgerRowForContract({
+      rows: [older, latest, ledgerRow({ valueAsOf: '2026-10-11', snapshotId: 'period-fee-2026-10-11' })],
+      contractDate: '2026-10-10',
+      termMonths: 24,
+      monthlyRent: 700000,
+      deposit: 0,
+    });
+
+    expect(result.status).toBe('CONFIRMED');
+    expect(result.status === 'CONFIRMED' ? result.row.snapshotId : '').toBe('period-fee-2026-10-10');
+  });
+
+  it('holds contract ledger selection when the latest pre-contract snapshot value differs', () => {
+    const result = pickLedgerRowForContract({
+      rows: [ledgerRow({ valueAsOf: '2026-10-09', monthlyRent: { amount: 710000, currency: 'KRW', state: 'KNOWN', reasonCode: null } })],
+      contractDate: '2026-10-10',
+      termMonths: 24,
+      monthlyRent: 700000,
+      deposit: 0,
+    });
+
+    expect(result).toMatchObject({
+      status: 'HOLD',
+      reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE',
+      detail: { mismatch: ['rent'] },
+    });
   });
 });

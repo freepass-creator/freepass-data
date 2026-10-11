@@ -23,6 +23,8 @@ export type PeriodFeeLedgerRow = {
   snapshotId: string;
   snapshotDateKst: string;
   computedAt: string;
+  valueBasis: 'CURRENT_AT_SNAPSHOT';
+  valueAsOf: string;
   engineRevision: string;
   sourceDigest: string;
   documentKey: string;
@@ -136,6 +138,22 @@ const snapshotDate = (snapshotId: string) => {
   if (!match) throw new Error('PERIOD_FEE_SNAPSHOT_ID_INVALID');
   return match[1]!;
 };
+const kstDate = (iso: string) => {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) throw new Error('PERIOD_FEE_OBSERVED_AT_INVALID');
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value;
+  const year = part('year');
+  const month = part('month');
+  const day = part('day');
+  if (!year || !month || !day) throw new Error('PERIOD_FEE_OBSERVED_AT_INVALID');
+  return `${year}-${month}-${day}`;
+};
 
 function normalizeFee(value: Rec | undefined): LedgerFeeAmount {
   const state = value?.state === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : value?.state === 'CALCULATED' ? 'CALCULATED' : 'UNKNOWN';
@@ -219,6 +237,7 @@ function buildHistory(input: {
 
 export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput): PeriodFeeLedgerPlan {
   const date = snapshotDate(input.snapshotId);
+  const valueAsOf = kstDate(input.observedAt);
   const rows: PeriodFeeLedgerRow[] = [];
   const baselines: ProductChangeBaseline[] = [];
   const reasonCounts: Record<string, number> = {};
@@ -262,6 +281,8 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput): PeriodFeeL
         snapshotId: input.snapshotId,
         snapshotDateKst: date,
         computedAt: input.observedAt,
+        valueBasis: 'CURRENT_AT_SNAPSHOT',
+        valueAsOf,
         engineRevision: ENGINE_REVISION,
         sourceDigest,
         documentKey,

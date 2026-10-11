@@ -1,6 +1,7 @@
 import type { Offer, PriceTerm, Product, VehicleAsset } from '../domain/catalog.js';
 import type { InternalFeeLookupTerm } from '../domain/internal-fee-lookup-contract.js';
 import { toInternalFeeLookup } from '../domain/internal-fee-lookup-contract.js';
+import type { PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
 import type { CatalogStore } from '../ports/catalog-store.js';
 
 export type ContractFeeLinkInput = {
@@ -54,6 +55,18 @@ export type ContractFeeLinkResult = {
   fees?: InternalFeeLookupTerm;
 };
 
+export type ContractLedgerPickInput = {
+  rows: readonly PeriodFeeLedgerRow[];
+  contractDate: string;
+  termMonths: number;
+  monthlyRent: number;
+  deposit: number;
+};
+
+export type ContractLedgerPickResult =
+  | { status: 'CONFIRMED'; row: PeriodFeeLedgerRow }
+  | { status: 'HOLD'; reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE'; detail: { candidateCount: number; latestValueAsOf?: string; mismatch?: Array<'rent' | 'deposit'> } };
+
 const normalizePlate = (plate: string) => plate.replace(/\s+/g, '');
 
 const moneyAmount = (money: { amount: number; currency: 'KRW' } | null | undefined) =>
@@ -106,6 +119,38 @@ const conditionMismatches = (input: ContractFeeLinkInput, term: PriceTerm) => {
 
 const conditionMatches = (input: ContractFeeLinkInput, term: PriceTerm) =>
   conditionMismatches(input, term).length === 0;
+
+const ledgerMoneyAmount = (money: { amount: number; currency: 'KRW' } | null | undefined) =>
+  money?.currency === 'KRW' ? money.amount : null;
+
+const ledgerRowMismatches = (input: Pick<ContractLedgerPickInput, 'monthlyRent' | 'deposit'>, row: PeriodFeeLedgerRow) => {
+  const mismatches: Array<'rent' | 'deposit'> = [];
+  if (ledgerMoneyAmount(row.monthlyRent) !== input.monthlyRent) mismatches.push('rent');
+  if (ledgerMoneyAmount(row.deposit.amount) !== input.deposit) mismatches.push('deposit');
+  return mismatches;
+};
+
+export function pickLedgerRowForContract(input: ContractLedgerPickInput): ContractLedgerPickResult {
+  const candidates = input.rows
+    .filter((row) =>
+      row.valueBasis === 'CURRENT_AT_SNAPSHOT'
+      && row.valueAsOf <= input.contractDate
+      && row.termMonths === input.termMonths)
+    .sort((a, b) => b.valueAsOf.localeCompare(a.valueAsOf) || b.snapshotId.localeCompare(a.snapshotId));
+  const latest = candidates[0];
+  if (!latest) {
+    return { status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE', detail: { candidateCount: 0 } };
+  }
+  const mismatch = ledgerRowMismatches(input, latest);
+  if (mismatch.length > 0) {
+    return {
+      status: 'HOLD',
+      reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE',
+      detail: { candidateCount: candidates.length, latestValueAsOf: latest.valueAsOf, mismatch },
+    };
+  }
+  return { status: 'CONFIRMED', row: latest };
+}
 
 export function resolveContractFeeLink(
   input: ContractFeeLinkInput,

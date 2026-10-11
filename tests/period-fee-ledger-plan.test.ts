@@ -41,6 +41,8 @@ describe('period fee ledger planner', () => {
     expect(plan.summary.productsWithPriceRows).toBe(1);
     expect(plan.rows).toHaveLength(1);
     expect(plan.rows[0]).toMatchObject({
+      valueBasis: 'CURRENT_AT_SNAPSHOT',
+      valueAsOf: '2026-10-12',
       vehicleUid: 'TEST-FAKE-ASSET-001',
       applyState: 'READY',
       holdReasonCode: null,

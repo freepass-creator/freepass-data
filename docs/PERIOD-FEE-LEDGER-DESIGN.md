@@ -93,6 +93,8 @@ type PeriodFeeLedgerRow = {
   snapshotId: string;
   snapshotDateKst: string; // YYYY-MM-DD
   computedAt: string;
+  valueBasis: 'CURRENT_AT_SNAPSHOT';
+  valueAsOf: string; // YYYY-MM-DD, computedAt KST date
   engineRevision: string;
   sourceDigest: string;
 
@@ -390,3 +392,11 @@ PR·시험·일정 반영:
 ## 10-12 계획기 구현 상태
 
 10-12 계획기 구현은 읽기 전용이다. `src/application/period-fee-ledger-plan.ts`가 `products`/`policy` 입력을 받아 기존 `buildKakaoCatalogReferenceProduct` 투영의 기간별 `supplierBillingFee`·`channelPayoutFee`와 `withCompatibilityDepositEvidence` 계열 보증금 상태를 재사용해 `period_fee_ledger` 계획 행과 `product_change_history` 차이 목록을 만든다. 실행은 `PERIOD_FEE_LEDGER_PLAN_OUT=<저장소 밖 절대경로> npm.cmd run plan:period-fee-ledger`이며 stdout은 개수·digest만 출력하고 원본 상품 키는 비공개 계획 파일에만 남긴다. 현재 한계는 운영 쓰기/apply, active snapshot 포인터, 이전 snapshot 운영 readback 연결, 20대 지휘통제실 판정 묶음이 아직 없다는 점이다. UID 없는 행은 `HOLD_NO_UID`로 계획에만 포함하고 apply 대상에서 제외한다.
+
+## 값의 시점
+
+`period_fee_ledger`의 금액은 계약 당시 원문을 복원한 값이 아니다. 각 행은 일 단위 snapshot을 만들 때 `products`와 현재 정책/수수료 규칙으로 계산한 현재값의 박제이며, 이 의미는 `valueBasis: 'CURRENT_AT_SNAPSHOT'`와 `valueAsOf`로 고정한다. `valueAsOf`는 snapshot `computedAt`의 KST 날짜다.
+
+계약 연결 소비자는 장부 행을 계약 조건으로 바로 쓰지 않는다. 계약 조건으로 확정하려면 `valueAsOf <= 계약일(접수일)`인 행 중 가장 늦은 snapshot을 고르고, 그 행의 월 대여료와 보증금이 계약 기록과 일치해야 한다. 계약일 이전 snapshot이 없거나 값이 다르면 `CONTRACT_TIME_VALUE_UNAVAILABLE` HOLD로 둔다.
+
+따라서 첫 snapshot 이전 계약, 예를 들어 장부가 없는 74건은 현재값으로 대체하지 않는다. 접수 시점 snapshot, 박제 이력, 공급사 원문 이력을 별도로 찾아야 하며 찾지 못하면 원문 없음 HOLD다. 계획기와 소비 규칙은 "계약 당시 값"이라는 플래그나 표현을 만들지 않는다.
