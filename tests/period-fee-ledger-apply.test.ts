@@ -372,6 +372,31 @@ describe('period fee ledger apply', () => {
     expect([...store.ledger.values()].every(row => (row.data as unknown as PeriodFeeLedgerRow).vehicleUid)).toBe(true);
   });
 
+  it('writes evidenceScope and verifies it during readback', async () => {
+    const first = makePlan();
+    const store = new MemoryPeriodFeeStore();
+
+    await applyPeriodFeeLedgerPlan(store, first, { expectedDigest: first.planDigest, writeApproved: true });
+
+    const storedFirst = [...store.ledger.values()].map(item => item.data as unknown as PeriodFeeLedgerRow);
+    expect(storedFirst).toHaveLength(1);
+    expect(storedFirst[0]!.evidenceScope).toBe('BASELINE_NOT_CONTRACT_EVIDENCE');
+
+    const second = planPeriodFeeLedger({
+      products: { p1: product({ price: { '36': { rent: 810000, deposit: 1000000 } } }) },
+      policies: {},
+      referenceInputs: {},
+      previousSnapshot: { rows: first.rows, productStates: first.baselines.productStates },
+    }, { clock: () => new Date('2026-10-13T00:00:00.000Z') });
+
+    await applyPeriodFeeLedgerPlan(store, second, { expectedDigest: second.planDigest, writeApproved: true });
+
+    const readRows = await store.readLedgerRows(second.snapshotId, runIdFor(second));
+    expect(readRows).toHaveLength(1);
+    expect(readRows[0]!.evidenceScope).toBe('OBSERVED_AT_SNAPSHOT');
+    expect(store.runs.get(runIdFor(second))?.readbackDigest).toBeTruthy();
+  });
+
   it('is idempotent for same document digests and refuses conflicting documents', async () => {
     const plan = makePlan();
     const store = new MemoryPeriodFeeStore();

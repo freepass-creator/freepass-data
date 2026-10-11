@@ -15,6 +15,13 @@ const snapshotRuns = (db: Firestore) =>
 const ledgerRows = (db: Firestore) =>
   db.collection(FIRESTORE_COLLECTIONS.periodFees.ledger) as CollectionReference<Rec>;
 
+export const normalizePeriodFeeLedgerRow = (data: Rec): PeriodFeeLedgerRow => ({
+  ...data,
+  evidenceScope: data.evidenceScope === 'BASELINE_NOT_CONTRACT_EVIDENCE' || data.evidenceScope === 'OBSERVED_AT_SNAPSHOT'
+    ? data.evidenceScope
+    : 'UNKNOWN_SCOPE',
+} as PeriodFeeLedgerRow);
+
 export async function readConsistentPeriodFeeLedgerRows(
   db: Firestore,
   snapshotId: string,
@@ -30,7 +37,7 @@ export async function readConsistentPeriodFeeLedgerRows(
   const rows = rowsSnap.docs
     .map(doc => {
       const { digest: _digest, ...data } = doc.data();
-      return { id: doc.id, row: data as PeriodFeeLedgerRow };
+      return { id: doc.id, row: normalizePeriodFeeLedgerRow(data) };
     })
     .filter(item => allowed.has(item.id))
     .map(item => item.row);

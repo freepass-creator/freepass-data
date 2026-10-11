@@ -1,5 +1,6 @@
 type LedgerFeeState = 'CALCULATED' | 'CALCULATED_APPROX' | 'UNKNOWN' | 'NOT_APPLICABLE';
 type DepositState = 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
+type LedgerEvidenceScope = 'BASELINE_NOT_CONTRACT_EVIDENCE' | 'OBSERVED_AT_SNAPSHOT' | 'UNKNOWN_SCOPE';
 type VehicleValueEvidence = {
   grade: 'CONFIRMED' | 'APPROX';
   source: 'SUPPLIER_RAW' | 'CONSUMER_PRICE' | 'NEW_CAR_TRIM';
@@ -38,6 +39,7 @@ export type PeriodFeeLedgerRow = {
   computedAt: string;
   valueBasis: 'CURRENT_AT_SNAPSHOT';
   valueAsOf: string;
+  evidenceScope: LedgerEvidenceScope;
   engineRevision: string;
   sourceDigest: string;
   documentKey: string;
@@ -132,6 +134,7 @@ export type PeriodFeeSnapshotWriteLock = {
 
 export type PeriodFeeLedgerFeeState = LedgerFeeState;
 export type PeriodFeeDepositState = DepositState;
+export type PeriodFeeLedgerEvidenceScope = LedgerEvidenceScope;
 export type PeriodFeeDepositEvidenceKind = DepositEvidenceKind;
 export type PeriodFeeLedgerFeeAmount = LedgerFeeAmount;
 export type PeriodFeeLedgerDepositEvidence = LedgerDepositEvidence;
