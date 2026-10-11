@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { DAILY_WRITER_ALLOWED_COLLECTIONS, evaluateDailyWriterGuard, writeStepsSkippedConfirmed } from '../src/domain/daily-writer-guard.js';
 import { FIRESTORE_COLLECTIONS } from '../src/infra/firestore-layout.js';
@@ -34,6 +35,42 @@ it('requests quarter-hour refresh without a once-per-day skip and preserves writ
   expect(workflow).toContain('assertCurrentSharedSheet(process.env.SHARED_SHEET_ID)');
   expect(workflow).toContain('FREEPASS_DATA_DAILY_SERVICE_ACCOUNT');
   expect(workflow).toContain('readbackMismatches');
+});
+it('pins manual apply to reviewed evidence and live recapture without introducing another Actions write step', () => {
+  const workflow = readFileSync('.github/workflows/shared-sheet-daily.yml', 'utf8');
+  for (const field of ['reviewed_run_id', 'reviewed_attempt', 'reviewed_generation', 'reviewed_digest', 'reviewed_source_pin'])
+    expect(workflow).toContain(`${field}:`);
+  const gate = workflow.slice(workflow.indexOf('- name: Daily schedule and manual apply gate'), workflow.indexOf('      - uses: actions/checkout@v4'));
+  for (const field of ['REVIEWED_RUN_ID', 'REVIEWED_ATTEMPT', 'REVIEWED_GENERATION', 'REVIEWED_DIGEST', 'REVIEWED_SOURCE_PIN'])
+    expect(gate).toMatch(new RegExp(`\\n          ${field}:`));
+  expect(gate).toContain('REVIEWED_PLAN_INPUTS_INVALID');
+  expect(workflow).toContain('FREEPASS_DATA_DAILY_MANUAL_APPLY');
+  expect(workflow).toContain('assertReviewedSharedSheetRun');
+  expect(workflow).toContain('assertReviewedPlanGeneration');
+  expect(workflow).toContain('assertLiveSharedSheetMatches');
+  expect(workflow).toContain('--live-capture "$T/live-capture.json"');
+  expect(workflow).toContain('--if-generation-match=0');
+  expect((workflow.match(/name: Apply to FreePass Data \(writes\)/g) ?? []).length).toBe(1);
+  expect((workflow.match(/name: Capture and plan \(no writes\)/g) ?? []).length).toBe(1);
+  const apply = workflow.slice(workflow.indexOf('- name: Apply to FreePass Data'));
+  expect(apply.indexOf('--out "$T/live-capture.json"')).toBeLessThan(apply.indexOf('--firestore --apply'));
+  expect(apply.indexOf('REVIEWED_PLAN_GENERATION_HOLD')).toBeLessThan(apply.indexOf('--firestore --apply'));
+});
+it('executes the actual gate shell: schedule-off/dry-run pass, manual-off/missing pin reject, exact manual pin passes', () => {
+  const workflow = readFileSync('.github/workflows/shared-sheet-daily.yml', 'utf8');
+  const gate = workflow.slice(workflow.indexOf('- name: Daily schedule and manual apply gate'), workflow.indexOf('      - uses: actions/checkout@v4'));
+  const script = gate.split(/        run: \|\r?\n/)[1]!.split(/\r?\n/).map(line => line.startsWith('          ') ? line.slice(10) : line).join('\n');
+  const variables = Object.fromEntries([...gate.matchAll(/^          ([A-Z_]+):/gm)].map(m => [m[1]!, '']));
+  const run = (event: string, mode: string, extra = {}) => spawnSync(process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash', ['-c',
+    script.replaceAll('${{ github.event_name }}', event).replaceAll('${{ inputs.mode }}', mode)],
+    { encoding: 'utf8', env: { ...process.env, ...variables, GITHUB_OUTPUT: '/dev/null', GITHUB_SHA: 'a'.repeat(40), ...extra } });
+  expect(run('schedule', '').status).toBe(0);
+  expect(run('workflow_dispatch', 'dry-run').status).toBe(0);
+  expect(run('workflow_dispatch', 'apply').stdout).toContain('MANUAL_APPLY_DISABLED');
+  expect(run('workflow_dispatch', 'apply', { MANUAL_APPLY: 'on' }).stdout).toContain('REVIEWED_PLAN_INPUTS_INVALID');
+  expect(run('workflow_dispatch', 'apply', { MANUAL_APPLY: 'on', REVIEWED_RUN_ID: '123', REVIEWED_ATTEMPT: '1',
+    REVIEWED_GENERATION: '456', REVIEWED_DIGEST: 'b'.repeat(64), REVIEWED_SOURCE_PIN: 'a'.repeat(40) }).status).toBe(0);
+  expect(run('workflow_dispatch', 'dry-run', { REVIEWED_RUN_ID: '123' }).status).not.toBe(0);
 });
 const db = 'projects/freepasserp5/databases/(default)/documents';
 const doc = (c: string) => `${db}/${c}/x1`;
