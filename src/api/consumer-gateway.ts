@@ -924,13 +924,13 @@ export function createConsumerGateway(
           const phase = product.iancar_phase_one;
           if (!object(phase) || !fields(Object.fromEntries(Object.entries(phase).filter(([k]) => k !== 'priceAliases')), ['policyStage'])
             || Object.hasOwn(phase, 'priceAliases') && (!object(phase.priceAliases) || Object.keys(phase.priceAliases).length > 200
-              || Object.entries(phase.priceAliases).some(([k, v]) => !isSingleProductPriceKey(k) || typeof v !== 'string' || !scalar(v)))) invalid();
+              || Object.entries(phase.priceAliases).some(([k, v]) => !isSingleProductPriceKey(k) || typeof v !== 'string' || !isSingleProductPriceKey(v)))) invalid();
         }
         for (const name of ['policies', 'partners'] as const) {
           const versions = meta.documentVersions[name], rows = data[name]!;
           if (!Array.isArray(versions) || versions.length !== Object.keys(rows).length || meta.collectionCounts[name] !== versions.length
             || new Set(versions.map(v => v?.id)).size !== versions.length
-            || versions.some(v => !object(v) || typeof v.id !== 'string' || !Object.hasOwn(rows, v.id) || !object(rows[v.id])
+            || versions.some(v => !object(v) || typeof v.id !== 'string' || !Object.hasOwn(rows, v.id) || !object(rows[v.id]) || rows[v.id]!._key !== v.id
               || !stamp(v.updateTime) || !versionOK(v) || !fields(rows[v.id], name === 'policies' ? SINGLE_POLICY_FACT_FIELDS : SINGLE_PARTNER_FACT_FIELDS))) invalid();
         }
         if (!exactKeys(meta.linkedFacts, ['policy', 'partner'])) invalid();

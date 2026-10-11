@@ -119,13 +119,20 @@ describe('bounded single-product compatibility facts', () => {
     const response = await app.inject({ url: url(), headers });
     expect(response.statusCode).toBe(200); expect(response.json()).toEqual(value); await app.close();
   });
-  it.each(['basisExtra', 'differenceExtra', 'basisUrl', 'aliasNumber'])('rejects nested deposit or alias leak %s', async condition => {
+  it.each(['basisExtra', 'differenceExtra', 'basisUrl', 'aliasNumber', 'aliasLong', 'aliasPrototype', 'linkedKeyMismatch'])('rejects nested deposit or alias leak %s', async condition => {
     const { app, readProductCompat, logs } = setup(); const value = snapshot();
     const row = (value.data.products[id]!.price as Record<string, Record<string, unknown>>)['36']!;
     if (condition === 'basisExtra') row.depositEvidenceBasis = { field: 'deposit_note', privateDebug: 'synthetic-secret' };
     if (condition === 'differenceExtra') row.depositRuleDifference = { ruleAmount: 0, fee: 100 };
     if (condition === 'basisUrl') row.depositEvidenceBasis = { source: 'https://private.example.invalid' };
     if (condition === 'aliasNumber') value.data.products[id]!.iancar_phase_one = { priceAliases: { '36': 1 } };
+    if (condition === 'aliasLong') value.data.products[id]!.iancar_phase_one = { priceAliases: { '36': 'x'.repeat(81) } };
+    if (condition === 'aliasPrototype') value.data.products[id]!.iancar_phase_one = { priceAliases: { '36': '__proto__' } };
+    if (condition === 'linkedKeyMismatch') {
+      value.data.policies.p1 = { _key: 'p2' }; value.meta.collectionCounts.policies = 1;
+      value.meta.documentVersions.policies = [{ id: 'p1', updateTime: value.meta.readAt, updateTimeExact: { ...value.meta.readTimeExact } }];
+      value.meta.linkedFacts.policy = { state: 'KNOWN', reasonCode: null };
+    }
     readProductCompat.mockResolvedValueOnce(value);
     const response = await app.inject({ url: url(), headers });
     expect(response.statusCode).toBe(503); expect(response.body).not.toContain('synthetic-secret');
