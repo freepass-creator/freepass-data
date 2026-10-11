@@ -234,8 +234,8 @@ export type IancarPhotoReviewBinding = { productId: string; vehicleId: string; p
 export type IancarOnePhotoReview = {
   basis?: 'CONTENT_ORDINAL/1';
   sourceRepresentatives?: boolean[];
-  upstreamPhotoIds: string[];
-  servingPhotoIds: string[];
+  upstreamPhotoIds?: string[];
+  servingPhotoIds?: string[];
   refs: Array<{
     sourceKind: 'IANCAR_ONE'; sourceApiVersion: 'iancar-one-api/1';
     sourceBindingDigest: string; photoSetDigest: string; sourcePhotoIdDigest: string;
@@ -269,14 +269,18 @@ export function planIancarPhotoReviewPatch(original: Record<string, unknown>, ro
   const validIds = (ids: unknown): ids is string[] => Array.isArray(ids) && ids.length === row.count
     && ids.every(id => typeof id === 'string' && id.trim() === id && !!id && id.length <= 2048)
     && new Set(ids).size === ids.length;
-  if (!review || !validIds(review.upstreamPhotoIds) || !validIds(review.servingPhotoIds)
-    || review.servingPhotoIds.some(id => !review.upstreamPhotoIds.includes(id))
-    || !hasVehiclePhotoVerification({ photo_original_refs: review.refs }) || review.refs.length !== row.count) fail();
+  if (!review || !hasVehiclePhotoVerification({ photo_original_refs: review.refs }) || review.refs.length !== row.count) fail();
   const contentBasis = review.basis === 'CONTENT_ORDINAL/1';
   if (review.basis !== undefined && !contentBasis) fail();
+  // A lost capture handle cannot be reconstructed from its digest or replaced by a current handle.
+  const captureIdsPresent = review.upstreamPhotoIds !== undefined || review.servingPhotoIds !== undefined;
+  if ((!contentBasis || captureIdsPresent) && (!validIds(review.upstreamPhotoIds) || !validIds(review.servingPhotoIds)
+    || review.servingPhotoIds!.some(id => !review.upstreamPhotoIds!.includes(id)))) fail();
   if (contentBasis && (!Array.isArray(review.sourceRepresentatives) || review.sourceRepresentatives.length !== row.count
     || review.sourceRepresentatives.some(value => typeof value !== 'boolean')
     || review.sourceRepresentatives.filter(Boolean).length > 1)) fail();
+  if (new Set(review.refs.map(ref => ref.sourceOrdinal)).size !== row.count
+    || new Set(review.refs.map(ref => ref.sourcePhotoIdDigest)).size !== row.count) fail();
   const binding = orderedJsonDigest(['RP031', row.productId, row.vehicleId, row.plate.replace(/\s/g, '')]);
   const set = contentBasis ? iancarReviewedContentSetDigest(binding, review.refs)
     : orderedJsonDigest(['ONE_PHOTO_SET/1', binding, review.upstreamPhotoIds, review.servingPhotoIds]);
@@ -286,8 +290,10 @@ export function planIancarPhotoReviewPatch(original: Record<string, unknown>, ro
   review.refs.forEach((ref, index) => {
     if (Object.keys(ref).some(key => !allowed.has(key)) || ref.sourceKind !== 'IANCAR_ONE'
       || ref.sourceApiVersion !== 'iancar-one-api/1' || ref.sourceBindingDigest !== binding
-      || ref.photoSetDigest !== set || ref.sourcePhotoIdDigest !== orderedJsonDigest(review.servingPhotoIds[index])
-      || ref.servingIndex !== index || ref.sourceOrdinal !== review.upstreamPhotoIds.indexOf(review.servingPhotoIds[index]!)
+      || ref.photoSetDigest !== set || !/^[a-f0-9]{64}$/.test(ref.sourcePhotoIdDigest)
+      || (captureIdsPresent && (ref.sourcePhotoIdDigest !== orderedJsonDigest(review.servingPhotoIds![index])
+        || ref.sourceOrdinal !== review.upstreamPhotoIds!.indexOf(review.servingPhotoIds![index]!)))
+      || ref.servingIndex !== index || !Number.isSafeInteger(ref.sourceOrdinal) || ref.sourceOrdinal < 0 || ref.sourceOrdinal >= row.count
       || (contentBasis ? (ref.reviewBasis !== 'CONTENT_ORDINAL/1'
         || ref.representative !== review.sourceRepresentatives![ref.sourceOrdinal])
         : (ref.reviewBasis !== undefined || ref.representative !== undefined))
@@ -298,12 +304,12 @@ export function planIancarPhotoReviewPatch(original: Record<string, unknown>, ro
       || !/^ONE 차량사진 전용 확인; 범위=\S[\s\S]*; 방법=\S[\s\S]*; 근거=\S[\s\S]*$/.test(ref.vehiclePhotoVerificationMethod)) fail();
   });
   if (contentBasis) {
-    const expected = review.upstreamPhotoIds.map((id, ordinal) => ({ id, representative: review.sourceRepresentatives![ordinal] }))
-      .sort((a, b) => Number(b.representative) - Number(a.representative)).map(photo => photo.id);
-    if (orderedJsonDigest(expected) !== orderedJsonDigest(review.servingPhotoIds)) fail();
+    const expected = review.sourceRepresentatives!.map((representative, ordinal) => ({ ordinal, representative }))
+      .sort((a, b) => Number(b.representative) - Number(a.representative)).map(photo => photo.ordinal);
+    if (orderedJsonDigest(expected) !== orderedJsonDigest(review.refs.map(ref => ref.sourceOrdinal))) fail();
   }
   return { provider_company_code: 'RP031', photo_original_refs: review.refs.map(ref => ({ ...ref })),
-    ...(!contentBasis ? { iancar_one_photo_ids: [...review.servingPhotoIds] } : {}) };
+    ...(!contentBasis ? { iancar_one_photo_ids: [...review.servingPhotoIds!] } : {}) };
 }
 
 /** Source adapters supply identity and bytes; authorization and validation stay in one pipeline. */

@@ -58,6 +58,39 @@ it('content review keeps opaque capture handles as evidence and preserves legacy
   expect(Object.keys(patch).sort()).toEqual(['photo_original_refs', 'provider_company_code']);
   expect(review.refs[0]!.sourcePhotoIdDigest).toBe(orderedJsonDigest('synthetic-b'));
 });
+it('content review without retained capture handles preserves the exact approved references', () => {
+  const { original, row, review } = contentReviewedAlbum();
+  const before = structuredClone(review.refs);
+  delete review.upstreamPhotoIds; delete review.servingPhotoIds;
+  const patch = planIancarPhotoReviewPatch(original, row, review);
+  expect(patch.photo_original_refs).toEqual(before);
+  expect(Object.keys(patch).sort()).toEqual(['photo_original_refs', 'provider_company_code']);
+  expect(review).not.toHaveProperty('upstreamPhotoIds');
+  expect(review).not.toHaveProperty('servingPhotoIds');
+});
+it('the legacy ID-bound review still requires both retained ID arrays', () => {
+  const { original, row, review } = reviewedAlbum();
+  delete review.upstreamPhotoIds; delete review.servingPhotoIds;
+  expect(() => planIancarPhotoReviewPatch(original, row, review)).toThrow('REVIEW_INVALID');
+});
+it.each(['one-array', 'legacy', 'digest', 'duplicate-digest', 'duplicate-ordinal', 'range', 'serving-order', 'human', 'current-handles'])
+  ('absent capture handles do not weaken %s validation', condition => {
+    const { original, row, review } = contentReviewedAlbum();
+    delete review.upstreamPhotoIds; delete review.servingPhotoIds;
+    if (condition === 'one-array') review.upstreamPhotoIds = ['synthetic-a', 'synthetic-b'];
+    if (condition === 'legacy') delete review.basis;
+    if (condition === 'digest') review.refs[0]!.sourcePhotoIdDigest = '';
+    if (condition === 'duplicate-digest') review.refs[0]!.sourcePhotoIdDigest = review.refs[1]!.sourcePhotoIdDigest;
+    if (condition === 'duplicate-ordinal') review.refs[0]!.sourceOrdinal = review.refs[1]!.sourceOrdinal;
+    if (condition === 'range') review.refs[0]!.sourceOrdinal = 2;
+    if (condition === 'serving-order') review.refs.reverse().forEach((ref, index) => { ref.servingIndex = index; });
+    if (condition === 'human') review.refs[0]!.vehiclePhotoVerifiedBy = '';
+    if (condition === 'current-handles') { review.upstreamPhotoIds = ['current-a', 'current-b']; review.servingPhotoIds = ['current-b', 'current-a']; }
+    // Recompute only the set digest to reach geometry/provenance guards rather than a stale envelope.
+    const set = iancarReviewedContentSetDigest(review.refs[0]!.sourceBindingDigest, review.refs);
+    review.refs.forEach(ref => { ref.photoSetDigest = set; });
+    expect(() => planIancarPhotoReviewPatch(original, row, review)).toThrow('REVIEW_INVALID');
+  });
 
 it.each(['representative', 'partial-basis', 'content-hash'])('content review rejects %s authority changes', condition => {
   const { original, row, review } = contentReviewedAlbum();
@@ -136,9 +169,9 @@ it.each(['unreviewed', 'binding', 'set', 'order', 'photo', 'bytes', 'time', 'met
   const ref = review.refs[0]!;
   if (condition === 'unreviewed') ref.vehiclePhotoVerifiedBy = '';
   if (condition === 'binding') ref.sourceBindingDigest = 'b'.repeat(64);
-  if (condition === 'set') review.upstreamPhotoIds.reverse();
+  if (condition === 'set') review.upstreamPhotoIds!.reverse();
   if (condition === 'order') ref.servingIndex = 1;
-  if (condition === 'photo') review.servingPhotoIds[0] = 'unreviewed-id';
+  if (condition === 'photo') review.servingPhotoIds![0] = 'unreviewed-id';
   if (condition === 'bytes') ref.photoSha256 = '';
   if (condition === 'time') ref.vehiclePhotoVerifiedAt = '2026-02-30T00:00:00Z';
   if (condition === 'method') ref.vehiclePhotoVerificationMethod = 'supplier trusted';
@@ -161,6 +194,27 @@ it('verification-only publication remains dry-run until exact digest and preserv
   await expect(publishIancarPhotoReferences({ ...input, apply: true, expectedPlanDigest: plan.planDigest })).resolves.toMatchObject({ writeExecuted: true });
   expect(Object.keys(mocks.update.mock.calls[0]![1]).sort()).toEqual(['iancar_one_photo_ids', 'photo_original_refs', 'provider_company_code']);
   expect(JSON.parse(mocks.writeFile.mock.calls[0]![1]).documents[0].exists).toBe(true);
+});
+it('captureless content publication uses the same backup/CAS/readback and changes only two fields', async () => {
+  const fixture = contentReviewedAlbum();
+  const original = { ...fixture.original, iancar_one_photo_ids: ['preserved-live-handle'] };
+  const review = fixture.review;
+  delete review.upstreamPhotoIds; delete review.servingPhotoIds;
+  const patch = planIancarPhotoReviewPatch(original, fixture.row, review);
+  const snapshot = { ref: { path: 'products/synthetic-product' }, updateTime: { toMillis: () => 1, isEqual: () => true }, data: () => original };
+  mocks.getAll.mockResolvedValue([snapshot]);
+  const input = { records: [{ ...fixture.row, review }], verificationOnly: true, apply: false };
+  const plan = await publishIancarPhotoReferences(input);
+  await expect(publishIancarPhotoReferences({ ...input, apply: true, expectedPlanDigest: 'wrong' })).rejects.toThrow('PLAN_CHANGED');
+  expect(mocks.writeFile).not.toHaveBeenCalled();
+  mocks.getAll.mockReset().mockResolvedValueOnce([snapshot]).mockResolvedValueOnce([{ ...snapshot, data: () => ({ ...original, ...patch }) }]);
+  mocks.transaction.mockImplementation(async callback => callback({ getAll: async () => [snapshot], update: mocks.update }));
+  await expect(publishIancarPhotoReferences({ ...input, apply: true, expectedPlanDigest: plan.planDigest })).resolves.toMatchObject({ writeExecuted: true });
+  expect(mocks.writeFile).toHaveBeenCalledTimes(1);
+  expect(Object.keys(mocks.update.mock.calls[0]![1]).sort()).toEqual(['photo_original_refs', 'provider_company_code']);
+  expect(original.iancar_one_photo_ids).toEqual(['preserved-live-handle']);
+  expect(original.price).toBe(123);
+  expect((mocks.update.mock.calls[0]![1].photo_original_refs as IancarOnePhotoReview['refs'])).toEqual(review.refs);
 });
 
 it.each(['absent', 'null', 'empty'])('review rollback restores %s approval representation and preserves unrelated changes', async state => {
@@ -205,7 +259,7 @@ it('bound ONE reviews freeze approved bytes and recheck the ordered set before t
   const product: Record<string, unknown> = { ...original, ...planIancarPhotoReviewPatch(original, row, review) };
   const source = { eligible: () => true, connection: () => 'synthetic-source', read: vi.fn(async (_product, index, fresh) => {
     expect(fresh).toBe(true);
-    return { count: 2, photoIds: review.servingPhotoIds, upstreamPhotoIds: review.upstreamPhotoIds,
+    return { count: 2, photoIds: review.servingPhotoIds!, upstreamPhotoIds: review.upstreamPhotoIds!,
       bytes: index === undefined ? null : bytes, contentType: index === undefined ? 'application/json' : 'image/jpeg' };
   }) };
   const reader = createVehiclePhotoReader(async () => product, source);
@@ -213,8 +267,8 @@ it('bound ONE reviews freeze approved bytes and recheck the ordered set before t
   expect(result.bytes).toEqual(bytes);
   expect(await result.revalidate()).toBe(true);
   expect(source.read.mock.calls.map(call => call[1])).toEqual([0, undefined]);
-  source.read.mockResolvedValueOnce({ count: 2, photoIds: [...review.servingPhotoIds].reverse(),
-    upstreamPhotoIds: review.upstreamPhotoIds, bytes: null, contentType: 'application/json' });
+  source.read.mockResolvedValueOnce({ count: 2, photoIds: [...review.servingPhotoIds!].reverse(),
+    upstreamPhotoIds: review.upstreamPhotoIds!, bytes: null, contentType: 'application/json' });
   expect(await result.revalidate()).toBe(false);
 });
 
@@ -232,7 +286,7 @@ it.each(['same-id-new-bytes', 'changed-order', 'missing-binding'])('bound ONE re
   const bytes = Buffer.from([255, 216, 255, 1]);
   review.refs.forEach(ref => { ref.photoSha256 = createHash('sha256').update(bytes).digest('hex'); });
   const product: Record<string, unknown> = { ...original, ...planIancarPhotoReviewPatch(original, row, review) };
-  const metadata = { count: 2, photoIds: review.servingPhotoIds, upstreamPhotoIds: review.upstreamPhotoIds };
+  const metadata = { count: 2, photoIds: review.servingPhotoIds!, upstreamPhotoIds: review.upstreamPhotoIds! };
   if (condition === 'changed-order') metadata.photoIds = [...metadata.photoIds].reverse();
   if (condition === 'missing-binding') (product.photo_original_refs as IancarOnePhotoReview['refs'])[0]!.sourceBindingDigest = '';
   const reader = createVehiclePhotoReader(async () => product, { eligible: () => true, connection: () => 'synthetic-source',

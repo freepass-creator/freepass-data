@@ -72,6 +72,29 @@ it('content plan applies after every current raw hash matches even when access h
   expect(process.exitCode).not.toBe(1); expect(state.publish).toHaveBeenCalledTimes(1);
   expect(state.getPhoto).toHaveBeenCalledTimes(2);
 });
+it('content plan without capture arrays keeps provenance and checks current raw bytes on apply only', async () => {
+  contentPlan();
+  const row = state.plan.records[0];
+  row.observedAt = new Date().toISOString();
+  delete row.review.upstreamPhotoIds; delete row.review.servingPhotoIds;
+  const refs = structuredClone(row.review.refs);
+  await run(['--reviewed-plan=synthetic-private-plan', '--expected-digest=PLAN']);
+  expect(process.exitCode).not.toBe(1);
+  expect(state.getVehicle).not.toHaveBeenCalled(); expect(state.getPhoto).not.toHaveBeenCalled();
+  vi.resetModules(); process.exitCode = undefined; state.publish.mockClear();
+  await run([...options, '--apply']);
+  expect(process.exitCode).not.toBe(1);
+  expect(state.getVehicle).toHaveBeenCalledTimes(2); expect(state.getPhoto).toHaveBeenCalledTimes(2);
+  const applied = state.publish.mock.calls[0]![0].records[0];
+  expect(applied.review.refs).toEqual(refs);
+  expect(applied.review).not.toHaveProperty('upstreamPhotoIds'); expect(applied.review).not.toHaveProperty('servingPhotoIds');
+});
+it('missing capture arrays still reject changed current bytes before publication', async () => {
+  contentPlan(); delete state.plan.records[0].review.upstreamPhotoIds; delete state.plan.records[0].review.servingPhotoIds;
+  state.changedBytes = true;
+  await run([...options, '--apply']);
+  expect(process.exitCode).toBe(1); expect(state.publish).not.toHaveBeenCalled();
+});
 it.each(['representative', 'content'])('content plan denies %s change before registration', async condition => {
   contentPlan();
   if (condition === 'representative') state.getVehicle.mockResolvedValue({ photos: [
