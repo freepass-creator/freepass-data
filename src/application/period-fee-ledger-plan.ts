@@ -259,6 +259,7 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput, options: Pl
   const snapshotId = periodFeeSnapshotIdFromObservedAt(observedAt);
   const date = snapshotDate(snapshotId);
   const valueAsOf = kstDate(observedAt);
+  const evidenceScope = input.previousSnapshot ? 'OBSERVED_AT_SNAPSHOT' : 'BASELINE_NOT_CONTRACT_EVIDENCE';
   const rows: PeriodFeeLedgerRow[] = [];
   const baselines: ProductChangeBaseline[] = [];
   const reasonCounts: Record<string, number> = {};
@@ -317,6 +318,7 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput, options: Pl
         computedAt: observedAt,
         valueBasis: 'CURRENT_AT_SNAPSHOT',
         valueAsOf,
+        evidenceScope,
         engineRevision: ENGINE_REVISION,
         sourceDigest,
         documentKey,

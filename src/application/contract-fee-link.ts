@@ -50,6 +50,8 @@ export type ContractFeeLinkLedgerFee = {
   status: 'CONFIRMED' | 'HOLD';
   snapshotId?: string;
   valueAsOf?: string;
+  evidenceScope?: PeriodFeeLedgerRow['evidenceScope'];
+  baselineExcludedCount?: number;
   supplierBillingFee: {
     state: PeriodFeeLedgerRow['supplierBillingFee']['state'];
     amount: PeriodFeeLedgerRow['supplierBillingFee']['amount'];
@@ -88,7 +90,7 @@ export type ContractLedgerPickInput = {
 
 export type ContractLedgerPickResult =
   | { status: 'CONFIRMED'; row: PeriodFeeLedgerRow }
-  | { status: 'HOLD'; reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE'; detail: { candidateCount: number; latestValueAsOf?: string; mismatch?: Array<'rent' | 'deposit'> } };
+  | { status: 'HOLD'; reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE'; detail: { candidateCount: number; baselineExcludedCount: number; latestValueAsOf?: string; mismatch?: Array<'rent' | 'deposit'> } };
 
 const normalizePlate = (plate: string) => plate.replace(/\s+/g, '');
 
@@ -192,22 +194,27 @@ const observedBeforeContract = (row: PeriodFeeLedgerRow, input: Pick<ContractLed
 };
 
 export function pickLedgerRowForContract(input: ContractLedgerPickInput): ContractLedgerPickResult {
+  const baselineExcludedCount = input.rows.filter((row) =>
+    row.termMonths === input.termMonths
+    && (row.evidenceScope === 'BASELINE_NOT_CONTRACT_EVIDENCE' || row.evidenceScope === 'UNKNOWN_SCOPE' || !row.evidenceScope))
+    .length;
   const candidates = input.rows
     .filter((row) =>
       row.valueBasis === 'CURRENT_AT_SNAPSHOT'
+      && row.evidenceScope === 'OBSERVED_AT_SNAPSHOT'
       && observedBeforeContract(row, input)
       && row.termMonths === input.termMonths)
     .sort((a, b) => ledgerObservationMs(b) - ledgerObservationMs(a) || b.snapshotId.localeCompare(a.snapshotId));
   const latest = candidates[0];
   if (!latest) {
-    return { status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE', detail: { candidateCount: 0 } };
+    return { status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE', detail: { candidateCount: 0, baselineExcludedCount } };
   }
   const mismatch = ledgerRowMismatches(input, latest);
   if (mismatch.length > 0) {
     return {
       status: 'HOLD',
       reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE',
-      detail: { candidateCount: candidates.length, latestValueAsOf: latest.valueAsOf, mismatch },
+      detail: { candidateCount: candidates.length, baselineExcludedCount, latestValueAsOf: latest.valueAsOf, mismatch },
     };
   }
   return { status: 'CONFIRMED', row: latest };
@@ -217,6 +224,7 @@ const ledgerFeeFromRow = (row: PeriodFeeLedgerRow): ContractFeeLinkLedgerFee => 
   status: row.applyState === 'HOLD' ? 'HOLD' : 'CONFIRMED',
   snapshotId: row.snapshotId,
   valueAsOf: row.valueAsOf,
+  evidenceScope: row.evidenceScope,
   supplierBillingFee: {
     state: row.supplierBillingFee.state,
     amount: row.supplierBillingFee.amount,
@@ -259,6 +267,7 @@ const ledgerFeeForContract = (
       channelPayoutFee: { state: 'UNKNOWN', amount: null, reasonCode: picked.reasonCode },
       vehicleValueEvidence: null,
       reasonCode: picked.reasonCode,
+      baselineExcludedCount: picked.detail.baselineExcludedCount,
     };
   }
   return ledgerFeeFromRow(picked.row);
