@@ -4,6 +4,22 @@ import { spawnSync } from 'node:child_process';
 
 const script = readFileSync(new URL('../scripts/verify-read-runtime.sh', import.meta.url), 'utf8');
 describe('existing private runtime verification', () => {
+  it('keeps explicit expected pins separate from declared pins and out of deployment', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const input = workflow.split('  workflow_dispatch:\n')[1]!.split('  push:')[0]!
+      .split('      expected_consumers_secret_version:\n')[1]!.split('\n      ')[0]!;
+    expect(input).toContain('type: string');
+    expect(input).toContain('required: false');
+    const verify = workflow.split('\n  verify:')[1]!;
+    expect(verify).toContain('EXPECTED_CONSUMERS_SECRET_VERSION: ${{ inputs.expected_consumers_secret_version || vars.FREEPASS_DATA_CONSUMERS_SECRET_VERSION }}');
+    expect(verify).toContain('CONSUMERS_SECRET_VERSION: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_VERSION }}');
+    expect(verify).not.toContain('CONSUMERS_SECRET_VERSION: ${{ inputs.expected_consumers_secret_version }}');
+    const deploy = workflow.split('\n  deploy:')[1]!.split('\n  verify:')[0]!;
+    expect(deploy).not.toContain('inputs.expected_consumers_secret_version');
+    expect(deploy).not.toContain('EXPECTED_CONSUMERS_SECRET_VERSION:');
+    expect(verify.indexOf('Validate verification scope before authentication')).toBeLessThan(verify.indexOf('Authenticate existing verification identity'));
+    expect(verify).toContain('run: bash scripts/verify-read-runtime.sh');
+  });
   it('requires an explicit positive expected pin matching the declaration before authentication', () => {
     const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
     const base = {
