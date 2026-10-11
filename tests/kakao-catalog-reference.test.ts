@@ -167,6 +167,21 @@ describe('current source observations in existing private reference', () => {
     const schema=JSON.parse(readFileSync(new URL('../contracts/kakao-catalog-reference-v1.schema.json',import.meta.url),'utf8'));
     const validate=new Ajv2020({strict:false,validateFormats:false}).compile({$defs:schema.$defs,...schema.$defs.sourceRowProduct});
     expect(validate(saved.observations[0]),JSON.stringify(validate.errors)).toBe(true);
+    for(const patch of [{token:'PRIVATE_TOKEN'},{rawPayload:{customer:'PRIVATE_CUSTOMER'}},{policyDigest:'not-a-digest'},
+      {policyContractDigest:'bad'},{inputDigest:'bad'},{authority:'SUPPLIER_RAW'},{currency:'USD'}]) {
+      const malformed=structuredClone(saved.observations[0])!;
+      const fee=malformed.normalized.priceConditions[0]!.supplierBillingFee as unknown as {derivedEvidence:Record<string,unknown>};
+      Object.assign(fee.derivedEvidence,patch);
+      expect(validate(malformed),JSON.stringify(patch)).toBe(false);
+    }
+    const unknown=structuredClone(saved.observations[0])!;
+    const fee=unknown.normalized.priceConditions[0]!.supplierBillingFee;
+    Object.assign(fee,{state:'UNKNOWN',amount:null,vatAmount:null,totalAmount:null,ruleId:null,reasonCode:'SOURCE_FEE_UNCONFIRMED'});
+    delete fee.sourceRefs;
+    expect(validate(unknown),JSON.stringify(validate.errors)).toBe(true);
+    fee.amount=0;
+    expect(validate(unknown)).toBe(false);
+
     expect((await store.listCandidates(input.runId))[0]!.status).toBe(record.status);
     expect(await store.listRaw(input.runId)).toEqual([input]);
   });

@@ -2,6 +2,11 @@
 
 ## 2026-10-11 15분 수집·정제·변경분 갱신 실행
 
+- 2026-10-12 후속 수집 수수료 연결: 기존 승인 엔진 출력을 SourceIngestionStore lineage에 저장하고 소비처는 검증된 저장값만 읽도록 기존 application/job/schema/test를 확장했다. identity HOLD, 원문·후보와 정산 사람 입력은 보존한다. 계산값 권위는 APPROVED_ENGINE_DERIVED_NOT_SETTLEMENT이며 정책/입력 digest와 출처를 보존한다. 중복·변조·정책 변경은 UNKNOWN/null, 조회 재계산은 0이다.
+- 검증: 94f4f84 WIP 이후 strictRequired 수정·악성 metadata 회귀 포함 4파일 전후 hash 고정 full 2504 PASS/18 conditional SKIP. build/architecture/data boundary PASS, 33 schema compile/15 standards tests PASS(전체 표준 상태 PARTIAL 유지). 실제 원문 prospective JSON 기본26/26·예외9/9·schema35/35·원문/후보/HOLD 보존35/35; 이는 운영 persistence 증거가 아니다. Claude schema 검토 ANSWERED/exit0; 출처 있음과 금액 확정은 별개이며 CALCULATED_APPROX는 저장 lineage validator가 허용하지 않는다.
+- 절차: 최초 dirty-worktree Academy HOLD 뒤 편집한 오류를 clean WIP snapshot 보존 및 새 READY 후 복구했다. 최초 HOLD를 PASS로 세지 않는다. exact final commit/CI는 후속 PR에서 고정한다.
+- 실제 남음: DB쓰기/current promotion/readback0, 기존 sourceRun 새 lineage 없음, manual apply OFF/과거 계획 만료. fbc00404 소비처 reader pin 고정, 새 pin 인수와 AI-OPS wrapper 운영 연결 미완료. native15분 수집 실행 미확인. next_start_here: exact main 통합 → 같은 main 새 dry-run/백업·원문 대조 → 정확 운영 범위 직전 승인 → 기존 reviewed manual apply → 실제 Firestore/소비처 readback. 새 저장소·엔진·RTDB·IAM·자동화 생성 금지.
+
 - 목적/정본: 대표 최신 직접 오더에 따라 Data는 원천 수집·정제·Firestore 상태/대여료 및 확정 기준별 수수료 최신화를 책임지고, 플랫폼이 직접 조회/출력한다. 기준 main `24fd7d15d31c12597c591f40cd54d4594ed3fea4`, academy data READY. 기존 수집/저장/수수료/품질 방에 겹치지 않는 실행 범위를 병렬 배정했다.
 - 변경: 기존 `shared-sheet-daily.yml` 파일·WIF·writer 신원·환경 이름·감사 계약을 유지하며 15분 cron으로 변경하고 날짜당 1회 skip만 제거한다. 기존 concurrency, 최신 감사 가드, revision/멱등성, 비공개 증거 및 저장 readback은 보존한다. 신규 예약/신원/키/RTDB/중계 서버 없음.
 - 실제 운영 효과: environment의 기존 `FREEPASS_DATA_SHARED_SHEET_DAILY=on`을 확인했으므로 main 반영은 예약 apply 빈도 변경이다. 최근 run `38098514945`는 전체 SUCCESS지만 capture/apply 단계 SKIPPED였다. 이를 수집 완료로 세지 않는다. GitHub 예약은 지연될 수 있어 15분 cron을 실제 15분 신선도 보장으로 표현하지 않는다.
