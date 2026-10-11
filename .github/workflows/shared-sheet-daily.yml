@@ -221,6 +221,9 @@ jobs:
           umask 077
           T="$RUNNER_TEMP/shared-sheet"
           mkdir -p "$T"
+          # Only reviewed manual apply skips this initial capture; schedule/dry-run still build their own plan.
+          # The Apply step below always re-reads live ERP/supplements/Sheet/master before any write.
+          if [ -z "$REVIEWED_RUN_ID" ]; then
           # 장기 개인 키·위임 없음(대표 승인 10-04): 공통 시트는 이 WIF 계정에 «보기» 공유, WIF 임시 자격(ADC)으로 spreadsheets.readonly.
           export FREEPASS_ERP5_READ_ACCESS_TOKEN="$(gcloud auth print-access-token)"
           export FREEPASS_DATA_EVIDENCE_BUCKET="$EVIDENCE_BUCKET"
@@ -250,12 +253,13 @@ jobs:
           # 합치기·UTC 변환·중복/충돌 판정(박제와 같은 차량번호 정규화)은 src/jobs/merge-shared-sheet-supplement.ts — 오류는 고정 코드만.
           node --import tsx src/jobs/merge-shared-sheet-supplement.ts "$T/supplement.json" "${parts[@]}"
           node --import tsx src/jobs/capture-shared-sheet.ts --spreadsheet "$SHARED_SHEET_ID" --erp5-capture "$ERP5_CAPTURE" --supplement "$T/supplement.json" --out "$T/capture.json"
-          if [ -n "$REVIEWED_RUN_ID" ]; then
+            node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --operational-refresh --capture "$T/capture.json" --plan-out "$T/plan.json" > "$T/report.json"
+          else
             gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REVIEWED_RUN_ID/attempts/$REVIEWED_ATTEMPT" > "$T/reviewed-run.json"
             node --import tsx --input-type=module <<'NODE'
           import { readFile, writeFile } from 'node:fs/promises';
           import { execFileSync } from 'node:child_process';
-          import { assertReviewedSharedSheetRun, assertReviewedPlanGeneration, assertSharedSheetPlan, assertLiveSharedSheetMatches } from './src/jobs/ingest-shared-sheet-canonical.ts';
+          import { assertReviewedSharedSheetRun, assertReviewedPlanGeneration, assertSharedSheetPlan } from './src/jobs/ingest-shared-sheet-canonical.ts';
           const e = process.env, dir = `${e.RUNNER_TEMP}/shared-sheet`;
           try {
             assertReviewedSharedSheetRun({ runId:e.REVIEWED_RUN_ID, attempt:e.REVIEWED_ATTEMPT, generation:e.REVIEWED_GENERATION,
@@ -271,13 +275,12 @@ jobs:
             assertReviewedPlanGeneration(e.REVIEWED_GENERATION,before.generation,(await get('')).generation);
             assertSharedSheetPlan(plan,e.REVIEWED_DIGEST,'freepasserp5');
             if(plan.operationalRefresh !== true)throw Error('REVIEWED_OPERATIONAL_REFRESH_REQUIRED');
-            assertLiveSharedSheetMatches(plan,JSON.parse(await readFile(`${dir}/capture.json`,'utf8')));
+            // Preserve the approved capture unchanged. This is not fresh evidence; the Apply step performs the sole live recapture.
+            await writeFile(`${dir}/capture.json`,JSON.stringify(plan.capture),{flag:'wx',mode:0o600});
             await writeFile(`${dir}/plan.json`,JSON.stringify(plan),{flag:'wx',mode:0o600});
             await writeFile(`${dir}/report.json`,JSON.stringify({mode:'DRY_RUN',writes:0,planDigest:e.REVIEWED_DIGEST,reviewed:true}),{flag:'wx',mode:0o600});
           } catch { console.error('REVIEWED_PLAN_SELECTION_HOLD'); process.exitCode=1; }
           NODE
-          else
-            node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --operational-refresh --capture "$T/capture.json" --plan-out "$T/plan.json" > "$T/report.json"
           fi
           node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0)process.exit(1);const {suppliers,...s}=r;console.log(JSON.stringify(s,null,2))" "$T/report.json"
       # 쓰기는 별도 단계. 감사는 이 단계의 실제 실행 여부를 판정하며 캡처/계획 성공을 쓰기 성공으로 세지 않는다.
