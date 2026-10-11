@@ -246,7 +246,6 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 검증: 통합 관련182 PASS(adapter18+gateway53+기존gateway111),build/architecture/access/diff-check PASS. 이전1518의177 PASS 및21 adapter16·12부분회귀/metadata누출해소는각head근거이며최종182와구분한다. 최종PR exact-head 독립검토와Linux CI는후속결속한다. 현재CODED/TESTED이며 새endpoint운영배포·실응답·ERP4 cutover/속도개선은미확인이다.
 - 경계/next_start_here: ERP4의mode별정규화·표시key/alias·partner/policy 전체판정동등성은별도HOLD이며 소비처가 기존판매조건검사를그대로재사용해야한다. ERP5 자체기존자격판정→photos-only binary 직접경로에 이fact를필수의존으로추가하지않는다. 실제serving08fd 위에이번순수fact/type/handler/test hunk만분리한runtime 후보를별도검증하고main tree불변ancestor로결속한다. 다른main금액/UID/internal-read 변경을이번배포로확대하지않는다. 최종검토·CI·00 exactsource GO 후20만실행하며업무DB·IAM·pins·consumer 범위변경0이다.
 
->>>>>>> origin/main
 
 ### 2026-10-12 사진 성능 소스 단일 배포 / 표본 실측 / 성능 미입증
 
