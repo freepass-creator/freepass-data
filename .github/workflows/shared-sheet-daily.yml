@@ -13,6 +13,21 @@ on:
         type: choice
         options: [dry-run, apply]
         default: dry-run
+      reviewed_run_id:
+        type: string
+        description: Successful main dry-run run ID (required for manual apply)
+      reviewed_attempt:
+        type: string
+        description: Exact reviewed run attempt
+      reviewed_generation:
+        type: string
+        description: Immutable private plan object generation
+      reviewed_digest:
+        type: string
+        description: Reviewed plan SHA-256 stable digest
+      reviewed_source_pin:
+        type: string
+        description: Reviewed main commit, must equal this execution commit
   schedule:
     # 15분 간격 요청. GitHub 예약 지연은 가능하므로 실제 수집시각/저장시각으로 신선도를 검증한다.
     - cron: '*/15 * * * *'
@@ -129,6 +144,11 @@ jobs:
           DAILY: ${{ vars.FREEPASS_DATA_SHARED_SHEET_DAILY }}
           MANUAL_APPLY: ${{ vars.FREEPASS_DATA_DAILY_MANUAL_APPLY }}
           GH_TOKEN: ${{ github.token }}
+          REVIEWED_RUN_ID: ${{ inputs.reviewed_run_id }}
+          REVIEWED_ATTEMPT: ${{ inputs.reviewed_attempt }}
+          REVIEWED_GENERATION: ${{ inputs.reviewed_generation }}
+          REVIEWED_DIGEST: ${{ inputs.reviewed_digest }}
+          REVIEWED_SOURCE_PIN: ${{ inputs.reviewed_source_pin }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = 'schedule' ]; then
@@ -146,6 +166,13 @@ jobs:
             fi
           elif [ "${{ inputs.mode }}" = 'apply' ] && [ "$MANUAL_APPLY" != 'on' ]; then
             echo "MANUAL_APPLY_DISABLED: set FREEPASS_DATA_DAILY_MANUAL_APPLY=on only for the controlled apply"; exit 1
+          fi
+          if [ "${{ github.event_name }}" = 'workflow_dispatch' ] && [ "${{ inputs.mode }}" = 'apply' ]; then
+            if ! [[ "$REVIEWED_RUN_ID" =~ ^[1-9][0-9]*$ && "$REVIEWED_ATTEMPT" =~ ^[1-9][0-9]*$ && "$REVIEWED_GENERATION" =~ ^[1-9][0-9]*$ && "$REVIEWED_DIGEST" =~ ^[a-f0-9]{64}$ && "$REVIEWED_SOURCE_PIN" = "$GITHUB_SHA" ]]; then
+              echo 'REVIEWED_PLAN_INPUTS_INVALID'; exit 1
+            fi
+          elif [ -n "$REVIEWED_RUN_ID$REVIEWED_ATTEMPT$REVIEWED_GENERATION$REVIEWED_DIGEST$REVIEWED_SOURCE_PIN" ]; then
+            echo 'REVIEWED_INPUTS_REQUIRE_MANUAL_APPLY'; exit 1
           fi
           echo "run=true" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
@@ -183,6 +210,12 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         env:
           EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_DAILY_EVIDENCE_BUCKET }}
+          GH_TOKEN: ${{ github.token }}
+          REVIEWED_RUN_ID: ${{ inputs.reviewed_run_id }}
+          REVIEWED_ATTEMPT: ${{ inputs.reviewed_attempt }}
+          REVIEWED_GENERATION: ${{ inputs.reviewed_generation }}
+          REVIEWED_DIGEST: ${{ inputs.reviewed_digest }}
+          REVIEWED_SOURCE_PIN: ${{ inputs.reviewed_source_pin }}
         run: |
           set -euo pipefail
           umask 077
@@ -217,17 +250,87 @@ jobs:
           # 합치기·UTC 변환·중복/충돌 판정(박제와 같은 차량번호 정규화)은 src/jobs/merge-shared-sheet-supplement.ts — 오류는 고정 코드만.
           node --import tsx src/jobs/merge-shared-sheet-supplement.ts "$T/supplement.json" "${parts[@]}"
           node --import tsx src/jobs/capture-shared-sheet.ts --spreadsheet "$SHARED_SHEET_ID" --erp5-capture "$ERP5_CAPTURE" --supplement "$T/supplement.json" --out "$T/capture.json"
-          node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --operational-refresh --capture "$T/capture.json" --plan-out "$T/plan.json" > "$T/report.json"
+          if [ -n "$REVIEWED_RUN_ID" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REVIEWED_RUN_ID/attempts/$REVIEWED_ATTEMPT" > "$T/reviewed-run.json"
+            node --import tsx --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+          import { execFileSync } from 'node:child_process';
+          import { assertReviewedSharedSheetRun, assertReviewedPlanGeneration, assertSharedSheetPlan, assertLiveSharedSheetMatches } from './src/jobs/ingest-shared-sheet-canonical.ts';
+          const e = process.env, dir = `${e.RUNNER_TEMP}/shared-sheet`;
+          try {
+            assertReviewedSharedSheetRun({ runId:e.REVIEWED_RUN_ID, attempt:e.REVIEWED_ATTEMPT, generation:e.REVIEWED_GENERATION,
+              digest:e.REVIEWED_DIGEST, sourcePin:e.REVIEWED_SOURCE_PIN, executionPin:e.GITHUB_SHA,
+              run:JSON.parse(await readFile(`${dir}/reviewed-run.json`,'utf8')) });
+            const object = `shared-sheet-daily/${e.REVIEWED_RUN_ID}-${e.REVIEWED_ATTEMPT}/plan.json`;
+            const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(e.EVIDENCE_BUCKET)}/o/${encodeURIComponent(object)}`;
+            const headers = { Authorization:`Bearer ${execFileSync('gcloud',['auth','print-access-token'],{encoding:'utf8'}).trim()}` };
+            const get = async suffix => { const r=await fetch(url+suffix,{headers,redirect:'error',signal:AbortSignal.timeout(30000)}); if(!r.ok)throw Error('READ_FAILED'); return r.json(); };
+            const before = await get('');
+            assertReviewedPlanGeneration(e.REVIEWED_GENERATION,before.generation,before.generation);
+            const plan = await get(`?alt=media&generation=${encodeURIComponent(e.REVIEWED_GENERATION)}`);
+            assertReviewedPlanGeneration(e.REVIEWED_GENERATION,before.generation,(await get('')).generation);
+            assertSharedSheetPlan(plan,e.REVIEWED_DIGEST,'freepasserp5');
+            if(plan.operationalRefresh !== true)throw Error('REVIEWED_OPERATIONAL_REFRESH_REQUIRED');
+            assertLiveSharedSheetMatches(plan,JSON.parse(await readFile(`${dir}/capture.json`,'utf8')));
+            await writeFile(`${dir}/plan.json`,JSON.stringify(plan),{flag:'wx',mode:0o600});
+            await writeFile(`${dir}/report.json`,JSON.stringify({mode:'DRY_RUN',writes:0,planDigest:e.REVIEWED_DIGEST,reviewed:true}),{flag:'wx',mode:0o600});
+          } catch { console.error('REVIEWED_PLAN_SELECTION_HOLD'); process.exitCode=1; }
+          NODE
+          else
+            node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --operational-refresh --capture "$T/capture.json" --plan-out "$T/plan.json" > "$T/report.json"
+          fi
           node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0)process.exit(1);const {suppliers,...s}=r;console.log(JSON.stringify(s,null,2))" "$T/report.json"
       # 쓰기는 별도 단계. 감사는 이 단계의 실제 실행 여부를 판정하며 캡처/계획 성공을 쓰기 성공으로 세지 않는다.
       - name: Apply to FreePass Data (writes) — counts only in the public log
         if: steps.gate.outputs.run == 'true' && env.APPLY == 'true'
+        env:
+          EVIDENCE_BUCKET: ${{ vars.FREEPASS_DATA_DAILY_EVIDENCE_BUCKET }}
+          REVIEWED_RUN_ID: ${{ inputs.reviewed_run_id }}
+          REVIEWED_ATTEMPT: ${{ inputs.reviewed_attempt }}
+          REVIEWED_GENERATION: ${{ inputs.reviewed_generation }}
         run: |
           set -euo pipefail
+          umask 077
           T="$RUNNER_TEMP/shared-sheet"
           DIGEST="$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).planDigest)" "$T/report.json")"
+          # Re-read upstream immediately before the existing CLI opens any audited write. Keep approved capture untouched.
+          export FREEPASS_ERP5_READ_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+          export FREEPASS_DATA_EVIDENCE_BUCKET="$EVIDENCE_BUCKET"
           set +e
-          node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --apply --plan "$T/plan.json" --expected-plan-digest "$DIGEST" > "$T/apply.json"
+          node --import tsx src/jobs/inspect-erp5-source.ts --live-read-only > "$T/live-erp5-report.json"
+          erp5_code=$?
+          set -e
+          test "$erp5_code" = 0 -o "$erp5_code" = 2
+          ERP5_CAPTURE="$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).privateCapturePath)" "$T/live-erp5-report.json")"
+          test -f "$ERP5_CAPTURE"
+          parts=()
+          for d in "$(TZ=Asia/Seoul date -d yesterday +%F)" "$(TZ=Asia/Seoul date +%F)"; do
+            set +e
+            err="$(gcloud storage cp --no-user-output-enabled "gs://$EVIDENCE_BUCKET/shared-sheet-supplement/$d.json" "$T/live-supplement-$d.json" 2>&1)"
+            code=$?
+            set -e
+            if [ "$code" != 0 ]; then
+              if grep -qiE 'not found|No URLs matched|matched no objects|404' <<<"$err"; then continue; fi
+              echo 'LIVE_SUPPLEMENT_READ_FAILED'; exit 1
+            fi
+            parts+=("$T/live-supplement-$d.json")
+          done
+          node --import tsx src/jobs/merge-shared-sheet-supplement.ts "$T/live-supplement.json" "${parts[@]}"
+          node --import tsx src/jobs/capture-shared-sheet.ts --spreadsheet "$SHARED_SHEET_ID" --erp5-capture "$ERP5_CAPTURE" --supplement "$T/live-supplement.json" --out "$T/live-capture.json"
+          if [ -n "$REVIEWED_RUN_ID" ]; then
+            node --import tsx --input-type=module <<'NODE'
+          import { assertReviewedPlanGeneration } from './src/jobs/ingest-shared-sheet-canonical.ts';
+          try {
+            const e=process.env, object=`shared-sheet-daily/${e.REVIEWED_RUN_ID}-${e.REVIEWED_ATTEMPT}/plan.json`;
+            const url=`https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(e.EVIDENCE_BUCKET)}/o/${encodeURIComponent(object)}`;
+            const r=await fetch(url,{headers:{Authorization:`Bearer ${e.FREEPASS_ERP5_READ_ACCESS_TOKEN}`},redirect:'error',signal:AbortSignal.timeout(30000)});
+            if(!r.ok)throw Error('READ_FAILED');
+            const meta=await r.json(); assertReviewedPlanGeneration(e.REVIEWED_GENERATION,meta.generation,meta.generation);
+          } catch { console.error('REVIEWED_PLAN_GENERATION_HOLD'); process.exitCode=1; }
+          NODE
+          fi
+          set +e
+          node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --apply --plan "$T/plan.json" --expected-plan-digest "$DIGEST" --live-capture "$T/live-capture.json" > "$T/apply.json"
           code=$?
           set -e
           cat "$T/apply.json"
@@ -242,7 +345,7 @@ jobs:
           set -euo pipefail
           T="$RUNNER_TEMP/shared-sheet"
           uri="gs://$EVIDENCE_BUCKET/shared-sheet-daily/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          for f in supplement.json capture.json plan.json report.json apply.json; do
+          for f in supplement.json capture.json plan.json report.json apply.json reviewed-run.json live-supplement.json live-capture.json; do
             if test -f "$T/$f"; then
               gcloud storage cp --no-user-output-enabled "$T/$f" "$uri/$f" --if-generation-match=0
               gcloud storage cp --no-user-output-enabled "$uri/$f" "$T/$f.readback"
