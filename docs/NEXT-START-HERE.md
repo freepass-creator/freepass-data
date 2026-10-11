@@ -536,6 +536,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 18:42 수수료 90기간 해결안 / 검토결과 고정 v2
+
+- 목적/정본: 대표 전체 상품 연결→main 통합→저장 재조회 오더. 기존 PR453 작업선만 재사용, main b7e519b를24f6dc9에 합침(양쪽 인계 보존). 구현 f353fad6a2326d256d29dc5df0fab0fe5273ea8e.
+- 실제 DRY_RUN: 18:42:07 KST 기존 CatalogStore160상품568기간, 양쪽 KNOWN393→483/UNKNOWN175→85. 해결90=기본회사 구독64+대표확정1개월26. 금액변경99 중 기존확정9는 빌린카60개월 옛기간식→대표확정36개월 월료100/80. 운영 writes0.
+- 근거 필요85: 신차 출고형태79, 기본6개월 미지원4, 보증금tier2. 해당36상품의 binding→원래RAW36/36 매칭; 최신head다름36, 최신RAW33매칭/3미매칭, 명시subtype/tier0. canonical정책문서0이므로 정책저장 담당의 ID/revision 인계와 조율하며 추정하지 않는다.
+- 안전 보완: Claude ANSWERED/exit0의 계산코드 변경 미고정 지적을 반영. 기존 재산출 plan을 v2로 올리고 각 entry.expectedEconomicsDigest를 트랜잭션 안에서 재계산값과 대조해 쓰기 전 HOLD한다. oldv1/누락digest 거부. approvalRef 필수, 실행자는 서비스로 유지하며 검토·승인 근거를 감사·리비전 reason에 보존. changedOffers는 실제commit 수이며 readbackVerifiedChangedOffers를 별도로 반환한다.
+- 새 비공개 plan: TEMP/period-economics-20261011-v2-candidate.json, policyDigest5be799d0cfe3e90533b9d2a2d72ac83c956977fdb1677a2f01c69e8a54c0ad34, planDigest5631ec012b90bc92101815e4a4aa8ab8d4e305e0462f8b4dc70228468dc6a534. 이전v1/bc9f5dd 계획 적용금지; before-image 보존. 코드 f353fad, 결과digest160/160 포함.
+- 검증: build/architecture/data-access PASS, main병합후 관련227PASS; 보완후 전체2164PASS/16조건부SKIP+마지막계획거부추가검사 포함 recompute19PASS. 독립 재검토 진행 중, 미응답을 PASS로 세지 않는다.
+- 남음/next_start_here: 통합 담당에게 PR437 contracts/단일선 수용을 요청했으며 PR453 임의종료·가드우회·동시main병합0. 최종독립검토→같은PR453 exacthead 인계→통합mainSHA 확정→정책담당 동시writer 없음과 최신revision/inputDigest/planDigest 확인→기존 writer apply 및 전160행readback. main반영/저장/온라인소비처검증은 아직 미실행.
+
+
 ### 2026-10-11 1개월 기본 수수료 5% 청구전액지급
 
 - 목적/정본: 대표 직접 확정 월 대여료5%, VAT별도, 청구 전액 지급. 기준 main 1e1ea6894def6bebd3abe4d231471f3153ffdfea, 기존 kakao-catalog-reference 수수료 엔진을 확장한다.
