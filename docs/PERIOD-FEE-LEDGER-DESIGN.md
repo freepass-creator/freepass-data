@@ -430,3 +430,25 @@ PR·시험·일정 반영:
 소유 행은 문서 ID 접두로 판정한다. ledger와 history 문서 ID는 `runId + "__" + 원래 키` 형태이며, reader/readback/rollback은 `__name__ >= runId + "__"` 그리고 `__name__ < runId + "__\uf8ff"` 범위를 500개 단위로 읽는다. 쓰기 때 계획에서 소유 문서들의 `[문서 키, 문서 digest]` 쌍을 키로 정렬해 `stableDigest`한 `rowContentDigest`와 `historyContentDigest`를 PREPARED run 문서에 기록한다. 되읽기, reader, 이전 run 복원, ACTIVE 재호출 멱등 검증은 접두 조회로 읽은 실제 문서의 키 digest와 내용 digest를 run 문서의 `rowCount/rowKeysDigest/rowContentDigest` 또는 `historyRowCount/historyKeysDigest/historyContentDigest`와 모두 비교할 때만 인정한다. 불일치하면 `LEDGER_READ_INCONSISTENT`로 실패한다.
 
 rollback도 같은 접두 범위로 현재 남아 있는 이 run 소유 문서만 찾고, 각 문서의 저장 digest가 삭제 직전 기대 digest와 일치하는 경우에만 삭제한다. 이전 ACTIVE run 복원 전에는 이전 run의 접두 범위 row count와 key digest를 다시 검증한다.
+
+## 손오공 상품 유형별 기간별 매핑표
+
+2026-10-12 대표 결정으로 손오공 `RP012`의 픽업 구독과 오공 구독은 차량가액 기준 수수료를 쓰지 않고 F04 `수수료표`의 기간별 규칙만 쓴다. UNKNOWN은 0이 아니며, 수수료 ledger도 같은 상태와 reasonCode를 보존한다.
+
+| 유형 | 기간 | 청구 규칙 ID | 지급 규칙 ID | 근거 행 | 미확정 사유 |
+| --- | --- | --- | --- | --- | --- |
+| 재렌트/중고렌트 | 12 | `STANDARD_RERENT_12_FIXED` | `STANDARD_RERENT_12_FIXED` | 5 | 없음 |
+| 재렌트/중고렌트 | 24 | `STANDARD_RERENT_24_RENT_X_TERM` | `STANDARD_RERENT_24_RENT_X_TERM` | 6 | 없음 |
+| 재렌트/중고렌트 | 36 | `STANDARD_RERENT_36_RENT_X_TERM` | `STANDARD_RERENT_36_RENT_X_TERM` | 7 | 없음 |
+| 재렌트/중고렌트 | 48 | `STANDARD_RERENT_48_RENT_X_TERM` | `STANDARD_RERENT_48_RENT_X_TERM` | 8 | 없음 |
+| 재렌트/중고렌트 | 60 | `STANDARD_RERENT_60_RENT_X_TERM` | `STANDARD_RERENT_60_RENT_X_TERM` | 9 | 없음 |
+| 오공구독 | 12 | `SONOKONG_SUBSCRIPTION_12_BILLING` | `SONOKONG_SUBSCRIPTION_12_PAYOUT` | 10 | 같은 상품·같은 조건의 12개월 월 대여료가 없으면 `Q12_BASIS_REQUIRED` |
+| 오공구독 인수형 | 24 | `SONOKONG_SUBSCRIPTION_24_BILLING` | `SONOKONG_SUBSCRIPTION_24_PAYOUT` | 11 | 12개월 기준 없으면 `Q12_BASIS_REQUIRED`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 인수형 | 36 | `SONOKONG_SUBSCRIPTION_36_BILLING` | `SONOKONG_SUBSCRIPTION_36_PAYOUT` | 12 | 12개월 기준 없으면 `Q12_BASIS_REQUIRED`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 인수형 | 48 | `SONOKONG_SUBSCRIPTION_48_BILLING` | `SONOKONG_SUBSCRIPTION_48_PAYOUT` | 13 | 12개월 기준 없으면 `Q12_BASIS_REQUIRED`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 인수형 | 60 | `SONOKONG_SUBSCRIPTION_60_BILLING` | `SONOKONG_SUBSCRIPTION_60_PAYOUT` | 14 | 12개월 기준 없으면 `Q12_BASIS_REQUIRED`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 반납형 | 24·36·48·60 | 없음 | 없음 | 173 | `RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED` |
+| 픽업구독 | 60 | `SONOKONG_PICKUP_60_BILLING_RENT_X_TERM` | `SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM` | 191 | 없음 |
+| 픽업구독 | 12·24·36·48 | 없음 | 없음 | 없음 | `PICKUP_TERM_RATE_NOT_IN_TABLE` |
+
+오공구독의 `q12Basis`는 reference builder가 같은 상품의 같은 정산방식·약정주행 조건에서 12개월 가격행 월 대여료를 찾아 `PRODUCT_12_MONTH_RENT`로 자동 주입한다. 12개월 행 자체는 인수·반납형 공통 기준으로 계산하며, 24~60개월은 원문 가격키나 필드에서 인수형이 확인될 때만 BUYOUT으로 계산한다.

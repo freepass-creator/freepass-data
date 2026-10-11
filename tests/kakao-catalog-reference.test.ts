@@ -879,11 +879,13 @@ describe('F04 2026-10-04 alignment regression', () => {
     expect(both({ ...base, termMonths, fuel: '' }).every(r => r.reasonCode === 'FUEL_REQUIRED_FOR_SUPPLIER_RULE')).toBe(true);
     expect(both({ ...base, termMonths })[0]!.sourceRefs).toContain('F04:수수료표!A161:M161');
   });
-  it.each(['픽업구독', '픽업 구독(롯데T카)'])('2: pickup %s uses vehicle value, never rent or Q12', productType => {
-    const input = { ...base, supplierId: 'RP012', productType, vehicleValue: 30000000 };
-    expect(amounts(input)).toEqual([1200000,900000]);
-    expect(amounts({ ...input, monthlyRent: 900000, termMonths: 84 })).toEqual([1200000,900000]);
-    expect(both({ ...input, vehicleValue: 0 }).every(r => r.reasonCode === 'VEHICLE_VALUE_REQUIRED')).toBe(true);
+  it.each(['픽업구독', '픽업 구독(롯데T카)'])('2: pickup %s uses only the 60-month rent x term rule', productType => {
+    const input = { ...base, supplierId: 'RP012', productType, vehicleValue: 30000000, monthlyRent: 1000000, termMonths: 60 };
+    expect(amounts(input)).toEqual([1650000,1200000]);
+    expect(both(input).map(r => r.ruleId)).toEqual(['SONOKONG_PICKUP_60_BILLING_RENT_X_TERM', 'SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM']);
+    expect(both(input)[0]!.sourceRefs).toContain('F04:수수료표!A191:M191');
+    expect(amounts({ ...input, vehicleValue: 99999999 })).toEqual([1650000,1200000]);
+    expect(both({ ...input, termMonths: 24 }).every(r => r.reasonCode === 'PICKUP_TERM_RATE_NOT_IN_TABLE')).toBe(true);
   });
   it.each(['RP021','PT-0026'])('billin %s uses the 36-month rent at 100/80 percent', supplierId => {
     expect(amounts({ ...base, supplierId, termMonths: 36, monthlyRent: 500000 })).toEqual([500000,400000]);
@@ -914,6 +916,14 @@ describe('F04 2026-10-04 alignment regression', () => {
     const sonokong = { ...product, provider_company_code: 'RP012', product_type: '오공구독' };
     expect(buildKakaoCatalogReferenceProduct('s', sonokong, { '24_2만': { q12Basis: { amount: 800000, sourceRef: 'private:verified-q12' }, subscriptionForm: 'BUYOUT' } })!.offers[0]!.priceTerms[0]!.supplierBillingFee.amount).toBe(1100000);
     expect(buildKakaoCatalogReferenceProduct('s', sonokong)!.offers[0]!.priceTerms[0]!.supplierBillingFee.reasonCode).toBe('Q12_BASIS_REQUIRED');
+    const sonokongWithQ12 = { ...sonokong, price: { '12': { rent: 800000 }, '24_인수형': { rent: 700000 } } };
+    expect(buildKakaoCatalogReferenceProduct('s-q12', sonokongWithQ12)!.offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee).toMatchObject({
+      state: 'CALCULATED',
+      amount: 1100000,
+      ruleId: 'SONOKONG_SUBSCRIPTION_24_BILLING',
+    });
+    const returnForm = { ...sonokong, price: { '12': { rent: 800000 }, '24': { rent: 700000 } } };
+    expect(buildKakaoCatalogReferenceProduct('s-return', returnForm)!.offers[0]!.priceTerms.find(t => t.termMonths === 24)!.supplierBillingFee.reasonCode).toBe('RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED');
     expect(product).toEqual(sourceBefore);
     expect(evidence).toEqual({ vehicleValue: 44000000, depositTierPercent: 5, newProductSubtype: 'NEW_PREDELIVERY' });
   });
@@ -925,28 +935,25 @@ describe('F04 2026-10-04 alignment regression', () => {
     const confirmed = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-11T00:00:00Z',
       products: { confirmed: { ...baseProduct, 원문: { 차량가격: '31,240,000' }, consumer_price: 31000000 } } });
     expect(validate(confirmed), JSON.stringify(validate.errors)).toBe(true);
-    expect(confirmed.feeComputation).toEqual({ mode: 'LIVE_ENGINE_UNSAVED', note: '계산값·저장 전' });
+    expect(confirmed).not.toHaveProperty('feeComputation');
     expect(confirmed.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toMatchObject({
-      state: 'CALCULATED',
-      amount: 1249600,
-      vehicleValueEvidence: { grade: 'CONFIRMED', source: 'SUPPLIER_RAW' },
+      state: 'UNKNOWN',
+      amount: null,
+      reasonCode: 'PICKUP_TERM_RATE_NOT_IN_TABLE',
     });
-    expect(JSON.stringify(confirmed.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee.vehicleValueEvidence)).not.toMatch(/amount|differenceAmount|31240000|240000/);
+    expect(confirmed.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).not.toHaveProperty('vehicleValueEvidence');
 
     const approximate = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-11T00:00:00Z',
       products: { approximate: { ...baseProduct, consumer_price: 30000000 } } });
     expect(validate(approximate), JSON.stringify(validate.errors)).toBe(true);
-    expect(approximate.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toMatchObject({
-      state: 'CALCULATED_APPROX',
-      vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE' },
-    });
+    expect(approximate.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', reasonCode: 'PICKUP_TERM_RATE_NOT_IN_TABLE' });
     expect(approximate.data[0]!.offers[0]!.priceTerms[0]!.expectedGrossMargin).toMatchObject({ state: 'UNKNOWN' });
 
     const missing = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-11T00:00:00Z',
       products: { missing: baseProduct } });
     expect(validate(missing), JSON.stringify(validate.errors)).toBe(true);
     expect(missing).not.toHaveProperty('feeComputation');
-    expect(missing.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'VEHICLE_VALUE_REQUIRED' });
+    expect(missing.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null, reasonCode: 'PICKUP_TERM_RATE_NOT_IN_TABLE' });
     expect(missing.data[0]!.offers[0]!.priceTerms[0]!.supplierBillingFee).not.toHaveProperty('vehicleValueEvidence');
 
     const otherSupplier = buildKakaoCatalogReference({ consumerId: 'kakao-ops', observedAt: '2026-10-11T00:00:00Z',
