@@ -329,7 +329,7 @@ describe('shared sheet local source to Canonical', () => {
     expect(n.suppliedTerms).toBe(3);
   });
   it('preserves overlapping master/year/deposit HOLDs by source row and term without borrowing long deposit', () => {
-    const c = capture({ 단기보증: '', 연식: '25MY' });
+    const c = capture({ 단기보증: '', 연식: '24MY' });
     const raw = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords[0]!;
     const before = structuredClone(raw);
     const evidence = masterEvidence();
@@ -472,7 +472,7 @@ describe('shared sheet local source to Canonical', () => {
     expect(p.result.report).toMatchObject({ status: 'PARTIAL_HOLD', held: 1 }); expect(await s.store.listOffers()).toHaveLength(0);
     expect(await s.source.listRaw(p.plan.runId)).toHaveLength(1);
   });
-  it.each([{ 최초등록일: '26.02.30' }, { 최초등록일: '25.04' }, { '12개월': '협의' }, { 단기보증: '10~20' }])('HOLDs ambiguous values without guessing', data => {
+  it.each([{ 최초등록일: '26.02.30' }, { 최초등록일: '24.04' }, { '12개월': '협의' }, { 단기보증: '10~20' }])('HOLDs ambiguous values without guessing', data => {
     expect(normalized(capture(data)).record.status).toBe('REJECTED');
   });
   it('rejects missing tabs, reordered headers and wrong digest; a malformed row is quarantined, not the batch', () => {

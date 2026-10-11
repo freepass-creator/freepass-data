@@ -56,19 +56,31 @@ describe('one active Data master authority', () => {
     expect(chooseVehicleIdentity(master, input(names)).pick).toBe('HOLD');
     expect(chooseVehicleIdentity(master, { ...input(names), specs: { fuel: 'LPG', displacementCc: 1999,
       drive: '2WD', seats: 5, modelYear: 2025 } })).toMatchObject({ pick: 'SHEET', masterId: 'm1', trimId: 't-old' });
-    expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: 2000, modelYear: 2025 } }).pick).toBe('HOLD');
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: 2100, modelYear: 2025 } }).pick).toBe('HOLD');
     expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: 1999 } }).pick).toBe('HOLD');
     expect(chooseVehicleIdentity(master, { ...input(names), specs: { modelYear: null } }).pick).toBe('HOLD');
     expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: null } }))
       .toMatchObject({ pick: 'HOLD', notes: ['SOURCE_SPEC_REVIEW_REQUIRED'] });
     expect(chooseVehicleIdentity(master, { ...input(names), firstRegistration: '2024-12',
-      specs: { modelYear: 2025 } })).toMatchObject({ pick: 'HOLD', notes: ['YEAR_REGISTRATION_MISMATCH'] });
+      specs: { modelYear: 2026 } })).toMatchObject({ pick: 'HOLD', notes: ['YEAR_REGISTRATION_MISMATCH'] });
+  });
+  it('treats nominal supplier displacement as the master exact value rounded to 100 cc, and model year within one year of registration', () => {
+    const master = indexVehicleMaster([{ masterId: 'm1', trimId: 't1', names, aliases: names.map(n => [n]),
+      specs: { displacementCc: 1999 }, modelYearStart: 2024, modelYearEnd: 2026 }]);
+    for (const cc of [1999, 2000]) expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: cc } }).pick).toBe('SHEET');
+    for (const cc of [1900, 2100, 1500]) expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: cc } }).pick).toBe('HOLD');
+    for (const my of [2024, 2025]) expect(chooseVehicleIdentity(master, { ...input(names), firstRegistration: '2024-11',
+      specs: { modelYear: my } }).pick).toBe('SHEET');
+    expect(chooseVehicleIdentity(master, { ...input(names), firstRegistration: '2024-03', specs: { modelYear: 2025 } }).pick).toBe('HOLD');
+    expect(chooseVehicleIdentity(master, { ...input(names), firstRegistration: '2025-03', specs: { modelYear: 2024 } }).pick).toBe('SHEET');
+    expect(chooseVehicleIdentity(master, { ...input(names), firstRegistration: '2026-11', specs: { modelYear: 2024 } }))
+      .toMatchObject({ pick: 'HOLD', notes: ['YEAR_REGISTRATION_MISMATCH'] });
   });
   it('holds a previously unique name when supplied fuel or displacement contradicts the master', () => {
     const master = indexVehicleMaster([{ masterId: 'm1', trimId: 't1', names, aliases: names.map(n => [n]),
       specs: { fuel: '가솔린', displacementCc: 1999 } }]);
     expect(chooseVehicleIdentity(master, input(names)).pick).toBe('SHEET');
-    for (const specs of [{ fuel: '하이브리드', displacementCc: 3000 }, { displacementCc: 2000 }, { seats: 5 }]) {
+    for (const specs of [{ fuel: '하이브리드', displacementCc: 3000 }, { displacementCc: 2100 }, { seats: 5 }]) {
       expect(chooseVehicleIdentity(master, { ...input(names), specs }).pick).toBe('HOLD');
     }
     expect(chooseVehicleIdentity(master, { ...input(names), specs: { seats: 5 } }))
