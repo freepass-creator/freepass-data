@@ -17,6 +17,7 @@ const argv = process.argv.slice(2);
 const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
 const PROJECT = process.env.FIREBASE_PROJECT_ID || 'freepasserp5';
 const F05 = process.env.FREEPASS_SHEET_F05_ID;
+const AICA = process.env.FREEPASS_AICA_SHEET_ID; // 아이카 별도 원본 시트(대표 10-12: 재고가 수시로 바뀌어 매번 직접 읽는다)
 
 // F05 탭 머리글 → 프리패스 데이터 칸. 점 경로는 products 문서 안의 중첩 값.
 export const HEADER_TO_FIELD = {
@@ -39,8 +40,8 @@ function gwsBin() {
   if (!m) throw new Error('GWS_BIN_NOT_FOUND');
   return m[1];
 }
-function readTab(tab) {
-  const out = execFileSync(gwsBin(), ['sheets', '+read', '--spreadsheet', F05, '--range', `'${tab}'!A1:BX3000`], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+function readTab(tab, sheetId = F05) {
+  const out = execFileSync(gwsBin(), ['sheets', '+read', '--spreadsheet', sheetId, '--range', `'${tab}'!A1:BX3000`], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
   return JSON.parse(out.slice(out.indexOf('{'))).values ?? [];
 }
 
@@ -69,10 +70,34 @@ function tabTitles() {
   return new Set(JSON.parse(out.slice(out.indexOf('{'))).sheets.map(x => x.properties.title));
 }
 
+// 아이카 원본 시트 탭(재고 3탭) 머리글 → 프리패스 데이터 칸. 월렌트=1개월, 장기보증=보증금(기간 공통).
+export const AICA_TABS = ['중고재렌트', '장기특별이벤트', '신차선출고'];
+export const AICA_HEADER_TO_FIELD = { 차량번호: 'car_number', 제조사: 'maker', 연료: 'fuel_type', 외장: 'ext_color', 내장: 'int_color', Km: 'mileage', 최초등록: 'first_registration_date',
+  배기량: 'engine_cc', 배차상태: 'status_label_raw', 옵션: 'options' };
+export function aicaRecords(values) {
+  const hi = values.findIndex(r => r.includes('차량번호'));
+  if (hi < 0) return [];
+  const head = values[hi], idx = Object.fromEntries(head.map((h, i) => [h, i]));
+  const get = (r, h) => (idx[h] == null ? '' : (r[idx[h]] ?? ''));
+  const out = [];
+  for (const r of values.slice(hi + 1)) {
+    if (!String(get(r, '차량번호')).trim()) continue;
+    const rec = {};
+    for (const [h, f] of Object.entries(AICA_HEADER_TO_FIELD)) rec[f] = get(r, h);
+    rec['price.1.rent'] = get(r, '월렌트');
+    for (const [h, p] of [['36개월', '36'], ['48개월', '48'], ['60개월', '60']]) rec[`price.${p}.rent`] = get(r, h);
+    for (const p of ['1', '36', '48', '60']) rec[`price.${p}.deposit`] = String(rec[`price.${p}.rent`]).trim() ? get(r, '장기보증') : '';
+    out.push(rec);
+  }
+  return out;
+}
+const AICA_FIELDS = [...Object.values(AICA_HEADER_TO_FIELD).filter(f => f !== 'car_number' && f !== 'int_color'),
+  ...['1', '36', '48', '60'].flatMap(p => [`price.${p}.rent`, `price.${p}.deposit`])];
+
 async function readProducts(token) {
   const out = []; let pageToken = '';
   const top = ['car_number', 'provider_company_code', 'partner_code', 'listable', 'maker', 'model', 'sub_model', 'trim_name', 'ext_color', 'year', 'mileage',
-    'engine_cc', 'fuel_type', 'first_registration_date', 'status_label_raw', 'options', 'price', '원문', 'sheet_source_tab', 'source'];
+    'engine_cc', 'int_color', 'fuel_type', 'first_registration_date', 'status_label_raw', 'options', 'price', '원문', 'sheet_source_tab', 'source'];
   do {
     const q = new URLSearchParams({ pageSize: '300' });
     for (const f of top) q.append('mask.fieldPaths', /^[A-Za-z_][A-Za-z0-9_]*$/.test(f) ? f : '`' + f + '`');
@@ -85,33 +110,44 @@ async function readProducts(token) {
   } while (pageToken);
   return out;
 }
-const flatten = d => ({ car_number: d.car_number, ...Object.fromEntries(FIELDS.map(f => [f, pick(d, f)])) });
+const flatten = d => ({ car_number: d.car_number, listable: d.listable === true, ...Object.fromEntries([...new Set([...FIELDS, ...AICA_FIELDS])].map(f => [f, pick(d, f)])) });
 
 export function f05Suppliers() { return spec.supplierChannels.sharedInputSheet.map(x => ({ code: x.code, tab: x.tab, companyName: x.companyName })); }
 
-const summarize = (code, tab, r, t0) => ({ supplier: code, tab, seconds: Math.round((Date.now() - t0) / 100) / 10, rawVehicles: r.rawVehicles, dataVehicles: r.dataVehicles,
+const summarize = (code, tab, r, t0) => ({ supplier: code, tab, sourceReadAt: r.sourceReadAt, dataReadAt: r.dataReadAt, listableTotal: r.listableTotal, listableNotInSource: r.listableNotInSource, seconds: Math.round((Date.now() - t0) / 100) / 10, rawVehicles: r.rawVehicles, dataVehicles: r.dataVehicles,
   commonVehicles: r.commonVehicles, vehicleCoverage: r.vehicleCoverage, fieldMatchRate: r.fieldMatchRate, fieldExactRate: r.fieldExactRate, types: r.types,
   worstFields: Object.entries(r.perField).filter(([, p]) => p.compared).map(([f, p]) => ({ field: f, compared: p.compared, matchRate: p.matchRate }))
     .sort((a, b) => a.matchRate - b.matchRate).slice(0, 5) });
 
 async function main() {
-  if (!F05) { console.error('FREEPASS_SHEET_F05_ID 환경변수 필요(시트 ID 는 비공개 문서에서)'); process.exit(2); }
-  const targets = argv.includes('--all') ? f05Suppliers() : f05Suppliers().filter(x => x.code === opt('supplier'));
+  const wantAica = argv.includes('--all') || opt('supplier') === 'RP004';
+  const f05Targets = argv.includes('--all') ? f05Suppliers() : f05Suppliers().filter(x => x.code === opt('supplier'));
+  if (f05Targets.length && !F05) { console.error('FREEPASS_SHEET_F05_ID 환경변수 필요(시트 ID 는 비공개 문서에서)'); process.exit(2); }
+  if (wantAica && !AICA) { console.error('FREEPASS_AICA_SHEET_ID 환경변수 필요'); process.exit(2); }
+  const targets = [...(wantAica ? [{ code: 'RP004', tab: '아이카 별도 시트', aica: true }] : []), ...f05Targets]; // 확인 순서: 아이카 → 공통 시트 공급사
   if (!targets.length) { console.error('F05 에 없는 공급사이거나 --supplier/--all 누락. F05 공급사: ' + f05Suppliers().map(x => x.code).join(',')); process.exit(2); }
   const token = execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8', shell: process.platform === 'win32' }).trim();
   const products = await readProducts(token);
-  const tabCache = new Map(), results = [], titles = tabTitles();
+  const tabCache = new Map(), results = [], titles = f05Targets.length ? tabTitles() : new Set();
+  const dataReadAt = new Date().toISOString();
   for (const t of targets) {
     const t0 = Date.now();
-    if (!titles.has(t.tab)) { // 규격엔 있으나 F05 에 탭이 없는 공급사 — 원천 없음으로 표시하고 계속
+    if (!t.aica && !titles.has(t.tab)) { // 규격엔 있으나 F05 에 탭이 없는 공급사 — 원천 없음으로 표시하고 계속
       results.push({ rep: { supplier: t.code, tab: t.tab, status: 'TAB_ABSENT_IN_F05' }, sum: { supplier: t.code, tab: t.tab, status: 'TAB_ABSENT_IN_F05', seconds: 0, rawVehicles: 0, dataVehicles: products.filter(p => (p.provider_company_code || p.partner_code) === t.code).length, types: Object.fromEntries(MISMATCH_TYPES.map(m => [m, 0])) } });
       continue;
     }
-    if (!tabCache.has(t.tab)) tabCache.set(t.tab, readTab(t.tab));
-    const sharedTab = f05Suppliers().filter(x => x.tab === t.tab).length > 1;
-    const raw = f05Records(tabCache.get(t.tab), sharedTab ? t.companyName : undefined);
+    let raw, fields = FIELDS;
+    const readStarted = new Date().toISOString();
+    if (t.aica) { raw = AICA_TABS.flatMap(tab => aicaRecords(readTab(tab, AICA))); fields = AICA_FIELDS; }
+    else {
+      if (!tabCache.has(t.tab)) tabCache.set(t.tab, readTab(t.tab));
+      const sharedTab = f05Suppliers().filter(x => x.tab === t.tab).length > 1;
+      raw = f05Records(tabCache.get(t.tab), sharedTab ? t.companyName : undefined);
+    }
     const data = products.filter(p => (p.provider_company_code || p.partner_code) === t.code).map(flatten);
-    const rep = { supplier: t.code, tab: t.tab, observedAt: new Date().toISOString(), ...reconcile(raw, data, { fields: FIELDS }) };
+    const rawPlates = new Set(raw.map(r => String(r.car_number).replace(/s+/g, '')));
+    const listableNotInSource = data.filter(d => d.listable && !rawPlates.has(String(d.car_number).replace(/s+/g, ''))).length;
+    const rep = { supplier: t.code, tab: t.tab, sourceReadAt: readStarted, dataReadAt, listableTotal: data.filter(d => d.listable).length, listableNotInSource, observedAt: new Date().toISOString(), ...reconcile(raw, data, { fields }) };
     results.push({ rep, sum: summarize(t.code, t.tab, rep, t0) });
     if (opt('out-dir')) { mkdirSync(opt('out-dir'), { recursive: true }); writeFileSync(join(opt('out-dir'), `${t.code}.json`), JSON.stringify(rep, null, 2)); }
   }
@@ -119,7 +155,7 @@ async function main() {
   if (argv.includes('--report-line')) { console.log(JSON.stringify({ kind: 'supplier-origin-verify/v1', observedAt: new Date().toISOString(), suppliers: results.map(r => r.sum) })); return; }
   if (argv.includes('--json')) { console.log(JSON.stringify(results.map(r => r.rep), null, 2)); return; }
   const pct = n => n == null ? '-' : (n * 100).toFixed(1) + '%';
-  console.log('공급사 | 탭 | 원천 | 데이터 | 공통 | 차량포함률 | 항목일치율 | ' + MISMATCH_TYPES.join(' | ') + ' | 초');
-  for (const { sum: s } of results) console.log(s.status ? [s.supplier, s.tab, s.status, '데이터', s.dataVehicles].join(' | ') : [s.supplier, s.tab, s.rawVehicles, s.dataVehicles, s.commonVehicles, pct(s.vehicleCoverage), pct(s.fieldMatchRate), ...MISMATCH_TYPES.map(t => s.types[t]), s.seconds].join(' | '));
+  console.log('공급사 | 탭 | 원천 | 데이터 | 공통 | 차량포함률 | 항목일치율 | ' + MISMATCH_TYPES.join(' | ') + ' | 판매중 | 원천없는판매중 | 원천읽은시각 | 초');
+  for (const { sum: s } of results) console.log(s.status ? [s.supplier, s.tab, s.status, '데이터', s.dataVehicles].join(' | ') : [s.supplier, s.tab, s.rawVehicles, s.dataVehicles, s.commonVehicles, pct(s.vehicleCoverage), pct(s.fieldMatchRate), ...MISMATCH_TYPES.map(t => s.types[t]), s.listableTotal, s.listableNotInSource, s.sourceReadAt, s.seconds].join(' | '));
 }
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/').split('/').pop())) await main();
