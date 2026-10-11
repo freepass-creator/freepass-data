@@ -115,6 +115,8 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
       snapshotId: runId,
       planDigest: '',
       previousActiveRunId: null,
+      rowKeys: [],
+      rowDigests: {},
       plannedCreateKeys: [],
       createdDocumentKeys: [],
       preparedAt: observedAt,
@@ -350,11 +352,108 @@ describe('period fee ledger apply', () => {
     await applyPeriodFeeLedgerPlan(store, second, { expectedDigest: second.planDigest, writeApproved: true });
 
     await expect(rollbackPeriodFeeLedgerSnapshot(store, first, { expectedDigest: first.planDigest, writeApproved: true }))
-      .rejects.toThrow('ROLLBACK_SUPERSEDED_RUN');
+      .rejects.toThrow('RUN_NOT_REAPPLICABLE');
 
     expect(store.ledger.size).toBe(1);
     expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'SUPERSEDED', active: false });
     expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ACTIVE', active: true, createdDocumentKeys: [] });
+  });
+
+  it('keeps PREPARED rollback rows that another ACTIVE run references by rowKeys', async () => {
+    const first = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    store.failAfterLedgerCreates = 1;
+    await expect(applyPeriodFeeLedgerPlan(store, first, { expectedDigest: first.planDigest, writeApproved: true }))
+      .rejects.toThrow('TEST_LEDGER_CREATE_INTERRUPTED');
+    store.failAfterLedgerCreates = null;
+
+    const history: ProductChangeHistoryRow[] = [{
+      schemaVersion: 'product-change-history/v1',
+      productKey: 'p1',
+      kind: 'STATUS',
+      fieldPath: 'status',
+      before: 'TEST-FAKE-BEFORE',
+      after: 'TEST-FAKE-AFTER',
+      changedAtKst: '2026-10-12',
+      snapshotId: first.snapshotId,
+      sourceObservationRef: null,
+    }];
+    const secondBase = { ...first, history };
+    const second = {
+      ...secondBase,
+      planDigest: stableDigest({
+        snapshotId: secondBase.snapshotId,
+        rows: secondBase.rows,
+        history: secondBase.history,
+        baselines: secondBase.baselines,
+      }),
+    };
+    await applyPeriodFeeLedgerPlan(store, second, { expectedDigest: second.planDigest, writeApproved: true });
+
+    const result = await rollbackPeriodFeeLedgerSnapshot(store, first, { expectedDigest: first.planDigest, writeApproved: true });
+
+    expect(result).toMatchObject({ status: 'ROLLED_BACK', deletedRows: 0, keptSharedByActiveRows: 1 });
+    expect(store.ledger.has(first.rows[0]!.documentKey)).toBe(true);
+    expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'ROLLED_BACK', active: false });
+    expect(store.runs.get(runIdFor(second))).toMatchObject({
+      status: 'ACTIVE',
+      active: true,
+      createdDocumentKeys: [],
+      rowKeys: [first.rows[0]!.documentKey],
+    });
+  });
+
+  it('rejects reapply of a superseded run', async () => {
+    const first = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, first, { expectedDigest: first.planDigest, writeApproved: true });
+    const history: ProductChangeHistoryRow[] = [{
+      schemaVersion: 'product-change-history/v1',
+      productKey: 'p1',
+      kind: 'STATUS',
+      fieldPath: 'status',
+      before: 'TEST-FAKE-BEFORE',
+      after: 'TEST-FAKE-AFTER',
+      changedAtKst: '2026-10-12',
+      snapshotId: first.snapshotId,
+      sourceObservationRef: null,
+    }];
+    const secondBase = { ...first, history };
+    const second = {
+      ...secondBase,
+      planDigest: stableDigest({
+        snapshotId: secondBase.snapshotId,
+        rows: secondBase.rows,
+        history: secondBase.history,
+        baselines: secondBase.baselines,
+      }),
+    };
+    await applyPeriodFeeLedgerPlan(store, second, { expectedDigest: second.planDigest, writeApproved: true });
+
+    await expect(applyPeriodFeeLedgerPlan(store, first, { expectedDigest: first.planDigest, writeApproved: true }))
+      .rejects.toThrow('RUN_NOT_REAPPLICABLE');
+
+    expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'SUPERSEDED', active: false });
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ACTIVE', active: true });
+  });
+
+  it('refuses previous run restore when its row digest readback is missing and keeps current ACTIVE', async () => {
+    const first = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, first, { expectedDigest: first.planDigest, writeApproved: true });
+    const second = makePlan({
+      p1: product(),
+      p2: product({ vehicle_uid: 'TEST-FAKE-ASSET-002', car_number: 'TEST-FAKE-PLATE-0002' }),
+    });
+    await applyPeriodFeeLedgerPlan(store, second, { expectedDigest: second.planDigest, writeApproved: true });
+    store.ledger.delete(first.rows[0]!.documentKey);
+
+    await expect(rollbackPeriodFeeLedgerSnapshot(store, second, { expectedDigest: second.planDigest, writeApproved: true }))
+      .rejects.toThrow('PERIOD_FEE_RESTORE_LEDGER_READBACK_FAILED');
+
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ACTIVE', active: true });
+    expect(await store.getActiveSnapshotRun(first.snapshotId)).toMatchObject({ runId: runIdFor(second) });
+    expect(store.ledger.has(second.rows[1]!.documentKey)).toBe(true);
   });
 
   it('rolls back an active history-only run without deleting shared ledger rows and restores the previous run', async () => {

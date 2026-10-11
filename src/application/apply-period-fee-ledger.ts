@@ -42,6 +42,7 @@ export type PeriodFeeLedgerRollbackResult = {
   writesEnabled: boolean;
   inactiveRuns: number;
   deletedRows: number;
+  keptSharedByActiveRows: number;
 };
 
 const planDigestBase = (plan: PeriodFeeLedgerPlan) => ({
@@ -78,6 +79,18 @@ const readyLedgerTargets = (plan: PeriodFeeLedgerPlan, keys?: readonly string[])
 
 const unique = (values: readonly string[]) => [...new Set(values)];
 
+const runRowKeys = (run: { rowKeys?: string[]; createdDocumentKeys: string[]; plannedCreateKeys: string[] }) =>
+  unique(run.rowKeys ?? [...run.createdDocumentKeys, ...run.plannedCreateKeys]);
+
+const runRowDigests = (
+  run: { rowDigests?: Record<string, string> },
+  plan: PeriodFeeLedgerPlan,
+) => {
+  const digests: Record<string, string> = { ...(run.rowDigests ?? {}) };
+  for (const target of readyLedgerTargets(plan)) digests[target.documentKey] = target.digest;
+  return digests;
+};
+
 async function ownedLedgerTargets(
   store: PeriodFeeLedgerApplyStore,
   plan: PeriodFeeLedgerPlan,
@@ -94,6 +107,19 @@ async function ownedLedgerTargets(
     }
   }
   return targets;
+}
+
+async function assertRestorableRunRows(
+  store: PeriodFeeLedgerApplyStore,
+  restore: { rowKeys?: string[]; rowDigests?: Record<string, string>; createdDocumentKeys: string[]; plannedCreateKeys: string[] },
+) {
+  for (const documentKey of runRowKeys(restore)) {
+    const expectedDigest = restore.rowDigests?.[documentKey];
+    const existing = await store.getLedgerDocument(documentKey);
+    if (!existing || !expectedDigest || existing.digest !== expectedDigest) {
+      throw new Error('PERIOD_FEE_RESTORE_LEDGER_READBACK_FAILED');
+    }
+  }
 }
 
 const historyDocumentKey = (row: ProductChangeHistoryRow | ProductChangeHistoryBaselineRow) =>
@@ -165,6 +191,9 @@ export async function applyPeriodFeeLedgerPlan(
   if (existingRun && existingRun.planDigest !== plan.planDigest) {
     throw new Error('PERIOD_FEE_RUN_DIGEST_CONFLICT');
   }
+  if (existingRun && ['SUPERSEDED', 'ROLLED_BACK', 'INACTIVE'].includes(existingRun.status)) {
+    throw new Error('RUN_NOT_REAPPLICABLE');
+  }
   if (existingRun?.status === 'ACTIVE' && existingRun.active) {
     for (const row of readyRows) {
       const existing = await store.getLedgerDocument(row.documentKey);
@@ -201,6 +230,8 @@ export async function applyPeriodFeeLedgerPlan(
       .filter(row => !existingLedgerDocuments.get(row.documentKey))
       .map(row => row.documentKey),
   ]);
+  const rowKeys = unique([...(existingRun?.rowKeys ?? []), ...readyRows.map(row => row.documentKey)]);
+  const rowDigests = runRowDigests(existingRun ?? { rowDigests: {} }, plan);
   await store.setSnapshotRun(runId, {
     schemaVersion: 'period-fee-snapshot-run/v1',
     runId,
@@ -209,6 +240,8 @@ export async function applyPeriodFeeLedgerPlan(
     status: 'PREPARED',
     active: false,
     previousActiveRunId,
+    rowKeys,
+    rowDigests,
     plannedCreateKeys,
     createdDocumentKeys: existingRun?.createdDocumentKeys ?? [],
     preparedAt,
@@ -255,6 +288,8 @@ export async function applyPeriodFeeLedgerPlan(
     status: 'ACTIVE',
     active: true,
     previousActiveRunId,
+    rowKeys,
+    rowDigests,
     plannedCreateKeys,
     createdDocumentKeys: unique([...(existingRun?.createdDocumentKeys ?? []), ...createdDocumentKeys]),
     preparedAt,
@@ -277,30 +312,44 @@ export async function rollbackPeriodFeeLedgerSnapshot(
 ): Promise<PeriodFeeLedgerRollbackResult> {
   validatePeriodFeeLedgerPlan(plan, options.expectedDigest);
   if (!options.writeApproved) {
-    return { status: 'DRY_RUN', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: false, inactiveRuns: 0, deletedRows: 0 };
+    return { status: 'DRY_RUN', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: false, inactiveRuns: 0, deletedRows: 0, keptSharedByActiveRows: 0 };
   }
   const runId = snapshotRunId(plan.snapshotId, plan.planDigest);
   const run = await store.getSnapshotRun(runId);
   if (!run || run.planDigest !== plan.planDigest) throw new Error('PERIOD_FEE_ROLLBACK_RUN_DIGEST_MISMATCH');
-  if (run.status === 'SUPERSEDED') throw new Error('ROLLBACK_SUPERSEDED_RUN');
+  if (['SUPERSEDED', 'ROLLED_BACK', 'INACTIVE'].includes(run.status)) throw new Error('RUN_NOT_REAPPLICABLE');
   const activeBefore = await store.getActiveSnapshotRun(plan.snapshotId);
   const ownedKeys = unique([...(run.createdDocumentKeys ?? []), ...(run.plannedCreateKeys ?? [])]);
   const targets = await ownedLedgerTargets(store, plan, ownedKeys);
+  const activeSharedKeys = new Set(
+    activeBefore && activeBefore.runId !== runId
+      ? runRowKeys(activeBefore)
+      : [],
+  );
+  const deleteTargets = targets.filter(target => !activeSharedKeys.has(target.documentKey));
+  const keptSharedByActiveRows = targets.length - deleteTargets.length;
   if (activeBefore && activeBefore.runId !== runId) {
-    for (const target of targets) {
+    for (const target of deleteTargets) {
       if (activeBefore.createdDocumentKeys.includes(target.documentKey)) throw new Error('PERIOD_FEE_ROLLBACK_ACTIVE_DOCUMENT_REFERENCE');
     }
   }
+  const restore = run.status === 'ACTIVE'
+    ? run.previousActiveRunId
+      ? await store.getSnapshotRun(run.previousActiveRunId)
+      : await store.getLatestSupersededSnapshotRun(plan.snapshotId, runId)
+    : null;
+  if (restore?.status === 'SUPERSEDED') await assertRestorableRunRows(store, restore);
   await store.setSnapshotRun(runId, { ...run, status: 'ROLLING_BACK', active: false });
-  const deletedRows = await store.deleteLedgerRowsByDigest(targets);
+  const deletedRows = await store.deleteLedgerRowsByDigest(deleteTargets);
   if (run.status === 'ACTIVE' || run.status === 'ROLLING_BACK') {
-    const restore = run.previousActiveRunId
+    const rollbackRestore = run.previousActiveRunId
       ? await store.getSnapshotRun(run.previousActiveRunId)
       : await store.getLatestSupersededSnapshotRun(plan.snapshotId, runId);
-    if (restore?.status === 'SUPERSEDED') {
-      await store.restoreSnapshotRunActive(restore.runId, restore.planDigest);
+    if (rollbackRestore?.status === 'SUPERSEDED') {
+      await assertRestorableRunRows(store, rollbackRestore);
+      await store.restoreSnapshotRunActive(rollbackRestore.runId, rollbackRestore.planDigest);
       const restored = await store.getActiveSnapshotRun(plan.snapshotId);
-      if (!restored || restored.runId !== restore.runId || restored.planDigest !== restore.planDigest) {
+      if (!restored || restored.runId !== rollbackRestore.runId || restored.planDigest !== rollbackRestore.planDigest) {
         throw new Error('PERIOD_FEE_ROLLBACK_RESTORE_READBACK_FAILED');
       }
     }
@@ -308,5 +357,5 @@ export async function rollbackPeriodFeeLedgerSnapshot(
   const latest = await store.getSnapshotRun(runId);
   await store.markSnapshotRunInactive(runId);
   await store.setSnapshotRun(runId, { ...(latest ?? run), status: 'ROLLED_BACK', active: false, activatedAt: null });
-  return { status: 'ROLLED_BACK', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: true, inactiveRuns: 1, deletedRows };
+  return { status: 'ROLLED_BACK', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: true, inactiveRuns: 1, deletedRows, keptSharedByActiveRows };
 }
