@@ -30,8 +30,10 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
         const detail = await client.getVehicle(vehicleId);
         const photoIds = iancarOnePhotoIds(detail, vehicleId, plate);
         const raw = (detail as any)?.data ?? detail;
-        const upstreamPhotoIds = raw.photos.map((photo: any) => String(photo.photo_id)) as string[];
-        const metadata = { count: photoIds.length, photoIds, upstreamPhotoIds };
+        const upstreamPhotoIds = raw.photos.map((photo: any) => String(photo.photo_id).trim()) as string[];
+        const upstreamRepresentatives = raw.photos.map((photo: any) => photo.representative) as boolean[];
+        const servingSourceOrdinals = photoIds.map(id => upstreamPhotoIds.indexOf(id));
+        const metadata = { count: photoIds.length, photoIds, upstreamPhotoIds, upstreamRepresentatives, servingSourceOrdinals };
         if (index === undefined) return { ...metadata, bytes: null, contentType: 'application/json' };
         const id = photoIds[index];
         if (!id) throw new Error('VEHICLE_PHOTO_NOT_FOUND');

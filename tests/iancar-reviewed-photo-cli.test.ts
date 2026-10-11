@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { orderedJsonDigest } from '../src/shared/stable-digest.js';
+import { iancarReviewedContentSetDigest } from '../src/domain/consumer-output-contract.js';
 
 const state = vi.hoisted(() => ({ plan: {} as any, count: 2, changedBytes: false,
   readFile: vi.fn(), getVehicle: vi.fn(), getPhoto: vi.fn(), publish: vi.fn(), config: vi.fn() }));
@@ -52,6 +53,34 @@ async function run(args: string[]) {
   await expect(import('../src/jobs/collect-iancar-one-api.js')).rejects.toThrow('SYNTHETIC_CLI_EXIT');
 }
 const options = ['--reviewed-plan=synthetic-private-plan', `--expected-digest=${digest}`];
+
+function contentPlan() {
+  const review = state.plan.records[0].review;
+  review.basis = 'CONTENT_ORDINAL/1'; review.sourceRepresentatives = [true, false];
+  review.refs.forEach((ref: any, i: number) => { ref.reviewBasis = 'CONTENT_ORDINAL/1'; ref.representative = i === 0; });
+  const set = iancarReviewedContentSetDigest(review.refs[0].sourceBindingDigest, review.refs);
+  review.refs.forEach((ref: any) => { ref.photoSetDigest = set; });
+  let generation = 0;
+  state.getVehicle.mockImplementation(async () => ({ photos: [0, 1].map(index => ({
+    photo_id: `rotating-${++generation}-${index}`, representative: index === 0,
+  })) }));
+}
+
+it('content plan applies after every current raw hash matches even when access handles rotate', async () => {
+  contentPlan();
+  await run([...options, '--apply']);
+  expect(process.exitCode).not.toBe(1); expect(state.publish).toHaveBeenCalledTimes(1);
+  expect(state.getPhoto).toHaveBeenCalledTimes(2);
+});
+it.each(['representative', 'content'])('content plan denies %s change before registration', async condition => {
+  contentPlan();
+  if (condition === 'representative') state.getVehicle.mockResolvedValue({ photos: [
+    { photo_id: 'rotating-0', representative: false }, { photo_id: 'rotating-1', representative: true },
+  ] });
+  if (condition === 'content') state.changedBytes = true;
+  await run([...options, '--apply']);
+  expect(state.publish).not.toHaveBeenCalled(); expect(process.exitCode).toBe(1);
+});
 
 it.each(['--sync', '--photos', '--apply-raw', '--restore-photos=other', '--unknown'])('refuses mixed option %s before reads', async option => {
   await run([...options, option]);

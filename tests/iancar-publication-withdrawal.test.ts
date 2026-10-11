@@ -17,7 +17,7 @@ vi.mock('firebase-admin/storage', () => ({ getStorage: () => ({ bucket: () => ({
 import { withdrawIancarPublication, publishIancarPhotoReferences, publishIancarPhaseOne, restoreIancarPhaseOne, encodeIancarBackupValue, planIancarPhotoReviewPatch, type IancarOnePhotoReview } from '../src/infra/iancar-publication-withdrawal-firestore.js';
 import { orderedJsonDigest } from '../src/shared/stable-digest.js';
 import { createHash } from 'node:crypto';
-import { createVehiclePhotoReader } from '../src/domain/consumer-output-contract.js';
+import { createVehiclePhotoReader, iancarReviewedContentSetDigest } from '../src/domain/consumer-output-contract.js';
 
 function reviewedAlbum() {
   const observedAt = new Date(Date.now() - 1000).toISOString();
@@ -37,6 +37,89 @@ function reviewedAlbum() {
   })) };
   return { original, row, review };
 }
+
+function contentReviewedAlbum() {
+  const fixture = reviewedAlbum();
+  fixture.review.basis = 'CONTENT_ORDINAL/1';
+  fixture.review.sourceRepresentatives = [false, true];
+  const bytes = Buffer.from([255, 216, 255, 1]);
+  fixture.review.refs.forEach(ref => {
+    ref.reviewBasis = 'CONTENT_ORDINAL/1'; ref.representative = fixture.review.sourceRepresentatives![ref.sourceOrdinal]!;
+    ref.photoSha256 = createHash('sha256').update(bytes).digest('hex');
+  });
+  const set = iancarReviewedContentSetDigest(fixture.review.refs[0]!.sourceBindingDigest, fixture.review.refs);
+  fixture.review.refs.forEach(ref => { ref.photoSetDigest = set; });
+  return { ...fixture, bytes };
+}
+
+it('content review keeps opaque capture handles as evidence and preserves legacy live-ID fields', () => {
+  const { original, row, review } = contentReviewedAlbum();
+  const patch = planIancarPhotoReviewPatch({ ...original, iancar_one_photo_ids: ['preserved-live-handle'] }, row, review);
+  expect(Object.keys(patch).sort()).toEqual(['photo_original_refs', 'provider_company_code']);
+  expect(review.refs[0]!.sourcePhotoIdDigest).toBe(orderedJsonDigest('synthetic-b'));
+});
+
+it.each(['representative', 'partial-basis', 'content-hash'])('content review rejects %s authority changes', condition => {
+  const { original, row, review } = contentReviewedAlbum();
+  if (condition === 'representative') review.sourceRepresentatives = [true, false];
+  if (condition === 'partial-basis') delete review.refs[0]!.reviewBasis;
+  if (condition === 'content-hash') review.refs[0]!.photoSha256 = 'b'.repeat(64);
+  expect(() => planIancarPhotoReviewPatch(original, row, review)).toThrow('REVIEW_INVALID');
+});
+
+it('content reader accepts rotating access handles only with matching current layout and approved raw bytes', async () => {
+  const { original, row, review, bytes } = contentReviewedAlbum();
+  const product = { ...original, ...planIancarPhotoReviewPatch(original, row, review) };
+  let request = 0;
+  const reader = createVehiclePhotoReader(async () => product, { eligible: () => true, connection: () => 'synthetic-binding',
+    read: async (_product, index) => {
+      const suffix = ++request;
+      return { count: 2, photoIds: [`opaque-b-${suffix}`, `opaque-a-${suffix}`],
+        upstreamPhotoIds: [`opaque-a-${suffix}`, `opaque-b-${suffix}`], upstreamRepresentatives: [false, true],
+        servingSourceOrdinals: [1, 0], bytes: index === undefined ? null : bytes,
+        contentType: index === undefined ? 'application/json' : 'image/jpeg' };
+    } });
+  const image = await reader('erp5-public-media', row.productId, 0);
+  expect(image.bytes).toEqual(bytes); expect(await image.revalidate()).toBe(true);
+  const count = await reader('erp5-public-media', row.productId);
+  expect(count.count).toBe(2); expect(await count.revalidate()).toBe(true);
+});
+
+it.each(['count', 'representative', 'layout', 'raw-bytes', 'mixed-basis', 'unknown-basis', 'missing-kind', 'vehicle'])('content reader rejects %s mismatch', async condition => {
+  const { original, row, review, bytes } = contentReviewedAlbum();
+  const product: Record<string, unknown> = { ...original, ...planIancarPhotoReviewPatch(original, row, review) };
+  if (condition === 'mixed-basis') delete (product.photo_original_refs as IancarOnePhotoReview['refs'])[1]!.reviewBasis;
+  if (condition === 'unknown-basis') Object.assign((product.photo_original_refs as IancarOnePhotoReview['refs'])[0]!, { reviewBasis: 'UNSUPPORTED' });
+  if (condition === 'missing-kind') delete (product.photo_original_refs as Record<string, unknown>[])[0]!.sourceKind;
+  if (condition === 'vehicle') product.iancar_one_vehicle_id = 'other-vehicle';
+  const reader = createVehiclePhotoReader(async () => product, { eligible: () => true, connection: () => 'synthetic-binding',
+    read: async () => ({ count: condition === 'count' ? 1 : 2, photoIds: ['opaque-b', 'opaque-a'], upstreamPhotoIds: ['opaque-a', 'opaque-b'],
+      upstreamRepresentatives: condition === 'representative' ? [true, false] : [false, true],
+      servingSourceOrdinals: condition === 'layout' ? [0, 1] : [1, 0],
+      bytes: condition === 'raw-bytes' ? Buffer.from([255, 216, 255, 2]) : bytes, contentType: 'image/jpeg' }) });
+  await expect(reader('erp5-public-media', row.productId, 0)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+});
+it('an unsupported basis cannot fall back to the old ID-bound branch', async () => {
+  const { original, row, review } = reviewedAlbum();
+  const product: Record<string, unknown> = { ...original, ...planIancarPhotoReviewPatch(original, row, review) };
+  (product.photo_original_refs as Record<string, unknown>[]).forEach(ref => { ref.reviewBasis = 'UNSUPPORTED'; });
+  const sourceRead = vi.fn();
+  const reader = createVehiclePhotoReader(async () => product, { eligible: () => true, connection: () => 'synthetic-binding', read: sourceRead });
+  await expect(reader('erp5-public-media', row.productId)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+  expect(sourceRead).not.toHaveBeenCalled();
+});
+
+it('content manifest is a layout/count check; a changed nonrepresentative image is still denied by its raw hash', async () => {
+  const { original, row, review } = contentReviewedAlbum();
+  const product = { ...original, ...planIancarPhotoReviewPatch(original, row, review) };
+  const reader = createVehiclePhotoReader(async () => product, { eligible: () => true, connection: () => 'synthetic-binding',
+    read: async (_product, index) => ({ count: 2, photoIds: ['opaque-b', 'opaque-a'], upstreamPhotoIds: ['opaque-a', 'opaque-b'],
+      upstreamRepresentatives: [false, true], servingSourceOrdinals: [1, 0],
+      bytes: index === undefined ? null : Buffer.from([255, 216, 255, 2]), contentType: index === undefined ? 'application/json' : 'image/jpeg' }) });
+  const manifest = await reader('erp5-public-media', row.productId);
+  expect(manifest.count).toBe(2); expect(await manifest.revalidate()).toBe(true);
+  await expect(reader('erp5-public-media', row.productId, 1)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+});
 
 it('review plan binds the exact ordered album and changes approval fields only', () => {
   const { original, row, review } = reviewedAlbum();
