@@ -338,6 +338,17 @@ describe('contract fee link', () => {
     });
   });
 
+  it('never picks a ledger row of another vehicle or supplier even when rent and deposit match', () => {
+    const input = { ...baseInput(), contractDate: '2026-10-10' };
+    for (const other of [{ assetId: 'asset-2', vehicleUid: 'asset-2' }, { supplierId: 'RP002' }]) {
+      const result = resolveContractFeeLink(input, { ...baseData(), ledgerRows: [ledgerRow(other)] });
+      expect(result.ledgerFee).toMatchObject({ status: 'HOLD', reasonCode: 'CONTRACT_TIME_VALUE_UNAVAILABLE' });
+    }
+    const mixed = resolveContractFeeLink(input, { ...baseData(), ledgerRows: [ledgerRow({ assetId: 'asset-2', vehicleUid: 'asset-2', snapshotId: 'period-fee-2026-10-09b' }), ledgerRow()] });
+    expect(mixed.ledgerFee?.status).toBe('CONFIRMED');
+    expect(mixed.ledgerFee?.snapshotId).toBe('period-fee-2026-10-09');
+  });
+
   it('omits ledgerFee when ledger rows are absent or contractDate is absent', () => {
     expect(resolveContractFeeLink({ ...baseInput(), contractDate: '2026-10-10' }, baseData()).ledgerFee).toBeUndefined();
     expect(resolveContractFeeLink(baseInput(), { ...baseData(), ledgerRows: [ledgerRow()] }).ledgerFee).toBeUndefined();

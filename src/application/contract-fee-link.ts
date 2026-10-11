@@ -197,12 +197,15 @@ const ledgerFeeForContract = (
   input: ContractFeeLinkInput,
   data: ContractFeeLinkData,
   term: PriceTerm,
+  match: { assetId: string; supplierId: string },
 ): ContractFeeLinkLedgerFee | undefined => {
   if (!data.ledgerRows || !input.contractDate) return undefined;
   const deposit = input.deposit ?? moneyAmount(term.deposit);
   if (deposit === null) return undefined;
   const picked = pickLedgerRowForContract({
-    rows: data.ledgerRows,
+    // 같은 개월·금액의 다른 차량 행이 섞이지 않도록 이미 매칭된 차량·공급사·기간 키로 먼저 좁힌다. 후보가 없으면 HOLD.
+    rows: data.ledgerRows.filter((row) => row.assetId === match.assetId
+      && row.supplierId === match.supplierId),
     contractDate: input.contractDate,
     termMonths: input.termMonths,
     monthlyRent: input.monthlyRent,
@@ -289,7 +292,7 @@ export function resolveContractFeeLink(
 
   const term = matchingTerms[0]!;
   const fees = firstFeeForTerm(offer, term)!;
-  const ledgerFee = ledgerFeeForContract(input, data, term);
+  const ledgerFee = ledgerFeeForContract(input, data, term, { assetId: asset.id, supplierId: offer.supplierId });
   const reasonCodes = [
     fees.supplierBillingFee,
     fees.channelPayoutFee,
