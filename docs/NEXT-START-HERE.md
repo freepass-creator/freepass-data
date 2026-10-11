@@ -11,6 +11,7 @@
 - 남음: 정제 데이터 canonical 저장 coverage와 identity 대조, 기존 ingest/canonicalization 및 `recompute-offer-economics.ts`의 reviewed plan/revision/audit/readback 적용, 소비처별 직접 reader 연결·최소 IAM·배포. 일반 inventory 진단은 DATA_ACCESS_AUDIT_UNAVAILABLE로 중단. 이를 성공으로 세지 않는다. 실제 DB/시트 쓰기·IAM 변경·배포 없음.
 - next_start_here: 기존 ingest shared-sheet canonical / recompute offer economics의 private plan과 저장 원천을 고정한 뒤 coverage를 대조한다. 운영 reference 데이터가 존재한다는 이유로 canonical 저장을 완료로 간주하지 않는다.
 - 독립 검토: 첫 광역 호출 REVIEW_TIMEOUT, 좁은 파일 검토는 본문/exit0/ANSWERED. 기존 fee 계약과 중복된 판정 및 전체 stdout 민감정보 노출 지적을 모두 반영했다. `toInternalFeeLookup`에 대여료 근거가 양쪽 모두 있을 때만 mismatch 검사를 추가하고 출력도 해당 계약으로 통일했다. 선택 가격근거 없는 이전 저장 문서는 보존한다. 전체 stdout 제거, 기존 private output 보호 유지. 전수 스캔 성능 지적은 미해결이며 서비스 고빈도 경로의 활성화 전 indexed read가 필요하다. 저장 sample direct read asset1/offer1/term3 성공, fee UNKNOWN3; 계산해 채우지 않음.
+- 최종 코드 `ccf1cf8` / PR #451(DRAFT). 최종 전체 검사 2152 PASS / 16 SKIP, build/architecture/boundary/diff-check PASS. 수정 후 좁은 Claude 재검토도 본문/exit0/ANSWERED: 두 지적 수정 확인, 해당 범위 남은 치명 문제 없음, 전수 스캔 성능은 잔여. 운영 완료 판정은 아니다. 정본 저장 담당과 AI-OPS 지휘에 같은 PR/coverage/남음을 전달했다.
 
 ## 2026-10-10 공개 상품 응답 설계
 
