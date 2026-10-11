@@ -229,6 +229,9 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-12 수집 15분·이안카·손오공 (collection-health-pipeline)
+- 감시 스크립트 `scripts/collection-health-watch.mjs`(gh 읽기만)+작업 스케줄러 등록 스크립트 추가, 첫 실측 7일 준수율 4.0%. 마지막 예약 실패 원인은 관문이 아니라 적용 HOLD(CANONICAL_COMMAND_REJECTED, 18대) — #490 의 가드 종속 서술 정정. 가드 완화는 하지 않음. 이안카는 코드 문제가 아니라 스케줄러 PAUSED/pending 운영 항목, 손오공은 RAW→후보 정규화 미연결. 상세 [COLLECTION-HEALTH-OPS](COLLECTION-HEALTH-OPS.md). next_start_here: 지휘통제실 승인(보조 트리거·이안카 대사·손오공 읽기 시험) 뒤 진행.
+
 ### 2026-10-12 사진 성능 소스 단일 배포 / 표본 실측 / 성능 미입증
 
 - 소유/관측: 00의 별도1회 GO로20만 실행했다. run38151193658/job114504840394 SUCCESS,20 완료 영수증00:27:08 KST/01 조회한 GitHub run updatedAt00:27:09 KST. 01은 실제 실행 로그에서 아래 안전 상태값과 단계 SUCCESS를 읽기 대조했다. 원천 사진 GET·사업 재등록·01 추가 dispatch0이다.
