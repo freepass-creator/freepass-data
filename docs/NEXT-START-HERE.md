@@ -1,5 +1,50 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-11 수집·정제 책임 실행 — 색상 규칙의 기존 저장 lifecycle 연결
+
+- 목적/대상: 대표 「너의 역할을 다해라」, 수집·정제·저장 범위만. 기존 PR451/f7ff3bc 작업선, academy data READY. 조회/공개 서버 추가 변경 없음.
+- 변경: 기존 `ingest-shared-sheet-canonical.ts`의 계획·적용 경로에 색상 opt-in 연결. 계획 CLI `--include-supplier-colors`로만 v6 선택, 계획의 flag/ruleVersion/commandId와 digest 고정. apply는 검토된 plan만 사용하며 flag 재지정 거부. 기본 v5는 보존한다.
+- 원문 보존: 기존 completed v5 source 회차에 v6 후보를 끼워 넣지 않는다. 같은 회차의 v6 후보가 없으면 `SUPPLIER_COLOR_REFINEMENT_REQUIRES_NEW_SOURCE_RUN`. 신규 capture/master 증거 및 기존 source-change 검토로 진행하며 unresolved master와 공급사 상태를 추정하지 않는다.
+- 검증: 관련60 PASS/build/boundary/diff-check PASS. 기존 전체2156 PASS/16 SKIP 이후 immutable 회차 guard 회귀를 추가했으며 최종 전체 결과/독립 검토는 실행 기록 참조. 합성 저장 시험에서 원문 색상→후보 facts 연결 확인, 실제 운영 DB writes0.
+- next_start_here: 기존 수집 담당은 최신 capture를 확보해 같은 CLI로 비공개 계획 작성; 단일 writer/원문·master·revision·백업·HOLD를 검증한 뒤 기존 apply/readback 진행. 운영 색상 저장 또는 전체 상품 연결 완료로 세지 않는다. 정책 정제·저장은 기존 담당이 계속, 새 저장 경로 없음.
+- 최종 결정론적 검증: 전체2157 PASS/16 조건부 SKIP, 관련60 PASS 및 차량 정본 색상 저장 APPLIED 회귀 확인, build/arch/boundary/diff-check PASS. 첫 독립 검토 REVIEW_TIMEOUT(300초), 파일 한 개 전달 일관성 질문으로 좁혀 재시도 중. 검토 미완료는 PASS가 아니며 운영 적용은 아직 하지 않는다.
+- 좁은 독립 재검토는 본문/exit0/ANSWERED로 전달 일관성을 확인. `getCandidate` guard의 `!`를 제거하라는 제안은 채택하지 않았다: 조회 ID는 v6 ruleVersion을 포함하는 새 candidateId이며 completed v5 run에는 그 ID가 없다. 반대로 바꾸면 v6 replay를 막고 v5 재작성 보호를 해제한다. 기존 v5 apply 후 같은 capture v6 plan이 쓰기 전에 거부되고 신규 capture 계획은 통과하는 회귀로 원본·실행 근거를 우선해 판정했다. 문자열 v6 상수 중복은 경미 잔여. 운영 적용/최신 원천 저장은 미완료.
+
+## 2026-10-11 기존 조회 주소의 직접 읽기 전환 신호
+
+- 대표 「여기로 접근하면 직접읽으라는 사인을 줘」: 기존 상품 GET catalog/catalog-compat/catalog-reference/internal-ai-reference 응답에 `X-Freepass-Read-Mode: DIRECT_FIRESTORE_REQUIRED`, `X-Freepass-Migration-Status: LEGACY_READ_PENDING_RETIREMENT`, 서버의 승인된 신원으로 직접 읽으라는 instruction과 전환 기준 Link를 추가했다. 인증 실패에도 신호는 표시하지만 인증·상태·본문은 변경하지 않는다. 사진·계약·정산 route에는 적용하지 않는다.
+- 검증: gateway 101 PASS, build 및 diff-check 결과는 해당 커밋 실행 기록 참조. 운영 배포 전이므로 현재 온라인 응답에 신호가 나온다고 표현하지 않는다. 기존 route 종료/리다이렉트나 권한 변경 없음.
+
+## 2026-10-11 플랫폼 직접 조회 전환 및 기존 상품 중계 폐기 결정
+
+- 목적/대상 revision: 대표 「수집 정제만」「각각 파이어스토어 조회」「기존거 다 폐기」. 기준 `025eb8b`, 기존 PR #451 작업선 유지. academy data READY.
+- 변경: 기존 Commercial Data Catalog에 Data=수집·정제·저장 / 플랫폼=직접 읽기·조회·출력 경계를 반영했다. 옛 상품 조회 API·중계·중복 reader·legacy fallback은 폐기 대상으로 확정하고 신규 연결은 추가하지 않는다. RAW·사람 입력·계약/정산 write는 삭제하지 않는다.
+- 실행: 기존 조회·소비처 담당 방에 직접 reader 구현/정본 대조/실제 출력 검증/옛 호출 제거를 전달했다. 새로운 방·수집기·저장 경로 없음.
+- 검증/남음: 문서 경계 변경이며 운영 코드 삭제, DB 쓰기, IAM 확대, 소비처 배포는 아직 없다. 중앙 gateway에는 상품뿐 아니라 계약·정산 기능이 공존하므로 서버 전체 제거 금지. PR #451 canonical coverage 및 전수 스캔은 미완료이며 직접 reader를 그대로 고빈도 운영 활성화하지 않는다.
+- next_start_here: 조회 담당의 소비처별 실제 호출점과 직접 read 결과를 회수하고 같은 정본/revision을 대조한다. 검증된 소비처의 옛 호출/fallback을 제거하고 마지막 의존 소비처 전환 후 중앙 상품 route/중계 코드를 삭제한다. 전환율은 실제 소비처별 증거로만 보고한다.
+
+## 2026-10-11 수집·정제 집중 — 원문 대조 및 색상 누락 보완
+
+- 목적: 대표 「수집 정제만 잘해둬봐」「ㄱㄱ」. IAM 설치와 소비처 배포는 이번 범위 밖. 기존 PR #451 작업선에서 원문 정제 adapter만 확장, 새 수집기/컬렉션/저장 경로 없음. academy data READY, 기준 `f5f8d3a`.
+- 원천 고정: 중앙 SourceIngestionStore 현재 head의 관측시각 2026-10-11 07:00:12 KST. RAW 175 = 후보 175, sourceRecordId 중복 0, 후보↔RAW fingerprint 연결 불일치 0. 원천 신선도를 오늘 현재까지 갱신했다고 표현하지 않는다. 차량 정본 중복판정 126, 연식·등록연도 불일치 23 등 기존 HOLD는 추정으로 해소하지 않았다(분류 중복 가능).
+- 발견/변경: 원문 외부색상 170 / 내부색상 167 칸이 populated지만 후보의 exteriorColor/interiorColor KNOWN은 각각 0. `normalize-shared-sheet.ts`에서 두 supplier 원문 텍스트를 독립 source fact로 보존하고 각 셀 lineage 추가. 색상 코드·별칭·차종 추정 없음. 빈칸 MISSING, 확인 placeholder REVIEW_REQUIRED. ruleVersion 5→6으로 이전 immutable candidate와 구분.
+- dry-run: 기존 RAW 175건을 메모리에서 색상만 재판정. 외부색상 KNOWN170/MISSING5, 내부색상 KNOWN167/MISSING8, RAW digest 불변, writes0. 전체 candidate의 master 승인 또는 canonical 승격 결과가 아니다.
+- 검증: 관련 86 PASS, 전체 2154 PASS /16 SKIP, build/boundary/diff-check PASS. Claude 독립 diff 검토 결과는 후속 기록 참조. 운영 원문·후보·canonical 쓰기 및 시트 변경 없음.
+- next_start_here: 기존 SourceIngestionStore 수집 lifecycle에서 ruleVersion6을 채택하고 최신 원천 및 sealed master를 고정해 기존 ingest plan으로 준비한다. 과거 후보 덮어쓰기/오류 줄 삭제/일괄 마스터 추정 금지. 이 색상 dry-run을 운영 반영 완료로 세지 않는다.
+- Claude 검토 본문/exit0/ANSWERED의 두 지적을 반영: 색상 placeholder는 field-level REVIEW_REQUIRED만 기록하며 candidate 전체 issues에 추가하지 않음. 기존 default normalizer/5와 candidate ID/lineage는 유지하고 `{includeSupplierColors:true}`를 명시한 경우에만 normalizer/6 후보 생성. 운영 기본 활성화는 아직 안 됐으며, 동일 fingerprint fact 재적재 plan을 검토하기 전 daily 기본값을 바꾸지 않는다. 수정 후 관련58 PASS/build PASS.
+
+## 2026-10-11 Firestore 직접 내부 조회 — 구현과 운영 연결 구분
+
+- 목적/대상 revision: 대표 직접 요청 「Data가 Firestore에 쓰고 각 서비스가 직접 읽기」. 기준 main `1e1ea6894def6bebd3abe4d231471f3153ffdfea`, 작업선 `work/freepass-data/firestore-direct-read-20261011`.
+- 재사용/변경: 기존 `query-canonical-by-plate.ts`, `withSharedSheetCatalogAccess(false)`, 중앙 Firebase target/store를 확장. 새 DB·컬렉션·Firebase app·계산 엔진 없음. 직접 진입점 `queryFirestoreByPlate(plate)`는 Cloud Run을 거치지 않고 실행 프로세스의 승인된 ADC로 Firestore를 읽는다. 접근 로그는 메모리 전용이며 durable audit/업무 쓰기 0. 내부 서버 전용이며 브라우저·익명 공개 계약이 아니다.
+- 출력: product/offer/asset ID와 revision·상태, 기존 차량 사실·기간별 가격·보증금·저장된 청구/지급 수수료. 수수료 중복 또는 기간/대여료 근거 불일치는 UNKNOWN/null. 읽으면서 재계산하거나 legacy 데이터로 fallback하지 않는다.
+- CLI: `npm run query:canonical-by-plate -- --direct --firestore --plate-file <private-input> --local-output <private-output>`. `FIREBASE_PROJECT_ID=freepasserp5`와 소비처 자신의 승인된 읽기 신원이 필요하다. 결과는 기존 private artifact 가드로 저장소 밖에만 기록한다. 프로그램 내부 호출은 반환 객체로 받으며 전체 payload stdout 경로는 없다.
+- 검증: build/architecture/data-access-boundary PASS, 전체 Vitest 2150 PASS / 16 SKIP(추가 CLI 회귀검사는 후속 실행 결과 참조). 실제 중앙 direct 조회는 정상 응답했으나 앞서 reference 조회에서 확인한 차량의 canonical asset/offer/term 일치 건수는 0이었다. 따라서 연결 완료/전체 상품 조회 완료가 아니다.
+- 추가 검증: CLI 가드 포함 관련 55 PASS. 기존 Cloud Run 설정의 F04 연결값을 출력/복사 저장 없이 프로세스 환경에 적용하여 economics dry-run 재실행 성공: 저장 Offer 160, 변경 예정 158, writes 0. 양쪽 수수료 각각 미확정 사유: 신차 subtype 79, 기간 정책 30, 보증금 tier 2. 적용하지 않았다.
+- 남음: 정제 데이터 canonical 저장 coverage와 identity 대조, 기존 ingest/canonicalization 및 `recompute-offer-economics.ts`의 reviewed plan/revision/audit/readback 적용, 소비처별 직접 reader 연결·최소 IAM·배포. 일반 inventory 진단은 DATA_ACCESS_AUDIT_UNAVAILABLE로 중단. 이를 성공으로 세지 않는다. 실제 DB/시트 쓰기·IAM 변경·배포 없음.
+- next_start_here: 기존 ingest shared-sheet canonical / recompute offer economics의 private plan과 저장 원천을 고정한 뒤 coverage를 대조한다. 운영 reference 데이터가 존재한다는 이유로 canonical 저장을 완료로 간주하지 않는다.
+- 독립 검토: 첫 광역 호출 REVIEW_TIMEOUT, 좁은 파일 검토는 본문/exit0/ANSWERED. 기존 fee 계약과 중복된 판정 및 전체 stdout 민감정보 노출 지적을 모두 반영했다. `toInternalFeeLookup`에 대여료 근거가 양쪽 모두 있을 때만 mismatch 검사를 추가하고 출력도 해당 계약으로 통일했다. 선택 가격근거 없는 이전 저장 문서는 보존한다. 전체 stdout 제거, 기존 private output 보호 유지. 전수 스캔 성능 지적은 미해결이며 서비스 고빈도 경로의 활성화 전 indexed read가 필요하다. 저장 sample direct read asset1/offer1/term3 성공, fee UNKNOWN3; 계산해 채우지 않음.
+- 최종 코드 `ccf1cf8` / PR #451(DRAFT). 최종 전체 검사 2152 PASS / 16 SKIP, build/architecture/boundary/diff-check PASS. 수정 후 좁은 Claude 재검토도 본문/exit0/ANSWERED: 두 지적 수정 확인, 해당 범위 남은 치명 문제 없음, 전수 스캔 성능은 잔여. 운영 완료 판정은 아니다. 정본 저장 담당과 AI-OPS 지휘에 같은 PR/coverage/남음을 전달했다.
 <a id="data-start"></a>
 
 ### 공통시트 상품행 조회 기준 — 2026-10-11 사용자 직접 결정

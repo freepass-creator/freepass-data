@@ -11,7 +11,7 @@ import { planSharedSheetCanonical, runSharedSheetCanonical, preflightSharedSheet
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { queryCanonicalByPlate } from '../src/jobs/query-canonical-by-plate.js';
+import { queryCanonicalByPlate, queryFirestoreByPlate, main as queryMain } from '../src/jobs/query-canonical-by-plate.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
@@ -72,6 +72,35 @@ function later(c: SharedSheetCapture) {
   return c;
 }
 describe('shared sheet local source to Canonical', () => {
+  it('pins color refinement in the reviewed plan and persists its candidate facts through existing intake', async () => {
+    const s = await stores(), c = capture({ 외부색상: '흰색', 내부색상: '검정' });
+    const normal = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
+    expect(normal.plan.ruleVersion).toBe('shared-sheet-normalizer/5');
+    const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, true);
+    expect(p.plan.ruleVersion).toBe('shared-sheet-normalizer/6');
+    expect(p.plan.includeSupplierColors).toBe(true);
+    const applied = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+      plan: p.plan, expectedPlanDigest: p.report.planDigest });
+    expect(applied.report).toMatchObject({ status: 'APPLIED' });
+    const assets = await s.store.listVehicleAssets();
+    expect(assets[0]!.sourceVehicleFacts!.fields.exteriorColor).toMatchObject({ state: 'KNOWN', value: '흰색' });
+    const candidates = await s.source.listCandidates(p.plan.runId);
+    expect(candidates[0]!.candidate.vehicleFacts!.fields.exteriorColor).toMatchObject({ state: 'KNOWN', value: '흰색' });
+    const changed = { ...p.plan };
+    delete changed.includeSupplierColors;
+    await expect(runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+      plan: changed, expectedPlanDigest: stableDigest(changed) })).rejects.toThrow('SHARED_SHEET_PLAN_REQUIRED_OR_CHANGED');
+  });
+  it('does not rewrite completed v5 source candidates with color v6', async () => {
+    const s = await stores(), c = capture({ 외부색상: '흰색' });
+    await apply(s, c);
+    await expect(planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, true))
+      .rejects.toThrow('SUPPLIER_COLOR_REFINEMENT_REQUIRES_NEW_SOURCE_RUN');
+    const old = await s.source.listCandidates(prepareRawSourceBatch(buildSharedSheetBatch(c)).runId);
+    expect(old[0]!.candidate.vehicleFacts!.fields.exteriorColor).toBeUndefined();
+    const fresh = await planSharedSheetCanonical(s.store, later(capture({ 외부색상: '흰색' })), 'synthetic-target', undefined, true);
+    expect(fresh.plan.ruleVersion).toBe('shared-sheet-normalizer/6');
+  });
   it.each([0, '0', '', '미확인', '협의'])('holds short deposit %j without inventing zero; preserves long-term evidence', value => {
     const n = normalized(capture({ 단기보증: value }));
     expect(n.record.candidate.priceTerms.filter(t => t.termMonths <= 12).every(t => t.depositState === 'UNKNOWN' && !t.deposit)).toBe(true);
@@ -117,6 +146,29 @@ describe('shared sheet local source to Canonical', () => {
     expect(f.modelYear!.value).toBe(2026); expect(f.firstRegistration!.value).toBe('2026-04');
     expect(f.displacementCc!.value).toBe(1234); expect(f.batteryKwh!.value).toBe(77.7); expect(f.drive!.value).toBe('2WD');
     expect(n.record.candidate.priceTerms[0]!.depositState).toBe('ZERO');
+  });
+  it('keeps both supplier colors as distinct source facts with cell lineage and immutable RAW', () => {
+    const c = capture({ 외부색상: '  펄 화이트  ', 내부색상: '블랙/브라운' });
+    const raw = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords[0]!;
+    const before = structuredClone(raw);
+    const n = normalizeSharedSheet(raw, masterEvidence(), { includeSupplierColors: true });
+    expect(n.record.candidate.vehicleFacts!.fields.exteriorColor).toMatchObject({ value: '펄 화이트', state: 'KNOWN', evidence: '펄 화이트' });
+    expect(n.record.candidate.vehicleFacts!.fields.interiorColor).toMatchObject({ value: '블랙/브라운', state: 'KNOWN' });
+    expect(n.lineage.find(l => l.normalized?.fieldPath === 'vehicleFacts.fields.exteriorColor')).toMatchObject({
+      source: { value: '  펄 화이트  ' }, normalized: { value: { value: '펄 화이트', state: 'KNOWN' } } });
+    expect(raw).toEqual(before);
+  });
+  it('does not borrow exterior color for empty interior color or guess a review placeholder', () => {
+    const c = capture({ 외부색상: '확인 필요', 내부색상: '' });
+    const raw = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords[0]!;
+    const n = normalizeSharedSheet(raw, masterEvidence(), { includeSupplierColors: true });
+    expect(n.record.candidate.vehicleFacts!.fields.exteriorColor).toMatchObject({ value: null, state: 'REVIEW_REQUIRED' });
+    expect(n.record.candidate.vehicleFacts!.fields.interiorColor).toMatchObject({ value: null, state: 'MISSING' });
+    expect(n.record.candidate.issues).not.toContain('INVALID_EXTERIORCOLOR');
+    expect(n.record.status).toBe('VALID');
+    const old = normalizeSharedSheet(raw, masterEvidence());
+    expect(old.record.candidate.vehicleFacts!.ruleVersion).toBe('shared-sheet-normalizer/5');
+    expect(old.record.candidate.vehicleFacts!.fields).not.toHaveProperty('exteriorColor');
   });
   // 소수 칸 표시 형식 «0.###"kWh"»는 정수를 «22.kWh»로 보인다(2026-10-04 서식 통일) — 같은 값. 점 두 개·글자는 여전히 거부.
   it.each([['22.kWh', 22], ['54.kWh', 54], ['77.4kWh', 77.4], ['84kWh', 84]])('battery %s → %s', (shown, value) =>
@@ -262,6 +314,38 @@ describe('shared sheet local source to Canonical', () => {
     const result = await queryCanonicalByPlate(s.store, ' test-fake-001 ');
     expect(result.matchedAssets).toBe(1); expect(result.results[0]!.terms).toHaveLength(3);
     expect(result.results[0]!.vehicle.facts!.fields.modelYear!.value).toBe(2026); expect(tx).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ authority: 'STORED_CANONICAL', schema: 'freepass-data.internal-canonical-query/v1' });
+    expect(result.results[0]).toHaveProperty('offerId');
+  });
+  it('direct query refuses stale stored economics without recalculating or writing', async () => {
+    const s = await stores(); await apply(s);
+    const offer = (await s.store.listOffers())[0]!;
+    offer.internalEconomicsTerms![0]!.monthlyRent = { amount: 999999, currency: 'KRW' };
+    await s.store.seed({ offers: [offer] });
+    const tx = vi.spyOn(s.store, 'transact');
+    const result = await queryCanonicalByPlate(s.store, 'TEST-FAKE-001');
+    expect(result.results[0]!.terms[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null,
+      vatAmount: null, totalAmount: null, reasonCode: 'MONTHLY_RENT_MISMATCH', status: 'UNCONFIRMED' });
+    expect(result.results[0]!.terms[0]!.channelPayoutFee.amount).toBeNull();
+    expect(tx).not.toHaveBeenCalled();
+  });
+  it('rejects unsafe direct CLI configuration and empty identity before Firebase access', async () => {
+    await expect(queryFirestoreByPlate('')).rejects.toThrow('PLATE_REQUIRED');
+    await expect(queryMain(['--direct', '--memory', '--plate-file', 'synthetic', '--local-output', 'synthetic']))
+      .rejects.toThrow('DIRECT_FIRESTORE_REQUIRED');
+    await expect(queryMain(['--direct', '--firestore', '--plate-file', 'synthetic']))
+      .rejects.toThrow('LOCAL_INPUT_OUTPUT_REQUIRED');
+  });
+  it('preserves older stored fee terms with optional price basis absent', async () => {
+    const s = await stores(); await apply(s);
+    const offer = (await s.store.listOffers())[0]!;
+    delete offer.internalEconomicsTerms![0]!.termMonths;
+    delete offer.internalEconomicsTerms![0]!.monthlyRent;
+    await s.store.seed({ offers: [offer] });
+    const result = await queryCanonicalByPlate(s.store, 'TEST-FAKE-001');
+    expect(result.results[0]!.feeContract).toBe('internal-fee-lookup/v1');
+    expect(result.results[0]!.terms[0]!.supplierBillingFee.reasonCode).not.toBe('MONTHLY_RENT_MISMATCH');
+    expect(result.results[0]!.terms[0]!.supplierBillingFee.reasonCode).not.toBe('TERM_MONTHS_MISMATCH');
   });
   it('keeps first observation from a previously held RAW row', async () => {
     const s = await stores(); await apply(s, capture({ 세부트림: '' }));
