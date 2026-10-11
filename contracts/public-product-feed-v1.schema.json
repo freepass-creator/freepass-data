@@ -20,7 +20,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 80,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$"
+      "pattern": "^[A-Za-z0-9가-힣][A-Za-z0-9가-힣_-]{0,79}$"
     },
     "url": {
       "type": [
@@ -54,8 +54,8 @@
         },
         "depositState": {
           "enum": [
-            "AMOUNT",
-            "VERIFIED_NO_DEPOSIT",
+            "KNOWN",
+            "ZERO",
             "UNKNOWN",
             "NOT_APPLICABLE"
           ]
@@ -284,7 +284,7 @@
         "image_url": { "$ref": "#/$defs/url" },
         "image_urls": {
           "type": "array",
-          "maxItems": 20,
+          "maxItems": 200,
           "items": {
             "type": "string",
             "maxLength": 500,

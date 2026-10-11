@@ -76,6 +76,8 @@ import {
   buildPublicProductQuote,
   publicConsumerIdFromWhitelabel,
 } from './public-product-feed.js';
+import { logRouteError } from '../shared/route-error-log.js';
+import { assertPublicAllowlistsConfigured, publicProviderAllowlist, publicSingleQueryValue, publicWhitelabelAllowlist } from './public-allowlist.js';
 
 export type ConsumerCapability =
   | 'catalog'
@@ -223,6 +225,7 @@ const PUBLIC_CACHE_MAX_ENTRIES = 64;
 const PUBLIC_RATE_LIMIT_MAX_ENTRIES = 4096;
 
 const publicCache = new Map<string, { expiresAt: number; value: CatalogCompatibilitySnapshot }>();
+const publicInFlight = new Map<string, Promise<CatalogCompatibilitySnapshot>>();
 const publicRateLimits = new Map<string, { resetAt: number; count: number }>();
 const publicTrustProxyHops = (): number => {
   const raw = process.env.FREEPASS_PUBLIC_TRUST_PROXY_HOPS?.trim() ?? '';
@@ -230,16 +233,6 @@ const publicTrustProxyHops = (): number => {
   if (!/^[0-3]$/.test(raw)) throw new Error('FREEPASS_PUBLIC_TRUST_PROXY_HOPS must be 0, 1, 2 or 3');
   return Number(raw);
 };
-const publicProviderAllowlist = (): Set<string> => new Set(
-  (process.env.FREEPASS_PUBLIC_PROVIDER_ALLOWLIST ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
-);
-
-const singleQueryValue = (value: string | string[] | undefined): string | undefined =>
-  Array.isArray(value) ? undefined : value;
-
 // Fastify exposes the chain from the socket outward; each route keeps its own trust budget.
 const clientIpAtHops = (request: { ip?: string; ips?: string[] | undefined }, hops: number): string =>
   request.ips?.[Math.min(hops, request.ips.length - 1)] ?? request.ip ?? 'unknown';
@@ -291,19 +284,22 @@ const normalizePublicQuery = (
   query: PublicCatalogQuery,
   registered: Map<string, RegisteredConsumerBinding>
 ): { p?: string; wl?: string; code?: string } => {
-  const p = singleQueryValue(query.p);
-  const wl = singleQueryValue(query.wl);
-  const code = singleQueryValue(query.code);
+  const p = publicSingleQueryValue(query.p);
+  const wl = publicSingleQueryValue(query.wl);
+  const code = publicSingleQueryValue(query.code);
   if (p !== undefined) {
-    if (!/^[A-Z0-9_]{2,40}$/.test(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_INVALID'), { statusCode: 400 });
+    if (!/^(?:RP|PT-)\d+$/.test(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_INVALID'), { statusCode: 400 });
     const allowed = publicProviderAllowlist();
-    if (allowed.size > 0 && !allowed.has(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_NOT_FOUND'), { statusCode: 404 });
+    if (!allowed.has(p)) throw Object.assign(new Error('PUBLIC_PROVIDER_NOT_ALLOWED'), { statusCode: 400 });
   }
   if (wl !== undefined) {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(wl)) throw Object.assign(new Error('PUBLIC_WL_INVALID'), { statusCode: 400 });
+    const allowed = publicWhitelabelAllowlist();
+    if (!allowed.has(wl)) throw Object.assign(new Error('PUBLIC_WL_NOT_ALLOWED'), { statusCode: 400 });
     const consumerId = publicConsumerIdFromWhitelabel(wl);
-    if (!registered.has(consumerId)) throw Object.assign(new Error('PUBLIC_WL_NOT_FOUND'), { statusCode: 404 });
+    if (!registered.has(consumerId)) throw Object.assign(new Error('PUBLIC_WL_NOT_ALLOWED'), { statusCode: 400 });
   }
-  if (code !== undefined && !/^[A-Za-z0-9_-]{1,120}$/.test(code)) {
+  if (code !== undefined && !/^[A-Za-z0-9가-힣_-]{1,120}$/.test(code)) {
     throw Object.assign(new Error('PUBLIC_CODE_INVALID'), { statusCode: 400 });
   }
   return {
@@ -315,11 +311,13 @@ const normalizePublicQuery = (
 
 export const publicRuntimeStatsForTest = () => ({
   cacheEntries: publicCache.size,
+  inFlightEntries: publicInFlight.size,
   rateLimitEntries: publicRateLimits.size,
 });
 
 export const resetPublicRuntimeForTest = () => {
   publicCache.clear();
+  publicInFlight.clear();
   publicRateLimits.clear();
 };
 
@@ -351,6 +349,7 @@ export function createConsumerGateway(
   estimateArtifactStore?: EstimateArtifactStore,
 ) {
   // Validate again for callers constructing registrations without the environment parser.
+  assertPublicAllowlistsConfigured();
   const registered = new Map(parseConsumerBindings(JSON.stringify(bindings)).map((item) => [item.id, item]));
   const proxyHops = process.env.FREEPASS_DATA_TRUST_PROXY_HOPS ?? '0';
   if (!/^[0-3]$/.test(proxyHops)) throw new Error('FREEPASS_DATA_TRUST_PROXY_HOPS_INVALID');
@@ -400,11 +399,20 @@ export function createConsumerGateway(
     sweepExpired(publicCache, now);
     const cached = publicCache.get(cacheKey);
     if (cached && cached.expiresAt > now) return cached.value;
+    const current = publicInFlight.get(cacheKey);
+    if (current) return current;
     if (!compatReader) throw new Error('PUBLIC_CATALOG_READER_UNAVAILABLE');
-    const value = await withPublicTimeout(compatReader.read(consumerId));
-    publicCache.set(cacheKey, { expiresAt: now + PUBLIC_CACHE_MS, value });
-    trimOldest(publicCache, PUBLIC_CACHE_MAX_ENTRIES);
-    return value;
+    const work = withPublicTimeout(compatReader.read(consumerId))
+      .then((value) => {
+        publicCache.set(cacheKey, { expiresAt: Date.now() + PUBLIC_CACHE_MS, value });
+        trimOldest(publicCache, PUBLIC_CACHE_MAX_ENTRIES);
+        return value;
+      })
+      .finally(() => {
+        if (publicInFlight.get(cacheKey) === work) publicInFlight.delete(cacheKey);
+      });
+    publicInFlight.set(cacheKey, work);
+    return work;
   };
   const publicRouteAllowed = (
     request: { routeOptions?: { url?: string | undefined }; url: string; ip?: string; ips?: string[] | undefined },
@@ -430,6 +438,7 @@ export function createConsumerGateway(
       }
       return response;
     } catch (error) {
+      logRouteError('/v1/public/catalog/feed', 'public_feed', error);
       const statusCode = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode?: unknown }).statusCode) : 503;
       if (statusCode === 400) return reply.code(400).send({ error: '잘못된 공개 상품 요청입니다.' });
       if (statusCode === 404) return reply.code(404).send({ error: '현재 안내 가능한 공개 채널이 아닙니다.' });
@@ -451,6 +460,7 @@ export function createConsumerGateway(
       }
       return response;
     } catch (error) {
+      logRouteError('/v1/public/catalog/quote', 'public_quote', error);
       if (error instanceof Error && error.message === 'PUBLIC_QUOTE_CODE_REQUIRED') {
         return reply.code(400).send({ error: '상품 코드가 없습니다.' });
       }
@@ -683,6 +693,7 @@ export function createConsumerGateway(
       });
       return result;
     } catch (error) {
+      logRouteError('/v1/consumers/:consumerId/catalog', 'consumer_catalog', error);
       if (error instanceof ConsumerReadError) {
         return reply.code(error.statusCode).send({ code: error.code, ...(error.details ?? {}) });
       }
@@ -785,6 +796,7 @@ export function createConsumerGateway(
       }
       return result;
     } catch (error) {
+      logRouteError('/v1/consumers/:consumerId/catalog-compat', 'consumer_catalog_compat', error);
       if (error instanceof DataAccessAuditUnavailableError) {
         return reply.code(503).send({ code: error.code });
       }
