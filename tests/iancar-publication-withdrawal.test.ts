@@ -908,3 +908,15 @@ it('a warm response expiring during its final membership request is refused', as
   await fixture.reader('erp5-public-media', fixture.row.productId, 0);
   expect(fixture.sourceRead.mock.calls.filter(call => call[1] !== undefined)).toHaveLength(2);
 });
+it('a shared-flight follower cannot reuse validated bytes beyond the fixed window', async () => {
+  const fixture = concurrentContentReader();
+  const calls = [fixture.reader('erp5-public-media', fixture.row.productId, 0), fixture.reader('erp5-public-media', fixture.row.productId, 0)];
+  await vi.waitFor(() => expect(fixture.sourceRead).toHaveBeenCalledTimes(1));
+  fixture.release();
+  const [initiator, follower] = await Promise.all(calls);
+  fixture.advance(30_000);
+  expect(await initiator!.revalidate()).toBe(true); // unchanged existing cold-request semantics
+  expect(await follower!.revalidate()).toBe(false);
+  await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(fixture.sourceRead.mock.calls.filter(call => call[1] !== undefined)).toHaveLength(2);
+});

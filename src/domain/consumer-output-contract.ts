@@ -469,6 +469,7 @@ export function createVehiclePhotoReader(
       reusedVerifiedImage = !!entry;
       if (!entry) {
         let request = pendingReviewed.get(reviewedKey);
+        reusedVerifiedImage = !!request;
         if (!request) {
           if (pendingReviewed.size >= VEHICLE_PHOTO_MAX_CONCURRENT) throw new Error('VEHICLE_PHOTO_BUSY');
           request = Promise.resolve().then(read).then(result => ({ result: { ...result,
