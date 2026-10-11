@@ -8,7 +8,7 @@ import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSIO
 import { ingestRawSourceBatch, prepareRawSourceBatch } from '../application/ingest-raw-source.js';
 import { canonicalizeCatalogCandidate, type CanonicalizeCatalogCandidateInput } from '../application/canonicalize-catalog-candidate.js';
 import { reviewSourceChange, applyReviewedSourceChange } from '../application/reviewed-source-change.js';
-import { precomputeOfferEconomics } from '../application/resolve-offer-commercial-terms.js';
+import { auditOfferEconomicsTerms, precomputeOfferEconomics } from '../application/resolve-offer-commercial-terms.js';
 import { KAKAO_COMMISSION_POLICY } from '../application/kakao-catalog-reference.js';
 import { decideSourceHead, type SourceRun, type SourceHead } from '../domain/source.js';
 import type { ApplyReviewedSourceChangeInput } from '../domain/source-change.js';
@@ -174,8 +174,10 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
           if ((c.fuelType === undefined && model?.fuel != null) || (c.driveType === undefined && model?.drive != null) ||
               (c.seats === undefined && model?.seats != null) || (c.mileageKm === undefined && asset?.odometerKm != null))
             reasons.push('MISSING_PREVIOUSLY_KNOWN_FACT_REQUIRES_REVIEW');
-          if (operationalRefresh && !priorRuns.has(binding.sourceRunId))
-            priorRuns.set(binding.sourceRunId, await store.listCandidatesByRun(binding.sourceRunId));
+          if (operationalRefresh && !priorRuns.has(binding.sourceRunId)) {
+            try { priorRuns.set(binding.sourceRunId, await store.listCandidatesByRun(binding.sourceRunId)); }
+            catch { throw new Error('OPERATIONAL_PREVIOUS_CANDIDATES_READ_FAILED'); }
+          }
           const previous = operationalRefresh ? priorRuns.get(binding.sourceRunId)!
             .filter(x => x.sourceId === binding.sourceId && x.sourceRecordId === binding.sourceRecordId &&
               x.sourceFingerprint === binding.sourceFingerprint && x.status === 'VALID') : [];
@@ -192,7 +194,12 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
               approvedChangeIds: review.reviewableChangeIds, approvedIssues: [],
               ...(fence ? { operationalRefresh: fence } : {}) };
           }
-        } catch { reasons.push('SOURCE_CHANGE_REVIEW_FAILED'); }
+        } catch (error) {
+          // Keep useful bounded reason codes, never provider messages or raw identifiers.
+          const code = error instanceof Error ? error.message : '';
+          reasons.push(['OPERATIONAL_PREVIOUS_CANDIDATE_NOT_UNIQUE', 'OPERATIONAL_PREVIOUS_CANDIDATES_READ_FAILED'].includes(code)
+            ? code : 'SOURCE_CHANGE_REVIEW_FAILED');
+        }
       }
     }
     if (reasons.length) {
@@ -271,6 +278,9 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
       replay.add(entry.recordId);
     } else if (stableDigest(entry) !== stableDigest(fresh.plan.entries[i])) throw new Error('SHARED_SHEET_PLAN_STALE');
   }
+  // Immutable pre-write economics oracle for confirmed vehicle-price fees. A rent capture
+  // is not a vehicle-price fact and must not recalculate or invent that basis.
+  const beforeOffers = plan.operationalRefresh ? new Map((await store.listOffers()).map(x => [x.id, structuredClone(x)])) : null;
   const run = await ingestRawSourceBatch(source, p.batch, new Date().toISOString(), p.normalize);
   if (run.headStatus !== 'CURRENT' || run.candidateCount !== p.normalized.length) throw new Error('SHARED_SHEET_INTAKE_NOT_READY');
   let committed = 0, noChange = 0, held = 0;
@@ -300,6 +310,20 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
     const asset = binding?.vehicleAssetId ? await store.getVehicleAsset(binding.vehicleAssetId) : null;
     const expected = precomputeOfferEconomics({ id: opaque('off', p.sourceId, c.sourceRecordId),
       supplierId: c.providerCompanyCode!, priceTerms: c.priceTerms }, c.commercialType, c.fuelType);
+    const before = offer ? beforeOffers?.get(offer.id) : undefined;
+    const refreshReceipt = entry.change?.operationalRefresh
+      ? await store.getReviewedSourceChangeReceipt(entry.change.idempotencyKey) : null;
+    if (before && offer && refreshReceipt?.sourceRunId === p.runId &&
+        refreshReceipt.offerId === offer.id && refreshReceipt.offerRevision === offer.revision &&
+        refreshReceipt.commandId === entry.change?.commandId &&
+        !auditOfferEconomicsTerms(before).invalidFacts.length &&
+        !auditOfferEconomicsTerms(offer).invalidFacts.length) {
+      for (const term of expected) for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
+        const previous = before.internalEconomicsTerms?.find(x => x.termKey === term.termKey)?.[side];
+        if (previous?.calculation?.kind === 'RATE' && previous.calculation.base === 'VEHICLE_PRICE')
+          term[side] = structuredClone(previous);
+      }
+    }
     storedTerms += offer?.internalEconomicsTerms?.length ?? 0;
     const policy = sharedSheetStatusPolicy(c.vehicleFacts?.fields.supplierStatus?.value);
     const product = binding ? await store.getProduct(binding.productId) : null;

@@ -72,6 +72,23 @@ function later(c: SharedSheetCapture) {
   return c;
 }
 describe('shared sheet local source to Canonical', () => {
+  it('reads back rent changes against the unchanged confirmed vehicle-price fee snapshot', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const offer = (await s.store.listOffers())[0]!;
+      const fee = { state: 'KNOWN' as const, amount: { currency: 'KRW' as const, amount: 300000 },
+        calculation: { kind: 'RATE' as const, base: 'VEHICLE_PRICE' as const, rate: 0.01 },
+        ruleId: 'test:confirmed-vehicle-rule', policyId: 'test:confirmed-policy', sourceRefs: ['test:confirmed-source'] };
+      offer.internalEconomicsTerms![0]!.channelPayoutFee = structuredClone(fee);
+      await s.store.seed({ offers: [offer] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: 'APPLIED', reconciliation: { readbackMismatches: 0 } });
+      expect((await s.store.listOffers())[0]!.internalEconomicsTerms![0]!.channelPayoutFee).toEqual(fee);
+    } finally { vi.useRealTimers(); }
+  });
   it('records a fresh unchanged observation without changing product or offer revisions', async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
     try {
