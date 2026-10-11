@@ -1,91 +1,20 @@
 import { buildKakaoCatalogReferenceProduct, KAKAO_COMMISSION_POLICY } from './kakao-catalog-reference.js';
 import { evidenceByTermForProduct, type NewCarTrimEvidenceInput, type VehicleValueEvidence } from './vehicle-value-evidence.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import type {
+  PeriodFeeDepositEvidenceKind,
+  PeriodFeeDepositState,
+  PeriodFeeLedgerDepositEvidence,
+  PeriodFeeLedgerFeeAmount,
+  PeriodFeeLedgerFeeState,
+  PeriodFeeLedgerRow,
+  PeriodFeeVehicleValueEvidence,
+  ProductChangeHistoryRow,
+} from '../domain/period-fee-ledger.js';
+
+export type { PeriodFeeLedgerRow, ProductChangeHistoryRow } from '../domain/period-fee-ledger.js';
 
 type Rec = Record<string, unknown>;
-
-type LedgerFeeState = 'CALCULATED' | 'CALCULATED_APPROX' | 'UNKNOWN' | 'NOT_APPLICABLE';
-type DepositState = 'KNOWN' | 'ZERO' | 'UNKNOWN' | 'NOT_APPLICABLE';
-type LedgerFeeAmount = {
-  state: LedgerFeeState;
-  amount: { amount: number; currency: 'KRW' } | null;
-  vatTreatment: 'EXCLUDED' | 'INCLUDED' | 'UNKNOWN' | null;
-  vatAmount: number | null;
-  totalAmount: number | null;
-  reasonCode: string | null;
-  ruleId: string | null;
-  policyId: string | null;
-  sourceRefs: string[];
-};
-
-type DepositEvidenceKind = 'SOURCE_AMOUNT' | 'SUPPLIER_RULE_NOTE' | 'VERIFIED_ZERO_TEXT' | 'UNKNOWN';
-
-type LedgerDepositEvidence = {
-  kind: DepositEvidenceKind;
-  ruleCode: string | null;
-  noteField: 'deposit_note' | string | null;
-  noteText: string | null;
-  sourcePriceKey: string;
-  calculationBasis: string | null;
-  policyCode: string | null;
-};
-
-export type PeriodFeeLedgerRow = {
-  schemaVersion: 'period-fee-ledger/v1';
-  snapshotId: string;
-  snapshotDateKst: string;
-  computedAt: string;
-  valueBasis: 'CURRENT_AT_SNAPSHOT';
-  valueAsOf: string;
-  engineRevision: string;
-  sourceDigest: string;
-  documentKey: string;
-  applyState: 'READY' | 'HOLD';
-  holdReasonCode: string | null;
-  vehicleUid: string | null;
-  assetId: string | null;
-  plateLookupKey: string | null;
-  plateLast4ForReport: string | null;
-  supplierId: string;
-  productId: string;
-  offerId: string;
-  offerRevision: number;
-  productUpdateTime: string | null;
-  termKey: string;
-  termMonths: number;
-  monthlyRent: { amount: number; currency: 'KRW'; state: 'KNOWN' | 'UNKNOWN'; reasonCode: string | null };
-  deposit: {
-    state: DepositState;
-    amount: { amount: number; currency: 'KRW' } | null;
-    reasonCode: string | null;
-    sourceRefs: string[];
-    depositEvidence: LedgerDepositEvidence;
-  };
-  vehicleValueEvidence?: VehicleValueEvidence | null;
-  supplierBillingFee: LedgerFeeAmount;
-  channelPayoutFee: LedgerFeeAmount;
-  ruleIds: string[];
-  policyIds: string[];
-  priceSourceRefs: string[];
-  inputRefs: {
-    productPath: string;
-    offerPath: string;
-    priceTermRef: string;
-    internalEconomicsRef: string | null;
-  };
-};
-
-export type ProductChangeHistoryRow = {
-  schemaVersion: 'product-change-history/v1';
-  productKey: string;
-  kind: 'STATUS' | 'RENT' | 'DEPOSIT';
-  fieldPath: 'vehicle_status' | 'status' | 'status_kind' | 'listable' | 'priceTerms.monthlyRent' | 'priceTerms.deposit';
-  before: unknown;
-  after: unknown;
-  changedAtKst: string;
-  snapshotId: string;
-  sourceObservationRef: string | null;
-};
 
 export type PeriodFeeLedgerPlan = {
   schema: 'freepass-data.period-fee-ledger-plan/v1';
@@ -103,9 +32,9 @@ export type PeriodFeeLedgerPlan = {
     historyRows: number;
     uid: { present: number; missing: number };
     apply: { ready: number; hold: number };
-    feeStates: Record<'supplierBillingFee' | 'channelPayoutFee', Record<LedgerFeeState, number>>;
+    feeStates: Record<'supplierBillingFee' | 'channelPayoutFee', Record<PeriodFeeLedgerFeeState, number>>;
     approxCount: Record<'supplierBillingFee' | 'channelPayoutFee', number>;
-    depositEvidenceKinds: Record<DepositEvidenceKind, number>;
+    depositEvidenceKinds: Record<PeriodFeeDepositEvidenceKind, number>;
     reasonCounts: Record<string, number>;
     settlementRowsAccessCount: 0;
     inputDigest: string;
@@ -165,7 +94,7 @@ const snapshotDate = (snapshotId: string) => {
   if (!match) throw new Error('PERIOD_FEE_SNAPSHOT_ID_INVALID');
   return match[1]!;
 };
-const kstDate = (iso: string) => {
+export const kstDate = (iso: string) => {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) throw new Error('PERIOD_FEE_OBSERVED_AT_INVALID');
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -194,12 +123,12 @@ function sourcePriceKey(termKey: string): string {
 }
 
 export function normalizeLedgerDepositEvidence(input: {
-  state: DepositState;
+  state: PeriodFeeDepositState;
   amount: { amount: number; currency: 'KRW' } | null;
   term: Rec;
   rawProduct: Rec;
   sourcePriceKey: string;
-}): { state: DepositState; reasonCode: string | null; evidence: LedgerDepositEvidence } {
+}): { state: PeriodFeeDepositState; reasonCode: string | null; evidence: PeriodFeeLedgerDepositEvidence } {
   const termEvidence = input.term.depositEvidence && typeof input.term.depositEvidence === 'object' && !Array.isArray(input.term.depositEvidence)
     ? input.term.depositEvidence as Rec : {};
   const rule = input.term.depositRule && typeof input.term.depositRule === 'object' && !Array.isArray(input.term.depositRule)
@@ -244,7 +173,7 @@ export function normalizeLedgerDepositEvidence(input: {
     calculationBasis: null } };
 }
 
-function normalizeFee(value: Rec | undefined, vehicleValueEvidence: VehicleValueEvidence | null): LedgerFeeAmount {
+function normalizeFee(value: Rec | undefined, vehicleValueEvidence: PeriodFeeVehicleValueEvidence | null): PeriodFeeLedgerFeeAmount {
   const calculatedState = vehicleValueEvidence?.grade === 'APPROX' ? 'CALCULATED_APPROX' : 'CALCULATED';
   const state = value?.state === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : value?.state === 'CALCULATED' ? calculatedState : 'UNKNOWN';
   const rawAmount = value?.amount;
@@ -337,7 +266,7 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput, options: Pl
     supplierBillingFee: { CALCULATED: 0, CALCULATED_APPROX: 0, UNKNOWN: 0, NOT_APPLICABLE: 0 },
     channelPayoutFee: { CALCULATED: 0, CALCULATED_APPROX: 0, UNKNOWN: 0, NOT_APPLICABLE: 0 },
   };
-  const depositEvidenceKinds: Record<DepositEvidenceKind, number> = { SOURCE_AMOUNT: 0, SUPPLIER_RULE_NOTE: 0, VERIFIED_ZERO_TEXT: 0, UNKNOWN: 0 };
+  const depositEvidenceKinds: Record<PeriodFeeDepositEvidenceKind, number> = { SOURCE_AMOUNT: 0, SUPPLIER_RULE_NOTE: 0, VERIFIED_ZERO_TEXT: 0, UNKNOWN: 0 };
   let uidPresent = 0;
   let uidMissing = 0;
 
@@ -370,7 +299,7 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput, options: Pl
         ? [snapshotId, vehicleUid, supplierId, productId, offerId, term.termKey].map(pathSafe).join('__')
         : [snapshotId, productKey, supplierId, productId, offerId, term.termKey].map(pathSafe).join('__');
       const depositState = String(term.depositState);
-      const normalizedDepositState: DepositState = (depositState === 'KNOWN' || depositState === 'ZERO' || depositState === 'NOT_APPLICABLE') ? depositState : 'UNKNOWN';
+      const normalizedDepositState: PeriodFeeDepositState = (depositState === 'KNOWN' || depositState === 'ZERO' || depositState === 'NOT_APPLICABLE') ? depositState : 'UNKNOWN';
       const depositAmount = term.deposit ? { amount: term.deposit.amount, currency: 'KRW' as const } : null;
       const depositWithEvidence = normalizeLedgerDepositEvidence({
         state: normalizedDepositState,
