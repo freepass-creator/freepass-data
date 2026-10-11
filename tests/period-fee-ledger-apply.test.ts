@@ -27,6 +27,13 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
   runs = new Map<string, PeriodFeeSnapshotRun>();
   forbiddenWriteAttempt = false;
   corruptReadback = false;
+  failAfterLedgerCreates: number | null = null;
+  failDeleteAfter = Number.POSITIVE_INFINITY;
+  failRestore = false;
+  setSnapshotRunCalls = 0;
+  createLedgerCalls = 0;
+  createHistoryCalls = 0;
+  activateCalls = 0;
 
   async getLedgerDocument(documentKey: string): Promise<ExistingPeriodFeeDocument | null> {
     return this.ledger.get(documentKey) ?? null;
@@ -34,10 +41,15 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
 
   async createLedgerDocument(documentKey: string, row: PeriodFeeLedgerRow, digest: string): Promise<void> {
     this.ledger.set(documentKey, { digest, data: structuredClone(row) as unknown as Record<string, unknown> });
+    this.createLedgerCalls += 1;
+    if (this.failAfterLedgerCreates !== null && this.createLedgerCalls >= this.failAfterLedgerCreates) {
+      throw new Error('TEST_LEDGER_CREATE_INTERRUPTED');
+    }
   }
 
   async createProductChangeHistoryDocument(documentKey: string, row: ProductChangeHistoryRow | ProductChangeHistoryBaselineRow, digest: string): Promise<void> {
     if (!documentKey.includes('__')) throw new Error('TEST_HISTORY_KEY_INVALID');
+    this.createHistoryCalls += 1;
     this.history.set(documentKey, { digest, data: structuredClone(row) as unknown as Record<string, unknown> });
   }
 
@@ -58,10 +70,12 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
   }
 
   async setSnapshotRun(runId: string, run: PeriodFeeSnapshotRun): Promise<void> {
+    this.setSnapshotRunCalls += 1;
     this.runs.set(runId, structuredClone(run));
   }
 
   async activateSnapshotRun(runId: string, run: PeriodFeeSnapshotRun, previousActiveRunId: string | null): Promise<void> {
+    this.activateCalls += 1;
     this.runs.set(runId, structuredClone(run));
     if (previousActiveRunId && previousActiveRunId !== runId) {
       const previous = this.runs.get(previousActiveRunId);
@@ -70,6 +84,7 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
   }
 
   async restoreSnapshotRunActive(runId: string, expectedPlanDigest: string): Promise<void> {
+    if (this.failRestore) throw new Error('TEST_RESTORE_INTERRUPTED');
     const run = this.runs.get(runId);
     if (!run || run.planDigest !== expectedPlanDigest || run.status !== 'SUPERSEDED') {
       throw new Error('TEST_RESTORE_RUN_MISMATCH');
@@ -100,6 +115,7 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
       snapshotId: runId,
       planDigest: '',
       previousActiveRunId: null,
+      plannedCreateKeys: [],
       createdDocumentKeys: [],
       preparedAt: observedAt,
       rowCount: 0,
@@ -118,6 +134,7 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
       if (stored?.digest === target.digest) {
         this.ledger.delete(target.documentKey);
         count += 1;
+        if (count >= this.failDeleteAfter) throw new Error('TEST_DELETE_INTERRUPTED');
       }
     }
     return count;
@@ -171,14 +188,43 @@ describe('period fee ledger apply', () => {
     const store = new MemoryPeriodFeeStore();
     await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
 
+    const callsBefore = {
+      setSnapshotRunCalls: store.setSnapshotRunCalls,
+      createLedgerCalls: store.createLedgerCalls,
+      createHistoryCalls: store.createHistoryCalls,
+      activateCalls: store.activateCalls,
+    };
+    const runBefore = structuredClone(store.runs.get(runIdFor(plan))!);
     const second = await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
-    expect(second.counts).toMatchObject({ ledgerCreated: 0, ledgerSkippedSameDigest: 1, activeMarked: 1 });
+    expect(second.counts).toMatchObject({ ledgerCreated: 0, ledgerSkippedSameDigest: 1, activeMarked: 0 });
+    expect({
+      setSnapshotRunCalls: store.setSnapshotRunCalls,
+      createLedgerCalls: store.createLedgerCalls,
+      createHistoryCalls: store.createHistoryCalls,
+      activateCalls: store.activateCalls,
+    }).toEqual(callsBefore);
+    expect(store.runs.get(runIdFor(plan))).toEqual(runBefore);
     expect(store.runs.get(runIdFor(plan))?.createdDocumentKeys).toEqual([plan.rows[0]!.documentKey]);
 
     const row = plan.rows[0]!;
     store.ledger.set(row.documentKey, { digest: stableDigest({ stale: true }), data: row as unknown as Record<string, unknown> });
     await expect(applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
       .rejects.toThrow('PERIOD_FEE_LEDGER_DOCUMENT_DIGEST_CONFLICT');
+  });
+
+  it('rejects a stored same-run digest conflict before rewriting ACTIVE evidence', async () => {
+    const plan = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+    const runId = runIdFor(plan);
+    store.runs.set(runId, { ...store.runs.get(runId)!, planDigest: 'TEST-FAKE-DIFFERENT-DIGEST' });
+    const callsBefore = store.setSnapshotRunCalls;
+
+    await expect(applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
+      .rejects.toThrow('PERIOD_FEE_RUN_DIGEST_CONFLICT');
+
+    expect(store.setSnapshotRunCalls).toBe(callsBefore);
+    expect(store.runs.get(runId)).toMatchObject({ status: 'ACTIVE', active: true, previousActiveRunId: null });
   });
 
   it('does not mark ACTIVE when readback mismatches', async () => {
@@ -215,8 +261,65 @@ describe('period fee ledger apply', () => {
     const result = await rollbackPeriodFeeLedgerSnapshot(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
 
     expect(result).toMatchObject({ status: 'ROLLED_BACK', inactiveRuns: 1, deletedRows: 1 });
-    expect(store.runs.get(runIdFor(plan))).toMatchObject({ status: 'INACTIVE', active: false });
+    expect(store.runs.get(runIdFor(plan))).toMatchObject({ status: 'ROLLED_BACK', active: false });
     expect(store.ledger.size).toBe(0);
+  });
+
+  it('persists planned create keys before row creation so interrupted apply can be rolled back', async () => {
+    const plan = makePlan({ p1: product(), p2: product({ vehicle_uid: 'TEST-FAKE-ASSET-002', car_number: 'TEST-FAKE-PLATE-0002' }) });
+    const store = new MemoryPeriodFeeStore();
+    store.failAfterLedgerCreates = 1;
+
+    await expect(applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
+      .rejects.toThrow('TEST_LEDGER_CREATE_INTERRUPTED');
+
+    const run = store.runs.get(runIdFor(plan))!;
+    expect(run).toMatchObject({ status: 'PREPARED', active: false });
+    expect(run.plannedCreateKeys.sort()).toEqual(plan.rows.map(row => row.documentKey).sort());
+    expect(run.createdDocumentKeys).toEqual([]);
+
+    store.failAfterLedgerCreates = null;
+    const result = await rollbackPeriodFeeLedgerSnapshot(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+
+    expect(result.deletedRows).toBe(1);
+    expect(store.ledger.size).toBe(0);
+    expect(store.runs.get(runIdFor(plan))).toMatchObject({ status: 'ROLLED_BACK', active: false });
+  });
+
+  it('keeps ownership when retrying a digest-identical planned row created before an interrupted apply', async () => {
+    const plan = makePlan({ p1: product(), p2: product({ vehicle_uid: 'TEST-FAKE-ASSET-002', car_number: 'TEST-FAKE-PLATE-0002' }) });
+    const store = new MemoryPeriodFeeStore();
+    store.failAfterLedgerCreates = 1;
+    await expect(applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
+      .rejects.toThrow('TEST_LEDGER_CREATE_INTERRUPTED');
+    store.failAfterLedgerCreates = null;
+
+    const result = await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+
+    expect(result.counts).toMatchObject({ ledgerCreated: 1, ledgerSkippedSameDigest: 1, activeMarked: 1 });
+    const run = store.runs.get(runIdFor(plan))!;
+    expect(run.plannedCreateKeys.sort()).toEqual(plan.rows.map(row => row.documentKey).sort());
+    expect(run.createdDocumentKeys).toEqual([plan.rows[1]!.documentKey]);
+    expect(store.ledger.size).toBe(2);
+  });
+
+  it('does not delete another run owned document that is outside this run ownership keys', async () => {
+    const plan = makePlan({ p1: product(), p2: product({ vehicle_uid: 'TEST-FAKE-ASSET-002', car_number: 'TEST-FAKE-PLATE-0002' }) });
+    const store = new MemoryPeriodFeeStore();
+    store.failAfterLedgerCreates = 1;
+    await expect(applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
+      .rejects.toThrow('TEST_LEDGER_CREATE_INTERRUPTED');
+    store.failAfterLedgerCreates = null;
+    const foreignRow = plan.rows[1]!;
+    store.ledger.set(foreignRow.documentKey, { digest: stableDigest(foreignRow), data: foreignRow as unknown as Record<string, unknown> });
+    const run = store.runs.get(runIdFor(plan))!;
+    store.runs.set(runIdFor(plan), { ...run, plannedCreateKeys: [plan.rows[0]!.documentKey] });
+
+    const result = await rollbackPeriodFeeLedgerSnapshot(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+
+    expect(result.deletedRows).toBe(1);
+    expect(store.ledger.has(plan.rows[0]!.documentKey)).toBe(false);
+    expect(store.ledger.has(foreignRow.documentKey)).toBe(true);
   });
 
   it('refuses rollback of a superseded history-only run and deletes zero shared ledger rows', async () => {
@@ -285,8 +388,74 @@ describe('period fee ledger apply', () => {
 
     expect(result).toMatchObject({ status: 'ROLLED_BACK', deletedRows: 0 });
     expect(store.ledger.size).toBe(1);
-    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'INACTIVE', active: false });
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ROLLED_BACK', active: false });
     expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'ACTIVE', active: true });
+  });
+
+  it('resumes rollback after delete interruption and restores the previous ACTIVE run', async () => {
+    const first = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, first, { expectedDigest: first.planDigest, writeApproved: true });
+    const second = makePlan({
+      p1: product(),
+      p2: product({ vehicle_uid: 'TEST-FAKE-ASSET-002', car_number: 'TEST-FAKE-PLATE-0002' }),
+    });
+    await applyPeriodFeeLedgerPlan(store, second, { expectedDigest: second.planDigest, writeApproved: true });
+    store.failDeleteAfter = 1;
+
+    await expect(rollbackPeriodFeeLedgerSnapshot(store, second, { expectedDigest: second.planDigest, writeApproved: true }))
+      .rejects.toThrow('TEST_DELETE_INTERRUPTED');
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ROLLING_BACK', active: false, previousActiveRunId: runIdFor(first) });
+
+    store.failDeleteAfter = Number.POSITIVE_INFINITY;
+    const result = await rollbackPeriodFeeLedgerSnapshot(store, second, { expectedDigest: second.planDigest, writeApproved: true });
+
+    expect(result).toMatchObject({ status: 'ROLLED_BACK', deletedRows: 0 });
+    expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'ACTIVE', active: true });
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ROLLED_BACK', active: false });
+    expect(store.ledger.has(second.rows[1]!.documentKey)).toBe(false);
+    expect(await store.getActiveSnapshotRun(first.snapshotId)).toMatchObject({ runId: runIdFor(first) });
+  });
+
+  it('resumes rollback after restore interruption and keeps an ACTIVE run available', async () => {
+    const first = makePlan();
+    const store = new MemoryPeriodFeeStore();
+    await applyPeriodFeeLedgerPlan(store, first, { expectedDigest: first.planDigest, writeApproved: true });
+    const history: ProductChangeHistoryRow[] = [{
+      schemaVersion: 'product-change-history/v1',
+      productKey: 'p1',
+      kind: 'STATUS',
+      fieldPath: 'status',
+      before: 'TEST-FAKE-BEFORE',
+      after: 'TEST-FAKE-AFTER',
+      changedAtKst: '2026-10-12',
+      snapshotId: first.snapshotId,
+      sourceObservationRef: null,
+    }];
+    const secondBase = { ...first, history };
+    const second = {
+      ...secondBase,
+      planDigest: stableDigest({
+        snapshotId: secondBase.snapshotId,
+        rows: secondBase.rows,
+        history: secondBase.history,
+        baselines: secondBase.baselines,
+      }),
+    };
+    await applyPeriodFeeLedgerPlan(store, second, { expectedDigest: second.planDigest, writeApproved: true });
+    store.failRestore = true;
+
+    await expect(rollbackPeriodFeeLedgerSnapshot(store, second, { expectedDigest: second.planDigest, writeApproved: true }))
+      .rejects.toThrow('TEST_RESTORE_INTERRUPTED');
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ROLLING_BACK', active: false, previousActiveRunId: runIdFor(first) });
+
+    store.failRestore = false;
+    const result = await rollbackPeriodFeeLedgerSnapshot(store, second, { expectedDigest: second.planDigest, writeApproved: true });
+
+    expect(result).toMatchObject({ status: 'ROLLED_BACK', deletedRows: 0 });
+    expect(store.runs.get(runIdFor(first))).toMatchObject({ status: 'ACTIVE', active: true });
+    expect(store.runs.get(runIdFor(second))).toMatchObject({ status: 'ROLLED_BACK', active: false });
+    expect(await store.getActiveSnapshotRun(first.snapshotId)).toMatchObject({ runId: runIdFor(first) });
   });
 
   it('keeps the existing ACTIVE run when a same-day digest conflict aborts', async () => {

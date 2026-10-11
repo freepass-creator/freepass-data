@@ -135,6 +135,7 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
         snapshotId: runId,
         planDigest: '',
         previousActiveRunId: null,
+        plannedCreateKeys: [],
         createdDocumentKeys: [],
         preparedAt: new Date().toISOString(),
         rowCount: 0,

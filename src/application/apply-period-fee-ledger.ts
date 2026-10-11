@@ -5,7 +5,7 @@ import type {
   ProductChangeHistoryBaselineRow,
   ProductChangeHistoryRow,
 } from '../domain/period-fee-ledger.js';
-import type { PeriodFeeLedgerApplyStore } from '../ports/period-fee-ledger-store.js';
+import type { ExistingPeriodFeeDocument, PeriodFeeLedgerApplyStore } from '../ports/period-fee-ledger-store.js';
 
 export type PeriodFeeLedgerApplyOptions = {
   expectedDigest: string;
@@ -76,6 +76,26 @@ const readyLedgerTargets = (plan: PeriodFeeLedgerPlan, keys?: readonly string[])
     .map(row => ({ documentKey: row.documentKey, digest: documentDigest(row) }));
 };
 
+const unique = (values: readonly string[]) => [...new Set(values)];
+
+async function ownedLedgerTargets(
+  store: PeriodFeeLedgerApplyStore,
+  plan: PeriodFeeLedgerPlan,
+  keys: readonly string[],
+) {
+  const targets: Array<{ documentKey: string; digest: string }> = [];
+  const seen = new Set<string>();
+  for (const target of readyLedgerTargets(plan, keys)) {
+    if (seen.has(target.documentKey)) continue;
+    const existing = await store.getLedgerDocument(target.documentKey);
+    if (existing?.digest === target.digest) {
+      targets.push(target);
+      seen.add(target.documentKey);
+    }
+  }
+  return targets;
+}
+
 const historyDocumentKey = (row: ProductChangeHistoryRow | ProductChangeHistoryBaselineRow) =>
   [row.productKey, row.snapshotId, row.fieldPath, stableDigest(row).slice(0, 24)]
     .map(part => String(part).replace(/[\/#?[\]*]/g, '_').slice(0, 180))
@@ -142,7 +162,27 @@ export async function applyPeriodFeeLedgerPlan(
   const preparedAt = nowIso(options.now);
   const runId = snapshotRunId(plan.snapshotId, plan.planDigest);
   const existingRun = await store.getSnapshotRun(runId);
+  if (existingRun && existingRun.planDigest !== plan.planDigest) {
+    throw new Error('PERIOD_FEE_RUN_DIGEST_CONFLICT');
+  }
+  if (existingRun?.status === 'ACTIVE' && existingRun.active) {
+    for (const row of readyRows) {
+      const existing = await store.getLedgerDocument(row.documentKey);
+      if (!existing || existing.digest !== documentDigest(row)) {
+        throw new Error('PERIOD_FEE_LEDGER_DOCUMENT_DIGEST_CONFLICT');
+      }
+    }
+    const readback = assertReadback(plan, await store.readLedgerRows(plan.snapshotId), options.sampleSize ?? 50);
+    if (existingRun.readbackDigest && existingRun.readbackDigest !== readback.digest) {
+      throw new Error('PERIOD_FEE_ACTIVE_READBACK_DIGEST_MISMATCH');
+    }
+    counts.ledgerSkippedSameDigest = readyRows.length;
+    return { status: 'APPLIED', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: true, counts };
+  }
   const previousActive = await store.getActiveSnapshotRun(plan.snapshotId);
+  const previousActiveRunId = previousActive?.runId === runId
+    ? existingRun?.previousActiveRunId ?? null
+    : previousActive?.runId ?? existingRun?.previousActiveRunId ?? null;
   if (previousActive && previousActive.planDigest !== plan.planDigest) {
     for (const row of readyRows) {
       const existing = await store.getLedgerDocument(row.documentKey);
@@ -151,6 +191,16 @@ export async function applyPeriodFeeLedgerPlan(
       }
     }
   }
+  const existingLedgerDocuments = new Map<string, ExistingPeriodFeeDocument | null>();
+  for (const row of readyRows) {
+    existingLedgerDocuments.set(row.documentKey, await store.getLedgerDocument(row.documentKey));
+  }
+  const plannedCreateKeys = unique([
+    ...(existingRun?.plannedCreateKeys ?? []),
+    ...readyRows
+      .filter(row => !existingLedgerDocuments.get(row.documentKey))
+      .map(row => row.documentKey),
+  ]);
   await store.setSnapshotRun(runId, {
     schemaVersion: 'period-fee-snapshot-run/v1',
     runId,
@@ -158,7 +208,8 @@ export async function applyPeriodFeeLedgerPlan(
     planDigest: plan.planDigest,
     status: 'PREPARED',
     active: false,
-    previousActiveRunId: previousActive?.runId ?? null,
+    previousActiveRunId,
+    plannedCreateKeys,
     createdDocumentKeys: existingRun?.createdDocumentKeys ?? [],
     preparedAt,
     activatedAt: null,
@@ -173,7 +224,9 @@ export async function applyPeriodFeeLedgerPlan(
   const createdDocumentKeys: string[] = [];
   for (const row of readyRows) {
     const digest = documentDigest(row);
-    const existing = await store.getLedgerDocument(row.documentKey);
+    const existing = existingLedgerDocuments.has(row.documentKey)
+      ? existingLedgerDocuments.get(row.documentKey)
+      : await store.getLedgerDocument(row.documentKey);
     if (existing) {
       if (existing.digest !== digest) throw new Error('PERIOD_FEE_LEDGER_DOCUMENT_DIGEST_CONFLICT');
       counts.ledgerSkippedSameDigest += 1;
@@ -181,6 +234,10 @@ export async function applyPeriodFeeLedgerPlan(
     }
     await store.createLedgerDocument(row.documentKey, row, digest);
     createdDocumentKeys.push(row.documentKey);
+    await store.setSnapshotRun(runId, {
+      ...(await store.getSnapshotRun(runId))!,
+      createdDocumentKeys: unique([...(existingRun?.createdDocumentKeys ?? []), ...createdDocumentKeys]),
+    });
     counts.ledgerCreated += 1;
   }
 
@@ -197,8 +254,9 @@ export async function applyPeriodFeeLedgerPlan(
     planDigest: plan.planDigest,
     status: 'ACTIVE',
     active: true,
-    previousActiveRunId: previousActive?.runId ?? null,
-    createdDocumentKeys: [...new Set([...(existingRun?.createdDocumentKeys ?? []), ...createdDocumentKeys])],
+    previousActiveRunId,
+    plannedCreateKeys,
+    createdDocumentKeys: unique([...(existingRun?.createdDocumentKeys ?? []), ...createdDocumentKeys]),
     preparedAt,
     activatedAt: nowIso(options.now),
     rowCount: plan.rows.length,
@@ -226,15 +284,16 @@ export async function rollbackPeriodFeeLedgerSnapshot(
   if (!run || run.planDigest !== plan.planDigest) throw new Error('PERIOD_FEE_ROLLBACK_RUN_DIGEST_MISMATCH');
   if (run.status === 'SUPERSEDED') throw new Error('ROLLBACK_SUPERSEDED_RUN');
   const activeBefore = await store.getActiveSnapshotRun(plan.snapshotId);
-  const targets = readyLedgerTargets(plan, run.createdDocumentKeys);
+  const ownedKeys = unique([...(run.createdDocumentKeys ?? []), ...(run.plannedCreateKeys ?? [])]);
+  const targets = await ownedLedgerTargets(store, plan, ownedKeys);
   if (activeBefore && activeBefore.runId !== runId) {
     for (const target of targets) {
       if (activeBefore.createdDocumentKeys.includes(target.documentKey)) throw new Error('PERIOD_FEE_ROLLBACK_ACTIVE_DOCUMENT_REFERENCE');
     }
   }
-  await store.markSnapshotRunInactive(runId);
+  await store.setSnapshotRun(runId, { ...run, status: 'ROLLING_BACK', active: false });
   const deletedRows = await store.deleteLedgerRowsByDigest(targets);
-  if (run.status === 'ACTIVE') {
+  if (run.status === 'ACTIVE' || run.status === 'ROLLING_BACK') {
     const restore = run.previousActiveRunId
       ? await store.getSnapshotRun(run.previousActiveRunId)
       : await store.getLatestSupersededSnapshotRun(plan.snapshotId, runId);
@@ -246,5 +305,8 @@ export async function rollbackPeriodFeeLedgerSnapshot(
       }
     }
   }
+  const latest = await store.getSnapshotRun(runId);
+  await store.markSnapshotRunInactive(runId);
+  await store.setSnapshotRun(runId, { ...(latest ?? run), status: 'ROLLED_BACK', active: false, activatedAt: null });
   return { status: 'ROLLED_BACK', snapshotId: plan.snapshotId, planDigest: plan.planDigest, writesEnabled: true, inactiveRuns: 1, deletedRows };
 }
