@@ -14,7 +14,19 @@ export type VehicleIdentityInputs = {
   data: Array<{ plate: string; identity: VehicleIdentity }>; dataReadTime: string; dataDigest: string;
 };
 export function verifiedMasterRecords(master: VehicleMasterSnapshot, now = Date.now()): VehicleMasterRecord[] {
-  return vehicleMasterSnapshotRows(master, now).records;
+  const records: VehicleMasterRecord[] = vehicleMasterSnapshotRows(master, now).records;
+  const trims = new Map(master.trims.map(row => [row.id, row.data]));
+  const numeric = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value :
+    typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : null;
+  const drive = (value: unknown) => typeof value === 'string' ?
+    ['FWD', 'RWD'].includes(value) ? '2WD' : ['4MATIC', '콰트로', 'xDrive'].includes(value) ? 'AWD' : value : null;
+  return records.map(record => {
+    const trim = trims.get(record.trimId)!;
+    return { ...record, specs: { fuel: typeof trim.fuel === 'string' ? trim.fuel : null,
+      displacementCc: numeric(trim.engine_cc), drive: drive(trim.drivetrain), seats: numeric(trim.seats) },
+      modelYearStart: numeric(trim.model_year_start),
+      modelYearEnd: trim.model_year_end === '현재' ? 2100 : numeric(trim.model_year_end) };
+  });
 }
 /** Check the immutable pair itself; matching display names or a reference_vm_ hash is not proof. */
 export function verifiedVehicleMasterReference(master: VehicleMasterSnapshot,

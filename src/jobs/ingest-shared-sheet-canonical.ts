@@ -2,7 +2,7 @@ import { readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { buildSharedSheetBatch, sharedSheetRegisteredChannels, sharedSheetUnavailableChannels, SHARED_SHEET_SPEC_DIGEST, type SharedSheetCapture } from '../adapters/shared-sheet-source.js';
-import { sharedSheetNormalizer, SHARED_SHEET_RULE_VERSION, sharedSheetStatusPolicy, type SharedSheetIdentityResolver } from '../adapters/normalize-shared-sheet.js';
+import { sharedSheetNormalizer, SHARED_SHEET_RULE_VERSION, SHARED_SHEET_COLOR_RULE_VERSION, sharedSheetStatusPolicy, type SharedSheetIdentityResolver } from '../adapters/normalize-shared-sheet.js';
 import { assertVehicleIdentityInputs, verifiedMasterRecords, type VehicleIdentityInputs, type VehicleMasterSnapshot } from '../adapters/vehicle-identity-inputs.js';
 import { chooseVehicleIdentity, indexVehicleMaster, VEHICLE_IDENTITY_RULE_VERSION } from '../domain/vehicle-identity-resolution.js';
 import { ingestRawSourceBatch, prepareRawSourceBatch } from '../application/ingest-raw-source.js';
@@ -85,7 +85,7 @@ export function identityResolver(inputs: VehicleIdentityInputs | undefined): Sha
   const master = indexVehicleMaster(verifiedMasterRecords(inputs.master));
   const data = new Map(inputs.data.map(x => [x.plate, x.identity]));
   return row => chooseVehicleIdentity(master, { sheet: row.sheet, data: data.get(row.plate) ?? null, raw: row.raw,
-    firstRegistration: row.firstRegistration, modelYear: row.modelYear });
+    firstRegistration: row.firstRegistration, modelYear: row.modelYear, ...(row.specs ? { specs: row.specs } : {}) });
 }
 function prepared(capture: SharedSheetCapture, identityInputs?: VehicleIdentityInputs, includeSupplierColors = false) {
   const batch = buildSharedSheetBatch(capture);
@@ -130,7 +130,7 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
   const ownership = await store.getCatalogWriterOwnership();
   const sourceEligible = currentHead?.runId === p.runId || decideSourceHead(p.batch.coverage, p.batch.observedAt, currentHead?.observedAt).acceptedAsHead;
   const plan: SharedSheetPlan = { schema: 'shared-sheet-canonical-plan/v1', target, capture: structuredClone(capture),
-    ruleVersion: includeSupplierColors ? 'shared-sheet-normalizer/6' : SHARED_SHEET_RULE_VERSION, specDigest: SHARED_SHEET_SPEC_DIGEST,
+    ruleVersion: includeSupplierColors ? SHARED_SHEET_COLOR_RULE_VERSION : SHARED_SHEET_RULE_VERSION, specDigest: SHARED_SHEET_SPEC_DIGEST,
     policyDigest: stableDigest(KAKAO_COMMISSION_POLICY), ownershipDigest: stableDigest(ownership),
     previousHeadDigest: stableDigest(currentHead), runId: p.runId, entries: [],
     ...(includeSupplierColors ? { includeSupplierColors: true as const } : {}),
@@ -260,7 +260,7 @@ export function assertSharedSheetPlan(plan: SharedSheetPlan | undefined, digest:
   if (!plan || !digest || plan.schema !== 'shared-sheet-canonical-plan/v1' || plan.target !== target ||
       (plan.includeSupplierColors !== undefined && plan.includeSupplierColors !== true) ||
       (plan.operationalRefresh !== undefined && plan.operationalRefresh !== true) ||
-      plan.ruleVersion !== (plan.includeSupplierColors ? 'shared-sheet-normalizer/6' : SHARED_SHEET_RULE_VERSION) || plan.specDigest !== SHARED_SHEET_SPEC_DIGEST ||
+      plan.ruleVersion !== (plan.includeSupplierColors ? SHARED_SHEET_COLOR_RULE_VERSION : SHARED_SHEET_RULE_VERSION) || plan.specDigest !== SHARED_SHEET_SPEC_DIGEST ||
       plan.policyDigest !== stableDigest(KAKAO_COMMISSION_POLICY) || digest !== stableDigest(plan) || !Array.isArray(plan.entries)) {
     throw new Error('SHARED_SHEET_PLAN_REQUIRED_OR_CHANGED');
   }
