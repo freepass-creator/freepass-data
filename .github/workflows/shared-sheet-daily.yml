@@ -1,8 +1,9 @@
-name: Shared sheet daily snapshot
+name: Shared sheet 15-minute change refresh
 # 실행 제목에 모드를 남긴다 — 매시 감시(daily-writer-guard)가 적용 실행을 이 제목으로 알아본다.
 run-name: shared-sheet-daily ${{ github.event_name == 'schedule' && 'apply' || inputs.mode }}
 
-# 공통 시트 → FreePass Data 하루 한 번 박제(대표 «두 갈래», 신원 승인 10-04 ①안).
+# 공통 시트 → FreePass Data 15분 변경분 갱신(대표 2026-10-11).
+# 파일명·실행 제목·WIF 신원·감사 계약은 기존 것을 유지한다.
 # 이 파일만 매일 박제 계정(github-data-inventory-writer)을 빌릴 수 있다: WIF 공급자 조건이 이 파일의 workflow_ref·main·
 # environment 로 묶여 있고, 변수 이름도 refresh(매시 배달)와 따로 쓴다(FREEPASS_DATA_DAILY_*).
 on:
@@ -13,17 +14,12 @@ on:
         options: [dry-run, apply]
         default: dry-run
   schedule:
-    # 매일 03:40 KST. 매시 배달(data-owned-refresh)과 같은 동시성 그룹이라 겹치지 않는다.
-    # GitHub 예약은 부하 때 빠지거나 몇 시간 밀린다(10-05 첫 예약 03:40 실행이 아예 만들어지지 않음, «매시» 감사도 4~6시간 간격).
-    # 그래서 04:40·05:40·06:40 KST 에 다시 시도한다 — 관문이 «오늘(KST) 이미 적용 성공»이면 건너뛴다(하루 한 번 그대로).
-    - cron: '40 18 * * *'
-    - cron: '40 19 * * *'
-    - cron: '40 20 * * *'
-    - cron: '40 21 * * *'
+    # 15분 간격 요청. GitHub 예약 지연은 가능하므로 실제 수집시각/저장시각으로 신선도를 검증한다.
+    - cron: '*/15 * * * *'
 
-# 예약 4회·수동 실행이 동시에 쓰지 못하게 같은 그룹에서 한 번에 하나만 돈다. cancel-in-progress: false 라 «돌고 있는» 실행은 취소되지 않지만,
-# 그룹당 «대기» 는 하나뿐이라 뒤늦게 온 실행이 앞선 대기 실행을 밀어내(취소) 대신 들어갈 수 있다. 그래도 하루 한 번은 유지된다 —
-# 대기를 거쳐 돌게 된 실행의 관문이 «오늘 성공·진행 중 쓰기» 를 다시 세기 때문이다. audit-refresh 가 기다리는 동안에도 그룹을 잡는다.
+# 15분 예약·수동 실행·기존 배달은 같은 그룹에서 한 번에 하나만 돈다. 진행 중 실행은 취소하지 않는다.
+# 그룹당 대기는 하나뿐이라 이후 실행이 앞선 대기 실행을 대체할 수 있다. 지연/누락은 실제 관측시각으로 판정한다.
+# audit-refresh 대기 중에도 그룹을 유지하며, 하루 한 번 제한은 더 이상 적용하지 않는다.
 # 일부만 쓰고 실패한 회차를 다음 회차가 다시 써도 중복되지 않는 근거: 차량별 쓰기는 영수증 멱등키(src/application/canonicalize-catalog-candidate.ts:412-416,
 # src/application/reviewed-source-change.ts:1016-1020)와 기대 revision(reviewed-source-change.ts:744-759) 으로 한 건씩 확인되고, 이미 쓴 건 영수증이 있어 noChange 로 센다
 # (src/jobs/ingest-shared-sheet-canonical.ts:228-236). 원본이 바뀌었으면 계획이 SHARED_SHEET_PLAN_STALE 로 멈춘다.
@@ -137,27 +133,8 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event_name }}" = 'schedule' ]; then
             if [ "$DAILY" != 'on' ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "daily schedule switch is off — skipped"; exit 0; fi
-            # 하루 한 번: 날짜는 «실행 생성 시각의 KST 날짜» 하나로 센다. 이 실행과 같은 날(KST) 생성된 apply 실행 중 «쓰기 단계
-            # (Apply to FreePass Data)에 들어간 것»이 있으면 다시 쓰지 않는다.
-            # - 쓰기 단계는 성공·진행 중만 센다. 실패·취소·시간 초과는 «오늘 박제 완료»가 아니다(10-10 되읽기 불일치로 실패했는데 뒤 회차가 «이미 썼음»으로 건너뛰어 성공처럼 보였다).
-            #   재시도가 안전한 근거: 각 차량 쓰기는 영수증 멱등키 + 기대 revision 으로 한 건씩 확인되고(이미 쓴 건 noChange), 계획은 매번 새로 세워 바뀌었으면 SHARED_SHEET_PLAN_STALE 로 멈춘다.
-            # - 캡처·계획·관문에서 멈춘 실행(쓰기 단계 skipped·미시작)은 세지 않는다 — 읽기 실패로 하루를 놓치지 않게.
-            # - 같은 실행의 이전 시도도 센다(filter=all). 지금 시도의 쓰기 단계는 아직 시작 전이라 세지 않는다.
-            # - 그 날 생성 범위를 페이지 끝까지 읽는다. 조회가 실패하면 «이력 없음»으로 보지 않고 멈춘다.
-            # - 수동 apply(FREEPASS_DATA_DAILY_MANUAL_APPLY=on)는 상황실이 통제하는 예외라 이 검사를 하지 않는다.
-            # - 이 단계를 나누기 전 판의 한 단계(«Capture, plan and (apply)»)도 쓰기 단계로 센다(캡처·쓰기를 가릴 수 없어 보수적으로).
-            # 기준 날짜 = 이 실행(재실행이어도 처음 생성된 실행)의 생성 시각을 KST 로 바꾼 날짜. 그 날 0시~다음 날 0시에 생성된 실행만 본다.
-            created="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq '.created_at')" || { echo "DAILY_ONCE_CHECK_FAILED: this run"; exit 1; }
-            day="$(date -u -d "@$(( $(date -u -d "$created" +%s) + 32400 ))" +%F)"  # KST = UTC+9, 서머타임 없음
-            since_s=$(( $(date -u -d "$day 00:00" +%s) - 32400 )); since="$(date -u -d "@$since_s" +%Y-%m-%dT%H:%M:%SZ)"
-            until="$(date -u -d "@$(( since_s + 86399 ))" +%Y-%m-%dT%H:%M:%SZ)"  # 범위 양 끝 포함이라 다음 날 0시는 빼고
-            ids="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/shared-sheet-daily.yml/runs?branch=main&created=$since..$until&per_page=100" --jq '.workflow_runs[] | select(.display_title | endswith(" apply")) | .id')"               || { echo "DAILY_ONCE_CHECK_FAILED: run list"; exit 1; }
-            applied=0
-            for id in $ids; do
-              ok="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?filter=all&per_page=100" --jq '[.jobs[].steps[] | select(((.name | startswith("Apply to FreePass Data")) or (.name | startswith("Capture, plan and (apply)"))) and .conclusion != "skipped" and .conclusion != "failure" and .conclusion != "cancelled" and .conclusion != "timed_out" and .started_at != null)] | length' | awk '{s+=$1} END {print s+0}')"                 || { echo "DAILY_ONCE_CHECK_FAILED: jobs of $id"; exit 1; }
-              applied=$(( applied + ok ))
-            done
-            if [ "$applied" -gt 0 ]; then echo "run=false" >> "$GITHUB_OUTPUT"; echo "already wrote on $day (KST) — retry schedule skipped"; exit 0; fi
+            # 하루 한 번 차단은 폐기. 동시 실행은 기존 concurrency 그룹으로 막고,
+            # 원문 변경/revision/멱등성/변경없음 판정은 기존 ingest writer가 소유한다.
             # 최근 매시 감사 실행(진행 중 포함 5개)의 daily-writer-guard job 중 «가장 늦게 끝난 것»이 기준 —
             # 진행 중인 실행에서 이미 실패한 감시가 있으면 그것이 이긴다.
             line="$(bash gate-src/scripts/ci/latest-audit-guard.sh)" || { echo "DAILY_WRITER_GUARD_NOT_OK: audit list unreadable — scheduled snapshot not run"; exit 1; }
@@ -242,7 +219,7 @@ jobs:
           node --import tsx src/jobs/capture-shared-sheet.ts --spreadsheet "$SHARED_SHEET_ID" --erp5-capture "$ERP5_CAPTURE" --supplement "$T/supplement.json" --out "$T/capture.json"
           node --import tsx src/jobs/ingest-shared-sheet-canonical.ts --firestore --capture "$T/capture.json" --plan-out "$T/plan.json" > "$T/report.json"
           node -e "const r=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(r.mode!=='DRY_RUN'||r.writes!==0)process.exit(1);const {suppliers,...s}=r;console.log(JSON.stringify(s,null,2))" "$T/report.json"
-      # 쓰기는 따로 한 단계 — 하루 한 번 관문이 «쓰기 단계에 들어간 실행»만 센다(캡처·계획에서 멈춘 실행은 그날 재시도를 막지 않는다).
+      # 쓰기는 별도 단계. 감사는 이 단계의 실제 실행 여부를 판정하며 캡처/계획 성공을 쓰기 성공으로 세지 않는다.
       - name: Apply to FreePass Data (writes) — counts only in the public log
         if: steps.gate.outputs.run == 'true' && env.APPLY == 'true'
         run: |
