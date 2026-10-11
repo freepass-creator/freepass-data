@@ -636,3 +636,233 @@ it('collector finishes successfully and reports lock warnings without changing i
     vi.doUnmock('../src/jobs/data-access-runtime.js');
   }
 });
+
+function concurrentContentReader() {
+  let clock = Date.now();
+  const { original, row, review, bytes } = contentReviewedAlbum();
+  let product: Record<string, unknown> = { ...original, ...planIancarPhotoReviewPatch(original, row, review) };
+  const metadata = { count: 2, photoIds: ['opaque-b', 'opaque-a'], upstreamPhotoIds: ['opaque-a', 'opaque-b'],
+    upstreamRepresentatives: [false, true], servingSourceOrdinals: [1, 0] };
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const sourceRead = vi.fn(async (_product: Record<string, unknown>, index?: number) => {
+    if (index !== undefined) await gate;
+    return { ...metadata, bytes: index === undefined ? null : bytes, contentType: index === undefined ? 'application/json' : 'image/jpeg' };
+  });
+  const productRead = vi.fn(async () => product);
+  const reader = createVehiclePhotoReader(productRead, { eligible: value => value?.listable === true,
+    connection: value => String(value.iancar_one_vehicle_id), read: sourceRead }, undefined, () => clock);
+  return { row, review, bytes, metadata, reader, sourceRead, productRead, release, advance: (ms: number) => { clock += ms; }, setProduct: (value: Record<string, unknown>) => { product = value; }, getProduct: () => product };
+}
+
+it('concurrent reads share only the ongoing exact approved image and keep independent revalidation', async () => {
+  const fixture = concurrentContentReader();
+  const calls = [fixture.reader('erp5-public-media', fixture.row.productId, 0), fixture.reader('erp5-public-media', fixture.row.productId, 0)];
+  await vi.waitFor(() => expect(fixture.sourceRead).toHaveBeenCalledTimes(1));
+  fixture.release();
+  const [first, second] = await Promise.all(calls);
+  expect(fixture.productRead).toHaveBeenCalledTimes(4);
+  first!.bytes![3] = 99;
+  expect(second!.bytes).toEqual(fixture.bytes);
+  expect(await first!.revalidate()).toBe(true);
+  expect(await second!.revalidate()).toBe(true);
+  expect(fixture.sourceRead.mock.calls.map(call => call[1])).toEqual([0, undefined, undefined]);
+  await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(fixture.sourceRead.mock.calls.map(call => call[1])).toEqual([0, undefined, undefined]);
+});
+
+it('failed shared reads are removed so the next request performs a fresh read', async () => {
+  const fixture = concurrentContentReader();
+  fixture.sourceRead.mockImplementationOnce(async () => { await new Promise<void>(resolve => setTimeout(resolve, 5)); throw new Error('IANCAR_PHOTO_NOT_FOUND'); });
+  const calls = [fixture.reader('erp5-public-media', fixture.row.productId, 0), fixture.reader('erp5-public-media', fixture.row.productId, 0)];
+  const failed = await Promise.allSettled(calls);
+  expect(failed.every(result => result.status === 'rejected')).toBe(true);
+  expect(fixture.sourceRead).toHaveBeenCalledTimes(1);
+  fixture.release();
+  expect((await fixture.reader('erp5-public-media', fixture.row.productId, 0)).bytes).toEqual(fixture.bytes);
+  expect(fixture.sourceRead).toHaveBeenCalledTimes(2);
+});
+
+it('a changed approval proof does not join an older ongoing request', async () => {
+  const fixture = concurrentContentReader();
+  const first = fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  await vi.waitFor(() => expect(fixture.sourceRead).toHaveBeenCalledTimes(1));
+  const changed = structuredClone(fixture.getProduct());
+  (changed.photo_original_refs as IancarOnePhotoReview['refs'])[0]!.vehiclePhotoVerifiedBy = 'another-actual-reviewer';
+  fixture.setProduct(changed);
+  const second = fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  await vi.waitFor(() => expect(fixture.sourceRead).toHaveBeenCalledTimes(2));
+  fixture.release();
+  await expect(first).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+  expect((await second).bytes).toEqual(fixture.bytes);
+});
+
+it('withdrawal while a shared image is pending rejects every waiting request', async () => {
+  const fixture = concurrentContentReader();
+  const calls = [fixture.reader('erp5-public-media', fixture.row.productId, 0), fixture.reader('erp5-public-media', fixture.row.productId, 0)];
+  await vi.waitFor(() => expect(fixture.sourceRead).toHaveBeenCalledTimes(1));
+  fixture.setProduct({ ...fixture.getProduct(), listable: false });
+  fixture.release();
+  const results = await Promise.allSettled(calls);
+  expect(results.every(result => result.status === 'rejected')).toBe(true);
+});
+
+it('consumer and product scopes never share ongoing approved bytes', async () => {
+  const fixture = concurrentContentReader();
+  const calls = [fixture.reader('erp5-public-media', fixture.row.productId, 0), fixture.reader('erp-com', fixture.row.productId, 0)];
+  await vi.waitFor(() => expect(fixture.sourceRead).toHaveBeenCalledTimes(2));
+  fixture.release();
+  await Promise.all(calls);
+  await expect(fixture.reader('unsupported-consumer', fixture.row.productId, 0)).rejects.toThrow('CONSUMER_FORBIDDEN');
+  await expect(fixture.reader('erp5-public-media', 'another-product', 0)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+});
+it('verified content reuse requires successful final membership and never extends the absolute TTL', async () => {
+  const fixture = concurrentContentReader(); fixture.release();
+  await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(fixture.sourceRead).toHaveBeenCalledTimes(1);
+  const cold = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(fixture.sourceRead).toHaveBeenCalledTimes(2); // no final audit/revalidation, no published cache
+  expect(await cold.revalidate()).toBe(true);
+  fixture.advance(29_000);
+  const warm = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(fixture.sourceRead.mock.calls.filter(call => call[1] !== undefined)).toHaveLength(2);
+  expect(await warm.revalidate()).toBe(true);
+  fixture.advance(1_000);
+  await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(fixture.sourceRead.mock.calls.filter(call => call[1] !== undefined)).toHaveLength(3);
+});
+
+it('a failed final membership check evicts verified bytes and returns no success', async () => {
+  const fixture = concurrentContentReader(); fixture.release();
+  const cold = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(await cold.revalidate()).toBe(true);
+  const warm = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  fixture.sourceRead.mockResolvedValueOnce({ ...fixture.metadata, count: 1, bytes: null, contentType: 'application/json' });
+  expect(await warm.revalidate()).toBe(false);
+  await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(fixture.sourceRead.mock.calls.filter(call => call[1] !== undefined)).toHaveLength(2);
+});
+
+it.each(['approval', 'binding', 'withdrawal', 'unknown-basis'])('warm bytes cannot bypass changed %s', async condition => {
+  const fixture = concurrentContentReader(); fixture.release();
+  const first = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(await first.revalidate()).toBe(true);
+  const changed = structuredClone(fixture.getProduct());
+  const refs = changed.photo_original_refs as IancarOnePhotoReview['refs'];
+  if (condition === 'approval') refs[0]!.vehiclePhotoVerifiedBy = '';
+  if (condition === 'binding') changed.iancar_one_vehicle_id = 'changed-vehicle';
+  if (condition === 'withdrawal') changed.listable = false;
+  if (condition === 'unknown-basis') refs[0]!.reviewBasis = 'UNKNOWN' as any;
+  fixture.setProduct(changed);
+  await expect(fixture.reader('erp5-public-media', fixture.row.productId, 0)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+});
+
+it('an audit delay cannot extend the byte validation TTL or publish an expired entry', async () => {
+  const fixture = concurrentContentReader(); fixture.release();
+  const first = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  fixture.advance(30_000);
+  expect(await first.revalidate()).toBe(true);
+  await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(fixture.sourceRead.mock.calls.filter(call => call[1] !== undefined)).toHaveLength(2);
+});
+it.each(['database', 'metadata'])('a final %s failure evicts completed reviewed bytes', async failure => {
+  const fixture = concurrentContentReader(); fixture.release();
+  const first = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(await first.revalidate()).toBe(true);
+  const warm = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  if (failure === 'database') fixture.productRead.mockRejectedValueOnce(new Error('synthetic-db-error'));
+  else fixture.sourceRead.mockRejectedValueOnce(new Error('synthetic-source-error'));
+  expect(await warm.revalidate()).toBe(false);
+  await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(fixture.sourceRead.mock.calls.filter(call => call[1] !== undefined)).toHaveLength(2);
+});
+
+it('changing a valid approval proof evicts the previous proof rather than reviving it later', async () => {
+  const fixture = concurrentContentReader(); fixture.release();
+  const original = structuredClone(fixture.getProduct());
+  const first = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(await first.revalidate()).toBe(true);
+  const changed = structuredClone(original);
+  (changed.photo_original_refs as IancarOnePhotoReview['refs'])[0]!.vehiclePhotoVerifiedBy = 'changed-real-reviewer';
+  fixture.setProduct(changed);
+  const second = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(await second.revalidate()).toBe(true);
+  fixture.setProduct(original);
+  await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(fixture.sourceRead.mock.calls.filter(call => call[1] !== undefined)).toHaveLength(3);
+});
+
+it('reviewed byte cache evicts old entries at its 32MiB bound', async () => {
+  const fixture = concurrentContentReader(); fixture.release();
+  const bytes = Buffer.alloc(7 * 1024 * 1024, 1); bytes[0] = 255; bytes[1] = 216; bytes[2] = 255;
+  const product = fixture.getProduct();
+  const refs = product.photo_original_refs as IancarOnePhotoReview['refs'];
+  refs.forEach(ref => { ref.photoSha256 = createHash('sha256').update(bytes).digest('hex'); });
+  const set = iancarReviewedContentSetDigest(refs[0]!.sourceBindingDigest, refs);
+  refs.forEach(ref => { ref.photoSetDigest = set; });
+  fixture.sourceRead.mockImplementation(async (_product, index) => ({ ...fixture.metadata,
+    bytes: index === undefined ? null : bytes, contentType: index === undefined ? 'application/json' : 'image/jpeg' }));
+  for (let i = 0; i < 5; i++) {
+    const image = await fixture.reader(`whitelabel-scope-${i}`, fixture.row.productId, 0);
+    expect(await image.revalidate()).toBe(true);
+  }
+  await fixture.reader('whitelabel-scope-0', fixture.row.productId, 0);
+  expect(fixture.sourceRead.mock.calls.filter(call => call[1] !== undefined)).toHaveLength(6);
+});
+
+it('reviewed byte cache evicts old entries at its 64-entry bound', async () => {
+  const fixture = concurrentContentReader(); fixture.release();
+  for (let i = 0; i < 65; i++) {
+    const image = await fixture.reader(`whitelabel-scope-${i}`, fixture.row.productId, 0);
+    expect(await image.revalidate()).toBe(true);
+  }
+  await fixture.reader('whitelabel-scope-0', fixture.row.productId, 0);
+  expect(fixture.sourceRead.mock.calls.filter(call => call[1] !== undefined)).toHaveLength(66);
+});
+it('the fixed reuse window serves previously verified frozen bytes and expiry forces a new raw validation', async () => {
+  const fixture = concurrentContentReader(); fixture.release();
+  const first = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(await first.revalidate()).toBe(true);
+  fixture.sourceRead.mockImplementation(async (_product, index) => ({ ...fixture.metadata,
+    bytes: index === undefined ? null : Buffer.from([255, 216, 255, 2]), contentType: index === undefined ? 'application/json' : 'image/jpeg' }));
+  const warm = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(warm.bytes).toEqual(fixture.bytes);
+  expect(await warm.revalidate()).toBe(true);
+  fixture.advance(30_000);
+  await expect(fixture.reader('erp5-public-media', fixture.row.productId, 0)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+});
+it('ongoing reviewed image requests remain bounded at eight and recover after completion', async () => {
+  const fixture = concurrentContentReader();
+  const calls = Array.from({ length: 8 }, (_, index) => fixture.reader(`whitelabel-scope-${index}`, fixture.row.productId, 0));
+  await vi.waitFor(() => expect(fixture.sourceRead).toHaveBeenCalledTimes(8));
+  await expect(fixture.reader('whitelabel-scope-8', fixture.row.productId, 0)).rejects.toThrow('VEHICLE_PHOTO_BUSY');
+  fixture.release();
+  await Promise.all(calls);
+  expect((await fixture.reader('whitelabel-scope-8', fixture.row.productId, 0)).bytes).toEqual(fixture.bytes);
+});
+it('a warm response expiring during its final membership request is refused', async () => {
+  const fixture = concurrentContentReader(); fixture.release();
+  const cold = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(await cold.revalidate()).toBe(true);
+  fixture.advance(29_000);
+  const warm = await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  fixture.sourceRead.mockImplementationOnce(async () => {
+    fixture.advance(1_000);
+    return { ...fixture.metadata, bytes: null, contentType: 'application/json' };
+  });
+  expect(await warm.revalidate()).toBe(false);
+  await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(fixture.sourceRead.mock.calls.filter(call => call[1] !== undefined)).toHaveLength(2);
+});
+it('a shared-flight follower cannot reuse validated bytes beyond the fixed window', async () => {
+  const fixture = concurrentContentReader();
+  const calls = [fixture.reader('erp5-public-media', fixture.row.productId, 0), fixture.reader('erp5-public-media', fixture.row.productId, 0)];
+  await vi.waitFor(() => expect(fixture.sourceRead).toHaveBeenCalledTimes(1));
+  fixture.release();
+  const [initiator, follower] = await Promise.all(calls);
+  fixture.advance(30_000);
+  expect(await initiator!.revalidate()).toBe(true); // unchanged existing cold-request semantics
+  expect(await follower!.revalidate()).toBe(false);
+  await fixture.reader('erp5-public-media', fixture.row.productId, 0);
+  expect(fixture.sourceRead.mock.calls.filter(call => call[1] !== undefined)).toHaveLength(2);
+});
