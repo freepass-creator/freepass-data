@@ -16,8 +16,21 @@ export type VehicleMasterReference = {
 export type IdentityChoice =
   | { pick: 'DATA' | 'SHEET'; identity: VehicleIdentity; dataIdentity: VehicleIdentity | null; notes: string[]; masterId: string; trimId: string }
   | { pick: 'HOLD'; identity: null; dataIdentity: VehicleIdentity | null; notes: string[] };
-export const VEHICLE_IDENTITY_RULE_VERSION = 'data-master-identity/3';
+export const VEHICLE_IDENTITY_RULE_VERSION = 'data-master-identity/4';
 const text = (v: string) => v.trim();
+/** Suppliers write nominal displacement (2000, 1600); the master keeps the exact value (1999, 1598). Equal after rounding the master to the nearest 100 cc. */
+const sameDisplacement = (supplied: number, master: number | null | undefined) =>
+  typeof master === 'number' && (supplied === master || Math.round(master / 100) * 100 === supplied);
+/**
+ * Model year may sit one year either side of the first-registration year: carried-over stock (MY = year - 1) any time,
+ * a next-year model (MY = year + 1) only from July on. Two or more years apart, or a next-year model registered in the
+ * first half, is a data conflict. `registration` is the parsed first-registration date (YYYY-MM[-DD]).
+ */
+export const yearRegistrationMismatch = (modelYear: number, registration: string) => {
+  const year = Number(registration.slice(0, 4)), month = Number(registration.slice(5, 7));
+  const gap = modelYear - year;
+  return gap < -1 || gap > 1 || (gap === 1 && Number.isFinite(month) && month > 0 && month < 7);
+};
 export function indexVehicleMaster(records: VehicleMasterRecord[]) {
   const match = (identity: VehicleIdentity, specs?: VehicleIdentitySpecs): VehicleMasterRecord | null => {
     const hits = records.filter(r => r.names.every((name, i) => {
@@ -29,6 +42,7 @@ export function indexVehicleMaster(records: VehicleMasterRecord[]) {
       if (value == null) return false; // supplied but invalid is not missing evidence
       if (key === 'modelYear') return typeof value === 'number' && typeof r.modelYearStart === 'number' &&
         typeof r.modelYearEnd === 'number' && value >= r.modelYearStart && value <= r.modelYearEnd;
+      if (key === 'displacementCc') return sameDisplacement(value as number, r.specs?.displacementCc);
       return r.specs?.[key as keyof VehicleIdentitySpecs] === value;
     }));
     return compatible.length === 1 ? compatible[0]! : null;
@@ -44,7 +58,7 @@ export function chooseVehicleIdentity(master: VehicleMasterIndex, input: {
   const dataIdentity = data?.names ?? null;
   // The normalizer supplies the already parsed registration date; do not infer MY from it.
   const yearMismatch = typeof input.specs?.modelYear === 'number' && /^20\d{2}-/.test(input.firstRegistration) &&
-    Number(input.firstRegistration.slice(0, 4)) !== input.specs.modelYear;
+    yearRegistrationMismatch(input.specs.modelYear, input.firstRegistration);
   const hold = (...notes: string[]): IdentityChoice => ({ pick: 'HOLD', identity: null, dataIdentity,
     notes: [...notes, ...(yearMismatch ? ['YEAR_REGISTRATION_MISMATCH'] : [])] });
   if (input.specs && Object.values(input.specs).some(value => value == null)) return hold('SOURCE_SPEC_REVIEW_REQUIRED');
