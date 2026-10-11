@@ -72,7 +72,7 @@ describe('API runtime boundary', () => {
     expect(workflow).toContain('id_token_audience: ${{ steps.readiness.outputs.url }}');
     expect(workflow).toContain('--header "X-Serverless-Authorization: Bearer $cloud_run_token"');
     expect(workflow).not.toContain('--header="X-Serverless-Authorization: Bearer $cloud_run_token"');
-    expect(workflow).toContain('Reusing existing immutable image for $GITHUB_SHA');
+    expect(workflow).toContain('Reusing existing immutable image for $EXPECTED_SOURCE_SHA');
     expect(workflow).toContain('/v1/consumers/erp-com/catalog-compat');
     expect(workflow).toContain('.schema == "freepass-data.catalog-compat/v1"');
     expect(workflow).toContain('.data.products | type == "object"');
@@ -129,7 +129,165 @@ describe('API runtime boundary', () => {
   it('the production container starts the compiled consumer entrypoint', () => {
     const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8')
       .replace(/\r\n/g, '\n');
-    expect(dockerfile).toContain('CMD ["node", "dist/src/api/consumer-server.js"]');
+    expect(dockerfile).toContain('ARG FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js');
+    expect(dockerfile).toContain('CMD ["sh", "-c", "exec node \\"$FREEPASS_DATA_ENTRYPOINT\\""]');
     expect(dockerfile).not.toContain('CMD ["node", "dist/api/consumer-server.js"]');
   });
+  it('public runtime entrypoint registers only health and public catalog routes', () => {
+    const source = readFileSync(new URL('../src/api/public-server.ts', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(source).toContain("app.get('/health'");
+    expect(source).toContain("'/v1/public/catalog/feed'");
+    expect(source).toContain("'/v1/public/catalog/quote'");
+    expect(source).toContain("readCollections: ['products', 'policy']");
+    expect(source).toContain('app.setNotFoundHandler');
+    expect(source).not.toContain('/v1/consumers/:consumerId');
+    expect(source).not.toContain('admin-workflow');
+    expect(source).not.toContain('settlement-ledger');
+    expect(source).not.toContain('FREEPASS_DATA_CONSUMERS_JSON');
+    expect(source).not.toContain('iancarOneApiConfigFromEnv');
+  });
+  it('public deployment reuses read-runtime workflow with no consumer or Iancar secrets by default', () => {
+    const publicWorkflow = readFileSync(new URL('../.github/workflows/deploy-public-runtime.yml', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const readWorkflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(readWorkflow).toContain('workflow_call:');
+    expect(readWorkflow).toContain('FREEPASS_DATA_ENTRYPOINT=$RUNTIME_ENTRYPOINT');
+    expect(readWorkflow).toContain('--service "$SERVICE_NAME"');
+    expect(readWorkflow).toContain('--service-account "$RUNTIME_SERVICE_ACCOUNT"');
+    expect(readWorkflow).toContain('--entrypoint "$RUNTIME_ENTRYPOINT"');
+    expect(readWorkflow).toContain('--use-consumer-secrets "$USE_CONSUMER_SECRETS"');
+    expect(readWorkflow).toContain('--max-instances "$MAX_INSTANCES"');
+    expect(readWorkflow).toContain('--runtime-concurrency "$RUNTIME_CONCURRENCY"');
+    expect(readWorkflow).toContain('Grant public invoker only when requested');
+    expect(readWorkflow).toContain('inputs.grant_public_invoker == true');
+    expect(readWorkflow).toContain('/v1/consumers/erp-com/catalog")" = "404"');
+    expect(publicWorkflow).toContain('uses: ./.github/workflows/deploy-read-runtime.yml');
+    expect(publicWorkflow).toContain('service_name: freepass-data-public');
+    expect(publicWorkflow).toContain('runtime_service_account: freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com');
+    expect(publicWorkflow).toContain('entrypoint: dist/src/api/public-server.js');
+    expect(publicWorkflow).toContain('use_consumer_secrets: false');
+    expect(publicWorkflow).not.toContain('FREEPASS_DATA_CONSUMERS_JSON');
+    expect(publicWorkflow).not.toContain('EANCAR_ONE_API_KEY');
+  });
+  it('rejects an unapproved public target before reaching deployment', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const section = workflow.split('      - name: Validate public approval before deployment effects')[1]?.split('      - name: Checkout resolved runtime source')[0];
+    const block = section?.split('        run: |\n')[1];
+    if (!block) throw new Error('Public approval preflight missing');
+    const script = block.split('\n').map(line => line.slice(10)).join('\n');
+    const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+    const valid = { ALLOW_UNAUTHENTICATED: 'true', GRANT_PUBLIC_INVOKER: 'true', PROJECT_ID: 'freepasserp5',
+      REGION: 'asia-northeast3', SERVICE_NAME: 'freepass-data-public',
+      RUNTIME_SERVICE_ACCOUNT: 'freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com',
+      RUNTIME_ENTRYPOINT: 'dist/src/api/public-server.js', USE_CONSUMER_SECRETS: 'false',
+      MAX_INSTANCES: '4', RUNTIME_CONCURRENCY: '16', APPROVED_PLAN_DIGEST: 'approved-plan', GITHUB_ENV: '/dev/null' };
+    const cases = [
+      [{}, true], [{ APPROVED_PLAN_DIGEST: '' }, false], [{ APPROVED_PLAN_DIGEST: 'old-plan' }, false],
+      [{ ALLOW_UNAUTHENTICATED: 'true', GRANT_PUBLIC_INVOKER: 'false' }, false],
+      [{ ALLOW_UNAUTHENTICATED: 'false', GRANT_PUBLIC_INVOKER: 'true' }, false],
+      [{ PROJECT_ID: 'other' }, false], [{ REGION: 'us-central1' }, false],
+      [{ SERVICE_NAME: 'freepass-data-read' }, false], [{ RUNTIME_SERVICE_ACCOUNT: 'private-runtime' }, false],
+      [{ RUNTIME_ENTRYPOINT: 'dist/src/api/consumer-server.js' }, false], [{ USE_CONSUMER_SECRETS: 'true' }, false],
+      [{ MAX_INSTANCES: '10' }, false], [{ RUNTIME_CONCURRENCY: '80' }, false],
+      [{ ALLOW_UNAUTHENTICATED: 'false', GRANT_PUBLIC_INVOKER: 'false', APPROVED_PLAN_DIGEST: '' }, false],
+      [{ ALLOW_UNAUTHENTICATED: 'false', GRANT_PUBLIC_INVOKER: 'false' }, true],
+      [{ ALLOW_UNAUTHENTICATED: 'false', GRANT_PUBLIC_INVOKER: 'false', APPROVED_PLAN_DIGEST: '', SERVICE_NAME: 'freepass-data-read', RUNTIME_ENTRYPOINT: 'dist/src/api/consumer-server.js', RUNTIME_SERVICE_ACCOUNT: 'private-runtime', USE_CONSUMER_SECRETS: 'true' }, true],
+    ] as const;
+    for (const [overrides, allowed] of cases) {
+      const result = spawnSync(bash, ['-s'], { input: 'node() { printf "%s\\n" "approved-plan"; }\n' + script + '\necho DEPLOYMENT_REACHED\n',
+        encoding: 'utf8', env: { ...process.env, ...valid, ...overrides } });
+      expect(result.status === 0, JSON.stringify(overrides) + result.stderr).toBe(allowed);
+      expect(result.stdout.includes('DEPLOYMENT_REACHED')).toBe(allowed);
+    }
+  });
+  it('public plan digest includes actual deployment arguments', () => {
+    const base = [
+      'scripts/public-runtime-plan-digest.mjs',
+      'docs/PUBLIC-RUNTIME-PLAN.md',
+      '--service', 'freepass-data-public',
+      '--service-account', 'freepass-data-public-runtime@freepasserp5.iam.gserviceaccount.com',
+      '--entrypoint', 'dist/src/api/public-server.js',
+      '--use-consumer-secrets', 'false',
+      '--max-instances', '4',
+      '--runtime-concurrency', '16',
+    ];
+    const run = (args: string[]) => spawnSync(process.execPath, args, { encoding: 'utf8' });
+    const approved = run(base);
+    expect(approved.status, approved.stderr).toBe(0);
+    expect(approved.stdout.trim()).toBe('3e0f0a8a3d9f8b7edc4f1781598781af2eba6dfaff9cd41c9a744e70c3a9bdbe');
+    for (const [index, value] of [[3, 'freepass-data-read'], [5, 'private-runtime'], [7, 'dist/src/api/consumer-server.js'], [9, 'true']] as const) {
+      const changed = [...base];
+      changed[index] = value;
+      const result = run(changed);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).not.toBe(approved.stdout.trim());
+    }
+  });
+  it.skipIf(process.platform === 'win32')('deployment preserves bindings and rejects missing or changed private environment', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const section = workflow.split('      - name: Deploy private read-only service')[1]!.split('      - name: Grant public invoker only when requested')[0]!;
+    const script = section.split('        run: |\n')[1]!.split('\n').map(line => line.slice(10)).join('\n');
+    expect(section).toContain('secrets.FREEPASS_SHEET_F04_ID');
+    expect(section).toContain('MISSING_SHEET_ID_ENV: FREEPASS_SHEET_F04_ID');
+    const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+    const env = [
+      { name: 'NODE_ENV', value: 'production' }, { name: 'FREEPASS_DATA_DRIVER', value: 'firestore' },
+      { name: 'FIREBASE_PROJECT_ID', value: 'freepasserp5' }, { name: 'FREEPASS_SHEET_F04_ID', value: 'synthetic-f04' },
+      { name: 'EXISTING_EXTRA', value: 'synthetic-extra' },
+      { name: 'FREEPASS_DATA_CONSUMERS_JSON', valueFrom: { secretKeyRef: { name: 'synthetic-consumers', key: '4' } } },
+      { name: 'EANCAR_ONE_API_KEY', valueFrom: { secretKeyRef: { name: 'synthetic-one', key: '1' } } },
+    ];
+    const snapshot = (values: unknown[]) => JSON.stringify({ spec: { template: { spec: { containers: [{ env: values }] } } } });
+    const mock = `gcloud() {
+      if [ "$2" = deploy ]; then
+        case "$*" in *--update-env-vars=NODE_ENV=production,FREEPASS_DATA_DRIVER=firestore,FIREBASE_PROJECT_ID=freepasserp5*) ;; *) return 1 ;; esac
+        case "$*" in *--timeout=300s*) ;; *) return 1 ;; esac
+        echo DEPLOY_REACHED
+        deployed=true
+      elif [ "\${deployed:-false}" = true ]; then printf '%s' "$MOCK_AFTER";
+      else printf '%s' "$MOCK_BEFORE"; fi
+    }\n`;
+    for (const [before, after, allowed, deployed] of [
+      [env, env, true, true],
+      [env.map(value => value.valueFrom ? { ...value, valueFrom: { secretKeyRef: { key: value.valueFrom.secretKeyRef.key, name: value.valueFrom.secretKeyRef.name } } } : value), env, true, true],
+      [env.filter(value => value.name !== 'FREEPASS_SHEET_F04_ID'), env, false, false],
+      [env.map(value => value.name === 'FREEPASS_SHEET_F04_ID' ? { ...value, value: '' } : value), env, false, false],
+      [env.map(value => value.name === 'FREEPASS_SHEET_F04_ID' ? { ...value, value: 'different-binding' } : value), env, false, false],
+      [env.map(value => value.name === 'EANCAR_ONE_API_KEY' ? { ...value, valueFrom: { secretKeyRef: { name: 'synthetic-one', key: '2' } } } : value), env, false, false],
+      [[...env, { name: 'UNPLANNED_SECRET', valueFrom: { secretKeyRef: { name: 'extra', key: '1' } } }], env, false, false],
+      [env, env.filter(value => value.name !== 'EXISTING_EXTRA'), false, true],
+      [env, env.map(value => value.name === 'FREEPASS_SHEET_F04_ID' ? { ...value, value: 'changed' } : value), false, true],
+      [env, env.map(value => value.name === 'FREEPASS_DATA_DRIVER' ? { ...value, value: 'memory' } : value), false, true],
+    ] as const) {
+    const result = spawnSync(bash, ['-s'], { input: mock + script, encoding: 'utf8', env: {
+      ...process.env, USE_CONSUMER_SECRETS: 'true', FREEPASS_SHEET_F04_ID: 'synthetic-f04', MOCK_BEFORE: snapshot([...before]), MOCK_AFTER: snapshot([...after]), GITHUB_ENV: '/dev/null',
+      CONSUMERS_SECRET_NAME: 'synthetic-consumers', CONSUMERS_SECRET_VERSION: '4',
+      IANCAR_SECRET_NAME: 'synthetic-one', IANCAR_SECRET_VERSION: '1', SERVICE_NAME: 'synthetic-service',
+      PROJECT_ID: 'freepasserp5', REGION: 'asia-northeast3', IMAGE_REF: 'synthetic-image',
+      RUNTIME_SERVICE_ACCOUNT: 'synthetic-account', MAX_INSTANCES: '10', RUNTIME_CONCURRENCY: '8',
+    } });
+    expect(result.status === 0, result.stderr).toBe(allowed);
+    expect(result.stdout.includes('DEPLOY_REACHED')).toBe(deployed);
+    expect(result.stdout).not.toContain('synthetic-f04');
+    expect(result.stdout).not.toContain('synthetic-extra');
+    }
+  });
+  it('deploys privately and grants anonymous invoker only after approved preflight', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const gate = workflow.indexOf('- name: Validate public approval before deployment effects');
+    expect(gate).toBeGreaterThan(0);
+    for (const step of ['Authenticate deploy identity', 'Build immutable container', 'Deploy private read-only service']) {
+      expect(workflow.indexOf('- name: ' + step)).toBeGreaterThan(gate);
+    }
+    const deployment = workflow.split('- name: Deploy private read-only service')[1]!.split('- name: Grant public invoker only when requested')[0]!;
+    expect(deployment).toContain('--no-allow-unauthenticated');
+    expect(deployment).not.toContain('--allow-unauthenticated');
+    const grant = workflow.split('- name: Grant public invoker only when requested')[1]!.split('- name: Verify service readiness metadata')[0]!;
+    expect(grant.indexOf('test "${PUBLIC_RUNTIME_APPROVAL_VALIDATED:-false}" = "true"')).toBeGreaterThan(0);
+    expect(grant.indexOf('test "$plan_digest" = "$APPROVED_PLAN_DIGEST"')).toBeLessThan(grant.indexOf('gcloud run services add-iam-policy-binding'));
+    expect(grant).toContain('--member=allUsers --role=roles/run.invoker');
+  });
+
 });

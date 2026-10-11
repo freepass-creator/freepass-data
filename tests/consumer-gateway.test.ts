@@ -2,8 +2,11 @@ import { PassThrough } from 'node:stream';
 import { createPhotoRequestBucket, PHOTO_REQUEST_LIMITS } from '../src/api/photo-request-limit.js';
 process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { createHash } from 'node:crypto';
+import sheetSpec from '../contracts/supplier-input-sheet-spec.v1.json' with { type: 'json' };
+import { normalizeSharedSheet } from '../src/adapters/normalize-shared-sheet.js';
+import type { RawRecord } from '../src/domain/source.js';
 import { vehiclePhotoKey } from '../src/domain/consumer-output-contract.js';
-import { createApprovedDrivePhotoReader, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../src/infra/erp5-compat-catalog-reader.js';
+import { isPublicIancarPhotoProduct, createApprovedDrivePhotoReader, createVehiclePhotoReader, isApprovedVehiclePhotoProduct, VEHICLE_PHOTO_CACHE_TTL_MS } from '../src/infra/erp5-compat-catalog-reader.js';
 import { buildAdminCatalogProjection } from '../src/application/admin-catalog.js';
 import { updateOfferPrice } from '../src/application/catalog.js';
 import { describe, expect, it, vi } from 'vitest';
@@ -19,6 +22,21 @@ const token = 'test-service-token-0123456789abcdef';
 const binding = { id: 'erp-com', projectionId: 'erp-public' as const, token };
 const url = '/v1/consumers/erp-com/catalog';
 const headers = { authorization: `Bearer ${token}` };
+
+describe('direct Firestore migration signal', () => {
+  it('signals only legacy product read routes without bypassing authentication', async () => {
+    const { app } = withAccess(new MemoryDataStore(), [binding]);
+    for (const route of ['catalog', 'catalog-compat', 'catalog-reference', 'internal-ai-reference']) {
+      const response = await app.inject({ url: `/v1/consumers/erp-com/${route}` });
+      expect(response.headers['x-freepass-read-mode']).toBe('DIRECT_FIRESTORE_REQUIRED');
+      expect(response.headers['x-freepass-migration-status']).toBe('LEGACY_READ_PENDING_RETIREMENT');
+      expect(response.statusCode).not.toBe(200);
+    }
+    const unrelated = await app.inject({ url: '/missing' });
+    expect(unrelated.headers['x-freepass-read-mode']).toBeUndefined();
+    await app.close();
+  });
+});
 
 describe('approved Drive original-byte adapter (offline only)', () => {
   const bytes = Buffer.from([255, 216, 255, 1]);
@@ -136,6 +154,8 @@ describe('read-only consumer gateway', () => {
       const response = await app.inject({ url: `/v1/consumers/${consumerId}/${route}`, headers });
       expect(response.statusCode).toBe(200);
       const rows = response.json().data;
+      expect(response.headers['x-freepass-read-mode']).toBe('DIRECT_FIRESTORE_REQUIRED');
+      expect(response.headers.link).toContain('/blob/main/docs/COMMERCIAL-DATA-CONSUMER-ROLLOUT.md#firestore-direct-read-migration');
       expect(rows).toHaveLength(2);
       expect(rows.find((row: { sourceProductId: string }) => row.sourceProductId === 'knownCc').vehicle)
         .toMatchObject({ engineCc: 1998, engineCcState: 'KNOWN', fuel: '가솔린', drive: 'AWD' });
@@ -1223,6 +1243,77 @@ it('serves Admin contract fee links in request order with one catalog read pass'
   await app.close();
 });
 
+it('serves Admin-only contract fee ledger approximation when the optional ledger port is injected', async () => {
+  const store = new MemoryDataStore();
+  await seedDemoCatalog(store);
+  const adminBinding: ConsumerBinding = {
+    id: 'freepass-admin-catalog',
+    projectionId: 'admin-catalog',
+    token: token + '-admin',
+    capabilities: ['contract-fee-link-read'],
+  };
+  const logs = new MemoryDataAccessLogStore();
+  const feeStore = {
+    listVehicleAssets: async () => store.listVehicleAssets(),
+    listProducts: async () => store.listProducts(),
+    listOffers: async () => store.listOffers(),
+  } as any;
+  const ledgerPort: Parameters<typeof createConsumerGateway>[7] = {
+    listContractFeeLedgerRows: async () => [{
+      schemaVersion: 'period-fee-ledger/v1',
+      snapshotId: 'period-fee-2026-10-09',
+      snapshotDateKst: '2026-10-09',
+      computedAt: '2026-10-09T00:00:00.000Z',
+      valueBasis: 'CURRENT_AT_SNAPSHOT',
+      valueAsOf: '2026-10-09',
+      engineRevision: 'test',
+      sourceDigest: 'digest',
+      documentKey: 'doc',
+      applyState: 'READY',
+      holdReasonCode: null,
+      vehicleUid: 'va_gv70_demo',
+      assetId: 'va_gv70_demo',
+      plateLookupKey: null,
+      plateLast4ForReport: null,
+      supplierId: 'supplier_demo',
+      productId: 'product_gv70_demo',
+      offerId: 'offer_gv70_demo',
+      offerRevision: 1,
+      productUpdateTime: null,
+      termKey: 'm36_demo',
+      termMonths: 36,
+      monthlyRent: { amount: 690000, currency: 'KRW', state: 'KNOWN', reasonCode: null },
+      deposit: { state: 'KNOWN', amount: { amount: 3000000, currency: 'KRW' }, reasonCode: null, sourceRefs: [], depositEvidence: { kind: 'SOURCE_AMOUNT', ruleCode: null, noteField: null, noteText: null, sourcePriceKey: 'm36_demo', calculationBasis: null, policyCode: null } },
+      vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE', amount: 12345678, differenceAmount: 1000 },
+      supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 90000, currency: 'KRW' }, vatTreatment: 'EXCLUDED', vatAmount: 9000, totalAmount: 99000, reasonCode: 'VEHICLE_VALUE_APPROX', ruleId: 'rule', policyId: 'policy', sourceRefs: [] },
+      channelPayoutFee: { state: 'CALCULATED', amount: { amount: 40000, currency: 'KRW' }, vatTreatment: 'EXCLUDED', vatAmount: 4000, totalAmount: 44000, reasonCode: null, ruleId: 'rule', policyId: 'policy', sourceRefs: [] },
+      ruleIds: ['rule'],
+      policyIds: ['policy'],
+      priceSourceRefs: [],
+      inputRefs: { productPath: 'products/p', offerPath: 'products/p/offers/o', priceTermRef: 'terms/m36', internalEconomicsRef: null },
+    }],
+  };
+  const app = createConsumerGateway(store, [binding, adminBinding], new DataAccessGateway(logs), feeStore, undefined, undefined, undefined, ledgerPort);
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/v1/consumers/freepass-admin-catalog/contract-fee-links',
+    headers: { authorization: `Bearer ${token}-admin` },
+    payload: { items: [{ key: 'row', assetId: 'va_gv70_demo', contractDate: '2026-10-10', supplierId: 'supplier_demo', termMonths: 36, monthlyRent: 690000, deposit: 3000000 }] },
+  });
+
+  expect(response.statusCode).toBe(200);
+  const row = response.json().results[0];
+  expect(row.ledgerFee).toMatchObject({
+    status: 'CONFIRMED',
+    supplierBillingFee: { state: 'CALCULATED_APPROX' },
+    vehicleValueEvidence: { grade: 'APPROX', source: 'CONSUMER_PRICE' },
+  });
+  expect(row.ledgerFee.vehicleValueEvidence).not.toHaveProperty('amount');
+  expect(row.ledgerFee).not.toHaveProperty('differenceAmount');
+  await app.close();
+});
+
 it('rejects invalid contract fee link requests before reading catalog data', async () => {
   const adminBinding: ConsumerBinding = {
     id: 'freepass-admin-catalog',
@@ -1320,6 +1411,94 @@ describe('authenticated exact reference product ID', () => {
 });
 
 describe('authenticated collected source scope', () => {
+  it('adapts source row products into the actual ERP compatibility Record map only with opt-in grant', async () => {
+    const at = '2026-10-11T00:00:00Z', sourceId = sheetSpec.supplierManagement.sourceBinding.sourceId;
+    const raws: RawRecord[] = ['500000', '무보증'].map((deposit, index) => ({ rawRecordId: `raw-${index}`, sourceId,
+      runId: 'fixture-run', sourceRecordId: `row-${index}`, sourceFingerprint: `fingerprint-${index}`, observedAt: at,
+      payload: { tab: '렌트존', row: index + 2, supplierCode: 'TEMP', values: sheetSpec.inputHeaders.map(h =>
+        ({ 회사명: '렌트존', 차량번호: '신차', 차량상태: '출고협의', 상품구분: '신차렌트', 제조사: '기아', 모델: '레이',
+          장기보증: deposit, '48개월': '300000', '60개월': '280000', 비고: 'PRIVATE_CUSTOMER' } as Record<string,string>)[h] ?? '') } }));
+    const head = { sourceId, runId: 'fixture-run', observedAt: at, acceptedAt: at, checkpoint: { sourceId, observedAt: at }, coverage: { mode: 'PARTIAL' as const, completeness: 'COMPLETE' as const } };
+    const sourceStore = { getSourceHead: vi.fn(async () => head), getRun: async () => ({ ...head, status: 'COMPLETED' as const, headStatus: 'CURRENT' as const, startedAt: at, rawCount: 2, candidateCount: 2, warningCount: 2 }),
+      listRaw: async () => raws, listCandidates: async () => raws.map(raw => normalizeSharedSheet(raw).record) };
+    const read = vi.fn(async (consumerId: string) => ({ schema: 'freepass-data.catalog-compat/v1' as const,
+      data: { products: { legacy: { product_code: 'legacy', listable: true } }, policies: {} },
+      meta: { consumerId, authority: 'FREEPASS_DATA_COMPATIBILITY_BRIDGE' as const, sourceProject: 'freepasserp5' as const,
+        observedAt: at, collectionCounts: { products: 1, policy: 0 }, depositEvidenceVersion: 'catalog-compat-deposit/1' as const } }));
+    const reader = { read, sourceStore }, endpoint = '/v1/consumers/erp-com/catalog-compat';
+    const { app: denied } = withAccess(new MemoryDataStore(), [binding], undefined, reader);
+    try {
+      expect((await denied.inject({ url: endpoint + '?sourceScope=COLLECTED', headers })).statusCode).toBe(403);
+      expect(read).not.toHaveBeenCalled(); expect(sourceStore.getSourceHead).not.toHaveBeenCalled();
+      const normal = await denied.inject({ url: endpoint, headers });
+      expect(normal.statusCode).toBe(200); expect(Object.keys(normal.json().data.products)).toEqual(['legacy']);
+      expect(sourceStore.getSourceHead).not.toHaveBeenCalled();
+    } finally { await denied.close(); }
+    const { app } = withAccess(new MemoryDataStore(), [{ ...binding, capabilities: ['catalog'], referenceSourceScopes: ['COLLECTED'] }], undefined, reader);
+    try {
+      const result = await app.inject({ url: endpoint + '?sourceScope=COLLECTED', headers });
+      expect(result.statusCode).toBe(200);
+      const body = result.json(), rows = Object.entries(body.data.products).filter(([id]) => id.startsWith('source_row_')).map(([,row]) => row as Record<string, any>);
+      expect(rows).toHaveLength(2); expect(body.meta).toMatchObject({ legacyProductCount: 1, sourceRowCoverage: { currentProductRowCount: 2, returnedProductRowCount: 2 } });
+      expect(rows.every(row => row.car_number === null && row.vehicle_uid === null && row.vehicle_status === '출고협의' && row.listable === false)).toBe(true);
+      expect(rows.map(row => row.price['48'].depositState)).toEqual(['KNOWN','ZERO']);
+      expect(rows.map(row => Object.keys(row.price))).toEqual([['48','60'],['48','60']]);
+      expect(rows.every(row => row.price['48'].supplierBillingFee.state === 'UNKNOWN'
+        && row.price['48'].supplierBillingFee.amount === null && row.price['48'].channelPayoutFee.amount === null)).toBe(true);
+      expect(result.body).not.toContain('PRIVATE_CUSTOMER');
+      expect(rows[0]!._source_row_product.facts.some((f: { fieldKey: string }) => f.fieldKey === 'deposit:m48')).toBe(true);
+      expect(rows[0]!.product_code).not.toBe(rows[1]!.product_code);
+    } finally { await app.close(); }
+  });
+  it.each([false, true])('reads existing source evidence only after a grant, with schema and atom/condition output (internal=%s)', async internal => {
+    const consumerId = internal ? 'internal-ai-observation-test' : 'kakao-ops';
+    const endpoint = `/v1/consumers/${consumerId}/${internal ? 'internal-ai-reference' : 'catalog-reference'}`;
+    const at = '2026-10-11T00:00:00Z', sourceId = sheetSpec.supplierManagement.sourceBinding.sourceId;
+    const values = sheetSpec.inputHeaders.map(h => ({ 회사명: '렌트존', 차량번호: '신차', 차량상태: '출고협의',
+      상품구분: '신차렌트', 제조사: '기아', 모델: '레이', 장기보증: '무보증', '48개월': '300000', '60개월': '280000', '옵션 원문': 'PRIVATE_PII' } as Record<string,string>)[h] ?? '');
+    const raw: RawRecord = { rawRecordId: 'fixture-raw', runId: 'fixture-run', sourceId, sourceRecordId: 'fixture-source-record', sourceFingerprint: 'fixture-fingerprint', observedAt: at,
+      payload: { values, supplierCode: 'TEMP', tab: '렌트존', row: 2, captureDigest: 'a'.repeat(64), token: 'PRIVATE_TOKEN' } };
+    const candidate = normalizeSharedSheet(raw).record;
+    const head = { sourceId, runId: raw.runId, observedAt: at, acceptedAt: at, checkpoint: { sourceId, observedAt: at }, coverage: { mode: 'PARTIAL' as const, completeness: 'COMPLETE' as const } };
+    const sourceStore = { getSourceHead: vi.fn(async () => head), getRun: async () => ({ ...head, status: 'COMPLETED' as const, headStatus: 'CURRENT' as const, startedAt: at, rawCount: 1, candidateCount: 1, warningCount: 1 }),
+      listRaw: async () => [raw], listCandidates: async () => [candidate] };
+    const reader = { sourceStore, read: async () => { throw new Error('unused'); },
+      readKakaoReferenceSource: async () => ({ consumerId, observedAt: at, products: {} }),
+      readInternalAiReferenceSource: async () => ({ consumerId, observedAt: at, products: {} }) };
+    const registration: ConsumerBinding = { id: consumerId, projectionId: 'erp-public', token, capabilities: [internal ? 'internal-ai-reference' : 'catalog-reference'] };
+    const { app: denied } = withAccess(new MemoryDataStore(), [registration], undefined, reader);
+    try {
+      expect((await denied.inject({ url: endpoint + '?sourceScope=COLLECTED', headers })).statusCode).toBe(403);
+      expect(sourceStore.getSourceHead).not.toHaveBeenCalled();
+    } finally { await denied.close(); }
+    const { app, logs } = withAccess(new MemoryDataStore(), [{ ...registration, referenceSourceScopes: ['COLLECTED'] }], undefined, reader);
+    try {
+      const response = await app.inject({ url: endpoint + '?' + new URLSearchParams({ sourceScope: 'COLLECTED', supplierName: '렌트존', model: '레이', termMonths: '48' }), headers });
+      expect(response.statusCode).toBe(200);
+      const body = response.json(), observation = body.data[0];
+      expect(body.sourceObservations.observations).toBeUndefined();
+      expect(body.meta.queryResolution).toMatchObject({ state: 'MATCHED', matchedProductCount: 1, matchedObservationCount: 1, matchedLegacyProductCount: 0 });
+      expect(observation).toMatchObject({ representationKind: 'CURRENT_SOURCE_ROW_PRODUCT', vehicleAssetId: null, source: { candidateStatus: 'REJECTED', row: 2 }, normalized: { plateNumber: null } });
+      expect(body.data).toEqual([observation]);
+      expect(observation.facts).toContainEqual(expect.objectContaining({ fieldKey: 'deposit:m48', rawValue: '무보증', normalizedValue: 0, state: 'ZERO' }));
+      expect(observation.normalized.priceConditions).toHaveLength(2);
+      expect(observation.normalized.priceConditions.every((term: Record<string, any>) =>
+        term.supplierBillingFee.state === 'UNKNOWN' && term.supplierBillingFee.amount === null
+        && term.channelPayoutFee.state === 'UNKNOWN' && term.channelPayoutFee.amount === null
+        && term.priceSourceRefs.some((ref: { field: string }) => ref.field === `${term.termMonths}개월`))).toBe(true);
+      expect(response.body).not.toMatch(/PRIVATE_PII|PRIVATE_TOKEN/);
+      expect(observation.facts).toContainEqual(expect.objectContaining({ fieldKey: 'sourceColumn:옵션 원문', rawValue: null, reasons: ['RAW_FREE_TEXT_WITHHELD'] }));
+      const exact = await app.inject({ url: endpoint + '?sourceScope=COLLECTED&sourceObservationId=' + observation.observationId, headers });
+      expect(exact.statusCode).toBe(200); expect(exact.json().data).toEqual([observation]);
+      const empty = await app.inject({ url: endpoint + '?sourceScope=COLLECTED&sourceObservationId=missing', headers });
+      expect(empty.statusCode).toBe(200); expect(empty.json().meta.queryResolution).toMatchObject({ state: 'NO_MATCH', matchedObservationCount: 0 });
+      const digestBefore = body.meta.dataDigest;
+      values[sheetSpec.inputHeaders.indexOf('48개월')] = '330000';
+      const changed = await app.inject({ url: endpoint + '?sourceScope=COLLECTED', headers });
+      expect(changed.statusCode).toBe(200); expect(changed.json().meta.dataDigest).not.toBe(digestBefore);
+      expect(logs.events.some(e => e.phase === 'SUCCEEDED')).toBe(true);
+    } finally { await app.close(); }
+  });
   it.each(['kakao-ops', 'internal-ai-fixture'])('requires explicit %s scope grant before source reads and keeps default scope unchanged', async consumerId => {
     const internal = consumerId.startsWith('internal-ai-');
     const source = { consumerId, sourceScope: 'COLLECTED' as const, observedAt: '2026-10-10T00:00:00Z', products: {
@@ -1359,8 +1538,116 @@ describe('authenticated collected source scope', () => {
   });
   it('does not allow a public registration to request collected grants or unsupported/duplicate scope grants', () => {
     for (const scopes of [['COLLECTED'], [], ['COLLECTED', 'COLLECTED'], ['LISTABLE'], 'COLLECTED']) {
-      expect(() => parseConsumerBindings(JSON.stringify([{ ...binding, referenceSourceScopes: scopes }]))).toThrow();
+      expect(() => parseConsumerBindings(JSON.stringify([{ ...binding, id: 'whitelabel-fixture', referenceSourceScopes: scopes }]))).toThrow();
     }
     expect(parseConsumerBindings(JSON.stringify([{ id: 'kakao-ops', projectionId: 'erp-public', token, capabilities: ['catalog-reference'], referenceSourceScopes: ['COLLECTED'] }]))[0]).toMatchObject({ referenceSourceScopes: ['COLLECTED'] });
+    expect(parseConsumerBindings(JSON.stringify([{ ...binding, capabilities: ['catalog'], referenceSourceScopes: ['COLLECTED'] }]))[0]).toMatchObject({ referenceSourceScopes: ['COLLECTED'] });
+  });
+});
+
+
+describe('ERP5 dedicated RP031 media consumer', () => {
+  const mediaToken = 'synthetic-erp5-media-token-0123456789abcdef';
+  const media: ConsumerBinding = { id: 'erp5-public-media', projectionId: 'erp-public', token: mediaToken, capabilities: ['photos'] };
+  const mediaHeaders = { authorization: `Bearer ${mediaToken}` };
+  const prefix = '/v1/consumers/erp5-public-media';
+  const photoUrl = prefix + '/catalog-compat/products/synthetic/photos';
+  const bytes = Buffer.from([255, 216, 255, 1]);
+  const product = () => ({ provider_company_code: 'RP031', listable: true, status_kind: '가용',
+    iancar_one_vehicle_id: 'synthetic-one-id', car_number: 'synthetic-plate',
+    photo_original_refs: [{ vehiclePhotoVerifiedBy: 'synthetic-reviewer', vehiclePhotoVerificationMethod: 'offline-test',
+      vehiclePhotoVerifiedAt: '2026-10-11T00:00:00.000Z' }] });
+  it('requires exact dedicated capability and distinct tokens without expanding legacy registrations', () => {
+    expect(parseConsumerBindings(JSON.stringify([binding, media]))[1]).toMatchObject(media);
+    expect(parseConsumerBindings(JSON.stringify([binding]))[0]?.capabilities).toEqual(['catalog']);
+    for (const patch of [{ capabilities: undefined }, { capabilities: [] }, { capabilities: ['catalog'] },
+      { capabilities: ['photos', 'catalog'] }, { capabilities: ['photos', 'photos'] }, { token },
+      { projectionId: 'admin-catalog' }, { id: 'erp5-public-media-other' }, { token: 'short' }])
+      expect(() => parseConsumerBindings(JSON.stringify([binding, { ...media, ...patch }]))).toThrow();
+    for (const id of ['erp-com', 'whitelabel-synthetic', 'kakao-ops', 'internal-ai-synthetic'])
+      expect(() => parseConsumerBindings(JSON.stringify([{ ...media, id }]))).toThrow();
+  });
+  it('authorizes only count/index routes and audits the dedicated caller with no token disclosure', async () => {
+    const read = vi.fn(async (_consumer: string, _id: string, index?: number) => ({ count: 2,
+      bytes: index === undefined ? null : bytes, contentType: index === undefined ? 'application/json' : 'image/jpeg', revalidate: async () => true }));
+    const catalogRead = vi.fn(async () => { throw new Error('must not read catalog'); });
+    const store = new MemoryDataStore(); const active = vi.spyOn(store, 'getActive');
+    const { app, logs } = withAccess(store, [binding, media], undefined, { read: catalogRead, readVehiclePhoto: read });
+    for (const suffix of ['', '/0']) {
+      const response = await app.inject({ url: photoUrl + suffix, headers: mediaHeaders });
+      expect(response.statusCode).toBe(200); expect(response.headers['cache-control']).toBe('private, no-store');
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+    }
+    expect(read.mock.calls[0]?.[0]).toBe('erp5-public-media');
+    expect(logs.events.at(-1)).toMatchObject({ phase: 'SUCCEEDED', operation: 'READ_PRODUCT_PHOTO',
+      actor: { id: 'consumer:erp5-public-media' }, clientId: 'erp5-public-media' });
+    for (const suffix of ['/catalog', '/catalog-compat', '/catalog-health', '/estimate-newcar-master',
+      '/catalog-reference', '/internal-ai-reference', '/issued-quotes/synthetic', '/share-envelopes/synthetic'])
+      expect((await app.inject({ url: prefix + suffix, headers: mediaHeaders })).statusCode, suffix).toBe(403);
+    for (const suffix of ['/settlement-ledger/read', '/contract-fee-links', '/admin-workflow/read', '/admin-workflow/commit'])
+      expect((await app.inject({ method: 'POST', url: prefix + suffix, headers: mediaHeaders, payload: {} })).statusCode, suffix).toBe(403);
+    expect(catalogRead).not.toHaveBeenCalled(); expect(active).not.toHaveBeenCalled(); expect(read).toHaveBeenCalledTimes(2);
+    expect((await app.inject({ url: compatUrl + '/products/synthetic/photos/0', headers: mediaHeaders })).statusCode).toBe(401);
+    expect((await app.inject({ url: photoUrl, headers })).statusCode).toBe(401);
+    for (const index of ['200', '-1', '01']) expect((await app.inject({ url: photoUrl + '/' + index, headers: mediaHeaders })).statusCode).toBe(400);
+    expect(JSON.stringify(logs.events)).not.toContain(mediaToken);
+    await app.close();
+  });
+  it.each([undefined, 0])('limits RP031 source and revalidation before %s delivery without Drive fallback', async index => {
+    let current: Record<string, unknown> = product();
+    const sourceRead = vi.fn(async () => ({ count: 1, bytes: index === undefined ? null : bytes, contentType: 'image/jpeg' }));
+    const drive = vi.fn(async () => ({ bytes, contentType: 'image/jpeg' }));
+    const reader = createVehiclePhotoReader(async () => current, { eligible: isPublicIancarPhotoProduct,
+      connection: p => JSON.stringify([p.provider_company_code, p.iancar_one_vehicle_id, p.car_number]), read: sourceRead }, drive);
+    for (const patch of [{ provider_company_code: 'RP013' }, { listable: false }, { publication_withdrawal: {} },
+      { status_kind: '출고불가' }, { iancar_one_vehicle_id: '' }, { car_number: '' }, { photo_original_refs: [] }]) {
+      current = { ...product(), ...patch };
+      await expect(reader(media.id, 'synthetic', index)).rejects.toThrow('VEHICLE_PHOTO_NOT_FOUND');
+    }
+    expect(sourceRead).not.toHaveBeenCalled(); expect(drive).not.toHaveBeenCalled();
+    current = product(); const result = await reader(media.id, 'synthetic', index);
+    for (const patch of [{ publication_withdrawal: {} }, { provider_company_code: 'RP013' },
+      { iancar_one_vehicle_id: 'changed' }, { car_number: 'changed' }, { listable: false }]) {
+      current = { ...product(), ...patch }; expect(await result.revalidate()).toBe(false);
+    }
+    expect(sourceRead).toHaveBeenCalledTimes(1); expect(drive).not.toHaveBeenCalled();
+  });
+  it.each(['count', 'bytes'] as const)('rejects dedicated %s delivery revoked during success audit', async mode => {
+    let current: Record<string, unknown> = product();
+    const reader = createVehiclePhotoReader(async () => current, { eligible: isPublicIancarPhotoProduct,
+      connection: p => JSON.stringify([p.iancar_one_vehicle_id, p.car_number]),
+      read: async (_p, index) => ({ count: 1, bytes: index === undefined ? null : bytes, contentType: 'image/jpeg' }) });
+    const { app, logs } = withAccess(new MemoryDataStore(), [media], undefined, {
+      read: async () => { throw new Error('unused'); }, readVehiclePhoto: reader });
+    const append = logs.appendDataAccessEvent.bind(logs);
+    vi.spyOn(logs, 'appendDataAccessEvent').mockImplementation(async event => {
+      await append(event); if (event.phase === 'SUCCEEDED') current = { ...current, publication_withdrawal: {} };
+    });
+    const response = await app.inject({ url: photoUrl + (mode === 'count' ? '' : '/0'), headers: mediaHeaders });
+    expect(response.statusCode).toBe(404); expect(response.rawPayload).not.toEqual(bytes);
+    expect(logs.events.at(-1)).toMatchObject({ phase: 'DENIED', reasonCode: 'VEHICLE_PHOTO_NOT_FOUND',
+      actor: { id: 'consumer:erp5-public-media' } }); await app.close();
+  });
+  it.each(['count', 'bytes'] as const)('withholds dedicated %s response if success audit cannot persist', async mode => {
+    const read = vi.fn(async (_consumer: string, _id: string, index?: number) => ({ count: 1,
+      bytes: index === undefined ? null : bytes, contentType: 'image/jpeg', revalidate: vi.fn(async () => true) }));
+    const { app, logs } = withAccess(new MemoryDataStore(), [media], undefined, {
+      read: async () => { throw new Error('unused'); }, readVehiclePhoto: read });
+    const append = logs.appendDataAccessEvent.bind(logs);
+    vi.spyOn(logs, 'appendDataAccessEvent').mockImplementation(async event => {
+      if (event.phase === 'SUCCEEDED') throw new Error('offline success-audit failure');
+      await append(event);
+    });
+    const response = await app.inject({ url: photoUrl + (mode === 'count' ? '' : '/0'), headers: mediaHeaders });
+    expect(response.statusCode).toBe(503); expect(response.rawPayload).not.toEqual(bytes);
+    expect(read).toHaveBeenCalledTimes(1); expect(logs.events.some(event => event.phase === 'SUCCEEDED')).toBe(false);
+    await app.close();
+  });
+  it('fails closed before supplier reads when audit persistence is unavailable', async () => {
+    const read = vi.fn(async () => { throw new Error('must not call supplier'); });
+    const { app, logs } = withAccess(new MemoryDataStore(), [media], undefined, { read: async () => { throw new Error('unused'); }, readVehiclePhoto: read });
+    vi.spyOn(logs, 'appendDataAccessEvent').mockRejectedValue(new Error('offline audit failure'));
+    expect((await app.inject({ url: photoUrl + '/0', headers: mediaHeaders })).statusCode).toBe(503);
+    expect(read).not.toHaveBeenCalled(); await app.close();
   });
 });

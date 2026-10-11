@@ -59,14 +59,14 @@ export type AdminWorkflowFilter = {
   value: unknown;
 };
 
-export type AdminWorkflowReadSpec =
+export type AdminWorkflowReadSpec = { view?: 'current-facts/v1' } & (
   | { kind: 'doc'; resource: AdminWorkflowResource; id: string }
   | {
       kind: 'query';
       resource: AdminWorkflowResource;
       filters?: AdminWorkflowFilter[];
       limit?: number;
-    };
+    });
 
 export type AdminWorkflowDocument = {
   id: string;
@@ -153,6 +153,10 @@ const field = (value: unknown) =>
 export function assertAdminWorkflowReadSpec(value: unknown): asserts value is AdminWorkflowReadSpec {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_ADMIN_WORKFLOW_READ');
   const v = value as Record<string, unknown>;
+  if (v.view !== undefined && (v.view !== 'current-facts/v1' || !['settlementRows', 'contracts'].includes(String(v.resource)))) {
+    throw new Error('INVALID_ADMIN_WORKFLOW_VIEW');
+  }
+  if (v.view && v.kind === 'query' && v.limit === undefined) throw new Error('INVALID_ADMIN_WORKFLOW_VIEW_LIMIT_REQUIRED');
   if (typeof v.resource !== 'string' || !(v.resource in ADMIN_WORKFLOW_RESOURCES)) throw new Error('INVALID_ADMIN_WORKFLOW_RESOURCE');
   if (v.kind === 'doc') {
     if (!id(v.id)) throw new Error('INVALID_ADMIN_WORKFLOW_DOCUMENT_ID');

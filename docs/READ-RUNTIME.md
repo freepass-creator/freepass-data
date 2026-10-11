@@ -2,6 +2,46 @@
 
 Status: IMPLEMENTED / VALIDATION REQUIRED BEFORE DEPLOYMENT
 
+<a id="period-economics-connection"></a>
+
+## 기간별 상품 경제조건 연결 규격 — 2026-10-11 사용자 결정
+
+**한 제공자(FreePass Data) → 등록 소비처별 인증 조회 → 받은 기간별 값을 그대로 사용한다.** 별도 그림자 가격표나 소비처 수수료 엔진을 정본으로 만들지 않는다. GitHub는 이 규격·코드의 저장소이며 실상품 금액은 인증된 Data API로 읽는다. 이 절은 기존 endpoint/schema의 연결 안내이며 새 API·저장소·요율을 만들지 않는다.
+
+| 소비처 / 용도 | 기존 읽기 경로 | 실행 계약 / 경계 |
+|---|---|---|
+| 카톡 내부 상품·기간별 청구/지급 조회 | `GET /v1/consumers/kakao-ops/catalog-reference` | `contracts/kakao-catalog-reference-v1.schema.json`; 공개 `catalog`로 내부 금액을 대신 읽지 않음 |
+| 등록된 내부 AI 업무 조회 | `GET /v1/consumers/{internal-ai-consumerId}/internal-ai-reference` | `contracts/internal-ai-reference-v1.schema.json`; 기존 전용 identity/capability 필요 |
+| ERP 기존 입력 모양을 유지하는 호환 adapter | `GET /v1/consumers/erp-com/catalog-compat` | 기존 compatibility 계약과 adapter만 사용; 내부 금액을 공개 ERP/화이트라벨에 전달하지 않음 |
+
+- 접속 base URL·전용 Bearer token·필요한 서비스 인증은 기존 운영 설정에서 주입한다. 토큰을 URL·Git·화면에 넣지 않는다. `sourceScope=COLLECTED`는 현재 수집 상품행까지 요청하는 옵션이며 모든 위 경로에서 등록된 해당 scope가 있어야 한다. 등록이나 배포를 이 문서가 승인하지 않는다. 기본 `LISTABLE`을 전체 수집 조회라고 부르지 않는다.
+- 차량번호는 reference의 `plateNumber` 필터로 조회하고 공급사·상품은 기존 `supplierId`/`supplierName`/`productId` 필터를 사용한다. ERP compatibility 경로가 같은 필터를 받는다고 가정하지 않는다. 응답 schema/consumerId/authority/digest·관측 시각·scope를 확인하고, 같은 번호의 복수 상품은 기존 `queryResolution`의 HOLD를 보존한다. 차량번호 없는 행은 상품 ID로 조회하며 상품 없음으로 처리하지 않는다.
+- 기존 상품은 `data[].offers[].priceTerms[]`, `CURRENT_SOURCE_ROW_PRODUCT`는 `data[].normalized.priceConditions[]`에서 **동일 기간 행의** 월료·보증금·`supplierBillingFee`·`channelPayoutFee`를 읽는다. 전자는 `termKey`, 후자는 해당 상품/관측 ID와 기간 조건으로 귀속을 유지한다. 기간·거리·반납/인수 조건을 임의 합치거나 다른 행의 값을 가져오지 않는다. 상품행은 응답 `data` 한 곳에서 출력하며 `sourceObservations.sourceSnapshot`은 원천의 범위·관측·분모 근거다. 서버 내부 배열인 `sourceObservations.observations`를 HTTP 응답 필드라고 가정하지 않는다. ERP adapter는 동일 결과를 `data.products[productId].price[기간]`에 전달한다.
+- 월료는 기존 상품의 `monthlyRent.amount`, 원천 행의 `monthlyRentAmount`; 보증금은 각 계약의 `depositAmount`/`deposit.amount`와 상태를 함께 읽는다. 수수료 `amount`는 공급가액, `totalAmount`는 기존 엔진이 반환한 VAT 포함액이다. `CALCULATED`는 기준표 계산 가능이지 계약·청구·지급 확정이 아니다. UNKNOWN/null·NOT_APPLICABLE·사유·규칙/가격 출처와 행의 publication HOLD를 그대로 보존하며 빈 값을 0으로 채우지 않는다. 표시 형식 변환 외 소비처 재계산·추정은 하지 않는다.
+- 실패·403·schema 불일치·범위/관측 불명은 조회 실패/HOLD로 반환한다. 내부 수수료가 없는 공개 `catalog`, 임의 Firestore 읽기, 로컬 그림자 캐시로 조용히 대체하지 않는다. 로컬 그림자 서버가 모든 `/v1/consumers/*`를 같은 가격표로 반환하는 동작은 이 규격을 충족하지 않는다. 특히 `settlement-ledger/read`는 실제 정산 사실의 별도 계약이며 상품 가격표를 정산 결과로 재사용하지 않는다.
+- 소비처 연결 출발점(ai-ops 읽기 감사 `ea3961d`): 기존 `packages/core/freepass-data-consumer.mjs`의 공개 projection 전용 validator를 무조건 느슨하게 풀지 말고 내부 reference 계약을 별도로 검증하는 읽기 경로로 확장한다. `scripts/프리패스데이터-구조조회.mjs`와 `scripts/상품조회.ps1`의 호출·base URL·전용 인증·캐시 경계를 함께 맞춘다. `scripts/정산/대조-핵심.mjs`의 별도 공개 catalog 읽기도 용도에 맞춰 분리한다. 해당 제품 담당이 기존 파일을 수정하며 Data 안에 소비처 구현을 복제하지 않는다. 주소만 바꾸거나 `projectionId=erp-public` 검사만 없애는 것은 연결 완료가 아니다.
+- 반영 순서: PR448 검토 → 승인된 코드 반영/고정 revision 배포와 필요한 소비처 scope → 소비처가 위 endpoint·schema를 읽도록 기존 연결 수정 → 차량번호20개 실제 응답/원천/엔진 대사 및 권한 거부 확인. 이번 문서 변경은 규격 고정과 Git 게시이며 머지·배포·grant·그림자 서버 전환은 미실행이다. 실제 소비처 readback 전에는 연결 완료라고 하지 않는다.
+
+## 2026-10-11 원천 상품행 기간별 청구·지급 연결 — 설계 / PR 범위
+
+- 목적/정본: main `f5e931889749ec869ae4b996725cc22aa8bf5784`(PR447), 실제 `CURRENT_SOURCE_ROW_PRODUCT`의 `normalized.priceConditions`와 ERP 내부 `catalog-compat`의 같은 기간 가격행에 청구(`supplierBillingFee`, 공급사→FreePass)·지급(`channelPayoutFee`, FreePass→영업채널)을 함께 제공한다. 기존 legacy `offers.priceTerms`에는 두 필드가 이미 있으므로 누락으로 간주하지 않는다.
+- 재사용 판정: `COMPOSE_OR_EXTEND`. 기존 `projectReferenceObservation`, `resolveSupplierBillingFee`, `resolveSalesCommission`, `resolveExpectedGrossMargin`, `referenceObservationToCompatibilityProduct`와 공유 reference schema/테스트를 확장한다. 새 계산 엔진·요율·정산 원장·개발선은 만들지 않는다. PR447 담당은 해당 main 이후 수정을 중지했으며 기존 금액 checkout을 재사용한다.
+- 입력/보류: 원천 run의 정상화 공급사·상품구분·KNOWN 연료·해당 기간 대여료만 계산 입력으로 사용한다. 빌링카/LC는 같은 거리 조건의 유일한 36개월 대여료를 기준으로 한다. 입력 부족·충돌·복수 기준은 UNKNOWN/null과 사유를 유지한다. 수수료의 규칙 출처와 가격·연료의 원천 facts/run 참조를 보존한다. 계산 가능은 계약 확정·판매 가능을 뜻하지 않으며 원천 행의 identity/publication HOLD를 유지한다.
+- 제공 경계: 카카오/내부 AI `sourceScope=COLLECTED` 및 명시 grant가 있는 `erp-com/catalog-compat`의 원천 상품행에만 연결한다. 기본 ERP/화이트라벨 공개 응답과 정산 사람 입력/저장값은 변경하지 않는다. 계약 정산 조회는 기존 `contract-fee-link`의 저장된 Canonical 경제조건을 읽으며 원천 참조 계산으로 대체하지 않는다.
+- 완료 검증: 최신 private 원문과 고정 seed 표본 20차번의 원문→정상화→기존 엔진→인증 경로 응답을 대조한다. 원문·차번·시트 ID는 Git에 넣지 않고 계산 가능/미확정 사유 및 불일치 집계만 남긴다. 테스트·빌드·Claude ANSWERED·최종 diff 확인 후 PR까지만 진행한다. 머지/배포/DB·시트·권한 쓰기 없음.
+
+### 실측 / 구현 검증 — 2026-10-11
+
+- 11:59:09 KST 중앙 Firebase target/기존 `SourceIngestionStore`로 새 읽기: legacy 원문 1,776개, 현재 source head의 RAW/후보 각175행, 정상화 가격조건678개. 이678조건에 청구·지급 필드가 없었다. source head의 원천 관측은 같은 날07:00:12 KST이며 물리 차량 전수나 모든 등록 탭의 최신 수집을 뜻하지 않는다. 12:06:14 KST head 재조회도 동일했다.
+- 구현: 같은 기간 행에 양쪽 기존 계산 결과·VAT 처리·공급가액(`amount`)·VAT 포함액(`totalAmount`)·규칙 참조와 `priceSourceRefs`를 연결했다. `referenceObservationToCompatibilityProduct`가 동일 결과를 전달한다. rent0은 원문 KNOWN0을 보존하되 수수료는 UNKNOWN/null이다. 빌링카36 기준 복수, 상품구분 충돌, 미확정 연료는 해당 사유로 보류한다. 새 요율·정산 저장·사람 입력 변경은 없다.
+- 전175행/678조건 집계: 청구·지급 **각각 CALCULATED545 / UNKNOWN133**. 계약 확정 수가 아니다. 양쪽 UNKNOWN 사유는 동일하며 `SOURCE_SUPPLIER_MISSING`1, `NEW_PRODUCT_SUBTYPE_REQUIRED`93, `TERM_NOT_IN_F04_COMMISSION_POLICY`35, `DEPOSIT_TIER_REQUIRED`4다. 원문에 없는 차량가액·보증금 tier·개별 합의·신차 세부구분을 추정하지 않는다.
+- 고정 seed `20261011`, 중복 차번을 구분한 표본20차번/20원천행/73기간: RAW 재정상화→해당 원천 후보→기존 수수료 엔진→카카오/내부 AI의 실제 gateway 로컬 인증 inject→ERP COLLECTED 응답을 대조했다. HTTP 실패·행 누락·원문/금액/기간 차이·엔진 차이·출처 손실·compat 차이 모두0. 원천175행만 고정한 로컬 인증 경로 검증이며 신규 운영 endpoint 배포 readback이 아니다. 비공개 실행 입력/집계는 Temp에 보존하고 Git에는 옮기지 않았다.
+- 검증: 관련257개 검사 PASS 이후 연료 회귀를 추가했다. 최종 전체 `npm test -- --maxWorkers=2` **2,147PASS/16조건부SKIP**, build/architecture/data-access boundary/diff check PASS. 첫 전체 실행의 runtime-policy 5초 timeout1건은 보존하며 부하를 줄인 재실행에서 해당 검사와 전체가 통과했다. standards33 schema/15검사 PASS이나 기존 profile은 PARTIAL이다. 공개 nested price를 강제로 listable로 놓아도 수수료·마진·가격 출처를 출력하지 않는 회귀가 통과했다.
+- 정산/공개 경계: 기존 `contract-fee-link`19검사는 저장된 경제조건 조회·불일치 보류를 유지한다. 외부 계약 정산을 참조 계산으로 덮지 않는다. ERP 실제 guest sanitizer의 null 보증금→0 변환 위험은 별도 소비처 후속 HOLD이며 이번 Data PR에서 고치거나 실제 cutover를 승인하지 않았다.
+- 독립 검토: 처음 설계 상의는300초 REVIEW_TIMEOUT으로 통과가 아니다. 총괄의 exact 구현 검토는 실제 Claude ANSWERED/exit0이며 공급사 코드 출처가 회사명 셀이 아니라 RAW `payload.supplierCode`라는 반례를 지적했다. 해당 참조를 정정하고 회사명과 공급사 코드가 다른 회귀로 검증한다. UNKNOWN/0·원문 상품구분·KNOWN 연료·유일36 기준·공개 allowlist·쓰기 금지에 대해 같은 좁은 범위의 추가 블로커는 없었다. 합의를 계약 확정이나 배포 증거로 확대하지 않는다.
+- 최종 정정 검증: 공급사 출처 정정 후 build와 관련239검사 PASS, 같은 seed20차번/73기간의 RAW/엔진/세 gateway 응답 재대조0차이. 총괄도 정상화기의 실제 RAW mapping과 같은239검사/diff check를 독립 확인해 유일 블로커 해소를 판정했다. 담당의 추가 좁은 Claude 호출도300초 REVIEW_TIMEOUT이므로 이를 ANSWERED로 세지 않는다.
+- next_start_here: 이 PR의 exact diff/독립 검토/CI → 별도 승인 시 원천 COLLECTED grant·고정 이미지 배포 → 카카오/내부 AI/ERP 실제 readback. UNKNOWN133은 공급사/계약의 확정 근거를 확보한 뒤 기존 엔진 입력으로만 해소한다. PR까지만 진행하며 운영 반영 완료로 표현하지 않는다.
+
 ## 2026-10-10 금액 사실과 발행 검증 분리 — 배포 전 준비
 
 - 정본: main `050e382`(PR433 포함), 기존 reference builder/보증금 검증기/공유 schema를 확장(`COMPOSE_OR_EXTEND`). 새 엔진·정책 사전·DB/시트 쓰기 없음.
@@ -434,6 +474,18 @@ Both responses use `Cache-Control: no-store`.
 
 ### Kakao catalog reference
 
+#### 공통시트 원천행 상품 / 원자값 / ERP 입력 계약
+
+공급사 탭의 비어 있지 않은 한 행은 상품 한 건이다. 같은 내용의 두 행은 상품 두 건이며 실물 차량 두 대 확정과는 다르다. 기존 `COLLECTED` grant 이후 SourceIngestionStore의 sealed shared-input source current head를 읽고 RAW/candidate를 연결한다. `REJECTED` 기록·출고협의·출고불가·번호 미정도 상품 존재와 known 조건을 보존한다. CURRENT head 전후 stableDigest·run 귀속·raw/candidate 개수·관측 연결을 확인하고 읽기 실패/변동은 오류로 닫는다. head 없음은 명시 HOLD이며 stale/partial을 완전한 최신 fleet 분모로 해석하지 않는다.
+
+기존 reference `data`는 `representationKind=LEGACY_PRODUCT`와 `CURRENT_SOURCE_ROW_PRODUCT`의 엄격 union이다. 후자는 `identityKind=CURRENT_SOURCE_ROW`, 현재 source/tab/row 위치 포인터 `productId`, immutable `observationId`, 미확정 `vehicleAssetId=null`, 원문/정제·원자 `facts`·출처·정제 사유·가격조건을 가진다. 위치 포인터는 삽입·이동에 따라 바뀔 수 있고 영구 상품 UID가 아니다. 관측 ID는 `sourceObservationId`로 exact 조회하며 productId 대체 키로 추정하지 않는다. 같은 공급사·차번의 legacy/current row를 임의 병합하지 않고 representation별 수를 분리한다. `matchedProductCount`는 반환 representation 수, `matchedObservationCount`는 current source rows, `matchedLegacyProductCount`는 legacy rows다. 이 세 수를 실물 대수로 쓰지 않는다.
+
+HTTP 상품 카드는 `data` 한 곳에서만 출력한다. `sourceObservations`는 state/reason/sourceSnapshot 요약만 반환하여 행을 두 번 출력하지 않는다. sourceSnapshot은 rawRowCount/normalizedCandidateCount/currentProductRowCount/returnedProductRowCount·관측 시각·capture 범위·관측 탭/RAW 미관측 등록탭을 포함한다. 미관측 등록탭을 빈 탭이나 원천 삭제로 추정하지 않는다. 응답 digest 및 Data Access 감사 digest는 원천행과 원자값을 포함한다. productId/관측ID 중복은 HOLD, source-only 매칭도 MATCHED이며 NO_MATCH로 숨기지 않는다. 동일 조건행에서 필터를 판정하고 일치 행의 모든 조건을 남긴다.
+
+원자 `facts`는 rawValue/normalizedValue/state/reasons/sourceRef(runId/rawRecordId/row/field)를 분리한다. `KNOWN/ZERO/UNKNOWN/HOLD`는 정제값 상태이며 원문 있음만으로 정제 확정하지 않는다. 모든 74입력 열은 출처에 대응하고 기간별 보증금 원자는 별도로 보존한다. `차명 원문/옵션 원문/예외사항/차고지/접수서류/비고` 자유문장6열은 값 null+RAW_FREE_TEXT_WITHHELD이며 나머지 미정제 사업 칸은 원문값+정제 null/UNKNOWN/RAW_FIELD_NOT_NORMALIZED다. 원문 payload/고객·서류·토큰·원문 오류는 반환하지 않는다. maker/model 원문 fallback은 검색·표시 전용이며 정제 HOLD는 유지한다. sourceStatus와 canonical review/판매목록 판정은 각각 구분한다.
+
+ERP의 실제 입력은 `/v1/consumers/erp-com/catalog-compat`의 `data.products` Record map이다. 기존 catalog capability와 명시 `referenceSourceScopes=["COLLECTED"]`가 있는 erp-com만 `?sourceScope=COLLECTED`를 요청할 수 있다. 미grant403은 RAW/products 읽기 전 차단하며 기본 요청과 화이트라벨은 기존 동작이다. allowlist `referenceObservationToCompatibilityProduct`가 현재 행 키/product_code/_key/id, nullable car_number/vehicle_uid, 표시용 차종·known 제원, 원문 차량상태, 기간별 rent/deposit/state 및 `_source_row_product` typed facts를 전달한다. 원문 spreading·임시차번 발급·판매상태 치환은 없다. 기존 legacy 입력과 current row 분모는 meta.legacyProductCount/sourceRowCoverage로 분리하며 합산 차량 수로 해석하지 않는다. ERP는 원천행 DTO의 typed HOLD/UNKNOWN을 확인해야 하며 일반 priceList의 숫자0 기본값을 확인된 ZERO로 승격하지 않는다. 기존 public feed·LISTABLE·ACTIVE·화이트라벨 권한을 확대하는 계약이 아니다.
+
 #### Explicit collected-source scope — code only, operating grants OFF
 
 The existing authenticated reference routes accept `sourceScope=COLLECTED` only for their existing reference consumer identity with an explicit `referenceSourceScopes=["COLLECTED"]` registration. Missing grant returns403 before source reads; invalid/duplicate scope returns400. Existing registrations and omitted/`LISTABLE` scope retain the listable projection. This code does not grant a deployed token new access or change the public feed.
@@ -508,10 +560,10 @@ Source-to-Canonical parity, or a whole-Catalog atomic snapshot.
 
 ## 2026-10-09 기간 금액 수정·저장·조회 실행 경로
 
-- 계산 정본: `KAKAO_COMMISSION_POLICY` 및 Commercial Data Catalog 최신 대표 확정. 새 정책은 code/contract 검사를 통과한 revision으로 고정한다. 현재 확정 정책은 `sales-commission-2026-10-09`.
+- 계산 정본: `KAKAO_COMMISSION_POLICY` 및 Commercial Data Catalog 최신 대표 확정. 새 정책은 code/contract 검사를 통과한 revision으로 고정한다. 현재 개발 정책은 `sales-commission-2026-10-11`이며 운영 저장 적용은 별도 검증 상태다.
 - 가격·보증금 정정은 기존 `UPDATE_OFFER_PRICE`의 expectedRevision/idempotency 경로를 쓴다. 사람 입력 원본과 과거 계약 정산은 자동 덮어쓰지 않는다.
-- 정책 정정은 아래 dry-run → reviewed plan apply를 쓴다. plan에는 모든 Offer before-image/inputDigest가 포함된다. 저장 변경은 CatalogStore 거래의 revision/audit/history/outbox/receipt로 남는다.
-- apply는 각 상품을 새로 getOffer 해서 가격 불변과 정책 재계산 결과를 대조한다. `readbackVerifiedOffers === processedOffers`이고 status APPLIED여야 저장 검증 성공이다. PERSISTENCE_READBACK_MISMATCH면 부분 커밋 건수를 남기고 HOLD로 중단한다.
+- 정책 정정은 아래 dry-run → reviewed plan apply를 쓴다. v2 plan에는 모든 Offer before-image/inputDigest/expectedEconomicsDigest가 포함된다. v1 또는 검토 결과 digest가 없는 계획은 거부한다. 적용 시 거래 안의 계산 결과가 검토 digest와 다르면 쓰기 전에 REVIEWED_ECONOMICS_DRIFT로 중단한다. 저장 변경은 CatalogStore 거래의 revision/audit/history/outbox/receipt로 남는다.
+- apply는 검토·승인 근거 참조 `--approval-ref`를 필수로 받고 실행 SERVICE 신원과 별도로 감사·리비전 reason에 보존한다. 각 상품을 새로 getOffer 해서 가격 불변과 검토된 expectedEconomicsDigest를 대조한다(현재 계산기로 다시 검증하지 않는다). `readbackVerifiedOffers === processedOffers`, `readbackVerifiedChangedOffers === changedOffers`이고 status APPLIED여야 저장 검증 성공이다. changedOffers는 실제 커밋 수이며 검증 완료 수가 아니다. PERSISTENCE_READBACK_MISMATCH면 부분 커밋 건수를 남기고 HOLD로 중단한다.
 - 빌린카 LC는 referenceRentBasis에36개월 termKey·월료·100%/80% 배율을 보존한다. 별도 감사가 가격행/월료/통화/배율/금액을 다시 검증한다. 기준36개월 가격 수정 후 재계산하면 다른 기간 수수료도 바뀐다.
 - 중앙 정본은 `catalog_offers.priceTerms/internalEconomicsTerms`. 모든 기간의 금액 또는 UNKNOWN/null/사유를 함께 둔다. 차량 번호 유무는 상품 식별자를 대체하지 않는다. 등록되지 않은 원천 상품을 저장했다고 확대하지 않는다.
 - Kakao/internal AI 외부 조회: 기존 인증된 `/v1/consumers/:consumerId/catalog-reference` 및 `/v1/consumers/:consumerId/internal-ai-reference` 경로. Admin 저장값은 검증된 admin-catalog 릴리스 발행 뒤 별도 응답을 대사한다. 모든 소비처는 기존 grant를 유지하며 내부 청구수수료를 공개 화이트라벨에 노출하지 않는다.
@@ -522,7 +574,7 @@ $env:FIREBASE_PROJECT_ID='freepasserp5'
 $env:NODE_ENV='production'
 node --import tsx src/jobs/recompute-offer-economics.ts --firestore
 # JSON 보고서의 plan만 비공개 UTF-8 파일로 보존하고 실제 planDigest를 고정한다.
-node --import tsx src/jobs/recompute-offer-economics.ts --firestore --apply --plan <비공개-plan.json> --policy-id sales-commission-2026-10-09 --expected-plan-digest <검토한-planDigest>
+node --import tsx src/jobs/recompute-offer-economics.ts --firestore --apply --plan <비공개-plan.json> --policy-id sales-commission-2026-10-11 --expected-plan-digest <검토한-v2-planDigest> --approval-ref <실제-검토승인-근거참조>
 ```
 ### 정산 원장과 상품 기준표의 금액 의미
 

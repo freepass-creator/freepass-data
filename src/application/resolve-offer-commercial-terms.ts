@@ -1,6 +1,8 @@
-import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
+import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Money, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import type { CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
 import { KAKAO_COMMISSION_POLICY, resolveSalesCommission, resolveSupplierBillingFee } from './kakao-catalog-reference.js';
+import type { PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
 import type {
   DepositResolution,
   MileageResolution,
@@ -12,12 +14,116 @@ import type {
 const positiveSafeInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
+/** Stored facts only. IDs, revision and complete price condition must match; never infer aliases. */
+export function joinStoredProductEconomics(productId: string, offers: readonly Offer[], ledger: readonly PeriodFeeLedgerRow[]) {
+  const unknown = (reasonCode: string): TermEconomicAmount => ({state:'UNKNOWN',amount:null,calculation:null,
+    sourceRefs:[],vatAmount:null,totalAmount:null,reasonCode});
+  const normalize = (fee: TermEconomicAmount): TermEconomicAmount => {
+    if (fee.state === 'UNKNOWN') return unknown(fee.reasonCode || 'STORED_FEE_UNKNOWN');
+    if (fee.state === 'NOT_APPLICABLE') return fee.amount == null ? structuredClone(fee) : unknown('INVALID_STORED_FEE_STATE');
+    const valid = fee.amount?.currency === 'KRW' && Number.isSafeInteger(fee.amount.amount) &&
+      (fee.state === 'ZERO' ? fee.amount.amount === 0 : fee.state === 'KNOWN' && fee.amount.amount > 0) && fee.sourceRefs.length > 0 && fee.sourceRefs.every(ref=>typeof ref==='string' && !!ref.trim());
+    return valid ? structuredClone(fee) : unknown('STORED_FEE_EVIDENCE_REQUIRED');
+  };
+  const ledgerFee = (fee: PeriodFeeLedgerRow['supplierBillingFee']): TermEconomicAmount => normalize({
+    ...structuredClone(fee), state:fee.state === 'CALCULATED' ? (fee.amount?.amount === 0 ? 'ZERO':'KNOWN') :
+      fee.state === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE':'UNKNOWN',
+    calculation:null, reasonCode:fee.state === 'CALCULATED_APPROX' ? 'APPROX_FEE_NOT_CONFIRMED':fee.reasonCode,
+    vatTreatment:fee.vatTreatment ?? 'UNKNOWN',policyId:fee.policyId ?? ''});
+  const comparable = (fee: TermEconomicAmount) => ({state:fee.state,amount:fee.amount ?? null,
+    vatTreatment:fee.vatTreatment ?? 'UNKNOWN',vatAmount:fee.vatAmount ?? null,totalAmount:fee.totalAmount ?? null,
+    policyId:fee.policyId?.trim() || null,ruleId:fee.ruleId ?? null});
+  const selected = offers.filter(offer=>offer.productId===productId);
+  const rows = selected.flatMap(offer=>offer.priceTerms.map(price=>{
+    const economics=offer.internalEconomicsTerms?.filter(term=>term.termKey===price.termKey) ?? [];
+    const matches=ledger.filter(row=>row.productId===productId && row.offerId===offer.id && row.termKey===price.termKey);
+    let reason:string|null=null;
+    if (selected.filter(candidate=>candidate.id===offer.id).length!==1 || offer.priceTerms.filter(term=>term.termKey===price.termKey).length!==1 || economics.length>1 || matches.length>1)
+      reason='DUPLICATE_STORED_JOIN_KEY';
+    const saved=economics[0], stored=matches[0];
+    if (!reason && saved && (saved.termMonths!==price.termMonths || !saved.monthlyRent || stableDigest(saved.monthlyRent)!==stableDigest(price.monthlyRent) ||
+      saved.depositCalculation.state!==price.depositState || stableDigest(saved.depositCalculation.amount ?? null)!==stableDigest(price.deposit ?? null))) reason='OFFER_ECONOMICS_PRICE_MISMATCH';
+    if (!reason && stored && (stored.offerRevision!==offer.revision || stored.supplierId!==offer.supplierId || stored.termMonths!==price.termMonths ||
+      stableDigest(stored.monthlyRent.state==='KNOWN'?{amount:stored.monthlyRent.amount,currency:stored.monthlyRent.currency}:null)!==stableDigest(price.monthlyRent) ||
+      stored.deposit.state!==price.depositState || stableDigest(stored.deposit.amount)!==stableDigest(price.deposit ?? null))) reason='LEDGER_PRICE_OR_REVISION_MISMATCH';
+    if (!reason && stored && stored.applyState!=='READY') reason=stored.holdReasonCode || 'LEDGER_NOT_READY';
+    const billing=saved?normalize(saved.supplierBillingFee):stored?ledgerFee(stored.supplierBillingFee):unknown('STORED_ECONOMICS_NOT_FOUND');
+    const payout=saved?normalize(saved.channelPayoutFee):stored?ledgerFee(stored.channelPayoutFee):unknown('STORED_ECONOMICS_NOT_FOUND');
+    if (!reason && saved && stored && (stableDigest(comparable(billing))!==stableDigest(comparable(ledgerFee(stored.supplierBillingFee))) ||
+      stableDigest(comparable(payout))!==stableDigest(comparable(ledgerFee(stored.channelPayoutFee))))) reason='STORED_FEE_SOURCES_CONFLICT';
+    const rentValid=price.monthlyRent.currency==='KRW' && positiveSafeInteger(price.monthlyRent.amount);
+    const verifiedZeroRent=price.monthlyRent.currency==='KRW' && price.monthlyRent.amount===0 &&
+      stored?.monthlyRent.state==='KNOWN' && stored.monthlyRent.amount===0 && stored.priceSourceRefs.some(ref=>typeof ref==='string' && !!ref.trim());
+    return {productId,offerId:offer.id,offerRevision:offer.revision,supplierId:offer.supplierId,
+      termKey:price.termKey,termMonths:price.termMonths,joinState:reason?'HOLD':saved&&stored?'MATCHED':saved?'OFFER_ONLY':stored?'LEDGER_ONLY':'HOLD',reasonCode:reason ?? (saved||stored?null:'STORED_ECONOMICS_NOT_FOUND'),
+      monthlyRent:{state:!reason&&verifiedZeroRent?'ZERO':rentValid&&!reason?'KNOWN':'UNKNOWN',amount:(rentValid||verifiedZeroRent)&&!reason?structuredClone(price.monthlyRent):null,reasonCode:reason ?? (rentValid||verifiedZeroRent?null:'RENT_EVIDENCE_REQUIRED')},
+      deposit:reason?unknown(reason):normalize({state:price.depositState,amount:price.deposit ?? null,calculation:null,
+        sourceRefs:stored?.deposit.sourceRefs ?? saved?.depositCalculation.sourceRefs ?? [],reasonCode:stored?.deposit.reasonCode ?? 'DEPOSIT_EVIDENCE_REQUIRED'}),
+      supplierBillingFee:reason?unknown(reason):billing,channelPayoutFee:reason?unknown(reason):payout};
+  }));
+  return {productId,rows,orphanLedgerRows:ledger.filter(row=>row.productId===productId && !rows.some(join=>join.offerId===row.offerId && join.termKey===row.termKey)).length};
+}
+
+/** Existing approved vehicle-price rates need an explicit source fact; rent is not that fact. */
+export function refreshOfferEconomicsForChangedInputs(
+  previous: Offer, next: Offer, policyContextChanged: boolean, commercialType?: CommercialType, fuel?: string | null,
+  vehiclePriceChange?: { before: Money | null; after: Money | null; sourceRef: string },
+) {
+  if (typeof policyContextChanged !== 'boolean') throw new Error('POLICY_CONTEXT_CHANGE_DECISION_REQUIRED');
+  const candidate = precomputeOfferEconomics(next, commercialType, fuel);
+  const old = new Map((previous.internalEconomicsTerms ?? []).map(term => [term.termKey, term]));
+  const oldPrices = new Map(previous.priceTerms.map(term => [term.termKey, term]));
+  const changedPriceKeys = new Set(next.priceTerms.filter(term => stableDigest(oldPrices.get(term.termKey) ?? null) !== stableDigest(term)).map(term => term.termKey));
+  for (const key of oldPrices.keys()) if (!next.priceTerms.some(term => term.termKey === key)) changedPriceKeys.add(key);
+  const reference36Changed = stableDigest(previous.priceTerms.filter(term => term.termMonths === 36)) !==
+    stableDigest(next.priceTerms.filter(term => term.termMonths === 36));
+  const priceChanged = !!vehiclePriceChange && stableDigest(vehiclePriceChange.before) !== stableDigest(vehiclePriceChange.after);
+  return candidate.map(term => {
+    for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
+      const fee = old.get(term.termKey)?.[side];
+      if (!fee) continue;
+      if (fee.calculation?.kind !== 'RATE' || fee.calculation.base !== 'VEHICLE_PRICE') {
+        const referenceChanged = (fee.referenceRentBasis && changedPriceKeys.has(fee.referenceRentBasis.termKey)) ||
+          (fee.ruleId?.startsWith('BILLIN_SUBSCRIPTION_36_RENT') && reference36Changed);
+        if (!policyContextChanged && !changedPriceKeys.has(term.termKey) && !referenceChanged) term[side] = structuredClone(fee);
+        continue;
+      }
+      term[side] = structuredClone(fee);
+      const oldPrice = oldPrices.get(term.termKey), newPrice = next.priceTerms.find(price => price.termKey === term.termKey)!;
+      if (policyContextChanged || oldPrice?.termMonths !== newPrice.termMonths ||
+          oldPrice?.mileageLimitKmPerYear !== newPrice.mileageLimitKmPerYear) {
+        term[side] = { ...structuredClone(fee), state: 'UNKNOWN', amount: null, calculation: null,
+          sourceRefs: [], vatAmount: null, totalAmount: null, reasonCode: 'VEHICLE_PRICE_POLICY_CONTEXT_REVIEW_REQUIRED' };
+        continue;
+      }
+      if (!priceChanged) continue;
+      const fact = vehiclePriceChange!;
+      const valid = fact.after?.currency === 'KRW' && positiveSafeInteger(fact.after.amount) &&
+        !!fact.sourceRef.trim() && !!fee.ruleId && !!fee.policyId && fee.sourceRefs.some(ref => ref.trim()) &&
+        (fee.state === 'KNOWN' || fee.state === 'ZERO') && Number.isFinite(fee.calculation.rate) && fee.calculation.rate >= 0;
+      const amount = valid ? Math.round(fact.after!.amount * fee.calculation.rate) : null;
+      if (amount === null || !Number.isSafeInteger(amount) || amount < 0) {
+        term[side] = { ...structuredClone(fee), state: 'UNKNOWN', amount: null, calculation: null,
+          sourceRefs: [], vatAmount: null, totalAmount: null, reasonCode: 'VEHICLE_PRICE_EVIDENCE_REQUIRED' };
+        continue;
+      }
+      const vat = fee.vatTreatment === 'EXCLUDED' ? Math.round(amount * 0.1) :
+        fee.vatTreatment === 'INCLUDED' ? Math.round(amount / 11) : null;
+      term[side] = { ...structuredClone(fee), state: amount === 0 ? 'ZERO' : 'KNOWN',
+        amount: { amount, currency: 'KRW' }, priceSourceRefs: [fact.sourceRef], vatAmount: vat,
+        totalAmount: vat === null ? null : fee.vatTreatment === 'EXCLUDED' ? amount + vat : amount,
+        reasonCode: null };
+    }
+    return term;
+  });
+}
+
 /** Canonical save adapter for the existing pinned commission policy. No I/O or input mutation.
  * Fees are per whole contract, supply amounts excluding VAT; missing rules are not exemptions.
  * Reuses the period-fees prototype's fail-closed mapping without its compatibility storage path.
  */
 export function precomputeOfferEconomics(
-  offer: Pick<Offer, 'id' | 'supplierId' | 'priceTerms'>,
+  offer: Pick<Offer, 'id' | 'supplierId' | 'priceTerms'> & Pick<Partial<Offer>, 'internalEconomicsTerms'>,
   commercialType?: CommercialType,
   fuel?: string | null,
   evidenceByTerm: CommissionEvidenceByTerm = {},
@@ -36,6 +142,10 @@ export function precomputeOfferEconomics(
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
       billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
+      const saved = offer.internalEconomicsTerms?.find(candidate => candidate.termKey === term.termKey)?.[
+        side === 'BILLING' ? 'supplierBillingFee' : 'channelPayoutFee'];
+      // This adapter has no canonical vehicle-price fact. Never replace that approved basis with rent.
+      if (saved?.calculation?.kind === 'RATE' && saved.calculation.base === 'VEHICLE_PRICE') return structuredClone(saved);
       const base: Pick<TermEconomicAmount, 'ruleId' | 'policyId' | 'sourceRefs' | 'priceSourceRefs' | 'vatTreatment' | 'vatAmount' | 'totalAmount' | 'referenceRentBasis'> = { ruleId: result.ruleId, policyId: policy.policyId,
         sourceRefs: [] as string[], priceSourceRefs: [priceRef],
         vatTreatment: result.vatTreatment, vatAmount: result.vatAmount, totalAmount: result.totalAmount };
@@ -59,7 +169,24 @@ export function precomputeOfferEconomics(
       if (result.state !== 'CALCULATED' || result.amount === null) return unknown(result.reasonCode ?? 'NO_MATCHING_RULE');
 
       let calculation: TermEconomicAmount['calculation'];
-      if (result.ruleId?.endsWith('_RENT_X_TERM')) {
+      const monthlyRule = policy.rules.find(rule => rule.id === result.ruleId && 'basis' in rule && rule.basis === 'MONTHLY_RENT');
+      if (term.termMonths === 1 && result.ruleId?.startsWith('STANDARD_RERENT_1_') && monthlyRule &&
+          'rateBasisPoints' in monthlyRule && typeof monthlyRule.rateBasisPoints === 'number') {
+        // Existing supported RATE base equals monthly rent for a one-month contract.
+        // Legacy FIXED rows need the original confirmed policy evidence, not just a familiar rule ID.
+        if (saved?.calculation?.kind === 'FIXED') {
+          const storedTerm = offer.internalEconomicsTerms?.find(candidate => candidate.termKey === term.termKey);
+          const oldRent = storedTerm?.monthlyRent;
+          const verified = saved.ruleId === result.ruleId && saved.policyId === policy.policyId &&
+            saved.sourceRefs.includes(policy.oneMonthBasic.sourceRef) &&
+            (saved.state === 'KNOWN' || saved.state === 'ZERO') && oldRent?.currency === 'KRW' &&
+            positiveSafeInteger(oldRent.amount) && saved.amount?.currency === 'KRW' &&
+            saved.amount.amount === Math.round(oldRent.amount * monthlyRule.rateBasisPoints / 10000) &&
+            saved.calculation.amount.currency === 'KRW' && saved.calculation.amount.amount === saved.amount.amount;
+          if (!verified) throw new Error('LEGACY_RENT_FEE_BASIS_REVIEW_REQUIRED');
+        }
+        calculation = { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: monthlyRule.rateBasisPoints / 10000 };
+      } else if (result.ruleId?.endsWith('_RENT_X_TERM')) {
         // Read rates from the same policy table, including the Switch ladder alias.
         const billing = policy.rules.find((rule) => rule.id === 'STANDARD_RERENT_BILLING_LADDER')!;
         const payout = policy.rules.find((rule) => 'termMonths' in rule && rule.termMonths === term.termMonths &&

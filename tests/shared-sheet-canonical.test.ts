@@ -11,7 +11,7 @@ import { planSharedSheetCanonical, runSharedSheetCanonical, preflightSharedSheet
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { queryCanonicalByPlate } from '../src/jobs/query-canonical-by-plate.js';
+import { queryCanonicalByPlate, queryCanonicalProducts, queryFirestoreByPlate, main as queryMain } from '../src/jobs/query-canonical-by-plate.js';
 import type { SourceIngestionStore } from '../src/ports/source-store.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 
@@ -72,6 +72,219 @@ function later(c: SharedSheetCapture) {
   return c;
 }
 describe('shared sheet local source to Canonical', () => {
+  it('searches products by supplier and name without requiring a vehicle number and preserves every stored fact', async () => {
+    const s = await stores(); await apply(s);
+    const product = (await s.store.listProducts())[0]!;
+    const offer = (await s.store.listOffers())[0]!;
+    const newProduct = { ...product, id: 'test:new-product', vehicleAssetId: null, commercialType: 'NEW_RENT' as const };
+    const newOffer = { ...offer, id: 'test:new-offer', productId: newProduct.id };
+    await s.store.seed({ products: [newProduct], offers: [newOffer] });
+    const before = stableDigest({ products: await s.store.listProducts(), offers: await s.store.listOffers() });
+    const result = await queryCanonicalProducts(s.store, { supplierName: '웰릭스', vehicleName: '시험모델' });
+    expect(result.matchedProducts).toBe(2);
+    const row = result.results.find(x => x.productId === newProduct.id)!;
+    expect(row.vehicleAsset).toBeNull();
+    expect(row.product).toEqual(newProduct);
+    expect(row.offer).toEqual(newOffer);
+    expect(row.terms).toHaveLength(3);
+    expect(row.photos).toMatchObject({ state: 'UNKNOWN', count: null, references: null });
+    expect(row.unknownFields).toContain('photos');
+    expect((await queryCanonicalProducts(s.store, { productId: newProduct.id })).matchedProducts).toBe(1);
+    expect((await queryCanonicalProducts(s.store, { supplierName: '없는공급사' })).matchedProducts).toBe(0);
+    expect((await queryCanonicalProducts(s.store, { plate: 'TEST-FAKE-001', supplierName: '웰릭스' })).matchedProducts).toBe(1);
+    expect(stableDigest({ products: await s.store.listProducts(), offers: await s.store.listOffers() })).toBe(before);
+  });
+  it('keeps a stored product visible when offer and vehicle links are unconfirmed', async () => {
+    const s = await stores(); await apply(s);
+    const product = (await s.store.listProducts())[0]!;
+    await s.store.seed({ products: [{ ...product, id: 'test:unconfirmed', vehicleModelId: 'test:missing', vehicleAssetId: null }] });
+    const result = await queryCanonicalProducts(s.store, { productId: 'test:unconfirmed' });
+    expect(result.matchedProducts).toBe(1);
+    expect(result.results[0]).toMatchObject({ offer: null, vehicleModel: null, policy: null, terms: [] });
+    expect(result.results[0]!.priceTermsState).toBe('UNKNOWN');
+    const filtered = await queryCanonicalProducts(s.store, { supplierName: '없는공급사' });
+    expect(filtered.supplierTermResolved).toBe(false);
+    expect(filtered.unresolvedSupplierProducts).toBe(1);
+    expect(result.results[0]!.unknownFields).toEqual(expect.arrayContaining(['vehicleModel', 'offer', 'photos', 'priceTerms']));
+    await expect(queryCanonicalProducts(s.store, { vehicleName: ' ' })).rejects.toThrow('INVALID_PRODUCT_SEARCH');
+    await expect(queryCanonicalProducts(s.store, { unrecognized: 'test' } as never)).rejects.toThrow('INVALID_PRODUCT_SEARCH');
+  });
+  it('resolves registered suppliers even when their active sheet tab is absent', async () => {
+    const s = await stores(); await apply(s);
+    const offer = (await s.store.listOffers())[0]!;
+    await s.store.seed({ offers: [{ ...offer, supplierId: 'RP011' }] });
+    const result = await queryCanonicalProducts(s.store, { supplierName: '연카' });
+    expect(result.supplierTermResolved).toBe(true);
+    expect(result.matchedProducts).toBe(1);
+  });
+  it.each([
+    { state: 'UNKNOWN' as const, tampered: false }, { state: 'NOT_APPLICABLE' as const, tampered: false },
+    { state: 'UNKNOWN' as const, tampered: true }, { state: 'NOT_APPLICABLE' as const, tampered: true },
+  ])('preserves unresolved $state and rejects readback mutation: $tampered', async ({ state, tampered }) => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const offer = (await s.store.listOffers())[0]!;
+      const fee = { state, amount: null, calculation: null, ruleId: null,
+        sourceRefs: [], reasonCode: 'test:original-unresolved' };
+      offer.internalEconomicsTerms![0]!.channelPayoutFee = structuredClone(fee);
+      await s.store.seed({ offers: [offer] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      if (tampered) {
+        const readOffer = s.store.getOffer.bind(s.store);
+        const readReceipt = s.store.getReviewedSourceChangeReceipt.bind(s.store);
+        vi.spyOn(s.store, 'getOffer').mockImplementation(async id => {
+          const current = await readOffer(id);
+          if (current && await readReceipt(p.plan.entries[0]!.change!.idempotencyKey))
+            current.internalEconomicsTerms![0]!.channelPayoutFee = { state: 'KNOWN',
+              amount: { amount: 123, currency: 'KRW' }, calculation: { kind: 'FIXED', amount: { amount: 123, currency: 'KRW' } },
+              ruleId: 'test:injected-rule', policyId: 'test:injected-policy', sourceRefs: ['test:injected-source'] };
+          return current;
+        });
+      }
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: tampered ? 'HOLD' : 'APPLIED',
+        reconciliation: { readbackMismatches: tampered ? 1 : 0 } });
+      expect((await s.store.listOffers())[0]!.internalEconomicsTerms![0]!.channelPayoutFee).toEqual(fee);
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(['unchanged', 'amount', 'rate', 'base', 'vat', 'total', 'source', 'policy', 'rule'])(
+    'verifies the exact vehicle-price fee snapshot after rent refresh: %s', async scenario => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const offer = (await s.store.listOffers())[0]!;
+      const fee = { state: 'KNOWN' as const, amount: { currency: 'KRW' as const, amount: 300000 },
+        calculation: { kind: 'RATE' as const, base: 'VEHICLE_PRICE' as const, rate: 0.01 },
+        ruleId: 'test:confirmed-vehicle-rule', policyId: 'test:confirmed-policy', sourceRefs: ['test:confirmed-source'] };
+      offer.internalEconomicsTerms![0]!.channelPayoutFee = structuredClone(fee);
+      await s.store.seed({ offers: [offer] });
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      if (scenario !== 'unchanged') {
+        const readOffer = s.store.getOffer.bind(s.store);
+        const readReceipt = s.store.getReviewedSourceChangeReceipt.bind(s.store);
+        vi.spyOn(s.store, 'getOffer').mockImplementation(async id => {
+          const current = await readOffer(id);
+          if (current && await readReceipt(p.plan.entries[0]!.change!.idempotencyKey)) {
+            const changed = current.internalEconomicsTerms![0]!.channelPayoutFee;
+            if (scenario === 'amount') changed.amount!.amount++;
+            if (scenario === 'rate' && changed.calculation?.kind === 'RATE') changed.calculation.rate = 0.02;
+            if (scenario === 'base' && changed.calculation?.kind === 'RATE') changed.calculation.base = 'MONTHLY_RENT_X_TERM';
+            if (scenario === 'vat') changed.vatAmount = 123;
+            if (scenario === 'total') changed.totalAmount = 123;
+            if (scenario === 'source') changed.sourceRefs = ['test:changed-source'];
+            if (scenario === 'policy') changed.policyId = 'test:changed-policy';
+            if (scenario === 'rule') changed.ruleId = 'test:changed-rule';
+          }
+          return current;
+        });
+      }
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: scenario === 'unchanged' ? 'APPLIED' : 'HOLD',
+        reconciliation: { readbackMismatches: scenario === 'unchanged' ? 0 : 1 } });
+      expect((await s.store.listOffers())[0]!.internalEconomicsTerms![0]!.channelPayoutFee).toEqual(fee);
+    } finally { vi.useRealTimers(); }
+  });
+  it('records a fresh unchanged observation without changing product or offer revisions', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const before = stableDigest({ products: await s.store.listProducts(), offers: await s.store.listOffers() });
+      const p = await planSharedSheetCanonical(s.store, later(capture()), 'synthetic-target', undefined, false, true);
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: 'APPLIED', committed: 0, noChange: 1 });
+      expect(stableDigest({ products: await s.store.listProducts(), offers: await s.store.listOffers() })).toBe(before);
+    } finally { vi.useRealTimers(); }
+  });
+  it('pins the operational refresh decision and rejects fence tampering before RAW intake', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const p = await planSharedSheetCanonical(s.store, later(capture()), 'synthetic-target', undefined, false, true);
+      const tampered = structuredClone(p.plan);
+      tampered.entries[0]!.change!.operationalRefresh!.maxObservationAgeSeconds = 1800;
+      await expect(runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: tampered, expectedPlanDigest: p.report.planDigest })).rejects.toThrow();
+      expect(await s.source.getRun(p.plan.runId)).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+  it('routes scheduled status and rent refresh through the pinned operational writer', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const c = later(capture({ 차량상태: '출고불가', '1개월': 777 }));
+      const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, false, true);
+      expect(p.plan.operationalRefresh).toBe(true);
+      expect(p.plan.entries[0]!.action).toBe('CHANGE');
+      expect(p.plan.entries[0]!.change!.operationalRefresh).toMatchObject({ maxObservationAgeSeconds: 900 });
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: 'APPLIED' });
+      expect((await s.store.listProducts())[0]!.status).toBe('HOLD');
+      expect((await s.store.listOffers())[0]!.priceTerms.find(x => x.termMonths === 1)!.monthlyRent.amount).toBe(777);
+      expect((await s.store.listOffers())[0]!.internalEconomicsTerms!.find(x => x.termMonths === 1)!.supplierBillingFee.amount!.amount).toBe(39);
+    } finally { vi.useRealTimers(); }
+  });
+  it('rejects an operational observation older than fifteen minutes without changing Canonical', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const before = stableDigest(await s.store.listOffers());
+      const p = await planSharedSheetCanonical(s.store, later(capture({ '1개월': 777 })), 'synthetic-target', undefined, false, true);
+      vi.setSystemTime(new Date('2026-10-04T00:30:01.000Z'));
+      await expect(runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest })).rejects.toThrow('HOLD');
+      expect(stableDigest(await s.store.listOffers())).toBe(before);
+    } finally { vi.useRealTimers(); }
+  });
+  it('preserves human rent through the actual scheduled plan and apply path', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:15:00.000Z'));
+    try {
+      const s = await stores(); await apply(s);
+      const offer = (await s.store.listOffers())[0]!;
+      const edited = structuredClone(offer);
+      edited.priceTerms[0]!.monthlyRent.amount = 999;
+      await s.store.seed({ offers: [edited] });
+      const c = later(capture({ '1개월': 777 }));
+      const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, false, true);
+      const result = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+        plan: p.plan, expectedPlanDigest: p.report.planDigest });
+      expect(result.report).toMatchObject({ status: 'HOLD', reason: 'CANONICAL_COMMAND_REJECTED' });
+      expect((await s.store.getOffer(offer.id))!.priceTerms[0]!.monthlyRent.amount).toBe(999);
+    } finally { vi.useRealTimers(); }
+  });
+  it('pins color refinement in the reviewed plan and persists its candidate facts through existing intake', async () => {
+    const s = await stores(), c = capture({ 외부색상: '흰색', 내부색상: '검정' });
+    const normal = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
+    expect(normal.plan.ruleVersion).toBe('shared-sheet-normalizer/5');
+    const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, true);
+    expect(p.plan.ruleVersion).toBe('shared-sheet-normalizer/6');
+    expect(p.plan.includeSupplierColors).toBe(true);
+    const applied = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+      plan: p.plan, expectedPlanDigest: p.report.planDigest });
+    expect(applied.report).toMatchObject({ status: 'APPLIED' });
+    const assets = await s.store.listVehicleAssets();
+    expect(assets[0]!.sourceVehicleFacts!.fields.exteriorColor).toMatchObject({ state: 'KNOWN', value: '흰색' });
+    const candidates = await s.source.listCandidates(p.plan.runId);
+    expect(candidates[0]!.candidate.vehicleFacts!.fields.exteriorColor).toMatchObject({ state: 'KNOWN', value: '흰색' });
+    const changed = { ...p.plan };
+    delete changed.includeSupplierColors;
+    await expect(runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+      plan: changed, expectedPlanDigest: stableDigest(changed) })).rejects.toThrow('SHARED_SHEET_PLAN_REQUIRED_OR_CHANGED');
+  });
+  it('does not rewrite completed v5 source candidates with color v6', async () => {
+    const s = await stores(), c = capture({ 외부색상: '흰색' });
+    await apply(s, c);
+    await expect(planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, true))
+      .rejects.toThrow('SUPPLIER_COLOR_REFINEMENT_REQUIRES_NEW_SOURCE_RUN');
+    const old = await s.source.listCandidates(prepareRawSourceBatch(buildSharedSheetBatch(c)).runId);
+    expect(old[0]!.candidate.vehicleFacts!.fields.exteriorColor).toBeUndefined();
+    const fresh = await planSharedSheetCanonical(s.store, later(capture({ 외부색상: '흰색' })), 'synthetic-target', undefined, true);
+    expect(fresh.plan.ruleVersion).toBe('shared-sheet-normalizer/6');
+  });
   it.each([0, '0', '', '미확인', '협의'])('holds short deposit %j without inventing zero; preserves long-term evidence', value => {
     const n = normalized(capture({ 단기보증: value }));
     expect(n.record.candidate.priceTerms.filter(t => t.termMonths <= 12).every(t => t.depositState === 'UNKNOWN' && !t.deposit)).toBe(true);
@@ -118,6 +331,29 @@ describe('shared sheet local source to Canonical', () => {
     expect(f.displacementCc!.value).toBe(1234); expect(f.batteryKwh!.value).toBe(77.7); expect(f.drive!.value).toBe('2WD');
     expect(n.record.candidate.priceTerms[0]!.depositState).toBe('ZERO');
   });
+  it('keeps both supplier colors as distinct source facts with cell lineage and immutable RAW', () => {
+    const c = capture({ 외부색상: '  펄 화이트  ', 내부색상: '블랙/브라운' });
+    const raw = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords[0]!;
+    const before = structuredClone(raw);
+    const n = normalizeSharedSheet(raw, masterEvidence(), { includeSupplierColors: true });
+    expect(n.record.candidate.vehicleFacts!.fields.exteriorColor).toMatchObject({ value: '펄 화이트', state: 'KNOWN', evidence: '펄 화이트' });
+    expect(n.record.candidate.vehicleFacts!.fields.interiorColor).toMatchObject({ value: '블랙/브라운', state: 'KNOWN' });
+    expect(n.lineage.find(l => l.normalized?.fieldPath === 'vehicleFacts.fields.exteriorColor')).toMatchObject({
+      source: { value: '  펄 화이트  ' }, normalized: { value: { value: '펄 화이트', state: 'KNOWN' } } });
+    expect(raw).toEqual(before);
+  });
+  it('does not borrow exterior color for empty interior color or guess a review placeholder', () => {
+    const c = capture({ 외부색상: '확인 필요', 내부색상: '' });
+    const raw = prepareRawSourceBatch(buildSharedSheetBatch(c)).rawRecords[0]!;
+    const n = normalizeSharedSheet(raw, masterEvidence(), { includeSupplierColors: true });
+    expect(n.record.candidate.vehicleFacts!.fields.exteriorColor).toMatchObject({ value: null, state: 'REVIEW_REQUIRED' });
+    expect(n.record.candidate.vehicleFacts!.fields.interiorColor).toMatchObject({ value: null, state: 'MISSING' });
+    expect(n.record.candidate.issues).not.toContain('INVALID_EXTERIORCOLOR');
+    expect(n.record.status).toBe('VALID');
+    const old = normalizeSharedSheet(raw, masterEvidence());
+    expect(old.record.candidate.vehicleFacts!.ruleVersion).toBe('shared-sheet-normalizer/5');
+    expect(old.record.candidate.vehicleFacts!.fields).not.toHaveProperty('exteriorColor');
+  });
   // 소수 칸 표시 형식 «0.###"kWh"»는 정수를 «22.kWh»로 보인다(2026-10-04 서식 통일) — 같은 값. 점 두 개·글자는 여전히 거부.
   it.each([['22.kWh', 22], ['54.kWh', 54], ['77.4kWh', 77.4], ['84kWh', 84]])('battery %s → %s', (shown, value) =>
     expect(normalized(capture({ 배터리용량: shown })).record.candidate.vehicleFacts!.fields.batteryKwh!.value).toBe(value));
@@ -154,7 +390,7 @@ describe('shared sheet local source to Canonical', () => {
     expect(JSON.stringify(result.report)).not.toContain('TEST-FAKE');
   });
   it('commits economics for every term; unresolved fee is null, not zero', async () => {
-    const s = await stores(); const p = await apply(s);
+    const s = await stores(); const p = await apply(s, capture({ '6개월': 600 }));
     expect(p.result.report).toMatchObject({ status: 'APPLIED', committed: 1 });
     const offer = (await s.store.listOffers())[0]!;
     expect(offer.internalEconomicsTerms).toHaveLength(offer.priceTerms.length);
@@ -262,6 +498,38 @@ describe('shared sheet local source to Canonical', () => {
     const result = await queryCanonicalByPlate(s.store, ' test-fake-001 ');
     expect(result.matchedAssets).toBe(1); expect(result.results[0]!.terms).toHaveLength(3);
     expect(result.results[0]!.vehicle.facts!.fields.modelYear!.value).toBe(2026); expect(tx).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ authority: 'STORED_CANONICAL', schema: 'freepass-data.internal-canonical-query/v1' });
+    expect(result.results[0]).toHaveProperty('offerId');
+  });
+  it('direct query refuses stale stored economics without recalculating or writing', async () => {
+    const s = await stores(); await apply(s);
+    const offer = (await s.store.listOffers())[0]!;
+    offer.internalEconomicsTerms![0]!.monthlyRent = { amount: 999999, currency: 'KRW' };
+    await s.store.seed({ offers: [offer] });
+    const tx = vi.spyOn(s.store, 'transact');
+    const result = await queryCanonicalByPlate(s.store, 'TEST-FAKE-001');
+    expect(result.results[0]!.terms[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null,
+      vatAmount: null, totalAmount: null, reasonCode: 'MONTHLY_RENT_MISMATCH', status: 'UNCONFIRMED' });
+    expect(result.results[0]!.terms[0]!.channelPayoutFee.amount).toBeNull();
+    expect(tx).not.toHaveBeenCalled();
+  });
+  it('rejects unsafe direct CLI configuration and empty identity before Firebase access', async () => {
+    await expect(queryFirestoreByPlate('')).rejects.toThrow('PLATE_REQUIRED');
+    await expect(queryMain(['--direct', '--memory', '--plate-file', 'synthetic', '--local-output', 'synthetic']))
+      .rejects.toThrow('DIRECT_FIRESTORE_REQUIRED');
+    await expect(queryMain(['--direct', '--firestore', '--plate-file', 'synthetic']))
+      .rejects.toThrow('LOCAL_INPUT_OUTPUT_REQUIRED');
+  });
+  it('preserves older stored fee terms with optional price basis absent', async () => {
+    const s = await stores(); await apply(s);
+    const offer = (await s.store.listOffers())[0]!;
+    delete offer.internalEconomicsTerms![0]!.termMonths;
+    delete offer.internalEconomicsTerms![0]!.monthlyRent;
+    await s.store.seed({ offers: [offer] });
+    const result = await queryCanonicalByPlate(s.store, 'TEST-FAKE-001');
+    expect(result.results[0]!.feeContract).toBe('internal-fee-lookup/v1');
+    expect(result.results[0]!.terms[0]!.supplierBillingFee.reasonCode).not.toBe('MONTHLY_RENT_MISMATCH');
+    expect(result.results[0]!.terms[0]!.supplierBillingFee.reasonCode).not.toBe('TERM_MONTHS_MISMATCH');
   });
   it('keeps first observation from a previously held RAW row', async () => {
     const s = await stores(); await apply(s, capture({ 세부트림: '' }));
