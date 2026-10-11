@@ -20,6 +20,31 @@ function capture(): Erp5SourceCapture {
 const input = (sheet: VehicleIdentity, data: VehicleIdentity | null = null) =>
   ({ sheet, data, raw: '쏘나타 DN8 스마트', firstRegistration: '', modelYear: '' });
 describe('one active Data master authority', () => {
+  it('uses exact supplied specs and model year to select an immutable pair, never the first same-name ID', () => {
+    const records = ['t-old', 't-new'].map((trimId, i) => ({ masterId: 'm1', trimId, names, aliases: names.map(n => [n]),
+      specs: { fuel: 'LPG', displacementCc: 1999, drive: '2WD', seats: 5 },
+      modelYearStart: i ? 2026 : 2024, modelYearEnd: i ? 2100 : 2025 }));
+    const master = indexVehicleMaster(records);
+    expect(chooseVehicleIdentity(master, input(names)).pick).toBe('HOLD');
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { fuel: 'LPG', displacementCc: 1999,
+      drive: '2WD', seats: 5, modelYear: 2025 } })).toMatchObject({ pick: 'SHEET', masterId: 'm1', trimId: 't-old' });
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: 2000, modelYear: 2025 } }).pick).toBe('HOLD');
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: 1999 } }).pick).toBe('HOLD');
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { modelYear: null } }).pick).toBe('HOLD');
+  });
+  it('holds a previously unique name when supplied fuel or displacement contradicts the master', () => {
+    const master = indexVehicleMaster([{ masterId: 'm1', trimId: 't1', names, aliases: names.map(n => [n]),
+      specs: { fuel: '가솔린', displacementCc: 1999 } }]);
+    expect(chooseVehicleIdentity(master, input(names)).pick).toBe('SHEET');
+    for (const specs of [{ fuel: '하이브리드', displacementCc: 3000 }, { displacementCc: 2000 }, { seats: 5 }]) {
+      expect(chooseVehicleIdentity(master, { ...input(names), specs }).pick).toBe('HOLD');
+    }
+  });
+  it('loads specs only from the sealed native trim and keeps its IDs', () => {
+    expect(verifiedMasterRecords(snapshot({ fuel: '디젤', engine_cc: 2151, drivetrain: 'FWD', seats: 9,
+      model_year_start: '2020', model_year_end: '현재' }))[0]).toMatchObject({ masterId: 'm1', trimId: 't1',
+      specs: { fuel: '디젤', displacementCc: 2151, drive: '2WD', seats: 9 }, modelYearStart: 2020, modelYearEnd: 2100 });
+  });
   it('publishes native ID provenance tied to the exact verified snapshot', () => {
     const master = snapshot();
     expect(verifiedVehicleMasterReference(master, { masterId: 'm1', trimId: 't1' })).toEqual({
