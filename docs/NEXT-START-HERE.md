@@ -1,5 +1,7 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-10 신뢰도 점검표 읽기 전용 산출: `src/application/trust-scorecard.ts`·`src/jobs/audit-trust-scorecard.ts`·`docs/TRUST-SCORECARD.md` 추가, 기존 parity/deposit/fee/photo/status/source head 재사용, 검증은 종료 보고 기준, next_start_here: 운영 실행은 네트워크 가능 환경에서 `TRUST_SCORECARD_OUT_DIR` 저장소 밖 절대경로로 수동 실행.
+
 
 ## 2026-10-10 공개 상품 응답 설계
 

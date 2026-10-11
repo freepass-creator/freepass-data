@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { Compute } from 'google-auth-library';
 import { getFirestore, type QuerySnapshot } from 'firebase-admin/firestore';
 import { createFirestoreSourceStore } from './source-firestore-store.js';
+import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { CENTRAL_FIREBASE_PROJECT_ID, getTargetFirebaseApp } from './firebase-target.js';
 import { depositEvidenceInputFromProduct, depositStatusLabel, hasConflictingPaidDeposit, normalizeErp5CompatibilityInteger, parseErp5CompatibilityPriceKey, readIancarPublishedDeposit, resolveDepositWithRuleNote } from '../domain/deposit-evidence.js';
 
@@ -266,6 +267,71 @@ export class FirestoreCatalogCompatibilityReader {
       policies: asMap(policies),
       ...masterRead,
       observedAt: new Date().toISOString(),
+    };
+  }
+
+  async readTrustScorecardInput() {
+    const C = FIRESTORE_COLLECTIONS;
+    const [
+      compat,
+      masterSnapshot,
+      legacyPolicies,
+      vehicleModels,
+      vehicleAssets,
+      catalogProducts,
+      catalogOffers,
+      sourceDefinitions,
+      sourceHeads,
+    ] = await Promise.all([
+      this.read('freepass-admin-catalog'),
+      readVehicleMasterSnapshot(),
+      this.db.collection('policy').get(),
+      this.db.collection(C.catalog.vehicleModels).get(),
+      this.db.collection(C.catalog.vehicleAssets).get(),
+      this.db.collection(C.catalog.products).get(),
+      this.db.collection(C.catalog.offers).get(),
+      this.db.collection(C.source.definitions).get(),
+      this.db.collection(C.source.heads).get(),
+    ]);
+    const sourceHeadById = new Map(sourceHeads.docs.map((doc) => [doc.id, jsonSafe(doc.data()) as Rec]));
+    const sourceFreshness = sourceDefinitions.docs.map((doc) => {
+      const definition = jsonSafe(doc.data()) as Rec;
+      const head = sourceHeadById.get(doc.id);
+      const expected = definition.expectedFreshnessSeconds;
+      return {
+        sourceId: String(definition.sourceId ?? doc.id),
+        expectedFreshnessSeconds: Number.isSafeInteger(expected) ? expected as number : null,
+        observedAt: typeof head?.observedAt === 'string' ? head.observedAt : null,
+        acceptedAt: typeof head?.acceptedAt === 'string' ? head.acceptedAt : null,
+      };
+    });
+    return {
+      readAt: compat.meta.observedAt,
+      legacyProducts: compat.data.products,
+      legacyPolicies: asMap(legacyPolicies),
+      legacyVehicleMasterRows: Object.entries(compat.data.vehicleMaster ?? {}).map(([id, row]) => ({
+        id,
+        maker: String(row.maker ?? ''),
+        model: String(row.model ?? ''),
+        subModel: String(row.sub_model ?? row.subModel ?? ''),
+        generationCode: typeof row.generationCode === 'string' ? row.generationCode : null,
+        yearStart: typeof row.yearStart === 'string' ? row.yearStart : null,
+        yearEnd: typeof row.yearEnd === 'string' ? row.yearEnd : null,
+      })),
+      vehicleReferenceRows: masterSnapshot.trims.map((row) => ({
+        maker: String(row.data.maker ?? ''),
+        model: String(row.data.model ?? ''),
+        subModel: String(row.data.sub_model ?? row.data.subModel ?? ''),
+        yearStart: typeof row.data.yearStart === 'string' ? row.data.yearStart : null,
+        yearEnd: typeof row.data.yearEnd === 'string' ? row.data.yearEnd : null,
+      })),
+      canonical: {
+        vehicleModels: vehicleModels.docs.map((doc) => jsonSafe(doc.data())),
+        vehicleAssets: vehicleAssets.docs.map((doc) => jsonSafe(doc.data())),
+        products: catalogProducts.docs.map((doc) => jsonSafe(doc.data())),
+        offers: catalogOffers.docs.map((doc) => jsonSafe(doc.data())),
+      },
+      sourceFreshness,
     };
   }
 }

@@ -69,6 +69,7 @@
     "export:sheet-blank-fill-input": "tsx src/jobs/export-sheet-blank-fill-input.ts",
     "ingest:kakao-source": "tsx src/jobs/ingest-kakao-source.ts",
     "audit:settlement-id-links": "tsx src/jobs/audit-settlement-id-links.ts",
+    "audit:trust-scorecard": "tsx src/jobs/audit-trust-scorecard.ts",
     "plan:vehicle-uid-migration": "tsx src/jobs/plan-vehicle-uid-migration.ts"
   },
   "dependencies": {
