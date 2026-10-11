@@ -22,6 +22,10 @@ function rollbackProductVehicleUidPatch(vehicleUid: string | null | undefined) {
   return vehicleUid === undefined ? { vehicle_uid: FieldValue.delete() } : { vehicle_uid: vehicleUid };
 }
 
+function rollbackProductUidRegistryPatch(hadRegistry: boolean | undefined, registryValue: unknown) {
+  return hadRegistry ? { vehicle_uid_registry: registryValue } : { vehicle_uid_registry: FieldValue.delete() };
+}
+
 const normalizeExternalIdsForCompare = (externalIds: unknown) =>
   Array.isArray(externalIds)
     ? [...externalIds].sort((left, right) => stableDigest(left).localeCompare(stableDigest(right)))
@@ -42,6 +46,7 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
     mutation.kind === 'ASSET_EXTERNAL_IDS' ? `asset:${mutation.assetId}` : `product:${mutation.productKey}`;
   const validationAssetKey = (mutation: VehicleUidMigrationStoreMutation) => {
     if (mutation.kind === 'PRODUCT_DELETE_VEHICLE_UID') return undefined;
+    if (mutation.kind === 'PRODUCT_VEHICLE_UID' && mutation.assetState === 'PRODUCT_ONLY') return `asset:${mutation.vehicleUid}`;
     if (!mutation.assetIdentifierDigest) return undefined;
     return `asset:${mutation.kind === 'ASSET_EXTERNAL_IDS' ? mutation.assetId : mutation.vehicleUid}`;
   };
@@ -53,7 +58,8 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
   ) => {
     if (!mutation.assetIdentifierDigest) return null;
     const target = mutation.kind === 'ASSET_EXTERNAL_IDS' ? `asset:${mutation.assetId}` : `product:${mutation.productKey}`;
-    if (!snap?.exists || !mutation.observedAt) return { target, reason: 'STALE_ASSET' as const };
+    if (!snap?.exists) return { target, reason: mutation.kind === 'PRODUCT_VEHICLE_UID' ? 'UID_ASSET_NOT_FOUND' as const : 'STALE_ASSET' as const };
+    if (!mutation.observedAt) return { target, reason: 'STALE_ASSET' as const };
     const asset = { id: snap.id, ...(snap.data() as Record<string, unknown>) } as VehicleAsset;
     if (summarizeVehicleUidMigrationAssetIdentifiers(asset, mutation.observedAt) !== mutation.assetIdentifierDigest) {
       return { target, reason: 'STALE_ASSET' as const };
@@ -82,6 +88,15 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
       if (mutation.expectedAfter !== undefined && snap.get('vehicle_uid') !== mutation.expectedAfter) {
         return { target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' as const };
       }
+      if (mutation.expectedRegistryAfter !== undefined && snap.get('vehicle_uid_registry') !== mutation.expectedRegistryAfter) {
+        return { target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' as const };
+      }
+      if (mutation.assetState === 'PRODUCT_ONLY' && validationSnap?.exists) {
+        return { target: `product:${mutation.productKey}`, reason: 'UID_ASSET_ALREADY_EXISTS' as const };
+      }
+      if (mutation.assetState === 'LINKED_EXISTING' && !mutation.assetIdentifierDigest) {
+        return { target: `product:${mutation.productKey}`, reason: 'UID_ASSET_NOT_FOUND' as const };
+      }
       return validateAssetDigest(mutation, validationSnap);
     } else if (mutation.kind === 'PRODUCT_VERIFY_IDENTIFIERS') {
       if (!snap.exists) return { target: `product:${mutation.productKey}`, reason: 'CONCURRENT_CHANGE' as const };
@@ -104,6 +119,9 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
       if (mutation.expectedAfter !== undefined && snap.get('vehicle_uid') !== mutation.expectedAfter) {
         return { target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' as const };
       }
+      if (mutation.expectedRegistryAfter !== undefined && snap.get('vehicle_uid_registry') !== mutation.expectedRegistryAfter) {
+        return { target: `product:${mutation.productKey}`, reason: 'ROLLBACK_SKIPPED_CHANGED' as const };
+      }
       return null;
     }
   };
@@ -113,9 +131,20 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
     }
     if (mutation.kind === 'PRODUCT_VERIFY_IDENTIFIERS') return {};
     if (mutation.kind === 'PRODUCT_VEHICLE_UID') {
-      return mutation.expectedAfter === undefined && mutation.vehicleUid !== null ? { vehicle_uid: mutation.vehicleUid } : rollbackProductVehicleUidPatch(mutation.vehicleUid);
+      if (mutation.expectedAfter !== undefined) {
+        return {
+          ...rollbackProductVehicleUidPatch(mutation.vehicleUid),
+          ...(mutation.expectedRegistryAfter !== undefined ? rollbackProductUidRegistryPatch(Boolean(mutation.vehicleUidRegistry), mutation.vehicleUidRegistry) : {}),
+        };
+      }
+      return mutation.vehicleUid !== null
+        ? { vehicle_uid: mutation.vehicleUid, ...(mutation.vehicleUidRegistry ? { vehicle_uid_registry: mutation.vehicleUidRegistry } : {}) }
+        : rollbackProductVehicleUidPatch(mutation.vehicleUid);
     }
-    return rollbackProductVehicleUidPatch(undefined);
+    return {
+      ...rollbackProductVehicleUidPatch(undefined),
+      ...(mutation.expectedRegistryAfter !== undefined ? rollbackProductUidRegistryPatch(mutation.hadVehicleUidRegistry, mutation.registryValue) : {}),
+    };
   };
   return {
     async getAsset(assetId) {
@@ -150,7 +179,7 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
     },
     async commitMutations(mutations: VehicleUidMigrationStoreMutation[]) {
       let applied = 0;
-      const skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' | 'NOT_APPLIED' | 'STALE_ASSET' | 'STALE_IDENTIFIER' }> = [];
+      const skipped: Array<{ target: string; reason: 'CONCURRENT_CHANGE' | 'ROLLBACK_SKIPPED_CHANGED' | 'NOT_APPLIED' | 'STALE_ASSET' | 'STALE_IDENTIFIER' | 'UID_ASSET_NOT_FOUND' | 'UID_ASSET_ALREADY_EXISTS' }> = [];
       const componentSkipped = await db.runTransaction(async (tx) => {
         const refs: Array<{ key: string; ref: ReturnType<typeof assetRef> | ReturnType<typeof productRef> }> = [];
         const addRef = (key: string, ref: ReturnType<typeof assetRef> | ReturnType<typeof productRef>) => {
