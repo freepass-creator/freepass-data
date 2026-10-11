@@ -250,6 +250,7 @@ describe('API runtime boundary', () => {
     }\n`;
     for (const [before, after, allowed, deployed] of [
       [env, env, true, true],
+      [env.map(value => value.valueFrom ? { ...value, valueFrom: { secretKeyRef: { key: value.valueFrom.secretKeyRef.key, name: value.valueFrom.secretKeyRef.name } } } : value), env, true, true],
       [env.filter(value => value.name !== 'FREEPASS_SHEET_F04_ID'), env, false, false],
       [env.map(value => value.name === 'FREEPASS_SHEET_F04_ID' ? { ...value, value: '' } : value), env, false, false],
       [env.map(value => value.name === 'FREEPASS_SHEET_F04_ID' ? { ...value, value: 'different-binding' } : value), env, false, false],
