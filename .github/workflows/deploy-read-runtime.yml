@@ -512,7 +512,6 @@ jobs:
             "$READ_RUNTIME_DEPLOYED_URL/v1/consumers/erp-com/catalog-compat")"
           echo "READ_RUNTIME_AUTHENTICATED_STATUS=$authenticated_status" >> "$GITHUB_ENV"
           if [ "$authenticated_status" != "200" ]; then
-            response_code="$(jq -r '.code // "NON_JSON_RESPONSE"' "$response_file" 2>/dev/null || echo NON_JSON_RESPONSE)"
             echo "::error::Authenticated compatibility readback failed: HTTP $authenticated_status / UNRECOGNIZED"
             exit 1
           fi
