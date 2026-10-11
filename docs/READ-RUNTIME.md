@@ -434,6 +434,18 @@ Both responses use `Cache-Control: no-store`.
 
 ### Kakao catalog reference
 
+#### 공통시트 원천행 상품 / 원자값 / ERP 입력 계약
+
+공급사 탭의 비어 있지 않은 한 행은 상품 한 건이다. 같은 내용의 두 행은 상품 두 건이며 실물 차량 두 대 확정과는 다르다. 기존 `COLLECTED` grant 이후 SourceIngestionStore의 sealed shared-input source current head를 읽고 RAW/candidate를 연결한다. `REJECTED` 기록·출고협의·출고불가·번호 미정도 상품 존재와 known 조건을 보존한다. CURRENT head 전후 stableDigest·run 귀속·raw/candidate 개수·관측 연결을 확인하고 읽기 실패/변동은 오류로 닫는다. head 없음은 명시 HOLD이며 stale/partial을 완전한 최신 fleet 분모로 해석하지 않는다.
+
+기존 reference `data`는 `representationKind=LEGACY_PRODUCT`와 `CURRENT_SOURCE_ROW_PRODUCT`의 엄격 union이다. 후자는 `identityKind=CURRENT_SOURCE_ROW`, 현재 source/tab/row 위치 포인터 `productId`, immutable `observationId`, 미확정 `vehicleAssetId=null`, 원문/정제·원자 `facts`·출처·정제 사유·가격조건을 가진다. 위치 포인터는 삽입·이동에 따라 바뀔 수 있고 영구 상품 UID가 아니다. 관측 ID는 `sourceObservationId`로 exact 조회하며 productId 대체 키로 추정하지 않는다. 같은 공급사·차번의 legacy/current row를 임의 병합하지 않고 representation별 수를 분리한다. `matchedProductCount`는 반환 representation 수, `matchedObservationCount`는 current source rows, `matchedLegacyProductCount`는 legacy rows다. 이 세 수를 실물 대수로 쓰지 않는다.
+
+HTTP 상품 카드는 `data` 한 곳에서만 출력한다. `sourceObservations`는 state/reason/sourceSnapshot 요약만 반환하여 행을 두 번 출력하지 않는다. sourceSnapshot은 rawRowCount/normalizedCandidateCount/currentProductRowCount/returnedProductRowCount·관측 시각·capture 범위·관측 탭/RAW 미관측 등록탭을 포함한다. 미관측 등록탭을 빈 탭이나 원천 삭제로 추정하지 않는다. 응답 digest 및 Data Access 감사 digest는 원천행과 원자값을 포함한다. productId/관측ID 중복은 HOLD, source-only 매칭도 MATCHED이며 NO_MATCH로 숨기지 않는다. 동일 조건행에서 필터를 판정하고 일치 행의 모든 조건을 남긴다.
+
+원자 `facts`는 rawValue/normalizedValue/state/reasons/sourceRef(runId/rawRecordId/row/field)를 분리한다. `KNOWN/ZERO/UNKNOWN/HOLD`는 정제값 상태이며 원문 있음만으로 정제 확정하지 않는다. 모든 74입력 열은 출처에 대응하고 기간별 보증금 원자는 별도로 보존한다. `차명 원문/옵션 원문/예외사항/차고지/접수서류/비고` 자유문장6열은 값 null+RAW_FREE_TEXT_WITHHELD이며 나머지 미정제 사업 칸은 원문값+정제 null/UNKNOWN/RAW_FIELD_NOT_NORMALIZED다. 원문 payload/고객·서류·토큰·원문 오류는 반환하지 않는다. maker/model 원문 fallback은 검색·표시 전용이며 정제 HOLD는 유지한다. sourceStatus와 canonical review/판매목록 판정은 각각 구분한다.
+
+ERP의 실제 입력은 `/v1/consumers/erp-com/catalog-compat`의 `data.products` Record map이다. 기존 catalog capability와 명시 `referenceSourceScopes=["COLLECTED"]`가 있는 erp-com만 `?sourceScope=COLLECTED`를 요청할 수 있다. 미grant403은 RAW/products 읽기 전 차단하며 기본 요청과 화이트라벨은 기존 동작이다. allowlist `referenceObservationToCompatibilityProduct`가 현재 행 키/product_code/_key/id, nullable car_number/vehicle_uid, 표시용 차종·known 제원, 원문 차량상태, 기간별 rent/deposit/state 및 `_source_row_product` typed facts를 전달한다. 원문 spreading·임시차번 발급·판매상태 치환은 없다. 기존 legacy 입력과 current row 분모는 meta.legacyProductCount/sourceRowCoverage로 분리하며 합산 차량 수로 해석하지 않는다. ERP는 원천행 DTO의 typed HOLD/UNKNOWN을 확인해야 하며 일반 priceList의 숫자0 기본값을 확인된 ZERO로 승격하지 않는다. 기존 public feed·LISTABLE·ACTIVE·화이트라벨 권한을 확대하는 계약이 아니다.
+
 #### Explicit collected-source scope — code only, operating grants OFF
 
 The existing authenticated reference routes accept `sourceScope=COLLECTED` only for their existing reference consumer identity with an explicit `referenceSourceScopes=["COLLECTED"]` registration. Missing grant returns403 before source reads; invalid/duplicate scope returns400. Existing registrations and omitted/`LISTABLE` scope retain the listable projection. This code does not grant a deployed token new access or change the public feed.

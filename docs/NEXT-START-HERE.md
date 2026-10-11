@@ -376,6 +376,13 @@
 
 <a id="data-start"></a>
 
+### 공통시트 상품행 조회 기준 — 2026-10-11 사용자 직접 결정
+
+- 각 공급사 탭의 비어 있지 않은 입력행은 상품 한 건이다. 내용·차종·차량번호가 같아도 별도 행이면 별도 상품이며, 번호 미정은 상품이 없다는 뜻이 아니다. 상품행 수와 실물 자산 대수는 분리한다.
+- 기존 SourceIngestionStore의 현재 head RAW/candidate → 기존 private reference/ERP catalog-compat 경로를 재사용한다. `REJECTED` 또는 신원 HOLD는 정제된 가격조건·원자값까지 숨길 이유가 아니다. 상태·정제 불확실성·판매목록 판정은 각각 보존한다.
+- `CURRENT_SOURCE_ROW_PRODUCT`의 `productId`는 현재 원천의 탭·행 위치 포인터이며 영구 상품 UID가 아니다. `observationId`는 run/RAW/fingerprint에 귀속된 불변 관측 ID, `vehicleAssetId=null`은 실물 자산 연결 미확정이다. 기존 `LEGACY_PRODUCT`와 합산해 실물 대수 또는 최신 원천 상품 수를 주장하지 않는다.
+- 조회/출력은 [READ-RUNTIME](READ-RUNTIME.md)의 공통시트 원천행 계약을 따른다. 응답 `data` 한 곳만 상품 카드로 출력하며, sourceSnapshot은 원천행 분모·반환 수·관측 시각·원천 범위용이다. 원문 자유문장·서류 가능 열은 비공개 사유로 대응하고 값은 반환하지 않는다.
+
 ## 2026-10-01 이안카 수정 API 재반영 요청 — NOT PUBLISHED / HOLD
 
 - 최신 사용자 결정(예약): `RESERVED`는 공통 표시 **계약중** / 호환 status_kind **선점**, available=false. 원천 RESERVED를 보존하며 실제 계약 생성/계약락 설정은 하지 않는다. 기준 revision `f4a3cac`; 기존 ONE adapter/test/API 계약만 확장했다. `projectIancarOneReservation`은 표시 helper이며 아직 발행 writer에 연결되지 않았다. 전량 수집·정책 변환·ERP/F01/F86 readback HOLD는 그대로이며 next_start_here는 아래 publication 준비 경로다.
@@ -529,6 +536,15 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 공통시트 전체 상품행 / 원자값 조회와 ERP 입력 대응
+
+- 목적/정본: main `4b0690ed634dc188d168033a66b87b67338847e9` 위 단일 work. 기존 sourceStore current head/RAW/candidate가 정본이며 products-only 조회로 번호 미정이 빠지는 문제를 연결한다. Academy READY, reuse `COMPOSE_OR_EXTEND`; 새 reader/컬렉션/서비스/정책문서 없이 기존 gateway·projector·strict schema·테스트 확장.
+- 변경: 원천행 상품은 `data` 일반 결과에 포함한다. `sourceObservationId` exact lookup과 현재 행 `productId` lookup, supplier/model/기간/금액/보증금 필터가 같은 조건행을 검사하고 모든 형제 조건을 보존한다. 원문 모델명 fallback은 조회/표시 전용이며 정제 maker/model HOLD를 풀지 않는다. 응답·감사 digest에 원천행/원자값/coverage를 포함한다. photo 처리는 legacy product만 실행한다.
+- ERP 출력: 명시 grant의 `erp-com/catalog-compat?sourceScope=COLLECTED`는 기존 `data.products` Record map에 allowlist adapter로 원천행 상품을 전달한다. 기본 요청·화이트라벨·미grant는 원천 RAW를 읽지 않는다. `_source_row_product`는 typed 원자/출처/정제 상태용이고 원문 payload 전체가 아니다. 원문 `출고협의/출고불가`를 그대로 보내며 Data의 정제 신원 HOLD를 공급사 판매상태로 치환하지 않는다. default/public/feed 노출·ACTIVE는 변경하지 않는다.
+- 실제 스냅샷 읽기/로컬 변환: observed `2026-10-10T22:00:12.027Z`, RAW175/candidate175/상품행175, exact 관측175/175·현재 행175/175·전체 행손실0·compat175/175·조건손실0. 렌트존8상품/레이2상품/ZERO1상품. 74입력 열 출처 coverage/행당79원자(기간별 보증금 별도)이며 자유문장6열은 값 비공개+사유. RAW에 없는 등록탭은 빈 탭/누락 확정이 아니라 미관측 상태로 남긴다. 신규 RAW/정제 저장0.
+- 실제 ERP pinned `b5462911390020b11345e779f85edecba31318d9` 29개 모듈을 읽기 전용 메모리 로더로 실행: 175행 compat 입력, 렌트존8행/레이2행, 기존 판매목록 predicate는 렌트존4/레이2다(출고불가4행은 기존 규칙으로 제외). 레이48/60개월 대여료500000/460000, 보증금500000 또는 명시ZERO0 그대로 확인. 이는 오프라인 실제 함수 검증이며 운영 GET/브라우저 cutover 증거가 아니다.
+- 남음/next_start_here: exact PR/Claude/CI/main 영수증 확인 후 운영 owner가 기존 read 서비스 배포와 kakao-ops/erp-com의 필요한 COLLECTED 등록만 별도 승인한다. ERP 실제 소비자가 인증된 내부 전건 경로에서만 sourceScope를 요청하고 typed source-row/UNKNOWN·HOLD를 처리해야 한다. 일반 ERP priceList는 unknown deposit/fee를 0 기본값으로 만들 수 있으므로 원천 typed 상태를 확정금액으로 오해하지 않는다. 최신 시트 전수 대사, 미관측 탭 판정, LIVE 전건175·렌트존8·레이2 GET과 실제 UI는 미실행. DB/IAM/Secret/운영 배포/외부 ERP 파일 수정0.
+
 ### 2026-10-11 reference productId 정확 단건 조회 — 코드 통합 / 운영 별도
 
 - 목적/기준 revision: `c45ba9829ea1b61bcd25ff4280acf4e014f261c6`. 기존 catalog-reference/internal-ai-reference 필터·typed 계약·queryResolution·회귀만 확장한다. Academy development READY / reuse COMPOSE_OR_EXTEND, 새 reader/모듈/정본 없음. 접수 PR445의 admin gateway 수정은 건드리지 않는다.
@@ -562,6 +578,12 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 검증: 정책 invariant·제품 범위 및 npm/job/adapter 입구 부재 8 PASS, 전체 Vitest 2,133 PASS / 외부환경 조건부 16 SKIP, build·architecture·Data Access boundary PASS, standards 33개 schema/15 PASS(기존 PARTIAL 유지), 실제 로컬 read-runtime smoke 13 PASS. 최종 exact commit·CI·Claude 결과는 이 작업 PR의 통합 영수증에 고정한다.
 - 남음: 운영 image `050e382`는 변경하지 않으며 배포·DB·IAM·ACTIVE·외부 저장소 변경 0회. 현재 가격/정책의 RP binding 재발급이나 정정은 별도 작업이다.
 - 복원/next_start_here: 이 폐기 commit의 revert로 코드만 복원할 수 있다. 복원하더라도 1회성 보정의 재실행 권한은 없다. 현재 main과 PR 검증을 확인하고 실제 미사용이 입증된 다음 후보만 이어서 폐기한다.
+### 2026-10-11 렌트존 번호 미정 정제 차량번호 분리
+
+- 정본 readback: `freepasserp5` 기존 SourceIngestionStore, source `shared-sheet:fa91e570d9bb9b3b0667451e`, run `run_61934839374a9d0d4f7d9b3164bc8487b587b680`, observedAt `2026-10-10T22:00:12.027Z`, COMPLETED. 렌트존 RAW 8/정제 후보 8 실제 저장 확인. 레이 원문 두 행의 보증금 KNOWN/ZERO와 기간별 대여료는 별도 보존되어 있다. 저장 누락으로 판단하거나 중복 저장하지 않는다.
+- 변경: 기존 normalizer에서 번호 미정 placeholder는 optional `candidate.carNumber`에 넣지 않는다. RAW 값·관측 ID·PLATE_NOT_ASSIGNED·차종 충돌 및 master 미확정 사유는 그대로 보존한다. 정제 출력 변경을 구분하도록 ruleVersion `/4`→`/5`. 새 schema/reader/영구상품ID/행 병합 없음.
+- 검증: shared-sheet capture/canonical 71 PASS, build/diff check PASS. 번호 미정 두 관측의 RAW 보존·ID 분리·REJECTED 유지·정제 carNumber 미설정 회귀. 운영 쓰기0, 배포0.
+- 남음/next_start_here: 조회 담당은 저장된 REJECTED 후보의 확인된 기간별 조건을 원문 근거와 함께 표시하되 차량수/영구 상품 연결로 승격하지 않는다. 기존 저장 후보에는 placeholder가 남아 있으므로 조회 projection에서도 assigned 판정 후 미설정/null로 노출한다. 이 변경의 통합과 독립 검토 결과를 별도 확인한다.
 
 ### 2026-10-10 PR427 손오공 RAW 크기 안전장치 — 운영 전환 HOLD
 

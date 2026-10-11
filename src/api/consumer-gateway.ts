@@ -42,6 +42,9 @@ import {
   buildKakaoCatalogReference,
   buildInternalAiReference,
   filterReferenceProducts,
+  readCurrentReferenceObservations,
+  referenceResponseDigest,
+  referenceObservationToCompatibilityProduct,
   type KakaoCatalogReference,
   type KakaoCatalogReferenceSource,
 } from '../application/kakao-catalog-reference.js';
@@ -170,7 +173,8 @@ export function parseConsumerBindings(raw: string | undefined): RegisteredConsum
     if (referenceSourceScopes !== undefined && (!Array.isArray(referenceSourceScopes)
       || referenceSourceScopes.length !== 1 || referenceSourceScopes[0] !== 'COLLECTED'
       || !(item.id === 'kakao-ops' && capabilities.includes('catalog-reference')
-        || internalAi && capabilities.includes('internal-ai-reference')))) {
+        || internalAi && capabilities.includes('internal-ai-reference')
+        || item.id === 'erp-com' && capabilities.includes('catalog')))) {
       throw new Error('Collected reference scope requires an explicit reference consumer grant');
     }
     ids.add(item.id);
@@ -332,9 +336,10 @@ export function createConsumerGateway(
   access: DataAccessGateway,
   healthStore?: CatalogDataHealthStore,
   compatReader?: {
+    sourceStore?: Parameters<typeof readCurrentReferenceObservations>[0];
     read(consumerId: string): Promise<CatalogCompatibilitySnapshot>;
-    readKakaoReferenceSource?(consumerId: string): Promise<KakaoCatalogReferenceSource>;
-    readInternalAiReferenceSource?(consumerId: string): Promise<KakaoCatalogReferenceSource>;
+    readKakaoReferenceSource?(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }): Promise<KakaoCatalogReferenceSource>;
+    readInternalAiReferenceSource?(consumerId: string, options?: { sourceScope: 'LISTABLE' | 'COLLECTED' }): Promise<KakaoCatalogReferenceSource>;
     readVehiclePhoto?(consumerId: string, productId: string, index?: number): Promise<{ count: number; bytes: Buffer | null; contentType: string; revalidate(): Promise<boolean> }>;
   },
   workflowStore?: AdminWorkflowStore,
@@ -712,6 +717,15 @@ export function createConsumerGateway(
         return reply.code(503).send({ code: 'COMPATIBILITY_READER_UNAVAILABLE' });
       }
 
+      const sourceScope = (request.query as Record<string, unknown>).sourceScope ?? 'LISTABLE';
+      if (typeof sourceScope !== 'string' || !['LISTABLE', 'COLLECTED'].includes(sourceScope)) {
+        return reply.code(400).send({ code: 'REFERENCE_SOURCE_SCOPE_INVALID' });
+      }
+      if (sourceScope === 'COLLECTED' && (binding.id !== 'erp-com' || !binding.referenceSourceScopes?.includes('COLLECTED'))) {
+        await access.deny('READ', { context, operation: 'READ_CONSUMER_CATALOG_COMPAT', resource }, 'REFERENCE_SOURCE_SCOPE_FORBIDDEN');
+        return reply.code(403).send({ code: 'REFERENCE_SOURCE_SCOPE_FORBIDDEN' });
+      }
+
       const result = await access.read({
         context,
         operation: 'READ_CONSUMER_CATALOG_COMPAT',
@@ -722,10 +736,23 @@ export function createConsumerGateway(
             schema: value.schema,
             consumerId: value.meta.consumerId,
             observedAt: value.meta.observedAt,
-            collectionCounts: value.meta.collectionCounts
+            collectionCounts: value.meta.collectionCounts,
+            data: value.data,
           })
         })
-      }, () => compatReader.read(binding.id));
+      }, async () => {
+        const snapshot = await compatReader.read(binding.id);
+        if (sourceScope !== 'COLLECTED') return snapshot;
+        if (!compatReader.sourceStore) throw new Error('REFERENCE_SOURCE_STORE_UNAVAILABLE');
+        const evidence = await readCurrentReferenceObservations(compatReader.sourceStore);
+        const rows = Object.fromEntries(evidence.observations.map(row => [row.productId, referenceObservationToCompatibilityProduct(row)]));
+        if (Object.keys(rows).length !== evidence.observations.length) throw new Error('REFERENCE_SOURCE_ROW_ID_AMBIGUOUS');
+        if (Object.keys(rows).some(key => Object.hasOwn(snapshot.data.products, key))) throw new Error('REFERENCE_SOURCE_ROW_KEY_CONFLICT');
+        return { ...snapshot, data: { ...snapshot.data, products: { ...snapshot.data.products, ...rows } },
+          meta: { ...snapshot.meta, sourceRowCoverage: evidence.sourceSnapshot,
+            legacyProductCount: Object.keys(snapshot.data.products).length,
+            collectionCounts: { ...snapshot.meta.collectionCounts, products: Object.keys(snapshot.data.products).length + Object.keys(rows).length } } };
+      });
 
       if (
         result.schema !== 'freepass-data.catalog-compat/v1' ||
@@ -809,21 +836,26 @@ export function createConsumerGateway(
         context,
         operation,
         resource,
-        summarize: (value: KakaoCatalogReference | ReturnType<typeof buildInternalAiReference>) => ({
+        summarize: (value: { meta: { projectedCount: number; dataDigest: string } }) => ({
           count: value.meta.projectedCount,
           digest: value.meta.dataDigest,
         })
       }, async () => {
-        const source = await readSource(binding.id);
+        const source = await readSource(binding.id, { sourceScope: sourceScope as 'COLLECTED' | 'LISTABLE' });
         if (source.consumerId !== binding.id) throw new Error('REFERENCE_SOURCE_CONSUMER_MISMATCH');
-        const scopedSource = { ...source, sourceScope: sourceScope as 'COLLECTED' | 'LISTABLE' };
+        const scopedSource = { ...source, sourceScope: sourceScope as 'COLLECTED' | 'LISTABLE',
+          ...(sourceScope === 'COLLECTED' && compatReader?.sourceStore
+            ? { sourceObservations: await readCurrentReferenceObservations(compatReader.sourceStore) } : {}) };
         const reference = internalAi ? buildInternalAiReference(scopedSource) : buildKakaoCatalogReference(scopedSource);
         const filtered = filterReferenceProducts(reference, request.query as Record<string, unknown>);
-        const data = await Promise.all(filtered.data.map(async product => ({ ...product,
+        const data = await Promise.all(filtered.data.map(async product => 'offers' in product ? ({ ...product,
           vehicleMediaEvidence: await inspectVehicleMediaEvidence({ productId: product.sourceProductId,
             product: source.products[product.sourceProductId]!, now: source.observedAt }),
-        })));
-        return { ...filtered, data, meta: { ...filtered.meta, dataDigest: hash(JSON.stringify(data)).toString('hex') } } as typeof filtered;
+        }) : product));
+        const sourceSummary = filtered.sourceObservations ? { state: filtered.sourceObservations.state,
+          reasonCode: filtered.sourceObservations.reasonCode, sourceSnapshot: filtered.sourceObservations.sourceSnapshot } : undefined;
+        return { ...filtered, data, ...(sourceSummary ? { sourceObservations: sourceSummary } : {}),
+          meta: { ...filtered.meta, dataDigest: referenceResponseDigest(data, sourceSummary) } };
       });
 
       if (
