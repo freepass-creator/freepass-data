@@ -2,9 +2,9 @@ process.env.FREEPASS_SHEET_F04_ID = 'test-sheet-f04';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryDataStore } from '../src/infra/memory-store.js';
 import { seedDemoCatalog } from '../src/demo-seed.js';
-import { offerEconomicsInputDigest, recomputeOfferEconomics } from '../src/application/catalog.js';
+import { offerEconomicsInputDigest, recomputeOfferEconomics, updateOfferPrice } from '../src/application/catalog.js';
 import { KAKAO_COMMISSION_POLICY } from '../src/application/kakao-catalog-reference.js';
-import { precomputeOfferEconomics } from '../src/application/resolve-offer-commercial-terms.js';
+import { precomputeOfferEconomics, refreshOfferEconomicsForChangedInputs } from '../src/application/resolve-offer-commercial-terms.js';
 import { planOfferEconomicsRecompute, runOfferEconomicsRecompute } from '../src/jobs/recompute-offer-economics.js';
 import { stableDigest } from '../src/shared/stable-digest.js';
 import { LEGACY_CATALOG_WRITER_OWNERSHIP } from '../src/domain/writer-ownership.js';
@@ -25,6 +25,59 @@ async function prepare(store: MemoryDataStore) {
 }
 
 describe('offer economics recompute', () => {
+  it('does not change an apply plan scope through API options', async () => {
+    const store=await fixture(), options=await prepare(store), tx=vi.spyOn(store,'transact');
+    await expect(runOfferEconomicsRecompute(store,{...options,offerIds:[]})).rejects.toThrow('reviewed plan');
+    await expect(runOfferEconomicsRecompute(store,{...options,productIds:[]})).rejects.toThrow('reviewed plan');
+    expect(tx).not.toHaveBeenCalled();
+  });
+  it('refreshes all Billin periods linked to the changed 36-month reference rent', async () => {
+    const store=await fixture(), original=(await store.listOffers())[0]!;
+    const offer={...original,supplierId:'RP021',priceTerms:[36,60].map(months=>({...original.priceTerms[0]!,termKey:`m${months}`,termMonths:months,monthlyRent:{amount:800000,currency:'KRW' as const}}))};
+    offer.internalEconomicsTerms=precomputeOfferEconomics(offer,'USED_SUBSCRIPTION');
+    const next=structuredClone(offer);next.priceTerms[0]!.monthlyRent.amount=900000;
+    const refreshed=refreshOfferEconomicsForChangedInputs(offer,next,'USED_SUBSCRIPTION');
+    expect(refreshed.map(term=>term.supplierBillingFee.amount!.amount)).toEqual([900000,900000]);
+    expect(refreshed.map(term=>term.channelPayoutFee.amount!.amount)).toEqual([720000,720000]);
+  });
+  it('scopes plans to changed offer/product IDs and rejects missing offers without writes', async () => {
+    const store = await fixture(), original = (await store.listOffers())[0]!;
+    await store.seed({ offers: [{ ...original, id: 'outside-scope', productId: 'outside-product' }] });
+    vi.spyOn(store, 'listOffers').mockRejectedValueOnce(new Error('must use direct IDs'));
+    const scoped = await planOfferEconomicsRecompute(store, 'memory-test', { offerIds: [original.id, original.id], productIds: [original.productId] });
+    expect(scoped.plan.entries.map(entry => entry.offerId)).toEqual([original.id]);
+    expect((await planOfferEconomicsRecompute(store, 'memory-test', { offerIds: [] })).offers).toBe(0);
+    await expect(planOfferEconomicsRecompute(store, 'memory-test', { offerIds: ['missing'] })).rejects.toThrow('scoped offer not found');
+    expect(store.audits).toHaveLength(0);
+  });
+  it('recalculates only affected rent periods and preserves vehicle-price fees through the existing writer', async () => {
+    const store = await fixture(), offer = (await store.listOffers())[0]!;
+    const product = (await store.getProduct(offer.productId))!;
+    await store.seed({ products: [{ ...product, commercialType: 'USED_RENT' }] });
+    offer.priceTerms = [24,36].map(months => ({...offer.priceTerms[0]!,termKey:`m${months}`,termMonths:months,monthlyRent:{amount:800000,currency:'KRW'}}));
+    offer.internalEconomicsTerms = precomputeOfferEconomics(offer,'USED_RENT');
+    offer.internalEconomicsTerms[0]!.channelPayoutFee = { state:'KNOWN',amount:{amount:300000,currency:'KRW'},
+      calculation:{kind:'RATE',base:'VEHICLE_PRICE',rate:0.01},sourceRefs:['test:approved-existing-policy'],
+      ruleId:'test:existing-vehicle-rate',policyId:'test:existing-policy',vatTreatment:'EXCLUDED',vatAmount:30000,totalAmount:330000 };
+    await store.seed({offers:[offer]});
+    await updateOfferPrice(store,{commandId:'changed-rent',idempotencyKey:'changed-rent',offerId:offer.id,
+      expectedRevision:offer.revision,termKey:'m24',monthlyRent:{amount:900000,currency:'KRW'},reason:'source rent changed',actor});
+    const saved = (await store.getOffer(offer.id))!;
+    expect(saved.internalEconomicsTerms![0]!.channelPayoutFee).toEqual(offer.internalEconomicsTerms[0]!.channelPayoutFee);
+    expect(saved.internalEconomicsTerms![0]!.supplierBillingFee.amount!.amount).not.toBe(offer.internalEconomicsTerms[0]!.supplierBillingFee.amount!.amount);
+    expect(saved.internalEconomicsTerms![1]).toEqual(offer.internalEconomicsTerms[1]);
+    expect(refreshOfferEconomicsForChangedInputs(offer,offer,'USED_RENT')).toEqual(offer.internalEconomicsTerms);
+    const repriced = refreshOfferEconomicsForChangedInputs(saved,saved,'USED_RENT',undefined,
+      {before:{amount:30000000,currency:'KRW'},after:{amount:40000000,currency:'KRW'},sourceRef:'test:new-price-fact'});
+    expect(repriced[0]!.channelPayoutFee).toMatchObject({amount:{amount:400000},vatAmount:40000,totalAmount:440000});
+    expect(repriced[0]!.supplierBillingFee).toEqual(saved.internalEconomicsTerms![0]!.supplierBillingFee);
+    const missing = refreshOfferEconomicsForChangedInputs(saved,saved,'USED_RENT',undefined,
+      {before:{amount:30000000,currency:'KRW'},after:null,sourceRef:''});
+    expect(missing[0]!.channelPayoutFee).toMatchObject({state:'UNKNOWN',amount:null,reasonCode:'VEHICLE_PRICE_EVIDENCE_REQUIRED'});
+    expect(offer.internalEconomicsTerms[0]!.channelPayoutFee.amount!.amount).toBe(300000);
+    const plan=await planOfferEconomicsRecompute(store,'memory-test',{offerIds:[offer.id]});
+    expect(plan.changedOffers).toBe(0);
+  });
   it('rejects old or incomplete reviewed plans before a transaction', async () => {
     const store = await fixture(), original = await prepare(store), tx = vi.spyOn(store,'transact');
     for (const kind of ['v1','missing-result'] as const) {

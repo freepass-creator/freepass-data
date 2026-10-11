@@ -22,13 +22,19 @@ export type EconomicsRecomputePlan = {
 };
 
 /** Pure reads: no transaction, gateway audit, projection, receipt or file writes. */
-export async function planOfferEconomicsRecompute(store: CatalogStore, target: string) {
+export type EconomicsRecomputeScope = { offerIds?: readonly string[]; productIds?: readonly string[] };
+export async function planOfferEconomicsRecompute(store: CatalogStore, target: string, scope: EconomicsRecomputeScope = {}) {
   const plan: EconomicsRecomputePlan = { schema: 'offer-economics-recompute/v2', target,
     policyId: KAKAO_COMMISSION_POLICY.policyId, policyDigest: stableDigest(KAKAO_COMMISSION_POLICY), entries: [] };
   const suppliers: Record<string, ReturnType<typeof supplierCounts>> = {};
   const unknown = new Map<string, number>();
   let changedOffers = 0;
-  for (const offer of (await store.listOffers()).sort((a, b) => a.id.localeCompare(b.id))) {
+  const offers = scope.offerIds ? await Promise.all([...new Set(scope.offerIds)].map(async id => {
+    const offer = await store.getOffer(id);
+    if (!offer) throw new Error('HOLD: scoped offer not found');
+    return offer;
+  })) : await store.listOffers();
+  for (const offer of offers.filter(offer => !scope.productIds || scope.productIds.includes(offer.productId)).sort((a, b) => a.id.localeCompare(b.id))) {
     const product = await store.getProduct(offer.productId);
     const model = product ? await store.getVehicleModel(product.vehicleModelId) : null;
     const after = precomputeOfferEconomics(offer, product?.commercialType, model?.fuel);
@@ -74,11 +80,12 @@ export async function planOfferEconomicsRecompute(store: CatalogStore, target: s
 type RecomputeOptions = {
   target: string; apply?: boolean; plan?: EconomicsRecomputePlan; expectedPlanDigest?: string;
   policyId?: string; actor?: ActorRef; approvalRef?: string; writer?: ExecutionWriterRef;
+  offerIds?: readonly string[]; productIds?: readonly string[];
 };
 
 function assertApplyPlan(options: RecomputeOptions): EconomicsRecomputePlan {
   const plan = options.plan;
-  if (!plan || plan.schema !== 'offer-economics-recompute/v2' || plan.target !== options.target ||
+  if (options.offerIds !== undefined || options.productIds !== undefined || !plan || plan.schema !== 'offer-economics-recompute/v2' || plan.target !== options.target ||
       options.policyId !== KAKAO_COMMISSION_POLICY.policyId || plan.policyId !== options.policyId ||
       plan.policyDigest !== stableDigest(KAKAO_COMMISSION_POLICY) || !options.actor || typeof options.approvalRef !== 'string' || !options.approvalRef.trim() || options.approvalRef.length > 512 || /[\r\n]/.test(options.approvalRef) ||
       options.expectedPlanDigest !== stableDigest(plan) || !Array.isArray(plan.entries) ||
@@ -90,7 +97,7 @@ function assertApplyPlan(options: RecomputeOptions): EconomicsRecomputePlan {
 }
 
 export async function runOfferEconomicsRecompute(store: CatalogStore, options: RecomputeOptions) {
-  if (!options.apply) return planOfferEconomicsRecompute(store, options.target);
+  if (!options.apply) return planOfferEconomicsRecompute(store, options.target, options);
   const plan = assertApplyPlan(options);
   const results: Array<{ offerId: string; status: string; changed: boolean; revision?: number; reason?: string }> = [];
   let readbackVerifiedOffers = 0, readbackVerifiedChangedOffers = 0;
@@ -129,12 +136,12 @@ export async function runOfferEconomicsRecompute(store: CatalogStore, options: R
 }
 
 export async function main(args = process.argv.slice(2)) {
-  const allowed = new Set(['--memory', '--firestore', '--apply', '--plan', '--policy-id', '--expected-plan-digest', '--approval-ref']);
+  const allowed = new Set(['--memory', '--firestore', '--apply', '--plan', '--policy-id', '--expected-plan-digest', '--approval-ref', '--offer-ids', '--product-ids']);
   const values = new Map<string, string>();
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (!allowed.has(arg) || values.has(arg)) throw new Error(`Unknown/duplicate argument: ${arg}`);
-    if (['--plan', '--policy-id', '--expected-plan-digest', '--approval-ref'].includes(arg)) {
+    if (['--plan', '--policy-id', '--expected-plan-digest', '--approval-ref', '--offer-ids', '--product-ids'].includes(arg)) {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error(`Missing value: ${arg}`);
       values.set(arg, value);
@@ -142,6 +149,7 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (values.has('--memory') === values.has('--firestore')) throw new Error('Select exactly one: --memory or --firestore');
   const apply = values.has('--apply');
+  if (apply && (values.has('--offer-ids') || values.has('--product-ids'))) throw new Error('HOLD: apply scope comes only from the reviewed plan');
   if (apply && (!values.has('--plan') || !values.has('--policy-id') || !values.has('--expected-plan-digest') || !values.has('--approval-ref'))) {
     throw new Error('HOLD: --apply needs --plan, --policy-id, --expected-plan-digest and --approval-ref');
   }
@@ -149,6 +157,8 @@ export async function main(args = process.argv.slice(2)) {
   const planFile = values.get('--plan');
   const plan = planFile ? JSON.parse(await readFile(planFile, 'utf8')) as EconomicsRecomputePlan : undefined;
   const options: RecomputeOptions = { target, apply,
+    ...(values.has('--offer-ids') ? { offerIds: values.get('--offer-ids')!.split(',').map(id => id.trim()).filter(Boolean) } : {}),
+    ...(values.has('--product-ids') ? { productIds: values.get('--product-ids')!.split(',').map(id => id.trim()).filter(Boolean) } : {}),
     ...(plan ? { plan } : {}), ...(values.has('--policy-id') ? { policyId: values.get('--policy-id')! } : {}),
     ...(values.has('--expected-plan-digest') ? { expectedPlanDigest: values.get('--expected-plan-digest')! } : {}),
     ...(values.has('--approval-ref') ? { approvalRef: values.get('--approval-ref')! } : {}),

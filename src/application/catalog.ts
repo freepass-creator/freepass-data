@@ -1,4 +1,4 @@
-import { precomputeOfferEconomics } from './resolve-offer-commercial-terms.js';
+import { precomputeOfferEconomics, refreshOfferEconomicsForChangedInputs } from './resolve-offer-commercial-terms.js';
 import { KAKAO_COMMISSION_POLICY } from './kakao-catalog-reference.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { orderedJsonDigest, stableDigest, stableRecordSetDigest, stableValue } from '../shared/stable-digest.js';
@@ -126,7 +126,7 @@ export async function updateOfferPrice(store: CatalogStore, input: UpdateOfferPr
     };
     const product = await tx.getProduct(next.productId);
     const model = product ? await tx.getVehicleModel(product.vehicleModelId) : null;
-    next.internalEconomicsTerms = precomputeOfferEconomics(next, product?.commercialType, model?.fuel);
+    next.internalEconomicsTerms = refreshOfferEconomicsForChangedInputs(current, next, product?.commercialType, model?.fuel);
     const receipt = {
       idempotencyKey: input.idempotencyKey, commandId: input.commandId,
       status: 'CANONICAL_COMMITTED' as const, entityType: 'offer', entityId: current.id,

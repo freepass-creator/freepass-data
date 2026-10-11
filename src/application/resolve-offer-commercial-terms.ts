@@ -1,4 +1,5 @@
-import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
+import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Money, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
+import { stableDigest } from '../shared/stable-digest.js';
 import type { CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
 import { KAKAO_COMMISSION_POLICY, resolveSalesCommission, resolveSupplierBillingFee } from './kakao-catalog-reference.js';
 import type {
@@ -12,12 +13,54 @@ import type {
 const positiveSafeInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
+/** Existing approved vehicle-price rates need an explicit source fact; rent is not that fact. */
+export function refreshOfferEconomicsForChangedInputs(
+  previous: Offer, next: Offer, commercialType?: CommercialType, fuel?: string | null,
+  vehiclePriceChange?: { before: Money | null; after: Money | null; sourceRef: string },
+) {
+  const candidate = precomputeOfferEconomics(next, commercialType, fuel);
+  const old = new Map((previous.internalEconomicsTerms ?? []).map(term => [term.termKey, term]));
+  const oldPrices = new Map(previous.priceTerms.map(term => [term.termKey, term]));
+  const changedPriceKeys = new Set(next.priceTerms.filter(term => stableDigest(oldPrices.get(term.termKey) ?? null) !== stableDigest(term)).map(term => term.termKey));
+  const priceChanged = !!vehiclePriceChange && stableDigest(vehiclePriceChange.before) !== stableDigest(vehiclePriceChange.after);
+  return candidate.map(term => {
+    for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
+      const fee = old.get(term.termKey)?.[side];
+      if (!fee) continue;
+      if (fee.calculation?.kind !== 'RATE' || fee.calculation.base !== 'VEHICLE_PRICE') {
+        const referenceChanged = fee.referenceRentBasis && changedPriceKeys.has(fee.referenceRentBasis.termKey);
+        if (!changedPriceKeys.has(term.termKey) && !referenceChanged) term[side] = structuredClone(fee);
+        continue;
+      }
+      term[side] = structuredClone(fee);
+      if (!priceChanged) continue;
+      const fact = vehiclePriceChange!;
+      const valid = fact.after?.currency === 'KRW' && positiveSafeInteger(fact.after.amount) &&
+        !!fact.sourceRef.trim() && !!fee.ruleId && !!fee.policyId && fee.sourceRefs.some(ref => ref.trim()) &&
+        (fee.state === 'KNOWN' || fee.state === 'ZERO') && Number.isFinite(fee.calculation.rate) && fee.calculation.rate >= 0;
+      const amount = valid ? Math.round(fact.after!.amount * fee.calculation.rate) : null;
+      if (amount === null || !Number.isSafeInteger(amount) || amount < 0) {
+        term[side] = { ...structuredClone(fee), state: 'UNKNOWN', amount: null, calculation: null,
+          sourceRefs: [], vatAmount: null, totalAmount: null, reasonCode: 'VEHICLE_PRICE_EVIDENCE_REQUIRED' };
+        continue;
+      }
+      const vat = fee.vatTreatment === 'EXCLUDED' ? Math.round(amount * 0.1) :
+        fee.vatTreatment === 'INCLUDED' ? Math.round(amount / 11) : null;
+      term[side] = { ...structuredClone(fee), state: amount === 0 ? 'ZERO' : 'KNOWN',
+        amount: { amount, currency: 'KRW' }, priceSourceRefs: [fact.sourceRef], vatAmount: vat,
+        totalAmount: vat === null ? null : fee.vatTreatment === 'EXCLUDED' ? amount + vat : amount,
+        reasonCode: null };
+    }
+    return term;
+  });
+}
+
 /** Canonical save adapter for the existing pinned commission policy. No I/O or input mutation.
  * Fees are per whole contract, supply amounts excluding VAT; missing rules are not exemptions.
  * Reuses the period-fees prototype's fail-closed mapping without its compatibility storage path.
  */
 export function precomputeOfferEconomics(
-  offer: Pick<Offer, 'id' | 'supplierId' | 'priceTerms'>,
+  offer: Pick<Offer, 'id' | 'supplierId' | 'priceTerms'> & Pick<Partial<Offer>, 'internalEconomicsTerms'>,
   commercialType?: CommercialType,
   fuel?: string | null,
   evidenceByTerm: CommissionEvidenceByTerm = {},
@@ -36,6 +79,10 @@ export function precomputeOfferEconomics(
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
       billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined };
     const convert = (result: ReturnType<typeof resolveSalesCommission>, side: 'BILLING' | 'PAYOUT'): TermEconomicAmount => {
+      const saved = offer.internalEconomicsTerms?.find(candidate => candidate.termKey === term.termKey)?.[
+        side === 'BILLING' ? 'supplierBillingFee' : 'channelPayoutFee'];
+      // This adapter has no canonical vehicle-price fact. Never replace that approved basis with rent.
+      if (saved?.calculation?.kind === 'RATE' && saved.calculation.base === 'VEHICLE_PRICE') return structuredClone(saved);
       const base: Pick<TermEconomicAmount, 'ruleId' | 'policyId' | 'sourceRefs' | 'priceSourceRefs' | 'vatTreatment' | 'vatAmount' | 'totalAmount' | 'referenceRentBasis'> = { ruleId: result.ruleId, policyId: policy.policyId,
         sourceRefs: [] as string[], priceSourceRefs: [priceRef],
         vatTreatment: result.vatTreatment, vatAmount: result.vatAmount, totalAmount: result.totalAmount };
