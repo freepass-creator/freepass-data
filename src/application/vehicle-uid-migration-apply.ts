@@ -384,7 +384,8 @@ export async function rollbackVehicleUidMigration(
         vehicleUid: item.vehicleUid ?? null,
         ...withExpectedAfter(item.appliedVehicleUid),
         ...(item.appliedVehicleUidRegistry !== undefined ? { expectedRegistryAfter: item.appliedVehicleUidRegistry } : {}),
-        ...(item.hadVehicleUidRegistry ? { vehicleUidRegistry: item.vehicleUidRegistry as 'PRODUCT_ONLY' } : {}),
+        ...(item.hadVehicleUidRegistry !== undefined ? { hadVehicleUidRegistry: item.hadVehicleUidRegistry } : {}),
+        registryValue: item.vehicleUidRegistry,
       };
     }
     return {

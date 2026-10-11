@@ -212,6 +212,22 @@ describe('vehicle UID Firestore writer transaction ordering', () => {
     expect(db.docs.has(assetPath(planned!.vehicleUid))).toBe(false);
   });
 
+  it('rollback restores an original null vehicle_uid_registry instead of deleting the field', async () => {
+    const p = plan({ p1: product('TEST-FAKE-NEW-001', { vehicle_uid: null, vehicle_uid_registry: null }) }, []);
+    const db = new FakeFirestore();
+    db.docs.set(productPath('p1'), product('TEST-FAKE-NEW-001', { vehicle_uid: null, vehicle_uid_registry: null }));
+
+    const applied = await applyVehicleUidMigration(fakeWriter(db), p, p.planDigest, { now: p.createdAt, approvedDigest: p.planDigest, writeFlag: 'APPLY' });
+    expect(db.docs.get(productPath('p1'))?.vehicle_uid_registry).toBe('PRODUCT_ONLY');
+
+    const rolledBack = await rollbackVehicleUidMigration(fakeWriter(db), applied.backup!, p.planDigest, { approvedDigest: p.planDigest, writeFlag: 'ROLLBACK' });
+    expect(rolledBack.status).toBe('ROLLED_BACK');
+    const restored = db.docs.get(productPath('p1')) as Record<string, unknown>;
+    expect(Object.hasOwn(restored, 'vehicle_uid_registry')).toBe(true);
+    expect(restored.vehicle_uid_registry).toBeNull();
+    expect(restored.vehicle_uid).toBeNull();
+  });
+
   it('skips PRODUCT_ONLY when an asset document exists with the planned UID', async () => {
     const p = plan({ p1: product('TEST-FAKE-NEW-001') }, []);
     const planned = p.items.find((item): item is Extract<typeof item, { kind: 'PRODUCT_SET_UID' }> => item.kind === 'PRODUCT_SET_UID' && item.productKey === 'p1')!;

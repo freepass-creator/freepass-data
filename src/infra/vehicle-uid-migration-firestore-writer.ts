@@ -134,7 +134,7 @@ export function createVehicleUidMigrationFirestoreWriter(db: Firestore = getFire
       if (mutation.expectedAfter !== undefined) {
         return {
           ...rollbackProductVehicleUidPatch(mutation.vehicleUid),
-          ...(mutation.expectedRegistryAfter !== undefined ? rollbackProductUidRegistryPatch(Boolean(mutation.vehicleUidRegistry), mutation.vehicleUidRegistry) : {}),
+          ...(mutation.expectedRegistryAfter !== undefined ? rollbackProductUidRegistryPatch(mutation.hadVehicleUidRegistry === true, mutation.registryValue) : {}),
         };
       }
       return mutation.vehicleUid !== null
