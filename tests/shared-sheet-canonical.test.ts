@@ -721,6 +721,14 @@ describe('reviewed shared-sheet selection and live upstream fences', () => {
     expect(() => assertLiveSharedSheetMatches(plan, live, Date.parse(live.readTime) - 1)).toThrow('LIVE_SHARED_SHEET_CAPTURE_STALE');
     live.digest = '0'.repeat(64); expect(() => assertLiveSharedSheetMatches(plan, live)).toThrow('INVALID_SHARED_SHEET_CAPTURE');
   });
+  it('rejects reusing the approved capture as live evidence and retains an explicit source revision fence', async () => {
+    const s = await stores(), c = liveNow(capture()), { plan } = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
+    expect(() => assertLiveSharedSheetMatches(plan, structuredClone(c))).toThrow('LIVE_SHARED_SHEET_RECAPTURE_REQUIRED');
+    const live = structuredClone(c); delete live.digest;
+    live.readTime = new Date(Date.parse(c.readTime) + 1).toISOString(); for (const t of live.tabs) t.readTime = live.readTime;
+    live.revision = 'different-source-revision'; live.digest = sharedSheetCaptureDigest(live);
+    expect(() => assertLiveSharedSheetMatches(plan, live, Date.parse(live.readTime))).toThrow('LIVE_SHARED_SHEET_CHANGED_REPLAN_REQUIRED');
+  });
   it('requires live evidence even on a replay; refusal happens before plan file read or any write runtime', async () => {
     await expect(ingestMain(['--firestore', '--apply', '--plan', 'missing-plan.json', '--expected-plan-digest', 'b'.repeat(64)]))
       .rejects.toThrow('APPLY_REQUIRES_LIVE_SOURCE_RECAPTURE');
