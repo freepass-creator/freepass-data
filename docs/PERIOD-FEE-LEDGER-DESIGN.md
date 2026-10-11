@@ -422,3 +422,11 @@ PR·시험·일정 반영:
 계약 연결 소비자는 장부 행을 계약 조건으로 바로 쓰지 않는다. 계약일이 날짜뿐이면 `valueAsOf < 계약일(접수일)`인 행 중 가장 늦은 snapshot을 고르고, 계약 시각 `contractAt`이 있으면 `valueAsOf` 또는 `computedAt`이 그 시각 이전인 행만 고른다. 그 행의 월 대여료와 보증금이 계약 기록과 일치해야 한다. 계약일 이전 snapshot이 없거나 값이 다르면 `CONTRACT_TIME_VALUE_UNAVAILABLE` HOLD로 둔다.
 
 따라서 첫 snapshot 이전 계약, 예를 들어 장부가 없는 74건은 현재값으로 대체하지 않는다. 접수 시점 snapshot, 박제 이력, 공급사 원문 이력을 별도로 찾아야 하며 찾지 못하면 원문 없음 HOLD다. 계획기와 소비 규칙은 "계약 당시 값"이라는 플래그나 표현을 만들지 않는다.
+
+## run 문서 크기 제한과 소유권 판정
+
+`period_fee_snapshot_runs/<runId>` 문서에는 행 문서 키 목록을 저장하지 않는다. run 문서에는 `rowCount`, `rowKeysDigest`, `historyRowCount`, `historyKeysDigest`, `planDigest`, 상태, 시각, 이전 ACTIVE run 같은 작은 manifest 필드만 둔다. `rowKeys`, `plannedCreateKeys`, `createdDocumentKeys` 같은 배열은 Firestore 1MiB 문서 한도를 넘길 수 있으므로 금지한다.
+
+소유 행은 문서 ID 접두로 판정한다. ledger와 history 문서 ID는 `runId + "__" + 원래 키` 형태이며, reader/readback/rollback은 `__name__ >= runId + "__"` 그리고 `__name__ < runId + "__\uf8ff"` 범위를 500개 단위로 읽는다. 읽은 문서 ID를 정렬해 `stableDigest(sortedKeys)`를 계산하고, run 문서의 `rowCount/rowKeysDigest` 또는 `historyRowCount/historyKeysDigest`와 일치할 때만 ACTIVE readback으로 인정한다. 불일치하면 `LEDGER_READ_INCONSISTENT`로 실패한다.
+
+rollback도 같은 접두 범위로 현재 남아 있는 이 run 소유 문서만 찾고, 각 문서의 저장 digest가 삭제 직전 기대 digest와 일치하는 경우에만 삭제한다. 이전 ACTIVE run 복원 전에는 이전 run의 접두 범위 row count와 key digest를 다시 검증한다.

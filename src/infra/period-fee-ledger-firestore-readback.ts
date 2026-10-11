@@ -1,6 +1,7 @@
 import type { CollectionReference, Firestore } from 'firebase-admin/firestore';
 import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import type { PeriodFeeLedgerRow, PeriodFeeSnapshotRun } from '../domain/period-fee-ledger.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 type Rec = Record<string, unknown>;
 
@@ -32,15 +33,23 @@ export async function readConsistentPeriodFeeLedgerRows(
   const run = runSnap.exists ? runSnap.data() as PeriodFeeSnapshotRun : null;
   if (!run || run.snapshotId !== snapshotId) throw new Error('PERIOD_FEE_READBACK_RUN_NOT_FOUND');
 
-  const allowed = new Set(run.rowKeys);
-  const rowsSnap = await ledgerRows(db).where('snapshotId', '==', snapshotId).get();
-  const rows = rowsSnap.docs
-    .map(doc => {
+  const rows: Array<{ id: string; row: PeriodFeeLedgerRow }> = [];
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot<Rec> | null = null;
+  for (;;) {
+    let query = ledgerRows(db)
+      .orderBy('__name__')
+      .startAt(runId + '__')
+      .endBefore(runId + '__\uf8ff')
+      .limit(500);
+    if (cursor) query = query.startAfter(cursor);
+    const page = await query.get();
+    rows.push(...page.docs.map(doc => {
       const { digest: _digest, ...data } = doc.data();
       return { id: doc.id, row: normalizePeriodFeeLedgerRow(data) };
-    })
-    .filter(item => allowed.has(item.id))
-    .map(item => item.row);
+    }));
+    if (page.docs.length < 500) break;
+    cursor = page.docs[page.docs.length - 1]!;
+  }
 
   const reread = await snapshotRuns(db).doc(runId).get();
   const rereadRun = reread.exists ? reread.data() as PeriodFeeSnapshotRun : null;
@@ -48,6 +57,8 @@ export async function readConsistentPeriodFeeLedgerRows(
   if (mustBeActive && (!rereadRun || !rereadRun.active || rereadRun.status !== 'ACTIVE' || rereadRun.runId !== runId)) {
     throw new Error('LEDGER_READ_INCONSISTENT');
   }
-  if (rows.length !== allowed.size) throw new Error('LEDGER_READ_INCONSISTENT');
-  return { run, rows };
+  const rowKeys = rows.map(item => item.id).sort((a, b) => a.localeCompare(b));
+  if (rows.length !== run.rowCount) throw new Error('LEDGER_READ_INCONSISTENT');
+  if (stableDigest(rowKeys) !== run.rowKeysDigest) throw new Error('LEDGER_READ_INCONSISTENT');
+  return { run, rows: rows.map(item => item.row) };
 }

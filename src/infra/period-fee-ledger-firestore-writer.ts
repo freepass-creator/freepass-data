@@ -5,6 +5,7 @@ import { FIRESTORE_COLLECTIONS } from './firestore-layout.js';
 import { readConsistentPeriodFeeLedgerRows } from './period-fee-ledger-firestore-readback.js';
 import type {
   ExistingPeriodFeeDocument,
+  ExistingPeriodFeeDocumentWithKey,
   PeriodFeeLedgerApplyStore,
   PeriodFeeSnapshotWriteGuard,
 } from '../ports/period-fee-ledger-store.js';
@@ -15,6 +16,7 @@ import type {
   PeriodFeeLedgerRow,
   ProductChangeHistoryRow,
 } from '../domain/period-fee-ledger.js';
+import { stableDigest } from '../shared/stable-digest.js';
 
 type Rec = Record<string, unknown>;
 
@@ -100,6 +102,31 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
     await this.collection(FIRESTORE_COLLECTIONS.periodFees.ledger).doc(documentKey).create({ ...row, digest });
   }
 
+  private async listByRunIdPrefix(collectionName: string, runId: string, pageSize = 500): Promise<ExistingPeriodFeeDocumentWithKey[]> {
+    const rows: ExistingPeriodFeeDocumentWithKey[] = [];
+    let cursor: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+    for (;;) {
+      let query = this.collection(collectionName)
+        .orderBy('__name__')
+        .startAt(runId + '__')
+        .endBefore(runId + '__\uf8ff')
+        .limit(pageSize);
+      if (cursor) query = query.startAfter(cursor);
+      const page = await query.get();
+      rows.push(...page.docs.map(doc => {
+        const data = doc.data() as Rec;
+        return { documentKey: doc.id, digest: typeof data.digest === 'string' ? data.digest : '', data };
+      }));
+      if (page.docs.length < pageSize) break;
+      cursor = page.docs[page.docs.length - 1]!;
+    }
+    return rows;
+  }
+
+  async listLedgerDocumentsByRunIdPrefix(runId: string, pageSize = 500): Promise<ExistingPeriodFeeDocumentWithKey[]> {
+    return this.listByRunIdPrefix(FIRESTORE_COLLECTIONS.periodFees.ledger, runId, pageSize);
+  }
+
   async getProductChangeHistoryDocument(documentKey: string): Promise<ExistingPeriodFeeDocument | null> {
     const snap = await this.collection(FIRESTORE_COLLECTIONS.periodFees.productChangeHistory).doc(documentKey).get();
     if (!snap.exists) return null;
@@ -123,6 +150,10 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
       }
       throw error;
     }
+  }
+
+  async listProductChangeHistoryDocumentsByRunIdPrefix(runId: string, pageSize = 500): Promise<ExistingPeriodFeeDocumentWithKey[]> {
+    return this.listByRunIdPrefix(FIRESTORE_COLLECTIONS.periodFees.productChangeHistory, runId, pageSize);
   }
 
   async getSnapshotRun(runId: string): Promise<PeriodFeeSnapshotRun | null> {
@@ -231,15 +262,13 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
         snapshotId: runId,
         planDigest: '',
         previousActiveRunId: null,
-        rowKeys: [],
-        rowDigests: {},
-        plannedCreateKeys: [],
-        createdDocumentKeys: [],
         preparedAt: new Date().toISOString(),
         rowCount: 0,
+        rowKeysDigest: stableDigest([]),
         readyRowCount: 0,
         holdNoUidCount: 0,
         historyRowCount: 0,
+        historyKeysDigest: stableDigest([]),
         readbackSampleCount: 0,
         readbackDigest: null,
       }),

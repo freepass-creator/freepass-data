@@ -110,16 +110,14 @@ export type PeriodFeeSnapshotRun = {
   status: 'PREPARED' | 'ACTIVE' | 'SUPERSEDED' | 'ROLLING_BACK' | 'ROLLED_BACK' | 'INACTIVE' | 'FAILED';
   active: boolean;
   previousActiveRunId: string | null;
-  rowKeys: string[];
-  rowDigests: Record<string, string>;
-  plannedCreateKeys: string[];
-  createdDocumentKeys: string[];
   preparedAt: string;
   activatedAt: string | null;
   rowCount: number;
+  rowKeysDigest: string;
   readyRowCount: number;
   holdNoUidCount: number;
   historyRowCount: number;
+  historyKeysDigest: string;
   readbackSampleCount: number;
   readbackDigest: string | null;
 };
