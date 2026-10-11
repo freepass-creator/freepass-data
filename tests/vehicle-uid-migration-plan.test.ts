@@ -238,6 +238,73 @@ describe('planVehicleUidMigration', () => {
     expect(result.summary.holdProducts).toBe(3);
   });
 
+  it('uses products that already have vehicle_uid as graph evidence without planning changes for them', () => {
+    const result = plan({
+      products: {
+        migrated: product('TEST-FAKE-A', { vin: 'TEST-FAKE-VIN-A', vehicle_uid: 'TEST-FAKE-UID-A' }),
+        unmigrated: product('TEST-FAKE-A', { vin: 'TEST-FAKE-VIN-B' }),
+      },
+      assets: [asset('TEST-FAKE-UID-A', 'TEST-FAKE-A', 'TEST-FAKE-VIN-A')],
+    });
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: 'HOLD',
+      productKey: 'unmigrated',
+      reason: 'GRAPH_COMPONENT_CONFLICT',
+    }));
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: 'HOLD',
+      productKey: 'unmigrated',
+      reason: 'VIN_CONFLICT',
+    }));
+    expect(result.items.filter(item => item.kind !== 'ASSET_ADD_EXTERNAL_IDS' && item.productKey === 'migrated')).toHaveLength(0);
+    expect(result.items.filter(item => item.kind === 'PRODUCT_SET_UID')).toHaveLength(0);
+  });
+
+  it('holds a product when same-kind fields disagree before linking to an asset', () => {
+    const result = plan({
+      products: {
+        p1: {
+          plateNumber: 'TEST-FAKE-A',
+          car_number: 'TEST-FAKE-B',
+          vin: 'TEST-FAKE-VIN-A',
+          vehicle_id_number: 'TEST-FAKE-VIN-B',
+          provider_company_code: 'TEST',
+        },
+      },
+      assets: [asset('TEST-FAKE-UID-A', 'TEST-FAKE-A', 'TEST-FAKE-VIN-A')],
+    });
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'p1', reason: 'GRAPH_COMPONENT_CONFLICT' }));
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'p1', reason: 'SAME_KIND_FIELDS_DISAGREE' }));
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'p1', reason: 'PLATE:SAME_KIND_FIELDS_DISAGREE' }));
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'p1', reason: 'VIN:SAME_KIND_FIELDS_DISAGREE' }));
+    expect(result.items.filter(item => item.kind === 'PRODUCT_SET_UID')).toHaveLength(0);
+  });
+
+  it('removes every planned mutation for a graph component that becomes HOLD', () => {
+    const result = plan({
+      products: {
+        p1: product('TEST-FAKE-A', { vin: 'TEST-FAKE-VIN-B' }),
+        p2: product('TEST-FAKE-C', { vin: 'TEST-FAKE-VIN-C' }),
+      },
+      assets: [
+        asset('TEST-FAKE-UID-A', 'TEST-FAKE-A', 'TEST-FAKE-VIN-A'),
+        asset('TEST-FAKE-UID-C', 'TEST-FAKE-C'),
+      ],
+    });
+    expect(result.items).toContainEqual(expect.objectContaining({ kind: 'HOLD', productKey: 'p1', reason: 'GRAPH_COMPONENT_CONFLICT' }));
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: 'PRODUCT_SET_UID',
+      productKey: 'p2',
+      vehicleUid: 'TEST-FAKE-UID-C',
+    }));
+    expect(result.items).toContainEqual(expect.objectContaining({
+      kind: 'ASSET_ADD_EXTERNAL_IDS',
+      assetId: 'TEST-FAKE-UID-C',
+    }));
+    expect(result.items.filter(item => item.kind === 'ASSET_ADD_EXTERNAL_IDS' && item.assetId === 'TEST-FAKE-UID-A')).toHaveLength(0);
+    expect(result.items.filter(item => item.kind === 'PRODUCT_SET_UID' && item.productKey === 'p1')).toHaveLength(0);
+  });
+
   it('holds every product in a component with two active plate values', () => {
     const result = plan({
       products: {

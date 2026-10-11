@@ -86,12 +86,28 @@ function field(product: VehicleUidMigrationProduct, names: string[]) {
   return undefined;
 }
 
+function fields(product: VehicleUidMigrationProduct, names: string[]) {
+  return names.map(name => text(product[name])).filter(Boolean);
+}
+
+function uniqueValues(values: string[], normalize: (value: string) => string = value => value) {
+  return [...new Set(values.map(normalize))];
+}
+
 function productIds(product: VehicleUidMigrationProduct) {
-  const plate = field(product, ['plateNumber', 'plate_number', 'car_number', 'vehicle_number', '차량번호']);
-  const vin = field(product, ['vin', 'VIN', 'vehicle_vin', '차대번호']);
+  const plateFields = ['plateNumber', 'plate_number', 'car_number', 'vehicle_number', '차량번호'];
+  const vinFields = ['vin', 'VIN', 'vehicle_vin', 'vehicle_id_number', '차대번호'];
+  const plateValues = fields(product, plateFields);
+  const vinValues = fields(product, vinFields);
+  const plate = field(product, plateFields);
+  const vin = field(product, vinFields);
   const supplierCode = field(product, ['provider_company_code', 'supplierCode', 'supplier_code']);
   const supplierVehicleId = field(product, ['iancar_one_vehicle_id', 'sourceVehicleId', 'supplier_vehicle_id', 'vehicleId']);
-  return { plate, vin, supplierCode, supplierVehicleId };
+  const sameKindFieldDisagreements = [
+    ...(uniqueValues(plateValues).length > 1 ? ['PLATE:SAME_KIND_FIELDS_DISAGREE'] : []),
+    ...(uniqueValues(vinValues, value => value.toUpperCase()).length > 1 ? ['VIN:SAME_KIND_FIELDS_DISAGREE'] : []),
+  ];
+  return { plate, vin, supplierCode, supplierVehicleId, sameKindFieldDisagreements };
 }
 
 function externalIdsForAsset(asset: VehicleAsset): VehicleExternalId[] {
@@ -325,11 +341,12 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
   const assetById = new Map(input.assets.map(asset => [asset.id, asset]));
   const uf = new UnionFind();
   for (const [key, product] of productEntries) {
-    if (hasOwn(product, 'vehicle_uid') && text(product.vehicle_uid)) continue;
     const productNode = `product:${key}`;
     uf.add(productNode);
     const info = productInfo.get(key)!;
     for (const id of info.externalIds) uf.union(productNode, `id:${identifierKey(id)}`);
+    const existingVehicleUid = text(product.vehicle_uid);
+    if (existingVehicleUid) uf.union(productNode, `asset:${existingVehicleUid}`);
     for (const binding of bindingsForProduct(input.bindings, key)) {
       if (binding.vehicleAssetId) uf.union(productNode, `asset:${binding.vehicleAssetId}`);
     }
@@ -365,6 +382,9 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
     for (const productKey of products) {
       const product = input.products[productKey]!;
       const info = productInfo.get(productKey)!;
+      if (info.ids.sameKindFieldDisagreements.length) {
+        reasons.push('SAME_KIND_FIELDS_DISAGREE', ...info.ids.sameKindFieldDisagreements);
+      }
       if (isPrefixProductKey(productKey)) reasons.push('PREFIX_PRODUCT_KEY_REQUIRES_REVIEW');
       if (isIancarProductKey(productKey)) reasons.push('IANCAR_PRODUCT_KEY_REQUIRES_REVIEW');
       const samePlate = info.ids.plate ? plateProducts.get(info.ids.plate) ?? [] : [];
@@ -403,6 +423,8 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
   for (const component of componentPlans.sort((a, b) => a.key.localeCompare(b.key))) {
     if (component.reasons.length) {
       for (const productKey of component.products) {
+        const product = input.products[productKey]!;
+        if (text(product.vehicle_uid)) continue;
         for (const reason of ['GRAPH_COMPONENT_CONFLICT', ...component.reasons]) {
           items.push({ kind: 'HOLD', productKey, reason, public: { productHash: hash(productKey), reason } });
         }
@@ -421,6 +443,8 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
       }
     }
     for (const productKey of component.products) {
+      const product = input.products[productKey]!;
+      if (text(product.vehicle_uid)) continue;
       items.push({
         kind: 'PRODUCT_SET_UID',
         productKey,
@@ -428,6 +452,14 @@ export function planVehicleUidMigration(input: PlanVehicleUidMigrationInput): Ve
         reason,
         public: { productHash: hash(productKey), vehicleUidHash: hash(uid), reason },
       });
+    }
+  }
+
+  const holdAssetIds = new Set(componentPlans.filter(component => component.reasons.length > 0).flatMap(component => component.assetIds));
+  if (holdAssetIds.size) {
+    for (let index = items.length - 1; index >= 0; index--) {
+      const item = items[index]!;
+      if (item.kind === 'ASSET_ADD_EXTERNAL_IDS' && holdAssetIds.has(item.assetId)) items.splice(index, 1);
     }
   }
 
