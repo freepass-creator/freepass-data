@@ -1,7 +1,8 @@
 import type { AdminPriceTerm, EconomicsCoverage, CommercialType, Money, Offer, OfferTermEconomics, Policy, PriceTerm, TermEconomicAmount } from '../domain/catalog.js';
 import { stableDigest } from '../shared/stable-digest.js';
 import type { CommissionEvidenceByTerm } from './kakao-catalog-reference.js';
-import { KAKAO_COMMISSION_POLICY, resolveSalesCommission, resolveSupplierBillingFee } from './kakao-catalog-reference.js';
+import { KAKAO_COMMISSION_POLICY, resolveSalesCommission, resolveSupplierBillingFee, selectSonokongQ12Basis } from './kakao-catalog-reference.js';
+import { parseErp5CompatibilityPriceKey } from '../domain/deposit-evidence.js';
 import type { PeriodFeeLedgerRow } from './period-fee-ledger-plan.js';
 import type {
   DepositResolution,
@@ -162,15 +163,36 @@ export function precomputeOfferEconomics(
     const basis36 = offer.priceTerms.filter(candidate => candidate.termMonths === 36 &&
       candidate.mileageLimitKmPerYear === term.mileageLimitKmPerYear && candidate.monthlyRent.currency === 'KRW' &&
       positiveSafeInteger(candidate.monthlyRent.amount));
-    const q12Basis = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION'
-      ? offer.priceTerms.filter(candidate => candidate.termMonths === 12 &&
-        candidate.mileageLimitKmPerYear === term.mileageLimitKmPerYear && candidate.monthlyRent.currency === 'KRW' &&
-        positiveSafeInteger(candidate.monthlyRent.amount))
-      : [];
-    const automaticSonokongEvidence = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION' && q12Basis.length === 1
-      ? { q12Basis: { amount: q12Basis[0]!.monthlyRent.amount, sourceRef: 'PRODUCT_12_MONTH_RENT' } }
+    const explicitEvidence = evidenceByTerm[term.termKey];
+    const parsedTargetKey = parseErp5CompatibilityPriceKey(term.termKey);
+    const targetSettlement = explicitEvidence?.subscriptionForm ?? parsedTargetKey?.settlement;
+    const q12Basis = offer.supplierId === 'RP012' && commercialType === 'OGONG_SUBSCRIPTION' && !explicitEvidence?.q12Basis
+      ? selectSonokongQ12Basis({
+        termMonths: term.termMonths,
+        settlement: targetSettlement,
+        mileageKm: term.mileageLimitKmPerYear ?? undefined,
+        mileagePeriod: 'year',
+        currency: term.monthlyRent.currency,
+        amount: term.monthlyRent.amount,
+        sourceRef: priceRef,
+      }, offer.priceTerms.flatMap(candidate => {
+        const parsedCandidateKey = parseErp5CompatibilityPriceKey(candidate.termKey);
+        const candidateEvidence = evidenceByTerm[candidate.termKey];
+        return [{
+          termMonths: candidate.termMonths,
+          settlement: candidateEvidence?.subscriptionForm ?? parsedCandidateKey?.settlement,
+          mileageKm: candidate.mileageLimitKmPerYear ?? undefined,
+          mileagePeriod: 'year' as const,
+          currency: candidate.monthlyRent.currency,
+          amount: candidate.monthlyRent.amount,
+          sourceRef: 'PRODUCT_12_MONTH_RENT',
+        }];
+      }))
+      : undefined;
+    const automaticSonokongEvidence = q12Basis
+      ? { q12Basis }
       : {};
-    const args = { ...evidenceByTerm[term.termKey], supplierId: offer.supplierId, productType, fuel: fuel ?? '',
+    const args = { ...explicitEvidence, supplierId: offer.supplierId, productType, fuel: fuel ?? '',
       termMonths: term.termMonths, monthlyRent: term.monthlyRent.amount,
       billin36MonthlyRent: basis36.length === 1 ? basis36[0]!.monthlyRent.amount : undefined,
       ...automaticSonokongEvidence };
