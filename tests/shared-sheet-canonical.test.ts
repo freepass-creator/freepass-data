@@ -72,6 +72,35 @@ function later(c: SharedSheetCapture) {
   return c;
 }
 describe('shared sheet local source to Canonical', () => {
+  it('pins color refinement in the reviewed plan and persists its candidate facts through existing intake', async () => {
+    const s = await stores(), c = capture({ 외부색상: '흰색', 내부색상: '검정' });
+    const normal = await planSharedSheetCanonical(s.store, c, 'synthetic-target');
+    expect(normal.plan.ruleVersion).toBe('shared-sheet-normalizer/5');
+    const p = await planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, true);
+    expect(p.plan.ruleVersion).toBe('shared-sheet-normalizer/6');
+    expect(p.plan.includeSupplierColors).toBe(true);
+    const applied = await runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+      plan: p.plan, expectedPlanDigest: p.report.planDigest });
+    expect(applied.report).toMatchObject({ status: 'APPLIED' });
+    const assets = await s.store.listVehicleAssets();
+    expect(assets[0]!.sourceVehicleFacts!.fields.exteriorColor).toMatchObject({ state: 'KNOWN', value: '흰색' });
+    const candidates = await s.source.listCandidates(p.plan.runId);
+    expect(candidates[0]!.candidate.vehicleFacts!.fields.exteriorColor).toMatchObject({ state: 'KNOWN', value: '흰색' });
+    const changed = { ...p.plan };
+    delete changed.includeSupplierColors;
+    await expect(runSharedSheetCanonical(s.store, s.source, { target: 'synthetic-target', apply: true,
+      plan: changed, expectedPlanDigest: stableDigest(changed) })).rejects.toThrow('SHARED_SHEET_PLAN_REQUIRED_OR_CHANGED');
+  });
+  it('does not rewrite completed v5 source candidates with color v6', async () => {
+    const s = await stores(), c = capture({ 외부색상: '흰색' });
+    await apply(s, c);
+    await expect(planSharedSheetCanonical(s.store, c, 'synthetic-target', undefined, true))
+      .rejects.toThrow('SUPPLIER_COLOR_REFINEMENT_REQUIRES_NEW_SOURCE_RUN');
+    const old = await s.source.listCandidates(prepareRawSourceBatch(buildSharedSheetBatch(c)).runId);
+    expect(old[0]!.candidate.vehicleFacts!.fields.exteriorColor).toBeUndefined();
+    const fresh = await planSharedSheetCanonical(s.store, later(capture({ 외부색상: '흰색' })), 'synthetic-target', undefined, true);
+    expect(fresh.plan.ruleVersion).toBe('shared-sheet-normalizer/6');
+  });
   it.each([0, '0', '', '미확인', '협의'])('holds short deposit %j without inventing zero; preserves long-term evidence', value => {
     const n = normalized(capture({ 단기보증: value }));
     expect(n.record.candidate.priceTerms.filter(t => t.termMonths <= 12).every(t => t.depositState === 'UNKNOWN' && !t.deposit)).toBe(true);

@@ -1,5 +1,14 @@
 # FreePass Data — NEXT START HERE
 
+## 2026-10-11 수집·정제 책임 실행 — 색상 규칙의 기존 저장 lifecycle 연결
+
+- 목적/대상: 대표 「너의 역할을 다해라」, 수집·정제·저장 범위만. 기존 PR451/f7ff3bc 작업선, academy data READY. 조회/공개 서버 추가 변경 없음.
+- 변경: 기존 `ingest-shared-sheet-canonical.ts`의 계획·적용 경로에 색상 opt-in 연결. 계획 CLI `--include-supplier-colors`로만 v6 선택, 계획의 flag/ruleVersion/commandId와 digest 고정. apply는 검토된 plan만 사용하며 flag 재지정 거부. 기본 v5는 보존한다.
+- 원문 보존: 기존 completed v5 source 회차에 v6 후보를 끼워 넣지 않는다. 같은 회차의 v6 후보가 없으면 `SUPPLIER_COLOR_REFINEMENT_REQUIRES_NEW_SOURCE_RUN`. 신규 capture/master 증거 및 기존 source-change 검토로 진행하며 unresolved master와 공급사 상태를 추정하지 않는다.
+- 검증: 관련60 PASS/build/boundary/diff-check PASS. 기존 전체2156 PASS/16 SKIP 이후 immutable 회차 guard 회귀를 추가했으며 최종 전체 결과/독립 검토는 실행 기록 참조. 합성 저장 시험에서 원문 색상→후보 facts 연결 확인, 실제 운영 DB writes0.
+- next_start_here: 기존 수집 담당은 최신 capture를 확보해 같은 CLI로 비공개 계획 작성; 단일 writer/원문·master·revision·백업·HOLD를 검증한 뒤 기존 apply/readback 진행. 운영 색상 저장 또는 전체 상품 연결 완료로 세지 않는다. 정책 정제·저장은 기존 담당이 계속, 새 저장 경로 없음.
+- 최종 결정론적 검증: 전체2157 PASS/16 조건부 SKIP, 관련60 PASS 및 차량 정본 색상 저장 APPLIED 회귀 확인, build/arch/boundary/diff-check PASS. 첫 독립 검토 REVIEW_TIMEOUT(300초), 파일 한 개 전달 일관성 질문으로 좁혀 재시도 중. 검토 미완료는 PASS가 아니며 운영 적용은 아직 하지 않는다.
+
 ## 2026-10-11 기존 조회 주소의 직접 읽기 전환 신호
 
 - 대표 「여기로 접근하면 직접읽으라는 사인을 줘」: 기존 상품 GET catalog/catalog-compat/catalog-reference/internal-ai-reference 응답에 `X-Freepass-Read-Mode: DIRECT_FIRESTORE_REQUIRED`, `X-Freepass-Migration-Status: LEGACY_READ_PENDING_RETIREMENT`, 서버의 승인된 신원으로 직접 읽으라는 instruction과 전환 기준 Link를 추가했다. 인증 실패에도 신호는 표시하지만 인증·상태·본문은 변경하지 않는다. 사진·계약·정산 route에는 적용하지 않는다.
