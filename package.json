@@ -71,6 +71,7 @@
     "audit:settlement-id-links": "tsx src/jobs/audit-settlement-id-links.ts",
     "audit:trust-scorecard": "tsx src/jobs/audit-trust-scorecard.ts",
     "plan:vehicle-uid-migration": "tsx src/jobs/plan-vehicle-uid-migration.ts",
+    "apply:vehicle-uid-migration": "tsx src/jobs/apply-vehicle-uid-migration.ts",
     "plan:period-fee-ledger": "tsx src/jobs/plan-period-fee-ledger.ts"
   },
   "dependencies": {

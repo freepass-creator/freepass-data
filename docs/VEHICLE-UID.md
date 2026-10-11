@@ -218,3 +218,27 @@ npm.cmd run plan:vehicle-uid-migration
 - `src/infra/iancar-publication-withdrawal-firestore.ts:321`의 신규 create 경로는 `vehicle_uid`를 모르는 legacy `products` 생성이 가능하므로, UID 적용 전 또는 같은 적용 PR에서 UID resolver/plan digest 연동이 필요하다.
 - `src/infra/iancar-publication-withdrawal-firestore.ts:128` 및 `src/infra/vehicle-name-reference-repair-firestore.ts:860`은 현재 필드 단위라 보존되지만, `vehicle_uid`를 patch/update에 넣지 않는 회귀 테스트를 적용 PR에 추가한다.
 - source ingest/data-owned refresh가 legacy `products`를 직접 덮어쓰는 새 경로가 생기면 `set`/replace 금지 또는 `merge/update` 보존 검사를 먼저 추가한다.
+
+## 10-13 적용 절차
+
+적용기는 계획 파일을 저장소 밖 절대경로에서만 읽고, 기본값은 시험 실행이다. 시험 실행은 Firestore 쓰기 0으로 계획 digest, 적용 대상 건수, HOLD 제외 여부만 출력한다.
+
+```powershell
+npm.cmd run apply:vehicle-uid-migration -- --plan "C:\temp\freepass-private\vehicle-uid-plan.json" --expected-digest "<planDigest>"
+```
+
+운영 적용은 계획기 stdout의 `planDigest`를 보고한 뒤, 같은 digest를 환경변수와 인자로 이중 승인할 때만 가능하다. `summary.invariants.oneActivePlatePerUid`가 false이면 적용하지 않는다. 적용은 `catalog_vehicle_assets` 기존 문서의 `externalIds` 추가와 `products` 기존 문서의 `vehicle_uid` 추가만 수행하며, 문서 생성·삭제·다른 필드 변경은 하지 않는다. HOLD 항목은 적용 대상에서 제외한다.
+
+```powershell
+$env:VEHICLE_UID_APPLY_APPROVED_DIGEST="<planDigest>"
+$env:VEHICLE_UID_APPLY_WRITE="APPLY"
+npm.cmd run apply:vehicle-uid-migration -- --plan "C:\temp\freepass-private\vehicle-uid-plan.json" --expected-digest "<planDigest>" --apply --backup-out "C:\temp\freepass-private\vehicle-uid-backup.json"
+```
+
+적용 중에는 기존 `vehicle_uid`가 같은 값이면 건너뛰고, 다른 값이면 즉시 중단한다. 적용 후에는 전체 대상 `vehicle_uid`와 `externalIds`를 되읽어 계획과 일치해야 성공으로 본다. 실패 또는 되돌림 필요 시 적용 때 만든 저장소 밖 백업 파일로 롤백한다. 롤백은 `products.vehicle_uid`를 삭제하고 `catalog_vehicle_assets.externalIds`를 사전 상태로 원복한다.
+
+```powershell
+$env:VEHICLE_UID_APPLY_APPROVED_DIGEST="<planDigest>"
+$env:VEHICLE_UID_ROLLBACK_WRITE="ROLLBACK"
+npm.cmd run apply:vehicle-uid-migration -- --rollback "C:\temp\freepass-private\vehicle-uid-backup.json" --expected-digest "<planDigest>"
+```
