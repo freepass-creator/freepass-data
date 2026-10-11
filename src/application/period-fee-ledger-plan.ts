@@ -18,6 +18,18 @@ type LedgerFeeAmount = {
   sourceRefs: string[];
 };
 
+type DepositEvidenceKind = 'SOURCE_AMOUNT' | 'SUPPLIER_RULE_NOTE' | 'VERIFIED_ZERO_TEXT' | 'UNKNOWN';
+
+type LedgerDepositEvidence = {
+  kind: DepositEvidenceKind;
+  ruleCode: string | null;
+  noteField: 'deposit_note' | string | null;
+  noteText: string | null;
+  sourcePriceKey: string;
+  calculationBasis: string | null;
+  policyCode: string | null;
+};
+
 export type PeriodFeeLedgerRow = {
   schemaVersion: 'period-fee-ledger/v1';
   snapshotId: string;
@@ -47,6 +59,7 @@ export type PeriodFeeLedgerRow = {
     amount: { amount: number; currency: 'KRW' } | null;
     reasonCode: string | null;
     sourceRefs: string[];
+    depositEvidence: LedgerDepositEvidence;
   };
   supplierBillingFee: LedgerFeeAmount;
   channelPayoutFee: LedgerFeeAmount;
@@ -90,6 +103,7 @@ export type PeriodFeeLedgerPlan = {
     uid: { present: number; missing: number };
     apply: { ready: number; hold: number };
     feeStates: Record<'supplierBillingFee' | 'channelPayoutFee', Record<LedgerFeeState, number>>;
+    depositEvidenceKinds: Record<DepositEvidenceKind, number>;
     reasonCounts: Record<string, number>;
     settlementRowsAccessCount: 0;
     inputDigest: string;
@@ -133,6 +147,14 @@ const text = (value: unknown) => typeof value === 'string' && value.trim() ? val
 const integer = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) ? value : null;
 const pathSafe = (value: string) => value.replace(/[\/#?[\]*]/g, '_').slice(0, 180);
 const sourceObservationId = (docKey: string) => `source_observation_${stableDigest({ docKey }).slice(0, 24)}`;
+const ruleCalculationBasis: Record<string, string> = {
+  SOURCE_AMOUNT: '원천 금액',
+  RENT_X_2: '월 대여료×2',
+  RENT_X_CONTRACT_YEARS_MAX3: '월 대여료×약정연수(최대 3개월)',
+  IMPORT_12_X3_18_PLUS_X6: '12개월 월 대여료×3 / 18개월 이상 월 대여료×6',
+  ZERO_DEPOSIT: '무보증 문구 근거',
+};
+const calculationBasis = (code: string) => ruleCalculationBasis[code] ?? null;
 const snapshotDate = (snapshotId: string) => {
   const match = /^period-fee-(\d{4}-\d{2}-\d{2})$/.exec(snapshotId);
   if (!match) throw new Error('PERIOD_FEE_SNAPSHOT_ID_INVALID');
@@ -154,6 +176,61 @@ const kstDate = (iso: string) => {
   if (!year || !month || !day) throw new Error('PERIOD_FEE_OBSERVED_AT_INVALID');
   return `${year}-${month}-${day}`;
 };
+
+function sourcePriceKey(termKey: string): string {
+  return termKey.startsWith('source:') ? termKey.slice('source:'.length) : termKey;
+}
+
+export function normalizeLedgerDepositEvidence(input: {
+  state: DepositState;
+  amount: { amount: number; currency: 'KRW' } | null;
+  term: Rec;
+  rawProduct: Rec;
+  sourcePriceKey: string;
+}): { state: DepositState; reasonCode: string | null; evidence: LedgerDepositEvidence } {
+  const termEvidence = input.term.depositEvidence && typeof input.term.depositEvidence === 'object' && !Array.isArray(input.term.depositEvidence)
+    ? input.term.depositEvidence as Rec : {};
+  const rule = input.term.depositRule && typeof input.term.depositRule === 'object' && !Array.isArray(input.term.depositRule)
+    ? input.term.depositRule as Rec : {};
+  const basis = rule.depositEvidenceBasis && typeof rule.depositEvidenceBasis === 'object' && !Array.isArray(rule.depositEvidenceBasis)
+    ? rule.depositEvidenceBasis as Rec : {};
+  const ruleCode = text(rule.code) ?? (text(termEvidence.reasonCode)?.startsWith('SUPPLIER_RULE_NOTE:')
+    ? text(termEvidence.reasonCode)!.slice('SUPPLIER_RULE_NOTE:'.length) : text(termEvidence.reasonCode));
+  const policyCode = text(input.rawProduct.policy_code);
+  const noteText = text(termEvidence.sourceNote) ?? text(basis.text);
+  const noteField = noteText ? 'deposit_note' : text(basis.field);
+  const base = {
+    ruleCode,
+    noteField,
+    noteText,
+    sourcePriceKey: input.sourcePriceKey,
+    calculationBasis: ruleCode ? ruleCalculationBasis[ruleCode] ?? text(rule.label) : null,
+    policyCode,
+  };
+  const reasonCode = text(termEvidence.reasonCode);
+  const sourceAmount = termEvidence.sourceAmount;
+  const hasSourceAmount = (typeof sourceAmount === 'number' && Number.isSafeInteger(sourceAmount) && sourceAmount > 0)
+    || (typeof sourceAmount === 'string' && /^(?:[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$/.test(sourceAmount));
+
+  if (input.state === 'KNOWN' && (reasonCode === 'SOURCE_AMOUNT' || ruleCode === 'SOURCE_AMOUNT') && hasSourceAmount) {
+    return { state: input.state, reasonCode, evidence: { kind: 'SOURCE_AMOUNT', ...base, ruleCode: 'SOURCE_AMOUNT',
+      calculationBasis: calculationBasis('SOURCE_AMOUNT') } };
+  }
+  if (input.state === 'KNOWN' && ruleCode && ruleCode !== 'SOURCE_AMOUNT' && noteText) {
+    return { state: input.state, reasonCode, evidence: { kind: 'SUPPLIER_RULE_NOTE', ...base,
+      calculationBasis: base.calculationBasis ?? ruleCalculationBasis[ruleCode] ?? null } };
+  }
+  if (input.state === 'ZERO' && (ruleCode === 'ZERO_DEPOSIT' || reasonCode === 'EXPLICIT_ZERO_DEPOSIT') && (noteText || text(basis.text))) {
+    return { state: input.state, reasonCode, evidence: { kind: 'VERIFIED_ZERO_TEXT', ...base, ruleCode: ruleCode ?? 'ZERO_DEPOSIT',
+      noteText: noteText ?? text(basis.text) ?? null, calculationBasis: calculationBasis('ZERO_DEPOSIT') } };
+  }
+  if (input.state === 'KNOWN') {
+    return { state: 'UNKNOWN', reasonCode: 'DEPOSIT_POLICY_EVIDENCE_REQUIRED',
+      evidence: { kind: 'UNKNOWN', ...base, ruleCode: ruleCode ?? null, calculationBasis: null } };
+  }
+  return { state: input.state, reasonCode, evidence: { kind: 'UNKNOWN', ...base, ruleCode: ruleCode ?? null,
+    calculationBasis: null } };
+}
 
 function normalizeFee(value: Rec | undefined): LedgerFeeAmount {
   const state = value?.state === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : value?.state === 'CALCULATED' ? 'CALCULATED' : 'UNKNOWN';
@@ -245,6 +322,7 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput): PeriodFeeL
     supplierBillingFee: { CALCULATED: 0, UNKNOWN: 0, NOT_APPLICABLE: 0 },
     channelPayoutFee: { CALCULATED: 0, UNKNOWN: 0, NOT_APPLICABLE: 0 },
   };
+  const depositEvidenceKinds: Record<DepositEvidenceKind, number> = { SOURCE_AMOUNT: 0, SUPPLIER_RULE_NOTE: 0, VERIFIED_ZERO_TEXT: 0, UNKNOWN: 0 };
   let uidPresent = 0;
   let uidMissing = 0;
 
@@ -276,6 +354,17 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput): PeriodFeeL
         ? [input.snapshotId, vehicleUid, supplierId, productId, offerId, term.termKey].map(pathSafe).join('__')
         : [input.snapshotId, productKey, supplierId, productId, offerId, term.termKey].map(pathSafe).join('__');
       const depositState = String(term.depositState);
+      const normalizedDepositState: DepositState = (depositState === 'KNOWN' || depositState === 'ZERO' || depositState === 'NOT_APPLICABLE') ? depositState : 'UNKNOWN';
+      const depositAmount = term.deposit ? { amount: term.deposit.amount, currency: 'KRW' as const } : null;
+      const depositWithEvidence = normalizeLedgerDepositEvidence({
+        state: normalizedDepositState,
+        amount: depositAmount,
+        term: term as Rec,
+        rawProduct,
+        sourcePriceKey: sourcePriceKey(term.termKey),
+      });
+      depositEvidenceKinds[depositWithEvidence.evidence.kind] += 1;
+      if (depositWithEvidence.reasonCode) reasonCounts[depositWithEvidence.reasonCode] = (reasonCounts[depositWithEvidence.reasonCode] ?? 0) + 1;
       rows.push({
         schemaVersion: 'period-fee-ledger/v1',
         snapshotId: input.snapshotId,
@@ -301,10 +390,11 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput): PeriodFeeL
         termMonths: term.termMonths,
         monthlyRent: { amount: term.monthlyRent.amount, currency: 'KRW', state: 'KNOWN', reasonCode: null },
         deposit: {
-          state: (depositState === 'KNOWN' || depositState === 'ZERO' || depositState === 'NOT_APPLICABLE') ? depositState : 'UNKNOWN',
-          amount: term.deposit ? { amount: term.deposit.amount, currency: 'KRW' } : null,
-          reasonCode: text((term.depositEvidence as Rec | undefined)?.reasonCode),
+          state: depositWithEvidence.state,
+          amount: depositWithEvidence.state === 'UNKNOWN' ? null : depositAmount,
+          reasonCode: depositWithEvidence.reasonCode,
           sourceRefs: [`source-product:${docKey}#${term.termKey}`],
+          depositEvidence: depositWithEvidence.evidence,
         },
         supplierBillingFee: billing,
         channelPayoutFee: payout,
@@ -338,6 +428,7 @@ export function planPeriodFeeLedger(input: PlanPeriodFeeLedgerInput): PeriodFeeL
     uid: { present: uidPresent, missing: uidMissing },
     apply: { ready: rows.filter(row => row.applyState === 'READY').length, hold: rows.filter(row => row.applyState === 'HOLD').length },
     feeStates,
+    depositEvidenceKinds,
     reasonCounts: Object.fromEntries(Object.entries(reasonCounts).sort(([a], [b]) => a.localeCompare(b))),
     settlementRowsAccessCount: 0 as const,
     inputDigest: stableDigest({ products: input.products, policies: input.policies ?? {}, referenceInputs: input.referenceInputs ?? null, previousSnapshot: input.previousSnapshot ?? null, observedAt: input.observedAt, snapshotId: input.snapshotId }),

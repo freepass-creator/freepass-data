@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { planPeriodFeeLedger } from '../src/application/period-fee-ledger-plan.js';
+import { normalizeLedgerDepositEvidence, planPeriodFeeLedger } from '../src/application/period-fee-ledger-plan.js';
 import publicProductFeedSchema from '../contracts/public-product-feed-v1.schema.json' with { type: 'json' };
 import { FIRESTORE_COLLECTIONS } from '../src/infra/firestore-layout.js';
 
@@ -64,6 +64,99 @@ describe('period fee ledger planner', () => {
     expect(plan.rows[0]!.supplierBillingFee).toMatchObject({ state: 'UNKNOWN', amount: null });
     expect(plan.rows[0]!.channelPayoutFee).toMatchObject({ state: 'UNKNOWN', amount: null });
     expect(Object.keys(plan.summary.reasonCounts).length).toBeGreaterThan(0);
+  });
+
+  it('carries SOURCE_AMOUNT deposit evidence for positive source deposits', () => {
+    const plan = planPeriodFeeLedger({
+      products: { sourceAmount: product({ price: { '36': { rent: 800000, deposit: 1000000 } } }) },
+      policies: {},
+      referenceInputs: {},
+      observedAt,
+      snapshotId,
+    });
+
+    expect(plan.rows[0]!.deposit).toMatchObject({
+      state: 'KNOWN',
+      amount: { amount: 1000000, currency: 'KRW' },
+      depositEvidence: {
+        kind: 'SOURCE_AMOUNT',
+        ruleCode: 'SOURCE_AMOUNT',
+        sourcePriceKey: '36',
+        calculationBasis: '원천 금액',
+      },
+    });
+    expect(plan.summary.depositEvidenceKinds.SOURCE_AMOUNT).toBe(1);
+  });
+
+  it('carries SUPPLIER_RULE_NOTE deposit evidence for compatible rule-note deposits', () => {
+    const plan = planPeriodFeeLedger({
+      products: { ruleNote: product({
+        provider_company_code: 'RP023',
+        product_type: '오플구독',
+        deposit_note: '국산: 월 대여료×2',
+        price: { '36': { rent: 800000, deposit: 0 } },
+      }) },
+      policies: {},
+      referenceInputs: {},
+      observedAt,
+      snapshotId,
+    });
+
+    expect(plan.rows[0]!.deposit).toMatchObject({
+      state: 'KNOWN',
+      amount: { amount: 1600000, currency: 'KRW' },
+      depositEvidence: {
+        kind: 'SUPPLIER_RULE_NOTE',
+        ruleCode: 'RENT_X_2',
+        noteField: 'deposit_note',
+        noteText: '국산: 월 대여료×2',
+        sourcePriceKey: '36',
+        calculationBasis: '월 대여료×2',
+      },
+    });
+    expect(plan.summary.depositEvidenceKinds.SUPPLIER_RULE_NOTE).toBe(1);
+  });
+
+  it('downgrades virtual KNOWN deposits without policy evidence to UNKNOWN', () => {
+    const result = normalizeLedgerDepositEvidence({
+      state: 'KNOWN',
+      amount: { amount: 1230000, currency: 'KRW' },
+      term: { depositEvidence: { sourceAmount: 0, reasonCode: null } },
+      rawProduct: {},
+      sourcePriceKey: '36',
+    });
+
+    expect(result).toMatchObject({
+      state: 'UNKNOWN',
+      reasonCode: 'DEPOSIT_POLICY_EVIDENCE_REQUIRED',
+      evidence: { kind: 'UNKNOWN', sourcePriceKey: '36' },
+    });
+  });
+
+  it('carries VERIFIED_ZERO_TEXT evidence for text-proven zero deposits', () => {
+    const plan = planPeriodFeeLedger({
+      products: { zeroText: product({
+        deposit_note: '무보증',
+        price: { '36': { rent: 800000, deposit: 0 } },
+      }) },
+      policies: {},
+      referenceInputs: {},
+      observedAt,
+      snapshotId,
+    });
+
+    expect(plan.rows[0]!.deposit).toMatchObject({
+      state: 'ZERO',
+      amount: { amount: 0, currency: 'KRW' },
+      depositEvidence: {
+        kind: 'VERIFIED_ZERO_TEXT',
+        ruleCode: 'ZERO_DEPOSIT',
+        noteField: 'deposit_note',
+        noteText: '무보증',
+        sourcePriceKey: '36',
+      },
+    });
+    expect(plan.summary.depositEvidenceKinds.VERIFIED_ZERO_TEXT).toBe(1);
   });
 
   it('marks rows without UID as plan-only HOLD_NO_UID', () => {

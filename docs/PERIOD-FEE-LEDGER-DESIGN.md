@@ -116,6 +116,15 @@ type PeriodFeeLedgerRow = {
     amount: { amount: number; currency: 'KRW' } | null;
     reasonCode: string | null;
     sourceRefs: string[];
+    depositEvidence: {
+      kind: 'SOURCE_AMOUNT' | 'SUPPLIER_RULE_NOTE' | 'VERIFIED_ZERO_TEXT' | 'UNKNOWN';
+      ruleCode: string | null;
+      noteField: 'deposit_note' | string | null;
+      noteText: string | null;
+      sourcePriceKey: string;
+      calculationBasis: string | null;
+      policyCode: string | null;
+    };
   };
 
   supplierBillingFee: LedgerFeeAmount;
