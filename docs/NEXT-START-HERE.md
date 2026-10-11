@@ -3045,6 +3045,9 @@ This file exists so another session can continue without re-discovering or re-cr
 
 ## 2026-10-11 PR465 상품 전체 직접 읽기 구현 후보
 
+- 후속 실제 실행(23:41~23:54 KST): PR465 main fbc00404에서 직접 CLI1776상품/175원천 재조회, native audit38147750358 및 writer guard SUCCESS. 이어 기존 shared-sheet-daily dry-run38148201370(main68c96649)에서 23:42:17 KST 원천12탭/175상품행·678기간 대사, CHANGE19/HOLD156/writerReady=true, capture/plan SUCCESS·applySKIP·DB쓰기0. private plan 고정 generation과19건 변경 전 binding/model/asset/product/offer 백업·재읽기, revision 불일치0/head·ownership 일치 확인. 자동 롤백 실행기는 없으며 승인 plan 적용 전 live 원천 동일성 재검증이 필요하다. 기존validator의 저장소 drift 검사가 공급사 live 원문 drift까지 보장한다는 설명은 철회한다.
+- 후속 기간 선택 수정: 기존 금액 작업선 PR480, code15939346에서 기존 planner/transaction이 같은 fee-only selector를 사용하도록4기존파일 확장. 승인 Git/USER 정책 재사용, 새 DB policy 필수 gate/엔진/ledger writer 없음; 9예외 제외·125비선택기간 보존. 관련28/build PASS, exact15939346 전체2422 PASS/18 conditional SKIP. 실제26건은 CURRENT source binding 불일치로 READY0/쓰기0. main05443076 동시 read-runtime 변경은822a1db4에서 모두 보존해 결합했고 최종 PR480 exacthead CI/독립 검증 뒤에만 통합한다. next_start_here: 수집 담당의 고정계획+live원문 대조 경로 → 현재 binding 갱신 readback → 동일selector로 재계획/정확 운영 승인 → 저장 후 직접 조회. AI-OPS 기존 PR146 wrapper 실제조회 후보 결과도 별도 통합/재읽기하며 요청했다는 사실을 완료로 세지 않는다.
+
 - 목적: 상품 전체를 온라인 Firestore에서 직접 읽는 기존 내부 소비처 진입점 확장. 대상 revision: merge base c968bbd2(operator 1dac5cf 결합), 기존 PR465 branch. 원본 저장소 dirty와 다른 역할 변경 보존.
 - 변경: 기존 compatibility reader/application/job/test 확장. legacy/canonical/current-source 각 representation을 구분하고 검색·결측·저장 사진 참조·기간조건을 연결. 새 API/reader/계약/요율/DB쓰기/IAM/운영 배포 없음.
 - 직접 조회 검토 revision: 813cacc1938dc4f589c0f9650525134ecc846374. 후속 main PR475/476 a109af00는 8587bae43fa3f3241ad6df49519393c81656ed78에서 import3개를 모두 보존해 통합했고 direct composition 함수 본문은 동일하다. 새 main 통합 head의 전체 시험/CI는 PR465 최종 영수증을 확인한다. 기존 등록 별칭/법인명 검색, 저장 경제조건 helper, options 사실, source grant 미지정/빈 범위의 source 읽기0, 별도 ledger 시점/digest를 보존한다. grant는 신뢰 서버의 기존 인가 결과 전달이며 Firebase 권한 발급이 아니다.
