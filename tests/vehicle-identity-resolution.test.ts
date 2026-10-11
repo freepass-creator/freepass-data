@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { chooseVehicleIdentity, indexVehicleMaster, type VehicleIdentity } from '../src/domain/vehicle-identity-resolution.js';
+import { chooseVehicleIdentity, indexVehicleMaster, type VehicleIdentity, type VehicleIdentitySpecs } from '../src/domain/vehicle-identity-resolution.js';
 import { assertVehicleIdentityInputs, buildVehicleIdentityInputs, verifiedMasterRecords, verifiedVehicleMasterReference, type VehicleMasterSnapshot } from '../src/adapters/vehicle-identity-inputs.js';
 import type { Erp5SourceCapture } from '../src/adapters/erp5-source-capture.js';
 import { identityResolver } from '../src/jobs/ingest-shared-sheet-canonical.js';
@@ -60,6 +60,10 @@ describe('one active Data master authority', () => {
     }
     expect(chooseVehicleIdentity(master, { ...input(names), specs: { seats: 5 } }))
       .toMatchObject({ pick: 'HOLD', notes: ['MASTER_SPEC_EVIDENCE_REQUIRED'] });
+    expect(chooseVehicleIdentity(master, { ...input(names), specs: { displacementCc: undefined } as unknown as VehicleIdentitySpecs }))
+      .toMatchObject({ pick: 'HOLD', notes: ['SOURCE_SPEC_REVIEW_REQUIRED'] });
+    expect(chooseVehicleIdentity(master, { ...input(names), raw: 'HEV' }))
+      .toMatchObject({ pick: 'HOLD', notes: ['HYBRID_SOURCE_CONFLICT'] });
   });
   it('does not mistake TECH source text for the existing hybrid ECH token', () => {
     const hybrid = [names[0], names[1], '쏘나타 하이브리드 DN8', names[3]] as const;

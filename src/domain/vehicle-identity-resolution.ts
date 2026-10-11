@@ -26,7 +26,7 @@ export function indexVehicleMaster(records: VehicleMasterRecord[]) {
     }));
     // Same visible name with multiple immutable trim IDs is not a unique choice.
     const compatible = hits.filter(r => !specs || Object.entries(specs).every(([key, value]) => {
-      if (value === null) return false; // supplied but invalid is not missing evidence
+      if (value == null) return false; // supplied but invalid is not missing evidence
       if (key === 'modelYear') return typeof value === 'number' && typeof r.modelYearStart === 'number' &&
         typeof r.modelYearEnd === 'number' && value >= r.modelYearStart && value <= r.modelYearEnd;
       return r.specs?.[key as keyof VehicleIdentitySpecs] === value;
@@ -47,7 +47,7 @@ export function chooseVehicleIdentity(master: VehicleMasterIndex, input: {
     Number(input.firstRegistration.slice(0, 4)) !== input.specs.modelYear;
   const hold = (...notes: string[]): IdentityChoice => ({ pick: 'HOLD', identity: null, dataIdentity,
     notes: [...notes, ...(yearMismatch ? ['YEAR_REGISTRATION_MISMATCH'] : [])] });
-  if (input.specs && Object.values(input.specs).some(value => value === null)) return hold('SOURCE_SPEC_REVIEW_REQUIRED');
+  if (input.specs && Object.values(input.specs).some(value => value == null)) return hold('SOURCE_SPEC_REVIEW_REQUIRED');
   const nonMatchReason = (identity: VehicleIdentity, fallback: string) => {
     const named = input.specs && master.match(identity);
     if (!named) return fallback;
@@ -70,7 +70,10 @@ export function chooseVehicleIdentity(master: VehicleMasterIndex, input: {
   const name = selected.names.slice(1).join(' ');
   const siblings = master.records.filter(r => r.names[0] === selected.names[0] && r.names[1] === selected.names[1]);
   for (const [tag, rx] of [['HYBRID', /하이브리드|HEV|E-?TECH|(^|[^A-Z])ECH([^A-Z]|$)/i], ['ELECTRIC', /전기|(^|[^A-Z])EV([^A-Z]|$)/i]] as const) {
-    if (rx.test(input.raw) && !rx.test(name) && siblings.some(r => rx.test(r.names.slice(1).join(' ')))) {
+    const fuelMatches = tag === 'HYBRID' ? ['하이브리드', '플러그인하이브리드', '플러그인 하이브리드'].includes(selected.specs?.fuel ?? '')
+      : selected.specs?.fuel === '전기';
+    if (rx.test(input.raw) && !rx.test(name) && (selected.specs && !fuelMatches ||
+        siblings.some(r => rx.test(r.names.slice(1).join(' '))))) {
       return hold(tag + '_SOURCE_CONFLICT');
     }
   }
