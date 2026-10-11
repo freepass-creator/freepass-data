@@ -163,21 +163,22 @@ const dateOnly = (value: string | undefined) =>
   typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
 
 const ledgerObservationMs = (row: PeriodFeeLedgerRow) => {
-  const valueAsOfMs = parseTime(row.valueAsOf);
-  if (Number.isFinite(valueAsOfMs)) return valueAsOfMs;
-  return parseTime(row.computedAt);
+  const computedAtMs = parseTime(row.computedAt);
+  const valueAsOfMs = dateOnly(row.valueAsOf) && Number.isFinite(computedAtMs)
+    ? NaN
+    : parseTime(row.valueAsOf);
+  const observed = [computedAtMs, valueAsOfMs].filter(Number.isFinite);
+  return observed.length > 0 ? Math.max(...observed) : NaN;
 };
 
 const contractInstantMs = (input: Pick<ContractLedgerPickInput, 'contractDate' | 'contractAt'>) =>
   parseTime(input.contractAt ?? input.contractDate);
 
 const ledgerObservationKstDate = (row: PeriodFeeLedgerRow) => {
+  const observationMs = ledgerObservationMs(row);
+  if (Number.isFinite(observationMs)) return kstDate(new Date(observationMs).toISOString());
   const valueAsOfDate = dateOnly(row.valueAsOf);
-  if (valueAsOfDate) return valueAsOfDate;
-  const valueAsOfMs = parseTime(row.valueAsOf);
-  if (Number.isFinite(valueAsOfMs)) return kstDate(row.valueAsOf);
-  const computedAtMs = parseTime(row.computedAt);
-  return Number.isFinite(computedAtMs) ? kstDate(row.computedAt) : null;
+  return valueAsOfDate ?? null;
 };
 
 const observedBeforeContract = (row: PeriodFeeLedgerRow, input: Pick<ContractLedgerPickInput, 'contractDate' | 'contractAt'>) => {

@@ -21,6 +21,7 @@ export type PeriodFeeLedgerApplyStore = {
   releaseSnapshotWriteLock(ownerId: string): Promise<void>;
   getLedgerDocument(documentKey: string): Promise<ExistingPeriodFeeDocument | null>;
   createLedgerDocument(documentKey: string, row: PeriodFeeLedgerRow, digest: string): Promise<void>;
+  getProductChangeHistoryDocument(documentKey: string): Promise<ExistingPeriodFeeDocument | null>;
   createProductChangeHistoryDocument(documentKey: string, row: ProductChangeHistoryRow | ProductChangeHistoryBaselineRow, digest: string): Promise<void>;
   getSnapshotRun(runId: string): Promise<PeriodFeeSnapshotRun | null>;
   getActiveSnapshotRun(snapshotId: string): Promise<PeriodFeeSnapshotRun | null>;

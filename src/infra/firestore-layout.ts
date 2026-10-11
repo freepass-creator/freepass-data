@@ -1,3 +1,5 @@
+import { compactFirestoreDocumentIdPart } from '../shared/stable-digest.js';
+
 export const FIRESTORE_COLLECTIONS = Object.freeze({
   catalog: Object.freeze({
     vehicleModels: 'catalog_vehicle_models',
@@ -76,8 +78,9 @@ export const FIRESTORE_COLLECTIONS = Object.freeze({
 export const sourceFirestoreDocumentId = (value: string) =>
   value.replaceAll('/', '__');
 
-export const firestoreSafeDocumentIdPart = (value: string) =>
-  value.replace(/[\/#?[\]*]/g, '_').slice(0, 180);
+export const firestoreSafeDocumentIdPart = (value: string) => {
+  return compactFirestoreDocumentIdPart(value);
+};
 
 export const periodFeeRunId = (snapshotId: string, planDigest: string) =>
   [snapshotId, planDigest.slice(0, 24)].map(firestoreSafeDocumentIdPart).join('__');

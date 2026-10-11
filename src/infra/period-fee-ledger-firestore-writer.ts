@@ -100,15 +100,27 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
     await this.collection(FIRESTORE_COLLECTIONS.periodFees.ledger).doc(documentKey).create({ ...row, digest });
   }
 
+  async getProductChangeHistoryDocument(documentKey: string): Promise<ExistingPeriodFeeDocument | null> {
+    const snap = await this.collection(FIRESTORE_COLLECTIONS.periodFees.productChangeHistory).doc(documentKey).get();
+    if (!snap.exists) return null;
+    const data = snap.data() as Rec;
+    return { digest: typeof data.digest === 'string' ? data.digest : '', data };
+  }
+
   async createProductChangeHistoryDocument(
     documentKey: string,
     row: ProductChangeHistoryRow | ProductChangeHistoryBaselineRow,
     digest: string,
   ): Promise<void> {
+    const ref = this.collection(FIRESTORE_COLLECTIONS.periodFees.productChangeHistory).doc(documentKey);
     try {
-      await this.collection(FIRESTORE_COLLECTIONS.periodFees.productChangeHistory).doc(documentKey).create({ ...row, digest });
+      await ref.create({ ...row, digest });
     } catch (error) {
-      if (String((error as { code?: unknown }).code) === '6' || String((error as Error).message).includes('ALREADY_EXISTS')) return;
+      if (String((error as { code?: unknown }).code) === '6' || String((error as Error).message).includes('ALREADY_EXISTS')) {
+        const existing = await ref.get();
+        if (existing.exists && (existing.data() as Rec | undefined)?.digest === digest) return;
+        throw new Error('DOCUMENT_ID_COLLISION');
+      }
       throw error;
     }
   }

@@ -76,8 +76,17 @@ class MemoryPeriodFeeStore implements PeriodFeeLedgerApplyStore {
     }
   }
 
+  async getProductChangeHistoryDocument(documentKey: string): Promise<ExistingPeriodFeeDocument | null> {
+    return this.history.get(documentKey) ?? null;
+  }
+
   async createProductChangeHistoryDocument(documentKey: string, row: ProductChangeHistoryRow | ProductChangeHistoryBaselineRow, digest: string): Promise<void> {
     if (!documentKey.includes('__')) throw new Error('TEST_HISTORY_KEY_INVALID');
+    const existing = this.history.get(documentKey);
+    if (existing) {
+      if (existing.digest !== digest) throw new Error('DOCUMENT_ID_COLLISION');
+      return;
+    }
     this.createHistoryCalls += 1;
     this.history.set(documentKey, { digest, data: structuredClone(row) as unknown as Record<string, unknown> });
   }
@@ -227,6 +236,18 @@ const makePlan = (products: Record<string, Record<string, unknown>> = { p1: prod
 
 const runIdFor = (plan: PeriodFeeLedgerPlan) => `${plan.snapshotId}__${plan.planDigest.slice(0, 24)}`;
 const storageKeyFor = (plan: PeriodFeeLedgerPlan, row: PeriodFeeLedgerRow) => periodFeeRunDocumentKey(runIdFor(plan), row.documentKey);
+const historyStorageKeyFor = (plan: PeriodFeeLedgerPlan, row: ProductChangeHistoryRow | ProductChangeHistoryBaselineRow) =>
+  periodFeeRunDocumentKey(runIdFor(plan), [row.productKey, row.snapshotId, row.fieldPath, stableDigest(row).slice(0, 24)].join('__'));
+
+const withPlanDigest = (plan: PeriodFeeLedgerPlan): PeriodFeeLedgerPlan => ({
+  ...plan,
+  planDigest: stableDigest({
+    snapshotId: plan.snapshotId,
+    rows: plan.rows,
+    history: plan.history,
+    baselines: plan.baselines,
+  }),
+});
 
 describe('period fee ledger apply', () => {
   it('dry-runs with zero writes when approval env is absent at the application boundary', async () => {
@@ -378,6 +399,95 @@ describe('period fee ledger apply', () => {
     store.ledger.set(storageKeyFor(plan, row), { digest: stableDigest({ stale: true }), data: row as unknown as Record<string, unknown> });
     await expect(applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
       .rejects.toThrow('PERIOD_FEE_LEDGER_DOCUMENT_DIGEST_CONFLICT');
+  });
+
+  it('stores distinct long-key product change histories without truncation collisions', async () => {
+    const longProductKey = `TEST-FAKE-${'PRODUCT-'.repeat(40)}`;
+    const base = makePlan();
+    const history: ProductChangeHistoryRow[] = [
+      {
+        schemaVersion: 'product-change-history/v1',
+        productKey: longProductKey,
+        kind: 'RENT',
+        fieldPath: 'priceTerms.monthlyRent',
+        before: { amount: 700000 },
+        after: { amount: 710000 },
+        changedAtKst: '2026-10-12',
+        snapshotId: base.snapshotId,
+        sourceObservationRef: null,
+      },
+      {
+        schemaVersion: 'product-change-history/v1',
+        productKey: longProductKey,
+        kind: 'DEPOSIT',
+        fieldPath: 'priceTerms.deposit',
+        before: { amount: 0 },
+        after: { amount: 1000000 },
+        changedAtKst: '2026-10-12',
+        snapshotId: base.snapshotId,
+        sourceObservationRef: null,
+      },
+    ];
+    const plan = withPlanDigest({ ...base, history });
+    const store = new MemoryPeriodFeeStore();
+
+    await applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true });
+
+    const keys = [...store.history.keys()];
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+    expect(keys.every(key => key.includes('__sha256_'))).toBe(true);
+  });
+
+  it('fails when an existing history document ID has a different digest', async () => {
+    const base = makePlan();
+    const history: ProductChangeHistoryRow[] = [{
+      schemaVersion: 'product-change-history/v1',
+      productKey: `TEST-FAKE-${'PRODUCT-'.repeat(40)}`,
+      kind: 'RENT',
+      fieldPath: 'priceTerms.monthlyRent',
+      before: { amount: 700000 },
+      after: { amount: 710000 },
+      changedAtKst: '2026-10-12',
+      snapshotId: base.snapshotId,
+      sourceObservationRef: null,
+    }];
+    const plan = withPlanDigest({ ...base, history });
+    const store = new MemoryPeriodFeeStore();
+    store.history.set(historyStorageKeyFor(plan, history[0]!), {
+      digest: stableDigest({ TEST: 'FAKE-DIFFERENT-CONTENT' }),
+      data: {},
+    });
+
+    await expect(applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
+      .rejects.toThrow('DOCUMENT_ID_COLLISION');
+    expect([...store.runs.values()].some(run => run.active)).toBe(false);
+  });
+
+  it('does not mark ACTIVE when history readback is missing', async () => {
+    const base = makePlan();
+    const history: ProductChangeHistoryRow[] = [{
+      schemaVersion: 'product-change-history/v1',
+      productKey: 'TEST-FAKE-PRODUCT',
+      kind: 'RENT',
+      fieldPath: 'priceTerms.monthlyRent',
+      before: { amount: 700000 },
+      after: { amount: 710000 },
+      changedAtKst: '2026-10-12',
+      snapshotId: base.snapshotId,
+      sourceObservationRef: null,
+    }];
+    const plan = withPlanDigest({ ...base, history });
+    const store = new MemoryPeriodFeeStore();
+    const original = store.getProductChangeHistoryDocument.bind(store);
+    store.getProductChangeHistoryDocument = async (key) => {
+      if (store.createHistoryCalls > 0 && key === historyStorageKeyFor(plan, history[0]!)) return null;
+      return original(key);
+    };
+
+    await expect(applyPeriodFeeLedgerPlan(store, plan, { expectedDigest: plan.planDigest, writeApproved: true }))
+      .rejects.toThrow('PERIOD_FEE_HISTORY_READBACK_FAILED');
+    expect(store.runs.get(runIdFor(plan))).toMatchObject({ status: 'PREPARED', active: false });
   });
 
   it('rejects a stored same-run digest conflict before rewriting ACTIVE evidence', async () => {

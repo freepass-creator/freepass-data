@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { stableDigest } from '../shared/stable-digest.js';
+import { compactFirestoreDocumentIdPart, stableDigest } from '../shared/stable-digest.js';
 import type { PeriodFeeLedgerPlan } from './period-fee-ledger-plan.js';
 import type {
   PeriodFeeLedgerRow,
@@ -67,14 +67,13 @@ const nowIso = (now: (() => Date) | undefined) => {
 };
 
 const documentDigest = (value: unknown) => stableDigest(value);
-const documentIdPart = (value: string) => value.replace(/[\/#?[\]*]/g, '_').slice(0, 180);
 const WRITE_LOCK_LEASE_MS = 15 * 60 * 1000;
 
 const snapshotRunId = (snapshotId: string, planDigest: string) =>
-  [snapshotId, planDigest.slice(0, 24)].map(documentIdPart).join('__');
+  [snapshotId, planDigest.slice(0, 24)].map(compactFirestoreDocumentIdPart).join('__');
 
 const storageDocumentKey = (runId: string, logicalDocumentKey: string) =>
-  [runId, logicalDocumentKey].map(documentIdPart).join('__');
+  [runId, logicalDocumentKey].map(compactFirestoreDocumentIdPart).join('__');
 
 const readyLedgerTargets = (plan: PeriodFeeLedgerPlan, runId: string, keys?: readonly string[]) => {
   const allowed = keys ? new Set(keys) : null;
@@ -166,7 +165,7 @@ async function assertRestorableRunRows(
 
 const historyDocumentKey = (row: ProductChangeHistoryRow | ProductChangeHistoryBaselineRow) =>
   [row.productKey, row.snapshotId, row.fieldPath, stableDigest(row).slice(0, 24)]
-    .map(part => documentIdPart(String(part)))
+    .map(part => String(part))
     .join('__');
 
 const runHistoryDocumentKey = (runId: string, row: ProductChangeHistoryRow | ProductChangeHistoryBaselineRow) =>
@@ -205,6 +204,19 @@ function assertReadback(plan: PeriodFeeLedgerPlan, readRows: PeriodFeeLedgerRow[
     if (!actual || stableDigest(actual) !== stableDigest(expected)) throw new Error('PERIOD_FEE_READBACK_ROW_MISMATCH');
   }
   return { sampleCount: sample.length, digest: stableDigest({ count: readRows.length, sample }) };
+}
+
+async function assertHistoryReadback(
+  store: PeriodFeeLedgerApplyStore,
+  targets: Array<{ documentKey: string; digest: string }>,
+) {
+  for (const target of targets) {
+    const existing = await store.getProductChangeHistoryDocument(target.documentKey);
+    if (!existing || existing.digest !== target.digest) {
+      throw new Error('PERIOD_FEE_HISTORY_READBACK_FAILED');
+    }
+  }
+  return stableDigest({ count: targets.length, targets });
 }
 
 export async function applyPeriodFeeLedgerPlan(
@@ -249,6 +261,8 @@ export async function applyPeriodFeeLedgerPlan(
       }
     }
     const readback = assertReadback(plan, await store.readLedgerRows(plan.snapshotId, runId), options.sampleSize ?? 50);
+    const historyTargets = historyRows.map(row => ({ documentKey: runHistoryDocumentKey(runId, row), digest: documentDigest(row) }));
+    await assertHistoryReadback(store, historyTargets);
     if (existingRun.readbackDigest && existingRun.readbackDigest !== readback.digest) {
       throw new Error('PERIOD_FEE_ACTIVE_READBACK_DIGEST_MISMATCH');
     }
@@ -316,12 +330,20 @@ export async function applyPeriodFeeLedgerPlan(
   }
 
   for (const row of historyRows) {
-    await store.createProductChangeHistoryDocument(runHistoryDocumentKey(runId, row), row, documentDigest(row));
+    const documentKey = runHistoryDocumentKey(runId, row);
+    const digest = documentDigest(row);
+    const existing = await store.getProductChangeHistoryDocument(documentKey);
+    if (existing) {
+      if (existing.digest !== digest) throw new Error('DOCUMENT_ID_COLLISION');
+      continue;
+    }
+    await store.createProductChangeHistoryDocument(documentKey, row, digest);
     await renewSnapshotWriteLock(store, lockOwnerId, options.now);
     counts.historyCreated += 1;
   }
 
   const readback = assertReadback(plan, await store.readLedgerRows(plan.snapshotId, runId), options.sampleSize ?? 50);
+  await assertHistoryReadback(store, historyRows.map(row => ({ documentKey: runHistoryDocumentKey(runId, row), digest: documentDigest(row) })));
   await renewSnapshotWriteLock(store, lockOwnerId, options.now);
   await store.activateSnapshotRun(runId, {
     schemaVersion: 'period-fee-snapshot-run/v1',
