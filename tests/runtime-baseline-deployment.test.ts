@@ -65,7 +65,26 @@ describe('selected source deployment baseline guard', () => {
       { pass: false, change: s => { s.spec.template.spec.containerConcurrency = 80; } },
       { pass: false, change: s => { s.spec.template.metadata.annotations['autoscaling.knative.dev/maxScale'] = '11'; } },
       { pass: false, change: s => { s.spec.template.spec.volumes.push({ name: 'unexpected' }); } },
-      { pass: false, change: s => { delete (s.spec.template.spec as Partial<typeof s.spec.template.spec>).volumes; } },
+      { pass: true, change: s => { delete (s.spec.template.spec as Partial<typeof s.spec.template.spec>).volumes; } },
+      { pass: true, change: s => { (s.spec.template.spec.containers[0]! as Record<string, unknown>).volumeMounts = []; } },
+      { pass: true, change: s => {
+        delete (s.spec.template.spec as Partial<typeof s.spec.template.spec>).volumes;
+        (s.spec.template.spec.containers[0]! as Record<string, unknown>).volumeMounts = [];
+      } },
+      ...[null, {}, 'unknown'].map(value => ({ pass: false, change: (s: Service) => {
+        (s.spec.template.spec as Record<string, unknown>).volumes = value;
+      } })),
+      ...[null, {}, 'unknown', [{ name: 'unexpected', mountPath: '/data' }]].map(value => ({ pass: false, change: (s: Service) => {
+        (s.spec.template.spec.containers[0]! as Record<string, unknown>).volumeMounts = value;
+      } })),
+      { pass: false, change: s => { delete (s.spec.template.spec as Partial<typeof s.spec.template.spec>).containers; } },
+      ...[null, {}, [], [null], [{}]].map(value => ({ pass: false, change: (s: Service) => {
+        (s.spec.template.spec as Record<string, unknown>).containers = value;
+      } })),
+      { pass: false, change: s => { delete (s.spec.template as Partial<typeof s.spec.template>).spec; } },
+      { pass: false, change: s => { delete (s.spec as Partial<typeof s.spec>).template; } },
+      { pass: false, change: s => { delete (s as Partial<Service>).spec; } },
+      { pass: false, change: s => { delete (s.spec.template.spec.containers[0]!.resources.limits as Partial<typeof s.spec.template.spec.containers[0]['resources']['limits']>).memory; } },
       { pass: false, change: s => { s.spec.template.spec.containers[0]!.resources.limits.memory = '1Gi'; } },
       { pass: false, change: s => { s.spec.template.spec.containers[0]!.ports[0]!.containerPort = 3000; } },
       { pass: false, change: s => { s.spec.template.spec.containers[0]!.image = 'other'; } },
@@ -92,5 +111,5 @@ describe('selected source deployment baseline guard', () => {
       expect(result.stdout + result.stderr).not.toContain('synthetic-f04');
       expect(result.stdout + result.stderr).not.toContain('synthetic-extra');
     }
-  });
+  }, 15_000);
 });

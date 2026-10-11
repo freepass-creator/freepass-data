@@ -283,8 +283,10 @@ jobs:
                 .spec.template.spec.serviceAccountName == $account and
                 .spec.template.spec.timeoutSeconds == 300 and .spec.template.spec.containerConcurrency == 8 and
                 .spec.template.metadata.annotations["autoscaling.knative.dev/maxScale"] == "10" and
-                (.spec.template.spec.volumes | type == "array" and length == 0) and
-                (.spec.template.spec.containers | length == 1) and
+                (.spec | type == "object") and (.spec.template | type == "object") and (.spec.template.spec | type == "object") and
+                (.spec.template.spec.containers | type == "array" and length == 1) and
+                (.spec.template.spec | (has("volumes") | not) or (.volumes | type == "array" and length == 0)) and
+                (.spec.template.spec.containers | all(.[]; type == "object" and ((has("volumeMounts") | not) or (.volumeMounts | type == "array" and length == 0)))) and
                 ([.spec.template.spec.containers[0].env[]? | select(.name == "NODE_ENV" or .name == "FREEPASS_DATA_DRIVER" or .name == "FIREBASE_PROJECT_ID") | {name,value}] | sort_by(.name) == ([{name:"NODE_ENV",value:"production"},{name:"FREEPASS_DATA_DRIVER",value:"firestore"},{name:"FIREBASE_PROJECT_ID",value:"freepasserp5"}] | sort_by(.name))) and
                 .spec.template.spec.containers[0].resources.limits.memory == "512Mi" and
                 (.spec.template.spec.containers[0].ports | length == 1 and .[0].containerPort == 8080) and
