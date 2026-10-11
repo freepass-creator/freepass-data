@@ -62,12 +62,13 @@ export function assertReviewedPlanGeneration(expected: string, before: string, a
   if (!/^[1-9]\d*$/.test(expected) || expected !== before || expected !== after)
     throw new Error('REVIEWED_PLAN_GENERATION_CHANGED');
 }
-/** Observation times are not supplier facts. Correction times and all provenance identities remain significant. */
+/** Capture observation times/digests are not supplier facts. Correction times and supplier provenance identities remain significant. */
 export function assertLiveSharedSheetMatches(plan: SharedSheetPlan, live: SharedSheetCapture, now = Date.now()) {
   buildSharedSheetBatch(plan.capture); buildSharedSheetBatch(live);
+  if (Date.parse(live.readTime) <= Date.parse(plan.capture.readTime)) throw new Error('LIVE_SHARED_SHEET_RECAPTURE_REQUIRED');
   if ([live.readTime, ...live.tabs.map(t => t.readTime)].some(at => Date.parse(at) > now || now - Date.parse(at) > 120_000))
     throw new Error('LIVE_SHARED_SHEET_CAPTURE_STALE');
-  const semantic = (c: SharedSheetCapture) => ({ schema: c.schema, spreadsheetId: c.spreadsheetId, layoutVersion: c.layoutVersion,
+  const semantic = (c: SharedSheetCapture) => ({ schema: c.schema, spreadsheetId: c.spreadsheetId, layoutVersion: c.layoutVersion, revision: c.revision ?? null,
     tabs: c.tabs.map(({ readTime: _, ...tab }) => tab),
     supplierEntered: (c.supplierEntered ?? []).map(r => r.source === 'ERP5_PRODUCTS_SOURCE_TEXT'
       ? (({ observedAt: _, ...fact }) => fact)(r) : r), corrections: c.corrections ?? [],
