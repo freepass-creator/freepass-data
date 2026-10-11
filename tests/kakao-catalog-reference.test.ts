@@ -924,10 +924,16 @@ describe('F04 2026-10-04 alignment regression', () => {
   it.each(['픽업구독', '픽업 구독(롯데T카)'])('2: pickup %s uses only the 60-month rent x term rule', productType => {
     const input = { ...base, supplierId: 'RP012', productType, vehicleValue: 30000000, monthlyRent: 1000000, termMonths: 60 };
     expect(amounts(input)).toEqual([1550000,1200000]);
-    expect(both(input).map(r => r.ruleId)).toEqual(['SONOKONG_PICKUP_60_BILLING_RENT_X_TERM', 'SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM']);
+    expect(both(input)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ state: 'CALCULATED_APPROX', amount: 1550000, ruleId: 'SONOKONG_PICKUP_60_BILLING_RENT_X_TERM', note: 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191' }),
+      expect.objectContaining({ state: 'CALCULATED_APPROX', amount: 1200000, ruleId: 'SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM', note: 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191' }),
+    ]));
     expect(both(input)[0]!.sourceRefs).toContain('F04:수수료표!A191:M191');
     expect(amounts({ ...input, vehicleValue: 99999999 })).toEqual([1550000,1200000]);
-    expect(both({ ...input, termMonths: 24 }).map(r => [r.state, r.amount])).toEqual([['CALCULATED_APPROX', 1040000], ['CALCULATED', 960000]]);
+    expect(both({ ...input, termMonths: 24 }).map(r => [r.state, r.amount, r.note])).toEqual([
+      ['CALCULATED_APPROX', 1040000, 'SONOKONG_PICKUP_TERM_PROXY_RERENT'],
+      ['CALCULATED_APPROX', 960000, 'SONOKONG_PICKUP_TERM_PROXY_RERENT'],
+    ]);
   });
   it.each(['RP021','PT-0026'])('billin %s uses the 36-month rent at 100/80 percent', supplierId => {
     expect(amounts({ ...base, supplierId, termMonths: 36, monthlyRent: 500000 })).toEqual([500000,400000]);

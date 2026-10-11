@@ -799,12 +799,12 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
       if (base.state !== 'CALCULATED' || base.amount === null) return base;
       return billing
         ? approximateCommission(`SONOKONG_PICKUP_${termMonths}_BILLING_RERENT_LADDER`, base.amount - 100000, 'EXCLUDED', 'SONOKONG_PICKUP_TERM_PROXY_RERENT')
-        : { ...base, ruleId: `SONOKONG_PICKUP_${termMonths}_PAYOUT_RERENT_LADDER` };
+        : approximateCommission(`SONOKONG_PICKUP_${termMonths}_PAYOUT_RERENT_LADDER`, base.amount, 'EXCLUDED', 'SONOKONG_PICKUP_TERM_PROXY_RERENT');
     }
     if (termMonths !== 60) return unknownCommission('TERM_NOT_IN_F04_COMMISSION_POLICY');
     return billing
       ? approximateCommission('SONOKONG_PICKUP_60_BILLING_RENT_X_TERM', monthlyRent * termMonths * 275 / 10000 - 100000, 'EXCLUDED', 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191')
-      : fixed('SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM', monthlyRent * termMonths * 200 / 10000);
+      : approximateCommission('SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM', monthlyRent * termMonths * 200 / 10000, 'EXCLUDED', 'SONOKONG_PICKUP_60_PROVISIONAL_ROW191');
   }
   if (['RP021', 'PT-0026'].includes(supplierId) && subscription) {
     const basis = input.billin36MonthlyRent ?? (termMonths === 36 ? monthlyRent : undefined);

@@ -564,6 +564,11 @@ function auditEconomicAmount(
   }
 }
 
+function expectedOgongBillingFromQ12(rent12: number, termMonths: number): number | null {
+  const addon = ({ 12: 0, 24: 200000, 36: 400000, 48: 600000, 60: 600000 } as Record<number, number | undefined>)[termMonths];
+  return addon === undefined ? null : rent12 - 100000 + addon;
+}
+
 /**
  * Audits pre-contract product economics without becoming a settlement calculator.
  * Contract overrides, invoicing, collection and payout remain in the Admin settlement domain.
@@ -594,13 +599,16 @@ export function auditOfferEconomicsTerms(offer: Offer): OfferEconomicsAudit {
       const fee = term[side], basis = fee.referenceRentBasis;
       if (!basis) continue;
       const reference = prices.get(basis.termKey);
+      const ogongBillingExpected = side === 'supplierBillingFee' && fee.ruleId?.startsWith('SONOKONG_SUBSCRIPTION_') && basis.termMonths === 12
+        ? expectedOgongBillingFromQ12(basis.monthlyRent.amount, price.termMonths)
+        : null;
       if (!reference || reference.termMonths !== basis.termMonths ||
           reference.monthlyRent.amount !== basis.monthlyRent.amount || reference.monthlyRent.currency !== basis.monthlyRent.currency ||
           (basis.termMonths === 36 && (basis.multiplier !== (side === 'supplierBillingFee' ? 1 : 0.8) ||
             Math.round(basis.monthlyRent.amount * basis.multiplier) !== fee.amount?.amount)) ||
           (basis.termMonths === 12 && (basis.multiplier !== 1 || (side === 'channelPayoutFee' &&
             basis.monthlyRent.amount !== fee.amount?.amount) || (side === 'supplierBillingFee' &&
-            (fee.amount?.amount ?? -1) < basis.monthlyRent.amount)))) {
+            (ogongBillingExpected === null || fee.amount?.amount !== ogongBillingExpected))))) {
         invalidFacts.push(`ECONOMICS_REFERENCE_RENT_MISMATCH:${term.termKey}:${side}`);
       }
     }

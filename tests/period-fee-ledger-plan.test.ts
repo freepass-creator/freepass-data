@@ -86,9 +86,9 @@ describe('period fee ledger planner', () => {
     expect(plan.rows[0]).toMatchObject({
       vehicleValueEvidence: null,
       supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 1550000, currency: 'KRW' }, ruleId: 'SONOKONG_PICKUP_60_BILLING_RENT_X_TERM' },
-      channelPayoutFee: { state: 'CALCULATED', amount: { amount: 1200000, currency: 'KRW' }, ruleId: 'SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM' },
+      channelPayoutFee: { state: 'CALCULATED_APPROX', amount: { amount: 1200000, currency: 'KRW' }, ruleId: 'SONOKONG_PICKUP_60_PAYOUT_RENT_X_TERM' },
     });
-    expect(plan.summary.approxCount).toEqual({ supplierBillingFee: 1, channelPayoutFee: 0 });
+    expect(plan.summary.approxCount).toEqual({ supplierBillingFee: 1, channelPayoutFee: 1 });
   });
 
   it('does not use approximate vehicle value evidence for Sonokong pickup fees', () => {
@@ -100,9 +100,9 @@ describe('period fee ledger planner', () => {
     expect(consumer.rows[0]).toMatchObject({
       vehicleValueEvidence: null,
       supplierBillingFee: { state: 'CALCULATED_APPROX', amount: { amount: 1550000, currency: 'KRW' } },
-      channelPayoutFee: { state: 'CALCULATED', amount: { amount: 1200000, currency: 'KRW' } },
+      channelPayoutFee: { state: 'CALCULATED_APPROX', amount: { amount: 1200000, currency: 'KRW' } },
     });
-    expect(consumer.summary.approxCount).toEqual({ supplierBillingFee: 1, channelPayoutFee: 0 });
+    expect(consumer.summary.approxCount).toEqual({ supplierBillingFee: 1, channelPayoutFee: 1 });
     expect(consumer.summary.feeStates.supplierBillingFee).toMatchObject({ CALCULATED: 0, CALCULATED_APPROX: 1 });
 
     const trim = planPeriodFeeLedger({
@@ -132,8 +132,8 @@ describe('period fee ledger planner', () => {
     expect(plan.rows).toHaveLength(2);
     expect(plan.rows.every(row => row.vehicleValueEvidence === null)).toBe(true);
     expect(plan.rows.every(row => row.supplierBillingFee.state === 'CALCULATED_APPROX' && row.supplierBillingFee.amount?.amount === 1040000)).toBe(true);
-    expect(plan.rows.every(row => row.channelPayoutFee.state === 'CALCULATED' && row.channelPayoutFee.amount?.amount === 960000)).toBe(true);
-    expect(plan.summary.approxCount).toEqual({ supplierBillingFee: 2, channelPayoutFee: 0 });
+    expect(plan.rows.every(row => row.channelPayoutFee.state === 'CALCULATED_APPROX' && row.channelPayoutFee.amount?.amount === 960000)).toBe(true);
+    expect(plan.summary.approxCount).toEqual({ supplierBillingFee: 2, channelPayoutFee: 2 });
   });
 
   it('does not change other suppliers by passing vehicle value evidence', () => {

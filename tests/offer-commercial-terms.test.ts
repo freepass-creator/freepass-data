@@ -346,6 +346,28 @@ describe('F04 explicit canonical evidence', () => {
     input.internalEconomicsTerms[0]!.supplierBillingFee.referenceRentBasis!.monthlyRent.amount += 100;
     expect(auditOfferEconomicsTerms(input).invalidFacts).toContain('ECONOMICS_REFERENCE_RENT_MISMATCH:24@default:supplierBillingFee');
   });
+  it('audits Sonokong Ogong billing against Q12 minus insurance plus exact term addon', () => {
+    const input = { ...offer(), supplierId: 'RP012' };
+    input.priceTerms = [
+      { termKey: '12_인수형', termMonths: 12, monthlyRent: { amount: 900000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+      { termKey: '24_인수형', termMonths: 24, monthlyRent: { amount: 700000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+      { termKey: '60_인수형', termMonths: 60, monthlyRent: { amount: 700000, currency: 'KRW' }, depositState: 'UNKNOWN' },
+    ];
+    input.internalEconomicsTerms = precomputeOfferEconomics(input, 'OGONG_SUBSCRIPTION', undefined, {}, ['12_인수형', '24_인수형', '60_인수형']);
+    expect(input.internalEconomicsTerms.map(term => term.supplierBillingFee.amount?.amount)).toEqual([800000, 1000000, 1400000]);
+    expect(auditOfferEconomicsTerms(input).invalidFacts).toHaveLength(0);
+    input.internalEconomicsTerms[0]!.supplierBillingFee.amount!.amount = 900000;
+    input.internalEconomicsTerms[1]!.supplierBillingFee.amount!.amount = 900000;
+    input.internalEconomicsTerms[2]!.supplierBillingFee.amount!.amount = 1500000;
+    expect(auditOfferEconomicsTerms(input).invalidFacts).toEqual([
+      'ECONOMICS_CALCULATION_MISMATCH:12_인수형:SUPPLIER_BILLING_FEE',
+      'ECONOMICS_CALCULATION_MISMATCH:24_인수형:SUPPLIER_BILLING_FEE',
+      'ECONOMICS_CALCULATION_MISMATCH:60_인수형:SUPPLIER_BILLING_FEE',
+      'ECONOMICS_REFERENCE_RENT_MISMATCH:12_인수형:supplierBillingFee',
+      'ECONOMICS_REFERENCE_RENT_MISMATCH:24_인수형:supplierBillingFee',
+      'ECONOMICS_REFERENCE_RENT_MISMATCH:60_인수형:supplierBillingFee',
+    ]);
+  });
 });
 
 describe('economic rule and price provenance separation', () => {
