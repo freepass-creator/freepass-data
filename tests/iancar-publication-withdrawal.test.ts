@@ -115,7 +115,7 @@ it('review rollback refuses a later owner change to approval', async () => {
   expect(mocks.update).not.toHaveBeenCalled();
 });
 
-it('bound ONE reviews verify raw bytes and the ordered set again before transmission', async () => {
+it('bound ONE reviews freeze approved bytes and recheck the ordered set before transmission', async () => {
   const { original, row, review } = reviewedAlbum();
   const bytes = Buffer.from([255, 216, 255, 1]);
   review.refs.forEach(ref => { ref.photoSha256 = createHash('sha256').update(bytes).digest('hex'); });
@@ -129,7 +129,7 @@ it('bound ONE reviews verify raw bytes and the ordered set again before transmis
   const result = await reader('erp5-public-media', row.productId, 0);
   expect(result.bytes).toEqual(bytes);
   expect(await result.revalidate()).toBe(true);
-  expect(source.read.mock.calls.map(call => call[1])).toEqual([0, undefined, 0]);
+  expect(source.read.mock.calls.map(call => call[1])).toEqual([0, undefined]);
   source.read.mockResolvedValueOnce({ count: 2, photoIds: [...review.servingPhotoIds].reverse(),
     upstreamPhotoIds: review.upstreamPhotoIds, bytes: null, contentType: 'application/json' });
   expect(await result.revalidate()).toBe(false);

@@ -228,6 +228,61 @@ export function isPublicIancarPhotoProduct(product: Record<string, unknown> | un
     && typeof product.car_number === 'string' && !!product.car_number.trim();
 }
 
+export type IancarPhotoReviewBinding = { productId: string; vehicleId: string; plate: string; count: number; observedAt: string };
+
+/** Human-supplied review of one fixed ONE album; never synthesized by collection. */
+export type IancarOnePhotoReview = {
+  upstreamPhotoIds: string[];
+  servingPhotoIds: string[];
+  refs: Array<{
+    sourceKind: 'IANCAR_ONE'; sourceApiVersion: 'iancar-one-api/1';
+    sourceBindingDigest: string; photoSetDigest: string; sourcePhotoIdDigest: string;
+    sourceOrdinal: number; servingIndex: number;
+    mediaType: 'image/jpeg' | 'image/png' | 'image/webp'; photoSha256: string;
+    sourceObservedAt: string;
+    vehiclePhotoVerifiedBy: string; vehiclePhotoVerificationMethod: string; vehiclePhotoVerifiedAt: string;
+  }>;
+};
+
+/** Pure opt-in plan. Existing photo publication does not infer or populate approval. */
+export function planIancarPhotoReviewPatch(original: Record<string, unknown>, row: IancarPhotoReviewBinding,
+  review: IancarOnePhotoReview, now = Date.now()): Record<string, unknown> {
+  const fail = () => { throw new Error('IANCAR_PHOTO_REVIEW_INVALID'); };
+  const instant = (value: unknown) => typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)
+    && Number.isFinite(Date.parse(value))
+    && new Date(value).toISOString() === value.replace(/Z$/, value.includes('.') ? 'Z' : '.000Z');
+  if (!isPublicIancarPhotoProduct(original) || original.iancar_one_vehicle_id !== row.vehicleId
+    || String(original.car_number).replace(/\s/g, '') !== row.plate.replace(/\s/g, '')
+    || !Number.isSafeInteger(row.count) || row.count < 1 || row.count > 200
+    || !instant(row.observedAt) || now - Date.parse(row.observedAt) > 900_000
+    || Date.parse(row.observedAt) > now + 60_000) fail();
+  const validIds = (ids: unknown): ids is string[] => Array.isArray(ids) && ids.length === row.count
+    && ids.every(id => typeof id === 'string' && id.trim() === id && !!id && id.length <= 2048)
+    && new Set(ids).size === ids.length;
+  if (!review || !validIds(review.upstreamPhotoIds) || !validIds(review.servingPhotoIds)
+    || review.servingPhotoIds.some(id => !review.upstreamPhotoIds.includes(id))
+    || !hasVehiclePhotoVerification({ photo_original_refs: review.refs }) || review.refs.length !== row.count) fail();
+  const binding = orderedJsonDigest(['RP031', row.productId, row.vehicleId, row.plate.replace(/\s/g, '')]);
+  const set = orderedJsonDigest(['ONE_PHOTO_SET/1', binding, review.upstreamPhotoIds, review.servingPhotoIds]);
+  const allowed = new Set(['sourceKind', 'sourceApiVersion', 'sourceBindingDigest', 'photoSetDigest',
+    'sourcePhotoIdDigest', 'sourceOrdinal', 'servingIndex', 'mediaType', 'photoSha256', 'sourceObservedAt',
+    'vehiclePhotoVerifiedBy', 'vehiclePhotoVerificationMethod', 'vehiclePhotoVerifiedAt']);
+  review.refs.forEach((ref, index) => {
+    if (Object.keys(ref).some(key => !allowed.has(key)) || ref.sourceKind !== 'IANCAR_ONE'
+      || ref.sourceApiVersion !== 'iancar-one-api/1' || ref.sourceBindingDigest !== binding
+      || ref.photoSetDigest !== set || ref.sourcePhotoIdDigest !== orderedJsonDigest(review.servingPhotoIds[index])
+      || ref.servingIndex !== index || ref.sourceOrdinal !== review.upstreamPhotoIds.indexOf(review.servingPhotoIds[index]!)
+      || !['image/jpeg', 'image/png', 'image/webp'].includes(ref.mediaType) || !/^[a-f0-9]{64}$/.test(ref.photoSha256)
+      || !instant(ref.sourceObservedAt) || ref.sourceObservedAt !== review.refs[0]!.sourceObservedAt
+      || Date.parse(ref.sourceObservedAt) > Date.parse(row.observedAt) || !instant(ref.vehiclePhotoVerifiedAt)
+      || Date.parse(ref.vehiclePhotoVerifiedAt) < Date.parse(ref.sourceObservedAt) || Date.parse(ref.vehiclePhotoVerifiedAt) > now
+      || !/^ONE 차량사진 전용 확인; 범위=\S[\s\S]*; 방법=\S[\s\S]*; 근거=\S[\s\S]*$/.test(ref.vehiclePhotoVerificationMethod)) fail();
+  });
+  return { provider_company_code: 'RP031', photo_original_refs: review.refs.map(ref => ({ ...ref })),
+    iancar_one_photo_ids: [...review.servingPhotoIds] };
+}
+
 /** Source adapters supply identity and bytes; authorization and validation stay in one pipeline. */
 export type VehiclePhotoRead = {
   count: number; bytes: Buffer | null; contentType: string;
@@ -293,17 +348,19 @@ export function createVehiclePhotoReader(
         && createHash('sha256').update(result.bytes).digest('hex') === ref.photoSha256;
     };
     const connection = JSON.stringify([source.connection(product), product.photo_original_refs]);
-    const revalidate = async (checkBytes = true): Promise<boolean> => {
+    const revalidate = async (checkSource = true): Promise<boolean> => {
       const current = await readProduct(productId);
       const unchanged = !!current && (!mediaOnly || isPublicIancarPhotoProduct(current)) && hasVehiclePhotoVerification(current) && consumerSources.find(candidate => candidate.eligible(current)) === source
         && JSON.stringify([source.connection(current), current.photo_original_refs]) === connection;
       if (!unchanged) return false;
-      if (!boundOneReview) return true;
-      try { return reviewedSetMatches(await source.read(current!, checkBytes ? index : undefined, true), checkBytes); } catch { return false; }
+      if (!boundOneReview || !checkSource) return true;
+      // The response is a frozen copy whose bytes already matched the reviewed hash.
+      // Recheck current membership, not a second image that will never be transmitted.
+      try { return reviewedSetMatches(await source.read(current!, undefined, true), false); } catch { return false; }
     };
     const recheck = async () => {
-      // The frozen response bytes were checked on read; this pass rechecks source membership.
-      // The public revalidate callback performs the final byte check after the success audit.
+      // Preserve the DB approval/withdrawal check here. The public callback also refreshes
+      // source membership after the success audit, without duplicating this source request.
       if (!await revalidate(false)) throw new Error('VEHICLE_PHOTO_NOT_FOUND');
     };
     const read = async () => {
