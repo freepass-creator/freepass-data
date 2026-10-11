@@ -12,6 +12,7 @@
       "items": { "anyOf": [{ "$ref": "#/$defs/product" }, { "$ref": "#/$defs/sourceRowProduct" }] }
     },
     "commissionPolicy": { "$ref": "#/$defs/commissionPolicy" },
+    "feeComputation": {"type":"object","additionalProperties":false,"required":["mode","note"],"properties":{"mode":{"const":"LIVE_ENGINE_UNSAVED"},"note":{"const":"계산값·저장 전"}}},
     "sourceObservations": {"type":"object","additionalProperties":false,"required":["state","reasonCode","sourceSnapshot"],"properties":{"state":{"const":"HOLD"},"reasonCode":{"type":"string"},"sourceSnapshot":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["sourceId","runId","observedAt","headStatus","coverageMode","completeness","countScope","rawRowCount","normalizedCandidateCount","currentProductRowCount","returnedProductRowCount","observedTabCounts","unobservedRegisteredTabs"],"properties":{"sourceId":{"type":"string"},"runId":{"type":"string"},"observedAt":{"type":"string","format":"date-time"},"headStatus":{"const":"CURRENT"},"coverageMode":{"enum":["FULL","DELTA","PARTIAL","UNKNOWN"]},"completeness":{"enum":["COMPLETE","INCOMPLETE","UNKNOWN"]},"countScope":{"const":"CAPTURED_SOURCE_PRODUCT_ROWS_NOT_PHYSICAL_VEHICLES"},"rawRowCount":{"type":"integer","minimum":0},"normalizedCandidateCount":{"type":"integer","minimum":0},"currentProductRowCount":{"type":"integer","minimum":0},"returnedProductRowCount":{"type":"integer","minimum":0},"observedTabCounts":{"type":"object","additionalProperties":{"type":"integer","minimum":0}},"unobservedRegisteredTabs":{"type":"array","items":{"type":"string"}}}}]}}},
     "meta": {
       "type": "object",
@@ -99,18 +100,19 @@
       "additionalProperties": false,
       "required": ["state", "ruleId", "amount", "vatTreatment", "vatAmount", "totalAmount", "reasonCode"],
       "properties": {
-        "state": { "enum": ["CALCULATED", "COORDINATION_REQUIRED", "UNKNOWN", "NOT_APPLICABLE"] },
+        "state": { "enum": ["CALCULATED", "CALCULATED_APPROX", "COORDINATION_REQUIRED", "UNKNOWN", "NOT_APPLICABLE"] },
         "sourceRefs": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^(F04:수수료표!A[1-9][0-9]*:M[1-9][0-9]*|USER:2026-10-09:BILLIN_LC_36_MONTH_RENT_100_80|USER:2026-10-11:ONE_MONTH_RENT_5_PERCENT_FULL_PAYOUT)$" } },
         "ruleId": { "$ref": "#/$defs/nullableString" },
         "amount": { "$ref": "#/$defs/nullableInteger" },
         "vatTreatment": { "enum": ["EXCLUDED", "INCLUDED", "UNKNOWN"] },
         "vatAmount": { "$ref": "#/$defs/nullableInteger" },
         "totalAmount": { "$ref": "#/$defs/nullableInteger" },
-        "reasonCode": { "$ref": "#/$defs/nullableString" }
+        "reasonCode": { "$ref": "#/$defs/nullableString" },
+        "vehicleValueEvidence": {"type":"object","additionalProperties":false,"required":["grade","source"],"properties":{"grade":{"enum":["CONFIRMED","APPROX"]},"source":{"enum":["SUPPLIER_RAW","CONSUMER_PRICE","NEW_CAR_TRIM"]}}}
       },
       "allOf": [
-        { "if": { "properties": { "state": { "const": "CALCULATED" } }, "required": ["state"] }, "then": { "properties": { "sourceRefs": { "type": "array", "minItems": 1 } }, "required": ["sourceRefs"] } },
-        { "if": { "properties": { "state": { "enum": ["UNKNOWN", "NOT_APPLICABLE", "COORDINATION_REQUIRED"] } }, "required": ["state"] }, "then": { "properties": { "sourceRefs": false } } }
+        { "if": { "properties": { "state": { "enum": ["CALCULATED", "CALCULATED_APPROX"] } }, "required": ["state"] }, "then": { "properties": { "sourceRefs": { "type": "array", "minItems": 1 } }, "required": ["sourceRefs"] } },
+        { "if": { "properties": { "state": { "enum": ["UNKNOWN", "NOT_APPLICABLE", "COORDINATION_REQUIRED"] } }, "required": ["state"] }, "then": { "properties": { "sourceRefs": false, "vehicleValueEvidence": false } } }
       ]
     },
     "marginResolution": {
