@@ -747,6 +747,7 @@ export function createConsumerGateway(
         const evidence = await readCurrentReferenceObservations(compatReader.sourceStore);
         const rows = Object.fromEntries(evidence.observations.map(row => [row.productId, referenceObservationToCompatibilityProduct(row)]));
         if (Object.keys(rows).length !== evidence.observations.length) throw new Error('REFERENCE_SOURCE_ROW_ID_AMBIGUOUS');
+        if (Object.keys(rows).some(key => Object.hasOwn(snapshot.data.products, key))) throw new Error('REFERENCE_SOURCE_ROW_KEY_CONFLICT');
         return { ...snapshot, data: { ...snapshot.data, products: { ...snapshot.data.products, ...rows } },
           meta: { ...snapshot.meta, sourceRowCoverage: evidence.sourceSnapshot,
             legacyProductCount: Object.keys(snapshot.data.products).length,

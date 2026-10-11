@@ -54,6 +54,7 @@ export async function readCurrentReferenceObservations(store: Pick<SourceIngesti
     const matches = candidates.filter(c => c.sourceRecordId === r.sourceRecordId && c.sourceFingerprint === r.sourceFingerprint);
     return projectReferenceObservation(r, matches.length === 1 ? matches[0] : undefined);
   });
+  if (new Set(observations.map(o => o.productId)).size !== observations.length) throw new Error('REFERENCE_SOURCE_ROW_ID_AMBIGUOUS');
   const after = await store.getSourceHead(sourceId);
   if (stableDigest(after) !== stableDigest(head)) throw new Error('REFERENCE_SOURCE_HEAD_DRIFT');
   const tabCounts = new Map<string, number>();

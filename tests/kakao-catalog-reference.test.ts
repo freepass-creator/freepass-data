@@ -58,6 +58,16 @@ describe('current source observations in existing private reference', () => {
     await expect(readCurrentReferenceObservations(port)).rejects.toThrow('REFERENCE_SOURCE_READ_INCOMPLETE');
     expect(() => projectReferenceObservation(raw, { ...candidate, runId: 'foreign' })).toThrow('REFERENCE_SOURCE_CANDIDATE_MISMATCH');
     expect(await readCurrentReferenceObservations({ getSourceHead: async () => null } as unknown as typeof port)).toMatchObject({ state: 'HOLD', reasonCode: 'SOURCE_HEAD_MISSING', observations: [] });
+    const complete = { ...port, getRun: async () => ({ ...head, startedAt: at, warningCount: 1, status: 'COMPLETED' as const, headStatus: 'CURRENT' as const, rawCount: 1, candidateCount: 1 }) };
+    let reads = 0;
+    await expect(readCurrentReferenceObservations({ ...complete, getSourceHead: async () => reads++ ? { ...head, runId: 'new-run' } : head })).rejects.toThrow('REFERENCE_SOURCE_HEAD_DRIFT');
+    const current = await readCurrentReferenceObservations({ ...complete, getSourceHead: async () => ({ ...head, sourceId }) });
+    expect(current.observations).toHaveLength(1);
+    const row = projectReferenceObservation(raw, candidate);
+    const duplicate = buildKakaoCatalogReference({ consumerId: 'kakao-ops', sourceScope: 'COLLECTED', observedAt: at, products: {},
+      sourceObservations: { state: 'HOLD' as const, reasonCode: 'FIXTURE', sourceSnapshot: current.sourceSnapshot!, observations: [row,row] } });
+    expect(filterReferenceProducts(duplicate, { sourceScope: 'COLLECTED', sourceObservationId: row.observationId }).meta).toMatchObject({
+      queryResolution: { state: 'HOLD', reasonCode: 'SOURCE_OBSERVATION_MULTIPLE_RECORDS', matchedProductCount: 2 } });
   });
 });
 import { Ajv2020 } from 'ajv/dist/2020.js';
