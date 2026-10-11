@@ -22,6 +22,19 @@ function capture(): Erp5SourceCapture {
 const input = (sheet: VehicleIdentity, data: VehicleIdentity | null = null) =>
   ({ sheet, data, raw: '쏘나타 DN8 스마트', firstRegistration: '', modelYear: '' });
 describe('one active Data master authority', () => {
+  it('uses verified fuel rather than sibling display labels for explicit source powertrain', () => {
+    const hybridNames = ['현대', '쏘나타', '하이브리드', '스마트'] as const;
+    const master = indexVehicleMaster([
+      { masterId: 'm1', trimId: 't1', names, aliases: names.map(n => [n]), specs: { fuel: '하이브리드' } },
+      { masterId: 'm2', trimId: 't2', names: hybridNames, aliases: hybridNames.map(n => [n]), specs: { fuel: '하이브리드' } }
+    ]);
+    expect(chooseVehicleIdentity(master, { ...input(names), raw: 'HEV', specs: { fuel: '하이브리드' } }))
+      .toMatchObject({ pick: 'SHEET', masterId: 'm1', trimId: 't1' });
+    const inconsistent = indexVehicleMaster([{ masterId: 'm2', trimId: 't2', names: hybridNames,
+      aliases: hybridNames.map(n => [n]), specs: { fuel: '가솔린' } }]);
+    expect(chooseVehicleIdentity(inconsistent, { ...input(hybridNames), raw: 'HEV' }))
+      .toMatchObject({ pick: 'HOLD', notes: ['HYBRID_SOURCE_CONFLICT'] });
+  });
   it('forwards parsed specs through the existing ingestion resolver for ambiguous names', () => {
     const master = snapshot({ fuel: 'LPG', engine_cc: 1999, drivetrain: 'FWD', seats: 5,
       model_year_start: '2024', model_year_end: '2025' });

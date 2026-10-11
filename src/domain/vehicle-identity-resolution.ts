@@ -72,8 +72,9 @@ export function chooseVehicleIdentity(master: VehicleMasterIndex, input: {
   for (const [tag, rx] of [['HYBRID', /하이브리드|HEV|E-?TECH|(^|[^A-Z])ECH([^A-Z]|$)/i], ['ELECTRIC', /전기|(^|[^A-Z])EV([^A-Z]|$)/i]] as const) {
     const fuelMatches = tag === 'HYBRID' ? ['하이브리드', '플러그인하이브리드', '플러그인 하이브리드'].includes(selected.specs?.fuel ?? '')
       : selected.specs?.fuel === '전기';
-    if (rx.test(input.raw) && !rx.test(name) && (selected.specs && !fuelMatches ||
-        siblings.some(r => rx.test(r.names.slice(1).join(' '))))) {
+    if (rx.test(input.raw) && (selected.specs ? !fuelMatches :
+        !rx.test(name) && siblings.some(r => rx.test(r.names.slice(1).join(' '))))) {
+      if (selected.specs && selected.specs.fuel == null) return hold('MASTER_SPEC_EVIDENCE_REQUIRED');
       return hold(tag + '_SOURCE_CONFLICT');
     }
   }
