@@ -893,6 +893,9 @@ export function createConsumerGateway(
         const scalar = (v: unknown) => v === null || typeof v === 'boolean' || typeof v === 'number' && Number.isFinite(v)
           || typeof v === 'string' && v.length <= 300 && !/[\u0000-\u001f\u007f]|https?:\/\/|AIza|ya29\./i.test(v);
         const fields = (row: unknown, allowed: readonly string[]) => object(row) && Object.keys(row).every(k => allowed.includes(k) && scalar(row[k]));
+        const priceFields = (row: unknown) => object(row) && Object.keys(row).every(k => (SINGLE_PRODUCT_PRICE_FIELDS as readonly string[]).includes(k)
+          && (k === 'depositEvidenceBasis' ? fields(row[k], ['field', 'text', 'source', 'at'])
+            : k === 'depositRuleDifference' ? fields(row[k], ['ruleAmount', 'ruleCode', 'differs']) : scalar(row[k])));
         if (!object(value) || value.schema !== 'freepass-data.catalog-compat/v1' || !object(value.data) || !object(value.meta)) invalid();
         const { data, meta } = value;
         if (Object.keys(value).some(k => !['schema', 'data', 'meta'].includes(k))
@@ -916,12 +919,12 @@ export function createConsumerGateway(
         const product = data.products[productId]!;
         if (!fields(Object.fromEntries(Object.entries(product).filter(([k]) => k !== 'price' && k !== 'iancar_phase_one')), SINGLE_PRODUCT_FACT_FIELDS)) invalid();
         if (Object.hasOwn(product, 'price') && product.price !== null && (!object(product.price) || Object.keys(product.price).length > 200
-          || Object.entries(product.price).some(([k, row]) => !isSingleProductPriceKey(k) || !fields(row, ['rent', 'deposit', 'depositState', 'deposit_state'])))) invalid();
+          || Object.entries(product.price).some(([k, row]) => !isSingleProductPriceKey(k) || !priceFields(row)))) invalid();
         if (Object.hasOwn(product, 'iancar_phase_one') && product.iancar_phase_one !== null) {
           const phase = product.iancar_phase_one;
           if (!object(phase) || !fields(Object.fromEntries(Object.entries(phase).filter(([k]) => k !== 'priceAliases')), ['policyStage'])
             || Object.hasOwn(phase, 'priceAliases') && (!object(phase.priceAliases) || Object.keys(phase.priceAliases).length > 200
-              || Object.entries(phase.priceAliases).some(([k, v]) => !isSingleProductPriceKey(k) || !scalar(v)))) invalid();
+              || Object.entries(phase.priceAliases).some(([k, v]) => !isSingleProductPriceKey(k) || typeof v !== 'string' || !scalar(v)))) invalid();
         }
         for (const name of ['policies', 'partners'] as const) {
           const versions = meta.documentVersions[name], rows = data[name]!;

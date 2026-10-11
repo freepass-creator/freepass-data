@@ -107,6 +107,30 @@ describe('bounded single-product compatibility facts', () => {
     expect(response.statusCode).toBe(503); expect(response.body).not.toContain('synthetic-secret');
     expect(logs.events.some(event => event.phase === 'SUCCEEDED')).toBe(false); await app.close();
   });
+  it.each([
+    { deposit: 2000000, depositState: 'KNOWN', depositEvidenceReason: 'EXPLICIT_AMOUNT' },
+    { deposit: 0, depositState: 'ZERO', depositEvidenceBasis: { field: 'deposit_note', text: '무보증', source: 'STORED_PRODUCT', at: '2026-10-12T00:00:00Z' } },
+    { deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'ZERO_WITHOUT_EVIDENCE' },
+    { deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'PAID_DEPOSIT_CONFLICT' },
+    { deposit: null, depositState: 'UNKNOWN', depositEvidenceReason: 'NOT_OBSERVED', depositRuleDifference: { ruleAmount: 0, ruleCode: 'UNKNOWN', differs: false } },
+  ])('preserves normalized deposit fact $depositState without recalculation', async price => {
+    const { app, readProductCompat } = setup(); const value = snapshot();
+    value.data.products[id]!.price = { '36': { rent: 500000, ...price } }; readProductCompat.mockResolvedValueOnce(value);
+    const response = await app.inject({ url: url(), headers });
+    expect(response.statusCode).toBe(200); expect(response.json()).toEqual(value); await app.close();
+  });
+  it.each(['basisExtra', 'differenceExtra', 'basisUrl', 'aliasNumber'])('rejects nested deposit or alias leak %s', async condition => {
+    const { app, readProductCompat, logs } = setup(); const value = snapshot();
+    const row = (value.data.products[id]!.price as Record<string, Record<string, unknown>>)['36']!;
+    if (condition === 'basisExtra') row.depositEvidenceBasis = { field: 'deposit_note', privateDebug: 'synthetic-secret' };
+    if (condition === 'differenceExtra') row.depositRuleDifference = { ruleAmount: 0, fee: 100 };
+    if (condition === 'basisUrl') row.depositEvidenceBasis = { source: 'https://private.example.invalid' };
+    if (condition === 'aliasNumber') value.data.products[id]!.iancar_phase_one = { priceAliases: { '36': 1 } };
+    readProductCompat.mockResolvedValueOnce(value);
+    const response = await app.inject({ url: url(), headers });
+    expect(response.statusCode).toBe(503); expect(response.body).not.toContain('synthetic-secret');
+    expect(logs.events.some(event => event.phase === 'SUCCEEDED')).toBe(false); await app.close();
+  });
   it.each(['PRODUCT_NOT_FOUND', 'PRODUCT_SELECTION_UNAVAILABLE', 'INVALID_PRODUCT_SELECTION', 'private upstream token'])('maps %s safely', async code => {
     const { app, readProductCompat } = setup(); readProductCompat.mockRejectedValueOnce(new Error(code));
     const response = await app.inject({ url: url(), headers });
