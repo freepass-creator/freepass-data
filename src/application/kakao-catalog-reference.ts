@@ -11,27 +11,37 @@ import type { SourceIngestionStore } from '../ports/source-store.js';
 import type { RawRecord, NormalizedCandidateRecord } from '../domain/source.js';
 import { isAssignedPlate } from '../domain/vehicle-plate.js';
 import { stableDigest } from '../shared/stable-digest.js';
+import { sharedSheetRegisteredChannels } from '../adapters/shared-sheet-source.js';
 
 export const referenceResponseDigest = (data: unknown, sourceObservations?: unknown) => hash(JSON.stringify(sourceObservations ? { data, sourceObservations } : data));
 
 /** Existing consumer application composes stored facts and sealed source evidence without a relay API. */
-export async function readStoredConsumerProducts<T, C>(reader: {
-  readStoredProducts(consumerId: string, search: Record<string, string>, photoProjection?: (product: Rec) => unknown): Promise<T>;
+export async function readStoredConsumerProducts<T extends { products: { supplierId?: string | null }[] }, C>(reader: {
+  readStoredProducts(consumerId: string, search: Record<string, string>, photoProjection?: (product: Rec) => unknown,
+    registeredNames?: (supplierId: string) => readonly string[]): Promise<T>;
   sourceStore: Pick<SourceIngestionStore, 'getSourceHead' | 'getRun' | 'listRaw' | 'listCandidates'>;
   readCanonicalProducts?: (search: Record<string, string>, ledgerRows: readonly unknown[]) => Promise<C>;
 }, consumerId: string, search: Record<string, string> = {}) {
-  const saved = await reader.readStoredProducts(consumerId, search, resolveReferenceVehiclePhotos);
+  const registeredNames = (id: string) => sharedSheetRegisteredChannels.filter(row => row.code === id).map(row => row.companyName);
+  const saved = await reader.readStoredProducts(consumerId, search, resolveReferenceVehiclePhotos, registeredNames);
   const ledgerRows = (saved as { ledgerRows?: readonly unknown[] }).ledgerRows ?? [];
-  const canonicalProducts = reader.readCanonicalProducts ? await reader.readCanonicalProducts(search, ledgerRows) : null;
   const source = await readCurrentReferenceObservations(reader.sourceStore, { storedFeesOnly: true });
   const key = (v: unknown) => typeof v === 'string' ? v.normalize('NFKC').replace(/\s+/g, '').toLowerCase() : '';
   const sourceRows = source.observations.filter(row => (!search.productId || row.productId === search.productId.trim())
     && (!search.supplierId || row.normalized.supplierId === search.supplierId.trim())
-    && (!search.supplierName || key(row.original.supplierName) === key(search.supplierName))
+    && (!search.supplierName || key(row.original.supplierName) === key(search.supplierName)
+      || (row.normalized.supplierId && registeredNames(row.normalized.supplierId).some(name => key(name) === key(search.supplierName))))
     && (!search.plate || plateIdentityKey(row.normalized.plateNumber) === plateIdentityKey(search.plate))
     && (!search.vehicleName || key([row.normalized.maker, row.normalized.model, row.normalized.subModel, row.normalized.trim].filter(Boolean).join(' ')).includes(key(search.vehicleName))));
-  return { ...saved, canonicalProducts, canonicalEvidence: { state: reader.readCanonicalProducts ? 'READ_COMPLETED' : 'UNKNOWN',
-    reasonCode: reader.readCanonicalProducts ? null : 'CANONICAL_READER_NOT_CONNECTED', snapshotConsistency: 'SEPARATE_CANONICAL_READ',
+  const supplierIds = [...new Set([...saved.products.map(p => p.supplierId), ...sourceRows.map(p => p.normalized.supplierId)].filter((id): id is string => !!id))];
+  const ambiguous = !!search.supplierName && supplierIds.length > 1;
+  const canonicalSearch: Record<string, string> = search.supplierName && supplierIds.length === 1 ? { ...search, supplierId: supplierIds[0]! } : { ...search };
+  if (search.supplierName && supplierIds.length === 1) delete canonicalSearch.supplierName;
+  const canonicalProducts = reader.readCanonicalProducts && !ambiguous ? await reader.readCanonicalProducts(canonicalSearch, ledgerRows) : null;
+  return { ...saved, canonicalProducts, supplierSearchEvidence: { state: ambiguous ? 'HOLD' : 'EXACT',
+    reasonCode: ambiguous ? 'SUPPLIER_SEARCH_AMBIGUOUS' : null, matchedSupplierIds: supplierIds.length },
+    canonicalEvidence: { state: reader.readCanonicalProducts && !ambiguous ? 'READ_COMPLETED' : 'UNKNOWN',
+    reasonCode: ambiguous ? 'SUPPLIER_SEARCH_AMBIGUOUS' : reader.readCanonicalProducts ? null : 'CANONICAL_READER_NOT_CONNECTED', snapshotConsistency: 'SEPARATE_CANONICAL_READ',
     authority: 'STORED_CANONICAL', emptyDoesNotProveAbsence: true },
     sourceFreshness: { state: 'UNVERIFIED', reasonCode: 'CURRENT_SOURCE_HEAD_NOT_PROOF_OF_CANONICAL_FRESHNESS' },
     settlementConfirmation: 'NOT_ASSESSED',

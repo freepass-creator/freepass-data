@@ -16,7 +16,8 @@ type Rec = Record<string, unknown>;
 
 /** Internal stored facts only: no fee engine, source fetch, public projection or identity inference. */
 export function selectStoredProducts(products: Record<string, Rec>, policies: Record<string, Rec>,
-  partners: Record<string, Rec>, search: Record<string, string> = {}, photoProjection?: (product: Rec) => unknown) {
+  partners: Record<string, Rec>, search: Record<string, string> = {}, photoProjection?: (product: Rec) => unknown,
+  registeredNames?: (supplierId: string) => readonly string[]) {
   const allowed = ['productId', 'supplierId', 'supplierName', 'vehicleName', 'plate'];
   for (const [key, value] of Object.entries(search))
     if (!allowed.includes(key) || typeof value !== 'string' || !value.trim()) throw new Error('INVALID_PRODUCT_SEARCH');
@@ -31,7 +32,8 @@ export function selectStoredProducts(products: Record<string, Rec>, policies: Re
     const supplierName = suppliers.length === 1 ? text(suppliers[0]![1].partner_name) || text(suppliers[0]![1].company_name) || text(suppliers[0]![1].name) || null : null;
     if (search.productId && search.productId.trim() !== productId) return [];
     if (search.supplierId && search.supplierId.trim() !== supplierId) return [];
-    if (search.supplierName && (!supplierName || nameKey(search.supplierName) !== nameKey(supplierName))) return [];
+    const supplierNames = [supplierName, ...(supplierId ? registeredNames?.(supplierId) ?? [] : [])].filter(Boolean);
+    if (search.supplierName && !supplierNames.some(name => nameKey(search.supplierName) === nameKey(name))) return [];
     if (search.plate && plateIdentityKey(search.plate) !== plateIdentityKey(product.car_number)) return [];
     if (search.vehicleName && !nameKey([product.maker, product.model, product.sub_model, product.trim_name].filter(Boolean).join(' ')).includes(nameKey(search.vehicleName))) return [];
     const policyCode = text(product.policy_code);
@@ -264,7 +266,8 @@ export class FirestoreCatalogCompatibilityReader {
   readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
 
   /** Shared internal consumer entrypoint. Current-source rows stay separate from saved products. */
-  async readStoredProducts(consumerId: string, search: Record<string, string> = {}, photoProjection?: (product: Rec) => unknown) {
+  async readStoredProducts(consumerId: string, search: Record<string, string> = {}, photoProjection?: (product: Rec) => unknown,
+    registeredNames?: (supplierId: string) => readonly string[]) {
     if (!['kakao-ops', 'freepass-admin-catalog'].includes(consumerId) && !/^internal-ai-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(consumerId))
       throw new Error('STORED_INTERNAL_CONSUMER_NOT_ALLOWED');
     selectStoredProducts({}, {}, {}, search); // Validate before network reads.
@@ -277,7 +280,7 @@ export class FirestoreCatalogCompatibilityReader {
         tx.get(this.db.collection(C.periodFees.ledger)),
         tx.get(this.db.collection(C.catalog.offers)),
       ]);
-      const rows = selectStoredProducts(asMap(products), asMap(policies), asMap(partners), search, photoProjection);
+      const rows = selectStoredProducts(asMap(products), asMap(policies), asMap(partners), search, photoProjection, registeredNames);
       return { rows: rows.map(row => ({ ...row,
         // Only exact saved product IDs may connect economics; never join by plate/name/code pattern.
         storedOffers: offers.docs.filter(d => d.get('productId') === row.productId).map(d => jsonSafe(d.data())),
@@ -294,6 +297,8 @@ export class FirestoreCatalogCompatibilityReader {
       products: saved.rows,
       ledgerRows: saved.ledgerRows,
       diagnostics: { queryOutcome: saved.rows.length ? 'MATCHES' : 'NOT_OBSERVED',
+        supplierSearchResolution: search.supplierName && new Set(saved.rows.map(row => row.supplierId).filter(Boolean)).size > 1
+          ? 'HOLD_AMBIGUOUS_REGISTERED_NAME' : 'EXACT_REGISTERED_OR_LEGAL_NAME',
         emptyDoesNotProveAbsence: true, representation: 'LEGACY_PRODUCT',
         unresolvedSupplierNames: saved.rows.filter(row => row.supplierName === null).length,
         currentLedgerVerified: false },

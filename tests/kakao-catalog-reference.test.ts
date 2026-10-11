@@ -42,6 +42,13 @@ describe('stored consumer product selection', () => {
     expect(selectStoredProducts(products, { other: { policy_code: 'TEST-POLICY', companyId: 'OTHER' } }, partners)[0]!.policy).toBeNull();
     expect(selectStoredProducts(products, { default: { policy_code: 'TEST-POLICY' }, mine: { policy_code: 'TEST-POLICY', companyId: 'TEST-SUPPLIER' } }, partners)[0]!.policy?.id).toBe('mine');
   });
+  it('accepts an explicit registered name without fuzzy legal-name rewriting', () => {
+    const legal = { 'TEST-SUPPLIER': { partner_name: '(주)시험공급사' } };
+    expect(selectStoredProducts(products, {}, legal, { supplierName: '시험공급사' }, undefined,
+      id => id === 'TEST-SUPPLIER' ? ['시험공급사'] : [])).toHaveLength(1);
+    expect(selectStoredProducts(products, {}, legal, { supplierName: '시험' }, undefined,
+      () => ['시험공급사'])).toHaveLength(0);
+  });
   it('rejects public consumers before database access', async () => {
     const reader = Object.create(FirestoreCatalogCompatibilityReader.prototype) as FirestoreCatalogCompatibilityReader;
     await expect(reader.readStoredProducts('erp-com')).rejects.toThrow('STORED_INTERNAL_CONSUMER_NOT_ALLOWED');
@@ -67,6 +74,11 @@ describe('stored consumer product selection', () => {
     expect(empty.canonicalEvidence).toMatchObject({ state: 'READ_COMPLETED', reasonCode: null, emptyDoesNotProveAbsence: true });
     expect(empty.sourceFreshness.state).toBe('UNVERIFIED');
     expect(empty.settlementConfirmation).toBe('NOT_ASSESSED');
+    let canonicalCalled = false;
+    const ambiguous = await readStoredConsumerProducts({ readStoredProducts: async () => ({ products: [{ supplierId: 'A' }, { supplierId: 'B' }] }),
+      sourceStore, readCanonicalProducts: async () => { canonicalCalled = true; return {}; } }, 'internal-ai-test', { supplierName: '공통이름' });
+    expect(ambiguous.supplierSearchEvidence).toMatchObject({ state: 'HOLD', reasonCode: 'SUPPLIER_SEARCH_AMBIGUOUS' });
+    expect(canonicalCalled).toBe(false);
   });
 });
 
