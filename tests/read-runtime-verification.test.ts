@@ -4,6 +4,48 @@ import { spawnSync } from 'node:child_process';
 
 const script = readFileSync(new URL('../scripts/verify-read-runtime.sh', import.meta.url), 'utf8');
 describe('existing private runtime verification', () => {
+  it('keeps explicit expected pins separate from declared pins and out of deployment', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const input = workflow.split('  workflow_dispatch:\n')[1]!.split('  push:')[0]!
+      .split('      expected_consumers_secret_version:\n')[1]!.split(/\n {6}\S/)[0]!;
+    expect(input).toContain('type: string');
+    expect(input).toContain('required: false');
+    const verify = workflow.split('\n  verify:')[1]!;
+    expect(verify).toContain('EXPECTED_CONSUMERS_SECRET_VERSION: ${{ inputs.expected_consumers_secret_version || vars.FREEPASS_DATA_CONSUMERS_SECRET_VERSION }}');
+    expect(verify).toContain('CONSUMERS_SECRET_VERSION: ${{ vars.FREEPASS_DATA_CONSUMERS_SECRET_VERSION }}');
+    expect(verify).not.toContain('CONSUMERS_SECRET_VERSION: ${{ inputs.expected_consumers_secret_version }}');
+    const deploy = workflow.split('\n  deploy:')[1]!.split('\n  verify:')[0]!;
+    expect(deploy).not.toContain('inputs.expected_consumers_secret_version');
+    expect(deploy).not.toContain('EXPECTED_CONSUMERS_SECRET_VERSION:');
+    expect(verify.indexOf('Validate verification scope before authentication')).toBeLessThan(verify.indexOf('Authenticate existing verification identity'));
+    expect(verify).toContain('run: bash scripts/verify-read-runtime.sh');
+  });
+  it('requires an explicit positive expected pin matching the declaration before authentication', () => {
+    const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+    const base = {
+      GITHUB_REF: 'refs/heads/main', EXPECTED_SOURCE_SHA: 'a'.repeat(40),
+      EXPECTED_IMAGE_DIGEST: 'sha256:' + 'b'.repeat(64), EXPECTED_REVISION: 'freepass-data-read-00030-bfq',
+      PROJECT_ID: 'freepasserp5', REGION: 'asia-northeast3', SERVICE_NAME: 'freepass-data-read',
+      RUNTIME_SERVICE_ACCOUNT: 'freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com',
+      CONSUMERS_SECRET_NAME: 'freepass-data-consumers', CONSUMERS_SECRET_VERSION: '5',
+      EXPECTED_CONSUMERS_SECRET_VERSION: '5', IANCAR_SECRET_NAME: 'freepass-data-iancar-one-api',
+      IANCAR_SECRET_VERSION: '1', VERIFY_PREFLIGHT_ONLY: 'true',
+    };
+    const cases: Array<[Record<string, string>, boolean]> = [
+      [{}, true], [{ CONSUMERS_SECRET_VERSION: '4', EXPECTED_CONSUMERS_SECRET_VERSION: '4' }, true],
+      [{ CONSUMERS_SECRET_NAME: 'alias' }, false], [{ CONSUMERS_SECRET_VERSION: '4' }, false],
+      [{ EXPECTED_CONSUMERS_SECRET_VERSION: '4' }, false], [{ IANCAR_SECRET_VERSION: '2' }, false],
+    ];
+    for (const key of ['CONSUMERS_SECRET_VERSION', 'EXPECTED_CONSUMERS_SECRET_VERSION']) {
+      for (const value of ['', '0', 'latest', 'alias', '05', '-1', '5.0', ' 5']) cases.push([{ [key]: value }, false]);
+    }
+    for (const [overrides, pass] of cases) {
+      const result = spawnSync(bash, ['-s'], { input: 'gcloud() { echo UNEXPECTED_AUTH_OR_READ >&2; return 1; }\n' + script,
+        encoding: 'utf8', env: { ...process.env, ...base, ...overrides } });
+      expect(result.status === 0, JSON.stringify(overrides) + result.stderr).toBe(pass);
+      expect(result.stdout + result.stderr).not.toContain('UNEXPECTED_AUTH_OR_READ');
+    }
+  });
   it('uses explicit serialized boolean mode and makes private readback mandatory', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8');
     expect(workflow).toContain("USE_CONSUMER_SECRETS: ${{ toJSON(inputs.use_consumer_secrets) != 'false' }}");
@@ -99,6 +141,12 @@ describe('existing private runtime verification', () => {
     }\n`;
     const cases: Array<{ change?: (s: typeof service, r: typeof rev) => void; overrides?: Record<string, string>; pass: boolean }> = [
       { pass: true }, { pass: true, change: (s, r) => { s.spec.template.spec.containers[0]!.image = path + ':' + sha + '@' + digest; r.spec.containers[0]!.image = path + '@' + digest; } },
+      { pass: true, overrides: { EXPECTED_CONSUMERS_SECRET_VERSION: '5', CONSUMERS_SECRET_VERSION: '5' }, change: (s, r) => {
+        s.spec.template.spec.containers[0]!.env[4]!.valueFrom!.secretKeyRef.key = '5';
+        r.spec.containers[0]!.env[4]!.valueFrom!.secretKeyRef.key = '5';
+      } },
+      { pass: false, overrides: { EXPECTED_CONSUMERS_SECRET_VERSION: '5', CONSUMERS_SECRET_VERSION: '5' } },
+      { pass: false, change: (_s, r) => { r.spec.containers[0]!.env[4]!.valueFrom!.secretKeyRef.name = 'alias'; } },
       { pass: false, overrides: { GITHUB_REF: 'refs/heads/other' } }, { pass: false, overrides: { EXPECTED_SOURCE_SHA: 'bad' } },
       { pass: false, overrides: { EXPECTED_IMAGE_DIGEST: 'bad' } }, { pass: false, overrides: { EXPECTED_REVISION: 'other' } },
       { pass: false, overrides: { MOCK_SOURCE_DIGEST: 'sha256:' + 'c'.repeat(64) } },
@@ -117,7 +165,7 @@ describe('existing private runtime verification', () => {
       const result = spawnSync('bash', ['-s'], { input: mock + script, encoding: 'utf8', env: {
         ...process.env, GITHUB_REF: 'refs/heads/main', EXPECTED_SOURCE_SHA: sha, EXPECTED_IMAGE_DIGEST: digest, EXPECTED_REVISION: revision,
         PROJECT_ID: 'freepasserp5', REGION: 'asia-northeast3', SERVICE_NAME: 'freepass-data-read', RUNTIME_SERVICE_ACCOUNT: spec.serviceAccountName,
-        CONSUMERS_SECRET_NAME: 'freepass-data-consumers', CONSUMERS_SECRET_VERSION: '4', IANCAR_SECRET_NAME: 'freepass-data-iancar-one-api', IANCAR_SECRET_VERSION: '1',
+        CONSUMERS_SECRET_NAME: 'freepass-data-consumers', CONSUMERS_SECRET_VERSION: '4', EXPECTED_CONSUMERS_SECRET_VERSION: '4', IANCAR_SECRET_NAME: 'freepass-data-iancar-one-api', IANCAR_SECRET_VERSION: '1',
         MOCK_SERVICE: JSON.stringify(s), MOCK_REVISION: JSON.stringify(r), MOCK_POLICY: '{"bindings":[]}', MOCK_SOURCE_DIGEST: digest,
         GITHUB_ENV: '/dev/null', GITHUB_OUTPUT: '/dev/null', ...test.overrides,
       } });

@@ -12,7 +12,10 @@ check DIGEST_FORMAT bash -c '[[ "$1" =~ ^sha256:[a-f0-9]{64}$ ]]' _ "$EXPECTED_I
 check REVISION_FORMAT bash -c '[[ "$1" =~ ^freepass-data-read-[0-9]{5}-[a-z0-9]+$ ]]' _ "$EXPECTED_REVISION"
 check TARGET test "$PROJECT_ID/$REGION/$SERVICE_NAME" = freepasserp5/asia-northeast3/freepass-data-read
 check RUNTIME_ACCOUNT test "$RUNTIME_SERVICE_ACCOUNT" = freepass-data-read-runtime@freepasserp5.iam.gserviceaccount.com
-check CONSUMER_PIN test "$CONSUMERS_SECRET_NAME:$CONSUMERS_SECRET_VERSION" = freepass-data-consumers:4
+check EXPECTED_CONSUMER_PIN_FORMAT bash -c '[[ "$1" =~ ^[1-9][0-9]*$ ]]' _ "${EXPECTED_CONSUMERS_SECRET_VERSION:-}"
+check DECLARED_CONSUMER_PIN_FORMAT bash -c '[[ "$1" =~ ^[1-9][0-9]*$ ]]' _ "${CONSUMERS_SECRET_VERSION:-}"
+check CONSUMER_NAME test "${CONSUMERS_SECRET_NAME:-}" = freepass-data-consumers
+check CONSUMER_PIN test "$CONSUMERS_SECRET_VERSION" = "$EXPECTED_CONSUMERS_SECRET_VERSION"
 check ONE_PIN test "$IANCAR_SECRET_NAME:$IANCAR_SECRET_VERSION" = freepass-data-iancar-one-api:1
 if [ "${VERIFY_PREFLIGHT_ONLY:-false}" = true ]; then exit 0; fi
 service_json="$(gcloud run services describe "$SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format=json)"
@@ -26,7 +29,7 @@ for metadata in "$service_json" "$revision_json"; do
   check SERVICE_ACCOUNT jq -e --arg account "$RUNTIME_SERVICE_ACCOUNT" '.serviceAccountName == $account' <<<"$spec" >/dev/null
   check CONCURRENCY jq -e '.containerConcurrency == 8' <<<"$spec" >/dev/null
   check ENV_BINDING jq -e '[.containers[0].env[]? | select(.name == "NODE_ENV" or .name == "FREEPASS_DATA_DRIVER" or .name == "FIREBASE_PROJECT_ID") | {name,value}] | sort_by(.name) == ([{name:"NODE_ENV",value:"production"},{name:"FREEPASS_DATA_DRIVER",value:"firestore"},{name:"FIREBASE_PROJECT_ID",value:"freepasserp5"}] | sort_by(.name))' <<<"$spec" >/dev/null
-  expected_secrets="$(jq -cnS '[{name:"FREEPASS_DATA_CONSUMERS_JSON",valueFrom:{secretKeyRef:{name:"freepass-data-consumers",key:"4"}}},{name:"EANCAR_ONE_API_KEY",valueFrom:{secretKeyRef:{name:"freepass-data-iancar-one-api",key:"1"}}}] | sort_by(.name)')"
+  expected_secrets="$(jq -cnS --arg consumers_version "$EXPECTED_CONSUMERS_SECRET_VERSION" '[{name:"FREEPASS_DATA_CONSUMERS_JSON",valueFrom:{secretKeyRef:{name:"freepass-data-consumers",key:$consumers_version}}},{name:"EANCAR_ONE_API_KEY",valueFrom:{secretKeyRef:{name:"freepass-data-iancar-one-api",key:"1"}}}] | sort_by(.name)')"
   actual_secrets="$(jq -cS '[.containers[0].env[]? | select(.valueFrom != null) | {name,valueFrom}] | sort_by(.name)' <<<"$spec")"
   check SECRET_REFERENCES test "$actual_secrets" = "$expected_secrets"
   image="$(jq -r '.containers[0].image // empty' <<<"$spec")"
