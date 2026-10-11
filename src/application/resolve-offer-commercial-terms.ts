@@ -298,7 +298,8 @@ export function precomputeOfferEconomics(
           if (!verified) throw new Error('LEGACY_RENT_FEE_BASIS_REVIEW_REQUIRED');
         }
         calculation = { kind: 'RATE', base: 'MONTHLY_RENT_X_TERM', rate: monthlyRule.rateBasisPoints / 10000 };
-      } else if (result.ruleId?.endsWith('_RENT_X_TERM') || result.note === 'SONOKONG_PICKUP_TERM_PROXY_RERENT') {
+      } else if (result.ruleId?.endsWith('_RENT_X_TERM') ||
+          (result.note === 'SONOKONG_PICKUP_TERM_PROXY_RERENT' && term.termMonths !== 12)) {
         // Read rates from the same policy table, including the Switch ladder alias.
         const billing = policy.rules.find((rule) => rule.id === 'STANDARD_RERENT_BILLING_LADDER')!;
         const payout = policy.rules.find((rule) => 'termMonths' in rule && rule.termMonths === term.termMonths &&
