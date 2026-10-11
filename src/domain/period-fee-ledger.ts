@@ -114,10 +114,12 @@ export type PeriodFeeSnapshotRun = {
   activatedAt: string | null;
   rowCount: number;
   rowKeysDigest: string;
+  rowContentDigest: string;
   readyRowCount: number;
   holdNoUidCount: number;
   historyRowCount: number;
   historyKeysDigest: string;
+  historyContentDigest: string;
   readbackSampleCount: number;
   readbackDigest: string | null;
 };

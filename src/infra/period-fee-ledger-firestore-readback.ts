@@ -60,5 +60,9 @@ export async function readConsistentPeriodFeeLedgerRows(
   const rowKeys = rows.map(item => item.id).sort((a, b) => a.localeCompare(b));
   if (rows.length !== run.rowCount) throw new Error('LEDGER_READ_INCONSISTENT');
   if (stableDigest(rowKeys) !== run.rowKeysDigest) throw new Error('LEDGER_READ_INCONSISTENT');
+  if (!run.rowContentDigest) throw new Error('LEDGER_READ_INCONSISTENT');
+  if (stableDigest(rows
+    .map(item => [item.id, stableDigest(item.row)] as const)
+    .sort(([left], [right]) => left.localeCompare(right))) !== run.rowContentDigest) throw new Error('LEDGER_READ_INCONSISTENT');
   return { run, rows: rows.map(item => item.row) };
 }

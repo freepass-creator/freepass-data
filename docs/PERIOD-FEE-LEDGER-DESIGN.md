@@ -425,8 +425,8 @@ PR·시험·일정 반영:
 
 ## run 문서 크기 제한과 소유권 판정
 
-`period_fee_snapshot_runs/<runId>` 문서에는 행 문서 키 목록을 저장하지 않는다. run 문서에는 `rowCount`, `rowKeysDigest`, `historyRowCount`, `historyKeysDigest`, `planDigest`, 상태, 시각, 이전 ACTIVE run 같은 작은 manifest 필드만 둔다. `rowKeys`, `plannedCreateKeys`, `createdDocumentKeys` 같은 배열은 Firestore 1MiB 문서 한도를 넘길 수 있으므로 금지한다.
+`period_fee_snapshot_runs/<runId>` 문서에는 행 문서 키 목록을 저장하지 않는다. run 문서에는 `rowCount`, `rowKeysDigest`, `rowContentDigest`, `historyRowCount`, `historyKeysDigest`, `historyContentDigest`, `planDigest`, 상태, 시각, 이전 ACTIVE run 같은 작은 manifest 필드만 둔다. `rowKeys`, `plannedCreateKeys`, `createdDocumentKeys` 같은 배열은 Firestore 1MiB 문서 한도를 넘길 수 있으므로 금지한다. 운영에는 `rowContentDigest`/`historyContentDigest` 없는 기존 run이 없으므로 구버전 run은 읽기 거부로 둔다.
 
-소유 행은 문서 ID 접두로 판정한다. ledger와 history 문서 ID는 `runId + "__" + 원래 키` 형태이며, reader/readback/rollback은 `__name__ >= runId + "__"` 그리고 `__name__ < runId + "__\uf8ff"` 범위를 500개 단위로 읽는다. 읽은 문서 ID를 정렬해 `stableDigest(sortedKeys)`를 계산하고, run 문서의 `rowCount/rowKeysDigest` 또는 `historyRowCount/historyKeysDigest`와 일치할 때만 ACTIVE readback으로 인정한다. 불일치하면 `LEDGER_READ_INCONSISTENT`로 실패한다.
+소유 행은 문서 ID 접두로 판정한다. ledger와 history 문서 ID는 `runId + "__" + 원래 키` 형태이며, reader/readback/rollback은 `__name__ >= runId + "__"` 그리고 `__name__ < runId + "__\uf8ff"` 범위를 500개 단위로 읽는다. 쓰기 때 계획에서 소유 문서들의 `[문서 키, 문서 digest]` 쌍을 키로 정렬해 `stableDigest`한 `rowContentDigest`와 `historyContentDigest`를 PREPARED run 문서에 기록한다. 되읽기, reader, 이전 run 복원, ACTIVE 재호출 멱등 검증은 접두 조회로 읽은 실제 문서의 키 digest와 내용 digest를 run 문서의 `rowCount/rowKeysDigest/rowContentDigest` 또는 `historyRowCount/historyKeysDigest/historyContentDigest`와 모두 비교할 때만 인정한다. 불일치하면 `LEDGER_READ_INCONSISTENT`로 실패한다.
 
 rollback도 같은 접두 범위로 현재 남아 있는 이 run 소유 문서만 찾고, 각 문서의 저장 digest가 삭제 직전 기대 digest와 일치하는 경우에만 삭제한다. 이전 ACTIVE run 복원 전에는 이전 run의 접두 범위 row count와 key digest를 다시 검증한다.

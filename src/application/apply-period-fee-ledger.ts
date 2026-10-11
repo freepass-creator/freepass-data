@@ -85,6 +85,10 @@ const readyLedgerTargets = (plan: PeriodFeeLedgerPlan, runId: string, keys?: rea
 
 const sorted = (values: readonly string[]) => [...values].sort((a, b) => a.localeCompare(b));
 const keysDigest = (values: readonly string[]) => stableDigest(sorted(values));
+const contentDigest = (values: readonly { documentKey: string; digest: string }[]) =>
+  stableDigest([...values]
+    .map(value => [value.documentKey, value.digest] as const)
+    .sort(([left], [right]) => left.localeCompare(right)));
 
 const lockLeaseExpiresAt = (now: (() => Date) | undefined) => {
   const acquiredAt = nowIso(now);
@@ -129,11 +133,14 @@ async function ownedLedgerTargets(
 
 async function assertRestorableRunRows(
   store: PeriodFeeLedgerApplyStore,
-  restore: { runId: string; rowCount: number; rowKeysDigest: string },
+  restore: { runId: string; rowCount: number; rowKeysDigest: string; rowContentDigest?: string },
 ) {
   const rows = await store.listLedgerDocumentsByRunIdPrefix(restore.runId, 500);
-  if (rows.length !== restore.rowCount || keysDigest(rows.map(row => row.documentKey)) !== restore.rowKeysDigest) {
-    throw new Error('PERIOD_FEE_RESTORE_LEDGER_READBACK_FAILED');
+  if (!restore.rowContentDigest
+    || rows.length !== restore.rowCount
+    || keysDigest(rows.map(row => row.documentKey)) !== restore.rowKeysDigest
+    || contentDigest(rows) !== restore.rowContentDigest) {
+    throw new Error('LEDGER_READ_INCONSISTENT');
   }
 }
 
@@ -185,9 +192,12 @@ async function assertHistoryReadback(
   runId: string,
   expectedCount: number,
   expectedKeysDigest: string,
+  expectedContentDigest: string,
 ) {
   const rows = await store.listProductChangeHistoryDocumentsByRunIdPrefix(runId, 500);
-  if (rows.length !== expectedCount || keysDigest(rows.map(row => row.documentKey)) !== expectedKeysDigest) {
+  if (rows.length !== expectedCount
+    || keysDigest(rows.map(row => row.documentKey)) !== expectedKeysDigest
+    || contentDigest(rows) !== expectedContentDigest) {
     throw new Error('LEDGER_READ_INCONSISTENT');
   }
   return stableDigest({ count: rows.length, targets: rows.map(row => ({ documentKey: row.documentKey, digest: row.digest })) });
@@ -218,11 +228,15 @@ export async function applyPeriodFeeLedgerPlan(
 
   const runId = snapshotRunId(plan.snapshotId, plan.planDigest);
   const expectedLedgerKeys = readyRows.map(row => storageDocumentKey(runId, row.documentKey));
-  const expectedHistoryKeys = historyRows.map(row => runHistoryDocumentKey(runId, row));
+  const expectedLedgerTargets = readyRows.map(row => ({ documentKey: storageDocumentKey(runId, row.documentKey), digest: documentDigest(row) }));
+  const expectedHistoryTargets = historyRows.map(row => ({ documentKey: runHistoryDocumentKey(runId, row), digest: documentDigest(row) }));
+  const expectedHistoryKeys = expectedHistoryTargets.map(target => target.documentKey);
   const rowCount = expectedLedgerKeys.length;
   const rowKeysDigest = keysDigest(expectedLedgerKeys);
+  const rowContentDigest = contentDigest(expectedLedgerTargets);
   const historyRowCount = expectedHistoryKeys.length;
   const historyKeysDigest = keysDigest(expectedHistoryKeys);
+  const historyContentDigest = contentDigest(expectedHistoryTargets);
   const lockOwnerId = `apply:${runId}:${randomUUID()}`;
   return withSnapshotWriteLock(store, lockOwnerId, options.now, async () => {
   const preparedAt = nowIso(options.now);
@@ -234,6 +248,7 @@ export async function applyPeriodFeeLedgerPlan(
     throw new Error('RUN_NOT_REAPPLICABLE');
   }
   if (existingRun?.status === 'ACTIVE' && existingRun.active) {
+    if (!existingRun.rowContentDigest || !existingRun.historyContentDigest) throw new Error('LEDGER_READ_INCONSISTENT');
     for (const row of readyRows) {
       const existing = await store.getLedgerDocument(storageDocumentKey(runId, row.documentKey));
       if (!existing || existing.digest !== documentDigest(row)) {
@@ -241,9 +256,12 @@ export async function applyPeriodFeeLedgerPlan(
       }
     }
     const readback = assertReadback(plan, await store.readLedgerRows(plan.snapshotId, runId), options.sampleSize ?? 50);
-    const historyTargets = historyRows.map(row => ({ documentKey: runHistoryDocumentKey(runId, row), digest: documentDigest(row) }));
-    if (keysDigest(historyTargets.map(target => target.documentKey)) !== historyKeysDigest) throw new Error('LEDGER_READ_INCONSISTENT');
-    await assertHistoryReadback(store, runId, historyRowCount, historyKeysDigest);
+    const ledgerTargets = await ownedLedgerTargets(store, runId);
+    if (ledgerTargets.length !== existingRun.rowCount
+      || keysDigest(ledgerTargets.map(target => target.documentKey)) !== existingRun.rowKeysDigest
+      || contentDigest(ledgerTargets) !== existingRun.rowContentDigest) throw new Error('LEDGER_READ_INCONSISTENT');
+    if (keysDigest(expectedHistoryTargets.map(target => target.documentKey)) !== historyKeysDigest) throw new Error('LEDGER_READ_INCONSISTENT');
+    await assertHistoryReadback(store, runId, historyRowCount, historyKeysDigest, existingRun.historyContentDigest);
     if (existingRun.readbackDigest && existingRun.readbackDigest !== readback.digest) {
       throw new Error('PERIOD_FEE_ACTIVE_READBACK_DIGEST_MISMATCH');
     }
@@ -270,10 +288,12 @@ export async function applyPeriodFeeLedgerPlan(
     activatedAt: null,
     rowCount,
     rowKeysDigest,
+    rowContentDigest,
     readyRowCount: readyRows.length,
     holdNoUidCount: holdNoUidRows.length,
     historyRowCount,
     historyKeysDigest,
+    historyContentDigest,
     readbackSampleCount: 0,
     readbackDigest: null,
   }, writeGuard(lockOwnerId, options.now));
@@ -308,7 +328,7 @@ export async function applyPeriodFeeLedgerPlan(
   }
 
   const readback = assertReadback(plan, await store.readLedgerRows(plan.snapshotId, runId), options.sampleSize ?? 50);
-  await assertHistoryReadback(store, runId, historyRowCount, historyKeysDigest);
+  await assertHistoryReadback(store, runId, historyRowCount, historyKeysDigest, historyContentDigest);
   await renewSnapshotWriteLock(store, lockOwnerId, options.now);
   await store.activateSnapshotRun(runId, {
     schemaVersion: 'period-fee-snapshot-run/v1',
@@ -322,10 +342,12 @@ export async function applyPeriodFeeLedgerPlan(
     activatedAt: nowIso(options.now),
     rowCount,
     rowKeysDigest,
+    rowContentDigest,
     readyRowCount: readyRows.length,
     holdNoUidCount: holdNoUidRows.length,
     historyRowCount,
     historyKeysDigest,
+    historyContentDigest,
     readbackSampleCount: readback.sampleCount,
     readbackDigest: readback.digest,
   }, writeGuard(lockOwnerId, options.now));
