@@ -1401,6 +1401,11 @@ describe('2026-10-11 one-month basic fee', () => {
   for (const over of [{supplierId:'UNKNOWN'},{productType:'신차렌트'},{supplierId:'RP014',productType:'중고구독'},{termMonths:6}]) expect(resolveSalesCommission({...base,...over})).toMatchObject({state:'UNKNOWN',amount:null});
   expect(resolveSalesCommission({...base,termMonths:12})).toMatchObject({amount:500000});
  });
+ it('keeps RP012 one-month rerent on the pre-existing five-percent ladder without insurance deduction', () => {
+  const input = { supplierId: 'RP012', productType: '재렌트', termMonths: 1, monthlyRent: 3000000 };
+  expect(resolveSupplierBillingFee(input)).toMatchObject({ state: 'CALCULATED', amount: 150000, ruleId: 'STANDARD_RERENT_1_BILLING_RENT_5_PERCENT' });
+  expect(resolveSalesCommission(input)).toMatchObject({ state: 'CALCULATED', amount: 150000, ruleId: 'STANDARD_RERENT_1_PAYOUT_RENT_5_PERCENT' });
+ });
 });
 
  it('precomputes one-month Money with provenance and leaves source prices intact', () => {

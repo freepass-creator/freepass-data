@@ -669,6 +669,9 @@ const resolveTermLadder = (
   );
 };
 
+const SONOKONG_RERENT_TERM_MONTHS = [12, 24, 36, 48, 60] as const;
+const SONOKONG_PICKUP_PROXY_TERM_MONTHS = [12, 24, 36, 48] as const;
+
 export type CommissionInput = {
   supplierId: string;
   productType: string;
@@ -806,7 +809,7 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   const subscription = /구독/.test(productType);
   if (supplierId === 'RP013' && /발주/.test(productType)) return unknownCommission('WELRIX_ORDER_RULE_UNCONFIRMED');
   if (supplierId === 'RP012' && /^픽업\s*구독(?:\(롯데T카\))?$/.test(productType)) {
-    if ([12, 24, 36, 48].includes(termMonths)) {
+    if (SONOKONG_PICKUP_PROXY_TERM_MONTHS.includes(termMonths as never)) {
       const base = resolveTermLadder(termMonths, monthlyRent, side, 'STANDARD_RERENT', 'TRUNC');
       if (base.state !== 'CALCULATED' || base.amount === null) return base;
       return billing
@@ -858,7 +861,7 @@ function resolveCommissionAmount(input: CommissionInput, side: 'BILLING' | 'PAYO
   if (subscription && KAKAO_COMMISSION_POLICY.supplierPolicyAssignments.basicSupplierIds.some(id => id === supplierId)) {
     return resolveTermLadder(termMonths, monthlyRent, side);
   }
-  if (supplierId === 'RP012' && rerent) {
+  if (supplierId === 'RP012' && rerent && SONOKONG_RERENT_TERM_MONTHS.includes(termMonths as never)) {
     const base = resolveTermLadder(termMonths, monthlyRent, side, 'STANDARD_RERENT', 'TRUNC');
     if (!billing || base.state !== 'CALCULATED' || base.amount === null) return base;
     return approximateCommission(`SONOKONG_RERENT_${termMonths}_BILLING_INSURANCE_DEDUCT`, base.amount - 100000, 'EXCLUDED', 'SONOKONG_INSURANCE_DEDUCT_100K', 'TRUNC');

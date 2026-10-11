@@ -377,6 +377,28 @@ describe('F04 explicit canonical evidence', () => {
     input.internalEconomicsTerms[0]!.supplierBillingFee.amount!.amount = Math.round(100001 * 60 * 275 / 10000) - 100000;
     expect(auditOfferEconomicsTerms(input).invalidFacts).toContain('ECONOMICS_CALCULATION_MISMATCH:60:SUPPLIER_BILLING_FEE');
   });
+  it('audits all RP012 rate fees with truncation, regardless of rule id prefix', () => {
+    const input = {
+      ...offer(), supplierId: 'RP012',
+      priceTerms: [{ termKey: '24', termMonths: 24, monthlyRent: { amount: 100001, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }],
+    };
+    input.internalEconomicsTerms = precomputeOfferEconomics(input, 'USED_RENT');
+    expect(input.internalEconomicsTerms[0]!.channelPayoutFee).toMatchObject({
+      ruleId: 'STANDARD_RERENT_24_RENT_X_TERM',
+      amount: { amount: 96000 },
+    });
+    expect(auditOfferEconomicsTerms(input).invalidFacts).not.toContain('ECONOMICS_CALCULATION_MISMATCH:24:CHANNEL_PAYOUT_FEE');
+    input.internalEconomicsTerms[0]!.channelPayoutFee.amount!.amount = Math.round(100001 * 24 * 0.04);
+    expect(auditOfferEconomicsTerms(input).invalidFacts).toContain('ECONOMICS_CALCULATION_MISMATCH:24:CHANNEL_PAYOUT_FEE');
+
+    const other = {
+      ...offer(), supplierId: 'RP013',
+      priceTerms: [{ termKey: '24', termMonths: 24, monthlyRent: { amount: 100001, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }],
+    };
+    other.internalEconomicsTerms = precomputeOfferEconomics(other, 'USED_RENT');
+    expect(other.internalEconomicsTerms[0]!.channelPayoutFee.amount?.amount).toBe(96001);
+    expect(auditOfferEconomicsTerms(other).invalidFacts).not.toContain('ECONOMICS_CALCULATION_MISMATCH:24:CHANNEL_PAYOUT_FEE');
+  });
   it('uses the same-product 36-month basis for Billin and records its exact price provenance', () => {
     const offer = { id: 'synthetic', supplierId: 'RP021', priceTerms: [{ termKey: '60', termMonths: 60, monthlyRent: { amount: 200000, currency: 'KRW' as const }, depositState: 'UNKNOWN' as const }] };
     expect(precomputeOfferEconomics(offer, 'USED_SUBSCRIPTION')[0]!.supplierBillingFee.reasonCode).toBe('BILLIN_36_MONTH_RENT_REQUIRED');

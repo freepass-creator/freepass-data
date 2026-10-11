@@ -534,6 +534,7 @@ export function summarizeCommercialTerms(
 function auditEconomicAmount(
   value: TermEconomicAmount,
   label: string,
+  supplierId: string,
   monthlyRent: number,
   termMonths: number,
   decisions: string[],
@@ -588,7 +589,7 @@ function auditEconomicAmount(
       invalidFacts.push(`INVALID_ECONOMICS_CALCULATION:${label}`);
       return;
     }
-    expected = value.ruleId?.startsWith('SONOKONG_')
+    expected = supplierId === 'RP012'
       ? truncWon(monthlyRent * termMonths * calculation.rate) + (calculation.adjustmentAmount?.amount ?? 0)
       : Math.round(monthlyRent * termMonths * calculation.rate) + (calculation.adjustmentAmount?.amount ?? 0);
   } else if (!Number.isFinite(calculation.rate) || calculation.rate < 0) {
@@ -634,9 +635,9 @@ export function auditOfferEconomicsTerms(offer: Offer): OfferEconomicsAudit {
         (term.termMonths !== undefined && term.termMonths !== price.termMonths)) {
       invalidFacts.push(`STALE_ECONOMICS_INPUT:${term.termKey}`);
     }
-    auditEconomicAmount(term.depositCalculation, `${term.termKey}:DEPOSIT`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
-    auditEconomicAmount(term.supplierBillingFee, `${term.termKey}:SUPPLIER_BILLING_FEE`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
-    auditEconomicAmount(term.channelPayoutFee, `${term.termKey}:CHANNEL_PAYOUT_FEE`, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
+    auditEconomicAmount(term.depositCalculation, `${term.termKey}:DEPOSIT`, offer.supplierId, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
+    auditEconomicAmount(term.supplierBillingFee, `${term.termKey}:SUPPLIER_BILLING_FEE`, offer.supplierId, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
+    auditEconomicAmount(term.channelPayoutFee, `${term.termKey}:CHANNEL_PAYOUT_FEE`, offer.supplierId, price.monthlyRent.amount, price.termMonths, decisions, invalidFacts);
     for (const side of ['supplierBillingFee', 'channelPayoutFee'] as const) {
       const fee = term[side], basis = fee.referenceRentBasis;
       if (!basis) continue;
@@ -693,7 +694,7 @@ export function readStoredTermFees(offer: Offer, price: PriceTerm): Pick<AdminPr
     if ((row?.monthlyRent && (row.monthlyRent.amount !== price.monthlyRent.amount || row.monthlyRent.currency !== price.monthlyRent.currency)) ||
         (row?.termMonths !== undefined && row.termMonths !== price.termMonths)) return unknown('STALE_ECONOMICS_INPUT');
     const errors: string[] = [];
-    auditEconomicAmount(value, field, price.monthlyRent.amount, price.termMonths, [], errors);
+    auditEconomicAmount(value, field, offer.supplierId, price.monthlyRent.amount, price.termMonths, [], errors);
     if (!['KNOWN', 'ZERO', 'UNKNOWN', 'NOT_APPLICABLE'].includes(value.state) || errors.length) return unknown('INVALID_STORED_ECONOMICS');
     return { ...structuredClone(value), amount: structuredClone(value.amount ?? null) };
   };
