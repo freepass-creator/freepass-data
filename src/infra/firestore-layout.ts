@@ -75,3 +75,12 @@ export const FIRESTORE_COLLECTIONS = Object.freeze({
 
 export const sourceFirestoreDocumentId = (value: string) =>
   value.replaceAll('/', '__');
+
+export const firestoreSafeDocumentIdPart = (value: string) =>
+  value.replace(/[\/#?[\]*]/g, '_').slice(0, 180);
+
+export const periodFeeRunId = (snapshotId: string, planDigest: string) =>
+  [snapshotId, planDigest.slice(0, 24)].map(firestoreSafeDocumentIdPart).join('__');
+
+export const periodFeeRunDocumentKey = (runId: string, documentKey: string) =>
+  [runId, documentKey].map(firestoreSafeDocumentIdPart).join('__');

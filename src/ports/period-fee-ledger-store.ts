@@ -19,7 +19,7 @@ export type PeriodFeeLedgerApplyStore = {
   setSnapshotRun(runId: string, run: PeriodFeeSnapshotRun): Promise<void>;
   activateSnapshotRun(runId: string, run: PeriodFeeSnapshotRun, previousActiveRunId: string | null): Promise<void>;
   restoreSnapshotRunActive(runId: string, expectedPlanDigest: string): Promise<void>;
-  readLedgerRows(snapshotId: string): Promise<PeriodFeeLedgerRow[]>;
+  readLedgerRows(snapshotId: string, runId: string): Promise<PeriodFeeLedgerRow[]>;
   markSnapshotRunInactive(runId: string): Promise<void>;
   deleteLedgerRowsByDigest(documentDigests: Array<{ documentKey: string; digest: string }>): Promise<number>;
 };

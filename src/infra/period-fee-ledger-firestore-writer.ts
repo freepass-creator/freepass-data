@@ -118,12 +118,17 @@ export class PeriodFeeLedgerFirestoreWriter implements PeriodFeeLedgerApplyStore
     });
   }
 
-  async readLedgerRows(snapshotId: string): Promise<PeriodFeeLedgerRow[]> {
+  async readLedgerRows(snapshotId: string, runId: string): Promise<PeriodFeeLedgerRow[]> {
+    const run = await this.getSnapshotRun(runId);
+    if (!run || run.snapshotId !== snapshotId) throw new Error('PERIOD_FEE_READBACK_RUN_NOT_FOUND');
     const snap = await this.collection(FIRESTORE_COLLECTIONS.periodFees.ledger).where('snapshotId', '==', snapshotId).get();
+    const allowed = new Set(run.rowKeys);
     return snap.docs.map(doc => {
       const { digest: _digest, ...data } = doc.data() as Rec;
-      return data as PeriodFeeLedgerRow;
-    });
+      return { id: doc.id, row: data as PeriodFeeLedgerRow };
+    })
+      .filter(item => allowed.has(item.id))
+      .map(item => item.row);
   }
 
   async markSnapshotRunInactive(runId: string): Promise<void> {
