@@ -207,6 +207,14 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 ## 날짜별 작업 이력
 
+### 2026-10-11 read runtime 기존 환경 보존 — 코드 준비 / 운영 미적용
+
+- 원천 관측: root 본인 GCP Console 21:04 KST에서 기존00026/source1067 healthy·traffic100, plain3+F04 key 및 consumer4/Iancar1 secret2, 8080/concurrency8/max10/volume0를 확인했다. 01 직접 운영 조회가 아니다.
+- 변경: 기존 deploy workflow의 전체 plain 환경 교체를 controlled NODE_ENV/DRIVER/FIREBASE_PROJECT_ID 세 값 update로 바꾼다. 기존 repository F04 secret 주입·필수 guard·append도 제거해 현 service F04를 다른 값으로 덮지 않는다. 실제 F04 값은 읽거나 복사하지 않았다. secret refs/IAM/region/service/source target/기타설정은 이번 수정 범위 밖이다. 신규 service의 F04 설정을 자동 제공하는 경로로 표시하지 않는다.
+- 검증: 배포 script mock에서 추가 환경 보존·production/firestore/freepasserp5 갱신, public 승인 및 private gate 관련3 PASS/11 미선택; build/architecture/access PASS. 필수 exact CI/독립 검토는 PR 영수증으로 결속한다. 실제 dispatch/등록/배포0.
+- next_start_here: 최종 workflow SHA 검증 후 기존 단일 실행 owner만 정상 배포한다. before/after keyset·value/valueFrom 타입·F04 존재 및 같은 process의 값 동일 boolean만 검증하고 원문/digest를 기록하지 않는다. actual image/Ready/SA/privateIAM/traffic·secret4/1 보존은 별도 확인한다. 사람 사진 확인과 business 등록은 strict reader serving 확인 이후다.
+
+
 ### 2026-10-11 ONE 고정 사진집합 사람 확인 등록 지원 — CODED / TESTED, 운영 미적용
 
 - 목적/소유: 00가 01에게 기존 photo-only compatibility bridge와 reader 관련 최소 hunk를 단독 배정했다. 기준 main `c1e2a15bff1e650347d3b7d1d42cb9e185140272`; 이 기록을 포함하는 구현 commit이 exact 준비 revision이다. 기존 `publishIancarPhotoReferences`/`runIancarPhotoPublication`은 존재하지만 사람 확인 입력을 지원하지 않았다는 점을 보완한다. 새 Canonical Product 필드·Firebase app·setter/store·source persistence 경로는 만들지 않았다.

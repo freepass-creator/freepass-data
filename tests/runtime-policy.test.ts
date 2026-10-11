@@ -225,6 +225,35 @@ describe('API runtime boundary', () => {
       expect(result.stdout.trim()).not.toBe(approved.stdout.trim());
     }
   });
+  it('deployment updates controlled environment values while preserving existing service settings', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const section = workflow.split('      - name: Deploy private read-only service')[1]!.split('      - name: Grant public invoker only when requested')[0]!;
+    const script = section.split('        run: |\n')[1]!.split('\n').map(line => line.slice(10)).join('\n');
+    expect(section).not.toContain('FREEPASS_SHEET_F04_ID');
+    const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+    const mock = `gcloud() {
+      local preserved=existing-f04 driver=missing target=missing node_env=missing
+      for arg in "$@"; do
+        case "$arg" in
+          --set-env-vars=*) preserved=DELETED ;;
+          --update-env-vars=*)
+            case "$arg" in *NODE_ENV=production*) node_env=production ;; esac
+            case "$arg" in *FREEPASS_DATA_DRIVER=firestore*) driver=firestore ;; esac
+            case "$arg" in *FIREBASE_PROJECT_ID=freepasserp5*) target=freepasserp5 ;; esac ;;
+        esac
+      done
+      printf '%s/%s/%s/%s' "$preserved" "$node_env" "$driver" "$target"
+    }\n`;
+    const result = spawnSync(bash, ['-s'], { input: mock + script, encoding: 'utf8', env: {
+      ...process.env, USE_CONSUMER_SECRETS: 'true', FREEPASS_SHEET_F04_ID: '',
+      CONSUMERS_SECRET_NAME: 'synthetic-consumers', CONSUMERS_SECRET_VERSION: '4',
+      IANCAR_SECRET_NAME: 'synthetic-one', IANCAR_SECRET_VERSION: '1', SERVICE_NAME: 'synthetic-service',
+      PROJECT_ID: 'freepasserp5', REGION: 'asia-northeast3', IMAGE_REF: 'synthetic-image',
+      RUNTIME_SERVICE_ACCOUNT: 'synthetic-account', MAX_INSTANCES: '10', RUNTIME_CONCURRENCY: '8',
+    } });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe('existing-f04/production/firestore/freepasserp5');
+  });
   it('deploys privately and grants anonymous invoker only after approved preflight', () => {
     const workflow = readFileSync(new URL('../.github/workflows/deploy-read-runtime.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
     const gate = workflow.indexOf('- name: Validate public approval before deployment effects');
