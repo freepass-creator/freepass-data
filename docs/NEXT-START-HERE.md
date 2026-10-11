@@ -236,6 +236,17 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 - 재판정 결과: 이슈 있는 행 153→101 / 175(87.4%→57.7%), 식별 충돌 144→75, 연식 불일치 23→8. 마스터·별칭·시트 쓰기 없음. 남은 식별 보류 75행은 별칭·마스터 보강 후보(이름 불일치 약 23)와 공급사 확인(나머지).
 - 검증: 관련 시험 갱신(2000 대 1999 허용·2100 보류, 연식 ±1 허용·±2 보류), 전체 시험 중 이 변경과 무관한 4건(kakao-source-intake·read-runtime 2건·runtime-policy, 실행 환경/깃 참조 의존)만 실패.
 - 남음/HOLD: 이 규칙이 main 에 반영·다음 15분 수집이 돌아야 실제 보류가 준다(PERSISTENCE 미검증). 이름 불일치 약 23행은 프리패스 데이터 별칭 보강이 필요하며 이 변경은 마스터를 쓰지 않았다.
+/^>>>>>>> origin/main$/d
+### 2026-10-12 단건 compatibility fact 구현 / 운영 후보 분리
+
+- 승인/소유: 대표의 전체 반영·병렬 작업 지시를00이 확인하고01 단일 adapter/공용type/NEXT 통합,12 gateway/전용test,10 사진계약 읽기,21 독립검토,20 단독 운영 실행으로 배정했다. 원본 checkout dirty185줄은 보존한다. 기존managed 통합선은 main c158f92 이후fb37873의 금액 변경을 일반merge로 보존했다.
+- 최소 계약: 기존 catalog-compat/v1 형식의 상품단건 GET은 catalog 권한이 있는 erp-com/whitelabel만 허용한다. 사진전용/public-catalog/admin에는 새 권한을 부여하지 않는다. meta.selection/readScope=SINGLE_PRODUCT·selectedProductId와 실 readTimeExact/각문서updateTimeExact seconds/nanoseconds를 반환해 전체snapshot·canonical revision으로 오해하지 않게 한다. 제품·명시한정책/파트너문서만 기존Firebase target/layout/read-only transaction으로 조회하며 같은 readTime은 SDK Timestamp.isEqual로 검사한다. 전체scan fallback·새store·alias추정0.
+- 사실/거부: 기존 asMap과같이 _key=exactdocID/product_code 보존. stored_key와docID 불일치,policy_id/code 상충,provider/partner 상충,관련문서code 불일치는503/HOLD이다. 없는제품404,없는정확relateddoc/참조는UNKNOWN이며 product원값을변경하거나0을발명하지않는다. 원문price/삭제/status/vehicle_status/provider/key/정책/partner.alias/DEFERRED priceAliases는긍정목록으로보존하되 private users·내부수수료·source자유본문·사진refs·비밀값은추가출력하지않는다.
+- 정규화/안전: 기존withCompatibilityDepositEvidence(raw,같은readAt)를먼저적용하고금액/state/label/reason/basis/difference의허용필드만반환한다. 전체조회와단건의양수/명시ZERO/근거없는0 UNKNOWNnull/유료충돌/null 동일성회귀를유지한다. 가격키는한글variant/주행거리/slash원문을재작성하지않고수송안전경계만검사한다. metadata/linkedfacts/version의추가필드·URL/credential·과대1MiB는503·성공audit없음으로차단한다.
+- 검증: 통합 관련182 PASS(adapter18+gateway53+기존gateway111),build/architecture/access/diff-check PASS. 이전1518의177 PASS 및21 adapter16·12부분회귀/metadata누출해소는각head근거이며최종182와구분한다. 최종PR exact-head 독립검토와Linux CI는후속결속한다. 현재CODED/TESTED이며 새endpoint운영배포·실응답·ERP4 cutover/속도개선은미확인이다.
+- 경계/next_start_here: ERP4의mode별정규화·표시key/alias·partner/policy 전체판정동등성은별도HOLD이며 소비처가 기존판매조건검사를그대로재사용해야한다. ERP5 자체기존자격판정→photos-only binary 직접경로에 이fact를필수의존으로추가하지않는다. 실제serving08fd 위에이번순수fact/type/handler/test hunk만분리한runtime 후보를별도검증하고main tree불변ancestor로결속한다. 다른main금액/UID/internal-read 변경을이번배포로확대하지않는다. 최종검토·CI·00 exactsource GO 후20만실행하며업무DB·IAM·pins·consumer 범위변경0이다.
+
+>>>>>>> origin/main
 
 ### 2026-10-12 사진 성능 소스 단일 배포 / 표본 실측 / 성능 미입증
 
