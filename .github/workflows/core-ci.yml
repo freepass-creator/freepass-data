@@ -29,6 +29,8 @@ jobs:
         run: npm run check:sheets
       - name: TypeScript build
         run: npm run build
+      - name: Trusted runtime source policy checks
+        run: npx vitest run tests/read-runtime-source-selection.test.ts tests/runtime-policy.test.ts tests/read-runtime-verification.test.ts
       - name: Unit tests
         run: npm test
       - name: Read runtime smoke
