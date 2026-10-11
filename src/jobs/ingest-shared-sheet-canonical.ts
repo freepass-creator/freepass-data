@@ -106,6 +106,9 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
   const unknownFeeReasons: Record<string, number> = {};
   const [assets, products, offers] = await Promise.all([store.listVehicleAssets(), store.listProducts(), store.listOffers()]);
   const prospective = overlay(store, p);
+  // A shared source run can bind hundreds of rows. Read its candidate set once per plan,
+  // never once per vehicle; this cache is local to this immutable planning invocation.
+  const priorRuns = new Map<string, Awaited<ReturnType<CatalogStore['listCandidatesByRun']>>>();
   for (const item of p.normalized) {
     const c = item.record.candidate;
     const supplier = c.providerCompanyCode ?? 'UNRESOLVED';
@@ -171,7 +174,9 @@ export async function planSharedSheetCanonical(store: CatalogStore, capture: Sha
           if ((c.fuelType === undefined && model?.fuel != null) || (c.driveType === undefined && model?.drive != null) ||
               (c.seats === undefined && model?.seats != null) || (c.mileageKm === undefined && asset?.odometerKm != null))
             reasons.push('MISSING_PREVIOUSLY_KNOWN_FACT_REQUIRES_REVIEW');
-          const previous = operationalRefresh ? (await store.listCandidatesByRun(binding.sourceRunId))
+          if (operationalRefresh && !priorRuns.has(binding.sourceRunId))
+            priorRuns.set(binding.sourceRunId, await store.listCandidatesByRun(binding.sourceRunId));
+          const previous = operationalRefresh ? priorRuns.get(binding.sourceRunId)!
             .filter(x => x.sourceId === binding.sourceId && x.sourceRecordId === binding.sourceRecordId &&
               x.sourceFingerprint === binding.sourceFingerprint && x.status === 'VALID') : [];
           if (operationalRefresh && previous.length !== 1) throw new Error('OPERATIONAL_PREVIOUS_CANDIDATE_NOT_UNIQUE');
