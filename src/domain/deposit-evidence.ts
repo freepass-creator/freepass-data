@@ -102,6 +102,27 @@ function sourceWaiverBasisFromProduct(product: Record<string, unknown>, termMont
   return source.field && source.text === '무보증' ? { field: source.field, text: '무보증' } : undefined;
 }
 
+function sourceRawAmountFromProduct(product: Record<string, unknown>, termMonths: unknown): unknown {
+  const source = sourceWaiverTextFromProduct(product, termMonths);
+  return source.field ? readProductPath(product, source.field) : undefined;
+}
+
+export function parseDepositSourceRawAmount(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+  const raw = value.trim();
+  if (/^(?:[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$/.test(raw)) {
+    const parsed = Number(raw.replaceAll(',', ''));
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+  }
+  const manwon = /^([1-9]\d*)\s*만원$/.exec(raw);
+  if (manwon) {
+    const parsed = Number(manwon[1]) * 10000;
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+  }
+  return undefined;
+}
+
 export function depositEvidenceInputFromProduct(
   product: Record<string, unknown>,
   sourceAmount: unknown,
@@ -120,6 +141,7 @@ export function depositEvidenceInputFromProduct(
     depositFreeConfirmation: product.deposit_free_confirmation,
     depositSourceWaiverBasis: sourceWaiverBasisFromProduct(product, extra.termMonths),
     depositSourceWaiverText: sourceWaiverTextFromProduct(product, extra.termMonths).text,
+    depositSourceRawAmount: sourceRawAmountFromProduct(product, extra.termMonths),
     sourceAmount,
     ...extra,
   };
@@ -212,7 +234,7 @@ export function resolveDepositByRuleNote(input: {
 }
 
 export type DepositWithRuleResolution =
-  | { state: 'KNOWN'; amount: number; reason: 'SOURCE_AMOUNT' | `SUPPLIER_RULE_NOTE:${DepositRuleCode}`; rule: null | { code: DepositRuleCode | 'SOURCE_AMOUNT'; multiplier: number | null; label: string }; depositRuleDifference?: { ruleAmount: number; ruleCode: DepositRuleCode; differs: true } }
+  | { state: 'KNOWN'; amount: number; reason: 'SOURCE_AMOUNT' | 'SOURCE_RAW_AMOUNT' | `SUPPLIER_RULE_NOTE:${DepositRuleCode}`; rule: null | { code: DepositRuleCode | 'SOURCE_AMOUNT' | 'SOURCE_RAW_AMOUNT'; multiplier: number | null; label: string }; depositRuleDifference?: { ruleAmount: number; ruleCode: DepositRuleCode | 'SOURCE_RAW_AMOUNT'; differs: true } }
   | { state: 'ZERO'; amount: 0; reason: 'EXPLICIT_ZERO_DEPOSIT'; depositEvidenceBasis: DepositEvidenceBasis; rule: { code: 'ZERO_DEPOSIT'; multiplier: 0; label: string; depositEvidenceBasis: DepositEvidenceBasis } }
   | { state: 'UNKNOWN'; amount: null; reason: string; rule: null };
 
@@ -226,12 +248,24 @@ export function resolveDepositWithRuleNote(input: {
   depositFree?: unknown;
   depositFreeConfirmation?: unknown;
   depositSourceWaiverBasis?: unknown;
+  depositSourceWaiverText?: unknown;
+  depositSourceRawAmount?: unknown;
   hasPositivePaidDeposit?: boolean;
   /** 규칙을 거는 범위. 기본 ANY(호환 응답·안내). 표준화 매핑은 기존 정책 그대로 «RP012 구독의 원문 정확히 0 + 연수 규칙»만(근거가 약한 확대 금지). */
   ruleScope?: 'ANY' | 'RP012_SUBSCRIPTION_EXACT_ZERO_YEARS_RULE';
 }): DepositWithRuleResolution {
   const evidence = assessDepositEvidence(input);
   const sourceAmountRule = { code: 'SOURCE_AMOUNT' as const, multiplier: null, label: '공급사 입력 금액' };
+  const sourceRawAmount = parseDepositSourceRawAmount(input.depositSourceRawAmount);
+  const sourceRawCandidate = (input.sourceAmount === 0 || input.sourceAmount === '0' || input.sourceAmount === undefined || input.sourceAmount === null || input.sourceAmount === '')
+    && sourceRawAmount !== undefined
+    && !input.depositSourceWaiverBasis
+    && input.depositSourceWaiverText !== '무보증';
+  if (sourceRawCandidate && evidence.state === 'UNKNOWN') {
+    return { state: 'KNOWN', amount: sourceRawAmount, reason: 'SOURCE_RAW_AMOUNT',
+      rule: { code: 'SOURCE_RAW_AMOUNT', multiplier: null, label: '원문 보증금' },
+      depositRuleDifference: { ruleAmount: sourceRawAmount, ruleCode: 'SOURCE_RAW_AMOUNT', differs: true } };
+  }
   if (evidence.state === 'KNOWN') {
     const rule = resolveDepositByRuleNote({ note: input.note, termMonths: input.termMonths, monthlyRent: input.monthlyRent });
     const depositRuleDifference = rule.state === 'KNOWN' && rule.amount !== evidence.amount
