@@ -34,3 +34,15 @@ test('중복 차량번호 표시', () => {
   const r = reconcile([{ car_number: '1', price: 1 }, { car_number: '1', price: 1 }], [], { fields: ['price'] });
   assert.equal(r.types.DUPLICATE_PLATE, 1);
 });
+
+test('쉼표 숫자는 날짜로 오해하지 않는다', () => {
+  assert.equal(classifyField('1,300,000', '1300000'), 'FORMAT_ONLY');
+  assert.equal(classifyField('2021-03-05', '2021.3.5'), 'FORMAT_ONLY');
+});
+
+test('날짜 자리수·배기량 반올림', () => {
+  assert.equal(classifyField('21-05-14', '2021-05-14'), 'FORMAT_ONLY');
+  assert.equal(classifyField('26-06', '26-6'), 'FORMAT_ONLY');
+  assert.equal(classifyField('3,500', '3470', 'engine_cc'), 'NEAR_NUMERIC');
+  assert.equal(classifyField('3,500', '2000', 'engine_cc'), 'VALUE_DIFF');
+});

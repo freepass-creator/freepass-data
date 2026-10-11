@@ -5,7 +5,8 @@ import { sha } from './supplier-freshness-lib.mjs';
 
 export const DEFAULT_FIELDS = ['price', 'mileage', 'year', 'maker', 'model', 'sub_model', 'trim_name', 'fuel_type', 'ext_color',
   'first_registration_date', 'status_label_raw', 'engine_cc', 'options'];
-export const MISMATCH_TYPES = ['MISSING_IN_DATA', 'ONLY_IN_DATA', 'EMPTY_IN_DATA', 'EMPTY_IN_RAW', 'FORMAT_ONLY', 'VALUE_DIFF', 'DUPLICATE_PLATE'];
+export const NEAR_TOLERANCE = { engine_cc: 0.06 }; // 배기량 반올림(3,500↔3470) 허용 비율
+export const MISMATCH_TYPES = ['MISSING_IN_DATA', 'ONLY_IN_DATA', 'EMPTY_IN_DATA', 'EMPTY_IN_RAW', 'FORMAT_ONLY', 'NEAR_NUMERIC', 'VALUE_DIFF', 'DUPLICATE_PLATE'];
 
 export const plateKey = v => String(v ?? '').replace(/\s+/g, '').trim();
 export const last4 = v => plateKey(v).slice(-4);
@@ -17,21 +18,24 @@ export function normalize(v) {
   if (Array.isArray(v)) return v.map(normalize).filter(Boolean).sort().join('|');
   if (typeof v === 'object') return JSON.stringify(v);
   let s = String(v).trim();
-  const date = s.match(/^(\d{4})[-./\s]?(\d{1,2})[-./\s]?(\d{1,2})/);
-  if (date) return `${date[1]}${date[2].padStart(2, '0')}${date[3].padStart(2, '0')}`;
   const num = s.replace(/[,\s]/g, '').replace(/(원|km|㎞|cc|CC)$/u, '');
-  if (/^-?\d+(\.\d+)?$/.test(num)) return String(Number(num));
+  if (/^-?\d+(\.\d+)?$/.test(num)) return String(Number(num)); // 숫자가 먼저: 1,300,000 = 1300000 (날짜로 오해하지 않는다)
+  const date = s.match(/^(\d{2}|\d{4})[-./\s](\d{1,2})(?:[-./\s](\d{1,2}))?$/);
+  if (date) return `${date[1].length === 2 ? '20' + date[1] : date[1]}${date[2].padStart(2, '0')}${date[3] ? date[3].padStart(2, '0') : ''}`;
   return s.replace(/\s+/g, '').toLowerCase();
 }
 const exact = v => isEmpty(v) ? '' : Array.isArray(v) ? JSON.stringify(v) : String(v).trim();
 
-export function classifyField(rawV, dataV) {
+export function classifyField(rawV, dataV, field) {
   const re = isEmpty(rawV), de = isEmpty(dataV);
   if (re && de) return 'BOTH_EMPTY';
   if (de) return 'EMPTY_IN_DATA';
   if (re) return 'EMPTY_IN_RAW';
   if (exact(rawV) === exact(dataV)) return 'MATCH';
-  return normalize(rawV) === normalize(dataV) ? 'FORMAT_ONLY' : 'VALUE_DIFF';
+  if (normalize(rawV) === normalize(dataV)) return 'FORMAT_ONLY';
+  const tol = NEAR_TOLERANCE[field], a = Number(normalize(rawV)), b = Number(normalize(dataV));
+  if (tol && a > 0 && b > 0 && Math.abs(a - b) / Math.max(a, b) <= tol) return 'NEAR_NUMERIC';
+  return 'VALUE_DIFF';
 }
 
 // rawRecords: [{ car_number, ...필드 }] (필드 이름은 map 으로 Firestore 이름에 맞춘 뒤). dataRecords: products 문서 필드 객체 배열.
@@ -53,11 +57,12 @@ export function reconcile(rawRecords, dataRecords, { fields = DEFAULT_FIELDS, sa
     if (!d) { add('MISSING_IN_DATA', { plate4: last4(k) }); continue; }
     both++;
     for (const f of fields) {
-      const c = classifyField(r[f], d[f]), pf = perField[f];
+      const c = classifyField(r[f], d[f], f), pf = perField[f];
       if (c === 'BOTH_EMPTY') continue;
       pf.compared++;
       if (c === 'MATCH') pf.match++;
       else if (c === 'FORMAT_ONLY') { pf.formatOnly++; add('FORMAT_ONLY', { plate4: last4(k), field: f, raw: clip(r[f]), data: clip(d[f]) }); }
+      else if (c === 'NEAR_NUMERIC') { pf.formatOnly++; add('NEAR_NUMERIC', { plate4: last4(k), field: f, raw: clip(r[f]), data: clip(d[f]) }); }
       else if (c === 'VALUE_DIFF') { pf.valueDiff++; add('VALUE_DIFF', { plate4: last4(k), field: f, raw: clip(r[f]), data: clip(d[f]) }); }
       else if (c === 'EMPTY_IN_DATA') { pf.emptyInData++; add('EMPTY_IN_DATA', { plate4: last4(k), field: f, raw: clip(r[f]) }); }
       else { pf.emptyInRaw++; add('EMPTY_IN_RAW', { plate4: last4(k), field: f, data: clip(d[f]) }); }
