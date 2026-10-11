@@ -108,9 +108,15 @@ describe('existing private runtime verification', () => {
       .split('\n').map(line => line.slice(10)).join('\n');
     const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
     const base = { VERIFY_JOB_STATUS: 'success', READ_RUNTIME_UNAUTHENTICATED_STATUS: '403', READ_RUNTIME_AUTHENTICATED_STATUS: '200',
-      READ_RUNTIME_READBACK_OK: 'true', READ_RUNTIME_MIGRATION_SIGNAL_OK: 'true', GITHUB_STEP_SUMMARY: '/dev/null' };
+      READ_RUNTIME_READBACK_OK: 'true', READ_RUNTIME_MIGRATION_SIGNAL_OK: 'true', GITHUB_STEP_SUMMARY: '/dev/null',
+      EXPECTED_SOURCE_SHA: 'a'.repeat(40), SINGLE_PRODUCT_READBACK_OK: '' };
+    const singleSource = '8af86d3b84020a402e21ec3c34a8498bd3066148';
     for (const [overrides, pass] of [[{}, true], [{ READ_RUNTIME_AUTHENTICATED_STATUS: 'UNVERIFIED' }, false],
-      [{ READ_RUNTIME_READBACK_OK: 'false' }, false], [{ READ_RUNTIME_MIGRATION_SIGNAL_OK: 'false' }, false]] as const) {
+      [{ READ_RUNTIME_READBACK_OK: 'false' }, false], [{ READ_RUNTIME_MIGRATION_SIGNAL_OK: 'false' }, false],
+      [{ EXPECTED_SOURCE_SHA: singleSource, SINGLE_PRODUCT_READBACK_OK: 'true' }, true],
+      [{ EXPECTED_SOURCE_SHA: singleSource, SINGLE_PRODUCT_READBACK_OK: 'false' }, false],
+      [{ EXPECTED_SOURCE_SHA: singleSource, SINGLE_PRODUCT_READBACK_OK: undefined }, false],
+      [{ SINGLE_PRODUCT_READBACK_OK: 'false' }, true]] as const) {
       const result = spawnSync(bash, ['-s'], { input: summary, encoding: 'utf8', env: { ...process.env, ...base, ...overrides } });
       expect(result.status === 0, result.stderr).toBe(pass);
     }
