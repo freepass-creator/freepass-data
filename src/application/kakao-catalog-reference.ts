@@ -1,3 +1,4 @@
+import { priceWithoutIancarAliases } from '../domain/iancar-price-alias.js';
 import { plateIdentityKey, isStrictKoreanPlate } from '../domain/vehicle-plate.js';
 import { createHash } from 'node:crypto';
 import { CONDITION_DIMENSION_SPECS } from './product-condition-dimensions.js';
@@ -1026,7 +1027,8 @@ export function buildKakaoCatalogReferenceProduct(documentId: string, source: Re
   if (!collected && source.listable !== true) return null;
   const supplierId = text(source.provider_company_code);
   if (!collected && !supplierId) return null;
-  const price = source.price && typeof source.price === 'object' && !Array.isArray(source.price) ? source.price as Rec : {};
+  // 이안카 별칭 키(기간만 있는 복사본)는 조건이 아니므로 뺀다 — 6087 60개월이 4행(별칭+3구간)이 아니라 3행(주행 3종)으로 나오게.
+  const price = source.price && typeof source.price === 'object' && !Array.isArray(source.price) ? priceWithoutIancarAliases(source) : {};
   if (!collected && !Object.keys(price).length) return null;
   const priceTerms = Object.entries(price as Rec).flatMap(([sourceKey, raw]) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];

@@ -347,6 +347,21 @@ describe('EANCAR ONE official partner API', () => {
     expect(buildIancarOneSourceBatch(capture).source.sourceId).toContain('phase-one-facts');
   });
 
+  it.each([['AVAILABLE', '출고가능', true], ['PREPARING', '출고가능', true], ['RESERVED', '계약중', true], ['UNAVAILABLE', '출고불가', false], ['RENTED', '출고불가', false]] as const)(
+    '대표 판매 기준(출고불가가 아니면 판매 가능): 원천 %s → %s(노출 %s), 원천 재고 상태는 증거에 그대로 보존', async (state, display, listable) => {
+    const fetcher = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      const body = await (await fullFetcher()(input)).json();
+      if (path === '/v1/vehicles') { body.data[0].inventory_status = state; body.data[0].available = state === 'AVAILABLE'; }
+      return new Response(JSON.stringify(body));
+    }) as typeof fetch;
+    const capture = await collectIancarOnePhaseOneFacts(config, fetcher);
+    expect(projectIancarOnePhaseOne(capture).vehicles[0]).toMatchObject({ displayStatus: display, sourceInventoryStatus: state });
+    const product = buildIancarOnePublicationProducts(capture)[0]!;
+    expect(product).toMatchObject({ vehicle_status: display, listable });
+    expect((product.evidence as { sourceInventoryStatus?: string }).sourceInventoryStatus).toBe(state);
+  });
+
   it('sync reads detail despite zero list photos, retaining representative IDs and deferred policy', async () => {
     const paths: string[] = [];
     const fetcher = (async (input: string | URL | Request) => {
@@ -1048,5 +1063,27 @@ describe('iancarOnePhotoIds — 신원 불일치·stale 거부', () => {
   it('stale 이 true(또는 없음)이면 DETAIL_STALE', () => {
     expect(() => iancarOnePhotoIds(vehicle({ stale: true }), 'EANCAR-x', '12가3456')).toThrow('IANCAR_PHOTO_DETAIL_STALE');
     expect(() => iancarOnePhotoIds(vehicle({ stale: undefined }), 'EANCAR-x', '12가3456')).toThrow('IANCAR_PHOTO_DETAIL_STALE');
+  });
+});
+
+describe('ONE GET 시간 초과 한 번 재시도', () => {
+  const ok = () => new Response(JSON.stringify({ success: true, data: [], pagination: { page: 1, page_size: 1, total: 0 }, synced_at: new Date().toISOString(), stale: false }), { status: 200, headers: { 'content-type': 'application/json' } });
+  it('첫 시도가 시간 초과여도 두 번째가 성공하면 이어 받는다', async () => {
+    let calls = 0;
+    const fetcher = (async () => { if (++calls === 1) throw new DOMException('timed out', 'TimeoutError'); return ok(); }) as typeof fetch;
+    await createIancarOneApiClient(config, fetcher).listVehicles();
+    expect(calls).toBe(2);
+  });
+  it('연속 시간 초과는 두 번까지만 시도하고 원래 오류를 던진다', async () => {
+    let calls = 0;
+    const fetcher = (async () => { calls++; throw new DOMException('timed out', 'TimeoutError'); }) as typeof fetch;
+    await expect(createIancarOneApiClient(config, fetcher).listVehicles()).rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(calls).toBe(2);
+  });
+  it('시간 초과가 아닌 네트워크 오류는 재시도하지 않는다', async () => {
+    let calls = 0;
+    const fetcher = (async () => { calls++; throw new TypeError('fetch failed'); }) as typeof fetch;
+    await expect(createIancarOneApiClient(config, fetcher).listVehicles()).rejects.toThrow('fetch failed');
+    expect(calls).toBe(1);
   });
 });
