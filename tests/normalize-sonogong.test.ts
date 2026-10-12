@@ -175,4 +175,23 @@ describe('Sonogong RAW to candidate normalizer', () => {
     expect(allMatch.candidate.issues).not.toContain('IDENTITY_MISMATCH');
     expect(allMatch.status).toBe('VALID');
   });
+
+  it('on identity hold carries no fact or lineage derived from the other vehicle detail', () => {
+    const base = payload('id-mix', '900가0000');
+    const otherDetail = { ...base.detail, carNumber: '900나1111', saleAmt: '77,777,000', firstRegistrationDate: '2019-07-07',
+      images: [{ sortOrder: 1, imageUrl: 'https://example.invalid/other.jpg' }], carDescription: 'OTHER_VEHICLE_TEXT',
+      options: ['OTHER_OPTION'] };
+    const normalized = normalizeOne({ ...base, detail: otherDetail })!;
+    const fields = normalized.record.candidate.vehicleFacts!.fields;
+    for (const key of ['vehiclePrice', 'firstRegistration', 'photoUrlPresence', 'rawPolicyOptionReference']) {
+      const field = fields[key];
+      expect(field === undefined || (field.value === null && field.state !== 'KNOWN')).toBe(true);
+    }
+    expect(normalized.record.candidate.priceTerms).toEqual([]);
+    const dump = JSON.stringify([normalized.record, normalized.lineage]);
+    for (const leak of ['77777000', '77,777,000', '2019-07-07', 'other.jpg', 'OTHER_VEHICLE_TEXT', 'OTHER_OPTION']) {
+      expect(dump).not.toContain(leak);
+    }
+    expect(normalized.record.status).toBe('REJECTED');
+  });
 });

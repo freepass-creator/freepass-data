@@ -48,9 +48,25 @@ export const sonogongNormalizer = (master?: SonogongMasterEvidence) => (raw: Raw
   if (raw.sourceRecordId.startsWith('evidence:list:') || raw.payload.evidenceKind === 'LIST_PAGE') return null;
   const payload = raw.payload;
   const list = object(payload.list) ? payload.list : {};
-  const detail = object(payload.detail) ? payload.detail : {};
+  const rawDetail = object(payload.detail) ? payload.detail : {};
   const bucket = text(payload.bucket);
   const issues: string[] = [];
+  // 목록과 상세가 «같은 차»임이 확인돼야 상세 유래 사실(요금·보증금·최초등록일·판매가·옵션·사진)을 쓴다(개발 2 P1).
+  // 신원이 안 맞거나 상세에 번호가 없으면 상세는 통째로 버린다 — 후보·계보에 다른 차 상세가 섞이지 않는다.
+  // (RAW 에는 관측 원문이 그대로 남는다. 후보에 연결하지 않을 뿐이다.)
+  const vinOf = (record: Record<string, unknown>) => {
+    for (const key of ['vin', 'vinNumber', 'carVin', 'chassisNumber', 'vehicleIdentificationNumber']) {
+      const value = text(record[key]).toUpperCase();
+      if (value) return value;
+    }
+    return '';
+  };
+  const listPlate = plateIdentityKey(list.carNumber), detailPlate = plateIdentityKey(rawDetail.carNumber);
+  const listVin = vinOf(list), detailVin = vinOf(rawDetail);
+  let identityHold = false;
+  if (!detailPlate) { issues.push('NO_DETAIL_IDENTITY'); identityHold = true; }
+  else if (detailPlate !== listPlate || (listVin && detailVin && listVin !== detailVin)) { issues.push('IDENTITY_MISMATCH'); identityHold = true; }
+  const detail: Record<string, unknown> = identityHold ? {} : rawDetail;
   const facts: SourceVehicleFacts = { ruleVersion: SONOGONG_RULE_VERSION, fields: {}, reasons: [] };
   const fact = (key: string, value: unknown, evidence: unknown, state: 'KNOWN' | 'MISSING' | 'REVIEW_REQUIRED', reasons: string[] = []) => {
     const normalizedValue = value === null || value === undefined || typeof value === 'string' || typeof value === 'number'
@@ -69,19 +85,6 @@ export const sonogongNormalizer = (master?: SonogongMasterEvidence) => (raw: Raw
   const plate = plateIdentityKey(list.carNumber);
   if (!plate) issues.push('PLATE_MISSING');
   else if (!isAssignedPlate(plate)) issues.push('PLATE_NOT_ASSIGNED');
-  // 목록과 상세가 «같은 차»임이 확인돼야 상세의 요금·보증금을 붙인다(개발 2 P1). 번호가 같아도 양쪽 차대번호가 다르면 다른 차다.
-  const detailPlate = plateIdentityKey(detail.carNumber);
-  const vinOf = (record: Record<string, unknown>) => {
-    for (const key of ['vin', 'vinNumber', 'carVin', 'chassisNumber', 'vehicleIdentificationNumber']) {
-      const value = text(record[key]).toUpperCase();
-      if (value) return value;
-    }
-    return '';
-  };
-  const listVin = vinOf(list), detailVin = vinOf(detail);
-  let identityHold = false;
-  if (!detailPlate) { issues.push('NO_DETAIL_IDENTITY'); identityHold = true; }
-  else if (detailPlate !== plate || (listVin && detailVin && listVin !== detailVin)) { issues.push('IDENTITY_MISMATCH'); identityHold = true; }
   const modelYear = parseFact('modelYear', list.carManufactureDate, value => {
     const m = text(value).match(/^(?:19|20)?(\d{2})/);
     if (!m) return null;
@@ -109,9 +112,11 @@ export const sonogongNormalizer = (master?: SonogongMasterEvidence) => (raw: Raw
   const images = Array.isArray(detail.images) ? detail.images.filter(object) : [];
   const imageUrls = images.map(image => ({ sortOrder: image.sortOrder ?? null, imageUrl: image.imageUrl ?? null }))
     .sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0));
-  fact('photoUrlPresence', { count: imageUrls.filter(x => typeof x.imageUrl === 'string' && x.imageUrl.trim()).length,
-    hasUrls: imageUrls.some(x => typeof x.imageUrl === 'string' && x.imageUrl.trim()) }, { count: imageUrls.length }, 'KNOWN');
-  fact('rawPolicyOptionReference', 'RAW_ONLY', { carDescriptionPresent: !!text(detail.carDescription), optionsPresent: Array.isArray(detail.options) && detail.options.length > 0 }, 'KNOWN');
+  if (!identityHold) {
+    fact('photoUrlPresence', { count: imageUrls.filter(x => typeof x.imageUrl === 'string' && x.imageUrl.trim()).length,
+      hasUrls: imageUrls.some(x => typeof x.imageUrl === 'string' && x.imageUrl.trim()) }, { count: imageUrls.length }, 'KNOWN');
+    fact('rawPolicyOptionReference', 'RAW_ONLY', { carDescriptionPresent: !!text(detail.carDescription), optionsPresent: Array.isArray(detail.options) && detail.options.length > 0 }, 'KNOWN');
+  }
 
   const specs: VehicleIdentitySpecs = {};
   if (facts.fields.fuel?.state === 'KNOWN' && typeof facts.fields.fuel.value === 'string') specs.fuel = facts.fields.fuel.value;
