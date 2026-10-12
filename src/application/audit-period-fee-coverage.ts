@@ -157,3 +157,35 @@ export function redactMismatchKeys(mismatchKeys: string[], salt: string) {
     return [createHash('sha256').update(`${salt}:${plate}`).digest('hex').slice(0, 12), ...rest].join('|');
   });
 }
+
+type LookupStatus = 'OK' | 'OK_ENGINE_ONLY_NOT_IN_LEDGER' | 'NOT_LISTABLE' | 'NO_PRICE_ROWS' | 'PRODUCT_NOT_FOUND';
+
+const label = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : null);
+
+/** 차량번호(또는 끝 4자리) 하나로 «왜 이 표가 나오는지»까지 돌려준다 — 빈 배열만 주지 않는다. */
+export function lookupFeeWithReason(inputs: FeeCoverageInputs, ledgerRows: PeriodFeeLedgerRow[], plateOrLast4: string) {
+  const keys = Object.keys(inputs.products).filter(key => key === plateOrLast4 || (plateOrLast4.length === 4 && key.endsWith(plateOrLast4)));
+  if (!keys.length) return [{ plateLast4: plateOrLast4.slice(-4), status: 'PRODUCT_NOT_FOUND' as LookupStatus, reason: '프리패스 데이터 상품에 없는 번호', rows: [] }];
+  return keys.sort().map((key) => {
+    const product = inputs.products[key]!;
+    const base = {
+      plateLast4: key.slice(-4),
+      supplierId: label(product.provider_company_code),
+      carName: [label(product.maker), label(product.model), label(product.sub_model)].filter(Boolean).join(' ') || null,
+    };
+    if (product.listable !== true) return { ...base, status: 'NOT_LISTABLE' as LookupStatus, reason: '판매 중 상품이 아님(listable 아님)', rows: [] };
+    const projected = buildKakaoCatalogReferenceProduct(key, product, {}, inputs.policies, inputs.observedAt);
+    if (!projected || !projected.offers.some(offer => offer.priceTerms.length)) {
+      return { ...base, status: 'NO_PRICE_ROWS' as LookupStatus, reason: '판매 중이나 가격 행 없음(공급사 코드·가격 칸 확인 필요)', rows: [] };
+    }
+    const ledger = lookupFeeTable(ledgerRows, key);
+    if (ledger.length) return { ...base, status: 'OK' as LookupStatus, reason: '장부(박제 시점) 기준', rows: ledger };
+    const plan = planPeriodFeeLedger({ products: { [key]: product }, policies: inputs.policies, newCarTrim: inputs.newCarTrim, previousSnapshot: null }, { clock: () => new Date(inputs.observedAt) });
+    return {
+      ...base,
+      status: 'OK_ENGINE_ONLY_NOT_IN_LEDGER' as LookupStatus,
+      reason: '장부에 없음(첫 박제 뒤 들어온 상품) — 지금 엔진 계산값',
+      rows: lookupFeeTable(plan.rows, key),
+    };
+  });
+}

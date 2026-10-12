@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { buildFeeCoverageAudit, lookupFeeTable, redactMismatchKeys, sampleFeeAuditPlates } from '../application/audit-period-fee-coverage.js';
+import { buildFeeCoverageAudit, lookupFeeWithReason, redactMismatchKeys, sampleFeeAuditPlates } from '../application/audit-period-fee-coverage.js';
 import { createPeriodFeeCoverageRuntime } from './data-access-runtime.js';
 import { writePrivateArtifact } from './ingest-shared-sheet-canonical.js';
 
@@ -11,7 +11,7 @@ export async function main() {
   const lookupArg = process.argv[2] === 'lookup' ? process.argv[3]?.trim() : undefined;
   const ledgerRows = await runtime.readActiveLedgerRows();
   if (lookupArg) {
-    console.log(JSON.stringify(lookupFeeTable(ledgerRows, lookupArg), null, 2));
+    console.log(JSON.stringify(lookupFeeWithReason(await runtime.readInputs(), ledgerRows, lookupArg), null, 2));
     return;
   }
   const outDir = process.env.PERIOD_FEE_COVERAGE_OUT_DIR?.trim();
