@@ -157,10 +157,15 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     const confirmation = { source: '공급사 확인', at: '2026-10-10T12:00:00+09:00', text: '무보증' };
     const base = { provider_company_code: 'RP004', product_type: '중고렌트',
       원문: { 전체: { 단기보증: '1,000,000' } } };
-    for (const patch of [{ deposit_free_confirmation: confirmation }, { deposit_note: '무보증' }, { deposit_free: true }]) {
+    for (const patch of [{ deposit_free_confirmation: confirmation }, { deposit_note: '무보증' }, { deposit_free: true }, { deposit_free: 'true' }, { deposit_free: '예' }]) {
       expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct({ ...base, ...patch }, 0, {
         termMonths: 12, monthlyRent: 500000,
       }))).toMatchObject({ state: 'UNKNOWN', amount: null });
+    }
+    for (const deposit_free of [false, '아니오', '아님', '불가', 'N']) {
+      expect(resolveDepositWithRuleNote(depositEvidenceInputFromProduct({ ...base, deposit_free }, 0, {
+        termMonths: 12, monthlyRent: 500000,
+      }))).toMatchObject({ state: 'KNOWN', amount: 1000000, reason: 'SOURCE_RAW_AMOUNT' });
     }
   });
   it('accepts exact won-unit raw warranty amounts but keeps manwon shorthand UNKNOWN', () => {
@@ -235,6 +240,12 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     const products = {
       rawShort: { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', 원문: { 전체: { 단기보증: '1,000,000' } },
         price: { '12': { rent: 500000, deposit: 0 } } },
+      'TEST-FAKE-109호1780': { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', deposit_free: false, 원문: { 전체: { 단기보증: '1,000,000' } },
+        price: { '12': { rent: 500000, deposit: 0 } } },
+      'TEST-FAKE-109호3432': { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', deposit_free: 'N', 원문: { 전체: { 장기보증: '500,000' } },
+        price: { '48': { rent: 500000, deposit: 0 } } },
+      'TEST-FAKE-conflicting-waiver-note': { listable: true, provider_company_code: 'RP032', product_type: '중고렌트', deposit_note: '무보증', 원문: { 전체: { 단기보증: '1,000,000' } },
+        price: { '12': { rent: 500000, deposit: 0 } } },
       noWaiver: { listable: true, provider_company_code: 'RP004', product_type: '중고렌트',
         price: { '24': { rent: 500000, deposit: 0 } } },
       forbidden: { listable: true, provider_company_code: 'RP012', product_type: '중고구독',
@@ -242,8 +253,9 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
     };
     const audit = buildZeroDepositCandidateAudit({ products, expectedProductIds: ['rawShort', 'missingProduct'], readAt: '2026-10-12T00:00:00.000Z' });
     expect(audit.publicSummary.countsByReason).toMatchObject({
-      RAW_AMOUNT_NOT_REFLECTED: 1,
+      RAW_AMOUNT_NOT_REFLECTED: 3,
       ZERO_OR_MISSING_WITHOUT_WAIVER_EVIDENCE: 1,
+      CONFLICTING_ZERO_DEPOSIT_EVIDENCE: 1,
       ZERO_DEPOSIT_FORBIDDEN_BY_PRODUCT_POLICY: 1,
       PRODUCT_DOC_MISSING: 1,
     });
@@ -255,6 +267,21 @@ describe('deposit evidence never promotes a placeholder to waiver', () => {
       productId: 'rawShort',
       questionTemplateId: null,
       rawDepositAmount: 1000000,
+    });
+    expect(audit.report.details.find(row => row.productId === 'TEST-FAKE-conflicting-waiver-note')).toMatchObject({
+      classification: 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE',
+      questionTemplateId: 'conflicting-zero-deposit-evidence',
+      rawDepositAmount: 1000000,
+    });
+    expect(audit.report.details.find(row => row.productId === 'TEST-FAKE-109호1780')).toMatchObject({
+      classification: 'RAW_AMOUNT_NOT_REFLECTED',
+      questionTemplateId: null,
+      rawDepositAmount: 1000000,
+    });
+    expect(audit.report.details.find(row => row.productId === 'TEST-FAKE-109호3432')).toMatchObject({
+      classification: 'RAW_AMOUNT_NOT_REFLECTED',
+      questionTemplateId: null,
+      rawDepositAmount: 500000,
     });
   });
 

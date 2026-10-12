@@ -103,7 +103,14 @@ export function buildZeroDepositCandidateAudit(input: ZeroDepositAuditInput) {
       if (!normalizeErp5CompatibilityInteger(row.rent)) continue;
       const parsed = parseErp5CompatibilityPriceKey(termKey);
       const rawDepositAmount = rawAmountForTerm(product, parsed?.months);
-      if (rawDepositAmount !== undefined && zeroLike(row.deposit)) {
+      const evidence = product.provider_company_code === 'RP031'
+        ? readIancarPublishedDeposit(product, termKey, readAt)
+        : resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
+          termMonths: parsed?.months,
+          monthlyRent: normalizeErp5CompatibilityInteger(row.rent),
+          hasPositivePaidDeposit,
+        }));
+      if (rawDepositAmount !== undefined && zeroLike(row.deposit) && evidence.state === 'KNOWN' && evidence.reason === 'SOURCE_RAW_AMOUNT') {
         details.push({
           productId,
           termKey,
@@ -117,13 +124,6 @@ export function buildZeroDepositCandidateAudit(input: ZeroDepositAuditInput) {
         });
         continue;
       }
-      const evidence = product.provider_company_code === 'RP031'
-        ? readIancarPublishedDeposit(product, termKey, readAt)
-        : resolveDepositWithRuleNote(depositEvidenceInputFromProduct(product, row.deposit, {
-          termMonths: parsed?.months,
-          monthlyRent: normalizeErp5CompatibilityInteger(row.rent),
-          hasPositivePaidDeposit,
-        }));
       const classification = questionReason(evidence.reason, row.deposit);
       if (!classification) continue;
       const template = ZERO_DEPOSIT_QUESTION_TEMPLATES[classification];

@@ -123,8 +123,8 @@ function hasAnyDepositWaiverOrConflictEvidence(input: Parameters<typeof resolveD
   const zeroEvidence = assessDepositEvidence({ ...input, sourceAmount: 0 });
   if (zeroEvidence.state === 'ZERO') return true;
   if (zeroEvidence.reason === 'CONFLICTING_ZERO_DEPOSIT_EVIDENCE' || zeroEvidence.reason === 'INVALID_OR_INCOMPLETE_ZERO_DEPOSIT_EVIDENCE') return true;
-  return input.depositFree === true || input.depositFree === '예'
-    || input.depositFree === false || input.depositFree === '아니오' || input.depositFree === '아님' || input.depositFree === '불가'
+  const depositFreeText = typeof input.depositFree === 'string' ? input.depositFree.trim().toLowerCase() : '';
+  return input.depositFree === true || ['true', '예', '무보증', 'y', 'yes'].includes(depositFreeText)
     || input.depositFreeConfirmation !== undefined;
 }
 
