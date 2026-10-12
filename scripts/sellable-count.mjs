@@ -21,6 +21,7 @@ const l4 = p => key(p).slice(-4);
 const spec = JSON.parse(readFileSync(join(ROOT, 'contracts', 'supplier-input-sheet-spec.v1.json'), 'utf8'));
 // 대표 기준(2026-10-12): 공통 시트 공급사 탭(«종합» 제외)에서 차량상태 «출고불가»만 빼고 전부 판매 가능
 const F05_SELLABLE = st => st !== '출고불가';
+const COMPANY_ALIAS = { 경진렌트: '경진', 경진렌트카: '경진' }; // 시트 표기 → 규격 회사명
 const NAMES = { RP004: '아이카', RP031: '이안카', RP012: '손오공', RP023: '오토플러스', RP006: '아이언' };
 for (const x of spec.supplierChannels.sharedInputSheet) NAMES[x.code] ??= `${x.tab}${x.tab !== x.companyName ? '/' + x.companyName : ''}`;
 
@@ -87,15 +88,19 @@ if (process.env.FREEPASS_SHEET_F05_ID) {
     if (v.length >= 1500) blockers.push(`F05_TAB_ROW_LIMIT:${tab}`); // 읽기 상한에 닿으면 불완전
     const ix = Object.fromEntries((v[0] ?? []).map((h, i) => [h, i])); if (ix['차량번호'] == null || ix['차량상태'] == null) { blockers.push(`F05_TAB_HEADER_MISSING:${tab}`); continue; } // 차량상태 머리글이 없으면 전 줄이 빈 상태 = 판매 가능으로 오인된다
     const g = (r, k) => String(r[ix[k]] ?? '').trim(), shared = sup.filter(x => x.tab === tab).length > 1;
+    if (shared && ix['회사명'] == null) { blockers.push(`F05_SHARED_TAB_COMPANY_COLUMN_MISSING:${tab}`); continue; }
+    const companyOf = r => COMPANY_ALIAS[g(r, '회사명')] ?? g(r, '회사명');
+    const known = new Set(sup.filter(x => x.tab === tab).map(x => x.companyName));
+    if (shared) for (const r of v.slice(1)) if (g(r, '차량번호') && !known.has(companyOf(r))) { blockers.push(`F05_UNKNOWN_COMPANY:${tab}`); break; }
     for (const [ri, r] of v.slice(1).entries()) {
       const rowHidden = hiddenRows.get(tab)?.has(ri + 2) === true;
       const plate = key(g(r, '차량번호')); if (!plate) continue;
       if (rowHidden) { globalThis.__hiddenPlateRows ??= {}; globalThis.__hiddenPlateRows[tab] = (globalThis.__hiddenPlateRows[tab] ?? 0) + 1; }
       if (!/\d{2,3}[가-힣]\d{4}/.test(plate)) { // «신차» 같은 번호 미배정 줄은 차량번호 대조에서 빼고 따로 센다(판매 후보면 지휘통제실 숫자에는 들어간다)
-        const c0 = (sup.find(x => x.tab === tab && (!shared || x.companyName === g(r, '회사명'))) ?? sup.find(x => x.tab === tab)).code;
+        const c0 = (sup.find(x => x.tab === tab && (!shared || x.companyName === companyOf(r))) ?? sup.find(x => x.tab === tab)).code;
         const o0 = (src[c0] ??= { set: new Set(), all: new Set(), 읽힘: true, 비고: '공통 시트: 출고불가 제외 전부' }); if (f05RowSellable({ status: g(r, '차량상태'), hidden: rowHidden })) { o0.미배정 = (o0.미배정 ?? 0) + 1; o0.lines = (o0.lines ?? 0) + 1; } continue;
       }
-      const code = (sup.find(x => x.tab === tab && (!shared || x.companyName === g(r, '회사명'))) ?? sup.find(x => x.tab === tab)).code;
+      const code = (sup.find(x => x.tab === tab && (!shared || x.companyName === companyOf(r))) ?? sup.find(x => x.tab === tab)).code;
       const o = (src[code] ??= { set: new Set(), all: new Set(), 읽힘: true, 비고: '공통 시트: 출고불가·숨긴 줄 제외 전부' });
       o.all.add(plate); const st = g(r, '차량상태'); if (f05RowSellable({ status: st, hidden: rowHidden })) o.lines = (o.lines ?? 0) + 1; (dist[code] ??= {})[st || '(빈칸)'] = ((dist[code] ??= {})[st || '(빈칸)'] || 0) + 1;
       if (f05RowSellable({ status: st, hidden: rowHidden })) o.set.add(plate);

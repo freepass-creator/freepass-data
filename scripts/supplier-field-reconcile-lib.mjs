@@ -46,7 +46,7 @@ function aliased(field, v) {
 export function classifyField(rawV, dataV, field) {
   const re = isEmpty(rawV), de = isEmpty(dataV);
   if (re && de) return 'BOTH_EMPTY';
-  if (de && depositAlias(field, rawV) === '0') return 'MATCH'; // 원천 «무보증» = 데이터 보증금 없음
+  if (de && depositAlias(field, rawV) === '0') return 'EMPTY_IN_DATA'; // 원천 «무보증»인데 데이터가 빈칸(미확정)이면 확정 0원과 같게 보지 않는다
   if (de) return 'EMPTY_IN_DATA';
   if (re) return 'EMPTY_IN_RAW';
   if (exact(rawV) === exact(dataV)) return 'MATCH';

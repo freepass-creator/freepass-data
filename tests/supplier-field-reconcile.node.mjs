@@ -51,7 +51,8 @@ import { makeCauseClassifier, rawAnomaly } from '../scripts/supplier-field-recon
 test('별칭·무보증은 일치로 본다', () => {
   assert.equal(classifyField('HEV', '하이브리드', 'fuel_type'), 'FORMAT_ONLY');
   assert.equal(classifyField('검정색', '블랙', 'ext_color'), 'FORMAT_ONLY');
-  assert.equal(classifyField('무보증', '', 'price.48.deposit'), 'MATCH');
+  assert.equal(classifyField('무보증', '', 'price.48.deposit'), 'EMPTY_IN_DATA'); // 미확정을 확정 0원과 같게 보지 않는다
+  assert.equal(classifyField('무보증', 0, 'price.48.deposit'), 'FORMAT_ONLY');
   assert.equal(classifyField('무보증', 2000000, 'price.48.deposit'), 'VALUE_DIFF');
 });
 test('원인 분류: 저장된 원문이 원천과 다르면 수집 지연, 같으면 정제 오류', () => {

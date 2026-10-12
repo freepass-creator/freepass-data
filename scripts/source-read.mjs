@@ -111,6 +111,7 @@ async function readIron() {
       let url = `https://ironrentcar.com/vehicles?condition=${cond}`; const seen = new Set();
       while (url && seen.size < 10 && !seen.has(url)) {
         seen.add(url); const html = await get(url);
+        if (seen.size === 1 && !/<article\b/.test(html)) return { ok: false, reason: `아이언 «${cond}» 첫 목록 페이지에서 차량을 한 건도 읽지 못함(점검 페이지·구조 변경 의심)` }; // fail-closed
         for (const a of html.matchAll(/<article\b[^>]*>[\s\S]*?<\/article>/g)) { const id = a[0].match(/href="\/vehicles\/([^"?/#]+)/)?.[1]; if (id) items.push({ id, cond, sold: /rental-product-card--sold/.test(a[0]) }); }
         const more = html.match(/<a[^>]*href="([^"]+)"[^>]*>\s*더보기\s*<\/a>/)?.[1];
         url = more ? new URL(more.replace(/&amp;/g, '&'), 'https://ironrentcar.com').href : null;
@@ -147,6 +148,7 @@ function readAutoplus(products) {
   let hp = null;
   if (opt('homepage-plates') && existsSync(opt('homepage-plates'))) hp = new Set(readFileSync(opt('homepage-plates'), 'utf8').split(/\r?\n/).map(s => s.trim()).filter(Boolean));
   if (!sheetId && !hp) return { ok: false, reason: '시트 주소와 홈페이지 목록이 모두 없음' };
+  if (hp && [...hp].filter(x => /\d{2,3}[가-힣]\d{4}/.test(x)).length < 10) return { ok: false, reason: '오토플러스 홈페이지 목록이 비정상적으로 작음(번호 형식 10건 미만) — 재읽기 필요' }; // fail-closed
   if (notes.some(n => /읽기 실패/.test(n))) return { ok: false, reason: `오토플러스 시트 읽기 불완전(${notes.join(',')}) — 재읽기 필요` }; // fail-closed
   const all = new Set([...plates, ...(hp ?? [])]);
   return { ok: true, readAt: new Date().toISOString(), records: [...all].map(p => ({ plate: p, 원천: [plates.has(p) ? '시트' : null, hp?.has(p) ? '홈페이지' : null].filter(Boolean).join('+'), raw: {} })),
@@ -160,6 +162,7 @@ const BLOCKED = { RP012: { ok: false, reason: '손오공 ERP 계정이 이 PC·f
 function findSourceRecord(records, prod, plate4) {
   if (prod) return records.find(r => plateKey(r.plate) === plateKey(prod.car_number)) ?? null;
   const m = records.filter(r => last4(r.plate) === plate4);
+  if (m.length > 1) return { ambiguous: m.length };
   return m.length === 1 ? m[0] : null;
 }
 function ianSingle(plate4, exactPlate) {
@@ -201,6 +204,7 @@ async function compareOne(c, plate4, idx = 0) {
   } else if (c === 'RP004' || c === 'RP006') {
     const res = await readSupplier(c, products); if (!res.ok) return { ok: false, reason: res.reason };
     readAt = res.readAt; const hit = findSourceRecord(res.records, prod, plate4);
+    if (hit?.ambiguous) return { ok: true, readAt, 식별불가: `끝 4자리가 같은 원천 차량 ${hit.ambiguous}대 — 번호 전체가 필요(부재로 판정하지 않음)` };
     if (!hit) return { ok: true, readAt, 원천에없음: true, 데이터있음: !!prod, 데이터: prod ? { 상태: prod.status, 판매중: prod.listable === true } : null };
     row('상태', hit.상태, prod?.status_label_raw, hit.상태 ? (prod?.listable ? '데이터 판매중' : '데이터 판매 아님') : undefined);
     row('연료', hit.연료, prod?.fuel_type); row('주행거리', hit.주행거리, prod?.mileage); row('외장', hit.외장, prod?.ext_color);
@@ -210,6 +214,7 @@ async function compareOne(c, plate4, idx = 0) {
   } else if (c === 'RP023') {
     const res = await readSupplier(c, products); if (!res.ok) return { ok: false, reason: res.reason };
     readAt = res.readAt; const hit = findSourceRecord(res.records, prod, plate4);
+    if (hit?.ambiguous) return { ok: true, readAt, 식별불가: `끝 4자리가 같은 원천 차량 ${hit.ambiguous}대 — 번호 전체가 필요(부재로 판정하지 않음)` };
     if (res.partial) return { ok: true, readAt, 판정: '홈페이지 목록 없음 — 부재 판정 불가(시트만으로는 공개 보류를 판단하지 않는다)', 원천: hit?.원천 ?? null, note: res.note };
     return { ok: true, readAt, 원천에있음: !!hit, 원천: hit?.원천 ?? null, 데이터: prod ? { 상태: prod.status, 사유: prod.status_reason, 판매중: prod.listable === true } : null,
       판정: hit ? (prod?.listable ? '원천에 있고 데이터 판매중' : '원천에 있으나 데이터 판매 아님') : (prod?.listable ? '원천(시트+홈페이지)에 없는데 데이터 판매중 → 공개 보류 후보' : '원천에 없고 데이터도 판매 아님'), note: res.note };
@@ -262,10 +267,11 @@ if (cmd === 'status') {
   const r = await compareOne(code, opt('plate4'), i);
   if (!r.ok) { console.error(`막힘: ${r.reason}`); process.exit(3); }
   const tag = n > 1 ? ` (끝4자리 같은 상품 ${i + 1}/${n}: ${(products.filter(p => (p.provider_company_code || p.partner_code) === code && last4(p.car_number) === opt('plate4'))[i]?.model ?? '?')})` : '';
+  const mlog = (...a) => console.log(maskPlates(a.map(x => (typeof x === 'string' ? x : JSON.stringify(x, null, 1))).join(' ')));
   if (argv.includes('--json')) console.log(maskPlates(r));
   else if (r.항목) {
-    console.log(`[${NAMES[code]} …${opt('plate4')}]${tag} 원천 읽은 시각 ${r.readAt} · 데이터 마지막 반영 ${r.데이터마지막반영 ?? '-'} · 마지막 폴링 ${r.데이터마지막폴링 ?? '-'} · 차이 ${r.차이건수}건${r.note ? ' · ' + r.note : ''}`);
-    console.log('항목 | 원천(정답) | 프리패스 데이터 | 판정'); for (const x of r.항목) console.log([x.항목, x.원천, x.데이터, x.판정].join(' | '));
-  } else console.log(tag, JSON.stringify(r, null, 1));
+    mlog(`[${NAMES[code]} …${opt('plate4')}]${tag} 원천 읽은 시각 ${r.readAt} · 데이터 마지막 반영 ${r.데이터마지막반영 ?? '-'} · 마지막 폴링 ${r.데이터마지막폴링 ?? '-'} · 차이 ${r.차이건수}건${r.note ? ' · ' + r.note : ''}`);
+    mlog('항목 | 원천(정답) | 프리패스 데이터 | 판정'); for (const x of r.항목) mlog([x.항목, x.원천, x.데이터, x.판정].join(' | '));
+  } else mlog(tag, r);
   }
 } else { console.error('사용: compare <공급사코드> --plate4 XXXX | status | status | read <공급사코드> [--plate4 XXXX|--summary] [--out 파일]'); process.exit(2); }

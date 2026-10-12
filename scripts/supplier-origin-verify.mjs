@@ -50,15 +50,19 @@ function readTab(tab, sheetId = F05) {
 }
 
 // 탭 머리글 행 + 데이터 행 → 대조용 원본 레코드(칸 이름은 프리패스 데이터 기준). companyName 이 있으면 회사명 칸으로 거른다.
-export function f05Records(values, companyName) {
+const COMPANY_ALIAS = { 경진렌트: '경진', 경진렌트카: '경진' }; // 시트 표기 → 규격 회사명
+export function f05Records(values, companyName, allowedCompanies = null) {
   const [head = [], ...rows] = values;
   if (!head.includes('차량번호')) throw new Error('TAB_HEADER_MISSING'); // fail-closed: 머리글이 없으면 빈 배열로 «원천 0대» 처리하지 않는다
   const idx = Object.fromEntries(head.map((h, i) => [h, i]));
   const get = (r, h) => (idx[h] == null ? '' : (r[idx[h]] ?? ''));
   const out = [];
+  if (companyName && idx['회사명'] == null) throw new Error('SHARED_TAB_COMPANY_COLUMN_MISSING'); // fail-closed
   for (const r of rows) {
     if (!String(get(r, '차량번호')).trim()) continue;
-    if (companyName && String(get(r, '회사명')).trim() !== companyName) continue;
+    const co = COMPANY_ALIAS[String(get(r, '회사명')).trim()] ?? String(get(r, '회사명')).trim();
+    if (companyName && allowedCompanies && !allowedCompanies.has(co)) throw new Error('F05_UNKNOWN_COMPANY'); // 미등록 회사명 행을 조용히 버리지 않는다
+    if (companyName && co !== companyName) continue;
     const rec = {};
     for (const [h, f] of Object.entries(HEADER_TO_FIELD)) rec[f] = get(r, h);
     for (const [h, p] of Object.entries(PERIODS)) {
@@ -222,7 +226,7 @@ async function main() {
     if (!t.rawJson && !t.aica) {
       if (!tabCache.has(t.tab)) tabCache.set(t.tab, readTab(t.tab));
       const sharedTab = f05Suppliers().filter(x => x.tab === t.tab).length > 1;
-      raw = f05Records(tabCache.get(t.tab), sharedTab ? t.companyName : undefined);
+      raw = f05Records(tabCache.get(t.tab), sharedTab ? t.companyName : undefined, sharedTab ? new Set(f05Suppliers().filter(x => x.tab === t.tab).map(x => x.companyName)) : null);
     }
     const data = products.filter(p => (p.provider_company_code || p.partner_code) === t.code).map(d => ({ ...flatten(d), ...Object.fromEntries(fields.map(f => [f, pick(d, f)])) }));
     const rawPlates = new Set(raw.map(r => String(r.car_number).replace(/\s+/g, '')));
