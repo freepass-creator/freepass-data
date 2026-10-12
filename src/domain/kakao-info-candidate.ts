@@ -162,9 +162,12 @@ function candidateStringValues(input: KakaoInfoCandidateInput) {
 function exceedsResidualDigitBudget(values: string[]) {
   let digits = 0;
   let concat = '';
-  const stripped = (match: string) => { concat += match.replace(/\D/g, ''); return ' '; };
+  let local = '';
+  // 가려진 금액·단위 숫자는 «그 칸 안에서만» 이어붙여 검사한다(칸을 가로지르면 정상 금액이 우연히 번호 모양이 된다).
+  const stripped = (match: string) => { local += match.replace(/\D/g, ''); return ' '; };
   for (const raw of values) {
     let text = raw;
+    local = '';
     // 한 칸 안의 숫자는 번호판 모양을 제외하고 순서 그대로도 검사한다(글자를 사이에 끼워 쪼개는 우회 차단).
     const validDate = /(?<!\d)(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?:T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.?\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?!\d|T)/g;
     for (const part of raw.replace(validDate, '|').replace(/(?<!\d)(?!0\d\d[가-힣 ])\d{2,3}[ \t-]*[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호][ \t-]*\d{4}(?!\d|[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호]\d)/g, '|').split('|')) {
@@ -174,11 +177,13 @@ function exceedsResidualDigitBudget(values: string[]) {
     text = text.replace(/(?<!\d)(?!0\d\d[가-힣 ])\d{2,3}[ \t-]*[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호][ \t-]*\d{4}(?!\d|[가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호]\d)/g, ' ');
     text = text.replace(/\d{4}-\d{2}-\d{2}(?:T[0-9:.]+Z?)?/g, ' ')
       .replace(/(?<![\d,])\d{1,3}(?:,\d{3}){1,2}(?![\d,])\s*원?/g, stripped)
-      .replace(/(?<!\d)\d{1,9}\s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%)/g, stripped);
+      .replace(/(?<!\d)\d{1,9}(?:\s*[~∼-]\s*\d{1,9})?\s*(?:만원|만|천원|원|개월|월|일|km|㎞|대|건|%|세|살|명|인|년|회|번|배)/g, stripped);
     for (const run of text.match(/\d+/g) ?? []) {
       concat += run;
+      local += run;
       if (run.length <= 5 || run.length >= 10) digits += run.length;
     }
+    if (/01[016789]\d{7,8}/.test(local) || /\d{6}[1-4]\d{6}/.test(local)) return true;
   }
   if (/01[016789]\d{7,8}/.test(concat) || /\d{6}[1-4]\d{6}/.test(concat)) return true;
   return digits >= 8;
@@ -245,7 +250,7 @@ function collectUnknownFields(input: KakaoInfoCandidateInput) {
 
 function isValidRoomCode(value: string) {
   const trimmed = value.trim();
-  if (!/^K-[A-Z0-9]{3,12}$/.test(trimmed)) return false;
+  if (!/^K-[A-Za-z0-9]{3,12}$/.test(trimmed)) return false;
   const suffix = trimmed.slice(2);
   if (/^\d{10,}$/.test(suffix)) return false;
   if ((suffix.match(/\d/g) ?? []).length > 6) return false;

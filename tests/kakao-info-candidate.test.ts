@@ -142,6 +142,17 @@ describe('KakaoInfoCandidate/v1 validation', () => {
       expect(createKakaoInfoCandidate(base({ fields: { ...base().fields, 값: v } }))).toEqual({ ok: false, reason: 'PII_DETECTED' });
     }
   });
+  it('accepts lowercase hex room codes like the real collection ones', () => {
+    expect(createKakaoInfoCandidate(base({ roomCode: 'K-59ca74' })).ok).toBe(true);
+    expect(createKakaoInfoCandidate(base({ roomCode: 'K-d5b7fe' })).ok).toBe(true);
+  });
+  it('allows natural insurance and age wording with ranges and units', () => {
+    const r = createKakaoInfoCandidate(base({
+      source: { ...base().source, excerpt: '만26세이상 대인,대물 30만원 / 자차면책금 50~100만원 차량수리비가액 30%입니다.' },
+      fields: { 항목: '조건', 요약: '대인·대물 30만원 / 자차면책금 50~100만원 / 차량수리비 30%', 값: '만26세이상 50~100만원' },
+    }));
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+  });
   it('rejects phone-like digit-heavy room codes', () => {
     expect(createKakaoInfoCandidate(base({ roomCode: 'K-010A12345678' }))).toEqual({ ok: false, reason: 'INVALID_ROOM_CODE' });
   });
