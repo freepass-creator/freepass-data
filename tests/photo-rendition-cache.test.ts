@@ -72,7 +72,7 @@ describe('게이트웨이: 캐시 적중은 원천(ONE)을 건너뛰고 DB 재�
   const build = async () => {
     const jpeg = await sharp({ create: { width: 1200, height: 900, channels: 3, background: '#778899' } }).jpeg().toBuffer();
     let sourceCalls = 0, metadataCalls = 0, dbReads = 0, clock = 1_000_000;
-    let albumCount = 3, sourceError: Error | undefined, failNextMetadata = false;
+    let albumCount = 3, sourceError: Error | undefined, failNextMetadata = false, repIndex = 1;
     let current: Record<string, unknown> = { ...product };
     const source: VehiclePhotoSource = {
       eligible: () => true, connection: () => 'c',
@@ -81,6 +81,12 @@ describe('게이트웨이: 캐시 적중은 원천(ONE)을 건너뛰고 DB 재�
         if (index === undefined && failNextMetadata) { failNextMetadata = false; throw new Error('IANCAR_ONE_API_HTTP_404'); }
         if (index !== undefined) sourceCalls++; else metadataCalls++;
         const ids = IDS.slice(0, albumCount);
+        if (albumCount === 3) {   // 대표 사진 위치(repIndex)에 따라 제공 순서가 달라지는 앨범 — ID 는 그대로 두고 구성만 바꾼다
+          const upstream = [IDS[1]!, IDS[0]!, IDS[2]!];
+          const ordinals = [repIndex, ...[0, 1, 2].filter(o => o !== repIndex)];
+          return { count: 3, photoIds: ordinals.map(o => upstream[o]!), upstreamPhotoIds: upstream, upstreamRepresentatives: [0, 1, 2].map(o => o === repIndex), servingSourceOrdinals: ordinals,
+            bytes: index === undefined ? null : jpeg, contentType: index === undefined ? 'application/json' : 'image/jpeg' };
+        }
         return { count: albumCount, photoIds: ids, upstreamPhotoIds: [ids[1]!, ids[0]!, ids[2]!].filter(Boolean), upstreamRepresentatives: [false, true, false].slice(0, albumCount), servingSourceOrdinals: [1, 0, 2].slice(0, albumCount),
           bytes: index === undefined ? null : jpeg, contentType: index === undefined ? 'application/json' : 'image/jpeg' };
       },
@@ -89,7 +95,7 @@ describe('게이트웨이: 캐시 적중은 원천(ONE)을 건너뛰고 DB 재�
     const app = createConsumerGateway(new MemoryDataStore(), [binding], new DataAccessGateway(new MemoryDataAccessLogStore()), undefined,
       { read: async () => { throw new Error('unused'); }, readVehiclePhoto } as never);
     return { app, set: (next: Record<string, unknown>) => { current = next; }, advance: (ms: number) => { clock += ms; },
-      setAlbumCount: (n: number) => { albumCount = n; }, failNextMetadata: () => { failNextMetadata = true; }, setSourceError: (e: Error | undefined) => { sourceError = e; },
+      setAlbumCount: (n: number) => { albumCount = n; }, setRepresentative: (i: number) => { repIndex = i; }, failNextMetadata: () => { failNextMetadata = true; }, setSourceError: (e: Error | undefined) => { sourceError = e; },
       calls: () => ({ sourceCalls, metadataCalls, dbReads }) };
   };
   it('첫 요청은 원천을 읽고, 같은 상품·순번·크기 재요청은 원천을 읽지 않으며 HIT 표시, 바이트 동일, DB 는 다시 읽는다', async () => {
@@ -171,6 +177,19 @@ describe('게이트웨이: 캐시 적중은 원천(ONE)을 건너뛰고 DB 재�
       expect(again.headers['x-photo-cache']).toBeUndefined();
       await app.close();
     }
+  });
+  it('재확인에서 앨범 지문(사진 수·대표 표시·순서)이 캐시를 만들 때와 달라지면(개수는 같아도) 캐시를 쓰지 않는다', async () => {
+    const { app, advance, setRepresentative } = await build();
+    await app.inject({ url: url('/0?size=list'), headers });
+    advance(11 * 60 * 1000);
+    setRepresentative(2);                                                                    // 대표 사진이 바뀜(원천에서 앨범 교체)
+    const res = await app.inject({ url: url('/0?size=list'), headers });
+    expect(res.statusCode).toBe(404);
+    expect(res.headers['x-photo-cache']).toBeUndefined();
+    const again = await app.inject({ url: url('/0?size=list'), headers });                  // 새 지문으로 다시 읽어 서빙
+    expect(again.statusCode).toBe(200);
+    expect(again.headers['x-photo-cache']).toBeUndefined();
+    await app.close();
   });
   it('재확인 중 원천이 일시 오류(503 등)면 캐시 사진을 내보내지 않고 503', async () => {
     const { app, advance, setSourceError } = await build();

@@ -328,9 +328,15 @@ export type VehiclePhotoRead = {
   upstreamRepresentatives?: boolean[]; servingSourceOrdinals?: number[];
 };
 /** 사진 읽기 선택 옵션. renditionCacheLookup: 같은 내용 표지(cacheTag)로 이미 줄여 둔 결과물이 있으면 돌려주는 함수(없으면 undefined). */
+/** 원천 앨범 지문 — 사진 수·대표 표시 패턴·제공 순서. ONE 은 사진 ID 를 호출마다 재발급하므로 ID 는 넣지 않는다.
+ * 캐시를 만들 때의 지문과 재확인 때의 지문이 다르면(앨범 구성·대표 사진·순서 변경) 캐시를 쓰지 않는다. */
+export function iancarAlbumFingerprint(read: { count: number; upstreamRepresentatives?: boolean[]; servingSourceOrdinals?: number[] }): string {
+  return createHash('sha256').update(JSON.stringify([read.count, read.upstreamRepresentatives ?? null, read.servingSourceOrdinals ?? null])).digest('hex');
+}
+
 export const RENDITION_SOURCE_RECHECK_MS = 10 * 60 * 1000;
 export type VehiclePhotoReadOptions = {
-  renditionCacheLookup?: (cacheTag: string) => { bytes: Buffer; contentType: string; sourceCheckedAt: number } | undefined;
+  renditionCacheLookup?: (cacheTag: string) => { bytes: Buffer; contentType: string; sourceCheckedAt: number; albumFingerprint?: string } | undefined;
   /** 캐시 적중 때 원천 앨범을 다시 확인하는 간격(ms). 기본 RENDITION_SOURCE_RECHECK_MS. */
   renditionSourceRecheckMs?: number;
 };
@@ -468,10 +474,12 @@ export function createVehiclePhotoReader(
               }
               enter('FINAL_MEMBERSHIP');
               if (!currentLayoutValid(album)) { emit('MEMBERSHIP_MISMATCH', 'FINAL_MEMBERSHIP'); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+              // 캐시를 만들 때의 앨범 지문과 달라졌으면(사진 수·대표 표시·순서 변경) 캐시를 쓰지 않는다.
+              if (hit.albumFingerprint !== undefined && iancarAlbumFingerprint(album) !== hit.albumFingerprint) { emit('MEMBERSHIP_MISMATCH', 'FINAL_MEMBERSHIP'); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
               checkedAt = now();
             }
             return { count: registeredPhotoCount, bytes: hit.bytes, contentType: hit.contentType, cacheTag, fromRenditionCache: true as const,
-              sourceCheckedAt: checkedAt, revalidate: async () => !!(await dbStillValid()) };
+              sourceCheckedAt: checkedAt, ...(hit.albumFingerprint !== undefined ? { albumFingerprint: hit.albumFingerprint } : {}), revalidate: async () => !!(await dbStillValid()) };
           }
         }
         let result: VehiclePhotoRead;
@@ -507,7 +515,7 @@ export function createVehiclePhotoReader(
         };
         if (index === undefined) {
           await recheckIds(() => revalidateIds(false));
-          return { count: result.count, bytes: null, contentType: 'application/json', cacheTag, sourceCheckedAt: now(), revalidate: revalidateIds };
+          return { count: result.count, bytes: null, contentType: 'application/json', cacheTag, sourceCheckedAt: now(), albumFingerprint: iancarAlbumFingerprint(result), revalidate: revalidateIds };
         }
         const bytes = result.bytes;
         enter('RESULT_MEDIA');
@@ -516,7 +524,7 @@ export function createVehiclePhotoReader(
           { emit('MEDIA_INVALID', 'RESULT_MEDIA'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
         const frozenBytes = Buffer.from(bytes);
         await recheckIds(() => revalidateIds(false));
-        return { count: result.count, bytes: frozenBytes, contentType: result.contentType, cacheTag, sourceCheckedAt: now(), revalidate: revalidateIds };
+        return { count: result.count, bytes: frozenBytes, contentType: result.contentType, cacheTag, sourceCheckedAt: now(), albumFingerprint: iancarAlbumFingerprint(result), revalidate: revalidateIds };
       } finally { active--; }
     }
     const mediaOnly = consumerId === 'erp5-public-media';

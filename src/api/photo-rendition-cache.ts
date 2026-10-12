@@ -4,7 +4,7 @@
  * 캐시는 «원천 호출»만 건너뛴다. 비공개·철회·삭제·연결·개수 변경 재확인(DB)은 캐시 적중에서도 매 요청 그대로 한다.
  * 한도: 시간(기본 6시간)·전체 바이트(기본 48MiB)·항목 수. 가득 차면 가장 오래 안 쓴 것부터 버린다. 프로세스 메모리에만 있다. */
 export type PhotoRenditionSize = 'list' | 'detail';
-export type PhotoRenditionEntry = { bytes: Buffer; contentType: string; sourceCheckedAt: number };
+export type PhotoRenditionEntry = { bytes: Buffer; contentType: string; sourceCheckedAt: number; albumFingerprint?: string };
 
 export const PHOTO_RENDITION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 export const PHOTO_RENDITION_CACHE_MAX_BYTES = 48 * 1024 * 1024;
@@ -26,7 +26,7 @@ export function createPhotoRenditionCache(options: { ttlMs?: number; maxBytes?: 
       if (!entry) return undefined;
       if (entry.expiresAt <= now()) { remove(k); return undefined; }
       entries.delete(k); entries.set(k, entry);                        // 최근 사용으로 갱신(LRU)
-      return { bytes: Buffer.from(entry.bytes), contentType: entry.contentType, sourceCheckedAt: entry.sourceCheckedAt };
+      return { bytes: Buffer.from(entry.bytes), contentType: entry.contentType, sourceCheckedAt: entry.sourceCheckedAt, ...(entry.albumFingerprint !== undefined ? { albumFingerprint: entry.albumFingerprint } : {}) };
     },
     set(productId: string, index: number, size: PhotoRenditionSize, tag: string, value: PhotoRenditionEntry): void {
       if (!Buffer.isBuffer(value.bytes) || !value.bytes.length || value.bytes.length > maxBytes / 4) return;   // 한 항목이 전체의 1/4 를 넘으면 담지 않는다
@@ -34,7 +34,7 @@ export function createPhotoRenditionCache(options: { ttlMs?: number; maxBytes?: 
       remove(k);
       for (const [other, entry] of entries) if (entry.expiresAt <= now()) remove(other);
       while ((totalBytes + value.bytes.length > maxBytes || entries.size >= maxEntries) && entries.size) remove(entries.keys().next().value!);
-      entries.set(k, { bytes: Buffer.from(value.bytes), contentType: value.contentType, sourceCheckedAt: value.sourceCheckedAt, expiresAt: now() + ttlMs });
+      entries.set(k, { bytes: Buffer.from(value.bytes), contentType: value.contentType, sourceCheckedAt: value.sourceCheckedAt, ...(value.albumFingerprint !== undefined ? { albumFingerprint: value.albumFingerprint } : {}), expiresAt: now() + ttlMs });
       totalBytes += value.bytes.length;
     },
     /** 원천 앨범을 다시 확인했을 때 마지막 확인 시각만 갱신한다(바이트·만료는 그대로). */
