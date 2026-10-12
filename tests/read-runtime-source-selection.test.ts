@@ -10,6 +10,36 @@ const script = section.split('        run: |\n')[1]!.split('\n').map(line => lin
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 
 describe('trusted read runtime source selection', () => {
+  it('stops selected-source publication on failed Linux checks or a mismatched local image', () => {
+    const validation = workflow.split('      - name: Validate selected photo source before publication')[1]!.split('      - name: Authenticate deploy identity')[0]!;
+    const validationScript = validation.split('        run: |\n')[1]!.split('\n').map(line => line.slice(10)).join('\n');
+    const selected = '57abb8a978457b87068c3c9c9d76cc8116934bd5';
+    const tree = '712c286a842dea616e7360b421fdd5e068540a40';
+    const parent = '2ebdb18822416847b2019f6506b7b0d65daf0ee2';
+    const mocks = `git() { case "$1" in rev-parse) if [ "$2" = 'HEAD^{tree}' ]; then echo '${tree}'; else echo '${selected}'; fi;; show) echo '${parent}';; esac; }\n` +
+      `tar() { :; }\n` +
+      `npm() { echo "NPM $*"; if [ "$1" = exec ] && [ "$MOCK_FAILED_CHECK" = true ]; then return 1; fi; }\n` +
+      `docker() { if [ "$1" = image ]; then case "$*" in *Config.Env*) echo '["FREEPASS_DATA_ENTRYPOINT=dist/src/api/consumer-server.js"]';; *) echo "$MOCK_LABEL";; esac; else echo "DOCKER $*"; fi; }\n` +
+      `jq() { cat >/dev/null; }\n`;
+    const dir = mkdtempSync(join(tmpdir(), 'selected-photo-check-'));
+    try {
+      for (const [failed, label, pass] of [['false', selected, true], ['true', selected, false], ['false', 'c'.repeat(40), false]] as const) {
+        const result = spawnSync(bash, ['-s'], { input: mocks + validationScript + '\necho PUBLICATION_ALLOWED\n', encoding: 'utf8', env: {
+          ...process.env, EXPECTED_SOURCE_SHA: selected, WORKFLOW_SOURCE_SHA: 'a'.repeat(40), RUNNER_TEMP: dir,
+          MOCK_FAILED_CHECK: failed, MOCK_LABEL: label, RUNTIME_ENTRYPOINT: 'dist/src/api/consumer-server.js',
+          GITHUB_ENV: '/dev/null', GITHUB_STEP_SUMMARY: '/dev/null',
+        } });
+        expect(result.status === 0, result.stderr).toBe(pass);
+        expect(result.stdout.includes('PUBLICATION_ALLOWED')).toBe(pass);
+        expect(result.stdout).toContain('NPM run test:delivery-owner');
+        expect(result.stdout).toContain('NPM exec -- vitest run tests/vehicle-photo-read-observer.test.ts');
+        expect(result.stdout).not.toContain('docker push');
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+    expect(workflow.indexOf('Validate selected photo source before publication')).toBeLessThan(workflow.indexOf('Authenticate deploy identity'));
+    expect(workflow.indexOf('SELECTED_PHOTO_SOURCE_CHECKED:-false')).toBeLessThan(workflow.indexOf('docker push "$image"'));
+  });
+
   it('accepts default main and an exact ancestor, rejects every untrusted ref before effects', () => {
     const dir = mkdtempSync(join(tmpdir(), 'runtime-source-'));
     const git = (...args: string[]) => {
