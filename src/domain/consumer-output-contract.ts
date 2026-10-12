@@ -228,6 +228,14 @@ export function isPublicIancarPhotoProduct(product: Record<string, unknown> | un
     && typeof product.car_number === 'string' && !!product.car_number.trim();
 }
 
+/** ID 기반 서빙 게이트용: 상품 문서에 등록된 ONE 사진 ID 목록(중복·빈 값 없음, 1~200개). 없으면 게이트 대상 아님. */
+export function idGatePhotoIds(product: Rec | undefined): string[] | undefined {
+  const ids = product?.iancar_one_photo_ids;
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length > 200) return undefined;
+  if (!ids.every(id => typeof id === 'string' && !!id.trim()) || new Set(ids).size !== ids.length) return undefined;
+  return [...ids] as string[];
+}
+
 export type IancarPhotoReviewBinding = { productId: string; vehicleId: string; plate: string; count: number; observedAt: string };
 
 /** Human-supplied review of one fixed ONE album; never synthesized by collection. */
@@ -335,6 +343,8 @@ export function createVehiclePhotoReader(
   approvedPhotoReader?: ApprovedPhotoReader,
   now: () => number = Date.now,
   observer?: VehiclePhotoReadFailureObserver,
+  /** 공급사 코드 허용 목록. 비어 있으면(기본) ID 기반 게이트는 꺼져 있다. 켜진 공급사는 검수 refs 없이도 상품 문서에 등록된 ONE 사진 ID 로만 서빙한다. */
+  idGateSuppliers: ReadonlySet<string> = new Set(),
 ) {
   const cache = new Map<string, { bytes: Buffer; contentType: string; expiresAt: number }>();
   type ReviewedImage = { result: VehiclePhotoRead; expiresAt: number; productId: string; connection: string };
@@ -365,6 +375,7 @@ export function createVehiclePhotoReader(
     },
   };
   const sources = [...(iancarSource ? [iancarSource] : []), approvedSource];
+  const recheckIds = async (check: () => Promise<boolean>) => { if (!await check()) throw new Error('VEHICLE_PHOTO_NOT_FOUND'); };
   return async (consumerId: string, productId: string, index?: number) => {
     // Diagnostic time is independent of the injected cache clock.
     const tick = () => { try { return performance.now(); } catch { return NaN; } };
@@ -386,6 +397,55 @@ export function createVehiclePhotoReader(
     let product: Rec | undefined;
     try { product = await readProduct(productId); } catch (error) { emit('DB_FAILURE'); invalidateReviewed(productId); throw error; }
     enter('INITIAL_GATE');
+    const gateIds = idGatePhotoIds(product);
+    if (iancarSource && product && gateIds && idGateSuppliers.has(String(product.provider_company_code))
+      && isPublicIancarPhotoProduct(product) && !hasVehiclePhotoVerification(product)) {
+      // ID 기반 게이트: 요청 키는 상품 문서에 등록된 ID 뿐이다. 원천 앨범이 등록 집합과 같을 때만 서빙하고 내부 필드는 응답에 싣지 않는다.
+      if (active >= VEHICLE_PHOTO_MAX_CONCURRENT) { emit('SOURCE_BUSY', 'SOURCE_AWAIT'); throw new Error('VEHICLE_PHOTO_BUSY'); }
+      active++;
+      try {
+        enter('SOURCE_AWAIT');
+        let result: VehiclePhotoRead;
+        try { result = await iancarSource.read(product, index, false); }
+        catch (error) {
+          const code = error instanceof Error ? error.message : '';
+          emit(code === 'VEHICLE_PHOTO_BUSY' || code === 'IANCAR_PHOTO_BUSY' ? 'SOURCE_BUSY' : code === 'VEHICLE_PHOTO_NOT_FOUND' || code === 'IANCAR_PHOTO_NOT_FOUND' ? 'SOURCE_NOT_FOUND' : 'SOURCE_UNAVAILABLE');
+          if (code.startsWith('VEHICLE_PHOTO_')) throw error;
+          if (code === 'IANCAR_PHOTO_NOT_FOUND') throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+          if (code === 'IANCAR_PHOTO_BUSY') throw new Error('VEHICLE_PHOTO_BUSY');
+          throw new Error('VEHICLE_PHOTO_UNAVAILABLE');
+        }
+        enter('RESULT_LAYOUT');
+        const served = result.photoIds;
+        if (!Array.isArray(served) || served.length !== gateIds.length || result.count !== gateIds.length
+          || new Set(served).size !== served.length || !served.every(id => gateIds.includes(id))) {
+          emit('MEMBERSHIP_MISMATCH', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_NOT_FOUND');
+        }
+        if (!Number.isSafeInteger(result.count) || result.count < 1 || result.count > 200) { emit('LAYOUT_MISMATCH', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
+        const revalidateIds = async (): Promise<boolean> => {
+          enter('FINAL_DB');
+          let current: Rec | undefined;
+          try { current = await readProduct(productId); } catch { emit('DB_FAILURE'); return false; }
+          enter('FINAL_GATE');
+          const currentIds = idGatePhotoIds(current);
+          const unchanged = !!current && isPublicIancarPhotoProduct(current) && !hasVehiclePhotoVerification(current)
+            && !!currentIds && currentIds.length === gateIds.length && currentIds.every((id, i) => id === gateIds[i]);
+          if (!unchanged) emit('PROOF_CHANGED');
+          return unchanged;
+        };
+        if (index === undefined) {
+          await recheckIds(revalidateIds);
+          return { count: result.count, bytes: null, contentType: 'application/json', revalidate: revalidateIds };
+        }
+        const bytes = result.bytes;
+        enter('RESULT_MEDIA');
+        if (index >= result.count) { emit('SELECTED_MISSING', 'RESULT_LAYOUT'); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }
+        if (validateVehiclePhotoMedia(result.contentType, Buffer.isBuffer(bytes) ? bytes.length : 0, bytes) || !Buffer.isBuffer(bytes))
+          { emit('MEDIA_INVALID', 'RESULT_MEDIA'); throw new Error('VEHICLE_PHOTO_UNAVAILABLE'); }
+        await recheckIds(revalidateIds);
+        return { count: result.count, bytes: Buffer.from(bytes), contentType: result.contentType, revalidate: revalidateIds };
+      } finally { active--; }
+    }
     const mediaOnly = consumerId === 'erp5-public-media';
     // The machine media consumer never falls through to approved Drive or other suppliers.
     if (mediaOnly && !isPublicIancarPhotoProduct(product)) { emit('PUBLIC_INELIGIBLE'); invalidateReviewed(productId); throw new Error('VEHICLE_PHOTO_NOT_FOUND'); }

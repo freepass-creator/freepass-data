@@ -423,7 +423,9 @@ export class FirestoreCatalogCompatibilityReader {
         // Identity and source bytes are supplied here; reviewed ONE binding/hash checks stay in Domain.
         return photoReader(product.iancar_one_vehicle_id as string, product.car_number as string, index, fresh);
       },
-    }, approvedPhotoReader, undefined, options.photoReadFailureObserver);
+    }, approvedPhotoReader, undefined, options.photoReadFailureObserver,
+    // 설정 한 곳(환경변수)에서 끄고 켠다. 비어 있으면 꺼짐. 예: IANCAR_PHOTO_ID_GATE_SUPPLIERS=RP031
+    new Set((process.env.IANCAR_PHOTO_ID_GATE_SUPPLIERS ?? '').split(',').map(value => value.trim()).filter(Boolean)));
   }
   readonly readVehiclePhoto: ReturnType<typeof createVehiclePhotoReader>;
 
