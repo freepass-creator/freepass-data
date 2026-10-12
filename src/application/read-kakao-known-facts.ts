@@ -50,21 +50,26 @@ function matchesSupplier(candidate: Record<string, unknown>, info: Record<string
   return Boolean(supplier) && supplier === supplierCode;
 }
 
-function matchesVehicle(vehicle: Record<string, unknown> | undefined, query: KakaoKnownFactQuery) {
+function matchesVehicle(root: Record<string, unknown>, vehicle: Record<string, unknown> | undefined, query: KakaoKnownFactQuery) {
+  const resolution = text((root.kakaoInfo as Record<string, unknown> | undefined)?.vehicleResolution);
+  if (!query.vehicleKey && !query.vehicleUid) return true;
+  if (resolution !== 'LINKED') return false;
   const productRef = text(vehicle?.productRef);
+  const bodyPlate = text(root.carNumber);
   const vehicleUid = text(vehicle?.vehicleUid);
   const vehicleKeyRef = query.vehicleKey ? `products/${query.vehicleKey}` : '';
   if (query.vehicleUid) {
     if (vehicleUid) return vehicleUid === query.vehicleUid;
+    if (query.vehicleKey && bodyPlate) return bodyPlate === query.vehicleKey;
     if (query.vehicleKey && productRef) return productRef === vehicleKeyRef;
     return false;
   }
   if (!query.vehicleKey) return false;
-  return productRef === vehicleKeyRef;
+  return bodyPlate === query.vehicleKey || productRef === vehicleKeyRef;
 }
 
-function factLayer(topic: KakaoKnownFactTopic): KakaoKnownFact['layer'] {
-  return isKakaoT0OnlyInfo(topic) ? 'T0' : 'T1';
+function factLayer(topic: KakaoKnownFactTopic, vehicleResolution: string): KakaoKnownFact['layer'] {
+  return vehicleResolution === 'LINKED' && !isKakaoT0OnlyInfo(topic) ? 'T1' : 'T0';
 }
 
 function recomputedSignal(info: Record<string, unknown>, asOf: string) {
@@ -84,7 +89,6 @@ export async function readKakaoKnownFacts(
 ): Promise<KakaoKnownFactReadResult> {
   if (!query.asOf || !Number.isFinite(Date.parse(query.asOf))) throw new Error('KAKAO_FACT_AS_OF_REQUIRED');
   if (!query.supplierCode?.trim()) throw new Error('KAKAO_FACT_SUPPLIER_REQUIRED');
-  if (!query.vehicleKey && !query.vehicleUid) throw new Error('KAKAO_FACT_VEHICLE_REQUIRED');
   const asOfMs = Date.parse(query.asOf);
   const records = await store.listCandidatesBySource(SOURCE_ID);
   let warningCount = 0;
@@ -98,10 +102,12 @@ export async function readKakaoKnownFacts(
     if (!info || info.type !== query.topic) return [];
     if (!matchesSupplier(root, info, query.supplierCode)) return [];
     const vehicle = info.vehicle as Record<string, unknown> | undefined;
-    if (!matchesVehicle(vehicle, query)) return [];
+    const vehicleResolution = text(info.vehicleResolution);
+    if (!matchesVehicle(root, vehicle, query)) return [];
     const sentAt = text((info as { sentAt?: unknown }).sentAt);
     const signal = recomputedSignal(info, query.asOf);
-    const expectedLayer = factLayer(query.topic);
+    const expectedLayer = factLayer(query.topic, vehicleResolution);
+    if (!query.vehicleKey && !query.vehicleUid && expectedLayer !== 'T0') return [];
     if (!signal || text(info.expiresAt) !== signal.expiresAt || text(info.layer) !== expectedLayer) {
       warningCount++;
       return [];

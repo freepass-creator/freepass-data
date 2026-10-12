@@ -72,7 +72,14 @@ function stableCandidateForDigest(candidate: unknown) {
     delete kakaoInfo.conflict;
     delete kakaoInfo.expiresAt;
     delete kakaoInfo.isFresh;
+    delete kakaoInfo.layer;
     delete kakaoInfo.vehicleResolution;
+    if (kakaoInfo.vehicle && typeof kakaoInfo.vehicle === 'object' && !Array.isArray(kakaoInfo.vehicle)) {
+      const vehicle = { ...(kakaoInfo.vehicle as Record<string, unknown>) };
+      delete vehicle.productRef;
+      delete vehicle.unspecified;
+      kakaoInfo.vehicle = vehicle;
+    }
     copy.kakaoInfo = kakaoInfo;
   }
   return copy;
@@ -94,7 +101,6 @@ function derivedSafetyFields(candidate: unknown) {
   return {
     expiresAt: info.expiresAt,
     conflict: info.conflict,
-    layer: info.layer,
   };
 }
 
@@ -116,6 +122,10 @@ function isT2OrAbove(layer: unknown) {
   return typeof layer === 'string' && /^T[2-9][0-9]*$/.test(layer);
 }
 
+function isT1OrAbove(layer: unknown) {
+  return typeof layer === 'string' && /^T[1-9][0-9]*$/.test(layer);
+}
+
 function isPromotionForbiddenType(type: unknown) {
   const typed = type as Parameters<typeof isKakaoMoneyInfo>[0];
   return isKakaoMoneyInfo(typed) || isKakaoT0OnlyInfo(typed) || text(type) === 'SALES_REQUEST';
@@ -134,6 +144,15 @@ export function hasKakaoInfoStoredInvariantViolation(candidate: unknown) {
   const info = storedKakaoInfo(candidate);
   if (!info || typeof info !== 'object' || Array.isArray(info)) return false;
   const type = info.type;
+  if (info.vehicleResolution === 'UNSPECIFIED_NO_PRODUCT') {
+    const vehicle = info.vehicle;
+    const productRef = vehicle && typeof vehicle === 'object' && !Array.isArray(vehicle)
+      ? (vehicle as Record<string, unknown>).productRef
+      : null;
+    if (productRef != null) return true;
+    if (info.autoPromotable === true) return true;
+    if (isT1OrAbove(info.layer)) return true;
+  }
   if (isPromotionForbiddenType(type) && info.autoPromotable === true) return true;
   if (isT2OrAbove(info.layer)) return true;
   if (info.autoPromotable === true && !hasStoredLiteralSameSentencePlateEvidence(info)) return true;
@@ -174,7 +193,17 @@ function applyVehicleResolutionToPlan(plan: ReturnType<typeof kakaoInfoCandidate
     const resolution = vehicleResolutionByCandidateId.get(record.sourceRecordId) ?? 'LINKED';
     const normalized = record.payload.normalized;
     if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) continue;
-    (normalized as Record<string, unknown>).vehicleResolution = resolution;
+    const info = normalized as Record<string, unknown>;
+    info.vehicleResolution = resolution;
+    if (resolution !== 'LINKED') {
+      info.layer = 'T0';
+      info.autoPromotable = false;
+      const vehicle = info.vehicle;
+      if (vehicle && typeof vehicle === 'object' && !Array.isArray(vehicle)) {
+        (vehicle as Record<string, unknown>).productRef = null;
+        (vehicle as Record<string, unknown>).unspecified = true;
+      }
+    }
   }
   return { ...plan, batch };
 }

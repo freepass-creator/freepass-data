@@ -233,9 +233,68 @@ describe('applyKakaoInfoCandidates', () => {
     });
     const persisted = await store.listCandidatesBySource('kakao-info-candidate');
     expect(persisted[0]?.candidateId).toBe(result.receipts[0]?.candidateId);
-    expect((persisted[0]?.candidate as unknown as { kakaoInfo: { vehicleResolution: string } }).kakaoInfo.vehicleResolution)
+    const kakaoInfo = (persisted[0]?.candidate as unknown as { kakaoInfo: { vehicleResolution: string; vehicle: { productRef: string | null; unspecified: boolean }; autoPromotable: boolean; layer: string } }).kakaoInfo;
+    expect(kakaoInfo.vehicleResolution)
       .toBe('UNSPECIFIED_NO_PRODUCT');
+    expect(kakaoInfo.vehicle.productRef).toBeNull();
+    expect(kakaoInfo.vehicle.unspecified).toBe(true);
+    expect(kakaoInfo.autoPromotable).toBe(false);
+    expect(kakaoInfo.layer).toBe('T0');
     expect(persisted[0]?.candidate.issues ?? []).not.toContain('VEHICLE_UNSPECIFIED');
+  });
+
+  it('excludes missing-product candidates from vehicle-specific reads and returns them only as T0 in unscoped reads', async () => {
+    const store = Object.assign(new MemorySourceStore(), { productExists: async () => false });
+    const inputs = [candidate()];
+    await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
+
+    expect(await readKakaoKnownFacts(store, {
+      vehicleKey: '123媛4567',
+      supplierCode: 'RP001',
+      topic: inputs[0]!.type,
+      asOf: '2026-10-12T01:00:00.000Z',
+    })).toEqual([]);
+
+    const unscoped = await readKakaoKnownFacts(store, {
+      supplierCode: 'RP001',
+      topic: inputs[0]!.type,
+      asOf: '2026-10-12T01:00:00.000Z',
+    });
+    expect(unscoped).toMatchObject([{ layer: 'T0', topic: inputs[0]!.type }]);
+  });
+
+  it('detects tampered missing-product derived fields on reapply and read', async () => {
+    const store = Object.assign(new MemorySourceStore(), { productExists: async () => false });
+    const inputs = [candidate()];
+    await applyKakaoInfoCandidates(store, inputs, options(inputs, true));
+    const stored = (await store.listCandidatesBySource('kakao-info-candidate'))[0]!;
+    const corrupted = {
+      ...stored,
+      candidate: {
+        ...stored.candidate,
+        kakaoInfo: {
+          ...((stored.candidate as unknown as { kakaoInfo: Record<string, unknown> }).kakaoInfo),
+          layer: 'T1',
+          autoPromotable: true,
+          vehicle: {
+            ...(((stored.candidate as unknown as { kakaoInfo: { vehicle: Record<string, unknown> } }).kakaoInfo).vehicle),
+            productRef: 'products/123媛4567',
+          },
+        },
+      },
+    };
+
+    await expect(applyKakaoInfoCandidates(Object.assign(store, { getCandidate: async () => corrupted }), inputs, options(inputs, true)))
+      .rejects.toThrow('KAKAO_INFO_CANDIDATE_CONFLICT');
+
+    const read = await readKakaoKnownFacts({ listCandidatesBySource: async () => [corrupted] }, {
+      vehicleKey: '123媛4567',
+      supplierCode: 'RP001',
+      topic: inputs[0]!.type,
+      asOf: '2026-10-12T01:00:00.000Z',
+    });
+    expect(read).toEqual([]);
+    expect(read.warningCount).toBe(1);
   });
 
   it('does not create a duplicate candidate when a product appears after a missing-product save', async () => {

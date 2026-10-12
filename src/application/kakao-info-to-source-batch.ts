@@ -194,7 +194,7 @@ export function kakaoInfoCandidatesToSourceBatch(
     const normalizedCandidate = payload.normalized;
     const issues = [
       'KAKAO_CANDIDATE_ONLY',
-      ...(normalizedCandidate.vehicle.unspecified ? ['VEHICLE_UNSPECIFIED'] : []),
+      ...(normalizedCandidate.vehicle.unspecified && normalizedCandidate.vehicle.plate == null ? ['VEHICLE_UNSPECIFIED'] : []),
       ...(normalizedCandidate.needsSupplierConfirm ? ['SUPPLIER_CONFIRM_REQUIRED'] : []),
       ...(normalizedCandidate.conflict ? ['KAKAO_INFO_CONFLICT'] : []),
       ...(!normalizedCandidate.isFresh ? ['KAKAO_INFO_EXPIRED'] : []),
