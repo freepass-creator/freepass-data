@@ -8,13 +8,14 @@ import {
 } from '../src/domain/kakao-info-candidate.js';
 
 const base = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
-  roomCode: 'K-TEST-FAKE-ROOM',
+  roomCode: 'K-TESTFAKE',
   source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: 'TEST-FAKE-PLATE-1 재고 확인' },
   type: '재고',
   vehicle: {
     plate: 'TEST-FAKE-PLATE-1',
     model: 'TEST-FAKE-MODEL',
     plateEvidenceMsgNo: 100,
+    plateStatusSameSentence: true,
     plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
   },
   fields: { 요약: '재고 확인', 값: '재고 있음' },
@@ -62,7 +63,7 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     expect(createKakaoInfoCandidate(base({ fields: { 요약: '금액', 값: '1,000,000' } })).ok).toBe(true);
     expect(createKakaoInfoCandidate(base({ fields: { 요약: '금액', 값: '1000000' } })).ok).toBe(true);
     expect(createKakaoInfoCandidate(base({ fields: { 요약: '금액', 값: '100만원' } })).ok).toBe(true);
-    expect(createKakaoInfoCandidate(base({ roomCode: 'K-010-1234-5678' })).ok).toBe(true);
+    expect(createKakaoInfoCandidate(base({ roomCode: 'K-A010B123' })).ok).toBe(true);
   });
 
   it('rejects candidates sent more than five minutes in the future', () => {
@@ -77,11 +78,10 @@ describe('KakaoInfoCandidate/v1 validation', () => {
       plateEvidenceMsgNo: 100,
       plateEvidence: { source: 'LITERAL_IN_UTTERANCE' },
     });
-    expect(assertKakaoInfoCandidate(base({ source: { ...base().source, msgNo: '102', excerpt: '다른 발언' } })).vehicle)
-      .toMatchObject({ plate: 'TEST-FAKE-PLATE-1' });
     for (const input of [
       base({ vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL' } }),
       base({ vehicle: { plate: 'TEST-FAKE-PLATE-1', model: 'TEST-FAKE-MODEL', plateEvidenceMsgNo: 100 } }),
+      base({ source: { ...base().source, msgNo: '102', excerpt: '다른 발언' } }),
       base({ source: { ...base().source, msgNo: '99' } }),
       base({ source: { ...base().source, msgNo: '103' } }),
       base({ source: { ...base().source, excerpt: '번호 없음' } }),
