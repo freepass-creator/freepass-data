@@ -76,6 +76,11 @@ test('감지 조회가 연속 실패하면 정지(조용한 무한 재시도 금
   assert.equal(s.halted, true); assert.equal(s.haltReason, 'OBSERVE_FAILED');
   assert.deepEqual(decide(s, sync(1), T), { action: 'HALTED', reason: 'OBSERVE_FAILED' });
 });
+test('날짜로 해석되지 않는 응답(잘못된 값)도 조회 실패로 세어 연속이면 정지', () => {
+  let s = initialState();
+  for (let i = 0; i < MAX_OBSERVE_FAILURES; i++) s = noteObservation(s, 'not-a-date');
+  assert.equal(s.halted, true); assert.equal(s.haltReason, 'OBSERVE_FAILED');
+});
 test('종료 코드: 정상 0, 건수 관문 중단 3, 그 밖의 실패 1', () => {
   assert.equal(exitCodeFor({ kind: 'APPLIED' }), 0);
   assert.equal(exitCodeFor({ kind: 'DRY_OK' }), 0);
@@ -88,32 +93,42 @@ const run = (args, env) => spawnSync(process.execPath, [script, ...args], { enco
 
 test('적용 모드는 승인·건수 범위·백업 버킷을 외부에서 받지 못하면 시작을 거부(64) — 실행기가 승인을 대신하지 않는다', () => {
   const root = mkdtempSync(join(tmpdir(), 'iancar-watch-'));
-  const result = run(['--apply', '--once'], { LOCALAPPDATA: root, TMPDIR: root });
+  const result = run(['--apply', '--once', '--lock-root', root], {});
   assert.equal(result.status, 64);
   assert.match(result.stderr, /EANCAR_ONE_SYNC_APPROVED|IANCAR_SYNC_EXPECT|EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET/);
-  const wrong = run(['--apply', '--once'], { LOCALAPPDATA: root, TMPDIR: root, EANCAR_ONE_SYNC_APPROVED: 'yes', IANCAR_SYNC_EXPECT: '{}', EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET: 'b' });
+  const wrong = run(['--apply', '--once', '--lock-root', root], { EANCAR_ONE_SYNC_APPROVED: 'yes', IANCAR_SYNC_EXPECT: '{}', EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET: 'b' });
   assert.equal(wrong.status, 64);
 });
 test('이미 살아 있는 프로세스가 잠금을 쥐고 있으면 종료 75(동시 실행 금지), --break-stale-lock 로도 못 지운다', () => {
   const root = mkdtempSync(join(tmpdir(), 'iancar-watch-'));
-  const lock = join(root, 'freepass-data', 'iancar-sync.lock');
+  const lock = join(root, 'iancar-sync.lock');
   mkdirSync(lock, { recursive: true });
   writeFileSync(join(lock, 'pid'), String(process.pid));
-  const result = run(['--once'], { LOCALAPPDATA: root, TMPDIR: root });
+  const result = run(['--once', '--lock-root', root], {});
   assert.equal(result.status, 75);
   assert.match(result.stderr, /잠금/);
-  assert.equal(run(['--once', '--break-stale-lock'], { LOCALAPPDATA: root, TMPDIR: root }).status, 75);
+  assert.equal(run(['--once', '--break-stale-lock', '--lock-root', root], {}).status, 75);
 });
 test('죽은 프로세스의 잠금은 자동으로 넘겨받지 않고(경쟁 방지) 종료 75, --break-stale-lock 로만 사람이 넘겨받는다', () => {
   const root = mkdtempSync(join(tmpdir(), 'iancar-watch-'));
-  const lock = join(root, 'freepass-data', 'iancar-sync.lock');
+  const lock = join(root, 'iancar-sync.lock');
   mkdirSync(lock, { recursive: true });
   writeFileSync(join(lock, 'pid'), '2147483646');
-  const auto = run(['--once'], { LOCALAPPDATA: root, TMPDIR: root });
+  const auto = run(['--once', '--lock-root', root], {});
   assert.equal(auto.status, 75);
   assert.match(auto.stderr, /비정상 종료/);
   // 사람이 넘겨받으면 잠금은 통과한다(열쇠 조회에서 멈추도록 gcloud 가 없는 PATH 로 실행 — 실제 비밀을 읽지 않는다)
   const empty = mkdtempSync(join(tmpdir(), 'iancar-nopath-'));
-  const taken = spawnSync(process.execPath, [script, '--once', '--break-stale-lock'], { encoding: 'utf8', timeout: 20000, env: { PATH: empty, LOCALAPPDATA: root, TMPDIR: root } });
+  const taken = spawnSync(process.execPath, [script, '--once', '--break-stale-lock', '--lock-root', root], { encoding: 'utf8', timeout: 20000, env: { PATH: empty } });
   assert.notEqual(taken.status, 75);
+});
+
+test('잠금 위치는 LOCALAPPDATA/TMPDIR 같은 환경변수에 의존하지 않는다(환경이 달라도 같은 잠금을 본다)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'iancar-watch-'));
+  const lock = join(root, 'iancar-sync.lock');
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(join(lock, 'pid'), String(process.pid));
+  for (const env of [{ LOCALAPPDATA: join(root, 'a'), TMPDIR: join(root, 'b') }, { TMPDIR: join(root, 'c') }, {}]) {
+    assert.equal(run(['--once', '--lock-root', root], env).status, 75);
+  }
 });

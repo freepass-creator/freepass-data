@@ -10,14 +10,17 @@
 //   --once   새 갱신을 한 번 처리하고 종료(종료 코드: 정상 0 / 건수 관문 중단 3 / 그 밖의 실패 1 / 정지 상태 2 / 다른 실행 중 75 / 설정 오류 64·65)
 //   기본은 계속 감시. 어떤 실패든(감지 조회 연속 3번 실패 포함) 정지(종료 코드 2)하고 자동 재시도하지 않는다. 사람이 확인한 뒤 --reset-halt 로만 다시 시작한다.
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { applyOutcome, classifyRun, decide, exitCodeFor, initialState, noteObservation, parseReport } from './iancar-sync-watch-lib.mjs';
 
 const argv = process.argv.slice(2);
 const apply = argv.includes('--apply'), once = argv.includes('--once'), resetHalt = argv.includes('--reset-halt'), breakStale = argv.includes('--break-stale-lock');
-const root = process.env.LOCALAPPDATA ?? process.env.TMPDIR ?? '/tmp';
-const stateDir = argv.includes('--state-dir') ? argv[argv.indexOf('--state-dir') + 1] : join(root, 'freepass-data', 'iancar-sync-watch');
+// 잠금·상태 위치는 환경변수에 의존하지 않는 «사용자 홈 고정 경로»다(LOCALAPPDATA/TMPDIR 가 다른 실행끼리 잠금 경로가 갈라져 배타가 깨지는 것을 막는다).
+// 시험용으로만 `--lock-root <경로>` 로 바꿀 수 있다(운영에서는 쓰지 않는다).
+const root = argv.includes('--lock-root') ? argv[argv.indexOf('--lock-root') + 1] : join(homedir(), '.freepass-data');
+const stateDir = argv.includes('--state-dir') ? argv[argv.indexOf('--state-dir') + 1] : join(root, 'iancar-sync-watch');
 mkdirSync(stateDir, { recursive: true });
 const stateFile = join(stateDir, 'state.json'), logFile = join(stateDir, 'history.jsonl'), alertFile = join(stateDir, 'alerts.log');
 const log = event => appendFileSync(logFile, JSON.stringify({ at: new Date().toISOString(), ...event }) + '\n');
@@ -33,34 +36,47 @@ if (apply) {
 // 배타 잠금: 감시 둘·감시와 단발이 동시에 같은 적용을 하지 못하게 한다.
 // 자동으로 넘겨받지 않는다(두 실행기가 죽은 잠금을 동시에 넘겨받는 경쟁을 만들지 않기 위해). 비정상 종료로 남은 잠금은
 // 사람이 --break-stale-lock 로 «프로세스가 죽은 것을 확인한 경우에만» 지운다(그 실행 하나만 실행 중이어야 한다).
-const lockDir = join(root, 'freepass-data', 'iancar-sync.lock');
+const lockDir = join(root, 'iancar-sync.lock');
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
-function readLockPid() { try { return Number(readFileSync(join(lockDir, 'pid'), 'utf8')); } catch { return NaN; } }
+function readPid(dir) { try { return Number(readFileSync(join(dir, 'pid'), 'utf8')); } catch { return NaN; } }
+function createLock() { mkdirSync(lockDir); writeFileSync(join(lockDir, 'pid'), String(process.pid)); }
 function takeLock() {
-  mkdirSync(join(root, 'freepass-data'), { recursive: true });
-  try { mkdirSync(lockDir); writeFileSync(join(lockDir, 'pid'), String(process.pid)); return 'OK'; }
+  mkdirSync(root, { recursive: true });
+  try { createLock(); return 'OK'; }
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
-    const pid = readLockPid();
-    if (breakStale && Number.isFinite(pid) && !alive(pid)) {
-      rmSync(lockDir, { recursive: true, force: true });
-      try { mkdirSync(lockDir); writeFileSync(join(lockDir, 'pid'), String(process.pid)); return 'OK'; } catch { return 'BUSY'; }
-    }
-    return Number.isFinite(pid) && !alive(pid) ? 'STALE' : 'BUSY';
+    const pid = readPid(lockDir);
+    const dead = Number.isFinite(pid) && !alive(pid);
+    if (!(breakStale && dead)) return dead ? 'STALE' : 'BUSY';
+    // 죽은 잠금의 인계는 원자적 이름 바꾸기로 한다: 이름을 바꾼 한 실행만 성공한다. 바꾼 뒤 그 안의 pid 가 방금 확인한 죽은 pid 와
+    // 같을 때만 지우고, 다르면(그 사이 다른 실행이 새 잠금을 만든 경우) 되돌려 놓고 물러난다.
+    const moved = lockDir + '.stale-' + process.pid;
+    try { renameSync(lockDir, moved); } catch { return 'BUSY'; }
+    if (readPid(moved) !== pid || alive(pid)) { try { renameSync(moved, lockDir); } catch { /* 되돌리기 실패 시 사람이 확인 */ } return 'BUSY'; }
+    rmSync(moved, { recursive: true, force: true });
+    try { createLock(); return 'OK'; } catch { return 'BUSY'; }
   }
 }
 const lock = takeLock();
 if (lock === 'BUSY') { console.error('다른 이안카 동기화가 실행 중이다(잠금) — 종료'); process.exit(75); }
 if (lock === 'STALE') { console.error('이전 실행이 비정상 종료하며 남긴 잠금(프로세스 없음) — 확인 후 --break-stale-lock 로 다시 시작'); process.exit(75); }
 
-// 자식 수집기가 살아 있는 동안에는 잠금을 놓지 않는다: 종료·신호 때 자식 트리를 먼저 끝낸 뒤 잠금을 지운다.
+// 자식 수집기가 살아 있는 동안에는 잠금을 놓지 않는다: 종료·신호 때 자식 트리를 끝내고 «종료를 확인한 뒤에만» 잠금을 지운다.
+// 끝났는지 확인하지 못하면 잠금을 남긴다(다음 실행이 겹치지 않게 — 사람이 확인 후 --break-stale-lock).
 let child = null;
+const pause = ms => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* 무시 */ } };
 function killChildTree() {
-  if (!child || child.exitCode !== null || !child.pid) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  else { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* 이미 종료 */ } } }
+  if (!child || child.exitCode !== null || !child.pid) return true;
+  const pid = child.pid;
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+  else { try { process.kill(-pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* 이미 종료 */ } } }
+  for (let i = 0; i < 30; i++) { if (!alive(pid)) return true; pause(100); }
+  return !alive(pid);
 }
-const releaseLock = () => { killChildTree(); try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* 무시 */ } };
+const releaseLock = () => {
+  if (!killChildTree()) { console.error('자식 수집기 종료를 확인하지 못해 잠금을 남긴다 — 확인 후 --break-stale-lock'); return; }
+  try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* 무시 */ }
+};
 process.on('exit', releaseLock);
 process.on('SIGINT', () => process.exit(130));
 process.on('SIGTERM', () => process.exit(143));

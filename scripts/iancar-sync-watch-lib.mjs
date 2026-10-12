@@ -32,7 +32,8 @@ export function classifyRun({ exitCode, stdout = '', stderr = '', dry = false })
 
 /** 감지 조회 결과를 상태에 반영한다. 연속 실패가 한도에 닿으면 정지한다(조용한 무한 재시도 금지). */
 export function noteObservation(state, observed) {
-  if (observed) return state.observeFailures ? { ...state, observeFailures: 0 } : state;
+  // 값이 없거나 날짜로 해석되지 않으면(잘못된 응답) 조회 실패로 센다.
+  if (observed && Number.isFinite(Date.parse(observed))) return state.observeFailures ? { ...state, observeFailures: 0 } : state;
   const failures = state.observeFailures + 1;
   const next = { ...state, observeFailures: failures };
   if (failures >= MAX_OBSERVE_FAILURES && !next.halted) { next.halted = true; next.haltReason = 'OBSERVE_FAILED'; }
