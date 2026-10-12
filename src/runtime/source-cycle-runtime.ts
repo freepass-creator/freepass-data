@@ -15,12 +15,12 @@ import { runSourceCycle } from '../jobs/source-cycle.js';
 import type { CyclePlan } from '../ports/source-cycle.js';
 import { stableDigest } from '../shared/stable-digest.js';
 
-export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, fetcher: typeof fetch = fetch) {
+export function createSourceCycleRuntime(env: NodeJS.ProcessEnv = process.env, fetcher: typeof fetch = fetch, acceptDrift: string[] = []) {
   const directory = env.SOURCE_CYCLE_PRIVATE_DIR || join(homedir(), '.codex', 'private', 'source-cycle');
   const ratio = Number(env.SOURCE_CYCLE_MAX_DOWNGRADE_RATIO ?? '0.2');
   if (!(ratio > 0 && ratio <= 1)) throw new Error('CYCLE_CONFIG_INVALID');
   const commands = firestoreCycleCommands({ env, directory: join(directory, 'backups'), fetcher,
-    observationSources: ['RP012', 'RP023'] });
+    observationSources: ['RP012', 'RP023'], acceptDrift });
   const control = fileCycleControl(directory, async (source, state, plan) => {
     await appendFile(join(directory, 'heartbeats.jsonl'), JSON.stringify({ source, ...state,
       sourceCount: plan?.sourceCount ?? null, digest: plan ? stableDigest(plan) : null }) + '\n', { mode: 0o600 });
@@ -135,7 +135,9 @@ export const control = configured?.control;
 
 export async function runtimeCli(args: string[], env = process.env) {
   const get = (name: string) => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
-  const runtime = createSourceCycleRuntime(env);
+  const acceptDrift = (get('--accept-drift') ?? '').split(',').map(x => x.trim()).filter(Boolean);
+  if (acceptDrift.some(c => !/^RP\d{3}$/.test(c))) throw new Error('ACCEPT_DRIFT_CODE_INVALID');
+  const runtime = createSourceCycleRuntime(env, fetch, acceptDrift);
   const key = get('--rollback');
   if (key) {
     if (!args.includes('--apply')) return { status: 'ROLLBACK_DRY_RUN', digest: await runtime.commands.rollbackDigest(key) };
@@ -156,7 +158,7 @@ export async function runtimeCli(args: string[], env = process.env) {
       if (selected.length !== 1) throw new Error('ONE_SOURCE_REQUIRED');
       await writeFile(resolve(planFile), JSON.stringify(result.plan), { mode: 0o600, flag: 'wx' });
     }
-    reports.push({ source: plugin.sourceId, status: result.status, summary: result.summary,
+    reports.push({ source: plugin.sourceId, status: result.status, summary: result.summary + (acceptDrift.includes(plugin.sourceId) ? ` · 보정허용(--accept-drift ${plugin.sourceId})` : ''),
       digest: 'planDigest' in result ? result.planDigest : null });
   }
   return reports;

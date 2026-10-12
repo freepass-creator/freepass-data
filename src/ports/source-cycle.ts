@@ -9,7 +9,8 @@ export type CycleProduct = {
   publication_withdrawal: { reason: string; source: string; observedAt: string; deleteAuthorized: false } | null;
   publication_withdrawal_prior: { listable: boolean; status: SourceProductRecord['status'] } | null;
 };
-export type CycleSnapshot = { products: CycleProduct[]; complete: boolean; enrollmentSupplier?: SupplierFields | null };
+export type CycleSnapshot = { products: CycleProduct[]; complete: boolean; enrollmentSupplier?: SupplierFields | null;
+  /** --accept-drift 로 허용된 보정 문서 uid(계획 digest 에 경고로 기록). */ acceptedDrift?: string[] };
 /** Implement with CatalogStore transactions, expected revision/digest, receipts and audit.
  * CAS must check the entire envelope, including the contract lock, atomically. No delete API. */
 export interface CycleCommands {

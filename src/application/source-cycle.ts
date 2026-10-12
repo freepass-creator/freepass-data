@@ -31,6 +31,7 @@ export function planSourceCycle(config: CycleConfig, evidence: CycleEvidence, sn
     evidence: structuredClone(evidence), entries: [], held: evidence.heldCount, blockers: [], sourceCount: 0,
     warnings: [], unassignedPlateCount: evidence.unassignedPlateCount ?? 0,
     exposedBefore: snapshot.products.filter(p => p.listable).length };
+  if (snapshot.acceptedDrift?.length) plan.warnings.push(`DRIFT_ACCEPTED:${snapshot.acceptedDrift.length}:${stableDigest(snapshot.acceptedDrift).slice(0, 12)}`);
   if (!snapshot.complete) plan.blockers.push('CATALOG_INCOMPLETE');
   if (!evidence.complete) plan.blockers.push('SOURCE_INCOMPLETE');
   if (snapshot.products.some(p => p.record.sourceId !== config.sourceId) ||

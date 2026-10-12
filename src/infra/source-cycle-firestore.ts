@@ -72,13 +72,17 @@ export function priceMatchesRecord(price: unknown, storedDigest: unknown, record
   const withoutMileage = Object.fromEntries(Object.entries(derived).map(([m, v]) => [m, { rent: v.rent, deposit: v.deposit }]));
   return priceDigest(price) === priceDigest(withoutMileage);
 }
-function envelope(d: Doc): CycleProduct {
+function envelope(d: Doc, acceptDrift: ReadonlySet<string> = new Set(), drifted?: string[]): CycleProduct {
   const f = decodeFields(d.fields), uid = decodeURIComponent(d.name.split('/').at(-1)!);
   const record = (f.source_cycle_record ?? productRecord(uid, f, String(f.source_observed_at ?? d.updateTime))) as SourceProductRecord;
   if (record.uid !== uid || record.sourceId !== f.provider_company_code) throw new Error('CATALOG_IDENTITY_INVALID');
   if (f.source_cycle_record) {
-    if (!priceMatchesRecord(f.price, f.source_cycle_price_digest, record) || f.car_number !== record.plate)
-      throw new Error('CATALOG_SOURCE_RECORD_DRIFT');
+    if (!priceMatchesRecord(f.price, f.source_cycle_price_digest, record) || f.car_number !== record.plate) {
+      // 승인된 외부 보정(예: 정책 보증금)을 코드별 명시 옵션으로만 받아들인다. 번호판 불일치는 항상 DRIFT.
+      if (!acceptDrift.has(String(f.provider_company_code)) || f.car_number !== record.plate) throw new Error('CATALOG_SOURCE_RECORD_DRIFT');
+      const current = productRecord(uid, f, record.observedAt);
+      record.terms = current.terms; drifted?.push(uid);
+    }
   }
   return { record, ...(typeof f.provider_name === 'string' && f.provider_name.trim() ? { supplierFields: {
     provider_name: f.provider_name, policy_code: typeof f.policy_code === 'string' ? f.policy_code : null } } : {}), listable: f.listable === true,
@@ -106,9 +110,9 @@ export function nativeCycleFields(p: CycleProduct, original: Fields = {}): Field
 const fieldPath = (name: string): string => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : '`' + name.replace(/`/g, '\`') + '`';
 /** Legacy products compatibility command port required by SPEC3. No SDK app, deletes or blind retries. */
 export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; directory: string; fetcher?: typeof fetch;
-  token?: () => Promise<string>; observationSources?: string[]; supplierDefaults?: Record<string, SupplierFields> }) {
+  token?: () => Promise<string>; observationSources?: string[]; acceptDrift?: string[]; supplierDefaults?: Record<string, SupplierFields> }) {
   const project = resolveTargetProject(options.env), base = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents`;
-  const fetcher = options.fetcher ?? fetch, cache = new Map<string, Doc>();
+  const fetcher = options.fetcher ?? fetch, cache = new Map<string, Doc>(), accept = new Set(options.acceptDrift ?? []);
   const docPath = (uid: string) => {
     if (!uid || uid.includes('/') || uid === '.' || uid === '..') throw new Error('UID_INVALID');
     return `/products/${encodeURIComponent(uid)}`;
@@ -153,7 +157,7 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
   const commands: CycleCommands = {
     async list(source) {
       for (const key of cache.keys()) if (key.startsWith(`${source}:`)) cache.delete(key);
-      const products: CycleProduct[] = []; let page = ''; const pages = new Set<string>();
+      const products: CycleProduct[] = [], drifted: string[] = []; let page = ''; const pages = new Set<string>();
       do {
         const query = new URLSearchParams({ pageSize: '300' });
         if (page) query.set('pageToken', page);
@@ -166,18 +170,18 @@ export function firestoreCycleCommands(options: { env?: NodeJS.ProcessEnv; direc
           const f = decodeFields(d.fields);
           if (f.provider_company_code !== source) continue;
           if (!d.updateTime) throw new Error('CATALOG_VERSION_REQUIRED');
-          const p = envelope(d); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
+          const p = envelope(d, accept, drifted); products.push(p); cache.set(`${source}:${p.record.uid}`, d);
         }
         page = result.nextPageToken ?? '';
         if (page && pages.has(page)) throw new Error('CATALOG_PAGINATION_LOOP');
         pages.add(page);
       } while (page);
-      return { products, complete: true, enrollmentSupplier: supplierFields(source) };
+      return { products, complete: true, enrollmentSupplier: supplierFields(source), ...(drifted.length ? { acceptedDrift: drifted.sort() } : {}) };
     },
     async read(source, uid) {
       const d = await getDoc(uid);
       if (!d) return null;
-      const p = envelope(d);
+      const p = envelope(d, accept);
       if (p.record.sourceId !== source) throw new Error('UID_OTHER_SUPPLIER');
       cache.set(`${source}:${uid}`, d); return p;
     },

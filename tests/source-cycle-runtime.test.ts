@@ -207,6 +207,24 @@ describe('Firestore REST runtime offline', () => {
     const { commands, fake } = await setup([product()]); fake.docs.get('TEST1001').fields.price = encodeFields({ price: {} }).price;
     await expect(commands.list(source)).rejects.toThrow('CATALOG_SOURCE_RECORD_DRIFT');
   });
+  it('--accept-drift 는 지정 코드의 가격 보정만 받아들이고 번호판 변경과 다른 코드는 계속 DRIFT', async () => {
+    const { fake, dir } = await setup([product()]);
+    const mk = (acceptDrift: string[]) => firestoreCycleCommands({ directory: dir, env: { FIREBASE_PROJECT_ID: 'synthetic-test' },
+      token: async () => 'synthetic-token', fetcher: fake.fetcher, acceptDrift });
+    const price = decodeFields(fake.docs.get('TEST1001').fields).price as Record<string, any>;
+    const corrected = Object.fromEntries(Object.entries(price).map(([m, v]) => [m, { ...v, deposit: 777000 }]));
+    fake.docs.get('TEST1001').fields.price = encodeFields({ price: corrected }).price;
+    await expect(mk([]).list(source)).rejects.toThrow('CATALOG_SOURCE_RECORD_DRIFT');
+    await expect(mk(['OTHER_CODE']).list(source)).rejects.toThrow('CATALOG_SOURCE_RECORD_DRIFT');
+    const snap = await mk([source]).list(source);
+    expect(snap.acceptedDrift).toEqual(['TEST1001']);
+    expect(snap.products[0]!.record.terms.every(t => t.deposit.value === 777000)).toBe(true);
+    const built = planSourceCycle({ sourceId: source, family: 'OTHER', maxDowngradeRatio: 1 },
+      { records: [product().record], observedAt: time, heldCount: 0, complete: true }, snap, now);
+    expect(built.plan.warnings.some(w => w.startsWith('DRIFT_ACCEPTED:1:'))).toBe(true);
+    fake.docs.get('TEST1001').fields.car_number = encodeFields({ car_number: '다른번호' }).car_number;
+    await expect(mk([source]).list(source)).rejects.toThrow('CATALOG_SOURCE_RECORD_DRIFT');
+  });
   it('list uses only required fields, while backup reads full document', async () => {
     const { commands, fake } = await setup([product()]);
     const before = (await commands.list(source)).products[0]!; await commands.backup('projection', before);
