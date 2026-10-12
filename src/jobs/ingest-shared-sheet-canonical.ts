@@ -299,6 +299,12 @@ export async function preflightSharedSheetApply(store: CatalogStore, plan: Share
   }
   return replay;
 }
+/** Public-log-safe failure label: a fixed UPPER_SNAKE code thrown by our own code, else the error class name. Never free text. */
+export function safeErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (/^[A-Z][A-Z0-9_]{2,80}$/.test(message)) return message;
+  return error instanceof Error && /^[A-Za-z0-9_]{1,40}$/.test(error.name) ? `UNCODED_${error.name}` : 'UNCODED';
+}
 export async function runSharedSheetCanonical(store: CatalogStore, source: SourceIngestionStore, options: {
   target: string; capture?: SharedSheetCapture; apply?: boolean; plan?: SharedSheetPlan; expectedPlanDigest?: string;
   identityInputs?: VehicleIdentityInputs; currentVehicleMasterSnapshot?: VehicleMasterSnapshot; includeSupplierColors?: boolean;
@@ -335,10 +341,11 @@ export async function runSharedSheetCanonical(store: CatalogStore, source: Sourc
       else if (entry.change) businessNoChange = (await applyReviewedSourceChange(store, entry.change)).status === 'NO_CHANGE';
       else throw new Error('INVALID_SHARED_SHEET_ACTION');
       if (replay.has(entry.recordId) || businessNoChange) noChange++; else committed++;
-    } catch {
-      // No thrown provider text or raw identifiers in stdout/public CI.
+    } catch (error) {
+      // No thrown provider text or raw identifiers in stdout/public CI: only a fixed UPPER_SNAKE code or the error class name.
       return { report: { mode: 'APPLY', status: 'HOLD', committed, noChange, held,
-        remaining: plan.entries.length - committed - noChange - held, reason: 'CANONICAL_COMMAND_REJECTED' } };
+        remaining: plan.entries.length - committed - noChange - held, reason: 'CANONICAL_COMMAND_REJECTED',
+        reasonCode: safeErrorCode(error) } };
     }
   }
   let suppliedTerms = 0, storedTerms = 0, heldTerms = 0, readbackMismatches = 0;
@@ -456,5 +463,5 @@ export async function main(args = process.argv.slice(2)) {
   if ('status' in result.report && result.report.status !== 'APPLIED') process.exitCode = 2;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(() => { console.error('SHARED_SHEET_JOB_HOLD'); process.exitCode = 1; });
+  main().catch(error => { console.error(`SHARED_SHEET_JOB_HOLD ${safeErrorCode(error)}`); process.exitCode = 1; });
 }

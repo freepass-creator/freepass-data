@@ -794,3 +794,13 @@ describe('reviewed shared-sheet selection and live upstream fences', () => {
     expect(write).not.toHaveBeenCalled();
   });
 });
+
+describe('safeErrorCode', () => {
+  it('공개 로그에는 고정 대문자 코드나 오류 클래스 이름만 낸다', async () => {
+    const { safeErrorCode } = await import('../src/jobs/ingest-shared-sheet-canonical.js');
+    expect(safeErrorCode(new Error('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED'))).toBe('VEHICLE_MASTER_CHANGED_REPLAN_REQUIRED');
+    expect(safeErrorCode(new Error('provider said 12가3456 failed'))).toBe('UNCODED_Error');
+    expect(safeErrorCode(new TypeError('x'))).toBe('UNCODED_TypeError');
+    expect(safeErrorCode('boom')).toBe('UNCODED');
+  });
+});
