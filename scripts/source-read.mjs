@@ -122,6 +122,9 @@ async function readIron() {
       records.push({ plate: dt['차량번호'] ?? '', 제조사: null, 차명: title, 연료: dt['유종'], 주행거리: dt['주행거리'], 외장: dt['외장 색상'], 월대여료: rent, 보증금: dep, 상태: it.sold ? '판매완료' : '게시', 사진수: (html.match(/<img[^>]+vehicles?[^>]*>/g) ?? []).length || null, 구분: it.cond, raw: { ...dt } });
     } catch (e) { records.push({ plate: '', 차명: `읽기 실패 ${it.id}`, error: e.message }); } } };
   await Promise.all([worker(), worker()]);
+  // fail-closed: 상세 조회가 하나라도 실패했거나 번호를 못 읽은 상세가 있으면 불완전한 원천 — 정상 완료로 돌려주지 않는다.
+  const failedDetail = records.filter(r => r.error || !r.plate).length;
+  if (failedDetail || !items.length) return { ok: false, reason: `아이언 읽기 불완전(상세 실패·번호 없음 ${failedDetail}건 / 목록 ${items.length}건) — 재읽기 필요` };
   return { ok: true, readAt: new Date().toISOString(), records: records.filter(r => !only || last4(r.plate) === only), note: '홈페이지 HTML 있는 그대로(상세 차량당 1회)', all: records };
 }
 
@@ -136,6 +139,7 @@ function readAutoplus(products) {
   let hp = null;
   if (opt('homepage-plates') && existsSync(opt('homepage-plates'))) hp = new Set(readFileSync(opt('homepage-plates'), 'utf8').split(/\r?\n/).map(s => s.trim()).filter(Boolean));
   if (!sheetId && !hp) return { ok: false, reason: '시트 주소와 홈페이지 목록이 모두 없음' };
+  if (notes.some(n => /읽기 실패/.test(n))) return { ok: false, reason: `오토플러스 시트 읽기 불완전(${notes.join(',')}) — 재읽기 필요` }; // fail-closed
   const all = new Set([...plates, ...(hp ?? [])]);
   return { ok: true, readAt: new Date().toISOString(), records: [...all].map(p => ({ plate: p, 원천: [plates.has(p) ? '시트' : null, hp?.has(p) ? '홈페이지' : null].filter(Boolean).join('+'), raw: {} })),
     note: `시트 차량 ${plates.size}대${hp ? ` · 홈페이지 ${hp.size}대` : ' · 홈페이지는 목록 API 가 화면 스크립트 전용이라 브라우저로 읽은 파일(--homepage-plates) 필요'}${notes.length ? ' · ' + notes.join(',') : ''}`, partial: !hp || !sheetId };

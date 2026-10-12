@@ -16,3 +16,10 @@ test('rowMetadata 의 hiddenByUser·hiddenByFilter 줄 번호(1부터)', () => {
   assert.deepEqual([...m.get('스타')].sort(), [2, 4]);
   assert.equal(m.get('KH').size, 0);
 });
+
+import { assertPlanComplete } from '../scripts/sellable-lib.mjs';
+test('fail-closed: 읽기 불완전(blockers)이 있으면 계획 생성을 중단한다', () => {
+  assert.doesNotThrow(() => assertPlanComplete([]));
+  const origError = console.error; console.error = () => {};
+  try { assert.throws(() => assertPlanComplete(['HIDDEN_ROW_METADATA_READ_FAILED']), /PLAN_BLOCKED/); } finally { console.error = origError; }
+});

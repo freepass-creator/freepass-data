@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { decodeValue } from './supplier-freshness-lib.mjs';
-import { f05RowSellable, hiddenRowsByTab } from './sellable-lib.mjs';
+import { assertPlanComplete, f05RowSellable, hiddenRowsByTab } from './sellable-lib.mjs';
 
 const argv = process.argv.slice(2);
 const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
@@ -56,6 +56,7 @@ const plateCode = new Map(docs.map(d => [d.plate, d.code]));
 
 // 원천별 판매가능 차량번호 집합 { code: { set:Set, 읽힘, 비고, 분포 } }
 const src = {};
+const blockers = []; // 불완전·실패한 읽기. 하나라도 있으면 시험 실행 계획을 만들지 않는다(fail-closed) — 불완전한 원천으로 하향/편입을 계획하면 안 된다.
 const run = (script, args) => execFileSync(process.execPath, [join(ROOT, 'scripts', script), ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 28 });
 
 // 공통 시트 F05
@@ -74,11 +75,11 @@ if (process.env.FREEPASS_SHEET_F05_ID) {
     const args = ['sheets', 'spreadsheets', 'get', '--params', JSON.stringify({ spreadsheetId: process.env.FREEPASS_SHEET_F05_ID, includeGridData: true, ranges: tabsAll.map(t => `'${t}'!A1:A1500`), fields: 'sheets(properties(title),data(startRow,rowMetadata(hiddenByUser,hiddenByFilter)))' })];
     const o = execFileSync(gwsBin(), args, { encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] });
     hiddenRows = hiddenRowsByTab(JSON.parse(o.slice(o.indexOf('{')))); hiddenOk = true;
-  } catch (e) { if (process.env.DEBUG_SELLABLE) console.error('hidden read error', e.message.slice(0, 300)); }
+  } catch (e) { blockers.push('HIDDEN_ROW_METADATA_READ_FAILED'); if (process.env.DEBUG_SELLABLE) console.error('hidden read error', e.message.slice(0, 300)); }
   global.__hiddenOk = hiddenOk; global.__hiddenCount = [...hiddenRows.values()].reduce((n, set) => n + set.size, 0);
   for (const tab of [...new Set(sup.map(x => x.tab))].filter(t => !globalThis.__visibleTabs || globalThis.__visibleTabs.has(t))) {
-    let v; try { const o = execFileSync(gwsBin(), ['sheets', '+read', '--spreadsheet', process.env.FREEPASS_SHEET_F05_ID, '--range', `'${tab}'!A1:BX1500`], { encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] }); v = JSON.parse(o.slice(o.indexOf('{'))).values ?? []; } catch { continue; }
-    const ix = Object.fromEntries((v[0] ?? []).map((h, i) => [h, i])); if (ix['차량번호'] == null) continue;
+    let v; try { const o = execFileSync(gwsBin(), ['sheets', '+read', '--spreadsheet', process.env.FREEPASS_SHEET_F05_ID, '--range', `'${tab}'!A1:BX1500`], { encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] }); v = JSON.parse(o.slice(o.indexOf('{'))).values ?? []; } catch { blockers.push(`F05_TAB_READ_FAILED:${tab}`); continue; }
+    const ix = Object.fromEntries((v[0] ?? []).map((h, i) => [h, i])); if (ix['차량번호'] == null) { blockers.push(`F05_TAB_HEADER_MISSING:${tab}`); continue; }
     const g = (r, k) => String(r[ix[k]] ?? '').trim(), shared = sup.filter(x => x.tab === tab).length > 1;
     for (const [ri, r] of v.slice(1).entries()) {
       const rowHidden = hiddenRows.get(tab)?.has(ri + 2) === true;
@@ -95,20 +96,24 @@ if (process.env.FREEPASS_SHEET_F05_ID) {
     }
   }
   for (const x of sup) if (!src[x.code]) src[x.code] = { set: new Set(), all: new Set(), 읽힘: false, 비고: `F05 에 «${x.tab}» 탭 없음` };
-} else for (const x of spec.supplierChannels.sharedInputSheet) src[x.code] = { set: new Set(), all: new Set(), 읽힘: false, 비고: 'FREEPASS_SHEET_F05_ID 없음' };
+} else { blockers.push('F05_SHEET_ID_MISSING'); for (const x of spec.supplierChannels.sharedInputSheet) src[x.code] = { set: new Set(), all: new Set(), 읽힘: false, 비고: 'FREEPASS_SHEET_F05_ID 없음' }; }
 
 // 별도 원천(원천읽기 도구 재사용)
 for (const [code, ok] of [['RP031', r => /^AVAILABLE/.test(r.상태 ?? '') && !/불가/.test(r.상태 ?? '')], ['RP004', r => ['배차가능', '배차문의', '수리중'].includes(r.상태)], ['RP006', r => r.상태 === '게시']]) {
   const out = tmp(code);
   try { run('source-read.mjs', ['read', code, '--out', out]); const rows = JSON.parse(readFileSync(out, 'utf8')); const set = new Set(rows.filter(ok).map(r => key(r.plate)).filter(Boolean));
     src[code] = { set, all: new Set(rows.map(r => key(r.plate)).filter(Boolean)), 읽힘: true, 비고: { RP031: 'ONE API AVAILABLE', RP004: '시트 배차가능·배차문의·수리중', RP006: '홈피 게시(판매완료 제외)' }[code] }; }
-  catch { src[code] = { set: new Set(), all: new Set(), 읽힘: false, 비고: '원천 읽기 실패' }; }
+  catch { blockers.push(`SOURCE_READ_FAILED:${code}`); src[code] = { set: new Set(), all: new Set(), 읽힘: false, 비고: '원천 읽기 실패' }; }
 }
 { const out = tmp('RP023'); const args = ['read', 'RP023', '--out', out]; if (opt('homepage-plates')) args.push('--homepage-plates', opt('homepage-plates'));
   try { run('source-read.mjs', args); const rows = JSON.parse(readFileSync(out, 'utf8')); const set = new Set(rows.map(r => key(r.plate)));
     const hpOnly = new Set(rows.filter(r => /홈페이지/.test(r.원천 ?? '')).map(r => key(r.plate))); // 대표 10-12: 홈페이지 게시 목록이 판매 가능 정본, 시트는 보조
     src.RP023 = opt('homepage-plates') ? { set: hpOnly, all: set, 읽힘: true, 비고: `홈페이지 게시 목록이 정본(시트에만 있는 ${set.size - hpOnly.size}대는 판매 가능에서 제외)` } : { set, all: set, 읽힘: true, 비고: '시트 목록에 존재(홈피 목록 파일 없음 → 일부)' }; }
-  catch { src.RP023 = { set: new Set(), all: new Set(), 읽힘: false, 비고: '원천 읽기 실패' }; } }
+  catch { blockers.push('SOURCE_READ_FAILED:RP023'); src.RP023 = { set: new Set(), all: new Set(), 읽힘: false, 비고: '원천 읽기 실패' }; }
+  // 오토플러스는 홈페이지 목록이 정본이다. 목록 파일이 없거나(자동 읽기 길 없음) 비정상적으로 작으면 계획을 만들지 않는다 — 빈 목록이면 판매 중 전부가 하향 대상이 된다.
+  const hpPath = opt('homepage-plates'), hpCount = hpPath && existsSync(hpPath) ? readFileSync(hpPath, 'utf8').split(/\r?\n/).filter(x => x.trim()).length : 0;
+  if (!process.env.FREEPASS_AUTOPLUS_SHEET_ID) blockers.push('AUTOPLUS_SHEET_ID_MISSING');
+  if (hpCount < 10) blockers.push(`AUTOPLUS_HOMEPAGE_LIST_MISSING_OR_TOO_SMALL:${hpCount}`); }
 { const mine = docs.filter(d => d.code === 'RP012' && d.listable), last = Math.max(0, ...mine.map(d => d.upd ?? 0)); // 수집기가 읽어 온 결과를 원천 기준으로 본다(대표 10-12)
   src.RP012 = { set: new Set(mine.map(d => d.plate)), all: new Set(docs.filter(d => d.code === 'RP012').map(d => d.plate)), 읽힘: true, 비고: `ERP4 매시 수집기 반영 결과 기준(마지막 수정 ${last ? new Date(last).toISOString().slice(0, 16) + 'Z' : '-'})` }; }
 
@@ -147,7 +152,9 @@ if (argv.includes('--detail')) for (const r of read) { if (r.원천O데이터X.l
 const diffN = read.reduce((n, r) => n + r.원천O데이터X.length + r.데이터O원천X.length, 0), blocked = rows.filter(r => !r.읽힘 && r.데이터판매).map(r => r.이름);
 const alert = `[데이터 감독] ${new Date().toISOString()} 판매가능 차이 ${diffN}건(원천O데이터X ${read.reduce((n, r) => n + r.원천O데이터X.length, 0)} · 데이터O원천X ${read.reduce((n, r) => n + r.데이터O원천X.length, 0)}) · ERP5≠데이터 ${rows.reduce((n, r) => n + r.ERP5와데이터차이.length, 0)}${blocked.length ? ' · 원천 미확인 ' + blocked.join(',') : ''}`;
 if (diffN || blocked.length) { console.log(alert); if (opt('alert-file')) appendFileSync(opt('alert-file'), alert + '\n'); }
+if (blockers.length) console.log(`주의: 읽기가 불완전합니다 — ${blockers.join(', ')}`);
 if (opt('plan-out')) { // 노출 하향·신규 편입·재노출 «시험 실행» 계획(쓰기 0). 승인 뒤 별도 쓰기 도구가 digest 를 대조해 적용한다.
+  assertPlanComplete(blockers); // fail-closed: 불완전·실패한 읽기가 하나라도 있으면 계획 파일을 만들지 않는다
   const plans = {};
   for (const r of read) {
     const c = r.code, s_ = src[c], mine = docs.filter(d => d.code === c), dataPlates = new Set(mine.map(d => d.plate));

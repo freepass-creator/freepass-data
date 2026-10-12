@@ -19,6 +19,8 @@ for (let page = 1; page <= 100; page++) {
   records.push(...(body.data ?? [])); syncedAt = body.synced_at; stale = body.stale; total = body.pagination?.total ?? records.length;
   if (!body.data?.length || records.length >= total) break;
 }
+// fail-closed: 목록이 응답한 총수와 읽은 수가 다르면 불완전 — 쓰기 전 계획의 입력으로 쓰지 못하게 종료한다.
+if (records.length !== total) { console.error(`IANCAR_LIST_INCOMPLETE read=${records.length} total=${total}`); process.exit(3); }
 if (process.argv.includes('--conditions')) { // 전 차량 기간별 요금·보증금(조건) 직접 읽기 — 차량당 getRates 1회, 동시 3
   const mapOut = arg('--map-out');
   const rows: Record<string, unknown>[] = []; let next = 0; const keys = new Set<string>();

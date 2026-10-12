@@ -7,6 +7,13 @@ export function f05RowSellable({ status, hidden = false }) {
   return String(status ?? '').trim() !== F05_NOT_SELLABLE_STATUS;
 }
 
+/** 읽기 전용 도구의 fail-closed: 불완전·실패한 읽기(blockers)가 하나라도 있으면 계획 생성을 중단한다. 오류 메시지는 고정 코드만. */
+export function assertPlanComplete(blockers) {
+  if (!blockers || blockers.length === 0) return;
+  console.error(`PLAN_BLOCKED ${blockers.join(' ')}`);
+  throw Object.assign(new Error('PLAN_BLOCKED'), { blockers });
+}
+
 /**
  * spreadsheets.get(ranges=탭!A:A, includeGridData) 응답에서 탭별 «숨긴 줄 번호(1부터)» 집합을 만든다.
  * rowMetadata[i] 가 hiddenByUser(행 숨기기) 또는 hiddenByFilter(필터 숨김)이면 숨긴 줄. 응답에 없는 줄은 보이는 줄.
