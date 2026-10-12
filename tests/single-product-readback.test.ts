@@ -138,7 +138,23 @@ describe('trusted bounded single-product runtime readback', () => {
     const deploy = workflow.split('\n  verify:')[0]!;
     expect(deploy).toContain('git show "$GITHUB_SHA:scripts/verify-single-product-readback.mjs"');
     expect(deploy.indexOf('git show "$GITHUB_SHA:scripts/verify-single-product-readback.mjs"')).toBeLessThan(deploy.indexOf('ref: ${{ steps.runtime-source.outputs.sha }}'));
-    expect(deploy.match(/gcloud secrets versions access/g)).toHaveLength(1);
+    // 비밀 읽기는 지정한 두 단계에서만 각각 정확히 1회, 그 밖의 모든 단계에서는 0회:
+    //  - 'Verify IAM denial and authenticated compatibility readback'(읽기 확인, 항상)
+    //  - 'Verify photo consumer secret before enabling the photo ID gate'(사진 ID 게이트를 켤 때만, 값은 버리고 존재·권한·형식만)
+    const stepBlocks = deploy.split(/\n      - (?=name: |uses: )/).slice(1);
+    const stepName = (block: string) => /^name: (.+)$/m.exec(block)?.[1]?.trim() ?? '(uses)';
+    const reads = stepBlocks.map(block => ({ name: stepName(block), count: (block.match(/gcloud secrets versions access/g) ?? []).length }));
+    const allowed = new Set(['Verify IAM denial and authenticated compatibility readback', 'Verify photo consumer secret before enabling the photo ID gate']);
+    for (const read of reads) expect({ name: read.name, count: read.count }).toEqual({ name: read.name, count: allowed.has(read.name) ? 1 : 0 });
+    expect(reads.filter(read => allowed.has(read.name))).toHaveLength(2);
+    // 배포 전 검증 단계: 실행 추적 끔, 조회·검증 명령의 stdout·stderr 모두 폐기, 실패 시 고정 문구만.
+    const photoVerify = stepBlocks.find(block => stepName(block) === 'Verify photo consumer secret before enabling the photo ID gate')!;
+    expect(photoVerify).toContain('set +x');
+    expect(photoVerify.indexOf('set +x')).toBeLessThan(photoVerify.indexOf('gcloud secrets versions access'));
+    expect(photoVerify).toMatch(/gcloud secrets versions access[^\n]*2>\/dev\/null/);
+    expect(photoVerify).toMatch(/jq -e [^\n]*>\/dev\/null 2>&1/);
+    expect(photoVerify).toContain('::error::소비처 비밀');
+    expect(photoVerify).not.toMatch(/set -[a-z]*x|echo[^\n]*\$\{?consumers_json/);
     expect(deploy).toContain('READBACK_CONSUMERS_JSON="$consumers_json" COMPAT_RESPONSE_FILE="$response_file"');
     expect(deploy).toContain('Clean trusted readback helper');
   });
