@@ -1,7 +1,7 @@
 /** 이안카 단발 적용 건수 관문 — 승인한 계획 건수 범위를 벗어나면 쓰기 전에 멈춘다(fail-closed).
  * 설정이 없거나 모양이 틀리거나 필수 항목이 빠지면 «통과»가 아니라 «중단»이다. */
 export const IANCAR_SYNC_REQUIRED_KEYS = [
-  'created', 'absenceHeld', 'withdrawalHoldsReleased', 'open', 'deletes', 'contractChanges', 'skippedCount',
+  'created', 'absenceHeld', 'withdrawalHoldsReleased', 'open', 'deletes', 'contractChanges', 'policyDocumentChanges', 'skippedCount',
 ] as const;
 
 export type IancarSyncGateResult = { ok: true } | { ok: false; reasons: string[] };
