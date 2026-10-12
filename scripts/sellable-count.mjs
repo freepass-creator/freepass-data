@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { decodeValue } from './supplier-freshness-lib.mjs';
 import { f05RowSellable, hiddenRowsByTab } from './sellable-lib.mjs';
 
@@ -43,11 +44,11 @@ const token = execFileSync('gcloud', ['auth', 'print-access-token'], { encoding:
 const docs = []; let pageToken = '';
 do {
   const q = new URLSearchParams({ pageSize: '300' }); if (pageToken) q.set('pageToken', pageToken);
-  for (const f of ['car_number', 'provider_company_code', 'partner_code', 'listable', 'status', '_var_polled_at', '_direct_ingest_at']) q.append('mask.fieldPaths', f);
+  for (const f of ['car_number', 'provider_company_code', 'partner_code', 'listable', 'status', '_pin_state', '_var_polled_at', '_direct_ingest_at']) q.append('mask.fieldPaths', f);
   const res = await fetch(`https://firestore.googleapis.com/v1/projects/${process.env.FIREBASE_PROJECT_ID || 'freepasserp5'}/databases/(default)/documents/products?${q}`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error(`FIRESTORE_READ_${res.status}`);
   const body = await res.json();
-  for (const d of body.documents ?? []) { const f = Object.fromEntries(Object.entries(d.fields ?? {}).map(([k, v]) => [k, decodeValue(v)])); docs.push({ plate: key(f.car_number), code: f.provider_company_code || f.partner_code || '-', listable: f.listable === true, obs: stateObs(f) }); }
+  for (const d of body.documents ?? []) { const f = Object.fromEntries(Object.entries(d.fields ?? {}).map(([k, v]) => [k, decodeValue(v)])); docs.push({ id: d.name.split('/').pop(), pin: f._pin_state ?? null, status: f.status ?? null, plate: key(f.car_number), code: f.provider_company_code || f.partner_code || '-', listable: f.listable === true, obs: stateObs(f) }); }
   pageToken = body.nextPageToken ?? '';
 } while (pageToken);
 const erp5 = new Set(((await (await fetch('https://freepasserp5.vercel.app/api/catalog', { signal: AbortSignal.timeout(90000) })).json()).vehicles ?? []).map(v => key(v.plate)));
@@ -97,10 +98,10 @@ if (process.env.FREEPASS_SHEET_F05_ID) {
 } else for (const x of spec.supplierChannels.sharedInputSheet) src[x.code] = { set: new Set(), all: new Set(), 읽힘: false, 비고: 'FREEPASS_SHEET_F05_ID 없음' };
 
 // 별도 원천(원천읽기 도구 재사용)
-for (const [code, ok] of [['RP031', r => /^AVAILABLE/.test(r.상태 ?? '') && !/불가/.test(r.상태 ?? '')], ['RP004', r => ['배차가능', '배차문의'].includes(r.상태)], ['RP006', r => r.상태 === '게시']]) {
+for (const [code, ok] of [['RP031', r => /^AVAILABLE/.test(r.상태 ?? '') && !/불가/.test(r.상태 ?? '')], ['RP004', r => ['배차가능', '배차문의', '수리중'].includes(r.상태)], ['RP006', r => r.상태 === '게시']]) {
   const out = tmp(code);
   try { run('source-read.mjs', ['read', code, '--out', out]); const rows = JSON.parse(readFileSync(out, 'utf8')); const set = new Set(rows.filter(ok).map(r => key(r.plate)).filter(Boolean));
-    src[code] = { set, all: new Set(rows.map(r => key(r.plate)).filter(Boolean)), 읽힘: true, 비고: { RP031: 'ONE API AVAILABLE', RP004: '시트 배차가능·배차문의', RP006: '홈피 게시(판매완료 제외)' }[code] }; }
+    src[code] = { set, all: new Set(rows.map(r => key(r.plate)).filter(Boolean)), 읽힘: true, 비고: { RP031: 'ONE API AVAILABLE', RP004: '시트 배차가능·배차문의·수리중', RP006: '홈피 게시(판매완료 제외)' }[code] }; }
   catch { src[code] = { set: new Set(), all: new Set(), 읽힘: false, 비고: '원천 읽기 실패' }; }
 }
 { const out = tmp('RP023'); const args = ['read', 'RP023', '--out', out]; if (opt('homepage-plates')) args.push('--homepage-plates', opt('homepage-plates'));
@@ -144,6 +145,21 @@ if (argv.includes('--detail')) for (const r of read) { if (r.원천O데이터X.l
 const diffN = read.reduce((n, r) => n + r.원천O데이터X.length + r.데이터O원천X.length, 0), blocked = rows.filter(r => !r.읽힘 && r.데이터판매).map(r => r.이름);
 const alert = `[데이터 감독] ${new Date().toISOString()} 판매가능 차이 ${diffN}건(원천O데이터X ${read.reduce((n, r) => n + r.원천O데이터X.length, 0)} · 데이터O원천X ${read.reduce((n, r) => n + r.데이터O원천X.length, 0)}) · ERP5≠데이터 ${rows.reduce((n, r) => n + r.ERP5와데이터차이.length, 0)}${blocked.length ? ' · 원천 미확인 ' + blocked.join(',') : ''}`;
 if (diffN || blocked.length) { console.log(alert); if (opt('alert-file')) appendFileSync(opt('alert-file'), alert + '\n'); }
+if (opt('plan-out')) { // 노출 하향·신규 편입·재노출 «시험 실행» 계획(쓰기 0). 승인 뒤 별도 쓰기 도구가 digest 를 대조해 적용한다.
+  const plans = {};
+  for (const r of read) {
+    const c = r.code, s_ = src[c], mine = docs.filter(d => d.code === c), dataPlates = new Set(mine.map(d => d.plate));
+    const downgrade = mine.filter(d => d.listable && !s_.set.has(d.plate)).map(d => ({ id: d.id, l4: l4(d.plate), status: d.status, pinned: d.pin === 'pinned', reason: s_.all.has(d.plate) ? 'SOURCE_NOT_SELLABLE' : 'SOURCE_ABSENT' })).sort((a, b) => a.id.localeCompare(b.id));
+    const enroll = [...s_.set].filter(p => !dataPlates.has(p)).map(p => ({ l4: l4(p), plate: p })).sort((a, b) => a.l4.localeCompare(b.l4) || a.plate.localeCompare(b.plate));
+    const reexpose = mine.filter(d => !d.listable && s_.set.has(d.plate)).map(d => ({ id: d.id, l4: l4(d.plate), status: d.status, pinned: d.pin === 'pinned' })).sort((a, b) => a.id.localeCompare(b.id));
+    plans[c] = { name: r.이름, sourceSellable: s_.set.size, unassignedPlateRows: s_.미배정 ?? 0, downgrade, enroll, reexpose };
+  }
+  const body = { schema: 'exposure-plan/v1', mode: 'DRY_RUN', writes: 0, readAt: new Date().toISOString(), plans };
+  const digest = createHash('sha256').update(JSON.stringify(plans)).digest('hex');
+  writeFileSync(opt('plan-out'), JSON.stringify({ ...body, digest }, null, 1));
+  console.log('시험 실행 계획 digest ' + digest.slice(0, 16) + ' — 공급사 | 하향 | 신규 편입 | 재노출 | 하향 중 잠금');
+  for (const [c, pl] of Object.entries(plans)) if (pl.downgrade.length || pl.enroll.length || pl.reexpose.length || pl.unassignedPlateRows) console.log([`${pl.name}(${c})`, pl.downgrade.length, pl.enroll.length + (pl.unassignedPlateRows ? `(+번호미배정 ${pl.unassignedPlateRows})` : ''), pl.reexpose.length, pl.downgrade.filter(x => x.pinned).length].join(' | '));
+}
 if (opt('json')) writeFileSync(opt('json'), JSON.stringify(rows.map(r => ({ ...r })), null, 1));
 if (global.__hiddenOk === false) console.log('주의: 숨긴 줄 메타데이터를 읽지 못함 — 숨긴 줄을 판매 가능으로 셌을 수 있음');
 else console.log(`숨긴 줄(차량번호 있는 줄) ${Object.values(globalThis.__hiddenPlateRows ?? {}).reduce((n, v) => n + v, 0)}개(행 숨기기·필터 숨김)는 출고불가로 제외: ${JSON.stringify(globalThis.__hiddenPlateRows ?? {})}`);
