@@ -50,7 +50,7 @@ import type {
 import { createFirestoreDataStore } from '../infra/firestore-store.js';
 import { readVehicleUidMigrationInputs } from '../infra/vehicle-uid-migration-firestore-reader.js';
 import { createVehicleUidMigrationFirestoreWriter } from '../infra/vehicle-uid-migration-firestore-writer.js';
-import { readPeriodFeeLedgerPlanInputs } from '../infra/period-fee-ledger-firestore-reader.js';
+import { readPeriodFeeLedgerPlanInputs, listActivePeriodFeeLedgerRows } from '../infra/period-fee-ledger-firestore-reader.js';
 import { PeriodFeeLedgerFirestoreWriter } from '../infra/period-fee-ledger-firestore-writer.js';
 import { MemoryDataAccessLogStore } from '../infra/memory-data-access-log.js';
 import { createFirestoreVehicleMasterStore } from '../infra/vehicle-master-firestore-store.js';
@@ -766,5 +766,33 @@ export function createVehicleMasterReadOnlyDataAccessRuntime(input: {
         inputDigest: value.summary.inputDigest
       })
     }, () => buildEstimateMasterFromCanonicalVehicleMaster(store, { bridge }))
+  };
+}
+
+export function createPeriodFeeCoverageRuntime() {
+  const access = new DataAccessGateway(new MemoryDataAccessLogStore());
+  const context = {
+    actor: { id: 'service:freepass-data-period-fee', kind: 'SERVICE' as const },
+    clientId: 'job:audit-period-fee-coverage',
+    purpose: 'read-only coverage audit and lookup of the ACTIVE period fee ledger against listable products',
+  };
+  return {
+    readInputs: () => access.read({
+      context,
+      operation: 'READ_PERIOD_FEE_LEDGER_PLAN_INPUTS',
+      resource: { kind: 'SOURCE', name: 'products+policy' },
+      summarize: (value) => ({
+        products: Object.keys(value.products).length,
+        policies: Object.keys(value.policies).length,
+        settlementRowsAccessCount: 0,
+        digest: stableDigest({ productKeys: Object.keys(value.products).sort(), observedAt: value.observedAt }),
+      }),
+    }, readPeriodFeeLedgerPlanInputs),
+    readActiveLedgerRows: () => access.read({
+      context,
+      operation: 'READ_ACTIVE_PERIOD_FEE_LEDGER_ROWS',
+      resource: { kind: 'SOURCE', name: 'period_fee_ledger' },
+      summarize: (rows) => ({ count: rows.length, digest: stableDigest(rows.map(row => row.documentKey).sort()) }),
+    }, listActivePeriodFeeLedgerRows),
   };
 }
