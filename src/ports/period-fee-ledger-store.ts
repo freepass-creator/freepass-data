@@ -9,6 +9,7 @@ import type {
 type Rec = Record<string, unknown>;
 
 export type ExistingPeriodFeeDocument = { digest: string; data: Rec };
+export type ExistingPeriodFeeDocumentWithKey = ExistingPeriodFeeDocument & { documentKey: string };
 
 export type PeriodFeeSnapshotWriteGuard = {
   lockOwnerId: string;
@@ -21,8 +22,10 @@ export type PeriodFeeLedgerApplyStore = {
   releaseSnapshotWriteLock(ownerId: string): Promise<void>;
   getLedgerDocument(documentKey: string): Promise<ExistingPeriodFeeDocument | null>;
   createLedgerDocument(documentKey: string, row: PeriodFeeLedgerRow, digest: string): Promise<void>;
+  listLedgerDocumentsByRunIdPrefix(runId: string, pageSize?: number): Promise<ExistingPeriodFeeDocumentWithKey[]>;
   getProductChangeHistoryDocument(documentKey: string): Promise<ExistingPeriodFeeDocument | null>;
   createProductChangeHistoryDocument(documentKey: string, row: ProductChangeHistoryRow | ProductChangeHistoryBaselineRow, digest: string): Promise<void>;
+  listProductChangeHistoryDocumentsByRunIdPrefix(runId: string, pageSize?: number): Promise<ExistingPeriodFeeDocumentWithKey[]>;
   getSnapshotRun(runId: string): Promise<PeriodFeeSnapshotRun | null>;
   getActiveSnapshotRun(snapshotId: string): Promise<PeriodFeeSnapshotRun | null>;
   getLatestSupersededSnapshotRun(snapshotId: string, excludeRunId: string): Promise<PeriodFeeSnapshotRun | null>;

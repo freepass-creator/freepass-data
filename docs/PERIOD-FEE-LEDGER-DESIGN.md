@@ -1,5 +1,4 @@
 # 기간별 청구·지급 장부 설계 (2026-10-11)
-
 ## 목적과 결정
 
 대표 승인(2026-10-11): **기간별 청구·지급을 프리패스 데이터(Firestore)에 박제하고 온라인에서 직접 읽는다.**
@@ -422,3 +421,56 @@ PR·시험·일정 반영:
 계약 연결 소비자는 장부 행을 계약 조건으로 바로 쓰지 않는다. 계약일이 날짜뿐이면 `valueAsOf < 계약일(접수일)`인 행 중 가장 늦은 snapshot을 고르고, 계약 시각 `contractAt`이 있으면 `valueAsOf` 또는 `computedAt`이 그 시각 이전인 행만 고른다. 그 행의 월 대여료와 보증금이 계약 기록과 일치해야 한다. 계약일 이전 snapshot이 없거나 값이 다르면 `CONTRACT_TIME_VALUE_UNAVAILABLE` HOLD로 둔다.
 
 따라서 첫 snapshot 이전 계약, 예를 들어 장부가 없는 74건은 현재값으로 대체하지 않는다. 접수 시점 snapshot, 박제 이력, 공급사 원문 이력을 별도로 찾아야 하며 찾지 못하면 원문 없음 HOLD다. 계획기와 소비 규칙은 "계약 당시 값"이라는 플래그나 표현을 만들지 않는다.
+
+## run 문서 크기 제한과 소유권 판정
+
+`period_fee_snapshot_runs/<runId>` 문서에는 행 문서 키 목록을 저장하지 않는다. run 문서에는 `rowCount`, `rowKeysDigest`, `rowContentDigest`, `historyRowCount`, `historyKeysDigest`, `historyContentDigest`, `planDigest`, 상태, 시각, 이전 ACTIVE run 같은 작은 manifest 필드만 둔다. `rowKeys`, `plannedCreateKeys`, `createdDocumentKeys` 같은 배열은 Firestore 1MiB 문서 한도를 넘길 수 있으므로 금지한다. 운영에는 `rowContentDigest`/`historyContentDigest` 없는 기존 run이 없으므로 구버전 run은 읽기 거부로 둔다.
+
+소유 행은 문서 ID 접두로 판정한다. ledger와 history 문서 ID는 `runId + "__" + 원래 키` 형태이며, reader/readback/rollback은 `__name__ >= runId + "__"` 그리고 `__name__ < runId + "__\uf8ff"` 범위를 500개 단위로 읽는다. 쓰기 때 계획에서 소유 문서들의 `[문서 키, 문서 digest]` 쌍을 키로 정렬해 `stableDigest`한 `rowContentDigest`와 `historyContentDigest`를 PREPARED run 문서에 기록한다. 되읽기, reader, 이전 run 복원, ACTIVE 재호출 멱등 검증은 접두 조회로 읽은 실제 문서의 키 digest와 내용 digest를 run 문서의 `rowCount/rowKeysDigest/rowContentDigest` 또는 `historyRowCount/historyKeysDigest/historyContentDigest`와 모두 비교할 때만 인정한다. 불일치하면 `LEDGER_READ_INCONSISTENT`로 실패한다.
+
+rollback도 같은 접두 범위로 현재 남아 있는 이 run 소유 문서만 찾고, 각 문서의 저장 digest가 삭제 직전 기대 digest와 일치하는 경우에만 삭제한다. 이전 ACTIVE run 복원 전에는 이전 run의 접두 범위 row count와 key digest를 다시 검증한다.
+
+## 손오공 상품 유형별 기간별 매핑표
+
+2026-10-12 대표 확정으로 손오공 `RP012`의 픽업 구독과 오공 구독은 차량가액 기준 수수료를 쓰지 않고 F04 `수수료표`의 기간별 규칙만 쓴다. UNKNOWN은 0이 아니며, 수수료 ledger도 같은 상태와 reasonCode를 보존한다. 오공구독 기준 대여료는 같은 상품 12개월 월 대여료로 확정했고, 청구는 `CALCULATED`와 `OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12`를 쓴다. 자기 기간 월 대여료 기준 경로와 별도 `OGONG_FEE_BASE` 상수는 없다.
+
+| 유형 | 기간 | 청구 규칙 | 지급 규칙 | 근거 행 | 근사 여부 | 메모 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 정정 | 전체 | 재렌트·중고렌트는 청구만 `CALCULATED_APPROX` | 재렌트·중고렌트 지급은 `CALCULATED` | 5~9 | 청구만 근사 | 보험료 차감 때문에 청구만 근사, 지급은 확정 |
+| 정정 | 전체 | 픽업구독 청구는 `CALCULATED_APPROX` | 픽업구독 지급도 `CALCULATED_APPROX` | 5~8, 191 | 청구·지급 모두 근사 | 12~48개월은 재렌트 대용, 60개월은 191행 잠정 |
+| 재렌트/중고렌트 | 12 | `600,000 - 100,000` | `500,000` | 5 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 재렌트/중고렌트 | 24 | `월대여료 × 4.75% × 기간 - 100,000` | `월대여료 × 4.00% × 기간` | 6 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 재렌트/중고렌트 | 36 | `월대여료 × 3.75% × 기간 - 100,000` | `월대여료 × 3.00% × 기간` | 7 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 재렌트/중고렌트 | 48 | `월대여료 × 3.25% × 기간 - 100,000` | `월대여료 × 2.50% × 기간` | 8 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 재렌트/중고렌트 | 60 | `월대여료 × 2.25% × 기간 - 100,000` | `월대여료 × 1.75% × 기간` | 9 | 청구만 근사 | 청구 `SONOKONG_INSURANCE_DEDUCT_100K`, 지급 `CALCULATED` |
+| 오공구독 | 12 | `12개월 월대여료 - 100,000` | `Q12` | 10 | 없음 | sourceRefs `OGONG_12M_BASE_MINUS_INSURANCE_2026-10-12`; Q12 없으면 `OGONG_12M_BASE_MISSING` |
+| 오공구독 인수형 | 24 | `12개월 월대여료 - 100,000 + 200,000` | `Q12` | 11 | 없음 | Q12 없으면 `OGONG_12M_BASE_MISSING`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 인수형 | 36 | `12개월 월대여료 - 100,000 + 400,000` | `Q12` | 12 | 없음 | Q12 없으면 `OGONG_12M_BASE_MISSING`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 인수형 | 48 | `12개월 월대여료 - 100,000 + 600,000` | `Q12` | 13 | 없음 | Q12 없으면 `OGONG_12M_BASE_MISSING`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 인수형 | 60 | `12개월 월대여료 - 100,000 + 600,000` | `Q12` | 14 | 없음 | Q12 없으면 `OGONG_12M_BASE_MISSING`, 인수형 확인 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 오공구독 반납형 | 24·36·48·60 | 없음 | 없음 | 173 | 미확정 | `RETURN_SUBSCRIPTION_TERM_NOT_SUPPORTED`; 인수/반납 구분 자체가 없으면 `SUBSCRIPTION_FORM_REQUIRED` |
+| 픽업구독 | 12 | `600,000 - 100,000` | `500,000` | 5 | 청구만 근사 | 재렌트 12개월 규칙 재사용, sourceRefs `SONOKONG_PICKUP_TERM_PROXY_RERENT`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+| 픽업구독 | 24 | `월대여료 × 4.75% × 기간 - 100,000` | `월대여료 × 4.00% × 기간` | 6 | 청구만 근사 | 재렌트 24개월 규칙 재사용, sourceRefs `SONOKONG_PICKUP_TERM_PROXY_RERENT`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+| 픽업구독 | 36 | `월대여료 × 3.75% × 기간 - 100,000` | `월대여료 × 3.00% × 기간` | 7 | 청구만 근사 | 재렌트 36개월 규칙 재사용, sourceRefs `SONOKONG_PICKUP_TERM_PROXY_RERENT`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+| 픽업구독 | 48 | `월대여료 × 3.25% × 기간 - 100,000` | `월대여료 × 2.50% × 기간` | 8 | 청구만 근사 | 재렌트 48개월 규칙 재사용, sourceRefs `SONOKONG_PICKUP_TERM_PROXY_RERENT`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+| 픽업구독 | 60 | `월대여료 × 2.75% × 기간 - 100,000` | `월대여료 × 2.00% × 기간` | 191 | 청구만 근사 | 잠정 행 191, sourceRefs `SONOKONG_PICKUP_60_PROVISIONAL_ROW191`, `SONOKONG_INSURANCE_DEDUCT_100K` |
+
+오공구독의 `q12Basis`는 reference builder가 같은 상품의 같은 정산방식·약정주행 조건에서 12개월 가격행 월 대여료를 찾아 `PRODUCT_12_MONTH_RENT`로 자동 주입한다. 12개월 행 자체는 인수·반납형 공통 기준으로 계산하며, 24~60개월은 원문 가격키나 필드에서 인수형이 확인될 때만 BUYOUT으로 계산한다. 오공구독 최종 청구가 음수이면 0으로 보정하지 않고 `NEGATIVE_BILLING_CONFIRM_REQUIRED`로 둔다.
+
+## 수수료 저장 구조 — 혼합(C), 최소 보강 (2026-10-12)
+
+정책은 평소 거의 안 바뀐다(하루에도 바뀌는 건 지금 맞추는 동안뿐). 그래서 **구조는 지금 박제 장부 위에 최소로** 얹고, 자동 재계산 파이프라인·상시 전환 장치는 만들지 않는다. 정책 변경 = 드문 **수동 절차**: 새 규칙 버전 추가 → 엔진 재계산(계획) → 검증 → 활성 전환(새 run 을 되읽기 통과 뒤 ACTIVE).
+
+세 층: ① 정책 규칙표는 버전별 데이터(덮어쓰기 금지) ② 현재 가격 행의 계산값은 엔진 한 곳이 계산해 장부에 박제(규칙 ID·정책 ID·엔진 revision·입력 digest 포함) ③ 계약 확정 시점 값은 계약에 동결. 소비처는 각자 계산하지 않고 같은 활성 run 의 값만 읽는다.
+
+새로 넣는 것은 이 셋뿐이다.
+- **(가) 정책 버전 발효 정보(칸만)**: `effectiveFrom`·`effectiveTo`(선택)·`effectiveBasis`('CONTRACT_DATE'|'SETTLEMENT_MONTH'|'UNCONFIRMED')·`changeKind`('NEW_APPLICATION'|'RETROACTIVE_CORRECTION'). 대표 시작일 답 전에는 `UNCONFIRMED` — 이 정책으로 계산한 값은 계약 동결로 승격하지 않는다.
+- **(나) 활성 전환 전 검증 점검**: 기존 «되읽기 통과 후 ACTIVE» 에 점검 셋을 더한다 — ⒜ 청구·지급 쌍 누락 0 ⒝ 직전 ACTIVE 대비 차액 목록(규칙 변경으로 의도한 것만) ⒞ UNKNOWN 사유 분포(증가 시 보고). 통과하면 ACTIVE 전환(기대 이전 run 일치 조건, 늦게 끝난 구버전 준비가 최신을 덮지 못함 — 현재 잠금·run 조건으로 이미 대부분 충족, 점검 ⒜⒝⒞ 만 추가).
+- **(다) 계약 동결 참조**: 계약 확정 시 계약 키 → 동결 문서 `{계약 키·revision, run/정책 버전 ID, 엔진 revision, 가격 행 참조, 청구/지급 {상태·공급가·VAT·단위}, 입력 digest, 규칙 ID, 근거, 개별 예외 표기(예: 천이 건 4%/3% 는 일반 규칙 위에 덮지 않고 따로)}`. CONFIRMED(계약 이전 관측·확정 정책)일 때만 생성, 근사·UNKNOWN·발효 미확정이면 동결하지 않고 사유와 함께 보류. 저장 위치(계약 문서의 한 칸 vs 신규 컬렉션)는 정산 세션과 합의(승인 항목).
+
+피할 것: 소비처별 계산, 기존 행 일괄 덮어쓰기(새 run 으로만), 최신 가산표로 과거 계약 재계산(동결값을 읽는다).
+필수 시험: 보험료 공제(−100,000)를 계산하는 경로가 엔진 한 곳뿐(소비처에 산출식·상수 없음), 정책 N+1 발효 후에도 N 으로 동결된 계약값 불변, 검증 점검 미통과 run 은 ACTIVE 불가, 발효 미확정 정책값은 동결 승격 불가.
+
+### 장부 변경에 걸리는 시간 (2026-10-12 박제 첫 적용 실측 + 추정)
+- **① 장부 전체(원장 13,339행 + 이력 1,724건) 다시 쓰고 되읽기까지: 실측 약 20분** (run 준비 21:06:41Z → ACTIVE 21:26:59Z = 20분 18초; 행마다 단건 create + 잠금 갱신, 건당 약 80ms). 그 앞의 계획 계산(운영 읽기 + 엔진 계산, 쓰기 없음)은 약 1~2분.
+- **② 공급사 하나(예: 손오공 7,187행 = 계획 행 15,054의 약 48%)만 바뀔 때: 현재 구조는 run 단위로 행 문서를 분리해 «새 run 이 전체 행을 새로 쓰는» 방식이라 실측 기준 약 20분으로 전체와 같다(추정 아님, 구조상 같은 쓰기량).** 시간을 줄이려면 쓰기를 400건 배치로 바꾼다 — 시험용 컬렉션 실측: 실제 행 모양 1,200건을 배치 3번에 13초(≈92건/초) → 전체 13,339행+이력 ≈ **2.5~3분(추정)**, 손오공만 새로 쓰는 구조(공급사 단위 구간)로 바꾸면 ≈ **1.5분 안팎(추정)**. 둘 다 정책 변경이 드물어 지금은 구현하지 않고, 변경이 잦아질 때 배치 쓰기 전환(작은 변경)부터 한다.

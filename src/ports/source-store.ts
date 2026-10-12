@@ -46,4 +46,6 @@ export interface SourceIngestionStore {
   listRaw(runId: string): Promise<RawRecord[]>;
   listCandidates(runId: string): Promise<NormalizedCandidateRecord[]>;
   listLineage(runId: string): Promise<FieldLineageRecord[]>;
+  getCandidate(candidateId: string): Promise<NormalizedCandidateRecord | null>;
+  listCandidatesBySource(sourceId: string): Promise<NormalizedCandidateRecord[]>;
 }

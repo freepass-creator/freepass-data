@@ -27,7 +27,7 @@
 - 기계 정본 uiOwnership / changeControl.baselineVersion. 날짜 두 열 yy-mm-dd, 글씨 9pt. 일 없는 연월 원문은 그대로 보존한다.
 - 차량상태에 인도완료(초록), 취소(빨강), 진행중(주황)을 정확한 값으로 추가. 기존 출고불가·계약중을 자동 변환하지 않는다. 새 색은 대표 최신 UI 지시로 승인한 표시 설정이다. 상태만 고정 9개 ONE_OF_LIST, 나머지 기존 6개 유한 helper 목록·정책 자유 입력 유지. 전체 행 색/취소선·추가 수식 없음.
 - 공급사: 자기 탭 본문 2~100행 입력. 대표/시트 관리: 머리글·열 순서·서식·목록 규격 변경. 종합은 기존 생성 경로, helper는 Data 관리 경로. ERP는 별도 세션.
-- 라이브 13개 탭 A1:BV1은 경고가 아닌 실제 편집 보호, pyh@teamjpk.com + Google 소유자만 수정. 본문은 입력 가능. 시트 소유자/관리 계정으로 접근하는 AI의 직접 API까지 불변으로 강제하는 것은 아님.
+- 라이브 13개 탭 A1:BV1은 경고가 아닌 실제 편집 보호, owner@example.com + Google 소유자만 수정. 본문은 입력 가능. 시트 소유자/관리 계정으로 접근하는 AI의 직접 API까지 불변으로 강제하는 것은 아님.
 - scripts/shared-sheet-ux.mjs는 정확한 탭/머리글 검증 후 제한된 표시 필드만 쓴다. 값·수식·구조 쓰기 차단, 보호 소유권 차이는 HOLD. 보호 조사에는 batchUpdate의 updatedSpreadsheet 전체 메타데이터가 필요하며 기본 metadata 응답의 보호 필드 생략을 부재로 판단하지 않는다.
 - 변경 전 백업 및 비공개 before/after 보존. 라이브 전후 userEnteredValue 차이 0, 9pt·날짜 검증 0 drift, 머리글 메모 962개, 보호 13개. 72 tests PASS. 화면 브라우저 탭 없음: API 서식 되읽기 검증, 실제 렌더/열기 속도는 HOLD. 종합 현재 296행/정본300행 차이는 이번 UI 작업에서 값·구조 변경 없이 별도 HOLD 유지. 자동 감시 미설정.
 
@@ -83,8 +83,8 @@
 - 구현: `scripts/shared-sheet-cascade-runtime.gs`의 onEdit는 현재 입력 행을 읽어 F:I **검증 규칙만** 변경한다. 여러 행 붙여넣기는 전체 편집 범위를 처리한다. 앞 단계가 맞지 않으면 뒤 목록은 제공하지 않고 기존 값을 보존하며 기본 검증 경고를 남긴다. 차종 이름을 생성·정정하거나 F03를 읽고 쓰지 않는다. 게시된 `차종연쇄`를 그대로 사용한다.
 - 선택 행 복구: onSelectionChange와 「차종 목록 → 선택한 행 드롭다운 갱신」 메뉴. Google은 빠른 이벤트를 생략할 수 있으므로 선택 이벤트 자체를 신뢰성 보장으로 표현하지 않는다. API 변경에는 onEdit가 발생하지 않으므로 `planCascadeValidationRefresh`로 같은 계층 규칙의 Sheets API 요청을 별도 생성·적용한다. publisher 자동 연결은 아직 미실행이다.
 - 생성: `node scripts/build-shared-sheet-cascade.mjs --metadata=<private-fresh-metadata.json> --out=<private-script-content.json>`. 공급사 15탭·차종 머리글 순서·sheetId·목록 탭을 정확히 묶는다. 운영 파일 ID는 생성된 비공개 산출물에만 넣는다.
-- 설치: `node scripts/deploy-shared-sheet-cascade.mjs --bundle=<private-script-content.json> --receipt=<private-receipt.json> [--script-id=<existing-bound-id>]`. `FREEPASS_APPS_SCRIPT_ACCESS_TOKEN`은 외부에서 안전하게 제공하며 채팅이나 로그에 출력하지 않는다. API 호출자는 script.projects + userinfo.email 권한과 `pyh@teamjpk.com`이 필요하다. 생성 결과 불명확 시 receipt가 중복 생성을 막으며, 기존 프로젝트의 parentId를 확인하고 다른 코드·manifest를 보존한다. 기존 onEdit/onOpen/onSelectionChange 충돌은 HOLD다. 업로드 후 되읽기는 PERSISTENCE만 확인하며 CUTOVER가 아니다.
-- 2026-10-06 현재: 현재 세션에는 Apps Script API 인증·호출 도구와 인증된 gws/gcloud/clasp가 없어 설치 CLI가 `APPS_SCRIPT_AUTH_UNAVAILABLE`로 쓰기 전 종료했다. Sheets 연결 프로필은 `pyh@teamjpk.com`이며 이 권한을 Apps Script 권한으로 간주하지 않는다. 현재 보조 수식·검증·조건부 서식은 그대로 유지한다.
+- 설치: `node scripts/deploy-shared-sheet-cascade.mjs --bundle=<private-script-content.json> --receipt=<private-receipt.json> [--script-id=<existing-bound-id>]`. `FREEPASS_APPS_SCRIPT_ACCESS_TOKEN`은 외부에서 안전하게 제공하며 채팅이나 로그에 출력하지 않는다. API 호출자는 script.projects + userinfo.email 권한과 `owner@example.com`이 필요하다. 생성 결과 불명확 시 receipt가 중복 생성을 막으며, 기존 프로젝트의 parentId를 확인하고 다른 코드·manifest를 보존한다. 기존 onEdit/onOpen/onSelectionChange 충돌은 HOLD다. 업로드 후 되읽기는 PERSISTENCE만 확인하며 CUTOVER가 아니다.
+- 2026-10-06 현재: 현재 세션에는 Apps Script API 인증·호출 도구와 인증된 gws/gcloud/clasp가 없어 설치 CLI가 `APPS_SCRIPT_AUTH_UNAVAILABLE`로 쓰기 전 종료했다. Sheets 연결 프로필은 `owner@example.com`이며 이 권한을 Apps Script 권한으로 간주하지 않는다. 현재 보조 수식·검증·조건부 서식은 그대로 유지한다.
 
 **운영 전환 순서 (미완료):** 전체 파일 백업 → 기존 bound 프로젝트/trigger 조사 → 설치·코드 되읽기 → 실제 제조사·모델 변경, 새 행, 여러 행 붙여넣기, API 입력 후 갱신과 기존 값 보존 검증 → 전체 현재 행의 F:I 검증을 새 목록으로 seed → 기존 helper 참조의 조건부 서식 교체(빨간 경고 유지 여부 별도 검증) → 검증/수식/조건부 서식에서 `_연쇄_*` 참조 0 확인 → 그때만 helper 수식·탭 정리 → 열기 시간 전후 비교. 종합은 입력 대상이 아니며 종합 검증 목록을 설치하지 않는다.
 
@@ -433,7 +433,7 @@ fields는 위치 식별자와 gridProperties/conditionalFormats, userEnteredForm
 
 ### 한 번 세팅 적용 절차 (2026-10-03 실행 기록)
 
-시트 읽기·쓰기는 이 PC의 `gws`(pyh@teamjpk.com, spreadsheets·drive 범위)로 직접 한다(AI Core capability `workspace.google-direct`). Codex 경유나 브라우저 로그인으로 우회하지 않는다.
+시트 읽기·쓰기는 이 PC의 `gws`(owner@example.com, spreadsheets·drive 범위)로 직접 한다(AI Core capability `workspace.google-direct`). Codex 경유나 브라우저 로그인으로 우회하지 않는다.
 
 1. **백업:** 시트를 같은 폴더에 `[복구용 원본] … — 2026-10-03 정책 칸 분리 전`으로 복사. 공유 설정은 바꾸지 않는다.
 2. **칸 나누기:** 메타데이터와 종합·공급사 탭 1행, 공급사 탭 결합 칸 8개(0부터 42~48, 56열)를 전체 높이로 읽어 `npm run sheets:input:plan -- --split=-`에 표준입력으로 넘긴다(읽은 뒤 5분 안). PLANNED 요청을 고치지 않고 batchUpdate 1회로 보낸다. 본문이 명령줄 한도를 넘으면 같은 요청을 API 본문으로 보낸다.

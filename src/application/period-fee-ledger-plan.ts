@@ -174,8 +174,10 @@ export function normalizeLedgerDepositEvidence(input: {
 }
 
 function normalizeFee(value: Rec | undefined, vehicleValueEvidence: PeriodFeeVehicleValueEvidence | null): PeriodFeeLedgerFeeAmount {
-  const calculatedState = vehicleValueEvidence?.grade === 'APPROX' ? 'CALCULATED_APPROX' : 'CALCULATED';
-  const state = value?.state === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : value?.state === 'CALCULATED' ? calculatedState : 'UNKNOWN';
+  const calculatedState = vehicleValueEvidence?.grade === 'APPROX' || value?.state === 'CALCULATED_APPROX' || value?.approximate === true
+    ? 'CALCULATED_APPROX'
+    : 'CALCULATED';
+  const state = value?.state === 'NOT_APPLICABLE' ? 'NOT_APPLICABLE' : (value?.state === 'CALCULATED' || value?.state === 'CALCULATED_APPROX') ? calculatedState : 'UNKNOWN';
   const rawAmount = value?.amount;
   const rawVatAmount = value?.vatAmount;
   const rawTotalAmount = value?.totalAmount;
@@ -188,7 +190,7 @@ function normalizeFee(value: Rec | undefined, vehicleValueEvidence: PeriodFeeVeh
     vatTreatment: value?.vatTreatment === 'EXCLUDED' || value?.vatTreatment === 'INCLUDED' || value?.vatTreatment === 'UNKNOWN' ? value.vatTreatment : null,
     vatAmount: Number.isSafeInteger(rawVatAmount) ? rawVatAmount as number : null,
     totalAmount: Number.isSafeInteger(rawTotalAmount) ? rawTotalAmount as number : null,
-    reasonCode: text(value?.reasonCode),
+    reasonCode: text(value?.reasonCode) ?? (state === 'CALCULATED_APPROX' ? text(value?.note) : null),
     ruleId: text(value?.ruleId),
     policyId: text(value?.policyId) ?? KAKAO_COMMISSION_POLICY.policyId,
     sourceRefs: Array.isArray(value?.sourceRefs) ? value.sourceRefs.filter((ref): ref is string => typeof ref === 'string') : [],
