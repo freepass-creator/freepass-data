@@ -73,6 +73,22 @@
 **되돌리기**: 스케줄러 일시중지(즉시), 회차별 비공개 백업과 `--restore` 계열 복구, 사진 필드는 `iancar_photo_source_original` 로 복원.
 **재개 뒤 신선도 확인**: PR #500 감시(마지막 성공·연속 실패 경보), `scripts/iancar-one-freshness.mjs --summary`(ONE 갱신 간격), Firestore `sourceSyncedAt` 이 ONE `synced_at` 보다 15분 넘게 뒤처진 시간 비율. 목표: 갱신 후 15분 안 반영률 95%.
 
+### 3-4. 승인용 두 계획 (사진 제외·PHOTO_PENDING, 2026-10-12 04:41~04:51Z, ONE 갱신 04:39:24Z 직후, 쓰기 0)
+| 항목 | A. 노출 중단 해제 포함 | B. 해제 제외(8대 그대로 보류) |
+| --- | --- | --- |
+| digest | `3e54e413ef21665b6bbac3fa7d7db97a3686555484c8c465eb127f4c7c608457` | `801433e31bc49e673d88603c936d8f45696c9a51473dbf105ede288a3c593b82` |
+| 원천 | 106대 | 106대 |
+| 기존 연결 갱신 | 99 | 91 |
+| 신규 생성 | 6 | 6 |
+| 원천 부재로 공개 보류(삭제 아님·원문 보존) | 12 | 12 |
+| 노출 중단 해제 | 8 | 0 (8대 보류 유지) |
+| PHOTO_PENDING 표시 | 51 | 46 |
+| 적용 후 노출 | 96 | 88 |
+| 쓰기 문서 합 | 117 | 109 |
+| 삭제 / 계약 변경 / 정책 문서 변경 | 0 / 0 / 0 | 0 / 0 / 0 |
+- digest 는 «원천 수집본(synced_at)+문서 상태»에 묶여 있어 승인한 digest 그대로를 나중에 적용할 수는 없다. 승인은 이 계획의 «형태»에 대한 것이고, 적용 실행은 갱신 직후 같은 옵션으로 계획→digest 일치 확인→적용을 한 번에 하며 건수가 위 표와 ±(원천 변동분)인지 확인한다.
+- 되돌리기: 적용 전 비공개 백업이 필수(`EANCAR_ONE_PRIVATE_EVIDENCE_BUCKET` 지정 필요 — 지금 환경에 미지정). 문서별 원래 값은 `iancar_photo_source_original`(사진), `iancar_phase_one_source_original`·`publication_withdrawal_source_original`(상태·보류)에 남는다. **한 줄 전체 복원 명령은 아직 없다**(`--restore-photos=` 는 사진 전용) — 승인 전 보완 항목.
+
 ## 4. 복구 순서 (승인 항목은 지휘통제실로)
 1. (이 PR) 원인·실측·관측 도구. 
 2. 승인 필요: 신선한 ONE 응답(`synced_at` 이 수집 15분 안)이 오는 시점에 `--sync` 계획 → 검토 → 단발 `--apply-sync`(`EANCAR_ONE_SYNC_APPROVED=true`). 계획에서 §3 의 9대 처리(미관측 → 공개 보류, 삭제 아님)가 어떻게 나오는지 먼저 본다.
