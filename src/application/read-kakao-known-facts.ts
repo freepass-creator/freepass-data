@@ -67,7 +67,7 @@ function matchesVehicle(root: Record<string, unknown>, vehicle: Record<string, u
 }
 
 function factLayer(topic: KakaoKnownFactTopic, vehicleResolution: string, channel: string): KakaoKnownFact['layer'] {
-  return vehicleResolution === 'LINKED' && !isKakaoT0OnlyInfo(topic) && (channel === '' || channel === 'KAKAO_RAW') ? 'T1' : 'T0';
+  return vehicleResolution === 'LINKED' && !isKakaoT0OnlyInfo(topic) && channel === 'KAKAO_RAW' ? 'T1' : 'T0'; // 채널이 없거나 알 수 없으면 안전 기본값 T0
 }
 
 function recomputedSignal(info: Record<string, unknown>, asOf: string) {
@@ -79,7 +79,7 @@ function recomputedSignal(info: Record<string, unknown>, asOf: string) {
     fields: { 항목: text(info.item), 요약: text(info.summary), 값: text(info.value) },
     source: {
       sentAt, side: '', msgNo: '', excerpt: '',
-      ...(text(info.channel) ? { channel: text(info.channel) as 'KAKAO_RAW' | 'EN1_SUMMARY' | 'KAKAO_NOTICE' } : {}),
+      channel: text(info.channel) as 'KAKAO_RAW' | 'EN1_SUMMARY' | 'KAKAO_NOTICE',
       ...(info.noticeFixed === true ? { noticeFixed: true as const } : {}),
     },
   }, asOf);

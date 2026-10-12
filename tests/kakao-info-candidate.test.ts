@@ -11,7 +11,7 @@ import {
 const base = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
   supplierCode: 'RP001',
   roomCode: 'K-TESTFAKE',
-  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: '99허0000 재고 확인' },
+  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', channel: 'KAKAO_RAW', excerpt: '99허0000 재고 확인' },
   type: '재고',
   vehicle: {
     plate: '99허0000',
@@ -183,7 +183,10 @@ describe('KakaoInfoCandidate/v1 validation', () => {
     expect(createKakaoInfoCandidate({ ...summary(), needsSupplierConfirm: false })).toEqual({ ok: false, reason: 'INVALID_FIELDS' });
     expect(createKakaoInfoCandidate(summary({}, { plate: '99허0000', plateEvidence: { source: 'LITERAL_IN_UTTERANCE', distance: 0 } }))).toEqual({ ok: false, reason: 'INVALID_PLATE_EVIDENCE' });
     expect(createKakaoInfoCandidate(summary({ sentAtApprox: 'before' }))).toEqual({ ok: false, reason: 'INVALID_SOURCE' });
-    expect(createKakaoInfoCandidate(summary({ channel: 'UNKNOWN_CHANNEL' }))).toEqual({ ok: false, reason: 'INVALID_SOURCE' });
+    expect(createKakaoInfoCandidate(summary({ channel: 'UNKNOWN_CHANNEL' }))).toEqual({ ok: false, reason: 'INVALID_CHANNEL' });
+    const { channel: _omit, ...noChannelSource } = base().source;
+    expect(createKakaoInfoCandidate(base({ source: noChannelSource as never }))).toEqual({ ok: false, reason: 'INVALID_CHANNEL' });
+    expect(createKakaoInfoCandidate(base({ source: { ...base().source, channel: undefined } as never }))).toEqual({ ok: false, reason: 'INVALID_CHANNEL' });
     const dateInferred = createKakaoInfoCandidate(summary({ sentAtApprox: 'dateInferred' }));
     expect(dateInferred.ok && dateInferred.candidate.source.sentAtApprox).toBe('dateInferred');
   });

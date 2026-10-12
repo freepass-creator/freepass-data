@@ -48,8 +48,8 @@ function payloadFor(candidate: KakaoInfoCandidate, now: string, conflict: boolea
       excerpt: candidate.source.excerpt,
     },
     normalized: {
-      layer: isKakaoT0OnlyInfo(candidate.type) || (candidate.source.channel ?? 'KAKAO_RAW') !== 'KAKAO_RAW' ? 'T0' : signal.layer,
-      channel: candidate.source.channel ?? 'KAKAO_RAW',
+      layer: isKakaoT0OnlyInfo(candidate.type) || candidate.source.channel !== 'KAKAO_RAW' ? 'T0' : signal.layer,
+      channel: candidate.source.channel,
       noticeFixed: candidate.source.noticeFixed === true,
       sentAtApprox: candidate.source.sentAtApprox ?? null,
       type: candidate.type,
@@ -97,8 +97,8 @@ function fingerprintPayloadFor(candidate: KakaoInfoCandidate) {
       excerpt: candidate.source.excerpt,
     },
     normalized: {
-      layer: isKakaoT0OnlyInfo(candidate.type) || (candidate.source.channel ?? 'KAKAO_RAW') !== 'KAKAO_RAW' ? 'T0' : 'T1',
-      channel: candidate.source.channel ?? 'KAKAO_RAW',
+      layer: isKakaoT0OnlyInfo(candidate.type) || candidate.source.channel !== 'KAKAO_RAW' ? 'T0' : 'T1',
+      channel: candidate.source.channel,
       noticeFixed: candidate.source.noticeFixed === true,
       sentAtApprox: candidate.source.sentAtApprox ?? null,
       type: candidate.type,

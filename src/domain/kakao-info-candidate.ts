@@ -7,6 +7,7 @@ export type KakaoInfoPlateEvidenceSource = 'LITERAL_IN_UTTERANCE' | 'LITERAL_IN_
 export type KakaoInfoRejectReason =
   | 'INVALID_ROOM_CODE'
   | 'INVALID_SOURCE'
+  | 'INVALID_CHANNEL'
   | 'INVALID_MSG_NO'
   | 'INVALID_PLATE_EVIDENCE'
   | 'SENDER_UNVERIFIED'
@@ -31,8 +32,8 @@ export type KakaoInfoCandidateInput = {
   roomCode: string;
   source: {
     sentAt: string; side: string; msgNo: string; excerpt: string;
-    /** 출처 채널. 없으면 KAKAO_RAW(대화 원문). EN1_SUMMARY·KAKAO_NOTICE 는 T0 고정·자동 승격 없음. */
-    channel?: KakaoInfoChannel;
+    /** 출처 채널(필수). KAKAO_RAW 만 대화 원문 — EN1_SUMMARY·KAKAO_NOTICE 는 T0 고정·자동 승격 없음. 누락은 거부. */
+    channel: KakaoInfoChannel;
     /** 발언 시각이 근사일 때(true) 또는 날짜만 추정(dateInferred). 자동 승격 금지. */
     sentAtApprox?: true | 'dateInferred';
     /** 고정 공지(KAKAO_NOTICE 만): 게시일 기준 90일 유효. */
@@ -328,7 +329,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
   }
   if (input.aiInvolved !== true || input.status !== 'CANDIDATE') return { ok: false, reason: 'INVALID_STATUS' };
   const channel = input.source.channel;
-  if (channel !== undefined && !kakaoInfoChannels.has(channel as string)) return { ok: false, reason: 'INVALID_SOURCE' };
+  if (typeof channel !== 'string' || !kakaoInfoChannels.has(channel)) return { ok: false, reason: 'INVALID_CHANNEL' };
   if (input.source.sentAtApprox !== undefined && input.source.sentAtApprox !== true && input.source.sentAtApprox !== 'dateInferred') {
     return { ok: false, reason: 'INVALID_SOURCE' };
   }
@@ -354,7 +355,7 @@ export function createKakaoInfoCandidate(input: KakaoInfoCandidateInput): KakaoI
       side: '상대',
       msgNo: input.source.msgNo.trim(),
       excerpt: input.source.excerpt,
-      ...(channel ? { channel } : {}),
+      channel,
       ...(input.source.sentAtApprox !== undefined ? { sentAtApprox: input.source.sentAtApprox } : {}),
       ...(input.source.noticeFixed === true ? { noticeFixed: true as const } : {}),
     },
@@ -442,7 +443,7 @@ export function isKakaoT0OnlyInfo(type: KakaoInfoType) {
 
 export function isKakaoStateAutoPromotable(candidate: Pick<KakaoInfoCandidate, 'type' | 'fields' | 'source' | 'vehicle'>, isFresh: boolean) {
   if (typeof isFresh !== 'boolean') throw new Error('INVALID_KAKAO_INFO_FRESHNESS');
-  if (candidate.source.channel !== undefined && candidate.source.channel !== 'KAKAO_RAW') return false;
+  if (candidate.source.channel !== 'KAKAO_RAW') return false;
   if (candidate.source.sentAtApprox !== undefined) return false;
   const text = `${candidate.fields.요약} ${candidate.fields.값}`;
   const hasPositive = statePositiveSignals.some((signal) => text.includes(signal));

@@ -6,7 +6,7 @@ import type { KakaoInfoCandidateInput } from '../src/domain/kakao-info-candidate
 const candidate = (patch: Partial<KakaoInfoCandidateInput> = {}): KakaoInfoCandidateInput => ({
   supplierCode: 'RP001',
   roomCode: 'K-TESTFAKE',
-  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: '123가4567 재고 확인' },
+  source: { sentAt: '2026-10-12T00:00:00.000Z', side: '상대', msgNo: '100', channel: 'KAKAO_RAW', excerpt: '123가4567 재고 확인' },
   type: '재고',
   vehicle: {
     plate: '123가4567',
@@ -246,7 +246,7 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
 
   it('does not use the oldest message time as freshness now', () => {
     const plan = kakaoInfoCandidatesToSourceBatch([candidate({
-      source: { sentAt: '2026-10-01T00:00:00.000Z', side: '상대', msgNo: '100', excerpt: '123가4567 재고 확인' },
+      source: { sentAt: '2026-10-01T00:00:00.000Z', side: '상대', msgNo: '100', channel: 'KAKAO_RAW', excerpt: '123가4567 재고 확인' },
       vehicle: {
         plate: '123가4567',
         model: 'TEST-FAKE-MODEL',
@@ -264,7 +264,7 @@ describe('kakaoInfoCandidatesToSourceBatch', () => {
   it('marks future sentAt as not fresh when classifying already trusted candidates', () => {
     const soonFuture = new Date(Date.now() + 4 * 60 * 1000).toISOString();
     const plan = kakaoInfoCandidatesToSourceBatch([candidate({
-      source: { sentAt: soonFuture, side: '상대', msgNo: '100', excerpt: '123가4567 재고 확인' },
+      source: { sentAt: soonFuture, side: '상대', msgNo: '100', channel: 'KAKAO_RAW', excerpt: '123가4567 재고 확인' },
     })], { now: new Date(Date.now() - 2 * 60 * 1000).toISOString() });
     expect(plan.candidates[0]?.isFresh).toBe(false);
     expect((plan.batch.records[0]?.payload as { normalized: { isFresh: boolean } }).normalized.isFresh).toBe(false);
