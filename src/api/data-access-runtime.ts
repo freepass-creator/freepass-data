@@ -24,8 +24,8 @@ export function createConsumerDataAccessRuntime(approvedPhotoReader?: ApprovedPh
   // The reader rechecks public eligibility before either private cache is used.
   const photoSets = new Map<string, { expiresAt: number; ids: Promise<string[]> }>();
   const photoBytes = createIancarPhotoByteCache();
-  // 원천(ONE) 대체 경로도 복제 작업과 같은 방식의 제한기를 거친다(저장본 없는 차가 몰려도 429 폭주 방지).
-  const oneLimiter = createPhotoRequestLimiter({ maxConcurrent: 4, minIntervalMs: 100 });
+  // 원천(ONE) 대체 경로도 같은 방식의 제한기(동시·간격)를 거친다. 요청 경로라 물러남 재시도는 하지 않는다(maxRetries 0 — 오류는 그대로 전달).
+  const oneLimiter = createPhotoRequestLimiter({ maxConcurrent: 4, minIntervalMs: 100, maxRetries: 0 });
   // 버킷 이름이 정확히 설정된 환경에서만 저장본 우선을 켠다(기본 꺼짐 — 동작 변화 없음).
   const storedIancarPhotoReader = process.env.IANCAR_PHOTO_STORE_BUCKET === IANCAR_PHOTO_STORE_BUCKET
     ? createStoredIancarPhotoReader({ store: createGcsPhotoObjectStore(IANCAR_PHOTO_STORE_BUCKET) })
