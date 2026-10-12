@@ -200,7 +200,7 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 
 <a id="data-open-items"></a>
 
-현재 전체 작업의 증거 범위와 남은 확인은 [2026-10-12 전체 완료 감사](#2026-10-12-전체-완료-감사)를 먼저 읽는다. 아래09-30 항목은 유지하는 역사적 점검 목록이며 현재 오류 건수로 해석하지 않는다.
+현재 한정 오픈의 증거·미확정은 [2026-10-12 readiness 인계](#limited-open-readiness-20261012)를 먼저 읽는다. [이전 전체 완료 감사](#2026-10-12-전체-완료-감사)와 아래09-30 항목은 당시 범위의 역사적 점검 목록이며 현재 오류0·신선도·전체완료로 재사용하지 않는다.
 
 현재 단건 fact 운영 검증은 [revision32 실패·revision33/34 성공 영수증](#single-product-runtime-readback)을 읽는다. 현재 revision34/source2eb에서 고정 상품 단건200→소비처 무인증401→사진전용403 검증은 성공했으나 새 사진 실패 진단 event의 실관측·원인확정은 미완료이다. 앞선32의 두 실패는 보존하며 전체 소비처 전환·성능 개선은 별도 HOLD이다.
 
@@ -230,6 +230,19 @@ AI의 저장소 진입 순서는 [AGENTS.md](../AGENTS.md)를 유지한다. 업�
 ---
 
 ## 날짜별 작업 이력
+
+<a id="limited-open-readiness-20261012"></a>
+
+### 2026-10-12 비UI 한정 오픈 readiness / 권위 설명 정착 / 최종 QA HOLD
+
+- 범위·소유: 대표가 승인한 기존 legacy 공개상품 목록/상세/공유/정보용 견적 범위만 인계한다. OTP·로그인·수수료·정식견적 발행·계약·정산·신규Canonical 전체cutover는 별도 HOLD이며 이 표가 오픈 PASS나 전체Data완료를 뜻하지 않는다. 01은 기존 Work에서 최신 main `604dbc85adbad395e8fffbf3e675a9554dbaf16b`의 privacy520·fee/source 섹션을 보존해 NEXT1파일만 기록한다. 실제 QA/서비스/문서 관측은00·각 owner 제공근거이며01의새운영조회가 아니다.
+- 운영 시점 분리(00/20 영수증): Data `freepass-data-read-00034-6r7`, source `2ebdb18822416847b2019f6506b7b0d65daf0ee2`, image `sha256:6becfc2456536d17f5b44c236e5e5d37b8dae1873e9fc120825649bbe18b7d62`의07:34 배포·fact200/401/403 PASS는 [기존 실행 패킷](#single-product-runtime-readback)에 보존한다. 08:21:12.942 KST control-plane GET1에서는 created/ready revision·traffic100·source/image 결속 TRUE만 확인했고 현재 Ready 상태 enum은 UNKNOWN이다. 과거Ready PASS를새현재상태로소급하지 않으며 runtime변경0이다. 문서main과실serving source를혼동하지 않는다.
+- 저장 권위·분모(00/B3Q 인수,01 원본미열람): legacy mirror381726/fullb546의05:36 snapshot은 한정legacy조회 근거이며 현재Canonical 또는현재공급사신선도 증거가 아니다. RAW175·lineage5089·CURRENT07:16은각각다른분모/관측값이고 Canonical FAIL을숨기거나합산해전량정제·ACTIVE발행 PASS로세지 않는다. supplier freshness는별도UNKNOWN이다. 이번인계에새원천수집·writer·DB권한은추가하지 않는다.
+- 판매 판정(00/14 source검토 인수): 알려진 RP031 `publication_withdrawal` 두객체형은global판매 HOLD이며임의marker는UNKNOWN으로보존한다. ERP5 server mask가필드를수신하는 CODE근거와실판매predicate가그의미를전부반영하는지는별개로갭을기록한다. 객체존재만으로승인·정상판매·전량불가를추정하지 않는다. 권한profile은publicDTO가아니며수수료/사진전용권한을자동확장하지 않는다.
+- 서로다른 QA 관측(00/133 제공,01 원본문미열람): FIRST_GO_11 문서GET1은09:26:37.729 KST, SECOND_GO_12 추가GET1은09:42:11.718 KST이며누적2/retry0이다. SECOND 원문의현재top-level `p.image_url`은같은상품 ERP4 `/api/img` 구조이고 `p.image_urls`는ARRAY/URL구조유효47·무효0이다. 같은SECOND 원문의nested 과거저장필드 `p.iancar_photo_source_original.image_url`과`.image_urls`는각각VALUE_TYPE NULL이다. ONE 검사값은비어있지않은STRING이며캐시검사값 urls는ARRAY/구조유효14이다. cache.src와첫scrapable link의trim동등은true지만각존재는UNKNOWN으로유지한다. 실제주소/원문은기록하지않고구조검사를실HTTP성공이나사진존재로확대하지 않는다. FIRST의provider/status와SECOND의image를하나의atomic snapshot으로결합하지 않는다.
+- QA 판정 한계: 사용함수3개의정의가로컬Git9a와동일하다는확인은 CODE결속이며실운영origin/HTTP사진/전체DTO는UNKNOWN이다. 최신ERP5 후보9a의기존대표사진404는실패이력으로보존하고원인확정·복구·최종production/public QA PASS로바꾸지 않는다. 기존originallist 재사용은표시용기존경로의근거일뿐새Data승인/DB권한이아니다. 실helper/root최종검증은그영수증전UNKNOWN이며추가live사진조회0이다.
+- 권위 설명 정착: 원래 [PR519](https://github.com/freepass-creator/freepass-data/pull/519) head `bdae775fadb4e7dc8abec297a39109768e39b786`의정적28/독립28 PASS와Core38184834914 SUCCESS·Canon38184834980 actor가지/당시516 contracts claim FAIL은 [대체 인수 영수증](https://github.com/freepass-creator/freepass-data/pull/519#issuecomment-6115780422)에보존한다. 516·520 정상병합후본인기존Work에서동일4파일만인수해 [PR521](https://github.com/freepass-creator/freepass-data/pull/521) head `52738335ffd371d86718eadec33d3daa656fd493`/base `63114cadd8fbb0ed867ae947d5391d3f679a69a1`를일반merge `604dbc85adbad395e8fffbf3e675a9554dbaf16b`로09:50:38 KST 정착했다. Core38189422187/job114618761111 SUCCESS09:50:08 KST,Canon38189422569/job114618762950 SUCCESS09:48:39 KST,12·21·00 내용동일성review PASS·검토tree diff0·기존bdae4파일diff0이다. profile은POLICY_DESCRIPTION_ONLY/effectiveGrant=false,ERP5 pinned28 코드참조CODE_CONFIRMED vsliveIAM/집행UNKNOWN이며28정적검사를runtime권한검증으로세지 않는다. 기존Canon실패를소급PASS로바꾸거나guard를수정하지 않았다.
+- next_start_here: root가한정legacy scope의최종production/public QA 영수증과기존helper/사진parity결과를결속하고대표404·predicategap·freshness/CANONICAL HOLD를지정owner범위에서판정한다. 정보용견적을정식견적/수수료/계약완료로승격하지않는다. 현재사진원인·권한집행·DataReady enum·전체cutover가미확인인동안미확인을0/정상으로채우지않는다. 이문서작업은source/contracts/workflow/IAM/secret/DB/서비스deploy·원천probe·사진GET·워밍0,원본checkout dirty185줄과다른owner의기존섹션을보존한다.
 
 <a id="single-product-runtime-readback"></a>
 
